@@ -261,7 +261,7 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
 
     /* Check if already banned with read lock */
     if (is_banned(fw, ip)) {
-        FW_DEBUG(2, "IP %pI4 is already banned");
+        FW_DEBUG(2, "IP %pI4 is already banned", &ip);
         FW_DEBUG(1, "EXIT: ban_ip -> 0 (already banned)");
         return 0;
     }
@@ -275,7 +275,7 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
             if (time_before(jiffies, entry->unban_time)) {
                 // Still banned - return early
                 spin_unlock(&fw->lock);
-                FW_DEBUG(2, "IP %pI4 still banned, returning early");
+                FW_DEBUG(2, "IP %pI4 still banned, returning early", &ip);
                 FW_DEBUG(1, "EXIT: ban_ip -> 0 (still banned under lock)");
                 return 0;
             } else {
@@ -285,7 +285,7 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
                 entry->unban_time = jiffies + (unsigned long)READ_ONCE(fw_ban_time) * HZ;
                 atomic_set(&entry->retry_count, 0);
                 spin_unlock(&fw->lock);
-                FW_DEBUG(2, "Updated expired ban entry for IP %pI4");
+                FW_DEBUG(2, "Updated expired ban entry for IP %pI4", &ip);
                 FW_DEBUG(1, "EXIT: ban_ip -> 0 (updated expired entry)");
                 return 0;
             }
