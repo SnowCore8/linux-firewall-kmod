@@ -1,6 +1,10 @@
-# 编译产物目录 (out-of-tree build)
-build/
+# ============================================================
+# Firewall 项目 .gitignore
+# ============================================================
 
+# ---- 构建产物 ----
+# out-of-tree 构建目录
+build/
 # 内核模块编译产物
 *.o
 *.ko
@@ -11,22 +15,19 @@ modules.order
 Module.symvers
 *.mod
 .module-common.o
-
 # 守护进程编译产物
 firewall-daemon
 firewall-ko-daemon
 
-# 临时文件
+# ---- 临时文件 ----
 *~
 *.tmp
 *.bak
 *.orig
+*.rej
+*.patch
 
-# 打包文件
-*.tar.gz
-*.zip
-
-# IDE / 编辑器
+# ---- IDE / 编辑器 ----
 .vscode/
 .idea/
 *.swp
@@ -34,22 +35,28 @@ firewall-ko-daemon
 *~
 .clangd/
 compile_commands.json
+*.cache
 
-# 日志文件
+# ---- 日志文件 ----
 *.log
 
-# 测试临时文件
+# ---- 测试临时文件 ----
 tests/*.ko
 tests/*.log
-/tmp/test_*.log
-/tmp/test_*.conf
 
-# 状态文件 (运行时生成)
+# ---- 运行时生成 ----
 /var/lib/firewall/state
 
-# AI 工具
-.qwen/
+# ---- 打包 / 归档 ----
+*.tar.gz
+*.zip
+*.deb
+*.rpm
 
-# OS 文件
+# ---- OS 特定文件 ----
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# ---- AI 工具 ----
+.qwen/
