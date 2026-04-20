@@ -13,7 +13,6 @@ DAEMON_SRC := src/daemon/firewall-daemon.c
 
 # Build output directory
 BUILD_DIR := build
-KERNEL_BUILD_DIR := $(BUILD_DIR)/kernel
 DAEMON_BUILD_DIR := $(BUILD_DIR)/daemon
 
 # Final output paths
@@ -30,7 +29,6 @@ DEBUG_LEVEL ?= 0
 kernel-module: $(KERNEL_MODULE)
 
 $(KERNEL_MODULE): $(KERNEL_SRC_DIR)/firewall.c $(KERNEL_SRC_DIR)/firewall.h
-	@mkdir -p $(KERNEL_BUILD_DIR)
 	@mkdir -p $(BUILD_DIR)
 	$(MAKE) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) \
 		ccflags-y="-DDEBUG_LEVEL=$(DEBUG_LEVEL)" \
