@@ -61,6 +61,7 @@
 #define DEFAULT_FINDTIME 600      /* 10 minutes */
 #define DEFAULT_BAN_TIME 600      /* 10 minutes */
 #define DEFAULT_INTERVAL 1        /* Check interval in seconds */
+#define DEFAULT_METRICS_PORT 9119  /* Prometheus metrics port */
 
 /* Maximum failed attempts to track per IP */
 #define MAX_FAILED_TIMESTAMPS 100
@@ -90,6 +91,7 @@ struct config {
     unsigned int ban_time;
     int daemonize;
     int interval;
+    int metrics_port;       /* Prometheus metrics port (0 = disabled) */
     char *log_files[MAX_LOG_FILES];
     int log_count;
     char *config_file;  /* Path to configuration file for runtime updates */
@@ -212,6 +214,7 @@ static int parse_config_file(const char *config_path)
     unsigned int old_findtime = cfg.findtime;
     unsigned int old_ban_time = cfg.ban_time;
     int old_interval = cfg.interval;
+    int old_metrics_port = cfg.metrics_port;
 
     for (int i = 0; i < cfg.log_count; i++) {
         old_log_files[i] = cfg.log_files[i] ? strdup(cfg.log_files[i]) : NULL;
@@ -346,6 +349,17 @@ static int parse_config_file(const char *config_path)
                 cfg.interval = (int)val;
                 daemon_log_info("Config interval set to %d", cfg.interval);
             }
+        } else if (strcmp(key, "metrics_port") == 0) {
+            char *endptr;
+            errno = 0;
+            long val = strtol(value, &endptr, 10);
+
+            if (errno != 0 || *endptr != '\0' || val < 0 || val > 65535) {
+                daemon_log_warn("Invalid metrics_port value in config: %s", value);
+            } else {
+                cfg.metrics_port = (int)val;
+                daemon_log_info("Config metrics_port set to %d", cfg.metrics_port);
+            }
         } else if (strcmp(key, "log_file") == 0) {
             if (cfg.log_count >= MAX_LOG_FILES) {
                 daemon_log_warn("Too many log files in config (max %d)", MAX_LOG_FILES);
@@ -418,6 +432,7 @@ restore_old_config:
     cfg.findtime = old_findtime;
     cfg.ban_time = old_ban_time;
     cfg.interval = old_interval;
+    cfg.metrics_port = old_metrics_port;
 
     pthread_mutex_unlock(&config_mutex);
     return -1;
@@ -461,6 +476,7 @@ static int parse_config(int argc, char *argv[])
         {"findtime",   required_argument, 0, 'f'},
         {"ban-time",   required_argument, 0, 'b'},
         {"interval",   required_argument, 0, 'i'},
+        {"metrics-port", required_argument, 0, 'p'},
         {"log",        required_argument, 0, 'l'},
         {"help",       no_argument,       0, 'h'},
         {0, 0, 0, 0}
@@ -472,6 +488,7 @@ static int parse_config(int argc, char *argv[])
     cfg.ban_time = DEFAULT_BAN_TIME;
     cfg.daemonize = 0;
     cfg.interval = DEFAULT_INTERVAL;
+    cfg.metrics_port = DEFAULT_METRICS_PORT;
     cfg.log_count = 0;
     cfg.config_file = NULL;  /* Initialize config file to NULL */
 
@@ -520,7 +537,7 @@ static int parse_config(int argc, char *argv[])
     }
 
     /* Now parse command line options (they override config file values) */
-    while ((opt = getopt_long(argc, argv, "c:dm:f:b:i:l:h", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:dm:f:b:i:l:p:h", long_options, NULL)) != -1) {
         switch (opt) {
         case 'c':  /* Config file - already handled above, but keep for completeness */
             break;
@@ -611,6 +628,25 @@ static int parse_config(int argc, char *argv[])
                 cfg.interval = (int)val;
             }
             break;
+        case 'p':
+            {
+                char *endptr;
+                errno = 0;
+                long val = strtol(optarg, &endptr, 10);
+
+                if (errno != 0 || *endptr != '\0') {
+                    fprintf(stderr, "Error: invalid metrics-port value '%s'\n", optarg);
+                    return -1;
+                }
+
+                if (val < 0 || val > 65535) {
+                    fprintf(stderr, "Error: metrics-port must be between 0 and 65535\n");
+                    return -1;
+                }
+
+                cfg.metrics_port = (int)val;
+            }
+            break;
         case 'l':
             if (cfg.log_count >= MAX_LOG_FILES) {
                 fprintf(stderr, "Error: too many log files (max %d)\n", MAX_LOG_FILES);
@@ -650,6 +686,7 @@ static int parse_config(int argc, char *argv[])
             printf("  -f, --findtime SECS    Time window for failures (default: %d)\n", DEFAULT_FINDTIME);
             printf("  -b, --ban-time SECS    Ban duration (default: %d)\n", DEFAULT_BAN_TIME);
             printf("  -i, --interval SECS    Check interval (default: %d)\n", DEFAULT_INTERVAL);
+            printf("  -p, --metrics-port PORT Prometheus metrics port (default: %d, 0=disable)\n", DEFAULT_METRICS_PORT);
             printf("  -l, --log FILE         Log file to monitor (can be specified multiple times)\n");
             printf("  -h, --help             Show this help\n");
             return 1;
@@ -1767,7 +1804,7 @@ static void monitor_loop(void)
 
                 if (cfg.config_file) {
                     unsigned int old_max_retries, old_findtime, old_ban_time;
-                    int old_interval;
+                    int old_interval, old_metrics_port;
 
                     /* 保存旧配置的关键值用于变更检测（parse_config_file 已内部处理回滚） */
                     pthread_mutex_lock(&config_mutex);
@@ -1775,6 +1812,7 @@ static void monitor_loop(void)
                     old_findtime = cfg.findtime;
                     old_ban_time = cfg.ban_time;
                     old_interval = cfg.interval;
+                    old_metrics_port = cfg.metrics_port;
                     pthread_mutex_unlock(&config_mutex);
 
                     /* 解析配置文件（parse_config_file 内部处理失败回滚） */
@@ -1828,6 +1866,9 @@ static void monitor_loop(void)
                         }
                         if (old_interval != cfg.interval) {
                             daemon_log_info("interval changed from %d to %d", old_interval, cfg.interval);
+                        }
+                        if (old_metrics_port != cfg.metrics_port) {
+                            daemon_log_info("metrics_port changed from %d to %d", old_metrics_port, cfg.metrics_port);
                         }
                         pthread_mutex_unlock(&config_mutex);
                     }
@@ -2267,11 +2308,15 @@ int main(int argc, char *argv[])
 
     /* Start Prometheus HTTP exporter */
     pthread_t exporter_thread;
-    if (pthread_create(&exporter_thread, NULL, start_http_exporter, (void *)(long)9119) != 0) {
-        daemon_log_warn("Failed to start Prometheus exporter thread");
+    if (cfg.metrics_port > 0) {
+        if (pthread_create(&exporter_thread, NULL, start_http_exporter, (void *)(long)cfg.metrics_port) != 0) {
+            daemon_log_warn("Failed to start Prometheus exporter thread");
+        } else {
+            daemon_log_info("Prometheus exporter started on port %d", cfg.metrics_port);
+            pthread_detach(exporter_thread);
+        }
     } else {
-        daemon_log_info("Prometheus exporter started on port 9119");
-        pthread_detach(exporter_thread);
+        daemon_log_info("Prometheus exporter disabled (metrics_port=0)");
     }
 
     monitor_loop();
