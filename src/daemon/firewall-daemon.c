@@ -92,6 +92,9 @@ struct config {
     int daemonize;
     int interval;
     int metrics_port;       /* Prometheus metrics port (0 = disabled) */
+    char *sshd_regex;       /* Custom sshd regex pattern (NULL = use default) */
+    char *vsftpd_regex;     /* Custom vsftpd regex pattern (NULL = use default) */
+    char *nginx_regex;      /* Custom nginx regex pattern (NULL = use default) */
     char *log_files[MAX_LOG_FILES];
     int log_count;
     char *config_file;  /* Path to configuration file for runtime updates */
@@ -215,6 +218,9 @@ static int parse_config_file(const char *config_path)
     unsigned int old_ban_time = cfg.ban_time;
     int old_interval = cfg.interval;
     int old_metrics_port = cfg.metrics_port;
+    char *old_sshd_regex = cfg.sshd_regex ? strdup(cfg.sshd_regex) : NULL;
+    char *old_vsftpd_regex = cfg.vsftpd_regex ? strdup(cfg.vsftpd_regex) : NULL;
+    char *old_nginx_regex = cfg.nginx_regex ? strdup(cfg.nginx_regex) : NULL;
 
     for (int i = 0; i < cfg.log_count; i++) {
         old_log_files[i] = cfg.log_files[i] ? strdup(cfg.log_files[i]) : NULL;
@@ -360,6 +366,36 @@ static int parse_config_file(const char *config_path)
                 cfg.metrics_port = (int)val;
                 daemon_log_info("Config metrics_port set to %d", cfg.metrics_port);
             }
+        } else if (strcmp(key, "sshd_regex") == 0) {
+            if (strlen(value) > 0) {
+                free(cfg.sshd_regex);
+                cfg.sshd_regex = strdup(value);
+                if (!cfg.sshd_regex) {
+                    daemon_log_err("Out of memory allocating sshd_regex");
+                    goto restore_old_config;
+                }
+                daemon_log_info("Config sshd_regex set to: %s", value);
+            }
+        } else if (strcmp(key, "vsftpd_regex") == 0) {
+            if (strlen(value) > 0) {
+                free(cfg.vsftpd_regex);
+                cfg.vsftpd_regex = strdup(value);
+                if (!cfg.vsftpd_regex) {
+                    daemon_log_err("Out of memory allocating vsftpd_regex");
+                    goto restore_old_config;
+                }
+                daemon_log_info("Config vsftpd_regex set to: %s", value);
+            }
+        } else if (strcmp(key, "nginx_regex") == 0) {
+            if (strlen(value) > 0) {
+                free(cfg.nginx_regex);
+                cfg.nginx_regex = strdup(value);
+                if (!cfg.nginx_regex) {
+                    daemon_log_err("Out of memory allocating nginx_regex");
+                    goto restore_old_config;
+                }
+                daemon_log_info("Config nginx_regex set to: %s", value);
+            }
         } else if (strcmp(key, "log_file") == 0) {
             if (cfg.log_count >= MAX_LOG_FILES) {
                 daemon_log_warn("Too many log files in config (max %d)", MAX_LOG_FILES);
@@ -433,6 +469,10 @@ restore_old_config:
     cfg.ban_time = old_ban_time;
     cfg.interval = old_interval;
     cfg.metrics_port = old_metrics_port;
+    /* Rollback regex patterns */
+    free(cfg.sshd_regex); cfg.sshd_regex = old_sshd_regex;
+    free(cfg.vsftpd_regex); cfg.vsftpd_regex = old_vsftpd_regex;
+    free(cfg.nginx_regex); cfg.nginx_regex = old_nginx_regex;
 
     pthread_mutex_unlock(&config_mutex);
     return -1;
@@ -2032,39 +2072,37 @@ static void cleanup(void)
 static int init_log_patterns(void)
 {
     int ret;
+    const char *sshd_pattern = cfg.sshd_regex ? cfg.sshd_regex :
+        "Failed password for (invalid user )?[a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})";
+    const char *vsftpd_pattern = cfg.vsftpd_regex ? cfg.vsftpd_regex :
+        "FAIL LOGIN: [Cc]lient[=\"]([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})";
+    const char *nginx_pattern = cfg.nginx_regex ? cfg.nginx_regex :
+        "([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}) [^ ]{1,64} [^ ]{1,64} \\[[^\\]]{1,64}\\] \"[^\"]{1,256}\" 401";
 
     /*
-     * SSH failed password pattern - with improved security
-     * Capture groups:
-     *   [0] = full match
-     *   [1] = "invalid user " (optional)
-     *   [2] = IP address  ← we use this
-     * Example: "Failed password for invalid user admin from 192.168.1.100"
-     * Fixed: Added bounded repetition to prevent catastrophic backtracking
+     * SSH failed password pattern
+     * Uses custom pattern from config if provided, otherwise built-in default
+     * The LAST capture group is used as the IP address
      */
-    memset(&sshd_regex, 0, sizeof(sshd_regex));  // Initialize to zero to prevent undefined behavior
-    ret = regcomp(&sshd_regex,
-        "Failed password for (invalid user )?[a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})",
-        REG_EXTENDED);  // REG_NOSUB removed: we need capture groups to extract IP addresses
+    memset(&sshd_regex, 0, sizeof(sshd_regex));
+    ret = regcomp(&sshd_regex, sshd_pattern, REG_EXTENDED);
     if (ret) {
         char errbuf[256];
         regerror(ret, &sshd_regex, errbuf, sizeof(errbuf));
         daemon_log_err("Failed to compile sshd regex: %s", errbuf);
         return -1;
     }
+    if (cfg.sshd_regex)
+        daemon_log_info("Using custom sshd regex pattern");
+    else
+        daemon_log_info("Using built-in sshd regex pattern");
 
     /*
-     * vsftpd FAIL LOGIN pattern - with improved security
-     * Capture groups:
-     *   [0] = full match
-     *   [1] = IP address  ← we use this
-     * Example: "FAIL LOGIN: client=192.168.1.100"
-     * Fixed: Added bounded repetition to prevent catastrophic backtracking
+     * vsftpd FAIL LOGIN pattern
+     * Uses custom pattern from config if provided, otherwise built-in default
      */
-    memset(&vsftpd_regex, 0, sizeof(vsftpd_regex));  // Initialize to zero to prevent undefined behavior
-    ret = regcomp(&vsftpd_regex,
-        "FAIL LOGIN: [Cc]lient[=\"]([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})",
-        REG_EXTENDED);  // REG_NOSUB removed: we need capture groups to extract IP addresses
+    memset(&vsftpd_regex, 0, sizeof(vsftpd_regex));
+    ret = regcomp(&vsftpd_regex, vsftpd_pattern, REG_EXTENDED);
     if (ret) {
         char errbuf[256];
         regerror(ret, &vsftpd_regex, errbuf, sizeof(errbuf));
@@ -2072,19 +2110,17 @@ static int init_log_patterns(void)
         regfree(&sshd_regex);
         return -1;
     }
+    if (cfg.vsftpd_regex)
+        daemon_log_info("Using custom vsftpd regex pattern");
+    else
+        daemon_log_info("Using built-in vsftpd regex pattern");
 
     /*
-     * nginx 401 Unauthorized pattern - with improved security
-     * Capture groups:
-     *   [0] = full match
-     *   [1] = IP address  ← we use this
-     * Example: "192.168.1.100 - - [01/Jan/2024:00:00:00] ... 401 Unauthorized"
-     * Fixed: Replaced problematic patterns with safer alternatives to prevent backtracking
+     * nginx 401 Unauthorized pattern
+     * Uses custom pattern from config if provided, otherwise built-in default
      */
-    memset(&nginx_regex, 0, sizeof(nginx_regex));  // Initialize to zero to prevent undefined behavior
-    ret = regcomp(&nginx_regex,
-        "([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}) [^ ]{1,64} [^ ]{1,64} \\[[^\\]]{1,64}\\] \"[^\"]{1,256}\" 401",
-        REG_EXTENDED);  // REG_NOSUB removed: we need capture groups to extract IP addresses
+    memset(&nginx_regex, 0, sizeof(nginx_regex));
+    ret = regcomp(&nginx_regex, nginx_pattern, REG_EXTENDED);
     if (ret) {
         char errbuf[256];
         regerror(ret, &nginx_regex, errbuf, sizeof(errbuf));
@@ -2093,9 +2129,13 @@ static int init_log_patterns(void)
         regfree(&vsftpd_regex);
         return -1;
     }
+    if (cfg.nginx_regex)
+        daemon_log_info("Using custom nginx regex pattern");
+    else
+        daemon_log_info("Using built-in nginx regex pattern");
 
     regex_compiled = 1;
-        daemon_log_info("Log patterns compiled successfully");
+    daemon_log_info("Log patterns compiled successfully");
     return 0;
 }
 
