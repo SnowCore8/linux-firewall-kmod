@@ -1275,32 +1275,12 @@ static ssize_t add_ban_write(struct file *file, const char __user *buf,
 
 /*
  * check_flood_protection - Check if adding this entry would exceed flood limits
- * Current policy: Max 200 additions per second (increased from 50 for better testability)
+ * NOTE: Flood protection feature has been removed.
+ * This function now always returns 0 (no rate limiting).
  */
 static int check_flood_protection(void)
 {
-    unsigned long now = jiffies;
-    unsigned long one_second = HZ;  // One second in jiffies
-
-    spin_lock(&fw_info.flood_lock);
-
-    // Reset counter if more than 1 second has passed since last check
-    if (time_after(now, fw_info.last_flood_check + one_second)) {
-        fw_info.recent_additions = 1;  // This addition counts as the first
-        fw_info.last_flood_check = now;
-    } else {
-        // Increment addition counter
-        fw_info.recent_additions++;
-
-        // Check if we've exceeded the limit (e.g., 200 additions per second)
-        if (fw_info.recent_additions > 200) {
-            spin_unlock(&fw_info.flood_lock);
-            return -EBUSY;  // Too many additions in the time window
-        }
-    }
-
-    spin_unlock(&fw_info.flood_lock);
-    return 0;
+    return 0;  // No rate limiting - flood protection removed
 }
 
 /*
