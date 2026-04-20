@@ -1,0 +1,34 @@
+# 编译产物目录 (out-of-tree build)
+build/
+
+# 旧版编译产物 (向后兼容)
+*.o
+*.ko
+*.mod.c
+*.mod.o
+*.cmd
+*.order
+*.symvers
+.module-common.o
+*.mod
+
+# 可执行文件 (旧版)
+firewall-ko-daemon
+
+# 临时文件
+*~
+
+# 打包文件
+*.tar.gz
+
+# IDE 文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 日志文件
+*.log
+
+# Qwen Code
+.qwen/
