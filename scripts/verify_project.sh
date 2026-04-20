@@ -9,14 +9,14 @@ cd "$SCRIPT_DIR/.."
 
 echo "Verifying firewall project integrity..."
 
-# Check that essential files exist
+# Check that essential files exist (with correct paths)
 ESSENTIAL_FILES=(
-    "firewall.c"
-    "firewall.h"
-    "firewall-daemon.c"
+    "src/kernel-module/firewall.c"
+    "src/kernel-module/firewall.h"
+    "src/daemon/firewall-daemon.c"
     "Makefile"
-    "DOCUMENTATION.md"
-    "test_firewall.sh"
+    "docs/DOCUMENTATION.md"
+    "tests/test_firewall.sh"
 )
 
 echo "Checking essential files..."
@@ -72,4 +72,4 @@ fi
 echo "Project verification completed successfully!"
 echo ""
 echo "To run the full test suite, execute:"
-echo "sudo ./test_firewall.sh"
+echo "sudo ./tests/test_firewall.sh"
