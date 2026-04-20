@@ -2044,7 +2044,7 @@ static int init_log_patterns(void)
      */
     memset(&sshd_regex, 0, sizeof(sshd_regex));  // Initialize to zero to prevent undefined behavior
     ret = regcomp(&sshd_regex,
-        "^Failed password for (invalid user )?[a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})",
+        "Failed password for (invalid user )?[a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})",
         REG_EXTENDED);  // REG_NOSUB removed: we need capture groups to extract IP addresses
     if (ret) {
         char errbuf[256];
@@ -2063,7 +2063,7 @@ static int init_log_patterns(void)
      */
     memset(&vsftpd_regex, 0, sizeof(vsftpd_regex));  // Initialize to zero to prevent undefined behavior
     ret = regcomp(&vsftpd_regex,
-        "^FAIL LOGIN: client=([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})",
+        "FAIL LOGIN: [Cc]lient[=\"]([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})",
         REG_EXTENDED);  // REG_NOSUB removed: we need capture groups to extract IP addresses
     if (ret) {
         char errbuf[256];
@@ -2083,7 +2083,7 @@ static int init_log_patterns(void)
      */
     memset(&nginx_regex, 0, sizeof(nginx_regex));  // Initialize to zero to prevent undefined behavior
     ret = regcomp(&nginx_regex,
-        "^([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}) [^ ]{1,64} [^ ]{1,64} \\[[^\\]]{1,64}\\] \"[^\"]{1,256}\" 401",
+        "([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}) [^ ]{1,64} [^ ]{1,64} \\[[^\\]]{1,64}\\] \"[^\"]{1,256}\" 401",
         REG_EXTENDED);  // REG_NOSUB removed: we need capture groups to extract IP addresses
     if (ret) {
         char errbuf[256];
