@@ -33,6 +33,7 @@
 #include <stddef.h>
 #include <pthread.h>
 #include <ctype.h>
+#include <stdatomic.h>
 
 /* ============================================================================
  * Unified Logging System for Daemon
@@ -118,6 +119,26 @@ static regex_t vsftpd_regex;
 static regex_t nginx_regex;
 static int regex_compiled = 0;
 
+/* ============================================================================
+ * Prometheus Statistics
+ * ============================================================================
+ * Thread-safe counters using atomic operations for monitoring and metrics.
+ * ========================================================================== */
+struct daemon_stats {
+    atomic_ulong lines_parsed;
+    atomic_ulong ips_extracted;
+    atomic_ulong ips_banned;
+    atomic_ulong failed_attempts;
+    atomic_ulong config_reloads;
+    atomic_ulong inotify_events;
+    atomic_ulong log_rotations;
+    atomic_ulong lines_skipped;
+    atomic_ulong regex_matches_sshd;
+    atomic_ulong regex_matches_vsftpd;
+    atomic_ulong regex_matches_nginx;
+    time_t start_time;
+} daemon_stats;
+
 /* Helper function for case-insensitive substring search */
 static int strcasestr_custom(const char *haystack, const char *needle) {
     size_t needle_len = strlen(needle);
@@ -159,6 +180,9 @@ static int init_log_patterns(void);
 static void free_log_patterns(void);
 static int validate_and_normalize_path(const char *input_path);
 
+/* HTTP exporter (defined in http-exporter.c) */
+extern void *start_http_exporter(void *port);
+
 /* Signal handler - only sets flag, no async-unsafe calls */
 static void signal_handler(int sig)
 {
@@ -169,6 +193,7 @@ static void signal_handler(int sig)
             break;
         case SIGHUP:
             reload_config = 1;  /* Reload configuration on SIGHUP */
+            atomic_fetch_add(&daemon_stats.config_reloads, 1);
             break;
     }
 }
@@ -751,6 +776,7 @@ static int extract_and_validate_ip(const char *log_line, char *ip_out, size_t ip
             (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) { /* multicast */
             return 0;
         }
+        atomic_fetch_add(&daemon_stats.ips_extracted, 1);
         size_t copy_len = strlen(ip_buf);
         if (copy_len >= ip_size) copy_len = ip_size - 1;
         memcpy(ip_out, ip_buf, copy_len);
@@ -779,6 +805,7 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
     if (regex_compiled) {
         int regex_result = regexec(&sshd_regex, line, 4, matches, 0);
         if (regex_result == 0) {
+            atomic_fetch_add(&daemon_stats.regex_matches_sshd, 1);
             /* Capture group 2: IP address */
             if (matches[2].rm_so >= 0 && matches[2].rm_eo > matches[2].rm_so) {
                 ip_start = line + matches[2].rm_so;
@@ -807,6 +834,7 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
     if (regex_compiled) {
         int regex_result = regexec(&vsftpd_regex, line, 4, matches, 0);
         if (regex_result == 0) {
+            atomic_fetch_add(&daemon_stats.regex_matches_vsftpd, 1);
             /* Capture group 1: IP address */
             if (matches[1].rm_so >= 0 && matches[1].rm_eo > matches[1].rm_so) {
                 ip_start = line + matches[1].rm_so;
@@ -835,6 +863,7 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
     if (regex_compiled) {
         int regex_result = regexec(&nginx_regex, line, 4, matches, 0);
         if (regex_result == 0) {
+            atomic_fetch_add(&daemon_stats.regex_matches_nginx, 1);
             /* Capture group 1: IP address */
             if (matches[1].rm_so >= 0 && matches[1].rm_eo > matches[1].rm_so) {
                 ip_start = line + matches[1].rm_so;
@@ -1008,6 +1037,8 @@ static void handle_failed_attempt(const char *ip, unsigned int max_retries, unsi
     struct failed_entry *entry = find_entry(ip);
     time_t now = time(NULL);
 
+    atomic_fetch_add(&daemon_stats.failed_attempts, 1);
+
     /* Validate IP before processing */
     if (!ip || strlen(ip) == 0) {
         daemon_log_err("Invalid IP address provided to handle_failed_attempt");
@@ -1151,6 +1182,7 @@ static int ban_ip(const char *ip)
         return -1;
     }
 
+    atomic_fetch_add(&daemon_stats.ips_banned, 1);
     daemon_log_info("Banned IP %s", ip);
     return 0;
 }
@@ -1321,23 +1353,26 @@ static int setup_inotify(void)
         file_states[i].wd = inotify_add_watch(inotify_fd, cfg.log_files[i],
             IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE | IN_CREATE);
         if (file_states[i].wd < 0) {
-            daemon_log_warn("Failed to watch %s: %s", cfg.log_files[i], strerror(errno));
-
-            /* Roll back: remove previously added watches */
-            for (int j = 0; j < i; j++) {
-                if (file_states[j].wd >= 0) {
-                    inotify_rm_watch(inotify_fd, file_states[j].wd);
-                    file_states[j].wd = -1;
-                }
-            }
-            /* Close inotify_fd to prevent leak */
-            close(inotify_fd);
-            inotify_fd = -1;
-            return -1;
+            daemon_log_warn("Failed to watch %s: %s (skipping)", cfg.log_files[i], strerror(errno));
+            file_states[i].wd = -1;
+            /* Continue with other log files instead of failing entirely */
         } else {
             daemon_log_info("Watching %s (wd=%d)", cfg.log_files[i], file_states[i].wd);
         }
     }
+
+    /* Check if at least one file is being watched */
+    int watched_count = 0;
+    for (int i = 0; i < cfg.log_count; i++) {
+        if (file_states[i].wd >= 0) watched_count++;
+    }
+    if (watched_count == 0) {
+        daemon_log_err("No log files could be watched");
+        close(inotify_fd);
+        inotify_fd = -1;
+        return -1;
+    }
+    daemon_log_info("Watching %d/%d log files", watched_count, cfg.log_count);
 
     return 0;
 }
@@ -1360,8 +1395,11 @@ static void process_single_line(const char *line, const char *log_path,
     size_t len = strlen(line);
     if (len >= 8192) {
         daemon_log_warn("Line too long (%zu bytes) in %s, skipping", len, log_path);
+        atomic_fetch_add(&daemon_stats.lines_skipped, 1);
         return;
     }
+
+    atomic_fetch_add(&daemon_stats.lines_parsed, 1);
 
     char ip[INET_ADDRSTRLEN];
     if (extract_and_validate_ip(line, ip, sizeof(ip))) {
@@ -1653,6 +1691,8 @@ static void handle_log_rotation(int idx)
     findtime = cfg.findtime;
     pthread_mutex_unlock(&config_mutex);
 
+    atomic_fetch_add(&daemon_stats.log_rotations, 1);
+
     /* Check if file still exists */
     if (stat(file_states[idx].path, &st) != 0) {
         daemon_log_warn("Log file disappeared: %s", file_states[idx].path);
@@ -1806,6 +1846,10 @@ static void monitor_loop(void)
                 daemon_log_err("inotify read error: %s", strerror(errno));
             }
             continue;
+        }
+
+        if (len > 0) {
+            atomic_fetch_add(&daemon_stats.inotify_events, 1);
         }
 
         /* Process events */
@@ -2198,6 +2242,9 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    /* Initialize statistics */
+    daemon_stats.start_time = time(NULL);
+
     /* Setup signal handlers */
     setup_signals();
 
@@ -2217,6 +2264,16 @@ int main(int argc, char *argv[])
     }
 
     /* Run monitoring loop */
+
+    /* Start Prometheus HTTP exporter */
+    pthread_t exporter_thread;
+    if (pthread_create(&exporter_thread, NULL, start_http_exporter, (void *)(long)9119) != 0) {
+        daemon_log_warn("Failed to start Prometheus exporter thread");
+    } else {
+        daemon_log_info("Prometheus exporter started on port 9119");
+        pthread_detach(exporter_thread);
+    }
+
     monitor_loop();
 
     /* Cleanup */

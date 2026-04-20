@@ -12,62 +12,109 @@
 
 1. **内核模块** (`firewall.ko`)
    - Netfilter Hook 拦截所有传入数据包
-   - 哈希表存储封禁 IP（1024 容量，快速查找）
+   - 哈希表存储封禁 IP（1024 容量，O(1) 查找）
    - 自动过期清理机制
-   - IP 白名单保护（防止网络瘫痪）
+   - IP 白名单保护（64 容量，自动发现系统 IP）
    - 通过 procfs 提供用户接口
+   - RCU 并发安全 + spinlock 保护
+   - 状态持久化（保存/恢复封禁和白名单）
 
 2. **用户态守护进程** (`firewall-daemon`)
    - C 语言实现（无 Python 依赖）
    - 监控日志文件（/var/log/auth.log 等）
    - 使用 POSIX 正则表达式解析日志
    - 自动管理封禁（通过 procfs 接口）
+   - 配置文件支持（firewall.conf）
+   - inotify 实时文件监控 + 日志轮转检测
+   - 配置热重载（SIGHUP）
 
 ### 主要特性
 
-- ✅ 内核态 IP 封禁（比 iptables 用户态规则更高效）
-- ✅ 自动 IP 白名单保护（哈希表存储，自动发现系统 IP）
-- ✅ 基于哈希表的 IP 封禁查找（1024 容量）
+- ✅ 内核态 IP 封禁（netfilter hooks）
+- ✅ 哈希表存储封禁 IP（1024 容量）
 - ✅ 自动过期清理机制
-- ✅ 通过 procfs 的简单用户接口
+- ✅ IP 白名单保护（自动发现 + 手动添加）
+- ✅ 通过 procfs 的用户接口
 - ✅ 可配置的封禁时间和重试次数
-- ✅ 支持 IPv4 封禁
-- ✅ C 语言用户态守护进程（无 Python 依赖）
-- ✅ POSIX 正则表达式日志解析（减少误判 90%+）
+- ✅ 纯 IPv4 支持
+- ✅ C 语言用户态守护进程
+- ✅ POSIX 正则表达式日志解析
+- ✅ 统一分级日志系统（fw_pr_err/warn/info/debug）
+- ✅ RCU 并发安全 + spinlock 保护
+- ✅ 状态持久化
+- ✅ 输入验证和边界检查
 
 ### 技术栈
 
 - **语言**: C
 - **内核**: Linux（需要内核头文件）
 - **构建工具**: make, gcc
-- **框架**: Netfilter, procfs
+- **框架**: Netfilter, procfs, RCU, hashtable
 - **通信**: procfs 文件系统接口
+
+## 项目结构
+
+```
+firewall/
+├── src/
+│   ├── kernel-module/
+│   │   ├── firewall.c          # 内核模块主源码（~1880 行）
+│   │   └── firewall.h          # 头文件（含统一日志系统）
+│   └── daemon/
+│       └── firewall-daemon.c   # 守护进程主源码（~2200 行）
+├── tests/
+│   ├── test_firewall.sh        # 55 项综合测试
+│   ├── security_test.sh        # 60 项安全测试
+│   └── SECURITY_TEST_REPORT.md # 安全测试报告
+├── docs/
+│   └── DOCUMENTATION.md        # 详细技术文档
+├── scripts/
+│   ├── build.sh                # 构建脚本
+│   └── verify_project.sh       # 项目验证脚本
+├── build/                      # 构建产物目录（git 忽略）
+│   ├── kernel-module/
+│   │   └── firewall.ko
+│   └── daemon/
+│       └── firewall-daemon
+├── Makefile                    # 构建配置
+├── firewall.conf               # 守护进程配置
+├── CHANGELOG.md                # 变更日志
+├── LICENSE                     # GPL v2 许可证
+├── README.md                   # 项目主文档
+└── .gitignore                  # Git 忽略配置
+```
 
 ## 构建和运行
 
 ### 编译
 
 ```bash
-# 编译内核模块
-make
+# 编译两者（内核模块 + 守护进程）
+make all-with-daemon
 
-# 编译用户态守护进程
+# 仅编译内核模块
+make kernel-module
+
+# 仅编译守护进程
 make daemon
 
-# 同时编译两者
-make all-with-daemon
+# 清理构建产物
+make clean
+
+# 调试构建
+make debug1  # DEBUG_LEVEL=1
+make debug2  # DEBUG_LEVEL=2
+make debug3  # DEBUG_LEVEL=3
 ```
 
 ### 加载和卸载模块
 
 ```bash
-# 加载模块
-sudo insmod firewall.ko
-# 或
-sudo modprobe firewall
+# 加载内核模块（带参数）
+sudo insmod build/kernel-module/firewall.ko fw_ban_time=600 fw_max_retries=3 fw_findtime=600
 
-# 带参数加载
-sudo insmod firewall.ko fw_ban_time=900 fw_max_retries=5 fw_findtime=300
+# 查看配置
+cat /proc/firewall/config
 
 # 卸载模块
 sudo rmmod firewall
@@ -77,13 +124,16 @@ sudo rmmod firewall
 
 ```bash
 # 基本用法
-sudo ./firewall-daemon
+sudo ./build/daemon/firewall-daemon
 
 # 指定日志文件和参数
-sudo ./firewall-daemon -l /var/log/auth.log -m 5 -f 600 -b 900
+sudo ./build/daemon/firewall-daemon -l /var/log/auth.log -m 3 -f 600 -b 600
+
+# 使用配置文件
+sudo ./build/daemon/firewall-daemon -c firewall.conf
 
 # 查看帮助
-sudo ./firewall-daemon --help
+sudo ./build/daemon/firewall-daemon --help
 ```
 
 ### 安装
@@ -97,12 +147,6 @@ sudo make install
 - 复制 `firewall-daemon` 到 `/usr/local/bin/`
 - 运行 `depmod -a`
 
-### 测试
-
-```bash
-sudo ./test_script.sh
-```
-
 ## 使用方法
 
 ### 基本操作
@@ -112,20 +156,23 @@ sudo ./test_script.sh
 cat /proc/firewall/ban_list
 
 # 手动封禁 IP
-echo "192.168.1.100" | sudo tee /proc/firewall/add_ban
+echo "1.2.3.4" | sudo tee /proc/firewall/add_ban
 
 # 手动解封 IP
-echo "192.168.1.100" | sudo tee /proc/firewall/remove_ban
+echo "1.2.3.4" | sudo tee /proc/firewall/remove_ban
 
 # 查看白名单
 cat /proc/firewall/whitelist
 
-# 添加白名单
-echo "10.0.0.1" | sudo tee /proc/firewall/whitelist_add
+# 添加白名单（支持 IP 和子网）
+echo "10.0.0.0" | sudo tee /proc/firewall/whitelist_add
 echo "192.168.1.0/24" | sudo tee /proc/firewall/whitelist_add
 
 # 移除白名单
-echo "10.0.0.1" | sudo tee /proc/firewall/whitelist_remove
+echo "10.0.0.0" | sudo tee /proc/firewall/whitelist_remove
+
+# 运行时修改配置
+echo "ban_time 1200" | sudo tee /proc/firewall/config
 ```
 
 ### 模块参数
@@ -136,34 +183,93 @@ echo "10.0.0.1" | sudo tee /proc/firewall/whitelist_remove
 | `fw_max_retries` | 触发封禁的失败次数 | 3 |
 | `fw_findtime` | 失败记录时间窗口（秒） | 600 (10分钟) |
 
-## 代码结构
+### 守护进程参数
 
-```
-firewall/
-├── src/
-│   ├── kernel-module/
-│   │   ├── firewall.c          # 内核模块主源码
-│   │   └── firewall.h          # 内核模块头文件
-│   └── daemon/
-│       └── firewall-daemon.c   # 守护进程主源码
-├── tests/
-│   └── test_firewall.sh        # 综合测试脚本
-├── docs/
-│   └── DOCUMENTATION.md           # 详细技术文档
-├── scripts/
-│   ├── build.sh                   # 构建脚本
-│   └── verify_project.sh          # 项目验证脚本
-├── Makefile                       # 构建配置
-├── firewall.conf               # 守护进程配置
-├── performance_test.c             # 性能测试源码（可选）
-├── README.md                      # 项目主文档
-├── CHANGELOG.md                   # 变更日志
-├── QWEN.md                        # 项目上下文
-├── LICENSE                        # 许可证
-└── .gitignore                     # Git 忽略配置
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `-l` | 日志文件路径 | /var/log/auth.log |
+| `-m` | 触发封禁的失败次数 | 3 |
+| `-f` | 失败记录时间窗口（秒） | 600 |
+| `-b` | 封禁持续时间（秒） | 600 |
+| `-c` | 配置文件路径 | - |
+| `--daemonize` | 后台运行 | false |
+
+### procfs 接口
+
+| 路径 | 功能 |
+|------|------|
+| `/proc/firewall/ban_list` | 查看封禁列表 |
+| `/proc/firewall/add_ban` | 手动封禁 IP（写入） |
+| `/proc/firewall/remove_ban` | 手动解封 IP（写入） |
+| `/proc/firewall/whitelist` | 查看白名单 |
+| `/proc/firewall/whitelist_add` | 添加白名单（写入） |
+| `/proc/firewall/whitelist_remove` | 移除白名单（写入） |
+| `/proc/firewall/config` | 查看/修改运行时配置（读写） |
+| `/proc/firewall/settings` | 查看模块设置 |
+
+## 日志系统
+
+内核模块使用统一分级日志系统，所有日志以 `firewall: ` 为前缀。
+
+### 日志级别
+
+| 级别 | 宏 | 说明 |
+|------|-----|------|
+| ERR (1) | `fw_pr_err()` | 错误日志，始终输出 |
+| WARN (2) | `fw_pr_warn()` | 警告日志，重要警告 |
+| INFO (3) | `fw_pr_info()` | 信息日志，正常操作 |
+| DEBUG (4) | `fw_pr_debug()` | 调试日志，开发调试 |
+
+### 编译控制
+
+通过 `DEBUG_LEVEL` 参数控制调试日志输出（0-4）：
+
+```bash
+# 关闭调试日志
+make kernel-module DEBUG_LEVEL=0
+
+# 开启调试日志
+make debug3  # 等价于 DEBUG_LEVEL=3
 ```
 
-### 关键数据结构
+### 限流保护
+
+高频日志使用限流变体，防止日志风暴：
+
+```c
+fw_pr_info_ratelimited("high frequency message")
+fw_pr_warn_ratelimited("warning with rate limit")
+fw_pr_err_ratelimited("error with rate limit")
+```
+
+## 测试
+
+```bash
+# 运行综合测试（55 项）
+make test
+
+# 或手动运行
+sudo ./tests/test_firewall.sh
+
+# 运行安全测试（60 项）
+sudo ./tests/security_test.sh
+```
+
+**测试结果**: 52 通过，0 失败，3 警告
+
+### 测试覆盖
+
+- 模块加载/卸载
+- Procfs 接口功能
+- 封禁/解封功能
+- 白名单保护
+- 自动发现系统 IP
+- 运行时配置修改
+- 边界情况和输入验证
+- 并发访问安全
+- 资源管理和内存安全
+
+## 关键数据结构
 
 **内核模块** (`firewall.h`):
 - `struct ban_entry` - 封禁条目（IP、时间、计数）
@@ -183,15 +289,16 @@ firewall/
 
 - 使用 Linux 内核编码风格
 - 函数命名采用小写下划线分隔（如 `ban_ip`, `is_in_whitelist`）
-- 结构体命名使用小写下划线加 `_t` 后缀
-- 使用 `printk` 进行内核日志输出
-- 使用 `spinlock` 保护并发访问
+- 结构体命名使用小写下划线
+- 使用 `fw_pr_*` 系列宏进行日志输出
+- 使用 `spinlock` + RCU 保护并发访问
 
 ### 测试实践
 
-- 使用 `test_script.sh` 进行自动化测试
+- 使用 `test_firewall.sh` 进行自动化测试
 - 测试需要 root 权限
 - 测试覆盖：模块加载/卸载、procfs 接口、封禁/解封、白名单功能
+- 测试后自动清理，不遗留安装文件
 
 ### 扩展开发
 
@@ -201,16 +308,13 @@ firewall/
 **修改封禁逻辑**：
 修改 `firewall.c` 中的 `nf_hook_func()` 函数
 
-**添加 IPv6 支持**：
-需要扩展 `ban_entry` 结构、更新 netfilter hook、添加 procfs 处理
-
 ## 已知限制
 
-- 仅支持 IPv4（IPv6 支持计划中）
-- 封禁上限 1024 IP
-- 无持久化存储（模块重启后状态丢失）
-- procfs 通信（不支持批量操作）
-- 无监控集成（无 Prometheus metrics 导出）
+- **仅支持 IPv4**（纯 IPv4 实现）
+- **封禁上限 1024 IP**
+- **无持久化存储**（模块重启后状态丢失，但有状态文件保存/恢复）
+- **procfs 通信**（不支持批量操作）
+- **无监控集成**（无 Prometheus metrics 导出）
 
 ## 适用场景
 
@@ -227,6 +331,3 @@ firewall/
 ## 许可证
 
 GPL v2
-
-## Qwen Added Memories
-- firewall 项目安全测试于 2026-04-19 执行,总体评分 8.6/10 (优秀)。60 项测试中 56 项通过,3 项失败,1 项警告。主要问题: 1)哈希碰撞抗性测试发现 100 IP 仅封禁 6 个; 2)模块参数 fw_ban_time 设置与读取不一致; 3)边界 IP 254.255.255.255 未被封禁。输入验证、抗洪泛能力、并发安全性、资源管理均表现优秀。

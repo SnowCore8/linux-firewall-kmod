@@ -10,6 +10,7 @@ PWD := $(shell pwd)
 # Source directories
 KERNEL_SRC_DIR := src/kernel-module
 DAEMON_SRC := src/daemon/firewall-daemon.c
+EXPORTER_SRC := src/daemon/http-exporter.c
 
 # Build output directories
 BUILD_DIR := build
@@ -40,9 +41,9 @@ $(KERNEL_MODULE): $(KERNEL_SRC_DIR)/firewall.c $(KERNEL_SRC_DIR)/firewall.h
 # Build user-space daemon
 daemon: $(DAEMON_BIN)
 
-$(DAEMON_BIN): $(DAEMON_SRC)
+$(DAEMON_BIN): $(DAEMON_SRC) $(EXPORTER_SRC)
 	@mkdir -p $(DAEMON_BUILD_DIR)
-	$(CC) -Wall -Wextra -O2 -o $@ $< -lpthread
+	$(CC) -Wall -Wextra -O2 -o $@ $(DAEMON_SRC) $(EXPORTER_SRC) -lpthread
 
 # Build both kernel module and daemon
 all-with-daemon: kernel-module daemon

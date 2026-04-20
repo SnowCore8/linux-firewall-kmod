@@ -252,6 +252,7 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
 
     /* Check whitelist first with read lock */
     if (is_in_whitelist(fw, ip)) {
+        atomic_inc(&fw->whitelist_reject_count);
         fw_pr_warn("REFUSED to ban whitelisted IP %pI4", &ip);
         FW_DEBUG(2, "IP %pI4 is in whitelist, refusing to ban", &ip);
         FW_DEBUG(1, "EXIT: ban_ip -> -EPERM (whitelisted)");
@@ -293,6 +294,7 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
 
     if (atomic_read(&fw->ban_count) >= MAX_BAN_ENTRIES) {
         spin_unlock(&fw->lock);
+        atomic_inc(&fw->ban_table_full_count);
         fw_pr_warn("Ban table full, cannot ban %pI4", &ip);
         FW_DEBUG(1, "EXIT: ban_ip -> -ENOSPC (ban table full)");
         return -ENOSPC;
@@ -301,6 +303,7 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
     entry = kmalloc(sizeof(*entry), GFP_ATOMIC);  /* Use GFP_ATOMIC to avoid sleeping in interrupt context */
     if (!entry) {
         spin_unlock(&fw->lock);
+        atomic_inc(&fw->alloc_failure_count);
         fw_pr_err("Failed to allocate memory for ban entry for IP %pI4", &ip);
         FW_DEBUG(1, "EXIT: ban_ip -> -ENOMEM (alloc failed)");
         return -ENOMEM;
@@ -315,6 +318,7 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
 
     hash_add(fw->ban_table, &entry->hash, ip);
     atomic_inc(&fw->ban_count);
+    atomic_inc(&fw->total_ban_count);
 
     spin_unlock(&fw->lock);
 
@@ -354,6 +358,7 @@ int unban_ip(struct firewall_info *fw, __be32 ip)
     spin_unlock(&fw->lock);
 
     if (found) {
+        atomic_inc(&fw->total_unban_count);
         /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding */
         fw_pr_info_ratelimited("IP %s unbanned", ip_str);
         FW_DEBUG(1, "EXIT: unban_ip -> 0 (success)");
@@ -429,6 +434,9 @@ void cleanup_expired_bans(struct firewall_info *fw)
 
     FW_DEBUG(2, "ENTRY: cleanup_expired_bans(current_count=%d, start_bucket=%d)", atomic_read(&fw->ban_count), start_bucket);
 
+    /* Increment cleanup cycle counter */
+    atomic_inc(&fw->cleanup_cycles);
+
     /* Early exit if no entries to clean */
     if (atomic_read(&fw->ban_count) == 0) {
         fw->cleanup_last_bucket = 0;  /* Reset for next cycle */
@@ -483,6 +491,7 @@ void cleanup_expired_bans(struct firewall_info *fw)
     spin_unlock(&fw->lock);
 
     if (removed > 0) {
+        atomic_add(removed, &fw->cleanup_expired_total);
         FW_DEBUG(1, "Cleaned up %d expired ban entries", removed);
         /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding during mass cleanup */
         fw_pr_info_ratelimited("Cleaned up %d expired ban entries", removed);
@@ -1149,6 +1158,41 @@ static const struct proc_ops config_fops = {
 };
 
 /*
+ * stats_show - Show firewall statistics
+ */
+static int stats_show(struct seq_file *m, void *v)
+{
+    struct firewall_info *fw = &fw_info;
+
+    seq_printf(m, "total_bans %u\n", atomic_read(&fw->total_ban_count));
+    seq_printf(m, "total_unbans %u\n", atomic_read(&fw->total_unban_count));
+    seq_printf(m, "whitelist_rejects %u\n", atomic_read(&fw->whitelist_reject_count));
+    seq_printf(m, "ban_table_full_rejects %u\n", atomic_read(&fw->ban_table_full_count));
+    seq_printf(m, "alloc_failures %u\n", atomic_read(&fw->alloc_failure_count));
+    seq_printf(m, "packets_dropped %u\n", atomic_read(&fw->packets_dropped));
+    seq_printf(m, "packets_accepted %u\n", atomic_read(&fw->packets_accepted));
+    seq_printf(m, "cleanup_cycles %u\n", atomic_read(&fw->cleanup_cycles));
+    seq_printf(m, "cleanup_expired_total %u\n", atomic_read(&fw->cleanup_expired_total));
+    seq_printf(m, "current_bans %d\n", atomic_read(&fw->ban_count));
+    seq_printf(m, "current_whitelist %d\n", atomic_read(&fw->whitelist_count));
+    seq_printf(m, "recent_additions %u\n", fw->recent_additions);
+
+    return 0;
+}
+
+static int stats_open(struct inode *inode, struct file *file)
+{
+    return single_open(file, stats_show, NULL);
+}
+
+static const struct proc_ops stats_fops = {
+    .proc_open = stats_open,
+    .proc_read = seq_read,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
+};
+
+/*
  * create_procfs_entries - Create procfs interface
  */
 int create_procfs_entries(struct firewall_info *fw)
@@ -1196,6 +1240,13 @@ int create_procfs_entries(struct firewall_info *fw)
         goto err_cleanup;
     fw->proc_whitelist_remove = entry;
 
+    entry = proc_create("stats", 0400, fw->proc_dir, &stats_fops);
+    if (!entry) {
+        fw_pr_err("Failed to create proc stats entry\n");
+        goto err_cleanup;
+    }
+    fw->proc_stats = entry;
+
     fw_pr_info("Procfs entries created");
     return 0;
 
@@ -1209,6 +1260,8 @@ err_cleanup:
  */
 void destroy_procfs_entries(struct firewall_info *fw)
 {
+    if (fw->proc_stats)
+        proc_remove(fw->proc_stats);
     if (fw->proc_config)
         proc_remove(fw->proc_config);
     if (fw->proc_whitelist_remove)
@@ -1379,9 +1432,12 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
 
     rcu_read_unlock();
 
-    if (unlikely(is_banned))
+    if (unlikely(is_banned)) {
+        atomic_inc(&fw_info.packets_dropped);
         return NF_DROP;
+    }
 
+    atomic_inc(&fw_info.packets_accepted);
     return NF_ACCEPT;
 }
 
@@ -1774,6 +1830,17 @@ static int __init firewall_init(void)
     spin_lock_init(&fw_info.whitelist_lock);
     hash_init(fw_info.whitelist_table);
     atomic_set(&fw_info.whitelist_count, 0);
+
+    /* Initialize statistics counters */
+    atomic_set(&fw_info.total_ban_count, 0);
+    atomic_set(&fw_info.total_unban_count, 0);
+    atomic_set(&fw_info.whitelist_reject_count, 0);
+    atomic_set(&fw_info.ban_table_full_count, 0);
+    atomic_set(&fw_info.alloc_failure_count, 0);
+    atomic_set(&fw_info.packets_dropped, 0);
+    atomic_set(&fw_info.packets_accepted, 0);
+    atomic_set(&fw_info.cleanup_cycles, 0);
+    atomic_set(&fw_info.cleanup_expired_total, 0);
 
     /* Restore state from file if available */
     if (state_file && strlen(state_file) > 0) {

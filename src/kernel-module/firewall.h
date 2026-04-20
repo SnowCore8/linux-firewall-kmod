@@ -142,6 +142,17 @@ struct firewall_info {
     unsigned long last_flood_check;
     unsigned int recent_additions;
 
+    /* Statistics counters */
+    atomic_t total_ban_count;          /* Cumulative ban operations */
+    atomic_t total_unban_count;        /* Cumulative unban operations */
+    atomic_t whitelist_reject_count;   /* Ban rejected by whitelist */
+    atomic_t ban_table_full_count;     /* Ban table full rejections */
+    atomic_t alloc_failure_count;      /* Memory allocation failures */
+    atomic_t packets_dropped;          /* Packets dropped by netfilter */
+    atomic_t packets_accepted;         /* Packets accepted by netfilter */
+    atomic_t cleanup_cycles;           /* Cleanup timer cycles */
+    atomic_t cleanup_expired_total;    /* Total expired entries cleaned */
+
     /* Whitelist hash table */
     DECLARE_HASHTABLE(whitelist_table, WHITELIST_HASH_BITS);
     spinlock_t whitelist_lock;
@@ -157,6 +168,7 @@ struct firewall_info {
     struct proc_dir_entry *proc_whitelist_remove;
     struct proc_dir_entry *proc_config;
     struct proc_dir_entry *proc_settings;
+    struct proc_dir_entry *proc_stats;  /* Statistics endpoint */
 };
 
 /* Function declarations */
