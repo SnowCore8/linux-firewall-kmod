@@ -1,34 +1,55 @@
 # 编译产物目录 (out-of-tree build)
 build/
 
-# 旧版编译产物 (向后兼容)
+# 内核模块编译产物
 *.o
 *.ko
 *.mod.c
 *.mod.o
-*.cmd
-*.order
-*.symvers
-.module-common.o
+.*.cmd
+modules.order
+Module.symvers
 *.mod
+.module-common.o
 
-# 可执行文件 (旧版)
+# 守护进程编译产物
+firewall-daemon
 firewall-ko-daemon
 
 # 临时文件
 *~
+*.tmp
+*.bak
+*.orig
 
 # 打包文件
 *.tar.gz
+*.zip
 
-# IDE 文件
+# IDE / 编辑器
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
+.clangd/
+compile_commands.json
 
 # 日志文件
 *.log
 
-# Qwen Code
+# 测试临时文件
+tests/*.ko
+tests/*.log
+/tmp/test_*.log
+/tmp/test_*.conf
+
+# 状态文件 (运行时生成)
+/var/lib/firewall/state
+
+# AI 工具
 .qwen/
+
+# OS 文件
+.DS_Store
+Thumbs.db
