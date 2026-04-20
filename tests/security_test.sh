@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-MODULE_PATH="../build/firewall.ko"
+MODULE_PATH="../build/kernel-module/firewall.ko"
 PROC_DIR="/proc/firewall"
 
 # 测试颜色

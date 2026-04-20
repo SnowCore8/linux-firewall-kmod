@@ -11,12 +11,13 @@ PWD := $(shell pwd)
 KERNEL_SRC_DIR := src/kernel-module
 DAEMON_SRC := src/daemon/firewall-daemon.c
 
-# Build output directory
+# Build output directories
 BUILD_DIR := build
+KERNEL_BUILD_DIR := $(BUILD_DIR)/kernel-module
 DAEMON_BUILD_DIR := $(BUILD_DIR)/daemon
 
 # Final output paths
-KERNEL_MODULE := $(BUILD_DIR)/firewall.ko
+KERNEL_MODULE := $(KERNEL_BUILD_DIR)/firewall.ko
 DAEMON_BIN := $(DAEMON_BUILD_DIR)/firewall-daemon
 
 # Compiler for daemon
@@ -29,11 +30,11 @@ DEBUG_LEVEL ?= 0
 kernel-module: $(KERNEL_MODULE)
 
 $(KERNEL_MODULE): $(KERNEL_SRC_DIR)/firewall.c $(KERNEL_SRC_DIR)/firewall.h
-	@mkdir -p $(BUILD_DIR)
+	@mkdir -p $(KERNEL_BUILD_DIR)
 	$(MAKE) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) \
 		ccflags-y="-DDEBUG_LEVEL=$(DEBUG_LEVEL)" \
 		modules
-	cp $(KERNEL_SRC_DIR)/firewall.ko $(BUILD_DIR)/firewall.ko
+	cp $(KERNEL_SRC_DIR)/firewall.ko $(KERNEL_BUILD_DIR)/firewall.ko
 	@$(MAKE) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) clean >/dev/null 2>&1
 
 # Build user-space daemon

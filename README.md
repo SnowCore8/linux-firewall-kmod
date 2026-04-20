@@ -42,7 +42,7 @@ make clean
 
 ```bash
 # 加载内核模块（带参数）
-sudo insmod build/firewall.ko fw_ban_time=600 fw_max_retries=3 fw_findtime=600
+sudo insmod build/kernel-module/firewall.ko fw_ban_time=600 fw_max_retries=3 fw_findtime=600
 
 # 查看配置
 cat /proc/firewall/config
