@@ -922,6 +922,9 @@ void auto_discover_system_ips(struct firewall_info *fw)
         return;
     }
 
+    /* Initialize temp_ips6 to zero to prevent uninitialized data usage */
+    memset(temp_ips6, 0, 64 * sizeof(struct temp_ipv6_entry));
+
     /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding */
     net_info_ratelimited("firewall: Auto-discovering system IPs...\n");
 
@@ -1659,7 +1662,12 @@ static ssize_t config_write(struct file *file, const char __user *buf,
     if (copy_from_user(input, buf, len))
         return -EFAULT;
 
-    input[len] = '\0';
+    /* FIX: Check for null terminator within buffer */
+    if (strnlen(input, sizeof(input)) >= sizeof(input)) {
+        printk(KERN_ERR "firewall: Config input too long\n");
+        return -EINVAL;
+    }
+
     if (len > 0 && input[len - 1] == '\n')
         input[len - 1] = '\0';
 
