@@ -15,6 +15,7 @@
 #include <linux/errno.h>
 #include <linux/skbuff.h>
 #include <linux/ip.h>
+#include <uapi/linux/ip.h>
 #include <linux/inetdevice.h>
 #include <linux/if_addr.h>
 #include <linux/netdevice.h>
@@ -41,11 +42,6 @@
 /* Whitelist hash table structure */
 #define WHITELIST_HASH_BITS 6
 #define MAX_WHITELIST_ENTRIES (1 << WHITELIST_HASH_BITS)  /* 64 entries */
-
-/* IP type enum - only IPv4 supported */
-enum ip_type {
-    IPV4_ADDR = 0
-};
 
 /* Whitelist entry structure - IPv4 only */
 struct whitelist_entry {
@@ -80,6 +76,11 @@ struct firewall_info {
     bool timer_initialized;  /* Track if timer has been initialized */
     int cleanup_last_bucket; /* Track last processed bucket for incremental cleanup */
 
+    /* Flood protection */
+    spinlock_t flood_lock;
+    unsigned long last_flood_check;
+    unsigned int recent_additions;
+
     /* Whitelist hash table */
     DECLARE_HASHTABLE(whitelist_table, WHITELIST_HASH_BITS);
     spinlock_t whitelist_lock;
@@ -94,18 +95,19 @@ struct firewall_info {
     struct proc_dir_entry *proc_whitelist_add;
     struct proc_dir_entry *proc_whitelist_remove;
     struct proc_dir_entry *proc_config;
+    struct proc_dir_entry *proc_settings;
 };
 
 /* Function declarations */
-int ban_ip_v4(struct firewall_info *fw, __be32 ip);
-int unban_ip_v4(struct firewall_info *fw, __be32 ip);
-int is_banned_v4(struct firewall_info *fw, __be32 ip);
+int ban_ip(struct firewall_info *fw, __be32 ip);
+int unban_ip(struct firewall_info *fw, __be32 ip);
+int is_banned(struct firewall_info *fw, __be32 ip);
 void cleanup_expired_bans(struct firewall_info *fw);
 
 /* Whitelist functions */
-int add_whitelist_entry_v4(struct firewall_info *fw, __be32 ip, __be32 mask, const char *dev_name);
-int remove_whitelist_entry_v4(struct firewall_info *fw, __be32 ip);
-bool is_in_whitelist_v4(struct firewall_info *fw, __be32 ip);
+int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const char *dev_name);
+int remove_whitelist_entry(struct firewall_info *fw, __be32 ip);
+bool is_in_whitelist(struct firewall_info *fw, __be32 ip);
 void auto_discover_system_ips(struct firewall_info *fw);
 
 int create_procfs_entries(struct firewall_info *fw);

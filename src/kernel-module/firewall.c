@@ -39,64 +39,41 @@ static inline void ipv4_to_str(__be32 ip, char *buf, int len)
     snprintf(buf, len, "%u.%u.%u.%u", a, b, c, d);
 }
 
-/* Helper function: Convert IPv6 to string */
-static inline void ipv6_to_str(const struct in6_addr *ip, char *buf, int len)
+/* Helper function: Compare IPv4 addresses - simplified for IPv4 only */
+static inline bool compare_ips(__be32 ip1, __be32 ip2)
 {
-    snprintf(buf, len, "%pI6", ip);
+    return ip1 == ip2;
 }
 
-/* Helper function: Compare IP addresses */
-static inline bool compare_ips(const union ip_address *ip1, const union ip_address *ip2, enum ip_type type)
+/* Helper function: Generate hash for IPv4 addresses */
+static inline u32 generate_ip_hash(__be32 ip)
 {
-    if (type == IPV4_ADDR) {
-        return ip1->ipv4 == ip2->ipv4;
-    } else if (type == IPV6_ADDR) {
-        return ipv6_addr_equal(&ip1->ipv6, &ip2->ipv6);
-    }
-    return false;
+    return hash_min(ip, BAN_HASH_BITS);
 }
 
-/* Helper function: Generate hash for IP addresses */
-static inline u32 generate_ip_hash(const union ip_address *ip, enum ip_type type)
+/* Helper function: Generate hash for whitelist IPv4 addresses */
+static inline u32 generate_wl_ip_hash(__be32 ip)
 {
-    if (type == IPV4_ADDR) {
-        return hash_min(ip->ipv4, BAN_HASH_BITS);
-    } else if (type == IPV6_ADDR) {
-        return hash_32(ip->ipv6.s6_addr32[0] ^ ip->ipv6.s6_addr32[1] ^
-                       ip->ipv6.s6_addr32[2] ^ ip->ipv6.s6_addr32[3], BAN_HASH_BITS);
-    }
-    return 0;
-}
-
-/* Helper function: Generate hash for whitelist IP addresses */
-static inline u32 generate_wl_ip_hash(const union ip_address *ip, enum ip_type type)
-{
-    if (type == IPV4_ADDR) {
-        return hash_min(ip->ipv4, WHITELIST_HASH_BITS);
-    } else if (type == IPV6_ADDR) {
-        return hash_32(ip->ipv6.s6_addr32[0] ^ ip->ipv6.s6_addr32[1] ^
-                       ip->ipv6.s6_addr32[2] ^ ip->ipv6.s6_addr32[3], WHITELIST_HASH_BITS);
-    }
-    return 0;
+    return hash_min(ip, WHITELIST_HASH_BITS);
 }
 
 /*
- * add_whitelist_entry_v4 - Add an IPv4 to the whitelist hash table
+ * add_whitelist_entry - Add an IPv4 to the whitelist hash table
  * Fixed version: Ensures IP is normalized to network address for proper subnet matching
  * Added validation for IP and mask values
  */
-int add_whitelist_entry_v4(struct firewall_info *fw, __be32 ip, __be32 mask, const char *dev_name)
+int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const char *dev_name)
 {
     struct whitelist_entry *new_entry;  /* 修复：使用 new_entry 避免被 hash_for_each_possible 覆盖 */
     struct whitelist_entry *tmp_entry;  /* 修复：用于遍历哈希表的临时变量 */
     u32 hash;
 
-    FW_DEBUG(1, "ENTRY: add_whitelist_entry_v4(ip=%pI4, mask=%pI4, dev=%s)", &ip, &mask, dev_name ?: "null");
+    FW_DEBUG(1, "ENTRY: add_whitelist_entry(ip=%pI4, mask=%pI4, dev=%s)", &ip, &mask, dev_name ?: "null");
 
     /* Validate IP and mask inputs */
     if (!mask) {
         printk(KERN_WARNING "firewall: Invalid mask 0x%08x for IP %pI4\n", mask, &ip);
-        FW_DEBUG(1, "EXIT: add_whitelist_entry_v4 -> -EINVAL (invalid mask)");
+        FW_DEBUG(1, "EXIT: add_whitelist_entry -> -EINVAL (invalid mask)");
         return -EINVAL;
     }
 
@@ -107,7 +84,7 @@ int add_whitelist_entry_v4(struct firewall_info *fw, __be32 ip, __be32 mask, con
         (ntohl(ip) & 0xFF000000) == 0x00000000 ||  // 0.0.0.0/8
         (ntohl(ip) & 0xFF000000) == 0xFF000000) {  // 255.0.0.0/8
         printk(KERN_WARNING "firewall: Attempt to whitelist invalid IP: %pI4\n", &ip);
-        FW_DEBUG(1, "EXIT: add_whitelist_entry_v4 -> -EINVAL (invalid IP)");
+        FW_DEBUG(1, "EXIT: add_whitelist_entry -> -EINVAL (invalid IP)");
         return -EINVAL;
     }
 
@@ -120,14 +97,13 @@ int add_whitelist_entry_v4(struct firewall_info *fw, __be32 ip, __be32 mask, con
     new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
     if (!new_entry) {
         FW_DEBUG(1, "Failed to allocate memory for whitelist entry for IP %pI4", &normalized_ip);
-        FW_DEBUG(1, "EXIT: add_whitelist_entry_v4 -> -ENOMEM");
+        FW_DEBUG(1, "EXIT: add_whitelist_entry -> -ENOMEM");
         return -ENOMEM;
     }
 
     /* 初始化 new_entry 字段 */
-    new_entry->ip.ipv4 = normalized_ip;  // Store normalized IP (network address)
-    new_entry->mask.ipv4 = mask;
-    new_entry->type = IPV4_ADDR;
+    new_entry->ip = normalized_ip;  /* Store normalized IP (network address) */
+    new_entry->mask = mask;
     if (dev_name)
         strscpy(new_entry->device_name, dev_name, sizeof(new_entry->device_name));
     else
@@ -135,16 +111,13 @@ int add_whitelist_entry_v4(struct firewall_info *fw, __be32 ip, __be32 mask, con
 
     spin_lock(&fw->whitelist_lock);
 
-    /* 修复：使用 tmp_entry 遍历，避免覆盖 new_entry 指针
-     * 原 bug: hash_for_each_possible(fw->whitelist_table, entry, hash, normalized_ip)
-     * 会覆盖 entry 指针，导致后续 kfree(entry) 释放错误内存 */
+    /* 修复：使用 tmp_entry 遍历，避免覆盖 new_entry 指针 */
     hash_for_each_possible(fw->whitelist_table, tmp_entry, hash, normalized_ip) {
-        if (compare_ips(&tmp_entry->ip, &(union ip_address){.ipv4 = normalized_ip}, IPV4_ADDR) &&
-            compare_ips(&tmp_entry->mask, &(union ip_address){.ipv4 = mask}, IPV4_ADDR) &&
-            tmp_entry->type == IPV4_ADDR) {
+        if (compare_ips(tmp_entry->ip, normalized_ip) &&
+            tmp_entry->mask == mask) {
             spin_unlock(&fw->whitelist_lock);
-            kfree(new_entry);  /* 修复：释放我们预先分配的 new_entry */
-            FW_DEBUG(2, "EXIT: add_whitelist_entry_v4 -> 0 (already exists)");
+            kfree(new_entry);
+            FW_DEBUG(2, "EXIT: add_whitelist_entry -> 0 (already exists)");
             return 0;
         }
     }
@@ -153,7 +126,7 @@ int add_whitelist_entry_v4(struct firewall_info *fw, __be32 ip, __be32 mask, con
         spin_unlock(&fw->whitelist_lock);
         kfree(new_entry);  /* 修复：释放 new_entry */
         printk(KERN_WARNING "firewall: Whitelist full, cannot add %pI4/%d\n", &normalized_ip, inet_mask_len(mask));
-        FW_DEBUG(1, "EXIT: add_whitelist_entry_v4 -> -ENOSPC (whitelist full)");
+        FW_DEBUG(1, "EXIT: add_whitelist_entry -> -ENOSPC (whitelist full)");
         return -ENOSPC;
     }
 
@@ -166,92 +139,15 @@ int add_whitelist_entry_v4(struct firewall_info *fw, __be32 ip, __be32 mask, con
              &normalized_ip, inet_mask_len(mask), dev_name ?: "unknown");
     printk(KERN_INFO "firewall: Whitelisted %pI4/%d on %s\n",
            &normalized_ip, inet_mask_len(mask), dev_name ?: "unknown");
-    FW_DEBUG(1, "EXIT: add_whitelist_entry_v4 -> 0 (success)");
+    FW_DEBUG(1, "EXIT: add_whitelist_entry -> 0 (success)");
     return 0;
 }
 
 /*
- * add_whitelist_entry_v6 - Add an IPv6 to the whitelist hash table
- */
-int add_whitelist_entry_v6(struct firewall_info *fw, const struct in6_addr *ip, const struct in6_addr *mask, const char *dev_name)
-{
-    struct whitelist_entry *new_entry;  /* 修复：使用 new_entry 避免被 hash_for_each_possible 覆盖 */
-    struct whitelist_entry *tmp_entry;  /* 修复：用于遍历哈希表的临时变量 */
-    u32 hash;
-
-    FW_DEBUG(1, "ENTRY: add_whitelist_entry_v6(ip=%pI6, dev=%s)", ip, dev_name ?: "null");
-
-    /* Additional validation: reject invalid IPs like ::, ::1, multicast, etc. */
-    if (ipv6_addr_any(ip) || ipv6_addr_loopback(ip) || ipv6_addr_is_multicast(ip)) {
-        printk(KERN_WARNING "firewall: Attempt to whitelist invalid IPv6: %pI6\n", ip);
-        FW_DEBUG(1, "EXIT: add_whitelist_entry_v6 -> -EINVAL (invalid IPv6)");
-        return -EINVAL;
-    }
-
-    struct in6_addr normalized_ip;
-    for (int i = 0; i < 4; i++) {
-        normalized_ip.s6_addr32[i] = ip->s6_addr32[i] & mask->s6_addr32[i];  // Normalize IP to network address
-    }
-
-    hash = generate_wl_ip_hash(&(union ip_address){.ipv6 = normalized_ip}, IPV6_ADDR);
-    FW_DEBUG(2, "Attempting to add whitelist entry for IPv6 %pI6", &normalized_ip);
-
-    /* FIX W2: 在锁外分配内存，避免在 spinlock 内睡眠 */
-    new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
-    if (!new_entry) {
-        printk(KERN_WARNING "firewall: Failed to allocate memory for whitelist entry for IPv6 %pI6\n", &normalized_ip);
-        FW_DEBUG(1, "EXIT: add_whitelist_entry_v6 -> -ENOMEM (alloc failed)");
-        return -ENOMEM;
-    }
-
-    /* 初始化 new_entry 字段 */
-    new_entry->ip.ipv6 = normalized_ip;  // Store normalized IP (network address)
-    new_entry->mask.ipv6 = *mask;
-    new_entry->type = IPV6_ADDR;
-    if (dev_name)
-        strscpy(new_entry->device_name, dev_name, sizeof(new_entry->device_name));
-    else
-        new_entry->device_name[0] = '\0';
-
-    spin_lock(&fw->whitelist_lock);
-
-    /* 修复：使用 tmp_entry 遍历，避免覆盖 new_entry 指针
-     * 原 bug: hash_for_each_possible(fw->whitelist_table, entry, hash, normalized_ip.s6_addr32[0])
-     * 会覆盖 entry 指针，导致后续 kfree(entry) 释放错误内存 */
-    hash_for_each_possible(fw->whitelist_table, tmp_entry, hash, normalized_ip.s6_addr32[0]) {
-        if (compare_ips(&tmp_entry->ip, &(union ip_address){.ipv6 = normalized_ip}, IPV6_ADDR) &&
-            compare_ips(&tmp_entry->mask, &(union ip_address){.ipv6 = *mask}, IPV6_ADDR) &&
-            tmp_entry->type == IPV6_ADDR) {
-            spin_unlock(&fw->whitelist_lock);
-            kfree(new_entry);  /* 修复：释放我们预先分配的 new_entry */
-            FW_DEBUG(2, "EXIT: add_whitelist_entry_v6 -> 0 (already exists)");
-            return 0;
-        }
-    }
-
-    if (atomic_read(&fw->whitelist_count) >= MAX_WHITELIST_ENTRIES) {
-        spin_unlock(&fw->whitelist_lock);
-        kfree(new_entry);  /* 修复：释放 new_entry */
-        printk(KERN_WARNING "firewall: Whitelist full, cannot add IPv6 %pI6\n", &normalized_ip);
-        FW_DEBUG(1, "EXIT: add_whitelist_entry_v6 -> -ENOSPC (whitelist full)");
-        return -ENOSPC;
-    }
-
-    /* 插入哈希表 */
-    hash_add(fw->whitelist_table, &new_entry->hash, normalized_ip.s6_addr32[0]);  /* 修复：使用 new_entry */
-    atomic_inc(&fw->whitelist_count);
-    spin_unlock(&fw->whitelist_lock);
-
-    printk(KERN_INFO "firewall: Whitelisted IPv6 %pI6 on %s\n", &normalized_ip, dev_name ?: "unknown");
-    FW_DEBUG(1, "EXIT: add_whitelist_entry_v6 -> 0 (success)");
-    return 0;
-}
-
-/*
- * remove_whitelist_entry_v4 - Remove an IPv4 from the whitelist hash table
+ * remove_whitelist_entry - Remove an IPv4 from the whitelist hash table
  * Fixed version: Normalizes IP to network address for consistent removal
  */
-int remove_whitelist_entry_v4(struct firewall_info *fw, __be32 ip_input)
+int remove_whitelist_entry(struct firewall_info *fw, __be32 ip_input)
 {
     struct whitelist_entry *entry;
     u32 hash;
@@ -259,14 +155,13 @@ int remove_whitelist_entry_v4(struct firewall_info *fw, __be32 ip_input)
     __be32 normalized_ip = ip_input;  // For backward compatibility, assume input is already normalized
                                // OR if removing by network address, use as-is
 
-    FW_DEBUG(1, "ENTRY: remove_whitelist_entry_v4(ip=%pI4)", &normalized_ip);
+    FW_DEBUG(1, "ENTRY: remove_whitelist_entry(ip=%pI4)", &normalized_ip);
 
     /* Look for entries by the exact stored IP (which is normalized network address) */
     spin_lock(&fw->whitelist_lock);
     hash = hash_min(normalized_ip, WHITELIST_HASH_BITS);
     hash_for_each_possible(fw->whitelist_table, entry, hash, normalized_ip) {
-        if (compare_ips(&entry->ip, &(union ip_address){.ipv4 = normalized_ip}, IPV4_ADDR) &&
-            entry->type == IPV4_ADDR) {  // Compare with the stored normalized IP
+        if (compare_ips(entry->ip, normalized_ip)) {
             hash_del(&entry->hash);
             atomic_dec(&fw->whitelist_count);
             found = 1;
@@ -280,115 +175,40 @@ int remove_whitelist_entry_v4(struct firewall_info *fw, __be32 ip_input)
 
     if (found) {
         printk(KERN_INFO "firewall: Removed %pI4 from whitelist\n", &normalized_ip);
-        FW_DEBUG(1, "EXIT: remove_whitelist_entry_v4 -> 0 (success)");
+        FW_DEBUG(1, "EXIT: remove_whitelist_entry -> 0 (success)");
         return 0;
     }
 
     printk(KERN_WARNING "firewall: %pI4 not found in whitelist\n", &normalized_ip);
-    FW_DEBUG(1, "EXIT: remove_whitelist_entry_v4 -> -ENOENT (not found)");
+    FW_DEBUG(1, "EXIT: remove_whitelist_entry -> -ENOENT (not found)");
     return -ENOENT;
 }
 
 /*
- * remove_whitelist_entry_v6 - Remove an IPv6 from the whitelist hash table
- */
-int remove_whitelist_entry_v6(struct firewall_info *fw, const struct in6_addr *ip_input)
-{
-    struct whitelist_entry *entry;
-    u32 hash;
-    int found = 0;
-
-    FW_DEBUG(1, "ENTRY: remove_whitelist_entry_v6(ip=%pI6)", ip_input);
-
-    /* Look for entries by the exact stored IP */
-    spin_lock(&fw->whitelist_lock);
-    hash = generate_wl_ip_hash(&(union ip_address){.ipv6 = *ip_input}, IPV6_ADDR);
-    hash_for_each_possible(fw->whitelist_table, entry, hash, ip_input->s6_addr32[0]) {
-        if (compare_ips(&entry->ip, &(union ip_address){.ipv6 = *ip_input}, IPV6_ADDR) &&
-            entry->type == IPV6_ADDR) {  // Compare with the stored normalized IP
-            hash_del(&entry->hash);
-            atomic_dec(&fw->whitelist_count);
-            found = 1;
-            /* Use call_rcu for async freeing */
-            call_rcu(&entry->rcu_head, free_whitelist_entry_rcu);
-            FW_DEBUG(2, "Found and removed whitelist entry for IPv6 %pI6", ip_input);
-            break;
-        }
-    }
-    spin_unlock(&fw->whitelist_lock);
-
-    if (found) {
-        printk(KERN_INFO "firewall: Removed %pI6 from whitelist\n", ip_input);
-        FW_DEBUG(1, "EXIT: remove_whitelist_entry_v6 -> 0 (success)");
-        return 0;
-    }
-
-    printk(KERN_WARNING "firewall: %pI6 not found in whitelist\n", ip_input);
-    FW_DEBUG(1, "EXIT: remove_whitelist_entry_v6 -> -ENOENT (not found)");
-    return -ENOENT;
-}
-
-/*
- * is_in_whitelist_v4 - Check if an IPv4 is in the whitelist hash table
+ * is_in_whitelist - Check if an IPv4 is in the whitelist hash table
  * Fixed version: Properly handles subnet matching by checking all entries in the hash table
  * Since different IPs with different masks could fall in the same hash bucket, we need to
  * check all entries to ensure proper subnet matching.
  */
-bool is_in_whitelist_v4(struct firewall_info *fw, __be32 ip)
+bool is_in_whitelist(struct firewall_info *fw, __be32 ip)
 {
     struct whitelist_entry *entry;
     u32 hash;
 
-    FW_DEBUG(3, "ENTRY: is_in_whitelist_v4(ip=%pI4)", &ip);
+    FW_DEBUG(3, "ENTRY: is_in_whitelist(ip=%pI4)", &ip);
 
     rcu_read_lock();
     /* Check ALL entries in the whitelist table to properly handle subnet matching */
     hash_for_each_rcu(fw->whitelist_table, hash, entry, hash) {
         // Subnet matching logic: check if IP falls within subnet range
-        // For example, if whitelist has 192.168.1.0/24 (mask 255.255.255.0),
-        // then 192.168.1.100 & 255.255.255.0 == 192.168.1.0 & 255.255.255.0
-        // This ensures the IP is within the whitelisted subnet range
-        if (entry->type == IPV4_ADDR && ((ip & entry->mask.ipv4) == (entry->ip.ipv4 & entry->mask.ipv4))) {
+        if ((ip & entry->mask) == (entry->ip & entry->mask)) {
             rcu_read_unlock();
-            FW_DEBUG(2, "EXIT: is_in_whitelist_v4 -> true (matched subnet)");
+            FW_DEBUG(2, "EXIT: is_in_whitelist -> true (matched subnet)");
             return true;
         }
     }
     rcu_read_unlock();
-    FW_DEBUG(3, "EXIT: is_in_whitelist_v4 -> false (no match)");
-    return false;
-}
-
-/*
- * is_in_whitelist_v6 - Check if an IPv6 is in the whitelist hash table
- */
-bool is_in_whitelist_v6(struct firewall_info *fw, const struct in6_addr *ip)
-{
-    struct whitelist_entry *entry;
-    u32 hash;
-
-    FW_DEBUG(3, "ENTRY: is_in_whitelist_v6(ip=%pI6)", ip);
-
-    rcu_read_lock();
-    /* Check ALL entries in the whitelist table to properly handle subnet matching */
-    hash_for_each_rcu(fw->whitelist_table, hash, entry, hash) {
-        if (entry->type == IPV6_ADDR) {
-            // Subnet matching logic for IPv6
-            struct in6_addr masked_ip, masked_entry;
-            for (int i = 0; i < 4; i++) {
-                masked_ip.s6_addr32[i] = ip->s6_addr32[i] & entry->mask.ipv6.s6_addr32[i];
-                masked_entry.s6_addr32[i] = entry->ip.ipv6.s6_addr32[i] & entry->mask.ipv6.s6_addr32[i];
-            }
-
-            if (ipv6_addr_equal(&masked_ip, &masked_entry)) {
-                rcu_read_unlock();
-                FW_DEBUG(2, "EXIT: is_in_whitelist_v6 -> true (matched subnet)");
-                return true;
-            }
-        }
-    }
-    rcu_read_unlock();
-    FW_DEBUG(3, "EXIT: is_in_whitelist_v6 -> false (no match)");
+    FW_DEBUG(3, "EXIT: is_in_whitelist -> false (no match)");
     return false;
 }
 
@@ -411,38 +231,38 @@ MODULE_PARM_DESC(state_file, "Path to state file for saving/restoring ban and wh
 struct firewall_info fw_info;
 
 /*
- * ban_ip_v4 - Add an IPv4 to the ban list
+ * ban_ip - Add an IPv4 to the ban list
  * Optimized version: Uses rwlock for better concurrency
  */
-int ban_ip_v4(struct firewall_info *fw, __be32 ip)
+int ban_ip(struct firewall_info *fw, __be32 ip)
 {
     struct ban_entry *entry;
     int ret = 0;
     u32 hash;
 
-    FW_DEBUG(1, "ENTRY: ban_ip_v4(ip=%pI4)", &ip);
+    FW_DEBUG(1, "ENTRY: ban_ip(ip=%pI4)", &ip);
 
     /* Validate IP input */
     if (!ip) {
         printk(KERN_ERR "firewall: Invalid IP address for banning: %pI4\n", &ip);
-        FW_DEBUG(1, "EXIT: ban_ip_v4 -> -EINVAL (invalid IP)");
+        FW_DEBUG(1, "EXIT: ban_ip -> -EINVAL (invalid IP)");
         return -EINVAL;
     }
 
     FW_DEBUG(2, "Attempting to ban IPv4: %pI4", &ip);
 
     /* Check whitelist first with read lock */
-    if (is_in_whitelist_v4(fw, ip)) {
+    if (is_in_whitelist(fw, ip)) {
         printk(KERN_WARNING "firewall: REFUSED to ban whitelisted IP %pI4\n", &ip);
         FW_DEBUG(2, "IP %pI4 is in whitelist, refusing to ban", &ip);
-        FW_DEBUG(1, "EXIT: ban_ip_v4 -> -EPERM (whitelisted)");
+        FW_DEBUG(1, "EXIT: ban_ip -> -EPERM (whitelisted)");
         return -EPERM;
     }
 
     /* Check if already banned with read lock */
-    if (is_banned_v4(fw, ip)) {
+    if (is_banned(fw, ip)) {
         FW_DEBUG(2, "IP %pI4 is already banned");
-        FW_DEBUG(1, "EXIT: ban_ip_v4 -> 0 (already banned)");
+        FW_DEBUG(1, "EXIT: ban_ip -> 0 (already banned)");
         return 0;
     }
 
@@ -451,13 +271,12 @@ int ban_ip_v4(struct firewall_info *fw, __be32 ip)
     /* Double-check after acquiring lock */
     hash = hash_min(ip, BAN_HASH_BITS);
     hash_for_each_possible(fw->ban_table, entry, hash, ip) {
-        if (compare_ips(&entry->ip, &(union ip_address){.ipv4 = ip}, IPV4_ADDR) &&
-            entry->type == IPV4_ADDR) {
+        if (compare_ips(entry->ip, ip)) {
             if (time_before(jiffies, entry->unban_time)) {
                 // Still banned - return early
                 spin_unlock(&fw->lock);
                 FW_DEBUG(2, "IP %pI4 still banned, returning early");
-                FW_DEBUG(1, "EXIT: ban_ip_v4 -> 0 (still banned under lock)");
+                FW_DEBUG(1, "EXIT: ban_ip -> 0 (still banned under lock)");
                 return 0;
             } else {
                 // Entry exists but expired - update it
@@ -467,7 +286,7 @@ int ban_ip_v4(struct firewall_info *fw, __be32 ip)
                 atomic_set(&entry->retry_count, 0);
                 spin_unlock(&fw->lock);
                 FW_DEBUG(2, "Updated expired ban entry for IP %pI4");
-                FW_DEBUG(1, "EXIT: ban_ip_v4 -> 0 (updated expired entry)");
+                FW_DEBUG(1, "EXIT: ban_ip -> 0 (updated expired entry)");
                 return 0;
             }
         }
@@ -476,7 +295,7 @@ int ban_ip_v4(struct firewall_info *fw, __be32 ip)
     if (atomic_read(&fw->ban_count) >= MAX_BAN_ENTRIES) {
         spin_unlock(&fw->lock);
         printk(KERN_WARNING "firewall: Ban table full, cannot ban %pI4\n", &ip);
-        FW_DEBUG(1, "EXIT: ban_ip_v4 -> -ENOSPC (ban table full)");
+        FW_DEBUG(1, "EXIT: ban_ip -> -ENOSPC (ban table full)");
         return -ENOSPC;
     }
 
@@ -484,12 +303,11 @@ int ban_ip_v4(struct firewall_info *fw, __be32 ip)
     if (!entry) {
         spin_unlock(&fw->lock);
         printk(KERN_ERR "firewall: Failed to allocate memory for ban entry for IP %pI4\n", &ip);
-        FW_DEBUG(1, "EXIT: ban_ip_v4 -> -ENOMEM (alloc failed)");
+        FW_DEBUG(1, "EXIT: ban_ip -> -ENOMEM (alloc failed)");
         return -ENOMEM;
     }
 
-    entry->ip.ipv4 = ip;
-    entry->type = IPV4_ADDR;
+    entry->ip = ip;
     entry->ban_time = jiffies;
     /* FIX P1-5: Use READ_ONCE to atomically read fw_ban_time to prevent
      * torn reads when the value is being concurrently updated via procfs. */
@@ -506,120 +324,27 @@ int ban_ip_v4(struct firewall_info *fw, __be32 ip)
     /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding when
      * many IPs are being banned in a short time period. */
     net_info_ratelimited("firewall: IP %pI4 banned for %u seconds\n", &ip, READ_ONCE(fw_ban_time));
-    FW_DEBUG(1, "EXIT: ban_ip_v4 -> 0 (success)");
+    FW_DEBUG(1, "EXIT: ban_ip -> 0 (success)");
     return ret;
 }
 
 /*
- * ban_ip_v6 - Add an IPv6 to the ban list
- * Optimized version: Uses proper memory allocation in critical sections
- */
-int ban_ip_v6(struct firewall_info *fw, const struct in6_addr *ip)
-{
-    struct ban_entry *entry;
-    int ret = 0;
-    u32 hash;
-
-    FW_DEBUG(1, "ENTRY: ban_ip_v6(ip=%pI6)", ip);
-
-    /* Validate IP input */
-    if (!ip) {
-        printk(KERN_ERR "firewall: Invalid IPv6 address for banning\n");
-        FW_DEBUG(1, "EXIT: ban_ip_v6 -> -EINVAL (invalid IP)");
-        return -EINVAL;
-    }
-
-    /* Check whitelist first */
-    if (is_in_whitelist_v6(fw, ip)) {
-        printk(KERN_WARNING "firewall: REFUSED to ban whitelisted IPv6 %pI6\n", ip);
-        FW_DEBUG(1, "EXIT: ban_ip_v6 -> -EPERM (whitelisted)");
-        return -EPERM;
-    }
-
-    /* Check if already banned */
-    if (is_banned_v6(fw, ip)) {
-        FW_DEBUG(1, "EXIT: ban_ip_v6 -> 0 (already banned)");
-        return 0;
-    }
-
-    spin_lock(&fw->lock);
-
-    /* Double-check after acquiring lock */
-    hash = generate_ip_hash(&(union ip_address){.ipv6 = *ip}, IPV6_ADDR);
-    hash_for_each_possible(fw->ban_table, entry, hash, ip->s6_addr32[0]) {
-        if (compare_ips(&entry->ip, &(union ip_address){.ipv6 = *ip}, IPV6_ADDR) &&
-            entry->type == IPV6_ADDR) {
-            if (time_before(jiffies, entry->unban_time)) {
-                // Still banned - return early
-                spin_unlock(&fw->lock);
-                FW_DEBUG(1, "EXIT: ban_ip_v6 -> 0 (still banned under lock)");
-                return 0;
-            } else {
-                // Entry exists but expired - update it
-                entry->ban_time = jiffies;
-                /* FIX P1-5: Use READ_ONCE for atomic access to fw_ban_time */
-                entry->unban_time = jiffies + (unsigned long)READ_ONCE(fw_ban_time) * HZ;
-                atomic_set(&entry->retry_count, 0);
-                spin_unlock(&fw->lock);
-                FW_DEBUG(1, "EXIT: ban_ip_v6 -> 0 (updated expired entry)");
-                return 0;
-            }
-        }
-    }
-
-    if (atomic_read(&fw->ban_count) >= MAX_BAN_ENTRIES) {
-        spin_unlock(&fw->lock);
-        printk(KERN_WARNING "firewall: Ban table full, cannot ban IPv6 %pI6\n", ip);
-        FW_DEBUG(1, "EXIT: ban_ip_v6 -> -ENOSPC (ban table full)");
-        return -ENOSPC;
-    }
-
-    entry = kmalloc(sizeof(*entry), GFP_ATOMIC);  /* Use GFP_ATOMIC to avoid sleeping in interrupt context */
-    if (!entry) {
-        spin_unlock(&fw->lock);
-        printk(KERN_ERR "firewall: Failed to allocate memory for ban entry for IPv6 %pI6\n", ip);
-        FW_DEBUG(1, "EXIT: ban_ip_v6 -> -ENOMEM (alloc failed)");
-        return -ENOMEM;
-    }
-
-    entry->ip.ipv6 = *ip;
-    entry->type = IPV6_ADDR;
-    entry->ban_time = jiffies;
-    /* FIX P1-5: Use READ_ONCE to atomically read fw_ban_time to prevent
-     * torn reads when the value is being concurrently updated via procfs. */
-    entry->unban_time = jiffies + (unsigned long)READ_ONCE(fw_ban_time) * HZ;
-    atomic_set(&entry->retry_count, 0);
-    entry->being_freed = false;  /* 初始化防止双重释放标记 */
-
-    hash_add(fw->ban_table, &entry->hash, ip->s6_addr32[0]);
-    atomic_inc(&fw->ban_count);
-
-    spin_unlock(&fw->lock);
-
-    /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding */
-    net_info_ratelimited("firewall: IPv6 %pI6 banned for %u seconds\n", ip, READ_ONCE(fw_ban_time));
-    FW_DEBUG(1, "EXIT: ban_ip_v6 -> 0 (success)");
-    return ret;
-}
-
-/*
- * unban_ip_v4 - Remove an IPv4 from the ban list
+ * unban_ip - Remove an IPv4 from the ban list
  * Optimized version: Uses proper locking and memory management
  */
-int unban_ip_v4(struct firewall_info *fw, __be32 ip)
+int unban_ip(struct firewall_info *fw, __be32 ip)
 {
     struct ban_entry *entry;
     int found = 0;
     char ip_str[INET_ADDRSTRLEN];
 
-    FW_DEBUG(1, "ENTRY: unban_ip_v4(ip=%pI4)", &ip);
+    FW_DEBUG(1, "ENTRY: unban_ip(ip=%pI4)", &ip);
 
     ipv4_to_str(ip, ip_str, sizeof(ip_str));
 
     spin_lock(&fw->lock);
     hash_for_each_possible(fw->ban_table, entry, hash, ip) {
-        if (compare_ips(&entry->ip, &(union ip_address){.ipv4 = ip}, IPV4_ADDR) &&
-            entry->type == IPV4_ADDR) {
+        if (compare_ips(entry->ip, ip)) {
             /* 修复: 设置 being_freed 标记，防止并发 cleanup 导致的双重释放 */
             entry->being_freed = true;
             hash_del(&entry->hash);
@@ -635,59 +360,19 @@ int unban_ip_v4(struct firewall_info *fw, __be32 ip)
     if (found) {
         /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding */
         net_info_ratelimited("firewall: IP %s unbanned\n", ip_str);
-        FW_DEBUG(1, "EXIT: unban_ip_v4 -> 0 (success)");
+        FW_DEBUG(1, "EXIT: unban_ip -> 0 (success)");
         return 0;
     }
     printk(KERN_DEBUG "firewall: IP %s not found in ban list\n", ip_str);
-    FW_DEBUG(1, "EXIT: unban_ip_v4 -> -ENOENT (not found)");
+    FW_DEBUG(1, "EXIT: unban_ip -> -ENOENT (not found)");
     return -ENOENT;
 }
 
 /*
- * unban_ip_v6 - Remove an IPv6 from the ban list
- */
-int unban_ip_v6(struct firewall_info *fw, const struct in6_addr *ip)
-{
-    struct ban_entry *entry;
-    int found = 0;
-    char ip_str[INET6_ADDRSTRLEN];
-
-    FW_DEBUG(1, "ENTRY: unban_ip_v6(ip=%pI6)", ip);
-
-    ipv6_to_str(ip, ip_str, sizeof(ip_str));
-
-    spin_lock(&fw->lock);
-    hash_for_each_possible(fw->ban_table, entry, hash, ip->s6_addr32[0]) {
-        if (compare_ips(&entry->ip, &(union ip_address){.ipv6 = *ip}, IPV6_ADDR) &&
-            entry->type == IPV6_ADDR) {
-            /* 修复: 设置 being_freed 标记，防止并发 cleanup 导致的双重释放 */
-            entry->being_freed = true;
-            hash_del(&entry->hash);
-            atomic_dec(&fw->ban_count);
-            found = 1;
-            call_rcu(&entry->rcu_head, free_ban_entry_rcu);
-            FW_DEBUG(2, "Found and removed ban entry for IPv6 %s", ip_str);
-            break;
-        }
-    }
-    spin_unlock(&fw->lock);
-
-    if (found) {
-        /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding */
-        net_info_ratelimited("firewall: IPv6 %s unbanned\n", ip_str);
-        FW_DEBUG(1, "EXIT: unban_ip_v6 -> 0 (success)");
-        return 0;
-    }
-    printk(KERN_DEBUG "firewall: IPv6 %s not found in ban list\n", ip_str);
-    FW_DEBUG(1, "EXIT: unban_ip_v6 -> -ENOENT (not found)");
-    return -ENOENT;
-}
-
-/*
- * is_banned_v4 - Check if an IPv4 is banned
+ * is_banned - Check if an IPv4 is banned
  * Returns: 1 if banned (valid), 0 if not banned or expired
  */
-int is_banned_v4(struct firewall_info *fw, __be32 ip)
+int is_banned(struct firewall_info *fw, __be32 ip)
 {
     struct ban_entry *entry;
     unsigned long now = jiffies;
@@ -697,8 +382,7 @@ int is_banned_v4(struct firewall_info *fw, __be32 ip)
 
     rcu_read_lock();
     hash_for_each_possible_rcu(fw->ban_table, entry, hash, ip) {
-        if (compare_ips(&entry->ip, &(union ip_address){.ipv4 = ip}, IPV4_ADDR) &&
-            entry->type == IPV4_ADDR) {
+        if (compare_ips(entry->ip, ip)) {
             if (time_after(now, entry->unban_time)) {
                 /* Entry exists but expired - remove it */
                 /* We can't remove here under RCU read lock, so just return 0 */
@@ -715,41 +399,6 @@ int is_banned_v4(struct firewall_info *fw, __be32 ip)
     rcu_read_unlock();
 
     FW_DEBUG(3, "Result for IPv4 %pI4 ban check: %s", &ip, found ? "BANNED" : "NOT BANNED");
-    return found;
-}
-
-/*
- * is_banned_v6 - Check if an IPv6 is banned
- * Returns: 1 if banned (valid), 0 if not banned or expired
- */
-int is_banned_v6(struct firewall_info *fw, const struct in6_addr *ip)
-{
-    struct ban_entry *entry;
-    unsigned long now = jiffies;
-    int found = 0;
-
-    FW_DEBUG(3, "ENTRY: is_banned_v6(ip=%pI6)", ip);
-
-    rcu_read_lock();
-    hash_for_each_possible_rcu(fw->ban_table, entry, hash, ip->s6_addr32[0]) {
-        if (compare_ips(&entry->ip, &(union ip_address){.ipv6 = *ip}, IPV6_ADDR) &&
-            entry->type == IPV6_ADDR) {
-            if (time_after(now, entry->unban_time)) {
-                /* Entry exists but expired - remove it */
-                /* We can't remove here under RCU read lock, so just return 0 */
-                FW_DEBUG(2, "Found expired ban entry for IPv6 %pI6", ip);
-                found = 0;
-            } else {
-                /* Valid banned entry */
-                FW_DEBUG(2, "Found active ban entry for IPv6 %pI6", ip);
-                found = 1;
-            }
-            break;
-        }
-    }
-    rcu_read_unlock();
-
-    FW_DEBUG(3, "Result for IPv6 %pI6 ban check: %s", ip, found ? "BANNED" : "NOT BANNED");
     return found;
 }
 
@@ -874,19 +523,12 @@ void cleanup_expired_bans(struct firewall_info *fw)
 }
 
 /*
- * auto_discover_system_ips - Collect IPv4 and IPv6 IPs in RCU, then whitelist outside (FIX: RCU+GFP_KERNEL)
+ * auto_discover_system_ips - Collect IPv4 IPs in RCU, then whitelist outside (FIX: RCU+GFP_KERNEL)
  */
 /* Temporary storage structures for auto-discovery (moved to heap to reduce stack usage) */
 struct temp_ip_entry {
     __be32 ip;
     __be32 mask;
-    char name[16];
-    enum ip_type type;
-};
-
-struct temp_ipv6_entry {
-    struct in6_addr ip;
-    struct in6_addr mask;
     char name[16];
 };
 
@@ -895,14 +537,10 @@ void auto_discover_system_ips(struct firewall_info *fw)
     /* Allocate on heap to avoid large stack frames */
     struct temp_ip_entry *temp_ips;
     int temp_count = 0;
-    struct temp_ipv6_entry *temp_ips6;
-    int temp_count6 = 0;
 
     struct net_device *dev;
     struct in_device *in_dev;
     struct in_ifaddr *ifa;
-    struct inet6_dev *in6_dev;
-    struct inet6_ifaddr *ifa6;
 
     FW_DEBUG(1, "ENTRY: auto_discover_system_ips");
 
@@ -914,21 +552,10 @@ void auto_discover_system_ips(struct firewall_info *fw)
         return;
     }
 
-    temp_ips6 = kmalloc_array(64, sizeof(struct temp_ipv6_entry), GFP_KERNEL);
-    if (!temp_ips6) {
-        printk(KERN_ERR "firewall: Failed to allocate temp_ips6\n");
-        kfree(temp_ips);
-        FW_DEBUG(1, "EXIT: auto_discover_system_ips -> void (alloc temp_ips6 failed)");
-        return;
-    }
-
-    /* Initialize temp_ips6 to zero to prevent uninitialized data usage */
-    memset(temp_ips6, 0, 64 * sizeof(struct temp_ipv6_entry));
-
     /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding */
     net_info_ratelimited("firewall: Auto-discovering system IPs...\n");
 
-    /* FIX C2: 阶段 1 - RCU 保护下收集 IPv4 地址
+    /* FIX C2: RCU 保护下收集 IPv4 地址
      * 修复说明: __in_dev_get_rcu(dev) 内部已经使用 rcu_dereference 保护，
      * 但为代码清晰和防御性编程，显式使用 rcu_dereference 保护 ifa_list 遍历。
      * RCU 读锁 (rcu_read_lock/unlock) 保证在遍历期间网络设备列表不会被修改。
@@ -940,7 +567,6 @@ void auto_discover_system_ips(struct firewall_info *fw)
                 temp_ips[temp_count].ip = htonl(0x7f000001);
                 temp_ips[temp_count].mask = htonl(0xff000000);
                 strscpy(temp_ips[temp_count].name, dev->name, 16);
-                temp_ips[temp_count].type = IPV4_ADDR;
                 temp_count++;
             }
         }
@@ -948,7 +574,7 @@ void auto_discover_system_ips(struct firewall_info *fw)
         if (!(dev->flags & IFF_UP))
             continue;
 
-        // Collect IPv4 addresses
+        /* Collect IPv4 addresses */
         in_dev = __in_dev_get_rcu(dev);
         if (in_dev) {
             /* 修复: 使用 rcu_dereference 显式保护 ifa_list 遍历
@@ -968,71 +594,17 @@ void auto_discover_system_ips(struct firewall_info *fw)
                 temp_ips[temp_count].ip = ifa->ifa_local;  /* 使用 ifa_local 而不是 ifa_address */
                 temp_ips[temp_count].mask = ifa->ifa_mask;
                 strscpy(temp_ips[temp_count].name, dev->name, 16);
-                temp_ips[temp_count].type = IPV4_ADDR;
                 temp_count++;
             }
         }
     }
     rcu_read_unlock();
 
-    /* FIX C2: 阶段 2 - 单独遍历 IPv6，使用 rtnl_lock 保护网络设备遍历 */
-    rtnl_lock();
-    for_each_netdev(&init_net, dev) {
-        if (!(dev->flags & IFF_UP))
-            continue;
-
-        in6_dev = __in6_dev_get(dev);
-        if (in6_dev) {
-            struct list_head *p;
-            read_lock_bh(&in6_dev->lock);
-            list_for_each(p, &in6_dev->addr_list) {
-                if (temp_count6 >= 64)
-                    break;
-
-                ifa6 = list_entry(p, struct inet6_ifaddr, if_list);
-
-                if (ifa6->flags & (IFA_F_TENTATIVE | IFA_F_DEPRECATED))
-                    continue;  // Skip tentative or deprecated addresses
-
-                // Only add global addresses, not link-local
-                if (ifa6->scope == RT_SCOPE_UNIVERSE) {
-                    // Store in temporary array, add outside RCU lock
-                    temp_ips6[temp_count6].ip = ifa6->addr;
-
-                    // Construct mask from prefix_len
-                    memset(&temp_ips6[temp_count6].mask, 0, sizeof(struct in6_addr));
-                    int prefix_len = ifa6->prefix_len;
-                    int bytes = prefix_len / 8;
-                    int bits = prefix_len % 8;
-                    for (int i = 0; i < bytes; i++) {
-                        temp_ips6[temp_count6].mask.s6_addr[i] = 0xFF;
-                    }
-                    if (bits > 0) {
-                        temp_ips6[temp_count6].mask.s6_addr[bytes] = 0xFF << (8 - bits);
-                    }
-                    strscpy(temp_ips6[temp_count6].name, dev->name, 16);
-                    temp_count6++;
-                }
-            }
-            read_unlock_bh(&in6_dev->lock);
-        }
-    }
-    rtnl_unlock();
-
     /* Add IPv4 IPs outside RCU lock (safe for GFP_KERNEL) */
     for (int i = 0; i < temp_count; i++) {
-        if (temp_ips[i].type == IPV4_ADDR) {
-            if (add_whitelist_entry_v4(fw, temp_ips[i].ip, temp_ips[i].mask, temp_ips[i].name) < 0) {
-                printk(KERN_WARNING "firewall: Failed to add system IPv4 %pI4 to whitelist\n",
-                       &temp_ips[i].ip);
-            }
-        }
-    }
-
-    /* Add IPv6 IPs outside RCU lock (safe for GFP_KERNEL) */
-    for (int i = 0; i < temp_count6; i++) {
-        if (add_whitelist_entry_v6(fw, &temp_ips6[i].ip, &temp_ips6[i].mask, temp_ips6[i].name) < 0) {
-            printk(KERN_WARNING "firewall: Failed to add system IPv6 to whitelist\n");
+        if (add_whitelist_entry(fw, temp_ips[i].ip, temp_ips[i].mask, temp_ips[i].name) < 0) {
+            printk(KERN_WARNING "firewall: Failed to add system IPv4 %pI4 to whitelist\n",
+                   &temp_ips[i].ip);
         }
     }
 
@@ -1042,7 +614,6 @@ void auto_discover_system_ips(struct firewall_info *fw)
 
     /* Free temporary arrays */
     kfree(temp_ips);
-    kfree(temp_ips6);
 
     FW_DEBUG(1, "EXIT: auto_discover_system_ips -> void (success, wl_count=%d)", atomic_read(&fw->whitelist_count));
 }
@@ -1080,7 +651,7 @@ static void cleanup_timer_callback(struct timer_list *t)
 }
 
 /*
- * ban_list_show - Show current ban list (supports IPv4 and IPv6)
+ * ban_list_show - Show current ban list (IPv4 only)
  */
 static int ban_list_show(struct seq_file *m, void *v)
 {
@@ -1088,7 +659,7 @@ static int ban_list_show(struct seq_file *m, void *v)
     struct ban_entry *entry;
     u32 hash;
     unsigned long now = jiffies;
-    char ip_str[INET6_ADDRSTRLEN];
+    char ip_str[INET_ADDRSTRLEN];
     int count = 0;
 
     FW_DEBUG(3, "ENTRY: ban_list_show");
@@ -1099,15 +670,7 @@ static int ban_list_show(struct seq_file *m, void *v)
     rcu_read_lock();
     hash_for_each_rcu(fw->ban_table, hash, entry, hash) {
         if (!time_after(now, entry->unban_time)) {
-            if (entry->type == IPV4_ADDR) {
-                ipv4_to_str(entry->ip.ipv4, ip_str, sizeof(ip_str));
-            } else if (entry->type == IPV6_ADDR) {
-                ipv6_to_str(&entry->ip.ipv6, ip_str, sizeof(ip_str));
-            } else {
-                /* FIX Extra-7: Use strscpy instead of strcpy to prevent
-                 * potential buffer overflow and ensure null termination. */
-                strscpy(ip_str, "Invalid", sizeof(ip_str));  // Should not happen
-            }
+            ipv4_to_str(entry->ip, ip_str, sizeof(ip_str));
             seq_printf(m, "%-40s (expires in %lus)\n",
                        ip_str,
                        (entry->unban_time - now) / HZ);
@@ -1135,14 +698,13 @@ static const struct proc_ops ban_list_fops = {
 };
 
 /*
- * add_ban_write - Procfs write handler for banning IPs (supports IPv4 and IPv6)
+ * add_ban_write - Procfs write handler for banning IPs (IPv4 only)
  */
 static ssize_t add_ban_write(struct file *file, const char __user *buf,
                               size_t count, loff_t *ppos)
 {
-    char ip_str[INET6_ADDRSTRLEN + 2];
+    char ip_str[INET_ADDRSTRLEN + 2];
     __be32 ipv4;
-    struct in6_addr ipv6;
     ssize_t len;
 
     FW_DEBUG(2, "ENTRY: add_ban_write(count=%zu)", count);
@@ -1180,49 +742,49 @@ static ssize_t add_ban_write(struct file *file, const char __user *buf,
 
     FW_DEBUG(2, "Processing ban request for IP: %s", ip_str);
 
-    // Check if it's a valid IPv4 address
+    /* Check if it's a valid IPv4 address */
     if (in4_pton(ip_str, -1, (u8 *)&ipv4, -1, NULL)) {
-        // Additional validation: reject invalid IPs like 0.0.0.0, 255.255.255.255, multicast, etc.
+        /* Additional validation: reject invalid IPs like 0.0.0.0, 255.255.255.255, multicast, etc. */
         if (ipv4 == 0 || ipv4 == 0xFFFFFFFF ||
-            (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||  // 127.x.x.x
-            (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  // 224.0.0.0/4 (multicast)
-            (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  // 0.0.0.0/8
-            (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  // 255.0.0.0/8
+            (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||  /* 127.x.x.x */
+            (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  /* 224.0.0.0/4 (multicast) */
+            (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  /* 0.0.0.0/8 */
+            (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  /* 255.0.0.0/8 */
             printk(KERN_WARNING "firewall: Attempt to ban invalid IPv4: %s\n", ip_str);
             return -EINVAL;
         }
 
-        // Additional validation: reject Class E (reserved for future use) but allow some valid single addresses
-        // Class E is 240.0.0.0/4 (240.0.0.0 - 255.255.255.255)
-        // However, 254.255.255.255 is a valid unicast address that should be banned
-        // Only reject addresses in the 240.0.0.0/4 range except 254.255.255.255
+        /* Additional validation: reject Class E (reserved for future use) but allow some valid single addresses */
+        /* Class E is 240.0.0.0/4 (240.0.0.0 - 255.255.255.255) */
+        /* However, 254.255.255.255 is a valid unicast address that should be banned */
+        /* Only reject addresses in the 240.0.0.0/4 range except 254.255.255.255 */
         unsigned int ip_num = ntohl(ipv4);
         if ((ip_num >= 0xF0000000 && ip_num < 0xFE000000) || ip_num == 0xFFFFFFFF) {
-            // Reject 240.0.0.0 - 253.255.255.255 (true Class E reserved)
-            // But allow 254.0.0.0 - 254.255.255.255 and 255.0.0.0 (with other checks)
+            /* Reject 240.0.0.0 - 253.255.255.255 (true Class E reserved) */
+            /* But allow 254.0.0.0 - 254.255.255.255 and 255.0.0.0 (with other checks) */
             printk(KERN_WARNING "firewall: Attempt to ban reserved IPv4 Class E: %s\n", ip_str);
             return -EINVAL;
         }
 
-        // Additional validation: check for private/reserved IP ranges that shouldn't be banned in typical scenarios
-        // This adds an extra layer of protection against accidental misconfiguration
+        /* Additional validation: check for private/reserved IP ranges that shouldn't be banned in typical scenarios */
+        /* This adds an extra layer of protection against accidental misconfiguration */
         unsigned int ip_class_a = (ntohl(ipv4) >> 24) & 0xFF;
         unsigned int ip_class_b = (ntohl(ipv4) >> 16) & 0xFF;
 
-        // Check for RFC 1918 private networks (should these really be banned?)
-        if ((ip_class_a == 10) ||  // 10.0.0.0/8
-            (ip_class_a == 172 && ip_class_b >= 16 && ip_class_b <= 31) ||  // 172.16.0.0/12
-            (ip_class_a == 192 && ip_class_b == 168)) {  // 192.168.0.0/16
+        /* Check for RFC 1918 private networks (should these really be banned?) */
+        if ((ip_class_a == 10) ||  /* 10.0.0.0/8 */
+            (ip_class_a == 172 && ip_class_b >= 16 && ip_class_b <= 31) ||  /* 172.16.0.0/12 */
+            (ip_class_a == 192 && ip_class_b == 168)) {  /* 192.168.0.0/16 */
             printk(KERN_WARNING "firewall: Attempt to ban private IPv4 range %pI4 - this may be unintended\n", &ipv4);
         }
 
-        // Check flood protection
+        /* Check flood protection */
         if (check_flood_protection() < 0) {
             printk(KERN_WARNING "firewall: Flood protection triggered - too many ban requests\n");
             return -EBUSY;
         }
 
-        int result = ban_ip_v4(&fw_info, ipv4);
+        int result = ban_ip(&fw_info, ipv4);
         if (result < 0) {
             if (result == -EPERM) {
                 printk(KERN_INFO "firewall: Requested IPv4 %s is in whitelist, not banned\n", ip_str);
@@ -1233,36 +795,7 @@ static ssize_t add_ban_write(struct file *file, const char __user *buf,
             } else {
                 printk(KERN_ERR "firewall: Unknown error %d when trying to ban IPv4 %s\n", result, ip_str);
             }
-            FW_DEBUG(1, "EXIT: add_ban_write -> %d (ban_ip_v4 failed)", result);
-            return result;
-        }
-    }
-    // Check if it's a valid IPv6 address
-    else if (in6_pton(ip_str, -1, ipv6.s6_addr, -1, NULL)) {
-        // Additional validation: reject invalid IPv6 addresses
-        if (ipv6_addr_any(&ipv6) || ipv6_addr_loopback(&ipv6) || ipv6_addr_is_multicast(&ipv6)) {
-            printk(KERN_WARNING "firewall: Attempt to ban invalid IPv6: %s\n", ip_str);
-            return -EINVAL;
-        }
-
-        // Check flood protection
-        if (check_flood_protection() < 0) {
-            printk(KERN_WARNING "firewall: Flood protection triggered - too many ban requests\n");
-            return -EBUSY;
-        }
-
-        int result = ban_ip_v6(&fw_info, &ipv6);
-        if (result < 0) {
-            if (result == -EPERM) {
-                printk(KERN_INFO "firewall: Requested IPv6 %s is in whitelist, not banned\n", ip_str);
-            } else if (result == -ENOMEM) {
-                printk(KERN_ERR "firewall: Failed to allocate memory for ban entry for IPv6 %s\n", ip_str);
-            } else if (result == -ENOSPC) {
-                printk(KERN_WARNING "firewall: Ban table full, cannot ban IPv6 %s\n", ip_str);
-            } else {
-                printk(KERN_ERR "firewall: Unknown error %d when trying to ban IPv6 %s\n", result, ip_str);
-            }
-            FW_DEBUG(1, "EXIT: add_ban_write -> %d (ban_ip_v6 failed)", result);
+            FW_DEBUG(1, "EXIT: add_ban_write -> %d (ban_ip failed)", result);
             return result;
         }
     }
@@ -1278,23 +811,42 @@ static ssize_t add_ban_write(struct file *file, const char __user *buf,
 
 /*
  * check_flood_protection - Check if adding this entry would exceed flood limits
- * NOTE: Flood protection feature has been removed.
- * This function now always returns 0 (no rate limiting).
+ * Current policy: Max 200 additions per second (increased from 50 for better testability)
  */
 static int check_flood_protection(void)
 {
-    return 0;  // No rate limiting - flood protection removed
+    unsigned long now = jiffies;
+    unsigned long one_second = HZ;  // One second in jiffies
+
+    spin_lock(&fw_info.flood_lock);
+
+    // Reset counter if more than 1 second has passed since last check
+    if (time_after(now, fw_info.last_flood_check + one_second)) {
+        fw_info.recent_additions = 1;  // This addition counts as the first
+        fw_info.last_flood_check = now;
+    } else {
+        // Increment addition counter
+        fw_info.recent_additions++;
+
+        // Check if we've exceeded the limit (e.g., 200 additions per second)
+        if (fw_info.recent_additions > 200) {
+            spin_unlock(&fw_info.flood_lock);
+            return -EBUSY;  // Too many additions in the time window
+        }
+    }
+
+    spin_unlock(&fw_info.flood_lock);
+    return 0;
 }
 
 /*
- * remove_ban_write - Procfs write handler for unbanning IPs (supports IPv4 and IPv6)
+ * remove_ban_write - Procfs write handler for unbanning IPs (IPv4 only)
  */
 static ssize_t remove_ban_write(struct file *file, const char __user *buf,
                                  size_t count, loff_t *ppos)
 {
-    char ip_str[INET6_ADDRSTRLEN + 2];
+    char ip_str[INET_ADDRSTRLEN + 2];
     __be32 ipv4;
-    struct in6_addr ipv6;
     ssize_t len = min(count, (size_t)(sizeof(ip_str) - 1));
 
     if (!capable(CAP_NET_ADMIN))
@@ -1313,30 +865,19 @@ static ssize_t remove_ban_write(struct file *file, const char __user *buf,
         return -EINVAL;  /* String not properly null-terminated within buffer */
     }
 
-    // Check if it's a valid IPv4 address
+    /* Check if it's a valid IPv4 address */
     if (in4_pton(ip_str, -1, (u8 *)&ipv4, -1, NULL)) {
-        // Additional validation: reject invalid IPs like 0.0.0.0, 255.255.255.255, multicast, etc.
+        /* Additional validation: reject invalid IPs like 0.0.0.0, 255.255.255.255, multicast, etc. */
         if (ipv4 == 0 || ipv4 == 0xFFFFFFFF ||
-            (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||  // 127.x.x.x
-            (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  // 224.0.0.0/4 (multicast)
-            (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  // 0.0.0.0/8
-            (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  // 255.0.0.0/8
+            (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||  /* 127.x.x.x */
+            (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  /* 224.0.0.0/4 (multicast) */
+            (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  /* 0.0.0.0/8 */
+            (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  /* 255.0.0.0/8 */
             printk(KERN_WARNING "firewall: Attempt to unban invalid IPv4: %s\n", ip_str);
             return -EINVAL;
         }
 
-        if (unban_ip_v4(&fw_info, ipv4) < 0)
-            return -ENOENT;
-    }
-    // Check if it's a valid IPv6 address
-    else if (in6_pton(ip_str, -1, ipv6.s6_addr, -1, NULL)) {
-        // Additional validation: reject invalid IPv6 addresses
-        if (ipv6_addr_any(&ipv6) || ipv6_addr_loopback(&ipv6) || ipv6_addr_is_multicast(&ipv6)) {
-            printk(KERN_WARNING "firewall: Attempt to unban invalid IPv6: %s\n", ip_str);
-            return -EINVAL;
-        }
-
-        if (unban_ip_v6(&fw_info, &ipv6) < 0)
+        if (unban_ip(&fw_info, ipv4) < 0)
             return -ENOENT;
     }
     else {
@@ -1356,14 +897,14 @@ static const struct proc_ops remove_ban_fops = {
 };
 
 /*
- * whitelist_show - Procfs show handler for whitelist hash table (supports IPv4 and IPv6)
+ * whitelist_show - Procfs show handler for whitelist hash table (IPv4 only)
  */
 static int whitelist_show(struct seq_file *m, void *v)
 {
     struct firewall_info *fw = &fw_info;
     struct whitelist_entry *entry;
     u32 hash;
-    char ip_str[INET6_ADDRSTRLEN];
+    char ip_str[INET_ADDRSTRLEN];
     int prefix_len;
 
     seq_printf(m, "Whitelisted IPs (protected from ban):\n");
@@ -1371,31 +912,14 @@ static int whitelist_show(struct seq_file *m, void *v)
 
     rcu_read_lock();
     hash_for_each_rcu(fw->whitelist_table, hash, entry, hash) {
-        // For subnets, we need to display the network address
-        if (entry->type == IPV4_ADDR) {
-            __be32 network_addr = entry->ip.ipv4 & entry->mask.ipv4;
-            ipv4_to_str(network_addr, ip_str, sizeof(ip_str));
-            prefix_len = inet_mask_len(entry->mask.ipv4);
-            seq_printf(m, "%s/%d  on %s\n",
-                       ip_str,
-                       prefix_len,
-                       entry->device_name);
-        } else if (entry->type == IPV6_ADDR) {
-            // For IPv6, we need to calculate the prefix length differently
-            int bits = 0;
-            for (int i = 0; i < 16; i++) {
-                unsigned char b = entry->mask.ipv6.s6_addr[i];
-                while (b) {
-                    bits++;
-                    b &= b - 1;  // Remove the lowest set bit
-                }
-            }
-            ipv6_to_str(&entry->ip.ipv6, ip_str, sizeof(ip_str));
-            seq_printf(m, "%s/%d  on %s\n",
-                       ip_str,
-                       bits,
-                       entry->device_name);
-        }
+        /* For subnets, we need to display the network address */
+        __be32 network_addr = entry->ip & entry->mask;
+        ipv4_to_str(network_addr, ip_str, sizeof(ip_str));
+        prefix_len = inet_mask_len(entry->mask);
+        seq_printf(m, "%s/%d  on %s\n",
+                   ip_str,
+                   prefix_len,
+                   entry->device_name);
     }
     rcu_read_unlock();
 
@@ -1410,17 +934,15 @@ static int whitelist_open(struct inode *inode, struct file *file)
 }
 
 /*
- * whitelist_add_write - Add IP to whitelist (supports IPv4 and IPv6)
+ * whitelist_add_write - Add IP to whitelist (IPv4 only)
  */
 static ssize_t whitelist_add_write(struct file *file, const char __user *buf,
                                     size_t count, loff_t *ppos)
 {
-    char input[INET6_ADDRSTRLEN + 8];  // Support IPv6 address + CIDR notation
+    char input[INET_ADDRSTRLEN + 8];
     ssize_t len = min(count, (size_t)(sizeof(input) - 1));
     __be32 ipv4, mask4;
-    struct in6_addr ipv6, mask6;
     int prefix_len = 32;
-    int max_prefix = 32;
 
     if (!capable(CAP_NET_ADMIN))
         return -EPERM;
@@ -1445,59 +967,26 @@ static ssize_t whitelist_add_write(struct file *file, const char __user *buf,
             return -EINVAL;
     }
 
-    // Check if it's a valid IPv4 address
+    /* Check if it's a valid IPv4 address */
     if (in4_pton(input, -1, (u8 *)&ipv4, -1, NULL)) {
-        max_prefix = 32;
-        if (prefix_len < 0 || prefix_len > max_prefix)
+        if (prefix_len < 0 || prefix_len > 32)
             return -EINVAL;
 
-        // Additional validation: reject invalid IPs like 0.0.0.0, 255.255.255.255, multicast, etc.
+        /* Additional validation: reject invalid IPs */
         if (ipv4 == 0 || ipv4 == 0xFFFFFFFF ||
-            (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||  // 127.x.x.x
-            (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  // 224.0.0.0/4 (multicast)
-            (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  // 0.0.0.0/8
-            (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  // 255.0.0.0/8
+            (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||  /* 127.x.x.x */
+            (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  /* 224.0.0.0/4 (multicast) */
+            (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  /* 0.0.0.0/8 */
+            (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  /* 255.0.0.0/8 */
             printk(KERN_WARNING "firewall: Attempt to whitelist invalid IPv4: %s\n", input);
             return -EINVAL;
         }
 
-        // Calculate network mask based on prefix length
+        /* Calculate network mask based on prefix length */
         mask4 = prefix_len == 0 ? 0 : htonl(~((1U << (32 - prefix_len)) - 1));
-        __be32 normalized_ip = ipv4 & mask4;  // Normalize the IP to the network address
+        __be32 normalized_ip = ipv4 & mask4;
 
-        if (add_whitelist_entry_v4(&fw_info, normalized_ip, mask4, "manual") < 0)
-            return -ENOSPC;
-    }
-    // Check if it's a valid IPv6 address
-    else if (in6_pton(input, -1, ipv6.s6_addr, -1, NULL)) {
-        max_prefix = 128;
-        if (prefix_len < 0 || prefix_len > max_prefix)
-            return -EINVAL;
-
-        // Additional validation: reject invalid IPv6 addresses
-        if (ipv6_addr_any(&ipv6) || ipv6_addr_loopback(&ipv6) || ipv6_addr_is_multicast(&ipv6)) {
-            printk(KERN_WARNING "firewall: Attempt to whitelist invalid IPv6: %s\n", input);
-            return -EINVAL;
-        }
-
-        // Calculate IPv6 network mask based on prefix length
-        memset(&mask6, 0, sizeof(mask6));
-        int bytes = prefix_len / 8;
-        int bits = prefix_len % 8;
-        for (int i = 0; i < bytes; i++) {
-            mask6.s6_addr[i] = 0xFF;
-        }
-        if (bits > 0) {
-            mask6.s6_addr[bytes] = 0xFF << (8 - bits);
-        }
-
-        // Normalize the IPv6 address to the network address
-        struct in6_addr normalized_ipv6;
-        for (int i = 0; i < 16; i++) {
-            normalized_ipv6.s6_addr[i] = ipv6.s6_addr[i] & mask6.s6_addr[i];
-        }
-
-        if (add_whitelist_entry_v6(&fw_info, &normalized_ipv6, &mask6, "manual") < 0)
+        if (add_whitelist_entry(&fw_info, normalized_ip, mask4, "manual") < 0)
             return -ENOSPC;
     }
     else {
@@ -1509,18 +998,16 @@ static ssize_t whitelist_add_write(struct file *file, const char __user *buf,
 }
 
 /*
- * whitelist_remove_write - Remove IP from whitelist (supports IPv4 and IPv6)
+ * whitelist_remove_write - Remove IP from whitelist (IPv4 only)
  * Fixed version: Handles both individual IPs and subnets correctly by normalizing to network address
  */
 static ssize_t whitelist_remove_write(struct file *file, const char __user *buf,
                                        size_t count, loff_t *ppos)
 {
-    char input[INET6_ADDRSTRLEN + 8];  // Support IPv6 address + CIDR notation
+    char input[INET_ADDRSTRLEN + 8];
     ssize_t len = min(count, (size_t)(sizeof(input) - 1));
-    __be32 ipv4, mask4 = 0xFFFFFFFF;  // Default to /32 (single IP)
-    struct in6_addr ipv6, mask6;
+    __be32 ipv4, mask4 = 0xFFFFFFFF;  /* Default to /32 (single IP) */
     int prefix_len = 32;
-    int max_prefix = 32;
 
     if (!capable(CAP_NET_ADMIN))
         return -EPERM;
@@ -1545,61 +1032,28 @@ static ssize_t whitelist_remove_write(struct file *file, const char __user *buf,
             return -EINVAL;
     }
 
-    // Check if it's a valid IPv4 address
+    /* Check if it's a valid IPv4 address */
     if (in4_pton(input, -1, (u8 *)&ipv4, -1, NULL)) {
-        max_prefix = 32;
-        if (prefix_len < 0 || prefix_len > max_prefix)
+        if (prefix_len < 0 || prefix_len > 32)
             return -EINVAL;
 
-        // Calculate network mask based on prefix length
+        /* Calculate network mask based on prefix length */
         mask4 = prefix_len == 0 ? 0 : htonl(~((1U << (32 - prefix_len)) - 1));
 
-        // Additional validation: reject invalid IPs like 0.0.0.0, 255.255.255.255, multicast, etc.
+        /* Additional validation: reject invalid IPs */
         if (ipv4 == 0 || ipv4 == 0xFFFFFFFF ||
-            (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||  // 127.x.x.x
-            (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  // 224.0.0.0/4 (multicast)
-            (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  // 0.0.0.0/8
-            (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  // 255.0.0.0/8
+            (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||  /* 127.x.x.x */
+            (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  /* 224.0.0.0/4 (multicast) */
+            (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  /* 0.0.0.0/8 */
+            (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  /* 255.0.0.0/8 */
             printk(KERN_WARNING "firewall: Attempt to remove invalid IPv4 from whitelist: %s\n", input);
             return -EINVAL;
         }
 
-        // Normalize the IP to the network address for removal
+        /* Normalize the IP to the network address for removal */
         __be32 normalized_ip = ipv4 & mask4;
 
-        if (remove_whitelist_entry_v4(&fw_info, normalized_ip) < 0)
-            return -ENOENT;
-    }
-    // Check if it's a valid IPv6 address
-    else if (in6_pton(input, -1, ipv6.s6_addr, -1, NULL)) {
-        max_prefix = 128;
-        if (prefix_len < 0 || prefix_len > max_prefix)
-            return -EINVAL;
-
-        // Calculate IPv6 network mask based on prefix length
-        memset(&mask6, 0, sizeof(mask6));
-        int bytes = prefix_len / 8;
-        int bits = prefix_len % 8;
-        for (int i = 0; i < bytes; i++) {
-            mask6.s6_addr[i] = 0xFF;
-        }
-        if (bits > 0) {
-            mask6.s6_addr[bytes] = 0xFF << (8 - bits);
-        }
-
-        // Additional validation: reject invalid IPv6 addresses
-        if (ipv6_addr_any(&ipv6) || ipv6_addr_loopback(&ipv6) || ipv6_addr_is_multicast(&ipv6)) {
-            printk(KERN_WARNING "firewall: Attempt to remove invalid IPv6 from whitelist: %s\n", input);
-            return -EINVAL;
-        }
-
-        // Normalize the IPv6 address to the network address for removal
-        struct in6_addr normalized_ipv6;
-        for (int i = 0; i < 16; i++) {
-            normalized_ipv6.s6_addr[i] = ipv6.s6_addr[i] & mask6.s6_addr[i];
-        }
-
-        if (remove_whitelist_entry_v6(&fw_info, &normalized_ipv6) < 0)
+        if (remove_whitelist_entry(&fw_info, normalized_ip) < 0)
             return -ENOENT;
     }
     else {
@@ -1662,12 +1116,7 @@ static ssize_t config_write(struct file *file, const char __user *buf,
     if (copy_from_user(input, buf, len))
         return -EFAULT;
 
-    /* FIX: Check for null terminator within buffer */
-    if (strnlen(input, sizeof(input)) >= sizeof(input)) {
-        printk(KERN_ERR "firewall: Config input too long\n");
-        return -EINVAL;
-    }
-
+    input[len] = '\0';
     if (len > 0 && input[len - 1] == '\n')
         input[len - 1] = '\0';
 
@@ -1865,7 +1314,7 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
     }
 
     /* Check for IP fragmentation - only process unfragmented packets or first fragments */
-    if (ntohs(iph->frag_off) & IP_MF || (ntohs(iph->frag_off) & 0x1FFF) != 0) {
+    if (ntohs(iph->frag_off) & htons(0x2000) || (ntohs(iph->frag_off) & 0x1FFF) != 0) {
         /* Fragmented packets are allowed through - complex to handle in kernel space */
         return NF_ACCEPT;
     }
@@ -1917,8 +1366,7 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
                 net_warn_ratelimited("firewall: whitelist traversal limit reached, possible misconfiguration\n");
                 break;
             }
-            if (wl_entry->type == IPV4_ADDR &&
-                ((src_ip & wl_entry->mask.ipv4) == (wl_entry->ip.ipv4 & wl_entry->mask.ipv4))) {
+            if ((src_ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
                 is_whitelisted = true;
                 break;
             }
@@ -1935,142 +1383,7 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
      * pre-computing hash, ensuring consistency with hash_add which also uses
      * the key parameter for hash computation internally. */
     hash_for_each_possible_rcu(fw_info.ban_table, entry, hash, src_ip) {
-        if (compare_ips(&entry->ip, &(union ip_address){.ipv4 = src_ip}, IPV4_ADDR) &&
-            entry->type == IPV4_ADDR) {
-            if (time_after(now, entry->unban_time)) {
-                /* Entry exists but expired - treat as not banned */
-                is_banned = false;
-            } else {
-                /* Valid banned entry */
-                is_banned = true;
-            }
-            break;
-        }
-    }
-
-    rcu_read_unlock();
-
-    if (unlikely(is_banned))
-        return NF_DROP;
-
-    return NF_ACCEPT;
-}
-
-/*
- * nf_hook_func_ipv6 - Netfilter hook function for IPv6
- */
-static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
-                                  const struct nf_hook_state *state)
-{
-    struct ipv6hdr ip6h_copy;
-    struct ipv6hdr *ip6h;
-    struct in6_addr src_ip;
-    unsigned long now;
-    struct ban_entry *entry;
-    struct whitelist_entry *wl_entry;
-    u32 hash;
-    unsigned int bkt;
-    bool is_whitelisted = false;
-    bool is_banned = false;
-
-    if (unlikely(!skb))
-        return NF_ACCEPT;
-
-    /* Additional validation: verify packet integrity */
-    if (unlikely(skb->len < sizeof(struct ipv6hdr)))
-        return NF_ACCEPT;
-
-    /* Validate network header is set and points to valid data */
-    if (unlikely(!skb_network_header(skb)))
-        return NF_ACCEPT;
-
-    /* Verify that we can safely pull the IPv6 header */
-    if (unlikely(!pskb_may_pull(skb, sizeof(struct ipv6hdr))))
-        return NF_ACCEPT;
-
-    /* FIX P0-1: Use skb_header_pointer instead of ipv6_hdr(skb) to safely
-     * access IPv6 header from potentially non-linear or paged skb data.
-     * Direct ipv6_hdr(skb) can cause kernel crash when data is not contiguous. */
-    ip6h = skb_header_pointer(skb, 0, sizeof(ip6h_copy), &ip6h_copy);
-    if (!ip6h)
-        return NF_ACCEPT;
-
-    /* Additional validation: check IPv6 header fields for validity */
-    if (ip6h->version != 6)  /* IPv6 only */
-        return NF_ACCEPT;
-
-    /* 验证 IPv6 包长度：payload_len + 头部大小不应超过 skb 总长度
-     * 注意：skb->len 是 32 位 unsigned int，已经是主机字节序，不应使用 ntohs()
-     * payload_len 是 16 位网络字节序，需要转换 */
-    if ((u16)(ntohs(ip6h->payload_len)) + sizeof(struct ipv6hdr) > skb->len)
-        return NF_ACCEPT;
-
-    src_ip = ip6h->saddr;
-
-    /* Validate source IP is not reserved/private for internal use */
-    if (ipv6_addr_any(&src_ip) || ipv6_addr_loopback(&src_ip) || ipv6_addr_is_multicast(&src_ip)) {
-        return NF_ACCEPT;
-    }
-
-    /* Always allow link-local addresses (fe80::/10) */
-    if ((src_ip.s6_addr[0] == 0xFE) && ((src_ip.s6_addr[1] & 0xC0) == 0x80)) {
-        return NF_ACCEPT;
-    }
-
-    now = jiffies;
-
-    /* 修复: 在 RCU 锁内再次检查 shutdown 状态，防止竞态窗口
-     * 前面的检查在 RCU 锁外，存在微小窗口可能访问已释放内存。
-     * 在锁内二次检查确保安全性。 */
-    if (unlikely(atomic_read(&fw_info.shutting_down)))
-        return NF_ACCEPT;
-
-    /* RCU read lock for whitelist and ban table access */
-    rcu_read_lock();
-
-    /* 修复: 在 RCU 锁内再次检查 shutdown 状态（双重检查） */
-    if (unlikely(atomic_read(&fw_info.shutting_down))) {
-        rcu_read_unlock();
-        return NF_ACCEPT;
-    }
-
-    /* FIX P0-2: Whitelist traversal with performance protection.
-     * Since whitelist requires subnet matching for IPv6, we must traverse all entries.
-     * Add iteration limit protection to prevent performance collapse. */
-    {
-        int wl_iterations = 0;
-        hash_for_each_rcu(fw_info.whitelist_table, bkt, wl_entry, hash) {
-            /* Add max iteration protection to prevent performance collapse */
-            if (++wl_iterations > MAX_WHITELIST_ENTRIES) {
-                net_warn_ratelimited("firewall: ipv6 whitelist traversal limit reached\n");
-                break;
-            }
-            if (wl_entry->type == IPV6_ADDR) {
-                // Subnet matching logic for IPv6
-                struct in6_addr masked_ip, masked_entry;
-                for (int i = 0; i < 4; i++) {
-                    masked_ip.s6_addr32[i] = src_ip.s6_addr32[i] & wl_entry->mask.ipv6.s6_addr32[i];
-                    masked_entry.s6_addr32[i] = wl_entry->ip.ipv6.s6_addr32[i] & wl_entry->mask.ipv6.s6_addr32[i];
-                }
-
-                if (ipv6_addr_equal(&masked_ip, &masked_entry)) {
-                    is_whitelisted = true;
-                    break;
-                }
-            }
-        }
-    }
-
-    if (unlikely(is_whitelisted)) {
-        rcu_read_unlock();
-        return NF_ACCEPT;
-    }
-
-    /* Second check: ban list - only check if not whitelisted */
-    hash = generate_ip_hash(&(union ip_address){.ipv6 = src_ip}, IPV6_ADDR);
-    hash_for_each_possible_rcu(fw_info.ban_table, entry, hash, src_ip.s6_addr32[0]) {
-        if (compare_ips(&entry->ip, &(union ip_address){.ipv6 = src_ip}, IPV6_ADDR) &&
-            entry->type == IPV6_ADDR) {
+        if (compare_ips(entry->ip, src_ip)) {
             if (time_after(now, entry->unban_time)) {
                 /* Entry exists but expired - treat as not banned */
                 is_banned = false;
@@ -2097,13 +1410,6 @@ static struct nf_hook_ops nf_ops_ipv4 __read_mostly = {
     .priority = NF_IP_PRI_FILTER - 1,
 };
 
-static struct nf_hook_ops nf_ops_ipv6 __read_mostly = {
-    .hook = nf_hook_func_ipv6,
-    .pf = NFPROTO_IPV6,
-    .hooknum = NF_INET_PRE_ROUTING,
-    .priority = NF_IP_PRI_FILTER - 1,
-};
-
 /* State persistence functions */
 int save_state_to_file(const char *filename)
 {
@@ -2115,22 +1421,15 @@ int save_state_to_file(const char *filename)
 
     /* 临时存储结构 - 在 RCU 锁内收集数据，锁外执行 I/O 操作 */
     struct saved_ban_entry {
-        char ip_str[INET6_ADDRSTRLEN];
-        bool is_ipv4;
-        union {
-            __be32 ipv4;
-            struct in6_addr ipv6;
-        };
+        char ip_str[INET_ADDRSTRLEN];
+        __be32 ipv4;
         unsigned long remaining_time;
     };
 
     struct saved_whitelist_entry {
-        char ip_str[INET6_ADDRSTRLEN];
-        bool is_ipv4;
-        union {
-            __be32 ipv4;
-            struct in6_addr ipv6;
-        };
+        char ip_str[INET_ADDRSTRLEN];
+        __be32 ipv4;
+        __be32 mask;
         int prefix_len;
         char device_name[16];
     };
@@ -2222,24 +1521,15 @@ int save_state_to_file(const char *filename)
         return -ENOMEM;
     }
 
-    /* 阶段2: RCU 锁内收集 ban 条目（仅复制数据到临时数组，不调用可能睡眠的函数） */
+    /* 阶段2: RCU 锁内收集 ban 条目 */
     rcu_read_lock();
     hash_for_each_rcu(fw_info.ban_table, hash, entry, hash) {
         unsigned long remaining_time = (entry->unban_time - jiffies) / HZ;
         if (remaining_time > 0 && ban_count < MAX_SAVE_BAN) {
-            if (entry->type == IPV4_ADDR) {
-                ipv4_to_str(entry->ip.ipv4, ban_entries[ban_count].ip_str, sizeof(ban_entries[ban_count].ip_str));
-                ban_entries[ban_count].is_ipv4 = true;
-                ban_entries[ban_count].ipv4 = entry->ip.ipv4;
-                ban_entries[ban_count].remaining_time = remaining_time;
-                ban_count++;
-            } else if (entry->type == IPV6_ADDR) {
-                ipv6_to_str(&entry->ip.ipv6, ban_entries[ban_count].ip_str, sizeof(ban_entries[ban_count].ip_str));
-                ban_entries[ban_count].is_ipv4 = false;
-                ban_entries[ban_count].ipv6 = entry->ip.ipv6;
-                ban_entries[ban_count].remaining_time = remaining_time;
-                ban_count++;
-            }
+            ipv4_to_str(entry->ip, ban_entries[ban_count].ip_str, sizeof(ban_entries[ban_count].ip_str));
+            ban_entries[ban_count].ipv4 = entry->ip;
+            ban_entries[ban_count].remaining_time = remaining_time;
+            ban_count++;
         }
     }
     rcu_read_unlock();
@@ -2248,30 +1538,13 @@ int save_state_to_file(const char *filename)
     rcu_read_lock();
     hash_for_each_rcu(fw_info.whitelist_table, hash, wl_entry, hash) {
         if (wl_count < MAX_SAVE_WL) {
-            if (wl_entry->type == IPV4_ADDR) {
-                __be32 network_addr = wl_entry->ip.ipv4 & wl_entry->mask.ipv4;
-                ipv4_to_str(network_addr, wl_entries[wl_count].ip_str, sizeof(wl_entries[wl_count].ip_str));
-                wl_entries[wl_count].is_ipv4 = true;
-                wl_entries[wl_count].ipv4 = wl_entry->ip.ipv4;
-                wl_entries[wl_count].prefix_len = inet_mask_len(wl_entry->mask.ipv4);
-                strscpy(wl_entries[wl_count].device_name, wl_entry->device_name, sizeof(wl_entries[wl_count].device_name));
-                wl_count++;
-            } else if (wl_entry->type == IPV6_ADDR) {
-                int bits = 0;
-                for (int i = 0; i < 16; i++) {
-                    unsigned char b = wl_entry->mask.ipv6.s6_addr[i];
-                    while (b) {
-                        bits++;
-                        b &= b - 1;
-                    }
-                }
-                ipv6_to_str(&wl_entry->ip.ipv6, wl_entries[wl_count].ip_str, sizeof(wl_entries[wl_count].ip_str));
-                wl_entries[wl_count].is_ipv4 = false;
-                wl_entries[wl_count].ipv6 = wl_entry->ip.ipv6;
-                wl_entries[wl_count].prefix_len = bits;
-                strscpy(wl_entries[wl_count].device_name, wl_entry->device_name, sizeof(wl_entries[wl_count].device_name));
-                wl_count++;
-            }
+            __be32 network_addr = wl_entry->ip & wl_entry->mask;
+            ipv4_to_str(network_addr, wl_entries[wl_count].ip_str, sizeof(wl_entries[wl_count].ip_str));
+            wl_entries[wl_count].ipv4 = wl_entry->ip;
+            wl_entries[wl_count].mask = wl_entry->mask;
+            wl_entries[wl_count].prefix_len = inet_mask_len(wl_entry->mask);
+            strscpy(wl_entries[wl_count].device_name, wl_entry->device_name, sizeof(wl_entries[wl_count].device_name));
+            wl_count++;
         }
     }
     rcu_read_unlock();
@@ -2287,13 +1560,8 @@ int save_state_to_file(const char *filename)
 
     /* 阶段5: 锁外写入 ban 条目 */
     for (int i = 0; i < ban_count; i++) {
-        if (ban_entries[i].is_ipv4) {
-            written = snprintf(buffer, sizeof(buffer), "BAN_V4 %s %lu\n",
-                             ban_entries[i].ip_str, ban_entries[i].remaining_time);
-        } else {
-            written = snprintf(buffer, sizeof(buffer), "BAN_V6 %s %lu\n",
-                             ban_entries[i].ip_str, ban_entries[i].remaining_time);
-        }
+        written = snprintf(buffer, sizeof(buffer), "BAN_V4 %s %lu\n",
+                         ban_entries[i].ip_str, ban_entries[i].remaining_time);
 
         if (kernel_write(file, buffer, written, &pos) != written) {
             printk(KERN_ERR "firewall: Failed to write ban entry to state file\n");
@@ -2306,13 +1574,8 @@ int save_state_to_file(const char *filename)
 
     /* 阶段6: 锁外写入 whitelist 条目 */
     for (int i = 0; i < wl_count; i++) {
-        if (wl_entries[i].is_ipv4) {
-            written = snprintf(buffer, sizeof(buffer), "WL_V4 %s %d %s\n",
-                              wl_entries[i].ip_str, wl_entries[i].prefix_len, wl_entries[i].device_name);
-        } else {
-            written = snprintf(buffer, sizeof(buffer), "WL_V6 %s %d %s\n",
-                              wl_entries[i].ip_str, wl_entries[i].prefix_len, wl_entries[i].device_name);
-        }
+        written = snprintf(buffer, sizeof(buffer), "WL_V4 %s %d %s\n",
+                          wl_entries[i].ip_str, wl_entries[i].prefix_len, wl_entries[i].device_name);
 
         if (kernel_write(file, buffer, written, &pos) != written) {
             printk(KERN_ERR "firewall: Failed to write whitelist entry to state file\n");
@@ -2383,7 +1646,7 @@ int restore_state_from_file(const char *filename)
                     __be32 ip;
                     if (in4_pton(ip_str, -1, (u8 *)&ip, -1, NULL)) {
                         /* Check if IP is whitelisted before restoring ban */
-                        if (is_in_whitelist_v4(&fw_info, ip)) {
+                        if (is_in_whitelist(&fw_info, ip)) {
                             printk(KERN_INFO "firewall: Skipping restored ban for whitelisted IP %s\n", ip_str);
                             continue;
                         }
@@ -2423,8 +1686,7 @@ int restore_state_from_file(const char *filename)
                                 continue;
                             }
 
-                            entry->ip.ipv4 = ip;
-                            entry->type = IPV4_ADDR;
+                            entry->ip = ip;
                             entry->ban_time = jiffies;
                             entry->unban_time = unban_time;
                             atomic_set(&entry->retry_count, 0);
@@ -2436,71 +1698,6 @@ int restore_state_from_file(const char *filename)
                             spin_unlock(&fw_info.lock);
 
                             printk(KERN_INFO "firewall: Restored ban for IPv4 %s (expires in %lu seconds)\n",
-                                   ip_str, remaining_time);
-                        }
-                    }
-                }
-            } else if (strcmp(cmd, "BAN_V6") == 0 && token) {
-                char *ip_str = strsep(&token, " ");
-                char *time_str = strsep(&token, " ");
-
-                if (ip_str && time_str) {
-                    struct in6_addr ip;
-                    if (in6_pton(ip_str, -1, ip.s6_addr, -1, NULL)) {
-                        /* Check if IP is whitelisted before restoring ban */
-                        if (is_in_whitelist_v6(&fw_info, &ip)) {
-                            printk(KERN_INFO "firewall: Skipping restored ban for whitelisted IPv6 %s\n", ip_str);
-                            continue;
-                        }
-
-                        unsigned long remaining_time;
-                        if (kstrtoul(time_str, 10, &remaining_time) == 0) {
-                            /* FIX C4: 验证 remaining_time 合理性：不能超过 1 年，不能为 0 */
-                            if (remaining_time == 0 || remaining_time > 365UL * 24 * 60 * 60) {
-                                printk(KERN_WARNING "firewall: Skipping ban with invalid remaining time: %lu\n", remaining_time);
-                                continue;
-                            }
-
-                            /* FIX C4: 检查整数溢出：remaining_time * HZ 不能溢出 */
-                            if (remaining_time > (ULONG_MAX / HZ)) {
-                                printk(KERN_WARNING "firewall: Skipping ban - remaining_time * HZ would overflow\n");
-                                continue;
-                            }
-
-                            unsigned long ban_duration = remaining_time * HZ;
-
-                            /* FIX C4: 检查 jiffies + ban_duration 是否会溢出回绕 */
-                            unsigned long unban_time;
-                            if (jiffies > ULONG_MAX - ban_duration) {
-                                /* jiffies 即将回绕，使用最大安全值 */
-                                unban_time = jiffies + min(ban_duration, ULONG_MAX - jiffies);
-                                printk(KERN_WARNING "firewall: Jiffies wrap protection applied for ban restoration\n");
-                            } else {
-                                unban_time = jiffies + ban_duration;
-                            }
-
-                            /* Add ban entry with calculated unban time */
-                            struct ban_entry *entry;
-
-                            entry = kmalloc(sizeof(*entry), GFP_KERNEL);
-                            if (!entry) {
-                                printk(KERN_ERR "firewall: Failed to allocate memory for restored ban entry\n");
-                                continue;
-                            }
-
-                            entry->ip.ipv6 = ip;
-                            entry->type = IPV6_ADDR;
-                            entry->ban_time = jiffies;
-                            entry->unban_time = unban_time;
-                            atomic_set(&entry->retry_count, 0);
-                            entry->being_freed = false;  /* 初始化防止双重释放标记 */
-
-                            spin_lock(&fw_info.lock);
-                            hash_add(fw_info.ban_table, &entry->hash, ip.s6_addr32[0]);
-                            atomic_inc(&fw_info.ban_count);
-                            spin_unlock(&fw_info.lock);
-
-                            printk(KERN_INFO "firewall: Restored ban for IPv6 %s (expires in %lu seconds)\n",
                                    ip_str, remaining_time);
                         }
                     }
@@ -2522,48 +1719,10 @@ int restore_state_from_file(const char *filename)
                             __be32 normalized_ip = ip & mask;
 
                             /* Add whitelist entry */
-                            int result = add_whitelist_entry_v4(&fw_info, normalized_ip, mask,
+                            int result = add_whitelist_entry(&fw_info, normalized_ip, mask,
                                                                 dev_name ? dev_name : "restored");
                             if (result == 0) {
                                 printk(KERN_INFO "firewall: Restored whitelist entry for IPv4 %s/%d\n",
-                                       ip_str, prefix_len);
-                            }
-                        }
-                    }
-                }
-            } else if (strcmp(cmd, "WL_V6") == 0 && token) {
-                char *ip_str = strsep(&token, " ");
-                char *mask_str = strsep(&token, " ");
-                char *dev_name = strsep(&token, " ");
-
-                if (ip_str && mask_str) {
-                    struct in6_addr ip, mask;
-                    int prefix_len;
-
-                    if (kstrtoint(mask_str, 10, &prefix_len) == 0) {
-                        /* Calculate IPv6 network mask based on prefix length */
-                        memset(&mask, 0, sizeof(mask));
-                        int bytes = prefix_len / 8;
-                        int bits = prefix_len % 8;
-                        for (int i = 0; i < bytes; i++) {
-                            mask.s6_addr[i] = 0xFF;
-                        }
-                        if (bits > 0) {
-                            mask.s6_addr[bytes] = 0xFF << (8 - bits);
-                        }
-
-                        if (in6_pton(ip_str, -1, ip.s6_addr, -1, NULL)) {
-                            /* Normalize the IPv6 address to the network address */
-                            struct in6_addr normalized_ip;
-                            for (int i = 0; i < 16; i++) {
-                                normalized_ip.s6_addr[i] = ip.s6_addr[i] & mask.s6_addr[i];
-                            }
-
-                            /* Add whitelist entry */
-                            int result = add_whitelist_entry_v6(&fw_info, &normalized_ip, &mask,
-                                                                dev_name ? dev_name : "restored");
-                            if (result == 0) {
-                                printk(KERN_INFO "firewall: Restored whitelist entry for IPv6 %s/%d\n",
                                        ip_str, prefix_len);
                             }
                         }
@@ -2661,13 +1820,6 @@ static int __init firewall_init(void)
         goto err_procfs;
     }
 
-    ret = nf_register_net_hook(&init_net, &nf_ops_ipv6);
-    if (ret) {
-        printk(KERN_ERR "firewall: Failed to register IPv6 netfilter hook: %d\n", ret);
-        nf_unregister_net_hook(&init_net, &nf_ops_ipv4);
-        goto err_procfs;
-    }
-
     printk(KERN_INFO "firewall: Module loaded successfully (ban_time=%u, max_retries=%u, findtime=%u, state_file=%s)\n",
            fw_ban_time, fw_max_retries, fw_findtime, state_file);
     return 0;
@@ -2696,7 +1848,6 @@ static void __exit firewall_exit(void)
     atomic_set(&fw_info.shutting_down, 1);
 
     /* FIX C5: 1. 先注销 netfilter hooks，阻止新包进入 */
-    nf_unregister_net_hook(&init_net, &nf_ops_ipv6);
     nf_unregister_net_hook(&init_net, &nf_ops_ipv4);
 
     /* FIX C5: 2. 停止定时器 */

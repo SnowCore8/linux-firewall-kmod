@@ -662,88 +662,10 @@ static int extract_ipv4(const char *line, char *ip_out, size_t ip_size)
     return 0;
 }
 
-/* Extract IPv6 address from log line */
-static int extract_ipv6(const char *line, char *ip_out, size_t ip_size)
-{
-    const char *ptr = line;
-    struct in6_addr addr;
-
-    // Search for IPv6 patterns in the log line
-    while (*ptr) {
-        // Try to parse IPv6 address
-        if (inet_pton(AF_INET6, ptr, &addr) == 1) {
-            // Found a valid IPv6 address at this position
-            // We need to extract just the IPv6 part
-            const char *end = ptr;
-            int brackets = 0;
-            int valid_chars = 0;
-
-            // Handle bracketed IPv6 addresses [::1]
-            if (*end == '[') {
-                brackets = 1;
-                end++;
-            }
-
-            // Move through valid IPv6 characters
-            while (*end &&
-                   ((*end >= '0' && *end <= '9') ||
-                    (*end >= 'a' && *end <= 'f') ||
-                    (*end >= 'A' && *end <= 'F') ||
-                    *end == ':' ||
-                    (brackets && *end == ']'))) {
-
-                if (brackets && *end == ']') {
-                    end++;
-                    break;
-                }
-
-                valid_chars++;
-                end++;
-            }
-
-            if (valid_chars > 0) {
-                size_t len = end - ptr;
-                if (len < ip_size) {
-                    strncpy(ip_out, ptr, len);
-                    ip_out[len] = '\0';
-
-                    // Validate the extracted IPv6 address
-                    if (inet_pton(AF_INET6, ip_out, &addr) == 1) {
-                        // Additional validation: reject invalid IPv6 addresses
-                        if (IN6_IS_ADDR_UNSPECIFIED(&addr) ||    // :: (unspecified)
-                            IN6_IS_ADDR_LOOPBACK(&addr) ||      // ::1 (loopback)
-                            IN6_IS_ADDR_MULTICAST(&addr)) {     // Multicast addresses
-                            ptr = end; // Move past this invalid address
-                            continue;
-                        }
-
-                        return 1;
-                    }
-                }
-            }
-        }
-
-        // Move to next character
-        ptr++;
-    }
-
-    return 0;
-}
-
-/* Extract IP address from log line (supports both IPv4 and IPv6) */
+/* Extract IP address from log line (IPv4 only) */
 static int extract_ip(const char *line, char *ip_out, size_t ip_size)
 {
-    // First try IPv4 extraction
-    if (extract_ipv4(line, ip_out, ip_size)) {
-        return 1;
-    }
-
-    // Then try IPv6 extraction
-    if (extract_ipv6(line, ip_out, ip_size)) {
-        return 1;
-    }
-
-    return 0;
+    return extract_ipv4(line, ip_out, ip_size);
 }
 
 /* Helper function to extract and validate IP from a log line.
@@ -751,9 +673,8 @@ static int extract_ip(const char *line, char *ip_out, size_t ip_size)
  * Consolidates duplicated IP extraction/validation logic from sshd/vsftpd/nginx branches. */
 static int extract_and_validate_ip(const char *log_line, char *ip_out, size_t ip_size)
 {
-    char ip_buf[INET6_ADDRSTRLEN];
+    char ip_buf[INET_ADDRSTRLEN];
     struct in_addr addr4;
-    struct in6_addr addr6;
 
     if (!parse_log_line(log_line, ip_buf, sizeof(ip_buf))) {
         return 0;
@@ -767,21 +688,6 @@ static int extract_and_validate_ip(const char *log_line, char *ip_out, size_t ip
             ip_num == 0xFFFFFFFF ||                         /* 255.255.255.255 */
             ((ip_num >> 24) & 0xFF) == 127 ||              /* 127.x.x.x (loopback) */
             (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) { /* multicast */
-            return 0;
-        }
-        size_t copy_len = strlen(ip_buf);
-        if (copy_len >= ip_size) copy_len = ip_size - 1;
-        memcpy(ip_out, ip_buf, copy_len);
-        ip_out[copy_len] = '\0';
-        return 1;
-    }
-
-    /* Validate IPv6 */
-    if (inet_pton(AF_INET6, ip_buf, &addr6) == 1) {
-        /* Reject invalid/reserved IPv6 addresses */
-        if (IN6_IS_ADDR_UNSPECIFIED(&addr6) ||    /* :: */
-            IN6_IS_ADDR_LOOPBACK(&addr6) ||      /* ::1 */
-            IN6_IS_ADDR_MULTICAST(&addr6)) {     /* multicast */
             return 0;
         }
         size_t copy_len = strlen(ip_buf);
@@ -817,12 +723,12 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
                 ip_start = line + matches[2].rm_so;
                 ip_len = matches[2].rm_eo - matches[2].rm_so;
 
-                if (ip_len >= INET6_ADDRSTRLEN || ip_len == 0) {
+                if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
                     syslog(LOG_WARNING, "firewall: Invalid IP length in sshd log: %zu", ip_len);
                     return 0;
                 }
 
-                char ip_buf[INET6_ADDRSTRLEN];
+                char ip_buf[INET_ADDRSTRLEN];
                 memcpy(ip_buf, ip_start, ip_len);
                 ip_buf[ip_len] = '\0';
                 strncpy(ip_out, ip_buf, ip_size - 1);
@@ -845,12 +751,12 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
                 ip_start = line + matches[1].rm_so;
                 ip_len = matches[1].rm_eo - matches[1].rm_so;
 
-                if (ip_len >= INET6_ADDRSTRLEN || ip_len == 0) {
+                if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
                     syslog(LOG_WARNING, "firewall: Invalid IP length in vsftpd log: %zu", ip_len);
                     return 0;
                 }
 
-                char ip_buf[INET6_ADDRSTRLEN];
+                char ip_buf[INET_ADDRSTRLEN];
                 memcpy(ip_buf, ip_start, ip_len);
                 ip_buf[ip_len] = '\0';
                 strncpy(ip_out, ip_buf, ip_size - 1);
@@ -873,12 +779,12 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
                 ip_start = line + matches[1].rm_so;
                 ip_len = matches[1].rm_eo - matches[1].rm_so;
 
-                if (ip_len >= INET6_ADDRSTRLEN || ip_len == 0) {
+                if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
                     syslog(LOG_WARNING, "firewall: Invalid IP length in nginx log: %zu", ip_len);
                     return 0;
                 }
 
-                char ip_buf[INET6_ADDRSTRLEN];
+                char ip_buf[INET_ADDRSTRLEN];
                 memcpy(ip_buf, ip_start, ip_len);
                 ip_buf[ip_len] = '\0';
                 strncpy(ip_out, ip_buf, ip_size - 1);
@@ -1145,13 +1051,12 @@ static int secure_procfs_write(const char *path, const char *data, size_t data_l
     return 0;
 }
 
-/* Ban IP via procfs (supports both IPv4 and IPv6) */
+/* Ban IP via procfs (IPv4 only) */
 static int ban_ip(const char *ip)
 {
     struct in_addr addr4;
-    struct in6_addr addr6;
     size_t ip_len;
-    char ip_with_newline[INET6_ADDRSTRLEN + 2];  // +1 for \n, +1 for \0 - support IPv6 addresses
+    char ip_with_newline[INET_ADDRSTRLEN + 2];  // +1 for \n, +1 for \0
 
     // Validate input IP format before attempting to ban
     if (!ip) {
@@ -1160,34 +1065,23 @@ static int ban_ip(const char *ip)
     }
 
     ip_len = strlen(ip);
-    if (ip_len == 0 || ip_len >= INET6_ADDRSTRLEN) {
+    if (ip_len == 0 || ip_len >= INET_ADDRSTRLEN) {
         syslog(LOG_ERR, "firewall: Invalid IP length %zu in ban_ip", ip_len);
         return -1;
     }
 
     // Check if it's a valid IPv4 address
-    if (inet_pton(AF_INET, ip, &addr4) == 1) {
-        // Additional validation: reject invalid IPv4 IPs like 0.0.0.0, 127.x.x.x, multicast, etc.
-        unsigned int ip_num = ntohl(addr4.s_addr);
-        if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
-            ((ip_num >> 24) & 0xFF) == 127 ||  // 127.x.x.x
-            (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {  // 224.0.0.0/4 (multicast)
-            syslog(LOG_ERR, "firewall: Attempt to ban invalid IPv4: %s", ip);
-            return -1;
-        }
+    if (inet_pton(AF_INET, ip, &addr4) != 1) {
+        syslog(LOG_ERR, "firewall: Invalid IPv4 address format: %s", ip);
+        return -1;
     }
-    // Check if it's a valid IPv6 address
-    else if (inet_pton(AF_INET6, ip, &addr6) == 1) {
-        // Additional validation: reject invalid IPv6 addresses
-        if (IN6_IS_ADDR_UNSPECIFIED(&addr6) ||    // :: (unspecified)
-            IN6_IS_ADDR_LOOPBACK(&addr6) ||      // ::1 (loopback)
-            IN6_IS_ADDR_MULTICAST(&addr6)) {     // Multicast addresses
-            syslog(LOG_ERR, "firewall: Attempt to ban invalid IPv6: %s", ip);
-            return -1;
-        }
-    }
-    else {
-        syslog(LOG_ERR, "firewall: Invalid IP address format: %s", ip);
+
+    // Additional validation: reject invalid IPv4 IPs like 0.0.0.0, 127.x.x.x, multicast, etc.
+    unsigned int ip_num = ntohl(addr4.s_addr);
+    if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
+        ((ip_num >> 24) & 0xFF) == 127 ||  // 127.x.x.x
+        (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {  // 224.0.0.0/4 (multicast)
+        syslog(LOG_ERR, "firewall: Attempt to ban invalid IPv4: %s", ip);
         return -1;
     }
 
@@ -1204,13 +1098,12 @@ static int ban_ip(const char *ip)
     return 0;
 }
 
-/* Unban IP via procfs (used for manual unban) (supports both IPv4 and IPv6) */
+/* Unban IP via procfs (used for manual unban) (IPv4 only) */
 __attribute__((unused))
 static int unban_ip(const char *ip)
 {
     struct in_addr addr4;
-    struct in6_addr addr6;
-    char ip_with_newline[INET6_ADDRSTRLEN + 2];  // +1 for \n, +1 for \0 - support IPv6 addresses
+    char ip_with_newline[INET_ADDRSTRLEN + 2];  // +1 for \n, +1 for \0
 
     // Validate input IP format before attempting to unban
     if (!ip) {
@@ -1219,28 +1112,17 @@ static int unban_ip(const char *ip)
     }
 
     // Check if it's a valid IPv4 address
-    if (inet_pton(AF_INET, ip, &addr4) == 1) {
-        // Additional validation: reject invalid IPv4 IPs like 0.0.0.0, 127.x.x.x, multicast, etc.
-        unsigned int ip_num = ntohl(addr4.s_addr);
-        if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
-            ((ip_num >> 24) & 0xFF) == 127 ||  // 127.x.x.x
-            (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {  // 224.0.0.0/4 (multicast)
-            syslog(LOG_ERR, "firewall: Attempt to unban invalid IPv4: %s", ip);
-            return -1;
-        }
+    if (inet_pton(AF_INET, ip, &addr4) != 1) {
+        syslog(LOG_ERR, "firewall: Invalid IPv4 address format: %s", ip);
+        return -1;
     }
-    // Check if it's a valid IPv6 address
-    else if (inet_pton(AF_INET6, ip, &addr6) == 1) {
-        // Additional validation: reject invalid IPv6 addresses
-        if (IN6_IS_ADDR_UNSPECIFIED(&addr6) ||    // :: (unspecified)
-            IN6_IS_ADDR_LOOPBACK(&addr6) ||      // ::1 (loopback)
-            IN6_IS_ADDR_MULTICAST(&addr6)) {     // Multicast addresses
-            syslog(LOG_ERR, "firewall: Attempt to unban invalid IPv6: %s", ip);
-            return -1;
-        }
-    }
-    else {
-        syslog(LOG_ERR, "firewall: Invalid IP address format: %s", ip);
+
+    // Additional validation: reject invalid IPv4 IPs like 0.0.0.0, 127.x.x.x, multicast, etc.
+    unsigned int ip_num = ntohl(addr4.s_addr);
+    if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
+        ((ip_num >> 24) & 0xFF) == 127 ||  // 127.x.x.x
+        (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {  // 224.0.0.0/4 (multicast)
+        syslog(LOG_ERR, "firewall: Attempt to unban invalid IPv4: %s", ip);
         return -1;
     }
 
@@ -1429,7 +1311,7 @@ static void process_single_line(const char *line, const char *log_path,
         return;
     }
 
-    char ip[46];
+    char ip[INET_ADDRSTRLEN];
     if (extract_and_validate_ip(line, ip, sizeof(ip))) {
         handle_failed_attempt(ip, max_retries, findtime);
     }
@@ -2038,12 +1920,11 @@ static int init_log_patterns(void)
      *   [1] = "invalid user " (optional)
      *   [2] = IP address  ← we use this
      * Example: "Failed password for invalid user admin from 192.168.1.100"
-     * Updated to support both IPv4 and IPv6 addresses
      * Fixed: Added bounded repetition to prevent catastrophic backtracking
      */
     memset(&sshd_regex, 0, sizeof(sshd_regex));  // Initialize to zero to prevent undefined behavior
     ret = regcomp(&sshd_regex,
-        "^Failed password for (invalid user )?[a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}|[0-9a-fA-F:]{3,39})",
+        "^Failed password for (invalid user )?[a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})",
         REG_EXTENDED);  // REG_NOSUB removed: we need capture groups to extract IP addresses
     if (ret) {
         char errbuf[256];
@@ -2062,7 +1943,7 @@ static int init_log_patterns(void)
      */
     memset(&vsftpd_regex, 0, sizeof(vsftpd_regex));  // Initialize to zero to prevent undefined behavior
     ret = regcomp(&vsftpd_regex,
-        "^FAIL LOGIN: client=([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}|[0-9a-fA-F:]{3,39})",
+        "^FAIL LOGIN: client=([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})",
         REG_EXTENDED);  // REG_NOSUB removed: we need capture groups to extract IP addresses
     if (ret) {
         char errbuf[256];
@@ -2082,7 +1963,7 @@ static int init_log_patterns(void)
      */
     memset(&nginx_regex, 0, sizeof(nginx_regex));  // Initialize to zero to prevent undefined behavior
     ret = regcomp(&nginx_regex,
-        "^([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}|[0-9a-fA-F:]{3,39}) [^ ]{1,64} [^ ]{1,64} \\[[^\\]]{1,64}\\] \"[^\"]{1,256}\" 401",
+        "^([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}) [^ ]{1,64} [^ ]{1,64} \\[[^\\]]{1,64}\\] \"[^\"]{1,256}\" 401",
         REG_EXTENDED);  // REG_NOSUB removed: we need capture groups to extract IP addresses
     if (ret) {
         char errbuf[256];
