@@ -60,7 +60,6 @@ struct ban_entry {
     atomic_t retry_count;
     struct hlist_node hash;
     struct rcu_head rcu_head;  /* For RCU-based freeing */
-    bool being_freed;          /* Prevent double free - set during cleanup_expired_bans */
 };
 
 /* Global firewall structure */

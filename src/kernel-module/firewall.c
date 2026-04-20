@@ -313,7 +313,6 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
      * torn reads when the value is being concurrently updated via procfs. */
     entry->unban_time = jiffies + (unsigned long)READ_ONCE(fw_ban_time) * HZ;
     atomic_set(&entry->retry_count, 0);
-    entry->being_freed = false;  /* 初始化防止双重释放标记 */
 
     hash_add(fw->ban_table, &entry->hash, ip);
     atomic_inc(&fw->ban_count);
@@ -345,8 +344,6 @@ int unban_ip(struct firewall_info *fw, __be32 ip)
     spin_lock(&fw->lock);
     hash_for_each_possible(fw->ban_table, entry, hash, ip) {
         if (compare_ips(entry->ip, ip)) {
-            /* 修复: 设置 being_freed 标记，防止并发 cleanup 导致的双重释放 */
-            entry->being_freed = true;
             hash_del(&entry->hash);
             atomic_dec(&fw->ban_count);
             found = 1;
@@ -465,19 +462,7 @@ void cleanup_expired_bans(struct firewall_info *fw)
                 break;
             }
 
-            /* 修复: 检查是否已被标记为释放中，防止双重释放
-             * 理论上可能存在同一条目被多次处理的风险，
-             * 通过 being_freed 标记确保每个条目只被释放一次。
-             */
-            if (entry->being_freed) {
-                processed++;
-                continue;
-            }
-
             if (time_after(now, entry->unban_time)) {
-                /* 修复: 标记为正在释放，防止并发场景下的双重释放 */
-                entry->being_freed = true;
-
                 /* FIX P1-4: Use hlist_del_rcu instead of hlist_del to safely
                  * remove entry while RCU readers may still be accessing it.
                  * hlist_del is not safe when concurrent RCU traversal is possible
@@ -1484,24 +1469,23 @@ int save_state_to_file(const char *filename)
         int getattr_err = vfs_getattr(&path, &stat_buf2);
 #endif
         if (getattr_err) {
-            /* 修复: vfs_getattr 失败时也需释放 path，防止引用泄漏 */
             net_warn_ratelimited("firewall: Cannot stat file %s, proceeding anyway\n", filename);
-            path_put(&path);
-        } else {
-            /* Check if it's a symbolic link - use S_ISLNK on stat mode */
-            if (S_ISLNK(stat_buf2.mode)) {
-                printk(KERN_ERR "firewall: Refusing to write to symbolic link: %s\n", filename);
-                path_put(&path); /* Release the path reference */
-                return -EACCES;
-            }
-            /* Check if it's a directory */
-            if (S_ISDIR(stat_buf2.mode)) {
-                printk(KERN_ERR "firewall: Refusing to write to directory: %s\n", filename);
-                path_put(&path); /* Release the path reference */
-                return -EISDIR;
-            }
-            path_put(&path); /* Release the path reference */
+            goto out_path_put;
         }
+        /* Check if it's a symbolic link - use S_ISLNK on stat mode */
+        if (S_ISLNK(stat_buf2.mode)) {
+            printk(KERN_ERR "firewall: Refusing to write to symbolic link: %s\n", filename);
+            err = -EACCES;
+            goto out_path_put;
+        }
+        /* Check if it's a directory */
+        if (S_ISDIR(stat_buf2.mode)) {
+            printk(KERN_ERR "firewall: Refusing to write to directory: %s\n", filename);
+            err = -EISDIR;
+            goto out_path_put;
+        }
+out_path_put:
+        path_put(&path);
     } else {
         /* File doesn't exist, which is fine for creation */
         err = 0; /* Reset error since non-existence is OK */
@@ -1690,7 +1674,6 @@ int restore_state_from_file(const char *filename)
                             entry->ban_time = jiffies;
                             entry->unban_time = unban_time;
                             atomic_set(&entry->retry_count, 0);
-                            entry->being_freed = false;  /* 初始化防止双重释放标记 */
 
                             spin_lock(&fw_info.lock);
                             hash_add(fw_info.ban_table, &entry->hash, ip);

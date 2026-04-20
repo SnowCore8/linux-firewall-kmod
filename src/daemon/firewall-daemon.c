@@ -83,7 +83,7 @@ struct config {
 struct failed_entry {
     char ip[16];
     time_t timestamps[MAX_FAILED_TIMESTAMPS];
-    int count;
+    unsigned int count;
     struct failed_entry *next;
     struct failed_entry *next_in_hash;  /* Next entry in hash bucket */
 };
@@ -128,7 +128,7 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size);
 static struct failed_entry *find_entry(const char *ip);
 static struct failed_entry *create_entry(const char *ip);
 static void remove_entry(const char *ip);
-static int count_recent(struct failed_entry *entry, time_t window, unsigned int max_retries);
+static unsigned int count_recent(struct failed_entry *entry, time_t window, unsigned int max_retries);
 static void handle_failed_attempt(const char *ip, unsigned int max_retries, unsigned int findtime);
 static int ban_ip(const char *ip);
 static int unban_ip(const char *ip);
@@ -165,6 +165,27 @@ static int parse_config_file(const char *config_path)
     char line[1024];
     char *key, *value;
 
+    /* 修复 #5: 保存旧配置的深拷贝，用于解析失败时恢复 */
+    char *old_log_files[MAX_LOG_FILES];
+    int old_log_count = 0;
+    unsigned int old_max_retries = cfg.max_retries;
+    unsigned int old_findtime = cfg.findtime;
+    unsigned int old_ban_time = cfg.ban_time;
+    int old_interval = cfg.interval;
+
+    for (int i = 0; i < cfg.log_count; i++) {
+        old_log_files[i] = cfg.log_files[i] ? strdup(cfg.log_files[i]) : NULL;
+        if (cfg.log_files[i] && !old_log_files[i]) {
+            /* 深拷贝失败，释放已分配的内存 */
+            for (int j = 0; j < i; j++) {
+                free(old_log_files[j]);
+            }
+            syslog(LOG_ERR, "firewall: Out of memory saving old config for rollback");
+            return -1;
+        }
+    }
+    old_log_count = cfg.log_count;
+
     /* 获取配置锁 - 防止与 monitor_loop() 并发访问 */
     pthread_mutex_lock(&config_mutex);
 
@@ -192,8 +213,7 @@ static int parse_config_file(const char *config_path)
     file = fopen(config_path, "r");
     if (!file) {
         syslog(LOG_WARNING, "firewall: Cannot open config file: %s", config_path);
-        pthread_mutex_unlock(&config_mutex);
-        return -1;
+        goto restore_old_config;
     }
 
     syslog(LOG_INFO, "firewall: Reading config file: %s", config_path);
@@ -305,8 +325,7 @@ static int parse_config_file(const char *config_path)
                             }
                         }
                         fclose(file);
-                        pthread_mutex_unlock(&config_mutex);
-                        return -1;
+                        goto restore_old_config;
                     } else {
                         syslog(LOG_INFO, "firewall: Added log file from config: %s", cfg.log_files[cfg.log_count]);
                         cfg.log_count++;
@@ -330,7 +349,38 @@ static int parse_config_file(const char *config_path)
 
     fclose(file);
     pthread_mutex_unlock(&config_mutex);
+
+    /* 解析成功，释放旧配置的深拷贝 */
+    for (int i = 0; i < old_log_count; i++) {
+        free(old_log_files[i]);
+    }
     return 0;
+
+restore_old_config:
+    /* 解析失败，恢复旧配置 */
+    syslog(LOG_WARNING, "firewall: Config parsing failed, restoring old configuration");
+
+    /* 释放新分配的资源（如果有） */
+    for (int i = 0; i < cfg.log_count; i++) {
+        free(cfg.log_files[i]);
+        cfg.log_files[i] = NULL;
+    }
+
+    /* 恢复旧配置 */
+    cfg.log_count = 0;
+    for (int i = 0; i < old_log_count; i++) {
+        if (old_log_files[i]) {
+            cfg.log_files[cfg.log_count] = old_log_files[i];
+            cfg.log_count++;
+        }
+    }
+    cfg.max_retries = old_max_retries;
+    cfg.findtime = old_findtime;
+    cfg.ban_time = old_ban_time;
+    cfg.interval = old_interval;
+
+    pthread_mutex_unlock(&config_mutex);
+    return -1;
 }
 
 /* Setup signal handlers using sigaction */
@@ -911,10 +961,10 @@ static void remove_entry(const char *ip)
 }
 
 /* Count recent failures within time window */
-static int count_recent(struct failed_entry *entry, time_t window, unsigned int max_retries)
+static unsigned int count_recent(struct failed_entry *entry, time_t window, unsigned int max_retries)
 {
     time_t now = time(NULL);
-    int count = 0;
+    unsigned int count = 0;
 
     /* Validate parameters to prevent potential issues */
     if (!entry || window <= 0) {
@@ -922,7 +972,7 @@ static int count_recent(struct failed_entry *entry, time_t window, unsigned int 
         return 0;
     }
 
-    for (int i = 0; i < entry->count; i++) {
+    for (unsigned int i = 0; i < entry->count; i++) {
         /* Prevent integer underflow if timestamp is in the future */
         if (now >= entry->timestamps[i]) {
             time_t diff = now - entry->timestamps[i];
@@ -932,7 +982,7 @@ static int count_recent(struct failed_entry *entry, time_t window, unsigned int 
             }
         }
         /* Limit processing to avoid excessive CPU usage if there are many timestamps */
-        if ((unsigned int)count > max_retries) {
+        if (count > max_retries) {
             /* Early exit if we've already exceeded the threshold */
             break;
         }
@@ -985,8 +1035,8 @@ static void handle_failed_attempt(const char *ip, unsigned int max_retries, unsi
     }
 
     /* Check if exceeded threshold - 使用传入参数而非全局 cfg */
-    int recent_fails = count_recent(entry, findtime, max_retries);
-    if (recent_fails >= (int)max_retries) {
+    unsigned int recent_fails = count_recent(entry, findtime, max_retries);
+    if (recent_fails >= max_retries) {
         syslog(LOG_WARNING, "firewall: IP %s exceeded %d failures in %d seconds, banning",
                ip, recent_fails, findtime);
         if (ban_ip(ip) == 0) {
@@ -1679,25 +1729,20 @@ static void monitor_loop(void)
                 reload_config = 0;
 
                 if (cfg.config_file) {
-                    struct config old_cfg;
+                    unsigned int old_max_retries, old_findtime, old_ban_time;
+                    int old_interval;
 
-                    /* 保存旧配置用于回滚 - 需要加锁 */
+                    /* 保存旧配置的关键值用于变更检测（parse_config_file 已内部处理回滚） */
                     pthread_mutex_lock(&config_mutex);
-                    old_cfg = cfg;
-                    /* 注意：这里只是浅拷贝，log_files 指针仍然指向同一内存 */
-                    /* parse_config_file 会 free 旧 log_files，所以需要重置 log_files 数组 */
-                    for (int i = 0; i < old_cfg.log_count; i++) {
-                        old_cfg.log_files[i] = cfg.log_files[i];
-                    }
+                    old_max_retries = cfg.max_retries;
+                    old_findtime = cfg.findtime;
+                    old_ban_time = cfg.ban_time;
+                    old_interval = cfg.interval;
                     pthread_mutex_unlock(&config_mutex);
 
-                    // Parse the config file again
+                    /* 解析配置文件（parse_config_file 内部处理失败回滚） */
                     if (parse_config_file(cfg.config_file) < 0) {
                         syslog(LOG_ERR, "firewall: Failed to reload configuration from %s", cfg.config_file);
-                        /* Restore old config - 需要加锁 */
-                        pthread_mutex_lock(&config_mutex);
-                        cfg = old_cfg;
-                        pthread_mutex_unlock(&config_mutex);
                     } else {
                         /* Configuration successfully reloaded */
                         syslog(LOG_INFO, "firewall: Configuration reloaded successfully");
@@ -1735,21 +1780,21 @@ static void monitor_loop(void)
 
                         /* Check for changes and apply them */
                         pthread_mutex_lock(&config_mutex);
-                        if (old_cfg.max_retries != cfg.max_retries) {
+                        if (old_max_retries != cfg.max_retries) {
                             syslog(LOG_INFO, "firewall: max_retries changed from %u to %u",
-                                   old_cfg.max_retries, cfg.max_retries);
+                                   old_max_retries, cfg.max_retries);
                         }
-                        if (old_cfg.findtime != cfg.findtime) {
+                        if (old_findtime != cfg.findtime) {
                             syslog(LOG_INFO, "firewall: findtime changed from %u to %u",
-                                   old_cfg.findtime, cfg.findtime);
+                                   old_findtime, cfg.findtime);
                         }
-                        if (old_cfg.ban_time != cfg.ban_time) {
+                        if (old_ban_time != cfg.ban_time) {
                             syslog(LOG_INFO, "firewall: ban_time changed from %u to %u",
-                                   old_cfg.ban_time, cfg.ban_time);
+                                   old_ban_time, cfg.ban_time);
                         }
-                        if (old_cfg.interval != cfg.interval) {
+                        if (old_interval != cfg.interval) {
                             syslog(LOG_INFO, "firewall: interval changed from %d to %d",
-                                   old_cfg.interval, cfg.interval);
+                                   old_interval, cfg.interval);
                         }
                         pthread_mutex_unlock(&config_mutex);
                     }
