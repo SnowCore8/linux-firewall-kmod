@@ -34,6 +34,21 @@
 #include <pthread.h>
 #include <ctype.h>
 
+/* ============================================================================
+ * Unified Logging System for Daemon
+ * ============================================================================
+ * All daemon logs use syslog with consistent "firewall: " prefix.
+ * Standard error output is only used before syslog is initialized.
+ * ========================================================================== */
+#define daemon_log_err(fmt, ...) \
+    syslog(LOG_ERR, "firewall: " fmt, ##__VA_ARGS__)
+#define daemon_log_warn(fmt, ...) \
+    syslog(LOG_WARNING, "firewall: " fmt, ##__VA_ARGS__)
+#define daemon_log_info(fmt, ...) \
+    syslog(LOG_INFO, "firewall: " fmt, ##__VA_ARGS__)
+#define daemon_log_debug(fmt, ...) \
+    syslog(LOG_DEBUG, "firewall: " fmt, ##__VA_ARGS__)
+
 /* Procfs paths */
 #define PROCFS_DIR "/proc/firewall"
 #define ADD_BAN_PATH PROCFS_DIR "/add_ban"
@@ -180,7 +195,7 @@ static int parse_config_file(const char *config_path)
             for (int j = 0; j < i; j++) {
                 free(old_log_files[j]);
             }
-            syslog(LOG_ERR, "firewall: Out of memory saving old config for rollback");
+        daemon_log_err("Out of memory saving old config for rollback");
             return -1;
         }
     }
@@ -212,11 +227,11 @@ static int parse_config_file(const char *config_path)
 
     file = fopen(config_path, "r");
     if (!file) {
-        syslog(LOG_WARNING, "firewall: Cannot open config file: %s", config_path);
+        daemon_log_warn("Cannot open config file: %s", config_path);
         goto restore_old_config;
     }
 
-    syslog(LOG_INFO, "firewall: Reading config file: %s", config_path);
+    daemon_log_info("Reading config file: %s", config_path);
 
     while (fgets(line, sizeof(line), file)) {
         /* Remove leading/trailing whitespace and comments */
@@ -236,7 +251,7 @@ static int parse_config_file(const char *config_path)
         /* Find the '=' separator */
         char *sep = strchr(line, '=');
         if (!sep) {
-            syslog(LOG_WARNING, "firewall: Invalid config line: %s", line);
+            daemon_log_warn("Invalid config line: %s", line);
             continue;
         }
 
@@ -268,10 +283,10 @@ static int parse_config_file(const char *config_path)
             long val = strtol(value, &endptr, 10);
 
             if (errno != 0 || *endptr != '\0' || val < 1 || val > 100 || val > INT_MAX) {
-                syslog(LOG_WARNING, "firewall: Invalid max_retries value in config: %s", value);
+                daemon_log_warn("Invalid max_retries value in config: %s", value);
             } else {
                 cfg.max_retries = (unsigned int)val;
-                syslog(LOG_INFO, "firewall: Config max_retries set to %u", cfg.max_retries);
+                daemon_log_info("Config max_retries set to %u", cfg.max_retries);
             }
         } else if (strcmp(key, "findtime") == 0) {
             char *endptr;
@@ -279,10 +294,10 @@ static int parse_config_file(const char *config_path)
             long val = strtol(value, &endptr, 10);
 
             if (errno != 0 || *endptr != '\0' || val < 1 || val > 3600 || val > INT_MAX) {
-                syslog(LOG_WARNING, "firewall: Invalid findtime value in config: %s", value);
+                daemon_log_warn("Invalid findtime value in config: %s", value);
             } else {
                 cfg.findtime = (unsigned int)val;
-                syslog(LOG_INFO, "firewall: Config findtime set to %u", cfg.findtime);
+                daemon_log_info("Config findtime set to %u", cfg.findtime);
             }
         } else if (strcmp(key, "ban_time") == 0) {
             char *endptr;
@@ -290,10 +305,10 @@ static int parse_config_file(const char *config_path)
             long val = strtol(value, &endptr, 10);
 
             if (errno != 0 || *endptr != '\0' || val < 1 || val > 86400 || val > INT_MAX) {
-                syslog(LOG_WARNING, "firewall: Invalid ban_time value in config: %s", value);
+                daemon_log_warn("Invalid ban_time value in config: %s", value);
             } else {
                 cfg.ban_time = (unsigned int)val;
-                syslog(LOG_INFO, "firewall: Config ban_time set to %u", cfg.ban_time);
+                daemon_log_info("Config ban_time set to %u", cfg.ban_time);
             }
         } else if (strcmp(key, "interval") == 0) {
             char *endptr;
@@ -301,22 +316,22 @@ static int parse_config_file(const char *config_path)
             long val = strtol(value, &endptr, 10);
 
             if (errno != 0 || *endptr != '\0' || val < 1 || val > 60 || val > INT_MAX) {
-                syslog(LOG_WARNING, "firewall: Invalid interval value in config: %s", value);
+                daemon_log_warn("Invalid interval value in config: %s", value);
             } else {
                 cfg.interval = (int)val;
-                syslog(LOG_INFO, "firewall: Config interval set to %d", cfg.interval);
+                daemon_log_info("Config interval set to %d", cfg.interval);
             }
         } else if (strcmp(key, "log_file") == 0) {
             if (cfg.log_count >= MAX_LOG_FILES) {
-                syslog(LOG_WARNING, "firewall: Too many log files in config (max %d)", MAX_LOG_FILES);
+                daemon_log_warn("Too many log files in config (max %d)", MAX_LOG_FILES);
             } else {
                 /* Validate the path to prevent path traversal attacks */
                 if (validate_and_normalize_path(value) < 0) {
-                    syslog(LOG_WARNING, "firewall: Invalid log file path in config: %s", value);
+                    daemon_log_warn("Invalid log file path in config: %s", value);
                 } else {
                     cfg.log_files[cfg.log_count] = strdup(value);
                     if (!cfg.log_files[cfg.log_count]) {
-                        syslog(LOG_ERR, "firewall: Out of memory allocating log file path");
+        daemon_log_err("Out of memory allocating log file path");
                         /* Free any previously allocated log file paths */
                         for (int j = 0; j < cfg.log_count; j++) {
                             if (cfg.log_files[j]) {
@@ -327,7 +342,7 @@ static int parse_config_file(const char *config_path)
                         fclose(file);
                         goto restore_old_config;
                     } else {
-                        syslog(LOG_INFO, "firewall: Added log file from config: %s", cfg.log_files[cfg.log_count]);
+                        daemon_log_info("Added log file from config: %s", cfg.log_files[cfg.log_count]);
                         cfg.log_count++;
                     }
                 }
@@ -335,15 +350,15 @@ static int parse_config_file(const char *config_path)
         } else if (strcmp(key, "daemonize") == 0) {
             if (strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
                 cfg.daemonize = 1;
-                syslog(LOG_INFO, "firewall: Config daemonize set to true");
+        daemon_log_info("Config daemonize set to true");
             } else if (strcmp(value, "false") == 0 || strcmp(value, "0") == 0) {
                 cfg.daemonize = 0;
-                syslog(LOG_INFO, "firewall: Config daemonize set to false");
+        daemon_log_info("Config daemonize set to false");
             } else {
-                syslog(LOG_WARNING, "firewall: Invalid daemonize value in config: %s", value);
+                daemon_log_warn("Invalid daemonize value in config: %s", value);
             }
         } else {
-            syslog(LOG_WARNING, "firewall: Unknown config key: %s", key);
+            daemon_log_warn("Unknown config key: %s", key);
         }
     }
 
@@ -358,7 +373,7 @@ static int parse_config_file(const char *config_path)
 
 restore_old_config:
     /* 解析失败，恢复旧配置 */
-    syslog(LOG_WARNING, "firewall: Config parsing failed, restoring old configuration");
+        daemon_log_warn("Config parsing failed, restoring old configuration");
 
     /* 释放新分配的资源（如果有） */
     for (int i = 0; i < cfg.log_count; i++) {
@@ -394,23 +409,19 @@ static void setup_signals(void)
     sa.sa_flags = 0;
 
     if (sigaction(SIGTERM, &sa, NULL) == -1) {
-        syslog(LOG_ERR, "firewall: Failed to setup SIGTERM handler: %s",
-               strerror(errno));
+        daemon_log_err("Failed to setup SIGTERM handler: %s", strerror(errno));
     }
     if (sigaction(SIGINT, &sa, NULL) == -1) {
-        syslog(LOG_ERR, "firewall: Failed to setup SIGINT handler: %s",
-               strerror(errno));
+        daemon_log_err("Failed to setup SIGINT handler: %s", strerror(errno));
     }
     if (sigaction(SIGHUP, &sa, NULL) == -1) {
-        syslog(LOG_ERR, "firewall: Failed to setup SIGHUP handler: %s",
-               strerror(errno));
+        daemon_log_err("Failed to setup SIGHUP handler: %s", strerror(errno));
     }
 
     /* Ignore SIGPIPE */
     sa.sa_handler = SIG_IGN;
     if (sigaction(SIGPIPE, &sa, NULL) == -1) {
-        syslog(LOG_ERR, "firewall: Failed to ignore SIGPIPE: %s",
-               strerror(errno));
+        daemon_log_err("Failed to ignore SIGPIPE: %s", strerror(errno));
     }
 }
 
@@ -638,7 +649,7 @@ static int parse_config(int argc, char *argv[])
         for (int i = 0; i < num_defaults; i++) {
             /* Apply the same path validation to default log files */
             if (validate_and_normalize_path(default_logs[i]) < 0) {
-                syslog(LOG_WARNING, "firewall: Skipping invalid default log path: %s", default_logs[i]);
+                daemon_log_warn("Skipping invalid default log path: %s", default_logs[i]);
                 continue;
             }
 
@@ -760,7 +771,7 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
     /* Length validation to prevent extremely long log lines */
     size_t line_len = strlen(line);
     if (line_len > 8192) {
-        syslog(LOG_WARNING, "firewall: Log line too long (%zu bytes), skipping", line_len);
+        daemon_log_warn("Log line too long (%zu bytes), skipping", line_len);
         return 0;
     }
 
@@ -774,7 +785,7 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
                 ip_len = matches[2].rm_eo - matches[2].rm_so;
 
                 if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
-                    syslog(LOG_WARNING, "firewall: Invalid IP length in sshd log: %zu", ip_len);
+                    daemon_log_warn("Invalid IP length in sshd log: %zu", ip_len);
                     return 0;
                 }
 
@@ -788,7 +799,7 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
         } else if (regex_result != REG_NOMATCH) {
             char errbuf[256];
             regerror(regex_result, &sshd_regex, errbuf, sizeof(errbuf));
-            syslog(LOG_WARNING, "firewall: Regex error in sshd pattern: %s", errbuf);
+            daemon_log_warn("Regex error in sshd pattern: %s", errbuf);
         }
     }
 
@@ -802,7 +813,7 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
                 ip_len = matches[1].rm_eo - matches[1].rm_so;
 
                 if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
-                    syslog(LOG_WARNING, "firewall: Invalid IP length in vsftpd log: %zu", ip_len);
+                    daemon_log_warn("Invalid IP length in vsftpd log: %zu", ip_len);
                     return 0;
                 }
 
@@ -816,7 +827,7 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
         } else if (regex_result != REG_NOMATCH) {
             char errbuf[256];
             regerror(regex_result, &vsftpd_regex, errbuf, sizeof(errbuf));
-            syslog(LOG_WARNING, "firewall: Regex error in vsftpd pattern: %s", errbuf);
+            daemon_log_warn("Regex error in vsftpd pattern: %s", errbuf);
         }
     }
 
@@ -830,7 +841,7 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
                 ip_len = matches[1].rm_eo - matches[1].rm_so;
 
                 if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
-                    syslog(LOG_WARNING, "firewall: Invalid IP length in nginx log: %zu", ip_len);
+                    daemon_log_warn("Invalid IP length in nginx log: %zu", ip_len);
                     return 0;
                 }
 
@@ -844,7 +855,7 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
         } else if (regex_result != REG_NOMATCH) {
             char errbuf[256];
             regerror(regex_result, &nginx_regex, errbuf, sizeof(errbuf));
-            syslog(LOG_WARNING, "firewall: Regex error in nginx pattern: %s", errbuf);
+            daemon_log_warn("Regex error in nginx pattern: %s", errbuf);
         }
     }
 
@@ -898,7 +909,7 @@ static struct failed_entry *create_entry(const char *ip)
 {
     struct failed_entry *entry = calloc(1, sizeof(*entry));
     if (!entry) {
-        syslog(LOG_ERR, "firewall: Failed to allocate memory for entry");
+        daemon_log_err("Failed to allocate memory for entry");
         return NULL;
     }
 
@@ -968,7 +979,7 @@ static unsigned int count_recent(struct failed_entry *entry, time_t window, unsi
 
     /* Validate parameters to prevent potential issues */
     if (!entry || window <= 0) {
-        syslog(LOG_DEBUG, "firewall: Invalid parameters to count_recent");
+        daemon_log_debug("Invalid parameters to count_recent");
         return 0;
     }
 
@@ -999,14 +1010,14 @@ static void handle_failed_attempt(const char *ip, unsigned int max_retries, unsi
 
     /* Validate IP before processing */
     if (!ip || strlen(ip) == 0) {
-        syslog(LOG_ERR, "firewall: Invalid IP address provided to handle_failed_attempt");
+        daemon_log_err("Invalid IP address provided to handle_failed_attempt");
         return;
     }
 
     if (!entry) {
         entry = create_entry(ip);
         if (!entry) {
-            syslog(LOG_ERR, "firewall: Failed to create entry for IP %s", ip);
+            daemon_log_err("Failed to create entry for IP %s", ip);
             return;
         }
     }
@@ -1037,19 +1048,15 @@ static void handle_failed_attempt(const char *ip, unsigned int max_retries, unsi
     /* Check if exceeded threshold - 使用传入参数而非全局 cfg */
     unsigned int recent_fails = count_recent(entry, findtime, max_retries);
     if (recent_fails >= max_retries) {
-        syslog(LOG_WARNING, "firewall: IP %s exceeded %d failures in %d seconds, banning",
-               ip, recent_fails, findtime);
+        daemon_log_warn("IP %s exceeded %d failures in %d seconds, banning", ip, recent_fails, findtime);
         if (ban_ip(ip) == 0) {
             remove_entry(ip);
-            syslog(LOG_INFO, "firewall: Successfully banned IP %s after %d failed attempts",
-                   ip, recent_fails);
+            daemon_log_info("Successfully banned IP %s after %d failed attempts", ip, recent_fails);
         } else {
-            syslog(LOG_ERR, "firewall: Failed to ban IP %s after %d failed attempts, keeping entry for retry",
-                   ip, recent_fails);
+            daemon_log_err("Failed to ban IP %s after %d failed attempts, keeping entry for retry", ip, recent_fails);
         }
     } else {
-        syslog(LOG_DEBUG, "firewall: IP %s has %d failed attempts in %d seconds",
-               ip, recent_fails, findtime);
+        daemon_log_debug("IP %s has %d failed attempts in %d seconds", ip, recent_fails, findtime);
     }
 }
 
@@ -1061,19 +1068,19 @@ static int secure_procfs_write(const char *path, const char *data, size_t data_l
 
     // Validate inputs
     if (!path || !data || data_len == 0) {
-        syslog(LOG_ERR, "firewall: Invalid parameters to secure_procfs_write");
+        daemon_log_err("Invalid parameters to secure_procfs_write");
         return -1;
     }
 
     // Check data length to prevent excessively long writes
     if (data_len > 256) {  // Reasonable limit for IP addresses
-        syslog(LOG_ERR, "firewall: Data too long for procfs write (%zu bytes)", data_len);
+        daemon_log_err("Data too long for procfs write (%zu bytes)", data_len);
         return -1;
     }
 
     fd = open(path, O_WRONLY);
     if (fd < 0) {
-        syslog(LOG_ERR, "firewall: Failed to open %s: %s", path, strerror(errno));
+        daemon_log_err("Failed to open %s: %s", path, strerror(errno));
         return -1;
     }
 
@@ -1084,7 +1091,7 @@ static int secure_procfs_write(const char *path, const char *data, size_t data_l
             if (errno == EINTR) {
                 continue;  // Interrupted, try again
             } else {
-                syslog(LOG_ERR, "firewall: Failed to write to %s: %s", path, strerror(errno));
+                daemon_log_err("Failed to write to %s: %s", path, strerror(errno));
                 close(fd);
                 return -1;
             }
@@ -1094,7 +1101,7 @@ static int secure_procfs_write(const char *path, const char *data, size_t data_l
 
     // Close file descriptor
     if (close(fd) < 0) {
-        syslog(LOG_WARNING, "firewall: Failed to close %s: %s", path, strerror(errno));
+        daemon_log_warn("Failed to close %s: %s", path, strerror(errno));
         return -1;  // Note: Still return success since write succeeded
     }
 
@@ -1110,19 +1117,19 @@ static int ban_ip(const char *ip)
 
     // Validate input IP format before attempting to ban
     if (!ip) {
-        syslog(LOG_ERR, "firewall: NULL IP address provided to ban_ip");
+        daemon_log_err("NULL IP address provided to ban_ip");
         return -1;
     }
 
     ip_len = strlen(ip);
     if (ip_len == 0 || ip_len >= INET_ADDRSTRLEN) {
-        syslog(LOG_ERR, "firewall: Invalid IP length %zu in ban_ip", ip_len);
+        daemon_log_err("Invalid IP length %zu in ban_ip", ip_len);
         return -1;
     }
 
     // Check if it's a valid IPv4 address
     if (inet_pton(AF_INET, ip, &addr4) != 1) {
-        syslog(LOG_ERR, "firewall: Invalid IPv4 address format: %s", ip);
+        daemon_log_err("Invalid IPv4 address format: %s", ip);
         return -1;
     }
 
@@ -1131,7 +1138,7 @@ static int ban_ip(const char *ip)
     if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
         ((ip_num >> 24) & 0xFF) == 127 ||  // 127.x.x.x
         (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {  // 224.0.0.0/4 (multicast)
-        syslog(LOG_ERR, "firewall: Attempt to ban invalid IPv4: %s", ip);
+        daemon_log_err("Attempt to ban invalid IPv4: %s", ip);
         return -1;
     }
 
@@ -1140,11 +1147,11 @@ static int ban_ip(const char *ip)
 
     // Use secure write function
     if (secure_procfs_write(ADD_BAN_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
-        syslog(LOG_ERR, "firewall: Failed to write to %s", ADD_BAN_PATH);
+        daemon_log_err("Failed to write to %s", ADD_BAN_PATH);
         return -1;
     }
 
-    syslog(LOG_INFO, "firewall: Banned IP %s", ip);
+    daemon_log_info("Banned IP %s", ip);
     return 0;
 }
 
@@ -1157,13 +1164,13 @@ static int unban_ip(const char *ip)
 
     // Validate input IP format before attempting to unban
     if (!ip) {
-        syslog(LOG_ERR, "firewall: NULL IP address provided to unban_ip");
+        daemon_log_err("NULL IP address provided to unban_ip");
         return -1;
     }
 
     // Check if it's a valid IPv4 address
     if (inet_pton(AF_INET, ip, &addr4) != 1) {
-        syslog(LOG_ERR, "firewall: Invalid IPv4 address format: %s", ip);
+        daemon_log_err("Invalid IPv4 address format: %s", ip);
         return -1;
     }
 
@@ -1172,7 +1179,7 @@ static int unban_ip(const char *ip)
     if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
         ((ip_num >> 24) & 0xFF) == 127 ||  // 127.x.x.x
         (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {  // 224.0.0.0/4 (multicast)
-        syslog(LOG_ERR, "firewall: Attempt to unban invalid IPv4: %s", ip);
+        daemon_log_err("Attempt to unban invalid IPv4: %s", ip);
         return -1;
     }
 
@@ -1181,11 +1188,11 @@ static int unban_ip(const char *ip)
 
     // Use secure write function
     if (secure_procfs_write(REMOVE_BAN_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
-        syslog(LOG_ERR, "firewall: Failed to write to %s", REMOVE_BAN_PATH);
+        daemon_log_err("Failed to write to %s", REMOVE_BAN_PATH);
         return -1;
     }
 
-    syslog(LOG_INFO, "firewall: Unbanned IP %s", ip);
+    daemon_log_info("Unbanned IP %s", ip);
     return 0;
 }
 
@@ -1270,23 +1277,20 @@ static int setup_inotify(void)
 {
     inotify_fd = inotify_init1(IN_CLOEXEC);  /* Use IN_CLOEXEC to prevent fd leak to child processes */
     if (inotify_fd < 0) {
-        syslog(LOG_ERR, "firewall: Failed to initialize inotify: %s",
-               strerror(errno));
+        daemon_log_err("Failed to initialize inotify: %s", strerror(errno));
         return -1;
     }
 
     /* Set non-blocking */
     int flags = fcntl(inotify_fd, F_GETFL);
     if (flags == -1) {
-        syslog(LOG_ERR, "firewall: Failed to get fcntl flags for inotify: %s",
-               strerror(errno));
+        daemon_log_err("Failed to get fcntl flags for inotify: %s", strerror(errno));
         close(inotify_fd);
         inotify_fd = -1;
         return -1;
     }
     if (fcntl(inotify_fd, F_SETFL, flags | O_NONBLOCK) == -1) {
-        syslog(LOG_ERR, "firewall: Failed to set inotify non-blocking: %s",
-               strerror(errno));
+        daemon_log_err("Failed to set inotify non-blocking: %s", strerror(errno));
         close(inotify_fd);
         inotify_fd = -1;
         return -1;
@@ -1310,16 +1314,14 @@ static int setup_inotify(void)
         if (stat(cfg.log_files[i], &st) == 0) {
             file_states[i].inode = st.st_ino;
             file_states[i].offset = st.st_size;
-            syslog(LOG_INFO, "firewall: Initial offset for %s: %ld bytes",
-                   cfg.log_files[i], (long)file_states[i].offset);
+            daemon_log_info("Initial offset for %s: %ld bytes", cfg.log_files[i], (long)file_states[i].offset);
         }
 
         /* Watch for modifications, moves, deletes */
         file_states[i].wd = inotify_add_watch(inotify_fd, cfg.log_files[i],
             IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE | IN_CREATE);
         if (file_states[i].wd < 0) {
-            syslog(LOG_WARNING, "firewall: Failed to watch %s: %s",
-                   cfg.log_files[i], strerror(errno));
+            daemon_log_warn("Failed to watch %s: %s", cfg.log_files[i], strerror(errno));
 
             /* Roll back: remove previously added watches */
             for (int j = 0; j < i; j++) {
@@ -1333,7 +1335,7 @@ static int setup_inotify(void)
             inotify_fd = -1;
             return -1;
         } else {
-            syslog(LOG_INFO, "firewall: Watching %s (wd=%d)", cfg.log_files[i], file_states[i].wd);
+            daemon_log_info("Watching %s (wd=%d)", cfg.log_files[i], file_states[i].wd);
         }
     }
 
@@ -1357,7 +1359,7 @@ static void process_single_line(const char *line, const char *log_path,
     /* Skip extremely long lines */
     size_t len = strlen(line);
     if (len >= 8192) {
-        syslog(LOG_WARNING, "firewall: Line too long (%zu bytes) in %s, skipping", len, log_path);
+        daemon_log_warn("Line too long (%zu bytes) in %s, skipping", len, log_path);
         return;
     }
 
@@ -1385,8 +1387,7 @@ static void process_lines_in_buffer(char *data, size_t len, const char *log_path
         size_t line_len = line_end - line_start;
 
         if (line_len >= 8192) {
-            syslog(LOG_WARNING, "firewall: Extremely long line (%zu bytes) in %s, skipping",
-                   line_len, log_path);
+            daemon_log_warn("Extremely long line (%zu bytes) in %s, skipping", line_len, log_path);
         } else {
             /* Temporarily null-terminate for processing */
             char saved = *line_end;
@@ -1414,8 +1415,7 @@ static void store_partial_line(const char *data, size_t len, const char *log_pat
         return;
 
     if (len >= sizeof(partial_line_buffer)) {
-        syslog(LOG_WARNING, "firewall: Partial line too long (%zu bytes) in %s, discarding",
-               len, log_path);
+        daemon_log_warn("Partial line too long (%zu bytes) in %s, discarding", len, log_path);
         pthread_mutex_lock(&partial_line_mutex);
         partial_line_len = 0;
         pthread_mutex_unlock(&partial_line_mutex);
@@ -1472,7 +1472,7 @@ static void flush_partial_line(const char *log_path, unsigned int max_retries, u
     pthread_mutex_unlock(&partial_line_mutex);
 
     if (old_len > 0) {
-        syslog(LOG_DEBUG, "firewall: Flushing partial line buffer with %zu bytes from %s", old_len, log_path);
+        daemon_log_debug("Flushing partial line buffer with %zu bytes from %s", old_len, log_path);
         process_single_line(temp, log_path, max_retries, findtime);
     }
 }
@@ -1496,7 +1496,7 @@ static void process_new_lines(int idx)
 
     /* Validate idx parameter */
     if (idx < 0 || idx >= MAX_LOG_FILES) {
-        syslog(LOG_ERR, "firewall: Invalid index %d to process_new_lines", idx);
+        daemon_log_err("Invalid index %d to process_new_lines", idx);
         return;
     }
 
@@ -1504,19 +1504,19 @@ static void process_new_lines(int idx)
 
     fd = open(log_path, O_RDONLY);
     if (fd < 0) {
-        syslog(LOG_ERR, "firewall: Failed to open %s: %s", log_path, strerror(errno));
+        daemon_log_err("Failed to open %s: %s", log_path, strerror(errno));
         goto cleanup;
     }
 
     /* Check if file was rotated (inode changed or size decreased) */
     if (fstat(fd, &st) == 0) {
         if (file_states[idx].inode != 0 && st.st_ino != file_states[idx].inode) {
-            syslog(LOG_INFO, "firewall: Log file rotated: %s", log_path);
+            daemon_log_info("Log file rotated: %s", log_path);
             file_states[idx].inode = st.st_ino;
             file_states[idx].offset = 0;
             flush_partial_line(log_path, max_retries, findtime);
         } else if (st.st_size < file_states[idx].offset) {
-            syslog(LOG_INFO, "firewall: Log file truncated: %s", log_path);
+            daemon_log_info("Log file truncated: %s", log_path);
             file_states[idx].inode = st.st_ino;
             file_states[idx].offset = 0;
             flush_partial_line(log_path, max_retries, findtime);
@@ -1526,7 +1526,7 @@ static void process_new_lines(int idx)
     /* Seek to last known offset */
     if (file_states[idx].offset > 0) {
         if (lseek(fd, file_states[idx].offset, SEEK_SET) == (off_t)-1) {
-            syslog(LOG_ERR, "firewall: Failed to seek in %s: %s", log_path, strerror(errno));
+            daemon_log_err("Failed to seek in %s: %s", log_path, strerror(errno));
             ret = -1;
             goto cleanup;
         }
@@ -1561,7 +1561,7 @@ static void process_new_lines(int idx)
             /* 修复问题3：使用堆分配避免大栈帧 */
             combined = malloc(partial_len + (size_t)bytes_read + 1);
             if (!combined) {
-                syslog(LOG_ERR, "firewall: Out of memory allocating combined buffer");
+        daemon_log_err("Out of memory allocating combined buffer");
                 free(local_partial);
                 /* 丢弃 partial 数据，直接处理新数据 */
                 size_t consumed = 0;
@@ -1609,7 +1609,7 @@ static void process_new_lines(int idx)
 
         /* Prevent integer overflow when updating offset */
         if (current_offset > SSIZE_MAX - bytes_read) {
-            syslog(LOG_ERR, "firewall: Integer overflow in file offset calculation");
+        daemon_log_err("Integer overflow in file offset calculation");
             ret = -1;
             goto cleanup;
         }
@@ -1617,7 +1617,7 @@ static void process_new_lines(int idx)
     }
 
     if (bytes_read < 0) {
-        syslog(LOG_WARNING, "firewall: Read error in %s: %s", log_path, strerror(errno));
+        daemon_log_warn("Read error in %s: %s", log_path, strerror(errno));
         ret = -1;
         goto cleanup;
     }
@@ -1631,7 +1631,7 @@ cleanup:
         fd = -1;
     }
     if (ret < 0) {
-        syslog(LOG_ERR, "firewall: Failed to process %s", log_path);
+        daemon_log_err("Failed to process %s", log_path);
     }
 }
 
@@ -1655,8 +1655,7 @@ static void handle_log_rotation(int idx)
 
     /* Check if file still exists */
     if (stat(file_states[idx].path, &st) != 0) {
-        syslog(LOG_WARNING, "firewall: Log file disappeared: %s",
-               file_states[idx].path);
+        daemon_log_warn("Log file disappeared: %s", file_states[idx].path);
         file_states[idx].offset = 0;
         flush_partial_line(file_states[idx].path, max_retries, findtime);
         return;
@@ -1664,7 +1663,7 @@ static void handle_log_rotation(int idx)
 
     /* Check if inode changed (file was rotated) */
     if (st.st_ino != file_states[idx].inode) {
-        syslog(LOG_INFO, "firewall: Log file rotated: %s", file_states[idx].path);
+        daemon_log_info("Log file rotated: %s", file_states[idx].path);
         file_states[idx].inode = st.st_ino;
         file_states[idx].offset = 0;
 
@@ -1678,12 +1677,10 @@ static void handle_log_rotation(int idx)
         file_states[idx].wd = inotify_add_watch(inotify_fd, file_states[idx].path,
             IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE | IN_CREATE);
         if (file_states[idx].wd < 0) {
-            syslog(LOG_ERR, "firewall: Failed to re-add watch for %s: %s",
-                   file_states[idx].path, strerror(errno));
+            daemon_log_err("Failed to re-add watch for %s: %s", file_states[idx].path, strerror(errno));
             file_states[idx].wd = -1;
         } else {
-            syslog(LOG_INFO, "firewall: Re-added watch for %s (wd=%d)",
-                   file_states[idx].path, file_states[idx].wd);
+            daemon_log_info("Re-added watch for %s (wd=%d)", file_states[idx].path, file_states[idx].wd);
         }
     }
 }
@@ -1693,7 +1690,7 @@ static void monitor_loop(void)
 {
     char buffer[EVENT_BUF_LEN];
 
-    syslog(LOG_INFO, "firewall: Starting monitoring loop");
+        daemon_log_info("Starting monitoring loop");
 
     while (running) {
         fd_set read_fds;
@@ -1715,7 +1712,7 @@ static void monitor_loop(void)
         int ret = select(inotify_fd + 1, &read_fds, NULL, NULL, &tv);
         if (ret < 0) {
             if (errno == EINTR) continue;
-            syslog(LOG_ERR, "firewall: select error: %s", strerror(errno));
+            daemon_log_err("select error: %s", strerror(errno));
             break;
         }
 
@@ -1725,7 +1722,7 @@ static void monitor_loop(void)
 
             /* Check if config reload was requested */
             if (reload_config) {
-                syslog(LOG_INFO, "firewall: Reloading configuration...");
+        daemon_log_info("Reloading configuration...");
                 reload_config = 0;
 
                 if (cfg.config_file) {
@@ -1742,10 +1739,10 @@ static void monitor_loop(void)
 
                     /* 解析配置文件（parse_config_file 内部处理失败回滚） */
                     if (parse_config_file(cfg.config_file) < 0) {
-                        syslog(LOG_ERR, "firewall: Failed to reload configuration from %s", cfg.config_file);
+                        daemon_log_err("Failed to reload configuration from %s", cfg.config_file);
                     } else {
                         /* Configuration successfully reloaded */
-                        syslog(LOG_INFO, "firewall: Configuration reloaded successfully");
+        daemon_log_info("Configuration reloaded successfully");
 
                         /* 修复问题2：重新设置 inotify watches */
                         if (inotify_fd >= 0) {
@@ -1774,27 +1771,23 @@ static void monitor_loop(void)
 
                         /* 重新设置 inotify */
                         if (setup_inotify() < 0) {
-                            syslog(LOG_ERR, "firewall: Failed to re-setup inotify after config reload");
+        daemon_log_err("Failed to re-setup inotify after config reload");
                             running = 0;  /* 安全退出 */
                         }
 
                         /* Check for changes and apply them */
                         pthread_mutex_lock(&config_mutex);
                         if (old_max_retries != cfg.max_retries) {
-                            syslog(LOG_INFO, "firewall: max_retries changed from %u to %u",
-                                   old_max_retries, cfg.max_retries);
+                            daemon_log_info("max_retries changed from %u to %u", old_max_retries, cfg.max_retries);
                         }
                         if (old_findtime != cfg.findtime) {
-                            syslog(LOG_INFO, "firewall: findtime changed from %u to %u",
-                                   old_findtime, cfg.findtime);
+                            daemon_log_info("findtime changed from %u to %u", old_findtime, cfg.findtime);
                         }
                         if (old_ban_time != cfg.ban_time) {
-                            syslog(LOG_INFO, "firewall: ban_time changed from %u to %u",
-                                   old_ban_time, cfg.ban_time);
+                            daemon_log_info("ban_time changed from %u to %u", old_ban_time, cfg.ban_time);
                         }
                         if (old_interval != cfg.interval) {
-                            syslog(LOG_INFO, "firewall: interval changed from %d to %d",
-                                   old_interval, cfg.interval);
+                            daemon_log_info("interval changed from %d to %d", old_interval, cfg.interval);
                         }
                         pthread_mutex_unlock(&config_mutex);
                     }
@@ -1810,8 +1803,7 @@ static void monitor_loop(void)
         ssize_t len = read(inotify_fd, buffer, EVENT_BUF_LEN);
         if (len < 0) {
             if (errno != EAGAIN) {
-                syslog(LOG_ERR, "firewall: inotify read error: %s",
-                       strerror(errno));
+                daemon_log_err("inotify read error: %s", strerror(errno));
             }
             continue;
         }
@@ -1823,30 +1815,29 @@ static void monitor_loop(void)
 
             /* Validate event structure size and prevent integer overflow */
             if (sizeof(struct inotify_event) > (size_t)len - i) {
-                syslog(LOG_ERR, "firewall: Invalid inotify event structure size");
+        daemon_log_err("Invalid inotify event structure size");
                 break;
             }
 
             /* Additional boundary check: ensure event->len is within reasonable bounds */
             if (event->len > EVENT_BUF_LEN) {
-                syslog(LOG_WARNING, "firewall: inotify event length too large, skipping (len=%u, max=%d)",
-                       event->len, (int)EVENT_BUF_LEN);
+                daemon_log_warn("inotify event length too large, skipping (len=%u, max=%d)", event->len, (int)EVENT_BUF_LEN);
                 break;
             }
 
             /* Verify event->len doesn't cause buffer overflow */
             if (sizeof(struct inotify_event) + event->len > (size_t)(len - i)) {
-                syslog(LOG_WARNING, "firewall: inotify event too large for remaining buffer, skipping");
+        daemon_log_warn("inotify event too large for remaining buffer, skipping");
                 break;
             }
 
             /* Additional safety check: ensure we don't have an unexpectedly large event length */
             if (event->len > 1024) {  /* Most inotify events have small names */
-                syslog(LOG_WARNING, "firewall: Suspiciously large inotify event length, skipping (len=%u)", event->len);
+                daemon_log_warn("Suspiciously large inotify event length, skipping (len=%u)", event->len);
                 /* Calculate next position safely even with large event->len */
                 size_t next_pos = i + sizeof(struct inotify_event) + event->len;
                 if (next_pos < i) {  // Overflow check
-                    syslog(LOG_ERR, "firewall: Integer overflow detected in inotify processing");
+        daemon_log_err("Integer overflow detected in inotify processing");
                     break;
                 }
                 i = next_pos;
@@ -1877,7 +1868,7 @@ static void monitor_loop(void)
                 pthread_mutex_lock(&config_mutex);
                 for (int j = 0; j < cfg.log_count; j++) {
                     if (event->wd == file_states[j].wd) {
-                        syslog(LOG_INFO, "firewall: Log file removed: %s", file_states[j].path);
+                        daemon_log_info("Log file removed: %s", file_states[j].path);
                         file_states[j].wd = -1;
                         break;
                     }
@@ -1888,7 +1879,7 @@ static void monitor_loop(void)
             /* Advance position with overflow check */
             size_t next_pos = i + sizeof(struct inotify_event) + event->len;
             if (next_pos < i) {  // Overflow check
-                syslog(LOG_ERR, "firewall: Integer overflow detected in inotify processing");
+        daemon_log_err("Integer overflow detected in inotify processing");
                 break;
             }
             i = next_pos;
@@ -1905,7 +1896,7 @@ static void monitor_loop(void)
 /* Cleanup resources */
 static void cleanup(void)
 {
-    syslog(LOG_INFO, "firewall: Cleaning up");
+        daemon_log_info("Cleaning up");
 
     /* Free regex patterns */
     free_log_patterns();
@@ -1916,14 +1907,13 @@ static void cleanup(void)
             if (file_states[i].wd >= 0) {
                 /* Only try to remove watch if the inotify_fd is still valid */
                 if (inotify_rm_watch(inotify_fd, file_states[i].wd) < 0) {
-                    syslog(LOG_WARNING, "firewall: Failed to remove watch for %s: %s",
-                           file_states[i].path, strerror(errno));
+                    daemon_log_warn("Failed to remove watch for %s: %s", file_states[i].path, strerror(errno));
                 }
                 file_states[i].wd = -1;  /* Mark as removed */
             }
         }
         if (close(inotify_fd) < 0) {
-            syslog(LOG_WARNING, "firewall: Failed to close inotify fd: %s", strerror(errno));
+            daemon_log_warn("Failed to close inotify fd: %s", strerror(errno));
         }
         inotify_fd = -1;
     }
@@ -1974,7 +1964,7 @@ static int init_log_patterns(void)
     if (ret) {
         char errbuf[256];
         regerror(ret, &sshd_regex, errbuf, sizeof(errbuf));
-        syslog(LOG_ERR, "firewall: Failed to compile sshd regex: %s", errbuf);
+        daemon_log_err("Failed to compile sshd regex: %s", errbuf);
         return -1;
     }
 
@@ -1993,7 +1983,7 @@ static int init_log_patterns(void)
     if (ret) {
         char errbuf[256];
         regerror(ret, &vsftpd_regex, errbuf, sizeof(errbuf));
-        syslog(LOG_ERR, "firewall: Failed to compile vsftpd regex: %s", errbuf);
+        daemon_log_err("Failed to compile vsftpd regex: %s", errbuf);
         regfree(&sshd_regex);
         return -1;
     }
@@ -2013,14 +2003,14 @@ static int init_log_patterns(void)
     if (ret) {
         char errbuf[256];
         regerror(ret, &nginx_regex, errbuf, sizeof(errbuf));
-        syslog(LOG_ERR, "firewall: Failed to compile nginx regex: %s", errbuf);
+        daemon_log_err("Failed to compile nginx regex: %s", errbuf);
         regfree(&sshd_regex);
         regfree(&vsftpd_regex);
         return -1;
     }
 
     regex_compiled = 1;
-    syslog(LOG_INFO, "firewall: Log patterns compiled successfully");
+        daemon_log_info("Log patterns compiled successfully");
     return 0;
 }
 
@@ -2177,34 +2167,33 @@ int main(int argc, char *argv[])
 
     /* Check if procfs interfaces exist before proceeding */
     if (access(PROCFS_DIR, F_OK) != 0) {
-        syslog(LOG_ERR, "firewall: Procfs directory %s does not exist. Is the kernel module loaded?",
-               PROCFS_DIR);
+        daemon_log_err("Procfs directory %s does not exist. Is the kernel module loaded?", PROCFS_DIR);
         fprintf(stderr, "Error: Procfs directory %s does not exist. Is the kernel module loaded?\n",
                 PROCFS_DIR);
         return EXIT_FAILURE;
     }
 
     if (access(ADD_BAN_PATH, F_OK) != 0) {
-        syslog(LOG_ERR, "firewall: Add ban procfs interface %s does not exist", ADD_BAN_PATH);
+        daemon_log_err("Add ban procfs interface %s does not exist", ADD_BAN_PATH);
         fprintf(stderr, "Error: Add ban procfs interface %s does not exist\n", ADD_BAN_PATH);
         return EXIT_FAILURE;
     }
 
     if (access(REMOVE_BAN_PATH, F_OK) != 0) {
-        syslog(LOG_ERR, "firewall: Remove ban procfs interface %s does not exist", REMOVE_BAN_PATH);
+        daemon_log_err("Remove ban procfs interface %s does not exist", REMOVE_BAN_PATH);
         fprintf(stderr, "Error: Remove ban procfs interface %s does not exist\n", REMOVE_BAN_PATH);
         return EXIT_FAILURE;
     }
 
     if (access(BAN_LIST_PATH, F_OK) != 0) {
-        syslog(LOG_ERR, "firewall: Ban list procfs interface %s does not exist", BAN_LIST_PATH);
+        daemon_log_err("Ban list procfs interface %s does not exist", BAN_LIST_PATH);
         fprintf(stderr, "Error: Ban list procfs interface %s does not exist\n", BAN_LIST_PATH);
         return EXIT_FAILURE;
     }
 
     /* Initialize log patterns */
     if (init_log_patterns() < 0) {
-        syslog(LOG_ERR, "firewall: Failed to initialize log patterns");
+        daemon_log_err("Failed to initialize log patterns");
         cleanup();
         return EXIT_FAILURE;
     }
@@ -2212,9 +2201,8 @@ int main(int argc, char *argv[])
     /* Setup signal handlers */
     setup_signals();
 
-    syslog(LOG_INFO, "firewall: Daemon starting up");
-    syslog(LOG_INFO, "firewall: max_retries=%u, findtime=%u, ban_time=%u",
-           cfg.max_retries, cfg.findtime, cfg.ban_time);
+        daemon_log_info("Daemon starting up");
+    daemon_log_info("max_retries=%u, findtime=%u, ban_time=%u", cfg.max_retries, cfg.findtime, cfg.ban_time);
 
     /* Daemonize if requested */
     if (cfg.daemonize) {
@@ -2223,7 +2211,7 @@ int main(int argc, char *argv[])
 
     /* Setup inotify */
     if (setup_inotify() < 0) {
-        syslog(LOG_ERR, "firewall: Failed to setup inotify");
+        daemon_log_err("Failed to setup inotify");
         cleanup();
         return EXIT_FAILURE;
     }
@@ -2233,7 +2221,7 @@ int main(int argc, char *argv[])
 
     /* Cleanup */
     cleanup();
-    syslog(LOG_INFO, "firewall: Daemon stopped");
+        daemon_log_info("Daemon stopped");
 
     return EXIT_SUCCESS;
 }

@@ -21,13 +21,75 @@
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
 
-/* Debug level control - define DEBUG_LEVEL to enable various debug messages */
+/* ============================================================================
+ * Unified Logging System
+ * ============================================================================
+ * Log levels:
+ *   FW_LOG_LEVEL_NONE  (0) - No logging
+ *   FW_LOG_LEVEL_ERR   (1) - Error logging - always output
+ *   FW_LOG_LEVEL_WARN  (2) - Warning logging - important warnings
+ *   FW_LOG_LEVEL_INFO  (3) - Info logging - normal operations
+ *   FW_LOG_LEVEL_DEBUG (4) - Debug logging - development debugging
+ *
+ * Usage:
+ *   fw_pr_err(fmt, ...)    - Error level (always output)
+ *   fw_pr_warn(fmt, ...)   - Warning level
+ *   fw_pr_info(fmt, ...)   - Info level
+ *   fw_pr_debug(fmt, ...)  - Debug level (controlled by DEBUG_LEVEL)
+ *   fw_log(level, fmt, ...) - Dynamic level logging
+ *
+ * Backward compatibility:
+ *   FW_DEBUG(level, fmt, args...) - Legacy macro, mapped to new system
+ * ========================================================================== */
+
+/* Log level definitions */
+#define FW_LOG_LEVEL_NONE   0  /* No logging */
+#define FW_LOG_LEVEL_ERR    1  /* Error logging - always output */
+#define FW_LOG_LEVEL_WARN   2  /* Warning logging - important warnings */
+#define FW_LOG_LEVEL_INFO   3  /* Info logging - normal operations */
+#define FW_LOG_LEVEL_DEBUG  4  /* Debug logging - development debugging */
+
+/* Unified logging macros - use pr_* series (recommended) */
+#define fw_pr_err(fmt, ...) \
+    pr_err("firewall: " fmt, ##__VA_ARGS__)
+#define fw_pr_warn(fmt, ...) \
+    pr_warn("firewall: " fmt, ##__VA_ARGS__)
+#define fw_pr_info(fmt, ...) \
+    pr_info("firewall: " fmt, ##__VA_ARGS__)
+#define fw_pr_debug(fmt, ...) \
+    pr_debug("firewall: " fmt, ##__VA_ARGS__)
+
+/* Rate-limited variants for high-frequency logging */
+#define fw_pr_info_ratelimited(fmt, ...) \
+    pr_info_ratelimited("firewall: " fmt, ##__VA_ARGS__)
+#define fw_pr_warn_ratelimited(fmt, ...) \
+    pr_warn_ratelimited("firewall: " fmt, ##__VA_ARGS__)
+#define fw_pr_err_ratelimited(fmt, ...) \
+    pr_err_ratelimited("firewall: " fmt, ##__VA_ARGS__)
+#define fw_pr_debug_ratelimited(fmt, ...) \
+    pr_debug_ratelimited("firewall: " fmt, ##__VA_ARGS__)
+
+/* Dynamic level logging macro - controlled by DEBUG_LEVEL at compile time */
+#define fw_log(level, fmt, ...) \
+    do { \
+        if (level <= DEBUG_LEVEL) { \
+            switch (level) { \
+            case FW_LOG_LEVEL_ERR: \
+                fw_pr_err(fmt, ##__VA_ARGS__); break; \
+            case FW_LOG_LEVEL_WARN: \
+                fw_pr_warn(fmt, ##__VA_ARGS__); break; \
+            case FW_LOG_LEVEL_INFO: \
+                fw_pr_info(fmt, ##__VA_ARGS__); break; \
+            case FW_LOG_LEVEL_DEBUG: \
+                fw_pr_debug(fmt, ##__VA_ARGS__); break; \
+            } \
+        } \
+    } while (0)
+
+/* Legacy FW_DEBUG macro compatibility - maps old level 1-3 to new system */
 #ifdef DEBUG_LEVEL
 #define FW_DEBUG(level, fmt, args...) \
-    do { \
-        if (DEBUG_LEVEL >= level) \
-            printk(KERN_DEBUG "firewall: [%s:%d] " fmt "\n", __func__, __LINE__, ##args); \
-    } while (0)
+    fw_log(FW_LOG_LEVEL_DEBUG - (level) + 1, fmt, ##args)
 #else
 #define FW_DEBUG(level, fmt, args...) \
     do { } while (0)

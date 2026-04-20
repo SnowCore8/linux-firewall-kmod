@@ -72,7 +72,7 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const 
 
     /* Validate IP and mask inputs */
     if (!mask) {
-        printk(KERN_WARNING "firewall: Invalid mask 0x%08x for IP %pI4\n", mask, &ip);
+        fw_pr_warn("Invalid mask 0x%08x for IP %pI4", mask, &ip);
         FW_DEBUG(1, "EXIT: add_whitelist_entry -> -EINVAL (invalid mask)");
         return -EINVAL;
     }
@@ -83,7 +83,7 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const 
         (ntohl(ip) & 0xF0000000) == 0xE0000000 ||  // 224.0.0.0/4 (multicast)
         (ntohl(ip) & 0xFF000000) == 0x00000000 ||  // 0.0.0.0/8
         (ntohl(ip) & 0xFF000000) == 0xFF000000) {  // 255.0.0.0/8
-        printk(KERN_WARNING "firewall: Attempt to whitelist invalid IP: %pI4\n", &ip);
+        fw_pr_warn("Attempt to whitelist invalid IP: %pI4", &ip);
         FW_DEBUG(1, "EXIT: add_whitelist_entry -> -EINVAL (invalid IP)");
         return -EINVAL;
     }
@@ -125,7 +125,7 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const 
     if (atomic_read(&fw->whitelist_count) >= MAX_WHITELIST_ENTRIES) {
         spin_unlock(&fw->whitelist_lock);
         kfree(new_entry);  /* 修复：释放 new_entry */
-        printk(KERN_WARNING "firewall: Whitelist full, cannot add %pI4/%d\n", &normalized_ip, inet_mask_len(mask));
+        fw_pr_warn("Whitelist full, cannot add %pI4/%d", &normalized_ip, inet_mask_len(mask));
         FW_DEBUG(1, "EXIT: add_whitelist_entry -> -ENOSPC (whitelist full)");
         return -ENOSPC;
     }
@@ -137,8 +137,7 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const 
 
     FW_DEBUG(1, "Successfully added whitelist entry for %pI4/%d on %s",
              &normalized_ip, inet_mask_len(mask), dev_name ?: "unknown");
-    printk(KERN_INFO "firewall: Whitelisted %pI4/%d on %s\n",
-           &normalized_ip, inet_mask_len(mask), dev_name ?: "unknown");
+    fw_pr_info("Whitelisted %pI4/%d on %s", &normalized_ip, inet_mask_len(mask), dev_name ?: "unknown");
     FW_DEBUG(1, "EXIT: add_whitelist_entry -> 0 (success)");
     return 0;
 }
@@ -174,12 +173,12 @@ int remove_whitelist_entry(struct firewall_info *fw, __be32 ip_input)
     spin_unlock(&fw->whitelist_lock);
 
     if (found) {
-        printk(KERN_INFO "firewall: Removed %pI4 from whitelist\n", &normalized_ip);
+        fw_pr_info("Removed %pI4 from whitelist", &normalized_ip);
         FW_DEBUG(1, "EXIT: remove_whitelist_entry -> 0 (success)");
         return 0;
     }
 
-    printk(KERN_WARNING "firewall: %pI4 not found in whitelist\n", &normalized_ip);
+    fw_pr_warn("%pI4 not found in whitelist", &normalized_ip);
     FW_DEBUG(1, "EXIT: remove_whitelist_entry -> -ENOENT (not found)");
     return -ENOENT;
 }
@@ -244,7 +243,7 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
 
     /* Validate IP input */
     if (!ip) {
-        printk(KERN_ERR "firewall: Invalid IP address for banning: %pI4\n", &ip);
+        fw_pr_err("Invalid IP address for banning: %pI4", &ip);
         FW_DEBUG(1, "EXIT: ban_ip -> -EINVAL (invalid IP)");
         return -EINVAL;
     }
@@ -253,7 +252,7 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
 
     /* Check whitelist first with read lock */
     if (is_in_whitelist(fw, ip)) {
-        printk(KERN_WARNING "firewall: REFUSED to ban whitelisted IP %pI4\n", &ip);
+        fw_pr_warn("REFUSED to ban whitelisted IP %pI4", &ip);
         FW_DEBUG(2, "IP %pI4 is in whitelist, refusing to ban", &ip);
         FW_DEBUG(1, "EXIT: ban_ip -> -EPERM (whitelisted)");
         return -EPERM;
@@ -294,7 +293,7 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
 
     if (atomic_read(&fw->ban_count) >= MAX_BAN_ENTRIES) {
         spin_unlock(&fw->lock);
-        printk(KERN_WARNING "firewall: Ban table full, cannot ban %pI4\n", &ip);
+        fw_pr_warn("Ban table full, cannot ban %pI4", &ip);
         FW_DEBUG(1, "EXIT: ban_ip -> -ENOSPC (ban table full)");
         return -ENOSPC;
     }
@@ -302,7 +301,7 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
     entry = kmalloc(sizeof(*entry), GFP_ATOMIC);  /* Use GFP_ATOMIC to avoid sleeping in interrupt context */
     if (!entry) {
         spin_unlock(&fw->lock);
-        printk(KERN_ERR "firewall: Failed to allocate memory for ban entry for IP %pI4\n", &ip);
+        fw_pr_err("Failed to allocate memory for ban entry for IP %pI4", &ip);
         FW_DEBUG(1, "EXIT: ban_ip -> -ENOMEM (alloc failed)");
         return -ENOMEM;
     }
@@ -322,7 +321,7 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
     FW_DEBUG(1, "Successfully added ban entry for IP %pI4", &ip);
     /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding when
      * many IPs are being banned in a short time period. */
-    net_info_ratelimited("firewall: IP %pI4 banned for %u seconds\n", &ip, READ_ONCE(fw_ban_time));
+    fw_pr_info_ratelimited("IP %pI4 banned for %u seconds", &ip, READ_ONCE(fw_ban_time));
     FW_DEBUG(1, "EXIT: ban_ip -> 0 (success)");
     return ret;
 }
@@ -356,11 +355,11 @@ int unban_ip(struct firewall_info *fw, __be32 ip)
 
     if (found) {
         /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding */
-        net_info_ratelimited("firewall: IP %s unbanned\n", ip_str);
+        fw_pr_info_ratelimited("IP %s unbanned", ip_str);
         FW_DEBUG(1, "EXIT: unban_ip -> 0 (success)");
         return 0;
     }
-    printk(KERN_DEBUG "firewall: IP %s not found in ban list\n", ip_str);
+    fw_pr_debug("IP %s not found in ban list", ip_str);
     FW_DEBUG(1, "EXIT: unban_ip -> -ENOENT (not found)");
     return -ENOENT;
 }
@@ -486,7 +485,7 @@ void cleanup_expired_bans(struct firewall_info *fw)
     if (removed > 0) {
         FW_DEBUG(1, "Cleaned up %d expired ban entries", removed);
         /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding during mass cleanup */
-        net_info_ratelimited("firewall: Cleaned up %d expired ban entries\n", removed);
+        fw_pr_info_ratelimited("Cleaned up %d expired ban entries", removed);
     } else {
         FW_DEBUG(3, "No expired entries found during cleanup");
     }
@@ -532,13 +531,13 @@ void auto_discover_system_ips(struct firewall_info *fw)
     /* Allocate temporary arrays on heap */
     temp_ips = kmalloc_array(64, sizeof(struct temp_ip_entry), GFP_KERNEL);
     if (!temp_ips) {
-        printk(KERN_ERR "firewall: Failed to allocate temp_ips\n");
+        fw_pr_err("Failed to allocate temp_ips");
         FW_DEBUG(1, "EXIT: auto_discover_system_ips -> void (alloc temp_ips failed)");
         return;
     }
 
     /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding */
-    net_info_ratelimited("firewall: Auto-discovering system IPs...\n");
+    fw_pr_info_ratelimited("Auto-discovering system IPs...");
 
     /* FIX C2: RCU 保护下收集 IPv4 地址
      * 修复说明: __in_dev_get_rcu(dev) 内部已经使用 rcu_dereference 保护，
@@ -588,14 +587,12 @@ void auto_discover_system_ips(struct firewall_info *fw)
     /* Add IPv4 IPs outside RCU lock (safe for GFP_KERNEL) */
     for (int i = 0; i < temp_count; i++) {
         if (add_whitelist_entry(fw, temp_ips[i].ip, temp_ips[i].mask, temp_ips[i].name) < 0) {
-            printk(KERN_WARNING "firewall: Failed to add system IPv4 %pI4 to whitelist\n",
-                   &temp_ips[i].ip);
+            fw_pr_warn("Failed to add system IPv4 %pI4 to whitelist", &temp_ips[i].ip);
         }
     }
 
     /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding */
-    net_info_ratelimited("firewall: Auto-discovery complete. %d entries\n",
-           atomic_read(&fw->whitelist_count));
+    fw_pr_info_ratelimited("Auto-discovery complete. %d entries", atomic_read(&fw->whitelist_count));
 
     /* Free temporary arrays */
     kfree(temp_ips);
@@ -735,7 +732,7 @@ static ssize_t add_ban_write(struct file *file, const char __user *buf,
             (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  /* 224.0.0.0/4 (multicast) */
             (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  /* 0.0.0.0/8 */
             (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  /* 255.0.0.0/8 */
-            printk(KERN_WARNING "firewall: Attempt to ban invalid IPv4: %s\n", ip_str);
+            fw_pr_warn("Attempt to ban invalid IPv4: %s", ip_str);
             return -EINVAL;
         }
 
@@ -747,7 +744,7 @@ static ssize_t add_ban_write(struct file *file, const char __user *buf,
         if ((ip_num >= 0xF0000000 && ip_num < 0xFE000000) || ip_num == 0xFFFFFFFF) {
             /* Reject 240.0.0.0 - 253.255.255.255 (true Class E reserved) */
             /* But allow 254.0.0.0 - 254.255.255.255 and 255.0.0.0 (with other checks) */
-            printk(KERN_WARNING "firewall: Attempt to ban reserved IPv4 Class E: %s\n", ip_str);
+            fw_pr_warn("Attempt to ban reserved IPv4 Class E: %s", ip_str);
             return -EINVAL;
         }
 
@@ -760,32 +757,32 @@ static ssize_t add_ban_write(struct file *file, const char __user *buf,
         if ((ip_class_a == 10) ||  /* 10.0.0.0/8 */
             (ip_class_a == 172 && ip_class_b >= 16 && ip_class_b <= 31) ||  /* 172.16.0.0/12 */
             (ip_class_a == 192 && ip_class_b == 168)) {  /* 192.168.0.0/16 */
-            printk(KERN_WARNING "firewall: Attempt to ban private IPv4 range %pI4 - this may be unintended\n", &ipv4);
+            fw_pr_warn("Attempt to ban private IPv4 range %pI4 - this may be unintended", &ipv4);
         }
 
         /* Check flood protection */
         if (check_flood_protection() < 0) {
-            printk(KERN_WARNING "firewall: Flood protection triggered - too many ban requests\n");
+            fw_pr_warn("Flood protection triggered - too many ban requests");
             return -EBUSY;
         }
 
         int result = ban_ip(&fw_info, ipv4);
         if (result < 0) {
             if (result == -EPERM) {
-                printk(KERN_INFO "firewall: Requested IPv4 %s is in whitelist, not banned\n", ip_str);
+                fw_pr_info("Requested IPv4 %s is in whitelist, not banned", ip_str);
             } else if (result == -ENOMEM) {
-                printk(KERN_ERR "firewall: Failed to allocate memory for ban entry for IPv4 %s\n", ip_str);
+                fw_pr_err("Failed to allocate memory for ban entry for IPv4 %s", ip_str);
             } else if (result == -ENOSPC) {
-                printk(KERN_WARNING "firewall: Ban table full, cannot ban IPv4 %s\n", ip_str);
+                fw_pr_warn("Ban table full, cannot ban IPv4 %s", ip_str);
             } else {
-                printk(KERN_ERR "firewall: Unknown error %d when trying to ban IPv4 %s\n", result, ip_str);
+                fw_pr_err("Unknown error %d when trying to ban IPv4 %s", result, ip_str);
             }
             FW_DEBUG(1, "EXIT: add_ban_write -> %d (ban_ip failed)", result);
             return result;
         }
     }
     else {
-        printk(KERN_WARNING "firewall: Invalid IP address format: %s\n", ip_str);
+        fw_pr_warn("Invalid IP address format: %s", ip_str);
         FW_DEBUG(1, "EXIT: add_ban_write -> -EINVAL (invalid IP format)");
         return -EINVAL;
     }
@@ -858,7 +855,7 @@ static ssize_t remove_ban_write(struct file *file, const char __user *buf,
             (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  /* 224.0.0.0/4 (multicast) */
             (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  /* 0.0.0.0/8 */
             (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  /* 255.0.0.0/8 */
-            printk(KERN_WARNING "firewall: Attempt to unban invalid IPv4: %s\n", ip_str);
+            fw_pr_warn("Attempt to unban invalid IPv4: %s", ip_str);
             return -EINVAL;
         }
 
@@ -866,7 +863,7 @@ static ssize_t remove_ban_write(struct file *file, const char __user *buf,
             return -ENOENT;
     }
     else {
-        printk(KERN_WARNING "firewall: Invalid IP address format: %s\n", ip_str);
+        fw_pr_warn("Invalid IP address format: %s", ip_str);
         return -EINVAL;
     }
 
@@ -963,7 +960,7 @@ static ssize_t whitelist_add_write(struct file *file, const char __user *buf,
             (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  /* 224.0.0.0/4 (multicast) */
             (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  /* 0.0.0.0/8 */
             (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  /* 255.0.0.0/8 */
-            printk(KERN_WARNING "firewall: Attempt to whitelist invalid IPv4: %s\n", input);
+            fw_pr_warn("Attempt to whitelist invalid IPv4: %s", input);
             return -EINVAL;
         }
 
@@ -975,7 +972,7 @@ static ssize_t whitelist_add_write(struct file *file, const char __user *buf,
             return -ENOSPC;
     }
     else {
-        printk(KERN_WARNING "firewall: Invalid IP address format: %s\n", input);
+        fw_pr_warn("Invalid IP address format: %s", input);
         return -EINVAL;
     }
 
@@ -1031,7 +1028,7 @@ static ssize_t whitelist_remove_write(struct file *file, const char __user *buf,
             (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  /* 224.0.0.0/4 (multicast) */
             (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  /* 0.0.0.0/8 */
             (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  /* 255.0.0.0/8 */
-            printk(KERN_WARNING "firewall: Attempt to remove invalid IPv4 from whitelist: %s\n", input);
+            fw_pr_warn("Attempt to remove invalid IPv4 from whitelist: %s", input);
             return -EINVAL;
         }
 
@@ -1042,7 +1039,7 @@ static ssize_t whitelist_remove_write(struct file *file, const char __user *buf,
             return -ENOENT;
     }
     else {
-        printk(KERN_WARNING "firewall: Invalid IP address format: %s\n", input);
+        fw_pr_warn("Invalid IP address format: %s", input);
         return -EINVAL;
     }
 
@@ -1106,37 +1103,37 @@ static ssize_t config_write(struct file *file, const char __user *buf,
         input[len - 1] = '\0';
 
     if (sscanf(input, "%63s %u", param, &value) != 2) {
-        printk(KERN_ERR "firewall: Invalid config format. Use: param value\n");
+        fw_pr_err("Invalid config format. Use: param value");
         return -EINVAL;
     }
 
     if (strcmp(param, "ban_time") == 0) {
         if (value < 1 || value > 365 * 24 * 60 * 60) {  // 1 year max
-            printk(KERN_ERR "firewall: ban_time must be between 1 and %d seconds\n", 365 * 24 * 60 * 60);
+            fw_pr_err("ban_time must be between 1 and %d seconds", 365 * 24 * 60 * 60);
             return -EINVAL;
         }
         /* FIX P1-5: Use WRITE_ONCE to atomically write fw_ban_time to prevent
          * torn writes when the value is being concurrently read from netfilter hooks. */
         WRITE_ONCE(fw_ban_time, value);
-        printk(KERN_INFO "firewall: ban_time updated to %u seconds\n", value);
+        fw_pr_info("ban_time updated to %u seconds", value);
     } else if (strcmp(param, "max_retries") == 0) {
         if (value < 1 || value > 1000) {  // Reasonable upper limit
-            printk(KERN_ERR "firewall: max_retries must be between 1 and 1000\n");
+            fw_pr_err("max_retries must be between 1 and 1000");
             return -EINVAL;
         }
         /* FIX P1-5: Use WRITE_ONCE for atomic access to fw_max_retries */
         WRITE_ONCE(fw_max_retries, value);
-        printk(KERN_INFO "firewall: max_retries updated to %u\n", value);
+        fw_pr_info("max_retries updated to %u", value);
     } else if (strcmp(param, "findtime") == 0) {
         if (value < 1 || value > 365 * 24 * 60 * 60) {  // 1 year max
-            printk(KERN_ERR "firewall: findtime must be between 1 and %d seconds\n", 365 * 24 * 60 * 60);
+            fw_pr_err("findtime must be between 1 and %d seconds", 365 * 24 * 60 * 60);
             return -EINVAL;
         }
         /* FIX P1-5: Use WRITE_ONCE for atomic access to fw_findtime */
         WRITE_ONCE(fw_findtime, value);
-        printk(KERN_INFO "firewall: findtime updated to %u seconds\n", value);
+        fw_pr_info("findtime updated to %u seconds", value);
     } else {
-        printk(KERN_ERR "firewall: Unknown parameter: %s\n", param);
+        fw_pr_err("Unknown parameter: %s", param);
         return -EINVAL;
     }
 
@@ -1160,7 +1157,7 @@ int create_procfs_entries(struct firewall_info *fw)
 
     fw->proc_dir = proc_mkdir("firewall", NULL);
     if (!fw->proc_dir) {
-        printk(KERN_ERR "firewall: Failed to create /proc/firewall\n");
+        fw_pr_err("Failed to create /proc/firewall");
         return -ENOMEM;
     }
 
@@ -1199,7 +1196,7 @@ int create_procfs_entries(struct firewall_info *fw)
         goto err_cleanup;
     fw->proc_whitelist_remove = entry;
 
-    printk(KERN_INFO "firewall: Procfs entries created\n");
+    fw_pr_info("Procfs entries created");
     return 0;
 
 err_cleanup:
@@ -1348,7 +1345,7 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
         hash_for_each_rcu(fw_info.whitelist_table, bkt, wl_entry, hash) {
             /* Add max iteration protection to prevent performance collapse */
             if (++wl_iterations > MAX_WHITELIST_ENTRIES) {
-                net_warn_ratelimited("firewall: whitelist traversal limit reached, possible misconfiguration\n");
+                fw_pr_warn_ratelimited("whitelist traversal limit reached, possible misconfiguration");
                 break;
             }
             if ((src_ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
@@ -1432,13 +1429,13 @@ int save_state_to_file(const char *filename)
     u32 hash;
 
     if (!filename || !*filename) {
-        printk(KERN_ERR "firewall: Invalid filename for state save\n");
+        fw_pr_err("Invalid filename for state save");
         return -EINVAL;
     }
 
     /* Security validation: Check for directory traversal in filename */
     if (strstr(filename, "../") || strstr(filename, "/..")) {
-        printk(KERN_ERR "firewall: Potential directory traversal in filename: %s\n", filename);
+        fw_pr_err("Potential directory traversal in filename: %s", filename);
         return -EINVAL;
     }
 
@@ -1446,10 +1443,10 @@ int save_state_to_file(const char *filename)
     if (strncmp(filename, "/var/lib/", 9) != 0 &&
         strncmp(filename, "/tmp/", 5) != 0 &&
         strncmp(filename, "/etc/", 5) != 0) {
-        printk(KERN_WARNING "firewall: State file path outside allowed directories: %s\n", filename);
+        fw_pr_warn("State file path outside allowed directories: %s", filename);
         /* Only allow saving to safe directories */
         if (strchr(filename, '/') && filename[0] != '/') {
-            printk(KERN_ERR "firewall: Relative path not allowed for state file: %s\n", filename);
+            fw_pr_err("Relative path not allowed for state file: %s", filename);
             return -EINVAL;
         }
     }
@@ -1469,18 +1466,18 @@ int save_state_to_file(const char *filename)
         int getattr_err = vfs_getattr(&path, &stat_buf2);
 #endif
         if (getattr_err) {
-            net_warn_ratelimited("firewall: Cannot stat file %s, proceeding anyway\n", filename);
+            fw_pr_warn_ratelimited("Cannot stat file %s, proceeding anyway", filename);
             goto out_path_put;
         }
         /* Check if it's a symbolic link - use S_ISLNK on stat mode */
         if (S_ISLNK(stat_buf2.mode)) {
-            printk(KERN_ERR "firewall: Refusing to write to symbolic link: %s\n", filename);
+            fw_pr_err("Refusing to write to symbolic link: %s", filename);
             err = -EACCES;
             goto out_path_put;
         }
         /* Check if it's a directory */
         if (S_ISDIR(stat_buf2.mode)) {
-            printk(KERN_ERR "firewall: Refusing to write to directory: %s\n", filename);
+            fw_pr_err("Refusing to write to directory: %s", filename);
             err = -EISDIR;
             goto out_path_put;
         }
@@ -1494,14 +1491,14 @@ out_path_put:
     /* 阶段1: 分配临时数组（GFP_KERNEL 可以睡眠，安全） */
     ban_entries = kmalloc_array(MAX_SAVE_BAN, sizeof(struct saved_ban_entry), GFP_KERNEL);
     if (!ban_entries) {
-        printk(KERN_ERR "firewall: Failed to allocate memory for saving ban entries\n");
+        fw_pr_err("Failed to allocate memory for saving ban entries");
         return -ENOMEM;
     }
 
     wl_entries = kmalloc_array(MAX_SAVE_WL, sizeof(struct saved_whitelist_entry), GFP_KERNEL);
     if (!wl_entries) {
         kfree(ban_entries);
-        printk(KERN_ERR "firewall: Failed to allocate memory for saving whitelist entries\n");
+        fw_pr_err("Failed to allocate memory for saving whitelist entries");
         return -ENOMEM;
     }
 
@@ -1536,7 +1533,7 @@ out_path_put:
     /* 阶段4: 锁外打开文件（可以安全睡眠） */
     file = filp_open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0600);
     if (IS_ERR(file)) {
-        printk(KERN_ERR "firewall: Failed to open file for saving state: %s\n", filename);
+        fw_pr_err("Failed to open file for saving state: %s", filename);
         kfree(ban_entries);
         kfree(wl_entries);
         return PTR_ERR(file);
@@ -1548,7 +1545,7 @@ out_path_put:
                          ban_entries[i].ip_str, ban_entries[i].remaining_time);
 
         if (kernel_write(file, buffer, written, &pos) != written) {
-            printk(KERN_ERR "firewall: Failed to write ban entry to state file\n");
+            fw_pr_err("Failed to write ban entry to state file");
             filp_close(file, NULL);
             kfree(ban_entries);
             kfree(wl_entries);
@@ -1562,7 +1559,7 @@ out_path_put:
                           wl_entries[i].ip_str, wl_entries[i].prefix_len, wl_entries[i].device_name);
 
         if (kernel_write(file, buffer, written, &pos) != written) {
-            printk(KERN_ERR "firewall: Failed to write whitelist entry to state file\n");
+            fw_pr_err("Failed to write whitelist entry to state file");
             filp_close(file, NULL);
             kfree(ban_entries);
             kfree(wl_entries);
@@ -1577,7 +1574,7 @@ out_path_put:
     kfree(ban_entries);
     kfree(wl_entries);
 
-    printk(KERN_INFO "firewall: State saved to %s (ban: %d, wl: %d)\n", filename, ban_count, wl_count);
+    fw_pr_info("State saved to %s (ban: %d, wl: %d)", filename, ban_count, wl_count);
     return 0;
 }
 
@@ -1590,21 +1587,21 @@ int restore_state_from_file(const char *filename)
     char *line, *token;
 
     if (!filename || !*filename) {
-        printk(KERN_ERR "firewall: Invalid filename for state restore\n");
+        fw_pr_err("Invalid filename for state restore");
         return -EINVAL;
     }
 
     /* Allocate buffer on heap to avoid large stack frame */
     buffer = kmalloc(PAGE_SIZE, GFP_KERNEL);
     if (!buffer) {
-        printk(KERN_ERR "firewall: Failed to allocate buffer for state restore\n");
+        fw_pr_err("Failed to allocate buffer for state restore");
         return -ENOMEM;
     }
 
     /* Open file for reading */
     file = filp_open(filename, O_RDONLY, 0);
     if (IS_ERR(file)) {
-        printk(KERN_INFO "firewall: State file does not exist: %s\n", filename);
+        fw_pr_info("State file does not exist: %s", filename);
         kfree(buffer);
         return 0; /* Not an error, just no saved state to restore */
     }
@@ -1631,7 +1628,7 @@ int restore_state_from_file(const char *filename)
                     if (in4_pton(ip_str, -1, (u8 *)&ip, -1, NULL)) {
                         /* Check if IP is whitelisted before restoring ban */
                         if (is_in_whitelist(&fw_info, ip)) {
-                            printk(KERN_INFO "firewall: Skipping restored ban for whitelisted IP %s\n", ip_str);
+                            fw_pr_info("Skipping restored ban for whitelisted IP %s", ip_str);
                             continue;
                         }
 
@@ -1639,13 +1636,13 @@ int restore_state_from_file(const char *filename)
                         if (kstrtoul(time_str, 10, &remaining_time) == 0) {
                             /* FIX C4: 验证 remaining_time 合理性：不能超过 1 年，不能为 0 */
                             if (remaining_time == 0 || remaining_time > 365UL * 24 * 60 * 60) {
-                                printk(KERN_WARNING "firewall: Skipping ban with invalid remaining time: %lu\n", remaining_time);
+                                fw_pr_warn("Skipping ban with invalid remaining time: %lu", remaining_time);
                                 continue;
                             }
 
                             /* FIX C4: 检查整数溢出：remaining_time * HZ 不能溢出 */
                             if (remaining_time > (ULONG_MAX / HZ)) {
-                                printk(KERN_WARNING "firewall: Skipping ban - remaining_time * HZ would overflow\n");
+                                fw_pr_warn("Skipping ban - remaining_time * HZ would overflow");
                                 continue;
                             }
 
@@ -1656,7 +1653,7 @@ int restore_state_from_file(const char *filename)
                             if (jiffies > ULONG_MAX - ban_duration) {
                                 /* jiffies 即将回绕，使用最大安全值 */
                                 unban_time = jiffies + min(ban_duration, ULONG_MAX - jiffies);
-                                printk(KERN_WARNING "firewall: Jiffies wrap protection applied for ban restoration\n");
+                                fw_pr_warn("Jiffies wrap protection applied for ban restoration");
                             } else {
                                 unban_time = jiffies + ban_duration;
                             }
@@ -1666,7 +1663,7 @@ int restore_state_from_file(const char *filename)
 
                             entry = kmalloc(sizeof(*entry), GFP_KERNEL);
                             if (!entry) {
-                                printk(KERN_ERR "firewall: Failed to allocate memory for restored ban entry\n");
+                                fw_pr_err("Failed to allocate memory for restored ban entry");
                                 continue;
                             }
 
@@ -1680,8 +1677,7 @@ int restore_state_from_file(const char *filename)
                             atomic_inc(&fw_info.ban_count);
                             spin_unlock(&fw_info.lock);
 
-                            printk(KERN_INFO "firewall: Restored ban for IPv4 %s (expires in %lu seconds)\n",
-                                   ip_str, remaining_time);
+                            fw_pr_info("Restored ban for IPv4 %s (expires in %lu seconds)", ip_str, remaining_time);
                         }
                     }
                 }
@@ -1705,8 +1701,7 @@ int restore_state_from_file(const char *filename)
                             int result = add_whitelist_entry(&fw_info, normalized_ip, mask,
                                                                 dev_name ? dev_name : "restored");
                             if (result == 0) {
-                                printk(KERN_INFO "firewall: Restored whitelist entry for IPv4 %s/%d\n",
-                                       ip_str, prefix_len);
+                                fw_pr_info("Restored whitelist entry for IPv4 %s/%d", ip_str, prefix_len);
                             }
                         }
                     }
@@ -1717,7 +1712,7 @@ int restore_state_from_file(const char *filename)
 
     filp_close(file, NULL);
     kfree(buffer);
-    printk(KERN_INFO "firewall: State restored from %s\n", filename);
+    fw_pr_info("State restored from %s", filename);
     return 0;
 }
 
@@ -1728,42 +1723,41 @@ static int __init firewall_init(void)
 {
     int ret;
 
-    printk(KERN_INFO "firewall: Loading firewall module v1.4\n");
+    fw_pr_info("Loading firewall module v1.4");
 
     /* 参数下界检查 - 防止 0 或过小值导致异常行为 */
     /* FIX P1-5: Use READ_ONCE for atomic access to module parameters */
     if (READ_ONCE(fw_ban_time) < 1) {
-        printk(KERN_ERR "firewall: fw_ban_time must be >= 1\n");
+        fw_pr_err("fw_ban_time must be >= 1");
         return -EINVAL;
     }
     if (READ_ONCE(fw_max_retries) < 1) {
-        printk(KERN_ERR "firewall: fw_max_retries must be >= 1\n");
+        fw_pr_err("fw_max_retries must be >= 1");
         return -EINVAL;
     }
     if (READ_ONCE(fw_findtime) < 1) {
-        printk(KERN_ERR "firewall: fw_findtime must be >= 1\n");
+        fw_pr_err("fw_findtime must be >= 1");
         return -EINVAL;
     }
 
     /* 参数上界检查 - 防止过大的值导致整数溢出 */
     if (READ_ONCE(fw_ban_time) > 365 * 24 * 60 * 60) {  /* 1 year max */
-        printk(KERN_ERR "firewall: fw_ban_time too large (max 1 year)\n");
+        fw_pr_err("fw_ban_time too large (max 1 year)");
         return -EINVAL;
     }
     if (READ_ONCE(fw_findtime) > 365 * 24 * 60 * 60) {  /* 1 year max */
-        printk(KERN_ERR "firewall: fw_findtime too large (max 1 year)\n");
+        fw_pr_err("fw_findtime too large (max 1 year)");
         return -EINVAL;
     }
     if (READ_ONCE(fw_max_retries) > 1000) {  /* Reasonable upper limit */
-        printk(KERN_ERR "firewall: fw_max_retries too large (max 1000)\n");
+        fw_pr_err("fw_max_retries too large (max 1000)");
         return -EINVAL;
     }
 
     /* Additional validation: ban time should not be less than findtime */
     /* FIX P1-5: Use READ_ONCE for atomic access to module parameters */
     if (READ_ONCE(fw_ban_time) < READ_ONCE(fw_findtime)) {
-        printk(KERN_WARNING "firewall: fw_ban_time (%u) is less than fw_findtime (%u), adjusting ban time\n",
-               READ_ONCE(fw_ban_time), READ_ONCE(fw_findtime));
+        fw_pr_warn("fw_ban_time (%u) is less than fw_findtime (%u), adjusting ban time", READ_ONCE(fw_ban_time), READ_ONCE(fw_findtime));
         /* FIX P1-5: Use WRITE_ONCE for atomic write */
         WRITE_ONCE(fw_ban_time, READ_ONCE(fw_findtime));  /* Ensure ban time is at least findtime */
     }
@@ -1799,12 +1793,11 @@ static int __init firewall_init(void)
 
     ret = nf_register_net_hook(&init_net, &nf_ops_ipv4);
     if (ret) {
-        printk(KERN_ERR "firewall: Failed to register IPv4 netfilter hook: %d\n", ret);
+        fw_pr_err("Failed to register IPv4 netfilter hook: %d", ret);
         goto err_procfs;
     }
 
-    printk(KERN_INFO "firewall: Module loaded successfully (ban_time=%u, max_retries=%u, findtime=%u, state_file=%s)\n",
-           fw_ban_time, fw_max_retries, fw_findtime, state_file);
+    fw_pr_info("Module loaded successfully (ban_time=%u, max_retries=%u, findtime=%u, state_file=%s)", fw_ban_time, fw_max_retries, fw_findtime, state_file);
     return 0;
 
 err_procfs:
@@ -1825,7 +1818,7 @@ static void __exit firewall_exit(void)
     struct whitelist_entry *wl;
     u32 wl_hash;
 
-    printk(KERN_INFO "firewall: Unloading firewall module\n");
+    fw_pr_info("Unloading firewall module");
 
     /* FIX C5: 设置关闭标志，阻止新操作 */
     atomic_set(&fw_info.shutting_down, 1);
@@ -1867,7 +1860,7 @@ static void __exit firewall_exit(void)
      * embedded in struct firewall_info. They are NOT dynamically allocated with kmalloc,
      * so we must NOT call kfree on them. Doing so would cause a kernel OOPS/crash. */
 
-    printk(KERN_INFO "firewall: Module unloaded\n");
+    fw_pr_info("Module unloaded");
 }
 
 module_init(firewall_init);
