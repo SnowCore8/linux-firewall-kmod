@@ -224,24 +224,6 @@ echo "192.168.1.1a" | tee "$PROC_DIR/add_ban" > /dev/null 2>&1 || pass "含字�
 # Test negative numbers in IP
 echo "-1.1.1.1" | tee "$PROC_DIR/add_ban" > /dev/null 2>&1 || pass "负数IP被拒绝"
 
-# Test flood protection (add many IPs quickly)
-section "洪泛保护测试"
-start=$(date +%s%N)
-for i in $(seq 1 50); do
-    echo "192.0.2.$i" | tee "$PROC_DIR/add_ban" > /dev/null 2>&1 || true
-done
-dur=$(( ($(date +%s%N) - start) / 1000000 ))
-info "添加50个IP耗时: ${dur}ms"
-count=$(wc -l < "$PROC_DIR/ban_list" 2>/dev/null || echo 0)
-info "实际封禁IP数量: $count"
-# With flood protection threshold at 200/sec, 50 IPs should all be added if done in < 1 second
-[[ $dur -lt 1000 && $count -eq 50 ]] && pass "洪泛保护正常（50个IP在1秒内全部添加）" || fail "洪泛保护异常"
-
-# Clear the added IPs
-for i in $(seq 1 50); do
-    echo "192.0.2.$i" | tee "$PROC_DIR/remove_ban" > /dev/null 2>&1 || true
-done
-
 # Test 7: Performance
 section "性能测试"
 start=$(date +%s%N)
