@@ -41,7 +41,7 @@ done
 sleep 0.5
 
 local_final_count=$(wc -l < "$PROC_BAN_LIST" 2>/dev/null || echo 0)
-info "添加 200 IP 后封禁列表: $local_final_count"
+fw_log_info "添加 200 IP 后封禁列表: $local_final_count"
 assert_le "$local_final_count" 1024 "封禁数量未超出 1024 上限"
 
 # 分批清理
