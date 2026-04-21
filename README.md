@@ -115,7 +115,36 @@ sudo ./build/daemon/firewall-daemon -l /var/log/auth.log -m 3 -f 600 -b 600
 
 ### 配置文件
 
-守护进程支持 YAML 配置文件 `firewall.conf`：
+守护进程支持 YAML 配置文件，可以使用单个或多个配置文件：
+
+**方式一：使用配置目录（推荐）**
+
+默认情况下，守护进程会自动加载 `./config/` 或 `/etc/firewall/config/` 目录下的所有 `.yaml` / `.yml` 文件：
+
+```
+config/
+├── default.yaml          # 默认配置
+├── frps.yaml             # frps 保护配置
+└── custom.yaml           # 其他自定义配置
+```
+
+文件按字母顺序加载，后面的配置会覆盖前面的（标量值），数组会追加合并。
+
+```bash
+# 自动加载默认目录
+sudo ./build/daemon/firewall-daemon
+
+# 指定配置目录
+sudo ./build/daemon/firewall-daemon -C /etc/firewall/config/
+```
+
+**方式二：使用单个配置文件**
+
+```bash
+sudo ./build/daemon/firewall-daemon -c firewall.conf
+```
+
+示例配置文件 (`config/default.yaml`)：
 
 ```yaml
 # firewall daemon configuration file
@@ -152,12 +181,6 @@ regex_patterns:
   vsftpd: ""
   nginx: ""
   frp: ""
-```
-
-使用配置文件启动：
-
-```bash
-sudo ./build/daemon/firewall-daemon -c firewall.conf
 ```
 
 ### procfs 接口
@@ -258,8 +281,10 @@ firewall/
 │   ├── firewall.ko
 │   └── daemon/
 │       └── firewall-daemon
+├── config/                     # 配置文件目录
+│   ├── default.yaml            # 默认配置
+│   └── frps.yaml               # frps 保护配置
 ├── Makefile                    # 构建配置
-├── firewall.conf               # 守护进程配置
 ├── CHANGELOG.md                # 变更日志
 ├── LICENSE                     # GPL v2 许可证
 ├── README.md                   # 项目主文档

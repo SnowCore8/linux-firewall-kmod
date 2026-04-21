@@ -35,6 +35,7 @@
 #include <ctype.h>
 #include <stdatomic.h>
 #include <yaml.h>
+#include <dirent.h>
 
 /* ============================================================================
  * Unified Logging System for Daemon
@@ -99,7 +100,8 @@ struct config {
     char *frp_regex;        /* Custom frp regex pattern (NULL = use default) */
     char *log_files[MAX_LOG_FILES];
     int log_count;
-    char *config_file;  /* Path to configuration file for runtime updates */
+    char *config_file;      /* Path to single configuration file for runtime updates */
+    char *config_dir;       /* Path to configuration directory (auto-loads all .yaml/.yml) */
 };
 
 /* Failed attempt tracker */
@@ -167,6 +169,7 @@ static int strcasestr_custom(const char *haystack, const char *needle) {
 /* Function prototypes */
 static void setup_signals(void);
 static int parse_config_file(const char *config_path);
+static int load_config_directory(const char *config_dir);
 static int parse_config(int argc, char *argv[]);
 static int extract_ip(const char *line, char *ip_out, size_t ip_size);
 static int parse_log_line(const char *line, char *ip_out, size_t ip_size);
@@ -534,6 +537,108 @@ restore_old_config:
     return -1;
 }
 
+/* Load all .yaml/.yml files from a configuration directory
+ * Files are loaded in alphabetical order, later files override earlier ones
+ * for scalar values, and arrays are appended. */
+static int load_config_directory(const char *config_dir)
+{
+    DIR *dir;
+    struct dirent *entry;
+    char **file_list = NULL;
+    int file_count = 0;
+    int file_capacity = 16;
+    int ret = 0;
+
+    dir = opendir(config_dir);
+    if (!dir) {
+        daemon_log_warn("Cannot open config directory: %s", config_dir);
+        return -1;
+    }
+
+    daemon_log_info("Loading configuration directory: %s", config_dir);
+
+    /* Allocate file list */
+    file_list = malloc(file_capacity * sizeof(char *));
+    if (!file_list) {
+        daemon_log_err("Out of memory allocating file list");
+        closedir(dir);
+        return -1;
+    }
+
+    /* Collect all .yaml and .yml files */
+    while ((entry = readdir(dir)) != NULL) {
+        const char *name = entry->d_name;
+        size_t len = strlen(name);
+
+        /* Check for .yaml or .yml extension */
+        if ((len > 5 && strcmp(name + len - 5, ".yaml") == 0) ||
+            (len > 4 && strcmp(name + len - 4, ".yml") == 0)) {
+            /* Expand list if needed */
+            if (file_count >= file_capacity) {
+                file_capacity *= 2;
+                char **new_list = realloc(file_list, file_capacity * sizeof(char *));
+                if (!new_list) {
+                    daemon_log_err("Out of memory expanding file list");
+                    for (int i = 0; i < file_count; i++) free(file_list[i]);
+                    free(file_list);
+                    closedir(dir);
+                    return -1;
+                }
+                file_list = new_list;
+            }
+
+            file_list[file_count] = strdup(name);
+            if (!file_list[file_count]) {
+                daemon_log_err("Out of memory allocating file name");
+                for (int i = 0; i < file_count; i++) free(file_list[i]);
+                free(file_list);
+                closedir(dir);
+                return -1;
+            }
+            file_count++;
+        }
+    }
+    closedir(dir);
+
+    if (file_count == 0) {
+        daemon_log_warn("No .yaml/.yml files found in: %s", config_dir);
+        free(file_list);
+        return 0;
+    }
+
+    /* Sort files alphabet for deterministic loading order */
+    for (int i = 0; i < file_count - 1; i++) {
+        for (int j = i + 1; j < file_count; j++) {
+            if (strcmp(file_list[i], file_list[j]) > 0) {
+                char *tmp = file_list[i];
+                file_list[i] = file_list[j];
+                file_list[j] = tmp;
+            }
+        }
+    }
+
+    /* Load each configuration file */
+    for (int i = 0; i < file_count; i++) {
+        char full_path[1024];
+        snprintf(full_path, sizeof(full_path), "%s/%s", config_dir, file_list[i]);
+
+        daemon_log_info("Loading config file [%d/%d]: %s", i + 1, file_count, full_path);
+
+        if (parse_config_file(full_path) < 0) {
+            daemon_log_warn("Failed to load config file: %s (continuing with others)", full_path);
+            /* Continue loading other files instead of failing completely */
+        }
+    }
+
+    /* Cleanup */
+    for (int i = 0; i < file_count; i++) {
+        free(file_list[i]);
+    }
+    free(file_list);
+
+    return ret;
+}
+
 /* Setup signal handlers using sigaction */
 static void setup_signals(void)
 {
@@ -566,7 +671,8 @@ static int parse_config(int argc, char *argv[])
 {
     int opt;
     static struct option long_options[] = {
-        {"config",     required_argument, 0, 'c'},  /* New config file option */
+        {"config",     required_argument, 0, 'c'},  /* Single config file */
+        {"config-dir", required_argument, 0, 'C'},  /* Config directory (auto-loads all .yaml) */
         {"daemonize",  no_argument,       0, 'd'},
         {"max-retries", required_argument, 0, 'm'},
         {"findtime",   required_argument, 0, 'f'},
@@ -586,41 +692,32 @@ static int parse_config(int argc, char *argv[])
     cfg.interval = DEFAULT_INTERVAL;
     cfg.metrics_port = DEFAULT_METRICS_PORT;
     cfg.log_count = 0;
-    cfg.config_file = NULL;  /* Initialize config file to NULL */
+    cfg.config_file = NULL;
+    cfg.config_dir = NULL;
 
     /* Initialize log files array to NULL */
     for (int i = 0; i < MAX_LOG_FILES; i++) {
         cfg.log_files[i] = NULL;
     }
 
-    /* First, check for config file option */
+    /* Default config directory: ./config/ relative to executable or /etc/firewall/config/ */
+    const char *default_config_dirs[] = {
+        "./config",
+        "/etc/firewall/config",
+        NULL
+    };
+
+    /* First pass: check for explicit config file or directory options */
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--config") == 0 || strncmp(argv[i], "--config=", 9) == 0 ||
-            strcmp(argv[i], "-c") == 0) {
-            char *config_path = NULL;
-
-            if (strcmp(argv[i], "--config") == 0 || strcmp(argv[i], "-c") == 0) {
-                /* Config file path is the next argument */
-                if (i + 1 < argc) {
-                    config_path = argv[i + 1];
-                }
-            } else if (strncmp(argv[i], "--config=", 9) == 0) {
-                /* Config file path is part of the same argument */
-                config_path = argv[i] + 9;
-            }
-
+        /* Check for --config or -c (single file) */
+        if (strcmp(argv[i], "--config") == 0 || strcmp(argv[i], "-c") == 0) {
+            char *config_path = (i + 1 < argc) ? argv[i + 1] : NULL;
             if (config_path) {
-                /* Store config file path for later reloads */
-                if (cfg.config_file) {
-                    free(cfg.config_file);  // Free any previously allocated config file path
-                }
                 cfg.config_file = strdup(config_path);
                 if (!cfg.config_file) {
                     fprintf(stderr, "Error: out of memory allocating config file path\n");
                     return -1;
                 }
-
-                /* Parse config file */
                 if (parse_config_file(config_path) < 0) {
                     fprintf(stderr, "Error: failed to parse config file: %s\n", config_path);
                     free(cfg.config_file);
@@ -629,13 +726,75 @@ static int parse_config(int argc, char *argv[])
                 }
                 break;
             }
+        } else if (strncmp(argv[i], "--config=", 9) == 0) {
+            const char *config_path = argv[i] + 9;
+            cfg.config_file = strdup(config_path);
+            if (!cfg.config_file) {
+                fprintf(stderr, "Error: out of memory allocating config file path\n");
+                return -1;
+            }
+            if (parse_config_file(config_path) < 0) {
+                fprintf(stderr, "Error: failed to parse config file: %s\n", config_path);
+                free(cfg.config_file);
+                cfg.config_file = NULL;
+                return -1;
+            }
+        }
+        /* Check for --config-dir or -C (directory) */
+        else if (strcmp(argv[i], "--config-dir") == 0 || strcmp(argv[i], "-C") == 0) {
+            char *dir_path = (i + 1 < argc) ? argv[i + 1] : NULL;
+            if (dir_path) {
+                cfg.config_dir = strdup(dir_path);
+                if (!cfg.config_dir) {
+                    fprintf(stderr, "Error: out of memory allocating config dir path\n");
+                    return -1;
+                }
+                if (load_config_directory(dir_path) < 0) {
+                    fprintf(stderr, "Warning: failed to load config directory: %s\n", dir_path);
+                    /* Non-fatal: continue without config */
+                }
+                break;
+            }
+        } else if (strncmp(argv[i], "--config-dir=", 13) == 0) {
+            const char *dir_path = argv[i] + 13;
+            cfg.config_dir = strdup(dir_path);
+            if (!cfg.config_dir) {
+                fprintf(stderr, "Error: out of memory allocating config dir path\n");
+                return -1;
+            }
+            if (load_config_directory(dir_path) < 0) {
+                fprintf(stderr, "Warning: failed to load config directory: %s\n", dir_path);
+            }
+        }
+    }
+
+    /* If no explicit config was provided, try default config directories */
+    if (!cfg.config_file && !cfg.config_dir) {
+        for (int i = 0; default_config_dirs[i] != NULL; i++) {
+            if (access(default_config_dirs[i], F_OK) == 0) {
+                cfg.config_dir = strdup(default_config_dirs[i]);
+                if (!cfg.config_dir) {
+                    fprintf(stderr, "Error: out of memory allocating config dir path\n");
+                    return -1;
+                }
+                if (load_config_directory(default_config_dirs[i]) < 0) {
+                    daemon_log_warn("No config files found in: %s", default_config_dirs[i]);
+                    free(cfg.config_dir);
+                    cfg.config_dir = NULL;
+                } else {
+                    daemon_log_info("Using default config directory: %s", default_config_dirs[i]);
+                    break;
+                }
+            }
         }
     }
 
     /* Now parse command line options (they override config file values) */
-    while ((opt = getopt_long(argc, argv, "c:dm:f:b:i:l:p:h", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:C:dm:f:b:i:l:p:h", long_options, NULL)) != -1) {
         switch (opt) {
-        case 'c':  /* Config file - already handled above, but keep for completeness */
+        case 'c':  /* Config file - already handled above */
+            break;
+        case 'C':  /* Config directory - already handled above */
             break;
         case 'd':
             cfg.daemonize = 1;
@@ -776,7 +935,9 @@ static int parse_config(int argc, char *argv[])
         case 'h':
             printf("Usage: %s [OPTIONS]\n", argv[0]);
             printf("\nOptions:\n");
-            printf("  -c, --config FILE      Configuration file path\n");
+            printf("  -c, --config FILE      Single configuration file path\n");
+            printf("  -C, --config-dir DIR   Configuration directory (auto-loads all .yaml/.yml files)\n");
+            printf("                         Default: ./config/ or /etc/firewall/config/\n");
             printf("  -d, --daemonize        Run as daemon\n");
             printf("  -m, --max-retries N    Max failed attempts before ban (default: %d)\n", DEFAULT_MAX_RETRIES);
             printf("  -f, --findtime SECS    Time window for failures (default: %d)\n", DEFAULT_FINDTIME);

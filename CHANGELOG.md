@@ -8,6 +8,9 @@
 - YAML 配置文件支持（替换原有的 INI 格式）
 - 使用 libyaml 库进行配置解析
 - 支持嵌套配置结构（log_files 数组、regex_patterns 映射）
+- 配置目录自动加载功能（`-C/--config-dir`）
+- 默认自动加载 `./config/` 或 `/etc/firewall/config/` 下所有 yaml 文件
+- 多配置文件合并支持（按字母顺序加载，后加载的覆盖前面的）
 
 ## [v1.4] - 2026-04-19
 
