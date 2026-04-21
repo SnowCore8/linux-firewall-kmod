@@ -99,78 +99,56 @@ clean:
 
 # Install targets
 install-kernel: $(KERNEL_MODULE)
+	@echo "Installing kernel module..."
 	cp $(KERNEL_MODULE) /lib/modules/$(shell uname -r)/kernel/net/
 	depmod -a
-	@echo "firewall.ko installed to /lib/modules/$(shell uname -r)/kernel/net/"
+	# Install auto-load configurations
+	install -D -m 644 config/modules-load.d/firewall.conf /etc/modules-load.d/firewall.conf
+	install -D -m 644 config/modprobe.d/firewall.conf /etc/modprobe.d/firewall.conf
+	-systemctl daemon-reload 2>/dev/null || true
+	@echo "Kernel module and auto-load configs installed."
 
 install-daemon: $(DAEMON_BIN)
+	@echo "Installing daemon and configuration..."
 	cp $(DAEMON_BIN) /usr/local/bin/
-	@echo "firewall-daemon installed to /usr/local/bin/"
-
-install-system-config:
-	@echo "Installing system configuration files..."
-	# Install modules-load.d config
-	install -D -m 644 config/modules-load.d/firewall.conf /etc/modules-load.d/firewall.conf
-	@echo "  /etc/modules-load.d/firewall.conf installed"
-	# Install modprobe.d config
-	install -D -m 644 config/modprobe.d/firewall.conf /etc/modprobe.d/firewall.conf
-	@echo "  /etc/modprobe.d/firewall.conf installed"
-	# Reload systemd-modules-load to apply changes
-	-systemctl daemon-reload 2>/dev/null || true
-
-install-config:
-	@echo "Installing YAML configuration files..."
+	# Install YAML configs
 	install -d -m 755 /etc/firewall/config
 	install -m 644 config/*.yaml /etc/firewall/config/
-	@echo "  /etc/firewall/config/ installed with default configs"
-
-install-systemd:
-	@echo "Installing systemd service..."
+	# Install systemd service
 	install -D -m 644 firewall-frps.service /etc/systemd/system/firewall-frps.service
 	systemctl daemon-reload
-	@echo "  firewall-frps.service installed and systemd reloaded"
-	@echo "  Enable with: systemctl enable firewall-frps.service"
+	@echo "Daemon, configs, and systemd service installed."
+	@echo "To enable auto-start: systemctl enable firewall-frps.service"
 
-install: install-kernel install-daemon install-system-config install-config install-systemd
+install: install-kernel install-daemon
 	@echo ""
 	@echo "Installation complete!"
-	@echo "To enable automatic loading of firewall module at boot:"
+	@echo "To enable automatic loading at boot:"
 	@echo "  systemctl enable systemd-modules-load.service"
-	@echo "To start firewall daemon at boot:"
+	@echo "To start daemon at boot:"
 	@echo "  systemctl enable firewall-frps.service"
 
 # Uninstall targets
-uninstall-system-config:
-	@echo "Removing system configuration files..."
+uninstall-kernel:
+	@echo "Removing kernel module and auto-load configs..."
+	rm -f /lib/modules/$(shell uname -r)/kernel/net/firewall.ko
 	rm -f /etc/modules-load.d/firewall.conf
 	rm -f /etc/modprobe.d/firewall.conf
+	depmod -a
 	-systemctl daemon-reload 2>/dev/null || true
-	@echo "System configuration files removed."
-
-uninstall-config:
-	@echo "Removing YAML configuration files..."
-	rm -rf /etc/firewall/config
-	@echo "YAML configuration files removed."
-
-uninstall-systemd:
-	@echo "Removing systemd service..."
-	rm -f /etc/systemd/system/firewall-frps.service
-	systemctl daemon-reload
-	@echo "Systemd service removed."
+	@echo "Kernel module and auto-load configs removed."
 
 uninstall-daemon:
+	@echo "Removing daemon, configs, and systemd service..."
 	rm -f /usr/local/bin/firewall-daemon
-	@echo "firewall-daemon removed from /usr/local/bin/"
+	rm -rf /etc/firewall/config
+	rm -f /etc/systemd/system/firewall-frps.service
+	systemctl daemon-reload
+	@echo "Daemon, configs, and systemd service removed."
 
-uninstall-kernel:
-	rm -f /lib/modules/$(shell uname -r)/kernel/net/firewall.ko
-	depmod -a
-	@echo "firewall.ko removed and module dependencies updated."
-
-uninstall: uninstall-system-config uninstall-config uninstall-systemd uninstall-daemon uninstall-kernel
+uninstall: uninstall-kernel uninstall-daemon
 	@echo ""
-	@echo "All firewall components uninstalled successfully."
+	@echo "All firewall components uninstalled."
 
 .PHONY: kernel-module daemon all-with-daemon all debug1 debug2 debug3 test test-performance clean \
-	install-kernel install-daemon install-system-config install-config install-systemd install \
-	uninstall-system-config uninstall-config uninstall-systemd uninstall-daemon uninstall-kernel uninstall
+	install-kernel install-daemon install uninstall-kernel uninstall-daemon uninstall
