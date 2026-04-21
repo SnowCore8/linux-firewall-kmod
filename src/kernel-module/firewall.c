@@ -236,6 +236,7 @@ struct firewall_info fw_info;
 int ban_ip(struct firewall_info *fw, __be32 ip)
 {
     struct ban_entry *entry;
+    struct whitelist_entry *wl_entry;
     int ret = 0;
     u32 hash;
 
@@ -250,38 +251,37 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
 
     FW_DEBUG(2, "Attempting to ban IPv4: %pI4", &ip);
 
-    /* Check whitelist first with read lock */
-    if (is_in_whitelist(fw, ip)) {
-        atomic_inc(&fw->whitelist_reject_count);
-        fw_pr_warn("REFUSED to ban whitelisted IP %pI4", &ip);
-        FW_DEBUG(2, "IP %pI4 is in whitelist, refusing to ban", &ip);
-        FW_DEBUG(1, "EXIT: ban_ip -> -EPERM (whitelisted)");
-        return -EPERM;
-    }
-
-    /* Check if already banned with read lock */
-    if (is_banned(fw, ip)) {
-        FW_DEBUG(2, "IP %pI4 is already banned", &ip);
-        FW_DEBUG(1, "EXIT: ban_ip -> 0 (already banned)");
-        return 0;
-    }
-
+    /* Acquire lock before any checks to eliminate TOCTOU race condition.
+     * This ensures whitelist check and ban operation are atomic. */
     spin_lock(&fw->lock);
 
-    /* Double-check after acquiring lock */
+    /* Check whitelist under lock protection to prevent TOCTOU race.
+     * Another thread could add the IP to whitelist between an unlocked
+     * check and the actual ban operation. */
+    hash_for_each(fw->whitelist_table, hash, wl_entry, hash) {
+        if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
+            spin_unlock(&fw->lock);
+            atomic_inc(&fw->whitelist_reject_count);
+            fw_pr_warn("REFUSED to ban whitelisted IP %pI4", &ip);
+            FW_DEBUG(2, "IP %pI4 is in whitelist, refusing to ban", &ip);
+            FW_DEBUG(1, "EXIT: ban_ip -> -EPERM (whitelisted)");
+            return -EPERM;
+        }
+    }
+
+    /* Check if already banned under same lock to ensure consistency */
     hash = hash_min(ip, BAN_HASH_BITS);
     hash_for_each_possible(fw->ban_table, entry, hash, ip) {
         if (compare_ips(entry->ip, ip)) {
             if (time_before(jiffies, entry->unban_time)) {
-                // Still banned - return early
+                /* Still banned - return early */
                 spin_unlock(&fw->lock);
                 FW_DEBUG(2, "IP %pI4 still banned, returning early", &ip);
-                FW_DEBUG(1, "EXIT: ban_ip -> 0 (still banned under lock)");
+                FW_DEBUG(1, "EXIT: ban_ip -> 0 (already banned under lock)");
                 return 0;
             } else {
-                // Entry exists but expired - update it
+                /* Entry exists but expired - update it */
                 entry->ban_time = jiffies;
-                /* FIX P1-5: Use READ_ONCE for atomic access to fw_ban_time */
                 entry->unban_time = jiffies + (unsigned long)READ_ONCE(fw_ban_time) * HZ;
                 atomic_set(&entry->retry_count, 0);
                 spin_unlock(&fw->lock);

@@ -79,20 +79,23 @@ echo "安全预检通过"
 pass "测试模式：仅加载/卸载模块，不安装到系统"
 
 # Check for module file in build directory or root
-if [[ -f "../build/$MODULE_FILE" ]]; then
+if [[ -f "../build/kernel-module/$MODULE_FILE" ]]; then
+    MODULE_PATH="../build/kernel-module/$MODULE_FILE"
+elif [[ -f "../build/$MODULE_FILE" ]]; then
     MODULE_PATH="../build/$MODULE_FILE"
 elif [[ -f "../$MODULE_FILE" ]]; then
     MODULE_PATH="../$MODULE_FILE"
 else
     info "编译模块..."
-    cd .. && make > /dev/null 2>&1
-    cd tests
-    if [[ -f "../build/$MODULE_FILE" ]]; then
+    (cd .. && make > /dev/null 2>&1)
+    if [[ -f "../build/kernel-module/$MODULE_FILE" ]]; then
+        MODULE_PATH="../build/kernel-module/$MODULE_FILE"
+    elif [[ -f "../build/$MODULE_FILE" ]]; then
         MODULE_PATH="../build/$MODULE_FILE"
     elif [[ -f "../$MODULE_FILE" ]]; then
         MODULE_PATH="../$MODULE_FILE"
     else
-        fail "编译失败"
+        fail "编译失败，未找到 $MODULE_FILE"
     fi
 fi
 pass "模块文件存在 ($MODULE_PATH)"
