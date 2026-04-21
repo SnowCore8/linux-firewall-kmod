@@ -43,7 +43,7 @@ daemon: $(DAEMON_BIN)
 
 $(DAEMON_BIN): $(DAEMON_SRC) $(EXPORTER_SRC)
 	@mkdir -p $(DAEMON_BUILD_DIR)
-	$(CC) -Wall -Wextra -O2 -o $@ $(DAEMON_SRC) $(EXPORTER_SRC) -lpthread
+	$(CC) -Wall -Wextra -O2 -o $@ $(DAEMON_SRC) $(EXPORTER_SRC) -lpthread -lyaml
 
 # Build both kernel module and daemon
 all-with-daemon: kernel-module daemon

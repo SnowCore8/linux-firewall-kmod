@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 新增
+- YAML 配置文件支持（替换原有的 INI 格式）
+- 使用 libyaml 库进行配置解析
+- 支持嵌套配置结构（log_files 数组、regex_patterns 映射）
+
 ## [v1.4] - 2026-04-19
 
 ### 新增

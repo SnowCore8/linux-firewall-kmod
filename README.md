@@ -115,18 +115,49 @@ sudo ./build/daemon/firewall-daemon -l /var/log/auth.log -m 3 -f 600 -b 600
 
 ### 配置文件
 
-守护进程支持配置文件 `firewall.conf`：
+守护进程支持 YAML 配置文件 `firewall.conf`：
 
-```ini
-max_retries = 3
-findtime = 600
-ban_time = 600
-interval = 1
-daemonize = false
-log_file = /var/log/auth.log
-log_file = /var/log/secure
-log_file = /var/log/vsftpd.log
-log_file = /var/log/nginx/error.log
+```yaml
+# firewall daemon configuration file
+
+# Max failed attempts before banning an IP
+max_retries: 5
+
+# Time window for counting failed attempts (in seconds)
+findtime: 600
+
+# Ban duration (in seconds)
+ban_time: 900
+
+# Check interval (in seconds)
+interval: 1
+
+# Whether to daemonize (true/false)
+daemonize: false
+
+# Log files to monitor
+log_files:
+  - /var/log/auth.log
+  - /var/log/secure
+  - /var/log/vsftpd.log
+  - /var/log/nginx/error.log
+
+# Prometheus metrics exporter port (0 to disable)
+metrics_port: 9119
+
+# Log parsing regex patterns (POSIX Extended regex)
+# Leave empty to use built-in defaults
+regex_patterns:
+  sshd: ""
+  vsftpd: ""
+  nginx: ""
+  frp: ""
+```
+
+使用配置文件启动：
+
+```bash
+sudo ./build/daemon/firewall-daemon -c firewall.conf
 ```
 
 ### procfs 接口

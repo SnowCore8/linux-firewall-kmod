@@ -34,6 +34,7 @@
 #include <pthread.h>
 #include <ctype.h>
 #include <stdatomic.h>
+#include <yaml.h>
 
 /* ============================================================================
  * Unified Logging System for Daemon
@@ -206,14 +207,16 @@ static void signal_handler(int sig)
     }
 }
 
-/* Parse configuration file */
+/* Parse configuration file using libyaml */
 static int parse_config_file(const char *config_path)
 {
     FILE *file;
-    char line[1024];
-    char *key, *value;
+    yaml_parser_t parser;
+    yaml_event_t event;
+    int done = 0;
+    int error = 0;
 
-    /* 修复 #5: 保存旧配置的深拷贝，用于解析失败时恢复 */
+    /* 保存旧配置的深拷贝，用于解析失败时恢复 */
     char *old_log_files[MAX_LOG_FILES];
     int old_log_count = 0;
     unsigned int old_max_retries = cfg.max_retries;
@@ -221,6 +224,7 @@ static int parse_config_file(const char *config_path)
     unsigned int old_ban_time = cfg.ban_time;
     int old_interval = cfg.interval;
     int old_metrics_port = cfg.metrics_port;
+    int old_daemonize = cfg.daemonize;
     char *old_sshd_regex = cfg.sshd_regex ? strdup(cfg.sshd_regex) : NULL;
     char *old_vsftpd_regex = cfg.vsftpd_regex ? strdup(cfg.vsftpd_regex) : NULL;
     char *old_nginx_regex = cfg.nginx_regex ? strdup(cfg.nginx_regex) : NULL;
@@ -229,32 +233,30 @@ static int parse_config_file(const char *config_path)
     for (int i = 0; i < cfg.log_count; i++) {
         old_log_files[i] = cfg.log_files[i] ? strdup(cfg.log_files[i]) : NULL;
         if (cfg.log_files[i] && !old_log_files[i]) {
-            /* 深拷贝失败，释放已分配的内存 */
             for (int j = 0; j < i; j++) {
                 free(old_log_files[j]);
             }
-        daemon_log_err("Out of memory saving old config for rollback");
+            daemon_log_err("Out of memory saving old config for rollback");
             return -1;
         }
     }
     old_log_count = cfg.log_count;
 
-    /* 获取配置锁 - 防止与 monitor_loop() 并发访问 */
+    /* 获取配置锁 */
     pthread_mutex_lock(&config_mutex);
 
-    /* Clean up old inotify watches to prevent watch leak on config reload (SIGHUP) */
+    /* Clean up old inotify watches */
     for (int i = 0; i < cfg.log_count; i++) {
         if (file_states[i].wd >= 0 && inotify_fd >= 0) {
             inotify_rm_watch(inotify_fd, file_states[i].wd);
             file_states[i].wd = -1;
         }
-        /* Also clear the rest of the state to avoid stale data */
         file_states[i].offset = 0;
         file_states[i].inode = 0;
         file_states[i].path[0] = '\0';
     }
 
-    /* Free old log_files to prevent memory leak on config reload (SIGHUP) */
+    /* Free old log_files */
     for (int i = 0; i < cfg.log_count; i++) {
         if (cfg.log_files[i]) {
             free(cfg.log_files[i]);
@@ -263,194 +265,223 @@ static int parse_config_file(const char *config_path)
     }
     cfg.log_count = 0;
 
+    /* Free old regex patterns */
+    free(cfg.sshd_regex); cfg.sshd_regex = NULL;
+    free(cfg.vsftpd_regex); cfg.vsftpd_regex = NULL;
+    free(cfg.nginx_regex); cfg.nginx_regex = NULL;
+    free(cfg.frp_regex); cfg.frp_regex = NULL;
+
+    /* Open config file */
     file = fopen(config_path, "r");
     if (!file) {
         daemon_log_warn("Cannot open config file: %s", config_path);
+        pthread_mutex_unlock(&config_mutex);
         goto restore_old_config;
     }
 
     daemon_log_info("Reading config file: %s", config_path);
 
-    while (fgets(line, sizeof(line), file)) {
-        /* Remove leading/trailing whitespace and comments */
-        size_t len = strlen(line);
+    /* Initialize YAML parser */
+    if (!yaml_parser_initialize(&parser)) {
+        daemon_log_err("Failed to initialize YAML parser");
+        fclose(file);
+        pthread_mutex_unlock(&config_mutex);
+        goto restore_old_config;
+    }
 
-        /* Remove trailing newline */
-        if (len > 0 && line[len - 1] == '\n') {
-            line[len - 1] = '\0';
-            len--;
+    yaml_parser_set_input_file(&parser, file);
+
+    /* Parser state tracking */
+    char *current_key = NULL;
+    int in_log_files_array = 0;
+    int in_regex_patterns = 0;
+
+    /* Parse YAML events */
+    while (!done) {
+        if (!yaml_parser_parse(&parser, &event)) {
+            daemon_log_err("YAML parse error: %s", parser.problem ? parser.problem : "unknown");
+            error = 1;
+            break;
         }
 
-        /* Skip empty lines and comments */
-        if (len == 0 || line[0] == '#' || line[0] == ';') {
-            continue;
-        }
+        switch (event.type) {
+        case YAML_STREAM_START_EVENT:
+        case YAML_DOCUMENT_START_EVENT:
+            break;
 
-        /* Find the '=' separator */
-        char *sep = strchr(line, '=');
-        if (!sep) {
-            daemon_log_warn("Invalid config line: %s", line);
-            continue;
-        }
+        case YAML_STREAM_END_EVENT:
+        case YAML_DOCUMENT_END_EVENT:
+            done = 1;
+            break;
 
-        /* Split into key and value */
-        *sep = '\0';
-        key = line;
-        value = sep + 1;
+        case YAML_SCALAR_EVENT: {
+            char *value = (char *)event.data.scalar.value;
 
-        /* Trim leading whitespace from key */
-        while (*key == ' ' || *key == '\t') {
-            key++;
-        }
-
-        /* Trim trailing whitespace from key */
-        char *end = key + strlen(key) - 1;
-        while (end > key && (*end == ' ' || *end == '\t')) {
-            *end-- = '\0';
-        }
-
-        /* Trim leading whitespace from value */
-        while (*value == ' ' || *value == '\t') {
-            value++;
-        }
-
-        /* Process configuration key-value pairs */
-        if (strcmp(key, "max_retries") == 0) {
-            char *endptr;
-            errno = 0;
-            long val = strtol(value, &endptr, 10);
-
-            if (errno != 0 || *endptr != '\0' || val < 1 || val > 100 || val > INT_MAX) {
-                daemon_log_warn("Invalid max_retries value in config: %s", value);
-            } else {
-                cfg.max_retries = (unsigned int)val;
-                daemon_log_info("Config max_retries set to %u", cfg.max_retries);
-            }
-        } else if (strcmp(key, "findtime") == 0) {
-            char *endptr;
-            errno = 0;
-            long val = strtol(value, &endptr, 10);
-
-            if (errno != 0 || *endptr != '\0' || val < 1 || val > 3600 || val > INT_MAX) {
-                daemon_log_warn("Invalid findtime value in config: %s", value);
-            } else {
-                cfg.findtime = (unsigned int)val;
-                daemon_log_info("Config findtime set to %u", cfg.findtime);
-            }
-        } else if (strcmp(key, "ban_time") == 0) {
-            char *endptr;
-            errno = 0;
-            long val = strtol(value, &endptr, 10);
-
-            if (errno != 0 || *endptr != '\0' || val < 1 || val > 86400 || val > INT_MAX) {
-                daemon_log_warn("Invalid ban_time value in config: %s", value);
-            } else {
-                cfg.ban_time = (unsigned int)val;
-                daemon_log_info("Config ban_time set to %u", cfg.ban_time);
-            }
-        } else if (strcmp(key, "interval") == 0) {
-            char *endptr;
-            errno = 0;
-            long val = strtol(value, &endptr, 10);
-
-            if (errno != 0 || *endptr != '\0' || val < 1 || val > 60 || val > INT_MAX) {
-                daemon_log_warn("Invalid interval value in config: %s", value);
-            } else {
-                cfg.interval = (int)val;
-                daemon_log_info("Config interval set to %d", cfg.interval);
-            }
-        } else if (strcmp(key, "metrics_port") == 0) {
-            char *endptr;
-            errno = 0;
-            long val = strtol(value, &endptr, 10);
-
-            if (errno != 0 || *endptr != '\0' || val < 0 || val > 65535) {
-                daemon_log_warn("Invalid metrics_port value in config: %s", value);
-            } else {
-                cfg.metrics_port = (int)val;
-                daemon_log_info("Config metrics_port set to %d", cfg.metrics_port);
-            }
-        } else if (strcmp(key, "sshd_regex") == 0) {
-            if (strlen(value) > 0) {
-                free(cfg.sshd_regex);
-                cfg.sshd_regex = strdup(value);
-                if (!cfg.sshd_regex) {
-                    daemon_log_err("Out of memory allocating sshd_regex");
-                    goto restore_old_config;
-                }
-                daemon_log_info("Config sshd_regex set to: %s", value);
-            }
-        } else if (strcmp(key, "vsftpd_regex") == 0) {
-            if (strlen(value) > 0) {
-                free(cfg.vsftpd_regex);
-                cfg.vsftpd_regex = strdup(value);
-                if (!cfg.vsftpd_regex) {
-                    daemon_log_err("Out of memory allocating vsftpd_regex");
-                    goto restore_old_config;
-                }
-                daemon_log_info("Config vsftpd_regex set to: %s", value);
-            }
-        } else if (strcmp(key, "nginx_regex") == 0) {
-            if (strlen(value) > 0) {
-                free(cfg.nginx_regex);
-                cfg.nginx_regex = strdup(value);
-                if (!cfg.nginx_regex) {
-                    daemon_log_err("Out of memory allocating nginx_regex");
-                    goto restore_old_config;
-                }
-                daemon_log_info("Config nginx_regex set to: %s", value);
-            }
-        } else if (strcmp(key, "frp_regex") == 0) {
-            if (strlen(value) > 0) {
-                free(cfg.frp_regex);
-                cfg.frp_regex = strdup(value);
-                if (!cfg.frp_regex) {
-                    daemon_log_err("Out of memory allocating frp_regex");
-                    goto restore_old_config;
-                }
-                daemon_log_info("Config frp_regex set to: %s", value);
-            }
-        } else if (strcmp(key, "log_file") == 0) {
-            if (cfg.log_count >= MAX_LOG_FILES) {
-                daemon_log_warn("Too many log files in config (max %d)", MAX_LOG_FILES);
-            } else {
-                /* Validate the path to prevent path traversal attacks */
-                if (validate_and_normalize_path(value) < 0) {
+            if (in_log_files_array) {
+                /* Parsing log_files array */
+                if (cfg.log_count >= MAX_LOG_FILES) {
+                    daemon_log_warn("Too many log files in config (max %d)", MAX_LOG_FILES);
+                } else if (validate_and_normalize_path(value) < 0) {
                     daemon_log_warn("Invalid log file path in config: %s", value);
                 } else {
                     cfg.log_files[cfg.log_count] = strdup(value);
                     if (!cfg.log_files[cfg.log_count]) {
-        daemon_log_err("Out of memory allocating log file path");
-                        /* Free any previously allocated log file paths */
-                        for (int j = 0; j < cfg.log_count; j++) {
-                            if (cfg.log_files[j]) {
-                                free(cfg.log_files[j]);
-                                cfg.log_files[j] = NULL;
-                            }
-                        }
-                        fclose(file);
-                        goto restore_old_config;
+                        daemon_log_err("Out of memory allocating log file path");
+                        error = 1;
                     } else {
                         daemon_log_info("Added log file from config: %s", cfg.log_files[cfg.log_count]);
                         cfg.log_count++;
                     }
                 }
-            }
-        } else if (strcmp(key, "daemonize") == 0) {
-            if (strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
-                cfg.daemonize = 1;
-        daemon_log_info("Config daemonize set to true");
-            } else if (strcmp(value, "false") == 0 || strcmp(value, "0") == 0) {
-                cfg.daemonize = 0;
-        daemon_log_info("Config daemonize set to false");
+            } else if (in_regex_patterns && current_key) {
+                /* Parsing regex pattern values */
+                if (strlen(value) > 0) {
+                    if (strcmp(current_key, "sshd") == 0) {
+                        cfg.sshd_regex = strdup(value);
+                        if (!cfg.sshd_regex) {
+                            daemon_log_err("Out of memory allocating sshd_regex");
+                            error = 1;
+                        } else {
+                            daemon_log_info("Config sshd_regex set to: %s", value);
+                        }
+                    } else if (strcmp(current_key, "vsftpd") == 0) {
+                        cfg.vsftpd_regex = strdup(value);
+                        if (!cfg.vsftpd_regex) {
+                            daemon_log_err("Out of memory allocating vsftpd_regex");
+                            error = 1;
+                        } else {
+                            daemon_log_info("Config vsftpd_regex set to: %s", value);
+                        }
+                    } else if (strcmp(current_key, "nginx") == 0) {
+                        cfg.nginx_regex = strdup(value);
+                        if (!cfg.nginx_regex) {
+                            daemon_log_err("Out of memory allocating nginx_regex");
+                            error = 1;
+                        } else {
+                            daemon_log_info("Config nginx_regex set to: %s", value);
+                        }
+                    } else if (strcmp(current_key, "frp") == 0) {
+                        cfg.frp_regex = strdup(value);
+                        if (!cfg.frp_regex) {
+                            daemon_log_err("Out of memory allocating frp_regex");
+                            error = 1;
+                        } else {
+                            daemon_log_info("Config frp_regex set to: %s", value);
+                        }
+                    }
+                    free(current_key);
+                    current_key = NULL;
+                }
+            } else if (current_key) {
+                /* We have a key-value pair */
+                if (strcmp(current_key, "max_retries") == 0) {
+                    char *endptr;
+                    errno = 0;
+                    long val = strtol(value, &endptr, 10);
+                    if (errno != 0 || *endptr != '\0' || val < 1 || val > 100 || val > INT_MAX) {
+                        daemon_log_warn("Invalid max_retries value in config: %s", value);
+                    } else {
+                        cfg.max_retries = (unsigned int)val;
+                        daemon_log_info("Config max_retries set to %u", cfg.max_retries);
+                    }
+                } else if (strcmp(current_key, "findtime") == 0) {
+                    char *endptr;
+                    errno = 0;
+                    long val = strtol(value, &endptr, 10);
+                    if (errno != 0 || *endptr != '\0' || val < 1 || val > 3600 || val > INT_MAX) {
+                        daemon_log_warn("Invalid findtime value in config: %s", value);
+                    } else {
+                        cfg.findtime = (unsigned int)val;
+                        daemon_log_info("Config findtime set to %u", cfg.findtime);
+                    }
+                } else if (strcmp(current_key, "ban_time") == 0) {
+                    char *endptr;
+                    errno = 0;
+                    long val = strtol(value, &endptr, 10);
+                    if (errno != 0 || *endptr != '\0' || val < 1 || val > 86400 || val > INT_MAX) {
+                        daemon_log_warn("Invalid ban_time value in config: %s", value);
+                    } else {
+                        cfg.ban_time = (unsigned int)val;
+                        daemon_log_info("Config ban_time set to %u", cfg.ban_time);
+                    }
+                } else if (strcmp(current_key, "interval") == 0) {
+                    char *endptr;
+                    errno = 0;
+                    long val = strtol(value, &endptr, 10);
+                    if (errno != 0 || *endptr != '\0' || val < 1 || val > 60 || val > INT_MAX) {
+                        daemon_log_warn("Invalid interval value in config: %s", value);
+                    } else {
+                        cfg.interval = (int)val;
+                        daemon_log_info("Config interval set to %d", cfg.interval);
+                    }
+                } else if (strcmp(current_key, "metrics_port") == 0) {
+                    char *endptr;
+                    errno = 0;
+                    long val = strtol(value, &endptr, 10);
+                    if (errno != 0 || *endptr != '\0' || val < 0 || val > 65535) {
+                        daemon_log_warn("Invalid metrics_port value in config: %s", value);
+                    } else {
+                        cfg.metrics_port = (int)val;
+                        daemon_log_info("Config metrics_port set to %d", cfg.metrics_port);
+                    }
+                } else if (strcmp(current_key, "daemonize") == 0) {
+                    if (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "TRUE") == 0 || strcmp(value, "1") == 0) {
+                        cfg.daemonize = 1;
+                        daemon_log_info("Config daemonize set to true");
+                    } else if (strcmp(value, "false") == 0 || strcmp(value, "False") == 0 || strcmp(value, "FALSE") == 0 || strcmp(value, "0") == 0) {
+                        cfg.daemonize = 0;
+                        daemon_log_info("Config daemonize set to false");
+                    } else {
+                        daemon_log_warn("Invalid daemonize value in config: %s", value);
+                    }
+                }
+                free(current_key);
+                current_key = NULL;
             } else {
-                daemon_log_warn("Invalid daemonize value in config: %s", value);
+                /* This is a key without value yet */
+                current_key = strdup(value);
             }
-        } else {
-            daemon_log_warn("Unknown config key: %s", key);
+            break;
         }
+
+        case YAML_SEQUENCE_START_EVENT: {
+            /* Check if we're starting log_files array */
+            if (current_key && strcmp(current_key, "log_files") == 0) {
+                in_log_files_array = 1;
+                free(current_key);
+                current_key = NULL;
+            }
+            break;
+        }
+
+        case YAML_SEQUENCE_END_EVENT:
+            in_log_files_array = 0;
+            break;
+
+        case YAML_MAPPING_START_EVENT: {
+            if (current_key && strcmp(current_key, "regex_patterns") == 0) {
+                in_regex_patterns = 1;
+                free(current_key);
+                current_key = NULL;
+            }
+            break;
+        }
+
+        case YAML_MAPPING_END_EVENT:
+            in_regex_patterns = 0;
+            break;
+
+        case YAML_ALIAS_EVENT:
+        case YAML_NO_EVENT:
+            break;
+        }
+
+        yaml_event_delete(&event);
+
+        if (error) break;
     }
 
+    yaml_parser_delete(&parser);
     fclose(file);
     pthread_mutex_unlock(&config_mutex);
 
@@ -458,17 +489,22 @@ static int parse_config_file(const char *config_path)
     for (int i = 0; i < old_log_count; i++) {
         free(old_log_files[i]);
     }
+    if (current_key) free(current_key);
     return 0;
 
 restore_old_config:
     /* 解析失败，恢复旧配置 */
-        daemon_log_warn("Config parsing failed, restoring old configuration");
+    daemon_log_warn("Config parsing failed, restoring old configuration");
 
-    /* 释放新分配的资源（如果有） */
+    /* 释放新分配的资源 */
     for (int i = 0; i < cfg.log_count; i++) {
         free(cfg.log_files[i]);
         cfg.log_files[i] = NULL;
     }
+    free(cfg.sshd_regex); cfg.sshd_regex = NULL;
+    free(cfg.vsftpd_regex); cfg.vsftpd_regex = NULL;
+    free(cfg.nginx_regex); cfg.nginx_regex = NULL;
+    free(cfg.frp_regex); cfg.frp_regex = NULL;
 
     /* 恢复旧配置 */
     cfg.log_count = 0;
@@ -483,13 +519,18 @@ restore_old_config:
     cfg.ban_time = old_ban_time;
     cfg.interval = old_interval;
     cfg.metrics_port = old_metrics_port;
-    /* Rollback regex patterns */
-    free(cfg.sshd_regex); cfg.sshd_regex = old_sshd_regex;
-    free(cfg.vsftpd_regex); cfg.vsftpd_regex = old_vsftpd_regex;
-    free(cfg.nginx_regex); cfg.nginx_regex = old_nginx_regex;
-    free(cfg.frp_regex); cfg.frp_regex = old_frp_regex;
+    cfg.daemonize = old_daemonize;
+    cfg.sshd_regex = old_sshd_regex;
+    cfg.vsftpd_regex = old_vsftpd_regex;
+    cfg.nginx_regex = old_nginx_regex;
+    cfg.frp_regex = old_frp_regex;
 
     pthread_mutex_unlock(&config_mutex);
+
+    /* Release old config copies */
+    for (int i = 0; i < old_log_count; i++) {
+        free(old_log_files[i]);
+    }
     return -1;
 }
 
