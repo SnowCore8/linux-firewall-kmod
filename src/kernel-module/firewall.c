@@ -220,8 +220,15 @@ MODULE_PARM_DESC(fw_ban_time, "Ban duration in seconds (default 600)");
 module_param(state_file, charp, 0644);
 MODULE_PARM_DESC(state_file, "Path to state file for saving/restoring ban and whitelist entries (default /var/lib/firewall/state)");
 
-/* Global firewall info */
-struct firewall_info fw_info;
+/* Global firewall info - made static to prevent external access */
+static struct firewall_info fw_info;
+
+/* Export function to provide controlled access to fw_info */
+struct firewall_info *get_fw_info(void)
+{
+    return &fw_info;
+}
+EXPORT_SYMBOL_GPL(get_fw_info);
 
 /*
  * ban_ip - Add an IPv4 to the ban list
@@ -1433,6 +1440,7 @@ static ssize_t config_write(struct file *file, const char __user *buf,
 {
     char input[256];
     char param[64];
+    char *value_str;
     unsigned int value;
     ssize_t len = min(count, (size_t)(sizeof(input) - 1));
 
@@ -1447,13 +1455,35 @@ static ssize_t config_write(struct file *file, const char __user *buf,
     if (len > 0 && input[len - 1] == '\n')
         input[len - 1] = '\0';
 
-    if (sscanf(input, "%63s %u", param, &value) != 2) {
+    /* Use strsep for more robust parameter parsing */
+    char *input_ptr = input;
+    char *token;
+
+    token = strsep(&input_ptr, " \t");
+    if (!token || strlen(token) == 0 || strlen(token) >= sizeof(param)) {
         fw_pr_err("Invalid config format. Use: param value");
         return -EINVAL;
     }
+    strncpy(param, token, sizeof(param) - 1);
+    param[sizeof(param) - 1] = '\0';
+
+    value_str = input_ptr;
+    if (!value_str || strlen(value_str) == 0) {
+        fw_pr_err("Missing value for parameter: %s", param);
+        return -EINVAL;
+    }
+
+    /* Parse value manually for better error handling */
+    char *endptr;
+    unsigned long val = simple_strtoul(value_str, &endptr, 10);
+    if (*endptr != '\0' || val == 0 || val > UINT_MAX) {
+        fw_pr_err("Invalid value: %s", value_str);
+        return -EINVAL;
+    }
+    value = (unsigned int)val;
 
     if (strcmp(param, "ban_time") == 0) {
-        if (value < 1 || value > 365 * 24 * 60 * 60) {  // 1 year max
+        if (value < 1 || value > 365 * 24 * 60 * 60) {  /* 1 year max */
             fw_pr_err("ban_time must be between 1 and %d seconds", 365 * 24 * 60 * 60);
             return -EINVAL;
         }
@@ -1817,6 +1847,9 @@ int save_state_to_file(const char *filename)
     struct ban_entry *entry;
     struct whitelist_entry *wl_entry;
     u32 hash;
+    /* Variables for TOCTOU protection */
+    dev_t saved_dev = 0;
+    ino_t saved_ino = 0;
 
     if (!filename || !*filename) {
         fw_pr_err("Invalid filename for state save");
@@ -1871,6 +1904,9 @@ int save_state_to_file(const char *filename)
             err = -EISDIR;
             goto out_path_put;
         }
+        /* Store inode for consistency check later */
+        dev_t saved_dev = stat_buf2.dev;
+        ino_t saved_ino = stat_buf2.ino;
 out_path_put:
         path_put(&path);
     } else {
@@ -1920,13 +1956,32 @@ out_path_put:
     }
     rcu_read_unlock();
 
-    /* 阶段4: 锁外打开文件（可以安全睡眠） */
-    file = filp_open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0600);
+    /* 阶段4: 锁外打开文件（使用 O_NOFOLLOW 防止符号链接攻击） */
+    file = filp_open(filename, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW, 0600);
     if (IS_ERR(file)) {
         fw_pr_err("Failed to open file for saving state: %s", filename);
         kfree(ban_entries);
         kfree(wl_entries);
         return PTR_ERR(file);
+    }
+
+    /* Inode consistency检查：验证打开的文件与之前检查的是同一个 */
+    {
+        struct kstat open_stat;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
+        int getattr_err = vfs_getattr(&file->f_path, &open_stat, STATX_BASIC_STATS, AT_STATX_SYNC_AS_STAT);
+#else
+        int getattr_err = vfs_getattr(&file->f_path, &open_stat);
+#endif
+        if (!getattr_err && saved_ino != 0) {
+            if (open_stat.ino != saved_ino || open_stat.dev != saved_dev) {
+                fw_pr_err("File inode changed between check and open (TOCTOU): %s", filename);
+                filp_close(file, NULL);
+                kfree(ban_entries);
+                kfree(wl_entries);
+                return -EACCES;
+            }
+        }
     }
 
     /* 阶段5: 锁外写入 ban 条目 */

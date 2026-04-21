@@ -219,7 +219,7 @@ int sqlite_add_permanent_ban(sqlite_db_t *db, const char *ip, uint32_t ip_num,
         return -1;
     }
 
-    const char *sql = 
+    const char *sql =
         "INSERT INTO permanent_banlist (ip, ip_num, reason, created_at, created_by, hit_count, last_hit_at, is_active) "
         "VALUES (?, ?, ?, ?, ?, 0, 0, 1);";
 
@@ -251,6 +251,77 @@ int sqlite_add_permanent_ban(sqlite_db_t *db, const char *ip, uint32_t ip_num,
                 sqlite3_errmsg(db->conn));
         return -1;
     }
+}
+
+/**
+ * 批量添加永久黑名单条目（使用事务优化性能）
+ */
+int sqlite_add_permanent_bans_batch(sqlite_db_t *db,
+                                    const char **ips,
+                                    const uint32_t *ip_nums,
+                                    const char **reasons,
+                                    const char **created_bys,
+                                    int count)
+{
+    if (!db || !ips || !ip_nums || !reasons || !created_bys || count <= 0) {
+        fprintf(stderr, "firewall: sqlite_add_permanent_bans_batch: invalid parameter\n");
+        return -1;
+    }
+
+    const char *sql =
+        "INSERT INTO permanent_banlist (ip, ip_num, reason, created_at, created_by, hit_count, last_hit_at, is_active) "
+        "VALUES (?, ?, ?, ?, ?, 0, 0, 1);";
+
+    sqlite3_stmt *stmt;
+    int rc;
+    int success_count = 0;
+
+    /* 开始事务 */
+    rc = sqlite3_exec(db->conn, "BEGIN TRANSACTION;", NULL, NULL, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "firewall: Failed to begin transaction: %s\n",
+                sqlite3_errmsg(db->conn));
+        return -1;
+    }
+
+    rc = sqlite3_prepare_v2(db->conn, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "firewall: Failed to prepare statement: %s\n",
+                sqlite3_errmsg(db->conn));
+        sqlite3_exec(db->conn, "ROLLBACK;", NULL, NULL, NULL);
+        return -1;
+    }
+
+    for (int i = 0; i < count; i++) {
+        sqlite3_bind_text(stmt, 1, ips[i], -1, SQLITE_STATIC);
+        sqlite3_bind_int64(stmt, 2, (sqlite3_int64)ip_nums[i]);
+        sqlite3_bind_text(stmt, 3, reasons[i], -1, SQLITE_STATIC);
+        sqlite3_bind_int64(stmt, 4, (sqlite3_int64)time(NULL));
+        sqlite3_bind_text(stmt, 5, created_bys[i], -1, SQLITE_STATIC);
+
+        rc = sqlite3_step(stmt);
+        sqlite3_reset(stmt);
+
+        if (rc == SQLITE_DONE) {
+            success_count++;
+        } else if (rc != SQLITE_CONSTRAINT) {
+            fprintf(stderr, "firewall: Failed to insert permanent ban %d: %s\n",
+                    i, sqlite3_errmsg(db->conn));
+        }
+    }
+
+    sqlite3_finalize(stmt);
+
+    /* 提交事务 */
+    rc = sqlite3_exec(db->conn, "COMMIT;", NULL, NULL, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "firewall: Failed to commit transaction: %s\n",
+                sqlite3_errmsg(db->conn));
+        sqlite3_exec(db->conn, "ROLLBACK;", NULL, NULL, NULL);
+        return -1;
+    }
+
+    return success_count;
 }
 
 /**

@@ -188,4 +188,7 @@ void auto_discover_system_ips(struct firewall_info *fw);
 int create_procfs_entries(struct firewall_info *fw);
 void destroy_procfs_entries(struct firewall_info *fw);
 
+/* Export function to provide controlled access to fw_info */
+struct firewall_info *get_fw_info(void);
+
 #endif /* FIREWALL_H */

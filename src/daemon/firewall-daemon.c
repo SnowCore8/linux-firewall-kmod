@@ -104,9 +104,6 @@ struct config {
     int interval;
     int metrics_port;       /* Prometheus metrics port (0 = disabled) */
     char *sshd_regex;       /* Custom sshd regex pattern (NULL = use default) */
-    char *vsftpd_regex;     /* Custom vsftpd regex pattern (NULL = use default) */
-    char *nginx_regex;      /* Custom nginx regex pattern (NULL = use default) */
-    char *frp_regex;        /* Custom frp regex pattern (NULL = use default) */
     char *log_files[MAX_LOG_FILES];
     int log_count;
     char *config_file;      /* Path to single configuration file for runtime updates */
@@ -138,9 +135,6 @@ static sqlite_db_t *sqlite_db = NULL;
 
 /* Precompiled regex patterns for log parsing */
 static regex_t sshd_regex;
-static regex_t vsftpd_regex;
-static regex_t nginx_regex;
-static regex_t frp_regex;
 static int regex_compiled = 0;
 
 /* ============================================================================
@@ -158,26 +152,12 @@ struct daemon_stats {
     atomic_ulong log_rotations;
     atomic_ulong lines_skipped;
     atomic_ulong regex_matches_sshd;
-    atomic_ulong regex_matches_vsftpd;
-    atomic_ulong regex_matches_nginx;
-    atomic_ulong regex_matches_frp;
     time_t start_time;
 } daemon_stats;
 
-/* Helper function for case-insensitive substring search */
-static int strcasestr_custom(const char *haystack, const char *needle) {
-    size_t needle_len = strlen(needle);
-    size_t haystack_len = strlen(haystack);
-
-    if (needle_len == 0) return 1;  /* Empty needle should match */
-    if (haystack_len < needle_len) return 0;
-
-    for (size_t i = 0; i <= haystack_len - needle_len; i++) {
-        if (strncasecmp(haystack + i, needle, needle_len) == 0) {
-            return 1;  /* Found match */
-        }
-    }
-    return 0;  /* No match */
+/* Comparison function for qsort - sorting config file names */
+static int compare_config_files(const void *a, const void *b) {
+    return strcmp(*(const char **)a, *(const char **)b);
 }
 
 /* Function prototypes */
@@ -243,9 +223,6 @@ static int parse_config_file(const char *config_path)
     int old_metrics_port = cfg.metrics_port;
     int old_daemonize = cfg.daemonize;
     char *old_sshd_regex = cfg.sshd_regex ? strdup(cfg.sshd_regex) : NULL;
-    char *old_vsftpd_regex = cfg.vsftpd_regex ? strdup(cfg.vsftpd_regex) : NULL;
-    char *old_nginx_regex = cfg.nginx_regex ? strdup(cfg.nginx_regex) : NULL;
-    char *old_frp_regex = cfg.frp_regex ? strdup(cfg.frp_regex) : NULL;
 
     for (int i = 0; i < cfg.log_count; i++) {
         old_log_files[i] = cfg.log_files[i] ? strdup(cfg.log_files[i]) : NULL;
@@ -284,9 +261,6 @@ static int parse_config_file(const char *config_path)
 
     /* Free old regex patterns */
     free(cfg.sshd_regex); cfg.sshd_regex = NULL;
-    free(cfg.vsftpd_regex); cfg.vsftpd_regex = NULL;
-    free(cfg.nginx_regex); cfg.nginx_regex = NULL;
-    free(cfg.frp_regex); cfg.frp_regex = NULL;
 
     /* Open config file */
     file = fopen(config_path, "r");
@@ -360,30 +334,6 @@ static int parse_config_file(const char *config_path)
                             error = 1;
                         } else {
                             daemon_log_info("Config sshd_regex set to: %s", value);
-                        }
-                    } else if (strcmp(current_key, "vsftpd") == 0) {
-                        cfg.vsftpd_regex = strdup(value);
-                        if (!cfg.vsftpd_regex) {
-                            daemon_log_err("Out of memory allocating vsftpd_regex");
-                            error = 1;
-                        } else {
-                            daemon_log_info("Config vsftpd_regex set to: %s", value);
-                        }
-                    } else if (strcmp(current_key, "nginx") == 0) {
-                        cfg.nginx_regex = strdup(value);
-                        if (!cfg.nginx_regex) {
-                            daemon_log_err("Out of memory allocating nginx_regex");
-                            error = 1;
-                        } else {
-                            daemon_log_info("Config nginx_regex set to: %s", value);
-                        }
-                    } else if (strcmp(current_key, "frp") == 0) {
-                        cfg.frp_regex = strdup(value);
-                        if (!cfg.frp_regex) {
-                            daemon_log_err("Out of memory allocating frp_regex");
-                            error = 1;
-                        } else {
-                            daemon_log_info("Config frp_regex set to: %s", value);
                         }
                     }
                     free(current_key);
@@ -537,9 +487,6 @@ restore_old_config:
         cfg.log_files[i] = NULL;
     }
     free(cfg.sshd_regex); cfg.sshd_regex = NULL;
-    free(cfg.vsftpd_regex); cfg.vsftpd_regex = NULL;
-    free(cfg.nginx_regex); cfg.nginx_regex = NULL;
-    free(cfg.frp_regex); cfg.frp_regex = NULL;
 
     /* 恢复旧配置 */
     cfg.log_count = 0;
@@ -556,9 +503,6 @@ restore_old_config:
     cfg.metrics_port = old_metrics_port;
     cfg.daemonize = old_daemonize;
     cfg.sshd_regex = old_sshd_regex;
-    cfg.vsftpd_regex = old_vsftpd_regex;
-    cfg.nginx_regex = old_nginx_regex;
-    cfg.frp_regex = old_frp_regex;
 
     pthread_mutex_unlock(&config_mutex);
 
@@ -580,6 +524,7 @@ static int load_config_directory(const char *config_dir)
     int file_count = 0;
     int file_capacity = 16;
     int ret = 0;
+    const int MAX_CONFIG_FILES = 50;  /* Limit to prevent excessive file loading */
 
     dir = opendir(config_dir);
     if (!dir) {
@@ -605,6 +550,13 @@ static int load_config_directory(const char *config_dir)
         /* Check for .yaml or .yml extension */
         if ((len > 5 && strcmp(name + len - 5, ".yaml") == 0) ||
             (len > 4 && strcmp(name + len - 4, ".yml") == 0)) {
+            
+            /* Enforce file limit */
+            if (file_count >= MAX_CONFIG_FILES) {
+                daemon_log_warn("Config file limit reached (%d), skipping: %s", MAX_CONFIG_FILES, name);
+                continue;
+            }
+            
             /* Expand list if needed */
             if (file_count >= file_capacity) {
                 file_capacity *= 2;
@@ -638,16 +590,8 @@ static int load_config_directory(const char *config_dir)
         return 0;
     }
 
-    /* Sort files alphabet for deterministic loading order */
-    for (int i = 0; i < file_count - 1; i++) {
-        for (int j = i + 1; j < file_count; j++) {
-            if (strcmp(file_list[i], file_list[j]) > 0) {
-                char *tmp = file_list[i];
-                file_list[i] = file_list[j];
-                file_list[j] = tmp;
-            }
-        }
-    }
+    /* Sort files alphabet using qsort for better performance */
+    qsort(file_list, (size_t)file_count, sizeof(char *), compare_config_files);
 
     /* Load each configuration file */
     for (int i = 0; i < file_count; i++) {
@@ -991,9 +935,7 @@ static int parse_config(int argc, char *argv[])
     if (cfg.log_count == 0) {
         const char *default_logs[] = {
             "/var/log/auth.log",
-            "/var/log/secure",
-            "/var/log/vsftpd.log",
-            "/var/log/nginx/error.log"
+            "/var/log/secure"
         };
         int num_defaults = sizeof(default_logs) / sizeof(default_logs[0]);
 
@@ -1134,6 +1076,11 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
             atomic_fetch_add(&daemon_stats.regex_matches_sshd, 1);
             /* Capture group 2: IP address */
             if (matches[2].rm_so >= 0 && matches[2].rm_eo > matches[2].rm_so) {
+                /* Add boundary checks to prevent out-of-bounds reads */
+                if ((size_t)matches[2].rm_eo > line_len) {
+                    daemon_log_warn("Regex match exceeds line length in sshd log");
+                    return 0;
+                }
                 ip_start = line + matches[2].rm_so;
                 ip_len = matches[2].rm_eo - matches[2].rm_so;
 
@@ -1156,99 +1103,10 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
         }
     }
 
-    /* Check for vsftpd failed login using precompiled regex */
-    if (regex_compiled) {
-        int regex_result = regexec(&vsftpd_regex, line, 4, matches, 0);
-        if (regex_result == 0) {
-            atomic_fetch_add(&daemon_stats.regex_matches_vsftpd, 1);
-            /* Capture group 1: IP address */
-            if (matches[1].rm_so >= 0 && matches[1].rm_eo > matches[1].rm_so) {
-                ip_start = line + matches[1].rm_so;
-                ip_len = matches[1].rm_eo - matches[1].rm_so;
-
-                if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
-                    daemon_log_warn("Invalid IP length in vsftpd log: %zu", ip_len);
-                    return 0;
-                }
-
-                char ip_buf[INET_ADDRSTRLEN];
-                memcpy(ip_buf, ip_start, ip_len);
-                ip_buf[ip_len] = '\0';
-                strncpy(ip_out, ip_buf, ip_size - 1);
-                ip_out[ip_size - 1] = '\0';
-                return 1;
-            }
-        } else if (regex_result != REG_NOMATCH) {
-            char errbuf[256];
-            regerror(regex_result, &vsftpd_regex, errbuf, sizeof(errbuf));
-            daemon_log_warn("Regex error in vsftpd pattern: %s", errbuf);
-        }
-    }
-
-    /* Check for nginx 401 Unauthorized using precompiled regex */
-    if (regex_compiled) {
-        int regex_result = regexec(&nginx_regex, line, 4, matches, 0);
-        if (regex_result == 0) {
-            atomic_fetch_add(&daemon_stats.regex_matches_nginx, 1);
-            /* Capture group 1: IP address */
-            if (matches[1].rm_so >= 0 && matches[1].rm_eo > matches[1].rm_so) {
-                ip_start = line + matches[1].rm_so;
-                ip_len = matches[1].rm_eo - matches[1].rm_so;
-
-                if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
-                    daemon_log_warn("Invalid IP length in nginx log: %zu", ip_len);
-                    return 0;
-                }
-
-                char ip_buf[INET_ADDRSTRLEN];
-                memcpy(ip_buf, ip_start, ip_len);
-                ip_buf[ip_len] = '\0';
-                strncpy(ip_out, ip_buf, ip_size - 1);
-                ip_out[ip_size - 1] = '\0';
-                return 1;
-            }
-        } else if (regex_result != REG_NOMATCH) {
-            char errbuf[256];
-            regerror(regex_result, &nginx_regex, errbuf, sizeof(errbuf));
-            daemon_log_warn("Regex error in nginx pattern: %s", errbuf);
-        }
-    }
-
-    /* Check for frp user connection using precompiled regex */
-    if (regex_compiled) {
-        int regex_result = regexec(&frp_regex, line, 4, matches, 0);
-        if (regex_result == 0) {
-            atomic_fetch_add(&daemon_stats.regex_matches_frp, 1);
-            /* Capture group 1: IP address */
-            if (matches[1].rm_so >= 0 && matches[1].rm_eo > matches[1].rm_so) {
-                ip_start = line + matches[1].rm_so;
-                ip_len = matches[1].rm_eo - matches[1].rm_so;
-
-                if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
-                    daemon_log_warn("Invalid IP length in frp log: %zu", ip_len);
-                    return 0;
-                }
-
-                char ip_buf[INET_ADDRSTRLEN];
-                memcpy(ip_buf, ip_start, ip_len);
-                ip_buf[ip_len] = '\0';
-                strncpy(ip_out, ip_buf, ip_size - 1);
-                ip_out[ip_size - 1] = '\0';
-                return 1;
-            }
-        } else if (regex_result != REG_NOMATCH) {
-            char errbuf[256];
-            regerror(regex_result, &frp_regex, errbuf, sizeof(errbuf));
-            daemon_log_warn("Regex error in frp pattern: %s", errbuf);
-        }
-    }
-
     /* Fallback: simple string matching (if regex not compiled) */
     if (!regex_compiled) {
         if (strstr(line, "Failed password for") ||
-            strstr(line, "authentication failure") ||
-            strstr(line, "FAIL LOGIN") ||
-            strstr(line, "401 Unauthorized")) {
+            strstr(line, "authentication failure")) {
             return extract_ip(line, ip_out, ip_size);
         }
     }
@@ -2438,12 +2296,6 @@ static int init_log_patterns(void)
     int ret;
     const char *sshd_pattern = cfg.sshd_regex ? cfg.sshd_regex :
         "Failed password for (invalid user )?[a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})";
-    const char *vsftpd_pattern = cfg.vsftpd_regex ? cfg.vsftpd_regex :
-        "FAIL LOGIN: [Cc]lient[=\"]([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})";
-    const char *nginx_pattern = cfg.nginx_regex ? cfg.nginx_regex :
-        "([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}) [^ ]{1,64} [^ ]{1,64} \\[[^\\]]{1,64}\\] \"[^\"]{1,256}\" 401";
-    const char *frp_pattern = cfg.frp_regex ? cfg.frp_regex :
-        "get a user connection \\[([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}):[0-9]+\\]";
 
     /*
      * SSH failed password pattern
@@ -2463,62 +2315,6 @@ static int init_log_patterns(void)
     else
         daemon_log_info("Using built-in sshd regex pattern");
 
-    /*
-     * vsftpd FAIL LOGIN pattern
-     * Uses custom pattern from config if provided, otherwise built-in default
-     */
-    memset(&vsftpd_regex, 0, sizeof(vsftpd_regex));
-    ret = regcomp(&vsftpd_regex, vsftpd_pattern, REG_EXTENDED);
-    if (ret) {
-        char errbuf[256];
-        regerror(ret, &vsftpd_regex, errbuf, sizeof(errbuf));
-        daemon_log_err("Failed to compile vsftpd regex: %s", errbuf);
-        regfree(&sshd_regex);
-        return -1;
-    }
-    if (cfg.vsftpd_regex)
-        daemon_log_info("Using custom vsftpd regex pattern");
-    else
-        daemon_log_info("Using built-in vsftpd regex pattern");
-
-    /*
-     * nginx 401 Unauthorized pattern
-     * Uses custom pattern from config if provided, otherwise built-in default
-     */
-    memset(&nginx_regex, 0, sizeof(nginx_regex));
-    ret = regcomp(&nginx_regex, nginx_pattern, REG_EXTENDED);
-    if (ret) {
-        char errbuf[256];
-        regerror(ret, &nginx_regex, errbuf, sizeof(errbuf));
-        daemon_log_err("Failed to compile nginx regex: %s", errbuf);
-        regfree(&sshd_regex);
-        regfree(&vsftpd_regex);
-        return -1;
-    }
-    if (cfg.nginx_regex)
-        daemon_log_info("Using custom nginx regex pattern");
-    else
-        daemon_log_info("Using built-in nginx regex pattern");
-
-    /*
-     * frp user connection pattern
-     * Uses custom pattern from config if provided, otherwise built-in default
-     * Matches: get a user connection [IP:PORT]
-     */
-    memset(&frp_regex, 0, sizeof(frp_regex));
-    ret = regcomp(&frp_regex, frp_pattern, REG_EXTENDED);
-    if (ret) {
-        char errbuf[256];
-        regerror(ret, &frp_regex, errbuf, sizeof(errbuf));
-        daemon_log_warn("Failed to compile frp regex: %s (non-fatal)", errbuf);
-        /* frp regex is optional, continue without it */
-    } else {
-        if (cfg.frp_regex)
-            daemon_log_info("Using custom frp regex pattern");
-        else
-            daemon_log_info("Using built-in frp regex pattern");
-    }
-
     regex_compiled = 1;
     daemon_log_info("Log patterns compiled successfully");
     return 0;
@@ -2529,9 +2325,6 @@ static void free_log_patterns(void)
 {
     if (regex_compiled) {
         regfree(&sshd_regex);
-        regfree(&vsftpd_regex);
-        regfree(&nginx_regex);
-        regfree(&frp_regex);
         regex_compiled = 0;
     }
 }

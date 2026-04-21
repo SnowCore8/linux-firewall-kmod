@@ -26,6 +26,3 @@ metrics_port: 9120
 # Log parsing regex patterns
 regex_patterns:
   sshd: ""
-  vsftpd: ""
-  nginx: ""
-  frp: ""

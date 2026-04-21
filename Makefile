@@ -25,6 +25,10 @@ DAEMON_BIN := $(DAEMON_BUILD_DIR)/firewall-daemon
 # Compiler for daemon
 CC ?= gcc
 
+# Security-focused compiler flags
+SECURITY_CFLAGS = -Wall -Wextra -Werror=format-security -O2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE
+SECURITY_LDFLAGS = -pie -Wl,-z,relro,-z,now
+
 # Debug level (0 = no debug, 1-3 = increasing verbosity)
 DEBUG_LEVEL ?= 0
 
@@ -44,7 +48,7 @@ daemon: $(DAEMON_BIN)
 
 $(DAEMON_BIN): $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC)
 	@mkdir -p $(DAEMON_BUILD_DIR)
-	$(CC) -Wall -Wextra -O2 -o $@ $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC) -lpthread -lyaml -lsqlite3
+	$(CC) $(SECURITY_CFLAGS) $(SECURITY_LDFLAGS) -o $@ $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC) -lpthread -lyaml -lsqlite3
 
 # Build both kernel module and daemon
 all-with-daemon: kernel-module daemon

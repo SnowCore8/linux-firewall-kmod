@@ -52,8 +52,6 @@ extern struct daemon_stats {
     atomic_ulong log_rotations;
     atomic_ulong lines_skipped;
     atomic_ulong regex_matches_sshd;
-    atomic_ulong regex_matches_vsftpd;
-    atomic_ulong regex_matches_nginx;
     time_t start_time;
 } daemon_stats;
 
@@ -175,24 +173,17 @@ static int generate_metrics(char *buf, size_t buf_size)
     unsigned long kernel_total_bans = 0;
     unsigned long kernel_total_unbans = 0;
     unsigned long kernel_whitelist_count = 0;
+    unsigned long kernel_current_bans = 0;  /* Current active bans from stats */
     time_t uptime;
 
-    /* Read kernel stats from procfs if available */
+    /* Read kernel stats from procfs - use /proc/firewall/stats for accurate current_bans count */
+    read_procfs_int("/proc/firewall/stats", &kernel_current_bans);
     read_procfs_int("/proc/firewall/ban_count", &kernel_total_bans);
     read_procfs_int("/proc/firewall/unban_count", &kernel_total_unbans);
     read_procfs_int("/proc/firewall/whitelist_count", &kernel_whitelist_count);
 
-    /* Count current banned IPs by reading ban_list */
-    FILE *fp = fopen("/proc/firewall/ban_list", "r");
-    if (fp) {
-        char line[256];
-        while (fgets(line, sizeof(line), fp)) {
-            /* Count non-empty lines as banned IPs */
-            if (strlen(line) > 1)
-                kernel_banned++;
-        }
-        fclose(fp);
-    }
+    /* Use the accurate current_bans value from stats */
+    kernel_banned = kernel_current_bans;
 
     /* Read daemon stats */
     unsigned long d_lines_parsed = atomic_load(&daemon_stats.lines_parsed);
@@ -204,8 +195,6 @@ static int generate_metrics(char *buf, size_t buf_size)
     unsigned long d_log_rotations = atomic_load(&daemon_stats.log_rotations);
     unsigned long d_lines_skipped = atomic_load(&daemon_stats.lines_skipped);
     unsigned long d_regex_sshd = atomic_load(&daemon_stats.regex_matches_sshd);
-    unsigned long d_regex_vsftpd = atomic_load(&daemon_stats.regex_matches_vsftpd);
-    unsigned long d_regex_nginx = atomic_load(&daemon_stats.regex_matches_nginx);
 
     uptime = time(NULL) - daemon_stats.start_time;
 
@@ -262,14 +251,6 @@ static int generate_metrics(char *buf, size_t buf_size)
         "# TYPE firewall_daemon_regex_sshd_matches_total counter\n"
         "firewall_daemon_regex_sshd_matches_total %lu\n"
         "\n"
-        "# HELP firewall_daemon_regex_vsftpd_matches_total Total vsftpd regex pattern matches\n"
-        "# TYPE firewall_daemon_regex_vsftpd_matches_total counter\n"
-        "firewall_daemon_regex_vsftpd_matches_total %lu\n"
-        "\n"
-        "# HELP firewall_daemon_regex_nginx_matches_total Total nginx regex pattern matches\n"
-        "# TYPE firewall_daemon_regex_nginx_matches_total counter\n"
-        "firewall_daemon_regex_nginx_matches_total %lu\n"
-        "\n"
         "# HELP firewall_daemon_uptime_seconds Daemon uptime in seconds\n"
         "# TYPE firewall_daemon_uptime_seconds gauge\n"
         "firewall_daemon_uptime_seconds %ld\n"
@@ -287,8 +268,6 @@ static int generate_metrics(char *buf, size_t buf_size)
         d_log_rotations,
         d_lines_skipped,
         d_regex_sshd,
-        d_regex_vsftpd,
-        d_regex_nginx,
         (long)uptime
     );
 }

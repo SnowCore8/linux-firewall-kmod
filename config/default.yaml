@@ -25,16 +25,10 @@ log_files:
 metrics_port: 9119
 
 # Log parsing regex patterns (POSIX Extended regex)
-# Only sshd is enabled by default; others are empty
+# Only sshd is supported by default
 regex_patterns:
-  # SSH failed password pattern (enabled)
+  # SSH failed password pattern
   sshd: ""
-  # vsftpd failed login pattern (disabled)
-  vsftpd: ""
-  # nginx 401 unauthorized pattern (disabled)
-  nginx: ""
-  # frp user connection pattern (disabled)
-  frp: ""
 
 # Permanent ban configuration (SQLite-based persistence)
 # Path to SQLite database file for permanent bans (empty = disabled)
