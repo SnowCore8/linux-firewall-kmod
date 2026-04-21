@@ -105,7 +105,7 @@ sudo cp firewall-daemon /usr/local/bin/
 sudo modprobe firewall
 
 # 带参数加载
-sudo insmod firewall.ko fw_ban_time=900 fw_max_retries=5 fw_findtime=300
+sudo insmod firewall.ko fw_ban_time=900
 
 # 卸载模块
 sudo rmmod firewall
@@ -118,8 +118,8 @@ sudo ./firewall-daemon
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `fw_ban_time` | 封禁持续时间（秒） | 600 (10分钟) |
-| `fw_max_retries` | 触发封禁的失败次数 | 3 |
-| `fw_findtime` | 失败记录时间窗口（秒） | 600 (10分钟) |
+
+**注意**：`max_retries`（触发封禁的失败次数）和 `findtime`（失败记录时间窗口）是**守护进程参数**，在内核模块中不使用。这些参数在守护进程启动时通过 `-m` 和 `-f` 选项或 YAML 配置文件设置。
 
 ### 守护进程参数
 ```bash

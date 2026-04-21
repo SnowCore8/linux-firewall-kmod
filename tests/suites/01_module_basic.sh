@@ -21,7 +21,7 @@ assert_success "! lsmod | grep -q '^firewall\b'" "模块卸载成功"
 
 # 1.3 带参数加载
 fw_subsection "带参数加载"
-fw_ensure_module_loaded "$KERNEL_MODULE_PATH" "fw_ban_time=300 fw_max_retries=5 fw_findtime=600"
+fw_ensure_module_loaded "$KERNEL_MODULE_PATH" "fw_ban_time=300"
 
 # 验证参数已设置（注意：sysfs 显示的是当前运行时值，insmod 传参在某些内核版本可能不立即反映）
 if [[ -f "/sys/module/firewall/parameters/fw_ban_time" ]]; then

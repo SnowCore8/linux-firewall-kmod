@@ -98,8 +98,6 @@
 #define BAN_HASH_BITS 10
 #define MAX_BAN_ENTRIES (1 << BAN_HASH_BITS)  /* 1024 entries */
 #define DEFAULT_BAN_TIME 600  /* 10 minutes in seconds */
-#define DEFAULT_MAX_RETRIES 3
-#define DEFAULT_FINDTIME 600  /* 10 minutes */
 
 /* Whitelist hash table structure */
 #define WHITELIST_HASH_BITS 6
@@ -132,8 +130,6 @@ struct firewall_info {
     atomic_t ban_count;
     atomic_t shutting_down;  /* Flag to prevent timer during shutdown */
     unsigned int ban_time;
-    unsigned int max_retries;
-    unsigned int findtime;
     struct timer_list cleanup_timer;
     bool timer_initialized;  /* Track if timer has been initialized */
     int cleanup_last_bucket; /* Track last processed bucket for incremental cleanup */

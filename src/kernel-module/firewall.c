@@ -213,16 +213,10 @@ bool is_in_whitelist(struct firewall_info *fw, __be32 ip)
 
 /* Module parameters (non-static, accessible from procfs) */
 unsigned int fw_ban_time = DEFAULT_BAN_TIME;
-unsigned int fw_max_retries = DEFAULT_MAX_RETRIES;
-unsigned int fw_findtime = DEFAULT_FINDTIME;
 char *state_file = "/var/lib/firewall/state";
 
 module_param(fw_ban_time, uint, 0644);
 MODULE_PARM_DESC(fw_ban_time, "Ban duration in seconds (default 600)");
-module_param(fw_max_retries, uint, 0644);
-MODULE_PARM_DESC(fw_max_retries, "Max retries before ban (default 3)");
-module_param(fw_findtime, uint, 0644);
-MODULE_PARM_DESC(fw_findtime, "Find time window in seconds (default 600)");
 module_param(state_file, charp, 0644);
 MODULE_PARM_DESC(state_file, "Path to state file for saving/restoring ban and whitelist entries (default /var/lib/firewall/state)");
 
@@ -1424,8 +1418,6 @@ static int config_show(struct seq_file *m, void *v)
     seq_printf(m, "Current firewall configuration:\n");
     seq_printf(m, "--------------------------------\n");
     seq_printf(m, "ban_time: %u seconds\n", READ_ONCE(fw_ban_time));
-    seq_printf(m, "max_retries: %u\n", READ_ONCE(fw_max_retries));
-    seq_printf(m, "findtime: %u seconds\n", READ_ONCE(fw_findtime));
     seq_printf(m, "Banned entries: %d\n", atomic_read(&fw_info.ban_count));
     seq_printf(m, "Whitelisted entries: %d\n", atomic_read(&fw_info.whitelist_count));
     return 0;
@@ -1466,25 +1458,9 @@ static ssize_t config_write(struct file *file, const char __user *buf,
             return -EINVAL;
         }
         /* FIX P1-5: Use WRITE_ONCE to atomically write fw_ban_time to prevent
-         * torn writes when the value is being concurrently read from netfilter hooks. */
+         * torn writes when the value is being concurrently updated via procfs. */
         WRITE_ONCE(fw_ban_time, value);
         fw_pr_info("ban_time updated to %u seconds", value);
-    } else if (strcmp(param, "max_retries") == 0) {
-        if (value < 1 || value > 1000) {  // Reasonable upper limit
-            fw_pr_err("max_retries must be between 1 and 1000");
-            return -EINVAL;
-        }
-        /* FIX P1-5: Use WRITE_ONCE for atomic access to fw_max_retries */
-        WRITE_ONCE(fw_max_retries, value);
-        fw_pr_info("max_retries updated to %u", value);
-    } else if (strcmp(param, "findtime") == 0) {
-        if (value < 1 || value > 365 * 24 * 60 * 60) {  // 1 year max
-            fw_pr_err("findtime must be between 1 and %d seconds", 365 * 24 * 60 * 60);
-            return -EINVAL;
-        }
-        /* FIX P1-5: Use WRITE_ONCE for atomic access to fw_findtime */
-        WRITE_ONCE(fw_findtime, value);
-        fw_pr_info("findtime updated to %u seconds", value);
     } else {
         fw_pr_err("Unknown parameter: %s", param);
         return -EINVAL;
@@ -2145,35 +2121,11 @@ static int __init firewall_init(void)
         fw_pr_err("fw_ban_time must be >= 1");
         return -EINVAL;
     }
-    if (READ_ONCE(fw_max_retries) < 1) {
-        fw_pr_err("fw_max_retries must be >= 1");
-        return -EINVAL;
-    }
-    if (READ_ONCE(fw_findtime) < 1) {
-        fw_pr_err("fw_findtime must be >= 1");
-        return -EINVAL;
-    }
 
     /* 参数上界检查 - 防止过大的值导致整数溢出 */
     if (READ_ONCE(fw_ban_time) > 365 * 24 * 60 * 60) {  /* 1 year max */
         fw_pr_err("fw_ban_time too large (max 1 year)");
         return -EINVAL;
-    }
-    if (READ_ONCE(fw_findtime) > 365 * 24 * 60 * 60) {  /* 1 year max */
-        fw_pr_err("fw_findtime too large (max 1 year)");
-        return -EINVAL;
-    }
-    if (READ_ONCE(fw_max_retries) > 1000) {  /* Reasonable upper limit */
-        fw_pr_err("fw_max_retries too large (max 1000)");
-        return -EINVAL;
-    }
-
-    /* Additional validation: ban time should not be less than findtime */
-    /* FIX P1-5: Use READ_ONCE for atomic access to module parameters */
-    if (READ_ONCE(fw_ban_time) < READ_ONCE(fw_findtime)) {
-        fw_pr_warn("fw_ban_time (%u) is less than fw_findtime (%u), adjusting ban time", READ_ONCE(fw_ban_time), READ_ONCE(fw_findtime));
-        /* FIX P1-5: Use WRITE_ONCE for atomic write */
-        WRITE_ONCE(fw_ban_time, READ_ONCE(fw_findtime));  /* Ensure ban time is at least findtime */
     }
 
     spin_lock_init(&fw_info.lock);
@@ -2222,7 +2174,7 @@ static int __init firewall_init(void)
         goto err_procfs;
     }
 
-    fw_pr_info("Module loaded successfully (ban_time=%u, max_retries=%u, findtime=%u, state_file=%s)", fw_ban_time, fw_max_retries, fw_findtime, state_file);
+    fw_pr_info("Module loaded successfully (ban_time=%u, state_file=%s)", fw_ban_time, state_file);
     return 0;
 
 err_procfs:

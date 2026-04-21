@@ -29,6 +29,7 @@
 - 配置文件从 `firewall.conf` 移至 `config/default.yaml`
 - 配置文件从 `firewall-frps.conf` 移至 `config/frps.yaml`
 - `make test` 使用新测试框架，旧脚本保留为 `make test-legacy`
+- systemd 服务文件重命名：`frps-firewall.service` → `firewall-daemon.service`（与可执行文件名保持一致，体现通用防火墙守护进程定位）
 
 ## [v1.4] - 2026-04-19
 

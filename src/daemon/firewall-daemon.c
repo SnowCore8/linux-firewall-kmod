@@ -4,6 +4,11 @@
  * Monitors log files for failed login attempts and automatically bans
  * offending IPs via the firewall kernel module procfs interface.
  *
+ * Note: max_retries and findtime are daemon-level parameters that control
+ * the log analysis logic (how many failures within what time window trigger
+ * a ban). These are NOT kernel module parameters - the kernel module only
+ * handles the actual IP blocking based on its ban_table.
+ *
  * Usage:
  *   sudo ./firewall-daemon [--daemonize] [--max-retries N] [--findtime SECS]
  */

@@ -47,8 +47,6 @@ PRIVATE_SUBNET="10.0.0.0/8"
 # ============================================================================
 # 模块加载参数
 DEFAULT_FW_BAN_TIME=600
-DEFAULT_FW_MAX_RETRIES=3
-DEFAULT_FW_FINDTIME=600
 
 # 超时设置
 MODULE_LOAD_TIMEOUT=5

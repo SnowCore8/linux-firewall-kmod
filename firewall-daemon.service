@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=forking
-ExecStart=/usr/local/bin/firewall-daemon -c /etc/firewall/firewall-frps.conf --daemonize
+ExecStart=/usr/local/bin/firewall-daemon -C /etc/firewall/config --daemonize
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5

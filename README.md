@@ -11,9 +11,10 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁
 - ✅ 自动过期清理机制
 - ✅ IP 白名单保护（自动发现系统 IP + 手动添加，64 容量）
 - ✅ 通过 procfs 的用户接口
-- ✅ 可配置的封禁时间和重试次数
+- ✅ 可配置的封禁持续时间
 - ✅ 纯 IPv4 支持
 - ✅ C 语言用户态守护进程（无 Python 依赖）
+  - 可配置的失败次数和时间窗口（max_retries / findtime）
 - ✅ POSIX 正则表达式日志解析（减少误判 90%+）
 - ✅ 统一分级日志系统（fw_pr_err/warn/info/debug）
 - ✅ RCU 并发安全 + spinlock 保护
@@ -42,7 +43,7 @@ make clean
 
 ```bash
 # 加载内核模块（带参数）
-sudo insmod build/kernel-module/firewall.ko fw_ban_time=600 fw_max_retries=3 fw_findtime=600
+sudo insmod build/kernel-module/firewall.ko fw_ban_time=600
 
 # 查看配置
 cat /proc/firewall/config
@@ -73,7 +74,7 @@ echo "192.168.1.0/24" | sudo tee /proc/firewall/whitelist_add
 # 移除白名单
 echo "10.0.0.0" | sudo tee /proc/firewall/whitelist_remove
 
-# 运行时修改配置
+# 运行时修改配置（目前仅支持 ban_time）
 echo "ban_time 1200" | sudo tee /proc/firewall/config
 ```
 
@@ -97,8 +98,8 @@ sudo ./build/daemon/firewall-daemon --help
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `fw_ban_time` | 封禁持续时间（秒） | 600 (10分钟) |
-| `fw_max_retries` | 触发封禁的失败次数 | 3 |
-| `fw_findtime` | 失败记录时间窗口（秒） | 600 (10分钟) |
+
+**注意**：`max_retries`（触发封禁的失败次数）和 `findtime`（失败记录时间窗口）是**守护进程参数**，在内核模块中不使用。这些参数在守护进程启动时通过 `-m` 和 `-f` 选项或 YAML 配置文件设置。
 
 ### 守护进程参数
 
@@ -141,7 +142,7 @@ sudo ./build/daemon/firewall-daemon -C /etc/firewall/config/
 **方式二：使用单个配置文件**
 
 ```bash
-sudo ./build/daemon/firewall-daemon -c firewall.conf
+sudo ./build/daemon/firewall-daemon -c config/frps.yaml
 ```
 
 示例配置文件 (`config/default.yaml`)：
@@ -303,7 +304,7 @@ firewall/
 │   └── daemon/
 │       └── firewall-daemon
 ├── Makefile                    # 构建配置
-├── firewall-frps.service       # systemd 服务文件
+├── firewall-daemon.service     # systemd 服务文件
 ├── CHANGELOG.md                # 变更日志
 ├── LICENSE                     # GPL v2 许可证
 ├── README.md                   # 项目主文档

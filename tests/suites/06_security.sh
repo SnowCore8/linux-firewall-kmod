@@ -25,13 +25,13 @@ fw_subsection "模块参数安全"
 fw_ensure_module_unloaded
 
 # 零值参数
-assert_failure "insmod '$KERNEL_MODULE_PATH' fw_ban_time=0 fw_max_retries=0 fw_findtime=0 2>/dev/null" "拒绝零值参数"
+assert_failure "insmod '$KERNEL_MODULE_PATH' fw_ban_time=0 2>/dev/null" "拒绝零值参数"
 
 # 负数参数
-assert_failure "insmod '$KERNEL_MODULE_PATH' fw_ban_time=-1 fw_max_retries=-1 2>/dev/null" "拒绝负数参数"
+assert_failure "insmod '$KERNEL_MODULE_PATH' fw_ban_time=-1 2>/dev/null" "拒绝负数参数"
 
 # 大数值参数
-fw_ensure_module_loaded "$KERNEL_MODULE_PATH" "fw_ban_time=86400 fw_max_retries=100 fw_findtime=3600"
+fw_ensure_module_loaded "$KERNEL_MODULE_PATH" "fw_ban_time=86400"
 if [[ -f "/sys/module/firewall/parameters/fw_ban_time" ]]; then
     local_bt=$(cat /sys/module/firewall/parameters/fw_ban_time 2>/dev/null || echo "unknown")
     assert_eq "$local_bt" "86400" "大参数值加载正确"
