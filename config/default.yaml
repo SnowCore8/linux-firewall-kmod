@@ -1,4 +1,5 @@
 # firewall daemon configuration file
+# Default configuration: protects only sshd (SSH service)
 
 # Max failed attempts before banning an IP
 max_retries: 5
@@ -15,24 +16,22 @@ interval: 1
 # Whether to daemonize (true/false)
 daemonize: false
 
-# Log files to monitor
+# Log files to monitor - only sshd
 log_files:
   - /var/log/auth.log
   - /var/log/secure
-  - /var/log/vsftpd.log
-  - /var/log/nginx/error.log
 
 # Prometheus metrics exporter port (0 to disable)
 metrics_port: 9119
 
 # Log parsing regex patterns (POSIX Extended regex)
-# Leave empty to use built-in defaults
+# Only sshd is enabled by default; others are empty
 regex_patterns:
-  # SSH failed password pattern
+  # SSH failed password pattern (enabled)
   sshd: ""
-  # vsftpd failed login pattern
+  # vsftpd failed login pattern (disabled)
   vsftpd: ""
-  # nginx 401 unauthorized pattern
+  # nginx 401 unauthorized pattern (disabled)
   nginx: ""
-  # frp user connection pattern
+  # frp user connection pattern (disabled)
   frp: ""
