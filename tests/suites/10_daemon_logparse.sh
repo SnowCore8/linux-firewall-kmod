@@ -32,7 +32,7 @@ fw_ensure_module_loaded "$KERNEL_MODULE_PATH" 2>/dev/null || {
 }
 
 # 启动守护进程处理测试日志
-info "启动守护进程处理测试日志..."
+fw_log_info "启动守护进程处理测试日志..."
 timeout 5 "$DAEMON_PATH" \
     --log "$local_test_log" \
     --max-retries 1 \
