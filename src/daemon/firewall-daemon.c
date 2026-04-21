@@ -2088,76 +2088,91 @@ static void monitor_loop(void)
         daemon_log_info("Reloading configuration...");
                 reload_config = 0;
 
-                if (cfg.config_file) {
-                    unsigned int old_max_retries, old_findtime, old_ban_time;
-                    int old_interval, old_metrics_port;
+                unsigned int old_max_retries, old_findtime, old_ban_time;
+                int old_interval, old_metrics_port;
 
-                    /* 保存旧配置的关键值用于变更检测（parse_config_file 已内部处理回滚） */
-                    pthread_mutex_lock(&config_mutex);
-                    old_max_retries = cfg.max_retries;
-                    old_findtime = cfg.findtime;
-                    old_ban_time = cfg.ban_time;
-                    old_interval = cfg.interval;
-                    old_metrics_port = cfg.metrics_port;
-                    pthread_mutex_unlock(&config_mutex);
+                /* 保存旧配置的关键值用于变更检测 */
+                pthread_mutex_lock(&config_mutex);
+                old_max_retries = cfg.max_retries;
+                old_findtime = cfg.findtime;
+                old_ban_time = cfg.ban_time;
+                old_interval = cfg.interval;
+                old_metrics_port = cfg.metrics_port;
+                pthread_mutex_unlock(&config_mutex);
 
-                    /* 解析配置文件（parse_config_file 内部处理失败回滚） */
+                /* 根据配置类型选择重载方式 */
+                int reload_ok = 0;
+                if (cfg.config_dir) {
+                    /* 配置目录模式：重新加载整个目录 */
+                    daemon_log_info("Reloading config directory: %s", cfg.config_dir);
+                    if (load_config_directory(cfg.config_dir) < 0) {
+                        daemon_log_warn("Failed to reload config directory, keeping old config");
+                    } else {
+                        reload_ok = 1;
+                        daemon_log_info("Config directory reloaded successfully");
+                    }
+                } else if (cfg.config_file) {
+                    /* 单文件模式：重新加载单个文件 */
                     if (parse_config_file(cfg.config_file) < 0) {
                         daemon_log_err("Failed to reload configuration from %s", cfg.config_file);
                     } else {
-                        /* Configuration successfully reloaded */
-        daemon_log_info("Configuration reloaded successfully");
+                        reload_ok = 1;
+                        daemon_log_info("Configuration reloaded successfully");
+                    }
+                } else {
+                    daemon_log_warn("No config file or directory specified, cannot reload");
+                }
 
-                        /* 修复问题2：重新设置 inotify watches */
-                        if (inotify_fd >= 0) {
-                            /* 移除旧 watches */
-                            for (int i = 0; i < cfg.log_count; i++) {
-                                if (file_states[i].wd >= 0) {
-                                    inotify_rm_watch(inotify_fd, file_states[i].wd);
-                                    file_states[i].wd = -1;
-                                }
-                                /* 重置文件状态 */
-                                file_states[i].offset = 0;
-                                file_states[i].inode = 0;
-                                file_states[i].path[0] = '\0';
-                            }
-                            close(inotify_fd);
-                            inotify_fd = -1;
-                        }
-
-                        /* 重置文件状态 */
+                if (reload_ok) {
+                    /* 修复问题2：重新设置 inotify watches */
+                    if (inotify_fd >= 0) {
+                        /* 移除旧 watches */
                         for (int i = 0; i < cfg.log_count; i++) {
-                            file_states[i].wd = -1;
+                            if (file_states[i].wd >= 0) {
+                                inotify_rm_watch(inotify_fd, file_states[i].wd);
+                                file_states[i].wd = -1;
+                            }
+                            /* 重置文件状态 */
                             file_states[i].offset = 0;
                             file_states[i].inode = 0;
                             file_states[i].path[0] = '\0';
                         }
-
-                        /* 重新设置 inotify */
-                        if (setup_inotify() < 0) {
-        daemon_log_err("Failed to re-setup inotify after config reload");
-                            running = 0;  /* 安全退出 */
-                        }
-
-                        /* Check for changes and apply them */
-                        pthread_mutex_lock(&config_mutex);
-                        if (old_max_retries != cfg.max_retries) {
-                            daemon_log_info("max_retries changed from %u to %u", old_max_retries, cfg.max_retries);
-                        }
-                        if (old_findtime != cfg.findtime) {
-                            daemon_log_info("findtime changed from %u to %u", old_findtime, cfg.findtime);
-                        }
-                        if (old_ban_time != cfg.ban_time) {
-                            daemon_log_info("ban_time changed from %u to %u", old_ban_time, cfg.ban_time);
-                        }
-                        if (old_interval != cfg.interval) {
-                            daemon_log_info("interval changed from %d to %d", old_interval, cfg.interval);
-                        }
-                        if (old_metrics_port != cfg.metrics_port) {
-                            daemon_log_info("metrics_port changed from %d to %d", old_metrics_port, cfg.metrics_port);
-                        }
-                        pthread_mutex_unlock(&config_mutex);
+                        close(inotify_fd);
+                        inotify_fd = -1;
                     }
+
+                    /* 重置文件状态 */
+                    for (int i = 0; i < cfg.log_count; i++) {
+                        file_states[i].wd = -1;
+                        file_states[i].offset = 0;
+                        file_states[i].inode = 0;
+                        file_states[i].path[0] = '\0';
+                    }
+
+                    /* 重新设置 inotify */
+                    if (setup_inotify() < 0) {
+        daemon_log_err("Failed to re-setup inotify after config reload");
+                        running = 0;  /* 安全退出 */
+                    }
+
+                    /* 检查变更并输出日志 */
+                    pthread_mutex_lock(&config_mutex);
+                    if (old_max_retries != cfg.max_retries) {
+                        daemon_log_info("max_retries changed from %u to %u", old_max_retries, cfg.max_retries);
+                    }
+                    if (old_findtime != cfg.findtime) {
+                        daemon_log_info("findtime changed from %u to %u", old_findtime, cfg.findtime);
+                    }
+                    if (old_ban_time != cfg.ban_time) {
+                        daemon_log_info("ban_time changed from %u to %u", old_ban_time, cfg.ban_time);
+                    }
+                    if (old_interval != cfg.interval) {
+                        daemon_log_info("interval changed from %d to %d", old_interval, cfg.interval);
+                    }
+                    if (old_metrics_port != cfg.metrics_port) {
+                        daemon_log_info("metrics_port changed from %d to %d", old_metrics_port, cfg.metrics_port);
+                    }
+                    pthread_mutex_unlock(&config_mutex);
                 }
             }
             continue;
