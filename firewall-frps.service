@@ -1,12 +1,10 @@
 [Unit]
 Description=Firewall Daemon for frps Protection
 After=network.target
-Requires=systemd-modules-load.service
-After=systemd-modules-load.service
 
 [Service]
 Type=forking
-ExecStart=/usr/local/bin/firewall-daemon -C /etc/firewall/config/ --daemonize
+ExecStart=/usr/local/bin/firewall-daemon -c /etc/firewall/firewall-frps.conf --daemonize
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
