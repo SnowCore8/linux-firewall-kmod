@@ -314,6 +314,7 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
     /* FIX P1-5: Use READ_ONCE to atomically read fw_ban_time to prevent
      * torn reads when the value is being concurrently updated via procfs. */
     entry->unban_time = jiffies + (unsigned long)READ_ONCE(fw_ban_time) * HZ;
+    entry->is_permanent = false;  /* Default to temporary ban */
     atomic_set(&entry->retry_count, 0);
 
     hash_add(fw->ban_table, &entry->hash, ip);
@@ -328,6 +329,97 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
     fw_pr_info_ratelimited("IP %pI4 banned for %u seconds", &ip, READ_ONCE(fw_ban_time));
     FW_DEBUG(1, "EXIT: ban_ip -> 0 (success)");
     return ret;
+}
+
+/*
+ * ban_ip_permanent - Add an IPv4 to the permanent ban list
+ * Permanent bans never expire (unban_time = 0)
+ */
+int ban_ip_permanent(struct firewall_info *fw, __be32 ip)
+{
+    struct ban_entry *entry;
+    struct whitelist_entry *wl_entry;
+    u32 hash;
+
+    FW_DEBUG(1, "ENTRY: ban_ip_permanent(ip=%pI4)", &ip);
+
+    /* Validate IP input */
+    if (!ip) {
+        fw_pr_err("Invalid IP address for permanent banning: %pI4", &ip);
+        FW_DEBUG(1, "EXIT: ban_ip_permanent -> -EINVAL (invalid IP)");
+        return -EINVAL;
+    }
+
+    FW_DEBUG(2, "Attempting to permanently ban IPv4: %pI4", &ip);
+
+    /* Acquire lock before any checks to eliminate TOCTOU race condition. */
+    spin_lock(&fw->lock);
+
+    /* Check whitelist under lock protection */
+    hash_for_each(fw->whitelist_table, hash, wl_entry, hash) {
+        if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
+            spin_unlock(&fw->lock);
+            atomic_inc(&fw->whitelist_reject_count);
+            fw_pr_warn("REFUSED to permanently ban whitelisted IP %pI4", &ip);
+            FW_DEBUG(2, "IP %pI4 is in whitelist, refusing to ban", &ip);
+            FW_DEBUG(1, "EXIT: ban_ip_permanent -> -EPERM (whitelisted)");
+            return -EPERM;
+        }
+    }
+
+    /* Check if already banned under same lock */
+    hash = hash_min(ip, BAN_HASH_BITS);
+    hash_for_each_possible(fw->ban_table, entry, hash, ip) {
+        if (compare_ips(entry->ip, ip)) {
+            if (entry->is_permanent || time_before(jiffies, entry->unban_time)) {
+                /* Still banned or permanent - return early */
+                spin_unlock(&fw->lock);
+                FW_DEBUG(2, "IP %pI4 already banned, returning early", &ip);
+                FW_DEBUG(1, "EXIT: ban_ip_permanent -> 0 (already banned)");
+                return 0;
+            } else {
+                /* Entry exists but expired - update it to permanent */
+                entry->ban_time = jiffies;
+                entry->unban_time = 0;  /* Permanent */
+                entry->is_permanent = true;
+                atomic_set(&entry->retry_count, 0);
+                spin_unlock(&fw->lock);
+                FW_DEBUG(2, "Updated expired ban entry to permanent for IP %pI4", &ip);
+                fw_pr_info("IP %pI4 permanently banned", &ip);
+                FW_DEBUG(1, "EXIT: ban_ip_permanent -> 0 (updated to permanent)");
+                return 0;
+            }
+        }
+    }
+
+    /* Permanent bans bypass the ban table limit - they use SQLite for persistence */
+    /* No limit check for permanent bans */
+
+    entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
+    if (!entry) {
+        spin_unlock(&fw->lock);
+        atomic_inc(&fw->alloc_failure_count);
+        fw_pr_err("Failed to allocate memory for permanent ban entry for IP %pI4", &ip);
+        FW_DEBUG(1, "EXIT: ban_ip_permanent -> -ENOMEM (alloc failed)");
+        return -ENOMEM;
+    }
+
+    entry->ip = ip;
+    entry->ban_time = jiffies;
+    entry->unban_time = 0;  /* Permanent ban - never expires */
+    entry->is_permanent = true;
+    atomic_set(&entry->retry_count, 0);
+
+    hash_add(fw->ban_table, &entry->hash, ip);
+    atomic_inc(&fw->ban_count);
+    atomic_inc(&fw->total_ban_count);
+
+    spin_unlock(&fw->lock);
+
+    FW_DEBUG(1, "Successfully added permanent ban entry for IP %pI4", &ip);
+    fw_pr_info("IP %pI4 permanently banned (permanent)", &ip);
+    FW_DEBUG(1, "EXIT: ban_ip_permanent -> 0 (success)");
+    return 0;
 }
 
 /*
@@ -370,6 +462,46 @@ int unban_ip(struct firewall_info *fw, __be32 ip)
 }
 
 /*
+ * unban_permanent_ip - Remove a permanent ban entry
+ * Only removes entries marked as permanent
+ */
+int unban_permanent_ip(struct firewall_info *fw, __be32 ip)
+{
+    struct ban_entry *entry;
+    int found = 0;
+    char ip_str[INET_ADDRSTRLEN];
+
+    FW_DEBUG(1, "ENTRY: unban_permanent_ip(ip=%pI4)", &ip);
+
+    ipv4_to_str(ip, ip_str, sizeof(ip_str));
+
+    spin_lock(&fw->lock);
+    hash_for_each_possible(fw->ban_table, entry, hash, ip) {
+        if (compare_ips(entry->ip, ip)) {
+            if (entry->is_permanent) {
+                hash_del(&entry->hash);
+                atomic_dec(&fw->ban_count);
+                found = 1;
+                call_rcu(&entry->rcu_head, free_ban_entry_rcu);
+                FW_DEBUG(2, "Found and removed permanent ban entry for IP %s", ip_str);
+            }
+            break;
+        }
+    }
+    spin_unlock(&fw->lock);
+
+    if (found) {
+        atomic_inc(&fw->total_unban_count);
+        fw_pr_info("IP %s permanently unbanned", ip_str);
+        FW_DEBUG(1, "EXIT: unban_permanent_ip -> 0 (success)");
+        return 0;
+    }
+    fw_pr_warn("IP %s not found in permanent ban list", ip_str);
+    FW_DEBUG(1, "EXIT: unban_permanent_ip -> -ENOENT (not found)");
+    return -ENOENT;
+}
+
+/*
  * is_banned - Check if an IPv4 is banned
  * Returns: 1 if banned (valid), 0 if not banned or expired
  */
@@ -384,7 +516,11 @@ int is_banned(struct firewall_info *fw, __be32 ip)
     rcu_read_lock();
     hash_for_each_possible_rcu(fw->ban_table, entry, hash, ip) {
         if (compare_ips(entry->ip, ip)) {
-            if (time_after(now, entry->unban_time)) {
+            /* Check if permanent ban (never expires) */
+            if (entry->is_permanent) {
+                FW_DEBUG(2, "Found permanent ban entry for IPv4 %pI4", &ip);
+                found = 1;
+            } else if (time_after(now, entry->unban_time)) {
                 /* Entry exists but expired - remove it */
                 /* We can't remove here under RCU read lock, so just return 0 */
                 FW_DEBUG(2, "Found expired ban entry for IPv4 %pI4", &ip);
@@ -400,6 +536,33 @@ int is_banned(struct firewall_info *fw, __be32 ip)
     rcu_read_unlock();
 
     FW_DEBUG(3, "Result for IPv4 %pI4 ban check: %s", &ip, found ? "BANNED" : "NOT BANNED");
+    return found;
+}
+
+/*
+ * is_permanently_banned - Check if an IPv4 is permanently banned
+ * Returns 1 if permanently banned, 0 otherwise
+ */
+int is_permanently_banned(struct firewall_info *fw, __be32 ip)
+{
+    struct ban_entry *entry;
+    int found = 0;
+
+    FW_DEBUG(3, "Checking if IPv4 %pI4 is permanently banned", &ip);
+
+    rcu_read_lock();
+    hash_for_each_possible_rcu(fw->ban_table, entry, hash, ip) {
+        if (compare_ips(entry->ip, ip)) {
+            if (entry->is_permanent) {
+                FW_DEBUG(2, "Found permanent ban entry for IPv4 %pI4", &ip);
+                found = 1;
+            }
+            break;
+        }
+    }
+    rcu_read_unlock();
+
+    FW_DEBUG(3, "Result for IPv4 %pI4 permanent ban check: %s", &ip, found ? "PERMANENTLY BANNED" : "NOT PERMANENTLY BANNED");
     return found;
 }
 
@@ -467,6 +630,12 @@ void cleanup_expired_bans(struct firewall_info *fw)
         hlist_for_each_entry_safe(entry, tmp, &fw->ban_table[current_bucket], hash) {
             if (processed >= max_processed_per_call) {
                 break;
+            }
+
+            /* Skip permanent bans - they never expire */
+            if (entry->is_permanent) {
+                processed++;
+                continue;
             }
 
             if (time_after(now, entry->unban_time)) {
@@ -658,9 +827,18 @@ static int ban_list_show(struct seq_file *m, void *v)
     seq_printf(m, "Current banned IPs:\n");
     seq_printf(m, "-------------------\n");
 
+    int permanent_count = 0;
+
     rcu_read_lock();
     hash_for_each_rcu(fw->ban_table, hash, entry, hash) {
-        if (!time_after(now, entry->unban_time)) {
+        /* Check if permanent ban (never expires) */
+        if (entry->is_permanent) {
+            ipv4_to_str(entry->ip, ip_str, sizeof(ip_str));
+            seq_printf(m, "%-40s (PERMANENT)\n", ip_str);
+            count++;
+            permanent_count++;
+        } else if (!time_after(now, entry->unban_time)) {
+            /* Temporary ban - check expiration */
             ipv4_to_str(entry->ip, ip_str, sizeof(ip_str));
             seq_printf(m, "%-40s (expires in %lus)\n",
                        ip_str,
@@ -671,7 +849,8 @@ static int ban_list_show(struct seq_file *m, void *v)
     rcu_read_unlock();
 
     seq_printf(m, "-------------------\n");
-    seq_printf(m, "Total: %d active bans\n", atomic_read(&fw->ban_count));
+    seq_printf(m, "Total: %d active bans (%d permanent, %d temporary)\n",
+               atomic_read(&fw->ban_count), permanent_count, count - permanent_count);
     FW_DEBUG(3, "EXIT: ban_list_show -> 0 (shown=%d)", count);
     return 0;
 }
@@ -686,6 +865,22 @@ static const struct proc_ops ban_list_fops = {
     .proc_read = seq_read,
     .proc_lseek = seq_lseek,
     .proc_release = single_release,
+};
+
+/* Forward declarations for permanent ban procfs handlers */
+static ssize_t permanent_add_ban_write(struct file *file, const char __user *buf,
+                                        size_t count, loff_t *ppos);
+static ssize_t permanent_remove_ban_write(struct file *file, const char __user *buf,
+                                           size_t count, loff_t *ppos);
+
+static const struct proc_ops permanent_add_fops = {
+    .proc_write = permanent_add_ban_write,
+    .proc_lseek = default_llseek,
+};
+
+static const struct proc_ops permanent_remove_fops = {
+    .proc_write = permanent_remove_ban_write,
+    .proc_lseek = default_llseek,
 };
 
 /*
@@ -797,6 +992,155 @@ static ssize_t add_ban_write(struct file *file, const char __user *buf,
     }
 
     FW_DEBUG(1, "EXIT: add_ban_write -> %zu (success)", count);
+    return count;
+}
+
+/*
+ * permanent_add_ban_write - Add a permanent ban via procfs
+ * Permanent bans never expire and persist across module reloads (via SQLite in daemon)
+ */
+static ssize_t permanent_add_ban_write(struct file *file, const char __user *buf,
+                                        size_t count, loff_t *ppos)
+{
+    char ip_str[INET_ADDRSTRLEN + 2];
+    __be32 ipv4;
+    ssize_t len;
+
+    FW_DEBUG(2, "ENTRY: permanent_add_ban_write(count=%zu)", count);
+
+    if (!capable(CAP_NET_ADMIN)) {
+        FW_DEBUG(1, "EXIT: permanent_add_ban_write -> -EPERM (no capability)");
+        return -EPERM;
+    }
+    if (count == 0) {
+        FW_DEBUG(2, "EXIT: permanent_add_ban_write -> 0 (empty input)");
+        return 0;
+    }
+    if (count > sizeof(ip_str) - 1) {
+        FW_DEBUG(1, "EXIT: permanent_add_ban_write -> -EINVAL (input too large: %zu)", count);
+        return -EINVAL;
+    }
+    len = min(count, (size_t)(sizeof(ip_str) - 1));
+
+    if (copy_from_user(ip_str, buf, len)) {
+        FW_DEBUG(1, "EXIT: permanent_add_ban_write -> -EFAULT (copy_from_user failed)");
+        return -EFAULT;
+    }
+
+    ip_str[len] = '\0';
+    if (len > 0 && ip_str[len - 1] == '\n')
+        ip_str[len - 1] = '\0';
+
+    if (strnlen(ip_str, sizeof(ip_str)) >= sizeof(ip_str)) {
+        FW_DEBUG(1, "EXIT: permanent_add_ban_write -> -EINVAL (not null-terminated)");
+        return -EINVAL;
+    }
+
+    FW_DEBUG(2, "Processing permanent ban request for IP: %s", ip_str);
+
+    if (in4_pton(ip_str, -1, (u8 *)&ipv4, -1, NULL)) {
+        if (ipv4 == 0 || ipv4 == 0xFFFFFFFF ||
+            (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||
+            (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||
+            (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||
+            (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {
+            fw_pr_warn("Attempt to permanently ban invalid IPv4: %s", ip_str);
+            return -EINVAL;
+        }
+
+        unsigned int ip_num = ntohl(ipv4);
+        if ((ip_num >= 0xF0000000 && ip_num < 0xFE000000) || ip_num == 0xFFFFFFFF) {
+            fw_pr_warn("Attempt to permanently ban reserved IPv4 Class E: %s", ip_str);
+            return -EINVAL;
+        }
+
+        /* Permanent bans bypass flood protection */
+        /* No flood protection check for permanent bans */
+
+        int result = ban_ip_permanent(&fw_info, ipv4);
+        if (result < 0) {
+            if (result == -EPERM) {
+                fw_pr_info("Requested IPv4 %s is in whitelist, not permanently banned", ip_str);
+            } else if (result == -ENOMEM) {
+                fw_pr_err("Failed to allocate memory for permanent ban entry for IPv4 %s", ip_str);
+            } else if (result == -ENOSPC) {
+                fw_pr_warn("Ban table full, cannot permanently ban IPv4 %s", ip_str);
+            } else {
+                fw_pr_err("Unknown error %d when trying to permanently ban IPv4 %s", result, ip_str);
+            }
+            FW_DEBUG(1, "EXIT: permanent_add_ban_write -> %d (ban_ip_permanent failed)", result);
+            return result;
+        }
+    } else {
+        fw_pr_warn("Invalid IP address format for permanent ban: %s", ip_str);
+        FW_DEBUG(1, "EXIT: permanent_add_ban_write -> -EINVAL (invalid IP format)");
+        return -EINVAL;
+    }
+
+    FW_DEBUG(1, "EXIT: permanent_add_ban_write -> %zu (success)", count);
+    return count;
+}
+
+/*
+ * permanent_remove_ban_write - Remove a permanent ban via procfs
+ */
+static ssize_t permanent_remove_ban_write(struct file *file, const char __user *buf,
+                                           size_t count, loff_t *ppos)
+{
+    char ip_str[INET_ADDRSTRLEN + 2];
+    __be32 ipv4;
+    ssize_t len;
+
+    FW_DEBUG(2, "ENTRY: permanent_remove_ban_write(count=%zu)", count);
+
+    if (!capable(CAP_NET_ADMIN)) {
+        FW_DEBUG(1, "EXIT: permanent_remove_ban_write -> -EPERM (no capability)");
+        return -EPERM;
+    }
+    if (count == 0) {
+        FW_DEBUG(2, "EXIT: permanent_remove_ban_write -> 0 (empty input)");
+        return 0;
+    }
+    if (count > sizeof(ip_str) - 1) {
+        FW_DEBUG(1, "EXIT: permanent_remove_ban_write -> -EINVAL (input too large: %zu)", count);
+        return -EINVAL;
+    }
+    len = min(count, (size_t)(sizeof(ip_str) - 1));
+
+    if (copy_from_user(ip_str, buf, len)) {
+        FW_DEBUG(1, "EXIT: permanent_remove_ban_write -> -EFAULT (copy_from_user failed)");
+        return -EFAULT;
+    }
+
+    ip_str[len] = '\0';
+    if (len > 0 && ip_str[len - 1] == '\n')
+        ip_str[len - 1] = '\0';
+
+    if (strnlen(ip_str, sizeof(ip_str)) >= sizeof(ip_str)) {
+        FW_DEBUG(1, "EXIT: permanent_remove_ban_write -> -EINVAL (not null-terminated)");
+        return -EINVAL;
+    }
+
+    FW_DEBUG(2, "Processing permanent unban request for IP: %s", ip_str);
+
+    if (in4_pton(ip_str, -1, (u8 *)&ipv4, -1, NULL)) {
+        int result = unban_permanent_ip(&fw_info, ipv4);
+        if (result < 0) {
+            if (result == -ENOENT) {
+                fw_pr_warn("IP %s not found in permanent ban list", ip_str);
+            } else {
+                fw_pr_err("Failed to remove permanent ban for IP %s (error %d)", ip_str, result);
+            }
+            FW_DEBUG(1, "EXIT: permanent_remove_ban_write -> %d (unban_permanent_ip failed)", result);
+            return result;
+        }
+    } else {
+        fw_pr_warn("Invalid IP address format for permanent unban: %s", ip_str);
+        FW_DEBUG(1, "EXIT: permanent_remove_ban_write -> -EINVAL (invalid IP format)");
+        return -EINVAL;
+    }
+
+    FW_DEBUG(1, "EXIT: permanent_remove_ban_write -> %zu (success)", count);
     return count;
 }
 
@@ -1220,6 +1564,16 @@ int create_procfs_entries(struct firewall_info *fw)
         goto err_cleanup;
     fw->proc_remove_ban = entry;
 
+    entry = proc_create("permanent_add_ban", 0200, fw->proc_dir, &permanent_add_fops);
+    if (!entry)
+        goto err_cleanup;
+    fw->proc_permanent_add = entry;
+
+    entry = proc_create("permanent_remove_ban", 0200, fw->proc_dir, &permanent_remove_fops);
+    if (!entry)
+        goto err_cleanup;
+    fw->proc_permanent_remove = entry;
+
     entry = proc_create("config", 0600, fw->proc_dir, &config_fops);  /* Read/write for configuration */
     if (!entry)
         goto err_cleanup;
@@ -1264,6 +1618,10 @@ void destroy_procfs_entries(struct firewall_info *fw)
         proc_remove(fw->proc_stats);
     if (fw->proc_config)
         proc_remove(fw->proc_config);
+    if (fw->proc_permanent_remove)
+        proc_remove(fw->proc_permanent_remove);
+    if (fw->proc_permanent_add)
+        proc_remove(fw->proc_permanent_add);
     if (fw->proc_whitelist_remove)
         proc_remove(fw->proc_whitelist_remove);
     if (fw->proc_whitelist_add)

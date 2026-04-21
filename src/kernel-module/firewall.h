@@ -118,8 +118,9 @@ struct whitelist_entry {
 struct ban_entry {
     __be32 ip;                 /* IPv4 address in network byte order */
     unsigned long ban_time;    /* when the IP was banned */
-    unsigned long unban_time;  /* when to unban */
+    unsigned long unban_time;  /* when to unban (0 = permanent) */
     atomic_t retry_count;
+    bool is_permanent;         /* permanent ban flag */
     struct hlist_node hash;
     struct rcu_head rcu_head;  /* For RCU-based freeing */
 };
@@ -163,6 +164,8 @@ struct firewall_info {
     struct proc_dir_entry *proc_ban_list;
     struct proc_dir_entry *proc_add_ban;
     struct proc_dir_entry *proc_remove_ban;
+    struct proc_dir_entry *proc_permanent_add;  /* Permanent ban add */
+    struct proc_dir_entry *proc_permanent_remove;  /* Permanent ban remove */
     struct proc_dir_entry *proc_whitelist;
     struct proc_dir_entry *proc_whitelist_add;
     struct proc_dir_entry *proc_whitelist_remove;
@@ -173,8 +176,11 @@ struct firewall_info {
 
 /* Function declarations */
 int ban_ip(struct firewall_info *fw, __be32 ip);
+int ban_ip_permanent(struct firewall_info *fw, __be32 ip);
 int unban_ip(struct firewall_info *fw, __be32 ip);
+int unban_permanent_ip(struct firewall_info *fw, __be32 ip);
 int is_banned(struct firewall_info *fw, __be32 ip);
+int is_permanently_banned(struct firewall_info *fw, __be32 ip);
 void cleanup_expired_bans(struct firewall_info *fw);
 
 /* Whitelist functions */

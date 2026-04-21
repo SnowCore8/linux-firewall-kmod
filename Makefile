@@ -11,6 +11,7 @@ PWD := $(shell pwd)
 KERNEL_SRC_DIR := src/kernel-module
 DAEMON_SRC := src/daemon/firewall-daemon.c
 EXPORTER_SRC := src/daemon/http-exporter.c
+SQLITE_SRC := src/daemon/sqlite-persistent.c
 
 # Build output directories
 BUILD_DIR := build
@@ -41,9 +42,9 @@ $(KERNEL_MODULE): $(KERNEL_SRC_DIR)/firewall.c $(KERNEL_SRC_DIR)/firewall.h
 # Build user-space daemon
 daemon: $(DAEMON_BIN)
 
-$(DAEMON_BIN): $(DAEMON_SRC) $(EXPORTER_SRC)
+$(DAEMON_BIN): $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC)
 	@mkdir -p $(DAEMON_BUILD_DIR)
-	$(CC) -Wall -Wextra -O2 -o $@ $(DAEMON_SRC) $(EXPORTER_SRC) -lpthread -lyaml
+	$(CC) -Wall -Wextra -O2 -o $@ $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC) -lpthread -lyaml -lsqlite3
 
 # Build both kernel module and daemon
 all-with-daemon: kernel-module daemon

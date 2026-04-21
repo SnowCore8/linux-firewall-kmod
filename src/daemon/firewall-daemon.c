@@ -36,6 +36,8 @@
 #include <stdatomic.h>
 #include <yaml.h>
 #include <dirent.h>
+#include <sys/stat.h>
+#include "sqlite-persistent.h"
 
 /* ============================================================================
  * Unified Logging System for Daemon
@@ -56,6 +58,8 @@
 #define PROCFS_DIR "/proc/firewall"
 #define ADD_BAN_PATH PROCFS_DIR "/add_ban"
 #define REMOVE_BAN_PATH PROCFS_DIR "/remove_ban"
+#define PERMANENT_ADD_BAN_PATH PROCFS_DIR "/permanent_add_ban"
+#define PERMANENT_REMOVE_BAN_PATH PROCFS_DIR "/permanent_remove_ban"
 #define BAN_LIST_PATH PROCFS_DIR "/ban_list"
 
 /* Default configuration */
@@ -102,6 +106,8 @@ struct config {
     int log_count;
     char *config_file;      /* Path to single configuration file for runtime updates */
     char *config_dir;       /* Path to configuration directory (auto-loads all .yaml/.yml) */
+    char *permanent_db_path; /* SQLite database path for permanent bans (NULL = disabled) */
+    int permanent_ban_enabled; /* Whether permanent bans are enabled */
 };
 
 /* Failed attempt tracker */
@@ -121,6 +127,9 @@ static struct config cfg;
 static struct failed_entry *failed_table = NULL;
 static int inotify_fd = -1;
 static struct file_state file_states[MAX_LOG_FILES];
+
+/* SQLite persistent banlist */
+static sqlite_db_t *sqlite_db = NULL;
 
 /* Precompiled regex patterns for log parsing */
 static regex_t sshd_regex;
@@ -436,6 +445,24 @@ static int parse_config_file(const char *config_path)
                         daemon_log_info("Config daemonize set to false");
                     } else {
                         daemon_log_warn("Invalid daemonize value in config: %s", value);
+                    }
+                } else if (strcmp(current_key, "permanent_db_path") == 0) {
+                    if (strlen(value) > 0) {
+                        cfg.permanent_db_path = strdup(value);
+                        if (!cfg.permanent_db_path) {
+                            daemon_log_err("Out of memory allocating permanent_db_path");
+                        } else {
+                            cfg.permanent_ban_enabled = 1;
+                            daemon_log_info("Config permanent_db_path set to: %s", value);
+                        }
+                    }
+                } else if (strcmp(current_key, "permanent_ban_enabled") == 0) {
+                    if (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "1") == 0) {
+                        cfg.permanent_ban_enabled = 1;
+                        daemon_log_info("Config permanent_ban_enabled set to true");
+                    } else {
+                        cfg.permanent_ban_enabled = 0;
+                        daemon_log_info("Config permanent_ban_enabled set to false");
                     }
                 }
                 free(current_key);
@@ -1499,14 +1526,78 @@ static int ban_ip(const char *ip)
     // Prepare data with newline for writing
     snprintf(ip_with_newline, sizeof(ip_with_newline), "%s\n", ip);
 
-    // Use secure write function
+    // Write to kernel module (temporary ban)
     if (secure_procfs_write(ADD_BAN_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
         daemon_log_err("Failed to write to %s", ADD_BAN_PATH);
         return -1;
     }
 
+    /* If permanent bans are enabled, also add to SQLite */
+    if (cfg.permanent_ban_enabled && sqlite_db) {
+        uint32_t ip_num = addr4.s_addr;
+        int rc = sqlite_add_permanent_ban(sqlite_db, ip, ip_num, "auto-ban from log", "auto");
+        if (rc == 0) {
+            daemon_log_info("IP %s added to permanent banlist (SQLite)", ip);
+        } else if (rc == -2) {
+            daemon_log_debug("IP %s already in permanent banlist", ip);
+        } else {
+            daemon_log_warn("Failed to add IP %s to permanent banlist (SQLite)", ip);
+        }
+    }
+
     atomic_fetch_add(&daemon_stats.ips_banned, 1);
     daemon_log_info("Banned IP %s", ip);
+    return 0;
+}
+
+/*
+ * ban_ip_permanent - Ban IP permanently via procfs and SQLite
+ */
+static int ban_ip_permanent(const char *ip)
+{
+    struct in_addr addr4;
+    size_t ip_len;
+    char ip_with_newline[INET_ADDRSTRLEN + 2];
+
+    if (!ip) {
+        daemon_log_err("NULL IP address provided to ban_ip_permanent");
+        return -1;
+    }
+
+    ip_len = strlen(ip);
+    if (ip_len == 0 || ip_len >= INET_ADDRSTRLEN) {
+        daemon_log_err("Invalid IP length %zu in ban_ip_permanent", ip_len);
+        return -1;
+    }
+
+    if (inet_pton(AF_INET, ip, &addr4) != 1) {
+        daemon_log_err("Invalid IPv4 address format: %s", ip);
+        return -1;
+    }
+
+    snprintf(ip_with_newline, sizeof(ip_with_newline), "%s\n", ip);
+
+    /* Write to kernel module permanent ban endpoint */
+    if (secure_procfs_write(PERMANENT_ADD_BAN_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
+        daemon_log_err("Failed to write to %s", PERMANENT_ADD_BAN_PATH);
+        return -1;
+    }
+
+    /* Also add to SQLite for persistence */
+    if (sqlite_db) {
+        uint32_t ip_num = addr4.s_addr;
+        int rc = sqlite_add_permanent_ban(sqlite_db, ip, ip_num, "manual permanent ban", "manual");
+        if (rc == 0) {
+            daemon_log_info("IP %s permanently banned and saved to SQLite", ip);
+        } else if (rc == -2) {
+            daemon_log_debug("IP %s already in permanent banlist", ip);
+        } else {
+            daemon_log_warn("Failed to save permanent ban to SQLite: %s", ip);
+        }
+    }
+
+    atomic_fetch_add(&daemon_stats.ips_banned, 1);
+    daemon_log_info("Permanently banned IP %s", ip);
     return 0;
 }
 
@@ -2323,6 +2414,13 @@ static void cleanup(void)
     /* Clear hash table pointers */
     memset(failed_hash_table, 0, sizeof(failed_hash_table));
 
+    /* Close SQLite database */
+    if (sqlite_db) {
+        sqlite_close(sqlite_db);
+        sqlite_db = NULL;
+        daemon_log_info("SQLite database closed");
+    }
+
     /* Destroy mutex for partial line buffer */
     pthread_mutex_destroy(&partial_line_mutex);
 
@@ -2608,6 +2706,39 @@ int main(int argc, char *argv[])
 
     /* Initialize statistics */
     daemon_stats.start_time = time(NULL);
+
+    /* Initialize SQLite database for permanent bans if configured */
+    if (cfg.permanent_ban_enabled && cfg.permanent_db_path) {
+        sqlite_db = sqlite_init(cfg.permanent_db_path);
+        if (!sqlite_db) {
+            daemon_log_warn("Failed to initialize SQLite database for permanent bans at %s", cfg.permanent_db_path);
+            daemon_log_warn("Permanent bans will not be available");
+        } else {
+            daemon_log_info("SQLite database initialized for permanent bans at %s", cfg.permanent_db_path);
+            
+            /* Load permanent bans from SQLite and apply to kernel module */
+            struct permanent_ban_entry *entries = NULL;
+            int count = 0;
+            if (sqlite_load_all_permanent_bans(sqlite_db, &entries, &count) == 0 && count > 0) {
+                daemon_log_info("Loading %d permanent bans from SQLite database", count);
+                for (int i = 0; i < count; i++) {
+                    char ip_with_newline[INET_ADDRSTRLEN + 2];
+                    snprintf(ip_with_newline, sizeof(ip_with_newline), "%s\n", entries[i].ip);
+                    
+                    if (secure_procfs_write(PERMANENT_ADD_BAN_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
+                        daemon_log_warn("Failed to restore permanent ban for %s to kernel", entries[i].ip);
+                    } else {
+                        daemon_log_info("Restored permanent ban for %s (reason: %s)", entries[i].ip, entries[i].reason);
+                    }
+                }
+                free(entries);
+            } else if (count == 0) {
+                daemon_log_info("No permanent bans found in SQLite database");
+            } else {
+                daemon_log_warn("Failed to load permanent bans from SQLite database");
+            }
+        }
+    }
 
     /* Setup signal handlers */
     setup_signals();

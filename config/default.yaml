@@ -35,3 +35,9 @@ regex_patterns:
   nginx: ""
   # frp user connection pattern (disabled)
   frp: ""
+
+# Permanent ban configuration (SQLite-based persistence)
+# Path to SQLite database file for permanent bans (empty = disabled)
+permanent_db_path: ""
+# Whether to enable permanent bans (true/false)
+permanent_ban_enabled: false
