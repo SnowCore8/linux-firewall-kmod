@@ -79,7 +79,11 @@ echo "安全预检通过"
 pass "测试模式：仅加载/卸载模块，不安装到系统"
 
 # Check for module file in build directory or root
-if [[ -f "../build/kernel-module/$MODULE_FILE" ]]; then
+if [[ -f "/tmp/firewall-build/build/kernel-module/$MODULE_FILE" ]]; then
+    MODULE_PATH="/tmp/firewall-build/build/kernel-module/$MODULE_FILE"
+elif [[ -f "/tmp/firewall-build/src/kernel-module/$MODULE_FILE" ]]; then
+    MODULE_PATH="/tmp/firewall-build/src/kernel-module/$MODULE_FILE"
+elif [[ -f "../build/kernel-module/$MODULE_FILE" ]]; then
     MODULE_PATH="../build/kernel-module/$MODULE_FILE"
 elif [[ -f "../build/$MODULE_FILE" ]]; then
     MODULE_PATH="../build/$MODULE_FILE"

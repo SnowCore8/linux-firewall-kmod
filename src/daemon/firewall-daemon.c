@@ -95,6 +95,7 @@ struct config {
     char *sshd_regex;       /* Custom sshd regex pattern (NULL = use default) */
     char *vsftpd_regex;     /* Custom vsftpd regex pattern (NULL = use default) */
     char *nginx_regex;      /* Custom nginx regex pattern (NULL = use default) */
+    char *frp_regex;        /* Custom frp regex pattern (NULL = use default) */
     char *log_files[MAX_LOG_FILES];
     int log_count;
     char *config_file;  /* Path to configuration file for runtime updates */
@@ -122,6 +123,7 @@ static struct file_state file_states[MAX_LOG_FILES];
 static regex_t sshd_regex;
 static regex_t vsftpd_regex;
 static regex_t nginx_regex;
+static regex_t frp_regex;
 static int regex_compiled = 0;
 
 /* ============================================================================
@@ -141,6 +143,7 @@ struct daemon_stats {
     atomic_ulong regex_matches_sshd;
     atomic_ulong regex_matches_vsftpd;
     atomic_ulong regex_matches_nginx;
+    atomic_ulong regex_matches_frp;
     time_t start_time;
 } daemon_stats;
 
@@ -221,6 +224,7 @@ static int parse_config_file(const char *config_path)
     char *old_sshd_regex = cfg.sshd_regex ? strdup(cfg.sshd_regex) : NULL;
     char *old_vsftpd_regex = cfg.vsftpd_regex ? strdup(cfg.vsftpd_regex) : NULL;
     char *old_nginx_regex = cfg.nginx_regex ? strdup(cfg.nginx_regex) : NULL;
+    char *old_frp_regex = cfg.frp_regex ? strdup(cfg.frp_regex) : NULL;
 
     for (int i = 0; i < cfg.log_count; i++) {
         old_log_files[i] = cfg.log_files[i] ? strdup(cfg.log_files[i]) : NULL;
@@ -396,6 +400,16 @@ static int parse_config_file(const char *config_path)
                 }
                 daemon_log_info("Config nginx_regex set to: %s", value);
             }
+        } else if (strcmp(key, "frp_regex") == 0) {
+            if (strlen(value) > 0) {
+                free(cfg.frp_regex);
+                cfg.frp_regex = strdup(value);
+                if (!cfg.frp_regex) {
+                    daemon_log_err("Out of memory allocating frp_regex");
+                    goto restore_old_config;
+                }
+                daemon_log_info("Config frp_regex set to: %s", value);
+            }
         } else if (strcmp(key, "log_file") == 0) {
             if (cfg.log_count >= MAX_LOG_FILES) {
                 daemon_log_warn("Too many log files in config (max %d)", MAX_LOG_FILES);
@@ -473,6 +487,7 @@ restore_old_config:
     free(cfg.sshd_regex); cfg.sshd_regex = old_sshd_regex;
     free(cfg.vsftpd_regex); cfg.vsftpd_regex = old_vsftpd_regex;
     free(cfg.nginx_regex); cfg.nginx_regex = old_nginx_regex;
+    free(cfg.frp_regex); cfg.frp_regex = old_frp_regex;
 
     pthread_mutex_unlock(&config_mutex);
     return -1;
@@ -962,6 +977,35 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
             char errbuf[256];
             regerror(regex_result, &nginx_regex, errbuf, sizeof(errbuf));
             daemon_log_warn("Regex error in nginx pattern: %s", errbuf);
+        }
+    }
+
+    /* Check for frp user connection using precompiled regex */
+    if (regex_compiled) {
+        int regex_result = regexec(&frp_regex, line, 4, matches, 0);
+        if (regex_result == 0) {
+            atomic_fetch_add(&daemon_stats.regex_matches_frp, 1);
+            /* Capture group 1: IP address */
+            if (matches[1].rm_so >= 0 && matches[1].rm_eo > matches[1].rm_so) {
+                ip_start = line + matches[1].rm_so;
+                ip_len = matches[1].rm_eo - matches[1].rm_so;
+
+                if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
+                    daemon_log_warn("Invalid IP length in frp log: %zu", ip_len);
+                    return 0;
+                }
+
+                char ip_buf[INET_ADDRSTRLEN];
+                memcpy(ip_buf, ip_start, ip_len);
+                ip_buf[ip_len] = '\0';
+                strncpy(ip_out, ip_buf, ip_size - 1);
+                ip_out[ip_size - 1] = '\0';
+                return 1;
+            }
+        } else if (regex_result != REG_NOMATCH) {
+            char errbuf[256];
+            regerror(regex_result, &frp_regex, errbuf, sizeof(errbuf));
+            daemon_log_warn("Regex error in frp pattern: %s", errbuf);
         }
     }
 
@@ -2078,6 +2122,8 @@ static int init_log_patterns(void)
         "FAIL LOGIN: [Cc]lient[=\"]([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})";
     const char *nginx_pattern = cfg.nginx_regex ? cfg.nginx_regex :
         "([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}) [^ ]{1,64} [^ ]{1,64} \\[[^\\]]{1,64}\\] \"[^\"]{1,256}\" 401";
+    const char *frp_pattern = cfg.frp_regex ? cfg.frp_regex :
+        "get a user connection \\[([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}):[0-9]+\\]";
 
     /*
      * SSH failed password pattern
@@ -2134,6 +2180,25 @@ static int init_log_patterns(void)
     else
         daemon_log_info("Using built-in nginx regex pattern");
 
+    /*
+     * frp user connection pattern
+     * Uses custom pattern from config if provided, otherwise built-in default
+     * Matches: get a user connection [IP:PORT]
+     */
+    memset(&frp_regex, 0, sizeof(frp_regex));
+    ret = regcomp(&frp_regex, frp_pattern, REG_EXTENDED);
+    if (ret) {
+        char errbuf[256];
+        regerror(ret, &frp_regex, errbuf, sizeof(errbuf));
+        daemon_log_warn("Failed to compile frp regex: %s (non-fatal)", errbuf);
+        /* frp regex is optional, continue without it */
+    } else {
+        if (cfg.frp_regex)
+            daemon_log_info("Using custom frp regex pattern");
+        else
+            daemon_log_info("Using built-in frp regex pattern");
+    }
+
     regex_compiled = 1;
     daemon_log_info("Log patterns compiled successfully");
     return 0;
@@ -2146,6 +2211,7 @@ static void free_log_patterns(void)
         regfree(&sshd_regex);
         regfree(&vsftpd_regex);
         regfree(&nginx_regex);
+        regfree(&frp_regex);
         regex_compiled = 0;
     }
 }
