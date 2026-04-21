@@ -69,9 +69,6 @@ test: $(KERNEL_MODULE) $(DAEMON_BIN)
 	sudo ./tests/run_tests.sh
 
 # Run legacy test suite (old scripts)
-test-legacy: $(KERNEL_MODULE) $(DAEMON_BIN)
-	sudo ./tests/test_firewall.sh
-
 # Test performance
 test-performance: performance_test.c
 	@mkdir -p $(BUILD_DIR)
