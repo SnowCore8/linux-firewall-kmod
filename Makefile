@@ -97,30 +97,23 @@ clean:
 		$(KERNEL_SRC_DIR)/Module.symvers
 	@echo "Build directory cleaned."
 
-# Install targets
-install-kernel: $(KERNEL_MODULE)
-	@echo "Installing kernel module..."
+# Install target - install everything
+install: $(KERNEL_MODULE) $(DAEMON_BIN)
+	@echo "Installing firewall components..."
+	# Kernel module
 	cp $(KERNEL_MODULE) /lib/modules/$(shell uname -r)/kernel/net/
 	depmod -a
-	# Install auto-load configurations
+	# Auto-load configurations
 	install -D -m 644 config/modules-load.d/firewall.conf /etc/modules-load.d/firewall.conf
 	install -D -m 644 config/modprobe.d/firewall.conf /etc/modprobe.d/firewall.conf
-	-systemctl daemon-reload 2>/dev/null || true
-	@echo "Kernel module and auto-load configs installed."
-
-install-daemon: $(DAEMON_BIN)
-	@echo "Installing daemon and configuration..."
+	# Daemon
 	cp $(DAEMON_BIN) /usr/local/bin/
-	# Install YAML configs
+	# YAML configs
 	install -d -m 755 /etc/firewall/config
 	install -m 644 config/*.yaml /etc/firewall/config/
-	# Install systemd service
+	# systemd service
 	install -D -m 644 firewall-frps.service /etc/systemd/system/firewall-frps.service
 	systemctl daemon-reload
-	@echo "Daemon, configs, and systemd service installed."
-	@echo "To enable auto-start: systemctl enable firewall-frps.service"
-
-install: install-kernel install-daemon
 	@echo ""
 	@echo "Installation complete!"
 	@echo "To enable automatic loading at boot:"
@@ -128,27 +121,17 @@ install: install-kernel install-daemon
 	@echo "To start daemon at boot:"
 	@echo "  systemctl enable firewall-frps.service"
 
-# Uninstall targets
-uninstall-kernel:
-	@echo "Removing kernel module and auto-load configs..."
+# Uninstall target - remove everything
+uninstall:
+	@echo "Removing firewall components..."
 	rm -f /lib/modules/$(shell uname -r)/kernel/net/firewall.ko
 	rm -f /etc/modules-load.d/firewall.conf
 	rm -f /etc/modprobe.d/firewall.conf
-	depmod -a
-	-systemctl daemon-reload 2>/dev/null || true
-	@echo "Kernel module and auto-load configs removed."
-
-uninstall-daemon:
-	@echo "Removing daemon, configs, and systemd service..."
 	rm -f /usr/local/bin/firewall-daemon
 	rm -rf /etc/firewall/config
 	rm -f /etc/systemd/system/firewall-frps.service
-	systemctl daemon-reload
-	@echo "Daemon, configs, and systemd service removed."
+	depmod -a
+	-systemctl daemon-reload 2>/dev/null || true
+	@echo "All firewall components removed."
 
-uninstall: uninstall-kernel uninstall-daemon
-	@echo ""
-	@echo "All firewall components uninstalled."
-
-.PHONY: kernel-module daemon all-with-daemon all debug1 debug2 debug3 test test-performance clean \
-	install-kernel install-daemon install uninstall-kernel uninstall-daemon uninstall
+.PHONY: kernel-module daemon all-with-daemon all debug1 debug2 debug3 test test-performance clean install uninstall
