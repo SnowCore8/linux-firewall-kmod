@@ -108,15 +108,11 @@ install: $(KERNEL_MODULE) $(DAEMON_BIN)
 	# YAML configs
 	install -d -m 755 /etc/firewall/config
 	install -m 644 config/*.yaml /etc/firewall/config/
-	# systemd service
-	install -D -m 644 firewall-frps.service /etc/systemd/system/firewall-frps.service
-	systemctl daemon-reload
+	systemctl daemon-reload 2>/dev/null || true
 	@echo ""
 	@echo "Installation complete!"
 	@echo "To enable automatic loading at boot:"
 	@echo "  systemctl enable systemd-modules-load.service"
-	@echo "To start daemon at boot:"
-	@echo "  systemctl enable firewall-frps.service"
 
 # Uninstall target - remove everything
 uninstall:
@@ -126,7 +122,6 @@ uninstall:
 	rm -f /etc/modprobe.d/firewall.conf
 	rm -f /usr/local/bin/firewall-daemon
 	rm -rf /etc/firewall/config
-	rm -f /etc/systemd/system/firewall-frps.service
 	depmod -a
 	-systemctl daemon-reload 2>/dev/null || true
 	@echo "All firewall components removed."
