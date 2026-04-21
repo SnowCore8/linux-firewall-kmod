@@ -2,7 +2,7 @@
 
 所有重要的项目变更记录都在此文件中。
 
-## [Unreleased]
+## [v1.5] - 2026-04-21
 
 ### 新增
 - YAML 配置文件支持（替换原有的 INI 格式）
@@ -11,6 +11,24 @@
 - 配置目录自动加载功能（`-C/--config-dir`）
 - 默认自动加载 `./config/` 或 `/etc/firewall/config/` 下所有 yaml 文件
 - 多配置文件合并支持（按字母顺序加载，后加载的覆盖前面的）
+- 模块化测试框架（95+ 项测试）
+  - 统一测试入口 `run_tests.sh`
+  - 测试框架核心 `test_framework.sh`
+  - 11 个独立测试套件
+  - 支持按类别运行测试
+  - 支持生成测试报告
+- Prometheus metrics 导出（HTTP exporter）
+- frp 日志解析支持
+
+### 改进
+- 重构测试脚本为模块化框架
+- 更新项目文档反映最新功能
+- 更新 QWEN.md 项目上下文
+
+### 变更
+- 配置文件从 `firewall.conf` 移至 `config/default.yaml`
+- 配置文件从 `firewall-frps.conf` 移至 `config/frps.yaml`
+- `make test` 使用新测试框架，旧脚本保留为 `make test-legacy`
 
 ## [v1.4] - 2026-04-19
 

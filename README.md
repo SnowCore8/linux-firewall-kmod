@@ -233,18 +233,31 @@ fw_pr_err_ratelimited("error with rate limit")
 
 ## 测试
 
+项目采用模块化测试框架，共 95+ 项测试：
+
 ```bash
-# 运行综合测试（55 项）
+# 运行所有测试（推荐）
 make test
 
 # 或手动运行
-sudo ./tests/test_firewall.sh
+sudo ./tests/run_tests.sh
 
-# 运行安全测试（60 项）
-sudo ./tests/security_test.sh
+# 运行单个测试套件
+sudo ./tests/run_tests.sh --suite 03       # 封禁/解封测试
+sudo ./tests/run_tests.sh --suite 09       # 配置测试
+
+# 按类别运行
+sudo ./tests/run_tests.sh --category security   # 安全测试
+sudo ./tests/run_tests.sh --category daemon     # 守护进程测试
+
+# 生成测试报告
+sudo ./tests/run_tests.sh --report
+
+# 运行旧测试脚本（向后兼容）
+make test-legacy
 ```
 
-**测试结果**: 52 通过，0 失败，3 警告
+**测试结果**: 93+ 通过，0 失败
 
 ### 测试覆盖
 
@@ -252,10 +265,12 @@ sudo ./tests/security_test.sh
 - Procfs 接口功能
 - 封禁/解封功能
 - 白名单保护
-- 自动发现系统 IP
-- 运行时配置修改
-- 边界情况和输入验证
+- 输入验证和边界检查
+- 安全测试（注入防护、权限检查）
 - 并发访问安全
+- 压力/性能测试
+- YAML 配置目录加载
+- 日志解析功能
 - 资源管理和内存安全
 
 ## 项目结构
@@ -267,24 +282,28 @@ firewall/
 │   │   ├── firewall.c          # 内核模块主源码（~1880 行）
 │   │   └── firewall.h          # 头文件（含统一日志系统）
 │   └── daemon/
-│       └── firewall-daemon.c   # 守护进程主源码（~2200 行）
+│       ├── firewall-daemon.c   # 守护进程主源码（~2600 行）
+│       └── http-exporter.c     # Prometheus 指标导出器
 ├── tests/
-│   ├── test_firewall.sh        # 55 项综合测试
-│   ├── security_test.sh        # 60 项安全测试
-│   └── SECURITY_TEST_REPORT.md # 安全测试报告
+│   ├── run_tests.sh            # 统一测试入口（95+ 项测试）
+│   ├── test_framework.sh       # 测试框架核心
+│   ├── test_config.sh          # 测试配置
+│   ├── suites/                 # 11 个测试套件
+│   └── reports/                # 测试报告
+├── config/                     # YAML 配置文件目录
+│   ├── default.yaml            # 默认配置
+│   └── frps.yaml               # frps 保护配置
 ├── docs/
 │   └── DOCUMENTATION.md        # 详细技术文档
 ├── scripts/
-│   ├── build.sh                # 构建脚本
-│   └── verify_project.sh       # 项目验证脚本
+│   └── build.sh                # 构建脚本
 ├── build/                      # 构建产物目录
-│   ├── firewall.ko
+│   ├── kernel-module/
+│   │   └── firewall.ko
 │   └── daemon/
 │       └── firewall-daemon
-├── config/                     # 配置文件目录
-│   ├── default.yaml            # 默认配置
-│   └── frps.yaml               # frps 保护配置
 ├── Makefile                    # 构建配置
+├── firewall-frps.service       # systemd 服务文件
 ├── CHANGELOG.md                # 变更日志
 ├── LICENSE                     # GPL v2 许可证
 ├── README.md                   # 项目主文档
@@ -297,7 +316,6 @@ firewall/
 - **封禁上限 1024 IP**
 - **无持久化存储**（模块重启后状态丢失，但有状态文件保存/恢复）
 - **procfs 通信**（不支持批量操作）
-- **无监控集成**（无 Prometheus metrics 导出）
 
 ## 适用场景
 

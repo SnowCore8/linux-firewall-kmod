@@ -4,7 +4,7 @@
 
 **firewall** 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁防护。它将 fail2ban 的核心功能从用户空间移动到内核空间，使用 netfilter 框架在数据包级别进行封禁，具有更低的延迟和更高的性能。
 
-**当前版本**: v1.4（哈希表优化 + 正则解析 + 扩大容量）
+**当前版本**: v1.5（YAML 配置 + 配置目录 + 模块化测试框架）
 
 ### 核心架构
 
@@ -24,9 +24,11 @@
    - 监控日志文件（/var/log/auth.log 等）
    - 使用 POSIX 正则表达式解析日志
    - 自动管理封禁（通过 procfs 接口）
-   - 配置文件支持（firewall.conf）
+   - YAML 配置文件支持（libyaml 解析）
+   - 配置目录自动加载（`config/` 目录）
    - inotify 实时文件监控 + 日志轮转检测
    - 配置热重载（SIGHUP）
+   - Prometheus metrics 导出（HTTP  exporter）
 
 ### 主要特性
 
@@ -43,6 +45,10 @@
 - ✅ RCU 并发安全 + spinlock 保护
 - ✅ 状态持久化
 - ✅ 输入验证和边界检查
+- ✅ YAML 配置文件（libyaml 解析）
+- ✅ 配置目录自动加载（多配置合并）
+- ✅ Prometheus metrics 导出
+- ✅ 模块化测试框架（95+ 项测试）
 
 ### 技术栈
 
@@ -61,23 +67,28 @@ firewall/
 │   │   ├── firewall.c          # 内核模块主源码（~1880 行）
 │   │   └── firewall.h          # 头文件（含统一日志系统）
 │   └── daemon/
-│       └── firewall-daemon.c   # 守护进程主源码（~2200 行）
+│       ├── firewall-daemon.c   # 守护进程主源码（~2600 行）
+│       └── http-exporter.c     # Prometheus 指标导出器
 ├── tests/
-│   ├── test_firewall.sh        # 55 项综合测试
-│   ├── security_test.sh        # 60 项安全测试
-│   └── SECURITY_TEST_REPORT.md # 安全测试报告
+│   ├── run_tests.sh            # 统一测试入口（95+ 项测试）
+│   ├── test_framework.sh       # 测试框架核心
+│   ├── test_config.sh          # 测试配置
+│   ├── suites/                 # 11 个测试套件
+│   └── reports/                # 测试报告
+├── config/                     # YAML 配置文件目录
+│   ├── default.yaml            # 默认配置
+│   └── frps.yaml               # frps 保护配置
 ├── docs/
 │   └── DOCUMENTATION.md        # 详细技术文档
 ├── scripts/
-│   ├── build.sh                # 构建脚本
-│   └── verify_project.sh       # 项目验证脚本
+│   └── build.sh                # 构建脚本
 ├── build/                      # 构建产物目录（git 忽略）
 │   ├── kernel-module/
 │   │   └── firewall.ko
 │   └── daemon/
 │       └── firewall-daemon
 ├── Makefile                    # 构建配置
-├── firewall.conf               # 守护进程配置
+├── firewall-frps.service       # systemd 服务文件
 ├── CHANGELOG.md                # 变更日志
 ├── LICENSE                     # GPL v2 许可证
 ├── README.md                   # 项目主文档
@@ -123,14 +134,17 @@ sudo rmmod firewall
 ### 启动守护进程
 
 ```bash
-# 基本用法
+# 基本用法（自动加载 config/ 目录）
 sudo ./build/daemon/firewall-daemon
+
+# 指定配置目录
+sudo ./build/daemon/firewall-daemon -C /etc/firewall/config/
+
+# 指定单个配置文件
+sudo ./build/daemon/firewall-daemon -c config/default.yaml
 
 # 指定日志文件和参数
 sudo ./build/daemon/firewall-daemon -l /var/log/auth.log -m 3 -f 600 -b 600
-
-# 使用配置文件
-sudo ./build/daemon/firewall-daemon -c firewall.conf
 
 # 查看帮助
 sudo ./build/daemon/firewall-daemon --help
@@ -192,6 +206,9 @@ echo "ban_time 1200" | sudo tee /proc/firewall/config
 | `-f` | 失败记录时间窗口（秒） | 600 |
 | `-b` | 封禁持续时间（秒） | 600 |
 | `-c` | 配置文件路径 | - |
+| `-C` | 配置目录路径 | ./config/ |
+| `-i` | 检查间隔（秒） | 1 |
+| `-p` | Prometheus 端口 | 9119 |
 | `--daemonize` | 后台运行 | false |
 
 ### procfs 接口
@@ -245,17 +262,28 @@ fw_pr_err_ratelimited("error with rate limit")
 ## 测试
 
 ```bash
-# 运行综合测试（55 项）
+# 运行所有测试（95+ 项）
 make test
 
 # 或手动运行
-sudo ./tests/test_firewall.sh
+sudo ./tests/run_tests.sh
 
-# 运行安全测试（60 项）
-sudo ./tests/security_test.sh
+# 运行单个测试套件
+sudo ./tests/run_tests.sh --suite 03       # 封禁/解封测试
+sudo ./tests/run_tests.sh --suite 09       # 配置测试
+
+# 按类别运行
+sudo ./tests/run_tests.sh --category security   # 安全测试
+sudo ./tests/run_tests.sh --category daemon     # 守护进程测试
+
+# 生成测试报告
+sudo ./tests/run_tests.sh --report
+
+# 运行旧测试脚本（向后兼容）
+make test-legacy
 ```
 
-**测试结果**: 52 通过，0 失败，3 警告
+**测试结果**: 93+ 通过，0 失败
 
 ### 测试覆盖
 
@@ -263,10 +291,12 @@ sudo ./tests/security_test.sh
 - Procfs 接口功能
 - 封禁/解封功能
 - 白名单保护
-- 自动发现系统 IP
-- 运行时配置修改
-- 边界情况和输入验证
+- 输入验证和边界检查
+- 安全测试（注入防护、权限检查）
 - 并发访问安全
+- 压力/性能测试
+- YAML 配置目录加载
+- 日志解析功能
 - 资源管理和内存安全
 
 ## 关键数据结构
@@ -295,10 +325,12 @@ sudo ./tests/security_test.sh
 
 ### 测试实践
 
-- 使用 `test_firewall.sh` 进行自动化测试
+- 使用 `run_tests.sh` 进行模块化测试（95+ 项测试）
 - 测试需要 root 权限
-- 测试覆盖：模块加载/卸载、procfs 接口、封禁/解封、白名单功能
+- 可运行单个测试套件：`./tests/run_tests.sh --suite 03`
+- 可按类别运行：`./tests/run_tests.sh --category security`
 - 测试后自动清理，不遗留安装文件
+- 支持生成测试报告：`./tests/run_tests.sh --report`
 
 ### 扩展开发
 
