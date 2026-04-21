@@ -86,9 +86,6 @@ uninstall-kernel:
 	depmod -a
 	@echo "firewall.ko removed and module dependencies updated."
 
-uninstall: uninstall-daemon uninstall-kernel
-	@echo "All firewall components uninstalled successfully."
-
 # Clean build artifacts
 clean:
 	rm -rf $(BUILD_DIR)
