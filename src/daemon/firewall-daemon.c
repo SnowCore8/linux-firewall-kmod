@@ -416,6 +416,17 @@ static int parse_config_file(const char *config_path)
     char *current_key = NULL;
     char *current_jail_name = NULL;
 
+    /* Extract config file directory for resolving relative paths */
+    char config_dir[1024];
+    strncpy(config_dir, config_path, sizeof(config_dir) - 1);
+    config_dir[sizeof(config_dir) - 1] = '\0';
+    char *last_slash = strrchr(config_dir, '/');
+    if (last_slash) {
+        *last_slash = '\0';
+    } else {
+        strcpy(config_dir, ".");
+    }
+
     /* 获取配置锁 */
     pthread_mutex_lock(&config_mutex);
 
@@ -521,10 +532,17 @@ static int parse_config_file(const char *config_path)
                 } else if (strcmp(current_key, "permanent_db_path") == 0) {
                     if (strlen(value) > 0) {
                         if (cfg.permanent_db_path) free(cfg.permanent_db_path);
-                        cfg.permanent_db_path = strdup(value);
+                        /* Resolve relative path against config file directory */
+                        if (value[0] == '/') {
+                            cfg.permanent_db_path = strdup(value);
+                        } else {
+                            char full_path[1024];
+                            snprintf(full_path, sizeof(full_path), "%s/%s", config_dir, value);
+                            cfg.permanent_db_path = strdup(full_path);
+                        }
                         if (cfg.permanent_db_path) {
                             cfg.permanent_ban_enabled = 1;
-                            daemon_log_info("Default permanent_db_path set to: %s", value);
+                            daemon_log_info("Default permanent_db_path set to: %s", cfg.permanent_db_path);
                         }
                     }
                 } else if (strcmp(current_key, "permanent_ban_enabled") == 0) {
@@ -654,7 +672,14 @@ static int parse_config_file(const char *config_path)
                 } else if (strcmp(current_key, "permanent_db_path") == 0) {
                     if (strlen(value) > 0) {
                         if (cfg.permanent_db_path) free(cfg.permanent_db_path);
-                        cfg.permanent_db_path = strdup(value);
+                        /* Resolve relative path against config file directory */
+                        if (value[0] == '/') {
+                            cfg.permanent_db_path = strdup(value);
+                        } else {
+                            char full_path[1024];
+                            snprintf(full_path, sizeof(full_path), "%s/%s", config_dir, value);
+                            cfg.permanent_db_path = strdup(full_path);
+                        }
                         if (cfg.permanent_db_path) cfg.permanent_ban_enabled = 1;
                     }
                 } else if (strcmp(current_key, "permanent_ban_enabled") == 0) {
