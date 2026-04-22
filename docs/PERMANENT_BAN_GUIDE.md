@@ -13,7 +13,7 @@
 │                    守护进程启动                          │
 │  1. 初始化 SQLite 数据库 (sqlite-persistent.c)          │
 │  2. 从数据库加载所有活跃永久封禁                         │
-│  3. 批量写入内核模块 /proc/firewall/permanent_add_ban   │
+│  3. 批量写入内核模块 /proc/firewall/bans (IP 0)         │
 │  4. 内核标记 is_permanent = true (永不超时)              │
 └─────────────────────────────────────────────────────────┘
 
@@ -33,7 +33,7 @@
 |------|------|------|
 | SQLite 持久化模块 | `src/daemon/sqlite-persistent.c/h` | 数据库操作封装 |
 | 内核永久封禁函数 | `src/kernel-module/firewall.c` | `ban_ip_permanent()`, `unban_permanent_ip()`, `is_permanently_banned()` |
-| 内核 procfs 接口 | `/proc/firewall/permanent_add_ban`, `/proc/firewall/permanent_remove_ban` | 用户态交互 |
+| 内核 procfs 接口 | `/proc/firewall/bans`（写入 `IP 0` 表示永久封禁，`unban IP` 表示解封） | 用户态交互 |
 | 守护进程集成 | `src/daemon/firewall-daemon.c` | SQLite 初始化、启动加载、运行时同步 |
 | YAML 配置 | `config/default.yaml` | `permanent_db_path`, `permanent_ban_enabled` |
 
@@ -74,13 +74,13 @@ permanent_ban_enabled: true
 
 ```bash
 # 添加永久封禁
-echo "1.2.3.4" | sudo tee /proc/firewall/permanent_add_ban
+echo "1.2.3.4 0" | sudo tee /proc/firewall/bans
 
 # 移除永久封禁
-echo "1.2.3.4" | sudo tee /proc/firewall/permanent_remove_ban
+echo "unban 1.2.3.4" | sudo tee /proc/firewall/bans
 
 # 查看所有封禁 (包括临时和永久)
-cat /proc/firewall/ban_list
+cat /proc/firewall/bans
 ```
 
 ### 3. 通过守护进程 API (未来扩展)
@@ -203,7 +203,7 @@ permanent_ban_enabled: true
 
 ## 未来改进
 
-- [ ] 增加 `/proc/firewall/permanent_list` 仅显示永久封禁
+- [ ] 增加 `/proc/firewall/bans` 过滤选项，仅显示永久封禁（如 `cat /proc/firewall/bans --permanent`）
 - [ ] 守护进程 HTTP API 支持远程管理永久封禁
 - [ ] 数据库自动备份机制
 - [ ] 按原因分类统计封禁数据

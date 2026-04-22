@@ -63,7 +63,6 @@
 /* Procfs paths - unified bans interface */
 #define PROCFS_DIR "/proc/firewall"
 #define BANS_PATH PROCFS_DIR "/bans"
-#define BAN_LIST_PATH PROCFS_DIR "/ban_list"
 
 /* Default configuration */
 #define DEFAULT_MAX_RETRIES 3
@@ -2901,12 +2900,6 @@ int main(int argc, char *argv[])
     if (access(BANS_PATH, F_OK) != 0) {
         daemon_log_err("Bans procfs interface %s does not exist", BANS_PATH);
         fprintf(stderr, "Error: Bans procfs interface %s does not exist\n", BANS_PATH);
-        return EXIT_FAILURE;
-    }
-
-    if (access(BAN_LIST_PATH, F_OK) != 0) {
-        daemon_log_err("Ban list procfs interface %s does not exist", BAN_LIST_PATH);
-        fprintf(stderr, "Error: Ban list procfs interface %s does not exist\n", BAN_LIST_PATH);
         return EXIT_FAILURE;
     }
 

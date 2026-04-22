@@ -59,23 +59,30 @@ sudo rmmod firewall
 
 ```bash
 # 查看封禁列表
-cat /proc/firewall/ban_list
+cat /proc/firewall/bans
 
-# 手动封禁 IP
-echo "1.2.3.4" | sudo tee /proc/firewall/add_ban
+# 临时封禁 IP（使用默认 ban_time）
+echo "1.2.3.4" | sudo tee /proc/firewall/bans
 
-# 手动解封 IP
-echo "1.2.3.4" | sudo tee /proc/firewall/remove_ban
+# 自定义时长封禁
+echo "1.2.3.4 3600" | sudo tee /proc/firewall/bans    # 封禁 1 小时
+echo "1.2.3.4 86400" | sudo tee /proc/firewall/bans   # 封禁 1 天
+
+# 永久封禁（0 表示永久）
+echo "1.2.3.4 0" | sudo tee /proc/firewall/bans
+
+# 解封 IP
+echo "unban 1.2.3.4" | sudo tee /proc/firewall/bans
 
 # 查看白名单
 cat /proc/firewall/whitelist
 
 # 添加白名单（支持 IP 和子网）
-echo "10.0.0.0" | sudo tee /proc/firewall/whitelist_add
-echo "192.168.1.0/24" | sudo tee /proc/firewall/whitelist_add
+echo "10.0.0.0/8" | sudo tee /proc/firewall/whitelist
+echo "add 192.168.1.0/24" | sudo tee /proc/firewall/whitelist
 
 # 移除白名单
-echo "10.0.0.0" | sudo tee /proc/firewall/whitelist_remove
+echo "remove 10.0.0.0/8" | sudo tee /proc/firewall/whitelist
 
 # 运行时修改配置（目前仅支持 ban_time）
 echo "ban_time 1200" | sudo tee /proc/firewall/config
@@ -186,14 +193,10 @@ jails:
 
 | 路径 | 功能 |
 |------|------|
-| `/proc/firewall/ban_list` | 查看封禁列表 |
-| `/proc/firewall/add_ban` | 手动封禁 IP（写入） |
-| `/proc/firewall/remove_ban` | 手动解封 IP（写入） |
-| `/proc/firewall/whitelist` | 查看白名单 |
-| `/proc/firewall/whitelist_add` | 添加白名单（写入） |
-| `/proc/firewall/whitelist_remove` | 移除白名单（写入） |
+| `/proc/firewall/bans` | 查看封禁列表（读）；临时/自定义时长/永久封禁 IP（写 `IP` 或 `IP seconds`）；解封 IP（写 `unban IP`） |
+| `/proc/firewall/whitelist` | 查看白名单（读）；添加白名单（写 `CIDR` 或 `add CIDR`）；移除白名单（写 `remove CIDR`） |
 | `/proc/firewall/config` | 查看/修改运行时配置（读写） |
-| `/proc/firewall/settings` | 查看模块设置 |
+| `/proc/firewall/stats` | 查看统计信息（只读） |
 
 ## 日志系统
 

@@ -141,14 +141,14 @@ for i in $(seq 1 6); do
 done
 sleep 5
 
-if cat /proc/firewall/ban_list | grep -q "$TEST_IP"; then
+if cat /proc/firewall/bans | grep -q "$TEST_IP"; then
     echo "  ✅ SSH Jail 封禁正常: $TEST_IP 已被封禁"
 else
     echo "  ⚠️  SSH Jail 封禁未触发"
 fi
 
 # 清理测试 IP
-echo "$TEST_IP" | sudo tee /proc/firewall/remove_ban >/dev/null 2>&1
+echo "unban $TEST_IP" | sudo tee /proc/firewall/bans >/dev/null 2>&1
 EOF
 
 # 7. 清理本地临时文件
@@ -165,7 +165,7 @@ echo ""
 echo "远程管理命令:"
 echo "  查看状态: ssh $REMOTE_USER@$REMOTE_HOST 'systemctl status firewall-daemon'"
 echo "  查看日志: ssh $REMOTE_USER@$REMOTE_HOST 'journalctl -u firewall-daemon -f'"
-echo "  查看封禁: ssh $REMOTE_USER@$REMOTE_HOST 'cat /proc/firewall/ban_list'"
+echo "  查看封禁: ssh $REMOTE_USER@$REMOTE_HOST 'cat /proc/firewall/bans'"
 echo "  热重载:   ssh $REMOTE_USER@$REMOTE_HOST 'systemctl reload firewall-daemon'"
 echo "  查看指标: ssh $REMOTE_USER@$REMOTE_HOST 'curl http://localhost:9119/metrics'"
 echo ""
