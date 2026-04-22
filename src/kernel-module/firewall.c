@@ -197,9 +197,13 @@ bool is_in_whitelist(struct firewall_info *fw, __be32 ip)
     FW_DEBUG(3, "ENTRY: is_in_whitelist(ip=%pI4)", &ip);
 
     rcu_read_lock();
-    /* Check ALL entries in the whitelist table to properly handle subnet matching */
+    /* Check ALL entries in the whitelist table to properly handle subnet matching.
+     * NOTE: This is O(n) because different prefix lengths can hash to different buckets.
+     * For the common case of /32 entries, we could use hash_for_each_possible_rcu(),
+     * but subnets require full traversal. With MAX_WHITELIST_ENTRIES=64, this is acceptable.
+     */
     hash_for_each_rcu(fw->whitelist_table, hash, entry, hash) {
-        // Subnet matching logic: check if IP falls within subnet range
+        /* Subnet matching logic: check if IP falls within subnet range */
         if ((ip & entry->mask) == (entry->ip & entry->mask)) {
             rcu_read_unlock();
             FW_DEBUG(2, "EXIT: is_in_whitelist -> true (matched subnet)");

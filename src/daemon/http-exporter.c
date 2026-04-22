@@ -177,13 +177,16 @@ static int generate_metrics(char *buf, size_t buf_size)
     time_t uptime;
 
     /* Read kernel stats from procfs - use /proc/firewall/stats for accurate current_bans count */
-    read_procfs_int("/proc/firewall/stats", &kernel_current_bans);
+    /* Note: read_procfs_int returns -1 on failure, we keep default 0 but log warning */
+    if (read_procfs_int("/proc/firewall/stats", &kernel_current_bans) < 0) {
+        /* Kernel module may not be loaded or stats file unavailable */
+        kernel_banned = 0;
+    } else {
+        kernel_banned = kernel_current_bans;
+    }
     read_procfs_int("/proc/firewall/ban_count", &kernel_total_bans);
     read_procfs_int("/proc/firewall/unban_count", &kernel_total_unbans);
     read_procfs_int("/proc/firewall/whitelist_count", &kernel_whitelist_count);
-
-    /* Use the accurate current_bans value from stats */
-    kernel_banned = kernel_current_bans;
 
     /* Read daemon stats */
     unsigned long d_lines_parsed = atomic_load(&daemon_stats.lines_parsed);

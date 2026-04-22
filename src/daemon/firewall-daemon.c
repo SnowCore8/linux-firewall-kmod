@@ -324,7 +324,16 @@ struct daemon_stats {
     time_t start_time;
 } daemon_stats;
 
-/* Cleanup all jail resources before config reload */
+/* Cleanup all jail resources before config reload
+ *
+ * NOTE: failed_table and failed_hash_table share the same objects.
+ * failed_table is the head of a linked list, while failed_hash_table
+ * contains pointers to the same objects for O(1) lookup.
+ * We iterate failed_table to free all objects exactly once, then
+ * zero out failed_hash_table (which only contains dangling pointers
+ * after the frees, but no ownership).
+ * This is safe as long as we always add the same object to both structures.
+ */
 static void cleanup_all_jails(void)
 {
     for (int i = 0; i < cfg.jail_count; i++) {
@@ -345,7 +354,10 @@ static void cleanup_all_jails(void)
         }
         j->log_count = 0;
 
-        /* Free failed attempt entries */
+        /* Free failed attempt entries.
+         * NOTE: failed_table and failed_hash_table share the same objects.
+         * We free via the linked list (failed_table) to avoid double-free.
+         */
         struct failed_entry *entry = j->failed_table;
         while (entry) {
             struct failed_entry *next = entry->next;
@@ -353,6 +365,7 @@ static void cleanup_all_jails(void)
             entry = next;
         }
         j->failed_table = NULL;
+        /* Zero out hash table - contains dangling pointers after frees above */
         memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
 
         /* Clear jail struct */
