@@ -10,7 +10,7 @@ assert_success "grep -q 'enabled: true' '$CONFIG_DIR/default.yaml'" "FRP Jail �
 
 # 13.2 验证 FRP 日志文件配置
 fw_subsection "FRP 日志文件配置"
-assert_success "grep -q '/root/frp/frp.log' '$CONFIG_DIR/default.yaml'" "frp.log 路径配置"
+assert_success "grep -q '/var/log/frp/frp.log' '$CONFIG_DIR/default.yaml'" "frp.log 路径配置"
 
 # 13.3 验证 FRP 参数配置
 fw_subsection "FRP 参数配置"

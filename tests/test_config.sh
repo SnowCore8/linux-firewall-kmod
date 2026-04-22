@@ -19,6 +19,9 @@ PROC_BAN_LIST="$PROC_DIR/ban_list"
 PROC_WHITELIST="$PROC_DIR/whitelist"
 PROC_WHITELIST_ADD="$PROC_DIR/whitelist_add"
 PROC_WHITELIST_REMOVE="$PROC_DIR/whitelist_remove"
+PROC_PERMANENT_ADD_BAN="$PROC_DIR/permanent_add_ban"
+PROC_PERMANENT_REMOVE_BAN="$PROC_DIR/permanent_remove_ban"
+PROC_STATS="$PROC_DIR/stats"
 PROC_CONFIG="$PROC_DIR/config"
 
 # ============================================================================

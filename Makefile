@@ -69,6 +69,15 @@ debug3:
 	$(MAKE) -C $(PWD) kernel-module DEBUG_LEVEL=3
 	$(MAKE) -C $(PWD) daemon
 
+# ASAN (AddressSanitizer) build for memory leak detection
+asan: $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC)
+	@mkdir -p $(DAEMON_BUILD_DIR)
+	$(CC) $(SECURITY_CFLAGS) -fsanitize=address -fno-omit-frame-pointer -g -O1 \
+		-Wno-unused-function -o $(DAEMON_BUILD_DIR)/firewall-daemon-asan \
+		$(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC) -lpthread -lyaml -lsqlite3 -lasan
+	@echo "ASAN build completed: $(DAEMON_BUILD_DIR)/firewall-daemon-asan"
+	@echo "Run with: ASAN_OPTIONS=detect_leaks=1 $(DAEMON_BUILD_DIR)/firewall-daemon-asan"
+
 # Run comprehensive test suite
 test: $(KERNEL_MODULE) $(DAEMON_BIN)
 	sudo ./tests/run_tests.sh
@@ -128,4 +137,4 @@ uninstall:
 	-systemctl daemon-reload 2>/dev/null || true
 	@echo "All firewall components removed."
 
-.PHONY: kernel-module daemon all-with-daemon all debug1 debug2 debug3 test test-performance clean install uninstall
+.PHONY: kernel-module daemon all-with-daemon all debug1 debug2 debug3 asan test test-performance clean install uninstall

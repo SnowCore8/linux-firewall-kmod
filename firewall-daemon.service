@@ -9,6 +9,7 @@ ExecStart=/usr/local/bin/firewall-daemon -C /etc/firewall/config --daemonize
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
+TimeoutStartSec=30
 
 # Security Hardening
 NoNewPrivileges=yes

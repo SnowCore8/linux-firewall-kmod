@@ -1375,36 +1375,51 @@ static void remove_entry_for_jail(struct jail *j, const char *ip)
 
 static struct failed_entry *find_entry(const char *ip)
 {
+    pthread_mutex_lock(&config_mutex);
+    
+    struct failed_entry *result = NULL;
     for (int j = 0; j < cfg.jail_count; j++) {
         struct failed_entry *entry = find_entry_for_jail(&cfg.jails[j], ip);
         if (entry) {
-            return entry;
+            result = entry;
+            break;
         }
     }
-    return NULL;
+    
+    pthread_mutex_unlock(&config_mutex);
+    return result;
 }
 
 /* Create new failed entry - creates in first jail (default behavior) */
 
 static struct failed_entry *create_entry(const char *ip)
 {
+    pthread_mutex_lock(&config_mutex);
+    
+    struct failed_entry *result = NULL;
     if (cfg.jail_count > 0) {
-        return create_entry_for_jail(&cfg.jails[0], ip);
+        result = create_entry_for_jail(&cfg.jails[0], ip);
     }
-    return NULL;
+    
+    pthread_mutex_unlock(&config_mutex);
+    return result;
 }
 
 /* Remove failed entry - searches all jails */
 
 static void remove_entry(const char *ip)
 {
+    pthread_mutex_lock(&config_mutex);
+    
     for (int j = 0; j < cfg.jail_count; j++) {
         struct failed_entry *entry = find_entry_for_jail(&cfg.jails[j], ip);
         if (entry) {
             remove_entry_for_jail(&cfg.jails[j], ip);
-            return;
+            break;
         }
     }
+    
+    pthread_mutex_unlock(&config_mutex);
 }
 
 
@@ -1589,8 +1604,8 @@ static int secure_procfs_write(const char *path, const char *data, size_t data_l
     while (total_written < data_len) {
         written = write(fd, data + total_written, data_len - total_written);
         if (written < 0) {
-            if (errno == EINTR) {
-                continue;  // Interrupted, try again
+            if (errno == EINTR || errno == EAGAIN) {
+                continue;  // Interrupted or resource temporarily unavailable, try again
             } else {
                 daemon_log_err("Failed to write to %s: %s", path, strerror(errno));
                 close(fd);
@@ -2139,13 +2154,15 @@ static void process_new_lines(int idx)
     /* Read and process data in chunks */
     current_offset = file_states[idx].offset;
 
+    /* Move allocations outside the loop for easier cleanup */
+    char *local_partial = NULL;
+    char *combined = NULL;
+
     while ((bytes_read = read(fd, buffer, sizeof(buffer) - 1)) > 0) {
         buffer[bytes_read] = '\0';  /* Ensure null termination for safety */
 
         /* Use heap allocation instead of stack allocation for partial line data */
         size_t partial_len = 0;
-        char *local_partial = NULL;
-        char *combined = NULL;
 
         /* Copy partial line data under lock */
         pthread_mutex_lock(&partial_line_mutex);
@@ -2219,14 +2236,26 @@ static void process_new_lines(int idx)
         /* Prevent integer overflow when updating offset */
         if (current_offset > SSIZE_MAX - bytes_read) {
             daemon_log_err("Integer overflow in file offset calculation");
+            /* Free allocated memory before exiting loop */
+            free(local_partial);
+            free(combined);
             ret = -1;
             goto cleanup;
         }
         current_offset += bytes_read;
+        
+        /* Free any remaining allocations for next iteration */
+        free(local_partial);
+        local_partial = NULL;
+        free(combined);
+        combined = NULL;
     }
 
     if (bytes_read < 0) {
         daemon_log_warn("Read error in %s: %s", log_path, strerror(errno));
+        /* Free allocated memory before cleanup */
+        free(local_partial);
+        free(combined);
         ret = -1;
         goto cleanup;
     }

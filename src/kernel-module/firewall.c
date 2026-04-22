@@ -218,11 +218,14 @@ bool is_in_whitelist(struct firewall_info *fw, __be32 ip)
 /* Module parameters (non-static, accessible from procfs) */
 unsigned int fw_ban_time = DEFAULT_BAN_TIME;
 char *state_file = "/var/lib/firewall/state";
+unsigned int fw_max_bans_per_second = 200;
 
 module_param(fw_ban_time, uint, 0644);
 MODULE_PARM_DESC(fw_ban_time, "Ban duration in seconds (default 600)");
 module_param(state_file, charp, 0644);
 MODULE_PARM_DESC(state_file, "Path to state file for saving/restoring ban and whitelist entries (default /var/lib/firewall/state)");
+module_param(fw_max_bans_per_second, uint, 0644);
+MODULE_PARM_DESC(fw_max_bans_per_second, "Maximum number of ban additions per second for flood protection (default 200)");
 
 /* Global firewall info - made static to prevent external access */
 static struct firewall_info fw_info;
@@ -1158,12 +1161,13 @@ static ssize_t permanent_remove_ban_write(struct file *file, const char __user *
 
 /*
  * check_flood_protection - Check if adding this entry would exceed flood limits
- * Current policy: Max 200 additions per second (increased from 50 for better testability)
+ * Uses configurable fw_max_bans_per_second module parameter
  */
 static int check_flood_protection(void)
 {
     unsigned long now = jiffies;
     unsigned long one_second = HZ;  // One second in jiffies
+    unsigned int max_bans;
 
     spin_lock(&fw_info.flood_lock);
 
@@ -1175,8 +1179,11 @@ static int check_flood_protection(void)
         // Increment addition counter
         fw_info.recent_additions++;
 
-        // Check if we've exceeded the limit (e.g., 200 additions per second)
-        if (fw_info.recent_additions > 200) {
+        // Use READ_ONCE to atomically read the configurable limit
+        max_bans = READ_ONCE(fw_max_bans_per_second);
+        
+        // Check if we've exceeded the configured limit
+        if (fw_info.recent_additions > max_bans) {
             spin_unlock(&fw_info.flood_lock);
             return -EBUSY;  // Too many additions in the time window
         }

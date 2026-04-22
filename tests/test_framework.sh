@@ -163,6 +163,14 @@ assert_file_contains() {
     assert_true "grep -q \"$pattern\" \"$file\" 2>/dev/null" "$msg"
 }
 
+# 断言：字符串包含内容
+assert_contains() {
+    local string="$1"
+    local pattern="$2"
+    local msg="${3:-字符串不包含 '$pattern'}"
+    assert_true "[[ \"\$string\" == *\"\$pattern\"* ]]" "$msg"
+}
+
 # 断言：字符串相等
 assert_eq() {
     local actual="$1"

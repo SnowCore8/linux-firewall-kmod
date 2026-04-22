@@ -14,6 +14,9 @@ assert_file_exists "$PROC_BAN_LIST" "ban_list 接口存在"
 assert_file_exists "$PROC_WHITELIST" "whitelist 接口存在"
 assert_file_exists "$PROC_WHITELIST_ADD" "whitelist_add 接口存在"
 assert_file_exists "$PROC_WHITELIST_REMOVE" "whitelist_remove 接口存在"
+assert_file_exists "$PROC_PERMANENT_ADD_BAN" "permanent_add_ban 接口存在"
+assert_file_exists "$PROC_PERMANENT_REMOVE_BAN" "permanent_remove_ban 接口存在"
+assert_file_exists "$PROC_STATS" "stats 接口存在"
 
 # 2.2 读写权限
 fw_subsection "接口权限检查"
@@ -28,6 +31,22 @@ assert_true "[[ -w '$PROC_WHITELIST_REMOVE' ]]" "whitelist_remove 可写"
 fw_subsection "空操作测试"
 assert_failure "echo '' > '$PROC_ADD_BAN' 2>&1" "空输入被封禁接口拒绝"
 assert_failure "echo '   ' > '$PROC_ADD_BAN' 2>&1" "空白输入被封禁接口拒绝"
+
+# 2.4 统计信息接口
+fw_subsection "统计信息接口"
+assert_true "[[ -r '$PROC_STATS' ]]" "stats 接口可读"
+stats_output=$(cat "$PROC_STATS" 2>&1)
+assert_success "cat '$PROC_STATS'" "读取统计信息成功"
+assert_contains "$stats_output" "current_bans" "统计信息包含 current_bans"
+assert_contains "$stats_output" "current_whitelist" "统计信息包含 current_whitelist"
+
+# 2.5 配置接口
+fw_subsection "配置接口"
+assert_true "[[ -r '$PROC_CONFIG' ]]" "config 接口可读"
+assert_true "[[ -w '$PROC_CONFIG' ]]" "config 接口可写"
+config_output=$(cat "$PROC_CONFIG" 2>&1)
+assert_success "cat '$PROC_CONFIG'" "读取配置成功"
+assert_contains "$config_output" "ban_time" "配置包含 ban_time 字段"
 
 # 清理
 fw_ensure_module_unloaded

@@ -16,7 +16,7 @@ ESSENTIAL_FILES=(
     "src/daemon/firewall-daemon.c"
     "Makefile"
     "docs/DOCUMENTATION.md"
-    "tests/test_firewall.sh"
+    "tests/run_tests.sh"
 )
 
 echo "Checking essential files..."
@@ -72,4 +72,4 @@ fi
 echo "Project verification completed successfully!"
 echo ""
 echo "To run the full test suite, execute:"
-echo "sudo ./tests/test_firewall.sh"
+echo "sudo ./tests/run_tests.sh"
