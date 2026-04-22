@@ -1,12 +1,13 @@
 # Firewall
 
-**版本**: v1.4（哈希表优化 + 正则解析 + 扩大容量）
+**版本**: v1.6（Jail 系统 + 安全加固）
 
 Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁防护。它将 fail2ban 的核心功能从用户空间移动到内核空间，使用 netfilter 框架在数据包级别进行封禁，具有更低的延迟和更高的性能。
 
 ## 特性
 
 - ✅ 内核态 IP 封禁（netfilter hooks，比 iptables 用户态规则更高效）
+- ✅ **Jail 系统** - 类似 fail2ban 的多服务隔离配置
 - ✅ 哈希表存储封禁 IP（1024 容量，O(1) 查找）
 - ✅ 自动过期清理机制
 - ✅ IP 白名单保护（自动发现系统 IP + 手动添加，64 容量）
@@ -14,12 +15,14 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁
 - ✅ 可配置的封禁持续时间
 - ✅ 纯 IPv4 支持
 - ✅ C 语言用户态守护进程（无 Python 依赖）
-  - 可配置的失败次数和时间窗口（max_retries / findtime）
+  - Jail 级别独立配置（max_retries / findtime / ban_time）
 - ✅ POSIX 正则表达式日志解析（减少误判 90%+）
 - ✅ 统一分级日志系统（fw_pr_err/warn/info/debug）
 - ✅ RCU 并发安全 + spinlock 保护
 - ✅ 状态持久化（保存/恢复封禁和白名单）
 - ✅ 输入验证和边界检查
+- ✅ 安全编译选项（-fstack-protector-strong, -D_FORTIFY_SOURCE=2, PIE）
+- ✅ systemd 安全加固（NoNewPrivileges, ProtectSystem=strict 等）
 
 ## 快速开始
 
@@ -116,20 +119,17 @@ sudo ./build/daemon/firewall-daemon -l /var/log/auth.log -m 3 -f 600 -b 600
 
 ### 配置文件
 
-守护进程支持 YAML 配置文件，可以使用单个或多个配置文件：
+守护进程支持 YAML 配置文件，使用 Jail 系统实现多服务隔离：
 
-**方式一：使用配置目录（推荐）**
+**配置目录（推荐）**
 
 默认情况下，守护进程会自动加载 `./config/` 或 `/etc/firewall/config/` 目录下的所有 `.yaml` / `.yml` 文件：
 
 ```
 config/
-├── default.yaml          # 默认配置
-├── frps.yaml             # frps 保护配置
-└── custom.yaml           # 其他自定义配置
+├── default.yaml          # 默认配置（sshd 防护）
+└── custom.yaml           # 其他自定义 jail
 ```
-
-文件按字母顺序加载，后面的配置会覆盖前面的（标量值），数组会追加合并。
 
 ```bash
 # 自动加载默认目录
@@ -139,50 +139,48 @@ sudo ./build/daemon/firewall-daemon
 sudo ./build/daemon/firewall-daemon -C /etc/firewall/config/
 ```
 
-**方式二：使用单个配置文件**
+**单个配置文件**
 
 ```bash
-sudo ./build/daemon/firewall-daemon -c config/frps.yaml
+sudo ./build/daemon/firewall-daemon -c config/default.yaml
 ```
 
-示例配置文件 (`config/default.yaml`)：
+**新 Jail 配置格式**：
 
 ```yaml
-# firewall daemon configuration file
+# 全局默认值（所有 jail 共享）
+defaults:
+  max_retries: 5
+  findtime: 600
+  ban_time: 900
+  interval: 1
+  metrics_port: 9119
 
-# Max failed attempts before banning an IP
-max_retries: 5
+# Jail 定义（每个服务独立监控）
+jails:
+  sshd:
+    enabled: true
+    log_files:
+      - /var/log/auth.log
+      - /var/log/secure
+    max_retries: 5        # 覆盖 defaults
+    findtime: 600         # 覆盖 defaults
+    ban_time: 900         # 覆盖 defaults
+    regex: ""             # 空字符串使用内置 sshd 模式
 
-# Time window for counting failed attempts (in seconds)
-findtime: 600
-
-# Ban duration (in seconds)
-ban_time: 900
-
-# Check interval (in seconds)
-interval: 1
-
-# Whether to daemonize (true/false)
-daemonize: false
-
-# Log files to monitor
-log_files:
-  - /var/log/auth.log
-  - /var/log/secure
-  - /var/log/vsftpd.log
-  - /var/log/nginx/error.log
-
-# Prometheus metrics exporter port (0 to disable)
-metrics_port: 9119
-
-# Log parsing regex patterns (POSIX Extended regex)
-# Leave empty to use built-in defaults
-regex_patterns:
-  sshd: ""
-  vsftpd: ""
-  nginx: ""
-  frp: ""
+  # 可以添加更多 jail...
+  # nginx:
+  #   enabled: true
+  #   log_files: [/var/log/nginx/error.log]
+  #   max_retries: 3
+  #   ban_time: 3600
 ```
+
+**关键特性**：
+- 每个 Jail 独立监控自己的日志文件
+- 每个 Jail 有独立的失败计数器和封禁阈值
+- 多配置文件可定义不同的 Jail，不会互相覆盖
+- Jail 未指定的参数使用 `defaults` 中的全局默认值
 
 ### procfs 接口
 
@@ -258,7 +256,7 @@ sudo ./tests/run_tests.sh --report
 make test-legacy
 ```
 
-**测试结果**: 93+ 通过，0 失败
+**测试结果**: 94 项测试全部通过
 
 ### 测试覆盖
 
@@ -270,7 +268,7 @@ make test-legacy
 - 安全测试（注入防护、权限检查）
 - 并发访问安全
 - 压力/性能测试
-- YAML 配置目录加载
+- Jail 配置加载和目录加载
 - 日志解析功能
 - 资源管理和内存安全
 
@@ -280,20 +278,20 @@ make test-legacy
 firewall/
 ├── src/
 │   ├── kernel-module/
-│   │   ├── firewall.c          # 内核模块主源码（~1880 行）
+│   │   ├── firewall.c          # 内核模块主源码（~2300 行）
 │   │   └── firewall.h          # 头文件（含统一日志系统）
 │   └── daemon/
-│       ├── firewall-daemon.c   # 守护进程主源码（~2600 行）
-│       └── http-exporter.c     # Prometheus 指标导出器
+│       ├── firewall-daemon.c   # 守护进程主源码（~3000 行，Jail 系统）
+│       ├── http-exporter.c     # Prometheus 指标导出器
+│       └── sqlite-persistent.c # SQLite 永久封禁持久化
 ├── tests/
-│   ├── run_tests.sh            # 统一测试入口（95+ 项测试）
+│   ├── run_tests.sh            # 统一测试入口（94 项测试）
 │   ├── test_framework.sh       # 测试框架核心
 │   ├── test_config.sh          # 测试配置
 │   ├── suites/                 # 11 个测试套件
 │   └── reports/                # 测试报告
 ├── config/                     # YAML 配置文件目录
-│   ├── default.yaml            # 默认配置
-│   └── frps.yaml               # frps 保护配置
+│   └── default.yaml            # 默认配置（sshd jail）
 ├── docs/
 │   └── DOCUMENTATION.md        # 详细技术文档
 ├── scripts/

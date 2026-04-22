@@ -2,6 +2,50 @@
 
 所有重要的项目变更记录都在此文件中。
 
+## [v1.6] - 2026-04-22
+
+### 新增
+- **Jail 系统** - 类似 fail2ban 的多服务隔离配置
+  - 每个 Jail 独立监控日志文件
+  - 每个 Jail 有独立的失败计数器和封禁阈值
+  - 支持最多 16 个 Jail，每个最多 10 个日志文件
+  - 新 YAML 配置格式：`defaults:` + `jails:` 结构
+  - 多配置文件可定义不同的 Jail，不会互相覆盖
+- **安全加固**
+  - 安全编译选项（-fstack-protector-strong, -D_FORTIFY_SOURCE=2, PIE）
+  - systemd 服务安全加固（NoNewPrivileges=yes, ProtectSystem=strict 等 14 项）
+  - 内核态 TOCTOU 竞态修复（O_NOFOLLOW + inode 一致性检查）
+  - 正则匹配边界检查（防止越界读取）
+  - 永久 ban 容量检查（防止拒绝服务）
+- **配置热重载** - SIGHUP 信号触发完整配置重载
+  - 自动清理旧 Jail 资源
+  - 重新解析配置并重新设置 inotify 监控
+- **SQLite 批量事务支持** - `sqlite_add_permanent_bans_batch()` 提升批量导入性能
+- **HTTP exporter 改进** - 准确的 current_bans 指标（从 /proc/firewall/stats 读取）
+- **代码质量**
+  - 全局变量 `fw_info` 改为 static，通过 `get_fw_info()` 导出受控访问
+  - 移除 vsftpd/nginx/frp 服务支持（仅保留 sshd）
+  - 移除旧格式配置兼容，要求显式 `jails:` 配置
+  - 零编译警告
+
+### 改进
+- 配置解析使用 `strsep` 替代 `sscanf`（更健壮的参数解析）
+- 配置目录加载使用 `qsort` 替代冒泡排序（O(n log n) + 50 文件限制）
+- `process_new_lines()` 加锁保护 Jail 配置访问（防止并发竞态）
+- 正则捕获组动态检测（支持自定义正则，不再硬编码索引）
+- `extract_ipv4()` 添加单词边界检查（防止误匹配如 1.2.3.4.5）
+
+### 修复
+- TOCTOU 变量遮蔽问题（`save_state_to_file()` 中 `saved_dev`/`saved_ino`）
+- 配置重载内存泄漏（添加 `cleanup_all_jails()` 释放旧资源）
+- HTTP exporter 错误处理（检查 `read_procfs_int()` 返回值）
+- 所有 94 项测试通过
+
+### 变更
+- 配置文件格式：从旧格式迁移到 Jail 格式
+- 移除 `config/frps.yaml`（frp 支持已移除）
+- `-l` 参数标记为废弃（提示使用 Jail 配置）
+
 ## [v1.5] - 2026-04-21
 
 ### 新增
