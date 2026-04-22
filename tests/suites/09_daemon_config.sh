@@ -12,7 +12,6 @@ assert_success "'$DAEMON_PATH' --help > /dev/null 2>&1" "--help 正常"
 fw_subsection "YAML 配置文件检查"
 assert_dir_exists "$CONFIG_DIR" "config/ 目录存在"
 assert_file_exists "$CONFIG_DIR/default.yaml" "default.yaml 存在"
-assert_file_exists "$CONFIG_DIR/frps.yaml" "frps.yaml 存在"
 
 # 9.3 默认配置目录加载
 fw_subsection "默认配置目录加载"
@@ -23,20 +22,21 @@ fw_subsection "指定配置目录 (-C)"
 # 创建临时测试配置目录
 local_test_config_dir="/tmp/fw_test_config_$$"
 mkdir -p "$local_test_config_dir"
-cat > "$local_test_config_dir/test1.yaml" << EOF
-max_retries: 7
-findtime: 120
-ban_time: 300
-interval: 2
-daemonize: false
-metrics_port: 9130
-log_files:
-  - /var/log/auth.log
-regex_patterns:
-  sshd: ""
-  vsftpd: ""
-  nginx: ""
-  frp: ""
+cat > "$local_test_config_dir/test1.yaml" << 'EOF'
+defaults:
+  max_retries: 7
+  findtime: 120
+  ban_time: 300
+  interval: 2
+  metrics_port: 9130
+
+jails:
+  sshd:
+    enabled: true
+    log_files:
+      - /var/log/auth.log
+    max_retries: 7
+    regex: ""
 EOF
 
 assert_success "timeout 2 '$DAEMON_PATH' -C '$local_test_config_dir' --help > /dev/null 2>&1" "指定配置目录加载"
