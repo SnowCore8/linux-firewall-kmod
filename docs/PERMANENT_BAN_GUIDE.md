@@ -170,23 +170,23 @@ Makefile 已更新，自动链接 `-lsqlite3`。
 ### 完整配置 (default.yaml)
 
 ```yaml
-max_retries: 5
-findtime: 600
-ban_time: 900
-interval: 1
-daemonize: false
+defaults:
+  max_retries: 5
+  findtime: 600
+  ban_time: 900
+  interval: 1
+  metrics_port: 9119
 
-log_files:
-  - /var/log/auth.log
-  - /var/log/secure
-
-metrics_port: 9119
-
-regex_patterns:
-  sshd: ""
-  vsftpd: ""
-  nginx: ""
-  frp: ""
+jails:
+  sshd:
+    enabled: true
+    log_files:
+      - /var/log/auth.log
+      - /var/log/secure
+    max_retries: 5
+    findtime: 600
+    ban_time: 900
+    regex: ""
 
 # 永久黑名单配置
 permanent_db_path: "/var/lib/firewall/permanent_bans.db"

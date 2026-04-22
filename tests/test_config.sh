@@ -62,35 +62,41 @@ CONCURRENT_TEST_COUNT=20
 # 守护进程配置测试用 YAML 内容
 # ============================================================================
 TEST_YAML_CONTENT_DEFAULT='
-max_retries: 5
-findtime: 600
-ban_time: 900
-interval: 1
-daemonize: false
-metrics_port: 9119
-log_files:
-  - /var/log/auth.log
-regex_patterns:
-  sshd: ""
-  vsftpd: ""
-  nginx: ""
-  frp: ""
+defaults:
+  max_retries: 5
+  findtime: 600
+  ban_time: 900
+  interval: 1
+  metrics_port: 9119
+
+jails:
+  sshd:
+    enabled: true
+    log_files:
+      - /var/log/auth.log
+    max_retries: 5
+    findtime: 600
+    ban_time: 900
+    regex: ""
 '
 
 TEST_YAML_CONTENT_FRPS='
-max_retries: 10
-findtime: 300
-ban_time: 3600
-interval: 2
-daemonize: true
-metrics_port: 9120
-log_files:
-  - /tmp/fw_test_frps.log
-regex_patterns:
-  sshd: ""
-  vsftpd: ""
-  nginx: ""
-  frp: ""
+defaults:
+  max_retries: 10
+  findtime: 300
+  ban_time: 3600
+  interval: 2
+  metrics_port: 9120
+
+jails:
+  sshd:
+    enabled: true
+    log_files:
+      - /tmp/fw_test_frps.log
+    max_retries: 10
+    findtime: 300
+    ban_time: 3600
+    regex: ""
 '
 
 # ============================================================================

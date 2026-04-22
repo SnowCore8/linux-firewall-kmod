@@ -832,13 +832,13 @@ static int ban_list_show(struct seq_file *m, void *v)
     unsigned long now = jiffies;
     char ip_str[INET_ADDRSTRLEN];
     int count = 0;
+    int temporary_count = 0;
+    int permanent_count = 0;
 
     FW_DEBUG(3, "ENTRY: ban_list_show");
 
     seq_printf(m, "Current banned IPs:\n");
     seq_printf(m, "-------------------\n");
-
-    int permanent_count = 0;
 
     rcu_read_lock();
     hash_for_each_rcu(fw->ban_table, hash, entry, hash) {
@@ -846,14 +846,15 @@ static int ban_list_show(struct seq_file *m, void *v)
         if (entry->is_permanent) {
             ipv4_to_str(entry->ip, ip_str, sizeof(ip_str));
             seq_printf(m, "%-40s (PERMANENT)\n", ip_str);
-            count++;
             permanent_count++;
+            count++;
         } else if (!time_after(now, entry->unban_time)) {
             /* Temporary ban - check expiration */
             ipv4_to_str(entry->ip, ip_str, sizeof(ip_str));
             seq_printf(m, "%-40s (expires in %lus)\n",
                        ip_str,
                        (entry->unban_time - now) / HZ);
+            temporary_count++;
             count++;
         }
     }
@@ -861,7 +862,7 @@ static int ban_list_show(struct seq_file *m, void *v)
 
     seq_printf(m, "-------------------\n");
     seq_printf(m, "Total: %d active bans (%d permanent, %d temporary)\n",
-               atomic_read(&fw->ban_count), permanent_count, count - permanent_count);
+               count, permanent_count, temporary_count);
     FW_DEBUG(3, "EXIT: ban_list_show -> 0 (shown=%d)", count);
     return 0;
 }

@@ -2141,6 +2141,7 @@ static void process_new_lines(int idx)
             if (!combined) {
                 daemon_log_err("Out of memory allocating combined buffer");
                 free(local_partial);
+                local_partial = NULL;
                 /* Discard partial data, process new data directly */
                 size_t consumed = 0;
                 process_lines_in_buffer(j, buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);
@@ -2155,6 +2156,7 @@ static void process_new_lines(int idx)
             memcpy(combined + partial_len, buffer, bytes_read);
             combined[partial_len + (size_t)bytes_read] = '\0';
             free(local_partial);
+            local_partial = NULL;  /* Prevent double-free */
 
             size_t total_len = partial_len + (size_t)bytes_read;
 
@@ -2173,9 +2175,13 @@ static void process_new_lines(int idx)
             }
 
             free(combined);
+            combined = NULL;  /* Prevent double-free */
         } else {
             /* No partial line - process buffer directly */
-            if (local_partial) free(local_partial);
+            if (local_partial) {
+                free(local_partial);
+                local_partial = NULL;
+            }
 
             size_t consumed = 0;
             process_lines_in_buffer(j, buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);

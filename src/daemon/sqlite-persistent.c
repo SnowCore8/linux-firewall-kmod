@@ -317,7 +317,7 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db,
     if (rc != SQLITE_OK) {
         fprintf(stderr, "firewall: Failed to commit transaction: %s\n",
                 sqlite3_errmsg(db->conn));
-        sqlite3_exec(db->conn, "ROLLBACK;", NULL, NULL, NULL);
+        /* COMMIT 失败后事务已自动回滚，无需显式 ROLLBACK */
         return -1;
     }
 
