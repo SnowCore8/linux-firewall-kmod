@@ -21,8 +21,17 @@ jails:
     ban_time: 900
     regex: ""  # Empty string uses built-in sshd pattern
 
+  frp:
+    enabled: true
+    log_files:
+      - /root/frp/frp.log
+    max_retries: 10
+    findtime: 300
+    ban_time: 1800
+    regex: ""  # Empty string uses built-in frp pattern
+
 # Permanent ban configuration (SQLite-based persistence)
 # Path to SQLite database file for permanent bans (empty = disabled)
-permanent_db_path: ""
+permanent_db_path: "bans.db"
 # Whether to enable permanent bans (true/false)
-permanent_ban_enabled: false
+permanent_ban_enabled: true

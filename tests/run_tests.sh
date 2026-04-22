@@ -123,6 +123,8 @@ declare -A SUITE_FILES=(
     ["09_daemon_config"]="suites/09_daemon_config.sh"
     ["10_daemon_logparse"]="suites/10_daemon_logparse.sh"
     ["11_resource_mgmt"]="suites/11_resource_mgmt.sh"
+    ["12_permanent_ban"]="suites/12_permanent_ban.sh"
+    ["13_frp_jail"]="suites/13_frp_jail.sh"
 )
 
 declare -A SUITE_CATEGORIES=(
@@ -137,6 +139,8 @@ declare -A SUITE_CATEGORIES=(
     ["09_daemon_config"]="daemon config"
     ["10_daemon_logparse"]="daemon logparse"
     ["11_resource_mgmt"]="resource"
+    ["12_permanent_ban"]="permanent ban"
+    ["13_frp_jail"]="daemon frp"
 )
 
 # ============================================================================
