@@ -587,7 +587,6 @@ static int parse_config_file(const char *config_path)
                 }
             } else if (current_key) {
                 /* Top-level key-value pair (not in jails or defaults) */
-                /* This handles backward compatibility for old-style configs */
                 if (strcmp(current_key, "max_retries") == 0) {
                     char *endptr;
                     errno = 0;
@@ -638,8 +637,8 @@ static int parse_config_file(const char *config_path)
                     }
                 } else if (strcmp(current_key, "permanent_ban_enabled") == 0) {
                     cfg.permanent_ban_enabled = (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "1") == 0);
-                } else if (strcmp(current_key, "log_files") == 0) {
-                    /* This will be handled by sequence start */
+                } else {
+                    daemon_log_warn("Ignoring unsupported top-level key: %s (jail format required)", current_key);
                 }
                 free(current_key);
                 current_key = NULL;
@@ -1110,32 +1109,7 @@ static int parse_config(int argc, char *argv[])
             }
             break;
         case 'l':
-            /* Create or use default jail for command-line log files */
-            {
-                struct jail *default_jail = find_or_create_jail("default");
-                if (!default_jail) {
-                    fprintf(stderr, "Error: failed to create default jail\n");
-                    return -1;
-                }
-
-                if (default_jail->log_count >= MAX_LOG_FILES) {
-                    fprintf(stderr, "Error: too many log files (max %d)\n", MAX_LOG_FILES);
-                    return -1;
-                }
-
-                /* Enhanced security: Strict path validation to prevent path traversal attacks */
-                if (validate_and_normalize_path(optarg) < 0) {
-                    fprintf(stderr, "Error: invalid log file path '%s'\n", optarg);
-                    return -1;
-                }
-
-                default_jail->log_files[default_jail->log_count] = strdup(optarg);
-                if (!default_jail->log_files[default_jail->log_count]) {
-                    fprintf(stderr, "Error: out of memory\n");
-                    return -1;
-                }
-                default_jail->log_count++;
-            }
+            fprintf(stderr, "Warning: -l is deprecated. Use jails: section in config file instead.\n");
             break;
         case 'h':
             printf("Usage: %s [OPTIONS]\n", argv[0]);
@@ -1144,13 +1118,23 @@ static int parse_config(int argc, char *argv[])
             printf("  -C, --config-dir DIR   Configuration directory (auto-loads all .yaml/.yml files)\n");
             printf("                         Default: ./config/ or /etc/firewall/config/\n");
             printf("  -d, --daemonize        Run as daemon\n");
-            printf("  -m, --max-retries N    Max failed attempts before ban (default: %d)\n", DEFAULT_MAX_RETRIES);
-            printf("  -f, --findtime SECS    Time window for failures (default: %d)\n", DEFAULT_FINDTIME);
-            printf("  -b, --ban-time SECS    Ban duration (default: %d)\n", DEFAULT_BAN_TIME);
+            printf("  -m, --max-retries N    Default max failed attempts (default: %d)\n", DEFAULT_MAX_RETRIES);
+            printf("  -f, --findtime SECS    Default time window (default: %d)\n", DEFAULT_FINDTIME);
+            printf("  -b, --ban-time SECS    Default ban duration (default: %d)\n", DEFAULT_BAN_TIME);
             printf("  -i, --interval SECS    Check interval (default: %d)\n", DEFAULT_INTERVAL);
             printf("  -p, --metrics-port PORT Prometheus metrics port (default: %d, 0=disable)\n", DEFAULT_METRICS_PORT);
-            printf("  -l, --log FILE         Log file to monitor (can be specified multiple times)\n");
+            printf("  -l, --log FILE         DEPRECATED: use jails: in config\n");
             printf("  -h, --help             Show this help\n");
+            printf("\nConfig file format:\n");
+            printf("  defaults:\n");
+            printf("    max_retries: 5\n");
+            printf("    findtime: 600\n");
+            printf("    ban_time: 900\n");
+            printf("  jails:\n");
+            printf("    sshd:\n");
+            printf("      enabled: true\n");
+            printf("      log_files:\n");
+            printf("        - /var/log/auth.log\n");
             return 1;
         case '?':
             /* getopt_long already printed an error message */
@@ -1160,42 +1144,21 @@ static int parse_config(int argc, char *argv[])
         }
     }
 
-    /* Default log files if none specified - create default jail */
+    /* Default log files if none specified - require jail format in config */
     int total_log_files = 0;
     for (int i = 0; i < cfg.jail_count; i++) {
         total_log_files += cfg.jails[i].log_count;
     }
 
     if (total_log_files == 0) {
-        const char *default_logs[] = {
-            "/var/log/auth.log",
-            "/var/log/secure"
-        };
-        int num_defaults = sizeof(default_logs) / sizeof(default_logs[0]);
-
-        struct jail *default_jail = find_or_create_jail("default");
-        if (!default_jail) {
-            fprintf(stderr, "Error: failed to create default jail\n");
-            return -1;
-        }
-
-        for (int i = 0; i < num_defaults; i++) {
-            /* Apply the same path validation to default log files */
-            if (validate_and_normalize_path(default_logs[i]) < 0) {
-                daemon_log_warn("Skipping invalid default log path: %s", default_logs[i]);
-                continue;
-            }
-
-            if (access(default_logs[i], R_OK) == 0) {
-                if (default_jail->log_count >= MAX_LOG_FILES) break;
-                default_jail->log_files[default_jail->log_count] = strdup(default_logs[i]);
-                if (!default_jail->log_files[default_jail->log_count]) {
-                    fprintf(stderr, "Error: out of memory\n");
-                    return -1;
-                }
-                default_jail->log_count++;
-            }
-        }
+        fprintf(stderr, "Error: no jails configured. Use jails: section in config file.\n");
+        fprintf(stderr, "Example:\n");
+        fprintf(stderr, "  jails:\n");
+        fprintf(stderr, "    sshd:\n");
+        fprintf(stderr, "      enabled: true\n");
+        fprintf(stderr, "      log_files:\n");
+        fprintf(stderr, "        - /var/log/auth.log\n");
+        return -1;
     }
 
     return 0;
