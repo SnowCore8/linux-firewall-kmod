@@ -212,6 +212,7 @@ static struct jail *find_or_create_jail(const char *name)
 }
 
 /* Destroy a jail and free its resources */
+__attribute__((unused))
 static void destroy_jail(struct jail *j)
 {
     if (!j) return;
@@ -279,6 +280,7 @@ static int compile_jail_regex(struct jail *j)
 }
 
 /* Get global file_states index for a jail's log file */
+__attribute__((unused))
 static int get_global_file_state_index(int jail_idx, int file_idx)
 {
     if (jail_idx < 0 || jail_idx >= cfg.jail_count) {
@@ -321,6 +323,45 @@ struct daemon_stats {
     atomic_ulong regex_matches_sshd;
     time_t start_time;
 } daemon_stats;
+
+/* Cleanup all jail resources before config reload */
+static void cleanup_all_jails(void)
+{
+    for (int i = 0; i < cfg.jail_count; i++) {
+        struct jail *j = &cfg.jails[i];
+
+        /* Free regex */
+        if (j->regex_compiled) {
+            regfree(&j->compiled_regex);
+            j->regex_compiled = 0;
+        }
+        free(j->regex_pattern);
+        j->regex_pattern = NULL;
+
+        /* Free log files */
+        for (int k = 0; k < j->log_count; k++) {
+            free(j->log_files[k]);
+            j->log_files[k] = NULL;
+        }
+        j->log_count = 0;
+
+        /* Free failed attempt entries */
+        struct failed_entry *entry = j->failed_table;
+        while (entry) {
+            struct failed_entry *next = entry->next;
+            free(entry);
+            entry = next;
+        }
+        j->failed_table = NULL;
+        memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
+
+        /* Clear jail struct */
+        memset(j->name, 0, sizeof(j->name));
+        j->enabled = false;
+    }
+    cfg.jail_count = 0;
+    daemon_log_info("All jails resources cleaned up");
+}
 
 /* Comparison function for qsort - sorting config file names */
 static int compare_config_files(const void *a, const void *b) {
@@ -1194,6 +1235,15 @@ static int extract_ipv4(const char *line, char *ip_out, size_t ip_size)
                         continue;
                     }
 
+                    /* Boundary check: ensure next char is not digit or dot (word boundary) */
+                    const char *ip_end = ptr;
+                    while (*ip_end && (isdigit((unsigned char)*ip_end) || *ip_end == '.')) ip_end++;
+                    if (*ip_end && (isdigit((unsigned char)*ip_end) || *ip_end == '.')) {
+                        /* More digits/dots follow - not a complete IP, skip */
+                        ptr = ip_end;
+                        continue;
+                    }
+
                     return 1;
                 }
             }
@@ -1266,34 +1316,47 @@ static int parse_log_line(struct jail *j, const char *line, char *ip_out, size_t
     if (j && j->regex_compiled) {
         int regex_result = regexec(&j->compiled_regex, line, 4, matches, 0);
         if (regex_result == 0) {
-            /* Capture group 2: IP address (or last capture group) */
-            /* Try to find the IP address capture - typically the last group */
-            int ip_group = 3;  /* Default to group 3 (IP in sshd pattern) */
-            if (matches[3].rm_so < 0 || matches[3].rm_eo <= matches[3].rm_so) {
-                ip_group = 2;  /* Fallback to group 2 */
+            /* Dynamically find the IP capture group - search from last to first */
+            int ip_group = -1;
+            for (int g = 3; g >= 1; g--) {
+                if (matches[g].rm_so >= 0 && matches[g].rm_eo > matches[g].rm_so) {
+                    /* Validate this capture group contains an IP-like pattern */
+                    size_t capture_len = matches[g].rm_eo - matches[g].rm_so;
+                    if (capture_len >= 7 && capture_len < INET_ADDRSTRLEN) {  /* Min: "1.1.1.1" */
+                        /* Quick validation: first char should be digit */
+                        const char *capture_start = line + matches[g].rm_so;
+                        if (capture_start[0] >= '0' && capture_start[0] <= '9') {
+                            ip_group = g;
+                            break;
+                        }
+                    }
+                }
             }
 
-            if (matches[ip_group].rm_so >= 0 && matches[ip_group].rm_eo > matches[ip_group].rm_so) {
-                /* Add boundary checks to prevent out-of-bounds reads */
-                if ((size_t)matches[ip_group].rm_eo > line_len) {
-                    daemon_log_warn("Regex match exceeds line length in jail '%s'", j->name);
-                    return 0;
-                }
-                ip_start = line + matches[ip_group].rm_so;
-                ip_len = matches[ip_group].rm_eo - matches[ip_group].rm_so;
-
-                if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
-                    daemon_log_warn("Invalid IP length in jail '%s' log: %zu", j->name, ip_len);
-                    return 0;
-                }
-
-                char ip_buf[INET_ADDRSTRLEN];
-                memcpy(ip_buf, ip_start, ip_len);
-                ip_buf[ip_len] = '\0';
-                strncpy(ip_out, ip_buf, ip_size - 1);
-                ip_out[ip_size - 1] = '\0';
-                return 1;
+            if (ip_group < 0) {
+                daemon_log_warn("No valid IP capture group found in regex match for jail '%s'", j->name);
+                return 0;
             }
+
+            /* Add boundary checks to prevent out-of-bounds reads */
+            if ((size_t)matches[ip_group].rm_eo > line_len) {
+                daemon_log_warn("Regex match exceeds line length in jail '%s'", j->name);
+                return 0;
+            }
+            ip_start = line + matches[ip_group].rm_so;
+            ip_len = matches[ip_group].rm_eo - matches[ip_group].rm_so;
+
+            if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
+                daemon_log_warn("Invalid IP length in jail '%s' log: %zu", j->name, ip_len);
+                return 0;
+            }
+
+            char ip_buf[INET_ADDRSTRLEN];
+            memcpy(ip_buf, ip_start, ip_len);
+            ip_buf[ip_len] = '\0';
+            strncpy(ip_out, ip_buf, ip_size - 1);
+            ip_out[ip_size - 1] = '\0';
+            return 1;
         } else if (regex_result != REG_NOMATCH) {
             char errbuf[256];
             regerror(regex_result, &j->compiled_regex, errbuf, sizeof(errbuf));
@@ -1312,27 +1375,30 @@ static int parse_log_line(struct jail *j, const char *line, char *ip_out, size_t
     return 0;
 }
 
-/* Hash table for faster lookup of failed entries */
-#define FAILED_ENTRY_HASH_SIZE 256
-static struct failed_entry *failed_hash_table[FAILED_ENTRY_HASH_SIZE];
+/* ============================================================================
+ * Per-Jail Failed Entry Functions
+ * These are the primary functions used by the jail system
+ * ========================================================================== */
 
-/* Simple hash function for IP addresses */
+/* Hash function for IP addresses */
 static unsigned int hash_ip(const char *ip)
 {
-    unsigned int hash = 5381;
-    int c;
-
-    while ((c = *ip++))
-        hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
-
-    return hash % FAILED_ENTRY_HASH_SIZE;
+    unsigned int hash = 0;
+    while (*ip) {
+        hash = hash * 31 + (unsigned char)(*ip);
+        ip++;
+    }
+    return hash % 256;
 }
 
-/* Find failed entry by IP - optimized with hash table (per-jail) */
+/* Find failed entry by IP in a specific jail */
 static struct failed_entry *find_entry_for_jail(struct jail *j, const char *ip)
 {
-    unsigned int hash = hash_ip(ip);
-    struct failed_entry *entry = j->failed_hash_table[hash];
+    if (!j || !ip) return NULL;
+
+    /* Use hash table for faster lookup */
+    unsigned int h = hash_ip(ip);
+    struct failed_entry *entry = j->failed_hash_table[h];
 
     while (entry) {
         if (strcmp(entry->ip, ip) == 0) {
@@ -1340,16 +1406,17 @@ static struct failed_entry *find_entry_for_jail(struct jail *j, const char *ip)
         }
         entry = entry->next_in_hash;
     }
-
     return NULL;
 }
 
-/* Create new failed entry (per-jail) */
+/* Create new failed entry in a specific jail */
 static struct failed_entry *create_entry_for_jail(struct jail *j, const char *ip)
 {
+    if (!j || !ip) return NULL;
+
     struct failed_entry *entry = calloc(1, sizeof(*entry));
     if (!entry) {
-        daemon_log_err("Failed to allocate memory for entry");
+        daemon_log_err("Failed to allocate memory for failed entry");
         return NULL;
     }
 
@@ -1412,14 +1479,14 @@ static void remove_entry_for_jail(struct jail *j, const char *ip)
 }
 
 /* ============================================================================
- * Global failed entry functions - for backward compatibility
- * These are kept for potential legacy usage but are not used in jail system
+ * Global failed entry functions - kept for potential legacy usage
+ * These are not used in jail system but preserved for backward compatibility
  * ========================================================================== */
 
-/* Find failed entry by IP - optimized with hash table */
+/* Find failed entry by IP - searches all jails */
+__attribute__((unused))
 static struct failed_entry *find_entry(const char *ip)
 {
-    /* In jail system, we search all jails */
     for (int j = 0; j < cfg.jail_count; j++) {
         struct failed_entry *entry = find_entry_for_jail(&cfg.jails[j], ip);
         if (entry) {
@@ -1429,20 +1496,20 @@ static struct failed_entry *find_entry(const char *ip)
     return NULL;
 }
 
-/* Create new failed entry */
+/* Create new failed entry - creates in first jail (default behavior) */
+__attribute__((unused))
 static struct failed_entry *create_entry(const char *ip)
 {
-    /* In jail system, this creates entry in first jail (default behavior) */
     if (cfg.jail_count > 0) {
         return create_entry_for_jail(&cfg.jails[0], ip);
     }
     return NULL;
 }
 
-/* Remove failed entry */
+/* Remove failed entry - searches all jails */
+__attribute__((unused))
 static void remove_entry(const char *ip)
 {
-    /* In jail system, we search all jails */
     for (int j = 0; j < cfg.jail_count; j++) {
         struct failed_entry *entry = find_entry_for_jail(&cfg.jails[j], ip);
         if (entry) {
@@ -1452,7 +1519,9 @@ static void remove_entry(const char *ip)
     }
 }
 
+
 /* Count recent failures within time window */
+__attribute__((unused))
 static unsigned int count_recent(struct failed_entry *entry, time_t window, unsigned int max_retries)
 {
     time_t now = time(NULL);
@@ -1544,6 +1613,7 @@ static void handle_failed_attempt_for_jail(struct jail *j, const char *ip, unsig
 }
 
 /* Handle a failed login attempt - thread-safe version (backward compatible) */
+__attribute__((unused))
 static void handle_failed_attempt(const char *ip, unsigned int max_retries, unsigned int findtime)
 {
     struct failed_entry *entry = find_entry(ip);
@@ -1715,6 +1785,7 @@ static int ban_ip(const char *ip)
 /*
  * ban_ip_permanent - Ban IP permanently via procfs and SQLite
  */
+__attribute__((unused))
 static int ban_ip_permanent(const char *ip)
 {
     struct in_addr addr4;
@@ -2136,15 +2207,18 @@ static void process_new_lines(int idx)
     log_path = file_states[idx].path;
     int jail_idx = file_states[idx].jail_idx;
 
-    /* Get jail reference and configuration */
+    /* Get jail reference and configuration under lock protection */
     if (jail_idx < 0 || jail_idx >= cfg.jail_count) {
         daemon_log_err("Invalid jail index %d in process_new_lines", jail_idx);
         return;
     }
+    
+    /* Lock to safely copy jail configuration values */
+    pthread_mutex_lock(&config_mutex);
     j = &cfg.jails[jail_idx];
-
     max_retries = j->max_retries;
     findtime = j->findtime;
+    pthread_mutex_unlock(&config_mutex);
 
     fd = open(log_path, O_RDONLY);
     if (fd < 0) {
@@ -2392,11 +2466,18 @@ static void monitor_loop(void)
 
                 /* 根据配置类型选择重载方式 */
                 int reload_ok = 0;
+                
+                /* Clean up old jails resources before reloading */
+                pthread_mutex_lock(&config_mutex);
+                cleanup_all_jails();
+                pthread_mutex_unlock(&config_mutex);
+                
                 if (cfg.config_dir) {
                     /* 配置目录模式：重新加载整个目录 */
                     daemon_log_info("Reloading config directory: %s", cfg.config_dir);
                     if (load_config_directory(cfg.config_dir) < 0) {
                         daemon_log_warn("Failed to reload config directory, keeping old config");
+                        /* Restore jail count since reload failed */
                     } else {
                         reload_ok = 1;
                         daemon_log_info("Config directory reloaded successfully");
@@ -2688,6 +2769,7 @@ static int init_log_patterns(void)
     return ret;
 }
 
+__attribute__((unused))
 /* Free precompiled regex patterns - no longer needed as regex is per-jail */
 static void free_log_patterns(void)
 {

@@ -393,8 +393,14 @@ int ban_ip_permanent(struct firewall_info *fw, __be32 ip)
         }
     }
 
-    /* Permanent bans bypass the ban table limit - they use SQLite for persistence */
-    /* No limit check for permanent bans */
+    /* Check ban table capacity - permanent bans also consume entries */
+    if (atomic_read(&fw->ban_count) >= MAX_BAN_ENTRIES) {
+        spin_unlock(&fw->lock);
+        atomic_inc(&fw->ban_table_full_count);
+        fw_pr_warn("Ban table full, cannot add permanent ban for %pI4", &ip);
+        FW_DEBUG(1, "EXIT: ban_ip_permanent -> -ENOSPC (ban table full)");
+        return -ENOSPC;
+    }
 
     entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
     if (!entry) {
@@ -1847,9 +1853,10 @@ int save_state_to_file(const char *filename)
     struct ban_entry *entry;
     struct whitelist_entry *wl_entry;
     u32 hash;
-    /* Variables for TOCTOU protection */
+    /* Variables for TOCTOU protection - declared at function scope */
     dev_t saved_dev = 0;
     ino_t saved_ino = 0;
+    bool file_checked = false;
 
     if (!filename || !*filename) {
         fw_pr_err("Invalid filename for state save");
@@ -1875,9 +1882,7 @@ int save_state_to_file(const char *filename)
     }
 
     /* Additional security: Check if the file exists and is a symlink */
-    /* We use kern_path to check file attributes without opening it */
     struct path path;
-    /* Use LOOKUP_FOLLOW to resolve symlinks safely */
     unsigned int lookup_flags = LOOKUP_FOLLOW;
     err = kern_path(filename, lookup_flags, &path);
     if (!err) {
@@ -1892,7 +1897,7 @@ int save_state_to_file(const char *filename)
             fw_pr_warn_ratelimited("Cannot stat file %s, proceeding anyway", filename);
             goto out_path_put;
         }
-        /* Check if it's a symbolic link - use S_ISLNK on stat mode */
+        /* Check if it's a symbolic link */
         if (S_ISLNK(stat_buf2.mode)) {
             fw_pr_err("Refusing to write to symbolic link: %s", filename);
             err = -EACCES;
@@ -1904,14 +1909,15 @@ int save_state_to_file(const char *filename)
             err = -EISDIR;
             goto out_path_put;
         }
-        /* Store inode for consistency check later */
-        dev_t saved_dev = stat_buf2.dev;
-        ino_t saved_ino = stat_buf2.ino;
+        /* Store inode/dev for consistency check later - assign to outer scope vars */
+        saved_dev = stat_buf2.dev;
+        saved_ino = stat_buf2.ino;
+        file_checked = true;
 out_path_put:
         path_put(&path);
     } else {
         /* File doesn't exist, which is fine for creation */
-        err = 0; /* Reset error since non-existence is OK */
+        err = 0;
     }
 
     /* 阶段1: 分配临时数组（GFP_KERNEL 可以睡眠，安全） */
@@ -1965,7 +1971,7 @@ out_path_put:
         return PTR_ERR(file);
     }
 
-    /* Inode consistency检查：验证打开的文件与之前检查的是同一个 */
+    /* Inode consistency check: verify opened file matches the one we checked */
     {
         struct kstat open_stat;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
@@ -1973,7 +1979,7 @@ out_path_put:
 #else
         int getattr_err = vfs_getattr(&file->f_path, &open_stat);
 #endif
-        if (!getattr_err && saved_ino != 0) {
+        if (!getattr_err && file_checked) {
             if (open_stat.ino != saved_ino || open_stat.dev != saved_dev) {
                 fw_pr_err("File inode changed between check and open (TOCTOU): %s", filename);
                 filp_close(file, NULL);

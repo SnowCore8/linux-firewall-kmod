@@ -194,7 +194,7 @@ static int generate_metrics(char *buf, size_t buf_size)
     unsigned long d_inotify_events = atomic_load(&daemon_stats.inotify_events);
     unsigned long d_log_rotations = atomic_load(&daemon_stats.log_rotations);
     unsigned long d_lines_skipped = atomic_load(&daemon_stats.lines_skipped);
-    unsigned long d_regex_sshd = atomic_load(&daemon_stats.regex_matches_sshd);
+    unsigned long d_regex_matches = atomic_load(&daemon_stats.regex_matches_sshd);
 
     uptime = time(NULL) - daemon_stats.start_time;
 
@@ -247,9 +247,9 @@ static int generate_metrics(char *buf, size_t buf_size)
         "# TYPE firewall_daemon_lines_skipped_total counter\n"
         "firewall_daemon_lines_skipped_total %lu\n"
         "\n"
-        "# HELP firewall_daemon_regex_sshd_matches_total Total sshd regex pattern matches\n"
-        "# TYPE firewall_daemon_regex_sshd_matches_total counter\n"
-        "firewall_daemon_regex_sshd_matches_total %lu\n"
+        "# HELP firewall_daemon_regex_matches_total Total regex pattern matches across all jails\n"
+        "# TYPE firewall_daemon_regex_matches_total counter\n"
+        "firewall_daemon_regex_matches_total %lu\n"
         "\n"
         "# HELP firewall_daemon_uptime_seconds Daemon uptime in seconds\n"
         "# TYPE firewall_daemon_uptime_seconds gauge\n"
@@ -267,7 +267,7 @@ static int generate_metrics(char *buf, size_t buf_size)
         d_inotify_events,
         d_log_rotations,
         d_lines_skipped,
-        d_regex_sshd,
+        d_regex_matches,
         (long)uptime
     );
 }
