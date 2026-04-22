@@ -1483,10 +1483,10 @@ static ssize_t config_write(struct file *file, const char __user *buf,
         return -EINVAL;
     }
 
-    /* Parse value manually for better error handling */
-    char *endptr;
-    unsigned long val = simple_strtoul(value_str, &endptr, 10);
-    if (*endptr != '\0' || val == 0 || val > UINT_MAX) {
+    /* Parse value using modern kstrtoul for better error handling */
+    unsigned long val;
+    int rc = kstrtoul(value_str, 10, &val);
+    if (rc != 0 || val == 0 || val > UINT_MAX) {
         fw_pr_err("Invalid value: %s", value_str);
         return -EINVAL;
     }
@@ -2311,4 +2311,4 @@ module_exit(firewall_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Firewall Authors");
 MODULE_DESCRIPTION("Kernel-level IP banning module (fail2ban alternative)");
-MODULE_VERSION("1.4");
+MODULE_VERSION("1.6");

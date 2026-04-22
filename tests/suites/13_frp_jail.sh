@@ -37,13 +37,29 @@ cat > "$local_frp_test_log" << 'EOF'
 2026/04/22 10:30:03 [W] [server/control.go:300] connection timeout from 192.0.2.200
 EOF
 
-# 使用 FRP 日志测试
-timeout 5 "$DAEMON_PATH" \
-    --log "$local_frp_test_log" \
-    --max-retries 1 \
-    --findtime 1 \
-    --ban-time 5 \
-    --interval 1 2>&1 || true
+# 创建 FRP YAML 配置
+local_frp_yaml="/tmp/fw_frp_yaml_$$.yaml"
+cat > "$local_frp_yaml" << EOF
+defaults:
+  max_retries: 1
+  findtime: 1
+  ban_time: 5
+  interval: 1
+  metrics_port: 9119
+
+jails:
+  frp:
+    enabled: true
+    log_files:
+      - $local_frp_test_log
+    max_retries: 1
+    findtime: 1
+    ban_time: 5
+    regex: ""
+EOF
+
+# 使用 FRP 配置测试
+timeout 5 "$DAEMON_PATH" -c "$local_frp_yaml" 2>&1 || true
 sleep 1
 
 # 检查封禁列表
@@ -55,7 +71,7 @@ else
     warn_test "ban_list 不可读"
 fi
 
-rm -f "$local_frp_test_log"
+rm -f "$local_frp_test_log" "$local_frp_yaml"
 
 # 13.6 FRP 配置热重载测试
 fw_subsection "FRP 配置热重载"

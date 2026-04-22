@@ -4,13 +4,13 @@
  * Monitors log files for failed login attempts and automatically bans
  * offending IPs via the firewall kernel module procfs interface.
  *
- * Note: max_retries and findtime are daemon-level parameters that control
+ * Note: max_retries, findtime, and ban_time are configured via YAML config file.
  * the log analysis logic (how many failures within what time window trigger
  * a ban). These are NOT kernel module parameters - the kernel module only
  * handles the actual IP blocking based on its ban_table.
  *
  * Usage:
- *   sudo ./firewall-daemon [--daemonize] [--max-retries N] [--findtime SECS]
+ *   sudo ./firewall-daemon [-c config.yaml] [-C config-dir] [--daemonize]
  */
 
 #define _GNU_SOURCE
@@ -115,7 +115,7 @@ struct jail {
 
 /* Global running flag */
 static volatile sig_atomic_t running = 1;
-static volatile sig_atomic_t reload_config = 0;
+static volatile sig_atomic_t reload_config = 0;  /* SIGHUP flag */
 
 /* Global default configuration */
 struct config {
@@ -212,7 +212,6 @@ static struct jail *find_or_create_jail(const char *name)
 }
 
 /* Destroy a jail and free its resources */
-__attribute__((unused))
 static void destroy_jail(struct jail *j)
 {
     if (!j) return;
@@ -280,7 +279,7 @@ static int compile_jail_regex(struct jail *j)
 }
 
 /* Get global file_states index for a jail's log file */
-__attribute__((unused))
+
 static int get_global_file_state_index(int jail_idx, int file_idx)
 {
     if (jail_idx < 0 || jail_idx >= cfg.jail_count) {
@@ -336,41 +335,10 @@ struct daemon_stats {
  */
 static void cleanup_all_jails(void)
 {
-    for (int i = 0; i < cfg.jail_count; i++) {
-        struct jail *j = &cfg.jails[i];
-
-        /* Free regex */
-        if (j->regex_compiled) {
-            regfree(&j->compiled_regex);
-            j->regex_compiled = 0;
-        }
-        free(j->regex_pattern);
-        j->regex_pattern = NULL;
-
-        /* Free log files */
-        for (int k = 0; k < j->log_count; k++) {
-            free(j->log_files[k]);
-            j->log_files[k] = NULL;
-        }
-        j->log_count = 0;
-
-        /* Free failed attempt entries.
-         * NOTE: failed_table and failed_hash_table share the same objects.
-         * We free via the linked list (failed_table) to avoid double-free.
-         */
-        struct failed_entry *entry = j->failed_table;
-        while (entry) {
-            struct failed_entry *next = entry->next;
-            free(entry);
-            entry = next;
-        }
-        j->failed_table = NULL;
-        /* Zero out hash table - contains dangling pointers after frees above */
-        memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
-
-        /* Clear jail struct */
-        memset(j->name, 0, sizeof(j->name));
-        j->enabled = false;
+    int old_count = cfg.jail_count;
+    for (int i = 0; i < old_count; i++) {
+        destroy_jail(&cfg.jails[i]);
+        memset(&cfg.jails[i], 0, sizeof(struct jail));
     }
     cfg.jail_count = 0;
     daemon_log_info("All jails resources cleaned up");
@@ -923,12 +891,6 @@ static int parse_config(int argc, char *argv[])
         {"config",     required_argument, 0, 'c'},  /* Single config file */
         {"config-dir", required_argument, 0, 'C'},  /* Config directory (auto-loads all .yaml) */
         {"daemonize",  no_argument,       0, 'd'},
-        {"max-retries", required_argument, 0, 'm'},
-        {"findtime",   required_argument, 0, 'f'},
-        {"ban-time",   required_argument, 0, 'b'},
-        {"interval",   required_argument, 0, 'i'},
-        {"metrics-port", required_argument, 0, 'p'},
-        {"log",        required_argument, 0, 'l'},
         {"help",       no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
@@ -1050,7 +1012,7 @@ static int parse_config(int argc, char *argv[])
     }
 
     /* Now parse command line options (they override config file values) */
-    while ((opt = getopt_long(argc, argv, "c:C:dm:f:b:i:l:p:h", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:C:dh", long_options, NULL)) != -1) {
         switch (opt) {
         case 'c':  /* Config file - already handled above */
             break;
@@ -1059,112 +1021,6 @@ static int parse_config(int argc, char *argv[])
         case 'd':
             cfg.daemonize = 1;
             break;
-        case 'm':
-            {
-                char *endptr;
-                errno = 0;
-                long val = strtol(optarg, &endptr, 10);
-
-                /* Check for conversion errors */
-                if (errno != 0 || *endptr != '\0') {
-                    fprintf(stderr, "Error: invalid max-retries value '%s'\n", optarg);
-                    return -1;
-                }
-
-                /* Enhanced validation with stricter limits */
-                if (val < 1 || val > 100 || val > INT_MAX) {  /* Reduced upper limit from MAX_FAILED_TIMESTAMPS to 100 */
-                    fprintf(stderr, "Error: max-retries must be between 1 and 100\n");
-                    return -1;
-                }
-
-                cfg.default_max_retries = (unsigned int)val;
-            }
-            break;
-        case 'f':
-            {
-                char *endptr;
-                errno = 0;
-                long val = strtol(optarg, &endptr, 10);
-
-                /* Check for conversion errors */
-                if (errno != 0 || *endptr != '\0') {
-                    fprintf(stderr, "Error: invalid findtime value '%s'\n", optarg);
-                    return -1;
-                }
-
-                /* Additional validation */
-                if (val < 1 || val > 3600 || val > INT_MAX) {
-                    fprintf(stderr, "Error: findtime must be between 1 and 3600 seconds\n");
-                    return -1;
-                }
-
-                cfg.default_findtime = (unsigned int)val;
-            }
-            break;
-        case 'b':
-            {
-                char *endptr;
-                errno = 0;
-                long val = strtol(optarg, &endptr, 10);
-
-                /* Check for conversion errors */
-                if (errno != 0 || *endptr != '\0') {
-                    fprintf(stderr, "Error: invalid ban-time value '%s'\n", optarg);
-                    return -1;
-                }
-
-                /* Additional validation */
-                if (val < 1 || val > 86400 || val > INT_MAX) {
-                    fprintf(stderr, "Error: ban-time must be between 1 and 86400 seconds\n");
-                    return -1;
-                }
-
-                cfg.default_ban_time = (unsigned int)val;
-            }
-            break;
-        case 'i':
-            {
-                char *endptr;
-                errno = 0;
-                long val = strtol(optarg, &endptr, 10);
-
-                /* Check for conversion errors */
-                if (errno != 0 || *endptr != '\0') {
-                    fprintf(stderr, "Error: invalid interval value '%s'\n", optarg);
-                    return -1;
-                }
-
-                /* Additional validation */
-                if (val < 1 || val > 60 || val > INT_MAX) {
-                    fprintf(stderr, "Error: interval must be between 1 and 60 seconds\n");
-                    return -1;
-                }
-
-                cfg.interval = (int)val;
-            }
-            break;
-        case 'p':
-            {
-                char *endptr;
-                errno = 0;
-                long val = strtol(optarg, &endptr, 10);
-
-                if (errno != 0 || *endptr != '\0') {
-                    fprintf(stderr, "Error: invalid metrics-port value '%s'\n", optarg);
-                    return -1;
-                }
-
-                if (val < 0 || val > 65535) {
-                    fprintf(stderr, "Error: metrics-port must be between 0 and 65535\n");
-                    return -1;
-                }
-
-                cfg.metrics_port = (int)val;
-            }
-            break;
-        case 'l':
-            fprintf(stderr, "Warning: -l is deprecated. Use jails: section in config file instead.\n");
-            break;
         case 'h':
             printf("Usage: %s [OPTIONS]\n", argv[0]);
             printf("\nOptions:\n");
@@ -1172,12 +1028,6 @@ static int parse_config(int argc, char *argv[])
             printf("  -C, --config-dir DIR   Configuration directory (auto-loads all .yaml/.yml files)\n");
             printf("                         Default: ./config/ or /etc/firewall/config/\n");
             printf("  -d, --daemonize        Run as daemon\n");
-            printf("  -m, --max-retries N    Default max failed attempts (default: %d)\n", DEFAULT_MAX_RETRIES);
-            printf("  -f, --findtime SECS    Default time window (default: %d)\n", DEFAULT_FINDTIME);
-            printf("  -b, --ban-time SECS    Default ban duration (default: %d)\n", DEFAULT_BAN_TIME);
-            printf("  -i, --interval SECS    Check interval (default: %d)\n", DEFAULT_INTERVAL);
-            printf("  -p, --metrics-port PORT Prometheus metrics port (default: %d, 0=disable)\n", DEFAULT_METRICS_PORT);
-            printf("  -l, --log FILE         DEPRECATED: use jails: in config\n");
             printf("  -h, --help             Show this help\n");
             printf("\nConfig file format:\n");
             printf("  defaults:\n");
@@ -1497,7 +1347,7 @@ static void remove_entry_for_jail(struct jail *j, const char *ip)
  * ========================================================================== */
 
 /* Find failed entry by IP - searches all jails */
-__attribute__((unused))
+
 static struct failed_entry *find_entry(const char *ip)
 {
     for (int j = 0; j < cfg.jail_count; j++) {
@@ -1510,7 +1360,7 @@ static struct failed_entry *find_entry(const char *ip)
 }
 
 /* Create new failed entry - creates in first jail (default behavior) */
-__attribute__((unused))
+
 static struct failed_entry *create_entry(const char *ip)
 {
     if (cfg.jail_count > 0) {
@@ -1520,7 +1370,7 @@ static struct failed_entry *create_entry(const char *ip)
 }
 
 /* Remove failed entry - searches all jails */
-__attribute__((unused))
+
 static void remove_entry(const char *ip)
 {
     for (int j = 0; j < cfg.jail_count; j++) {
@@ -1534,7 +1384,7 @@ static void remove_entry(const char *ip)
 
 
 /* Count recent failures within time window */
-__attribute__((unused))
+
 static unsigned int count_recent(struct failed_entry *entry, time_t window, unsigned int max_retries)
 {
     time_t now = time(NULL);
@@ -1626,7 +1476,7 @@ static void handle_failed_attempt_for_jail(struct jail *j, const char *ip, unsig
 }
 
 /* Handle a failed login attempt - thread-safe version (backward compatible) */
-__attribute__((unused))
+
 static void handle_failed_attempt(const char *ip, unsigned int max_retries, unsigned int findtime)
 {
     struct failed_entry *entry = find_entry(ip);
@@ -1777,18 +1627,9 @@ static int ban_ip(const char *ip)
         return -1;
     }
 
-    /* If permanent bans are enabled, also add to SQLite */
-    if (cfg.permanent_ban_enabled && sqlite_db) {
-        uint32_t ip_num = addr4.s_addr;
-        int rc = sqlite_add_permanent_ban(sqlite_db, ip, ip_num, "auto-ban from log", "auto");
-        if (rc == 0) {
-            daemon_log_info("IP %s added to permanent banlist (SQLite)", ip);
-        } else if (rc == -2) {
-            daemon_log_debug("IP %s already in permanent banlist", ip);
-        } else {
-            daemon_log_warn("Failed to add IP %s to permanent banlist (SQLite)", ip);
-        }
-    }
+    /* Note: Automatic bans from log parsing are temporary only.
+     * Permanent bans should only be added via explicit ban_ip_permanent() call.
+     * This prevents accidental permanent blocking from false positives. */
 
     atomic_fetch_add(&daemon_stats.ips_banned, 1);
     daemon_log_info("Banned IP %s", ip);
@@ -1798,7 +1639,7 @@ static int ban_ip(const char *ip)
 /*
  * ban_ip_permanent - Ban IP permanently via procfs and SQLite
  */
-__attribute__((unused))
+
 static int ban_ip_permanent(const char *ip)
 {
     struct in_addr addr4;
@@ -1848,7 +1689,7 @@ static int ban_ip_permanent(const char *ip)
 }
 
 /* Unban IP via procfs (used for manual unban) (IPv4 only) */
-__attribute__((unused))
+
 static int unban_ip(const char *ip)
 {
     struct in_addr addr4;
@@ -1950,6 +1791,13 @@ static void daemonize_process(void)
     /* Change working directory */
     if (chdir("/") < 0) {
         perror("chdir");
+    }
+
+    /* Write PID file for systemd Type=forking support */
+    FILE *pidfile = fopen("/var/run/firewall-daemon.pid", "w");
+    if (pidfile) {
+        fprintf(pidfile, "%d\n", getpid());
+        fclose(pidfile);
     }
 
     /* Redirect standard file descriptors to /dev/null */
@@ -2368,10 +2216,12 @@ cleanup:
 /* Function to periodically clean up partial line buffer to prevent accumulation */
 static void cleanup_partial_line_buffer(void)
 {
-    /* Use default jail for periodic cleanup */
-    if (cfg.jail_count > 0) {
-        flush_partial_line(&cfg.jails[0], "periodic_cleanup", DEFAULT_MAX_RETRIES, DEFAULT_FINDTIME);
+    /* Iterate through all jails for cleanup */
+    pthread_mutex_lock(&config_mutex);
+    for (int i = 0; i < cfg.jail_count; i++) {
+        flush_partial_line(&cfg.jails[i], "periodic_cleanup", DEFAULT_MAX_RETRIES, DEFAULT_FINDTIME);
     }
+    pthread_mutex_unlock(&config_mutex);
 }
 
 /* Handle log file rotation */
@@ -2460,10 +2310,9 @@ static void monitor_loop(void)
             /* Timeout - periodic cleanup */
             cleanup_expired_bans();
 
-            /* Check if config reload was requested */
-            if (reload_config) {
+            /* Check if config reload was requested - use atomic exchange to prevent lost signals */
+            if (__atomic_exchange_n(&reload_config, 0, __ATOMIC_SEQ_CST)) {
         daemon_log_info("Reloading configuration...");
-                reload_config = 0;
 
                 unsigned int old_max_retries, old_findtime, old_ban_time;
                 int old_interval, old_metrics_port;
@@ -2482,6 +2331,10 @@ static void monitor_loop(void)
                 
                 /* Clean up old jails resources before reloading */
                 pthread_mutex_lock(&config_mutex);
+                /* Clean up partial line buffers for all jails before config change */
+                for (int i = 0; i < cfg.jail_count; i++) {
+                    flush_partial_line(&cfg.jails[i], "config_reload_cleanup", DEFAULT_MAX_RETRIES, DEFAULT_FINDTIME);
+                }
                 cleanup_all_jails();
                 pthread_mutex_unlock(&config_mutex);
                 
@@ -2782,7 +2635,7 @@ static int init_log_patterns(void)
     return ret;
 }
 
-__attribute__((unused))
+
 /* Free precompiled regex patterns - no longer needed as regex is per-jail */
 static void free_log_patterns(void)
 {

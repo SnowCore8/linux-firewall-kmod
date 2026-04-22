@@ -1,9 +1,10 @@
 [Unit]
-Description=Firewall Daemon for frps Protection
+Description=Firewall Daemon for IP Ban Protection
 After=network.target
 
 [Service]
 Type=forking
+PIDFile=/var/run/firewall-daemon.pid
 ExecStart=/usr/local/bin/firewall-daemon -C /etc/firewall/config --daemonize
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure

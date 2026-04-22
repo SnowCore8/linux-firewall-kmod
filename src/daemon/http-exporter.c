@@ -166,6 +166,32 @@ static int send_response(int sockfd, const char *headers, const char *body)
  * Metrics generation
  * ========================================================================== */
 
+/* Read a specific integer value from /proc/firewall/stats by key name */
+static int read_procfs_stats_key(const char *key, unsigned long *value)
+{
+    FILE *fp;
+    char line[256];
+    int found = 0;
+
+    fp = fopen("/proc/firewall/stats", "r");
+    if (!fp)
+        return -1;
+
+    while (fgets(line, sizeof(line), fp)) {
+        char name[128];
+        unsigned long val;
+        if (sscanf(line, "%127s %lu", name, &val) == 2) {
+            if (strcmp(name, key) == 0) {
+                *value = val;
+                found = 1;
+                break;
+            }
+        }
+    }
+    fclose(fp);
+    return found ? 0 : -1;
+}
+
 /* Generate Prometheus metrics text */
 static int generate_metrics(char *buf, size_t buf_size)
 {
@@ -176,17 +202,12 @@ static int generate_metrics(char *buf, size_t buf_size)
     unsigned long kernel_current_bans = 0;  /* Current active bans from stats */
     time_t uptime;
 
-    /* Read kernel stats from procfs - use /proc/firewall/stats for accurate current_bans count */
-    /* Note: read_procfs_int returns -1 on failure, we keep default 0 but log warning */
-    if (read_procfs_int("/proc/firewall/stats", &kernel_current_bans) < 0) {
-        /* Kernel module may not be loaded or stats file unavailable */
-        kernel_banned = 0;
-    } else {
-        kernel_banned = kernel_current_bans;
-    }
-    read_procfs_int("/proc/firewall/ban_count", &kernel_total_bans);
-    read_procfs_int("/proc/firewall/unban_count", &kernel_total_unbans);
-    read_procfs_int("/proc/firewall/whitelist_count", &kernel_whitelist_count);
+    /* Read kernel stats from procfs - parse specific keys from /proc/firewall/stats */
+    read_procfs_stats_key("current_bans", &kernel_current_bans);
+    read_procfs_stats_key("total_bans", &kernel_total_bans);
+    read_procfs_stats_key("total_unbans", &kernel_total_unbans);
+    read_procfs_stats_key("current_whitelist", &kernel_whitelist_count);
+    kernel_banned = kernel_current_bans;
 
     /* Read daemon stats */
     unsigned long d_lines_parsed = atomic_load(&daemon_stats.lines_parsed);

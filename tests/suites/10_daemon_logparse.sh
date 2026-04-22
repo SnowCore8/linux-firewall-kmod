@@ -31,14 +31,30 @@ fw_ensure_module_loaded "$KERNEL_MODULE_PATH" 2>/dev/null || {
     return 0
 }
 
+# 创建临时 YAML 配置用于日志解析测试
+local_yaml_config="/tmp/fw_logparse_yaml_$$.yaml"
+cat > "$local_yaml_config" << EOF
+defaults:
+  max_retries: 1
+  findtime: 1
+  ban_time: 5
+  interval: 1
+  metrics_port: 9119
+
+jails:
+  sshd:
+    enabled: true
+    log_files:
+      - $local_test_log
+    max_retries: 1
+    findtime: 1
+    ban_time: 5
+    regex: ""
+EOF
+
 # 启动守护进程处理测试日志
 fw_log_info "启动守护进程处理测试日志..."
-timeout 5 "$DAEMON_PATH" \
-    --log "$local_test_log" \
-    --max-retries 1 \
-    --findtime 1 \
-    --ban-time 5 \
-    --interval 1 &
+timeout 5 "$DAEMON_PATH" -c "$local_yaml_config" &
 local_daemon_pid=$!
 sleep 3
 
@@ -58,7 +74,7 @@ fi
 # 清理守护进程
 kill $local_daemon_pid 2>/dev/null || true
 wait $local_daemon_pid 2>/dev/null || true
-rm -f "$local_test_log"
+rm -f "$local_test_log" "$local_yaml_config"
 
 # 10.4 特殊字符日志
 fw_subsection "特殊字符日志处理"
@@ -69,32 +85,79 @@ Mar 10 10:30:02 server sshd[1235]: Failed password for <script>alert('xss')</scr
 Mar 10 10:30:03 server sshd[1236]: Failed password for root from 192.0.2.3 port 12347 ssh2
 EOF
 
-timeout 5 "$DAEMON_PATH" \
-    --log "$local_special_log" \
-    --max-retries 1 \
-    --findtime 1 \
-    --ban-time 5 \
-    --interval 1 2>&1 || true
+local_special_yaml="/tmp/fw_special_yaml_$$.yaml"
+cat > "$local_special_yaml" << EOF
+defaults:
+  max_retries: 1
+  findtime: 1
+  ban_time: 5
+  interval: 1
+  metrics_port: 9119
+
+jails:
+  sshd:
+    enabled: true
+    log_files:
+      - $local_special_log
+    max_retries: 1
+    regex: ""
+EOF
+
+timeout 5 "$DAEMON_PATH" -c "$local_special_yaml" 2>&1 || true
 sleep 1
 assert_true "true" "特殊字符日志处理未崩溃"
 
-rm -f "$local_special_log"
+rm -f "$local_special_log" "$local_special_yaml"
 
 # 10.5 空日志文件
 fw_subsection "空日志文件处理"
 : > "/tmp/fw_test_empty_$$.log"
-timeout 3 "$DAEMON_PATH" \
-    --log "/tmp/fw_test_empty_$$.log" \
-    --max-retries 1 \
-    --findtime 1 \
-    --ban-time 5 \
-    --interval 1 2>&1 || true
+
+local_empty_yaml="/tmp/fw_empty_yaml_$$.yaml"
+cat > "$local_empty_yaml" << EOF
+defaults:
+  max_retries: 1
+  findtime: 1
+  ban_time: 5
+  interval: 1
+  metrics_port: 9119
+
+jails:
+  sshd:
+    enabled: true
+    log_files:
+      - /tmp/fw_test_empty_$$.log
+    max_retries: 1
+    regex: ""
+EOF
+
+timeout 3 "$DAEMON_PATH" -c "$local_empty_yaml" 2>&1 || true
 assert_true "true" "空日志文件处理未崩溃"
 
-rm -f "/tmp/fw_test_empty_$$.log"
+rm -f "/tmp/fw_test_empty_$$.log" "$local_empty_yaml"
 
 # 10.6 不存在日志文件
 fw_subsection "不存在日志文件处理"
-assert_failure "timeout 3 '$DAEMON_PATH' --log '/nonexistent/log.log' --max-retries 1 --findtime 1 --ban-time 5 --interval 1 2>&1" "不存在的日志文件被拒绝"
+
+local_nonexist_yaml="/tmp/fw_nonexist_yaml_$$.yaml"
+cat > "$local_nonexist_yaml" << EOF
+defaults:
+  max_retries: 1
+  findtime: 1
+  ban_time: 5
+  interval: 1
+  metrics_port: 9119
+
+jails:
+  sshd:
+    enabled: true
+    log_files:
+      - /nonexistent/log.log
+    max_retries: 1
+    regex: ""
+EOF
+
+assert_failure "timeout 3 '$DAEMON_PATH' -c '$local_nonexist_yaml' 2>&1" "不存在的日志文件被拒绝"
+rm -f "$local_nonexist_yaml"
 
 fw_ensure_module_unloaded

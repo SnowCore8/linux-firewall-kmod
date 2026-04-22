@@ -358,9 +358,6 @@ sudo ./build/daemon/firewall-daemon -C /etc/firewall/config/
 # 指定单个配置文件
 sudo ./build/daemon/firewall-daemon -c config/default.yaml
 
-# 使用命令行参数（已标记为废弃，建议使用 Jail 配置）
-sudo ./build/daemon/firewall-daemon -l /var/log/auth.log -m 5 -f 600 -b 900
-
 # 查看帮助
 sudo ./build/daemon/firewall-daemon --help
 ```
@@ -394,21 +391,17 @@ sudo systemctl status firewall-daemon
 ### 守护进程参数
 
 ```bash
-sudo ./build/daemon/firewall-daemon -l /var/log/auth.log -m 5 -f 600 -b 900
+sudo ./build/daemon/firewall-daemon -c config/default.yaml --daemonize
 ```
 
 | 参数 | 说明 | 默认值 | 状态 |
 |------|------|--------|------|
-| `-l` | 日志文件路径 | /var/log/auth.log | ⚠️ 已废弃，建议使用 Jail 配置 |
-| `-m` | 触发封禁的失败次数 | 5 | ⚠️ 已废弃，建议使用 Jail 配置 |
-| `-f` | 失败记录时间窗口（秒） | 600 | ⚠️ 已废弃，建议使用 Jail 配置 |
-| `-b` | 封禁持续时间（秒） | 900 | ⚠️ 已废弃，建议使用 Jail 配置 |
 | `-c` | 配置文件路径 | - | ✅ 推荐使用 |
 | `-C` | 配置目录路径 | ./config/ 或 /etc/firewall/config/ | ✅ 推荐使用 |
-| `--daemonize` | 后台运行模式 | false | ✅ 生产环境推荐 |
-| `-h` | 显示帮助信息 | - | - |
+| `-d`, `--daemonize` | 后台运行模式 | false | ✅ 生产环境推荐 |
+| `-h`, `--help` | 显示帮助信息 | - | - |
 
-**注意**：`-l`、`-m`、`-f`、`-b` 命令行参数已标记为废弃，建议使用 Jail 配置系统。
+**注意**：所有封禁策略参数（`max_retries`、`findtime`、`ban_time`、`interval`、`metrics_port`）必须通过 YAML 配置文件设置。
 
 ### Procfs 接口
 

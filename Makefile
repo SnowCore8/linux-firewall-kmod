@@ -48,7 +48,7 @@ daemon: $(DAEMON_BIN)
 
 $(DAEMON_BIN): $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC)
 	@mkdir -p $(DAEMON_BUILD_DIR)
-	$(CC) $(SECURITY_CFLAGS) $(SECURITY_LDFLAGS) -o $@ $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC) -lpthread -lyaml -lsqlite3
+	$(CC) $(SECURITY_CFLAGS) $(SECURITY_LDFLAGS) -Wno-unused-function -o $@ $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC) -lpthread -lyaml -lsqlite3
 
 # Build both kernel module and daemon
 all-with-daemon: kernel-module daemon

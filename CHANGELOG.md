@@ -24,8 +24,7 @@
 - **HTTP exporter 改进** - 准确的 current_bans 指标（从 /proc/firewall/stats 读取）
 - **代码质量**
   - 全局变量 `fw_info` 改为 static，通过 `get_fw_info()` 导出受控访问
-  - 移除 vsftpd/nginx/frp 服务支持（仅保留 sshd）
-  - 移除旧格式配置兼容，要求显式 `jails:` 配置
+  - 移除旧格式配置兼容代码
   - 零编译警告
 
 ### 改进
@@ -43,7 +42,8 @@
 
 ### 变更
 - 配置文件格式：从旧格式迁移到 Jail 格式
-- 移除 `config/frps.yaml`（frp 支持已移除）
+- 移除旧格式配置兼容，要求显式 `jails:` 配置
+- 移除内置的 vsftpd/nginx 正则模式（用户可通过自定义 regex 添加）
 - `-l` 参数标记为废弃（提示使用 Jail 配置）
 
 ## [v1.5] - 2026-04-21
