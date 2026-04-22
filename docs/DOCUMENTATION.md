@@ -386,7 +386,7 @@ sudo systemctl status firewall-daemon
 |------|------|--------|
 | `fw_ban_time` | 封禁持续时间（秒） | 600 (10分钟) |
 
-**注意**：`max_retries`（触发封禁的失败次数）和 `findtime`（失败记录时间窗口）是**守护进程参数**，在内核模块中不使用。这些参数在守护进程启动时通过 `-m` 和 `-f` 选项或 YAML 配置文件设置。
+**注意**：`max_retries`（触发封禁的失败次数）、`findtime`（失败记录时间窗口）、`ban_time`（封禁持续时间）、`interval`（检查间隔）和 `metrics_port`（Prometheus 端口）是**守护进程配置参数**，必须通过 YAML 配置文件设置，不支持命令行参数。
 
 ### 守护进程参数
 
