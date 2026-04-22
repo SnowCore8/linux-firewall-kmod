@@ -173,15 +173,15 @@ if [[ "$RUN_ALL" == true ]]; then
     done
 elif [[ -n "$RUN_SUITE" ]]; then
     # 尝试匹配编号或名称
-    local_found=false
+    found_suite=false
     for key in "${!SUITE_FILES[@]}"; do
         if [[ "$key" == "$RUN_SUITE"* ]]; then
             run_suite "$key"
-            local_found=true
+            found_suite=true
             break
         fi
     done
-    if [[ "$local_found" == false ]]; then
+    if [[ "$found_suite" == false ]]; then
         fw_log_error "未找到匹配的测试套件: $RUN_SUITE"
         exit 1
     fi
@@ -189,8 +189,8 @@ elif [[ -n "$RUN_CATEGORY" ]]; then
     fw_section "按类别运行测试: $RUN_CATEGORY"
 
     for key in $(echo "${!SUITE_FILES[@]}" | tr ' ' '\n' | sort); do
-        local_cats="${SUITE_CATEGORIES[$key]:-}"
-        if [[ " $local_cats " == *" $RUN_CATEGORY "* ]]; then
+        cats="${SUITE_CATEGORIES[$key]:-}"
+        if [[ " $cats " == *" $RUN_CATEGORY "* ]]; then
             run_suite "$key"
         fi
     done

@@ -46,9 +46,17 @@ assert_true "! grep -q '$LOCALHOST_IP' '$PROC_BAN_LIST' 2>/dev/null" "回环地�
 
 # 4.5 白名单格式验证
 fw_subsection "白名单格式验证"
-assert_failure "echo 'invalid_subnet' > '$PROC_WHITELIST_ADD' 2>&1" "无效子网格式被拒绝"
-assert_failure "echo '999.999.999.999/32' > '$PROC_WHITELIST_ADD' 2>&1" "无效子网 IP 被拒绝"
-assert_failure "echo '192.168.1.0/33' > '$PROC_WHITELIST_ADD' 2>&1" "无效前缀长度被拒绝"
+local rc=0
+echo 'invalid_subnet' > "$PROC_WHITELIST_ADD" 2>/dev/null || rc=$?
+assert_true "[[ $rc -ne 0 ]]" "无效子网格式被拒绝"
+
+rc=0
+echo '999.999.999.999/32' > "$PROC_WHITELIST_ADD" 2>/dev/null || rc=$?
+assert_true "[[ $rc -ne 0 ]]" "无效子网 IP 被拒绝"
+
+rc=0
+echo '192.168.1.0/33' > "$PROC_WHITELIST_ADD" 2>/dev/null || rc=$?
+assert_true "[[ $rc -ne 0 ]]" "无效前缀长度被拒绝"
 
 # 4.6 白名单容量测试
 fw_subsection "白名单容量测试 (上限 64)"

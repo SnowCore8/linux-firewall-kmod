@@ -51,8 +51,10 @@ fw_subsection "无效配置处理"
 local_invalid_config="/tmp/fw_test_invalid_$$"
 echo "invalid: [yaml: broken" > "$local_invalid_config"
 # 无效 YAML 应被解析器拒绝或处理为警告，不应崩溃
-timeout 2 "'$DAEMON_PATH' -c '$local_invalid_config' --help > /dev/null 2>&1" || true
-assert_true "true" "无效 YAML 处理完成（未崩溃）"
+local rc=0
+timeout 2 "$DAEMON_PATH" -c "$local_invalid_config" >/dev/null 2>&1 || rc=$?
+# rc=0 (成功但警告), rc=1 (配置错误), rc=124 (超时) 都表示"未崩溃"
+assert_true "[[ $rc -eq 0 || $rc -eq 1 || $rc -eq 124 ]]" "无效 YAML 处理完成（未崩溃）"
 rm -f "$local_invalid_config"
 
 # 9.7 不存在的配置 文件

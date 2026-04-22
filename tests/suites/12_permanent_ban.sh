@@ -47,11 +47,16 @@ echo "$TEST_PERM_IP2" > "$PROC_PERMANENT_REMOVE" 2>/dev/null || true
 # ============================================================================
 fw_subsection "永久封禁输入验证"
 
-assert_true "! echo 'invalid_ip' > '$PROC_PERMANENT_ADD' 2>/dev/null" "拒绝无效 IP 格式"
-assert_true "! echo '127.0.0.1' > '$PROC_PERMANENT_ADD' 2>/dev/null" "拒绝回环地址"
-assert_true "! echo '0.0.0.0' > '$PROC_PERMANENT_ADD' 2>/dev/null" "拒绝 0.0.0.0"
-assert_true "! echo '255.255.255.255' > '$PROC_PERMANENT_ADD' 2>/dev/null" "拒绝广播地址"
-assert_true "! echo \"1.2.3.4'; DROP TABLE permanent_banlist;--\" > '$PROC_PERMANENT_ADD' 2>/dev/null" "SQL 注入尝试被拒绝"
+# 无效 IP 格式
+assert_failure "echo 'invalid_ip' > '$PROC_PERMANENT_ADD' 2>/dev/null" "拒绝无效 IP 格式"
+
+# 保留地址
+assert_failure "echo '127.0.0.1' > '$PROC_PERMANENT_ADD' 2>/dev/null" "拒绝回环地址"
+assert_failure "echo '0.0.0.0' > '$PROC_PERMANENT_ADD' 2>/dev/null" "拒绝 0.0.0.0"
+assert_failure "echo '255.255.255.255' > '$PROC_PERMANENT_ADD' 2>/dev/null" "拒绝广播地址"
+
+# SQL 注入测试 (procfs 写入应安全处理)
+assert_failure "echo \"1.2.3.4'; DROP TABLE permanent_banlist;--\" > '$PROC_PERMANENT_ADD' 2>/dev/null" "SQL 注入尝试被拒绝"
 
 # ============================================================================
 # 12.4 重复永久封禁处理
@@ -148,10 +153,12 @@ EOF
     assert_eq "$local_count2" "1" "SQLite 唯一性约束生效"
 
     # 批量插入性能
+    local now
+    now=$(date +%s)
     local_batch_start=$(date +%s%N)
     sqlite3 "$TEST_DB_PATH" <<EOF
 BEGIN TRANSACTION;
-$(for i in $(seq 1 100); do echo "INSERT OR IGNORE INTO permanent_banlist (ip, ip_num, reason, created_at) VALUES ('10.0.$((i / 255)).$((i % 255))', $((3221225985 + i)), 'batch test', $(date +%s));"; done)
+$(for i in $(seq 1 100); do echo "INSERT OR IGNORE INTO permanent_banlist (ip, ip_num, reason, created_at) VALUES ('10.0.$((i / 255)).$((i % 255))', $((3221225985 + i)), 'batch test', $now);"; done)
 COMMIT;
 EOF
     local_batch_end=$(date +%s%N)
@@ -205,3 +212,4 @@ fi
 # 清理
 # ============================================================================
 fw_cleanup_section "永久黑名单测试完成"
+fw_ensure_module_unloaded

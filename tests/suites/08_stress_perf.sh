@@ -13,7 +13,7 @@ for i in $(seq 1 $PERF_TEST_COUNT); do
 done
 local_dur=$(( ($(date +%s%N) - local_start) / 1000000 ))
 local_avg=$(( local_dur / PERF_TEST_COUNT ))
-info "封禁 $PERF_TEST_COUNT IP 耗时: ${local_dur}ms (平均 ${local_avg}ms/IP)"
+fw_log_info "封禁 $PERF_TEST_COUNT IP 耗时: ${local_dur}ms (平均 ${local_avg}ms/IP)"
 assert_le "$local_dur" 5000 "封禁 $PERF_TEST_COUNT IP 在 5s 内"
 
 # 8.2 解封性能
@@ -24,7 +24,7 @@ for i in $(seq 1 $PERF_TEST_COUNT); do
 done
 local_dur=$(( ($(date +%s%N) - local_start) / 1000000 ))
 local_avg=$(( local_dur / PERF_TEST_COUNT ))
-info "解封 $PERF_TEST_COUNT IP 耗时: ${local_dur}ms (平均 ${local_avg}ms/IP)"
+fw_log_info "解封 $PERF_TEST_COUNT IP 耗时: ${local_dur}ms (平均 ${local_avg}ms/IP)"
 assert_le "$local_dur" 5000 "解封 $PERF_TEST_COUNT IP 在 5s 内"
 
 # 8.3 压力测试
@@ -34,7 +34,7 @@ for i in $(seq 1 $STRESS_IP_COUNT); do
     echo "172.16.$((i/255)).$((i%255))" > "$PROC_ADD_BAN" 2>/dev/null || true
 done
 local_dur=$(( ($(date +%s%N) - local_start) / 1000000 ))
-info "压力测试 $STRESS_IP_COUNT IP 耗时: ${local_dur}ms"
+fw_log_info "压力测试 $STRESS_IP_COUNT IP 耗时: ${local_dur}ms"
 assert_le "$local_dur" 10000 "压力测试在 10s 内完成"
 
 local_ban_count=$(wc -l < "$PROC_BAN_LIST" 2>/dev/null || echo 0)

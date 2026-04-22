@@ -26,7 +26,8 @@ assert_success "timeout 2 '$DAEMON_PATH' -c '$CONFIG_DIR/default.yaml' --help > 
 fw_subsection "FRP 日志解析"
 fw_ensure_module_loaded "$KERNEL_MODULE_PATH" 2>/dev/null || {
     skip_test "内核模块无法加载，跳过 FRP 日志解析测试"
-    return 0
+    fw_ensure_module_unloaded
+    exit 0
 }
 
 # 创建 FRP 测试日志

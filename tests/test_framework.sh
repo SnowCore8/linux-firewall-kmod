@@ -160,7 +160,7 @@ assert_file_contains() {
     local file="$1"
     local pattern="$2"
     local msg="${3:-文件 $file 不包含 '$pattern'}"
-    assert_true "grep -q '$pattern' '$file' 2>/dev/null" "$msg"
+    assert_true "grep -q \"$pattern\" \"$file\" 2>/dev/null" "$msg"
 }
 
 # 断言：字符串相等
@@ -254,9 +254,15 @@ fw_ensure_module_loaded() {
 
     # 加载
     if [[ -n "$params" ]]; then
-        insmod "$module_path" $params 2>/dev/null
+        if ! insmod "$module_path" $params 2>/dev/null; then
+            fw_log_error "模块加载失败: $module_path $params"
+            return 1
+        fi
     else
-        insmod "$module_path" 2>/dev/null
+        if ! insmod "$module_path" 2>/dev/null; then
+            fw_log_error "模块加载失败: $module_path"
+            return 1
+        fi
     fi
     sleep 0.5
 }
