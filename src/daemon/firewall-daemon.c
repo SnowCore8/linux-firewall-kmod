@@ -1628,7 +1628,7 @@ static int ban_ip(const char *ip)
 {
     struct in_addr addr4;
     size_t ip_len;
-    char ip_with_newline[INET_ADDRSTRLEN + 6];  // +4 for "ban ", +1 for \n, +1 for \0
+    char ip_with_newline[INET_ADDRSTRLEN + 2];  // +1 for \n, +1 for \0
 
     // Validate input IP format before attempting to ban
     if (!ip) {
@@ -1658,7 +1658,7 @@ static int ban_ip(const char *ip)
     }
 
     // Prepare data with newline for writing
-    snprintf(ip_with_newline, sizeof(ip_with_newline), "ban %s\n", ip);
+    snprintf(ip_with_newline, sizeof(ip_with_newline), "%s\n", ip);
 
     // Write to kernel module (temporary ban)
     if (secure_procfs_write(BANS_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
@@ -1683,7 +1683,7 @@ static int ban_ip_permanent(const char *ip)
 {
     struct in_addr addr4;
     size_t ip_len;
-    char ip_with_newline[INET_ADDRSTRLEN + 2];
+    char ip_with_newline[INET_ADDRSTRLEN + 5];  // +3 for " 0", +1 for \n, +1 for \0
 
     if (!ip) {
         daemon_log_err("NULL IP address provided to ban_ip_permanent");
@@ -1701,7 +1701,7 @@ static int ban_ip_permanent(const char *ip)
         return -1;
     }
 
-    snprintf(ip_with_newline, sizeof(ip_with_newline), "permanent %s\n", ip);
+    snprintf(ip_with_newline, sizeof(ip_with_newline), "%s 0\n", ip);
 
     /* Write to kernel module permanent ban endpoint */
     if (secure_procfs_write(BANS_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
@@ -1774,7 +1774,7 @@ static int unban_ip(const char *ip)
 static int unban_permanent_ip(const char *ip)
 {
     struct in_addr addr4;
-    char ip_with_newline[INET_ADDRSTRLEN + 20];  // +20 for "unpermanent " prefix
+    char ip_with_newline[INET_ADDRSTRLEN + 8];  // +6 for "unban ", +1 for \n, +1 for \0
 
     if (!ip) {
         daemon_log_err("NULL IP address provided to unban_permanent_ip");
@@ -1792,12 +1792,12 @@ static int unban_permanent_ip(const char *ip)
     if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
         ((ip_num >> 24) & 0xFF) == 127 ||  // 127.x.x.x
         (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {  // 224.0.0.0/4 (multicast)
-        daemon_log_err("Attempt to unpermanent invalid IPv4: %s", ip);
+        daemon_log_err("Attempt to unban permanent invalid IPv4: %s", ip);
         return -1;
     }
 
-    // Prepare data with unpermanent command
-    snprintf(ip_with_newline, sizeof(ip_with_newline), "unpermanent %s\n", ip);
+    // Prepare data with unban command (same as regular unban)
+    snprintf(ip_with_newline, sizeof(ip_with_newline), "unban %s\n", ip);
 
     // Write to kernel module
     if (secure_procfs_write(BANS_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
