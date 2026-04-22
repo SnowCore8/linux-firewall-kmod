@@ -1,28 +1,12 @@
 # firewall daemon configuration for frps protection
-# Monitors frp log for suspicious connections on port 2222
+# Monitors frp log for suspicious connections
 
-# Max failed attempts before banning an IP
-max_retries: 10
-
-# Time window for counting failed attempts (in seconds)
-findtime: 300
-
-# Ban duration (in seconds)
-ban_time: 3600
-
-# Check interval (in seconds)
-interval: 2
-
-# Whether to daemonize (true/false)
-daemonize: true
-
-# Log files to monitor - frp log
-log_files:
-  - /root/frp/frp.log
-
-# Prometheus metrics exporter port (0 to disable)
-metrics_port: 9120
-
-# Log parsing regex patterns
-regex_patterns:
-  sshd: ""
+jails:
+  frps:
+    enabled: true
+    log_files:
+      - /root/frp/frp.log
+    max_retries: 10
+    findtime: 300
+    ban_time: 3600
+    regex: ""  # Uses built-in sshd pattern as fallback

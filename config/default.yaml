@@ -1,34 +1,25 @@
 # firewall daemon configuration file
 # Default configuration: protects only sshd (SSH service)
 
-# Max failed attempts before banning an IP
-max_retries: 5
+# Global defaults - applied to all jails unless overridden
+defaults:
+  max_retries: 5
+  findtime: 600
+  ban_time: 900
+  interval: 1
+  metrics_port: 9119
 
-# Time window for counting failed attempts (in seconds)
-findtime: 600
-
-# Ban duration (in seconds)
-ban_time: 900
-
-# Check interval (in seconds)
-interval: 1
-
-# Whether to daemonize (true/false)
-daemonize: false
-
-# Log files to monitor - only sshd
-log_files:
-  - /var/log/auth.log
-  - /var/log/secure
-
-# Prometheus metrics exporter port (0 to disable)
-metrics_port: 9119
-
-# Log parsing regex patterns (POSIX Extended regex)
-# Only sshd is supported by default
-regex_patterns:
-  # SSH failed password pattern
-  sshd: ""
+# Jail definitions
+jails:
+  sshd:
+    enabled: true
+    log_files:
+      - /var/log/auth.log
+      - /var/log/secure
+    max_retries: 5
+    findtime: 600
+    ban_time: 900
+    regex: ""  # Empty string uses built-in sshd pattern
 
 # Permanent ban configuration (SQLite-based persistence)
 # Path to SQLite database file for permanent bans (empty = disabled)

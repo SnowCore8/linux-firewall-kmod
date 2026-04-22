@@ -39,6 +39,7 @@
 #include <pthread.h>
 #include <ctype.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <yaml.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -77,8 +78,11 @@
 /* Maximum failed attempts to track per IP */
 #define MAX_FAILED_TIMESTAMPS 100
 
-/* Maximum number of log files to monitor */
+/* Maximum number of log files to monitor per jail */
 #define MAX_LOG_FILES 10
+
+/* Maximum number of jails */
+#define MAX_JAILS 16
 
 /* Event buffer size for inotify */
 #define EVENT_BUF_LEN (1024 * (sizeof(struct inotify_event) + 16))
@@ -89,27 +93,44 @@ struct file_state {
     off_t offset;
     ino_t inode;
     int wd;  /* inotify watch descriptor */
+    int jail_idx;  /* Which jail this file belongs to */
+};
+
+/* Jail structure - isolated monitoring unit */
+struct jail {
+    char name[64];                    /* Jail name (sshd, nginx, etc.) */
+    bool enabled;                     /* Whether this jail is active */
+    char *log_files[MAX_LOG_FILES];   /* Log files for this jail */
+    int log_count;                    /* Number of log files */
+    char *regex_pattern;              /* Custom regex pattern (NULL = builtin) */
+    regex_t compiled_regex;           /* Compiled regex */
+    int regex_compiled;               /* Whether regex is compiled */
+    unsigned int max_retries;         /* Max failures before ban */
+    unsigned int findtime;            /* Time window for counting failures */
+    unsigned int ban_time;            /* Ban duration */
+    struct failed_entry *failed_table;/* Per-jail failed attempts */
+    /* Hash table for faster lookup */
+    struct failed_entry *failed_hash_table[256];
 };
 
 /* Global running flag */
 static volatile sig_atomic_t running = 1;
 static volatile sig_atomic_t reload_config = 0;
 
-/* Configuration structure */
+/* Global default configuration */
 struct config {
-    unsigned int max_retries;
-    unsigned int findtime;
-    unsigned int ban_time;
+    unsigned int default_max_retries; /* Default for new jails */
+    unsigned int default_findtime;
+    unsigned int default_ban_time;
     int daemonize;
     int interval;
     int metrics_port;       /* Prometheus metrics port (0 = disabled) */
-    char *sshd_regex;       /* Custom sshd regex pattern (NULL = use default) */
-    char *log_files[MAX_LOG_FILES];
-    int log_count;
     char *config_file;      /* Path to single configuration file for runtime updates */
     char *config_dir;       /* Path to configuration directory (auto-loads all .yaml/.yml) */
     char *permanent_db_path; /* SQLite database path for permanent bans (NULL = disabled) */
     int permanent_ban_enabled; /* Whether permanent bans are enabled */
+    struct jail jails[MAX_JAILS]; /* All jails */
+    int jail_count;
 };
 
 /* Failed attempt tracker */
@@ -126,16 +147,162 @@ static pthread_mutex_t config_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Global state */
 static struct config cfg;
-static struct failed_entry *failed_table = NULL;
 static int inotify_fd = -1;
-static struct file_state file_states[MAX_LOG_FILES];
+/* File states array - sized for all jails' log files */
+static struct file_state file_states[MAX_JAILS * MAX_LOG_FILES];
 
 /* SQLite persistent banlist */
 static sqlite_db_t *sqlite_db = NULL;
 
-/* Precompiled regex patterns for log parsing */
-static regex_t sshd_regex;
-static int regex_compiled = 0;
+/* ============================================================================
+ * Jail Management Functions
+ * ============================================================================ */
+
+/* Initialize jail with default values from global config */
+static void init_jail_defaults(struct jail *j)
+{
+    j->enabled = true;
+    j->log_count = 0;
+    j->regex_pattern = NULL;
+    j->regex_compiled = 0;
+    memset(&j->compiled_regex, 0, sizeof(j->compiled_regex));
+    j->max_retries = cfg.default_max_retries;
+    j->findtime = cfg.default_findtime;
+    j->ban_time = cfg.default_ban_time;
+    j->failed_table = NULL;
+    memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
+
+    for (int i = 0; i < MAX_LOG_FILES; i++) {
+        j->log_files[i] = NULL;
+    }
+}
+
+/* Free jail regex */
+static void free_jail_regex(struct jail *j)
+{
+    if (j && j->regex_compiled) {
+        regfree(&j->compiled_regex);
+        j->regex_compiled = 0;
+    }
+}
+
+/* Find existing jail or create new one */
+static struct jail *find_or_create_jail(const char *name)
+{
+    /* Find existing jail */
+    for (int i = 0; i < cfg.jail_count; i++) {
+        if (strcmp(cfg.jails[i].name, name) == 0) {
+            return &cfg.jails[i];
+        }
+    }
+
+    /* Create new jail */
+    if (cfg.jail_count >= MAX_JAILS) {
+        daemon_log_warn("Max jails reached (%d), cannot create jail '%s'", MAX_JAILS, name);
+        return NULL;
+    }
+
+    struct jail *j = &cfg.jails[cfg.jail_count++];
+    init_jail_defaults(j);
+    strncpy(j->name, name, sizeof(j->name) - 1);
+    j->name[sizeof(j->name) - 1] = '\0';
+
+    daemon_log_info("Created new jail: %s", name);
+    return j;
+}
+
+/* Destroy a jail and free its resources */
+static void destroy_jail(struct jail *j)
+{
+    if (!j) return;
+
+    /* Free log files */
+    for (int i = 0; i < j->log_count; i++) {
+        if (j->log_files[i]) {
+            free(j->log_files[i]);
+            j->log_files[i] = NULL;
+        }
+    }
+    j->log_count = 0;
+
+    /* Free regex */
+    free_jail_regex(j);
+    if (j->regex_pattern) {
+        free(j->regex_pattern);
+        j->regex_pattern = NULL;
+    }
+
+    /* Free failed table */
+    if (j->failed_table) {
+        struct failed_entry *entry = j->failed_table;
+        while (entry) {
+            struct failed_entry *next = entry->next;
+            free(entry);
+            entry = next;
+        }
+        j->failed_table = NULL;
+    }
+
+    /* Clear hash table */
+    memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
+
+    daemon_log_info("Destroyed jail: %s", j->name);
+}
+
+/* Compile regex for a jail */
+static int compile_jail_regex(struct jail *j)
+{
+    if (!j) return -1;
+
+    /* Free existing regex if compiled */
+    if (j->regex_compiled) {
+        regfree(&j->compiled_regex);
+        j->regex_compiled = 0;
+    }
+
+    /* Use jail's custom regex or built-in default */
+    const char *pattern = (j->regex_pattern && strlen(j->regex_pattern) > 0) ?
+        j->regex_pattern :
+        "Failed password for (invalid user )?[a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})";
+
+    int ret = regcomp(&j->compiled_regex, pattern, REG_EXTENDED);
+    if (ret != 0) {
+        char errbuf[256];
+        regerror(ret, &j->compiled_regex, errbuf, sizeof(errbuf));
+        daemon_log_err("Failed to compile regex for jail '%s': %s", j->name, errbuf);
+        return -1;
+    }
+
+    j->regex_compiled = 1;
+    daemon_log_debug("Compiled regex for jail '%s'", j->name);
+    return 0;
+}
+
+/* Get global file_states index for a jail's log file */
+static int get_global_file_state_index(int jail_idx, int file_idx)
+{
+    if (jail_idx < 0 || jail_idx >= cfg.jail_count) {
+        daemon_log_err("Invalid jail index: %d", jail_idx);
+        return -1;
+    }
+    if (file_idx < 0 || file_idx >= cfg.jails[jail_idx].log_count) {
+        daemon_log_err("Invalid file index for jail %d: %d", jail_idx, file_idx);
+        return -1;
+    }
+
+    int global_idx = 0;
+    for (int j = 0; j < jail_idx; j++) {
+        global_idx += cfg.jails[j].log_count;
+    }
+    global_idx += file_idx;
+
+    if (global_idx >= MAX_JAILS * MAX_LOG_FILES) {
+        daemon_log_err("Global file index out of bounds: %d", global_idx);
+        return -1;
+    }
+
+    return global_idx;
+}
 
 /* ============================================================================
  * Prometheus Statistics
@@ -166,7 +333,13 @@ static int parse_config_file(const char *config_path);
 static int load_config_directory(const char *config_dir);
 static int parse_config(int argc, char *argv[]);
 static int extract_ip(const char *line, char *ip_out, size_t ip_size);
-static int parse_log_line(const char *line, char *ip_out, size_t ip_size);
+static int parse_log_line(struct jail *j, const char *line, char *ip_out, size_t ip_size);
+static struct jail *find_or_create_jail(const char *name);
+static void destroy_jail(struct jail *j);
+static void init_jail_defaults(struct jail *j);
+static int compile_jail_regex(struct jail *j);
+static void free_jail_regex(struct jail *j);
+static int get_global_file_state_index(int jail_idx, int file_idx);
 static struct failed_entry *find_entry(const char *ip);
 static struct failed_entry *create_entry(const char *ip);
 static void remove_entry(const char *ip);
@@ -204,7 +377,7 @@ static void signal_handler(int sig)
     }
 }
 
-/* Parse configuration file using libyaml */
+/* Parse configuration file using libyaml - supports jail-based YAML format */
 static int parse_config_file(const char *config_path)
 {
     FILE *file;
@@ -213,61 +386,23 @@ static int parse_config_file(const char *config_path)
     int done = 0;
     int error = 0;
 
-    /* 保存旧配置的深拷贝，用于解析失败时恢复 */
-    char *old_log_files[MAX_LOG_FILES];
-    int old_log_count = 0;
-    unsigned int old_max_retries = cfg.max_retries;
-    unsigned int old_findtime = cfg.findtime;
-    unsigned int old_ban_time = cfg.ban_time;
-    int old_interval = cfg.interval;
-    int old_metrics_port = cfg.metrics_port;
-    int old_daemonize = cfg.daemonize;
-    char *old_sshd_regex = cfg.sshd_regex ? strdup(cfg.sshd_regex) : NULL;
-
-    for (int i = 0; i < cfg.log_count; i++) {
-        old_log_files[i] = cfg.log_files[i] ? strdup(cfg.log_files[i]) : NULL;
-        if (cfg.log_files[i] && !old_log_files[i]) {
-            for (int j = 0; j < i; j++) {
-                free(old_log_files[j]);
-            }
-            daemon_log_err("Out of memory saving old config for rollback");
-            return -1;
-        }
-    }
-    old_log_count = cfg.log_count;
+    /* Track parsing state for jail-based YAML */
+    struct jail *current_jail = NULL;
+    int in_jails_section = 0;
+    int in_defaults_section = 0;
+    int in_log_files_array = 0;
+    char *current_key = NULL;
+    char *current_jail_name = NULL;
 
     /* 获取配置锁 */
     pthread_mutex_lock(&config_mutex);
-
-    /* Clean up old inotify watches */
-    for (int i = 0; i < cfg.log_count; i++) {
-        if (file_states[i].wd >= 0 && inotify_fd >= 0) {
-            inotify_rm_watch(inotify_fd, file_states[i].wd);
-            file_states[i].wd = -1;
-        }
-        file_states[i].offset = 0;
-        file_states[i].inode = 0;
-        file_states[i].path[0] = '\0';
-    }
-
-    /* Free old log_files */
-    for (int i = 0; i < cfg.log_count; i++) {
-        if (cfg.log_files[i]) {
-            free(cfg.log_files[i]);
-            cfg.log_files[i] = NULL;
-        }
-    }
-    cfg.log_count = 0;
-
-    /* Free old regex patterns */
-    free(cfg.sshd_regex); cfg.sshd_regex = NULL;
 
     /* Open config file */
     file = fopen(config_path, "r");
     if (!file) {
         daemon_log_warn("Cannot open config file: %s", config_path);
         pthread_mutex_unlock(&config_mutex);
-        goto restore_old_config;
+        return -1;
     }
 
     daemon_log_info("Reading config file: %s", config_path);
@@ -277,15 +412,10 @@ static int parse_config_file(const char *config_path)
         daemon_log_err("Failed to initialize YAML parser");
         fclose(file);
         pthread_mutex_unlock(&config_mutex);
-        goto restore_old_config;
+        return -1;
     }
 
     yaml_parser_set_input_file(&parser, file);
-
-    /* Parser state tracking */
-    char *current_key = NULL;
-    int in_log_files_array = 0;
-    int in_regex_patterns = 0;
 
     /* Parse YAML events */
     while (!done) {
@@ -308,76 +438,185 @@ static int parse_config_file(const char *config_path)
         case YAML_SCALAR_EVENT: {
             char *value = (char *)event.data.scalar.value;
 
-            if (in_log_files_array) {
-                /* Parsing log_files array */
-                if (cfg.log_count >= MAX_LOG_FILES) {
-                    daemon_log_warn("Too many log files in config (max %d)", MAX_LOG_FILES);
-                } else if (validate_and_normalize_path(value) < 0) {
-                    daemon_log_warn("Invalid log file path in config: %s", value);
-                } else {
-                    cfg.log_files[cfg.log_count] = strdup(value);
-                    if (!cfg.log_files[cfg.log_count]) {
-                        daemon_log_err("Out of memory allocating log file path");
-                        error = 1;
-                    } else {
-                        daemon_log_info("Added log file from config: %s", cfg.log_files[cfg.log_count]);
-                        cfg.log_count++;
-                    }
-                }
-            } else if (in_regex_patterns && current_key) {
-                /* Parsing regex pattern values */
-                if (strlen(value) > 0) {
-                    if (strcmp(current_key, "sshd") == 0) {
-                        cfg.sshd_regex = strdup(value);
-                        if (!cfg.sshd_regex) {
-                            daemon_log_err("Out of memory allocating sshd_regex");
-                            error = 1;
-                        } else {
-                            daemon_log_info("Config sshd_regex set to: %s", value);
-                        }
-                    }
-                    free(current_key);
-                    current_key = NULL;
-                }
-            } else if (current_key) {
-                /* We have a key-value pair */
+            if (in_defaults_section && current_key) {
+                /* Parsing defaults section - set global defaults */
                 if (strcmp(current_key, "max_retries") == 0) {
                     char *endptr;
                     errno = 0;
                     long val = strtol(value, &endptr, 10);
-                    if (errno != 0 || *endptr != '\0' || val < 1 || val > 100 || val > INT_MAX) {
-                        daemon_log_warn("Invalid max_retries value in config: %s", value);
+                    if (errno != 0 || *endptr != '\0' || val < 1 || val > 100) {
+                        daemon_log_warn("Invalid default max_retries: %s", value);
                     } else {
-                        cfg.max_retries = (unsigned int)val;
-                        daemon_log_info("Config max_retries set to %u", cfg.max_retries);
+                        cfg.default_max_retries = (unsigned int)val;
+                        daemon_log_info("Default max_retries set to %u", cfg.default_max_retries);
                     }
                 } else if (strcmp(current_key, "findtime") == 0) {
                     char *endptr;
                     errno = 0;
                     long val = strtol(value, &endptr, 10);
-                    if (errno != 0 || *endptr != '\0' || val < 1 || val > 3600 || val > INT_MAX) {
-                        daemon_log_warn("Invalid findtime value in config: %s", value);
+                    if (errno != 0 || *endptr != '\0' || val < 1 || val > 3600) {
+                        daemon_log_warn("Invalid default findtime: %s", value);
                     } else {
-                        cfg.findtime = (unsigned int)val;
-                        daemon_log_info("Config findtime set to %u", cfg.findtime);
+                        cfg.default_findtime = (unsigned int)val;
+                        daemon_log_info("Default findtime set to %u", cfg.default_findtime);
                     }
                 } else if (strcmp(current_key, "ban_time") == 0) {
                     char *endptr;
                     errno = 0;
                     long val = strtol(value, &endptr, 10);
-                    if (errno != 0 || *endptr != '\0' || val < 1 || val > 86400 || val > INT_MAX) {
-                        daemon_log_warn("Invalid ban_time value in config: %s", value);
+                    if (errno != 0 || *endptr != '\0' || val < 1 || val > 86400) {
+                        daemon_log_warn("Invalid default ban_time: %s", value);
                     } else {
-                        cfg.ban_time = (unsigned int)val;
-                        daemon_log_info("Config ban_time set to %u", cfg.ban_time);
+                        cfg.default_ban_time = (unsigned int)val;
+                        daemon_log_info("Default ban_time set to %u", cfg.default_ban_time);
                     }
                 } else if (strcmp(current_key, "interval") == 0) {
                     char *endptr;
                     errno = 0;
                     long val = strtol(value, &endptr, 10);
-                    if (errno != 0 || *endptr != '\0' || val < 1 || val > 60 || val > INT_MAX) {
-                        daemon_log_warn("Invalid interval value in config: %s", value);
+                    if (errno != 0 || *endptr != '\0' || val < 1 || val > 60) {
+                        daemon_log_warn("Invalid default interval: %s", value);
                     } else {
+                        cfg.interval = (int)val;
+                        daemon_log_info("Default interval set to %d", cfg.interval);
+                    }
+                } else if (strcmp(current_key, "metrics_port") == 0) {
+                    char *endptr;
+                    errno = 0;
+                    long val = strtol(value, &endptr, 10);
+                    if (errno != 0 || *endptr != '\0' || val < 0 || val > 65535) {
+                        daemon_log_warn("Invalid default metrics_port: %s", value);
+                    } else {
+                        cfg.metrics_port = (int)val;
+                        daemon_log_info("Default metrics_port set to %d", cfg.metrics_port);
+                    }
+                } else if (strcmp(current_key, "daemonize") == 0) {
+                    if (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "1") == 0) {
+                        cfg.daemonize = 1;
+                    } else {
+                        cfg.daemonize = 0;
+                    }
+                } else if (strcmp(current_key, "permanent_db_path") == 0) {
+                    if (strlen(value) > 0) {
+                        if (cfg.permanent_db_path) free(cfg.permanent_db_path);
+                        cfg.permanent_db_path = strdup(value);
+                        if (cfg.permanent_db_path) {
+                            cfg.permanent_ban_enabled = 1;
+                            daemon_log_info("Default permanent_db_path set to: %s", value);
+                        }
+                    }
+                } else if (strcmp(current_key, "permanent_ban_enabled") == 0) {
+                    cfg.permanent_ban_enabled = (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "1") == 0);
+                }
+                free(current_key);
+                current_key = NULL;
+            } else if (in_jails_section && current_jail_name && !in_log_files_array) {
+                /* We're in a jail section - either this is a jail key or a jail property */
+                if (!current_key) {
+                    /* This is a property key for the current jail */
+                    current_key = strdup(value);
+                } else {
+                    /* We have key-value pair for jail property */
+                    /* Find or create jail if not already created */
+                    if (!current_jail) {
+                        current_jail = find_or_create_jail(current_jail_name);
+                        if (!current_jail) {
+                            daemon_log_warn("Failed to create jail '%s'", current_jail_name);
+                            free(current_key);
+                            current_key = NULL;
+                            break;
+                        }
+                    }
+
+                    if (strcmp(current_key, "enabled") == 0) {
+                        current_jail->enabled = (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "1") == 0);
+                        daemon_log_info("Jail '%s' enabled: %s", current_jail->name, value);
+                    } else if (strcmp(current_key, "max_retries") == 0) {
+                        char *endptr;
+                        errno = 0;
+                        long val = strtol(value, &endptr, 10);
+                        if (errno != 0 || *endptr != '\0' || val < 1 || val > 100) {
+                            daemon_log_warn("Invalid max_retries for jail '%s': %s", current_jail->name, value);
+                        } else {
+                            current_jail->max_retries = (unsigned int)val;
+                            daemon_log_info("Jail '%s' max_retries set to %u", current_jail->name, current_jail->max_retries);
+                        }
+                    } else if (strcmp(current_key, "findtime") == 0) {
+                        char *endptr;
+                        errno = 0;
+                        long val = strtol(value, &endptr, 10);
+                        if (errno != 0 || *endptr != '\0' || val < 1 || val > 3600) {
+                            daemon_log_warn("Invalid findtime for jail '%s': %s", current_jail->name, value);
+                        } else {
+                            current_jail->findtime = (unsigned int)val;
+                            daemon_log_info("Jail '%s' findtime set to %u", current_jail->name, current_jail->findtime);
+                        }
+                    } else if (strcmp(current_key, "ban_time") == 0) {
+                        char *endptr;
+                        errno = 0;
+                        long val = strtol(value, &endptr, 10);
+                        if (errno != 0 || *endptr != '\0' || val < 1 || val > 86400) {
+                            daemon_log_warn("Invalid ban_time for jail '%s': %s", current_jail->name, value);
+                        } else {
+                            current_jail->ban_time = (unsigned int)val;
+                            daemon_log_info("Jail '%s' ban_time set to %u", current_jail->name, current_jail->ban_time);
+                        }
+                    } else if (strcmp(current_key, "regex") == 0) {
+                        if (current_jail->regex_pattern) free(current_jail->regex_pattern);
+                        current_jail->regex_pattern = strdup(value);
+                        daemon_log_info("Jail '%s' regex set to: %s", current_jail->name, value);
+                    }
+                    free(current_key);
+                    current_key = NULL;
+                }
+            } else if (in_log_files_array && current_jail) {
+                /* Parsing log_files array for current jail */
+                if (current_jail->log_count >= MAX_LOG_FILES) {
+                    daemon_log_warn("Too many log files for jail '%s' (max %d)", current_jail->name, MAX_LOG_FILES);
+                } else if (validate_and_normalize_path(value) < 0) {
+                    daemon_log_warn("Invalid log file path for jail '%s': %s", current_jail->name, value);
+                } else {
+                    current_jail->log_files[current_jail->log_count] = strdup(value);
+                    if (!current_jail->log_files[current_jail->log_count]) {
+                        daemon_log_err("Out of memory allocating log file path");
+                        error = 1;
+                    } else {
+                        daemon_log_info("Jail '%s' added log file: %s", current_jail->name, current_jail->log_files[current_jail->log_count]);
+                        current_jail->log_count++;
+                    }
+                }
+            } else if (current_key) {
+                /* Top-level key-value pair (not in jails or defaults) */
+                /* This handles backward compatibility for old-style configs */
+                if (strcmp(current_key, "max_retries") == 0) {
+                    char *endptr;
+                    errno = 0;
+                    long val = strtol(value, &endptr, 10);
+                    if (errno == 0 && *endptr == '\0' && val >= 1 && val <= 100) {
+                        cfg.default_max_retries = (unsigned int)val;
+                        daemon_log_info("Config max_retries set to %u", cfg.default_max_retries);
+                    }
+                } else if (strcmp(current_key, "findtime") == 0) {
+                    char *endptr;
+                    errno = 0;
+                    long val = strtol(value, &endptr, 10);
+                    if (errno == 0 && *endptr == '\0' && val >= 1 && val <= 3600) {
+                        cfg.default_findtime = (unsigned int)val;
+                        daemon_log_info("Config findtime set to %u", cfg.default_findtime);
+                    }
+                } else if (strcmp(current_key, "ban_time") == 0) {
+                    char *endptr;
+                    errno = 0;
+                    long val = strtol(value, &endptr, 10);
+                    if (errno == 0 && *endptr == '\0' && val >= 1 && val <= 86400) {
+                        cfg.default_ban_time = (unsigned int)val;
+                        daemon_log_info("Config ban_time set to %u", cfg.default_ban_time);
+                    }
+                } else if (strcmp(current_key, "interval") == 0) {
+                    char *endptr;
+                    errno = 0;
+                    long val = strtol(value, &endptr, 10);
+                    if (errno == 0 && *endptr == '\0' && val >= 1 && val <= 60) {
                         cfg.interval = (int)val;
                         daemon_log_info("Config interval set to %d", cfg.interval);
                     }
@@ -385,40 +624,22 @@ static int parse_config_file(const char *config_path)
                     char *endptr;
                     errno = 0;
                     long val = strtol(value, &endptr, 10);
-                    if (errno != 0 || *endptr != '\0' || val < 0 || val > 65535) {
-                        daemon_log_warn("Invalid metrics_port value in config: %s", value);
-                    } else {
+                    if (errno == 0 && *endptr == '\0' && val >= 0 && val <= 65535) {
                         cfg.metrics_port = (int)val;
                         daemon_log_info("Config metrics_port set to %d", cfg.metrics_port);
                     }
                 } else if (strcmp(current_key, "daemonize") == 0) {
-                    if (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "TRUE") == 0 || strcmp(value, "1") == 0) {
-                        cfg.daemonize = 1;
-                        daemon_log_info("Config daemonize set to true");
-                    } else if (strcmp(value, "false") == 0 || strcmp(value, "False") == 0 || strcmp(value, "FALSE") == 0 || strcmp(value, "0") == 0) {
-                        cfg.daemonize = 0;
-                        daemon_log_info("Config daemonize set to false");
-                    } else {
-                        daemon_log_warn("Invalid daemonize value in config: %s", value);
-                    }
+                    cfg.daemonize = (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "1") == 0);
                 } else if (strcmp(current_key, "permanent_db_path") == 0) {
                     if (strlen(value) > 0) {
+                        if (cfg.permanent_db_path) free(cfg.permanent_db_path);
                         cfg.permanent_db_path = strdup(value);
-                        if (!cfg.permanent_db_path) {
-                            daemon_log_err("Out of memory allocating permanent_db_path");
-                        } else {
-                            cfg.permanent_ban_enabled = 1;
-                            daemon_log_info("Config permanent_db_path set to: %s", value);
-                        }
+                        if (cfg.permanent_db_path) cfg.permanent_ban_enabled = 1;
                     }
                 } else if (strcmp(current_key, "permanent_ban_enabled") == 0) {
-                    if (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "1") == 0) {
-                        cfg.permanent_ban_enabled = 1;
-                        daemon_log_info("Config permanent_ban_enabled set to true");
-                    } else {
-                        cfg.permanent_ban_enabled = 0;
-                        daemon_log_info("Config permanent_ban_enabled set to false");
-                    }
+                    cfg.permanent_ban_enabled = (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "1") == 0);
+                } else if (strcmp(current_key, "log_files") == 0) {
+                    /* This will be handled by sequence start */
                 }
                 free(current_key);
                 current_key = NULL;
@@ -430,7 +651,6 @@ static int parse_config_file(const char *config_path)
         }
 
         case YAML_SEQUENCE_START_EVENT: {
-            /* Check if we're starting log_files array */
             if (current_key && strcmp(current_key, "log_files") == 0) {
                 in_log_files_array = 1;
                 free(current_key);
@@ -444,17 +664,44 @@ static int parse_config_file(const char *config_path)
             break;
 
         case YAML_MAPPING_START_EVENT: {
-            if (current_key && strcmp(current_key, "regex_patterns") == 0) {
-                in_regex_patterns = 1;
+            if (current_key && strcmp(current_key, "jails") == 0) {
+                in_jails_section = 1;
                 free(current_key);
+                current_key = NULL;
+            } else if (current_key && strcmp(current_key, "defaults") == 0) {
+                in_defaults_section = 1;
+                free(current_key);
+                current_key = NULL;
+            } else if (in_jails_section && current_key) {
+                /* Starting a new jail mapping */
+                if (current_jail_name) free(current_jail_name);
+                current_jail_name = current_key;
+                current_jail = NULL;  /* Will be created when properties are parsed */
                 current_key = NULL;
             }
             break;
         }
 
-        case YAML_MAPPING_END_EVENT:
-            in_regex_patterns = 0;
+        case YAML_MAPPING_END_EVENT: {
+            if (in_jails_section && !in_log_files_array) {
+                /* End of a jail section - compile regex if pattern exists */
+                if (current_jail_name && current_jail) {
+                    if (current_jail->regex_pattern && strlen(current_jail->regex_pattern) > 0) {
+                        compile_jail_regex(current_jail);
+                    }
+                    daemon_log_info("Finished parsing jail '%s': enabled=%d, log_count=%d, max_retries=%u",
+                        current_jail->name, current_jail->enabled, current_jail->log_count, current_jail->max_retries);
+                }
+                if (current_jail_name) {
+                    free(current_jail_name);
+                    current_jail_name = NULL;
+                }
+                current_jail = NULL;
+            } else if (in_defaults_section) {
+                in_defaults_section = 0;
+            }
             break;
+        }
 
         case YAML_ALIAS_EVENT:
         case YAML_NO_EVENT:
@@ -470,47 +717,11 @@ static int parse_config_file(const char *config_path)
     fclose(file);
     pthread_mutex_unlock(&config_mutex);
 
-    /* 解析成功，释放旧配置的深拷贝 */
-    for (int i = 0; i < old_log_count; i++) {
-        free(old_log_files[i]);
-    }
+    /* Cleanup */
     if (current_key) free(current_key);
+    if (current_jail_name) free(current_jail_name);
+
     return 0;
-
-restore_old_config:
-    /* 解析失败，恢复旧配置 */
-    daemon_log_warn("Config parsing failed, restoring old configuration");
-
-    /* 释放新分配的资源 */
-    for (int i = 0; i < cfg.log_count; i++) {
-        free(cfg.log_files[i]);
-        cfg.log_files[i] = NULL;
-    }
-    free(cfg.sshd_regex); cfg.sshd_regex = NULL;
-
-    /* 恢复旧配置 */
-    cfg.log_count = 0;
-    for (int i = 0; i < old_log_count; i++) {
-        if (old_log_files[i]) {
-            cfg.log_files[cfg.log_count] = old_log_files[i];
-            cfg.log_count++;
-        }
-    }
-    cfg.max_retries = old_max_retries;
-    cfg.findtime = old_findtime;
-    cfg.ban_time = old_ban_time;
-    cfg.interval = old_interval;
-    cfg.metrics_port = old_metrics_port;
-    cfg.daemonize = old_daemonize;
-    cfg.sshd_regex = old_sshd_regex;
-
-    pthread_mutex_unlock(&config_mutex);
-
-    /* Release old config copies */
-    for (int i = 0; i < old_log_count; i++) {
-        free(old_log_files[i]);
-    }
-    return -1;
 }
 
 /* Load all .yaml/.yml files from a configuration directory
@@ -593,7 +804,7 @@ static int load_config_directory(const char *config_dir)
     /* Sort files alphabet using qsort for better performance */
     qsort(file_list, (size_t)file_count, sizeof(char *), compare_config_files);
 
-    /* Load each configuration file */
+    /* Load each configuration file - each file can define independent jails */
     for (int i = 0; i < file_count; i++) {
         char full_path[1024];
         snprintf(full_path, sizeof(full_path), "%s/%s", config_dir, file_list[i]);
@@ -605,6 +816,15 @@ static int load_config_directory(const char *config_dir)
             /* Continue loading other files instead of failing completely */
         }
     }
+
+    /* Log summary of loaded jails */
+    pthread_mutex_lock(&config_mutex);
+    daemon_log_info("Loaded %d jails from directory: %s", cfg.jail_count, config_dir);
+    for (int i = 0; i < cfg.jail_count; i++) {
+        daemon_log_info("  Jail[%d]: %s (enabled=%d, log_count=%d, max_retries=%u)",
+            i, cfg.jails[i].name, cfg.jails[i].enabled, cfg.jails[i].log_count, cfg.jails[i].max_retries);
+    }
+    pthread_mutex_unlock(&config_mutex);
 
     /* Cleanup */
     for (int i = 0; i < file_count; i++) {
@@ -661,19 +881,30 @@ static int parse_config(int argc, char *argv[])
     };
 
     /* Set defaults */
-    cfg.max_retries = DEFAULT_MAX_RETRIES;
-    cfg.findtime = DEFAULT_FINDTIME;
-    cfg.ban_time = DEFAULT_BAN_TIME;
+    cfg.default_max_retries = DEFAULT_MAX_RETRIES;
+    cfg.default_findtime = DEFAULT_FINDTIME;
+    cfg.default_ban_time = DEFAULT_BAN_TIME;
     cfg.daemonize = 0;
     cfg.interval = DEFAULT_INTERVAL;
     cfg.metrics_port = DEFAULT_METRICS_PORT;
-    cfg.log_count = 0;
+    cfg.jail_count = 0;
     cfg.config_file = NULL;
     cfg.config_dir = NULL;
+    cfg.permanent_db_path = NULL;
+    cfg.permanent_ban_enabled = 0;
 
-    /* Initialize log files array to NULL */
-    for (int i = 0; i < MAX_LOG_FILES; i++) {
-        cfg.log_files[i] = NULL;
+    /* Initialize jails */
+    for (int i = 0; i < MAX_JAILS; i++) {
+        cfg.jails[i].name[0] = '\0';
+        cfg.jails[i].enabled = false;
+        cfg.jails[i].log_count = 0;
+        cfg.jails[i].regex_pattern = NULL;
+        cfg.jails[i].regex_compiled = 0;
+        cfg.jails[i].failed_table = NULL;
+        memset(cfg.jails[i].failed_hash_table, 0, sizeof(cfg.jails[i].failed_hash_table));
+        for (int j = 0; j < MAX_LOG_FILES; j++) {
+            cfg.jails[i].log_files[j] = NULL;
+        }
     }
 
     /* Default config directory: ./config/ relative to executable or /etc/firewall/config/ */
@@ -793,7 +1024,7 @@ static int parse_config(int argc, char *argv[])
                     return -1;
                 }
 
-                cfg.max_retries = (unsigned int)val;
+                cfg.default_max_retries = (unsigned int)val;
             }
             break;
         case 'f':
@@ -814,7 +1045,7 @@ static int parse_config(int argc, char *argv[])
                     return -1;
                 }
 
-                cfg.findtime = (unsigned int)val;
+                cfg.default_findtime = (unsigned int)val;
             }
             break;
         case 'b':
@@ -835,7 +1066,7 @@ static int parse_config(int argc, char *argv[])
                     return -1;
                 }
 
-                cfg.ban_time = (unsigned int)val;
+                cfg.default_ban_time = (unsigned int)val;
             }
             break;
         case 'i':
@@ -879,34 +1110,32 @@ static int parse_config(int argc, char *argv[])
             }
             break;
         case 'l':
-            if (cfg.log_count >= MAX_LOG_FILES) {
-                fprintf(stderr, "Error: too many log files (max %d)\n", MAX_LOG_FILES);
-                return -1;
-            }
-
-            /* Enhanced security: Strict path validation to prevent path traversal attacks */
-            if (validate_and_normalize_path(optarg) < 0) {
-                fprintf(stderr, "Error: invalid log file path '%s'\n", optarg);
-                return -1;
-            }
-
-            cfg.log_files[cfg.log_count] = strdup(optarg);
-            if (!cfg.log_files[cfg.log_count]) {
-                fprintf(stderr, "Error: out of memory\n");
-                // Free any previously allocated log file paths
-                for (int j = 0; j < cfg.log_count; j++) {
-                    if (cfg.log_files[j]) {
-                        free(cfg.log_files[j]);
-                        cfg.log_files[j] = NULL;
-                    }
+            /* Create or use default jail for command-line log files */
+            {
+                struct jail *default_jail = find_or_create_jail("default");
+                if (!default_jail) {
+                    fprintf(stderr, "Error: failed to create default jail\n");
+                    return -1;
                 }
-                if (cfg.config_file) {  // Also free config file if allocated
-                    free(cfg.config_file);
-                    cfg.config_file = NULL;
+
+                if (default_jail->log_count >= MAX_LOG_FILES) {
+                    fprintf(stderr, "Error: too many log files (max %d)\n", MAX_LOG_FILES);
+                    return -1;
                 }
-                return -1;
+
+                /* Enhanced security: Strict path validation to prevent path traversal attacks */
+                if (validate_and_normalize_path(optarg) < 0) {
+                    fprintf(stderr, "Error: invalid log file path '%s'\n", optarg);
+                    return -1;
+                }
+
+                default_jail->log_files[default_jail->log_count] = strdup(optarg);
+                if (!default_jail->log_files[default_jail->log_count]) {
+                    fprintf(stderr, "Error: out of memory\n");
+                    return -1;
+                }
+                default_jail->log_count++;
             }
-            cfg.log_count++;
             break;
         case 'h':
             printf("Usage: %s [OPTIONS]\n", argv[0]);
@@ -931,13 +1160,24 @@ static int parse_config(int argc, char *argv[])
         }
     }
 
-    /* Default log files if none specified */
-    if (cfg.log_count == 0) {
+    /* Default log files if none specified - create default jail */
+    int total_log_files = 0;
+    for (int i = 0; i < cfg.jail_count; i++) {
+        total_log_files += cfg.jails[i].log_count;
+    }
+
+    if (total_log_files == 0) {
         const char *default_logs[] = {
             "/var/log/auth.log",
             "/var/log/secure"
         };
         int num_defaults = sizeof(default_logs) / sizeof(default_logs[0]);
+
+        struct jail *default_jail = find_or_create_jail("default");
+        if (!default_jail) {
+            fprintf(stderr, "Error: failed to create default jail\n");
+            return -1;
+        }
 
         for (int i = 0; i < num_defaults; i++) {
             /* Apply the same path validation to default log files */
@@ -947,23 +1187,13 @@ static int parse_config(int argc, char *argv[])
             }
 
             if (access(default_logs[i], R_OK) == 0) {
-                cfg.log_files[cfg.log_count] = strdup(default_logs[i]);
-                if (!cfg.log_files[cfg.log_count]) {
+                if (default_jail->log_count >= MAX_LOG_FILES) break;
+                default_jail->log_files[default_jail->log_count] = strdup(default_logs[i]);
+                if (!default_jail->log_files[default_jail->log_count]) {
                     fprintf(stderr, "Error: out of memory\n");
-                    // Free any previously allocated log file paths
-                    for (int j = 0; j < cfg.log_count; j++) {
-                        if (cfg.log_files[j]) {
-                            free(cfg.log_files[j]);
-                            cfg.log_files[j] = NULL;
-                        }
-                    }
-                    if (cfg.config_file) {  // Also free config file if allocated
-                        free(cfg.config_file);
-                        cfg.config_file = NULL;
-                    }
                     return -1;
                 }
-                cfg.log_count++;
+                default_jail->log_count++;
             }
         }
     }
@@ -1024,13 +1254,13 @@ static int extract_ip(const char *line, char *ip_out, size_t ip_size)
 
 /* Helper function to extract and validate IP from a log line.
  * Returns 1 if a valid IP was extracted, 0 otherwise.
- * Consolidates duplicated IP extraction/validation logic from sshd/vsftpd/nginx branches. */
-static int extract_and_validate_ip(const char *log_line, char *ip_out, size_t ip_size)
+ * Uses jail's regex for parsing. */
+static int extract_and_validate_ip(struct jail *j, const char *log_line, char *ip_out, size_t ip_size)
 {
     char ip_buf[INET_ADDRSTRLEN];
     struct in_addr addr4;
 
-    if (!parse_log_line(log_line, ip_buf, sizeof(ip_buf))) {
+    if (!parse_log_line(j, log_line, ip_buf, sizeof(ip_buf))) {
         return 0;
     }
 
@@ -1055,8 +1285,8 @@ static int extract_and_validate_ip(const char *log_line, char *ip_out, size_t ip
     return 0;
 }
 
-/* Parse log line and extract IP if it's a failed login */
-static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
+/* Parse log line and extract IP if it's a failed login - uses jail's regex */
+static int parse_log_line(struct jail *j, const char *line, char *ip_out, size_t ip_size)
 {
     regmatch_t matches[4];
     const char *ip_start;
@@ -1069,23 +1299,28 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
         return 0;
     }
 
-    /* Check for sshd failed password using precompiled regex */
-    if (regex_compiled) {
-        int regex_result = regexec(&sshd_regex, line, 4, matches, 0);
+    /* Check for failed login using jail's compiled regex */
+    if (j && j->regex_compiled) {
+        int regex_result = regexec(&j->compiled_regex, line, 4, matches, 0);
         if (regex_result == 0) {
-            atomic_fetch_add(&daemon_stats.regex_matches_sshd, 1);
-            /* Capture group 2: IP address */
-            if (matches[2].rm_so >= 0 && matches[2].rm_eo > matches[2].rm_so) {
+            /* Capture group 2: IP address (or last capture group) */
+            /* Try to find the IP address capture - typically the last group */
+            int ip_group = 3;  /* Default to group 3 (IP in sshd pattern) */
+            if (matches[3].rm_so < 0 || matches[3].rm_eo <= matches[3].rm_so) {
+                ip_group = 2;  /* Fallback to group 2 */
+            }
+
+            if (matches[ip_group].rm_so >= 0 && matches[ip_group].rm_eo > matches[ip_group].rm_so) {
                 /* Add boundary checks to prevent out-of-bounds reads */
-                if ((size_t)matches[2].rm_eo > line_len) {
-                    daemon_log_warn("Regex match exceeds line length in sshd log");
+                if ((size_t)matches[ip_group].rm_eo > line_len) {
+                    daemon_log_warn("Regex match exceeds line length in jail '%s'", j->name);
                     return 0;
                 }
-                ip_start = line + matches[2].rm_so;
-                ip_len = matches[2].rm_eo - matches[2].rm_so;
+                ip_start = line + matches[ip_group].rm_so;
+                ip_len = matches[ip_group].rm_eo - matches[ip_group].rm_so;
 
                 if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
-                    daemon_log_warn("Invalid IP length in sshd log: %zu", ip_len);
+                    daemon_log_warn("Invalid IP length in jail '%s' log: %zu", j->name, ip_len);
                     return 0;
                 }
 
@@ -1098,13 +1333,13 @@ static int parse_log_line(const char *line, char *ip_out, size_t ip_size)
             }
         } else if (regex_result != REG_NOMATCH) {
             char errbuf[256];
-            regerror(regex_result, &sshd_regex, errbuf, sizeof(errbuf));
-            daemon_log_warn("Regex error in sshd pattern: %s", errbuf);
+            regerror(regex_result, &j->compiled_regex, errbuf, sizeof(errbuf));
+            daemon_log_warn("Regex error in jail '%s' pattern: %s", j->name, errbuf);
         }
     }
 
     /* Fallback: simple string matching (if regex not compiled) */
-    if (!regex_compiled) {
+    if (!j || !j->regex_compiled) {
         if (strstr(line, "Failed password for") ||
             strstr(line, "authentication failure")) {
             return extract_ip(line, ip_out, ip_size);
@@ -1130,11 +1365,11 @@ static unsigned int hash_ip(const char *ip)
     return hash % FAILED_ENTRY_HASH_SIZE;
 }
 
-/* Find failed entry by IP - optimized with hash table */
-static struct failed_entry *find_entry(const char *ip)
+/* Find failed entry by IP - optimized with hash table (per-jail) */
+static struct failed_entry *find_entry_for_jail(struct jail *j, const char *ip)
 {
     unsigned int hash = hash_ip(ip);
-    struct failed_entry *entry = failed_hash_table[hash];
+    struct failed_entry *entry = j->failed_hash_table[hash];
 
     while (entry) {
         if (strcmp(entry->ip, ip) == 0) {
@@ -1146,8 +1381,8 @@ static struct failed_entry *find_entry(const char *ip)
     return NULL;
 }
 
-/* Create new failed entry */
-static struct failed_entry *create_entry(const char *ip)
+/* Create new failed entry (per-jail) */
+static struct failed_entry *create_entry_for_jail(struct jail *j, const char *ip)
 {
     struct failed_entry *entry = calloc(1, sizeof(*entry));
     if (!entry) {
@@ -1159,23 +1394,23 @@ static struct failed_entry *create_entry(const char *ip)
     entry->ip[sizeof(entry->ip) - 1] = '\0';
     entry->count = 0;
 
-    /* Add to linked list */
-    entry->next = failed_table;
-    failed_table = entry;
+    /* Add to jail's linked list */
+    entry->next = j->failed_table;
+    j->failed_table = entry;
 
-    /* Add to hash table */
+    /* Add to jail's hash table */
     unsigned int hash = hash_ip(ip);
-    entry->next_in_hash = failed_hash_table[hash];
-    failed_hash_table[hash] = entry;
+    entry->next_in_hash = j->failed_hash_table[hash];
+    j->failed_hash_table[hash] = entry;
 
     return entry;
 }
 
-/* Remove failed entry */
-static void remove_entry(const char *ip)
+/* Remove failed entry (per-jail) */
+static void remove_entry_for_jail(struct jail *j, const char *ip)
 {
     struct failed_entry *prev = NULL;
-    struct failed_entry *entry = failed_table;
+    struct failed_entry *entry = j->failed_table;
 
     /* Find in main linked list */
     while (entry) {
@@ -1184,20 +1419,20 @@ static void remove_entry(const char *ip)
             if (prev) {
                 prev->next = entry->next;
             } else {
-                failed_table = entry->next;
+                j->failed_table = entry->next;
             }
 
             /* Remove from hash table */
             unsigned int hash = hash_ip(ip);
             struct failed_entry *hash_prev = NULL;
-            struct failed_entry *hash_entry = failed_hash_table[hash];
+            struct failed_entry *hash_entry = j->failed_hash_table[hash];
 
             while (hash_entry) {
                 if (hash_entry == entry) {
                     if (hash_prev) {
                         hash_prev->next_in_hash = hash_entry->next_in_hash;
                     } else {
-                        failed_hash_table[hash] = hash_entry->next_in_hash;
+                        j->failed_hash_table[hash] = hash_entry->next_in_hash;
                     }
                     break;
                 }
@@ -1210,6 +1445,47 @@ static void remove_entry(const char *ip)
         }
         prev = entry;
         entry = entry->next;
+    }
+}
+
+/* ============================================================================
+ * Global failed entry functions - for backward compatibility
+ * These are kept for potential legacy usage but are not used in jail system
+ * ========================================================================== */
+
+/* Find failed entry by IP - optimized with hash table */
+static struct failed_entry *find_entry(const char *ip)
+{
+    /* In jail system, we search all jails */
+    for (int j = 0; j < cfg.jail_count; j++) {
+        struct failed_entry *entry = find_entry_for_jail(&cfg.jails[j], ip);
+        if (entry) {
+            return entry;
+        }
+    }
+    return NULL;
+}
+
+/* Create new failed entry */
+static struct failed_entry *create_entry(const char *ip)
+{
+    /* In jail system, this creates entry in first jail (default behavior) */
+    if (cfg.jail_count > 0) {
+        return create_entry_for_jail(&cfg.jails[0], ip);
+    }
+    return NULL;
+}
+
+/* Remove failed entry */
+static void remove_entry(const char *ip)
+{
+    /* In jail system, we search all jails */
+    for (int j = 0; j < cfg.jail_count; j++) {
+        struct failed_entry *entry = find_entry_for_jail(&cfg.jails[j], ip);
+        if (entry) {
+            remove_entry_for_jail(&cfg.jails[j], ip);
+            return;
+        }
     }
 }
 
@@ -1244,7 +1520,67 @@ static unsigned int count_recent(struct failed_entry *entry, time_t window, unsi
     return count;
 }
 
-/* Handle a failed login attempt - 线程安全版本 */
+/* Handle a failed login attempt - jail-aware version */
+static void handle_failed_attempt_for_jail(struct jail *j, const char *ip, unsigned int max_retries, unsigned int findtime)
+{
+    struct failed_entry *entry = find_entry_for_jail(j, ip);
+    time_t now = time(NULL);
+
+    atomic_fetch_add(&daemon_stats.failed_attempts, 1);
+
+    /* Validate IP before processing */
+    if (!ip || strlen(ip) == 0) {
+        daemon_log_err("Invalid IP address provided to handle_failed_attempt");
+        return;
+    }
+
+    if (!entry) {
+        entry = create_entry_for_jail(j, ip);
+        if (!entry) {
+            daemon_log_err("Failed to create entry for IP %s", ip);
+            return;
+        }
+    }
+
+    /* Add timestamp */
+    if (entry->count < MAX_FAILED_TIMESTAMPS) {
+        entry->timestamps[entry->count++] = now;
+    } else {
+        /* Shift timestamps to make room for the new one */
+        memmove(entry->timestamps, entry->timestamps + 1,
+                (MAX_FAILED_TIMESTAMPS - 1) * sizeof(time_t));
+        entry->timestamps[MAX_FAILED_TIMESTAMPS - 1] = now;
+
+        /* After shifting, check if oldest timestamp is too old to keep */
+        time_t oldest_valid = now - findtime;
+        int new_count = 0;
+        for (int i = 0; i < MAX_FAILED_TIMESTAMPS; i++) {
+            if (entry->timestamps[i] >= oldest_valid) {
+                if (new_count != i) {
+                    entry->timestamps[new_count] = entry->timestamps[i];
+                }
+                new_count++;
+            }
+        }
+        entry->count = new_count;
+    }
+
+    /* Check if exceeded threshold */
+    unsigned int recent_fails = count_recent(entry, findtime, max_retries);
+    if (recent_fails >= max_retries) {
+        daemon_log_warn("IP %s exceeded %d failures in %d seconds in jail '%s', banning", ip, recent_fails, findtime, j->name);
+        if (ban_ip(ip) == 0) {
+            remove_entry_for_jail(j, ip);
+            daemon_log_info("Successfully banned IP %s after %d failed attempts in jail '%s'", ip, recent_fails, j->name);
+        } else {
+            daemon_log_err("Failed to ban IP %s after %d failed attempts in jail '%s', keeping entry for retry", ip, recent_fails, j->name);
+        }
+    } else {
+        daemon_log_debug("IP %s has %d failed attempts in %d seconds in jail '%s'", ip, recent_fails, findtime, j->name);
+    }
+}
+
+/* Handle a failed login attempt - thread-safe version (backward compatible) */
 static void handle_failed_attempt(const char *ip, unsigned int max_retries, unsigned int findtime)
 {
     struct failed_entry *entry = find_entry(ip);
@@ -1605,42 +1941,65 @@ static int setup_inotify(void)
         return -1;
     }
 
-    /* Add watches for each log file */
-    for (int i = 0; i < cfg.log_count; i++) {
-        struct stat st;
+    /* Add watches for each log file in each jail */
+    int global_idx = 0;
+    for (int j = 0; j < cfg.jail_count; j++) {
+        struct jail *jail = &cfg.jails[j];
 
-        /* Initialize file state - use explicit initialization instead of memset
-         * to preserve wd field (which should be -1 before adding watch) */
-        file_states[i].path[0] = '\0';
-        file_states[i].offset = 0;
-        file_states[i].inode = 0;
-        file_states[i].wd = -1;  /* Mark as not watching yet */
-
-        strncpy(file_states[i].path, cfg.log_files[i], sizeof(file_states[i].path) - 1);
-        file_states[i].path[sizeof(file_states[i].path) - 1] = '\0';  /* Ensure null termination */
-
-        /* Get initial inode */
-        if (stat(cfg.log_files[i], &st) == 0) {
-            file_states[i].inode = st.st_ino;
-            file_states[i].offset = st.st_size;
-            daemon_log_info("Initial offset for %s: %ld bytes", cfg.log_files[i], (long)file_states[i].offset);
+        if (!jail->enabled) {
+            daemon_log_info("Skipping disabled jail: %s", jail->name);
+            continue;
         }
 
-        /* Watch for modifications, moves, deletes */
-        file_states[i].wd = inotify_add_watch(inotify_fd, cfg.log_files[i],
-            IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE | IN_CREATE);
-        if (file_states[i].wd < 0) {
-            daemon_log_warn("Failed to watch %s: %s (skipping)", cfg.log_files[i], strerror(errno));
-            file_states[i].wd = -1;
-            /* Continue with other log files instead of failing entirely */
-        } else {
-            daemon_log_info("Watching %s (wd=%d)", cfg.log_files[i], file_states[i].wd);
+        for (int i = 0; i < jail->log_count; i++) {
+            struct stat st;
+
+            /* Initialize file state */
+            file_states[global_idx].path[0] = '\0';
+            file_states[global_idx].offset = 0;
+            file_states[global_idx].inode = 0;
+            file_states[global_idx].wd = -1;  /* Mark as not watching yet */
+            file_states[global_idx].jail_idx = j;  /* Record which jail this file belongs to */
+
+            strncpy(file_states[global_idx].path, jail->log_files[i], sizeof(file_states[global_idx].path) - 1);
+            file_states[global_idx].path[sizeof(file_states[global_idx].path) - 1] = '\0';
+
+            /* Get initial inode */
+            if (stat(jail->log_files[i], &st) == 0) {
+                file_states[global_idx].inode = st.st_ino;
+                file_states[global_idx].offset = st.st_size;
+                daemon_log_info("Initial offset for %s (jail=%s): %ld bytes", jail->log_files[i], jail->name, (long)file_states[global_idx].offset);
+            }
+
+            /* Watch for modifications, moves, deletes */
+            file_states[global_idx].wd = inotify_add_watch(inotify_fd, jail->log_files[i],
+                IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE | IN_CREATE);
+            if (file_states[global_idx].wd < 0) {
+                daemon_log_warn("Failed to watch %s (jail=%s): %s (skipping)", jail->log_files[i], jail->name, strerror(errno));
+                file_states[global_idx].wd = -1;
+                /* Continue with other log files instead of failing entirely */
+            } else {
+                daemon_log_info("Watching %s (jail=%s, wd=%d)", jail->log_files[i], jail->name, file_states[global_idx].wd);
+            }
+
+            global_idx++;
+            if (global_idx >= MAX_JAILS * MAX_LOG_FILES) {
+                daemon_log_warn("Maximum file states reached (%d), stopping watch addition", MAX_JAILS * MAX_LOG_FILES);
+                goto watch_summary;
+            }
         }
     }
 
+watch_summary:
     /* Check if at least one file is being watched */
     int watched_count = 0;
-    for (int i = 0; i < cfg.log_count; i++) {
+    int total_files = 0;
+    for (int j = 0; j < cfg.jail_count; j++) {
+        if (cfg.jails[j].enabled) {
+            total_files += cfg.jails[j].log_count;
+        }
+    }
+    for (int i = 0; i < global_idx; i++) {
         if (file_states[i].wd >= 0) watched_count++;
     }
     if (watched_count == 0) {
@@ -1649,7 +2008,7 @@ static int setup_inotify(void)
         inotify_fd = -1;
         return -1;
     }
-    daemon_log_info("Watching %d/%d log files", watched_count, cfg.log_count);
+    daemon_log_info("Watching %d/%d log files across %d jails", watched_count, total_files, cfg.jail_count);
 
     return 0;
 }
@@ -1662,7 +2021,7 @@ static pthread_mutex_t partial_line_mutex = PTHREAD_MUTEX_INITIALIZER;
 /* Helper: Process a single complete log line.
  * Extracts IP and handles failed login attempt.
  * Called with null-terminated line in `line`. */
-static void process_single_line(const char *line, const char *log_path,
+static void process_single_line(struct jail *j, const char *line, const char *log_path,
                                 unsigned int max_retries, unsigned int findtime)
 {
     if (!line || strlen(line) == 0)
@@ -1679,8 +2038,8 @@ static void process_single_line(const char *line, const char *log_path,
     atomic_fetch_add(&daemon_stats.lines_parsed, 1);
 
     char ip[INET_ADDRSTRLEN];
-    if (extract_and_validate_ip(line, ip, sizeof(ip))) {
-        handle_failed_attempt(ip, max_retries, findtime);
+    if (extract_and_validate_ip(j, line, ip, sizeof(ip))) {
+        handle_failed_attempt_for_jail(j, ip, max_retries, findtime);
     }
 }
 
@@ -1689,7 +2048,7 @@ static void process_single_line(const char *line, const char *log_path,
  * Updates `*consumed` to the number of bytes consumed (up to and including last newline).
  * Any remaining data after the last newline is left for the caller to handle as partial.
  * NOTE: This function may temporarily modify `data` to null-terminate lines. */
-static void process_lines_in_buffer(char *data, size_t len, const char *log_path, size_t *consumed,
+static void process_lines_in_buffer(struct jail *j, char *data, size_t len, const char *log_path, size_t *consumed,
                                     unsigned int max_retries, unsigned int findtime)
 {
     char *line_start = data;
@@ -1708,7 +2067,7 @@ static void process_lines_in_buffer(char *data, size_t len, const char *log_path
             char saved = *line_end;
             /* Safe: line_len < 8192, and data is within caller's buffer */
             *line_end = '\0';
-            process_single_line(line_start, log_path, max_retries, findtime);
+            process_single_line(j, line_start, log_path, max_retries, findtime);
             *line_end = saved;
         }
 
@@ -1723,7 +2082,7 @@ static void process_lines_in_buffer(char *data, size_t len, const char *log_path
 
 /* Helper: Store remaining data as partial line (thread-safe).
  * If partial buffer would overflow, processes accumulated data and resets. */
-static void store_partial_line(const char *data, size_t len, const char *log_path,
+static void store_partial_line(struct jail *j, const char *data, size_t len, const char *log_path,
                                unsigned int max_retries, unsigned int findtime)
 {
     if (len == 0)
@@ -1748,7 +2107,7 @@ static void store_partial_line(const char *data, size_t len, const char *log_pat
         if (old_len > 0 && old_len < sizeof(temp)) {
             memcpy(temp, partial_line_buffer, old_len);
             temp[old_len] = '\0';
-            process_single_line(temp, log_path, max_retries, findtime);
+            process_single_line(j, temp, log_path, max_retries, findtime);
         }
 
         /* Store new data */
@@ -1770,7 +2129,7 @@ static void store_partial_line(const char *data, size_t len, const char *log_pat
 
 /* Helper: Process accumulated partial line buffer (thread-safe).
  * Drains the partial buffer and processes its content. */
-static void flush_partial_line(const char *log_path, unsigned int max_retries, unsigned int findtime)
+static void flush_partial_line(struct jail *j, const char *log_path, unsigned int max_retries, unsigned int findtime)
 {
     size_t old_len = 0;
     char temp[sizeof(partial_line_buffer)];
@@ -1788,7 +2147,7 @@ static void flush_partial_line(const char *log_path, unsigned int max_retries, u
 
     if (old_len > 0) {
         daemon_log_debug("Flushing partial line buffer with %zu bytes from %s", old_len, log_path);
-        process_single_line(temp, log_path, max_retries, findtime);
+        process_single_line(j, temp, log_path, max_retries, findtime);
     }
 }
 
@@ -1802,20 +2161,27 @@ static void process_new_lines(int idx)
     ssize_t bytes_read;
     int ret = 0;
     const char *log_path;
-    /* 在函数入口处读取配置 - 避免在数据处理路径中访问全局 cfg */
+    struct jail *j = NULL;
     unsigned int max_retries, findtime;
-    pthread_mutex_lock(&config_mutex);
-    max_retries = cfg.max_retries;
-    findtime = cfg.findtime;
-    pthread_mutex_unlock(&config_mutex);
 
     /* Validate idx parameter */
-    if (idx < 0 || idx >= MAX_LOG_FILES) {
+    if (idx < 0 || idx >= MAX_JAILS * MAX_LOG_FILES) {
         daemon_log_err("Invalid index %d to process_new_lines", idx);
         return;
     }
 
     log_path = file_states[idx].path;
+    int jail_idx = file_states[idx].jail_idx;
+
+    /* Get jail reference and configuration */
+    if (jail_idx < 0 || jail_idx >= cfg.jail_count) {
+        daemon_log_err("Invalid jail index %d in process_new_lines", jail_idx);
+        return;
+    }
+    j = &cfg.jails[jail_idx];
+
+    max_retries = j->max_retries;
+    findtime = j->findtime;
 
     fd = open(log_path, O_RDONLY);
     if (fd < 0) {
@@ -1829,12 +2195,12 @@ static void process_new_lines(int idx)
             daemon_log_info("Log file rotated: %s", log_path);
             file_states[idx].inode = st.st_ino;
             file_states[idx].offset = 0;
-            flush_partial_line(log_path, max_retries, findtime);
+            flush_partial_line(j, log_path, max_retries, findtime);
         } else if (st.st_size < file_states[idx].offset) {
             daemon_log_info("Log file truncated: %s", log_path);
             file_states[idx].inode = st.st_ino;
             file_states[idx].offset = 0;
-            flush_partial_line(log_path, max_retries, findtime);
+            flush_partial_line(j, log_path, max_retries, findtime);
         }
     }
 
@@ -1853,12 +2219,12 @@ static void process_new_lines(int idx)
     while ((bytes_read = read(fd, buffer, sizeof(buffer) - 1)) > 0) {
         buffer[bytes_read] = '\0';  /* Ensure null termination for safety */
 
-        /* 修复问题3和问题5：使用堆分配代替栈分配，并在锁内复制数据 */
+        /* Use heap allocation instead of stack allocation for partial line data */
         size_t partial_len = 0;
         char *local_partial = NULL;
         char *combined = NULL;
 
-        /* 先在锁内复制 partial line 数据 */
+        /* Copy partial line data under lock */
         pthread_mutex_lock(&partial_line_mutex);
         partial_len = partial_line_len;
         if (partial_len > 0 && partial_len < sizeof(partial_line_buffer)) {
@@ -1870,19 +2236,18 @@ static void process_new_lines(int idx)
         }
         pthread_mutex_unlock(&partial_line_mutex);
 
-        /* 在锁外处理数据 - 避免长时间持有锁 */
+        /* Process data outside the lock */
         if (local_partial && partial_len > 0) {
-            /* 有 partial line 数据，需要合并处理 */
-            /* 修复问题3：使用堆分配避免大栈帧 */
+            /* Has partial line data, need to merge and process */
             combined = malloc(partial_len + (size_t)bytes_read + 1);
             if (!combined) {
-        daemon_log_err("Out of memory allocating combined buffer");
+                daemon_log_err("Out of memory allocating combined buffer");
                 free(local_partial);
-                /* 丢弃 partial 数据，直接处理新数据 */
+                /* Discard partial data, process new data directly */
                 size_t consumed = 0;
-                process_lines_in_buffer(buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);
+                process_lines_in_buffer(j, buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);
                 if (consumed < (size_t)bytes_read) {
-                    store_partial_line(buffer + consumed, (size_t)bytes_read - consumed, log_path, max_retries, findtime);
+                    store_partial_line(j, buffer + consumed, (size_t)bytes_read - consumed, log_path, max_retries, findtime);
                 }
                 current_offset += bytes_read;
                 continue;
@@ -1895,18 +2260,18 @@ static void process_new_lines(int idx)
 
             size_t total_len = partial_len + (size_t)bytes_read;
 
-            /* 清除已消费的 partial line */
+            /* Clear consumed partial line */
             pthread_mutex_lock(&partial_line_mutex);
             partial_line_len = 0;
             pthread_mutex_unlock(&partial_line_mutex);
 
             /* Process complete lines */
             size_t consumed = 0;
-            process_lines_in_buffer(combined, total_len, log_path, &consumed, max_retries, findtime);
+            process_lines_in_buffer(j, combined, total_len, log_path, &consumed, max_retries, findtime);
 
             /* Store any remaining data as new partial line */
             if (consumed < total_len) {
-                store_partial_line(combined + consumed, total_len - consumed, log_path, max_retries, findtime);
+                store_partial_line(j, combined + consumed, total_len - consumed, log_path, max_retries, findtime);
             }
 
             free(combined);
@@ -1915,16 +2280,16 @@ static void process_new_lines(int idx)
             if (local_partial) free(local_partial);
 
             size_t consumed = 0;
-            process_lines_in_buffer(buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);
+            process_lines_in_buffer(j, buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);
 
             if (consumed < (size_t)bytes_read) {
-                store_partial_line(buffer + consumed, (size_t)bytes_read - consumed, log_path, max_retries, findtime);
+                store_partial_line(j, buffer + consumed, (size_t)bytes_read - consumed, log_path, max_retries, findtime);
             }
         }
 
         /* Prevent integer overflow when updating offset */
         if (current_offset > SSIZE_MAX - bytes_read) {
-        daemon_log_err("Integer overflow in file offset calculation");
+            daemon_log_err("Integer overflow in file offset calculation");
             ret = -1;
             goto cleanup;
         }
@@ -1953,20 +2318,28 @@ cleanup:
 /* Function to periodically clean up partial line buffer to prevent accumulation */
 static void cleanup_partial_line_buffer(void)
 {
-    /* 使用默认配置值进行清理 - 这些值仅在清理时使用，不影响实际封禁逻辑 */
-    flush_partial_line("periodic_cleanup", DEFAULT_MAX_RETRIES, DEFAULT_FINDTIME);
+    /* Use default jail for periodic cleanup */
+    if (cfg.jail_count > 0) {
+        flush_partial_line(&cfg.jails[0], "periodic_cleanup", DEFAULT_MAX_RETRIES, DEFAULT_FINDTIME);
+    }
 }
 
 /* Handle log file rotation */
 static void handle_log_rotation(int idx)
 {
     struct stat st;
-    /* 读取配置 - 避免直接访问全局 cfg */
+    int jail_idx = file_states[idx].jail_idx;
+    struct jail *j = NULL;
     unsigned int max_retries, findtime;
-    pthread_mutex_lock(&config_mutex);
-    max_retries = cfg.max_retries;
-    findtime = cfg.findtime;
-    pthread_mutex_unlock(&config_mutex);
+
+    if (jail_idx >= 0 && jail_idx < cfg.jail_count) {
+        j = &cfg.jails[jail_idx];
+        max_retries = j->max_retries;
+        findtime = j->findtime;
+    } else {
+        max_retries = DEFAULT_MAX_RETRIES;
+        findtime = DEFAULT_FINDTIME;
+    }
 
     atomic_fetch_add(&daemon_stats.log_rotations, 1);
 
@@ -1974,7 +2347,7 @@ static void handle_log_rotation(int idx)
     if (stat(file_states[idx].path, &st) != 0) {
         daemon_log_warn("Log file disappeared: %s", file_states[idx].path);
         file_states[idx].offset = 0;
-        flush_partial_line(file_states[idx].path, max_retries, findtime);
+        if (j) flush_partial_line(j, file_states[idx].path, max_retries, findtime);
         return;
     }
 
@@ -1985,7 +2358,7 @@ static void handle_log_rotation(int idx)
         file_states[idx].offset = 0;
 
         /* Clean up partial line buffer on rotation */
-        flush_partial_line(file_states[idx].path, max_retries, findtime);
+        if (j) flush_partial_line(j, file_states[idx].path, max_retries, findtime);
 
         /* Re-add watch if needed */
         if (file_states[idx].wd >= 0) {
@@ -2047,9 +2420,9 @@ static void monitor_loop(void)
 
                 /* 保存旧配置的关键值用于变更检测 */
                 pthread_mutex_lock(&config_mutex);
-                old_max_retries = cfg.max_retries;
-                old_findtime = cfg.findtime;
-                old_ban_time = cfg.ban_time;
+                old_max_retries = cfg.default_max_retries;
+                old_findtime = cfg.default_findtime;
+                old_ban_time = cfg.default_ban_time;
                 old_interval = cfg.interval;
                 old_metrics_port = cfg.metrics_port;
                 pthread_mutex_unlock(&config_mutex);
@@ -2078,47 +2451,41 @@ static void monitor_loop(void)
                 }
 
                 if (reload_ok) {
-                    /* 修复问题2：重新设置 inotify watches */
+                    /* Re-setup inotify watches after config reload */
                     if (inotify_fd >= 0) {
-                        /* 移除旧 watches */
-                        for (int i = 0; i < cfg.log_count; i++) {
+                        /* Remove old watches - iterate through all possible file states */
+                        int max_states = MAX_JAILS * MAX_LOG_FILES;
+                        for (int i = 0; i < max_states; i++) {
                             if (file_states[i].wd >= 0) {
                                 inotify_rm_watch(inotify_fd, file_states[i].wd);
                                 file_states[i].wd = -1;
                             }
-                            /* 重置文件状态 */
+                            /* Reset file state */
                             file_states[i].offset = 0;
                             file_states[i].inode = 0;
                             file_states[i].path[0] = '\0';
+                            file_states[i].jail_idx = -1;
                         }
                         close(inotify_fd);
                         inotify_fd = -1;
                     }
 
-                    /* 重置文件状态 */
-                    for (int i = 0; i < cfg.log_count; i++) {
-                        file_states[i].wd = -1;
-                        file_states[i].offset = 0;
-                        file_states[i].inode = 0;
-                        file_states[i].path[0] = '\0';
-                    }
-
-                    /* 重新设置 inotify */
+                    /* Re-setup inotify */
                     if (setup_inotify() < 0) {
-        daemon_log_err("Failed to re-setup inotify after config reload");
-                        running = 0;  /* 安全退出 */
+                        daemon_log_err("Failed to re-setup inotify after config reload");
+                        running = 0;  /* Safe exit */
                     }
 
-                    /* 检查变更并输出日志 */
+                    /* Check changes and output logs */
                     pthread_mutex_lock(&config_mutex);
-                    if (old_max_retries != cfg.max_retries) {
-                        daemon_log_info("max_retries changed from %u to %u", old_max_retries, cfg.max_retries);
+                    if (old_max_retries != cfg.default_max_retries) {
+                        daemon_log_info("default_max_retries changed from %u to %u", old_max_retries, cfg.default_max_retries);
                     }
-                    if (old_findtime != cfg.findtime) {
-                        daemon_log_info("findtime changed from %u to %u", old_findtime, cfg.findtime);
+                    if (old_findtime != cfg.default_findtime) {
+                        daemon_log_info("default_findtime changed from %u to %u", old_findtime, cfg.default_findtime);
                     }
-                    if (old_ban_time != cfg.ban_time) {
-                        daemon_log_info("ban_time changed from %u to %u", old_ban_time, cfg.ban_time);
+                    if (old_ban_time != cfg.default_ban_time) {
+                        daemon_log_info("default_ban_time changed from %u to %u", old_ban_time, cfg.default_ban_time);
                     }
                     if (old_interval != cfg.interval) {
                         daemon_log_info("interval changed from %d to %d", old_interval, cfg.interval);
@@ -2187,8 +2554,9 @@ static void monitor_loop(void)
             if (event->mask & (IN_MODIFY | IN_MOVED_TO)) {
                 /* File was modified or created - find matching file */
                 pthread_mutex_lock(&config_mutex);
-                for (int j = 0; j < cfg.log_count; j++) {
-                    if (event->wd == file_states[j].wd) {
+                int max_states = MAX_JAILS * MAX_LOG_FILES;
+                for (int j = 0; j < max_states; j++) {
+                    if (file_states[j].wd >= 0 && event->wd == file_states[j].wd) {
                         /* Check if file was rotated */
                         if (event->mask & (IN_MOVED_TO | IN_CREATE)) {
                             pthread_mutex_unlock(&config_mutex);
@@ -2206,8 +2574,9 @@ static void monitor_loop(void)
             } else if (event->mask & (IN_MOVED_FROM | IN_DELETE)) {
                 /* File was moved or deleted - mark for rotation handling */
                 pthread_mutex_lock(&config_mutex);
-                for (int j = 0; j < cfg.log_count; j++) {
-                    if (event->wd == file_states[j].wd) {
+                int max_states = MAX_JAILS * MAX_LOG_FILES;
+                for (int j = 0; j < max_states; j++) {
+                    if (file_states[j].wd >= 0 && event->wd == file_states[j].wd) {
                         daemon_log_info("Log file removed: %s", file_states[j].path);
                         file_states[j].wd = -1;
                         break;
@@ -2236,14 +2605,12 @@ static void monitor_loop(void)
 /* Cleanup resources */
 static void cleanup(void)
 {
-        daemon_log_info("Cleaning up");
-
-    /* Free regex patterns */
-    free_log_patterns();
+    daemon_log_info("Cleaning up");
 
     /* Remove inotify watches */
     if (inotify_fd >= 0) {
-        for (int i = 0; i < cfg.log_count; i++) {
+        int max_states = MAX_JAILS * MAX_LOG_FILES;
+        for (int i = 0; i < max_states; i++) {
             if (file_states[i].wd >= 0) {
                 /* Only try to remove watch if the inotify_fd is still valid */
                 if (inotify_rm_watch(inotify_fd, file_states[i].wd) < 0) {
@@ -2258,24 +2625,57 @@ static void cleanup(void)
         inotify_fd = -1;
     }
 
-    /* Free config */
-    for (int i = 0; i < cfg.log_count; i++) {
-        if (cfg.log_files[i]) {
-            free(cfg.log_files[i]);
-            cfg.log_files[i] = NULL;  /* Prevent double-free */
+    /* Free all jails and their resources */
+    for (int j = 0; j < cfg.jail_count; j++) {
+        struct jail *jail = &cfg.jails[j];
+
+        /* Free log files */
+        for (int i = 0; i < jail->log_count; i++) {
+            if (jail->log_files[i]) {
+                free(jail->log_files[i]);
+                jail->log_files[i] = NULL;
+            }
         }
-    }
+        jail->log_count = 0;
 
-    /* Free failed table and hash table */
-    struct failed_entry *entry = failed_table;
-    while (entry) {
-        struct failed_entry *next = entry->next;
-        free(entry);
-        entry = next;
-    }
+        /* Free regex */
+        free_jail_regex(jail);
+        if (jail->regex_pattern) {
+            free(jail->regex_pattern);
+            jail->regex_pattern = NULL;
+        }
 
-    /* Clear hash table pointers */
-    memset(failed_hash_table, 0, sizeof(failed_hash_table));
+        /* Free failed table and hash table */
+        if (jail->failed_table) {
+            struct failed_entry *entry = jail->failed_table;
+            while (entry) {
+                struct failed_entry *next = entry->next;
+                free(entry);
+                entry = next;
+            }
+            jail->failed_table = NULL;
+        }
+
+        /* Clear hash table pointers */
+        memset(jail->failed_hash_table, 0, sizeof(jail->failed_hash_table));
+
+        daemon_log_info("Cleaned up jail: %s", jail->name);
+    }
+    cfg.jail_count = 0;
+
+    /* Free global config strings */
+    if (cfg.config_file) {
+        free(cfg.config_file);
+        cfg.config_file = NULL;
+    }
+    if (cfg.config_dir) {
+        free(cfg.config_dir);
+        cfg.config_dir = NULL;
+    }
+    if (cfg.permanent_db_path) {
+        free(cfg.permanent_db_path);
+        cfg.permanent_db_path = NULL;
+    }
 
     /* Close SQLite database */
     if (sqlite_db) {
@@ -2290,43 +2690,45 @@ static void cleanup(void)
     closelog();
 }
 
-/* Initialize precompiled regex patterns for log parsing */
+/* Initialize precompiled regex patterns for all jails */
 static int init_log_patterns(void)
 {
-    int ret;
-    const char *sshd_pattern = cfg.sshd_regex ? cfg.sshd_regex :
-        "Failed password for (invalid user )?[a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})";
+    int ret = 0;
 
-    /*
-     * SSH failed password pattern
-     * Uses custom pattern from config if provided, otherwise built-in default
-     * The LAST capture group is used as the IP address
-     */
-    memset(&sshd_regex, 0, sizeof(sshd_regex));
-    ret = regcomp(&sshd_regex, sshd_pattern, REG_EXTENDED);
-    if (ret) {
-        char errbuf[256];
-        regerror(ret, &sshd_regex, errbuf, sizeof(errbuf));
-        daemon_log_err("Failed to compile sshd regex: %s", errbuf);
-        return -1;
+    /* Compile regex for each jail that has a pattern */
+    for (int i = 0; i < cfg.jail_count; i++) {
+        struct jail *jail = &cfg.jails[i];
+
+        if (!jail->enabled) {
+            daemon_log_debug("Skipping disabled jail '%s' for regex compilation", jail->name);
+            continue;
+        }
+
+        if (jail->regex_pattern && strlen(jail->regex_pattern) > 0) {
+            if (compile_jail_regex(jail) < 0) {
+                daemon_log_warn("Failed to compile regex for jail '%s'", jail->name);
+                ret = -1;
+                /* Continue compiling for other jails */
+            } else {
+                daemon_log_info("Compiled regex for jail '%s'", jail->name);
+            }
+        } else {
+            /* Jail will use built-in default pattern */
+            daemon_log_info("Jail '%s' will use built-in default regex pattern", jail->name);
+        }
     }
-    if (cfg.sshd_regex)
-        daemon_log_info("Using custom sshd regex pattern");
-    else
-        daemon_log_info("Using built-in sshd regex pattern");
 
-    regex_compiled = 1;
-    daemon_log_info("Log patterns compiled successfully");
-    return 0;
+    if (ret == 0) {
+        daemon_log_info("All jail regex patterns compiled successfully");
+    }
+
+    return ret;
 }
 
-/* Free precompiled regex patterns */
+/* Free precompiled regex patterns - no longer needed as regex is per-jail */
 static void free_log_patterns(void)
 {
-    if (regex_compiled) {
-        regfree(&sshd_regex);
-        regex_compiled = 0;
-    }
+    /* Regex is now managed per-jail, so no global patterns to free */
 }
 
 /* Enhanced path validation function to prevent path traversal attacks */
@@ -2371,8 +2773,8 @@ static int validate_and_normalize_path(const char *input_path) {
         strstr(input_path, "..\\") ||
         strstr(input_path, "/.." ) ||
         strstr(input_path, "..%00") ||  /* Null byte injection */
-        strcasestr_custom(input_path, "%2e%2e%2f") ||  /* URL encoded ../ */
-        strcasestr_custom(input_path, "%2e%2e%5c") ||  /* URL encoded ..\ */
+        strcasestr(input_path, "%2e%2e%2f") ||  /* URL encoded ../ */
+        strcasestr(input_path, "%2e%2e%5c") ||  /* URL encoded ..\ */
         strstr(input_path, ".\\.") ||  /* Alternative Windows style */
         strstr(input_path, "..%2f") || /* Another URL encoded variant */
         strstr(input_path, "..%5c") || /* Another URL encoded variant */
@@ -2447,9 +2849,10 @@ int main(int argc, char *argv[])
 {
     int ret;
 
-    /* Initialize file_states array with -1 for wd to distinguish from valid watch descriptors */
-    for (int i = 0; i < MAX_LOG_FILES; i++) {
+    /* Initialize file_states array with -1 for wd and jail_idx to distinguish from valid watch descriptors */
+    for (int i = 0; i < MAX_JAILS * MAX_LOG_FILES; i++) {
         file_states[i].wd = -1;
+        file_states[i].jail_idx = -1;
     }
 
     /* Parse configuration */
@@ -2462,9 +2865,6 @@ int main(int argc, char *argv[])
         /* Help was displayed */
         return EXIT_SUCCESS;
     }
-
-    /* Initialize hash table */
-    memset(failed_hash_table, 0, sizeof(failed_hash_table));
 
     /* Open syslog */
     openlog("firewall", LOG_PID | LOG_CONS, LOG_DAEMON);
@@ -2541,8 +2941,17 @@ int main(int argc, char *argv[])
     /* Setup signal handlers */
     setup_signals();
 
-        daemon_log_info("Daemon starting up");
-    daemon_log_info("max_retries=%u, findtime=%u, ban_time=%u", cfg.max_retries, cfg.findtime, cfg.ban_time);
+    daemon_log_info("Daemon starting up");
+    daemon_log_info("Loaded %d jails", cfg.jail_count);
+    for (int i = 0; i < cfg.jail_count; i++) {
+        if (cfg.jails[i].enabled) {
+            daemon_log_info("  Jail[%d]: %s (enabled=%d, log_count=%d, max_retries=%u, findtime=%u, ban_time=%u)",
+                i, cfg.jails[i].name, cfg.jails[i].enabled, cfg.jails[i].log_count,
+                cfg.jails[i].max_retries, cfg.jails[i].findtime, cfg.jails[i].ban_time);
+        }
+    }
+    daemon_log_info("Global defaults: max_retries=%u, findtime=%u, ban_time=%u",
+        cfg.default_max_retries, cfg.default_findtime, cfg.default_ban_time);
 
     /* Daemonize if requested */
     if (cfg.daemonize) {
