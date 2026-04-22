@@ -24,11 +24,13 @@ jails:
   frp:
     enabled: true
     log_files:
-      - /root/frp/frp.log
+      - /var/log/frp/frp.log
     max_retries: 10
     findtime: 300
     ban_time: 1800
-    regex: ""  # Empty string uses built-in frp pattern
+    # 匹配 FRP 错误/警告日志中的远程 IP 地址（使用捕获组提取 IP）
+    # 示例：2026-04-22 17:52:16.417 [E] [...] remoteAddr: 43.100.123.123:7000
+    regex: ".*\\[E\\].*remoteAddr:\\s*([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)|.*\\[W\\].*remoteAddr:\\s*([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)"
 
 # Permanent ban configuration (SQLite-based persistence)
 # Path to SQLite database file for permanent bans (empty = disabled)
