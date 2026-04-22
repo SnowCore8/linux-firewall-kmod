@@ -64,12 +64,12 @@ timeout 5 "$DAEMON_PATH" -c "$local_frp_yaml" 2>&1 || true
 sleep 1
 
 # 检查封禁列表
-if [[ -r "$PROC_BAN_LIST" ]]; then
-    local_ban_count=$(wc -l < "$PROC_BAN_LIST" 2>/dev/null || echo 0)
+if [[ -r "$PROC_BANS" ]]; then
+    local_ban_count=$(wc -l < "$PROC_BANS" 2>/dev/null || echo 0)
     fw_log_info "FRP 日志解析后封禁 IP 数量: $local_ban_count"
     assert_ge "$local_ban_count" 0 "FRP 日志解析处理成功"
 else
-    warn_test "ban_list 不可读"
+    warn_test "bans 接口不可读"
 fi
 
 rm -f "$local_frp_test_log" "$local_frp_yaml"

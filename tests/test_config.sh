@@ -13,14 +13,8 @@ CONFIG_DIR="$PROJECT_ROOT/config"
 
 # Procfs 路径
 PROC_DIR="/proc/firewall"
-PROC_ADD_BAN="$PROC_DIR/add_ban"
-PROC_REMOVE_BAN="$PROC_DIR/remove_ban"
-PROC_BAN_LIST="$PROC_DIR/ban_list"
+PROC_BANS="$PROC_DIR/bans"
 PROC_WHITELIST="$PROC_DIR/whitelist"
-PROC_WHITELIST_ADD="$PROC_DIR/whitelist_add"
-PROC_WHITELIST_REMOVE="$PROC_DIR/whitelist_remove"
-PROC_PERMANENT_ADD_BAN="$PROC_DIR/permanent_add_ban"
-PROC_PERMANENT_REMOVE_BAN="$PROC_DIR/permanent_remove_ban"
 PROC_STATS="$PROC_DIR/stats"
 PROC_CONFIG="$PROC_DIR/config"
 

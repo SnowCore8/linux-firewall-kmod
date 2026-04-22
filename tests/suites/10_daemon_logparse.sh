@@ -61,8 +61,8 @@ local_daemon_pid=$!
 sleep 3
 
 # 检查是否有 IP 被封禁
-if [[ -r "$PROC_BAN_LIST" ]]; then
-    local_ban_count=$(wc -l < "$PROC_BAN_LIST" 2>/dev/null || echo 0)
+if [[ -r "$PROC_BANS" ]]; then
+    local_ban_count=$(wc -l < "$PROC_BANS" 2>/dev/null || echo 0)
     fw_log_info "封禁列表中的 IP 数量: $local_ban_count"
     if [[ $local_ban_count -gt 0 ]]; then
         assert_ge "$local_ban_count" 1 "日志解析成功，有 IP 被封禁"
@@ -70,7 +70,7 @@ if [[ -r "$PROC_BAN_LIST" ]]; then
         warn_test "日志解析后无 IP 被封禁（可能是正则未匹配）"
     fi
 else
-    warn_test "ban_list 不可读"
+    warn_test "bans 接口不可读"
 fi
 
 # 清理守护进程

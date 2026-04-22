@@ -60,12 +60,9 @@
 #define daemon_log_debug(fmt, ...) \
     syslog(LOG_DEBUG, "firewall: " fmt, ##__VA_ARGS__)
 
-/* Procfs paths */
+/* Procfs paths - unified bans interface */
 #define PROCFS_DIR "/proc/firewall"
-#define ADD_BAN_PATH PROCFS_DIR "/add_ban"
-#define REMOVE_BAN_PATH PROCFS_DIR "/remove_ban"
-#define PERMANENT_ADD_BAN_PATH PROCFS_DIR "/permanent_add_ban"
-#define PERMANENT_REMOVE_BAN_PATH PROCFS_DIR "/permanent_remove_ban"
+#define BANS_PATH PROCFS_DIR "/bans"
 #define BAN_LIST_PATH PROCFS_DIR "/ban_list"
 
 /* Default configuration */
@@ -368,7 +365,9 @@ static void remove_entry(const char *ip);
 static unsigned int count_recent(struct failed_entry *entry, time_t window, unsigned int max_retries);
 static void handle_failed_attempt(const char *ip, unsigned int max_retries, unsigned int findtime);
 static int ban_ip(const char *ip);
+static int ban_ip_permanent(const char *ip);
 static int unban_ip(const char *ip);
+static int unban_permanent_ip(const char *ip);
 static void cleanup_expired_bans(void);
 static void cleanup_partial_line_buffer(void);
 static void daemonize_process(void);
@@ -1629,7 +1628,7 @@ static int ban_ip(const char *ip)
 {
     struct in_addr addr4;
     size_t ip_len;
-    char ip_with_newline[INET_ADDRSTRLEN + 2];  // +1 for \n, +1 for \0
+    char ip_with_newline[INET_ADDRSTRLEN + 6];  // +4 for "ban ", +1 for \n, +1 for \0
 
     // Validate input IP format before attempting to ban
     if (!ip) {
@@ -1659,11 +1658,11 @@ static int ban_ip(const char *ip)
     }
 
     // Prepare data with newline for writing
-    snprintf(ip_with_newline, sizeof(ip_with_newline), "%s\n", ip);
+    snprintf(ip_with_newline, sizeof(ip_with_newline), "ban %s\n", ip);
 
     // Write to kernel module (temporary ban)
-    if (secure_procfs_write(ADD_BAN_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
-        daemon_log_err("Failed to write to %s", ADD_BAN_PATH);
+    if (secure_procfs_write(BANS_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
+        daemon_log_err("Failed to write to %s", BANS_PATH);
         return -1;
     }
 
@@ -1702,11 +1701,11 @@ static int ban_ip_permanent(const char *ip)
         return -1;
     }
 
-    snprintf(ip_with_newline, sizeof(ip_with_newline), "%s\n", ip);
+    snprintf(ip_with_newline, sizeof(ip_with_newline), "permanent %s\n", ip);
 
     /* Write to kernel module permanent ban endpoint */
-    if (secure_procfs_write(PERMANENT_ADD_BAN_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
-        daemon_log_err("Failed to write to %s", PERMANENT_ADD_BAN_PATH);
+    if (secure_procfs_write(BANS_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
+        daemon_log_err("Failed to write to %s", BANS_PATH);
         return -1;
     }
 
@@ -1733,7 +1732,7 @@ static int ban_ip_permanent(const char *ip)
 static int unban_ip(const char *ip)
 {
     struct in_addr addr4;
-    char ip_with_newline[INET_ADDRSTRLEN + 2];  // +1 for \n, +1 for \0
+    char ip_with_newline[INET_ADDRSTRLEN + 8];  // +6 for "unban ", +1 for \n, +1 for \0
 
     // Validate input IP format before attempting to unban
     if (!ip) {
@@ -1757,15 +1756,66 @@ static int unban_ip(const char *ip)
     }
 
     // Prepare data with newline for writing
-    snprintf(ip_with_newline, sizeof(ip_with_newline), "%s\n", ip);
+    snprintf(ip_with_newline, sizeof(ip_with_newline), "unban %s\n", ip);
 
     // Use secure write function
-    if (secure_procfs_write(REMOVE_BAN_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
-        daemon_log_err("Failed to write to %s", REMOVE_BAN_PATH);
+    if (secure_procfs_write(BANS_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
+        daemon_log_err("Failed to write to %s", BANS_PATH);
         return -1;
     }
 
     daemon_log_info("Unbanned IP %s", ip);
+    return 0;
+}
+
+/*
+ * unban_permanent_ip - Remove permanent ban for IP via procfs and SQLite
+ */
+static int unban_permanent_ip(const char *ip)
+{
+    struct in_addr addr4;
+    char ip_with_newline[INET_ADDRSTRLEN + 20];  // +20 for "unpermanent " prefix
+
+    if (!ip) {
+        daemon_log_err("NULL IP address provided to unban_permanent_ip");
+        return -1;
+    }
+
+    // Check if it's a valid IPv4 address
+    if (inet_pton(AF_INET, ip, &addr4) != 1) {
+        daemon_log_err("Invalid IPv4 address format: %s", ip);
+        return -1;
+    }
+
+    // Additional validation: reject invalid IPv4 IPs
+    unsigned int ip_num = ntohl(addr4.s_addr);
+    if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
+        ((ip_num >> 24) & 0xFF) == 127 ||  // 127.x.x.x
+        (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {  // 224.0.0.0/4 (multicast)
+        daemon_log_err("Attempt to unpermanent invalid IPv4: %s", ip);
+        return -1;
+    }
+
+    // Prepare data with unpermanent command
+    snprintf(ip_with_newline, sizeof(ip_with_newline), "unpermanent %s\n", ip);
+
+    // Write to kernel module
+    if (secure_procfs_write(BANS_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
+        daemon_log_err("Failed to write to %s", BANS_PATH);
+        return -1;
+    }
+
+    // Also remove from SQLite for persistence
+    if (sqlite_db) {
+        int rc = sqlite_remove_permanent_ban(sqlite_db, ip);
+        if (rc == 0) {
+            daemon_log_info("IP %s permanent ban removed from SQLite", ip);
+        } else {
+            daemon_log_warn("Failed to remove permanent ban from SQLite: %s", ip);
+        }
+    }
+
+    daemon_log_info("Removed permanent ban for IP %s", ip);
     return 0;
 }
 
@@ -2848,15 +2898,9 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    if (access(ADD_BAN_PATH, F_OK) != 0) {
-        daemon_log_err("Add ban procfs interface %s does not exist", ADD_BAN_PATH);
-        fprintf(stderr, "Error: Add ban procfs interface %s does not exist\n", ADD_BAN_PATH);
-        return EXIT_FAILURE;
-    }
-
-    if (access(REMOVE_BAN_PATH, F_OK) != 0) {
-        daemon_log_err("Remove ban procfs interface %s does not exist", REMOVE_BAN_PATH);
-        fprintf(stderr, "Error: Remove ban procfs interface %s does not exist\n", REMOVE_BAN_PATH);
+    if (access(BANS_PATH, F_OK) != 0) {
+        daemon_log_err("Bans procfs interface %s does not exist", BANS_PATH);
+        fprintf(stderr, "Error: Bans procfs interface %s does not exist\n", BANS_PATH);
         return EXIT_FAILURE;
     }
 
@@ -2891,10 +2935,10 @@ int main(int argc, char *argv[])
             if (sqlite_load_all_permanent_bans(sqlite_db, &entries, &count) == 0 && count > 0) {
                 daemon_log_info("Loading %d permanent bans from SQLite database", count);
                 for (int i = 0; i < count; i++) {
-                    char ip_with_newline[INET_ADDRSTRLEN + 2];
-                    snprintf(ip_with_newline, sizeof(ip_with_newline), "%s\n", entries[i].ip);
-                    
-                    if (secure_procfs_write(PERMANENT_ADD_BAN_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
+                    char ip_with_newline[INET_ADDRSTRLEN + 20];  // +20 for "permanent " prefix
+                    snprintf(ip_with_newline, sizeof(ip_with_newline), "permanent %s\n", entries[i].ip);
+
+                    if (secure_procfs_write(BANS_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
                         daemon_log_warn("Failed to restore permanent ban for %s to kernel", entries[i].ip);
                     } else {
                         daemon_log_info("Restored permanent ban for %s (reason: %s)", entries[i].ip, entries[i].reason);

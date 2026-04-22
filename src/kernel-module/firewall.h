@@ -157,17 +157,11 @@ struct firewall_info {
 
     /* Procfs entries */
     struct proc_dir_entry *proc_dir;
-    struct proc_dir_entry *proc_ban_list;
-    struct proc_dir_entry *proc_add_ban;
-    struct proc_dir_entry *proc_remove_ban;
-    struct proc_dir_entry *proc_permanent_add;  /* Permanent ban add */
-    struct proc_dir_entry *proc_permanent_remove;  /* Permanent ban remove */
-    struct proc_dir_entry *proc_whitelist;
-    struct proc_dir_entry *proc_whitelist_add;
-    struct proc_dir_entry *proc_whitelist_remove;
-    struct proc_dir_entry *proc_config;
+    struct proc_dir_entry *proc_bans;        /* Unified bans interface (read/write) */
+    struct proc_dir_entry *proc_whitelist;   /* Unified whitelist interface (read/write) */
+    struct proc_dir_entry *proc_config;      /* Configuration (read/write) */
     struct proc_dir_entry *proc_settings;
-    struct proc_dir_entry *proc_stats;  /* Statistics endpoint */
+    struct proc_dir_entry *proc_stats;       /* Statistics endpoint (read-only) */
 };
 
 /* Function declarations */

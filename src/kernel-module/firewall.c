@@ -825,9 +825,10 @@ static void cleanup_timer_callback(struct timer_list *t)
 }
 
 /*
- * ban_list_show - Show current ban list (IPv4 only)
+ * bans_show - Show current ban list (IPv4 only)
+ * Reused from original ban_list_show
  */
-static int ban_list_show(struct seq_file *m, void *v)
+static int bans_show(struct seq_file *m, void *v)
 {
     struct firewall_info *fw = &fw_info;
     struct ban_entry *entry;
@@ -838,7 +839,7 @@ static int ban_list_show(struct seq_file *m, void *v)
     int temporary_count = 0;
     int permanent_count = 0;
 
-    FW_DEBUG(3, "ENTRY: ban_list_show");
+    FW_DEBUG(3, "ENTRY: bans_show");
 
     seq_printf(m, "Current banned IPs:\n");
     seq_printf(m, "-------------------\n");
@@ -866,298 +867,248 @@ static int ban_list_show(struct seq_file *m, void *v)
     seq_printf(m, "-------------------\n");
     seq_printf(m, "Total: %d active bans (%d permanent, %d temporary)\n",
                count, permanent_count, temporary_count);
-    FW_DEBUG(3, "EXIT: ban_list_show -> 0 (shown=%d)", count);
+    FW_DEBUG(3, "EXIT: bans_show -> 0 (shown=%d)", count);
     return 0;
 }
 
-static int ban_list_open(struct inode *inode, struct file *file)
+static int bans_open(struct inode *inode, struct file *file)
 {
-    return single_open(file, ban_list_show, NULL);
+    return single_open(file, bans_show, NULL);
 }
 
-static const struct proc_ops ban_list_fops = {
-    .proc_open = ban_list_open,
-    .proc_read = seq_read,
-    .proc_lseek = seq_lseek,
-    .proc_release = single_release,
-};
-
-/* Forward declarations for permanent ban procfs handlers */
-static ssize_t permanent_add_ban_write(struct file *file, const char __user *buf,
-                                        size_t count, loff_t *ppos);
-static ssize_t permanent_remove_ban_write(struct file *file, const char __user *buf,
-                                           size_t count, loff_t *ppos);
-
-static const struct proc_ops permanent_add_fops = {
-    .proc_write = permanent_add_ban_write,
-    .proc_lseek = default_llseek,
-};
-
-static const struct proc_ops permanent_remove_fops = {
-    .proc_write = permanent_remove_ban_write,
-    .proc_lseek = default_llseek,
-};
-
 /*
- * add_ban_write - Procfs write handler for banning IPs (IPv4 only)
+ * bans_write - Unified write handler for ban management
+ * Commands:
+ *   <ip>              -> Temporary ban (default)
+ *   ban <ip>          -> Temporary ban
+ *   unban <ip>        -> Remove ban
+ *   permanent <ip>    -> Permanent ban
+ *   unpermanent <ip>  -> Remove permanent ban
  */
-static ssize_t add_ban_write(struct file *file, const char __user *buf,
-                              size_t count, loff_t *ppos)
+static ssize_t bans_write(struct file *file, const char __user *buf,
+                          size_t count, loff_t *ppos)
 {
-    char ip_str[INET_ADDRSTRLEN + 2];
+    char input[INET_ADDRSTRLEN + 32];
     __be32 ipv4;
     ssize_t len;
+    char *ptr, *cmd_start, *ip_start;
+    char cmd_buf[16];
+    int result;
 
-    FW_DEBUG(2, "ENTRY: add_ban_write(count=%zu)", count);
+    FW_DEBUG(2, "ENTRY: bans_write(count=%zu)", count);
 
     if (!capable(CAP_NET_ADMIN)) {
-        FW_DEBUG(1, "EXIT: add_ban_write -> -EPERM (no capability)");
+        FW_DEBUG(1, "EXIT: bans_write -> -EPERM (no capability)");
         return -EPERM;
     }
     if (count == 0) {
-        FW_DEBUG(2, "EXIT: add_ban_write -> 0 (empty input)");
+        FW_DEBUG(2, "EXIT: bans_write -> 0 (empty input)");
         return 0;
     }
     /* Limit input to prevent buffer overflow */
-    if (count > sizeof(ip_str) - 1) {
-        FW_DEBUG(1, "EXIT: add_ban_write -> -EINVAL (input too large: %zu)", count);
+    if (count > sizeof(input) - 1) {
+        FW_DEBUG(1, "EXIT: bans_write -> -EINVAL (input too large: %zu)", count);
         return -EINVAL;
     }
-    len = min(count, (size_t)(sizeof(ip_str) - 1));
+    len = min(count, (size_t)(sizeof(input) - 1));
 
-    if (copy_from_user(ip_str, buf, len)) {
-        FW_DEBUG(1, "EXIT: add_ban_write -> -EFAULT (copy_from_user failed)");
+    if (copy_from_user(input, buf, len)) {
+        FW_DEBUG(1, "EXIT: bans_write -> -EFAULT (copy_from_user failed)");
         return -EFAULT;
     }
 
     /* Ensure null termination */
-    ip_str[len] = '\0';
-    if (len > 0 && ip_str[len - 1] == '\n')
-        ip_str[len - 1] = '\0';
+    input[len] = '\0';
+    if (len > 0 && input[len - 1] == '\n')
+        input[len - 1] = '\0';
 
     /* Validate that we have a null terminator within our buffer bounds */
-    if (strnlen(ip_str, sizeof(ip_str)) >= sizeof(ip_str)) {
-        FW_DEBUG(1, "EXIT: add_ban_write -> -EINVAL (not null-terminated)");
-        return -EINVAL;  /* String not properly null-terminated within buffer */
+    if (strnlen(input, sizeof(input)) >= sizeof(input)) {
+        FW_DEBUG(1, "EXIT: bans_write -> -EINVAL (not null-terminated)");
+        return -EINVAL;
     }
 
-    FW_DEBUG(2, "Processing ban request for IP: %s", ip_str);
+    /* Skip leading whitespace */
+    ptr = input;
+    while (*ptr && (*ptr == ' ' || *ptr == '\t'))
+        ptr++;
 
-    /* Check if it's a valid IPv4 address */
-    if (in4_pton(ip_str, -1, (u8 *)&ipv4, -1, NULL)) {
-        /* Additional validation: reject invalid IPs like 0.0.0.0, 255.255.255.255, multicast, etc. */
-        if (ipv4 == 0 || ipv4 == 0xFFFFFFFF ||
-            (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||  /* 127.x.x.x */
-            (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  /* 224.0.0.0/4 (multicast) */
-            (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  /* 0.0.0.0/8 */
-            (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  /* 255.0.0.0/8 */
-            fw_pr_warn("Attempt to ban invalid IPv4: %s", ip_str);
+    if (*ptr == '\0') {
+        fw_pr_warn("Empty command");
+        return -EINVAL;
+    }
+
+    /* Extract command keyword (if any) */
+    cmd_start = ptr;
+    cmd_buf[0] = '\0';
+
+    /* Find end of first word */
+    while (*ptr && *ptr != ' ' && *ptr != '\t')
+        ptr++;
+
+    /* Check if this word is a command keyword */
+    if (*ptr) {
+        /* There's more content after first word - could be a command */
+        char saved = *ptr;
+        *ptr = '\0';
+
+        /* Check if it's a known command */
+        if (strcmp(cmd_start, "ban") == 0 ||
+            strcmp(cmd_start, "unban") == 0 ||
+            strcmp(cmd_start, "permanent") == 0 ||
+            strcmp(cmd_start, "unpermanent") == 0) {
+            strncpy(cmd_buf, cmd_start, sizeof(cmd_buf) - 1);
+            cmd_buf[sizeof(cmd_buf) - 1] = '\0';
+            /* Skip whitespace to find IP */
+            *ptr = saved;
+            while (*ptr && (*ptr == ' ' || *ptr == '\t'))
+                ptr++;
+            ip_start = ptr;
+        } else {
+            /* Not a command keyword - check if there's extra content after this word */
+            /* If there is, this is an invalid command format */
+            if (saved != '\0') {
+                fw_pr_warn("Invalid command format: %s", input);
+                return -EINVAL;
+            }
+            /* Only one word - treat as IP address */
+            *ptr = saved;
+            ip_start = cmd_start;
+        }
+    } else {
+        /* Only one word - treat as IP address */
+        ip_start = cmd_start;
+    }
+
+    /* Validate IP string */
+    if (*ip_start == '\0') {
+        fw_pr_warn("Missing IP address");
+        return -EINVAL;
+    }
+
+    /* Terminate IP string */
+    ptr = ip_start;
+    while (*ptr && *ptr != ' ' && *ptr != '\t')
+        ptr++;
+
+    /* Check for extra content after IP address - invalid format */
+    if (*ptr != '\0') {
+        /* Verify remaining content is not just whitespace */
+        char *check = ptr;
+        while (*check && (*check == ' ' || *check == '\t'))
+            check++;
+        if (*check != '\0') {
+            fw_pr_warn("Invalid command format - extra content after IP: %s", input);
             return -EINVAL;
         }
+    }
 
-        /* Additional validation: reject Class E (reserved for future use) but allow some valid single addresses */
-        /* Class E is 240.0.0.0/4 (240.0.0.0 - 255.255.255.255) */
-        /* However, 254.255.255.255 is a valid unicast address that should be banned */
-        /* Only reject addresses in the 240.0.0.0/4 range except 254.255.255.255 */
-        unsigned int ip_num = ntohl(ipv4);
-        if ((ip_num >= 0xF0000000 && ip_num < 0xFE000000) || ip_num == 0xFFFFFFFF) {
-            /* Reject 240.0.0.0 - 253.255.255.255 (true Class E reserved) */
-            /* But allow 254.0.0.0 - 254.255.255.255 and 255.0.0.0 (with other checks) */
-            fw_pr_warn("Attempt to ban reserved IPv4 Class E: %s", ip_str);
-            return -EINVAL;
+    *ptr = '\0';
+
+    FW_DEBUG(2, "Processing ban command: cmd='%s' ip='%s'", cmd_buf, ip_start);
+
+    /* Parse IP address */
+    if (!in4_pton(ip_start, -1, (u8 *)&ipv4, -1, NULL)) {
+        fw_pr_warn("Invalid IP address format: %s", ip_start);
+        return -EINVAL;
+    }
+
+    /* Additional validation: reject invalid IPs */
+    if (ipv4 == 0 || ipv4 == 0xFFFFFFFF ||
+        (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||  /* 127.x.x.x */
+        (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  /* 224.0.0.0/4 (multicast) */
+        (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  /* 0.0.0.0/8 */
+        (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  /* 255.0.0.0/8 */
+        fw_pr_warn("Attempt to ban invalid IPv4: %s", ip_start);
+        return -EINVAL;
+    }
+
+    /* Check Class E reserved addresses */
+    unsigned int ip_num = ntohl(ipv4);
+    if ((ip_num >= 0xF0000000 && ip_num < 0xFE000000) || ip_num == 0xFFFFFFFF) {
+        fw_pr_warn("Attempt to ban reserved IPv4 Class E: %s", ip_start);
+        return -EINVAL;
+    }
+
+    /* Check for private/reserved IP ranges (warning only) */
+    unsigned int ip_class_a = (ntohl(ipv4) >> 24) & 0xFF;
+    unsigned int ip_class_b = (ntohl(ipv4) >> 16) & 0xFF;
+    if ((ip_class_a == 10) ||
+        (ip_class_a == 172 && ip_class_b >= 16 && ip_class_b <= 31) ||
+        (ip_class_a == 192 && ip_class_b == 168)) {
+        fw_pr_warn("Attempt to ban private IPv4 range %pI4 - this may be unintended", &ipv4);
+    }
+
+    /* Execute command */
+    if (strcmp(cmd_buf, "unban") == 0) {
+        result = unban_ip(&fw_info, ipv4);
+        if (result < 0) {
+            if (result == -ENOENT) {
+                fw_pr_warn("IP %s not found in ban list", ip_start);
+            } else {
+                fw_pr_err("Failed to unban IP %s (error %d)", ip_start, result);
+            }
+            return result;
         }
-
-        /* Additional validation: check for private/reserved IP ranges that shouldn't be banned in typical scenarios */
-        /* This adds an extra layer of protection against accidental misconfiguration */
-        unsigned int ip_class_a = (ntohl(ipv4) >> 24) & 0xFF;
-        unsigned int ip_class_b = (ntohl(ipv4) >> 16) & 0xFF;
-
-        /* Check for RFC 1918 private networks (should these really be banned?) */
-        if ((ip_class_a == 10) ||  /* 10.0.0.0/8 */
-            (ip_class_a == 172 && ip_class_b >= 16 && ip_class_b <= 31) ||  /* 172.16.0.0/12 */
-            (ip_class_a == 192 && ip_class_b == 168)) {  /* 192.168.0.0/16 */
-            fw_pr_warn("Attempt to ban private IPv4 range %pI4 - this may be unintended", &ipv4);
+    } else if (strcmp(cmd_buf, "permanent") == 0) {
+        /* Check flood protection bypass for permanent bans */
+        result = ban_ip_permanent(&fw_info, ipv4);
+        if (result < 0) {
+            if (result == -EPERM) {
+                fw_pr_info("Requested IPv4 %s is in whitelist, not permanently banned", ip_start);
+            } else if (result == -ENOMEM) {
+                fw_pr_err("Failed to allocate memory for permanent ban entry for IPv4 %s", ip_start);
+            } else if (result == -ENOSPC) {
+                fw_pr_warn("Ban table full, cannot permanently ban IPv4 %s", ip_start);
+            } else {
+                fw_pr_err("Unknown error %d when trying to permanently ban IPv4 %s", result, ip_start);
+            }
+            return result;
         }
-
-        /* Check flood protection */
+    } else if (strcmp(cmd_buf, "unpermanent") == 0) {
+        result = unban_permanent_ip(&fw_info, ipv4);
+        if (result < 0) {
+            if (result == -ENOENT) {
+                fw_pr_warn("IP %s not found in permanent ban list", ip_start);
+            } else {
+                fw_pr_err("Failed to remove permanent ban for IP %s (error %d)", ip_start, result);
+            }
+            return result;
+        }
+    } else {
+        /* Default: temporary ban (cmd_buf is empty or "ban") */
+        /* Check flood protection for temporary bans */
         if (check_flood_protection() < 0) {
             fw_pr_warn("Flood protection triggered - too many ban requests");
             return -EBUSY;
         }
 
-        int result = ban_ip(&fw_info, ipv4);
+        result = ban_ip(&fw_info, ipv4);
         if (result < 0) {
             if (result == -EPERM) {
-                fw_pr_info("Requested IPv4 %s is in whitelist, not banned", ip_str);
+                fw_pr_info("Requested IPv4 %s is in whitelist, not banned", ip_start);
             } else if (result == -ENOMEM) {
-                fw_pr_err("Failed to allocate memory for ban entry for IPv4 %s", ip_str);
+                fw_pr_err("Failed to allocate memory for ban entry for IPv4 %s", ip_start);
             } else if (result == -ENOSPC) {
-                fw_pr_warn("Ban table full, cannot ban IPv4 %s", ip_str);
+                fw_pr_warn("Ban table full, cannot ban IPv4 %s", ip_start);
             } else {
-                fw_pr_err("Unknown error %d when trying to ban IPv4 %s", result, ip_str);
+                fw_pr_err("Unknown error %d when trying to ban IPv4 %s", result, ip_start);
             }
-            FW_DEBUG(1, "EXIT: add_ban_write -> %d (ban_ip failed)", result);
             return result;
         }
     }
-    else {
-        fw_pr_warn("Invalid IP address format: %s", ip_str);
-        FW_DEBUG(1, "EXIT: add_ban_write -> -EINVAL (invalid IP format)");
-        return -EINVAL;
-    }
 
-    FW_DEBUG(1, "EXIT: add_ban_write -> %zu (success)", count);
+    FW_DEBUG(1, "EXIT: bans_write -> %zu (success)", count);
     return count;
 }
 
-/*
- * permanent_add_ban_write - Add a permanent ban via procfs
- * Permanent bans never expire and persist across module reloads (via SQLite in daemon)
- */
-static ssize_t permanent_add_ban_write(struct file *file, const char __user *buf,
-                                        size_t count, loff_t *ppos)
-{
-    char ip_str[INET_ADDRSTRLEN + 2];
-    __be32 ipv4;
-    ssize_t len;
-
-    FW_DEBUG(2, "ENTRY: permanent_add_ban_write(count=%zu)", count);
-
-    if (!capable(CAP_NET_ADMIN)) {
-        FW_DEBUG(1, "EXIT: permanent_add_ban_write -> -EPERM (no capability)");
-        return -EPERM;
-    }
-    if (count == 0) {
-        FW_DEBUG(2, "EXIT: permanent_add_ban_write -> 0 (empty input)");
-        return 0;
-    }
-    if (count > sizeof(ip_str) - 1) {
-        FW_DEBUG(1, "EXIT: permanent_add_ban_write -> -EINVAL (input too large: %zu)", count);
-        return -EINVAL;
-    }
-    len = min(count, (size_t)(sizeof(ip_str) - 1));
-
-    if (copy_from_user(ip_str, buf, len)) {
-        FW_DEBUG(1, "EXIT: permanent_add_ban_write -> -EFAULT (copy_from_user failed)");
-        return -EFAULT;
-    }
-
-    ip_str[len] = '\0';
-    if (len > 0 && ip_str[len - 1] == '\n')
-        ip_str[len - 1] = '\0';
-
-    if (strnlen(ip_str, sizeof(ip_str)) >= sizeof(ip_str)) {
-        FW_DEBUG(1, "EXIT: permanent_add_ban_write -> -EINVAL (not null-terminated)");
-        return -EINVAL;
-    }
-
-    FW_DEBUG(2, "Processing permanent ban request for IP: %s", ip_str);
-
-    if (in4_pton(ip_str, -1, (u8 *)&ipv4, -1, NULL)) {
-        if (ipv4 == 0 || ipv4 == 0xFFFFFFFF ||
-            (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||
-            (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||
-            (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||
-            (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {
-            fw_pr_warn("Attempt to permanently ban invalid IPv4: %s", ip_str);
-            return -EINVAL;
-        }
-
-        unsigned int ip_num = ntohl(ipv4);
-        if ((ip_num >= 0xF0000000 && ip_num < 0xFE000000) || ip_num == 0xFFFFFFFF) {
-            fw_pr_warn("Attempt to permanently ban reserved IPv4 Class E: %s", ip_str);
-            return -EINVAL;
-        }
-
-        /* Permanent bans bypass flood protection */
-        /* No flood protection check for permanent bans */
-
-        int result = ban_ip_permanent(&fw_info, ipv4);
-        if (result < 0) {
-            if (result == -EPERM) {
-                fw_pr_info("Requested IPv4 %s is in whitelist, not permanently banned", ip_str);
-            } else if (result == -ENOMEM) {
-                fw_pr_err("Failed to allocate memory for permanent ban entry for IPv4 %s", ip_str);
-            } else if (result == -ENOSPC) {
-                fw_pr_warn("Ban table full, cannot permanently ban IPv4 %s", ip_str);
-            } else {
-                fw_pr_err("Unknown error %d when trying to permanently ban IPv4 %s", result, ip_str);
-            }
-            FW_DEBUG(1, "EXIT: permanent_add_ban_write -> %d (ban_ip_permanent failed)", result);
-            return result;
-        }
-    } else {
-        fw_pr_warn("Invalid IP address format for permanent ban: %s", ip_str);
-        FW_DEBUG(1, "EXIT: permanent_add_ban_write -> -EINVAL (invalid IP format)");
-        return -EINVAL;
-    }
-
-    FW_DEBUG(1, "EXIT: permanent_add_ban_write -> %zu (success)", count);
-    return count;
-}
-
-/*
- * permanent_remove_ban_write - Remove a permanent ban via procfs
- */
-static ssize_t permanent_remove_ban_write(struct file *file, const char __user *buf,
-                                           size_t count, loff_t *ppos)
-{
-    char ip_str[INET_ADDRSTRLEN + 2];
-    __be32 ipv4;
-    ssize_t len;
-
-    FW_DEBUG(2, "ENTRY: permanent_remove_ban_write(count=%zu)", count);
-
-    if (!capable(CAP_NET_ADMIN)) {
-        FW_DEBUG(1, "EXIT: permanent_remove_ban_write -> -EPERM (no capability)");
-        return -EPERM;
-    }
-    if (count == 0) {
-        FW_DEBUG(2, "EXIT: permanent_remove_ban_write -> 0 (empty input)");
-        return 0;
-    }
-    if (count > sizeof(ip_str) - 1) {
-        FW_DEBUG(1, "EXIT: permanent_remove_ban_write -> -EINVAL (input too large: %zu)", count);
-        return -EINVAL;
-    }
-    len = min(count, (size_t)(sizeof(ip_str) - 1));
-
-    if (copy_from_user(ip_str, buf, len)) {
-        FW_DEBUG(1, "EXIT: permanent_remove_ban_write -> -EFAULT (copy_from_user failed)");
-        return -EFAULT;
-    }
-
-    ip_str[len] = '\0';
-    if (len > 0 && ip_str[len - 1] == '\n')
-        ip_str[len - 1] = '\0';
-
-    if (strnlen(ip_str, sizeof(ip_str)) >= sizeof(ip_str)) {
-        FW_DEBUG(1, "EXIT: permanent_remove_ban_write -> -EINVAL (not null-terminated)");
-        return -EINVAL;
-    }
-
-    FW_DEBUG(2, "Processing permanent unban request for IP: %s", ip_str);
-
-    if (in4_pton(ip_str, -1, (u8 *)&ipv4, -1, NULL)) {
-        int result = unban_permanent_ip(&fw_info, ipv4);
-        if (result < 0) {
-            if (result == -ENOENT) {
-                fw_pr_warn("IP %s not found in permanent ban list", ip_str);
-            } else {
-                fw_pr_err("Failed to remove permanent ban for IP %s (error %d)", ip_str, result);
-            }
-            FW_DEBUG(1, "EXIT: permanent_remove_ban_write -> %d (unban_permanent_ip failed)", result);
-            return result;
-        }
-    } else {
-        fw_pr_warn("Invalid IP address format for permanent unban: %s", ip_str);
-        FW_DEBUG(1, "EXIT: permanent_remove_ban_write -> -EINVAL (invalid IP format)");
-        return -EINVAL;
-    }
-
-    FW_DEBUG(1, "EXIT: permanent_remove_ban_write -> %zu (success)", count);
-    return count;
-}
+static const struct proc_ops bans_fops = {
+    .proc_open = bans_open,
+    .proc_read = seq_read,
+    .proc_write = bans_write,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
+};
 
 /*
  * check_flood_protection - Check if adding this entry would exceed flood limits
@@ -1194,66 +1145,9 @@ static int check_flood_protection(void)
 }
 
 /*
- * remove_ban_write - Procfs write handler for unbanning IPs (IPv4 only)
+ * whitelist_read - Show whitelist entries (IPv4 only)
  */
-static ssize_t remove_ban_write(struct file *file, const char __user *buf,
-                                 size_t count, loff_t *ppos)
-{
-    char ip_str[INET_ADDRSTRLEN + 2];
-    __be32 ipv4;
-    ssize_t len = min(count, (size_t)(sizeof(ip_str) - 1));
-
-    if (!capable(CAP_NET_ADMIN))
-        return -EPERM;
-    if (count == 0)
-        return 0;
-    if (copy_from_user(ip_str, buf, len))
-        return -EFAULT;
-
-    ip_str[len] = '\0';
-    if (len > 0 && ip_str[len - 1] == '\n')
-        ip_str[len - 1] = '\0';
-
-    /* Validate that we have a null terminator within our buffer bounds */
-    if (strnlen(ip_str, sizeof(ip_str)) >= sizeof(ip_str)) {
-        return -EINVAL;  /* String not properly null-terminated within buffer */
-    }
-
-    /* Check if it's a valid IPv4 address */
-    if (in4_pton(ip_str, -1, (u8 *)&ipv4, -1, NULL)) {
-        /* Additional validation: reject invalid IPs like 0.0.0.0, 255.255.255.255, multicast, etc. */
-        if (ipv4 == 0 || ipv4 == 0xFFFFFFFF ||
-            (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||  /* 127.x.x.x */
-            (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  /* 224.0.0.0/4 (multicast) */
-            (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  /* 0.0.0.0/8 */
-            (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  /* 255.0.0.0/8 */
-            fw_pr_warn("Attempt to unban invalid IPv4: %s", ip_str);
-            return -EINVAL;
-        }
-
-        if (unban_ip(&fw_info, ipv4) < 0)
-            return -ENOENT;
-    }
-    else {
-        fw_pr_warn("Invalid IP address format: %s", ip_str);
-        return -EINVAL;
-    }
-
-    return count;
-}
-
-static const struct proc_ops add_ban_fops = {
-    .proc_write = add_ban_write,
-};
-
-static const struct proc_ops remove_ban_fops = {
-    .proc_write = remove_ban_write,
-};
-
-/*
- * whitelist_show - Procfs show handler for whitelist hash table (IPv4 only)
- */
-static int whitelist_show(struct seq_file *m, void *v)
+static int whitelist_read(struct seq_file *m, void *v)
 {
     struct firewall_info *fw = &fw_info;
     struct whitelist_entry *entry;
@@ -1266,7 +1160,6 @@ static int whitelist_show(struct seq_file *m, void *v)
 
     rcu_read_lock();
     hash_for_each_rcu(fw->whitelist_table, hash, entry, hash) {
-        /* For subnets, we need to display the network address */
         __be32 network_addr = entry->ip & entry->mask;
         ipv4_to_str(network_addr, ip_str, sizeof(ip_str));
         prefix_len = inet_mask_len(entry->mask);
@@ -1284,153 +1177,175 @@ static int whitelist_show(struct seq_file *m, void *v)
 
 static int whitelist_open(struct inode *inode, struct file *file)
 {
-    return single_open(file, whitelist_show, NULL);
+    return single_open(file, whitelist_read, NULL);
 }
 
 /*
- * whitelist_add_write - Add IP to whitelist (IPv4 only)
+ * whitelist_write - Unified write handler for whitelist management
+ * Commands:
+ *   add <subnet>      -> Add to whitelist
+ *   remove <subnet>   -> Remove from whitelist
+ *   <subnet>          -> Default: add to whitelist
  */
-static ssize_t whitelist_add_write(struct file *file, const char __user *buf,
-                                    size_t count, loff_t *ppos)
+static ssize_t whitelist_write(struct file *file, const char __user *buf,
+                                size_t count, loff_t *ppos)
 {
-    char input[INET_ADDRSTRLEN + 8];
-    ssize_t len = min(count, (size_t)(sizeof(input) - 1));
+    char input[INET_ADDRSTRLEN + 16];
+    ssize_t len;
+    char *ptr, *cmd_start, *subnet_start;
+    char cmd_buf[16];
     __be32 ipv4, mask4;
     int prefix_len = 32;
+    int result;
 
-    if (!capable(CAP_NET_ADMIN))
+    FW_DEBUG(2, "ENTRY: whitelist_write(count=%zu)", count);
+
+    if (!capable(CAP_NET_ADMIN)) {
+        FW_DEBUG(1, "EXIT: whitelist_write -> -EPERM (no capability)");
         return -EPERM;
-    if (count == 0)
+    }
+    if (count == 0) {
+        FW_DEBUG(2, "EXIT: whitelist_write -> 0 (empty input)");
         return 0;
-    if (copy_from_user(input, buf, len))
+    }
+    if (count > sizeof(input) - 1) {
+        FW_DEBUG(1, "EXIT: whitelist_write -> -EINVAL (input too large: %zu)", count);
+        return -EINVAL;
+    }
+    len = min(count, (size_t)(sizeof(input) - 1));
+
+    if (copy_from_user(input, buf, len)) {
+        FW_DEBUG(1, "EXIT: whitelist_write -> -EFAULT (copy_from_user failed)");
         return -EFAULT;
+    }
 
     input[len] = '\0';
     if (len > 0 && input[len - 1] == '\n')
         input[len - 1] = '\0';
 
-    /* Validate that we have a null terminator within our buffer bounds */
     if (strnlen(input, sizeof(input)) >= sizeof(input)) {
-        return -EINVAL;  /* String not properly null-terminated within buffer */
-    }
-
-    char *slash = strchr(input, '/');
-    if (slash) {
-        *slash = '\0';
-        if (kstrtoint(slash + 1, 10, &prefix_len) < 0)
-            return -EINVAL;
-    }
-
-    /* Check if it's a valid IPv4 address */
-    if (in4_pton(input, -1, (u8 *)&ipv4, -1, NULL)) {
-        if (prefix_len < 0 || prefix_len > 32)
-            return -EINVAL;
-
-        /* Additional validation: reject invalid IPs */
-        if (ipv4 == 0 || ipv4 == 0xFFFFFFFF ||
-            (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||  /* 127.x.x.x */
-            (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  /* 224.0.0.0/4 (multicast) */
-            (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  /* 0.0.0.0/8 */
-            (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  /* 255.0.0.0/8 */
-            fw_pr_warn("Attempt to whitelist invalid IPv4: %s", input);
-            return -EINVAL;
-        }
-
-        /* Calculate network mask based on prefix length */
-        mask4 = prefix_len == 0 ? 0 : htonl(~((1U << (32 - prefix_len)) - 1));
-        __be32 normalized_ip = ipv4 & mask4;
-
-        if (add_whitelist_entry(&fw_info, normalized_ip, mask4, "manual") < 0)
-            return -ENOSPC;
-    }
-    else {
-        fw_pr_warn("Invalid IP address format: %s", input);
+        FW_DEBUG(1, "EXIT: whitelist_write -> -EINVAL (not null-terminated)");
         return -EINVAL;
     }
 
-    return count;
-}
+    /* Skip leading whitespace */
+    ptr = input;
+    while (*ptr && (*ptr == ' ' || *ptr == '\t'))
+        ptr++;
 
-/*
- * whitelist_remove_write - Remove IP from whitelist (IPv4 only)
- * Fixed version: Handles both individual IPs and subnets correctly by normalizing to network address
- */
-static ssize_t whitelist_remove_write(struct file *file, const char __user *buf,
-                                       size_t count, loff_t *ppos)
-{
-    char input[INET_ADDRSTRLEN + 8];
-    ssize_t len = min(count, (size_t)(sizeof(input) - 1));
-    __be32 ipv4, mask4 = 0xFFFFFFFF;  /* Default to /32 (single IP) */
-    int prefix_len = 32;
-
-    if (!capable(CAP_NET_ADMIN))
-        return -EPERM;
-    if (count == 0)
-        return 0;
-    if (copy_from_user(input, buf, len))
-        return -EFAULT;
-
-    input[len] = '\0';
-    if (len > 0 && input[len - 1] == '\n')
-        input[len - 1] = '\0';
-
-    /* Validate that we have a null terminator within our buffer bounds */
-    if (strnlen(input, sizeof(input)) >= sizeof(input)) {
-        return -EINVAL;  /* String not properly null-terminated within buffer */
-    }
-
-    char *slash = strchr(input, '/');
-    if (slash) {
-        *slash = '\0';
-        if (kstrtoint(slash + 1, 10, &prefix_len) < 0)
-            return -EINVAL;
-    }
-
-    /* Check if it's a valid IPv4 address */
-    if (in4_pton(input, -1, (u8 *)&ipv4, -1, NULL)) {
-        if (prefix_len < 0 || prefix_len > 32)
-            return -EINVAL;
-
-        /* Calculate network mask based on prefix length */
-        mask4 = prefix_len == 0 ? 0 : htonl(~((1U << (32 - prefix_len)) - 1));
-
-        /* Additional validation: reject invalid IPs */
-        if (ipv4 == 0 || ipv4 == 0xFFFFFFFF ||
-            (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||  /* 127.x.x.x */
-            (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||  /* 224.0.0.0/4 (multicast) */
-            (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||  /* 0.0.0.0/8 */
-            (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {  /* 255.0.0.0/8 */
-            fw_pr_warn("Attempt to remove invalid IPv4 from whitelist: %s", input);
-            return -EINVAL;
-        }
-
-        /* Normalize the IP to the network address for removal */
-        __be32 normalized_ip = ipv4 & mask4;
-
-        if (remove_whitelist_entry(&fw_info, normalized_ip) < 0)
-            return -ENOENT;
-    }
-    else {
-        fw_pr_warn("Invalid IP address format: %s", input);
+    if (*ptr == '\0') {
+        fw_pr_warn("Empty command");
         return -EINVAL;
     }
 
+    /* Extract command keyword (if any) */
+    cmd_start = ptr;
+    cmd_buf[0] = '\0';
+
+    /* Find end of first word */
+    while (*ptr && *ptr != ' ' && *ptr != '\t')
+        ptr++;
+
+    if (*ptr) {
+        char saved = *ptr;
+        *ptr = '\0';
+
+        if (strcmp(cmd_start, "add") == 0 || strcmp(cmd_start, "remove") == 0) {
+            strncpy(cmd_buf, cmd_start, sizeof(cmd_buf) - 1);
+            cmd_buf[sizeof(cmd_buf) - 1] = '\0';
+            *ptr = saved;
+            while (*ptr && (*ptr == ' ' || *ptr == '\t'))
+                ptr++;
+            subnet_start = ptr;
+        } else {
+            *ptr = saved;
+            subnet_start = cmd_start;
+        }
+    } else {
+        subnet_start = cmd_start;
+    }
+
+    if (*subnet_start == '\0') {
+        fw_pr_warn("Missing subnet");
+        return -EINVAL;
+    }
+
+    /* Terminate subnet string */
+    ptr = subnet_start;
+    while (*ptr && *ptr != ' ' && *ptr != '\t')
+        ptr++;
+    *ptr = '\0';
+
+    /* Parse subnet (IP/prefix) */
+    char *slash = strchr(subnet_start, '/');
+    if (slash) {
+        *slash = '\0';
+        if (kstrtoint(slash + 1, 10, &prefix_len) < 0) {
+            fw_pr_warn("Invalid prefix length");
+            return -EINVAL;
+        }
+    }
+
+    if (!in4_pton(subnet_start, -1, (u8 *)&ipv4, -1, NULL)) {
+        fw_pr_warn("Invalid IP address format: %s", subnet_start);
+        return -EINVAL;
+    }
+
+    if (prefix_len < 0 || prefix_len > 32) {
+        fw_pr_warn("Invalid prefix length: %d", prefix_len);
+        return -EINVAL;
+    }
+
+    /* Additional validation: reject invalid IPs */
+    if (ipv4 == 0 || ipv4 == 0xFFFFFFFF ||
+        (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||
+        (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||
+        (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||
+        (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {
+        fw_pr_warn("Attempt to whitelist invalid IPv4: %s", subnet_start);
+        return -EINVAL;
+    }
+
+    mask4 = prefix_len == 0 ? 0 : htonl(~((1U << (32 - prefix_len)) - 1));
+    __be32 normalized_ip = ipv4 & mask4;
+
+    if (strcmp(cmd_buf, "remove") == 0) {
+        result = remove_whitelist_entry(&fw_info, normalized_ip);
+        if (result < 0) {
+            if (result == -ENOENT) {
+                fw_pr_warn("%pI4/%d not found in whitelist", &normalized_ip, prefix_len);
+            } else {
+                fw_pr_err("Failed to remove %pI4/%d from whitelist (error %d)", &normalized_ip, prefix_len, result);
+            }
+            return result;
+        }
+    } else {
+        /* Default: add (cmd_buf is empty or "add") */
+        result = add_whitelist_entry(&fw_info, normalized_ip, mask4, "manual");
+        if (result < 0) {
+            if (result == -ENOMEM) {
+                fw_pr_err("Failed to allocate memory for whitelist entry");
+            } else if (result == -ENOSPC) {
+                fw_pr_warn("Whitelist full, cannot add %pI4/%d", &normalized_ip, prefix_len);
+            } else if (result == -EINVAL) {
+                fw_pr_warn("Invalid entry for whitelist");
+            } else {
+                fw_pr_err("Unknown error %d when adding to whitelist", result);
+            }
+            return result;
+        }
+    }
+
+    FW_DEBUG(1, "EXIT: whitelist_write -> %zu (success)", count);
     return count;
 }
 
 static const struct proc_ops whitelist_fops = {
     .proc_open = whitelist_open,
     .proc_read = seq_read,
+    .proc_write = whitelist_write,
     .proc_lseek = seq_lseek,
     .proc_release = single_release,
-};
-
-static const struct proc_ops whitelist_add_fops = {
-    .proc_write = whitelist_add_write,
-};
-
-static const struct proc_ops whitelist_remove_fops = {
-    .proc_write = whitelist_remove_write,
 };
 
 /*
@@ -1562,6 +1477,7 @@ static const struct proc_ops stats_fops = {
 
 /*
  * create_procfs_entries - Create procfs interface
+ * Creates 4 unified interfaces: bans, whitelist, config, stats
  */
 int create_procfs_entries(struct firewall_info *fw)
 {
@@ -1573,51 +1489,25 @@ int create_procfs_entries(struct firewall_info *fw)
         return -ENOMEM;
     }
 
-    entry = proc_create("ban_list", 0400, fw->proc_dir, &ban_list_fops);  /* Only readable by owner */
+    /* bans: unified read/write interface for ban management */
+    entry = proc_create("bans", 0600, fw->proc_dir, &bans_fops);
     if (!entry)
         goto err_cleanup;
-    fw->proc_ban_list = entry;
+    fw->proc_bans = entry;
 
-    entry = proc_create("add_ban", 0200, fw->proc_dir, &add_ban_fops);
-    if (!entry)
-        goto err_cleanup;
-    fw->proc_add_ban = entry;
-
-    entry = proc_create("remove_ban", 0200, fw->proc_dir, &remove_ban_fops);
-    if (!entry)
-        goto err_cleanup;
-    fw->proc_remove_ban = entry;
-
-    entry = proc_create("permanent_add_ban", 0200, fw->proc_dir, &permanent_add_fops);
-    if (!entry)
-        goto err_cleanup;
-    fw->proc_permanent_add = entry;
-
-    entry = proc_create("permanent_remove_ban", 0200, fw->proc_dir, &permanent_remove_fops);
-    if (!entry)
-        goto err_cleanup;
-    fw->proc_permanent_remove = entry;
-
-    entry = proc_create("config", 0600, fw->proc_dir, &config_fops);  /* Read/write for configuration */
+    /* config: read/write for configuration */
+    entry = proc_create("config", 0600, fw->proc_dir, &config_fops);
     if (!entry)
         goto err_cleanup;
     fw->proc_config = entry;
 
-    entry = proc_create("whitelist", 0400, fw->proc_dir, &whitelist_fops);  /* Only readable by owner */
+    /* whitelist: unified read/write interface for whitelist management */
+    entry = proc_create("whitelist", 0600, fw->proc_dir, &whitelist_fops);
     if (!entry)
         goto err_cleanup;
     fw->proc_whitelist = entry;
 
-    entry = proc_create("whitelist_add", 0200, fw->proc_dir, &whitelist_add_fops);
-    if (!entry)
-        goto err_cleanup;
-    fw->proc_whitelist_add = entry;
-
-    entry = proc_create("whitelist_remove", 0200, fw->proc_dir, &whitelist_remove_fops);
-    if (!entry)
-        goto err_cleanup;
-    fw->proc_whitelist_remove = entry;
-
+    /* stats: read-only statistics */
     entry = proc_create("stats", 0400, fw->proc_dir, &stats_fops);
     if (!entry) {
         fw_pr_err("Failed to create proc stats entry\n");
@@ -1625,7 +1515,7 @@ int create_procfs_entries(struct firewall_info *fw)
     }
     fw->proc_stats = entry;
 
-    fw_pr_info("Procfs entries created");
+    fw_pr_info("Procfs entries created (bans, whitelist, config, stats)");
     return 0;
 
 err_cleanup:
@@ -1640,26 +1530,12 @@ void destroy_procfs_entries(struct firewall_info *fw)
 {
     if (fw->proc_stats)
         proc_remove(fw->proc_stats);
-    if (fw->proc_config)
-        proc_remove(fw->proc_config);
-    if (fw->proc_permanent_remove)
-        proc_remove(fw->proc_permanent_remove);
-    if (fw->proc_permanent_add)
-        proc_remove(fw->proc_permanent_add);
-    if (fw->proc_whitelist_remove)
-        proc_remove(fw->proc_whitelist_remove);
-    if (fw->proc_whitelist_add)
-        proc_remove(fw->proc_whitelist_add);
     if (fw->proc_whitelist)
         proc_remove(fw->proc_whitelist);
-    if (fw->proc_settings)
-        proc_remove(fw->proc_settings);
-    if (fw->proc_remove_ban)
-        proc_remove(fw->proc_remove_ban);
-    if (fw->proc_add_ban)
-        proc_remove(fw->proc_add_ban);
-    if (fw->proc_ban_list)
-        proc_remove(fw->proc_ban_list);
+    if (fw->proc_config)
+        proc_remove(fw->proc_config);
+    if (fw->proc_bans)
+        proc_remove(fw->proc_bans);
     if (fw->proc_dir)
         proc_remove(fw->proc_dir);
 }

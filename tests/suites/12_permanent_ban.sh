@@ -1,14 +1,10 @@
 #!/bin/bash
-# 12_permanent_ban.sh - 永久黑名单功能测试 (SQLite 持久化)
+# 12_permanent_ban.sh - 永久封禁功能测试 (SQLite 持久化)
 
-fw_test_header "永久黑名单功能测试"
+fw_test_header "永久封禁功能测试"
 
 # 确保内核模块已加载
 fw_ensure_module_loaded "$KERNEL_MODULE_PATH"
-
-# 永久黑名单 procfs 路径
-PROC_PERMANENT_ADD="/proc/firewall/permanent_add_ban"
-PROC_PERMANENT_REMOVE="/proc/firewall/permanent_remove_ban"
 
 # 测试用 SQLite 数据库路径
 TEST_DB_PATH="/tmp/fw_test_permanent_$$.db"
@@ -19,15 +15,15 @@ TEST_DB_PATH="/tmp/fw_test_permanent_$$.db"
 fw_subsection "基本永久封禁/解封"
 
 TEST_PERM_IP="198.51.100.100"
-echo "$TEST_PERM_IP" > "$PROC_PERMANENT_ADD" 2>/dev/null
+echo "permanent $TEST_PERM_IP" > "$PROC_BANS" 2>/dev/null
 sleep 0.3
 
-assert_file_contains "$PROC_BAN_LIST" "$TEST_PERM_IP" "IP $TEST_PERM_IP 永久封禁成功"
+assert_file_contains "$PROC_BANS" "$TEST_PERM_IP" "IP $TEST_PERM_IP 永久封禁成功"
 
-echo "$TEST_PERM_IP" > "$PROC_PERMANENT_REMOVE" 2>/dev/null
+echo "unpermanent $TEST_PERM_IP" > "$PROC_BANS" 2>/dev/null
 sleep 0.3
 
-assert_true "! grep -q '$TEST_PERM_IP' '$PROC_BAN_LIST' 2>/dev/null" "IP $TEST_PERM_IP 永久解封成功"
+assert_true "! grep -q '$TEST_PERM_IP' '$PROC_BANS' 2>/dev/null" "IP $TEST_PERM_IP 永久解封成功"
 
 # ============================================================================
 # 12.2 永久封禁不会自动过期
@@ -35,12 +31,12 @@ assert_true "! grep -q '$TEST_PERM_IP' '$PROC_BAN_LIST' 2>/dev/null" "IP $TEST_P
 fw_subsection "永久封禁过期检查"
 
 TEST_PERM_IP2="198.51.100.101"
-echo "$TEST_PERM_IP2" > "$PROC_PERMANENT_ADD" 2>/dev/null
+echo "permanent $TEST_PERM_IP2" > "$PROC_BANS" 2>/dev/null
 sleep 0.3
 
-assert_file_contains "$PROC_BAN_LIST" "$TEST_PERM_IP2" "永久封禁条目存在（不自动过期）"
+assert_file_contains "$PROC_BANS" "$TEST_PERM_IP2" "永久封禁条目存在（不自动过期）"
 
-echo "$TEST_PERM_IP2" > "$PROC_PERMANENT_REMOVE" 2>/dev/null || true
+echo "unpermanent $TEST_PERM_IP2" > "$PROC_BANS" 2>/dev/null || true
 
 # ============================================================================
 # 12.3 输入验证
@@ -48,15 +44,15 @@ echo "$TEST_PERM_IP2" > "$PROC_PERMANENT_REMOVE" 2>/dev/null || true
 fw_subsection "永久封禁输入验证"
 
 # 无效 IP 格式
-assert_failure "echo 'invalid_ip' > '$PROC_PERMANENT_ADD' 2>/dev/null" "拒绝无效 IP 格式"
+assert_failure "echo 'permanent invalid_ip' > '$PROC_BANS' 2>/dev/null" "拒绝无效 IP 格式"
 
 # 保留地址
-assert_failure "echo '127.0.0.1' > '$PROC_PERMANENT_ADD' 2>/dev/null" "拒绝回环地址"
-assert_failure "echo '0.0.0.0' > '$PROC_PERMANENT_ADD' 2>/dev/null" "拒绝 0.0.0.0"
-assert_failure "echo '255.255.255.255' > '$PROC_PERMANENT_ADD' 2>/dev/null" "拒绝广播地址"
+assert_failure "echo 'permanent 127.0.0.1' > '$PROC_BANS' 2>/dev/null" "拒绝回环地址"
+assert_failure "echo 'permanent 0.0.0.0' > '$PROC_BANS' 2>/dev/null" "拒绝 0.0.0.0"
+assert_failure "echo 'permanent 255.255.255.255' > '$PROC_BANS' 2>/dev/null" "拒绝广播地址"
 
 # SQL 注入测试 (procfs 写入应安全处理)
-assert_failure "echo \"1.2.3.4'; DROP TABLE permanent_banlist;--\" > '$PROC_PERMANENT_ADD' 2>/dev/null" "SQL 注入尝试被拒绝"
+assert_failure "echo \"permanent 1.2.3.4'; DROP TABLE permanent_banlist;--\" > '$PROC_BANS' 2>/dev/null" "SQL 注入尝试被拒绝"
 
 # ============================================================================
 # 12.4 重复永久封禁处理
@@ -64,15 +60,15 @@ assert_failure "echo \"1.2.3.4'; DROP TABLE permanent_banlist;--\" > '$PROC_PERM
 fw_subsection "重复永久封禁处理"
 
 TEST_PERM_IP3="198.51.100.102"
-echo "$TEST_PERM_IP3" > "$PROC_PERMANENT_ADD" 2>/dev/null
+echo "permanent $TEST_PERM_IP3" > "$PROC_BANS" 2>/dev/null
 sleep 0.2
-echo "$TEST_PERM_IP3" > "$PROC_PERMANENT_ADD" 2>/dev/null
+echo "permanent $TEST_PERM_IP3" > "$PROC_BANS" 2>/dev/null
 sleep 0.2
 
-local_dup_count=$(grep -c "$TEST_PERM_IP3" "$PROC_BAN_LIST" 2>/dev/null || echo 0)
+local_dup_count=$(grep -c "$TEST_PERM_IP3" "$PROC_BANS" 2>/dev/null || echo 0)
 assert_eq "$local_dup_count" "1" "重复永久封禁未产生重复条目"
 
-echo "$TEST_PERM_IP3" > "$PROC_PERMANENT_REMOVE" 2>/dev/null || true
+echo "unpermanent $TEST_PERM_IP3" > "$PROC_BANS" 2>/dev/null || true
 
 # ============================================================================
 # 12.5 白名单保护永久封禁
@@ -80,13 +76,13 @@ echo "$TEST_PERM_IP3" > "$PROC_PERMANENT_REMOVE" 2>/dev/null || true
 fw_subsection "白名单保护永久封禁"
 
 WHITELIST_IP="10.0.0.1"
-echo "$WHITELIST_IP" > "/proc/firewall/whitelist_add" 2>/dev/null
+echo "add $WHITELIST_IP" > "$PROC_WHITELIST" 2>/dev/null
 sleep 0.2
 
-assert_true "! echo '$WHITELIST_IP' > '$PROC_PERMANENT_ADD' 2>/dev/null" "白名单 IP 不能被永久封禁"
-assert_true "! grep -q '$WHITELIST_IP' '$PROC_BAN_LIST' 2>/dev/null" "白名单 IP 未被封禁"
+assert_true "! echo 'permanent $WHITELIST_IP' > '$PROC_BANS' 2>/dev/null" "白名单 IP 不能被永久封禁"
+assert_true "! grep -q '$WHITELIST_IP' '$PROC_BANS' 2>/dev/null" "白名单 IP 未被封禁"
 
-echo "$WHITELIST_IP" > "/proc/firewall/whitelist_remove" 2>/dev/null || true
+echo "remove $WHITELIST_IP" > "$PROC_WHITELIST" 2>/dev/null || true
 
 # ============================================================================
 # 12.6 大量永久封禁性能
@@ -95,19 +91,19 @@ fw_subsection "大量永久封禁性能"
 
 local_start_time=$(date +%s)
 for i in $(seq 1 50); do
-    echo "203.0.113.$i" > "$PROC_PERMANENT_ADD" 2>/dev/null || true
+    echo "permanent 203.0.113.$i" > "$PROC_BANS" 2>/dev/null || true
 done
 sleep 1
 
 local_end_time=$(date +%s)
 local_duration=$((local_end_time - local_start_time))
 
-local_ban_count=$(wc -l < "$PROC_BAN_LIST" 2>/dev/null || echo 0)
+local_ban_count=$(wc -l < "$PROC_BANS" 2>/dev/null || echo 0)
 assert_ge "$local_ban_count" 50 "批量永久封禁 50 个 IP，实际 $local_ban_count 个"
 
 # 清理
 for i in $(seq 1 50); do
-    echo "203.0.113.$i" > "$PROC_PERMANENT_REMOVE" 2>/dev/null || true
+    echo "unpermanent 203.0.113.$i" > "$PROC_BANS" 2>/dev/null || true
 done
 
 # ============================================================================
