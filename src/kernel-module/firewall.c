@@ -247,6 +247,7 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
     struct whitelist_entry *wl_entry;
     int ret = 0;
     u32 hash;
+    int bkt;
 
     FW_DEBUG(1, "ENTRY: ban_ip(ip=%pI4)", &ip);
 
@@ -266,7 +267,7 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
     /* Check whitelist under lock protection to prevent TOCTOU race.
      * Another thread could add the IP to whitelist between an unlocked
      * check and the actual ban operation. */
-    hash_for_each(fw->whitelist_table, hash, wl_entry, hash) {
+    hash_for_each(fw->whitelist_table, bkt, wl_entry, hash) {
         if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
             spin_unlock(&fw->lock);
             atomic_inc(&fw->whitelist_reject_count);
@@ -348,6 +349,7 @@ int ban_ip_permanent(struct firewall_info *fw, __be32 ip)
     struct ban_entry *entry;
     struct whitelist_entry *wl_entry;
     u32 hash;
+    int bkt;
 
     FW_DEBUG(1, "ENTRY: ban_ip_permanent(ip=%pI4)", &ip);
 
@@ -364,7 +366,7 @@ int ban_ip_permanent(struct firewall_info *fw, __be32 ip)
     spin_lock(&fw->lock);
 
     /* Check whitelist under lock protection */
-    hash_for_each(fw->whitelist_table, hash, wl_entry, hash) {
+    hash_for_each(fw->whitelist_table, bkt, wl_entry, hash) {
         if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
             spin_unlock(&fw->lock);
             atomic_inc(&fw->whitelist_reject_count);
@@ -890,6 +892,7 @@ static int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned lo
     struct ban_entry *entry;
     struct whitelist_entry *wl_entry;
     u32 hash;
+    int bkt;
 
     FW_DEBUG(1, "ENTRY: ban_ip_with_duration(ip=%pI4, seconds=%lu)", &ip, seconds);
 
@@ -913,7 +916,7 @@ static int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned lo
     spin_lock(&fw->lock);
 
     /* Check whitelist under lock protection */
-    hash_for_each(fw->whitelist_table, hash, wl_entry, hash) {
+    hash_for_each(fw->whitelist_table, bkt, wl_entry, hash) {
         if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
             spin_unlock(&fw->lock);
             atomic_inc(&fw->whitelist_reject_count);
