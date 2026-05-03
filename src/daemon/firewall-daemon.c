@@ -127,7 +127,7 @@ struct config {
     unsigned int default_max_retries; /* Default for new jails */
     unsigned int default_findtime;
     unsigned int default_ban_time;
-    int daemonize;
+    int daemon;
     int interval;
     int metrics_port;       /* Prometheus metrics port (0 = disabled) */
     char *config_file;      /* Path to single configuration file for runtime updates */
@@ -496,7 +496,7 @@ static struct config *config_clone(const struct config *src)
     dst->default_max_retries = src->default_max_retries;
     dst->default_findtime = src->default_findtime;
     dst->default_ban_time = src->default_ban_time;
-    dst->daemonize = src->daemonize;
+    dst->daemon = src->daemon;
     dst->interval = src->interval;
     dst->metrics_port = src->metrics_port;
     dst->permanent_ban_enabled = src->permanent_ban_enabled;
@@ -814,11 +814,11 @@ static int parse_config_file(const char *config_path)
                         cfg.metrics_port = (int)val;
                         daemon_log_info("Default metrics_port set to %d", cfg.metrics_port);
                     }
-                } else if (strcmp(current_key, "daemonize") == 0) {
+                } else if (strcmp(current_key, "daemon") == 0) {
                     if (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "1") == 0) {
-                        cfg.daemonize = 1;
+                        cfg.daemon = 1;
                     } else {
-                        cfg.daemonize = 0;
+                        cfg.daemon = 0;
                     }
                 } else if (strcmp(current_key, "permanent_db_path") == 0) {
                     if (strlen(value) > 0) {
@@ -958,8 +958,8 @@ static int parse_config_file(const char *config_path)
                         cfg.metrics_port = (int)val;
                         daemon_log_info("Config metrics_port set to %d", cfg.metrics_port);
                     }
-                } else if (strcmp(current_key, "daemonize") == 0) {
-                    cfg.daemonize = (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "1") == 0);
+                } else if (strcmp(current_key, "daemon") == 0) {
+                    cfg.daemon = (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "1") == 0);
                 } else if (strcmp(current_key, "permanent_db_path") == 0) {
                     if (strlen(value) > 0) {
                         if (cfg.permanent_db_path) free(cfg.permanent_db_path);
@@ -1215,7 +1215,7 @@ static int parse_config(int argc, char *argv[])
     cfg.default_max_retries = DEFAULT_MAX_RETRIES;
     cfg.default_findtime = DEFAULT_FINDTIME;
     cfg.default_ban_time = DEFAULT_BAN_TIME;
-    cfg.daemonize = 0;
+    cfg.daemon = 0;
     cfg.interval = DEFAULT_INTERVAL;
     cfg.metrics_port = DEFAULT_METRICS_PORT;
     cfg.jail_count = 0;
@@ -1333,7 +1333,7 @@ static int parse_config(int argc, char *argv[])
         case 'C':  /* Config directory - already handled above */
             break;
         case 'd':
-            cfg.daemonize = 1;
+            cfg.daemon = 1;
             break;
         case 'h':
             printf("Usage: %s [OPTIONS]\n", argv[0]);
@@ -3191,7 +3191,7 @@ int main(int argc, char *argv[])
         cfg.default_max_retries, cfg.default_findtime, cfg.default_ban_time);
 
     /* Daemonize if requested */
-    if (cfg.daemonize) {
+    if (cfg.daemon) {
         daemonize_process();
     }
 
