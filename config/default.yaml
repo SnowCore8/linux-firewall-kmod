@@ -34,6 +34,7 @@ jails:
 
 # Permanent ban configuration (SQLite-based persistence)
 # Path to SQLite database file for permanent bans (empty = disabled)
-permanent_db_path: "bans.db"
+# Use absolute path in a secure location with proper permissions
+permanent_db_path: "/var/lib/firewall/bans.db"
 # Whether to enable permanent bans (true/false)
 permanent_ban_enabled: true

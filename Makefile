@@ -25,6 +25,10 @@ DAEMON_BIN := $(DAEMON_BUILD_DIR)/firewall-daemon
 # Compiler for daemon
 CC ?= gcc
 
+# Parallel build support (use all available cores by default)
+NPROC ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+MAKEFLAGS += -j$(NPROC)
+
 # Security-focused compiler flags
 SECURITY_CFLAGS = -Wall -Wextra -Werror=format-security -O2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE
 SECURITY_LDFLAGS = -pie -Wl,-z,relro,-z,now
@@ -50,7 +54,7 @@ $(DAEMON_BIN): $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC)
 	@mkdir -p $(DAEMON_BUILD_DIR)
 	$(CC) $(SECURITY_CFLAGS) $(SECURITY_LDFLAGS) -Wno-unused-function -o $@ $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC) -lpthread -lyaml -lsqlite3
 
-# Build both kernel module and daemon
+# Build both kernel module and daemon (parallel)
 all-with-daemon: kernel-module daemon
 
 # Build everything
