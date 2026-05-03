@@ -1,6 +1,9 @@
 # Makefile for firewall kernel module
 # Out-of-tree build: all artifacts go to build/ directory
 
+# Set default goal
+.DEFAULT_GOAL := all
+
 # Kernel build directory (adjust if needed)
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
@@ -27,7 +30,6 @@ CC ?= gcc
 
 # Parallel build support (use all available cores by default)
 NPROC ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
-MAKEFLAGS += -j$(NPROC)
 
 # Security-focused compiler flags
 SECURITY_CFLAGS = -Wall -Wextra -Werror=format-security -O2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE
@@ -37,28 +39,28 @@ SECURITY_LDFLAGS = -pie -Wl,-z,relro,-z,now
 DEBUG_LEVEL ?= 0
 
 # Build the kernel module
-kernel-module: $(KERNEL_MODULE)
-
-$(KERNEL_MODULE): $(KERNEL_SRC_DIR)/firewall.c $(KERNEL_SRC_DIR)/firewall.h
+kernel-module: $(KERNEL_SRC_DIR)/firewall.c $(KERNEL_SRC_DIR)/firewall.h
 	@mkdir -p $(KERNEL_BUILD_DIR)
-	$(MAKE) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) \
+	+$(MAKE) -j$(NPROC) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) \
 		ccflags-y="-DDEBUG_LEVEL=$(DEBUG_LEVEL)" \
 		modules
 	cp $(KERNEL_SRC_DIR)/firewall.ko $(KERNEL_BUILD_DIR)/firewall.ko
 	@$(MAKE) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) clean >/dev/null 2>&1
 
 # Build user-space daemon
-daemon: $(DAEMON_BIN)
-
-$(DAEMON_BIN): $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC)
+daemon: $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC)
 	@mkdir -p $(DAEMON_BUILD_DIR)
-	$(CC) $(SECURITY_CFLAGS) $(SECURITY_LDFLAGS) -Wno-unused-function -o $@ $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC) -lpthread -lyaml -lsqlite3
+	$(CC) $(SECURITY_CFLAGS) $(SECURITY_LDFLAGS) -Wno-unused-function -o $(DAEMON_BIN) $^ -lpthread -lyaml -lsqlite3
 
-# Build both kernel module and daemon (parallel)
-all-with-daemon: kernel-module daemon
+# Build both kernel module and daemon (sequential to avoid jobserver issues)
+all:
+	@echo "Building kernel module and daemon..."
+	$(MAKE) kernel-module
+	$(MAKE) daemon
+	@echo "Build complete: $(KERNEL_MODULE) and $(DAEMON_BIN)"
 
-# Build everything
-all: all-with-daemon
+# Alias for backward compatibility
+all-with-daemon: all
 
 # Debug builds
 debug1:
