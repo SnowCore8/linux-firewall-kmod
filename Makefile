@@ -20,6 +20,12 @@ PWD := $(shell pwd)
 # Source directories
 KERNEL_SRC_DIR := src/kernel-module
 DAEMON_SRC := src/daemon/firewall-daemon.c
+DAEMON_JAIL_MGR := src/daemon/jail-manager.c
+DAEMON_CONFIG_PARSER := src/daemon/config-parser.c
+DAEMON_LOG_PARSER := src/daemon/log-parser.c
+DAEMON_FAILED_TRACKER := src/daemon/failed-tracker.c
+DAEMON_BAN_MGR := src/daemon/ban-manager.c
+DAEMON_FILE_MON := src/daemon/file-monitor.c
 EXPORTER_SRC := src/daemon/http-exporter.c
 SQLITE_SRC := src/daemon/sqlite-persistent.c
 
@@ -55,7 +61,7 @@ kernel-module: $(KERNEL_SRC_DIR)/firewall.c $(KERNEL_SRC_DIR)/firewall.h
 	@$(MAKE) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) clean >/dev/null 2>&1
 
 # Build user-space daemon
-daemon: $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC)
+daemon: $(DAEMON_SRC) $(DAEMON_JAIL_MGR) $(DAEMON_CONFIG_PARSER) $(DAEMON_LOG_PARSER) $(DAEMON_FAILED_TRACKER) $(DAEMON_BAN_MGR) $(DAEMON_FILE_MON) $(EXPORTER_SRC) $(SQLITE_SRC)
 	@mkdir -p $(DAEMON_BUILD_DIR)
 	$(CC) $(SECURITY_CFLAGS) $(SECURITY_LDFLAGS) -Wno-unused-function -o $(DAEMON_BIN) $^ -lpthread -lyaml -lsqlite3 -lmicrohttpd -lpcre2-8
 
@@ -80,11 +86,11 @@ debug3:
 	$(MAKE) -C $(PWD) daemon
 
 # ASAN (AddressSanitizer) build for memory leak detection
-asan: $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC)
+asan: $(DAEMON_SRC) $(DAEMON_JAIL_MGR) $(DAEMON_CONFIG_PARSER) $(DAEMON_LOG_PARSER) $(DAEMON_FAILED_TRACKER) $(DAEMON_BAN_MGR) $(DAEMON_FILE_MON) $(EXPORTER_SRC) $(SQLITE_SRC)
 	@mkdir -p $(DAEMON_BUILD_DIR)
 	$(CC) $(SECURITY_CFLAGS) -fsanitize=address -fno-omit-frame-pointer -g -O1 \
 		-Wno-unused-function -o $(DAEMON_BUILD_DIR)/firewall-daemon-asan \
-		$(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC) -lpthread -lyaml -lsqlite3 -lasan
+		$(DAEMON_SRC) $(DAEMON_JAIL_MGR) $(DAEMON_CONFIG_PARSER) $(DAEMON_LOG_PARSER) $(DAEMON_FAILED_TRACKER) $(DAEMON_BAN_MGR) $(DAEMON_FILE_MON) $(EXPORTER_SRC) $(SQLITE_SRC) -lpthread -lyaml -lsqlite3 -lasan
 	@echo "ASAN build completed: $(DAEMON_BUILD_DIR)/firewall-daemon-asan"
 	@echo "Run with: ASAN_OPTIONS=detect_leaks=1 $(DAEMON_BUILD_DIR)/firewall-daemon-asan"
 
