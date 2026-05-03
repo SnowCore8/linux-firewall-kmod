@@ -129,14 +129,14 @@ sudo ./build/daemon/firewall-daemon --help
 ### 守护进程参数
 
 ```bash
-sudo ./build/daemon/firewall-daemon -c config/default.yaml --daemonize
+sudo ./build/daemon/firewall-daemon -c config/default.yaml --daemon
 ```
 
 | 参数 | 说明 | 默认值 | 状态 |
 |------|------|--------|------|
 | `-c` | 配置文件路径 | - | ✅ 推荐使用 |
 | `-C` | 配置目录路径 | ./config/ 或 /etc/firewall/ | ✅ 推荐使用 |
-| `-d`, `--daemonize` | 后台运行模式 | false | ✅ 生产环境推荐 |
+| `-d`, `--daemon` | 后台运行模式 | false | ✅ 生产环境推荐 |
 | `-h`, `--help` | 显示帮助信息 | - | - |
 
 **注意**：所有封禁策略参数（`max_retries`、`findtime`、`ban_time`、`interval`、`metrics_port`）必须通过 YAML 配置文件设置，不支持命令行参数。

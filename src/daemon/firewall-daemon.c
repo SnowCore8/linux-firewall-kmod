@@ -10,7 +10,7 @@
  * handles the actual IP blocking based on its ban_table.
  *
  * Usage:
- *   sudo ./firewall-daemon [-c config.yaml] [-C config-dir] [--daemonize]
+ *   sudo ./firewall-daemon [-c config.yaml] [-C config-dir] [--daemon]
  */
 
 #define _GNU_SOURCE
@@ -1206,7 +1206,7 @@ static int parse_config(int argc, char *argv[])
     static struct option long_options[] = {
         {"config",     required_argument, 0, 'c'},  /* Single config file */
         {"config-dir", required_argument, 0, 'C'},  /* Config directory (auto-loads all .yaml) */
-        {"daemonize",  no_argument,       0, 'd'},
+        {"daemon",     no_argument,       0, 'd'},
         {"help",       no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
@@ -1341,7 +1341,7 @@ static int parse_config(int argc, char *argv[])
             printf("  -c, --config FILE      Single configuration file path\n");
             printf("  -C, --config-dir DIR   Configuration directory (auto-loads all .yaml/.yml files)\n");
             printf("                         Default: /etc/firewall/\n");
-            printf("  -d, --daemonize        Run as daemon\n");
+            printf("  -d, --daemon           Run as daemon\n");
             printf("  -h, --help             Show this help\n");
             printf("\nConfig file format:\n");
             printf("  defaults:\n");

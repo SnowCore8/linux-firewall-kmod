@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=forking
 PIDFile=/run/firewall-daemon.pid
-ExecStart=/usr/local/sbin/firewall-daemon -C /etc/firewall --daemonize
+ExecStart=/usr/local/sbin/firewall-daemon -C /etc/firewall --daemon
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
