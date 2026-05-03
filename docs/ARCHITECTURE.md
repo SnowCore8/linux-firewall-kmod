@@ -1,6 +1,6 @@
 # Firewall 架构设计文档
 
-**版本**: v1.9 | **最后更新**: 2026-05-04
+**版本**: v2.0 | **最后更新**: 2026-05-04
 
 ---
 
@@ -12,6 +12,7 @@
 4. [数据流：从日志行到 IP 封禁](#4-数据流从日志行到-ip-封禁)
 5. [组件交互图](#5-组件交互图)
 6. [关键设计决策](#6-关键设计决策)
+7. [模块依赖图](#7-模块依赖图)
 
 ---
 
@@ -52,13 +53,40 @@ Firewall 是 Linux 内核模块版本的 fail2ban，采用**双层架构**：内
 └──────────────────────────────────────────────────┘
 ```
 
+**内核模块**：
+
 | 组件 | 文件 | 行数 | 职责 |
 |------|------|------|------|
 | 内核模块 | `src/kernel-module/firewall.c` | 2389 | Netfilter 过滤、封禁表管理 |
 | 内核头文件 | `src/kernel-module/firewall.h` | ~191 | 数据结构、日志宏、函数声明 |
-| 守护进程 | `src/daemon/firewall-daemon.c` | 3475 | Jail 系统、日志解析、配置管理 |
-| HTTP 导出器 | `src/daemon/http-exporter.c` | ~374 | Prometheus 指标服务 |
-| SQLite 持久化 | `src/daemon/sqlite-persistent.c` | ~689 | 永久封禁数据库 |
+
+**守护进程模块**（v2.0 重构后，原 3475 行单文件拆分为 8 个模块）：
+
+| 模块 | 文件 (.c/.h) | 行数 | 职责 |
+|------|-------------|------|------|
+| 共享头文件 | `firewall-daemon.h` | 200 | 类型定义、宏、常量、全局 extern 声明 |
+| 主入口 | `firewall-daemon.c` | 360 | main()、信号处理、守护进程化、清理 |
+| Jail 管理 | `jail-manager.c/h` | 564 | Jail 生命周期、配置克隆、正则编译、迁移 |
+| 配置解析 | `config-parser.c/h` | 987 | YAML 解析、目录加载、CLI 参数、路径验证 |
+| 日志解析 | `log-parser.c/h` | 201 | PCRE2 正则匹配、IP 提取、日志行解析 |
+| 失败追踪 | `failed-tracker.c/h` | 350 | khash 失败记录、时间窗口计数、封禁阈值检查 |
+| 封禁管理 | `ban-manager.c/h` | 261 | 封禁/解封操作、procfs 安全写入、IP 验证 |
+| 文件监控 | `file-monitor.c/h` | 779 | inotify 事件、日志读取、轮转检测、monitor_loop |
+
+**已有独立模块**：
+
+| 模块 | 文件 | 行数 | 职责 |
+|------|------|------|------|
+| HTTP 导出器 | `http-exporter.c` | 374 | Prometheus 指标服务 |
+| SQLite 持久化 | `sqlite-persistent.c/h` | 793 | 永久封禁数据库 |
+
+**工具库**：
+
+| 模块 | 文件 | 行数 | 职责 |
+|------|------|------|------|
+| 哈希库 | `khash.h` | 627 | 头文件哈希库（第三方，O(1) 查找） |
+
+> 总计：18 个文件，~5496 行。原单文件 3475 行 → 模块化后平均每模块 ~305 行。
 
 ---
 
@@ -184,52 +212,95 @@ void cleanup_expired_bans(struct firewall_info *fw) {
 
 ## 3. 守护进程设计
 
-### 3.1 Jail 系统架构
+v2.0 将原 3475 行单文件 `firewall-daemon.c` 重构为 **8 个职责清晰的模块**，所有模块通过 `firewall-daemon.h` 共享类型定义、全局状态（`cfg`、`config_mutex`、`daemon_stats`）和宏。
+
+### 3.1 模块架构总览
+
+```
+                    ┌─────────────────────┐
+                    │  firewall-daemon.h   │  ← 共享头文件
+                    │  (类型/宏/externs)   │     所有模块依赖
+                    └──────────┬──────────┘
+                               │
+          ┌─────────┬──────────┼──────────┬─────────┐
+          ▼         ▼          ▼          ▼         ▼
+   ┌──────────┐ ┌───────┐ ┌───────┐ ┌───────┐ ┌──────────┐
+   │jail-mgr  │ │config │ │log    │ │failed │ │ban-mgr   │
+   │.c/h      │ │-parser│ │-parser│ │-tracker│ │.c/h      │
+   └──────────┘ └───────┘ └───────┘ └───────┘ └──────────┘
+          │                              │
+          └──────────┬───────────────────┘
+                     ▼
+              ┌────────────┐
+              │file-monitor│  ← 主循环，串联所有模块
+              │.c/h        │
+              └────────────┘
+```
+
+**共享头文件 `firewall-daemon.h` 提供**：
+- 核心数据结构：`struct jail`、`struct config`、`struct failed_entry`、`struct file_state`
+- 全局状态 extern：`cfg`、`config_mutex`、`daemon_stats`、`inotify_fd`、`file_states[]`、`sqlite_db`
+- 统一日志宏：`daemon_log_err/warn/info/debug`（syslog 封装）
+- 常量定义：`MAX_JAILS`(16)、`MAX_LOG_FILES`(10)、`DEFAULT_*` 默认值
+- 枚举类型：`ban_action_t`（TEMP/PERMANENT/UNBAN/UNBAN_PERM）
+
+### 3.2 Jail 系统架构（`jail-manager.c/h`）
 
 类似 fail2ban 的多服务隔离，每个 Jail 独立监控、计数、封禁：
 
 ```
-  Global Config (defaults)
-  ┌─────────────────────────────────────┐
-  │ max_retries=5  findtime=600  ...    │
-  └─────────────────────────────────────┘
-         │
-  ┌──────┴──────┐  ┌──────┴──────┐
-  │ Jail: sshd  │  │ Jail: frp   │
-  │ log:auth.log│  │ log:frp.log │
-  │ max_retry:5 │  │ max_retry:10│
-  │ regex:builtin│ │ regex:custom│
-  │ failed_hash │  │ failed_hash │
-  └─────────────┘  └─────────────┘
-         │                │
-         └───────┬────────┘
-                 ▼
-         execute_ban_action()
-         → procfs 写入 + SQLite 持久化
+   Global Config (defaults)
+   ┌─────────────────────────────────────┐
+   │ max_retries=5  findtime=600  ...    │
+   └─────────────────────────────────────┘
+          │
+   ┌──────┴──────┐  ┌──────┴──────┐
+   │ Jail: sshd  │  │ Jail: frp   │
+   │ log:auth.log│  │ log:frp.log │
+   │ max_retry:5 │  │ max_retry:10│
+   │ regex:builtin│ │ regex:custom│
+   │ failed_hash │  │ failed_hash │
+   └─────────────┘  └─────────────┘
+          │                │
+          └───────┬────────┘
+                  ▼
+          execute_ban_action()
+          → procfs 写入 + SQLite 持久化
 ```
 
 **限制**：最多 16 个 Jail，每个最多 10 个日志文件，自定义 regex 最大 1024 字节（最多 50 个 `|`）。
 
-### 3.2 日志监控（inotify）
+**核心函数**：
+| 函数 | 职责 |
+|------|------|
+| `find_or_create_jail()` | 查找或创建 Jail |
+| `clone_jail()` / `config_clone()` | 深拷贝配置（双缓冲热重载用） |
+| `migrate_failed_entries()` | 迁移失败计数器（保留攻击记录） |
+| `compile_jail_regex()` | PCRE2 正则编译 |
+| `cleanup_all_jails()` | 释放所有 Jail 资源 |
+
+### 3.3 日志监控（`file-monitor.c/h`）
 
 `inotify` + `select()` 实现事件驱动 + 定时轮询混合模式：
 
 ```
-  monitor_loop():
-    select(inotify_fd, timeout=interval)
-      │
-      ├─ 超时 → cleanup_expired_bans()
-      │        → 检查 reload_config (SIGHUP)
-      │
-      └─ inotify 事件 (IN_MODIFY | IN_MOVED_TO)
-           → 匹配 file_states[wd]
-           → 检测日志轮转 (inode 变化 / 文件减小)
-           → process_new_lines(idx)
+   monitor_loop():
+     select(inotify_fd, timeout=interval)
+       │
+       ├─ 超时 → cleanup_expired_bans()
+       │        → 检查 reload_config (SIGHUP)
+       │
+       └─ inotify 事件 (IN_MODIFY | IN_MOVED_TO)
+            → 匹配 file_states[wd]
+            → 检测日志轮转 (inode 变化 / 文件减小)
+            → process_new_lines(idx)
+               → parse_log_line()          ← log-parser.c/h
+               → handle_failed_attempt_for_jail() ← failed-tracker.c/h
 ```
 
 每个 Jail 维护 8192 字节 `partial_line_buffer`，处理跨读取调用的不完整行。
 
-### 3.3 PCRE2 正则引擎
+### 3.4 PCRE2 正则引擎（`log-parser.c/h`）
 
 | 特性 | POSIX regex | PCRE2 |
 |------|------------|-------|
@@ -239,23 +310,84 @@ void cleanup_expired_bans(struct firewall_info *fw) {
 
 **ReDoS 防护**：编译前检查嵌套量词（`)`, `)*` 等）、交替数量（≤50）、模式长度（≤1024）。
 
-### 3.4 配置热重载（SIGHUP + 双缓冲）
+**核心函数**：
+| 函数 | 职责 |
+|------|------|
+| `parse_log_line()` | 使用 Jail 的 PCRE2 正则匹配日志行 |
+| `extract_and_validate_ip()` | 提取并验证 IP 地址 |
+| `extract_ip()` / `extract_ipv4()` | 基础 IP 提取（回退模式） |
+
+### 3.5 失败追踪与封禁阈值（`failed-tracker.c/h`）
+
+使用 khash (`khash_t(ip_map)`) 实现 O(1) 查找，每个 Jail 独立维护失败记录：
 
 ```
-  SIGHUP → reload_config=1 → monitor_loop 超时检查
-    │
-    ├─ 阶段1: 无锁解析 YAML 到临时 config
-    ├─ 阶段2: 短暂持锁交换
-    │    → memcpy temp → cfg
-    │    → 迁移 failed_hash（保留失败计数）
-    │    → 释放旧 Jail 资源
-    ├─ 阶段3: 重建 inotify 监控
-    └─ 解析失败 → 保留旧配置
+   handle_failed_attempt_for_jail(jail, ip, max_retries, findtime)
+     │
+     ├─ find_entry_for_jail() → 查找已有记录
+     │   (未找到 → create_entry_for_jail())
+     │
+     ├─ process_failed_timestamps() → 添加时间戳
+     │
+     ├─ count_recent() → 滑动窗口计数
+     │   (仅统计 findtime 时间窗口内的失败)
+     │
+     └─ check_and_ban() → 阈值检查
+         │ count >= max_retries
+         ▼
+         execute_ban_action() → 触发封禁
+         remove_entry_for_jail() → 清除记录
+```
+
+**核心函数**：
+| 函数 | 职责 |
+|------|------|
+| `handle_failed_attempt_for_jail()` | 主入口：记录失败、计数、检查阈值 |
+| `find_entry_for_jail()` | khash O(1) 查找 |
+| `count_recent()` | 滑动窗口内失败计数 |
+| `check_and_ban()` | 阈值判断并触发封禁 |
+
+> **向后兼容**：旧的全局函数 `find_entry()` / `create_entry()` / `remove_entry()` / `handle_failed_attempt()` 保留为包装器，内部委托给 Jail 感知版本。新代码应使用 `_for_jail` 后缀的函数。
+
+### 3.6 封禁操作（`ban-manager.c/h`）
+
+统一封禁/解封入口，支持四种动作类型：
+
+```
+   execute_ban_action(action, ip)
+     │
+     ├─ BAN_ACTION_TEMP      → procfs 写入 IP（临时封禁）
+     ├─ BAN_ACTION_PERMANENT → procfs 写入 IP + SQLite 持久化
+     ├─ BAN_ACTION_UNBAN     → procfs 写入 "unban IP"
+     └─ BAN_ACTION_UNBAN_PERM → SQLite 删除 + procfs 解封
+```
+
+**核心函数**：
+| 函数 | 职责 |
+|------|------|
+| `execute_ban_action()` | 统一封禁/解封入口 |
+| `validate_ipv4()` | IP 格式验证 + 网络字节序转换 |
+| `secure_procfs_write()` | 安全的 procfs 文件写入 |
+| `cleanup_expired_bans()` | 清理内核过期封禁 |
+
+### 3.7 配置解析与热重载（`config-parser.c/h` + `jail-manager.c/h`）
+
+```
+   SIGHUP → reload_config=1 → monitor_loop 超时检查
+     │
+     ├─ 阶段1: 无锁解析 YAML 到临时 config  ← config-parser.c/h
+     │    parse_config_file() / load_config_directory()
+     ├─ 阶段2: 短暂持锁交换  ← jail-manager.c/h
+     │    → config_clone() 深拷贝
+     │    → migrate_failed_entries() 迁移失败计数
+     │    → free_config_partial() 释放旧资源
+     ├─ 阶段3: 重建 inotify 监控  ← file-monitor.c/h
+     └─ 解析失败 → 保留旧配置
 ```
 
 **优势**：解析不阻塞日志处理，切换瞬间完成，失败时不影响运行。
 
-### 3.5 HTTP Exporter
+### 3.8 HTTP Exporter（`http-exporter.c`）
 
 `libmicrohttpd` 实现，独立 pthread 运行：
 
@@ -266,7 +398,7 @@ void cleanup_expired_bans(struct firewall_info *fw) {
 
 关键配置：端口 9119，最大连接 10，超时 5 秒。指标来源涵盖内核模块（包计数、封禁计数）和守护进程（解析行数、封禁 IP 数、配置重载次数等）。
 
-### 3.6 SQLite 持久化
+### 3.9 SQLite 持久化（`sqlite-persistent.c/h`）
 
 ```c
 struct sqlite_db {
@@ -283,60 +415,79 @@ struct sqlite_db {
 ## 4. 数据流：从日志行到 IP 封禁
 
 ```
-  攻击者 SSH 暴力破解
-    │ 失败日志
-    ▼
-  /var/log/auth.log
-    │ inotify IN_MODIFY
-    ▼
-  firewall-daemon: monitor_loop()
-    → select() 收到事件
-    → process_new_lines() 读取日志
-    → PCRE2 JIT 匹配提取 IP
-    → handle_failed_attempt() 更新计数器
-    │ 失败次数 >= max_retries
-    ▼
-  execute_ban_action("192.168.1.100")
-    → validate_ipv4()
-    → secure_procfs_write("/proc/firewall/bans", "192.168.1.100\n")
-    → SQLite 持久化 (如启用)
-    │ procfs 写入
-    ▼
-  内核模块: bans_write()
-    → 解析 IP → 验证 → 白名单检查
-    → __do_ban_ip(): spin_lock → hash_add → unlock
-    │ 封禁生效
-    ▼
-  后续数据包: nf_hook_func_ipv4()
-    → RCU 读锁 → 白名单检查 → 封禁表查找
-    → 命中 → NF_DROP ◀── 数据包丢弃
+   攻击者 SSH 暴力破解
+     │ 失败日志
+     ▼
+   /var/log/auth.log
+     │ inotify IN_MODIFY
+     ▼
+   file-monitor.c: monitor_loop()
+     → select() 收到事件
+     → process_new_lines() 读取日志
+     ▼
+   log-parser.c: parse_log_line()
+     → PCRE2 JIT 正则匹配
+     → extract_and_validate_ip() 提取 IP
+     ▼
+   failed-tracker.c: handle_failed_attempt_for_jail()
+     → find_entry_for_jail() / create_entry_for_jail()  khash O(1)
+     → process_failed_timestamps() 添加时间戳
+     → count_recent() 滑动窗口计数
+     → check_and_ban() 阈值检查
+     │ 失败次数 >= max_retries
+     ▼
+   ban-manager.c: execute_ban_action()
+     → validate_ipv4() IP 验证
+     → secure_procfs_write("/proc/firewall/bans", "192.168.1.100\n")
+     → SQLite 持久化 (如启用)
+     │ procfs 写入
+     ▼
+   内核模块: bans_write()
+     → 解析 IP → 验证 → 白名单检查
+     → __do_ban_ip(): spin_lock → hash_add → unlock
+     │ 封禁生效
+     ▼
+   后续数据包: nf_hook_func_ipv4()
+     → RCU 读锁 → 白名单检查 → 封禁表查找
+     → 命中 → NF_DROP ◀── 数据包丢弃
 ```
 
-**时间线**：日志写入 → inotify 触发（毫秒级）→ 正则匹配 → 计数器检查 → procfs 写入 → 内核封禁（微秒级）→ 后续包 DROP。
+**时间线**：日志写入 → inotify 触发（毫秒级）→ 正则匹配 (`log-parser.c`) → 计数器检查 (`failed-tracker.c`) → procfs 写入 (`ban-manager.c`) → 内核封禁（微秒级）→ 后续包 DROP。
 
 ---
 
 ## 5. 组件交互图
 
 ```
-  ┌─────────────┐  inotify   ┌──────────────────┐  procfs   ┌─────────────┐
-  │ 系统日志     │ ─────────▶ │  firewall-daemon  │ ─────────▶│  内核模块    │
-  │ auth.log    │            │  (主线程)         │           │  firewall.ko │
-  │ frp.log     │            │                  │           │             │
-  └─────────────┘            │ ┌──────┬──────┐  │           │ ┌─────────┐ │
-                             │ │PCRE2 │khash │  │           │ │ban_table│ │
-                             │ └──────┴──────┘  │           │ │(1024)   │ │
-                             │ ┌──────────────┐ │           │ └─────────┘ │
-                             │ │SQLite 持久化  │ │           │ ┌─────────┐ │
-                             │ └──────────────┘ │           │ │whitelist│ │
-                             └────────┬─────────┘           │ │(64)     │ │
-                                      │                     │ └─────────┘ │
-                    ┌─────────────────┼─────────────────┐   │ ┌─────────┐ │
-                    ▼                 ▼                 ▼   │ │Netfilter│ │
-          ┌──────────────┐  ┌──────────────┐  ┌────────┐   │ │ Hook    │ │
-          │HTTP Exporter │  │ systemd 加固  │  │状态文件│   │ └─────────┘ │
-          │ :9119        │  │ 15 项限制     │  │/var/lib│   └─────────────┘
-          └──────────────┘  └──────────────┘  └────────┘
+   ┌─────────────┐  inotify   ┌──────────────────────────────────────┐  procfs   ┌─────────────┐
+   │ 系统日志     │ ─────────▶ │         firewall-daemon 进程          │ ─────────▶│  内核模块    │
+   │ auth.log    │            │                                      │           │  firewall.ko │
+   │ frp.log     │            │  ┌────────────┐  ┌─────────────┐     │           │             │
+   └─────────────┘            │  │file-monitor│─▶│ log-parser  │     │           │ ┌─────────┐ │
+                              │  │ .c/h       │  │ .c/h        │     │           │ │ban_table│ │
+                              │  └─────┬──────┘  └─────────────┘     │           │ │(1024)   │ │
+                              │        │                             │           │ └─────────┘ │
+                              │        ▼                             │           │ ┌─────────┐ │
+                              │  ┌─────────────┐  ┌─────────────┐   │           │ │whitelist│ │
+                              │  │failed-tracker│─▶│ban-manager  │   │           │ │(64)     │ │
+                              │  │ .c/h (khash) │  │ .c/h        │   │           │ └─────────┘ │
+                              │  └─────────────┘  └──────┬──────┘   │           │ ┌─────────┐ │
+                              │  ┌─────────────┐         │          │           │ │Netfilter│ │
+                              │  │config-parser│         │          │           │ │ Hook    │ │
+                              │  │ .c/h        │         │          │           │ └─────────┘ │
+                              │  └─────────────┘         │          │           └─────────────┘
+                              │  ┌─────────────┐         │          │
+                              │  │jail-manager │◀────────┘          │
+                              │  │ .c/h        │                    │
+                              │  └─────────────┘                    │
+                              └──────────┬───────────────────────────┘
+                                         │
+                      ┌──────────────────┼──────────────────┐
+                      ▼                  ▼                  ▼
+            ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐
+            │HTTP Exporter │  │ SQLite 持久化 │  │ khash.h (工具库)  │
+            │ :9119        │  │ (可选)       │  │ O(1) 哈希查找     │
+            └──────────────┘  └──────────────┘  └──────────────────┘
 ```
 
 ---
@@ -393,10 +544,70 @@ call_rcu(&entry->rcu_head, free_ban_entry_rcu);
 ```
 
 **关键设计点**：
-- **failed_hash 迁移**：配置重载时保留失败计数器，防止攻击者利用重载间隙"重置"计数
-- **原子性**：配置交换在短暂持锁期间完成，所有线程看到一致视图
+- **failed_hash 迁移**：配置重载时通过 `jail-manager.c/h` 的 `migrate_failed_entries()` 保留失败计数器，防止攻击者利用重载间隙"重置"计数
+- **原子性**：配置交换在短暂持锁期间完成（`config_clone()` 深拷贝 + memcpy 交换），所有线程看到一致视图
 - **失败安全**：解析失败保留旧配置，不影响运行
 
 ---
 
-*文档版本: v1.9 | 架构基于 Linux 内核模块 + C 用户态守护进程*
+## 7. 模块依赖图
+
+### 7.1 依赖关系
+
+```
+                    ┌─────────────────────┐
+                    │  firewall-daemon.h   │  ← 共享头文件（所有模块依赖）
+                    │  (类型/宏/externs)   │
+                    └──────────┬──────────┘
+                               │
+          ┌─────────┬──────────┼──────────┬─────────┐
+          ▼         ▼          ▼          ▼         ▼
+   ┌──────────┐ ┌───────┐ ┌───────┐ ┌───────┐ ┌──────────┐
+   │jail-mgr  │ │config │ │log    │ │failed │ │ban-mgr   │
+   │.c/h      │ │-parser│ │-parser│ │-tracker│ │.c/h      │
+   │          │ │.c/h   │ │.c/h   │ │.c/h    │ │          │
+   └────┬─────┘ └───┬───┘ └───┬───┘ └───┬───┘ └────┬─────┘
+        │            │         │         │          │
+        │            ▼         │         ▼          │
+        │       ┌────────┐    │    ┌────────┐      │
+        │       │jail-mgr│    │    │ban-mgr │      │
+        │       │(clone) │    │    │        │      │
+        │       └────────┘    │    └────────┘      │
+        │                     │                    │
+        └──────────┬──────────┘                    │
+                   ▼                               ▼
+            ┌────────────┐                  ┌──────────┐
+            │file-monitor│ ────────────────▶│ban-mgr   │
+            │.c/h        │   (触发封禁)      │.c/h      │
+            └────────────┘                  └──────────┘
+                   │
+                   ▼
+            ┌────────────┐
+            │firewall-   │  ← main() 调用 monitor_loop()
+            │daemon.c    │
+            └────────────┘
+
+  独立模块（不依赖 firewall-daemon.h）:
+  ┌──────────────┐  ┌──────────────┐  ┌──────────┐
+  │http-exporter │  │sqlite-persist│  │ khash.h  │
+  │.c            │  │.c/h          │  │(第三方)   │
+  └──────────────┘  └──────────────┘  └──────────┘
+```
+
+### 7.2 模块职责速查表
+
+| 模块 | 核心函数 | 被谁调用 | 调用谁 |
+|------|---------|---------|--------|
+| `firewall-daemon.c` | `main()`, `signal_handler()`, `daemonize_process()`, `cleanup()` | 操作系统 | 所有模块 |
+| `jail-manager.c/h` | `find_or_create_jail()`, `clone_jail()`, `config_clone()`, `migrate_failed_entries()` | `config-parser`, `firewall-daemon` | `firewall-daemon.h` |
+| `config-parser.c/h` | `parse_config_file()`, `load_config_directory()`, `parse_config()` | `firewall-daemon` | `jail-manager`, `firewall-daemon.h` |
+| `log-parser.c/h` | `parse_log_line()`, `extract_and_validate_ip()`, `extract_ip()` | `file-monitor` | `firewall-daemon.h` |
+| `failed-tracker.c/h` | `handle_failed_attempt_for_jail()`, `find_entry_for_jail()`, `check_and_ban()` | `file-monitor` | `jail-manager`, `ban-manager`, `firewall-daemon.h` |
+| `ban-manager.c/h` | `execute_ban_action()`, `validate_ipv4()`, `secure_procfs_write()` | `failed-tracker`, `firewall-daemon` | `firewall-daemon.h` |
+| `file-monitor.c/h` | `monitor_loop()`, `process_new_lines()`, `handle_log_rotation()` | `firewall-daemon` | `log-parser`, `failed-tracker`, `firewall-daemon.h` |
+| `http-exporter.c` | `start_http_exporter()`, `stop_http_exporter()` | `firewall-daemon` | 无（独立） |
+| `sqlite-persistent.c/h` | `sqlite_init()`, `sqlite_insert_ban()`, ... | `ban-manager` | 无（独立） |
+
+---
+
+*文档版本: v2.0 | 架构基于 Linux 内核模块 + C 用户态守护进程（模块化 v2.0）*
