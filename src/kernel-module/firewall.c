@@ -57,6 +57,48 @@ static inline u32 generate_wl_ip_hash(__be32 ip)
     return hash_min(ip, WHITELIST_HASH_BITS);
 }
 
+/* Forward declaration */
+static int validate_ipv4_address(__be32 ip, const char *ip_str, const char *context);
+
+/*
+ * validate_ipv4_address - Unified IPv4 address validation for banning/whitelisting
+ * @ip: IP address in network byte order (__be32)
+ * @ip_str: IP address string for logging (may be NULL)
+ * @context: Context string for log messages (e.g., "ban", "whitelist")
+ *
+ * Rejects: 0.0.0.0, 255.255.255.255, 127.0.0.0/8 (loopback),
+ *          224.0.0.0/4 (multicast + Class E), 0.0.0.0/8
+ *
+ * Returns: 0 if valid, -EINVAL if invalid
+ */
+static int validate_ipv4_address(__be32 ip, const char *ip_str, const char *context)
+{
+    unsigned int ip_num = ntohl(ip);
+
+    if (ip == 0 || ip == 0xFFFFFFFF) {
+        fw_pr_warn("Attempt to %s invalid IPv4: %s", context, ip_str ?: "(null)");
+        return -EINVAL;
+    }
+    if ((ip_num & 0xFF000000) == 0x7F000000) {  /* 127.x.x.x (loopback) */
+        fw_pr_warn("Attempt to %s loopback IPv4: %s", context, ip_str ?: "(null)");
+        return -EINVAL;
+    }
+    if ((ip_num & 0xF0000000) == 0xE0000000) {  /* 224.0.0.0/4 (multicast + Class E) */
+        fw_pr_warn("Attempt to %s reserved IPv4 (multicast/Class E): %s", context, ip_str ?: "(null)");
+        return -EINVAL;
+    }
+    if ((ip_num & 0xFF000000) == 0x00000000) {  /* 0.x.x.x */
+        fw_pr_warn("Attempt to %s invalid IPv4 (0.0.0.0/8): %s", context, ip_str ?: "(null)");
+        return -EINVAL;
+    }
+    if ((ip_num & 0xFF000000) == 0xFF000000) {  /* 255.x.x.x */
+        fw_pr_warn("Attempt to %s invalid IPv4 (255.0.0.0/8): %s", context, ip_str ?: "(null)");
+        return -EINVAL;
+    }
+
+    return 0;
+}
+
 /*
  * add_whitelist_entry - Add an IPv4 to the whitelist hash table
  * Fixed version: Ensures IP is normalized to network address for proper subnet matching
@@ -77,13 +119,8 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const 
         return -EINVAL;
     }
 
-    /* Additional validation: reject invalid IPs like 0.0.0.0, 255.255.255.255, multicast, etc. */
-    if (ip == 0 || ip == 0xFFFFFFFF ||
-        (ntohl(ip) & 0xFF000000) == 0x7F000000 ||  // 127.x.x.x
-        (ntohl(ip) & 0xF0000000) == 0xE0000000 ||  // 224.0.0.0/4 (multicast)
-        (ntohl(ip) & 0xFF000000) == 0x00000000 ||  // 0.0.0.0/8
-        (ntohl(ip) & 0xFF000000) == 0xFF000000) {  // 255.0.0.0/8
-        fw_pr_warn("Attempt to whitelist invalid IP: %pI4", &ip);
+    /* Unified IPv4 address validation */
+    if (validate_ipv4_address(ip, NULL, "whitelist") < 0) {
         FW_DEBUG(1, "EXIT: add_whitelist_entry -> -EINVAL (invalid IP)");
         return -EINVAL;
     }
@@ -161,7 +198,7 @@ int remove_whitelist_entry(struct firewall_info *fw, __be32 ip_input)
     hash = hash_min(normalized_ip, WHITELIST_HASH_BITS);
     hash_for_each_possible(fw->whitelist_table, entry, hash, normalized_ip) {
         if (compare_ips(entry->ip, normalized_ip)) {
-            hash_del(&entry->hash);
+            hlist_del_rcu(&entry->hash);
             atomic_dec(&fw->whitelist_count);
             found = 1;
             /* Use call_rcu for async freeing */
@@ -274,15 +311,18 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
     /* Acquire lock before any checks to eliminate TOCTOU race condition */
     spin_lock(&fw->lock);
 
-    /* Check whitelist under lock protection */
-    hash_for_each(fw->whitelist_table, bkt, wl_entry, hash) {
+    /* Check whitelist using RCU (whitelist_table is RCU-protected) */
+    rcu_read_lock();
+    hash_for_each_rcu(fw->whitelist_table, bkt, wl_entry, hash) {
         if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
+            rcu_read_unlock();
             spin_unlock(&fw->lock);
             atomic_inc(&fw->whitelist_reject_count);
             fw_pr_warn("REFUSED to ban whitelisted IP %pI4", &ip);
             return -EPERM;
         }
     }
+    rcu_read_unlock();
 
     /* Check if already banned under same lock */
     hash = hash_min(ip, BAN_HASH_BITS);
@@ -383,7 +423,7 @@ static int __do_unban_ip(struct firewall_info *fw, __be32 ip, bool permanent_onl
     hash_for_each_possible(fw->ban_table, entry, hash, ip) {
         if (compare_ips(entry->ip, ip)) {
             if (!permanent_only || entry->is_permanent) {
-                hash_del(&entry->hash);
+            hlist_del_rcu(&entry->hash);
                 atomic_dec(&fw->ban_count);
                 found = 1;
                 call_rcu(&entry->rcu_head, free_ban_entry_rcu);
@@ -857,9 +897,11 @@ static int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned lo
     /* Acquire lock before any checks to eliminate TOCTOU race condition. */
     spin_lock(&fw->lock);
 
-    /* Check whitelist under lock protection */
-    hash_for_each(fw->whitelist_table, bkt, wl_entry, hash) {
+    /* Check whitelist using RCU (whitelist_table is RCU-protected) */
+    rcu_read_lock();
+    hash_for_each_rcu(fw->whitelist_table, bkt, wl_entry, hash) {
         if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
+            rcu_read_unlock();
             spin_unlock(&fw->lock);
             atomic_inc(&fw->whitelist_reject_count);
             fw_pr_warn("REFUSED to ban whitelisted IP %pI4", &ip);
@@ -868,6 +910,7 @@ static int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned lo
             return -EPERM;
         }
     }
+    rcu_read_unlock();
 
     /* Check if already banned under same lock */
     hash = hash_min(ip, BAN_HASH_BITS);
@@ -1126,20 +1169,8 @@ ban_default_duration:
         return -EINVAL;
     }
 
-    /* Additional validation: reject invalid IPs */
-    if (ip == 0 || ip == 0xFFFFFFFF ||
-        (ntohl(ip) & 0xFF000000) == 0x7F000000 ||  /* 127.x.x.x */
-        (ntohl(ip) & 0xF0000000) == 0xE0000000 ||  /* 224.0.0.0/4 (multicast) */
-        (ntohl(ip) & 0xFF000000) == 0x00000000 ||  /* 0.0.0.0/8 */
-        (ntohl(ip) & 0xFF000000) == 0xFF000000) {  /* 255.0.0.0/8 */
-        fw_pr_warn("Attempt to ban invalid IPv4: %s", ip_str);
-        return -EINVAL;
-    }
-
-    /* Check Class E reserved addresses */
-    unsigned int ip_num = ntohl(ip);
-    if ((ip_num >= 0xF0000000 && ip_num < 0xFE000000) || ip_num == 0xFFFFFFFF) {
-        fw_pr_warn("Attempt to ban reserved IPv4 Class E: %s", ip_str);
+    /* Unified IPv4 address validation */
+    if (validate_ipv4_address(ip, ip_str, "ban") < 0) {
         return -EINVAL;
     }
 
@@ -1422,13 +1453,8 @@ static ssize_t whitelist_write(struct file *file, const char __user *buf,
         return -EINVAL;
     }
 
-    /* Additional validation: reject invalid IPs */
-    if (ipv4 == 0 || ipv4 == 0xFFFFFFFF ||
-        (ntohl(ipv4) & 0xFF000000) == 0x7F000000 ||
-        (ntohl(ipv4) & 0xF0000000) == 0xE0000000 ||
-        (ntohl(ipv4) & 0xFF000000) == 0x00000000 ||
-        (ntohl(ipv4) & 0xFF000000) == 0xFF000000) {
-        fw_pr_warn("Attempt to whitelist invalid IPv4: %s", subnet_start);
+    /* Unified IPv4 address validation */
+    if (validate_ipv4_address(ipv4, subnet_start, "whitelist") < 0) {
         return -EINVAL;
     }
 
@@ -1722,11 +1748,6 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
     if (ntohs(iph->tot_len) > skb->len)  /* Total length must not exceed skb length */
         return NF_ACCEPT;
 
-    /* Strict validation: check for maximum allowed packet size to prevent oversized packets */
-    if (ntohs(iph->tot_len) > 0xFFFF) {  /* IP specification maximum size (65535 bytes) */
-        return NF_ACCEPT;
-    }
-
     /* Additional check: consider extremely large packets suspicious (MTU is typically 1500 bytes) */
     if (ntohs(iph->tot_len) > 9000) {  /* Jumbo frames are typically max ~9000 bytes */
         /* Log the suspicious packet but still process it for banning purposes */
@@ -1734,7 +1755,8 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
 
     /* Check for IP fragmentation - only process unfragmented packets or first fragments */
     if (ntohs(iph->frag_off) & htons(0x2000) || (ntohs(iph->frag_off) & 0x1FFF) != 0) {
-        /* Fragmented packets are allowed through - complex to handle in kernel space */
+        /* Fragmented packets: cannot inspect payload in kernel space, but log for monitoring */
+        fw_pr_warn_ratelimited("Fragmented packet from %pI4 passed through (cannot inspect payload)", &iph->saddr);
         return NF_ACCEPT;
     }
 
@@ -1951,8 +1973,16 @@ out_path_put:
     /* 阶段2: RCU 锁内收集 ban 条目 */
     rcu_read_lock();
     hash_for_each_rcu(fw_info.ban_table, hash, entry, hash) {
-        unsigned long remaining_time = (entry->unban_time - jiffies) / HZ;
-        if (remaining_time > 0 && ban_count < MAX_SAVE_BAN) {
+        unsigned long remaining_time;
+        if (entry->is_permanent) {
+            /* 永久 ban 用 0 标记 */
+            remaining_time = 0;
+        } else if (time_after(entry->unban_time, jiffies)) {
+            remaining_time = (entry->unban_time - jiffies) / HZ;
+        } else {
+            continue; /* 已过期，跳过 */
+        }
+        if (ban_count < MAX_SAVE_BAN) {
             ipv4_to_str(entry->ip, ban_entries[ban_count].ip_str, sizeof(ban_entries[ban_count].ip_str));
             ban_entries[ban_count].ipv4 = entry->ip;
             ban_entries[ban_count].remaining_time = remaining_time;
@@ -2125,33 +2155,38 @@ int restore_state_from_file(const char *filename)
 
                         unsigned long remaining_time;
                         if (kstrtoul(time_str, 10, &remaining_time) == 0) {
-                            /* FIX C4: 验证 remaining_time 合理性：不能超过 1 年，不能为 0 */
-                            if (remaining_time == 0 || remaining_time > 365UL * 24 * 60 * 60) {
+                            struct ban_entry *entry;
+                            bool is_permanent = false;
+                            unsigned long unban_time = 0;
+
+                            if (remaining_time == 0) {
+                                /* remaining_time == 0 表示永久 ban */
+                                is_permanent = true;
+                                unban_time = 0;
+                            } else if (remaining_time > 365UL * 24 * 60 * 60) {
                                 fw_pr_warn("Skipping ban with invalid remaining time: %lu", remaining_time);
                                 continue;
-                            }
-
-                            /* FIX C4: 检查整数溢出：remaining_time * HZ 不能溢出 */
-                            if (remaining_time > (ULONG_MAX / HZ)) {
-                                fw_pr_warn("Skipping ban - remaining_time * HZ would overflow");
-                                continue;
-                            }
-
-                            unsigned long ban_duration = remaining_time * HZ;
-
-                            /* FIX C4: 检查 jiffies + ban_duration 是否会溢出回绕 */
-                            unsigned long unban_time;
-                            if (jiffies > ULONG_MAX - ban_duration) {
-                                /* jiffies 即将回绕，使用最大安全值 */
-                                unban_time = jiffies + min(ban_duration, ULONG_MAX - jiffies);
-                                fw_pr_warn("Jiffies wrap protection applied for ban restoration");
                             } else {
-                                unban_time = jiffies + ban_duration;
+                                is_permanent = false;
+                                /* FIX C4: 检查整数溢出：remaining_time * HZ 不能溢出 */
+                                if (remaining_time > (ULONG_MAX / HZ)) {
+                                    fw_pr_warn("Skipping ban - remaining_time * HZ would overflow");
+                                    continue;
+                                }
+
+                                unsigned long ban_duration = remaining_time * HZ;
+
+                                /* FIX C4: 检查 jiffies + ban_duration 是否会溢出回绕 */
+                                if (jiffies > ULONG_MAX - ban_duration) {
+                                    /* jiffies 即将回绕，使用最大安全值 */
+                                    unban_time = jiffies + min(ban_duration, ULONG_MAX - jiffies);
+                                    fw_pr_warn("Jiffies wrap protection applied for ban restoration");
+                                } else {
+                                    unban_time = jiffies + ban_duration;
+                                }
                             }
 
                             /* Add ban entry with calculated unban time */
-                            struct ban_entry *entry;
-
                             entry = kmalloc(sizeof(*entry), GFP_KERNEL);
                             if (!entry) {
                                 fw_pr_err("Failed to allocate memory for restored ban entry");
@@ -2161,6 +2196,7 @@ int restore_state_from_file(const char *filename)
                             entry->ip = ip;
                             entry->ban_time = jiffies;
                             entry->unban_time = unban_time;
+                            entry->is_permanent = is_permanent;
                             atomic_set(&entry->retry_count, 0);
 
                             spin_lock(&fw_info.lock);
@@ -2168,7 +2204,10 @@ int restore_state_from_file(const char *filename)
                             atomic_inc(&fw_info.ban_count);
                             spin_unlock(&fw_info.lock);
 
-                            fw_pr_info("Restored ban for IPv4 %s (expires in %lu seconds)", ip_str, remaining_time);
+                            if (is_permanent)
+                                fw_pr_info("Restored permanent ban for IPv4 %s", ip_str);
+                            else
+                                fw_pr_info("Restored ban for IPv4 %s (expires in %lu seconds)", ip_str, remaining_time);
                         }
                     }
                 }

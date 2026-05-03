@@ -23,6 +23,7 @@
 #include <time.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <syslog.h>
 #include <microhttpd.h>
 
@@ -36,6 +37,11 @@
 
 /* Procfs paths */
 #define PROCFS_STATS_PATH "/proc/firewall/stats"
+
+/* ============================================================================
+ * HTTP exporter running flag (for graceful shutdown)
+ * ========================================================================== */
+static atomic_bool http_exporter_running = false;
 
 /* ============================================================================
  * External reference to daemon_stats (defined in firewall-daemon.c)
@@ -322,6 +328,9 @@ void *start_http_exporter(void *port)
     int listen_port = port ? (int)(long)port : EXPORTER_DEFAULT_PORT;
     struct MHD_Daemon *daemon;
 
+    /* Mark exporter as running */
+    atomic_store(&http_exporter_running, true);
+
     /* Start libmicrohttpd daemon */
     daemon = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY | MHD_USE_ERROR_LOG,
                               (uint16_t)listen_port,
@@ -336,17 +345,30 @@ void *start_http_exporter(void *port)
         exporter_log_err("Failed to start HTTP daemon on port %d: %s",
                          listen_port, strerror(errno));
         exporter_log_info("Prometheus exporter disabled (port may be in use)");
+        atomic_store(&http_exporter_running, false);
         return NULL;
     }
 
     exporter_log_info("Prometheus exporter listening on 0.0.0.0:%d (libmicrohttpd)", listen_port);
 
-    /* Block until thread is cancelled or daemon stops */
-    while (1) {
+    /* Block until thread is signalled to stop */
+    while (atomic_load(&http_exporter_running)) {
         sleep(1);
     }
 
     MHD_stop_daemon(daemon);
     exporter_log_info("Prometheus exporter stopped");
     return NULL;
+}
+
+/**
+ * stop_http_exporter - Signal the HTTP exporter thread to stop
+ *
+ * Called from cleanup() to gracefully shut down the exporter thread.
+ */
+void stop_http_exporter(void)
+{
+    if (atomic_load(&http_exporter_running)) {
+        atomic_store(&http_exporter_running, false);
+    }
 }

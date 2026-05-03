@@ -89,7 +89,7 @@ jails:
   sshd:
     enabled: true
     log_files:
-      - /tmp/fw_test_frps.log
+      - /var/log/fw_test_frps.log
     max_retries: 10
     findtime: 300
     ban_time: 3600

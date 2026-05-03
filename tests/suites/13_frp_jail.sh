@@ -90,7 +90,7 @@ jails:
   frp:
     enabled: true
     log_files:
-      - /tmp/fw_test_frps.log
+      - /var/log/fw_test_frps.log
     max_retries: 3
     findtime: 120
     ban_time: 600
