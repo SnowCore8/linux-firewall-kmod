@@ -33,7 +33,8 @@
 #include <getopt.h>
 #include <pwd.h>
 #include <grp.h>
-#include <regex.h>
+#define PCRE2_CODE_UNIT_WIDTH 8
+#include <pcre2.h>
 #include <limits.h>
 #include <stddef.h>
 #include <pthread.h>
@@ -104,7 +105,8 @@ struct jail {
     char *log_files[MAX_LOG_FILES];   /* Log files for this jail */
     int log_count;                    /* Number of log files */
     char *regex_pattern;              /* Custom regex pattern (NULL = builtin) */
-    regex_t compiled_regex;           /* Compiled regex (POSIX) */
+    pcre2_code *compiled_regex;       /* Compiled regex (PCRE2) */
+    pcre2_match_data *match_data;     /* PCRE2 match data buffer */
     int regex_compiled;               /* Whether regex is compiled */
     unsigned int max_retries;         /* Max failures before ban */
     unsigned int findtime;            /* Time window for counting failures */
@@ -187,7 +189,12 @@ static void init_jail_defaults(struct jail *j)
 static void free_jail_regex(struct jail *j)
 {
     if (j && j->regex_compiled) {
-        regfree(&j->compiled_regex);
+        if (j->compiled_regex)
+            pcre2_code_free(j->compiled_regex);
+        if (j->match_data)
+            pcre2_match_data_free(j->match_data);
+        j->compiled_regex = NULL;
+        j->match_data = NULL;
         j->regex_compiled = 0;
     }
 }
@@ -255,14 +262,19 @@ static void destroy_jail(struct jail *j)
     daemon_log_info("Destroyed jail: %s", j->name);
 }
 
-/* Compile regex for a jail */
+/* Compile regex for a jail using PCRE2 */
 static int compile_jail_regex(struct jail *j)
 {
     if (!j) return -1;
 
     /* Free existing regex if compiled */
     if (j->regex_compiled) {
-        regfree(&j->compiled_regex);
+        if (j->compiled_regex)
+            pcre2_code_free(j->compiled_regex);
+        if (j->match_data)
+            pcre2_match_data_free(j->match_data);
+        j->compiled_regex = NULL;
+        j->match_data = NULL;
         j->regex_compiled = 0;
     }
 
@@ -298,11 +310,25 @@ static int compile_jail_regex(struct jail *j)
         }
     }
 
-    int ret = regcomp(&j->compiled_regex, pattern, REG_EXTENDED);
-    if (ret != 0) {
-        char errbuf[256];
-        regerror(ret, &j->compiled_regex, errbuf, sizeof(errbuf));
-        daemon_log_err("Failed to compile regex for jail '%s': %s", j->name, errbuf);
+    /* Compile with PCRE2 */
+    int error_number;
+    PCRE2_SIZE error_offset;
+    j->compiled_regex = pcre2_compile((PCRE2_SPTR)pattern, PCRE2_ZERO_TERMINATED,
+                                       PCRE2_NO_UTF_CHECK, &error_number, &error_offset, NULL);
+    if (!j->compiled_regex) {
+        PCRE2_UCHAR buffer[256];
+        pcre2_get_error_message(error_number, buffer, sizeof(buffer));
+        daemon_log_err("Failed to compile regex for jail '%s' at offset %d: %s",
+                       j->name, (int)error_offset, buffer);
+        return -1;
+    }
+
+    /* Create match data buffer */
+    j->match_data = pcre2_match_data_create_from_pattern(j->compiled_regex, NULL);
+    if (!j->match_data) {
+        daemon_log_err("Failed to create match data for jail '%s'", j->name);
+        pcre2_code_free(j->compiled_regex);
+        j->compiled_regex = NULL;
         return -1;
     }
 
@@ -578,7 +604,12 @@ static void free_config_partial(struct config *cfg)
         }
 
         if (jail->regex_compiled) {
-            regfree(&jail->compiled_regex);
+            if (jail->compiled_regex)
+                pcre2_code_free(jail->compiled_regex);
+            if (jail->match_data)
+                pcre2_match_data_free(jail->match_data);
+            jail->compiled_regex = NULL;
+            jail->match_data = NULL;
             jail->regex_compiled = 0;
         }
         if (jail->regex_pattern) {
@@ -1445,10 +1476,9 @@ static int extract_and_validate_ip(struct jail *j, const char *log_line, char *i
     return 0;
 }
 
-/* Parse log line and extract IP if it's a failed login - uses jail's regex */
+/* Parse log line and extract IP if it's a failed login - uses jail's PCRE2 regex */
 static int parse_log_line(struct jail *j, const char *line, char *ip_out, size_t ip_size)
 {
-    regmatch_t matches[4];
     const char *ip_start;
     size_t ip_len;
 
@@ -1459,19 +1489,25 @@ static int parse_log_line(struct jail *j, const char *line, char *ip_out, size_t
         return 0;
     }
 
-    /* Check for failed login using jail's compiled regex */
-    if (j && j->regex_compiled) {
-        int regex_result = regexec(&j->compiled_regex, line, 4, matches, 0);
-        if (regex_result == 0) {
+    /* Check for failed login using jail's compiled PCRE2 regex */
+    if (j && j->regex_compiled && j->compiled_regex && j->match_data) {
+        int regex_result = pcre2_match(j->compiled_regex, (PCRE2_SPTR)line,
+                                        (PCRE2_SIZE)line_len, 0, 0,
+                                        j->match_data, NULL);
+        if (regex_result >= 0) {
+            /* Get captured substrings */
+            PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(j->match_data);
+            int num_groups = regex_result;
+
             /* Dynamically find the IP capture group - search from last to first */
             int ip_group = -1;
-            for (int g = 3; g >= 1; g--) {
-                if (matches[g].rm_so >= 0 && matches[g].rm_eo > matches[g].rm_so) {
+            for (int g = num_groups - 1; g >= 1; g--) {
+                if (ovector[g * 2] != PCRE2_UNSET && ovector[g * 2 + 1] > ovector[g * 2]) {
                     /* Validate this capture group contains an IP-like pattern */
-                    size_t capture_len = matches[g].rm_eo - matches[g].rm_so;
+                    size_t capture_len = ovector[g * 2 + 1] - ovector[g * 2];
                     if (capture_len >= 7 && capture_len < INET_ADDRSTRLEN) {  /* Min: "1.1.1.1" */
                         /* Quick validation: first char should be digit */
-                        const char *capture_start = line + matches[g].rm_so;
+                        const char *capture_start = line + ovector[g * 2];
                         if (capture_start[0] >= '0' && capture_start[0] <= '9') {
                             ip_group = g;
                             break;
@@ -1486,12 +1522,12 @@ static int parse_log_line(struct jail *j, const char *line, char *ip_out, size_t
             }
 
             /* Add boundary checks to prevent out-of-bounds reads */
-            if ((size_t)matches[ip_group].rm_eo > line_len) {
+            if ((size_t)ovector[ip_group * 2 + 1] > line_len) {
                 daemon_log_warn("Regex match exceeds line length in jail '%s'", j->name);
                 return 0;
             }
-            ip_start = line + matches[ip_group].rm_so;
-            ip_len = matches[ip_group].rm_eo - matches[ip_group].rm_so;
+            ip_start = line + ovector[ip_group * 2];
+            ip_len = ovector[ip_group * 2 + 1] - ovector[ip_group * 2];
 
             if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
                 daemon_log_warn("Invalid IP length in jail '%s' log: %zu", j->name, ip_len);
@@ -1504,9 +1540,9 @@ static int parse_log_line(struct jail *j, const char *line, char *ip_out, size_t
             strncpy(ip_out, ip_buf, ip_size - 1);
             ip_out[ip_size - 1] = '\0';
             return 1;
-        } else if (regex_result != REG_NOMATCH) {
-            char errbuf[256];
-            regerror(regex_result, &j->compiled_regex, errbuf, sizeof(errbuf));
+        } else if (regex_result != PCRE2_ERROR_NOMATCH) {
+            PCRE2_UCHAR errbuf[256];
+            pcre2_get_error_message(regex_result, errbuf, sizeof(errbuf));
             daemon_log_warn("Regex error in jail '%s' pattern: %s", j->name, errbuf);
         }
     }
