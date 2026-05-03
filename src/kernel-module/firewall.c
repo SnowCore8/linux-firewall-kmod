@@ -106,8 +106,8 @@ static int validate_ipv4_address(__be32 ip, const char *ip_str, const char *cont
  */
 int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const char *dev_name)
 {
-    struct whitelist_entry *new_entry;  /* 修复：使用 new_entry 避免被 hash_for_each_possible 覆盖 */
-    struct whitelist_entry *tmp_entry;  /* 修复：用于遍历哈希表的临时变量 */
+    struct whitelist_entry *new_entry;  /* FIX: Use new_entry to avoid being overwritten by hash_for_each_possible */
+    struct whitelist_entry *tmp_entry;  /* FIX: Temporary variable for traversing hash table */
     u32 hash;
 
     FW_DEBUG(1, "ENTRY: add_whitelist_entry(ip=%pI4, mask=%pI4, dev=%s)", &ip, &mask, dev_name ?: "null");
@@ -130,7 +130,7 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const 
     hash = hash_min(normalized_ip, WHITELIST_HASH_BITS);
     FW_DEBUG(2, "Attempting to add whitelist entry for %pI4/%d", &normalized_ip, inet_mask_len(mask));
 
-    /* FIX W2: 在锁外分配内存，避免在 spinlock 内睡眠 */
+    /* FIX W2: Allocate memory outside the lock to avoid sleeping inside spinlock */
     new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
     if (!new_entry) {
         FW_DEBUG(1, "Failed to allocate memory for whitelist entry for IP %pI4", &normalized_ip);
@@ -138,7 +138,7 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const 
         return -ENOMEM;
     }
 
-    /* 初始化 new_entry 字段 */
+    /* Initialize new_entry fields */
     new_entry->ip = normalized_ip;  /* Store normalized IP (network address) */
     new_entry->mask = mask;
     if (dev_name)
@@ -148,7 +148,7 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const 
 
     spin_lock(&fw->whitelist_lock);
 
-    /* 修复：使用 tmp_entry 遍历，避免覆盖 new_entry 指针 */
+    /* FIX: Use tmp_entry for traversal to avoid overwriting new_entry pointer */
     hash_for_each_possible(fw->whitelist_table, tmp_entry, hash, normalized_ip) {
         if (compare_ips(tmp_entry->ip, normalized_ip) &&
             tmp_entry->mask == mask) {
@@ -161,14 +161,14 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const 
 
     if (atomic_read(&fw->whitelist_count) >= MAX_WHITELIST_ENTRIES) {
         spin_unlock(&fw->whitelist_lock);
-        kfree(new_entry);  /* 修复：释放 new_entry */
+        kfree(new_entry);  /* FIX: Free new_entry */
         fw_pr_warn("Whitelist full, cannot add %pI4/%d", &normalized_ip, inet_mask_len(mask));
         FW_DEBUG(1, "EXIT: add_whitelist_entry -> -ENOSPC (whitelist full)");
         return -ENOSPC;
     }
 
-    /* 插入哈希表 */
-    hash_add(fw->whitelist_table, &new_entry->hash, normalized_ip);  /* 修复：使用 new_entry */
+    /* Insert into hash table */
+    hash_add(fw->whitelist_table, &new_entry->hash, normalized_ip);  /* FIX: Use new_entry */
     atomic_inc(&fw->whitelist_count);
     spin_unlock(&fw->whitelist_lock);
 
@@ -423,11 +423,11 @@ static int __do_unban_ip(struct firewall_info *fw, __be32 ip, bool permanent_onl
     hash_for_each_possible(fw->ban_table, entry, hash, ip) {
         if (compare_ips(entry->ip, ip)) {
             if (!permanent_only || entry->is_permanent) {
-            hlist_del_rcu(&entry->hash);
-                atomic_dec(&fw->ban_count);
-                found = 1;
-                call_rcu(&entry->rcu_head, free_ban_entry_rcu);
-            }
+             hlist_del_rcu(&entry->hash);
+             atomic_dec(&fw->ban_count);
+             found = 1;
+             call_rcu(&entry->rcu_head, free_ban_entry_rcu);
+         }
             break;
         }
     }
@@ -623,8 +623,9 @@ void cleanup_expired_bans(struct firewall_info *fw)
     for (int i = 0; i < (1 << 3) && processed < max_processed_per_call; i++) {  /* Process up to 8 buckets per call */
         int current_bucket = (start_bucket + i) % ban_table_size;
 
-        /* hlist_for_each_entry_safe 保证即使当前 entry 被删除，tmp 仍指向下一个有效节点
-         * 因此在循环内调用 hlist_del_rcu 删除 entry 是安全的，不会破坏遍历 */
+        /* hlist_for_each_entry_safe guarantees that even if current entry is deleted,
+         * tmp still points to the next valid node. Therefore calling hlist_del_rcu to
+         * delete entry inside the loop is safe and won't break traversal */
         hlist_for_each_entry_safe(entry, tmp, &fw->ban_table[current_bucket], hash) {
             if (processed >= max_processed_per_call) {
                 break;
@@ -715,10 +716,11 @@ void auto_discover_system_ips(struct firewall_info *fw)
     /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding */
     fw_pr_info_ratelimited("Auto-discovering system IPs...");
 
-    /* FIX C2: RCU 保护下收集 IPv4 地址
-     * 修复说明: __in_dev_get_rcu(dev) 内部已经使用 rcu_dereference 保护，
-     * 但为代码清晰和防御性编程，显式使用 rcu_dereference 保护 ifa_list 遍历。
-     * RCU 读锁 (rcu_read_lock/unlock) 保证在遍历期间网络设备列表不会被修改。
+    /* FIX C2: Collect IPv4 addresses under RCU protection
+     * Fix explanation: __in_dev_get_rcu(dev) internally uses rcu_dereference protection,
+     * but for code clarity and defensive programming, explicitly use rcu_dereference to
+     * protect ifa_list traversal. RCU read lock (rcu_read_lock/unlock) ensures network
+     * device list won't be modified during traversal.
      */
     rcu_read_lock();
     for_each_netdev_rcu(&init_net, dev) {
@@ -737,21 +739,22 @@ void auto_discover_system_ips(struct firewall_info *fw)
         /* Collect IPv4 addresses */
         in_dev = __in_dev_get_rcu(dev);
         if (in_dev) {
-            /* 修复: 使用 rcu_dereference 显式保护 ifa_list 遍历
-             * __in_dev_get_rcu 返回的 in_dev 指针由 RCU 保护，
-             * in_dev->ifa_list 的遍历也需要 RCU dereference 保护以防止并发修改。
+            /* FIX: Use rcu_dereference to explicitly protect ifa_list traversal
+             * The in_dev pointer returned by __in_dev_get_rcu is protected by RCU,
+             * but in_dev->ifa_list traversal also needs RCU dereference protection
+             * to prevent concurrent modifications.
              */
             for (ifa = rcu_dereference(in_dev->ifa_list); ifa;
                  ifa = rcu_dereference(ifa->ifa_next)) {
                 if (temp_count >= 64)
                     break;
 
-                /* 验证 IP 地址的有效性 */
+                /* Validate IP address validity */
                 if (!ifa->ifa_local) {
                     continue;  /* Skip invalid IP addresses */
                 }
 
-                temp_ips[temp_count].ip = ifa->ifa_local;  /* 使用 ifa_local 而不是 ifa_address */
+                temp_ips[temp_count].ip = ifa->ifa_local;  /* Use ifa_local instead of ifa_address */
                 temp_ips[temp_count].mask = ifa->ifa_mask;
                 strscpy(temp_ips[temp_count].name, dev->name, 16);
                 temp_count++;
@@ -1780,16 +1783,16 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
 
     now = jiffies;
 
-    /* 修复: 在 RCU 锁内再次检查 shutdown 状态，防止竞态窗口
-     * 前面的检查在 RCU 锁外，存在微小窗口可能访问已释放内存。
-     * 在锁内二次检查确保安全性。 */
+    /* FIX: Recheck shutdown status inside RCU lock to prevent race window
+     * Previous check was outside RCU lock, creating a small window that might
+     * access freed memory. Double checking inside the lock ensures safety. */
     if (unlikely(atomic_read(&fw_info.shutting_down)))
         return NF_ACCEPT;
 
     /* RCU read lock for whitelist and ban table access */
     rcu_read_lock();
 
-    /* 修复: 在 RCU 锁内再次检查 shutdown 状态（双重检查） */
+    /* FIX: Recheck shutdown status inside RCU lock (double check) */
     if (unlikely(atomic_read(&fw_info.shutting_down))) {
         rcu_read_unlock();
         return NF_ACCEPT;
@@ -1863,7 +1866,7 @@ int save_state_to_file(const char *filename)
     int written;
     int err;
 
-    /* 临时存储结构 - 在 RCU 锁内收集数据，锁外执行 I/O 操作 */
+    /* Temporary storage structure - collect data inside RCU lock, perform I/O operations outside */
     struct saved_ban_entry {
         char ip_str[INET_ADDRSTRLEN];
         __be32 ipv4;
@@ -1878,7 +1881,7 @@ int save_state_to_file(const char *filename)
         char device_name[16];
     };
 
-    /* 限制保存数量，避免大分配 */
+    /* Limit save count to avoid large allocations */
     #define MAX_SAVE_BAN 1024
     #define MAX_SAVE_WL 64
 
@@ -1956,7 +1959,7 @@ out_path_put:
         err = 0;
     }
 
-    /* 阶段1: 分配临时数组（GFP_KERNEL 可以睡眠，安全） */
+    /* Phase 1: Allocate temporary array (GFP_KERNEL can sleep, safe) */
     ban_entries = kmalloc_array(MAX_SAVE_BAN, sizeof(struct saved_ban_entry), GFP_KERNEL);
     if (!ban_entries) {
         fw_pr_err("Failed to allocate memory for saving ban entries");
@@ -1970,17 +1973,17 @@ out_path_put:
         return -ENOMEM;
     }
 
-    /* 阶段2: RCU 锁内收集 ban 条目 */
+    /* Phase 2: Collect ban entries inside RCU lock */
     rcu_read_lock();
     hash_for_each_rcu(fw_info.ban_table, hash, entry, hash) {
         unsigned long remaining_time;
         if (entry->is_permanent) {
-            /* 永久 ban 用 0 标记 */
+            /* Permanent ban marked with 0 */
             remaining_time = 0;
         } else if (time_after(entry->unban_time, jiffies)) {
             remaining_time = (entry->unban_time - jiffies) / HZ;
         } else {
-            continue; /* 已过期，跳过 */
+            continue; /* Expired, skip */
         }
         if (ban_count < MAX_SAVE_BAN) {
             ipv4_to_str(entry->ip, ban_entries[ban_count].ip_str, sizeof(ban_entries[ban_count].ip_str));
@@ -1991,7 +1994,7 @@ out_path_put:
     }
     rcu_read_unlock();
 
-    /* 阶段3: RCU 锁内收集 whitelist 条目 */
+    /* Phase 3: Collect whitelist entries inside RCU lock */
     rcu_read_lock();
     hash_for_each_rcu(fw_info.whitelist_table, hash, wl_entry, hash) {
         if (wl_count < MAX_SAVE_WL) {
@@ -2006,7 +2009,7 @@ out_path_put:
     }
     rcu_read_unlock();
 
-    /* 阶段4: 锁外打开文件（使用 O_NOFOLLOW 防止符号链接攻击） */
+    /* Phase 4: Open file outside lock (use O_NOFOLLOW to prevent symlink attacks) */
     file = filp_open(filename, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW, 0600);
     if (IS_ERR(file)) {
         fw_pr_err("Failed to open file for saving state: %s", filename);
@@ -2034,7 +2037,7 @@ out_path_put:
         }
     }
 
-    /* 阶段5: 锁外写入 ban 条目 */
+    /* Phase 5: Write ban entries outside lock */
     for (int i = 0; i < ban_count; i++) {
         written = snprintf(buffer, sizeof(buffer), "BAN_V4 %s %lu\n",
                          ban_entries[i].ip_str, ban_entries[i].remaining_time);
@@ -2048,7 +2051,7 @@ out_path_put:
         }
     }
 
-    /* 阶段6: 锁外写入 whitelist 条目 */
+    /* Phase 6: Write whitelist entries outside lock */
     for (int i = 0; i < wl_count; i++) {
         written = snprintf(buffer, sizeof(buffer), "WL_V4 %s %d %s\n",
                           wl_entries[i].ip_str, wl_entries[i].prefix_len, wl_entries[i].device_name);
@@ -2062,10 +2065,10 @@ out_path_put:
         }
     }
 
-    /* 阶段7: 锁外关闭文件 */
+    /* Phase 7: Close file outside lock */
     filp_close(file, NULL);
 
-    /* 阶段8: 释放临时数组 */
+    /* Phase 8: Free temporary array */
     kfree(ban_entries);
     kfree(wl_entries);
 
@@ -2160,7 +2163,7 @@ int restore_state_from_file(const char *filename)
                             unsigned long unban_time = 0;
 
                             if (remaining_time == 0) {
-                                /* remaining_time == 0 表示永久 ban */
+                                /* remaining_time == 0 indicates permanent ban */
                                 is_permanent = true;
                                 unban_time = 0;
                             } else if (remaining_time > 365UL * 24 * 60 * 60) {
@@ -2168,7 +2171,7 @@ int restore_state_from_file(const char *filename)
                                 continue;
                             } else {
                                 is_permanent = false;
-                                /* FIX C4: 检查整数溢出：remaining_time * HZ 不能溢出 */
+                                /* FIX C4: Check integer overflow: remaining_time * HZ must not overflow */
                                 if (remaining_time > (ULONG_MAX / HZ)) {
                                     fw_pr_warn("Skipping ban - remaining_time * HZ would overflow");
                                     continue;
@@ -2176,9 +2179,9 @@ int restore_state_from_file(const char *filename)
 
                                 unsigned long ban_duration = remaining_time * HZ;
 
-                                /* FIX C4: 检查 jiffies + ban_duration 是否会溢出回绕 */
+                                /* FIX C4: Check if jiffies + ban_duration will overflow wraparound */
                                 if (jiffies > ULONG_MAX - ban_duration) {
-                                    /* jiffies 即将回绕，使用最大安全值 */
+                                    /* Jiffies about to wraparound, use maximum safe value */
                                     unban_time = jiffies + min(ban_duration, ULONG_MAX - jiffies);
                                     fw_pr_warn("Jiffies wrap protection applied for ban restoration");
                                 } else {
@@ -2253,16 +2256,16 @@ static int __init firewall_init(void)
 {
     int ret;
 
-    fw_pr_info("Loading firewall module v1.8");
+    fw_pr_info("Loading firewall module v1.9");
 
-    /* 参数下界检查 - 防止 0 或过小值导致异常行为 */
+    /* Parameter lower bound check - prevent 0 or too small values causing abnormal behavior */
     /* FIX P1-5: Use READ_ONCE for atomic access to module parameters */
     if (READ_ONCE(fw_ban_time) < 1) {
         fw_pr_err("fw_ban_time must be >= 1");
         return -EINVAL;
     }
 
-    /* 参数上界检查 - 防止过大的值导致整数溢出 */
+    /* Parameter upper bound check - prevent large values causing integer overflow */
     if (READ_ONCE(fw_ban_time) > 365 * 24 * 60 * 60) {  /* 1 year max */
         fw_pr_err("fw_ban_time too large (max 1 year)");
         return -EINVAL;
@@ -2300,7 +2303,7 @@ static int __init firewall_init(void)
     auto_discover_system_ips(&fw_info);
 
     timer_setup(&fw_info.cleanup_timer, cleanup_timer_callback, 0);
-    fw_info.timer_initialized = true;  /* 标记定时器已初始化 */
+    fw_info.timer_initialized = true;  /* Mark timer as initialized */
     /* FIX P1-5: Use READ_ONCE for atomic access to fw_ban_time */
     mod_timer(&fw_info.cleanup_timer, jiffies + ((unsigned long)READ_ONCE(fw_ban_time) * HZ) / 2);
 
@@ -2337,25 +2340,25 @@ static void __exit firewall_exit(void)
 
     fw_pr_info("Unloading firewall module");
 
-    /* FIX C5: 设置关闭标志，阻止新操作 */
+    /* FIX C5: Set shutdown flag to prevent new operations */
     atomic_set(&fw_info.shutting_down, 1);
 
-    /* FIX C5: 1. 先注销 netfilter hooks，阻止新包进入 */
+    /* FIX C5: 1. Unregister netfilter hooks first to prevent new packets from entering */
     nf_unregister_net_hook(&init_net, &nf_ops_ipv4);
 
-    /* FIX C5: 2. 停止定时器 */
+    /* FIX C5: 2. Stop timer */
     if (fw_info.timer_initialized) {
         timer_delete_sync(&fw_info.cleanup_timer);
         fw_info.timer_initialized = false;
     }
 
-    /* FIX C5: 3. 销毁 procfs 入口，阻止用户空间操作 */
+    /* FIX C5: 3. Destroy procfs entries to prevent userspace operations */
     destroy_procfs_entries(&fw_info);
 
-    /* FIX C5: 4. 等待所有 RCU 读者退出 */
+    /* FIX C5: 4. Wait for all RCU readers to exit */
     synchronize_rcu();
 
-    /* FIX C5: 5. 现在安全保存状态（无并发访问） */
+    /* FIX C5: 5. Now safely save state (no concurrent access) */
     if (state_file && strlen(state_file) > 0) {
         save_state_to_file(state_file);
     }
@@ -2386,4 +2389,4 @@ module_exit(firewall_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Firewall Authors");
 MODULE_DESCRIPTION("Kernel-level IP banning module (fail2ban alternative)");
-MODULE_VERSION("1.8");
+MODULE_VERSION("1.9");

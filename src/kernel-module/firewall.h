@@ -120,7 +120,7 @@ struct ban_entry {
     __be32 ip;                 /* IPv4 address in network byte order */
     unsigned long ban_time;    /* when the IP was banned */
     unsigned long unban_time;  /* when to unban (0 = permanent) */
-    atomic_t retry_count;
+    atomic_t retry_count;       /* Reserved for future use */
     bool is_permanent;         /* permanent ban flag */
     struct hlist_node hash;
     struct rcu_head rcu_head;  /* For RCU-based freeing */

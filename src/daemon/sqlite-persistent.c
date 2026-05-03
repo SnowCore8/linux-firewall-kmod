@@ -1,8 +1,7 @@
 /*
- * sqlite-persistent.c - SQLite 持久化永久黑名单模块
- *
- * 提供永久黑名单的存储、加载、查询功能
- * 使用 SQLite 数据库实现持久化存储
+ * sqlite-persistent.c - SQLite persistent permanent blacklist module
+ * Provides storage, loading, and query functions for permanent blacklists
+ * Implements persistent storage using SQLite database
  */
 
 #include "sqlite-persistent.h"
@@ -17,19 +16,19 @@
 #include <libgen.h>
 #include <pthread.h>
 
-/* 数据库句柄结构 */
+/* Database handle structure */
 struct sqlite_db {
-    sqlite3 *conn;              /* SQLite 连接句柄 */
-    char db_path[512];          /* 数据库文件路径 */
-    pthread_mutex_t lock;       /* 线程安全互斥锁 */
+    sqlite3 *conn;              /* SQLite connection handle */
+    char db_path[512];          /* Database file path */
+    pthread_mutex_t lock;       /* Thread-safe mutex lock */
 };
 
 /* ============================================================================
- * 内部辅助函数
+ * Internal helper functions
  * ========================================================================== */
 
 /**
- * 确保数据库目录存在
+ * Ensure database directory exists
  */
 static int ensure_db_dir(const char *db_path)
 {
@@ -43,7 +42,7 @@ static int ensure_db_dir(const char *db_path)
     struct stat st;
 
     if (stat(dir, &st) != 0) {
-        /* 目录不存在，尝试创建 */
+        /* Directory does not exist, try to create */
         if (mkdir(dir, 0750) != 0) {
             fprintf(stderr, "firewall: Failed to create db directory %s: %s\n",
                     dir, strerror(errno));
@@ -61,8 +60,8 @@ static int ensure_db_dir(const char *db_path)
 }
 
 /**
- * 初始化数据库表结构
- */
+* Initialize database table schema
+*/
 static int init_db_schema(sqlite3 *conn)
 {
     const char *create_table_sql = 
@@ -115,8 +114,8 @@ static int init_db_schema(sqlite3 *conn)
 }
 
 /**
- * 启用 WAL 模式提升并发性能
- */
+* Enable WAL mode to improve concurrent performance
+*/
 static int enable_wal_mode(sqlite3 *conn)
 {
     char *err_msg = NULL;
@@ -142,12 +141,12 @@ static int enable_wal_mode(sqlite3 *conn)
 }
 
 /* ============================================================================
- * 公共接口实现
+ * Public interface implementation
  * ========================================================================== */
 
 /**
- * 初始化 SQLite 数据库
- */
+* Initialize SQLite database
+*/
 sqlite_db_t *sqlite_init(const char *db_path)
 {
     if (!db_path) {
@@ -164,16 +163,16 @@ sqlite_db_t *sqlite_init(const char *db_path)
     strncpy(db->db_path, db_path, sizeof(db->db_path) - 1);
     db->db_path[sizeof(db->db_path) - 1] = '\0';
 
-    /* 初始化互斥锁 */
+    /* Initialize mutex lock */
     pthread_mutex_init(&db->lock, NULL);
 
-    /* 确保目录存在 */
+    /* Ensure directory exists */
     if (ensure_db_dir(db_path) != 0) {
         free(db);
         return NULL;
     }
 
-    /* 打开数据库连接 */
+    /* Open database connection */
     int rc = sqlite3_open(db_path, &db->conn);
     if (rc != SQLITE_OK) {
         fprintf(stderr, "firewall: Cannot open SQLite database %s: %s\n",
@@ -183,12 +182,12 @@ sqlite_db_t *sqlite_init(const char *db_path)
         return NULL;
     }
 
-    /* 启用 WAL 模式 */
+    /* Enable WAL mode */
     if (enable_wal_mode(db->conn) != 0) {
         fprintf(stderr, "firewall: Warning: WAL mode not enabled\n");
     }
 
-    /* 初始化表结构 */
+    /* Initialize table schema */
     if (init_db_schema(db->conn) != 0) {
         fprintf(stderr, "firewall: Failed to initialize database schema\n");
         sqlite3_close(db->conn);
@@ -201,8 +200,8 @@ sqlite_db_t *sqlite_init(const char *db_path)
 }
 
 /**
- * 关闭 SQLite 数据库
- */
+* Close SQLite database
+*/
 void sqlite_close(sqlite_db_t *db)
 {
     if (!db) return;
@@ -215,8 +214,8 @@ void sqlite_close(sqlite_db_t *db)
 }
 
 /**
- * 添加永久黑名单条目
- */
+* Add permanent blacklist entry
+*/
 int sqlite_add_permanent_ban(sqlite_db_t *db, const char *ip, uint32_t ip_num,
                              const char *reason, const char *created_by)
 {
@@ -254,9 +253,9 @@ int sqlite_add_permanent_ban(sqlite_db_t *db, const char *ip, uint32_t ip_num,
     pthread_mutex_unlock(&db->lock);
 
     if (rc == SQLITE_DONE) {
-        return 0;  /* 成功 */
+           return 0;  /* Success */
     } else if (rc == SQLITE_CONSTRAINT) {
-        return -2;  /* 已存在 */
+        return -2;  /* Already exists */
     } else {
         fprintf(stderr, "firewall: Failed to insert permanent ban: %s\n",
                 sqlite3_errmsg(db->conn));
@@ -265,8 +264,8 @@ int sqlite_add_permanent_ban(sqlite_db_t *db, const char *ip, uint32_t ip_num,
 }
 
 /**
- * 批量添加永久黑名单条目（使用事务优化性能）
- */
+* Batch add permanent blacklist entries (optimize performance with transactions)
+*/
 int sqlite_add_permanent_bans_batch(sqlite_db_t *db,
                                     const char **ips,
                                     const uint32_t *ip_nums,
@@ -289,7 +288,7 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db,
     int rc;
     int success_count = 0;
 
-    /* 开始事务 */
+    /* Begin transaction */
     rc = sqlite3_exec(db->conn, "BEGIN TRANSACTION;", NULL, NULL, NULL);
     if (rc != SQLITE_OK) {
         fprintf(stderr, "firewall: Failed to begin transaction: %s\n",
@@ -327,12 +326,12 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db,
 
     sqlite3_finalize(stmt);
 
-    /* 提交事务 */
+    /* Commit transaction */
     rc = sqlite3_exec(db->conn, "COMMIT;", NULL, NULL, NULL);
     if (rc != SQLITE_OK) {
         fprintf(stderr, "firewall: Failed to commit transaction: %s\n",
                 sqlite3_errmsg(db->conn));
-        /* COMMIT 失败后事务已自动回滚，无需显式 ROLLBACK */
+        /* Transaction automatically rolls back after COMMIT failure, no explicit ROLLBACK needed */
         pthread_mutex_unlock(&db->lock);
         return -1;
     }
@@ -343,8 +342,8 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db,
 }
 
 /**
- * 移除永久黑名单条目 (软删除)
- */
+* Remove permanent blacklist entry (soft delete)
+*/
 int sqlite_remove_permanent_ban(sqlite_db_t *db, const char *ip)
 {
     if (!db || !ip) {
@@ -377,9 +376,9 @@ int sqlite_remove_permanent_ban(sqlite_db_t *db, const char *ip)
     if (rc == SQLITE_DONE) {
         int changes = sqlite3_changes(db->conn);
         if (changes > 0) {
-            return 0;  /* 成功 */
+       return 0;  /* Success */
         } else {
-            return -2;  /* 不存在 */
+            return -2;  /* Does not exist */
         }
     } else {
         fprintf(stderr, "firewall: Failed to remove permanent ban: %s\n",
@@ -389,8 +388,8 @@ int sqlite_remove_permanent_ban(sqlite_db_t *db, const char *ip)
 }
 
 /**
- * 检查 IP 是否在永久黑名单中
- */
+* Check if IP is in permanent blacklist
+*/
 int sqlite_is_permanent_banned(sqlite_db_t *db, uint32_t ip_num)
 {
     if (!db) {
@@ -421,9 +420,9 @@ int sqlite_is_permanent_banned(sqlite_db_t *db, uint32_t ip_num)
     pthread_mutex_unlock(&db->lock);
 
     if (rc == SQLITE_ROW) {
-        return 1;  /* 在黑名单中 */
+        return 1;  /* In blacklist */
     } else if (rc == SQLITE_DONE) {
-        return 0;  /* 不在 */
+        return 0;  /* Not in */
     } else {
         fprintf(stderr, "firewall: Failed to query permanent ban: %s\n",
                 sqlite3_errmsg(db->conn));
@@ -432,8 +431,8 @@ int sqlite_is_permanent_banned(sqlite_db_t *db, uint32_t ip_num)
 }
 
 /**
- * 加载所有活跃的永久黑名单条目
- */
+* Load all active permanent blacklist entries
+*/
 int sqlite_load_all_permanent_bans(sqlite_db_t *db, 
                                    struct permanent_ban_entry **entries,
                                    int *count)
@@ -463,7 +462,7 @@ int sqlite_load_all_permanent_bans(sqlite_db_t *db,
         return -1;
     }
 
-    /* 先计数 */
+    /* Count first */
     int n = 0;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         n++;
@@ -473,10 +472,10 @@ int sqlite_load_all_permanent_bans(sqlite_db_t *db,
     if (n == 0) {
         sqlite3_finalize(stmt);
         pthread_mutex_unlock(&db->lock);
-        return 0;  /* 没有记录 */
+        return 0;  /* No records */
     }
 
-    /* 分配内存 */
+    /* Allocate memory */
     *entries = calloc(n, sizeof(struct permanent_ban_entry));
     if (!*entries) {
         fprintf(stderr, "firewall: Out of memory allocating ban entries\n");
@@ -485,7 +484,7 @@ int sqlite_load_all_permanent_bans(sqlite_db_t *db,
         return -1;
     }
 
-    /* 读取数据 */
+    /* Read data */
     int i = 0;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < n) {
         struct permanent_ban_entry *e = &(*entries)[i];
@@ -538,8 +537,8 @@ int sqlite_load_all_permanent_bans(sqlite_db_t *db,
 }
 
 /**
- * 更新命中统计
- */
+* Update hit statistics
+*/
 int sqlite_update_hit_stats(sqlite_db_t *db, uint32_t ip_num)
 {
     if (!db) {
@@ -581,8 +580,8 @@ int sqlite_update_hit_stats(sqlite_db_t *db, uint32_t ip_num)
 }
 
 /**
- * 获取数据库统计信息
- */
+* Get database statistics
+*/
 int sqlite_get_stats(sqlite_db_t *db, int *total_count, int *active_count)
 {
     if (!db) {
@@ -598,7 +597,7 @@ int sqlite_get_stats(sqlite_db_t *db, int *total_count, int *active_count)
     sqlite3_stmt *stmt;
     int rc;
 
-    /* 总记录数 */
+    /* Total record count */
     rc = sqlite3_prepare_v2(db->conn, sql_total, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         fprintf(stderr, "firewall: Failed to prepare statement: %s\n",
@@ -614,7 +613,7 @@ int sqlite_get_stats(sqlite_db_t *db, int *total_count, int *active_count)
     }
     sqlite3_finalize(stmt);
 
-    /* 活跃记录数 */
+    /* Active record count */
     rc = sqlite3_prepare_v2(db->conn, sql_active, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         fprintf(stderr, "firewall: Failed to prepare statement: %s\n",
@@ -636,8 +635,8 @@ int sqlite_get_stats(sqlite_db_t *db, int *total_count, int *active_count)
 }
 
 /**
- * 清理已删除的旧记录
- */
+* Clean up old deleted records
+*/
 int sqlite_purge_deleted(sqlite_db_t *db, int days)
 {
     if (!db) {

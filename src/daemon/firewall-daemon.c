@@ -147,7 +147,7 @@ struct failed_entry {
     struct failed_entry *next_in_hash;  /* Next entry in hash bucket */
 };
 
-/* 配置互斥锁 - 保护 cfg 全局变量的多线程访问 */
+/* Configuration mutex - protect multithreaded access to cfg global variable */
 static pthread_mutex_t config_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Global state */
@@ -2897,7 +2897,7 @@ static void monitor_loop(void)
         struct timeval tv;
         int current_interval;
 
-        /* 读取配置需要加锁 - 防止与 SIGHUP 配置重载并发 */
+        /* Reading configuration requires locking - prevent concurrency with SIGHUP config reload */
         pthread_mutex_lock(&config_mutex);
         current_interval = cfg.interval;
         pthread_mutex_unlock(&config_mutex);
@@ -2927,7 +2927,7 @@ static void monitor_loop(void)
                 unsigned int old_max_retries, old_findtime, old_ban_time;
                 int old_interval, old_metrics_port;
 
-                /* 保存旧配置的关键值用于变更检测 */
+                /* Save key values of old configuration for change detection */
                 pthread_mutex_lock(&config_mutex);
                 old_max_retries = cfg.default_max_retries;
                 old_findtime = cfg.default_findtime;
@@ -2936,7 +2936,7 @@ static void monitor_loop(void)
                 old_metrics_port = cfg.metrics_port;
                 pthread_mutex_unlock(&config_mutex);
 
-                /* 根据配置类型选择重载方式 */
+                /* Select reload method based on configuration type */
                 int reload_ok = 0;
 
                 /* parse_config_file now uses double-buffering internally:
@@ -2946,7 +2946,7 @@ static void monitor_loop(void)
                  * swap handles migration and cleanup atomically. */
 
                 if (cfg.config_dir) {
-                    /* 配置目录模式：重新加载整个目录 */
+                    /* Configuration directory mode: reload entire directory */
                     daemon_log_info("Reloading config directory: %s", cfg.config_dir);
                     if (load_config_directory(cfg.config_dir) < 0) {
                         daemon_log_warn("Failed to reload config directory, keeping old config");
@@ -2956,7 +2956,7 @@ static void monitor_loop(void)
                         daemon_log_info("Config directory reloaded successfully");
                     }
                 } else if (cfg.config_file) {
-                    /* 单文件模式：重新加载单个文件 */
+                    /* Single file mode: reload single file */
                     if (parse_config_file(cfg.config_file) < 0) {
                         daemon_log_err("Failed to reload configuration from %s", cfg.config_file);
                     } else {

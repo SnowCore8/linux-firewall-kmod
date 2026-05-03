@@ -1,0 +1,8 @@
+Third-Party Notices
+
+This project includes the following third-party software:
+
+khash.h - klib hash table library
+Copyright (c) 2008-2023 by Attractive Chaos <attractivechaos@gmail.com>
+License: MIT License
+Source: https://github.com/attractivechaos/klib
