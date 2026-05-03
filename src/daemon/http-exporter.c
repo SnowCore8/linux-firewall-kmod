@@ -410,7 +410,7 @@ static int handle_request(int sockfd)
     }
 
     /* Validate URI doesn't contain path traversal */
-    if (strstr(uri, "..") != NULL || strstr(uri, "%2e") != NULL) {
+    if (strstr(uri, "..") != NULL || strcasestr(uri, "%2e") != NULL || strcasestr(uri, "%2f") != NULL) {
         exporter_log_warn("Path traversal attempt in URI: %s", uri);
         send_response(sockfd, http_400, NULL);
         return -1;
