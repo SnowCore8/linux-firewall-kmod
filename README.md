@@ -1,6 +1,6 @@
 # Firewall
 
-**版本**: v1.7（安全加固 + 测试扩展）
+**版本**: v1.8（库替换 + 代码重构 + 测试扩展）
 
 Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁防护。它将 fail2ban 的核心功能从用户空间移动到内核空间，使用 netfilter 框架在数据包级别进行封禁，具有更低的延迟和更高的性能。
 
@@ -21,6 +21,11 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁
 - ✅ RCU 并发安全 + spinlock 保护
 - ✅ 状态持久化（保存/恢复封禁和白名单）
 - ✅ 输入验证和边界检查
+- ✅ **v1.8 库替换与重构**
+  - HTTP 服务器 → libmicrohttpd（-330行，RFC合规）
+  - POSIX Regex → PCRE2（JIT加速，内置超时）
+  - Ban/Unban 函数族统一（-75行）
+  - 单 `make` 编译全部
 - ✅ **v1.7 安全加固**
   - 整数溢出防护（`check_mul_overflow()` 全面覆盖）
   - SQLite use-after-free 修复（`SQLITE_TRANSIENT`）
@@ -260,7 +265,7 @@ fw_pr_err_ratelimited("error with rate limit")
 
 ## 测试
 
-项目采用模块化测试框架，共 113 项测试：
+项目采用模块化测试框架，共 149 项测试：
 
 ```bash
 # 运行所有测试（推荐）
@@ -284,7 +289,7 @@ sudo ./tests/run_tests.sh --report
 make test-legacy
 ```
 
-**测试结果**: 113 项测试全部通过
+**测试结果**: 149 项测试全部通过
 
 ### 测试覆盖
 
@@ -309,14 +314,14 @@ make test-legacy
 firewall/
 ├── src/
 │   ├── kernel-module/
-│   │   ├── firewall.c          # 内核模块主源码（~2400 行）
+│   │   ├── firewall.c          # 内核模块主源码（~2350 行）
 │   │   └── firewall.h          # 头文件（含统一日志系统）
 │   └── daemon/
 │       ├── firewall-daemon.c   # 守护进程主源码（~3200 行，Jail 系统）
-│       ├── http-exporter.c     # Prometheus 指标导出器
+│       ├── http-exporter.c     # Prometheus 指标导出器（libmicrohttpd）
 │       └── sqlite-persistent.c # SQLite 永久封禁持久化
 ├── tests/
-│   ├── run_tests.sh            # 统一测试入口（113 项测试）
+│   ├── run_tests.sh            # 统一测试入口（149 项测试）
 │   ├── test_framework.sh       # 测试框架核心
 │   ├── test_config.sh          # 测试配置
 │   ├── suites/                 # 16 个测试套件（含 3 个新增安全测试）

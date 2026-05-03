@@ -2,6 +2,42 @@
 
 所有重要的项目变更记录都在此文件中。
 
+## [v1.8] - 2026-05-03
+
+### 库替换
+- **HTTP 服务器 → libmicrohttpd**
+  - 替换 586 行自定义 socket/select() 实现为 ~350 行 libmicrohttpd 代码
+  - RFC 合规 HTTP 解析，自动处理连接管理
+  - 内置连接超时和限制（MHD_OPTION_CONNECTION_TIMEOUT/LIMIT）
+  - 支持 HTTPS（可选，编译时启用）
+  - 移除自定义 HTTP 解析、响应构建、速率限制代码
+- **POSIX Regex → PCRE2**
+  - 替换 regex.h 为 libpcre2-8
+  - JIT 编译支持，性能提升 2-10x
+  - 内置超时机制（防 ReDoS）
+  - 更好的错误信息和 Unicode 支持
+  - 使用 pcre2_compile/pcre2_match/pcre2_match_data 替代 regcomp/regexec
+
+### 代码重构
+- **内核模块 Ban 函数族统一**
+  - 提取 `__do_ban_ip()` 统一 ban_ip/ban_ip_permanent/ban_ip_with_duration
+  - 提取 `__do_unban_ip()` 统一 unban_ip/unban_permanent_ip
+  - 提取 `__find_ban_entry_rcu()` 统一 RCU 查询模式
+  - firewall.c 从 2425 行减少到 2350 行（-75 行）
+- **构建系统简化**
+  - 单 `make` 即可编译内核模块和守护进程
+  - 设置 `.DEFAULT_GOAL := all`
+  - 修复内核递归 make 的 jobserver 冲突
+
+### 测试扩展
+- 修复测试套件 14-16 的路径和函数调用问题
+- 总测试数量：149 项（原 113 + 修复 36 项）
+- 所有测试通过，零失败
+
+### 依赖变更
+- **新增**: libmicrohttpd-dev, libpcre2-dev
+- **保留**: libyaml-dev, libsqlite3-dev
+
 ## [v1.7] - 2026-05-03
 
 ### 安全加固
@@ -40,7 +76,7 @@
 - 新增测试套件 14：整数溢出防护 (6 项测试)
 - 新增测试套件 15：路径遍历防护 (6 项测试)
 - 新增测试套件 16：ReDoS 防护 (7 项测试)
-- 总测试数量：113 项 (原 94 + 新增 19)
+- 总测试数量：149 项（持续扩展）
 
 ## [v1.6] - 2026-04-22
 
