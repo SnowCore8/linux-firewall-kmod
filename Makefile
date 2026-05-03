@@ -50,7 +50,7 @@ kernel-module: $(KERNEL_SRC_DIR)/firewall.c $(KERNEL_SRC_DIR)/firewall.h
 # Build user-space daemon
 daemon: $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC)
 	@mkdir -p $(DAEMON_BUILD_DIR)
-	$(CC) $(SECURITY_CFLAGS) $(SECURITY_LDFLAGS) -Wno-unused-function -o $(DAEMON_BIN) $^ -lpthread -lyaml -lsqlite3
+	$(CC) $(SECURITY_CFLAGS) $(SECURITY_LDFLAGS) -Wno-unused-function -o $(DAEMON_BIN) $^ -lpthread -lyaml -lsqlite3 -lmicrohttpd
 
 # Build both kernel module and daemon (sequential to avoid jobserver issues)
 all:
