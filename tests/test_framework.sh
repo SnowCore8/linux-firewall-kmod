@@ -385,8 +385,8 @@ fw_cleanup() {
         rm -f "/lib/modules/$(uname -r)/kernel/net/firewall.ko"
         depmod -a 2>/dev/null
     fi
-    if [[ -f "/usr/local/bin/firewall-daemon" ]]; then
+    if [[ -f "/usr/local/sbin/firewall-daemon" ]]; then
         fw_log_error "测试结束后发现守护进程被安装到系统，立即清理"
-        rm -f "/usr/local/bin/firewall-daemon"
+        rm -f "/usr/local/sbin/firewall-daemon"
     fi
 }

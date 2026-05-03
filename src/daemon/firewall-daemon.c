@@ -1340,7 +1340,7 @@ static int parse_config(int argc, char *argv[])
             printf("\nOptions:\n");
             printf("  -c, --config FILE      Single configuration file path\n");
             printf("  -C, --config-dir DIR   Configuration directory (auto-loads all .yaml/.yml files)\n");
-            printf("                         Default: ./config/ or /etc/firewall/config/\n");
+            printf("                         Default: /etc/firewall/\n");
             printf("  -d, --daemonize        Run as daemon\n");
             printf("  -h, --help             Show this help\n");
             printf("\nConfig file format:\n");

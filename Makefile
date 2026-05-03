@@ -95,7 +95,10 @@ asan: $(DAEMON_SRC) $(EXPORTER_SRC) $(SQLITE_SRC)
 test: $(KERNEL_MODULE) $(DAEMON_BIN)
 	sudo ./tests/run_tests.sh
 
-# Run legacy test suite (old scripts)
+# Run legacy test suite (old individual test scripts)
+test-legacy: $(KERNEL_MODULE) $(DAEMON_BIN)
+	sudo ./tests/test_legacy.sh
+
 # Test performance
 test-performance: performance_test.c
 	@mkdir -p $(BUILD_DIR)
@@ -156,4 +159,4 @@ uninstall:
 	-systemctl daemon-reload 2>/dev/null || true
 	@echo "All firewall components removed."
 
-.PHONY: kernel-module daemon all-with-daemon all debug1 debug2 debug3 asan test test-performance clean install uninstall
+.PHONY: kernel-module daemon all-with-daemon all debug1 debug2 debug3 asan test test-legacy test-performance clean install uninstall

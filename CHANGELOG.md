@@ -89,7 +89,7 @@
   - 多配置文件可定义不同的 Jail，不会互相覆盖
 - **安全加固**
   - 安全编译选项（-fstack-protector-strong, -D_FORTIFY_SOURCE=2, PIE）
-  - systemd 服务安全加固（NoNewPrivileges=yes, ProtectSystem=strict 等 14 项）
+  - systemd 服务安全加固（NoNewPrivileges=yes, ProtectSystem=strict 等 15 项）
   - 内核态 TOCTOU 竞态修复（O_NOFOLLOW + inode 一致性检查）
   - 正则匹配边界检查（防止越界读取）
   - 永久 ban 容量检查（防止拒绝服务）

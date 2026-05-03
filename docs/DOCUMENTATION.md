@@ -24,7 +24,7 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁
    - **Jail 系统** - 类似 fail2ban 的多服务隔离配置
    - 每个 Jail 独立监控日志文件
    - 每个 Jail 有独立的失败计数器和封禁阈值
-   - 使用 POSIX 正则表达式解析日志
+   - 使用 PCRE2 正则表达式解析日志（JIT 加速，内置超时）
    - 自动管理封禁（通过 procfs 接口）
    - SQLite 永久封禁持久化支持
    - Prometheus metrics 导出（HTTP exporter）
@@ -42,7 +42,7 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁
 - ✅ 纯 IPv4 支持
 - ✅ C 语言用户态守护进程（无 Python 依赖）
   - Jail 级别独立配置（max_retries / findtime / ban_time）
-- ✅ POSIX 正则表达式日志解析（减少误判 90%+）
+- ✅ PCRE2 正则表达式日志解析（JIT 加速 2-10x，内置超时防 ReDoS）
 - ✅ 统一分级日志系统（fw_pr_err/warn/info/debug）
 - ✅ RCU 并发安全 + spinlock 保护
 - ✅ 状态持久化（保存/恢复封禁和白名单）
@@ -420,10 +420,10 @@ sudo cp build/kernel-module/firewall.ko /lib/modules/$(uname -r)/extra/
 sudo depmod -a
 
 # 安装守护进程
-sudo cp build/daemon/firewall-daemon /usr/local/bin/
+sudo cp build/daemon/firewall-daemon /usr/local/sbin/
 
 # 安装配置文件
-sudo install -d -m 755 /etc/firewall/config
+sudo install -d -m 755 /etc/firewall
 sudo install -m 644 config/*.yaml /etc/firewall/
 
 # 安装 systemd 服务
@@ -624,7 +624,8 @@ make test-legacy
 - **仅支持 IPv4**（纯 IPv4 实现）
 - **封禁上限 1024 IP**
 - **白名单上限 64 条目**
-- **无持久化存储**（模块重启后状态丢失，但有状态文件保存/恢复机制）
+- **内核模块状态非持久化**（模块重启后封禁列表丢失，但有状态文件保存/恢复机制）
+- **SQLite 永久封禁持久化**（可选功能，封禁记录保存在数据库中，重启后自动恢复）
 - **procfs 通信**（不支持批量操作）
 - **永久封禁依赖 SQLite**（可选功能，需要 libsqlite3）
 - **ban_time 限制**: 30 秒 ~ 1 年（31,536,000 秒，防止整数溢出）
@@ -636,7 +637,7 @@ make test-legacy
 firewall/
 ├── src/
 │   ├── kernel-module/
-│   │   ├── firewall.c          # 内核模块主源码（~2400 行）
+│   │   ├── firewall.c          # 内核模块主源码（~2350 行）
 │   │   └── firewall.h          # 头文件（含统一日志系统）
 │   └── daemon/
 │       ├── firewall-daemon.c   # 守护进程主源码（~3200 行，Jail 系统）

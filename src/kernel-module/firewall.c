@@ -2214,7 +2214,7 @@ static int __init firewall_init(void)
 {
     int ret;
 
-    fw_pr_info("Loading firewall module v1.4");
+    fw_pr_info("Loading firewall module v1.8");
 
     /* 参数下界检查 - 防止 0 或过小值导致异常行为 */
     /* FIX P1-5: Use READ_ONCE for atomic access to module parameters */
@@ -2347,4 +2347,4 @@ module_exit(firewall_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Firewall Authors");
 MODULE_DESCRIPTION("Kernel-level IP banning module (fail2ban alternative)");
-MODULE_VERSION("1.6");
+MODULE_VERSION("1.8");
