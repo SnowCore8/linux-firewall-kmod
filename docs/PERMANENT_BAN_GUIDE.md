@@ -167,7 +167,7 @@ struct ban_entry {
 
 ```bash
 # 完整编译
-make all-with-daemon
+make
 
 # 仅编译守护进程
 make daemon

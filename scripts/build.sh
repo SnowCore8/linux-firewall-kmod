@@ -43,7 +43,7 @@ build_daemon() {
 
 build_all() {
     info "Building all components..."
-    make -C "$PROJECT_ROOT" -f "$PROJECT_ROOT/Makefile" all-with-daemon
+    make -C "$PROJECT_ROOT" -f "$PROJECT_ROOT/Makefile" all
 }
 
 # Default to building everything

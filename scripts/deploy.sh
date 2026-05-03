@@ -143,7 +143,7 @@ mkdir -p /var/lib/firewall
 
 echo "  [4.3] Compiling project..."
 make clean
-make all-with-daemon
+make
 if [[ $? -ne 0 ]]; then
     echo "  ❌ Compilation failed"
     exit 1

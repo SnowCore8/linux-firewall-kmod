@@ -19,7 +19,7 @@ sudo yum install -y gcc make kernel-devel kernel-headers libyaml-devel sqlite-de
 ### 1.2 编译安装
 
 ```bash
-make all-with-daemon    # 编译内核模块 + 守护进程
+make                    # 编译内核模块 + 守护进程
 sudo make install       # 安装到系统
 ```
 

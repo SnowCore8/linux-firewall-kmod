@@ -25,7 +25,7 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁
 
 ```bash
 # 编译两者（内核模块 + 守护进程）
-make all-with-daemon
+make
 
 # 仅编译内核模块 / 仅编译守护进程
 make kernel-module
