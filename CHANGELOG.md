@@ -2,6 +2,27 @@
 
 所有重要的项目变更记录都在此文件中。
 
+## [v1.9] - 2026-05-04
+
+### Critical 安全/并发修复
+- **内核模块锁一致性** - `__do_ban_ip`/`ban_ip_with_duration` 改用 RCU 读取 whitelist，消除并发竞态
+- **RCU 删除安全** - `hash_del` → `hlist_del_rcu`，防止 RCU 读取期间内存访问错误
+- **状态保存/恢复** - 修复永久 ban 剩余时间下溢 + `is_permanent` 字段正确初始化
+- **khash 悬空指针** - 使用 `strdup` 存储 key，销毁时正确释放，防止 use-after-free
+- **配置重载并发安全** - 锁内复制数据防 use-after-free + `parse_config_file` 双缓冲模式（持锁 ~340→~50 行）
+- **HTTP 线程优雅退出** - `atomic_bool` 标志控制，防止线程泄漏
+- **SQLite 线程安全** - 添加 `pthread_mutex_t` 保护，防止并发数据库访问
+
+### 代码质量改进
+- 统一 IPv4 地址验证为 `validate_ipv4_address()`
+- 删除无意义的 `tot_len > 0xFFFF` 检查
+- 分片包添加 ratelimited 日志监控
+- `secure_procfs_write` close 返回值与注释统一
+
+### 测试
+- 测试脚本路径修复：`/tmp` → `/var/log`
+- 147/147 测试全部通过
+
 ## [v1.8] - 2026-05-03
 
 ### 库替换

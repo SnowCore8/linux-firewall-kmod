@@ -1,5 +1,7 @@
 # 永久黑名单功能指南 (SQLite 持久化)
 
+> **v1.9 更新**: 新增 SQLite 线程安全保护（pthread_mutex_t），修复状态保存/恢复中的 is_permanent 初始化和剩余时间计算问题
+
 > **v1.7 更新**: SQLite 绑定已从 `SQLITE_STATIC` 改为 `SQLITE_TRANSIENT`，修复了潜在的 use-after-free 漏洞。
 
 ## 概述
@@ -110,6 +112,12 @@ struct ban_entry {
 };
 ```
 
+**v1.9 修复**: `is_permanent` 字段在所有创建路径中正确初始化：
+- `ban_ip_permanent()` 中设置为 `true`
+- 状态保存时通过 `save_state_to_file()` 持久化 `P` 标记
+- 状态恢复时通过 `restore_state_from_file()` 正确解析 `P` 标记并恢复 `is_permanent = true`
+- 修复了之前恢复后 `is_permanent` 未正确初始化导致剩余时间计算错误的问题
+
 ### 核心 API
 
 | 函数 | 说明 |
@@ -133,6 +141,7 @@ struct ban_entry {
 | **能力检查** | procfs 写入检查 `CAP_NET_ADMIN` |
 | **软删除** | `is_active=0` 而非物理删除，保留审计记录 |
 | **路径安全** | `ensure_db_dir()` 验证路径合法性 + `strdup()` NULL 检查 |
+| **线程安全** | pthread_mutex_t 保护所有 SQLite 公共接口，防止并发访问竞争 |
 
 ## 测试覆盖
 
