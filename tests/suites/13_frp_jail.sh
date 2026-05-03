@@ -27,7 +27,7 @@ fw_subsection "FRP 日志解析"
 fw_ensure_module_loaded "$KERNEL_MODULE_PATH" 2>/dev/null || {
     skip_test "内核模块无法加载，跳过 FRP 日志解析测试"
     fw_ensure_module_unloaded
-    exit 0
+    return 0
 }
 
 # 创建 FRP 测试日志
@@ -67,7 +67,7 @@ sleep 1
 if [[ -r "$PROC_BANS" ]]; then
     local_ban_count=$(wc -l < "$PROC_BANS" 2>/dev/null || echo 0)
     fw_log_info "FRP 日志解析后封禁 IP 数量: $local_ban_count"
-    assert_ge "$local_ban_count" 0 "FRP 日志解析处理成功"
+    assert_ge "$local_ban_count" 1 "FRP 日志解析处理成功，有 IP 被封禁"
 else
     warn_test "bans 接口不可读"
 fi

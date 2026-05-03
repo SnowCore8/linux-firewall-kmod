@@ -47,9 +47,19 @@ local_cycle_pass=true
 for cycle in $(seq 1 5); do
     local_cycle_ip="198.51.100.$cycle"
     echo "$local_cycle_ip" > "$PROC_BANS" 2>/dev/null || true
-    sleep 0.1
+    sleep 0.2
     echo "unban $local_cycle_ip" > "$PROC_BANS" 2>/dev/null || true
+    sleep 0.2
 done
-assert_true "true" "5 次封禁/解封循环稳定"
+# Verify all cycle IPs are unbanned (check each one individually)
+local_all_unbanned=true
+for cycle in $(seq 1 5); do
+    local_cycle_ip="198.51.100.$cycle"
+    if grep -q "$local_cycle_ip" "$PROC_BANS" 2>/dev/null; then
+        local_all_unbanned=false
+        break
+    fi
+done
+assert_true "[[ $local_all_unbanned == true ]]" "5 次封禁/解封循环稳定，所有 IP 已解封"
 
 fw_ensure_module_unloaded

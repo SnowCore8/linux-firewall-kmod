@@ -108,7 +108,10 @@ if [[ ! -f "$KERNEL_MODULE_PATH" ]]; then
         exit 1
     fi
 fi
-assert_file_exists "$KERNEL_MODULE_PATH" "内核模块存在"
+if [[ ! -f "$KERNEL_MODULE_PATH" ]]; then
+    fw_log_error "内核模块不存在: $KERNEL_MODULE_PATH"
+    exit 1
+fi
 
 # 检查 daemon 二进制（如果测试需要）
 DAEMON_BIN="$PROJECT_ROOT/build/daemon/firewall-daemon"

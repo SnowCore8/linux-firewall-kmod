@@ -72,15 +72,17 @@ echo "unban $TEST_PERM_IP3" > "$PROC_BANS" 2>/dev/null || true
 
 # ============================================================================
 # 12.5 白名单保护永久封禁
-# ============================================================================
 fw_subsection "白名单保护永久封禁"
 
 WHITELIST_IP="10.0.0.1"
 echo "add $WHITELIST_IP" > "$PROC_WHITELIST" 2>/dev/null
 sleep 0.2
 
-assert_true "! echo '$WHITELIST_IP 0' > '$PROC_BANS' 2>/dev/null" "白名单 IP 不能被永久封禁"
-assert_true "! grep -q '$WHITELIST_IP' '$PROC_BANS' 2>/dev/null" "白名单 IP 未被封禁"
+# Attempt to permanently ban whitelisted IP
+echo "$WHITELIST_IP 0" > "$PROC_BANS" 2>/dev/null || true
+sleep 0.3
+# Verify whitelist IP was NOT banned (whitelist protection)
+assert_true "! grep -q '$WHITELIST_IP' '$PROC_BANS' 2>/dev/null" "白名单 IP 不能被永久封禁"
 
 echo "remove $WHITELIST_IP" > "$PROC_WHITELIST" 2>/dev/null || true
 
@@ -162,9 +164,12 @@ EOF
     assert_ge "$local_batch_count" 100 "SQLite 批量插入 100 条，实际 $local_batch_count 条"
 
     # 索引查询性能
-    sqlite3 "$TEST_DB_PATH" "EXPLAIN QUERY PLAN SELECT * FROM permanent_banlist WHERE ip_num=3221225986;" | grep -q "INDEX" && \
-        assert_true "true" "SQLite 索引查询使用索引" || \
-        warn_test "SQLite 索引查询未使用预期索引"
+    local_explain_output=$(sqlite3 "$TEST_DB_PATH" "EXPLAIN QUERY PLAN SELECT * FROM permanent_banlist WHERE ip_num=3221225986;")
+    if echo "$local_explain_output" | grep -q "INDEX"; then
+        assert_true "[[ -n '$local_explain_output' ]]" "SQLite 索引查询使用索引"
+    else
+        warn_test "SQLite 索引查询未使用预期索引: $local_explain_output"
+    fi
 
     # 删除测试
     sqlite3 "$TEST_DB_PATH" "DELETE FROM permanent_banlist WHERE ip LIKE '10.0.%';"

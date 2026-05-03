@@ -8,7 +8,7 @@ fw_subsection "守护进程检查"
 if [[ ! -x "$DAEMON_PATH" ]]; then
     skip_test "守护进程未编译，跳过日志解析测试"
     fw_ensure_module_unloaded
-    exit 0
+    return 0
 fi
 
 # 10.2 构造测试日志
@@ -107,7 +107,8 @@ EOF
 
 timeout 5 "$DAEMON_PATH" -c "$local_special_yaml" 2>&1 || true
 sleep 1
-assert_true "true" "特殊字符日志处理未崩溃"
+# Verify procfs is still accessible after daemon ran with special characters
+assert_true "[[ -r '$PROC_BANS' ]]" "特殊字符日志处理后 procfs 仍可访问"
 
 rm -f "$local_special_log" "$local_special_yaml"
 
@@ -134,7 +135,8 @@ jails:
 EOF
 
 timeout 3 "$DAEMON_PATH" -c "$local_empty_yaml" 2>&1 || true
-assert_true "true" "空日志文件处理未崩溃"
+# Verify procfs is still accessible after daemon ran with empty log
+assert_true "[[ -r '$PROC_BANS' ]]" "空日志文件处理后 procfs 仍可访问"
 
 rm -f "/tmp/fw_test_empty_$$.log" "$local_empty_yaml"
 
