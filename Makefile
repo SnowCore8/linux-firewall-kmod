@@ -66,9 +66,6 @@ all:
 	$(MAKE) daemon
 	@echo "Build complete: $(KERNEL_MODULE) and $(DAEMON_BIN)"
 
-# Alias for backward compatibility
-all-with-daemon: all
-
 # Debug builds
 debug1:
 	$(MAKE) -C $(PWD) kernel-module DEBUG_LEVEL=1
@@ -159,4 +156,4 @@ uninstall:
 	-systemctl daemon-reload 2>/dev/null || true
 	@echo "All firewall components removed."
 
-.PHONY: kernel-module daemon all-with-daemon all debug1 debug2 debug3 asan test test-legacy test-performance clean install uninstall
+.PHONY: kernel-module daemon all debug1 debug2 debug3 asan test test-legacy test-performance clean install uninstall
