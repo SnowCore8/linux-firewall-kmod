@@ -4,6 +4,13 @@
 # Set default goal
 .DEFAULT_GOAL := all
 
+# Installation paths (FHS compliant)
+PREFIX ?= /usr/local
+SBINDIR ?= $(PREFIX)/sbin
+ETCDIR ?= /etc
+RUNSTATEDIR ?= /var/lib
+KERNEL_MODDIR ?= /lib/modules/$(shell uname -r)/extra
+
 # Kernel build directory (adjust if needed)
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
@@ -97,13 +104,13 @@ test-performance: performance_test.c
 
 # Uninstall targets
 uninstall-daemon:
-	rm -f /usr/local/bin/firewall-daemon
-	@echo "firewall-daemon removed from /usr/local/bin/"
+	rm -f $(SBINDIR)/firewall-daemon
+	@echo "firewall-daemon removed from $(SBINDIR)/"
 
 uninstall-kernel:
-	rm -f /lib/modules/$(shell uname -r)/kernel/net/firewall.ko
+	rm -f $(KERNEL_MODDIR)/firewall.ko
 	depmod -a
-	@echo "firewall.ko removed and module dependencies updated."
+	@echo "firewall.ko removed from $(KERNEL_MODDIR)/ and module dependencies updated."
 
 # Clean build artifacts
 clean:
@@ -113,31 +120,37 @@ clean:
 		$(KERNEL_SRC_DIR)/Module.symvers
 	@echo "Build directory cleaned."
 
-# Install target - install everything
+# Install target - install everything (FHS compliant)
 install: $(KERNEL_MODULE) $(DAEMON_BIN)
 	@echo "Installing firewall components..."
-	# Kernel module
-	cp $(KERNEL_MODULE) /lib/modules/$(shell uname -r)/kernel/net/
+	# Kernel module (third-party out-of-tree module goes to extra/)
+	install -D -m 644 $(KERNEL_MODULE) $(DESTDIR)$(KERNEL_MODDIR)/firewall.ko
 	depmod -a
-	# Daemon
-	cp $(DAEMON_BIN) /usr/local/bin/
-	# YAML configs
-	install -d -m 755 /etc/firewall/config
-	install -m 644 config/*.yaml /etc/firewall/config/
-	# systemd service
-	install -D -m 644 firewall-daemon.service /etc/systemd/system/firewall-daemon.service
+	# Daemon (system service goes to sbin/)
+	install -D -m 755 $(DAEMON_BIN) $(DESTDIR)$(SBINDIR)/firewall-daemon
+	# State directory for SQLite database and runtime data
+	install -d -m 750 $(DESTDIR)$(RUNSTATEDIR)/firewall
+	# Configuration files (directly under /etc/firewall/, no config/ subdirectory)
+	install -d -m 755 $(DESTDIR)$(ETCDIR)/firewall
+	install -m 644 config/*.yaml $(DESTDIR)$(ETCDIR)/firewall/
+	# systemd service file
+	install -D -m 644 firewall-daemon.service $(DESTDIR)/etc/systemd/system/firewall-daemon.service
 	systemctl daemon-reload
 	@echo ""
 	@echo "Installation complete!"
+	@echo "  Kernel module: $(KERNEL_MODDIR)/firewall.ko"
+	@echo "  Daemon:        $(SBINDIR)/firewall-daemon"
+	@echo "  Config:        $(ETCDIR)/firewall/"
+	@echo "  State:         $(RUNSTATEDIR)/firewall/"
 	@echo "To start daemon at boot:"
 	@echo "  systemctl enable firewall-daemon.service"
 
 # Uninstall target - remove everything
 uninstall:
 	@echo "Removing firewall components..."
-	rm -f /lib/modules/$(shell uname -r)/kernel/net/firewall.ko
-	rm -f /usr/local/bin/firewall-daemon
-	rm -rf /etc/firewall/config
+	rm -f $(KERNEL_MODDIR)/firewall.ko
+	rm -f $(SBINDIR)/firewall-daemon
+	rm -rf $(ETCDIR)/firewall
 	rm -f /etc/systemd/system/firewall-daemon.service
 	depmod -a
 	-systemctl daemon-reload 2>/dev/null || true

@@ -107,7 +107,7 @@ echo "ban_time 1200" | sudo tee /proc/firewall/config
 sudo ./build/daemon/firewall-daemon
 
 # 指定配置目录
-sudo ./build/daemon/firewall-daemon -C /etc/firewall/config/
+sudo ./build/daemon/firewall-daemon -C /etc/firewall/
 
 # 指定单个配置文件
 sudo ./build/daemon/firewall-daemon -c config/default.yaml
@@ -135,7 +135,7 @@ sudo ./build/daemon/firewall-daemon -c config/default.yaml --daemonize
 | 参数 | 说明 | 默认值 | 状态 |
 |------|------|--------|------|
 | `-c` | 配置文件路径 | - | ✅ 推荐使用 |
-| `-C` | 配置目录路径 | ./config/ 或 /etc/firewall/config/ | ✅ 推荐使用 |
+| `-C` | 配置目录路径 | ./config/ 或 /etc/firewall/ | ✅ 推荐使用 |
 | `-d`, `--daemonize` | 后台运行模式 | false | ✅ 生产环境推荐 |
 | `-h`, `--help` | 显示帮助信息 | - | - |
 
@@ -147,7 +147,7 @@ sudo ./build/daemon/firewall-daemon -c config/default.yaml --daemonize
 
 **配置目录（推荐）**
 
-默认情况下，守护进程会自动加载 `./config/` 或 `/etc/firewall/config/` 目录下的所有 `.yaml` / `.yml` 文件：
+默认情况下，守护进程会自动加载 `./config/` 或 `/etc/firewall/` 目录下的所有 `.yaml` / `.yml` 文件：
 
 ```
 config/
@@ -160,7 +160,7 @@ config/
 sudo ./build/daemon/firewall-daemon
 
 # 指定配置目录
-sudo ./build/daemon/firewall-daemon -C /etc/firewall/config/
+sudo ./build/daemon/firewall-daemon -C /etc/firewall/
 ```
 
 **单个配置文件**

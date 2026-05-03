@@ -11,7 +11,7 @@ fi
 
 REMOTE_HOST="$1"
 REMOTE_USER="${2:-root}"
-PROJECT_DIR="/root/firewall"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "========================================="
 echo "Firewall Deployment Script"
@@ -85,28 +85,28 @@ if [[ $? -ne 0 ]]; then
     exit 1
 fi
 
-# 2. 打包源码（不含 build 目录）
+# 2. Package source code (excluding build directory)
 echo ""
-echo "[2/7] 打包源码..."
-cd /root
-tar czf firewall-src.tar.gz \
-    firewall/src/ \
-    firewall/config/ \
-    firewall/tests/ \
-    firewall/Makefile \
-    firewall/firewall-daemon.service \
-    firewall/scripts/
-echo "✅ 打包完成"
+echo "[2/7] Packaging source code..."
+cd "$PROJECT_DIR"
+tar czf /tmp/firewall-src.tar.gz \
+    src/ \
+    config/ \
+    tests/ \
+    Makefile \
+    firewall-daemon.service \
+    scripts/
+echo "✅ Packaging complete"
 
 # 3. Upload to remote server
 echo ""
 echo "[3/7] Uploading to remote server..."
-scp firewall-src.tar.gz "$REMOTE_USER@$REMOTE_HOST":/tmp/
+scp /tmp/firewall-src.tar.gz "$REMOTE_USER@$REMOTE_HOST":/tmp/
 if [[ $? -ne 0 ]]; then
-    echo "❌ 上传失败"
+    echo "❌ Upload failed"
     exit 1
 fi
-echo "✅ 上传完成"
+echo "✅ Upload complete"
 
 # 4. Remote compilation and installation
 echo ""
@@ -114,35 +114,35 @@ echo "[4/7] Remote compilation and installation..."
 ssh -o StrictHostKeyChecking=accept-new "$REMOTE_USER@$REMOTE_HOST" << 'REMOTE_SCRIPT'
 set -e
 
-echo "  [4.1] 解压源码..."
-cd /root
+echo "  [4.1] Extracting source..."
+REMOTE_WORK_DIR=$(mktemp -d)
+cd "$REMOTE_WORK_DIR"
 tar xzf /tmp/firewall-src.tar.gz
 
-echo "  [4.2] 创建必要目录..."
+echo "  [4.2] Creating required directories..."
 mkdir -p /var/log/frp
 mkdir -p /var/lib/firewall
 
-echo "  [4.3] 编译项目..."
-cd /root/firewall
+echo "  [4.3] Compiling project..."
 make clean
 make all-with-daemon
 if [[ $? -ne 0 ]]; then
-    echo "  ❌ 编译失败"
+    echo "  ❌ Compilation failed"
     exit 1
 fi
-echo "  ✅ 编译成功"
+echo "  ✅ Compilation successful"
 
-echo "  [4.4] 安装到系统..."
+echo "  [4.4] Installing to system..."
 make install
 
-echo "  [4.5] 加载内核模块..."
+echo "  [4.5] Loading kernel module..."
 rmmod firewall 2>/dev/null || true
 sleep 1
-insmod build/kernel-module/firewall.ko fw_ban_time=600
-echo "  ✅ 内核模块已加载"
+modprobe firewall 2>/dev/null || insmod /lib/modules/$(uname -r)/extra/firewall.ko fw_ban_time=600
+echo "  ✅ Kernel module loaded"
 lsmod | grep firewall
 
-echo "  [4.6] 配置守护进程..."
+echo "  [4.6] Configuring daemon..."
 pkill -9 firewall-daemon 2>/dev/null || true
 sleep 1
 systemctl daemon-reload
@@ -156,7 +156,7 @@ echo "  [4.7] 验证部署..."
 echo "  内核版本: $(uname -r)"
 echo "  内核模块: $(lsmod | grep firewall | awk '{print $1, $2, $3}')"
 echo "  守护进程: $(ps aux | grep firewall-daemon | grep -v grep | wc -l) 个实例"
-echo "  PID 文件: $(cat /var/run/firewall-daemon.pid 2>/dev/null || echo '不存在')"
+echo "  PID file: $(cat /run/firewall-daemon.pid 2>/dev/null || echo 'not found')"
 echo "  封禁统计: $(cat /proc/firewall/stats | grep -E 'current_bans|current_whitelist')"
 echo "  Prometheus: $(curl -s http://localhost:9119/metrics 2>/dev/null | head -3 || echo '不可用')"
 
@@ -206,7 +206,7 @@ EOF
 # 7. Clean up local temporary files
 echo ""
 echo "[7/7] Cleaning up local temporary files..."
-rm -f /root/firewall-src.tar.gz
+rm -f /tmp/firewall-src.tar.gz
 echo "✅ Cleanup complete"
 
 echo ""

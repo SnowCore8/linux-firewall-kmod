@@ -42,7 +42,7 @@ static int ensure_db_dir(const char *db_path)
 
     if (stat(dir, &st) != 0) {
         /* 目录不存在，尝试创建 */
-        if (mkdir(dir, 0755) != 0) {
+        if (mkdir(dir, 0750) != 0) {
             fprintf(stderr, "firewall: Failed to create db directory %s: %s\n",
                     dir, strerror(errno));
             free(path_copy);

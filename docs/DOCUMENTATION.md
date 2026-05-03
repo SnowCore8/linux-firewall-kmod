@@ -416,7 +416,7 @@ sudo make install
 
 # 或手动安装
 # 安装内核模块
-sudo cp build/kernel-module/firewall.ko /lib/modules/$(uname -r)/kernel/net/
+sudo cp build/kernel-module/firewall.ko /lib/modules/$(uname -r)/extra/
 sudo depmod -a
 
 # 安装守护进程
@@ -424,7 +424,7 @@ sudo cp build/daemon/firewall-daemon /usr/local/bin/
 
 # 安装配置文件
 sudo install -d -m 755 /etc/firewall/config
-sudo install -m 644 config/*.yaml /etc/firewall/config/
+sudo install -m 644 config/*.yaml /etc/firewall/
 
 # 安装 systemd 服务
 sudo install -D -m 644 firewall-daemon.service /etc/systemd/system/firewall-daemon.service
@@ -453,7 +453,7 @@ sudo rmmod firewall
 sudo ./build/daemon/firewall-daemon
 
 # 指定配置目录
-sudo ./build/daemon/firewall-daemon -C /etc/firewall/config/
+sudo ./build/daemon/firewall-daemon -C /etc/firewall/
 
 # 指定单个配置文件
 sudo ./build/daemon/firewall-daemon -c config/default.yaml
@@ -497,7 +497,7 @@ sudo ./build/daemon/firewall-daemon -c config/default.yaml --daemonize
 | 参数 | 说明 | 默认值 | 状态 |
 |------|------|--------|------|
 | `-c` | 配置文件路径 | - | ✅ 推荐使用 |
-| `-C` | 配置目录路径 | ./config/ 或 /etc/firewall/config/ | ✅ 推荐使用 |
+| `-C` | 配置目录路径 | ./config/ 或 /etc/firewall/ | ✅ 推荐使用 |
 | `-d`, `--daemonize` | 后台运行模式 | false | ✅ 生产环境推荐 |
 | `-h`, `--help` | 显示帮助信息 | - | - |
 

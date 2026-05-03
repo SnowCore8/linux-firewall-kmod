@@ -1237,10 +1237,9 @@ static int parse_config(int argc, char *argv[])
         }
     }
 
-    /* Default config directory: ./config/ relative to executable or /etc/firewall/config/ */
+    /* Default config directory: /etc/firewall/ (FHS compliant) */
     const char *default_config_dirs[] = {
-        "./config",
-        "/etc/firewall/config",
+        "/etc/firewall",
         NULL
     };
 
@@ -2163,7 +2162,7 @@ static void daemonize_process(void)
     }
 
     /* Write PID file for systemd Type=forking support */
-    FILE *pidfile = fopen("/var/run/firewall-daemon.pid", "w");
+    FILE *pidfile = fopen("/run/firewall-daemon.pid", "w");
     if (pidfile) {
         fprintf(pidfile, "%d\n", getpid());
         fclose(pidfile);
