@@ -54,9 +54,9 @@ Firewall 是 Linux 内核模块版本的 fail2ban，采用**双层架构**：内
 
 | 组件 | 文件 | 行数 | 职责 |
 |------|------|------|------|
-| 内核模块 | `src/kernel-module/firewall.c` | ~2350 | Netfilter 过滤、封禁表管理 |
+| 内核模块 | `src/kernel-module/firewall.c` | 2389 | Netfilter 过滤、封禁表管理 |
 | 内核头文件 | `src/kernel-module/firewall.h` | ~191 | 数据结构、日志宏、函数声明 |
-| 守护进程 | `src/daemon/firewall-daemon.c` | ~3476 | Jail 系统、日志解析、配置管理 |
+| 守护进程 | `src/daemon/firewall-daemon.c` | 3475 | Jail 系统、日志解析、配置管理 |
 | HTTP 导出器 | `src/daemon/http-exporter.c` | ~374 | Prometheus 指标服务 |
 | SQLite 持久化 | `src/daemon/sqlite-persistent.c` | ~689 | 永久封禁数据库 |
 
