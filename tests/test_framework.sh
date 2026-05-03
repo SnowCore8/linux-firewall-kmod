@@ -370,7 +370,37 @@ fw_cleanup_section() {
 # 跳过测试（兼容函数）
 fw_skip() {
     local msg="${1:-跳过}"
-    fw_log_info "$msg"
+    TEST_SKIP=$((TEST_SKIP + 1))
+    TEST_TOTAL=$((TEST_TOTAL + 1))
+    echo -e "  ${CYAN}[SKIP]${NC} $msg"
+    TEST_RESULTS+=("SKIP|$CURRENT_SUITE|$msg")
+}
+
+# 显式标记测试通过
+fw_pass() {
+    local msg="${1:-测试通过}"
+    TEST_PASS=$((TEST_PASS + 1))
+    TEST_TOTAL=$((TEST_TOTAL + 1))
+    echo -e "  ${GREEN}[PASS]${NC} $msg"
+    TEST_RESULTS+=("PASS|$CURRENT_SUITE|$msg")
+}
+
+# 显式标记测试失败
+fw_fail() {
+    local msg="${1:-测试失败}"
+    TEST_FAIL=$((TEST_FAIL + 1))
+    TEST_TOTAL=$((TEST_TOTAL + 1))
+    echo -e "  ${RED}[FAIL]${NC} $msg"
+    TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg")
+}
+
+# 显式标记测试警告
+fw_warn() {
+    local msg="${1:-测试警告}"
+    TEST_WARN=$((TEST_WARN + 1))
+    TEST_TOTAL=$((TEST_TOTAL + 1))
+    echo -e "  ${YELLOW}[WARN]${NC} $msg"
+    TEST_RESULTS+=("WARN|$CURRENT_SUITE|$msg")
 }
 
 fw_cleanup() {
