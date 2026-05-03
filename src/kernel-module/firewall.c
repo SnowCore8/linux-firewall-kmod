@@ -241,145 +241,37 @@ EXPORT_SYMBOL_GPL(get_fw_info);
  * ban_ip - Add an IPv4 to the ban list
  * Optimized version: Uses rwlock for better concurrency
  */
-int ban_ip(struct firewall_info *fw, __be32 ip)
+/*
+ * __do_ban_ip - Internal unified ban function
+ * @fw: firewall info structure
+ * @ip: IP address to ban
+ * @unban_time: when to unban (0 = permanent)
+ * @is_permanent: whether this is a permanent ban
+ * @log_msg: log message suffix (e.g., "for %u seconds", "permanently")
+ * @log_arg: argument for log message (0 if not needed)
+ *
+ * This is the unified internal ban implementation used by all public
+ * ban functions. Handles whitelist check, duplicate detection, capacity
+ * check, allocation, and hash insertion.
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
+                       unsigned long unban_time, bool is_permanent,
+                       const char *log_msg, unsigned long log_arg)
 {
     struct ban_entry *entry;
     struct whitelist_entry *wl_entry;
-    int ret = 0;
     u32 hash;
     int bkt;
-
-    FW_DEBUG(1, "ENTRY: ban_ip(ip=%pI4)", &ip);
 
     /* Validate IP input */
     if (!ip) {
         fw_pr_err("Invalid IP address for banning: %pI4", &ip);
-        FW_DEBUG(1, "EXIT: ban_ip -> -EINVAL (invalid IP)");
         return -EINVAL;
     }
 
-    FW_DEBUG(2, "Attempting to ban IPv4: %pI4", &ip);
-
-    /* Acquire lock before any checks to eliminate TOCTOU race condition.
-     * This ensures whitelist check and ban operation are atomic. */
-    spin_lock(&fw->lock);
-
-    /* Check whitelist under lock protection to prevent TOCTOU race.
-     * Another thread could add the IP to whitelist between an unlocked
-     * check and the actual ban operation. */
-    hash_for_each(fw->whitelist_table, bkt, wl_entry, hash) {
-        if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
-            spin_unlock(&fw->lock);
-            atomic_inc(&fw->whitelist_reject_count);
-            fw_pr_warn("REFUSED to ban whitelisted IP %pI4", &ip);
-            FW_DEBUG(2, "IP %pI4 is in whitelist, refusing to ban", &ip);
-            FW_DEBUG(1, "EXIT: ban_ip -> -EPERM (whitelisted)");
-            return -EPERM;
-        }
-    }
-
-    /* Check if already banned under same lock to ensure consistency */
-    hash = hash_min(ip, BAN_HASH_BITS);
-    hash_for_each_possible(fw->ban_table, entry, hash, ip) {
-        if (compare_ips(entry->ip, ip)) {
-            if (time_before(jiffies, entry->unban_time)) {
-                /* Still banned - return early */
-                spin_unlock(&fw->lock);
-                FW_DEBUG(2, "IP %pI4 still banned, returning early", &ip);
-                FW_DEBUG(1, "EXIT: ban_ip -> 0 (already banned under lock)");
-                return 0;
-            } else {
-                /* Entry exists but expired - update it */
-                unsigned long ban_secs = READ_ONCE(fw_ban_time);
-                unsigned long ban_duration;
-                if (check_mul_overflow(ban_secs, (unsigned long)HZ, &ban_duration)) {
-                    spin_unlock(&fw->lock);
-                    fw_pr_err("ban_time overflow detected");
-                    FW_DEBUG(1, "EXIT: ban_ip -> -EINVAL (overflow)");
-                    return -EINVAL;
-                }
-                entry->ban_time = jiffies;
-                entry->unban_time = jiffies + ban_duration;
-                atomic_set(&entry->retry_count, 0);
-                spin_unlock(&fw->lock);
-                FW_DEBUG(2, "Updated expired ban entry for IP %pI4", &ip);
-                FW_DEBUG(1, "EXIT: ban_ip -> 0 (updated expired entry)");
-                return 0;
-            }
-        }
-    }
-
-    if (atomic_read(&fw->ban_count) >= MAX_BAN_ENTRIES) {
-        spin_unlock(&fw->lock);
-        atomic_inc(&fw->ban_table_full_count);
-        fw_pr_warn("Ban table full, cannot ban %pI4", &ip);
-        FW_DEBUG(1, "EXIT: ban_ip -> -ENOSPC (ban table full)");
-        return -ENOSPC;
-    }
-
-    entry = kmalloc(sizeof(*entry), GFP_ATOMIC);  /* Use GFP_ATOMIC to avoid sleeping in interrupt context */
-    if (!entry) {
-        spin_unlock(&fw->lock);
-        atomic_inc(&fw->alloc_failure_count);
-        fw_pr_err("Failed to allocate memory for ban entry for IP %pI4", &ip);
-        FW_DEBUG(1, "EXIT: ban_ip -> -ENOMEM (alloc failed)");
-        return -ENOMEM;
-    }
-
-    entry->ip = ip;
-    entry->ban_time = jiffies;
-    {
-        unsigned long ban_secs = READ_ONCE(fw_ban_time);
-        unsigned long ban_duration;
-        if (check_mul_overflow(ban_secs, (unsigned long)HZ, &ban_duration)) {
-            spin_unlock(&fw->lock);
-            kfree(entry);
-            fw_pr_err("ban_time overflow detected");
-            FW_DEBUG(1, "EXIT: ban_ip -> -EINVAL (overflow)");
-            return -EINVAL;
-        }
-        entry->unban_time = jiffies + ban_duration;
-    }
-    entry->is_permanent = false;  /* Default to temporary ban */
-    atomic_set(&entry->retry_count, 0);
-
-    hash_add(fw->ban_table, &entry->hash, ip);
-    atomic_inc(&fw->ban_count);
-    atomic_inc(&fw->total_ban_count);
-
-    spin_unlock(&fw->lock);
-
-    FW_DEBUG(1, "Successfully added ban entry for IP %pI4", &ip);
-    /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding when
-     * many IPs are being banned in a short time period. */
-    fw_pr_info_ratelimited("IP %pI4 banned for %u seconds", &ip, READ_ONCE(fw_ban_time));
-    FW_DEBUG(1, "EXIT: ban_ip -> 0 (success)");
-    return ret;
-}
-
-/*
- * ban_ip_permanent - Add an IPv4 to the permanent ban list
- * Permanent bans never expire (unban_time = 0)
- */
-int ban_ip_permanent(struct firewall_info *fw, __be32 ip)
-{
-    struct ban_entry *entry;
-    struct whitelist_entry *wl_entry;
-    u32 hash;
-    int bkt;
-
-    FW_DEBUG(1, "ENTRY: ban_ip_permanent(ip=%pI4)", &ip);
-
-    /* Validate IP input */
-    if (!ip) {
-        fw_pr_err("Invalid IP address for permanent banning: %pI4", &ip);
-        FW_DEBUG(1, "EXIT: ban_ip_permanent -> -EINVAL (invalid IP)");
-        return -EINVAL;
-    }
-
-    FW_DEBUG(2, "Attempting to permanently ban IPv4: %pI4", &ip);
-
-    /* Acquire lock before any checks to eliminate TOCTOU race condition. */
+    /* Acquire lock before any checks to eliminate TOCTOU race condition */
     spin_lock(&fw->lock);
 
     /* Check whitelist under lock protection */
@@ -387,9 +279,7 @@ int ban_ip_permanent(struct firewall_info *fw, __be32 ip)
         if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
             spin_unlock(&fw->lock);
             atomic_inc(&fw->whitelist_reject_count);
-            fw_pr_warn("REFUSED to permanently ban whitelisted IP %pI4", &ip);
-            FW_DEBUG(2, "IP %pI4 is in whitelist, refusing to ban", &ip);
-            FW_DEBUG(1, "EXIT: ban_ip_permanent -> -EPERM (whitelisted)");
+            fw_pr_warn("REFUSED to ban whitelisted IP %pI4", &ip);
             return -EPERM;
         }
     }
@@ -399,48 +289,41 @@ int ban_ip_permanent(struct firewall_info *fw, __be32 ip)
     hash_for_each_possible(fw->ban_table, entry, hash, ip) {
         if (compare_ips(entry->ip, ip)) {
             if (entry->is_permanent || time_before(jiffies, entry->unban_time)) {
-                /* Still banned or permanent - return early */
                 spin_unlock(&fw->lock);
-                FW_DEBUG(2, "IP %pI4 already banned, returning early", &ip);
-                FW_DEBUG(1, "EXIT: ban_ip_permanent -> 0 (already banned)");
-                return 0;
+                return 0;  /* Already banned */
             } else {
-                /* Entry exists but expired - update it to permanent */
+                /* Entry exists but expired - update it */
                 entry->ban_time = jiffies;
-                entry->unban_time = 0;  /* Permanent */
-                entry->is_permanent = true;
+                entry->unban_time = unban_time;
+                entry->is_permanent = is_permanent;
                 atomic_set(&entry->retry_count, 0);
                 spin_unlock(&fw->lock);
-                FW_DEBUG(2, "Updated expired ban entry to permanent for IP %pI4", &ip);
-                fw_pr_info("IP %pI4 permanently banned", &ip);
-                FW_DEBUG(1, "EXIT: ban_ip_permanent -> 0 (updated to permanent)");
                 return 0;
             }
         }
     }
 
-    /* Check ban table capacity - permanent bans also consume entries */
+    /* Check ban table capacity */
     if (atomic_read(&fw->ban_count) >= MAX_BAN_ENTRIES) {
         spin_unlock(&fw->lock);
         atomic_inc(&fw->ban_table_full_count);
-        fw_pr_warn("Ban table full, cannot add permanent ban for %pI4", &ip);
-        FW_DEBUG(1, "EXIT: ban_ip_permanent -> -ENOSPC (ban table full)");
+        fw_pr_warn("Ban table full, cannot ban %pI4", &ip);
         return -ENOSPC;
     }
 
+    /* Allocate new entry */
     entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
     if (!entry) {
         spin_unlock(&fw->lock);
         atomic_inc(&fw->alloc_failure_count);
-        fw_pr_err("Failed to allocate memory for permanent ban entry for IP %pI4", &ip);
-        FW_DEBUG(1, "EXIT: ban_ip_permanent -> -ENOMEM (alloc failed)");
+        fw_pr_err("Failed to allocate memory for ban entry for IP %pI4", &ip);
         return -ENOMEM;
     }
 
     entry->ip = ip;
     entry->ban_time = jiffies;
-    entry->unban_time = 0;  /* Permanent ban - never expires */
-    entry->is_permanent = true;
+    entry->unban_time = unban_time;
+    entry->is_permanent = is_permanent;
     atomic_set(&entry->retry_count, 0);
 
     hash_add(fw->ban_table, &entry->hash, ip);
@@ -449,74 +332,61 @@ int ban_ip_permanent(struct firewall_info *fw, __be32 ip)
 
     spin_unlock(&fw->lock);
 
-    FW_DEBUG(1, "Successfully added permanent ban entry for IP %pI4", &ip);
-    fw_pr_info("IP %pI4 permanently banned (permanent)", &ip);
-    FW_DEBUG(1, "EXIT: ban_ip_permanent -> 0 (success)");
+    /* Log with provided message */
+    if (log_msg && log_arg)
+        fw_pr_info_ratelimited("IP %pI4 %s", &ip, log_msg, log_arg);
+    else if (log_msg)
+        fw_pr_info_ratelimited("IP %pI4 %s", &ip, log_msg);
+
     return 0;
 }
 
 /*
- * unban_ip - Remove an IPv4 from the ban list
- * Optimized version: Uses proper locking and memory management
+ * __find_ban_entry_rcu - Find ban entry using RCU (internal helper)
+ * @fw: firewall info structure
+ * @ip: IP address to look up
+ *
+ * Returns: pointer to ban_entry if found, NULL otherwise
+ * Must be called within rcu_read_lock()/rcu_read_unlock()
  */
-int unban_ip(struct firewall_info *fw, __be32 ip)
+static struct ban_entry *__find_ban_entry_rcu(struct firewall_info *fw, __be32 ip)
 {
     struct ban_entry *entry;
-    int found = 0;
-    char ip_str[INET_ADDRSTRLEN];
+    u32 hash __maybe_unused = hash_min(ip, BAN_HASH_BITS);
 
-    FW_DEBUG(1, "ENTRY: unban_ip(ip=%pI4)", &ip);
-
-    ipv4_to_str(ip, ip_str, sizeof(ip_str));
-
-    spin_lock(&fw->lock);
-    hash_for_each_possible(fw->ban_table, entry, hash, ip) {
-        if (compare_ips(entry->ip, ip)) {
-            hash_del(&entry->hash);
-            atomic_dec(&fw->ban_count);
-            found = 1;
-            call_rcu(&entry->rcu_head, free_ban_entry_rcu);
-            FW_DEBUG(2, "Found and removed ban entry for IP %s", ip_str);
-            break;
-        }
+    hash_for_each_possible_rcu(fw->ban_table, entry, hash, ip) {
+        if (compare_ips(entry->ip, ip))
+            return entry;
     }
-    spin_unlock(&fw->lock);
-
-    if (found) {
-        atomic_inc(&fw->total_unban_count);
-        /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding */
-        fw_pr_info_ratelimited("IP %s unbanned", ip_str);
-        FW_DEBUG(1, "EXIT: unban_ip -> 0 (success)");
-        return 0;
-    }
-    fw_pr_debug("IP %s not found in ban list", ip_str);
-    FW_DEBUG(1, "EXIT: unban_ip -> -ENOENT (not found)");
-    return -ENOENT;
+    return NULL;
 }
 
 /*
- * unban_permanent_ip - Remove a permanent ban entry
- * Only removes entries marked as permanent
+ * __do_unban_ip - Internal unified unban function
+ * @fw: firewall info structure
+ * @ip: IP address to unban
+ * @permanent_only: if true, only remove permanent bans
+ *
+ * Returns: 0 on success, -ENOENT if not found
  */
-int unban_permanent_ip(struct firewall_info *fw, __be32 ip)
+static int __do_unban_ip(struct firewall_info *fw, __be32 ip, bool permanent_only)
 {
     struct ban_entry *entry;
     int found = 0;
     char ip_str[INET_ADDRSTRLEN];
-
-    FW_DEBUG(1, "ENTRY: unban_permanent_ip(ip=%pI4)", &ip);
+    u32 hash;
 
     ipv4_to_str(ip, ip_str, sizeof(ip_str));
 
     spin_lock(&fw->lock);
+    hash = hash_min(ip, BAN_HASH_BITS);
     hash_for_each_possible(fw->ban_table, entry, hash, ip) {
         if (compare_ips(entry->ip, ip)) {
-            if (entry->is_permanent) {
+            if (!permanent_only || entry->is_permanent) {
                 hash_del(&entry->hash);
                 atomic_dec(&fw->ban_count);
                 found = 1;
                 call_rcu(&entry->rcu_head, free_ban_entry_rcu);
-                FW_DEBUG(2, "Found and removed permanent ban entry for IP %s", ip_str);
             }
             break;
         }
@@ -525,13 +395,38 @@ int unban_permanent_ip(struct firewall_info *fw, __be32 ip)
 
     if (found) {
         atomic_inc(&fw->total_unban_count);
-        fw_pr_info("IP %s permanently unbanned", ip_str);
-        FW_DEBUG(1, "EXIT: unban_permanent_ip -> 0 (success)");
+        if (permanent_only)
+            fw_pr_info("IP %s permanently unbanned", ip_str);
+        else
+            fw_pr_info_ratelimited("IP %s unbanned", ip_str);
         return 0;
     }
-    fw_pr_warn("IP %s not found in permanent ban list", ip_str);
-    FW_DEBUG(1, "EXIT: unban_permanent_ip -> -ENOENT (not found)");
     return -ENOENT;
+}
+
+/*
+ * unban_ip - Remove an IPv4 from the ban list
+ */
+int unban_ip(struct firewall_info *fw, __be32 ip)
+{
+    FW_DEBUG(1, "ENTRY: unban_ip(ip=%pI4)", &ip);
+    int ret = __do_unban_ip(fw, ip, false);
+    FW_DEBUG(1, "EXIT: unban_ip -> %d", ret);
+    return ret;
+}
+
+/*
+ * unban_permanent_ip - Remove a permanent ban entry
+ * Only removes entries marked as permanent
+ */
+int unban_permanent_ip(struct firewall_info *fw, __be32 ip)
+{
+    FW_DEBUG(1, "ENTRY: unban_permanent_ip(ip=%pI4)", &ip);
+    int ret = __do_unban_ip(fw, ip, true);
+    if (ret == -ENOENT)
+        fw_pr_warn("IP not found in permanent ban list");
+    FW_DEBUG(1, "EXIT: unban_permanent_ip -> %d", ret);
+    return ret;
 }
 
 /*
@@ -547,29 +442,63 @@ int is_banned(struct firewall_info *fw, __be32 ip)
     FW_DEBUG(3, "Checking if IPv4 %pI4 is banned", &ip);
 
     rcu_read_lock();
-    hash_for_each_possible_rcu(fw->ban_table, entry, hash, ip) {
-        if (compare_ips(entry->ip, ip)) {
-            /* Check if permanent ban (never expires) */
-            if (entry->is_permanent) {
-                FW_DEBUG(2, "Found permanent ban entry for IPv4 %pI4", &ip);
-                found = 1;
-            } else if (time_after(now, entry->unban_time)) {
-                /* Entry exists but expired - remove it */
-                /* We can't remove here under RCU read lock, so just return 0 */
-                FW_DEBUG(2, "Found expired ban entry for IPv4 %pI4", &ip);
-                found = 0;
-            } else {
-                /* Valid banned entry */
-                FW_DEBUG(2, "Found active ban entry for IPv4 %pI4", &ip);
-                found = 1;
-            }
-            break;
+    entry = __find_ban_entry_rcu(fw, ip);
+    if (entry) {
+        /* Check if permanent ban (never expires) */
+        if (entry->is_permanent) {
+            FW_DEBUG(2, "Found permanent ban entry for IPv4 %pI4", &ip);
+            found = 1;
+        } else if (time_after(now, entry->unban_time)) {
+            /* Entry exists but expired - remove it */
+            /* We can't remove here under RCU read lock, so just return 0 */
+            FW_DEBUG(2, "Found expired ban entry for IPv4 %pI4", &ip);
+            found = 0;
+        } else {
+            /* Valid banned entry */
+            FW_DEBUG(2, "Found active ban entry for IPv4 %pI4", &ip);
+            found = 1;
         }
     }
     rcu_read_unlock();
 
     FW_DEBUG(3, "Result for IPv4 %pI4 ban check: %s", &ip, found ? "BANNED" : "NOT BANNED");
     return found;
+}
+
+/*
+ * ban_ip - Add an IPv4 to the ban list with default duration
+ */
+int ban_ip(struct firewall_info *fw, __be32 ip)
+{
+    unsigned long ban_secs = READ_ONCE(fw_ban_time);
+    unsigned long ban_duration;
+
+    FW_DEBUG(1, "ENTRY: ban_ip(ip=%pI4)", &ip);
+
+    if (check_mul_overflow(ban_secs, (unsigned long)HZ, &ban_duration)) {
+        fw_pr_err("ban_time overflow detected");
+        return -EINVAL;
+    }
+
+    FW_DEBUG(2, "Attempting to ban IPv4: %pI4", &ip);
+    int ret = __do_ban_ip(fw, ip, jiffies + ban_duration, false,
+                          "banned for %u seconds", ban_secs);
+    FW_DEBUG(1, "EXIT: ban_ip -> %d", ret);
+    return ret;
+}
+
+/*
+ * ban_ip_permanent - Add an IPv4 to the permanent ban list
+ * Permanent bans never expire (unban_time = 0)
+ */
+int ban_ip_permanent(struct firewall_info *fw, __be32 ip)
+{
+    FW_DEBUG(1, "ENTRY: ban_ip_permanent(ip=%pI4)", &ip);
+    FW_DEBUG(2, "Attempting to permanently ban IPv4: %pI4", &ip);
+
+    int ret = __do_ban_ip(fw, ip, 0, true, "permanently banned", 0);
+    FW_DEBUG(1, "EXIT: ban_ip_permanent -> %d", ret);
+    return ret;
 }
 
 /*
@@ -584,14 +513,10 @@ int is_permanently_banned(struct firewall_info *fw, __be32 ip)
     FW_DEBUG(3, "Checking if IPv4 %pI4 is permanently banned", &ip);
 
     rcu_read_lock();
-    hash_for_each_possible_rcu(fw->ban_table, entry, hash, ip) {
-        if (compare_ips(entry->ip, ip)) {
-            if (entry->is_permanent) {
-                FW_DEBUG(2, "Found permanent ban entry for IPv4 %pI4", &ip);
-                found = 1;
-            }
-            break;
-        }
+    entry = __find_ban_entry_rcu(fw, ip);
+    if (entry && entry->is_permanent) {
+        FW_DEBUG(2, "Found permanent ban entry for IPv4 %pI4", &ip);
+        found = 1;
     }
     rcu_read_unlock();
 
