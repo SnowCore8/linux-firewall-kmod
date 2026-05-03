@@ -1,6 +1,6 @@
 # Firewall
 
-**版本**: v1.6（Jail 系统 + 安全加固）
+**版本**: v1.7（安全加固 + 测试扩展）
 
 Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁防护。它将 fail2ban 的核心功能从用户空间移动到内核空间，使用 netfilter 框架在数据包级别进行封禁，具有更低的延迟和更高的性能。
 
@@ -21,6 +21,13 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁
 - ✅ RCU 并发安全 + spinlock 保护
 - ✅ 状态持久化（保存/恢复封禁和白名单）
 - ✅ 输入验证和边界检查
+- ✅ **v1.7 安全加固**
+  - 整数溢出防护（`check_mul_overflow()` 全面覆盖）
+  - SQLite use-after-free 修复（`SQLITE_TRANSIENT`）
+  - 路径遍历纵深防御（多层验证）
+  - ReDoS 防护（自定义 regex 安全检查）
+  - HTTP Exporter 加固
+  - YAML 解析边界防护
 - ✅ 安全编译选项（-fstack-protector-strong, -D_FORTIFY_SOURCE=2, PIE）
 - ✅ systemd 安全加固（NoNewPrivileges, ProtectSystem=strict 等）
 
@@ -235,7 +242,7 @@ fw_pr_err_ratelimited("error with rate limit")
 
 ## 测试
 
-项目采用模块化测试框架，共 95+ 项测试：
+项目采用模块化测试框架，共 113 项测试：
 
 ```bash
 # 运行所有测试（推荐）
@@ -259,7 +266,7 @@ sudo ./tests/run_tests.sh --report
 make test-legacy
 ```
 
-**测试结果**: 94 项测试全部通过
+**测试结果**: 113 项测试全部通过
 
 ### 测试覆盖
 
@@ -274,6 +281,9 @@ make test-legacy
 - Jail 配置加载和目录加载
 - 日志解析功能
 - 资源管理和内存安全
+- 整数溢出防护（新增）
+- 路径遍历防护（新增）
+- ReDoS 防护（新增）
 
 ## 项目结构
 
@@ -281,24 +291,27 @@ make test-legacy
 firewall/
 ├── src/
 │   ├── kernel-module/
-│   │   ├── firewall.c          # 内核模块主源码（~2300 行）
+│   │   ├── firewall.c          # 内核模块主源码（~2400 行）
 │   │   └── firewall.h          # 头文件（含统一日志系统）
 │   └── daemon/
-│       ├── firewall-daemon.c   # 守护进程主源码（~3000 行，Jail 系统）
+│       ├── firewall-daemon.c   # 守护进程主源码（~3200 行，Jail 系统）
 │       ├── http-exporter.c     # Prometheus 指标导出器
 │       └── sqlite-persistent.c # SQLite 永久封禁持久化
 ├── tests/
-│   ├── run_tests.sh            # 统一测试入口（94 项测试）
+│   ├── run_tests.sh            # 统一测试入口（113 项测试）
 │   ├── test_framework.sh       # 测试框架核心
 │   ├── test_config.sh          # 测试配置
-│   ├── suites/                 # 11 个测试套件
+│   ├── suites/                 # 16 个测试套件（含 3 个新增安全测试）
 │   └── reports/                # 测试报告
 ├── config/                     # YAML 配置文件目录
 │   └── default.yaml            # 默认配置（sshd jail）
 ├── docs/
-│   └── DOCUMENTATION.md        # 详细技术文档
+│   ├── DOCUMENTATION.md        # 详细技术文档
+│   └── PERMANENT_BAN_GUIDE.md  # 永久封禁指南 (v1.7 更新)
 ├── scripts/
-│   └── build.sh                # 构建脚本
+│   ├── build.sh                # 构建脚本
+│   ├── deploy.sh               # 部署脚本（v1.7 安全加固）
+│   └── verify_project.sh       # 项目验证脚本
 ├── build/                      # 构建产物目录
 │   ├── kernel-module/
 │   │   └── firewall.ko
@@ -318,6 +331,7 @@ firewall/
 - **封禁上限 1024 IP**
 - **无持久化存储**（模块重启后状态丢失，但有状态文件保存/恢复）
 - **procfs 通信**（不支持批量操作）
+- **ban_time 限制**: 30 秒 ~ 365 天（防止整数溢出）
 
 ## 适用场景
 

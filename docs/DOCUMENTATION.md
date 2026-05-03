@@ -4,7 +4,7 @@
 
 Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁防护。它将 fail2ban 的核心功能从用户空间移动到内核空间，使用 netfilter 框架在数据包级别进行封禁，具有更低的延迟和更高的性能。
 
-**当前版本**: v1.6（Jail 系统 + 安全加固）
+**当前版本**: v1.7（安全加固 + 测试扩展）
 
 ## 项目架构
 
@@ -47,6 +47,13 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁
 - ✅ RCU 并发安全 + spinlock 保护
 - ✅ 状态持久化（保存/恢复封禁和白名单）
 - ✅ 输入验证和边界检查
+- ✅ **v1.7 安全加固**
+  - 整数溢出防护（`check_mul_overflow()` 覆盖所有 ban 时间计算）
+  - SQLite use-after-free 修复（`SQLITE_STATIC` → `SQLITE_TRANSIENT`）
+  - 路径遍历纵深防御（扩展字符黑名单 + URL 编码检测 + `/tmp/` 移除）
+  - ReDoS 防护（嵌套量词拒绝 + 交替数量限制 + 模式长度限制）
+  - HTTP Exporter 加固（请求截断检测 + URI 路径遍历防护）
+  - YAML 解析边界防护（单值 1024 字符限制）
 - ✅ 安全编译选项（-fstack-protector-strong, -D_FORTIFY_SOURCE=2, PIE）
 - ✅ systemd 安全加固（NoNewPrivileges, ProtectSystem=strict 等 14 项）
 - ✅ 配置热重载（SIGHUP 信号触发完整配置重载）
@@ -146,6 +153,65 @@ if (st.st_dev != saved_dev || st.st_ino != saved_ino) {
 - `extract_ipv4()` 添加单词边界检查
 - 正则捕获组动态检测（支持自定义正则，不再硬编码索引）
 - 防止误匹配和缓冲区越界读取
+
+### v1.7 安全加固详情
+
+#### 整数溢出防护
+
+内核模块中所有涉及 ban 时间计算的地方都添加了 `check_mul_overflow()` 检查：
+
+```c
+unsigned long ban_secs = READ_ONCE(fw_ban_time);
+unsigned long ban_duration;
+if (check_mul_overflow(ban_secs, (unsigned long)HZ, &ban_duration)) {
+    fw_pr_err("ban_time overflow detected");
+    return -EINVAL;
+}
+entry->unban_time = jiffies + ban_duration;
+```
+
+- `ban_ip()` - 默认时长封禁
+- `ban_ip_with_duration()` - 自定义时长封禁
+- `bans_write()` - procfs 写入时的时长验证
+- 新增 `MAX_BAN_TIME` (365 天) 和 `MIN_BAN_TIME` (30 秒) 常量
+
+#### SQLite use-after-free 修复
+
+所有 `sqlite3_bind_text()` 调用从 `SQLITE_STATIC` 改为 `SQLITE_TRANSIENT`，防止调用方字符串在 SQLite 使用前被释放导致的 use-after-free：
+
+- `sqlite_add_permanent_ban()` - 3 处
+- `sqlite_add_permanent_bans_batch()` - 3 处
+- `sqlite_remove_permanent_ban()` - 1 处
+
+#### 路径遍历纵深防御
+
+守护进程 `validate_and_normalize_path()` 添加多层验证：
+
+1. **扩展字符黑名单**: `|;&`$(){}<>!~*?[]`
+2. **URL 编码检测**: 拒绝 `%2e`、`%2f` (大小写不敏感)
+3. **`..` 检测**: 拒绝目录穿越
+4. **`realpath()` 验证**: 规范化后验证路径在允许位置
+5. **移除 `/tmp/`**: 不再允许 `/tmp/` 作为日志路径
+
+#### ReDoS 防护
+
+自定义 jail regex 编译前进行安全检查：
+
+- 拒绝嵌套量词: `)+`, `)*`, `){`, `}?`, `++`, `*+`
+- 限制交替数量: 最多 50 个 `|`
+- 限制模式长度: 最多 1024 字节
+
+#### HTTP Exporter 加固
+
+- 请求截断检测: 防止超长请求导致缓冲区溢出
+- URI 路径遍历防护: 拒绝 `..` 和 URL 编码变体
+- 新增 `exporter_log_warn` 宏
+
+#### YAML 解析边界防护
+
+- 单值长度限制: 1024 字符
+- Jail 数量限制: 16 个（已有）
+- 日志文件限制: 10 个/jail（已有）
 
 ### 其他安全特性
 
@@ -249,6 +315,8 @@ jails:
 | 最大 Jail 数量 | 16 | 防止资源耗尽 |
 | 每个 Jail 最大日志文件数 | 10 | 防止 inotify 资源耗尽 |
 | 配置文件数量 | 50 | 配置目录加载限制 |
+| 自定义 regex 长度 | 1024 字节 | 防止 ReDoS 攻击 |
+| 自定义 regex 交替数 | 50 个 `|` | 防止回溯炸弹 |
 
 ### 配置解析改进
 
@@ -448,7 +516,7 @@ cat /proc/firewall/stats
 
 ## 测试
 
-项目采用模块化测试框架，共 94+ 项测试：
+项目采用模块化测试框架，共 113 项测试：
 
 ```bash
 # 运行所有测试（推荐）
@@ -472,7 +540,7 @@ sudo ./tests/run_tests.sh --report
 make test-legacy
 ```
 
-**测试结果**: 94 项测试全部通过
+**测试结果**: 113 项测试全部通过
 
 ### 测试覆盖
 
@@ -489,12 +557,15 @@ make test-legacy
 - ✅ 资源管理和内存安全
 - ✅ 配置热重载
 - ✅ 永久封禁持久化（SQLite）
+- ✅ 整数溢出防护（新增，测试套件 14）
+- ✅ 路径遍历防护（新增，测试套件 15）
+- ✅ ReDoS 防护（新增，测试套件 16）
 
 ### 测试框架特性
 
 - 统一测试入口 `run_tests.sh`
 - 测试框架核心 `test_framework.sh`
-- 11 个独立测试套件
+- 16 个独立测试套件
 - 支持按类别运行测试
 - 支持生成测试报告
 
@@ -519,6 +590,7 @@ make test-legacy
 - **无持久化存储**（模块重启后状态丢失，但有状态文件保存/恢复机制）
 - **procfs 通信**（不支持批量操作）
 - **永久封禁依赖 SQLite**（可选功能，需要 libsqlite3）
+- **ban_time 限制**: 30 秒 ~ 365 天（防止整数溢出）
 
 ## 项目结构
 
@@ -526,25 +598,26 @@ make test-legacy
 firewall/
 ├── src/
 │   ├── kernel-module/
-│   │   ├── firewall.c          # 内核模块主源码（~2300 行）
+│   │   ├── firewall.c          # 内核模块主源码（~2400 行）
 │   │   └── firewall.h          # 头文件（含统一日志系统）
 │   └── daemon/
-│       ├── firewall-daemon.c   # 守护进程主源码（~3000 行，Jail 系统）
+│       ├── firewall-daemon.c   # 守护进程主源码（~3200 行，Jail 系统）
 │       ├── http-exporter.c     # Prometheus 指标导出器
 │       └── sqlite-persistent.c # SQLite 永久封禁持久化
 ├── tests/
-│   ├── run_tests.sh            # 统一测试入口（94 项测试）
+│   ├── run_tests.sh            # 统一测试入口（113 项测试）
 │   ├── test_framework.sh       # 测试框架核心
 │   ├── test_config.sh          # 测试配置
-│   ├── suites/                 # 11 个测试套件
+│   ├── suites/                 # 16 个测试套件（含 3 个新增安全测试）
 │   └── reports/                # 测试报告
 ├── config/                     # YAML 配置文件目录
 │   └── default.yaml            # 默认配置（sshd jail）
 ├── docs/
 │   ├── DOCUMENTATION.md        # 详细技术文档（本文件）
-│   └── PERMANENT_BAN_GUIDE.md  # 永久封禁指南
+│   └── PERMANENT_BAN_GUIDE.md  # 永久封禁指南 (v1.7 更新)
 ├── scripts/
 │   ├── build.sh                # 构建脚本
+│   ├── deploy.sh               # 部署脚本（v1.7 安全加固）
 │   └── verify_project.sh       # 项目验证脚本
 ├── build/                      # 构建产物目录
 │   ├── kernel-module/
@@ -561,11 +634,31 @@ firewall/
 
 ## 代码质量改进
 
+### v1.7 安全加固
+
+- 整数溢出防护：所有 `seconds * HZ` 运算使用 `check_mul_overflow()`
+- SQLite 安全：`SQLITE_STATIC` → `SQLITE_TRANSIENT` (7 处)
+- 路径遍历：4 层纵深防御（字符黑名单 + URL 编码 + `..` 检测 + `realpath()`）
+- ReDoS 防护：自定义 regex 3 重安全检查
+- HTTP Exporter：请求截断检测 + URI 路径遍历防护
+- YAML 解析：单值 1024 字符限制
+- 部署脚本：移除硬编码 IP + 部署确认提示 + SSH 主机密钥验证
+
 ### 全局变量管理
 
 - 全局变量 `fw_info` 改为 `static`，防止外部直接访问
 - 通过 `get_fw_info()` 函数导出受控访问
 - 提高封装性和安全性
+
+### 部署脚本安全
+
+v1.7 对 `scripts/deploy.sh` 进行了安全加固：
+
+- 移除硬编码默认 IP (`43.100.123.123`)
+- 添加部署前确认提示 (`read -p "Confirm deployment..."`)
+- SSH 连接增加 `-o StrictHostKeyChecking=accept-new`
+- 所有 SSH/SCP 命令使用引号包裹参数
+- 统一注释为英文
 
 ### 服务支持调整
 
@@ -579,6 +672,7 @@ firewall/
 - 配置解析使用 `strsep` 替代 `sscanf`（更健壮的参数解析）
 - 配置目录加载使用 `qsort` 替代冒泡排序（O(n log n) + 50 文件限制）
 - `process_new_lines()` 加锁保护 Jail 配置访问（防止并发竞态）
+- 内核模块使用 `#include <linux/overflow.h>` 提供溢出检测函数
 
 ## 许可证
 

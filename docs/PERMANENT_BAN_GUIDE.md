@@ -1,5 +1,7 @@
 # 永久黑名单功能指南 (SQLite 持久化)
 
+> **v1.7 更新**: SQLite 绑定已从 `SQLITE_STATIC` 改为 `SQLITE_TRANSIENT`，修复了潜在的 use-after-free 漏洞。
+
 ## 概述
 
 永久黑名单功能为 firewall 项目增加了基于 SQLite 的持久化存储能力，使得关键恶意 IP 能够被永久封禁，即使在内核模块重新加载或系统重启后依然有效。
@@ -127,10 +129,10 @@ struct ban_entry {
 |------|------|
 | **白名单保护** | 永久封禁前检查白名单，拒绝封名单 IP |
 | **输入验证** | IP 格式、范围、保留地址验证 |
-| **SQL 注入防护** | 使用 SQLite 参数绑定，杜绝注入 |
+| **SQL 注入防护** | 使用 SQLite 参数绑定 + `SQLITE_TRANSIENT`，杜绝注入和 use-after-free |
 | **能力检查** | procfs 写入检查 `CAP_NET_ADMIN` |
 | **软删除** | `is_active=0` 而非物理删除，保留审计记录 |
-| **路径安全** | `ensure_db_dir()` 验证路径合法性 |
+| **路径安全** | `ensure_db_dir()` 验证路径合法性 + `strdup()` NULL 检查 |
 
 ## 测试覆盖
 
@@ -151,7 +153,8 @@ struct ban_entry {
 ### 依赖
 
 - **SQLite3**: `libsqlite3-dev` (Ubuntu/Debian) 或 `sqlite-devel` (RHEL/CentOS)
-- 其他依赖不变 (libyaml, pthread, kernel headers)
+- **libyaml**: `libyaml-dev` (Ubuntu/Debian) 或 `libyaml-devel` (RHEL/CentOS)
+- 其他依赖: pthread, kernel headers
 
 ### 编译
 
@@ -209,3 +212,4 @@ permanent_ban_enabled: true
 - [ ] 按原因分类统计封禁数据
 - [ ] 支持 CIDR 子网永久封禁
 - [ ] 数据库连接池优化
+- [ ] SQLite 事务隔离级别优化
