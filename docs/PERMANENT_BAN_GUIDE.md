@@ -66,7 +66,7 @@ CREATE INDEX IF NOT EXISTS idx_is_active ON permanent_banlist(is_active);
 
 ```yaml
 # SQLite 数据库路径 (必须设置以启用永久封禁)
-permanent_db_path: "/var/lib/firewall/permanent_bans.db"
+permanent_db_path: "/var/lib/firewall/bans.db"
 
 # 启用永久封禁
 permanent_ban_enabled: true
@@ -191,8 +191,17 @@ jails:
     ban_time: 900
     regex: ""
 
+  frp:
+    enabled: true
+    log_files:
+      - /var/log/frp/frp.log
+    max_retries: 10
+    findtime: 300
+    ban_time: 1800
+    regex: ".*\\[E\\].*remoteAddr:\\s*([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)"
+
 # 永久黑名单配置
-permanent_db_path: "/var/lib/firewall/permanent_bans.db"
+permanent_db_path: "/var/lib/firewall/bans.db"
 permanent_ban_enabled: true
 ```
 

@@ -29,7 +29,7 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁
   - HTTP Exporter 加固
   - YAML 解析边界防护
 - ✅ 安全编译选项（-fstack-protector-strong, -D_FORTIFY_SOURCE=2, PIE）
-- ✅ systemd 安全加固（NoNewPrivileges, ProtectSystem=strict 等）
+- ✅ systemd 安全加固（NoNewPrivileges, ProtectSystem=strict 等 15 项）
 
 ## 快速开始
 
@@ -98,11 +98,14 @@ echo "ban_time 1200" | sudo tee /proc/firewall/config
 ### 启动守护进程
 
 ```bash
-# 基本用法
+# 使用配置文件启动（推荐，加载 config/ 目录下所有 .yaml）
 sudo ./build/daemon/firewall-daemon
 
-# 指定日志文件和参数
-sudo ./build/daemon/firewall-daemon -l /var/log/auth.log -m 3 -f 600 -b 600
+# 指定配置目录
+sudo ./build/daemon/firewall-daemon -C /etc/firewall/config/
+
+# 指定单个配置文件
+sudo ./build/daemon/firewall-daemon -c config/default.yaml
 
 # 查看帮助
 sudo ./build/daemon/firewall-daemon --help
@@ -121,15 +124,17 @@ sudo ./build/daemon/firewall-daemon --help
 ### 守护进程参数
 
 ```bash
-sudo ./build/daemon/firewall-daemon -l /var/log/auth.log -m 3 -f 600 -b 600
+sudo ./build/daemon/firewall-daemon -c config/default.yaml --daemonize
 ```
 
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `-l` | 日志文件路径 | /var/log/auth.log |
-| `-m` | 触发封禁的失败次数 | 3 |
-| `-f` | 失败记录时间窗口（秒） | 600 |
-| `-b` | 封禁持续时间（秒） | 600 |
+| 参数 | 说明 | 默认值 | 状态 |
+|------|------|--------|------|
+| `-c` | 配置文件路径 | - | ✅ 推荐使用 |
+| `-C` | 配置目录路径 | ./config/ 或 /etc/firewall/config/ | ✅ 推荐使用 |
+| `-d`, `--daemonize` | 后台运行模式 | false | ✅ 生产环境推荐 |
+| `-h`, `--help` | 显示帮助信息 | - | - |
+
+**注意**：所有封禁策略参数（`max_retries`、`findtime`、`ban_time`、`interval`、`metrics_port`）必须通过 YAML 配置文件设置，不支持命令行参数。
 
 ### 配置文件
 
@@ -182,12 +187,25 @@ jails:
     ban_time: 900         # 覆盖 defaults
     regex: ""             # 空字符串使用内置 sshd 模式
 
+  frp:
+    enabled: true
+    log_files:
+      - /var/log/frp/frp.log
+    max_retries: 10
+    findtime: 300
+    ban_time: 1800
+    regex: ".*\\[E\\].*remoteAddr:\\s*([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)"
+
   # 可以添加更多 jail...
   # nginx:
   #   enabled: true
   #   log_files: [/var/log/nginx/error.log]
   #   max_retries: 3
   #   ban_time: 3600
+
+# 永久封禁配置（SQLite 持久化）
+permanent_db_path: "/var/lib/firewall/bans.db"
+permanent_ban_enabled: true
 ```
 
 **关键特性**：
@@ -310,7 +328,7 @@ firewall/
 │   └── PERMANENT_BAN_GUIDE.md  # 永久封禁指南 (v1.7 更新)
 ├── scripts/
 │   ├── build.sh                # 构建脚本
-│   ├── deploy.sh               # 部署脚本（v1.7 安全加固）
+│   ├── deploy.sh               # 部署脚本（v1.7 安全加固：确认提示 + SSH 密钥验证）
 │   └── verify_project.sh       # 项目验证脚本
 ├── build/                      # 构建产物目录
 │   ├── kernel-module/
@@ -329,9 +347,11 @@ firewall/
 
 - **仅支持 IPv4**（纯 IPv4 实现）
 - **封禁上限 1024 IP**
+- **白名单上限 64 条目**
 - **无持久化存储**（模块重启后状态丢失，但有状态文件保存/恢复）
 - **procfs 通信**（不支持批量操作）
-- **ban_time 限制**: 30 秒 ~ 365 天（防止整数溢出）
+- **ban_time 限制**: 30 秒 ~ 1 年（防止整数溢出）
+- **自定义 regex 限制**: 最大 1024 字节，最多 50 个交替符 `|`
 
 ## 适用场景
 

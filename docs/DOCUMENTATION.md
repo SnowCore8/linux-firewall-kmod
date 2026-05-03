@@ -55,7 +55,7 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁
   - HTTP Exporter 加固（请求截断检测 + URI 路径遍历防护）
   - YAML 解析边界防护（单值 1024 字符限制）
 - ✅ 安全编译选项（-fstack-protector-strong, -D_FORTIFY_SOURCE=2, PIE）
-- ✅ systemd 安全加固（NoNewPrivileges, ProtectSystem=strict 等 14 项）
+- ✅ systemd 安全加固（NoNewPrivileges, ProtectSystem=strict 等 15 项）
 - ✅ 配置热重载（SIGHUP 信号触发完整配置重载）
 - ✅ SQLite 永久封禁持久化
 - ✅ Prometheus metrics 导出
@@ -83,7 +83,7 @@ SECURITY_LDFLAGS = -pie -Wl,-z,relro,-z,now
 
 ### systemd 服务安全加固
 
-服务文件 (`firewall-daemon.service`) 包含 14 项安全限制：
+服务文件 (`firewall-daemon.service`) 包含 15 项安全限制：
 
 ```ini
 # 安全加固
@@ -108,12 +108,14 @@ SystemCallArchitectures=native
 |------|------|
 | `NoNewPrivileges=yes` | 禁止进程获取新权限 |
 | `ProtectSystem=strict` | 将 `/usr` 和 `/boot` 设为只读 |
+| `ReadWritePaths` | 允许写入的特定路径 |
 | `PrivateTmp=yes` | 提供隔离的 `/tmp` 命名空间 |
 | `ProtectHome=yes` | 禁止访问 `/home`、`/root`、`/run/user` |
 | `ProtectKernelTunables=yes` | 禁止修改内核参数 |
 | `ProtectKernelModules=yes` | 禁止加载内核模块 |
 | `MemoryDenyWriteExecute=yes` | 禁止映射同时可写可执行的内存 |
 | `SystemCallFilter=@system-service` | 限制系统调用白名单 |
+| `SystemCallArchitectures=native` | 仅允许本机架构 |
 
 ### 内核态 TOCTOU 竞态修复
 
@@ -203,9 +205,15 @@ entry->unban_time = jiffies + ban_duration;
 
 #### HTTP Exporter 加固
 
-- 请求截断检测: 防止超长请求导致缓冲区溢出
-- URI 路径遍历防护: 拒绝 `..` 和 URL 编码变体
+- 请求截断检测: 防止超长请求导致缓冲区溢出 (buffer 1024 bytes)
+- URI 路径遍历防护: 拒绝 `..` 和 URL 编码变体 (`%2e`, `%2f`, 大小写不敏感)
+- HTTP 版本验证: 解析并验证请求行格式
 - 新增 `exporter_log_warn` 宏
+- 速率限制: 64 个 IP 追踪，每 IP 每秒 10 请求
+- 超时设置: 5 秒接收超时
+- 监听端口: 9119 (可配置)
+- 端点: `/metrics` (Prometheus), `/health`, `/healthz`
+- 生成 14 项 Prometheus 指标
 
 #### YAML 解析边界防护
 
@@ -244,6 +252,8 @@ entry->unban_time = jiffies + ban_duration;
 - 解封操作: ~1235 ops/ms
 - 白名单添加: ~1220 ops/ms
 - 白名单查询: ~1227 ops/ms
+
+> 注: 以上数据基于 v1.6 测试，v1.7 安全加固后性能略有变化（溢出检查增加约 1-2% 开销）。
 
 ## Jail 系统详解
 
@@ -286,7 +296,7 @@ Jail 系统是 v1.6 的核心特性，提供类似 fail2ban 的多服务隔离�
 4. **资源隔离**: Jail 之间互不干扰，单个 Jail 配置错误不影响其他 Jail
 5. **配置合并**: 支持多配置文件，按字母顺序加载，后加载的覆盖前面的
 
-### 配置示例
+### Jail 配置示例
 
 ```yaml
 defaults:
@@ -306,6 +316,19 @@ jails:
     findtime: 600
     ban_time: 900
     regex: ""  # 空字符串使用内置 sshd 模式
+
+  frp:
+    enabled: true
+    log_files:
+      - /var/log/frp/frp.log
+    max_retries: 10
+    findtime: 300
+    ban_time: 1800
+    regex: ".*\\[E\\].*remoteAddr:\\s*([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)"
+
+# 永久黑名单配置
+permanent_db_path: "/var/lib/firewall/bans.db"
+permanent_ban_enabled: true
 ```
 
 ### Jail 限制
@@ -317,6 +340,7 @@ jails:
 | 配置文件数量 | 50 | 配置目录加载限制 |
 | 自定义 regex 长度 | 1024 字节 | 防止 ReDoS 攻击 |
 | 自定义 regex 交替数 | 50 个 `|` | 防止回溯炸弹 |
+| YAML 单值长度 | 1024 字符 | 防止内存耗尽 |
 
 ### 配置解析改进
 
@@ -357,7 +381,7 @@ sudo systemctl reload firewall-daemon
 ### 构建
 
 ```bash
-# 编译两者（内核模块 + 守护进程）
+# 编译两者（内核模块 + 守护进程，默认并行编译）
 make all-with-daemon
 
 # 仅编译内核模块
@@ -365,6 +389,9 @@ make kernel-module
 
 # 仅编译守护进程
 make daemon
+
+# 指定并行编译核心数（默认使用所有可用核心）
+make all-with-daemon NPROC=4
 
 # 清理构建产物
 make clean
@@ -557,6 +584,10 @@ make test-legacy
 - ✅ 资源管理和内存安全
 - ✅ 配置热重载
 - ✅ 永久封禁持久化（SQLite）
+- ✅ FRP Jail 功能
+- ✅ 整数溢出防护（测试套件 14，6 项测试）
+- ✅ 路径遍历防护（测试套件 15，6 项测试）
+- ✅ ReDoS 防护（测试套件 16，7 项测试）
 - ✅ 整数溢出防护（新增，测试套件 14）
 - ✅ 路径遍历防护（新增，测试套件 15）
 - ✅ ReDoS 防护（新增，测试套件 16）
@@ -587,10 +618,12 @@ make test-legacy
 
 - **仅支持 IPv4**（纯 IPv4 实现）
 - **封禁上限 1024 IP**
+- **白名单上限 64 条目**
 - **无持久化存储**（模块重启后状态丢失，但有状态文件保存/恢复机制）
 - **procfs 通信**（不支持批量操作）
 - **永久封禁依赖 SQLite**（可选功能，需要 libsqlite3）
-- **ban_time 限制**: 30 秒 ~ 365 天（防止整数溢出）
+- **ban_time 限制**: 30 秒 ~ 1 年（31,536,000 秒，防止整数溢出）
+- **自定义 regex 限制**: 最大 1024 字节，最多 50 个交替符 `|`，禁止嵌套量词
 
 ## 项目结构
 
@@ -659,6 +692,7 @@ v1.7 对 `scripts/deploy.sh` 进行了安全加固：
 - SSH 连接增加 `-o StrictHostKeyChecking=accept-new`
 - 所有 SSH/SCP 命令使用引号包裹参数
 - 统一注释为英文
+- 7 步部署流程：依赖检查 → 打包 → 上传 → 编译安装 → 验证 → 测试 → 清理
 
 ### 服务支持调整
 
