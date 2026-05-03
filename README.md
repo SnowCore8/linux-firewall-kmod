@@ -265,7 +265,7 @@ fw_pr_err_ratelimited("error with rate limit")
 
 ## 测试
 
-项目采用模块化测试框架，共 149 项测试：
+项目采用模块化测试框架，共 147 项测试：
 
 ```bash
 # 运行所有测试（推荐）
@@ -289,7 +289,7 @@ sudo ./tests/run_tests.sh --report
 make test-legacy
 ```
 
-**测试结果**: 149 项测试全部通过
+**测试结果**: 147 项测试全部通过
 
 ### 测试覆盖
 
@@ -321,7 +321,7 @@ firewall/
 │       ├── http-exporter.c     # Prometheus 指标导出器（libmicrohttpd）
 │       └── sqlite-persistent.c # SQLite 永久封禁持久化
 ├── tests/
-│   ├── run_tests.sh            # 统一测试入口（149 项测试）
+│   ├── run_tests.sh            # 统一测试入口（147 项测试）
 │   ├── test_framework.sh       # 测试框架核心
 │   ├── test_config.sh          # 测试配置
 │   ├── suites/                 # 16 个测试套件（含 3 个新增安全测试）

@@ -138,7 +138,7 @@ install: $(KERNEL_MODULE) $(DAEMON_BIN)
 	install -m 644 config/*.yaml $(DESTDIR)$(ETCDIR)/firewall/
 	# systemd service file
 	install -D -m 644 firewall-daemon.service $(DESTDIR)/etc/systemd/system/firewall-daemon.service
-	systemctl daemon-reload
+	-systemctl daemon-reload 2>/dev/null || true
 	@echo ""
 	@echo "Installation complete!"
 	@echo "  Kernel module: $(KERNEL_MODDIR)/firewall.ko"

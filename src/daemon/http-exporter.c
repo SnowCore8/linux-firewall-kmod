@@ -23,6 +23,7 @@
 #include <time.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <syslog.h>
 #include <microhttpd.h>
 
 /* ============================================================================
@@ -53,14 +54,14 @@ extern struct daemon_stats {
 } daemon_stats;
 
 /* ============================================================================
- * Logging helpers
+ * Logging helpers (use syslog for consistency with daemon)
  * ========================================================================== */
 #define exporter_log_err(fmt, ...) \
-    fprintf(stderr, "firewall[exporter]: ERROR: " fmt "\n", ##__VA_ARGS__)
+    syslog(LOG_ERR, "firewall[exporter]: ERROR: " fmt, ##__VA_ARGS__)
 #define exporter_log_warn(fmt, ...) \
-    fprintf(stderr, "firewall[exporter]: WARN: " fmt "\n", ##__VA_ARGS__)
+    syslog(LOG_WARNING, "firewall[exporter]: WARN: " fmt, ##__VA_ARGS__)
 #define exporter_log_info(fmt, ...) \
-    fprintf(stderr, "firewall[exporter]: " fmt "\n", ##__VA_ARGS__)
+    syslog(LOG_INFO, "firewall[exporter]: " fmt, ##__VA_ARGS__)
 
 /* ============================================================================
  * Kernel stats reader

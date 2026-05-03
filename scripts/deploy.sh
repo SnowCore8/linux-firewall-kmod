@@ -33,19 +33,25 @@ if command -v apt-get >/dev/null 2>&1; then
     PKG_MANAGER="apt"
     YAML_PKG="libyaml-dev"
     SQLITE_PKG="libsqlite3-dev"
+    MHD_PKG="libmicrohttpd-dev"
+    PCRE2_PKG="libpcre2-dev"
     KERNEL_HEADERS_PKG="linux-headers-$(uname -r)"
 elif command -v yum >/dev/null 2>&1; then
     PKG_MANAGER="yum"
     YAML_PKG="libyaml-devel"
     SQLITE_PKG="sqlite-devel"
+    MHD_PKG="libmicrohttpd-devel"
+    PCRE2_PKG="pcre2-devel"
     KERNEL_HEADERS_PKG="kernel-devel-$(uname -r)"
 elif command -v dnf >/dev/null 2>&1; then
     PKG_MANAGER="dnf"
     YAML_PKG="libyaml-devel"
     SQLITE_PKG="sqlite-devel"
+    MHD_PKG="libmicrohttpd-devel"
+    PCRE2_PKG="pcre2-devel"
     KERNEL_HEADERS_PKG="kernel-devel-$(uname -r)"
 else
-    echo "❌ 不支持的包管理器"
+    echo "❌ Unsupported package manager"
     exit 1
 fi
 
@@ -73,11 +79,23 @@ else
 fi
 echo "  检查 $SQLITE_PKG..."
 if [ "$PKG_MANAGER" = "apt" ]; then
-    dpkg -l | grep $SQLITE_PKG >/dev/null 2>&1 || { echo "❌ 缺少 $SQLITE_PKG"; exit 1; }
+    dpkg -l | grep $SQLITE_PKG >/dev/null 2>&1 || { echo "❌ Missing $SQLITE_PKG"; exit 1; }
 else
-    rpm -q $SQLITE_PKG >/dev/null 2>&1 || { echo "❌ 缺少 $SQLITE_PKG"; exit 1; }
+    rpm -q $SQLITE_PKG >/dev/null 2>&1 || { echo "❌ Missing $SQLITE_PKG"; exit 1; }
 fi
-echo "✅ 依赖检查通过"
+echo "  检查 $MHD_PKG..."
+if [ "$PKG_MANAGER" = "apt" ]; then
+    dpkg -l | grep $MHD_PKG >/dev/null 2>&1 || { echo "❌ Missing $MHD_PKG"; exit 1; }
+else
+    rpm -q $MHD_PKG >/dev/null 2>&1 || { echo "❌ Missing $MHD_PKG"; exit 1; }
+fi
+echo "  检查 $PCRE2_PKG..."
+if [ "$PKG_MANAGER" = "apt" ]; then
+    dpkg -l | grep $PCRE2_PKG >/dev/null 2>&1 || { echo "❌ Missing $PCRE2_PKG"; exit 1; }
+else
+    rpm -q $PCRE2_PKG >/dev/null 2>&1 || { echo "❌ Missing $PCRE2_PKG"; exit 1; }
+fi
+echo "✅ Dependencies check passed"
 EOF
 
 if [[ $? -ne 0 ]]; then

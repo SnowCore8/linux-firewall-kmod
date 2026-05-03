@@ -3081,11 +3081,12 @@ static int validate_and_normalize_path(const char *input_path) {
     free(path_copy);
 
     /* Verify resolved path doesn't escape expected locations.
-     * Log files should be under /var/log or similar standard locations. */
+     * Log files should be under /var/log or similar standard locations.
+     * Note: /root/ is excluded as systemd ProtectHome=yes blocks access. */
     if (strncmp(resolved, "/var/log", 8) != 0 &&
         strncmp(resolved, "/etc/", 5) != 0 &&
         strncmp(resolved, "/home/", 6) != 0 &&
-        strncmp(resolved, "/root/", 6) != 0) {
+        strncmp(resolved, "/srv/", 5) != 0) {
         /* Reject paths outside standard locations */
         return -1;
     }
