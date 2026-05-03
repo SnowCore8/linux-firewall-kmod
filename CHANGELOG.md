@@ -2,6 +2,46 @@
 
 所有重要的项目变更记录都在此文件中。
 
+## [v1.7] - 2026-05-03
+
+### 安全加固
+- **整数溢出防护** - 内核模块 ban 时间计算全面防护
+  - 添加 `check_mul_overflow()` 检查所有 `seconds * HZ` 运算
+  - 新增 `MAX_BAN_TIME` (365天) 和 `MIN_BAN_TIME` (30秒) 常量
+  - 修复 `ban_ip()`, `ban_ip_with_duration()`, `bans_write()` 中的溢出风险
+- **SQLite 安全修复** - 修复 use-after-free 漏洞
+  - 所有 `SQLITE_STATIC` 替换为 `SQLITE_TRANSIENT`
+  - 涉及 `sqlite_add_permanent_ban()`, `sqlite_add_permanent_bans_batch()`, `sqlite_remove_permanent_ban()`
+- **路径遍历纵深防御** - 多层验证防止目录穿越
+  - 扩展拒绝字符集：`|;&`$(){}<>!~*?[]`
+  - 拒绝 URL 编码的遍历尝试：`%2e`, `%2f`
+  - 移除 `/tmp/` 作为允许的路径前缀
+  - 简化路径验证逻辑，拒绝非标准位置
+- **ReDoS 防护** - 自定义 regex 安全检查
+  - 拒绝嵌套量词：`)+`, `)*`, `){`, `}?`, `++`, `*+`
+  - 限制交替数量：最多 50 个 `|`
+  - 限制模式长度：最多 1024 字节
+- **HTTP Exporter 加固**
+  - 添加请求截断检测
+  - 添加 URI 路径遍历防护
+  - 新增 `exporter_log_warn` 宏
+- **YAML 解析边界防护**
+  - 单值长度限制：1024 字符
+  - 保持 jail 数量限制：16 个
+  - 保持日志文件限制：10 个/jail
+
+### 部署脚本改进
+- 移除硬编码默认 IP (`43.100.123.123`)
+- 添加部署前确认提示
+- SSH 增加 `-o StrictHostKeyChecking=accept-new`
+- 统一注释为英文
+
+### 测试
+- 新增测试套件 14：整数溢出防护 (6 项测试)
+- 新增测试套件 15：路径遍历防护 (6 项测试)
+- 新增测试套件 16：ReDoS 防护 (7 项测试)
+- 总测试数量：113 项 (原 94 + 新增 19)
+
 ## [v1.6] - 2026-04-22
 
 ### 新增

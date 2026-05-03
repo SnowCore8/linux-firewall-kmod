@@ -36,8 +36,78 @@
 #define EXPORTER_BUFFER_SIZE  8192
 #define EXPORTER_TIMEOUT_SEC  5
 
+/* Rate limiting */
+#define EXPORTER_RATE_LIMIT_MAX_IPS 64    /* Track up to 64 unique IPs */
+#define EXPORTER_RATE_LIMIT_REQ_SEC 10   /* Max requests per second per IP */
+
 /* Procfs paths */
 #define PROCFS_STATS_PATH "/proc/firewall/stats"
+
+/* ============================================================================
+ * Rate Limiting
+ * ========================================================================== */
+struct rate_limit_entry {
+    uint32_t ip;
+    time_t last_request;
+    unsigned int request_count;
+    time_t window_start;
+};
+
+static struct rate_limit_entry rate_limit_table[EXPORTER_RATE_LIMIT_MAX_IPS];
+static int rate_limit_count = 0;
+
+/*
+ * check_rate_limit - Check if request from IP is within rate limit
+ * @ip: Client IP in network byte order
+ *
+ * Returns: 0 if allowed, -1 if rate limited
+ */
+static int check_rate_limit(uint32_t ip)
+{
+    time_t now = time(NULL);
+    struct rate_limit_entry *entry = NULL;
+
+    /* Find existing entry */
+    for (int i = 0; i < rate_limit_count; i++) {
+        if (rate_limit_table[i].ip == ip) {
+            entry = &rate_limit_table[i];
+            break;
+        }
+    }
+
+    /* Create new entry if not found */
+    if (!entry) {
+        if (rate_limit_count >= EXPORTER_RATE_LIMIT_MAX_IPS) {
+            /* Table full - evict oldest entry */
+            rate_limit_table[0].ip = ip;
+            rate_limit_table[0].last_request = now;
+            rate_limit_table[0].request_count = 1;
+            rate_limit_table[0].window_start = now;
+            return 0;
+        }
+        entry = &rate_limit_table[rate_limit_count++];
+        entry->ip = ip;
+        entry->last_request = now;
+        entry->request_count = 1;
+        entry->window_start = now;
+        return 0;
+    }
+
+    /* Reset window if expired */
+    if (now - entry->window_start >= 1) {
+        entry->request_count = 0;
+        entry->window_start = now;
+    }
+
+    entry->request_count++;
+    entry->last_request = now;
+
+    if (entry->request_count > EXPORTER_RATE_LIMIT_REQ_SEC) {
+        return -1; /* Rate limited */
+    }
+
+    return 0;
+}
 
 /* ============================================================================
  * External reference to daemon_stats (defined in firewall-daemon.c)
@@ -60,6 +130,8 @@ extern struct daemon_stats {
  * ========================================================================== */
 #define exporter_log_err(fmt, ...) \
     fprintf(stderr, "firewall[exporter]: ERROR: " fmt "\n", ##__VA_ARGS__)
+#define exporter_log_warn(fmt, ...) \
+    fprintf(stderr, "firewall[exporter]: WARN: " fmt "\n", ##__VA_ARGS__)
 #define exporter_log_info(fmt, ...) \
     fprintf(stderr, "firewall[exporter]: " fmt "\n", ##__VA_ARGS__)
 
@@ -307,6 +379,7 @@ static int handle_request(int sockfd)
     ssize_t bytes_read;
     char method[16] = {0};
     char uri[256] = {0};
+    char http_version[32] = {0};
 
     /* Set receive timeout */
     struct timeval tv;
@@ -323,8 +396,22 @@ static int handle_request(int sockfd)
     }
     buffer[bytes_read] = '\0';
 
-    /* Parse method and URI */
-    if (sscanf(buffer, "%15s %255s", method, uri) != 2) {
+    /* Check if request was truncated */
+    if (bytes_read >= (ssize_t)sizeof(buffer) - 1) {
+        exporter_log_warn("Request too large, possible attack");
+        send_response(sockfd, http_400, NULL);
+        return -1;
+    }
+
+    /* Parse method, URI and HTTP version */
+    if (sscanf(buffer, "%15s %255s %31s", method, uri, http_version) < 2) {
+        send_response(sockfd, http_400, NULL);
+        return -1;
+    }
+
+    /* Validate URI doesn't contain path traversal */
+    if (strstr(uri, "..") != NULL || strstr(uri, "%2e") != NULL) {
+        exporter_log_warn("Path traversal attempt in URI: %s", uri);
         send_response(sockfd, http_400, NULL);
         return -1;
     }
@@ -466,6 +553,20 @@ void *start_http_exporter(void *port)
                 if (errno != EAGAIN && errno != EWOULDBLOCK) {
                     exporter_log_err("Failed to accept connection: %s", strerror(errno));
                 }
+                continue;
+            }
+
+            /* Rate limiting check */
+            if (check_rate_limit(client_addr.sin_addr.s_addr) < 0) {
+                exporter_log_info("Rate limited connection from %s", inet_ntoa(client_addr.sin_addr));
+                const char *rate_limit_response =
+                    "HTTP/1.1 429 Too Many Requests\r\n"
+                    "Content-Type: text/plain\r\n"
+                    "Connection: close\r\n"
+                    "\r\n"
+                    "429 Too Many Requests\r\n";
+                send(client_fd, rate_limit_response, strlen(rate_limit_response), MSG_NOSIGNAL);
+                close(client_fd);
                 continue;
             }
 

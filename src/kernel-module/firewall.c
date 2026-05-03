@@ -290,8 +290,16 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
                 return 0;
             } else {
                 /* Entry exists but expired - update it */
+                unsigned long ban_secs = READ_ONCE(fw_ban_time);
+                unsigned long ban_duration;
+                if (check_mul_overflow(ban_secs, (unsigned long)HZ, &ban_duration)) {
+                    spin_unlock(&fw->lock);
+                    fw_pr_err("ban_time overflow detected");
+                    FW_DEBUG(1, "EXIT: ban_ip -> -EINVAL (overflow)");
+                    return -EINVAL;
+                }
                 entry->ban_time = jiffies;
-                entry->unban_time = jiffies + (unsigned long)READ_ONCE(fw_ban_time) * HZ;
+                entry->unban_time = jiffies + ban_duration;
                 atomic_set(&entry->retry_count, 0);
                 spin_unlock(&fw->lock);
                 FW_DEBUG(2, "Updated expired ban entry for IP %pI4", &ip);
@@ -320,9 +328,18 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
 
     entry->ip = ip;
     entry->ban_time = jiffies;
-    /* FIX P1-5: Use READ_ONCE to atomically read fw_ban_time to prevent
-     * torn reads when the value is being concurrently updated via procfs. */
-    entry->unban_time = jiffies + (unsigned long)READ_ONCE(fw_ban_time) * HZ;
+    {
+        unsigned long ban_secs = READ_ONCE(fw_ban_time);
+        unsigned long ban_duration;
+        if (check_mul_overflow(ban_secs, (unsigned long)HZ, &ban_duration)) {
+            spin_unlock(&fw->lock);
+            kfree(entry);
+            fw_pr_err("ban_time overflow detected");
+            FW_DEBUG(1, "EXIT: ban_ip -> -EINVAL (overflow)");
+            return -EINVAL;
+        }
+        entry->unban_time = jiffies + ban_duration;
+    }
     entry->is_permanent = false;  /* Default to temporary ban */
     atomic_set(&entry->retry_count, 0);
 
@@ -939,8 +956,15 @@ static int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned lo
                 return 0;
             } else {
                 /* Entry exists but expired - update it */
+                unsigned long ban_duration;
+                if (check_mul_overflow(seconds, (unsigned long)HZ, &ban_duration)) {
+                    spin_unlock(&fw->lock);
+                    fw_pr_err("ban duration overflow for IP %pI4", &ip);
+                    FW_DEBUG(1, "EXIT: ban_ip_with_duration -> -EINVAL (overflow)");
+                    return -EINVAL;
+                }
                 entry->ban_time = jiffies;
-                entry->unban_time = jiffies + seconds * HZ;
+                entry->unban_time = jiffies + ban_duration;
                 entry->is_permanent = false;
                 atomic_set(&entry->retry_count, 0);
                 spin_unlock(&fw->lock);
@@ -970,7 +994,17 @@ static int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned lo
 
     entry->ip = ip;
     entry->ban_time = jiffies;
-    entry->unban_time = jiffies + seconds * HZ;
+    {
+        unsigned long ban_duration;
+        if (check_mul_overflow(seconds, (unsigned long)HZ, &ban_duration)) {
+            spin_unlock(&fw->lock);
+            kfree(entry);
+            fw_pr_err("ban duration overflow for IP %pI4", &ip);
+            FW_DEBUG(1, "EXIT: ban_ip_with_duration -> -EINVAL (overflow)");
+            return -EINVAL;
+        }
+        entry->unban_time = jiffies + ban_duration;
+    }
     entry->is_permanent = false;
     atomic_set(&entry->retry_count, 0);
 
@@ -1128,6 +1162,17 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
             seconds = simple_strtol(space_pos, &endp, 10);
             if (endp == space_pos || *endp != '\0') {
                 fw_pr_warn("Invalid format - invalid seconds value: %s", input);
+                return -EINVAL;
+            }
+
+            /* Validate seconds bounds to prevent overflow */
+            if (seconds < 0 && seconds != -1) {
+                /* Negative values other than -1 are invalid */
+                fw_pr_warn("Invalid ban duration: %ld", seconds);
+                return -EINVAL;
+            }
+            if (seconds > MAX_BAN_TIME) {
+                fw_pr_warn("Ban duration %ld exceeds maximum %d seconds", seconds, MAX_BAN_TIME);
                 return -EINVAL;
             }
 
@@ -2086,6 +2131,12 @@ int restore_state_from_file(const char *filename)
         return -EINVAL;
     }
 
+    /* Security: Reject symlinks and validate path */
+    if (strstr(filename, "..") != NULL) {
+        fw_pr_err("State restore: path traversal attempt rejected: %s", filename);
+        return -EINVAL;
+    }
+
     /* Allocate buffer on heap to avoid large stack frame */
     buffer = kmalloc(PAGE_SIZE, GFP_KERNEL);
     if (!buffer) {
@@ -2093,12 +2144,32 @@ int restore_state_from_file(const char *filename)
         return -ENOMEM;
     }
 
-    /* Open file for reading */
-    file = filp_open(filename, O_RDONLY, 0);
+    /* Open file for reading with O_NOFOLLOW to prevent symlink attacks */
+    file = filp_open(filename, O_RDONLY | O_NOFOLLOW, 0);
     if (IS_ERR(file)) {
-        fw_pr_info("State file does not exist: %s", filename);
+        if (PTR_ERR(file) == -ELOOP) {
+            fw_pr_warn("State restore: symlink detected and rejected: %s", filename);
+        } else {
+            fw_pr_info("State file does not exist: %s", filename);
+        }
         kfree(buffer);
         return 0; /* Not an error, just no saved state to restore */
+    }
+
+    /* Security: Verify file is a regular file (not device, socket, etc.) */
+    {
+        struct kstat stat;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
+        int stat_err = vfs_getattr(&file->f_path, &stat, STATX_BASIC_STATS, AT_STATX_SYNC_AS_STAT);
+#else
+        int stat_err = vfs_getattr(&file->f_path, &stat);
+#endif
+        if (stat_err == 0 && !S_ISREG(stat.mode)) {
+            fw_pr_err("State restore: not a regular file: %s", filename);
+            filp_close(file, NULL);
+            kfree(buffer);
+            return -EINVAL;
+        }
     }
 
     /* Read entire file into buffer */

@@ -102,8 +102,29 @@ if [[ ! -f "$KERNEL_MODULE_PATH" ]]; then
         exit 1
     }
     cd "$SCRIPT_DIR"
+    # 验证编译产物
+    if [[ ! -f "$KERNEL_MODULE_PATH" ]]; then
+        fw_log_error "内核模块编译成功但产物不存在: $KERNEL_MODULE_PATH"
+        exit 1
+    fi
 fi
 assert_file_exists "$KERNEL_MODULE_PATH" "内核模块存在"
+
+# 检查 daemon 二进制（如果测试需要）
+DAEMON_BIN="$PROJECT_ROOT/build/daemon/firewall-daemon"
+if [[ ! -f "$DAEMON_BIN" ]]; then
+    fw_log_info "编译用户态守护进程..."
+    cd "$PROJECT_ROOT" && make daemon >/dev/null 2>&1 || {
+        fw_log_warn "守护进程编译失败（部分测试可能跳过）"
+    }
+    cd "$SCRIPT_DIR"
+    # 验证编译产物
+    if [[ -f "$DAEMON_BIN" ]]; then
+        fw_log_info "守护进程编译成功"
+    else
+        fw_log_warn "守护进程编译成功但产物不存在"
+    fi
+fi
 
 # 安全预检
 fw_log_info "测试模式：仅加载/卸载模块，不安装到系统"
@@ -125,6 +146,9 @@ declare -A SUITE_FILES=(
     ["11_resource_mgmt"]="suites/11_resource_mgmt.sh"
     ["12_permanent_ban"]="suites/12_permanent_ban.sh"
     ["13_frp_jail"]="suites/13_frp_jail.sh"
+    ["14_integer_overflow"]="suites/14_integer_overflow.sh"
+    ["15_path_traversal"]="suites/15_path_traversal.sh"
+    ["16_redos_test"]="suites/16_redos_test.sh"
 )
 
 declare -A SUITE_CATEGORIES=(
@@ -141,6 +165,9 @@ declare -A SUITE_CATEGORIES=(
     ["11_resource_mgmt"]="resource"
     ["12_permanent_ban"]="permanent ban"
     ["13_frp_jail"]="daemon frp"
+    ["14_integer_overflow"]="security overflow"
+    ["15_path_traversal"]="security path"
+    ["16_redos_test"]="security regex"
 )
 
 # ============================================================================

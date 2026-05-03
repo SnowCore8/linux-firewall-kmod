@@ -20,6 +20,7 @@
 #include <linux/if_addr.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
+#include <linux/overflow.h>
 
 /* ============================================================================
  * Unified Logging System
@@ -98,6 +99,8 @@
 #define BAN_HASH_BITS 10
 #define MAX_BAN_ENTRIES (1 << BAN_HASH_BITS)  /* 1024 entries */
 #define DEFAULT_BAN_TIME 600  /* 10 minutes in seconds */
+#define MAX_BAN_TIME (365 * 24 * 60 * 60)  /* 1 year max, prevents overflow */
+#define MIN_BAN_TIME 30  /* 30 seconds minimum to avoid excessive timer overhead */
 
 /* Whitelist hash table structure */
 #define WHITELIST_HASH_BITS 6

@@ -1,30 +1,82 @@
 #!/bin/bash
-# deploy.sh - 部署防火墙到远程服务器（含远程编译）
-# 用法: ./deploy.sh <remote_host> [remote_user]
+# deploy.sh - Deploy firewall to remote server (with remote compilation)
+# Usage: ./deploy.sh <remote_host> [remote_user]
 
-REMOTE_HOST="${1:-43.100.123.123}"
+if [[ -z "$1" ]]; then
+    echo "Usage: ./deploy.sh <remote_host> [remote_user]"
+    echo "  remote_host: Target server IP or hostname (required)"
+    echo "  remote_user: SSH user (default: root)"
+    exit 1
+fi
+
+REMOTE_HOST="$1"
 REMOTE_USER="${2:-root}"
 PROJECT_DIR="/root/firewall"
 
 echo "========================================="
-echo "防火墙部署脚本"
-echo "目标服务器: $REMOTE_USER@$REMOTE_HOST"
+echo "Firewall Deployment Script"
+echo "Target server: $REMOTE_USER@$REMOTE_HOST"
 echo "========================================="
 
-# 1. 检查远程服务器依赖
+read -p "Confirm deployment to $REMOTE_HOST? [y/N] " confirm
+if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+    echo "Deployment cancelled."
+    exit 0
+fi
+
+# 1. Check remote server dependencies
 echo ""
-echo "[1/7] 检查远程服务器依赖..."
-ssh $REMOTE_USER@$REMOTE_HOST << 'EOF'
+echo "[1/7] Checking remote server dependencies..."
+ssh -o StrictHostKeyChecking=accept-new "$REMOTE_USER@$REMOTE_HOST" << 'EOF'
+# Detect package manager
+if command -v apt-get >/dev/null 2>&1; then
+    PKG_MANAGER="apt"
+    YAML_PKG="libyaml-dev"
+    SQLITE_PKG="libsqlite3-dev"
+    KERNEL_HEADERS_PKG="linux-headers-$(uname -r)"
+elif command -v yum >/dev/null 2>&1; then
+    PKG_MANAGER="yum"
+    YAML_PKG="libyaml-devel"
+    SQLITE_PKG="sqlite-devel"
+    KERNEL_HEADERS_PKG="kernel-devel-$(uname -r)"
+elif command -v dnf >/dev/null 2>&1; then
+    PKG_MANAGER="dnf"
+    YAML_PKG="libyaml-devel"
+    SQLITE_PKG="sqlite-devel"
+    KERNEL_HEADERS_PKG="kernel-devel-$(uname -r)"
+else
+    echo "❌ 不支持的包管理器"
+    exit 1
+fi
+
+echo "  检测到包管理器: $PKG_MANAGER"
+
 echo "  检查 gcc..."
 which gcc >/dev/null 2>&1 || { echo "❌ 缺少 gcc"; exit 1; }
 echo "  检查 make..."
 which make >/dev/null 2>&1 || { echo "❌ 缺少 make"; exit 1; }
 echo "  检查内核头文件..."
-ls /lib/modules/$(uname -r)/build/Makefile >/dev/null 2>&1 || { echo "❌ 缺少内核头文件，请安装: apt install linux-headers-$(uname -r)"; exit 1; }
-echo "  检查 libyaml-dev..."
-dpkg -l | grep libyaml-dev >/dev/null 2>&1 || { echo "❌ 缺少 libyaml-dev"; exit 1; }
-echo "  检查 libsqlite3-dev..."
-dpkg -l | grep libsqlite3-dev >/dev/null 2>&1 || { echo "❌ 缺少 libsqlite3-dev"; exit 1; }
+ls /lib/modules/$(uname -r)/build/Makefile >/dev/null 2>&1 || {
+    echo "❌ 缺少内核头文件"
+    if [ "$PKG_MANAGER" = "apt" ]; then
+        echo "   安装命令: apt install linux-headers-$(uname -r)"
+    else
+        echo "   安装命令: $PKG_MANAGER install kernel-devel-$(uname -r)"
+    fi
+    exit 1;
+}
+echo "  检查 $YAML_PKG..."
+if [ "$PKG_MANAGER" = "apt" ]; then
+    dpkg -l | grep $YAML_PKG >/dev/null 2>&1 || { echo "❌ 缺少 $YAML_PKG"; exit 1; }
+else
+    rpm -q $YAML_PKG >/dev/null 2>&1 || { echo "❌ 缺少 $YAML_PKG"; exit 1; }
+fi
+echo "  检查 $SQLITE_PKG..."
+if [ "$PKG_MANAGER" = "apt" ]; then
+    dpkg -l | grep $SQLITE_PKG >/dev/null 2>&1 || { echo "❌ 缺少 $SQLITE_PKG"; exit 1; }
+else
+    rpm -q $SQLITE_PKG >/dev/null 2>&1 || { echo "❌ 缺少 $SQLITE_PKG"; exit 1; }
+fi
 echo "✅ 依赖检查通过"
 EOF
 
@@ -46,20 +98,20 @@ tar czf firewall-src.tar.gz \
     firewall/scripts/
 echo "✅ 打包完成"
 
-# 3. 上传到远程服务器
+# 3. Upload to remote server
 echo ""
-echo "[3/7] 上传到远程服务器..."
-scp firewall-src.tar.gz $REMOTE_USER@$REMOTE_HOST:/tmp/
+echo "[3/7] Uploading to remote server..."
+scp firewall-src.tar.gz "$REMOTE_USER@$REMOTE_HOST":/tmp/
 if [[ $? -ne 0 ]]; then
     echo "❌ 上传失败"
     exit 1
 fi
 echo "✅ 上传完成"
 
-# 4. 远程编译和安装
+# 4. Remote compilation and installation
 echo ""
-echo "[4/7] 远程编译和安装..."
-ssh $REMOTE_USER@$REMOTE_HOST << 'REMOTE_SCRIPT'
+echo "[4/7] Remote compilation and installation..."
+ssh -o StrictHostKeyChecking=accept-new "$REMOTE_USER@$REMOTE_HOST" << 'REMOTE_SCRIPT'
 set -e
 
 echo "  [4.1] 解压源码..."
@@ -120,52 +172,52 @@ if [[ $? -ne 0 ]]; then
     exit 1
 fi
 
-# 5. 验证远程服务
+# 5. Verify remote service
 echo ""
-echo "[5/7] 验证远程服务..."
-ssh $REMOTE_USER@$REMOTE_HOST "curl -s http://localhost:9119/metrics | head -10"
+echo "[5/7] Verifying remote service..."
+ssh -o StrictHostKeyChecking=accept-new "$REMOTE_USER@$REMOTE_HOST" "curl -s http://localhost:9119/metrics | head -10"
 if [[ $? -eq 0 ]]; then
     echo "✅ Prometheus 指标导出正常"
 else
     echo "⚠️  Prometheus 指标导出异常"
 fi
 
-# 6. 测试 SSH Jail
+# 6. Test SSH Jail
 echo ""
-echo "[6/7] 测试 SSH Jail..."
-ssh $REMOTE_USER@$REMOTE_HOST << 'EOF'
+echo "[6/7] Testing SSH Jail..."
+ssh -o StrictHostKeyChecking=accept-new "$REMOTE_USER@$REMOTE_HOST" << 'EOF'
 TEST_IP="203.0.113.99"
-echo "  模拟 6 次 SSH 失败登录..."
-for i in $(seq 1 6); do
-    echo "$(date '+%b %d %H:%M:%S') server sshd[$$]: Failed password for root from $TEST_IP port 12345 ssh2" | sudo tee -a /var/log/auth.log > /dev/null
-done
-sleep 5
+    echo "  模拟 6 次 SSH 失败登录..."
+    for i in $(seq 1 6); do
+        echo "$(date '+%b %d %H:%M:%S') server sshd[$$]: Failed password for root from $TEST_IP port 12345 ssh2" | sudo tee -a /var/log/auth.log > /dev/null
+    done
+    sleep 5
 
-if cat /proc/firewall/bans | grep -q "$TEST_IP"; then
-    echo "  ✅ SSH Jail 封禁正常: $TEST_IP 已被封禁"
-else
-    echo "  ⚠️  SSH Jail 封禁未触发"
-fi
+    if cat /proc/firewall/bans | grep -q "$TEST_IP"; then
+        echo "  ✅ SSH Jail working: $TEST_IP has been banned"
+    else
+        echo "  ⚠️  SSH Jail did not trigger"
+    fi
 
-# 清理测试 IP
-echo "unban $TEST_IP" | sudo tee /proc/firewall/bans >/dev/null 2>&1
+    # Clean up test IP
+    echo "unban $TEST_IP" | sudo tee /proc/firewall/bans >/dev/null 2>&1
 EOF
 
-# 7. 清理本地临时文件
+# 7. Clean up local temporary files
 echo ""
-echo "[7/7] 清理本地临时文件..."
+echo "[7/7] Cleaning up local temporary files..."
 rm -f /root/firewall-src.tar.gz
-echo "✅ 清理完成"
+echo "✅ Cleanup complete"
 
 echo ""
 echo "========================================="
-echo "🎉 部署完成！"
+echo "🎉 Deployment complete!"
 echo "========================================="
 echo ""
-echo "远程管理命令:"
-echo "  查看状态: ssh $REMOTE_USER@$REMOTE_HOST 'systemctl status firewall-daemon'"
-echo "  查看日志: ssh $REMOTE_USER@$REMOTE_HOST 'journalctl -u firewall-daemon -f'"
-echo "  查看封禁: ssh $REMOTE_USER@$REMOTE_HOST 'cat /proc/firewall/bans'"
-echo "  热重载:   ssh $REMOTE_USER@$REMOTE_HOST 'systemctl reload firewall-daemon'"
-echo "  查看指标: ssh $REMOTE_USER@$REMOTE_HOST 'curl http://localhost:9119/metrics'"
+echo "Remote management commands:"
+echo "  Status: ssh $REMOTE_USER@$REMOTE_HOST 'systemctl status firewall-daemon'"
+echo "  Logs:   ssh $REMOTE_USER@$REMOTE_HOST 'journalctl -u firewall-daemon -f'"
+echo "  Bans:   ssh $REMOTE_USER@$REMOTE_HOST 'cat /proc/firewall/bans'"
+echo "  Reload: ssh $REMOTE_USER@$REMOTE_HOST 'systemctl reload firewall-daemon'"
+echo "  Metrics: ssh $REMOTE_USER@$REMOTE_HOST 'curl http://localhost:9119/metrics'"
 echo ""

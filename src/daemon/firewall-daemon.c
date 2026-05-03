@@ -43,7 +43,12 @@
 #include <yaml.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <libgen.h>
+#include "khash.h"
 #include "sqlite-persistent.h"
+
+/* Hash table for failed entries per jail */
+KHASH_MAP_INIT_STR(ip_map, struct failed_entry*)
 
 /* ============================================================================
  * Unified Logging System for Daemon
@@ -99,14 +104,16 @@ struct jail {
     char *log_files[MAX_LOG_FILES];   /* Log files for this jail */
     int log_count;                    /* Number of log files */
     char *regex_pattern;              /* Custom regex pattern (NULL = builtin) */
-    regex_t compiled_regex;           /* Compiled regex */
+    regex_t compiled_regex;           /* Compiled regex (POSIX) */
     int regex_compiled;               /* Whether regex is compiled */
     unsigned int max_retries;         /* Max failures before ban */
     unsigned int findtime;            /* Time window for counting failures */
     unsigned int ban_time;            /* Ban duration */
-    struct failed_entry *failed_table;/* Per-jail failed attempts */
-    /* Hash table for faster lookup */
-    struct failed_entry *failed_hash_table[256];
+    struct failed_entry *failed_table;/* Per-jail failed attempts (linked list) */
+    struct failed_entry *failed_hash_table[256]; /* Manual hash table */
+    khash_t(ip_map) *failed_hash;     /* khash for O(1) lookup */
+    char partial_line_buffer[8192];   /* Buffer for incomplete log lines */
+    size_t partial_line_len;          /* Current length of partial line */
 };
 
 /* Global running flag */
@@ -167,6 +174,9 @@ static void init_jail_defaults(struct jail *j)
     j->ban_time = cfg.default_ban_time;
     j->failed_table = NULL;
     memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
+    j->failed_hash = NULL;
+    j->partial_line_len = 0;
+    j->partial_line_buffer[0] = '\0';
 
     for (int i = 0; i < MAX_LOG_FILES; i++) {
         j->log_files[i] = NULL;
@@ -261,6 +271,33 @@ static int compile_jail_regex(struct jail *j)
         j->regex_pattern :
         "Failed password for (invalid user )?[a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})";
 
+    /* Validate regex pattern to prevent ReDoS attacks */
+    if (j->regex_pattern && strlen(j->regex_pattern) > 0) {
+        /* Reject nested quantifiers that can cause catastrophic backtracking */
+        if (strstr(pattern, ")+") || strstr(pattern, ")*") ||
+            strstr(pattern, "){") || strstr(pattern, "}?") ||
+            strstr(pattern, "++") || strstr(pattern, "*+")) {
+            daemon_log_err("Rejected unsafe regex for jail '%s': nested quantifiers detected", j->name);
+            return -1;
+        }
+
+        /* Reject excessive alternation (a|b|c|... patterns) */
+        int pipe_count = 0;
+        for (const char *p = pattern; *p; p++) {
+            if (*p == '|') pipe_count++;
+        }
+        if (pipe_count > 50) {
+            daemon_log_err("Rejected unsafe regex for jail '%s': too many alternations (%d)", j->name, pipe_count);
+            return -1;
+        }
+
+        /* Reject patterns that are too long */
+        if (strlen(pattern) > 1024) {
+            daemon_log_err("Rejected unsafe regex for jail '%s': pattern too long (%zu bytes)", j->name, strlen(pattern));
+            return -1;
+        }
+    }
+
     int ret = regcomp(&j->compiled_regex, pattern, REG_EXTENDED);
     if (ret != 0) {
         char errbuf[256];
@@ -340,6 +377,226 @@ static void cleanup_all_jails(void)
     daemon_log_info("All jails resources cleaned up");
 }
 
+/* Find or create jail in a specific config (for double-buffer reload) */
+static struct jail *find_or_create_jail_in_cfg(const char *name, struct config *target_cfg)
+{
+    for (int i = 0; i < target_cfg->jail_count; i++) {
+        if (strcmp(target_cfg->jails[i].name, name) == 0) {
+            return &target_cfg->jails[i];
+        }
+    }
+
+    if (target_cfg->jail_count >= MAX_JAILS) {
+        daemon_log_warn("Max jails reached (%d), cannot create jail '%s'", MAX_JAILS, name);
+        return NULL;
+    }
+
+    struct jail *j = &target_cfg->jails[target_cfg->jail_count++];
+    j->enabled = true;
+    j->log_count = 0;
+    j->regex_pattern = NULL;
+    memset(&j->compiled_regex, 0, sizeof(j->compiled_regex));
+    j->regex_compiled = 0;
+    j->max_retries = target_cfg->default_max_retries;
+    j->findtime = target_cfg->default_findtime;
+    j->ban_time = target_cfg->default_ban_time;
+    j->failed_table = NULL;
+    memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
+    j->failed_hash = NULL;
+    j->partial_line_len = 0;
+    j->partial_line_buffer[0] = '\0';
+
+    for (int i = 0; i < MAX_LOG_FILES; i++) {
+        j->log_files[i] = NULL;
+    }
+
+    strncpy(j->name, name, sizeof(j->name) - 1);
+    j->name[sizeof(j->name) - 1] = '\0';
+
+    daemon_log_info("Created new jail: %s", name);
+    return j;
+}
+
+/* Clone a single jail (deep copy, excludes runtime state) */
+static int clone_jail(struct jail *dst, const struct jail *src)
+{
+    memcpy(dst, src, sizeof(*dst));
+
+    dst->log_count = 0;
+    for (int i = 0; i < src->log_count; i++) {
+        if (src->log_files[i]) {
+            dst->log_files[i] = strdup(src->log_files[i]);
+            if (!dst->log_files[i]) {
+                for (int j = 0; j < dst->log_count; j++) {
+                    free(dst->log_files[j]);
+                }
+                return -1;
+            }
+            dst->log_count++;
+        }
+    }
+
+    dst->regex_pattern = NULL;
+    if (src->regex_pattern) {
+        dst->regex_pattern = strdup(src->regex_pattern);
+        if (!dst->regex_pattern) {
+            for (int j = 0; j < dst->log_count; j++) {
+                free(dst->log_files[j]);
+            }
+            return -1;
+        }
+    }
+
+    /* Don't clone compiled regex - will be recompiled */
+    memset(&dst->compiled_regex, 0, sizeof(dst->compiled_regex));
+    dst->regex_compiled = 0;
+
+    /* Don't clone runtime state */
+    dst->failed_table = NULL;
+    memset(dst->failed_hash_table, 0, sizeof(dst->failed_hash_table));
+    dst->failed_hash = NULL;
+    dst->partial_line_len = 0;
+    dst->partial_line_buffer[0] = '\0';
+
+    return 0;
+}
+
+/* Clone entire config (excludes runtime state) */
+static struct config *config_clone(const struct config *src)
+{
+    struct config *dst = calloc(1, sizeof(*dst));
+    if (!dst) return NULL;
+
+    dst->default_max_retries = src->default_max_retries;
+    dst->default_findtime = src->default_findtime;
+    dst->default_ban_time = src->default_ban_time;
+    dst->daemonize = src->daemonize;
+    dst->interval = src->interval;
+    dst->metrics_port = src->metrics_port;
+    dst->permanent_ban_enabled = src->permanent_ban_enabled;
+
+    if (src->config_file) {
+        dst->config_file = strdup(src->config_file);
+        if (!dst->config_file) goto fail;
+    }
+    if (src->config_dir) {
+        dst->config_dir = strdup(src->config_dir);
+        if (!dst->config_dir) goto fail;
+    }
+    if (src->permanent_db_path) {
+        dst->permanent_db_path = strdup(src->permanent_db_path);
+        if (!dst->permanent_db_path) goto fail;
+    }
+
+    dst->jail_count = src->jail_count;
+    for (int i = 0; i < src->jail_count; i++) {
+        if (clone_jail(&dst->jails[i], &src->jails[i]) < 0) {
+            goto fail;
+        }
+    }
+
+    return dst;
+
+fail:
+    if (dst->config_file) free(dst->config_file);
+    if (dst->config_dir) free(dst->config_dir);
+    if (dst->permanent_db_path) free(dst->permanent_db_path);
+    for (int i = 0; i < dst->jail_count; i++) {
+        for (int j = 0; j < dst->jails[i].log_count; j++) {
+            free(dst->jails[i].log_files[j]);
+        }
+        if (dst->jails[i].regex_pattern) free(dst->jails[i].regex_pattern);
+    }
+    free(dst);
+    return NULL;
+}
+
+/* Validate configuration integrity */
+static int config_validate(const struct config *cfg)
+{
+    if (!cfg) return -1;
+    if (cfg->jail_count <= 0 || cfg->jail_count > MAX_JAILS) return -1;
+    if (cfg->interval <= 0 || cfg->interval > 60) return -1;
+    if (cfg->metrics_port < 0 || cfg->metrics_port > 65535) return -1;
+    if (cfg->default_max_retries == 0) return -1;
+    if (cfg->default_findtime == 0) return -1;
+    if (cfg->default_ban_time == 0) return -1;
+
+    for (int i = 0; i < cfg->jail_count; i++) {
+        const struct jail *j = &cfg->jails[i];
+        if (!j->enabled) continue;
+        if (j->log_count == 0) {
+            daemon_log_err("Jail '%s' has no log files", j->name);
+            return -1;
+        }
+        if (j->max_retries == 0) {
+            daemon_log_err("Jail '%s' has max_retries=0", j->name);
+            return -1;
+        }
+        if (j->findtime == 0) {
+            daemon_log_err("Jail '%s' has findtime=0", j->name);
+            return -1;
+        }
+        if (j->ban_time == 0) {
+            daemon_log_err("Jail '%s' has ban_time=0", j->name);
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+/* Migrate failed entries from old config to new config */
+static void migrate_failed_entries(struct config *old, struct config *new)
+{
+    for (int i = 0; i < old->jail_count; i++) {
+        struct jail *old_jail = &old->jails[i];
+        if (!old_jail->failed_hash) continue;
+
+        for (int j = 0; j < new->jail_count; j++) {
+            struct jail *new_jail = &new->jails[j];
+            if (strcmp(old_jail->name, new_jail->name) == 0) {
+                new_jail->failed_hash = old_jail->failed_hash;
+                old_jail->failed_hash = NULL;
+                daemon_log_debug("Migrated failed entries for jail '%s'", new_jail->name);
+                break;
+            }
+        }
+    }
+}
+
+/* Free config without runtime state (already migrated) */
+static void free_config_partial(struct config *cfg)
+{
+    if (!cfg) return;
+
+    for (int i = 0; i < cfg->jail_count; i++) {
+        struct jail *jail = &cfg->jails[i];
+
+        for (int j = 0; j < jail->log_count; j++) {
+            free(jail->log_files[j]);
+        }
+
+        if (jail->regex_compiled) {
+            regfree(&jail->compiled_regex);
+            jail->regex_compiled = 0;
+        }
+        if (jail->regex_pattern) {
+            free(jail->regex_pattern);
+        }
+
+        /* failed_hash already migrated, skip */
+    }
+
+    if (cfg->config_file) free(cfg->config_file);
+    if (cfg->config_dir) free(cfg->config_dir);
+    if (cfg->permanent_db_path) free(cfg->permanent_db_path);
+}
+
+/* Forward declarations - must be before functions that use them */
+static int setup_inotify(void);
+static void cleanup_partial_line_buffer(void);
+
 /* Comparison function for qsort - sorting config file names */
 static int compare_config_files(const void *a, const void *b) {
     return strcmp(*(const char **)a, *(const char **)b);
@@ -368,9 +625,7 @@ static int ban_ip_permanent(const char *ip);
 static int unban_ip(const char *ip);
 static int unban_permanent_ip(const char *ip);
 static void cleanup_expired_bans(void);
-static void cleanup_partial_line_buffer(void);
 static void daemonize_process(void);
-static int setup_inotify(void);
 static void process_new_lines(int idx);
 static void monitor_loop(void);
 static void cleanup(void);
@@ -468,6 +723,13 @@ static int parse_config_file(const char *config_path)
 
         case YAML_SCALAR_EVENT: {
             char *value = (char *)event.data.scalar.value;
+
+            /* Reject excessively long values to prevent memory exhaustion */
+            if (strlen(value) > 1024) {
+                daemon_log_warn("YAML value too long (%zu bytes), rejecting", strlen(value));
+                error = 1;
+                break;
+            }
 
             if (in_defaults_section && current_key) {
                 /* Parsing defaults section - set global defaults */
@@ -938,8 +1200,7 @@ static int parse_config(int argc, char *argv[])
         cfg.jails[i].log_count = 0;
         cfg.jails[i].regex_pattern = NULL;
         cfg.jails[i].regex_compiled = 0;
-        cfg.jails[i].failed_table = NULL;
-        memset(cfg.jails[i].failed_hash_table, 0, sizeof(cfg.jails[i].failed_hash_table));
+        cfg.jails[i].failed_hash = NULL;
         for (int j = 0; j < MAX_LOG_FILES; j++) {
             cfg.jails[i].log_files[j] = NULL;
         }
@@ -1266,31 +1527,14 @@ static int parse_log_line(struct jail *j, const char *line, char *ip_out, size_t
  * These are the primary functions used by the jail system
  * ========================================================================== */
 
-/* Hash function for IP addresses */
-static unsigned int hash_ip(const char *ip)
-{
-    unsigned int hash = 0;
-    while (*ip) {
-        hash = hash * 31 + (unsigned char)(*ip);
-        ip++;
-    }
-    return hash % 256;
-}
-
 /* Find failed entry by IP in a specific jail */
 static struct failed_entry *find_entry_for_jail(struct jail *j, const char *ip)
 {
-    if (!j || !ip) return NULL;
-
-    /* Use hash table for faster lookup */
-    unsigned int h = hash_ip(ip);
-    struct failed_entry *entry = j->failed_hash_table[h];
-
-    while (entry) {
-        if (strcmp(entry->ip, ip) == 0) {
-            return entry;
-        }
-        entry = entry->next_in_hash;
+    if (!j || !j->failed_hash || !ip) return NULL;
+    
+    khint_t k = kh_get(ip_map, j->failed_hash, ip);
+    if (k != kh_end(j->failed_hash)) {
+        return kh_value(j->failed_hash, k);
     }
     return NULL;
 }
@@ -1299,68 +1543,48 @@ static struct failed_entry *find_entry_for_jail(struct jail *j, const char *ip)
 static struct failed_entry *create_entry_for_jail(struct jail *j, const char *ip)
 {
     if (!j || !ip) return NULL;
-
+    
+    /* Initialize hash table if needed */
+    if (!j->failed_hash) {
+        j->failed_hash = kh_init(ip_map);
+        if (!j->failed_hash) {
+            daemon_log_err("Failed to initialize hash table for jail '%s'", j->name);
+            return NULL;
+        }
+    }
+    
+    /* Check if entry already exists */
+    int ret;
+    khint_t k = kh_put(ip_map, j->failed_hash, ip, &ret);
+    if (ret == 0) {
+        return kh_value(j->failed_hash, k);  /* Already exists */
+    }
+    
+    /* Create new entry */
     struct failed_entry *entry = calloc(1, sizeof(*entry));
     if (!entry) {
         daemon_log_err("Failed to allocate memory for failed entry");
+        kh_del(ip_map, j->failed_hash, k);  /* Remove empty slot */
         return NULL;
     }
-
+    
     strncpy(entry->ip, ip, sizeof(entry->ip) - 1);
     entry->ip[sizeof(entry->ip) - 1] = '\0';
     entry->count = 0;
-
-    /* Add to jail's linked list */
-    entry->next = j->failed_table;
-    j->failed_table = entry;
-
-    /* Add to jail's hash table */
-    unsigned int hash = hash_ip(ip);
-    entry->next_in_hash = j->failed_hash_table[hash];
-    j->failed_hash_table[hash] = entry;
-
+    
+    kh_value(j->failed_hash, k) = entry;
     return entry;
 }
 
 /* Remove failed entry (per-jail) */
 static void remove_entry_for_jail(struct jail *j, const char *ip)
 {
-    struct failed_entry *prev = NULL;
-    struct failed_entry *entry = j->failed_table;
-
-    /* Find in main linked list */
-    while (entry) {
-        if (strcmp(entry->ip, ip) == 0) {
-            /* Remove from main linked list */
-            if (prev) {
-                prev->next = entry->next;
-            } else {
-                j->failed_table = entry->next;
-            }
-
-            /* Remove from hash table */
-            unsigned int hash = hash_ip(ip);
-            struct failed_entry *hash_prev = NULL;
-            struct failed_entry *hash_entry = j->failed_hash_table[hash];
-
-            while (hash_entry) {
-                if (hash_entry == entry) {
-                    if (hash_prev) {
-                        hash_prev->next_in_hash = hash_entry->next_in_hash;
-                    } else {
-                        j->failed_hash_table[hash] = hash_entry->next_in_hash;
-                    }
-                    break;
-                }
-                hash_prev = hash_entry;
-                hash_entry = hash_entry->next_in_hash;
-            }
-
-            free(entry);
-            return;
-        }
-        prev = entry;
-        entry = entry->next;
+    if (!j || !j->failed_hash || !ip) return;
+    
+    khint_t k = kh_get(ip_map, j->failed_hash, ip);
+    if (k != kh_end(j->failed_hash)) {
+        free(kh_value(j->failed_hash, k));
+        kh_del(ip_map, j->failed_hash, k);
     }
 }
 
@@ -1453,20 +1677,107 @@ static unsigned int count_recent(struct failed_entry *entry, time_t window, unsi
     return count;
 }
 
-/* Handle a failed login attempt - jail-aware version */
-static void handle_failed_attempt_for_jail(struct jail *j, const char *ip, unsigned int max_retries, unsigned int findtime)
+/* ============================================================================
+ * Core Failed Attempt Processing Logic
+ * ========================================================================== */
+
+/*
+ * process_failed_timestamps - Add timestamp and manage buffer overflow
+ * @entry: Failed entry to update
+ * @now: Current timestamp
+ * @findtime: Time window for counting failures
+ */
+static void process_failed_timestamps(struct failed_entry *entry, time_t now, time_t findtime)
 {
-    struct failed_entry *entry = find_entry_for_jail(j, ip);
-    time_t now = time(NULL);
+    if (entry->count < MAX_FAILED_TIMESTAMPS) {
+        entry->timestamps[entry->count++] = now;
+    } else {
+        /* Shift timestamps to make room for the new one */
+        memmove(entry->timestamps, entry->timestamps + 1,
+                (MAX_FAILED_TIMESTAMPS - 1) * sizeof(time_t));
+        entry->timestamps[MAX_FAILED_TIMESTAMPS - 1] = now;
 
-    atomic_fetch_add(&daemon_stats.failed_attempts, 1);
+        /* Filter out expired timestamps */
+        time_t oldest_valid = now - findtime;
+        int new_count = 0;
+        for (int i = 0; i < MAX_FAILED_TIMESTAMPS; i++) {
+            if (entry->timestamps[i] >= oldest_valid) {
+                if (new_count != i) {
+                    entry->timestamps[new_count] = entry->timestamps[i];
+                }
+                new_count++;
+            }
+        }
+        entry->count = new_count;
+    }
+}
 
-    /* Validate IP before processing */
-    if (!ip || strlen(ip) == 0) {
-        daemon_log_err("Invalid IP address provided to handle_failed_attempt");
+/*
+ * check_and_ban - Check threshold and ban if exceeded
+ * @entry: Failed entry to check
+ * @ip: IP address string
+ * @max_retries: Maximum allowed failures
+ * @findtime: Time window for counting failures
+ * @jail_name: Jail name for logging (NULL for global)
+ */
+static void check_and_ban(struct failed_entry *entry, const char *ip,
+                          unsigned int max_retries, unsigned int findtime,
+                          const char *jail_name)
+{
+    unsigned int recent_fails = count_recent(entry, findtime, max_retries);
+
+    if (recent_fails >= max_retries) {
+        if (jail_name) {
+            daemon_log_warn("IP %s exceeded %d failures in %d seconds in jail '%s', banning",
+                           ip, recent_fails, findtime, jail_name);
+        } else {
+            daemon_log_warn("IP %s exceeded %d failures in %d seconds, banning",
+                           ip, recent_fails, findtime);
+        }
+
+        if (ban_ip(ip) == 0) {
+            if (jail_name) {
+                daemon_log_info("Successfully banned IP %s after %d failed attempts in jail '%s'",
+                               ip, recent_fails, jail_name);
+            } else {
+                daemon_log_info("Successfully banned IP %s after %d failed attempts",
+                               ip, recent_fails);
+            }
+        } else {
+            if (jail_name) {
+                daemon_log_err("Failed to ban IP %s after %d failed attempts in jail '%s', keeping entry for retry",
+                              ip, recent_fails, jail_name);
+            } else {
+                daemon_log_err("Failed to ban IP %s after %d failed attempts, keeping entry for retry",
+                              ip, recent_fails);
+            }
+        }
+    } else {
+        if (jail_name) {
+            daemon_log_debug("IP %s has %d failed attempts in %d seconds in jail '%s'",
+                            ip, recent_fails, findtime, jail_name);
+        } else {
+            daemon_log_debug("IP %s has %d failed attempts in %d seconds",
+                            ip, recent_fails, findtime);
+        }
+    }
+}
+
+/* Handle a failed login attempt - jail-aware version */
+static void handle_failed_attempt_for_jail(struct jail *j, const char *ip,
+                                           unsigned int max_retries, unsigned int findtime)
+{
+    struct failed_entry *entry;
+    time_t now;
+
+    if (!ip || !*ip) {
+        daemon_log_err("Invalid IP address provided to handle_failed_attempt_for_jail");
         return;
     }
 
+    atomic_fetch_add(&daemon_stats.failed_attempts, 1);
+
+    entry = find_entry_for_jail(j, ip);
     if (!entry) {
         entry = create_entry_for_jail(j, ip);
         if (!entry) {
@@ -1475,59 +1786,30 @@ static void handle_failed_attempt_for_jail(struct jail *j, const char *ip, unsig
         }
     }
 
-    /* Add timestamp */
-    if (entry->count < MAX_FAILED_TIMESTAMPS) {
-        entry->timestamps[entry->count++] = now;
-    } else {
-        /* Shift timestamps to make room for the new one */
-        memmove(entry->timestamps, entry->timestamps + 1,
-                (MAX_FAILED_TIMESTAMPS - 1) * sizeof(time_t));
-        entry->timestamps[MAX_FAILED_TIMESTAMPS - 1] = now;
+    now = time(NULL);
+    process_failed_timestamps(entry, now, findtime);
+    check_and_ban(entry, ip, max_retries, findtime, j->name);
 
-        /* After shifting, check if oldest timestamp is too old to keep */
-        time_t oldest_valid = now - findtime;
-        int new_count = 0;
-        for (int i = 0; i < MAX_FAILED_TIMESTAMPS; i++) {
-            if (entry->timestamps[i] >= oldest_valid) {
-                if (new_count != i) {
-                    entry->timestamps[new_count] = entry->timestamps[i];
-                }
-                new_count++;
-            }
-        }
-        entry->count = new_count;
-    }
-
-    /* Check if exceeded threshold */
-    unsigned int recent_fails = count_recent(entry, findtime, max_retries);
-    if (recent_fails >= max_retries) {
-        daemon_log_warn("IP %s exceeded %d failures in %d seconds in jail '%s', banning", ip, recent_fails, findtime, j->name);
-        if (ban_ip(ip) == 0) {
-            remove_entry_for_jail(j, ip);
-            daemon_log_info("Successfully banned IP %s after %d failed attempts in jail '%s'", ip, recent_fails, j->name);
-        } else {
-            daemon_log_err("Failed to ban IP %s after %d failed attempts in jail '%s', keeping entry for retry", ip, recent_fails, j->name);
-        }
-    } else {
-        daemon_log_debug("IP %s has %d failed attempts in %d seconds in jail '%s'", ip, recent_fails, findtime, j->name);
+    /* Remove entry after successful ban */
+    if (count_recent(entry, findtime, max_retries) >= max_retries) {
+        remove_entry_for_jail(j, ip);
     }
 }
 
-/* Handle a failed login attempt - thread-safe version (backward compatible) */
-
+/* Handle a failed login attempt - global version (backward compatible) */
 static void handle_failed_attempt(const char *ip, unsigned int max_retries, unsigned int findtime)
 {
-    struct failed_entry *entry = find_entry(ip);
-    time_t now = time(NULL);
+    struct failed_entry *entry;
+    time_t now;
 
-    atomic_fetch_add(&daemon_stats.failed_attempts, 1);
-
-    /* Validate IP before processing */
-    if (!ip || strlen(ip) == 0) {
+    if (!ip || !*ip) {
         daemon_log_err("Invalid IP address provided to handle_failed_attempt");
         return;
     }
 
+    atomic_fetch_add(&daemon_stats.failed_attempts, 1);
+
+    entry = find_entry(ip);
     if (!entry) {
         entry = create_entry(ip);
         if (!entry) {
@@ -1536,42 +1818,67 @@ static void handle_failed_attempt(const char *ip, unsigned int max_retries, unsi
         }
     }
 
-    /* Add timestamp */
-    if (entry->count < MAX_FAILED_TIMESTAMPS) {
-        entry->timestamps[entry->count++] = now;
-    } else {
-        /* Shift timestamps to make room for the new one */
-        memmove(entry->timestamps, entry->timestamps + 1,
-                (MAX_FAILED_TIMESTAMPS - 1) * sizeof(time_t));
-        entry->timestamps[MAX_FAILED_TIMESTAMPS - 1] = now;
+    now = time(NULL);
+    process_failed_timestamps(entry, now, findtime);
+    check_and_ban(entry, ip, max_retries, findtime, NULL);
 
-        /* After shifting, check if oldest timestamp is too old to keep */
-        time_t oldest_valid = now - findtime;
-        int new_count = 0;
-        for (int i = 0; i < MAX_FAILED_TIMESTAMPS; i++) {
-            if (entry->timestamps[i] >= oldest_valid) {
-                if (new_count != i) {
-                    entry->timestamps[new_count] = entry->timestamps[i];
-                }
-                new_count++;
-            }
-        }
-        entry->count = new_count;
+    /* Remove entry after successful ban */
+    if (count_recent(entry, findtime, max_retries) >= max_retries) {
+        remove_entry(ip);
+    }
+}
+
+/* Structure to hold validated IP information */
+typedef struct {
+    struct in_addr addr;
+    uint32_t ip_num;  /* network byte order */
+} validated_ip_t;
+
+/*
+ * validate_ipv4 - Validate and parse an IPv4 address string
+ * @ip: IP address string to validate
+ * @out: Output structure to store parsed address (may be NULL)
+ *
+ * Returns: 0 on success, -1 on failure
+ * 
+ * Validates:
+ * - Non-NULL, non-empty string
+ * - Length < INET_ADDRSTRLEN
+ * - Valid IPv4 format via inet_pton
+ * - Rejects: 0.0.0.0, 255.255.255.255, 127.0.0.0/8, 224.0.0.0/4 (multicast)
+ */
+static int validate_ipv4(const char *ip, validated_ip_t *out)
+{
+    struct in_addr addr4;
+    size_t ip_len;
+
+    if (!ip) {
+        return -1;
     }
 
-    /* Check if exceeded threshold - 使用传入参数而非全局 cfg */
-    unsigned int recent_fails = count_recent(entry, findtime, max_retries);
-    if (recent_fails >= max_retries) {
-        daemon_log_warn("IP %s exceeded %d failures in %d seconds, banning", ip, recent_fails, findtime);
-        if (ban_ip(ip) == 0) {
-            remove_entry(ip);
-            daemon_log_info("Successfully banned IP %s after %d failed attempts", ip, recent_fails);
-        } else {
-            daemon_log_err("Failed to ban IP %s after %d failed attempts, keeping entry for retry", ip, recent_fails);
-        }
-    } else {
-        daemon_log_debug("IP %s has %d failed attempts in %d seconds", ip, recent_fails, findtime);
+    ip_len = strlen(ip);
+    if (ip_len == 0 || ip_len >= INET_ADDRSTRLEN) {
+        return -1;
     }
+
+    if (inet_pton(AF_INET, ip, &addr4) != 1) {
+        return -1;
+    }
+
+    // Additional validation: reject invalid IPv4 IPs like 0.0.0.0, 127.x.x.x, multicast, etc.
+    unsigned int ip_num = ntohl(addr4.s_addr);
+    if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
+        ((ip_num >> 24) & 0xFF) == 127 ||  // 127.x.x.x
+        (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {  // 224.0.0.0/4 (multicast)
+        return -1;
+    }
+
+    if (out) {
+        out->addr = addr4;
+        out->ip_num = addr4.s_addr;  // network byte order
+    }
+
+    return 0;
 }
 
 /* Secure procfs file operation helper */
@@ -1580,14 +1887,26 @@ static int secure_procfs_write(const char *path, const char *data, size_t data_l
     ssize_t written;
     size_t total_written = 0;
 
-    // Validate inputs
+    /* Validate inputs */
     if (!path || !data || data_len == 0) {
         daemon_log_err("Invalid parameters to secure_procfs_write");
         return -1;
     }
 
-    // Check data length to prevent excessively long writes
-    if (data_len > 256) {  // Reasonable limit for IP addresses
+    /* Security: Validate path is within /proc/firewall/ */
+    if (strncmp(path, PROCFS_DIR "/", sizeof(PROCFS_DIR)) != 0) {
+        daemon_log_err("secure_procfs_write: path outside %s: %s", PROCFS_DIR, path);
+        return -1;
+    }
+
+    /* Reject path traversal attempts */
+    if (strstr(path, "..") != NULL) {
+        daemon_log_err("secure_procfs_write: path traversal attempt: %s", path);
+        return -1;
+    }
+
+    /* Check data length to prevent excessively long writes */
+    if (data_len > 256) {
         daemon_log_err("Data too long for procfs write (%zu bytes)", data_len);
         return -1;
     }
@@ -1622,200 +1941,125 @@ static int secure_procfs_write(const char *path, const char *data, size_t data_l
     return 0;
 }
 
-/* Ban IP via procfs (IPv4 only) */
-static int ban_ip(const char *ip)
+/* ============================================================================
+ * Ban/Unban Action Types
+ * ========================================================================== */
+typedef enum {
+    BAN_ACTION_TEMP,        /* Temporary ban (default duration) */
+    BAN_ACTION_PERMANENT,   /* Permanent ban */
+    BAN_ACTION_UNBAN,       /* Unban IP */
+    BAN_ACTION_UNBAN_PERM   /* Remove permanent ban */
+} ban_action_t;
+
+/*
+ * execute_ban_action - Unified ban/unban operation
+ * @action: Type of ban/unban action to perform
+ * @ip: IPv4 address string
+ *
+ * Returns: 0 on success, -1 on failure
+ */
+static int execute_ban_action(ban_action_t action, const char *ip)
 {
-    struct in_addr addr4;
-    size_t ip_len;
-    char ip_with_newline[INET_ADDRSTRLEN + 2];  // +1 for \n, +1 for \0
+    validated_ip_t validated;
+    char cmd_buf[INET_ADDRSTRLEN + 16];
+    int cmd_len;
 
-    // Validate input IP format before attempting to ban
     if (!ip) {
-        daemon_log_err("NULL IP address provided to ban_ip");
+        daemon_log_err("NULL IP address provided to execute_ban_action");
         return -1;
     }
 
-    ip_len = strlen(ip);
-    if (ip_len == 0 || ip_len >= INET_ADDRSTRLEN) {
-        daemon_log_err("Invalid IP length %zu in ban_ip", ip_len);
+    if (validate_ipv4(ip, &validated) < 0) {
+        daemon_log_err("Invalid IPv4 address: %s", ip);
         return -1;
     }
 
-    // Check if it's a valid IPv4 address
-    if (inet_pton(AF_INET, ip, &addr4) != 1) {
-        daemon_log_err("Invalid IPv4 address format: %s", ip);
+    /* Format command based on action type */
+    switch (action) {
+    case BAN_ACTION_TEMP:
+        cmd_len = snprintf(cmd_buf, sizeof(cmd_buf), "%s\n", ip);
+        break;
+    case BAN_ACTION_PERMANENT:
+        cmd_len = snprintf(cmd_buf, sizeof(cmd_buf), "%s 0\n", ip);
+        break;
+    case BAN_ACTION_UNBAN:
+    case BAN_ACTION_UNBAN_PERM:
+        cmd_len = snprintf(cmd_buf, sizeof(cmd_buf), "unban %s\n", ip);
+        break;
+    default:
+        daemon_log_err("Unknown ban action type: %d", action);
         return -1;
     }
 
-    // Additional validation: reject invalid IPv4 IPs like 0.0.0.0, 127.x.x.x, multicast, etc.
-    unsigned int ip_num = ntohl(addr4.s_addr);
-    if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
-        ((ip_num >> 24) & 0xFF) == 127 ||  // 127.x.x.x
-        (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {  // 224.0.0.0/4 (multicast)
-        daemon_log_err("Attempt to ban invalid IPv4: %s", ip);
+    if (cmd_len < 0 || (size_t)cmd_len >= sizeof(cmd_buf)) {
+        daemon_log_err("Command buffer overflow for IP %s", ip);
         return -1;
     }
 
-    // Prepare data with newline for writing
-    snprintf(ip_with_newline, sizeof(ip_with_newline), "%s\n", ip);
-
-    // Write to kernel module (temporary ban)
-    if (secure_procfs_write(BANS_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
+    /* Write to kernel module via procfs */
+    if (secure_procfs_write(BANS_PATH, cmd_buf, (size_t)cmd_len) < 0) {
         daemon_log_err("Failed to write to %s", BANS_PATH);
         return -1;
     }
 
-    /* Note: Automatic bans from log parsing are temporary only.
-     * Permanent bans should only be added via explicit ban_ip_permanent() call.
-     * This prevents accidental permanent blocking from false positives. */
+    /* Handle SQLite persistence for permanent ban actions */
+    if (sqlite_db) {
+        int sqlite_rc = 0;
+        if (action == BAN_ACTION_PERMANENT) {
+            sqlite_rc = sqlite_add_permanent_ban(sqlite_db, ip, validated.ip_num,
+                                                 "manual permanent ban", "manual");
+        } else if (action == BAN_ACTION_UNBAN_PERM) {
+            sqlite_rc = sqlite_remove_permanent_ban(sqlite_db, ip);
+        }
 
-    atomic_fetch_add(&daemon_stats.ips_banned, 1);
-    daemon_log_info("Banned IP %s", ip);
+        if (sqlite_rc != 0 && sqlite_rc != -2) {  /* -2 = already exists (not an error) */
+            daemon_log_warn("SQLite operation failed for IP %s (action=%d, rc=%d)", ip, action, sqlite_rc);
+        }
+    }
+
+    /* Update statistics and log for ban actions */
+    if (action == BAN_ACTION_TEMP || action == BAN_ACTION_PERMANENT) {
+        atomic_fetch_add(&daemon_stats.ips_banned, 1);
+    }
+
+    /* Log the action */
+    switch (action) {
+    case BAN_ACTION_TEMP:
+        daemon_log_info("Banned IP %s", ip);
+        break;
+    case BAN_ACTION_PERMANENT:
+        daemon_log_info("Permanently banned IP %s", ip);
+        break;
+    case BAN_ACTION_UNBAN:
+        daemon_log_info("Unbanned IP %s", ip);
+        break;
+    case BAN_ACTION_UNBAN_PERM:
+        daemon_log_info("Removed permanent ban for IP %s", ip);
+        break;
+    }
+
     return 0;
 }
 
-/*
- * ban_ip_permanent - Ban IP permanently via procfs and SQLite
- */
+/* Backward-compatible wrapper functions */
+static int ban_ip(const char *ip)
+{
+    return execute_ban_action(BAN_ACTION_TEMP, ip);
+}
 
 static int ban_ip_permanent(const char *ip)
 {
-    struct in_addr addr4;
-    size_t ip_len;
-    char ip_with_newline[INET_ADDRSTRLEN + 5];  // +3 for " 0", +1 for \n, +1 for \0
-
-    if (!ip) {
-        daemon_log_err("NULL IP address provided to ban_ip_permanent");
-        return -1;
-    }
-
-    ip_len = strlen(ip);
-    if (ip_len == 0 || ip_len >= INET_ADDRSTRLEN) {
-        daemon_log_err("Invalid IP length %zu in ban_ip_permanent", ip_len);
-        return -1;
-    }
-
-    if (inet_pton(AF_INET, ip, &addr4) != 1) {
-        daemon_log_err("Invalid IPv4 address format: %s", ip);
-        return -1;
-    }
-
-    snprintf(ip_with_newline, sizeof(ip_with_newline), "%s 0\n", ip);
-
-    /* Write to kernel module permanent ban endpoint */
-    if (secure_procfs_write(BANS_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
-        daemon_log_err("Failed to write to %s", BANS_PATH);
-        return -1;
-    }
-
-    /* Also add to SQLite for persistence */
-    if (sqlite_db) {
-        uint32_t ip_num = addr4.s_addr;
-        int rc = sqlite_add_permanent_ban(sqlite_db, ip, ip_num, "manual permanent ban", "manual");
-        if (rc == 0) {
-            daemon_log_info("IP %s permanently banned and saved to SQLite", ip);
-        } else if (rc == -2) {
-            daemon_log_debug("IP %s already in permanent banlist", ip);
-        } else {
-            daemon_log_warn("Failed to save permanent ban to SQLite: %s", ip);
-        }
-    }
-
-    atomic_fetch_add(&daemon_stats.ips_banned, 1);
-    daemon_log_info("Permanently banned IP %s", ip);
-    return 0;
+    return execute_ban_action(BAN_ACTION_PERMANENT, ip);
 }
-
-/* Unban IP via procfs (used for manual unban) (IPv4 only) */
 
 static int unban_ip(const char *ip)
 {
-    struct in_addr addr4;
-    char ip_with_newline[INET_ADDRSTRLEN + 8];  // +6 for "unban ", +1 for \n, +1 for \0
-
-    // Validate input IP format before attempting to unban
-    if (!ip) {
-        daemon_log_err("NULL IP address provided to unban_ip");
-        return -1;
-    }
-
-    // Check if it's a valid IPv4 address
-    if (inet_pton(AF_INET, ip, &addr4) != 1) {
-        daemon_log_err("Invalid IPv4 address format: %s", ip);
-        return -1;
-    }
-
-    // Additional validation: reject invalid IPv4 IPs like 0.0.0.0, 127.x.x.x, multicast, etc.
-    unsigned int ip_num = ntohl(addr4.s_addr);
-    if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
-        ((ip_num >> 24) & 0xFF) == 127 ||  // 127.x.x.x
-        (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {  // 224.0.0.0/4 (multicast)
-        daemon_log_err("Attempt to unban invalid IPv4: %s", ip);
-        return -1;
-    }
-
-    // Prepare data with newline for writing
-    snprintf(ip_with_newline, sizeof(ip_with_newline), "unban %s\n", ip);
-
-    // Use secure write function
-    if (secure_procfs_write(BANS_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
-        daemon_log_err("Failed to write to %s", BANS_PATH);
-        return -1;
-    }
-
-    daemon_log_info("Unbanned IP %s", ip);
-    return 0;
+    return execute_ban_action(BAN_ACTION_UNBAN, ip);
 }
 
-/*
- * unban_permanent_ip - Remove permanent ban for IP via procfs and SQLite
- */
 static int unban_permanent_ip(const char *ip)
 {
-    struct in_addr addr4;
-    char ip_with_newline[INET_ADDRSTRLEN + 8];  // +6 for "unban ", +1 for \n, +1 for \0
-
-    if (!ip) {
-        daemon_log_err("NULL IP address provided to unban_permanent_ip");
-        return -1;
-    }
-
-    // Check if it's a valid IPv4 address
-    if (inet_pton(AF_INET, ip, &addr4) != 1) {
-        daemon_log_err("Invalid IPv4 address format: %s", ip);
-        return -1;
-    }
-
-    // Additional validation: reject invalid IPv4 IPs
-    unsigned int ip_num = ntohl(addr4.s_addr);
-    if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
-        ((ip_num >> 24) & 0xFF) == 127 ||  // 127.x.x.x
-        (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {  // 224.0.0.0/4 (multicast)
-        daemon_log_err("Attempt to unban permanent invalid IPv4: %s", ip);
-        return -1;
-    }
-
-    // Prepare data with unban command (same as regular unban)
-    snprintf(ip_with_newline, sizeof(ip_with_newline), "unban %s\n", ip);
-
-    // Write to kernel module
-    if (secure_procfs_write(BANS_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
-        daemon_log_err("Failed to write to %s", BANS_PATH);
-        return -1;
-    }
-
-    // Also remove from SQLite for persistence
-    if (sqlite_db) {
-        int rc = sqlite_remove_permanent_ban(sqlite_db, ip);
-        if (rc == 0) {
-            daemon_log_info("IP %s permanent ban removed from SQLite", ip);
-        } else {
-            daemon_log_warn("Failed to remove permanent ban from SQLite: %s", ip);
-        }
-    }
-
-    daemon_log_info("Removed permanent ban for IP %s", ip);
-    return 0;
+    return execute_ban_action(BAN_ACTION_UNBAN_PERM, ip);
 }
 
 /* Cleanup expired bans and partial line buffer (optional, kernel handles this) */
@@ -1997,10 +2241,7 @@ watch_summary:
     return 0;
 }
 
-/* Static buffer for storing partial lines between reads */
-static char partial_line_buffer[8192];  /* Increased buffer size to handle longer lines */
-static size_t partial_line_len = 0;
-static pthread_mutex_t partial_line_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* Partial line buffer is now per-jail (see struct jail) */
 
 /* Helper: Process a single complete log line.
  * Extracts IP and handles failed login attempt.
@@ -2064,75 +2305,63 @@ static void process_lines_in_buffer(struct jail *j, char *data, size_t len, cons
     *consumed = len - remaining;
 }
 
-/* Helper: Store remaining data as partial line (thread-safe).
+/* Helper: Store remaining data as partial line (no lock needed - per-jail buffer).
  * If partial buffer would overflow, processes accumulated data and resets. */
 static void store_partial_line(struct jail *j, const char *data, size_t len, const char *log_path,
                                unsigned int max_retries, unsigned int findtime)
 {
-    if (len == 0)
-        return;
-
-    if (len >= sizeof(partial_line_buffer)) {
+    if (len == 0) return;
+    
+    if (len >= sizeof(j->partial_line_buffer)) {
         daemon_log_warn("Partial line too long (%zu bytes) in %s, discarding", len, log_path);
-        pthread_mutex_lock(&partial_line_mutex);
-        partial_line_len = 0;
-        pthread_mutex_unlock(&partial_line_mutex);
+        j->partial_line_len = 0;
         return;
     }
-
-    pthread_mutex_lock(&partial_line_mutex);
-
+    
     /* Check if adding this data would overflow */
-    if (partial_line_len + len >= sizeof(partial_line_buffer)) {
+    if (j->partial_line_len + len >= sizeof(j->partial_line_buffer)) {
         /* Buffer would overflow - process accumulated data and replace with new data */
-        size_t old_len = partial_line_len;
-        char temp[sizeof(partial_line_buffer)];
-
+        size_t old_len = j->partial_line_len;
+        char temp[sizeof(j->partial_line_buffer)];
+        
         if (old_len > 0 && old_len < sizeof(temp)) {
-            memcpy(temp, partial_line_buffer, old_len);
+            memcpy(temp, j->partial_line_buffer, old_len);
             temp[old_len] = '\0';
             process_single_line(j, temp, log_path, max_retries, findtime);
         }
-
+        
         /* Store new data */
-        memcpy(partial_line_buffer, data, len);
-        partial_line_len = len;
+        memcpy(j->partial_line_buffer, data, len);
+        j->partial_line_len = len;
     } else {
         /* Safe to append */
-        memcpy(partial_line_buffer + partial_line_len, data, len);
-        partial_line_len += len;
+        memcpy(j->partial_line_buffer + j->partial_line_len, data, len);
+        j->partial_line_len += len;
     }
-
+    
     /* Ensure null termination */
-    if (partial_line_len < sizeof(partial_line_buffer)) {
-        partial_line_buffer[partial_line_len] = '\0';
+    if (j->partial_line_len < sizeof(j->partial_line_buffer)) {
+        j->partial_line_buffer[j->partial_line_len] = '\0';
     }
-
-    pthread_mutex_unlock(&partial_line_mutex);
 }
 
-/* Helper: Process accumulated partial line buffer (thread-safe).
+/* Helper: Process accumulated partial line buffer (no lock needed - per-jail buffer).
  * Drains the partial buffer and processes its content. */
-static void flush_partial_line(struct jail *j, const char *log_path, unsigned int max_retries, unsigned int findtime)
+static void flush_partial_line(struct jail *j, const char *log_path,
+                               unsigned int max_retries, unsigned int findtime)
 {
-    size_t old_len = 0;
-    char temp[sizeof(partial_line_buffer)];
-
-    pthread_mutex_lock(&partial_line_mutex);
-    if (partial_line_len > 0) {
-        old_len = partial_line_len;
-        if (old_len >= sizeof(temp))
-            old_len = sizeof(temp) - 1;
-        memcpy(temp, partial_line_buffer, old_len);
-        temp[old_len] = '\0';
-        partial_line_len = 0;
-    }
-    pthread_mutex_unlock(&partial_line_mutex);
-
-    if (old_len > 0) {
-        daemon_log_debug("Flushing partial line buffer with %zu bytes from %s", old_len, log_path);
-        process_single_line(j, temp, log_path, max_retries, findtime);
-    }
+    if (j->partial_line_len == 0) return;
+    
+    size_t old_len = j->partial_line_len;
+    char temp[sizeof(j->partial_line_buffer)];
+    if (old_len >= sizeof(temp))
+        old_len = sizeof(temp) - 1;
+    memcpy(temp, j->partial_line_buffer, old_len);
+    temp[old_len] = '\0';
+    j->partial_line_len = 0;
+    
+    daemon_log_debug("Flushing partial line buffer with %zu bytes from %s", old_len, log_path);
+    process_single_line(j, temp, log_path, max_retries, findtime);
 }
 
 /* Process new lines from log file starting from tracked offset */
@@ -2213,17 +2442,15 @@ static void process_new_lines(int idx)
         /* Use heap allocation instead of stack allocation for partial line data */
         size_t partial_len = 0;
 
-        /* Copy partial line data under lock */
-        pthread_mutex_lock(&partial_line_mutex);
-        partial_len = partial_line_len;
-        if (partial_len > 0 && partial_len < sizeof(partial_line_buffer)) {
+        /* Use jail's partial line buffer directly (no lock needed) */
+        partial_len = j->partial_line_len;
+        if (partial_len > 0 && partial_len < sizeof(j->partial_line_buffer)) {
             local_partial = malloc(partial_len + 1);
             if (local_partial) {
-                memcpy(local_partial, partial_line_buffer, partial_len);
+                memcpy(local_partial, j->partial_line_buffer, partial_len);
                 local_partial[partial_len] = '\0';
             }
         }
-        pthread_mutex_unlock(&partial_line_mutex);
 
         /* Process data outside the lock */
         if (local_partial && partial_len > 0) {
@@ -2252,9 +2479,7 @@ static void process_new_lines(int idx)
             size_t total_len = partial_len + (size_t)bytes_read;
 
             /* Clear consumed partial line */
-            pthread_mutex_lock(&partial_line_mutex);
-            partial_line_len = 0;
-            pthread_mutex_unlock(&partial_line_mutex);
+            j->partial_line_len = 0;
 
             /* Process complete lines */
             size_t consumed = 0;
@@ -2325,10 +2550,10 @@ cleanup:
 /* Function to periodically clean up partial line buffer to prevent accumulation */
 static void cleanup_partial_line_buffer(void)
 {
-    /* Iterate through all jails for cleanup */
     pthread_mutex_lock(&config_mutex);
     for (int i = 0; i < cfg.jail_count; i++) {
-        flush_partial_line(&cfg.jails[i], "periodic_cleanup", DEFAULT_MAX_RETRIES, DEFAULT_FINDTIME);
+        flush_partial_line(&cfg.jails[i], "periodic_cleanup",
+                          cfg.jails[i].max_retries, cfg.jails[i].findtime);
     }
     pthread_mutex_unlock(&config_mutex);
 }
@@ -2664,7 +2889,7 @@ static void cleanup(void)
             jail->regex_pattern = NULL;
         }
 
-        /* Free failed table and hash table */
+        /* Free failed entries from linked list (each entry freed once) */
         if (jail->failed_table) {
             struct failed_entry *entry = jail->failed_table;
             while (entry) {
@@ -2674,9 +2899,13 @@ static void cleanup(void)
             }
             jail->failed_table = NULL;
         }
-
-        /* Clear hash table pointers */
         memset(jail->failed_hash_table, 0, sizeof(jail->failed_hash_table));
+
+        /* Free khash table */
+        if (jail->failed_hash) {
+            kh_destroy(ip_map, jail->failed_hash);
+            jail->failed_hash = NULL;
+        }
 
         daemon_log_info("Cleaned up jail: %s", jail->name);
     }
@@ -2702,9 +2931,6 @@ static void cleanup(void)
         sqlite_db = NULL;
         daemon_log_info("SQLite database closed");
     }
-
-    /* Destroy mutex for partial line buffer */
-    pthread_mutex_destroy(&partial_line_mutex);
 
     closelog();
 }
@@ -2751,113 +2977,81 @@ static void free_log_patterns(void)
     /* Regex is now managed per-jail, so no global patterns to free */
 }
 
-/* Enhanced path validation function to prevent path traversal attacks */
+/*
+ * validate_and_normalize_path - Validate log file path for security
+ * @input_path: Path to validate
+ *
+ * Uses realpath() for robust path normalization and traversal detection.
+ * Rejects paths with shell metacharacters, control characters, or
+ * that resolve outside expected locations.
+ *
+ * Returns: 0 if valid, -1 if invalid
+ */
 static int validate_and_normalize_path(const char *input_path) {
-    /* Basic checks */
-    if (!input_path || strlen(input_path) == 0) {
+    char resolved[PATH_MAX];
+    size_t input_len;
+
+    if (!input_path) {
         return -1;
     }
 
-    /* Length check to prevent buffer overflow attacks */
-    size_t input_len = strlen(input_path);
-    if (input_len >= 512) {
+    input_len = strlen(input_path);
+    if (input_len == 0 || input_len >= PATH_MAX) {
         return -1;
     }
 
-    /* Check for null bytes and other dangerous characters */
-    for (size_t i = 0; i < input_len; i++) {
-        if (input_path[i] == '\0') {
-            return -1; /* embedded null byte */
-        }
-        /* Allow only alphanumeric, common path separators, and punctuation */
-        if ((unsigned char)input_path[i] < 32) {
-            return -1; /* control characters */
-        }
-        /* Reject certain characters that could be used in path traversal or command injection */
-        if (input_path[i] == '|' || input_path[i] == ';' ||
-            input_path[i] == '&' || input_path[i] == '`' ||
-            input_path[i] == '$' || input_path[i] == '(' ||
-            input_path[i] == ')' || input_path[i] == '{' ||
-            input_path[i] == '}') {
-            return -1; /* dangerous shell metacharacters */
-        }
-    }
-
-    /* Path must start with / to be considered a valid absolute path */
+    /* Must be absolute path */
     if (input_path[0] != '/') {
         return -1;
     }
 
-    /* Check for obvious path traversal attempts */
-    if (strstr(input_path, "../") ||
-        strstr(input_path, "..\\") ||
-        strstr(input_path, "/.." ) ||
-        strstr(input_path, "..%00") ||  /* Null byte injection */
-        strcasestr(input_path, "%2e%2e%2f") ||  /* URL encoded ../ */
-        strcasestr(input_path, "%2e%2e%5c") ||  /* URL encoded ..\ */
-        strstr(input_path, ".\\.") ||  /* Alternative Windows style */
-        strstr(input_path, "..%2f") || /* Another URL encoded variant */
-        strstr(input_path, "..%5c") || /* Another URL encoded variant */
-        strstr(input_path, "%2e%2e%2e") || /* URL encoded ... */
-        strstr(input_path, "%252e%252e%252f")) { /* Double-encoded ../ */
-        return -1;
-    }
-
-    /* Additional check for double slashes that might be used in attacks */
-    if (strstr(input_path, "//")) {
-        /* Allow double slash only in protocol specifications like http:// */
-        if (strstr(input_path, "://") == NULL) {
+    /* Reject control characters */
+    for (size_t i = 0; i < input_len; i++) {
+        if ((unsigned char)input_path[i] < 32) {
             return -1;
         }
     }
 
-    /* 修复问题4：只拒绝真正的路径遍历攻击模式，允许合法的带点文件名 */
-    /* 原来的检查 strstr(input_path, "/.") 会错误拒绝 /var/log/auth.log.1 等合法路径 */
-    if (strstr(input_path, "/../") || strstr(input_path, "/..\\") ||
-        (input_path[0] == '.' && input_path[1] == '.') ||
-        strcmp(input_path, "..") == 0) {
+    /* Reject shell metacharacters that could enable injection */
+    if (strpbrk(input_path, "|;&`$(){}<>!~*?[]") != NULL) {
         return -1;
     }
 
-    /* 删除了过度严格的检查：
-     * if (strstr(input_path, "./") ||
-     *     strstr(input_path, "/.") ||
-     *     strstr(input_path, "...")) {
-     *     return -1;
-     * }
-     */
-
-    /* More robust path traversal check: normalize the path */
-    char normalized_path[512];
-    strncpy(normalized_path, input_path, sizeof(normalized_path) - 1);
-    normalized_path[sizeof(normalized_path) - 1] = '\0';
-
-    /* Additional normalization to detect path traversal patterns */
-    char *tmp = normalized_path;
-    int depth = 0;
-    while ((tmp = strchr(tmp, '/'))) {
-        tmp++; // Move past the current slash
-        if (tmp - normalized_path >= (ptrdiff_t)sizeof(normalized_path) - 1) {
-            break; // Safety check to prevent pointer arithmetic issues
-        }
-
-        if (tmp - normalized_path >= 2 && strncmp(tmp - 2, "/../", 4) == 0) {
-            return -1; // Pattern like "/../" detected
-        }
-
-        if (strncmp(tmp, "..", 2) == 0 &&
-            (tmp[2] == '/' || tmp[2] == '\0' || tmp[2] == '\\')) {
-            depth--; // Going up a directory level
-            if (depth < 0) {
-                return -1; // Attempt to go above root
-            }
-        } else if (tmp > normalized_path + 1 && *(tmp-2) != '.') { // Not part of ".." sequence
-            depth++;
-        }
+    /* Reject URL-encoded traversal attempts */
+    if (strcasestr(input_path, "%2e") != NULL || strcasestr(input_path, "%2f") != NULL) {
+        return -1;
     }
 
-    /* Final check: ensure path resolves to a safe location */
-    if (depth < 0) {
+    /* Reject obvious path traversal patterns */
+    if (strstr(input_path, "..") != NULL) {
+        return -1;
+    }
+
+    /* Use realpath() for final normalization and validation.
+     * realpath() requires the path to exist, so we use it only for
+     * the directory component. If the file doesn't exist yet, we
+     * validate the parent directory instead. */
+    char *path_copy = strdup(input_path);
+    if (!path_copy) {
+        return -1;
+    }
+
+    char *dir = dirname(path_copy);
+    if (realpath(dir, resolved) == NULL) {
+        /* Directory doesn't exist - allow if path looks safe */
+        free(path_copy);
+        return (strstr(input_path, "//") == NULL) ? 0 : -1;
+    }
+
+    free(path_copy);
+
+    /* Verify resolved path doesn't escape expected locations.
+     * Log files should be under /var/log or similar standard locations. */
+    if (strncmp(resolved, "/var/log", 8) != 0 &&
+        strncmp(resolved, "/etc/", 5) != 0 &&
+        strncmp(resolved, "/home/", 6) != 0 &&
+        strncmp(resolved, "/root/", 6) != 0) {
+        /* Reject paths outside standard locations */
         return -1;
     }
 

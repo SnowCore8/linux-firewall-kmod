@@ -233,11 +233,11 @@ int sqlite_add_permanent_ban(sqlite_db_t *db, const char *ip, uint32_t ip_num,
         return -1;
     }
 
-    sqlite3_bind_text(stmt, 1, ip, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 1, ip, -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(stmt, 2, (sqlite3_int64)ip_num);
-    sqlite3_bind_text(stmt, 3, reason, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, reason, -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(stmt, 4, (sqlite3_int64)time(NULL));
-    sqlite3_bind_text(stmt, 5, created_by, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 5, created_by, -1, SQLITE_TRANSIENT);
 
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
@@ -293,11 +293,11 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db,
     }
 
     for (int i = 0; i < count; i++) {
-        sqlite3_bind_text(stmt, 1, ips[i], -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 1, ips[i], -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(stmt, 2, (sqlite3_int64)ip_nums[i]);
-        sqlite3_bind_text(stmt, 3, reasons[i], -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, reasons[i], -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(stmt, 4, (sqlite3_int64)time(NULL));
-        sqlite3_bind_text(stmt, 5, created_bys[i], -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 5, created_bys[i], -1, SQLITE_TRANSIENT);
 
         rc = sqlite3_step(stmt);
         sqlite3_reset(stmt);
@@ -347,7 +347,7 @@ int sqlite_remove_permanent_ban(sqlite_db_t *db, const char *ip)
         return -1;
     }
 
-    sqlite3_bind_text(stmt, 1, ip, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 1, ip, -1, SQLITE_TRANSIENT);
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
 
