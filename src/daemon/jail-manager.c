@@ -139,12 +139,46 @@ int compile_jail_regex(struct jail *j)
 
     /* 验证正则表达式模式以防止 ReDoS 攻击 */
     if (j->regex_pattern && strlen(j->regex_pattern) > 0) {
-        /* 拒绝可能导致灾难性回溯的嵌套量词 */
+        size_t pattern_len = strlen(pattern);
+
+        /* 拒绝过长的模式（在嵌套量词检测之前先做长度检查） */
+        if (pattern_len > 1024) {
+            daemon_log_err("Rejected unsafe regex for jail '%s': pattern too long (%zu bytes, max 1024)",
+                           j->name, pattern_len);
+            return -1;
+        }
+
+        /* 拒绝基本的嵌套量词模式: )+  )*  ){  }?  ++  *+ */
         if (strstr(pattern, ")+") || strstr(pattern, ")*") ||
             strstr(pattern, "){") || strstr(pattern, "}?") ||
             strstr(pattern, "++") || strstr(pattern, "*+")) {
-            daemon_log_err("Rejected unsafe regex for jail '%s': nested quantifiers detected", j->name);
+            daemon_log_err("Rejected unsafe regex for jail '%s': nested quantifiers detected "
+                           "(patterns like )+  )*  ){  }?  ++  *+ are not allowed)", j->name);
             return -1;
+        }
+
+        /* 拒绝 (a?)+ 类型模式: )? 后面紧跟 ) 再跟量词 (+*{?) */
+        for (const char *p = pattern; *p; p++) {
+            if (p[0] == ')' && p[1] == '?' && p[2] == ')') {
+                char next = p[3];
+                if (next == '+' || next == '*' || next == '{' || next == '?') {
+                    daemon_log_err("Rejected unsafe regex for jail '%s': nested optional quantifier "
+                                   "detected (pattern like (a?)+ at offset %ld)", j->name, (long)(p - pattern));
+                    return -1;
+                }
+            }
+        }
+
+        /* 拒绝 (? 后直接跟量词的模式: (?+  (?*  (?{  (?? */
+        for (const char *p = pattern; *p; p++) {
+            if (p[0] == '(' && p[1] == '?') {
+                char next = p[2];
+                if (next == '+' || next == '*' || next == '{' || next == '?') {
+                    daemon_log_err("Rejected unsafe regex for jail '%s': invalid quantifier after "
+                                   "'(?' at offset %ld", j->name, (long)(p - pattern));
+                    return -1;
+                }
+            }
         }
 
         /* 拒绝过多的分支选择（a|b|c|... 模式） */
@@ -153,13 +187,8 @@ int compile_jail_regex(struct jail *j)
             if (*p == '|') pipe_count++;
         }
         if (pipe_count > 50) {
-            daemon_log_err("Rejected unsafe regex for jail '%s': too many alternations (%d)", j->name, pipe_count);
-            return -1;
-        }
-
-        /* 拒绝过长的模式 */
-        if (strlen(pattern) > 1024) {
-            daemon_log_err("Rejected unsafe regex for jail '%s': pattern too long (%zu bytes)", j->name, strlen(pattern));
+            daemon_log_err("Rejected unsafe regex for jail '%s': too many alternations (%d, max 50)",
+                           j->name, pipe_count);
             return -1;
         }
     }
