@@ -59,21 +59,27 @@ fw_test_header() {
 # 例如：echo '192.168.1.1; rm -rf /' > file 中的分号在单引号内，是安全的
 strip_quotes() {
     local cmd="$1"
-    # 移除单引号内的内容
-    cmd=$(echo "$cmd" | sed "s/'[^']*'//g")
-    # 移除双引号内的内容
-    cmd=$(echo "$cmd" | sed 's/"[^"]*"//g')
+    # 移除单引号内的内容（处理转义单引号：'\''）
+    cmd=$(echo "$cmd" | sed "s/'[^']*'//g; s/'\\\\''//g")
+    # 移除双引号内的内容（处理转义双引号：\"）
+    cmd=$(echo "$cmd" | sed 's/"[^"\\]*\(\\.[^"\\]*\)*/""/g; s/""//g')
     echo "$cmd"
 }
 
 # 安全检查：检测命令中是否包含潜在的注入字符
 # 禁止的字符: ; ` { } \n
+# 禁止的模式: $() 命令替换、&& 和 || 逻辑运算符
 # 允许 $ 用于变量展开（如 $VAR, ${VAR}）
 # 允许 & 用于重定向（如 2>&1）
 # 这些字符可能被用于命令注入攻击
 is_safe_command() {
     local cmd="$1"
-    local dangerous_pattern='[;`{}]'
+    local dangerous_pattern='[;`{}|]'
+    
+    # 检测命令替换和逻辑运算符
+    if [[ "$cmd" == *'$('* ]] || [[ "$cmd" == *'&&'* ]] || [[ "$cmd" == *'||'* ]]; then
+        return 1
+    fi
     
     # 对引号外剩余部分进行危险字符检测
     local stripped
@@ -261,7 +267,15 @@ assert_ge() {
     local msg="${3:-期望 >= $expected 但得到 $actual}"
     TEST_TOTAL=$((TEST_TOTAL + 1))
 
-    if [[ "$actual" -ge "$expected" ]] 2>/dev/null; then
+    # 先验证参数是否为有效整数
+    if ! [[ "$actual" =~ ^-?[0-9]+$ ]] || ! [[ "$expected" =~ ^-?[0-9]+$ ]]; then
+        TEST_FAIL=$((TEST_FAIL + 1))
+        echo -e "  ${RED}[FAIL]${NC} $msg (错误: 参数不是有效整数)"
+        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg (错误: 参数不是有效整数)")
+        return 1
+    fi
+
+    if [[ "$actual" -ge "$expected" ]]; then
         TEST_PASS=$((TEST_PASS + 1))
         echo -e "  ${GREEN}[PASS]${NC} $msg"
         TEST_RESULTS+=("PASS|$CURRENT_SUITE|$msg")
@@ -281,7 +295,15 @@ assert_le() {
     local msg="${3:-期望 <= $expected 但得到 $actual}"
     TEST_TOTAL=$((TEST_TOTAL + 1))
 
-    if [[ "$actual" -le "$expected" ]] 2>/dev/null; then
+    # 先验证参数是否为有效整数
+    if ! [[ "$actual" =~ ^-?[0-9]+$ ]] || ! [[ "$expected" =~ ^-?[0-9]+$ ]]; then
+        TEST_FAIL=$((TEST_FAIL + 1))
+        echo -e "  ${RED}[FAIL]${NC} $msg (错误: 参数不是有效整数)"
+        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg (错误: 参数不是有效整数)")
+        return 1
+    fi
+
+    if [[ "$actual" -le "$expected" ]]; then
         TEST_PASS=$((TEST_PASS + 1))
         echo -e "  ${GREEN}[PASS]${NC} $msg"
         TEST_RESULTS+=("PASS|$CURRENT_SUITE|$msg")
@@ -335,12 +357,36 @@ fw_ensure_module_loaded() {
             return 1
         fi
     fi
-    sleep 0.5
+
+    # 验证模块是否真的加载成功
+    local retries=10
+    while [[ $retries -gt 0 ]]; do
+        if lsmod | grep -q "^firewall "; then
+            return 0
+        fi
+        sleep 0.2
+        retries=$((retries - 1))
+    done
+
+    fw_log_error "模块加载后验证失败: 模块未出现在 lsmod 中"
+    return 1
 }
 
 fw_ensure_module_unloaded() {
-    rmmod firewall 2>/dev/null || true
+    if lsmod | grep -q "^firewall "; then
+        if ! rmmod firewall 2>/dev/null; then
+            fw_log_warn "模块卸载失败，可能被其他进程引用"
+            return 1
+        fi
+    fi
     sleep 0.3
+    
+    # 验证卸载
+    if lsmod | grep -q "^firewall "; then
+        fw_log_error "模块卸载验证失败: 模块仍在运行"
+        return 1
+    fi
+    return 0
 }
 
 # ============================================================================
@@ -352,6 +398,10 @@ fw_generate_report() {
     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
 
     mkdir -p "$(dirname "$report_file")"
+    
+    # 临时保存并清空颜色变量，避免 Markdown 中出现 ANSI 代码
+    local _red="$RED" _green="$GREEN" _yellow="$YELLOW" _blue="$BLUE" _cyan="$CYAN" _nc="$NC" _bold="$BOLD"
+    RED="" GREEN="" YELLOW="" BLUE="" CYAN="" NC="" BOLD=""
 
     cat > "$report_file" << EOF
 # Firewall 测试报告
@@ -393,6 +443,9 @@ EOF
         echo -e "${RED}## ✗ 存在 $TEST_FAIL 个失败项${NC}" >> "$report_file"
     fi
 
+    # 报告生成完成后恢复颜色变量
+    RED="$_red" GREEN="$_green" YELLOW="$_yellow" BLUE="$_blue" CYAN="$_cyan" NC="$_nc" BOLD="$_bold"
+    
     echo ""
     fw_log_info "测试报告已生成: $report_file"
 }
@@ -401,6 +454,12 @@ EOF
 # 测试摘要
 # ============================================================================
 fw_print_summary() {
+    # 一致性校验：确保 PASS+FAIL+WARN+SKIP == TOTAL
+    local sum=$((TEST_PASS + TEST_FAIL + TEST_WARN + TEST_SKIP))
+    if [[ $sum -ne $TEST_TOTAL ]]; then
+        echo -e "${RED}[错误] 统计不一致: PASS+FAIL+WARN+SKIP=$sum != TOTAL=$TEST_TOTAL${NC}"
+    fi
+
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
     echo -e "${CYAN}${BOLD}                      测试总结${NC}"
