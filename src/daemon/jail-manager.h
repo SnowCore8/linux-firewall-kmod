@@ -1,5 +1,5 @@
 /*
- * jail-manager.h - Jail 管理函数头文件
+ * jail-manager.h - jail 管理函数头文件
  */
 
 #ifndef JAIL_MANAGER_H

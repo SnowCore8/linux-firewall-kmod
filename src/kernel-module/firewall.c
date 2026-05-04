@@ -27,7 +27,9 @@ static inline void ipv4_to_str(__be32 ip, char *buf, int len)
     unsigned int c = (ntohl(ip) >> 8) & 0xFF;
     unsigned int d = ntohl(ip) & 0xFF;
 
-    /* 验证缓冲区大小足以容纳 IP 字符串（至少 16 字符："xxx.xxx.xxx.xxx\0"） */
+    /* 验证缓冲区大小足以容纳 IP 字符串
+     * 至少 16 字符："xxx.xxx.xxx.xxx\0"
+     */
     if (len < 16) {
         if (len > 0) {
             buf[0] = '\0';  /* 如果缓冲区存在，添加空终止符 */
@@ -233,7 +235,7 @@ bool is_in_whitelist(struct firewall_info *fw, __be32 ip)
     FW_DEBUG(3, "ENTRY: is_in_whitelist(ip=%pI4)", &ip);
 
     rcu_read_lock();
-    /* 检查白名单表中的 ALL 条目以正确处理子网匹配。
+    /* 检查白名单表中的所有条目以正确处理子网匹配。
      * 注意：这是 O(n) 的，因为不同前缀长度可能哈希到不同桶。
      * 对于常见的 /32 条目，可以使用 hash_for_each_possible_rcu()，
      * 但子网需要完整遍历。MAX_WHITELIST_ENTRIES=64 时这是可接受的。
@@ -651,7 +653,7 @@ void cleanup_expired_bans(struct firewall_info *fw)
     }
 
     /* 更新下次调用的起始桶 */
-    fw->cleanup_last_bucket = (start_bucket + (1 << 3)) % ban_table_size;  /* 前进 8 个桶 */
+    fw->cleanup_last_bucket = (start_bucket + (1 << 3)) % ban_table_size;  /* 前进 8 个哈希桶 */
 
     spin_unlock(&fw->lock);
 

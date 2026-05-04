@@ -173,7 +173,7 @@ int execute_ban_action(ban_action_t action, const char *ip)
             sqlite_rc = sqlite_remove_permanent_ban(sqlite_db, ip);
         }
 
-        if (sqlite_rc != 0 && sqlite_rc != -2) {  /* -2 = 已存在（不是错误） */
+        if (sqlite_rc != 0 && sqlite_rc != -2) {  /* -2 = 已存在（不是错误）。 */
             daemon_log_warn("SQLite operation failed for IP %s (action=%d, rc=%d)", ip, action, sqlite_rc);
         }
     }

@@ -1,5 +1,5 @@
 /*
- * jail-manager.c - Jail 管理函数
+ * jail-manager.c - jail 管理函数
  */
 
 #include "firewall-daemon.h"
