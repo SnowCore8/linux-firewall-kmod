@@ -55,9 +55,26 @@ sudo systemctl reload firewall-daemon     # 热重载配置（SIGHUP）
 ```bash
 # 严格模式（默认，未知参数报错）
 sudo ./build/daemon/firewall-daemon --strict
+sudo ./build/daemon/firewall-daemon -s
 
 # 宽松模式（未知参数仅警告）
 sudo ./build/daemon/firewall-daemon --permissive
+sudo ./build/daemon/firewall-daemon -p
+```
+
+### 2.1.2 完整命令行参数
+
+```bash
+sudo ./build/daemon/firewall-daemon [OPTIONS]
+
+选项：
+  -c, --config FILE      单个配置文件路径
+  -C, --config-dir DIR   配置目录（自动加载所有 .yaml/.yml 文件）
+                         默认：/etc/firewall/
+  -d, --daemon           以守护进程模式运行
+  -s, --strict           启用严格配置校验（默认）
+  -p, --permissive       允许未知参数并输出警告
+  -h, --help             显示帮助信息
 ```
 
 ### 2.2 封禁/解封与白名单
@@ -87,10 +104,12 @@ echo "remove 10.0.0.0/8" | sudo tee /proc/firewall/whitelist    # 移除白名�
 | 读取 | `cat` | `cat /proc/firewall/bans` |
 | 默认封禁 | `IP` | `echo "1.2.3.4" \| sudo tee /proc/firewall/bans` |
 | 自定义时长 | `IP seconds` | `echo "1.2.3.4 7200" \| sudo tee /proc/firewall/bans` |
-| 永久封禁 | `IP 0` | `echo "1.2.3.4 0" \| sudo tee /proc/firewall/bans` |
+| 永久封禁 | `IP 0` 或 `permanent IP` | `echo "1.2.3.4 0" \| sudo tee /proc/firewall/bans` |
 | 解封 | `unban IP` | `echo "unban 1.2.3.4" \| sudo tee /proc/firewall/bans` |
 
 **限制**：封禁上限 1024 IP，ban_time 范围 30 秒 ~ 31,536,000 秒（1 年）。
+
+> **注意**：`permanent IP` 格式为 v2.0 新增，与 `IP 0` 等价但语义更清晰。
 
 ### 3.2 /proc/firewall/whitelist（读写）
 

@@ -57,21 +57,21 @@ Firewall 是 Linux 内核模块版本的 fail2ban，采用**双层架构**：内
 
 | 组件 | 文件 | 行数 | 职责 |
 |------|------|------|------|
-| 内核模块 | `src/kernel-module/firewall.c` | 2389 | Netfilter 过滤、封禁表管理 |
-| 内核头文件 | `src/kernel-module/firewall.h` | ~191 | 数据结构、日志宏、函数声明 |
+| 内核模块 | `src/kernel-module/firewall.c` | 2462 | Netfilter 过滤、封禁表管理 |
+| 内核头文件 | `src/kernel-module/firewall.h` | 191 | 数据结构、日志宏、函数声明 |
 
 **守护进程模块**（v2.0 重构后，原 3475 行单文件拆分为 8 个模块）：
 
 | 模块 | 文件 (.c/.h) | 行数 | 职责 |
 |------|-------------|------|------|
-| 共享头文件 | `firewall-daemon.h` | 200 | 类型定义、宏、常量、全局 extern 声明 |
-| 主入口 | `firewall-daemon.c` | 360 | main()、信号处理、守护进程化、清理 |
-| Jail 管理 | `jail-manager.c/h` | 564 | Jail 生命周期、配置克隆、正则编译、迁移 |
-| 配置解析 | `config-parser.c/h` | 987 | YAML 解析、目录加载、CLI 参数、路径验证 |
+| 共享头文件 | `firewall-daemon.h` | 202 | 类型定义、宏、常量、全局 extern 声明 |
+| 主入口 | `firewall-daemon.c` | 361 | main()、信号处理、守护进程化、清理 |
+| Jail 管理 | `jail-manager.c/h` | 596 | Jail 生命周期、配置克隆、正则编译、迁移 |
+| 配置解析 | `config-parser.c/h` | 1012 | YAML 解析、目录加载、CLI 参数、路径验证 |
 | 日志解析 | `log-parser.c/h` | 201 | PCRE2 正则匹配、IP 提取、日志行解析 |
 | 失败追踪 | `failed-tracker.c/h` | 350 | khash 失败记录、时间窗口计数、封禁阈值检查 |
-| 封禁管理 | `ban-manager.c/h` | 261 | 封禁/解封操作、procfs 安全写入、IP 验证 |
-| 文件监控 | `file-monitor.c/h` | 779 | inotify 事件、日志读取、轮转检测、monitor_loop |
+| 封禁管理 | `ban-manager.c/h` | 260 | 封禁/解封操作、procfs 安全写入、IP 验证 |
+| 文件监控 | `file-monitor.c/h` | 780 | inotify 事件、日志读取、轮转检测、monitor_loop |
 
 **已有独立模块**：
 
@@ -86,7 +86,7 @@ Firewall 是 Linux 内核模块版本的 fail2ban，采用**双层架构**：内
 |------|------|------|------|
 | 哈希库 | `khash.h` | 627 | 头文件哈希库（第三方，O(1) 查找） |
 
-> 总计：18 个文件，~5496 行。原单文件 3475 行 → 模块化后平均每模块 ~305 行。
+> 总计：18 个文件，~8319 行。原单文件 3475 行 → 模块化后平均每模块 ~460 行。
 
 ---
 

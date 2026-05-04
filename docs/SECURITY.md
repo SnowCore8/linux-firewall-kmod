@@ -214,6 +214,7 @@ int sqlite_add_permanent_ban(const char *ip, const char *reason) {
 - **参数白名单校验**：`defaults` 和 `jail` 部分分别维护有效参数列表
 - **值范围校验**：所有数值参数在加载时验证有效性，防止边界溢出
 - **统一错误提示**：错误消息包含参数名、值、位置，便于快速定位问题
+- **路径安全验证**：日志文件路径必须为绝对路径，通过 `realpath()` 规范化并验证
 
 ### 防护场景
 
@@ -222,19 +223,30 @@ int sqlite_add_permanent_ban(const char *ip, const char *reason) {
 | **拼写错误注入** | `max_retrys: 999`（意图绕过限制） | 未知参数直接拒绝加载 |
 | **无效值注入** | `max_retries: 999999` | 值范围校验拦截 |
 | **未知参数注入** | 在 jail 中添加 `custom_backdoor: true` | 参数白名单校验拦截 |
+| **路径遍历** | `log_files: ../../etc/passwd` | 5 层路径验证拒绝 |
 
 ### 错误消息格式
 
 严格模式下，所有配置错误遵循统一格式：
 
 ```
-Invalid config parameter '{key}' with value '{value}' at {location}
+Invalid config parameter '{key}' with value '{value}' in {location}
 ```
 
 示例：
 - `Invalid config parameter 'invalid_key' with value 'value' in [defaults] of config.yaml`
 - `Invalid config parameter 'timeout' with value '30' in jail 'sshd'`
 - `Invalid value for 'max_retries': '999' (must be integer between 1 and 100)`
+
+### 有效参数白名单
+
+**defaults 部分**（8 个）：
+- `max_retries`, `findtime`, `ban_time`, `interval`, `metrics_port`
+- `daemon`, `permanent_db_path`, `permanent_ban_enabled`
+
+**Jail 部分**（7 个）：
+- `enabled`, `log_files`, `max_retries`, `findtime`, `ban_time`
+- `regex`, `regex_pattern`（等价别名）
 
 ---
 

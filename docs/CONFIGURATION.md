@@ -49,10 +49,10 @@ permanent_ban_enabled: true                       # 是否启用永久封禁
 | 参数 | 类型 | 默认值 | 说明 | 有效范围 |
 |------|------|--------|------|----------|
 | `max_retries` | integer | `5` | 触发封禁所需的失败次数 | 1 ~ 100 |
-| `findtime` | integer | `600` | 失败记录的时间窗口（秒） | 10 ~ 86400 |
-| `ban_time` | integer | `900` | 封禁持续时间（秒） | 30 ~ 31536000（1年） |
+| `findtime` | integer | `600` | 失败记录的时间窗口（秒） | 1 ~ 3600 |
+| `ban_time` | integer | `900` | 封禁持续时间（秒），0=永久 | 0 或 1 ~ 86400 |
 | `interval` | integer | `1` | 日志检查间隔（秒） | 1 ~ 60 |
-| `metrics_port` | integer | `9119` | Prometheus 指标导出端口 | 1024 ~ 65535 |
+| `metrics_port` | integer | `9119` | Prometheus 指标导出端口 | 0 ~ 65535 |
 
 ### 参数详解
 
@@ -84,6 +84,16 @@ Firewall 支持两种配置校验模式，可通过命令行参数控制：
 | **拼写错误** | `max_retrys: 5` | `Invalid config parameter 'max_retrys' with value '5' in [defaults]` |
 | **Jail 未知参数** | `sshd:` 下的 `timeout: 30` | `Invalid config parameter 'timeout' with value '30' in jail 'sshd'` |
 
+#### 有效参数白名单
+
+**defaults 部分**仅接受以下参数：
+- `max_retries`, `findtime`, `ban_time`, `interval`, `metrics_port`
+- `daemon`, `permanent_db_path`, `permanent_ban_enabled`
+
+**Jail 部分**仅接受以下参数：
+- `enabled`, `log_files`, `max_retries`, `findtime`, `ban_time`
+- `regex`, `regex_pattern`（两者等价）
+
 ### 宽松模式行为
 
 在宽松模式下，未知参数和无效值仅记录警告日志，不会阻止配置加载：
@@ -108,9 +118,10 @@ WARNING: Invalid default max_retries: 999
 | `enabled` | boolean | `true` | 是否启用该 Jail | - |
 | `log_files` | array | `[]` | 要监控的日志文件路径列表 | 最多 10 个文件 |
 | `max_retries` | integer | 继承 defaults | 覆盖全局 max_retries | 1 ~ 100 |
-| `findtime` | integer | 继承 defaults | 覆盖全局 findtime | 10 ~ 86400 |
-| `ban_time` | integer | 继承 defaults | 覆盖全局 ban_time | 30 ~ 31536000 |
+| `findtime` | integer | 继承 defaults | 覆盖全局 findtime | 1 ~ 3600 |
+| `ban_time` | integer | 继承 defaults | 覆盖全局 ban_time，0=永久 | 0 或 1 ~ 86400 |
 | `regex` | string | `""` | 自定义 PCRE2 正则表达式 | 最大 1024 字节 |
+| `regex_pattern` | string | `""` | `regex` 的别名 | 最大 1024 字节 |
 
 ### 参数详解
 
