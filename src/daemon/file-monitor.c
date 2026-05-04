@@ -92,14 +92,15 @@ watch_summary:
     for (int i = 0; i < global_idx; i++) {
         if (file_states[i].wd >= 0) watched_count++;
     }
-    if (watched_count == 0) {
-        daemon_log_err("No log files could be watched");
-        close(inotify_fd);
-        inotify_fd = -1;
-        return -1;
-    }
+    
     daemon_log_info("Watching %d/%d log files across %d jails", watched_count, total_files, cfg.jail_count);
-
+    
+    /* 如果没有文件被监控，警告但不退出 - 允许日志文件稍后创建 */
+    if (watched_count == 0) {
+        daemon_log_warn("No log files could be watched initially. Daemon will continue running and retry when files are created.");
+        /* 不关闭 inotify_fd，保持运行状态 */
+    }
+    
     return 0;
 }
 
@@ -540,6 +541,61 @@ void monitor_loop(void)
             /* 超时 - 定期清理 */
             cleanup_expired_bans();
 
+            /* 定期检查是否有新日志文件创建（每60秒） */
+            {
+                static time_t last_check_time = 0;
+                time_t now = time(NULL);
+                if (now - last_check_time >= 60) {
+                    last_check_time = now;
+                    int needs_resetup = 0;
+                    for (int j = 0; j < cfg.jail_count; j++) {
+                        if (!cfg.jails[j].enabled) continue;
+                        for (int i = 0; i < cfg.jails[j].log_count; i++) {
+                            struct stat st;
+                            if (stat(cfg.jails[j].log_files[i], &st) == 0) {
+                                /* 文件存在，检查是否已经在监控中 */
+                                int already_watched = 0;
+                                int max_states = MAX_JAILS * MAX_LOG_FILES;
+                                for (int k = 0; k < max_states; k++) {
+                                    if (file_states[k].wd >= 0 &&
+                                        strcmp(file_states[k].path, cfg.jails[j].log_files[i]) == 0) {
+                                        already_watched = 1;
+                                        break;
+                                    }
+                                }
+                                if (!already_watched) {
+                                    daemon_log_info("New log file detected: %s (jail=%s), will re-setup inotify",
+                                                    cfg.jails[j].log_files[i], cfg.jails[j].name);
+                                    needs_resetup = 1;
+                                }
+                            }
+                        }
+                    }
+                    if (needs_resetup && inotify_fd >= 0) {
+                        /* 移除旧监控 */
+                        int max_states = MAX_JAILS * MAX_LOG_FILES;
+                        for (int i = 0; i < max_states; i++) {
+                            if (file_states[i].wd >= 0) {
+                                inotify_rm_watch(inotify_fd, file_states[i].wd);
+                                file_states[i].wd = -1;
+                            }
+                            file_states[i].offset = 0;
+                            file_states[i].inode = 0;
+                            file_states[i].path[0] = '\0';
+                            file_states[i].jail_idx = -1;
+                        }
+                        close(inotify_fd);
+                        inotify_fd = -1;
+
+                        if (setup_inotify() < 0) {
+                            daemon_log_warn("Failed to re-setup inotify for new log files. Will retry later.");
+                        } else {
+                            daemon_log_info("Successfully re-setup inotify with new log files");
+                        }
+                    }
+                }
+            }
+
             /* 检查是否请求了配置重载 - 使用原子交换防止信号丢失 */
             if (__atomic_exchange_n(&reload_config, 0, __ATOMIC_SEQ_CST)) {
                 atomic_fetch_add(&daemon_stats.config_reloads, 1);  /* 记录配置重载次数 */
@@ -610,8 +666,7 @@ void monitor_loop(void)
 
                     /* 重新设置 inotify */
                     if (setup_inotify() < 0) {
-                        daemon_log_err("Failed to re-setup inotify after config reload");
-                        running = 0;  /* 安全退出 */
+                        daemon_log_warn("Failed to re-setup inotify after config reload. Daemon will continue running.");
                     }
 
                     /* 检查变更并输出日志 */
