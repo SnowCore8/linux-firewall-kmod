@@ -426,6 +426,9 @@ static int parse_yaml_into(const char *config_path, struct config *target)
         case YAML_SEQUENCE_START_EVENT: {
             if (ctx.current_key && strcmp(ctx.current_key, "log_files") == 0) {
                 ctx.in_log_files_array = 1;
+            }
+            /* 无论是否匹配，都需要释放 current_key */
+            if (ctx.current_key) {
                 free(ctx.current_key);
                 ctx.current_key = NULL;
             }
@@ -450,6 +453,10 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                 if (ctx.current_jail_name) free(ctx.current_jail_name);
                 ctx.current_jail_name = ctx.current_key;
                 ctx.current_jail = NULL;  /* 将在解析属性时创建 */
+                ctx.current_key = NULL;
+            } else if (ctx.current_key) {
+                /* 意外映射，释放 key */
+                free(ctx.current_key);
                 ctx.current_key = NULL;
             }
         }
@@ -528,12 +535,19 @@ int parse_config_file(const char *config_path)
     pthread_rwlock_rdlock(&config_rwlock);
     if (cfg.config_file) {
         new_cfg->config_file = strdup(cfg.config_file);
+        if (!new_cfg->config_file) { pthread_rwlock_unlock(&config_rwlock); free(new_cfg); return -1; }
     }
     if (cfg.config_dir) {
         new_cfg->config_dir = strdup(cfg.config_dir);
+        if (!new_cfg->config_dir) {
+            free(new_cfg->config_file); pthread_rwlock_unlock(&config_rwlock); free(new_cfg); return -1;
+        }
     }
     if (cfg.permanent_db_path) {
         new_cfg->permanent_db_path = strdup(cfg.permanent_db_path);
+        if (!new_cfg->permanent_db_path) {
+            free(new_cfg->config_file); free(new_cfg->config_dir); pthread_rwlock_unlock(&config_rwlock); free(new_cfg); return -1;
+        }
         new_cfg->permanent_ban_enabled = cfg.permanent_ban_enabled;
     }
     pthread_rwlock_unlock(&config_rwlock);
@@ -638,6 +652,15 @@ int parse_config_file(const char *config_path)
             if (old_jail->match_data) pcre2_match_data_free(old_jail->match_data);
         }
         if (old_jail->regex_pattern) free(old_jail->regex_pattern);
+        /* 释放 failed_table 链表 */
+        if (old_jail->failed_table) {
+            struct failed_entry *entry = old_jail->failed_table;
+            while (entry) {
+                struct failed_entry *next = entry->next;
+                free(entry);
+                entry = next;
+            }
+        }
         /* failed_hash 已迁移，跳过 */
         memset(old_jail, 0, sizeof(struct jail));
     }

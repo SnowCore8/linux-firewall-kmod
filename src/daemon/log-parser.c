@@ -42,8 +42,8 @@ int extract_ipv4(const char *line, char *ip_out, size_t ip_size)
         if (i == 4) {
             /* 验证词边界 */
             if (!isdigit((unsigned char)*ptr) && *ptr != '.') {
-                /* 验证 IP */
-                unsigned int ip_num = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3];
+                /* 验证 IP - 移位前强制转换为 unsigned int 避免有符号整数溢出 UB */
+                unsigned int ip_num = ((unsigned int)octets[0] << 24) | ((unsigned int)octets[1] << 16) | ((unsigned int)octets[2] << 8) | (unsigned int)octets[3];
                 if (ip_num != 0 && ip_num != 0xFFFFFFFF &&
                     octets[0] != 127 &&
                     (octets[0] < 224 || octets[0] > 239)) {
