@@ -159,20 +159,23 @@ fw_ensure_module_loaded "$KERNEL_MODULE_PATH" || {
 
 # 验证模块完全就绪（lsmod + procfs 双重检查）
 fw_log_info "验证模块就绪..."
-sleep 0.5  # 等待模块初始化完成
+sleep 1  # 等待模块完全初始化
 
-if ! lsmod | grep -q "^firewall "; then
-    fw_log_error "模块未出现在 lsmod 中"
-    exit 1
-fi
+_module_ready=false
+for i in 1 2 3; do
+    if lsmod | grep -q "^firewall " && [[ -d "$PROC_DIR" ]] && [[ -w "$PROC_BANS" ]]; then
+        _module_ready=true
+        break
+    fi
+    fw_log_debug "模块就绪检查第 $i 次失败，等待后重试..."
+    sleep 1
+done
 
-if [[ ! -d "$PROC_DIR" ]]; then
-    fw_log_error "procfs 目录 $PROC_DIR 不存在，模块未正确初始化"
-    exit 1
-fi
-
-if [[ ! -w "$PROC_BANS" ]]; then
-    fw_log_error "procfs bans 接口不可写，模块未正确初始化"
+if [[ "$_module_ready" != true ]]; then
+    fw_log_error "模块未完全就绪（lsmod/procfs/bans 检查失败）"
+    fw_log_error "lsmod: $(lsmod 2>/dev/null | grep firewall || echo 'not found')"
+    fw_log_error "procfs: $([ -d "$PROC_DIR" ] && echo 'exists' || echo 'missing')"
+    fw_log_error "bans: $([ -w "$PROC_BANS" ] && echo 'writable' || echo 'not writable')"
     exit 1
 fi
 
