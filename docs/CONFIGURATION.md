@@ -121,7 +121,6 @@ WARNING: Invalid default max_retries: 999
 | `findtime` | integer | 继承 defaults | 覆盖全局 findtime | 1 ~ 3600 |
 | `ban_time` | integer | 继承 defaults | 覆盖全局 ban_time，0=永久 | 0 或 1 ~ 86400 |
 | `regex` | string | `""` | 自定义 PCRE2 正则表达式 | 最大 1024 字节 |
-| `regex_pattern` | string | `""` | `regex` 的别名 | 最大 1024 字节 |
 
 ### 参数详解
 

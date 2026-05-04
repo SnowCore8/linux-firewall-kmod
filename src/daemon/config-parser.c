@@ -41,7 +41,7 @@ static int is_valid_jail_key(const char *key)
 {
     const char *valid_keys[] = {
         "enabled", "log_files", "max_retries", "findtime",
-        "ban_time", "regex_pattern", "regex", NULL
+        "ban_time", "regex", NULL
     };
     for (int i = 0; valid_keys[i]; i++) {
         if (strcmp(key, valid_keys[i]) == 0) return 1;
@@ -309,7 +309,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                             ctx.current_jail->ban_time = (unsigned int)val;
                             daemon_log_info("Jail '%s' ban_time set to %u", ctx.current_jail->name, ctx.current_jail->ban_time);
                         }
-                    } else if (strcmp(ctx.current_key, "regex") == 0 || strcmp(ctx.current_key, "regex_pattern") == 0) {
+                    } else if (strcmp(ctx.current_key, "regex") == 0) {
                         if (ctx.current_jail->regex_pattern) free(ctx.current_jail->regex_pattern);
                         ctx.current_jail->regex_pattern = strdup(value);
                         daemon_log_info("Jail '%s' regex set to: %s", ctx.current_jail->name, value);
