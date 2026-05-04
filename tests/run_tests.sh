@@ -156,7 +156,27 @@ fw_ensure_module_loaded "$KERNEL_MODULE_PATH" || {
     fw_log_error "内核模块加载失败，终止测试"
     exit 1
 }
-fw_log_info "内核模块已加载"
+
+# 验证模块完全就绪（lsmod + procfs 双重检查）
+fw_log_info "验证模块就绪..."
+sleep 0.5  # 等待模块初始化完成
+
+if ! lsmod | grep -q "^firewall "; then
+    fw_log_error "模块未出现在 lsmod 中"
+    exit 1
+fi
+
+if [[ ! -d "$PROC_DIR" ]]; then
+    fw_log_error "procfs 目录 $PROC_DIR 不存在，模块未正确初始化"
+    exit 1
+fi
+
+if [[ ! -w "$PROC_BANS" ]]; then
+    fw_log_error "procfs bans 接口不可写，模块未正确初始化"
+    exit 1
+fi
+
+fw_log_info "模块就绪：lsmod ✓ | procfs ✓ | bans 接口 ✓"
 
 # ============================================================================
 # 测试套件映射
@@ -193,14 +213,18 @@ declare -A SUITE_CATEGORIES=(
 # 运行测试
 # ============================================================================
 
-# 在运行测试套件前验证模块状态
-_lsmod_output=$(lsmod 2>/dev/null) || true
-if echo "$_lsmod_output" | grep -q "^firewall"; then
-    fw_log_debug "模块状态检查通过"
-else
-    fw_log_error "内核模块未加载，无法运行测试"
-    exit 1
-fi
+# 模块健康检查函数 - 在每个测试套件执行前验证
+check_module_ready() {
+    if ! lsmod | grep -q "^firewall "; then
+        fw_log_error "模块意外卸载，终止测试"
+        return 1
+    fi
+    if [[ ! -d "$PROC_DIR" ]] || [[ ! -w "$PROC_BANS" ]]; then
+        fw_log_error "procfs 接口异常，终止测试"
+        return 1
+    fi
+    return 0
+}
 
 run_suite() {
     local suite_key="$1"
@@ -213,6 +237,12 @@ run_suite() {
 
     if [[ ! -f "$suite_file" ]]; then
         fw_log_error "测试套件文件不存在: $suite_file"
+        return 1
+    fi
+
+    # 执行前验证模块就绪
+    if ! check_module_ready; then
+        fw_log_error "模块未就绪，跳过测试套件: $suite_key"
         return 1
     fi
 
