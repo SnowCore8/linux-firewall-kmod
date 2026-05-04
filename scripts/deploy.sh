@@ -24,10 +24,29 @@ if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
     exit 0
 fi
 
+# 回滚函数（在部署失败时清理所有更改）
+rollback() {
+    echo "⚠️  检测到部署失败，正在回滚..."
+    ssh "$REMOTE_USER@$REMOTE_HOST" << 'ROLLBACK_SCRIPT'
+    rmmod firewall 2>/dev/null || true
+    systemctl stop firewall-daemon 2>/dev/null || true
+    systemctl disable firewall-daemon 2>/dev/null || true
+    rm -f /etc/systemd/system/firewall-daemon.service
+    systemctl daemon-reload 2>/dev/null || true
+    rm -f /tmp/firewall-src.tar.gz
+    ROLLBACK_SCRIPT
+    echo "✅ 回滚完成"
+    exit 1
+}
+trap 'rollback' EXIT INT TERM
+
 # 1. 检查远程服务器依赖
 echo ""
 echo "[1/7] Checking remote server dependencies..."
-ssh -o StrictHostKeyChecking=accept-new "$REMOTE_USER@$REMOTE_HOST" << 'EOF'
+ssh -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/dev/null \
+    -o IdentitiesOnly=yes \
+    "$REMOTE_USER@$REMOTE_HOST" << 'EOF'
 # 检测远程服务器的包管理器
 if command -v apt-get >/dev/null 2>&1; then
     PKG_MANAGER="apt"
@@ -95,6 +114,11 @@ if [ "$PKG_MANAGER" = "apt" ]; then
 else
     rpm -q $PCRE2_PKG >/dev/null 2>&1 || { echo "❌ 缺少 $PCRE2_PKG"; exit 1; }
 fi
+
+echo "  检查 curl（用于监控指标）..."
+which curl >/dev/null 2>&1 || { echo "❌ 缺少 curl"; exit 1; }
+echo "  ✅ curl 已安装"
+
 echo "✅ 依赖检查通过"
 EOF
 
@@ -126,10 +150,27 @@ if [[ $? -ne 0 ]]; then
 fi
 echo "✅ 上传完成"
 
+# 验证上传文件完整性
+echo "  验证上传文件完整性..."
+ssh "$REMOTE_USER@$REMOTE_HOST" << 'VERIFY_SCRIPT'
+cd /tmp
+md5sum -c firewall-src.tar.gz.md5 >/dev/null 2>&1 || {
+    echo "❌ 上传文件验证失败"
+    exit 1
+}
+VERIFY_SCRIPT
+if [[ $? -ne 0 ]]; then
+    echo "❌ 文件完整性验证失败"
+    exit 1
+fi
+
 # 4. 远程编译和安装
 echo ""
 echo "[4/7] Remote compilation and installation..."
-ssh -o StrictHostKeyChecking=accept-new "$REMOTE_USER@$REMOTE_HOST" << 'REMOTE_SCRIPT'
+ssh -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/dev/null \
+    -o IdentitiesOnly=yes \
+    "$REMOTE_USER@$REMOTE_HOST" << 'REMOTE_SCRIPT'
 set -e
 
 echo "  [4.1] Extracting source..."
