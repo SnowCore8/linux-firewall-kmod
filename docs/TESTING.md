@@ -12,7 +12,9 @@
 
 ## 2. 测试套件列表
 
-### 基础功能类
+### 功能测试（`tests/suites/`）
+
+#### 基础功能类
 
 | 编号 | 套件名称 | 测试数 | 类别 | 说明 |
 |------|----------|--------|------|------|
@@ -21,17 +23,7 @@
 | 03 | `ban_unban` | 10 | basic | 基本封禁/解封、批量操作、循环稳定性 |
 | 04 | `whitelist` | 8 | basic | 白名单添加/移除、IP/子网支持 |
 
-### 安全类
-
-| 编号 | 套件名称 | 测试数 | 类别 | 说明 |
-|------|----------|--------|------|------|
-| 05 | `input_validation` | 10 | security | 无效 IP、边界值、格式验证 |
-| 06 | `security` | 12 | security | 命令注入、procfs 权限、模块参数安全 |
-| 14 | `integer_overflow` | 8 | security | 整数溢出防护、乘法溢出检测 |
-| 15 | `path_traversal` | 6 | security | 路径穿越攻击防护、纵深防御 |
-| 16 | `redos_test` | 5 | security | ReDoS 防护、正则安全检查 |
-
-### 守护进程类
+#### 守护进程类
 
 | 编号 | 套件名称 | 测试数 | 类别 | 说明 |
 |------|----------|--------|------|------|
@@ -39,7 +31,7 @@
 | 10 | `daemon_logparse` | 10 | daemon | 日志解析（sshd/vsftpd/nginx/frp） |
 | 13 | `frp_jail` | 8 | daemon | FRP Jail 隔离、独立配置验证 |
 
-### 性能与资源类
+#### 性能与资源类
 
 | 编号 | 套件名称 | 测试数 | 类别 | 说明 |
 |------|----------|--------|------|------|
@@ -47,6 +39,16 @@
 | 08 | `stress_perf` | 10 | performance | 封禁/解封性能、压力测试、哈希碰撞 |
 | 11 | `resource_mgmt` | 10 | resource | 资源管理、内存安全、泄漏检测 |
 | 12 | `permanent_ban` | 12 | resource | SQLite 持久化、重启恢复、数据库完整性 |
+
+### 安全测试（`tests/security/`）
+
+| 编号 | 套件名称 | 测试数 | 类别 | 说明 |
+|------|----------|--------|------|------|
+| 01 | `input_validation` | 10 | security | 无效 IP、边界值、格式验证 |
+| 02 | `security` | 12 | security | 命令注入、procfs 权限、模块参数安全 |
+| 03 | `integer_overflow` | 8 | security | 整数溢出防护、乘法溢出检测 |
+| 04 | `path_traversal` | 6 | security | 路径穿越攻击防护、纵深防御 |
+| 05 | `redos` | 5 | security | ReDoS 防护、正则安全检查 |
 
 ---
 
@@ -57,15 +59,25 @@
 make test
 sudo ./tests/run_tests.sh
 
-# 运行单个测试套件
+# 运行单个功能测试套件（tests/suites/）
 sudo ./tests/run_tests.sh --suite 03        # 封禁/解封
 sudo ./tests/run_tests.sh --suite 09        # 守护进程配置
 
+# 运行单个安全测试套件（tests/security/）
+sudo ./tests/run_tests.sh --security-suite 01   # 输入验证
+sudo ./tests/run_tests.sh --security-suite 02   # 安全加固
+sudo ./tests/run_tests.sh --security-suite 03   # 整数溢出
+sudo ./tests/run_tests.sh --security-suite 04   # 路径穿越
+sudo ./tests/run_tests.sh --security-suite 05   # ReDoS 防护
+
 # 按类别运行
-sudo ./tests/run_tests.sh --category security   # 安全测试（05/06/14/15/16）
+sudo ./tests/run_tests.sh --category security   # 安全测试（security/01-05）
 sudo ./tests/run_tests.sh --category daemon     # 守护进程（09/10/13）
 sudo ./tests/run_tests.sh --category performance # 性能（07/08）
 sudo ./tests/run_tests.sh --category basic      # 基础（01/02/03/04）
+
+# 仅运行安全测试
+sudo ./tests/run_tests.sh --security-only
 
 # 生成测试报告
 sudo ./tests/run_tests.sh --report
@@ -133,19 +145,28 @@ fw_ensure_module_unloaded                                  # 卸载模块
 
 ## 5. 编写新测试
 
-### 5.1 添加测试套件
+### 5.1 添加功能测试套件
 
 1. 在 `tests/suites/` 创建 `XX_name.sh`（XX 为两位编号）
 2. 在 `run_tests.sh` 的 `SUITE_FILES` 和 `SUITE_CATEGORIES` 中添加映射
 3. 使用框架断言函数编写测试
 
-### 5.2 命名规范
+### 5.2 添加安全测试套件
 
-- 套件文件：`XX_short_name.sh`（如 `03_ban_unban.sh`）
+1. 在 `tests/security/` 创建 `XX_name.sh`（XX 为两位编号，独立于 suites/ 编号）
+2. 在 `run_tests.sh` 的 `SECURITY_SUITE_FILES` 中添加映射
+3. 安全测试应重点关注：输入验证、注入防护、边界条件、资源耗尽等
+
+### 5.3 命名规范
+
+- 功能套件文件：`tests/suites/XX_short_name.sh`（如 `03_ban_unban.sh`）
+- 安全套件文件：`tests/security/XX_short_name.sh`（如 `01_input_validation.sh`）
 - 测试小节：`fw_subsection "描述"`
 - 断言消息：简洁描述预期结果
 
-### 5.3 示例
+### 5.4 示例
+
+#### 功能测试示例
 
 ```bash
 #!/bin/bash
@@ -160,6 +181,25 @@ assert_file_contains "$PROC_DIR/stats" "bans" "包含 bans 字段"
 
 fw_subsection "边界条件"
 assert_failure "echo 'invalid' > '$PROC_BANS' 2>&1" "无效输入被拒绝"
+
+fw_ensure_module_unloaded
+```
+
+#### 安全测试示例
+
+```bash
+#!/bin/bash
+# tests/security/XX_example.sh
+
+fw_test_header "安全测试示例"
+fw_ensure_module_loaded "$KERNEL_MODULE_PATH"
+
+fw_subsection "输入验证"
+assert_failure "echo '1.2.3.999' > '$PROC_BANS' 2>&1" "无效 IP 被拒绝"
+assert_failure "echo 'abc.def.ghi.jkl' > '$PROC_BANS' 2>&1" "非数字 IP 被拒绝"
+
+fw_subsection "注入防护"
+assert_failure "echo '1.2.3.4; rm -rf /' > '$PROC_BANS' 2>&1" "命令注入被拦截"
 
 fw_ensure_module_unloaded
 ```

@@ -14,9 +14,6 @@ fw_test_header "路径遍历防护测试"
 # ============================================================================
 fw_subsection "Procfs bans 接口拒绝路径遍历输入"
 
-# 加载内核模块
-fw_ensure_module_loaded "$KERNEL_MODULE_PATH"
-
 # 测试 1.1: 正常 IP 应该被成功封禁（基线测试）
 echo '203.0.113.1' > "$PROC_BANS" 2>/dev/null || true
 sleep 0.2
@@ -345,9 +342,6 @@ rm -rf "$TEST_DIR"
 # ============================================================================
 fw_subsection "符号链接攻击检测"
 
-# 先卸载之前加载的模块
-fw_ensure_module_unloaded
-
 # 测试 5.1: 内核模块拒绝符号链接状态文件
 # 创建指向 /proc/self/environ 的符号链接作为状态文件
 mkdir -p /var/lib/firewall
@@ -371,7 +365,6 @@ rm -f "$DMESG_TMP"
 rm -f /var/lib/firewall/state
 
 # 测试 5.2: 内核模块拒绝包含 ../ 的状态文件路径
-fw_ensure_module_unloaded
 sleep 0.3
 
 # 清空 dmesg
@@ -388,7 +381,6 @@ assert_true "grep -q 'path traversal attempt rejected' '$DMESG_TMP'" "dmesg 包�
 rm -f "$DMESG_TMP"
 
 # 测试 5.3: 内核模块拒绝状态文件路径中的 ../ 模式（/.. 边界情况）
-fw_ensure_module_unloaded
 sleep 0.3
 
 # 清空 dmesg
@@ -412,9 +404,6 @@ fw_subsection "验证正常操作不受影响"
 # 确保模块已加载
 LSMOD_TMP="/tmp/fw_lsmod_check_$$"
 lsmod > "$LSMOD_TMP" 2>/dev/null
-if ! grep -q "^firewall " "$LSMOD_TMP"; then
-    fw_ensure_module_loaded "$KERNEL_MODULE_PATH"
-fi
 rm -f "$LSMOD_TMP"
 
 # 测试 6.1: 正常 IP 封禁仍然工作
@@ -454,7 +443,6 @@ rm -rf "$TEST_DIR"
 # ============================================================================
 # 清理环境
 # ============================================================================
-fw_ensure_module_unloaded
 
 echo ""
 echo "路径遍历防护测试完成"

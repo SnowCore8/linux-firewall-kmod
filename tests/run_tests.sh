@@ -77,6 +77,7 @@ if [[ "$SHOW_HELP" == true ]]; then
   ./tests/run_tests.sh --suite 03         # 运行封禁/解封测试
   ./tests/run_tests.sh --suite 09         # 运行配置测试
   ./tests/run_tests.sh --report           # 运行所有测试并生成报告
+  ./tests/run_tests.sh --category security  # 安全测试（5 个套件）
   ./tests/run_tests.sh --debug            # 运行所有测试并显示调试信息
 EOF
     exit 0
@@ -150,6 +151,14 @@ fi
 # 安全预检
 fw_log_info "测试模式：仅加载/卸载模块，不安装到系统"
 
+# 加载内核模块
+fw_section "加载内核模块"
+fw_ensure_module_loaded "$KERNEL_MODULE_PATH" || {
+    fw_log_error "内核模块加载失败，终止测试"
+    exit 1
+}
+fw_log_info "内核模块已加载"
+
 # ============================================================================
 # 测试套件映射
 # ============================================================================
@@ -158,8 +167,6 @@ declare -A SUITE_FILES=(
     ["02_procfs_interface"]="suites/02_procfs_interface.sh"
     ["03_ban_unban"]="suites/03_ban_unban.sh"
     ["04_whitelist"]="suites/04_whitelist.sh"
-    ["05_input_validation"]="suites/05_input_validation.sh"
-    ["06_security"]="suites/06_security.sh"
     ["07_concurrency"]="suites/07_concurrency.sh"
     ["08_stress_perf"]="suites/08_stress_perf.sh"
     ["09_daemon_config"]="suites/09_daemon_config.sh"
@@ -167,9 +174,12 @@ declare -A SUITE_FILES=(
     ["11_resource_mgmt"]="suites/11_resource_mgmt.sh"
     ["12_permanent_ban"]="suites/12_permanent_ban.sh"
     ["13_frp_jail"]="suites/13_frp_jail.sh"
-    ["14_integer_overflow"]="suites/14_integer_overflow.sh"
-    ["15_path_traversal"]="suites/15_path_traversal.sh"
-    ["16_redos_test"]="suites/16_redos_test.sh"
+    # 安全测试（已移至 security/ 目录）
+    ["01_security_input_validation"]="security/01_input_validation.sh"
+    ["02_security"]="security/02_security.sh"
+    ["03_security_overflow"]="security/03_integer_overflow.sh"
+    ["04_security_path"]="security/04_path_traversal.sh"
+    ["05_security_redos"]="security/05_redos.sh"
 )
 
 declare -A SUITE_CATEGORIES=(
@@ -177,8 +187,6 @@ declare -A SUITE_CATEGORIES=(
     ["02_procfs_interface"]="procfs basic"
     ["03_ban_unban"]="ban basic"
     ["04_whitelist"]="whitelist security"
-    ["05_input_validation"]="security input"
-    ["06_security"]="security"
     ["07_concurrency"]="concurrency performance"
     ["08_stress_perf"]="stress performance"
     ["09_daemon_config"]="daemon config"
@@ -186,14 +194,23 @@ declare -A SUITE_CATEGORIES=(
     ["11_resource_mgmt"]="resource"
     ["12_permanent_ban"]="permanent ban"
     ["13_frp_jail"]="daemon frp"
-    ["14_integer_overflow"]="security overflow"
-    ["15_path_traversal"]="security path"
-    ["16_redos_test"]="security regex"
+    # 安全测试（已移至 security/ 目录）
+    ["01_security_input_validation"]="security"
+    ["02_security"]="security"
+    ["03_security_overflow"]="security"
+    ["04_security_path"]="security"
+    ["05_security_redos"]="security"
 )
 
 # ============================================================================
 # 运行测试
 # ============================================================================
+
+# 在运行测试套件前验证模块状态
+if ! lsmod | grep -q "^firewall "; then
+    fw_log_error "内核模块未加载，无法运行测试"
+    exit 1
+fi
 
 run_suite() {
     local suite_key="$1"
@@ -250,6 +267,12 @@ fi
 if [[ "$GEN_REPORT" == true ]]; then
     fw_generate_report "reports/test_report.md"
 fi
+
+# ============================================================================
+# 测试完成，卸载模块
+# ============================================================================
+fw_section "测试完成，卸载模块"
+fw_ensure_module_unloaded || fw_log_warn "模块卸载失败（可能被占用）"
 
 # ============================================================================
 # 打印摘要

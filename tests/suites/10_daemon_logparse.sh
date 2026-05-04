@@ -7,7 +7,6 @@ fw_test_header "日志解析测试"
 fw_subsection "守护进程检查"
 if [[ ! -x "$DAEMON_PATH" ]]; then
     skip_test "守护进程未编译，跳过日志解析测试"
-    fw_ensure_module_unloaded
     return 0
 fi
 
@@ -26,12 +25,11 @@ EOF
 
 # 10.3 守护进程处理测试
 # 需要内核模块已加载
-fw_ensure_module_loaded "$KERNEL_MODULE_PATH" 2>/dev/null || {
-    skip_test "内核模块无法加载，跳过处理测试"
+if ! lsmod | grep -q "^firewall "; then
+    skip_test "内核模块未加载，跳过处理测试"
     rm -f "$local_test_log"
-    fw_ensure_module_unloaded
-    exit 0
-}
+    return 0
+fi
 
 # 创建临时 YAML 配置用于日志解析测试
 local_yaml_config="/tmp/fw_logparse_yaml_$$.yaml"
@@ -187,4 +185,3 @@ fi
 
 rm -f "$local_nonexist_yaml"
 
-fw_ensure_module_unloaded

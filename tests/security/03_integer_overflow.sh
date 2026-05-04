@@ -4,9 +4,6 @@
 
 fw_test_header "整数溢出防护测试"
 
-# 确保模块已加载
-fw_ensure_module_loaded "$KERNEL_MODULE_PATH"
-
 # 测试 1：正常封禁时间（应成功）
 fw_subsection "正常封禁时间"
 echo "$TEST_IP 3600" > "$PROC_BANS" 2>/dev/null
