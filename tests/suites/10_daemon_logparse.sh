@@ -25,7 +25,7 @@ EOF
 
 # 10.3 守护进程处理测试
 # 需要内核模块已加载
-if ! lsmod | grep -q "^firewall "; then
+if ! lsmod | grep -q "^firewall"; then
     skip_test "内核模块未加载，跳过处理测试"
     rm -f "$local_test_log"
     return 0

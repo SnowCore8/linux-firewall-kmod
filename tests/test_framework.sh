@@ -301,7 +301,7 @@ fw_ensure_module_loaded() {
         local lsmod_output
         lsmod_output=$(lsmod 2>&1)
         fw_log_debug "lsmod 输出 (retries=$retries): $(echo "$lsmod_output" | grep firewall || echo 'no firewall found')"
-        if echo "$lsmod_output" | grep -q "^firewall "; then
+        if echo "$lsmod_output" | grep -q "^firewall"; then
             fw_log_debug "模块验证成功"
             return 0
         fi
@@ -314,7 +314,7 @@ fw_ensure_module_loaded() {
 }
 
 fw_ensure_module_unloaded() {
-    if lsmod | grep -q "^firewall "; then
+    if lsmod | grep -q "^firewall"; then
         if ! rmmod firewall 2>/dev/null; then
             fw_log_warn "模块卸载失败，可能被其他进程引用"
             return 1
@@ -323,7 +323,7 @@ fw_ensure_module_unloaded() {
     sleep 0.3
     
     # 验证卸载
-    if lsmod | grep -q "^firewall "; then
+    if lsmod | grep -q "^firewall"; then
         fw_log_error "模块卸载验证失败: 模块仍在运行"
         return 1
     fi
@@ -468,7 +468,7 @@ fw_warn() {
 
 fw_cleanup() {
     # 卸载内核模块（测试模式）
-    if lsmod | grep -q "^firewall "; then
+    if lsmod | grep -q "^firewall"; then
         rmmod firewall 2>/dev/null || true
     fi
     

@@ -152,6 +152,10 @@ fw_log_info "测试模式：仅加载/卸载模块，不安装到系统"
 
 # 加载内核模块
 fw_section "加载内核模块"
+fw_log_debug "KERNEL_MODULE_PATH=$KERNEL_MODULE_PATH"
+fw_log_debug "PROC_DIR=$PROC_DIR"
+fw_log_debug "PROC_BANS=$PROC_BANS"
+
 fw_ensure_module_loaded "$KERNEL_MODULE_PATH" || {
     fw_log_error "内核模块加载失败，终止测试"
     exit 1
@@ -167,15 +171,16 @@ for i in 1 2 3; do
     _procfs_ok=false
     _bans_ok=false
     
-    lsmod | grep -q "^firewall " && _lsmod_ok=true
+    lsmod | grep -q "^firewall" && _lsmod_ok=true
     [[ -d "$PROC_DIR" ]] && _procfs_ok=true
     [[ -w "$PROC_BANS" ]] && _bans_ok=true
+    
+    fw_log_debug "检查 [$i]: lsmod=$_lsmod_ok procfs=$_procfs_ok bans=$_bans_ok"
     
     if [[ "$_lsmod_ok" == true ]] && [[ "$_procfs_ok" == true ]] && [[ "$_bans_ok" == true ]]; then
         _module_ready=true
         break
     fi
-    fw_log_debug "模块就绪检查第 $i 次失败 [lsmod=$_lsmod_ok procfs=$_procfs_ok bans=$_bans_ok]，等待后重试..."
     sleep 1
 done
 
@@ -223,7 +228,7 @@ declare -A SUITE_CATEGORIES=(
 
 # 模块健康检查函数 - 在每个测试套件执行前验证
 check_module_ready() {
-    if ! lsmod | grep -q "^firewall "; then
+    if ! lsmod | grep -q "^firewall"; then
         fw_log_error "模块意外卸载，终止测试"
         return 1
     fi
