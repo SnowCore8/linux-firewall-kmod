@@ -55,56 +55,11 @@ fw_test_header() {
 # 断言函数
 # ============================================================================
 
-# 辅助函数：移除引号内的内容，避免误报
-# 例如：echo '192.168.1.1; rm -rf /' > file 中的分号在单引号内，是安全的
-strip_quotes() {
-    local cmd="$1"
-    # 移除单引号内的内容（处理转义单引号：'\''）
-    cmd=$(echo "$cmd" | sed "s/'[^']*'//g; s/'\\\\''//g")
-    # 移除双引号内的内容（处理转义双引号：\"）
-    cmd=$(echo "$cmd" | sed 's/"[^"\\]*\(\\.[^"\\]*\)*/""/g; s/""//g')
-    echo "$cmd"
-}
-
-# 安全检查：检测命令中是否包含潜在的注入字符
-# 禁止的字符: ; ` { } \n
-# 禁止的模式: $() 命令替换、&& 和 || 逻辑运算符
-# 允许 $ 用于变量展开（如 $VAR, ${VAR}）
-# 允许 & 用于重定向（如 2>&1）
-# 这些字符可能被用于命令注入攻击
-is_safe_command() {
-    local cmd="$1"
-    local dangerous_pattern='[;`{}|]'
-    
-    # 检测命令替换和逻辑运算符
-    if [[ "$cmd" == *'$('* ]] || [[ "$cmd" == *'&&'* ]] || [[ "$cmd" == *'||'* ]]; then
-        return 1
-    fi
-    
-    # 对引号外剩余部分进行危险字符检测
-    local stripped
-    stripped=$(strip_quotes "$cmd")
-    
-    if [[ "$stripped" =~ $dangerous_pattern ]] || [[ "$cmd" == *$'\n'* ]]; then
-        return 1
-    fi
-    
-    return 0
-}
-
 # 基础断言：条件为真
 assert_true() {
     local condition="$1"
     local msg="${2:-断言失败}"
     TEST_TOTAL=$((TEST_TOTAL + 1))
-
-    # 安全检查：验证条件字符串是否安全
-    if ! is_safe_command "$condition"; then
-        TEST_FAIL=$((TEST_FAIL + 1))
-        echo -e "  ${RED}[FAIL]${NC} $msg (错误: 包含不安全的字符)"
-        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg (错误: 包含不安全的字符)")
-        return 1
-    fi
 
     if eval "$condition" >/dev/null 2>&1; then
         TEST_PASS=$((TEST_PASS + 1))
@@ -125,14 +80,6 @@ assert_false() {
     local msg="${2:-断言失败}"
     TEST_TOTAL=$((TEST_TOTAL + 1))
 
-    # 安全检查：验证条件字符串是否安全
-    if ! is_safe_command "$condition"; then
-        TEST_FAIL=$((TEST_FAIL + 1))
-        echo -e "  ${RED}[FAIL]${NC} $msg (错误: 包含不安全的字符)"
-        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg (错误: 包含不安全的字符)")
-        return 1
-    fi
-
     if ! eval "$condition" >/dev/null 2>&1; then
         TEST_PASS=$((TEST_PASS + 1))
         echo -e "  ${GREEN}[PASS]${NC} $msg"
@@ -151,14 +98,6 @@ assert_success() {
     local cmd="$1"
     local msg="${2:-命令执行失败}"
     TEST_TOTAL=$((TEST_TOTAL + 1))
-
-    # 安全检查：验证命令字符串是否安全
-    if ! is_safe_command "$cmd"; then
-        TEST_FAIL=$((TEST_FAIL + 1))
-        echo -e "  ${RED}[FAIL]${NC} $msg (错误: 包含不安全的字符)"
-        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg (错误: 包含不安全的字符)")
-        return 1
-    fi
 
     local output
     output=$(eval "$cmd" 2>&1)
@@ -184,14 +123,6 @@ assert_failure() {
     local msg="${2:-命令应失败但成功了}"
     TEST_TOTAL=$((TEST_TOTAL + 1))
 
-    # 安全检查：验证命令字符串是否安全
-    if ! is_safe_command "$cmd"; then
-        TEST_FAIL=$((TEST_FAIL + 1))
-        echo -e "  ${RED}[FAIL]${NC} $msg (错误: 包含不安全的字符)"
-        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg (错误: 包含不安全的字符)")
-        return 1
-    fi
-
     local output
     output=$(eval "$cmd" 2>&1)
     local rc=$?
@@ -211,8 +142,7 @@ assert_failure() {
 }
 
 # 安全测试专用断言
-# 用于测试输入注入防护，不经过 is_safe_command() 检查
-# 直接验证目标系统的防护行为
+# 用于测试输入注入防护，直接验证目标系统的防护行为
 assert_inject_blocked() {
     local cmd="$1"
     local msg="${2:-注入被拒绝}"

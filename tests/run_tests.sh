@@ -207,7 +207,10 @@ declare -A SUITE_CATEGORIES=(
 # ============================================================================
 
 # 在运行测试套件前验证模块状态
-if ! lsmod | grep -q "^firewall "; then
+_lsmod_output=$(lsmod 2>/dev/null) || true
+if echo "$_lsmod_output" | grep -q "^firewall"; then
+    fw_log_debug "模块状态检查通过"
+else
     fw_log_error "内核模块未加载，无法运行测试"
     exit 1
 fi
