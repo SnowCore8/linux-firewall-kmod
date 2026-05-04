@@ -109,16 +109,6 @@ test-performance: performance_test.c
 	$(CC) -Wall -Wextra -O2 -o $(BUILD_DIR)/performance_test performance_test.c
 	$(BUILD_DIR)/performance_test
 
-# Uninstall targets
-uninstall-daemon:
-	rm -f $(SBINDIR)/firewall-daemon
-	@echo "firewall-daemon removed from $(SBINDIR)/"
-
-uninstall-kernel:
-	rm -f $(KERNEL_MODDIR)/firewall.ko
-	depmod -a
-	@echo "firewall.ko removed from $(KERNEL_MODDIR)/ and module dependencies updated."
-
 # Clean build artifacts
 clean:
 	rm -rf $(BUILD_DIR)
@@ -158,14 +148,63 @@ install: $(KERNEL_MODULE) $(DAEMON_BIN)
 	@echo "  systemctl enable firewall-daemon.service"
 
 # Uninstall target - remove everything
-uninstall:
-	@echo "Removing firewall components..."
-	rm -f $(KERNEL_MODDIR)/firewall.ko
-	rm -f $(SBINDIR)/firewall-daemon
-	rm -rf $(FIREWALLETC)
-	rm -f /etc/systemd/system/firewall-daemon.service
-	depmod -a
-	-systemctl daemon-reload 2>/dev/null || true
-	@echo "All firewall components removed."
+uninstall: uninstall-files uninstall-systemd uninstall-config uninstall-state-logs uninstall-procfs uninstall-kernel
+	@echo ""
+	@echo "=========================================="
+	@echo "Firewall uninstallation complete!"
+	@echo "=========================================="
+	@echo "  ✓ Daemon stopped and removed"
+	@echo "  ✓ Systemd service disabled and removed"
+	@echo "  ✓ Configuration directory removed"
+	@echo "  ✓ State directory and logs removed"
+	@echo "  ✓ Procfs interfaces cleaned"
+	@echo "  ✓ Kernel module removed"
+	@echo ""
+	@echo "Note: Some system logs (e.g., /var/log/auth.log) may still contain firewall activity records."
+	@echo "Note: SQLite database backups, if any, should be manually removed."
 
-.PHONY: kernel-module daemon all debug1 debug2 debug3 asan test test-legacy test-performance clean install uninstall
+# Uninstall runtime files (stop services, remove PID/lock files)
+uninstall-files:
+	@echo "Removing runtime files..."
+	@systemctl stop firewall-daemon 2>/dev/null || true
+	@pkill -f "firewall-daemon" 2>/dev/null || true
+	@rm -f /run/firewall-daemon.pid
+	@rm -f /var/run/firewall-daemon.pid
+	@rm -rf /run/firewall
+	@rm -rf /var/run/firewall
+	@echo "  ✓ PID and lock files cleaned"
+
+# Uninstall systemd service
+uninstall-systemd:
+	@echo "Removing systemd service..."
+	@systemctl stop firewall-daemon 2>/dev/null || true
+	@systemctl disable firewall-daemon 2>/dev/null || true
+	@rm -f /etc/systemd/system/firewall-daemon.service
+	@-systemctl daemon-reload 2>/dev/null || true
+	@echo "  ✓ Service stopped, disabled and removed"
+
+# Uninstall configuration directory
+uninstall-config:
+	@echo "Removing configuration directory..."
+	@rm -rf $(FIREWALLETC)
+	@echo "  ✓ Configuration directory removed"
+
+# Uninstall state and logs directory
+uninstall-state-logs:
+	@echo "Removing state and log directories..."
+	@rm -rf $(RUNSTATEDIR)/firewall
+	@rm -f $(RUNSTATEDIR)/firewall/*.db
+	@rm -f $(RUNSTATEDIR)/firewall/*.db-journal
+	@rm -rf $(LOGDIR)/frp
+	@rm -rf $(LOGDIR)/firewall
+	@find /var/log -name "firewall-*" -type f -delete 2>/dev/null || true
+	@echo "  ✓ State directory and logs removed"
+
+# Uninstall procfs interfaces
+uninstall-procfs:
+	@echo "Cleaning procfs interfaces..."
+	@pkill -f "firewall-daemon" 2>/dev/null || true
+	@rm -rf /proc/firewall
+	@echo "  ✓ Procfs interfaces cleaned"
+
+.PHONY: kernel-module daemon all debug1 debug2 debug3 asan test test-legacy test-performance clean clean-build install uninstall uninstall-files uninstall-systemd uninstall-config uninstall-state-logs uninstall-procfs uninstall-kernel
