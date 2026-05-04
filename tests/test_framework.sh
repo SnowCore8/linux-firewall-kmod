@@ -284,7 +284,7 @@ fw_ensure_module_unloaded() {
 # 测试报告生成
 # ============================================================================
 fw_generate_report() {
-    local report_file="${1:-tests/reports/test_report.md}"
+    local report_file="${1:-reports/test_report.md}"
     local timestamp
     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
 
