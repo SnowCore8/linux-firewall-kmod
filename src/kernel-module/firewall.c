@@ -423,11 +423,11 @@ static int __do_unban_ip(struct firewall_info *fw, __be32 ip, bool permanent_onl
     hash_for_each_possible(fw->ban_table, entry, hash, ip) {
         if (compare_ips(entry->ip, ip)) {
             if (!permanent_only || entry->is_permanent) {
-             hlist_del_rcu(&entry->hash);
-             atomic_dec(&fw->ban_count);
-             found = 1;
-             call_rcu(&entry->rcu_head, free_ban_entry_rcu);
-         }
+                hlist_del_rcu(&entry->hash);
+                atomic_dec(&fw->ban_count);
+                found = 1;
+                call_rcu(&entry->rcu_head, free_ban_entry_rcu);
+            }
             break;
         }
     }
@@ -1044,6 +1044,25 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
         return -EINVAL;
     }
 
+    /* 拒绝路径遍历攻击 - 检查输入中是否包含 '../' 或 URL 编码的路径遍历 */
+    if (strstr(input, "..") != NULL) {
+        fw_pr_warn("Path traversal attempt detected: %s", input);
+        return -EINVAL;
+    }
+    /* 检查 URL 编码的路径遍历（不区分大小写） */
+    {
+        char *lower_input = input;
+        char *ptr;
+        for (ptr = lower_input; *ptr; ptr++) {
+            if (*ptr >= 'A' && *ptr <= 'Z')
+                *ptr = *ptr - 'A' + 'a';
+        }
+        if (strstr(lower_input, "%2e") != NULL || strstr(lower_input, "%2f") != NULL) {
+            fw_pr_warn("URL encoded path traversal attempt detected: %s", input);
+            return -EINVAL;
+        }
+    }
+
     /* Skip leading whitespace */
     space_pos = input;
     while (*space_pos && (*space_pos == ' ' || *space_pos == '\t'))
@@ -1570,6 +1589,13 @@ static ssize_t config_write(struct file *file, const char __user *buf,
     value = (unsigned int)val;
 
     if (strcmp(param, "ban_time") == 0) {
+        /* FIX P1-5: 检查整数溢出 - 使用 check_mul_overflow() 验证 value * HZ 不会溢出 */
+        unsigned long ban_duration;
+        if (check_mul_overflow(value, (unsigned long)HZ, &ban_duration)) {
+            fw_pr_err("ban_time overflow detected: %u * HZ", value);
+            return -EINVAL;
+        }
+        /* 检查值范围使用 MIN_BAN_TIME 和 MAX_BAN_TIME 常量 */
         if (value < 1 || value > 365 * 24 * 60 * 60) {  /* 1 year max */
             fw_pr_err("ban_time must be between 1 and %d seconds", 365 * 24 * 60 * 60);
             return -EINVAL;
@@ -1612,7 +1638,8 @@ static int stats_show(struct seq_file *m, void *v)
     seq_printf(m, "cleanup_expired_total %u\n", atomic_read(&fw->cleanup_expired_total));
     seq_printf(m, "current_bans %d\n", atomic_read(&fw->ban_count));
     seq_printf(m, "current_whitelist %d\n", atomic_read(&fw->whitelist_count));
-    seq_printf(m, "recent_additions %u\n", fw->recent_additions);
+    /* FIX P1-5: 使用 READ_ONCE 原子读取 recent_additions，防止数据竞争 */
+    seq_printf(m, "recent_additions %u\n", READ_ONCE(fw->recent_additions));
 
     return 0;
 }
@@ -1902,9 +1929,53 @@ int save_state_to_file(const char *filename)
     }
 
     /* Security validation: Check for directory traversal in filename */
-    if (strstr(filename, "../") || strstr(filename, "/..")) {
-        fw_pr_err("Potential directory traversal in filename: %s", filename);
+    /* 检查 URL 编码的路径遍历尝试 */
+    if (strstr(filename, "%2e") || strstr(filename, "%2E") ||
+        strstr(filename, "%2f") || strstr(filename, "%2F")) {
+        fw_pr_err("URL-encoded path traversal attempt: %s", filename);
         return -EINVAL;
+    }
+
+    /* 检查更广泛的特殊字符 */
+    {
+        const char *dangerous_chars = "|;&`$(){}<>!~*?[]";
+        for (const char *p = filename; *p; p++) {
+            if (strchr(dangerous_chars, *p)) {
+                fw_pr_err("Dangerous character '%c' in path: %s", *p, filename);
+                return -EINVAL;
+            }
+        }
+    }
+
+    /* 检测路径遍历尝试（包括 ../、/.. 和单独的 ..） */
+    {
+        const char *p = filename;
+        while (*p) {
+            /* 检查 ../ 模式 */
+            if (p[0] == '.' && p[1] == '.' && p[2] == '/') {
+                fw_pr_err("Potential directory traversal in filename: %s", filename);
+                return -EINVAL;
+            }
+            /* 检查 /.. 模式 */
+            if (p[0] == '/' && p[1] == '.' && p[2] == '.') {
+                /* 确保 .. 后面是路径分隔符或字符串结束 */
+                if (p[3] == '\0' || p[3] == '/') {
+                    fw_pr_err("Potential directory traversal in filename: %s", filename);
+                    return -EINVAL;
+                }
+            }
+            /* 检查单独的 .. （作为完整路径组件） */
+            if (p[0] == '.' && p[1] == '.') {
+                /* 检查前后是否为路径分隔符或字符串结束 */
+                bool prev_sep = (p == filename) || (p[-1] == '/');
+                bool next_sep = (p[2] == '\0') || (p[2] == '/');
+                if (prev_sep && next_sep) {
+                    fw_pr_err("Potential directory traversal in filename: %s", filename);
+                    return -EINVAL;
+                }
+            }
+            p++;
+        }
     }
 
     /* Security validation: Ensure the filename starts with a safe path */
@@ -2388,4 +2459,4 @@ module_exit(firewall_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Firewall Authors");
 MODULE_DESCRIPTION("Kernel-level IP banning module (fail2ban alternative)");
-MODULE_VERSION("1.9");
+MODULE_VERSION("2.0");

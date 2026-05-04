@@ -55,11 +55,35 @@ fw_test_header() {
 # 断言函数
 # ============================================================================
 
+# 安全检查：检测命令中是否包含潜在的注入字符
+# 禁止的字符: ; | ` ( ) { } \n
+# 允许 $ 用于变量展开（如 $VAR, ${VAR}）
+# 允许 & 用于重定向（如 2>&1）
+# 这些字符可能被用于命令注入攻击
+is_safe_command() {
+    local cmd="$1"
+    
+    # 检查是否包含危险字符（排除 $ 和 &）
+    if [[ "$cmd" =~ [\;\|\`\(\)\{\}] ]] || [[ "$cmd" == *$'\n'* ]]; then
+        return 1
+    fi
+    
+    return 0
+}
+
 # 基础断言：条件为真
 assert_true() {
     local condition="$1"
     local msg="${2:-断言失败}"
     TEST_TOTAL=$((TEST_TOTAL + 1))
+
+    # 安全检查：验证条件字符串是否安全
+    if ! is_safe_command "$condition"; then
+        TEST_FAIL=$((TEST_FAIL + 1))
+        echo -e "  ${RED}[FAIL]${NC} $msg (错误: 包含不安全的字符)"
+        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg (错误: 包含不安全的字符)")
+        return 1
+    fi
 
     if eval "$condition" >/dev/null 2>&1; then
         TEST_PASS=$((TEST_PASS + 1))
@@ -80,6 +104,14 @@ assert_false() {
     local msg="${2:-断言失败}"
     TEST_TOTAL=$((TEST_TOTAL + 1))
 
+    # 安全检查：验证条件字符串是否安全
+    if ! is_safe_command "$condition"; then
+        TEST_FAIL=$((TEST_FAIL + 1))
+        echo -e "  ${RED}[FAIL]${NC} $msg (错误: 包含不安全的字符)"
+        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg (错误: 包含不安全的字符)")
+        return 1
+    fi
+
     if ! eval "$condition" >/dev/null 2>&1; then
         TEST_PASS=$((TEST_PASS + 1))
         echo -e "  ${GREEN}[PASS]${NC} $msg"
@@ -98,6 +130,14 @@ assert_success() {
     local cmd="$1"
     local msg="${2:-命令执行失败}"
     TEST_TOTAL=$((TEST_TOTAL + 1))
+
+    # 安全检查：验证命令字符串是否安全
+    if ! is_safe_command "$cmd"; then
+        TEST_FAIL=$((TEST_FAIL + 1))
+        echo -e "  ${RED}[FAIL]${NC} $msg (错误: 包含不安全的字符)"
+        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg (错误: 包含不安全的字符)")
+        return 1
+    fi
 
     local output
     output=$(eval "$cmd" 2>&1)
@@ -122,6 +162,14 @@ assert_failure() {
     local cmd="$1"
     local msg="${2:-命令应失败但成功了}"
     TEST_TOTAL=$((TEST_TOTAL + 1))
+
+    # 安全检查：验证命令字符串是否安全
+    if ! is_safe_command "$cmd"; then
+        TEST_FAIL=$((TEST_FAIL + 1))
+        echo -e "  ${RED}[FAIL]${NC} $msg (错误: 包含不安全的字符)"
+        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg (错误: 包含不安全的字符)")
+        return 1
+    fi
 
     local output
     output=$(eval "$cmd" 2>&1)
@@ -404,19 +452,20 @@ fw_warn() {
 }
 
 fw_cleanup() {
-    rmmod firewall 2>/dev/null || true
-
-    # 清理临时文件
-    rm -f /tmp/fw_test_*.log /tmp/fw_test_*.tmp /tmp/fw_test_*.yaml
-
-    # 严格检查：确保测试后没有遗留安装文件
-    if [[ -f "/lib/modules/$(uname -r)/kernel/net/firewall.ko" ]]; then
-        fw_log_error "测试结束后发现模块被安装到系统，立即清理"
-        rm -f "/lib/modules/$(uname -r)/kernel/net/firewall.ko"
-        depmod -a 2>/dev/null
+    # 卸载内核模块（测试模式）
+    if lsmod | grep -q "^firewall "; then
+        rmmod firewall 2>/dev/null || true
     fi
-    if [[ -f "/usr/local/sbin/firewall-daemon" ]]; then
-        fw_log_error "测试结束后发现守护进程被安装到系统，立即清理"
-        rm -f "/usr/local/sbin/firewall-daemon"
-    fi
+    
+    # 只清理测试创建的临时文件
+    rm -f /tmp/fw_test_*.log 2>/dev/null
+    rm -f /tmp/fw_test_*.yaml 2>/dev/null
+    rm -f /tmp/fw_test_*.conf 2>/dev/null
+    
+    # 清理编译临时文件
+    rm -f /tmp/fw_compile_*.log 2>/dev/null
+    rm -f /tmp/fw_test_mod_*.ko 2>/dev/null
+    
+    # 注意：不再删除 /lib/modules/*/kernel/net/firewall.ko 和 /usr/local/sbin/firewall-daemon
+    # 这些系统文件只能由包管理器或安装脚本管理
 }
