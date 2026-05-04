@@ -268,6 +268,9 @@ run_suite() {
         fw_log_error "模块未就绪，跳过测试套件: $suite_key"
         fw_log_debug "lsmod: $(lsmod 2>/dev/null | grep firewall || echo 'not found')"
         fw_log_debug "procfs: $([ -d "$PROC_DIR" ] && echo 'exists' || echo 'missing')"
+        TEST_SKIP=$((TEST_SKIP + 1))
+        TEST_TOTAL=$((TEST_TOTAL + 1))
+        TEST_RESULTS+=("SKIP|$suite_key|模块未就绪，跳过整个套件")
         return 1
     fi
 

@@ -412,10 +412,16 @@ fw_print_summary() {
     echo -e "  ${CYAN}跳过: $TEST_SKIP${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
 
-    if [[ $TEST_FAIL -eq 0 ]]; then
-        echo -e "${GREEN}${BOLD}✓ 所有测试通过!${NC}"
-    else
+    if [[ $TEST_FAIL -gt 0 ]]; then
         echo -e "${RED}${BOLD}✗ 存在 $TEST_FAIL 个失败项，需要修复${NC}"
+    elif [[ $TEST_SKIP -gt 0 ]]; then
+        echo -e "${YELLOW}⚠ 存在 $TEST_SKIP 个跳过项${NC}"
+        if [[ $TEST_WARN -gt 0 ]]; then
+            echo -e "${YELLOW}⚠ 存在 $TEST_WARN 个警告项${NC}"
+        fi
+        echo -e "${GREEN}✓ 已执行的测试全部通过${NC}"
+    else
+        echo -e "${GREEN}${BOLD}✓ 所有测试通过!${NC}"
     fi
     echo ""
 }

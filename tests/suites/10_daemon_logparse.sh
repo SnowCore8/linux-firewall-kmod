@@ -54,7 +54,7 @@ EOF
 
 # 启动守护进程处理测试日志
 fw_log_info "启动守护进程处理测试日志..."
-timeout 5 "$DAEMON_PATH" -c "$local_yaml_config" 2>/tmp/fw_daemon_stderr_$$.log &
+timeout --signal=KILL 5 "$DAEMON_PATH" -c "$local_yaml_config" 2>/tmp/fw_daemon_stderr_$$.log &
 local_daemon_pid=$!
 sleep 3
 
@@ -108,7 +108,7 @@ jails:
     regex: ""
 EOF
 
-timeout 5 "$DAEMON_PATH" -c "$local_special_yaml" 2>/tmp/fw_daemon_stderr_special_$$.log || true
+timeout --signal=KILL 5 "$DAEMON_PATH" -c "$local_special_yaml" 2>/tmp/fw_daemon_stderr_special_$$.log || true
 if [[ -s /tmp/fw_daemon_stderr_special_$$.log ]]; then
     fw_log_warn "守护进程 stderr (特殊字符): $(cat /tmp/fw_daemon_stderr_special_$$.log)"
 fi
@@ -141,7 +141,7 @@ jails:
     regex: ""
 EOF
 
-timeout 3 "$DAEMON_PATH" -c "$local_empty_yaml" 2>/tmp/fw_daemon_stderr_empty_$$.log || true
+timeout --signal=KILL 3 "$DAEMON_PATH" -c "$local_empty_yaml" 2>/tmp/fw_daemon_stderr_empty_$$.log || true
 if [[ -s /tmp/fw_daemon_stderr_empty_$$.log ]]; then
     fw_log_warn "守护进程 stderr (空日志): $(cat /tmp/fw_daemon_stderr_empty_$$.log)"
 fi

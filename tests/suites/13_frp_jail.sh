@@ -20,7 +20,7 @@ assert_success "sed -n '/^  frp:/,/^$/p' '$CONFIG_DIR/default.yaml' | grep -q 'b
 
 # 13.4 守护进程加载 FRP 配置
 fw_subsection "守护进程加载 FRP 配置"
-assert_success "timeout 2 '$DAEMON_PATH' -c '$CONFIG_DIR/default.yaml' >/dev/null 2>&1; rc=\$?; [ \$rc -eq 0 ] || [ \$rc -eq 124 ]" "FRP 配置文件加载成功"
+assert_success "timeout --signal=KILL 2 '$DAEMON_PATH' -c '$CONFIG_DIR/default.yaml' >/dev/null 2>&1; rc=\$?; [ \$rc -eq 0 ] || [ \$rc -eq 124 ] || [ \$rc -eq 137 ]" "FRP 配置文件加载成功"
 
 # 13.5 FRP 日志解析测试
 fw_subsection "FRP 日志解析"
@@ -55,7 +55,7 @@ jails:
 EOF
 
 # 使用 FRP 配置测试
-timeout 5 "$DAEMON_PATH" -c "$local_frp_yaml" 2>/tmp/fw_daemon_stderr_frp_$$.log || true
+timeout --signal=KILL 5 "$DAEMON_PATH" -c "$local_frp_yaml" 2>/tmp/fw_daemon_stderr_frp_$$.log || true
 if [[ -s /tmp/fw_daemon_stderr_frp_$$.log ]]; then
     fw_log_warn "守护进程 stderr (FRP): $(cat /tmp/fw_daemon_stderr_frp_$$.log)"
 fi
@@ -98,5 +98,5 @@ jails:
     regex: ""
 EOF
 
-assert_success "timeout 2 '$DAEMON_PATH' -c '$local_frp_config' >/dev/null 2>&1; rc=\$?; [ \$rc -eq 0 ] || [ \$rc -eq 124 ]" "FRP 独立配置文件加载"
+assert_success "timeout --signal=KILL 2 '$DAEMON_PATH' -c '$local_frp_config' >/dev/null 2>&1; rc=\$?; [ \$rc -eq 0 ] || [ \$rc -eq 124 ] || [ \$rc -eq 137 ]" "FRP 独立配置文件加载"
 rm -f "$local_frp_config" /var/log/fw_test_frps.log
