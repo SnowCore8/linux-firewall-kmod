@@ -390,7 +390,11 @@ int clone_jail(struct jail *dst, const struct jail *src)
 {
     memcpy(dst, src, sizeof(*dst));
 
+    /* 清零指针数组以防止 memcpy 后残留源指针 */
     dst->log_count = 0;
+    for (int i = 0; i < MAX_LOG_FILES; i++) {
+        dst->log_files[i] = NULL;
+    }
     for (int i = 0; i < src->log_count; i++) {
         if (src->log_files[i]) {
             dst->log_files[i] = strdup(src->log_files[i]);

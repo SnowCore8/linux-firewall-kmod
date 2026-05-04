@@ -145,8 +145,9 @@ struct failed_entry {
     struct failed_entry *next_in_hash;  /* 哈希桶中的下一个条目 */
 };
 
-/* 配置互斥锁 - 保护 cfg 全局变量的多线程访问 */
-extern pthread_mutex_t config_mutex;
+/* 配置读写锁 - 保护 cfg 全局变量的多线程访问
+ * 使用读写锁允许多个读者并发访问，写者独占访问 */
+extern pthread_rwlock_t config_rwlock;
 
 /* 全局状态 */
 extern struct config cfg;

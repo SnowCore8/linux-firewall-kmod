@@ -31,7 +31,7 @@
  * 配置参数
  * ========================================================================== */
 #define EXPORTER_DEFAULT_PORT 9119
-#define EXPORTER_BUFFER_SIZE  8192
+#define EXPORTER_BUFFER_SIZE  16384  /* 增加到 16KB 以容纳所有指标 */
 #define EXPORTER_MAX_CONNECTIONS 10
 #define EXPORTER_CONNECTION_TIMEOUT 5
 

@@ -523,7 +523,9 @@ int parse_config_file(const char *config_path)
         return -1;
     }
 
-    /* 将路径字符串复制到 new_cfg（解析相对路径所需） */
+    /* 将路径字符串复制到 new_cfg（解析相对路径所需）
+     * 在持有读锁的情况下复制以防止并发修改 */
+    pthread_rwlock_rdlock(&config_rwlock);
     if (cfg.config_file) {
         new_cfg->config_file = strdup(cfg.config_file);
     }
@@ -534,9 +536,10 @@ int parse_config_file(const char *config_path)
         new_cfg->permanent_db_path = strdup(cfg.permanent_db_path);
         new_cfg->permanent_ban_enabled = cfg.permanent_ban_enabled;
     }
+    pthread_rwlock_unlock(&config_rwlock);
 
     /* 复制当前默认值作为基准 */
-    pthread_mutex_lock(&config_mutex);
+    pthread_rwlock_rdlock(&config_rwlock);
     new_cfg->default_max_retries = cfg.default_max_retries;
     new_cfg->default_findtime = cfg.default_findtime;
     new_cfg->default_ban_time = cfg.default_ban_time;
@@ -544,7 +547,7 @@ int parse_config_file(const char *config_path)
     new_cfg->interval = cfg.interval;
     new_cfg->metrics_port = cfg.metrics_port;
     new_cfg->jail_count = 0;
-    pthread_mutex_unlock(&config_mutex);
+    pthread_rwlock_unlock(&config_rwlock);
 
     /* 在不持有锁的情况下将 YAML 解析到 new_cfg */
     parse_rc = parse_yaml_into(config_path, new_cfg);
@@ -589,8 +592,8 @@ int parse_config_file(const char *config_path)
         return -1;
     }
 
-    /* 短暂加锁以交换配置并迁移运行时状态 */
-    pthread_mutex_lock(&config_mutex);
+    /* 短暂加写锁以交换配置并迁移运行时状态 */
+    pthread_rwlock_wrlock(&config_rwlock);
 
     /* 快照旧配置以进行迁移和清理 */
     old_cfg_snapshot = config_clone(&cfg);
@@ -664,7 +667,7 @@ int parse_config_file(const char *config_path)
         cfg.permanent_ban_enabled = new_cfg->permanent_ban_enabled;
     }
 
-    pthread_mutex_unlock(&config_mutex);
+    pthread_rwlock_unlock(&config_rwlock);
 
     /* 释放 new_cfg（jail 已移动，路径已移动） */
     if (new_cfg->config_file) free(new_cfg->config_file);
@@ -777,13 +780,13 @@ int load_config_directory(const char *config_dir)
     }
 
     /* 记录已加载 jail 的摘要 */
-    pthread_mutex_lock(&config_mutex);
+    pthread_rwlock_rdlock(&config_rwlock);
     daemon_log_info("Loaded %d jails from directory: %s", cfg.jail_count, config_dir);
     for (int i = 0; i < cfg.jail_count; i++) {
         daemon_log_info("  Jail[%d]: %s (enabled=%d, log_count=%d, max_retries=%u)",
             i, cfg.jails[i].name, cfg.jails[i].enabled, cfg.jails[i].log_count, cfg.jails[i].max_retries);
     }
-    pthread_mutex_unlock(&config_mutex);
+    pthread_rwlock_unlock(&config_rwlock);
 
     /* 清理 */
     for (int i = 0; i < file_count; i++) {

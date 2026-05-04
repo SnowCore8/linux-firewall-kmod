@@ -258,8 +258,22 @@ void process_new_lines(int idx)
     char local_partial_buf[sizeof(((struct jail *)0)->partial_line_buffer)];
     size_t local_partial_len = 0;
 
-    /* 加锁以安全复制jail配置值和部分行缓冲区 */
-    pthread_mutex_lock(&config_mutex);
+    /* 加写锁以安全复制jail配置值和部分行缓冲区。
+     * 使用写锁是因为我们需要修改 j->partial_line_len。
+     * 持有写锁直到处理完成，以防止配置重载导致 use-after-free。*/
+    if (jail_idx < 0 || jail_idx >= cfg.jail_count) {
+        daemon_log_err("Invalid jail index %d in process_new_lines", jail_idx);
+        return;
+    }
+    
+    /* 持有写锁时复制jail配置值和部分行缓冲区 */
+    pthread_rwlock_wrlock(&config_rwlock);
+    if (jail_idx >= cfg.jail_count) {
+        /* 锁获取后再次检查，防止配置重载 */
+        pthread_rwlock_unlock(&config_rwlock);
+        daemon_log_err("Jail index %d became invalid after lock acquisition", jail_idx);
+        return;
+    }
     j = &cfg.jails[jail_idx];
     max_retries = j->max_retries;
     findtime = j->findtime;
@@ -270,19 +284,18 @@ void process_new_lines(int idx)
     }
     /* 清除jail的部分缓冲区，因为我们现在拥有数据 */
     j->partial_line_len = 0;
-    pthread_mutex_unlock(&config_mutex);
+    /* 注意：写锁将在处理完成后释放，以防止配置重载期间 use-after-free */
 
     fd = open(log_path, O_RDONLY);
     if (fd < 0) {
         daemon_log_err("Failed to open %s: %s", log_path, strerror(errno));
-        /* 失败时恢复部分缓冲区 */
-        pthread_mutex_lock(&config_mutex);
+        /* 失败时恢复部分缓冲区（写锁已持有） */
         if (jail_idx < cfg.jail_count) {
             cfg.jails[jail_idx].partial_line_len = local_partial_len;
             if (local_partial_len > 0)
                 memcpy(cfg.jails[jail_idx].partial_line_buffer, local_partial_buf, local_partial_len);
         }
-        pthread_mutex_unlock(&config_mutex);
+        pthread_rwlock_unlock(&config_rwlock);
         goto cleanup;
     }
 
@@ -404,14 +417,13 @@ void process_new_lines(int idx)
     file_states[idx].offset = current_offset;
 
 cleanup_restore_partial:
-    /* 在锁下将部分行缓冲区恢复到jail */
-    pthread_mutex_lock(&config_mutex);
+    /* 在写锁下将部分行缓冲区恢复到jail（写锁已持有） */
     if (jail_idx < cfg.jail_count) {
         cfg.jails[jail_idx].partial_line_len = local_partial_len;
         if (local_partial_len > 0 && local_partial_len < sizeof(local_partial_buf))
             memcpy(cfg.jails[jail_idx].partial_line_buffer, local_partial_buf, local_partial_len);
     }
-    pthread_mutex_unlock(&config_mutex);
+    pthread_rwlock_unlock(&config_rwlock);
 
 cleanup:
     if (fd >= 0) {
@@ -427,12 +439,12 @@ cleanup:
 /* 定期清理部分行缓冲区以防止累积的函数 */
 void cleanup_partial_line_buffer(void)
 {
-    pthread_mutex_lock(&config_mutex);
+    pthread_rwlock_wrlock(&config_rwlock);
     for (int i = 0; i < cfg.jail_count; i++) {
         flush_partial_line(&cfg.jails[i], "periodic_cleanup",
                           cfg.jails[i].max_retries, cfg.jails[i].findtime);
     }
-    pthread_mutex_unlock(&config_mutex);
+    pthread_rwlock_unlock(&config_rwlock);
 }
 
 /* 处理日志文件轮转 */
@@ -443,9 +455,9 @@ void handle_log_rotation(int idx)
     struct jail *j = NULL;
     unsigned int max_retries, findtime;
 
-    /* 在锁下复制jail数据以防止配置重载期间的use-after-free */
+    /* 在读锁下复制jail数据以防止配置重载期间的use-after-free */
     if (jail_idx >= 0 && jail_idx < cfg.jail_count) {
-        pthread_mutex_lock(&config_mutex);
+        pthread_rwlock_rdlock(&config_rwlock);
         /* 获取锁后再次检查 */
         if (jail_idx < cfg.jail_count) {
             j = &cfg.jails[jail_idx];
@@ -458,7 +470,7 @@ void handle_log_rotation(int idx)
                 memcpy(local_buf, j->partial_line_buffer, local_len);
             }
             j->partial_line_len = 0;
-            pthread_mutex_unlock(&config_mutex);
+            pthread_rwlock_unlock(&config_rwlock);
 
             /* 不持有锁处理已复制的部分行 */
             if (local_len > 0 && local_len < sizeof(local_buf)) {
@@ -466,7 +478,7 @@ void handle_log_rotation(int idx)
                 process_single_line(j, local_buf, file_states[idx].path, max_retries, findtime);
             }
         } else {
-            pthread_mutex_unlock(&config_mutex);
+            pthread_rwlock_unlock(&config_rwlock);
             max_retries = DEFAULT_MAX_RETRIES;
             findtime = DEFAULT_FINDTIME;
         }
@@ -517,10 +529,10 @@ void monitor_loop(void)
         struct timeval tv;
         int current_interval;
 
-        /* 读取配置需要加锁 - 防止与SIGHUP配置重载并发 */
-        pthread_mutex_lock(&config_mutex);
+        /* 读取配置需要加读锁 - 防止与SIGHUP配置重载并发 */
+        pthread_rwlock_rdlock(&config_rwlock);
         current_interval = cfg.interval;
-        pthread_mutex_unlock(&config_mutex);
+        pthread_rwlock_unlock(&config_rwlock);
 
         FD_ZERO(&read_fds);
         FD_SET(inotify_fd, &read_fds);
@@ -549,13 +561,13 @@ void monitor_loop(void)
                 int old_interval, old_metrics_port;
 
                 /* 保存旧配置的关键值以检测变更 */
-                pthread_mutex_lock(&config_mutex);
+                pthread_rwlock_rdlock(&config_rwlock);
                 old_max_retries = cfg.default_max_retries;
                 old_findtime = cfg.default_findtime;
                 old_ban_time = cfg.default_ban_time;
                 old_interval = cfg.interval;
                 old_metrics_port = cfg.metrics_port;
-                pthread_mutex_unlock(&config_mutex);
+                pthread_rwlock_unlock(&config_rwlock);
 
                 /* 根据配置类型选择重载方法 */
                 int reload_ok = 0;
@@ -615,7 +627,7 @@ void monitor_loop(void)
                     }
 
                     /* 检查变更并输出日志 */
-                    pthread_mutex_lock(&config_mutex);
+                    pthread_rwlock_rdlock(&config_rwlock);
                     if (old_max_retries != cfg.default_max_retries) {
                         daemon_log_info("default_max_retries changed from %u to %u", old_max_retries, cfg.default_max_retries);
                     }
@@ -631,7 +643,7 @@ void monitor_loop(void)
                     if (old_metrics_port != cfg.metrics_port) {
                         daemon_log_info("metrics_port changed from %d to %d", old_metrics_port, cfg.metrics_port);
                     }
-                    pthread_mutex_unlock(&config_mutex);
+                    pthread_rwlock_unlock(&config_rwlock);
                 }
             }
             continue;
@@ -691,27 +703,27 @@ void monitor_loop(void)
 
             if (event->mask & (IN_MODIFY | IN_MOVED_TO)) {
                 /* 文件被修改或创建 - 查找匹配的文件 */
-                pthread_mutex_lock(&config_mutex);
+                pthread_rwlock_rdlock(&config_rwlock);
                 int max_states = MAX_JAILS * MAX_LOG_FILES;
                 for (int j = 0; j < max_states; j++) {
                     if (file_states[j].wd >= 0 && event->wd == file_states[j].wd) {
                         /* 检查文件是否被轮转 */
                         if (event->mask & (IN_MOVED_TO | IN_CREATE)) {
-                            pthread_mutex_unlock(&config_mutex);
+                            pthread_rwlock_unlock(&config_rwlock);
                             handle_log_rotation(j);
-                            pthread_mutex_lock(&config_mutex);
+                            pthread_rwlock_rdlock(&config_rwlock);
                         }
                         /* 处理新行 */
-                        pthread_mutex_unlock(&config_mutex);
+                        pthread_rwlock_unlock(&config_rwlock);
                         process_new_lines(j);
-                        pthread_mutex_lock(&config_mutex);
+                        pthread_rwlock_rdlock(&config_rwlock);
                         break;
                     }
                 }
-                pthread_mutex_unlock(&config_mutex);
+                pthread_rwlock_unlock(&config_rwlock);
             } else if (event->mask & (IN_MOVED_FROM | IN_DELETE)) {
                 /* 文件被移动或删除 - 标记为轮转处理 */
-                pthread_mutex_lock(&config_mutex);
+                pthread_rwlock_wrlock(&config_rwlock);
                 int max_states = MAX_JAILS * MAX_LOG_FILES;
                 for (int j = 0; j < max_states; j++) {
                     if (file_states[j].wd >= 0 && event->wd == file_states[j].wd) {
@@ -720,7 +732,7 @@ void monitor_loop(void)
                         break;
                     }
                 }
-                pthread_mutex_unlock(&config_mutex);
+                pthread_rwlock_unlock(&config_rwlock);
             }
 
             /* 推进位置并进行溢出检查 */

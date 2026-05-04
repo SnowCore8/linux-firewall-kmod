@@ -260,7 +260,7 @@ void handle_failed_attempt(const char *ip, unsigned int max_retries, unsigned in
 /* 按IP查找失败条目 - 搜索所有jail */
 struct failed_entry *find_entry(const char *ip)
 {
-    pthread_mutex_lock(&config_mutex);
+    pthread_rwlock_rdlock(&config_rwlock);
     
     struct failed_entry *result = NULL;
     for (int j = 0; j < cfg.jail_count; j++) {
@@ -271,28 +271,28 @@ struct failed_entry *find_entry(const char *ip)
         }
     }
     
-    pthread_mutex_unlock(&config_mutex);
+    pthread_rwlock_unlock(&config_rwlock);
     return result;
 }
 
 /* 创建新的失败条目 - 在第一个jail中创建（默认行为） */
 struct failed_entry *create_entry(const char *ip)
 {
-    pthread_mutex_lock(&config_mutex);
+    pthread_rwlock_rdlock(&config_rwlock);
     
     struct failed_entry *result = NULL;
     if (cfg.jail_count > 0) {
         result = create_entry_for_jail(&cfg.jails[0], ip);
     }
     
-    pthread_mutex_unlock(&config_mutex);
+    pthread_rwlock_unlock(&config_rwlock);
     return result;
 }
 
 /* 移除失败条目 - 搜索所有jail */
 void remove_entry(const char *ip)
 {
-    pthread_mutex_lock(&config_mutex);
+    pthread_rwlock_wrlock(&config_rwlock);
     
     for (int j = 0; j < cfg.jail_count; j++) {
         struct failed_entry *entry = find_entry_for_jail(&cfg.jails[j], ip);
@@ -302,5 +302,5 @@ void remove_entry(const char *ip)
         }
     }
     
-    pthread_mutex_unlock(&config_mutex);
+    pthread_rwlock_unlock(&config_rwlock);
 }
