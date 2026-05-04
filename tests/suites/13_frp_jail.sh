@@ -60,7 +60,11 @@ jails:
 EOF
 
 # 使用 FRP 配置测试
-timeout 5 "$DAEMON_PATH" -c "$local_frp_yaml" 2>&1 || true
+timeout 5 "$DAEMON_PATH" -c "$local_frp_yaml" 2>/tmp/fw_daemon_stderr_frp_$$.log || true
+if [[ -s /tmp/fw_daemon_stderr_frp_$$.log ]]; then
+    fw_log_warn "守护进程 stderr (FRP): $(cat /tmp/fw_daemon_stderr_frp_$$.log)"
+fi
+rm -f /tmp/fw_daemon_stderr_frp_$$.log
 sleep 1
 
 # 检查封禁列表

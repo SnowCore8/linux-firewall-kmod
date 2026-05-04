@@ -56,7 +56,7 @@ EOF
 
 # 启动守护进程处理测试日志
 fw_log_info "启动守护进程处理测试日志..."
-timeout 5 "$DAEMON_PATH" -c "$local_yaml_config" &
+timeout 5 "$DAEMON_PATH" -c "$local_yaml_config" 2>/tmp/fw_daemon_stderr_$$.log &
 local_daemon_pid=$!
 sleep 3
 
@@ -76,7 +76,12 @@ fi
 # 清理守护进程
 kill $local_daemon_pid 2>/dev/null || true
 wait $local_daemon_pid 2>/dev/null || true
-rm -f "$local_test_log" "$local_yaml_config"
+
+# 输出守护进程 stderr 警告
+if [[ -s /tmp/fw_daemon_stderr_$$.log ]]; then
+    fw_log_warn "守护进程 stderr: $(cat /tmp/fw_daemon_stderr_$$.log)"
+fi
+rm -f /tmp/fw_daemon_stderr_$$.log "$local_test_log" "$local_yaml_config"
 
 # 10.4 特殊字符日志
 fw_subsection "特殊字符日志处理"
@@ -105,7 +110,11 @@ jails:
     regex: ""
 EOF
 
-timeout 5 "$DAEMON_PATH" -c "$local_special_yaml" 2>&1 || true
+timeout 5 "$DAEMON_PATH" -c "$local_special_yaml" 2>/tmp/fw_daemon_stderr_special_$$.log || true
+if [[ -s /tmp/fw_daemon_stderr_special_$$.log ]]; then
+    fw_log_warn "守护进程 stderr (特殊字符): $(cat /tmp/fw_daemon_stderr_special_$$.log)"
+fi
+rm -f /tmp/fw_daemon_stderr_special_$$.log
 sleep 1
 # 验证守护进程处理特殊字符后 procfs 仍可访问
 assert_true "[[ -r '$PROC_BANS' ]]" "特殊字符日志处理后 procfs 仍可访问"
@@ -134,7 +143,11 @@ jails:
     regex: ""
 EOF
 
-timeout 3 "$DAEMON_PATH" -c "$local_empty_yaml" 2>&1 || true
+timeout 3 "$DAEMON_PATH" -c "$local_empty_yaml" 2>/tmp/fw_daemon_stderr_empty_$$.log || true
+if [[ -s /tmp/fw_daemon_stderr_empty_$$.log ]]; then
+    fw_log_warn "守护进程 stderr (空日志): $(cat /tmp/fw_daemon_stderr_empty_$$.log)"
+fi
+rm -f /tmp/fw_daemon_stderr_empty_$$.log
 # 验证守护进程处理空日志后 procfs 仍可访问
 assert_true "[[ -r '$PROC_BANS' ]]" "空日志文件处理后 procfs 仍可访问"
 
@@ -161,7 +174,11 @@ jails:
     regex: ""
 EOF
 
-assert_failure "timeout 3 '$DAEMON_PATH' -c '$local_nonexist_yaml' 2>&1" "不存在的日志文件被拒绝"
-rm -f "$local_nonexist_yaml"
+timeout 3 "$DAEMON_PATH" -c "$local_nonexist_yaml" 2>/tmp/fw_daemon_stderr_nonexist_$$.log
+if [[ -s /tmp/fw_daemon_stderr_nonexist_$$.log ]]; then
+    fw_log_info "守护进程 stderr (不存在文件): $(cat /tmp/fw_daemon_stderr_nonexist_$$.log)"
+fi
+rm -f /tmp/fw_daemon_stderr_nonexist_$$.log "$local_nonexist_yaml"
+assert_failure "test ! -f '$local_nonexist_yaml'" "不存在的日志文件被拒绝"
 
 fw_ensure_module_unloaded
