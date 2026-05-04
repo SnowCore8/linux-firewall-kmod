@@ -207,4 +207,14 @@ uninstall-procfs:
 	@rm -rf /proc/firewall
 	@echo "  ✓ Procfs interfaces cleaned"
 
+# Uninstall kernel module
+uninstall-kernel:
+	@echo "Removing kernel module..."
+	@rmmod firewall 2>/dev/null || true
+	@rm -f $(KERNEL_MODDIR)/firewall.ko
+	@rm -f $(KERNEL_MODDIR)/modules.order
+	@rm -f $(KERNEL_MODDIR)/Module.symvers
+	@depmod -a
+	@echo "  ✓ Kernel module and dependencies removed"
+
 .PHONY: kernel-module daemon all debug1 debug2 debug3 asan test test-legacy test-performance clean clean-build install uninstall uninstall-files uninstall-systemd uninstall-config uninstall-state-logs uninstall-procfs uninstall-kernel
