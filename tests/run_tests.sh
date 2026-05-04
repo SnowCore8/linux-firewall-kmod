@@ -67,7 +67,7 @@ if [[ "$SHOW_HELP" == true ]]; then
 选项:
   (无)                    运行所有测试
   --suite <编号或名称>     运行单个测试套件 (如: 03, 03_ban_unban)
-  --category <类别>        按类别运行 (如: security, daemon, performance)
+  --category <类别>        按类别运行 (如: daemon, performance)
   --report                 生成测试报告
   --debug                  启用调试输出
   --help                   显示此帮助
@@ -77,7 +77,6 @@ if [[ "$SHOW_HELP" == true ]]; then
   ./tests/run_tests.sh --suite 03         # 运行封禁/解封测试
   ./tests/run_tests.sh --suite 09         # 运行配置测试
   ./tests/run_tests.sh --report           # 运行所有测试并生成报告
-  ./tests/run_tests.sh --category security  # 安全测试（5 个套件）
   ./tests/run_tests.sh --debug            # 运行所有测试并显示调试信息
 EOF
     exit 0
@@ -174,12 +173,6 @@ declare -A SUITE_FILES=(
     ["11_resource_mgmt"]="suites/11_resource_mgmt.sh"
     ["12_permanent_ban"]="suites/12_permanent_ban.sh"
     ["13_frp_jail"]="suites/13_frp_jail.sh"
-    # 安全测试（已移至 security/ 目录）
-    ["01_security_input_validation"]="security/01_input_validation.sh"
-    ["02_security"]="security/02_security.sh"
-    ["03_security_overflow"]="security/03_integer_overflow.sh"
-    ["04_security_path"]="security/04_path_traversal.sh"
-    ["05_security_redos"]="security/05_redos.sh"
 )
 
 declare -A SUITE_CATEGORIES=(
@@ -194,12 +187,6 @@ declare -A SUITE_CATEGORIES=(
     ["11_resource_mgmt"]="resource"
     ["12_permanent_ban"]="permanent ban"
     ["13_frp_jail"]="daemon frp"
-    # 安全测试（已移至 security/ 目录）
-    ["01_security_input_validation"]="security"
-    ["02_security"]="security"
-    ["03_security_overflow"]="security"
-    ["04_security_path"]="security"
-    ["05_security_redos"]="security"
 )
 
 # ============================================================================

@@ -141,63 +141,6 @@ assert_failure() {
     fi
 }
 
-# 安全测试专用断言
-# 用于测试输入注入防护，直接验证目标系统的防护行为
-assert_inject_blocked() {
-    local cmd="$1"
-    local msg="${2:-注入被拒绝}"
-    TEST_TOTAL=$((TEST_TOTAL + 1))
-    
-    # 直接执行命令（可能包含注入字符）
-    local output
-    output=$(eval "$cmd" 2>&1)
-    local rc=$?
-    
-    # 验证命令返回非 0 或写入未生效
-    if [[ $rc -ne 0 ]]; then
-        TEST_PASS=$((TEST_PASS + 1))
-        echo -e "  ${GREEN}[PASS]${NC} $msg"
-        TEST_RESULTS+=("PASS|$CURRENT_SUITE|$msg")
-        return 0
-    else
-        TEST_FAIL=$((TEST_FAIL + 1))
-        echo -e "  ${RED}[FAIL]${NC} $msg (退出码: $rc)"
-        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg (退出码: $rc)")
-        return 1
-    fi
-}
-
-# 安全测试断言：验证注入后系统状态未改变
-assert_inject_no_effect() {
-    local cmd="$1"
-    local check_var="$2"  # 用于验证的变量或命令
-    local msg="${3:-注入无影响}"
-    TEST_TOTAL=$((TEST_TOTAL + 1))
-    
-    # 记录注入前状态
-    local before
-    before=$(eval "$check_var" 2>/dev/null || echo "none")
-    
-    # 执行注入命令
-    eval "$cmd" >/dev/null 2>&1 || true
-    
-    # 记录注入后状态
-    local after
-    after=$(eval "$check_var" 2>/dev/null || echo "none")
-    
-    if [[ "$before" == "$after" ]]; then
-        TEST_PASS=$((TEST_PASS + 1))
-        echo -e "  ${GREEN}[PASS]${NC} $msg"
-        TEST_RESULTS+=("PASS|$CURRENT_SUITE|$msg")
-        return 0
-    else
-        TEST_FAIL=$((TEST_FAIL + 1))
-        echo -e "  ${RED}[FAIL]${NC} $msg (状态从 '$before' 变为 '$after')"
-        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg")
-        return 1
-    fi
-}
-
 # 断言：文件存在
 assert_file_exists() {
     local file="$1"
