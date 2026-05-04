@@ -8,4 +8,4 @@ jails:
       - /var/log/vsftpd.log
       - /var/log/auth.log
     # 智能推断参数：max_retries=5, findtime=600, ban_time=1800
-    regex: "FAIL LOGIN: Client \\\"([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)\\\""
+    regex: 'FAIL LOGIN: Client \\\"([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)\\\"'

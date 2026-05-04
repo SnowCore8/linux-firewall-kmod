@@ -8,4 +8,4 @@ jails:
       - /var/log/nginx/error.log
     # 智能推断参数：max_retries=10, findtime=300, ban_time=1800
     # 匹配 Nginx 访问禁止规则的日志
-    regex: "access forbidden by rule, client: ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)"
+    regex: 'access forbidden by rule, client: ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)'
