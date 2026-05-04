@@ -35,6 +35,7 @@ jails:
 # Permanent ban configuration (SQLite-based persistence)
 # Path to SQLite database file for permanent bans (empty = disabled)
 # Use absolute path in a secure location with proper permissions
-permanent_db_path: "/var/lib/firewall/bans.db"
+# Can be overridden by environment variable FIREWALL_DB_PATH
+permanent_db_path: "${FIREWALL_DB_PATH:-/var/lib/firewall/bans.db}"
 # Whether to enable permanent bans (true/false)
 permanent_ban_enabled: true

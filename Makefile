@@ -7,8 +7,9 @@
 # Installation paths (FHS compliant)
 PREFIX ?= /usr/local
 SBINDIR ?= $(PREFIX)/sbin
-ETCDIR ?= /etc
+FIREWALLETC ?= /etc/firewall
 RUNSTATEDIR ?= /var/lib
+LOGDIR ?= /var/log
 KERNEL_MODDIR ?= /lib/modules/$(shell uname -r)/extra
 
 # Kernel build directory (adjust if needed)
@@ -134,11 +135,15 @@ install: $(KERNEL_MODULE) $(DAEMON_BIN)
 	depmod -a
 	# Daemon (system service goes to sbin/)
 	install -D -m 755 $(DAEMON_BIN) $(DESTDIR)$(SBINDIR)/firewall-daemon
-	# State directory for SQLite database and runtime data
-	install -d -m 750 $(DESTDIR)$(RUNSTATEDIR)/firewall
-	# Configuration files (directly under /etc/firewall/, no config/ subdirectory)
-	install -d -m 755 $(DESTDIR)$(ETCDIR)/firewall
-	install -m 644 config/*.yaml $(DESTDIR)$(ETCDIR)/firewall/
+	# State directory for SQLite database and runtime data (root only)
+	install -d -m 700 -o root -g root $(DESTDIR)$(RUNSTATEDIR)/firewall
+	# Configuration files (root only, more secure)
+	install -d -m 700 -o root -g root $(DESTDIR)$(FIREWALLETC)
+	install -m 600 -o root -g root config/*.yaml $(DESTDIR)$(FIREWALLETC)/
+	# Log directory (FRP logs)
+	install -d -m 755 -o root -g root $(DESTDIR)$(LOGDIR)/frp
+	# PID directory
+	install -d -m 755 -o root -g root $(DESTDIR)/run/firewall
 	# systemd service file
 	install -D -m 644 firewall-daemon.service $(DESTDIR)/etc/systemd/system/firewall-daemon.service
 	-systemctl daemon-reload 2>/dev/null || true
@@ -146,8 +151,9 @@ install: $(KERNEL_MODULE) $(DAEMON_BIN)
 	@echo "Installation complete!"
 	@echo "  Kernel module: $(KERNEL_MODDIR)/firewall.ko"
 	@echo "  Daemon:        $(SBINDIR)/firewall-daemon"
-	@echo "  Config:        $(ETCDIR)/firewall/"
+	@echo "  Config:        $(FIREWALLETC)/"
 	@echo "  State:         $(RUNSTATEDIR)/firewall/"
+	@echo "  Logs:          $(LOGDIR)/frp/"
 	@echo "To start daemon at boot:"
 	@echo "  systemctl enable firewall-daemon.service"
 
@@ -156,7 +162,7 @@ uninstall:
 	@echo "Removing firewall components..."
 	rm -f $(KERNEL_MODDIR)/firewall.ko
 	rm -f $(SBINDIR)/firewall-daemon
-	rm -rf $(ETCDIR)/firewall
+	rm -rf $(FIREWALLETC)
 	rm -f /etc/systemd/system/firewall-daemon.service
 	depmod -a
 	-systemctl daemon-reload 2>/dev/null || true
