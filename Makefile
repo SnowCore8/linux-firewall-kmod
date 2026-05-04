@@ -139,15 +139,16 @@ clean:
 # ============================================================================
 # 安装目标 - 安装所有组件 (FHS compliant)
 # ============================================================================
-install: install-kernel-module install-daemon install-config install-state install-systemd
+install: install-kernel-module install-daemon install-config install-state install-systemd install-start
 	@echo ""
 	@echo "Installation complete!"
 	@echo "  Kernel module: $(KERNEL_MODDIR)/firewall.ko"
 	@echo "  Daemon:        $(SBINDIR)/firewall-daemon"
 	@echo "  Config:        $(FIREWALLETC)/"
 	@echo "  State:         $(RUNSTATEDIR)/firewall/"
-	@echo "To start daemon at boot:"
-	@echo "  systemctl enable firewall-daemon.service"
+	@echo ""
+	@echo "Service status:"
+	-systemctl status firewall-daemon.service --no-pager 2>/dev/null || true
 
 # 安装内核模块
 install-kernel-module: $(KERNEL_MODULE)
@@ -166,8 +167,16 @@ install-daemon: $(DAEMON_BIN)
 install-config:
 	@echo "Installing configuration files..."
 	install -d -m 700 -o root -g root $(DESTDIR)$(FIREWALLETC)
-	install -m 600 -o root -g root config/*.yaml $(DESTDIR)$(FIREWALLETC)/
+	install -d -m 700 -o root -g root $(DESTDIR)$(FIREWALLETC)/examples
+	# 只安装默认配置到主目录
+	install -m 600 -o root -g root config/default.yaml $(DESTDIR)$(FIREWALLETC)/
+	# 其他配置作为示例
+	install -m 600 -o root -g root config/*.yaml $(DESTDIR)$(FIREWALLETC)/examples/
+	# 移除示例中的 default.yaml
+	rm -f $(DESTDIR)$(FIREWALLETC)/examples/default.yaml
 	@echo "  ✓ Configuration files installed"
+	@echo "    Main config: $(FIREWALLETC)/default.yaml"
+	@echo "    Examples:    $(FIREWALLETC)/examples/"
 
 # 安装状态目录
 install-state:
@@ -181,6 +190,15 @@ install-systemd:
 	install -D -m 644 firewall-daemon.service $(DESTDIR)/etc/systemd/system/firewall-daemon.service
 	-systemctl daemon-reload 2>/dev/null || true
 	@echo "  ✓ Systemd service installed"
+
+# 加载内核模块并启动服务
+install-start:
+	@echo "Loading kernel module and starting daemon..."
+	-insmod $(KERNEL_MODULE) 2>/dev/null || modprobe firewall 2>/dev/null || true
+	-systemctl enable firewall-daemon.service 2>/dev/null || true
+	-systemctl start firewall-daemon.service 2>/dev/null || true
+	@sleep 2
+	@echo "  ✓ Service started"
 
 # ============================================================================
 # 卸载目标 - 删除所有组件
