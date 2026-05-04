@@ -21,6 +21,14 @@ jails:
     ban_time: 900
     regex: ""  # 空字符串使用内置的 sshd 模式
 
+  frp:
+    enabled: true
+    log_files: /var/log/frp/frp.log
+    max_retries: 10
+    findtime: 300
+    ban_time: 1800
+    regex: ""  # 空字符串使用内置默认
+
 # 永久封禁配置（基于 SQLite 的持久化）
 # 永久封禁的 SQLite 数据库文件路径（空 = 禁用）
 # 使用具有适当权限的安全位置的绝对路径
