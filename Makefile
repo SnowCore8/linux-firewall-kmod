@@ -165,56 +165,64 @@ uninstall: uninstall-files uninstall-systemd uninstall-config uninstall-state-lo
 
 # Uninstall runtime files (stop services, remove PID/lock files)
 uninstall-files:
-	@echo "Removing runtime files..."
-	@systemctl stop firewall-daemon 2>/dev/null || true
-	@pkill -f "firewall-daemon" 2>/dev/null || true
-	@rm -f /run/firewall-daemon.pid
-	@rm -f /var/run/firewall-daemon.pid
-	@rm -rf /run/firewall
-	@rm -rf /var/run/firewall
-	@echo "  ✓ PID and lock files cleaned"
+	echo "Removing runtime files..."
+	systemctl stop firewall-daemon >/dev/null 2>&1 || true
+	# 使用 ps 检查并 kill 进程，避免 pkill 阻塞
+	if ps aux | grep -q "[f]irewall-daemon"; then \
+		killall -9 firewall-daemon 2>/dev/null || true; \
+		ps aux | grep -v grep | grep [f]irewall-daemon | awk '{print $$2}' | xargs -r kill -9 2>/dev/null || true; \
+	fi
+	rm -f /run/firewall-daemon.pid
+	rm -f /var/run/firewall-daemon.pid
+	rm -rf /run/firewall
+	rm -rf /var/run/firewall
+	echo "  ✓ PID and lock files cleaned"
 
 # Uninstall systemd service
 uninstall-systemd:
-	@echo "Removing systemd service..."
-	@systemctl stop firewall-daemon 2>/dev/null || true
-	@systemctl disable firewall-daemon 2>/dev/null || true
-	@rm -f /etc/systemd/system/firewall-daemon.service
-	@-systemctl daemon-reload 2>/dev/null || true
-	@echo "  ✓ Service stopped, disabled and removed"
+	echo "Removing systemd service..."
+	systemctl stop firewall-daemon 2>/dev/null || true
+	systemctl disable firewall-daemon 2>/dev/null || true
+	rm -f /etc/systemd/system/firewall-daemon.service
+	-systemctl daemon-reload 2>/dev/null || true
+	echo "  ✓ Service stopped, disabled and removed"
 
 # Uninstall configuration directory
 uninstall-config:
-	@echo "Removing configuration directory..."
-	@rm -rf $(FIREWALLETC)
-	@echo "  ✓ Configuration directory removed"
+	echo "Removing configuration directory..."
+	rm -rf $(FIREWALLETC)
+	echo "  ✓ Configuration directory removed"
 
 # Uninstall state and logs directory
 uninstall-state-logs:
-	@echo "Removing state and log directories..."
-	@rm -rf $(RUNSTATEDIR)/firewall
-	@rm -f $(RUNSTATEDIR)/firewall/*.db
-	@rm -f $(RUNSTATEDIR)/firewall/*.db-journal
-	@rm -rf $(LOGDIR)/frp
-	@rm -rf $(LOGDIR)/firewall
-	@find /var/log -name "firewall-*" -type f -delete 2>/dev/null || true
-	@echo "  ✓ State directory and logs removed"
+	echo "Removing state and log directories..."
+	rm -rf $(RUNSTATEDIR)/firewall
+	rm -f $(RUNSTATEDIR)/firewall/*.db
+	rm -f $(RUNSTATEDIR)/firewall/*.db-journal
+	rm -rf $(LOGDIR)/frp
+	rm -rf $(LOGDIR)/firewall
+	find /var/log -name "firewall-*" -type f -delete 2>/dev/null || true
+	echo "  ✓ State directory and logs removed"
 
 # Uninstall procfs interfaces
 uninstall-procfs:
-	@echo "Cleaning procfs interfaces..."
-	@pkill -f "firewall-daemon" 2>/dev/null || true
-	@rm -rf /proc/firewall
-	@echo "  ✓ Procfs interfaces cleaned"
+	echo "Cleaning procfs interfaces..."
+	# 使用 ps 检查并 kill 进程，避免 pkill 阻塞
+	if ps aux | grep -q "[f]irewall-daemon"; then \
+		killall -9 firewall-daemon 2>/dev/null || true; \
+		ps aux | grep -v grep | grep [f]irewall-daemon | awk '{print $$2}' | xargs -r kill -9 2>/dev/null || true; \
+	fi
+	rm -rf /proc/firewall
+	echo "  ✓ Procfs interfaces cleaned"
 
 # Uninstall kernel module
 uninstall-kernel:
-	@echo "Removing kernel module..."
-	@rmmod firewall 2>/dev/null || true
-	@rm -f $(KERNEL_MODDIR)/firewall.ko
-	@rm -f $(KERNEL_MODDIR)/modules.order
-	@rm -f $(KERNEL_MODDIR)/Module.symvers
-	@depmod -a
-	@echo "  ✓ Kernel module and dependencies removed"
+	echo "Removing kernel module..."
+	rmmod firewall 2>/dev/null || true
+	rm -f $(KERNEL_MODDIR)/firewall.ko
+	rm -f $(KERNEL_MODDIR)/modules.order
+	rm -f $(KERNEL_MODDIR)/Module.symvers
+	depmod -a
+	echo "  ✓ Kernel module and dependencies removed"
 
 .PHONY: kernel-module daemon all debug1 debug2 debug3 asan test test-legacy test-performance clean clean-build install uninstall uninstall-files uninstall-systemd uninstall-config uninstall-state-logs uninstall-procfs uninstall-kernel
