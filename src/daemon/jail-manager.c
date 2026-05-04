@@ -148,25 +148,28 @@ int compile_jail_regex(struct jail *j)
             return -1;
         }
 
-        /* 拒绝基本的嵌套量词模式: )+  )*  ){  }?  ++  *+ */
-        if (strstr(pattern, ")+") || strstr(pattern, ")*") ||
-            strstr(pattern, "){") || strstr(pattern, "}?") ||
-            strstr(pattern, "++") || strstr(pattern, "*+")) {
-            daemon_log_err("Rejected unsafe regex for jail '%s': nested quantifiers detected "
-                           "(patterns like )+  )*  ){  }?  ++  *+ are not allowed)", j->name);
-            return -1;
-        }
-
-        /* 拒绝 (a?)+ 类型模式: )? 后面紧跟 ) 再跟量词 (+*{?) */
+        /* 拒绝真正的嵌套量词模式: 遍历检测 ) 后紧跟 + 或 * 的情况
+         * 注意: (text)? 是合法的可选捕获组，不应被拒绝
+         *       只有 )+  )* 才是危险的嵌套量词（如 (a+)+ (a*)*）
+         * 保留 ++ 和 *+ 的检测（占有量词） */
+        int has_nested_quantifier = 0;
         for (const char *p = pattern; *p; p++) {
-            if (p[0] == ')' && p[1] == '?' && p[2] == ')') {
-                char next = p[3];
-                if (next == '+' || next == '*' || next == '{' || next == '?') {
-                    daemon_log_err("Rejected unsafe regex for jail '%s': nested optional quantifier "
-                                   "detected (pattern like (a?)+ at offset %ld)", j->name, (long)(p - pattern));
+            if (p[0] == ')') {
+                char next = p[1];
+                if (next == '+' || next == '*') {
+                    has_nested_quantifier = 1;
+                    daemon_log_err("Rejected unsafe regex for jail '%s': nested quantifiers detected "
+                                   "(pattern like (a+)+ or (a*)* at offset %ld)", j->name, (long)(p - pattern));
                     return -1;
                 }
             }
+        }
+        (void)has_nested_quantifier;
+
+        if (strstr(pattern, "++") || strstr(pattern, "*+")) {
+            daemon_log_err("Rejected unsafe regex for jail '%s': possessive quantifiers detected "
+                           "(patterns like ++  *+ are not allowed)", j->name);
+            return -1;
         }
 
         /* 拒绝 (? 后直接跟量词的模式: (?+  (?*  (?{  (?? */

@@ -55,6 +55,17 @@ fw_test_header() {
 # 断言函数
 # ============================================================================
 
+# 辅助函数：移除引号内的内容，避免误报
+# 例如：echo '192.168.1.1; rm -rf /' > file 中的分号在单引号内，是安全的
+strip_quotes() {
+    local cmd="$1"
+    # 移除单引号内的内容
+    cmd=$(echo "$cmd" | sed "s/'[^']*'//g")
+    # 移除双引号内的内容
+    cmd=$(echo "$cmd" | sed 's/"[^"]*"//g')
+    echo "$cmd"
+}
+
 # 安全检查：检测命令中是否包含潜在的注入字符
 # 禁止的字符: ; ` { } \n
 # 允许 $ 用于变量展开（如 $VAR, ${VAR}）
@@ -64,8 +75,11 @@ is_safe_command() {
     local cmd="$1"
     local dangerous_pattern='[;`{}]'
     
-    # 检查是否包含危险字符（排除 $ 和 &）
-    if [[ "$cmd" =~ $dangerous_pattern ]] || [[ "$cmd" == *$'\n'* ]]; then
+    # 对引号外剩余部分进行危险字符检测
+    local stripped
+    stripped=$(strip_quotes "$cmd")
+    
+    if [[ "$stripped" =~ $dangerous_pattern ]] || [[ "$cmd" == *$'\n'* ]]; then
         return 1
     fi
     
