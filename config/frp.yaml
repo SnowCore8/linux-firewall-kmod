@@ -1,0 +1,11 @@
+# FRP 内网穿透服务防护配置
+# 监控 FRP 错误和警告日志，防护未授权访问
+
+jails:
+  frp:
+    enabled: true
+    log_files:
+      - /var/log/frp/frp.log
+    # 智能推断参数：max_retries=10, findtime=300, ban_time=1800
+    # 匹配 FRP 错误 [E] 和警告 [W] 日志中的远程 IP
+    regex: ".*\\[(?:E|W)\\].*remoteAddr:\\s*([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)"
