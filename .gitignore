@@ -3,9 +3,7 @@
 # ============================================================
 
 # ---- 构建产物 ----
-# out-of-tree 构建目录
 build/
-# 内核模块编译产物
 *.o
 *.ko
 *.mod.c
@@ -15,7 +13,6 @@ modules.order
 Module.symvers
 *.mod
 .module-common.o
-# 守护进程编译产物
 firewall-daemon
 firewall-ko-daemon
 
@@ -32,20 +29,19 @@ firewall-ko-daemon
 .idea/
 *.swp
 *.swo
-*~
 .clangd/
 compile_commands.json
 *.cache
 
-# ---- 日志文件 ----
-*.log
-
 # ---- 测试临时文件 ----
 tests/*.ko
 tests/*.log
+tests/reports/
 
-# ---- 运行时生成 ----
-/var/lib/firewall/state
+# ---- OS 特定文件 ----
+.DS_Store
+Thumbs.db
+desktop.ini
 
 # ---- 打包 / 归档 ----
 *.tar.gz
@@ -53,11 +49,8 @@ tests/*.log
 *.deb
 *.rpm
 
-# ---- OS 特定文件 ----
-.DS_Store
-Thumbs.db
-desktop.ini
-
 # ---- AI 工具 ----
 .qwen/
-bans.db
+.cursor/
+.cursorrules
+.claude/
