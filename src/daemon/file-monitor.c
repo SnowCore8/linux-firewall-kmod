@@ -330,7 +330,14 @@ void process_new_lines(int idx)
                 daemon_log_err("分配组合缓冲区内存不足");
                 /* 丢弃部分数据，直接处理新数据 */
                 size_t consumed = 0;
-                process_lines_in_buffer(j, buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);
+                /* 持有读锁处理行数据，防止 use-after-free。
+                 * process_lines_in_buffer 内部调用 process_single_line，
+                 * 需要访问 j->compiled_regex、j->match_data、j->failed_hash。*/
+                pthread_rwlock_rdlock(&config_rwlock);
+                if (jail_idx < cfg.jail_count) {
+                    process_lines_in_buffer(&cfg.jails[jail_idx], buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);
+                }
+                pthread_rwlock_unlock(&config_rwlock);
                 if (consumed < (size_t)bytes_read) {
                     /* 将剩余数据存储为本地缓冲区中的新部分行 */
                     size_t remain = (size_t)bytes_read - consumed;
@@ -353,9 +360,13 @@ void process_new_lines(int idx)
             /* 已合并，清除本地部分行 */
             local_partial_len = 0;
 
-            /* 处理完整的行 */
+            /* 处理完整的行 - 持有读锁防止 use-after-free */
             size_t consumed = 0;
-            process_lines_in_buffer(j, combined, total_len, log_path, &consumed, max_retries, findtime);
+            pthread_rwlock_rdlock(&config_rwlock);
+            if (jail_idx < cfg.jail_count) {
+                process_lines_in_buffer(&cfg.jails[jail_idx], combined, total_len, log_path, &consumed, max_retries, findtime);
+            }
+            pthread_rwlock_unlock(&config_rwlock);
 
             /* 将任何剩余数据存储为本地缓冲区中的新部分行 */
             if (consumed < total_len) {
@@ -371,9 +382,13 @@ void process_new_lines(int idx)
             free(combined);
             combined = NULL;
         } else {
-            /* 无部分行 - 直接处理缓冲区 */
+            /* 无部分行 - 直接处理缓冲区 - 持有读锁防止 use-after-free */
             size_t consumed = 0;
-            process_lines_in_buffer(j, buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);
+            pthread_rwlock_rdlock(&config_rwlock);
+            if (jail_idx < cfg.jail_count) {
+                process_lines_in_buffer(&cfg.jails[jail_idx], buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);
+            }
+            pthread_rwlock_unlock(&config_rwlock);
 
             if (consumed < (size_t)bytes_read) {
                 size_t remain = (size_t)bytes_read - consumed;
@@ -459,13 +474,16 @@ void handle_log_rotation(int idx)
                 memcpy(local_buf, j->partial_line_buffer, local_len);
             }
             j->partial_line_len = 0;
-            pthread_rwlock_unlock(&config_rwlock);
 
-            /* 不持有锁处理已复制的部分行 */
+            /* 在持有锁时处理已复制的部分行，防止 use-after-free。
+             * process_single_line 需要访问 j->compiled_regex、j->match_data、j->failed_hash，
+             * 这些字段在配置重载时会被修改或释放。*/
             if (local_len > 0 && local_len < sizeof(local_buf)) {
                 local_buf[local_len] = '\0';
                 process_single_line(j, local_buf, file_states[idx].path, max_retries, findtime);
             }
+
+            pthread_rwlock_unlock(&config_rwlock);
         } else {
             pthread_rwlock_unlock(&config_rwlock);
             max_retries = DEFAULT_MAX_RETRIES;

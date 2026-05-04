@@ -606,17 +606,20 @@ int parse_config_file(const char *config_path)
     cfg.interval = new_cfg->interval;
     cfg.metrics_port = new_cfg->metrics_port;
 
-    /* 将运行时状态（failed_hash）从旧 jail 迁移到新 jail */
+    /* 将运行时状态（failed_hash）从旧 jail 迁移到新 jail。
+     * 注意：old_cfg_snapshot 是通过 config_clone() 创建的，clone_jail() 显式设置 failed_hash = NULL，
+     * 所以必须从原始 cfg 获取 failed_hash。*/
     if (old_cfg_snapshot) {
         for (int i = 0; i < old_cfg_snapshot->jail_count; i++) {
             struct jail *old_jail = &old_cfg_snapshot->jails[i];
-            if (!old_jail->failed_hash) continue;
+            struct jail *real_old_jail = &cfg.jails[i];  /* 从原始 cfg 获取 failed_hash */
+            if (!real_old_jail->failed_hash) continue;
 
             for (int j = 0; j < new_cfg->jail_count; j++) {
                 struct jail *new_jail = &new_cfg->jails[j];
                 if (strcmp(old_jail->name, new_jail->name) == 0) {
-                    new_jail->failed_hash = old_jail->failed_hash;
-                    old_jail->failed_hash = NULL;
+                    new_jail->failed_hash = real_old_jail->failed_hash;
+                    real_old_jail->failed_hash = NULL;  /* 防止后续清理时泄漏 */
                     daemon_log_debug("Migrated failed entries for jail '%s'", new_jail->name);
                     break;
                 }
