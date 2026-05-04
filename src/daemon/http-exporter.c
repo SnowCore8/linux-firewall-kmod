@@ -140,14 +140,14 @@ static int generate_metrics(char *buf, size_t buf_size)
     unsigned long kernel_current_bans = 0;
     time_t uptime;
 
-    /* Read kernel stats from procfs */
+    /* 从 procfs 读取内核统计信息 */
     read_procfs_stats_key("current_bans", &kernel_current_bans);
     read_procfs_stats_key("total_bans", &kernel_total_bans);
     read_procfs_stats_key("total_unbans", &kernel_total_unbans);
     read_procfs_stats_key("current_whitelist", &kernel_whitelist_count);
     kernel_banned = kernel_current_bans;
 
-    /* Read daemon stats */
+    /* 读取守护进程统计信息 */
     unsigned long d_lines_parsed = atomic_load(&daemon_stats.lines_parsed);
     unsigned long d_ips_extracted = atomic_load(&daemon_stats.ips_extracted);
     unsigned long d_ips_banned = atomic_load(&daemon_stats.ips_banned);

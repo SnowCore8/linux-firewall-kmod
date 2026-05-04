@@ -1,7 +1,7 @@
-# firewall daemon configuration file
-# Default configuration: protects only sshd (SSH service)
+# 防火墙守护进程配置文件
+# 默认配置：仅保护 sshd（SSH 服务）
 
-# Global defaults - applied to all jails unless overridden
+# 全局默认值 - 应用于所有 jail，除非被覆盖
 defaults:
   max_retries: 5
   findtime: 600
@@ -9,7 +9,7 @@ defaults:
   interval: 1
   metrics_port: 9119
 
-# Jail definitions
+# Jail 定义
 jails:
   sshd:
     enabled: true
@@ -19,23 +19,12 @@ jails:
     max_retries: 5
     findtime: 600
     ban_time: 900
-    regex: ""  # Empty string uses built-in sshd pattern
+    regex: ""  # 空字符串使用内置的 sshd 模式
 
-  frp:
-    enabled: true
-    log_files:
-      - /var/log/frp/frp.log
-    max_retries: 10
-    findtime: 300
-    ban_time: 1800
-    # 匹配 FRP 错误/警告日志中的远程 IP 地址（使用捕获组提取 IP）
-    # 示例：2026-04-22 17:52:16.417 [E] [...] remoteAddr: 43.100.123.123:7000
-    regex: ".*\\[E\\].*remoteAddr:\\s*([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)|.*\\[W\\].*remoteAddr:\\s*([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)"
-
-# Permanent ban configuration (SQLite-based persistence)
-# Path to SQLite database file for permanent bans (empty = disabled)
-# Use absolute path in a secure location with proper permissions
-# Can be overridden by environment variable FIREWALL_DB_PATH
+# 永久封禁配置（基于 SQLite 的持久化）
+# 永久封禁的 SQLite 数据库文件路径（空 = 禁用）
+# 使用具有适当权限的安全位置的绝对路径
+# 可通过环境变量 FIREWALL_DB_PATH 覆盖
 permanent_db_path: "/var/lib/firewall/bans.db"
-# Whether to enable permanent bans (true/false)
+# 是否启用永久封禁（true/false）
 permanent_ban_enabled: true

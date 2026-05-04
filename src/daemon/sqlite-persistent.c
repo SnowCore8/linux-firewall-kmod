@@ -18,13 +18,13 @@
 
 /* 数据库句柄结构 */
 struct sqlite_db {
-    sqlite3 *conn;              /* SQLite connection handle */
-    char db_path[512];          /* Database file path */
-    pthread_mutex_t lock;       /* Thread-safe mutex lock */
+    sqlite3 *conn;              /* SQLite 连接句柄 */
+    char db_path[512];          /* 数据库文件路径 */
+    pthread_mutex_t lock;       /* 线程安全互斥锁 */
 };
 
 /* ============================================================================
- * Internal helper functions
+ * 内部辅助函数
  * ========================================================================== */
 
 /**
@@ -88,7 +88,7 @@ static int init_db_schema(sqlite3 *conn)
 
     rc = sqlite3_exec(conn, create_table_sql, NULL, NULL, &err_msg);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "firewall: Failed to create permanent_banlist table: %s\n",
+        fprintf(stderr, "firewall: 创建 permanent_banlist 表失败：%s\n",
                 err_msg);
         sqlite3_free(err_msg);
         return -1;
@@ -96,7 +96,7 @@ static int init_db_schema(sqlite3 *conn)
 
     rc = sqlite3_exec(conn, create_index1_sql, NULL, NULL, &err_msg);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "firewall: Failed to create idx_ip_num index: %s\n",
+        fprintf(stderr, "firewall: 创建 idx_ip_num 索引失败：%s\n",
                 err_msg);
         sqlite3_free(err_msg);
         return -1;
@@ -104,7 +104,7 @@ static int init_db_schema(sqlite3 *conn)
 
     rc = sqlite3_exec(conn, create_index2_sql, NULL, NULL, &err_msg);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "firewall: Failed to create idx_is_active index: %s\n",
+        fprintf(stderr, "firewall: 创建 idx_is_active 索引失败：%s\n",
                 err_msg);
         sqlite3_free(err_msg);
         return -1;
@@ -123,15 +123,15 @@ static int enable_wal_mode(sqlite3 *conn)
 
     rc = sqlite3_exec(conn, "PRAGMA journal_mode=WAL;", NULL, NULL, &err_msg);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "firewall: Failed to enable WAL mode: %s\n",
-                err_msg ? err_msg : "unknown error");
+        fprintf(stderr, "firewall: 启用 WAL 模式失败：%s\n",
+                err_msg ? err_msg : "未知错误");
         sqlite3_free(err_msg);
         return -1;
     }
 
     rc = sqlite3_exec(conn, "PRAGMA synchronous=NORMAL;", NULL, NULL, &err_msg);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "firewall: Failed to set synchronous=NORMAL: %s\n",
+        fprintf(stderr, "firewall: 设置 synchronous=NORMAL 失败：%s\n",
                 err_msg ? err_msg : "unknown error");
         sqlite3_free(err_msg);
         return -1;
@@ -235,7 +235,7 @@ int sqlite_add_permanent_ban(sqlite_db_t *db, const char *ip, uint32_t ip_num,
 
     rc = sqlite3_prepare_v2(db->conn, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "firewall: Failed to prepare statement: %s\n",
+        fprintf(stderr, "firewall: 准备语句失败：%s\n",
                 sqlite3_errmsg(db->conn));
         pthread_mutex_unlock(&db->lock);
         return -1;
@@ -253,11 +253,11 @@ int sqlite_add_permanent_ban(sqlite_db_t *db, const char *ip, uint32_t ip_num,
     pthread_mutex_unlock(&db->lock);
 
     if (rc == SQLITE_DONE) {
-           return 0;  /* Success */
+           return 0;  /* 成功 */
     } else if (rc == SQLITE_CONSTRAINT) {
-        return -2;  /* Already exists */
+        return -2;  /* 已存在 */
     } else {
-        fprintf(stderr, "firewall: Failed to insert permanent ban: %s\n",
+        fprintf(stderr, "firewall: 插入永久封禁失败：%s\n",
                 sqlite3_errmsg(db->conn));
         return -1;
     }
@@ -288,10 +288,10 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db,
     int rc;
     int success_count = 0;
 
-    /* Begin transaction */
+    /* 开始事务 */
     rc = sqlite3_exec(db->conn, "BEGIN TRANSACTION;", NULL, NULL, NULL);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "firewall: Failed to begin transaction: %s\n",
+        fprintf(stderr, "firewall: 开始事务失败：%s\n",
                 sqlite3_errmsg(db->conn));
         pthread_mutex_unlock(&db->lock);
         return -1;
@@ -299,7 +299,7 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db,
 
     rc = sqlite3_prepare_v2(db->conn, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "firewall: Failed to prepare statement: %s\n",
+        fprintf(stderr, "firewall: 准备语句失败：%s\n",
                 sqlite3_errmsg(db->conn));
         sqlite3_exec(db->conn, "ROLLBACK;", NULL, NULL, NULL);
         pthread_mutex_unlock(&db->lock);
@@ -326,12 +326,12 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db,
 
     sqlite3_finalize(stmt);
 
-    /* Commit transaction */
+    /* 提交事务 */
     rc = sqlite3_exec(db->conn, "COMMIT;", NULL, NULL, NULL);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "firewall: Failed to commit transaction: %s\n",
+        fprintf(stderr, "firewall: 提交事务失败：%s\n",
                 sqlite3_errmsg(db->conn));
-        /* Transaction automatically rolls back after COMMIT failure, no explicit ROLLBACK needed */
+        /* COMMIT 失败后事务自动回滚，无需显式 ROLLBACK */
         pthread_mutex_unlock(&db->lock);
         return -1;
     }
@@ -376,12 +376,12 @@ int sqlite_remove_permanent_ban(sqlite_db_t *db, const char *ip)
     if (rc == SQLITE_DONE) {
         int changes = sqlite3_changes(db->conn);
         if (changes > 0) {
-       return 0;  /* Success */
+       return 0;  /* 成功 */
         } else {
-            return -2;  /* Does not exist */
+            return -2;  /* 不存在 */
         }
     } else {
-        fprintf(stderr, "firewall: Failed to remove permanent ban: %s\n",
+        fprintf(stderr, "firewall: 移除永久封禁失败：%s\n",
                 sqlite3_errmsg(db->conn));
         return -1;
     }
@@ -420,11 +420,11 @@ int sqlite_is_permanent_banned(sqlite_db_t *db, uint32_t ip_num)
     pthread_mutex_unlock(&db->lock);
 
     if (rc == SQLITE_ROW) {
-        return 1;  /* In blacklist */
+        return 1;  /* 在黑名单中 */
     } else if (rc == SQLITE_DONE) {
-        return 0;  /* Not in */
+        return 0;  /* 不在 */
     } else {
-        fprintf(stderr, "firewall: Failed to query permanent ban: %s\n",
+        fprintf(stderr, "firewall: 查询永久封禁失败：%s\n",
                 sqlite3_errmsg(db->conn));
         return -1;
     }
@@ -462,7 +462,7 @@ int sqlite_load_all_permanent_bans(sqlite_db_t *db,
         return -1;
     }
 
-    /* Count first */
+    /* 先计数 */
     int n = 0;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         n++;
@@ -472,10 +472,10 @@ int sqlite_load_all_permanent_bans(sqlite_db_t *db,
     if (n == 0) {
         sqlite3_finalize(stmt);
         pthread_mutex_unlock(&db->lock);
-        return 0;  /* No records */
+        return 0;  /* 无记录 */
     }
 
-    /* Allocate memory */
+    /* 分配内存 */
     *entries = calloc(n, sizeof(struct permanent_ban_entry));
     if (!*entries) {
         fprintf(stderr, "firewall: Out of memory allocating ban entries\n");
@@ -484,7 +484,7 @@ int sqlite_load_all_permanent_bans(sqlite_db_t *db,
         return -1;
     }
 
-    /* Read data */
+    /* 读取数据 */
     int i = 0;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < n) {
         struct permanent_ban_entry *e = &(*entries)[i];
@@ -597,10 +597,10 @@ int sqlite_get_stats(sqlite_db_t *db, int *total_count, int *active_count)
     sqlite3_stmt *stmt;
     int rc;
 
-    /* Total record count */
+    /* 总记录数 */
     rc = sqlite3_prepare_v2(db->conn, sql_total, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "firewall: Failed to prepare statement: %s\n",
+        fprintf(stderr, "firewall: 准备语句失败：%s\n",
                 sqlite3_errmsg(db->conn));
         pthread_mutex_unlock(&db->lock);
         return -1;
@@ -613,7 +613,7 @@ int sqlite_get_stats(sqlite_db_t *db, int *total_count, int *active_count)
     }
     sqlite3_finalize(stmt);
 
-    /* Active record count */
+    /* 活跃记录数 */
     rc = sqlite3_prepare_v2(db->conn, sql_active, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         fprintf(stderr, "firewall: Failed to prepare statement: %s\n",

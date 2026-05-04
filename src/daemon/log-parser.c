@@ -22,7 +22,7 @@ int extract_ipv4(const char *line, char *ip_out, size_t ip_size)
 
                 snprintf(ip_out, ip_size, "%d.%d.%d.%d",
                         octets[0], octets[1], octets[2], octets[3]);
-                /* Validate with inet_pton */
+                /* 使用 inet_pton 验证 */
                 unsigned char buf[4];
                 if (inet_pton(AF_INET, ip_out, buf) == 1) {
                     /* 额外验证：拒绝无效IP，如 0.0.0.0、127.x.x.x、组播地址等 */

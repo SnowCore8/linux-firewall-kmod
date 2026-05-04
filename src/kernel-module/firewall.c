@@ -811,8 +811,8 @@ static void cleanup_timer_callback(struct timer_list *t)
 }
 
 /*
- * bans_show - Show current ban list (IPv4 only)
- * Reused from original ban_list_show
+ * bans_show - 显示当前封禁列表（仅 IPv4）
+ * 复用自原始 ban_list_show
  */
 static int bans_show(struct seq_file *m, void *v)
 {
@@ -827,21 +827,21 @@ static int bans_show(struct seq_file *m, void *v)
 
     FW_DEBUG(3, "ENTRY: bans_show");
 
-    seq_printf(m, "Current banned IPs:\n");
+    seq_printf(m, "当前封禁的 IP 列表：\n");
     seq_printf(m, "-------------------\n");
 
     rcu_read_lock();
     hash_for_each_rcu(fw->ban_table, hash, entry, hash) {
-        /* Check if permanent ban (never expires) */
+        /* 检查是否为永久封禁（永不过期） */
         if (entry->is_permanent) {
             ipv4_to_str(entry->ip, ip_str, sizeof(ip_str));
-            seq_printf(m, "%-40s (PERMANENT)\n", ip_str);
+            seq_printf(m, "%-40s（永久）\n", ip_str);
             permanent_count++;
             count++;
         } else if (!time_after(now, entry->unban_time)) {
-            /* Temporary ban - check expiration */
+            /* 临时封禁 - 检查是否过期 */
             ipv4_to_str(entry->ip, ip_str, sizeof(ip_str));
-            seq_printf(m, "%-40s (expires in %lus)\n",
+            seq_printf(m, "%-40s（%lu 秒后过期）\n",
                        ip_str,
                        (entry->unban_time - now) / HZ);
             temporary_count++;
@@ -851,7 +851,7 @@ static int bans_show(struct seq_file *m, void *v)
     rcu_read_unlock();
 
     seq_printf(m, "-------------------\n");
-    seq_printf(m, "Total: %d active bans (%d permanent, %d temporary)\n",
+    seq_printf(m, "总计：%d 个活跃封禁（%d 个永久，%d 个临时）\n",
                count, permanent_count, temporary_count);
     FW_DEBUG(3, "EXIT: bans_show -> 0 (shown=%d)", count);
     return 0;
@@ -863,13 +863,13 @@ static int bans_open(struct inode *inode, struct file *file)
 }
 
 /*
- * ban_ip_with_duration - Ban an IP with a custom duration
- * @fw: firewall info structure
- * @ip: IP address to ban
- * @seconds: ban duration in seconds (must be > 0)
+ * ban_ip_with_duration - 使用自定义持续时间封禁 IP
+ * @fw: 防火墙信息结构体
+ * @ip: 要封禁的 IP 地址
+ * @seconds: 封禁持续时间（秒）（必须 > 0）
  *
- * This function creates a ban entry with a custom unban time,
- * avoiding the need to modify the global fw_ban_time.
+ * 此函数创建具有自定义解封时间的封禁条目，
+ * 避免修改全局 fw_ban_time。
  */
 static int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned long seconds)
 {
@@ -880,14 +880,14 @@ static int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned lo
 
     FW_DEBUG(1, "ENTRY: ban_ip_with_duration(ip=%pI4, seconds=%lu)", &ip, seconds);
 
-    /* Validate IP input */
+    /* 验证 IP 输入 */
     if (!ip) {
         fw_pr_err("Invalid IP address for banning: %pI4", &ip);
         FW_DEBUG(1, "EXIT: ban_ip_with_duration -> -EINVAL (invalid IP)");
         return -EINVAL;
     }
 
-    /* Validate duration */
+    /* 验证持续时间 */
     if (seconds == 0) {
         fw_pr_err("Invalid ban duration: 0 seconds");
         FW_DEBUG(1, "EXIT: ban_ip_with_duration -> -EINVAL (zero duration)");
@@ -896,10 +896,10 @@ static int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned lo
 
     FW_DEBUG(2, "Attempting to ban IPv4 %pI4 for %lu seconds", &ip, seconds);
 
-    /* Acquire lock before any checks to eliminate TOCTOU race condition. */
+    /* 在任何检查之前获取锁，以消除 TOCTOU 竞态条件。 */
     spin_lock(&fw->lock);
 
-    /* Check whitelist using RCU (whitelist_table is RCU-protected) */
+    /* 使用 RCU 检查白名单（whitelist_table 受 RCU 保护） */
     rcu_read_lock();
     hash_for_each_rcu(fw->whitelist_table, bkt, wl_entry, hash) {
         if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
@@ -914,18 +914,18 @@ static int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned lo
     }
     rcu_read_unlock();
 
-    /* Check if already banned under same lock */
+    /* 在同一锁下检查是否已被封禁 */
     hash = hash_min(ip, BAN_HASH_BITS);
     hash_for_each_possible(fw->ban_table, entry, hash, ip) {
         if (compare_ips(entry->ip, ip)) {
             if (entry->is_permanent || time_before(jiffies, entry->unban_time)) {
-                /* Still banned or permanent - return early */
+                /* 仍被封禁或永久封禁 - 提前返回 */
                 spin_unlock(&fw->lock);
                 FW_DEBUG(2, "IP %pI4 still banned, returning early", &ip);
                 FW_DEBUG(1, "EXIT: ban_ip_with_duration -> 0 (already banned)");
                 return 0;
             } else {
-                /* Entry exists but expired - update it */
+                /* 条目存在但已过期 — 更新它 */
                 unsigned long ban_duration;
                 if (check_mul_overflow(seconds, (unsigned long)HZ, &ban_duration)) {
                     spin_unlock(&fw->lock);
@@ -1021,7 +1021,7 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
         FW_DEBUG(2, "EXIT: bans_write -> 0 (empty input)");
         return 0;
     }
-    /* Limit input to prevent buffer overflow */
+    /* 限制输入以防止缓冲区溢出 */
     if (count > sizeof(input) - 1) {
         FW_DEBUG(1, "EXIT: bans_write -> -EINVAL (input too large: %zu)", count);
         return -EINVAL;
@@ -1033,12 +1033,12 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
         return -EFAULT;
     }
 
-    /* Ensure null termination */
+    /* 确保空终止 */
     input[len] = '\0';
     if (len > 0 && input[len - 1] == '\n')
         input[len - 1] = '\0';
 
-    /* Validate that we have a null terminator within our buffer bounds */
+    /* 验证我们在缓冲区范围内有空终止符 */
     if (strnlen(input, sizeof(input)) >= sizeof(input)) {
         FW_DEBUG(1, "EXIT: bans_write -> -EINVAL (not null-terminated)");
         return -EINVAL;
@@ -1063,7 +1063,7 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
         }
     }
 
-    /* Skip leading whitespace */
+    /* 跳过前导空白 */
     space_pos = input;
     while (*space_pos && (*space_pos == ' ' || *space_pos == '\t'))
         space_pos++;
@@ -1073,10 +1073,10 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
         return -EINVAL;
     }
 
-    /* Check for "unban <ip>" command */
+    /* 检查 "unban <ip>" 命令 */
     if (strncmp(space_pos, "unban ", 6) == 0 || strncmp(space_pos, "unban\t", 6) == 0) {
-        /* Extract IP after "unban " */
-        char *ip_start = space_pos + 5;  /* Skip "unban" */
+        /* 提取 "unban " 后的 IP */
+        char *ip_start = space_pos + 5;  /* 跳过 "unban" */
         while (*ip_start && (*ip_start == ' ' || *ip_start == '\t'))
             ip_start++;
 
@@ -1085,7 +1085,7 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
             return -EINVAL;
         }
 
-        /* Check for extra content after IP */
+        /* 检查 IP 后是否有额外内容 */
         char *ip_end = ip_start;
         while (*ip_end && *ip_end != ' ' && *ip_end != '\t')
             ip_end++;
@@ -1094,7 +1094,7 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
             return -EINVAL;
         }
 
-        /* Parse IP */
+        /* 解析 IP */
         strncpy(ip_str, ip_start, sizeof(ip_str) - 1);
         ip_str[sizeof(ip_str) - 1] = '\0';
 
@@ -1103,7 +1103,7 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
             return -EINVAL;
         }
 
-        /* Execute unban */
+        /* 执行解封 */
         result = unban_ip(&fw_info, ip);
         if (result < 0) {
             if (result == -ENOENT) {
@@ -1117,8 +1117,8 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
         return count;
     }
 
-    /* Parse input format: "<ip>" or "<ip> <seconds>" */
-    /* Find space separator (if any) */
+    /* 解析输入格式："<ip>" 或 "<ip> <seconds>" */
+    /* 查找空格分隔符（如果有） */
     {
         char *ptr;
         char *ip_start;
@@ -1128,35 +1128,35 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
         while (*ptr && (*ptr == ' ' || *ptr == '\t'))
             ptr++;
 
-        /* Find end of first token (IP) */
+        /* 查找第一个令牌（IP）的结尾 */
         ip_start = ptr;
         while (*ptr && *ptr != ' ' && *ptr != '\t')
             ptr++;
 
         if (*ptr) {
-            /* Found space - check if there's more content */
-            *ptr = '\0';  /* Terminate IP string */
+            /* 找到空格 - 检查是否有更多内容 */
+            *ptr = '\0';  /* 终止 IP 字符串 */
             space_pos = ptr + 1;
 
-            /* Skip whitespace to find seconds value */
+            /* 跳过空白以查找秒数值 */
             while (*space_pos && (*space_pos == ' ' || *space_pos == '\t'))
                 space_pos++;
 
             if (*space_pos == '\0') {
-                /* Only whitespace after IP - treat as plain IP */
+                /* IP 后只有空白 - 视为纯 IP */
                 goto ban_default_duration;
             }
 
-            /* Parse seconds value */
+            /* 解析秒数值 */
             seconds = simple_strtol(space_pos, &endp, 10);
             if (endp == space_pos || *endp != '\0') {
                 fw_pr_warn("Invalid format - invalid seconds value: %s", input);
                 return -EINVAL;
             }
 
-            /* Validate seconds bounds to prevent overflow */
+            /* 验证秒数边界以防止溢出 */
             if (seconds < 0 && seconds != -1) {
-                /* Negative values other than -1 are invalid */
+                /* 除 -1 外的负值无效 */
                 fw_pr_warn("Invalid ban duration: %ld", seconds);
                 return -EINVAL;
             }
@@ -1165,37 +1165,37 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
                 return -EINVAL;
             }
 
-            /* Copy IP string for validation */
+            /* 复制 IP 字符串以进行验证 */
             strncpy(ip_str, ip_start, sizeof(ip_str) - 1);
             ip_str[sizeof(ip_str) - 1] = '\0';
         } else {
-            /* No space found - pure IP address */
+            /* 未找到空格 - 纯 IP 地址 */
             *ptr = '\0';
 ban_default_duration:
             strncpy(ip_str, ip_start, sizeof(ip_str) - 1);
             ip_str[sizeof(ip_str) - 1] = '\0';
-            seconds = -2;  /* Special marker: use default duration */
+            seconds = -2;  /* 特殊标记：使用默认持续时间 */
         }
     }
 
-    /* Validate IP format */
+    /* 验证 IP 格式 */
     if (*ip_str == '\0') {
         fw_pr_warn("Missing IP address");
         return -EINVAL;
     }
 
-    /* Parse IP address */
+    /* 解析 IP 地址 */
     if (!in4_pton(ip_str, -1, (u8 *)&ip, -1, NULL)) {
         fw_pr_warn("Invalid IP address format: %s", ip_str);
         return -EINVAL;
     }
 
-    /* Unified IPv4 address validation */
+    /* 统一的 IPv4 地址验证 */
     if (validate_ipv4_address(ip, ip_str, "ban") < 0) {
         return -EINVAL;
     }
 
-    /* Check for private/reserved IP ranges (warning only) */
+    /* 检查私有/保留 IP 范围（仅警告） */
     unsigned int ip_class_a = (ntohl(ip) >> 24) & 0xFF;
     unsigned int ip_class_b = (ntohl(ip) >> 16) & 0xFF;
     if ((ip_class_a == 10) ||
@@ -1204,9 +1204,9 @@ ban_default_duration:
         fw_pr_warn("Attempt to ban private IPv4 range %pI4 - this may be unintended", &ip);
     }
 
-    /* Execute ban/unban based on seconds value */
+    /* 根据秒数值执行封禁/解封 */
     if (seconds < 0 && seconds != -2) {
-        /* Negative value: unban */
+        /* 负值：解封 */
         result = unban_ip(&fw_info, ip);
         if (result < 0) {
             if (result == -ENOENT) {
@@ -1217,8 +1217,8 @@ ban_default_duration:
             return result;
         }
     } else if (seconds == 0) {
-        /* Zero: permanent ban */
-        /* Check flood protection bypass for permanent bans */
+        /* 零：永久封禁 */
+        /* 检查永久封禁的泛洪保护绕过 */
         result = ban_ip_permanent(&fw_info, ip);
         if (result < 0) {
             if (result == -EPERM) {
@@ -1233,8 +1233,8 @@ ban_default_duration:
             return result;
         }
     } else if (seconds == -2) {
-        /* Marker for default duration: use standard ban_ip() */
-        /* Check flood protection for temporary bans */
+        /* 默认持续时间的标记：使用标准 ban_ip() */
+        /* 检查临时封禁的泛洪保护 */
         if (check_flood_protection() < 0) {
             fw_pr_warn("Flood protection triggered - too many ban requests");
             return -EBUSY;
@@ -1254,8 +1254,8 @@ ban_default_duration:
             return result;
         }
     } else {
-        /* Positive value: custom duration ban */
-        /* Check flood protection for temporary bans */
+        /* 正值：自定义持续时间封禁 */
+        /* 检查临时封禁的泛洪保护 */
         if (check_flood_protection() < 0) {
             fw_pr_warn("Flood protection triggered - too many ban requests");
             return -EBUSY;
@@ -1289,32 +1289,32 @@ static const struct proc_ops bans_fops = {
 };
 
 /*
- * check_flood_protection - Check if adding this entry would exceed flood limits
- * Uses configurable fw_max_bans_per_second module parameter
+ * check_flood_protection - 检查添加此条目是否会超过泛洪限制
+ * 使用可配置的 fw_max_bans_per_second 模块参数
  */
 static int check_flood_protection(void)
 {
     unsigned long now = jiffies;
-    unsigned long one_second = HZ;  // One second in jiffies
+    unsigned long one_second = HZ;  // 一秒钟的 jiffies 数
     unsigned int max_bans;
 
     spin_lock(&fw_info.flood_lock);
 
-    // Reset counter if more than 1 second has passed since last check
+    // 如果自上次检查以来已超过 1 秒，则重置计数器
     if (time_after(now, fw_info.last_flood_check + one_second)) {
-        fw_info.recent_additions = 1;  // This addition counts as the first
+        fw_info.recent_additions = 1;  // 此次添加计为第一次
         fw_info.last_flood_check = now;
     } else {
-        // Increment addition counter
+        // 增加添加计数器
         fw_info.recent_additions++;
 
-        // Use READ_ONCE to atomically read the configurable limit
+        // 使用 READ_ONCE 原子读取可配置的限值
         max_bans = READ_ONCE(fw_max_bans_per_second);
         
-        // Check if we've exceeded the configured limit
+        // 检查是否已超过配置的限值
         if (fw_info.recent_additions > max_bans) {
             spin_unlock(&fw_info.flood_lock);
-            return -EBUSY;  // Too many additions in the time window
+            return -EBUSY;  // 时间窗口内添加次数过多
         }
     }
 
@@ -1323,7 +1323,7 @@ static int check_flood_protection(void)
 }
 
 /*
- * whitelist_read - Show whitelist entries (IPv4 only)
+ * whitelist_read - 显示白名单条目（仅 IPv4）
  */
 static int whitelist_read(struct seq_file *m, void *v)
 {
@@ -1333,7 +1333,7 @@ static int whitelist_read(struct seq_file *m, void *v)
     char ip_str[INET_ADDRSTRLEN];
     int prefix_len;
 
-    seq_printf(m, "Whitelisted IPs (protected from ban):\n");
+    seq_printf(m, "白名单 IP（免受封禁）：\n");
     seq_printf(m, "--------------------------------------\n");
 
     rcu_read_lock();
@@ -1349,7 +1349,7 @@ static int whitelist_read(struct seq_file *m, void *v)
     rcu_read_unlock();
 
     seq_printf(m, "--------------------------------------\n");
-    seq_printf(m, "Total: %d entries\n", atomic_read(&fw->whitelist_count));
+    seq_printf(m, "总计：%d 个条目\n", atomic_read(&fw->whitelist_count));
     return 0;
 }
 
@@ -1359,11 +1359,11 @@ static int whitelist_open(struct inode *inode, struct file *file)
 }
 
 /*
- * whitelist_write - Unified write handler for whitelist management
- * Commands:
- *   add <subnet>      -> Add to whitelist
- *   remove <subnet>   -> Remove from whitelist
- *   <subnet>          -> Default: add to whitelist
+ * whitelist_write - 白名单管理的统一写入处理程序
+ * 命令：
+ *   add <子网>      -> 添加到白名单
+ *   remove <子网>   -> 从白名单移除
+ *   <子网>          -> 默认：添加到白名单
  */
 static ssize_t whitelist_write(struct file *file, const char __user *buf,
                                 size_t count, loff_t *ppos)
@@ -1406,7 +1406,7 @@ static ssize_t whitelist_write(struct file *file, const char __user *buf,
         return -EINVAL;
     }
 
-    /* Skip leading whitespace */
+    /* 跳过前导空白 */
     ptr = input;
     while (*ptr && (*ptr == ' ' || *ptr == '\t'))
         ptr++;
@@ -1416,11 +1416,11 @@ static ssize_t whitelist_write(struct file *file, const char __user *buf,
         return -EINVAL;
     }
 
-    /* Extract command keyword (if any) */
+    /* 提取命令关键字（如果有） */
     cmd_start = ptr;
     cmd_buf[0] = '\0';
 
-    /* Find end of first word */
+    /* 查找第一个单词的结尾 */
     while (*ptr && *ptr != ' ' && *ptr != '\t')
         ptr++;
 
@@ -1448,13 +1448,13 @@ static ssize_t whitelist_write(struct file *file, const char __user *buf,
         return -EINVAL;
     }
 
-    /* Terminate subnet string */
+    /* 终止子网字符串 */
     ptr = subnet_start;
     while (*ptr && *ptr != ' ' && *ptr != '\t')
         ptr++;
     *ptr = '\0';
 
-    /* Parse subnet (IP/prefix) */
+    /* 解析子网（IP/前缀） */
     char *slash = strchr(subnet_start, '/');
     if (slash) {
         *slash = '\0';
@@ -1474,7 +1474,7 @@ static ssize_t whitelist_write(struct file *file, const char __user *buf,
         return -EINVAL;
     }
 
-    /* Unified IPv4 address validation */
+    /* 统一的 IPv4 地址验证 */
     if (validate_ipv4_address(ipv4, subnet_start, "whitelist") < 0) {
         return -EINVAL;
     }
@@ -1493,7 +1493,7 @@ static ssize_t whitelist_write(struct file *file, const char __user *buf,
             return result;
         }
     } else {
-        /* Default: add (cmd_buf is empty or "add") */
+        /* 默认：添加（cmd_buf 为空或 "add"） */
         result = add_whitelist_entry(&fw_info, normalized_ip, mask4, "manual");
         if (result < 0) {
             if (result == -ENOMEM) {
@@ -1522,17 +1522,17 @@ static const struct proc_ops whitelist_fops = {
 };
 
 /*
- * config_show / config_write - Procfs handlers for configuration
- * Moved before create_procfs_entries to avoid forward declaration issues
+ * config_show / config_write - 配置的 procfs 处理程序
+ * 移至 create_procfs_entries 之前以避免前向声明问题
  */
 static int config_show(struct seq_file *m, void *v)
 {
-    /* FIX P1-5: Use READ_ONCE for atomic access to module parameters */
-    seq_printf(m, "Current firewall configuration:\n");
+    /* 修复 P1-5：使用 READ_ONCE 原子访问模块参数 */
+    seq_printf(m, "当前防火墙配置：\n");
     seq_printf(m, "--------------------------------\n");
-    seq_printf(m, "ban_time: %u seconds\n", READ_ONCE(fw_ban_time));
-    seq_printf(m, "Banned entries: %d\n", atomic_read(&fw_info.ban_count));
-    seq_printf(m, "Whitelisted entries: %d\n", atomic_read(&fw_info.whitelist_count));
+    seq_printf(m, "ban_time：%u 秒\n", READ_ONCE(fw_ban_time));
+    seq_printf(m, "封禁条目数：%d\n", atomic_read(&fw_info.ban_count));
+    seq_printf(m, "白名单条目数：%d\n", atomic_read(&fw_info.whitelist_count));
     return 0;
 }
 
@@ -1561,7 +1561,7 @@ static ssize_t config_write(struct file *file, const char __user *buf,
     if (len > 0 && input[len - 1] == '\n')
         input[len - 1] = '\0';
 
-    /* Use strsep for more robust parameter parsing */
+    /* 使用 strsep 进行更稳健的参数解析 */
     char *input_ptr = input;
     char *token;
 
@@ -1579,7 +1579,7 @@ static ssize_t config_write(struct file *file, const char __user *buf,
         return -EINVAL;
     }
 
-    /* Parse value using modern kstrtoul for better error handling */
+    /* 使用现代 kstrtoul 解析值以获得更好的错误处理 */
     unsigned long val;
     int rc = kstrtoul(value_str, 10, &val);
     if (rc != 0 || val == 0 || val > UINT_MAX) {
@@ -1600,8 +1600,8 @@ static ssize_t config_write(struct file *file, const char __user *buf,
             fw_pr_err("ban_time must be between 1 and %d seconds", 365 * 24 * 60 * 60);
             return -EINVAL;
         }
-        /* FIX P1-5: Use WRITE_ONCE to atomically write fw_ban_time to prevent
-         * torn writes when the value is being concurrently updated via procfs. */
+        /* 修复 P1-5：使用 WRITE_ONCE 原子写入 fw_ban_time 以防止
+         * 当值通过 procfs 并发更新时出现撕裂写入。 */
         WRITE_ONCE(fw_ban_time, value);
         fw_pr_info("ban_time updated to %u seconds", value);
     } else {
@@ -1621,7 +1621,7 @@ static const struct proc_ops config_fops = {
 };
 
 /*
- * stats_show - Show firewall statistics
+ * stats_show - 显示防火墙统计信息
  */
 static int stats_show(struct seq_file *m, void *v)
 {
@@ -1657,8 +1657,8 @@ static const struct proc_ops stats_fops = {
 };
 
 /*
- * create_procfs_entries - Create procfs interface
- * Creates 4 unified interfaces: bans, whitelist, config, stats
+ * create_procfs_entries - 创建 procfs 接口
+ * 创建 4 个统一接口：bans、whitelist、config、stats
  */
 int create_procfs_entries(struct firewall_info *fw)
 {
@@ -1670,25 +1670,25 @@ int create_procfs_entries(struct firewall_info *fw)
         return -ENOMEM;
     }
 
-    /* bans: unified read/write interface for ban management */
+    /* bans：封禁管理的统一读/写接口 */
     entry = proc_create("bans", 0600, fw->proc_dir, &bans_fops);
     if (!entry)
         goto err_cleanup;
     fw->proc_bans = entry;
 
-    /* config: read/write for configuration */
+    /* config：配置的读/写接口 */
     entry = proc_create("config", 0600, fw->proc_dir, &config_fops);
     if (!entry)
         goto err_cleanup;
     fw->proc_config = entry;
 
-    /* whitelist: unified read/write interface for whitelist management */
+    /* whitelist：白名单管理的统一读/写接口 */
     entry = proc_create("whitelist", 0600, fw->proc_dir, &whitelist_fops);
     if (!entry)
         goto err_cleanup;
     fw->proc_whitelist = entry;
 
-    /* stats: read-only statistics */
+    /* stats：只读统计信息 */
     entry = proc_create("stats", 0400, fw->proc_dir, &stats_fops);
     if (!entry) {
         fw_pr_err("Failed to create proc stats entry\n");
@@ -1705,7 +1705,7 @@ err_cleanup:
 }
 
 /*
- * destroy_procfs_entries - Remove procfs entries
+ * destroy_procfs_entries - 移除 procfs 条目
  */
 void destroy_procfs_entries(struct firewall_info *fw)
 {
@@ -1722,8 +1722,8 @@ void destroy_procfs_entries(struct firewall_info *fw)
 }
 
 /*
- * nf_hook_func_ipv4 - Netfilter hook function for IPv4
- * Enhanced version: Improved skb validation and additional safety checks
+ * nf_hook_func_ipv4 - IPv4 的 netfilter 钩子函数
+ * 增强版本：改进的 skb 验证和额外的安全检查
  */
 static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
                                   const struct nf_hook_state *state)
@@ -1741,57 +1741,57 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
     if (unlikely(!skb))
         return NF_ACCEPT;
 
-    /* Additional validation: verify packet integrity */
+    /* 额外验证：检查数据包完整性 */
     if (unlikely(skb->len < sizeof(struct iphdr)))
         return NF_ACCEPT;
 
-    /* Validate network header is set and points to valid data */
+    /* 验证网络头已设置并指向有效数据 */
     if (unlikely(!skb_network_header(skb)))
         return NF_ACCEPT;
 
-    /* Verify that we can safely pull the IP header */
+    /* 验证我们可以安全地拉取 IP 头 */
     if (unlikely(!pskb_may_pull(skb, sizeof(struct iphdr))))
         return NF_ACCEPT;
 
-    /* Safely copy IP header to prevent reading from non-linear skb data */
+    /* 安全复制 IP 头以防止从非线性 skb 数据读取 */
     iph = skb_header_pointer(skb, 0, sizeof(iph_copy), &iph_copy);
     if (!iph)
         return NF_ACCEPT;
 
-    /* Additional validation: check IP header fields for validity */
-    if (iph->version != 4)  /* IPv4 only */
+    /* 额外验证：检查 IP 头字段的有效性 */
+    if (iph->version != 4)  /* 仅 IPv4 */
         return NF_ACCEPT;
 
-    if (iph->ihl < 5)  /* Minimum IP header length is 5 words */
+    if (iph->ihl < 5)  /* 最小 IP 头长度为 5 个字 */
         return NF_ACCEPT;
 
-    if (iph->ihl > 15)  /* Maximum IP header length is 15 words (60 bytes) */
+    if (iph->ihl > 15)  /* 最大 IP 头长度为 15 个字（60 字节） */
         return NF_ACCEPT;
 
-    if (iph->ihl * 4 > ntohs(iph->tot_len))  /* Header length must not exceed total length */
+    if (iph->ihl * 4 > ntohs(iph->tot_len))  /* 头长度不得超过总长度 */
         return NF_ACCEPT;
 
-    if (ntohs(iph->tot_len) < sizeof(struct iphdr))  /* Packet length check */
+    if (ntohs(iph->tot_len) < sizeof(struct iphdr))  /* 数据包长度检查 */
         return NF_ACCEPT;
 
-    if (ntohs(iph->tot_len) > skb->len)  /* Total length must not exceed skb length */
+    if (ntohs(iph->tot_len) > skb->len)  /* 总长度不得超过 skb 长度 */
         return NF_ACCEPT;
 
-    /* Additional check: consider extremely large packets suspicious (MTU is typically 1500 bytes) */
-    if (ntohs(iph->tot_len) > 9000) {  /* Jumbo frames are typically max ~9000 bytes */
-        /* Log the suspicious packet but still process it for banning purposes */
+    /* 额外检查：将极大的数据包视为可疑（MTU 通常为 1500 字节） */
+    if (ntohs(iph->tot_len) > 9000) {  /* 巨型帧通常最大约 9000 字节 */
+        /* 记录可疑数据包但仍为封禁目的处理它 */
     }
 
-    /* Check for IP fragmentation - only process unfragmented packets or first fragments */
+    /* 检查 IP 分片 - 仅处理未分片的数据包或第一个分片 */
     if (ntohs(iph->frag_off) & htons(0x2000) || (ntohs(iph->frag_off) & 0x1FFF) != 0) {
-        /* Fragmented packets: cannot inspect payload in kernel space, but log for monitoring */
+        /* 分片数据包：无法在内核空间检查负载，但记录以供监控 */
         fw_pr_warn_ratelimited("Fragmented packet from %pI4 passed through (cannot inspect payload)", &iph->saddr);
         return NF_ACCEPT;
     }
 
     src_ip = iph->saddr;
 
-    /* Validate source IP is not reserved/private for internal use */
+    /* 验证源 IP 不是保留/私有供内部使用 */
     if (unlikely(src_ip == 0 ||                      /* 0.0.0.0 */
                  src_ip == 0xFFFFFFFF ||            /* 255.255.255.255 */
                  (ntohl(src_ip) & 0xFF000000) == 0x7F000000 ||  /* 127.x.x.x */
@@ -1800,25 +1800,25 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
         return NF_ACCEPT;
     }
 
-    /* Additional validation: validate protocol field for common protocols */
+    /* 额外验证：验证常见协议的协议字段 */
     if (iph->protocol != IPPROTO_TCP &&
         iph->protocol != IPPROTO_UDP &&
         iph->protocol != IPPROTO_ICMP) {
-        /* Allow other protocols but log for debugging */
+        /* 允许其他协议但记录以供调试 */
     }
 
     now = jiffies;
 
-    /* FIX: Recheck shutdown status inside RCU lock to prevent race window
-     * Previous check was outside RCU lock, creating a small window that might
-     * access freed memory. Double checking inside the lock ensures safety. */
+    /* 修复：在 RCU 锁内重新检查关闭状态以防止竞态窗口
+     * 之前的检查在 RCU 锁外，创建了一个可能
+     * 访问已释放内存的小窗口。在锁内双重检查确保安全。 */
     if (unlikely(atomic_read(&fw_info.shutting_down)))
         return NF_ACCEPT;
 
-    /* RCU read lock for whitelist and ban table access */
+    /* 白名单和封禁表访问的 RCU 读锁 */
     rcu_read_lock();
 
-    /* FIX: Recheck shutdown status inside RCU lock (double check) */
+    /* 修复：在 RCU 锁内重新检查关闭状态（双重检查） */
     if (unlikely(atomic_read(&fw_info.shutting_down))) {
         rcu_read_unlock();
         return NF_ACCEPT;
@@ -1831,7 +1831,7 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
     {
         int wl_iterations = 0;
         hash_for_each_rcu(fw_info.whitelist_table, bkt, wl_entry, hash) {
-            /* Add max iteration protection to prevent performance collapse */
+            /* 添加最大迭代保护以防止性能崩溃 */
             if (++wl_iterations > MAX_WHITELIST_ENTRIES) {
                 fw_pr_warn_ratelimited("whitelist traversal limit reached, possible misconfiguration");
                 break;
@@ -1848,17 +1848,17 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
         return NF_ACCEPT;
     }
 
-    /* Second check: ban list - only check if not whitelisted */
-    /* FIX P1-6: Pass src_ip directly to hash_for_each_possible_rcu instead of
-     * pre-computing hash, ensuring consistency with hash_add which also uses
-     * the key parameter for hash computation internally. */
+    /* 第二次检查：封禁列表 - 仅在未列入白名单时检查 */
+    /* 修复 P1-6：直接将 src_ip 传递给 hash_for_each_possible_rcu 而不是
+     * 预先计算哈希，确保与 hash_add 的一致性，hash_add 也在内部使用
+     * key 参数进行哈希计算。 */
     hash_for_each_possible_rcu(fw_info.ban_table, entry, hash, src_ip) {
         if (compare_ips(entry->ip, src_ip)) {
             if (time_after(now, entry->unban_time)) {
-                /* Entry exists but expired - treat as not banned */
+                /* 条目存在但已过期 — 视为未封禁 */
                 is_banned = false;
             } else {
-                /* Valid banned entry */
+                /* 有效的封禁条目 */
                 is_banned = true;
             }
             break;
@@ -1883,7 +1883,7 @@ static struct nf_hook_ops nf_ops_ipv4 __read_mostly = {
     .priority = NF_IP_PRI_FILTER - 1,
 };
 
-/* State persistence functions */
+/* 状态持久化函数 */
 int save_state_to_file(const char *filename)
 {
     struct file *file;
@@ -1892,7 +1892,7 @@ int save_state_to_file(const char *filename)
     int written;
     int err;
 
-    /* Temporary storage structure - collect data inside RCU lock, perform I/O operations outside */
+    /* 临时存储结构 - 在 RCU 锁内收集数据，在锁外执行 I/O 操作 */
     struct saved_ban_entry {
         char ip_str[INET_ADDRSTRLEN];
         __be32 ipv4;
@@ -1907,7 +1907,7 @@ int save_state_to_file(const char *filename)
         char device_name[16];
     };
 
-    /* Limit save count to avoid large allocations */
+    /* 限制保存数量以避免大分配 */
     #define MAX_SAVE_BAN 1024
     #define MAX_SAVE_WL 64
 
@@ -1918,7 +1918,7 @@ int save_state_to_file(const char *filename)
     struct ban_entry *entry;
     struct whitelist_entry *wl_entry;
     u32 hash;
-    /* Variables for TOCTOU protection - declared at function scope */
+    /* TOCTOU 保护的变量 - 在函数作用域声明 */
     dev_t saved_dev = 0;
     ino_t saved_ino = 0;
     bool file_checked = false;
@@ -1928,7 +1928,7 @@ int save_state_to_file(const char *filename)
         return -EINVAL;
     }
 
-    /* Security validation: Check for directory traversal in filename */
+    /* 安全验证：检查文件名中的目录遍历 */
     /* 检查 URL 编码的路径遍历尝试 */
     if (strstr(filename, "%2e") || strstr(filename, "%2E") ||
         strstr(filename, "%2f") || strstr(filename, "%2F")) {
@@ -1978,24 +1978,24 @@ int save_state_to_file(const char *filename)
         }
     }
 
-    /* Security validation: Ensure the filename starts with a safe path */
+    /* 安全验证：确保文件名以安全路径开头 */
     if (strncmp(filename, "/var/lib/", 9) != 0 &&
         strncmp(filename, "/tmp/", 5) != 0 &&
         strncmp(filename, "/etc/", 5) != 0) {
         fw_pr_warn("State file path outside allowed directories: %s", filename);
-        /* Only allow saving to safe directories */
+        /* 仅允许保存到安全目录 */
         if (strchr(filename, '/') && filename[0] != '/') {
             fw_pr_err("Relative path not allowed for state file: %s", filename);
             return -EINVAL;
         }
     }
 
-    /* Additional security: Check if the file exists and is a symlink */
+    /* 额外安全：检查文件是否存在以及是否为符号链接 */
     struct path path;
     unsigned int lookup_flags = LOOKUP_FOLLOW;
     err = kern_path(filename, lookup_flags, &path);
     if (!err) {
-        /* File exists - get its attributes */
+        /* 文件存在 - 获取其属性 */
         struct kstat stat_buf2;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
         int getattr_err = vfs_getattr(&path, &stat_buf2, STATX_BASIC_STATS, AT_STATX_SYNC_AS_STAT);
@@ -2006,30 +2006,30 @@ int save_state_to_file(const char *filename)
             fw_pr_warn_ratelimited("Cannot stat file %s, proceeding anyway", filename);
             goto out_path_put;
         }
-        /* Check if it's a symbolic link */
+        /* 检查是否为符号链接 */
         if (S_ISLNK(stat_buf2.mode)) {
             fw_pr_err("Refusing to write to symbolic link: %s", filename);
             err = -EACCES;
             goto out_path_put;
         }
-        /* Check if it's a directory */
+        /* 检查是否为目录 */
         if (S_ISDIR(stat_buf2.mode)) {
             fw_pr_err("Refusing to write to directory: %s", filename);
             err = -EISDIR;
             goto out_path_put;
         }
-        /* Store inode/dev for consistency check later - assign to outer scope vars */
+        /* 存储 inode/dev 以供稍后一致性检查 - 分配给外部作用域变量 */
         saved_dev = stat_buf2.dev;
         saved_ino = stat_buf2.ino;
         file_checked = true;
 out_path_put:
         path_put(&path);
     } else {
-        /* File doesn't exist, which is fine for creation */
+        /* 文件不存在，这对于创建来说没问题 */
         err = 0;
     }
 
-    /* Phase 1: Allocate temporary array (GFP_KERNEL can sleep, safe) */
+    /* 阶段 1：分配临时数组（GFP_KERNEL 可以睡眠，安全） */
     ban_entries = kmalloc_array(MAX_SAVE_BAN, sizeof(struct saved_ban_entry), GFP_KERNEL);
     if (!ban_entries) {
         fw_pr_err("Failed to allocate memory for saving ban entries");
@@ -2043,17 +2043,17 @@ out_path_put:
         return -ENOMEM;
     }
 
-    /* Phase 2: Collect ban entries inside RCU lock */
+    /* 阶段 2：在 RCU 锁内收集封禁条目 */
     rcu_read_lock();
     hash_for_each_rcu(fw_info.ban_table, hash, entry, hash) {
         unsigned long remaining_time;
         if (entry->is_permanent) {
-            /* Permanent ban marked with 0 */
+            /* 永久封禁标记为 0 */
             remaining_time = 0;
         } else if (time_after(entry->unban_time, jiffies)) {
             remaining_time = (entry->unban_time - jiffies) / HZ;
         } else {
-            continue; /* Expired, skip */
+            continue; /* 已过期，跳过 */
         }
         if (ban_count < MAX_SAVE_BAN) {
             ipv4_to_str(entry->ip, ban_entries[ban_count].ip_str, sizeof(ban_entries[ban_count].ip_str));
@@ -2064,7 +2064,7 @@ out_path_put:
     }
     rcu_read_unlock();
 
-    /* Phase 3: Collect whitelist entries inside RCU lock */
+    /* 阶段 3：在 RCU 锁内收集白名单条目 */
     rcu_read_lock();
     hash_for_each_rcu(fw_info.whitelist_table, hash, wl_entry, hash) {
         if (wl_count < MAX_SAVE_WL) {
@@ -2079,7 +2079,7 @@ out_path_put:
     }
     rcu_read_unlock();
 
-    /* Phase 4: Open file outside lock (use O_NOFOLLOW to prevent symlink attacks) */
+    /* 阶段 4：在锁外打开文件（使用 O_NOFOLLOW 防止符号链接攻击） */
     file = filp_open(filename, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW, 0600);
     if (IS_ERR(file)) {
         fw_pr_err("Failed to open file for saving state: %s", filename);
@@ -2088,7 +2088,7 @@ out_path_put:
         return PTR_ERR(file);
     }
 
-    /* Inode consistency check: verify opened file matches the one we checked */
+    /* inode 一致性检查：验证打开的文件与我们检查的文件匹配 */
     {
         struct kstat open_stat;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
@@ -2107,7 +2107,7 @@ out_path_put:
         }
     }
 
-    /* Phase 5: Write ban entries outside lock */
+    /* 阶段 5：在锁外写入封禁条目 */
     for (int i = 0; i < ban_count; i++) {
         written = snprintf(buffer, sizeof(buffer), "BAN_V4 %s %lu\n",
                          ban_entries[i].ip_str, ban_entries[i].remaining_time);
@@ -2121,7 +2121,7 @@ out_path_put:
         }
     }
 
-    /* Phase 6: Write whitelist entries outside lock */
+    /* 阶段 6：在锁外写入白名单条目 */
     for (int i = 0; i < wl_count; i++) {
         written = snprintf(buffer, sizeof(buffer), "WL_V4 %s %d %s\n",
                           wl_entries[i].ip_str, wl_entries[i].prefix_len, wl_entries[i].device_name);
@@ -2135,10 +2135,10 @@ out_path_put:
         }
     }
 
-    /* Phase 7: Close file outside lock */
+    /* 阶段 7：在锁外关闭文件 */
     filp_close(file, NULL);
 
-    /* Phase 8: Free temporary array */
+    /* 阶段 8：释放临时数组 */
     kfree(ban_entries);
     kfree(wl_entries);
 
@@ -2159,20 +2159,20 @@ int restore_state_from_file(const char *filename)
         return -EINVAL;
     }
 
-    /* Security: Reject symlinks and validate path */
+    /* 安全：拒绝符号链接并验证路径 */
     if (strstr(filename, "..") != NULL) {
         fw_pr_err("State restore: path traversal attempt rejected: %s", filename);
         return -EINVAL;
     }
 
-    /* Allocate buffer on heap to avoid large stack frame */
+    /* 在堆上分配缓冲区以避免大栈帧 */
     buffer = kmalloc(PAGE_SIZE, GFP_KERNEL);
     if (!buffer) {
         fw_pr_err("Failed to allocate buffer for state restore");
         return -ENOMEM;
     }
 
-    /* Open file for reading with O_NOFOLLOW to prevent symlink attacks */
+    /* 以只读方式打开文件，使用 O_NOFOLLOW 防止符号链接攻击 */
     file = filp_open(filename, O_RDONLY | O_NOFOLLOW, 0);
     if (IS_ERR(file)) {
         if (PTR_ERR(file) == -ELOOP) {
@@ -2181,10 +2181,10 @@ int restore_state_from_file(const char *filename)
             fw_pr_info("State file does not exist: %s", filename);
         }
         kfree(buffer);
-        return 0; /* Not an error, just no saved state to restore */
+        return 0; /* 不是错误，只是没有要恢复的保存状态 */
     }
 
-    /* Security: Verify file is a regular file (not device, socket, etc.) */
+    /* 安全：验证文件是普通文件（不是设备、套接字等） */
     {
         struct kstat stat;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
@@ -2200,16 +2200,16 @@ int restore_state_from_file(const char *filename)
         }
     }
 
-    /* Read entire file into buffer */
+    /* 将整个文件读入缓冲区 */
     bytes_read = kernel_read(file, buffer, PAGE_SIZE - 1, &pos);
     if (bytes_read > 0) {
         buffer[bytes_read] = '\0';
 
         line = buffer;
         while ((token = strsep(&line, "\n")) != NULL) {
-            if (*token == '\0') continue; /* Skip empty lines */
+            if (*token == '\0') continue; /* 跳过空行 */
 
-            /* Parse the line */
+            /* 解析行 */
             char *cmd = strsep(&token, " ");
             if (!cmd) continue;
 
@@ -2220,7 +2220,7 @@ int restore_state_from_file(const char *filename)
                 if (ip_str && time_str) {
                     __be32 ip;
                     if (in4_pton(ip_str, -1, (u8 *)&ip, -1, NULL)) {
-                        /* Check if IP is whitelisted before restoring ban */
+                        /* 在恢复封禁之前检查 IP 是否在白名单中 */
                         if (is_in_whitelist(&fw_info, ip)) {
                             fw_pr_info("Skipping restored ban for whitelisted IP %s", ip_str);
                             continue;
@@ -2233,7 +2233,7 @@ int restore_state_from_file(const char *filename)
                             unsigned long unban_time = 0;
 
                             if (remaining_time == 0) {
-                                /* remaining_time == 0 indicates permanent ban */
+                                /* remaining_time == 0 表示永久封禁 */
                                 is_permanent = true;
                                 unban_time = 0;
                             } else if (remaining_time > 365UL * 24 * 60 * 60) {
@@ -2241,7 +2241,7 @@ int restore_state_from_file(const char *filename)
                                 continue;
                             } else {
                                 is_permanent = false;
-                                /* FIX C4: Check integer overflow: remaining_time * HZ must not overflow */
+                                /* 修复 C4：检查整数溢出：remaining_time * HZ 不得溢出 */
                                 if (remaining_time > (ULONG_MAX / HZ)) {
                                     fw_pr_warn("Skipping ban - remaining_time * HZ would overflow");
                                     continue;
@@ -2249,9 +2249,9 @@ int restore_state_from_file(const char *filename)
 
                                 unsigned long ban_duration = remaining_time * HZ;
 
-                                /* FIX C4: Check if jiffies + ban_duration will overflow wraparound */
+                                /* 修复 C4：检查 jiffies + ban_duration 是否会溢出回绕 */
                                 if (jiffies > ULONG_MAX - ban_duration) {
-                                    /* Jiffies about to wraparound, use maximum safe value */
+                                    /* Jiffies 即将回绕，使用最大安全值 */
                                     unban_time = jiffies + min(ban_duration, ULONG_MAX - jiffies);
                                     fw_pr_warn("Jiffies wrap protection applied for ban restoration");
                                 } else {
@@ -2259,7 +2259,7 @@ int restore_state_from_file(const char *filename)
                                 }
                             }
 
-                            /* Add ban entry with calculated unban time */
+                            /* 使用计算的解封时间添加封禁条目 */
                             entry = kmalloc(sizeof(*entry), GFP_KERNEL);
                             if (!entry) {
                                 fw_pr_err("Failed to allocate memory for restored ban entry");
@@ -2294,13 +2294,13 @@ int restore_state_from_file(const char *filename)
                     int prefix_len;
 
                     if (kstrtoint(mask_str, 10, &prefix_len) == 0) {
-                        /* Calculate network mask based on prefix length */
+                        /* 根据前缀长度计算网络掩码 */
                         mask = prefix_len == 0 ? 0 : htonl(~((1U << (32 - prefix_len)) - 1));
 
                         if (in4_pton(ip_str, -1, (u8 *)&ip, -1, NULL)) {
                             __be32 normalized_ip = ip & mask;
 
-                            /* Add whitelist entry */
+                            /* 添加白名单条目 */
                             int result = add_whitelist_entry(&fw_info, normalized_ip, mask,
                                                                 dev_name ? dev_name : "restored");
                             if (result == 0) {
@@ -2320,7 +2320,7 @@ int restore_state_from_file(const char *filename)
 }
 
 /*
- * firewall_init - Module initialization
+ * firewall_init - 模块初始化
  */
 static int __init firewall_init(void)
 {
@@ -2328,14 +2328,14 @@ static int __init firewall_init(void)
 
     fw_pr_info("Loading firewall module v1.9");
 
-    /* Parameter lower bound check - prevent 0 or too small values causing abnormal behavior */
-    /* FIX P1-5: Use READ_ONCE for atomic access to module parameters */
+    /* 参数下限检查 - 防止 0 或太小的值导致异常行为 */
+    /* 修复 P1-5：使用 READ_ONCE 原子访问模块参数 */
     if (READ_ONCE(fw_ban_time) < 1) {
         fw_pr_err("fw_ban_time must be >= 1");
         return -EINVAL;
     }
 
-    /* Parameter upper bound check - prevent large values causing integer overflow */
+    /* 参数上限检查 - 防止大值导致整数溢出 */
     if (READ_ONCE(fw_ban_time) > 365 * 24 * 60 * 60) {  /* 1 year max */
         fw_pr_err("fw_ban_time too large (max 1 year)");
         return -EINVAL;
@@ -2354,7 +2354,7 @@ static int __init firewall_init(void)
     hash_init(fw_info.whitelist_table);
     atomic_set(&fw_info.whitelist_count, 0);
 
-    /* Initialize statistics counters */
+    /* 初始化统计计数器 */
     atomic_set(&fw_info.total_ban_count, 0);
     atomic_set(&fw_info.total_unban_count, 0);
     atomic_set(&fw_info.whitelist_reject_count, 0);
@@ -2365,7 +2365,7 @@ static int __init firewall_init(void)
     atomic_set(&fw_info.cleanup_cycles, 0);
     atomic_set(&fw_info.cleanup_expired_total, 0);
 
-    /* Restore state from file if available */
+    /* 如果可用，从文件恢复状态 */
     if (state_file && strlen(state_file) > 0) {
         restore_state_from_file(state_file);
     }
@@ -2373,8 +2373,8 @@ static int __init firewall_init(void)
     auto_discover_system_ips(&fw_info);
 
     timer_setup(&fw_info.cleanup_timer, cleanup_timer_callback, 0);
-    fw_info.timer_initialized = true;  /* Mark timer as initialized */
-    /* FIX P1-5: Use READ_ONCE for atomic access to fw_ban_time */
+    fw_info.timer_initialized = true;  /* 标记定时器已初始化 */
+    /* 修复 P1-5：使用 READ_ONCE 原子访问 fw_ban_time */
     mod_timer(&fw_info.cleanup_timer, jiffies + ((unsigned long)READ_ONCE(fw_ban_time) * HZ) / 2);
 
     ret = create_procfs_entries(&fw_info);
@@ -2398,7 +2398,7 @@ err_timer:
 }
 
 /*
- * firewall_exit - Module cleanup
+ * firewall_exit - 模块清理
  */
 static void __exit firewall_exit(void)
 {
@@ -2410,45 +2410,45 @@ static void __exit firewall_exit(void)
 
     fw_pr_info("Unloading firewall module");
 
-    /* FIX C5: Set shutdown flag to prevent new operations */
+    /* 修复 C5：设置关闭标志以防止新操作 */
     atomic_set(&fw_info.shutting_down, 1);
 
-    /* FIX C5: 1. Unregister netfilter hooks first to prevent new packets from entering */
+    /* 修复 C5：1. 先注销 netfilter 钩子以防止新数据包进入 */
     nf_unregister_net_hook(&init_net, &nf_ops_ipv4);
 
-    /* FIX C5: 2. Stop timer */
+    /* 修复 C5：2. 停止定时器 */
     if (fw_info.timer_initialized) {
         timer_delete_sync(&fw_info.cleanup_timer);
         fw_info.timer_initialized = false;
     }
 
-    /* FIX C5: 3. Destroy procfs entries to prevent userspace operations */
+    /* 修复 C5：3. 销毁 procfs 条目以防止用户空间操作 */
     destroy_procfs_entries(&fw_info);
 
-    /* FIX C5: 4. Wait for all RCU readers to exit */
+    /* 修复 C5：4. 等待所有 RCU 读者退出 */
     synchronize_rcu();
 
-    /* FIX C5: 5. Now safely save state (no concurrent access) */
+    /* 修复 C5：5. 现在可以安全保存状态（无并发访问） */
     if (state_file && strlen(state_file) > 0) {
         save_state_to_file(state_file);
     }
 
-    /* Now it's safe to free all entries since no RCU readers can be accessing them */
-    /* Free all ban entries */
+    /* 现在可以安全地释放所有条目，因为没有 RCU 读者可以访问它们 */
+    /* 释放所有封禁条目 */
     hash_for_each_safe(fw_info.ban_table, ban_hash, tmp, entry, hash) {
         hash_del(&entry->hash);
-        kfree(entry);  /* Directly free since no RCU readers can access after synchronize_rcu() */
+        kfree(entry);  /* 直接释放，因为 synchronize_rcu() 后没有 RCU 读者可以访问 */
     }
 
-    /* Free all whitelist entries */
+    /* 释放所有白名单条目 */
     hash_for_each_safe(fw_info.whitelist_table, wl_hash, tmp, wl, hash) {
         hash_del(&wl->hash);
-        kfree(wl);  /* Directly free since no RCU readers can access after synchronize_rcu() */
+        kfree(wl);  /* 直接释放，因为 synchronize_rcu() 后没有 RCU 读者可以访问 */
     }
 
-    /* NOTE: ban_table and whitelist_table are statically allocated via DECLARE_HASHTABLE
-     * embedded in struct firewall_info. They are NOT dynamically allocated with kmalloc,
-     * so we must NOT call kfree on them. Doing so would cause a kernel OOPS/crash. */
+    /* 注意：ban_table 和 whitelist_table 是通过 DECLARE_HASHTABLE 静态分配的
+     * 嵌入在 struct firewall_info 中。它们不是用 kmalloc 动态分配的，
+     * 所以我们绝对不能对它们调用 kfree。这样做会导致内核 OOPS/崩溃。 */
 
     fw_pr_info("Module unloaded");
 }

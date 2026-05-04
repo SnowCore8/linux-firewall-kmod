@@ -400,7 +400,7 @@ void process_new_lines(int idx)
         goto cleanup_restore_partial;
     }
 
-    /* Update offset */
+    /* 更新偏移量 */
     file_states[idx].offset = current_offset;
 
 cleanup_restore_partial:
@@ -571,13 +571,13 @@ void monitor_loop(void)
                     daemon_log_info("Reloading config directory: %s", cfg.config_dir);
                     if (load_config_directory(cfg.config_dir) < 0) {
                         daemon_log_warn("Failed to reload config directory, keeping old config");
-                        /* Restore jail count since reload failed */
+                        /* 重载失败，保留 jail 数量 */
                     } else {
                         reload_ok = 1;
                         daemon_log_info("Config directory reloaded successfully");
                     }
                 } else if (cfg.config_file) {
-                    /* Single file mode: reload single file */
+                    /* 单文件模式：重载单个文件 */
                     if (parse_config_file(cfg.config_file) < 0) {
                         daemon_log_err("Failed to reload configuration from %s", cfg.config_file);
                     } else {
@@ -589,16 +589,16 @@ void monitor_loop(void)
                 }
 
                 if (reload_ok) {
-                    /* Re-setup inotify watches after config reload */
+                    /* 配置重载后重新设置 inotify 监控 */
                     if (inotify_fd >= 0) {
-                        /* Remove old watches - iterate through all possible file states */
+                        /* 移除旧监控 - 遍历所有可能的文件状态 */
                         int max_states = MAX_JAILS * MAX_LOG_FILES;
                         for (int i = 0; i < max_states; i++) {
                             if (file_states[i].wd >= 0) {
                                 inotify_rm_watch(inotify_fd, file_states[i].wd);
                                 file_states[i].wd = -1;
                             }
-                            /* Reset file state */
+                            /* 重置文件状态 */
                             file_states[i].offset = 0;
                             file_states[i].inode = 0;
                             file_states[i].path[0] = '\0';
@@ -608,13 +608,13 @@ void monitor_loop(void)
                         inotify_fd = -1;
                     }
 
-                    /* Re-setup inotify */
+                    /* 重新设置 inotify */
                     if (setup_inotify() < 0) {
                         daemon_log_err("Failed to re-setup inotify after config reload");
-                        running = 0;  /* Safe exit */
+                        running = 0;  /* 安全退出 */
                     }
 
-                    /* Check changes and output logs */
+                    /* 检查变更并输出日志 */
                     pthread_mutex_lock(&config_mutex);
                     if (old_max_retries != cfg.default_max_retries) {
                         daemon_log_info("default_max_retries changed from %u to %u", old_max_retries, cfg.default_max_retries);
@@ -637,10 +637,10 @@ void monitor_loop(void)
             continue;
         }
 
-        /* Check if we should exit before processing events */
+        /* 处理事件前检查是否应退出 */
         if (!running) break;
 
-        /* Read inotify events */
+        /* 读取 inotify 事件 */
         ssize_t len = read(inotify_fd, buffer, EVENT_BUF_LEN);
         if (len < 0) {
             if (errno != EAGAIN) {
@@ -653,55 +653,55 @@ void monitor_loop(void)
             atomic_fetch_add(&daemon_stats.inotify_events, 1);
         }
 
-        /* Process events */
+        /* 处理事件 */
         size_t i = 0;
         while (i < (size_t)len) {
             struct inotify_event *event = (struct inotify_event *)&buffer[i];
 
-            /* Validate event structure size and prevent integer overflow */
+            /* 验证事件结构大小并防止整数溢出 */
             if (sizeof(struct inotify_event) > (size_t)len - i) {
                 daemon_log_err("Invalid inotify event structure size");
                 break;
             }
 
-            /* Additional boundary check: ensure event->len is within reasonable bounds */
+            /* 额外边界检查：确保 event->len 在合理范围内 */
             if (event->len > EVENT_BUF_LEN) {
                 daemon_log_warn("inotify event length too large, skipping (len=%u, max=%d)", event->len, (int)EVENT_BUF_LEN);
                 break;
             }
 
-            /* Verify event->len doesn't cause buffer overflow */
+            /* 验证 event->len 不会导致缓冲区溢出 */
             if (sizeof(struct inotify_event) + event->len > (size_t)(len - i)) {
                 daemon_log_warn("inotify event too large for remaining buffer, skipping");
                 break;
             }
 
-            /* Additional safety check: ensure we don't have an unexpectedly large event length */
-            if (event->len > 1024) {  /* Most inotify events have small names */
+            /* 额外安全检查：确保我们不会有意外的大的事件长度 */
+            if (event->len > 1024) {  /* 大多数 inotify 事件名称较小 */
                 daemon_log_warn("Suspiciously large inotify event length, skipping (len=%u)", event->len);
-                /* Calculate next position safely even with large event->len */
+                /* 即使 event->len 很大也安全计算下一个位置 */
                 size_t next_pos = i + sizeof(struct inotify_event) + event->len;
-                if (next_pos < i) {  // Overflow check
+                if (next_pos < i) {  // 溢出检查
                     daemon_log_err("Integer overflow detected in inotify processing");
                     break;
                 }
                 i = next_pos;
-                continue;  // Skip processing this suspicious event but continue with others
+                continue;  // 跳过处理此可疑事件但继续处理其他事件
             }
 
             if (event->mask & (IN_MODIFY | IN_MOVED_TO)) {
-                /* File was modified or created - find matching file */
+                /* 文件被修改或创建 - 查找匹配的文件 */
                 pthread_mutex_lock(&config_mutex);
                 int max_states = MAX_JAILS * MAX_LOG_FILES;
                 for (int j = 0; j < max_states; j++) {
                     if (file_states[j].wd >= 0 && event->wd == file_states[j].wd) {
-                        /* Check if file was rotated */
+                        /* 检查文件是否被轮转 */
                         if (event->mask & (IN_MOVED_TO | IN_CREATE)) {
                             pthread_mutex_unlock(&config_mutex);
                             handle_log_rotation(j);
                             pthread_mutex_lock(&config_mutex);
                         }
-                        /* Process new lines */
+                        /* 处理新行 */
                         pthread_mutex_unlock(&config_mutex);
                         process_new_lines(j);
                         pthread_mutex_lock(&config_mutex);
@@ -710,7 +710,7 @@ void monitor_loop(void)
                 }
                 pthread_mutex_unlock(&config_mutex);
             } else if (event->mask & (IN_MOVED_FROM | IN_DELETE)) {
-                /* File was moved or deleted - mark for rotation handling */
+                /* 文件被移动或删除 - 标记为轮转处理 */
                 pthread_mutex_lock(&config_mutex);
                 int max_states = MAX_JAILS * MAX_LOG_FILES;
                 for (int j = 0; j < max_states; j++) {
@@ -723,19 +723,19 @@ void monitor_loop(void)
                 pthread_mutex_unlock(&config_mutex);
             }
 
-            /* Advance position with overflow check */
+            /* 推进位置并进行溢出检查 */
             size_t next_pos = i + sizeof(struct inotify_event) + event->len;
-            if (next_pos < i) {  // Overflow check
+            if (next_pos < i) {  // 溢出检查
                 daemon_log_err("Integer overflow detected in inotify processing");
                 break;
             }
             i = next_pos;
 
-            /* Check if we should exit during event processing */
+            /* 事件处理期间检查是否应退出 */
             if (!running) break;
         }
 
-        /* Check if we should exit after processing events */
+        /* 事件处理后检查是否应退出 */
         if (!running) break;
     }
 }

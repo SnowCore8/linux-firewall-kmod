@@ -54,7 +54,7 @@ struct failed_entry *create_entry_for_jail(struct jail *j, const char *ip)
     if (!entry) {
         daemon_log_err("Failed to allocate memory for failed entry");
         free(key_copy);
-        kh_del(ip_map, j->failed_hash, k);  /* Remove empty slot */
+        kh_del(ip_map, j->failed_hash, k);  /* 移除空槽位 */
         return NULL;
     }
     
