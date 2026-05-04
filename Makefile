@@ -136,22 +136,10 @@ clean:
 	rm -rf $(BUILD_DIR)
 	@echo "Build directory cleaned."
 
-# Install target - install everything (FHS compliant)
-install: $(KERNEL_MODULE) $(DAEMON_BIN)
-	@echo "Installing firewall components..."
-	# Kernel module (third-party out-of-tree module goes to extra/)
-	install -D -m 644 $(KERNEL_MODULE) $(DESTDIR)$(KERNEL_MODDIR)/firewall.ko
-	depmod -a
-	# Daemon (system service goes to sbin/)
-	install -D -m 755 $(DAEMON_BIN) $(DESTDIR)$(SBINDIR)/firewall-daemon
-	# State directory for SQLite database and runtime data (root only)
-	install -d -m 700 -o root -g root $(DESTDIR)$(RUNSTATEDIR)/firewall
-	# Configuration files (root only, more secure)
-	install -d -m 700 -o root -g root $(DESTDIR)$(FIREWALLETC)
-	install -m 600 -o root -g root config/*.yaml $(DESTDIR)$(FIREWALLETC)/
-	# systemd service file
-	install -D -m 644 firewall-daemon.service $(DESTDIR)/etc/systemd/system/firewall-daemon.service
-	-systemctl daemon-reload 2>/dev/null || true
+# ============================================================================
+# 安装目标 - 安装所有组件 (FHS compliant)
+# ============================================================================
+install: install-kernel-module install-daemon install-config install-state install-systemd
 	@echo ""
 	@echo "Installation complete!"
 	@echo "  Kernel module: $(KERNEL_MODDIR)/firewall.ko"
@@ -161,83 +149,102 @@ install: $(KERNEL_MODULE) $(DAEMON_BIN)
 	@echo "To start daemon at boot:"
 	@echo "  systemctl enable firewall-daemon.service"
 
-# Uninstall target - remove everything
-uninstall: uninstall-files uninstall-systemd uninstall-config uninstall-state-logs uninstall-procfs uninstall-kernel
+# 安装内核模块
+install-kernel-module: $(KERNEL_MODULE)
+	@echo "Installing kernel module..."
+	install -D -m 644 $(KERNEL_MODULE) $(DESTDIR)$(KERNEL_MODDIR)/firewall.ko
+	depmod -a
+	@echo "  ✓ Kernel module installed"
+
+# 安装守护进程
+install-daemon: $(DAEMON_BIN)
+	@echo "Installing daemon..."
+	install -D -m 755 $(DAEMON_BIN) $(DESTDIR)$(SBINDIR)/firewall-daemon
+	@echo "  ✓ Daemon installed"
+
+# 安装配置文件
+install-config:
+	@echo "Installing configuration files..."
+	install -d -m 700 -o root -g root $(DESTDIR)$(FIREWALLETC)
+	install -m 600 -o root -g root config/*.yaml $(DESTDIR)$(FIREWALLETC)/
+	@echo "  ✓ Configuration files installed"
+
+# 安装状态目录
+install-state:
+	@echo "Creating state directory..."
+	install -d -m 700 -o root -g root $(DESTDIR)$(RUNSTATEDIR)/firewall
+	@echo "  ✓ State directory created"
+
+# 安装 systemd 服务
+install-systemd:
+	@echo "Installing systemd service..."
+	install -D -m 644 firewall-daemon.service $(DESTDIR)/etc/systemd/system/firewall-daemon.service
+	-systemctl daemon-reload 2>/dev/null || true
+	@echo "  ✓ Systemd service installed"
+
+# ============================================================================
+# 卸载目标 - 删除所有组件
+# ============================================================================
+uninstall: uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel
 	@echo ""
 	@echo "=========================================="
 	@echo "Firewall uninstallation complete!"
 	@echo "=========================================="
 	@echo "  ✓ Daemon stopped and removed"
 	@echo "  ✓ Systemd service disabled and removed"
+	@echo "  ✓ Binary files removed"
 	@echo "  ✓ Configuration directory removed"
-	@echo "  ✓ State directory and logs removed"
-	@echo "  ✓ Procfs interfaces cleaned"
+	@echo "  ✓ State directory removed"
 	@echo "  ✓ Kernel module removed"
 	@echo ""
 	@echo "Note: Some system logs (e.g., /var/log/auth.log) may still contain firewall activity records."
 	@echo "Note: SQLite database backups, if any, should be manually removed."
 
-# Uninstall runtime files (stop services, remove PID/lock files)
+# 停止守护进程
+uninstall-stop:
+	@echo "Stopping daemon..."
+	-systemctl stop firewall-daemon 2>/dev/null || true
+	-killall -9 firewall-daemon 2>/dev/null || true
+	@echo "  ✓ Daemon stopped"
+
+# 卸载 systemd 服务
+uninstall-systemd:
+	@echo "Removing systemd service..."
+	-systemctl disable firewall-daemon 2>/dev/null || true
+	rm -f /etc/systemd/system/firewall-daemon.service
+	-systemctl daemon-reload 2>/dev/null || true
+	@echo "  ✓ Systemd service removed"
+
+# 删除二进制文件
 uninstall-files:
-	echo "Removing runtime files..."
-	systemctl stop firewall-daemon >/dev/null 2>&1 || true
-	# 使用 ps 检查并 kill 进程，避免 pkill 阻塞
-	if ps aux | grep -q "[f]irewall-daemon"; then \
-		killall -9 firewall-daemon 2>/dev/null || true; \
-		ps aux | grep -v grep | grep [f]irewall-daemon | awk '{print $$2}' | xargs -r kill -9 2>/dev/null || true; \
-	fi
+	@echo "Removing binary files..."
+	rm -f $(DESTDIR)$(SBINDIR)/firewall-daemon
 	rm -f /run/firewall-daemon.pid
 	rm -f /var/run/firewall-daemon.pid
 	rm -rf /run/firewall
 	rm -rf /var/run/firewall
-	# 删除守护进程二进制文件
-	rm -f $(DESTDIR)$(SBINDIR)/firewall-daemon
-	echo "  ✓ PID, lock files and daemon binary cleaned"
+	@echo "  ✓ Binary files removed"
 
-# Uninstall systemd service
-uninstall-systemd:
-	echo "Removing systemd service..."
-	systemctl stop firewall-daemon 2>/dev/null || true
-	systemctl disable firewall-daemon 2>/dev/null || true
-	rm -f /etc/systemd/system/firewall-daemon.service
-	-systemctl daemon-reload 2>/dev/null || true
-	echo "  ✓ Service stopped, disabled and removed"
-
-# Uninstall configuration directory
+# 删除配置目录
 uninstall-config:
-	echo "Removing configuration directory..."
-	rm -rf $(FIREWALLETC)
-	echo "  ✓ Configuration directory removed"
+	@echo "Removing configuration directory..."
+	rm -rf $(DESTDIR)$(FIREWALLETC)
+	@echo "  ✓ Configuration directory removed"
 
-# Uninstall state and logs directory
-uninstall-state-logs:
-	echo "Removing state and log directories..."
-	rm -rf $(RUNSTATEDIR)/firewall
-	rm -f $(RUNSTATEDIR)/firewall/*.db
-	rm -f $(RUNSTATEDIR)/firewall/*.db-journal
-	rm -rf $(LOGDIR)/firewall
-	find /var/log -name "firewall-*" -type f -delete 2>/dev/null || true
-	echo "  ✓ State directory and logs removed"
+# 删除状态目录
+uninstall-state:
+	@echo "Removing state directory..."
+	rm -rf $(DESTDIR)$(RUNSTATEDIR)/firewall
+	@echo "  ✓ State directory removed"
 
-# Uninstall procfs interfaces
-uninstall-procfs:
-	echo "Cleaning procfs interfaces..."
-	# 使用 ps 检查并 kill 进程，避免 pkill 阻塞
-	if ps aux | grep -q "[f]irewall-daemon"; then \
-		killall -9 firewall-daemon 2>/dev/null || true; \
-		ps aux | grep -v grep | grep [f]irewall-daemon | awk '{print $$2}' | xargs -r kill -9 2>/dev/null || true; \
-	fi
-	rm -rf /proc/firewall
-	echo "  ✓ Procfs interfaces cleaned"
-
-# Uninstall kernel module
+# 卸载内核模块
 uninstall-kernel:
-	echo "Removing kernel module..."
-	rmmod firewall 2>/dev/null || true
-	rm -f $(KERNEL_MODDIR)/firewall.ko
-	rm -f $(KERNEL_MODDIR)/modules.order
-	rm -f $(KERNEL_MODDIR)/Module.symvers
-	depmod -a
-	echo "  ✓ Kernel module and dependencies removed"
+	@echo "Removing kernel module..."
+	-rmmod firewall 2>/dev/null || true
+	rm -f $(DESTDIR)$(KERNEL_MODDIR)/firewall.ko
+	rm -f $(DESTDIR)$(KERNEL_MODDIR)/modules.order
+	rm -f $(DESTDIR)$(KERNEL_MODDIR)/Module.symvers
+	-depmod -a 2>/dev/null || true
+	@echo "  ✓ Kernel module removed"
 
-.PHONY: kernel-module daemon all debug1 debug2 debug3 asan test test-legacy test-performance clean install uninstall uninstall-files uninstall-systemd uninstall-config uninstall-state-logs uninstall-procfs uninstall-kernel
+.PHONY: kernel-module daemon all debug1 debug2 debug3 asan test test-legacy test-performance clean install install-kernel-module install-daemon install-config install-state install-systemd uninstall uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel
