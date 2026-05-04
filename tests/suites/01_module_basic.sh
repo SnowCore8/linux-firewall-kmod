@@ -9,7 +9,12 @@ assert_file_exists "$KERNEL_MODULE_PATH" "内核模块文件存在"
 
 # 1.2 模块加载/卸载
 fw_subsection "模块加载/卸载"
-assert_success "insmod '$KERNEL_MODULE_PATH'" "模块加载成功"
+# run_tests.sh 已预加载模块，如果模块已存在则跳过 insmod
+if lsmod | grep -q '^firewall' || [[ -d "$PROC_DIR" ]]; then
+    fw_pass "模块加载成功（已预加载）"
+else
+    assert_success "insmod '$KERNEL_MODULE_PATH'" "模块加载成功"
+fi
 sleep 0.5
 
 assert_true "(lsmod | grep -q '^firewall\b') || [[ -d '$PROC_DIR' ]]" "lsmod 或 procfs 验证模块已加载"

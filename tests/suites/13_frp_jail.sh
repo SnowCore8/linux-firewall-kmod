@@ -25,8 +25,8 @@ assert_success "timeout 2 '$DAEMON_PATH' -c '$CONFIG_DIR/default.yaml' >/dev/nul
 # 13.5 FRP 日志解析测试
 fw_subsection "FRP 日志解析"
 
-# 创建 FRP 测试日志
-local_frp_test_log="/tmp/fw_test_frp_$$.log"
+# 创建 FRP 测试日志（必须在 /var/log 下以通过路径验证）
+local_frp_test_log="/var/log/fw_test_frp_$$.log"
 cat > "$local_frp_test_log" << 'EOF'
 2026/04/22 10:30:01 [W] [proxy/proxy.go:100] get a user connection [203.0.113.50:12345]
 2026/04/22 10:30:02 [E] [server/control.go:200] invalid token from 198.51.100.100
@@ -34,7 +34,7 @@ cat > "$local_frp_test_log" << 'EOF'
 EOF
 
 # 创建 FRP YAML 配置
-local_frp_yaml="/tmp/fw_frp_yaml_$$.yaml"
+local_frp_yaml="/var/log/fw_frp_yaml_$$.yaml"
 cat > "$local_frp_yaml" << EOF
 defaults:
   max_retries: 1
@@ -77,6 +77,8 @@ rm -f "$local_frp_test_log" "$local_frp_yaml"
 fw_subsection "FRP 配置热重载"
 # 创建临时 FRP 配置
 local_frp_config="/tmp/fw_test_frp_config_$$.yaml"
+# 创建日志文件（守护进程要求日志文件存在才能设置 inotify）
+touch /var/log/fw_test_frps.log
 cat > "$local_frp_config" << 'EOF'
 defaults:
   max_retries: 5
@@ -97,4 +99,4 @@ jails:
 EOF
 
 assert_success "timeout 2 '$DAEMON_PATH' -c '$local_frp_config' >/dev/null 2>&1; rc=\$?; [ \$rc -eq 0 ] || [ \$rc -eq 124 ]" "FRP 独立配置文件加载"
-rm -f "$local_frp_config"
+rm -f "$local_frp_config" /var/log/fw_test_frps.log

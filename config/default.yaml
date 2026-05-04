@@ -23,7 +23,8 @@ jails:
 
   frp:
     enabled: true
-    log_files: /var/log/frp/frp.log
+    log_files:
+      - /var/log/frp/frp.log
     max_retries: 10
     findtime: 300
     ban_time: 1800

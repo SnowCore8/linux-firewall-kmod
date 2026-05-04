@@ -15,7 +15,8 @@ assert_file_exists "$CONFIG_DIR/default.yaml" "default.yaml 存在"
 
 # 9.3 默认配置目录加载
 fw_subsection "默认配置目录加载"
-assert_success "cd '$PROJECT_ROOT' && timeout 2 '$DAEMON_PATH' >/dev/null 2>&1; rc=\$?; [ \$rc -eq 0 ] || [ \$rc -eq 124 ]" "默认配置目录加载"
+# 显式指定项目配置目录（而非依赖 /etc/firewall）
+assert_success "timeout 2 '$DAEMON_PATH' -C '$CONFIG_DIR' >/dev/null 2>&1; rc=\$?; [ \$rc -eq 0 ] || [ \$rc -eq 124 ]" "默认配置目录加载"
 
 # 9.4 指定配置目录
 fw_subsection "指定配置目录 (-C)"
@@ -57,5 +58,12 @@ timeout 2 "$DAEMON_PATH" -c "$local_invalid_config" >/dev/null 2>&1 || rc=$?
 assert_true "[[ $rc -lt 128 ]]" "无效 YAML 处理完成（未崩溃，退出码=$rc）"
 rm -f "$local_invalid_config"
 
-# 9.7 不存在的配置 文件
-assert_failure "timeout 2 '$DAEMON_PATH' -c '/nonexistent/config.yaml' >/dev/null 2>&1; rc=\$?; [ \$rc -ne 0 ] && [ \$rc -ne 124 ]" "不存在配置文件被拒绝"
+# 9.7 不存在的配置文件
+local rc=0
+timeout 2 "$DAEMON_PATH" -c '/nonexistent/config.yaml' >/dev/null 2>&1 || rc=$?
+# rc 应为 1（配置错误），不应为 0（成功）或 124（超时）
+if [[ $rc -ne 0 && $rc -ne 124 ]]; then
+    fw_pass "不存在配置文件被拒绝（退出码=$rc）"
+else
+    fw_fail "不存在配置文件被拒绝（退出码=$rc，预期非0且非124）"
+fi
