@@ -361,10 +361,10 @@ struct jail *find_or_create_jail_in_cfg(const char *name, struct config *target_
     j->regex_pattern = NULL;
     memset(&j->compiled_regex, 0, sizeof(j->compiled_regex));
     j->regex_compiled = 0;
-    /* 初始化为全局 defaults，等待解析完成后应用智能推断 */
-    j->max_retries = target_cfg->default_max_retries;
-    j->findtime = target_cfg->default_findtime;
-    j->ban_time = target_cfg->default_ban_time;
+    /* 注意：max_retries/findtime/ban_time 保持为 0，等待 apply_smart_defaults_to_all() 设置 */
+    j->max_retries = 0;
+    j->findtime = 0;
+    j->ban_time = 0;
     j->_max_retries_set = false;
     j->_findtime_set = false;
     j->_ban_time_set = false;
