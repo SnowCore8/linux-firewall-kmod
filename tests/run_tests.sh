@@ -209,6 +209,7 @@ declare -A SUITE_FILES=(
     ["11_resource_mgmt"]="suites/11_resource_mgmt.sh"
     ["12_permanent_ban"]="suites/12_permanent_ban.sh"
     ["13_frp_jail"]="suites/13_frp_jail.sh"
+    ["14_ban_netfilter"]="suites/14_ban_netfilter.sh"
 )
 
 declare -A SUITE_CATEGORIES=(
@@ -223,6 +224,7 @@ declare -A SUITE_CATEGORIES=(
     ["11_resource_mgmt"]="resource"
     ["12_permanent_ban"]="permanent ban"
     ["13_frp_jail"]="daemon frp"
+    ["14_ban_netfilter"]="ban netfilter security"
 )
 
 # ============================================================================
