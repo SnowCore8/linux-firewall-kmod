@@ -374,9 +374,9 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
 
     /* 使用提供的消息记录日志 */
     if (log_msg && log_arg)
-        fw_pr_info_ratelimited("IP %pI4 %s", &ip, log_msg, log_arg);
+        fw_pr_info_ratelimited("%pI4 %s", &ip, log_msg, log_arg);
     else if (log_msg)
-        fw_pr_info_ratelimited("IP %pI4 %s", &ip, log_msg);
+        fw_pr_info_ratelimited("%pI4 %s", &ip, log_msg);
 
     return 0;
 }
