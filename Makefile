@@ -130,10 +130,6 @@ install: $(KERNEL_MODULE) $(DAEMON_BIN)
 	# Configuration files (root only, more secure)
 	install -d -m 700 -o root -g root $(DESTDIR)$(FIREWALLETC)
 	install -m 600 -o root -g root config/*.yaml $(DESTDIR)$(FIREWALLETC)/
-	# Log directory (FRP logs)
-	install -d -m 755 -o root -g root $(DESTDIR)$(LOGDIR)/frp
-	# PID directory
-	install -d -m 755 -o root -g root $(DESTDIR)/run/firewall
 	# systemd service file
 	install -D -m 644 firewall-daemon.service $(DESTDIR)/etc/systemd/system/firewall-daemon.service
 	-systemctl daemon-reload 2>/dev/null || true
@@ -143,7 +139,6 @@ install: $(KERNEL_MODULE) $(DAEMON_BIN)
 	@echo "  Daemon:        $(SBINDIR)/firewall-daemon"
 	@echo "  Config:        $(FIREWALLETC)/"
 	@echo "  State:         $(RUNSTATEDIR)/firewall/"
-	@echo "  Logs:          $(LOGDIR)/frp/"
 	@echo "To start daemon at boot:"
 	@echo "  systemctl enable firewall-daemon.service"
 
@@ -201,7 +196,6 @@ uninstall-state-logs:
 	rm -rf $(RUNSTATEDIR)/firewall
 	rm -f $(RUNSTATEDIR)/firewall/*.db
 	rm -f $(RUNSTATEDIR)/firewall/*.db-journal
-	rm -rf $(LOGDIR)/frp
 	rm -rf $(LOGDIR)/firewall
 	find /var/log -name "firewall-*" -type f -delete 2>/dev/null || true
 	echo "  ✓ State directory and logs removed"
