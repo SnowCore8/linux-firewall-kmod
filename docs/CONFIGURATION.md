@@ -111,15 +111,31 @@ WARNING: Invalid default max_retries: 999
 
 每个 Jail 代表一个被监控的服务，拥有独立的日志源和封禁策略。
 
+### 智能推断参数
+
+Firewall 会根据 Jail 名称**自动推断最佳参数**，你只需配置 `log_files` 即可开箱即用：
+
+| 服务类型 | 识别关键词 | max_retries | findtime | ban_time |
+|----------|-----------|-------------|----------|----------|
+| **SSH** | `ssh`, `sshd` | 5 | 600s (10分钟) | 900s (15分钟) |
+| **Web** | `nginx`, `apache`, `http` | 10 | 300s (5分钟) | 1800s (30分钟) |
+| **FTP** | `ftp`, `vsftpd`, `proftpd` | 5 | 600s (10分钟) | 1800s (30分钟) |
+| **邮件** | `postfix`, `dovecot`, `mail` | 5 | 300s (5分钟) | 1800s (30分钟) |
+| **FRP** | `frp` | 10 | 300s (5分钟) | 1800s (30分钟) |
+| **数据库** | `mysql`, `mariadb`, `postgres` | 3 | 300s (5分钟) | 3600s (1小时) |
+| **其他** | 未匹配 | 继承 defaults | 继承 defaults | 继承 defaults |
+
+> 用户显式配置的参数会覆盖智能推断值。
+
 ### 参数说明
 
 | 参数 | 类型 | 默认值 | 说明 | 限制 |
 |------|------|--------|------|------|
 | `enabled` | boolean | `true` | 是否启用该 Jail | - |
 | `log_files` | array | `[]` | 要监控的日志文件路径列表 | 最多 10 个文件 |
-| `max_retries` | integer | 继承 defaults | 覆盖全局 max_retries | 1 ~ 100 |
-| `findtime` | integer | 继承 defaults | 覆盖全局 findtime | 1 ~ 3600 |
-| `ban_time` | integer | 继承 defaults | 覆盖全局 ban_time，0=永久 | 0 或 1 ~ 86400 |
+| `max_retries` | integer | 智能推断 | 覆盖默认 max_retries | 1 ~ 100 |
+| `findtime` | integer | 智能推断 | 覆盖默认 findtime | 1 ~ 3600 |
+| `ban_time` | integer | 智能推断 | 覆盖默认 ban_time，0=永久 | 0 或 1 ~ 86400 |
 | `regex` | string | `""` | 自定义 PCRE2 正则表达式 | 最大 1024 字节 |
 
 ### 参数详解
@@ -428,19 +444,22 @@ permanent_ban_enabled: true
 ### 示例三：最小配置
 
 ```yaml
-defaults:
-  max_retries: 5
-  findtime: 600
-  ban_time: 900
-  interval: 1
-  metrics_port: 9119
-
+# 智能推断模式 - 只需配置 log_files
 jails:
   sshd:
-    enabled: true
     log_files:
       - /var/log/auth.log
-    regex: ""
+    # max_retries/findtime/ban_time 自动推断为 SSH 推荐值
+
+  nginx:
+    log_files:
+      - /var/log/nginx/error.log
+    # 自动推断为 WEB 推荐值
+
+  mysql:
+    log_files:
+      - /var/log/mysql/error.log
+    # 自动推断为 DB 推荐值
 ```
 
 ---
