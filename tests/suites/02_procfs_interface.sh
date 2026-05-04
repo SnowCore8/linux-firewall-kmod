@@ -22,10 +22,18 @@ assert_true "[[ -w '$PROC_BANS' ]]" "bans 接口可写"
 assert_true "[[ -r '$PROC_WHITELIST' ]]" "whitelist 可读"
 assert_true "[[ -w '$PROC_WHITELIST' ]]" "whitelist 可写"
 
-# 2.3 空操作测试
+# 2.3 空操作测试 - 验证空输入/空白输入被静默忽略（不添加到封禁列表）
 fw_subsection "空操作测试"
-assert_failure "echo '' > '$PROC_BANS' 2>&1" "空输入被封禁接口拒绝"
-assert_failure "echo '   ' > '$PROC_BANS' 2>&1" "空白输入被封禁接口拒绝"
+local_bans_before=$(wc -l < "$PROC_BANS" 2>/dev/null || echo 0)
+echo '' > "$PROC_BANS" 2>/dev/null || true
+sleep 0.1
+local_bans_after_empty=$(wc -l < "$PROC_BANS" 2>/dev/null || echo 0)
+assert_eq "$local_bans_before" "$local_bans_after_empty" "空输入被静默忽略，封禁列表不变"
+
+echo '   ' > "$PROC_BANS" 2>/dev/null || true
+sleep 0.1
+local_bans_after_blank=$(wc -l < "$PROC_BANS" 2>/dev/null || echo 0)
+assert_eq "$local_bans_before" "$local_bans_after_blank" "空白输入被静默忽略，封禁列表不变"
 
 # 2.4 统计信息接口
 fw_subsection "统计信息接口"

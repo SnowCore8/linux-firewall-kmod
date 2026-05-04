@@ -45,15 +45,15 @@ for i in $(seq 1 $STRESS_IP_COUNT); do
     echo "unban 172.16.$((i/255)).$((i%255))" > "$PROC_BANS" 2>/dev/null || true
 done
 
-# 8.4 哈希碰撞测试
-fw_subsection "哈希碰撞抗性"
+# 8.4 批量封禁负载测试 - 验证大量不同 IP 封禁后数据完整性
+fw_subsection "批量封禁负载测试"
 for i in $(seq 1 100); do
     echo "192.0.2.$((i%256))" > "$PROC_BANS" 2>/dev/null || true
 done
 sleep 0.5
 
-local_hash_count=$(wc -l < "$PROC_BANS" 2>/dev/null || echo 0)
-assert_ge "$local_hash_count" 50 "哈希表工作正常 (>50 IP)，实际 $local_hash_count"
+local_ban_count=$(wc -l < "$PROC_BANS" 2>/dev/null || echo 0)
+assert_ge "$local_ban_count" 50 "批量封禁后封禁列表数据完整 (>50 IP)，实际 $local_ban_count"
 
 # 清理
 for i in $(seq 1 100); do

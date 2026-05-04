@@ -56,7 +56,7 @@ done
 # 7.4 读取时修改
 fw_subsection "读取时修改"
 for i in $(seq 1 10); do
-    (cat "$PROC_BANS" > /dev/null 2>&1 &) &
+    cat "$PROC_BANS" > /dev/null 2>&1 &
     echo "192.168.200.$i" > "$PROC_BANS" 2>/dev/null &
 done
 wait

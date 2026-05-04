@@ -17,7 +17,7 @@ assert_true "(lsmod | grep -q '^firewall\b') || [[ -d '$PROC_DIR' ]]" "lsmod 或
 assert_dir_exists "$PROC_DIR" "proc 目录存在"
 
 fw_ensure_module_unloaded
-assert_success "! lsmod | grep -q '^firewall\b'" "模块卸载成功"
+assert_failure "lsmod | grep -q '^firewall\b'" "模块卸载成功（lsmod 中无 firewall 模块）"
 
 # 1.3 带参数加载
 fw_subsection "带参数加载"

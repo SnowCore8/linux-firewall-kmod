@@ -16,10 +16,16 @@ echo "add $TEST_SUBNET" > "$PROC_WHITELIST" 2>/dev/null
 sleep 0.2
 assert_file_contains "$PROC_WHITELIST" "$TEST_SUBNET" "手动添加子网白名单 $TEST_SUBNET"
 
-# 4.3 白名单保护
-echo "$TEST_SUBNET_IP" > "$PROC_BANS" 2>/dev/null || true
+# 4.3 白名单保护 - 验证白名单 IP 无法被封禁
+local_bans_before=$(wc -l < "$PROC_BANS" 2>/dev/null || echo 0)
+local_write_rc=0
+echo "$TEST_SUBNET_IP" > "$PROC_BANS" 2>/dev/null || local_write_rc=$?
 sleep 0.2
-assert_true "! grep -q '$TEST_SUBNET_IP' '$PROC_BANS' 2>/dev/null" "白名单子网 IP 受保护"
+local_bans_after=$(wc -l < "$PROC_BANS" 2>/dev/null || echo 0)
+# 验证封禁列表没有增长（无论 procfs 拒绝写入还是内核过滤，结果都是列表不变）
+assert_eq "$local_bans_before" "$local_bans_after" "白名单子网 IP 未进入封禁列表"
+# 验证列表中确实不存在该 IP
+assert_true "! grep -q '$TEST_SUBNET_IP' '$PROC_BANS' 2>/dev/null" "封禁列表中无白名单 IP"
 
 # 移除白名单
 echo "remove $TEST_SUBNET" > "$PROC_WHITELIST" 2>/dev/null

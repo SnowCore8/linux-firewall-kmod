@@ -18,8 +18,12 @@ assert_true "[[ -w '$PROC_BANS' ]]" "bans 接口可写"
 assert_true "[[ -r '$PROC_WHITELIST' ]]" "whitelist 只读正常"
 assert_true "[[ -w '$PROC_WHITELIST' ]]" "whitelist 可写正常"
 
-# 尝试截断只读文件（应被拒绝或无影响）
-assert_success ": > '$PROC_BANS' 2>&1" "截断 bans 操作完成（内核处理）"
+# 尝试截断 bans 文件 - procfs 虚拟文件不受 shell 截断影响
+local_bans_before=$(cat "$PROC_BANS" 2>/dev/null)
+: > "$PROC_BANS" 2>/dev/null || true
+sleep 0.1
+local_bans_after=$(cat "$PROC_BANS" 2>/dev/null)
+assert_eq "$local_bans_before" "$local_bans_after" "procfs bans 文件不受 shell 截断影响（内核状态不变）"
 
 # 6.3 模块参数安全
 fw_subsection "模块参数安全"
