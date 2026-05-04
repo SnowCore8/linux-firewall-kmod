@@ -140,6 +140,13 @@ tar czf /tmp/firewall-src.tar.gz \
     scripts/
 echo "✅ 打包完成"
 
+# 生成 MD5 校验文件
+echo ""
+echo "  生成 MD5 校验文件..."
+cd "$PROJECT_DIR"
+md5sum firewall-src.tar.gz > firewall-src.tar.gz.md5
+echo "✅ MD5 文件生成完成"
+
 # 3. 上传到远程服务器
 echo ""
 echo "[3/7] Uploading to remote server..."

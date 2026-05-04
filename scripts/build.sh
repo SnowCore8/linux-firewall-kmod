@@ -7,18 +7,64 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # 检查所需命令
-command -v make >/dev/null 2>&1 || { error "make not found in PATH"; exit 1; }
-command -v gcc >/dev/null 2>&1 || { error "gcc not found in PATH"; exit 1; }
+command -v make >/dev/null 2>&1 || { echo "make not found in PATH"; exit 1; }
+command -v gcc >/dev/null 2>&1 || { echo "gcc not found in PATH"; exit 1; }
 
 # 检查依赖库
-for lib in yaml sqlite3 microhttpd pcre2-8; do
-    if ! pkg-config --exists lib$lib 2>/dev/null; then
-        error "Missing required library: lib$lib-dev"
-        echo "   安装命令（Debian/Ubuntu）: sudo apt install lib$lib-dev"
-        echo "   安装命令（RHEL/CentOS）: sudo yum install $lib-devel"
+check_library() {
+    local pkg_name=$1
+    local apt_pkg=$2
+    local rpm_pkg=$3
+    
+    if ! pkg-config --exists lib$pkg_name 2>/dev/null; then
+        echo "Missing required library: lib$pkg_name-dev"
+        echo "   安装命令（Debian/Ubuntu）: sudo apt install $apt_pkg"
+        echo "   安装命令（RHEL/CentOS）: sudo yum install $rpm_pkg"
         exit 1
     fi
-done
+}
+
+# 特殊处理 libyaml（pkg-config 文件名可能不同）
+if ! pkg-config --exists libyaml 2>/dev/null; then
+    echo "Checking for yaml library..."
+    if pkg-config --exists yaml 2>/dev/null; then
+        echo "Found yaml using pkg-config: yaml"
+    else
+        # 直接检查库文件是否存在
+        if [ -f "/usr/lib/x86_64-linux-gnu/libyaml-0.so" ]; then
+            echo "Found libyaml.so directly, updating Makefile"
+            sed -i 's/libyaml/libyaml-0/g' /root/firewall/Makefile
+        else
+            echo "libyaml not found, trying yaml-0.1.pc..."
+            if [ -f "/usr/lib/x86_64-linux-gnu/pkgconfig/yaml-0.1.pc" ]; then
+                echo "Found yaml-0.1.pc, updating Makefile"
+                sed -i 's/libyaml/libyaml-0/g' /root/firewall/Makefile
+            else
+                echo "libyaml-dev not found"
+                echo "   安装命令（Debian/Ubuntu）: sudo apt install libyaml-dev"
+                echo "   安装命令（RHEL/CentOS）: sudo yum install libyaml-devel"
+                exit 1
+            fi
+        fi
+    fi
+else
+    echo "Found libyaml using pkg-config"
+fi
+
+# 特殊处理 sqlite3（pkg-config 文件名可能不同）
+if ! pkg-config --exists libsqlite3 2>/dev/null; then
+    if pkg-config --exists sqlite3 2>/dev/null; then
+        echo "Found sqlite3 using pkg-config: sqlite3"
+    else
+        echo "libsqlite3-dev not found"
+        echo "   安装命令（Debian/Ubuntu）: sudo apt install libsqlite3-dev"
+        echo "   安装命令（RHEL/CentOS）: sudo yum install sqlite-devel"
+        exit 1
+    fi
+fi
+
+check_library microhttpd libmicrohttpd-dev libmicrohttpd-devel
+check_library pcre2-8 libpcre2-dev pcre2-devel
 
 # 颜色定义
 if [[ -t 1 ]]; then
