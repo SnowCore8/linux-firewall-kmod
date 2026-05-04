@@ -20,15 +20,10 @@ assert_success "sed -n '/^  frp:/,/^$/p' '$CONFIG_DIR/default.yaml' | grep -q 'b
 
 # 13.4 守护进程加载 FRP 配置
 fw_subsection "守护进程加载 FRP 配置"
-assert_success "timeout 2 '$DAEMON_PATH' -c '$CONFIG_DIR/default.yaml' --help > /dev/null 2>&1" "FRP 配置文件加载成功"
+assert_success "timeout 2 '$DAEMON_PATH' -c '$CONFIG_DIR/default.yaml' >/dev/null 2>&1; rc=\$?; [ \$rc -eq 0 ] || [ \$rc -eq 124 ]" "FRP 配置文件加载成功"
 
 # 13.5 FRP 日志解析测试
 fw_subsection "FRP 日志解析"
-fw_ensure_module_loaded "$KERNEL_MODULE_PATH" 2>/dev/null || {
-    skip_test "内核模块无法加载，跳过 FRP 日志解析测试"
-    fw_ensure_module_unloaded
-    return 0
-}
 
 # 创建 FRP 测试日志
 local_frp_test_log="/tmp/fw_test_frp_$$.log"
@@ -101,7 +96,5 @@ jails:
     regex: ""
 EOF
 
-assert_success "timeout 2 '$DAEMON_PATH' -c '$local_frp_config' --help > /dev/null 2>&1" "FRP 独立配置文件加载"
+assert_success "timeout 2 '$DAEMON_PATH' -c '$local_frp_config' >/dev/null 2>&1; rc=\$?; [ \$rc -eq 0 ] || [ \$rc -eq 124 ]" "FRP 独立配置文件加载"
 rm -f "$local_frp_config"
-
-fw_ensure_module_unloaded

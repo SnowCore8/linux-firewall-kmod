@@ -15,7 +15,7 @@ assert_file_exists "$CONFIG_DIR/default.yaml" "default.yaml 存在"
 
 # 9.3 默认配置目录加载
 fw_subsection "默认配置目录加载"
-assert_success "cd '$PROJECT_ROOT' && timeout 2 '$DAEMON_PATH' --help > /dev/null 2>&1" "默认配置目录加载"
+assert_success "cd '$PROJECT_ROOT' && timeout 2 '$DAEMON_PATH' >/dev/null 2>&1; rc=\$?; [ \$rc -eq 0 ] || [ \$rc -eq 124 ]" "默认配置目录加载"
 
 # 9.4 指定配置目录
 fw_subsection "指定配置目录 (-C)"
@@ -39,12 +39,12 @@ jails:
     regex: ""
 EOF
 
-assert_success "timeout 2 '$DAEMON_PATH' -C '$local_test_config_dir' --help > /dev/null 2>&1" "指定配置目录加载"
+assert_success "timeout 2 '$DAEMON_PATH' -C '$local_test_config_dir' >/dev/null 2>&1; rc=\$?; [ \$rc -eq 0 ] || [ \$rc -eq 124 ]" "指定配置目录加载"
 rm -rf "$local_test_config_dir"
 
 # 9.5 单个配置文件加载 (-c)
 fw_subsection "单个配置文件加载 (-c)"
-assert_success "timeout 2 '$DAEMON_PATH' -c '$CONFIG_DIR/default.yaml' --help > /dev/null 2>&1" "单配置文件加载"
+assert_success "timeout 2 '$DAEMON_PATH' -c '$CONFIG_DIR/default.yaml' >/dev/null 2>&1; rc=\$?; [ \$rc -eq 0 ] || [ \$rc -eq 124 ]" "单配置文件加载"
 
 # 9.6 无效配置处理
 fw_subsection "无效配置处理"
@@ -58,4 +58,4 @@ assert_true "[[ $rc -lt 128 ]]" "无效 YAML 处理完成（未崩溃，退出�
 rm -f "$local_invalid_config"
 
 # 9.7 不存在的配置 文件
-assert_failure "timeout 2 '$DAEMON_PATH' -c '/nonexistent/config.yaml' --help > /dev/null 2>&1" "不存在配置文件被拒绝"
+assert_failure "timeout 2 '$DAEMON_PATH' -c '/nonexistent/config.yaml' >/dev/null 2>&1; rc=\$?; [ \$rc -ne 0 ] && [ \$rc -ne 124 ]" "不存在配置文件被拒绝"

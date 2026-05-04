@@ -3,8 +3,6 @@
 
 fw_test_header "Procfs 接口测试"
 
-fw_ensure_module_loaded "$KERNEL_MODULE_PATH"
-
 # 2.1 接口存在性
 fw_subsection "接口文件存在性"
 assert_dir_exists "$PROC_DIR" "proc/firewall 目录存在"
@@ -50,6 +48,3 @@ assert_true "[[ -w '$PROC_CONFIG' ]]" "config 接口可写"
 config_output=$(cat "$PROC_CONFIG" 2>&1)
 assert_success "cat '$PROC_CONFIG'" "读取配置成功"
 assert_contains "$config_output" "ban_time" "配置包含 ban_time 字段"
-
-# 清理
-fw_ensure_module_unloaded

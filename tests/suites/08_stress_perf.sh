@@ -3,8 +3,6 @@
 
 fw_test_header "压力/性能测试"
 
-fw_ensure_module_loaded "$KERNEL_MODULE_PATH"
-
 # 8.1 封禁性能
 fw_subsection "封禁性能"
 local_start=$(date +%s%N)
@@ -59,5 +57,3 @@ assert_ge "$local_ban_count" 50 "批量封禁后封禁列表数据完整 (>50 IP
 for i in $(seq 1 100); do
     echo "unban 192.0.2.$((i%256))" > "$PROC_BANS" 2>/dev/null || true
 done
-
-fw_ensure_module_unloaded

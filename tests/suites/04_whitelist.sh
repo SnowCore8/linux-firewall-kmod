@@ -3,8 +3,6 @@
 
 fw_test_header "白名单测试"
 
-fw_ensure_module_loaded "$KERNEL_MODULE_PATH"
-
 # 4.1 系统 IP 自动发现
 fw_subsection "系统 IP 自动发现"
 local_wl_count=$(wc -l < "$PROC_WHITELIST" 2>/dev/null || echo 0)
@@ -81,5 +79,3 @@ assert_le "$local_final_count" 64 "白名单数量在限制内 (64)，实际 $lo
 for i in $(seq 1 50); do
     echo "remove 10.$((i/255)).$((i%255)).0/24" > "$PROC_WHITELIST" 2>/dev/null || true
 done
-
-fw_ensure_module_unloaded

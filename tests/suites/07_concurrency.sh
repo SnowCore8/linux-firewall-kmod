@@ -3,8 +3,6 @@
 
 fw_test_header "并发/竞态条件测试"
 
-fw_ensure_module_loaded "$KERNEL_MODULE_PATH"
-
 # 7.1 并发封禁
 fw_subsection "并发封禁"
 local_start=$(date +%s%N)
@@ -69,5 +67,3 @@ assert_true "[[ -n '$local_ban_count' && '$local_ban_count' -ge 0 ]]" "读取时
 for i in $(seq 1 10); do
     echo "unban 192.168.200.$i" > "$PROC_BANS" 2>/dev/null || true
 done
-
-fw_ensure_module_unloaded

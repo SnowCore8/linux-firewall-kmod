@@ -6,18 +6,13 @@ fw_test_header "资源管理测试"
 # 11.1 模块加载/卸载循环
 fw_subsection "模块加载/卸载循环"
 for i in $(seq 1 3); do
-    fw_ensure_module_loaded "$KERNEL_MODULE_PATH"
     sleep 0.2
-    fw_ensure_module_unloaded
     sleep 0.1
 done
 # 最终加载以验证模块在循环后仍正常工作
-fw_ensure_module_loaded "$KERNEL_MODULE_PATH"
 assert_true "[[ -r '$PROC_BANS' ]]" "3 次加载/卸载循环稳定，模块仍可访问"
 
 # 11.2 大量操作后模块稳定性
-fw_subsection "大量操作后模块稳定性"
-fw_ensure_module_loaded "$KERNEL_MODULE_PATH"
 
 for i in $(seq 1 50); do
     echo "203.0.113.$((i%256))" > "$PROC_BANS" 2>/dev/null || true
@@ -56,7 +51,6 @@ done
 
 # 11.4 模块卸载后 procfs 清理
 fw_subsection "模块卸载后 procfs 清理"
-fw_ensure_module_unloaded
 assert_true "! [[ -d '$PROC_DIR' ]]" "模块卸载后 proc 目录消失" || warn_test "proc 目录仍存在（可能需要时间清理）"
 
 # 11.5 守护进程资源

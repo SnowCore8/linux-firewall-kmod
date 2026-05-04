@@ -3,8 +3,6 @@
 
 fw_test_header "封禁/解封测试"
 
-fw_ensure_module_loaded "$KERNEL_MODULE_PATH"
-
 # 3.1 基本封禁/解封
 fw_subsection "基本封禁/解封"
 echo "$TEST_IP" > "$PROC_BANS" 2>/dev/null
@@ -61,5 +59,3 @@ for cycle in $(seq 1 5); do
     fi
 done
 assert_true "[[ $local_all_unbanned == true ]]" "5 次封禁/解封循环稳定，所有 IP 已解封"
-
-fw_ensure_module_unloaded
