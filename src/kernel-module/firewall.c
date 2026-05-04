@@ -985,7 +985,7 @@ static int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned lo
     spin_unlock(&fw->lock);
 
     FW_DEBUG(1, "Successfully added ban entry for IP %pI4 with duration %lu seconds", &ip, seconds);
-    fw_pr_info_ratelimited("IP %pI4 banned for %lu seconds", &ip, seconds);
+    fw_pr_info_ratelimited("%pI4 banned for %lu seconds", &ip, seconds);
     FW_DEBUG(1, "EXIT: ban_ip_with_duration -> 0 (success)");
     return 0;
 }
