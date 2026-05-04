@@ -163,19 +163,24 @@ sleep 1  # 等待模块完全初始化
 
 _module_ready=false
 for i in 1 2 3; do
-    if lsmod | grep -q "^firewall " && [[ -d "$PROC_DIR" ]] && [[ -w "$PROC_BANS" ]]; then
+    _lsmod_ok=false
+    _procfs_ok=false
+    _bans_ok=false
+    
+    lsmod | grep -q "^firewall " && _lsmod_ok=true
+    [[ -d "$PROC_DIR" ]] && _procfs_ok=true
+    [[ -w "$PROC_BANS" ]] && _bans_ok=true
+    
+    if [[ "$_lsmod_ok" == true ]] && [[ "$_procfs_ok" == true ]] && [[ "$_bans_ok" == true ]]; then
         _module_ready=true
         break
     fi
-    fw_log_debug "模块就绪检查第 $i 次失败，等待后重试..."
+    fw_log_debug "模块就绪检查第 $i 次失败 [lsmod=$_lsmod_ok procfs=$_procfs_ok bans=$_bans_ok]，等待后重试..."
     sleep 1
 done
 
 if [[ "$_module_ready" != true ]]; then
-    fw_log_error "模块未完全就绪（lsmod/procfs/bans 检查失败）"
-    fw_log_error "lsmod: $(lsmod 2>/dev/null | grep firewall || echo 'not found')"
-    fw_log_error "procfs: $([ -d "$PROC_DIR" ] && echo 'exists' || echo 'missing')"
-    fw_log_error "bans: $([ -w "$PROC_BANS" ] && echo 'writable' || echo 'not writable')"
+    fw_log_error "模块未完全就绪"
     exit 1
 fi
 
