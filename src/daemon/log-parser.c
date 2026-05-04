@@ -9,51 +9,54 @@
 int extract_ipv4(const char *line, char *ip_out, size_t ip_size)
 {
     const char *ptr = line;
-    int octets[4];
 
     /* 搜索模式：数字.数字.数字.数字 */
     while (*ptr) {
-        if (sscanf(ptr, "%d.%d.%d.%d", &octets[0], &octets[1], &octets[2], &octets[3]) == 4) {
-            /* 验证每个字节段 */
-            if (octets[0] >= 0 && octets[0] <= 255 &&
-                octets[1] >= 0 && octets[1] <= 255 &&
-                octets[2] >= 0 && octets[2] <= 255 &&
-                octets[3] >= 0 && octets[3] <= 255) {
+        /* 快速查找第一个数字 */
+        while (*ptr && !isdigit((unsigned char)*ptr)) ptr++;
+        if (!*ptr) break;
 
-                snprintf(ip_out, ip_size, "%d.%d.%d.%d",
-                        octets[0], octets[1], octets[2], octets[3]);
-                /* 使用 inet_pton 验证 */
-                unsigned char buf[4];
-                if (inet_pton(AF_INET, ip_out, buf) == 1) {
-                    /* 额外验证：拒绝无效IP，如 0.0.0.0、127.x.x.x、组播地址等 */
-                    unsigned int ip_num = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3];
-                    if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
-                        octets[0] == 127 ||  // 127.x.x.x（回环地址）
-                        (octets[0] >= 224 && octets[0] <= 239)) {  // 224.0.0.0/4（组播地址）
-                        /* 跳过无效IP：越过整个类IP模式 */
-                        while (*ptr && (isdigit((unsigned char)*ptr) || *ptr == '.')) ptr++;
-                        continue;
-                    }
+        /* 手动解析 IP 地址以避免 sscanf 开销 */
+        const char *start = ptr;
+        int octets[4];
+        int i;
 
-                    /* 边界检查：确保下一个字符不是数字或点（词边界） */
-                    const char *ip_end = ptr;
-                    while (*ip_end && (isdigit((unsigned char)*ip_end) || *ip_end == '.')) ip_end++;
-                    if (*ip_end && (isdigit((unsigned char)*ip_end) || *ip_end == '.')) {
-                        /* 后面还有更多数字/点 - 不是完整的IP，跳过 */
-                        ptr = ip_end;
-                        continue;
-                    }
+        for (i = 0; i < 4; i++) {
+            if (i > 0) {
+                if (*ptr != '.') break;
+                ptr++;
+            }
+            if (!isdigit((unsigned char)*ptr)) break;
 
+            int val = 0;
+            int digits = 0;
+            while (isdigit((unsigned char)*ptr) && digits < 3) {
+                val = val * 10 + (*ptr - '0');
+                ptr++;
+                digits++;
+            }
+            if (val > 255) break;
+            octets[i] = val;
+        }
+
+        if (i == 4) {
+            /* 验证词边界 */
+            if (!isdigit((unsigned char)*ptr) && *ptr != '.') {
+                /* 验证 IP */
+                unsigned int ip_num = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3];
+                if (ip_num != 0 && ip_num != 0xFFFFFFFF &&
+                    octets[0] != 127 &&
+                    (octets[0] < 224 || octets[0] > 239)) {
+                    snprintf(ip_out, ip_size, "%d.%d.%d.%d",
+                            octets[0], octets[1], octets[2], octets[3]);
                     return 1;
                 }
             }
         }
-        /* sscanf 未匹配或字节段无效：跳过数字和点以避免重复扫描 */
-        if (isdigit((unsigned char)*ptr) || *ptr == '.') {
-            while (*ptr && (isdigit((unsigned char)*ptr) || *ptr == '.')) ptr++;
-        } else {
-            ptr++;
-        }
+
+        /* 跳过当前数字序列 */
+        ptr = start;
+        while (*ptr && (isdigit((unsigned char)*ptr) || *ptr == '.')) ptr++;
     }
 
     return 0;

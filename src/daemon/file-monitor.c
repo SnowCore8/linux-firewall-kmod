@@ -258,15 +258,8 @@ void process_new_lines(int idx)
     char local_partial_buf[sizeof(((struct jail *)0)->partial_line_buffer)];
     size_t local_partial_len = 0;
 
-    /* 加写锁以安全复制jail配置值和部分行缓冲区。
-     * 使用写锁是因为我们需要修改 j->partial_line_len。
-     * 持有写锁直到处理完成，以防止配置重载导致 use-after-free。*/
-    if (jail_idx < 0 || jail_idx >= cfg.jail_count) {
-        daemon_log_err("Invalid jail index %d in process_new_lines", jail_idx);
-        return;
-    }
-    
-    /* 持有写锁时复制jail配置值和部分行缓冲区 */
+    /* 短暂持有写锁以复制 jail 配置值和部分行缓冲区。
+     * 锁会在复制数据后立即释放，文件读取和处理在锁外进行。*/
     pthread_rwlock_wrlock(&config_rwlock);
     if (jail_idx >= cfg.jail_count) {
         /* 锁获取后再次检查，防止配置重载 */
@@ -282,20 +275,14 @@ void process_new_lines(int idx)
     if (local_partial_len > 0 && local_partial_len < sizeof(local_partial_buf)) {
         memcpy(local_partial_buf, j->partial_line_buffer, local_partial_len);
     }
-    /* 清除jail的部分缓冲区，因为我们现在拥有数据 */
+    /* 清除 jail 的部分缓冲区，因为我们现在拥有数据 */
     j->partial_line_len = 0;
-    /* 注意：写锁将在处理完成后释放，以防止配置重载期间 use-after-free */
+    /* 立即释放写锁，文件读取和处理在锁外进行 */
+    pthread_rwlock_unlock(&config_rwlock);
 
     fd = open(log_path, O_RDONLY);
     if (fd < 0) {
         daemon_log_err("Failed to open %s: %s", log_path, strerror(errno));
-        /* 失败时恢复部分缓冲区（写锁已持有） */
-        if (jail_idx < cfg.jail_count) {
-            cfg.jails[jail_idx].partial_line_len = local_partial_len;
-            if (local_partial_len > 0)
-                memcpy(cfg.jails[jail_idx].partial_line_buffer, local_partial_buf, local_partial_len);
-        }
-        pthread_rwlock_unlock(&config_rwlock);
         goto cleanup;
     }
 
@@ -417,7 +404,8 @@ void process_new_lines(int idx)
     file_states[idx].offset = current_offset;
 
 cleanup_restore_partial:
-    /* 在写锁下将部分行缓冲区恢复到jail（写锁已持有） */
+    /* 短暂持有写锁以将部分行缓冲区恢复到 jail */
+    pthread_rwlock_wrlock(&config_rwlock);
     if (jail_idx < cfg.jail_count) {
         cfg.jails[jail_idx].partial_line_len = local_partial_len;
         if (local_partial_len > 0 && local_partial_len < sizeof(local_partial_buf))
