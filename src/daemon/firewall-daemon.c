@@ -24,6 +24,9 @@
 volatile sig_atomic_t running = 1;
 volatile sig_atomic_t reload_config = 0;  /* SIGHUP 标志 */
 
+/* 配置严格模式标志（默认开启） */
+int config_strict_mode = 1;
+
 /* 配置互斥锁 - 保护多线程对 cfg 全局变量的访问 */
 pthread_mutex_t config_mutex = PTHREAD_MUTEX_INITIALIZER;
 

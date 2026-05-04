@@ -6,6 +6,9 @@
 #include "jail-manager.h"
 #include "config-parser.h"
 
+/* 引用全局严格模式标志 */
+extern int config_strict_mode;
+
 /* 用于双缓冲配置重新加载的 YAML 解析上下文 */
 struct yaml_parse_ctx {
     struct jail *current_jail;
@@ -14,7 +17,37 @@ struct yaml_parse_ctx {
     int in_log_files_array;
     char *current_key;
     char *current_jail_name;
+    int strict_mode;          /* 1=严格模式，0=兼容模式 */
+    int has_error;            /* 错误累积标志 */
+    const char *config_file;  /* 配置文件路径（用于错误提示） */
 };
+
+/* 校验 defaults 部分的参数名是否有效 */
+static int is_valid_defaults_key(const char *key)
+{
+    const char *valid_keys[] = {
+        "max_retries", "findtime", "ban_time", "interval",
+        "metrics_port", "daemon", "permanent_db_path",
+        "permanent_ban_enabled", NULL
+    };
+    for (int i = 0; valid_keys[i]; i++) {
+        if (strcmp(key, valid_keys[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+/* 校验 jail 部分的参数名是否有效 */
+static int is_valid_jail_key(const char *key)
+{
+    const char *valid_keys[] = {
+        "enabled", "log_files", "max_retries", "findtime",
+        "ban_time", "regex_pattern", "regex", NULL
+    };
+    for (int i = 0; valid_keys[i]; i++) {
+        if (strcmp(key, valid_keys[i]) == 0) return 1;
+    }
+    return 0;
+}
 
 /* 将 YAML 文件解析到目标配置（不持有锁）。
  * 这是从 parse_config_file 中提取的核心解析逻辑。
@@ -28,6 +61,8 @@ static int parse_yaml_into(const char *config_path, struct config *target)
     int error = 0;
 
     struct yaml_parse_ctx ctx = {0};
+    ctx.strict_mode = config_strict_mode;  /* 使用全局严格模式设置 */
+    ctx.config_file = config_path;
 
     /* 提取配置文件目录以解析相对路径 */
     char config_dir[1024];
@@ -93,7 +128,13 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                     errno = 0;
                     long val = strtol(value, &endptr, 10);
                     if (errno != 0 || *endptr != '\0' || val < 1 || val > 100) {
-                        daemon_log_warn("Invalid default max_retries: %s", value);
+                        if (ctx.strict_mode) {
+                            daemon_log_err("Invalid value for 'max_retries': '%s' (must be integer between 1 and 100) in %s",
+                                           value, ctx.config_file ? ctx.config_file : "unknown");
+                            ctx.has_error = 1;
+                        } else {
+                            daemon_log_warn("Invalid default max_retries: %s", value);
+                        }
                     } else {
                         target->default_max_retries = (unsigned int)val;
                         daemon_log_info("Default max_retries set to %u", target->default_max_retries);
@@ -103,7 +144,13 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                     errno = 0;
                     long val = strtol(value, &endptr, 10);
                     if (errno != 0 || *endptr != '\0' || val < 1 || val > 3600) {
-                        daemon_log_warn("Invalid default findtime: %s", value);
+                        if (ctx.strict_mode) {
+                            daemon_log_err("Invalid value for 'findtime': '%s' (must be integer between 1 and 3600) in %s",
+                                           value, ctx.config_file ? ctx.config_file : "unknown");
+                            ctx.has_error = 1;
+                        } else {
+                            daemon_log_warn("Invalid default findtime: %s", value);
+                        }
                     } else {
                         target->default_findtime = (unsigned int)val;
                         daemon_log_info("Default findtime set to %u", target->default_findtime);
@@ -112,8 +159,14 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                     char *endptr;
                     errno = 0;
                     long val = strtol(value, &endptr, 10);
-                    if (errno != 0 || *endptr != '\0' || val < 1 || val > 86400) {
-                        daemon_log_warn("Invalid default ban_time: %s", value);
+                    if (errno != 0 || *endptr != '\0' || (val != 0 && (val < 1 || val > 86400))) {
+                        if (ctx.strict_mode) {
+                            daemon_log_err("Invalid value for 'ban_time': '%s' (must be 0 or integer between 1 and 86400) in %s",
+                                           value, ctx.config_file ? ctx.config_file : "unknown");
+                            ctx.has_error = 1;
+                        } else {
+                            daemon_log_warn("Invalid default ban_time: %s", value);
+                        }
                     } else {
                         target->default_ban_time = (unsigned int)val;
                         daemon_log_info("Default ban_time set to %u", target->default_ban_time);
@@ -123,7 +176,13 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                     errno = 0;
                     long val = strtol(value, &endptr, 10);
                     if (errno != 0 || *endptr != '\0' || val < 1 || val > 60) {
-                        daemon_log_warn("Invalid default interval: %s", value);
+                        if (ctx.strict_mode) {
+                            daemon_log_err("Invalid value for 'interval': '%s' (must be integer between 1 and 60) in %s",
+                                           value, ctx.config_file ? ctx.config_file : "unknown");
+                            ctx.has_error = 1;
+                        } else {
+                            daemon_log_warn("Invalid default interval: %s", value);
+                        }
                     } else {
                         target->interval = (int)val;
                         daemon_log_info("Default interval set to %d", target->interval);
@@ -133,7 +192,13 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                     errno = 0;
                     long val = strtol(value, &endptr, 10);
                     if (errno != 0 || *endptr != '\0' || val < 0 || val > 65535) {
-                        daemon_log_warn("Invalid default metrics_port: %s", value);
+                        if (ctx.strict_mode) {
+                            daemon_log_err("Invalid value for 'metrics_port': '%s' (must be integer between 0 and 65535) in %s",
+                                           value, ctx.config_file ? ctx.config_file : "unknown");
+                            ctx.has_error = 1;
+                        } else {
+                            daemon_log_warn("Invalid default metrics_port: %s", value);
+                        }
                     } else {
                         target->metrics_port = (int)val;
                         daemon_log_info("Default metrics_port set to %d", target->metrics_port);
@@ -162,6 +227,16 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                     }
                 } else if (strcmp(ctx.current_key, "permanent_ban_enabled") == 0) {
                     target->permanent_ban_enabled = (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "1") == 0);
+                } else {
+                    /* 未知参数处理 */
+                    if (ctx.strict_mode) {
+                        daemon_log_err("Invalid config parameter '%s' with value '%s' in [defaults] of %s",
+                                       ctx.current_key, value, ctx.config_file ? ctx.config_file : "unknown");
+                        ctx.has_error = 1;
+                    } else {
+                        daemon_log_warn("Ignoring unknown parameter in [defaults]: %s = %s",
+                                        ctx.current_key, value);
+                    }
                 }
                 free(ctx.current_key);
                 ctx.current_key = NULL;
@@ -191,7 +266,13 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                         errno = 0;
                         long val = strtol(value, &endptr, 10);
                         if (errno != 0 || *endptr != '\0' || val < 1 || val > 100) {
-                            daemon_log_warn("Invalid max_retries for jail '%s': %s", ctx.current_jail->name, value);
+                            if (ctx.strict_mode) {
+                                daemon_log_err("Invalid value for 'max_retries': '%s' in jail '%s' of %s (must be integer between 1 and 100)",
+                                               value, ctx.current_jail->name, ctx.config_file);
+                                ctx.has_error = 1;
+                            } else {
+                                daemon_log_warn("Invalid max_retries for jail '%s': %s", ctx.current_jail->name, value);
+                            }
                         } else {
                             ctx.current_jail->max_retries = (unsigned int)val;
                             daemon_log_info("Jail '%s' max_retries set to %u", ctx.current_jail->name, ctx.current_jail->max_retries);
@@ -201,7 +282,13 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                         errno = 0;
                         long val = strtol(value, &endptr, 10);
                         if (errno != 0 || *endptr != '\0' || val < 1 || val > 3600) {
-                            daemon_log_warn("Invalid findtime for jail '%s': %s", ctx.current_jail->name, value);
+                            if (ctx.strict_mode) {
+                                daemon_log_err("Invalid value for 'findtime': '%s' in jail '%s' of %s (must be integer between 1 and 3600)",
+                                               value, ctx.current_jail->name, ctx.config_file);
+                                ctx.has_error = 1;
+                            } else {
+                                daemon_log_warn("Invalid findtime for jail '%s': %s", ctx.current_jail->name, value);
+                            }
                         } else {
                             ctx.current_jail->findtime = (unsigned int)val;
                             daemon_log_info("Jail '%s' findtime set to %u", ctx.current_jail->name, ctx.current_jail->findtime);
@@ -210,16 +297,32 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                         char *endptr;
                         errno = 0;
                         long val = strtol(value, &endptr, 10);
-                        if (errno != 0 || *endptr != '\0' || val < 1 || val > 86400) {
-                            daemon_log_warn("Invalid ban_time for jail '%s': %s", ctx.current_jail->name, value);
+                        if (errno != 0 || *endptr != '\0' || (val != 0 && (val < 1 || val > 86400))) {
+                            if (ctx.strict_mode) {
+                                daemon_log_err("Invalid value for 'ban_time': '%s' in jail '%s' of %s (must be 0 or integer between 1 and 86400)",
+                                               value, ctx.current_jail->name, ctx.config_file);
+                                ctx.has_error = 1;
+                            } else {
+                                daemon_log_warn("Invalid ban_time for jail '%s': %s", ctx.current_jail->name, value);
+                            }
                         } else {
                             ctx.current_jail->ban_time = (unsigned int)val;
                             daemon_log_info("Jail '%s' ban_time set to %u", ctx.current_jail->name, ctx.current_jail->ban_time);
                         }
-                    } else if (strcmp(ctx.current_key, "regex") == 0) {
+                    } else if (strcmp(ctx.current_key, "regex") == 0 || strcmp(ctx.current_key, "regex_pattern") == 0) {
                         if (ctx.current_jail->regex_pattern) free(ctx.current_jail->regex_pattern);
                         ctx.current_jail->regex_pattern = strdup(value);
                         daemon_log_info("Jail '%s' regex set to: %s", ctx.current_jail->name, value);
+                    } else {
+                        /* 未知 jail 参数 */
+                        if (ctx.strict_mode) {
+                            daemon_log_err("Invalid config parameter '%s' with value '%s' in jail '%s' of %s",
+                                           ctx.current_key, value, ctx.current_jail->name, ctx.config_file);
+                            ctx.has_error = 1;
+                        } else {
+                            daemon_log_warn("Ignoring unknown parameter in jail '%s': %s = %s",
+                                            ctx.current_jail->name, ctx.current_key, value);
+                        }
                     }
                     free(ctx.current_key);
                     ctx.current_key = NULL;
@@ -300,7 +403,13 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                 } else if (strcmp(ctx.current_key, "permanent_ban_enabled") == 0) {
                     target->permanent_ban_enabled = (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "1") == 0);
                 } else {
-                    daemon_log_warn("Ignoring unsupported top-level key: %s (jail format required)", ctx.current_key);
+                    if (ctx.strict_mode) {
+                        daemon_log_err("Invalid config parameter '%s' with value '%s' at top-level of %s (jail format required)",
+                                       ctx.current_key, value, ctx.config_file);
+                        ctx.has_error = 1;
+                    } else {
+                        daemon_log_warn("Ignoring unsupported top-level key: %s (jail format required)", ctx.current_key);
+                    }
                 }
                 free(ctx.current_key);
                 ctx.current_key = NULL;
@@ -380,6 +489,12 @@ static int parse_yaml_into(const char *config_path, struct config *target)
     /* 清理 */
     if (ctx.current_key) free(ctx.current_key);
     if (ctx.current_jail_name) free(ctx.current_jail_name);
+
+    /* 严格模式下如果有任何错误则返回失败 */
+    if (ctx.has_error && ctx.strict_mode) {
+        daemon_log_err("Config loading failed due to invalid parameters in %s", config_path);
+        return -1;
+    }
 
     return error ? -1 : 0;
 }
@@ -706,6 +821,8 @@ int parse_config(int argc, char *argv[])
         {"config",     required_argument, 0, 'c'},  /* 单个配置文件 */
         {"config-dir", required_argument, 0, 'C'},  /* 配置目录（自动加载所有 .yaml） */
         {"daemon",     no_argument,       0, 'd'},
+        {"strict",     no_argument,       0, 's'},  /* 严格模式（默认） */
+        {"permissive", no_argument,       0, 'p'},  /* 宽松模式 */
         {"help",       no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
@@ -801,6 +918,14 @@ int parse_config(int argc, char *argv[])
                 fprintf(stderr, "Warning: failed to load config directory: %s\n", dir_path);
             }
         }
+        /* 检查 --strict 或 -s（严格模式） */
+        else if (strcmp(argv[i], "--strict") == 0 || strcmp(argv[i], "-s") == 0) {
+            config_strict_mode = 1;
+        }
+        /* 检查 --permissive 或 -p（宽松模式） */
+        else if (strcmp(argv[i], "--permissive") == 0 || strcmp(argv[i], "-p") == 0) {
+            config_strict_mode = 0;
+        }
     }
 
     /* 如果未提供显式配置，尝试默认配置目录 */
@@ -825,7 +950,7 @@ int parse_config(int argc, char *argv[])
     }
 
     /* 现在解析命令行选项（它们会覆盖配置文件中的值） */
-    while ((opt = getopt_long(argc, argv, "c:C:dh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:C:dsph", long_options, NULL)) != -1) {
         switch (opt) {
         case 'c':  /* 配置文件 - 已在上面处理 */
             break;
@@ -834,6 +959,14 @@ int parse_config(int argc, char *argv[])
         case 'd':
             cfg.daemon = 1;
             break;
+        case 's':
+            config_strict_mode = 1;
+            fprintf(stderr, "Strict mode enabled: invalid config parameters will cause loading failure\n");
+            break;
+        case 'p':
+            config_strict_mode = 0;
+            fprintf(stderr, "Permissive mode enabled: invalid config parameters will be ignored with warnings\n");
+            break;
         case 'h':
             printf("Usage: %s [OPTIONS]\n", argv[0]);
             printf("\nOptions:\n");
@@ -841,6 +974,8 @@ int parse_config(int argc, char *argv[])
             printf("  -C, --config-dir DIR   Configuration directory (auto-loads all .yaml/.yml files)\n");
             printf("                         Default: /etc/firewall/\n");
             printf("  -d, --daemon           Run as daemon\n");
+            printf("  -s, --strict           Enable strict config validation (default)\n");
+            printf("  -p, --permissive       Allow unknown parameters with warnings\n");
             printf("  -h, --help             Show this help\n");
             printf("\nConfig file format:\n");
             printf("  defaults:\n");

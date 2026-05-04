@@ -114,6 +114,9 @@ struct jail {
 extern volatile sig_atomic_t running;
 extern volatile sig_atomic_t reload_config;
 
+/* 配置严格模式标志 */
+extern int config_strict_mode;
+
 /* 全局默认配置 */
 struct config {
     unsigned int default_max_retries; /* 新 jail 的默认值 */
