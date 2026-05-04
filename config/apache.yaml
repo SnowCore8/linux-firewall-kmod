@@ -1,0 +1,11 @@
+# Apache 防护配置
+# 监控 Apache 错误日志，防护暴力破解和恶意扫描
+
+jails:
+  apache:
+    enabled: true
+    log_files:
+      - /var/log/apache2/error.log
+    # 智能推断参数：max_retries=10, findtime=300, ban_time=1800
+    # 匹配 Apache 认证失败日志
+    regex: "client denied by server configuration: .+?, client: ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)"

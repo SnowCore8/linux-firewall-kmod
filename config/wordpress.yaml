@@ -1,0 +1,12 @@
+# WordPress 防护配置
+# 监控 WordPress 登录失败日志，防护 wp-admin 暴力破解
+# 需要安装 WP Fail2Ban 插件或类似日志插件
+
+jails:
+  wordpress:
+    enabled: true
+    log_files:
+      - /var/log/nginx/error.log
+    # 智能推断参数：max_retries=10, findtime=300, ban_time=1800
+    # 匹配 WordPress 认证失败日志（需要插件支持）
+    regex: "Authentication failure for.*from ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)"

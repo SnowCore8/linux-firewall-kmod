@@ -1,0 +1,11 @@
+# vsftpd FTP 服务防护配置
+# 监控 FTP 认证失败日志，防护 FTP 暴力破解
+
+jails:
+  vsftpd:
+    enabled: true
+    log_files:
+      - /var/log/vsftpd.log
+      - /var/log/auth.log
+    # 智能推断参数：max_retries=5, findtime=600, ban_time=1800
+    regex: "FAIL LOGIN: Client \"([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\""

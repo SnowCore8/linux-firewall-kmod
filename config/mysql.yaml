@@ -1,0 +1,12 @@
+# MySQL/MariaDB 数据库防护配置
+# 监控数据库错误日志，防护数据库暴力破解
+
+jails:
+  mysql:
+    enabled: true
+    log_files:
+      - /var/log/mysql/error.log
+      - /var/log/mariadb/mariadb.log
+    # 智能推断参数：max_retries=3, findtime=300, ban_time=3600
+    # 注意：MySQL 默认不记录认证失败，需在配置中启用 log_warnings
+    regex: "Access denied for user.*@.*\[([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\]"

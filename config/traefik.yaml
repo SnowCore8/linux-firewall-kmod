@@ -1,0 +1,11 @@
+# Traefik 反向代理防护配置
+# 监控 Traefik 访问日志，防护恶意扫描和攻击
+
+jails:
+  traefik:
+    enabled: true
+    log_files:
+      - /var/log/traefik/traefik.log
+    # 智能推断参数：max_retries=10, findtime=300, ban_time=1800
+    # 匹配 Traefik 错误日志中的客户端 IP
+    regex: "error while.*client ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)"

@@ -1,0 +1,11 @@
+# Postfix 邮件服务器防护配置
+# 监控 Postfix SASL 认证失败日志，防护邮件中继滥用
+
+jails:
+  postfix:
+    enabled: true
+    log_files:
+      - /var/log/mail.log
+      - /var/log/maillog
+    # 智能推断参数：max_retries=5, findtime=300, ban_time=1800
+    regex: "warning:.*\[([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\]: SASL.*authentication failure"

@@ -403,7 +403,7 @@ permanent_db_path: "/var/lib/firewall/bans.db"   # SQLite 数据库路径
 permanent_ban_enabled: true                       # 启用永久封禁
 ```
 
-### 示例二：多 Jail 配置
+### 示例二：多 Jail 配置（智能推断）
 
 ```yaml
 defaults:
@@ -414,28 +414,33 @@ defaults:
   metrics_port: 9119
 
 jails:
+  # SSH 服务 - 智能推断：retries=5, findtime=600, ban=900
   sshd:
     enabled: true
     log_files:
       - /var/log/auth.log
     regex: ""
 
+  # Nginx - 智能推断：retries=10, findtime=300, ban=1800
   nginx:
     enabled: true
     log_files:
       - /var/log/nginx/error.log
-    max_retries: 3
-    ban_time: 3600
     regex: "access forbidden by rule, client: ([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)"
 
+  # Dovecot - 智能推断：retries=5, findtime=300, ban=1800
   dovecot:
     enabled: true
     log_files:
       - /var/log/mail.log
-    max_retries: 5
-    findtime: 300
-    ban_time: 1800
     regex: "auth:.*auth failed.*rip=([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)"
+
+  # MySQL - 智能推断：retries=3, findtime=300, ban=3600
+  mysql:
+    enabled: true
+    log_files:
+      - /var/log/mysql/error.log
+    regex: "Access denied for user.*@.*\\[([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)\\]"
 
 permanent_db_path: "/var/lib/firewall/bans.db"
 permanent_ban_enabled: true
@@ -461,6 +466,39 @@ jails:
       - /var/log/mysql/error.log
     # 自动推断为 DB 推荐值
 ```
+
+---
+
+## 8.5 预设配置模板
+
+项目在 `config/` 目录下提供以下服务的预设配置模板：
+
+| 模板文件 | 服务类型 | 说明 |
+|----------|---------|------|
+| `default.yaml` | SSH | 默认配置，仅保护 SSH 服务 |
+| `nginx.yaml` | Web 服务器 | Nginx 错误日志防护 |
+| `apache.yaml` | Web 服务器 | Apache 错误日志防护 |
+| `dovecot.yaml` | 邮件服务 | Dovecot 认证失败防护 |
+| `postfix.yaml` | 邮件服务 | Postfix SASL 认证防护 |
+| `mysql.yaml` | 数据库 | MySQL/MariaDB 访问拒绝防护 |
+| `vsftpd.yaml` | FTP 服务 | vsftpd 登录失败防护 |
+| `wordpress.yaml` | Web 应用 | WordPress 登录失败防护 |
+| `redis.yaml` | 数据库 | Redis 密码错误防护 |
+| `docker.yaml` | 容器平台 | Docker API 未授权访问防护 |
+| `traefik.yaml` | 反向代理 | Traefik 错误日志防护 |
+
+### 使用预设模板
+
+```bash
+# 复制所需模板到配置目录
+sudo cp config/nginx.yaml /etc/firewall/
+sudo cp config/dovecot.yaml /etc/firewall/
+
+# 或复制所有模板
+sudo cp config/*.yaml /etc/firewall/
+```
+
+> **提示**：所有模板已启用智能推断，只需根据实际环境修改 `log_files` 路径即可使用。
 
 ---
 

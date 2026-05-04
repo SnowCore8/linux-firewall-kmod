@@ -1,0 +1,11 @@
+# Docker API 防护配置
+# 监控 Docker 守护进程日志，防护未授权 API 访问
+
+jails:
+  docker:
+    enabled: true
+    log_files:
+      - /var/log/docker.log
+    # 智能推断参数：max_retries=3, findtime=300, ban_time=3600
+    # 匹配 Docker 未授权访问日志
+    regex: "http: TLS handshake error from ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+).*"

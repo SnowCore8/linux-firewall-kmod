@@ -1,0 +1,11 @@
+# Dovecot 邮件服务防护配置
+# 监控 Dovecot 认证失败日志，防护邮件账户暴力破解
+
+jails:
+  dovecot:
+    enabled: true
+    log_files:
+      - /var/log/mail.log
+      - /var/log/dovecot.log
+    # 智能推断参数：max_retries=5, findtime=300, ban_time=1800
+    regex: "auth:.*auth failed.*rip=([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)"
