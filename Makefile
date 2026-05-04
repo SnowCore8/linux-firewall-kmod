@@ -9,7 +9,6 @@ PREFIX ?= /usr/local
 SBINDIR ?= $(PREFIX)/sbin
 FIREWALLETC ?= /etc/firewall
 RUNSTATEDIR ?= /var/lib
-LOGDIR ?= /var/log
 KERNEL_MODDIR ?= /lib/modules/$(shell uname -r)/extra
 
 # Kernel build directory (adjust if needed)
@@ -20,20 +19,14 @@ PWD := $(shell pwd)
 
 # Source directories
 KERNEL_SRC_DIR := src/kernel-module
-DAEMON_SRC := src/daemon/firewall-daemon.c
-DAEMON_JAIL_MGR := src/daemon/jail-manager.c
-DAEMON_CONFIG_PARSER := src/daemon/config-parser.c
-DAEMON_LOG_PARSER := src/daemon/log-parser.c
-DAEMON_FAILED_TRACKER := src/daemon/failed-tracker.c
-DAEMON_BAN_MGR := src/daemon/ban-manager.c
-DAEMON_FILE_MON := src/daemon/file-monitor.c
-EXPORTER_SRC := src/daemon/http-exporter.c
-SQLITE_SRC := src/daemon/sqlite-persistent.c
+DAEMON_SRC_DIR := src/daemon
 
 # Build output directories
 BUILD_DIR := build
 KERNEL_BUILD_DIR := $(BUILD_DIR)/kernel-module
+KERNEL_OBJ_DIR := $(KERNEL_BUILD_DIR)/obj
 DAEMON_BUILD_DIR := $(BUILD_DIR)/daemon
+DAEMON_OBJ_DIR := $(DAEMON_BUILD_DIR)/obj
 
 # Final output paths
 KERNEL_MODULE := $(KERNEL_BUILD_DIR)/firewall.ko
@@ -52,19 +45,48 @@ SECURITY_LDFLAGS = -pie -Wl,-z,relro,-z,now
 # Debug level (0 = no debug, 1-3 = increasing verbosity)
 DEBUG_LEVEL ?= 0
 
+# Daemon source files
+DAEMON_SRCS := $(DAEMON_SRC_DIR)/firewall-daemon.c \
+               $(DAEMON_SRC_DIR)/jail-manager.c \
+               $(DAEMON_SRC_DIR)/config-parser.c \
+               $(DAEMON_SRC_DIR)/log-parser.c \
+               $(DAEMON_SRC_DIR)/failed-tracker.c \
+               $(DAEMON_SRC_DIR)/ban-manager.c \
+               $(DAEMON_SRC_DIR)/file-monitor.c \
+               $(DAEMON_SRC_DIR)/http-exporter.c \
+               $(DAEMON_SRC_DIR)/sqlite-persistent.c
+
+DAEMON_OBJS := $(patsubst $(DAEMON_SRC_DIR)/%.c,$(DAEMON_OBJ_DIR)/%.o,$(DAEMON_SRCS))
+
 # Build the kernel module
-kernel-module: $(KERNEL_SRC_DIR)/firewall.c $(KERNEL_SRC_DIR)/firewall.h
+# Note: Kernel module build must stay in source directory (kernel build system requirement)
+# Intermediate files are cleaned after build, only .ko is copied to build/
+kernel-module: $(KERNEL_MODULE)
+
+$(KERNEL_MODULE): $(KERNEL_SRC_DIR)/firewall.c $(KERNEL_SRC_DIR)/firewall.h
 	@mkdir -p $(KERNEL_BUILD_DIR)
+	@echo "  CC      kernel-module"
 	+$(MAKE) -j$(NPROC) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) \
 		ccflags-y="-DDEBUG_LEVEL=$(DEBUG_LEVEL)" \
 		modules
-	cp $(KERNEL_SRC_DIR)/firewall.ko $(KERNEL_BUILD_DIR)/firewall.ko
-	@$(MAKE) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) clean >/dev/null 2>&1
+	@cp $(KERNEL_SRC_DIR)/firewall.ko $(KERNEL_BUILD_DIR)/firewall.ko
+	# Clean intermediate files from source directory
+	@rm -f $(KERNEL_SRC_DIR)/*.o $(KERNEL_SRC_DIR)/*.mod.c $(KERNEL_SRC_DIR)/*.mod.o \
+		$(KERNEL_SRC_DIR)/.*.cmd $(KERNEL_SRC_DIR)/modules.order \
+		$(KERNEL_SRC_DIR)/Module.symvers $(KERNEL_SRC_DIR)/.module-common.o
 
 # Build user-space daemon
-daemon: $(DAEMON_SRC) $(DAEMON_JAIL_MGR) $(DAEMON_CONFIG_PARSER) $(DAEMON_LOG_PARSER) $(DAEMON_FAILED_TRACKER) $(DAEMON_BAN_MGR) $(DAEMON_FILE_MON) $(EXPORTER_SRC) $(SQLITE_SRC)
+daemon: $(DAEMON_BIN)
+
+$(DAEMON_BIN): $(DAEMON_OBJS)
 	@mkdir -p $(DAEMON_BUILD_DIR)
-	$(CC) $(SECURITY_CFLAGS) $(SECURITY_LDFLAGS) -Wno-unused-function -o $(DAEMON_BIN) $^ -lpthread -lyaml -lsqlite3 -lmicrohttpd -lpcre2-8
+	@echo "  LD      $@"
+	$(CC) $(SECURITY_CFLAGS) $(SECURITY_LDFLAGS) -Wno-unused-function -o $@ $^ -lpthread -lyaml -lsqlite3 -lmicrohttpd -lpcre2-8
+
+$(DAEMON_OBJ_DIR)/%.o: $(DAEMON_SRC_DIR)/%.c
+	@mkdir -p $(DAEMON_OBJ_DIR)
+	@echo "  CC      $<"
+	$(CC) $(SECURITY_CFLAGS) -Wno-unused-function -c $< -o $@
 
 # Build both kernel module and daemon (sequential to avoid jobserver issues)
 all:
@@ -87,11 +109,11 @@ debug3:
 	$(MAKE) -C $(PWD) daemon
 
 # ASAN (AddressSanitizer) build for memory leak detection
-asan: $(DAEMON_SRC) $(DAEMON_JAIL_MGR) $(DAEMON_CONFIG_PARSER) $(DAEMON_LOG_PARSER) $(DAEMON_FAILED_TRACKER) $(DAEMON_BAN_MGR) $(DAEMON_FILE_MON) $(EXPORTER_SRC) $(SQLITE_SRC)
+asan: $(DAEMON_OBJS)
 	@mkdir -p $(DAEMON_BUILD_DIR)
+	@echo "  LD      $(DAEMON_BUILD_DIR)/firewall-daemon-asan"
 	$(CC) $(SECURITY_CFLAGS) -fsanitize=address -fno-omit-frame-pointer -g -O1 \
-		-Wno-unused-function -o $(DAEMON_BUILD_DIR)/firewall-daemon-asan \
-		$(DAEMON_SRC) $(DAEMON_JAIL_MGR) $(DAEMON_CONFIG_PARSER) $(DAEMON_LOG_PARSER) $(DAEMON_FAILED_TRACKER) $(DAEMON_BAN_MGR) $(DAEMON_FILE_MON) $(EXPORTER_SRC) $(SQLITE_SRC) -lpthread -lyaml -lsqlite3 -lasan
+		-Wno-unused-function -o $(DAEMON_BUILD_DIR)/firewall-daemon-asan $(DAEMON_OBJS) -lpthread -lyaml -lsqlite3 -lasan
 	@echo "ASAN build completed: $(DAEMON_BUILD_DIR)/firewall-daemon-asan"
 	@echo "Run with: ASAN_OPTIONS=detect_leaks=1 $(DAEMON_BUILD_DIR)/firewall-daemon-asan"
 
@@ -112,9 +134,6 @@ test-performance: performance_test.c
 # Clean build artifacts
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f $(KERNEL_SRC_DIR)/*.o $(KERNEL_SRC_DIR)/*.ko $(KERNEL_SRC_DIR)/*.mod.c \
-		$(KERNEL_SRC_DIR)/*.mod.o $(KERNEL_SRC_DIR)/.*.cmd $(KERNEL_SRC_DIR)/modules.order \
-		$(KERNEL_SRC_DIR)/Module.symvers
 	@echo "Build directory cleaned."
 
 # Install target - install everything (FHS compliant)
@@ -221,4 +240,4 @@ uninstall-kernel:
 	depmod -a
 	echo "  ✓ Kernel module and dependencies removed"
 
-.PHONY: kernel-module daemon all debug1 debug2 debug3 asan test test-legacy test-performance clean clean-build install uninstall uninstall-files uninstall-systemd uninstall-config uninstall-state-logs uninstall-procfs uninstall-kernel
+.PHONY: kernel-module daemon all debug1 debug2 debug3 asan test test-legacy test-performance clean install uninstall uninstall-files uninstall-systemd uninstall-config uninstall-state-logs uninstall-procfs uninstall-kernel

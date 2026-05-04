@@ -4,17 +4,6 @@
 
 # ---- 构建产物 ----
 build/
-*.o
-*.ko
-*.mod.c
-*.mod.o
-.*.cmd
-modules.order
-Module.symvers
-*.mod
-.module-common.o
-firewall-daemon
-firewall-ko-daemon
 
 # ---- 临时文件 ----
 *~
