@@ -55,4 +55,7 @@ int init_log_patterns(void);
 /* 释放预编译正则表达式模式 */
 void free_log_patterns(void);
 
+/* 为所有未显式配置的 jail 应用智能推断参数 */
+void apply_smart_defaults_to_all(struct config *target_cfg);
+
 #endif /* JAIL_MANAGER_H */

@@ -275,6 +275,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                             }
                         } else {
                             ctx.current_jail->max_retries = (unsigned int)val;
+                            ctx.current_jail->_max_retries_set = true;
                             daemon_log_info("Jail '%s' max_retries set to %u", ctx.current_jail->name, ctx.current_jail->max_retries);
                         }
                     } else if (strcmp(ctx.current_key, "findtime") == 0) {
@@ -291,6 +292,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                             }
                         } else {
                             ctx.current_jail->findtime = (unsigned int)val;
+                            ctx.current_jail->_findtime_set = true;
                             daemon_log_info("Jail '%s' findtime set to %u", ctx.current_jail->name, ctx.current_jail->findtime);
                         }
                     } else if (strcmp(ctx.current_key, "ban_time") == 0) {
@@ -307,6 +309,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                             }
                         } else {
                             ctx.current_jail->ban_time = (unsigned int)val;
+                            ctx.current_jail->_ban_time_set = true;
                             daemon_log_info("Jail '%s' ban_time set to %u", ctx.current_jail->name, ctx.current_jail->ban_time);
                         }
                     } else if (strcmp(ctx.current_key, "regex") == 0) {
@@ -496,7 +499,12 @@ static int parse_yaml_into(const char *config_path, struct config *target)
         return -1;
     }
 
-    return error ? -1 : 0;
+    if (error) return -1;
+
+    /* 解析成功后应用智能推断参数（仅对未显式配置的参数） */
+    apply_smart_defaults_to_all(target);
+
+    return 0;
 }
 
 /* 使用 libyaml 解析配置文件 - 支持基于 jail 的 YAML 格式。

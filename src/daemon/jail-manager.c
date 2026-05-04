@@ -5,58 +5,72 @@
 #include "firewall-daemon.h"
 #include "jail-manager.h"
 
-/* 根据服务名称智能推断推荐参数 */
-static void apply_smart_defaults(struct jail *j, const char *name)
+/* 根据服务名称智能推断推荐参数（仅当用户未显式配置时应用） */
+static void apply_smart_defaults_single(struct jail *j, const char *name, struct config *target_cfg)
 {
     /* SSH 服务 - 暴力破解防护 */
     if (strstr(name, "ssh") || strstr(name, "sshd")) {
-        j->max_retries = 5;
-        j->findtime = 600;      /* 10 分钟窗口 */
-        j->ban_time = 900;      /* 15 分钟封禁 */
-        daemon_log_info("Jail '%s': applying SSH smart defaults (retries=5, findtime=600, ban=900)", name);
+        if (!j->_max_retries_set) j->max_retries = 5;
+        if (!j->_findtime_set) j->findtime = 600;
+        if (!j->_ban_time_set) j->ban_time = 900;
+        daemon_log_info("Jail '%s': applying SSH smart defaults (retries=%u, findtime=%u, ban=%u)",
+                       name, j->max_retries, j->findtime, j->ban_time);
     }
     /* Nginx/Apache 服务 - Web 攻击防护 */
     else if (strstr(name, "nginx") || strstr(name, "apache") || strstr(name, "http")) {
-        j->max_retries = 10;
-        j->findtime = 300;      /* 5 分钟窗口 */
-        j->ban_time = 1800;     /* 30 分钟封禁 */
-        daemon_log_info("Jail '%s': applying WEB smart defaults (retries=10, findtime=300, ban=1800)", name);
+        if (!j->_max_retries_set) j->max_retries = 10;
+        if (!j->_findtime_set) j->findtime = 300;
+        if (!j->_ban_time_set) j->ban_time = 1800;
+        daemon_log_info("Jail '%s': applying WEB smart defaults (retries=%u, findtime=%u, ban=%u)",
+                       name, j->max_retries, j->findtime, j->ban_time);
     }
     /* FTP 服务 */
     else if (strstr(name, "ftp") || strstr(name, "vsftpd") || strstr(name, "proftpd")) {
-        j->max_retries = 5;
-        j->findtime = 600;
-        j->ban_time = 1800;
-        daemon_log_info("Jail '%s': applying FTP smart defaults (retries=5, findtime=600, ban=1800)", name);
+        if (!j->_max_retries_set) j->max_retries = 5;
+        if (!j->_findtime_set) j->findtime = 600;
+        if (!j->_ban_time_set) j->ban_time = 1800;
+        daemon_log_info("Jail '%s': applying FTP smart defaults (retries=%u, findtime=%u, ban=%u)",
+                       name, j->max_retries, j->findtime, j->ban_time);
     }
     /* 邮件服务 */
     else if (strstr(name, "postfix") || strstr(name, "dovecot") || strstr(name, "mail")) {
-        j->max_retries = 5;
-        j->findtime = 300;
-        j->ban_time = 1800;
-        daemon_log_info("Jail '%s': applying MAIL smart defaults (retries=5, findtime=300, ban=1800)", name);
+        if (!j->_max_retries_set) j->max_retries = 5;
+        if (!j->_findtime_set) j->findtime = 300;
+        if (!j->_ban_time_set) j->ban_time = 1800;
+        daemon_log_info("Jail '%s': applying MAIL smart defaults (retries=%u, findtime=%u, ban=%u)",
+                       name, j->max_retries, j->findtime, j->ban_time);
     }
     /* FRP 服务 */
     else if (strstr(name, "frp")) {
-        j->max_retries = 10;
-        j->findtime = 300;
-        j->ban_time = 1800;
-        daemon_log_info("Jail '%s': applying FRP smart defaults (retries=10, findtime=300, ban=1800)", name);
+        if (!j->_max_retries_set) j->max_retries = 10;
+        if (!j->_findtime_set) j->findtime = 300;
+        if (!j->_ban_time_set) j->ban_time = 1800;
+        daemon_log_info("Jail '%s': applying FRP smart defaults (retries=%u, findtime=%u, ban=%u)",
+                       name, j->max_retries, j->findtime, j->ban_time);
     }
     /* 数据库服务 */
     else if (strstr(name, "mysql") || strstr(name, "mariadb") || strstr(name, "postgres")) {
-        j->max_retries = 3;
-        j->findtime = 300;
-        j->ban_time = 3600;     /* 1 小时封禁 */
-        daemon_log_info("Jail '%s': applying DB smart defaults (retries=3, findtime=300, ban=3600)", name);
+        if (!j->_max_retries_set) j->max_retries = 3;
+        if (!j->_findtime_set) j->findtime = 300;
+        if (!j->_ban_time_set) j->ban_time = 3600;
+        daemon_log_info("Jail '%s': applying DB smart defaults (retries=%u, findtime=%u, ban=%u)",
+                       name, j->max_retries, j->findtime, j->ban_time);
     }
     /* 默认使用全局 defaults */
     else {
-        j->max_retries = cfg.default_max_retries;
-        j->findtime = cfg.default_findtime;
-        j->ban_time = cfg.default_ban_time;
+        if (!j->_max_retries_set) j->max_retries = target_cfg->default_max_retries;
+        if (!j->_findtime_set) j->findtime = target_cfg->default_findtime;
+        if (!j->_ban_time_set) j->ban_time = target_cfg->default_ban_time;
         daemon_log_info("Jail '%s': using global defaults (retries=%u, findtime=%u, ban=%u)",
                        name, j->max_retries, j->findtime, j->ban_time);
+    }
+}
+
+/* 为所有未显式配置的 jail 应用智能推断参数 */
+void apply_smart_defaults_to_all(struct config *target_cfg)
+{
+    for (int i = 0; i < target_cfg->jail_count; i++) {
+        apply_smart_defaults_single(&target_cfg->jails[i], target_cfg->jails[i].name, target_cfg);
     }
 }
 
@@ -69,6 +83,9 @@ void init_jail_defaults(struct jail *j)
     j->regex_compiled = 0;
     memset(&j->compiled_regex, 0, sizeof(j->compiled_regex));
     /* 注意：max_retries/findtime/ban_time 将在 apply_smart_defaults 中设置 */
+    j->_max_retries_set = false;
+    j->_findtime_set = false;
+    j->_ban_time_set = false;
     j->failed_table = NULL;
     memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
     j->failed_hash = NULL;
@@ -114,9 +131,6 @@ struct jail *find_or_create_jail(const char *name)
     init_jail_defaults(j);
     strncpy(j->name, name, sizeof(j->name) - 1);
     j->name[sizeof(j->name) - 1] = '\0';
-
-    /* 应用智能推断参数 */
-    apply_smart_defaults(j, name);
 
     daemon_log_info("Created new jail: %s", name);
     return j;
@@ -347,9 +361,13 @@ struct jail *find_or_create_jail_in_cfg(const char *name, struct config *target_
     j->regex_pattern = NULL;
     memset(&j->compiled_regex, 0, sizeof(j->compiled_regex));
     j->regex_compiled = 0;
+    /* 初始化为全局 defaults，等待解析完成后应用智能推断 */
     j->max_retries = target_cfg->default_max_retries;
     j->findtime = target_cfg->default_findtime;
     j->ban_time = target_cfg->default_ban_time;
+    j->_max_retries_set = false;
+    j->_findtime_set = false;
+    j->_ban_time_set = false;
     j->failed_table = NULL;
     memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
     j->failed_hash = NULL;

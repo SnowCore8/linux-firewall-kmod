@@ -103,6 +103,9 @@ struct jail {
     unsigned int max_retries;         /* 封禁前的最大失败次数 */
     unsigned int findtime;            /* 统计失败次数的时间窗口 */
     unsigned int ban_time;            /* 封禁持续时间 */
+    bool _max_retries_set;            /* 用户是否显式配置了 max_retries */
+    bool _findtime_set;               /* 用户是否显式配置了 findtime */
+    bool _ban_time_set;               /* 用户是否显式配置了 ban_time */
     struct failed_entry *failed_table;/* 每个 jail 的失败尝试（链表） */
     struct failed_entry *failed_hash_table[256]; /* 手动哈希表 */
     khash_t(ip_map) *failed_hash;     /* khash 用于 O(1) 查找 */
