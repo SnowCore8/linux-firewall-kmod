@@ -107,7 +107,7 @@ EOF
 
 timeout 5 "$DAEMON_PATH" -c "$local_special_yaml" 2>&1 || true
 sleep 1
-# Verify procfs is still accessible after daemon ran with special characters
+# 验证守护进程处理特殊字符后 procfs 仍可访问
 assert_true "[[ -r '$PROC_BANS' ]]" "特殊字符日志处理后 procfs 仍可访问"
 
 rm -f "$local_special_log" "$local_special_yaml"
@@ -135,7 +135,7 @@ jails:
 EOF
 
 timeout 3 "$DAEMON_PATH" -c "$local_empty_yaml" 2>&1 || true
-# Verify procfs is still accessible after daemon ran with empty log
+# 验证守护进程处理空日志后 procfs 仍可访问
 assert_true "[[ -r '$PROC_BANS' ]]" "空日志文件处理后 procfs 仍可访问"
 
 rm -f "/tmp/fw_test_empty_$$.log" "$local_empty_yaml"

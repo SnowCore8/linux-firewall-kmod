@@ -1,12 +1,12 @@
 /*
- * config-parser.c - Configuration parsing functions
+ * config-parser.c - 配置解析函数
  */
 
 #include "firewall-daemon.h"
 #include "jail-manager.h"
 #include "config-parser.h"
 
-/* YAML parsing context for double-buffer config reload */
+/* 用于双缓冲配置重新加载的 YAML 解析上下文 */
 struct yaml_parse_ctx {
     struct jail *current_jail;
     int in_jails_section;
@@ -16,9 +16,9 @@ struct yaml_parse_ctx {
     char *current_jail_name;
 };
 
-/* Parse YAML file into a target config (no lock held).
- * This is the core parsing logic extracted from parse_config_file.
- * Returns 0 on success, -1 on error. */
+/* 将 YAML 文件解析到目标配置（不持有锁）。
+ * 这是从 parse_config_file 中提取的核心解析逻辑。
+ * 成功返回 0，错误返回 -1。 */
 static int parse_yaml_into(const char *config_path, struct config *target)
 {
     FILE *file;
@@ -29,7 +29,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
 
     struct yaml_parse_ctx ctx = {0};
 
-    /* Extract config file directory for resolving relative paths */
+    /* 提取配置文件目录以解析相对路径 */
     char config_dir[1024];
     strncpy(config_dir, config_path, sizeof(config_dir) - 1);
     config_dir[sizeof(config_dir) - 1] = '\0';
@@ -40,7 +40,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
         strcpy(config_dir, ".");
     }
 
-    /* Open config file */
+    /* 打开配置文件 */
     file = fopen(config_path, "r");
     if (!file) {
         daemon_log_warn("Cannot open config file: %s", config_path);
@@ -49,7 +49,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
 
     daemon_log_info("Reading config file: %s", config_path);
 
-    /* Initialize YAML parser */
+    /* 初始化 YAML 解析器 */
     if (!yaml_parser_initialize(&parser)) {
         daemon_log_err("Failed to initialize YAML parser");
         fclose(file);
@@ -58,7 +58,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
 
     yaml_parser_set_input_file(&parser, file);
 
-    /* Parse YAML events */
+    /* 解析 YAML 事件 */
     while (!done) {
         if (!yaml_parser_parse(&parser, &event)) {
             daemon_log_err("YAML parse error: %s", parser.problem ? parser.problem : "unknown");
@@ -79,7 +79,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
         case YAML_SCALAR_EVENT: {
             char *value = (char *)event.data.scalar.value;
 
-            /* Reject excessively long values to prevent memory exhaustion */
+            /* 拒绝过长的值以防止内存耗尽 */
             if (strlen(value) > 1024) {
                 daemon_log_warn("YAML value too long (%zu bytes), rejecting", strlen(value));
                 error = 1;
@@ -87,7 +87,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
             }
 
             if (ctx.in_defaults_section && ctx.current_key) {
-                /* Parsing defaults section - set global defaults */
+                /* 解析 defaults 部分 - 设置全局默认值 */
                 if (strcmp(ctx.current_key, "max_retries") == 0) {
                     char *endptr;
                     errno = 0;
@@ -147,7 +147,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                 } else if (strcmp(ctx.current_key, "permanent_db_path") == 0) {
                     if (strlen(value) > 0) {
                         if (target->permanent_db_path) free(target->permanent_db_path);
-                        /* Resolve relative path against config file directory */
+                        /* 相对于配置文件目录解析相对路径 */
                         if (value[0] == '/') {
                             target->permanent_db_path = strdup(value);
                         } else {
@@ -166,13 +166,13 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                 free(ctx.current_key);
                 ctx.current_key = NULL;
             } else if (ctx.in_jails_section && ctx.current_jail_name && !ctx.in_log_files_array) {
-                /* We're in a jail section - either this is a jail key or a jail property */
+                /* 在 jail 部分中 - 这可能是 jail 键或 jail 属性 */
                 if (!ctx.current_key) {
-                    /* This is a property key for the current jail */
+                    /* 这是当前 jail 的属性键 */
                     ctx.current_key = strdup(value);
                 } else {
-                    /* We have key-value pair for jail property */
-                    /* Find or create jail if not already created */
+                    /* 我们有了 jail 属性的键值对 */
+                    /* 如果尚未创建则查找或创建 jail */
                     if (!ctx.current_jail) {
                         ctx.current_jail = find_or_create_jail_in_cfg(ctx.current_jail_name, target);
                         if (!ctx.current_jail) {
@@ -225,7 +225,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                     ctx.current_key = NULL;
                 }
             } else if (ctx.in_log_files_array && ctx.current_jail) {
-                /* Parsing log_files array for current jail */
+                /* 解析当前 jail 的 log_files 数组 */
                 if (ctx.current_jail->log_count >= MAX_LOG_FILES) {
                     daemon_log_warn("Too many log files for jail '%s' (max %d)", ctx.current_jail->name, MAX_LOG_FILES);
                 } else if (validate_and_normalize_path(value) < 0) {
@@ -241,7 +241,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                     }
                 }
             } else if (ctx.current_key) {
-                /* Top-level key-value pair (not in jails or defaults) */
+                /* 顶层键值对（不在 jails 或 defaults 中） */
                 if (strcmp(ctx.current_key, "max_retries") == 0) {
                     char *endptr;
                     errno = 0;
@@ -287,7 +287,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                 } else if (strcmp(ctx.current_key, "permanent_db_path") == 0) {
                     if (strlen(value) > 0) {
                         if (target->permanent_db_path) free(target->permanent_db_path);
-                        /* Resolve relative path against config file directory */
+                        /* 相对于配置文件目录解析相对路径 */
                         if (value[0] == '/') {
                             target->permanent_db_path = strdup(value);
                         } else {
@@ -305,7 +305,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                 free(ctx.current_key);
                 ctx.current_key = NULL;
             } else {
-                /* This is a key without value yet */
+                /* 这是一个还没有值的键 */
                 ctx.current_key = strdup(value);
             }
             break;
@@ -334,10 +334,10 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                 free(ctx.current_key);
                 ctx.current_key = NULL;
             } else if (ctx.in_jails_section && ctx.current_key) {
-                /* Starting a new jail mapping */
+                /* 开始一个新的 jail 映射 */
                 if (ctx.current_jail_name) free(ctx.current_jail_name);
                 ctx.current_jail_name = ctx.current_key;
-                ctx.current_jail = NULL;  /* Will be created when properties are parsed */
+                ctx.current_jail = NULL;  /* 将在解析属性时创建 */
                 ctx.current_key = NULL;
             }
         }
@@ -345,7 +345,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
 
         case YAML_MAPPING_END_EVENT: {
             if (ctx.in_jails_section && !ctx.in_log_files_array) {
-                /* End of a jail section - compile regex if pattern exists */
+                /* jail 部分结束 - 如果存在模式则编译正则表达式 */
                 if (ctx.current_jail_name && ctx.current_jail) {
                     if (ctx.current_jail->regex_pattern && strlen(ctx.current_jail->regex_pattern) > 0) {
                         compile_jail_regex(ctx.current_jail);
@@ -377,30 +377,30 @@ static int parse_yaml_into(const char *config_path, struct config *target)
     yaml_parser_delete(&parser);
     fclose(file);
 
-    /* Cleanup */
+    /* 清理 */
     if (ctx.current_key) free(ctx.current_key);
     if (ctx.current_jail_name) free(ctx.current_jail_name);
 
     return error ? -1 : 0;
 }
 
-/* Parse configuration file using libyaml - supports jail-based YAML format.
- * Uses double-buffer pattern: parses into temporary config without holding lock,
- * then briefly locks to swap configs and migrate runtime state. */
+/* 使用 libyaml 解析配置文件 - 支持基于 jail 的 YAML 格式。
+ * 使用双缓冲模式：在不持有锁的情况下解析到临时配置，
+ * 然后短暂加锁以交换配置并迁移运行时状态。 */
 int parse_config_file(const char *config_path)
 {
     struct config *new_cfg;
     struct config *old_cfg_snapshot = NULL;
     int parse_rc;
 
-    /* Allocate temporary config */
+    /* 分配临时配置 */
     new_cfg = calloc(1, sizeof(*new_cfg));
     if (!new_cfg) {
         daemon_log_err("Out of memory allocating temporary config");
         return -1;
     }
 
-    /* Copy path strings to new_cfg (needed for relative path resolution) */
+    /* 将路径字符串复制到 new_cfg（解析相对路径所需） */
     if (cfg.config_file) {
         new_cfg->config_file = strdup(cfg.config_file);
     }
@@ -412,7 +412,7 @@ int parse_config_file(const char *config_path)
         new_cfg->permanent_ban_enabled = cfg.permanent_ban_enabled;
     }
 
-    /* Copy current defaults as baseline */
+    /* 复制当前默认值作为基准 */
     pthread_mutex_lock(&config_mutex);
     new_cfg->default_max_retries = cfg.default_max_retries;
     new_cfg->default_findtime = cfg.default_findtime;
@@ -423,11 +423,11 @@ int parse_config_file(const char *config_path)
     new_cfg->jail_count = 0;
     pthread_mutex_unlock(&config_mutex);
 
-    /* Parse YAML into new_cfg WITHOUT holding the lock */
+    /* 在不持有锁的情况下将 YAML 解析到 new_cfg */
     parse_rc = parse_yaml_into(config_path, new_cfg);
     if (parse_rc < 0) {
         daemon_log_warn("Failed to parse config file: %s", config_path);
-        /* Free new_cfg's allocated strings */
+        /* 释放 new_cfg 分配的字符串 */
         if (new_cfg->config_file) free(new_cfg->config_file);
         if (new_cfg->config_dir) free(new_cfg->config_dir);
         if (new_cfg->permanent_db_path) free(new_cfg->permanent_db_path);
@@ -445,10 +445,10 @@ int parse_config_file(const char *config_path)
         return -1;
     }
 
-    /* Validate new config */
+    /* 验证新配置 */
     if (config_validate(new_cfg) < 0) {
         daemon_log_warn("Config validation failed for: %s", config_path);
-        /* Free new_cfg */
+        /* 释放 new_cfg */
         if (new_cfg->config_file) free(new_cfg->config_file);
         if (new_cfg->config_dir) free(new_cfg->config_dir);
         if (new_cfg->permanent_db_path) free(new_cfg->permanent_db_path);
@@ -466,13 +466,13 @@ int parse_config_file(const char *config_path)
         return -1;
     }
 
-    /* Briefly lock to swap configs and migrate runtime state */
+    /* 短暂加锁以交换配置并迁移运行时状态 */
     pthread_mutex_lock(&config_mutex);
 
-    /* Snapshot old config for migration and cleanup */
+    /* 快照旧配置以进行迁移和清理 */
     old_cfg_snapshot = config_clone(&cfg);
 
-    /* Copy new config values to global cfg */
+    /* 将新配置值复制到全局 cfg */
     cfg.default_max_retries = new_cfg->default_max_retries;
     cfg.default_findtime = new_cfg->default_findtime;
     cfg.default_ban_time = new_cfg->default_ban_time;
@@ -480,7 +480,7 @@ int parse_config_file(const char *config_path)
     cfg.interval = new_cfg->interval;
     cfg.metrics_port = new_cfg->metrics_port;
 
-    /* Migrate runtime state (failed_hash) from old jails to new jails */
+    /* 将运行时状态（failed_hash）从旧 jail 迁移到新 jail */
     if (old_cfg_snapshot) {
         for (int i = 0; i < old_cfg_snapshot->jail_count; i++) {
             struct jail *old_jail = &old_cfg_snapshot->jails[i];
@@ -498,7 +498,7 @@ int parse_config_file(const char *config_path)
         }
     }
 
-    /* Clean up old jails (failed_hash already migrated) */
+    /* 清理旧 jail（failed_hash 已迁移） */
     for (int i = 0; i < cfg.jail_count; i++) {
         struct jail *old_jail = &cfg.jails[i];
         for (int j = 0; j < old_jail->log_count; j++) {
@@ -509,21 +509,21 @@ int parse_config_file(const char *config_path)
             if (old_jail->match_data) pcre2_match_data_free(old_jail->match_data);
         }
         if (old_jail->regex_pattern) free(old_jail->regex_pattern);
-        /* failed_hash already migrated, skip */
+        /* failed_hash 已迁移，跳过 */
         memset(old_jail, 0, sizeof(struct jail));
     }
     cfg.jail_count = 0;
 
-    /* Copy new jails to global cfg */
+    /* 将新 jail 复制到全局 cfg */
     cfg.jail_count = new_cfg->jail_count;
     for (int i = 0; i < new_cfg->jail_count; i++) {
         memcpy(&cfg.jails[i], &new_cfg->jails[i], sizeof(struct jail));
-        /* Clear source to prevent double-free */
+        /* 清空源以防止重复释放 */
         memset(&new_cfg->jails[i], 0, sizeof(struct jail));
     }
     new_cfg->jail_count = 0;
 
-    /* Update path strings */
+    /* 更新路径字符串 */
     if (new_cfg->config_file) {
         if (cfg.config_file) free(cfg.config_file);
         cfg.config_file = new_cfg->config_file;
@@ -543,13 +543,13 @@ int parse_config_file(const char *config_path)
 
     pthread_mutex_unlock(&config_mutex);
 
-    /* Free new_cfg (jails already moved, paths already moved) */
+    /* 释放 new_cfg（jail 已移动，路径已移动） */
     if (new_cfg->config_file) free(new_cfg->config_file);
     if (new_cfg->config_dir) free(new_cfg->config_dir);
     if (new_cfg->permanent_db_path) free(new_cfg->permanent_db_path);
     free(new_cfg);
 
-    /* Free old config snapshot (runtime state already migrated) */
+    /* 释放旧配置快照（运行时状态已迁移） */
     if (old_cfg_snapshot) {
         free_config_partial(old_cfg_snapshot);
         free(old_cfg_snapshot);
@@ -559,9 +559,9 @@ int parse_config_file(const char *config_path)
     return 0;
 }
 
-/* Load all .yaml/.yml files from a configuration directory
- * Files are loaded in alphabetical order, later files override earlier ones
- * for scalar values, and arrays are appended. */
+/* 从配置目录加载所有 .yaml/.yml 文件
+ * 文件按字母顺序加载，后面的文件会覆盖前面的标量值，
+ * 数组则会追加。 */
 int load_config_directory(const char *config_dir)
 {
     DIR *dir;
@@ -570,7 +570,7 @@ int load_config_directory(const char *config_dir)
     int file_count = 0;
     int file_capacity = 16;
     int ret = 0;
-    const int MAX_CONFIG_FILES = 50;  /* Limit to prevent excessive file loading */
+    const int MAX_CONFIG_FILES = 50;  /* 限制数量以防止加载过多文件 */
 
     dir = opendir(config_dir);
     if (!dir) {
@@ -580,7 +580,7 @@ int load_config_directory(const char *config_dir)
 
     daemon_log_info("Loading configuration directory: %s", config_dir);
 
-    /* Allocate file list */
+    /* 分配文件列表 */
     file_list = malloc(file_capacity * sizeof(char *));
     if (!file_list) {
         daemon_log_err("Out of memory allocating file list");
@@ -588,23 +588,23 @@ int load_config_directory(const char *config_dir)
         return -1;
     }
 
-    /* Collect all .yaml and .yml files */
+    /* 收集所有 .yaml 和 .yml 文件 */
     while ((entry = readdir(dir)) != NULL) {
         const char *name = entry->d_name;
         size_t len = strlen(name);
 
-        /* Check for .yaml or .yml extension */
+        /* 检查 .yaml 或 .yml 扩展名 */
         if ((len > 5 && strcmp(name + len - 5, ".yaml") == 0) ||
             (len > 4 && strcmp(name + len - 4, ".yml") == 0)) {
             
-            /* Enforce file limit */
+            /* 强制执行文件数量限制 */
             if (file_count >= MAX_CONFIG_FILES) {
                 daemon_log_warn("Config file limit reached (%d), skipping: %s", MAX_CONFIG_FILES, name);
                 continue;
             }
             
 
-            /* Expand list if needed */
+            /* 如果需要则扩展列表 */
             if (file_count >= file_capacity) {
                 file_capacity *= 2;
                 char **new_list = realloc(file_list, file_capacity * sizeof(char *));
@@ -637,10 +637,10 @@ int load_config_directory(const char *config_dir)
         return 0;
     }
 
-    /* Sort files alphabet using qsort for better performance */
+    /* 使用 qsort 按字母顺序对文件排序以提高性能 */
     qsort(file_list, (size_t)file_count, sizeof(char *), compare_config_files);
 
-    /* Load each configuration file - each file can define independent jails */
+    /* 加载每个配置文件 - 每个文件可以定义独立的 jail */
     for (int i = 0; i < file_count; i++) {
         char full_path[1024];
         snprintf(full_path, sizeof(full_path), "%s/%s", config_dir, file_list[i]);
@@ -649,11 +649,11 @@ int load_config_directory(const char *config_dir)
 
         if (parse_config_file(full_path) < 0) {
             daemon_log_warn("Failed to load config file: %s (continuing with others)", full_path);
-            /* Continue loading other files instead of failing completely */
+            /* 继续加载其他文件而不是完全失败 */
         }
     }
 
-    /* Log summary of loaded jails */
+    /* 记录已加载 jail 的摘要 */
     pthread_mutex_lock(&config_mutex);
     daemon_log_info("Loaded %d jails from directory: %s", cfg.jail_count, config_dir);
     for (int i = 0; i < cfg.jail_count; i++) {
@@ -662,7 +662,7 @@ int load_config_directory(const char *config_dir)
     }
     pthread_mutex_unlock(&config_mutex);
 
-    /* Cleanup */
+    /* 清理 */
     for (int i = 0; i < file_count; i++) {
         free(file_list[i]);
     }
@@ -671,7 +671,7 @@ int load_config_directory(const char *config_dir)
     return ret;
 }
 
-/* Setup signal handlers using sigaction */
+/* 使用 sigaction 设置信号处理函数 */
 void setup_signals(void)
 {
     struct sigaction sa;
@@ -691,26 +691,26 @@ void setup_signals(void)
         daemon_log_err("Failed to setup SIGHUP handler: %s", strerror(errno));
     }
 
-    /* Ignore SIGPIPE */
+    /* 忽略 SIGPIPE */
     sa.sa_handler = SIG_IGN;
     if (sigaction(SIGPIPE, &sa, NULL) == -1) {
         daemon_log_err("Failed to ignore SIGPIPE: %s", strerror(errno));
     }
 }
 
-/* Parse command line arguments */
+/* 解析命令行参数 */
 int parse_config(int argc, char *argv[])
 {
     int opt;
     static struct option long_options[] = {
-        {"config",     required_argument, 0, 'c'},  /* Single config file */
-        {"config-dir", required_argument, 0, 'C'},  /* Config directory (auto-loads all .yaml) */
+        {"config",     required_argument, 0, 'c'},  /* 单个配置文件 */
+        {"config-dir", required_argument, 0, 'C'},  /* 配置目录（自动加载所有 .yaml） */
         {"daemon",     no_argument,       0, 'd'},
         {"help",       no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
 
-    /* Set defaults */
+    /* 设置默认值 */
     cfg.default_max_retries = DEFAULT_MAX_RETRIES;
     cfg.default_findtime = DEFAULT_FINDTIME;
     cfg.default_ban_time = DEFAULT_BAN_TIME;
@@ -723,7 +723,7 @@ int parse_config(int argc, char *argv[])
     cfg.permanent_db_path = NULL;
     cfg.permanent_ban_enabled = 0;
 
-    /* Initialize jails */
+    /* 初始化 jails */
     for (int i = 0; i < MAX_JAILS; i++) {
         cfg.jails[i].name[0] = '\0';
         cfg.jails[i].enabled = false;
@@ -736,15 +736,15 @@ int parse_config(int argc, char *argv[])
         }
     }
 
-    /* Default config directory: /etc/firewall/ (FHS compliant) */
+    /* 默认配置目录：/etc/firewall/（符合 FHS 标准） */
     const char *default_config_dirs[] = {
         "/etc/firewall",
         NULL
     };
 
-    /* First pass: check for explicit config file or directory options */
+    /* 第一遍：检查显式的配置文件或目录选项 */
     for (int i = 1; i < argc; i++) {
-        /* Check for --config or -c (single file) */
+        /* 检查 --config 或 -c（单个文件） */
         if (strcmp(argv[i], "--config") == 0 || strcmp(argv[i], "-c") == 0) {
             char *config_path = (i + 1 < argc) ? argv[i + 1] : NULL;
             if (config_path) {
@@ -775,7 +775,7 @@ int parse_config(int argc, char *argv[])
                 return -1;
             }
         }
-        /* Check for --config-dir or -C (directory) */
+        /* 检查 --config-dir 或 -C（目录） */
         else if (strcmp(argv[i], "--config-dir") == 0 || strcmp(argv[i], "-C") == 0) {
             char *dir_path = (i + 1 < argc) ? argv[i + 1] : NULL;
             if (dir_path) {
@@ -786,7 +786,7 @@ int parse_config(int argc, char *argv[])
                 }
                 if (load_config_directory(dir_path) < 0) {
                     fprintf(stderr, "Warning: failed to load config directory: %s\n", dir_path);
-                    /* Non-fatal: continue without config */
+                    /* 非致命错误：在没有配置的情况下继续 */
                 }
                 break;
             }
@@ -803,7 +803,7 @@ int parse_config(int argc, char *argv[])
         }
     }
 
-    /* If no explicit config was provided, try default config directories */
+    /* 如果未提供显式配置，尝试默认配置目录 */
     if (!cfg.config_file && !cfg.config_dir) {
         for (int i = 0; default_config_dirs[i] != NULL; i++) {
             if (access(default_config_dirs[i], F_OK) == 0) {
@@ -824,12 +824,12 @@ int parse_config(int argc, char *argv[])
         }
     }
 
-    /* Now parse command line options (they override config file values) */
+    /* 现在解析命令行选项（它们会覆盖配置文件中的值） */
     while ((opt = getopt_long(argc, argv, "c:C:dh", long_options, NULL)) != -1) {
         switch (opt) {
-        case 'c':  /* Config file - already handled above */
+        case 'c':  /* 配置文件 - 已在上面处理 */
             break;
-        case 'C':  /* Config directory - already handled above */
+        case 'C':  /* 配置目录 - 已在上面处理 */
             break;
         case 'd':
             cfg.daemon = 1;
@@ -854,14 +854,14 @@ int parse_config(int argc, char *argv[])
             printf("        - /var/log/auth.log\n");
             return 1;
         case '?':
-            /* getopt_long already printed an error message */
+            /* getopt_long 已打印错误信息 */
             return -1;
         default:
             return -1;
         }
     }
 
-    /* Default log files if none specified - require jail format in config */
+    /* 如果未指定默认日志文件 - 需要在配置中使用 jail 格式 */
     int total_log_files = 0;
     for (int i = 0; i < cfg.jail_count; i++) {
         total_log_files += cfg.jails[i].log_count;
@@ -882,14 +882,14 @@ int parse_config(int argc, char *argv[])
 }
 
 /*
- * validate_and_normalize_path - Validate log file path for security
- * @input_path: Path to validate
+ * validate_and_normalize_path - 验证日志文件路径的安全性
+ * @input_path: 要验证的路径
  *
- * Uses realpath() for robust path normalization and traversal detection.
- * Rejects paths with shell metacharacters, control characters, or
- * that resolve outside expected locations.
+ * 使用 realpath() 进行可靠的路径规范化和遍历检测。
+ * 拒绝包含 shell 元字符、控制字符或
+ * 解析到预期位置之外的路径。
  *
- * Returns: 0 if valid, -1 if invalid
+ * 返回值：有效返回 0，无效返回 -1
  */
 int validate_and_normalize_path(const char *input_path) {
     char resolved[PATH_MAX];
@@ -904,37 +904,37 @@ int validate_and_normalize_path(const char *input_path) {
         return -1;
     }
 
-    /* Must be absolute path */
+    /* 必须是绝对路径 */
     if (input_path[0] != '/') {
         return -1;
     }
 
-    /* Reject control characters */
+    /* 拒绝控制字符 */
     for (size_t i = 0; i < input_len; i++) {
         if ((unsigned char)input_path[i] < 32) {
             return -1;
         }
     }
 
-    /* Reject shell metacharacters that could enable injection */
+    /* 拒绝可能导致注入的 shell 元字符 */
     if (strpbrk(input_path, "|;&`$(){}<>!~*?[]") != NULL) {
         return -1;
     }
 
-    /* Reject URL-encoded traversal attempts */
+    /* 拒绝 URL 编码的遍历尝试 */
     if (strcasestr(input_path, "%2e") != NULL || strcasestr(input_path, "%2f") != NULL) {
         return -1;
     }
 
-    /* Reject obvious path traversal patterns */
+    /* 拒绝明显的路径遍历模式 */
     if (strstr(input_path, "..") != NULL) {
         return -1;
     }
 
-    /* Use realpath() for final normalization and validation.
-     * realpath() requires the path to exist, so we use it only for
-     * the directory component. If the file doesn't exist yet, we
-     * validate the parent directory instead. */
+    /* 使用 realpath() 进行最终的规范化和验证。
+     * realpath() 要求路径存在，因此我们仅将其用于
+     * 目录部分。如果文件尚不存在，我们
+     * 改为验证父目录。 */
     char *path_copy = strdup(input_path);
     if (!path_copy) {
         return -1;
@@ -942,21 +942,21 @@ int validate_and_normalize_path(const char *input_path) {
 
     char *dir = dirname(path_copy);
     if (realpath(dir, resolved) == NULL) {
-        /* Directory doesn't exist - allow if path looks safe */
+        /* 目录不存在 - 如果路径看起来安全则允许 */
         free(path_copy);
         return (strstr(input_path, "//") == NULL) ? 0 : -1;
     }
 
     free(path_copy);
 
-    /* Verify resolved path doesn't escape expected locations.
-     * Log files should be under /var/log or similar standard locations.
-     * Note: /root/ is excluded as systemd ProtectHome=yes blocks access. */
+    /* 验证解析后的路径不会逃逸到预期位置之外。
+     * 日志文件应位于 /var/log 或类似的标准位置。
+     * 注意：/root/ 被排除，因为 systemd ProtectHome=yes 会阻止访问。 */
     if (strncmp(resolved, "/var/log", 8) != 0 &&
         strncmp(resolved, "/etc/", 5) != 0 &&
         strncmp(resolved, "/home/", 6) != 0 &&
         strncmp(resolved, "/srv/", 5) != 0) {
-        /* Reject paths outside standard locations */
+        /* 拒绝不在标准位置的路径 */
         return -1;
     }
 

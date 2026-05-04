@@ -1,5 +1,5 @@
 /*
- * failed-tracker.c - Failed attempt tracking functions
+ * failed-tracker.c - 失败尝试跟踪函数
  */
 
 #include "firewall-daemon.h"
@@ -7,7 +7,7 @@
 #include "ban-manager.h"
 #include "failed-tracker.h"
 
-/* Find failed entry by IP in a specific jail */
+/* 在特定 jail 中按IP查找失败条目 */
 struct failed_entry *find_entry_for_jail(struct jail *j, const char *ip)
 {
     if (!j || !j->failed_hash || !ip) return NULL;
@@ -19,12 +19,12 @@ struct failed_entry *find_entry_for_jail(struct jail *j, const char *ip)
     return NULL;
 }
 
-/* Create new failed entry in a specific jail */
+/* 在特定 jail 中创建新的失败条目 */
 struct failed_entry *create_entry_for_jail(struct jail *j, const char *ip)
 {
     if (!j || !ip) return NULL;
     
-    /* Initialize hash table if needed */
+    /* 如果需要则初始化哈希表 */
     if (!j->failed_hash) {
         j->failed_hash = kh_init(ip_map);
         if (!j->failed_hash) {
@@ -33,23 +33,23 @@ struct failed_entry *create_entry_for_jail(struct jail *j, const char *ip)
         }
     }
     
-    /* Check if entry already exists */
+    /* 检查条目是否已存在 */
     int ret;
     khint_t k = kh_put(ip_map, j->failed_hash, ip, &ret);
     if (ret == 0) {
-        return kh_value(j->failed_hash, k);  /* Already exists */
+        return kh_value(j->failed_hash, k);  /* 已存在 */
     }
     
-    /* Key ownership: replace stack pointer with heap-allocated copy */
+    /* 键所有权：用堆分配的副本替换栈指针 */
     char *key_copy = strdup(ip);
     if (!key_copy) {
         daemon_log_err("Failed to allocate memory for hash key");
-        kh_del(ip_map, j->failed_hash, k);  /* Remove empty slot */
+        kh_del(ip_map, j->failed_hash, k);  /* 移除空槽位 */
         return NULL;
     }
     kh_key(j->failed_hash, k) = key_copy;
     
-    /* Create new entry */
+    /* 创建新条目 */
     struct failed_entry *entry = calloc(1, sizeof(*entry));
     if (!entry) {
         daemon_log_err("Failed to allocate memory for failed entry");
@@ -66,7 +66,7 @@ struct failed_entry *create_entry_for_jail(struct jail *j, const char *ip)
     return entry;
 }
 
-/* Remove failed entry (per-jail) */
+/* 移除失败条目（每个jail） */
 void remove_entry_for_jail(struct jail *j, const char *ip)
 {
     if (!j || !j->failed_hash || !ip) return;
@@ -74,35 +74,35 @@ void remove_entry_for_jail(struct jail *j, const char *ip)
     khint_t k = kh_get(ip_map, j->failed_hash, ip);
     if (k != kh_end(j->failed_hash)) {
         free(kh_value(j->failed_hash, k));
-        free((char *)kh_key(j->failed_hash, k));  /* Free heap-allocated key */
+        free((char *)kh_key(j->failed_hash, k));  /* 释放堆分配的键 */
         kh_del(ip_map, j->failed_hash, k);
     }
 }
 
-/* Count recent failures within time window */
+/* 统计时间窗口内的近期失败次数 */
 unsigned int count_recent(struct failed_entry *entry, time_t window, unsigned int max_retries)
 {
     time_t now = time(NULL);
     unsigned int count = 0;
 
-    /* Validate parameters to prevent potential issues */
+    /* 验证参数以防止潜在问题 */
     if (!entry || window <= 0) {
         daemon_log_debug("Invalid parameters to count_recent");
         return 0;
     }
 
     for (unsigned int i = 0; i < entry->count; i++) {
-        /* Prevent integer underflow if timestamp is in the future */
+        /* 如果时间戳在未来，防止整数下溢 */
         if (now >= entry->timestamps[i]) {
             time_t diff = now - entry->timestamps[i];
-            /* Additional check to prevent potential integer overflow in comparison */
+            /* 额外检查以防止比较中潜在的整数溢出 */
             if (diff <= window) {
                 count++;
             }
         }
-        /* Limit processing to avoid excessive CPU usage if there are many timestamps */
+        /* 限制处理以避免在时间戳过多时过度消耗CPU */
         if (count > max_retries) {
-            /* Early exit if we've already exceeded the threshold */
+            /* 如果已超过阈值则提前退出 */
             break;
         }
     }
@@ -111,22 +111,22 @@ unsigned int count_recent(struct failed_entry *entry, time_t window, unsigned in
 }
 
 /*
- * process_failed_timestamps - Add timestamp and manage buffer overflow
- * @entry: Failed entry to update
- * @now: Current timestamp
- * @findtime: Time window for counting failures
+ * process_failed_timestamps - 添加时间戳并管理缓冲区溢出
+ * @entry: 要更新的失败条目
+ * @now: 当前时间戳
+ * @findtime: 统计失败次数的时间窗口
  */
 void process_failed_timestamps(struct failed_entry *entry, time_t now, time_t findtime)
 {
     if (entry->count < MAX_FAILED_TIMESTAMPS) {
         entry->timestamps[entry->count++] = now;
     } else {
-        /* Shift timestamps to make room for the new one */
+        /* 移动时间戳为新时间戳腾出空间 */
         memmove(entry->timestamps, entry->timestamps + 1,
                 (MAX_FAILED_TIMESTAMPS - 1) * sizeof(time_t));
         entry->timestamps[MAX_FAILED_TIMESTAMPS - 1] = now;
 
-        /* Filter out expired timestamps */
+        /* 过滤掉过期的时间戳 */
         time_t oldest_valid = now - findtime;
         int new_count = 0;
         for (int i = 0; i < MAX_FAILED_TIMESTAMPS; i++) {
@@ -142,12 +142,12 @@ void process_failed_timestamps(struct failed_entry *entry, time_t now, time_t fi
 }
 
 /*
- * check_and_ban - Check threshold and ban if exceeded
- * @entry: Failed entry to check
- * @ip: IP address string
- * @max_retries: Maximum allowed failures
- * @findtime: Time window for counting failures
- * @jail_name: Jail name for logging (NULL for global)
+ * check_and_ban - 检查阈值，如果超过则封禁
+ * @entry: 要检查的失败条目
+ * @ip: IP地址字符串
+ * @max_retries: 最大允许失败次数
+ * @findtime: 统计失败次数的时间窗口
+ * @jail_name: Jail名称用于日志记录（NULL表示全局）
  */
 void check_and_ban(struct failed_entry *entry, const char *ip,
                    unsigned int max_retries, unsigned int findtime,
@@ -192,7 +192,7 @@ void check_and_ban(struct failed_entry *entry, const char *ip,
     }
 }
 
-/* Handle a failed login attempt - jail-aware version */
+/* 处理失败登录尝试 - 支持jail的版本 */
 void handle_failed_attempt_for_jail(struct jail *j, const char *ip,
                                    unsigned int max_retries, unsigned int findtime)
 {
@@ -219,13 +219,13 @@ void handle_failed_attempt_for_jail(struct jail *j, const char *ip,
     process_failed_timestamps(entry, now, findtime);
     check_and_ban(entry, ip, max_retries, findtime, j->name);
 
-    /* Remove entry after successful ban */
+    /* 成功封禁后移除条目 */
     if (count_recent(entry, findtime, max_retries) >= max_retries) {
         remove_entry_for_jail(j, ip);
     }
 }
 
-/* Handle a failed login attempt - global version (backward compatible) */
+/* 处理失败登录尝试 - 全局版本（向后兼容） */
 void handle_failed_attempt(const char *ip, unsigned int max_retries, unsigned int findtime)
 {
     struct failed_entry *entry;
@@ -251,13 +251,13 @@ void handle_failed_attempt(const char *ip, unsigned int max_retries, unsigned in
     process_failed_timestamps(entry, now, findtime);
     check_and_ban(entry, ip, max_retries, findtime, NULL);
 
-    /* Remove entry after successful ban */
+    /* 成功封禁后移除条目 */
     if (count_recent(entry, findtime, max_retries) >= max_retries) {
         remove_entry(ip);
     }
 }
 
-/* Find failed entry by IP - searches all jails */
+/* 按IP查找失败条目 - 搜索所有jail */
 struct failed_entry *find_entry(const char *ip)
 {
     pthread_mutex_lock(&config_mutex);
@@ -275,7 +275,7 @@ struct failed_entry *find_entry(const char *ip)
     return result;
 }
 
-/* Create new failed entry - creates in first jail (default behavior) */
+/* 创建新的失败条目 - 在第一个jail中创建（默认行为） */
 struct failed_entry *create_entry(const char *ip)
 {
     pthread_mutex_lock(&config_mutex);
@@ -289,7 +289,7 @@ struct failed_entry *create_entry(const char *ip)
     return result;
 }
 
-/* Remove failed entry - searches all jails */
+/* 移除失败条目 - 搜索所有jail */
 void remove_entry(const char *ip)
 {
     pthread_mutex_lock(&config_mutex);

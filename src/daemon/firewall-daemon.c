@@ -1,15 +1,14 @@
 /*
- * firewall-daemon.c - User-space daemon for firewall kernel module
+ * firewall-daemon.c - 防火墙内核模块的用户空间守护进程
  *
- * Monitors log files for failed login attempts and automatically bans
- * offending IPs via the firewall kernel module procfs interface.
+ * 监控日志文件中的失败登录尝试，并通过防火墙内核模块的 procfs 接口
+ * 自动封禁违规 IP。
  *
- * Note: max_retries, findtime, and ban_time are configured via YAML config file.
- * the log analysis logic (how many failures within what time window trigger
- * a ban). These are NOT kernel module parameters - the kernel module only
- * handles the actual IP blocking based on its ban_table.
+ * 注意：max_retries、findtime 和 ban_time 通过 YAML 配置文件设置。
+ * 日志分析逻辑（在多长时间内多少次失败触发封禁）。这些不是内核模块参数——
+ * 内核模块仅根据其 ban_table 处理实际的 IP 封禁。
  *
- * Usage:
+ * 用法：
  *   sudo ./firewall-daemon [-c config.yaml] [-C config-dir] [--daemon]
  */
 
@@ -21,26 +20,26 @@
 #include "ban-manager.h"
 #include "file-monitor.h"
 
-/* Global running flag */
+/* 全局运行标志 */
 volatile sig_atomic_t running = 1;
-volatile sig_atomic_t reload_config = 0;  /* SIGHUP flag */
+volatile sig_atomic_t reload_config = 0;  /* SIGHUP 标志 */
 
-/* Configuration mutex - protect multithreaded access to cfg global variable */
+/* 配置互斥锁 - 保护多线程对 cfg 全局变量的访问 */
 pthread_mutex_t config_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/* Global state */
+/* 全局状态 */
 struct config cfg;
 int inotify_fd = -1;
-/* File states array - sized for all jails' log files */
+/* 文件状态数组 - 大小为所有 jail 的日志文件数量 */
 struct file_state file_states[MAX_JAILS * MAX_LOG_FILES];
 
-/* SQLite persistent banlist */
+/* SQLite 持久化封禁列表 */
 sqlite_db_t *sqlite_db = NULL;
 
-/* Prometheus statistics */
+/* Prometheus 统计信息 */
 struct daemon_stats daemon_stats;
 
-/* Signal handler - only sets flag, no async-unsafe calls */
+/* 信号处理函数 - 仅设置标志，不进行异步不安全调用 */
 void signal_handler(int sig)
 {
     switch(sig) {
@@ -49,35 +48,35 @@ void signal_handler(int sig)
             running = 0;
             break;
         case SIGHUP:
-            reload_config = 1;  /* Reload configuration on SIGHUP */
+            reload_config = 1;  /* 收到 SIGHUP 时重新加载配置 */
             atomic_fetch_add(&daemon_stats.config_reloads, 1);
             break;
     }
 }
 
-/* Daemonize process */
+/* 将进程守护进程化 */
 void daemonize_process(void)
 {
     pid_t pid;
 
-    /* First fork */
+    /* 第一次 fork */
     pid = fork();
     if (pid < 0) {
         perror("fork");
         exit(EXIT_FAILURE);
     }
     if (pid > 0) {
-        /* Parent exits - use _exit to avoid flushing stdio buffers in forked child */
+        /* 父进程退出 - 使用 _exit 避免在 fork 的子进程中刷新 stdio 缓冲区 */
         _exit(EXIT_SUCCESS);
     }
 
-    /* Create new session */
+    /* 创建新会话 */
     if (setsid() < 0) {
         perror("setsid");
         exit(EXIT_FAILURE);
     }
 
-    /* Temporarily ignore SIGHUP during daemonization to prevent accidental reloads */
+    /* 在守护进程化期间临时忽略 SIGHUP，防止意外重新加载 */
     struct sigaction sa_ignore;
     memset(&sa_ignore, 0, sizeof(sa_ignore));
     sa_ignore.sa_handler = SIG_IGN;
@@ -85,18 +84,18 @@ void daemonize_process(void)
     sa_ignore.sa_flags = 0;
     sigaction(SIGHUP, &sa_ignore, NULL);
 
-    /* Second fork */
+    /* 第二次 fork */
     pid = fork();
     if (pid < 0) {
         perror("fork");
         exit(EXIT_FAILURE);
     }
     if (pid > 0) {
-        /* First child exits - use _exit to avoid flushing stdio buffers in forked child */
+        /* 第一个子进程退出 - 使用 _exit 避免在 fork 的子进程中刷新 stdio 缓冲区 */
         _exit(EXIT_SUCCESS);
     }
 
-    /* Re-enable SIGHUP handler after daemonization is complete, so config reload works */
+    /* 守护进程化完成后重新启用 SIGHUP 处理函数，使配置重新加载生效 */
     struct sigaction sa_restore;
     memset(&sa_restore, 0, sizeof(sa_restore));
     sa_restore.sa_handler = signal_handler;
@@ -104,19 +103,19 @@ void daemonize_process(void)
     sa_restore.sa_flags = 0;
     sigaction(SIGHUP, &sa_restore, NULL);
 
-    /* Change working directory */
+    /* 切换工作目录 */
     if (chdir("/") < 0) {
         perror("chdir");
     }
 
-    /* Write PID file for systemd Type=forking support */
+    /* 写入 PID 文件以支持 systemd Type=forking */
     FILE *pidfile = fopen("/run/firewall-daemon.pid", "w");
     if (pidfile) {
         fprintf(pidfile, "%d\n", getpid());
         fclose(pidfile);
     }
 
-    /* Redirect standard file descriptors to /dev/null */
+    /* 将标准文件描述符重定向到 /dev/null */
     int devnull = open("/dev/null", O_RDWR);
     if (devnull >= 0) {
         dup2(devnull, STDIN_FILENO);
@@ -128,24 +127,24 @@ void daemonize_process(void)
     }
 }
 
-/* Cleanup resources */
+/* 清理资源 */
 void cleanup(void)
 {
     daemon_log_info("Cleaning up");
 
-    /* Stop HTTP exporter thread gracefully */
+    /* 优雅地停止 HTTP 导出器线程 */
     stop_http_exporter();
 
-    /* Remove inotify watches */
+    /* 移除 inotify 监视 */
     if (inotify_fd >= 0) {
         int max_states = MAX_JAILS * MAX_LOG_FILES;
         for (int i = 0; i < max_states; i++) {
             if (file_states[i].wd >= 0) {
-                /* Only try to remove watch if the inotify_fd is still valid */
+                /* 仅在 inotify_fd 仍然有效时尝试移除监视 */
                 if (inotify_rm_watch(inotify_fd, file_states[i].wd) < 0) {
                     daemon_log_warn("Failed to remove watch for %s: %s", file_states[i].path, strerror(errno));
                 }
-                file_states[i].wd = -1;  /* Mark as removed */
+                file_states[i].wd = -1;  /* 标记为已移除 */
             }
         }
         if (close(inotify_fd) < 0) {
@@ -154,11 +153,11 @@ void cleanup(void)
         inotify_fd = -1;
     }
 
-    /* Free all jails and their resources */
+    /* 释放所有 jail 及其资源 */
     for (int j = 0; j < cfg.jail_count; j++) {
         struct jail *jail = &cfg.jails[j];
 
-        /* Free log files */
+        /* 释放日志文件 */
         for (int i = 0; i < jail->log_count; i++) {
             if (jail->log_files[i]) {
                 free(jail->log_files[i]);
@@ -167,14 +166,14 @@ void cleanup(void)
         }
         jail->log_count = 0;
 
-        /* Free regex */
+        /* 释放正则表达式 */
         free_jail_regex(jail);
         if (jail->regex_pattern) {
             free(jail->regex_pattern);
             jail->regex_pattern = NULL;
         }
 
-        /* Free failed entries from linked list (each entry freed once) */
+        /* 从链表中释放失败记录（每条记录仅释放一次） */
         if (jail->failed_table) {
             struct failed_entry *entry = jail->failed_table;
             while (entry) {
@@ -186,9 +185,9 @@ void cleanup(void)
         }
         memset(jail->failed_hash_table, 0, sizeof(jail->failed_hash_table));
 
-        /* Free khash table */
+        /* 释放 khash 表 */
         if (jail->failed_hash) {
-            /* Free heap-allocated keys before destroying hash table */
+            /* 在销毁哈希表之前释放堆分配的键 */
             khint_t k;
             for (k = kh_begin(jail->failed_hash); k != kh_end(jail->failed_hash); ++k) {
                 if (kh_exist(jail->failed_hash, k)) {
@@ -203,7 +202,7 @@ void cleanup(void)
     }
     cfg.jail_count = 0;
 
-    /* Free global config strings */
+    /* 释放全局配置字符串 */
     if (cfg.config_file) {
         free(cfg.config_file);
         cfg.config_file = NULL;
@@ -217,7 +216,7 @@ void cleanup(void)
         cfg.permanent_db_path = NULL;
     }
 
-    /* Close SQLite database */
+    /* 关闭 SQLite 数据库 */
     if (sqlite_db) {
         sqlite_close(sqlite_db);
         sqlite_db = NULL;
@@ -227,32 +226,32 @@ void cleanup(void)
     closelog();
 }
 
-/* Main entry point */
+/* 主入口点 */
 int main(int argc, char *argv[])
 {
     int ret;
 
-    /* Initialize file_states array with -1 for wd and jail_idx to distinguish from valid watch descriptors */
+    /* 初始化 file_states 数组，将 wd 和 jail_idx 设为 -1，以区别于有效的监视描述符 */
     for (int i = 0; i < MAX_JAILS * MAX_LOG_FILES; i++) {
         file_states[i].wd = -1;
         file_states[i].jail_idx = -1;
     }
 
-    /* Parse configuration */
+    /* 解析配置 */
     ret = parse_config(argc, argv);
     if (ret < 0) {
         fprintf(stderr, "Error: invalid configuration\n");
         return EXIT_FAILURE;
     }
     if (ret > 0) {
-        /* Help was displayed */
+        /* 已显示帮助信息 */
         return EXIT_SUCCESS;
     }
 
-    /* Open syslog */
+    /* 打开 syslog */
     openlog("firewall", LOG_PID | LOG_CONS, LOG_DAEMON);
 
-    /* Check if procfs interfaces exist before proceeding */
+    /* 在继续之前检查 procfs 接口是否存在 */
     if (access(PROCFS_DIR, F_OK) != 0) {
         daemon_log_err("Procfs directory %s does not exist. Is the kernel module loaded?", PROCFS_DIR);
         fprintf(stderr, "Error: Procfs directory %s does not exist. Is the kernel module loaded?\n",
@@ -266,17 +265,17 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    /* Initialize log patterns */
+    /* 初始化日志模式 */
     if (init_log_patterns() < 0) {
         daemon_log_err("Failed to initialize log patterns");
         cleanup();
         return EXIT_FAILURE;
     }
 
-    /* Initialize statistics */
+    /* 初始化统计信息 */
     daemon_stats.start_time = time(NULL);
 
-    /* Initialize SQLite database for permanent bans if configured */
+    /* 如果已配置，初始化用于永久封禁的 SQLite 数据库 */
     if (cfg.permanent_ban_enabled && cfg.permanent_db_path) {
         sqlite_db = sqlite_init(cfg.permanent_db_path);
         if (!sqlite_db) {
@@ -285,13 +284,13 @@ int main(int argc, char *argv[])
         } else {
             daemon_log_info("SQLite database initialized for permanent bans at %s", cfg.permanent_db_path);
             
-            /* Load permanent bans from SQLite and apply to kernel module */
+            /* 从 SQLite 加载永久封禁并应用到内核模块 */
             struct permanent_ban_entry *entries = NULL;
             int count = 0;
             if (sqlite_load_all_permanent_bans(sqlite_db, &entries, &count) == 0 && count > 0) {
                 daemon_log_info("Loading %d permanent bans from SQLite database", count);
                 for (int i = 0; i < count; i++) {
-                    char ip_with_newline[INET_ADDRSTRLEN + 20];  // +20 for "permanent " prefix
+                    char ip_with_newline[INET_ADDRSTRLEN + 20];  // +20 用于 "permanent " 前缀
                     snprintf(ip_with_newline, sizeof(ip_with_newline), "permanent %s\n", entries[i].ip);
 
                     if (secure_procfs_write(BANS_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
@@ -309,7 +308,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* Setup signal handlers */
+    /* 设置信号处理函数 */
     setup_signals();
 
     daemon_log_info("Daemon starting up");
@@ -324,21 +323,21 @@ int main(int argc, char *argv[])
     daemon_log_info("Global defaults: max_retries=%u, findtime=%u, ban_time=%u",
         cfg.default_max_retries, cfg.default_findtime, cfg.default_ban_time);
 
-    /* Daemonize if requested */
+    /* 如果请求则守护进程化 */
     if (cfg.daemon) {
         daemonize_process();
     }
 
-    /* Setup inotify */
+    /* 设置 inotify */
     if (setup_inotify() < 0) {
         daemon_log_err("Failed to setup inotify");
         cleanup();
         return EXIT_FAILURE;
     }
 
-    /* Run monitoring loop */
+    /* 运行监控循环 */
 
-    /* Start Prometheus HTTP exporter */
+    /* 启动 Prometheus HTTP 导出器 */
     pthread_t exporter_thread;
     if (cfg.metrics_port > 0) {
         if (pthread_create(&exporter_thread, NULL, start_http_exporter, (void *)(long)cfg.metrics_port) != 0) {
@@ -353,7 +352,7 @@ int main(int argc, char *argv[])
 
     monitor_loop();
 
-    /* Cleanup */
+    /* 清理 */
     cleanup();
     daemon_log_info("Daemon stopped");
 

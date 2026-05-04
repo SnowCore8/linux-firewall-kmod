@@ -1,17 +1,17 @@
 /*
- * http-exporter.c - Prometheus HTTP exporter for firewall daemon
+ * http-exporter.c - 防火墙守护进程的 Prometheus HTTP 导出器
  *
- * Uses libmicrohttpd for RFC-compliant HTTP server implementation.
- * Provides /metrics and /health endpoints for Prometheus monitoring.
- * Runs in a separate pthread.
+ * 使用 libmicrohttpd 实现符合 RFC 规范的 HTTP 服务器。
+ * 提供 /metrics 和 /health 端点用于 Prometheus 监控。
+ * 在独立的 pthread 线程中运行。
  *
- * Features:
- *   - libmicrohttpd-based HTTP server (RFC compliant)
- *   - Prometheus text format output
- *   - Reads kernel stats from /proc/firewall/stats
- *   - Reads daemon stats from shared daemon_stats structure
- *   - Listens on 0.0.0.0:9119 by default
- *   - Built-in rate limiting via MHD_OPTION_CONNECTION_LIMIT
+ * 功能特性：
+ *   - 基于 libmicrohttpd 的 HTTP 服务器（符合 RFC 规范）
+ *   - Prometheus 文本格式输出
+ *   - 从 /proc/firewall/stats 读取内核统计信息
+ *   - 从共享 daemon_stats 结构读取守护进程统计信息
+ *   - 默认监听 0.0.0.0:9119
+ *   - 内置通过 MHD_OPTION_CONNECTION_LIMIT 实现的限流
  */
 
 #define _GNU_SOURCE
@@ -28,23 +28,23 @@
 #include <microhttpd.h>
 
 /* ============================================================================
- * Configuration
+ * 配置参数
  * ========================================================================== */
 #define EXPORTER_DEFAULT_PORT 9119
 #define EXPORTER_BUFFER_SIZE  8192
 #define EXPORTER_MAX_CONNECTIONS 10
 #define EXPORTER_CONNECTION_TIMEOUT 5
 
-/* Procfs paths */
+/* Procfs 路径 */
 #define PROCFS_STATS_PATH "/proc/firewall/stats"
 
 /* ============================================================================
- * HTTP exporter running flag (for graceful shutdown)
+ * HTTP 导出器运行标志（用于优雅关闭）
  * ========================================================================== */
 static atomic_bool http_exporter_running = false;
 
 /* ============================================================================
- * External reference to daemon_stats (defined in firewall-daemon.c)
+ * 对外引用 daemon_stats（在 firewall-daemon.c 中定义）
  * ========================================================================== */
 extern struct daemon_stats {
     atomic_ulong lines_parsed;
@@ -60,7 +60,7 @@ extern struct daemon_stats {
 } daemon_stats;
 
 /* ============================================================================
- * Logging helpers (use syslog for consistency with daemon)
+ * 日志辅助函数（使用 syslog 以保持与守护进程一致）
  * ========================================================================== */
 #define exporter_log_err(fmt, ...) \
     syslog(LOG_ERR, "firewall[exporter]: ERROR: " fmt, ##__VA_ARGS__)
@@ -70,10 +70,10 @@ extern struct daemon_stats {
     syslog(LOG_INFO, "firewall[exporter]: " fmt, ##__VA_ARGS__)
 
 /* ============================================================================
- * Kernel stats reader
+ * 内核统计信息读取器
  * ========================================================================== */
 
-/* Read a single integer value from a procfs file */
+/* 从 procfs 文件中读取单个整数值 */
 static int read_procfs_int(const char *path, unsigned long *out)
 {
     FILE *fp;
@@ -100,7 +100,7 @@ static int read_procfs_int(const char *path, unsigned long *out)
     return -1;
 }
 
-/* Read a specific integer value from /proc/firewall/stats by key name */
+/* 根据键名从 /proc/firewall/stats 中读取特定整数值 */
 static int read_procfs_stats_key(const char *key, unsigned long *value)
 {
     FILE *fp;
@@ -127,10 +127,10 @@ static int read_procfs_stats_key(const char *key, unsigned long *value)
 }
 
 /* ============================================================================
- * Metrics generation
+ * 指标生成
  * ========================================================================== */
 
-/* Generate Prometheus metrics text */
+/* 生成 Prometheus 指标文本 */
 static int generate_metrics(char *buf, size_t buf_size)
 {
     unsigned long kernel_banned = 0;
@@ -235,7 +235,7 @@ static int generate_metrics(char *buf, size_t buf_size)
 }
 
 /* ============================================================================
- * libmicrohttpd request handler
+ * libmicrohttpd 请求处理器
  * ========================================================================== */
 
 static enum MHD_Result answer_to_connection(void *cls, struct MHD_Connection *connection,
@@ -249,14 +249,14 @@ static enum MHD_Result answer_to_connection(void *cls, struct MHD_Connection *co
     char metrics_buf[EXPORTER_BUFFER_SIZE];
     int len;
 
-    /* Suppress unused parameter warnings */
+    /* 忽略未使用参数的警告 */
     (void)cls;
     (void)version;
     (void)upload_data;
     (void)upload_data_size;
     (void)con_cls;
 
-    /* Only accept GET requests */
+    /* 仅接受 GET 请求 */
     if (strcmp(method, "GET") != 0) {
         page = "405 Method Not Allowed\r\n";
         response = MHD_create_response_from_buffer(strlen(page), (void *)page, MHD_RESPMEM_PERSISTENT);
@@ -267,7 +267,7 @@ static enum MHD_Result answer_to_connection(void *cls, struct MHD_Connection *co
         return ret == MHD_YES ? MHD_YES : MHD_NO;
     }
 
-    /* Route requests */
+    /* 路由请求 */
     if (strcmp(url, "/metrics") == 0) {
         len = generate_metrics(metrics_buf, sizeof(metrics_buf));
         if (len < 0 || (size_t)len >= sizeof(metrics_buf)) {
@@ -311,27 +311,27 @@ static enum MHD_Result answer_to_connection(void *cls, struct MHD_Connection *co
 }
 
 /* ============================================================================
- * HTTP server main loop
+ * HTTP 服务器主循环
  * ========================================================================== */
 
 /**
- * start_http_exporter - Start Prometheus HTTP exporter thread
- * @port: Port number to listen on (passed as void* for pthread compatibility)
+ * start_http_exporter - 启动 Prometheus HTTP 导出器线程
+ * @port: 监听的端口号（以 void* 传递以保持 pthread 兼容性）
  *
- * This function runs in a separate thread and provides a lightweight HTTP
- * server for Prometheus metrics collection using libmicrohttpd.
+ * 该函数在独立的线程中运行，使用 libmicrohttpd 提供轻量级 HTTP 服务器
+ * 用于 Prometheus 指标收集。
  *
- * Returns: NULL (pthread convention)
+ * 返回值：NULL（pthread 约定）
  */
 void *start_http_exporter(void *port)
 {
     int listen_port = port ? (int)(long)port : EXPORTER_DEFAULT_PORT;
     struct MHD_Daemon *daemon;
 
-    /* Mark exporter as running */
+    /* 标记导出器为运行状态 */
     atomic_store(&http_exporter_running, true);
 
-    /* Start libmicrohttpd daemon */
+    /* 启动 libmicrohttpd 守护进程 */
     daemon = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY | MHD_USE_ERROR_LOG,
                               (uint16_t)listen_port,
                               NULL, NULL,
@@ -351,7 +351,7 @@ void *start_http_exporter(void *port)
 
     exporter_log_info("Prometheus exporter listening on 0.0.0.0:%d (libmicrohttpd)", listen_port);
 
-    /* Block until thread is signalled to stop */
+    /* 阻塞直到线程收到停止信号 */
     while (atomic_load(&http_exporter_running)) {
         sleep(1);
     }
@@ -362,9 +362,9 @@ void *start_http_exporter(void *port)
 }
 
 /**
- * stop_http_exporter - Signal the HTTP exporter thread to stop
+ * stop_http_exporter - 向 HTTP 导出器线程发送停止信号
  *
- * Called from cleanup() to gracefully shut down the exporter thread.
+ * 从 cleanup() 调用以优雅关闭导出器线程。
  */
 void stop_http_exporter(void)
 {

@@ -1,5 +1,5 @@
 /*
- * config-parser.h - Header for configuration parsing functions
+ * config-parser.h - 配置解析函数头文件
  */
 
 #ifndef CONFIG_PARSER_H
@@ -7,19 +7,19 @@
 
 #include "firewall-daemon.h"
 
-/* Parse configuration file using libyaml - supports jail-based YAML format */
+/* 使用 libyaml 解析配置文件 - 支持基于 jail 的 YAML 格式 */
 int parse_config_file(const char *config_path);
 
-/* Load all .yaml/.yml files from a configuration directory */
+/* 从配置目录加载所有 .yaml/.yml 文件 */
 int load_config_directory(const char *config_dir);
 
-/* Parse command line arguments */
+/* 解析命令行参数 */
 int parse_config(int argc, char *argv[]);
 
-/* Setup signal handlers */
+/* 设置信号处理函数 */
 void setup_signals(void);
 
-/* Validate and normalize log file path for security */
+/* 验证并规范化日志文件路径以确保安全 */
 int validate_and_normalize_path(const char *input_path);
 
 #endif /* CONFIG_PARSER_H */

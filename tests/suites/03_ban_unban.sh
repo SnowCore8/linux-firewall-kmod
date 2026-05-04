@@ -51,7 +51,7 @@ for cycle in $(seq 1 5); do
     echo "unban $local_cycle_ip" > "$PROC_BANS" 2>/dev/null || true
     sleep 0.2
 done
-# Verify all cycle IPs are unbanned (check each one individually)
+# 验证所有循环 IP 已解封（逐个检查）
 local_all_unbanned=true
 for cycle in $(seq 1 5); do
     local_cycle_ip="198.51.100.$cycle"

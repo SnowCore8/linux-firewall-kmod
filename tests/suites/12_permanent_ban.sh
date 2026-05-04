@@ -78,10 +78,10 @@ WHITELIST_IP="10.0.0.1"
 echo "add $WHITELIST_IP" > "$PROC_WHITELIST" 2>/dev/null
 sleep 0.2
 
-# Attempt to permanently ban whitelisted IP
+# 尝试永久封禁白名单 IP
 echo "$WHITELIST_IP 0" > "$PROC_BANS" 2>/dev/null || true
 sleep 0.3
-# Verify whitelist IP was NOT banned (whitelist protection)
+# 验证白名单 IP 未被封禁（白名单保护）
 assert_true "! grep -q '$WHITELIST_IP' '$PROC_BANS' 2>/dev/null" "白名单 IP 不能被永久封禁"
 
 echo "remove $WHITELIST_IP" > "$PROC_WHITELIST" 2>/dev/null || true

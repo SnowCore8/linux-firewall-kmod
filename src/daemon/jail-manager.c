@@ -1,11 +1,11 @@
 /*
- * jail-manager.c - Jail management functions
+ * jail-manager.c - Jail 管理函数
  */
 
 #include "firewall-daemon.h"
 #include "jail-manager.h"
 
-/* Initialize jail with default values from global config */
+/* 使用全局配置的默认值初始化 jail */
 void init_jail_defaults(struct jail *j)
 {
     j->enabled = true;
@@ -27,7 +27,7 @@ void init_jail_defaults(struct jail *j)
     }
 }
 
-/* Free jail regex */
+/* 释放 jail 正则表达式 */
 void free_jail_regex(struct jail *j)
 {
     if (j && j->regex_compiled) {
@@ -41,17 +41,17 @@ void free_jail_regex(struct jail *j)
     }
 }
 
-/* Find existing jail or create new one */
+/* 查找现有 jail 或创建新的 */
 struct jail *find_or_create_jail(const char *name)
 {
-    /* Find existing jail */
+    /* 查找现有 jail */
     for (int i = 0; i < cfg.jail_count; i++) {
         if (strcmp(cfg.jails[i].name, name) == 0) {
             return &cfg.jails[i];
         }
     }
 
-    /* Create new jail */
+    /* 创建新 jail */
     if (cfg.jail_count >= MAX_JAILS) {
         daemon_log_warn("Max jails reached (%d), cannot create jail '%s'", MAX_JAILS, name);
         return NULL;
@@ -66,12 +66,12 @@ struct jail *find_or_create_jail(const char *name)
     return j;
 }
 
-/* Destroy a jail and free its resources */
+/* 销毁 jail 并释放其资源 */
 void destroy_jail(struct jail *j)
 {
     if (!j) return;
 
-    /* Free log files */
+    /* 释放日志文件 */
     for (int i = 0; i < j->log_count; i++) {
         if (j->log_files[i]) {
             free(j->log_files[i]);
@@ -80,14 +80,14 @@ void destroy_jail(struct jail *j)
     }
     j->log_count = 0;
 
-    /* Free regex */
+    /* 释放正则表达式 */
     free_jail_regex(j);
     if (j->regex_pattern) {
         free(j->regex_pattern);
         j->regex_pattern = NULL;
     }
 
-    /* Free failed table */
+    /* 释放失败记录表 */
     if (j->failed_table) {
         struct failed_entry *entry = j->failed_table;
         while (entry) {
@@ -98,10 +98,10 @@ void destroy_jail(struct jail *j)
         j->failed_table = NULL;
     }
 
-    /* Clear hash table */
+    /* 清空哈希表 */
     memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
 
-    /* Free khash table keys (heap-allocated strings) before destroying */
+    /* 在销毁之前释放 khash 表的键（堆分配的字符串） */
     if (j->failed_hash) {
         khint_t k;
         for (k = kh_begin(j->failed_hash); k != kh_end(j->failed_hash); ++k) {
@@ -116,12 +116,12 @@ void destroy_jail(struct jail *j)
     daemon_log_info("Destroyed jail: %s", j->name);
 }
 
-/* Compile regex for a jail using PCRE2 */
+/* 使用 PCRE2 编译 jail 的正则表达式 */
 int compile_jail_regex(struct jail *j)
 {
     if (!j) return -1;
 
-    /* Free existing regex if compiled */
+    /* 如果已编译则释放现有正则表达式 */
     if (j->regex_compiled) {
         if (j->compiled_regex)
             pcre2_code_free(j->compiled_regex);
@@ -132,14 +132,14 @@ int compile_jail_regex(struct jail *j)
         j->regex_compiled = 0;
     }
 
-    /* Use jail's custom regex or built-in default */
+    /* 使用 jail 的自定义正则表达式或内置默认值 */
     const char *pattern = (j->regex_pattern && strlen(j->regex_pattern) > 0) ?
         j->regex_pattern :
         "Failed password for (invalid user )?[a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})";
 
-    /* Validate regex pattern to prevent ReDoS attacks */
+    /* 验证正则表达式模式以防止 ReDoS 攻击 */
     if (j->regex_pattern && strlen(j->regex_pattern) > 0) {
-        /* Reject nested quantifiers that can cause catastrophic backtracking */
+        /* 拒绝可能导致灾难性回溯的嵌套量词 */
         if (strstr(pattern, ")+") || strstr(pattern, ")*") ||
             strstr(pattern, "){") || strstr(pattern, "}?") ||
             strstr(pattern, "++") || strstr(pattern, "*+")) {
@@ -147,7 +147,7 @@ int compile_jail_regex(struct jail *j)
             return -1;
         }
 
-        /* Reject excessive alternation (a|b|c|... patterns) */
+        /* 拒绝过多的分支选择（a|b|c|... 模式） */
         int pipe_count = 0;
         for (const char *p = pattern; *p; p++) {
             if (*p == '|') pipe_count++;
@@ -157,14 +157,14 @@ int compile_jail_regex(struct jail *j)
             return -1;
         }
 
-        /* Reject patterns that are too long */
+        /* 拒绝过长的模式 */
         if (strlen(pattern) > 1024) {
             daemon_log_err("Rejected unsafe regex for jail '%s': pattern too long (%zu bytes)", j->name, strlen(pattern));
             return -1;
         }
     }
 
-    /* Compile with PCRE2 */
+    /* 使用 PCRE2 编译 */
     int error_number;
     PCRE2_SIZE error_offset;
     j->compiled_regex = pcre2_compile((PCRE2_SPTR)pattern, PCRE2_ZERO_TERMINATED,
@@ -177,7 +177,7 @@ int compile_jail_regex(struct jail *j)
         return -1;
     }
 
-    /* Create match data buffer */
+    /* 创建匹配数据缓冲区 */
     j->match_data = pcre2_match_data_create_from_pattern(j->compiled_regex, NULL);
     if (!j->match_data) {
         daemon_log_err("Failed to create match data for jail '%s'", j->name);
@@ -191,7 +191,7 @@ int compile_jail_regex(struct jail *j)
     return 0;
 }
 
-/* Get global file_states index for a jail's log file */
+/* 获取 jail 日志文件的全局 file_states 索引 */
 
 int get_global_file_state_index(int jail_idx, int file_idx)
 {
@@ -218,15 +218,15 @@ int get_global_file_state_index(int jail_idx, int file_idx)
     return global_idx;
 }
 
-/* Cleanup all jail resources before config reload
+/* 在重新加载配置之前清理所有 jail 资源
  *
- * NOTE: failed_table and failed_hash_table share the same objects.
- * failed_table is the head of a linked list, while failed_hash_table
- * contains pointers to the same objects for O(1) lookup.
- * We iterate failed_table to free all objects exactly once, then
- * zero out failed_hash_table (which only contains dangling pointers
- * after the frees, but no ownership).
- * This is safe as long as we always add the same object to both structures.
+ * 注意：failed_table 和 failed_hash_table 共享相同的对象。
+ * failed_table 是链表的头节点，而 failed_hash_table
+ * 包含指向相同对象的指针以实现 O(1) 查找。
+ * 我们遍历 failed_table 来精确释放每个对象一次，然后
+ * 将 failed_hash_table 清零（释放后它只包含悬空指针，
+ * 但不拥有所有权）。
+ * 只要我们始终将同一个对象添加到两个结构中，这就是安全的。
  */
 void cleanup_all_jails(void)
 {
@@ -239,7 +239,7 @@ void cleanup_all_jails(void)
     daemon_log_info("All jails resources cleaned up");
 }
 
-/* Find or create jail in a specific config (for double-buffer reload) */
+/* 在特定配置中查找或创建 jail（用于双缓冲重新加载） */
 struct jail *find_or_create_jail_in_cfg(const char *name, struct config *target_cfg)
 {
     for (int i = 0; i < target_cfg->jail_count; i++) {
@@ -279,7 +279,7 @@ struct jail *find_or_create_jail_in_cfg(const char *name, struct config *target_
     return j;
 }
 
-/* Clone a single jail (deep copy, excludes runtime state) */
+/* 克隆单个 jail（深拷贝，不包含运行时状态） */
 int clone_jail(struct jail *dst, const struct jail *src)
 {
     memcpy(dst, src, sizeof(*dst));
@@ -309,11 +309,11 @@ int clone_jail(struct jail *dst, const struct jail *src)
         }
     }
 
-    /* Don't clone compiled regex - will be recompiled */
+    /* 不克隆已编译的正则表达式 - 将重新编译 */
     memset(&dst->compiled_regex, 0, sizeof(dst->compiled_regex));
     dst->regex_compiled = 0;
 
-    /* Don't clone runtime state */
+    /* 不克隆运行时状态 */
     dst->failed_table = NULL;
     memset(dst->failed_hash_table, 0, sizeof(dst->failed_hash_table));
     dst->failed_hash = NULL;
@@ -323,7 +323,7 @@ int clone_jail(struct jail *dst, const struct jail *src)
     return 0;
 }
 
-/* Clone entire config (excludes runtime state) */
+/* 克隆整个配置（不包含运行时状态） */
 struct config *config_clone(const struct config *src)
 {
     struct config *dst = calloc(1, sizeof(*dst));
@@ -373,7 +373,7 @@ fail:
     return NULL;
 }
 
-/* Validate configuration integrity */
+/* 验证配置完整性 */
 int config_validate(const struct config *cfg)
 {
     if (!cfg) return -1;
@@ -408,7 +408,7 @@ int config_validate(const struct config *cfg)
     return 0;
 }
 
-/* Migrate failed entries from old config to new config */
+/* 将失败记录从旧配置迁移到新配置 */
 void migrate_failed_entries(struct config *old, struct config *new)
 {
     for (int i = 0; i < old->jail_count; i++) {
@@ -427,7 +427,7 @@ void migrate_failed_entries(struct config *old, struct config *new)
     }
 }
 
-/* Free config without runtime state (already migrated) */
+/* 释放不含运行时状态的配置（已迁移） */
 void free_config_partial(struct config *cfg)
 {
     if (!cfg) return;
@@ -452,7 +452,7 @@ void free_config_partial(struct config *cfg)
             free(jail->regex_pattern);
         }
 
-        /* failed_hash already migrated, skip */
+        /* failed_hash 已迁移，跳过 */
     }
 
     if (cfg->config_file) free(cfg->config_file);
@@ -460,17 +460,17 @@ void free_config_partial(struct config *cfg)
     if (cfg->permanent_db_path) free(cfg->permanent_db_path);
 }
 
-/* Comparison function for qsort - sorting config file names */
+/* qsort 的比较函数 - 对配置文件名排序 */
 int compare_config_files(const void *a, const void *b) {
     return strcmp(*(const char **)a, *(const char **)b);
 }
 
-/* Initialize precompiled regex patterns for all jails */
+/* 初始化所有 jail 的预编译正则表达式模式 */
 int init_log_patterns(void)
 {
     int ret = 0;
 
-    /* Compile regex for each jail that has a pattern */
+    /* 为每个有模式的 jail 编译正则表达式 */
     for (int i = 0; i < cfg.jail_count; i++) {
         struct jail *jail = &cfg.jails[i];
 
@@ -483,12 +483,12 @@ int init_log_patterns(void)
             if (compile_jail_regex(jail) < 0) {
                 daemon_log_warn("Failed to compile regex for jail '%s'", jail->name);
                 ret = -1;
-                /* Continue compiling for other jails */
+                /* 继续为其他 jail 编译 */
             } else {
                 daemon_log_info("Compiled regex for jail '%s'", jail->name);
             }
         } else {
-            /* Jail will use built-in default pattern */
+            /* Jail 将使用内置默认模式 */
             daemon_log_info("Jail '%s' will use built-in default regex pattern", jail->name);
         }
     }
@@ -501,8 +501,8 @@ int init_log_patterns(void)
 }
 
 
-/* Free precompiled regex patterns - no longer needed as regex is per-jail */
+/* 释放预编译正则表达式模式 - 由于正则表达式按 jail 管理，不再需要 */
 void free_log_patterns(void)
 {
-    /* Regex is now managed per-jail, so no global patterns to free */
+    /* 正则表达式现在按 jail 管理，因此没有全局模式需要释放 */
 }

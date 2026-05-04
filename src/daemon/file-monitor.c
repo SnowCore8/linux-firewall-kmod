@@ -1,5 +1,5 @@
 /*
- * file-monitor.c - Inotify and file monitoring functions
+ * file-monitor.c - inotify和文件监控函数
  */
 
 #include "firewall-daemon.h"
@@ -7,16 +7,16 @@
 #include "failed-tracker.h"
 #include "file-monitor.h"
 
-/* Setup inotify monitoring */
+/* 设置inotify监控 */
 int setup_inotify(void)
 {
-    inotify_fd = inotify_init1(IN_CLOEXEC);  /* Use IN_CLOEXEC to prevent fd leak to child processes */
+    inotify_fd = inotify_init1(IN_CLOEXEC);  /* 使用IN_CLOEXEC防止fd泄漏到子进程 */
     if (inotify_fd < 0) {
         daemon_log_err("Failed to initialize inotify: %s", strerror(errno));
         return -1;
     }
 
-    /* Set non-blocking */
+    /* 设置为非阻塞 */
     int flags = fcntl(inotify_fd, F_GETFL);
     if (flags == -1) {
         daemon_log_err("Failed to get fcntl flags for inotify: %s", strerror(errno));
@@ -31,7 +31,7 @@ int setup_inotify(void)
         return -1;
     }
 
-    /* Add watches for each log file in each jail */
+    /* 为每个jail中的每个日志文件添加监控 */
     int global_idx = 0;
     for (int j = 0; j < cfg.jail_count; j++) {
         struct jail *jail = &cfg.jails[j];
@@ -44,44 +44,44 @@ int setup_inotify(void)
         for (int i = 0; i < jail->log_count; i++) {
             struct stat st;
 
-            /* Initialize file state */
+            /* 初始化文件状态 */
             file_states[global_idx].path[0] = '\0';
             file_states[global_idx].offset = 0;
             file_states[global_idx].inode = 0;
-            file_states[global_idx].wd = -1;  /* Mark as not watching yet */
-            file_states[global_idx].jail_idx = j;  /* Record which jail this file belongs to */
+            file_states[global_idx].wd = -1;  /* 标记为尚未监控 */
+            file_states[global_idx].jail_idx = j;  /* 记录此文件属于哪个jail */
 
             strncpy(file_states[global_idx].path, jail->log_files[i], sizeof(file_states[global_idx].path) - 1);
             file_states[global_idx].path[sizeof(file_states[global_idx].path) - 1] = '\0';
 
-            /* Get initial inode */
+            /* 获取初始inode */
             if (stat(jail->log_files[i], &st) == 0) {
                 file_states[global_idx].inode = st.st_ino;
                 file_states[global_idx].offset = st.st_size;
                 daemon_log_info("Initial offset for %s (jail=%s): %ld bytes", jail->log_files[i], jail->name, (long)file_states[global_idx].offset);
             }
 
-            /* Watch for modifications, moves, deletes */
+            /* 监控修改、移动、删除操作 */
             file_states[global_idx].wd = inotify_add_watch(inotify_fd, jail->log_files[i],
                 IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE | IN_CREATE);
             if (file_states[global_idx].wd < 0) {
                 daemon_log_warn("Failed to watch %s (jail=%s): %s (skipping)", jail->log_files[i], jail->name, strerror(errno));
                 file_states[global_idx].wd = -1;
-                /* Continue with other log files instead of failing entirely */
+                /* 继续处理其他日志文件而不是完全失败 */
             } else {
                 daemon_log_info("Watching %s (jail=%s, wd=%d)", jail->log_files[i], jail->name, file_states[global_idx].wd);
             }
 
             global_idx++;
             if (global_idx >= MAX_JAILS * MAX_LOG_FILES) {
-                daemon_log_warn("Maximum file states reached (%d), stopping watch addition", MAX_JAILS * MAX_LOG_FILES);
+                daemon_log_warn("达到最大文件状态数（%d），停止添加监控", MAX_JAILS * MAX_LOG_FILES);
                 goto watch_summary;
             }
         }
     }
 
 watch_summary:
-    /* Check if at least one file is being watched */
+    /* 检查是否至少有一个文件被监控 */
     int watched_count = 0;
     int total_files = 0;
     for (int j = 0; j < cfg.jail_count; j++) {
@@ -103,16 +103,16 @@ watch_summary:
     return 0;
 }
 
-/* Helper: Process a single complete log line.
- * Extracts IP and handles failed login attempt.
- * Called with null-terminated line in `line`. */
+/* 辅助函数：处理单条完整的日志行。
+ * 提取IP并处理失败登录尝试。
+ * 调用时 `line` 为以null结尾的字符串。*/
 void process_single_line(struct jail *j, const char *line, const char *log_path,
                         unsigned int max_retries, unsigned int findtime)
 {
     if (!line || strlen(line) == 0)
         return;
 
-    /* Skip extremely long lines */
+    /* 跳过极长的行 */
     size_t len = strlen(line);
     if (len >= 8192) {
         daemon_log_warn("Line too long (%zu bytes) in %s, skipping", len, log_path);
@@ -128,11 +128,11 @@ void process_single_line(struct jail *j, const char *line, const char *log_path,
     }
 }
 
-/* Helper: Process all complete lines in a buffer.
- * `data` points to the buffer, `len` is the data length.
- * Updates `*consumed` to the number of bytes consumed (up to and including last newline).
- * Any remaining data after the last newline is left for the caller to handle as partial.
- * NOTE: This function may temporarily modify `data` to null-terminate lines. */
+/* 辅助函数：处理缓冲区中所有完整的行。
+ * `data` 指向缓冲区，`len` 是数据长度。
+ * 更新 `*consumed` 为已消耗的字节数（直到并包括最后一个换行符）。
+ * 最后一个换行符之后的剩余数据留给调用者作为部分行处理。
+ * 注意：此函数可能会临时修改 `data` 以null终止各行。*/
 void process_lines_in_buffer(struct jail *j, char *data, size_t len, const char *log_path, size_t *consumed,
                             unsigned int max_retries, unsigned int findtime)
 {
@@ -148,16 +148,16 @@ void process_lines_in_buffer(struct jail *j, char *data, size_t len, const char 
         if (line_len >= 8192) {
             daemon_log_warn("Extremely long line (%zu bytes) in %s, skipping", line_len, log_path);
         } else {
-            /* Temporarily null-terminate for processing */
+            /* 临时null终止以便处理 */
             char saved = *line_end;
-            /* Safe: line_len < 8192, and data is within caller's buffer */
+            /* 安全：line_len < 8192，且data在调用者的缓冲区范围内 */
             *line_end = '\0';
             process_single_line(j, line_start, log_path, max_retries, findtime);
             *line_end = saved;
         }
 
-        /* Move past this line */
-        size_t advance = line_len + 1;  /* +1 for newline */
+        /* 越过此行 */
+        size_t advance = line_len + 1;  /* +1表示换行符 */
         line_start += advance;
         remaining -= advance;
     }
@@ -165,8 +165,8 @@ void process_lines_in_buffer(struct jail *j, char *data, size_t len, const char 
     *consumed = len - remaining;
 }
 
-/* Helper: Store remaining data as partial line (no lock needed - per-jail buffer).
- * If partial buffer would overflow, processes accumulated data and resets. */
+/* 辅助函数：将剩余数据存储为部分行（无需锁 - 每个jail的缓冲区）。
+ * 如果部分缓冲区将溢出，则处理累积数据并重置。*/
 void store_partial_line(struct jail *j, const char *data, size_t len, const char *log_path,
                        unsigned int max_retries, unsigned int findtime)
 {
@@ -178,9 +178,9 @@ void store_partial_line(struct jail *j, const char *data, size_t len, const char
         return;
     }
     
-    /* Check if adding this data would overflow */
+    /* 检查添加此数据是否会溢出 */
     if (j->partial_line_len + len >= sizeof(j->partial_line_buffer)) {
-        /* Buffer would overflow - process accumulated data and replace with new data */
+        /* 缓冲区将溢出 - 处理累积数据并替换为新数据 */
         size_t old_len = j->partial_line_len;
         char temp[sizeof(j->partial_line_buffer)];
         
@@ -190,23 +190,23 @@ void store_partial_line(struct jail *j, const char *data, size_t len, const char
             process_single_line(j, temp, log_path, max_retries, findtime);
         }
         
-        /* Store new data */
+        /* 存储新数据 */
         memcpy(j->partial_line_buffer, data, len);
         j->partial_line_len = len;
     } else {
-        /* Safe to append */
+        /* 安全追加 */
         memcpy(j->partial_line_buffer + j->partial_line_len, data, len);
         j->partial_line_len += len;
     }
     
-    /* Ensure null termination */
+    /* 确保null终止 */
     if (j->partial_line_len < sizeof(j->partial_line_buffer)) {
         j->partial_line_buffer[j->partial_line_len] = '\0';
     }
 }
 
-/* Helper: Process accumulated partial line buffer (no lock needed - per-jail buffer).
- * Drains the partial buffer and processes its content. */
+/* 辅助函数：处理累积的部分行缓冲区（无需锁 - 每个jail的缓冲区）。
+ * 清空部分缓冲区并处理其内容。*/
 void flush_partial_line(struct jail *j, const char *log_path,
                        unsigned int max_retries, unsigned int findtime)
 {
@@ -224,7 +224,7 @@ void flush_partial_line(struct jail *j, const char *log_path,
     process_single_line(j, temp, log_path, max_retries, findtime);
 }
 
-/* Process new lines from log file starting from tracked offset */
+/* 从跟踪的偏移量开始处理日志文件中的新行 */
 void process_new_lines(int idx)
 {
     int fd = -1;
@@ -237,7 +237,7 @@ void process_new_lines(int idx)
     struct jail *j = NULL;
     unsigned int max_retries, findtime;
 
-    /* Validate idx parameter */
+    /* 验证idx参数 */
     if (idx < 0 || idx >= MAX_JAILS * MAX_LOG_FILES) {
         daemon_log_err("Invalid index %d to process_new_lines", idx);
         return;
@@ -246,36 +246,36 @@ void process_new_lines(int idx)
     log_path = file_states[idx].path;
     int jail_idx = file_states[idx].jail_idx;
 
-    /* Get jail reference and configuration under lock protection.
-     * Copy ALL jail data we need to local variables to prevent use-after-free
-     * if SIGHUP config reload happens after we release the lock. */
+    /* 在锁保护下获取jail引用和配置。
+     * 将所有需要的jail数据复制到局部变量中，以防止在释放锁后
+     * 如果发生SIGHUP配置重载导致use-after-free。*/
     if (jail_idx < 0 || jail_idx >= cfg.jail_count) {
         daemon_log_err("Invalid jail index %d in process_new_lines", jail_idx);
         return;
     }
     
-    /* Local copy of partial line buffer to avoid dangling pointer */
+    /* 部分行缓冲区的本地副本以避免悬垂指针 */
     char local_partial_buf[sizeof(((struct jail *)0)->partial_line_buffer)];
     size_t local_partial_len = 0;
 
-    /* Lock to safely copy jail configuration values and partial line buffer */
+    /* 加锁以安全复制jail配置值和部分行缓冲区 */
     pthread_mutex_lock(&config_mutex);
     j = &cfg.jails[jail_idx];
     max_retries = j->max_retries;
     findtime = j->findtime;
-    /* Copy partial line buffer while holding lock */
+    /* 持有锁时复制部分行缓冲区 */
     local_partial_len = j->partial_line_len;
     if (local_partial_len > 0 && local_partial_len < sizeof(local_partial_buf)) {
         memcpy(local_partial_buf, j->partial_line_buffer, local_partial_len);
     }
-    /* Clear the jail's partial buffer since we now own the data */
+    /* 清除jail的部分缓冲区，因为我们现在拥有数据 */
     j->partial_line_len = 0;
     pthread_mutex_unlock(&config_mutex);
 
     fd = open(log_path, O_RDONLY);
     if (fd < 0) {
         daemon_log_err("Failed to open %s: %s", log_path, strerror(errno));
-        /* Restore partial buffer on failure */
+        /* 失败时恢复部分缓冲区 */
         pthread_mutex_lock(&config_mutex);
         if (jail_idx < cfg.jail_count) {
             cfg.jails[jail_idx].partial_line_len = local_partial_len;
@@ -286,24 +286,24 @@ void process_new_lines(int idx)
         goto cleanup;
     }
 
-    /* Check if file was rotated (inode changed or size decreased) */
+    /* 检查文件是否被轮转（inode改变或大小减小） */
     if (fstat(fd, &st) == 0) {
         if (file_states[idx].inode != 0 && st.st_ino != file_states[idx].inode) {
             daemon_log_info("Log file rotated: %s", log_path);
             file_states[idx].inode = st.st_ino;
             file_states[idx].offset = 0;
-            /* Discard partial line on rotation */
+            /* 轮转时丢弃部分行 */
             local_partial_len = 0;
         } else if (st.st_size < file_states[idx].offset) {
             daemon_log_info("Log file truncated: %s", log_path);
             file_states[idx].inode = st.st_ino;
             file_states[idx].offset = 0;
-            /* Discard partial line on truncation */
+            /* 截断时丢弃部分行 */
             local_partial_len = 0;
         }
     }
 
-    /* Seek to last known offset */
+    /* 定位到最后已知的偏移量 */
     if (file_states[idx].offset > 0) {
         if (lseek(fd, file_states[idx].offset, SEEK_SET) == (off_t)-1) {
             daemon_log_err("Failed to seek in %s: %s", log_path, strerror(errno));
@@ -312,26 +312,26 @@ void process_new_lines(int idx)
         }
     }
 
-    /* Read and process data in chunks */
+    /* 分块读取和处理数据 */
     current_offset = file_states[idx].offset;
 
-    /* Move allocations outside the loop for easier cleanup */
+    /* 将分配移到循环外部以便于清理 */
     char *combined = NULL;
 
     while ((bytes_read = read(fd, buffer, sizeof(buffer) - 1)) > 0) {
-        buffer[bytes_read] = '\0';  /* Ensure null termination for safety */
+        buffer[bytes_read] = '\0';  /* 确保安全null终止 */
 
-        /* Process data using local partial buffer */
+        /* 使用本地部分缓冲区处理数据 */
         if (local_partial_len > 0) {
-            /* Has partial line data, need to merge and process */
+            /* 有部分行数据，需要合并和处理 */
             combined = malloc(local_partial_len + (size_t)bytes_read + 1);
             if (!combined) {
-                daemon_log_err("Out of memory allocating combined buffer");
-                /* Discard partial data, process new data directly */
+                daemon_log_err("分配组合缓冲区内存不足");
+                /* 丢弃部分数据，直接处理新数据 */
                 size_t consumed = 0;
                 process_lines_in_buffer(j, buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);
                 if (consumed < (size_t)bytes_read) {
-                    /* Store remaining as new partial in local buffer */
+                    /* 将剩余数据存储为本地缓冲区中的新部分行 */
                     size_t remain = (size_t)bytes_read - consumed;
                     if (remain < sizeof(local_partial_buf)) {
                         memcpy(local_partial_buf, buffer + consumed, remain);
@@ -349,14 +349,14 @@ void process_new_lines(int idx)
             combined[local_partial_len + (size_t)bytes_read] = '\0';
             size_t total_len = local_partial_len + (size_t)bytes_read;
 
-            /* Clear local partial since we merged it */
+            /* 已合并，清除本地部分行 */
             local_partial_len = 0;
 
-            /* Process complete lines */
+            /* 处理完整的行 */
             size_t consumed = 0;
             process_lines_in_buffer(j, combined, total_len, log_path, &consumed, max_retries, findtime);
 
-            /* Store any remaining data as new partial line in local buffer */
+            /* 将任何剩余数据存储为本地缓冲区中的新部分行 */
             if (consumed < total_len) {
                 size_t remain = total_len - consumed;
                 if (remain < sizeof(local_partial_buf)) {
@@ -370,7 +370,7 @@ void process_new_lines(int idx)
             free(combined);
             combined = NULL;
         } else {
-            /* No partial line - process buffer directly */
+            /* 无部分行 - 直接处理缓冲区 */
             size_t consumed = 0;
             process_lines_in_buffer(j, buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);
 
@@ -385,7 +385,7 @@ void process_new_lines(int idx)
             }
         }
 
-        /* Prevent integer overflow when updating offset */
+        /* 更新偏移量时防止整数溢出 */
         if (current_offset > SSIZE_MAX - bytes_read) {
             daemon_log_err("Integer overflow in file offset calculation");
             ret = -1;
@@ -404,7 +404,7 @@ void process_new_lines(int idx)
     file_states[idx].offset = current_offset;
 
 cleanup_restore_partial:
-    /* Restore partial line buffer to jail under lock */
+    /* 在锁下将部分行缓冲区恢复到jail */
     pthread_mutex_lock(&config_mutex);
     if (jail_idx < cfg.jail_count) {
         cfg.jails[jail_idx].partial_line_len = local_partial_len;
@@ -424,7 +424,7 @@ cleanup:
     }
 }
 
-/* Function to periodically clean up partial line buffer to prevent accumulation */
+/* 定期清理部分行缓冲区以防止累积的函数 */
 void cleanup_partial_line_buffer(void)
 {
     pthread_mutex_lock(&config_mutex);
@@ -435,7 +435,7 @@ void cleanup_partial_line_buffer(void)
     pthread_mutex_unlock(&config_mutex);
 }
 
-/* Handle log file rotation */
+/* 处理日志文件轮转 */
 void handle_log_rotation(int idx)
 {
     struct stat st;
@@ -443,15 +443,15 @@ void handle_log_rotation(int idx)
     struct jail *j = NULL;
     unsigned int max_retries, findtime;
 
-    /* Copy jail data under lock to prevent use-after-free during config reload */
+    /* 在锁下复制jail数据以防止配置重载期间的use-after-free */
     if (jail_idx >= 0 && jail_idx < cfg.jail_count) {
         pthread_mutex_lock(&config_mutex);
-        /* Double-check after acquiring lock */
+        /* 获取锁后再次检查 */
         if (jail_idx < cfg.jail_count) {
             j = &cfg.jails[jail_idx];
             max_retries = j->max_retries;
             findtime = j->findtime;
-            /* Copy and clear partial line buffer while holding lock */
+            /* 持有锁时复制并清除部分行缓冲区 */
             char local_buf[sizeof(j->partial_line_buffer)];
             size_t local_len = j->partial_line_len;
             if (local_len > 0 && local_len < sizeof(local_buf)) {
@@ -460,7 +460,7 @@ void handle_log_rotation(int idx)
             j->partial_line_len = 0;
             pthread_mutex_unlock(&config_mutex);
 
-            /* Process the copied partial line without holding lock */
+            /* 不持有锁处理已复制的部分行 */
             if (local_len > 0 && local_len < sizeof(local_buf)) {
                 local_buf[local_len] = '\0';
                 process_single_line(j, local_buf, file_states[idx].path, max_retries, findtime);
@@ -477,20 +477,20 @@ void handle_log_rotation(int idx)
 
     atomic_fetch_add(&daemon_stats.log_rotations, 1);
 
-    /* Check if file still exists */
+    /* 检查文件是否仍然存在 */
     if (stat(file_states[idx].path, &st) != 0) {
         daemon_log_warn("Log file disappeared: %s", file_states[idx].path);
         file_states[idx].offset = 0;
         return;
     }
 
-    /* Check if inode changed (file was rotated) */
+    /* 检查inode是否改变（文件被轮转） */
     if (st.st_ino != file_states[idx].inode) {
         daemon_log_info("Log file rotated: %s", file_states[idx].path);
         file_states[idx].inode = st.st_ino;
         file_states[idx].offset = 0;
 
-        /* Re-add watch if needed */
+        /* 如果需要则重新添加监控 */
         if (file_states[idx].wd >= 0) {
             inotify_rm_watch(inotify_fd, file_states[idx].wd);
         }
@@ -505,7 +505,7 @@ void handle_log_rotation(int idx)
     }
 }
 
-/* Main monitoring loop */
+/* 主监控循环 */
 void monitor_loop(void)
 {
     char buffer[EVENT_BUF_LEN];
@@ -517,7 +517,7 @@ void monitor_loop(void)
         struct timeval tv;
         int current_interval;
 
-        /* Reading configuration requires locking - prevent concurrency with SIGHUP config reload */
+        /* 读取配置需要加锁 - 防止与SIGHUP配置重载并发 */
         pthread_mutex_lock(&config_mutex);
         current_interval = cfg.interval;
         pthread_mutex_unlock(&config_mutex);
@@ -528,7 +528,7 @@ void monitor_loop(void)
         tv.tv_sec = current_interval;
         tv.tv_usec = 0;
 
-        /* Wait for inotify events or timeout */
+        /* 等待inotify事件或超时 */
         int ret = select(inotify_fd + 1, &read_fds, NULL, NULL, &tv);
         if (ret < 0) {
             if (errno == EINTR) continue;
@@ -537,17 +537,17 @@ void monitor_loop(void)
         }
 
         if (ret == 0) {
-            /* Timeout - periodic cleanup */
+            /* 超时 - 定期清理 */
             cleanup_expired_bans();
 
-            /* Check if config reload was requested - use atomic exchange to prevent lost signals */
+            /* 检查是否请求了配置重载 - 使用原子交换防止信号丢失 */
             if (__atomic_exchange_n(&reload_config, 0, __ATOMIC_SEQ_CST)) {
                 daemon_log_info("Reloading configuration...");
 
                 unsigned int old_max_retries, old_findtime, old_ban_time;
                 int old_interval, old_metrics_port;
 
-                /* Save key values of old configuration for change detection */
+                /* 保存旧配置的关键值以检测变更 */
                 pthread_mutex_lock(&config_mutex);
                 old_max_retries = cfg.default_max_retries;
                 old_findtime = cfg.default_findtime;
@@ -556,17 +556,17 @@ void monitor_loop(void)
                 old_metrics_port = cfg.metrics_port;
                 pthread_mutex_unlock(&config_mutex);
 
-                /* Select reload method based on configuration type */
+                /* 根据配置类型选择重载方法 */
                 int reload_ok = 0;
 
-                /* parse_config_file now uses double-buffering internally:
-                 * it parses into a temp config (no lock), then briefly locks
-                 * to swap configs and migrate runtime state (failed_hash).
-                 * NO need to call cleanup_all_jails() first - the double-buffer
-                 * swap handles migration and cleanup atomically. */
+                /* parse_config_file 现在内部使用双缓冲：
+                 * 它解析到临时配置（无锁），然后短暂加锁
+                 * 以交换配置并迁移运行时状态（failed_hash）。
+                 * 无需先调用cleanup_all_jails() - 双缓冲
+                 * 交换以原子方式处理迁移和清理。*/
 
                 if (cfg.config_dir) {
-                    /* Configuration directory mode: reload entire directory */
+                    /* 配置目录模式：重载整个目录 */
                     daemon_log_info("Reloading config directory: %s", cfg.config_dir);
                     if (load_config_directory(cfg.config_dir) < 0) {
                         daemon_log_warn("Failed to reload config directory, keeping old config");

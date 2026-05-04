@@ -11,7 +11,7 @@ for i in $(seq 1 3); do
     fw_ensure_module_unloaded
     sleep 0.1
 done
-# Final load to verify module is still functional after cycles
+# 最终加载以验证模块在循环后仍正常工作
 fw_ensure_module_loaded "$KERNEL_MODULE_PATH"
 assert_true "[[ -r '$PROC_BANS' ]]" "3 次加载/卸载循环稳定，模块仍可访问"
 

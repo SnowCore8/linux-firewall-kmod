@@ -1,16 +1,16 @@
 #!/bin/bash
-# build.sh - Build script for firewall project
+# build.sh - 防火墙项目构建脚本
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Check required commands
+# 检查所需命令
 command -v make >/dev/null 2>&1 || { error "make not found in PATH"; exit 1; }
 command -v gcc >/dev/null 2>&1 || { error "gcc not found in PATH"; exit 1; }
 
-# Colors
+# 颜色定义
 if [[ -t 1 ]]; then
     RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 else
@@ -46,7 +46,7 @@ build_all() {
     make -C "$PROJECT_ROOT" -f "$PROJECT_ROOT/Makefile" all
 }
 
-# Default to building everything
+# 默认构建所有组件
 BUILD_TYPE="all"
 
 while [[ $# -gt 0 ]]; do

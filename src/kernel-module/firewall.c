@@ -1,26 +1,25 @@
 /*
- * firewall.c - Linux kernel module for IP banning
+ * firewall.c - 用于 IP 封禁的 Linux 内核模块
  *
- * This module provides kernel-level IP banning functionality
- * using netfilter hooks.
+ * 本模块使用 netfilter 钩子提供内核级 IP 封禁功能。
  */
 
 #include "firewall.h"
 #include <linux/namei.h>
 #include <linux/version.h>
 
-/* Forward declarations for RCU callbacks */
+/* RCU 回调的前向声明 */
 static void free_ban_entry_rcu(struct rcu_head *head);
 static void free_whitelist_entry_rcu(struct rcu_head *head);
 
-/* Forward declaration for flood protection function */
+/* 泛洪保护函数的前向声明 */
 static int check_flood_protection(void);
 
-/* Forward declarations for state file functions */
+/* 状态文件函数的前向声明 */
 static int save_state_to_file(const char *filename);
 static int restore_state_from_file(const char *filename);
 
-/* Helper function: Convert IPv4 to string */
+/* 辅助函数：将 IPv4 转换为字符串 */
 static inline void ipv4_to_str(__be32 ip, char *buf, int len)
 {
     unsigned int a = ntohl(ip) >> 24;
@@ -28,10 +27,10 @@ static inline void ipv4_to_str(__be32 ip, char *buf, int len)
     unsigned int c = (ntohl(ip) >> 8) & 0xFF;
     unsigned int d = ntohl(ip) & 0xFF;
 
-    /* Validate buffer size is sufficient for IP string (at least 16 chars: "xxx.xxx.xxx.xxx\0") */
+    /* 验证缓冲区大小足以容纳 IP 字符串（至少 16 字符："xxx.xxx.xxx.xxx\0"） */
     if (len < 16) {
         if (len > 0) {
-            buf[0] = '\0';  /* Null terminate if buffer exists */
+            buf[0] = '\0';  /* 如果缓冲区存在，添加空终止符 */
         }
         return;
     }
@@ -39,37 +38,37 @@ static inline void ipv4_to_str(__be32 ip, char *buf, int len)
     snprintf(buf, len, "%u.%u.%u.%u", a, b, c, d);
 }
 
-/* Helper function: Compare IPv4 addresses - simplified for IPv4 only */
+/* 辅助函数：比较 IPv4 地址 — 简化为仅 IPv4 */
 static inline bool compare_ips(__be32 ip1, __be32 ip2)
 {
     return ip1 == ip2;
 }
 
-/* Helper function: Generate hash for IPv4 addresses */
+/* 辅助函数：为 IPv4 地址生成哈希 */
 static inline u32 generate_ip_hash(__be32 ip)
 {
     return hash_min(ip, BAN_HASH_BITS);
 }
 
-/* Helper function: Generate hash for whitelist IPv4 addresses */
+/* 辅助函数：为白名单 IPv4 地址生成哈希 */
 static inline u32 generate_wl_ip_hash(__be32 ip)
 {
     return hash_min(ip, WHITELIST_HASH_BITS);
 }
 
-/* Forward declaration */
+/* 前向声明 */
 static int validate_ipv4_address(__be32 ip, const char *ip_str, const char *context);
 
 /*
- * validate_ipv4_address - Unified IPv4 address validation for banning/whitelisting
- * @ip: IP address in network byte order (__be32)
- * @ip_str: IP address string for logging (may be NULL)
- * @context: Context string for log messages (e.g., "ban", "whitelist")
+ * validate_ipv4_address - 统一的 IPv4 地址验证，用于封禁/白名单
+ * @ip: 网络字节序的 IP 地址 (__be32)
+ * @ip_str: 用于日志的 IP 地址字符串（可为 NULL）
+ * @context: 用于日志消息的上下文字符串（如 "ban"、"whitelist"）
  *
- * Rejects: 0.0.0.0, 255.255.255.255, 127.0.0.0/8 (loopback),
- *          224.0.0.0/4 (multicast + Class E), 0.0.0.0/8
+ * 拒绝：0.0.0.0、255.255.255.255、127.0.0.0/8（回环）、
+ *       224.0.0.0/4（组播 + E 类）、0.0.0.0/8
  *
- * Returns: 0 if valid, -EINVAL if invalid
+ * 返回值：有效返回 0，无效返回 -EINVAL
  */
 static int validate_ipv4_address(__be32 ip, const char *ip_str, const char *context)
 {
@@ -79,11 +78,11 @@ static int validate_ipv4_address(__be32 ip, const char *ip_str, const char *cont
         fw_pr_warn("Attempt to %s invalid IPv4: %s", context, ip_str ?: "(null)");
         return -EINVAL;
     }
-    if ((ip_num & 0xFF000000) == 0x7F000000) {  /* 127.x.x.x (loopback) */
+    if ((ip_num & 0xFF000000) == 0x7F000000) {  /* 127.x.x.x（回环） */
         fw_pr_warn("Attempt to %s loopback IPv4: %s", context, ip_str ?: "(null)");
         return -EINVAL;
     }
-    if ((ip_num & 0xF0000000) == 0xE0000000) {  /* 224.0.0.0/4 (multicast + Class E) */
+    if ((ip_num & 0xF0000000) == 0xE0000000) {  /* 224.0.0.0/4（组播 + E 类） */
         fw_pr_warn("Attempt to %s reserved IPv4 (multicast/Class E): %s", context, ip_str ?: "(null)");
         return -EINVAL;
     }
@@ -100,37 +99,37 @@ static int validate_ipv4_address(__be32 ip, const char *ip_str, const char *cont
 }
 
 /*
- * add_whitelist_entry - Add an IPv4 to the whitelist hash table
- * Fixed version: Ensures IP is normalized to network address for proper subnet matching
- * Added validation for IP and mask values
+ * add_whitelist_entry - 将 IPv4 添加到白名单哈希表
+ * 修复版本：确保 IP 被规范化为网络地址，以正确匹配子网
+ * 增加了对 IP 和掩码值的验证
  */
 int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const char *dev_name)
 {
-    struct whitelist_entry *new_entry;  /* FIX: Use new_entry to avoid being overwritten by hash_for_each_possible */
-    struct whitelist_entry *tmp_entry;  /* FIX: Temporary variable for traversing hash table */
+    struct whitelist_entry *new_entry;  /* 修复：使用 new_entry 避免被 hash_for_each_possible 覆盖 */
+    struct whitelist_entry *tmp_entry;  /* 修复：遍历哈希表的临时变量 */
     u32 hash;
 
     FW_DEBUG(1, "ENTRY: add_whitelist_entry(ip=%pI4, mask=%pI4, dev=%s)", &ip, &mask, dev_name ?: "null");
 
-    /* Validate IP and mask inputs */
+    /* 验证 IP 和掩码输入 */
     if (!mask) {
         fw_pr_warn("Invalid mask 0x%08x for IP %pI4", mask, &ip);
         FW_DEBUG(1, "EXIT: add_whitelist_entry -> -EINVAL (invalid mask)");
         return -EINVAL;
     }
 
-    /* Unified IPv4 address validation */
+    /* 统一的 IPv4 地址验证 */
     if (validate_ipv4_address(ip, NULL, "whitelist") < 0) {
         FW_DEBUG(1, "EXIT: add_whitelist_entry -> -EINVAL (invalid IP)");
         return -EINVAL;
     }
 
-    __be32 normalized_ip = ip & mask;  // Normalize IP to network address
+    __be32 normalized_ip = ip & mask;  // 将 IP 规范化为网络地址
 
     hash = hash_min(normalized_ip, WHITELIST_HASH_BITS);
     FW_DEBUG(2, "Attempting to add whitelist entry for %pI4/%d", &normalized_ip, inet_mask_len(mask));
 
-    /* FIX W2: Allocate memory outside the lock to avoid sleeping inside spinlock */
+    /* 修复 W2：在锁外分配内存，避免在 spinlock 内睡眠 */
     new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
     if (!new_entry) {
         FW_DEBUG(1, "Failed to allocate memory for whitelist entry for IP %pI4", &normalized_ip);
@@ -138,8 +137,8 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const 
         return -ENOMEM;
     }
 
-    /* Initialize new_entry fields */
-    new_entry->ip = normalized_ip;  /* Store normalized IP (network address) */
+    /* 初始化 new_entry 字段 */
+    new_entry->ip = normalized_ip;  /* 存储规范化后的 IP（网络地址） */
     new_entry->mask = mask;
     if (dev_name)
         strscpy(new_entry->device_name, dev_name, sizeof(new_entry->device_name));
@@ -148,7 +147,7 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const 
 
     spin_lock(&fw->whitelist_lock);
 
-    /* FIX: Use tmp_entry for traversal to avoid overwriting new_entry pointer */
+    /* 修复：使用 tmp_entry 遍历，避免覆盖 new_entry 指针 */
     hash_for_each_possible(fw->whitelist_table, tmp_entry, hash, normalized_ip) {
         if (compare_ips(tmp_entry->ip, normalized_ip) &&
             tmp_entry->mask == mask) {
@@ -161,14 +160,14 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const 
 
     if (atomic_read(&fw->whitelist_count) >= MAX_WHITELIST_ENTRIES) {
         spin_unlock(&fw->whitelist_lock);
-        kfree(new_entry);  /* FIX: Free new_entry */
+        kfree(new_entry);  /* 修复：释放 new_entry */
         fw_pr_warn("Whitelist full, cannot add %pI4/%d", &normalized_ip, inet_mask_len(mask));
         FW_DEBUG(1, "EXIT: add_whitelist_entry -> -ENOSPC (whitelist full)");
         return -ENOSPC;
     }
 
-    /* Insert into hash table */
-    hash_add(fw->whitelist_table, &new_entry->hash, normalized_ip);  /* FIX: Use new_entry */
+    /* 插入哈希表 */
+    hash_add(fw->whitelist_table, &new_entry->hash, normalized_ip);  /* 修复：使用 new_entry */
     atomic_inc(&fw->whitelist_count);
     spin_unlock(&fw->whitelist_lock);
 
@@ -180,20 +179,20 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const 
 }
 
 /*
- * remove_whitelist_entry - Remove an IPv4 from the whitelist hash table
- * Fixed version: Normalizes IP to network address for consistent removal
+ * remove_whitelist_entry - 从白名单哈希表中移除 IPv4
+ * 修复版本：规范化 IP 为网络地址，以确保一致性的移除
  */
 int remove_whitelist_entry(struct firewall_info *fw, __be32 ip_input)
 {
     struct whitelist_entry *entry;
     u32 hash;
     int found = 0;
-    __be32 normalized_ip = ip_input;  // For backward compatibility, assume input is already normalized
-                               // OR if removing by network address, use as-is
+    __be32 normalized_ip = ip_input;  // 为向后兼容，假设输入已规范化
+                                // 或者如果按网络地址移除，则原样使用
 
     FW_DEBUG(1, "ENTRY: remove_whitelist_entry(ip=%pI4)", &normalized_ip);
 
-    /* Look for entries by the exact stored IP (which is normalized network address) */
+    /* 按精确存储的 IP 查找条目（即已规范化的网络地址） */
     spin_lock(&fw->whitelist_lock);
     hash = hash_min(normalized_ip, WHITELIST_HASH_BITS);
     hash_for_each_possible(fw->whitelist_table, entry, hash, normalized_ip) {
@@ -201,7 +200,7 @@ int remove_whitelist_entry(struct firewall_info *fw, __be32 ip_input)
             hlist_del_rcu(&entry->hash);
             atomic_dec(&fw->whitelist_count);
             found = 1;
-            /* Use call_rcu for async freeing */
+            /* 使用 call_rcu 异步释放 */
             call_rcu(&entry->rcu_head, free_whitelist_entry_rcu);
             FW_DEBUG(2, "Found and removed whitelist entry for %pI4", &normalized_ip);
             break;
@@ -221,10 +220,10 @@ int remove_whitelist_entry(struct firewall_info *fw, __be32 ip_input)
 }
 
 /*
- * is_in_whitelist - Check if an IPv4 is in the whitelist hash table
- * Fixed version: Properly handles subnet matching by checking all entries in the hash table
- * Since different IPs with different masks could fall in the same hash bucket, we need to
- * check all entries to ensure proper subnet matching.
+ * is_in_whitelist - 检查 IPv4 是否在白名单哈希表中
+ * 修复版本：通过检查哈希表中的所有条目来正确处理子网匹配
+ * 由于不同 IP 使用不同掩码可能落入同一哈希桶，我们需要
+ * 检查所有条目以确保正确的子网匹配。
  */
 bool is_in_whitelist(struct firewall_info *fw, __be32 ip)
 {
@@ -234,13 +233,13 @@ bool is_in_whitelist(struct firewall_info *fw, __be32 ip)
     FW_DEBUG(3, "ENTRY: is_in_whitelist(ip=%pI4)", &ip);
 
     rcu_read_lock();
-    /* Check ALL entries in the whitelist table to properly handle subnet matching.
-     * NOTE: This is O(n) because different prefix lengths can hash to different buckets.
-     * For the common case of /32 entries, we could use hash_for_each_possible_rcu(),
-     * but subnets require full traversal. With MAX_WHITELIST_ENTRIES=64, this is acceptable.
+    /* 检查白名单表中的 ALL 条目以正确处理子网匹配。
+     * 注意：这是 O(n) 的，因为不同前缀长度可能哈希到不同桶。
+     * 对于常见的 /32 条目，可以使用 hash_for_each_possible_rcu()，
+     * 但子网需要完整遍历。MAX_WHITELIST_ENTRIES=64 时这是可接受的。
      */
     hash_for_each_rcu(fw->whitelist_table, hash, entry, hash) {
-        /* Subnet matching logic: check if IP falls within subnet range */
+        /* 子网匹配逻辑：检查 IP 是否在子网范围内 */
         if ((ip & entry->mask) == (entry->ip & entry->mask)) {
             rcu_read_unlock();
             FW_DEBUG(2, "EXIT: is_in_whitelist -> true (matched subnet)");
@@ -252,22 +251,22 @@ bool is_in_whitelist(struct firewall_info *fw, __be32 ip)
     return false;
 }
 
-/* Module parameters (non-static, accessible from procfs) */
+/* 模块参数（非静态，可从 procfs 访问） */
 unsigned int fw_ban_time = DEFAULT_BAN_TIME;
 char *state_file = "/var/lib/firewall/state";
 unsigned int fw_max_bans_per_second = 200;
 
 module_param(fw_ban_time, uint, 0644);
-MODULE_PARM_DESC(fw_ban_time, "Ban duration in seconds (default 600)");
+MODULE_PARM_DESC(fw_ban_time, "封禁持续时间（秒）（默认 600）");
 module_param(state_file, charp, 0644);
-MODULE_PARM_DESC(state_file, "Path to state file for saving/restoring ban and whitelist entries (default /var/lib/firewall/state)");
+MODULE_PARM_DESC(state_file, "用于保存/恢复封禁和白名单条目的状态文件路径（默认 /var/lib/firewall/state）");
 module_param(fw_max_bans_per_second, uint, 0644);
-MODULE_PARM_DESC(fw_max_bans_per_second, "Maximum number of ban additions per second for flood protection (default 200)");
+MODULE_PARM_DESC(fw_max_bans_per_second, "泛洪保护下每秒最大封禁添加次数（默认 200）");
 
-/* Global firewall info - made static to prevent external access */
+/* 全局防火墙信息 — 设为 static 以防止外部访问 */
 static struct firewall_info fw_info;
 
-/* Export function to provide controlled access to fw_info */
+/* 导出函数，提供对 fw_info 的受控访问 */
 struct firewall_info *get_fw_info(void)
 {
     return &fw_info;
@@ -275,23 +274,22 @@ struct firewall_info *get_fw_info(void)
 EXPORT_SYMBOL_GPL(get_fw_info);
 
 /*
- * ban_ip - Add an IPv4 to the ban list
- * Optimized version: Uses rwlock for better concurrency
+ * ban_ip - 将 IPv4 添加到封禁列表
+ * 优化版本：使用 rwlock 提高并发性
  */
 /*
- * __do_ban_ip - Internal unified ban function
- * @fw: firewall info structure
- * @ip: IP address to ban
- * @unban_time: when to unban (0 = permanent)
- * @is_permanent: whether this is a permanent ban
- * @log_msg: log message suffix (e.g., "for %u seconds", "permanently")
- * @log_arg: argument for log message (0 if not needed)
+ * __do_ban_ip - 内部统一封禁函数
+ * @fw: 防火墙信息结构体
+ * @ip: 要封禁的 IP 地址
+ * @unban_time: 解封时间（0 = 永久）
+ * @is_permanent: 是否为永久封禁
+ * @log_msg: 日志消息后缀（如 "for %u seconds"、"permanently"）
+ * @log_arg: 日志消息参数（不需要时为 0）
  *
- * This is the unified internal ban implementation used by all public
- * ban functions. Handles whitelist check, duplicate detection, capacity
- * check, allocation, and hash insertion.
+ * 这是所有公共封禁函数使用的统一内部封禁实现。处理白名单检查、
+ * 重复检测、容量检查、分配和哈希插入。
  *
- * Returns: 0 on success, negative error code on failure
+ * 返回值：成功返回 0，失败返回负错误码
  */
 static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
                        unsigned long unban_time, bool is_permanent,
@@ -302,16 +300,16 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
     u32 hash;
     int bkt;
 
-    /* Validate IP input */
+    /* 验证 IP 输入 */
     if (!ip) {
         fw_pr_err("Invalid IP address for banning: %pI4", &ip);
         return -EINVAL;
     }
 
-    /* Acquire lock before any checks to eliminate TOCTOU race condition */
+    /* 在任何检查之前获取锁，以消除 TOCTOU 竞态条件 */
     spin_lock(&fw->lock);
 
-    /* Check whitelist using RCU (whitelist_table is RCU-protected) */
+    /* 使用 RCU 检查白名单（whitelist_table 受 RCU 保护） */
     rcu_read_lock();
     hash_for_each_rcu(fw->whitelist_table, bkt, wl_entry, hash) {
         if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
@@ -324,15 +322,15 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
     }
     rcu_read_unlock();
 
-    /* Check if already banned under same lock */
+    /* 在同一锁下检查是否已被封禁 */
     hash = hash_min(ip, BAN_HASH_BITS);
     hash_for_each_possible(fw->ban_table, entry, hash, ip) {
         if (compare_ips(entry->ip, ip)) {
             if (entry->is_permanent || time_before(jiffies, entry->unban_time)) {
                 spin_unlock(&fw->lock);
-                return 0;  /* Already banned */
+                return 0;  /* 已被封禁 */
             } else {
-                /* Entry exists but expired - update it */
+                /* 条目存在但已过期 — 更新它 */
                 entry->ban_time = jiffies;
                 entry->unban_time = unban_time;
                 entry->is_permanent = is_permanent;
@@ -343,7 +341,7 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
         }
     }
 
-    /* Check ban table capacity */
+    /* 检查封禁表容量 */
     if (atomic_read(&fw->ban_count) >= MAX_BAN_ENTRIES) {
         spin_unlock(&fw->lock);
         atomic_inc(&fw->ban_table_full_count);
@@ -351,7 +349,7 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
         return -ENOSPC;
     }
 
-    /* Allocate new entry */
+    /* 分配新条目 */
     entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
     if (!entry) {
         spin_unlock(&fw->lock);
@@ -372,7 +370,7 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
 
     spin_unlock(&fw->lock);
 
-    /* Log with provided message */
+    /* 使用提供的消息记录日志 */
     if (log_msg && log_arg)
         fw_pr_info_ratelimited("IP %pI4 %s", &ip, log_msg, log_arg);
     else if (log_msg)
@@ -382,12 +380,12 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
 }
 
 /*
- * __find_ban_entry_rcu - Find ban entry using RCU (internal helper)
- * @fw: firewall info structure
- * @ip: IP address to look up
+ * __find_ban_entry_rcu - 使用 RCU 查找封禁条目（内部辅助函数）
+ * @fw: 防火墙信息结构体
+ * @ip: 要查找的 IP 地址
  *
- * Returns: pointer to ban_entry if found, NULL otherwise
- * Must be called within rcu_read_lock()/rcu_read_unlock()
+ * 返回值：找到返回 ban_entry 指针，否则返回 NULL
+ * 必须在 rcu_read_lock()/rcu_read_unlock() 内调用
  */
 static struct ban_entry *__find_ban_entry_rcu(struct firewall_info *fw, __be32 ip)
 {
@@ -402,12 +400,12 @@ static struct ban_entry *__find_ban_entry_rcu(struct firewall_info *fw, __be32 i
 }
 
 /*
- * __do_unban_ip - Internal unified unban function
- * @fw: firewall info structure
- * @ip: IP address to unban
- * @permanent_only: if true, only remove permanent bans
+ * __do_unban_ip - 内部统一解封函数
+ * @fw: 防火墙信息结构体
+ * @ip: 要解封的 IP 地址
+ * @permanent_only: 如果为 true，仅移除永久封禁
  *
- * Returns: 0 on success, -ENOENT if not found
+ * 返回值：成功返回 0，未找到返回 -ENOENT
  */
 static int __do_unban_ip(struct firewall_info *fw, __be32 ip, bool permanent_only)
 {
@@ -445,7 +443,7 @@ static int __do_unban_ip(struct firewall_info *fw, __be32 ip, bool permanent_onl
 }
 
 /*
- * unban_ip - Remove an IPv4 from the ban list
+ * unban_ip - 从封禁列表中移除 IPv4
  */
 int unban_ip(struct firewall_info *fw, __be32 ip)
 {
@@ -456,22 +454,22 @@ int unban_ip(struct firewall_info *fw, __be32 ip)
 }
 
 /*
- * unban_permanent_ip - Remove a permanent ban entry
- * Only removes entries marked as permanent
+ * unban_permanent_ip - 移除永久封禁条目
+ * 仅移除标记为永久的条目
  */
 int unban_permanent_ip(struct firewall_info *fw, __be32 ip)
 {
     FW_DEBUG(1, "ENTRY: unban_permanent_ip(ip=%pI4)", &ip);
     int ret = __do_unban_ip(fw, ip, true);
     if (ret == -ENOENT)
-        fw_pr_warn("IP not found in permanent ban list");
+        fw_pr_warn("IP 未在永久封禁列表中找到");
     FW_DEBUG(1, "EXIT: unban_permanent_ip -> %d", ret);
     return ret;
 }
 
 /*
- * is_banned - Check if an IPv4 is banned
- * Returns: 1 if banned (valid), 0 if not banned or expired
+ * is_banned - 检查 IPv4 是否被封禁
+ * 返回值：1 表示被封禁（有效），0 表示未封禁或已过期
  */
 int is_banned(struct firewall_info *fw, __be32 ip)
 {
@@ -484,17 +482,17 @@ int is_banned(struct firewall_info *fw, __be32 ip)
     rcu_read_lock();
     entry = __find_ban_entry_rcu(fw, ip);
     if (entry) {
-        /* Check if permanent ban (never expires) */
+        /* 检查是否为永久封禁（永不过期） */
         if (entry->is_permanent) {
             FW_DEBUG(2, "Found permanent ban entry for IPv4 %pI4", &ip);
             found = 1;
         } else if (time_after(now, entry->unban_time)) {
-            /* Entry exists but expired - remove it */
-            /* We can't remove here under RCU read lock, so just return 0 */
+            /* 条目存在但已过期 — 移除它 */
+            /* 我们无法在 RCU 读锁下移除，所以仅返回 0 */
             FW_DEBUG(2, "Found expired ban entry for IPv4 %pI4", &ip);
             found = 0;
         } else {
-            /* Valid banned entry */
+            /* 有效的封禁条目 */
             FW_DEBUG(2, "Found active ban entry for IPv4 %pI4", &ip);
             found = 1;
         }
@@ -506,7 +504,7 @@ int is_banned(struct firewall_info *fw, __be32 ip)
 }
 
 /*
- * ban_ip - Add an IPv4 to the ban list with default duration
+ * ban_ip - 将 IPv4 添加到封禁列表，使用默认持续时间
  */
 int ban_ip(struct firewall_info *fw, __be32 ip)
 {
@@ -528,8 +526,8 @@ int ban_ip(struct firewall_info *fw, __be32 ip)
 }
 
 /*
- * ban_ip_permanent - Add an IPv4 to the permanent ban list
- * Permanent bans never expire (unban_time = 0)
+ * ban_ip_permanent - 将 IPv4 添加到永久封禁列表
+ * 永久封禁永不过期（unban_time = 0）
  */
 int ban_ip_permanent(struct firewall_info *fw, __be32 ip)
 {
@@ -542,8 +540,8 @@ int ban_ip_permanent(struct firewall_info *fw, __be32 ip)
 }
 
 /*
- * is_permanently_banned - Check if an IPv4 is permanently banned
- * Returns 1 if permanently banned, 0 otherwise
+ * is_permanently_banned - 检查 IPv4 是否被永久封禁
+ * 如果永久封禁返回 1，否则返回 0
  */
 int is_permanently_banned(struct firewall_info *fw, __be32 ip)
 {
@@ -565,9 +563,9 @@ int is_permanently_banned(struct firewall_info *fw, __be32 ip)
 }
 
 /*
- * cleanup_expired_bans - Remove expired ban entries
- * Optimized version: Early exit when no entries to clean
- * Note: Collect entries to free, then call_rcu for async freeing (not in lock).
+ * cleanup_expired_bans - 移除过期的封禁条目
+ * 优化版本：当没有条目需要清理时提前退出
+ * 注意：收集要释放的条目，然后调用 call_rcu 异步释放（不在锁内）。
  */
 static void free_ban_entry_rcu(struct rcu_head *head)
 {
@@ -590,17 +588,17 @@ void cleanup_expired_bans(struct firewall_info *fw)
     unsigned long now = jiffies;
     int removed = 0;
     int processed = 0;
-    int max_processed_per_call = 50;  /* Limit processing per call to prevent long lock holds */
-    int start_bucket = fw->cleanup_last_bucket;  /* Start from where we left off last time */
+    int max_processed_per_call = 50;  /* 限制每次调用处理的数量，防止长时间持有锁 */
+    int start_bucket = fw->cleanup_last_bucket;  /* 从上次离开的位置继续 */
 
     FW_DEBUG(2, "ENTRY: cleanup_expired_bans(current_count=%d, start_bucket=%d)", atomic_read(&fw->ban_count), start_bucket);
 
-    /* Increment cleanup cycle counter */
+    /* 增加清理周期计数器 */
     atomic_inc(&fw->cleanup_cycles);
 
-    /* Early exit if no entries to clean */
+    /* 如果没有条目需要清理，提前退出 */
     if (atomic_read(&fw->ban_count) == 0) {
-        fw->cleanup_last_bucket = 0;  /* Reset for next cycle */
+        fw->cleanup_last_bucket = 0;  /* 为下一周期重置 */
         FW_DEBUG(3, "No entries to clean, exiting early");
         FW_DEBUG(2, "EXIT: cleanup_expired_bans -> void (no entries)");
         return;
@@ -608,44 +606,43 @@ void cleanup_expired_bans(struct firewall_info *fw)
 
     spin_lock(&fw->lock);
 
-    /* Early exit if no entries to clean after lock acquired */
+    /* 获取锁后再次检查是否没有条目需要清理，提前退出 */
     if (atomic_read(&fw->ban_count) == 0) {
         spin_unlock(&fw->lock);
-        fw->cleanup_last_bucket = 0;  /* Reset for next cycle */
+        fw->cleanup_last_bucket = 0;  /* 为下一周期重置 */
         FW_DEBUG(3, "No entries to clean after lock acquired, exiting early");
         FW_DEBUG(2, "EXIT: cleanup_expired_bans -> void (no entries after lock)");
         return;
     }
 
-    /* Process only a subset of buckets each call to distribute load */
+    /* 每次调用仅处理一部分桶，以分散负载 */
     unsigned int ban_table_size = 1 << BAN_HASH_BITS;
 
-    for (int i = 0; i < (1 << 3) && processed < max_processed_per_call; i++) {  /* Process up to 8 buckets per call */
+    for (int i = 0; i < (1 << 3) && processed < max_processed_per_call; i++) {  /* 每次调用最多处理 8 个桶 */
         int current_bucket = (start_bucket + i) % ban_table_size;
 
-        /* hlist_for_each_entry_safe guarantees that even if current entry is deleted,
-         * tmp still points to the next valid node. Therefore calling hlist_del_rcu to
-         * delete entry inside the loop is safe and won't break traversal */
+        /* hlist_for_each_entry_safe 保证即使当前条目被删除，
+         * tmp 仍然指向下一个有效节点。因此在循环内调用 hlist_del_rcu
+         * 删除 entry 是安全的，不会破坏遍历 */
         hlist_for_each_entry_safe(entry, tmp, &fw->ban_table[current_bucket], hash) {
             if (processed >= max_processed_per_call) {
                 break;
             }
 
-            /* Skip permanent bans - they never expire */
+            /* 跳过永久封禁 — 它们永不过期 */
             if (entry->is_permanent) {
                 processed++;
                 continue;
             }
 
             if (time_after(now, entry->unban_time)) {
-                /* FIX P1-4: Use hlist_del_rcu instead of hlist_del to safely
-                 * remove entry while RCU readers may still be accessing it.
-                 * hlist_del is not safe when concurrent RCU traversal is possible
-                 * in the netfilter hook functions. */
+                /* 修复 P1-4：使用 hlist_del_rcu 而非 hlist_del，以在 RCU 读者
+                 * 仍可能访问时安全移除 entry。当 netfilter 钩子函数中可能存在
+                 * 并发 RCU 遍历时，hlist_del 是不安全的。 */
                 hlist_del_rcu(&entry->hash);
                 atomic_dec(&fw->ban_count);
                 removed++;
-                /* Use call_rcu for async freeing (not in lock) */
+                /* 使用 call_rcu 异步释放（不在锁内） */
                 call_rcu(&entry->rcu_head, free_ban_entry_rcu);
                 FW_DEBUG(2, "Removed expired ban entry");
             }
@@ -653,40 +650,40 @@ void cleanup_expired_bans(struct firewall_info *fw)
         }
     }
 
-    /* Update the starting bucket for the next call */
-    fw->cleanup_last_bucket = (start_bucket + (1 << 3)) % ban_table_size;  /* Advance by 8 buckets */
+    /* 更新下次调用的起始桶 */
+    fw->cleanup_last_bucket = (start_bucket + (1 << 3)) % ban_table_size;  /* 前进 8 个桶 */
 
     spin_unlock(&fw->lock);
 
     if (removed > 0) {
         atomic_add(removed, &fw->cleanup_expired_total);
         FW_DEBUG(1, "Cleaned up %d expired ban entries", removed);
-        /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding during mass cleanup */
+        /* 修复 Extra-8：使用 net_info_ratelimited 防止大量清理时日志泛滥 */
         fw_pr_info_ratelimited("Cleaned up %d expired ban entries", removed);
     } else {
         FW_DEBUG(3, "No expired entries found during cleanup");
     }
 
-    /* If we cleaned up entries, reschedule cleanup sooner to continue cleaning */
+    /* 如果清理了条目，更早地重新调度清理以继续清理 */
     if (removed > 0 && atomic_read(&fw->ban_count) > 0) {
-        /* FIX: Check shutting_down before re-arming timer to prevent race during shutdown */
+        /* 修复：在关闭前重新设置定时器前检查 shutting_down，防止关闭期间的竞态 */
         if (unlikely(atomic_read(&fw->shutting_down))) {
             FW_DEBUG(2, "EXIT: cleanup_expired_bans -> void (shutting down, skip timer)");
             return;
         }
-        mod_timer(&fw->cleanup_timer, jiffies + HZ/10);  /* Retry in 100ms if there might be more to clean */
+        mod_timer(&fw->cleanup_timer, jiffies + HZ/10);  /* 如果可能还有要清理的，100ms 后重试 */
         FW_DEBUG(2, "Rescheduled cleanup for 100ms due to remaining entries");
     } else {
-        FW_DEBUG(3, "No more entries to clean, using standard timer interval");
+        FW_DEBUG(3, "没有更多条目需要清理，使用标准定时器间隔");
     }
 
     FW_DEBUG(2, "EXIT: cleanup_expired_bans -> void (removed=%d, processed=%d)", removed, processed);
 }
 
 /*
- * auto_discover_system_ips - Collect IPv4 IPs in RCU, then whitelist outside (FIX: RCU+GFP_KERNEL)
+ * auto_discover_system_ips - 在 RCU 中收集 IPv4 IP，然后在锁外添加白名单（修复：RCU+GFP_KERNEL）
  */
-/* Temporary storage structures for auto-discovery (moved to heap to reduce stack usage) */
+/* 自动发现的临时存储结构（移到堆上以减少栈使用） */
 struct temp_ip_entry {
     __be32 ip;
     __be32 mask;
@@ -695,7 +692,7 @@ struct temp_ip_entry {
 
 void auto_discover_system_ips(struct firewall_info *fw)
 {
-    /* Allocate on heap to avoid large stack frames */
+    /* 在堆上分配以避免大栈帧 */
     struct temp_ip_entry *temp_ips;
     int temp_count = 0;
 
@@ -705,7 +702,7 @@ void auto_discover_system_ips(struct firewall_info *fw)
 
     FW_DEBUG(1, "ENTRY: auto_discover_system_ips");
 
-    /* Allocate temporary arrays on heap */
+    /* 在堆上分配临时数组 */
     temp_ips = kmalloc_array(64, sizeof(struct temp_ip_entry), GFP_KERNEL);
     if (!temp_ips) {
         fw_pr_err("Failed to allocate temp_ips");
@@ -713,14 +710,14 @@ void auto_discover_system_ips(struct firewall_info *fw)
         return;
     }
 
-    /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding */
+    /* 修复 Extra-8：使用 net_info_ratelimited 防止日志泛滥 */
     fw_pr_info_ratelimited("Auto-discovering system IPs...");
 
-    /* FIX C2: Collect IPv4 addresses under RCU protection
-     * Fix explanation: __in_dev_get_rcu(dev) internally uses rcu_dereference protection,
-     * but for code clarity and defensive programming, explicitly use rcu_dereference to
-     * protect ifa_list traversal. RCU read lock (rcu_read_lock/unlock) ensures network
-     * device list won't be modified during traversal.
+    /* 修复 C2：在 RCU 保护下收集 IPv4 地址
+     * 修复说明：__in_dev_get_rcu(dev) 内部使用 rcu_dereference 保护，
+     * 但为了代码清晰和防御性编程，显式使用 rcu_dereference 来
+     * 保护 ifa_list 遍历。RCU 读锁（rcu_read_lock/unlock）确保网络设备
+     * 列表在遍历期间不会被修改。
      */
     rcu_read_lock();
     for_each_netdev_rcu(&init_net, dev) {
@@ -736,25 +733,25 @@ void auto_discover_system_ips(struct firewall_info *fw)
         if (!(dev->flags & IFF_UP))
             continue;
 
-        /* Collect IPv4 addresses */
+        /* 收集 IPv4 地址 */
         in_dev = __in_dev_get_rcu(dev);
         if (in_dev) {
-            /* FIX: Use rcu_dereference to explicitly protect ifa_list traversal
-             * The in_dev pointer returned by __in_dev_get_rcu is protected by RCU,
-             * but in_dev->ifa_list traversal also needs RCU dereference protection
-             * to prevent concurrent modifications.
+            /* 修复：使用 rcu_dereference 显式保护 ifa_list 遍历
+             * __in_dev_get_rcu 返回的 in_dev 指针受 RCU 保护，
+             * 但 in_dev->ifa_list 遍历也需要 RCU dereference 保护，
+             * 以防止并发修改。
              */
             for (ifa = rcu_dereference(in_dev->ifa_list); ifa;
                  ifa = rcu_dereference(ifa->ifa_next)) {
                 if (temp_count >= 64)
                     break;
 
-                /* Validate IP address validity */
+                /* 验证 IP 地址有效性 */
                 if (!ifa->ifa_local) {
-                    continue;  /* Skip invalid IP addresses */
+                    continue;  /* 跳过无效 IP 地址 */
                 }
 
-                temp_ips[temp_count].ip = ifa->ifa_local;  /* Use ifa_local instead of ifa_address */
+                temp_ips[temp_count].ip = ifa->ifa_local;  /* 使用 ifa_local 而非 ifa_address */
                 temp_ips[temp_count].mask = ifa->ifa_mask;
                 strscpy(temp_ips[temp_count].name, dev->name, 16);
                 temp_count++;
@@ -763,25 +760,25 @@ void auto_discover_system_ips(struct firewall_info *fw)
     }
     rcu_read_unlock();
 
-    /* Add IPv4 IPs outside RCU lock (safe for GFP_KERNEL) */
+    /* 在 RCU 锁外添加 IPv4 IP（对 GFP_KERNEL 安全） */
     for (int i = 0; i < temp_count; i++) {
         if (add_whitelist_entry(fw, temp_ips[i].ip, temp_ips[i].mask, temp_ips[i].name) < 0) {
             fw_pr_warn("Failed to add system IPv4 %pI4 to whitelist", &temp_ips[i].ip);
         }
     }
 
-    /* FIX Extra-8: Use net_info_ratelimited to prevent log flooding */
+    /* 修复 Extra-8：使用 net_info_ratelimited 防止日志泛滥 */
     fw_pr_info_ratelimited("Auto-discovery complete. %d entries", atomic_read(&fw->whitelist_count));
 
-    /* Free temporary arrays */
+    /* 释放临时数组 */
     kfree(temp_ips);
 
     FW_DEBUG(1, "EXIT: auto_discover_system_ips -> void (success, wl_count=%d)", atomic_read(&fw->whitelist_count));
 }
 
 /*
- * cleanup_timer_callback - Timer callback for periodic cleanup
- * Optimized version: Reduced frequency and improved efficiency
+ * cleanup_timer_callback - 定期清理的定时器回调
+ * 优化版本：降低频率并提高效率
  */
 static void cleanup_timer_callback(struct timer_list *t)
 {
@@ -796,14 +793,14 @@ static void cleanup_timer_callback(struct timer_list *t)
 
     cleanup_expired_bans(fw);
 
-    /* Re-check shutting_down before re-arming timer to prevent race during shutdown */
+    /* 在重新设置定时器前再次检查 shutting_down，防止关闭期间的竞态 */
     if (unlikely(atomic_read(&fw->shutting_down))) {
         FW_DEBUG(2, "EXIT: cleanup_timer_callback -> void (shutting down after cleanup)");
         return;
     }
 
-    /* Adjust cleanup interval: use minimum of ban_time/4 or 30 seconds to balance performance and memory usage */
-    /* FIX P1-5: Use READ_ONCE for atomic access to fw_ban_time */
+    /* 调整清理间隔：使用 ban_time/4 或 30 秒的最小值，以平衡性能和内存使用 */
+    /* 修复 P1-5：使用 READ_ONCE 原子访问 fw_ban_time */
     unsigned long cleanup_interval = max(HZ * 30UL, ((unsigned long)READ_ONCE(fw_ban_time) * HZ) / 4);
     FW_DEBUG(3, "Re-arming cleanup timer with interval=%lu jiffies", cleanup_interval);
     mod_timer(&fw->cleanup_timer, jiffies + cleanup_interval);

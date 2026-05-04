@@ -23,34 +23,34 @@
 #include <linux/overflow.h>
 
 /* ============================================================================
- * Unified Logging System
+ * 统一日志系统
  * ============================================================================
- * Log levels:
- *   FW_LOG_LEVEL_NONE  (0) - No logging
- *   FW_LOG_LEVEL_ERR   (1) - Error logging - always output
- *   FW_LOG_LEVEL_WARN  (2) - Warning logging - important warnings
- *   FW_LOG_LEVEL_INFO  (3) - Info logging - normal operations
- *   FW_LOG_LEVEL_DEBUG (4) - Debug logging - development debugging
+ * 日志级别:
+ *   FW_LOG_LEVEL_NONE  (0) - 无日志
+ *   FW_LOG_LEVEL_ERR   (1) - 错误日志 - 始终输出
+ *   FW_LOG_LEVEL_WARN  (2) - 警告日志 - 重要警告
+ *   FW_LOG_LEVEL_INFO  (3) - 信息日志 - 正常操作
+ *   FW_LOG_LEVEL_DEBUG (4) - 调试日志 - 开发调试
  *
- * Usage:
- *   fw_pr_err(fmt, ...)    - Error level (always output)
- *   fw_pr_warn(fmt, ...)   - Warning level
- *   fw_pr_info(fmt, ...)   - Info level
- *   fw_pr_debug(fmt, ...)  - Debug level (controlled by DEBUG_LEVEL)
- *   fw_log(level, fmt, ...) - Dynamic level logging
+ * 用法:
+ *   fw_pr_err(fmt, ...)    - 错误级别 (始终输出)
+ *   fw_pr_warn(fmt, ...)   - 警告级别
+ *   fw_pr_info(fmt, ...)   - 信息级别
+ *   fw_pr_debug(fmt, ...)  - 调试级别 (由 DEBUG_LEVEL 控制)
+ *   fw_log(level, fmt, ...) - 动态级别日志
  *
- * Backward compatibility:
- *   FW_DEBUG(level, fmt, args...) - Legacy macro, mapped to new system
+ * 向后兼容:
+ *   FW_DEBUG(level, fmt, args...) - 遗留宏，映射到新系统
  * ========================================================================== */
 
-/* Log level definitions */
-#define FW_LOG_LEVEL_NONE   0  /* No logging */
-#define FW_LOG_LEVEL_ERR    1  /* Error logging - always output */
-#define FW_LOG_LEVEL_WARN   2  /* Warning logging - important warnings */
-#define FW_LOG_LEVEL_INFO   3  /* Info logging - normal operations */
-#define FW_LOG_LEVEL_DEBUG  4  /* Debug logging - development debugging */
+/* 日志级别定义 */
+#define FW_LOG_LEVEL_NONE   0  /* 无日志 */
+#define FW_LOG_LEVEL_ERR    1  /* 错误日志 - 始终输出 */
+#define FW_LOG_LEVEL_WARN   2  /* 警告日志 - 重要警告 */
+#define FW_LOG_LEVEL_INFO   3  /* 信息日志 - 正常操作 */
+#define FW_LOG_LEVEL_DEBUG  4  /* 调试日志 - 开发调试 */
 
-/* Unified logging macros - use pr_* series (recommended) */
+/* 统一日志宏 - 使用 pr_* 系列 (推荐) */
 #define fw_pr_err(fmt, ...) \
     pr_err("firewall: " fmt, ##__VA_ARGS__)
 #define fw_pr_warn(fmt, ...) \
@@ -60,7 +60,7 @@
 #define fw_pr_debug(fmt, ...) \
     pr_debug("firewall: " fmt, ##__VA_ARGS__)
 
-/* Rate-limited variants for high-frequency logging */
+/* 限流变体，用于高频日志 */
 #define fw_pr_info_ratelimited(fmt, ...) \
     pr_info_ratelimited("firewall: " fmt, ##__VA_ARGS__)
 #define fw_pr_warn_ratelimited(fmt, ...) \
@@ -70,7 +70,7 @@
 #define fw_pr_debug_ratelimited(fmt, ...) \
     pr_debug_ratelimited("firewall: " fmt, ##__VA_ARGS__)
 
-/* Dynamic level logging macro - controlled by DEBUG_LEVEL at compile time */
+/* 动态级别日志宏 - 由编译时 DEBUG_LEVEL 控制 */
 #define fw_log(level, fmt, ...) \
     do { \
         if (level <= DEBUG_LEVEL) { \
@@ -87,7 +87,7 @@
         } \
     } while (0)
 
-/* Legacy FW_DEBUG macro compatibility - maps old level 1-3 to new system */
+/* 遗留 FW_DEBUG 宏兼容性 - 将旧级别 1-3 映射到新系统 */
 #ifdef DEBUG_LEVEL
 #define FW_DEBUG(level, fmt, args...) \
     fw_log(FW_LOG_LEVEL_DEBUG - (level) + 1, fmt, ##args)
@@ -97,77 +97,77 @@
 #endif
 
 #define BAN_HASH_BITS 10
-#define MAX_BAN_ENTRIES (1 << BAN_HASH_BITS)  /* 1024 entries */
-#define DEFAULT_BAN_TIME 600  /* 10 minutes in seconds */
-#define MAX_BAN_TIME (365 * 24 * 60 * 60)  /* 1 year max, prevents overflow */
-#define MIN_BAN_TIME 30  /* 30 seconds minimum to avoid excessive timer overhead */
+#define MAX_BAN_ENTRIES (1 << BAN_HASH_BITS)  /* 1024 个条目 */
+#define DEFAULT_BAN_TIME 600  /* 10 分钟（秒） */
+#define MAX_BAN_TIME (365 * 24 * 60 * 60)  /* 最大 1 年，防止溢出 */
+#define MIN_BAN_TIME 30  /* 最小 30 秒，避免过多的定时器开销 */
 
-/* Whitelist hash table structure */
+/* 白名单哈希表结构 */
 #define WHITELIST_HASH_BITS 6
-#define MAX_WHITELIST_ENTRIES (1 << WHITELIST_HASH_BITS)  /* 64 entries */
+#define MAX_WHITELIST_ENTRIES (1 << WHITELIST_HASH_BITS)  /* 64 个条目 */
 
-/* Whitelist entry structure - IPv4 only */
+/* 白名单条目结构 - 仅 IPv4 */
 struct whitelist_entry {
-    __be32 ip;                 /* IPv4 address in network byte order */
-    __be32 mask;               /* Network mask for subnets */
-    char device_name[16];      /* Network device name (e.g., eth0) */
-    struct hlist_node hash;    /* Hash table node */
-    struct rcu_head rcu_head;  /* For RCU-based freeing */
+    __be32 ip;                 /* IPv4 地址，网络字节序 */
+    __be32 mask;               /* 子网掩码 */
+    char device_name[16];      /* 网络设备名称（如 eth0） */
+    struct hlist_node hash;    /* 哈希表节点 */
+    struct rcu_head rcu_head;  /* 用于 RCU 释放 */
 };
 
-/* Ban entry structure - IPv4 only */
+/* 封禁条目结构 - 仅 IPv4 */
 struct ban_entry {
-    __be32 ip;                 /* IPv4 address in network byte order */
-    unsigned long ban_time;    /* when the IP was banned */
-    unsigned long unban_time;  /* when to unban (0 = permanent) */
-    atomic_t retry_count;       /* Reserved for future use */
-    bool is_permanent;         /* permanent ban flag */
+    __be32 ip;                 /* IPv4 地址，网络字节序 */
+    unsigned long ban_time;    /* IP 被封禁的时间 */
+    unsigned long unban_time;  /* 解除封禁的时间（0 = 永久） */
+    atomic_t retry_count;       /* 保留供将来使用 */
+    bool is_permanent;         /* 永久封禁标志 */
     struct hlist_node hash;
-    struct rcu_head rcu_head;  /* For RCU-based freeing */
+    struct rcu_head rcu_head;  /* 用于 RCU 释放 */
 };
 
-/* Global firewall structure */
+/* 全局防火墙结构 */
 struct firewall_info {
     DECLARE_HASHTABLE(ban_table, BAN_HASH_BITS);
     spinlock_t lock;
     atomic_t ban_count;
-    atomic_t shutting_down;  /* Flag to prevent timer during shutdown */
+    atomic_t shutting_down;  /* 防止关闭期间定时器触发的标志 */
     unsigned int ban_time;
     struct timer_list cleanup_timer;
-    bool timer_initialized;  /* Track if timer has been initialized */
-    int cleanup_last_bucket; /* Track last processed bucket for incremental cleanup */
+    bool timer_initialized;  /* 跟踪定时器是否已初始化 */
+    int cleanup_last_bucket; /* 跟踪上次处理的桶，用于增量清理 */
 
-    /* Flood protection */
+    /* 泛洪保护 */
     spinlock_t flood_lock;
     unsigned long last_flood_check;
     unsigned int recent_additions;
 
-    /* Statistics counters */
-    atomic_t total_ban_count;          /* Cumulative ban operations */
-    atomic_t total_unban_count;        /* Cumulative unban operations */
-    atomic_t whitelist_reject_count;   /* Ban rejected by whitelist */
-    atomic_t ban_table_full_count;     /* Ban table full rejections */
-    atomic_t alloc_failure_count;      /* Memory allocation failures */
-    atomic_t packets_dropped;          /* Packets dropped by netfilter */
-    atomic_t packets_accepted;         /* Packets accepted by netfilter */
-    atomic_t cleanup_cycles;           /* Cleanup timer cycles */
-    atomic_t cleanup_expired_total;    /* Total expired entries cleaned */
+    /* 统计计数器 */
+    atomic_t total_ban_count;          /* 累计封禁操作次数 */
+    atomic_t total_unban_count;        /* 累计解封操作次数 */
+    atomic_t whitelist_reject_count;   /* 被白名单拒绝的封禁 */
+    atomic_t ban_table_full_count;     /* 封禁表已满的拒绝次数 */
+    atomic_t alloc_failure_count;      /* 内存分配失败次数 */
+    atomic_t packets_dropped;          /* 被 netfilter 丢弃的数据包 */
+    atomic_t packets_accepted;         /* 被 netfilter 接受的数据包 */
+    atomic_t cleanup_cycles;           /* 清理定时器周期数 */
+    atomic_t cleanup_expired_total;    /* 已清理的过期条目总数 */
 
-    /* Whitelist hash table */
+    /* 白名单哈希表 */
     DECLARE_HASHTABLE(whitelist_table, WHITELIST_HASH_BITS);
     spinlock_t whitelist_lock;
     atomic_t whitelist_count;
 
-    /* Procfs entries */
+    /* procfs 条目 */
     struct proc_dir_entry *proc_dir;
-    struct proc_dir_entry *proc_bans;        /* Unified bans interface (read/write) */
-    struct proc_dir_entry *proc_whitelist;   /* Unified whitelist interface (read/write) */
-    struct proc_dir_entry *proc_config;      /* Configuration (read/write) */
+    struct proc_dir_entry *proc_bans;        /* 统一封禁接口（读/写） */
+    struct proc_dir_entry *proc_whitelist;   /* 统一白名单接口（读/写） */
+    struct proc_dir_entry *proc_config;      /* 配置（读/写） */
     struct proc_dir_entry *proc_settings;
-    struct proc_dir_entry *proc_stats;       /* Statistics endpoint (read-only) */
+    struct proc_dir_entry *proc_stats;       /* 统计端点（只读） */
 };
 
-/* Function declarations */
+/* 函数声明 */
 int ban_ip(struct firewall_info *fw, __be32 ip);
 int ban_ip_permanent(struct firewall_info *fw, __be32 ip);
 int unban_ip(struct firewall_info *fw, __be32 ip);
@@ -176,7 +176,7 @@ int is_banned(struct firewall_info *fw, __be32 ip);
 int is_permanently_banned(struct firewall_info *fw, __be32 ip);
 void cleanup_expired_bans(struct firewall_info *fw);
 
-/* Whitelist functions */
+/* 白名单函数 */
 int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const char *dev_name);
 int remove_whitelist_entry(struct firewall_info *fw, __be32 ip);
 bool is_in_whitelist(struct firewall_info *fw, __be32 ip);
@@ -185,7 +185,7 @@ void auto_discover_system_ips(struct firewall_info *fw);
 int create_procfs_entries(struct firewall_info *fw);
 void destroy_procfs_entries(struct firewall_info *fw);
 
-/* Export function to provide controlled access to fw_info */
+/* 导出函数，提供对 fw_info 的受控访问 */
 struct firewall_info *get_fw_info(void);
 
 #endif /* FIREWALL_H */

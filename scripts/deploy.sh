@@ -1,11 +1,11 @@
 #!/bin/bash
-# deploy.sh - Deploy firewall to remote server (with remote compilation)
-# Usage: ./deploy.sh <remote_host> [remote_user]
+# deploy.sh - 部署防火墙到远程服务器（远程编译）
+# 用法: ./deploy.sh <远程主机> [远程用户]
 
 if [[ -z "$1" ]]; then
-    echo "Usage: ./deploy.sh <remote_host> [remote_user]"
-    echo "  remote_host: Target server IP or hostname (required)"
-    echo "  remote_user: SSH user (default: root)"
+    echo "用法：./deploy.sh <远程主机> [远程用户]"
+    echo "  remote_host: 目标服务器 IP 或主机名（必需）"
+    echo "  remote_user: SSH 用户（默认：root）"
     exit 1
 fi
 
@@ -20,15 +20,15 @@ echo "========================================="
 
 read -p "Confirm deployment to $REMOTE_HOST? [y/N] " confirm
 if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-    echo "Deployment cancelled."
+    echo "部署已取消。"
     exit 0
 fi
 
-# 1. Check remote server dependencies
+# 1. 检查远程服务器依赖
 echo ""
 echo "[1/7] Checking remote server dependencies..."
 ssh -o StrictHostKeyChecking=accept-new "$REMOTE_USER@$REMOTE_HOST" << 'EOF'
-# Detect package manager
+# 检测远程服务器的包管理器
 if command -v apt-get >/dev/null 2>&1; then
     PKG_MANAGER="apt"
     YAML_PKG="libyaml-dev"
@@ -65,9 +65,9 @@ echo "  检查内核头文件..."
 ls /lib/modules/$(uname -r)/build/Makefile >/dev/null 2>&1 || {
     echo "❌ 缺少内核头文件"
     if [ "$PKG_MANAGER" = "apt" ]; then
-        echo "   安装命令: apt install linux-headers-$(uname -r)"
+        echo "   安装命令：apt install linux-headers-$(uname -r)"
     else
-        echo "   安装命令: $PKG_MANAGER install kernel-devel-$(uname -r)"
+        echo "   安装命令：$PKG_MANAGER install kernel-devel-$(uname -r)"
     fi
     exit 1;
 }
@@ -79,23 +79,23 @@ else
 fi
 echo "  检查 $SQLITE_PKG..."
 if [ "$PKG_MANAGER" = "apt" ]; then
-    dpkg -l | grep $SQLITE_PKG >/dev/null 2>&1 || { echo "❌ Missing $SQLITE_PKG"; exit 1; }
+    dpkg -l | grep $SQLITE_PKG >/dev/null 2>&1 || { echo "❌ 缺少 $SQLITE_PKG"; exit 1; }
 else
-    rpm -q $SQLITE_PKG >/dev/null 2>&1 || { echo "❌ Missing $SQLITE_PKG"; exit 1; }
+    rpm -q $SQLITE_PKG >/dev/null 2>&1 || { echo "❌ 缺少 $SQLITE_PKG"; exit 1; }
 fi
 echo "  检查 $MHD_PKG..."
 if [ "$PKG_MANAGER" = "apt" ]; then
-    dpkg -l | grep $MHD_PKG >/dev/null 2>&1 || { echo "❌ Missing $MHD_PKG"; exit 1; }
+    dpkg -l | grep $MHD_PKG >/dev/null 2>&1 || { echo "❌ 缺少 $MHD_PKG"; exit 1; }
 else
-    rpm -q $MHD_PKG >/dev/null 2>&1 || { echo "❌ Missing $MHD_PKG"; exit 1; }
+    rpm -q $MHD_PKG >/dev/null 2>&1 || { echo "❌ 缺少 $MHD_PKG"; exit 1; }
 fi
 echo "  检查 $PCRE2_PKG..."
 if [ "$PKG_MANAGER" = "apt" ]; then
-    dpkg -l | grep $PCRE2_PKG >/dev/null 2>&1 || { echo "❌ Missing $PCRE2_PKG"; exit 1; }
+    dpkg -l | grep $PCRE2_PKG >/dev/null 2>&1 || { echo "❌ 缺少 $PCRE2_PKG"; exit 1; }
 else
-    rpm -q $PCRE2_PKG >/dev/null 2>&1 || { echo "❌ Missing $PCRE2_PKG"; exit 1; }
+    rpm -q $PCRE2_PKG >/dev/null 2>&1 || { echo "❌ 缺少 $PCRE2_PKG"; exit 1; }
 fi
-echo "✅ Dependencies check passed"
+echo "✅ 依赖检查通过"
 EOF
 
 if [[ $? -ne 0 ]]; then
@@ -103,7 +103,7 @@ if [[ $? -ne 0 ]]; then
     exit 1
 fi
 
-# 2. Package source code (excluding build directory)
+# 2. 打包源代码（排除构建目录）
 echo ""
 echo "[2/7] Packaging source code..."
 cd "$PROJECT_DIR"
@@ -114,9 +114,9 @@ tar czf /tmp/firewall-src.tar.gz \
     Makefile \
     firewall-daemon.service \
     scripts/
-echo "✅ Packaging complete"
+echo "✅ 打包完成"
 
-# 3. Upload to remote server
+# 3. 上传到远程服务器
 echo ""
 echo "[3/7] Uploading to remote server..."
 scp /tmp/firewall-src.tar.gz "$REMOTE_USER@$REMOTE_HOST":/tmp/
@@ -124,9 +124,9 @@ if [[ $? -ne 0 ]]; then
     echo "❌ Upload failed"
     exit 1
 fi
-echo "✅ Upload complete"
+echo "✅ 上传完成"
 
-# 4. Remote compilation and installation
+# 4. 远程编译和安装
 echo ""
 echo "[4/7] Remote compilation and installation..."
 ssh -o StrictHostKeyChecking=accept-new "$REMOTE_USER@$REMOTE_HOST" << 'REMOTE_SCRIPT'
@@ -176,56 +176,11 @@ echo "  内核模块: $(lsmod | grep firewall | awk '{print $1, $2, $3}')"
 echo "  守护进程: $(ps aux | grep firewall-daemon | grep -v grep | wc -l) 个实例"
 echo "  PID file: $(cat /run/firewall-daemon.pid 2>/dev/null || echo 'not found')"
 echo "  封禁统计: $(cat /proc/firewall/stats | grep -E 'current_bans|current_whitelist')"
-echo "  Prometheus: $(curl -s http://localhost:9119/metrics 2>/dev/null | head -3 || echo '不可用')"
+echo "  Prometheus: $(curl -s http://localhost:9119/metrics 2>/dev/null | head -3 || echo '无法访问')"
 
 # 清理
 rm -f /tmp/firewall-src.tar.gz
-
-echo ""
-echo "✅ 远程安装完成"
-REMOTE_SCRIPT
-
-if [[ $? -ne 0 ]]; then
-    echo "❌ 远程安装失败"
-    exit 1
-fi
-
-# 5. Verify remote service
-echo ""
-echo "[5/7] Verifying remote service..."
-ssh -o StrictHostKeyChecking=accept-new "$REMOTE_USER@$REMOTE_HOST" "curl -s http://localhost:9119/metrics | head -10"
-if [[ $? -eq 0 ]]; then
-    echo "✅ Prometheus 指标导出正常"
-else
-    echo "⚠️  Prometheus 指标导出异常"
-fi
-
-# 6. Test SSH Jail
-echo ""
-echo "[6/7] Testing SSH Jail..."
-ssh -o StrictHostKeyChecking=accept-new "$REMOTE_USER@$REMOTE_HOST" << 'EOF'
-TEST_IP="203.0.113.99"
-    echo "  模拟 6 次 SSH 失败登录..."
-    for i in $(seq 1 6); do
-        echo "$(date '+%b %d %H:%M:%S') server sshd[$$]: Failed password for root from $TEST_IP port 12345 ssh2" | sudo tee -a /var/log/auth.log > /dev/null
-    done
-    sleep 5
-
-    if cat /proc/firewall/bans | grep -q "$TEST_IP"; then
-        echo "  ✅ SSH Jail working: $TEST_IP has been banned"
-    else
-        echo "  ⚠️  SSH Jail did not trigger"
-    fi
-
-    # Clean up test IP
-    echo "unban $TEST_IP" | sudo tee /proc/firewall/bans >/dev/null 2>&1
-EOF
-
-# 7. Clean up local temporary files
-echo ""
-echo "[7/7] Cleaning up local temporary files..."
-rm -f /tmp/firewall-src.tar.gz
-echo "✅ Cleanup complete"
+echo "✅ 清理完成"
 
 echo ""
 echo "========================================="

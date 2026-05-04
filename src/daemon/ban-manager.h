@@ -1,5 +1,5 @@
 /*
- * ban-manager.h - Header for ban/unban operations
+ * ban-manager.h - 封禁/解封操作头文件
  */
 
 #ifndef BAN_MANAGER_H
@@ -7,22 +7,22 @@
 
 #include "firewall-daemon.h"
 
-/* Validate and parse an IPv4 address string */
+/* 验证并解析 IPv4 地址字符串 */
 int validate_ipv4(const char *ip, validated_ip_t *out);
 
-/* Secure procfs file operation helper */
+/* 安全的 procfs 文件操作辅助函数 */
 int secure_procfs_write(const char *path, const char *data, size_t data_len);
 
-/* Unified ban/unban operation */
+/* 统一的封禁/解封操作 */
 int execute_ban_action(ban_action_t action, const char *ip);
 
-/* Backward-compatible wrapper functions */
+/* 向后兼容的包装函数 */
 int ban_ip(const char *ip);
 int ban_ip_permanent(const char *ip);
 int unban_ip(const char *ip);
 int unban_permanent_ip(const char *ip);
 
-/* Cleanup expired bans and partial line buffer */
+/* 清理过期的封禁和不完整行缓冲区 */
 void cleanup_expired_bans(void);
 
 #endif /* BAN_MANAGER_H */

@@ -1,8 +1,7 @@
 /*
- * firewall-daemon.h - Shared header for firewall daemon modules
+ * firewall-daemon.h - 防火墙守护进程模块共享头文件
  *
- * Contains all shared constants, structures, enums, and extern declarations
- * used across the various daemon modules.
+ * 包含各个守护进程模块使用的共享常量、结构体、枚举和外部声明。
  */
 
 #ifndef FIREWALL_DAEMON_H
@@ -41,14 +40,14 @@
 #include "khash.h"
 #include "sqlite-persistent.h"
 
-/* Hash table for failed entries per jail */
+/* 每个 jail 的失败条目哈希表 */
 KHASH_MAP_INIT_STR(ip_map, struct failed_entry*)
 
 /* ============================================================================
- * Unified Logging System for Daemon
+ * 守护进程统一日志系统
  * ============================================================================
- * All daemon logs use syslog with consistent "firewall: " prefix.
- * Standard error output is only used before syslog is initialized.
+ * 所有守护进程日志使用 syslog，带有统一的 "firewall: " 前缀。
+ * 标准错误输出仅在 syslog 初始化之前使用。
  * ========================================================================== */
 #define daemon_log_err(fmt, ...) \
     syslog(LOG_ERR, "firewall: " fmt, ##__VA_ARGS__)
@@ -59,91 +58,91 @@ KHASH_MAP_INIT_STR(ip_map, struct failed_entry*)
 #define daemon_log_debug(fmt, ...) \
     syslog(LOG_DEBUG, "firewall: " fmt, ##__VA_ARGS__)
 
-/* Procfs paths - unified bans interface */
+/* Procfs 路径 - 统一 bans 接口 */
 #define PROCFS_DIR "/proc/firewall"
 #define BANS_PATH PROCFS_DIR "/bans"
 
-/* Default configuration */
+/* 默认配置 */
 #define DEFAULT_MAX_RETRIES 3
-#define DEFAULT_FINDTIME 600      /* 10 minutes */
-#define DEFAULT_BAN_TIME 600      /* 10 minutes */
-#define DEFAULT_INTERVAL 1        /* Check interval in seconds */
-#define DEFAULT_METRICS_PORT 9119  /* Prometheus metrics port */
+#define DEFAULT_FINDTIME 600      /* 10 分钟 */
+#define DEFAULT_BAN_TIME 600      /* 10 分钟 */
+#define DEFAULT_INTERVAL 1        /* 检查间隔（秒） */
+#define DEFAULT_METRICS_PORT 9119  /* Prometheus 指标端口 */
 
-/* Maximum failed attempts to track per IP */
+/* 每个 IP 最多跟踪的失败尝试次数 */
 #define MAX_FAILED_TIMESTAMPS 100
 
-/* Maximum number of log files to monitor per jail */
+/* 每个 jail 最多监控的日志文件数 */
 #define MAX_LOG_FILES 10
 
-/* Maximum number of jails */
+/* 最大 jail 数量 */
 #define MAX_JAILS 16
 
-/* Event buffer size for inotify */
+/* inotify 事件缓冲区大小 */
 #define EVENT_BUF_LEN (1024 * (sizeof(struct inotify_event) + 16))
 
-/* File state tracking for log rotation detection */
+/* 用于检测日志轮转的文件状态跟踪 */
 struct file_state {
     char path[512];
     off_t offset;
     ino_t inode;
-    int wd;  /* inotify watch descriptor */
-    int jail_idx;  /* Which jail this file belongs to */
+    int wd;  /* inotify 监视描述符 */
+    int jail_idx;  /* 此文件所属的 jail */
 };
 
-/* Jail structure - isolated monitoring unit */
+/* Jail 结构体 - 独立的监控单元 */
 struct jail {
-    char name[64];                    /* Jail name (sshd, nginx, etc.) */
-    bool enabled;                     /* Whether this jail is active */
-    char *log_files[MAX_LOG_FILES];   /* Log files for this jail */
-    int log_count;                    /* Number of log files */
-    char *regex_pattern;              /* Custom regex pattern (NULL = builtin) */
-    pcre2_code *compiled_regex;       /* Compiled regex (PCRE2) */
-    pcre2_match_data *match_data;     /* PCRE2 match data buffer */
-    int regex_compiled;               /* Whether regex is compiled */
-    unsigned int max_retries;         /* Max failures before ban */
-    unsigned int findtime;            /* Time window for counting failures */
-    unsigned int ban_time;            /* Ban duration */
-    struct failed_entry *failed_table;/* Per-jail failed attempts (linked list) */
-    struct failed_entry *failed_hash_table[256]; /* Manual hash table */
-    khash_t(ip_map) *failed_hash;     /* khash for O(1) lookup */
-    char partial_line_buffer[8192];   /* Buffer for incomplete log lines */
-    size_t partial_line_len;          /* Current length of partial line */
+    char name[64];                    /* Jail 名称（sshd、nginx 等） */
+    bool enabled;                     /* 此 jail 是否处于活动状态 */
+    char *log_files[MAX_LOG_FILES];   /* 此 jail 的日志文件 */
+    int log_count;                    /* 日志文件数量 */
+    char *regex_pattern;              /* 自定义正则表达式模式（NULL = 内置） */
+    pcre2_code *compiled_regex;       /* 编译后的正则表达式（PCRE2） */
+    pcre2_match_data *match_data;     /* PCRE2 匹配数据缓冲区 */
+    int regex_compiled;               /* 正则表达式是否已编译 */
+    unsigned int max_retries;         /* 封禁前的最大失败次数 */
+    unsigned int findtime;            /* 统计失败次数的时间窗口 */
+    unsigned int ban_time;            /* 封禁持续时间 */
+    struct failed_entry *failed_table;/* 每个 jail 的失败尝试（链表） */
+    struct failed_entry *failed_hash_table[256]; /* 手动哈希表 */
+    khash_t(ip_map) *failed_hash;     /* khash 用于 O(1) 查找 */
+    char partial_line_buffer[8192];   /* 不完整日志行的缓冲区 */
+    size_t partial_line_len;          /* 当前不完整行的长度 */
 };
 
-/* Global running flag */
+/* 全局运行标志 */
 extern volatile sig_atomic_t running;
 extern volatile sig_atomic_t reload_config;
 
-/* Global default configuration */
+/* 全局默认配置 */
 struct config {
-    unsigned int default_max_retries; /* Default for new jails */
+    unsigned int default_max_retries; /* 新 jail 的默认值 */
     unsigned int default_findtime;
     unsigned int default_ban_time;
     int daemon;
     int interval;
-    int metrics_port;       /* Prometheus metrics port (0 = disabled) */
-    char *config_file;      /* Path to single configuration file for runtime updates */
-    char *config_dir;       /* Path to configuration directory (auto-loads all .yaml/.yml) */
-    char *permanent_db_path; /* SQLite database path for permanent bans (NULL = disabled) */
-    int permanent_ban_enabled; /* Whether permanent bans are enabled */
-    struct jail jails[MAX_JAILS]; /* All jails */
+    int metrics_port;       /* Prometheus 指标端口（0 = 禁用） */
+    char *config_file;      /* 运行时更新的单个配置文件路径 */
+    char *config_dir;       /* 配置目录路径（自动加载所有 .yaml/.yml） */
+    char *permanent_db_path; /* 永久封禁的 SQLite 数据库路径（NULL = 禁用） */
+    int permanent_ban_enabled; /* 是否启用永久封禁 */
+    struct jail jails[MAX_JAILS]; /* 所有 jails */
     int jail_count;
 };
 
-/* Failed attempt tracker */
+/* 失败尝试跟踪器 */
 struct failed_entry {
     char ip[16];
     time_t timestamps[MAX_FAILED_TIMESTAMPS];
     unsigned int count;
     struct failed_entry *next;
-    struct failed_entry *next_in_hash;  /* Next entry in hash bucket */
+    struct failed_entry *next_in_hash;  /* 哈希桶中的下一个条目 */
 };
 
-/* Configuration mutex - protect multithreaded access to cfg global variable */
+/* 配置互斥锁 - 保护 cfg 全局变量的多线程访问 */
 extern pthread_mutex_t config_mutex;
 
-/* Global state */
+/* 全局状态 */
 extern struct config cfg;
 extern struct daemon_stats daemon_stats;
 extern int inotify_fd;
@@ -151,9 +150,9 @@ extern struct file_state file_states[MAX_JAILS * MAX_LOG_FILES];
 extern sqlite_db_t *sqlite_db;
 
 /* ============================================================================
- * Prometheus Statistics
+ * Prometheus 统计
  * ============================================================================
- * Thread-safe counters using atomic operations for monitoring and metrics.
+ * 使用原子操作的线程安全计数器，用于监控和指标。
  * ========================================================================== */
 struct daemon_stats {
     atomic_ulong lines_parsed;
@@ -169,29 +168,29 @@ struct daemon_stats {
 };
 
 /* ============================================================================
- * Ban/Unban Action Types
+ * 封禁/解封操作类型
  * ========================================================================== */
 typedef enum {
-    BAN_ACTION_TEMP,        /* Temporary ban (default duration) */
-    BAN_ACTION_PERMANENT,   /* Permanent ban */
-    BAN_ACTION_UNBAN,       /* Unban IP */
-    BAN_ACTION_UNBAN_PERM   /* Remove permanent ban */
+    BAN_ACTION_TEMP,        /* 临时封禁（默认持续时间） */
+    BAN_ACTION_PERMANENT,   /* 永久封禁 */
+    BAN_ACTION_UNBAN,       /* 解封 IP */
+    BAN_ACTION_UNBAN_PERM   /* 移除永久封禁 */
 } ban_action_t;
 
-/* Structure to hold validated IP information */
+/* 保存已验证 IP 信息的结构体 */
 typedef struct {
     struct in_addr addr;
-    uint32_t ip_num;  /* network byte order */
+    uint32_t ip_num;  /* 网络字节序 */
 } validated_ip_t;
 
-/* External function declarations */
+/* 外部函数声明 */
 extern void signal_handler(int sig);
 extern void daemonize_process(void);
 extern void cleanup(void);
 extern void *start_http_exporter(void *port);
 extern void stop_http_exporter(void);
 
-/* Function declarations for inter-module calls */
+/* 模块间调用的函数声明 */
 extern int ban_ip(const char *ip);
 extern void cleanup_partial_line_buffer(void);
 extern void cleanup_expired_bans(void);

@@ -25,7 +25,7 @@ for i in $(seq 1 10); do
 done
 wait
 sleep 0.5
-# Verify kernel module is still responsive after concurrent operations
+# 验证并发操作后内核模块仍响应
 local_stats=$(cat "$PROC_STATS" 2>/dev/null)
 assert_true "[[ -n '$local_stats' ]]" "同时封禁/解封后模块仍响应"
 
@@ -42,7 +42,7 @@ for i in $(seq 1 5); do
 done
 wait
 sleep 0.5
-# Verify both interfaces are still functional
+# 验证两个接口仍然正常工作
 local_wl=$(cat "$PROC_WHITELIST" 2>/dev/null)
 local_bans=$(cat "$PROC_BANS" 2>/dev/null)
 assert_true "[[ -n '$local_wl' && -n '$local_bans' ]]" "白名单和封禁列表并发操作后接口正常"
@@ -61,7 +61,7 @@ for i in $(seq 1 10); do
 done
 wait
 sleep 0.5
-# Verify stats are still readable and consistent
+# 验证统计信息仍然可读且一致
 local_ban_count=$(grep "current_bans" "$PROC_STATS" 2>/dev/null | awk '{print $2}')
 assert_true "[[ -n '$local_ban_count' && '$local_ban_count' -ge 0 ]]" "读取时修改后统计信息一致"
 
