@@ -1,6 +1,6 @@
 # Firewall
 
-**版本**: v1.9（安全/并发修复 + 代码质量改进）
+**版本**: v2.0（严格配置校验模式 + 代码质量改进）
 
 Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁防护。它将 fail2ban 的核心功能从用户空间移动到内核空间，使用 netfilter 框架在数据包级别进行封禁，具有更低的延迟和更高的性能。
 
@@ -15,6 +15,7 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁
 - ✅ C 语言用户态守护进程（无 Python 依赖）
 - ✅ POSIX 正则表达式日志解析（减少误判 90%+）
 - ✅ RCU 并发安全 + spinlock 保护
+- ✅ **严格配置校验模式**（v2.0 新增）— 未知参数或无效值直接报错拒绝加载
 - ✅ 状态持久化（保存/恢复封禁和白名单）
 
 > v1.7/v1.8 详细变更（libmicrohttpd/PCRE2 替换、安全加固等）请查看 [CHANGELOG.md](CHANGELOG.md)。
@@ -82,6 +83,10 @@ sudo ./build/daemon/firewall-daemon -c config/default.yaml
 
 # 查看帮助
 sudo ./build/daemon/firewall-daemon --help
+
+# 严格模式（默认）与宽松模式
+sudo ./build/daemon/firewall-daemon --strict      # 严格模式（默认）
+sudo ./build/daemon/firewall-daemon --permissive  # 宽松模式（仅警告）
 ```
 
 ## 📚 文档导航

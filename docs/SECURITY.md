@@ -1,6 +1,6 @@
 # 安全特性文档
 
-> **版本**: v1.9 | **更新日期**: 2026-05-04
+> **版本**: v2.0 | **更新日期**: 2026-05-04
 
 本文档详述 Firewall 项目的安全特性、加固措施和历史安全修复。
 
@@ -11,10 +11,11 @@
 1. [安全编译选项](#1-安全编译选项)
 2. [systemd 服务安全加固](#2-systemd-服务安全加固)
 3. [v1.9 安全/并发修复](#3-v19-安全并发修复)
-4. [v1.7 安全加固](#4-v17-安全加固)
-5. [TOCTOU 竞态修复](#5-toctou-竞态修复)
-6. [其他安全特性](#6-其他安全特性)
-7. [安全最佳实践](#7-安全最佳实践)
+4. [v2.0 配置注入防护](#4-v20-配置注入防护)
+5. [v1.7 安全加固](#5-v17-安全加固)
+6. [TOCTOU 竞态修复](#6-toctou-竞态修复)
+7. [其他安全特性](#7-其他安全特性)
+8. [安全最佳实践](#8-安全最佳实践)
 
 ---
 
@@ -205,9 +206,41 @@ int sqlite_add_permanent_ban(const char *ip, const char *reason) {
 
 ---
 
-## 4. v1.7 安全加固
+## 4. v2.0 配置注入防护
 
-### 4.1 整数溢出防护
+### 配置注入防护
+
+- **严格模式默认开启**：配置文件中任何未知参数或无效值都会导致加载失败
+- **参数白名单校验**：`defaults` 和 `jail` 部分分别维护有效参数列表
+- **值范围校验**：所有数值参数在加载时验证有效性，防止边界溢出
+- **统一错误提示**：错误消息包含参数名、值、位置，便于快速定位问题
+
+### 防护场景
+
+| 攻击类型 | 示例 | 防护机制 |
+|----------|------|---------|
+| **拼写错误注入** | `max_retrys: 999`（意图绕过限制） | 未知参数直接拒绝加载 |
+| **无效值注入** | `max_retries: 999999` | 值范围校验拦截 |
+| **未知参数注入** | 在 jail 中添加 `custom_backdoor: true` | 参数白名单校验拦截 |
+
+### 错误消息格式
+
+严格模式下，所有配置错误遵循统一格式：
+
+```
+Invalid config parameter '{key}' with value '{value}' at {location}
+```
+
+示例：
+- `Invalid config parameter 'invalid_key' with value 'value' in [defaults] of config.yaml`
+- `Invalid config parameter 'timeout' with value '30' in jail 'sshd'`
+- `Invalid value for 'max_retries': '999' (must be integer between 1 and 100)`
+
+---
+
+## 5. v1.7 安全加固
+
+### 5.1 整数溢出防护
 
 **问题**: `seconds * HZ` 运算未检查整数溢出，`ban_time` 过大时封禁时间异常。
 
@@ -227,7 +260,7 @@ entry->unban_time = jiffies + ban_duration;
 
 覆盖位置: `ban_ip()`、`ban_ip_with_duration()`、`bans_write()`。新增 `MAX_BAN_TIME` (365天)、`MIN_BAN_TIME` (30秒) 常量。
 
-### 4.2 SQLite use-after-free
+### 5.2 SQLite use-after-free
 
 **问题**: `sqlite3_bind_text()` 使用 `SQLITE_STATIC`，调用方在 `sqlite3_step()` 前释放字符串。
 
@@ -241,7 +274,7 @@ entry->unban_time = jiffies + ban_duration;
 sqlite3_bind_text(stmt, 1, ip_str, -1, SQLITE_TRANSIENT);
 ```
 
-### 4.3 路径遍历纵深防御
+### 5.3 路径遍历纵深防御
 
 **问题**: 日志文件路径验证不足，可能通过特殊路径读取非预期文件。
 
@@ -257,7 +290,7 @@ sqlite3_bind_text(stmt, 1, ip_str, -1, SQLITE_TRANSIENT);
 | 4 | `realpath()` 验证 | 规范化后验证路径在允许位置 |
 | 5 | 前缀白名单 | 仅允许 `/var/log/` 下的文件 |
 
-### 4.4 ReDoS 防护
+### 5.4 ReDoS 防护
 
 **问题**: 自定义正则可能包含嵌套量词，导致正则引擎回溯爆炸。
 
@@ -271,7 +304,7 @@ sqlite3_bind_text(stmt, 1, ip_str, -1, SQLITE_TRANSIENT);
 | 交替数量 | ≤ 50 个 `\|` | 防止回溯炸弹 |
 | 嵌套量词 | 拒绝 `)+`、`)*`、`++` 等 | 防止指数级回溯 |
 
-### 4.5 HTTP Exporter 加固
+### 5.5 HTTP Exporter 加固
 
 - 请求截断检测（缓冲区 1024 字节）
 - URI 路径遍历防护（拒绝 `..` 和 URL 编码变体）
@@ -279,7 +312,7 @@ sqlite3_bind_text(stmt, 1, ip_str, -1, SQLITE_TRANSIENT);
 - 速率限制：64 个 IP 追踪，每 IP 每秒 10 请求
 - 5 秒接收超时
 
-### 4.6 YAML 解析边界防护
+### 5.6 YAML 解析边界防护
 
 - 单值长度限制: 1024 字符
 - Jail 数量限制: 16 个
@@ -287,7 +320,7 @@ sqlite3_bind_text(stmt, 1, ip_str, -1, SQLITE_TRANSIENT);
 
 ---
 
-## 5. TOCTOU 竞态修复
+## 6. TOCTOU 竞态修复
 
 **问题**: `save_state_to_file()` 存在 Time-of-Check to Time-of-Use 竞态条件。攻击者可在 `stat()` 检查后、`fopen()` 写入前将文件替换为符号链接，导致数据写入非预期位置。
 
@@ -321,22 +354,22 @@ int save_state_to_file(const char *path) {
 
 ---
 
-## 6. 其他安全特性
+## 7. 其他安全特性
 
-### 6.1 RCU 并发机制
+### 7.1 RCU 并发机制
 
 - **读取**: `rcu_read_lock()` / `rcu_read_unlock()` 无锁读取
 - **写入**: `spin_lock()` / `spin_unlock()` 互斥写操作
 - **删除**: `hlist_del_rcu()` + `kfree_rcu()` 延迟释放
 - **遍历**: `hash_for_each_rcu()` RCU 安全遍历
 
-### 6.2 整数溢出和下溢防护
+### 7.2 整数溢出和下溢防护
 
 - `check_mul_overflow()` 覆盖所有乘法运算
 - inotify 事件处理防止 `buf_len - event_len` 下溢
 - `MAX_BAN_TIME` (365天)、`MIN_BAN_TIME` (30秒) 边界常量
 
-### 6.3 输入验证
+### 7.3 输入验证
 
 | 接口 | 验证项 | 说明 |
 |------|--------|------|
@@ -347,27 +380,27 @@ int save_state_to_file(const char *path) {
 | 文件路径 | 5 层纵深防御 | 防止路径遍历 |
 | YAML 值 | 单值 1024 字符限制 | 防止内存耗尽 |
 
-### 6.4 自动白名单保护
+### 7.4 自动白名单保护
 
 - 启动时自动发现系统 IP 并加入白名单（防自锁）
 - 支持手动添加 IP 和子网（CIDR 格式）
 - 白名单上限 64 条目
 
-### 6.5 洪泛保护
+### 7.5 洪泛保护
 
 - 内核模块内置速率限制日志
 - 分片包添加 ratelimited 日志监控
 - 永久 ban 容量检查（防拒绝服务）
 
-### 6.6 全局变量受控访问
+### 7.6 全局变量受控访问
 
 - `fw_info` 改为 `static`，通过 `get_fw_info()` 导出受控访问
 
 ---
 
-## 7. 安全最佳实践
+## 8. 安全最佳实践
 
-### 7.1 部署建议
+### 8.1 部署建议
 
 1. **使用 systemd 管理**: 利用 15 项安全限制，不手动启动守护进程
 2. **最小权限**: `NoNewPrivileges=yes` 限制权限提升
@@ -380,7 +413,7 @@ sudo chmod 755 /etc/firewall
 sudo chmod 644 /etc/firewall/*.yaml
 ```
 
-### 7.2 配置建议
+### 8.2 配置建议
 
 1. **封禁阈值**: `max_retries: 5`，`findtime: 600` 避免误封
 2. **封禁时间**: `ban_time: 900`（15分钟），避免过长
@@ -388,7 +421,7 @@ sudo chmod 644 /etc/firewall/*.yaml
 4. **白名单**: 确保管理 IP 在白名单中
 5. **自定义 regex**: 避免嵌套量词和过多交替符
 
-### 7.3 监控建议
+### 8.3 监控建议
 
 1. **Prometheus 指标**（端口 9119）:
    - `firewall_current_bans` — 当前封禁数
@@ -414,6 +447,7 @@ sudo chmod 644 /etc/firewall/*.yaml
 
 | 版本 | 日期 | 关键修复 | 严重程度 |
 |------|------|----------|----------|
+| v2.0 | 2026-05-04 | 严格配置校验模式、参数白名单、值范围校验、配置注入防护 | 高 |
 | v1.9 | 2026-05-04 | RCU 删除安全、khash 悬空指针、配置重载并发安全 | 严重 |
 | v1.7 | 2026-05-03 | 整数溢出、SQLite UAF、路径遍历、ReDoS | 高 |
 | v1.6 | 2026-04-22 | TOCTOU 竞态、安全编译选项、systemd 加固 | 严重 |

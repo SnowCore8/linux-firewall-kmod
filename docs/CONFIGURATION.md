@@ -64,6 +64,39 @@ permanent_ban_enabled: true                       # 是否启用永久封禁
 
 ---
 
+## 2.5 配置校验模式
+
+Firewall 支持两种配置校验模式，可通过命令行参数控制：
+
+| 模式 | 命令行参数 | 遇到无效参数时 |
+|------|-----------|---------------|
+| **严格模式**（默认） | `--strict` | ❌ 报错并拒绝加载配置 |
+| **宽松模式** | `--permissive` | ⚠️ 输出警告并继续加载 |
+
+### 严格模式行为
+
+在严格模式下，以下情况会导致配置加载失败：
+
+| 错误类型 | 示例 | 错误提示 |
+|----------|------|---------|
+| **未知参数** | `defaults:` 下的 `invalid_key: value` | `Invalid config parameter 'invalid_key' with value 'value' in [defaults] of config.yaml` |
+| **无效数值** | `max_retries: 999` | `Invalid value for 'max_retries': '999' (must be integer between 1 and 100)` |
+| **拼写错误** | `max_retrys: 5` | `Invalid config parameter 'max_retrys' with value '5' in [defaults]` |
+| **Jail 未知参数** | `sshd:` 下的 `timeout: 30` | `Invalid config parameter 'timeout' with value '30' in jail 'sshd'` |
+
+### 宽松模式行为
+
+在宽松模式下，未知参数和无效值仅记录警告日志，不会阻止配置加载：
+
+```
+WARNING: Ignoring unknown parameter in [defaults]: invalid_key = value
+WARNING: Invalid default max_retries: 999
+```
+
+> **建议**：生产环境应使用默认的严格模式，以便及时发现配置错误。
+
+---
+
 ## 3. Jail 配置
 
 每个 Jail 代表一个被监控的服务，拥有独立的日志源和封禁策略。

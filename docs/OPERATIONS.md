@@ -50,6 +50,16 @@ sudo systemctl enable firewall-daemon     # 开机自启
 sudo systemctl reload firewall-daemon     # 热重载配置（SIGHUP）
 ```
 
+### 2.1.1 配置校验模式
+
+```bash
+# 严格模式（默认，未知参数报错）
+sudo ./build/daemon/firewall-daemon --strict
+
+# 宽松模式（未知参数仅警告）
+sudo ./build/daemon/firewall-daemon --permissive
+```
+
 ### 2.2 封禁/解封与白名单
 
 ```bash
@@ -165,6 +175,16 @@ curl http://localhost:9119/health    # 健康检查
 ---
 
 ## 6. 故障排查
+
+### 6.0 常见问题速查
+
+| 错误现象 | 可能原因 | 解决方法 |
+|----------|----------|----------|
+| 配置加载失败：`Invalid config parameter` | 配置文件存在未知参数或拼写错误 | 检查配置文件，使用 `--permissive` 可临时绕过 |
+| 模块加载失败 | 内核 headers 不匹配或 Secure Boot 启用 | 安装对应版本 headers 或禁用 Secure Boot |
+| 守护进程无法启动 | 依赖库缺失或端口占用 | 检查 `ldd` 输出和端口占用情况 |
+| 封禁不生效 | IP 在白名单或模块未加载 | 检查白名单列表和模块状态 |
+| 日志解析失败 | 日志文件不存在或 regex 不匹配 | 检查文件路径和正则表达式 |
 
 ### 6.1 模块加载失败
 
