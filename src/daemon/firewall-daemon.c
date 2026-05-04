@@ -52,7 +52,6 @@ void signal_handler(int sig)
             break;
         case SIGHUP:
             reload_config = 1;  /* 收到 SIGHUP 时重新加载配置 */
-            atomic_fetch_add(&daemon_stats.config_reloads, 1);
             break;
     }
 }

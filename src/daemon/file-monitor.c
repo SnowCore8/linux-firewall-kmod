@@ -542,6 +542,7 @@ void monitor_loop(void)
 
             /* 检查是否请求了配置重载 - 使用原子交换防止信号丢失 */
             if (__atomic_exchange_n(&reload_config, 0, __ATOMIC_SEQ_CST)) {
+                atomic_fetch_add(&daemon_stats.config_reloads, 1);  /* 记录配置重载次数 */
                 daemon_log_info("Reloading configuration...");
 
                 unsigned int old_max_retries, old_findtime, old_ban_time;
