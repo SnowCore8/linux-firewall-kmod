@@ -56,7 +56,7 @@ jails:
     max_retries: 1
     findtime: 1
     ban_time: 5
-    regex: ""
+    regex_pattern: ""
 EOF
 
 # 使用 FRP 配置测试

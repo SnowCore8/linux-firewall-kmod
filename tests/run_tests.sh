@@ -230,7 +230,7 @@ fi
 # 生成报告
 # ============================================================================
 if [[ "$GEN_REPORT" == true ]]; then
-    fw_generate_report "tests/reports/test_report.md"
+    fw_generate_report "reports/test_report.md"
 fi
 
 # ============================================================================

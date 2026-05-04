@@ -51,7 +51,7 @@ jails:
     max_retries: 1
     findtime: 1
     ban_time: 5
-    regex: ""
+    regex_pattern: ""
 EOF
 
 # 启动守护进程处理测试日志
