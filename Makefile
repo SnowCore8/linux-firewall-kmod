@@ -167,16 +167,8 @@ install-daemon: $(DAEMON_BIN)
 install-config:
 	@echo "Installing configuration files..."
 	install -d -m 700 -o root -g root $(DESTDIR)$(FIREWALLETC)
-	install -d -m 700 -o root -g root $(DESTDIR)$(FIREWALLETC)/examples
-	# 只安装默认配置到主目录
-	install -m 600 -o root -g root config/default.yaml $(DESTDIR)$(FIREWALLETC)/
-	# 其他配置作为示例
-	install -m 600 -o root -g root config/*.yaml $(DESTDIR)$(FIREWALLETC)/examples/
-	# 移除示例中的 default.yaml
-	rm -f $(DESTDIR)$(FIREWALLETC)/examples/default.yaml
+	install -m 600 -o root -g root config/*.yaml $(DESTDIR)$(FIREWALLETC)/
 	@echo "  ✓ Configuration files installed"
-	@echo "    Main config: $(FIREWALLETC)/default.yaml"
-	@echo "    Examples:    $(FIREWALLETC)/examples/"
 
 # 安装状态目录
 install-state:
