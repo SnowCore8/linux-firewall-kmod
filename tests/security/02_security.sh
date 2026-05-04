@@ -5,9 +5,10 @@ fw_test_header "安全测试"
 
 # 6.1 命令注入防护
 fw_subsection "命令注入防护"
-assert_inject_blocked "echo '8.8.8.8; touch /tmp/fw_pwned' > '$PROC_BANS' 2>&1" "分号注入被拒绝"
-assert_true "! [[ -f /tmp/fw_pwned ]]" "命令注入未执行"
-rm -f /tmp/fw_pwned
+local_tmpfile="/tmp/fw_test_security_$$.pwned"
+assert_inject_blocked "echo '8.8.8.8; touch $local_tmpfile' > '$PROC_BANS' 2>&1" "分号注入被拒绝"
+assert_true "! [[ -f $local_tmpfile ]]" "命令注入未执行（临时文件未创建）"
+rm -f "$local_tmpfile" 2>/dev/null || true
 
 # 6.2 procfs 只读/只写检查
 fw_subsection "procfs 权限检查"

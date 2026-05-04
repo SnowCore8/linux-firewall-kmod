@@ -343,10 +343,10 @@ rm -rf "$TEST_DIR"
 fw_subsection "符号链接攻击检测"
 
 # 测试 5.1: 内核模块拒绝符号链接状态文件
-# 创建指向 /proc/self/environ 的符号链接作为状态文件
-mkdir -p /var/lib/firewall
-rm -f /var/lib/firewall/state
-ln -sf /proc/self/environ /var/lib/firewall/state
+# 创建指向 /proc/self/environ 的符号链接作为状态文件（使用临时路径）
+local_state_file="/tmp/fw_test_state_$$.file"
+rm -f "$local_state_file" 2>/dev/null || true
+ln -sf /proc/self/environ "$local_state_file"
 
 # 清空 dmesg 中旧的防火墙消息
 dmesg -c > /dev/null 2>&1 || true
@@ -362,7 +362,7 @@ assert_true "grep -q 'symlink detected and rejected' '$DMESG_TMP'" "dmesg 包含
 rm -f "$DMESG_TMP"
 
 # 清理符号链接
-rm -f /var/lib/firewall/state
+rm -f "$local_state_file" 2>/dev/null || true
 
 # 测试 5.2: 内核模块拒绝包含 ../ 的状态文件路径
 sleep 0.3
