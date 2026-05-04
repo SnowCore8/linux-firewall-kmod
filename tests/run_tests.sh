@@ -171,7 +171,10 @@ for i in 1 2 3; do
     _procfs_ok=false
     _bans_ok=false
     
-    lsmod | grep -q "^firewall" && _lsmod_ok=true
+    _lsmod_raw=$(lsmod 2>/dev/null)
+    if echo "$_lsmod_raw" | grep -q "^firewall"; then
+        _lsmod_ok=true
+    fi
     [[ -d "$PROC_DIR" ]] && _procfs_ok=true
     [[ -w "$PROC_BANS" ]] && _bans_ok=true
     
@@ -228,12 +231,18 @@ declare -A SUITE_CATEGORIES=(
 
 # 模块健康检查函数 - 在每个测试套件执行前验证
 check_module_ready() {
-    if ! lsmod | grep -q "^firewall"; then
-        fw_log_error "模块意外卸载，终止测试"
+    local _lsmod_out
+    _lsmod_out=$(lsmod 2>/dev/null) || true
+    if ! echo "$_lsmod_out" | grep -q "^firewall"; then
+        fw_log_error "模块意外卸载 (lsmod 检查失败)"
         return 1
     fi
-    if [[ ! -d "$PROC_DIR" ]] || [[ ! -w "$PROC_BANS" ]]; then
-        fw_log_error "procfs 接口异常，终止测试"
+    if [[ ! -d "$PROC_DIR" ]]; then
+        fw_log_error "procfs 目录不存在: $PROC_DIR"
+        return 1
+    fi
+    if [[ ! -w "$PROC_BANS" ]]; then
+        fw_log_error "bans 接口不可写: $PROC_BANS"
         return 1
     fi
     return 0
@@ -254,13 +263,22 @@ run_suite() {
     fi
 
     # 执行前验证模块就绪
+    fw_log_debug "执行前检查模块状态: $suite_key"
     if ! check_module_ready; then
         fw_log_error "模块未就绪，跳过测试套件: $suite_key"
+        fw_log_debug "lsmod: $(lsmod 2>/dev/null | grep firewall || echo 'not found')"
+        fw_log_debug "procfs: $([ -d "$PROC_DIR" ] && echo 'exists' || echo 'missing')"
         return 1
     fi
 
     fw_log_info "运行测试套件: $suite_key"
     source "./$suite_file"
+    
+    # 执行后再次检查模块状态
+    fw_log_debug "执行后检查模块状态: $suite_key"
+    if ! lsmod | grep -q "^firewall"; then
+        fw_log_warn "测试套件 $suite_key 执行后模块已卸载"
+    fi
 }
 
 if [[ "$RUN_ALL" == true ]]; then
