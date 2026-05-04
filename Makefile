@@ -176,7 +176,9 @@ uninstall-files:
 	rm -f /var/run/firewall-daemon.pid
 	rm -rf /run/firewall
 	rm -rf /var/run/firewall
-	echo "  ✓ PID and lock files cleaned"
+	# 删除守护进程二进制文件
+	rm -f $(DESTDIR)$(SBINDIR)/firewall-daemon
+	echo "  ✓ PID, lock files and daemon binary cleaned"
 
 # Uninstall systemd service
 uninstall-systemd:
