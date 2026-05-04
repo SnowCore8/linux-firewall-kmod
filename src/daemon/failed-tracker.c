@@ -39,6 +39,10 @@ struct failed_entry *create_entry_for_jail(struct jail *j, const char *ip)
     if (ret == 0) {
         return kh_value(j->failed_hash, k);  /* 已存在 */
     }
+    if (ret < 0) {
+        daemon_log_err("Failed to resize hash table for jail '%s'", j->name);
+        return NULL;
+    }
     
     /* 键所有权：用堆分配的副本替换栈指针 */
     char *key_copy = strdup(ip);

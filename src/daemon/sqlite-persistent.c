@@ -168,6 +168,7 @@ sqlite_db_t *sqlite_init(const char *db_path)
 
     /* 确保目录存在 */
     if (ensure_db_dir(db_path) != 0) {
+        pthread_mutex_destroy(&db->lock);
         free(db);
         return NULL;
     }
@@ -178,6 +179,7 @@ sqlite_db_t *sqlite_init(const char *db_path)
         fprintf(stderr, "firewall: 无法打开 SQLite 数据库%s：%s\n",
                 db_path, sqlite3_errmsg(db->conn));
         sqlite3_close(db->conn);
+        pthread_mutex_destroy(&db->lock);
         free(db);
         return NULL;
     }
@@ -191,6 +193,7 @@ sqlite_db_t *sqlite_init(const char *db_path)
     if (init_db_schema(db->conn) != 0) {
         fprintf(stderr, "firewall: 初始化数据库结构失败\n");
         sqlite3_close(db->conn);
+        pthread_mutex_destroy(&db->lock);
         free(db);
         return NULL;
     }

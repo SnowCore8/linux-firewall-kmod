@@ -2379,19 +2379,44 @@ static int __init firewall_init(void)
 
     ret = create_procfs_entries(&fw_info);
     if (ret)
-        goto err_timer;
+        goto err_ban;
 
     ret = nf_register_net_hook(&init_net, &nf_ops_ipv4);
     if (ret) {
         fw_pr_err("Failed to register IPv4 netfilter hook: %d", ret);
-        goto err_procfs;
+        goto err_whitelist;
     }
 
     fw_pr_info("Module loaded successfully (ban_time=%u, state_file=%s)", fw_ban_time, state_file);
     return 0;
 
+err_whitelist:
+    /* 释放所有白名单条目 */
+    {
+        struct whitelist_entry *wl;
+        u32 wl_hash;
+        struct hlist_node *tmp;
+        hash_for_each_safe(fw_info.whitelist_table, wl_hash, tmp, wl, hash) {
+            hash_del(&wl->hash);
+            kfree(wl);
+        }
+    }
+    goto err_ban;
+err_ban:
+    /* 释放所有封禁条目 */
+    {
+        struct ban_entry *entry;
+        u32 ban_hash;
+        struct hlist_node *tmp;
+        hash_for_each_safe(fw_info.ban_table, ban_hash, tmp, entry, hash) {
+            hash_del(&entry->hash);
+            kfree(entry);
+        }
+    }
+    goto err_procfs;
 err_procfs:
     destroy_procfs_entries(&fw_info);
+    goto err_timer;
 err_timer:
     timer_delete_sync(&fw_info.cleanup_timer);
     return ret;

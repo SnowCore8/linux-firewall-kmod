@@ -121,16 +121,6 @@ asan: $(DAEMON_OBJS)
 test: $(KERNEL_MODULE) $(DAEMON_BIN)
 	sudo ./tests/run_tests.sh
 
-# Run legacy test suite (old individual test scripts)
-test-legacy: $(KERNEL_MODULE) $(DAEMON_BIN)
-	sudo ./tests/test_legacy.sh
-
-# Test performance
-test-performance: performance_test.c
-	@mkdir -p $(BUILD_DIR)
-	$(CC) -Wall -Wextra -O2 -o $(BUILD_DIR)/performance_test performance_test.c
-	$(BUILD_DIR)/performance_test
-
 # Clean build artifacts
 clean:
 	rm -rf $(BUILD_DIR)
@@ -257,4 +247,4 @@ uninstall-kernel:
 	-depmod -a 2>/dev/null || true
 	@echo "  ✓ Kernel module removed"
 
-.PHONY: kernel-module daemon all debug1 debug2 debug3 asan test test-legacy test-performance clean install install-kernel-module install-daemon install-config install-state install-systemd uninstall uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel
+.PHONY: kernel-module daemon all debug1 debug2 debug3 asan test clean install install-kernel-module install-daemon install-config install-state install-systemd uninstall uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel

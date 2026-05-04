@@ -114,15 +114,20 @@ void free_jail_regex(struct jail *j)
 /* 查找现有 jail 或创建新的 */
 struct jail *find_or_create_jail(const char *name)
 {
+    pthread_rwlock_wrlock(&config_rwlock);
+
     /* 查找现有 jail */
     for (int i = 0; i < cfg.jail_count; i++) {
         if (strcmp(cfg.jails[i].name, name) == 0) {
-            return &cfg.jails[i];
+            struct jail *j = &cfg.jails[i];
+            pthread_rwlock_unlock(&config_rwlock);
+            return j;
         }
     }
 
     /* 创建新 jail */
     if (cfg.jail_count >= MAX_JAILS) {
+        pthread_rwlock_unlock(&config_rwlock);
         daemon_log_warn("Max jails reached (%d), cannot create jail '%s'", MAX_JAILS, name);
         return NULL;
     }
@@ -132,6 +137,7 @@ struct jail *find_or_create_jail(const char *name)
     strncpy(j->name, name, sizeof(j->name) - 1);
     j->name[sizeof(j->name) - 1] = '\0';
 
+    pthread_rwlock_unlock(&config_rwlock);
     daemon_log_info("Created new jail: %s", name);
     return j;
 }
@@ -297,11 +303,15 @@ int compile_jail_regex(struct jail *j)
 
 int get_global_file_state_index(int jail_idx, int file_idx)
 {
+    pthread_rwlock_rdlock(&config_rwlock);
+
     if (jail_idx < 0 || jail_idx >= cfg.jail_count) {
+        pthread_rwlock_unlock(&config_rwlock);
         daemon_log_err("Invalid jail index: %d", jail_idx);
         return -1;
     }
     if (file_idx < 0 || file_idx >= cfg.jails[jail_idx].log_count) {
+        pthread_rwlock_unlock(&config_rwlock);
         daemon_log_err("Invalid file index for jail %d: %d", jail_idx, file_idx);
         return -1;
     }
@@ -311,6 +321,8 @@ int get_global_file_state_index(int jail_idx, int file_idx)
         global_idx += cfg.jails[j].log_count;
     }
     global_idx += file_idx;
+
+    pthread_rwlock_unlock(&config_rwlock);
 
     if (global_idx >= MAX_JAILS * MAX_LOG_FILES) {
         daemon_log_err("Global file index out of bounds: %d", global_idx);
@@ -332,12 +344,14 @@ int get_global_file_state_index(int jail_idx, int file_idx)
  */
 void cleanup_all_jails(void)
 {
+    pthread_rwlock_wrlock(&config_rwlock);
     int old_count = cfg.jail_count;
     for (int i = 0; i < old_count; i++) {
         destroy_jail(&cfg.jails[i]);
         memset(&cfg.jails[i], 0, sizeof(struct jail));
     }
     cfg.jail_count = 0;
+    pthread_rwlock_unlock(&config_rwlock);
     daemon_log_info("All jails resources cleaned up");
 }
 
@@ -402,6 +416,7 @@ int clone_jail(struct jail *dst, const struct jail *src)
                 for (int j = 0; j < dst->log_count; j++) {
                     free(dst->log_files[j]);
                 }
+                dst->log_count = 0;  /* 清零防止 config_clone 失败路径 double-free */
                 return -1;
             }
             dst->log_count++;

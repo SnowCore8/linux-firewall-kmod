@@ -45,7 +45,7 @@ assert_true "[[ $DROPPED_DIFF -gt 0 ]]" "netfilter 钩子丢弃 $DROPPED_DIFF �
 # 14.6 验证内核模块
 fw_subsection "内核模块验证"
 if lsmod 2>/dev/null | grep -q "firewall"; then
-    fw_log_pass "内核模块已加载"
+    fw_pass "内核模块已加载"
 else
     fw_log_warn "内核模块未加载（可能已被测试框架卸载）"
 fi

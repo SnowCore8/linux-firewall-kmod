@@ -330,10 +330,10 @@ void process_new_lines(int idx)
                 daemon_log_err("分配组合缓冲区内存不足");
                 /* 丢弃部分数据，直接处理新数据 */
                 size_t consumed = 0;
-                /* 持有读锁处理行数据，防止 use-after-free。
+                /* 持有写锁处理行数据，防止 use-after-free。
                  * process_lines_in_buffer 内部调用 process_single_line，
-                 * 需要访问 j->compiled_regex、j->match_data、j->failed_hash。*/
-                pthread_rwlock_rdlock(&config_rwlock);
+                 * 会修改 j->failed_hash，需要写锁保护。*/
+                pthread_rwlock_wrlock(&config_rwlock);
                 if (jail_idx < cfg.jail_count) {
                     process_lines_in_buffer(&cfg.jails[jail_idx], buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);
                 }
@@ -360,9 +360,11 @@ void process_new_lines(int idx)
             /* 已合并，清除本地部分行 */
             local_partial_len = 0;
 
-            /* 处理完整的行 - 持有读锁防止 use-after-free */
+            /* 处理完整的行 - 持有写锁防止 use-after-free。
+             * process_lines_in_buffer 内部调用 process_single_line，
+             * 会修改 j->failed_hash，需要写锁保护。*/
             size_t consumed = 0;
-            pthread_rwlock_rdlock(&config_rwlock);
+            pthread_rwlock_wrlock(&config_rwlock);
             if (jail_idx < cfg.jail_count) {
                 process_lines_in_buffer(&cfg.jails[jail_idx], combined, total_len, log_path, &consumed, max_retries, findtime);
             }
@@ -382,9 +384,11 @@ void process_new_lines(int idx)
             free(combined);
             combined = NULL;
         } else {
-            /* 无部分行 - 直接处理缓冲区 - 持有读锁防止 use-after-free */
+            /* 无部分行 - 直接处理缓冲区 - 持有写锁防止 use-after-free。
+             * process_lines_in_buffer 内部调用 process_single_line，
+             * 会修改 j->failed_hash，需要写锁保护。*/
             size_t consumed = 0;
-            pthread_rwlock_rdlock(&config_rwlock);
+            pthread_rwlock_wrlock(&config_rwlock);
             if (jail_idx < cfg.jail_count) {
                 process_lines_in_buffer(&cfg.jails[jail_idx], buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);
             }
@@ -459,9 +463,11 @@ void handle_log_rotation(int idx)
     struct jail *j = NULL;
     unsigned int max_retries, findtime;
 
-    /* 在读锁下复制jail数据以防止配置重载期间的use-after-free */
+    /* 在写锁下复制jail数据以防止配置重载期间的use-after-free。
+     * j->partial_line_len = 0 是写操作，process_single_line 会修改 j->failed_hash，
+     * 需要写锁保护。*/
     if (jail_idx >= 0 && jail_idx < cfg.jail_count) {
-        pthread_rwlock_rdlock(&config_rwlock);
+        pthread_rwlock_wrlock(&config_rwlock);
         /* 获取锁后再次检查 */
         if (jail_idx < cfg.jail_count) {
             j = &cfg.jails[jail_idx];

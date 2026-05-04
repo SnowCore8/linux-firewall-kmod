@@ -6,7 +6,9 @@ fw_test_header "资源管理测试"
 # 11.1 模块加载/卸载循环
 fw_subsection "模块加载/卸载循环"
 for i in $(seq 1 3); do
+    rmmod firewall 2>/dev/null || true
     sleep 0.2
+    insmod "$KERNEL_MODULE_PATH" 2>/dev/null || true
     sleep 0.1
 done
 # 最终加载以验证模块在循环后仍正常工作
@@ -51,8 +53,9 @@ done
 
 # 11.4 模块卸载后 procfs 清理
 fw_subsection "模块卸载后 procfs 清理"
-# 内核模块卸载后 procfs 清理可能有延迟，等待后重试
+rmmod firewall 2>/dev/null || true
 sleep 1
+# 内核模块卸载后 procfs 清理可能有延迟，等待后重试
 if [[ ! -d "$PROC_DIR" ]]; then
     fw_pass "模块卸载后 proc 目录消失"
 else
