@@ -174,11 +174,17 @@ jails:
     regex: ""
 EOF
 
-timeout 3 "$DAEMON_PATH" -c "$local_nonexist_yaml" 2>/tmp/fw_daemon_stderr_nonexist_$$.log
-if [[ -s /tmp/fw_daemon_stderr_nonexist_$$.log ]]; then
-    fw_log_info "守护进程 stderr (不存在文件): $(cat /tmp/fw_daemon_stderr_nonexist_$$.log)"
+# 运行守护进程并捕获退出码（日志文件 /nonexistent/log.log 不存在）
+timeout 3 "$DAEMON_PATH" -c "$local_nonexist_yaml" > /dev/null 2>&1
+local rc=$?
+
+# 验证守护进程因不存在的日志文件而失败
+if [[ $rc -ne 0 ]]; then
+    assert_true "[[ $rc -ne 0 ]]" "不存在的日志文件被拒绝（退出码 $rc）"
+else
+    assert_true "[[ $rc -ne 0 ]]" "不存在的日志文件应导致守护进程失败"
 fi
-rm -f /tmp/fw_daemon_stderr_nonexist_$$.log "$local_nonexist_yaml"
-assert_failure "test ! -f '$local_nonexist_yaml'" "不存在的日志文件被拒绝"
+
+rm -f "$local_nonexist_yaml"
 
 fw_ensure_module_unloaded
