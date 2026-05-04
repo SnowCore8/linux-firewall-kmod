@@ -62,12 +62,16 @@
 
 /* 限流变体，用于高频日志 */
 #define fw_pr_info_ratelimited(fmt, ...) \
+    __attribute__((format(KERN_INFO, 1, 2))) \
     pr_info_ratelimited("firewall: " fmt, ##__VA_ARGS__)
 #define fw_pr_warn_ratelimited(fmt, ...) \
+    __attribute__((format(KERN_WARNING, 1, 2))) \
     pr_warn_ratelimited("firewall: " fmt, ##__VA_ARGS__)
 #define fw_pr_err_ratelimited(fmt, ...) \
+    __attribute__((format(KERN_ERR, 1, 2))) \
     pr_err_ratelimited("firewall: " fmt, ##__VA_ARGS__)
 #define fw_pr_debug_ratelimited(fmt, ...) \
+    __attribute__((format(KERN_DEBUG, 1, 2))) \
     pr_debug_ratelimited("firewall: " fmt, ##__VA_ARGS__)
 
 /* 动态级别日志宏 - 由编译时 DEBUG_LEVEL 控制 */
