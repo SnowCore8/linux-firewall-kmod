@@ -5,84 +5,119 @@
 #include "jail-manager.h"
 #include "firewall-daemon.h"
 
+/* 服务名称匹配辅助函数 */
+
+/**
+ * is_service_name_match - 检查服务名称是否匹配指定模式
+ * @name: 服务名称
+ * @patterns: 模式数组（以 NULL 结尾）
+ * 返回: 1 表示匹配，0 表示不匹配
+ *
+ * 匹配规则：
+ * 1. 精确匹配（如 "sshd" == "sshd"）
+ * 2. 前缀匹配（如 "sshd-custom" 以 "sshd" 开头）
+ * 3. 后缀匹配（如 "custom-sshd" 以 "sshd" 结尾）
+ */
+static int is_service_name_match(const char *name, const char *const *patterns) {
+  for (int i = 0; patterns[i] != NULL; i++) {
+    const char *pattern = patterns[i];
+    size_t name_len = strlen(name);
+    size_t pattern_len = strlen(pattern);
+
+    /* 精确匹配 */
+    if (strcmp(name, pattern) == 0)
+      return 1;
+
+    /* 前缀匹配：服务名以模式开头，且后面紧跟 - 或结束 */
+    if (name_len > pattern_len &&
+        strncmp(name, pattern, pattern_len) == 0 &&
+        name[pattern_len] == '-')
+      return 1;
+
+    /* 后缀匹配：服务名以模式结尾，且前面紧跟 - 或开始 */
+    if (name_len > pattern_len &&
+        strcmp(name + name_len - pattern_len, pattern) == 0 &&
+        name[name_len - pattern_len - 1] == '-')
+      return 1;
+
+    /* 包含匹配：模式作为独立词出现在服务名中（前后都是 -） */
+    {
+      const char *pos = strstr(name, pattern);
+      if (pos) {
+        int at_start = (pos == name);
+        int at_end = (pos + pattern_len == name + name_len);
+        int char_before_ok = at_start || (pos[-1] == '-');
+        int char_after_ok = at_end || (pos[pattern_len] == '-');
+
+        if (char_before_ok && char_after_ok)
+          return 1;
+      }
+    }
+  }
+  return 0;
+}
+
+/* 服务名称模式定义 */
+static const char *const ssh_patterns[] = {"ssh", "sshd", NULL};
+static const char *const web_patterns[] = {"nginx", "apache", "http", NULL};
+static const char *const ftp_patterns[] = {"ftp", "vsftpd", "proftpd", NULL};
+static const char *const mail_patterns[] = {"postfix", "dovecot", "mail", NULL};
+static const char *const frp_patterns[] = {"frp", NULL};
+static const char *const db_patterns[] = {"mysql", "mariadb", "postgres", NULL};
+
+/* 根据服务名称应用智能默认参数 */
+
+/**
+ * apply_service_defaults - 应用特定服务的默认参数
+ * @j: jail结构
+ * @name: 服务名称
+ * @service_type: 服务类型标识
+ * @retries: 推荐的最大重试次数
+ * @findtime: 推荐的查找时间（秒）
+ * @ban_time: 推荐的封禁时间（秒）
+ */
+static void apply_service_defaults(struct jail *j, const char *name,
+                                   const char *service_type,
+                                   unsigned int retries, unsigned int findtime,
+                                   unsigned int ban_time) {
+  if (!j->_max_retries_set)
+    j->max_retries = retries;
+  if (!j->_findtime_set)
+    j->findtime = findtime;
+  if (!j->_ban_time_set)
+    j->ban_time = ban_time;
+
+  daemon_log_info("Jail '%s': applying %s smart defaults (retries=%u, "
+                  "findtime=%u, ban=%u)",
+                  name, service_type, j->max_retries, j->findtime, j->ban_time);
+}
+
 /* 根据服务名称智能推断推荐参数（仅当用户未显式配置时应用） */
 static void apply_smart_defaults_single(struct jail *j, const char *name,
                                         struct config *target_cfg) {
   /* SSH 服务 - 暴力破解防护 */
-  if (strstr(name, "ssh") || strstr(name, "sshd")) {
-    if (!j->_max_retries_set)
-      j->max_retries = 5;
-    if (!j->_findtime_set)
-      j->findtime = 600;
-    if (!j->_ban_time_set)
-      j->ban_time = 900;
-    daemon_log_info("Jail '%s': applying SSH smart defaults (retries=%u, "
-                    "findtime=%u, ban=%u)",
-                    name, j->max_retries, j->findtime, j->ban_time);
+  if (is_service_name_match(name, ssh_patterns)) {
+    apply_service_defaults(j, name, "SSH", 5, 600, 900);
   }
   /* Nginx/Apache 服务 - Web 攻击防护 */
-  else if (strstr(name, "nginx") || strstr(name, "apache") ||
-           strstr(name, "http")) {
-    if (!j->_max_retries_set)
-      j->max_retries = 10;
-    if (!j->_findtime_set)
-      j->findtime = 300;
-    if (!j->_ban_time_set)
-      j->ban_time = 1800;
-    daemon_log_info("Jail '%s': applying WEB smart defaults (retries=%u, "
-                    "findtime=%u, ban=%u)",
-                    name, j->max_retries, j->findtime, j->ban_time);
+  else if (is_service_name_match(name, web_patterns)) {
+    apply_service_defaults(j, name, "WEB", 10, 300, 1800);
   }
   /* FTP 服务 */
-  else if (strstr(name, "ftp") || strstr(name, "vsftpd") ||
-           strstr(name, "proftpd")) {
-    if (!j->_max_retries_set)
-      j->max_retries = 5;
-    if (!j->_findtime_set)
-      j->findtime = 600;
-    if (!j->_ban_time_set)
-      j->ban_time = 1800;
-    daemon_log_info("Jail '%s': applying FTP smart defaults (retries=%u, "
-                    "findtime=%u, ban=%u)",
-                    name, j->max_retries, j->findtime, j->ban_time);
+  else if (is_service_name_match(name, ftp_patterns)) {
+    apply_service_defaults(j, name, "FTP", 5, 600, 1800);
   }
   /* 邮件服务 */
-  else if (strstr(name, "postfix") || strstr(name, "dovecot") ||
-           strstr(name, "mail")) {
-    if (!j->_max_retries_set)
-      j->max_retries = 5;
-    if (!j->_findtime_set)
-      j->findtime = 300;
-    if (!j->_ban_time_set)
-      j->ban_time = 1800;
-    daemon_log_info("Jail '%s': applying MAIL smart defaults (retries=%u, "
-                    "findtime=%u, ban=%u)",
-                    name, j->max_retries, j->findtime, j->ban_time);
+  else if (is_service_name_match(name, mail_patterns)) {
+    apply_service_defaults(j, name, "MAIL", 5, 300, 1800);
   }
   /* FRP 服务 */
-  else if (strstr(name, "frp")) {
-    if (!j->_max_retries_set)
-      j->max_retries = 10;
-    if (!j->_findtime_set)
-      j->findtime = 300;
-    if (!j->_ban_time_set)
-      j->ban_time = 1800;
-    daemon_log_info("Jail '%s': applying FRP smart defaults (retries=%u, "
-                    "findtime=%u, ban=%u)",
-                    name, j->max_retries, j->findtime, j->ban_time);
+  else if (is_service_name_match(name, frp_patterns)) {
+    apply_service_defaults(j, name, "FRP", 10, 300, 1800);
   }
   /* 数据库服务 */
-  else if (strstr(name, "mysql") || strstr(name, "mariadb") ||
-           strstr(name, "postgres")) {
-    if (!j->_max_retries_set)
-      j->max_retries = 3;
-    if (!j->_findtime_set)
-      j->findtime = 300;
-    if (!j->_ban_time_set)
-      j->ban_time = 3600;
-    daemon_log_info("Jail '%s': applying DB smart defaults (retries=%u, "
-                    "findtime=%u, ban=%u)",
-                    name, j->max_retries, j->findtime, j->ban_time);
+  else if (is_service_name_match(name, db_patterns)) {
+    apply_service_defaults(j, name, "DB", 3, 300, 3600);
   }
   /* 默认使用全局 defaults */
   else {
@@ -210,10 +245,129 @@ void destroy_jail(struct jail *j) {
   daemon_log_info("Destroyed jail: %s", j->name);
 }
 
+/**
+ * validate_regex_safety - 验证正则表达式模式以防止 ReDoS 攻击
+ * @j: jail结构
+ * @pattern: 正则表达式模式
+ * 返回: 0 表示安全，-1 表示不安全
+ */
+static int validate_regex_safety(struct jail *j, const char *pattern) {
+  size_t pattern_len;
+  int pipe_count = 0;
+
+  if (!j->regex_pattern || strlen(j->regex_pattern) == 0)
+    return 0; /* 使用内置默认模式，跳过验证 */
+
+  pattern_len = strlen(pattern);
+
+  /* 拒绝过长的模式 */
+  if (pattern_len > 1024) {
+    daemon_log_err("Rejected unsafe regex for jail '%s': pattern too long "
+                   "(%zu bytes, max 1024)",
+                   j->name, pattern_len);
+    return -1;
+  }
+
+  /* 拒绝嵌套量词模式: )+ 或 )* */
+  for (const char *p = pattern; *p; p++) {
+    if (p[0] == ')') {
+      char next = p[1];
+      if (next == '+' || next == '*') {
+        daemon_log_err("Rejected unsafe regex for jail '%s': nested "
+                       "quantifiers detected "
+                       "(pattern like (a+)+ or (a*)* at offset %ld)",
+                       j->name, (long)(p - pattern));
+        return -1;
+      }
+    }
+  }
+
+  /* 拒绝占有量词: ++ 或 *+ */
+  if (strstr(pattern, "++") || strstr(pattern, "*+")) {
+    daemon_log_err("Rejected unsafe regex for jail '%s': possessive "
+                   "quantifiers detected "
+                   "(patterns like ++  *+ are not allowed)",
+                   j->name);
+    return -1;
+  }
+
+  /* 拒绝 (? 后直接跟量词的模式 */
+  for (const char *p = pattern; *p; p++) {
+    if (p[0] == '(' && p[1] == '?') {
+      char next = p[2];
+      if (next == '+' || next == '*' || next == '{' || next == '?') {
+        daemon_log_err(
+            "Rejected unsafe regex for jail '%s': invalid quantifier after "
+            "'(?' at offset %ld",
+            j->name, (long)(p - pattern));
+        return -1;
+      }
+    }
+  }
+
+  /* 拒绝过多的分支选择 */
+  for (const char *p = pattern; *p; p++) {
+    if (*p == '|')
+      pipe_count++;
+  }
+  if (pipe_count > 50) {
+    daemon_log_err("Rejected unsafe regex for jail '%s': too many "
+                   "alternations (%d, max 50)",
+                   j->name, pipe_count);
+    return -1;
+  }
+
+  return 0;
+}
+
+/**
+ * compile_pcre2_pattern - 编译PCRE2正则表达式并创建匹配数据
+ * @j: jail结构
+ * @pattern: 正则表达式模式
+ * @out_re: 输出参数，编译后的正则表达式
+ * @out_md: 输出参数，匹配数据
+ * 返回: 0 表示成功，-1 表示失败
+ */
+static int compile_pcre2_pattern(struct jail *j, const char *pattern,
+                                 pcre2_code **out_re,
+                                 pcre2_match_data **out_md) {
+  int error_number;
+  PCRE2_SIZE error_offset;
+  pcre2_code *re;
+  pcre2_match_data *md;
+
+  /* 编译正则表达式 */
+  re = pcre2_compile((PCRE2_SPTR)pattern, PCRE2_ZERO_TERMINATED,
+                     PCRE2_NO_UTF_CHECK, &error_number, &error_offset, NULL);
+  if (!re) {
+    PCRE2_UCHAR buffer[256];
+    pcre2_get_error_message(error_number, buffer, sizeof(buffer));
+    daemon_log_err("Failed to compile regex for jail '%s' at offset %d: %s",
+                   j->name, (int)error_offset, buffer);
+    return -1;
+  }
+
+  /* 创建匹配数据缓冲区 */
+  md = pcre2_match_data_create_from_pattern(re, NULL);
+  if (!md) {
+    daemon_log_err("Failed to create match data for jail '%s'", j->name);
+    pcre2_code_free(re);
+    return -1;
+  }
+
+  *out_re = re;
+  *out_md = md;
+  return 0;
+}
+
 /* 使用 PCRE2 编译 jail 的正则表达式 */
 int compile_jail_regex(struct jail *j) {
+  int ret = -1;
+  pcre2_code *re = NULL;
+  pcre2_match_data *md = NULL;
+
   if (!j)
-    return -1;
+    goto cleanup;
 
   /* 如果已编译则释放现有正则表达式 */
   if (j->regex_compiled) {
@@ -234,99 +388,30 @@ int compile_jail_regex(struct jail *j) {
             "([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})";
 
   /* 验证正则表达式模式以防止 ReDoS 攻击 */
-  if (j->regex_pattern && strlen(j->regex_pattern) > 0) {
-    size_t pattern_len = strlen(pattern);
+  if (validate_regex_safety(j, pattern) < 0)
+    goto cleanup;
 
-    /* 拒绝过长的模式（在嵌套量词检测之前先做长度检查） */
-    if (pattern_len > 1024) {
-      daemon_log_err("Rejected unsafe regex for jail '%s': pattern too long "
-                     "(%zu bytes, max 1024)",
-                     j->name, pattern_len);
-      return -1;
-    }
+  /* 编译 PCRE2 模式 */
+  if (compile_pcre2_pattern(j, pattern, &re, &md) < 0)
+    goto cleanup;
 
-    /* 拒绝真正的嵌套量词模式: 遍历检测 ) 后紧跟 + 或 * 的情况
-     * 注意: (text)? 是合法的可选捕获组，不应被拒绝
-     *       只有 )+  )* 才是危险的嵌套量词（如 (a+)+ (a*)*）
-     * 保留 ++ 和 *+ 的检测（占有量词） */
-    int has_nested_quantifier = 0;
-    for (const char *p = pattern; *p; p++) {
-      if (p[0] == ')') {
-        char next = p[1];
-        if (next == '+' || next == '*') {
-          has_nested_quantifier = 1;
-          daemon_log_err("Rejected unsafe regex for jail '%s': nested "
-                         "quantifiers detected "
-                         "(pattern like (a+)+ or (a*)* at offset %ld)",
-                         j->name, (long)(p - pattern));
-          return -1;
-        }
-      }
-    }
-    (void)has_nested_quantifier;
-
-    if (strstr(pattern, "++") || strstr(pattern, "*+")) {
-      daemon_log_err("Rejected unsafe regex for jail '%s': possessive "
-                     "quantifiers detected "
-                     "(patterns like ++  *+ are not allowed)",
-                     j->name);
-      return -1;
-    }
-
-    /* 拒绝 (? 后直接跟量词的模式: (?+  (?*  (?{  (?? */
-    for (const char *p = pattern; *p; p++) {
-      if (p[0] == '(' && p[1] == '?') {
-        char next = p[2];
-        if (next == '+' || next == '*' || next == '{' || next == '?') {
-          daemon_log_err(
-              "Rejected unsafe regex for jail '%s': invalid quantifier after "
-              "'(?' at offset %ld",
-              j->name, (long)(p - pattern));
-          return -1;
-        }
-      }
-    }
-
-    /* 拒绝过多的分支选择（a|b|c|... 模式） */
-    int pipe_count = 0;
-    for (const char *p = pattern; *p; p++) {
-      if (*p == '|')
-        pipe_count++;
-    }
-    if (pipe_count > 50) {
-      daemon_log_err("Rejected unsafe regex for jail '%s': too many "
-                     "alternations (%d, max 50)",
-                     j->name, pipe_count);
-      return -1;
-    }
-  }
-
-  /* 使用 PCRE2 编译 */
-  int error_number;
-  PCRE2_SIZE error_offset;
-  j->compiled_regex =
-      pcre2_compile((PCRE2_SPTR)pattern, PCRE2_ZERO_TERMINATED,
-                    PCRE2_NO_UTF_CHECK, &error_number, &error_offset, NULL);
-  if (!j->compiled_regex) {
-    PCRE2_UCHAR buffer[256];
-    pcre2_get_error_message(error_number, buffer, sizeof(buffer));
-    daemon_log_err("Failed to compile regex for jail '%s' at offset %d: %s",
-                   j->name, (int)error_offset, buffer);
-    return -1;
-  }
-
-  /* 创建匹配数据缓冲区 */
-  j->match_data = pcre2_match_data_create_from_pattern(j->compiled_regex, NULL);
-  if (!j->match_data) {
-    daemon_log_err("Failed to create match data for jail '%s'", j->name);
-    pcre2_code_free(j->compiled_regex);
-    j->compiled_regex = NULL;
-    return -1;
-  }
-
+  /* 编译成功，更新 jail 结构 */
+  j->compiled_regex = re;
+  j->match_data = md;
   j->regex_compiled = 1;
+  re = NULL; /* 防止 cleanup 释放 */
+  md = NULL; /* 防止 cleanup 释放 */
   daemon_log_debug("Compiled regex for jail '%s'", j->name);
-  return 0;
+  ret = 0;
+
+cleanup:
+  /* 统一资源清理 */
+  if (re)
+    pcre2_code_free(re);
+  if (md)
+    pcre2_match_data_free(md);
+
+  return ret;
 }
 
 /* 获取 jail 日志文件的全局 file_states 索引 */
