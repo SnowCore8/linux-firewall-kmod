@@ -95,11 +95,8 @@ int save_state_to_file(const char *filename)
     if (strncmp(filename, "/var/lib/", 9) != 0 &&
         strncmp(filename, "/tmp/", 5) != 0 &&
         strncmp(filename, "/etc/", 5) != 0) {
-        fw_pr_warn("State file path outside allowed directories: %s", filename);
-        if (strchr(filename, '/') && filename[0] != '/') {
-            fw_pr_err("Relative path not allowed for state file: %s", filename);
-            return -EINVAL;
-        }
+        fw_pr_err("State file path outside allowed directories, rejected: %s", filename);
+        return -EPERM;
     }
 
     ban_entries = kmalloc_array(MAX_SAVE_BAN, sizeof(struct saved_ban_entry), GFP_KERNEL);
@@ -156,9 +153,12 @@ int save_state_to_file(const char *filename)
         return PTR_ERR(file);
     }
 
+    /* 记录打开时的 inode 信息，用于后续 TOCTOU 验证 */
+    ino_t saved_ino = 0;
+    dev_t saved_dev = 0;
     {
         struct kstat open_stat;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,12, 0)
         int getattr_err = vfs_getattr(&file->f_path, &open_stat, STATX_BASIC_STATS, AT_STATX_SYNC_AS_STAT);
 #else
         int getattr_err = vfs_getattr(&file->f_path, &open_stat);
@@ -177,6 +177,9 @@ int save_state_to_file(const char *filename)
             kfree(wl_entries);
             return -EACCES;
         }
+        /* 保存 inode 和设备号，用于写入后验证一致性 */
+        saved_ino = open_stat.ino;
+        saved_dev = open_stat.dev;
     }
 
     for (int i = 0; i < ban_count; i++) {
@@ -202,6 +205,24 @@ int save_state_to_file(const char *filename)
             kfree(ban_entries);
             kfree(wl_entries);
             return -EIO;
+        }
+    }
+
+    /* 写入完成后验证 inode 一致性，防止 TOCTOU 攻击 */
+    {
+        struct kstat close_stat;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,12, 0)
+        int getattr_err = vfs_getattr(&file->f_path, &close_stat, STATX_BASIC_STATS, AT_STATX_SYNC_AS_STAT);
+#else
+        int getattr_err = vfs_getattr(&file->f_path, &close_stat);
+#endif
+        if (getattr_err == 0 &&
+            (close_stat.ino != saved_ino || close_stat.dev != saved_dev)) {
+            fw_pr_err("State file inode changed during write (possible TOCTOU attack): %s", filename);
+            filp_close(file, NULL);
+            kfree(ban_entries);
+            kfree(wl_entries);
+            return -EACCES;
         }
     }
 

@@ -81,7 +81,11 @@ static int __init firewall_init(void)
     atomic_set(&fw_info.cleanup_expired_total, 0);
 
     if (state_file && strlen(state_file) > 0) {
-        restore_state_from_file(state_file);
+        int restore_ret = restore_state_from_file(state_file);
+        if (restore_ret < 0) {
+            fw_pr_err("Failed to restore state from %s (error %d), starting with clean state",
+                      state_file, restore_ret);
+        }
     }
 
     INIT_DELAYED_WORK(&fw_info.sync_work, sync_work_handler);

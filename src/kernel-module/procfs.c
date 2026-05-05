@@ -66,8 +66,256 @@ static int bans_open(struct inode *inode, struct file *file)
     return single_open(file, bans_show, NULL);
 }
 
+/* ============================================================================
+ * bans_write 辅助函数 - 拆分单一职责
+ * ========================================================================== */
+
+/**
+ * validate_ban_input - 校验用户输入的安全性和格式
+ * @input: 用户输入字符串（已拷贝到内核空间）
+ * 返回: 0 表示校验通过，负数错误码表示失败
+ */
+static int validate_ban_input(const char *input)
+{
+    if (strstr(input, "..") != NULL) {
+        fw_pr_warn("Path traversal attempt detected: %s", input);
+        return -EINVAL;
+    }
+
+    {
+        char lower_input[256];
+        size_t i;
+
+        for (i = 0; input[i] && i < sizeof(lower_input) - 1; i++) {
+            if (input[i] >= 'A' && input[i] <= 'Z')
+                lower_input[i] = input[i] - 'A' + 'a';
+            else
+                lower_input[i] = input[i];
+        }
+        lower_input[i] = '\0';
+
+        if (strstr(lower_input, "%2e") != NULL || strstr(lower_input, "%2f") != NULL) {
+            fw_pr_warn("URL encoded path traversal attempt detected: %s", input);
+            return -EINVAL;
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * parse_ban_command - 解析封禁命令类型和 IP 地址
+ * @input: 用户输入字符串
+ * @ip_str: 输出参数，存储解析出的 IP 字符串
+ * @ip_str_size: ip_str 缓冲区大小
+ * @is_unban: 输出参数，是否为 unban 命令
+ * 返回: 0 表示解析成功，负数错误码表示失败
+ */
+static int parse_ban_command(const char *input, char *ip_str, size_t ip_str_size,
+                             bool *is_unban)
+{
+    const char *cmd_ptr = input;
+
+    /* 跳过前导空白 */
+    while (*cmd_ptr && (*cmd_ptr == ' ' || *cmd_ptr == '\t'))
+        cmd_ptr++;
+
+    if (*cmd_ptr == '\0') {
+        fw_pr_warn("Empty command");
+        return -EINVAL;
+    }
+
+    /* 检查是否为 unban 命令 */
+    if (strncmp(cmd_ptr, "unban ", 6) == 0 || strncmp(cmd_ptr, "unban\t", 6) == 0) {
+        const char *ip_start = cmd_ptr + 5;
+        while (*ip_start && (*ip_start == ' ' || *ip_start == '\t'))
+            ip_start++;
+
+        if (*ip_start == '\0') {
+            fw_pr_warn("Missing IP address after 'unban'");
+            return -EINVAL;
+        }
+
+        const char *ip_end = ip_start;
+        while (*ip_end && *ip_end != ' ' && *ip_end != '\t')
+            ip_end++;
+        if (*ip_end != '\0') {
+            fw_pr_warn("Invalid format - extra content after IP: %s", input);
+            return -EINVAL;
+        }
+
+        strncpy(ip_str, ip_start, ip_str_size - 1);
+        ip_str[ip_str_size - 1] = '\0';
+        *is_unban = true;
+        return 0;
+    }
+
+    /* ban 命令：提取 IP 地址 */
+    {
+        const char *ptr = cmd_ptr;
+        const char *ip_start = ptr;
+
+        while (*ptr && *ptr != ' ' && *ptr != '\t')
+            ptr++;
+
+        if (*ptr == '\0' || *(ptr + 1) == '\0') {
+            /* 只有 IP，无持续时间 */
+            strncpy(ip_str, ip_start, ip_str_size - 1);
+            ip_str[ip_str_size - 1] = '\0';
+        } else {
+            /* IP 后面有内容，提取 IP 部分 */
+            size_t ip_len = ptr - ip_start;
+            if (ip_len >= ip_str_size)
+                ip_len = ip_str_size - 1;
+            strncpy(ip_str, ip_start, ip_len);
+            ip_str[ip_len] = '\0';
+        }
+    }
+
+    *is_unban = false;
+    return 0;
+}
+
+/**
+ * parse_ban_duration - 解析封禁持续时间
+ * @input: 用户输入字符串
+ * 返回: 持续时间（秒），特殊值含义：
+ *       -2 = 使用默认持续时间
+ *       -1 = unban 操作
+ *        0 = 永久封禁
+ *       >0 = 指定秒数
+ *       负数错误码 = 解析失败
+ */
+static long parse_ban_duration(const char *input)
+{
+    const char *ptr = input;
+    const char *space_pos = NULL;
+
+    /* 跳过前导空白 */
+    while (*ptr && (*ptr == ' ' || *ptr == '\t'))
+        ptr++;
+
+    /* 找到 IP 后的空白位置 */
+    while (*ptr && *ptr != ' ' && *ptr != '\t')
+        ptr++;
+
+    if (*ptr == '\0') {
+        /* 没有持续时间，使用默认值 */
+        return -2;
+    }
+
+    /* 跳过空白，定位到持续时间内 */
+    space_pos = ptr + 1;
+    while (*space_pos && (*space_pos == ' ' || *space_pos == '\t'))
+        space_pos++;
+
+    if (*space_pos == '\0') {
+        /* 空白后无内容，使用默认值 */
+        return -2;
+    }
+
+    {
+        char *endp;
+        long seconds = simple_strtol(space_pos, &endp, 10);
+
+        if (endp == space_pos || *endp != '\0') {
+            fw_pr_warn("Invalid format - invalid seconds value: %s", input);
+            return -EINVAL;
+        }
+
+        if (seconds < 0 && seconds != -1) {
+            fw_pr_warn("Invalid ban duration: %ld", seconds);
+            return -EINVAL;
+        }
+
+        if (seconds > MAX_BAN_TIME) {
+            fw_pr_warn("Ban duration %ld exceeds maximum %d seconds", seconds, MAX_BAN_TIME);
+            return -EINVAL;
+        }
+
+        return seconds;
+    }
+}
+
+/**
+ * execute_ban_action - 执行封禁/解封动作
+ * @ip: IPv4 地址
+ * @ip_str: IP 字符串（用于日志）
+ * @seconds: 持续时间（由 parse_ban_duration 解析）
+ * @is_unban: 是否为解封操作
+ * 返回: 0 表示成功，负数错误码表示失败
+ */
+static int execute_ban_action(__be32 ip, const char *ip_str, long seconds, bool is_unban)
+{
+    int result;
+
+    if (is_unban || (seconds < 0 && seconds != -2)) {
+        /* 解封操作 */
+        result = unban_ip(&fw_info, ip);
+        if (result < 0) {
+            if (result == -ENOENT)
+                fw_pr_warn("IP %s not found in ban list", ip_str);
+            else
+                fw_pr_err("Failed to unban IP %s (error %d)", ip_str, result);
+            return result;
+        }
+        return 0;
+    }
+
+    if (seconds == 0) {
+        /* 永久封禁 */
+        result = ban_ip_permanent(&fw_info, ip);
+        if (result < 0) {
+            if (result == -EPERM)
+                fw_pr_info("Requested IPv4 %s is in whitelist, not permanently banned", ip_str);
+            else if (result == -ENOMEM)
+                fw_pr_err("Failed to allocate memory for permanent ban entry for IPv4 %s", ip_str);
+            else if (result == -ENOSPC)
+                fw_pr_warn("Ban table full, cannot permanently ban IPv4 %s", ip_str);
+            else
+                fw_pr_err("Unknown error %d when trying to permanently ban IPv4 %s", result, ip_str);
+            return result;
+        }
+        return 0;
+    }
+
+    /* 需要泛洪保护的情况：默认持续时间或指定持续时间 */
+    if (check_flood_protection() < 0) {
+        fw_pr_warn("Flood protection triggered - too many ban requests");
+        return -EBUSY;
+    }
+
+    if (seconds == -2) {
+        /* 默认持续时间封禁 */
+        result = ban_ip(&fw_info, ip);
+    } else {
+        /* 指定持续时间封禁 */
+        result = ban_ip_with_duration(&fw_info, ip, (unsigned long)seconds);
+    }
+
+    if (result < 0) {
+        if (result == -EPERM)
+            fw_pr_info("Requested IPv4 %s is in whitelist, not banned", ip_str);
+        else if (result == -ENOMEM)
+            fw_pr_err("Failed to allocate memory for ban entry for IPv4 %s", ip_str);
+        else if (result == -ENOSPC)
+            fw_pr_warn("Ban table full, cannot ban IPv4 %s", ip_str);
+        else
+            fw_pr_err("Unknown error %d when trying to ban IPv4 %s", result, ip_str);
+        return result;
+    }
+
+    return 0;
+}
+
 /*
  * bans_write - 封禁管理的统一写入处理程序
+ * 支持的命令格式：
+ *   "unban <ip>"      - 解封 IP
+ *   "<ip>"            - 使用默认持续时间封禁
+ *   "<ip> <seconds>"  - 指定持续时间封禁（秒）
+ *   "<ip> 0"          - 永久封禁
+ *   "<ip> -1"         - 解封 IP
  */
 static ssize_t bans_write(struct file *file, const char __user *buf,
                           size_t count, loff_t *ppos)
@@ -76,13 +324,13 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
     char ip_str[INET_ADDRSTRLEN];
     __be32 ip;
     long seconds;
-    char *space_pos;
-    char *endp;
     ssize_t len;
     int result;
+    bool is_unban = false;
 
     FW_DEBUG(2, "ENTRY: bans_write(count=%zu)", count);
 
+    /* 权限和输入长度校验 */
     if (!capable(CAP_NET_ADMIN)) {
         FW_DEBUG(1, "EXIT: bans_write -> -EPERM (no capability)");
         return -EPERM;
@@ -111,214 +359,52 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
         return -EINVAL;
     }
 
-    if (strstr(input, "..") != NULL) {
-        fw_pr_warn("Path traversal attempt detected: %s", input);
-        return -EINVAL;
-    }
-    {
-        char lower_input[sizeof(input)];
-        size_t i;
+    /* 安全性校验 */
+    result = validate_ban_input(input);
+    if (result < 0)
+        return result;
 
-        for (i = 0; input[i] && i < sizeof(lower_input) - 1; i++) {
-            if (input[i] >= 'A' && input[i] <= 'Z')
-                lower_input[i] = input[i] - 'A' + 'a';
-            else
-                lower_input[i] = input[i];
-        }
-        lower_input[i] = '\0';
+    /* 解析命令类型和 IP */
+    result = parse_ban_command(input, ip_str, sizeof(ip_str), &is_unban);
+    if (result < 0)
+        return result;
 
-        if (strstr(lower_input, "%2e") != NULL || strstr(lower_input, "%2f") != NULL) {
-            fw_pr_warn("URL encoded path traversal attempt detected: %s", input);
-            return -EINVAL;
-        }
-    }
-
-    space_pos = input;
-    while (*space_pos && (*space_pos == ' ' || *space_pos == '\t'))
-        space_pos++;
-
-    if (*space_pos == '\0') {
-        fw_pr_warn("Empty command");
-        return -EINVAL;
-    }
-
-    if (strncmp(space_pos, "unban ", 6) == 0 || strncmp(space_pos, "unban\t", 6) == 0) {
-        char *ip_start = space_pos + 5;
-        while (*ip_start && (*ip_start == ' ' || *ip_start == '\t'))
-            ip_start++;
-
-        if (*ip_start == '\0') {
-            fw_pr_warn("Missing IP address after 'unban'");
-            return -EINVAL;
-        }
-
-        char *ip_end = ip_start;
-        while (*ip_end && *ip_end != ' ' && *ip_end != '\t')
-            ip_end++;
-        if (*ip_end != '\0') {
-            fw_pr_warn("Invalid format - extra content after IP: %s", input);
-            return -EINVAL;
-        }
-
-        strncpy(ip_str, ip_start, sizeof(ip_str) - 1);
-        ip_str[sizeof(ip_str) - 1] = '\0';
-
-        if (!in4_pton(ip_str, -1, (u8 *)&ip, -1, NULL)) {
-            fw_pr_warn("Invalid IP address format: %s", ip_str);
-            return -EINVAL;
-        }
-
-        result = unban_ip(&fw_info, ip);
-        if (result < 0) {
-            if (result == -ENOENT) {
-                fw_pr_warn("IP %s not found in ban list", ip_str);
-            } else {
-                fw_pr_err("Failed to unban IP %s (error %d)", ip_str, result);
-            }
-            return result;
-        }
-        FW_DEBUG(1, "EXIT: bans_write -> %zu (success, unbanned)", count);
-        return count;
-    }
-
-    {
-        char parse_buf[sizeof(input)];
-        char *ptr;
-        char *ip_start;
-
-        memcpy(parse_buf, input, sizeof(parse_buf));
-
-        space_pos = NULL;
-        ptr = parse_buf;
-        while (*ptr && (*ptr == ' ' || *ptr == '\t'))
-            ptr++;
-
-        ip_start = ptr;
-        while (*ptr && *ptr != ' ' && *ptr != '\t')
-            ptr++;
-
-        if (*ptr) {
-            *ptr = '\0';
-            space_pos = ptr + 1;
-
-            while (*space_pos && (*space_pos == ' ' || *space_pos == '\t'))
-                space_pos++;
-
-            if (*space_pos == '\0') {
-                goto ban_default_duration;
-            }
-
-            seconds = simple_strtol(space_pos, &endp, 10);
-            if (endp == space_pos || *endp != '\0') {
-                fw_pr_warn("Invalid format - invalid seconds value: %s", input);
-                return -EINVAL;
-            }
-
-            if (seconds < 0 && seconds != -1) {
-                fw_pr_warn("Invalid ban duration: %ld", seconds);
-                return -EINVAL;
-            }
-            if (seconds > MAX_BAN_TIME) {
-                fw_pr_warn("Ban duration %ld exceeds maximum %d seconds", seconds, MAX_BAN_TIME);
-                return -EINVAL;
-            }
-
-            strncpy(ip_str, ip_start, sizeof(ip_str) - 1);
-            ip_str[sizeof(ip_str) - 1] = '\0';
-        } else {
-            *ptr = '\0';
-ban_default_duration:
-            strncpy(ip_str, ip_start, sizeof(ip_str) - 1);
-            ip_str[sizeof(ip_str) - 1] = '\0';
-            seconds = -2;
-        }
-    }
-
-    if (*ip_str == '\0') {
-        fw_pr_warn("Missing IP address");
-        return -EINVAL;
-    }
-
+    /* 解析 IP 地址 */
     if (!in4_pton(ip_str, -1, (u8 *)&ip, -1, NULL)) {
         fw_pr_warn("Invalid IP address format: %s", ip_str);
         return -EINVAL;
     }
 
+    /* 验证 IP 合法性 */
     if (validate_ipv4_address(ip, ip_str, "ban") < 0) {
         return -EINVAL;
     }
 
-    unsigned int ip_class_a = (ntohl(ip) >> 24) & 0xFF;
-    unsigned int ip_class_b = (ntohl(ip) >> 16) & 0xFF;
-    if ((ip_class_a == 10) ||
-        (ip_class_a == 172 && ip_class_b >= 16 && ip_class_b <= 31) ||
-        (ip_class_a == 192 && ip_class_b == 168)) {
-        fw_pr_warn("Attempt to ban private IPv4 range %pI4 - this may be unintended", &ip);
+    /* 私有 IP 警告 */
+    {
+        unsigned int ip_class_a = (ntohl(ip) >> 24) & 0xFF;
+        unsigned int ip_class_b = (ntohl(ip) >> 16) & 0xFF;
+        if ((ip_class_a == 10) ||
+            (ip_class_a == 172 && ip_class_b >= 16 && ip_class_b <= 31) ||
+            (ip_class_a == 192 && ip_class_b == 168)) {
+            fw_pr_warn("Attempt to ban private IPv4 range %pI4 - this may be unintended", &ip);
+        }
     }
 
-    if (seconds < 0 && seconds != -2) {
-        result = unban_ip(&fw_info, ip);
-        if (result < 0) {
-            if (result == -ENOENT) {
-                fw_pr_warn("IP %s not found in ban list", ip_str);
-            } else {
-                fw_pr_err("Failed to unban IP %s (error %d)", ip_str, result);
-            }
-            return result;
-        }
-    } else if (seconds == 0) {
-        result = ban_ip_permanent(&fw_info, ip);
-        if (result < 0) {
-            if (result == -EPERM) {
-                fw_pr_info("Requested IPv4 %s is in whitelist, not permanently banned", ip_str);
-            } else if (result == -ENOMEM) {
-                fw_pr_err("Failed to allocate memory for permanent ban entry for IPv4 %s", ip_str);
-            } else if (result == -ENOSPC) {
-                fw_pr_warn("Ban table full, cannot permanently ban IPv4 %s", ip_str);
-            } else {
-                fw_pr_err("Unknown error %d when trying to permanently ban IPv4 %s", result, ip_str);
-            }
-            return result;
-        }
-    } else if (seconds == -2) {
-        if (check_flood_protection() < 0) {
-            fw_pr_warn("Flood protection triggered - too many ban requests");
-            return -EBUSY;
-        }
-
-        result = ban_ip(&fw_info, ip);
-        if (result < 0) {
-            if (result == -EPERM) {
-                fw_pr_info("Requested IPv4 %s is in whitelist, not banned", ip_str);
-            } else if (result == -ENOMEM) {
-                fw_pr_err("Failed to allocate memory for ban entry for IPv4 %s", ip_str);
-            } else if (result == -ENOSPC) {
-                fw_pr_warn("Ban table full, cannot ban IPv4 %s", ip_str);
-            } else {
-                fw_pr_err("Unknown error %d when trying to ban IPv4 %s", result, ip_str);
-            }
-            return result;
+    /* 解析持续时间（仅对 ban 命令需要） */
+    if (!is_unban) {
+        seconds = parse_ban_duration(input);
+        if (seconds < 0 && seconds != -1 && seconds != -2) {
+            return (int)seconds;
         }
     } else {
-        if (check_flood_protection() < 0) {
-            fw_pr_warn("Flood protection triggered - too many ban requests");
-            return -EBUSY;
-        }
-
-        result = ban_ip_with_duration(&fw_info, ip, (unsigned long)seconds);
-        if (result < 0) {
-            if (result == -EPERM) {
-                fw_pr_info("Requested IPv4 %s is in whitelist, not banned", ip_str);
-            } else if (result == -ENOMEM) {
-                fw_pr_err("Failed to allocate memory for ban entry for IPv4 %s", ip_str);
-            } else if (result == -ENOSPC) {
-                fw_pr_warn("Ban table full, cannot ban IPv4 %s", ip_str);
-            } else {
-                fw_pr_err("Unknown error %d when trying to ban IPv4 %s", result, ip_str);
-            }
-            return result;
-        }
+        seconds = -1; /* unban 操作 */
     }
+
+    /* 执行封禁/解封动作 */
+    result = execute_ban_action(ip, ip_str, seconds, is_unban);
+    if (result < 0)
+        return result;
 
     FW_DEBUG(1, "EXIT: bans_write -> %zu (success)", count);
     return count;
