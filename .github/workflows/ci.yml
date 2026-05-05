@@ -114,14 +114,6 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v6
 
-      - name: 安装依赖
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential linux-headers-$(uname -r) libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev
-
-      - name: 编译（带警告检查）
-        run: make CFLAGS_EXTRA="-Werror"
-
       - name: 安装 clang-format
         run: sudo apt-get install -y clang-format
 
@@ -131,6 +123,14 @@ jobs:
           clang-format --dry-run --Werror src/kernel-module/*.c src/kernel-module/*.h
           echo "检查守护进程代码..."
           clang-format --dry-run --Werror src/daemon/*.c src/daemon/*.h
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential linux-headers-$(uname -r) libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev
+
+      - name: 编译（带警告检查）
+        run: make CFLAGS_EXTRA="-Werror"
 
   yaml-lint:
     name: YAML 配置检查
