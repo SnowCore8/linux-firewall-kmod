@@ -36,7 +36,7 @@ fw_log_info "压力测试 $STRESS_IP_COUNT IP 耗时: ${local_dur}ms"
 assert_le "$local_dur" 10000 "压力测试在 10s 内完成"
 
 local_ban_count=$(wc -l < "$PROC_BANS" 2>/dev/null || echo 0)
-assert_le "$local_ban_count" 1024 "封禁数量在限制内 (1024)，实际 $local_ban_count"
+assert_le "$local_ban_count" 4096 "封禁数量在限制内 (4096)，实际 $local_ban_count"
 
 # 清理
 for i in $(seq 1 $STRESS_IP_COUNT); do

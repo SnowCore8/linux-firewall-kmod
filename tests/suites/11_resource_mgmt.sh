@@ -29,8 +29,8 @@ for i in $(seq 1 50); do
     echo "unban 203.0.113.$((i%256))" > "$PROC_BANS" 2>/dev/null || true
 done
 
-# 11.3 封禁容量测试 (1024 上限)
-fw_subsection "封禁容量边界测试 (1024 上限)"
+# 11.3 封禁容量测试 (4096 上限)
+fw_subsection "封禁容量边界测试 (4096 上限)"
 local_added=0
 for i in $(seq 1 200); do
     if echo "10.0.$((i/256)).$((i%256))" > "$PROC_BANS" 2>/dev/null; then
@@ -41,7 +41,7 @@ sleep 0.5
 
 local_final_count=$(wc -l < "$PROC_BANS" 2>/dev/null || echo 0)
 fw_log_info "添加 200 IP 后封禁列表: $local_final_count"
-assert_le "$local_final_count" 1024 "封禁数量未超出 1024 上限"
+assert_le "$local_final_count" 4096 "封禁数量未超出 4096 上限"
 
 # 分批清理
 for i in $(seq 1 200); do
