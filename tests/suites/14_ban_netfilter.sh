@@ -1,10 +1,10 @@
 #!/bin/bash
 # 14_ban_netfilter.sh - 黑名单 IP netfilter 链表验证测试
-# 使用真实可路由 IP (43.100.123.123) 验证 ban_table 封禁条目格式和功能
+# 使用真实可路由 IP (223.5.5.5) 验证 ban_table 封禁条目格式和功能
 
 fw_test_header "黑名单 netfilter 封禁测试"
 
-TEST_NETFILTER_IP="43.100.123.123"
+TEST_NETFILTER_IP="223.5.5.5"
 
 # 14.1 检查 procfs 接口
 fw_subsection "procfs 接口检查"
