@@ -99,5 +99,8 @@ jobs:
           name: build-artifacts
           path: build/
 
+      - name: 设置执行权限
+        run: chmod +x build/daemon/firewall-daemon
+
       - name: 执行测试并生成报告
         run: sudo -E ./tests/run_tests.sh --report
