@@ -4,7 +4,6 @@
 
 # ---- 构建产物 ----
 build/
-site/
 *.ko
 *.ko.cmd
 *.mod.c
