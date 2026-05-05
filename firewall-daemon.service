@@ -1,6 +1,7 @@
 [Unit]
 Description=Firewall Daemon for IP Ban Protection
-After=network.target
+After=network.target systemd-modules-load.service
+Requires=systemd-modules-load.service
 
 [Service]
 Type=forking
@@ -20,7 +21,7 @@ ReadWritePaths=/var/lib/firewall /etc/firewall
 PrivateTmp=yes
 ProtectHome=yes
 ProtectKernelTunables=yes
-ProtectKernelModules=yes
+# ProtectKernelModules=yes  # 注释：模块已通过 modules-load.d 在启动时加载
 ProtectControlGroups=yes
 RestrictNamespaces=yes
 RestrictRealtime=yes

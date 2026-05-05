@@ -170,6 +170,8 @@ install-state:
 install-systemd:
 	@echo "Installing systemd service..."
 	install -D -m 644 firewall-daemon.service $(DESTDIR)/etc/systemd/system/firewall-daemon.service
+	@echo "Installing kernel module autoload config..."
+	install -D -m 644 config/modules-load.d/firewall.conf $(DESTDIR)/etc/modules-load.d/firewall.conf
 	-systemctl daemon-reload 2>/dev/null || true
 	@echo "  ✓ Systemd service installed"
 
