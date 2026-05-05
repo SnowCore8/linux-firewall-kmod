@@ -1,10 +1,10 @@
 # Firewall 测试框架文档
 
-**版本**: v2.0 | **更新日期**: 2026-05-04
+**版本**: v2.0 | **更新日期**: 2026-05-05
 
 ## 1. 测试概览
 
-项目采用模块化 Bash 测试框架，共 **12 个测试套件**，覆盖内核模块、守护进程、安全防护和性能等关键领域。
+项目采用模块化 Bash 测试框架，共 **12 个测试套件**，**106 项测试**，覆盖内核模块、守护进程、安全防护和性能等关键领域。
 
 **覆盖范围**：模块加载/卸载、Procfs 接口、IP 封禁/解封、白名单管理、并发安全、压力性能、YAML 配置加载、日志解析、资源管理、永久封禁持久化、Netfilter 封禁验证。
 
@@ -18,33 +18,33 @@
 
 | 编号 | 套件名称 | 测试数 | 类别 | 说明 |
 |------|----------|--------|------|------|
-| 01 | `module_basic` | 10 | basic | 模块加载/卸载、参数验证、重复加载保护 |
-| 02 | `procfs_interface` | 14 | basic | Procfs 接口读写、格式验证、空输入拒绝 |
-| 03 | `ban_unban` | 5 | basic | 基本封禁/解封、批量操作、循环稳定性 |
-| 04 | `whitelist` | 12 | basic | 白名单添加/移除、IP/子网支持、保留地址保护 |
+| 01 | `module_basic` | 4 | basic | 模块加载/卸载、参数验证、重复加载保护 |
+| 02 | `procfs_interface` | ~16 | basic | Procfs 接口读写、格式验证、空输入拒绝 |
+| 03 | `ban_unban` | ~4 | basic | 基本封禁/解封、批量操作、循环稳定性 |
+| 04 | `whitelist` | ~11 | basic | 白名单添加/移除、IP/子网支持、保留地址保护 |
 
 #### 安全防护类
 
 | 编号 | 套件名称 | 测试数 | 类别 | 说明 |
 |------|----------|--------|------|------|
-| 14 | `ban_netfilter` | - | security | Netfilter 封禁验证、数据包过滤测试 |
+| 14 | `ban_netfilter` | ~9 | security | Netfilter 封禁验证、数据包过滤测试 |
 
 #### 守护进程类
 
 | 编号 | 套件名称 | 测试数 | 类别 | 说明 |
 |------|----------|--------|------|------|
-| 09 | `daemon_config` | 10 | daemon | YAML 配置加载、目录加载、无效配置处理 |
-| 10 | `daemon_logparse` | 4 | daemon | 日志解析（sshd/vsftpd/nginx/frp） |
-| 13 | `frp_jail` | 9 | daemon | FRP Jail 隔离、独立配置验证 |
+| 09 | `daemon_config` | ~7 | daemon | YAML 配置加载、目录加载、无效配置处理 |
+| 10 | `daemon_logparse` | ~6 | daemon | 日志解析（sshd/vsftpd/nginx/frp） |
+| 13 | `frp_jail` | ~6 | daemon | FRP Jail 隔离、独立配置验证 |
 
 #### 性能与资源类
 
 | 编号 | 套件名称 | 测试数 | 类别 | 说明 |
 |------|----------|--------|------|------|
-| 07 | `concurrency` | 4 | performance | 并发访问安全、竞态条件检测 |
-| 08 | `stress_perf` | 5 | performance | 封禁/解封性能、压力测试、哈希碰撞 |
-| 11 | `resource_mgmt` | 5 | resource | 资源管理、内存安全、泄漏检测 |
-| 12 | `permanent_ban` | 16 | resource | SQLite 持久化、重启恢复、数据库完整性 |
+| 07 | `concurrency` | ~4 | performance | 并发访问安全、竞态条件检测 |
+| 08 | `stress_perf` | ~6 | performance | 封禁/解封性能、压力测试、哈希碰撞 |
+| 11 | `resource_mgmt` | ~5 | resource | 资源管理、内存安全、泄漏检测 |
+| 12 | `permanent_ban` | ~18 | resource | SQLite 持久化、重启恢复、数据库完整性 |
 
 ---
 
@@ -69,9 +69,6 @@ sudo ./tests/run_tests.sh --report
 
 # 调试模式（显示 [DEBUG] 日志）
 sudo ./tests/run_tests.sh --debug
-
-# 旧测试脚本兼容
-make test-legacy
 
 # 查看帮助
 sudo ./tests/run_tests.sh --help

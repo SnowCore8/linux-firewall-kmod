@@ -1,103 +1,68 @@
 # Firewall 运维操作手册
 
 **版本**: v2.0  
-**最后更新**: 2026-05-04
-
----
+**最后更新**: 2026-05-05
 
 ## 1. 安装部署
 
-### 1.1 系统依赖
+### 1.1 系统要求
 
-```bash
-# Debian/Ubuntu
-sudo apt install -y build-essential linux-headers-$(uname -r) libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev
-# RHEL/CentOS/Rocky
-sudo yum install -y gcc make kernel-devel kernel-headers libyaml-devel sqlite-devel libmicrohttpd-devel pcre2-devel
-```
+| 项目 | 要求 |
+|------|------|
+| 操作系统 | Linux (内核 5.15+) |
+| 架构 | x86_64 |
+| 依赖 | libyaml, libsqlite3, libmicrohttpd, libpcre2-8 |
+| 权限 | root (加载内核模块) |
 
 ### 1.2 编译安装
 
 ```bash
-make                    # 编译内核模块 + 守护进程
-sudo make install       # 安装到系统
-```
+# 安装依赖 (Debian/Ubuntu)
+sudo apt install -y build-essential linux-headers-$(uname -r) \
+  libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev
 
-安装路径：内核模块 → `/lib/modules/$(uname -r)/extra/firewall.ko`，守护进程 → `/usr/local/sbin/firewall-daemon`，配置 → `/etc/firewall/`，状态目录 → `/var/lib/firewall/`，systemd 服务 → `/etc/systemd/system/firewall-daemon.service`。
+# 编译
+make
+
+# 安装
+sudo make install
+```
 
 ### 1.3 手动安装
 
 ```bash
-sudo cp build/kernel-module/firewall.ko /lib/modules/$(uname -r)/extra/ && sudo depmod -a
+# 1. 安装内核模块
+sudo cp build/kernel-module/firewall.ko /lib/modules/$(uname -r)/extra/
+sudo depmod -a
+sudo modprobe firewall
+
+# 2. 安装守护进程
 sudo cp build/daemon/firewall-daemon /usr/local/sbin/
-sudo install -d -m 755 /etc/firewall && sudo install -m 644 config/*.yaml /etc/firewall/
-sudo install -d -m 750 /var/lib/firewall
-sudo install -D -m 644 firewall-daemon.service /etc/systemd/system/firewall-daemon.service && sudo systemctl daemon-reload
+
+# 3. 安装配置
+sudo mkdir -p /etc/firewall
+sudo cp config/*.yaml /etc/firewall/
+
+# 4. 安装 systemd 服务
+sudo cp firewall-daemon.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now firewall-daemon
 ```
 
----
+## 2. procfs 接口
 
-## 2. 日常操作
+所有操作通过 `/proc/firewall/` 目录进行。
 
-### 2.1 服务管理
+### 2.1 接口列表
 
-```bash
-sudo systemctl start firewall-daemon      # 启动
-sudo systemctl stop firewall-daemon       # 停止
-sudo systemctl restart firewall-daemon    # 重启
-sudo systemctl status firewall-daemon     # 状态
-sudo systemctl enable firewall-daemon     # 开机自启
-sudo systemctl reload firewall-daemon     # 热重载配置（SIGHUP）
-```
+| 路径 | 权限 | 功能 |
+|------|------|------|
+| `/proc/firewall/bans` | 0600 | 封禁列表管理 |
+| `/proc/firewall/whitelist` | 0600 | 白名单管理 |
+| `/proc/firewall/config` | 0600 | 运行时配置 |
+| `/proc/firewall/stats` | 0400 | 统计信息 |
 
-### 2.1.1 配置校验模式
-
-```bash
-# 严格模式（默认，未知参数报错）
-sudo ./build/daemon/firewall-daemon --strict
-sudo ./build/daemon/firewall-daemon -s
-
-# 宽松模式（未知参数仅警告）
-sudo ./build/daemon/firewall-daemon --permissive
-sudo ./build/daemon/firewall-daemon -p
-```
-
-### 2.1.2 完整命令行参数
-
-```bash
-sudo ./build/daemon/firewall-daemon [OPTIONS]
-
-选项：
-  -c, --config FILE      单个配置文件路径
-  -C, --config-dir DIR   配置目录（自动加载所有 .yaml/.yml 文件）
-                         默认：/etc/firewall/
-  -d, --daemon           以守护进程模式运行
-  -s, --strict           启用严格配置校验（默认）
-  -p, --permissive       允许未知参数并输出警告
-  -h, --help             显示帮助信息
-```
-
-### 2.2 封禁/解封与白名单
-
-```bash
-cat /proc/firewall/bans                              # 查看封禁列表
-echo "1.2.3.4" | sudo tee /proc/firewall/bans        # 默认时长封禁
-echo "1.2.3.4 3600" | sudo tee /proc/firewall/bans   # 自定义时长（秒）
-echo "1.2.3.4 0" | sudo tee /proc/firewall/bans      # 永久封禁
-echo "unban 1.2.3.4" | sudo tee /proc/firewall/bans  # 解封
-cat /proc/firewall/whitelist                         # 查看白名单
-echo "10.0.0.0/8" | sudo tee /proc/firewall/whitelist           # 添加白名单
-echo "add 192.168.1.0/24" | sudo tee /proc/firewall/whitelist   # 添加（显式）
-echo "remove 10.0.0.0/8" | sudo tee /proc/firewall/whitelist    # 移除白名单
-```
-
----
-
-## 3. procfs 接口完整参考
-
-所有接口需要 `CAP_NET_ADMIN` 权限（通过 `sudo` 获取）。
-
-### 3.1 /proc/firewall/bans（读写）
+### 2.2 封禁操作
 
 | 操作 | 格式 | 示例 |
 |------|------|------|
@@ -109,69 +74,95 @@ echo "remove 10.0.0.0/8" | sudo tee /proc/firewall/whitelist    # 移除白名�
 
 **限制**：封禁上限 1024 IP，ban_time 范围 30 秒 ~ 31,536,000 秒（1 年）。
 
-### 3.2 /proc/firewall/whitelist（读写）
+### 2.3 白名单操作
 
 | 操作 | 格式 | 示例 |
 |------|------|------|
 | 读取 | `cat` | `cat /proc/firewall/whitelist` |
-| 添加 | `CIDR` 或 `add CIDR` | `echo "10.0.0.0/8" \| sudo tee /proc/firewall/whitelist` |
-| 移除 | `remove CIDR` | `echo "remove 10.0.0.0/8" \| sudo tee /proc/firewall/whitelist` |
+| 添加子网 | `subnet/prefix` | `echo "10.0.0.0/8" \| sudo tee /proc/firewall/whitelist` |
+| 移除子网 | `remove subnet/prefix` | `echo "remove 10.0.0.0/8" \| sudo tee /proc/firewall/whitelist` |
 
-**限制**：白名单上限 64 条目，支持 CIDR 格式。
+**限制**：白名单上限 64 条目。
 
-### 3.3 /proc/firewall/config（读写）
+### 2.4 统计信息
 
 ```bash
-cat /proc/firewall/config                              # 查看当前配置
-echo "ban_time 1200" | sudo tee /proc/firewall/config  # 修改 ban_time
+cat /proc/firewall/stats
 ```
 
-目前仅支持运行时修改 `ban_time` 参数。
-
-### 3.4 /proc/firewall/stats（只读）
-
-```bash
-cat /proc/firewall/stats   # 输出：总封禁数、总解封数、当前活跃封禁数、白名单条目数
+输出示例：
+```
+current_bans: 15
+total_bans: 1234
+total_unbans: 1200
+packets_dropped: 56789
+packets_accepted: 1234567
+whitelist_entries: 5
 ```
 
----
-
-## 4. 内核模块管理
-
-### 4.1 加载与卸载
+## 3. 命令行参数
 
 ```bash
-sudo insmod build/kernel-module/firewall.ko fw_ban_time=600   # 加载
-sudo systemctl stop firewall-daemon && sudo rmmod firewall    # 卸载
+sudo ./build/daemon/firewall-daemon --help
 ```
 
-### 4.2 模块参数与状态检查
+选项：
+| 选项 | 说明 |
+|------|------|
+| `-c, --config FILE` | 单个配置文件路径 |
+| `-C, --config-dir DIR` | 配置目录（自动加载所有 .yaml/.yml 文件） |
+| `-f, --foreground` | 前台运行（不守护进程化） |
+| `-v, --verbose` | 详细日志输出 |
+| `-s, --strict` | 启用严格配置校验（默认） |
+| `-p, --permissive` | 允许未知参数并输出警告 |
+| `-h, --help` | 显示帮助信息 |
 
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `fw_ban_time` | 默认封禁时长（秒） | 600 |
-| `fw_max_bans_per_second` | 每秒最大封禁次数（洪泛保护） | 200 |
+## 4. systemd 服务管理
+
+### 4.1 基本操作
 
 ```bash
-cat /sys/module/firewall/parameters/fw_ban_time           # 查看参数
-echo 900 | sudo tee /sys/module/firewall/parameters/fw_ban_time  # 运行时修改
-lsmod | grep firewall          # 检查是否加载
-modinfo firewall               # 查看模块信息
-ls -la /proc/firewall/         # 检查 procfs 是否就绪
+# 启动服务
+sudo systemctl start firewall-daemon
+
+# 停止服务
+sudo systemctl stop firewall-daemon
+
+# 重启服务
+sudo systemctl restart firewall-daemon
+
+# 查看状态
+sudo systemctl status firewall-daemon
+
+# 查看日志
+sudo journalctl -u firewall-daemon -f
 ```
 
----
-
-## 5. 日志与监控
-
-### 5.1 日志查看
+### 4.2 开机自启
 
 ```bash
-dmesg | grep firewall          # 内核日志
-dmesg -w | grep firewall       # 实时跟踪
-sudo journalctl -u firewall-daemon      # 守护进程日志
-sudo journalctl -u firewall-daemon -f   # 实时跟踪
-grep firewall /var/log/syslog           # syslog 查看
+sudo systemctl enable firewall-daemon
+```
+
+### 4.3 服务加固
+
+`firewall-daemon.service` 已包含以下安全加固：
+- `ProtectSystem=strict`
+- `ProtectHome=yes`
+- `NoNewPrivileges=yes`
+- `PrivateTmp=yes`
+- `CapabilityBoundingSet=CAP_NET_ADMIN CAP_DAC_READ_SEARCH`
+
+## 5. 监控与可观测性
+
+### 5.1 日志
+
+```bash
+# 内核日志
+dmesg | grep firewall
+
+# 守护进程日志
+sudo journalctl -u firewall-daemon -n 100
 ```
 
 ### 5.2 Prometheus 指标
@@ -206,114 +197,114 @@ curl http://localhost:9119/healthz   # 健康检查（K8s 兼容）
 | `firewall_daemon_regex_matches_total` | counter | 正则匹配成功次数 |
 | `firewall_daemon_uptime_seconds` | gauge | 守护进程运行时间（秒） |
 
----
+### 5.3 Grafana 仪表板
+
+Prometheus 配置示例：
+```yaml
+scrape_configs:
+  - job_name: 'firewall'
+    static_configs:
+      - targets: ['localhost:9119']
+```
 
 ## 6. 故障排查
-
-### 6.0 常见问题速查
-
-| 错误现象 | 可能原因 | 解决方法 |
-|----------|----------|----------|
-| 配置加载失败：`Invalid config parameter` | 配置文件存在未知参数或拼写错误 | 检查配置文件，使用 `--permissive` 可临时绕过 |
-| 模块加载失败 | 内核 headers 不匹配或 Secure Boot 启用 | 安装对应版本 headers 或禁用 Secure Boot |
-| 守护进程无法启动 | 依赖库缺失或端口占用 | 检查 `ldd` 输出和端口占用情况 |
-| 封禁不生效 | IP 在白名单或模块未加载 | 检查白名单列表和模块状态 |
-| 日志解析失败 | 日志文件不存在或 regex 不匹配 | 检查文件路径和正则表达式 |
 
 ### 6.1 模块加载失败
 
 ```bash
-ls /lib/modules/$(uname -r)/build        # 检查内核 headers
-mokutil --sb-state                       # 检查 Secure Boot
-sudo insmod build/kernel-module/firewall.ko && dmesg | tail -20
+# 检查内核版本
+uname -r
+
+# 检查模块依赖
+modinfo build/kernel-module/firewall.ko
+
+# 查看内核日志
+dmesg | tail -20
 ```
 
-**解决**：安装对应版本 `linux-headers`，或禁用 Secure Boot。
-
-### 6.2 守护进程无法启动
+### 6.2 守护进程启动失败
 
 ```bash
-ldd /usr/local/sbin/firewall-daemon          # 检查依赖库
-sudo ss -tlnp | grep 9119                    # 检查端口占用
-sudo journalctl -u firewall-daemon -n 50     # 查看最近日志
-```
+# 检查配置文件
+sudo ./build/daemon/firewall-daemon -c config/default.yaml --strict
 
-**解决**：安装缺失依赖（libyaml、libsqlite3、libmicrohttpd、libpcre2）。
+# 检查日志
+sudo journalctl -u firewall-daemon -n 50 --no-pager
+
+# 检查端口占用
+sudo ss -tlnp | grep 9119
+```
 
 ### 6.3 封禁不生效
 
 ```bash
-lsmod | grep firewall                        # 检查模块加载
-cat /proc/firewall/whitelist                 # 检查是否在白名单
-dmesg | grep firewall | tail -20             # 查看内核日志
+# 检查模块是否加载
+lsmod | grep firewall
+
+# 检查 procfs 接口
+cat /proc/firewall/bans
+
+# 检查统计信息
+cat /proc/firewall/stats
+
+# 检查内核日志
+dmesg | grep firewall
 ```
 
-### 6.4 配置文件语法错误
+### 6.4 性能问题
 
 ```bash
-python3 -c "import yaml; yaml.safe_load(open('/etc/firewall/default.yaml'))"
+# 查看封禁表使用率
+cat /proc/firewall/stats | grep current_bans
+
+# 查看 Prometheus 指标
+curl -s http://localhost:9119/metrics | grep firewall
+
+# 检查系统负载
+top -p $(pgrep firewall-daemon)
 ```
 
-**常见错误**：缩进不一致、缺少冒号、非法字符。
+## 7. 维护操作
 
-### 6.5 日志解析失败
+### 7.1 配置热重载
 
 ```bash
-ls -la /var/log/auth.log                     # 检查日志文件存在
-sudo journalctl -u firewall-daemon | grep -i parse  # 查看解析错误
+# 修改配置后重载
+sudo kill -HUP $(cat /run/firewall-daemon.pid)
+
+# 或使用 systemctl
+sudo systemctl reload firewall-daemon
 ```
 
----
-
-## 7. 调试模式
-
-### 7.1 内核模块调试
+### 7.2 状态保存/恢复
 
 ```bash
-make kernel-module DEBUG_LEVEL=0   # 生产环境（关闭调试）
-make debug1                        # 少量调试
-make debug2                        # 中等调试
-make debug3                        # 详细调试
+# 手动保存状态
+echo "save /var/lib/firewall/state.bin" | sudo tee /proc/firewall/config
+
+# 手动恢复状态
+echo "restore /var/lib/firewall/state.bin" | sudo tee /proc/firewall/config
 ```
 
-DEBUG_LEVEL 范围 0-4，加载后通过 `dmesg -w | grep firewall` 查看输出。
+### 7.3 清理过期封禁
 
-### 7.2 守护进程调试与 ASAN
+过期封禁由内核定时器自动清理，无需手动操作。
 
-```bash
-sudo ./build/daemon/firewall-daemon -c config/default.yaml   # 前台运行
-make asan    # ASAN 内存检测
-ASAN_OPTIONS=detect_leaks=1 sudo ./build/daemon/firewall-daemon-asan -c config/default.yaml
-```
+## 8. 已知限制
 
----
+| 限制 | 说明 |
+|------|------|
+| 封禁容量 | 最多 1024 个 IP |
+| 白名单容量 | 最多 64 个条目 |
+| IPv6 支持 | 仅支持 IPv4 |
+| 分片包 | 无法检查分片包内容，直接放行 |
+| 内核版本 | 需要 5.15+ 内核 |
 
-## 8. 性能调优
+## 9. 性能基准
 
-### 8.1 基准测试数据
-
-| 操作 | 吞吐量 |
-|------|--------|
-| 封禁操作 | ~840 ops/ms |
-| 查询操作 | ~885 ops/ms |
-| 解封操作 | ~1235 ops/ms |
-| 白名单添加 | ~1220 ops/ms |
-| 白名单查询 | ~1227 ops/ms |
-
-> 注：v1.7 安全加固后性能约下降 1-2%（溢出检查开销）。
-
-### 8.2 调优建议
-
-- **ban_time**：推荐 600-3600 秒，避免过短导致频繁过期清理
-- **max_retries**：sshd 推荐 5 次，公开服务可降至 3 次
-- **findtime**：推荐 300-600 秒，与 max_retries 配合使用
-- **SQLite 维护**：定期检查数据库大小，必要时执行 `VACUUM`
-
-### 8.3 监控告警阈值
-
-| 指标 | 警告 | 严重 |
+| 操作 | 延迟 | 说明 |
 |------|------|------|
-| `active_bans` | > 800 | > 1000 |
-| `parse_errors_total`（每分钟） | > 10 | > 50 |
-| 守护进程 CPU 使用率 | > 30% | > 60% |
-| SQLite 数据库大小 | > 100MB | > 500MB |
+| 封禁查找 | <1μs | O(1) 哈希查找 |
+| 数据包过滤 | <0.5μs | Netfilter 钩子 |
+| 日志解析 | ~10μs | PCRE2 JIT 加速 |
+| 失败追踪 | <1μs | khash O(1) 插入 |

@@ -1,6 +1,6 @@
 # Firewall
 
-**版本**: v2.0（严格配置校验模式 + 代码质量改进）
+**版本**: v2.0
 
 [![CI](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml/badge.svg)](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](LICENSE)
@@ -19,11 +19,9 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁
 - ✅ C 语言用户态守护进程（无 Python 依赖）
 - ✅ PCRE2 正则表达式日志解析（JIT 加速，ReDoS 防护）
 - ✅ RCU 并发安全 + spinlock 保护
-- ✅ **严格配置校验模式**（v2.0 新增）— 未知参数或无效值直接报错拒绝加载
+- ✅ **严格配置校验模式** — 未知参数或无效值直接报错拒绝加载
 - ✅ 状态持久化（SQLite 保存/恢复永久封禁）
 - ✅ Prometheus 指标导出（端口 9119）
-
-> v1.7/v1.8 详细变更（libmicrohttpd/PCRE2 替换、安全加固等）请查看 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 快速开始
 
@@ -101,8 +99,8 @@ sudo ./build/daemon/firewall-daemon --permissive  # 宽松模式（仅警告）
 | [CONFIGURATION.md](docs/CONFIGURATION.md) | 完整配置说明：YAML Jail 格式、参数详解、严格/宽松模式、热重载、自定义正则 |
 | [OPERATIONS.md](docs/OPERATIONS.md) | 运维操作手册：安装部署、procfs 接口、命令行参数、故障排查、性能调优 |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计文档：内核模块设计、守护进程设计、数据流、组件交互、模块依赖 |
-| [TESTING.md](docs/TESTING.md) | 测试框架文档：147 项测试覆盖、运行方式、编写新测试 |
-| [SECURITY.md](docs/SECURITY.md) | 安全特性详解：编译选项、systemd 加固、v1.7/v1.9/v2.0 安全修复 |
+| [TESTING.md](docs/TESTING.md) | 测试框架文档：106 项测试覆盖、运行方式、编写新测试 |
+| [SECURITY.md](docs/SECURITY.md) | 安全特性详解：编译选项、systemd 加固、安全修复 |
 | [PERMANENT_BAN_GUIDE.md](docs/PERMANENT_BAN_GUIDE.md) | 永久封禁指南：SQLite 持久化、数据库 schema、使用方法 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更日志：v1.0 至 v2.0 详细变更记录 |
 
