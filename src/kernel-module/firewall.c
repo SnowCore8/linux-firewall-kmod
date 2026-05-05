@@ -2178,17 +2178,21 @@ int restore_state_from_file(const char *filename)
                             /* 修复 1.1：使用 RCU 检查重复，防止状态文件包含重复条目 */
                             {
                                 struct ban_entry *existing;
-                                u32 hash = hash_min(ip, BAN_HASH_BITS);
+                                bool found = false;
 
                                 rcu_read_lock();
                                 hash_for_each_possible_rcu(fw_info.ban_table, existing, hash, ip) {
                                     if (compare_ips(existing->ip, ip)) {
-                                        rcu_read_unlock();
-                                        fw_pr_info("Skipping duplicate ban for IPv4 %s", ip_str);
-                                        goto skip_ban_entry;
+                                        found = true;
+                                        break;
                                     }
                                 }
                                 rcu_read_unlock();
+
+                                if (found) {
+                                    fw_pr_info("Skipping duplicate ban for IPv4 %s", ip_str);
+                                    goto skip_ban_entry;
+                                }
                             }
 
                             /* 在锁外分配内存（GFP_KERNEL 安全） */

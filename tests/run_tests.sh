@@ -267,13 +267,21 @@ run_suite() {
     # 执行前验证模块就绪
     fw_log_debug "执行前检查模块状态: $suite_key"
     if ! check_module_ready; then
-        fw_log_error "模块未就绪，跳过测试套件: $suite_key"
-        fw_log_debug "lsmod: $(lsmod 2>/dev/null | grep firewall || echo 'not found')"
-        fw_log_debug "procfs: $([ -d "$PROC_DIR" ] && echo 'exists' || echo 'missing')"
-        TEST_SKIP=$((TEST_SKIP + 1))
-        TEST_TOTAL=$((TEST_TOTAL + 1))
-        TEST_RESULTS+=("SKIP|$suite_key|模块未就绪，跳过整个套件")
-        return 1
+        fw_log_warn "模块未就绪，尝试重新加载..."
+        # 尝试重新加载模块
+        fw_ensure_module_unloaded 2>/dev/null || true
+        if fw_ensure_module_loaded "$KERNEL_MODULE_PATH"; then
+            fw_log_info "模块重新加载成功，继续执行 $suite_key"
+            sleep 0.5
+        else
+            fw_log_error "模块重新加载失败，跳过测试套件: $suite_key"
+            fw_log_debug "lsmod: $(lsmod 2>/dev/null | grep firewall || echo 'not found')"
+            fw_log_debug "procfs: $([ -d "$PROC_DIR" ] && echo 'exists' || echo 'missing')"
+            TEST_SKIP=$((TEST_SKIP + 1))
+            TEST_TOTAL=$((TEST_TOTAL + 1))
+            TEST_RESULTS+=("SKIP|$suite_key|模块未就绪且重新加载失败，跳过整个套件")
+            return 1
+        fi
     fi
 
     fw_log_info "运行测试套件: $suite_key"

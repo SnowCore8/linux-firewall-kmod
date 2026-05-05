@@ -68,6 +68,13 @@ else
     fi
 fi
 
+# 修复：重新加载模块，确保后续测试套件可以正常执行
+insmod "$KERNEL_MODULE_PATH" 2>/dev/null || true
+sleep 0.5
+if [[ ! -d "$PROC_DIR" ]]; then
+    fw_log_error "模块重新加载失败，后续测试套件将跳过"
+fi
+
 # 11.5 守护进程资源
 fw_subsection "守护进程资源检查"
 if [[ -x "$DAEMON_PATH" ]]; then
