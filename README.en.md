@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml/badge.svg)](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v2.0-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
+[![Release](https://img.shields.io/badge/release-v2.1-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
 [![Language](https://img.shields.io/badge/Language-C-blue.svg)]()
 [![Platform](https://img.shields.io/badge/Platform-Linux%205.x%20%7C%206.x-orange.svg)]()
 
@@ -27,7 +27,7 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 
 - ✅ **Kernel-space IP banning** — netfilter hooks for higher efficiency
 - ✅ **Jail system** — multi-service isolation like fail2ban
-- ✅ **Hash table storage** — 1024 capacity, O(1) lookup performance
+- ✅ **Hash table storage** — 4096 capacity, O(1) lookup performance
 - ✅ **Auto-expire cleanup** — periodic cleanup of expired bans
 - ✅ **IP whitelist protection** — auto-discovery + manual entries (64 capacity)
 - ✅ **procfs interface** — ban/unban/whitelist/config operations
@@ -37,6 +37,9 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 - ✅ **Strict config validation** — unknown params rejected by default
 - ✅ **State persistence** — SQLite for permanent ban recovery
 - ✅ **Prometheus metrics** — exported on port 9119
+- ✅ **Security Hardening** — Integer overflow protection, Use-After-Free fix, RCU consistency
+- ✅ **Performance Optimization** — Hash table capacity 4096, SQLite statement cache, whitelist two-stage matching
+- ✅ **Code Quality** — Unified goto cleanup pattern, extracted common config parsing functions
 
 ## Quick Start
 
@@ -87,12 +90,12 @@ sudo ./build/daemon/firewall-daemon --help                  # Help
 | [CONFIGURATION.md](docs/CONFIGURATION.md) | YAML Jail format, parameters, hot-reload | Configuration |
 | [OPERATIONS.md](docs/OPERATIONS.md) | Deployment, procfs API, troubleshooting | Operations |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Kernel design, data flow, components | Developers |
-| [TESTING.md](docs/TESTING.md) | 106 tests, how to run/write | Testers |
+| [TESTING.md](docs/TESTING.md) | 105 tests, how to run/write | Testers |
 | [SECURITY.md](docs/SECURITY.md) | Build options, systemd hardening | Security |
 | [PERMANENT_BAN_GUIDE.md](docs/PERMANENT_BAN_GUIDE.md) | SQLite persistence, DB schema | Advanced users |
 | [FAQ.md](docs/FAQ.md) | Frequently asked questions | All users |
 | [MIGRATION.md](docs/MIGRATION.md) | Migration guide from fail2ban | Migrating users |
-| [CHANGELOG.md](CHANGELOG.md) | v1.0 to v2.0 changelog | All users |
+| [CHANGELOG.md](CHANGELOG.md) | v1.0 to v2.1 changelog | All users |
 
 ## Use Cases
 

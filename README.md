@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml/badge.svg)](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v2.0-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
+[![Release](https://img.shields.io/badge/release-v2.1-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
 [![Language](https://img.shields.io/badge/Language-C-blue.svg)]()
 [![Platform](https://img.shields.io/badge/Platform-Linux%205.x%20%7C%206.x-orange.svg)]()
 
@@ -27,7 +27,7 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 
 - ✅ **内核态 IP 封禁** — netfilter hooks，比 iptables 用户态更高效
 - ✅ **Jail 系统** — 类似 fail2ban 的多服务隔离配置
-- ✅ **哈希表存储** — 1024 容量，O(1) 查找性能
+- ✅ **哈希表存储** — 4096 容量，O(1) 查找性能
 - ✅ **自动过期清理** — 定时清理过期封禁记录
 - ✅ **IP 白名单保护** — 自动发现系统 IP + 手动添加（64 容量）
 - ✅ **procfs 用户接口** — 封禁/解封/白名单/配置操作
@@ -37,6 +37,9 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 - ✅ **严格配置校验** — 未知参数或无效值直接报错拒绝加载
 - ✅ **状态持久化** — SQLite 保存/恢复永久封禁
 - ✅ **Prometheus 指标** — 端口 9119 导出监控指标
+- ✅ **安全加固** — 整数溢出防护、Use-After-Free 修复、RCU 一致性增强
+- ✅ **性能优化** — 哈希表容量 4096、SQLite 语句缓存、白名单两阶段匹配
+- ✅ **代码质量** — 统一 goto cleanup 模式、提取通用配置解析函数
 
 ## 快速开始
 
@@ -87,12 +90,12 @@ sudo ./build/daemon/firewall-daemon --help                  # 帮助
 | [CONFIGURATION.md](docs/CONFIGURATION.md) | YAML Jail 格式、参数详解、热重载 | 配置管理 |
 | [OPERATIONS.md](docs/OPERATIONS.md) | 安装部署、procfs API、故障排查 | 运维人员 |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 内核模块设计、数据流、组件交互 | 开发者 |
-| [TESTING.md](docs/TESTING.md) | 106 项测试覆盖、运行方式 | 测试人员 |
+| [TESTING.md](docs/TESTING.md) | 105 项测试覆盖、运行方式 | 测试人员 |
 | [SECURITY.md](docs/SECURITY.md) | 编译选项、systemd 加固 | 安全工程师 |
 | [PERMANENT_BAN_GUIDE.md](docs/PERMANENT_BAN_GUIDE.md) | SQLite 持久化、数据库 schema | 高级用户 |
 | [FAQ.md](docs/FAQ.md) | 常见问题解答 | 所有用户 |
 | [MIGRATION.md](docs/MIGRATION.md) | 从 fail2ban 迁移指南 | 迁移用户 |
-| [CHANGELOG.md](CHANGELOG.md) | v1.0 至 v2.0 变更记录 | 所有用户 |
+| [CHANGELOG.md](CHANGELOG.md) | v1.0 至 v2.1 变更记录 | 所有用户 |
 
 ## 适用场景
 
