@@ -323,18 +323,19 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
 
     /* 检查是否已被封禁 */
     hash = hash_min(ip, BAN_HASH_BITS);
-    hash_for_each_possible(fw->ban_table, entry, hash, ip) {
-        if (compare_ips(entry->ip, ip)) {
-            if (entry->is_permanent || time_before(jiffies, entry->unban_time)) {
+    struct ban_entry *existing;
+    hash_for_each_possible(fw->ban_table, existing, hash, ip) {
+        if (compare_ips(existing->ip, ip)) {
+            if (existing->is_permanent || time_before(jiffies, existing->unban_time)) {
                 spin_unlock(&fw->lock);
                 kfree(entry);  /* 释放预分配的内存 */
                 return 0;  /* 已被封禁 */
             } else {
                 /* 条目存在但已过期 — 更新它 */
-                entry->ban_time = jiffies;
-                entry->unban_time = unban_time;
-                entry->is_permanent = is_permanent;
-                atomic_set(&entry->retry_count, 0);
+                existing->ban_time = jiffies;
+                existing->unban_time = unban_time;
+                existing->is_permanent = is_permanent;
+                atomic_set(&existing->retry_count, 0);
                 spin_unlock(&fw->lock);
                 kfree(entry);  /* 释放预分配的内存 */
                 return 0;
