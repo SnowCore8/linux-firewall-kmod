@@ -1,41 +1,58 @@
-# Security Policy
+# 安全策略
 
-## Supported Versions
+## 支持的版本
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 2.0.x   | :white_check_mark: |
-| < 2.0   | :x:                |
+| 版本 | 是否支持 |
+|------|----------|
+| 2.0.x | :white_check_mark: |
+| < 2.0 | :x: |
 
-## Reporting a Vulnerability
+## 报告漏洞
 
-We take security seriously. If you discover a security vulnerability, please follow these steps:
+我们认真对待安全问题。如果您发现安全漏洞，请遵循以下流程：
 
-1. **DO NOT** open a public issue
-2. Email us directly or use GitHub's private vulnerability reporting
-3. Include:
-   - Description of the vulnerability
-   - Steps to reproduce
-   - Potential impact
-   - Suggested fix (if any)
+1. **不要**提交公开 Issue
+2. 通过邮件联系我们，或使用 GitHub 的私有漏洞报告功能
+3. 报告内容请包含：
+   - 漏洞描述
+   - 复现步骤
+   - 潜在影响
+   - 修复建议（可选）
 
-We will respond within 48 hours and work to address the issue promptly.
+我们将在 **48 小时内**响应并尽快修复问题。
 
-## Security Best Practices
+## 安全最佳实践
 
-- Always run the daemon with systemd security hardening
-- Use strict configuration validation mode (default)
-- Keep your kernel and dependencies up to date
-- Monitor Prometheus metrics for unusual activity
-- Review logs regularly for attack patterns
+| 实践 | 说明 |
+|------|------|
+| systemd 加固 | 始终通过 systemd 启动守护进程，启用安全沙箱 |
+| 严格验证 | 保持配置验证模式为严格（默认开启） |
+| 及时更新 | 保持内核和依赖库为最新版本 |
+| 监控指标 | 通过 Prometheus（端口 9119）监控异常活动 |
+| 日志审查 | 定期审查日志，识别攻击模式 |
 
-## Security Features
+## 安全特性概览
 
-- Security compilation flags (PIE, RELRO, Stack Protector)
-- RCU concurrency safety
-- Input validation on all interfaces
-- Path traversal protection
-- ReDoS prevention for custom regex
-- TOCTOU race condition fixes
+本项目内置多层安全防护机制，包括：
 
-Thank you for helping keep Firewall secure!
+- **编译安全**：PIE、RELRO、Stack Protector 等安全编译标志
+- **运行时加固**：systemd 沙箱、最小权限原则
+- **输入验证**：IP 地址过滤、路径遍历防护、URL 编码检测
+- **并发安全**：RCU 无锁读、单锁写设计
+- **内存安全**：预分配策略、RCU 安全释放、TOCTOU 防护
+- **正则安全**：ReDoS 危险模式检测、长度限制、超时保护
+
+> 详细技术实现请参考 [安全特性文档](docs/SECURITY.md)。
+
+## 安全修复历史
+
+| 版本 | 修复内容 |
+|------|---------|
+| v2.0 | RCU 安全性修复、TOCTOU 竞态修复、缓冲区溢出修复 |
+| v1.9 | SQLite 线程安全保护、状态持久化修复 |
+| v1.8 | libmicrohttpd 替换（安全更新） |
+| v1.7 | PCRE2 替换（ReDoS 防护） |
+
+完整修复详情请参阅 [安全特性文档](docs/SECURITY.md)。
+
+感谢您的协助，共同维护项目安全！

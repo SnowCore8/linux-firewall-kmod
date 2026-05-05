@@ -140,12 +140,9 @@ rcu_read_unlock()                spin_unlock(&fw->lock)
 
 ### 3.5 procfs 接口
 
-| 路径 | 权限 | 功能 |
-|------|------|------|
-| `/proc/firewall/bans` | 0600 | 封禁列表管理（读/写） |
-| `/proc/firewall/whitelist` | 0600 | 白名单管理（读/写） |
-| `/proc/firewall/config` | 0600 | 运行时配置（读/写） |
-| `/proc/firewall/stats` | 0400 | 统计信息（只读） |
+内核模块通过 `/proc/firewall/` 目录提供用户态交互接口，包括封禁管理、白名单管理、运行时配置和统计信息。
+
+详细的接口操作说明、命令示例和限制条件，请参考 [运维操作手册 → procfs 接口](OPERATIONS.md#2-procfs-接口)。
 
 ## 4. 守护进程设计
 

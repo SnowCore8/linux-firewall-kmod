@@ -1,14 +1,25 @@
 # 贡献指南
 
-感谢你关注本项目！无论是修复 Bug、添加功能、改进文档，还是提出建议，每一份贡献都弥足珍贵。
+## 欢迎贡献
 
-## 快速开始
+感谢你关注 **linux-firewall-kmod** 项目！无论是修复 Bug、添加新功能、改进文档，还是提出建议，每一份贡献都让项目变得更好。
 
-### 环境准备
+## 开始之前
 
-**系统要求**：Linux 内核 4.19+（推荐 5.10+），x86_64 架构
+- 阅读 [README.md](README.md) 了解项目目标和核心特性
+- 浏览 [文档索引](docs/README.md) 熟悉项目文档
+- 查看现有 [Issues](https://github.com/SnowCore8/linux-firewall-kmod/issues) 避免重复
+- 阅读 [Git 工作流规范](docs/GIT_WORKFLOW.md) 了解协作流程
 
-**安装依赖**：
+## 开发环境设置
+
+### 系统要求
+
+- **操作系统**：Linux（Debian/Ubuntu 或 RHEL/CentOS/Fedora）
+- **内核版本**：4.19+（推荐 5.10+）
+- **架构**：x86_64
+
+### 安装依赖
 
 ```bash
 # Debian/Ubuntu
@@ -22,69 +33,106 @@ sudo dnf install gcc make kernel-devel kernel-headers \
   pkg-config git
 ```
 
-### 编译项目
+### 克隆与编译
 
 ```bash
-git clone https://github.com/SnowCore8/firewall.git
-cd firewall
+git clone https://github.com/SnowCore8/linux-firewall-kmod.git
+cd linux-firewall-kmod
 
-# 编译内核模块
-make modules
+# 编译内核模块 + 守护进程
+make
 
-# 编译用户态守护进程
-make userland
+# 仅编译内核模块
+make kernel-module
 
-# 完整编译（内核模块 + 用户态）
-make all
+# 仅编译守护进程
+make daemon
 ```
 
 ### 运行测试
 
 ```bash
-# 运行全部测试
+# 运行全部测试（12 个套件，106 项测试）
 make test
 
-# 运行单元测试
+# 仅运行单元测试
 make unit-test
 
-# 运行集成测试
+# 仅运行集成测试
 make integration-test
 ```
 
-## Git 工作流
+## 贡献方式
 
-本项目采用 **Fork + Pull Request** 协作模式。
+### 1. 报告 Bug
 
-### 分支命名规范
+使用 [Bug 报告模板](.github/ISSUE_TEMPLATE/bug_report.md) 提交 Issue，包含：
+- 环境信息（内核版本、发行版、项目版本）
+- 问题描述和复现步骤
+- 预期行为与实际行为
+- 相关日志输出（kernel log、daemon log）
 
-| 分支类型 | 命名格式 | 示例 |
-|----------|----------|------|
-| 新功能 | `feature/<简短描述>` | `feature/ipv6-support` |
-| Bug 修复 | `fix/<简短描述>` | `fix/race-condition-in-lookup` |
-| 紧急修复 | `hotfix/<简短描述>` | `hotfix/critical-memory-leak` |
-| 文档更新 | `docs/<简短描述>` | `docs/update-api-reference` |
-| 重构 | `refactor/<简短描述>` | `refactor/extract-rule-parser` |
-| 性能优化 | `perf/<简短描述>` | `perf/optimize-hash-resize` |
+### 2. 提出新功能
 
-**命名要求**：
-- 使用小写字母和连字符（kebab-case）
-- 描述简洁明确，不超过 5 个单词
-- 避免使用缩写（除非是广泛认可的，如 `api`、`ip`）
+使用 [功能请求模板](.github/ISSUE_TEMPLATE/feature_request.md) 提交 Issue，说明：
+- 功能描述和使用场景
+- 替代方案（如有）
+- 参考实现或设计思路
 
-### PR 提交流程
+### 3. 提交代码修复
 
-1. Fork 本仓库到你的 GitHub 账号
-2. 从 `main` 分支创建功能分支
-3. 在功能分支上进行开发
-4. 提交变更（遵循[提交规范](#提交规范)）
-5. 推送功能分支到你的 Fork
-6. 向本仓库的 `main` 分支发起 Pull Request
+1. 在 Issue 中说明你打算修复的问题
+2. Fork 仓库并创建功能分支
+3. 编写代码并添加测试
+4. 确保所有测试通过
+5. 提交 Pull Request
 
-## 提交规范
+### 4. 改进文档
 
-本项目遵循 [Conventional Commits](https://www.conventionalcommits.org/) 规范。
+- 修正拼写错误或表述不清
+- 补充缺失的配置说明
+- 添加使用示例和最佳实践
+- 翻译文档为其他语言
 
-### 提交格式
+### 5. 添加测试用例
+
+- 为未覆盖的代码路径添加单元测试
+- 为边界条件添加回归测试
+- 完善集成测试场景
+
+## 代码规范
+
+### C 语言编码规范
+
+| 规则 | 说明 |
+|------|------|
+| 命名 | 函数/变量使用 `snake_case`，宏使用 `UPPER_CASE` |
+| 缩进 | 4 个空格，禁止使用 Tab |
+| 行宽 | 最大 100 字符 |
+| 括号 | K&R 风格，左括号不换行 |
+| 函数长度 | 单个函数不超过 50 行，复杂逻辑拆分为子函数 |
+
+### 注释规范
+
+- **统一使用中文注释**
+- 注释解释"为什么"而非"做什么"
+- 公共函数必须包含文档字符串（功能、参数、返回值）
+- 复杂算法必须包含思路说明
+
+```c
+/**
+ * 检查 IP 是否在白名单中
+ * @param ip 待检查的 IPv4 地址（网络字节序）
+ * @return 1 表示在白名单中，0 表示不在
+ * 
+ * 注意：使用 RCU 读端临界区，调用方无需额外加锁
+ */
+int whitelist_check(__be32 ip);
+```
+
+### 提交信息规范
+
+遵循 [Conventional Commits](https://www.conventionalcommits.org/) 规范：
 
 ```
 <type>(<scope>): <subject>
@@ -94,147 +142,73 @@ make integration-test
 <footer>
 ```
 
-### Type 类型
-
 | Type | 说明 | 示例 |
 |------|------|------|
 | `feat` | 新功能 | `feat(rules): add CIDR range matching support` |
 | `fix` | Bug 修复 | `fix(kernel): resolve RCU grace period deadlock` |
 | `docs` | 文档更新 | `docs(readme): add quick start guide` |
-| `style` | 代码格式（不影响功能） | `style: fix indentation in rule_parser.c` |
+| `style` | 代码格式 | `style: fix indentation in rule_parser.c` |
 | `refactor` | 代码重构 | `refactor(hash): simplify resize logic` |
 | `perf` | 性能优化 | `perf(lookup): reduce lock contention in hot path` |
 | `test` | 测试相关 | `test(rules): add edge case for empty rule file` |
-| `chore` | 构建/工具链变更 | `chore(ci): add kernel 6.1 to test matrix` |
+| `chore` | 构建/工具 | `chore(ci): add kernel 6.1 to test matrix` |
 
-### 提交示例
+## Pull Request 流程
 
-```bash
-# 简单提交
-git commit -m "feat(rules): add port range matching support"
+### 1. Fork 仓库
 
-# 完整提交（含 body 和 footer）
-git commit -m "fix(kernel): resolve RCU grace period deadlock
+在 GitHub 上点击 "Fork" 将仓库复制到你的账号。
 
-The lookup function was accessing freed memory during hash resize.
-This patch adds proper RCU read-side critical section to prevent
-use-after-free.
-
-Fixes #42"
-```
-
-### Subject 书写要求
-
-- 使用祈使句（"add" 而非 "added"）
-- 首字母小写
-- 结尾不加句号
-- 长度不超过 72 个字符
-
-## 开发流程
-
-### 完整流程图
-
-```
-克隆仓库 → 创建分支 → 开发实现 → 运行测试 → 提交变更 → 发起 PR → 代码审查 → 合并
-```
-
-### 详细步骤
-
-**1. 克隆仓库**
+### 2. 创建功能分支
 
 ```bash
-git clone https://github.com/SnowCore8/firewall.git
-cd firewall
-```
-
-**2. 创建功能分支**
-
-```bash
+git clone https://github.com/<your-username>/linux-firewall-kmod.git
+cd linux-firewall-kmod
 git checkout main
-git pull origin main
 git checkout -b feature/your-feature-name
 ```
 
-**3. 开发实现**
-
-- 遵循项目[代码风格](#代码风格)
-- 保持函数职责单一
-- 添加必要的注释和日志
-
-**4. 运行测试**
+### 3. 开发与提交
 
 ```bash
-# 确保所有测试通过
+# 编写代码...
+
+# 确保测试通过
 make test
 
-# 检查代码格式
-make lint
-
-# 检查内存泄漏（需要 valgrind）
-make valgrind
-```
-
-**5. 提交变更**
-
-```bash
+# 提交变更
 git add <files>
 git commit -m "feat(scope): your commit message"
 ```
 
-**6. 推送并发起 PR**
+### 4. 推送并创建 PR
 
 ```bash
 git push origin feature/your-feature-name
 ```
 
-然后在 GitHub 上创建 Pull Request。
+在 GitHub 上向本仓库的 `main` 分支发起 Pull Request。
 
-## 测试要求
+### 5. 代码审查
 
-### 测试层级
+维护者会在 48 小时内响应。审查通过后即可合并。
 
-| 层级 | 说明 | 命令 |
-|------|------|------|
-| 单元测试 | 测试单个函数/模块 | `make unit-test` |
-| 集成测试 | 测试模块间交互 | `make integration-test` |
-| 端到端测试 | 完整场景验证 | `make e2e-test` |
+### 6. 合并
 
-### 覆盖率要求
+PR 合并后，功能分支可安全删除。
 
-- **新功能**：必须附带单元测试，行覆盖率 ≥ 80%
-- **Bug 修复**：必须添加回归测试
-- **核心模块**（内核态规则匹配、用户态配置解析）：行覆盖率 ≥ 90%
+## PR 检查清单
 
-### 编写测试
-
-```c
-// tests/test_rule_parser.c
-void test_parse_cidr_rule(void) {
-    const char *yaml = "rule:\n  ip: 192.168.1.0/24\n  action: drop";
-    rule_t *rule = rule_parse(yaml);
-
-    assert(rule != NULL);
-    assert(rule->type == RULE_TYPE_CIDR);
-    assert(rule->ip.addr == 0xC0A80100);
-    assert(rule->ip.prefix == 24);
-
-    rule_free(rule);
-}
-```
-
-## 代码审查
-
-### PR 要求
-
-发起 PR 时请确保：
+发起 PR 前请确认：
 
 - [ ] 代码通过所有测试（`make test`）
 - [ ] 遵循 Conventional Commits 提交规范
-- [ ] 新功能已添加对应测试
+- [ ] 新功能已添加对应测试用例
 - [ ] 文档已同步更新
 - [ ] PR 描述清晰，说明变更内容和原因
+- [ ] 无敏感信息泄露（密钥、配置等）
 
-### 审查标准
+## 审查标准
 
 | 维度 | 要求 |
 |------|------|
@@ -244,115 +218,19 @@ void test_parse_cidr_rule(void) {
 | 可读性 | 命名清晰，注释充分 |
 | 测试 | 覆盖正常路径和边界情况 |
 
-### 审查流程
+## 行为准则
 
-1. 维护者收到 PR 后 48 小时内响应
-2. 审查者提出修改建议或批准合并
-3. 贡献者根据反馈修改代码
-4. 审查通过后由维护者合并到 `main` 分支
-
-## 文档更新
-
-**代码变更时，必须同步更新相关文档**：
-
-| 变更类型 | 需要更新的文档 |
-|----------|----------------|
-| 新增配置项 | `docs/configuration.md` |
-| 新增 API | `docs/api/` 目录 |
-| 架构变更 | `docs/architecture.md` |
-| 部署变更 | `docs/deployment.md` |
-| 用户可见变更 | `CHANGELOG.md` |
-
-文档编写要求：
-- 使用中文
-- 代码示例可运行
-- 参数说明完整
-- 标注版本信息（如适用）
-
-## 问题报告
-
-### 提交 Issue
-
-在 [Issues](https://github.com/SnowCore8/firewall/issues) 页面创建新问题。
-
-### Bug 报告模板
-
-```markdown
-## 环境信息
-- 内核版本：`uname -r`
-- 发行版：如 Ubuntu 22.04
-- 项目版本：`git describe --tags`
-
-## 问题描述
-清晰简洁地描述你遇到的问题。
-
-## 复现步骤
-1. 执行 '...'
-2. 配置 '...'
-3. 触发 '...'
-
-## 预期行为
-描述你期望发生什么。
-
-## 实际行为
-描述实际发生了什么。
-
-## 日志输出
-```
-# 粘贴相关日志（kernel log、daemon log）
-```
-
-## 附加信息
-其他有助于排查的信息（配置文件、网络拓扑等）。
-```
-
-### 功能请求模板
-
-```markdown
-## 功能描述
-清晰简洁地描述你想要的功能。
-
-## 使用场景
-说明这个功能能解决什么问题。
-
-## 替代方案
-描述你考虑过的替代解决方案。
-
-## 附加信息
-其他相关信息或参考实现。
-```
-
----
-
-## 项目理念
-
-- **简洁优先** — 每个模块职责单一，代码易读
-- **安全第一** — 内核态防护，输入严格验证
-- **性能导向** — O(1) 查找，RCU 无锁读取
-- **文档完整** — 代码即文档，注释解释"为什么"
-
-## 技术栈
-
-- **语言**: C (C99/C11)
-- **内核框架**: Netfilter + RCU + procfs
-- **外部库**: libyaml, libsqlite3, libmicrohttpd, libpcre2-8
-- **第三方库**: khash.h (MIT)
-
-## 开发工具链
-
-| 工具 | 用途 |
-|------|------|
-| [OpenCode](https://opencode.ai) | AI 编程助手（代码编写、审查、重构） |
-| GCC | C 编译器 |
-| Kbuild | 内核模块构建系统 |
-| GNU Make | 项目构建 |
-| GitHub Actions | CI/CD 自动化 |
+- 尊重每一位贡献者，使用友好、包容的语言
+- 接受建设性批评，专注于问题而非个人
+- 维护社区和谐，禁止人身攻击或歧视性言论
+- 发现不当行为请联系项目维护者
 
 ## 许可证
 
-本项目采用 MIT License — 详见 [LICENSE](LICENSE)
+本项目采用 [MIT License](LICENSE) 开源协议。提交代码即表示你同意将代码以 MIT License 发布。
 
 ## 联系方式
 
 - **GitHub**: [@SnowCore8](https://github.com/SnowCore8)
 - **邮箱**: snowcore8@gmail.com
+- **Issues**: [提交问题或建议](https://github.com/SnowCore8/linux-firewall-kmod/issues)

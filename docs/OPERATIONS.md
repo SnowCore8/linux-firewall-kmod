@@ -51,7 +51,9 @@ sudo systemctl enable --now firewall-daemon
 
 ## 2. procfs 接口
 
-所有操作通过 `/proc/firewall/` 目录进行。
+> **架构说明**：procfs 接口的内部实现和设计原理，请参考 [架构设计文档 → procfs 接口](ARCHITECTURE.md#35-procfs-接口)。
+
+所有操作通过 `/proc/firewall/` 目录进行，需要 root 权限。
 
 ### 2.1 接口列表
 
