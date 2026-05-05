@@ -226,7 +226,7 @@ bool is_in_whitelist(struct firewall_info *fw, __be32 ip)
     /* 检查白名单表中的所有条目以正确处理子网匹配。
      * 注意：这是 O(n) 的，因为不同前缀长度可能哈希到不同桶。
      * 对于常见的 /32 条目，可以使用 hash_for_each_possible_rcu()，
-     * 但子网需要完整遍历。MAX_WHITELIST_ENTRIES=64 时这是可接受的。
+     * 但子网需要完整遍历。MAX_WHITELIST_ENTRIES=MAX_DISCOVERED_IPS 时这是可接受的。
      */
     hash_for_each_rcu(fw->whitelist_table, hash, entry, hash) {
         /* 子网匹配逻辑：检查 IP 是否在子网范围内 */
@@ -682,6 +682,237 @@ struct temp_ip_entry {
     char name[16];
 };
 
+/*
+ * sync_work_handler - 延迟工作队列处理函数（防抖后执行）
+ */
+static void sync_work_handler(struct work_struct *work)
+{
+    struct firewall_info *fw;
+    struct temp_ip_entry *current_ips;
+    int current_count = 0;
+    struct net_device *dev;
+    struct in_device *in_dev;
+    struct in_ifaddr *ifa;
+    struct whitelist_entry *entry;
+    struct hlist_node *tmp;
+    u32 bkt;
+    int i;
+
+    fw = container_of(work, struct firewall_info, sync_work.work);
+
+    FW_DEBUG(1, "ENTRY: sync_work_handler");
+
+    /* 检查是否正在关闭 */
+    if (unlikely(atomic_read(&fw->shutting_down))) {
+        FW_DEBUG(2, "EXIT: sync_work_handler -> void (shutting down)");
+        return;
+    }
+
+    /* 分配临时数组存储当前系统 IP */
+    current_ips = kmalloc_array(MAX_DISCOVERED_IPS, sizeof(struct temp_ip_entry), GFP_KERNEL);
+    if (!current_ips) {
+        fw_pr_err("Failed to allocate current_ips");
+        return;
+    }
+
+    /* 在 RCU 保护下收集当前系统所有网卡 IP */
+    rcu_read_lock();
+    for_each_netdev_rcu(&init_net, dev) {
+        if (!(dev->flags & IFF_UP))
+            continue;
+
+        in_dev = __in_dev_get_rcu(dev);
+        if (in_dev) {
+            for (ifa = rcu_dereference(in_dev->ifa_list); ifa;
+                 ifa = rcu_dereference(ifa->ifa_next)) {
+                if (current_count >= MAX_DISCOVERED_IPS)
+                    break;
+
+                if (!ifa->ifa_local)
+                    continue;
+
+                current_ips[current_count].ip = ifa->ifa_local;
+                current_ips[current_count].mask = ifa->ifa_mask;
+                strscpy(current_ips[current_count].name, dev->name, 16);
+                current_count++;
+            }
+        }
+    }
+    rcu_read_unlock();
+
+    /* 如果没有发现任何 IP，早期返回 */
+    if (current_count == 0) {
+        fw_pr_debug("No active network interfaces with IPv4 found");
+        kfree(current_ips);
+        return;
+    }
+
+    /* 构建当前 IP 的查找表 */
+    struct current_ip_lookup {
+        __be32 ip;
+        __be32 mask;
+        bool found;
+    };
+    struct current_ip_lookup *lookup_table;
+    lookup_table = kmalloc_array(current_count, sizeof(struct current_ip_lookup), GFP_KERNEL);
+    if (!lookup_table) {
+        fw_pr_err("Failed to allocate lookup_table");
+        kfree(current_ips);
+        return;
+    }
+    for (i = 0; i < current_count; i++) {
+        lookup_table[i].ip = current_ips[i].ip & current_ips[i].mask;
+        lookup_table[i].mask = current_ips[i].mask;
+        lookup_table[i].found = false;
+    }
+
+    /* 遍历白名单，标记已存在的 auto-discovered 条目 */
+    spin_lock(&fw->whitelist_lock);
+    hash_for_each_safe(fw->whitelist_table, bkt, tmp, entry, hash) {
+        /* 只处理自动发现的条目（device_name 不是 "manual" 或 "restored"） */
+        if (strcmp(entry->device_name, "manual") == 0 ||
+            strcmp(entry->device_name, "restored") == 0) {
+            continue;
+        }
+
+        /* 检查该条目是否仍在当前系统 IP 列表中 */
+        for (i = 0; i < current_count; i++) {
+            __be32 normalized_current = current_ips[i].ip & current_ips[i].mask;
+            if (entry->ip == normalized_current && entry->mask == current_ips[i].mask) {
+                lookup_table[i].found = true;
+                break;
+            }
+        }
+
+        /* 如果该自动发现条目不再存在，标记删除 */
+        if (i == current_count) {
+            char ip_str[INET_ADDRSTRLEN];
+            ipv4_to_str(entry->ip, ip_str, sizeof(ip_str));
+            FW_DEBUG(2, "Removing stale whitelist entry for %s/%d on %s",
+                     ip_str, inet_mask_len(entry->mask), entry->device_name);
+            hlist_del_rcu(&entry->hash);
+            atomic_dec(&fw->whitelist_count);
+            call_rcu(&entry->rcu_head, free_whitelist_entry_rcu);
+        }
+    }
+    spin_unlock(&fw->whitelist_lock);
+
+    /* 添加新的系统 IP 到白名单 */
+    for (i = 0; i < current_count; i++) {
+        if (!lookup_table[i].found) {
+            if (add_whitelist_entry(fw, current_ips[i].ip, current_ips[i].mask, current_ips[i].name) < 0) {
+                fw_pr_warn("Failed to add system IPv4 %pI4 to whitelist during sync", &current_ips[i].ip);
+            }
+        }
+    }
+
+    kfree(lookup_table);
+    kfree(current_ips);
+
+    fw_pr_info_ratelimited("Sync complete. Current whitelist entries: %d", atomic_read(&fw->whitelist_count));
+    FW_DEBUG(1, "EXIT: sync_work_handler -> void (success, wl_count=%d)", atomic_read(&fw->whitelist_count));
+}
+
+/*
+ * sync_system_ips - 调度 IP 同步工作（带防抖）
+ * 当网卡发生变化时（IP 变化、网卡上下线等），延迟 500ms 后同步白名单
+ */
+void sync_system_ips(struct firewall_info *fw)
+{
+    unsigned long delay = msecs_to_jiffies(500);  /* 500ms 防抖延迟 */
+
+    FW_DEBUG(1, "ENTRY: sync_system_ips (scheduling with 500ms debounce)");
+
+    /* 检查是否正在关闭 */
+    if (unlikely(atomic_read(&fw->shutting_down))) {
+        FW_DEBUG(2, "EXIT: sync_system_ips -> void (shutting down)");
+        return;
+    }
+
+    /* 调度延迟工作，如果已有待处理的工作则更新延迟时间（实现防抖） */
+    mod_delayed_work(system_wq, &fw->sync_work, delay);
+
+    FW_DEBUG(1, "EXIT: sync_system_ips -> void (work scheduled)");
+}
+
+/*
+ * netdev_event_handler - 网络设备事件回调函数
+ * 监听网卡 IP 变化、网卡上下线等事件
+ */
+static int netdev_event_handler(struct notifier_block *nb, unsigned long event, void *ptr)
+{
+    struct firewall_info *fw;
+    struct net_device *dev;
+
+    fw = container_of(nb, struct firewall_info, netdev_notifier);
+
+    /* 检查是否正在关闭 */
+    if (unlikely(atomic_read(&fw->shutting_down)))
+        return NOTIFY_DONE;
+
+    dev = netdev_notifier_info_to_dev(ptr);
+    if (!dev)
+        return NOTIFY_DONE;
+
+    /* 只处理与 IP 地址变化相关的事件 */
+    switch (event) {
+    case NETDEV_UP:      /* 网卡启用，IP 已配置 */
+    case NETDEV_DOWN:    /* 网卡禁用，IP 失效 */
+    case NETDEV_CHANGE:  /* IP 地址变化（DHCP 续约等） */
+        fw_pr_debug_ratelimited("Network event %lu on device %s", event, dev->name);
+        /* 触发 IP 同步 */
+        sync_system_ips(fw);
+        break;
+    default:
+        break;
+    }
+
+    return NOTIFY_DONE;
+}
+
+/*
+ * register_netdev_notifier - 注册网络设备事件监听器
+ */
+int register_netdev_notifier(struct firewall_info *fw)
+{
+    int ret;
+
+    FW_DEBUG(1, "ENTRY: register_netdev_notifier");
+
+    fw->netdev_notifier.notifier_call = netdev_event_handler;
+
+    ret = register_netdevice_notifier(&fw->netdev_notifier);
+    if (ret) {
+        fw_pr_err("Failed to register netdevice notifier: %d", ret);
+        fw->netdev_notifier_registered = false;
+        FW_DEBUG(1, "EXIT: register_netdev_notifier -> %d", ret);
+        return ret;
+    }
+
+    fw->netdev_notifier_registered = true;
+    fw_pr_info("Network device notifier registered");
+    FW_DEBUG(1, "EXIT: register_netdev_notifier -> 0");
+    return 0;
+}
+
+/*
+ * unregister_netdev_notifier - 注销网络设备事件监听器
+ */
+void unregister_netdev_notifier(struct firewall_info *fw)
+{
+    FW_DEBUG(1, "ENTRY: unregister_netdev_notifier");
+
+    if (fw->netdev_notifier_registered) {
+        unregister_netdevice_notifier(&fw->netdev_notifier);
+        fw->netdev_notifier_registered = false;
+        fw_pr_info("Network device notifier unregistered");
+    } else {
+        fw_pr_debug("Network device notifier was not registered");
+    }
+
+    FW_DEBUG(1, "EXIT: unregister_netdev_notifier -> void");
+}
+
 void auto_discover_system_ips(struct firewall_info *fw)
 {
     /* 在堆上分配以避免大栈帧 */
@@ -695,7 +926,7 @@ void auto_discover_system_ips(struct firewall_info *fw)
     FW_DEBUG(1, "ENTRY: auto_discover_system_ips");
 
     /* 在堆上分配临时数组 */
-    temp_ips = kmalloc_array(64, sizeof(struct temp_ip_entry), GFP_KERNEL);
+    temp_ips = kmalloc_array(MAX_DISCOVERED_IPS, sizeof(struct temp_ip_entry), GFP_KERNEL);
     if (!temp_ips) {
         fw_pr_err("Failed to allocate temp_ips");
         FW_DEBUG(1, "EXIT: auto_discover_system_ips -> void (alloc temp_ips failed)");
@@ -713,14 +944,9 @@ void auto_discover_system_ips(struct firewall_info *fw)
      */
     rcu_read_lock();
     for_each_netdev_rcu(&init_net, dev) {
-        if (dev->flags & IFF_LOOPBACK) {
-            if (temp_count < 64) {
-                temp_ips[temp_count].ip = htonl(0x7f000001);
-                temp_ips[temp_count].mask = htonl(0xff000000);
-                strscpy(temp_ips[temp_count].name, dev->name, 16);
-                temp_count++;
-            }
-        }
+        /* 跳过回环设备，其地址会被 validate_ipv4_address 拒绝 */
+        if (dev->flags & IFF_LOOPBACK)
+            continue;
 
         if (!(dev->flags & IFF_UP))
             continue;
@@ -735,7 +961,7 @@ void auto_discover_system_ips(struct firewall_info *fw)
              */
             for (ifa = rcu_dereference(in_dev->ifa_list); ifa;
                  ifa = rcu_dereference(ifa->ifa_next)) {
-                if (temp_count >= 64)
+                if (temp_count >= MAX_DISCOVERED_IPS)
                     break;
 
                 /* 验证 IP 地址有效性 */
@@ -894,7 +1120,6 @@ static int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned lo
                           "banned for %lu seconds", seconds);
     FW_DEBUG(1, "EXIT: ban_ip_with_duration -> %d", ret);
     return ret;
-    return 0;
 }
 
 /*
@@ -1452,7 +1677,7 @@ static ssize_t config_write(struct file *file, const char __user *buf,
                              size_t count, loff_t *ppos)
 {
     char input[256];
-    char param[64];
+    char param[MAX_DISCOVERED_IPS];
     char *value_str;
     unsigned int value;
     ssize_t len = min(count, (size_t)(sizeof(input) - 1));
@@ -1825,7 +2050,7 @@ int save_state_to_file(const char *filename)
 
     /* 限制保存数量以避免大分配 */
     #define MAX_SAVE_BAN 1024
-    #define MAX_SAVE_WL 64
+    #define MAX_SAVE_WL MAX_DISCOVERED_IPS
 
     struct saved_ban_entry *ban_entries = NULL;
     struct saved_whitelist_entry *wl_entries = NULL;
@@ -2311,7 +2536,17 @@ static int __init firewall_init(void)
         restore_state_from_file(state_file);
     }
 
+    /* 初始化延迟同步工作队列（用于网卡 IP 变化防抖） */
+    INIT_DELAYED_WORK(&fw_info.sync_work, sync_work_handler);
+
     auto_discover_system_ips(&fw_info);
+
+    /* 注册网络设备事件监听器，实现 IP 实时更新 */
+    ret = register_netdev_notifier(&fw_info);
+    if (ret) {
+        fw_pr_warn("Failed to register netdev notifier, IP auto-update disabled");
+        /* 不视为致命错误，继续加载模块 */
+    }
 
     timer_setup(&fw_info.cleanup_timer, cleanup_timer_callback, 0);
     fw_info.timer_initialized = true;  /* 标记定时器已初始化 */
@@ -2320,18 +2555,35 @@ static int __init firewall_init(void)
 
     ret = create_procfs_entries(&fw_info);
     if (ret)
-        goto err_ban;
+        goto err_notifier;
 
     ret = nf_register_net_hook(&init_net, &nf_ops_ipv4);
     if (ret) {
         fw_pr_err("Failed to register IPv4 netfilter hook: %d", ret);
-        goto err_whitelist;
+        goto err_procfs;
     }
 
     fw_pr_info("Module loaded successfully (ban_time=%u, state_file=%s)", fw_ban_time, state_file);
     return 0;
 
-err_whitelist:
+err_procfs:
+    destroy_procfs_entries(&fw_info);
+err_notifier:
+    /* 设置关闭标志，阻止新操作 */
+    atomic_set(&fw_info.shutting_down, 1);
+
+    /* 取消待处理的同步工作 */
+    cancel_delayed_work_sync(&fw_info.sync_work);
+
+    /* 先停止定时器，防止回调访问已释放内存 */
+    timer_delete_sync(&fw_info.cleanup_timer);
+
+    /* 注销网络设备事件监听器 */
+    unregister_netdev_notifier(&fw_info);
+
+    /* 等待所有 RCU 回调完成，防止双重释放 */
+    synchronize_rcu();
+
     /* 释放所有白名单条目 */
     {
         struct whitelist_entry *wl;
@@ -2342,8 +2594,7 @@ err_whitelist:
             kfree(wl);
         }
     }
-    goto err_ban;
-err_ban:
+
     /* 释放所有封禁条目 */
     {
         struct ban_entry *entry;
@@ -2354,12 +2605,7 @@ err_ban:
             kfree(entry);
         }
     }
-    goto err_procfs;
-err_procfs:
-    destroy_procfs_entries(&fw_info);
-    goto err_timer;
-err_timer:
-    timer_delete_sync(&fw_info.cleanup_timer);
+
     return ret;
 }
 
@@ -2379,8 +2625,14 @@ static void __exit firewall_exit(void)
     /* 修复 C5：设置关闭标志以防止新操作 */
     atomic_set(&fw_info.shutting_down, 1);
 
+    /* 取消待处理的同步工作，确保关闭期间不再执行 */
+    cancel_delayed_work_sync(&fw_info.sync_work);
+
     /* 修复 C5：1. 先注销 netfilter 钩子以防止新数据包进入 */
     nf_unregister_net_hook(&init_net, &nf_ops_ipv4);
+
+    /* 注销网络设备事件监听器 */
+    unregister_netdev_notifier(&fw_info);
 
     /* 修复 C5：2. 停止定时器 */
     if (fw_info.timer_initialized) {

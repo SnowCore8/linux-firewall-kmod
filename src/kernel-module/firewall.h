@@ -21,6 +21,7 @@
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
 #include <linux/overflow.h>
+#include <linux/workqueue.h>
 
 /* ============================================================================
  * 统一日志系统
@@ -106,6 +107,9 @@
 #define WHITELIST_HASH_BITS 6
 #define MAX_WHITELIST_ENTRIES (1 << WHITELIST_HASH_BITS)  /* 64 个条目 */
 
+/* 自动发现 IP 的最大数量（与白名单容量一致） */
+#define MAX_DISCOVERED_IPS MAX_WHITELIST_ENTRIES
+
 /* 白名单条目结构 - 仅 IPv4 */
 struct whitelist_entry {
     __be32 ip;                 /* IPv4 地址，网络字节序 */
@@ -166,6 +170,11 @@ struct firewall_info {
     struct proc_dir_entry *proc_config;      /* 配置（读/写） */
     struct proc_dir_entry *proc_settings;
     struct proc_dir_entry *proc_stats;       /* 统计端点（只读） */
+
+    /* 网络事件监听器 */
+    struct notifier_block netdev_notifier;
+    struct delayed_work sync_work;           /* 防抖同步工作队列 */
+    bool netdev_notifier_registered;         /* 跟踪通知器是否成功注册 */
 };
 
 /* 函数声明 */
@@ -182,6 +191,11 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const 
 int remove_whitelist_entry(struct firewall_info *fw, __be32 ip);
 bool is_in_whitelist(struct firewall_info *fw, __be32 ip);
 void auto_discover_system_ips(struct firewall_info *fw);
+void sync_system_ips(struct firewall_info *fw);
+
+/* 网络事件监听 */
+int register_netdev_notifier(struct firewall_info *fw);
+void unregister_netdev_notifier(struct firewall_info *fw);
 
 int create_procfs_entries(struct firewall_info *fw);
 void destroy_procfs_entries(struct firewall_info *fw);
