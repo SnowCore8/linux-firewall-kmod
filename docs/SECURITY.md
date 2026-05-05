@@ -244,9 +244,9 @@ Invalid config parameter '{key}' with value '{value}' in {location}
 - `max_retries`, `findtime`, `ban_time`, `interval`, `metrics_port`
 - `daemon`, `permanent_db_path`, `permanent_ban_enabled`
 
-**Jail 部分**（7 个）：
+**Jail 部分**（6 个）：
 - `enabled`, `log_files`, `max_retries`, `findtime`, `ban_time`
-- `regex`, `regex_pattern`（等价别名）
+- `regex`
 
 ---
 
@@ -436,9 +436,9 @@ sudo chmod 644 /etc/firewall/*.yaml
 ### 8.3 监控建议
 
 1. **Prometheus 指标**（端口 9119）:
-   - `firewall_current_bans` — 当前封禁数
-   - `firewall_total_bans` — 累计封禁次数
-   - `firewall_ban_rate` — 封禁速率
+   - `firewall_kernel_banned_ips_current` — 当前封禁数
+   - `firewall_kernel_total_bans_total` — 累计封禁次数
+   - `firewall_daemon_ips_banned_total` — 守护进程封禁次数
 
 2. **日志关键词监控**:
    - `overflow detected` — 整数溢出告警

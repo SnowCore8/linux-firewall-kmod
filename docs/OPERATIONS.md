@@ -1,6 +1,6 @@
 # Firewall 运维操作手册
 
-**版本**: v1.9  
+**版本**: v2.0  
 **最后更新**: 2026-05-04
 
 ---
@@ -104,12 +104,10 @@ echo "remove 10.0.0.0/8" | sudo tee /proc/firewall/whitelist    # 移除白名�
 | 读取 | `cat` | `cat /proc/firewall/bans` |
 | 默认封禁 | `IP` | `echo "1.2.3.4" \| sudo tee /proc/firewall/bans` |
 | 自定义时长 | `IP seconds` | `echo "1.2.3.4 7200" \| sudo tee /proc/firewall/bans` |
-| 永久封禁 | `IP 0` 或 `permanent IP` | `echo "1.2.3.4 0" \| sudo tee /proc/firewall/bans` |
+| 永久封禁 | `IP 0` | `echo "1.2.3.4 0" \| sudo tee /proc/firewall/bans` |
 | 解封 | `unban IP` | `echo "unban 1.2.3.4" \| sudo tee /proc/firewall/bans` |
 
 **限制**：封禁上限 1024 IP，ban_time 范围 30 秒 ~ 31,536,000 秒（1 年）。
-
-> **注意**：`permanent IP` 格式为 v2.0 新增，与 `IP 0` 等价但语义更清晰。
 
 ### 3.2 /proc/firewall/whitelist（读写）
 
@@ -152,6 +150,7 @@ sudo systemctl stop firewall-daemon && sudo rmmod firewall    # 卸载
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `fw_ban_time` | 默认封禁时长（秒） | 600 |
+| `fw_max_bans_per_second` | 每秒最大封禁次数（洪泛保护） | 200 |
 
 ```bash
 cat /sys/module/firewall/parameters/fw_ban_time           # 查看参数
@@ -180,16 +179,32 @@ grep firewall /var/log/syslog           # syslog 查看
 ```bash
 curl http://localhost:9119/metrics   # 指标端点
 curl http://localhost:9119/health    # 健康检查
+curl http://localhost:9119/healthz   # 健康检查（K8s 兼容）
 ```
 
-| 指标 | 说明 |
-|------|------|
-| `firewall_bans_total` | 累计封禁次数 |
-| `firewall_unbans_total` | 累计解封次数 |
-| `firewall_active_bans` | 当前活跃封禁数 |
-| `firewall_whitelist_entries` | 白名单条目数 |
-| `firewall_parse_errors_total` | 日志解析错误数 |
-| `firewall_jail_events_total` | 各 Jail 触发事件数 |
+#### 内核模块指标（4 项）
+
+| 指标 | 类型 | 说明 |
+|------|------|------|
+| `firewall_kernel_banned_ips_current` | gauge | 当前活跃封禁数 |
+| `firewall_kernel_total_bans_total` | counter | 累计封禁次数 |
+| `firewall_kernel_total_unbans_total` | counter | 累计解封次数 |
+| `firewall_kernel_whitelist_count` | gauge | 白名单条目数 |
+
+#### 守护进程指标（10 项）
+
+| 指标 | 类型 | 说明 |
+|------|------|------|
+| `firewall_daemon_lines_parsed_total` | counter | 解析的日志行总数 |
+| `firewall_daemon_ips_extracted_total` | counter | 提取的 IP 地址总数 |
+| `firewall_daemon_ips_banned_total` | counter | 封禁的 IP 总数 |
+| `firewall_daemon_failed_attempts_total` | counter | 失败尝试总数 |
+| `firewall_daemon_config_reloads_total` | counter | 配置重载次数 |
+| `firewall_daemon_inotify_events_total` | counter | inotify 事件总数 |
+| `firewall_daemon_log_rotations_total` | counter | 日志轮转检测次数 |
+| `firewall_daemon_lines_skipped_total` | counter | 跳过的日志行总数 |
+| `firewall_daemon_regex_matches_total` | counter | 正则匹配成功次数 |
+| `firewall_daemon_uptime_seconds` | gauge | 守护进程运行时间（秒） |
 
 ---
 

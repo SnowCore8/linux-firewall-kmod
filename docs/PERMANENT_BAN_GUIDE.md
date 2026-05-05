@@ -1,6 +1,6 @@
 # 永久黑名单功能指南 (SQLite 持久化)
 
-> **v1.9 更新**: 新增 SQLite 线程安全保护（pthread_mutex_t），修复状态保存/恢复中的 is_permanent 初始化和剩余时间计算问题，同时将 SQLite 绑定从 `SQLITE_STATIC` 改为 `SQLITE_TRANSIENT`，修复了潜在的 use-after-free 漏洞。
+> **v2.0 更新**: 统一封禁/解封入口 `execute_ban_action()` 支持四种动作类型（临时封禁、永久封禁、解封、移除永久封禁），集成 ban-manager.c 模块化管理。
 
 ## 概述
 

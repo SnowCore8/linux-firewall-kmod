@@ -1,6 +1,6 @@
 # 配置指南
 
-**版本**: v1.9
+**版本**: v2.0
 
 本文档详细介绍 Firewall 守护进程的 YAML 配置格式、参数说明、最佳实践和故障排查。
 
@@ -53,6 +53,7 @@ permanent_ban_enabled: true                       # 是否启用永久封禁
 | `ban_time` | integer | `900` | 封禁持续时间（秒），0=永久 | 0 或 1 ~ 86400 |
 | `interval` | integer | `1` | 日志检查间隔（秒） | 1 ~ 60 |
 | `metrics_port` | integer | `9119` | Prometheus 指标导出端口 | 0 ~ 65535 |
+| `daemon` | boolean | `false` | 是否以守护进程模式运行 | true/false |
 
 ### 参数详解
 
@@ -92,7 +93,7 @@ Firewall 支持两种配置校验模式，可通过命令行参数控制：
 
 **Jail 部分**仅接受以下参数：
 - `enabled`, `log_files`, `max_retries`, `findtime`, `ban_time`
-- `regex`, `regex_pattern`（两者等价）
+- `regex`
 
 ### 宽松模式行为
 
