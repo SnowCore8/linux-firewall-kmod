@@ -354,7 +354,8 @@ int restore_state_from_file(const char *filename) {
 
             /* 检查恢复的封禁条目数量是否超过限制 */
             if (restored_ban_count >= max_restore_bans) {
-              fw_pr_warn("Maximum ban entries (%d) reached during restore, skipping remaining",
+              fw_pr_warn("Maximum ban entries (%d) reached during restore, "
+                         "skipping remaining",
                          max_restore_bans);
               continue;
             }
@@ -435,7 +436,6 @@ int restore_state_from_file(const char *filename) {
               else
                 fw_pr_info("Restored ban for IPv4 %s (expires in %lu seconds)",
                            ip_str, remaining_time);
-
             }
           }
         }
@@ -450,7 +450,8 @@ int restore_state_from_file(const char *filename) {
 
           /* 检查恢复的白名单条目数量是否超过限制 */
           if (restored_wl_count >= max_restore_wl) {
-            fw_pr_warn("Maximum whitelist entries (%d) reached during restore, skipping remaining",
+            fw_pr_warn("Maximum whitelist entries (%d) reached during restore, "
+                       "skipping remaining",
                        max_restore_wl);
             continue;
           }
