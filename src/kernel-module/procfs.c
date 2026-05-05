@@ -39,15 +39,19 @@ static int bans_show(struct seq_file *m, void *v) {
 
   rcu_read_lock();
   hash_for_each_rcu(fw->ban_table, hash, entry, hash) {
-    if (entry->is_permanent) {
+    /* 安全修复：使用 READ_ONCE 防止 RCU 读取期间的数据竞争 */
+    bool is_permanent = READ_ONCE(entry->is_permanent);
+    unsigned long unban_time = READ_ONCE(entry->unban_time);
+
+    if (is_permanent) {
       ipv4_to_str(entry->ip, ip_str, sizeof(ip_str));
       seq_printf(m, "%-40s（永久）\n", ip_str);
       permanent_count++;
       count++;
-    } else if (!time_after(now, entry->unban_time)) {
+    } else if (!time_after(now, unban_time)) {
       ipv4_to_str(entry->ip, ip_str, sizeof(ip_str));
       seq_printf(m, "%-40s（%lu 秒后过期）\n", ip_str,
-                 (entry->unban_time - now) / HZ);
+                 (unban_time - now) / HZ);
       temporary_count++;
       count++;
     }
@@ -103,6 +107,63 @@ static int validate_ban_input(const char *input) {
 }
 
 /**
+ * validate_and_copy_ip - 验证 IP 长度并复制到输出缓冲区
+ * @ip_start: IP 字符串起始位置
+ * @ip_end: IP 字符串结束位置
+ * @ip_str: 输出缓冲区
+ * @ip_str_size: 缓冲区大小
+ * 返回: 0 表示成功，-EINVAL 表示失败
+ */
+static int validate_and_copy_ip(const char *ip_start, const char *ip_end,
+                                char *ip_str, size_t ip_str_size) {
+  size_t ip_len = (size_t)(ip_end - ip_start);
+
+  if (ip_len == 0 || ip_len >= INET_ADDRSTRLEN || ip_len >= ip_str_size) {
+    fw_pr_warn("Invalid IP address length: %zu", ip_len);
+    return -EINVAL;
+  }
+
+  strncpy(ip_str, ip_start, ip_len);
+  ip_str[ip_len] = '\0';
+  return 0;
+}
+
+/**
+ * parse_unban_command - 解析 unban 命令并提取 IP 地址
+ * @cmd_ptr: 指向 "unban" 命令的指针
+ * @input: 完整输入字符串（用于错误日志）
+ * @ip_str: 输出缓冲区
+ * @ip_str_size: 缓冲区大小
+ * 返回: 0 表示成功，负数错误码表示失败
+ */
+static int parse_unban_command(const char *cmd_ptr, const char *input,
+                               char *ip_str, size_t ip_str_size) {
+  const char *ip_start = cmd_ptr + 5;
+
+  /* 跳过 unban 后的空白 */
+  while (*ip_start && (*ip_start == ' ' || *ip_start == '\t'))
+    ip_start++;
+
+  if (*ip_start == '\0') {
+    fw_pr_warn("Missing IP address after 'unban'");
+    return -EINVAL;
+  }
+
+  /* 查找 IP 结束位置 */
+  const char *ip_end = ip_start;
+  while (*ip_end && *ip_end != ' ' && *ip_end != '\t')
+    ip_end++;
+
+  /* 检查是否有额外内容 */
+  if (*ip_end != '\0') {
+    fw_pr_warn("Invalid format - extra content after IP: %s", input);
+    return -EINVAL;
+  }
+
+  return validate_and_copy_ip(ip_start, ip_end, ip_str, ip_str_size);
+}
+
+/**
  * parse_ban_command - 解析封禁命令类型和 IP 地址
  * @input: 用户输入字符串
  * @ip_str: 输出参数，存储解析出的 IP 字符串
@@ -126,68 +187,89 @@ static int parse_ban_command(const char *input, char *ip_str,
   /* 检查是否为 unban 命令 */
   if (strncmp(cmd_ptr, "unban ", 6) == 0 ||
       strncmp(cmd_ptr, "unban\t", 6) == 0) {
-    const char *ip_start = cmd_ptr + 5;
-    while (*ip_start && (*ip_start == ' ' || *ip_start == '\t'))
-      ip_start++;
-
-    if (*ip_start == '\0') {
-      fw_pr_warn("Missing IP address after 'unban'");
-      return -EINVAL;
-    }
-
-    const char *ip_end = ip_start;
-    while (*ip_end && *ip_end != ' ' && *ip_end != '\t')
-      ip_end++;
-    if (*ip_end != '\0') {
-      fw_pr_warn("Invalid format - extra content after IP: %s", input);
-      return -EINVAL;
-    }
-
-    strncpy(ip_str, ip_start, ip_str_size - 1);
-    ip_str[ip_str_size - 1] = '\0';
-    *is_unban = true;
-    return 0;
+    int ret = parse_unban_command(cmd_ptr, input, ip_str, ip_str_size);
+    if (ret == 0)
+      *is_unban = true;
+    return ret;
   }
 
   /* ban 命令：提取 IP 地址 */
-  {
-    const char *ptr = cmd_ptr;
-    const char *ip_start = ptr;
+  const char *ptr = cmd_ptr;
+  const char *ip_start = ptr;
 
-    while (*ptr && *ptr != ' ' && *ptr != '\t')
-      ptr++;
+  while (*ptr && *ptr != ' ' && *ptr != '\t')
+    ptr++;
 
-    /* 安全检查：避免越界访问 */
-    if (*ptr == '\0') {
-      /* 只有 IP，无持续时间 */
-      strncpy(ip_str, ip_start, ip_str_size - 1);
-      ip_str[ip_str_size - 1] = '\0';
-    } else {
-      /* IP 后面有内容，检查是否只有空白 */
-      const char *after_space = ptr + 1;
-      while (*after_space == ' ' || *after_space == '\t')
-        after_space++;
+  /* 验证并复制 IP 地址（无论后面是否有内容，IP 提取逻辑相同） */
+  return validate_and_copy_ip(ip_start, ptr, ip_str, ip_str_size) == 0
+             ? (*is_unban = false, 0)
+             : -EINVAL;
+}
 
-      if (*after_space == '\0') {
-        /* IP 后只有空白 */
-        size_t ip_len = ptr - ip_start;
-        if (ip_len >= ip_str_size)
-          ip_len = ip_str_size - 1;
-        strncpy(ip_str, ip_start, ip_len);
-        ip_str[ip_len] = '\0';
-      } else {
-        /* IP 后有有效内容 */
-        size_t ip_len = ptr - ip_start;
-        if (ip_len >= ip_str_size)
-          ip_len = ip_str_size - 1;
-        strncpy(ip_str, ip_start, ip_len);
-        ip_str[ip_len] = '\0';
-      }
-    }
+/**
+ * find_duration_start - 查找持续时间字符串的起始位置
+ * @input: 用户输入字符串
+ * 返回: 指向持续时间字符串的指针，如果无持续时间则返回 NULL
+ */
+static const char *find_duration_start(const char *input) {
+  const char *ptr = input;
+
+  /* 跳过前导空白 */
+  while (*ptr && (*ptr == ' ' || *ptr == '\t'))
+    ptr++;
+
+  /* 跳过 IP 地址 */
+  while (*ptr && *ptr != ' ' && *ptr != '\t')
+    ptr++;
+
+  if (*ptr == '\0')
+    return NULL; /* 没有持续时间 */
+
+  /* 跳过空白 */
+  ptr++;
+  while (*ptr && (*ptr == ' ' || *ptr == '\t'))
+    ptr++;
+
+  return (*ptr == '\0') ? NULL : ptr;
+}
+
+/**
+ * validate_duration_string - 验证持续时间字符串并解析为数值
+ * @duration_str: 持续时间字符串
+ * @input: 完整输入（用于错误日志）
+ * 返回: 解析后的秒数，负数错误码表示失败
+ */
+static long validate_duration_string(const char *duration_str,
+                                     const char *input) {
+  long seconds;
+  int ret = kstrtol(duration_str, 10, &seconds);
+
+  if (ret != 0) {
+    fw_pr_warn("Invalid format - invalid seconds value: %s", input);
+    return -EINVAL;
   }
 
-  *is_unban = false;
-  return 0;
+  /* 检查是否有非数字后缀 */
+  const char *endp = duration_str;
+  while (*endp >= '0' && *endp <= '9')
+    endp++;
+  if (*endp != '\0' && *endp != ' ' && *endp != '\t' && *endp != '\n') {
+    fw_pr_warn("Invalid format - invalid seconds value: %s", input);
+    return -EINVAL;
+  }
+
+  if (seconds < 0 && seconds != -1) {
+    fw_pr_warn("Invalid ban duration: %ld", seconds);
+    return -EINVAL;
+  }
+
+  if (seconds > MAX_BAN_TIME) {
+    fw_pr_warn("Ban duration %ld exceeds maximum %d seconds", seconds,
+               MAX_BAN_TIME);
+    return -EINVAL;
+  }
+
+  return seconds;
 }
 
 /**
@@ -201,123 +283,86 @@ static int parse_ban_command(const char *input, char *ip_str,
  *       负数错误码 = 解析失败
  */
 static long parse_ban_duration(const char *input) {
-  const char *ptr = input;
-  const char *space_pos = NULL;
+  const char *duration_start = find_duration_start(input);
 
-  /* 跳过前导空白 */
-  while (*ptr && (*ptr == ' ' || *ptr == '\t'))
-    ptr++;
+  if (!duration_start)
+    return -2; /* 没有持续时间，使用默认值 */
 
-  /* 找到 IP 后的空白位置 */
-  while (*ptr && *ptr != ' ' && *ptr != '\t')
-    ptr++;
-
-  if (*ptr == '\0') {
-    /* 没有持续时间，使用默认值 */
-    return -2;
-  }
-
-  /* 跳过空白，定位到持续时间内 */
-  space_pos = ptr + 1;
-  while (*space_pos && (*space_pos == ' ' || *space_pos == '\t'))
-    space_pos++;
-
-  if (*space_pos == '\0') {
-    /* 空白后无内容，使用默认值 */
-    return -2;
-  }
-
-  {
-    long seconds;
-    int ret = kstrtol(space_pos, 10, &seconds);
-
-    if (ret != 0) {
-      fw_pr_warn("Invalid format - invalid seconds value: %s", input);
-      return -EINVAL;
-    }
-
-    /* 检查是否有非数字后缀 */
-    const char *endp = space_pos;
-    while (*endp >= '0' && *endp <= '9')
-      endp++;
-    if (*endp != '\0' && *endp != ' ' && *endp != '\t' && *endp != '\n') {
-      fw_pr_warn("Invalid format - invalid seconds value: %s", input);
-      return -EINVAL;
-    }
-
-    if (seconds < 0 && seconds != -1) {
-      fw_pr_warn("Invalid ban duration: %ld", seconds);
-      return -EINVAL;
-    }
-
-    if (seconds > MAX_BAN_TIME) {
-      fw_pr_warn("Ban duration %ld exceeds maximum %d seconds", seconds,
-                 MAX_BAN_TIME);
-      return -EINVAL;
-    }
-
-    return seconds;
-  }
+  return validate_duration_string(duration_start, input);
 }
 
 /**
- * execute_ban_action - 执行封禁/解封动作
+ * execute_unban_action - 执行解封操作
+ * @fw: 防火墙信息结构
  * @ip: IPv4 地址
  * @ip_str: IP 字符串（用于日志）
- * @seconds: 持续时间（由 parse_ban_duration 解析）
- * @is_unban: 是否为解封操作
  * 返回: 0 表示成功，负数错误码表示失败
  */
-static int execute_ban_action(__be32 ip, const char *ip_str, long seconds,
-                              bool is_unban) {
+static int execute_unban_action(struct firewall_info *fw, __be32 ip,
+                                const char *ip_str) {
+  int result = unban_ip(fw, ip);
+
+  if (result < 0) {
+    if (result == -ENOENT)
+      fw_pr_warn("IP %s not found in ban list", ip_str);
+    else
+      fw_pr_err("Failed to unban IP %s (error %d)", ip_str, result);
+    return result;
+  }
+  return 0;
+}
+
+/**
+ * execute_permanent_ban - 执行永久封禁操作
+ * @fw: 防火墙信息结构
+ * @ip: IPv4 地址
+ * @ip_str: IP 字符串（用于日志）
+ * 返回: 0 表示成功，负数错误码表示失败
+ */
+static int execute_permanent_ban(struct firewall_info *fw, __be32 ip,
+                                 const char *ip_str) {
+  int result = ban_ip_permanent(fw, ip);
+
+  if (result < 0) {
+    if (result == -EPERM)
+      fw_pr_info("Requested IPv4 %s is in whitelist, not permanently banned",
+                 ip_str);
+    else if (result == -ENOMEM)
+      fw_pr_err(
+          "Failed to allocate memory for permanent ban entry for IPv4 %s",
+          ip_str);
+    else if (result == -ENOSPC)
+      fw_pr_warn("Ban table full, cannot permanently ban IPv4 %s", ip_str);
+    else
+      fw_pr_err("Unknown error %d when trying to permanently ban IPv4 %s",
+                result, ip_str);
+    return result;
+  }
+  return 0;
+}
+
+/**
+ * execute_temporary_ban - 执行临时封禁操作（带泛洪保护）
+ * @fw: 防火墙信息结构
+ * @ip: IPv4 地址
+ * @ip_str: IP 字符串（用于日志）
+ * @seconds: 持续时间（-2 表示默认持续时间，>0 表示指定秒数）
+ * 返回: 0 表示成功，负数错误码表示失败
+ */
+static int execute_temporary_ban(struct firewall_info *fw, __be32 ip,
+                                 const char *ip_str, long seconds) {
   int result;
 
-  if (is_unban || (seconds < 0 && seconds != -2)) {
-    /* 解封操作 */
-    result = unban_ip(&fw_info, ip);
-    if (result < 0) {
-      if (result == -ENOENT)
-        fw_pr_warn("IP %s not found in ban list", ip_str);
-      else
-        fw_pr_err("Failed to unban IP %s (error %d)", ip_str, result);
-      return result;
-    }
-    return 0;
-  }
-
-  if (seconds == 0) {
-    /* 永久封禁 */
-    result = ban_ip_permanent(&fw_info, ip);
-    if (result < 0) {
-      if (result == -EPERM)
-        fw_pr_info("Requested IPv4 %s is in whitelist, not permanently banned",
-                   ip_str);
-      else if (result == -ENOMEM)
-        fw_pr_err(
-            "Failed to allocate memory for permanent ban entry for IPv4 %s",
-            ip_str);
-      else if (result == -ENOSPC)
-        fw_pr_warn("Ban table full, cannot permanently ban IPv4 %s", ip_str);
-      else
-        fw_pr_err("Unknown error %d when trying to permanently ban IPv4 %s",
-                  result, ip_str);
-      return result;
-    }
-    return 0;
-  }
-
-  /* 需要泛洪保护的情况：默认持续时间或指定持续时间 */
+  /* 检查泛洪保护 */
   if (check_flood_protection() < 0) {
     fw_pr_warn("Flood protection triggered - too many ban requests");
     return -EBUSY;
   }
 
   if (seconds == -2) {
-    /* 默认持续时间封禁 */
-    result = ban_ip(&fw_info, ip);
+    result = ban_ip(fw, ip);
   } else {
-    /* 指定持续时间封禁 */
-    result = ban_ip_with_duration(&fw_info, ip, (unsigned long)seconds);
+    result = ban_ip_with_duration(fw, ip, (unsigned long)seconds);
   }
 
   if (result < 0) {
@@ -331,8 +376,26 @@ static int execute_ban_action(__be32 ip, const char *ip_str, long seconds,
       fw_pr_err("Unknown error %d when trying to ban IPv4 %s", result, ip_str);
     return result;
   }
-
   return 0;
+}
+
+/**
+ * execute_ban_action - 执行封禁/解封动作
+ * @ip: IPv4 地址
+ * @ip_str: IP 字符串（用于日志）
+ * @seconds: 持续时间（由 parse_ban_duration 解析）
+ * @is_unban: 是否为解封操作
+ * 返回: 0 表示成功，负数错误码表示失败
+ */
+static int execute_ban_action(__be32 ip, const char *ip_str, long seconds,
+                              bool is_unban) {
+  if (is_unban || (seconds < 0 && seconds != -2))
+    return execute_unban_action(&fw_info, ip, ip_str);
+
+  if (seconds == 0)
+    return execute_permanent_ban(&fw_info, ip, ip_str);
+
+  return execute_temporary_ban(&fw_info, ip, ip_str, seconds);
 }
 
 /*
@@ -502,6 +565,172 @@ static int whitelist_open(struct inode *inode, struct file *file) {
   return single_open(file, whitelist_read, NULL);
 }
 
+/* ============================================================================
+ * whitelist_write 辅助函数 - 拆分单一职责
+ * ========================================================================== */
+
+/**
+ * extract_command_token - 提取命令词（add/remove）并定位子网起始位置
+ * @ptr: 当前指针位置（输入/输出）
+ * @cmd_buf: 输出缓冲区
+ * @cmd_buf_size: 缓冲区大小
+ * 返回: 指向子网字符串的指针
+ */
+static char *extract_command_token(char **ptr, char *cmd_buf,
+                                   size_t cmd_buf_size) {
+  char *cmd_start = *ptr;
+
+  /* 查找第一个命令词 */
+  while (**ptr && **ptr != ' ' && **ptr != '\t')
+    (*ptr)++;
+
+  if (**ptr) {
+    char saved = **ptr;
+    **ptr = '\0';
+
+    if (strcmp(cmd_start, "add") == 0 || strcmp(cmd_start, "remove") == 0) {
+      strncpy(cmd_buf, cmd_start, cmd_buf_size - 1);
+      cmd_buf[cmd_buf_size - 1] = '\0';
+      **ptr = saved;
+      (*ptr)++;
+      while (**ptr && (**ptr == ' ' || **ptr == '\t'))
+        (*ptr)++;
+      return *ptr;
+    }
+    **ptr = saved;
+  }
+
+  return cmd_start;
+}
+
+/**
+ * parse_whitelist_command - 解析白名单命令（add/remove/IP）
+ * @input: 用户输入字符串
+ * @cmd_buf: 输出参数，存储命令（"add"、"remove"或空）
+ * @cmd_buf_size: cmd_buf 缓冲区大小
+ * @subnet_out: 输出参数，指向子网字符串的指针
+ * 返回: 0 表示成功，负数错误码表示失败
+ */
+static int parse_whitelist_command(char *input, char *cmd_buf,
+                                   size_t cmd_buf_size, char **subnet_out) {
+  char *ptr = input;
+
+  /* 跳过前导空白 */
+  while (*ptr && (*ptr == ' ' || *ptr == '\t'))
+    ptr++;
+
+  if (*ptr == '\0') {
+    fw_pr_warn("Empty command");
+    return -EINVAL;
+  }
+
+  cmd_buf[0] = '\0';
+
+  /* 提取命令词并定位子网起始位置 */
+  char *subnet_start = extract_command_token(&ptr, cmd_buf, cmd_buf_size);
+
+  if (*subnet_start == '\0') {
+    fw_pr_warn("Missing subnet");
+    return -EINVAL;
+  }
+
+  /* 截断子网字符串在空白处 */
+  ptr = subnet_start;
+  while (*ptr && *ptr != ' ' && *ptr != '\t')
+    ptr++;
+  *ptr = '\0';
+
+  *subnet_out = subnet_start;
+  return 0;
+}
+
+/**
+ * parse_whitelist_subnet - 解析子网地址和前缀长度
+ * @subnet_str: 子网字符串（可能被修改）
+ * @ipv4_out: 输出参数，存储解析的 IP 地址
+ * @prefix_len_out: 输出参数，存储前缀长度
+ * 返回: 0 表示成功，负数错误码表示失败
+ */
+static int parse_whitelist_subnet(char *subnet_str, __be32 *ipv4_out,
+                                  int *prefix_len_out) {
+  int prefix_len = 32;
+  __be32 ipv4;
+
+  /* 检查是否有前缀长度 */
+  char *slash = strchr(subnet_str, '/');
+  if (slash) {
+    *slash = '\0';
+    if (kstrtoint(slash + 1, 10, &prefix_len) < 0) {
+      fw_pr_warn("Invalid prefix length");
+      return -EINVAL;
+    }
+  }
+
+  /* 解析 IP 地址 */
+  if (!in4_pton(subnet_str, -1, (u8 *)&ipv4, -1, NULL)) {
+    fw_pr_warn("Invalid IP address format: %s", subnet_str);
+    return -EINVAL;
+  }
+
+  if (prefix_len < 0 || prefix_len > 32) {
+    fw_pr_warn("Invalid prefix length: %d", prefix_len);
+    return -EINVAL;
+  }
+
+  if (validate_ipv4_address(ipv4, subnet_str, "whitelist") < 0) {
+    return -EINVAL;
+  }
+
+  *ipv4_out = ipv4;
+  *prefix_len_out = prefix_len;
+  return 0;
+}
+
+/**
+ * execute_whitelist_action - 执行白名单添加/删除操作
+ * @ipv4: IP 地址
+ * @mask4: 子网掩码
+ * @prefix_len: 前缀长度
+ * @cmd: 命令（"add"、"remove"或空）
+ * 返回: 0 表示成功，负数错误码表示失败
+ */
+static int execute_whitelist_action(__be32 ipv4, __be32 mask4, int prefix_len,
+                                    const char *cmd) {
+  int result;
+  __be32 normalized_ip = ipv4 & mask4;
+
+  if (strcmp(cmd, "remove") == 0) {
+    result = remove_whitelist_entry(&fw_info, normalized_ip);
+    if (result < 0) {
+      if (result == -ENOENT) {
+        fw_pr_warn("%pI4/%d not found in whitelist", &normalized_ip,
+                   prefix_len);
+      } else {
+        fw_pr_err("Failed to remove %pI4/%d from whitelist (error %d)",
+                  &normalized_ip, prefix_len, result);
+      }
+      return result;
+    }
+  } else {
+    result = add_whitelist_entry(&fw_info, normalized_ip, mask4, "manual");
+    if (result < 0) {
+      if (result == -ENOMEM) {
+        fw_pr_err("Failed to allocate memory for whitelist entry");
+      } else if (result == -ENOSPC) {
+        fw_pr_warn("Whitelist full, cannot add %pI4/%d", &normalized_ip,
+                   prefix_len);
+      } else if (result == -EINVAL) {
+        fw_pr_warn("Invalid entry for whitelist");
+      } else {
+        fw_pr_err("Unknown error %d when adding to whitelist", result);
+      }
+      return result;
+    }
+  }
+
+  return 0;
+}
+
 /*
  * whitelist_write - 白名单管理的统一写入处理程序
  */
@@ -509,14 +738,15 @@ static ssize_t whitelist_write(struct file *file, const char __user *buf,
                                size_t count, loff_t *ppos) {
   char input[INET_ADDRSTRLEN + 16];
   ssize_t len;
-  char *ptr, *cmd_start, *subnet_start;
   char cmd_buf[16];
+  char *subnet_str;
   __be32 ipv4, mask4;
-  int prefix_len = 32;
+  int prefix_len;
   int result;
 
   FW_DEBUG(2, "ENTRY: whitelist_write(count=%zu)", count);
 
+  /* 权限和输入长度校验 */
   if (!capable(CAP_NET_ADMIN)) {
     FW_DEBUG(1, "EXIT: whitelist_write -> -EPERM (no capability)");
     return -EPERM;
@@ -546,104 +776,23 @@ static ssize_t whitelist_write(struct file *file, const char __user *buf,
     return -EINVAL;
   }
 
-  ptr = input;
-  while (*ptr && (*ptr == ' ' || *ptr == '\t'))
-    ptr++;
+  /* 解析命令 */
+  result = parse_whitelist_command(input, cmd_buf, sizeof(cmd_buf), &subnet_str);
+  if (result < 0)
+    return result;
 
-  if (*ptr == '\0') {
-    fw_pr_warn("Empty command");
-    return -EINVAL;
-  }
+  /* 解析子网地址 */
+  result = parse_whitelist_subnet(subnet_str, &ipv4, &prefix_len);
+  if (result < 0)
+    return result;
 
-  cmd_start = ptr;
-  cmd_buf[0] = '\0';
+  /* 计算子网掩码 */
+  mask4 = prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1));
 
-  while (*ptr && *ptr != ' ' && *ptr != '\t')
-    ptr++;
-
-  if (*ptr) {
-    char saved = *ptr;
-    *ptr = '\0';
-
-    if (strcmp(cmd_start, "add") == 0 || strcmp(cmd_start, "remove") == 0) {
-      strncpy(cmd_buf, cmd_start, sizeof(cmd_buf) - 1);
-      cmd_buf[sizeof(cmd_buf) - 1] = '\0';
-      *ptr = saved;
-      while (*ptr && (*ptr == ' ' || *ptr == '\t'))
-        ptr++;
-      subnet_start = ptr;
-    } else {
-      *ptr = saved;
-      subnet_start = cmd_start;
-    }
-  } else {
-    subnet_start = cmd_start;
-  }
-
-  if (*subnet_start == '\0') {
-    fw_pr_warn("Missing subnet");
-    return -EINVAL;
-  }
-
-  ptr = subnet_start;
-  while (*ptr && *ptr != ' ' && *ptr != '\t')
-    ptr++;
-  *ptr = '\0';
-
-  char *slash = strchr(subnet_start, '/');
-  if (slash) {
-    *slash = '\0';
-    if (kstrtoint(slash + 1, 10, &prefix_len) < 0) {
-      fw_pr_warn("Invalid prefix length");
-      return -EINVAL;
-    }
-  }
-
-  if (!in4_pton(subnet_start, -1, (u8 *)&ipv4, -1, NULL)) {
-    fw_pr_warn("Invalid IP address format: %s", subnet_start);
-    return -EINVAL;
-  }
-
-  if (prefix_len < 0 || prefix_len > 32) {
-    fw_pr_warn("Invalid prefix length: %d", prefix_len);
-    return -EINVAL;
-  }
-
-  if (validate_ipv4_address(ipv4, subnet_start, "whitelist") < 0) {
-    return -EINVAL;
-  }
-
-  mask4 = prefix_len == 0 ? 0 : htonl(~((1U << (32 - prefix_len)) - 1));
-  __be32 normalized_ip = ipv4 & mask4;
-
-  if (strcmp(cmd_buf, "remove") == 0) {
-    result = remove_whitelist_entry(&fw_info, normalized_ip);
-    if (result < 0) {
-      if (result == -ENOENT) {
-        fw_pr_warn("%pI4/%d not found in whitelist", &normalized_ip,
-                   prefix_len);
-      } else {
-        fw_pr_err("Failed to remove %pI4/%d from whitelist (error %d)",
-                  &normalized_ip, prefix_len, result);
-      }
-      return result;
-    }
-  } else {
-    result = add_whitelist_entry(&fw_info, normalized_ip, mask4, "manual");
-    if (result < 0) {
-      if (result == -ENOMEM) {
-        fw_pr_err("Failed to allocate memory for whitelist entry");
-      } else if (result == -ENOSPC) {
-        fw_pr_warn("Whitelist full, cannot add %pI4/%d", &normalized_ip,
-                   prefix_len);
-      } else if (result == -EINVAL) {
-        fw_pr_warn("Invalid entry for whitelist");
-      } else {
-        fw_pr_err("Unknown error %d when adding to whitelist", result);
-      }
-      return result;
-    }
-  }
+  /* 执行添加/删除操作 */
+  result = execute_whitelist_action(ipv4, mask4, prefix_len, cmd_buf);
+  if (result < 0)
+    return result;
 
   FW_DEBUG(1, "EXIT: whitelist_write -> %zu (success)", count);
   return count;
@@ -673,6 +822,62 @@ static int config_open(struct inode *inode, struct file *file) {
   return single_open(file, config_show, NULL);
 }
 
+/* ============================================================================
+ * config_write 辅助函数 - 拆分单一职责
+ * ========================================================================== */
+
+/**
+ * parse_config_input - 解析配置输入为参数名和值
+ * @input: 用户输入字符串（可能被修改）
+ * @param: 输出参数，存储参数名
+ * @param_size: param 缓冲区大小
+ * @value_str_out: 输出参数，指向值字符串的指针
+ * 返回: 0 表示成功，负数错误码表示失败
+ */
+static int parse_config_input(char *input, char *param, size_t param_size,
+                              char **value_str_out) {
+  char *input_ptr = input;
+  char *token;
+
+  token = strsep(&input_ptr, " \t");
+  if (!token || strlen(token) == 0 || strlen(token) >= param_size) {
+    fw_pr_err("Invalid config format. Use: param value");
+    return -EINVAL;
+  }
+  strncpy(param, token, param_size - 1);
+  param[param_size - 1] = '\0';
+
+  *value_str_out = input_ptr;
+  if (!*value_str_out || strlen(*value_str_out) == 0) {
+    fw_pr_err("Missing value for parameter: %s", param);
+    return -EINVAL;
+  }
+
+  return 0;
+}
+
+/**
+ * apply_config_ban_time - 应用 ban_time 配置更新
+ * @value: 新的 ban_time 值（秒）
+ * 返回: 0 表示成功，负数错误码表示失败
+ */
+static int apply_config_ban_time(unsigned int value) {
+  unsigned long ban_duration;
+
+  if (check_mul_overflow(value, (unsigned long)HZ, &ban_duration)) {
+    fw_pr_err("ban_time overflow detected: %u * HZ", value);
+    return -EINVAL;
+  }
+  if (value < 1 || value > 365 * 24 * 60 * 60) {
+    fw_pr_err("ban_time must be between 1 and %d seconds",
+              365 * 24 * 60 * 60);
+    return -EINVAL;
+  }
+  WRITE_ONCE(fw_ban_time, value);
+  fw_pr_info("ban_time updated to %u seconds", value);
+  return 0;
+}
+
 /*
  * config_write - 配置写入处理程序
  */
@@ -682,12 +887,18 @@ static ssize_t config_write(struct file *file, const char __user *buf,
   char param[64];
   char *value_str;
   unsigned int value;
-  ssize_t len = min(count, (size_t)(sizeof(input) - 1));
+  ssize_t len;
+  int result;
 
   if (!capable(CAP_NET_ADMIN))
     return -EPERM;
   if (count == 0)
     return 0;
+  /* 安全修复：在计算 len 前验证 count，防止超大输入导致缓冲区溢出 */
+  if (count > sizeof(input) - 1)
+    return -EINVAL;
+
+  len = min(count, (size_t)(sizeof(input) - 1));
   if (copy_from_user(input, buf, len))
     return -EFAULT;
 
@@ -695,44 +906,27 @@ static ssize_t config_write(struct file *file, const char __user *buf,
   if (len > 0 && input[len - 1] == '\n')
     input[len - 1] = '\0';
 
-  char *input_ptr = input;
-  char *token;
+  /* 解析参数和值 */
+  result = parse_config_input(input, param, sizeof(param), &value_str);
+  if (result < 0)
+    return result;
 
-  token = strsep(&input_ptr, " \t");
-  if (!token || strlen(token) == 0 || strlen(token) >= sizeof(param)) {
-    fw_pr_err("Invalid config format. Use: param value");
-    return -EINVAL;
+  /* 解析数值 */
+  {
+    unsigned long val;
+    int rc = kstrtoul(value_str, 10, &val);
+    if (rc != 0 || val == 0 || val > UINT_MAX) {
+      fw_pr_err("Invalid value: %s", value_str);
+      return -EINVAL;
+    }
+    value = (unsigned int)val;
   }
-  strncpy(param, token, sizeof(param) - 1);
-  param[sizeof(param) - 1] = '\0';
 
-  value_str = input_ptr;
-  if (!value_str || strlen(value_str) == 0) {
-    fw_pr_err("Missing value for parameter: %s", param);
-    return -EINVAL;
-  }
-
-  unsigned long val;
-  int rc = kstrtoul(value_str, 10, &val);
-  if (rc != 0 || val == 0 || val > UINT_MAX) {
-    fw_pr_err("Invalid value: %s", value_str);
-    return -EINVAL;
-  }
-  value = (unsigned int)val;
-
+  /* 应用配置更新 */
   if (strcmp(param, "ban_time") == 0) {
-    unsigned long ban_duration;
-    if (check_mul_overflow(value, (unsigned long)HZ, &ban_duration)) {
-      fw_pr_err("ban_time overflow detected: %u * HZ", value);
-      return -EINVAL;
-    }
-    if (value < 1 || value > 365 * 24 * 60 * 60) {
-      fw_pr_err("ban_time must be between 1 and %d seconds",
-                365 * 24 * 60 * 60);
-      return -EINVAL;
-    }
-    WRITE_ONCE(fw_ban_time, value);
-    fw_pr_info("ban_time updated to %u seconds", value);
+    result = apply_config_ban_time(value);
+    if (result < 0)
+      return result;
   } else {
     fw_pr_err("Unknown parameter: %s", param);
     return -EINVAL;

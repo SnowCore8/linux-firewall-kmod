@@ -98,8 +98,8 @@
   } while (0)
 #endif
 
-#define BAN_HASH_BITS 10
-#define MAX_BAN_ENTRIES (1 << BAN_HASH_BITS) /* 1024 个条目 */
+#define BAN_HASH_BITS 12
+#define MAX_BAN_ENTRIES (1 << BAN_HASH_BITS) /* 4096 个条目 */
 #define DEFAULT_BAN_TIME 600                 /* 10 分钟（秒） */
 #define MAX_BAN_TIME (365 * 24 * 60 * 60)    /* 最大 1 年，防止溢出 */
 #define MIN_BAN_TIME 30 /* 最小 30 秒，避免过多的定时器开销 */

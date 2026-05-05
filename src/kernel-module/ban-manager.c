@@ -60,7 +60,10 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
    * 使用 RCU 读锁保护白名单遍历，确保数据一致性。 */
   rcu_read_lock();
   hash_for_each_rcu(fw->whitelist_table, bkt, wl_entry, hash) {
-    if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
+    /* 使用 READ_ONCE() 防止 RCU 读端与写端并发时的撕裂读 */
+    __be32 wl_mask = READ_ONCE(wl_entry->mask);
+    __be32 wl_ip = READ_ONCE(wl_entry->ip);
+    if ((ip & wl_mask) == (wl_ip & wl_mask)) {
       rcu_read_unlock();
       spin_unlock(&fw->lock);
       kfree(entry);
@@ -76,8 +79,10 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
   struct ban_entry *existing;
   hash_for_each_possible(fw->ban_table, existing, hash, ip) {
     if (compare_ips(existing->ip, ip)) {
-      if (existing->is_permanent ||
-          time_before(jiffies, existing->unban_time)) {
+      /* 使用 READ_ONCE() 与写入端的 WRITE_ONCE() 配对，防止撕裂读 */
+      bool is_permanent = READ_ONCE(existing->is_permanent);
+      unsigned long unban_time_val = READ_ONCE(existing->unban_time);
+      if (is_permanent || time_before(jiffies, unban_time_val)) {
         spin_unlock(&fw->lock);
         kfree(entry);
         return 0;
@@ -154,7 +159,8 @@ static int __do_unban_ip(struct firewall_info *fw, __be32 ip,
   hash = hash_min(ip, BAN_HASH_BITS);
   hash_for_each_possible(fw->ban_table, entry, hash, ip) {
     if (compare_ips(entry->ip, ip)) {
-      if (!permanent_only || entry->is_permanent) {
+      /* 使用 READ_ONCE() 与写入端的 WRITE_ONCE() 配对 */
+      if (!permanent_only || READ_ONCE(entry->is_permanent)) {
         hlist_del_rcu(&entry->hash);
         atomic_dec(&fw->ban_count);
         found = 1;
@@ -278,7 +284,7 @@ int is_permanently_banned(struct firewall_info *fw, __be32 ip) {
 
   rcu_read_lock();
   entry = __find_ban_entry_rcu(fw, ip);
-  if (entry && entry->is_permanent) {
+  if (entry && READ_ONCE(entry->is_permanent)) {
     FW_DEBUG(2, "Found permanent ban entry for IPv4 %pI4", &ip);
     found = 1;
   }

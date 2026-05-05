@@ -123,6 +123,12 @@ EXPORT_SYMBOL_GPL(remove_whitelist_entry);
 
 /*
  * is_in_whitelist - 检查 IPv4 是否在白名单哈希表中
+ *
+ * 优化策略：
+ * 1. 首先尝试精确匹配（/32），使用 hash_for_each_possible_rcu 达到 O(1)
+ * 2. 如果未找到，再遍历所有条目检查子网匹配
+ *
+ * 大多数白名单条目是单个 IP（/32），此优化可将常见查询从 O(n) 降至 O(1)
  */
 bool is_in_whitelist(struct firewall_info *fw, __be32 ip) {
   struct whitelist_entry *entry;
@@ -131,13 +137,36 @@ bool is_in_whitelist(struct firewall_info *fw, __be32 ip) {
   FW_DEBUG(3, "ENTRY: is_in_whitelist(ip=%pI4)", &ip);
 
   rcu_read_lock();
+
+  /* 阶段 1：尝试精确匹配（/32），使用哈希直接定位，O(1) */
+  hash = hash_min(ip, WHITELIST_HASH_BITS);
+  hash_for_each_possible_rcu(fw->whitelist_table, entry, hash, ip) {
+    /* 使用 READ_ONCE 防止 RCU 读端与写端并发时的撕裂读 */
+    __be32 wl_mask = READ_ONCE(entry->mask);
+    __be32 wl_ip = READ_ONCE(entry->ip);
+    /* 精确匹配：掩码为全 1 且 IP 相等 */
+    if (wl_mask == 0xFFFFFFFF && compare_ips(wl_ip, ip)) {
+      rcu_read_unlock();
+      FW_DEBUG(2, "EXIT: is_in_whitelist -> true (exact match /32)");
+      return true;
+    }
+  }
+
+  /* 阶段 2：遍历所有条目检查子网匹配 */
   hash_for_each_rcu(fw->whitelist_table, hash, entry, hash) {
-    if ((ip & entry->mask) == (entry->ip & entry->mask)) {
+    /* 使用 READ_ONCE 防止撕裂读 */
+    __be32 wl_mask = READ_ONCE(entry->mask);
+    /* 跳过已检查的 /32 条目 */
+    if (wl_mask == 0xFFFFFFFF)
+      continue;
+    __be32 wl_ip = READ_ONCE(entry->ip);
+    if ((ip & wl_mask) == (wl_ip & wl_mask)) {
       rcu_read_unlock();
       FW_DEBUG(2, "EXIT: is_in_whitelist -> true (matched subnet)");
       return true;
     }
   }
+
   rcu_read_unlock();
   FW_DEBUG(3, "EXIT: is_in_whitelist -> false (no match)");
   return false;
