@@ -5,18 +5,16 @@
 [![CI](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml/badge.svg)](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Release](https://img.shields.io/badge/release-v2.0-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
-[![Language](https://img.shields.io/badge/Language-C%20%7C%20Python-blue.svg)]()
+[![Language](https://img.shields.io/badge/Language-C-blue.svg)]()
 [![Platform](https://img.shields.io/badge/Platform-Linux%205.x%20%7C%206.x-orange.svg)]()
 
----
+> 🌍 [English README](README.en.md)
 
-## 🇨🇳 中文文档
-
-### 概述
+## 概述
 
 Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用户空间移至内核空间，使用 netfilter 框架在数据包级别进行实时 IP 封禁，具有更低的延迟和更高的性能。
 
-### 为什么选择本项目
+## 为什么选择本项目
 
 | 对比项 | fail2ban（用户态） | Firewall（内核态） |
 |--------|-------------------|-------------------|
@@ -25,7 +23,7 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 | 资源占用 | Python 运行时 + 依赖 | 轻量 C 守护进程 |
 | 查找性能 | 线性遍历规则 | 哈希表 O(1) 查找 |
 
-### 核心特性
+## 核心特性
 
 - ✅ **内核态 IP 封禁** — netfilter hooks，比 iptables 用户态更高效
 - ✅ **Jail 系统** — 类似 fail2ban 的多服务隔离配置
@@ -40,9 +38,10 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 - ✅ **状态持久化** — SQLite 保存/恢复永久封禁
 - ✅ **Prometheus 指标** — 端口 9119 导出监控指标
 
-### 快速开始
+## 快速开始
 
-**编译**
+### 编译
+
 ```bash
 make                    # 编译全部
 make kernel-module      # 仅内核模块
@@ -50,34 +49,38 @@ make daemon             # 仅守护进程
 make clean              # 清理
 ```
 
-**加载模块**
+### 加载模块
+
 ```bash
 sudo insmod build/kernel-module/firewall.ko fw_ban_time=600
 cat /proc/firewall/config
 sudo rmmod firewall
 ```
 
-**基本操作**
+### 基本操作
+
 ```bash
 # 封禁（默认 / 自定义时长 / 永久）
 echo "1.2.3.4"       | sudo tee /proc/firewall/bans
 echo "1.2.3.4 3600"  | sudo tee /proc/firewall/bans
 echo "1.2.3.4 0"     | sudo tee /proc/firewall/bans
+
 # 解封 / 白名单
 echo "unban 1.2.3.4" | sudo tee /proc/firewall/bans
 echo "10.0.0.0/8"    | sudo tee /proc/firewall/whitelist
 ```
 
-**启动守护进程**
+### 启动守护进程
+
 ```bash
-sudo ./build/daemon/firewall-daemon                     # 默认配置
+sudo ./build/daemon/firewall-daemon                         # 默认配置
 sudo ./build/daemon/firewall-daemon -c config/default.yaml  # 指定配置
-sudo ./build/daemon/firewall-daemon --help              # 帮助
+sudo ./build/daemon/firewall-daemon --help                  # 帮助
 ```
 
 > 📖 完整 procfs 接口：[docs/OPERATIONS.md](docs/OPERATIONS.md)
 
-### 📚 文档导航
+## 📚 文档导航
 
 | 文档 | 内容说明 | 适合人群 |
 |------|----------|----------|
@@ -87,9 +90,11 @@ sudo ./build/daemon/firewall-daemon --help              # 帮助
 | [TESTING.md](docs/TESTING.md) | 106 项测试覆盖、运行方式 | 测试人员 |
 | [SECURITY.md](docs/SECURITY.md) | 编译选项、systemd 加固 | 安全工程师 |
 | [PERMANENT_BAN_GUIDE.md](docs/PERMANENT_BAN_GUIDE.md) | SQLite 持久化、数据库 schema | 高级用户 |
+| [FAQ.md](docs/FAQ.md) | 常见问题解答 | 所有用户 |
+| [MIGRATION.md](docs/MIGRATION.md) | 从 fail2ban 迁移指南 | 迁移用户 |
 | [CHANGELOG.md](CHANGELOG.md) | v1.0 至 v2.0 变更记录 | 所有用户 |
 
-### 适用场景
+## 适用场景
 
 | ✅ 适合 | ❌ 不推荐 |
 |---------|-----------|
@@ -97,103 +102,8 @@ sudo ./build/daemon/firewall-daemon --help              # 帮助
 | 开发/测试环境 | 需要审计合规的场景 |
 | 小规模 SSH 暴力破解防护 | 大规模分布式部署 |
 
-### 许可证与贡献
+## 许可证与贡献
 
 - **许可证**: [MIT License](LICENSE)
 - **贡献**: [Issues](https://github.com/SnowCore8/linux-firewall-kmod/issues) | [PRs](https://github.com/SnowCore8/linux-firewall-kmod/pulls)
 - **作者**: [SnowCore8](https://github.com/SnowCore8) — 使用 [OpenCode](https://opencode.ai) 辅助开发
-
----
-
-## 🇬🇧 English Documentation
-
-### Overview
-
-Firewall is a Linux kernel module version of fail2ban, moving ban logic from userspace to kernelspace using the netfilter framework for real-time IP banning at the packet level.
-
-### Why This Project
-
-| Feature | fail2ban (Userspace) | Firewall (Kernelspace) |
-|---------|---------------------|----------------------|
-| Ban Location | iptables/nftables | netfilter kernel hooks |
-| Response Time | Seconds | Milliseconds |
-| Resource Usage | Python runtime | Lightweight C daemon |
-| Lookup Performance | Linear scan | Hash table O(1) |
-
-### Core Features
-
-- ✅ **Kernel-space IP banning** — netfilter hooks for higher efficiency
-- ✅ **Jail system** — multi-service isolation like fail2ban
-- ✅ **Hash table storage** — 1024 capacity, O(1) lookup
-- ✅ **Auto-expire cleanup** — periodic cleanup of expired bans
-- ✅ **IP whitelist** — auto-discovery + manual entries (64 capacity)
-- ✅ **procfs interface** — ban/unban/whitelist/config operations
-- ✅ **C daemon** — no Python dependency, lightweight
-- ✅ **PCRE2 regex** — JIT accelerated, ReDoS protected
-- ✅ **RCU concurrency** — spinlock protected, high-concurrency safe
-- ✅ **Strict validation** — unknown params rejected by default
-- ✅ **State persistence** — SQLite for permanent bans
-- ✅ **Prometheus metrics** — exported on port 9119
-
-### Quick Start
-
-**Build**
-```bash
-make                    # Build all
-make kernel-module      # Kernel module only
-make daemon             # Daemon only
-make clean              # Clean
-```
-
-**Load Module**
-```bash
-sudo insmod build/kernel-module/firewall.ko fw_ban_time=600
-cat /proc/firewall/config
-sudo rmmod firewall
-```
-
-**Basic Operations**
-```bash
-# Ban (default / custom / permanent)
-echo "1.2.3.4"       | sudo tee /proc/firewall/bans
-echo "1.2.3.4 3600"  | sudo tee /proc/firewall/bans
-echo "1.2.3.4 0"     | sudo tee /proc/firewall/bans
-# Unban / Whitelist
-echo "unban 1.2.3.4" | sudo tee /proc/firewall/bans
-echo "10.0.0.0/8"    | sudo tee /proc/firewall/whitelist
-```
-
-**Start Daemon**
-```bash
-sudo ./build/daemon/firewall-daemon                     # Default config
-sudo ./build/daemon/firewall-daemon -c config/default.yaml  # Custom config
-sudo ./build/daemon/firewall-daemon --help              # Help
-```
-
-> 📖 Full procfs interface: [docs/OPERATIONS.md](docs/OPERATIONS.md)
-
-### 📚 Documentation Navigation
-
-| Document | Description | For |
-|----------|-------------|-----|
-| [CONFIGURATION.md](docs/CONFIGURATION.md) | YAML Jail format, parameters, hot-reload | Configuration |
-| [OPERATIONS.md](docs/OPERATIONS.md) | Deployment, procfs API, troubleshooting | Operations |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Kernel design, data flow, components | Developers |
-| [TESTING.md](docs/TESTING.md) | 106 tests, how to run/write | Testers |
-| [SECURITY.md](docs/SECURITY.md) | Build options, systemd hardening | Security |
-| [PERMANENT_BAN_GUIDE.md](docs/PERMANENT_BAN_GUIDE.md) | SQLite persistence, DB schema | Advanced users |
-| [CHANGELOG.md](CHANGELOG.md) | v1.0 to v2.0 changelog | All users |
-
-### Use Cases
-
-| ✅ Recommended | ❌ Not Recommended |
-|----------------|-------------------|
-| Personal VPS protection | Production DDoS protection |
-| Dev/test environments | Audit compliance scenarios |
-| Small-scale SSH brute-force protection | Large-scale distributed deployment |
-
-### License & Contributing
-
-- **License**: [MIT License](LICENSE)
-- **Contribute**: [Issues](https://github.com/SnowCore8/linux-firewall-kmod/issues) | [PRs](https://github.com/SnowCore8/linux-firewall-kmod/pulls)
-- **Author**: [SnowCore8](https://github.com/SnowCore8) — Built with [OpenCode](https://opencode.ai)
