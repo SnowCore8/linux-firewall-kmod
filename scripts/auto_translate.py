@@ -15,6 +15,7 @@ import re
 import time
 import sys
 import logging
+import requests
 from pathlib import Path
 
 try:
@@ -28,7 +29,30 @@ except ImportError:
 DOCS_DIR = "site-docs"
 MAX_RETRIES = 3
 DELAY = 1.5  # 请求间隔秒数
-RETRY_DELAY = 2  # 重试间隔秒数
+RETRY_DELAY = 2  # 重试基础间隔秒数
+REQUEST_TIMEOUT = 30  # 请求超时秒数
+
+# === Monkey-patch requests 添加默认超时 ===
+_original_requests_get = requests.get
+_original_requests_post = requests.post
+
+
+def _patched_requests_get(*args, **kwargs):
+    """为所有 requests.get 调用添加默认超时"""
+    if 'timeout' not in kwargs:
+        kwargs['timeout'] = REQUEST_TIMEOUT
+    return _original_requests_get(*args, **kwargs)
+
+
+def _patched_requests_post(*args, **kwargs):
+    """为所有 requests.post 调用添加默认超时"""
+    if 'timeout' not in kwargs:
+        kwargs['timeout'] = REQUEST_TIMEOUT
+    return _original_requests_post(*args, **kwargs)
+
+
+requests.get = _patched_requests_get
+requests.post = _patched_requests_post
 
 # === 日志配置 ===
 logging.basicConfig(
@@ -38,58 +62,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# === 全局翻译器缓存 ===
+_translator_cache = {}
 
-def extract_code_blocks(text):
+
+def _get_translator(src_lang, dest_lang):
     """
-    提取代码块和行内代码，返回占位符映射
+    获取或创建翻译器实例（函数级别缓存）
 
     Args:
-        text: 原始 Markdown 文本
+        src_lang: 源语言代码
+        dest_lang: 目标语言代码
 
     Returns:
-        tuple: (替换后的文本, 占位符映射字典)
+        GoogleTranslator: 翻译器实例
     """
-    blocks = {}
-    counter = [0]  # 使用列表保证闭包可修改
-
-    def replace_block(match, is_inline=False):
-        """替换代码块为占位符"""
-        placeholder = f"__CODE_BLOCK_{counter[0]}__"
-        blocks[placeholder] = match.group(0)
-        counter[0] += 1
-        # 多行代码块添加换行，行内代码保持原样
-        if is_inline:
-            return placeholder
-        return f"\n{placeholder}\n"
-
-    # 先提取多行代码块 ```...```
-    text = re.sub(r'```[\s\S]*?```', lambda m: replace_block(m, is_inline=False), text)
-
-    # 再提取行内代码 `...`
-    text = re.sub(r'`[^`]+`', lambda m: replace_block(m, is_inline=True), text)
-
-    return text, blocks
-
-
-def restore_code_blocks(text, blocks):
-    """
-    还原代码块到翻译后的文本
-
-    Args:
-        text: 翻译后的文本
-        blocks: 占位符映射字典
-
-    Returns:
-        str: 还原后的文本
-    """
-    for placeholder, original_code in blocks.items():
-        text = text.replace(placeholder, original_code)
-    return text
+    cache_key = f"{src_lang}->{dest_lang}"
+    if cache_key not in _translator_cache:
+        _translator_cache[cache_key] = GoogleTranslator(source=src_lang, target=dest_lang)
+    return _translator_cache[cache_key]
 
 
 def translate_segment(text, src_lang, dest_lang):
     """
-    翻译单个文本段，带重试机制
+    翻译单个文本段，带重试机制和指数退避
 
     Args:
         text: 待翻译文本段
@@ -102,16 +98,18 @@ def translate_segment(text, src_lang, dest_lang):
     if not text.strip():
         return text
 
+    translator = _get_translator(src_lang, dest_lang)
+
     for attempt in range(MAX_RETRIES):
         try:
-            translator = GoogleTranslator(source=src_lang, target=dest_lang)
             result = translator.translate(text)
             if result:
                 return result
-        except Exception as e:
+        except (OSError, IOError, UnicodeDecodeError, Exception) as e:
             logger.warning(f"翻译失败 (尝试 {attempt + 1}/{MAX_RETRIES}): {e}")
             if attempt < MAX_RETRIES - 1:
-                time.sleep(RETRY_DELAY)
+                # 指数退避：2s, 4s, 8s
+                time.sleep(RETRY_DELAY * (2 ** attempt))
 
     logger.error(f"翻译失败，已达最大重试次数: {text[:50]}...")
     return None
@@ -119,7 +117,7 @@ def translate_segment(text, src_lang, dest_lang):
 
 def translate_text(text, src_lang, dest_lang):
     """
-    翻译完整文本，按段落分割处理
+    翻译完整文本，按行处理保留原始换行符结构
 
     Args:
         text: 待翻译文本
@@ -127,36 +125,40 @@ def translate_text(text, src_lang, dest_lang):
         dest_lang: 目标语言代码（en 或 zh-CN）
 
     Returns:
-        str: 翻译后的文本，失败返回 None
+        tuple: (翻译后的文本, 失败段落列表)
     """
     # 提取代码块
     text, blocks = extract_code_blocks(text)
 
-    # 按段落分割（保留空行）
-    paragraphs = text.split('\n\n')
-    translated_paragraphs = []
+    # 按行处理，保留原始换行符结构
+    lines = text.split('\n')
+    translated_lines = []
+    failed_segments = []  # 记录失败的段落索引
 
-    for i, paragraph in enumerate(paragraphs):
-        if not paragraph.strip():
-            translated_paragraphs.append(paragraph)
+    for i, line in enumerate(lines):
+        if not line.strip():
+            translated_lines.append(line)
             continue
 
-        logger.info(f"翻译段落 {i + 1}/{len(paragraphs)}")
-        result = translate_segment(paragraph, src_lang, dest_lang)
+        logger.info(f"翻译行 {i + 1}/{len(lines)}")
+        result = translate_segment(line, src_lang, dest_lang)
 
         if result is None:
-            logger.warning(f"跳过翻译失败的段落 {i + 1}")
-            translated_paragraphs.append(paragraph)  # 保留原文
+            logger.warning(f"跳过翻译失败的行 {i + 1}")
+            translated_lines.append(line)  # 保留原文
+            failed_segments.append(i + 1)  # 记录失败行号（1-based）
         else:
-            translated_paragraphs.append(result)
+            translated_lines.append(result)
 
         # 请求间隔，避免限流
-        if i < len(paragraphs) - 1:
+        if i < len(lines) - 1:
             time.sleep(DELAY)
 
-    # 合并段落并还原代码块
-    translated_text = '\n\n'.join(translated_paragraphs)
-    return restore_code_blocks(translated_text, blocks)
+    # 合并行并还原代码块
+    translated_text = '\n'.join(translated_lines)
+    translated_text = restore_code_blocks(translated_text, blocks)
+
+    return translated_text, failed_segments
 
 
 def process_file_pair(zh_path, en_path):
@@ -194,11 +196,17 @@ def process_file_pair(zh_path, en_path):
         src_content = src_path.read_text(encoding='utf-8')
 
         # 执行翻译
-        translated_content = translate_text(src_content, src_lang, dest_lang)
+        translated_content, failed_segments = translate_text(src_content, src_lang, dest_lang)
 
         if translated_content is None:
             logger.error(f"翻译失败: {src_path.name}")
             return "error"
+
+        # 如果有失败的段落，在文件头部添加注释标记
+        if failed_segments:
+            warning_comment = f"<!-- 警告：以下行翻译失败，保留了原文：{', '.join(map(str, failed_segments))} -->\n\n"
+            translated_content = warning_comment + translated_content
+            logger.warning(f"文件 {dest_path.name} 包含 {len(failed_segments)} 个未翻译的段落")
 
         # 写入目标文件
         dest_path.write_text(translated_content, encoding='utf-8')
@@ -206,7 +214,7 @@ def process_file_pair(zh_path, en_path):
 
         return f"translated_{direction.replace(' -> ', '_to_')}"
 
-    except Exception as e:
+    except (OSError, IOError, UnicodeDecodeError, Exception) as e:
         logger.error(f"处理文件对时出错: {e}")
         return "error"
 

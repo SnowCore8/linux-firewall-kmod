@@ -40,6 +40,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore(docs): auto translate documentation [skip ci]"
+            git commit -m "[skip ci] chore(docs): auto translate documentation"
             git push
           fi
