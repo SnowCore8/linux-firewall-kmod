@@ -487,6 +487,38 @@ fw_cleanup() {
     rm -f /tmp/fw_compile_*.log 2>/dev/null
     rm -f /tmp/fw_test_mod_*.ko 2>/dev/null
     
+    # 清理测试包装器脚本
+    rm -f /tmp/fw_test_wrapper_*.sh 2>/dev/null
+    rm -f /tmp/fw_suite_stderr_*.log 2>/dev/null
+    
     # 注意：不再删除 /lib/modules/*/kernel/net/firewall.ko 和 /usr/local/sbin/firewall-daemon
     # 这些系统文件只能由包管理器或安装脚本管理
+}
+
+# ============================================================================
+# 错误处理和恢复
+# ============================================================================
+
+# 测试套件错误处理包装器
+fw_run_suite_with_error_handling() {
+    local suite_name="$1"
+    local suite_func="$2"
+    
+    fw_log_debug "开始执行测试套件: $suite_name"
+    
+    # 执行测试套件
+    if $suite_func; then
+        fw_log_debug "测试套件 $suite_name 成功完成"
+        return 0
+    else
+        fw_log_warn "测试套件 $suite_name 执行失败"
+        return 1
+    fi
+}
+
+# 确保清理函数在错误时也被调用
+fw_safe_cleanup() {
+    local exit_code=$?
+    fw_cleanup
+    exit $exit_code
 }

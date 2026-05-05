@@ -27,6 +27,8 @@ RUN_SUITE=""
 RUN_CATEGORY=""
 GEN_REPORT=false
 SHOW_HELP=false
+RUN_PARALLEL=false
+SUITE_TIMEOUT=120  # 单个测试套件超时时间（秒）
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -52,6 +54,14 @@ while [[ $# -gt 0 ]]; do
             TEST_DEBUG=1
             shift
             ;;
+        --parallel)
+            RUN_PARALLEL=true
+            shift
+            ;;
+        --timeout)
+            SUITE_TIMEOUT="$2"
+            shift 2
+            ;;
         *)
             echo "未知参数: $1"
             echo "使用 --help 查看用法"
@@ -70,6 +80,8 @@ if [[ "$SHOW_HELP" == true ]]; then
   --category <类别>        按类别运行 (如: daemon, performance)
   --report                 生成测试报告
   --debug                  启用调试输出
+  --parallel               并行执行测试套件（需要模块支持并发）
+  --timeout <秒>           设置单个测试套件超时时间（默认 120 秒）
   --help                   显示此帮助
 
 示例:
@@ -78,6 +90,8 @@ if [[ "$SHOW_HELP" == true ]]; then
   ./tests/run_tests.sh --suite 09         # 运行配置测试
   ./tests/run_tests.sh --report           # 运行所有测试并生成报告
   ./tests/run_tests.sh --debug            # 运行所有测试并显示调试信息
+  ./tests/run_tests.sh --timeout 60       # 设置超时为 60 秒
+  ./tests/run_tests.sh --parallel         # 并行执行测试
 EOF
     exit 0
 fi
@@ -228,6 +242,89 @@ declare -A SUITE_CATEGORIES=(
 )
 
 # ============================================================================
+# 并行执行支持
+# ============================================================================
+
+# 测试套件依赖分组
+# 组 0：基础模块测试（必须串行）
+# 组 1：独立功能测试（可并行，但共享模块状态）
+# 组 2：守护进程测试（可并行，不依赖模块状态）
+declare -A SUITE_GROUPS=(
+    ["01_module_basic"]="0"
+    ["02_procfs_interface"]="0"
+    ["03_ban_unban"]="0"
+    ["04_whitelist"]="0"
+    ["07_concurrency"]="0"
+    ["08_stress_perf"]="0"
+    ["09_daemon_config"]="2"
+    ["10_daemon_logparse"]="2"
+    ["11_resource_mgmt"]="1"
+    ["12_permanent_ban"]="1"
+    ["13_frp_jail"]="2"
+    ["14_ban_netfilter"]="1"
+)
+
+run_suites_parallel() {
+    fw_log_info "并行执行测试套件（实验性功能）"
+    fw_log_warn "注意：内核模块测试并行执行可能导致状态冲突"
+    
+    # 收集所有套件按组分类
+    local group0_suites=()
+    local group1_suites=()
+    local group2_suites=()
+    
+    for suite_key in $(echo "${!SUITE_FILES[@]}" | tr ' ' '\n' | sort); do
+        local group="${SUITE_GROUPS[$suite_key]:-1}"
+        case "$group" in
+            0) group0_suites+=("$suite_key") ;;
+            1) group1_suites+=("$suite_key") ;;
+            2) group2_suites+=("$suite_key") ;;
+        esac
+    done
+    
+    # 组 0：串行执行（模块基础测试）
+    fw_section "组 0：基础模块测试（串行）"
+    for suite_key in "${group0_suites[@]}"; do
+        run_suite "$suite_key"
+    done
+    
+    # 组 1 和 2：并行执行
+    fw_section "组 1+2：功能和守护进程测试（并行）"
+    
+    local pids=()
+    local suite_pids=()
+    
+    # 启动所有并行测试
+    for suite_key in "${group1_suites[@]}" "${group2_suites[@]}"; do
+        (
+            # 子 shell 中执行
+            run_suite "$suite_key"
+        ) &
+        pids+=($!)
+        suite_pids+=("$suite_key:$!")
+        fw_log_debug "启动测试套件 $suite_key (PID: $!)"
+    done
+    
+    # 等待所有并行测试完成
+    local failed=0
+    for i in "${!pids[@]}"; do
+        local pid=${pids[$i]}
+        local suite_key="${suite_pids[$i]%%:*}"
+        
+        if wait "$pid"; then
+            fw_log_debug "测试套件 $suite_key 完成"
+        else
+            fw_log_error "测试套件 $suite_key 失败"
+            failed=$((failed + 1))
+        fi
+    done
+    
+    if [[ $failed -gt 0 ]]; then
+        fw_log_warn "$failed 个并行测试套件失败"
+    fi
+}
+
+# ============================================================================
 # 运行测试
 # ============================================================================
 
@@ -284,22 +381,45 @@ run_suite() {
         fi
     fi
 
-    fw_log_info "运行测试套件: $suite_key"
+    fw_log_info "运行测试套件: $suite_key (超时: ${SUITE_TIMEOUT}s)"
+    
+    local start_time
+    start_time=$(date +%s)
+    
+    # 执行测试套件（直接 source，保持变量状态）
     source "./$suite_file"
+    local suite_exit_code=$?
+    
+    local end_time
+    end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    
+    # 检查是否超时
+    if [[ $duration -gt $SUITE_TIMEOUT ]]; then
+        fw_log_warn "测试套件 $suite_key 执行时间过长: ${duration}s (建议超时: ${SUITE_TIMEOUT}s)"
+    fi
+    
+    fw_log_debug "测试套件 $suite_key 完成，耗时: ${duration}s"
     
     # 执行后再次检查模块状态
     fw_log_debug "执行后检查模块状态: $suite_key"
     if ! lsmod | grep -q "^firewall"; then
         fw_log_warn "测试套件 $suite_key 执行后模块已卸载"
     fi
+    
+    return $suite_exit_code
 }
 
 if [[ "$RUN_ALL" == true ]]; then
     fw_section "运行所有测试套件"
 
-    for suite_key in $(echo "${!SUITE_FILES[@]}" | tr ' ' '\n' | sort); do
-        run_suite "$suite_key"
-    done
+    if [[ "$RUN_PARALLEL" == true ]]; then
+        run_suites_parallel
+    else
+        for suite_key in $(echo "${!SUITE_FILES[@]}" | tr ' ' '\n' | sort); do
+            run_suite "$suite_key"
+        done
+    fi
 elif [[ -n "$RUN_SUITE" ]]; then
     # 尝试匹配编号或名称
     found_suite=false
