@@ -1,0 +1,38 @@
+#!/usr/bin/make -f
+# debian/rules - 使用 dh 构建系统
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	make all
+
+override_dh_auto_install:
+	# 安装内核模块
+	install -d $(CURDIR)/debian/linux-firewall-kmod/lib/modules/$(shell uname -r)/extra
+	install -m 644 build/kernel-module/firewall.ko $(CURDIR)/debian/linux-firewall-kmod/lib/modules/$(shell uname -r)/extra/
+
+	# 安装守护进程
+	install -d $(CURDIR)/debian/linux-firewall-kmod/usr/local/sbin
+	install -m 755 build/daemon/firewall-daemon $(CURDIR)/debian/linux-firewall-kmod/usr/local/sbin/
+
+	# 安装配置文件
+	install -d $(CURDIR)/debian/linux-firewall-kmod/etc/firewall
+	install -m 644 config/*.yaml $(CURDIR)/debian/linux-firewall-kmod/etc/firewall/
+	install -d $(CURDIR)/debian/linux-firewall-kmod/etc/modules-load.d
+	install -m 644 config/modules-load.d/firewall.conf $(CURDIR)/debian/linux-firewall-kmod/etc/modules-load.d/
+
+	# 安装 systemd 服务
+	install -d $(CURDIR)/debian/linux-firewall-kmod/etc/systemd/system
+	install -m 644 firewall-daemon.service $(CURDIR)/debian/linux-firewall-kmod/etc/systemd/system/
+
+	# 创建状态目录
+	install -d -m 700 $(CURDIR)/debian/linux-firewall-kmod/var/lib/firewall
+
+	# 安装文档
+	install -d $(CURDIR)/debian/linux-firewall-kmod/usr/share/doc/linux-firewall-kmod
+	install -m 644 README.md CHANGELOG.md LICENSE $(CURDIR)/debian/linux-firewall-kmod/usr/share/doc/linux-firewall-kmod/
+
+override_dh_auto_clean:
+	make clean
+	dh_auto_clean

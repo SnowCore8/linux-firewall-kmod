@@ -1,0 +1,30 @@
+Source: linux-firewall-kmod
+Section: net
+Priority: optional
+Maintainer: SnowCore8 <admin@core8.top>
+Build-Depends: debhelper (>= 12), build-essential, linux-headers-amd64 | linux-headers-generic, libyaml-dev, libsqlite3-dev, libmicrohttpd-dev, libpcre2-dev
+Standards-Version: 4.5.1
+Rules-Requires-Root: no
+
+Package: linux-firewall-kmod
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Linux kernel module version of fail2ban
+ Firewall is a high-performance real-time IP ban protection system.
+ It moves fail2ban's core functionality from userspace to the kernel,
+ using netfilter framework for packet-level banning with lower latency.
+ .
+ Features:
+  - Kernel-space IP banning via netfilter hooks
+  - Jail system for multi-service isolation
+  - Hash table for O(1) IP lookup (1024 capacity)
+  - RCU concurrency safety + spinlock protection
+  - PCRE2 regex log parsing with JIT acceleration
+  - SQLite persistence for permanent bans
+  - Prometheus metrics export
+
+Package: linux-firewall-kmod-source
+Architecture: all
+Description: Source code for linux-firewall-kmod
+ This package contains the full source code for building
+ the firewall kernel module and userspace daemon.
