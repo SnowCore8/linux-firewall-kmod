@@ -222,4 +222,77 @@ struct firewall_info *get_fw_info(void);
 /* Netfilter 钩子操作结构（在 netfilter.c 中定义） */
 extern struct nf_hook_ops nf_ops_ipv4;
 
+/* ============================================================================
+ * 公共内联辅助函数
+ * ============================================================================ */
+
+/**
+ * ipv4_to_str - 将 IPv4 地址转换为点分十进制字符串
+ * @ip: IPv4 地址（网络字节序）
+ * @buf: 输出缓冲区
+ * @len: 缓冲区长度
+ */
+static inline void ipv4_to_str(__be32 ip, char *buf, int len)
+{
+    unsigned int a = ntohl(ip) >> 24;
+    unsigned int b = (ntohl(ip) >> 16) & 0xFF;
+    unsigned int c = (ntohl(ip) >> 8) & 0xFF;
+    unsigned int d = ntohl(ip) & 0xFF;
+
+    if (len < 16) {
+        if (len > 0) {
+            buf[0] = '\0';
+        }
+        return;
+    }
+
+    snprintf(buf, len, "%u.%u.%u.%u", a, b, c, d);
+}
+
+/**
+ * compare_ips - 比较两个 IPv4 地址是否相等
+ * @ip1: 第一个 IPv4 地址
+ * @ip2: 第二个 IPv4 地址
+ * 返回: true 如果相等，否则 false
+ */
+static inline bool compare_ips(__be32 ip1, __be32 ip2)
+{
+    return ip1 == ip2;
+}
+
+/**
+ * validate_ipv4_address - 验证 IPv4 地址是否合法
+ * @ip: IPv4 地址（网络字节序）
+ * @ip_str: IP 字符串（用于日志，可为 NULL）
+ * @context: 上下文描述（如 "ban"、"whitelist"）
+ * 返回: 0 表示合法，-EINVAL 表示非法
+ */
+static inline int validate_ipv4_address(__be32 ip, const char *ip_str, const char *context)
+{
+    unsigned int ip_num = ntohl(ip);
+
+    if (ip == 0 || ip == 0xFFFFFFFF) {
+        fw_pr_warn("Attempt to %s invalid IPv4: %s", context, ip_str ?: "(null)");
+        return -EINVAL;
+    }
+    if ((ip_num & 0xFF000000) == 0x7F000000) {
+        fw_pr_warn("Attempt to %s loopback IPv4: %s", context, ip_str ?: "(null)");
+        return -EINVAL;
+    }
+    if ((ip_num & 0xF0000000) == 0xE0000000) {
+        fw_pr_warn("Attempt to %s reserved IPv4 (multicast/Class E): %s", context, ip_str ?: "(null)");
+        return -EINVAL;
+    }
+    if ((ip_num & 0xFF000000) == 0x00000000) {
+        fw_pr_warn("Attempt to %s invalid IPv4 (0.0.0.0/8): %s", context, ip_str ?: "(null)");
+        return -EINVAL;
+    }
+    if ((ip_num & 0xFF000000) == 0xFF000000) {
+        fw_pr_warn("Attempt to %s invalid IPv4 (255.0.0.0/8): %s", context, ip_str ?: "(null)");
+        return -EINVAL;
+    }
+
+    return 0;
+}
+
 #endif /* FIREWALL_H */

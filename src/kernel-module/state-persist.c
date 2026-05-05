@@ -11,33 +11,6 @@
 /* 外部变量声明 */
 extern struct firewall_info fw_info;
 
-/* 前向声明 */
-static void ipv4_to_str(__be32 ip, char *buf, int len);
-
-/* 辅助函数：比较 IPv4 地址 */
-static inline bool compare_ips(__be32 ip1, __be32 ip2)
-{
-    return ip1 == ip2;
-}
-
-/* 辅助函数：将 IPv4 转换为字符串 */
-static void ipv4_to_str(__be32 ip, char *buf, int len)
-{
-    unsigned int a = ntohl(ip) >> 24;
-    unsigned int b = (ntohl(ip) >> 16) & 0xFF;
-    unsigned int c = (ntohl(ip) >> 8) & 0xFF;
-    unsigned int d = ntohl(ip) & 0xFF;
-
-    if (len < 16) {
-        if (len > 0) {
-            buf[0] = '\0';
-        }
-        return;
-    }
-
-    snprintf(buf, len, "%u.%u.%u.%u", a, b, c, d);
-}
-
 /*
  * save_state_to_file - 将当前状态保存到文件
  */
@@ -395,7 +368,7 @@ int restore_state_from_file(const char *filename)
                             atomic_set(&entry->retry_count, 0);
 
                             spin_lock(&fw_info.lock);
-                            hash_add(fw_info.ban_table, &entry->hash, ip);
+                            hash_add_rcu(fw_info.ban_table, &entry->hash, ip);
                             atomic_inc(&fw_info.ban_count);
                             atomic_inc(&fw_info.total_ban_count);
                             spin_unlock(&fw_info.lock);

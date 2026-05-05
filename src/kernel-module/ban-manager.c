@@ -25,30 +25,6 @@ static int __do_unban_ip(struct firewall_info *fw, __be32 ip, bool permanent_onl
 int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned long seconds);
 int check_flood_protection(void);
 
-/* 辅助函数：将 IPv4 转换为字符串 */
-static inline void ipv4_to_str(__be32 ip, char *buf, int len)
-{
-    unsigned int a = ntohl(ip) >> 24;
-    unsigned int b = (ntohl(ip) >> 16) & 0xFF;
-    unsigned int c = (ntohl(ip) >> 8) & 0xFF;
-    unsigned int d = ntohl(ip) & 0xFF;
-
-    if (len < 16) {
-        if (len > 0) {
-            buf[0] = '\0';
-        }
-        return;
-    }
-
-    snprintf(buf, len, "%u.%u.%u.%u", a, b, c, d);
-}
-
-/* 辅助函数：比较 IPv4 地址 */
-static inline bool compare_ips(__be32 ip1, __be32 ip2)
-{
-    return ip1 == ip2;
-}
-
 /*
  * __do_ban_ip - 内部统一封禁函数
  */
@@ -98,9 +74,9 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
                 kfree(entry);
                 return 0;
             } else {
-                existing->ban_time = jiffies;
-                existing->unban_time = unban_time;
-                existing->is_permanent = is_permanent;
+                WRITE_ONCE(existing->ban_time, jiffies);
+                WRITE_ONCE(existing->unban_time, unban_time);
+                WRITE_ONCE(existing->is_permanent, is_permanent);
                 atomic_set(&existing->retry_count, 0);
                 spin_unlock(&fw->lock);
                 kfree(entry);
@@ -125,7 +101,7 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
     entry->is_permanent = is_permanent;
     atomic_set(&entry->retry_count, 0);
 
-    hash_add(fw->ban_table, &entry->hash, ip);
+    hash_add_rcu(fw->ban_table, &entry->hash, ip);
     atomic_inc(&fw->ban_count);
     atomic_inc(&fw->total_ban_count);
 
@@ -232,10 +208,10 @@ int is_banned(struct firewall_info *fw, __be32 ip)
     rcu_read_lock();
     entry = __find_ban_entry_rcu(fw, ip);
     if (entry) {
-        if (entry->is_permanent) {
+        if (READ_ONCE(entry->is_permanent)) {
             FW_DEBUG(2, "Found permanent ban entry for IPv4 %pI4", &ip);
             found = 1;
-        } else if (time_after(now, entry->unban_time)) {
+        } else if (time_after(now, READ_ONCE(entry->unban_time))) {
             FW_DEBUG(2, "Found expired ban entry for IPv4 %pI4", &ip);
             found = 0;
         } else {

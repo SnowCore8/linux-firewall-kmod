@@ -6,43 +6,6 @@
 
 #include "firewall.h"
 
-/* 辅助函数：比较 IPv4 地址 */
-static inline bool compare_ips(__be32 ip1, __be32 ip2)
-{
-    return ip1 == ip2;
-}
-
-/*
- * validate_ipv4_address - 统一的 IPv4 地址验证
- */
-static int validate_ipv4_address(__be32 ip, const char *ip_str, const char *context)
-{
-    unsigned int ip_num = ntohl(ip);
-
-    if (ip == 0 || ip == 0xFFFFFFFF) {
-        fw_pr_warn("Attempt to %s invalid IPv4: %s", context, ip_str ?: "(null)");
-        return -EINVAL;
-    }
-    if ((ip_num & 0xFF000000) == 0x7F000000) {
-        fw_pr_warn("Attempt to %s loopback IPv4: %s", context, ip_str ?: "(null)");
-        return -EINVAL;
-    }
-    if ((ip_num & 0xF0000000) == 0xE0000000) {
-        fw_pr_warn("Attempt to %s reserved IPv4 (multicast/Class E): %s", context, ip_str ?: "(null)");
-        return -EINVAL;
-    }
-    if ((ip_num & 0xFF000000) == 0x00000000) {
-        fw_pr_warn("Attempt to %s invalid IPv4 (0.0.0.0/8): %s", context, ip_str ?: "(null)");
-        return -EINVAL;
-    }
-    if ((ip_num & 0xFF000000) == 0xFF000000) {
-        fw_pr_warn("Attempt to %s invalid IPv4 (255.0.0.0/8): %s", context, ip_str ?: "(null)");
-        return -EINVAL;
-    }
-
-    return 0;
-}
-
 /*
  * add_whitelist_entry - 将 IPv4 添加到白名单哈希表
  */
@@ -105,7 +68,7 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const 
         return -ENOSPC;
     }
 
-    hash_add(fw->whitelist_table, &new_entry->hash, normalized_ip);
+    hash_add_rcu(fw->whitelist_table, &new_entry->hash, normalized_ip);
     atomic_inc(&fw->whitelist_count);
     spin_unlock(&fw->whitelist_lock);
 

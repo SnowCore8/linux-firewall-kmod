@@ -13,30 +13,6 @@ struct temp_ip_entry {
     char name[16];
 };
 
-/* 辅助函数：将 IPv4 转换为字符串 */
-static inline void ipv4_to_str(__be32 ip, char *buf, int len)
-{
-    unsigned int a = ntohl(ip) >> 24;
-    unsigned int b = (ntohl(ip) >> 16) & 0xFF;
-    unsigned int c = (ntohl(ip) >> 8) & 0xFF;
-    unsigned int d = ntohl(ip) & 0xFF;
-
-    if (len < 16) {
-        if (len > 0) {
-            buf[0] = '\0';
-        }
-        return;
-    }
-
-    snprintf(buf, len, "%u.%u.%u.%u", a, b, c, d);
-}
-
-/* 辅助函数：比较 IPv4 地址 */
-static inline bool compare_ips(__be32 ip1, __be32 ip2)
-{
-    return ip1 == ip2;
-}
-
 /*
  * sync_work_handler - 延迟工作队列处理函数（防抖后执行）
  */

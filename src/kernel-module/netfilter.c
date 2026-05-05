@@ -9,12 +9,6 @@
 /* 外部变量声明 */
 extern struct firewall_info fw_info;
 
-/* 辅助函数：比较 IPv4 地址 */
-static inline bool compare_ips(__be32 ip1, __be32 ip2)
-{
-    return ip1 == ip2;
-}
-
 /*
  * nf_hook_func_ipv4 - IPv4 的 netfilter 钩子函数
  */
@@ -123,10 +117,10 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
 
     hash_for_each_possible_rcu(fw_info.ban_table, entry, hash, src_ip) {
         if (compare_ips(entry->ip, src_ip)) {
-            if (time_after(now, entry->unban_time)) {
-                is_banned = false;
-            } else {
+            if (READ_ONCE(entry->is_permanent) || time_before(now, READ_ONCE(entry->unban_time))) {
                 is_banned = true;
+            } else {
+                is_banned = false;
             }
             break;
         }

@@ -16,62 +16,6 @@ extern struct firewall_info fw_info;
 static int bans_show(struct seq_file *m, void *v);
 static int bans_open(struct inode *inode, struct file *file);
 static ssize_t bans_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos);
-static int validate_ipv4_address(__be32 ip, const char *ip_str, const char *context);
-
-/* 辅助函数：将 IPv4 转换为字符串 */
-static inline void ipv4_to_str(__be32 ip, char *buf, int len)
-{
-    unsigned int a = ntohl(ip) >> 24;
-    unsigned int b = (ntohl(ip) >> 16) & 0xFF;
-    unsigned int c = (ntohl(ip) >> 8) & 0xFF;
-    unsigned int d = ntohl(ip) & 0xFF;
-
-    if (len < 16) {
-        if (len > 0) {
-            buf[0] = '\0';
-        }
-        return;
-    }
-
-    snprintf(buf, len, "%u.%u.%u.%u", a, b, c, d);
-}
-
-/* 辅助函数：比较 IPv4 地址 */
-static inline bool compare_ips(__be32 ip1, __be32 ip2)
-{
-    return ip1 == ip2;
-}
-
-/*
- * validate_ipv4_address - 统一的 IPv4 地址验证
- */
-static int validate_ipv4_address(__be32 ip, const char *ip_str, const char *context)
-{
-    unsigned int ip_num = ntohl(ip);
-
-    if (ip == 0 || ip == 0xFFFFFFFF) {
-        fw_pr_warn("Attempt to %s invalid IPv4: %s", context, ip_str ?: "(null)");
-        return -EINVAL;
-    }
-    if ((ip_num & 0xFF000000) == 0x7F000000) {
-        fw_pr_warn("Attempt to %s loopback IPv4: %s", context, ip_str ?: "(null)");
-        return -EINVAL;
-    }
-    if ((ip_num & 0xF0000000) == 0xE0000000) {
-        fw_pr_warn("Attempt to %s reserved IPv4 (multicast/Class E): %s", context, ip_str ?: "(null)");
-        return -EINVAL;
-    }
-    if ((ip_num & 0xFF000000) == 0x00000000) {
-        fw_pr_warn("Attempt to %s invalid IPv4 (0.0.0.0/8): %s", context, ip_str ?: "(null)");
-        return -EINVAL;
-    }
-    if ((ip_num & 0xFF000000) == 0xFF000000) {
-        fw_pr_warn("Attempt to %s invalid IPv4 (255.0.0.0/8): %s", context, ip_str ?: "(null)");
-        return -EINVAL;
-    }
-
-    return 0;
-}
 
 /*
  * bans_show - 显示当前封禁列表
@@ -601,7 +545,7 @@ static ssize_t config_write(struct file *file, const char __user *buf,
                              size_t count, loff_t *ppos)
 {
     char input[256];
-    char param[MAX_DISCOVERED_IPS];
+    char param[64];
     char *value_str;
     unsigned int value;
     ssize_t len = min(count, (size_t)(sizeof(input) - 1));
