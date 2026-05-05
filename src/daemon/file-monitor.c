@@ -234,8 +234,6 @@ void process_new_lines(int idx)
     int fd = -1;
     struct stat st;
     off_t current_offset;
-    char buffer[8192];
-    ssize_t bytes_read;
     int ret = 0;
     const char *log_path;
     struct jail *j = NULL;
@@ -313,112 +311,101 @@ void process_new_lines(int idx)
         }
     }
 
-    /* 分块读取和处理数据 */
+    /* 批量读取和处理数据，减少锁竞争 */
     current_offset = file_states[idx].offset;
 
-    /* 将分配移到循环外部以便于清理 */
-    char *combined = NULL;
-
-    while ((bytes_read = read(fd, buffer, sizeof(buffer) - 1)) > 0) {
-        buffer[bytes_read] = '\0';  /* 确保安全null终止 */
-
-        /* 使用本地部分缓冲区处理数据 */
-        if (local_partial_len > 0) {
-            /* 有部分行数据，需要合并和处理 */
-            combined = malloc(local_partial_len + (size_t)bytes_read + 1);
-            if (!combined) {
-                daemon_log_err("分配组合缓冲区内存不足");
-                /* 丢弃部分数据，直接处理新数据 */
-                size_t consumed = 0;
-                /* 持有写锁处理行数据，防止 use-after-free。
-                 * process_lines_in_buffer 内部调用 process_single_line，
-                 * 会修改 j->failed_hash，需要写锁保护。*/
-                pthread_rwlock_wrlock(&config_rwlock);
-                if (jail_idx < cfg.jail_count) {
-                    process_lines_in_buffer(&cfg.jails[jail_idx], buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);
-                }
-                pthread_rwlock_unlock(&config_rwlock);
-                if (consumed < (size_t)bytes_read) {
-                    /* 将剩余数据存储为本地缓冲区中的新部分行 */
-                    size_t remain = (size_t)bytes_read - consumed;
-                    if (remain < sizeof(local_partial_buf)) {
-                        memcpy(local_partial_buf, buffer + consumed, remain);
-                        local_partial_len = remain;
-                    } else {
-                        local_partial_len = 0;
-                    }
-                }
-                current_offset += bytes_read;
-                continue;
-            }
-
-            memcpy(combined, local_partial_buf, local_partial_len);
-            memcpy(combined + local_partial_len, buffer, bytes_read);
-            combined[local_partial_len + (size_t)bytes_read] = '\0';
-            size_t total_len = local_partial_len + (size_t)bytes_read;
-
-            /* 已合并，清除本地部分行 */
-            local_partial_len = 0;
-
-            /* 处理完整的行 - 持有写锁防止 use-after-free。
-             * process_lines_in_buffer 内部调用 process_single_line，
-             * 会修改 j->failed_hash，需要写锁保护。*/
-            size_t consumed = 0;
-            pthread_rwlock_wrlock(&config_rwlock);
-            if (jail_idx < cfg.jail_count) {
-                process_lines_in_buffer(&cfg.jails[jail_idx], combined, total_len, log_path, &consumed, max_retries, findtime);
-            }
-            pthread_rwlock_unlock(&config_rwlock);
-
-            /* 将任何剩余数据存储为本地缓冲区中的新部分行 */
-            if (consumed < total_len) {
-                size_t remain = total_len - consumed;
-                if (remain < sizeof(local_partial_buf)) {
-                    memcpy(local_partial_buf, combined + consumed, remain);
-                    local_partial_len = remain;
-                } else {
-                    local_partial_len = 0;
-                }
-            }
-
-            free(combined);
-            combined = NULL;
-        } else {
-            /* 无部分行 - 直接处理缓冲区 - 持有写锁防止 use-after-free。
-             * process_lines_in_buffer 内部调用 process_single_line，
-             * 会修改 j->failed_hash，需要写锁保护。*/
-            size_t consumed = 0;
-            pthread_rwlock_wrlock(&config_rwlock);
-            if (jail_idx < cfg.jail_count) {
-                process_lines_in_buffer(&cfg.jails[jail_idx], buffer, (size_t)bytes_read, log_path, &consumed, max_retries, findtime);
-            }
-            pthread_rwlock_unlock(&config_rwlock);
-
-            if (consumed < (size_t)bytes_read) {
-                size_t remain = (size_t)bytes_read - consumed;
-                if (remain < sizeof(local_partial_buf)) {
-                    memcpy(local_partial_buf, buffer + consumed, remain);
-                    local_partial_len = remain;
-                } else {
-                    local_partial_len = 0;
-                }
-            }
-        }
-
-        /* 更新偏移量时防止整数溢出 */
-        if (current_offset > SSIZE_MAX - bytes_read) {
-            daemon_log_err("Integer overflow in file offset calculation");
-            ret = -1;
-            goto cleanup_restore_partial;
-        }
-        current_offset += bytes_read;
+    /* 分配批量读取缓冲区（最大 256KB） */
+#define BATCH_READ_MAX (256 * 1024)
+    char *batch_buf = malloc(BATCH_READ_MAX);
+    if (!batch_buf) {
+        daemon_log_err("分配批量读取缓冲区内存不足");
+        ret = -ENOMEM;
+        goto cleanup_restore_partial;
     }
 
-    if (bytes_read < 0) {
+    size_t batch_total = 0;
+    ssize_t chunk_read;
+
+    /* 批量读取：循环读取直到 EOF 或缓冲区满 */
+    while (batch_total < BATCH_READ_MAX - 1 &&
+           (chunk_read = read(fd, batch_buf + batch_total,
+                             BATCH_READ_MAX - 1 - batch_total)) > 0) {
+        batch_total += (size_t)chunk_read;
+    }
+
+    if (chunk_read < 0) {
         daemon_log_warn("Read error in %s: %s", log_path, strerror(errno));
+        free(batch_buf);
         ret = -1;
         goto cleanup_restore_partial;
     }
+
+    /* 处理批量读取的数据 */
+    if (batch_total > 0) {
+        batch_buf[batch_total] = '\0';
+
+        /* 合并部分行数据（如果有） */
+        char *process_buf = batch_buf;
+        size_t process_len = batch_total;
+        char *combined = NULL;
+
+        if (local_partial_len > 0) {
+            size_t alloc_size = local_partial_len + batch_total + 1;
+            /* 整数溢出检查 */
+            if (alloc_size < local_partial_len || alloc_size < batch_total) {
+                daemon_log_err("整数溢出检测：组合缓冲区大小计算溢出");
+                free(batch_buf);
+                ret = -ENOMEM;
+                goto cleanup_restore_partial;
+            }
+            combined = malloc(alloc_size);
+            if (!combined) {
+                daemon_log_err("分配组合缓冲区内存不足");
+                free(batch_buf);
+                ret = -ENOMEM;
+                goto cleanup_restore_partial;
+            }
+            memcpy(combined, local_partial_buf, local_partial_len);
+            memcpy(combined + local_partial_len, batch_buf, batch_total);
+            combined[local_partial_len + batch_total] = '\0';
+            process_buf = combined;
+            process_len = local_partial_len + batch_total;
+            local_partial_len = 0;  /* 已合并，清除本地部分行 */
+        }
+
+        /* 一次性获取写锁处理所有数据，减少锁竞争 */
+        size_t consumed = 0;
+        pthread_rwlock_wrlock(&config_rwlock);
+        if (jail_idx < cfg.jail_count) {
+            process_lines_in_buffer(&cfg.jails[jail_idx], process_buf, process_len,
+                                   log_path, &consumed, max_retries, findtime);
+        }
+        pthread_rwlock_unlock(&config_rwlock);
+
+        /* 保存未处理的部分行到本地缓冲区 */
+        if (consumed < process_len) {
+            size_t remain = process_len - consumed;
+            if (remain < sizeof(local_partial_buf)) {
+                memcpy(local_partial_buf, process_buf + consumed, remain);
+                local_partial_len = remain;
+            } else {
+                local_partial_len = 0;
+            }
+        }
+
+        free(combined);
+
+        /* 更新偏移量 */
+        if (current_offset > SSIZE_MAX - (ssize_t)batch_total) {
+            daemon_log_err("Offset overflow detected");
+            free(batch_buf);
+            ret = -1;
+            goto cleanup_restore_partial;
+        }
+        current_offset += batch_total;
+    }
+
+    free(batch_buf);
 
     /* 更新偏移量 */
     file_states[idx].offset = current_offset;
@@ -438,7 +425,7 @@ cleanup:
         close(fd);
         fd = -1;
     }
-    free(combined);
+    /* 注意：combined 在批量处理逻辑内部已释放，无需在此处释放 */
     if (ret < 0) {
         daemon_log_err("Failed to process %s", log_path);
     }

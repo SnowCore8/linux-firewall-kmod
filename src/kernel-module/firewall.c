@@ -1274,13 +1274,17 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
     }
 
     /* 解析输入格式："<ip>" 或 "<ip> <seconds>" */
-    /* 查找空格分隔符（如果有） */
+    /* 使用独立的局部缓冲区进行解析，避免修改原始 input 缓冲区 */
     {
+        char parse_buf[sizeof(input)];
         char *ptr;
         char *ip_start;
 
+        /* 将 input 复制到独立缓冲区进行安全解析 */
+        memcpy(parse_buf, input, sizeof(parse_buf));
+
         space_pos = NULL;
-        ptr = input;
+        ptr = parse_buf;
         while (*ptr && (*ptr == ' ' || *ptr == '\t'))
             ptr++;
 
@@ -1291,7 +1295,7 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
 
         if (*ptr) {
             /* 找到空格 - 检查是否有更多内容 */
-            *ptr = '\0';  /* 终止 IP 字符串 */
+            *ptr = '\0';  /* 在局部缓冲区中终止 IP 字符串 */
             space_pos = ptr + 1;
 
             /* 跳过空白以查找秒数值 */
@@ -2055,7 +2059,6 @@ int save_state_to_file(const char *filename)
     char buffer[512];
     loff_t pos = 0;
     int written;
-    int err;
 
     /* 临时存储结构 - 在 RCU 锁内收集数据，在锁外执行 I/O 操作 */
     struct saved_ban_entry {
@@ -2083,10 +2086,6 @@ int save_state_to_file(const char *filename)
     struct ban_entry *entry;
     struct whitelist_entry *wl_entry;
     u32 hash;
-    /* TOCTOU 保护的变量 - 在函数作用域声明 */
-    dev_t saved_dev = 0;
-    ino_t saved_ino = 0;
-    bool file_checked = false;
 
     if (!filename || !*filename) {
         fw_pr_err("Invalid filename for state save");
@@ -2155,44 +2154,8 @@ int save_state_to_file(const char *filename)
         }
     }
 
-    /* 额外安全：检查文件是否存在以及是否为符号链接 */
-    struct path path;
-    unsigned int lookup_flags = LOOKUP_FOLLOW;
-    err = kern_path(filename, lookup_flags, &path);
-    if (!err) {
-        /* 文件存在 - 获取其属性 */
-        struct kstat stat_buf2;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
-        int getattr_err = vfs_getattr(&path, &stat_buf2, STATX_BASIC_STATS, AT_STATX_SYNC_AS_STAT);
-#else
-        int getattr_err = vfs_getattr(&path, &stat_buf2);
-#endif
-        if (getattr_err) {
-            fw_pr_warn_ratelimited("Cannot stat file %s, proceeding anyway", filename);
-            goto out_path_put;
-        }
-        /* 检查是否为符号链接 */
-        if (S_ISLNK(stat_buf2.mode)) {
-            fw_pr_err("Refusing to write to symbolic link: %s", filename);
-            err = -EACCES;
-            goto out_path_put;
-        }
-        /* 检查是否为目录 */
-        if (S_ISDIR(stat_buf2.mode)) {
-            fw_pr_err("Refusing to write to directory: %s", filename);
-            err = -EISDIR;
-            goto out_path_put;
-        }
-        /* 存储 inode/dev 以供稍后一致性检查 - 分配给外部作用域变量 */
-        saved_dev = stat_buf2.dev;
-        saved_ino = stat_buf2.ino;
-        file_checked = true;
-out_path_put:
-        path_put(&path);
-    } else {
-        /* 文件不存在，这对于创建来说没问题 */
-        err = 0;
-    }
+    /* 修复 TOCTOU：移除 kern_path 预检查，直接使用 filp_open + O_NOFOLLOW
+     * 避免检查与打开之间的时间窗口被攻击者利用替换为符号链接 */
 
     /* 阶段 1：分配临时数组（GFP_KERNEL 可以睡眠，安全） */
     ban_entries = kmalloc_array(MAX_SAVE_BAN, sizeof(struct saved_ban_entry), GFP_KERNEL);
@@ -2253,7 +2216,7 @@ out_path_put:
         return PTR_ERR(file);
     }
 
-    /* inode 一致性检查：验证打开的文件与我们检查的文件匹配 */
+    /* 安全验证：打开后检查文件属性（防止 TOCTOU 攻击） */
     {
         struct kstat open_stat;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
@@ -2261,14 +2224,20 @@ out_path_put:
 #else
         int getattr_err = vfs_getattr(&file->f_path, &open_stat);
 #endif
-        if (!getattr_err && file_checked) {
-            if (open_stat.ino != saved_ino || open_stat.dev != saved_dev) {
-                fw_pr_err("File inode changed between check and open (TOCTOU): %s", filename);
-                filp_close(file, NULL);
-                kfree(ban_entries);
-                kfree(wl_entries);
-                return -EACCES;
-            }
+        if (getattr_err) {
+            fw_pr_err("Failed to stat state file after open: %s", filename);
+            filp_close(file, NULL);
+            kfree(ban_entries);
+            kfree(wl_entries);
+            return -EACCES;
+        }
+        /* 验证是普通文件（不是目录、设备、套接字等） */
+        if (!S_ISREG(open_stat.mode)) {
+            fw_pr_err("State file is not a regular file: %s", filename);
+            filp_close(file, NULL);
+            kfree(ban_entries);
+            kfree(wl_entries);
+            return -EACCES;
         }
     }
 
@@ -2330,8 +2299,9 @@ int restore_state_from_file(const char *filename)
         return -EINVAL;
     }
 
-    /* 在堆上分配缓冲区以避免大栈帧 */
-    buffer = kmalloc(PAGE_SIZE, GFP_KERNEL);
+    /* 在堆上分配缓冲区以避免大栈帧，最大支持 64KB 状态文件 */
+#define MAX_STATE_FILE_SIZE (64 * 1024)
+    buffer = kmalloc(MAX_STATE_FILE_SIZE, GFP_KERNEL);
     if (!buffer) {
         fw_pr_err("Failed to allocate buffer for state restore");
         return -ENOMEM;
@@ -2365,10 +2335,27 @@ int restore_state_from_file(const char *filename)
         }
     }
 
-    /* 将整个文件读入缓冲区 */
-    bytes_read = kernel_read(file, buffer, PAGE_SIZE - 1, &pos);
+    /* 循环读取整个文件直到 EOF 或达到最大大小 */
+    bytes_read = 0;
+    while (bytes_read < MAX_STATE_FILE_SIZE - 1) {
+        ssize_t chunk;
+        chunk = kernel_read(file, buffer + bytes_read,
+                           MAX_STATE_FILE_SIZE - 1 - bytes_read, &pos);
+        if (chunk <= 0) {
+            /* EOF 或读取错误 */
+            break;
+        }
+        bytes_read += chunk;
+    }
+
     if (bytes_read > 0) {
         buffer[bytes_read] = '\0';
+
+        /* 如果达到最大大小，记录警告 */
+        if (bytes_read >= MAX_STATE_FILE_SIZE - 1) {
+            fw_pr_warn("State file truncated at %zd bytes (max %d)",
+                      bytes_read, MAX_STATE_FILE_SIZE);
+        }
 
         line = buffer;
         while ((token = strsep(&line, "\n")) != NULL) {

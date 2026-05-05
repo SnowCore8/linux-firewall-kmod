@@ -48,6 +48,7 @@ struct failed_entry *create_entry_for_jail(struct jail *j, const char *ip)
     char *key_copy = strdup(ip);
     if (!key_copy) {
         daemon_log_err("Failed to allocate memory for hash key");
+        /* 注意：此时 kh_key 仍指向原始 ip 参数（非堆分配），无需释放 */
         kh_del(ip_map, j->failed_hash, k);  /* 移除空槽位 */
         return NULL;
     }
@@ -57,7 +58,9 @@ struct failed_entry *create_entry_for_jail(struct jail *j, const char *ip)
     struct failed_entry *entry = calloc(1, sizeof(*entry));
     if (!entry) {
         daemon_log_err("Failed to allocate memory for failed entry");
-        free(key_copy);
+        /* 键已设置为 key_copy，必须先释放键再删除条目 */
+        free((char *)kh_key(j->failed_hash, k));
+        kh_key(j->failed_hash, k) = NULL;
         kh_del(ip_map, j->failed_hash, k);  /* 移除空槽位 */
         return NULL;
     }

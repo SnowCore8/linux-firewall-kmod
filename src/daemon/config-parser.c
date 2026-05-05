@@ -66,13 +66,18 @@ static int parse_yaml_into(const char *config_path, struct config *target)
 
     /* 提取配置文件目录以解析相对路径 */
     char config_dir[1024];
-    strncpy(config_dir, config_path, sizeof(config_dir) - 1);
-    config_dir[sizeof(config_dir) - 1] = '\0';
+    size_t path_len = strlen(config_path);
+    if (path_len >= sizeof(config_dir)) {
+        daemon_log_err("Config path too long (%zu >= %zu): %s",
+                      path_len, sizeof(config_dir), config_path);
+        return -1;
+    }
+    memcpy(config_dir, config_path, path_len + 1);  /* 安全：已检查长度 */
     char *last_slash = strrchr(config_dir, '/');
     if (last_slash) {
         *last_slash = '\0';
     } else {
-        strcpy(config_dir, ".");
+        memcpy(config_dir, ".", 2);  /* 安全：小常量字符串 */
     }
 
     /* 打开配置文件 */

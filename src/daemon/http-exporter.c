@@ -49,6 +49,8 @@ static pthread_t exporter_thread_id;
 static pthread_mutex_t thread_id_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t thread_id_cond = PTHREAD_COND_INITIALIZER;
 static bool thread_id_ready = false;
+/* 修复问题8：跟踪线程是否成功创建，防止对未创建的线程调用 join */
+static atomic_bool exporter_thread_created = false;
 
 /* ============================================================================
  * 日志辅助函数（使用 syslog 以保持与守护进程一致）
@@ -335,6 +337,9 @@ void *start_http_exporter(void *port)
     pthread_cond_signal(&thread_id_cond);
     pthread_mutex_unlock(&thread_id_mutex);
 
+    /* 修复问题8：标记线程已成功创建 */
+    atomic_store(&exporter_thread_created, true);
+
     /* 标记导出器为运行状态 */
     atomic_store(&http_exporter_running, true);
 
@@ -382,19 +387,28 @@ void *start_http_exporter(void *port)
  *
  * 从 cleanup() 调用以优雅关闭导出器线程。
  * 修复 1.4：等待线程 ID 就绪后调用 pthread_join 确保线程完全结束。
+ * 修复问题8：仅在成功创建后才调用 pthread_join，防止线程泄漏。
  */
 void stop_http_exporter(void)
 {
     if (atomic_load(&http_exporter_running)) {
         atomic_store(&http_exporter_running, false);
 
-        /* 等待线程 ID 就绪，防止线程还未初始化就 join */
-        pthread_mutex_lock(&thread_id_mutex);
-        while (!thread_id_ready) {
-            pthread_cond_wait(&thread_id_cond, &thread_id_mutex);
-        }
-        pthread_mutex_unlock(&thread_id_mutex);
+        /* 修复问题8：仅在成功创建后才等待和 join 线程 */
+        if (atomic_load(&exporter_thread_created)) {
+            /* 等待线程 ID 就绪，防止线程还未初始化就 join */
+            pthread_mutex_lock(&thread_id_mutex);
+            while (!thread_id_ready) {
+                pthread_cond_wait(&thread_id_cond, &thread_id_mutex);
+            }
+            pthread_mutex_unlock(&thread_id_mutex);
 
-        pthread_join(exporter_thread_id, NULL);
+            /* 安全 join：检查线程是否仍然有效 */
+            int join_err = pthread_join(exporter_thread_id, NULL);
+            if (join_err != 0 && join_err != ESRCH) {
+                /* ESRCH 表示线程已退出，其他错误记录日志 */
+                exporter_log_warn("pthread_join failed: %s", strerror(join_err));
+            }
+        }
     }
 }
