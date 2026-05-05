@@ -53,19 +53,17 @@ int validate_ipv4(const char *ip, validated_ip_t *out) {
 }
 
 /* 安全的procfs文件操作辅助函数 */
-int secure_procfs_write(const char *path, const char *data, size_t data_len) {
-  int fd;
-  ssize_t written;
-  size_t total_written = 0;
 
-  /* 验证输入参数 */
-  if (!path || !data || data_len == 0) {
-    daemon_log_err("Invalid parameters to secure_procfs_write");
-    return -1;
-  }
+/**
+ * validate_procfs_path - 验证procfs路径的安全性
+ * @path: 要验证的路径
+ * 返回: 0 表示验证通过，-1 表示失败
+ */
+static int validate_procfs_path(const char *path) {
+  const char *p;
 
-  /* 安全检查：验证路径在 /proc/firewall/ 内 */
-  if (strncmp(path, PROCFS_DIR "/", sizeof(PROCFS_DIR)) != 0) {
+  /* 验证路径在 /proc/firewall/ 内 */
+  if (strncmp(path, PROCFS_DIR "/", sizeof(PROCFS_DIR) + 1) != 0) {
     daemon_log_err("secure_procfs_write: path outside %s: %s", PROCFS_DIR,
                    path);
     return -1;
@@ -77,40 +75,223 @@ int secure_procfs_write(const char *path, const char *data, size_t data_len) {
     return -1;
   }
 
-  /* 检查数据长度以防止过长的写入 */
-  if (data_len > 256) {
-    daemon_log_err("Data too long for procfs write (%zu bytes)", data_len);
+  /* 验证路径只包含安全字符 */
+  for (p = path + sizeof(PROCFS_DIR); *p; p++) {
+    if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+          (*p >= '0' && *p <= '9') || *p == '/' || *p == '-' || *p == '_' ||
+          *p == '.')) {
+      daemon_log_err("secure_procfs_write: invalid character in path: %s "
+                     "(char: '%c' at offset %ld)",
+                     path, *p, (long)(p - path));
+      return -1;
+    }
+  }
+
+  /* 验证路径不以/结尾 */
+  size_t path_len = strlen(path);
+  if (path_len > 0 && path[path_len - 1] == '/') {
+    daemon_log_err("secure_procfs_write: path ends with '/': %s", path);
     return -1;
   }
 
-  fd = open(path, O_WRONLY);
-  if (fd < 0) {
-    daemon_log_err("Failed to open %s: %s", path, strerror(errno));
+  return 0;
+}
+
+/**
+ * verify_procfs_fd - 验证文件描述符指向procfs路径
+ * @fd: 文件描述符
+ * 返回: 0 表示验证通过，-1 表示失败
+ */
+static int verify_procfs_fd(int fd) {
+  char proc_fd_path[64];
+  char link_target[PATH_MAX];
+  ssize_t link_len;
+
+  snprintf(proc_fd_path, sizeof(proc_fd_path), "/proc/self/fd/%d", fd);
+  link_len = readlink(proc_fd_path, link_target, sizeof(link_target) - 1);
+  if (link_len < 0) {
+    daemon_log_err("Failed to read link for fd %d: %s", fd, strerror(errno));
+    return -1;
+  }
+  link_target[link_len] = '\0';
+
+  /* 验证目标路径确实是procfs路径 */
+  if (strncmp(link_target, "/proc/firewall/", 15) != 0) {
+    daemon_log_err("secure_procfs_write: fd %d points to non-procfs path: "
+                   "%s (expected /proc/firewall/...)",
+                   fd, link_target);
     return -1;
   }
 
-  // 以可控方式写入数据
+  return 0;
+}
+
+/**
+ * write_to_procfs_fd - 向已打开的procfs文件描述符写入数据
+ * @fd: 文件描述符
+ * @data: 要写入的数据
+ * @data_len: 数据长度
+ * 返回: 0 表示成功，-1 表示失败
+ */
+static int write_to_procfs_fd(int fd, const char *data, size_t data_len) {
+  ssize_t written;
+  size_t total_written = 0;
+
   while (total_written < data_len) {
     written = write(fd, data + total_written, data_len - total_written);
     if (written < 0) {
-      if (errno == EINTR || errno == EAGAIN) {
-        continue; // 被中断或资源暂时不可用，重试
-      } else {
-        daemon_log_err("Failed to write to %s: %s", path, strerror(errno));
-        close(fd);
-        return -1;
-      }
+      if (errno == EINTR || errno == EAGAIN)
+        continue; /* 被中断或资源暂时不可用，重试 */
+
+      daemon_log_err("Failed to write to procfs fd %d: %s", fd,
+                     strerror(errno));
+      return -1;
     }
     total_written += written;
   }
 
-  // 关闭文件描述符
-  if (close(fd) < 0) {
-    daemon_log_warn("Failed to close %s: %s", path, strerror(errno));
-    /* 写入成功，因此返回成功。procfs 关闭失败很罕见且通常非致命（如 EINTR）。*/
+  return 0;
+}
+
+int secure_procfs_write(const char *path, const char *data, size_t data_len) {
+  int fd = -1;
+  int ret = -1;
+
+  /* 验证输入参数 */
+  if (!path || !data || data_len == 0) {
+    daemon_log_err("Invalid parameters to secure_procfs_write");
+    goto cleanup;
+  }
+
+  /* 验证路径安全性 */
+  if (validate_procfs_path(path) < 0)
+    goto cleanup;
+
+  /* 检查数据长度 */
+  if (data_len > 256) {
+    daemon_log_err("Data too long for procfs write (%zu bytes)", data_len);
+    goto cleanup;
+  }
+
+  /* 打开文件（禁止跟随符号链接） */
+  fd = open(path, O_WRONLY | O_NOFOLLOW);
+  if (fd < 0) {
+    daemon_log_err("Failed to open %s: %s", path, strerror(errno));
+    goto cleanup;
+  }
+
+  /* 验证文件描述符指向procfs */
+  if (verify_procfs_fd(fd) < 0)
+    goto cleanup;
+
+  /* 写入数据 */
+  if (write_to_procfs_fd(fd, data, data_len) < 0)
+    goto cleanup;
+
+  ret = 0; /* 成功 */
+
+cleanup:
+  /* 统一资源清理 */
+  if (fd >= 0) {
+    if (close(fd) < 0 && ret == 0)
+      daemon_log_warn("Failed to close %s: %s", path, strerror(errno));
+  }
+
+  return ret;
+}
+
+/**
+ * format_ban_command - 根据操作类型格式化封禁命令
+ * @action: 封禁操作类型
+ * @ip: IPv4地址字符串
+ * @cmd_buf: 输出缓冲区
+ * @cmd_buf_size: 缓冲区大小
+ * 返回: 写入的字节数，失败返回-1
+ */
+static int format_ban_command(ban_action_t action, const char *ip,
+                              char *cmd_buf, size_t cmd_buf_size) {
+  int cmd_len;
+
+  switch (action) {
+  case BAN_ACTION_TEMP:
+    cmd_len = snprintf(cmd_buf, cmd_buf_size, "%s\n", ip);
+    break;
+  case BAN_ACTION_PERMANENT:
+    cmd_len = snprintf(cmd_buf, cmd_buf_size, "%s 0\n", ip);
+    break;
+  case BAN_ACTION_UNBAN:
+  case BAN_ACTION_UNBAN_PERM:
+    cmd_len = snprintf(cmd_buf, cmd_buf_size, "unban %s\n", ip);
+    break;
+  default:
+    daemon_log_err("Unknown ban action type: %d", action);
+    return -1;
+  }
+
+  if (cmd_len < 0 || (size_t)cmd_len >= cmd_buf_size) {
+    daemon_log_err("Command buffer overflow for IP %s", ip);
+    return -1;
+  }
+
+  return cmd_len;
+}
+
+/**
+ * execute_sqlite_action - 执行SQLite持久化操作
+ * @action: 封禁操作类型
+ * @ip: IPv4地址字符串
+ * @validated: 已验证的IP结构
+ * 返回: 0 表示成功，负数表示失败
+ */
+static int execute_sqlite_action(ban_action_t action, const char *ip,
+                                 validated_ip_t validated) {
+  int sqlite_rc = 0;
+
+  if (!sqlite_db)
+    return 0;
+
+  if (action == BAN_ACTION_PERMANENT) {
+    sqlite_rc = sqlite_add_permanent_ban(sqlite_db, ip, validated.ip_num,
+                                         "manual permanent ban", "manual");
+  } else if (action == BAN_ACTION_UNBAN_PERM) {
+    sqlite_rc = sqlite_remove_permanent_ban(sqlite_db, ip);
+  }
+
+  if (sqlite_rc != 0 && sqlite_rc != -2) { /* -2 = 已存在（不是错误） */
+    daemon_log_warn("SQLite operation failed for IP %s (action=%d, rc=%d)",
+                    ip, action, sqlite_rc);
   }
 
   return 0;
+}
+
+/**
+ * log_ban_action - 记录封禁操作日志和更新统计
+ * @action: 封禁操作类型
+ * @ip: IPv4地址字符串
+ */
+static void log_ban_action(ban_action_t action, const char *ip) {
+  /* 更新统计 */
+  if (action == BAN_ACTION_TEMP || action == BAN_ACTION_PERMANENT)
+    atomic_fetch_add(&daemon_stats.ips_banned, 1);
+
+  /* 记录操作日志 */
+  switch (action) {
+  case BAN_ACTION_TEMP:
+    daemon_log_info("Banned IP %s", ip);
+    break;
+  case BAN_ACTION_PERMANENT:
+    daemon_log_info("Permanently banned IP %s", ip);
+    break;
+  case BAN_ACTION_UNBAN:
+    daemon_log_info("Unbanned IP %s", ip);
+    break;
+  case BAN_ACTION_UNBAN_PERM:
+    daemon_log_info("Removed permanent ban for IP %s", ip);
+    break;
+  default:
+    break;
+  }
 }
 
 /*
@@ -135,27 +316,10 @@ int execute_ban_action(ban_action_t action, const char *ip) {
     return -1;
   }
 
-  /* 根据操作类型格式化命令 */
-  switch (action) {
-  case BAN_ACTION_TEMP:
-    cmd_len = snprintf(cmd_buf, sizeof(cmd_buf), "%s\n", ip);
-    break;
-  case BAN_ACTION_PERMANENT:
-    cmd_len = snprintf(cmd_buf, sizeof(cmd_buf), "%s 0\n", ip);
-    break;
-  case BAN_ACTION_UNBAN:
-  case BAN_ACTION_UNBAN_PERM:
-    cmd_len = snprintf(cmd_buf, sizeof(cmd_buf), "unban %s\n", ip);
-    break;
-  default:
-    daemon_log_err("Unknown ban action type: %d", action);
+  /* 格式化命令 */
+  cmd_len = format_ban_command(action, ip, cmd_buf, sizeof(cmd_buf));
+  if (cmd_len < 0)
     return -1;
-  }
-
-  if (cmd_len < 0 || (size_t)cmd_len >= sizeof(cmd_buf)) {
-    daemon_log_err("Command buffer overflow for IP %s", ip);
-    return -1;
-  }
 
   /* 通过procfs写入内核模块 */
   if (secure_procfs_write(BANS_PATH, cmd_buf, (size_t)cmd_len) < 0) {
@@ -163,42 +327,11 @@ int execute_ban_action(ban_action_t action, const char *ip) {
     return -1;
   }
 
-  /* 处理永久封禁操作的SQLite持久化 */
-  if (sqlite_db) {
-    int sqlite_rc = 0;
-    if (action == BAN_ACTION_PERMANENT) {
-      sqlite_rc = sqlite_add_permanent_ban(sqlite_db, ip, validated.ip_num,
-                                           "manual permanent ban", "manual");
-    } else if (action == BAN_ACTION_UNBAN_PERM) {
-      sqlite_rc = sqlite_remove_permanent_ban(sqlite_db, ip);
-    }
+  /* 处理SQLite持久化 */
+  execute_sqlite_action(action, ip, validated);
 
-    if (sqlite_rc != 0 && sqlite_rc != -2) { /* -2 = 已存在（不是错误）。 */
-      daemon_log_warn("SQLite operation failed for IP %s (action=%d, rc=%d)",
-                      ip, action, sqlite_rc);
-    }
-  }
-
-  /* 更新封禁操作的统计和日志 */
-  if (action == BAN_ACTION_TEMP || action == BAN_ACTION_PERMANENT) {
-    atomic_fetch_add(&daemon_stats.ips_banned, 1);
-  }
-
-  /* 记录操作日志 */
-  switch (action) {
-  case BAN_ACTION_TEMP:
-    daemon_log_info("Banned IP %s", ip);
-    break;
-  case BAN_ACTION_PERMANENT:
-    daemon_log_info("Permanently banned IP %s", ip);
-    break;
-  case BAN_ACTION_UNBAN:
-    daemon_log_info("Unbanned IP %s", ip);
-    break;
-  case BAN_ACTION_UNBAN_PERM:
-    daemon_log_info("Removed permanent ban for IP %s", ip);
-    break;
-  }
+  /* 记录操作日志和更新统计 */
+  log_ban_action(action, ip);
 
   return 0;
 }
