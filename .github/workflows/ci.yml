@@ -46,9 +46,10 @@ jobs:
             exit 1
           fi
 
-  # 测试任务：保持原有配置不变
+  # 测试任务：依赖编译任务，确保编译成功后再运行测试
   test:
     name: 运行测试
+    needs: [build]
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -65,10 +66,10 @@ jobs:
       - name: 执行测试并生成报告
         run: sudo ./tests/run_tests.sh --report
 
-  # 代码质量任务：合并原有的 code-quality 和 yaml-lint
-  # 包含代码风格检查、YAML 配置检查和编译警告检查
+  # 代码质量任务：依赖编译任务，包含代码风格检查、YAML 配置检查和编译警告检查
   lint:
     name: 代码质量检查
+    needs: [build]
     runs-on: ubuntu-latest
 
     steps:
