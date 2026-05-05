@@ -100,4 +100,4 @@ jobs:
           path: .
 
       - name: 执行测试并生成报告
-        run: sudo ./tests/run_tests.sh --report
+        run: sudo -E ./tests/run_tests.sh --report
