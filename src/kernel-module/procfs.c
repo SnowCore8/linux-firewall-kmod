@@ -230,7 +230,6 @@ static long parse_ban_duration(const char *input)
     }
 
     {
-        char *endp;
         long seconds;
         int ret = kstrtol(space_pos, 10, &seconds);
 
@@ -240,7 +239,7 @@ static long parse_ban_duration(const char *input)
         }
 
         /* 检查是否有非数字后缀 */
-        endp = space_pos;
+        const char *endp = space_pos;
         while (*endp >= '0' && *endp <= '9')
             endp++;
         if (*endp != '\0' && *endp != ' ' && *endp != '\t' && *endp != '\n') {
