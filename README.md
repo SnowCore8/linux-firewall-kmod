@@ -120,6 +120,10 @@ sudo ./build/daemon/firewall-daemon --permissive  # 宽松模式（仅警告）
 
 MIT License — 详见 [LICENSE](LICENSE)
 
+## 贡献
+
+欢迎开发者贡献代码！请通过 [Issues](https://github.com/SnowCore8/linux-firewall-kmod/issues) 或 [Pull Requests](https://github.com/SnowCore8/linux-firewall-kmod/pulls) 参与。
+
 ## 关于项目
 
 本项目由 **SnowCore8** 独立开发，使用 [OpenCode](https://opencode.ai) AI 编程助手辅助完成。
