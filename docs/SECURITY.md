@@ -1,6 +1,6 @@
 # 安全特性技术文档
 
-**版本**: v2.0
+**版本**: v2.1
 
 ## 1. 编译安全
 
@@ -69,6 +69,12 @@ CapabilityBoundingSet=CAP_NET_ADMIN CAP_DAC_READ_SEARCH  # 最小权限
 
 procfs 接口检测编码绕过：`%2e` → `.`、`%2f` → `/`、`%2e%2e` → `..`
 
+### 3.4 procfs 接口安全
+
+- **IP 地址长度验证**：防止 `strncpy` 缓冲区溢出，确保输入 IP 地址不超过内部缓冲区大小
+- **输入长度检查**：`config_write` 添加 `count` 参数验证，拒绝超长写入请求
+- **控制字符过滤**：拒绝非 printable 字符，防止注入攻击和异常输入
+
 ## 4. 并发安全
 
 ### 4.1 RCU 机制
@@ -82,7 +88,11 @@ rcu_read_unlock()                spin_unlock()
                                  call_rcu() → 延迟释放
 ```
 
-**关键保证**：读者无需等待写者；写者等待 RCU 宽限期后释放内存；字段读写使用 `READ_ONCE`/`WRITE_ONCE` 防止编译器重排序。
+**关键保证**：
+- 读者无需等待写者；写者等待 RCU 宽限期后释放内存
+- 所有共享字段读写配对使用 `READ_ONCE`/`WRITE_ONCE` 防止编译器重排序
+- 白名单遍历中 `mask` 和 `ip` 字段使用 `READ_ONCE` 保护，确保读取一致性
+- 配置重载使用双缓冲模式，锁内仅执行指针交换，避免持锁期间长时间操作
 
 ### 4.2 锁设计
 
@@ -143,6 +153,11 @@ if (close_stat.ino != saved_stat.ino)
 - 最大长度：1024 字节
 - JIT 编译加速，匹配超时保护
 
+### 6.3 运行时保护
+
+- **PCRE2_MATCH_LIMIT**：10000 次最大回溯次数，防止正则表达式拒绝服务攻击（ReDoS）
+- **PCRE2_DEPTH_LIMIT**：1000 层最大递归深度，防止深层嵌套正则导致栈溢出
+
 ## 7. 监控指标
 
 Prometheus 指标（端口 9119）：
@@ -157,6 +172,11 @@ Prometheus 指标（端口 9119）：
 
 | 版本 | 修复内容 |
 |------|---------|
+| v2.1 | 整数溢出漏洞修复（`1U << 32` → `1ULL`） |
+| v2.1 | Use-After-Free 漏洞修复（HTTP exporter 持锁复制字符串） |
+| v2.1 | RCU 读取一致性修复（`READ_ONCE`/`WRITE_ONCE` 配对） |
+| v2.1 | 路径验证增强（`O_NOFOLLOW` + `/proc/self/fd/` 验证） |
+| v2.1 | ReDoS 防护增强（`PCRE2_MATCH_LIMIT` 限制回溯） |
 | v2.0 | RCU 安全性修复（`hash_add_rcu`、`READ_ONCE`/`WRITE_ONCE`） |
 | v2.0 | TOCTOU 竞态条件修复（`O_NOFOLLOW` + inode 验证） |
 | v2.0 | 缓冲区溢出修复（独立解析缓冲区） |

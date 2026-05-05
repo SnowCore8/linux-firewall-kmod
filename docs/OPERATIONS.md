@@ -1,7 +1,7 @@
 # Firewall 运维操作手册
 
-**版本**: v2.0  
-**最后更新**: 2026-05-05
+**版本**: v2.1  
+**最后更新**: 2026-05-06
 
 ## 1. 安装部署
 
@@ -64,6 +64,18 @@ sudo systemctl enable --now firewall-daemon
 | `/proc/firewall/config` | 0600 | 运行时配置 |
 | `/proc/firewall/stats` | 0400 | 统计信息 |
 
+### 2.1.1 安全增强（v2.1）
+
+**输入验证**：
+- IP 地址长度验证：防止缓冲区溢出
+- 输入长度检查：`count > sizeof(input) - 1` 拒绝超大输入
+- 控制字符过滤：拒绝非 printable 字符（除空格和制表符）
+
+**路径验证**：
+- `O_NOFOLLOW` 标志：防止符号链接绕过
+- `/proc/self/fd/` 验证：确认文件描述符指向 procfs 路径
+- 字符白名单：仅允许字母、数字、`/`、`-`、`_`、`.`
+
 ### 2.2 封禁操作
 
 | 操作 | 格式 | 示例 |
@@ -74,7 +86,7 @@ sudo systemctl enable --now firewall-daemon
 | 永久封禁 | `IP 0` | `echo "1.2.3.4 0" \| sudo tee /proc/firewall/bans` |
 | 解封 | `unban IP` | `echo "unban 1.2.3.4" \| sudo tee /proc/firewall/bans` |
 
-**限制**：封禁上限 1024 IP，ban_time 范围 30 秒 ~ 31,536,000 秒（1 年）。
+**限制**：封禁上限 4096 IP，ban_time 范围 30 秒 ~ 31,536,000 秒（1 年）。
 
 ### 2.3 白名单操作
 
@@ -296,7 +308,7 @@ echo "restore /var/lib/firewall/state.bin" | sudo tee /proc/firewall/config
 
 | 限制 | 说明 |
 |------|------|
-| 封禁容量 | 最多 1024 个 IP |
+| 封禁容量 | 最多 4096 个 IP |
 | 白名单容量 | 最多 64 个条目 |
 | IPv6 支持 | 仅支持 IPv4 |
 | 分片包 | 无法检查分片包内容，直接放行 |

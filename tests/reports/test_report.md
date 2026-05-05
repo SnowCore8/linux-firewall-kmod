@@ -1,6 +1,6 @@
 # Firewall 测试报告
 
-**生成时间**: 2026-05-06 02:01:01
+**生成时间**: 2026-05-06 03:25:19
 **总计**: 105 | **通过**: 102 | **失败**: 0 | **警告**: 2 | **跳过**: 1
 
 ## 测试结果
@@ -112,13 +112,13 @@
 - ✅ **[黑名单 netfilter 封禁测试]** bans 接口存在
 - ✅ **[黑名单 netfilter 封禁测试]** stats 接口存在
 - ✅ **[黑名单 netfilter 封禁测试]** packets_dropped 初始值: 0
-- ✅ **[黑名单 netfilter 封禁测试]** packets_accepted 初始值: 21
+- ✅ **[黑名单 netfilter 封禁测试]** packets_accepted 初始值: 134
 - ✅ **[黑名单 netfilter 封禁测试]** IP 223.5.5.5 封禁成功
 - ✅ **[黑名单 netfilter 封禁测试]** 封禁数量增加 (20 → 21)
 - ✅ **[黑名单 netfilter 封禁测试]** ban_table 中存在 223.5.5.5 的封禁记录
 - ✅ **[黑名单 netfilter 封禁测试]** 封禁条目格式正确
 - ✅ **[黑名单 netfilter 封禁测试]** IP 223.5.5.5 解封成功
-- ✅ **[黑名单 netfilter 封禁测试]** packets_dropped 最终值: 0
+- ✅ **[黑名单 netfilter 封禁测试]** packets_dropped 最终值: 5
 - ✅ **[黑名单 netfilter 封禁测试]** current_bans 恢复到初始水平: 20
 
 ## ✓ 所有测试通过!
