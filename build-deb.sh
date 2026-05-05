@@ -9,6 +9,7 @@ VERSION="${1:-2.0.0}"
 VERSION="${VERSION#v}"
 BUILD_DIR="build/deb"
 PACKAGE_NAME="linux-firewall-kmod"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "=== 构建 Debian 软件包 ==="
 echo "版本: $VERSION"
@@ -143,6 +144,9 @@ chmod 755 "$TEMP_DIR/DEBIAN/postrm"
 echo "构建 deb 包..."
 cd "$BUILD_DIR"
 dpkg-deb --build --root-owner-group "$PACKAGE_NAME-$VERSION"
+
+# 回到项目根目录
+cd "$PROJECT_ROOT"
 
 echo "=== 构建完成 ==="
 echo "deb 包位置: $BUILD_DIR/$PACKAGE_NAME-$VERSION.deb"
