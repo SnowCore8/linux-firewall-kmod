@@ -46,6 +46,7 @@ theme:
     - content.tooltips            # 工具提示
 
 # 导航结构
+# 注意：使用不带语言后缀的基础文件名，i18n 插件会自动处理多语言版本
 nav:
   - 快速开始:
       - 项目介绍: index.md
@@ -102,6 +103,52 @@ plugins:
         - zh
         - en
       separator: '[\s\-,:!=\[\]()"/]+|(?!\b)(?=[A-Z][a-z])|\.(?!\d)|[，,、]'
+  - i18n:
+      docs_structure: suffix
+      languages:
+        - locale: zh
+          default: true
+          name: 中文
+          build: true
+          nav_translations:
+            快速开始: 快速开始
+            深入理解: 深入理解
+            运维与使用: 运维与使用
+            开发与贡献: 开发与贡献
+            其他: 其他
+            项目介绍: 项目介绍
+            安装部署: 安装部署
+            配置指南: 配置指南
+            架构设计: 架构设计
+            安全特性: 安全特性
+            永久封禁: 永久封禁
+            常见问题: 常见问题
+            迁移指南: 迁移指南
+            贡献指南: 贡献指南
+            Git 工作流: Git 工作流
+            测试框架: 测试框架
+            更新日志: 更新日志
+        - locale: en
+          name: English
+          build: true
+          nav_translations:
+            快速开始: Getting Started
+            深入理解: Deep Dive
+            运维与使用: Operations
+            开发与贡献: Development
+            其他: Others
+            项目介绍: Overview
+            安装部署: Installation
+            配置指南: Configuration
+            架构设计: Architecture
+            安全特性: Security
+            永久封禁: Permanent Ban
+            常见问题: FAQ
+            迁移指南: Migration Guide
+            贡献指南: Contributing
+            Git 工作流: Git Workflow
+            测试框架: Testing
+            更新日志: Changelog
   - minify:
       minify_html: true
 
