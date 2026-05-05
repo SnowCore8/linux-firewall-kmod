@@ -5,6 +5,8 @@
 set -e
 
 VERSION="${1:-2.0.0}"
+# 移除版本号前的 'v' 前缀（deb 版本必须以数字开头）
+VERSION="${VERSION#v}"
 BUILD_DIR="build/deb"
 PACKAGE_NAME="linux-firewall-kmod"
 
