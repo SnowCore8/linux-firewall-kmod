@@ -178,28 +178,48 @@ struct firewall_info {
 };
 
 /* 函数声明 */
+
+/* ban-manager.c */
 int ban_ip(struct firewall_info *fw, __be32 ip);
 int ban_ip_permanent(struct firewall_info *fw, __be32 ip);
+int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned long seconds);
 int unban_ip(struct firewall_info *fw, __be32 ip);
 int unban_permanent_ip(struct firewall_info *fw, __be32 ip);
 int is_banned(struct firewall_info *fw, __be32 ip);
 int is_permanently_banned(struct firewall_info *fw, __be32 ip);
+int check_flood_protection(void);
 
-/* 白名单函数 */
+/* whitelist.c */
 int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const char *dev_name);
 int remove_whitelist_entry(struct firewall_info *fw, __be32 ip);
 bool is_in_whitelist(struct firewall_info *fw, __be32 ip);
+
+/* netdev.c */
 void auto_discover_system_ips(struct firewall_info *fw);
 void sync_system_ips(struct firewall_info *fw);
-
-/* 网络事件监听 */
+void sync_work_handler(struct work_struct *work);
 int register_netdev_notifier(struct firewall_info *fw);
 void unregister_netdev_notifier(struct firewall_info *fw);
 
+/* procfs.c */
 int create_procfs_entries(struct firewall_info *fw);
 void destroy_procfs_entries(struct firewall_info *fw);
 
+/* state-persist.c */
+int save_state_to_file(const char *filename);
+int restore_state_from_file(const char *filename);
+
+/* RCU 回调函数（cleanup.c 中定义，其他模块需要使用） */
+void free_ban_entry_rcu(struct rcu_head *head);
+void free_whitelist_entry_rcu(struct rcu_head *head);
+
+/* 清理定时器回调（cleanup.c 中定义） */
+void cleanup_timer_callback(struct timer_list *t);
+
 /* 导出函数，提供对 fw_info 的受控访问 */
 struct firewall_info *get_fw_info(void);
+
+/* Netfilter 钩子操作结构（在 netfilter.c 中定义） */
+extern struct nf_hook_ops nf_ops_ipv4;
 
 #endif /* FIREWALL_H */
