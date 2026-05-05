@@ -8,4 +8,4 @@ linux-firewall-kmod (2.0.0-1) unstable; urgency=medium
   * SQLite persistence for permanent bans
   * Prometheus metrics export
 
- -- SnowCore8 <admin@core8.top>  Mon, 05 May 2026 00:00:00 +0000
+ -- SnowCore8 <snowcore8@gmail.com>  Mon, 05 May 2026 00:00:00 +0000

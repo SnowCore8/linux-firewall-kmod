@@ -118,12 +118,8 @@ sudo ./build/daemon/firewall-daemon --permissive  # 宽松模式（仅警告）
 
 ## 许可证
 
-MIT License
+MIT License — 详见 [LICENSE](LICENSE)
 
-## 贡献
+## 关于项目
 
-欢迎贡献代码！请参阅 [CONTRIBUTING.md](CONTRIBUTING.md) 了解如何参与开发。
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=SnowCore8/linux-firewall-kmod&type=Date)](https://star-history.com/#SnowCore8/linux-firewall-kmod&Date)
+本项目由 **SnowCore8** 独立开发，使用 [OpenCode](https://opencode.ai) AI 编程助手辅助完成。
