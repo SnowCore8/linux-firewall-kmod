@@ -12,19 +12,21 @@ int setup_inotify(void);
 
 /* 辅助函数：处理单条完整日志行 */
 void process_single_line(struct jail *j, const char *line, const char *log_path,
-                        unsigned int max_retries, unsigned int findtime);
+                         unsigned int max_retries, unsigned int findtime);
 
 /* 辅助函数：处理缓冲区中的所有完整行 */
-void process_lines_in_buffer(struct jail *j, char *data, size_t len, const char *log_path, size_t *consumed,
-                            unsigned int max_retries, unsigned int findtime);
+void process_lines_in_buffer(struct jail *j, char *data, size_t len,
+                             const char *log_path, size_t *consumed,
+                             unsigned int max_retries, unsigned int findtime);
 
 /* 辅助函数：将剩余数据存储为不完整行 */
-void store_partial_line(struct jail *j, const char *data, size_t len, const char *log_path,
-                       unsigned int max_retries, unsigned int findtime);
+void store_partial_line(struct jail *j, const char *data, size_t len,
+                        const char *log_path, unsigned int max_retries,
+                        unsigned int findtime);
 
 /* 辅助函数：处理累积的不完整行缓冲区 */
 void flush_partial_line(struct jail *j, const char *log_path,
-                       unsigned int max_retries, unsigned int findtime);
+                        unsigned int max_retries, unsigned int findtime);
 
 /* 从跟踪的偏移量开始处理日志文件的新行 */
 void process_new_lines(int idx);

@@ -29,7 +29,8 @@ int get_global_file_state_index(int jail_idx, int file_idx);
 void cleanup_all_jails(void);
 
 /* 在特定配置中查找或创建 jail（用于双缓冲重载） */
-struct jail *find_or_create_jail_in_cfg(const char *name, struct config *target_cfg);
+struct jail *find_or_create_jail_in_cfg(const char *name,
+                                        struct config *target_cfg);
 
 /* 克隆单个 jail（深拷贝，不包含运行时状态） */
 int clone_jail(struct jail *dst, const struct jail *src);

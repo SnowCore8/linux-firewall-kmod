@@ -2,183 +2,196 @@
  * log-parser.c - 日志解析和IP提取函数
  */
 
-#include "firewall-daemon.h"
 #include "log-parser.h"
+#include "firewall-daemon.h"
 
 /* 从日志行中提取IPv4地址（非正则模式的回退方案） */
-int extract_ipv4(const char *line, char *ip_out, size_t ip_size)
-{
-    const char *ptr = line;
+int extract_ipv4(const char *line, char *ip_out, size_t ip_size) {
+  const char *ptr = line;
 
-    /* 搜索模式：数字.数字.数字.数字 */
-    while (*ptr) {
-        /* 快速查找第一个数字 */
-        while (*ptr && !isdigit((unsigned char)*ptr)) ptr++;
-        if (!*ptr) break;
+  /* 搜索模式：数字.数字.数字.数字 */
+  while (*ptr) {
+    /* 快速查找第一个数字 */
+    while (*ptr && !isdigit((unsigned char)*ptr))
+      ptr++;
+    if (!*ptr)
+      break;
 
-        /* 手动解析 IP 地址以避免 sscanf 开销 */
-        const char *start = ptr;
-        int octets[4];
-        int i;
+    /* 手动解析 IP 地址以避免 sscanf 开销 */
+    const char *start = ptr;
+    int octets[4];
+    int i;
 
-        for (i = 0; i < 4; i++) {
-            if (i > 0) {
-                if (*ptr != '.') break;
-                ptr++;
-            }
-            if (!isdigit((unsigned char)*ptr)) break;
+    for (i = 0; i < 4; i++) {
+      if (i > 0) {
+        if (*ptr != '.')
+          break;
+        ptr++;
+      }
+      if (!isdigit((unsigned char)*ptr))
+        break;
 
-            int val = 0;
-            int digits = 0;
-            while (isdigit((unsigned char)*ptr) && digits < 3) {
-                val = val * 10 + (*ptr - '0');
-                ptr++;
-                digits++;
-            }
-            if (val > 255) break;
-            octets[i] = val;
-        }
-
-        if (i == 4) {
-            /* 验证词边界 */
-            if (!isdigit((unsigned char)*ptr) && *ptr != '.') {
-                /* 验证 IP - 移位前强制转换为 unsigned int 避免有符号整数溢出 UB */
-                unsigned int ip_num = ((unsigned int)octets[0] << 24) | ((unsigned int)octets[1] << 16) | ((unsigned int)octets[2] << 8) | (unsigned int)octets[3];
-                if (ip_num != 0 && ip_num != 0xFFFFFFFF &&
-                    octets[0] != 127 &&
-                    (octets[0] < 224 || octets[0] > 239)) {
-                    snprintf(ip_out, ip_size, "%d.%d.%d.%d",
-                            octets[0], octets[1], octets[2], octets[3]);
-                    return 1;
-                }
-            }
-        }
-
-        /* 跳过当前数字序列 */
-        ptr = start;
-        while (*ptr && (isdigit((unsigned char)*ptr) || *ptr == '.')) ptr++;
+      int val = 0;
+      int digits = 0;
+      while (isdigit((unsigned char)*ptr) && digits < 3) {
+        val = val * 10 + (*ptr - '0');
+        ptr++;
+        digits++;
+      }
+      if (val > 255)
+        break;
+      octets[i] = val;
     }
 
-    return 0;
+    if (i == 4) {
+      /* 验证词边界 */
+      if (!isdigit((unsigned char)*ptr) && *ptr != '.') {
+        /* 验证 IP - 移位前强制转换为 unsigned int 避免有符号整数溢出 UB */
+        unsigned int ip_num =
+            ((unsigned int)octets[0] << 24) | ((unsigned int)octets[1] << 16) |
+            ((unsigned int)octets[2] << 8) | (unsigned int)octets[3];
+        if (ip_num != 0 && ip_num != 0xFFFFFFFF && octets[0] != 127 &&
+            (octets[0] < 224 || octets[0] > 239)) {
+          snprintf(ip_out, ip_size, "%d.%d.%d.%d", octets[0], octets[1],
+                   octets[2], octets[3]);
+          return 1;
+        }
+      }
+    }
+
+    /* 跳过当前数字序列 */
+    ptr = start;
+    while (*ptr && (isdigit((unsigned char)*ptr) || *ptr == '.'))
+      ptr++;
+  }
+
+  return 0;
 }
 
 /* 从日志行中提取IP地址（仅IPv4） */
-int extract_ip(const char *line, char *ip_out, size_t ip_size)
-{
-    return extract_ipv4(line, ip_out, ip_size);
+int extract_ip(const char *line, char *ip_out, size_t ip_size) {
+  return extract_ipv4(line, ip_out, ip_size);
 }
 
 /* 辅助函数：从日志行中提取并验证IP。
  * 如果成功提取有效IP则返回1，否则返回0。
  * 使用 jail 的正则表达式进行解析。 */
-int extract_and_validate_ip(struct jail *j, const char *log_line, char *ip_out, size_t ip_size)
-{
-    char ip_buf[INET_ADDRSTRLEN];
-    struct in_addr addr4;
+int extract_and_validate_ip(struct jail *j, const char *log_line, char *ip_out,
+                            size_t ip_size) {
+  char ip_buf[INET_ADDRSTRLEN];
+  struct in_addr addr4;
 
-    if (!parse_log_line(j, log_line, ip_buf, sizeof(ip_buf))) {
-        return 0;
-    }
-
-    /* 验证IPv4 */
-    if (inet_pton(AF_INET, ip_buf, &addr4) == 1) {
-        unsigned int ip_num = ntohl(addr4.s_addr);
-        /* 拒绝无效/保留的IPv4地址 */
-        if (ip_num == 0 ||                                  /* 0.0.0.0 */
-            ip_num == 0xFFFFFFFF ||                         /* 255.255.255.255 */
-            ((ip_num >> 24) & 0xFF) == 127 ||              /* 127.x.x.x（回环地址） */
-            (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) { /* 组播地址 */
-            return 0;
-        }
-        atomic_fetch_add(&daemon_stats.ips_extracted, 1);
-        size_t copy_len = strlen(ip_buf);
-        if (copy_len >= ip_size) copy_len = ip_size - 1;
-        memcpy(ip_out, ip_buf, copy_len);
-        ip_out[copy_len] = '\0';
-        return 1;
-    }
-
+  if (!parse_log_line(j, log_line, ip_buf, sizeof(ip_buf))) {
     return 0;
+  }
+
+  /* 验证IPv4 */
+  if (inet_pton(AF_INET, ip_buf, &addr4) == 1) {
+    unsigned int ip_num = ntohl(addr4.s_addr);
+    /* 拒绝无效/保留的IPv4地址 */
+    if (ip_num == 0 ||                    /* 0.0.0.0 */
+        ip_num == 0xFFFFFFFF ||           /* 255.255.255.255 */
+        ((ip_num >> 24) & 0xFF) == 127 || /* 127.x.x.x（回环地址） */
+        (((ip_num >> 24) & 0xFF) >= 224 &&
+         ((ip_num >> 24) & 0xFF) <= 239)) { /* 组播地址 */
+      return 0;
+    }
+    atomic_fetch_add(&daemon_stats.ips_extracted, 1);
+    size_t copy_len = strlen(ip_buf);
+    if (copy_len >= ip_size)
+      copy_len = ip_size - 1;
+    memcpy(ip_out, ip_buf, copy_len);
+    ip_out[copy_len] = '\0';
+    return 1;
+  }
+
+  return 0;
 }
 
 /* 解析日志行，如果是失败登录则提取IP - 使用 jail 的 PCRE2 正则表达式 */
-int parse_log_line(struct jail *j, const char *line, char *ip_out, size_t ip_size)
-{
-    const char *ip_start;
-    size_t ip_len;
+int parse_log_line(struct jail *j, const char *line, char *ip_out,
+                   size_t ip_size) {
+  const char *ip_start;
+  size_t ip_len;
 
-    /* 长度验证以防止极长的日志行 */
-    size_t line_len = strlen(line);
-    if (line_len > 8192) {
-        daemon_log_warn("Log line too long (%zu bytes), skipping", line_len);
-        return 0;
-    }
-
-    /* 使用 jail 编译的 PCRE2 正则表达式检查失败登录 */
-    if (j && j->regex_compiled && j->compiled_regex && j->match_data) {
-        int regex_result = pcre2_match(j->compiled_regex, (PCRE2_SPTR)line,
-                                        (PCRE2_SIZE)line_len, 0, 0,
-                                        j->match_data, NULL);
-        if (regex_result >= 0) {
-            /* 获取捕获的子串 */
-            PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(j->match_data);
-            int num_groups = regex_result;
-
-            /* 动态查找IP捕获组 - 从后向前搜索 */
-            int ip_group = -1;
-            for (int g = num_groups - 1; g >= 1; g--) {
-                if (ovector[g * 2] != PCRE2_UNSET && ovector[g * 2 + 1] > ovector[g * 2]) {
-                    /* 验证此捕获组包含类IP模式 */
-                    size_t capture_len = ovector[g * 2 + 1] - ovector[g * 2];
-                    if (capture_len >= 7 && capture_len < INET_ADDRSTRLEN) {  /* 最小长度："1.1.1.1" */
-                        /* 快速验证：首字符应为数字 */
-                        const char *capture_start = line + ovector[g * 2];
-                        if (capture_start[0] >= '0' && capture_start[0] <= '9') {
-                            ip_group = g;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (ip_group < 0) {
-                daemon_log_warn("No valid IP capture group found in regex match for jail '%s'", j->name);
-                return 0;
-            }
-
-            /* 添加边界检查以防止越界读取 */
-            if ((size_t)ovector[ip_group * 2 + 1] > line_len) {
-                daemon_log_warn("Regex match exceeds line length in jail '%s'", j->name);
-                return 0;
-            }
-            ip_start = line + ovector[ip_group * 2];
-            ip_len = ovector[ip_group * 2 + 1] - ovector[ip_group * 2];
-
-            if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
-                daemon_log_warn("Invalid IP length in jail '%s' log: %zu", j->name, ip_len);
-                return 0;
-            }
-
-            char ip_buf[INET_ADDRSTRLEN];
-            memcpy(ip_buf, ip_start, ip_len);
-            ip_buf[ip_len] = '\0';
-            strncpy(ip_out, ip_buf, ip_size - 1);
-            ip_out[ip_size - 1] = '\0';
-            return 1;
-        } else if (regex_result != PCRE2_ERROR_NOMATCH) {
-            PCRE2_UCHAR errbuf[256];
-            pcre2_get_error_message(regex_result, errbuf, sizeof(errbuf));
-            daemon_log_warn("Regex error in jail '%s' pattern: %s", j->name, errbuf);
-        }
-    }
-
-    /* 回退方案：简单字符串匹配（如果正则表达式未编译） */
-    if (!j || !j->regex_compiled) {
-        if (strstr(line, "Failed password for") ||
-            strstr(line, "authentication failure")) {
-            return extract_ip(line, ip_out, ip_size);
-        }
-    }
-
+  /* 长度验证以防止极长的日志行 */
+  size_t line_len = strlen(line);
+  if (line_len > 8192) {
+    daemon_log_warn("Log line too long (%zu bytes), skipping", line_len);
     return 0;
+  }
+
+  /* 使用 jail 编译的 PCRE2 正则表达式检查失败登录 */
+  if (j && j->regex_compiled && j->compiled_regex && j->match_data) {
+    int regex_result =
+        pcre2_match(j->compiled_regex, (PCRE2_SPTR)line, (PCRE2_SIZE)line_len,
+                    0, 0, j->match_data, NULL);
+    if (regex_result >= 0) {
+      /* 获取捕获的子串 */
+      PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(j->match_data);
+      int num_groups = regex_result;
+
+      /* 动态查找IP捕获组 - 从后向前搜索 */
+      int ip_group = -1;
+      for (int g = num_groups - 1; g >= 1; g--) {
+        if (ovector[g * 2] != PCRE2_UNSET &&
+            ovector[g * 2 + 1] > ovector[g * 2]) {
+          /* 验证此捕获组包含类IP模式 */
+          size_t capture_len = ovector[g * 2 + 1] - ovector[g * 2];
+          if (capture_len >= 7 &&
+              capture_len < INET_ADDRSTRLEN) { /* 最小长度："1.1.1.1" */
+            /* 快速验证：首字符应为数字 */
+            const char *capture_start = line + ovector[g * 2];
+            if (capture_start[0] >= '0' && capture_start[0] <= '9') {
+              ip_group = g;
+              break;
+            }
+          }
+        }
+      }
+
+      if (ip_group < 0) {
+        daemon_log_warn(
+            "No valid IP capture group found in regex match for jail '%s'",
+            j->name);
+        return 0;
+      }
+
+      /* 添加边界检查以防止越界读取 */
+      if ((size_t)ovector[ip_group * 2 + 1] > line_len) {
+        daemon_log_warn("Regex match exceeds line length in jail '%s'",
+                        j->name);
+        return 0;
+      }
+      ip_start = line + ovector[ip_group * 2];
+      ip_len = ovector[ip_group * 2 + 1] - ovector[ip_group * 2];
+
+      if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
+        daemon_log_warn("Invalid IP length in jail '%s' log: %zu", j->name,
+                        ip_len);
+        return 0;
+      }
+
+      char ip_buf[INET_ADDRSTRLEN];
+      memcpy(ip_buf, ip_start, ip_len);
+      ip_buf[ip_len] = '\0';
+      strncpy(ip_out, ip_buf, ip_size - 1);
+      ip_out[ip_size - 1] = '\0';
+      return 1;
+    } else if (regex_result != PCRE2_ERROR_NOMATCH) {
+      PCRE2_UCHAR errbuf[256];
+      pcre2_get_error_message(regex_result, errbuf, sizeof(errbuf));
+      daemon_log_warn("Regex error in jail '%s' pattern: %s", j->name, errbuf);
+    }
+  }
+
+  /* 回退方案：简单字符串匹配（如果正则表达式未编译） */
+  if (!j || !j->regex_compiled) {
+    if (strstr(line, "Failed password for") ||
+        strstr(line, "authentication failure")) {
+      return extract_ip(line, ip_out, ip_size);
+    }
+  }
+
+  return 0;
 }

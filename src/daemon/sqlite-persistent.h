@@ -11,15 +11,15 @@
 
 /* 永久封禁条目 */
 struct permanent_ban_entry {
-    int id;                     /* 数据库自增 ID */
-    char ip[16];                /* IP 地址（点分十进制） */
-    uint32_t ip_num;            /* IP 数字（网络字节序） */
-    char reason[256];           /* 封禁原因 */
-    time_t created_at;          /* 创建时间 */
-    char created_by[32];        /* 触发来源（auto/manual/api） */
-    int hit_count;              /* 匹配次数 */
-    time_t last_hit_at;         /* 最后匹配时间 */
-    int is_active;              /* 是否活跃（0=已删除但记录保留） */
+  int id;              /* 数据库自增 ID */
+  char ip[16];         /* IP 地址（点分十进制） */
+  uint32_t ip_num;     /* IP 数字（网络字节序） */
+  char reason[256];    /* 封禁原因 */
+  time_t created_at;   /* 创建时间 */
+  char created_by[32]; /* 触发来源（auto/manual/api） */
+  int hit_count;       /* 匹配次数 */
+  time_t last_hit_at;  /* 最后匹配时间 */
+  int is_active;       /* 是否活跃（0=已删除但记录保留） */
 };
 
 /* 数据库句柄（对外不透明） */
@@ -73,7 +73,7 @@ int sqlite_is_permanent_banned(sqlite_db_t *db, uint32_t ip_num);
  * @param count 输出条目数量
  * @return 0 成功，-1 失败
  */
-int sqlite_load_all_permanent_bans(sqlite_db_t *db, 
+int sqlite_load_all_permanent_bans(sqlite_db_t *db,
                                    struct permanent_ban_entry **entries,
                                    int *count);
 
