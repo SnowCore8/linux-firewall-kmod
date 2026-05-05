@@ -262,6 +262,11 @@ int restore_state_from_file(const char *filename) {
   loff_t pos = 0;
   ssize_t bytes_read;
   char *line, *token;
+  /* 限制恢复的条目数量，防止恶意构造的状态文件导致资源耗尽 */
+  int restored_ban_count = 0;
+  int restored_wl_count = 0;
+  const int max_restore_bans = MAX_BAN_ENTRIES;
+  const int max_restore_wl = MAX_DISCOVERED_IPS;
 
   if (!filename || !*filename) {
     fw_pr_err("Invalid filename for state restore");
@@ -347,6 +352,13 @@ int restore_state_from_file(const char *filename) {
               continue;
             }
 
+            /* 检查恢复的封禁条目数量是否超过限制 */
+            if (restored_ban_count >= max_restore_bans) {
+              fw_pr_warn("Maximum ban entries (%d) reached during restore, skipping remaining",
+                         max_restore_bans);
+              continue;
+            }
+
             unsigned long remaining_time;
             if (kstrtoul(time_str, 10, &remaining_time) == 0) {
               struct ban_entry *entry;
@@ -395,14 +407,14 @@ int restore_state_from_file(const char *filename) {
 
                 if (found) {
                   fw_pr_info("Skipping duplicate ban for IPv4 %s", ip_str);
-                  goto skip_ban_entry;
+                  continue;
                 }
               }
 
               entry = kmalloc(sizeof(*entry), GFP_KERNEL);
               if (!entry) {
                 fw_pr_err("Failed to allocate memory for restored ban entry");
-                goto skip_ban_entry;
+                continue;
               }
 
               entry->ip = ip;
@@ -416,6 +428,7 @@ int restore_state_from_file(const char *filename) {
               atomic_inc(&fw_info.ban_count);
               atomic_inc(&fw_info.total_ban_count);
               spin_unlock(&fw_info.lock);
+              restored_ban_count++;
 
               if (is_permanent)
                 fw_pr_info("Restored permanent ban for IPv4 %s", ip_str);
@@ -423,7 +436,6 @@ int restore_state_from_file(const char *filename) {
                 fw_pr_info("Restored ban for IPv4 %s (expires in %lu seconds)",
                            ip_str, remaining_time);
 
-            skip_ban_entry:;
             }
           }
         }
@@ -436,6 +448,13 @@ int restore_state_from_file(const char *filename) {
           __be32 ip, mask = 0xFFFFFFFF;
           int prefix_len;
 
+          /* 检查恢复的白名单条目数量是否超过限制 */
+          if (restored_wl_count >= max_restore_wl) {
+            fw_pr_warn("Maximum whitelist entries (%d) reached during restore, skipping remaining",
+                       max_restore_wl);
+            continue;
+          }
+
           if (kstrtoint(mask_str, 10, &prefix_len) == 0) {
             mask =
                 prefix_len == 0 ? 0 : htonl(~((1U << (32 - prefix_len)) - 1));
@@ -447,6 +466,7 @@ int restore_state_from_file(const char *filename) {
                   add_whitelist_entry(&fw_info, normalized_ip, mask,
                                       dev_name ? dev_name : "restored");
               if (result == 0) {
+                restored_wl_count++;
                 fw_pr_info("Restored whitelist entry for IPv4 %s/%d", ip_str,
                            prefix_len);
               }
@@ -459,7 +479,8 @@ int restore_state_from_file(const char *filename) {
 
   filp_close(file, NULL);
   kfree(buffer);
-  fw_pr_info("State restored from %s", filename);
+  fw_pr_info("State restored from %s (ban: %d, wl: %d)", filename,
+             restored_ban_count, restored_wl_count);
   return 0;
 }
 EXPORT_SYMBOL_GPL(restore_state_from_file);

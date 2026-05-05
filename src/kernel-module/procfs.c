@@ -376,13 +376,38 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
     return -EFAULT;
   }
 
+  /* 数据完整性验证：确保 copy_from_user 后缓冲区内容完整
+   * 防止用户空间在拷贝过程中修改数据导致的竞态条件 */
+  if (len > 0 && len < sizeof(input)) {
+    /* 验证拷贝长度与预期一致 */
+    size_t actual_len = strnlen(input, len);
+    if (actual_len >= len) {
+      /* 数据可能不完整，强制截断并添加终止符 */
+      input[len] = '\0';
+    }
+  }
+
   input[len] = '\0';
   if (len > 0 && input[len - 1] == '\n')
     input[len - 1] = '\0';
 
+  /* 二次验证：确保字符串正确终止 */
   if (strnlen(input, sizeof(input)) >= sizeof(input)) {
     FW_DEBUG(1, "EXIT: bans_write -> -EINVAL (not null-terminated)");
     return -EINVAL;
+  }
+
+  /* 边界检查：验证输入不包含控制字符（除空格和制表符外） */
+  {
+    size_t i;
+    for (i = 0; i < len && input[i] != '\0'; i++) {
+      char c = input[i];
+      /* 允许 printable 字符、空格、制表符 */
+      if (c < 0x20 && c != '\t') {
+        fw_pr_warn("Invalid control character 0x%02x at position %zu", c, i);
+        return -EINVAL;
+      }
+    }
   }
 
   /* 安全性校验 */

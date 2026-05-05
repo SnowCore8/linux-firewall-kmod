@@ -44,19 +44,7 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
     return -EINVAL;
   }
 
-  /* 白名单检查移到 fw->lock 外，仅用 RCU 保护 */
-  rcu_read_lock();
-  hash_for_each_rcu(fw->whitelist_table, bkt, wl_entry, hash) {
-    if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
-      rcu_read_unlock();
-      atomic_inc(&fw->whitelist_reject_count);
-      fw_pr_warn("REFUSED to ban whitelisted IP %pI4", &ip);
-      return -EPERM;
-    }
-  }
-  rcu_read_unlock();
-
-  /* 在锁外预分配内存 */
+  /* 在锁外预分配内存，避免在持锁时分配 */
   entry = kmalloc(sizeof(*entry), GFP_KERNEL);
   if (!entry) {
     atomic_inc(&fw->alloc_failure_count);
@@ -65,6 +53,23 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
   }
 
   spin_lock(&fw->lock);
+
+  /* 白名单检查必须在锁内执行，防止 UAF 竞态条件：
+   * 在 RCU 读锁外检查白名单后，条目可能被其他 CPU 释放，
+   * 导致后续操作基于已释放的数据做出错误决策。
+   * 使用 RCU 读锁保护白名单遍历，确保数据一致性。 */
+  rcu_read_lock();
+  hash_for_each_rcu(fw->whitelist_table, bkt, wl_entry, hash) {
+    if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
+      rcu_read_unlock();
+      spin_unlock(&fw->lock);
+      kfree(entry);
+      atomic_inc(&fw->whitelist_reject_count);
+      fw_pr_warn("REFUSED to ban whitelisted IP %pI4", &ip);
+      return -EPERM;
+    }
+  }
+  rcu_read_unlock();
 
   /* 检查是否已被封禁 */
   hash = hash_min(ip, BAN_HASH_BITS);
