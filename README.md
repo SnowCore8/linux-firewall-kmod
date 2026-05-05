@@ -81,20 +81,21 @@ sudo ./build/daemon/firewall-daemon -c config/default.yaml  # 指定配置
 sudo ./build/daemon/firewall-daemon --help                  # 帮助
 ```
 
-> 📖 完整 procfs 接口：[docs/OPERATIONS.md](docs/OPERATIONS.md)
+> 📖 完整 procfs 接口：[docs/user-guide/operations.md](docs/user-guide/operations.md)
 
 ## 📚 文档导航
 
 | 文档 | 内容说明 | 适合人群 |
 |------|----------|----------|
-| [CONFIGURATION.md](docs/CONFIGURATION.md) | YAML Jail 格式、参数详解、热重载 | 配置管理 |
-| [OPERATIONS.md](docs/OPERATIONS.md) | 安装部署、procfs API、故障排查 | 运维人员 |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 内核模块设计、数据流、组件交互 | 开发者 |
-| [TESTING.md](docs/TESTING.md) | 105 项测试覆盖、运行方式 | 测试人员 |
-| [SECURITY.md](docs/SECURITY.md) | 编译选项、systemd 加固 | 安全工程师 |
-| [PERMANENT_BAN_GUIDE.md](docs/PERMANENT_BAN_GUIDE.md) | SQLite 持久化、数据库 schema | 高级用户 |
-| [FAQ.md](docs/FAQ.md) | 常见问题解答 | 所有用户 |
-| [MIGRATION.md](docs/MIGRATION.md) | 从 fail2ban 迁移指南 | 迁移用户 |
+| [配置指南](docs/user-guide/configuration.md) | YAML Jail 格式、参数详解、热重载 | 配置管理 |
+| [运维手册](docs/user-guide/operations.md) | 安装部署、procfs API、故障排查 | 运维人员 |
+| [架构设计](docs/developer/architecture.md) | 内核模块设计、数据流、组件交互 | 开发者 |
+| [测试框架](docs/developer/testing.md) | 105 项测试覆盖、运行方式 | 测试人员 |
+| [安全策略](SECURITY.md) | 安全报告与漏洞提交流程 | 安全工程师 |
+| [安全特性](docs/security/security.md) | 编译选项、systemd 加固、防护机制 | 安全工程师 |
+| [永久封禁指南](docs/user-guide/permanent-ban.md) | SQLite 持久化、数据库 schema | 高级用户 |
+| [常见问题](docs/user-guide/faq.md) | 常见问题解答 | 所有用户 |
+| [迁移指南](docs/getting-started/migration.md) | 从 fail2ban 迁移指南 | 迁移用户 |
 | [CHANGELOG.md](CHANGELOG.md) | v1.0 至 v2.1 变更记录 | 所有用户 |
 
 ## 适用场景

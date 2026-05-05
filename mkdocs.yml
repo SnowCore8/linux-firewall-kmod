@@ -50,19 +50,19 @@ theme:
 nav:
   - 快速开始:
       - 项目介绍: index.md
-      - 安装部署: operations.md
-      - 配置指南: configuration.md
+      - 安装部署: user-guide/operations.md
+      - 配置指南: user-guide/configuration.md
+      - 迁移指南: getting-started/migration.md
   - 深入理解:
-      - 架构设计: architecture.md
-      - 安全特性: security.md
-      - 永久封禁: permanent-ban.md
+      - 架构设计: developer/architecture.md
+      - 安全特性: security/security.md
+      - 永久封禁: user-guide/permanent-ban.md
   - 运维与使用:
-      - 常见问题: faq.md
-      - 迁移指南: migration.md
+      - 常见问题: user-guide/faq.md
   - 开发与贡献:
       - 贡献指南: contributing.md
-      - Git 工作流: git-workflow.md
-      - 测试框架: testing.md
+      - Git 工作流: developer/git-workflow.md
+      - 测试框架: developer/testing.md
   - 其他:
       - 更新日志: changelog.md
 

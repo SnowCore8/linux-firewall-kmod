@@ -81,20 +81,21 @@ sudo ./build/daemon/firewall-daemon -c config/default.yaml  # Custom config
 sudo ./build/daemon/firewall-daemon --help                  # Help
 ```
 
-> 📖 Full procfs interface: [docs/OPERATIONS.md](docs/OPERATIONS.md)
+> 📖 Full procfs interface: [docs/user-guide/operations.md](docs/user-guide/operations.md)
 
 ## 📚 Documentation Navigation
 
 | Document | Description | For |
 |----------|-------------|-----|
-| [CONFIGURATION.md](docs/CONFIGURATION.md) | YAML Jail format, parameters, hot-reload | Configuration |
-| [OPERATIONS.md](docs/OPERATIONS.md) | Deployment, procfs API, troubleshooting | Operations |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Kernel design, data flow, components | Developers |
-| [TESTING.md](docs/TESTING.md) | 105 tests, how to run/write | Testers |
-| [SECURITY.md](docs/SECURITY.md) | Build options, systemd hardening | Security |
-| [PERMANENT_BAN_GUIDE.md](docs/PERMANENT_BAN_GUIDE.md) | SQLite persistence, DB schema | Advanced users |
-| [FAQ.md](docs/FAQ.md) | Frequently asked questions | All users |
-| [MIGRATION.md](docs/MIGRATION.md) | Migration guide from fail2ban | Migrating users |
+| [Configuration](docs/user-guide/configuration.md) | YAML Jail format, parameters, hot-reload | Configuration |
+| [Operations](docs/user-guide/operations.md) | Deployment, procfs API, troubleshooting | Operations |
+| [Architecture](docs/developer/architecture.md) | Kernel design, data flow, components | Developers |
+| [Testing](docs/developer/testing.md) | 105 tests, how to run/write | Testers |
+| [Security Policy](SECURITY.md) | Security reporting & vulnerability process | Security |
+| [Security Details](docs/security/security.md) | Build options, systemd hardening | Security |
+| [Permanent Ban](docs/user-guide/permanent-ban.md) | SQLite persistence, DB schema | Advanced users |
+| [FAQ](docs/user-guide/faq.md) | Frequently asked questions | All users |
+| [Migration](docs/getting-started/migration.md) | Migration guide from fail2ban | Migrating users |
 | [CHANGELOG.md](CHANGELOG.md) | v1.0 to v2.1 changelog | All users |
 
 ## Use Cases
