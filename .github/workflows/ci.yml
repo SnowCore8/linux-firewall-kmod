@@ -7,9 +7,10 @@ on:
     branches: [master, main]
 
 jobs:
-  # 编译任务：合并原有的 build-kernel-module、build-daemon、build-all
+  # 编译任务：依赖代码质量检查，确保代码风格通过后再编译
   build:
     name: 编译
+    needs: [lint]
     runs-on: ubuntu-latest
 
     steps:
@@ -66,10 +67,9 @@ jobs:
       - name: 执行测试并生成报告
         run: sudo ./tests/run_tests.sh --report
 
-  # 代码质量任务：依赖编译任务，包含代码风格检查、YAML 配置检查和编译警告检查
+  # 代码质量任务：最先执行，包含代码风格检查、YAML 配置检查和编译警告检查
   lint:
     name: 代码质量检查
-    needs: [build]
     runs-on: ubuntu-latest
 
     steps:
