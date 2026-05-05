@@ -70,7 +70,7 @@ Section: net
 Priority: optional
 Architecture: amd64
 Depends: libyaml-0-2, libsqlite3-0, libmicrohttpd12, libpcre2-8-0
-Maintainer: SnowCore8 <admin@core8.top>
+Maintainer: SnowCore8 <snowcore8@gmail.com>
 Description: Linux kernel module version of fail2ban
  Firewall is a high-performance real-time IP ban protection system.
  It moves fail2ban's core functionality from userspace to the kernel,

@@ -200,7 +200,7 @@ static void __exit firewall_exit(void)
 module_init(firewall_init);
 module_exit(firewall_exit);
 
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("Dual MIT/GPL");
 MODULE_AUTHOR("Firewall Authors");
 MODULE_DESCRIPTION("Kernel-level IP banning module (fail2ban alternative)");
 MODULE_VERSION("2.0");
