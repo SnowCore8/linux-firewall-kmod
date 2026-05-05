@@ -1,0 +1,24 @@
+# CODEOWNERS - 代码审查责任人
+# 语法: https://help.github.com/articles/about-codeowners/
+
+# 默认责任人
+* @SnowCore8
+
+# 内核模块
+src/kernel-module/ @SnowCore8
+
+# 守护进程
+src/daemon/ @SnowCore8
+
+# 配置文件
+config/ @SnowCore8
+
+# 测试
+tests/ @SnowCore8
+
+# 文档
+docs/ @SnowCore8
+
+# 构建系统
+Makefile @SnowCore8
+scripts/ @SnowCore8

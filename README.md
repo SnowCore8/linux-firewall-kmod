@@ -2,6 +2,10 @@
 
 **版本**: v2.0（严格配置校验模式 + 代码质量改进）
 
+[![CI](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml/badge.svg)](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-v2.0-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
+
 Firewall 是一个 Linux 内核模块版本的 fail2ban，用于实时 IP 封禁防护。它将 fail2ban 的核心功能从用户空间移动到内核空间，使用 netfilter 框架在数据包级别进行封禁，具有更低的延迟和更高的性能。
 
 ## 核心特性
@@ -117,3 +121,11 @@ sudo ./build/daemon/firewall-daemon --permissive  # 宽松模式（仅警告）
 ## 许可证
 
 GPL v2
+
+## 贡献
+
+欢迎贡献代码！请参阅 [CONTRIBUTING.md](CONTRIBUTING.md) 了解如何参与开发。
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=SnowCore8/linux-firewall-kmod&type=Date)](https://star-history.com/#SnowCore8/linux-firewall-kmod&Date)
