@@ -7,87 +7,46 @@ on:
     branches: [master, main]
 
 jobs:
-  build-kernel-module:
-    name: 编译内核模块
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        kernel:
-          - "6.5.0"
-          - "6.8.0"
-
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v6
-
-      - name: 安装依赖
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential linux-headers-$(uname -r)
-
-      - name: 编译内核模块
-        run: make kernel-module
-
-      - name: 验证编译产物
-        run: |
-          if [[ -f build/kernel-module/firewall.ko ]]; then
-            echo "内核模块编译成功"
-            file build/kernel-module/firewall.ko
-          else
-            echo "内核模块编译失败"
-            exit 1
-          fi
-
-  build-daemon:
-    name: 编译守护进程
+  # 编译任务：合并原有的 build-kernel-module、build-daemon、build-all
+  build:
+    name: 编译
     runs-on: ubuntu-latest
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
-      - name: 安装依赖
+      - name: 安装编译依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev
+          sudo apt-get install -y build-essential linux-headers-$(uname -r) \
+            libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev
 
-      - name: 编译守护进程
-        run: make daemon
-
-      - name: 验证编译产物
-        run: |
-          if [[ -f build/daemon/firewall-daemon ]]; then
-            echo "守护进程编译成功"
-            file build/daemon/firewall-daemon
-            ldd build/daemon/firewall-daemon
-          else
-            echo "守护进程编译失败"
-            exit 1
-          fi
-
-  build-all:
-    name: 完整编译
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v6
-
-      - name: 安装依赖
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential linux-headers-$(uname -r) libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev
-
-      - name: 完整编译
+      - name: 完整编译（内核模块 + 守护进程）
         run: make
 
       - name: 验证编译产物
         run: |
-          echo "=== 内核模块 ==="
-          ls -lh build/kernel-module/firewall.ko
-          echo "=== 守护进程 ==="
-          ls -lh build/daemon/firewall-daemon
+          echo "=== 验证内核模块 ==="
+          if [[ -f build/kernel-module/firewall.ko ]]; then
+            echo "✓ 内核模块编译成功"
+            file build/kernel-module/firewall.ko
+          else
+            echo "✗ 内核模块编译失败"
+            exit 1
+          fi
 
+          echo "=== 验证守护进程 ==="
+          if [[ -f build/daemon/firewall-daemon ]]; then
+            echo "✓ 守护进程编译成功"
+            file build/daemon/firewall-daemon
+            ldd build/daemon/firewall-daemon
+          else
+            echo "✗ 守护进程编译失败"
+            exit 1
+          fi
+
+  # 测试任务：保持原有配置不变
   test:
     name: 运行测试
     runs-on: ubuntu-latest
@@ -95,7 +54,7 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: 安装编译依赖
         run: |
@@ -106,42 +65,36 @@ jobs:
       - name: 执行测试并生成报告
         run: sudo ./tests/run_tests.sh --report
 
-  code-quality:
+  # 代码质量任务：合并原有的 code-quality 和 yaml-lint
+  # 包含代码风格检查、YAML 配置检查和编译警告检查
+  lint:
     name: 代码质量检查
     runs-on: ubuntu-latest
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
-      - name: 安装 clang-format
-        run: sudo apt-get install -y clang-format
+      - name: 安装检查工具
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+          pip install yamllint
 
-      - name: 检查代码风格
+      - name: 检查代码风格（clang-format）
         run: |
           echo "检查内核模块代码..."
           clang-format --dry-run --Werror src/kernel-module/*.c src/kernel-module/*.h
           echo "检查守护进程代码..."
           clang-format --dry-run --Werror src/daemon/*.c src/daemon/*.h
 
-      - name: 安装依赖
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential linux-headers-$(uname -r) libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev
-
-      - name: 编译（带警告检查）
-        run: make CFLAGS_EXTRA="-Werror"
-
-  yaml-lint:
-    name: YAML 配置检查
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v6
-
-      - name: 安装 yamllint
-        run: pip install yamllint
-
-      - name: 检查 YAML 配置
+      - name: 检查 YAML 配置（yamllint）
         run: yamllint -c .yamllint config/*.yaml
+
+      - name: 安装编译依赖
+        run: |
+          sudo apt-get install -y build-essential linux-headers-$(uname -r) \
+            libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev
+
+      - name: 编译警告检查（-Werror）
+        run: make SECURITY_CFLAGS="-Wall -Wextra -Werror -O2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE"
