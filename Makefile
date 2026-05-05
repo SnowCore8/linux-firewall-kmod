@@ -69,7 +69,7 @@ $(KERNEL_MODULE): $(KERNEL_SRC_DIR)/firewall.c $(KERNEL_SRC_DIR)/firewall.h
 	+$(MAKE) -j$(NPROC) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) \
 		ccflags-y="-DDEBUG_LEVEL=$(DEBUG_LEVEL)" \
 		modules
-	@cp $(KERNEL_SRC_DIR)/firewall.ko $(KERNEL_BUILD_DIR)/firewall.ko
+	@cp $(KERNEL_SRC_DIR)/firewall-mod.ko $(KERNEL_BUILD_DIR)/firewall.ko
 	# Clean intermediate files from source directory
 	@rm -f $(KERNEL_SRC_DIR)/*.o $(KERNEL_SRC_DIR)/*.ko $(KERNEL_SRC_DIR)/*.mod.c $(KERNEL_SRC_DIR)/*.mod.o \
 		$(KERNEL_SRC_DIR)/*.mod $(KERNEL_SRC_DIR)/.*.cmd $(KERNEL_SRC_DIR)/modules.order \
