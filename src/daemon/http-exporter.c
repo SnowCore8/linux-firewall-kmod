@@ -26,6 +26,7 @@
 #include <stdbool.h>
 #include <syslog.h>
 #include <microhttpd.h>
+#include "firewall-daemon.h"  /* 修复 P1-5：访问 cfg.metrics_bind_address */
 
 /* ============================================================================
  * 配置参数
@@ -48,22 +49,6 @@ static pthread_t exporter_thread_id;
 static pthread_mutex_t thread_id_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t thread_id_cond = PTHREAD_COND_INITIALIZER;
 static bool thread_id_ready = false;
-
-/* ============================================================================
- * 对外引用 daemon_stats（在 firewall-daemon.c 中定义）
- * ========================================================================== */
-extern struct daemon_stats {
-    atomic_ulong lines_parsed;
-    atomic_ulong ips_extracted;
-    atomic_ulong ips_banned;
-    atomic_ulong failed_attempts;
-    atomic_ulong config_reloads;
-    atomic_ulong inotify_events;
-    atomic_ulong log_rotations;
-    atomic_ulong lines_skipped;
-    atomic_ulong regex_matches_sshd;
-    time_t start_time;
-} daemon_stats;
 
 /* ============================================================================
  * 日志辅助函数（使用 syslog 以保持与守护进程一致）
@@ -333,6 +318,15 @@ void *start_http_exporter(void *port)
 {
     int listen_port = port ? (int)(long)port : EXPORTER_DEFAULT_PORT;
     struct MHD_Daemon *daemon;
+    const char *bind_address = "127.0.0.1";  /* 修复 P1-5：默认绑定 localhost */
+    struct sockaddr_in bind_addr;
+
+    /* 修复 P1-5：从全局配置读取绑定地址 */
+    pthread_rwlock_rdlock(&config_rwlock);
+    if (cfg.metrics_bind_address && strlen(cfg.metrics_bind_address) > 0) {
+        bind_address = cfg.metrics_bind_address;
+    }
+    pthread_rwlock_unlock(&config_rwlock);
 
     /* 修复 1.4：使用条件变量同步线程 ID */
     pthread_mutex_lock(&thread_id_mutex);
@@ -344,25 +338,34 @@ void *start_http_exporter(void *port)
     /* 标记导出器为运行状态 */
     atomic_store(&http_exporter_running, true);
 
-    /* 启动 libmicrohttpd 守护进程 */
+    /* 修复 P1-5：使用 MHD_OPTION_SOCK_ADDR 绑定到指定地址 */
+    memset(&bind_addr, 0, sizeof(bind_addr));
+    bind_addr.sin_family = AF_INET;
+    bind_addr.sin_port = htons((uint16_t)listen_port);
+    if (inet_pton(AF_INET, bind_address, &bind_addr.sin_addr) != 1) {
+        exporter_log_err("Invalid bind address: %s, falling back to 127.0.0.1", bind_address);
+        inet_pton(AF_INET, "127.0.0.1", &bind_addr.sin_addr);
+    }
+
     daemon = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY | MHD_USE_ERROR_LOG,
                               (uint16_t)listen_port,
                               NULL, NULL,
                               &answer_to_connection, NULL,
                               MHD_OPTION_CONNECTION_LIMIT, EXPORTER_MAX_CONNECTIONS,
                               MHD_OPTION_CONNECTION_TIMEOUT, EXPORTER_CONNECTION_TIMEOUT,
+                              MHD_OPTION_SOCK_ADDR, &bind_addr,
                               MHD_OPTION_NOTIFY_COMPLETED, NULL, NULL,
                               MHD_OPTION_END);
 
     if (daemon == NULL) {
-        exporter_log_err("Failed to start HTTP daemon on port %d: %s",
-                         listen_port, strerror(errno));
+        exporter_log_err("Failed to start HTTP daemon on %s:%d: %s",
+                         bind_address, listen_port, strerror(errno));
         exporter_log_info("Prometheus exporter disabled (port may be in use)");
         atomic_store(&http_exporter_running, false);
         return NULL;
     }
 
-    exporter_log_info("Prometheus exporter listening on 0.0.0.0:%d (libmicrohttpd)", listen_port);
+    exporter_log_info("Prometheus exporter listening on %s:%d (libmicrohttpd)", bind_address, listen_port);
 
     /* 阻塞直到线程收到停止信号 */
     while (atomic_load(&http_exporter_running)) {

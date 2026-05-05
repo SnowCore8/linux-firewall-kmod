@@ -88,7 +88,7 @@ void init_jail_defaults(struct jail *j)
     j->_ban_time_set = false;
     memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
     j->failed_hash = NULL;
-    j->partial_line_len = 0;
+    atomic_store(&j->partial_line_len, 0);
     j->partial_line_buffer[0] = '\0';
 
     for (int i = 0; i < MAX_LOG_FILES; i++) {
@@ -363,7 +363,7 @@ struct jail *find_or_create_jail_in_cfg(const char *name, struct config *target_
     j->_ban_time_set = false;
     memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
     j->failed_hash = NULL;
-    j->partial_line_len = 0;
+    atomic_store(&j->partial_line_len, 0);
     j->partial_line_buffer[0] = '\0';
 
     for (int i = 0; i < MAX_LOG_FILES; i++) {
@@ -419,7 +419,7 @@ int clone_jail(struct jail *dst, const struct jail *src)
     /* 不克隆运行时状态 */
     memset(dst->failed_hash_table, 0, sizeof(dst->failed_hash_table));
     dst->failed_hash = NULL;
-    dst->partial_line_len = 0;
+    atomic_store(&dst->partial_line_len, 0);
     dst->partial_line_buffer[0] = '\0';
 
     return 0;

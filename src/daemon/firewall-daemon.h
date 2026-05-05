@@ -109,7 +109,7 @@ struct jail {
     struct failed_entry *failed_hash_table[256]; /* 手动哈希表（废弃） */
     khash_t(ip_map) *failed_hash;     /* khash 用于 O(1) 查找 */
     char partial_line_buffer[8192];   /* 不完整日志行的缓冲区 */
-    size_t partial_line_len;          /* 当前不完整行的长度 */
+    atomic_size_t partial_line_len;   /* 修复 P2-7：使用原子类型，允许无锁读取和原子清零 */
 };
 
 /* 全局运行标志 */
@@ -127,6 +127,7 @@ struct config {
     int daemon;
     int interval;
     int metrics_port;       /* Prometheus 指标端口（0 = 禁用） */
+    char *metrics_bind_address; /* Prometheus 指标绑定地址（默认 127.0.0.1） */
     char *config_file;      /* 运行时更新的单个配置文件路径 */
     char *config_dir;       /* 配置目录路径（自动加载所有 .yaml/.yml） */
     char *permanent_db_path; /* 永久封禁的 SQLite 数据库路径（NULL = 禁用） */

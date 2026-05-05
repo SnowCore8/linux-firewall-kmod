@@ -248,7 +248,7 @@ unsigned int fw_max_bans_per_second = 200;
 
 module_param(fw_ban_time, uint, 0644);
 MODULE_PARM_DESC(fw_ban_time, "封禁持续时间（秒）（默认 600）");
-module_param(state_file, charp, 0644);
+module_param(state_file, charp, 0444);  /* 修复 P2-8：改为只读权限，防止运行时修改 */
 MODULE_PARM_DESC(state_file, "用于保存/恢复封禁和白名单条目的状态文件路径（默认 /var/lib/firewall/state）");
 module_param(fw_max_bans_per_second, uint, 0644);
 MODULE_PARM_DESC(fw_max_bans_per_second, "泛洪保护下每秒最大封禁添加次数（默认 200）");
@@ -311,7 +311,14 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
     }
     rcu_read_unlock();
 
-    /* 获取锁进行封禁表操作 */
+    /* 修复 P0-1：在锁外预分配内存，避免在 spinlock 内使用 GFP_ATOMIC */
+    entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+    if (!entry) {
+        atomic_inc(&fw->alloc_failure_count);
+        fw_pr_err("Failed to allocate memory for ban entry for IP %pI4", &ip);
+        return -ENOMEM;
+    }
+
     spin_lock(&fw->lock);
 
     /* 检查是否已被封禁 */
@@ -320,6 +327,7 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
         if (compare_ips(entry->ip, ip)) {
             if (entry->is_permanent || time_before(jiffies, entry->unban_time)) {
                 spin_unlock(&fw->lock);
+                kfree(entry);  /* 释放预分配的内存 */
                 return 0;  /* 已被封禁 */
             } else {
                 /* 条目存在但已过期 — 更新它 */
@@ -328,6 +336,7 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
                 entry->is_permanent = is_permanent;
                 atomic_set(&entry->retry_count, 0);
                 spin_unlock(&fw->lock);
+                kfree(entry);  /* 释放预分配的内存 */
                 return 0;
             }
         }
@@ -336,20 +345,13 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
     /* 检查封禁表容量 */
     if (atomic_read(&fw->ban_count) >= MAX_BAN_ENTRIES) {
         spin_unlock(&fw->lock);
+        kfree(entry);  /* 释放预分配的内存 */
         atomic_inc(&fw->ban_table_full_count);
         fw_pr_warn("Ban table full, cannot ban %pI4", &ip);
         return -ENOSPC;
     }
 
-    /* 分配新条目（在锁内使用 GFP_ATOMIC） */
-    entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
-    if (!entry) {
-        spin_unlock(&fw->lock);
-        atomic_inc(&fw->alloc_failure_count);
-        fw_pr_err("Failed to allocate memory for ban entry for IP %pI4", &ip);
-        return -ENOMEM;
-    }
-
+    /* 初始化并插入新条目 */
     entry->ip = ip;
     entry->ban_time = jiffies;
     entry->unban_time = unban_time;
@@ -554,11 +556,15 @@ int is_permanently_banned(struct firewall_info *fw, __be32 ip)
     return found;
 }
 
-/*
+/**
  * cleanup_expired_bans - 移除过期的封禁条目
  * 优化版本：当没有条目需要清理时提前退出
  * 注意：收集要释放的条目，然后调用 call_rcu 异步释放（不在锁内）。
+ *
+ * 返回值：true 表示还有更多条目可能需要清理，false 表示当前无更多条目
  */
+static bool cleanup_expired_bans(struct firewall_info *fw);
+
 static void free_ban_entry_rcu(struct rcu_head *head)
 {
     struct ban_entry *entry = container_of(head, struct ban_entry, rcu_head);
@@ -573,7 +579,7 @@ static void free_whitelist_entry_rcu(struct rcu_head *head)
     kfree(entry);
 }
 
-void cleanup_expired_bans(struct firewall_info *fw)
+static bool cleanup_expired_bans(struct firewall_info *fw)
 {
     struct ban_entry *entry;
     struct hlist_node *tmp;
@@ -592,8 +598,8 @@ void cleanup_expired_bans(struct firewall_info *fw)
     if (atomic_read(&fw->ban_count) == 0) {
         fw->cleanup_last_bucket = 0;  /* 为下一周期重置 */
         FW_DEBUG(3, "No entries to clean, exiting early");
-        FW_DEBUG(2, "EXIT: cleanup_expired_bans -> void (no entries)");
-        return;
+        FW_DEBUG(2, "EXIT: cleanup_expired_bans -> false (no entries)");
+        return false;
     }
 
     spin_lock(&fw->lock);
@@ -603,8 +609,8 @@ void cleanup_expired_bans(struct firewall_info *fw)
         spin_unlock(&fw->lock);
         fw->cleanup_last_bucket = 0;  /* 为下一周期重置 */
         FW_DEBUG(3, "No entries to clean after lock acquired, exiting early");
-        FW_DEBUG(2, "EXIT: cleanup_expired_bans -> void (no entries after lock)");
-        return;
+        FW_DEBUG(2, "EXIT: cleanup_expired_bans -> false (no entries after lock)");
+        return false;
     }
 
     /* 每次调用仅处理一部分桶，以分散负载 */
@@ -656,20 +662,20 @@ void cleanup_expired_bans(struct firewall_info *fw)
         FW_DEBUG(3, "No expired entries found during cleanup");
     }
 
-    /* 如果清理了条目，更早地重新调度清理以继续清理 */
-    if (removed > 0 && atomic_read(&fw->ban_count) > 0) {
-        /* 修复：在关闭前重新设置定时器前检查 shutting_down，防止关闭期间的竞态 */
-        if (unlikely(atomic_read(&fw->shutting_down))) {
-            FW_DEBUG(2, "EXIT: cleanup_expired_bans -> void (shutting down, skip timer)");
-            return;
-        }
-        mod_timer(&fw->cleanup_timer, jiffies + HZ/10);  /* 如果可能还有要清理的，100ms 后重试 */
-        FW_DEBUG(2, "Rescheduled cleanup for 100ms due to remaining entries");
+    /* 修复 P0-2：移除 cleanup_expired_bans 中的 mod_timer 调用，
+     * 避免与 cleanup_timer_callback 中的定时器设置冲突。
+     * 定时器间隔的动态调整统一在 cleanup_timer_callback 中处理。
+     * 返回是否还有更多条目可能需要清理，供调用方调整定时器间隔。 */
+    bool has_more_entries = (removed > 0 && atomic_read(&fw->ban_count) > 0);
+    if (has_more_entries) {
+        FW_DEBUG(2, "Entries remain after cleanup, timer callback will use shorter interval");
     } else {
-        FW_DEBUG(3, "没有更多条目需要清理，使用标准定时器间隔");
+        FW_DEBUG(3, "No more entries to clean, using standard timer interval");
     }
 
-    FW_DEBUG(2, "EXIT: cleanup_expired_bans -> void (removed=%d, processed=%d)", removed, processed);
+    FW_DEBUG(2, "EXIT: cleanup_expired_bans -> %s (removed=%d, processed=%d)",
+             has_more_entries ? "true" : "false", removed, processed);
+    return has_more_entries;
 }
 
 /*
@@ -997,6 +1003,7 @@ void auto_discover_system_ips(struct firewall_info *fw)
 /*
  * cleanup_timer_callback - 定期清理的定时器回调
  * 优化版本：降低频率并提高效率
+ * 修复 P0-2：根据清理结果动态调整定时器间隔
  */
 static void cleanup_timer_callback(struct timer_list *t)
 {
@@ -1009,7 +1016,8 @@ static void cleanup_timer_callback(struct timer_list *t)
         return;
     }
 
-    cleanup_expired_bans(fw);
+    /* 执行清理并获取是否还有更多条目需要清理的标志 */
+    bool has_more_entries = cleanup_expired_bans(fw);
 
     /* 在重新设置定时器前再次检查 shutting_down，防止关闭期间的竞态 */
     if (unlikely(atomic_read(&fw->shutting_down))) {
@@ -1017,10 +1025,19 @@ static void cleanup_timer_callback(struct timer_list *t)
         return;
     }
 
-    /* 调整清理间隔：使用 ban_time/4 或 30 秒的最小值，以平衡性能和内存使用 */
-    /* 修复 P1-5：使用 READ_ONCE 原子访问 fw_ban_time */
-    unsigned long cleanup_interval = max(HZ * 30UL, ((unsigned long)READ_ONCE(fw_ban_time) * HZ) / 4);
-    FW_DEBUG(3, "Re-arming cleanup timer with interval=%lu jiffies", cleanup_interval);
+    /* 修复 P0-2：根据清理结果动态调整定时器间隔
+     * - 如果还有更多条目需要清理，使用较短间隔（1秒）加速清理
+     * - 否则使用标准间隔（ban_time/4 或 30秒的最小值） */
+    unsigned long cleanup_interval;
+    if (has_more_entries) {
+        cleanup_interval = HZ;  /* 1秒后再次检查 */
+        FW_DEBUG(3, "More entries to clean, using short interval (1s)");
+    } else {
+        /* 修复 P1-5：使用 READ_ONCE 原子访问 fw_ban_time */
+        cleanup_interval = max(HZ * 30UL, ((unsigned long)READ_ONCE(fw_ban_time) * HZ) / 4);
+        FW_DEBUG(3, "No more entries, using standard interval (%lu jiffies)", cleanup_interval);
+    }
+
     mod_timer(&fw->cleanup_timer, jiffies + cleanup_interval);
 
     FW_DEBUG(3, "EXIT: cleanup_timer_callback -> void (timer re-armed)");
@@ -1181,14 +1198,20 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
         fw_pr_warn("Path traversal attempt detected: %s", input);
         return -EINVAL;
     }
-    /* 检查 URL 编码的路径遍历（不区分大小写） */
+    /* 修复 P2-6：使用独立缓冲区进行小写转换，不直接修改用户输入 */
     {
-        char *lower_input = input;
-        char *ptr;
-        for (ptr = lower_input; *ptr; ptr++) {
-            if (*ptr >= 'A' && *ptr <= 'Z')
-                *ptr = *ptr - 'A' + 'a';
+        char lower_input[sizeof(input)];
+        size_t i;
+
+        /* 复制到独立缓冲区并转为小写 */
+        for (i = 0; input[i] && i < sizeof(lower_input) - 1; i++) {
+            if (input[i] >= 'A' && input[i] <= 'Z')
+                lower_input[i] = input[i] - 'A' + 'a';
+            else
+                lower_input[i] = input[i];
         }
+        lower_input[i] = '\0';
+
         if (strstr(lower_input, "%2e") != NULL || strstr(lower_input, "%2f") != NULL) {
             fw_pr_warn("URL encoded path traversal attempt detected: %s", input);
             return -EINVAL;

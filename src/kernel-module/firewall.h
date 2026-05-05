@@ -184,7 +184,6 @@ int unban_ip(struct firewall_info *fw, __be32 ip);
 int unban_permanent_ip(struct firewall_info *fw, __be32 ip);
 int is_banned(struct firewall_info *fw, __be32 ip);
 int is_permanently_banned(struct firewall_info *fw, __be32 ip);
-void cleanup_expired_bans(struct firewall_info *fw);
 
 /* 白名单函数 */
 int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask, const char *dev_name);

@@ -321,9 +321,18 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db,
 
         if (rc == SQLITE_DONE) {
             success_count++;
-        } else if (rc != SQLITE_CONSTRAINT) {
+        } else if (rc == SQLITE_CONSTRAINT) {
+            /* 约束错误（如重复 IP）是预期的，跳过该条目继续处理 */
+            fprintf(stderr, "firewall: Skipped duplicate permanent ban %d: %s\n",
+                    i, sqlite3_errmsg(db->conn));
+        } else {
+            /* 修复 P1-3：遇到非约束错误时立即回滚事务，防止部分提交 */
             fprintf(stderr, "firewall: Failed to insert permanent ban %d: %s\n",
                     i, sqlite3_errmsg(db->conn));
+            sqlite3_finalize(stmt);
+            sqlite3_exec(db->conn, "ROLLBACK;", NULL, NULL, NULL);
+            pthread_mutex_unlock(&db->lock);
+            return -1;
         }
     }
 

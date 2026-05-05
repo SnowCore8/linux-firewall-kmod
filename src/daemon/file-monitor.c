@@ -171,18 +171,21 @@ void process_lines_in_buffer(struct jail *j, char *data, size_t len, const char 
 void store_partial_line(struct jail *j, const char *data, size_t len, const char *log_path,
                        unsigned int max_retries, unsigned int findtime)
 {
+    size_t current_len;
+
     if (len == 0) return;
     
     if (len >= sizeof(j->partial_line_buffer)) {
         daemon_log_warn("Partial line too long (%zu bytes) in %s, discarding", len, log_path);
-        j->partial_line_len = 0;
+        atomic_store(&j->partial_line_len, 0);
         return;
     }
     
+    current_len = atomic_load(&j->partial_line_len);
     /* 检查添加此数据是否会溢出 */
-    if (j->partial_line_len + len >= sizeof(j->partial_line_buffer)) {
+    if (current_len + len >= sizeof(j->partial_line_buffer)) {
         /* 缓冲区将溢出 - 处理累积数据并替换为新数据 */
-        size_t old_len = j->partial_line_len;
+        size_t old_len = current_len;
         char temp[sizeof(j->partial_line_buffer)];
         
         if (old_len > 0 && old_len < sizeof(temp)) {
@@ -193,16 +196,17 @@ void store_partial_line(struct jail *j, const char *data, size_t len, const char
         
         /* 存储新数据 */
         memcpy(j->partial_line_buffer, data, len);
-        j->partial_line_len = len;
+        atomic_store(&j->partial_line_len, len);
     } else {
         /* 安全追加 */
-        memcpy(j->partial_line_buffer + j->partial_line_len, data, len);
-        j->partial_line_len += len;
+        memcpy(j->partial_line_buffer + current_len, data, len);
+        atomic_store(&j->partial_line_len, current_len + len);
     }
     
     /* 确保null终止 */
-    if (j->partial_line_len < sizeof(j->partial_line_buffer)) {
-        j->partial_line_buffer[j->partial_line_len] = '\0';
+    current_len = atomic_load(&j->partial_line_len);
+    if (current_len < sizeof(j->partial_line_buffer)) {
+        j->partial_line_buffer[current_len] = '\0';
     }
 }
 
@@ -211,15 +215,14 @@ void store_partial_line(struct jail *j, const char *data, size_t len, const char
 void flush_partial_line(struct jail *j, const char *log_path,
                        unsigned int max_retries, unsigned int findtime)
 {
-    if (j->partial_line_len == 0) return;
+    size_t old_len = atomic_exchange(&j->partial_line_len, 0);
+    if (old_len == 0) return;
     
-    size_t old_len = j->partial_line_len;
     char temp[sizeof(j->partial_line_buffer)];
     if (old_len >= sizeof(temp))
         old_len = sizeof(temp) - 1;
     memcpy(temp, j->partial_line_buffer, old_len);
     temp[old_len] = '\0';
-    j->partial_line_len = 0;
     
     daemon_log_debug("Flushing partial line buffer with %zu bytes from %s", old_len, log_path);
     process_single_line(j, temp, log_path, max_retries, findtime);
@@ -259,9 +262,8 @@ void process_new_lines(int idx)
     char local_partial_buf[sizeof(((struct jail *)0)->partial_line_buffer)];
     size_t local_partial_len = 0;
 
-    /* 短暂持有写锁以复制 jail 配置值和部分行缓冲区。
-     * 锁会在复制数据后立即释放，文件读取和处理在锁外进行。*/
-    pthread_rwlock_wrlock(&config_rwlock);
+    /* 修复 P2-7：使用读锁复制 jail 配置值，partial_line_len 使用原子操作清零 */
+    pthread_rwlock_rdlock(&config_rwlock);
     if (jail_idx >= cfg.jail_count) {
         /* 锁获取后再次检查，防止配置重载 */
         pthread_rwlock_unlock(&config_rwlock);
@@ -271,14 +273,12 @@ void process_new_lines(int idx)
     j = &cfg.jails[jail_idx];
     max_retries = j->max_retries;
     findtime = j->findtime;
-    /* 持有锁时复制部分行缓冲区 */
-    local_partial_len = j->partial_line_len;
+    /* 使用原子交换清零 partial_line_len，避免使用写锁 */
+    local_partial_len = atomic_exchange(&j->partial_line_len, 0);
     if (local_partial_len > 0 && local_partial_len < sizeof(local_partial_buf)) {
         memcpy(local_partial_buf, j->partial_line_buffer, local_partial_len);
     }
-    /* 清除 jail 的部分缓冲区，因为我们现在拥有数据 */
-    j->partial_line_len = 0;
-    /* 立即释放写锁，文件读取和处理在锁外进行 */
+    /* 立即释放读锁，文件读取和处理在锁外进行 */
     pthread_rwlock_unlock(&config_rwlock);
 
     fd = open(log_path, O_RDONLY);
@@ -424,12 +424,12 @@ void process_new_lines(int idx)
     file_states[idx].offset = current_offset;
 
 cleanup_restore_partial:
-    /* 短暂持有写锁以将部分行缓冲区恢复到 jail */
+    /* 修复 P2-7：使用写锁恢复部分行缓冲区，使用原子操作设置长度 */
     pthread_rwlock_wrlock(&config_rwlock);
     if (jail_idx < cfg.jail_count) {
-        cfg.jails[jail_idx].partial_line_len = local_partial_len;
         if (local_partial_len > 0 && local_partial_len < sizeof(local_partial_buf))
             memcpy(cfg.jails[jail_idx].partial_line_buffer, local_partial_buf, local_partial_len);
+        atomic_store(&cfg.jails[jail_idx].partial_line_len, local_partial_len);
     }
     pthread_rwlock_unlock(&config_rwlock);
 
@@ -464,8 +464,7 @@ void handle_log_rotation(int idx)
     unsigned int max_retries, findtime;
 
     /* 在写锁下复制jail数据以防止配置重载期间的use-after-free。
-     * j->partial_line_len = 0 是写操作，process_single_line 会修改 j->failed_hash，
-     * 需要写锁保护。*/
+     * process_single_line 会修改 j->failed_hash，需要写锁保护。*/
     if (jail_idx >= 0 && jail_idx < cfg.jail_count) {
         pthread_rwlock_wrlock(&config_rwlock);
         /* 获取锁后再次检查 */
@@ -473,13 +472,12 @@ void handle_log_rotation(int idx)
             j = &cfg.jails[jail_idx];
             max_retries = j->max_retries;
             findtime = j->findtime;
-            /* 持有锁时复制并清除部分行缓冲区 */
+            /* 修复 P2-7：使用原子操作读取并清零 partial_line_len */
             char local_buf[sizeof(j->partial_line_buffer)];
-            size_t local_len = j->partial_line_len;
+            size_t local_len = atomic_exchange(&j->partial_line_len, 0);
             if (local_len > 0 && local_len < sizeof(local_buf)) {
                 memcpy(local_buf, j->partial_line_buffer, local_len);
             }
-            j->partial_line_len = 0;
 
             /* 在持有锁时处理已复制的部分行，防止 use-after-free。
              * process_single_line 需要访问 j->compiled_regex、j->match_data、j->failed_hash，
@@ -646,6 +644,7 @@ void monitor_loop(void)
 
                 unsigned int old_max_retries, old_findtime, old_ban_time;
                 int old_interval, old_metrics_port;
+                char *old_metrics_bind_address = NULL;
 
                 /* 保存旧配置的关键值以检测变更 */
                 pthread_rwlock_rdlock(&config_rwlock);
@@ -654,6 +653,9 @@ void monitor_loop(void)
                 old_ban_time = cfg.default_ban_time;
                 old_interval = cfg.interval;
                 old_metrics_port = cfg.metrics_port;
+                if (cfg.metrics_bind_address) {
+                    old_metrics_bind_address = strdup(cfg.metrics_bind_address);
+                }
                 pthread_rwlock_unlock(&config_rwlock);
 
                 /* 根据配置类型选择重载方法 */
@@ -729,7 +731,16 @@ void monitor_loop(void)
                     if (old_metrics_port != cfg.metrics_port) {
                         daemon_log_info("metrics_port changed from %d to %d", old_metrics_port, cfg.metrics_port);
                     }
+                    if (old_metrics_bind_address && cfg.metrics_bind_address &&
+                        strcmp(old_metrics_bind_address, cfg.metrics_bind_address) != 0) {
+                        daemon_log_info("metrics_bind_address changed from %s to %s",
+                                       old_metrics_bind_address, cfg.metrics_bind_address);
+                    }
                     pthread_rwlock_unlock(&config_rwlock);
+
+                    if (old_metrics_bind_address) {
+                        free(old_metrics_bind_address);
+                    }
                 }
             }
             continue;
@@ -788,25 +799,27 @@ void monitor_loop(void)
             }
 
             if (event->mask & (IN_MODIFY | IN_MOVED_TO)) {
-                /* 文件被修改或创建 - 查找匹配的文件 */
+                /* 修复 P1-4：先在锁内找到匹配索引，然后解锁再处理，避免频繁切换锁 */
+                int matched_idx = -1;
+                bool is_rotation = (event->mask & (IN_MOVED_TO | IN_CREATE)) != 0;
+
                 pthread_rwlock_rdlock(&config_rwlock);
                 int max_states = MAX_JAILS * MAX_LOG_FILES;
                 for (int j = 0; j < max_states; j++) {
                     if (file_states[j].wd >= 0 && event->wd == file_states[j].wd) {
-                        /* 检查文件是否被轮转 */
-                        if (event->mask & (IN_MOVED_TO | IN_CREATE)) {
-                            pthread_rwlock_unlock(&config_rwlock);
-                            handle_log_rotation(j);
-                            pthread_rwlock_rdlock(&config_rwlock);
-                        }
-                        /* 处理新行 */
-                        pthread_rwlock_unlock(&config_rwlock);
-                        process_new_lines(j);
-                        pthread_rwlock_rdlock(&config_rwlock);
+                        matched_idx = j;
                         break;
                     }
                 }
                 pthread_rwlock_unlock(&config_rwlock);
+
+                /* 在锁外处理文件轮转和新行 */
+                if (matched_idx >= 0) {
+                    if (is_rotation) {
+                        handle_log_rotation(matched_idx);
+                    }
+                    process_new_lines(matched_idx);
+                }
             } else if (event->mask & (IN_MOVED_FROM | IN_DELETE)) {
                 /* 文件被移动或删除 - 标记为轮转处理 */
                 pthread_rwlock_wrlock(&config_rwlock);

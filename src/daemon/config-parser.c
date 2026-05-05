@@ -27,7 +27,7 @@ static int is_valid_defaults_key(const char *key)
 {
     const char *valid_keys[] = {
         "max_retries", "findtime", "ban_time", "interval",
-        "metrics_port", "daemon", "permanent_db_path",
+        "metrics_port", "metrics_bind_address", "daemon", "permanent_db_path",
         "permanent_ban_enabled", NULL
     };
     for (int i = 0; valid_keys[i]; i++) {
@@ -202,6 +202,17 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                     } else {
                         target->metrics_port = (int)val;
                         daemon_log_info("Default metrics_port set to %d", target->metrics_port);
+                    }
+                } else if (strcmp(ctx.current_key, "metrics_bind_address") == 0) {
+                    /* 修复 P1-5：解析 metrics_bind_address 配置项 */
+                    if (strlen(value) > 0 && strlen(value) < 64) {
+                        if (target->metrics_bind_address) free(target->metrics_bind_address);
+                        target->metrics_bind_address = strdup(value);
+                        if (target->metrics_bind_address) {
+                            daemon_log_info("Default metrics_bind_address set to: %s", target->metrics_bind_address);
+                        }
+                    } else {
+                        daemon_log_warn("Invalid metrics_bind_address value (empty or too long): %s", value);
                     }
                 } else if (strcmp(ctx.current_key, "daemon") == 0) {
                     if (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "1") == 0) {
@@ -387,6 +398,15 @@ static int parse_yaml_into(const char *config_path, struct config *target)
                     if (errno == 0 && *endptr == '\0' && val >= 0 && val <= 65535) {
                         target->metrics_port = (int)val;
                         daemon_log_info("Config metrics_port set to %d", target->metrics_port);
+                    }
+                } else if (strcmp(ctx.current_key, "metrics_bind_address") == 0) {
+                    /* 修复 P1-5：解析顶层 metrics_bind_address 配置项 */
+                    if (strlen(value) > 0 && strlen(value) < 64) {
+                        if (target->metrics_bind_address) free(target->metrics_bind_address);
+                        target->metrics_bind_address = strdup(value);
+                        if (target->metrics_bind_address) {
+                            daemon_log_info("Config metrics_bind_address set to: %s", target->metrics_bind_address);
+                        }
                     }
                 } else if (strcmp(ctx.current_key, "daemon") == 0) {
                     target->daemon = (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 || strcmp(value, "1") == 0);
@@ -620,6 +640,13 @@ int parse_config_file(const char *config_path)
     cfg.daemon = new_cfg->daemon;
     cfg.interval = new_cfg->interval;
     cfg.metrics_port = new_cfg->metrics_port;
+
+    /* 修复 P1-5：更新 metrics_bind_address */
+    if (new_cfg->metrics_bind_address) {
+        if (cfg.metrics_bind_address) free(cfg.metrics_bind_address);
+        cfg.metrics_bind_address = new_cfg->metrics_bind_address;
+        new_cfg->metrics_bind_address = NULL;
+    }
 
     /* 将运行时状态（failed_hash）从旧 jail 迁移到新 jail。
      * 注意：old_cfg_snapshot 是通过 config_clone() 创建的，clone_jail() 显式设置 failed_hash = NULL，
@@ -864,6 +891,7 @@ int parse_config(int argc, char *argv[])
     cfg.daemon = 0;
     cfg.interval = DEFAULT_INTERVAL;
     cfg.metrics_port = DEFAULT_METRICS_PORT;
+    cfg.metrics_bind_address = strdup("127.0.0.1");  /* 修复 P1-5：默认绑定 localhost */
     cfg.jail_count = 0;
     cfg.config_file = NULL;
     cfg.config_dir = NULL;
