@@ -108,57 +108,76 @@ if [[ $EUID -ne 0 ]]; then
 fi
 fw_log_info "Root 权限检查通过"
 
-# 始终清理并重新编译以确保最新代码
-fw_log_info "清理旧产物..."
-cd "$PROJECT_ROOT" && make clean >/dev/null 2>&1
-cd "$SCRIPT_DIR"
+# 检查是否跳过编译（CI 环境中使用 build 任务的产物）
+if [[ "${SKIP_COMPILE:-0}" == "1" ]]; then
+    fw_log_info "跳过编译步骤（使用 CI 编译产物）"
+    
+    # 验证编译产物是否存在
+    if [[ ! -f "$KERNEL_MODULE_PATH" ]]; then
+        fw_log_error "内核模块产物不存在: $KERNEL_MODULE_PATH"
+        exit 1
+    fi
+    fw_log_info "内核模块产物验证通过"
+    
+    DAEMON_BIN="$PROJECT_ROOT/build/daemon/firewall-daemon"
+    if [[ -f "$DAEMON_BIN" ]]; then
+        fw_log_info "守护进程产物验证通过"
+    else
+        fw_log_warn "守护进程产物不存在（部分测试可能跳过）"
+    fi
+else
+    # 始终清理并重新编译以确保最新代码
+    fw_log_info "清理旧产物..."
+    cd "$PROJECT_ROOT" && make clean >/dev/null 2>&1
+    cd "$SCRIPT_DIR"
 
-# 编译内核模块
-fw_log_info "编译内核模块..."
-cd "$PROJECT_ROOT" && make kernel-module 2>/tmp/fw_compile_stderr_$$.log || {
+    # 编译内核模块
+    fw_log_info "编译内核模块..."
+    cd "$PROJECT_ROOT" && make kernel-module 2>/tmp/fw_compile_stderr_$$.log || {
+        if [[ -s /tmp/fw_compile_stderr_$$.log ]]; then
+            fw_log_error "编译输出: $(cat /tmp/fw_compile_stderr_$$.log)"
+        fi
+        fw_log_error "内核模块编译失败"
+        rm -f /tmp/fw_compile_stderr_$$.log
+        exit 1
+    }
+    cd "$SCRIPT_DIR"
+    # 输出编译警告
     if [[ -s /tmp/fw_compile_stderr_$$.log ]]; then
-        fw_log_error "编译输出: $(cat /tmp/fw_compile_stderr_$$.log)"
+        while IFS= read -r line; do
+            fw_log_warn "编译警告: $line"
+        done < /tmp/fw_compile_stderr_$$.log
+    fi
+    # 无条件清理临时文件
+    rm -f /tmp/fw_compile_stderr_$$.log
+    # 验证编译产物
+    if [[ ! -f "$KERNEL_MODULE_PATH" ]]; then
+        fw_log_error "内核模块编译成功但产物不存在: $KERNEL_MODULE_PATH"
+        exit 1
+    fi
+
+    # 编译守护进程
+    DAEMON_BIN="$PROJECT_ROOT/build/daemon/firewall-daemon"
+    fw_log_info "编译用户态守护进程..."
+    cd "$PROJECT_ROOT" && make daemon 2>/tmp/fw_compile_stderr_$$.log || {
+        rm -f /tmp/fw_compile_stderr_$$.log
+        fw_log_warn "守护进程编译失败（部分测试可能跳过）"
+    }
+    cd "$SCRIPT_DIR"
+    # 输出编译警告
+    if [[ -s /tmp/fw_compile_stderr_$$.log ]]; then
+        while IFS= read -r line; do
+            fw_log_warn "编译警告: $line"
+        done < /tmp/fw_compile_stderr_$$.log
+        fw_log_info "清理编译临时文件..."
     fi
     rm -f /tmp/fw_compile_stderr_$$.log
-    fw_log_error "内核模块编译失败"
-    exit 1
-}
-cd "$SCRIPT_DIR"
-# 输出编译警告
-if [[ -s /tmp/fw_compile_stderr_$$.log ]]; then
-    while IFS= read -r line; do
-        fw_log_warn "编译警告: $line"
-    done < /tmp/fw_compile_stderr_$$.log
-    fw_log_info "清理编译临时文件..."
-fi
-rm -f /tmp/fw_compile_stderr_$$.log
-# 验证编译产物
-if [[ ! -f "$KERNEL_MODULE_PATH" ]]; then
-    fw_log_error "内核模块编译成功但产物不存在: $KERNEL_MODULE_PATH"
-    exit 1
-fi
-
-# 编译守护进程
-DAEMON_BIN="$PROJECT_ROOT/build/daemon/firewall-daemon"
-fw_log_info "编译用户态守护进程..."
-cd "$PROJECT_ROOT" && make daemon 2>/tmp/fw_compile_stderr_$$.log || {
-    rm -f /tmp/fw_compile_stderr_$$.log
-    fw_log_warn "守护进程编译失败（部分测试可能跳过）"
-}
-cd "$SCRIPT_DIR"
-# 输出编译警告
-if [[ -s /tmp/fw_compile_stderr_$$.log ]]; then
-    while IFS= read -r line; do
-        fw_log_warn "编译警告: $line"
-    done < /tmp/fw_compile_stderr_$$.log
-    fw_log_info "清理编译临时文件..."
-fi
-rm -f /tmp/fw_compile_stderr_$$.log
-# 验证编译产物
-if [[ -f "$DAEMON_BIN" ]]; then
-    fw_log_info "守护进程编译成功"
-else
-    fw_log_warn "守护进程编译失败（部分测试可能跳过）"
+    # 验证编译产物
+    if [[ -f "$DAEMON_BIN" ]]; then
+        fw_log_info "守护进程编译成功"
+    else
+        fw_log_warn "守护进程编译失败（部分测试可能跳过）"
+    fi
 fi
 
 # 安全预检

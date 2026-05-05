@@ -7,10 +7,34 @@ on:
     branches: [master, main]
 
 jobs:
-  # 编译任务：依赖代码质量检查，确保代码风格通过后再编译
+  # 代码质量任务：最先执行，仅包含静态检查（代码风格 + YAML 配置）
+  lint:
+    name: 代码质量检查
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装检查工具
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+          pip install yamllint
+
+      - name: 检查代码风格（clang-format）
+        run: |
+          echo "检查内核模块代码..."
+          clang-format --dry-run --Werror src/kernel-module/*.c src/kernel-module/*.h
+          echo "检查守护进程代码..."
+          clang-format --dry-run --Werror src/daemon/*.c src/daemon/*.h
+
+      - name: 检查 YAML 配置（yamllint）
+        run: yamllint -c .yamllint config/*.yaml
+
+  # 编译任务：独立执行，与 lint 并行运行
   build:
     name: 编译
-    needs: [lint]
     runs-on: ubuntu-latest
 
     steps:
@@ -47,55 +71,42 @@ jobs:
             exit 1
           fi
 
-  # 测试任务：依赖编译任务，确保编译成功后再运行测试
+      - name: 上传编译产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            build/kernel-module/firewall.ko
+            build/daemon/firewall-daemon
+          retention-days: 1
+          if-no-files-found: error
+
+  # 测试任务：依赖编译任务，使用 build 的编译产物
   test:
     name: 运行测试
     needs: [build]
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # 跳过测试脚本内部的重新编译步骤，使用 build 任务的产物
+      SKIP_COMPILE: "1"
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 安装编译依赖
+      - name: 下载编译产物
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: .
+
+      - name: 设置编译产物执行权限
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential linux-headers-$(uname -r) \
-            libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev
+          chmod +x build/daemon/firewall-daemon
+          # 验证产物完整性
+          file build/kernel-module/firewall.ko
+          file build/daemon/firewall-daemon
 
       - name: 执行测试并生成报告
         run: sudo ./tests/run_tests.sh --report
-
-  # 代码质量任务：最先执行，包含代码风格检查、YAML 配置检查和编译警告检查
-  lint:
-    name: 代码质量检查
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 安装检查工具
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-format
-          pip install yamllint
-
-      - name: 检查代码风格（clang-format）
-        run: |
-          echo "检查内核模块代码..."
-          clang-format --dry-run --Werror src/kernel-module/*.c src/kernel-module/*.h
-          echo "检查守护进程代码..."
-          clang-format --dry-run --Werror src/daemon/*.c src/daemon/*.h
-
-      - name: 检查 YAML 配置（yamllint）
-        run: yamllint -c .yamllint config/*.yaml
-
-      - name: 安装编译依赖
-        run: |
-          sudo apt-get install -y build-essential linux-headers-$(uname -r) \
-            libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev
-
-      - name: 编译警告检查（-Werror）
-        run: make SECURITY_CFLAGS="-Wall -Wextra -Werror -O2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE"
