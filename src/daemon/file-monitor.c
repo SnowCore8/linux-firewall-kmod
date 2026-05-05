@@ -572,26 +572,45 @@ void monitor_loop(void)
                 if (now - last_check_time >= 60) {
                     last_check_time = now;
                     int needs_resetup = 0;
-                    for (int j = 0; j < cfg.jail_count; j++) {
+
+                    /* 修复 1.3：先快速复制配置数据到局部变量（持锁时间短） */
+                    struct {
+                        char path[512];
+                        char name[64];
+                    } log_entries[MAX_JAILS * MAX_LOG_FILES];
+                    int log_entry_count = 0;
+
+                    pthread_rwlock_rdlock(&config_rwlock);
+                    for (int j = 0; j < cfg.jail_count && log_entry_count < MAX_JAILS * MAX_LOG_FILES; j++) {
                         if (!cfg.jails[j].enabled) continue;
-                        for (int i = 0; i < cfg.jails[j].log_count; i++) {
-                            struct stat st;
-                            if (stat(cfg.jails[j].log_files[i], &st) == 0) {
-                                /* 文件存在，检查是否已经在监控中 */
-                                int already_watched = 0;
-                                int max_states = MAX_JAILS * MAX_LOG_FILES;
-                                for (int k = 0; k < max_states; k++) {
-                                    if (file_states[k].wd >= 0 &&
-                                        strcmp(file_states[k].path, cfg.jails[j].log_files[i]) == 0) {
-                                        already_watched = 1;
-                                        break;
-                                    }
+                        for (int i = 0; i < cfg.jails[j].log_count && log_entry_count < MAX_JAILS * MAX_LOG_FILES; i++) {
+                            strncpy(log_entries[log_entry_count].path, cfg.jails[j].log_files[i], sizeof(log_entries[0].path) - 1);
+                            log_entries[log_entry_count].path[sizeof(log_entries[0].path) - 1] = '\0';
+                            strncpy(log_entries[log_entry_count].name, cfg.jails[j].name, sizeof(log_entries[0].name) - 1);
+                            log_entries[log_entry_count].name[sizeof(log_entries[0].name) - 1] = '\0';
+                            log_entry_count++;
+                        }
+                    }
+                    pthread_rwlock_unlock(&config_rwlock);
+
+                    /* 在锁外执行 stat() 系统调用，避免阻塞配置重载 */
+                    for (int idx = 0; idx < log_entry_count; idx++) {
+                        struct stat st;
+                        if (stat(log_entries[idx].path, &st) == 0) {
+                            /* 文件存在，检查是否已经在监控中 */
+                            int already_watched = 0;
+                            int max_states = MAX_JAILS * MAX_LOG_FILES;
+                            for (int k = 0; k < max_states; k++) {
+                                if (file_states[k].wd >= 0 &&
+                                    strcmp(file_states[k].path, log_entries[idx].path) == 0) {
+                                    already_watched = 1;
+                                    break;
                                 }
-                                if (!already_watched) {
-                                    daemon_log_info("New log file detected: %s (jail=%s), will re-setup inotify",
-                                                    cfg.jails[j].log_files[i], cfg.jails[j].name);
-                                    needs_resetup = 1;
-                                }
+                            }
+                            if (!already_watched) {
+                                daemon_log_info("New log file detected: %s (jail=%s), will re-setup inotify",
+                                                log_entries[idx].path, log_entries[idx].name);
+                                needs_resetup = 1;
                             }
                         }
                     }

@@ -106,8 +106,7 @@ struct jail {
     bool _max_retries_set;            /* 用户是否显式配置了 max_retries */
     bool _findtime_set;               /* 用户是否显式配置了 findtime */
     bool _ban_time_set;               /* 用户是否显式配置了 ban_time */
-    struct failed_entry *failed_table;/* 每个 jail 的失败尝试（链表） */
-    struct failed_entry *failed_hash_table[256]; /* 手动哈希表 */
+    struct failed_entry *failed_hash_table[256]; /* 手动哈希表（废弃） */
     khash_t(ip_map) *failed_hash;     /* khash 用于 O(1) 查找 */
     char partial_line_buffer[8192];   /* 不完整日志行的缓冲区 */
     size_t partial_line_len;          /* 当前不完整行的长度 */

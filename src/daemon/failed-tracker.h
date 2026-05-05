@@ -31,16 +31,6 @@ void check_and_ban(struct failed_entry *entry, const char *ip,
 void handle_failed_attempt_for_jail(struct jail *j, const char *ip,
                                    unsigned int max_retries, unsigned int findtime);
 
-/* 处理失败登录尝试 - 全局版本（向后兼容） */
-void handle_failed_attempt(const char *ip, unsigned int max_retries, unsigned int findtime);
-
-/* 按 IP 查找失败条目 - 搜索所有 jails（遗留函数） */
-struct failed_entry *find_entry(const char *ip);
-
-/* 创建新的失败条目 - 在第一个 jail 中创建（遗留函数） */
-struct failed_entry *create_entry(const char *ip);
-
-/* 移除失败条目 - 搜索所有 jails（遗留函数） */
-void remove_entry(const char *ip);
+/* 修复 3.3：删除废弃的全局函数声明（handle_failed_attempt, find_entry, create_entry, remove_entry） */
 
 #endif /* FAILED_TRACKER_H */

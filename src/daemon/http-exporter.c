@@ -43,6 +43,12 @@
  * ========================================================================== */
 static atomic_bool http_exporter_running = false;
 
+/* 修复 1.4：线程 ID 同步机制，防止 stop_http_exporter 读到无效线程 ID */
+static pthread_t exporter_thread_id;
+static pthread_mutex_t thread_id_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t thread_id_cond = PTHREAD_COND_INITIALIZER;
+static bool thread_id_ready = false;
+
 /* ============================================================================
  * 对外引用 daemon_stats（在 firewall-daemon.c 中定义）
  * ========================================================================== */
@@ -328,6 +334,13 @@ void *start_http_exporter(void *port)
     int listen_port = port ? (int)(long)port : EXPORTER_DEFAULT_PORT;
     struct MHD_Daemon *daemon;
 
+    /* 修复 1.4：使用条件变量同步线程 ID */
+    pthread_mutex_lock(&thread_id_mutex);
+    exporter_thread_id = pthread_self();
+    thread_id_ready = true;
+    pthread_cond_signal(&thread_id_cond);
+    pthread_mutex_unlock(&thread_id_mutex);
+
     /* 标记导出器为运行状态 */
     atomic_store(&http_exporter_running, true);
 
@@ -365,10 +378,20 @@ void *start_http_exporter(void *port)
  * stop_http_exporter - 向 HTTP 导出器线程发送停止信号
  *
  * 从 cleanup() 调用以优雅关闭导出器线程。
+ * 修复 1.4：等待线程 ID 就绪后调用 pthread_join 确保线程完全结束。
  */
 void stop_http_exporter(void)
 {
     if (atomic_load(&http_exporter_running)) {
         atomic_store(&http_exporter_running, false);
+
+        /* 等待线程 ID 就绪，防止线程还未初始化就 join */
+        pthread_mutex_lock(&thread_id_mutex);
+        while (!thread_id_ready) {
+            pthread_cond_wait(&thread_id_cond, &thread_id_mutex);
+        }
+        pthread_mutex_unlock(&thread_id_mutex);
+
+        pthread_join(exporter_thread_id, NULL);
     }
 }

@@ -98,7 +98,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
         if (!yaml_parser_parse(&parser, &event)) {
             daemon_log_err("YAML parse error: %s", parser.problem ? parser.problem : "unknown");
             error = 1;
-            break;
+            goto cleanup;
         }
 
         switch (event.type) {
@@ -118,7 +118,7 @@ static int parse_yaml_into(const char *config_path, struct config *target)
             if (strlen(value) > 1024) {
                 daemon_log_warn("YAML value too long (%zu bytes), rejecting", strlen(value));
                 error = 1;
-                break;
+                goto cleanup;
             }
 
             if (ctx.in_defaults_section && ctx.current_key) {
@@ -490,15 +490,16 @@ static int parse_yaml_into(const char *config_path, struct config *target)
 
         yaml_event_delete(&event);
 
-        if (error) break;
+        if (error) goto cleanup;
     }
 
+cleanup:
     yaml_parser_delete(&parser);
     fclose(file);
 
-    /* 清理 */
-    if (ctx.current_key) free(ctx.current_key);
-    if (ctx.current_jail_name) free(ctx.current_jail_name);
+    /* 修复 2.1：统一清理路径，防止错误时内存泄漏 */
+    if (ctx.current_key) { free(ctx.current_key); ctx.current_key = NULL; }
+    if (ctx.current_jail_name) { free(ctx.current_jail_name); ctx.current_jail_name = NULL; }
 
     /* 严格模式下如果有任何错误则返回失败 */
     if (ctx.has_error && ctx.strict_mode) {
@@ -652,15 +653,7 @@ int parse_config_file(const char *config_path)
             if (old_jail->match_data) pcre2_match_data_free(old_jail->match_data);
         }
         if (old_jail->regex_pattern) free(old_jail->regex_pattern);
-        /* 释放 failed_table 链表 */
-        if (old_jail->failed_table) {
-            struct failed_entry *entry = old_jail->failed_table;
-            while (entry) {
-                struct failed_entry *next = entry->next;
-                free(entry);
-                entry = next;
-            }
-        }
+        /* 修复 2.3：删除废弃的 failed_table 清理代码 */
         /* failed_hash 已迁移，跳过 */
         memset(old_jail, 0, sizeof(struct jail));
     }

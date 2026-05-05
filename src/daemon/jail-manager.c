@@ -86,7 +86,6 @@ void init_jail_defaults(struct jail *j)
     j->_max_retries_set = false;
     j->_findtime_set = false;
     j->_ban_time_set = false;
-    j->failed_table = NULL;
     memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
     j->failed_hash = NULL;
     j->partial_line_len = 0;
@@ -163,18 +162,7 @@ void destroy_jail(struct jail *j)
         j->regex_pattern = NULL;
     }
 
-    /* 释放失败记录表 */
-    if (j->failed_table) {
-        struct failed_entry *entry = j->failed_table;
-        while (entry) {
-            struct failed_entry *next = entry->next;
-            free(entry);
-            entry = next;
-        }
-        j->failed_table = NULL;
-    }
-
-    /* 清空哈希表 */
+    /* 修复 2.3：删除废弃的 failed_table 清理代码（仅使用 khash） */
     memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
 
     /* 在销毁之前释放 khash 表的键（堆分配的字符串） */
@@ -332,16 +320,7 @@ int get_global_file_state_index(int jail_idx, int file_idx)
     return global_idx;
 }
 
-/* 在重新加载配置之前清理所有 jail 资源
- *
- * 注意：failed_table 和 failed_hash_table 共享相同的对象。
- * failed_table 是链表的头节点，而 failed_hash_table
- * 包含指向相同对象的指针以实现 O(1) 查找。
- * 我们遍历 failed_table 来精确释放每个对象一次，然后
- * 将 failed_hash_table 清零（释放后它只包含悬空指针，
- * 但不拥有所有权）。
- * 只要我们始终将同一个对象添加到两个结构中，这就是安全的。
- */
+/* 在重新加载配置之前清理所有 jail 资源 */
 void cleanup_all_jails(void)
 {
     pthread_rwlock_wrlock(&config_rwlock);
@@ -382,7 +361,6 @@ struct jail *find_or_create_jail_in_cfg(const char *name, struct config *target_
     j->_max_retries_set = false;
     j->_findtime_set = false;
     j->_ban_time_set = false;
-    j->failed_table = NULL;
     memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
     j->failed_hash = NULL;
     j->partial_line_len = 0;
@@ -439,7 +417,6 @@ int clone_jail(struct jail *dst, const struct jail *src)
     dst->regex_compiled = 0;
 
     /* 不克隆运行时状态 */
-    dst->failed_table = NULL;
     memset(dst->failed_hash_table, 0, sizeof(dst->failed_hash_table));
     dst->failed_hash = NULL;
     dst->partial_line_len = 0;

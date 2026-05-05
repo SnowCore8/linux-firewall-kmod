@@ -176,16 +176,7 @@ void cleanup(void)
             jail->regex_pattern = NULL;
         }
 
-        /* 从链表中释放失败记录（每条记录仅释放一次） */
-        if (jail->failed_table) {
-            struct failed_entry *entry = jail->failed_table;
-            while (entry) {
-                struct failed_entry *next = entry->next;
-                free(entry);
-                entry = next;
-            }
-            jail->failed_table = NULL;
-        }
+        /* 修复 2.3：删除废弃的 failed_table 清理代码（仅使用 khash） */
         memset(jail->failed_hash_table, 0, sizeof(jail->failed_hash_table));
 
         /* 释放 khash 表 */

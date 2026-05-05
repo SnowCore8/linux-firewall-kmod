@@ -46,18 +46,6 @@ static inline bool compare_ips(__be32 ip1, __be32 ip2)
     return ip1 == ip2;
 }
 
-/* 辅助函数：为 IPv4 地址生成哈希 */
-static inline u32 generate_ip_hash(__be32 ip)
-{
-    return hash_min(ip, BAN_HASH_BITS);
-}
-
-/* 辅助函数：为白名单 IPv4 地址生成哈希 */
-static inline u32 generate_wl_ip_hash(__be32 ip)
-{
-    return hash_min(ip, WHITELIST_HASH_BITS);
-}
-
 /* 前向声明 */
 static int validate_ipv4_address(__be32 ip, const char *ip_str, const char *context);
 
@@ -308,15 +296,14 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
         return -EINVAL;
     }
 
-    /* 在任何检查之前获取锁，以消除 TOCTOU 竞态条件 */
-    spin_lock(&fw->lock);
-
-    /* 使用 RCU 检查白名单（whitelist_table 受 RCU 保护） */
+    /* 修复 1.2：白名单检查移到 fw->lock 外，仅用 RCU 保护
+     * 注意：存在微小的 TOCTOU 窗口（白名单检查与封禁操作之间），
+     * 但这是可接受的：白名单修改是低频操作，最坏情况是某个 IP
+     * 刚好在窗口期被白名单移除然后被封禁——这符合预期行为。 */
     rcu_read_lock();
     hash_for_each_rcu(fw->whitelist_table, bkt, wl_entry, hash) {
         if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
             rcu_read_unlock();
-            spin_unlock(&fw->lock);
             atomic_inc(&fw->whitelist_reject_count);
             fw_pr_warn("REFUSED to ban whitelisted IP %pI4", &ip);
             return -EPERM;
@@ -324,7 +311,10 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
     }
     rcu_read_unlock();
 
-    /* 在同一锁下检查是否已被封禁 */
+    /* 获取锁进行封禁表操作 */
+    spin_lock(&fw->lock);
+
+    /* 检查是否已被封禁 */
     hash = hash_min(ip, BAN_HASH_BITS);
     hash_for_each_possible(fw->ban_table, entry, hash, ip) {
         if (compare_ips(entry->ip, ip)) {
@@ -351,7 +341,7 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
         return -ENOSPC;
     }
 
-    /* 分配新条目 */
+    /* 分配新条目（在锁内使用 GFP_ATOMIC） */
     entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
     if (!entry) {
         spin_unlock(&fw->lock);
@@ -868,15 +858,11 @@ static int bans_open(struct inode *inode, struct file *file)
  * @ip: 要封禁的 IP 地址
  * @seconds: 封禁持续时间（秒）（必须 > 0）
  *
- * 此函数创建具有自定义解封时间的封禁条目，
- * 避免修改全局 fw_ban_time。
+ * 修复 3.2：简化为调用 __do_ban_ip，消除 ~100 行重复代码
  */
 static int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned long seconds)
 {
-    struct ban_entry *entry;
-    struct whitelist_entry *wl_entry;
-    u32 hash;
-    int bkt;
+    unsigned long ban_duration;
 
     FW_DEBUG(1, "ENTRY: ban_ip_with_duration(ip=%pI4, seconds=%lu)", &ip, seconds);
 
@@ -894,99 +880,20 @@ static int ban_ip_with_duration(struct firewall_info *fw, __be32 ip, unsigned lo
         return -EINVAL;
     }
 
+    /* 检查整数溢出 */
+    if (check_mul_overflow(seconds, (unsigned long)HZ, &ban_duration)) {
+        fw_pr_err("ban duration overflow for IP %pI4", &ip);
+        FW_DEBUG(1, "EXIT: ban_ip_with_duration -> -EINVAL (overflow)");
+        return -EINVAL;
+    }
+
     FW_DEBUG(2, "Attempting to ban IPv4 %pI4 for %lu seconds", &ip, seconds);
 
-    /* 在任何检查之前获取锁，以消除 TOCTOU 竞态条件。 */
-    spin_lock(&fw->lock);
-
-    /* 使用 RCU 检查白名单（whitelist_table 受 RCU 保护） */
-    rcu_read_lock();
-    hash_for_each_rcu(fw->whitelist_table, bkt, wl_entry, hash) {
-        if ((ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
-            rcu_read_unlock();
-            spin_unlock(&fw->lock);
-            atomic_inc(&fw->whitelist_reject_count);
-            fw_pr_warn("REFUSED to ban whitelisted IP %pI4", &ip);
-            FW_DEBUG(2, "IP %pI4 is in whitelist, refusing to ban", &ip);
-            FW_DEBUG(1, "EXIT: ban_ip_with_duration -> -EPERM (whitelisted)");
-            return -EPERM;
-        }
-    }
-    rcu_read_unlock();
-
-    /* 在同一锁下检查是否已被封禁 */
-    hash = hash_min(ip, BAN_HASH_BITS);
-    hash_for_each_possible(fw->ban_table, entry, hash, ip) {
-        if (compare_ips(entry->ip, ip)) {
-            if (entry->is_permanent || time_before(jiffies, entry->unban_time)) {
-                /* 仍被封禁或永久封禁 - 提前返回 */
-                spin_unlock(&fw->lock);
-                FW_DEBUG(2, "IP %pI4 still banned, returning early", &ip);
-                FW_DEBUG(1, "EXIT: ban_ip_with_duration -> 0 (already banned)");
-                return 0;
-            } else {
-                /* 条目存在但已过期 — 更新它 */
-                unsigned long ban_duration;
-                if (check_mul_overflow(seconds, (unsigned long)HZ, &ban_duration)) {
-                    spin_unlock(&fw->lock);
-                    fw_pr_err("ban duration overflow for IP %pI4", &ip);
-                    FW_DEBUG(1, "EXIT: ban_ip_with_duration -> -EINVAL (overflow)");
-                    return -EINVAL;
-                }
-                entry->ban_time = jiffies;
-                entry->unban_time = jiffies + ban_duration;
-                entry->is_permanent = false;
-                atomic_set(&entry->retry_count, 0);
-                spin_unlock(&fw->lock);
-                FW_DEBUG(2, "Updated expired ban entry for IP %pI4 with custom duration", &ip);
-                FW_DEBUG(1, "EXIT: ban_ip_with_duration -> 0 (updated expired entry)");
-                return 0;
-            }
-        }
-    }
-
-    if (atomic_read(&fw->ban_count) >= MAX_BAN_ENTRIES) {
-        spin_unlock(&fw->lock);
-        atomic_inc(&fw->ban_table_full_count);
-        fw_pr_warn("Ban table full, cannot ban %pI4", &ip);
-        FW_DEBUG(1, "EXIT: ban_ip_with_duration -> -ENOSPC (ban table full)");
-        return -ENOSPC;
-    }
-
-    entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
-    if (!entry) {
-        spin_unlock(&fw->lock);
-        atomic_inc(&fw->alloc_failure_count);
-        fw_pr_err("Failed to allocate memory for ban entry for IP %pI4", &ip);
-        FW_DEBUG(1, "EXIT: ban_ip_with_duration -> -ENOMEM (alloc failed)");
-        return -ENOMEM;
-    }
-
-    entry->ip = ip;
-    entry->ban_time = jiffies;
-    {
-        unsigned long ban_duration;
-        if (check_mul_overflow(seconds, (unsigned long)HZ, &ban_duration)) {
-            spin_unlock(&fw->lock);
-            kfree(entry);
-            fw_pr_err("ban duration overflow for IP %pI4", &ip);
-            FW_DEBUG(1, "EXIT: ban_ip_with_duration -> -EINVAL (overflow)");
-            return -EINVAL;
-        }
-        entry->unban_time = jiffies + ban_duration;
-    }
-    entry->is_permanent = false;
-    atomic_set(&entry->retry_count, 0);
-
-    hash_add(fw->ban_table, &entry->hash, ip);
-    atomic_inc(&fw->ban_count);
-    atomic_inc(&fw->total_ban_count);
-
-    spin_unlock(&fw->lock);
-
-    FW_DEBUG(1, "Successfully added ban entry for IP %pI4 with duration %lu seconds", &ip, seconds);
-    fw_pr_info_ratelimited("%pI4 banned for %lu seconds", &ip, seconds);
-    FW_DEBUG(1, "EXIT: ban_ip_with_duration -> 0 (success)");
+    /* 委托给统一的 __do_ban_ip 函数 */
+    int ret = __do_ban_ip(fw, ip, jiffies + ban_duration, false,
+                          "banned for %lu seconds", seconds);
+    FW_DEBUG(1, "EXIT: ban_ip_with_duration -> %d", ret);
+    return ret;
     return 0;
 }
 
@@ -1638,8 +1545,14 @@ static int stats_show(struct seq_file *m, void *v)
     seq_printf(m, "cleanup_expired_total %u\n", atomic_read(&fw->cleanup_expired_total));
     seq_printf(m, "current_bans %d\n", atomic_read(&fw->ban_count));
     seq_printf(m, "current_whitelist %d\n", atomic_read(&fw->whitelist_count));
-    /* FIX P1-5: 使用 READ_ONCE 原子读取 recent_additions，防止数据竞争 */
-    seq_printf(m, "recent_additions %u\n", READ_ONCE(fw->recent_additions));
+    /* 修复 4.2：持有 flood_lock 读取 recent_additions，防止数据竞争 */
+    {
+        unsigned int recent;
+        spin_lock(&fw->flood_lock);
+        recent = fw->recent_additions;
+        spin_unlock(&fw->flood_lock);
+        seq_printf(m, "recent_additions %u\n", recent);
+    }
 
     return 0;
 }
@@ -1855,7 +1768,10 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
     hash_for_each_possible_rcu(fw_info.ban_table, entry, hash, src_ip) {
         if (compare_ips(entry->ip, src_ip)) {
             if (time_after(now, entry->unban_time)) {
-                /* 条目存在但已过期 — 视为未封禁 */
+                /* 条目存在但已过期 — 视为未封禁
+                 * 修复 4.3：不在热路径中删除过期条目，由 cleanup_expired_bans()
+                 * 定时器异步清理。这避免了在数据包处理路径中获取 spin_lock
+                 * 的开销，确保网络延迟最小化。 */
                 is_banned = false;
             } else {
                 /* 有效的封禁条目 */
@@ -2259,11 +2175,27 @@ int restore_state_from_file(const char *filename)
                                 }
                             }
 
-                            /* 使用计算的解封时间添加封禁条目 */
+                            /* 修复 1.1：使用 RCU 检查重复，防止状态文件包含重复条目 */
+                            {
+                                struct ban_entry *existing;
+                                u32 hash = hash_min(ip, BAN_HASH_BITS);
+
+                                rcu_read_lock();
+                                hash_for_each_possible_rcu(fw_info.ban_table, existing, hash, ip) {
+                                    if (compare_ips(existing->ip, ip)) {
+                                        rcu_read_unlock();
+                                        fw_pr_info("Skipping duplicate ban for IPv4 %s", ip_str);
+                                        goto skip_ban_entry;
+                                    }
+                                }
+                                rcu_read_unlock();
+                            }
+
+                            /* 在锁外分配内存（GFP_KERNEL 安全） */
                             entry = kmalloc(sizeof(*entry), GFP_KERNEL);
                             if (!entry) {
                                 fw_pr_err("Failed to allocate memory for restored ban entry");
-                                continue;
+                                goto skip_ban_entry;
                             }
 
                             entry->ip = ip;
@@ -2272,15 +2204,20 @@ int restore_state_from_file(const char *filename)
                             entry->is_permanent = is_permanent;
                             atomic_set(&entry->retry_count, 0);
 
+                            /* 在 spinlock 内插入哈希表 */
                             spin_lock(&fw_info.lock);
                             hash_add(fw_info.ban_table, &entry->hash, ip);
                             atomic_inc(&fw_info.ban_count);
+                            atomic_inc(&fw_info.total_ban_count);  /* 修复 1.1：递增总计数 */
                             spin_unlock(&fw_info.lock);
 
                             if (is_permanent)
                                 fw_pr_info("Restored permanent ban for IPv4 %s", ip_str);
                             else
                                 fw_pr_info("Restored ban for IPv4 %s (expires in %lu seconds)", ip_str, remaining_time);
+
+skip_ban_entry:
+                            ;
                         }
                     }
                 }
