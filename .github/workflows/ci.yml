@@ -75,9 +75,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
-          path: |
-            build/kernel-module/firewall.ko
-            build/daemon/firewall-daemon
+          path: build/
           retention-days: 1
           if-no-files-found: error
 
@@ -99,14 +97,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: build-artifacts
-          path: .
-
-      - name: 设置编译产物执行权限
-        run: |
-          chmod +x build/daemon/firewall-daemon
-          # 验证产物完整性
-          file build/kernel-module/firewall.ko
-          file build/daemon/firewall-daemon
+          path: build/
 
       - name: 执行测试并生成报告
         run: sudo ./tests/run_tests.sh --report
