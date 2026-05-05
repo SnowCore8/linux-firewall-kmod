@@ -97,7 +97,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: build-artifacts
-          path: build/
+          path: .
 
       - name: 执行测试并生成报告
         run: sudo ./tests/run_tests.sh --report
