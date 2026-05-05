@@ -216,8 +216,14 @@ int save_state_to_file(const char *filename)
 #else
         int getattr_err = vfs_getattr(&file->f_path, &close_stat);
 #endif
-        if (getattr_err == 0 &&
-            (close_stat.ino != saved_ino || close_stat.dev != saved_dev)) {
+        if (getattr_err != 0) {
+            fw_pr_err("Failed to stat state file after write: %s", filename);
+            filp_close(file, NULL);
+            kfree(ban_entries);
+            kfree(wl_entries);
+            return -EACCES;
+        }
+        if (close_stat.ino != saved_ino || close_stat.dev != saved_dev) {
             fw_pr_err("State file inode changed during write (possible TOCTOU attack): %s", filename);
             filp_close(file, NULL);
             kfree(ban_entries);

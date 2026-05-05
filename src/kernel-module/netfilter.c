@@ -68,9 +68,13 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
         /* 记录可疑数据包但仍为封禁目的处理它 */
     }
 
-    if (ntohs(iph->frag_off) & htons(IP_MF) || (ntohs(iph->frag_off) & IP_OFFSET) != 0) {
-        fw_pr_warn_ratelimited("Fragmented packet from %pI4 passed through (cannot inspect payload)", &iph->saddr);
-        return NF_ACCEPT;
+    /* 检查分片标志（主机字节序比较） */
+    {
+        __be16 frag_off = iph->frag_off;
+        if ((ntohs(frag_off) & IP_MF) || (ntohs(frag_off) & IP_OFFSET)) {
+            fw_pr_warn_ratelimited("Fragmented packet from %pI4 passed through (cannot inspect payload)", &iph->saddr);
+            return NF_ACCEPT;
+        }
     }
 
     src_ip = iph->saddr;
@@ -103,28 +107,20 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
 
     /* 白名单查找优化：
      * 1. 先尝试哈希查找精确匹配的 /32 条目（O(1)）
-     * 2. 如果未找到，再遍历查找子网匹配（仅在有子网条目时）
-     * 这样在大部分 /32 条目的场景下，避免 O(n) 遍历 */
+     * 2. 如果未找到，再遍历查找子网匹配 */
     {
         int wl_iterations = 0;
-        bool has_subnet_entries = false;
 
         /* 步骤 1：使用哈希查找精确匹配的 /32 条目 */
         hash_for_each_possible_rcu(fw_info.whitelist_table, wl_entry, hash, src_ip) {
-            if (wl_entry->mask == 0xFFFFFFFF) {
-                /* /32 精确匹配，直接比较 IP */
-                if (wl_entry->ip == src_ip) {
-                    is_whitelisted = true;
-                    break;
-                }
-            } else {
-                /* 标记存在子网条目，需要后续遍历 */
-                has_subnet_entries = true;
+            if (wl_entry->mask == 0xFFFFFFFF && wl_entry->ip == src_ip) {
+                is_whitelisted = true;
+                break;
             }
         }
 
-        /* 步骤 2：仅当 /32 未匹配且存在子网条目时，才遍历整个表 */
-        if (!is_whitelisted && has_subnet_entries) {
+        /* 步骤 2：/32 未匹配时，遍历全表检查子网匹配 */
+        if (!is_whitelisted) {
             hash_for_each_rcu(fw_info.whitelist_table, bkt, wl_entry, hash) {
                 if (++wl_iterations > MAX_WHITELIST_ENTRIES) {
                     fw_pr_warn_ratelimited("whitelist traversal limit reached, possible misconfiguration");

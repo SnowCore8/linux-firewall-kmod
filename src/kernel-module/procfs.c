@@ -158,17 +158,32 @@ static int parse_ban_command(const char *input, char *ip_str, size_t ip_str_size
         while (*ptr && *ptr != ' ' && *ptr != '\t')
             ptr++;
 
-        if (*ptr == '\0' || *(ptr + 1) == '\0') {
+        /* 安全检查：避免越界访问 */
+        if (*ptr == '\0') {
             /* 只有 IP，无持续时间 */
             strncpy(ip_str, ip_start, ip_str_size - 1);
             ip_str[ip_str_size - 1] = '\0';
         } else {
-            /* IP 后面有内容，提取 IP 部分 */
-            size_t ip_len = ptr - ip_start;
-            if (ip_len >= ip_str_size)
-                ip_len = ip_str_size - 1;
-            strncpy(ip_str, ip_start, ip_len);
-            ip_str[ip_len] = '\0';
+            /* IP 后面有内容，检查是否只有空白 */
+            const char *after_space = ptr + 1;
+            while (*after_space == ' ' || *after_space == '\t')
+                after_space++;
+            
+            if (*after_space == '\0') {
+                /* IP 后只有空白 */
+                size_t ip_len = ptr - ip_start;
+                if (ip_len >= ip_str_size)
+                    ip_len = ip_str_size - 1;
+                strncpy(ip_str, ip_start, ip_len);
+                ip_str[ip_len] = '\0';
+            } else {
+                /* IP 后有有效内容 */
+                size_t ip_len = ptr - ip_start;
+                if (ip_len >= ip_str_size)
+                    ip_len = ip_str_size - 1;
+                strncpy(ip_str, ip_start, ip_len);
+                ip_str[ip_len] = '\0';
+            }
         }
     }
 
@@ -216,9 +231,19 @@ static long parse_ban_duration(const char *input)
 
     {
         char *endp;
-        long seconds = simple_strtol(space_pos, &endp, 10);
+        long seconds;
+        int ret = kstrtol(space_pos, 10, &seconds);
 
-        if (endp == space_pos || *endp != '\0') {
+        if (ret != 0) {
+            fw_pr_warn("Invalid format - invalid seconds value: %s", input);
+            return -EINVAL;
+        }
+
+        /* 检查是否有非数字后缀 */
+        endp = space_pos;
+        while (*endp >= '0' && *endp <= '9')
+            endp++;
+        if (*endp != '\0' && *endp != ' ' && *endp != '\t' && *endp != '\n') {
             fw_pr_warn("Invalid format - invalid seconds value: %s", input);
             return -EINVAL;
         }
