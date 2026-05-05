@@ -1,0 +1,116 @@
+# MkDocs 配置文件
+# 项目: Firewall - Linux Kernel Module Version of fail2ban
+
+site_name: Firewall
+site_description: Linux Kernel Module Version of fail2ban
+site_url: https://SnowCore8.github.io/linux-firewall-kmod/
+repo_url: https://github.com/SnowCore8/linux-firewall-kmod
+repo_name: SnowCore8/linux-firewall-kmod
+docs_dir: site-docs
+
+# 主题配置
+theme:
+  name: material
+  language: zh
+  palette:
+    # 深色模式切换
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: 切换到浅色模式
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: 切换到深色模式
+  features:
+    - navigation.instant          # 即时页面加载
+    - navigation.tracking         # URL 跟踪锚点
+    - navigation.tabs             # 顶部导航标签
+    - navigation.tabs.sticky      # 导航标签固定
+    - navigation.sections         # 侧边栏分组
+    - navigation.expand           # 默认展开侧边栏
+    - navigation.indexes          # 章节索引页
+    - navigation.top              # 返回顶部按钮
+    - search.highlight            # 搜索高亮
+    - search.share                # 搜索分享
+    - search.suggest              # 搜索建议
+    - content.code.copy           # 代码复制按钮
+    - content.code.annotate       # 代码注释
+    - content.tabs.link           # 标签页链接
+    - content.tooltips            # 工具提示
+
+# 导航结构
+nav:
+  - 快速开始:
+      - 项目介绍: index.md
+      - 安装部署: operations.md
+      - 配置指南: configuration.md
+  - 深入理解:
+      - 架构设计: architecture.md
+      - 安全特性: security.md
+      - 永久封禁: permanent-ban.md
+  - 运维与使用:
+      - 常见问题: faq.md
+      - 迁移指南: migration.md
+  - 开发与贡献:
+      - 贡献指南: contributing.md
+      - Git 工作流: git-workflow.md
+      - 测试框架: testing.md
+  - 其他:
+      - 更新日志: changelog.md
+
+# Markdown 扩展
+markdown_extensions:
+  - admonition                    # 提示框/警告框
+  - attr_list                     # 属性列表
+  - def_list                      # 定义列表
+  - footnotes                     # 脚注
+  - md_in_html                    # HTML 中的 Markdown
+  - tables                        # 表格支持
+  - toc:
+      permalink: true             # 锚点永久链接
+      permalink_title: 永久链接
+      toc_depth: 3                # 目录深度
+  - pymdownx.highlight:
+      anchor_linenums: true       # 行号锚点
+      line_spans: __span          # 行跨度
+      pygments_lang_class: true   # Pygments 语言类
+  - pymdownx.inlinehilite         # 行内高亮
+  - pymdownx.snippets             # 代码片段包含
+  - pymdownx.superfences:         # 超级代码块
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true       # 替代标签样式
+  - pymdownx.tasklist:
+      custom_checkbox: true       # 自定义复选框
+  - pymdownx.emoji:
+      emoji_generator: !!python/name:pymdownx.emoji.to_svg
+
+# 插件配置
+plugins:
+  - search:
+      lang:
+        - zh
+        - en
+      separator: '[\s\-,:!=\[\]()"/]+|(?!\b)(?=[A-Z][a-z])|\.(?!\d)|[，,、]'
+  - minify:
+      minify_html: true
+
+# 额外配置
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/SnowCore8/linux-firewall-kmod
+  generator: false  # 隐藏 "Made with Material for MkDocs"
+
+# 版权信息
+copyright: Copyright &copy; 2026 SnowCore8
