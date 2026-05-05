@@ -115,6 +115,51 @@ def translate_segment(text, src_lang, dest_lang):
     return None
 
 
+def extract_code_blocks(text):
+    """
+    提取代码块，返回替换后的文本和代码块字典
+
+    Args:
+        text: 原始文本
+
+    Returns:
+        tuple: (替换占位符后的文本, 代码块字典 {索引: 原始代码块})
+    """
+    blocks = {}
+    counter = 0
+
+    def replacer(match):
+        nonlocal counter
+        placeholder = f"__CODE_BLOCK_{counter}__"
+        blocks[counter] = match.group(0)
+        counter += 1
+        return placeholder
+
+    # 匹配带语言标识的代码块：```python ... ```
+    text = re.sub(r'```[\w]*\n[\s\S]*?```', replacer, text)
+    # 匹配行内代码：`code`
+    text = re.sub(r'`[^`]+`', replacer, text)
+
+    return text, blocks
+
+
+def restore_code_blocks(text, blocks):
+    """
+    还原代码块占位符
+
+    Args:
+        text: 包含占位符的文本
+        blocks: 代码块字典 {索引: 原始代码块}
+
+    Returns:
+        str: 还原后的文本
+    """
+    for idx, block in blocks.items():
+        placeholder = f"__CODE_BLOCK_{idx}__"
+        text = text.replace(placeholder, block)
+    return text
+
+
 def translate_text(text, src_lang, dest_lang):
     """
     翻译完整文本，按行处理保留原始换行符结构
