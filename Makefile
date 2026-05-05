@@ -185,19 +185,20 @@ install-start:
 	@echo "  ✓ Service started"
 
 # ============================================================================
-# 卸载目标 - 删除所有组件
+# 卸载目标 - 安全卸载所有组件
 # ============================================================================
-uninstall: uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel
+uninstall: uninstall-stop uninstall-kernel uninstall-systemd uninstall-modload uninstall-files uninstall-config uninstall-state uninstall-verify
 	@echo ""
 	@echo "=========================================="
 	@echo "Firewall uninstallation complete!"
 	@echo "=========================================="
 	@echo "  ✓ Daemon stopped and removed"
+	@echo "  ✓ Kernel module safely unloaded"
 	@echo "  ✓ Systemd service disabled and removed"
+	@echo "  ✓ Module autoload config removed"
 	@echo "  ✓ Binary files removed"
 	@echo "  ✓ Configuration directory removed"
 	@echo "  ✓ State directory removed"
-	@echo "  ✓ Kernel module removed"
 	@echo ""
 	@echo "Note: Some system logs (e.g., /var/log/auth.log) may still contain firewall activity records."
 	@echo "Note: SQLite database backups, if any, should be manually removed."
@@ -239,14 +240,60 @@ uninstall-state:
 	rm -rf $(DESTDIR)$(RUNSTATEDIR)/firewall
 	@echo "  ✓ State directory removed"
 
-# 卸载内核模块
+# 安全卸载内核模块
 uninstall-kernel:
-	@echo "Removing kernel module..."
-	-rmmod firewall 2>/dev/null || true
+	@echo "Safely removing kernel module..."
+	@if lsmod | grep -q "^firewall "; then \
+		echo "  Module is loaded, checking usage..."; \
+		USED=$$(grep "^firewall " /proc/modules | awk '{print $$3}'); \
+		if [ "$$USED" != "0" ]; then \
+			echo "  WARNING: Module is in use by $$USED process(es), forcing stop..."; \
+			-systemctl stop firewall-daemon 2>/dev/null || true; \
+			-killall -9 firewall-daemon 2>/dev/null || true; \
+			sleep 1; \
+		fi; \
+		echo "  Unloading module..."; \
+		if rmmod firewall 2>/dev/null; then \
+			echo "  ✓ Module unloaded successfully"; \
+		else \
+			echo "  WARNING: Failed to unload module, it may be in use"; \
+			echo "  You may need to manually run: rmmod -f firewall"; \
+		fi; \
+	else \
+		echo "  Module is not loaded, skipping unload"; \
+	fi
 	rm -f $(DESTDIR)$(KERNEL_MODDIR)/firewall.ko
 	rm -f $(DESTDIR)$(KERNEL_MODDIR)/modules.order
 	rm -f $(DESTDIR)$(KERNEL_MODDIR)/Module.symvers
-	-depmod -a 2>/dev/null || true
-	@echo "  ✓ Kernel module removed"
+	depmod -a 2>/dev/null || true
+	@echo "  ✓ Kernel module files removed and depmod updated"
 
-.PHONY: kernel-module daemon all debug1 debug2 debug3 asan test clean install install-kernel-module install-daemon install-config install-state install-systemd uninstall uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel
+# 删除模块自动加载配置
+uninstall-modload:
+	@echo "Removing module autoload config..."
+	rm -f /etc/modules-load.d/firewall.conf
+	@echo "  ✓ Module autoload config removed"
+
+# 卸载验证
+uninstall-verify:
+	@echo "Verifying uninstallation..."
+	@if lsmod | grep -q "^firewall "; then \
+		echo "  WARNING: Kernel module is still loaded!"; \
+		echo "  Please run: sudo rmmod firewall"; \
+	else \
+		echo "  ✓ Kernel module is not loaded"; \
+	fi
+	@if [ -f /etc/modules-load.d/firewall.conf ]; then \
+		echo "  WARNING: Module autoload config still exists!"; \
+		echo "  Please run: sudo rm /etc/modules-load.d/firewall.conf"; \
+	else \
+		echo "  ✓ Module autoload config is removed"; \
+	fi
+	@if [ -f /etc/systemd/system/firewall-daemon.service ]; then \
+		echo "  WARNING: Systemd service file still exists!"; \
+	else \
+		echo "  ✓ Systemd service file is removed"; \
+	fi
+	@echo "  ✓ Verification complete"
+
+.PHONY: kernel-module daemon all debug1 debug2 debug3 asan test clean install install-kernel-module install-daemon install-config install-state install-systemd install-start uninstall uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel uninstall-modload uninstall-verify
