@@ -1152,9 +1152,43 @@ int load_config_directory(const char *config_dir) {
       cfg.permanent_ban_enabled = file_cfg->permanent_ban_enabled;
     }
 
-    /* 累加 jail 到全局 cfg */
+    /* 累加 jail 到全局 cfg（同名 jail 采用"后到优先"策略：更新现有条目） */
     int added_count = 0;
+    int updated_count = 0;
     for (int j = 0; j < file_cfg->jail_count; j++) {
+      /* 检查是否已存在同名 jail */
+      int found = 0;
+      for (int k = 0; k < cfg.jail_count; k++) {
+        if (strcmp(cfg.jails[k].name, file_cfg->jails[j].name) == 0) {
+          /* 同名 jail 已存在：释放旧条目资源，用新条目覆盖 */
+          struct jail *old_jail = &cfg.jails[k];
+          for (int m = 0; m < old_jail->log_count; m++) {
+            free(old_jail->log_files[m]);
+          }
+          if (old_jail->regex_compiled) {
+            if (old_jail->compiled_regex)
+              pcre2_code_free(old_jail->compiled_regex);
+            if (old_jail->match_data)
+              pcre2_match_data_free(old_jail->match_data);
+          }
+          if (old_jail->regex_pattern)
+            free(old_jail->regex_pattern);
+
+          /* 用新条目覆盖 */
+          memcpy(old_jail, &file_cfg->jails[j], sizeof(struct jail));
+          /* 清空源以防止重复释放 */
+          memset(&file_cfg->jails[j], 0, sizeof(struct jail));
+          found = 1;
+          updated_count++;
+          daemon_log_info("Updated existing jail '%s' from: %s",
+                          old_jail->name, full_path);
+          break;
+        }
+      }
+      if (found)
+        continue;
+
+      /* 新 jail：追加到全局 cfg */
       if (cfg.jail_count >= MAX_JAILS) {
         daemon_log_warn("MAX_JAILS limit reached, cannot add more jails");
         break;
@@ -1168,7 +1202,8 @@ int load_config_directory(const char *config_dir) {
     }
     pthread_rwlock_unlock(&config_rwlock);
 
-    daemon_log_info("Added %d jail(s) from: %s", added_count, full_path);
+    daemon_log_info("Added %d new jail(s), updated %d existing jail(s) from: %s",
+                    added_count, updated_count, full_path);
 
     /* 清理临时配置 */
     free_config_partial(file_cfg);
