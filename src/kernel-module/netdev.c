@@ -259,9 +259,6 @@ void auto_discover_system_ips(struct firewall_info *fw) {
 
   rcu_read_lock();
   for_each_netdev_rcu(&init_net, dev) {
-    if (dev->flags & IFF_LOOPBACK)
-      continue;
-
     if (!(dev->flags & IFF_UP))
       continue;
 

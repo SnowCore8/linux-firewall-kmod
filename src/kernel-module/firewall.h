@@ -266,17 +266,23 @@ static inline bool compare_ips(__be32 ip1, __be32 ip2) { return ip1 == ip2; }
  * @ip: IPv4 地址（网络字节序）
  * @ip_str: IP 字符串（用于日志，可为 NULL）
  * @context: 上下文描述（如 "ban"、"whitelist"）
+ * @allow_loopback: 是否允许回环地址（系统自动发现时设为 true）
  * 返回: 0 表示合法，-EINVAL 表示非法
+ *
+ * 注意：当 allow_loopback=true 时，跳过回环地址检查，用于系统 IP 自动发现
+ * 场景（如 lo 设备的 127.0.0.0/8）。用户手动操作时仍应传入 false 以保持安全防护。
  */
 static inline int validate_ipv4_address(__be32 ip, const char *ip_str,
-                                        const char *context) {
+                                        const char *context,
+                                        bool allow_loopback) {
   unsigned int ip_num = ntohl(ip);
 
   if (ip == 0 || ip == 0xFFFFFFFF) {
     fw_pr_warn("Attempt to %s invalid IPv4: %s", context, ip_str ?: "(null)");
     return -EINVAL;
   }
-  if ((ip_num & 0xFF000000) == 0x7F000000) {
+  /* 回环地址检查：仅当 allow_loopback=false 时拒绝 */
+  if (!allow_loopback && (ip_num & 0xFF000000) == 0x7F000000) {
     fw_pr_warn("Attempt to %s loopback IPv4: %s", context, ip_str ?: "(null)");
     return -EINVAL;
   }

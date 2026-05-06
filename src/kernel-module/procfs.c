@@ -490,7 +490,7 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
   }
 
   /* 验证 IP 合法性 */
-  if (validate_ipv4_address(ip, ip_str, "ban") < 0) {
+  if (validate_ipv4_address(ip, ip_str, "ban", false) < 0) {
     return -EINVAL;
   }
 
@@ -677,7 +677,7 @@ static int parse_whitelist_subnet(char *subnet_str, __be32 *ipv4_out,
     return -EINVAL;
   }
 
-  if (validate_ipv4_address(ipv4, subnet_str, "whitelist") < 0) {
+  if (validate_ipv4_address(ipv4, subnet_str, "whitelist", true) < 0) {
     return -EINVAL;
   }
 

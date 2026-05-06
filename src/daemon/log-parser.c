@@ -17,6 +17,9 @@ static const char *find_ip_candidate(const char **ptr, const char *line) {
   const char *start;
   const char *end;
 
+  /* line 参数预留用于未来边界检查，当前未使用 */
+  (void)line;
+
   /* 快速查找第一个数字 */
   while (**ptr && !isdigit((unsigned char)**ptr))
     (*ptr)++;

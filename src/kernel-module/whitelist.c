@@ -24,7 +24,7 @@ int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask,
     return -EINVAL;
   }
 
-  if (validate_ipv4_address(ip, NULL, "whitelist") < 0) {
+  if (validate_ipv4_address(ip, NULL, "whitelist", true) < 0) {
     FW_DEBUG(1, "EXIT: add_whitelist_entry -> -EINVAL (invalid IP)");
     return -EINVAL;
   }
