@@ -1070,7 +1070,9 @@ int load_config_directory(const char *config_dir) {
   /* 使用 qsort 按字母顺序对文件排序以提高性能 */
   qsort(file_list, (size_t)file_count, sizeof(char *), compare_config_files);
 
-  /* 加载每个配置文件 - 每个文件可以定义独立的 jail */
+  /* 加载每个配置文件 - 每个文件可以定义独立的 jail
+   * 修复：使用临时配置解析每个文件，然后累加 jail 到全局 cfg，
+   * 而不是调用 parse_config_file（它会重置 jail_count 导致覆盖）。 */
   for (int i = 0; i < file_count; i++) {
     char full_path[1024];
     snprintf(full_path, sizeof(full_path), "%s/%s", config_dir, file_list[i]);
@@ -1078,11 +1080,99 @@ int load_config_directory(const char *config_dir) {
     daemon_log_info("Loading config file [%d/%d]: %s", i + 1, file_count,
                     full_path);
 
-    if (parse_config_file(full_path) < 0) {
-      daemon_log_warn("Failed to load config file: %s (continuing with others)",
-                      full_path);
-      /* 继续加载其他文件而不是完全失败 */
+    /* 解析到临时配置 */
+    struct config *file_cfg = calloc(1, sizeof(struct config));
+    if (!file_cfg) {
+      daemon_log_err("Out of memory allocating temp config for: %s",
+                     full_path);
+      ret = -1;
+      continue;
     }
+
+    /* 初始化临时配置的默认值为当前全局默认值 */
+    pthread_rwlock_rdlock(&config_rwlock);
+    file_cfg->default_max_retries = cfg.default_max_retries;
+    file_cfg->default_findtime = cfg.default_findtime;
+    file_cfg->default_ban_time = cfg.default_ban_time;
+    file_cfg->daemon = cfg.daemon;
+    file_cfg->interval = cfg.interval;
+    file_cfg->metrics_port = cfg.metrics_port;
+    file_cfg->jail_count = 0;
+    file_cfg->config_file = strdup(full_path);
+    file_cfg->config_dir = strdup(config_dir);
+    pthread_rwlock_unlock(&config_rwlock);
+
+    if (parse_yaml_into(full_path, file_cfg) < 0) {
+      daemon_log_warn("Failed to parse config file: %s (continuing with others)",
+                      full_path);
+      free_config_partial(file_cfg);
+      free(file_cfg);
+      continue;
+    }
+
+    if (config_validate(file_cfg) < 0) {
+      daemon_log_warn("Config validation failed for: %s (continuing)",
+                      full_path);
+      free_config_partial(file_cfg);
+      free(file_cfg);
+      continue;
+    }
+
+    /* 更新全局默认值（后面的文件覆盖前面的） */
+    pthread_rwlock_wrlock(&config_rwlock);
+    cfg.default_max_retries = file_cfg->default_max_retries;
+    cfg.default_findtime = file_cfg->default_findtime;
+    cfg.default_ban_time = file_cfg->default_ban_time;
+    cfg.daemon = file_cfg->daemon;
+    cfg.interval = file_cfg->interval;
+    cfg.metrics_port = file_cfg->metrics_port;
+    if (file_cfg->metrics_bind_address) {
+      if (cfg.metrics_bind_address)
+        free(cfg.metrics_bind_address);
+      cfg.metrics_bind_address = file_cfg->metrics_bind_address;
+      file_cfg->metrics_bind_address = NULL;
+    }
+    if (file_cfg->metrics_username) {
+      if (cfg.metrics_username)
+        free(cfg.metrics_username);
+      cfg.metrics_username = file_cfg->metrics_username;
+      file_cfg->metrics_username = NULL;
+    }
+    if (file_cfg->metrics_password) {
+      if (cfg.metrics_password)
+        free(cfg.metrics_password);
+      cfg.metrics_password = file_cfg->metrics_password;
+      file_cfg->metrics_password = NULL;
+    }
+    if (file_cfg->permanent_db_path) {
+      if (cfg.permanent_db_path)
+        free(cfg.permanent_db_path);
+      cfg.permanent_db_path = file_cfg->permanent_db_path;
+      file_cfg->permanent_db_path = NULL;
+      cfg.permanent_ban_enabled = file_cfg->permanent_ban_enabled;
+    }
+
+    /* 累加 jail 到全局 cfg */
+    int added_count = 0;
+    for (int j = 0; j < file_cfg->jail_count; j++) {
+      if (cfg.jail_count >= MAX_JAILS) {
+        daemon_log_warn("MAX_JAILS limit reached, cannot add more jails");
+        break;
+      }
+      memcpy(&cfg.jails[cfg.jail_count], &file_cfg->jails[j],
+             sizeof(struct jail));
+      /* 清空源以防止重复释放 */
+      memset(&file_cfg->jails[j], 0, sizeof(struct jail));
+      cfg.jail_count++;
+      added_count++;
+    }
+    pthread_rwlock_unlock(&config_rwlock);
+
+    daemon_log_info("Added %d jail(s) from: %s", added_count, full_path);
+
+    /* 清理临时配置 */
+    free_config_partial(file_cfg);
+    free(file_cfg);
   }
 
   /* 记录已加载 jail 的摘要 */
