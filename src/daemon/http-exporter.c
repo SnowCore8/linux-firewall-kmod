@@ -387,7 +387,10 @@ static int base64_decode_simple(const char *input, char *output,
     unsigned char c2 = (unsigned char)input[i + 2];
     unsigned char c3 = (unsigned char)input[i + 3];
 
-    if (c0 == '=' || c1 == '=' || c2 == '=' || c3 == '=') {
+    /* RFC 4648: '=' 填充只能出现在最后两个位置 */
+    if (c0 == '=' || c1 == '=')
+      return -1;
+    if (c2 == '=' || c3 == '=') {
       /* '=' 仅允许出现在最后两个位置，此处简化处理：
        * 仅跳过 '=' 的查表，但仍需确保非 '=' 字符合法 */
     }
@@ -433,6 +436,10 @@ static int constant_time_compare(const void *a, const void *b, size_t len) {
   for (size_t i = 0; i < len; i++) {
     result |= pa[i] ^ pb[i];
   }
+
+  /* 编译器屏障：防止编译器优化掉 volatile 写入或重排序循环 */
+  __asm__ volatile("" ::: "memory");
+
   return (int)result;
 }
 
@@ -450,9 +457,11 @@ static int check_basic_auth_header(const char *auth_header) {
   pthread_rwlock_rdlock(&config_rwlock);
   if (cfg.metrics_username && strlen(cfg.metrics_username) > 0) {
     strncpy(cfg_user, cfg.metrics_username, sizeof(cfg_user) - 1);
+    cfg_user[sizeof(cfg_user) - 1] = '\0';
   }
   if (cfg.metrics_password && strlen(cfg.metrics_password) > 0) {
     strncpy(cfg_pass, cfg.metrics_password, sizeof(cfg_pass) - 1);
+    cfg_pass[sizeof(cfg_pass) - 1] = '\0';
   }
   pthread_rwlock_unlock(&config_rwlock);
 
