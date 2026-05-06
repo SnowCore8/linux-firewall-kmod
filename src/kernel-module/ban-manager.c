@@ -89,7 +89,7 @@ static int __do_ban_ip(struct firewall_info *fw, __be32 ip,
       } else {
         WRITE_ONCE(existing->ban_time, jiffies);
         WRITE_ONCE(existing->unban_time, unban_time);
-        WRITE_ONCE(existing->is_permanent, is_permanent);
+        /* is_permanent 保持不变（从 READ_ONCE 读取的同一值，无需重复写入） */
         atomic_set(&existing->retry_count, 0);
         spin_unlock(&fw->lock);
         kfree(entry);
