@@ -590,6 +590,11 @@ struct config *config_clone(const struct config *src) {
     if (!dst->metrics_password)
       goto fail;
   }
+  if (src->metrics_bind_address) {
+    dst->metrics_bind_address = strdup(src->metrics_bind_address);
+    if (!dst->metrics_bind_address)
+      goto fail;
+  }
 
   dst->jail_count = src->jail_count;
   for (int i = 0; i < src->jail_count; i++) {
@@ -611,6 +616,8 @@ fail:
     free(dst->metrics_username);
   if (dst->metrics_password)
     free(dst->metrics_password);
+  if (dst->metrics_bind_address)
+    free(dst->metrics_bind_address);
   for (int i = 0; i < dst->jail_count; i++) {
     for (int j = 0; j < dst->jails[i].log_count; j++) {
       free(dst->jails[i].log_files[j]);
@@ -718,6 +725,8 @@ void free_config_partial(struct config *cfg) {
     free(cfg->config_dir);
   if (cfg->permanent_db_path)
     free(cfg->permanent_db_path);
+  if (cfg->metrics_bind_address)
+    free(cfg->metrics_bind_address);
   if (cfg->metrics_username)
     free(cfg->metrics_username);
   if (cfg->metrics_password)
