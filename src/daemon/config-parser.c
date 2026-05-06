@@ -195,20 +195,20 @@ static int apply_defaults_integer_config(struct config *target,
     daemon_log_info("defaults ban_time set to %u", target->default_ban_time);
     return 0;
   } else if (strcmp(key, "interval") == 0) {
-    int int_val;
-    int rc = parse_config_integer(key, value, 1, 60, (unsigned int *)&int_val,
+    unsigned int uint_val;
+    int rc = parse_config_integer(key, value, 1, 60, &uint_val,
                                   strict_mode, "defaults", config_file,
                                   has_error);
     if (rc == 0)
-      target->interval = int_val;
+      target->interval = (int)uint_val;
     return rc;
   } else if (strcmp(key, "metrics_port") == 0) {
-    int int_val;
+    unsigned int uint_val;
     int rc = parse_config_integer(
-        key, value, 0, 65535, (unsigned int *)&int_val, strict_mode,
+        key, value, 0, 65535, &uint_val, strict_mode,
         "defaults", config_file, has_error);
     if (rc == 0)
-      target->metrics_port = int_val;
+      target->metrics_port = (int)uint_val;
     return rc;
   }
 
