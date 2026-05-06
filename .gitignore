@@ -52,6 +52,9 @@ desktop.ini
 .cursor/
 .cursorrules
 .claude/
+agents/
+AGENTS.md
+opencode.json
 
 # ---- 安全 ----
 *.key
