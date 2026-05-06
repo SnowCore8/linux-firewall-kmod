@@ -636,8 +636,8 @@ int config_validate(const struct config *cfg) {
     return -1;
   if (cfg->default_findtime == 0)
     return -1;
-  if (cfg->default_ban_time == 0)
-    return -1;
+  /* ban_time=0 表示永久封禁，config-parser.c 中已允许此值 */
+  /* default_ban_time 可以为 0（永久封禁），不做拒绝检查 */
 
   for (int i = 0; i < cfg->jail_count; i++) {
     const struct jail *j = &cfg->jails[i];
@@ -655,9 +655,9 @@ int config_validate(const struct config *cfg) {
       daemon_log_err("Jail '%s' has findtime=0", j->name);
       return -1;
     }
+    /* ban_time=0 表示永久封禁，config-parser.c 中已允许此值 */
     if (j->ban_time == 0) {
-      daemon_log_err("Jail '%s' has ban_time=0", j->name);
-      return -1;
+      daemon_log_debug("Jail '%s' ban_time=0 (permanent ban)", j->name);
     }
   }
 
