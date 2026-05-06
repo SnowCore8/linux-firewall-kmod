@@ -634,7 +634,6 @@ static struct MHD_Daemon *start_mhd_daemon(int listen_port,
       EXPORTER_CONNECTION_TIMEOUT, MHD_OPTION_SOCK_ADDR, bind_addr,
       MHD_OPTION_NOTIFY_COMPLETED, NULL, NULL, MHD_OPTION_END);
 }
-}
 
 /**
  * start_http_exporter - 启动 Prometheus HTTP 导出器线程
