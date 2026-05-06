@@ -10,7 +10,8 @@
  *   - Prometheus 文本格式输出
  *   - 从 /proc/firewall/stats 读取内核统计信息
  *   - 从共享 daemon_stats 结构读取守护进程统计信息
- *   - 默认监听 0.0.0.0:9119
+ *   - 默认监听 127.0.0.1:9119
+ *   - 支持 Basic Auth 认证（通过 metrics_username/metrics_password 配置）
  *   - 内置通过 MHD_OPTION_CONNECTION_LIMIT 实现的限流
  */
 
@@ -345,6 +346,123 @@ static int generate_metrics(char *buf, size_t buf_size) {
  * ========================================================================== */
 
 /**
+ * base64_decode_simple - 简单的 Base64 解码（用于 Basic Auth）
+ * @input: Base64 编码字符串
+ * @output: 解码输出缓冲区
+ * @output_size: 输出缓冲区大小
+ * 返回: 解码后的字节数，失败返回 -1
+ */
+static int base64_decode_simple(const char *input, char *output,
+                                size_t output_size) {
+  static const unsigned char decode_table[256] = {
+      ['A'] = 0,  ['B'] = 1,  ['C'] = 2,  ['D'] = 3,  ['E'] = 4,  ['F'] = 5,
+      ['G'] = 6,  ['H'] = 7,  ['I'] = 8,  ['J'] = 9,  ['K'] = 10, ['L'] = 11,
+      ['M'] = 12, ['N'] = 13, ['O'] = 14, ['P'] = 15, ['Q'] = 16, ['R'] = 17,
+      ['S'] = 18, ['T'] = 19, ['U'] = 20, ['V'] = 21, ['W'] = 22, ['X'] = 23,
+      ['Y'] = 24, ['Z'] = 25, ['a'] = 26, ['b'] = 27, ['c'] = 28, ['d'] = 29,
+      ['e'] = 30, ['f'] = 31, ['g'] = 32, ['h'] = 33, ['i'] = 34, ['j'] = 35,
+      ['k'] = 36, ['l'] = 37, ['m'] = 38, ['n'] = 39, ['o'] = 40, ['p'] = 41,
+      ['q'] = 42, ['r'] = 43, ['s'] = 44, ['t'] = 45, ['u'] = 46, ['v'] = 47,
+      ['w'] = 48, ['x'] = 49, ['y'] = 50, ['z'] = 51, ['0'] = 52, ['1'] = 53,
+      ['2'] = 54, ['3'] = 55, ['4'] = 56, ['5'] = 57, ['6'] = 58, ['7'] = 59,
+      ['8'] = 60, ['9'] = 61, ['+'] = 62, ['/'] = 63,
+  };
+  size_t in_len = strlen(input);
+  size_t out_idx = 0;
+
+  if (in_len % 4 != 0)
+    return -1;
+
+  for (size_t i = 0; i < in_len && out_idx < output_size; i += 4) {
+    int b0 = (input[i] == '=') ? 0 : decode_table[(unsigned char)input[i]];
+    int b1 = (input[i + 1] == '=') ? 0 : decode_table[(unsigned char)input[i + 1]];
+    int b2 = (input[i + 2] == '=') ? 0 : decode_table[(unsigned char)input[i + 2]];
+    int b3 = (input[i + 3] == '=') ? 0 : decode_table[(unsigned char)input[i + 3]];
+
+    output[out_idx++] = (unsigned char)((b0 << 2) | (b1 >> 4));
+    if (input[i + 2] != '=' && out_idx < output_size)
+      output[out_idx++] = (unsigned char)((b1 << 4) | (b2 >> 2));
+    if (input[i + 3] != '=' && out_idx < output_size)
+      output[out_idx++] = (unsigned char)((b2 << 6) | b3);
+  }
+
+  return (int)out_idx;
+}
+
+/**
+ * check_basic_auth - 验证 HTTP Basic Auth 凭据
+ * @auth_header: Authorization 头值（如 "Basic dXNlcjpwYXNz"）
+ * 返回: 1 表示认证成功，0 表示失败，-1 表示未配置认证
+ *
+ * 注意：当未配置用户名/密码时，跳过认证（向后兼容）。
+ */
+static int check_basic_auth_header(const char *auth_header) {
+  char cfg_user[64] = {0};
+  char cfg_pass[128] = {0};
+
+  pthread_rwlock_rdlock(&config_rwlock);
+  if (cfg.metrics_username && strlen(cfg.metrics_username) > 0) {
+    strncpy(cfg_user, cfg.metrics_username, sizeof(cfg_user) - 1);
+  }
+  if (cfg.metrics_password && strlen(cfg.metrics_password) > 0) {
+    strncpy(cfg_pass, cfg.metrics_password, sizeof(cfg_pass) - 1);
+  }
+  pthread_rwlock_unlock(&config_rwlock);
+
+  /* 未配置认证时跳过检查（向后兼容） */
+  if (strlen(cfg_user) == 0 || strlen(cfg_pass) == 0) {
+    return -1;
+  }
+
+  if (!auth_header || strncmp(auth_header, "Basic ", 6) != 0) {
+    return 0;
+  }
+
+  /* 解码 Base64 凭据 */
+  char decoded[192]; /* 64 + 128 + ':' + '\0' */
+  int decoded_len = base64_decode_simple(auth_header + 6, decoded,
+                                         sizeof(decoded) - 1);
+  if (decoded_len <= 0) {
+    return 0;
+  }
+  decoded[decoded_len] = '\0';
+
+  /* 查找 user:pass 分隔符 */
+  char *colon = strchr(decoded, ':');
+  if (!colon) {
+    return 0;
+  }
+  *colon = '\0';
+  char *auth_user = decoded;
+  char *auth_pass = colon + 1;
+
+  return (strcmp(cfg_user, auth_user) == 0 &&
+          strcmp(cfg_pass, auth_pass) == 0) ? 1 : 0;
+}
+
+/**
+ * send_unauthorized_response - 发送 401 Unauthorized 响应
+ * @connection: MHD 连接
+ * 返回: MHD_Result
+ */
+static enum MHD_Result
+send_unauthorized_response(struct MHD_Connection *connection) {
+  struct MHD_Response *response;
+  const char *body = "401 Unauthorized\r\n";
+  int ret;
+
+  response = MHD_create_response_from_buffer(strlen(body), (void *)body,
+                                              MHD_RESPMEM_PERSISTENT);
+  if (!response)
+    return MHD_NO;
+  MHD_add_response_header(response, "WWW-Authenticate",
+                          "Basic realm=\"firewall-metrics\"");
+  ret = MHD_queue_response(connection, MHD_HTTP_UNAUTHORIZED, response);
+  MHD_destroy_response(response);
+  return ret == MHD_YES ? MHD_YES : MHD_NO;
+}
+
+/**
  * send_error_response - 发送错误响应
  * @connection: MHD 连接
  * @status_code: HTTP 状态码
@@ -422,6 +540,8 @@ answer_to_connection(void *cls, struct MHD_Connection *connection,
                      const char *url, const char *method, const char *version,
                      const char *upload_data, size_t *upload_data_size,
                      void **con_cls) {
+  const char *auth_header;
+
   /* 忽略未使用参数的警告 */
   (void)cls;
   (void)version;
@@ -433,6 +553,18 @@ answer_to_connection(void *cls, struct MHD_Connection *connection,
   if (strcmp(method, "GET") != 0) {
     return send_error_response(connection, MHD_HTTP_METHOD_NOT_ALLOWED,
                                "405 Method Not Allowed\r\n");
+  }
+
+  /* Basic Auth 认证检查（/health 端点跳过认证） */
+  if (strcmp(url, "/health") != 0 && strcmp(url, "/healthz") != 0) {
+    auth_header = MHD_lookup_connection_value(connection, MHD_HEADER_KIND,
+                                              "Authorization");
+    int auth_result = check_basic_auth_header(auth_header);
+    if (auth_result == 0) {
+      exporter_log_warn("Unauthorized access attempt to %s", url);
+      return send_unauthorized_response(connection);
+    }
+    /* auth_result == -1 表示未配置认证，跳过 */
   }
 
   /* 路由请求 */
@@ -501,6 +633,7 @@ static struct MHD_Daemon *start_mhd_daemon(int listen_port,
       EXPORTER_MAX_CONNECTIONS, MHD_OPTION_CONNECTION_TIMEOUT,
       EXPORTER_CONNECTION_TIMEOUT, MHD_OPTION_SOCK_ADDR, bind_addr,
       MHD_OPTION_NOTIFY_COMPLETED, NULL, NULL, MHD_OPTION_END);
+}
 }
 
 /**

@@ -27,6 +27,7 @@ static int is_valid_defaults_key(const char *key) {
   const char *valid_keys[] = {
       "max_retries", "findtime",          "ban_time",
       "interval",    "metrics_port",      "metrics_bind_address",
+      "metrics_username", "metrics_password",
       "daemon",      "permanent_db_path", "permanent_ban_enabled",
       NULL};
   for (int i = 0; valid_keys[i]; i++) {
@@ -227,6 +228,10 @@ static int apply_defaults_string_config(struct config *target, const char *key,
                                         const char *config_dir) {
   if (strcmp(key, "metrics_bind_address") == 0) {
     return parse_config_string(value, 64, &target->metrics_bind_address);
+  } else if (strcmp(key, "metrics_username") == 0) {
+    return parse_config_string(value, 64, &target->metrics_username);
+  } else if (strcmp(key, "metrics_password") == 0) {
+    return parse_config_string(value, 128, &target->metrics_password);
   } else if (strcmp(key, "daemon") == 0) {
     target->daemon = parse_config_bool(value);
     return 0;
@@ -595,6 +600,24 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
                               target->metrics_bind_address);
             }
           }
+        } else if (strcmp(ctx.current_key, "metrics_username") == 0) {
+          if (strlen(value) > 0 && strlen(value) < 64) {
+            if (target->metrics_username)
+              free(target->metrics_username);
+            target->metrics_username = strdup(value);
+            if (target->metrics_username) {
+              daemon_log_info("Config metrics_username configured");
+            }
+          }
+        } else if (strcmp(ctx.current_key, "metrics_password") == 0) {
+          if (strlen(value) > 0 && strlen(value) < 128) {
+            if (target->metrics_password)
+              free(target->metrics_password);
+            target->metrics_password = strdup(value);
+            if (target->metrics_password) {
+              daemon_log_info("Config metrics_password configured");
+            }
+          }
         } else if (strcmp(ctx.current_key, "daemon") == 0) {
           target->daemon =
               (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 ||
@@ -865,6 +888,20 @@ int parse_config_file(const char *config_path) {
     new_cfg->metrics_bind_address = NULL;
   }
 
+  /* 更新 metrics 认证凭据 */
+  if (new_cfg->metrics_username) {
+    if (cfg.metrics_username)
+      free(cfg.metrics_username);
+    cfg.metrics_username = new_cfg->metrics_username;
+    new_cfg->metrics_username = NULL;
+  }
+  if (new_cfg->metrics_password) {
+    if (cfg.metrics_password)
+      free(cfg.metrics_password);
+    cfg.metrics_password = new_cfg->metrics_password;
+    new_cfg->metrics_password = NULL;
+  }
+
   /* 清理旧 jail（failed_hash 已迁移） */
   for (int i = 0; i < cfg.jail_count; i++) {
     struct jail *old_jail = &cfg.jails[i];
@@ -922,6 +959,10 @@ int parse_config_file(const char *config_path) {
     free(new_cfg->config_dir);
   if (new_cfg->permanent_db_path)
     free(new_cfg->permanent_db_path);
+  if (new_cfg->metrics_username)
+    free(new_cfg->metrics_username);
+  if (new_cfg->metrics_password)
+    free(new_cfg->metrics_password);
   free(new_cfg);
 
   /* 释放旧配置快照（运行时状态已迁移） */

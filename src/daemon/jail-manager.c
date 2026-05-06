@@ -580,6 +580,16 @@ struct config *config_clone(const struct config *src) {
     if (!dst->permanent_db_path)
       goto fail;
   }
+  if (src->metrics_username) {
+    dst->metrics_username = strdup(src->metrics_username);
+    if (!dst->metrics_username)
+      goto fail;
+  }
+  if (src->metrics_password) {
+    dst->metrics_password = strdup(src->metrics_password);
+    if (!dst->metrics_password)
+      goto fail;
+  }
 
   dst->jail_count = src->jail_count;
   for (int i = 0; i < src->jail_count; i++) {
@@ -597,6 +607,10 @@ fail:
     free(dst->config_dir);
   if (dst->permanent_db_path)
     free(dst->permanent_db_path);
+  if (dst->metrics_username)
+    free(dst->metrics_username);
+  if (dst->metrics_password)
+    free(dst->metrics_password);
   for (int i = 0; i < dst->jail_count; i++) {
     for (int j = 0; j < dst->jails[i].log_count; j++) {
       free(dst->jails[i].log_files[j]);
@@ -704,6 +718,10 @@ void free_config_partial(struct config *cfg) {
     free(cfg->config_dir);
   if (cfg->permanent_db_path)
     free(cfg->permanent_db_path);
+  if (cfg->metrics_username)
+    free(cfg->metrics_username);
+  if (cfg->metrics_password)
+    free(cfg->metrics_password);
 }
 
 /* qsort 的比较函数 - 对配置文件名排序 */
