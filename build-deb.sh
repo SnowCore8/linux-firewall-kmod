@@ -121,20 +121,22 @@ set -e
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
     # 停止并禁用 systemd 服务
     if command -v systemctl &> /dev/null; then
-        systemctl stop firewall-daemon || true
-        systemctl disable firewall-daemon || true
-        systemctl daemon-reload
+        systemctl stop firewall-daemon 2>/dev/null || true
+        systemctl disable firewall-daemon 2>/dev/null || true
+        systemctl daemon-reload 2>/dev/null || true
     fi
 
-    # 卸载内核模块
-    if lsmod | grep -q "^firewall"; then
-        echo "Unloading firewall kernel module..."
-        rmmod firewall || true
-    fi
+    # 卸载内核模块（尝试所有可能的模块名）
+    for mod_name in firewall firewall_mod; do
+        if lsmod | grep -q "^${mod_name}"; then
+            echo "Unloading firewall kernel module (${mod_name})..."
+            rmmod "${mod_name}" 2>/dev/null || true
+        fi
+    done
 
     # 更新模块依赖
     if command -v depmod &> /dev/null; then
-        depmod -a
+        depmod -a 2>/dev/null || true
     fi
 fi
 EOF
