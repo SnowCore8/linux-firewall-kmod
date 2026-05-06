@@ -245,9 +245,9 @@ static int enable_wal_mode(sqlite3 *conn) {
     return -1;
   }
 
-  rc = sqlite3_exec(conn, "PRAGMA synchronous=NORMAL;", NULL, NULL, &err_msg);
+  rc = sqlite3_exec(conn, "PRAGMA synchronous=FULL;", NULL, NULL, &err_msg);
   if (rc != SQLITE_OK) {
-    fprintf(stderr, "firewall: 设置 synchronous=NORMAL 失败：%s\n",
+    fprintf(stderr, "firewall: 设置 synchronous=FULL 失败：%s\n",
             err_msg ? err_msg : "unknown error");
     sqlite3_free(err_msg);
     return -1;
