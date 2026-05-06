@@ -34,7 +34,7 @@ static int bans_show(struct seq_file *m, void *v) {
 
   FW_DEBUG(3, "ENTRY: bans_show");
 
-  seq_printf(m, "当前封禁的 IP 列表：\n");
+  seq_printf(m, "Banned IP List:\n");
   seq_printf(m, "-------------------\n");
 
   rcu_read_lock();
@@ -45,12 +45,13 @@ static int bans_show(struct seq_file *m, void *v) {
 
     if (is_permanent) {
       ipv4_to_str(entry->ip, ip_str, sizeof(ip_str));
-      seq_printf(m, "%-40s（永久）\n", ip_str);
+      seq_printf(m, "%-40s (permanent)\n", ip_str);
       permanent_count++;
       count++;
     } else if (!time_after(now, unban_time)) {
       ipv4_to_str(entry->ip, ip_str, sizeof(ip_str));
-      seq_printf(m, "%-40s（%lu 秒后过期）\n", ip_str, (unban_time - now) / HZ);
+      seq_printf(m, "%-40s (expires in %lu seconds)\n", ip_str,
+                 (unban_time - now) / HZ);
       temporary_count++;
       count++;
     }
@@ -58,7 +59,7 @@ static int bans_show(struct seq_file *m, void *v) {
   rcu_read_unlock();
 
   seq_printf(m, "-------------------\n");
-  seq_printf(m, "总计：%d 个活跃封禁（%d 个永久，%d 个临时）\n", count,
+  seq_printf(m, "Total: %d active bans (%d permanent, %d temporary)\n", count,
              permanent_count, temporary_count);
   FW_DEBUG(3, "EXIT: bans_show -> 0 (shown=%d)", count);
   return 0;
@@ -542,7 +543,7 @@ static int whitelist_read(struct seq_file *m, void *v) {
   char ip_str[INET_ADDRSTRLEN];
   int prefix_len;
 
-  seq_printf(m, "白名单 IP（免受封禁）：\n");
+  seq_printf(m, "Whitelisted IPs (protected from banning):\n");
   seq_printf(m, "--------------------------------------\n");
 
   rcu_read_lock();
@@ -555,7 +556,7 @@ static int whitelist_read(struct seq_file *m, void *v) {
   rcu_read_unlock();
 
   seq_printf(m, "--------------------------------------\n");
-  seq_printf(m, "总计：%d 个条目\n", atomic_read(&fw->whitelist_count));
+  seq_printf(m, "Total: %d entries\n", atomic_read(&fw->whitelist_count));
   return 0;
 }
 
@@ -809,11 +810,12 @@ static const struct proc_ops whitelist_fops = {
  * config_show - 显示配置
  */
 static int config_show(struct seq_file *m, void *v) {
-  seq_printf(m, "当前防火墙配置：\n");
+  seq_printf(m, "Current Firewall Configuration:\n");
   seq_printf(m, "--------------------------------\n");
-  seq_printf(m, "ban_time：%u 秒\n", READ_ONCE(fw_ban_time));
-  seq_printf(m, "封禁条目数：%d\n", atomic_read(&fw_info.ban_count));
-  seq_printf(m, "白名单条目数：%d\n", atomic_read(&fw_info.whitelist_count));
+  seq_printf(m, "ban_time: %u seconds\n", READ_ONCE(fw_ban_time));
+  seq_printf(m, "Ban entries: %d\n", atomic_read(&fw_info.ban_count));
+  seq_printf(m, "Whitelist entries: %d\n",
+             atomic_read(&fw_info.whitelist_count));
   return 0;
 }
 
