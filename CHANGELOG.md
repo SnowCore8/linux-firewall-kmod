@@ -2,6 +2,24 @@
 
 所有重要的项目变更记录都在此文件中。
 
+## v2.1.1 - 配置加载修复与 CI 质量提升（2026-05-07）
+
+### 修复
+- **回环地址白名单自动发现** - 移除 `auto_discover_system_ips` 中的 `IFF_LOOPBACK` 跳过逻辑，`validate_ipv4_address` 添加 `allow_loopback` 参数区分封禁和白名单场景
+- **配置目录加载 jail 覆盖问题** - `load_config_directory` 改为解析到临时配置后累加 jail，修复 `parse_config_file` 重置 `jail_count` 导致只保留最后一个文件的问题
+- **同名 jail 检测** - 采用"后到优先"策略，避免重复监控和封禁
+- **YAML 配置文件正则引号** - 修复 mysql/postfix/frp/vsftpd 四个配置文件的单引号转义问题，改为双引号使 PCRE2 正确编译
+- **deb 包卸载脚本** - postrm 脚本尝试 `firewall` 和 `firewall_mod` 两个模块名，确保内核模块正确卸载
+
+### 代码质量
+- **clang-format 集成** - 添加 `format-check` 和 `format` Makefile 目标，编译前自动检查代码格式
+- **代码格式修复** - 格式化 10 个源文件，消除 20+ 处 clang-format 违规，确保 CI 通过
+- **内存泄漏修复** - `free_config_partial` 添加 `metrics_bind_address` 释放，`config_clone` 添加对应字段复制
+
+### 测试
+- 12/12 YAML 配置文件审查通过
+- deb 包安装/卸载完整流程验证通过
+
 ## v2.1 - 安全加固与性能优化（2026-05-06）
 
 ### 严重安全修复
