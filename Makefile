@@ -89,11 +89,24 @@ $(DAEMON_OBJ_DIR)/%.o: $(DAEMON_SRC_DIR)/%.c
 	$(CC) $(SECURITY_CFLAGS) -Wno-unused-function -c $< -o $@
 
 # Build both kernel module and daemon (sequential to avoid jobserver issues)
-all:
+all: format-check
 	@echo "Building kernel module and daemon..."
 	$(MAKE) kernel-module
 	$(MAKE) daemon
 	@echo "Build complete: $(KERNEL_MODULE) and $(DAEMON_BIN)"
+
+# Check code formatting (clang-format)
+format-check:
+	@echo "Checking code formatting..."
+	@clang-format --dry-run --Werror $(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h $(DAEMON_SRC_DIR)/*.c $(DAEMON_SRC_DIR)/*.h || \
+		(echo "ERROR: Code formatting check failed. Run 'make format' to auto-fix." && exit 1)
+	@echo "✓ Code formatting check passed"
+
+# Auto-format code (clang-format)
+format:
+	@echo "Formatting code..."
+	@clang-format -i $(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h $(DAEMON_SRC_DIR)/*.c $(DAEMON_SRC_DIR)/*.h
+	@echo "✓ Code formatted successfully"
 
 # Debug builds
 debug1:
@@ -296,4 +309,4 @@ uninstall-verify:
 	fi
 	@echo "  ✓ Verification complete"
 
-.PHONY: kernel-module daemon all debug1 debug2 debug3 asan test clean install install-kernel-module install-daemon install-config install-state install-systemd install-start uninstall uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel uninstall-modload uninstall-verify
+.PHONY: kernel-module daemon all debug1 debug2 debug3 asan test clean install install-kernel-module install-daemon install-config install-state install-systemd install-start uninstall uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel uninstall-modload uninstall-verify format-check format
