@@ -261,8 +261,8 @@ static int execute_sqlite_action(ban_action_t action, const char *ip,
   }
 
   if (sqlite_rc != 0 && sqlite_rc != -2) { /* -2 = 已存在（不是错误） */
-    daemon_log_warn("SQLite operation failed for IP %s (action=%d, rc=%d)",
-                    ip, action, sqlite_rc);
+    daemon_log_warn("SQLite operation failed for IP %s (action=%d, rc=%d)", ip,
+                    action, sqlite_rc);
     /* 安全考虑：永久封禁/解封操作的 SQLite 失败必须返回错误，
      * 防止重启后封禁状态丢失导致安全策略被绕过 */
     if (action == BAN_ACTION_PERMANENT || action == BAN_ACTION_UNBAN_PERM) {
@@ -338,8 +338,8 @@ int execute_ban_action(ban_action_t action, const char *ip) {
   /* 处理SQLite持久化 */
   int sqlite_rc = execute_sqlite_action(action, ip, validated);
   if (sqlite_rc < 0) {
-    daemon_log_err("SQLite persistence failed for IP %s (action=%d, rc=%d)",
-                   ip, action, sqlite_rc);
+    daemon_log_err("SQLite persistence failed for IP %s (action=%d, rc=%d)", ip,
+                   action, sqlite_rc);
     /* 安全考虑：永久封禁/解封操作的 SQLite 失败必须返回错误，
      * 由 execute_sqlite_action 已返回负值，此处直接阻断操作 */
     return -1;

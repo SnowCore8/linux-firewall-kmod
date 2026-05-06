@@ -63,8 +63,7 @@ static int validate_ip_candidate(const char *start, const char *end,
     return 0;
 
   /* 验证词边界：IP 地址前后不能是数字或点 */
-  if (start > line &&
-      (isdigit((unsigned char)start[-1]) || start[-1] == '.'))
+  if (start > line && (isdigit((unsigned char)start[-1]) || start[-1] == '.'))
     return 0;
   if (*end && (isdigit((unsigned char)*end) || *end == '.'))
     return 0;
@@ -175,13 +174,13 @@ static int match_pcre2_regex(struct jail *j, const char *line, size_t line_len,
   /* 设置匹配限制以防止 ReDoS 攻击 */
   mcontext = pcre2_match_context_create(NULL);
   if (mcontext) {
-    pcre2_set_match_limit(mcontext, 10000);   /* 最大回溯次数 */
-    pcre2_set_depth_limit(mcontext, 1000);    /* 最大递归深度 */
+    pcre2_set_match_limit(mcontext, 10000); /* 最大回溯次数 */
+    pcre2_set_depth_limit(mcontext, 1000);  /* 最大递归深度 */
   }
 
   regex_result =
-      pcre2_match(j->compiled_regex, (PCRE2_SPTR)line, (PCRE2_SIZE)line_len,
-                  0, 0, j->match_data, mcontext);
+      pcre2_match(j->compiled_regex, (PCRE2_SPTR)line, (PCRE2_SIZE)line_len, 0,
+                  0, j->match_data, mcontext);
 
   if (mcontext)
     pcre2_match_context_free(mcontext);
@@ -201,8 +200,7 @@ static int match_pcre2_regex(struct jail *j, const char *line, size_t line_len,
 
   /* 动态查找IP捕获组 - 从后向前搜索 */
   for (int g = num_groups - 1; g >= 1; g--) {
-    if (ovector[g * 2] != PCRE2_UNSET &&
-        ovector[g * 2 + 1] > ovector[g * 2]) {
+    if (ovector[g * 2] != PCRE2_UNSET && ovector[g * 2 + 1] > ovector[g * 2]) {
       size_t capture_len = ovector[g * 2 + 1] - ovector[g * 2];
       if (capture_len >= 7 && capture_len < INET_ADDRSTRLEN) {
         const char *capture_start = line + ovector[g * 2];
@@ -231,8 +229,7 @@ static int match_pcre2_regex(struct jail *j, const char *line, size_t line_len,
   ip_len = ovector[ip_group * 2 + 1] - ovector[ip_group * 2];
 
   if (ip_len >= INET_ADDRSTRLEN || ip_len == 0) {
-    daemon_log_warn("Invalid IP length in jail '%s' log: %zu", j->name,
-                    ip_len);
+    daemon_log_warn("Invalid IP length in jail '%s' log: %zu", j->name, ip_len);
     return -1;
   }
 

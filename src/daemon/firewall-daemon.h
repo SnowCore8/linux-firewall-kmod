@@ -129,9 +129,9 @@ struct config {
   int interval;
   int metrics_port;           /* Prometheus 指标端口（0 = 禁用） */
   char *metrics_bind_address; /* Prometheus 指标绑定地址（默认 127.0.0.1） */
-  char *metrics_username;     /* Prometheus 指标 Basic Auth 用户名 */
-  char *metrics_password;     /* Prometheus 指标 Basic Auth 密码 */
-  char *config_file;          /* 运行时更新的单个配置文件路径 */
+  char *metrics_username; /* Prometheus 指标 Basic Auth 用户名 */
+  char *metrics_password; /* Prometheus 指标 Basic Auth 密码 */
+  char *config_file;      /* 运行时更新的单个配置文件路径 */
   char *config_dir; /* 配置目录路径（自动加载所有 .yaml/.yml） */
   char *permanent_db_path; /* 永久封禁的 SQLite 数据库路径（NULL = 禁用） */
   int permanent_ban_enabled;    /* 是否启用永久封禁 */

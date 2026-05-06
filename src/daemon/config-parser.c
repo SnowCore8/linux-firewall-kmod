@@ -24,12 +24,18 @@ struct yaml_parse_ctx {
 
 /* 校验 defaults 部分的参数名是否有效 */
 static int is_valid_defaults_key(const char *key) {
-  const char *valid_keys[] = {
-      "max_retries", "findtime",          "ban_time",
-      "interval",    "metrics_port",      "metrics_bind_address",
-      "metrics_username", "metrics_password",
-      "daemon",      "permanent_db_path", "permanent_ban_enabled",
-      NULL};
+  const char *valid_keys[] = {"max_retries",
+                              "findtime",
+                              "ban_time",
+                              "interval",
+                              "metrics_port",
+                              "metrics_bind_address",
+                              "metrics_username",
+                              "metrics_password",
+                              "daemon",
+                              "permanent_db_path",
+                              "permanent_ban_enabled",
+                              NULL};
   for (int i = 0; valid_keys[i]; i++) {
     if (strcmp(key, valid_keys[i]) == 0)
       return 1;
@@ -159,9 +165,8 @@ static int parse_config_path(const char *value, const char *config_dir,
  * @has_error: 错误标志输出
  * 返回: 0 表示成功，-1 表示解析失败或未知配置项
  */
-static int apply_defaults_integer_config(struct config *target,
-                                         const char *key, const char *value,
-                                         int strict_mode,
+static int apply_defaults_integer_config(struct config *target, const char *key,
+                                         const char *value, int strict_mode,
                                          const char *config_file,
                                          int *has_error) {
   if (strcmp(key, "max_retries") == 0) {
@@ -169,9 +174,9 @@ static int apply_defaults_integer_config(struct config *target,
                                 &target->default_max_retries, strict_mode,
                                 "defaults", config_file, has_error);
   } else if (strcmp(key, "findtime") == 0) {
-    return parse_config_integer(key, value, 1, 3600,
-                                &target->default_findtime, strict_mode,
-                                "defaults", config_file, has_error);
+    return parse_config_integer(key, value, 1, 3600, &target->default_findtime,
+                                strict_mode, "defaults", config_file,
+                                has_error);
   } else if (strcmp(key, "ban_time") == 0) {
     /* ban_time 特殊处理：允许 0 值 */
     char *endptr;
@@ -196,17 +201,15 @@ static int apply_defaults_integer_config(struct config *target,
     return 0;
   } else if (strcmp(key, "interval") == 0) {
     unsigned int uint_val;
-    int rc = parse_config_integer(key, value, 1, 60, &uint_val,
-                                  strict_mode, "defaults", config_file,
-                                  has_error);
+    int rc = parse_config_integer(key, value, 1, 60, &uint_val, strict_mode,
+                                  "defaults", config_file, has_error);
     if (rc == 0)
       target->interval = (int)uint_val;
     return rc;
   } else if (strcmp(key, "metrics_port") == 0) {
     unsigned int uint_val;
-    int rc = parse_config_integer(
-        key, value, 0, 65535, &uint_val, strict_mode,
-        "defaults", config_file, has_error);
+    int rc = parse_config_integer(key, value, 0, 65535, &uint_val, strict_mode,
+                                  "defaults", config_file, has_error);
     if (rc == 0)
       target->metrics_port = (int)uint_val;
     return rc;
@@ -236,8 +239,7 @@ static int apply_defaults_string_config(struct config *target, const char *key,
     target->daemon = parse_config_bool(value);
     return 0;
   } else if (strcmp(key, "permanent_db_path") == 0) {
-    int rc =
-        parse_config_path(value, config_dir, &target->permanent_db_path);
+    int rc = parse_config_path(value, config_dir, &target->permanent_db_path);
     if (rc == 0) {
       target->permanent_ban_enabled = 1;
       daemon_log_info("Default permanent_db_path set to: %s",
@@ -306,16 +308,16 @@ static int apply_jail_integer_config(struct jail *jail, const char *key,
                                      const char *value, int strict_mode,
                                      const char *config_file, int *has_error) {
   if (strcmp(key, "max_retries") == 0) {
-    int rc = parse_config_integer(key, value, 1, 100, &jail->max_retries,
-                                  strict_mode, jail->name, config_file,
-                                  has_error);
+    int rc =
+        parse_config_integer(key, value, 1, 100, &jail->max_retries,
+                             strict_mode, jail->name, config_file, has_error);
     if (rc == 0)
       jail->_max_retries_set = true;
     return rc;
   } else if (strcmp(key, "findtime") == 0) {
-    int rc = parse_config_integer(key, value, 1, 3600, &jail->findtime,
-                                  strict_mode, jail->name, config_file,
-                                  has_error);
+    int rc =
+        parse_config_integer(key, value, 1, 3600, &jail->findtime, strict_mode,
+                             jail->name, config_file, has_error);
     if (rc == 0)
       jail->_findtime_set = true;
     return rc;
@@ -327,10 +329,9 @@ static int apply_jail_integer_config(struct jail *jail, const char *key,
     if (errno != 0 || *endptr != '\0' ||
         (val != 0 && (val < 1 || val > 86400))) {
       if (strict_mode) {
-        daemon_log_err(
-            "Invalid value for 'ban_time': '%s' in jail '%s' of %s "
-            "(must be 0 or integer between 1 and 86400)",
-            value, jail->name, config_file);
+        daemon_log_err("Invalid value for 'ban_time': '%s' in jail '%s' of %s "
+                       "(must be 0 or integer between 1 and 86400)",
+                       value, jail->name, config_file);
         if (has_error)
           *has_error = 1;
       } else {
@@ -341,8 +342,7 @@ static int apply_jail_integer_config(struct jail *jail, const char *key,
     }
     jail->ban_time = (unsigned int)val;
     jail->_ban_time_set = true;
-    daemon_log_info("Jail '%s' ban_time set to %u", jail->name,
-                    jail->ban_time);
+    daemon_log_info("Jail '%s' ban_time set to %u", jail->name, jail->ban_time);
     return 0;
   }
 
@@ -387,8 +387,8 @@ static int apply_jail_config(struct jail *jail, const char *key,
                              const char *value, int strict_mode,
                              const char *config_file, int *has_error) {
   /* 尝试整数类型配置 */
-  int rc = apply_jail_integer_config(jail, key, value, strict_mode,
-                                     config_file, has_error);
+  int rc = apply_jail_integer_config(jail, key, value, strict_mode, config_file,
+                                     has_error);
   if (rc == 0)
     return 0;
 
@@ -400,8 +400,8 @@ static int apply_jail_config(struct jail *jail, const char *key,
   /* 未知 jail 参数 */
   if (strict_mode) {
     daemon_log_err(
-        "Invalid config parameter '%s' with value '%s' in jail '%s' of %s",
-        key, value, jail->name, config_file);
+        "Invalid config parameter '%s' with value '%s' in jail '%s' of %s", key,
+        value, jail->name, config_file);
     if (has_error)
       *has_error = 1;
   } else {
@@ -858,7 +858,8 @@ int parse_config_file(const char *config_path) {
    * failed_hash = NULL， 所以必须从原始 cfg 获取 failed_hash。*/
   for (int i = 0; i < old_cfg_snapshot->jail_count; i++) {
     struct jail *old_jail = &old_cfg_snapshot->jails[i];
-    struct jail *real_old_jail = &cfg.jails[i]; /* 从原始 cfg 获取 failed_hash */
+    struct jail *real_old_jail =
+        &cfg.jails[i]; /* 从原始 cfg 获取 failed_hash */
     if (!real_old_jail->failed_hash)
       continue;
 
@@ -867,7 +868,8 @@ int parse_config_file(const char *config_path) {
       if (strcmp(old_jail->name, new_jail->name) == 0) {
         new_jail->failed_hash = real_old_jail->failed_hash;
         real_old_jail->failed_hash = NULL; /* 防止后续清理时泄漏 */
-        daemon_log_debug("Migrated failed entries for jail '%s'", new_jail->name);
+        daemon_log_debug("Migrated failed entries for jail '%s'",
+                         new_jail->name);
         break;
       }
     }
@@ -1083,8 +1085,7 @@ int load_config_directory(const char *config_dir) {
     /* 解析到临时配置 */
     struct config *file_cfg = calloc(1, sizeof(struct config));
     if (!file_cfg) {
-      daemon_log_err("Out of memory allocating temp config for: %s",
-                     full_path);
+      daemon_log_err("Out of memory allocating temp config for: %s", full_path);
       ret = -1;
       continue;
     }
@@ -1103,8 +1104,9 @@ int load_config_directory(const char *config_dir) {
     pthread_rwlock_unlock(&config_rwlock);
 
     if (parse_yaml_into(full_path, file_cfg) < 0) {
-      daemon_log_warn("Failed to parse config file: %s (continuing with others)",
-                      full_path);
+      daemon_log_warn(
+          "Failed to parse config file: %s (continuing with others)",
+          full_path);
       free_config_partial(file_cfg);
       free(file_cfg);
       continue;
@@ -1180,8 +1182,8 @@ int load_config_directory(const char *config_dir) {
           memset(&file_cfg->jails[j], 0, sizeof(struct jail));
           found = 1;
           updated_count++;
-          daemon_log_info("Updated existing jail '%s' from: %s",
-                          old_jail->name, full_path);
+          daemon_log_info("Updated existing jail '%s' from: %s", old_jail->name,
+                          full_path);
           break;
         }
       }
@@ -1202,8 +1204,9 @@ int load_config_directory(const char *config_dir) {
     }
     pthread_rwlock_unlock(&config_rwlock);
 
-    daemon_log_info("Added %d new jail(s), updated %d existing jail(s) from: %s",
-                    added_count, updated_count, full_path);
+    daemon_log_info(
+        "Added %d new jail(s), updated %d existing jail(s) from: %s",
+        added_count, updated_count, full_path);
 
     /* 清理临时配置 */
     free_config_partial(file_cfg);

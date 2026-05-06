@@ -270,7 +270,8 @@ static inline bool compare_ips(__be32 ip1, __be32 ip2) { return ip1 == ip2; }
  * 返回: 0 表示合法，-EINVAL 表示非法
  *
  * 注意：当 allow_loopback=true 时，跳过回环地址检查，用于系统 IP 自动发现
- * 场景（如 lo 设备的 127.0.0.0/8）。用户手动操作时仍应传入 false 以保持安全防护。
+ * 场景（如 lo 设备的 127.0.0.0/8）。用户手动操作时仍应传入 false
+ * 以保持安全防护。
  */
 static inline int validate_ipv4_address(__be32 ip, const char *ip_str,
                                         const char *context,

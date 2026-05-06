@@ -406,8 +406,8 @@ void process_new_lines(int idx) {
 
     /* 在锁外执行正则匹配和行处理 */
     if (process_jail) {
-      process_lines_in_buffer(process_jail, process_buf, process_len,
-                              log_path, &consumed, max_retries, findtime);
+      process_lines_in_buffer(process_jail, process_buf, process_len, log_path,
+                              &consumed, max_retries, findtime);
     }
 
     /* 保存未处理的部分行到本地缓冲区 */

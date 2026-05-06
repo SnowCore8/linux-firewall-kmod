@@ -18,7 +18,8 @@
  * 2. 前缀匹配（如 "sshd-custom" 以 "sshd" 开头）
  * 3. 后缀匹配（如 "custom-sshd" 以 "sshd" 结尾）
  */
-static int is_service_name_match(const char *name, const char *const *patterns) {
+static int is_service_name_match(const char *name,
+                                 const char *const *patterns) {
   for (int i = 0; patterns[i] != NULL; i++) {
     const char *pattern = patterns[i];
     size_t name_len = strlen(name);
@@ -29,8 +30,7 @@ static int is_service_name_match(const char *name, const char *const *patterns) 
       return 1;
 
     /* 前缀匹配：服务名以模式开头，且后面紧跟 - 或结束 */
-    if (name_len > pattern_len &&
-        strncmp(name, pattern, pattern_len) == 0 &&
+    if (name_len > pattern_len && strncmp(name, pattern, pattern_len) == 0 &&
         name[pattern_len] == '-')
       return 1;
 

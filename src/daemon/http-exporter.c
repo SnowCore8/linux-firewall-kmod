@@ -214,8 +214,7 @@ static int format_kernel_metrics(char *buf, size_t buf_size, int offset,
  * @stats: 守护进程统计信息
  * 返回: 写入的字节数
  */
-static int format_daemon_counter_metrics(char *buf, size_t buf_size,
-                                         int offset,
+static int format_daemon_counter_metrics(char *buf, size_t buf_size, int offset,
                                          const daemon_stats_snapshot_t *stats) {
   return snprintf(
       buf + offset, buf_size - offset,
@@ -359,18 +358,19 @@ static int base64_decode_simple(const char *input, char *output,
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Woverride-init"
   static const unsigned char decode_table[256] = {
-      [0 ... 255] = 0xFF,
-      ['A'] = 0,  ['B'] = 1,  ['C'] = 2,  ['D'] = 3,  ['E'] = 4,  ['F'] = 5,
-      ['G'] = 6,  ['H'] = 7,  ['I'] = 8,  ['J'] = 9,  ['K'] = 10, ['L'] = 11,
-      ['M'] = 12, ['N'] = 13, ['O'] = 14, ['P'] = 15, ['Q'] = 16, ['R'] = 17,
-      ['S'] = 18, ['T'] = 19, ['U'] = 20, ['V'] = 21, ['W'] = 22, ['X'] = 23,
-      ['Y'] = 24, ['Z'] = 25, ['a'] = 26, ['b'] = 27, ['c'] = 28, ['d'] = 29,
-      ['e'] = 30, ['f'] = 31, ['g'] = 32, ['h'] = 33, ['i'] = 34, ['j'] = 35,
-      ['k'] = 36, ['l'] = 37, ['m'] = 38, ['n'] = 39, ['o'] = 40, ['p'] = 41,
-      ['q'] = 42, ['r'] = 43, ['s'] = 44, ['t'] = 45, ['u'] = 46, ['v'] = 47,
-      ['w'] = 48, ['x'] = 49, ['y'] = 50, ['z'] = 51, ['0'] = 52, ['1'] = 53,
-      ['2'] = 54, ['3'] = 55, ['4'] = 56, ['5'] = 57, ['6'] = 58, ['7'] = 59,
-      ['8'] = 60, ['9'] = 61, ['+'] = 62, ['/'] = 63,
+      [0 ... 255] = 0xFF, ['A'] = 0,  ['B'] = 1,  ['C'] = 2,  ['D'] = 3,
+      ['E'] = 4,          ['F'] = 5,  ['G'] = 6,  ['H'] = 7,  ['I'] = 8,
+      ['J'] = 9,          ['K'] = 10, ['L'] = 11, ['M'] = 12, ['N'] = 13,
+      ['O'] = 14,         ['P'] = 15, ['Q'] = 16, ['R'] = 17, ['S'] = 18,
+      ['T'] = 19,         ['U'] = 20, ['V'] = 21, ['W'] = 22, ['X'] = 23,
+      ['Y'] = 24,         ['Z'] = 25, ['a'] = 26, ['b'] = 27, ['c'] = 28,
+      ['d'] = 29,         ['e'] = 30, ['f'] = 31, ['g'] = 32, ['h'] = 33,
+      ['i'] = 34,         ['j'] = 35, ['k'] = 36, ['l'] = 37, ['m'] = 38,
+      ['n'] = 39,         ['o'] = 40, ['p'] = 41, ['q'] = 42, ['r'] = 43,
+      ['s'] = 44,         ['t'] = 45, ['u'] = 46, ['v'] = 47, ['w'] = 48,
+      ['x'] = 49,         ['y'] = 50, ['z'] = 51, ['0'] = 52, ['1'] = 53,
+      ['2'] = 54,         ['3'] = 55, ['4'] = 56, ['5'] = 57, ['6'] = 58,
+      ['7'] = 59,         ['8'] = 60, ['9'] = 61, ['+'] = 62, ['/'] = 63,
   };
 #pragma GCC diagnostic pop
   size_t in_len = strlen(input);
@@ -478,8 +478,8 @@ static int check_basic_auth_header(const char *auth_header) {
   /* 安全考虑：缓冲区增大至 256 字节，与输入缓冲区一致，
    * 防止 Base64 解码后长度接近边界时 null 终止符写入越界 */
   char decoded[256];
-  int decoded_len = base64_decode_simple(auth_header + 6, decoded,
-                                         sizeof(decoded) - 1);
+  int decoded_len =
+      base64_decode_simple(auth_header + 6, decoded, sizeof(decoded) - 1);
   if (decoded_len <= 0) {
     return 0;
   }
@@ -510,7 +510,9 @@ static int check_basic_auth_header(const char *auth_header) {
   }
 
   return (constant_time_compare(cfg_user, auth_user, user_len) == 0 &&
-          constant_time_compare(cfg_pass, auth_pass, pass_len) == 0) ? 1 : 0;
+          constant_time_compare(cfg_pass, auth_pass, pass_len) == 0)
+             ? 1
+             : 0;
 }
 
 /**
@@ -525,7 +527,7 @@ send_unauthorized_response(struct MHD_Connection *connection) {
   int ret;
 
   response = MHD_create_response_from_buffer(strlen(body), (void *)body,
-                                              MHD_RESPMEM_PERSISTENT);
+                                             MHD_RESPMEM_PERSISTENT);
   if (!response)
     return MHD_NO;
   MHD_add_response_header(response, "WWW-Authenticate",
@@ -575,8 +577,8 @@ handle_metrics_request(struct MHD_Connection *connection) {
                                "500 Internal Server Error\r\n");
   }
 
-  response = MHD_create_response_from_buffer(len, metrics_buf,
-                                             MHD_RESPMEM_MUST_COPY);
+  response =
+      MHD_create_response_from_buffer(len, metrics_buf, MHD_RESPMEM_MUST_COPY);
   if (!response)
     return MHD_NO;
   MHD_add_response_header(response, "Content-Type",
@@ -597,9 +599,8 @@ handle_health_request(struct MHD_Connection *connection) {
   struct MHD_Response *response;
   int ret;
 
-  response = MHD_create_response_from_buffer(strlen(health_body),
-                                             (void *)health_body,
-                                             MHD_RESPMEM_PERSISTENT);
+  response = MHD_create_response_from_buffer(
+      strlen(health_body), (void *)health_body, MHD_RESPMEM_PERSISTENT);
   if (!response)
     return MHD_NO;
   MHD_add_response_header(response, "Content-Type", "application/json");
@@ -698,8 +699,8 @@ static const char *setup_bind_address(struct sockaddr_in *bind_addr,
  * @bind_addr: 绑定地址结构
  * 返回: MHD_Daemon指针，失败返回NULL
  */
-static struct MHD_Daemon *start_mhd_daemon(int listen_port,
-                                           const struct sockaddr_in *bind_addr) {
+static struct MHD_Daemon *
+start_mhd_daemon(int listen_port, const struct sockaddr_in *bind_addr) {
   return MHD_start_daemon(
       MHD_USE_SELECT_INTERNALLY | MHD_USE_ERROR_LOG, (uint16_t)listen_port,
       NULL, NULL, &answer_to_connection, NULL, MHD_OPTION_CONNECTION_LIMIT,

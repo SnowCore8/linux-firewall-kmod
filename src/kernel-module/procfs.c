@@ -50,8 +50,7 @@ static int bans_show(struct seq_file *m, void *v) {
       count++;
     } else if (!time_after(now, unban_time)) {
       ipv4_to_str(entry->ip, ip_str, sizeof(ip_str));
-      seq_printf(m, "%-40s（%lu 秒后过期）\n", ip_str,
-                 (unban_time - now) / HZ);
+      seq_printf(m, "%-40s（%lu 秒后过期）\n", ip_str, (unban_time - now) / HZ);
       temporary_count++;
       count++;
     }
@@ -328,9 +327,8 @@ static int execute_permanent_ban(struct firewall_info *fw, __be32 ip,
       fw_pr_info("Requested IPv4 %s is in whitelist, not permanently banned",
                  ip_str);
     else if (result == -ENOMEM)
-      fw_pr_err(
-          "Failed to allocate memory for permanent ban entry for IPv4 %s",
-          ip_str);
+      fw_pr_err("Failed to allocate memory for permanent ban entry for IPv4 %s",
+                ip_str);
     else if (result == -ENOSPC)
       fw_pr_warn("Ban table full, cannot permanently ban IPv4 %s", ip_str);
     else
@@ -777,7 +775,8 @@ static ssize_t whitelist_write(struct file *file, const char __user *buf,
   }
 
   /* 解析命令 */
-  result = parse_whitelist_command(input, cmd_buf, sizeof(cmd_buf), &subnet_str);
+  result =
+      parse_whitelist_command(input, cmd_buf, sizeof(cmd_buf), &subnet_str);
   if (result < 0)
     return result;
 
@@ -869,8 +868,7 @@ static int apply_config_ban_time(unsigned int value) {
     return -EINVAL;
   }
   if (value < 1 || value > 365 * 24 * 60 * 60) {
-    fw_pr_err("ban_time must be between 1 and %d seconds",
-              365 * 24 * 60 * 60);
+    fw_pr_err("ban_time must be between 1 and %d seconds", 365 * 24 * 60 * 60);
     return -EINVAL;
   }
   WRITE_ONCE(fw_ban_time, value);

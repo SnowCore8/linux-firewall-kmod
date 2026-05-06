@@ -23,15 +23,15 @@ struct sqlite_db {
   pthread_mutex_t lock; /* 线程安全互斥锁 */
 
   /* 缓存的 prepared statements，避免高频操作时重复编译 SQL */
-  sqlite3_stmt *stmt_add_ban;       /* INSERT 永久封禁 */
-  sqlite3_stmt *stmt_remove_ban;    /* UPDATE is_active=0 软删除 */
-  sqlite3_stmt *stmt_check_ban;     /* SELECT 1 检查是否存在 */
-  sqlite3_stmt *stmt_update_stats;  /* UPDATE hit_count 命中统计 */
-  sqlite3_stmt *stmt_load_all;      /* SELECT 加载所有活跃条目 */
-  sqlite3_stmt *stmt_stats_total;   /* COUNT(*) 总记录数 */
-  sqlite3_stmt *stmt_stats_active;  /* COUNT(*) 活跃记录数 */
-  sqlite3_stmt *stmt_purge_days;    /* DELETE 按天数清理 */
-  sqlite3_stmt *stmt_purge_all;     /* DELETE 所有已删除 */
+  sqlite3_stmt *stmt_add_ban;      /* INSERT 永久封禁 */
+  sqlite3_stmt *stmt_remove_ban;   /* UPDATE is_active=0 软删除 */
+  sqlite3_stmt *stmt_check_ban;    /* SELECT 1 检查是否存在 */
+  sqlite3_stmt *stmt_update_stats; /* UPDATE hit_count 命中统计 */
+  sqlite3_stmt *stmt_load_all;     /* SELECT 加载所有活跃条目 */
+  sqlite3_stmt *stmt_stats_total;  /* COUNT(*) 总记录数 */
+  sqlite3_stmt *stmt_stats_active; /* COUNT(*) 活跃记录数 */
+  sqlite3_stmt *stmt_purge_days;   /* DELETE 按天数清理 */
+  sqlite3_stmt *stmt_purge_all;    /* DELETE 所有已删除 */
 };
 
 /* ============================================================================
@@ -77,88 +77,102 @@ static int prepare_cached_statements(sqlite_db_t *db) {
   int rc;
 
   /* INSERT 永久封禁 */
-  rc = sqlite3_prepare_v2(db->conn,
+  rc = sqlite3_prepare_v2(
+      db->conn,
       "INSERT INTO permanent_banlist (ip, ip_num, reason, created_at, "
       "created_by, hit_count, last_hit_at, is_active) "
       "VALUES (?, ?, ?, ?, ?, 0, 0, 1);",
       -1, &db->stmt_add_ban, NULL);
   if (rc != SQLITE_OK) {
-    fprintf(stderr, "firewall: 准备 INSERT 语句失败：%s\n", sqlite3_errmsg(db->conn));
+    fprintf(stderr, "firewall: 准备 INSERT 语句失败：%s\n",
+            sqlite3_errmsg(db->conn));
     return -1;
   }
 
   /* UPDATE is_active=0 软删除 */
   rc = sqlite3_prepare_v2(db->conn,
-      "UPDATE permanent_banlist SET is_active = 0 WHERE ip = ? AND is_active = 1;",
-      -1, &db->stmt_remove_ban, NULL);
+                          "UPDATE permanent_banlist SET is_active = 0 WHERE ip "
+                          "= ? AND is_active = 1;",
+                          -1, &db->stmt_remove_ban, NULL);
   if (rc != SQLITE_OK) {
-    fprintf(stderr, "firewall: 准备 REMOVE 语句失败：%s\n", sqlite3_errmsg(db->conn));
+    fprintf(stderr, "firewall: 准备 REMOVE 语句失败：%s\n",
+            sqlite3_errmsg(db->conn));
     return -1;
   }
 
   /* SELECT 1 检查是否存在 */
   rc = sqlite3_prepare_v2(db->conn,
-      "SELECT 1 FROM permanent_banlist WHERE ip_num = ? AND is_active = 1 LIMIT 1;",
-      -1, &db->stmt_check_ban, NULL);
+                          "SELECT 1 FROM permanent_banlist WHERE ip_num = ? "
+                          "AND is_active = 1 LIMIT 1;",
+                          -1, &db->stmt_check_ban, NULL);
   if (rc != SQLITE_OK) {
-    fprintf(stderr, "firewall: 准备 CHECK 语句失败：%s\n", sqlite3_errmsg(db->conn));
+    fprintf(stderr, "firewall: 准备 CHECK 语句失败：%s\n",
+            sqlite3_errmsg(db->conn));
     return -1;
   }
 
   /* UPDATE hit_count 命中统计 */
-  rc = sqlite3_prepare_v2(db->conn,
+  rc = sqlite3_prepare_v2(
+      db->conn,
       "UPDATE permanent_banlist SET hit_count = hit_count + 1, last_hit_at = ? "
       "WHERE ip_num = ? AND is_active = 1;",
       -1, &db->stmt_update_stats, NULL);
   if (rc != SQLITE_OK) {
-    fprintf(stderr, "firewall: 准备 UPDATE_STATS 语句失败：%s\n", sqlite3_errmsg(db->conn));
+    fprintf(stderr, "firewall: 准备 UPDATE_STATS 语句失败：%s\n",
+            sqlite3_errmsg(db->conn));
     return -1;
   }
 
   /* SELECT 加载所有活跃条目 */
-  rc = sqlite3_prepare_v2(db->conn,
+  rc = sqlite3_prepare_v2(
+      db->conn,
       "SELECT id, ip, ip_num, reason, created_at, created_by, hit_count, "
       "last_hit_at, is_active "
       "FROM permanent_banlist WHERE is_active = 1 ORDER BY created_at;",
       -1, &db->stmt_load_all, NULL);
   if (rc != SQLITE_OK) {
-    fprintf(stderr, "firewall: 准备 LOAD_ALL 语句失败：%s\n", sqlite3_errmsg(db->conn));
+    fprintf(stderr, "firewall: 准备 LOAD_ALL 语句失败：%s\n",
+            sqlite3_errmsg(db->conn));
     return -1;
   }
 
   /* COUNT(*) 总记录数 */
-  rc = sqlite3_prepare_v2(db->conn,
-      "SELECT COUNT(*) FROM permanent_banlist;",
-      -1, &db->stmt_stats_total, NULL);
+  rc = sqlite3_prepare_v2(db->conn, "SELECT COUNT(*) FROM permanent_banlist;",
+                          -1, &db->stmt_stats_total, NULL);
   if (rc != SQLITE_OK) {
-    fprintf(stderr, "firewall: 准备 STATS_TOTAL 语句失败：%s\n", sqlite3_errmsg(db->conn));
+    fprintf(stderr, "firewall: 准备 STATS_TOTAL 语句失败：%s\n",
+            sqlite3_errmsg(db->conn));
     return -1;
   }
 
   /* COUNT(*) 活跃记录数 */
-  rc = sqlite3_prepare_v2(db->conn,
-      "SELECT COUNT(*) FROM permanent_banlist WHERE is_active = 1;",
+  rc = sqlite3_prepare_v2(
+      db->conn, "SELECT COUNT(*) FROM permanent_banlist WHERE is_active = 1;",
       -1, &db->stmt_stats_active, NULL);
   if (rc != SQLITE_OK) {
-    fprintf(stderr, "firewall: 准备 STATS_ACTIVE 语句失败：%s\n", sqlite3_errmsg(db->conn));
+    fprintf(stderr, "firewall: 准备 STATS_ACTIVE 语句失败：%s\n",
+            sqlite3_errmsg(db->conn));
     return -1;
   }
 
   /* DELETE 按天数清理 */
-  rc = sqlite3_prepare_v2(db->conn,
+  rc = sqlite3_prepare_v2(
+      db->conn,
       "DELETE FROM permanent_banlist WHERE is_active = 0 AND last_hit_at < ?;",
       -1, &db->stmt_purge_days, NULL);
   if (rc != SQLITE_OK) {
-    fprintf(stderr, "firewall: 准备 PURGE_DAYS 语句失败：%s\n", sqlite3_errmsg(db->conn));
+    fprintf(stderr, "firewall: 准备 PURGE_DAYS 语句失败：%s\n",
+            sqlite3_errmsg(db->conn));
     return -1;
   }
 
   /* DELETE 所有已删除 */
   rc = sqlite3_prepare_v2(db->conn,
-      "DELETE FROM permanent_banlist WHERE is_active = 0;",
-      -1, &db->stmt_purge_all, NULL);
+                          "DELETE FROM permanent_banlist WHERE is_active = 0;",
+                          -1, &db->stmt_purge_all, NULL);
   if (rc != SQLITE_OK) {
-    fprintf(stderr, "firewall: 准备 PURGE_ALL 语句失败：%s\n", sqlite3_errmsg(db->conn));
+    fprintf(stderr, "firewall: 准备 PURGE_ALL 语句失败：%s\n",
+            sqlite3_errmsg(db->conn));
     return -1;
   }
 
@@ -169,15 +183,42 @@ static int prepare_cached_statements(sqlite_db_t *db) {
  * 释放所有缓存的 prepared statements
  */
 static void finalize_cached_statements(sqlite_db_t *db) {
-  if (db->stmt_add_ban) { sqlite3_finalize(db->stmt_add_ban); db->stmt_add_ban = NULL; }
-  if (db->stmt_remove_ban) { sqlite3_finalize(db->stmt_remove_ban); db->stmt_remove_ban = NULL; }
-  if (db->stmt_check_ban) { sqlite3_finalize(db->stmt_check_ban); db->stmt_check_ban = NULL; }
-  if (db->stmt_update_stats) { sqlite3_finalize(db->stmt_update_stats); db->stmt_update_stats = NULL; }
-  if (db->stmt_load_all) { sqlite3_finalize(db->stmt_load_all); db->stmt_load_all = NULL; }
-  if (db->stmt_stats_total) { sqlite3_finalize(db->stmt_stats_total); db->stmt_stats_total = NULL; }
-  if (db->stmt_stats_active) { sqlite3_finalize(db->stmt_stats_active); db->stmt_stats_active = NULL; }
-  if (db->stmt_purge_days) { sqlite3_finalize(db->stmt_purge_days); db->stmt_purge_days = NULL; }
-  if (db->stmt_purge_all) { sqlite3_finalize(db->stmt_purge_all); db->stmt_purge_all = NULL; }
+  if (db->stmt_add_ban) {
+    sqlite3_finalize(db->stmt_add_ban);
+    db->stmt_add_ban = NULL;
+  }
+  if (db->stmt_remove_ban) {
+    sqlite3_finalize(db->stmt_remove_ban);
+    db->stmt_remove_ban = NULL;
+  }
+  if (db->stmt_check_ban) {
+    sqlite3_finalize(db->stmt_check_ban);
+    db->stmt_check_ban = NULL;
+  }
+  if (db->stmt_update_stats) {
+    sqlite3_finalize(db->stmt_update_stats);
+    db->stmt_update_stats = NULL;
+  }
+  if (db->stmt_load_all) {
+    sqlite3_finalize(db->stmt_load_all);
+    db->stmt_load_all = NULL;
+  }
+  if (db->stmt_stats_total) {
+    sqlite3_finalize(db->stmt_stats_total);
+    db->stmt_stats_total = NULL;
+  }
+  if (db->stmt_stats_active) {
+    sqlite3_finalize(db->stmt_stats_active);
+    db->stmt_stats_active = NULL;
+  }
+  if (db->stmt_purge_days) {
+    sqlite3_finalize(db->stmt_purge_days);
+    db->stmt_purge_days = NULL;
+  }
+  if (db->stmt_purge_all) {
+    sqlite3_finalize(db->stmt_purge_all);
+    db->stmt_purge_all = NULL;
+  }
 }
 
 /**
@@ -419,7 +460,8 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db, const char **ips,
     sqlite3_bind_int64(db->stmt_add_ban, 2, (sqlite3_int64)ip_nums[i]);
     sqlite3_bind_text(db->stmt_add_ban, 3, reasons[i], -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(db->stmt_add_ban, 4, (sqlite3_int64)time(NULL));
-    sqlite3_bind_text(db->stmt_add_ban, 5, created_bys[i], -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(db->stmt_add_ban, 5, created_bys[i], -1,
+                      SQLITE_TRANSIENT);
 
     rc = sqlite3_step(db->stmt_add_ban);
 
