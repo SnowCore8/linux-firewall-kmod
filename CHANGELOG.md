@@ -9,7 +9,7 @@
 - **配置目录加载 jail 覆盖问题** - `load_config_directory` 改为解析到临时配置后累加 jail，修复 `parse_config_file` 重置 `jail_count` 导致只保留最后一个文件的问题
 - **同名 jail 检测** - 采用"后到优先"策略，避免重复监控和封禁
 - **YAML 配置文件正则引号** - 修复 mysql/postfix/frp/vsftpd 四个配置文件的单引号转义问题，改为双引号使 PCRE2 正确编译
-- **deb 包卸载脚本** - postrm 脚本尝试 `firewall` 和 `firewall_mod` 两个模块名，确保内核模块正确卸载
+- **deb 包卸载脚本** - postrm 脚本正确卸载 `firewall` 内核模块
 
 ### 代码质量
 - **clang-format 集成** - 添加 `format-check` 和 `format` Makefile 目标，编译前自动检查代码格式
