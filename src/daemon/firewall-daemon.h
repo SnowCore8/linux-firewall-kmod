@@ -141,7 +141,7 @@ struct config {
 
 /* 失败尝试跟踪器 */
 struct failed_entry {
-  char ip[16];
+  char ip[INET_ADDRSTRLEN + 1]; /* +1 用于 null 终止符 */
   time_t timestamps[MAX_FAILED_TIMESTAMPS];
   unsigned int count;
   struct failed_entry *next;
