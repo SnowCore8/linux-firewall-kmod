@@ -150,6 +150,13 @@ int save_state_to_file(const char *filename) {
   }
   rcu_read_unlock();
 
+  /* 安全打开状态文件：
+   * - O_NOFOLLOW: 拒绝符号链接，防止符号链接攻击
+   * - O_CREAT: 首次加载时创建文件
+   * - O_TRUNC: 覆盖旧内容
+   * - 不使用 O_EXCL: 模块重载时需要写入已有文件
+   * - 打开后进行 inode 验证（见下方 TOCTOU 检查），防止文件替换攻击
+   */
   file = filp_open(filename, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW, 0600);
   if (IS_ERR(file)) {
     fw_pr_err("Failed to open file for saving state: %s", filename);
