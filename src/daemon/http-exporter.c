@@ -354,7 +354,12 @@ static int generate_metrics(char *buf, size_t buf_size) {
  */
 static int base64_decode_simple(const char *input, char *output,
                                 size_t output_size) {
+  /* 安全考虑：全部初始化为 0xFF（无效值），防止未初始化条目默认为 0
+   * 与 'A' 的值相同，导致攻击者可通过特殊字符伪造 Base64 输入 */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Woverride-init"
   static const unsigned char decode_table[256] = {
+      [0 ... 255] = 0xFF,
       ['A'] = 0,  ['B'] = 1,  ['C'] = 2,  ['D'] = 3,  ['E'] = 4,  ['F'] = 5,
       ['G'] = 6,  ['H'] = 7,  ['I'] = 8,  ['J'] = 9,  ['K'] = 10, ['L'] = 11,
       ['M'] = 12, ['N'] = 13, ['O'] = 14, ['P'] = 15, ['Q'] = 16, ['R'] = 17,
@@ -367,6 +372,7 @@ static int base64_decode_simple(const char *input, char *output,
       ['2'] = 54, ['3'] = 55, ['4'] = 56, ['5'] = 57, ['6'] = 58, ['7'] = 59,
       ['8'] = 60, ['9'] = 61, ['+'] = 62, ['/'] = 63,
   };
+#pragma GCC diagnostic pop
   size_t in_len = strlen(input);
   size_t out_idx = 0;
 
@@ -374,10 +380,30 @@ static int base64_decode_simple(const char *input, char *output,
     return -1;
 
   for (size_t i = 0; i < in_len && out_idx < output_size; i += 4) {
-    int b0 = (input[i] == '=') ? 0 : decode_table[(unsigned char)input[i]];
-    int b1 = (input[i + 1] == '=') ? 0 : decode_table[(unsigned char)input[i + 1]];
-    int b2 = (input[i + 2] == '=') ? 0 : decode_table[(unsigned char)input[i + 2]];
-    int b3 = (input[i + 3] == '=') ? 0 : decode_table[(unsigned char)input[i + 3]];
+    /* 安全考虑：检查字符是否为合法 Base64 字符（非 0xFF）
+     * 防止控制字符、高 ASCII 等非法字符被当作有效输入处理 */
+    unsigned char c0 = (unsigned char)input[i];
+    unsigned char c1 = (unsigned char)input[i + 1];
+    unsigned char c2 = (unsigned char)input[i + 2];
+    unsigned char c3 = (unsigned char)input[i + 3];
+
+    if (c0 == '=' || c1 == '=' || c2 == '=' || c3 == '=') {
+      /* '=' 仅允许出现在最后两个位置，此处简化处理：
+       * 仅跳过 '=' 的查表，但仍需确保非 '=' 字符合法 */
+    }
+    if (input[i] != '=' && decode_table[c0] == 0xFF)
+      return -1;
+    if (input[i + 1] != '=' && decode_table[c1] == 0xFF)
+      return -1;
+    if (input[i + 2] != '=' && decode_table[c2] == 0xFF)
+      return -1;
+    if (input[i + 3] != '=' && decode_table[c3] == 0xFF)
+      return -1;
+
+    int b0 = (input[i] == '=') ? 0 : decode_table[c0];
+    int b1 = (input[i + 1] == '=') ? 0 : decode_table[c1];
+    int b2 = (input[i + 2] == '=') ? 0 : decode_table[c2];
+    int b3 = (input[i + 3] == '=') ? 0 : decode_table[c3];
 
     output[out_idx++] = (unsigned char)((b0 << 2) | (b1 >> 4));
     if (input[i + 2] != '=' && out_idx < output_size)
@@ -387,6 +413,27 @@ static int base64_decode_simple(const char *input, char *output,
   }
 
   return (int)out_idx;
+}
+
+/**
+ * constant_time_compare - 恒定时间字符串比较（防时序攻击）
+ * @a: 第一个缓冲区
+ * @b: 第二个缓冲区
+ * @len: 比较长度（以较短者为准）
+ * 返回: 0 表示相等，非 0 表示不等
+ *
+ * 安全考虑：使用异或累加方式比较，确保无论何时不匹配都执行
+ * 相同次数的操作，防止攻击者通过响应时间差异逐位猜测密码。
+ */
+static int constant_time_compare(const void *a, const void *b, size_t len) {
+  const unsigned char *pa = (const unsigned char *)a;
+  const unsigned char *pb = (const unsigned char *)b;
+  volatile unsigned char result = 0;
+
+  for (size_t i = 0; i < len; i++) {
+    result |= pa[i] ^ pb[i];
+  }
+  return (int)result;
 }
 
 /**
@@ -419,11 +466,17 @@ static int check_basic_auth_header(const char *auth_header) {
   }
 
   /* 解码 Base64 凭据 */
-  char decoded[192]; /* 64 + 128 + ':' + '\0' */
+  /* 安全考虑：缓冲区增大至 256 字节，与输入缓冲区一致，
+   * 防止 Base64 解码后长度接近边界时 null 终止符写入越界 */
+  char decoded[256];
   int decoded_len = base64_decode_simple(auth_header + 6, decoded,
                                          sizeof(decoded) - 1);
   if (decoded_len <= 0) {
     return 0;
+  }
+  /* 安全考虑：边界检查，防止 decoded_len 等于缓冲区大小时越界写入 */
+  if (decoded_len >= (int)sizeof(decoded)) {
+    decoded_len = (int)sizeof(decoded) - 1;
   }
   decoded[decoded_len] = '\0';
 
@@ -436,8 +489,19 @@ static int check_basic_auth_header(const char *auth_header) {
   char *auth_user = decoded;
   char *auth_pass = colon + 1;
 
-  return (strcmp(cfg_user, auth_user) == 0 &&
-          strcmp(cfg_pass, auth_pass) == 0) ? 1 : 0;
+  /* 安全考虑：使用恒定时间比较替代 strcmp，防止时序攻击 */
+  size_t user_len = strlen(cfg_user);
+  size_t pass_len = strlen(cfg_pass);
+  size_t auth_user_len = strlen(auth_user);
+  size_t auth_pass_len = strlen(auth_pass);
+
+  /* 长度不同直接判定失败（长度比较不泄露密码内容） */
+  if (user_len != auth_user_len || pass_len != auth_pass_len) {
+    return 0;
+  }
+
+  return (constant_time_compare(cfg_user, auth_user, user_len) == 0 &&
+          constant_time_compare(cfg_pass, auth_pass, pass_len) == 0) ? 1 : 0;
 }
 
 /**
