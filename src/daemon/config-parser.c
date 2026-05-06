@@ -567,7 +567,8 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
           char *endptr;
           errno = 0;
           long val = strtol(value, &endptr, 10);
-          if (errno == 0 && *endptr == '\0' && val >= 1 && val <= 86400) {
+          if (errno == 0 && *endptr == '\0' &&
+              (val == 0 || (val >= 1 && val <= 86400))) {
             target->default_ban_time = (unsigned int)val;
             daemon_log_info("Config ban_time set to %u",
                             target->default_ban_time);
