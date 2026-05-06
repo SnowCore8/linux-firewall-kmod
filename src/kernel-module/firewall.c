@@ -21,13 +21,13 @@ unsigned int fw_ban_time = DEFAULT_BAN_TIME;
 char *state_file = "/var/lib/firewall/state";
 unsigned int fw_max_bans_per_second = 200;
 
-module_param(fw_ban_time, uint, 0644);
+module_param(fw_ban_time, uint, 0400);
 MODULE_PARM_DESC(fw_ban_time, "封禁持续时间（秒）（默认 600）");
 module_param(state_file, charp, 0444);
 MODULE_PARM_DESC(state_file,
                  "用于保存/恢复封禁和白名单条目的状态文件路径（默认 "
                  "/var/lib/firewall/state）");
-module_param(fw_max_bans_per_second, uint, 0644);
+module_param(fw_max_bans_per_second, uint, 0400);
 MODULE_PARM_DESC(fw_max_bans_per_second,
                  "泛洪保护下每秒最大封禁添加次数（默认 200）");
 
