@@ -328,7 +328,12 @@ int execute_ban_action(ban_action_t action, const char *ip) {
   }
 
   /* 处理SQLite持久化 */
-  execute_sqlite_action(action, ip, validated);
+  int sqlite_rc = execute_sqlite_action(action, ip, validated);
+  if (sqlite_rc < 0) {
+    daemon_log_warn("SQLite persistence failed for IP %s (action=%d)",
+                    ip, action);
+    /* SQLite 失败不影响主流程，继续记录日志 */
+  }
 
   /* 记录操作日志和更新统计 */
   log_ban_action(action, ip);
