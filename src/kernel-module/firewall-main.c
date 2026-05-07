@@ -5,6 +5,7 @@
  */
 
 #include "firewall.h"
+#include <linux/random.h>
 #include <linux/version.h>
 
 /* 模块参数（非静态，可从 procfs 访问） */
@@ -24,6 +25,9 @@ MODULE_PARM_DESC(fw_max_bans_per_second,
 
 /* 全局防火墙信息 */
 struct firewall_info fw_info;
+
+/* 全局哈希种子（用于 IPv6 哈希表，防止哈希碰撞攻击） */
+u32 fw_hash_seed;
 
 /* 导出函数，提供对 fw_info 的受控访问 */
 struct firewall_info *get_fw_info(void) { return &fw_info; }
@@ -67,6 +71,9 @@ static int __init firewall_init(void) {
   int ret;
 
   fw_pr_info("Loading firewall module v2.2 (IPv4/IPv6)");
+
+  /* 初始化全局哈希种子（防止哈希碰撞攻击） */
+  get_random_bytes(&fw_hash_seed, sizeof(fw_hash_seed));
 
   if (READ_ONCE(fw_ban_time) < 1) {
     fw_pr_err("fw_ban_time must be >= 1");

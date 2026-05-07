@@ -4,8 +4,10 @@
 
 #include "firewall.h"
 
+extern u32 fw_hash_seed;
+
 static u32 hash_wl_ipv6(const struct in6_addr *addr) {
-  return jhash(addr, sizeof(struct in6_addr), 0) &
+  return jhash(addr, sizeof(struct in6_addr), fw_hash_seed) &
          ((1 << WHITELIST_HASH_BITS) - 1);
 }
 

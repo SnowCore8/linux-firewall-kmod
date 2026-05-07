@@ -228,8 +228,8 @@ static int init_db_schema(sqlite3 *conn) {
   const char *create_table_sql =
       "CREATE TABLE IF NOT EXISTS permanent_banlist (\n"
       "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
-      "    ip TEXT NOT NULL UNIQUE,\n"
-      "    ip_num INTEGER NOT NULL UNIQUE,\n"
+      "    ip TEXT NOT NULL,\n"
+      "    ip_num INTEGER NOT NULL DEFAULT 0,\n"
       "    reason TEXT DEFAULT 'auto-ban',\n"
       "    created_at INTEGER NOT NULL,\n"
       "    created_by TEXT DEFAULT 'auto',\n"
@@ -243,6 +243,12 @@ static int init_db_schema(sqlite3 *conn) {
 
   const char *create_index2_sql = "CREATE INDEX IF NOT EXISTS idx_is_active ON "
                                   "permanent_banlist(is_active);";
+
+  /* 对 ip_num 添加部分唯一索引：仅当 ip_num != 0（即 IPv4）时强制执行唯一性。
+   * IPv6 地址的 ip_num 为 0，允许多个 IPv6 地址共存。 */
+  const char *create_index3_sql =
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_ip_num_unique "
+      "ON permanent_banlist(ip_num) WHERE ip_num != 0;";
 
   char *err_msg = NULL;
   int rc;
@@ -264,6 +270,13 @@ static int init_db_schema(sqlite3 *conn) {
   rc = sqlite3_exec(conn, create_index2_sql, NULL, NULL, &err_msg);
   if (rc != SQLITE_OK) {
     fprintf(stderr, "firewall: 创建 idx_is_active 索引失败：%s\n", err_msg);
+    sqlite3_free(err_msg);
+    return -1;
+  }
+
+  rc = sqlite3_exec(conn, create_index3_sql, NULL, NULL, &err_msg);
+  if (rc != SQLITE_OK) {
+    fprintf(stderr, "firewall: 创建 idx_ip_num_unique 索引失败：%s\n", err_msg);
     sqlite3_free(err_msg);
     return -1;
   }

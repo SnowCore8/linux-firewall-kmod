@@ -254,6 +254,9 @@ struct firewall_info *get_fw_info(void);
 extern struct nf_hook_ops nf_ops_ipv4;
 extern struct nf_hook_ops nf_ops_ipv6;
 
+/* 全局哈希种子（在 firewall-main.c 中初始化） */
+extern u32 fw_hash_seed;
+
 /* ============================================================================
  * 公共内联辅助函数
  * ============================================================================
@@ -312,7 +315,7 @@ static inline bool compare_ips(u8 af, const void *ip1, const void *ip2) {
 static inline u32 hash_ip(u8 af, const void *ip, int bits) {
   if (af == FW_AF_INET6) {
     const struct in6_addr *addr = ip;
-    return jhash(addr, sizeof(struct in6_addr), 0) & ((1 << bits) - 1);
+    return jhash(addr, sizeof(struct in6_addr), fw_hash_seed) & ((1 << bits) - 1);
   }
   return hash_min(*(__be32 *)ip, bits);
 }
@@ -402,7 +405,7 @@ static inline int validate_ipv6_address(const struct in6_addr *addr,
                                         const char *ip_str,
                                         const char *context,
                                         bool allow_loopback) {
-  if (ipv6_addr_any(addr) || ipv6_addr_any(addr)) {
+  if (ipv6_addr_any(addr)) {
     fw_pr_warn("Attempt to %s invalid IPv6: %s", context, ip_str ?: "(null)");
     return -EINVAL;
   }

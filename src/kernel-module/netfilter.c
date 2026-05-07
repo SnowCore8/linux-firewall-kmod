@@ -9,6 +9,7 @@
 #define IP_OFFSET 0x1FFF
 
 extern struct firewall_info fw_info;
+extern u32 fw_hash_seed;
 
 static unsigned int handle_ban_check(u8 af, const void *src_ip) {
   unsigned long now;
@@ -31,7 +32,7 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
 
   if (af == FW_AF_INET6) {
     struct in6_addr *ip6 = (struct in6_addr *)src_ip;
-    u32 wl_bkt = jhash(ip6, sizeof(struct in6_addr), 0) &
+    u32 wl_bkt = jhash(ip6, sizeof(struct in6_addr), fw_hash_seed) &
                  ((1 << WHITELIST_HASH_BITS) - 1);
 
     /* 精确匹配 */
@@ -57,7 +58,8 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
     }
 
     if (!is_whitelisted) {
-      u32 ban_bkt = wl_bkt;
+      u32 ban_bkt = jhash(ip6, sizeof(struct in6_addr), fw_hash_seed) &
+                    ((1 << BAN_HASH_BITS) - 1);
       hlist_for_each_entry_rcu(entry, &fw_info.ban_table_ipv6[ban_bkt], hash) {
         if (entry->af == af && ipv6_addr_equal(&entry->addr.ipv6, ip6)) {
           if (READ_ONCE(entry->is_permanent) ||

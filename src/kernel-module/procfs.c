@@ -513,7 +513,8 @@ static int whitelist_read(struct seq_file *m, void *v) {
   /* IPv6 白名单 */
   hash_for_each_rcu(fw->whitelist_table_ipv6, hash, entry, hash) {
     u8 prefix_len = READ_ONCE(entry->mask.prefix_len);
-    seq_printf(m, "%pI6/%d  on %s\n", &entry->addr.ipv6, prefix_len,
+    struct in6_addr addr_copy = entry->addr.ipv6;
+    seq_printf(m, "%pI6/%d  on %s\n", &addr_copy, prefix_len,
                entry->device_name);
     count++;
   }

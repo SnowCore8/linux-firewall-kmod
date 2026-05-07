@@ -7,6 +7,7 @@
 extern unsigned int fw_ban_time;
 extern unsigned int fw_max_bans_per_second;
 extern struct firewall_info fw_info;
+extern u32 fw_hash_seed;
 
 extern void free_ban_entry_rcu(struct rcu_head *head);
 
@@ -24,7 +25,7 @@ int check_flood_protection(void);
 
 /* 辅助：IPv6 哈希值计算 */
 static u32 hash_ipv6(const struct in6_addr *addr) {
-  return jhash(addr, sizeof(struct in6_addr), 0) &
+  return jhash(addr, sizeof(struct in6_addr), fw_hash_seed) &
          ((1 << BAN_HASH_BITS) - 1);
 }
 
@@ -55,23 +56,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
   rcu_read_lock();
   if (af == FW_AF_INET6) {
     struct in6_addr *ip6 = (struct in6_addr *)ip;
-    u32 wl_hash = hash_ipv6(ip6);
-    bkt = wl_hash;
-    if (bkt >= (1 << WHITELIST_HASH_BITS))
-      bkt = wl_hash % (1 << WHITELIST_HASH_BITS);
-    hlist_for_each_entry_rcu(wl_entry, &fw->whitelist_table_ipv6[bkt], hash) {
-      u8 prefix = READ_ONCE(wl_entry->mask.prefix_len);
-      const struct in6_addr *wl_ip = &wl_entry->addr.ipv6;
-      if (ipv6_prefix_equal(ip6, wl_ip, prefix)) {
-        rcu_read_unlock();
-        spin_unlock(&fw->lock);
-        kfree(entry);
-        atomic_inc(&fw->whitelist_reject_count);
-        fw_pr_warn("REFUSED to ban whitelisted IP %s", ip_str);
-        return -EPERM;
-      }
-    }
-    /* 检查所有桶（子网匹配） */
+    /* 子网遍历（覆盖所有条目，包括精确匹配） */
     hash_for_each_rcu(fw->whitelist_table_ipv6, bkt, wl_entry, hash) {
       u8 prefix = READ_ONCE(wl_entry->mask.prefix_len);
       const struct in6_addr *wl_ip = &wl_entry->addr.ipv6;
@@ -102,6 +87,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
   rcu_read_unlock();
 
   /* 检查是否已被封禁 */
+  rcu_read_lock();
   if (af == FW_AF_INET6) {
     struct in6_addr *ip6 = (struct in6_addr *)ip;
     u32 bkt6 = hash_ipv6(ip6);
@@ -111,6 +97,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
         bool is_perm = READ_ONCE(existing->is_permanent);
         unsigned long ubt = READ_ONCE(existing->unban_time);
         if (is_perm || time_before(jiffies, ubt)) {
+          rcu_read_unlock();
           spin_unlock(&fw->lock);
           kfree(entry);
           return 0;
@@ -118,6 +105,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
         WRITE_ONCE(existing->ban_time, jiffies);
         WRITE_ONCE(existing->unban_time, unban_time);
         atomic_set(&existing->retry_count, 0);
+        rcu_read_unlock();
         spin_unlock(&fw->lock);
         kfree(entry);
         return 0;
@@ -132,6 +120,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
         bool is_perm = READ_ONCE(existing->is_permanent);
         unsigned long ubt = READ_ONCE(existing->unban_time);
         if (is_perm || time_before(jiffies, ubt)) {
+          rcu_read_unlock();
           spin_unlock(&fw->lock);
           kfree(entry);
           return 0;
@@ -139,12 +128,14 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
         WRITE_ONCE(existing->ban_time, jiffies);
         WRITE_ONCE(existing->unban_time, unban_time);
         atomic_set(&existing->retry_count, 0);
+        rcu_read_unlock();
         spin_unlock(&fw->lock);
         kfree(entry);
         return 0;
       }
     }
   }
+  rcu_read_unlock();
 
   if (atomic_read(&fw->ban_count) >= MAX_BAN_ENTRIES) {
     spin_unlock(&fw->lock);

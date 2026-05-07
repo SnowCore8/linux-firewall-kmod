@@ -10,6 +10,7 @@
 
 /* 外部变量声明 */
 extern struct firewall_info fw_info;
+extern u32 fw_hash_seed;
 
 /* 辅助函数：验证文件路径安全 */
 static int validate_state_path(const char *filename) {
@@ -78,6 +79,7 @@ int save_state_to_file(const char *filename) {
   char buffer[512];
   loff_t pos = 0;
   int written;
+  int ret = 0;
 
   struct saved_ban_entry_v4 {
     __be32 ipv4;
@@ -159,7 +161,7 @@ int save_state_to_file(const char *filename) {
     else
       continue;
     if (ban_count_v6 < MAX_SAVE_BAN) {
-      ban_entries_v6[ban_count_v6].ipv6 = entry->addr.ipv6;
+      memcpy(&ban_entries_v6[ban_count_v6].ipv6, &entry->addr.ipv6, sizeof(struct in6_addr));
       ban_entries_v6[ban_count_v6].remaining_time = remaining_time;
       ban_count_v6++;
     }
@@ -183,7 +185,7 @@ int save_state_to_file(const char *filename) {
   rcu_read_lock();
   hash_for_each_rcu(fw_info.whitelist_table_ipv6, hash, wl_entry, hash) {
     if (wl_count_v6 < MAX_SAVE_WL) {
-      wl_entries_v6[wl_count_v6].ipv6 = wl_entry->addr.ipv6;
+      memcpy(&wl_entries_v6[wl_count_v6].ipv6, &wl_entry->addr.ipv6, sizeof(struct in6_addr));
       wl_entries_v6[wl_count_v6].prefix_len = READ_ONCE(wl_entry->mask.prefix_len);
       strscpy(wl_entries_v6[wl_count_v6].device_name, wl_entry->device_name,
               sizeof(wl_entries_v6[wl_count_v6].device_name));
@@ -195,6 +197,7 @@ int save_state_to_file(const char *filename) {
   file = filp_open(filename, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW, 0600);
   if (IS_ERR(file)) {
     fw_pr_err("Failed to open file for saving state: %s", filename);
+    ret = -EIO;
     goto out_free;
   }
 
@@ -211,6 +214,7 @@ int save_state_to_file(const char *filename) {
     if (getattr_err || !S_ISREG(open_stat.mode)) {
       fw_pr_err("Failed to stat state file or not regular: %s", filename);
       filp_close(file, NULL);
+      ret = -EIO;
       goto out_free;
     }
     saved_ino = open_stat.ino;
@@ -226,6 +230,7 @@ int save_state_to_file(const char *filename) {
     if (kernel_write(file, buffer, written, &pos) != written) {
       fw_pr_err("Failed to write ban entry to state file");
       filp_close(file, NULL);
+      ret = -EIO;
       goto out_free;
     }
   }
@@ -239,6 +244,7 @@ int save_state_to_file(const char *filename) {
     if (kernel_write(file, buffer, written, &pos) != written) {
       fw_pr_err("Failed to write ban entry to state file");
       filp_close(file, NULL);
+      ret = -EIO;
       goto out_free;
     }
   }
@@ -254,6 +260,7 @@ int save_state_to_file(const char *filename) {
     if (kernel_write(file, buffer, written, &pos) != written) {
       fw_pr_err("Failed to write whitelist entry to state file");
       filp_close(file, NULL);
+      ret = -EIO;
       goto out_free;
     }
   }
@@ -266,6 +273,7 @@ int save_state_to_file(const char *filename) {
     if (kernel_write(file, buffer, written, &pos) != written) {
       fw_pr_err("Failed to write whitelist entry to state file");
       filp_close(file, NULL);
+      ret = -EIO;
       goto out_free;
     }
   }
@@ -283,6 +291,7 @@ int save_state_to_file(const char *filename) {
       fw_pr_err("State file inode changed during write (possible TOCTOU attack): %s",
                 filename);
       filp_close(file, NULL);
+      ret = -EIO;
       goto out_free;
     }
   }
@@ -296,7 +305,7 @@ out_free:
   kfree(ban_entries_v6);
   kfree(wl_entries_v4);
   kfree(wl_entries_v6);
-  return 0;
+  return ret;
 }
 EXPORT_SYMBOL_GPL(save_state_to_file);
 
@@ -479,7 +488,7 @@ int restore_state_from_file(const char *filename) {
 
               spin_lock(&fw_info.lock);
               {
-                u32 bkt6 = jhash(&ip6, sizeof(ip6), 0) &
+                u32 bkt6 = jhash(&ip6, sizeof(ip6), fw_hash_seed) &
                            ((1 << BAN_HASH_BITS) - 1);
                 hash_add_rcu(fw_info.ban_table_ipv6, &entry->hash, bkt6);
               }
