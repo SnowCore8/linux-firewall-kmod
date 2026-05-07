@@ -32,16 +32,25 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
 
   if (af == FW_AF_INET6) {
     struct in6_addr *ip6 = (struct in6_addr *)src_ip;
-    u32 wl_bkt = jhash(ip6, sizeof(struct in6_addr), fw_hash_seed) &
-                 ((1 << WHITELIST_HASH_BITS) - 1);
+    u32 ip6_hash = jhash(ip6, sizeof(struct in6_addr), fw_hash_seed);
+    u32 wl_bkt = ip6_hash & ((1 << WHITELIST_HASH_BITS) - 1);
 
     /* 精确匹配 */
     hlist_for_each_entry_rcu(wl_entry, &fw_info.whitelist_table_ipv6[wl_bkt],
                              hash) {
-      if (wl_entry->mask.prefix_len == 128 &&
-          ipv6_addr_equal(ip6, &wl_entry->addr.ipv6)) {
-        is_whitelisted = true;
-        break;
+      if (wl_entry->mask.prefix_len == 128) {
+        /* struct in6_addr 16 字节，超出 READ_ONCE 支持范围，逐 u32 读取 */
+        const __be32 *src = (__be32 *)wl_entry->addr.ipv6.s6_addr;
+        struct in6_addr wl_addr;
+
+        wl_addr.s6_addr32[0] = READ_ONCE(((__be32 *)src)[0]);
+        wl_addr.s6_addr32[1] = READ_ONCE(((__be32 *)src)[1]);
+        wl_addr.s6_addr32[2] = READ_ONCE(((__be32 *)src)[2]);
+        wl_addr.s6_addr32[3] = READ_ONCE(((__be32 *)src)[3]);
+        if (ipv6_addr_equal(ip6, &wl_addr)) {
+          is_whitelisted = true;
+          break;
+        }
       }
     }
 
@@ -49,17 +58,24 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
     if (!is_whitelisted) {
       hash_for_each_rcu(fw_info.whitelist_table_ipv6, bkt, wl_entry, hash) {
         u8 prefix = READ_ONCE(wl_entry->mask.prefix_len);
-        if (prefix < 128 &&
-            ipv6_prefix_equal(ip6, &wl_entry->addr.ipv6, prefix)) {
-          is_whitelisted = true;
-          break;
+        if (prefix < 128) {
+          const __be32 *src = (__be32 *)wl_entry->addr.ipv6.s6_addr;
+          struct in6_addr wl_addr;
+
+          wl_addr.s6_addr32[0] = READ_ONCE(((__be32 *)src)[0]);
+          wl_addr.s6_addr32[1] = READ_ONCE(((__be32 *)src)[1]);
+          wl_addr.s6_addr32[2] = READ_ONCE(((__be32 *)src)[2]);
+          wl_addr.s6_addr32[3] = READ_ONCE(((__be32 *)src)[3]);
+          if (ipv6_prefix_equal(ip6, &wl_addr, prefix)) {
+            is_whitelisted = true;
+            break;
+          }
         }
       }
     }
 
     if (!is_whitelisted) {
-      u32 ban_bkt = jhash(ip6, sizeof(struct in6_addr), fw_hash_seed) &
-                    ((1 << BAN_HASH_BITS) - 1);
+      u32 ban_bkt = ip6_hash & ((1 << BAN_HASH_BITS) - 1);
       hlist_for_each_entry_rcu(entry, &fw_info.ban_table_ipv6[ban_bkt], hash) {
         if (entry->af == af && ipv6_addr_equal(&entry->addr.ipv6, ip6)) {
           if (READ_ONCE(entry->is_permanent) ||

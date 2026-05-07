@@ -223,12 +223,24 @@ static void finalize_cached_statements(sqlite_db_t *db) {
 
 /**
  * 初始化数据库表结构
+ * 包含迁移逻辑：将缺少 UNIQUE 约束的旧表升级到新结构。
+ *
+ * 迁移策略：
+ * 1. 创建新表 permanent_banlist_new（含 UNIQUE(ip)）
+ * 2. 检测旧表是否存在数据 → 需要迁移
+ * 3. 去重后复制到新表（保留最早的记录）
+ * 4. 原子替换：删除旧表，重命名新表
+ * 5. 创建索引
  */
 static int init_db_schema(sqlite3 *conn) {
-  const char *create_table_sql =
-      "CREATE TABLE IF NOT EXISTS permanent_banlist (\n"
+  char *err_msg = NULL;
+  int rc;
+
+  /* 新表结构：ip 列添加 UNIQUE 约束，保证所有地址（含 IPv6）唯一 */
+  const char *create_new_table_sql =
+      "CREATE TABLE IF NOT EXISTS permanent_banlist_new (\n"
       "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
-      "    ip TEXT NOT NULL,\n"
+      "    ip TEXT NOT NULL UNIQUE,\n"
       "    ip_num INTEGER NOT NULL DEFAULT 0,\n"
       "    reason TEXT DEFAULT 'auto-ban',\n"
       "    created_at INTEGER NOT NULL,\n"
@@ -238,27 +250,131 @@ static int init_db_schema(sqlite3 *conn) {
       "    is_active INTEGER DEFAULT 1\n"
       ");";
 
-  const char *create_index1_sql =
-      "CREATE INDEX IF NOT EXISTS idx_ip_num ON permanent_banlist(ip_num);";
-
-  const char *create_index2_sql = "CREATE INDEX IF NOT EXISTS idx_is_active ON "
-                                  "permanent_banlist(is_active);";
-
-  /* 对 ip_num 添加部分唯一索引：仅当 ip_num != 0（即 IPv4）时强制执行唯一性。
-   * IPv6 地址的 ip_num 为 0，允许多个 IPv6 地址共存。 */
-  const char *create_index3_sql =
-      "CREATE UNIQUE INDEX IF NOT EXISTS idx_ip_num_unique "
-      "ON permanent_banlist(ip_num) WHERE ip_num != 0;";
-
-  char *err_msg = NULL;
-  int rc;
-
-  rc = sqlite3_exec(conn, create_table_sql, NULL, NULL, &err_msg);
+  /* 第一步：创建新表 */
+  rc = sqlite3_exec(conn, create_new_table_sql, NULL, NULL, &err_msg);
   if (rc != SQLITE_OK) {
-    fprintf(stderr, "firewall: 创建 permanent_banlist 表失败：%s\n", err_msg);
+    fprintf(stderr, "firewall: 创建 permanent_banlist_new 表失败：%s\n",
+            err_msg);
     sqlite3_free(err_msg);
     return -1;
   }
+
+  /* 第二步：检查新表是否为空（刚创建），且旧表存在数据 → 需要迁移 */
+  int new_table_empty = 1;
+  sqlite3_stmt *check_stmt = NULL;
+  rc = sqlite3_prepare_v2(conn, "SELECT COUNT(*) FROM permanent_banlist_new;",
+                          -1, &check_stmt, NULL);
+  if (rc == SQLITE_OK) {
+    if (sqlite3_step(check_stmt) == SQLITE_ROW) {
+      new_table_empty = (sqlite3_column_int(check_stmt, 0) == 0);
+    }
+    sqlite3_finalize(check_stmt);
+  }
+
+  /* 检查旧表是否存在 */
+  int old_table_exists = 0;
+  rc = sqlite3_prepare_v2(
+      conn,
+      "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+      "AND name='permanent_banlist';",
+      -1, &check_stmt, NULL);
+  if (rc == SQLITE_OK) {
+    if (sqlite3_step(check_stmt) == SQLITE_ROW) {
+      old_table_exists = (sqlite3_column_int(check_stmt, 0) > 0);
+    }
+    sqlite3_finalize(check_stmt);
+  }
+
+  if (new_table_empty && old_table_exists) {
+    /* 需要迁移：从旧表去重后复制到新表 */
+    syslog(LOG_INFO,
+           "firewall: SQLite 迁移：检测到旧表结构，开始去重迁移到 UNIQUE(ip)");
+
+    /* 用事务包裹整个迁移流程，确保原子性 */
+    rc = sqlite3_exec(conn, "BEGIN TRANSACTION;", NULL, NULL, &err_msg);
+    if (rc != SQLITE_OK) {
+      fprintf(stderr, "firewall: 开始迁移事务失败：%s\n", err_msg);
+      sqlite3_free(err_msg);
+      return -1;
+    }
+
+    /* 清理所有重复记录（不限 ip_num），保留 rowid 最小（最早）的一条 */
+    rc = sqlite3_exec(conn,
+                      "DELETE FROM permanent_banlist WHERE rowid NOT IN ("
+                      "  SELECT MIN(rowid) FROM permanent_banlist "
+                      "  GROUP BY ip"
+                      ");",
+                      NULL, NULL, &err_msg);
+    if (rc != SQLITE_OK) {
+      fprintf(stderr, "firewall: 清理重复记录失败：%s\n", err_msg);
+      sqlite3_free(err_msg);
+      sqlite3_exec(conn, "ROLLBACK;", NULL, NULL, NULL);
+      return -1;
+    }
+
+    /* 复制旧表数据到新表 */
+    rc = sqlite3_exec(
+        conn,
+        "INSERT OR IGNORE INTO permanent_banlist_new "
+        "(ip, ip_num, reason, created_at, created_by, hit_count, "
+        "last_hit_at, is_active) "
+        "SELECT ip, ip_num, reason, created_at, created_by, hit_count, "
+        "last_hit_at, is_active FROM permanent_banlist;",
+        NULL, NULL, &err_msg);
+    if (rc != SQLITE_OK) {
+      fprintf(stderr, "firewall: 迁移数据到新表失败：%s\n", err_msg);
+      sqlite3_free(err_msg);
+      sqlite3_exec(conn, "ROLLBACK;", NULL, NULL, NULL);
+      sqlite3_exec(conn, "DROP TABLE IF EXISTS permanent_banlist_new;", NULL,
+                   NULL, NULL);
+      return -1;
+    }
+
+    /* 原子替换：删除旧表，重命名新表 */
+    rc = sqlite3_exec(
+        conn,
+        "DROP TABLE IF EXISTS permanent_banlist;"
+        "ALTER TABLE permanent_banlist_new RENAME TO permanent_banlist;",
+        NULL, NULL, &err_msg);
+    if (rc != SQLITE_OK) {
+      fprintf(stderr, "firewall: 替换旧表失败：%s\n", err_msg);
+      sqlite3_free(err_msg);
+      sqlite3_exec(conn, "ROLLBACK;", NULL, NULL, NULL);
+      return -1;
+    }
+
+    /* 提交事务 */
+    rc = sqlite3_exec(conn, "COMMIT;", NULL, NULL, &err_msg);
+    if (rc != SQLITE_OK) {
+      fprintf(stderr, "firewall: 提交迁移事务失败：%s\n", err_msg);
+      sqlite3_free(err_msg);
+      /* COMMIT 失败后事务自动回滚 */
+      return -1;
+    }
+
+    syslog(LOG_INFO, "firewall: SQLite 迁移完成");
+  } else if (!new_table_empty) {
+    /* 新表已有数据（迁移已完成过的二次启动），清理临时表 */
+    sqlite3_exec(conn, "DROP TABLE IF EXISTS permanent_banlist_new;", NULL,
+                 NULL, NULL);
+  } else {
+    /* 旧表不存在且新表为空：纯新库，只需重命名新表 */
+    sqlite3_exec(
+        conn,
+        "DROP TABLE IF EXISTS permanent_banlist;"
+        "ALTER TABLE permanent_banlist_new RENAME TO permanent_banlist;",
+        NULL, NULL, NULL);
+  }
+
+  /* 删除旧的部分唯一索引（如果存在），UNIQUE(ip) 已覆盖所有情况 */
+  sqlite3_exec(conn, "DROP INDEX IF EXISTS idx_ip_num_unique;", NULL, NULL,
+               NULL);
+
+  /* 在最终表 permanent_banlist 上创建索引 */
+  const char *create_index1_sql =
+      "CREATE INDEX IF NOT EXISTS idx_ip_num ON permanent_banlist(ip_num);";
+  const char *create_index2_sql = "CREATE INDEX IF NOT EXISTS idx_is_active ON "
+                                  "permanent_banlist(is_active);";
 
   rc = sqlite3_exec(conn, create_index1_sql, NULL, NULL, &err_msg);
   if (rc != SQLITE_OK) {
@@ -270,13 +386,6 @@ static int init_db_schema(sqlite3 *conn) {
   rc = sqlite3_exec(conn, create_index2_sql, NULL, NULL, &err_msg);
   if (rc != SQLITE_OK) {
     fprintf(stderr, "firewall: 创建 idx_is_active 索引失败：%s\n", err_msg);
-    sqlite3_free(err_msg);
-    return -1;
-  }
-
-  rc = sqlite3_exec(conn, create_index3_sql, NULL, NULL, &err_msg);
-  if (rc != SQLITE_OK) {
-    fprintf(stderr, "firewall: 创建 idx_ip_num_unique 索引失败：%s\n", err_msg);
     sqlite3_free(err_msg);
     return -1;
   }
