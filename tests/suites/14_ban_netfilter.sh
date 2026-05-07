@@ -38,8 +38,8 @@ fw_subsection "netfilter 封禁条目验证"
 BAN_ENTRY=$(grep "$TEST_NETFILTER_IP" "$PROC_BANS" 2>/dev/null || true)
 assert_true "[[ -n \"$BAN_ENTRY\" ]]" "ban_table 中存在 $TEST_NETFILTER_IP 的封禁记录"
 
-# 验证封禁条目格式（匹配 bans_show() 输出格式）
-assert_true "echo \"$BAN_ENTRY\" | grep -qE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+.*（(永久|[0-9]+ 秒后过期)）'" "封禁条目格式正确"
+# 验证封禁条目格式（匹配 bans_show() 输出格式 - 英文）
+assert_true "echo \"$BAN_ENTRY\" | grep -qE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+.*\((permanent|expires in [0-9]+ seconds)\)'" "封禁条目格式正确"
 
 # 14.6 验证内核模块
 fw_subsection "内核模块验证"
