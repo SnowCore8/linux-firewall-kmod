@@ -73,12 +73,12 @@ static bool cleanup_expired_bans(struct firewall_info *fw) {
         break;
       }
 
-      if (entry->is_permanent) {
+      if (READ_ONCE(entry->is_permanent)) {
         processed++;
         continue;
       }
 
-      if (time_after(now, entry->unban_time)) {
+      if (time_after(now, READ_ONCE(entry->unban_time))) {
         hlist_del_rcu(&entry->hash);
         atomic_dec(&fw->ban_count);
         removed++;

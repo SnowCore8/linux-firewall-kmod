@@ -548,9 +548,11 @@ static int whitelist_read(struct seq_file *m, void *v) {
 
   rcu_read_lock();
   hash_for_each_rcu(fw->whitelist_table, hash, entry, hash) {
-    __be32 network_addr = entry->ip & entry->mask;
+    __be32 wl_ip = READ_ONCE(entry->ip);
+    __be32 wl_mask = READ_ONCE(entry->mask);
+    __be32 network_addr = wl_ip & wl_mask;
     ipv4_to_str(network_addr, ip_str, sizeof(ip_str));
-    prefix_len = inet_mask_len(entry->mask);
+    prefix_len = inet_mask_len(wl_mask);
     seq_printf(m, "%s/%d  on %s\n", ip_str, prefix_len, entry->device_name);
   }
   rcu_read_unlock();

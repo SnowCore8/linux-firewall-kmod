@@ -117,17 +117,17 @@ int save_state_to_file(const char *filename) {
   rcu_read_lock();
   hash_for_each_rcu(fw_info.ban_table, hash, entry, hash) {
     unsigned long remaining_time;
-    if (entry->is_permanent) {
+    if (READ_ONCE(entry->is_permanent)) {
       remaining_time = 0;
-    } else if (time_after(entry->unban_time, jiffies)) {
-      remaining_time = (entry->unban_time - jiffies) / HZ;
+    } else if (time_after(READ_ONCE(entry->unban_time), jiffies)) {
+      remaining_time = (READ_ONCE(entry->unban_time) - jiffies) / HZ;
     } else {
       continue;
     }
     if (ban_count < MAX_SAVE_BAN) {
-      ipv4_to_str(entry->ip, ban_entries[ban_count].ip_str,
+      ipv4_to_str(READ_ONCE(entry->ip), ban_entries[ban_count].ip_str,
                   sizeof(ban_entries[ban_count].ip_str));
-      ban_entries[ban_count].ipv4 = entry->ip;
+      ban_entries[ban_count].ipv4 = READ_ONCE(entry->ip);
       ban_entries[ban_count].remaining_time = remaining_time;
       ban_count++;
     }
@@ -137,12 +137,14 @@ int save_state_to_file(const char *filename) {
   rcu_read_lock();
   hash_for_each_rcu(fw_info.whitelist_table, hash, wl_entry, hash) {
     if (wl_count < MAX_SAVE_WL) {
-      __be32 network_addr = wl_entry->ip & wl_entry->mask;
+      __be32 wl_ip = READ_ONCE(wl_entry->ip);
+      __be32 wl_mask = READ_ONCE(wl_entry->mask);
+      __be32 network_addr = wl_ip & wl_mask;
       ipv4_to_str(network_addr, wl_entries[wl_count].ip_str,
                   sizeof(wl_entries[wl_count].ip_str));
-      wl_entries[wl_count].ipv4 = wl_entry->ip;
-      wl_entries[wl_count].mask = wl_entry->mask;
-      wl_entries[wl_count].prefix_len = inet_mask_len(wl_entry->mask);
+      wl_entries[wl_count].ipv4 = wl_ip;
+      wl_entries[wl_count].mask = wl_mask;
+      wl_entries[wl_count].prefix_len = inet_mask_len(wl_mask);
       strscpy(wl_entries[wl_count].device_name, wl_entry->device_name,
               sizeof(wl_entries[wl_count].device_name));
       wl_count++;
@@ -465,7 +467,7 @@ int restore_state_from_file(const char *filename) {
 
           if (kstrtoint(mask_str, 10, &prefix_len) == 0) {
             mask =
-                prefix_len == 0 ? 0 : htonl(~((1U << (32 - prefix_len)) - 1));
+                prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1));
 
             if (in4_pton(ip_str, -1, (u8 *)&ip, -1, NULL)) {
               __be32 normalized_ip = ip & mask;

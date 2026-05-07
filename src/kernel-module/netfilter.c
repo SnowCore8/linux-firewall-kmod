@@ -113,7 +113,8 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
     /* 步骤 1：使用哈希查找精确匹配的 /32 条目 */
     hash_for_each_possible_rcu(fw_info.whitelist_table, wl_entry, hash,
                                src_ip) {
-      if (wl_entry->mask == 0xFFFFFFFF && wl_entry->ip == src_ip) {
+      if (READ_ONCE(wl_entry->mask) == 0xFFFFFFFF &&
+          READ_ONCE(wl_entry->ip) == src_ip) {
         is_whitelisted = true;
         break;
       }
@@ -127,8 +128,9 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
               "whitelist traversal limit reached, possible misconfiguration");
           break;
         }
-        if (wl_entry->mask != 0xFFFFFFFF &&
-            (src_ip & wl_entry->mask) == (wl_entry->ip & wl_entry->mask)) {
+        if (READ_ONCE(wl_entry->mask) != 0xFFFFFFFF &&
+            (src_ip & READ_ONCE(wl_entry->mask)) ==
+                (READ_ONCE(wl_entry->ip) & READ_ONCE(wl_entry->mask))) {
           is_whitelisted = true;
           break;
         }
@@ -142,7 +144,7 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
   }
 
   hash_for_each_possible_rcu(fw_info.ban_table, entry, hash, src_ip) {
-    if (compare_ips(entry->ip, src_ip)) {
+    if (compare_ips(READ_ONCE(entry->ip), src_ip)) {
       if (READ_ONCE(entry->is_permanent) ||
           time_before(now, READ_ONCE(entry->unban_time))) {
         is_banned = true;
