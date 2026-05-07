@@ -357,7 +357,7 @@ int main(int argc, char *argv[]) {
     } else {
       daemon_log_info("Prometheus exporter started on port %d",
                       cfg.metrics_port);
-      pthread_detach(exporter_thread);
+      /* 不 detach 线程，由 stop_http_exporter 负责 join 清理 */
     }
   } else {
     daemon_log_info("Prometheus exporter disabled (metrics_port=0)");

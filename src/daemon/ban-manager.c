@@ -167,9 +167,10 @@ int secure_procfs_write(const char *path, const char *data, size_t data_len) {
   if (validate_procfs_path(path) < 0)
     goto cleanup;
 
-  /* 检查数据长度 */
-  if (data_len > 256) {
-    daemon_log_err("Data too long for procfs write (%zu bytes)", data_len);
+  /* 检查数据长度 - 内核模块 procfs 内部缓冲区有限 */
+  if (data_len > 64) {
+    daemon_log_err("Data too long for procfs write (%zu bytes, max 64)",
+                   data_len);
     goto cleanup;
   }
 

@@ -79,10 +79,17 @@ static int read_procfs_int(const char *path, unsigned long *out) {
 
   if (fgets(line, sizeof(line), fp)) {
     char *colon = strchr(line, ':');
+    char *endptr;
     if (colon) {
-      value = strtoul(colon + 1, NULL, 10);
+      errno = 0;
+      value = strtoul(colon + 1, &endptr, 10);
+      if (errno != 0 || (*endptr != '\n' && *endptr != '\0' && *endptr != ' '))
+        value = 0;
     } else {
-      value = strtoul(line, NULL, 10);
+      errno = 0;
+      value = strtoul(line, &endptr, 10);
+      if (errno != 0 || (*endptr != '\n' && *endptr != '\0' && *endptr != ' '))
+        value = 0;
     }
     *out = value;
     fclose(fp);
@@ -380,6 +387,10 @@ static int base64_decode_simple(const char *input, char *output,
     return -1;
 
   for (size_t i = 0; i < in_len && out_idx < output_size; i += 4) {
+    /* 防御性检查：确保不越界读取 */
+    if (i + 3 >= in_len)
+      return -1;
+
     /* 安全考虑：检查字符是否为合法 Base64 字符（非 0xFF）
      * 防止控制字符、高 ASCII 等非法字符被当作有效输入处理 */
     unsigned char c0 = (unsigned char)input[i];

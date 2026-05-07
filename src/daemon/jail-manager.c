@@ -508,7 +508,12 @@ struct jail *find_or_create_jail_in_cfg(const char *name,
 int clone_jail(struct jail *dst, const struct jail *src) {
   memcpy(dst, src, sizeof(*dst));
 
-  /* 清零指针数组以防止 memcpy 后残留源指针 */
+  /* 清零指针以防止 memcpy 后残留源指针导致 double-free */
+  dst->regex_pattern = NULL;
+  memset(&dst->compiled_regex, 0, sizeof(dst->compiled_regex));
+  dst->regex_compiled = 0;
+  dst->failed_hash = NULL;
+
   dst->log_count = 0;
   for (int i = 0; i < MAX_LOG_FILES; i++) {
     dst->log_files[i] = NULL;
@@ -527,7 +532,7 @@ int clone_jail(struct jail *dst, const struct jail *src) {
     }
   }
 
-  dst->regex_pattern = NULL;
+  /* 克隆 regex_pattern 字符串 */
   if (src->regex_pattern) {
     dst->regex_pattern = strdup(src->regex_pattern);
     if (!dst->regex_pattern) {
@@ -538,13 +543,10 @@ int clone_jail(struct jail *dst, const struct jail *src) {
     }
   }
 
-  /* 不克隆已编译的正则表达式 - 将重新编译 */
-  memset(&dst->compiled_regex, 0, sizeof(dst->compiled_regex));
-  dst->regex_compiled = 0;
+  /* 不克隆已编译的正则表达式 - 将重新编译（已在函数开头清零） */
 
   /* 不克隆运行时状态 */
   memset(dst->failed_hash_table, 0, sizeof(dst->failed_hash_table));
-  dst->failed_hash = NULL;
   atomic_store(&dst->partial_line_len, 0);
   dst->partial_line_buffer[0] = '\0';
 

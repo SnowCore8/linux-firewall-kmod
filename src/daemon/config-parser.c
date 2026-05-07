@@ -553,6 +553,10 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
             target->default_max_retries = (unsigned int)val;
             daemon_log_info("Config max_retries set to %u",
                             target->default_max_retries);
+          } else if (ctx.strict_mode) {
+            daemon_log_err("Invalid value for '%s': '%s' in top-level of %s",
+                           ctx.current_key, value, ctx.config_file);
+            ctx.has_error = 1;
           }
         } else if (strcmp(ctx.current_key, "findtime") == 0) {
           char *endptr;
@@ -562,6 +566,10 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
             target->default_findtime = (unsigned int)val;
             daemon_log_info("Config findtime set to %u",
                             target->default_findtime);
+          } else if (ctx.strict_mode) {
+            daemon_log_err("Invalid value for '%s': '%s' in top-level of %s",
+                           ctx.current_key, value, ctx.config_file);
+            ctx.has_error = 1;
           }
         } else if (strcmp(ctx.current_key, "ban_time") == 0) {
           char *endptr;
@@ -572,6 +580,10 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
             target->default_ban_time = (unsigned int)val;
             daemon_log_info("Config ban_time set to %u",
                             target->default_ban_time);
+          } else if (ctx.strict_mode) {
+            daemon_log_err("Invalid value for '%s': '%s' in top-level of %s",
+                           ctx.current_key, value, ctx.config_file);
+            ctx.has_error = 1;
           }
         } else if (strcmp(ctx.current_key, "interval") == 0) {
           char *endptr;
@@ -580,6 +592,10 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
           if (errno == 0 && *endptr == '\0' && val >= 1 && val <= 60) {
             target->interval = (int)val;
             daemon_log_info("Config interval set to %d", target->interval);
+          } else if (ctx.strict_mode) {
+            daemon_log_err("Invalid value for '%s': '%s' in top-level of %s",
+                           ctx.current_key, value, ctx.config_file);
+            ctx.has_error = 1;
           }
         } else if (strcmp(ctx.current_key, "metrics_port") == 0) {
           char *endptr;
@@ -589,6 +605,10 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
             target->metrics_port = (int)val;
             daemon_log_info("Config metrics_port set to %d",
                             target->metrics_port);
+          } else if (ctx.strict_mode) {
+            daemon_log_err("Invalid value for '%s': '%s' in top-level of %s",
+                           ctx.current_key, value, ctx.config_file);
+            ctx.has_error = 1;
           }
         } else if (strcmp(ctx.current_key, "metrics_bind_address") == 0) {
           /* 修复 P1-5：解析顶层 metrics_bind_address 配置项 */
@@ -785,8 +805,8 @@ int parse_config_file(const char *config_path) {
     return -1;
   }
 
-  /* 将路径字符串复制到 new_cfg（解析相对路径所需）
-   * 在持有读锁的情况下复制以防止并发修改 */
+  /* 在持有读锁的情况下复制路径字符串和默认值
+   * 统一为一个锁区域，防止因条件分支导致锁未释放而后续再次获取时死锁 */
   pthread_rwlock_rdlock(&config_rwlock);
   if (cfg.config_file) {
     new_cfg->config_file = strdup(cfg.config_file);
@@ -810,10 +830,8 @@ int parse_config_file(const char *config_path) {
     }
     new_cfg->permanent_ban_enabled = cfg.permanent_ban_enabled;
   }
-  pthread_rwlock_unlock(&config_rwlock);
 
   /* 复制当前默认值作为基准 */
-  pthread_rwlock_rdlock(&config_rwlock);
   new_cfg->default_max_retries = cfg.default_max_retries;
   new_cfg->default_findtime = cfg.default_findtime;
   new_cfg->default_ban_time = cfg.default_ban_time;
@@ -1281,6 +1299,10 @@ int parse_config(int argc, char *argv[]) {
   cfg.metrics_port = DEFAULT_METRICS_PORT;
   cfg.metrics_bind_address =
       strdup("127.0.0.1"); /* 修复 P1-5：默认绑定 localhost */
+  if (!cfg.metrics_bind_address) {
+    fprintf(stderr, "Error: out of memory allocating metrics bind address\n");
+    return -1;
+  }
   cfg.jail_count = 0;
   cfg.config_file = NULL;
   cfg.config_dir = NULL;

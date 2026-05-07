@@ -388,27 +388,17 @@ void process_new_lines(int idx) {
       local_partial_len = 0; /* 已合并，清除本地部分行 */
     }
 
-    /* 修复 P1-7：将正则匹配移到锁外，仅更新共享状态时持锁。
-     * process_lines_in_buffer 包含 PCRE2 正则匹配，耗时较长，
-     * 在写锁内执行会阻塞配置重载和其他线程。
-     * 注意：此处使用 cfg.jails[jail_idx] 指针，由于处理时间较短，
-     * 且配置重载频率低，use-after-free 风险可接受。
-     * 若需完全消除风险，需重构 process_single_line 使用局部副本。 */
+    /* 修复 P1-7：在读锁保护下执行正则匹配和行处理，防止配置重载期间
+     * compiled_regex/match_data 被释放导致的 use-after-free。
+     * 虽然持锁会增加配置重载的延迟，但安全性优先。 */
     size_t consumed = 0;
-    struct jail *process_jail = NULL;
 
-    /* 短暂获取读锁获取 jail 指针 */
     pthread_rwlock_rdlock(&config_rwlock);
     if (jail_idx < cfg.jail_count) {
-      process_jail = &cfg.jails[jail_idx];
+      process_lines_in_buffer(&cfg.jails[jail_idx], process_buf, process_len,
+                              log_path, &consumed, max_retries, findtime);
     }
     pthread_rwlock_unlock(&config_rwlock);
-
-    /* 在锁外执行正则匹配和行处理 */
-    if (process_jail) {
-      process_lines_in_buffer(process_jail, process_buf, process_len, log_path,
-                              &consumed, max_retries, findtime);
-    }
 
     /* 保存未处理的部分行到本地缓冲区 */
     if (consumed < process_len) {
