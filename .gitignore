@@ -5,13 +5,23 @@
 # ---- 构建产物 ----
 build/
 site/
+
+# 内核模块编译产物（in-tree 构建时产生，Makefile 会在构建后清理但需防御性忽略）
 *.ko
-*.ko.cmd
+*.o
 *.mod.c
 *.mod
-*.o
+*.mod.o
 Module.symvers
 modules.order
+
+# 内核构建系统产生的隐藏文件（以 . 开头的中间文件）
+.*.cmd
+.*.o
+.*.d
+
+# 内核构建临时目录
+.tmp_versions/
 
 # ---- 临时文件 ----
 *~
