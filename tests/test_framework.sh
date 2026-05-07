@@ -266,6 +266,149 @@ skip_test() {
 }
 
 # ============================================================================
+# Procfs 辅助函数
+# ============================================================================
+
+# 等待 procfs 处理完成
+fw_wait_procfs() { sleep "${PROCFS_SYNC_DELAY:-0.2}"; }
+
+# 获取 procfs 统计值
+fw_get_stat() { grep "$1" "$PROC_STATS" 2>/dev/null | awk '{print $2}'; }
+
+# 封禁列表行数
+fw_count_bans() { wc -l < "$PROC_BANS" 2>/dev/null || echo 0; }
+
+# 白名单行数
+fw_count_whitelist() { wc -l < "$PROC_WHITELIST" 2>/dev/null || echo 0; }
+
+# ============================================================================
+# 封禁/解封辅助函数
+# ============================================================================
+
+# 封禁 IP（同步等待）
+fw_ban() { echo "$1" > "$PROC_BANS" 2>/dev/null; fw_wait_procfs; }
+
+# 封禁 IP 带时长（同步等待）
+fw_ban_with_time() { echo "$1 $2" > "$PROC_BANS" 2>/dev/null; fw_wait_procfs; }
+
+# 永久封禁 IP（同步等待）
+fw_ban_permanent() { echo "$1 0" > "$PROC_BANS" 2>/dev/null; fw_wait_procfs; }
+
+# 解封 IP（同步等待）
+fw_unban() { echo "unban $1" > "$PROC_BANS" 2>/dev/null; fw_wait_procfs; }
+
+# 批量封禁 IP
+fw_ban_multiple() {
+    for ip in "$@"; do
+        echo "$ip" > "$PROC_BANS" 2>/dev/null || true
+    done
+    fw_wait_procfs
+}
+
+# 批量解封 IP
+fw_unban_multiple() {
+    for ip in "$@"; do
+        echo "unban $ip" > "$PROC_BANS" 2>/dev/null || true
+    done
+    fw_wait_procfs
+}
+
+# 断言：IP 未被封禁（不在封禁列表中）
+fw_assert_ip_not_banned() {
+    local ip="$1" desc="${2:-IP $1 未进入封禁列表}"
+    assert_true "! grep -q '$ip' '$PROC_BANS' 2>/dev/null" "$desc"
+}
+
+# 断言：procfs 列表计数未变化
+fw_assert_list_unchanged() {
+    local list_path="$1" before="$2" desc="${3:-列表未变化}"
+    local after
+    after=$(wc -l < "$list_path" 2>/dev/null || echo 0)
+    assert_eq "$before" "$after" "$desc"
+}
+
+# 添加白名单（同步等待）
+fw_whitelist_add() { echo "add $1" > "$PROC_WHITELIST" 2>/dev/null; fw_wait_procfs; }
+
+# 移除白名单（同步等待）
+fw_whitelist_remove() { echo "remove $1" > "$PROC_WHITELIST" 2>/dev/null; fw_wait_procfs; }
+
+# ============================================================================
+# 基准测试辅助函数
+# ============================================================================
+
+# 基准测试：测量命令执行时间并断言不超过阈值
+# 用法: fw_benchmark "描述" 阈值_ms "命令"
+fw_benchmark() {
+    local desc="$1" threshold="$2" cmd="$3"
+    local start end dur
+    start=$(date +%s%N)
+    eval "$cmd" 2>/dev/null
+    end=$(date +%s%N)
+    dur=$(( (end - start) / 1000000 ))
+    assert_le "$dur" "$threshold" "$desc (${dur}ms)"
+}
+
+# ============================================================================
+# 守护进程辅助函数
+# ============================================================================
+
+# 运行守护进程，接受 0/124/137 为正常退出码
+# 用法: fw_daemon_starts_ok "完整命令字符串" "描述"
+fw_daemon_starts_ok() {
+    local cmd="$1" desc="$2"
+    local rc=0
+    eval "timeout --signal=KILL 2 $cmd" >/dev/null 2>&1 || rc=$?
+    if [[ $rc -eq 0 || $rc -eq 124 || $rc -eq 137 ]]; then
+        fw_pass "$desc (退出码=$rc)"
+    else
+        fw_fail "$desc (退出码=$rc, 预期 0/124/137)"
+    fi
+}
+
+# 运行守护进程并捕获 stderr
+# 用法: fw_run_daemon_captured 配置文件 [超时秒数]
+fw_run_daemon_captured() {
+    local config="$1" timeout_sec="${2:-5}"
+    local stderr_file="/tmp/fw_daemon_stderr_$$.log"
+    timeout --signal=KILL "$timeout_sec" "$DAEMON_PATH" -c "$config" 2>"$stderr_file" || true
+    if [[ -s "$stderr_file" ]]; then
+        fw_log_warn "守护进程 stderr: $(cat "$stderr_file")"
+    fi
+    rm -f "$stderr_file"
+}
+
+# ============================================================================
+# 配置生成辅助函数
+# ============================================================================
+
+# 生成测试用 YAML 配置
+# 用法: fw_generate_test_yaml 文件 日志文件 [max_retries] [findtime] [ban_time] [metrics_port] [jail_name]
+fw_generate_test_yaml() {
+    local file="$1" log_file="$2"
+    local max_retries="${3:-1}" findtime="${4:-1}" ban_time="${5:-5}"
+    local metrics_port="${6:-9119}" jail_name="${7:-sshd}"
+    cat > "$file" << EOF
+defaults:
+  max_retries: $max_retries
+  findtime: $findtime
+  ban_time: $ban_time
+  interval: 1
+  metrics_port: $metrics_port
+
+jails:
+  $jail_name:
+    enabled: true
+    log_files:
+      - $log_file
+    max_retries: $max_retries
+    findtime: $findtime
+    ban_time: $ban_time
+    regex: ""
+EOF
+}
+
+# ============================================================================
 # 模块管理
 # ============================================================================
 fw_ensure_module_loaded() {

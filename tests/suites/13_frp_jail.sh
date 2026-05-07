@@ -3,28 +3,25 @@
 
 fw_test_header "FRP Jail 配置测试"
 
-# 13.1 检查 FRP 配置文件
+# 13.1 FRP Jail 配置存在性
 fw_subsection "FRP Jail 配置存在性"
-assert_success "test -f '$CONFIG_DIR/frp.yaml' || grep -q 'frp:' '$CONFIG_DIR/default.yaml'" "FRP Jail 定义存在"
-assert_success "grep -q 'enabled: true' '$CONFIG_DIR/frp.yaml' 2>/dev/null || grep -q 'enabled: true' '$CONFIG_DIR/default.yaml'" "FRP Jail 已启用"
+assert_true "(test -f '$CONFIG_DIR/frp.yaml') || (grep -q 'frp:' '$CONFIG_DIR/default.yaml' 2>/dev/null)" "FRP Jail 定义存在"
+assert_true "(grep -q 'enabled: true' '$CONFIG_DIR/frp.yaml' 2>/dev/null) || (grep -q 'enabled: true' '$CONFIG_DIR/default.yaml' 2>/dev/null)" "FRP Jail 已启用"
 
-# 13.2 验证 FRP 日志文件配置
+# 13.2 FRP 日志文件配置
 fw_subsection "FRP 日志文件配置"
-assert_success "grep -q '/var/log/frp/frp.log' '$CONFIG_DIR/frp.yaml' 2>/dev/null || grep -q '/var/log/frp/frp.log' '$CONFIG_DIR/default.yaml'" "frp.log 路径配置"
+assert_true "(grep -q '/var/log/frp/frp.log' '$CONFIG_DIR/frp.yaml' 2>/dev/null) || (grep -q '/var/log/frp/frp.log' '$CONFIG_DIR/default.yaml' 2>/dev/null)" "frp.log 路径配置"
 
-# 13.3 验证 FRP 参数配置（使用智能推断，参数可选）
+# 13.3 FRP 参数配置
 fw_subsection "FRP 参数配置"
-# 智能推断模式下参数可选，检查配置文件是否存在即可
-assert_success "test -f '$CONFIG_DIR/frp.yaml' || grep -q 'frp:' '$CONFIG_DIR/default.yaml'" "FRP 配置完整"
+assert_true "(test -f '$CONFIG_DIR/frp.yaml') || (grep -q 'frp:' '$CONFIG_DIR/default.yaml' 2>/dev/null)" "FRP 配置完整"
 
 # 13.4 守护进程加载 FRP 配置
 fw_subsection "守护进程加载 FRP 配置"
-assert_success "timeout --signal=KILL 2 '$DAEMON_PATH' -c '$CONFIG_DIR/default.yaml' >/dev/null 2>&1; rc=\$?; [ \$rc -eq 0 ] || [ \$rc -eq 124 ] || [ \$rc -eq 137 ]" "FRP 配置文件加载成功"
+fw_daemon_starts_ok "'$DAEMON_PATH' -c '$CONFIG_DIR/default.yaml'" "FRP 配置文件加载成功"
 
 # 13.5 FRP 日志解析测试
 fw_subsection "FRP 日志解析"
-
-# 创建 FRP 测试日志（必须在 /var/log 下以通过路径验证）
 local_frp_test_log="/var/log/fw_test_frp_$$.log"
 cat > "$local_frp_test_log" << 'EOF'
 2026/04/22 10:30:01 [W] [proxy/proxy.go:100] get a user connection [203.0.113.50:12345]
@@ -32,7 +29,6 @@ cat > "$local_frp_test_log" << 'EOF'
 2026/04/22 10:30:03 [W] [server/control.go:300] connection timeout from 192.0.2.200
 EOF
 
-# 创建 FRP YAML 配置
 local_frp_yaml="/var/log/fw_frp_yaml_$$.yaml"
 cat > "$local_frp_yaml" << EOF
 defaults:
@@ -53,17 +49,11 @@ jails:
     regex: ""
 EOF
 
-# 使用 FRP 配置测试
-timeout --signal=KILL 5 "$DAEMON_PATH" -c "$local_frp_yaml" 2>/tmp/fw_daemon_stderr_frp_$$.log || true
-if [[ -s /tmp/fw_daemon_stderr_frp_$$.log ]]; then
-    fw_log_warn "守护进程 stderr (FRP): $(cat /tmp/fw_daemon_stderr_frp_$$.log)"
-fi
-rm -f /tmp/fw_daemon_stderr_frp_$$.log
+fw_run_daemon_captured "$local_frp_yaml" 5
 sleep 1
 
-# 检查封禁列表
 if [[ -r "$PROC_BANS" ]]; then
-    local_ban_count=$(wc -l < "$PROC_BANS" 2>/dev/null || echo 0)
+    local_ban_count=$(fw_count_bans)
     fw_log_info "FRP 日志解析后封禁 IP 数量: $local_ban_count"
     assert_ge "$local_ban_count" 1 "FRP 日志解析处理成功，有 IP 被封禁"
 else
@@ -74,9 +64,7 @@ rm -f "$local_frp_test_log" "$local_frp_yaml"
 
 # 13.6 FRP 配置热重载测试
 fw_subsection "FRP 配置热重载"
-# 创建临时 FRP 配置
 local_frp_config="/tmp/fw_test_frp_config_$$.yaml"
-# 创建日志文件（守护进程要求日志文件存在才能设置 inotify）
 touch "/var/log/fw_test_frps.log"
 cat > "$local_frp_config" << 'EOF'
 defaults:
@@ -97,5 +85,5 @@ jails:
     regex: ""
 EOF
 
-assert_success "timeout --signal=KILL 2 '$DAEMON_PATH' -c '$local_frp_config' >/dev/null 2>&1; rc=\$?; [ \$rc -eq 0 ] || [ \$rc -eq 124 ] || [ \$rc -eq 137 ]" "FRP 独立配置文件加载"
+fw_daemon_starts_ok "'$DAEMON_PATH' -c '$local_frp_config'" "FRP 独立配置文件加载"
 rm -f "$local_frp_config" "/var/log/fw_test_frps.log"

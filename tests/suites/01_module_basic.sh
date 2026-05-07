@@ -9,21 +9,17 @@ assert_file_exists "$KERNEL_MODULE_PATH" "内核模块文件存在"
 
 # 1.2 模块加载/卸载
 fw_subsection "模块加载/卸载"
-# run_tests.sh 已预加载模块，如果模块已存在则跳过 insmod
 if lsmod | grep -q '^firewall' || [[ -d "$PROC_DIR" ]]; then
     fw_pass "模块加载成功（已预加载）"
 else
     assert_success "insmod '$KERNEL_MODULE_PATH'" "模块加载成功"
 fi
 sleep 0.5
-
 assert_true "(lsmod | grep -q '^firewall\b') || [[ -d '$PROC_DIR' ]]" "lsmod 或 procfs 验证模块已加载"
 assert_dir_exists "$PROC_DIR" "proc 目录存在"
 
 # 1.3 带参数加载
 fw_subsection "带参数加载"
-
-# 验证参数已设置（注意：sysfs 显示的是当前运行时值，insmod 传参在某些内核版本可能不立即反映）
 if [[ -f "/sys/module/firewall/parameters/fw_ban_time" ]]; then
     local_ban_time=$(cat /sys/module/firewall/parameters/fw_ban_time 2>/dev/null || echo "unknown")
     fw_log_info "fw_ban_time 当前值: $local_ban_time"

@@ -3,7 +3,7 @@
 
 fw_test_header "日志解析测试"
 
-# 10.1 守护进程可执行
+# 10.1 守护进程检查
 fw_subsection "守护进程检查"
 if [[ ! -x "$DAEMON_PATH" ]]; then
     skip_test "守护进程未编译，跳过日志解析测试"
@@ -23,44 +23,23 @@ Invalid line with no IP address
 Mar 10 10:30:01 server sshd[1234]: Failed password for root from port ssh2
 EOF
 
-# 10.3 守护进程处理测试
-# 需要内核模块已加载
+# 10.3 内核模块检查
 if ! lsmod | grep -q "^firewall"; then
     skip_test "内核模块未加载，跳过处理测试"
     rm -f "$local_test_log"
     return 0
 fi
 
-# 创建临时 YAML 配置用于日志解析测试
+# 10.4 守护进程处理测试日志
+fw_subsection "守护进程处理测试日志"
 local_yaml_config="/tmp/fw_logparse_yaml_$$.yaml"
-cat > "$local_yaml_config" << EOF
-defaults:
-  max_retries: 1
-  findtime: 1
-  ban_time: 5
-  interval: 1
-  metrics_port: 9119
+fw_generate_test_yaml "$local_yaml_config" "$local_test_log" 1 1 5
 
-jails:
-  sshd:
-    enabled: true
-    log_files:
-      - $local_test_log
-    max_retries: 1
-    findtime: 1
-    ban_time: 5
-    regex_pattern: ""
-EOF
+fw_run_daemon_captured "$local_yaml_config" 5
+sleep 1
 
-# 启动守护进程处理测试日志
-fw_log_info "启动守护进程处理测试日志..."
-timeout --signal=KILL 5 "$DAEMON_PATH" -c "$local_yaml_config" 2>/tmp/fw_daemon_stderr_$$.log &
-local_daemon_pid=$!
-sleep 3
-
-# 检查是否有 IP 被封禁
 if [[ -r "$PROC_BANS" ]]; then
-    local_ban_count=$(wc -l < "$PROC_BANS" 2>/dev/null || echo 0)
+    local_ban_count=$(fw_count_bans)
     fw_log_info "封禁列表中的 IP 数量: $local_ban_count"
     if [[ $local_ban_count -gt 0 ]]; then
         assert_ge "$local_ban_count" 1 "日志解析成功，有 IP 被封禁"
@@ -70,18 +49,9 @@ if [[ -r "$PROC_BANS" ]]; then
 else
     warn_test "bans 接口不可读"
 fi
+rm -f "$local_test_log" "$local_yaml_config"
 
-# 清理守护进程
-kill $local_daemon_pid 2>/dev/null || true
-wait $local_daemon_pid 2>/dev/null || true
-
-# 输出守护进程 stderr 警告
-if [[ -s /tmp/fw_daemon_stderr_$$.log ]]; then
-    fw_log_warn "守护进程 stderr: $(cat /tmp/fw_daemon_stderr_$$.log)"
-fi
-rm -f /tmp/fw_daemon_stderr_$$.log "$local_test_log" "$local_yaml_config"
-
-# 10.4 特殊字符日志
+# 10.5 特殊字符日志处理
 fw_subsection "特殊字符日志处理"
 local_special_log="/tmp/fw_test_special_$$.log"
 cat > "$local_special_log" << 'EOF'
@@ -91,97 +61,27 @@ Mar 10 10:30:03 server sshd[1236]: Failed password for root from 192.0.2.3 port 
 EOF
 
 local_special_yaml="/tmp/fw_special_yaml_$$.yaml"
-cat > "$local_special_yaml" << EOF
-defaults:
-  max_retries: 1
-  findtime: 1
-  ban_time: 5
-  interval: 1
-  metrics_port: 9119
-
-jails:
-  sshd:
-    enabled: true
-    log_files:
-      - $local_special_log
-    max_retries: 1
-    regex: ""
-EOF
-
-timeout --signal=KILL 5 "$DAEMON_PATH" -c "$local_special_yaml" 2>/tmp/fw_daemon_stderr_special_$$.log || true
-if [[ -s /tmp/fw_daemon_stderr_special_$$.log ]]; then
-    fw_log_warn "守护进程 stderr (特殊字符): $(cat /tmp/fw_daemon_stderr_special_$$.log)"
-fi
-rm -f /tmp/fw_daemon_stderr_special_$$.log
+fw_generate_test_yaml "$local_special_yaml" "$local_special_log" 1 1 5
+fw_run_daemon_captured "$local_special_yaml" 5
 sleep 1
-# 验证守护进程处理特殊字符后 procfs 仍可访问
 assert_true "[[ -r '$PROC_BANS' ]]" "特殊字符日志处理后 procfs 仍可访问"
-
 rm -f "$local_special_log" "$local_special_yaml"
 
-# 10.5 空日志文件
+# 10.6 空日志文件处理
 fw_subsection "空日志文件处理"
 : > "/tmp/fw_test_empty_$$.log"
-
 local_empty_yaml="/tmp/fw_empty_yaml_$$.yaml"
-cat > "$local_empty_yaml" << EOF
-defaults:
-  max_retries: 1
-  findtime: 1
-  ban_time: 5
-  interval: 1
-  metrics_port: 9119
-
-jails:
-  sshd:
-    enabled: true
-    log_files:
-      - /tmp/fw_test_empty_$$.log
-    max_retries: 1
-    regex: ""
-EOF
-
-timeout --signal=KILL 3 "$DAEMON_PATH" -c "$local_empty_yaml" 2>/tmp/fw_daemon_stderr_empty_$$.log || true
-if [[ -s /tmp/fw_daemon_stderr_empty_$$.log ]]; then
-    fw_log_warn "守护进程 stderr (空日志): $(cat /tmp/fw_daemon_stderr_empty_$$.log)"
-fi
-rm -f /tmp/fw_daemon_stderr_empty_$$.log
-# 验证守护进程处理空日志后 procfs 仍可访问
+fw_generate_test_yaml "$local_empty_yaml" "/tmp/fw_test_empty_$$.log" 1 1 5
+fw_run_daemon_captured "$local_empty_yaml" 3
 assert_true "[[ -r '$PROC_BANS' ]]" "空日志文件处理后 procfs 仍可访问"
-
 rm -f "/tmp/fw_test_empty_$$.log" "$local_empty_yaml"
 
-# 10.6 不存在日志文件
+# 10.7 不存在日志文件处理
 fw_subsection "不存在日志文件处理"
-
 local_nonexist_yaml="/tmp/fw_nonexist_yaml_$$.yaml"
-cat > "$local_nonexist_yaml" << EOF
-defaults:
-  max_retries: 1
-  findtime: 1
-  ban_time: 5
-  interval: 1
-  metrics_port: 9119
+fw_generate_test_yaml "$local_nonexist_yaml" "/nonexistent/log.log" 1 1 5
 
-jails:
-  sshd:
-    enabled: true
-    log_files:
-      - /nonexistent/log.log
-    max_retries: 1
-    regex: ""
-EOF
-
-# 运行守护进程并捕获退出码（日志文件 /nonexistent/log.log 不存在）
 timeout 3 "$DAEMON_PATH" -c "$local_nonexist_yaml" > /dev/null 2>&1
 local rc=$?
-
-# 验证守护进程因不存在的日志文件而失败
-if [[ $rc -ne 0 ]]; then
-    assert_true "[[ $rc -ne 0 ]]" "不存在的日志文件被拒绝（退出码 $rc）"
-else
-    assert_true "[[ $rc -ne 0 ]]" "不存在的日志文件应导致守护进程失败"
-fi
-
+assert_true "[[ $rc -ne 0 ]]" "不存在的日志文件被拒绝（退出码 $rc）"
 rm -f "$local_nonexist_yaml"
-
