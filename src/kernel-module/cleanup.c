@@ -34,7 +34,7 @@ static int cleanup_table_ipv4(struct firewall_info *fw) {
   for (int i = 0; i < (1 << 3) && processed < max_processed_per_call; i++) {
     int current_bucket = (start_bucket + i) % table_size;
     hlist_for_each_entry_safe(entry, tmp, &fw->ban_table_ipv4[current_bucket],
-                               hash) {
+                              hash) {
       if (processed >= max_processed_per_call)
         break;
       if (READ_ONCE(entry->is_permanent)) {
@@ -66,7 +66,7 @@ static int cleanup_table_ipv6(struct firewall_info *fw) {
   for (int i = 0; i < (1 << 3) && processed < max_processed_per_call; i++) {
     int current_bucket = (start_bucket + i) % table_size;
     hlist_for_each_entry_safe(entry, tmp, &fw->ban_table_ipv6[current_bucket],
-                               hash) {
+                              hash) {
       if (processed >= max_processed_per_call)
         break;
       if (READ_ONCE(entry->is_permanent)) {

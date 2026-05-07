@@ -127,7 +127,8 @@ void sync_work_handler(struct work_struct *work) {
       lookup_table[i].addr.ipv6 = current_ips[i].addr.ipv6;
       lookup_table[i].mask.prefix_len = current_ips[i].mask.prefix_len;
     } else {
-      lookup_table[i].addr.ipv4 = current_ips[i].addr.ipv4 & current_ips[i].mask.ipv4_mask;
+      lookup_table[i].addr.ipv4 =
+          current_ips[i].addr.ipv4 & current_ips[i].mask.ipv4_mask;
       lookup_table[i].mask.ipv4_mask = current_ips[i].mask.ipv4_mask;
     }
     lookup_table[i].found = false;
@@ -363,14 +364,12 @@ void auto_discover_system_ips(struct firewall_info *fw) {
   for (int i = 0; i < temp_count; i++) {
     int ret;
     if (temp_ips[i].af == FW_AF_INET6) {
-      ret = add_whitelist_entry(fw, FW_AF_INET6, &temp_ips[i].addr.ipv6,
-                                NULL, temp_ips[i].mask.prefix_len,
-                                temp_ips[i].name);
+      ret = add_whitelist_entry(fw, FW_AF_INET6, &temp_ips[i].addr.ipv6, NULL,
+                                temp_ips[i].mask.prefix_len, temp_ips[i].name);
     } else {
-      ret = add_whitelist_entry(fw, FW_AF_INET, &temp_ips[i].addr.ipv4,
-                                &temp_ips[i].mask.ipv4_mask,
-                                inet_mask_len(temp_ips[i].mask.ipv4_mask),
-                                temp_ips[i].name);
+      ret = add_whitelist_entry(
+          fw, FW_AF_INET, &temp_ips[i].addr.ipv4, &temp_ips[i].mask.ipv4_mask,
+          inet_mask_len(temp_ips[i].mask.ipv4_mask), temp_ips[i].name);
     }
     if (ret < 0)
       fw_pr_warn("Failed to add system IP to whitelist");

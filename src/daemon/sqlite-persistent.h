@@ -7,7 +7,7 @@
 
 /* 永久封禁条目 (支持 IPv4/IPv6) */
 struct permanent_ban_entry {
-  int id;              /* 数据库自增 ID */
+  int id;                    /* 数据库自增 ID */
   char ip[INET6_ADDRSTRLEN]; /* IP 地址（字符串，支持 IPv4/IPv6） */
   uint32_t ip_num;     /* IP 数字（网络字节序，仅 IPv4 有效） */
   int af;              /* 地址族: AF_INET 或 AF_INET6 */

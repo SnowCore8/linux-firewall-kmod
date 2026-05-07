@@ -208,5 +208,6 @@ module_exit(firewall_exit);
 
 MODULE_LICENSE("Dual MIT/GPL");
 MODULE_AUTHOR("Firewall Authors");
-MODULE_DESCRIPTION("Kernel-level IP banning module (fail2ban alternative, IPv4/IPv6)");
+MODULE_DESCRIPTION(
+    "Kernel-level IP banning module (fail2ban alternative, IPv4/IPv6)");
 MODULE_VERSION("2.2");

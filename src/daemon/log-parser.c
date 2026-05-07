@@ -43,7 +43,8 @@ static int validate_ip_candidate(const char *start, const char *end,
     return 0;
 
   /* 验证词边界 */
-  if (start > line && (isxdigit((unsigned char)start[-1]) || start[-1] == '.' || start[-1] == ':'))
+  if (start > line && (isxdigit((unsigned char)start[-1]) || start[-1] == '.' ||
+                       start[-1] == ':'))
     return 0;
   if (*end && (isxdigit((unsigned char)*end) || *end == '.' || *end == ':'))
     return 0;
@@ -138,7 +139,8 @@ int extract_ip(const char *line, char *ip_out, size_t ip_size) {
       break;
 
     end = start;
-    while (*end && (isxdigit((unsigned char)*end) || *end == '.' || *end == ':'))
+    while (*end &&
+           (isxdigit((unsigned char)*end) || *end == '.' || *end == ':'))
       end++;
 
     if (validate_ip_candidate(start, end, line, ip_out, ip_size))
@@ -162,10 +164,8 @@ int extract_and_validate_ip(struct jail *j, const char *log_line, char *ip_out,
   /* 尝试 IPv4 */
   if (inet_pton(AF_INET, ip_buf, &addr4) == 1) {
     unsigned int ip_num = ntohl(addr4.s_addr);
-    if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
-        ((ip_num >> 24) & 0xFF) == 127 ||
-        (((ip_num >> 24) & 0xFF) >= 224 &&
-         ((ip_num >> 24) & 0xFF) <= 239)) {
+    if (ip_num == 0 || ip_num == 0xFFFFFFFF || ((ip_num >> 24) & 0xFF) == 127 ||
+        (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {
       return 0;
     }
     atomic_fetch_add(&daemon_stats.ips_extracted, 1);

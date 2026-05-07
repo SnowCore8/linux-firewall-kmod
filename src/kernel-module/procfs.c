@@ -271,8 +271,8 @@ static long parse_ban_duration(const char *input) {
 /**
  * execute_unban_action - 执行解封操作
  */
-static int execute_unban_action(struct firewall_info *fw, u8 af,
-                                const void *ip, const char *ip_str) {
+static int execute_unban_action(struct firewall_info *fw, u8 af, const void *ip,
+                                const char *ip_str) {
   int result = unban_ip(fw, af, ip);
 
   if (result < 0) {
@@ -302,8 +302,8 @@ static int execute_permanent_ban(struct firewall_info *fw, u8 af,
     else if (result == -ENOSPC)
       fw_pr_warn("Ban table full, cannot permanently ban IP %s", ip_str);
     else
-      fw_pr_err("Unknown error %d when trying to permanently ban IP %s",
-                result, ip_str);
+      fw_pr_err("Unknown error %d when trying to permanently ban IP %s", result,
+                ip_str);
     return result;
   }
   return 0;
@@ -455,8 +455,9 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
     if ((ip_class_a == 10) ||
         (ip_class_a == 172 && ip_class_b >= 16 && ip_class_b <= 31) ||
         (ip_class_a == 192 && ip_class_b == 168)) {
-      fw_pr_warn("Attempt to ban private IPv4 range %s - this may be unintended",
-                 ip_str);
+      fw_pr_warn(
+          "Attempt to ban private IPv4 range %s - this may be unintended",
+          ip_str);
     }
   }
 
@@ -614,7 +615,8 @@ static int parse_whitelist_subnet(char *subnet_str, u8 *af_out, void *ip_out,
       fw_pr_warn("Invalid prefix length: %d", prefix_len);
       return -EINVAL;
     }
-    if (validate_ipv4_address(*(__be32 *)ip_out, subnet_str, "whitelist", true) < 0)
+    if (validate_ipv4_address(*(__be32 *)ip_out, subnet_str, "whitelist",
+                              true) < 0)
       return -EINVAL;
   } else if (in6_pton(subnet_str, -1, (u8 *)ip_out, -1, NULL)) {
     af = FW_AF_INET6;
@@ -649,8 +651,8 @@ static int execute_whitelist_action(u8 af, void *ip, int prefix_len,
       if (result == -ENOENT) {
         fw_pr_warn("%s/%d not found in whitelist", ip_str, prefix_len);
       } else {
-        fw_pr_err("Failed to remove %s/%d from whitelist (error %d)",
-                  ip_str, prefix_len, result);
+        fw_pr_err("Failed to remove %s/%d from whitelist (error %d)", ip_str,
+                  prefix_len, result);
       }
       return result;
     }
@@ -666,8 +668,9 @@ static int execute_whitelist_action(u8 af, void *ip, int prefix_len,
       if (prefix_len > 0) {
         int i;
         for (i = 0; i < 16; i++) {
-          int bits = (prefix_len > (i * 8 + 8)) ? 8 :
-                     (prefix_len > (i * 8)) ? (prefix_len - i * 8) : 0;
+          int bits = (prefix_len > (i * 8 + 8)) ? 8
+                     : (prefix_len > (i * 8))   ? (prefix_len - i * 8)
+                                                : 0;
           mask.s6_addr[i] = (u8)(0xFF << (8 - bits));
         }
       }
@@ -676,17 +679,20 @@ static int execute_whitelist_action(u8 af, void *ip, int prefix_len,
       for (i = 0; i < 16; i++)
         normalized.ipv6.s6_addr[i] = addr->s6_addr[i] & mask.s6_addr[i];
     } else {
-      __be32 mask4 = prefix_len == 0 ? 0 :
-                     htonl(~((1ULL << (32 - prefix_len)) - 1));
+      __be32 mask4 =
+          prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1));
       normalized.ipv4 = *(__be32 *)ip & mask4;
       af = FW_AF_INET;
     }
 
-    result = add_whitelist_entry(&fw_info, af, &normalized,
-                                 af == FW_AF_INET6 ? NULL :
-                                 (__be32[]){ prefix_len == 0 ? 0 :
-                                 htonl(~((1ULL << (32 - prefix_len)) - 1)) },
-                                 prefix_len, "manual");
+    result = add_whitelist_entry(
+        &fw_info, af, &normalized,
+        af == FW_AF_INET6
+            ? NULL
+            : (__be32[]){prefix_len == 0
+                             ? 0
+                             : htonl(~((1ULL << (32 - prefix_len)) - 1))},
+        prefix_len, "manual");
     if (result < 0) {
       if (result == -ENOMEM) {
         fw_pr_err("Failed to allocate memory for whitelist entry");
@@ -752,8 +758,8 @@ static ssize_t whitelist_write(struct file *file, const char __user *buf,
     return -EINVAL;
   }
 
-  result = parse_whitelist_command(input, cmd_buf, sizeof(cmd_buf),
-                                   &subnet_str);
+  result =
+      parse_whitelist_command(input, cmd_buf, sizeof(cmd_buf), &subnet_str);
   if (result < 0)
     return result;
 

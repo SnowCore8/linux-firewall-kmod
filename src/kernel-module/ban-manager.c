@@ -14,13 +14,13 @@ extern void free_ban_entry_rcu(struct rcu_head *head);
 static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
                        unsigned long unban_time, bool is_permanent,
                        const char *log_msg, unsigned long log_arg);
-static struct ban_entry *__find_ban_entry_rcu(struct firewall_info *fw,
-                                               u8 af, const void *ip);
+static struct ban_entry *__find_ban_entry_rcu(struct firewall_info *fw, u8 af,
+                                              const void *ip);
 static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip,
                          bool permanent_only);
 
 int ban_ip_with_duration(struct firewall_info *fw, u8 af, const void *ip,
-                          unsigned long seconds);
+                         unsigned long seconds);
 int check_flood_protection(void);
 
 /* 辅助：IPv6 哈希值计算 */
@@ -174,8 +174,8 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
   return 0;
 }
 
-static struct ban_entry *__find_ban_entry_rcu(struct firewall_info *fw,
-                                               u8 af, const void *ip) {
+static struct ban_entry *__find_ban_entry_rcu(struct firewall_info *fw, u8 af,
+                                              const void *ip) {
   struct ban_entry *entry;
 
   if (af == FW_AF_INET6) {
@@ -349,7 +349,7 @@ int check_flood_protection(void) {
 }
 
 int ban_ip_with_duration(struct firewall_info *fw, u8 af, const void *ip,
-                          unsigned long seconds) {
+                         unsigned long seconds) {
   unsigned long ban_duration;
   FW_DEBUG(1, "ENTRY: ban_ip_with_duration(af=%d, seconds=%lu)", af, seconds);
   if (!ip) {

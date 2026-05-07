@@ -582,7 +582,8 @@ int sqlite_is_permanent_banned(sqlite_db_t *db, uint32_t ip_num) {
  */
 int sqlite_is_permanent_banned_ipv6(sqlite_db_t *db, const char *ip) {
   if (!db || !ip) {
-    fprintf(stderr, "firewall: sqlite_is_permanent_banned_ipv6: invalid parameter\n");
+    fprintf(stderr,
+            "firewall: sqlite_is_permanent_banned_ipv6: invalid parameter\n");
     return -1;
   }
 

@@ -37,7 +37,7 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
 
     /* 精确匹配 */
     hlist_for_each_entry_rcu(wl_entry, &fw_info.whitelist_table_ipv6[wl_bkt],
-                              hash) {
+                             hash) {
       if (wl_entry->mask.prefix_len == 128 &&
           ipv6_addr_equal(ip6, &wl_entry->addr.ipv6)) {
         is_whitelisted = true;
@@ -74,7 +74,7 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
     u32 wl_bkt = hash_min(ipv4, WHITELIST_HASH_BITS);
 
     hlist_for_each_entry_rcu(wl_entry, &fw_info.whitelist_table_ipv4[wl_bkt],
-                              hash) {
+                             hash) {
       if (wl_entry->mask.ipv4_mask == 0xFFFFFFFF &&
           wl_entry->addr.ipv4 == ipv4) {
         is_whitelisted = true;
@@ -120,7 +120,7 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
 }
 
 static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
-                                       const struct nf_hook_state *state) {
+                                      const struct nf_hook_state *state) {
   struct iphdr iph_copy;
   struct iphdr *iph;
   __be32 src_ip;
@@ -138,8 +138,8 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
   {
     __be16 frag_off = iph->frag_off;
     if ((ntohs(frag_off) & IP_MF) || (ntohs(frag_off) & IP_OFFSET)) {
-      fw_pr_warn_ratelimited(
-          "Fragmented packet from %pI4 passed through", &iph->saddr);
+      fw_pr_warn_ratelimited("Fragmented packet from %pI4 passed through",
+                             &iph->saddr);
       return NF_ACCEPT;
     }
   }
@@ -155,13 +155,12 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
 }
 
 static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
-                                       const struct nf_hook_state *state) {
+                                      const struct nf_hook_state *state) {
   struct ipv6hdr iph6_copy;
   struct ipv6hdr *iph6;
   struct in6_addr src_ip;
 
-  if (unlikely(!skb) ||
-      unlikely(!pskb_may_pull(skb, sizeof(struct ipv6hdr))))
+  if (unlikely(!skb) || unlikely(!pskb_may_pull(skb, sizeof(struct ipv6hdr))))
     return NF_ACCEPT;
 
   iph6 = skb_header_pointer(skb, 0, sizeof(iph6_copy), &iph6_copy);

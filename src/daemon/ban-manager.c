@@ -26,10 +26,8 @@ int validate_ipv4(const char *ip, validated_ip_t *out) {
   }
 
   unsigned int ip_num = ntohl(addr4.s_addr);
-  if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
-      ((ip_num >> 24) & 0xFF) == 127 ||
-      (((ip_num >> 24) & 0xFF) >= 224 &&
-       ((ip_num >> 24) & 0xFF) <= 239)) {
+  if (ip_num == 0 || ip_num == 0xFFFFFFFF || ((ip_num >> 24) & 0xFF) == 127 ||
+      (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {
     return -1;
   }
 
@@ -60,10 +58,8 @@ int validate_ip(const char *ip, validated_ip_t *out) {
   /* 先尝试 IPv4 */
   if (inet_pton(AF_INET, ip, &addr4) == 1) {
     unsigned int ip_num = ntohl(addr4.s_addr);
-    if (ip_num == 0 || ip_num == 0xFFFFFFFF ||
-        ((ip_num >> 24) & 0xFF) == 127 ||
-        (((ip_num >> 24) & 0xFF) >= 224 &&
-         ((ip_num >> 24) & 0xFF) <= 239)) {
+    if (ip_num == 0 || ip_num == 0xFFFFFFFF || ((ip_num >> 24) & 0xFF) == 127 ||
+        (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {
       return -1;
     }
     if (out) {
@@ -345,6 +341,4 @@ int unban_permanent_ip(const char *ip) {
 }
 
 /* 清理过期封禁和部分行缓冲区（可选，内核已处理） */
-void cleanup_expired_bans(void) {
-  cleanup_partial_line_buffer();
-}
+void cleanup_expired_bans(void) { cleanup_partial_line_buffer(); }

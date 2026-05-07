@@ -53,8 +53,8 @@ for i in $(seq 1 50); do
     fi
 done
 fw_wait_procfs
-local_final_count=$(fw_count_whitelist)
-assert_le "$local_final_count" 64 "白名单数量在限制内 (64)，实际 $local_final_count"
+local wl_count=$(fw_get_stat current_whitelist)
+assert_le "$wl_count" 64 "白名单数量在限制内 (64)，实际 $wl_count"
 
 # 清理
 for i in $(seq 1 50); do

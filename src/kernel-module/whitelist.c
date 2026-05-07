@@ -18,8 +18,14 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
   struct whitelist_entry *tmp_entry;
   u32 bkt;
 
-  FW_DEBUG(1, "ENTRY: add_whitelist_entry(af=%d, prefix=%d, dev=%s)",
-           af, prefix_len, dev_name ?: "null");
+  FW_DEBUG(1, "ENTRY: add_whitelist_entry(af=%d, prefix=%d, dev=%s)", af,
+           prefix_len, dev_name ?: "null");
+
+  /* Fast-path capacity check (lockless, may be stale) */
+  if (atomic_read(&fw->whitelist_count) >= MAX_WHITELIST_ENTRIES) {
+    fw_pr_warn("Whitelist full, cannot add entry");
+    return -ENOSPC;
+  }
 
   new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
   if (!new_entry) {
@@ -58,8 +64,7 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
   } else {
     bkt = hash_min(new_entry->addr.ipv4, WHITELIST_HASH_BITS);
     hlist_for_each_entry_rcu(tmp_entry, &fw->whitelist_table_ipv4[bkt], hash) {
-      if (tmp_entry->af == af &&
-          tmp_entry->addr.ipv4 == new_entry->addr.ipv4 &&
+      if (tmp_entry->af == af && tmp_entry->addr.ipv4 == new_entry->addr.ipv4 &&
           tmp_entry->mask.ipv4_mask == new_entry->mask.ipv4_mask) {
         spin_unlock(&fw->whitelist_lock);
         kfree(new_entry);
@@ -89,8 +94,7 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
                new_entry->mask.prefix_len, dev_name ?: "unknown");
   else
     fw_pr_info("Whitelisted %pI4/%d on %s", &new_entry->addr.ipv4,
-               inet_mask_len(new_entry->mask.ipv4_mask),
-               dev_name ?: "unknown");
+               inet_mask_len(new_entry->mask.ipv4_mask), dev_name ?: "unknown");
   return 0;
 }
 EXPORT_SYMBOL_GPL(add_whitelist_entry);
@@ -101,7 +105,8 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
   u32 bkt;
   int found = 0;
 
-  FW_DEBUG(1, "ENTRY: remove_whitelist_entry(af=%d, prefix=%d)", af, prefix_len);
+  FW_DEBUG(1, "ENTRY: remove_whitelist_entry(af=%d, prefix=%d)", af,
+           prefix_len);
 
   spin_lock(&fw->whitelist_lock);
   if (af == FW_AF_INET6) {
@@ -119,9 +124,13 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
     }
   } else {
     __be32 ipv4 = *(__be32 *)ip;
-    bkt = hash_min(ipv4, WHITELIST_HASH_BITS);
+    __be32 mask4 =
+        prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1));
+    __be32 net_ipv4 = ipv4 & mask4;
+    bkt = hash_min(net_ipv4, WHITELIST_HASH_BITS);
     hlist_for_each_entry(entry, &fw->whitelist_table_ipv4[bkt], hash) {
-      if (entry->af == af && entry->addr.ipv4 == ipv4) {
+      if (entry->af == af && entry->addr.ipv4 == net_ipv4 &&
+          entry->mask.ipv4_mask == mask4) {
         hlist_del_rcu(&entry->hash);
         atomic_dec(&fw->whitelist_count);
         found = 1;
@@ -163,8 +172,7 @@ bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip) {
     /* 子网匹配 */
     hash_for_each_rcu(fw->whitelist_table_ipv6, bkt, entry, hash) {
       u8 prefix = READ_ONCE(entry->mask.prefix_len);
-      if (prefix < 128 &&
-          ipv6_prefix_equal(ip6, &entry->addr.ipv6, prefix)) {
+      if (prefix < 128 && ipv6_prefix_equal(ip6, &entry->addr.ipv6, prefix)) {
         rcu_read_unlock();
         return true;
       }

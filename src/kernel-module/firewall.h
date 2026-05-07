@@ -117,38 +117,38 @@
 #define INET6_STR_LEN 48
 
 /* IP 地址族标识 */
-#define FW_AF_INET  2   /* AF_INET */
-#define FW_AF_INET6 10  /* AF_INET6 */
+#define FW_AF_INET 2   /* AF_INET */
+#define FW_AF_INET6 10 /* AF_INET6 */
 
 /* 白名单条目结构 - 支持 IPv4/IPv6 */
 struct whitelist_entry {
-  u8 af;                            /* 地址族: FW_AF_INET 或 FW_AF_INET6 */
+  u8 af; /* 地址族: FW_AF_INET 或 FW_AF_INET6 */
   union {
-    __be32 ipv4;                    /* IPv4 地址，网络字节序 */
-    struct in6_addr ipv6;           /* IPv6 地址 */
+    __be32 ipv4;          /* IPv4 地址，网络字节序 */
+    struct in6_addr ipv6; /* IPv6 地址 */
   } addr;
   union {
-    __be32 ipv4_mask;               /* IPv4 子网掩码 */
-    u8 prefix_len;                  /* IPv6 前缀长度 */
+    __be32 ipv4_mask; /* IPv4 子网掩码 */
+    u8 prefix_len;    /* IPv6 前缀长度 */
   } mask;
-  char device_name[16];             /* 网络设备名称（如 eth0） */
-  struct hlist_node hash;           /* 哈希表节点 */
-  struct rcu_head rcu_head;         /* 用于 RCU 释放 */
+  char device_name[16];     /* 网络设备名称（如 eth0） */
+  struct hlist_node hash;   /* 哈希表节点 */
+  struct rcu_head rcu_head; /* 用于 RCU 释放 */
 };
 
 /* 封禁条目结构 - 支持 IPv4/IPv6 */
 struct ban_entry {
-  u8 af;                            /* 地址族: FW_AF_INET 或 FW_AF_INET6 */
+  u8 af; /* 地址族: FW_AF_INET 或 FW_AF_INET6 */
   union {
-    __be32 ipv4;                    /* IPv4 地址，网络字节序 */
-    struct in6_addr ipv6;           /* IPv6 地址 */
+    __be32 ipv4;          /* IPv4 地址，网络字节序 */
+    struct in6_addr ipv6; /* IPv6 地址 */
   } addr;
-  unsigned long ban_time;           /* IP 被封禁的时间 */
-  unsigned long unban_time;         /* 解除封禁的时间（0 = 永久） */
-  atomic_t retry_count;             /* 保留供将来使用 */
-  bool is_permanent;                /* 永久封禁标志 */
+  unsigned long ban_time;   /* IP 被封禁的时间 */
+  unsigned long unban_time; /* 解除封禁的时间（0 = 永久） */
+  atomic_t retry_count;     /* 保留供将来使用 */
+  bool is_permanent;        /* 永久封禁标志 */
   struct hlist_node hash;
-  struct rcu_head rcu_head;         /* 用于 RCU 释放 */
+  struct rcu_head rcu_head; /* 用于 RCU 释放 */
 };
 
 /* 全局防火墙结构 */
@@ -210,7 +210,7 @@ struct firewall_info {
 int ban_ip(struct firewall_info *fw, u8 af, const void *ip);
 int ban_ip_permanent(struct firewall_info *fw, u8 af, const void *ip);
 int ban_ip_with_duration(struct firewall_info *fw, u8 af, const void *ip,
-                          unsigned long seconds);
+                         unsigned long seconds);
 int unban_ip(struct firewall_info *fw, u8 af, const void *ip);
 int unban_permanent_ip(struct firewall_info *fw, u8 af, const void *ip);
 int is_banned(struct firewall_info *fw, u8 af, const void *ip);
@@ -219,8 +219,7 @@ int check_flood_protection(void);
 
 /* whitelist.c */
 int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
-                        const void *mask, int prefix_len,
-                        const char *dev_name);
+                        const void *mask, int prefix_len, const char *dev_name);
 int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
                            int prefix_len);
 bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip);
@@ -273,7 +272,8 @@ static inline void ip_to_str(u8 af, const void *ip, char *buf, int len) {
   if (af == FW_AF_INET6) {
     const struct in6_addr *addr = ip;
     if (len < INET6_STR_LEN) {
-      if (len > 0) buf[0] = '\0';
+      if (len > 0)
+        buf[0] = '\0';
       return;
     }
     snprintf(buf, len, "%pI6", addr);
@@ -284,7 +284,8 @@ static inline void ip_to_str(u8 af, const void *ip, char *buf, int len) {
     unsigned int c = (ntohl(addr) >> 8) & 0xFF;
     unsigned int d = ntohl(addr) & 0xFF;
     if (len < 16) {
-      if (len > 0) buf[0] = '\0';
+      if (len > 0)
+        buf[0] = '\0';
       return;
     }
     snprintf(buf, len, "%u.%u.%u.%u", a, b, c, d);
@@ -315,7 +316,8 @@ static inline bool compare_ips(u8 af, const void *ip1, const void *ip2) {
 static inline u32 hash_ip(u8 af, const void *ip, int bits) {
   if (af == FW_AF_INET6) {
     const struct in6_addr *addr = ip;
-    return jhash(addr, sizeof(struct in6_addr), fw_hash_seed) & ((1 << bits) - 1);
+    return jhash(addr, sizeof(struct in6_addr), fw_hash_seed) &
+           ((1 << bits) - 1);
   }
   return hash_min(*(__be32 *)ip, bits);
 }
@@ -338,7 +340,8 @@ static inline u32 hash_ip_for_whitelist(u8 af, const void *ip, int bits) {
 /**
  * get_ban_table - 获取对应地址族的 ban 哈希表
  */
-static inline struct hlist_head *get_ban_table(struct firewall_info *fw, u8 af) {
+static inline struct hlist_head *get_ban_table(struct firewall_info *fw,
+                                               u8 af) {
   if (af == FW_AF_INET6)
     return fw->ban_table_ipv6;
   return fw->ban_table_ipv4;
@@ -347,7 +350,8 @@ static inline struct hlist_head *get_ban_table(struct firewall_info *fw, u8 af) 
 /**
  * get_whitelist_table - 获取对应地址族的 whitelist 哈希表
  */
-static inline struct hlist_head *get_whitelist_table(struct firewall_info *fw, u8 af) {
+static inline struct hlist_head *get_whitelist_table(struct firewall_info *fw,
+                                                     u8 af) {
   if (af == FW_AF_INET6)
     return fw->whitelist_table_ipv6;
   return fw->whitelist_table_ipv4;
@@ -402,8 +406,7 @@ static inline int validate_ipv4_address(__be32 ip, const char *ip_str,
  * 返回: 0 表示合法，-EINVAL 表示非法
  */
 static inline int validate_ipv6_address(const struct in6_addr *addr,
-                                        const char *ip_str,
-                                        const char *context,
+                                        const char *ip_str, const char *context,
                                         bool allow_loopback) {
   if (ipv6_addr_any(addr)) {
     fw_pr_warn("Attempt to %s invalid IPv6: %s", context, ip_str ?: "(null)");
@@ -429,12 +432,12 @@ static inline int validate_ipv6_address(const struct in6_addr *addr,
  * @context: 上下文描述
  * @allow_loopback: 是否允许回环地址
  */
-static inline int validate_ip_address(u8 af, const void *ip,
-                                      const char *ip_str,
+static inline int validate_ip_address(u8 af, const void *ip, const char *ip_str,
                                       const char *context,
                                       bool allow_loopback) {
   if (af == FW_AF_INET6)
-    return validate_ipv6_address((const struct in6_addr *)ip, ip_str, context, allow_loopback);
+    return validate_ipv6_address((const struct in6_addr *)ip, ip_str, context,
+                                 allow_loopback);
   return validate_ipv4_address(*(__be32 *)ip, ip_str, context, allow_loopback);
 }
 
