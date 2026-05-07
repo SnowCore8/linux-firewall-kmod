@@ -380,6 +380,11 @@ run_suite() {
         return 1
     fi
 
+    # 执行前重置数据，确保测试套件之间隔离
+    fw_log_debug "执行前重置测试数据: $suite_key"
+    fw_reset_all_data
+    sleep 0.3  # 等待 procfs 处理完成
+
     # 执行前验证模块就绪
     fw_log_debug "执行前检查模块状态: $suite_key"
     if ! check_module_ready; then

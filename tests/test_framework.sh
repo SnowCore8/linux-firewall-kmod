@@ -334,6 +334,60 @@ fw_whitelist_add() { echo "add $1" > "$PROC_WHITELIST" 2>/dev/null; fw_wait_proc
 fw_whitelist_remove() { echo "remove $1" > "$PROC_WHITELIST" 2>/dev/null; fw_wait_procfs; }
 
 # ============================================================================
+# 数据重置函数（测试套件之间隔离）
+# ============================================================================
+
+# 重置所有测试数据，确保每个测试套件从干净状态开始
+fw_reset_all_data() {
+    fw_log_debug "开始重置所有测试数据"
+
+    # 1. 清空封禁列表：读取当前封禁，逐个解封
+    if [[ -r "$PROC_BANS" ]]; then
+        local banned_ips
+        banned_ips=$(grep -oP '^\d+\.\d+\.\d+\.\d+' "$PROC_BANS" 2>/dev/null || true)
+        if [[ -n "$banned_ips" ]]; then
+            local count=0
+            while IFS= read -r ip; do
+                [[ -z "$ip" ]] && continue
+                echo "unban $ip" > "$PROC_BANS" 2>/dev/null || true
+                count=$((count + 1))
+            done <<< "$banned_ips"
+            fw_log_debug "已解封 $count 个 IP"
+            fw_wait_procfs
+        fi
+    fi
+
+    # 2. 清空手动添加的白名单（保留系统自动发现的条目）
+    if [[ -r "$PROC_WHITELIST" ]]; then
+        # 提取 device_name 为 manual 或 restored 的条目
+        local manual_entries
+        manual_entries=$(grep -E ' on (manual|restored)$' "$PROC_WHITELIST" 2>/dev/null | grep -oP '^[^\s/]+' || true)
+        if [[ -n "$manual_entries" ]]; then
+            local count=0
+            while IFS= read -r subnet; do
+                [[ -z "$subnet" ]] && continue
+                echo "remove $subnet" > "$PROC_WHITELIST" 2>/dev/null || true
+                count=$((count + 1))
+            done <<< "$manual_entries"
+            fw_log_debug "已移除 $count 个手动白名单条目"
+            fw_wait_procfs
+        fi
+    fi
+
+    # 3. 清理测试创建的临时文件
+    rm -f /tmp/fw_test_*.log 2>/dev/null || true
+    rm -f /tmp/fw_test_*.yaml 2>/dev/null || true
+    rm -f /tmp/fw_test_*.conf 2>/dev/null || true
+    rm -f /tmp/fw_test_*.tmp 2>/dev/null || true
+
+    # 4. 清理测试用 SQLite 数据库
+    rm -f /tmp/fw_test_*.db 2>/dev/null || true
+    rm -f /tmp/test_bans.db 2>/dev/null || true
+
+    fw_log_debug "测试数据重置完成"
+}
+
+# ============================================================================
 # 基准测试辅助函数
 # ============================================================================
 
@@ -621,6 +675,9 @@ fw_warn() {
 }
 
 fw_cleanup() {
+    # 先重置数据（需要在模块卸载前执行，否则 procfs 操作会失败）
+    fw_reset_all_data
+
     # 卸载内核模块（测试模式）
     if lsmod | grep -q "^firewall"; then
         rmmod firewall 2>/dev/null || true
@@ -630,6 +687,7 @@ fw_cleanup() {
     rm -f /tmp/fw_test_*.log 2>/dev/null
     rm -f /tmp/fw_test_*.yaml 2>/dev/null
     rm -f /tmp/fw_test_*.conf 2>/dev/null
+    rm -f /tmp/fw_test_*.tmp 2>/dev/null
     
     # 清理编译临时文件
     rm -f /tmp/fw_compile_*.log 2>/dev/null
