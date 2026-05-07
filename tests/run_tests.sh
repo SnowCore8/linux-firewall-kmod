@@ -341,6 +341,20 @@ run_suites_parallel() {
     if [[ $failed -gt 0 ]]; then
         fw_log_warn "$failed 个并行测试套件失败"
     fi
+
+    # 并行组执行完毕，检查模块状态（父 shell 级别）
+    fw_log_debug "并行组执行完毕，检查模块状态"
+    if ! check_module_ready; then
+        fw_log_warn "并行测试导致模块卸载，尝试重新加载..."
+        fw_ensure_module_unloaded 2>/dev/null || true
+        rm -f /var/lib/firewall/state 2>/dev/null
+        if fw_ensure_module_loaded "$KERNEL_MODULE_PATH"; then
+            fw_log_info "并行组后模块重新加载成功"
+            sleep 0.5
+        else
+            fw_log_error "并行组后模块重新加载失败"
+        fi
+    fi
 }
 
 # ============================================================================
@@ -430,10 +444,15 @@ run_suite() {
     # 清理状态文件，防止模块卸载时保存的残余条目影响后续测试
     fw_cleanup_state
     
-    # 执行后再次检查模块状态
-    fw_log_debug "执行后检查模块状态: $suite_key"
-    if ! lsmod | grep -q "^firewall"; then
-        fw_log_warn "测试套件 $suite_key 执行后模块已卸载"
+    # 执行后检查模块状态，确保后续套件不受影响
+    if ! check_module_ready; then
+        fw_log_warn "测试套件 $suite_key 执行后模块未就绪，尝试重新加载..."
+        if fw_ensure_module_loaded "$KERNEL_MODULE_PATH"; then
+            fw_log_info "模块重新加载成功"
+            sleep 0.5
+        else
+            fw_log_error "模块重新加载失败"
+        fi
     fi
     
     return $suite_exit_code

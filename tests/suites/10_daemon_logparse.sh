@@ -24,10 +24,17 @@ Mar 10 10:30:01 server sshd[1234]: Failed password for root from port ssh2
 EOF
 
 # 10.3 内核模块检查
-if ! lsmod | grep -q "^firewall"; then
-    skip_test "内核模块未加载，跳过处理测试"
-    rm -f "$local_test_log"
-    return 0
+if ! check_module_ready; then
+    fw_log_warn "内核模块意外卸载，尝试重新加载..."
+    rm -f /var/lib/firewall/state 2>/dev/null
+    if fw_ensure_module_loaded "$KERNEL_MODULE_PATH"; then
+        fw_log_info "模块重新加载成功，继续执行"
+        sleep 0.5
+    else
+        skip_test "内核模块未加载且重新加载失败，跳过处理测试"
+        rm -f "$local_test_log"
+        return 0
+    fi
 fi
 
 # 10.4 守护进程处理测试日志
