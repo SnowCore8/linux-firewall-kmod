@@ -141,7 +141,7 @@ struct config {
 
 /* 失败尝试跟踪器 */
 struct failed_entry {
-  char ip[INET_ADDRSTRLEN + 1]; /* +1 用于 null 终止符 */
+  char ip[INET6_ADDRSTRLEN + 1]; /* +1 用于 null 终止符 */
   time_t timestamps[MAX_FAILED_TIMESTAMPS];
   unsigned int count;
   struct failed_entry *next;
@@ -187,10 +187,14 @@ typedef enum {
   BAN_ACTION_UNBAN_PERM /* 移除永久封禁 */
 } ban_action_t;
 
-/* 保存已验证 IP 信息的结构体 */
+/* 保存已验证 IP 信息的结构体 (支持 IPv4/IPv6) */
 typedef struct {
-  struct in_addr addr;
-  uint32_t ip_num; /* 网络字节序 */
+  int af; /* AF_INET 或 AF_INET6 */
+  union {
+    struct in_addr addr4;
+    struct in6_addr addr6;
+  } addr;
+  uint32_t ip_num; /* 网络字节序 (仅 IPv4 有效) */
 } validated_ip_t;
 
 /* 外部函数声明 */

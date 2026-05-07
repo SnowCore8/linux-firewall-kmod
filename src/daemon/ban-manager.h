@@ -1,5 +1,5 @@
 /*
- * ban-manager.h - 封禁/解封操作头文件
+ * ban-manager.h - 封禁/解封操作头文件 (支持 IPv4/IPv6)
  */
 
 #ifndef BAN_MANAGER_H
@@ -7,8 +7,11 @@
 
 #include "firewall-daemon.h"
 
-/* 验证并解析 IPv4 地址字符串 */
+/* 验证并解析 IPv4 地址字符串 (向后兼容) */
 int validate_ipv4(const char *ip, validated_ip_t *out);
+
+/* 验证并解析 IP 地址字符串 (支持 IPv4/IPv6) */
+int validate_ip(const char *ip, validated_ip_t *out);
 
 /* 安全的 procfs 文件操作辅助函数 */
 int secure_procfs_write(const char *path, const char *data, size_t data_len);

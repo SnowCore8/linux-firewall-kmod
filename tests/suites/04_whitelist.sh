@@ -57,4 +57,8 @@ local_final_count=$(fw_count_whitelist)
 assert_le "$local_final_count" 64 "白名单数量在限制内 (64)，实际 $local_final_count"
 
 # 清理
+for i in $(seq 1 50); do
+    ip="10.$((i/255)).$((i%255)).0/24"
+    echo "remove $ip" > "$PROC_WHITELIST" 2>/dev/null || true
+done
 fw_unban_multiple $(for i in $(seq 1 50); do echo "10.$((i/255)).$((i%255)).0/24"; done) 2>/dev/null || true

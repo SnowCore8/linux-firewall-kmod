@@ -564,6 +564,47 @@ int sqlite_is_permanent_banned(sqlite_db_t *db, uint32_t ip_num) {
 }
 
 /**
+ * 检查 IP 是否在永久黑名单中 (IPv6)
+ * 使用 ip TEXT 字段进行查找
+ */
+int sqlite_is_permanent_banned_ipv6(sqlite_db_t *db, const char *ip) {
+  if (!db || !ip) {
+    fprintf(stderr, "firewall: sqlite_is_permanent_banned_ipv6: invalid parameter\n");
+    return -1;
+  }
+
+  pthread_mutex_lock(&db->lock);
+
+  sqlite3_stmt *stmt = NULL;
+  int rc = sqlite3_prepare_v2(db->conn,
+                              "SELECT 1 FROM permanent_banlist WHERE ip = ? "
+                              "AND is_active = 1 LIMIT 1;",
+                              -1, &stmt, NULL);
+  if (rc != SQLITE_OK) {
+    fprintf(stderr, "firewall: 准备 IPv6 CHECK 语句失败：%s\n",
+            sqlite3_errmsg(db->conn));
+    pthread_mutex_unlock(&db->lock);
+    return -1;
+  }
+
+  sqlite3_bind_text(stmt, 1, ip, -1, SQLITE_TRANSIENT);
+  rc = sqlite3_step(stmt);
+
+  sqlite3_finalize(stmt);
+  pthread_mutex_unlock(&db->lock);
+
+  if (rc == SQLITE_ROW) {
+    return 1;
+  } else if (rc == SQLITE_DONE) {
+    return 0;
+  } else {
+    fprintf(stderr, "firewall: 查询 IPv6 永久封禁失败：%s\n",
+            sqlite3_errmsg(db->conn));
+    return -1;
+  }
+}
+
+/**
  * 加载所有活动的永久黑名单条目
  * 使用缓存的 prepared statement，避免重复编译 SQL
  */

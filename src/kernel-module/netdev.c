@@ -1,5 +1,5 @@
 /*
- * netdev.c - 网络设备通知器
+ * netdev.c - 网络设备通知器 (支持 IPv4/IPv6)
  *
  * 包含网络设备事件监听、系统 IP 自动发现和白名单同步相关的函数实现。
  */
@@ -8,8 +8,15 @@
 
 /* 自动发现的临时存储结构 */
 struct temp_ip_entry {
-  __be32 ip;
-  __be32 mask;
+  u8 af;
+  union {
+    __be32 ipv4;
+    struct in6_addr ipv6;
+  } addr;
+  union {
+    __be32 ipv4_mask;
+    u8 prefix_len;
+  } mask;
   char name[16];
 };
 
@@ -21,8 +28,6 @@ void sync_work_handler(struct work_struct *work) {
   struct temp_ip_entry *current_ips;
   int current_count = 0;
   struct net_device *dev;
-  struct in_device *in_dev;
-  struct in_ifaddr *ifa;
   struct whitelist_entry *entry;
   struct hlist_node *tmp;
   u32 bkt;
@@ -49,34 +54,63 @@ void sync_work_handler(struct work_struct *work) {
     if (!(dev->flags & IFF_UP))
       continue;
 
-    in_dev = __in_dev_get_rcu(dev);
-    if (in_dev) {
-      for (ifa = rcu_dereference(in_dev->ifa_list); ifa;
-           ifa = rcu_dereference(ifa->ifa_next)) {
-        if (current_count >= MAX_DISCOVERED_IPS)
-          break;
+    /* IPv4 地址发现 */
+    {
+      struct in_device *in_dev = __in_dev_get_rcu(dev);
+      if (in_dev) {
+        struct in_ifaddr *ifa;
+        for (ifa = rcu_dereference(in_dev->ifa_list); ifa;
+             ifa = rcu_dereference(ifa->ifa_next)) {
+          if (current_count >= MAX_DISCOVERED_IPS)
+            break;
+          if (!ifa->ifa_local)
+            continue;
+          current_ips[current_count].af = FW_AF_INET;
+          current_ips[current_count].addr.ipv4 = ifa->ifa_local;
+          current_ips[current_count].mask.ipv4_mask = ifa->ifa_mask;
+          strscpy(current_ips[current_count].name, dev->name, 16);
+          current_count++;
+        }
+      }
+    }
 
-        if (!ifa->ifa_local)
-          continue;
-
-        current_ips[current_count].ip = ifa->ifa_local;
-        current_ips[current_count].mask = ifa->ifa_mask;
-        strscpy(current_ips[current_count].name, dev->name, 16);
-        current_count++;
+    /* IPv6 地址发现 */
+    {
+      struct inet6_dev *in6_dev = __in6_dev_get(dev);
+      if (in6_dev) {
+        struct inet6_ifaddr *ifp;
+        read_lock_bh(&in6_dev->lock);
+        list_for_each_entry(ifp, &in6_dev->addr_list, if_list) {
+          if (current_count >= MAX_DISCOVERED_IPS)
+            break;
+          current_ips[current_count].af = FW_AF_INET6;
+          current_ips[current_count].addr.ipv6 = ifp->addr;
+          current_ips[current_count].mask.prefix_len = ifp->prefix_len;
+          strscpy(current_ips[current_count].name, dev->name, 16);
+          current_count++;
+        }
+        read_unlock_bh(&in6_dev->lock);
       }
     }
   }
   rcu_read_unlock();
 
   if (current_count == 0) {
-    fw_pr_debug("No active network interfaces with IPv4 found");
+    fw_pr_debug("No active network interfaces found");
     kfree(current_ips);
     return;
   }
 
   struct current_ip_lookup {
-    __be32 ip;
-    __be32 mask;
+    u8 af;
+    union {
+      __be32 ipv4;
+      struct in6_addr ipv6;
+    } addr;
+    union {
+      __be32 ipv4_mask;
+      u8 prefix_len;
+    } mask;
     bool found;
   };
   struct current_ip_lookup *lookup_table;
@@ -88,32 +122,51 @@ void sync_work_handler(struct work_struct *work) {
     return;
   }
   for (i = 0; i < current_count; i++) {
-    lookup_table[i].ip = current_ips[i].ip & current_ips[i].mask;
-    lookup_table[i].mask = current_ips[i].mask;
+    lookup_table[i].af = current_ips[i].af;
+    if (current_ips[i].af == FW_AF_INET6) {
+      lookup_table[i].addr.ipv6 = current_ips[i].addr.ipv6;
+      lookup_table[i].mask.prefix_len = current_ips[i].mask.prefix_len;
+    } else {
+      lookup_table[i].addr.ipv4 = current_ips[i].addr.ipv4 & current_ips[i].mask.ipv4_mask;
+      lookup_table[i].mask.ipv4_mask = current_ips[i].mask.ipv4_mask;
+    }
     lookup_table[i].found = false;
   }
 
   spin_lock(&fw->whitelist_lock);
-  hash_for_each_safe(fw->whitelist_table, bkt, tmp, entry, hash) {
+  hash_for_each_safe(fw->whitelist_table_ipv4, bkt, tmp, entry, hash) {
     if (strcmp(entry->device_name, "manual") == 0 ||
-        strcmp(entry->device_name, "restored") == 0) {
+        strcmp(entry->device_name, "restored") == 0)
       continue;
-    }
-
     for (i = 0; i < current_count; i++) {
-      __be32 normalized_current = current_ips[i].ip & current_ips[i].mask;
-      if (entry->ip == normalized_current &&
-          entry->mask == current_ips[i].mask) {
+      if (lookup_table[i].af != FW_AF_INET)
+        continue;
+      if (entry->addr.ipv4 == lookup_table[i].addr.ipv4 &&
+          entry->mask.ipv4_mask == lookup_table[i].mask.ipv4_mask) {
         lookup_table[i].found = true;
         break;
       }
     }
-
     if (i == current_count) {
-      char ip_str[INET_ADDRSTRLEN];
-      ipv4_to_str(entry->ip, ip_str, sizeof(ip_str));
-      FW_DEBUG(2, "Removing stale whitelist entry for %s/%d on %s", ip_str,
-               inet_mask_len(entry->mask), entry->device_name);
+      hlist_del_rcu(&entry->hash);
+      atomic_dec(&fw->whitelist_count);
+      call_rcu(&entry->rcu_head, free_whitelist_entry_rcu);
+    }
+  }
+  hash_for_each_safe(fw->whitelist_table_ipv6, bkt, tmp, entry, hash) {
+    if (strcmp(entry->device_name, "manual") == 0 ||
+        strcmp(entry->device_name, "restored") == 0)
+      continue;
+    for (i = 0; i < current_count; i++) {
+      if (lookup_table[i].af != FW_AF_INET6)
+        continue;
+      if (ipv6_addr_equal(&entry->addr.ipv6, &lookup_table[i].addr.ipv6) &&
+          entry->mask.prefix_len == lookup_table[i].mask.prefix_len) {
+        lookup_table[i].found = true;
+        break;
+      }
+    }
+    if (i == current_count) {
       hlist_del_rcu(&entry->hash);
       atomic_dec(&fw->whitelist_count);
       call_rcu(&entry->rcu_head, free_whitelist_entry_rcu);
@@ -123,11 +176,19 @@ void sync_work_handler(struct work_struct *work) {
 
   for (i = 0; i < current_count; i++) {
     if (!lookup_table[i].found) {
-      if (add_whitelist_entry(fw, current_ips[i].ip, current_ips[i].mask,
-                              current_ips[i].name) < 0) {
-        fw_pr_warn("Failed to add system IPv4 %pI4 to whitelist during sync",
-                   &current_ips[i].ip);
+      int ret;
+      if (current_ips[i].af == FW_AF_INET6) {
+        ret = add_whitelist_entry(fw, FW_AF_INET6, &current_ips[i].addr.ipv6,
+                                  NULL, current_ips[i].mask.prefix_len,
+                                  current_ips[i].name);
+      } else {
+        ret = add_whitelist_entry(fw, FW_AF_INET, &current_ips[i].addr.ipv4,
+                                  &current_ips[i].mask.ipv4_mask,
+                                  inet_mask_len(current_ips[i].mask.ipv4_mask),
+                                  current_ips[i].name);
       }
+      if (ret < 0)
+        fw_pr_warn("Failed to add system IP to whitelist during sync");
     }
   }
 
@@ -241,8 +302,6 @@ void auto_discover_system_ips(struct firewall_info *fw) {
   int temp_count = 0;
 
   struct net_device *dev;
-  struct in_device *in_dev;
-  struct in_ifaddr *ifa;
 
   FW_DEBUG(1, "ENTRY: auto_discover_system_ips");
 
@@ -250,8 +309,6 @@ void auto_discover_system_ips(struct firewall_info *fw) {
                            GFP_KERNEL);
   if (!temp_ips) {
     fw_pr_err("Failed to allocate temp_ips");
-    FW_DEBUG(1,
-             "EXIT: auto_discover_system_ips -> void (alloc temp_ips failed)");
     return;
   }
 
@@ -262,32 +319,61 @@ void auto_discover_system_ips(struct firewall_info *fw) {
     if (!(dev->flags & IFF_UP))
       continue;
 
-    in_dev = __in_dev_get_rcu(dev);
-    if (in_dev) {
-      for (ifa = rcu_dereference(in_dev->ifa_list); ifa;
-           ifa = rcu_dereference(ifa->ifa_next)) {
-        if (temp_count >= MAX_DISCOVERED_IPS)
-          break;
-
-        if (!ifa->ifa_local) {
-          continue;
+    /* IPv4 发现 */
+    {
+      struct in_device *in_dev = __in_dev_get_rcu(dev);
+      if (in_dev) {
+        struct in_ifaddr *ifa;
+        for (ifa = rcu_dereference(in_dev->ifa_list); ifa;
+             ifa = rcu_dereference(ifa->ifa_next)) {
+          if (temp_count >= MAX_DISCOVERED_IPS)
+            break;
+          if (!ifa->ifa_local)
+            continue;
+          temp_ips[temp_count].af = FW_AF_INET;
+          temp_ips[temp_count].addr.ipv4 = ifa->ifa_local;
+          temp_ips[temp_count].mask.ipv4_mask = ifa->ifa_mask;
+          strscpy(temp_ips[temp_count].name, dev->name, 16);
+          temp_count++;
         }
+      }
+    }
 
-        temp_ips[temp_count].ip = ifa->ifa_local;
-        temp_ips[temp_count].mask = ifa->ifa_mask;
-        strscpy(temp_ips[temp_count].name, dev->name, 16);
-        temp_count++;
+    /* IPv6 发现 */
+    {
+      struct inet6_dev *in6_dev = __in6_dev_get(dev);
+      if (in6_dev) {
+        struct inet6_ifaddr *ifp;
+        read_lock_bh(&in6_dev->lock);
+        list_for_each_entry(ifp, &in6_dev->addr_list, if_list) {
+          if (temp_count >= MAX_DISCOVERED_IPS)
+            break;
+          temp_ips[temp_count].af = FW_AF_INET6;
+          temp_ips[temp_count].addr.ipv6 = ifp->addr;
+          temp_ips[temp_count].mask.prefix_len = ifp->prefix_len;
+          strscpy(temp_ips[temp_count].name, dev->name, 16);
+          temp_count++;
+        }
+        read_unlock_bh(&in6_dev->lock);
       }
     }
   }
   rcu_read_unlock();
 
   for (int i = 0; i < temp_count; i++) {
-    if (add_whitelist_entry(fw, temp_ips[i].ip, temp_ips[i].mask,
-                            temp_ips[i].name) < 0) {
-      fw_pr_warn("Failed to add system IPv4 %pI4 to whitelist",
-                 &temp_ips[i].ip);
+    int ret;
+    if (temp_ips[i].af == FW_AF_INET6) {
+      ret = add_whitelist_entry(fw, FW_AF_INET6, &temp_ips[i].addr.ipv6,
+                                NULL, temp_ips[i].mask.prefix_len,
+                                temp_ips[i].name);
+    } else {
+      ret = add_whitelist_entry(fw, FW_AF_INET, &temp_ips[i].addr.ipv4,
+                                &temp_ips[i].mask.ipv4_mask,
+                                inet_mask_len(temp_ips[i].mask.ipv4_mask),
+                                temp_ips[i].name);
     }
+    if (ret < 0)
+      fw_pr_warn("Failed to add system IP to whitelist");
   }
 
   fw_pr_info_ratelimited("Auto-discovery complete. %d entries",

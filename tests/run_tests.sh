@@ -386,6 +386,8 @@ run_suite() {
         fw_log_warn "模块未就绪，尝试重新加载..."
         # 尝试重新加载模块
         fw_ensure_module_unloaded 2>/dev/null || true
+        # 清理状态文件，防止残余条目影响测试
+        rm -f /var/lib/firewall/state 2>/dev/null
         if fw_ensure_module_loaded "$KERNEL_MODULE_PATH"; then
             fw_log_info "模块重新加载成功，继续执行 $suite_key"
             sleep 0.5
@@ -419,6 +421,9 @@ run_suite() {
     fi
     
     fw_log_debug "测试套件 $suite_key 完成，耗时: ${duration}s"
+    
+    # 清理状态文件，防止模块卸载时保存的残余条目影响后续测试
+    rm -f /var/lib/firewall/state 2>/dev/null
     
     # 执行后再次检查模块状态
     fw_log_debug "执行后检查模块状态: $suite_key"

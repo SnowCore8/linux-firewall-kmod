@@ -8,9 +8,11 @@
 #include <linux/inet.h>
 #include <linux/inetdevice.h>
 #include <linux/ip.h>
+#include <linux/ipv6.h>
 #include <linux/netdevice.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv4.h>
+#include <linux/netfilter_ipv6.h>
 #include <linux/overflow.h>
 #include <linux/proc_fs.h>
 #include <linux/rcupdate.h>
@@ -111,29 +113,50 @@
 /* 自动发现 IP 的最大数量（与白名单容量一致） */
 #define MAX_DISCOVERED_IPS MAX_WHITELIST_ENTRIES
 
-/* 白名单条目结构 - 仅 IPv4 */
+/* IPv6 地址字符串最大长度 (e.g., "2001:db8::ffff:ffff:ffff:ffff") */
+#define INET6_STR_LEN 48
+
+/* IP 地址族标识 */
+#define FW_AF_INET  2   /* AF_INET */
+#define FW_AF_INET6 10  /* AF_INET6 */
+
+/* 白名单条目结构 - 支持 IPv4/IPv6 */
 struct whitelist_entry {
-  __be32 ip;                /* IPv4 地址，网络字节序 */
-  __be32 mask;              /* 子网掩码 */
-  char device_name[16];     /* 网络设备名称（如 eth0） */
-  struct hlist_node hash;   /* 哈希表节点 */
-  struct rcu_head rcu_head; /* 用于 RCU 释放 */
+  u8 af;                            /* 地址族: FW_AF_INET 或 FW_AF_INET6 */
+  union {
+    __be32 ipv4;                    /* IPv4 地址，网络字节序 */
+    struct in6_addr ipv6;           /* IPv6 地址 */
+  } addr;
+  union {
+    __be32 ipv4_mask;               /* IPv4 子网掩码 */
+    u8 prefix_len;                  /* IPv6 前缀长度 */
+  } mask;
+  char device_name[16];             /* 网络设备名称（如 eth0） */
+  struct hlist_node hash;           /* 哈希表节点 */
+  struct rcu_head rcu_head;         /* 用于 RCU 释放 */
 };
 
-/* 封禁条目结构 - 仅 IPv4 */
+/* 封禁条目结构 - 支持 IPv4/IPv6 */
 struct ban_entry {
-  __be32 ip;                /* IPv4 地址，网络字节序 */
-  unsigned long ban_time;   /* IP 被封禁的时间 */
-  unsigned long unban_time; /* 解除封禁的时间（0 = 永久） */
-  atomic_t retry_count;     /* 保留供将来使用 */
-  bool is_permanent;        /* 永久封禁标志 */
+  u8 af;                            /* 地址族: FW_AF_INET 或 FW_AF_INET6 */
+  union {
+    __be32 ipv4;                    /* IPv4 地址，网络字节序 */
+    struct in6_addr ipv6;           /* IPv6 地址 */
+  } addr;
+  unsigned long ban_time;           /* IP 被封禁的时间 */
+  unsigned long unban_time;         /* 解除封禁的时间（0 = 永久） */
+  atomic_t retry_count;             /* 保留供将来使用 */
+  bool is_permanent;                /* 永久封禁标志 */
   struct hlist_node hash;
-  struct rcu_head rcu_head; /* 用于 RCU 释放 */
+  struct rcu_head rcu_head;         /* 用于 RCU 释放 */
 };
 
 /* 全局防火墙结构 */
 struct firewall_info {
-  DECLARE_HASHTABLE(ban_table, BAN_HASH_BITS);
+  /* IPv4 封禁哈希表 */
+  DECLARE_HASHTABLE(ban_table_ipv4, BAN_HASH_BITS);
+  /* IPv6 封禁哈希表 */
+  DECLARE_HASHTABLE(ban_table_ipv6, BAN_HASH_BITS);
   spinlock_t lock;
   atomic_t ban_count;
   atomic_t shutting_down; /* 防止关闭期间定时器触发的标志 */
@@ -160,8 +183,10 @@ struct firewall_info {
   atomic_t cleanup_cycles;         /* 清理定时器周期数 */
   atomic_t cleanup_expired_total;  /* 已清理的过期条目总数 */
 
-  /* 白名单哈希表 */
-  DECLARE_HASHTABLE(whitelist_table, WHITELIST_HASH_BITS);
+  /* IPv4 白名单哈希表 */
+  DECLARE_HASHTABLE(whitelist_table_ipv4, WHITELIST_HASH_BITS);
+  /* IPv6 白名单哈希表 */
+  DECLARE_HASHTABLE(whitelist_table_ipv6, WHITELIST_HASH_BITS);
   spinlock_t whitelist_lock;
   atomic_t whitelist_count;
 
@@ -182,21 +207,23 @@ struct firewall_info {
 /* 函数声明 */
 
 /* ban-manager.c */
-int ban_ip(struct firewall_info *fw, __be32 ip);
-int ban_ip_permanent(struct firewall_info *fw, __be32 ip);
-int ban_ip_with_duration(struct firewall_info *fw, __be32 ip,
-                         unsigned long seconds);
-int unban_ip(struct firewall_info *fw, __be32 ip);
-int unban_permanent_ip(struct firewall_info *fw, __be32 ip);
-int is_banned(struct firewall_info *fw, __be32 ip);
-int is_permanently_banned(struct firewall_info *fw, __be32 ip);
+int ban_ip(struct firewall_info *fw, u8 af, const void *ip);
+int ban_ip_permanent(struct firewall_info *fw, u8 af, const void *ip);
+int ban_ip_with_duration(struct firewall_info *fw, u8 af, const void *ip,
+                          unsigned long seconds);
+int unban_ip(struct firewall_info *fw, u8 af, const void *ip);
+int unban_permanent_ip(struct firewall_info *fw, u8 af, const void *ip);
+int is_banned(struct firewall_info *fw, u8 af, const void *ip);
+int is_permanently_banned(struct firewall_info *fw, u8 af, const void *ip);
 int check_flood_protection(void);
 
 /* whitelist.c */
-int add_whitelist_entry(struct firewall_info *fw, __be32 ip, __be32 mask,
+int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
+                        const void *mask, int prefix_len,
                         const char *dev_name);
-int remove_whitelist_entry(struct firewall_info *fw, __be32 ip);
-bool is_in_whitelist(struct firewall_info *fw, __be32 ip);
+int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
+                           int prefix_len);
+bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip);
 
 /* netdev.c */
 void auto_discover_system_ips(struct firewall_info *fw);
@@ -225,6 +252,7 @@ struct firewall_info *get_fw_info(void);
 
 /* Netfilter 钩子操作结构（在 netfilter.c 中定义） */
 extern struct nf_hook_ops nf_ops_ipv4;
+extern struct nf_hook_ops nf_ops_ipv6;
 
 /* ============================================================================
  * 公共内联辅助函数
@@ -232,46 +260,103 @@ extern struct nf_hook_ops nf_ops_ipv4;
  */
 
 /**
- * ipv4_to_str - 将 IPv4 地址转换为点分十进制字符串
- * @ip: IPv4 地址（网络字节序）
- * @buf: 输出缓冲区
+ * ip_to_str - 将 IP 地址转换为字符串
+ * @af: 地址族 (FW_AF_INET 或 FW_AF_INET6)
+ * @ip: IP 地址指针
+ * @buf: 输出缓冲区 (至少 INET6_STR_LEN 字节)
  * @len: 缓冲区长度
  */
-static inline void ipv4_to_str(__be32 ip, char *buf, int len) {
-  unsigned int a = ntohl(ip) >> 24;
-  unsigned int b = (ntohl(ip) >> 16) & 0xFF;
-  unsigned int c = (ntohl(ip) >> 8) & 0xFF;
-  unsigned int d = ntohl(ip) & 0xFF;
-
-  if (len < 16) {
-    if (len > 0) {
-      buf[0] = '\0';
+static inline void ip_to_str(u8 af, const void *ip, char *buf, int len) {
+  if (af == FW_AF_INET6) {
+    const struct in6_addr *addr = ip;
+    if (len < INET6_STR_LEN) {
+      if (len > 0) buf[0] = '\0';
+      return;
     }
-    return;
+    snprintf(buf, len, "%pI6", addr);
+  } else {
+    __be32 addr = *(__be32 *)ip;
+    unsigned int a = ntohl(addr) >> 24;
+    unsigned int b = (ntohl(addr) >> 16) & 0xFF;
+    unsigned int c = (ntohl(addr) >> 8) & 0xFF;
+    unsigned int d = ntohl(addr) & 0xFF;
+    if (len < 16) {
+      if (len > 0) buf[0] = '\0';
+      return;
+    }
+    snprintf(buf, len, "%u.%u.%u.%u", a, b, c, d);
   }
-
-  snprintf(buf, len, "%u.%u.%u.%u", a, b, c, d);
 }
 
 /**
- * compare_ips - 比较两个 IPv4 地址是否相等
- * @ip1: 第一个 IPv4 地址
- * @ip2: 第二个 IPv4 地址
+ * compare_ips - 比较两个 IP 地址是否相等
+ * @af: 地址族
+ * @ip1: 第一个 IP 地址
+ * @ip2: 第二个 IP 地址
  * 返回: true 如果相等，否则 false
  */
-static inline bool compare_ips(__be32 ip1, __be32 ip2) { return ip1 == ip2; }
+static inline bool compare_ips(u8 af, const void *ip1, const void *ip2) {
+  if (af == FW_AF_INET6)
+    return ipv6_addr_equal((const struct in6_addr *)ip1,
+                           (const struct in6_addr *)ip2);
+  return *(__be32 *)ip1 == *(__be32 *)ip2;
+}
+
+/**
+ * hash_ip - 计算 IP 地址的哈希值
+ * @af: 地址族
+ * @ip: IP 地址
+ * @bits: 哈希表位数
+ * 返回: 哈希值
+ */
+static inline u32 hash_ip(u8 af, const void *ip, int bits) {
+  if (af == FW_AF_INET6) {
+    const struct in6_addr *addr = ip;
+    return jhash(addr, sizeof(struct in6_addr), 0) & ((1 << bits) - 1);
+  }
+  return hash_min(*(__be32 *)ip, bits);
+}
+
+/**
+ * hash_ip_for_ban - 计算用于 ban_table 的哈希值
+ * 使用 jhash2 确保 IPv4 和 IPv6 分布均匀
+ */
+static inline u32 hash_ip_for_ban(u8 af, const void *ip, int bits) {
+  return hash_ip(af, ip, bits);
+}
+
+/**
+ * hash_ip_for_whitelist - 计算用于 whitelist_table 的哈希值
+ */
+static inline u32 hash_ip_for_whitelist(u8 af, const void *ip, int bits) {
+  return hash_ip(af, ip, bits);
+}
+
+/**
+ * get_ban_table - 获取对应地址族的 ban 哈希表
+ */
+static inline struct hlist_head *get_ban_table(struct firewall_info *fw, u8 af) {
+  if (af == FW_AF_INET6)
+    return fw->ban_table_ipv6;
+  return fw->ban_table_ipv4;
+}
+
+/**
+ * get_whitelist_table - 获取对应地址族的 whitelist 哈希表
+ */
+static inline struct hlist_head *get_whitelist_table(struct firewall_info *fw, u8 af) {
+  if (af == FW_AF_INET6)
+    return fw->whitelist_table_ipv6;
+  return fw->whitelist_table_ipv4;
+}
 
 /**
  * validate_ipv4_address - 验证 IPv4 地址是否合法
  * @ip: IPv4 地址（网络字节序）
  * @ip_str: IP 字符串（用于日志，可为 NULL）
  * @context: 上下文描述（如 "ban"、"whitelist"）
- * @allow_loopback: 是否允许回环地址（系统自动发现时设为 true）
+ * @allow_loopback: 是否允许回环地址
  * 返回: 0 表示合法，-EINVAL 表示非法
- *
- * 注意：当 allow_loopback=true 时，跳过回环地址检查，用于系统 IP 自动发现
- * 场景（如 lo 设备的 127.0.0.0/8）。用户手动操作时仍应传入 false
- * 以保持安全防护。
  */
 static inline int validate_ipv4_address(__be32 ip, const char *ip_str,
                                         const char *context,
@@ -282,7 +367,6 @@ static inline int validate_ipv4_address(__be32 ip, const char *ip_str,
     fw_pr_warn("Attempt to %s invalid IPv4: %s", context, ip_str ?: "(null)");
     return -EINVAL;
   }
-  /* 回环地址检查：仅当 allow_loopback=false 时拒绝 */
   if (!allow_loopback && (ip_num & 0xFF000000) == 0x7F000000) {
     fw_pr_warn("Attempt to %s loopback IPv4: %s", context, ip_str ?: "(null)");
     return -EINVAL;
@@ -304,6 +388,51 @@ static inline int validate_ipv4_address(__be32 ip, const char *ip_str,
   }
 
   return 0;
+}
+
+/**
+ * validate_ipv6_address - 验证 IPv6 地址是否合法
+ * @addr: IPv6 地址
+ * @ip_str: IP 字符串（用于日志，可为 NULL）
+ * @context: 上下文描述
+ * @allow_loopback: 是否允许回环地址
+ * 返回: 0 表示合法，-EINVAL 表示非法
+ */
+static inline int validate_ipv6_address(const struct in6_addr *addr,
+                                        const char *ip_str,
+                                        const char *context,
+                                        bool allow_loopback) {
+  if (ipv6_addr_any(addr) || ipv6_addr_any(addr)) {
+    fw_pr_warn("Attempt to %s invalid IPv6: %s", context, ip_str ?: "(null)");
+    return -EINVAL;
+  }
+  if (!allow_loopback && ipv6_addr_loopback(addr)) {
+    fw_pr_warn("Attempt to %s loopback IPv6: %s", context, ip_str ?: "(null)");
+    return -EINVAL;
+  }
+  /* 拒绝 multicast 和 link-local */
+  if (ipv6_addr_is_multicast(addr)) {
+    fw_pr_warn("Attempt to %s multicast IPv6: %s", context, ip_str ?: "(null)");
+    return -EINVAL;
+  }
+  return 0;
+}
+
+/**
+ * validate_ip_address - 统一 IP 地址验证入口
+ * @af: 地址族
+ * @ip: IP 地址
+ * @ip_str: IP 字符串（用于日志）
+ * @context: 上下文描述
+ * @allow_loopback: 是否允许回环地址
+ */
+static inline int validate_ip_address(u8 af, const void *ip,
+                                      const char *ip_str,
+                                      const char *context,
+                                      bool allow_loopback) {
+  if (af == FW_AF_INET6)
+    return validate_ipv6_address((const struct in6_addr *)ip, ip_str, context, allow_loopback);
+  return validate_ipv4_address(*(__be32 *)ip, ip_str, context, allow_loopback);
 }
 
 #endif /* FIREWALL_H */

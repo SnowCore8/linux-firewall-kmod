@@ -1,5 +1,5 @@
 /*
- * state-persist.c - 状态持久化
+ * state-persist.c - 状态持久化 (支持 IPv4/IPv6)
  *
  * 包含将封禁和白名单状态保存到文件以及从文件恢复的函数实现。
  */
@@ -11,40 +11,8 @@
 /* 外部变量声明 */
 extern struct firewall_info fw_info;
 
-/*
- * save_state_to_file - 将当前状态保存到文件
- */
-int save_state_to_file(const char *filename) {
-  struct file *file;
-  char buffer[512];
-  loff_t pos = 0;
-  int written;
-
-  struct saved_ban_entry {
-    char ip_str[INET_ADDRSTRLEN];
-    __be32 ipv4;
-    unsigned long remaining_time;
-  };
-
-  struct saved_whitelist_entry {
-    char ip_str[INET_ADDRSTRLEN];
-    __be32 ipv4;
-    __be32 mask;
-    int prefix_len;
-    char device_name[16];
-  };
-
-#define MAX_SAVE_BAN 1024
-#define MAX_SAVE_WL MAX_DISCOVERED_IPS
-
-  struct saved_ban_entry *ban_entries = NULL;
-  struct saved_whitelist_entry *wl_entries = NULL;
-  int ban_count = 0;
-  int wl_count = 0;
-  struct ban_entry *entry;
-  struct whitelist_entry *wl_entry;
-  u32 hash;
-
+/* 辅助函数：验证文件路径安全 */
+static int validate_state_path(const char *filename) {
   if (!filename || !*filename) {
     fw_pr_err("Invalid filename for state save");
     return -EINVAL;
@@ -99,75 +67,137 @@ int save_state_to_file(const char *filename) {
     return -EPERM;
   }
 
-  ban_entries =
-      kmalloc_array(MAX_SAVE_BAN, sizeof(struct saved_ban_entry), GFP_KERNEL);
-  if (!ban_entries) {
-    fw_pr_err("Failed to allocate memory for saving ban entries");
-    return -ENOMEM;
-  }
+  return 0;
+}
 
-  wl_entries = kmalloc_array(MAX_SAVE_WL, sizeof(struct saved_whitelist_entry),
-                             GFP_KERNEL);
-  if (!wl_entries) {
-    kfree(ban_entries);
-    fw_pr_err("Failed to allocate memory for saving whitelist entries");
-    return -ENOMEM;
-  }
+/*
+ * save_state_to_file - 将当前状态保存到文件
+ */
+int save_state_to_file(const char *filename) {
+  struct file *file;
+  char buffer[512];
+  loff_t pos = 0;
+  int written;
 
-  rcu_read_lock();
-  hash_for_each_rcu(fw_info.ban_table, hash, entry, hash) {
+  struct saved_ban_entry_v4 {
+    __be32 ipv4;
     unsigned long remaining_time;
-    if (READ_ONCE(entry->is_permanent)) {
-      remaining_time = 0;
-    } else if (time_after(READ_ONCE(entry->unban_time), jiffies)) {
-      remaining_time = (READ_ONCE(entry->unban_time) - jiffies) / HZ;
-    } else {
-      continue;
-    }
-    if (ban_count < MAX_SAVE_BAN) {
-      ipv4_to_str(READ_ONCE(entry->ip), ban_entries[ban_count].ip_str,
-                  sizeof(ban_entries[ban_count].ip_str));
-      ban_entries[ban_count].ipv4 = READ_ONCE(entry->ip);
-      ban_entries[ban_count].remaining_time = remaining_time;
-      ban_count++;
-    }
-  }
-  rcu_read_unlock();
+  };
 
+  struct saved_ban_entry_v6 {
+    struct in6_addr ipv6;
+    unsigned long remaining_time;
+  };
+
+  struct saved_whitelist_entry_v4 {
+    __be32 ipv4;
+    __be32 mask;
+    char device_name[16];
+  };
+
+  struct saved_whitelist_entry_v6 {
+    struct in6_addr ipv6;
+    u8 prefix_len;
+    char device_name[16];
+  };
+
+#define MAX_SAVE_BAN 1024
+#define MAX_SAVE_WL MAX_DISCOVERED_IPS
+
+  struct saved_ban_entry_v4 *ban_entries_v4 = NULL;
+  struct saved_ban_entry_v6 *ban_entries_v6 = NULL;
+  struct saved_whitelist_entry_v4 *wl_entries_v4 = NULL;
+  struct saved_whitelist_entry_v6 *wl_entries_v6 = NULL;
+  int ban_count_v4 = 0, ban_count_v6 = 0;
+  int wl_count_v4 = 0, wl_count_v6 = 0;
+  struct ban_entry *entry;
+  struct whitelist_entry *wl_entry;
+  u32 hash;
+
+  if (validate_state_path(filename) < 0)
+    return -EINVAL;
+
+  ban_entries_v4 = kmalloc_array(MAX_SAVE_BAN, sizeof(struct saved_ban_entry_v4), GFP_KERNEL);
+  ban_entries_v6 = kmalloc_array(MAX_SAVE_BAN, sizeof(struct saved_ban_entry_v6), GFP_KERNEL);
+  wl_entries_v4 = kmalloc_array(MAX_SAVE_WL, sizeof(struct saved_whitelist_entry_v4), GFP_KERNEL);
+  wl_entries_v6 = kmalloc_array(MAX_SAVE_WL, sizeof(struct saved_whitelist_entry_v6), GFP_KERNEL);
+  if (!ban_entries_v4 || !ban_entries_v6 || !wl_entries_v4 || !wl_entries_v6) {
+    kfree(ban_entries_v4);
+    kfree(ban_entries_v6);
+    kfree(wl_entries_v4);
+    kfree(wl_entries_v6);
+    fw_pr_err("Failed to allocate memory for saving state entries");
+    return -ENOMEM;
+  }
+
+  /* 收集 IPv4 封禁 */
   rcu_read_lock();
-  hash_for_each_rcu(fw_info.whitelist_table, hash, wl_entry, hash) {
-    if (wl_count < MAX_SAVE_WL) {
-      __be32 wl_ip = READ_ONCE(wl_entry->ip);
-      __be32 wl_mask = READ_ONCE(wl_entry->mask);
-      __be32 network_addr = wl_ip & wl_mask;
-      ipv4_to_str(network_addr, wl_entries[wl_count].ip_str,
-                  sizeof(wl_entries[wl_count].ip_str));
-      wl_entries[wl_count].ipv4 = wl_ip;
-      wl_entries[wl_count].mask = wl_mask;
-      wl_entries[wl_count].prefix_len = inet_mask_len(wl_mask);
-      strscpy(wl_entries[wl_count].device_name, wl_entry->device_name,
-              sizeof(wl_entries[wl_count].device_name));
-      wl_count++;
+  hash_for_each_rcu(fw_info.ban_table_ipv4, hash, entry, hash) {
+    unsigned long remaining_time;
+    if (READ_ONCE(entry->is_permanent))
+      remaining_time = 0;
+    else if (time_after(READ_ONCE(entry->unban_time), jiffies))
+      remaining_time = (READ_ONCE(entry->unban_time) - jiffies) / HZ;
+    else
+      continue;
+    if (ban_count_v4 < MAX_SAVE_BAN) {
+      ban_entries_v4[ban_count_v4].ipv4 = READ_ONCE(entry->addr.ipv4);
+      ban_entries_v4[ban_count_v4].remaining_time = remaining_time;
+      ban_count_v4++;
     }
   }
   rcu_read_unlock();
 
-  /* 安全打开状态文件：
-   * - O_NOFOLLOW: 拒绝符号链接，防止符号链接攻击
-   * - O_CREAT: 首次加载时创建文件
-   * - O_TRUNC: 覆盖旧内容
-   * - 不使用 O_EXCL: 模块重载时需要写入已有文件
-   * - 打开后进行 inode 验证（见下方 TOCTOU 检查），防止文件替换攻击
-   */
+  /* 收集 IPv6 封禁 */
+  rcu_read_lock();
+  hash_for_each_rcu(fw_info.ban_table_ipv6, hash, entry, hash) {
+    unsigned long remaining_time;
+    if (READ_ONCE(entry->is_permanent))
+      remaining_time = 0;
+    else if (time_after(READ_ONCE(entry->unban_time), jiffies))
+      remaining_time = (READ_ONCE(entry->unban_time) - jiffies) / HZ;
+    else
+      continue;
+    if (ban_count_v6 < MAX_SAVE_BAN) {
+      ban_entries_v6[ban_count_v6].ipv6 = entry->addr.ipv6;
+      ban_entries_v6[ban_count_v6].remaining_time = remaining_time;
+      ban_count_v6++;
+    }
+  }
+  rcu_read_unlock();
+
+  /* 收集 IPv4 白名单 */
+  rcu_read_lock();
+  hash_for_each_rcu(fw_info.whitelist_table_ipv4, hash, wl_entry, hash) {
+    if (wl_count_v4 < MAX_SAVE_WL) {
+      wl_entries_v4[wl_count_v4].ipv4 = READ_ONCE(wl_entry->addr.ipv4);
+      wl_entries_v4[wl_count_v4].mask = READ_ONCE(wl_entry->mask.ipv4_mask);
+      strscpy(wl_entries_v4[wl_count_v4].device_name, wl_entry->device_name,
+              sizeof(wl_entries_v4[wl_count_v4].device_name));
+      wl_count_v4++;
+    }
+  }
+  rcu_read_unlock();
+
+  /* 收集 IPv6 白名单 */
+  rcu_read_lock();
+  hash_for_each_rcu(fw_info.whitelist_table_ipv6, hash, wl_entry, hash) {
+    if (wl_count_v6 < MAX_SAVE_WL) {
+      wl_entries_v6[wl_count_v6].ipv6 = wl_entry->addr.ipv6;
+      wl_entries_v6[wl_count_v6].prefix_len = READ_ONCE(wl_entry->mask.prefix_len);
+      strscpy(wl_entries_v6[wl_count_v6].device_name, wl_entry->device_name,
+              sizeof(wl_entries_v6[wl_count_v6].device_name));
+      wl_count_v6++;
+    }
+  }
+  rcu_read_unlock();
+
   file = filp_open(filename, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW, 0600);
   if (IS_ERR(file)) {
     fw_pr_err("Failed to open file for saving state: %s", filename);
-    kfree(ban_entries);
-    kfree(wl_entries);
-    return PTR_ERR(file);
+    goto out_free;
   }
 
-  /* 记录打开时的 inode 信息，用于后续 TOCTOU 验证 */
   ino_t saved_ino = 0;
   dev_t saved_dev = 0;
   {
@@ -178,53 +208,69 @@ int save_state_to_file(const char *filename) {
 #else
     int getattr_err = vfs_getattr(&file->f_path, &open_stat);
 #endif
-    if (getattr_err) {
-      fw_pr_err("Failed to stat state file after open: %s", filename);
+    if (getattr_err || !S_ISREG(open_stat.mode)) {
+      fw_pr_err("Failed to stat state file or not regular: %s", filename);
       filp_close(file, NULL);
-      kfree(ban_entries);
-      kfree(wl_entries);
-      return -EACCES;
+      goto out_free;
     }
-    if (!S_ISREG(open_stat.mode)) {
-      fw_pr_err("State file is not a regular file: %s", filename);
-      filp_close(file, NULL);
-      kfree(ban_entries);
-      kfree(wl_entries);
-      return -EACCES;
-    }
-    /* 保存 inode 和设备号，用于写入后验证一致性 */
     saved_ino = open_stat.ino;
     saved_dev = open_stat.dev;
   }
 
-  for (int i = 0; i < ban_count; i++) {
+  /* 写入 IPv4 封禁 */
+  for (int i = 0; i < ban_count_v4; i++) {
+    char ip_str[INET_ADDRSTRLEN];
+    ip_to_str(FW_AF_INET, &ban_entries_v4[i].ipv4, ip_str, sizeof(ip_str));
     written = snprintf(buffer, sizeof(buffer), "BAN_V4 %s %lu\n",
-                       ban_entries[i].ip_str, ban_entries[i].remaining_time);
-
+                       ip_str, ban_entries_v4[i].remaining_time);
     if (kernel_write(file, buffer, written, &pos) != written) {
       fw_pr_err("Failed to write ban entry to state file");
       filp_close(file, NULL);
-      kfree(ban_entries);
-      kfree(wl_entries);
-      return -EIO;
+      goto out_free;
     }
   }
 
-  for (int i = 0; i < wl_count; i++) {
-    written = snprintf(buffer, sizeof(buffer), "WL_V4 %s %d %s\n",
-                       wl_entries[i].ip_str, wl_entries[i].prefix_len,
-                       wl_entries[i].device_name);
+  /* 写入 IPv6 封禁 */
+  for (int i = 0; i < ban_count_v6; i++) {
+    char ip_str[INET6_STR_LEN];
+    ip_to_str(FW_AF_INET6, &ban_entries_v6[i].ipv6, ip_str, sizeof(ip_str));
+    written = snprintf(buffer, sizeof(buffer), "BAN_V6 %s %lu\n",
+                       ip_str, ban_entries_v6[i].remaining_time);
+    if (kernel_write(file, buffer, written, &pos) != written) {
+      fw_pr_err("Failed to write ban entry to state file");
+      filp_close(file, NULL);
+      goto out_free;
+    }
+  }
 
+  /* 写入 IPv4 白名单 */
+  for (int i = 0; i < wl_count_v4; i++) {
+    char ip_str[INET_ADDRSTRLEN];
+    __be32 net_addr = wl_entries_v4[i].ipv4 & wl_entries_v4[i].mask;
+    ip_to_str(FW_AF_INET, &net_addr, ip_str, sizeof(ip_str));
+    written = snprintf(buffer, sizeof(buffer), "WL_V4 %s %d %s\n",
+                       ip_str, inet_mask_len(wl_entries_v4[i].mask),
+                       wl_entries_v4[i].device_name);
     if (kernel_write(file, buffer, written, &pos) != written) {
       fw_pr_err("Failed to write whitelist entry to state file");
       filp_close(file, NULL);
-      kfree(ban_entries);
-      kfree(wl_entries);
-      return -EIO;
+      goto out_free;
     }
   }
 
-  /* 写入完成后验证 inode 一致性，防止 TOCTOU 攻击 */
+  /* 写入 IPv6 白名单 */
+  for (int i = 0; i < wl_count_v6; i++) {
+    written = snprintf(buffer, sizeof(buffer), "WL_V6 %pI6 %d %s\n",
+                       &wl_entries_v6[i].ipv6, wl_entries_v6[i].prefix_len,
+                       wl_entries_v6[i].device_name);
+    if (kernel_write(file, buffer, written, &pos) != written) {
+      fw_pr_err("Failed to write whitelist entry to state file");
+      filp_close(file, NULL);
+      goto out_free;
+    }
+  }
+
+  /* TOCTOU 验证 */
   {
     struct kstat close_stat;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
@@ -233,31 +279,23 @@ int save_state_to_file(const char *filename) {
 #else
     int getattr_err = vfs_getattr(&file->f_path, &close_stat);
 #endif
-    if (getattr_err != 0) {
-      fw_pr_err("Failed to stat state file after write: %s", filename);
+    if (getattr_err || close_stat.ino != saved_ino || close_stat.dev != saved_dev) {
+      fw_pr_err("State file inode changed during write (possible TOCTOU attack): %s",
+                filename);
       filp_close(file, NULL);
-      kfree(ban_entries);
-      kfree(wl_entries);
-      return -EACCES;
-    }
-    if (close_stat.ino != saved_ino || close_stat.dev != saved_dev) {
-      fw_pr_err(
-          "State file inode changed during write (possible TOCTOU attack): %s",
-          filename);
-      filp_close(file, NULL);
-      kfree(ban_entries);
-      kfree(wl_entries);
-      return -EACCES;
+      goto out_free;
     }
   }
 
   filp_close(file, NULL);
+  fw_pr_info("State saved to %s (ban v4: %d, ban v6: %d, wl v4: %d, wl v6: %d)",
+             filename, ban_count_v4, ban_count_v6, wl_count_v4, wl_count_v6);
 
-  kfree(ban_entries);
-  kfree(wl_entries);
-
-  fw_pr_info("State saved to %s (ban: %d, wl: %d)", filename, ban_count,
-             wl_count);
+out_free:
+  kfree(ban_entries_v4);
+  kfree(ban_entries_v6);
+  kfree(wl_entries_v4);
+  kfree(wl_entries_v6);
   return 0;
 }
 EXPORT_SYMBOL_GPL(save_state_to_file);
@@ -271,9 +309,7 @@ int restore_state_from_file(const char *filename) {
   loff_t pos = 0;
   ssize_t bytes_read;
   char *line, *token;
-  /* 限制恢复的条目数量，防止恶意构造的状态文件导致资源耗尽 */
-  int restored_ban_count = 0;
-  int restored_wl_count = 0;
+  int restored_ban_count = 0, restored_wl_count = 0;
   const int max_restore_bans = MAX_BAN_ENTRIES;
   const int max_restore_wl = MAX_DISCOVERED_IPS;
 
@@ -287,7 +323,7 @@ int restore_state_from_file(const char *filename) {
     return -EINVAL;
   }
 
-#define MAX_STATE_FILE_SIZE (64 * 1024)
+#define MAX_STATE_FILE_SIZE (128 * 1024)
   buffer = kmalloc(MAX_STATE_FILE_SIZE, GFP_KERNEL);
   if (!buffer) {
     fw_pr_err("Failed to allocate buffer for state restore");
@@ -296,11 +332,10 @@ int restore_state_from_file(const char *filename) {
 
   file = filp_open(filename, O_RDONLY | O_NOFOLLOW, 0);
   if (IS_ERR(file)) {
-    if (PTR_ERR(file) == -ELOOP) {
+    if (PTR_ERR(file) == -ELOOP)
       fw_pr_warn("State restore: symlink detected and rejected: %s", filename);
-    } else {
+    else
       fw_pr_info("State file does not exist: %s", filename);
-    }
     kfree(buffer);
     return 0;
   }
@@ -326,19 +361,13 @@ int restore_state_from_file(const char *filename) {
     ssize_t chunk;
     chunk = kernel_read(file, buffer + bytes_read,
                         MAX_STATE_FILE_SIZE - 1 - bytes_read, &pos);
-    if (chunk <= 0) {
+    if (chunk <= 0)
       break;
-    }
     bytes_read += chunk;
   }
 
   if (bytes_read > 0) {
     buffer[bytes_read] = '\0';
-
-    if (bytes_read >= MAX_STATE_FILE_SIZE - 1) {
-      fw_pr_warn("State file truncated at %zd bytes (max %d)", bytes_read,
-                 MAX_STATE_FILE_SIZE);
-    }
 
     line = buffer;
     while ((token = strsep(&line, "\n")) != NULL) {
@@ -349,6 +378,7 @@ int restore_state_from_file(const char *filename) {
       if (!cmd)
         continue;
 
+      /* 恢复 IPv4 封禁 */
       if (strcmp(cmd, "BAN_V4") == 0 && token) {
         char *ip_str = strsep(&token, " ");
         char *time_str = strsep(&token, " ");
@@ -356,15 +386,13 @@ int restore_state_from_file(const char *filename) {
         if (ip_str && time_str) {
           __be32 ip;
           if (in4_pton(ip_str, -1, (u8 *)&ip, -1, NULL)) {
-            if (is_in_whitelist(&fw_info, ip)) {
+            if (is_in_whitelist(&fw_info, FW_AF_INET, &ip)) {
               fw_pr_info("Skipping restored ban for whitelisted IP %s", ip_str);
               continue;
             }
 
-            /* 检查恢复的封禁条目数量是否超过限制 */
             if (restored_ban_count >= max_restore_bans) {
-              fw_pr_warn("Maximum ban entries (%d) reached during restore, "
-                         "skipping remaining",
+              fw_pr_warn("Maximum ban entries (%d) reached during restore",
                          max_restore_bans);
               continue;
             }
@@ -377,48 +405,13 @@ int restore_state_from_file(const char *filename) {
 
               if (remaining_time == 0) {
                 is_permanent = true;
-                unban_time = 0;
               } else if (remaining_time > 365UL * 24 * 60 * 60) {
                 fw_pr_warn("Skipping ban with invalid remaining time: %lu",
                            remaining_time);
                 continue;
               } else {
-                is_permanent = false;
-                if (remaining_time > (ULONG_MAX / HZ)) {
-                  fw_pr_warn(
-                      "Skipping ban - remaining_time * HZ would overflow");
-                  continue;
-                }
-
                 unsigned long ban_duration = remaining_time * HZ;
-
-                if (jiffies > ULONG_MAX - ban_duration) {
-                  unban_time = jiffies + min(ban_duration, ULONG_MAX - jiffies);
-                  fw_pr_warn(
-                      "Jiffies wrap protection applied for ban restoration");
-                } else {
-                  unban_time = jiffies + ban_duration;
-                }
-              }
-
-              {
-                struct ban_entry *existing;
-                bool found = false;
-
-                rcu_read_lock();
-                hash_for_each_possible_rcu(fw_info.ban_table, existing, hash,
-                                           ip) {
-                  if (compare_ips(existing->ip, ip)) {
-                    found = true;
-                    break;
-                  }
-                }
-                rcu_read_unlock();
-
-                if (found) {
-                  fw_pr_info("Skipping duplicate ban for IPv4 %s", ip_str);
-                  continue;
-                }
+                unban_time = jiffies + ban_duration;
               }
 
               entry = kmalloc(sizeof(*entry), GFP_KERNEL);
@@ -427,59 +420,123 @@ int restore_state_from_file(const char *filename) {
                 continue;
               }
 
-              entry->ip = ip;
+              entry->af = FW_AF_INET;
+              entry->addr.ipv4 = ip;
               entry->ban_time = jiffies;
               entry->unban_time = unban_time;
               entry->is_permanent = is_permanent;
               atomic_set(&entry->retry_count, 0);
 
               spin_lock(&fw_info.lock);
-              hash_add_rcu(fw_info.ban_table, &entry->hash, ip);
+              hash_add_rcu(fw_info.ban_table_ipv4, &entry->hash, ip);
               atomic_inc(&fw_info.ban_count);
               atomic_inc(&fw_info.total_ban_count);
               spin_unlock(&fw_info.lock);
               restored_ban_count++;
-
-              if (is_permanent)
-                fw_pr_info("Restored permanent ban for IPv4 %s", ip_str);
-              else
-                fw_pr_info("Restored ban for IPv4 %s (expires in %lu seconds)",
-                           ip_str, remaining_time);
             }
           }
         }
+      /* 恢复 IPv6 封禁 */
+      } else if (strcmp(cmd, "BAN_V6") == 0 && token) {
+        char *ip_str = strsep(&token, " ");
+        char *time_str = strsep(&token, " ");
+
+        if (ip_str && time_str) {
+          struct in6_addr ip6;
+          if (in6_pton(ip_str, -1, (u8 *)&ip6, -1, NULL)) {
+            if (is_in_whitelist(&fw_info, FW_AF_INET6, &ip6)) {
+              fw_pr_info("Skipping restored ban for whitelisted IP %s", ip_str);
+              continue;
+            }
+
+            if (restored_ban_count >= max_restore_bans)
+              continue;
+
+            unsigned long remaining_time;
+            if (kstrtoul(time_str, 10, &remaining_time) == 0) {
+              struct ban_entry *entry;
+              bool is_permanent = false;
+              unsigned long unban_time = 0;
+
+              if (remaining_time == 0) {
+                is_permanent = true;
+              } else if (remaining_time > 365UL * 24 * 60 * 60) {
+                continue;
+              } else {
+                unban_time = jiffies + remaining_time * HZ;
+              }
+
+              entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+              if (!entry)
+                continue;
+
+              entry->af = FW_AF_INET6;
+              entry->addr.ipv6 = ip6;
+              entry->ban_time = jiffies;
+              entry->unban_time = unban_time;
+              entry->is_permanent = is_permanent;
+              atomic_set(&entry->retry_count, 0);
+
+              spin_lock(&fw_info.lock);
+              {
+                u32 bkt6 = jhash(&ip6, sizeof(ip6), 0) &
+                           ((1 << BAN_HASH_BITS) - 1);
+                hash_add_rcu(fw_info.ban_table_ipv6, &entry->hash, bkt6);
+              }
+              atomic_inc(&fw_info.ban_count);
+              atomic_inc(&fw_info.total_ban_count);
+              spin_unlock(&fw_info.lock);
+              restored_ban_count++;
+            }
+          }
+        }
+      /* 恢复 IPv4 白名单 */
       } else if (strcmp(cmd, "WL_V4") == 0 && token) {
         char *ip_str = strsep(&token, " ");
         char *mask_str = strsep(&token, " ");
         char *dev_name = strsep(&token, " ");
 
         if (ip_str && mask_str) {
-          __be32 ip, mask = 0xFFFFFFFF;
+          __be32 ip, mask;
           int prefix_len;
 
-          /* 检查恢复的白名单条目数量是否超过限制 */
-          if (restored_wl_count >= max_restore_wl) {
-            fw_pr_warn("Maximum whitelist entries (%d) reached during restore, "
-                       "skipping remaining",
-                       max_restore_wl);
+          if (restored_wl_count >= max_restore_wl)
             continue;
-          }
 
           if (kstrtoint(mask_str, 10, &prefix_len) == 0) {
-            mask =
-                prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1));
+            mask = prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1));
 
             if (in4_pton(ip_str, -1, (u8 *)&ip, -1, NULL)) {
               __be32 normalized_ip = ip & mask;
-
-              int result =
-                  add_whitelist_entry(&fw_info, normalized_ip, mask,
-                                      dev_name ? dev_name : "restored");
-              if (result == 0) {
+              int result = add_whitelist_entry(&fw_info, FW_AF_INET,
+                                               &normalized_ip, &mask,
+                                               prefix_len,
+                                               dev_name ? dev_name : "restored");
+              if (result == 0)
                 restored_wl_count++;
-                fw_pr_info("Restored whitelist entry for IPv4 %s/%d", ip_str,
-                           prefix_len);
-              }
+            }
+          }
+        }
+      /* 恢复 IPv6 白名单 */
+      } else if (strcmp(cmd, "WL_V6") == 0 && token) {
+        char *ip_str = strsep(&token, " ");
+        char *prefix_str = strsep(&token, " ");
+        char *dev_name = strsep(&token, " ");
+
+        if (ip_str && prefix_str) {
+          struct in6_addr ip6;
+          int prefix_len;
+
+          if (restored_wl_count >= max_restore_wl)
+            continue;
+
+          if (kstrtoint(prefix_str, 10, &prefix_len) == 0) {
+            if (in6_pton(ip_str, -1, (u8 *)&ip6, -1, NULL)) {
+              int result = add_whitelist_entry(&fw_info, FW_AF_INET6,
+                                               &ip6, NULL, prefix_len,
+                                               dev_name ? dev_name : "restored");
+              if (result == 0)
+                restored_wl_count++;
             }
           }
         }
