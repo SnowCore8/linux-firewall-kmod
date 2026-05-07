@@ -293,8 +293,7 @@ int main(int argc, char *argv[]) {
         daemon_log_info("Loading %d permanent bans from SQLite database",
                         count);
         for (int i = 0; i < count; i++) {
-          char ip_with_newline[INET_ADDRSTRLEN +
-                               20]; // +20 用于 "permanent " 前缀
+          char ip_with_newline[64]; /* 足够容纳 IPv6 地址 + "permanent " 前缀 + 换行 */
           snprintf(ip_with_newline, sizeof(ip_with_newline), "permanent %s\n",
                    entries[i].ip);
 
