@@ -1,6 +1,7 @@
 # 架构设计文档
 
-**版本**: v2.1
+**版本**: v2.1.1
+**最后更新**: 2026-05-07
 
 ## 1. 整体架构
 
@@ -67,15 +68,15 @@ Firewall 采用**双层架构**，将 fail2ban 的核心功能从用户空间移
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `firewall.c` | ~200 | 模块入口、参数定义、初始化/清理 |
-| `firewall.h` | ~225 | 数据结构、宏定义、函数声明 |
-| `ban-manager.c` | ~361 | 封禁/解封管理、哈希表操作 |
-| `whitelist.c` | ~180 | 白名单管理、系统 IP 自动发现 |
+| `firewall-main.c` | ~210 | 模块入口、参数定义、初始化/清理 |
+| `firewall.h` | ~310 | 数据结构、宏定义、函数声明 |
+| `ban-manager.c` | ~360 | 封禁/解封管理、哈希表操作 |
+| `whitelist.c` | ~175 | 白名单管理、系统 IP 自动发现 |
 | `cleanup.c` | ~150 | 过期清理、定时器回调 |
-| `netdev.c` | ~320 | 网络设备通知器、IP 自动发现 |
-| `procfs.c` | ~993 | procfs 接口实现 |
-| `netfilter.c` | ~150 | Netfilter 钩子、数据包过滤 |
-| `state-persist.c` | ~445 | 状态持久化（保存/恢复） |
+| `netdev.c` | ~300 | 网络设备通知器、IP 自动发现 |
+| `procfs.c` | ~1050 | procfs 接口实现 |
+| `netfilter.c` | ~175 | Netfilter 钩子、数据包过滤 |
+| `state-persist.c` | ~500 | 状态持久化（保存/恢复） |
 
 ### 3.2 核心数据结构
 
@@ -86,6 +87,7 @@ struct ban_entry {
     unsigned long ban_time; /* 封禁时间 (jiffies) */
     unsigned long unban_time; /* 解封时间 (jiffies) */
     bool is_permanent;      /* 是否永久封禁 */
+    atomic_t retry_count;   /* 保留供将来使用 */
     struct hlist_node hash; /* 哈希表节点 */
     struct rcu_head rcu_head; /* RCU 释放头 */
 };
@@ -94,7 +96,7 @@ struct ban_entry {
 struct whitelist_entry {
     __be32 ip;              /* 子网地址 */
     __be32 mask;            /* 子网掩码 */
-    char dev_name[IFNAMSIZ]; /* 设备名 */
+    char device_name[16];   /* 设备名 */
     struct hlist_node hash; /* 哈希表节点 */
     struct rcu_head rcu_head; /* RCU 释放头 */
 };
@@ -103,13 +105,27 @@ struct whitelist_entry {
 struct firewall_info {
     DECLARE_HASHTABLE(ban_table, BAN_HASH_BITS);     /* 封禁哈希表 */
     DECLARE_HASHTABLE(whitelist_table, WL_HASH_BITS); /* 白名单哈希表 */
-    spinlock_t lock;          /* 写锁 */
+    spinlock_t lock;          /* 封禁表写锁 */
+    spinlock_t whitelist_lock; /* 白名单写锁 */
     atomic_t ban_count;       /* 当前封禁数 */
     atomic_t total_ban_count; /* 累计封禁数 */
     atomic_t total_unban_count; /* 累计解封数 */
     struct timer_list cleanup_timer; /* 清理定时器 */
-    struct delayed_work sync_work;   /* 同步工作 */
-    struct notifier_block netdev_nb; /* 网络设备通知器 */
+    atomic_t shutting_down;   /* 关闭标志 */
+    unsigned int ban_time;    /* 默认封禁时长 */
+    bool timer_initialized;   /* 定时器初始化标志 */
+    u32 cleanup_last_bucket;  /* 清理最后处理的桶 */
+    spinlock_t flood_lock;    /* 洪泛保护锁 */
+    unsigned long last_flood_check; /* 最后洪泛检查时间 */
+    atomic_t recent_additions; /* 近期添加次数 */
+    atomic_t whitelist_reject_count; /* 白名单拒绝次数 */
+    atomic_t ban_table_full_count; /* 封禁表满次数 */
+    atomic_t alloc_failure_count; /* 分配失败次数 */
+    atomic_t cleanup_cycles;  /* 清理周期数 */
+    atomic_t cleanup_expired_total; /* 累计清理过期条目 */
+    atomic_t whitelist_count; /* 白名单条目数 */
+    struct proc_settings proc_settings; /* procfs 设置 */
+    bool netdev_notifier_registered; /* 网络设备通知器注册标志 */
 };
 ```
 
@@ -129,6 +145,7 @@ rcu_read_unlock()                spin_unlock(&fw->lock)
 - 读路径使用 RCU，无锁高性能
 - 写路径使用 spinlock + RCU 安全删除
 - 字段读写使用 `READ_ONCE`/`WRITE_ONCE` 防止编译器重排序
+- 双锁设计：`lock`（封禁表）+ `whitelist_lock`（白名单），避免锁竞争
 - 配置重载使用双缓冲模式：锁外解析，锁内仅交换指针
 - 白名单两阶段匹配：精确匹配 O(1) + 子网遍历
 
@@ -213,7 +230,7 @@ main()
 ## 5. 模块依赖图
 
 ```
-firewall.c (入口)
+firewall-main.c (入口)
   ├── ban-manager.c
   ├── whitelist.c
   ├── cleanup.c

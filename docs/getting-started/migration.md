@@ -1,7 +1,7 @@
 # 从 fail2ban 迁移指南
 
-**版本**: v2.0
-**最后更新**: 2026-05-05
+**版本**: v2.1.1
+**最后更新**: 2026-05-07
 
 ---
 
@@ -32,7 +32,7 @@ fail2ban 是一个成熟可靠的日志监控工具，但其基于 Python 用户
 | **日志监控** | 轮询（`polling`） | inotify 事件驱动 |
 | **持久化** | 文件系统（`/var/lib/fail2ban/`） | SQLite 数据库 |
 | **监控指标** | 无内置 | Prometheus（端口 9119） |
-| **封禁容量** | 无硬性限制 | 1024 IP |
+| **封禁容量** | 无硬性限制 | 4096 IP |
 | **白名单** | `ignoreip` 参数 | 独立白名单表（64 条目） |
 | **IPv6** | 支持 | 仅支持 IPv4 |
 | **配置校验** | 宽松（未知参数被忽略） | 严格（默认拒绝加载） |
@@ -192,9 +192,9 @@ backend  = auto
 
 ```yaml
 defaults:
-  max_retries: 5
+  max_retries: 3
   findtime: 600         # 10 分钟
-  ban_time: 900         # 15 分钟
+  ban_time: 600         # 10 分钟
   interval: 1           # 日志检查间隔（秒）
   metrics_port: 9119    # Prometheus 指标端口
 ```

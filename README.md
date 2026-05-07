@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml/badge.svg)](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v2.1-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
+[![Release](https://img.shields.io/badge/release-v2.1.1-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
 [![Language](https://img.shields.io/badge/Language-C-blue.svg)]()
 [![Platform](https://img.shields.io/badge/Platform-Linux%205.x%20%7C%206.x-orange.svg)]()
 

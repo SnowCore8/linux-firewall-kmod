@@ -1,6 +1,6 @@
 # 安全特性技术文档
 
-**版本**: v2.1
+**版本**: v2.1.1
 
 ## 1. 编译安全
 
@@ -97,12 +97,11 @@ rcu_read_unlock()                spin_unlock()
 ### 4.2 锁设计
 
 ```
-firewall_info.lock
-  ├── ban_table (哈希表)
-  └── whitelist_table (哈希表)
+firewall_info.lock           → ban_table (封禁哈希表)
+firewall_info.whitelist_lock → whitelist_table (白名单哈希表)
 ```
 
-单锁设计，无死锁风险。
+双锁设计，避免锁竞争，无死锁风险。
 
 ## 5. 内存安全
 
@@ -162,16 +161,40 @@ if (close_stat.ino != saved_stat.ino)
 
 Prometheus 指标（端口 9119）：
 
+### 内核模块指标（4 项）
+
 | 指标 | 说明 |
 |------|------|
 | `firewall_kernel_banned_ips_current` | 当前封禁数 |
 | `firewall_kernel_total_bans_total` | 累计封禁次数 |
-| `firewall_daemon_ips_banned_total` | 守护进程封禁次数 |
+| `firewall_kernel_total_unbans_total` | 累计解封次数 |
+| `firewall_kernel_whitelist_count` | 白名单条目数 |
+
+### 守护进程指标（10 项）
+
+| 指标 | 说明 |
+|------|------|
+| `firewall_daemon_lines_parsed_total` | 解析的日志行总数 |
+| `firewall_daemon_ips_extracted_total` | 提取的 IP 地址总数 |
+| `firewall_daemon_ips_banned_total` | 封禁的 IP 总数 |
+| `firewall_daemon_failed_attempts_total` | 失败尝试总数 |
+| `firewall_daemon_config_reloads_total` | 配置重载次数 |
+| `firewall_daemon_inotify_events_total` | inotify 事件总数 |
+| `firewall_daemon_log_rotations_total` | 日志轮转检测次数 |
+| `firewall_daemon_lines_skipped_total` | 跳过的日志行总数 |
+| `firewall_daemon_regex_matches_total` | 正则匹配成功次数 |
+| `firewall_daemon_uptime_seconds` | 守护进程运行时间（秒） |
 
 ## 8. 安全修复历史
 
 | 版本 | 修复内容 |
 |------|---------|
+| v2.1.1 | pthread_rwlock 自死锁修复（config-parser.c） |
+| v2.1.1 | Use-After-Free 竞态修复（file-monitor.c） |
+| v2.1.1 | 线程 join 修复（firewall-daemon.c） |
+| v2.1.1 | clone_jail 失败路径状态不一致修复 |
+| v2.1.1 | procfs 写入长度限制收紧（256→64 字节） |
+| v2.1.1 | Basic Auth 恒定时间比较防时序攻击 |
 | v2.1 | 整数溢出漏洞修复（`1U << 32` → `1ULL`） |
 | v2.1 | Use-After-Free 漏洞修复（HTTP exporter 持锁复制字符串） |
 | v2.1 | RCU 读取一致性修复（`READ_ONCE`/`WRITE_ONCE` 配对） |

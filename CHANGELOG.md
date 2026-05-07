@@ -2,6 +2,22 @@
 
 所有重要的项目变更记录都在此文件中。
 
+## [Unreleased]
+
+### 安全修复
+- **守护进程 9 项中高危代码缺陷修复** - 包括 pthread_rwlock 自死锁、分离线程无法 join、Use-After-Free 竞态、clone_jail 失败路径状态不一致、严格模式静默失效、procfs 写入长度限制过松、strtoul 无 errno 检查、Base64 解码越界风险、strdup OOM 未处理
+- **procfs 接口输出统一为英文** - 修复国际化兼容性问题
+
+### 代码质量
+- **内核模块统一命名** - 模块名称统一为 `firewall`，移除 `firewall_mod` 历史遗留
+- **SQLite 数据持久性增强** - `synchronous=FULL` 模式确保断电后数据不丢失
+- **Prometheus Basic Auth 认证** - 支持 `metrics_username` / `metrics_password` 配置，防止未授权访问
+
+### 测试
+- **测试框架全面重构** - 新增 15+ 共享辅助函数，12 个测试套件全部重构，消除大量重复代码
+- **YAML 配置测试** - 12/12 配置文件审查通过
+- **测试结果**: 94/94 通过（100% 通过率），0 失败
+
 ## v2.1.1 - 配置加载修复与 CI 质量提升（2026-05-07）
 
 ### 修复

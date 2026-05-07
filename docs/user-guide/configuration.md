@@ -1,6 +1,6 @@
 # 配置指南
 
-**版本**: v2.1
+**版本**: v2.1.1
 
 ## 1. 配置文件结构
 
@@ -26,9 +26,9 @@ sudo ./build/daemon/firewall-daemon -C /etc/firewall/
 ```yaml
 # 全局默认配置
 defaults:
-  max_retries: 5
+  max_retries: 3
   findtime: 600
-  ban_time: 900
+  ban_time: 600
   interval: 1
   metrics_port: 9119
 
@@ -50,19 +50,24 @@ sshd:
 
 | 参数 | 类型 | 默认值 | 说明 | 有效范围 |
 |------|------|--------|------|----------|
-| `max_retries` | integer | `5` | 触发封禁所需的失败次数 | 1 ~ 100 |
+| `max_retries` | integer | `3` | 触发封禁所需的失败次数 | 1 ~ 100 |
 | `findtime` | integer | `600` | 失败记录的时间窗口（秒） | 1 ~ 3600 |
-| `ban_time` | integer | `900` | 封禁持续时间（秒），0=永久 | 0 或 1 ~ 86400 |
+| `ban_time` | integer | `600` | 封禁持续时间（秒），0=永久 | 0 或 1 ~ 86400 |
 | `interval` | integer | `1` | 日志检查间隔（秒） | 1 ~ 60 |
 | `metrics_port` | integer | `9119` | Prometheus 指标导出端口 | 0 ~ 65535 |
+| `metrics_bind_address` | string | `127.0.0.1` | Prometheus 指标绑定地址 | 有效 IPv4 地址 |
+| `metrics_username` | string | - | Prometheus Basic Auth 用户名（可选） | 最长 64 字符 |
+| `metrics_password` | string | - | Prometheus Basic Auth 密码（可选） | 最长 128 字符 |
+| `permanent_ban_enabled` | boolean | `false` | 是否启用永久封禁 | - |
+| `permanent_db_path` | string | - | SQLite 数据库路径 | 有效文件路径 |
 
 **示例**：
 
 ```yaml
 defaults:
-  max_retries: 5        # 5 次失败后封禁
+  max_retries: 3        # 3 次失败后封禁
   findtime: 600         # 10 分钟窗口
-  ban_time: 900         # 封禁 15 分钟
+  ban_time: 600         # 封禁 10 分钟
   interval: 1           # 每秒检查一次
   metrics_port: 9119    # Prometheus 端口
 ```
