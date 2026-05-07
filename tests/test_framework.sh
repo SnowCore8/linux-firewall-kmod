@@ -573,6 +573,11 @@ fw_print_summary() {
 # 清理函数（测试结束后调用）
 # ============================================================================
 
+# 清理模块状态文件（防止模块卸载时保存的残余条目影响测试）
+fw_cleanup_state() {
+    rm -f /var/lib/firewall/state 2>/dev/null
+}
+
 # 测试小节清理（在 subsection 结束时调用）
 fw_cleanup_section() {
     local msg="${1:-小节清理完成}"
@@ -633,9 +638,6 @@ fw_cleanup() {
     # 清理测试包装器脚本
     rm -f /tmp/fw_test_wrapper_*.sh 2>/dev/null
     rm -f /tmp/fw_suite_stderr_*.log 2>/dev/null
-    
-    # 清理状态文件，防止模块卸载时保存的残余条目影响后续测试
-    rm -f /var/lib/firewall/state 2>/dev/null
     
     # 注意：不再删除 /lib/modules/*/kernel/net/firewall.ko 和 /usr/local/sbin/firewall-daemon
     # 这些系统文件只能由包管理器或安装脚本管理

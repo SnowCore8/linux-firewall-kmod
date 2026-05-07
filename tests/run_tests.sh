@@ -423,7 +423,7 @@ run_suite() {
     fw_log_debug "测试套件 $suite_key 完成，耗时: ${duration}s"
     
     # 清理状态文件，防止模块卸载时保存的残余条目影响后续测试
-    rm -f /var/lib/firewall/state 2>/dev/null
+    fw_cleanup_state
     
     # 执行后再次检查模块状态
     fw_log_debug "执行后检查模块状态: $suite_key"
