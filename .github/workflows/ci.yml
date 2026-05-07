@@ -48,7 +48,7 @@ jobs:
             libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev
 
       - name: 完整编译（内核模块 + 守护进程）
-        run: make
+        run: make build -j$(nproc)
 
       - name: 验证编译产物
         run: |

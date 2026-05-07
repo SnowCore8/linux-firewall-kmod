@@ -1,51 +1,78 @@
-# Makefile for firewall kernel module
+# Makefile for firewall project
 # Out-of-tree build: all artifacts go to build/ directory
+#
+# Refactored: added header dependency tracking, DESTDIR support,
+# parameterized debug builds, and ASAN isolation.
 
-# Set default goal
+# ============================================================================
+# 1. 版本与元信息
+# ============================================================================
 .DEFAULT_GOAL := all
 
-# Installation paths (FHS compliant)
-PREFIX ?= /usr/local
-SBINDIR ?= $(PREFIX)/sbin
+# ============================================================================
+# 2. 路径与目录配置
+# ============================================================================
+PREFIX      ?= /usr/local
+SBINDIR     ?= $(PREFIX)/sbin
 FIREWALLETC ?= /etc/firewall
 RUNSTATEDIR ?= /var/lib
 KERNEL_MODDIR ?= /lib/modules/$(shell uname -r)/extra
 
-# Kernel build directory (adjust if needed)
-KDIR ?= /lib/modules/$(shell uname -r)/build
+# DESTDIR 支持打包和暂存安装，默认为空（直接安装到系统）
+DESTDIR     ?=
 
-# Current directory
+# 并行编译线程数（自动检测）
+NPROC ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+
+# 内核构建目录
+KDIR        ?= /lib/modules/$(shell uname -r)/build
+
+# 项目路径
 PWD := $(shell pwd)
 
-# Source directories
+# 源码目录
 KERNEL_SRC_DIR := src/kernel-module
 DAEMON_SRC_DIR := src/daemon
 
-# Build output directories
-BUILD_DIR := build
+# 构建输出目录
+BUILD_DIR        := build
 KERNEL_BUILD_DIR := $(BUILD_DIR)/kernel-module
-KERNEL_OBJ_DIR := $(KERNEL_BUILD_DIR)/obj
 DAEMON_BUILD_DIR := $(BUILD_DIR)/daemon
-DAEMON_OBJ_DIR := $(DAEMON_BUILD_DIR)/obj
+DAEMON_OBJ_DIR   := $(DAEMON_BUILD_DIR)/obj
 
-# Final output paths
+# ASAN 专用对象目录（P0-2: 隔离 ASAN 和普通编译产物）
+ASAN_OBJ_DIR := $(BUILD_DIR)/daemon/asan-obj
+
+# 最终输出路径
 KERNEL_MODULE := $(KERNEL_BUILD_DIR)/firewall.ko
-DAEMON_BIN := $(DAEMON_BUILD_DIR)/firewall-daemon
+DAEMON_BIN    := $(DAEMON_BUILD_DIR)/firewall-daemon
 
-# Compiler for daemon
+# ============================================================================
+# 3. 编译器与标志配置
+# ============================================================================
 CC ?= gcc
 
-# Parallel build support (use all available cores by default)
-NPROC ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+# 尝试使用 pkg-config 获取 yaml 库名（解决不同发行版库名差异）
+# 优先检查 libyaml.so（通用），其次 libyaml-0.so（部分系统），最后回退 -lyaml
+YAML_LIBS := $(shell ldconfig -p 2>/dev/null | grep -q 'libyaml\.so' && echo "-lyaml" || (ldconfig -p 2>/dev/null | grep -q 'libyaml-0\.so' && echo "-lyaml-0" || echo "-lyaml"))
 
-# Security-focused compiler flags
-SECURITY_CFLAGS = -Wall -Wextra -Werror=format-security -O2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE
-SECURITY_LDFLAGS = -pie -Wl,-z,relro,-z,now
+# 安全编译标志（普通构建）
+SECURITY_CFLAGS  := -Wall -Wextra -Werror=format-security -O2 \
+                    -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE
+SECURITY_LDFLAGS := -pie -Wl,-z,relro,-z,now
 
-# Debug level (0 = no debug, 1-3 = increasing verbosity)
+# ASAN 专用编译标志（独立于 SECURITY_CFLAGS，避免混用）
+ASAN_CFLAGS  := -Wall -Wextra -Werror=format-security -g -O1 \
+                -fstack-protector-strong -fPIE \
+                -fsanitize=address -fno-omit-frame-pointer
+ASAN_LDFLAGS := -pie -Wl,-z,relro,-z,now -fsanitize=address
+
+# 调试级别（0 = 无调试, 1-3 = 递增详细度）
 DEBUG_LEVEL ?= 0
 
-# Daemon source files
+# ============================================================================
+# 4. 源文件与目标文件声明
+# ============================================================================
 DAEMON_SRCS := $(DAEMON_SRC_DIR)/firewall-daemon.c \
                $(DAEMON_SRC_DIR)/jail-manager.c \
                $(DAEMON_SRC_DIR)/config-parser.c \
@@ -56,150 +83,185 @@ DAEMON_SRCS := $(DAEMON_SRC_DIR)/firewall-daemon.c \
                $(DAEMON_SRC_DIR)/http-exporter.c \
                $(DAEMON_SRC_DIR)/sqlite-persistent.c
 
+# P0-1: 普通编译对象文件
 DAEMON_OBJS := $(patsubst $(DAEMON_SRC_DIR)/%.c,$(DAEMON_OBJ_DIR)/%.o,$(DAEMON_SRCS))
 
-# Build the kernel module
-# Note: Kernel module build must stay in source directory (kernel build system requirement)
-# Intermediate files are cleaned after build, only .ko is copied to build/
+# P0-2: ASAN 编译对象文件（独立目录，避免与普通 .o 混用）
+ASAN_OBJS := $(patsubst $(DAEMON_SRC_DIR)/%.c,$(ASAN_OBJ_DIR)/%.o,$(DAEMON_SRCS))
+
+# P0-1: 头文件依赖文件（由 -MMD -MP 自动生成）
+DEPS := $(DAEMON_OBJS:.o=.d)
+
+# ============================================================================
+# 5. 主要构建目标 (all, build, kernel-module, daemon)
+# ============================================================================
+
+# P1-4: all 不再依赖 format-check，仅执行构建
+.PHONY: all build
+all: build
+build: kernel-module daemon
+	@echo "Build complete: $(KERNEL_MODULE) and $(DAEMON_BIN)"
+
+# P2-7: 内核模块编译 — 使用 MAKEFLAGS 继承父 make 的 jobserver
+# 如果 MAKEFLAGS 中没有 -j/--jobserver，则自动添加 -j$(NPROC)
+KERNEL_PARALLEL := $(if $(findstring j,$(MAKEFLAGS)),,$(NPROC))
 kernel-module: $(KERNEL_MODULE)
 
 $(KERNEL_MODULE): $(KERNEL_SRC_DIR)/firewall-main.c $(KERNEL_SRC_DIR)/firewall.h
 	@mkdir -p $(KERNEL_BUILD_DIR)
 	@echo "  CC      kernel-module"
-	+$(MAKE) -j$(NPROC) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) \
+	+$(MAKE) $(if $(KERNEL_PARALLEL),-j$(KERNEL_PARALLEL)) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) \
 		ccflags-y="-DDEBUG_LEVEL=$(DEBUG_LEVEL)" \
 		modules
 	@cp $(KERNEL_SRC_DIR)/firewall.ko $(KERNEL_BUILD_DIR)/firewall.ko
-	# Clean intermediate files from source directory
-	@rm -f $(KERNEL_SRC_DIR)/*.o $(KERNEL_SRC_DIR)/*.ko $(KERNEL_SRC_DIR)/*.mod.c $(KERNEL_SRC_DIR)/*.mod.o \
-		$(KERNEL_SRC_DIR)/*.mod $(KERNEL_SRC_DIR)/.*.cmd $(KERNEL_SRC_DIR)/modules.order \
-		$(KERNEL_SRC_DIR)/Module.symvers $(KERNEL_SRC_DIR)/.module-common.o
+	@# 清理源码目录中的中间文件
+	@rm -f $(KERNEL_SRC_DIR)/*.o $(KERNEL_SRC_DIR)/*.ko $(KERNEL_SRC_DIR)/*.mod.c \
+		$(KERNEL_SRC_DIR)/*.mod.o $(KERNEL_SRC_DIR)/*.mod $(KERNEL_SRC_DIR)/.*.cmd \
+		$(KERNEL_SRC_DIR)/modules.order $(KERNEL_SRC_DIR)/Module.symvers \
+		$(KERNEL_SRC_DIR)/.module-common.o
 
-# Build user-space daemon
+# 守护进程包装目标
 daemon: $(DAEMON_BIN)
 
+# 守护进程链接
 $(DAEMON_BIN): $(DAEMON_OBJS)
 	@mkdir -p $(DAEMON_BUILD_DIR)
 	@echo "  LD      $@"
-	$(CC) $(SECURITY_CFLAGS) $(SECURITY_LDFLAGS) -Wno-unused-function -o $@ $^ -lpthread -lyaml -lsqlite3 -lmicrohttpd -lpcre2-8
+	$(CC) $(SECURITY_CFLAGS) $(SECURITY_LDFLAGS) -Wno-unused-function -o $@ $^ \
+		-lpthread $(YAML_LIBS) -lsqlite3 -lmicrohttpd -lpcre2-8
 
+# ============================================================================
+# 6. 自动依赖生成 (-MMD -MP)
+# ============================================================================
+
+# P0-1: 守护进程编译规则 — 添加 -MMD -MP 生成头文件依赖
 $(DAEMON_OBJ_DIR)/%.o: $(DAEMON_SRC_DIR)/%.c
 	@mkdir -p $(DAEMON_OBJ_DIR)
 	@echo "  CC      $<"
-	$(CC) $(SECURITY_CFLAGS) -Wno-unused-function -c $< -o $@
+	$(CC) $(SECURITY_CFLAGS) -MMD -MP -Wno-unused-function -c $< -o $@
 
-# Build both kernel module and daemon (sequential to avoid jobserver issues)
-all: format-check
-	@echo "Building kernel module and daemon..."
-	$(MAKE) kernel-module
-	$(MAKE) daemon
-	@echo "Build complete: $(KERNEL_MODULE) and $(DAEMON_BIN)"
+# 包含自动生成的依赖文件（如果存在）
+-include $(DEPS)
 
-# Check code formatting (clang-format)
-format-check:
-	@echo "Checking code formatting..."
-	@clang-format --dry-run --Werror $(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h $(DAEMON_SRC_DIR)/*.c $(DAEMON_SRC_DIR)/*.h || \
-		(echo "ERROR: Code formatting check failed. Run 'make format' to auto-fix." && exit 1)
-	@echo "✓ Code formatting check passed"
+# ============================================================================
+# 7. 调试与诊断目标 (debug, asan)
+# ============================================================================
 
-# Auto-format code (clang-format)
-format:
-	@echo "Formatting code..."
-	@clang-format -i $(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h $(DAEMON_SRC_DIR)/*.c $(DAEMON_SRC_DIR)/*.h
-	@echo "✓ Code formatted successfully"
+# P1-6: Debug 目标参数化 — 使用 DL 变量指定调试级别
+.PHONY: debug
+debug:
+	$(MAKE) build DEBUG_LEVEL=$(or $(DL),1)
 
-# Debug builds
-debug1:
-	$(MAKE) -C $(PWD) kernel-module DEBUG_LEVEL=1
-	$(MAKE) -C $(PWD) daemon
-
-debug2:
-	$(MAKE) -C $(PWD) kernel-module DEBUG_LEVEL=2
-	$(MAKE) -C $(PWD) daemon
-
-debug3:
-	$(MAKE) -C $(PWD) kernel-module DEBUG_LEVEL=3
-	$(MAKE) -C $(PWD) daemon
-
-# ASAN (AddressSanitizer) build for memory leak detection
-asan: $(DAEMON_OBJS)
+# P0-2: ASAN 使用独立对象目录，避免与普通编译产物冲突
+.PHONY: asan
+asan: $(ASAN_OBJS)
 	@mkdir -p $(DAEMON_BUILD_DIR)
 	@echo "  LD      $(DAEMON_BUILD_DIR)/firewall-daemon-asan"
-	$(CC) $(SECURITY_CFLAGS) -fsanitize=address -fno-omit-frame-pointer -g -O1 \
-		-Wno-unused-function -o $(DAEMON_BUILD_DIR)/firewall-daemon-asan $(DAEMON_OBJS) -lpthread -lyaml -lsqlite3 -lasan
+	$(CC) $(ASAN_CFLAGS) $(ASAN_LDFLAGS) -Wno-unused-function -o \
+		$(DAEMON_BUILD_DIR)/firewall-daemon-asan $(ASAN_OBJS) \
+		-lpthread $(YAML_LIBS) -lsqlite3 -lmicrohttpd -lpcre2-8
 	@echo "ASAN build completed: $(DAEMON_BUILD_DIR)/firewall-daemon-asan"
 	@echo "Run with: ASAN_OPTIONS=detect_leaks=1 $(DAEMON_BUILD_DIR)/firewall-daemon-asan"
 
-# Run comprehensive test suite
-test: $(KERNEL_MODULE) $(DAEMON_BIN)
-	sudo ./tests/run_tests.sh
-
-# Clean build artifacts
-clean:
-	rm -rf $(BUILD_DIR)
-	@echo "Build directory cleaned."
+$(ASAN_OBJ_DIR)/%.o: $(DAEMON_SRC_DIR)/%.c
+	@mkdir -p $(ASAN_OBJ_DIR)
+	@echo "  CC [asan] $<"
+	$(CC) $(ASAN_CFLAGS) -MMD -MP -Wno-unused-function -c $< -o $@
 
 # ============================================================================
-# 安装目标 - 安装所有组件 (FHS compliant)
+# 8. 代码质量目标 (format-check, format, ci)
 # ============================================================================
+
+# P1-4: CI 专用目标（包含格式检查 + 构建 + 测试）
+.PHONY: ci
+ci: format-check build test
+
+.PHONY: format-check
+format-check:
+	@echo "Checking code formatting..."
+	@clang-format --dry-run --Werror \
+		$(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h \
+		$(DAEMON_SRC_DIR)/*.c $(DAEMON_SRC_DIR)/*.h || \
+		(echo "ERROR: Code formatting check failed. Run 'make format' to auto-fix." && exit 1)
+	@echo "✓ Code formatting check passed"
+
+.PHONY: format
+format:
+	@echo "Formatting code..."
+	@clang-format -i \
+		$(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h \
+		$(DAEMON_SRC_DIR)/*.c $(DAEMON_SRC_DIR)/*.h
+	@echo "✓ Code formatted successfully"
+
+# ============================================================================
+# 9. 安装目标 (Install Targets)
+# ============================================================================
+# P0-3: 所有 install 子目标统一使用 $(DESTDIR) 前缀，支持打包暂存安装
+
+.PHONY: install install-kernel-module install-daemon install-config install-state install-systemd install-start
 install: install-kernel-module install-daemon install-config install-state install-systemd install-start
 	@echo ""
 	@echo "Installation complete!"
-	@echo "  Kernel module: $(KERNEL_MODDIR)/firewall.ko"
-	@echo "  Daemon:        $(SBINDIR)/firewall-daemon"
-	@echo "  Config:        $(FIREWALLETC)/"
-	@echo "  State:         $(RUNSTATEDIR)/firewall/"
+	@echo "  Kernel module: $(DESTDIR)$(KERNEL_MODDIR)/firewall.ko"
+	@echo "  Daemon:        $(DESTDIR)$(SBINDIR)/firewall-daemon"
+	@echo "  Config:        $(DESTDIR)$(FIREWALLETC)/"
+	@echo "  State:         $(DESTDIR)$(RUNSTATEDIR)/firewall/"
 	@echo ""
 	@echo "Service status:"
 	-systemctl status firewall-daemon.service --no-pager 2>/dev/null || true
 
-# 安装内核模块
 install-kernel-module: $(KERNEL_MODULE)
 	@echo "Installing kernel module..."
 	install -D -m 644 $(KERNEL_MODULE) $(DESTDIR)$(KERNEL_MODDIR)/firewall.ko
-	depmod -a
+	if [ -z "$(DESTDIR)" ]; then \
+		depmod -a; \
+	fi
 	@echo "  ✓ Kernel module installed"
 
-# 安装守护进程
 install-daemon: $(DAEMON_BIN)
 	@echo "Installing daemon..."
 	install -D -m 755 $(DAEMON_BIN) $(DESTDIR)$(SBINDIR)/firewall-daemon
 	@echo "  ✓ Daemon installed"
 
-# 安装配置文件
 install-config:
 	@echo "Installing configuration files..."
 	install -d -m 700 -o root -g root $(DESTDIR)$(FIREWALLETC)
 	install -m 600 -o root -g root config/*.yaml $(DESTDIR)$(FIREWALLETC)/
 	@echo "  ✓ Configuration files installed"
 
-# 安装状态目录
 install-state:
 	@echo "Creating state directory..."
 	install -d -m 700 -o root -g root $(DESTDIR)$(RUNSTATEDIR)/firewall
 	@echo "  ✓ State directory created"
 
-# 安装 systemd 服务
 install-systemd:
 	@echo "Installing systemd service..."
 	install -D -m 644 firewall-daemon.service $(DESTDIR)/etc/systemd/system/firewall-daemon.service
 	@echo "Installing kernel module autoload config..."
 	install -D -m 644 config/modules-load.d/firewall.conf $(DESTDIR)/etc/modules-load.d/firewall.conf
-	-systemctl daemon-reload 2>/dev/null || true
+	if [ -z "$(DESTDIR)" ]; then \
+		systemctl daemon-reload 2>/dev/null || true; \
+	fi
 	@echo "  ✓ Systemd service installed"
 
-# 加载内核模块并启动服务
 install-start:
 	@echo "Loading kernel module and starting daemon..."
-	-insmod $(KERNEL_MODULE) 2>/dev/null || modprobe firewall 2>/dev/null || true
-	-systemctl enable firewall-daemon.service 2>/dev/null || true
-	-systemctl start firewall-daemon.service 2>/dev/null || true
-	@sleep 2
+	if [ -z "$(DESTDIR)" ]; then \
+		insmod $(KERNEL_MODULE) 2>/dev/null || modprobe firewall 2>/dev/null || true; \
+		systemctl enable firewall-daemon.service 2>/dev/null || true; \
+		systemctl start firewall-daemon.service 2>/dev/null || true; \
+		sleep 2; \
+	else \
+		echo "Skipping system services setup in DESTDIR mode"; \
+	fi
 	@echo "  ✓ Service started"
 
 # ============================================================================
-# 卸载目标 - 安全卸载所有组件
+# 10. 卸载目标 (Uninstall Targets)
 # ============================================================================
+# P0-3: 所有 uninstall 子目标统一使用 $(DESTDIR) 前缀
+
+.PHONY: uninstall uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel uninstall-modload uninstall-verify
 uninstall: uninstall-stop uninstall-kernel uninstall-systemd uninstall-modload uninstall-files uninstall-config uninstall-state uninstall-verify
 	@echo ""
 	@echo "=========================================="
@@ -216,22 +278,23 @@ uninstall: uninstall-stop uninstall-kernel uninstall-systemd uninstall-modload u
 	@echo "Note: Some system logs (e.g., /var/log/auth.log) may still contain firewall activity records."
 	@echo "Note: SQLite database backups, if any, should be manually removed."
 
-# 停止守护进程
 uninstall-stop:
 	@echo "Stopping daemon..."
 	-systemctl stop firewall-daemon 2>/dev/null || true
 	-killall -9 firewall-daemon 2>/dev/null || true
 	@echo "  ✓ Daemon stopped"
 
-# 卸载 systemd 服务
 uninstall-systemd:
 	@echo "Removing systemd service..."
-	-systemctl disable firewall-daemon 2>/dev/null || true
-	rm -f /etc/systemd/system/firewall-daemon.service
-	-systemctl daemon-reload 2>/dev/null || true
+	if [ -z "$(DESTDIR)" ]; then \
+		systemctl disable firewall-daemon 2>/dev/null || true; \
+	fi
+	rm -f $(DESTDIR)/etc/systemd/system/firewall-daemon.service
+	if [ -z "$(DESTDIR)" ]; then \
+		systemctl daemon-reload 2>/dev/null || true; \
+	fi
 	@echo "  ✓ Systemd service removed"
 
-# 删除二进制文件
 uninstall-files:
 	@echo "Removing binary files..."
 	rm -f $(DESTDIR)$(SBINDIR)/firewall-daemon
@@ -241,19 +304,17 @@ uninstall-files:
 	rm -rf /var/run/firewall
 	@echo "  ✓ Binary files removed"
 
-# 删除配置目录
 uninstall-config:
 	@echo "Removing configuration directory..."
 	rm -rf $(DESTDIR)$(FIREWALLETC)
 	@echo "  ✓ Configuration directory removed"
 
-# 删除状态目录
 uninstall-state:
 	@echo "Removing state directory..."
 	rm -rf $(DESTDIR)$(RUNSTATEDIR)/firewall
 	@echo "  ✓ State directory removed"
 
-# 安全卸载内核模块
+# uninstall-kernel 不再依赖 uninstall-stop，避免在 uninstall 链中重复执行
 uninstall-kernel:
 	@echo "Safely removing kernel module..."
 	@if lsmod | grep -q "^firewall "; then \
@@ -261,8 +322,6 @@ uninstall-kernel:
 		USED=$$(grep "^firewall " /proc/modules | awk '{print $$3}'); \
 		if [ "$$USED" != "0" ]; then \
 			echo "  WARNING: Module is in use by $$USED process(es), forcing stop..."; \
-			-systemctl stop firewall-daemon 2>/dev/null || true; \
-			-killall -9 firewall-daemon 2>/dev/null || true; \
 			sleep 1; \
 		fi; \
 		echo "  Unloading module..."; \
@@ -278,16 +337,16 @@ uninstall-kernel:
 	rm -f $(DESTDIR)$(KERNEL_MODDIR)/firewall.ko
 	rm -f $(DESTDIR)$(KERNEL_MODDIR)/modules.order
 	rm -f $(DESTDIR)$(KERNEL_MODDIR)/Module.symvers
-	depmod -a 2>/dev/null || true
+	if [ -z "$(DESTDIR)" ]; then \
+		depmod -a 2>/dev/null || true; \
+	fi
 	@echo "  ✓ Kernel module files removed and depmod updated"
 
-# 删除模块自动加载配置
 uninstall-modload:
 	@echo "Removing module autoload config..."
-	rm -f /etc/modules-load.d/firewall.conf
+	rm -f $(DESTDIR)/etc/modules-load.d/firewall.conf
 	@echo "  ✓ Module autoload config removed"
 
-# 卸载验证
 uninstall-verify:
 	@echo "Verifying uninstallation..."
 	@if lsmod | grep -q "^firewall "; then \
@@ -296,17 +355,78 @@ uninstall-verify:
 	else \
 		echo "  ✓ Kernel module is not loaded"; \
 	fi
-	@if [ -f /etc/modules-load.d/firewall.conf ]; then \
+	@if [ -f $(DESTDIR)/etc/modules-load.d/firewall.conf ]; then \
 		echo "  WARNING: Module autoload config still exists!"; \
-		echo "  Please run: sudo rm /etc/modules-load.d/firewall.conf"; \
+		echo "  Please run: sudo rm $(DESTDIR)/etc/modules-load.d/firewall.conf"; \
 	else \
 		echo "  ✓ Module autoload config is removed"; \
 	fi
-	@if [ -f /etc/systemd/system/firewall-daemon.service ]; then \
+	@if [ -f $(DESTDIR)/etc/systemd/system/firewall-daemon.service ]; then \
 		echo "  WARNING: Systemd service file still exists!"; \
 	else \
 		echo "  ✓ Systemd service file is removed"; \
 	fi
 	@echo "  ✓ Verification complete"
 
-.PHONY: kernel-module daemon all debug1 debug2 debug3 asan test clean install install-kernel-module install-daemon install-config install-state install-systemd install-start uninstall uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel uninstall-modload uninstall-verify format-check format
+# ============================================================================
+# 11. 清理目标 (clean, distclean)
+# ============================================================================
+
+.PHONY: clean distclean
+clean:
+	rm -rf $(BUILD_DIR)
+	@echo "Build directory cleaned."
+
+# P2-10: distclean 额外清理内核源码目录中可能残留的隐藏文件
+distclean: clean
+	find $(KERNEL_SRC_DIR) -name ".*.cmd" -delete 2>/dev/null || true
+	find $(KERNEL_SRC_DIR) -name ".*.o" -delete 2>/dev/null || true
+	find $(KERNEL_SRC_DIR) -name ".*.d" -delete 2>/dev/null || true
+	find $(KERNEL_SRC_DIR) -name ".tmp_versions" -exec rm -rf {} + 2>/dev/null || true
+	find $(KERNEL_SRC_DIR) -name "*.symversions" -delete 2>/dev/null || true
+	@echo "All generated files cleaned."
+
+# ============================================================================
+# 12. 辅助目标 (help, test)
+# ============================================================================
+
+# P2-9: help 目标
+.PHONY: help
+help:
+	@echo "可用目标:"
+	@echo "  all/build     - 编译内核模块和守护进程（默认）"
+	@echo "  kernel-module - 仅编译内核模块"
+	@echo "  daemon        - 仅编译守护进程"
+	@echo "  debug         - 调试版本编译 (DL=1/2/3, 默认 1)"
+	@echo "  asan          - AddressSanitizer 版本编译"
+	@echo "  install       - 安装到系统"
+	@echo "  uninstall     - 从系统卸载"
+	@echo "  clean         - 清理编译产物"
+	@echo "  distclean     - 清理所有生成文件（含内核中间文件）"
+	@echo "  test          - 运行测试套件"
+	@echo "  format        - 格式化代码"
+	@echo "  format-check  - 检查代码格式"
+	@echo "  ci            - CI 完整构建（格式检查 + 编译 + 测试）"
+	@echo "  help          - 显示此帮助信息"
+
+# 运行综合测试套件
+.PHONY: test
+test: $(KERNEL_MODULE) $(DAEMON_BIN)
+	sudo ./tests/run_tests.sh
+
+# ============================================================================
+# 13. .PHONY 声明（按功能分组）
+# ============================================================================
+
+# 构建相关
+.PHONY: all build kernel-module daemon debug asan
+# 代码质量
+.PHONY: format-check format ci
+# 安装相关
+.PHONY: install install-kernel-module install-daemon install-config install-state install-systemd install-start
+# 卸载相关
+.PHONY: uninstall uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel uninstall-modload uninstall-verify
+# 清理相关
+.PHONY: clean distclean
+# 辅助功能
+.PHONY: help test

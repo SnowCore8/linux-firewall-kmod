@@ -20,43 +20,19 @@ mkdir -p "$BUILD_DIR"
 
 # 编译项目
 echo "编译项目..."
-make clean
-make all
+make -C "$PROJECT_ROOT" clean
+make -C "$PROJECT_ROOT" all
 
-# 创建临时安装目录
+# P2-8: 使用 make install DESTDIR= 复用安装逻辑，避免与 Makefile 重复
 TEMP_DIR="$BUILD_DIR/$PACKAGE_NAME-$VERSION"
-mkdir -p "$TEMP_DIR"
-
-# 安装内核模块
-echo "安装内核模块..."
-KERNEL_VERSION=$(uname -r)
-install -d "$TEMP_DIR/lib/modules/$KERNEL_VERSION/extra"
-install -m 644 build/kernel-module/firewall.ko "$TEMP_DIR/lib/modules/$KERNEL_VERSION/extra/"
-
-# 安装守护进程
-echo "安装守护进程..."
-install -d "$TEMP_DIR/usr/local/sbin"
-install -m 755 build/daemon/firewall-daemon "$TEMP_DIR/usr/local/sbin/"
-
-# 安装配置文件
-echo "安装配置文件..."
-install -d "$TEMP_DIR/etc/firewall"
-install -m 644 config/*.yaml "$TEMP_DIR/etc/firewall/"
-install -d "$TEMP_DIR/etc/modules-load.d"
-install -m 644 config/modules-load.d/firewall.conf "$TEMP_DIR/etc/modules-load.d/"
-
-# 安装 systemd 服务
-echo "安装 systemd 服务..."
-install -d "$TEMP_DIR/etc/systemd/system"
-install -m 644 firewall-daemon.service "$TEMP_DIR/etc/systemd/system/"
-
-# 创建状态目录
-install -d -m 700 "$TEMP_DIR/var/lib/firewall"
+echo "安装到暂存目录: $TEMP_DIR"
+make -C "$PROJECT_ROOT" install DESTDIR="$TEMP_DIR" PREFIX=/usr
 
 # 安装文档
 echo "安装文档..."
 install -d "$TEMP_DIR/usr/share/doc/$PACKAGE_NAME"
-install -m 644 README.md CHANGELOG.md LICENSE "$TEMP_DIR/usr/share/doc/$PACKAGE_NAME/"
+install -m 644 "$PROJECT_ROOT/README.md" "$PROJECT_ROOT/CHANGELOG.md" "$PROJECT_ROOT/LICENSE" \
+    "$TEMP_DIR/usr/share/doc/$PACKAGE_NAME/" 2>/dev/null || true
 
 # 创建 DEBIAN 目录
 echo "创建 DEBIAN 控制文件..."
@@ -142,7 +118,7 @@ chmod 755 "$TEMP_DIR/DEBIAN/postrm"
 
 # 构建 deb 包
 echo "构建 deb 包..."
-cd "$BUILD_DIR"
+cd "$TEMP_DIR/.."
 dpkg-deb --build --root-owner-group "$PACKAGE_NAME-$VERSION"
 
 # 回到项目根目录
