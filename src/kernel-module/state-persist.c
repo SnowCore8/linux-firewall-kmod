@@ -492,7 +492,7 @@ int restore_state_from_file(const char *filename) {
         char *ip_str = strsep(&token, " ");
         char *time_str = strsep(&token, " ");
 
-        if (ip_str && time_str) {
+        if (ip_str && time_str && (!token || *token == '\0')) {
           struct in6_addr ip6;
           if (in6_pton(ip_str, -1, (u8 *)&ip6, -1, NULL)) {
             if (is_in_whitelist(&fw_info, FW_AF_INET6, &ip6)) {
