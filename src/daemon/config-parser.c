@@ -748,7 +748,28 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
         if (ctx.current_jail_name)
           free(ctx.current_jail_name);
         ctx.current_jail_name = ctx.current_key;
-        ctx.current_jail = NULL; /* 将在解析属性时创建 */
+        /* 修复 R5-4：如果同名 jail 已存在，先释放旧资源防止泄漏 */
+        ctx.current_jail = NULL;
+        for (int _k = 0; _k < target->jail_count; _k++) {
+          if (strcmp(target->jails[_k].name, ctx.current_key) == 0) {
+            ctx.current_jail = &target->jails[_k];
+            break;
+          }
+        }
+        if (ctx.current_jail) {
+          /* 释放旧 jail 资源 */
+          for (int k = 0; k < ctx.current_jail->log_count; k++)
+            free(ctx.current_jail->log_files[k]);
+          if (ctx.current_jail->regex_compiled) {
+            if (ctx.current_jail->compiled_regex)
+              pcre2_code_free(ctx.current_jail->compiled_regex);
+            if (ctx.current_jail->match_data)
+              pcre2_match_data_free(ctx.current_jail->match_data);
+          }
+          if (ctx.current_jail->regex_pattern)
+            free(ctx.current_jail->regex_pattern);
+          memset(ctx.current_jail, 0, sizeof(struct jail));
+        }
         ctx.current_key = NULL;
       } else if (ctx.current_key) {
         /* 意外映射，释放 key */
@@ -1177,7 +1198,20 @@ int load_config_directory(const char *config_dir) {
     pthread_rwlock_unlock(&config_rwlock);
 
     file_cfg->config_file = strdup(full_path);
+    if (!file_cfg->config_file) {
+        daemon_log_err("Out of memory allocating config_file for: %s", full_path);
+        free(file_cfg);
+        ret = -1;
+        continue;
+    }
     file_cfg->config_dir = strdup(config_dir);
+    if (!file_cfg->config_dir) {
+        daemon_log_err("Out of memory allocating config_dir for: %s", config_dir);
+        free(file_cfg->config_file);
+        free(file_cfg);
+        ret = -1;
+        continue;
+    }
 
     if (parse_yaml_into(full_path, file_cfg) < 0) {
       daemon_log_warn(

@@ -199,7 +199,6 @@ int extract_and_validate_ip(struct jail *j, const char *log_line, char *ip_out,
 
 static int match_pcre2_regex(struct jail *j, const char *line, size_t line_len,
                              char *ip_out, size_t ip_size) {
-  pcre2_match_context *mcontext = NULL;
   int regex_result;
   PCRE2_SIZE *ovector;
   int num_groups;
@@ -208,18 +207,9 @@ static int match_pcre2_regex(struct jail *j, const char *line, size_t line_len,
   size_t ip_len;
   char ip_buf[INET6_ADDRSTRLEN];
 
-  mcontext = pcre2_match_context_create(NULL);
-  if (mcontext) {
-    pcre2_set_match_limit(mcontext, 10000);
-    pcre2_set_depth_limit(mcontext, 1000);
-  }
-
   regex_result =
       pcre2_match(j->compiled_regex, (PCRE2_SPTR)line, (PCRE2_SIZE)line_len, 0,
-                  0, j->match_data, mcontext);
-
-  if (mcontext)
-    pcre2_match_context_free(mcontext);
+                  0, j->match_data, NULL);
 
   if (regex_result < 0) {
     if (regex_result != PCRE2_ERROR_NOMATCH) {

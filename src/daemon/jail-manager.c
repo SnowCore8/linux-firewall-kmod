@@ -568,7 +568,9 @@ int clone_jail(struct jail *dst, const struct jail *src) {
     if (!dst->regex_pattern) {
       for (int j = 0; j < dst->log_count; j++) {
         free(dst->log_files[j]);
+        dst->log_files[j] = NULL;  /* 防止 double-free */
       }
+      dst->log_count = 0;  /* 重置计数 */
       return -1;
     }
   }
@@ -628,11 +630,12 @@ struct config *config_clone(const struct config *src) {
       goto fail;
   }
 
-  dst->jail_count = src->jail_count;
+  dst->jail_count = 0;
   for (int i = 0; i < src->jail_count; i++) {
     if (clone_jail(&dst->jails[i], &src->jails[i]) < 0) {
       goto fail;
     }
+    dst->jail_count++;  /* 克隆成功才递增 */
   }
 
   return dst;
