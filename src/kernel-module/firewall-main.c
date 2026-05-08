@@ -182,6 +182,8 @@ static void __exit firewall_exit(void) {
   /* 注销 Netfilter 钩子 */
   nf_unregister_net_hook(&init_net, &nf_ops_ipv4);
   nf_unregister_net_hook(&init_net, &nf_ops_ipv6);
+  /* 修复 S2-5：确保所有 RCU 读者退出后再继续清理 */
+  synchronize_rcu();
 
   unregister_netdev_notifier(&fw_info);
 

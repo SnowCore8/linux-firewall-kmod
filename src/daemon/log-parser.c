@@ -139,8 +139,10 @@ int extract_ip(const char *line, char *ip_out, size_t ip_size) {
       break;
 
     end = start;
+    /* 修复 W2-5：限制贪婪匹配长度，避免捕获过长字符串导致误识别 */
     while (*end &&
-           (isxdigit((unsigned char)*end) || *end == '.' || *end == ':'))
+           (isxdigit((unsigned char)*end) || *end == '.' || *end == ':') &&
+           (size_t)(end - start) < INET6_ADDRSTRLEN)
       end++;
 
     if (validate_ip_candidate(start, end, line, ip_out, ip_size))

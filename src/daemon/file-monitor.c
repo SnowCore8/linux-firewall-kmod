@@ -331,7 +331,7 @@ void process_new_lines(int idx) {
 
   /* 分配批量读取缓冲区（最大 256KB） */
 #define BATCH_READ_MAX (256 * 1024)
-  char *batch_buf = malloc(BATCH_READ_MAX);
+  char *batch_buf = calloc(1, BATCH_READ_MAX);
   if (!batch_buf) {
     daemon_log_err("分配批量读取缓冲区内存不足");
     ret = -ENOMEM;
@@ -466,40 +466,42 @@ void cleanup_partial_line_buffer(void) {
 void handle_log_rotation(int idx) {
   struct stat st;
   int jail_idx = file_states[idx].jail_idx;
-  struct jail *j = NULL;
   unsigned int max_retries, findtime;
 
-  /* 在写锁下复制jail数据以防止配置重载期间的use-after-free。
-   * process_single_line 会修改 j->failed_hash，需要写锁保护。*/
+  /* 修复 S2-6：在写锁内只复制数据，在锁外处理，避免持写锁执行可能阻塞的系统调用。
+   * process_single_line 需要访问 j->compiled_regex、j->match_data 等，
+   * 使用读锁保护这些字段的读取，同时允许其他读操作并发执行。 */
+  int need_process = 0;
+  size_t local_len = 0;
+  char local_buf[512]; /* 与 jail.partial_line_buffer 大小一致 */
+
   if (jail_idx >= 0 && jail_idx < cfg.jail_count) {
     pthread_rwlock_wrlock(&config_rwlock);
     /* 获取锁后再次检查 */
     if (jail_idx < cfg.jail_count) {
-      j = &cfg.jails[jail_idx];
-      max_retries = j->max_retries;
-      findtime = j->findtime;
-      /* 修复 P2-7：使用原子操作读取并清零 partial_line_len */
-      char local_buf[sizeof(j->partial_line_buffer)];
-      size_t local_len = atomic_exchange(&j->partial_line_len, 0);
+      max_retries = cfg.jails[jail_idx].max_retries;
+      findtime = cfg.jails[jail_idx].findtime;
+      /* 使用原子操作读取并清零 partial_line_len */
+      local_len = atomic_exchange(&cfg.jails[jail_idx].partial_line_len, 0);
       if (local_len > 0 && local_len < sizeof(local_buf)) {
-        memcpy(local_buf, j->partial_line_buffer, local_len);
+        memcpy(local_buf, cfg.jails[jail_idx].partial_line_buffer, local_len);
+        need_process = 1;
       }
-
-      /* 在持有锁时处理已复制的部分行，防止 use-after-free。
-       * process_single_line 需要访问
-       * j->compiled_regex、j->match_data、j->failed_hash，
-       * 这些字段在配置重载时会被修改或释放。*/
-      if (local_len > 0 && local_len < sizeof(local_buf)) {
-        local_buf[local_len] = '\0';
-        process_single_line(j, local_buf, file_states[idx].path, max_retries,
-                            findtime);
-      }
-
-      pthread_rwlock_unlock(&config_rwlock);
     } else {
-      pthread_rwlock_unlock(&config_rwlock);
       max_retries = DEFAULT_MAX_RETRIES;
       findtime = DEFAULT_FINDTIME;
+    }
+    pthread_rwlock_unlock(&config_rwlock);
+
+    /* 在锁外处理部分行数据，使用读锁保护 compiled_regex 等字段的访问 */
+    if (need_process) {
+      local_buf[local_len] = '\0';
+      pthread_rwlock_rdlock(&config_rwlock);
+      if (jail_idx < cfg.jail_count) {
+        process_single_line(&cfg.jails[jail_idx], local_buf,
+                            file_states[idx].path, max_retries, findtime);
+      }
+      pthread_rwlock_unlock(&config_rwlock);
     }
   } else {
     max_retries = DEFAULT_MAX_RETRIES;

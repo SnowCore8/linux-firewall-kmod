@@ -447,9 +447,10 @@ static int base64_decode_simple(const char *input, char *output,
     int b3 = (input[i + 3] == '=') ? 0 : decode_table[c3];
 
     output[out_idx++] = (unsigned char)((b0 << 2) | (b1 >> 4));
-    if (input[i + 2] != '=' && out_idx < output_size)
+    /* 修复 W2-7：使用 out_idx + 1 < output_size 确保 null 终止符有空间 */
+    if (input[i + 2] != '=' && out_idx + 1 < output_size)
       output[out_idx++] = (unsigned char)((b1 << 4) | (b2 >> 2));
-    if (input[i + 3] != '=' && out_idx < output_size)
+    if (input[i + 3] != '=' && out_idx + 1 < output_size)
       output[out_idx++] = (unsigned char)((b2 << 6) | b3);
   }
 

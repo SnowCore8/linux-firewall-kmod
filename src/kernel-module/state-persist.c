@@ -318,6 +318,9 @@ out_free:
 }
 EXPORT_SYMBOL_GPL(save_state_to_file);
 
+/* 防止重复恢复状态的标记（模块生命周期内仅恢复一次） */
+static bool state_restored = false;
+
 /*
  * restore_state_from_file - 从文件恢复状态
  */
@@ -330,6 +333,10 @@ int restore_state_from_file(const char *filename) {
   int restored_ban_count = 0, restored_wl_count = 0;
   const int max_restore_bans = MAX_BAN_ENTRIES;
   const int max_restore_wl = MAX_DISCOVERED_IPS;
+
+  /* 修复 S2-3：防止重复恢复状态导致竞态 */
+  if (state_restored)
+    return 0;
 
   if (!filename || !*filename) {
     fw_pr_err("Invalid filename for state restore");
@@ -399,7 +406,8 @@ int restore_state_from_file(const char *filename) {
         char *ip_str = strsep(&token, " ");
         char *time_str = strsep(&token, " ");
 
-        if (ip_str && time_str) {
+        /* 修复 W2-6：增强格式校验，确保只有预期的字段 */
+        if (ip_str && time_str && (!token || *token == '\0')) {
           __be32 ip;
           if (in4_pton(ip_str, -1, (u8 *)&ip, -1, NULL)) {
             if (is_in_whitelist(&fw_info, FW_AF_INET, &ip)) {
@@ -615,6 +623,10 @@ int restore_state_from_file(const char *filename) {
 
   filp_close(file, NULL);
   kfree(buffer);
+
+  /* 修复 S2-3：标记已恢复，防止重复调用 */
+  state_restored = true;
+
   fw_pr_info("State restored from %s (ban: %d, wl: %d)", filename,
              restored_ban_count, restored_wl_count);
   return 0;

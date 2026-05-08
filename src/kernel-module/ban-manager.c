@@ -83,19 +83,17 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
 
   spin_lock(&fw->lock);
 
-  /* 检查是否已被封禁 */
-  rcu_read_lock();
+  /* 修复 W2-3：已在 spinlock 保护下，使用 hlist_for_each_entry 替代 RCU 版本，
+   * 消除 RCU 嵌套（spinlock + rcu_read_lock）导致的 lockdep 警告。 */
   if (af == FW_AF_INET6) {
     struct in6_addr *ip6 = (struct in6_addr *)ip;
     u32 bkt6 = hash_ipv6(ip6);
     struct ban_entry *existing;
-    hlist_for_each_entry_rcu(existing, &fw->ban_table_ipv6[bkt6], hash,
-                             lockdep_is_held(&fw->lock)) {
+    hlist_for_each_entry(existing, &fw->ban_table_ipv6[bkt6], hash) {
       if (existing->af == af && ipv6_addr_equal(&existing->addr.ipv6, ip6)) {
         bool is_perm = READ_ONCE(existing->is_permanent);
         unsigned long ubt = READ_ONCE(existing->unban_time);
         if (is_perm || time_before(jiffies, ubt)) {
-          rcu_read_unlock();
           spin_unlock(&fw->lock);
           kfree(entry);
           return 0;
@@ -103,7 +101,6 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
         WRITE_ONCE(existing->ban_time, jiffies);
         WRITE_ONCE(existing->unban_time, unban_time);
         atomic_set(&existing->retry_count, 0);
-        rcu_read_unlock();
         spin_unlock(&fw->lock);
         kfree(entry);
         return 0;
@@ -113,13 +110,11 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     __be32 ipv4 = *(__be32 *)ip;
     u32 bkt4 = hash_min(ipv4, BAN_HASH_BITS);
     struct ban_entry *existing;
-    hlist_for_each_entry_rcu(existing, &fw->ban_table_ipv4[bkt4], hash,
-                             lockdep_is_held(&fw->lock)) {
+    hlist_for_each_entry(existing, &fw->ban_table_ipv4[bkt4], hash) {
       if (existing->af == af && existing->addr.ipv4 == ipv4) {
         bool is_perm = READ_ONCE(existing->is_permanent);
         unsigned long ubt = READ_ONCE(existing->unban_time);
         if (is_perm || time_before(jiffies, ubt)) {
-          rcu_read_unlock();
           spin_unlock(&fw->lock);
           kfree(entry);
           return 0;
@@ -127,14 +122,12 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
         WRITE_ONCE(existing->ban_time, jiffies);
         WRITE_ONCE(existing->unban_time, unban_time);
         atomic_set(&existing->retry_count, 0);
-        rcu_read_unlock();
         spin_unlock(&fw->lock);
         kfree(entry);
         return 0;
       }
     }
   }
-  rcu_read_unlock();
 
   if (atomic_read(&fw->ban_count) >= MAX_BAN_ENTRIES) {
     spin_unlock(&fw->lock);

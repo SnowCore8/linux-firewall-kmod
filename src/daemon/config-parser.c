@@ -502,6 +502,11 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
         if (!ctx.current_key) {
           /* 这是当前 jail 的属性键 */
           ctx.current_key = strdup(value);
+          if (!ctx.current_key) {
+            daemon_log_err("Out of memory allocating current key");
+            error = 1;
+            goto cleanup;
+          }
         } else {
           /* 我们有了 jail 属性的键值对 */
           /* 如果尚未创建则查找或创建 jail */
@@ -681,6 +686,11 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
       } else {
         /* 这是一个还没有值的键 */
         ctx.current_key = strdup(value);
+        if (!ctx.current_key) {
+          daemon_log_err("Out of memory allocating current key");
+          error = 1;
+          goto cleanup;
+        }
       }
       break;
     }
@@ -860,33 +870,44 @@ int parse_config_file(const char *config_path) {
    * 导致其他线程长时间阻塞。
    * 修复：在锁外准备新配置和快照，锁内仅交换指针，锁外清理旧配置。 */
 
-  /* 在锁外创建旧配置快照（用于迁移运行时状态） */
+  /* 修复 S2-2：在读锁保护下创建快照并提取 failed_hash 指针，消除竞态条件。
+   * 原问题：config_clone(&cfg) 在无锁保护下执行，期间 cfg 可能被其他线程修改，
+   * 导致快照数据不一致；且在写锁内再次访问 cfg.jails[i].failed_hash 时可能被
+   * 其他 reader 观察到中间状态。
+   * 修复：在读锁保护下同时创建快照并提取 failed_hash 指针，
+   * 将 failed_hash 从原始 cfg 转移到快照中（防止后续误用）。 */
+  pthread_rwlock_rdlock(&config_rwlock);
   old_cfg_snapshot = config_clone(&cfg);
   if (!old_cfg_snapshot) {
+    pthread_rwlock_unlock(&config_rwlock);
     daemon_log_err("Failed to clone config for migration");
     goto cleanup;
   }
+  /* 在锁内同时提取需要的 failed_hash 指针，防止竞态 */
+  for (int i = 0; i < old_cfg_snapshot->jail_count; i++) {
+    struct jail *old_jail = &old_cfg_snapshot->jails[i];
+    struct jail *real_old_jail = &cfg.jails[i];
+    old_jail->failed_hash = real_old_jail->failed_hash;
+    real_old_jail->failed_hash = NULL; /* 防止后续误用 */
+  }
+  pthread_rwlock_unlock(&config_rwlock);
 
   /* 短暂加写锁以交换配置并迁移运行时状态 */
   pthread_rwlock_wrlock(&config_rwlock);
 
-  /* 修复 P1-6：在锁外已创建快照，锁内仅迁移运行时状态和交换指针 */
+  /* 修复 P1-6：在锁外已创建快照并提取 failed_hash，锁内仅迁移到新配置和交换指针 */
 
-  /* 将运行时状态（failed_hash）从旧 jail 迁移到新 jail。
-   * 注意：old_cfg_snapshot 是通过 config_clone() 创建的，clone_jail() 显式设置
-   * failed_hash = NULL， 所以必须从原始 cfg 获取 failed_hash。*/
+  /* 将运行时状态（failed_hash）从快照迁移到新 jail */
   for (int i = 0; i < old_cfg_snapshot->jail_count; i++) {
     struct jail *old_jail = &old_cfg_snapshot->jails[i];
-    struct jail *real_old_jail =
-        &cfg.jails[i]; /* 从原始 cfg 获取 failed_hash */
-    if (!real_old_jail->failed_hash)
+    if (!old_jail->failed_hash)
       continue;
 
     for (int j = 0; j < new_cfg->jail_count; j++) {
       struct jail *new_jail = &new_cfg->jails[j];
       if (strcmp(old_jail->name, new_jail->name) == 0) {
-        new_jail->failed_hash = real_old_jail->failed_hash;
-        real_old_jail->failed_hash = NULL; /* 防止后续清理时泄漏 */
+        new_jail->failed_hash = old_jail->failed_hash;
+        old_jail->failed_hash = NULL; /* 防止后续清理时泄漏 */
         daemon_log_debug("Migrated failed entries for jail '%s'",
                          new_jail->name);
         break;
@@ -1066,6 +1087,9 @@ int load_config_directory(const char *config_dir) {
           return -1;
         }
         file_list = new_list;
+        /* 修复 W2-8：初始化新扩容的元素为 NULL，防止未初始化指针被误用 */
+        for (int i = file_count; i < file_capacity; i++)
+          file_list[i] = NULL;
       }
 
       file_list[file_count] = strdup(name);
@@ -1109,18 +1133,25 @@ int load_config_directory(const char *config_dir) {
       continue;
     }
 
-    /* 初始化临时配置的默认值为当前全局默认值 */
+    /* 修复 S2-1：先读取需要的数据再释放锁，避免锁降级导致死锁风险 */
     pthread_rwlock_rdlock(&config_rwlock);
-    file_cfg->default_max_retries = cfg.default_max_retries;
-    file_cfg->default_findtime = cfg.default_findtime;
-    file_cfg->default_ban_time = cfg.default_ban_time;
-    file_cfg->daemon = cfg.daemon;
-    file_cfg->interval = cfg.interval;
-    file_cfg->metrics_port = cfg.metrics_port;
+    unsigned int tmp_max_retries = cfg.default_max_retries;
+    unsigned int tmp_findtime = cfg.default_findtime;
+    unsigned int tmp_ban_time = cfg.default_ban_time;
+    int tmp_daemon = cfg.daemon;
+    int tmp_interval = cfg.interval;
+    int tmp_metrics_port = cfg.metrics_port;
+    pthread_rwlock_unlock(&config_rwlock);
+
+    file_cfg->default_max_retries = tmp_max_retries;
+    file_cfg->default_findtime = tmp_findtime;
+    file_cfg->default_ban_time = tmp_ban_time;
+    file_cfg->daemon = tmp_daemon;
+    file_cfg->interval = tmp_interval;
+    file_cfg->metrics_port = tmp_metrics_port;
     file_cfg->jail_count = 0;
     file_cfg->config_file = strdup(full_path);
     file_cfg->config_dir = strdup(config_dir);
-    pthread_rwlock_unlock(&config_rwlock);
 
     if (parse_yaml_into(full_path, file_cfg) < 0) {
       daemon_log_warn(
