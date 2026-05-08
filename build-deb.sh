@@ -2,9 +2,19 @@
 # build-deb.sh - 构建 Debian 软件包
 # 用法: ./build-deb.sh [版本号]
 
-set -e
+set -euo pipefail
 
-VERSION="${1:-2.0.0}"
+# 从 CHANGELOG.md 自动提取最新已发布版本号（跳过 [Unreleased]）
+auto_version() {
+    local changelog
+    changelog="$(dirname "${BASH_SOURCE[0]}")/CHANGELOG.md"
+    if [[ -f "$changelog" ]]; then
+        grep -m1 '^## v' "$changelog" | sed 's/^## v//;s/[^0-9.].*//'
+    fi
+}
+DEFAULT_VERSION="$(auto_version)"
+: "${DEFAULT_VERSION:=2.1.1}"
+VERSION="${1:-$DEFAULT_VERSION}"
 # 移除版本号前的 'v' 前缀（deb 版本必须以数字开头）
 VERSION="${VERSION#v}"
 BUILD_DIR="build/deb"
@@ -55,7 +65,7 @@ Description: Linux kernel module version of fail2ban
  Features:
   - Kernel-space IP banning via netfilter hooks
   - Jail system for multi-service isolation
-  - Hash table for O(1) IP lookup (1024 capacity)
+  - Hash table for O(1) IP lookup (4096 capacity)
   - RCU concurrency safety + spinlock protection
   - PCRE2 regex log parsing with JIT acceleration
   - SQLite persistence for permanent bans

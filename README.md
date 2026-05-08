@@ -49,6 +49,7 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 make                    # 编译全部
 make kernel-module      # 仅内核模块
 make daemon             # 仅守护进程
+make debug DL=2         # 调试版本编译 (DL=1/2/3，默认 1)
 make clean              # 清理
 ```
 

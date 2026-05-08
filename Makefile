@@ -92,6 +92,9 @@ ASAN_OBJS := $(patsubst $(DAEMON_SRC_DIR)/%.c,$(ASAN_OBJ_DIR)/%.o,$(DAEMON_SRCS)
 # P0-1: 头文件依赖文件（由 -MMD -MP 自动生成）
 DEPS := $(DAEMON_OBJS:.o=.d)
 
+# P0-2: ASAN 编译头文件依赖文件（由 -MMD -MP 自动生成）
+ASAN_DEPS := $(ASAN_OBJS:.o=.d)
+
 # ============================================================================
 # 5. 主要构建目标 (all, build, kernel-module, daemon)
 # ============================================================================
@@ -142,6 +145,7 @@ $(DAEMON_OBJ_DIR)/%.o: $(DAEMON_SRC_DIR)/%.c
 
 # 包含自动生成的依赖文件（如果存在）
 -include $(DEPS)
+-include $(ASAN_DEPS)
 
 # ============================================================================
 # 7. 调试与诊断目标 (debug, asan)
@@ -178,12 +182,19 @@ ci: format-check build test
 
 .PHONY: format-check
 format-check:
-	@echo "Checking code formatting..."
+	@echo "Checking C code formatting..."
 	@clang-format --dry-run --Werror \
 		$(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h \
 		$(DAEMON_SRC_DIR)/*.c $(DAEMON_SRC_DIR)/*.h || \
 		(echo "ERROR: Code formatting check failed. Run 'make format' to auto-fix." && exit 1)
-	@echo "✓ Code formatting check passed"
+	@echo "✓ C code formatting check passed"
+	@if command -v yamllint >/dev/null 2>&1; then \
+		echo "Checking YAML configuration..."; \
+		yamllint config/; \
+	else \
+		echo "yamllint not found, skipping YAML check"; \
+	fi
+	@echo "Format check passed."
 
 .PHONY: format
 format:
@@ -403,7 +414,7 @@ help:
 	@echo "  uninstall     - 从系统卸载"
 	@echo "  clean         - 清理编译产物"
 	@echo "  distclean     - 清理所有生成文件（含内核中间文件）"
-	@echo "  test          - 运行测试套件"
+	@echo "  test          - 运行测试套件 (需要 sudo)"
 	@echo "  format        - 格式化代码"
 	@echo "  format-check  - 检查代码格式"
 	@echo "  ci            - CI 完整构建（格式检查 + 编译 + 测试）"

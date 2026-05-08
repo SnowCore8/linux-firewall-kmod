@@ -24,17 +24,14 @@ check_library() {
     fi
 }
 
-# Check for yaml library via pkg-config or library file existence
-# P1-5: Removed sed -i that modified Makefile; use env var YAML_LIB instead
+# Check for yaml library existence (Makefile uses ldconfig for detection)
 detect_yaml_library() {
     if pkg-config --exists libyaml 2>/dev/null; then
         echo "Found libyaml using pkg-config"
-        echo "YAML_LIB=libyaml"
         return
     fi
     if pkg-config --exists yaml 2>/dev/null; then
         echo "Found yaml using pkg-config: yaml"
-        echo "YAML_LIB=yaml"
         return
     fi
     # Check common library paths for yaml-0.1 / yaml
@@ -43,13 +40,11 @@ detect_yaml_library() {
        [ -f "/usr/lib64/libyaml-0.so" ] || \
        [ -f "/usr/lib64/libyaml.so" ]; then
         echo "Found yaml library directly on system"
-        echo "YAML_LIB=yaml-0.1"
         return
     fi
     # Fallback: check pkg-config for yaml-0.1
     if pkg-config --exists yaml-0.1 2>/dev/null; then
         echo "Found yaml-0.1 using pkg-config"
-        echo "YAML_LIB=yaml-0.1"
         return
     fi
     echo "libyaml-dev not found"
@@ -58,8 +53,7 @@ detect_yaml_library() {
     exit 1
 }
 
-YAML_LIB_INFO=$(detect_yaml_library)
-echo "$YAML_LIB_INFO" | grep "^YAML_LIB=" | cut -d= -f2
+detect_yaml_library
 
 # Check for sqlite3 library via pkg-config
 detect_sqlite3_library() {
@@ -101,17 +95,17 @@ usage() {
 
 build_kernel_module() {
     info "Building kernel module..."
-    make -C "$PROJECT_ROOT" -f "$PROJECT_ROOT/Makefile" kernel-module
+    make -C "$PROJECT_ROOT" kernel-module
 }
 
 build_daemon() {
     info "Building daemon..."
-    make -C "$PROJECT_ROOT" -f "$PROJECT_ROOT/Makefile" daemon
+    make -C "$PROJECT_ROOT" daemon
 }
 
 build_all() {
     info "Building all components..."
-    make -C "$PROJECT_ROOT" -f "$PROJECT_ROOT/Makefile" all
+    make -C "$PROJECT_ROOT" all
 }
 
 # 默认构建所有组件
