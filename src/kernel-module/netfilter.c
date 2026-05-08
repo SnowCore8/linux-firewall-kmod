@@ -36,7 +36,12 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
     u32 ip6_hash = jhash(ip6, sizeof(struct in6_addr), fw_hash_seed);
     u32 wl_bkt = ip6_hash & ((1 << WHITELIST_HASH_BITS) - 1);
 
-    /* 精确匹配 */
+    /* 精确匹配（/128 前缀）：使用与封禁表相同的哈希策略，
+     * 直接定位到对应桶，O(1) 查找。
+     * 子网匹配（前缀 < 128）：由于哈希基于完整 IP 而非前缀，
+     * 必须遍历所有桶进行前缀比较，O(n) 查找。
+     * 这是哈希桶设计的固有限制：不同前缀长度的子网条目
+     * 可能分布在不同的桶中，无法通过单一哈希定位。 */
     hlist_for_each_entry_rcu(wl_entry, &fw_info.whitelist_table_ipv6[wl_bkt],
                              hash) {
       if (wl_entry->mask.prefix_len == 128) {

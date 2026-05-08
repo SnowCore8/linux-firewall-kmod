@@ -894,12 +894,15 @@ int parse_config_file(const char *config_path) {
    * 导致其他线程长时间阻塞。
    * 修复：在锁外准备新配置和快照，锁内仅交换指针，锁外清理旧配置。 */
 
-  /* 修复 S2-2：在读锁保护下创建快照并提取 failed_hash 指针，消除竞态条件。
-   * 原问题：config_clone(&cfg) 在无锁保护下执行，期间 cfg 可能被其他线程修改，
-   * 导致快照数据不一致；且在写锁内再次访问 cfg.jails[i].failed_hash 时可能被
-   * 其他 reader 观察到中间状态。
-   * 修复：在读锁保护下同时创建快照并提取 failed_hash 指针，
-   * 将 failed_hash 从原始 cfg 转移到快照中（防止后续误用）。 */
+  /* 修复 R4-2：在读锁保护下创建快照并提取 failed_hash 指针到本地数组，
+   * 避免在读锁临界区内修改 cfg.jails[i].failed_hash（违反读写锁语义）。
+   * 迁移操作在后续写锁内完成。 */
+  struct jail_failed_hash_pair {
+    char name[64];
+    void *failed_hash;
+  } failed_hash_pairs[MAX_JAILS];
+  int failed_hash_count = 0;
+
   pthread_rwlock_rdlock(&config_rwlock);
   old_cfg_snapshot = config_clone(&cfg);
   if (!old_cfg_snapshot) {
@@ -907,39 +910,39 @@ int parse_config_file(const char *config_path) {
     daemon_log_err("Failed to clone config for migration");
     goto cleanup;
   }
-  /* 在锁内同时提取需要的 failed_hash 指针，防止竞态 */
-  for (int i = 0; i < old_cfg_snapshot->jail_count; i++) {
+  /* 在锁内提取 failed_hash 指针到本地数组（不修改 cfg） */
+  for (int i = 0; i < old_cfg_snapshot->jail_count && i < MAX_JAILS; i++) {
     struct jail *old_jail = &old_cfg_snapshot->jails[i];
     struct jail *real_old_jail = &cfg.jails[i];
-    old_jail->failed_hash = real_old_jail->failed_hash;
-    real_old_jail->failed_hash = NULL; /* 防止后续误用 */
+    strncpy(failed_hash_pairs[i].name, old_jail->name,
+            sizeof(failed_hash_pairs[i].name) - 1);
+    failed_hash_pairs[i].name[sizeof(failed_hash_pairs[i].name) - 1] = '\0';
+    failed_hash_pairs[i].failed_hash = real_old_jail->failed_hash;
+    failed_hash_count++;
   }
   pthread_rwlock_unlock(&config_rwlock);
 
-  /* 短暂加写锁以交换配置并迁移运行时状态 */
+  /* 修复 R4-1：短暂加写锁，采用"双缓冲+指针交换"模式确保原子性。
+   * 读者要么看到完整旧配置，要么看到完整新配置，不会看到中间状态。
+   * 修复 R4-2：使用本地数组 failed_hash_pairs 迁移 failed_hash。 */
   pthread_rwlock_wrlock(&config_rwlock);
 
-  /* 修复 P1-6：在锁外已创建快照并提取 failed_hash，锁内仅迁移到新配置和交换指针 */
-
-  /* 将运行时状态（failed_hash）从快照迁移到新 jail */
-  for (int i = 0; i < old_cfg_snapshot->jail_count; i++) {
-    struct jail *old_jail = &old_cfg_snapshot->jails[i];
-    if (!old_jail->failed_hash)
+  /* 将运行时状态（failed_hash）从本地数组迁移到新 jail */
+  for (int i = 0; i < failed_hash_count; i++) {
+    if (!failed_hash_pairs[i].failed_hash)
       continue;
-
     for (int j = 0; j < new_cfg->jail_count; j++) {
       struct jail *new_jail = &new_cfg->jails[j];
-      if (strcmp(old_jail->name, new_jail->name) == 0) {
-        new_jail->failed_hash = old_jail->failed_hash;
-        old_jail->failed_hash = NULL; /* 防止后续清理时泄漏 */
-        daemon_log_debug("Migrated failed entries for jail '%s'",
-                         new_jail->name);
+      if (strcmp(failed_hash_pairs[i].name, new_jail->name) == 0) {
+        new_jail->failed_hash = failed_hash_pairs[i].failed_hash;
+        failed_hash_pairs[i].failed_hash = NULL;
+        daemon_log_debug("Migrated failed entries for jail '%s'", new_jail->name);
         break;
       }
     }
   }
 
-  /* 交换指针：将新配置值复制到全局 cfg */
+  /* 原子交换：先更新所有标量默认值（读者看到新值时可接受） */
   cfg.default_max_retries = new_cfg->default_max_retries;
   cfg.default_findtime = new_cfg->default_findtime;
   cfg.default_ban_time = new_cfg->default_ban_time;
@@ -947,15 +950,13 @@ int parse_config_file(const char *config_path) {
   cfg.interval = new_cfg->interval;
   cfg.metrics_port = new_cfg->metrics_port;
 
-  /* 修复 P1-5：更新 metrics_bind_address */
+  /* 更新 metrics 字符串（旧值将在锁外释放） */
   if (new_cfg->metrics_bind_address) {
     if (cfg.metrics_bind_address)
       free(cfg.metrics_bind_address);
     cfg.metrics_bind_address = new_cfg->metrics_bind_address;
     new_cfg->metrics_bind_address = NULL;
   }
-
-  /* 更新 metrics 认证凭据 */
   if (new_cfg->metrics_username) {
     if (cfg.metrics_username)
       free(cfg.metrics_username);
@@ -969,8 +970,11 @@ int parse_config_file(const char *config_path) {
     new_cfg->metrics_password = NULL;
   }
 
-  /* 清理旧 jail（failed_hash 已迁移） */
-  for (int i = 0; i < cfg.jail_count; i++) {
+  /* 原子交换 jail 数组：
+   * 1. 先清空所有 jail 槽位（此时 jail_count 仍是旧值，读者不会访问已清空的槽位）
+   * 2. 复制新 jail 数据
+   * 3. 最后更新 jail_count（读者此时看到完整的新 jail 数组） */
+  for (int i = 0; i < MAX_JAILS; i++) {
     struct jail *old_jail = &cfg.jails[i];
     for (int j = 0; j < old_jail->log_count; j++) {
       free(old_jail->log_files[j]);
@@ -983,18 +987,21 @@ int parse_config_file(const char *config_path) {
     }
     if (old_jail->regex_pattern)
       free(old_jail->regex_pattern);
+    /* failed_hash 已迁移到 new_cfg，不在此处释放 */
     memset(old_jail, 0, sizeof(struct jail));
   }
-  cfg.jail_count = 0;
 
-  /* 将新 jail 复制到全局 cfg */
-  cfg.jail_count = new_cfg->jail_count;
-  for (int i = 0; i < new_cfg->jail_count; i++) {
+  /* 复制新 jail 到全局 cfg */
+  for (int i = 0; i < new_cfg->jail_count && i < MAX_JAILS; i++) {
     memcpy(&cfg.jails[i], &new_cfg->jails[i], sizeof(struct jail));
-    /* 清空源以防止重复释放 */
     memset(&new_cfg->jails[i], 0, sizeof(struct jail));
   }
   new_cfg->jail_count = 0;
+
+  /* 关键：在所有 jail 数据复制完成后，才更新 jail_count
+   * 此时读者要么看到旧的完整 jail 数组（jail_count 尚未更新），
+   * 要么看到新的完整 jail 数组（jail_count 已更新）。 */
+  cfg.jail_count = new_cfg->jail_count;
 
   /* 更新路径字符串 */
   if (new_cfg->config_file) {
@@ -1157,23 +1164,18 @@ int load_config_directory(const char *config_dir) {
       continue;
     }
 
-    /* 修复 S2-1：先读取需要的数据再释放锁，避免锁降级导致死锁风险 */
+    /* 修复 R4-9：在读锁内直接赋值到 file_cfg，避免锁释放后赋值窗口期内
+     * cfg 被其他线程修改的风险。 */
     pthread_rwlock_rdlock(&config_rwlock);
-    unsigned int tmp_max_retries = cfg.default_max_retries;
-    unsigned int tmp_findtime = cfg.default_findtime;
-    unsigned int tmp_ban_time = cfg.default_ban_time;
-    int tmp_daemon = cfg.daemon;
-    int tmp_interval = cfg.interval;
-    int tmp_metrics_port = cfg.metrics_port;
+    file_cfg->default_max_retries = cfg.default_max_retries;
+    file_cfg->default_findtime = cfg.default_findtime;
+    file_cfg->default_ban_time = cfg.default_ban_time;
+    file_cfg->daemon = cfg.daemon;
+    file_cfg->interval = cfg.interval;
+    file_cfg->metrics_port = cfg.metrics_port;
+    file_cfg->jail_count = 0;
     pthread_rwlock_unlock(&config_rwlock);
 
-    file_cfg->default_max_retries = tmp_max_retries;
-    file_cfg->default_findtime = tmp_findtime;
-    file_cfg->default_ban_time = tmp_ban_time;
-    file_cfg->daemon = tmp_daemon;
-    file_cfg->interval = tmp_interval;
-    file_cfg->metrics_port = tmp_metrics_port;
-    file_cfg->jail_count = 0;
     file_cfg->config_file = strdup(full_path);
     file_cfg->config_dir = strdup(config_dir);
 
@@ -1194,41 +1196,12 @@ int load_config_directory(const char *config_dir) {
       continue;
     }
 
-    /* 更新全局默认值（后面的文件覆盖前面的） */
+    /* 修复 R4-3：在写锁内先累加 jail 数组，最后再更新默认值。
+     * 这样读者在锁外看到的结果是：要么旧默认值+旧 jail 数组，
+     * 要么新默认值+新 jail 数组，不会出现中间状态。 */
     pthread_rwlock_wrlock(&config_rwlock);
-    cfg.default_max_retries = file_cfg->default_max_retries;
-    cfg.default_findtime = file_cfg->default_findtime;
-    cfg.default_ban_time = file_cfg->default_ban_time;
-    cfg.daemon = file_cfg->daemon;
-    cfg.interval = file_cfg->interval;
-    cfg.metrics_port = file_cfg->metrics_port;
-    if (file_cfg->metrics_bind_address) {
-      if (cfg.metrics_bind_address)
-        free(cfg.metrics_bind_address);
-      cfg.metrics_bind_address = file_cfg->metrics_bind_address;
-      file_cfg->metrics_bind_address = NULL;
-    }
-    if (file_cfg->metrics_username) {
-      if (cfg.metrics_username)
-        free(cfg.metrics_username);
-      cfg.metrics_username = file_cfg->metrics_username;
-      file_cfg->metrics_username = NULL;
-    }
-    if (file_cfg->metrics_password) {
-      if (cfg.metrics_password)
-        free(cfg.metrics_password);
-      cfg.metrics_password = file_cfg->metrics_password;
-      file_cfg->metrics_password = NULL;
-    }
-    if (file_cfg->permanent_db_path) {
-      if (cfg.permanent_db_path)
-        free(cfg.permanent_db_path);
-      cfg.permanent_db_path = file_cfg->permanent_db_path;
-      file_cfg->permanent_db_path = NULL;
-      cfg.permanent_ban_enabled = file_cfg->permanent_ban_enabled;
-    }
 
-    /* 累加 jail 到全局 cfg（同名 jail 采用"后到优先"策略：更新现有条目） */
+    /* 第一步：累加 jail 到全局 cfg（同名 jail 采用"后到优先"策略：更新现有条目） */
     int added_count = 0;
     int updated_count = 0;
     for (int j = 0; j < file_cfg->jail_count; j++) {
@@ -1276,6 +1249,40 @@ int load_config_directory(const char *config_dir) {
       cfg.jail_count++;
       added_count++;
     }
+
+    /* 第二步：更新全局默认值（所有 jail 已累加完成后） */
+    cfg.default_max_retries = file_cfg->default_max_retries;
+    cfg.default_findtime = file_cfg->default_findtime;
+    cfg.default_ban_time = file_cfg->default_ban_time;
+    cfg.daemon = file_cfg->daemon;
+    cfg.interval = file_cfg->interval;
+    cfg.metrics_port = file_cfg->metrics_port;
+    if (file_cfg->metrics_bind_address) {
+      if (cfg.metrics_bind_address)
+        free(cfg.metrics_bind_address);
+      cfg.metrics_bind_address = file_cfg->metrics_bind_address;
+      file_cfg->metrics_bind_address = NULL;
+    }
+    if (file_cfg->metrics_username) {
+      if (cfg.metrics_username)
+        free(cfg.metrics_username);
+      cfg.metrics_username = file_cfg->metrics_username;
+      file_cfg->metrics_username = NULL;
+    }
+    if (file_cfg->metrics_password) {
+      if (cfg.metrics_password)
+        free(cfg.metrics_password);
+      cfg.metrics_password = file_cfg->metrics_password;
+      file_cfg->metrics_password = NULL;
+    }
+    if (file_cfg->permanent_db_path) {
+      if (cfg.permanent_db_path)
+        free(cfg.permanent_db_path);
+      cfg.permanent_db_path = file_cfg->permanent_db_path;
+      file_cfg->permanent_db_path = NULL;
+      cfg.permanent_ban_enabled = file_cfg->permanent_ban_enabled;
+    }
+
     pthread_rwlock_unlock(&config_rwlock);
 
     daemon_log_info(

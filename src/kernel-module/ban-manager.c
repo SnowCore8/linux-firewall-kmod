@@ -50,7 +50,12 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     return -ENOMEM;
   }
 
-  /* 白名单检查（在锁外执行，避免持 spinlock 遍历整个 whitelist 表） */
+  /* 修复 R4-4：将白名单检查和封禁执行放在同一个 spinlock 保护下，
+   * 消除白名单条目可能在检查和封禁之间被添加的 TOCTOU 竞态条件。
+   * 白名单使用 RCU 保护，在 spinlock 内嵌套 rcu_read_lock 进行遍历。 */
+  spin_lock(&fw->lock);
+
+  /* 在主锁保护下，使用 RCU 遍历检查白名单 */
   rcu_read_lock();
   if (af == FW_AF_INET6) {
     struct in6_addr *ip6 = (struct in6_addr *)ip;
@@ -59,6 +64,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
       const struct in6_addr *wl_ip = &wl_entry->addr.ipv6;
       if (ipv6_prefix_equal(ip6, wl_ip, prefix)) {
         rcu_read_unlock();
+        spin_unlock(&fw->lock);
         kfree(entry);
         atomic_inc(&fw->whitelist_reject_count);
         fw_pr_warn("REFUSED to ban whitelisted IP %s", ip_str);
@@ -72,6 +78,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
       __be32 wl_ip = READ_ONCE(wl_entry->addr.ipv4);
       if ((ipv4 & wl_mask) == (wl_ip & wl_mask)) {
         rcu_read_unlock();
+        spin_unlock(&fw->lock);
         kfree(entry);
         atomic_inc(&fw->whitelist_reject_count);
         fw_pr_warn("REFUSED to ban whitelisted IP %s", ip_str);
@@ -80,8 +87,6 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     }
   }
   rcu_read_unlock();
-
-  spin_lock(&fw->lock);
 
   /* 修复 W2-3：已在 spinlock 保护下，使用 hlist_for_each_entry 替代 RCU 版本，
    * 消除 RCU 嵌套（spinlock + rcu_read_lock）导致的 lockdep 警告。 */

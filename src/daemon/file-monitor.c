@@ -312,6 +312,8 @@ void process_new_lines(int idx) {
                    jail_idx);
     return;
   }
+  /* 修复 R4-5：j 指针仅在锁内用于复制数据到局部变量。
+   * 锁释放后不再解引用 j，后续通过 cfg.jails[jail_idx] + 读锁访问。 */
   j = &cfg.jails[jail_idx];
   max_retries = j->max_retries;
   findtime = j->findtime;
@@ -493,7 +495,9 @@ void cleanup_partial_line_buffer(void) {
   } jail_snapshots[MAX_JAILS];
   int snapshot_count = 0;
 
-  pthread_rwlock_wrlock(&config_rwlock);
+  /* 修复 R4-7：改用读锁。atomic_exchange 是原子操作，不需要写锁保护。
+   * 读锁保护 cfg.jail_count 和 jail 数据的并发读取。 */
+  pthread_rwlock_rdlock(&config_rwlock);
   snapshot_count = cfg.jail_count;
   for (int i = 0; i < snapshot_count && i < MAX_JAILS; i++) {
     jail_snapshots[i].partial_len = atomic_exchange(&cfg.jails[i].partial_line_len, 0);
@@ -528,15 +532,14 @@ void handle_log_rotation(int idx) {
   int jail_idx = file_states[idx].jail_idx;
   unsigned int max_retries, findtime;
 
-  /* 修复 S2-6：在写锁内只复制数据，在锁外处理，避免持写锁执行可能阻塞的系统调用。
-   * process_single_line 需要访问 j->compiled_regex、j->match_data 等，
-   * 使用读锁保护这些字段的读取，同时允许其他读操作并发执行。 */
+  /* 修复 R4-6：改用读锁 + 原子操作。atomic_exchange 本身就是原子的，
+   * 不需要额外的写锁保护。此处只需读锁保护 cfg.jail_count 和 jail 数据的读取。 */
   int need_process = 0;
   size_t local_len = 0;
   char local_buf[512]; /* 与 jail.partial_line_buffer 大小一致 */
 
   if (jail_idx >= 0 && jail_idx < cfg.jail_count) {
-    pthread_rwlock_wrlock(&config_rwlock);
+    pthread_rwlock_rdlock(&config_rwlock);
     /* 获取锁后再次检查 */
     if (jail_idx < cfg.jail_count) {
       max_retries = cfg.jails[jail_idx].max_retries;
@@ -748,16 +751,29 @@ void monitor_loop(void) {
         /* 根据配置类型选择重载方法 */
         int reload_ok = 0;
 
+        /* 修复 R4-8：在访问 cfg.config_dir/cfg.config_file 前获取读锁，
+         * 将其复制到局部变量，防止 SIGHUP 重载期间指针被修改。 */
+        char *reload_config_dir = NULL;
+        char *reload_config_file = NULL;
+        pthread_rwlock_rdlock(&config_rwlock);
+        if (cfg.config_dir) {
+          reload_config_dir = strdup(cfg.config_dir);
+        }
+        if (cfg.config_file) {
+          reload_config_file = strdup(cfg.config_file);
+        }
+        pthread_rwlock_unlock(&config_rwlock);
+
         /* parse_config_file 现在内部使用双缓冲：
          * 它解析到临时配置（无锁），然后短暂加锁
          * 以交换配置并迁移运行时状态（failed_hash）。
          * 无需先调用cleanup_all_jails() - 双缓冲
          * 交换以原子方式处理迁移和清理。*/
 
-        if (cfg.config_dir) {
+        if (reload_config_dir) {
           /* 配置目录模式：重载整个目录 */
-          daemon_log_info("Reloading config directory: %s", cfg.config_dir);
-          if (load_config_directory(cfg.config_dir) < 0) {
+          daemon_log_info("Reloading config directory: %s", reload_config_dir);
+          if (load_config_directory(reload_config_dir) < 0) {
             daemon_log_warn(
                 "Failed to reload config directory, keeping old config");
             /* 重载失败，保留 jail 数量 */
@@ -765,11 +781,11 @@ void monitor_loop(void) {
             reload_ok = 1;
             daemon_log_info("Config directory reloaded successfully");
           }
-        } else if (cfg.config_file) {
+        } else if (reload_config_file) {
           /* 单文件模式：重载单个文件 */
-          if (parse_config_file(cfg.config_file) < 0) {
+          if (parse_config_file(reload_config_file) < 0) {
             daemon_log_err("Failed to reload configuration from %s",
-                           cfg.config_file);
+                           reload_config_file);
           } else {
             reload_ok = 1;
             daemon_log_info("Configuration reloaded successfully");
@@ -778,6 +794,11 @@ void monitor_loop(void) {
           daemon_log_warn(
               "No config file or directory specified, cannot reload");
         }
+
+        if (reload_config_dir)
+          free(reload_config_dir);
+        if (reload_config_file)
+          free(reload_config_file);
 
         if (reload_ok) {
           /* 配置重载后重新设置 inotify 监控 */
