@@ -281,7 +281,6 @@ static int apply_defaults_string_config(struct config *target, const char *key,
     if (rc < 0 && has_error)
       *has_error = 1;
     if (rc == 0) {
-      target->permanent_ban_enabled = 1;
       daemon_log_info("Default permanent_db_path set to: %s",
                       target->permanent_db_path);
     }
@@ -394,10 +393,11 @@ static int apply_jail_integer_config(struct jail *jail, const char *key,
  * @jail: 目标 jail 结构
  * @key: 配置项名称
  * @value: 配置值字符串
+ * @has_error: 错误标志输出
  * 返回: 0 表示成功，-1 表示未知配置项
  */
 static int apply_jail_string_config(struct jail *jail, const char *key,
-                                    const char *value) {
+                                    const char *value, int *has_error) {
   if (strcmp(key, "enabled") == 0) {
     jail->enabled = parse_config_bool(value);
     daemon_log_info("Jail '%s' enabled: %s", jail->name, value);
@@ -405,8 +405,11 @@ static int apply_jail_string_config(struct jail *jail, const char *key,
   } else if (strcmp(key, "regex") == 0) {
     /* 修复 R3-4：使用临时变量避免 OOM 时指针悬空 */
     char *tmp = strdup(value);
-    if (!tmp)
+    if (!tmp) {
+      if (has_error)
+        *has_error = 1;
       return -1;
+    }
     if (jail->regex_pattern)
       free(jail->regex_pattern);
     jail->regex_pattern = tmp;
@@ -437,7 +440,7 @@ static int apply_jail_config(struct jail *jail, const char *key,
     return 0;
 
   /* 尝试字符串/布尔类型配置 */
-  rc = apply_jail_string_config(jail, key, value);
+  rc = apply_jail_string_config(jail, key, value, has_error);
   if (rc == 0)
     return 0;
 
@@ -595,174 +598,9 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
           }
         }
       } else if (ctx.current_key) {
-        /* 顶层键值对（不在 jails 或 defaults 中） */
-        if (strcmp(ctx.current_key, "max_retries") == 0) {
-          char *endptr;
-          errno = 0;
-          long val = strtol(value, &endptr, 10);
-          if (errno == 0 && *endptr == '\0' && val >= 1 && val <= 100) {
-            target->default_max_retries = (unsigned int)val;
-            daemon_log_info("Config max_retries set to %u",
-                            target->default_max_retries);
-          } else if (ctx.strict_mode) {
-            daemon_log_err("Invalid value for '%s': '%s' in top-level of %s",
-                           ctx.current_key, value, ctx.config_file);
-            ctx.has_error = 1;
-          }
-        } else if (strcmp(ctx.current_key, "findtime") == 0) {
-          char *endptr;
-          errno = 0;
-          long val = strtol(value, &endptr, 10);
-          if (errno == 0 && *endptr == '\0' && val >= 1 && val <= 3600) {
-            target->default_findtime = (unsigned int)val;
-            daemon_log_info("Config findtime set to %u",
-                            target->default_findtime);
-          } else if (ctx.strict_mode) {
-            daemon_log_err("Invalid value for '%s': '%s' in top-level of %s",
-                           ctx.current_key, value, ctx.config_file);
-            ctx.has_error = 1;
-          }
-        } else if (strcmp(ctx.current_key, "ban_time") == 0) {
-          char *endptr;
-          errno = 0;
-          long val = strtol(value, &endptr, 10);
-          if (errno == 0 && *endptr == '\0' &&
-              (val == 0 || (val >= 1 && val <= 86400))) {
-            target->default_ban_time = (unsigned int)val;
-            daemon_log_info("Config ban_time set to %u",
-                            target->default_ban_time);
-          } else if (ctx.strict_mode) {
-            daemon_log_err("Invalid value for '%s': '%s' in top-level of %s",
-                           ctx.current_key, value, ctx.config_file);
-            ctx.has_error = 1;
-          }
-        } else if (strcmp(ctx.current_key, "interval") == 0) {
-          char *endptr;
-          errno = 0;
-          long val = strtol(value, &endptr, 10);
-          if (errno == 0 && *endptr == '\0' && val >= 1 && val <= 60) {
-            target->interval = (int)val;
-            daemon_log_info("Config interval set to %d", target->interval);
-          } else if (ctx.strict_mode) {
-            daemon_log_err("Invalid value for '%s': '%s' in top-level of %s",
-                           ctx.current_key, value, ctx.config_file);
-            ctx.has_error = 1;
-          }
-        } else if (strcmp(ctx.current_key, "metrics_port") == 0) {
-          char *endptr;
-          errno = 0;
-          long val = strtol(value, &endptr, 10);
-          if (errno == 0 && *endptr == '\0' && val >= 0 && val <= 65535) {
-            target->metrics_port = (int)val;
-            daemon_log_info("Config metrics_port set to %d",
-                            target->metrics_port);
-          } else if (ctx.strict_mode) {
-            daemon_log_err("Invalid value for '%s': '%s' in top-level of %s",
-                           ctx.current_key, value, ctx.config_file);
-            ctx.has_error = 1;
-          }
-        } else if (strcmp(ctx.current_key, "metrics_bind_address") == 0) {
-          /* 修复 P1-5：解析顶层 metrics_bind_address 配置项 */
-          if (strlen(value) > 0 && strlen(value) < 64) {
-            /* 修复 R3-4：使用临时变量避免 OOM 时指针悬空 */
-            char *tmp = strdup(value);
-            if (tmp) {
-              if (target->metrics_bind_address)
-                free(target->metrics_bind_address);
-              target->metrics_bind_address = tmp;
-              daemon_log_info("Config metrics_bind_address set to: %s",
-                              target->metrics_bind_address);
-            } else if (ctx.strict_mode) {
-              daemon_log_err("OOM allocating metrics_bind_address in top-level of %s",
-                             ctx.config_file);
-              ctx.has_error = 1;
-            }
-          }
-        } else if (strcmp(ctx.current_key, "metrics_username") == 0) {
-          if (strlen(value) > 0 && strlen(value) < 64) {
-            /* 修复 R3-4：使用临时变量避免 OOM 时指针悬空 */
-            char *tmp = strdup(value);
-            if (tmp) {
-              if (target->metrics_username)
-                free(target->metrics_username);
-              target->metrics_username = tmp;
-              daemon_log_info("Config metrics_username configured");
-            } else if (ctx.strict_mode) {
-              daemon_log_err("OOM allocating metrics_username in top-level of %s",
-                             ctx.config_file);
-              ctx.has_error = 1;
-            }
-          }
-        } else if (strcmp(ctx.current_key, "metrics_password") == 0) {
-          if (strlen(value) > 0 && strlen(value) < 128) {
-            /* 修复 R3-4：使用临时变量避免 OOM 时指针悬空 */
-            char *tmp = strdup(value);
-            if (tmp) {
-              if (target->metrics_password)
-                free(target->metrics_password);
-              target->metrics_password = tmp;
-              daemon_log_info("Config metrics_password configured");
-            } else if (ctx.strict_mode) {
-              daemon_log_err("OOM allocating metrics_password in top-level of %s",
-                             ctx.config_file);
-              ctx.has_error = 1;
-            }
-          }
-        } else if (strcmp(ctx.current_key, "daemon") == 0) {
-          target->daemon =
-              (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 ||
-               strcmp(value, "1") == 0);
-        } else if (strcmp(ctx.current_key, "permanent_db_path") == 0) {
-          if (strlen(value) > 0) {
-            /* 拒绝路径遍历 */
-            if (strstr(value, "..") != NULL) {
-              daemon_log_warn("permanent_db_path contains path traversal, rejecting: %s", value);
-            } else if (strcasestr(value, "%2e") != NULL || strcasestr(value, "%2f") != NULL) {
-              daemon_log_warn("permanent_db_path contains URL-encoded traversal, rejecting: %s", value);
-            } else if (strpbrk(value, "|;&`$(){}<>!~*?[]") != NULL) {
-              daemon_log_warn("permanent_db_path contains shell metacharacters, rejecting: %s", value);
-            } else {
-              char *tmp;
-              if (value[0] == '/') {
-                tmp = strdup(value);
-              } else {
-                char full_path[1024];
-                int n = snprintf(full_path, sizeof(full_path), "%s/%s", config_dir,
-                         value);
-                if (n < 0 || (size_t)n >= sizeof(full_path)) {
-                  tmp = NULL;
-                } else {
-                  tmp = strdup(full_path);
-                }
-              }
-              if (tmp) {
-                if (target->permanent_db_path)
-                  free(target->permanent_db_path);
-                target->permanent_db_path = tmp;
-                target->permanent_ban_enabled = 1;
-              } else if (ctx.strict_mode) {
-                daemon_log_err("OOM allocating permanent_db_path in top-level of %s",
-                               ctx.config_file);
-                ctx.has_error = 1;
-              }
-            }
-          }
-        } else if (strcmp(ctx.current_key, "permanent_ban_enabled") == 0) {
-          target->permanent_ban_enabled =
-              (strcmp(value, "true") == 0 || strcmp(value, "True") == 0 ||
-               strcmp(value, "1") == 0);
-        } else {
-          if (ctx.strict_mode) {
-            daemon_log_err("Invalid config parameter '%s' with value '%s' at "
-                           "top-level of %s (jail format required)",
-                           ctx.current_key, value, ctx.config_file);
-            ctx.has_error = 1;
-          } else {
-            daemon_log_warn(
-                "Ignoring unsupported top-level key: %s (jail format required)",
-                ctx.current_key);
-          }
-        }
+        /* 顶层键值对（不在 jails 或 defaults 中）— 复用 apply_defaults_config */
+        apply_defaults_config(target, ctx.current_key, value, ctx.strict_mode,
+                              ctx.config_file, config_dir, &ctx.has_error);
         free(ctx.current_key);
         ctx.current_key = NULL;
       } else {

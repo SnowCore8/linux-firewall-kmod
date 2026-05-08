@@ -17,7 +17,8 @@ TimeoutStartSec=30
 # Security Hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/firewall /etc/firewall
+ReadWritePaths=/var/lib/firewall
+ReadOnlyPaths=/etc/firewall
 PrivateTmp=yes
 ProtectHome=yes
 ProtectKernelTunables=yes

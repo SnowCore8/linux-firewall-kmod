@@ -666,18 +666,33 @@ fail:
 
 /* 验证配置完整性 */
 int config_validate(const struct config *cfg) {
-  if (!cfg)
+  if (!cfg) {
+    daemon_log_err("Config validation failed: cfg is NULL");
     return -1;
-  if (cfg->jail_count <= 0 || cfg->jail_count > MAX_JAILS)
+  }
+  if (cfg->jail_count <= 0 || cfg->jail_count > MAX_JAILS) {
+    daemon_log_err("Config validation failed: invalid jail_count=%d (must be 1..%d)",
+                   cfg->jail_count, MAX_JAILS);
     return -1;
-  if (cfg->interval <= 0 || cfg->interval > 60)
+  }
+  if (cfg->interval <= 0 || cfg->interval > 60) {
+    daemon_log_err("Config validation failed: invalid interval=%d (must be 1..60)",
+                   cfg->interval);
     return -1;
-  if (cfg->metrics_port < 0 || cfg->metrics_port > 65535)
+  }
+  if (cfg->metrics_port < 0 || cfg->metrics_port > 65535) {
+    daemon_log_err("Config validation failed: invalid metrics_port=%d (must be 0..65535)",
+                   cfg->metrics_port);
     return -1;
-  if (cfg->default_max_retries == 0)
+  }
+  if (cfg->default_max_retries == 0) {
+    daemon_log_err("Config validation failed: default_max_retries is 0");
     return -1;
-  if (cfg->default_findtime == 0)
+  }
+  if (cfg->default_findtime == 0) {
+    daemon_log_err("Config validation failed: default_findtime is 0");
     return -1;
+  }
   /* ban_time=0 表示永久封禁，config-parser.c 中已允许此值 */
   /* default_ban_time 可以为 0（永久封禁），不做拒绝检查 */
 

@@ -850,7 +850,6 @@ static ssize_t config_write(struct file *file, const char __user *buf,
   char input[256];
   char param[64];
   char *value_str;
-  unsigned int value;
   ssize_t len;
   int result;
 
@@ -885,18 +884,15 @@ static ssize_t config_write(struct file *file, const char __user *buf,
   if (result < 0)
     return result;
 
-  {
+  /* 先检查参数名是否存在，再解析数值，避免无效参数名时误导用户 */
+  if (strcmp(param, "ban_time") == 0) {
     unsigned long val;
     int rc = kstrtoul(value_str, 10, &val);
     if (rc != 0 || val == 0 || val > UINT_MAX) {
-      fw_pr_err("Invalid value: %s", value_str);
+      fw_pr_err("Invalid value for ban_time: %s", value_str);
       return -EINVAL;
     }
-    value = (unsigned int)val;
-  }
-
-  if (strcmp(param, "ban_time") == 0) {
-    result = apply_config_ban_time(value);
+    result = apply_config_ban_time((unsigned int)val);
     if (result < 0)
       return result;
   } else {

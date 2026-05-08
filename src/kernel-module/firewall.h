@@ -292,7 +292,7 @@ extern u32 fw_hash_seed;
  * @buf: 输出缓冲区 (至少 INET6_STR_LEN 字节)
  * @len: 缓冲区长度
  */
-static inline void ip_to_str(u8 af, const void *ip, char *buf, int len) {
+static inline void ip_to_str(u8 af, const void *ip, char *buf, size_t len) {
   if (af == FW_AF_INET6) {
     const struct in6_addr *addr = ip;
     if (len < INET6_STR_LEN) {
