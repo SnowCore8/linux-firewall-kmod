@@ -58,7 +58,7 @@ static int validate_ip_candidate(const char *start, const char *end,
     unsigned int ip_num = ntohl(addr4.s_addr);
     unsigned int ip_class_a = (ip_num >> 24) & 0xFF;
     if (ip_num == 0 || ip_num == 0xFFFFFFFF || ip_class_a == 127 ||
-        (ip_class_a >= 224 && ip_class_a <= 239))
+        ip_class_a >= 224)
       return 0;
     strncpy(ip_out, ip_buf, ip_size - 1);
     ip_out[ip_size - 1] = '\0';
@@ -115,7 +115,7 @@ int extract_ipv4(const char *line, char *ip_out, size_t ip_size) {
       unsigned int ip_num = ntohl(addr.s_addr);
       unsigned int ip_class_a = (ip_num >> 24) & 0xFF;
       if (ip_num == 0 || ip_num == 0xFFFFFFFF || ip_class_a == 127 ||
-          (ip_class_a >= 224 && ip_class_a <= 239))
+          ip_class_a >= 224)
         continue;
 
       strncpy(ip_out, ip_buf, ip_size - 1);
@@ -167,7 +167,7 @@ int extract_and_validate_ip(struct jail *j, const char *log_line, char *ip_out,
   if (inet_pton(AF_INET, ip_buf, &addr4) == 1) {
     unsigned int ip_num = ntohl(addr4.s_addr);
     if (ip_num == 0 || ip_num == 0xFFFFFFFF || ((ip_num >> 24) & 0xFF) == 127 ||
-        (((ip_num >> 24) & 0xFF) >= 224 && ((ip_num >> 24) & 0xFF) <= 239)) {
+        ((ip_num >> 24) & 0xFF) >= 224) {
       return 0;
     }
     atomic_fetch_add(&daemon_stats.ips_extracted, 1);

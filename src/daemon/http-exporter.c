@@ -54,6 +54,12 @@ static bool thread_id_ready = false;
 /* 修复问题8：跟踪线程是否成功创建，防止对未创建的线程调用 join */
 static atomic_bool exporter_thread_created = false;
 
+/* 修复 R8-2：Basic Auth 暴力破解防护 - 失败计数器和临时锁定 */
+static _Atomic(unsigned long) auth_failures = 0;
+static _Atomic(time_t) last_failure_time = 0;
+#define AUTH_FAILURE_THRESHOLD 10  /* 10 次失败后触发锁定 */
+#define AUTH_LOCKOUT_DURATION 60   /* 锁定 60 秒 */
+
 /* ============================================================================
  * 日志辅助函数（使用 syslog 以保持与守护进程一致）
  * ========================================================================== */
@@ -88,6 +94,28 @@ static inline void exporter_log_warn_ratelimited(const char *fmt, ...) {
   va_start(args, fmt);
   vsyslog(LOG_WARNING, fmt, args);
   va_end(args);
+}
+
+/* ============================================================================
+ * HTTP 安全头辅助函数（修复 R8-1 + R8-4）
+ * ========================================================================== */
+
+/**
+ * add_security_headers - 为 HTTP 响应添加安全头
+ * @response: MHD 响应对象
+ *
+ * 添加以下安全头以防止常见 Web 攻击：
+ * - X-Content-Type-Options: nosniff (防止 MIME 嗅探)
+ * - X-Frame-Options: DENY (防止点击劫持)
+ * - X-Content-Security-Policy: default-src 'none' (限制资源加载)
+ * - Cache-Control: no-store (防止敏感数据缓存)
+ */
+static void add_security_headers(struct MHD_Response *response) {
+  MHD_add_response_header(response, "X-Content-Type-Options", "nosniff");
+  MHD_add_response_header(response, "X-Frame-Options", "DENY");
+  MHD_add_response_header(response, "X-Content-Security-Policy",
+                          "default-src 'none'");
+  MHD_add_response_header(response, "Cache-Control", "no-store");
 }
 
 /* ============================================================================
@@ -509,7 +537,22 @@ static int check_basic_auth_header(const char *auth_header) {
     return -1;
   }
 
+  /* 修复 R8-2：暴力破解防护 - 检查是否处于锁定状态 */
+  time_t now = time(NULL);
+  time_t last = atomic_load(&last_failure_time);
+  if (atomic_load(&auth_failures) >= AUTH_FAILURE_THRESHOLD &&
+      (now - last) < AUTH_LOCKOUT_DURATION) {
+    exporter_log_warn_ratelimited(
+        "Auth temporarily locked due to too many failures (%lu failures in "
+        "%ld seconds)",
+        atomic_load(&auth_failures), (long)(now - last));
+    return 0;
+  }
+
   if (!auth_header || strncmp(auth_header, "Basic ", 6) != 0) {
+    /* 修复 R8-2：记录认证失败 */
+    atomic_fetch_add(&auth_failures, 1);
+    atomic_store(&last_failure_time, time(NULL));
     return 0;
   }
 
@@ -520,6 +563,9 @@ static int check_basic_auth_header(const char *auth_header) {
   int decoded_len =
       base64_decode_simple(auth_header + 6, decoded, sizeof(decoded) - 1);
   if (decoded_len <= 0) {
+    /* 修复 R8-2：记录 Base64 解码失败 */
+    atomic_fetch_add(&auth_failures, 1);
+    atomic_store(&last_failure_time, time(NULL));
     return 0;
   }
   /* 安全考虑：边界检查，防止 decoded_len 等于缓冲区大小时越界写入 */
@@ -531,6 +577,9 @@ static int check_basic_auth_header(const char *auth_header) {
   /* 查找 user:pass 分隔符 */
   char *colon = strchr(decoded, ':');
   if (!colon) {
+    /* 修复 R8-2：记录格式错误失败 */
+    atomic_fetch_add(&auth_failures, 1);
+    atomic_store(&last_failure_time, time(NULL));
     return 0;
   }
   *colon = '\0';
@@ -554,6 +603,14 @@ static int check_basic_auth_header(const char *auth_header) {
   memset(decoded, 0, sizeof(decoded));
   memset(cfg_pass, 0, sizeof(cfg_pass));
 
+  /* 修复 R8-2：认证成功时重置失败计数器，失败时递增 */
+  if (result == 1) {
+    atomic_store(&auth_failures, 0);
+  } else {
+    atomic_fetch_add(&auth_failures, 1);
+    atomic_store(&last_failure_time, time(NULL));
+  }
+
   return result;
 }
 
@@ -574,6 +631,8 @@ send_unauthorized_response(struct MHD_Connection *connection) {
     return MHD_NO;
   MHD_add_response_header(response, "WWW-Authenticate",
                           "Basic realm=\"firewall-metrics\"");
+  /* 修复 R8-4：401 响应同样需要安全头 */
+  add_security_headers(response);
   ret = MHD_queue_response(connection, MHD_HTTP_UNAUTHORIZED, response);
   MHD_destroy_response(response);
   return ret == MHD_YES ? MHD_YES : MHD_NO;
@@ -595,6 +654,8 @@ static enum MHD_Result send_error_response(struct MHD_Connection *connection,
                                              MHD_RESPMEM_PERSISTENT);
   if (!response)
     return MHD_NO;
+  /* 修复 R8-4：错误响应同样需要安全头 */
+  add_security_headers(response);
   ret = MHD_queue_response(connection, status_code, response);
   MHD_destroy_response(response);
   return ret == MHD_YES ? MHD_YES : MHD_NO;
@@ -625,6 +686,8 @@ handle_metrics_request(struct MHD_Connection *connection) {
     return MHD_NO;
   MHD_add_response_header(response, "Content-Type",
                           "text/plain; version=0.0.4; charset=utf-8");
+  /* 修复 R8-1：添加安全头防止 MIME 嗅探、点击劫持等攻击 */
+  add_security_headers(response);
   ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
   MHD_destroy_response(response);
   return ret == MHD_YES ? MHD_YES : MHD_NO;
@@ -646,6 +709,8 @@ handle_health_request(struct MHD_Connection *connection) {
   if (!response)
     return MHD_NO;
   MHD_add_response_header(response, "Content-Type", "application/json");
+  /* 修复 R8-4：/health 端点同样需要安全头 */
+  add_security_headers(response);
   ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
   MHD_destroy_response(response);
   return ret == MHD_YES ? MHD_YES : MHD_NO;
