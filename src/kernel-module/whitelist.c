@@ -52,7 +52,8 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
 
   if (af == FW_AF_INET6) {
     bkt = hash_wl_ipv6(&new_entry->addr.ipv6);
-    hlist_for_each_entry_rcu(tmp_entry, &fw->whitelist_table_ipv6[bkt], hash) {
+    hlist_for_each_entry_rcu(tmp_entry, &fw->whitelist_table_ipv6[bkt], hash,
+                             lockdep_is_held(&fw->whitelist_lock)) {
       if (tmp_entry->af == af &&
           ipv6_addr_equal(&tmp_entry->addr.ipv6, &new_entry->addr.ipv6) &&
           tmp_entry->mask.prefix_len == new_entry->mask.prefix_len) {
@@ -63,7 +64,8 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
     }
   } else {
     bkt = hash_min(new_entry->addr.ipv4, WHITELIST_HASH_BITS);
-    hlist_for_each_entry_rcu(tmp_entry, &fw->whitelist_table_ipv4[bkt], hash) {
+    hlist_for_each_entry_rcu(tmp_entry, &fw->whitelist_table_ipv4[bkt], hash,
+                             lockdep_is_held(&fw->whitelist_lock)) {
       if (tmp_entry->af == af && tmp_entry->addr.ipv4 == new_entry->addr.ipv4 &&
           tmp_entry->mask.ipv4_mask == new_entry->mask.ipv4_mask) {
         spin_unlock(&fw->whitelist_lock);

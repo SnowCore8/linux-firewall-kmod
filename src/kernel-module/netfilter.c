@@ -39,13 +39,18 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
     hlist_for_each_entry_rcu(wl_entry, &fw_info.whitelist_table_ipv6[wl_bkt],
                              hash) {
       if (wl_entry->mask.prefix_len == 128) {
-        /* struct in6_addr 16 字节，超出 READ_ONCE 支持范围，逐 u32 读取 */
+        /* struct in6_addr 16 字节，超出 READ_ONCE 支持范围。
+         * 安全保证：白名单条目在 RCU 发布后不可变（仅增删，不修改），
+         * 因此 RCU reader 要么看到完整旧条目，要么看到完整新条目。
+         * 使用 barrier() 防止编译器重排序逐个 u32 读取。 */
         const __be32 *src = (__be32 *)wl_entry->addr.ipv6.s6_addr;
         struct in6_addr wl_addr;
 
         wl_addr.s6_addr32[0] = READ_ONCE(((__be32 *)src)[0]);
         wl_addr.s6_addr32[1] = READ_ONCE(((__be32 *)src)[1]);
         wl_addr.s6_addr32[2] = READ_ONCE(((__be32 *)src)[2]);
+        /* 编译器屏障：确保前 3 个 u32 读取完成后才读取第 4 个 */
+        barrier();
         wl_addr.s6_addr32[3] = READ_ONCE(((__be32 *)src)[3]);
         if (ipv6_addr_equal(ip6, &wl_addr)) {
           is_whitelisted = true;
@@ -65,6 +70,7 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
           wl_addr.s6_addr32[0] = READ_ONCE(((__be32 *)src)[0]);
           wl_addr.s6_addr32[1] = READ_ONCE(((__be32 *)src)[1]);
           wl_addr.s6_addr32[2] = READ_ONCE(((__be32 *)src)[2]);
+          barrier();
           wl_addr.s6_addr32[3] = READ_ONCE(((__be32 *)src)[3]);
           if (ipv6_prefix_equal(ip6, &wl_addr, prefix)) {
             is_whitelisted = true;

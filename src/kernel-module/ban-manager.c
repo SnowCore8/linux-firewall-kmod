@@ -89,7 +89,8 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     struct in6_addr *ip6 = (struct in6_addr *)ip;
     u32 bkt6 = hash_ipv6(ip6);
     struct ban_entry *existing;
-    hlist_for_each_entry_rcu(existing, &fw->ban_table_ipv6[bkt6], hash) {
+    hlist_for_each_entry_rcu(existing, &fw->ban_table_ipv6[bkt6], hash,
+                             lockdep_is_held(&fw->lock)) {
       if (existing->af == af && ipv6_addr_equal(&existing->addr.ipv6, ip6)) {
         bool is_perm = READ_ONCE(existing->is_permanent);
         unsigned long ubt = READ_ONCE(existing->unban_time);
@@ -112,7 +113,8 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     __be32 ipv4 = *(__be32 *)ip;
     u32 bkt4 = hash_min(ipv4, BAN_HASH_BITS);
     struct ban_entry *existing;
-    hlist_for_each_entry_rcu(existing, &fw->ban_table_ipv4[bkt4], hash) {
+    hlist_for_each_entry_rcu(existing, &fw->ban_table_ipv4[bkt4], hash,
+                             lockdep_is_held(&fw->lock)) {
       if (existing->af == af && existing->addr.ipv4 == ipv4) {
         bool is_perm = READ_ONCE(existing->is_permanent);
         unsigned long ubt = READ_ONCE(existing->unban_time);

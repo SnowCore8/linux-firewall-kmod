@@ -20,6 +20,7 @@
 #include <errno.h>
 #include <microhttpd.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -62,6 +63,31 @@ static atomic_bool exporter_thread_created = false;
   syslog(LOG_WARNING, "firewall[exporter]: WARN: " fmt, ##__VA_ARGS__)
 #define exporter_log_info(fmt, ...)                                            \
   syslog(LOG_INFO, "firewall[exporter]: " fmt, ##__VA_ARGS__)
+
+/* 安全审计日志速率限制：防止认证失败日志淹没系统日志 */
+static inline void exporter_log_warn_ratelimited(const char *fmt, ...) {
+  static time_t last_warn = 0;
+  static int warn_count = 0;
+  time_t now = time(NULL);
+  va_list args;
+
+  if (now != last_warn) {
+    last_warn = now;
+    warn_count = 0;
+  }
+  warn_count++;
+  /* 每秒最多输出 1 条，超额仅在每分钟输出一次汇总 */
+  if (warn_count > 1) {
+    if (warn_count == 2)
+      syslog(LOG_WARNING,
+             "firewall[exporter]: WARN: suppressing repeated auth failure logs");
+    return;
+  }
+
+  va_start(args, fmt);
+  vsyslog(LOG_WARNING, fmt, args);
+  va_end(args);
+}
 
 /* ============================================================================
  * 内核统计信息读取器
@@ -516,14 +542,18 @@ static int check_basic_auth_header(const char *auth_header) {
   size_t auth_pass_len = strlen(auth_pass);
 
   /* 长度不同直接判定失败（长度比较不泄露密码内容） */
-  if (user_len != auth_user_len || pass_len != auth_pass_len) {
-    return 0;
-  }
+  int result = (user_len != auth_user_len || pass_len != auth_pass_len)
+                   ? 0
+                   : (constant_time_compare(cfg_user, auth_user, user_len) == 0 &&
+                      constant_time_compare(cfg_pass, auth_pass, pass_len) == 0)
+                         ? 1
+                         : 0;
 
-  return (constant_time_compare(cfg_user, auth_user, user_len) == 0 &&
-          constant_time_compare(cfg_pass, auth_pass, pass_len) == 0)
-             ? 1
-             : 0;
+  /* 安全考虑：认证完成后立即清零敏感缓冲区，防止内存残留 */
+  memset(decoded, 0, sizeof(decoded));
+  memset(cfg_pass, 0, sizeof(cfg_pass));
+
+  return result;
 }
 
 /**
@@ -646,7 +676,8 @@ answer_to_connection(void *cls, struct MHD_Connection *connection,
                                               "Authorization");
     int auth_result = check_basic_auth_header(auth_header);
     if (auth_result == 0) {
-      exporter_log_warn("Unauthorized access attempt to %s", url);
+      /* 安全考虑：使用 ratelimited 日志防止攻击者通过频繁请求淹没系统日志 */
+      exporter_log_warn_ratelimited("Unauthorized access attempt to %s", url);
       return send_unauthorized_response(connection);
     }
     /* auth_result == -1 表示未配置认证，跳过 */

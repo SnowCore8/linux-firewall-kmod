@@ -391,7 +391,7 @@ int restore_state_from_file(const char *filename) {
         continue;
 
       char *cmd = strsep(&token, " ");
-      if (!cmd)
+      if (!cmd || !*cmd)
         continue;
 
       /* 恢复 IPv4 封禁 */
@@ -456,7 +456,8 @@ int restore_state_from_file(const char *filename) {
                 bool duplicate = false;
 
                 hlist_for_each_entry_rcu(existing,
-                                         &fw_info.ban_table_ipv4[bkt4], hash) {
+                                         &fw_info.ban_table_ipv4[bkt4], hash,
+                                         lockdep_is_held(&fw_info.lock)) {
                   if (existing->af == FW_AF_INET && existing->addr.ipv4 == ip) {
                     duplicate = true;
                     break;
@@ -534,7 +535,8 @@ int restore_state_from_file(const char *filename) {
                 bool duplicate = false;
 
                 hlist_for_each_entry_rcu(existing,
-                                         &fw_info.ban_table_ipv6[bkt6], hash) {
+                                         &fw_info.ban_table_ipv6[bkt6], hash,
+                                         lockdep_is_held(&fw_info.lock)) {
                   if (existing->af == FW_AF_INET6 &&
                       ipv6_addr_equal(&existing->addr.ipv6, &ip6)) {
                     duplicate = true;

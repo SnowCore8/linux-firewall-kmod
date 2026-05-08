@@ -317,6 +317,35 @@ static int validate_regex_safety(struct jail *j, const char *pattern) {
     return -1;
   }
 
+  /* 拒绝量化的交替组：如 (a|aa)+ 导致指数级回溯 */
+  {
+    int paren_depth = 0;
+    bool has_alternation_in_group = false;
+    for (const char *p = pattern; *p; p++) {
+      if (*p == '(' && p[1] != '?') {
+        paren_depth++;
+        has_alternation_in_group = false;
+      } else if (*p == ')') {
+        if (has_alternation_in_group) {
+          /* 检查右括号后是否紧跟量词 */
+          char next = p[1];
+          if (next == '+' || next == '*' || next == '{' || next == '?') {
+            daemon_log_err(
+                "Rejected unsafe regex for jail '%s': alternation inside "
+                "quantified group detected (pattern like (a|aa)+ at offset %ld)",
+                j->name, (long)(p - pattern));
+            return -1;
+          }
+        }
+        paren_depth--;
+        if (paren_depth < 0)
+          paren_depth = 0;
+      } else if (*p == '|' && paren_depth > 0) {
+        has_alternation_in_group = true;
+      }
+    }
+  }
+
   return 0;
 }
 
@@ -718,7 +747,18 @@ void free_config_partial(struct config *cfg) {
       free(jail->regex_pattern);
     }
 
-    /* failed_hash 已迁移，跳过 */
+    /* 防御性清理：如果 failed_hash 未被迁移（如错误路径），释放防止泄漏 */
+    if (jail->failed_hash) {
+      khint_t k;
+      for (k = kh_begin(jail->failed_hash); k != kh_end(jail->failed_hash);
+           ++k) {
+        if (kh_exist(jail->failed_hash, k)) {
+          free((char *)kh_key(jail->failed_hash, k));
+        }
+      }
+      kh_destroy(ip_map, jail->failed_hash);
+      jail->failed_hash = NULL;
+    }
   }
 
   if (cfg->config_file)

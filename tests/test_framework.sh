@@ -55,11 +55,35 @@ fw_test_header() {
 # 断言函数
 # ============================================================================
 
+# 安全验证：检查条件字符串是否包含危险的命令注入模式
+# 返回 0 表示安全，1 表示不安全
+assert_condition_safe() {
+    local cond="$1"
+    # 拒绝命令链式操作符：分号、双与号、双竖线（不在 [[ ]] 内的）
+    if [[ "$cond" =~ \; ]] || [[ "$cond" =~ \&\& ]] || [[ "$cond" =~ \|\| ]]; then
+        fw_log_error "拒绝不安全的断言条件（包含命令链式操作符）: $cond"
+        return 1
+    fi
+    # 拒绝命令替换：$() 和 反引号
+    if [[ "$cond" =~ \$\( ]] || [[ "$cond" =~ \` ]]; then
+        fw_log_error "拒绝不安全的断言条件（包含命令替换）: $cond"
+        return 1
+    fi
+    return 0
+}
+
 # 基础断言：条件为真
 assert_true() {
     local condition="$1"
     local msg="${2:-断言失败}"
     TEST_TOTAL=$((TEST_TOTAL + 1))
+
+    if ! assert_condition_safe "$condition"; then
+        TEST_FAIL=$((TEST_FAIL + 1))
+        echo -e "  ${RED}[FAIL]${NC} $msg (不安全条件被拒绝)"
+        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg (不安全条件被拒绝)")
+        return 1
+    fi
 
     if eval "$condition" >/dev/null 2>&1; then
         TEST_PASS=$((TEST_PASS + 1))
@@ -79,6 +103,13 @@ assert_false() {
     local condition="$1"
     local msg="${2:-断言失败}"
     TEST_TOTAL=$((TEST_TOTAL + 1))
+
+    if ! assert_condition_safe "$condition"; then
+        TEST_FAIL=$((TEST_FAIL + 1))
+        echo -e "  ${RED}[FAIL]${NC} $msg (不安全条件被拒绝)"
+        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg (不安全条件被拒绝)")
+        return 1
+    fi
 
     if ! eval "$condition" >/dev/null 2>&1; then
         TEST_PASS=$((TEST_PASS + 1))

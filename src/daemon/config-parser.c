@@ -118,7 +118,8 @@ static int parse_config_bool(const char *value) {
  */
 static int parse_config_string(const char *value, size_t max_len,
                                char **target) {
-  if (strlen(value) == 0 || (max_len > 0 && strlen(value) >= max_len)) {
+  size_t val_len = strlen(value);
+  if (val_len == 0 || (max_len > 0 && val_len >= max_len)) {
     return -1;
   }
 
