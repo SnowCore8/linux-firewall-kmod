@@ -568,9 +568,9 @@ int clone_jail(struct jail *dst, const struct jail *src) {
     if (!dst->regex_pattern) {
       for (int j = 0; j < dst->log_count; j++) {
         free(dst->log_files[j]);
-        dst->log_files[j] = NULL;  /* 防止 double-free */
+        dst->log_files[j] = NULL; /* 防止 double-free */
       }
-      dst->log_count = 0;  /* 重置计数 */
+      dst->log_count = 0; /* 重置计数 */
       return -1;
     }
   }
@@ -635,7 +635,7 @@ struct config *config_clone(const struct config *src) {
     if (clone_jail(&dst->jails[i], &src->jails[i]) < 0) {
       goto fail;
     }
-    dst->jail_count++;  /* 克隆成功才递增 */
+    dst->jail_count++; /* 克隆成功才递增 */
   }
 
   return dst;
@@ -671,18 +671,21 @@ int config_validate(const struct config *cfg) {
     return -1;
   }
   if (cfg->jail_count <= 0 || cfg->jail_count > MAX_JAILS) {
-    daemon_log_err("Config validation failed: invalid jail_count=%d (must be 1..%d)",
-                   cfg->jail_count, MAX_JAILS);
+    daemon_log_err(
+        "Config validation failed: invalid jail_count=%d (must be 1..%d)",
+        cfg->jail_count, MAX_JAILS);
     return -1;
   }
   if (cfg->interval <= 0 || cfg->interval > 60) {
-    daemon_log_err("Config validation failed: invalid interval=%d (must be 1..60)",
-                   cfg->interval);
+    daemon_log_err(
+        "Config validation failed: invalid interval=%d (must be 1..60)",
+        cfg->interval);
     return -1;
   }
   if (cfg->metrics_port < 0 || cfg->metrics_port > 65535) {
-    daemon_log_err("Config validation failed: invalid metrics_port=%d (must be 0..65535)",
-                   cfg->metrics_port);
+    daemon_log_err(
+        "Config validation failed: invalid metrics_port=%d (must be 0..65535)",
+        cfg->metrics_port);
     return -1;
   }
   if (cfg->default_max_retries == 0) {

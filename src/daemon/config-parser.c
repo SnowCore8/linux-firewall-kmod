@@ -142,7 +142,7 @@ static int parse_config_string(const char *value, size_t max_len,
  * 返回: 0 表示成功，-1 表示失败
  */
 static int parse_config_path(const char *value, const char *config_dir,
-                              char **target) {
+                             char **target) {
   if (strlen(value) == 0) {
     return -1;
   }
@@ -598,7 +598,8 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
           }
         }
       } else if (ctx.current_key) {
-        /* 顶层键值对（不在 jails 或 defaults 中）— 复用 apply_defaults_config */
+        /* 顶层键值对（不在 jails 或 defaults 中）— 复用 apply_defaults_config
+         */
         apply_defaults_config(target, ctx.current_key, value, ctx.strict_mode,
                               ctx.config_file, config_dir, &ctx.has_error);
         free(ctx.current_key);
@@ -854,7 +855,8 @@ int parse_config_file(const char *config_path) {
       if (strcmp(failed_hash_pairs[i].name, new_jail->name) == 0) {
         new_jail->failed_hash = failed_hash_pairs[i].failed_hash;
         failed_hash_pairs[i].failed_hash = NULL;
-        daemon_log_debug("Migrated failed entries for jail '%s'", new_jail->name);
+        daemon_log_debug("Migrated failed entries for jail '%s'",
+                         new_jail->name);
         break;
       }
     }
@@ -889,7 +891,8 @@ int parse_config_file(const char *config_path) {
   }
 
   /* 原子交换 jail 数组：
-   * 1. 先清空所有 jail 槽位（此时 jail_count 仍是旧值，读者不会访问已清空的槽位）
+   * 1. 先清空所有 jail 槽位（此时 jail_count
+   * 仍是旧值，读者不会访问已清空的槽位）
    * 2. 复制新 jail 数据
    * 3. 最后更新 jail_count（读者此时看到完整的新 jail 数组） */
   for (int i = 0; i < MAX_JAILS; i++) {
@@ -1096,18 +1099,18 @@ int load_config_directory(const char *config_dir) {
 
     file_cfg->config_file = strdup(full_path);
     if (!file_cfg->config_file) {
-        daemon_log_err("Out of memory allocating config_file for: %s", full_path);
-        free(file_cfg);
-        ret = -1;
-        continue;
+      daemon_log_err("Out of memory allocating config_file for: %s", full_path);
+      free(file_cfg);
+      ret = -1;
+      continue;
     }
     file_cfg->config_dir = strdup(config_dir);
     if (!file_cfg->config_dir) {
-        daemon_log_err("Out of memory allocating config_dir for: %s", config_dir);
-        free(file_cfg->config_file);
-        free(file_cfg);
-        ret = -1;
-        continue;
+      daemon_log_err("Out of memory allocating config_dir for: %s", config_dir);
+      free(file_cfg->config_file);
+      free(file_cfg);
+      ret = -1;
+      continue;
     }
 
     if (parse_yaml_into(full_path, file_cfg) < 0) {
@@ -1132,7 +1135,8 @@ int load_config_directory(const char *config_dir) {
      * 要么新默认值+新 jail 数组，不会出现中间状态。 */
     pthread_rwlock_wrlock(&config_rwlock);
 
-    /* 第一步：累加 jail 到全局 cfg（同名 jail 采用"后到优先"策略：更新现有条目） */
+    /* 第一步：累加 jail 到全局 cfg（同名 jail
+     * 采用"后到优先"策略：更新现有条目） */
     int added_count = 0;
     int updated_count = 0;
     for (int j = 0; j < file_cfg->jail_count; j++) {

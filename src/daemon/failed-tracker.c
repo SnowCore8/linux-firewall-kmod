@@ -89,7 +89,7 @@ void remove_entry_for_jail(struct jail *j, const char *ip) {
 
 /* 统计时间窗口内的近期失败次数 */
 unsigned int count_recent(struct failed_entry *entry, time_t window,
-                           unsigned int max_retries) {
+                          unsigned int max_retries) {
   time_t now = time(NULL);
   unsigned int count = 0;
 
@@ -134,7 +134,7 @@ unsigned int count_recent(struct failed_entry *entry, time_t window,
  * @findtime: 统计失败次数的时间窗口
  */
 void process_failed_timestamps(struct failed_entry *entry, time_t now,
-                                time_t findtime) {
+                               time_t findtime) {
   /* 修复 W2-1：编译时检查 memmove 大小计算不会溢出 */
   _Static_assert(MAX_FAILED_TIMESTAMPS < (SIZE_MAX / sizeof(time_t)),
                  "MAX_FAILED_TIMESTAMPS * sizeof(time_t) would overflow");

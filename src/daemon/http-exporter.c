@@ -57,8 +57,8 @@ static atomic_bool exporter_thread_created = false;
 /* 修复 R8-2：Basic Auth 暴力破解防护 - 失败计数器和临时锁定 */
 static _Atomic(unsigned long) auth_failures = 0;
 static _Atomic(time_t) last_failure_time = 0;
-#define AUTH_FAILURE_THRESHOLD 10  /* 10 次失败后触发锁定 */
-#define AUTH_LOCKOUT_DURATION 60   /* 锁定 60 秒 */
+#define AUTH_FAILURE_THRESHOLD 10 /* 10 次失败后触发锁定 */
+#define AUTH_LOCKOUT_DURATION 60  /* 锁定 60 秒 */
 
 /* ============================================================================
  * 日志辅助函数（使用 syslog 以保持与守护进程一致）

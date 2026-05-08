@@ -207,9 +207,8 @@ static int match_pcre2_regex(struct jail *j, const char *line, size_t line_len,
   size_t ip_len;
   char ip_buf[INET6_ADDRSTRLEN];
 
-  regex_result =
-      pcre2_match(j->compiled_regex, (PCRE2_SPTR)line, (PCRE2_SIZE)line_len, 0,
-                  0, j->match_data, NULL);
+  regex_result = pcre2_match(j->compiled_regex, (PCRE2_SPTR)line,
+                             (PCRE2_SIZE)line_len, 0, 0, j->match_data, NULL);
 
   if (regex_result < 0) {
     if (regex_result != PCRE2_ERROR_NOMATCH) {

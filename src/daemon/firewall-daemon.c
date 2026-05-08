@@ -113,7 +113,7 @@ void daemonize_process(void) {
   /* 写入 PID 文件以支持 systemd Type=forking
    * 使用 open() + O_CREAT|O_EXCL|O_NOFOLLOW 防止符号链接攻击 */
   int pidfd = open("/run/firewall-daemon.pid",
-                    O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+                   O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
   if (pidfd >= 0) {
     char pid_str[32];
     int len = snprintf(pid_str, sizeof(pid_str), "%d\n", getpid());

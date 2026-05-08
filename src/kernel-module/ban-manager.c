@@ -30,8 +30,8 @@ static u32 hash_ipv6(const struct in6_addr *addr) {
 }
 
 static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
-                        unsigned long unban_time, bool is_permanent,
-                        const char *log_msg, unsigned long log_arg) {
+                       unsigned long unban_time, bool is_permanent,
+                       const char *log_msg, unsigned long log_arg) {
   struct ban_entry *entry;
   struct whitelist_entry *wl_entry;
   int bkt;
@@ -198,7 +198,7 @@ static struct ban_entry *__find_ban_entry_rcu(struct firewall_info *fw, u8 af,
 }
 
 static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip,
-                          bool permanent_only) {
+                         bool permanent_only) {
   struct ban_entry *entry;
   int found = 0;
   char ip_str[INET6_STR_LEN];
