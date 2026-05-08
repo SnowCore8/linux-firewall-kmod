@@ -335,7 +335,8 @@ void process_new_lines(int idx) {
   if (!batch_buf) {
     daemon_log_err("分配批量读取缓冲区内存不足");
     ret = -ENOMEM;
-    /* 注意：cleanup_restore_partial 会恢复 local_partial_len，确保部分行数据不丢失 */
+    /* 注意：cleanup_restore_partial 会恢复
+     * local_partial_len，确保部分行数据不丢失 */
     goto cleanup_restore_partial;
   }
 

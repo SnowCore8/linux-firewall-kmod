@@ -79,8 +79,9 @@ static inline void exporter_log_warn_ratelimited(const char *fmt, ...) {
   /* 每秒最多输出 1 条，超额仅在每分钟输出一次汇总 */
   if (warn_count > 1) {
     if (warn_count == 2)
-      syslog(LOG_WARNING,
-             "firewall[exporter]: WARN: suppressing repeated auth failure logs");
+      syslog(
+          LOG_WARNING,
+          "firewall[exporter]: WARN: suppressing repeated auth failure logs");
     return;
   }
 
@@ -542,12 +543,11 @@ static int check_basic_auth_header(const char *auth_header) {
   size_t auth_pass_len = strlen(auth_pass);
 
   /* 长度不同直接判定失败（长度比较不泄露密码内容） */
-  int result = (user_len != auth_user_len || pass_len != auth_pass_len)
-                   ? 0
-                   : (constant_time_compare(cfg_user, auth_user, user_len) == 0 &&
-                      constant_time_compare(cfg_pass, auth_pass, pass_len) == 0)
-                         ? 1
-                         : 0;
+  int result = (user_len != auth_user_len || pass_len != auth_pass_len) ? 0
+               : (constant_time_compare(cfg_user, auth_user, user_len) == 0 &&
+                  constant_time_compare(cfg_pass, auth_pass, pass_len) == 0)
+                   ? 1
+                   : 0;
 
   /* 安全考虑：认证完成后立即清零敏感缓冲区，防止内存残留 */
   memset(decoded, 0, sizeof(decoded));

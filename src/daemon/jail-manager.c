@@ -332,7 +332,8 @@ static int validate_regex_safety(struct jail *j, const char *pattern) {
           if (next == '+' || next == '*' || next == '{' || next == '?') {
             daemon_log_err(
                 "Rejected unsafe regex for jail '%s': alternation inside "
-                "quantified group detected (pattern like (a|aa)+ at offset %ld)",
+                "quantified group detected (pattern like (a|aa)+ at offset "
+                "%ld)",
                 j->name, (long)(p - pattern));
             return -1;
           }
