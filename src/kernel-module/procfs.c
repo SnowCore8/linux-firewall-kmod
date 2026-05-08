@@ -869,6 +869,18 @@ static ssize_t config_write(struct file *file, const char __user *buf,
   if (len > 0 && input[len - 1] == '\n')
     input[len - 1] = '\0';
 
+  /* 修复 R6-6：控制字符校验（参考 bans_write 第 418-427 行） */
+  {
+    size_t i;
+    for (i = 0; i < len && input[i] != '\0'; i++) {
+      char c = input[i];
+      if (c < 0x20 && c != '\t') {
+        fw_pr_warn("Invalid control character 0x%02x at position %zu", c, i);
+        return -EINVAL;
+      }
+    }
+  }
+
   result = parse_config_input(input, param, sizeof(param), &value_str);
   if (result < 0)
     return result;

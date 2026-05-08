@@ -287,8 +287,10 @@ int parse_log_line(struct jail *j, const char *line, char *ip_out,
     result = match_pcre2_regex(j, line, line_len, ip_out, ip_size);
     if (result == 1)
       return 1;
-    if (result == -1)
+    if (result == -1) {
+      daemon_log_err("Jail '%s' regex has no valid IP capture group", j->name);
       return 0;
+    }
   }
 
   if (!j || !j->regex_compiled)

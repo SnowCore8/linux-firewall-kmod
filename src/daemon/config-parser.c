@@ -233,28 +233,41 @@ static int apply_defaults_integer_config(struct config *target, const char *key,
  * @key: 配置项名称
  * @value: 配置值字符串
  * @config_dir: 配置文件目录
+ * @has_error: 错误标志输出（修复 R6-2：区分"解析错误"和"未知键"）
  * 返回: 0 表示成功，-1 表示未知配置项
  */
 static int apply_defaults_string_config(struct config *target, const char *key,
                                         const char *value,
-                                        const char *config_dir) {
+                                        const char *config_dir,
+                                        int *has_error) {
   if (strcmp(key, "metrics_bind_address") == 0) {
-    return parse_config_string(value, 64, &target->metrics_bind_address);
+    int rc = parse_config_string(value, 64, &target->metrics_bind_address);
+    if (rc < 0 && has_error)
+      *has_error = 1;
+    return rc < 0 ? -1 : 0;
   } else if (strcmp(key, "metrics_username") == 0) {
-    return parse_config_string(value, 64, &target->metrics_username);
+    int rc = parse_config_string(value, 64, &target->metrics_username);
+    if (rc < 0 && has_error)
+      *has_error = 1;
+    return rc < 0 ? -1 : 0;
   } else if (strcmp(key, "metrics_password") == 0) {
-    return parse_config_string(value, 128, &target->metrics_password);
+    int rc = parse_config_string(value, 128, &target->metrics_password);
+    if (rc < 0 && has_error)
+      *has_error = 1;
+    return rc < 0 ? -1 : 0;
   } else if (strcmp(key, "daemon") == 0) {
     target->daemon = parse_config_bool(value);
     return 0;
   } else if (strcmp(key, "permanent_db_path") == 0) {
     int rc = parse_config_path(value, config_dir, &target->permanent_db_path);
+    if (rc < 0 && has_error)
+      *has_error = 1;
     if (rc == 0) {
       target->permanent_ban_enabled = 1;
       daemon_log_info("Default permanent_db_path set to: %s",
                       target->permanent_db_path);
     }
-    return rc;
+    return rc < 0 ? -1 : 0;
   } else if (strcmp(key, "permanent_ban_enabled") == 0) {
     target->permanent_ban_enabled = parse_config_bool(value);
     return 0;
@@ -285,7 +298,7 @@ static int apply_defaults_config(struct config *target, const char *key,
     return 0;
 
   /* 尝试字符串/布尔类型配置 */
-  rc = apply_defaults_string_config(target, key, value, config_dir);
+  rc = apply_defaults_string_config(target, key, value, config_dir, has_error);
   if (rc == 0)
     return 0;
 
@@ -641,6 +654,10 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
               target->metrics_bind_address = tmp;
               daemon_log_info("Config metrics_bind_address set to: %s",
                               target->metrics_bind_address);
+            } else if (ctx.strict_mode) {
+              daemon_log_err("OOM allocating metrics_bind_address in top-level of %s",
+                             ctx.config_file);
+              ctx.has_error = 1;
             }
           }
         } else if (strcmp(ctx.current_key, "metrics_username") == 0) {
@@ -652,6 +669,10 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
                 free(target->metrics_username);
               target->metrics_username = tmp;
               daemon_log_info("Config metrics_username configured");
+            } else if (ctx.strict_mode) {
+              daemon_log_err("OOM allocating metrics_username in top-level of %s",
+                             ctx.config_file);
+              ctx.has_error = 1;
             }
           }
         } else if (strcmp(ctx.current_key, "metrics_password") == 0) {
@@ -663,6 +684,10 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
                 free(target->metrics_password);
               target->metrics_password = tmp;
               daemon_log_info("Config metrics_password configured");
+            } else if (ctx.strict_mode) {
+              daemon_log_err("OOM allocating metrics_password in top-level of %s",
+                             ctx.config_file);
+              ctx.has_error = 1;
             }
           }
         } else if (strcmp(ctx.current_key, "daemon") == 0) {
@@ -686,6 +711,10 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
                 free(target->permanent_db_path);
               target->permanent_db_path = tmp;
               target->permanent_ban_enabled = 1;
+            } else if (ctx.strict_mode) {
+              daemon_log_err("OOM allocating permanent_db_path in top-level of %s",
+                             ctx.config_file);
+              ctx.has_error = 1;
             }
           }
         } else if (strcmp(ctx.current_key, "permanent_ban_enabled") == 0) {

@@ -389,6 +389,12 @@ int restore_state_from_file(const char *filename) {
     bytes_read += chunk;
   }
 
+  /* 修复 R6-5：状态文件超过大小时添加警告日志 */
+  if (bytes_read >= MAX_STATE_FILE_SIZE - 1) {
+    fw_pr_warn("State file truncated at %d bytes (max %d)",
+               (int)bytes_read, MAX_STATE_FILE_SIZE - 1);
+  }
+
   if (bytes_read > 0) {
     buffer[bytes_read] = '\0';
 

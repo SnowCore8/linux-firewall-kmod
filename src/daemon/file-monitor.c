@@ -319,8 +319,12 @@ void process_new_lines(int idx) {
   findtime = j->findtime;
   /* 使用原子交换清零 partial_line_len，避免使用写锁 */
   local_partial_len = atomic_exchange(&j->partial_line_len, 0);
-  if (local_partial_len > 0 && local_partial_len < sizeof(local_partial_buf)) {
-    memcpy(local_partial_buf, j->partial_line_buffer, local_partial_len);
+  /* 修复 R6-8：使用 <= 并截断，避免 local_partial_len 恰好等于缓冲区大小时数据丢失 */
+  if (local_partial_len > 0) {
+    size_t safe_len = local_partial_len;
+    if (safe_len >= sizeof(local_partial_buf))
+      safe_len = sizeof(local_partial_buf) - 1;
+    memcpy(local_partial_buf, j->partial_line_buffer, safe_len);
   }
   /* 立即释放读锁，文件读取和处理在锁外进行 */
   pthread_rwlock_unlock(&config_rwlock);
@@ -536,7 +540,7 @@ void handle_log_rotation(int idx) {
    * 不需要额外的写锁保护。此处只需读锁保护 cfg.jail_count 和 jail 数据的读取。 */
   int need_process = 0;
   size_t local_len = 0;
-  char local_buf[512]; /* 与 jail.partial_line_buffer 大小一致 */
+  char local_buf[sizeof(((struct jail *)0)->partial_line_buffer)]; /* 修复 R6-3：使用与 jail.partial_line_buffer 一致的大小（8192字节） */
 
   if (jail_idx >= 0 && jail_idx < cfg.jail_count) {
     pthread_rwlock_rdlock(&config_rwlock);

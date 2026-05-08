@@ -908,7 +908,7 @@ int sqlite_purge_deleted(sqlite_db_t *db, int days) {
     stmt = db->stmt_purge_days;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
-    time_t cutoff = time(NULL) - (days * 86400);
+    time_t cutoff = time(NULL) - ((time_t)days * 86400);
     sqlite3_bind_int64(stmt, 1, (sqlite3_int64)cutoff);
   } else {
     stmt = db->stmt_purge_all;
