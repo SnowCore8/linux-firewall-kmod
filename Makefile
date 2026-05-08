@@ -28,7 +28,7 @@ NPROC ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 KDIR        ?= /lib/modules/$(shell uname -r)/build
 
 # 项目路径
-PWD := $(shell pwd)
+PWD := $(CURDIR)
 
 # 源码目录
 KERNEL_SRC_DIR := src/kernel-module
@@ -107,7 +107,7 @@ build: kernel-module daemon
 
 # P2-7: 内核模块编译 — 使用 MAKEFLAGS 继承父 make 的 jobserver
 # 如果 MAKEFLAGS 中没有 -j/--jobserver，则自动添加 -j$(NPROC)
-KERNEL_PARALLEL := $(if $(findstring j,$(MAKEFLAGS)),,$(NPROC))
+KERNEL_PARALLEL := $(if $(filter -j% --jobserver%,$(MAKEFLAGS)),,$(NPROC))
 kernel-module: $(KERNEL_MODULE)
 
 $(KERNEL_MODULE): $(KERNEL_SRC_DIR)/firewall-main.c $(KERNEL_SRC_DIR)/firewall.h

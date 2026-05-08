@@ -36,7 +36,8 @@ make -C "$PROJECT_ROOT" all
 # P2-8: 使用 make install DESTDIR= 复用安装逻辑，避免与 Makefile 重复
 TEMP_DIR="$BUILD_DIR/$PACKAGE_NAME-$VERSION"
 echo "安装到暂存目录: $TEMP_DIR"
-make -C "$PROJECT_ROOT" install DESTDIR="$TEMP_DIR" PREFIX=/usr
+make -C "$PROJECT_ROOT" install-kernel-module install-daemon install-config install-state install-systemd \
+    DESTDIR="$TEMP_DIR" PREFIX=/usr
 
 # 安装文档
 echo "安装文档..."
@@ -85,7 +86,11 @@ fi
 # 加载内核模块
 if ! lsmod | grep -q "^firewall"; then
     echo "Loading firewall kernel module..."
-    modprobe firewall || true
+    if ! modprobe firewall; then
+        echo "ERROR: Failed to load firewall kernel module" >&2
+        echo "Please check dmesg for details" >&2
+        exit 1
+    fi
 fi
 
 # 启用并启动 systemd 服务
