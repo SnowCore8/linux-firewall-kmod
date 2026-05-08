@@ -30,8 +30,8 @@ static u32 hash_ipv6(const struct in6_addr *addr) {
 }
 
 static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
-                       unsigned long unban_time, bool is_permanent,
-                       const char *log_msg, unsigned long log_arg) {
+                        unsigned long unban_time, bool is_permanent,
+                        const char *log_msg, unsigned long log_arg) {
   struct ban_entry *entry;
   struct whitelist_entry *wl_entry;
   int bkt;
@@ -50,12 +50,11 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     return -ENOMEM;
   }
 
-  /* 修复 R4-4：将白名单检查和封禁执行放在同一个 spinlock 保护下，
-   * 消除白名单条目可能在检查和封禁之间被添加的 TOCTOU 竞态条件。
-   * 白名单使用 RCU 保护，在 spinlock 内嵌套 rcu_read_lock 进行遍历。 */
-  spin_lock(&fw->lock);
+  /* R9-4 修复：将白名单检查放在全局锁下（防止 TOCTOU），
+   * 封禁表操作放在每桶锁下（减少并发竞争）。 */
 
-  /* 在主锁保护下，使用 RCU 遍历检查白名单 */
+  /* 步骤 1：全局锁保护下的白名单检查 */
+  spin_lock(&fw->lock);
   rcu_read_lock();
   if (af == FW_AF_INET6) {
     struct in6_addr *ip6 = (struct in6_addr *)ip;
@@ -88,52 +87,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
   }
   rcu_read_unlock();
 
-  /* 修复 W2-3：已在 spinlock 保护下，使用 hlist_for_each_entry 替代 RCU 版本，
-   * 消除 RCU 嵌套（spinlock + rcu_read_lock）导致的 lockdep 警告。 */
-  if (af == FW_AF_INET6) {
-    struct in6_addr *ip6 = (struct in6_addr *)ip;
-    u32 bkt6 = hash_ipv6(ip6);
-    struct ban_entry *existing;
-    hlist_for_each_entry(existing, &fw->ban_table_ipv6[bkt6], hash) {
-      if (existing->af == af && ipv6_addr_equal(&existing->addr.ipv6, ip6)) {
-        bool is_perm = READ_ONCE(existing->is_permanent);
-        unsigned long ubt = READ_ONCE(existing->unban_time);
-        if (is_perm || time_before(jiffies, ubt)) {
-          spin_unlock(&fw->lock);
-          kfree(entry);
-          return 0;
-        }
-        WRITE_ONCE(existing->ban_time, jiffies);
-        WRITE_ONCE(existing->unban_time, unban_time);
-        atomic_set(&existing->retry_count, 0);
-        spin_unlock(&fw->lock);
-        kfree(entry);
-        return 0;
-      }
-    }
-  } else {
-    __be32 ipv4 = *(__be32 *)ip;
-    u32 bkt4 = hash_min(ipv4, BAN_HASH_BITS);
-    struct ban_entry *existing;
-    hlist_for_each_entry(existing, &fw->ban_table_ipv4[bkt4], hash) {
-      if (existing->af == af && existing->addr.ipv4 == ipv4) {
-        bool is_perm = READ_ONCE(existing->is_permanent);
-        unsigned long ubt = READ_ONCE(existing->unban_time);
-        if (is_perm || time_before(jiffies, ubt)) {
-          spin_unlock(&fw->lock);
-          kfree(entry);
-          return 0;
-        }
-        WRITE_ONCE(existing->ban_time, jiffies);
-        WRITE_ONCE(existing->unban_time, unban_time);
-        atomic_set(&existing->retry_count, 0);
-        spin_unlock(&fw->lock);
-        kfree(entry);
-        return 0;
-      }
-    }
-  }
-
+  /* 步骤 2：检查封禁表容量（仍在全局锁下） */
   if (atomic_read(&fw->ban_count) >= MAX_BAN_ENTRIES) {
     spin_unlock(&fw->lock);
     kfree(entry);
@@ -141,27 +95,77 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     fw_pr_warn("Ban table full, cannot ban %s", ip_str);
     return -ENOSPC;
   }
+  spin_unlock(&fw->lock);
 
-  entry->af = af;
-  if (af == FW_AF_INET6)
-    entry->addr.ipv6 = *(const struct in6_addr *)ip;
-  else
-    entry->addr.ipv4 = *(__be32 *)ip;
-  entry->ban_time = jiffies;
-  entry->unban_time = unban_time;
-  entry->is_permanent = is_permanent;
-  atomic_set(&entry->retry_count, 0);
-
+  /* 步骤 3：使用每桶锁操作封禁表（不同桶可并行） */
   if (af == FW_AF_INET6) {
-    u32 bkt6 = hash_ipv6((struct in6_addr *)ip);
+    struct in6_addr *ip6 = (struct in6_addr *)ip;
+    u32 bkt6 = hash_ipv6(ip6);
+    struct ban_entry *existing;
+
+    spin_lock(&fw->ban_locks_ipv6[bkt6]);
+    hlist_for_each_entry(existing, &fw->ban_table_ipv6[bkt6], hash) {
+      if (existing->af == af && ipv6_addr_equal(&existing->addr.ipv6, ip6)) {
+        bool is_perm = READ_ONCE(existing->is_permanent);
+        unsigned long ubt = READ_ONCE(existing->unban_time);
+        if (is_perm || time_before(jiffies, ubt)) {
+          spin_unlock(&fw->ban_locks_ipv6[bkt6]);
+          kfree(entry);
+          return 0;
+        }
+        WRITE_ONCE(existing->ban_time, jiffies);
+        WRITE_ONCE(existing->unban_time, unban_time);
+        atomic_set(&existing->retry_count, 0);
+        spin_unlock(&fw->ban_locks_ipv6[bkt6]);
+        kfree(entry);
+        return 0;
+      }
+    }
+
+    entry->af = af;
+    entry->addr.ipv6 = *(const struct in6_addr *)ip;
+    entry->ban_time = jiffies;
+    entry->unban_time = unban_time;
+    entry->is_permanent = is_permanent;
+    atomic_set(&entry->retry_count, 0);
     hash_add_rcu(fw->ban_table_ipv6, &entry->hash, bkt6);
+    spin_unlock(&fw->ban_locks_ipv6[bkt6]);
   } else {
+    __be32 ipv4 = *(__be32 *)ip;
+    u32 bkt4 = hash_min(ipv4, BAN_HASH_BITS);
+    struct ban_entry *existing;
+
+    spin_lock(&fw->ban_locks_ipv4[bkt4]);
+    hlist_for_each_entry(existing, &fw->ban_table_ipv4[bkt4], hash) {
+      if (existing->af == af && existing->addr.ipv4 == ipv4) {
+        bool is_perm = READ_ONCE(existing->is_permanent);
+        unsigned long ubt = READ_ONCE(existing->unban_time);
+        if (is_perm || time_before(jiffies, ubt)) {
+          spin_unlock(&fw->ban_locks_ipv4[bkt4]);
+          kfree(entry);
+          return 0;
+        }
+        WRITE_ONCE(existing->ban_time, jiffies);
+        WRITE_ONCE(existing->unban_time, unban_time);
+        atomic_set(&existing->retry_count, 0);
+        spin_unlock(&fw->ban_locks_ipv4[bkt4]);
+        kfree(entry);
+        return 0;
+      }
+    }
+
+    entry->af = af;
+    entry->addr.ipv4 = *(__be32 *)ip;
+    entry->ban_time = jiffies;
+    entry->unban_time = unban_time;
+    entry->is_permanent = is_permanent;
+    atomic_set(&entry->retry_count, 0);
     hash_add_rcu(fw->ban_table_ipv4, &entry->hash, *(__be32 *)ip);
+    spin_unlock(&fw->ban_locks_ipv4[bkt4]);
   }
+
   atomic_inc(&fw->ban_count);
   atomic_inc(&fw->total_ban_count);
-
-  spin_unlock(&fw->lock);
 
   if (log_msg && log_arg)
     fw_pr_info_ratelimited("%s %s %lu", log_msg, ip_str, log_arg);
@@ -194,16 +198,18 @@ static struct ban_entry *__find_ban_entry_rcu(struct firewall_info *fw, u8 af,
 }
 
 static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip,
-                         bool permanent_only) {
+                          bool permanent_only) {
   struct ban_entry *entry;
   int found = 0;
   char ip_str[INET6_STR_LEN];
   ip_to_str(af, ip, ip_str, sizeof(ip_str));
 
-  spin_lock(&fw->lock);
+  /* R9-4: 使用每桶锁替代全局锁，不同桶的解封操作可并行执行 */
   if (af == FW_AF_INET6) {
     struct in6_addr *ip6 = (struct in6_addr *)ip;
     u32 bkt = hash_ipv6(ip6);
+
+    spin_lock(&fw->ban_locks_ipv6[bkt]);
     hlist_for_each_entry(entry, &fw->ban_table_ipv6[bkt], hash) {
       if (entry->af == af && ipv6_addr_equal(&entry->addr.ipv6, ip6)) {
         if (!permanent_only || READ_ONCE(entry->is_permanent)) {
@@ -215,9 +221,12 @@ static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip,
         break;
       }
     }
+    spin_unlock(&fw->ban_locks_ipv6[bkt]);
   } else {
     __be32 ipv4 = *(__be32 *)ip;
     u32 bkt = hash_min(ipv4, BAN_HASH_BITS);
+
+    spin_lock(&fw->ban_locks_ipv4[bkt]);
     hlist_for_each_entry(entry, &fw->ban_table_ipv4[bkt], hash) {
       if (entry->af == af && entry->addr.ipv4 == ipv4) {
         if (!permanent_only || READ_ONCE(entry->is_permanent)) {
@@ -229,8 +238,8 @@ static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip,
         break;
       }
     }
+    spin_unlock(&fw->ban_locks_ipv4[bkt]);
   }
-  spin_unlock(&fw->lock);
 
   if (found) {
     atomic_inc(&fw->total_unban_count);

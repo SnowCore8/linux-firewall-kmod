@@ -91,6 +91,15 @@ static int __init firewall_init(void) {
   atomic_set(&fw_info.ban_count, 0);
   atomic_set(&fw_info.shutting_down, 0);
 
+  /* R9-4: 初始化每桶自旋锁 */
+  {
+    int i;
+    for (i = 0; i < (1 << BAN_HASH_BITS); i++) {
+      spin_lock_init(&fw_info.ban_locks_ipv4[i]);
+      spin_lock_init(&fw_info.ban_locks_ipv6[i]);
+    }
+  }
+
   spin_lock_init(&fw_info.flood_lock);
   fw_info.last_flood_check = jiffies;
   fw_info.recent_additions = 0;
@@ -99,6 +108,10 @@ static int __init firewall_init(void) {
   hash_init(fw_info.whitelist_table_ipv4);
   hash_init(fw_info.whitelist_table_ipv6);
   atomic_set(&fw_info.whitelist_count, 0);
+
+  /* R9-3: 初始化子网白名单 RCU 链表 */
+  INIT_LIST_HEAD(&fw_info.ipv4_subnet_wl);
+  INIT_LIST_HEAD(&fw_info.ipv6_subnet_wl);
 
   atomic_set(&fw_info.total_ban_count, 0);
   atomic_set(&fw_info.total_unban_count, 0);

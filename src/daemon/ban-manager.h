@@ -28,4 +28,7 @@ int unban_permanent_ip(const char *ip);
 /* 清理过期的封禁和不完整行缓冲区 */
 void cleanup_expired_bans(void);
 
+/* R9-9: 关闭缓存的 procfs fd（用于守护进程关闭时清理） */
+void close_cached_bans_fd(void);
+
 #endif /* BAN_MANAGER_H */

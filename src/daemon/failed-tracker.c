@@ -68,6 +68,7 @@ struct failed_entry *create_entry_for_jail(struct jail *j, const char *ip) {
   strncpy(entry->ip, ip, sizeof(entry->ip) - 1);
   entry->ip[sizeof(entry->ip) - 1] = '\0';
   entry->count = 0;
+  entry->recent_head = 0; /* R9-7: 初始化滑动窗口起始索引 */
 
   kh_value(j->failed_hash, k) = entry;
   return entry;
@@ -88,7 +89,7 @@ void remove_entry_for_jail(struct jail *j, const char *ip) {
 
 /* 统计时间窗口内的近期失败次数 */
 unsigned int count_recent(struct failed_entry *entry, time_t window,
-                          unsigned int max_retries) {
+                           unsigned int max_retries) {
   time_t now = time(NULL);
   unsigned int count = 0;
 
@@ -98,20 +99,29 @@ unsigned int count_recent(struct failed_entry *entry, time_t window,
     return 0;
   }
 
-  for (unsigned int i = 0; i < entry->count; i++) {
-    /* 如果时间戳在未来，防止整数下溢 */
+  /* R9-7 优化：使用滑动窗口起始索引，避免每次从头线性扫描。
+   * 先进过期时间戳，缩小扫描范围，最坏情况仍为 O(n) 但平均 O(1)。 */
+  unsigned int start = entry->recent_head;
+  if (start >= entry->count)
+    start = 0;
+
+  /* 跳过过期时间戳 */
+  while (start < entry->count && now >= entry->timestamps[start] &&
+         (now - entry->timestamps[start]) > window) {
+    start++;
+  }
+  entry->recent_head = start;
+
+  /* 只扫描窗口内的时间戳 */
+  for (unsigned int i = start; i < entry->count; i++) {
     if (now >= entry->timestamps[i]) {
       time_t diff = now - entry->timestamps[i];
-      /* 额外检查以防止比较中潜在的整数溢出 */
       if (diff <= window) {
         count++;
       }
     }
-    /* 限制处理以避免在时间戳过多时过度消耗CPU */
-    if (count > max_retries) {
-      /* 如果已超过阈值则提前退出 */
+    if (count > max_retries)
       break;
-    }
   }
 
   return count;
@@ -124,7 +134,7 @@ unsigned int count_recent(struct failed_entry *entry, time_t window,
  * @findtime: 统计失败次数的时间窗口
  */
 void process_failed_timestamps(struct failed_entry *entry, time_t now,
-                               time_t findtime) {
+                                time_t findtime) {
   /* 修复 W2-1：编译时检查 memmove 大小计算不会溢出 */
   _Static_assert(MAX_FAILED_TIMESTAMPS < (SIZE_MAX / sizeof(time_t)),
                  "MAX_FAILED_TIMESTAMPS * sizeof(time_t) would overflow");
@@ -136,6 +146,10 @@ void process_failed_timestamps(struct failed_entry *entry, time_t now,
     memmove(entry->timestamps, entry->timestamps + 1,
             (MAX_FAILED_TIMESTAMPS - 1) * sizeof(time_t));
     entry->timestamps[MAX_FAILED_TIMESTAMPS - 1] = now;
+
+    /* R9-7: 移动后重置滑动窗口索引（因为所有时间戳都向前移动了一位） */
+    if (entry->recent_head > 0)
+      entry->recent_head--;
 
     /* 过滤掉过期的时间戳 */
     time_t oldest_valid = now - findtime;
@@ -149,6 +163,7 @@ void process_failed_timestamps(struct failed_entry *entry, time_t now,
       }
     }
     entry->count = new_count;
+    entry->recent_head = 0; /* 重置滑动窗口索引 */
   }
 }
 

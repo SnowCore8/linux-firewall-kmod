@@ -155,29 +155,62 @@ static int read_procfs_int(const char *path, unsigned long *out) {
   return -1;
 }
 
-/* 根据键名从 /proc/firewall/stats 中读取特定整数值 */
-static int read_procfs_stats_key(const char *key, unsigned long *value) {
+/* R9-2 修复：批量读取 /proc/firewall/stats 文件，一次解析所有统计键，
+ * 避免对每个键独立 fopen/fclose 产生的 4+ 次不必要系统调用。 */
+typedef struct {
+  unsigned long banned;
+  unsigned long total_bans;
+  unsigned long total_unbans;
+  unsigned long whitelist_count;
+  int has_banned;
+  int has_total_bans;
+  int has_total_unbans;
+  int has_whitelist_count;
+} kernel_stats_batch_t;
+
+static int read_kernel_stats_batch(kernel_stats_batch_t *stats) {
   FILE *fp;
   char line[256];
-  int found = 0;
+  char name[128];
+  unsigned long val;
+
+  /* 初始化标记 */
+  stats->banned = 0;
+  stats->total_bans = 0;
+  stats->total_unbans = 0;
+  stats->whitelist_count = 0;
+  stats->has_banned = 0;
+  stats->has_total_bans = 0;
+  stats->has_total_unbans = 0;
+  stats->has_whitelist_count = 0;
 
   fp = fopen("/proc/firewall/stats", "r");
   if (!fp)
     return -1;
 
   while (fgets(line, sizeof(line), fp)) {
-    char name[128];
-    unsigned long val;
     if (sscanf(line, "%127s %lu", name, &val) == 2) {
-      if (strcmp(name, key) == 0) {
-        *value = val;
-        found = 1;
-        break;
+      if (strcmp(name, "current_bans") == 0) {
+        stats->banned = val;
+        stats->has_banned = 1;
+      } else if (strcmp(name, "total_bans") == 0) {
+        stats->total_bans = val;
+        stats->has_total_bans = 1;
+      } else if (strcmp(name, "total_unbans") == 0) {
+        stats->total_unbans = val;
+        stats->has_total_unbans = 1;
+      } else if (strcmp(name, "current_whitelist") == 0) {
+        stats->whitelist_count = val;
+        stats->has_whitelist_count = 1;
       }
+      /* 找到所有键后可提前退出 */
+      if (stats->has_banned && stats->has_total_bans &&
+          stats->has_total_unbans && stats->has_whitelist_count)
+        break;
     }
   }
   fclose(fp);
-  return found ? 0 : -1;
+  return 0;
 }
 
 /* ============================================================================
@@ -196,12 +229,20 @@ typedef struct {
 } kernel_stats_t;
 
 static void read_kernel_stats(kernel_stats_t *stats) {
-  unsigned long current_bans = 0;
-  read_procfs_stats_key("current_bans", &current_bans);
-  read_procfs_stats_key("total_bans", &stats->total_bans);
-  read_procfs_stats_key("total_unbans", &stats->total_unbans);
-  read_procfs_stats_key("current_whitelist", &stats->whitelist_count);
-  stats->banned = current_bans;
+  kernel_stats_batch_t batch;
+
+  /* 初始化为默认值，防止批量读取失败时使用未初始化值 */
+  stats->banned = 0;
+  stats->total_bans = 0;
+  stats->total_unbans = 0;
+  stats->whitelist_count = 0;
+
+  if (read_kernel_stats_batch(&batch) == 0) {
+    stats->banned = batch.banned;
+    stats->total_bans = batch.total_bans;
+    stats->total_unbans = batch.total_unbans;
+    stats->whitelist_count = batch.whitelist_count;
+  }
 }
 
 /**

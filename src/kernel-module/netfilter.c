@@ -12,11 +12,33 @@
 extern struct firewall_info fw_info;
 extern u32 fw_hash_seed;
 
+/* R9-1 修复：使用 per-CPU 计数器避免热路径中的 atomic_inc 缓存一致性开销。
+ * 每个 CPU 维护本地计数器，每达到批次阈值时刷新到全局 atomic 计数器。 */
+static DEFINE_PER_CPU(struct fw_per_cpu_stats, fw_cpu_stats);
+
+/* 刷新 per-CPU 计数器到全局 atomic 计数器（cleanup.c 中也会调用） */
+void fw_flush_cpu_stats(void) {
+  struct fw_per_cpu_stats *stats;
+  u64 acc, drop;
+
+  stats = this_cpu_ptr(&fw_cpu_stats);
+  acc = READ_ONCE(stats->packets_accepted);
+  drop = READ_ONCE(stats->packets_dropped);
+
+  if (acc > 0) {
+    atomic_add((int)acc, &fw_info.packets_accepted);
+    WRITE_ONCE(stats->packets_accepted, 0);
+  }
+  if (drop > 0) {
+    atomic_add((int)drop, &fw_info.packets_dropped);
+    WRITE_ONCE(stats->packets_dropped, 0);
+  }
+}
+
 static unsigned int handle_ban_check(u8 af, const void *src_ip) {
   unsigned long now;
   struct ban_entry *entry;
   struct whitelist_entry *wl_entry;
-  unsigned int bkt;
   bool is_whitelisted = false;
   bool is_banned = false;
 
@@ -65,23 +87,22 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
       }
     }
 
-    /* 子网匹配 */
+    /* 子网匹配：R9-3 优化 - 使用专用子网链表，避免遍历所有 64 个哈希桶 */
     if (!is_whitelisted) {
-      hash_for_each_rcu(fw_info.whitelist_table_ipv6, bkt, wl_entry, hash) {
+      struct whitelist_entry *wl_entry;
+      list_for_each_entry_rcu(wl_entry, &fw_info.ipv6_subnet_wl, subnet_node) {
         u8 prefix = READ_ONCE(wl_entry->mask.prefix_len);
-        if (prefix < 128) {
-          const __be32 *src = (__be32 *)wl_entry->addr.ipv6.s6_addr;
-          struct in6_addr wl_addr;
+        const __be32 *src = (__be32 *)wl_entry->addr.ipv6.s6_addr;
+        struct in6_addr wl_addr;
 
-          wl_addr.s6_addr32[0] = READ_ONCE(((__be32 *)src)[0]);
-          wl_addr.s6_addr32[1] = READ_ONCE(((__be32 *)src)[1]);
-          wl_addr.s6_addr32[2] = READ_ONCE(((__be32 *)src)[2]);
-          barrier();
-          wl_addr.s6_addr32[3] = READ_ONCE(((__be32 *)src)[3]);
-          if (ipv6_prefix_equal(ip6, &wl_addr, prefix)) {
-            is_whitelisted = true;
-            break;
-          }
+        wl_addr.s6_addr32[0] = READ_ONCE(((__be32 *)src)[0]);
+        wl_addr.s6_addr32[1] = READ_ONCE(((__be32 *)src)[1]);
+        wl_addr.s6_addr32[2] = READ_ONCE(((__be32 *)src)[2]);
+        barrier();
+        wl_addr.s6_addr32[3] = READ_ONCE(((__be32 *)src)[3]);
+        if (ipv6_prefix_equal(ip6, &wl_addr, prefix)) {
+          is_whitelisted = true;
+          break;
         }
       }
     }
@@ -111,14 +132,14 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
     }
 
     if (!is_whitelisted) {
-      hash_for_each_rcu(fw_info.whitelist_table_ipv4, bkt, wl_entry, hash) {
+      struct whitelist_entry *wl_entry;
+      /* R9-3 优化：使用专用子网链表，避免遍历所有 64 个哈希桶 */
+      list_for_each_entry_rcu(wl_entry, &fw_info.ipv4_subnet_wl, subnet_node) {
         __be32 wl_mask = READ_ONCE(wl_entry->mask.ipv4_mask);
-        if (wl_mask != 0xFFFFFFFF) {
-          __be32 wl_ip = READ_ONCE(wl_entry->addr.ipv4);
-          if ((ipv4 & wl_mask) == (wl_ip & wl_mask)) {
-            is_whitelisted = true;
-            break;
-          }
+        __be32 wl_ip = READ_ONCE(wl_entry->addr.ipv4);
+        if ((ipv4 & wl_mask) == (wl_ip & wl_mask)) {
+          is_whitelisted = true;
+          break;
         }
       }
     }
@@ -139,11 +160,19 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
   rcu_read_unlock();
 
   if (unlikely(is_banned)) {
-    atomic_inc(&fw_info.packets_dropped);
+    struct fw_per_cpu_stats *stats = this_cpu_ptr(&fw_cpu_stats);
+    stats->packets_dropped++;
+    if (unlikely(stats->packets_dropped >= FW_PER_CPU_BATCH_SIZE))
+      fw_flush_cpu_stats();
     return NF_DROP;
   }
 
-  atomic_inc(&fw_info.packets_accepted);
+  {
+    struct fw_per_cpu_stats *stats = this_cpu_ptr(&fw_cpu_stats);
+    stats->packets_accepted++;
+    if (unlikely(stats->packets_accepted >= FW_PER_CPU_BATCH_SIZE))
+      fw_flush_cpu_stats();
+  }
   return NF_ACCEPT;
 }
 

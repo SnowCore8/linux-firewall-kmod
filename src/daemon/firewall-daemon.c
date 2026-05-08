@@ -229,6 +229,9 @@ void cleanup(void) {
     daemon_log_info("SQLite database closed");
   }
 
+  /* R9-9: 关闭缓存的 procfs bans fd */
+  close_cached_bans_fd();
+
   closelog();
 }
 

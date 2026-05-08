@@ -144,6 +144,7 @@ struct failed_entry {
   char ip[INET6_ADDRSTRLEN + 1]; /* +1 用于 null 终止符 */
   time_t timestamps[MAX_FAILED_TIMESTAMPS];
   unsigned int count;
+  unsigned int recent_head; /* R9-7: 滑动窗口起始索引，O(1) 计数优化 */
   struct failed_entry *next;
   struct failed_entry *next_in_hash; /* 哈希桶中的下一个条目 */
 };

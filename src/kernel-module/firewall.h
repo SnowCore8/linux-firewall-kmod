@@ -25,6 +25,20 @@
 #include <linux/workqueue.h>
 #include <uapi/linux/ip.h>
 
+/* Per-CPU packet stats for hot-path optimization (R9-1).
+ * Instead of atomic_inc on every packet (cache coherency overhead),
+ * each CPU maintains local counters and flushes to global atomics
+ * in batches. */
+#define FW_PER_CPU_BATCH_SIZE 1024
+
+struct fw_per_cpu_stats {
+  u64 packets_accepted;
+  u64 packets_dropped;
+};
+
+/* R9-1: Per-CPU counter flush function (called from cleanup timer) */
+void fw_flush_cpu_stats(void);
+
 /* ============================================================================
  * 统一日志系统
  * ============================================================================
@@ -134,6 +148,7 @@ struct whitelist_entry {
   char device_name[16];     /* 网络设备名称（如 eth0） */
   struct hlist_node hash;   /* 哈希表节点 */
   struct rcu_head rcu_head; /* 用于 RCU 释放 */
+  struct list_head subnet_node; /* R9-3: 子网链表节点（仅非精确匹配条目使用） */
 };
 
 /* 封禁条目结构 - 支持 IPv4/IPv6 */
@@ -158,6 +173,10 @@ struct firewall_info {
   /* IPv6 封禁哈希表 */
   DECLARE_HASHTABLE(ban_table_ipv6, BAN_HASH_BITS);
   spinlock_t lock;
+  /* R9-4 修复：每桶自旋锁，减少高并发封禁场景下的锁竞争。
+   * 不同桶的封禁/解封操作可并行执行。 */
+  spinlock_t ban_locks_ipv4[1 << BAN_HASH_BITS];
+  spinlock_t ban_locks_ipv6[1 << BAN_HASH_BITS];
   atomic_t ban_count;
   atomic_t shutting_down; /* 防止关闭期间定时器触发的标志 */
   unsigned int ban_time;
@@ -189,6 +208,11 @@ struct firewall_info {
   DECLARE_HASHTABLE(whitelist_table_ipv6, WHITELIST_HASH_BITS);
   spinlock_t whitelist_lock;
   atomic_t whitelist_count;
+
+  /* R9-3 修复：子网白名单 RCU 链表，用于 O(1) 平均查找。
+   * 哈希表用于精确匹配 O(1)，子网链表用于前缀匹配（避免遍历所有 64 个桶）。 */
+  struct list_head ipv4_subnet_wl;
+  struct list_head ipv6_subnet_wl;
 
   /* procfs 条目 */
   struct proc_dir_entry *proc_dir;

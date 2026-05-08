@@ -285,7 +285,7 @@ void flush_partial_line(struct jail *j, const char *log_path,
 void process_new_lines(int idx) {
   int fd = -1;
   struct stat st;
-  off_t current_offset;
+  off_t current_offset = 0; /* R9-5: 初始化，防止编译器未初始化警告 */
   int ret = 0;
   const char *log_path;
   struct jail *j = NULL;
@@ -374,24 +374,23 @@ void process_new_lines(int idx) {
     }
   }
 
-  /* 批量读取和处理数据，减少锁竞争 */
-  current_offset = file_states[idx].offset;
-
-  /* 分配批量读取缓冲区（最大 256KB） */
+  /* R9-5 修复：使用 static 缓冲区复用，避免每次 calloc/free 256KB 的开销。
+   * 由于 process_new_lines 在单线程监控循环中调用，static 缓冲区是安全的。 */
 #define BATCH_READ_MAX (256 * 1024)
-  char *batch_buf = calloc(1, BATCH_READ_MAX);
-  if (!batch_buf) {
-    daemon_log_err("分配批量读取缓冲区内存不足");
-    ret = -ENOMEM;
-    /* 注意：cleanup_restore_partial 会恢复
-     * local_partial_len，确保部分行数据不丢失 */
+  static char batch_buf[BATCH_READ_MAX];
+  static _Atomic(int) batch_buf_in_use = 0;
+
+  /* 防止递归调用（防御性检查） */
+  if (atomic_exchange(&batch_buf_in_use, 1)) {
+    daemon_log_warn("批量读取缓冲区正在使用中，跳过此次处理");
+    ret = -EBUSY;
     goto cleanup_restore_partial;
   }
 
+  /* 批量读取：循环读取直到 EOF 或缓冲区满 */
   size_t batch_total = 0;
   ssize_t chunk_read;
 
-  /* 批量读取：循环读取直到 EOF 或缓冲区满 */
   while (batch_total < BATCH_READ_MAX - 1 &&
          (chunk_read = read(fd, batch_buf + batch_total,
                             BATCH_READ_MAX - 1 - batch_total)) > 0) {
@@ -400,7 +399,7 @@ void process_new_lines(int idx) {
 
   if (chunk_read < 0) {
     daemon_log_warn("Read error in %s: %s", log_path, strerror(errno));
-    free(batch_buf);
+    atomic_store(&batch_buf_in_use, 0);
     ret = -1;
     goto cleanup_restore_partial;
   }
@@ -419,14 +418,14 @@ void process_new_lines(int idx) {
       /* 整数溢出检查 */
       if (alloc_size < local_partial_len || alloc_size < batch_total) {
         daemon_log_err("整数溢出检测：组合缓冲区大小计算溢出");
-        free(batch_buf);
+        atomic_store(&batch_buf_in_use, 0);
         ret = -ENOMEM;
         goto cleanup_restore_partial;
       }
       combined = malloc(alloc_size);
       if (!combined) {
         daemon_log_err("分配组合缓冲区内存不足");
-        free(batch_buf);
+        atomic_store(&batch_buf_in_use, 0);
         ret = -ENOMEM;
         goto cleanup_restore_partial;
       }
@@ -466,14 +465,14 @@ void process_new_lines(int idx) {
     /* 更新偏移量 */
     if (current_offset > SSIZE_MAX - (ssize_t)batch_total) {
       daemon_log_err("Offset overflow detected");
-      free(batch_buf);
+      atomic_store(&batch_buf_in_use, 0);
       ret = -1;
       goto cleanup_restore_partial;
     }
     current_offset += batch_total;
   }
 
-  free(batch_buf);
+  atomic_store(&batch_buf_in_use, 0);
 
   /* 更新偏移量 */
   file_states[idx].offset = current_offset;

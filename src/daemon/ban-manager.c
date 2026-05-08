@@ -5,6 +5,63 @@
 #include "ban-manager.h"
 #include "firewall-daemon.h"
 
+/* Forward declarations for functions used by cached fd logic */
+static int verify_procfs_fd(int fd);
+static int write_to_procfs_fd(int fd, const char *data, size_t data_len);
+
+/* R9-9 修复：缓存 procfs fd，避免每次封禁操作都 open/close。
+ * 在首次写入时打开并验证，之后复用。如果写入失败则重新打开。 */
+static _Atomic(int) cached_bans_fd = -1;
+static pthread_mutex_t bans_fd_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* 获取或重新打开缓存的 bans procfs fd */
+static int get_cached_bans_fd(void) {
+  int fd = atomic_load(&cached_bans_fd);
+  if (fd >= 0) {
+    /* 快速路径：验证 fd 仍然有效 */
+    if (verify_procfs_fd(fd) == 0)
+      return fd;
+    /* fd 已失效，关闭并重新打开 */
+    close(fd);
+    atomic_store(&cached_bans_fd, -1);
+  }
+
+  /* 慢速路径：打开并验证 */
+  pthread_mutex_lock(&bans_fd_mutex);
+  /* 双重检查 */
+  fd = atomic_load(&cached_bans_fd);
+  if (fd >= 0 && verify_procfs_fd(fd) == 0) {
+    pthread_mutex_unlock(&bans_fd_mutex);
+    return fd;
+  }
+  if (fd >= 0)
+    close(fd);
+
+  fd = open(BANS_PATH, O_WRONLY | O_NOFOLLOW);
+  if (fd < 0) {
+    daemon_log_err("Failed to open %s: %s", BANS_PATH, strerror(errno));
+    pthread_mutex_unlock(&bans_fd_mutex);
+    return -1;
+  }
+
+  if (verify_procfs_fd(fd) < 0) {
+    close(fd);
+    pthread_mutex_unlock(&bans_fd_mutex);
+    return -1;
+  }
+
+  atomic_store(&cached_bans_fd, fd);
+  pthread_mutex_unlock(&bans_fd_mutex);
+  return fd;
+}
+
+/* 关闭缓存的 bans fd（用于守护进程关闭时清理） */
+void close_cached_bans_fd(void) {
+  int fd = atomic_exchange(&cached_bans_fd, -1);
+  if (fd >= 0)
+    close(fd);
+}
+
 /*
  * validate_ipv4 - 验证并解析IPv4地址字符串 (向后兼容)
  */
@@ -173,6 +230,7 @@ static int write_to_procfs_fd(int fd, const char *data, size_t data_len) {
 int secure_procfs_write(const char *path, const char *data, size_t data_len) {
   int fd = -1;
   int ret = -1;
+  bool using_cached = false;
 
   if (!path || !data || data_len == 0) {
     daemon_log_err("Invalid parameters to secure_procfs_write");
@@ -188,22 +246,37 @@ int secure_procfs_write(const char *path, const char *data, size_t data_len) {
     goto cleanup;
   }
 
-  fd = open(path, O_WRONLY | O_NOFOLLOW);
-  if (fd < 0) {
-    daemon_log_err("Failed to open %s: %s", path, strerror(errno));
-    goto cleanup;
+  /* R9-9: 对 bans 路径使用缓存的 fd，避免每次 open/close */
+  if (strcmp(path, BANS_PATH) == 0) {
+    fd = get_cached_bans_fd();
+    if (fd < 0)
+      goto cleanup;
+    using_cached = true;
+  } else {
+    fd = open(path, O_WRONLY | O_NOFOLLOW);
+    if (fd < 0) {
+      daemon_log_err("Failed to open %s: %s", path, strerror(errno));
+      goto cleanup;
+    }
+    if (verify_procfs_fd(fd) < 0)
+      goto cleanup;
   }
 
-  if (verify_procfs_fd(fd) < 0)
+  if (write_to_procfs_fd(fd, data, data_len) < 0) {
+    /* R9-9: 如果使用缓存 fd 写入失败，关闭并标记为无效，下次重新打开 */
+    if (using_cached) {
+      atomic_store(&cached_bans_fd, -1);
+      close(fd);
+      fd = -1;
+    }
     goto cleanup;
-
-  if (write_to_procfs_fd(fd, data, data_len) < 0)
-    goto cleanup;
+  }
 
   ret = 0;
 
 cleanup:
-  if (fd >= 0) {
+  /* R9-9: 缓存 fd 不关闭，仅关闭非缓存路径的 fd */
+  if (fd >= 0 && !using_cached) {
     if (close(fd) < 0 && ret == 0)
       daemon_log_warn("Failed to close %s: %s", path, strerror(errno));
   }

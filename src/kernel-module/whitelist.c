@@ -3,6 +3,7 @@
  */
 
 #include "firewall.h"
+#include <linux/list.h>
 
 extern u32 fw_hash_seed;
 
@@ -88,6 +89,16 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
   else
     hash_add_rcu(fw->whitelist_table_ipv4, &new_entry->hash,
                  new_entry->addr.ipv4);
+
+  /* R9-3: 将子网条目（非精确匹配）添加到子网链表，加速后续查找 */
+  if (af == FW_AF_INET6) {
+    if (new_entry->mask.prefix_len < 128)
+      list_add_tail_rcu(&new_entry->subnet_node, &fw->ipv6_subnet_wl);
+  } else {
+    if (new_entry->mask.ipv4_mask != 0xFFFFFFFF)
+      list_add_tail_rcu(&new_entry->subnet_node, &fw->ipv4_subnet_wl);
+  }
+
   atomic_inc(&fw->whitelist_count);
   spin_unlock(&fw->whitelist_lock);
 
@@ -118,6 +129,9 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
           ipv6_addr_equal(&entry->addr.ipv6, (const struct in6_addr *)ip) &&
           entry->mask.prefix_len == (u8)prefix_len) {
         hlist_del_rcu(&entry->hash);
+        /* R9-3: 从子网链表中移除（如果是子网条目） */
+        if (prefix_len < 128)
+          list_del_rcu(&entry->subnet_node);
         atomic_dec(&fw->whitelist_count);
         found = 1;
         call_rcu(&entry->rcu_head, free_whitelist_entry_rcu);
@@ -134,6 +148,9 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
       if (entry->af == af && entry->addr.ipv4 == net_ipv4 &&
           entry->mask.ipv4_mask == mask4) {
         hlist_del_rcu(&entry->hash);
+        /* R9-3: 从子网链表中移除（如果是子网条目） */
+        if (mask4 != 0xFFFFFFFF)
+          list_del_rcu(&entry->subnet_node);
         atomic_dec(&fw->whitelist_count);
         found = 1;
         call_rcu(&entry->rcu_head, free_whitelist_entry_rcu);
@@ -171,10 +188,10 @@ bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip) {
         return true;
       }
     }
-    /* 子网匹配 */
-    hash_for_each_rcu(fw->whitelist_table_ipv6, bkt, entry, hash) {
+    /* R9-3 优化：使用专用子网链表进行前缀匹配 */
+    list_for_each_entry_rcu(entry, &fw->ipv6_subnet_wl, subnet_node) {
       u8 prefix = READ_ONCE(entry->mask.prefix_len);
-      if (prefix < 128 && ipv6_prefix_equal(ip6, &entry->addr.ipv6, prefix)) {
+      if (ipv6_prefix_equal(ip6, &entry->addr.ipv6, prefix)) {
         rcu_read_unlock();
         return true;
       }
@@ -189,14 +206,13 @@ bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip) {
         return true;
       }
     }
-    hash_for_each_rcu(fw->whitelist_table_ipv4, bkt, entry, hash) {
+    /* R9-3 优化：使用专用子网链表进行前缀匹配 */
+    list_for_each_entry_rcu(entry, &fw->ipv4_subnet_wl, subnet_node) {
       __be32 wl_mask = READ_ONCE(entry->mask.ipv4_mask);
-      if (wl_mask != 0xFFFFFFFF) {
-        __be32 wl_ip = READ_ONCE(entry->addr.ipv4);
-        if ((ipv4 & wl_mask) == (wl_ip & wl_mask)) {
-          rcu_read_unlock();
-          return true;
-        }
+      __be32 wl_ip = READ_ONCE(entry->addr.ipv4);
+      if ((ipv4 & wl_mask) == (wl_ip & wl_mask)) {
+        rcu_read_unlock();
+        return true;
       }
     }
   }
