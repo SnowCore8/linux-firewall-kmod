@@ -336,10 +336,8 @@ int restore_state_from_file(const char *filename) {
     return -EINVAL;
   }
 
-  if (strstr(filename, "..") != NULL) {
-    fw_pr_err("State restore: path traversal attempt rejected: %s", filename);
+  if (validate_state_path(filename) < 0)
     return -EINVAL;
-  }
 
 #define MAX_STATE_FILE_SIZE (128 * 1024)
   buffer = kmalloc(MAX_STATE_FILE_SIZE, GFP_KERNEL);
@@ -428,7 +426,13 @@ int restore_state_from_file(const char *filename) {
                            remaining_time);
                 continue;
               } else {
-                unsigned long ban_duration = remaining_time * HZ;
+                unsigned long ban_duration;
+                if (check_mul_overflow(remaining_time, (unsigned long)HZ,
+                                       &ban_duration)) {
+                  fw_pr_warn("Ban duration overflow for IP %s, skipping",
+                             ip_str);
+                  continue;
+                }
                 unban_time = jiffies + ban_duration;
               }
 
@@ -446,11 +450,31 @@ int restore_state_from_file(const char *filename) {
               atomic_set(&entry->retry_count, 0);
 
               spin_lock(&fw_info.lock);
-              hash_add_rcu(fw_info.ban_table_ipv4, &entry->hash, ip);
-              atomic_inc(&fw_info.ban_count);
-              atomic_inc(&fw_info.total_ban_count);
-              spin_unlock(&fw_info.lock);
-              restored_ban_count++;
+              {
+                u32 bkt4 = hash_min(ip, BAN_HASH_BITS);
+                struct ban_entry *existing;
+                bool duplicate = false;
+
+                hlist_for_each_entry_rcu(existing,
+                                         &fw_info.ban_table_ipv4[bkt4], hash) {
+                  if (existing->af == FW_AF_INET && existing->addr.ipv4 == ip) {
+                    duplicate = true;
+                    break;
+                  }
+                }
+
+                if (duplicate) {
+                  spin_unlock(&fw_info.lock);
+                  kfree(entry);
+                  fw_pr_info("Skipping duplicate ban entry for IP %s", ip_str);
+                } else {
+                  hash_add_rcu(fw_info.ban_table_ipv4, &entry->hash, ip);
+                  atomic_inc(&fw_info.ban_count);
+                  atomic_inc(&fw_info.total_ban_count);
+                  spin_unlock(&fw_info.lock);
+                  restored_ban_count++;
+                }
+              }
             }
           }
         }
@@ -481,7 +505,14 @@ int restore_state_from_file(const char *filename) {
               } else if (remaining_time > 365UL * 24 * 60 * 60) {
                 continue;
               } else {
-                unban_time = jiffies + remaining_time * HZ;
+                unsigned long ban_duration;
+                if (check_mul_overflow(remaining_time, (unsigned long)HZ,
+                                       &ban_duration)) {
+                  fw_pr_warn("Ban duration overflow for IP %s, skipping",
+                             ip_str);
+                  continue;
+                }
+                unban_time = jiffies + ban_duration;
               }
 
               entry = kmalloc(sizeof(*entry), GFP_KERNEL);
@@ -499,12 +530,30 @@ int restore_state_from_file(const char *filename) {
               {
                 u32 bkt6 = jhash(&ip6, sizeof(ip6), fw_hash_seed) &
                            ((1 << BAN_HASH_BITS) - 1);
-                hash_add_rcu(fw_info.ban_table_ipv6, &entry->hash, bkt6);
+                struct ban_entry *existing;
+                bool duplicate = false;
+
+                hlist_for_each_entry_rcu(existing,
+                                         &fw_info.ban_table_ipv6[bkt6], hash) {
+                  if (existing->af == FW_AF_INET6 &&
+                      ipv6_addr_equal(&existing->addr.ipv6, &ip6)) {
+                    duplicate = true;
+                    break;
+                  }
+                }
+
+                if (duplicate) {
+                  spin_unlock(&fw_info.lock);
+                  kfree(entry);
+                  fw_pr_info("Skipping duplicate ban entry for IP %s", ip_str);
+                } else {
+                  hash_add_rcu(fw_info.ban_table_ipv6, &entry->hash, bkt6);
+                  atomic_inc(&fw_info.ban_count);
+                  atomic_inc(&fw_info.total_ban_count);
+                  spin_unlock(&fw_info.lock);
+                  restored_ban_count++;
+                }
               }
-              atomic_inc(&fw_info.ban_count);
-              atomic_inc(&fw_info.total_ban_count);
-              spin_unlock(&fw_info.lock);
-              restored_ban_count++;
             }
           }
         }

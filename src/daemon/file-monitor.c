@@ -859,7 +859,16 @@ void monitor_loop(void) {
           process_new_lines(matched_idx);
         }
       } else if (event->mask & (IN_MOVED_FROM | IN_DELETE)) {
-        /* 文件被移动或删除 - 标记为轮转处理 */
+        /* 文件被移动或删除 - 标记为轮转处理
+         *
+         * 使用写锁是因为需要修改 file_states[j].wd = -1。
+         * 虽然遍历本身是读操作，但 wd 字段的修改会导致并发读取
+         * file_states 的线程看到不一致的状态，因此必须使用写锁保护。
+         *
+         * 优化考虑：如果 MAX_JAILS * MAX_LOG_FILES 较大，可以考虑
+         * 使用原子操作 (__atomic_compare_exchange) 来避免写锁，
+         * 但当前实现简单且正确。
+         */
         pthread_rwlock_wrlock(&config_rwlock);
         int max_states = MAX_JAILS * MAX_LOG_FILES;
         for (int j = 0; j < max_states; j++) {

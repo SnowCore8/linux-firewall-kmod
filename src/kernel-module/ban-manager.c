@@ -50,19 +50,15 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     return -ENOMEM;
   }
 
-  spin_lock(&fw->lock);
-
-  /* 白名单检查 */
+  /* 白名单检查（在锁外执行，避免持 spinlock 遍历整个 whitelist 表） */
   rcu_read_lock();
   if (af == FW_AF_INET6) {
     struct in6_addr *ip6 = (struct in6_addr *)ip;
-    /* 子网遍历（覆盖所有条目，包括精确匹配） */
     hash_for_each_rcu(fw->whitelist_table_ipv6, bkt, wl_entry, hash) {
       u8 prefix = READ_ONCE(wl_entry->mask.prefix_len);
       const struct in6_addr *wl_ip = &wl_entry->addr.ipv6;
       if (ipv6_prefix_equal(ip6, wl_ip, prefix)) {
         rcu_read_unlock();
-        spin_unlock(&fw->lock);
         kfree(entry);
         atomic_inc(&fw->whitelist_reject_count);
         fw_pr_warn("REFUSED to ban whitelisted IP %s", ip_str);
@@ -76,7 +72,6 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
       __be32 wl_ip = READ_ONCE(wl_entry->addr.ipv4);
       if ((ipv4 & wl_mask) == (wl_ip & wl_mask)) {
         rcu_read_unlock();
-        spin_unlock(&fw->lock);
         kfree(entry);
         atomic_inc(&fw->whitelist_reject_count);
         fw_pr_warn("REFUSED to ban whitelisted IP %s", ip_str);
@@ -85,6 +80,8 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     }
   }
   rcu_read_unlock();
+
+  spin_lock(&fw->lock);
 
   /* 检查是否已被封禁 */
   rcu_read_lock();
