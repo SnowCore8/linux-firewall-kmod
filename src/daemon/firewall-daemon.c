@@ -47,6 +47,7 @@ struct daemon_stats daemon_stats;
 void signal_handler(int sig) {
   switch (sig) {
   case SIGTERM:
+    /* fall-through: SIGTERM and SIGINT both set running=0 */
   case SIGINT:
     running = 0;
     break;
@@ -154,6 +155,9 @@ void cleanup(void) {
     inotify_fd = -1;
   }
 
+  /* 修复 R3-3：使用写锁保护对全局 cfg 的访问，防止与 SIGHUP 重载竞态 */
+  pthread_rwlock_wrlock(&config_rwlock);
+
   /* 释放所有 jail 及其资源 */
   for (int j = 0; j < cfg.jail_count; j++) {
     struct jail *jail = &cfg.jails[j];
@@ -208,6 +212,8 @@ void cleanup(void) {
     free(cfg.permanent_db_path);
     cfg.permanent_db_path = NULL;
   }
+
+  pthread_rwlock_unlock(&config_rwlock);
 
   /* 关闭 SQLite 数据库 */
   if (sqlite_db) {

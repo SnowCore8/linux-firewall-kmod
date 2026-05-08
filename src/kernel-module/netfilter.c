@@ -4,6 +4,7 @@
 
 #include "firewall.h"
 #include <linux/if_ether.h>
+#include <linux/ipv6.h>
 
 #define IP_MF 0x2000
 #define IP_OFFSET 0x1FFF
@@ -160,9 +161,10 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
   {
     __be16 frag_off = iph->frag_off;
     if ((ntohs(frag_off) & IP_MF) || (ntohs(frag_off) & IP_OFFSET)) {
-      fw_pr_warn_ratelimited("Fragmented packet from %pI4 passed through",
+      fw_pr_warn_ratelimited("Fragmented packet from %pI4 dropped",
                              &iph->saddr);
-      return NF_ACCEPT;
+      /* 安全：分片包可能绕过基于完整报头的封禁检查，直接丢弃 */
+      return NF_DROP;
     }
   }
 
@@ -181,6 +183,9 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
   struct ipv6hdr iph6_copy;
   struct ipv6hdr *iph6;
   struct in6_addr src_ip;
+  u8 nexthdr;
+  struct ipv6_opt_hdr opt;
+  unsigned int offset;
 
   if (unlikely(!skb) || unlikely(!pskb_may_pull(skb, sizeof(struct ipv6hdr))))
     return NF_ACCEPT;
@@ -188,6 +193,24 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
   iph6 = skb_header_pointer(skb, 0, sizeof(iph6_copy), &iph6_copy);
   if (!iph6 || iph6->version != 6)
     return NF_ACCEPT;
+
+  /* 检查 IPv6 分片扩展头：分片包可能绕过基于完整报头的封禁检查 */
+  nexthdr = iph6->nexthdr;
+  offset = sizeof(struct ipv6hdr);
+  while (nexthdr == NEXTHDR_HOP || nexthdr == NEXTHDR_ROUTING ||
+         nexthdr == NEXTHDR_DEST || nexthdr == NEXTHDR_AUTH) {
+    if (!pskb_may_pull(skb, offset + sizeof(struct ipv6_opt_hdr)))
+      break;
+    if (skb_header_pointer(skb, offset, sizeof(opt), &opt) == NULL)
+      break;
+    offset += ipv6_optlen(&opt);
+    nexthdr = opt.nexthdr;
+  }
+  if (nexthdr == NEXTHDR_FRAGMENT) {
+    fw_pr_warn_ratelimited("IPv6 fragmented packet dropped");
+    /* 安全：分片包可能绕过封禁检查，直接丢弃 */
+    return NF_DROP;
+  }
 
   src_ip = iph6->saddr;
   if (unlikely(ipv6_addr_any(&src_ip) || ipv6_addr_loopback(&src_ip) ||

@@ -123,10 +123,14 @@ static int parse_config_string(const char *value, size_t max_len,
     return -1;
   }
 
+  /* 修复 R3-4：使用临时变量避免 OOM 时指针悬空 */
+  char *tmp = strdup(value);
+  if (!tmp)
+    return -1;
   if (*target)
     free(*target);
-  *target = strdup(value);
-  return (*target) ? 0 : -1;
+  *target = tmp;
+  return 0;
 }
 
 /**
@@ -142,18 +146,22 @@ static int parse_config_path(const char *value, const char *config_dir,
     return -1;
   }
 
-  if (*target)
-    free(*target);
-
+  /* 修复 R3-4：使用临时变量避免 OOM 时指针悬空 */
+  char *tmp;
   if (value[0] == '/') {
-    *target = strdup(value);
+    tmp = strdup(value);
   } else {
     char full_path[1024];
     snprintf(full_path, sizeof(full_path), "%s/%s", config_dir, value);
-    *target = strdup(full_path);
+    tmp = strdup(full_path);
   }
 
-  return (*target) ? 0 : -1;
+  if (!tmp)
+    return -1;
+  if (*target)
+    free(*target);
+  *target = tmp;
+  return 0;
 }
 
 /**
@@ -364,9 +372,13 @@ static int apply_jail_string_config(struct jail *jail, const char *key,
     daemon_log_info("Jail '%s' enabled: %s", jail->name, value);
     return 0;
   } else if (strcmp(key, "regex") == 0) {
+    /* 修复 R3-4：使用临时变量避免 OOM 时指针悬空 */
+    char *tmp = strdup(value);
+    if (!tmp)
+      return -1;
     if (jail->regex_pattern)
       free(jail->regex_pattern);
-    jail->regex_pattern = strdup(value);
+    jail->regex_pattern = tmp;
     daemon_log_info("Jail '%s' regex set to: %s", jail->name, value);
     return 0;
   }
@@ -471,10 +483,12 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
 
     switch (event.type) {
     case YAML_STREAM_START_EVENT:
+      /* fall-through: stream and document start events need no processing */
     case YAML_DOCUMENT_START_EVENT:
       break;
 
     case YAML_STREAM_END_EVENT:
+      /* fall-through: stream and document end events both signal completion */
     case YAML_DOCUMENT_END_EVENT:
       done = 1;
       break;
@@ -619,29 +633,35 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
         } else if (strcmp(ctx.current_key, "metrics_bind_address") == 0) {
           /* 修复 P1-5：解析顶层 metrics_bind_address 配置项 */
           if (strlen(value) > 0 && strlen(value) < 64) {
-            if (target->metrics_bind_address)
-              free(target->metrics_bind_address);
-            target->metrics_bind_address = strdup(value);
-            if (target->metrics_bind_address) {
+            /* 修复 R3-4：使用临时变量避免 OOM 时指针悬空 */
+            char *tmp = strdup(value);
+            if (tmp) {
+              if (target->metrics_bind_address)
+                free(target->metrics_bind_address);
+              target->metrics_bind_address = tmp;
               daemon_log_info("Config metrics_bind_address set to: %s",
                               target->metrics_bind_address);
             }
           }
         } else if (strcmp(ctx.current_key, "metrics_username") == 0) {
           if (strlen(value) > 0 && strlen(value) < 64) {
-            if (target->metrics_username)
-              free(target->metrics_username);
-            target->metrics_username = strdup(value);
-            if (target->metrics_username) {
+            /* 修复 R3-4：使用临时变量避免 OOM 时指针悬空 */
+            char *tmp = strdup(value);
+            if (tmp) {
+              if (target->metrics_username)
+                free(target->metrics_username);
+              target->metrics_username = tmp;
               daemon_log_info("Config metrics_username configured");
             }
           }
         } else if (strcmp(ctx.current_key, "metrics_password") == 0) {
           if (strlen(value) > 0 && strlen(value) < 128) {
-            if (target->metrics_password)
-              free(target->metrics_password);
-            target->metrics_password = strdup(value);
-            if (target->metrics_password) {
+            /* 修复 R3-4：使用临时变量避免 OOM 时指针悬空 */
+            char *tmp = strdup(value);
+            if (tmp) {
+              if (target->metrics_password)
+                free(target->metrics_password);
+              target->metrics_password = tmp;
               daemon_log_info("Config metrics_password configured");
             }
           }
@@ -651,19 +671,22 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
                strcmp(value, "1") == 0);
         } else if (strcmp(ctx.current_key, "permanent_db_path") == 0) {
           if (strlen(value) > 0) {
-            if (target->permanent_db_path)
-              free(target->permanent_db_path);
-            /* 相对于配置文件目录解析相对路径 */
+            /* 修复 R3-4：使用临时变量避免 OOM 时指针悬空 */
+            char *tmp;
             if (value[0] == '/') {
-              target->permanent_db_path = strdup(value);
+              tmp = strdup(value);
             } else {
               char full_path[1024];
               snprintf(full_path, sizeof(full_path), "%s/%s", config_dir,
                        value);
-              target->permanent_db_path = strdup(full_path);
+              tmp = strdup(full_path);
             }
-            if (target->permanent_db_path)
+            if (tmp) {
+              if (target->permanent_db_path)
+                free(target->permanent_db_path);
+              target->permanent_db_path = tmp;
               target->permanent_ban_enabled = 1;
+            }
           }
         } else if (strcmp(ctx.current_key, "permanent_ban_enabled") == 0) {
           target->permanent_ban_enabled =
@@ -760,6 +783,7 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
     }
 
     case YAML_ALIAS_EVENT:
+      /* fall-through: alias and no-event both need no processing */
     case YAML_NO_EVENT:
       break;
     }

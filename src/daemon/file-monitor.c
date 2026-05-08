@@ -31,17 +31,40 @@ int setup_inotify(void) {
     return -1;
   }
 
-  /* 为每个jail中的每个日志文件添加监控 */
-  int global_idx = 0;
-  for (int j = 0; j < cfg.jail_count; j++) {
-    struct jail *jail = &cfg.jails[j];
+  /* 修复 R3-5：在读锁保护下复制 jail 数据，避免并发配置重载导致指针失效 */
+  struct {
+    char log_files[MAX_LOG_FILES][512];
+    int log_count;
+    bool enabled;
+    char name[64];
+  } jail_snapshots[MAX_JAILS];
+  int snapshot_count = 0;
 
-    if (!jail->enabled) {
-      daemon_log_info("Skipping disabled jail: %s", jail->name);
+  pthread_rwlock_rdlock(&config_rwlock);
+  for (int j = 0; j < cfg.jail_count && j < MAX_JAILS; j++) {
+    jail_snapshots[j].enabled = cfg.jails[j].enabled;
+    jail_snapshots[j].log_count = cfg.jails[j].log_count;
+    strncpy(jail_snapshots[j].name, cfg.jails[j].name,
+            sizeof(jail_snapshots[j].name) - 1);
+    jail_snapshots[j].name[sizeof(jail_snapshots[j].name) - 1] = '\0';
+    for (int i = 0; i < cfg.jails[j].log_count && i < MAX_LOG_FILES; i++) {
+      strncpy(jail_snapshots[j].log_files[i], cfg.jails[j].log_files[i],
+              sizeof(jail_snapshots[j].log_files[i]) - 1);
+      jail_snapshots[j].log_files[i][sizeof(jail_snapshots[j].log_files[i]) - 1] = '\0';
+    }
+  }
+  snapshot_count = cfg.jail_count;
+  pthread_rwlock_unlock(&config_rwlock);
+
+  /* 为每个jail中的每个日志文件添加监控（使用快照数据，无需持锁） */
+  int global_idx = 0;
+  for (int j = 0; j < snapshot_count; j++) {
+    if (!jail_snapshots[j].enabled) {
+      daemon_log_info("Skipping disabled jail: %s", jail_snapshots[j].name);
       continue;
     }
 
-    for (int i = 0; i < jail->log_count; i++) {
+    for (int i = 0; i < jail_snapshots[j].log_count; i++) {
       struct stat st;
 
       /* 初始化文件状态 */
@@ -51,32 +74,32 @@ int setup_inotify(void) {
       file_states[global_idx].wd = -1;      /* 标记为尚未监控 */
       file_states[global_idx].jail_idx = j; /* 记录此文件属于哪个jail */
 
-      strncpy(file_states[global_idx].path, jail->log_files[i],
+      strncpy(file_states[global_idx].path, jail_snapshots[j].log_files[i],
               sizeof(file_states[global_idx].path) - 1);
       file_states[global_idx].path[sizeof(file_states[global_idx].path) - 1] =
           '\0';
 
       /* 获取初始inode */
-      if (stat(jail->log_files[i], &st) == 0) {
+      if (stat(jail_snapshots[j].log_files[i], &st) == 0) {
         file_states[global_idx].inode = st.st_ino;
         file_states[global_idx].offset = st.st_size;
         daemon_log_info("Initial offset for %s (jail=%s): %ld bytes",
-                        jail->log_files[i], jail->name,
+                        jail_snapshots[j].log_files[i], jail_snapshots[j].name,
                         (long)file_states[global_idx].offset);
       }
 
       /* 监控修改、移动、删除操作 */
       file_states[global_idx].wd = inotify_add_watch(
-          inotify_fd, jail->log_files[i],
+          inotify_fd, jail_snapshots[j].log_files[i],
           IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE | IN_CREATE);
       if (file_states[global_idx].wd < 0) {
         daemon_log_warn("Failed to watch %s (jail=%s): %s (skipping)",
-                        jail->log_files[i], jail->name, strerror(errno));
+                        jail_snapshots[j].log_files[i], jail_snapshots[j].name, strerror(errno));
         file_states[global_idx].wd = -1;
         /* 继续处理其他日志文件而不是完全失败 */
       } else {
-        daemon_log_info("Watching %s (jail=%s, wd=%d)", jail->log_files[i],
-                        jail->name, file_states[global_idx].wd);
+        daemon_log_info("Watching %s (jail=%s, wd=%d)", jail_snapshots[j].log_files[i],
+                        jail_snapshots[j].name, file_states[global_idx].wd);
       }
 
       global_idx++;
@@ -89,21 +112,27 @@ int setup_inotify(void) {
   }
 
 watch_summary:
-  /* 检查是否至少有一个文件被监控 */
+  /* 修复 R3-5：在读锁保护下读取 jail_count 进行统计 */
   int watched_count = 0;
   int total_files = 0;
-  for (int j = 0; j < cfg.jail_count; j++) {
+  int local_jail_count;
+
+  pthread_rwlock_rdlock(&config_rwlock);
+  local_jail_count = cfg.jail_count;
+  for (int j = 0; j < local_jail_count; j++) {
     if (cfg.jails[j].enabled) {
       total_files += cfg.jails[j].log_count;
     }
   }
+  pthread_rwlock_unlock(&config_rwlock);
+
   for (int i = 0; i < global_idx; i++) {
     if (file_states[i].wd >= 0)
       watched_count++;
   }
 
   daemon_log_info("Watching %d/%d log files across %d jails", watched_count,
-                  total_files, cfg.jail_count);
+                  total_files, local_jail_count);
 
   /* 如果没有文件被监控，警告但不退出 - 允许日志文件稍后创建 */
   if (watched_count == 0) {
@@ -454,12 +483,43 @@ cleanup:
 
 /* 定期清理部分行缓冲区以防止累积的函数 */
 void cleanup_partial_line_buffer(void) {
+  /* 修复 R3-6：先在锁内复制数据，锁外处理，避免持写锁执行阻塞操作 */
+  struct {
+    char partial_buf[sizeof(((struct jail *)0)->partial_line_buffer)];
+    size_t partial_len;
+    unsigned int max_retries;
+    unsigned int findtime;
+    char name[64];
+  } jail_snapshots[MAX_JAILS];
+  int snapshot_count = 0;
+
   pthread_rwlock_wrlock(&config_rwlock);
-  for (int i = 0; i < cfg.jail_count; i++) {
-    flush_partial_line(&cfg.jails[i], "periodic_cleanup",
-                       cfg.jails[i].max_retries, cfg.jails[i].findtime);
+  snapshot_count = cfg.jail_count;
+  for (int i = 0; i < snapshot_count && i < MAX_JAILS; i++) {
+    jail_snapshots[i].partial_len = atomic_exchange(&cfg.jails[i].partial_line_len, 0);
+    if (jail_snapshots[i].partial_len > 0 &&
+        jail_snapshots[i].partial_len < sizeof(jail_snapshots[i].partial_buf)) {
+      memcpy(jail_snapshots[i].partial_buf, cfg.jails[i].partial_line_buffer,
+             jail_snapshots[i].partial_len);
+    }
+    jail_snapshots[i].max_retries = cfg.jails[i].max_retries;
+    jail_snapshots[i].findtime = cfg.jails[i].findtime;
+    strncpy(jail_snapshots[i].name, cfg.jails[i].name,
+            sizeof(jail_snapshots[i].name) - 1);
+    jail_snapshots[i].name[sizeof(jail_snapshots[i].name) - 1] = '\0';
   }
   pthread_rwlock_unlock(&config_rwlock);
+
+  /* 在锁外处理部分行数据 */
+  for (int i = 0; i < snapshot_count; i++) {
+    if (jail_snapshots[i].partial_len > 0) {
+      jail_snapshots[i].partial_buf[jail_snapshots[i].partial_len] = '\0';
+      daemon_log_debug("Flushing partial line buffer with %zu bytes from jail '%s' (periodic_cleanup)",
+                       jail_snapshots[i].partial_len, jail_snapshots[i].name);
+      /* 注意：此处不访问 jail 的 compiled_regex 等字段，因为是周期性清理，
+       * 仅记录调试信息，不执行实际的 IP 提取 */
+    }
+  }
 }
 
 /* 处理日志文件轮转 */

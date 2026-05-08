@@ -223,6 +223,7 @@ static int format_ban_command(ban_action_t action, const char *ip,
     cmd_len = snprintf(cmd_buf, cmd_buf_size, "%s 0\n", ip);
     break;
   case BAN_ACTION_UNBAN:
+    /* fall-through: UNBAN and UNBAN_PERM use the same "unban" command format */
   case BAN_ACTION_UNBAN_PERM:
     cmd_len = snprintf(cmd_buf, cmd_buf_size, "unban %s\n", ip);
     break;
