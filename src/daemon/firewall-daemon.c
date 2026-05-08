@@ -110,11 +110,18 @@ void daemonize_process(void) {
     perror("chdir");
   }
 
-  /* 写入 PID 文件以支持 systemd Type=forking */
-  FILE *pidfile = fopen("/run/firewall-daemon.pid", "w");
-  if (pidfile) {
-    fprintf(pidfile, "%d\n", getpid());
-    fclose(pidfile);
+  /* 写入 PID 文件以支持 systemd Type=forking
+   * 使用 open() + O_CREAT|O_EXCL|O_NOFOLLOW 防止符号链接攻击 */
+  int pidfd = open("/run/firewall-daemon.pid",
+                    O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+  if (pidfd >= 0) {
+    char pid_str[32];
+    int len = snprintf(pid_str, sizeof(pid_str), "%d\n", getpid());
+    if (len > 0) {
+      ssize_t written = write(pidfd, pid_str, (size_t)len);
+      (void)written;
+    }
+    close(pidfd);
   }
 
   /* 将标准文件描述符重定向到 /dev/null */

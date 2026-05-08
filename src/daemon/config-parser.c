@@ -5,6 +5,7 @@
 #include "config-parser.h"
 #include "firewall-daemon.h"
 #include "jail-manager.h"
+#include <strings.h>
 
 /* 引用全局严格模式标志 */
 extern int config_strict_mode;
@@ -141,18 +142,35 @@ static int parse_config_string(const char *value, size_t max_len,
  * 返回: 0 表示成功，-1 表示失败
  */
 static int parse_config_path(const char *value, const char *config_dir,
-                             char **target) {
+                              char **target) {
   if (strlen(value) == 0) {
     return -1;
   }
 
-  /* 修复 R3-4：使用临时变量避免 OOM 时指针悬空 */
+  /* 拒绝路径遍历 */
+  if (strstr(value, "..") != NULL) {
+    return -1;
+  }
+
+  /* 拒绝 URL 编码遍历 */
+  if (strcasestr(value, "%2e") != NULL || strcasestr(value, "%2f") != NULL) {
+    return -1;
+  }
+
+  /* 拒绝 shell 元字符 */
+  if (strpbrk(value, "|;&`$(){}<>!~*?[]") != NULL) {
+    return -1;
+  }
+
   char *tmp;
   if (value[0] == '/') {
     tmp = strdup(value);
   } else {
     char full_path[1024];
-    snprintf(full_path, sizeof(full_path), "%s/%s", config_dir, value);
+    int n = snprintf(full_path, sizeof(full_path), "%s/%s", config_dir, value);
+    if (n < 0 || (size_t)n >= sizeof(full_path)) {
+      return -1;
+    }
     tmp = strdup(full_path);
   }
 
@@ -696,25 +714,37 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
                strcmp(value, "1") == 0);
         } else if (strcmp(ctx.current_key, "permanent_db_path") == 0) {
           if (strlen(value) > 0) {
-            /* 修复 R3-4：使用临时变量避免 OOM 时指针悬空 */
-            char *tmp;
-            if (value[0] == '/') {
-              tmp = strdup(value);
+            /* 拒绝路径遍历 */
+            if (strstr(value, "..") != NULL) {
+              daemon_log_warn("permanent_db_path contains path traversal, rejecting: %s", value);
+            } else if (strcasestr(value, "%2e") != NULL || strcasestr(value, "%2f") != NULL) {
+              daemon_log_warn("permanent_db_path contains URL-encoded traversal, rejecting: %s", value);
+            } else if (strpbrk(value, "|;&`$(){}<>!~*?[]") != NULL) {
+              daemon_log_warn("permanent_db_path contains shell metacharacters, rejecting: %s", value);
             } else {
-              char full_path[1024];
-              snprintf(full_path, sizeof(full_path), "%s/%s", config_dir,
-                       value);
-              tmp = strdup(full_path);
-            }
-            if (tmp) {
-              if (target->permanent_db_path)
-                free(target->permanent_db_path);
-              target->permanent_db_path = tmp;
-              target->permanent_ban_enabled = 1;
-            } else if (ctx.strict_mode) {
-              daemon_log_err("OOM allocating permanent_db_path in top-level of %s",
-                             ctx.config_file);
-              ctx.has_error = 1;
+              char *tmp;
+              if (value[0] == '/') {
+                tmp = strdup(value);
+              } else {
+                char full_path[1024];
+                int n = snprintf(full_path, sizeof(full_path), "%s/%s", config_dir,
+                         value);
+                if (n < 0 || (size_t)n >= sizeof(full_path)) {
+                  tmp = NULL;
+                } else {
+                  tmp = strdup(full_path);
+                }
+              }
+              if (tmp) {
+                if (target->permanent_db_path)
+                  free(target->permanent_db_path);
+                target->permanent_db_path = tmp;
+                target->permanent_ban_enabled = 1;
+              } else if (ctx.strict_mode) {
+                daemon_log_err("OOM allocating permanent_db_path in top-level of %s",
+                               ctx.config_file);
+                ctx.has_error = 1;
+              }
             }
           }
         } else if (strcmp(ctx.current_key, "permanent_ban_enabled") == 0) {

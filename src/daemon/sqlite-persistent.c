@@ -51,9 +51,18 @@ static int ensure_db_dir(const char *db_path) {
   char *dir = dirname(path_copy);
   struct stat st;
 
+  /* 验证目录不在敏感位置 */
+  if (strcmp(dir, "/") == 0 || strcmp(dir, "/etc") == 0 ||
+      strcmp(dir, "/usr") == 0 || strcmp(dir, "/bin") == 0 ||
+      strcmp(dir, "/sbin") == 0) {
+    fprintf(stderr, "firewall: 数据库目录路径不安全: %s\n", dir);
+    free(path_copy);
+    return -1;
+  }
+
   if (stat(dir, &st) != 0) {
     /* 目录不存在，尝试创建 */
-    if (mkdir(dir, 0750) != 0) {
+    if (mkdir(dir, 0700) != 0) {
       fprintf(stderr, "firewall: 创建数据库目录%s失败：%s\n", dir,
               strerror(errno));
       free(path_copy);

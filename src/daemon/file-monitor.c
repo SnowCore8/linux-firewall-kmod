@@ -79,6 +79,15 @@ int setup_inotify(void) {
       file_states[global_idx].path[sizeof(file_states[global_idx].path) - 1] =
           '\0';
 
+      /* 在 stat 之前检查是否为符号链接 */
+      struct stat lstat_st;
+      if (lstat(jail_snapshots[j].log_files[i], &lstat_st) == 0 &&
+          S_ISLNK(lstat_st.st_mode)) {
+        daemon_log_warn("Log file is a symlink, rejecting: %s",
+                        jail_snapshots[j].log_files[i]);
+        continue;
+      }
+
       /* 获取初始inode */
       if (stat(jail_snapshots[j].log_files[i], &st) == 0) {
         file_states[global_idx].inode = st.st_ino;
@@ -329,9 +338,13 @@ void process_new_lines(int idx) {
   /* 立即释放读锁，文件读取和处理在锁外进行 */
   pthread_rwlock_unlock(&config_rwlock);
 
-  fd = open(log_path, O_RDONLY);
+  fd = open(log_path, O_RDONLY | O_NOFOLLOW);
   if (fd < 0) {
-    daemon_log_err("Failed to open %s: %s", log_path, strerror(errno));
+    if (errno == ELOOP) {
+      daemon_log_warn("Log file is a symlink, skipping: %s", log_path);
+    } else {
+      daemon_log_err("Failed to open %s: %s", log_path, strerror(errno));
+    }
     goto cleanup;
   }
 
