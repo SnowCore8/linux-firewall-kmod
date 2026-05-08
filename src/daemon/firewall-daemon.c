@@ -357,7 +357,7 @@ int main(int argc, char *argv[]) {
 
   /* 设置 inotify */
   if (setup_inotify() < 0) {
-    daemon_log_err("Failed to setup inotify");
+    daemon_log_err("Failed to setup inotify: %s", strerror(errno));
     cleanup();
     return EXIT_FAILURE;
   }

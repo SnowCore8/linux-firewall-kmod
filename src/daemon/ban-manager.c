@@ -383,7 +383,7 @@ int execute_ban_action(ban_action_t action, const char *ip) {
     return -1;
 
   if (secure_procfs_write(BANS_PATH, cmd_buf, (size_t)cmd_len) < 0) {
-    daemon_log_err("Failed to write to %s", BANS_PATH);
+    daemon_log_err("Failed to write to %s: %s", BANS_PATH, strerror(errno));
     return -1;
   }
 

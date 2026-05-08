@@ -174,7 +174,7 @@ struct daemon_stats {
   atomic_ulong inotify_events;
   atomic_ulong log_rotations;
   atomic_ulong lines_skipped;
-  atomic_ulong regex_matches_sshd;
+  atomic_ulong regex_matches;       /* Total regex matches across all jails */
   time_t start_time;
 };
 

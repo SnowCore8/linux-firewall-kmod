@@ -270,7 +270,7 @@ static void read_daemon_stats(daemon_stats_snapshot_t *stats) {
   stats->inotify_events = atomic_load(&daemon_stats.inotify_events);
   stats->log_rotations = atomic_load(&daemon_stats.log_rotations);
   stats->lines_skipped = atomic_load(&daemon_stats.lines_skipped);
-  stats->regex_matches = atomic_load(&daemon_stats.regex_matches_sshd);
+  stats->regex_matches = atomic_load(&daemon_stats.regex_matches);
 }
 
 /**

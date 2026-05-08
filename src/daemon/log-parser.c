@@ -261,6 +261,7 @@ static int match_pcre2_regex(struct jail *j, const char *line, size_t line_len,
   ip_buf[ip_len] = '\0';
   strncpy(ip_out, ip_buf, ip_size - 1);
   ip_out[ip_size - 1] = '\0';
+  atomic_fetch_add(&daemon_stats.regex_matches, 1);
   return 1;
 }
 
