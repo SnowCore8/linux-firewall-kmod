@@ -378,16 +378,15 @@ void process_new_lines(int idx) {
     }
   }
 
-  /* R9-5 修复：使用 static 缓冲区复用，避免每次 calloc/free 256KB 的开销。
-   * 由于 process_new_lines 在单线程监控循环中调用，static 缓冲区是安全的。 */
+  /* C2 修复：使用动态分配的缓冲区替代 static 缓冲区。
+   * 原问题：static batch_buf_in_use 标志会导致高负载时部分日志处理被跳过，
+   * 可能遗漏攻击者的登录尝试。
+   * 修复：每次调用时 malloc，处理完毕后 free，避免静态缓冲区的递归调用问题。 */
 #define BATCH_READ_MAX (256 * 1024)
-  static char batch_buf[BATCH_READ_MAX];
-  static _Atomic(int) batch_buf_in_use = 0;
-
-  /* 防止递归调用（防御性检查） */
-  if (atomic_exchange(&batch_buf_in_use, 1)) {
-    daemon_log_warn("批量读取缓冲区正在使用中，跳过此次处理");
-    ret = -EBUSY;
+  char *batch_buf = malloc(BATCH_READ_MAX);
+  if (!batch_buf) {
+    daemon_log_err("无法分配批量读取缓冲区（%d 字节）", BATCH_READ_MAX);
+    ret = -ENOMEM;
     goto cleanup_restore_partial;
   }
 
@@ -403,7 +402,6 @@ void process_new_lines(int idx) {
 
   if (chunk_read < 0) {
     daemon_log_warn("Read error in %s: %s", log_path, strerror(errno));
-    atomic_store(&batch_buf_in_use, 0);
     ret = -1;
     goto cleanup_restore_partial;
   }
@@ -422,14 +420,12 @@ void process_new_lines(int idx) {
       /* 整数溢出检查 */
       if (alloc_size < local_partial_len || alloc_size < batch_total) {
         daemon_log_err("整数溢出检测：组合缓冲区大小计算溢出");
-        atomic_store(&batch_buf_in_use, 0);
         ret = -ENOMEM;
         goto cleanup_restore_partial;
       }
       combined = malloc(alloc_size);
       if (!combined) {
         daemon_log_err("分配组合缓冲区内存不足");
-        atomic_store(&batch_buf_in_use, 0);
         ret = -ENOMEM;
         goto cleanup_restore_partial;
       }
@@ -469,19 +465,25 @@ void process_new_lines(int idx) {
     /* 更新偏移量 */
     if (current_offset > SSIZE_MAX - (ssize_t)batch_total) {
       daemon_log_err("Offset overflow detected");
-      atomic_store(&batch_buf_in_use, 0);
       ret = -1;
       goto cleanup_restore_partial;
     }
     current_offset += batch_total;
   }
 
-  atomic_store(&batch_buf_in_use, 0);
+  /* C2 修复：释放动态分配的缓冲区 */
+  free(batch_buf);
+  batch_buf = NULL;
 
   /* 更新偏移量 */
   file_states[idx].offset = current_offset;
 
 cleanup_restore_partial:
+  /* C2 修复：在错误路径中释放动态分配的缓冲区（正常路径已释放则 batch_buf 为 NULL） */
+  if (batch_buf) {
+    free(batch_buf);
+    batch_buf = NULL;
+  }
   /* 修复 P2-7：使用写锁恢复部分行缓冲区，使用原子操作设置长度 */
   pthread_rwlock_wrlock(&config_rwlock);
   if (jail_idx < cfg.jail_count) {
