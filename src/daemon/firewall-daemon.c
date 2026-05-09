@@ -269,6 +269,8 @@ int main(int argc, char *argv[]) {
             "Error: Procfs directory %s does not exist. Is the kernel module "
             "loaded?\n",
             PROCFS_DIR);
+    /* H3 修复：在返回前调用 cleanup() 释放已分配的资源 */
+    cleanup();
     return EXIT_FAILURE;
   }
 
@@ -276,6 +278,8 @@ int main(int argc, char *argv[]) {
     daemon_log_err("Bans procfs interface %s does not exist", BANS_PATH);
     fprintf(stderr, "Error: Bans procfs interface %s does not exist\n",
             BANS_PATH);
+    /* H3 修复：在返回前调用 cleanup() 释放已分配的资源 */
+    cleanup();
     return EXIT_FAILURE;
   }
 
