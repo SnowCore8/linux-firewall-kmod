@@ -244,6 +244,7 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < MAX_JAILS * MAX_LOG_FILES; i++) {
     file_states[i].wd = -1;
     file_states[i].jail_idx = -1;
+    file_states[i].symlink_detected = false; /* 修复：初始化为非符号链接 */
   }
 
   /* 解析配置 */

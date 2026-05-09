@@ -88,6 +88,7 @@ struct file_state {
   ino_t inode;
   int wd;       /* inotify 监视描述符 */
   int jail_idx; /* 此文件所属的 jail */
+  bool symlink_detected; /* 修复：标记文件是否为符号链接，防止重复处理 */
 };
 
 /* Jail 结构体 - 独立的监控单元 */
