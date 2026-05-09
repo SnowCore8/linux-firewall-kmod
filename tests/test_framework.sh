@@ -85,16 +85,33 @@ assert_true() {
         return 1
     fi
 
-    if eval "$condition" >/dev/null 2>&1; then
-        TEST_PASS=$((TEST_PASS + 1))
-        echo -e "  ${GREEN}[PASS]${NC} $msg"
-        TEST_RESULTS+=("PASS|$CURRENT_SUITE|$msg")
-        return 0
+    # 修复：使用 [[ ]] 替代 eval 执行断言条件
+    if [[ "$condition" == "[["* ]]; then
+        # [[ ]] 表达式：直接执行
+        if bash -c "$condition" 2>/dev/null; then
+            TEST_PASS=$((TEST_PASS + 1))
+            echo -e "  ${GREEN}[PASS]${NC} $msg"
+            TEST_RESULTS+=("PASS|$CURRENT_SUITE|$msg")
+            return 0
+        else
+            TEST_FAIL=$((TEST_FAIL + 1))
+            echo -e "  ${RED}[FAIL]${NC} $msg"
+            TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg")
+            return 1
+        fi
     else
-        TEST_FAIL=$((TEST_FAIL + 1))
-        echo -e "  ${RED}[FAIL]${NC} $msg"
-        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg")
-        return 1
+        # 简单命令：使用 bash -c 替代 eval
+        if bash -c "$condition" 2>/dev/null; then
+            TEST_PASS=$((TEST_PASS + 1))
+            echo -e "  ${GREEN}[PASS]${NC} $msg"
+            TEST_RESULTS+=("PASS|$CURRENT_SUITE|$msg")
+            return 0
+        else
+            TEST_FAIL=$((TEST_FAIL + 1))
+            echo -e "  ${RED}[FAIL]${NC} $msg"
+            TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg")
+            return 1
+        fi
     fi
 }
 
@@ -111,16 +128,31 @@ assert_false() {
         return 1
     fi
 
-    if ! eval "$condition" >/dev/null 2>&1; then
-        TEST_PASS=$((TEST_PASS + 1))
-        echo -e "  ${GREEN}[PASS]${NC} $msg"
-        TEST_RESULTS+=("PASS|$CURRENT_SUITE|$msg")
-        return 0
+    # 修复：使用 [[ ]] 替代 eval 执行断言条件
+    if [[ "$condition" == "[["* ]]; then
+        if ! bash -c "$condition" 2>/dev/null; then
+            TEST_PASS=$((TEST_PASS + 1))
+            echo -e "  ${GREEN}[PASS]${NC} $msg"
+            TEST_RESULTS+=("PASS|$CURRENT_SUITE|$msg")
+            return 0
+        else
+            TEST_FAIL=$((TEST_FAIL + 1))
+            echo -e "  ${RED}[FAIL]${NC} $msg"
+            TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg")
+            return 1
+        fi
     else
-        TEST_FAIL=$((TEST_FAIL + 1))
-        echo -e "  ${RED}[FAIL]${NC} $msg"
-        TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg")
-        return 1
+        if ! bash -c "$condition" 2>/dev/null; then
+            TEST_PASS=$((TEST_PASS + 1))
+            echo -e "  ${GREEN}[PASS]${NC} $msg"
+            TEST_RESULTS+=("PASS|$CURRENT_SUITE|$msg")
+            return 0
+        else
+            TEST_FAIL=$((TEST_FAIL + 1))
+            echo -e "  ${RED}[FAIL]${NC} $msg"
+            TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg")
+            return 1
+        fi
     fi
 }
 
