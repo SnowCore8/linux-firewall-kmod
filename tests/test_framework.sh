@@ -60,8 +60,9 @@ fw_test_header() {
 assert_condition_safe() {
     local cond="$1"
     # 移除单引号和双引号内的内容（避免误判字符串中的特殊字符）
+    # 使用 Perl 处理多行字符串
     local stripped
-    stripped=$(echo "$cond" | sed "s/'[^']*'//g; s/\"[^\"]*\"//g")
+    stripped=$(echo "$cond" | perl -0777 -pe "s/'[^']*'//g; s/\"[^\"]*\"//g" 2>/dev/null || echo "$cond")
     # 拒绝分号（命令分隔符）和裸反引号（命令替换）
     if [[ "$stripped" =~ \; ]] || [[ "$stripped" =~ [^\\]\` ]] || [[ "$stripped" == *\` ]]; then
         fw_log_error "拒绝不安全的断言条件（包含命令注入模式）: $cond"
