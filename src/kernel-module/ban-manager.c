@@ -19,6 +19,35 @@ extern u32 fw_hash_seed;
 
 extern void free_ban_entry_rcu(struct rcu_head *head);
 
+/* 修复：将 RECHECK_WHITELIST_* 宏提取为静态内联函数 */
+static inline int __recheck_whitelist_ipv6(struct firewall_info *fw,
+                                           const struct in6_addr *ip6) {
+  int bkt;
+  struct whitelist_entry *wl_entry;
+
+  hash_for_each_rcu(fw->whitelist_table_ipv6, bkt, wl_entry, hash) {
+    u8 prefix = READ_ONCE(wl_entry->mask.prefix_len);
+    const struct in6_addr *wl_ip = &wl_entry->addr.ipv6;
+    if (ipv6_prefix_equal(ip6, wl_ip, prefix))
+      return -EPERM;
+  }
+  return 0;
+}
+
+static inline int __recheck_whitelist_ipv4(struct firewall_info *fw,
+                                           __be32 ipv4) {
+  int bkt;
+  struct whitelist_entry *wl_entry;
+
+  hash_for_each_rcu(fw->whitelist_table_ipv4, bkt, wl_entry, hash) {
+    __be32 wl_mask = READ_ONCE(wl_entry->mask.ipv4_mask);
+    __be32 wl_ip = READ_ONCE(wl_entry->addr.ipv4);
+    if ((ipv4 & wl_mask) == (wl_ip & wl_mask))
+      return -EPERM;
+  }
+  return 0;
+}
+
 static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
                        unsigned long unban_time, bool is_permanent,
                        const char *log_msg, unsigned long log_arg);
@@ -108,32 +137,8 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
   }
   spin_unlock(&fw->lock);
 
-  /* C1 修复辅助：在每桶锁下再次验证白名单的宏 */
-  /* 修复 RCU 锁泄漏：宏不再直接 return，而是设置 ret 变量并 break，
-   * 确保调用者能正确执行 rcu_read_unlock()。 */
-#define RECHECK_WHITELIST_IPV6()                                               \
-  do {                                                                         \
-    hash_for_each_rcu(fw->whitelist_table_ipv6, bkt, wl_entry, hash) {         \
-      u8 prefix = READ_ONCE(wl_entry->mask.prefix_len);                        \
-      const struct in6_addr *wl_ip = &wl_entry->addr.ipv6;                     \
-      if (ipv6_prefix_equal(ip6, wl_ip, prefix)) {                             \
-        ret = -EPERM;                                                          \
-        break;                                                                 \
-      }                                                                        \
-    }                                                                          \
-  } while (0)
-
-#define RECHECK_WHITELIST_IPV4()                                               \
-  do {                                                                         \
-    hash_for_each_rcu(fw->whitelist_table_ipv4, bkt, wl_entry, hash) {         \
-      __be32 wl_mask = READ_ONCE(wl_entry->mask.ipv4_mask);                    \
-      __be32 wl_ip = READ_ONCE(wl_entry->addr.ipv4);                           \
-      if ((ipv4 & wl_mask) == (wl_ip & wl_mask)) {                             \
-        ret = -EPERM;                                                          \
-        break;                                                                 \
-      }                                                                        \
-    }                                                                          \
-  } while (0)
+  /* C1 修复辅助：在每桶锁下再次验证白名单的静态内联函数
+   * 修复 RCU 锁泄漏：函数不再直接 return，而是通过返回值通知调用者 */
 
   /* 步骤 3：使用每桶锁操作封禁表（不同桶可并行） */
   if (af == FW_AF_INET6) {
@@ -144,8 +149,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     spin_lock(&fw->ban_locks_ipv6[bkt6]);
     /* C1 修复：在每桶锁保护下再次验证白名单 */
     rcu_read_lock();
-    ret = 0;
-    RECHECK_WHITELIST_IPV6();
+    ret = __recheck_whitelist_ipv6(fw, ip6);
     rcu_read_unlock();
     if (ret == -EPERM) {
       spin_unlock(&fw->ban_locks_ipv6[bkt6]);
@@ -189,8 +193,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     spin_lock(&fw->ban_locks_ipv4[bkt4]);
     /* C1 修复：在每桶锁保护下再次验证白名单 */
     rcu_read_lock();
-    ret = 0;
-    RECHECK_WHITELIST_IPV4();
+    ret = __recheck_whitelist_ipv4(fw, ipv4);
     rcu_read_unlock();
     if (ret == -EPERM) {
       spin_unlock(&fw->ban_locks_ipv4[bkt4]);
