@@ -252,6 +252,7 @@ void store_partial_line(struct jail *j, const char *data, size_t len,
 
     /* 存储新数据 */
     memcpy(j->partial_line_buffer, data, len);
+    j->partial_line_buffer[len] = '\0'; /* 修复：确保 null 终止 */
     atomic_store(&j->partial_line_len, len);
   } else {
     /* 安全追加 */
@@ -625,6 +626,7 @@ void handle_log_rotation(int idx) {
     /* 如果需要则重新添加监控 */
     if (file_states[idx].wd >= 0) {
       inotify_rm_watch(inotify_fd, file_states[idx].wd);
+      file_states[idx].wd = -1; /* 修复：先重置 wd，防止使用已失效的描述符 */
     }
     file_states[idx].wd = inotify_add_watch(
         inotify_fd, file_states[idx].path,
@@ -646,7 +648,7 @@ void monitor_loop(void) {
 
   daemon_log_info("Starting monitoring loop");
 
-  while (running) {
+  while (atomic_load(&running)) {
     fd_set read_fds;
     struct timeval tv;
     int current_interval;
@@ -764,7 +766,7 @@ void monitor_loop(void) {
       }
 
       /* 检查是否请求了配置重载 - 使用原子交换防止信号丢失 */
-      if (__atomic_exchange_n(&reload_config, 0, __ATOMIC_SEQ_CST)) {
+      if (atomic_exchange(&reload_config, 0)) {
         atomic_fetch_add(&daemon_stats.config_reloads,
                          1); /* 记录配置重载次数 */
         daemon_log_info("Reloading configuration...");
@@ -902,7 +904,7 @@ void monitor_loop(void) {
     }
 
     /* 处理事件前检查是否应退出 */
-    if (!running)
+    if (!atomic_load(&running))
       break;
 
     /* 读取 inotify 事件 */
@@ -1013,12 +1015,12 @@ void monitor_loop(void) {
       i = next_pos;
 
       /* 事件处理期间检查是否应退出 */
-      if (!running)
+      if (!atomic_load(&running))
         break;
     }
 
     /* 事件处理后检查是否应退出 */
-    if (!running)
+    if (!atomic_load(&running))
       break;
   }
 }
