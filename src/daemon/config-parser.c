@@ -6,6 +6,16 @@
 #include "firewall-daemon.h"
 #include "jail-manager.h"
 #include <strings.h>
+#include <stdint.h>
+
+/* 用户空间版本的乘法溢出检查（内核 check_mul_overflow 的等价实现） */
+static inline int check_mul_overflow(size_t a, size_t b, size_t *result) {
+  if (a != 0 && b > SIZE_MAX / a) {
+    return -1; /* 溢出 */
+  }
+  *result = a * b;
+  return 0; /* 成功 */
+}
 
 /* 引用全局严格模式标志 */
 extern int config_strict_mode;
