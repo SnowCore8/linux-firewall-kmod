@@ -296,7 +296,8 @@ void process_new_lines(int idx) {
   const char *log_path;
   struct jail *j = NULL;
   unsigned int max_retries, findtime;
-  char *batch_buf = NULL; /* 提前声明，避免 goto cleanup_restore_partial 时未初始化 */
+  char *batch_buf =
+      NULL; /* 提前声明，避免 goto cleanup_restore_partial 时未初始化 */
 
   /* 验证idx参数 */
   if (idx < 0 || idx >= MAX_JAILS * MAX_LOG_FILES) {
