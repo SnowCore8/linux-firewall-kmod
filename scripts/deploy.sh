@@ -157,6 +157,14 @@ if [[ $? -ne 0 ]]; then
 fi
 echo "✅ 上传完成"
 
+# 修复：上传 MD5 校验文件到远程服务器
+echo "  上传 MD5 校验文件..."
+scp "$PROJECT_DIR/firewall-src.tar.gz.md5" "$REMOTE_USER@$REMOTE_HOST":/tmp/
+if [[ $? -ne 0 ]]; then
+    echo "❌ MD5 文件上传失败"
+    exit 1
+fi
+
 # 验证上传文件完整性
 echo "  验证上传文件完整性..."
 ssh "$REMOTE_USER@$REMOTE_HOST" << 'VERIFY_SCRIPT'
@@ -228,6 +236,7 @@ echo "  Prometheus: $(curl -s http://localhost:9119/metrics 2>/dev/null | head -
 
 # 清理
 rm -f /tmp/firewall-src.tar.gz
+rm -f /tmp/firewall-src.tar.gz.md5
 echo "✅ 清理完成"
 
 echo ""
