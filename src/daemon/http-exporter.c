@@ -563,6 +563,15 @@ static int check_basic_auth_header(const char *auth_header) {
   char cfg_pass[128] = {0};
 
   pthread_rwlock_rdlock(&config_rwlock);
+  /* 修复：如果密码长度超过缓冲区大小，直接返回失败，防止截断比较 */
+  if (strlen(cfg.metrics_password) >= sizeof(cfg_pass)) {
+    pthread_rwlock_unlock(&config_rwlock);
+    memset(cfg_pass, 0, sizeof(cfg_pass));
+    atomic_fetch_add(&auth_failures, 1);
+    atomic_store(&last_failure_time, time(NULL));
+    return 0;
+  }
+
   if (cfg.metrics_username && strlen(cfg.metrics_username) > 0) {
     strncpy(cfg_user, cfg.metrics_username, sizeof(cfg_user) - 1);
     cfg_user[sizeof(cfg_user) - 1] = '\0';
