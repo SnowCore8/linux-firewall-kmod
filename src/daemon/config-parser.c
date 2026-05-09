@@ -5,8 +5,8 @@
 #include "config-parser.h"
 #include "firewall-daemon.h"
 #include "jail-manager.h"
-#include <strings.h>
 #include <stdint.h>
+#include <strings.h>
 
 /* 用户空间版本的乘法溢出检查（内核 check_mul_overflow 的等价实现） */
 static inline int check_mul_overflow(size_t a, size_t b, size_t *result) {
@@ -1055,7 +1055,8 @@ int load_config_directory(const char *config_dir) {
        * 溢出导致分配过小的缓冲区 */
       if (file_count >= file_capacity) {
         size_t new_capacity;
-        if (check_mul_overflow((size_t)file_capacity, (size_t)2, &new_capacity)) {
+        if (check_mul_overflow((size_t)file_capacity, (size_t)2,
+                               &new_capacity)) {
           daemon_log_err("file_capacity overflow detected");
           for (int i = 0; i < file_count; i++)
             free(file_list[i]);
