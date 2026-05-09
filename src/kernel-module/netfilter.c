@@ -240,7 +240,8 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
            nexthdr == NEXTHDR_DEST || nexthdr == NEXTHDR_AUTH) {
       /* 修复：深度限制，防止循环或过多扩展头 */
       if (++ext_hdr_depth > MAX_EXT_HDR_DEPTH) {
-        fw_pr_warn_ratelimited("IPv6 extension header depth exceeded, dropping");
+        fw_pr_warn_ratelimited(
+            "IPv6 extension header depth exceeded, dropping");
         return NF_DROP;
       }
       if (!pskb_may_pull(skb, offset + sizeof(struct ipv6_opt_hdr)))

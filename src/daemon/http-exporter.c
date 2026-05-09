@@ -660,10 +660,16 @@ static int check_basic_auth_header(const char *auth_header) {
   char auth_pass_cmp[256] = {0};
 
   /* 安全复制（不会溢出，因为 max_len < sizeof(decoded) < 256） */
-  memcpy(user_cmp, cfg_user, user_len < sizeof(user_cmp) ? user_len : sizeof(user_cmp));
-  memcpy(auth_user_cmp, auth_user, auth_user_len < sizeof(auth_user_cmp) ? auth_user_len : sizeof(auth_user_cmp));
-  memcpy(pass_cmp, cfg_pass, pass_len < sizeof(pass_cmp) ? pass_len : sizeof(pass_cmp));
-  memcpy(auth_pass_cmp, auth_pass, auth_pass_len < sizeof(auth_pass_cmp) ? auth_pass_len : sizeof(auth_pass_cmp));
+  memcpy(user_cmp, cfg_user,
+         user_len < sizeof(user_cmp) ? user_len : sizeof(user_cmp));
+  memcpy(auth_user_cmp, auth_user,
+         auth_user_len < sizeof(auth_user_cmp) ? auth_user_len
+                                               : sizeof(auth_user_cmp));
+  memcpy(pass_cmp, cfg_pass,
+         pass_len < sizeof(pass_cmp) ? pass_len : sizeof(pass_cmp));
+  memcpy(auth_pass_cmp, auth_pass,
+         auth_pass_len < sizeof(auth_pass_cmp) ? auth_pass_len
+                                               : sizeof(auth_pass_cmp));
 
   /* 恒定时间比较：使用异或累加，即使长度不同也执行完整比较
    * 长度差异也通过异或纳入结果，防止早期退出 */

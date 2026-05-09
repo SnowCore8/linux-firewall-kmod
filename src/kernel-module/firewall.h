@@ -181,9 +181,10 @@ struct firewall_info {
   atomic_t shutting_down; /* 防止关闭期间定时器触发的标志 */
   unsigned int ban_time;
   struct timer_list cleanup_timer;
-  bool timer_initialized; /* 跟踪定时器是否已初始化 */
+  bool timer_initialized;       /* 跟踪定时器是否已初始化 */
   int cleanup_last_bucket_ipv4; /* 修复：IPv4 独立的清理进度索引 */
-  int cleanup_last_bucket_ipv6; /* 修复：IPv6 独立的清理进度索引，防止 IPv4/IPv6 互相干扰 */
+  int cleanup_last_bucket_ipv6; /* 修复：IPv6 独立的清理进度索引，防止 IPv4/IPv6
+                                   互相干扰 */
 
   /* 泛洪保护 */
   spinlock_t flood_lock;
@@ -196,8 +197,8 @@ struct firewall_info {
   atomic_t whitelist_reject_count; /* 被白名单拒绝的封禁 */
   atomic_t ban_table_full_count;   /* 封禁表已满的拒绝次数 */
   atomic_t alloc_failure_count;    /* 内存分配失败次数 */
-  atomic64_t packets_dropped;        /* 被 netfilter 丢弃的数据包 */
-  atomic64_t packets_accepted;       /* 被 netfilter 接受的数据包 */
+  atomic64_t packets_dropped;      /* 被 netfilter 丢弃的数据包 */
+  atomic64_t packets_accepted;     /* 被 netfilter 接受的数据包 */
   atomic_t cleanup_cycles;         /* 清理定时器周期数 */
   atomic_t cleanup_expired_total;  /* 已清理的过期条目总数 */
 

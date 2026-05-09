@@ -74,7 +74,8 @@ int setup_inotify(void) {
       file_states[global_idx].inode = 0;
       file_states[global_idx].wd = -1;      /* 标记为尚未监控 */
       file_states[global_idx].jail_idx = j; /* 记录此文件属于哪个jail */
-      file_states[global_idx].symlink_detected = false; /* 修复：初始化为非符号链接 */
+      file_states[global_idx].symlink_detected =
+          false; /* 修复：初始化为非符号链接 */
 
       strncpy(file_states[global_idx].path, jail_snapshots[j].log_files[i],
               sizeof(file_states[global_idx].path) - 1);
@@ -354,7 +355,8 @@ void process_new_lines(int idx) {
     if (errno == ELOOP) {
       /* 修复：标记符号链接状态，防止后续重复处理 */
       file_states[idx].symlink_detected = true;
-      daemon_log_warn("Log file is a symlink, skipping and marking: %s", log_path);
+      daemon_log_warn("Log file is a symlink, skipping and marking: %s",
+                      log_path);
     } else {
       daemon_log_err("Failed to open %s: %s", log_path, strerror(errno));
     }
@@ -488,7 +490,8 @@ void process_new_lines(int idx) {
   file_states[idx].offset = current_offset;
 
 cleanup_restore_partial:
-  /* C2 修复：在错误路径中释放动态分配的缓冲区（正常路径已释放则 batch_buf 为 NULL） */
+  /* C2 修复：在错误路径中释放动态分配的缓冲区（正常路径已释放则 batch_buf 为
+   * NULL） */
   if (batch_buf) {
     free(batch_buf);
     batch_buf = NULL;
@@ -749,7 +752,8 @@ void monitor_loop(void) {
               file_states[i].inode = 0;
               file_states[i].path[0] = '\0';
               file_states[i].jail_idx = -1;
-              file_states[i].symlink_detected = false; /* 修复：重置符号链接标记 */
+              file_states[i].symlink_detected =
+                  false; /* 修复：重置符号链接标记 */
             }
             close(inotify_fd);
             inotify_fd = -1;
@@ -854,7 +858,8 @@ void monitor_loop(void) {
               file_states[i].inode = 0;
               file_states[i].path[0] = '\0';
               file_states[i].jail_idx = -1;
-              file_states[i].symlink_detected = false; /* 修复：重置符号链接标记 */
+              file_states[i].symlink_detected =
+                  false; /* 修复：重置符号链接标记 */
             }
             close(inotify_fd);
             inotify_fd = -1;
