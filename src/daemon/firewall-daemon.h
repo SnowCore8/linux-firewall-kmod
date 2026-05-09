@@ -113,9 +113,9 @@ struct jail {
       partial_line_len; /* 修复 P2-7：使用原子类型，允许无锁读取和原子清零 */
 };
 
-/* 全局运行标志 */
-extern volatile sig_atomic_t running;
-extern volatile sig_atomic_t reload_config;
+/* 全局运行标志 - 修复：统一使用 _Atomic(int) 替代 volatile sig_atomic_t */
+extern _Atomic(int) running;
+extern _Atomic(int) reload_config;
 
 /* 配置严格模式标志 */
 extern int config_strict_mode;

@@ -20,9 +20,9 @@
 #include "jail-manager.h"
 #include "log-parser.h"
 
-/* 全局运行标志 */
-volatile sig_atomic_t running = 1;
-volatile sig_atomic_t reload_config = 0; /* SIGHUP 标志 */
+/* 全局运行标志 - 修复：统一使用 _Atomic(int) 替代 volatile sig_atomic_t */
+_Atomic(int) running = 1;
+_Atomic(int) reload_config = 0; /* SIGHUP 标志 */
 
 /* 配置严格模式标志（默认开启） */
 int config_strict_mode = 1;
@@ -49,10 +49,10 @@ void signal_handler(int sig) {
   case SIGTERM:
     /* fall-through: SIGTERM and SIGINT both set running=0 */
   case SIGINT:
-    running = 0;
+    atomic_store(&running, 0);
     break;
   case SIGHUP:
-    reload_config = 1; /* 收到 SIGHUP 时重新加载配置 */
+    atomic_store(&reload_config, 1); /* 收到 SIGHUP 时重新加载配置 */
     break;
   }
 }
