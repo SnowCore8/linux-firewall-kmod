@@ -475,10 +475,10 @@ fw_daemon_starts_ok() {
     local cmd="$1" desc="$2"
     local rc=0
     eval "timeout --signal=KILL 2 $cmd" >/dev/null 2>&1 || rc=$?
-    if [[ $rc -eq 0 || $rc -eq 1 || $rc -eq 124 || $rc -eq 137 ]]; then
+    if [[ $rc -eq 0 || $rc -eq 124 || $rc -eq 137 ]]; then
         fw_pass "$desc (退出码=$rc)"
     else
-        fw_fail "$desc (退出码=$rc, 预期 0/1/124/137)"
+        fw_fail "$desc (退出码=$rc, 预期 0/124/137)"
     fi
 }
 

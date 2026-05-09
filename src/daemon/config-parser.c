@@ -942,12 +942,12 @@ int parse_config_file(const char *config_path) {
     memcpy(&cfg.jails[i], &new_cfg->jails[i], sizeof(struct jail));
     memset(&new_cfg->jails[i], 0, sizeof(struct jail));
   }
-  new_cfg->jail_count = 0;
-
   /* 关键：在所有 jail 数据复制完成后，才更新 jail_count
    * 此时读者要么看到旧的完整 jail 数组（jail_count 尚未更新），
-   * 要么看到新的完整 jail 数组（jail_count 已更新）。 */
+   * 要么看到新的完整 jail 数组（jail_count 已更新）。
+   * 修复：必须先赋值给 cfg.jail_count，再清零 new_cfg->jail_count */
   cfg.jail_count = new_cfg->jail_count;
+  new_cfg->jail_count = 0;
 
   /* 更新路径字符串 */
   if (new_cfg->config_file) {
