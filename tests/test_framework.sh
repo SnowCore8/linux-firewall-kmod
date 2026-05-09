@@ -59,19 +59,13 @@ fw_test_header() {
 # 返回 0 表示安全，1 表示不安全
 assert_condition_safe() {
     local cond="$1"
-    # 如果条件以 [[ 开头，允许其中的 && 和 ||（它们是 [[ ]] 内的合法操作符）
-    if [[ "$cond" == "[["* ]]; then
-        # [[ ]] 内部：只拒绝分号（命令分隔符）和命令替换
-        if [[ "$cond" =~ \; ]] || [[ "$cond" =~ \$\( ]] || [[ "$cond" =~ \` ]]; then
-            fw_log_error "拒绝不安全的断言条件（包含命令注入模式）: $cond"
-            return 1
-        fi
-    else
-        # 非 [[ ]] 表达式：拒绝所有命令链式操作符和命令替换
-        if [[ "$cond" =~ \; ]] || [[ "$cond" =~ \&\& ]] || [[ "$cond" =~ \|\| ]] || [[ "$cond" =~ \$\( ]] || [[ "$cond" =~ \` ]]; then
-            fw_log_error "拒绝不安全的断言条件（包含命令注入模式）: $cond"
-            return 1
-        fi
+    # 移除单引号和双引号内的内容（避免误判字符串中的特殊字符）
+    local stripped
+    stripped=$(echo "$cond" | sed "s/'[^']*'//g; s/\"[^\"]*\"//g")
+    # 拒绝分号（命令分隔符）和裸反引号（命令替换）
+    if [[ "$stripped" =~ \; ]] || [[ "$stripped" =~ [^\\]\` ]] || [[ "$stripped" == *\` ]]; then
+        fw_log_error "拒绝不安全的断言条件（包含命令注入模式）: $cond"
+        return 1
     fi
     return 0
 }
