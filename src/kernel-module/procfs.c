@@ -123,13 +123,18 @@ static int validate_ban_input(const char *input) {
 
 /**
  * validate_and_copy_ip - 验证 IP 长度并复制到输出缓冲区
+ * M5 修复：增强缓冲区大小检查，确保 ip_str_size 足够容纳 IP 地址和 null 终止符
  */
 static int validate_and_copy_ip(const char *ip_start, const char *ip_end,
                                 char *ip_str, size_t ip_str_size) {
   size_t ip_len = (size_t)(ip_end - ip_start);
 
-  if (ip_len == 0 || ip_len >= INET6_ADDRSTRLEN || ip_len >= ip_str_size) {
-    fw_pr_warn("Invalid IP address length: %zu", ip_len);
+  /* M5 修复：确保 ip_str_size 至少为 1（容纳 null 终止符），
+   * 并且 ip_len + 1 <= ip_str_size（容纳 IP 地址和 null 终止符） */
+  if (ip_len == 0 || ip_str_size == 0 || ip_len >= INET6_ADDRSTRLEN ||
+      ip_len + 1 > ip_str_size) {
+    fw_pr_warn("Invalid IP address length: %zu (buffer size: %zu)", ip_len,
+               ip_str_size);
     return -EINVAL;
   }
 
