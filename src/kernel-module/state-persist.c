@@ -463,15 +463,15 @@ int restore_state_from_file(const char *filename) {
               entry->is_permanent = is_permanent;
               atomic_set(&entry->retry_count, 0);
 
-              spin_lock(&fw_info.lock);
+              /* 修复：使用每桶锁替代全局锁，提高并发性能 */
               {
                 u32 bkt4 = hash_min(ip, BAN_HASH_BITS);
                 struct ban_entry *existing;
                 bool duplicate = false;
 
+                spin_lock(&fw_info.ban_locks_ipv4[bkt4]);
                 hlist_for_each_entry_rcu(existing,
-                                         &fw_info.ban_table_ipv4[bkt4], hash,
-                                         lockdep_is_held(&fw_info.lock)) {
+                                         &fw_info.ban_table_ipv4[bkt4], hash) {
                   if (existing->af == FW_AF_INET && existing->addr.ipv4 == ip) {
                     duplicate = true;
                     break;
@@ -479,14 +479,14 @@ int restore_state_from_file(const char *filename) {
                 }
 
                 if (duplicate) {
-                  spin_unlock(&fw_info.lock);
+                  spin_unlock(&fw_info.ban_locks_ipv4[bkt4]);
                   kfree(entry);
                   fw_pr_info("Skipping duplicate ban entry for IP %s", ip_str);
                 } else {
                   hash_add_rcu(fw_info.ban_table_ipv4, &entry->hash, ip);
                   atomic_inc(&fw_info.ban_count);
                   atomic_inc(&fw_info.total_ban_count);
-                  spin_unlock(&fw_info.lock);
+                  spin_unlock(&fw_info.ban_locks_ipv4[bkt4]);
                   restored_ban_count++;
                 }
               }
@@ -541,16 +541,16 @@ int restore_state_from_file(const char *filename) {
               entry->is_permanent = is_permanent;
               atomic_set(&entry->retry_count, 0);
 
-              spin_lock(&fw_info.lock);
+              /* 修复：使用每桶锁替代全局锁，提高并发性能 */
               {
                 u32 bkt6 = jhash(&ip6, sizeof(ip6), fw_hash_seed) &
                            ((1 << BAN_HASH_BITS) - 1);
                 struct ban_entry *existing;
                 bool duplicate = false;
 
+                spin_lock(&fw_info.ban_locks_ipv6[bkt6]);
                 hlist_for_each_entry_rcu(existing,
-                                         &fw_info.ban_table_ipv6[bkt6], hash,
-                                         lockdep_is_held(&fw_info.lock)) {
+                                         &fw_info.ban_table_ipv6[bkt6], hash) {
                   if (existing->af == FW_AF_INET6 &&
                       ipv6_addr_equal(&existing->addr.ipv6, &ip6)) {
                     duplicate = true;
@@ -559,14 +559,14 @@ int restore_state_from_file(const char *filename) {
                 }
 
                 if (duplicate) {
-                  spin_unlock(&fw_info.lock);
+                  spin_unlock(&fw_info.ban_locks_ipv6[bkt6]);
                   kfree(entry);
                   fw_pr_info("Skipping duplicate ban entry for IP %s", ip_str);
                 } else {
                   hash_add_rcu(fw_info.ban_table_ipv6, &entry->hash, bkt6);
                   atomic_inc(&fw_info.ban_count);
                   atomic_inc(&fw_info.total_ban_count);
-                  spin_unlock(&fw_info.lock);
+                  spin_unlock(&fw_info.ban_locks_ipv6[bkt6]);
                   restored_ban_count++;
                 }
               }
