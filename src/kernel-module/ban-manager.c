@@ -1,5 +1,13 @@
 /*
  * ban-manager.c - IP 封禁/解封管理 (支持 IPv4/IPv6)
+ *
+ * M1 修复：锁顺序文档
+ * - 全局锁 (fw->lock): 用于保护白名单检查和容量检查
+ * - 每桶锁 (fw->ban_locks_ipv4/ipv6[bkt]): 用于保护封禁表操作
+ * 锁顺序规则：
+ * 1. 全局锁和每桶锁不能嵌套持有（必须先释放全局锁再获取每桶锁）
+ * 2. 不同桶的锁可以并发获取（无顺序要求）
+ * 3. RCU 读锁 (rcu_read_lock) 可以与任何锁嵌套（不会阻塞）
  */
 
 #include "firewall.h"
@@ -35,6 +43,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
   struct ban_entry *entry;
   struct whitelist_entry *wl_entry;
   int bkt;
+  int ret;
   char ip_str[INET6_STR_LEN];
   ip_to_str(af, ip, ip_str, sizeof(ip_str));
 
@@ -51,9 +60,11 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
   }
 
   /* R9-4 修复：将白名单检查放在全局锁下（防止 TOCTOU），
-   * 封禁表操作放在每桶锁下（减少并发竞争）。 */
+   * 封禁表操作放在每桶锁下（减少并发竞争）。
+   * C1 修复：在每桶锁保护下再次验证白名单，确保从白名单检查到封禁条目插入
+   * 的整个操作是原子的，防止在容量检查和插入之间白名单状态发生变化。 */
 
-  /* 步骤 1：全局锁保护下的白名单检查 */
+  /* 步骤 1：全局锁保护下的白名单检查（快速失败） */
   spin_lock(&fw->lock);
   rcu_read_lock();
   if (af == FW_AF_INET6) {
@@ -97,6 +108,33 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
   }
   spin_unlock(&fw->lock);
 
+  /* C1 修复辅助：在每桶锁下再次验证白名单的宏 */
+  /* 修复 RCU 锁泄漏：宏不再直接 return，而是设置 ret 变量并 break，
+   * 确保调用者能正确执行 rcu_read_unlock()。 */
+#define RECHECK_WHITELIST_IPV6()                                               \
+  do {                                                                         \
+    hash_for_each_rcu(fw->whitelist_table_ipv6, bkt, wl_entry, hash) {         \
+      u8 prefix = READ_ONCE(wl_entry->mask.prefix_len);                        \
+      const struct in6_addr *wl_ip = &wl_entry->addr.ipv6;                     \
+      if (ipv6_prefix_equal(ip6, wl_ip, prefix)) {                             \
+        ret = -EPERM;                                                          \
+        break;                                                                 \
+      }                                                                        \
+    }                                                                          \
+  } while (0)
+
+#define RECHECK_WHITELIST_IPV4()                                               \
+  do {                                                                         \
+    hash_for_each_rcu(fw->whitelist_table_ipv4, bkt, wl_entry, hash) {         \
+      __be32 wl_mask = READ_ONCE(wl_entry->mask.ipv4_mask);                    \
+      __be32 wl_ip = READ_ONCE(wl_entry->addr.ipv4);                           \
+      if ((ipv4 & wl_mask) == (wl_ip & wl_mask)) {                             \
+        ret = -EPERM;                                                          \
+        break;                                                                 \
+      }                                                                        \
+    }                                                                          \
+  } while (0)
+
   /* 步骤 3：使用每桶锁操作封禁表（不同桶可并行） */
   if (af == FW_AF_INET6) {
     struct in6_addr *ip6 = (struct in6_addr *)ip;
@@ -104,6 +142,19 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     struct ban_entry *existing;
 
     spin_lock(&fw->ban_locks_ipv6[bkt6]);
+    /* C1 修复：在每桶锁保护下再次验证白名单 */
+    rcu_read_lock();
+    ret = 0;
+    RECHECK_WHITELIST_IPV6();
+    rcu_read_unlock();
+    if (ret == -EPERM) {
+      spin_unlock(&fw->ban_locks_ipv6[bkt6]);
+      kfree(entry);
+      atomic_inc(&fw->whitelist_reject_count);
+      fw_pr_warn("REFUSED to ban whitelisted IP %s (recheck)", ip_str);
+      return ret;
+    }
+
     hlist_for_each_entry(existing, &fw->ban_table_ipv6[bkt6], hash) {
       if (existing->af == af && ipv6_addr_equal(&existing->addr.ipv6, ip6)) {
         bool is_perm = READ_ONCE(existing->is_permanent);
@@ -136,6 +187,19 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     struct ban_entry *existing;
 
     spin_lock(&fw->ban_locks_ipv4[bkt4]);
+    /* C1 修复：在每桶锁保护下再次验证白名单 */
+    rcu_read_lock();
+    ret = 0;
+    RECHECK_WHITELIST_IPV4();
+    rcu_read_unlock();
+    if (ret == -EPERM) {
+      spin_unlock(&fw->ban_locks_ipv4[bkt4]);
+      kfree(entry);
+      atomic_inc(&fw->whitelist_reject_count);
+      fw_pr_warn("REFUSED to ban whitelisted IP %s (recheck)", ip_str);
+      return ret;
+    }
+
     hlist_for_each_entry(existing, &fw->ban_table_ipv4[bkt4], hash) {
       if (existing->af == af && existing->addr.ipv4 == ipv4) {
         bool is_perm = READ_ONCE(existing->is_permanent);
