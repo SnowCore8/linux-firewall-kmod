@@ -91,64 +91,15 @@ jobs:
 
       - name: 编译守护进程
         run: |
-          set -x
-          echo "=== 步骤 1: 编译守护进程 ==="
-
-          # 检查依赖库是否已安装
-          echo "--- 检查依赖库 ---"
-          MISSING_LIBS=()
-          for lib in libyaml.so libsqlite3.so libmicrohttpd.so libpcre2-8.so; do
-            if ldconfig -p 2>/dev/null | grep -q "$lib"; then
-              echo "  ✓ 找到库: $lib"
-            else
-              echo "  ✗ 缺少库: $lib"
-              MISSING_LIBS+=("$lib")
-            fi
-          done
-
-          if [[ ${#MISSING_LIBS[@]} -gt 0 ]]; then
-            echo "::warning::以下库未找到，尝试重新安装: ${MISSING_LIBS[*]}"
-            sudo apt-get install -y libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev
-            ldconfig
-          fi
-
-          echo "--- 编译器版本 ---"
-          gcc --version || true
-          echo "--- pkg-config 检查 ---"
-          pkg-config --libs --cflags libyaml 2>/dev/null || echo "  pkg-config: libyaml 不可用（使用 ldconfig 回退）"
-          pkg-config --libs --cflags sqlite3 2>/dev/null || echo "  pkg-config: sqlite3 不可用"
-          pkg-config --libs --cflags libmicrohttpd 2>/dev/null || echo "  pkg-config: libmicrohttpd 不可用"
-          pkg-config --libs --cflags libpcre2-8 2>/dev/null || echo "  pkg-config: libpcre2-8 不可用"
-
-          # 先尝试标准编译（带安全标志）
-          echo "--- 尝试标准编译（带安全标志）---"
-          if make daemon -j$(nproc) 2>&1; then
-            echo "✓ 守护进程编译完成（标准模式）"
-          else
-            echo "::warning::标准编译失败，尝试回退编译（禁用安全标志）---"
-            # fallback: 不带安全编译标志重新编译
-            make clean || true
-            # 覆盖 SECURITY_CFLAGS 和 SECURITY_LDFLAGS 为简化版本
-            if make daemon \
-                SECURITY_CFLAGS="-Wall -Wextra -O2 -fPIE" \
-                SECURITY_LDFLAGS="-pie" \
-                -j$(nproc) 2>&1; then
-              echo "✓ 守护进程编译完成（回退模式，已禁用部分安全标志）"
-              echo "::warning::使用回退编译模式，安全标志已被简化"
-            else
-              echo "::error::守护进程编译失败（标准模式和回退模式均失败）"
-              echo "--- 编译错误详情 ---"
-              make daemon -j1 2>&1 || true
-              exit 1
-            fi
-          fi
+          set -e
+          echo "=== 编译守护进程 ==="
+          make daemon -j$(nproc)
+          echo "✓ 守护进程编译完成"
 
           echo "--- 编译产物检查 ---"
           if [[ -f build/daemon/firewall-daemon ]]; then
             echo "  产物大小: $(du -h build/daemon/firewall-daemon | cut -f1)"
             file build/daemon/firewall-daemon
-            echo "  依赖库:"
-            ldd build/daemon/firewall-daemon || true
           else
             echo "::error::编译产物不存在: build/daemon/firewall-daemon"
             exit 1
