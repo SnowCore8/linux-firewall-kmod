@@ -93,6 +93,7 @@ jobs:
         run: |
           set -e
           echo "=== 编译守护进程 ==="
+          make clean || true
           make daemon -j$(nproc)
           echo "✓ 守护进程编译完成"
 
