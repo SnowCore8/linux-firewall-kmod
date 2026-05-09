@@ -296,6 +296,7 @@ void process_new_lines(int idx) {
   const char *log_path;
   struct jail *j = NULL;
   unsigned int max_retries, findtime;
+  char *batch_buf = NULL; /* 提前声明，避免 goto cleanup_restore_partial 时未初始化 */
 
   /* 验证idx参数 */
   if (idx < 0 || idx >= MAX_JAILS * MAX_LOG_FILES) {
@@ -394,7 +395,7 @@ void process_new_lines(int idx) {
    * 可能遗漏攻击者的登录尝试。
    * 修复：每次调用时 malloc，处理完毕后 free，避免静态缓冲区的递归调用问题。 */
 #define BATCH_READ_MAX (256 * 1024)
-  char *batch_buf = malloc(BATCH_READ_MAX);
+  batch_buf = malloc(BATCH_READ_MAX);
   if (!batch_buf) {
     daemon_log_err("无法分配批量读取缓冲区（%d 字节）", BATCH_READ_MAX);
     ret = -ENOMEM;

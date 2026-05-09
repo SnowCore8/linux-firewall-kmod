@@ -106,9 +106,9 @@ build: kernel-module daemon
 	@echo "Build complete: $(KERNEL_MODULE) and $(DAEMON_BIN)"
 
 # P2-7: 内核模块编译 — 使用 MAKEFLAGS 继承父 make 的 jobserver
-# 如果 MAKEFLAGS 中没有 -j/--jobserver，则自动添加 -j$(NPROC)
+# 如果 MAKEFLAGS 中没有 -j/--jobserver，则不传递并行标志（由内核构建系统自行决定）
 # KDIR 不存在时提供友好错误提示和替代方案
-KERNEL_PARALLEL := $(if $(filter -j% --jobserver%,$(MAKEFLAGS)),,$(NPROC))
+KERNEL_PARALLEL := $(if $(filter -j% --jobserver%,$(MAKEFLAGS)),,)
 kernel-module: $(KERNEL_MODULE)
 
 $(KERNEL_MODULE): $(KERNEL_SRC_DIR)/firewall-main.c $(KERNEL_SRC_DIR)/firewall.h
@@ -139,7 +139,7 @@ $(KERNEL_MODULE): $(KERNEL_SRC_DIR)/firewall-main.c $(KERNEL_SRC_DIR)/firewall.h
 	fi
 	@mkdir -p $(KERNEL_BUILD_DIR)
 	@echo "  CC      kernel-module"
-	+$(MAKE) $(if $(KERNEL_PARALLEL),-j$(KERNEL_PARALLEL)) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) \
+	+$(MAKE) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) \
 		ccflags-y="-DDEBUG_LEVEL=$(DEBUG_LEVEL)" \
 		modules
 	@cp $(KERNEL_SRC_DIR)/firewall.ko $(KERNEL_BUILD_DIR)/firewall.ko

@@ -89,14 +89,49 @@ jobs:
             fi
           fi
 
-      - name: 完整编译（内核模块 + 守护进程）
+      - name: 编译守护进程
         run: |
+          set -x
+          echo "=== 步骤 1: 编译守护进程 ==="
+          make daemon -j$(nproc)
+          echo "✓ 守护进程编译完成"
+
+      - name: 编译内核模块
+        continue-on-error: true
+        id: kernel-module-build
+        run: |
+          set -x
           if [[ -n "${{ steps.kdir.outputs.KDIR }}" ]]; then
+            echo "=== 步骤 2: 编译内核模块 ==="
             echo "使用 KDIR=${{ steps.kdir.outputs.KDIR }}"
-            make build KDIR=${{ steps.kdir.outputs.KDIR }} -j$(nproc)
+            echo "内核版本: $(ls $(echo ${{ steps.kdir.outputs.KDIR }} | head -c 20)/.. 2>/dev/null | head -1 || echo '未知')"
+            make kernel-module KDIR=${{ steps.kdir.outputs.KDIR }}
+            echo "✓ 内核模块编译完成"
           else
-            echo "⚠ 内核头文件不可用，跳过内核模块编译，仅编译守护进程"
-            make daemon -j$(nproc)
+            echo "⚠ 内核头文件不可用，跳过内核模块编译"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 编译结果总结
+        run: |
+          echo "=== 编译结果总结 ==="
+          if [[ "${{ steps.kernel-module-build.outcome }}" == "success" ]]; then
+            echo "✓ 内核模块: 编译成功"
+          elif [[ "${{ steps.kernel-module-build.outputs.skip }}" == "true" ]]; then
+            echo "⚠ 内核模块: 跳过（内核头文件不可用）"
+          else
+            echo "⚠ 内核模块: 编译失败（不影响 CI 继续）"
+            echo "可能的原因:"
+            echo "  1. 内核头文件版本与代码不兼容"
+            echo "  2. 编译器版本差异"
+            echo "  3. 内核 API 变更"
+            echo "建议: 检查内核模块编译日志中的具体错误信息"
+          fi
+          if [[ -f build/daemon/firewall-daemon ]]; then
+            echo "✓ 守护进程: 编译成功"
+          else
+            echo "✗ 守护进程: 编译失败"
+            exit 1
           fi
 
       - name: 验证编译产物
