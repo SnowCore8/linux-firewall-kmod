@@ -68,7 +68,8 @@ struct failed_entry *create_entry_for_jail(struct jail *j, const char *ip) {
   strncpy(entry->ip, ip, sizeof(entry->ip) - 1);
   entry->ip[sizeof(entry->ip) - 1] = '\0';
   entry->count = 0;
-  entry->recent_head = 0; /* R9-7: 初始化滑动窗口起始索引 */
+  /* H2 修复：使用原子操作初始化 recent_head */
+  atomic_store(&entry->recent_head, 0);
 
   kh_value(j->failed_hash, k) = entry;
   return entry;
@@ -100,8 +101,9 @@ unsigned int count_recent(struct failed_entry *entry, time_t window,
   }
 
   /* R9-7 优化：使用滑动窗口起始索引，避免每次从头线性扫描。
-   * 先进过期时间戳，缩小扫描范围，最坏情况仍为 O(n) 但平均 O(1)。 */
-  unsigned int start = entry->recent_head;
+   * 先进过期时间戳，缩小扫描范围，最坏情况仍为 O(n) 但平均 O(1)。
+   * H2 修复：使用原子操作读取和更新 recent_head，防止竞态条件。 */
+  unsigned int start = atomic_load(&entry->recent_head);
   if (start >= entry->count)
     start = 0;
 
@@ -110,7 +112,8 @@ unsigned int count_recent(struct failed_entry *entry, time_t window,
          (now - entry->timestamps[start]) > window) {
     start++;
   }
-  entry->recent_head = start;
+  /* H2 修复：使用原子操作更新 recent_head */
+  atomic_store(&entry->recent_head, start);
 
   /* 只扫描窗口内的时间戳 */
   for (unsigned int i = start; i < entry->count; i++) {
@@ -147,9 +150,10 @@ void process_failed_timestamps(struct failed_entry *entry, time_t now,
             (MAX_FAILED_TIMESTAMPS - 1) * sizeof(time_t));
     entry->timestamps[MAX_FAILED_TIMESTAMPS - 1] = now;
 
-    /* R9-7: 移动后重置滑动窗口索引（因为所有时间戳都向前移动了一位） */
-    if (entry->recent_head > 0)
-      entry->recent_head--;
+    /* R9-7: 移动后重置滑动窗口索引（因为所有时间戳都向前移动了一位）
+     * H2 修复：使用原子操作更新 recent_head */
+    if (atomic_load(&entry->recent_head) > 0)
+      atomic_fetch_sub(&entry->recent_head, 1);
 
     /* 过滤掉过期的时间戳 */
     time_t oldest_valid = now - findtime;
@@ -163,7 +167,8 @@ void process_failed_timestamps(struct failed_entry *entry, time_t now,
       }
     }
     entry->count = new_count;
-    entry->recent_head = 0; /* 重置滑动窗口索引 */
+    /* H2 修复：使用原子操作重置 recent_head */
+    atomic_store(&entry->recent_head, 0);
   }
 }
 
