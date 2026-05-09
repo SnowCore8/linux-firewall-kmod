@@ -627,18 +627,43 @@ static int check_basic_auth_header(const char *auth_header) {
   char *auth_user = decoded;
   char *auth_pass = colon + 1;
 
-  /* 安全考虑：使用恒定时间比较替代 strcmp，防止时序攻击 */
+  /* H4 修复：声明字符串长度变量，用于恒定时间比较 */
   size_t user_len = strlen(cfg_user);
   size_t pass_len = strlen(cfg_pass);
   size_t auth_user_len = strlen(auth_user);
   size_t auth_pass_len = strlen(auth_pass);
 
-  /* 长度不同直接判定失败（长度比较不泄露密码内容） */
-  int result = (user_len != auth_user_len || pass_len != auth_pass_len) ? 0
-               : (constant_time_compare(cfg_user, auth_user, user_len) == 0 &&
-                  constant_time_compare(cfg_pass, auth_pass, pass_len) == 0)
-                   ? 1
-                   : 0;
+  /* H4 修复：使用真正的恒定时间比较，防止时序攻击泄露密码信息。
+   * 原问题：长度不同直接判定失败会泄露密码长度信息。
+   * 修复：将较短的字符串填充到与最长字符串相同长度，然后执行完整比较。 */
+  size_t max_len = user_len > auth_user_len ? user_len : auth_user_len;
+  size_t pass_max_len = pass_len > auth_pass_len ? pass_len : auth_pass_len;
+  size_t total_max = max_len > pass_max_len ? max_len : pass_max_len;
+
+  /* 限制最大比较长度以防止过大缓冲区 */
+  if (total_max > sizeof(decoded))
+    total_max = sizeof(decoded);
+
+  /* 使用局部缓冲区填充零，确保比较长度一致 */
+  char user_cmp[256] = {0};
+  char auth_user_cmp[256] = {0};
+  char pass_cmp[256] = {0};
+  char auth_pass_cmp[256] = {0};
+
+  /* 安全复制（不会溢出，因为 max_len < sizeof(decoded) < 256） */
+  memcpy(user_cmp, cfg_user, user_len < sizeof(user_cmp) ? user_len : sizeof(user_cmp));
+  memcpy(auth_user_cmp, auth_user, auth_user_len < sizeof(auth_user_cmp) ? auth_user_len : sizeof(auth_user_cmp));
+  memcpy(pass_cmp, cfg_pass, pass_len < sizeof(pass_cmp) ? pass_len : sizeof(pass_cmp));
+  memcpy(auth_pass_cmp, auth_pass, auth_pass_len < sizeof(auth_pass_cmp) ? auth_pass_len : sizeof(auth_pass_cmp));
+
+  /* 恒定时间比较：使用异或累加，即使长度不同也执行完整比较
+   * 长度差异也通过异或纳入结果，防止早期退出 */
+  int result = constant_time_compare(user_cmp, auth_user_cmp, total_max);
+  result |= constant_time_compare(pass_cmp, auth_pass_cmp, total_max);
+  /* 如果长度不同，结果必然非零 */
+  result |= (user_len != auth_user_len);
+  result |= (pass_len != auth_pass_len);
+  result = (result == 0) ? 1 : 0;
 
   /* 安全考虑：认证完成后立即清零敏感缓冲区，防止内存残留 */
   memset(decoded, 0, sizeof(decoded));
@@ -783,7 +808,8 @@ answer_to_connection(void *cls, struct MHD_Connection *connection,
                                               "Authorization");
     int auth_result = check_basic_auth_header(auth_header);
     if (auth_result == 0) {
-      /* 安全考虑：使用 ratelimited 日志防止攻击者通过频繁请求淹没系统日志 */
+      /* M3 修复：安全日志 - 只记录 URL，不记录 Authorization 头或其他敏感凭据
+       * 使用 ratelimited 日志防止攻击者通过频繁请求淹没系统日志 */
       exporter_log_warn_ratelimited("Unauthorized access attempt to %s", url);
       return send_unauthorized_response(connection);
     }
