@@ -107,10 +107,36 @@ build: kernel-module daemon
 
 # P2-7: 内核模块编译 — 使用 MAKEFLAGS 继承父 make 的 jobserver
 # 如果 MAKEFLAGS 中没有 -j/--jobserver，则自动添加 -j$(NPROC)
+# KDIR 不存在时提供友好错误提示和替代方案
 KERNEL_PARALLEL := $(if $(filter -j% --jobserver%,$(MAKEFLAGS)),,$(NPROC))
 kernel-module: $(KERNEL_MODULE)
 
 $(KERNEL_MODULE): $(KERNEL_SRC_DIR)/firewall-main.c $(KERNEL_SRC_DIR)/firewall.h
+	@if [ ! -d "$(KDIR)" ]; then \
+		echo ""; \
+		echo "======================================================="; \
+		echo "错误: 内核构建目录不存在"; \
+		echo "  KDIR = $(KDIR)"; \
+		echo "  运行内核: $(shell uname -r)"; \
+		echo ""; \
+		echo "可能的原因和解决方案:"; \
+		echo "  1. 未安装内核头文件:"; \
+		echo "     sudo apt install linux-headers-$(shell uname -r)"; \
+		echo ""; \
+		echo "  2. GitHub Actions Azure VM 使用自定义内核，头文件不在标准 apt 源中。"; \
+		echo "     请手动指定 KDIR:"; \
+		echo "     make build KDIR=\$$(find /lib/modules -maxdepth 2 -name build -type d | head -n1)"; \
+		echo ""; \
+		echo "  3. 跳过内核模块编译，仅编译守护进程:"; \
+		echo "     make daemon"; \
+		echo ""; \
+		echo "可用的内核构建目录:"; \
+		find /lib/modules -maxdepth 2 -name build -type d 2>/dev/null | while read d; do \
+			echo "  $$d -> $$(readlink -f "$$d")"; \
+		done || echo "  （无可用目录）"; \
+		echo "======================================================="; \
+		exit 1; \
+	fi
 	@mkdir -p $(KERNEL_BUILD_DIR)
 	@echo "  CC      kernel-module"
 	+$(MAKE) $(if $(KERNEL_PARALLEL),-j$(KERNEL_PARALLEL)) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) \
