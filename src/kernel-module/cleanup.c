@@ -31,7 +31,8 @@ static int cleanup_table_ipv4(struct firewall_info *fw) {
   int removed = 0;
   int processed = 0;
   int max_processed_per_call = 50;
-  int start_bucket = fw->cleanup_last_bucket;
+  /* 修复：使用 IPv4 独立的清理进度索引 */
+  int start_bucket = fw->cleanup_last_bucket_ipv4;
   unsigned int table_size = 1 << BAN_HASH_BITS;
 
   for (int i = 0; i < (1 << 3) && processed < max_processed_per_call; i++) {
@@ -66,7 +67,8 @@ static int cleanup_table_ipv6(struct firewall_info *fw) {
   int removed = 0;
   int processed = 0;
   int max_processed_per_call = 50;
-  int start_bucket = fw->cleanup_last_bucket;
+  /* 修复：使用 IPv6 独立的清理进度索引 */
+  int start_bucket = fw->cleanup_last_bucket_ipv6;
   unsigned int table_size = 1 << BAN_HASH_BITS;
 
   for (int i = 0; i < (1 << 3) && processed < max_processed_per_call; i++) {
@@ -106,7 +108,9 @@ static bool cleanup_expired_bans(struct firewall_info *fw) {
   fw_flush_cpu_stats();
 
   if (atomic_read(&fw->ban_count) == 0) {
-    fw->cleanup_last_bucket = 0;
+    /* 修复：分别重置 IPv4 和 IPv6 独立的清理进度索引 */
+    fw->cleanup_last_bucket_ipv4 = 0;
+    fw->cleanup_last_bucket_ipv6 = 0;
     FW_DEBUG(2, "EXIT: cleanup_expired_bans -> false (no entries)");
     return false;
   }
@@ -115,8 +119,11 @@ static bool cleanup_expired_bans(struct firewall_info *fw) {
   removed += cleanup_table_ipv4(fw);
   removed += cleanup_table_ipv6(fw);
 
-  fw->cleanup_last_bucket =
-      (fw->cleanup_last_bucket + (1 << 3)) % (1 << BAN_HASH_BITS);
+  /* 修复：分别更新 IPv4 和 IPv6 独立的清理进度索引 */
+  fw->cleanup_last_bucket_ipv4 =
+      (fw->cleanup_last_bucket_ipv4 + (1 << 3)) % (1 << BAN_HASH_BITS);
+  fw->cleanup_last_bucket_ipv6 =
+      (fw->cleanup_last_bucket_ipv6 + (1 << 3)) % (1 << BAN_HASH_BITS);
 
   if (removed > 0) {
     atomic_add(removed, &fw->cleanup_expired_total);

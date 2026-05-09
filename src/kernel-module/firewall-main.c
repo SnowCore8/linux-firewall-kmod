@@ -118,6 +118,10 @@ static int __init firewall_init(void) {
   INIT_LIST_HEAD(&fw_info.ipv4_subnet_wl);
   INIT_LIST_HEAD(&fw_info.ipv6_subnet_wl);
 
+  /* 修复：初始化 IPv4 和 IPv6 独立的清理进度索引 */
+  fw_info.cleanup_last_bucket_ipv4 = 0;
+  fw_info.cleanup_last_bucket_ipv6 = 0;
+
   atomic_set(&fw_info.total_ban_count, 0);
   atomic_set(&fw_info.total_unban_count, 0);
   atomic_set(&fw_info.whitelist_reject_count, 0);

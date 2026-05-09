@@ -182,9 +182,8 @@ struct firewall_info {
   unsigned int ban_time;
   struct timer_list cleanup_timer;
   bool timer_initialized; /* 跟踪定时器是否已初始化 */
-  int cleanup_last_bucket; /* 修复 4.1：跟踪上次处理的桶，用于增量清理
-                            * 注意：仅由定时器回调（单线程上下文）访问，无需原子操作
-                            */
+  int cleanup_last_bucket_ipv4; /* 修复：IPv4 独立的清理进度索引 */
+  int cleanup_last_bucket_ipv6; /* 修复：IPv6 独立的清理进度索引，防止 IPv4/IPv6 互相干扰 */
 
   /* 泛洪保护 */
   spinlock_t flood_lock;
