@@ -929,8 +929,10 @@ static int stats_show(struct seq_file *m, void *v) {
   seq_printf(m, "ban_table_full_rejects %u\n",
              atomic_read(&fw->ban_table_full_count));
   seq_printf(m, "alloc_failures %u\n", atomic_read(&fw->alloc_failure_count));
-  seq_printf(m, "packets_dropped %u\n", atomic_read(&fw->packets_dropped));
-  seq_printf(m, "packets_accepted %u\n", atomic_read(&fw->packets_accepted));
+  seq_printf(m, "packets_dropped %llu\n",
+             (unsigned long long)atomic64_read(&fw->packets_dropped));
+  seq_printf(m, "packets_accepted %llu\n",
+             (unsigned long long)atomic64_read(&fw->packets_accepted));
   seq_printf(m, "cleanup_cycles %u\n", atomic_read(&fw->cleanup_cycles));
   seq_printf(m, "cleanup_expired_total %u\n",
              atomic_read(&fw->cleanup_expired_total));

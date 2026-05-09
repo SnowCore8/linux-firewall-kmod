@@ -26,11 +26,11 @@ void fw_flush_cpu_stats(void) {
   drop = READ_ONCE(stats->packets_dropped);
 
   if (acc > 0) {
-    atomic_add((int)acc, &fw_info.packets_accepted);
+    atomic64_add(acc, &fw_info.packets_accepted);
     WRITE_ONCE(stats->packets_accepted, 0);
   }
   if (drop > 0) {
-    atomic_add((int)drop, &fw_info.packets_dropped);
+    atomic64_add(drop, &fw_info.packets_dropped);
     WRITE_ONCE(stats->packets_dropped, 0);
   }
 }

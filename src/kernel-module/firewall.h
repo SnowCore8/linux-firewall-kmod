@@ -196,8 +196,8 @@ struct firewall_info {
   atomic_t whitelist_reject_count; /* 被白名单拒绝的封禁 */
   atomic_t ban_table_full_count;   /* 封禁表已满的拒绝次数 */
   atomic_t alloc_failure_count;    /* 内存分配失败次数 */
-  atomic_t packets_dropped;        /* 被 netfilter 丢弃的数据包 */
-  atomic_t packets_accepted;       /* 被 netfilter 接受的数据包 */
+  atomic64_t packets_dropped;        /* 被 netfilter 丢弃的数据包 */
+  atomic64_t packets_accepted;       /* 被 netfilter 接受的数据包 */
   atomic_t cleanup_cycles;         /* 清理定时器周期数 */
   atomic_t cleanup_expired_total;  /* 已清理的过期条目总数 */
 

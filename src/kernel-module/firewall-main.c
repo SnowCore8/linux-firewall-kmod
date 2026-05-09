@@ -127,8 +127,8 @@ static int __init firewall_init(void) {
   atomic_set(&fw_info.whitelist_reject_count, 0);
   atomic_set(&fw_info.ban_table_full_count, 0);
   atomic_set(&fw_info.alloc_failure_count, 0);
-  atomic_set(&fw_info.packets_dropped, 0);
-  atomic_set(&fw_info.packets_accepted, 0);
+  atomic64_set(&fw_info.packets_dropped, 0);
+  atomic64_set(&fw_info.packets_accepted, 0);
   atomic_set(&fw_info.cleanup_cycles, 0);
   atomic_set(&fw_info.cleanup_expired_total, 0);
 
