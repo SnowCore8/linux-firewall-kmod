@@ -611,7 +611,9 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db, const char **ips,
       sqlite3_reset(db->stmt_add_ban);
       continue;
     } else {
-      /* 修复 P1-3：遇到非约束错误时立即回滚事务，防止部分提交 */
+      /* M4 修复：遇到非约束错误时立即回滚事务，防止部分提交
+       * 注意：SQLITE_CONSTRAINT（重复 IP）是预期错误，跳过但不回滚，
+       * 因为其他有效条目仍应被提交 */
       sqlite_log_err("firewall: Failed to insert permanent ban %d: %s\n", i,
                      sqlite3_errmsg(db->conn));
       sqlite3_exec(db->conn, "ROLLBACK;", NULL, NULL, NULL);
@@ -624,7 +626,8 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db, const char **ips,
   rc = sqlite3_exec(db->conn, "COMMIT;", NULL, NULL, NULL);
   if (rc != SQLITE_OK) {
     sqlite_log_err("firewall: 提交事务失败：%s\n", sqlite3_errmsg(db->conn));
-    /* COMMIT 失败后事务自动回滚，无需显式 ROLLBACK */
+    /* M4 修复：COMMIT 失败后 SQLite 会自动回滚事务，但显式回滚更安全 */
+    sqlite3_exec(db->conn, "ROLLBACK;", NULL, NULL, NULL);
     pthread_mutex_unlock(&db->lock);
     return -1;
   }
