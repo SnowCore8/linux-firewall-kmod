@@ -35,6 +35,8 @@ EXPORT_SYMBOL_GPL(get_fw_info);
 
 /*
  * cleanup_all_entries - 清理所有封禁和白名单条目
+ * 修复 S2-5：使用 RCU 安全删除（hlist_del_rcu + call_rcu），
+ * 防止 use-after-free。删除后调用 synchronize_rcu() 等待所有 RCU 回调完成。
  */
 static void cleanup_all_entries(void) {
   struct ban_entry *entry;
@@ -44,24 +46,27 @@ static void cleanup_all_entries(void) {
   u32 wl_hash;
 
   hash_for_each_safe(fw_info.ban_table_ipv4, ban_hash, tmp, entry, hash) {
-    hash_del(&entry->hash);
-    kfree(entry);
+    hlist_del_rcu(&entry->hash);
+    call_rcu(&entry->rcu_head, free_ban_entry_rcu);
   }
 
   hash_for_each_safe(fw_info.ban_table_ipv6, ban_hash, tmp, entry, hash) {
-    hash_del(&entry->hash);
-    kfree(entry);
+    hlist_del_rcu(&entry->hash);
+    call_rcu(&entry->rcu_head, free_ban_entry_rcu);
   }
 
   hash_for_each_safe(fw_info.whitelist_table_ipv4, wl_hash, tmp, wl, hash) {
-    hash_del(&wl->hash);
-    kfree(wl);
+    hlist_del_rcu(&wl->hash);
+    call_rcu(&wl->rcu_head, free_whitelist_entry_rcu);
   }
 
   hash_for_each_safe(fw_info.whitelist_table_ipv6, wl_hash, tmp, wl, hash) {
-    hash_del(&wl->hash);
-    kfree(wl);
+    hlist_del_rcu(&wl->hash);
+    call_rcu(&wl->rcu_head, free_whitelist_entry_rcu);
   }
+
+  /* 等待所有 RCU 回调完成，确保条目内存被完全释放 */
+  synchronize_rcu();
 }
 
 /*
