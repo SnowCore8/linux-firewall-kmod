@@ -53,8 +53,8 @@ DAEMON_BIN    := $(DAEMON_BUILD_DIR)/firewall-daemon
 CC ?= gcc
 
 # 尝试使用 pkg-config 获取 yaml 库名（解决不同发行版库名差异）
-# 优先检查 libyaml.so（通用），其次 libyaml-0.so（部分系统），最后回退 -lyaml
-YAML_LIBS := $(shell ldconfig -p 2>/dev/null | grep -q 'libyaml\.so' && echo "-lyaml" || (ldconfig -p 2>/dev/null | grep -q 'libyaml-0\.so' && echo "-lyaml-0" || echo "-lyaml"))
+# 优先使用 pkg-config（如果可用），其次检查 libyaml.so（通用），最后回退 -lyaml
+YAML_LIBS := $(shell pkg-config --libs libyaml 2>/dev/null || (ldconfig -p 2>/dev/null | grep -q 'libyaml\.so' && echo "-lyaml" || echo "-lyaml"))
 
 # 安全编译标志（普通构建）
 SECURITY_CFLAGS  := -Wall -Wextra -Werror=format-security -O2 \
