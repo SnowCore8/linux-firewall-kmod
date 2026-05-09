@@ -37,10 +37,26 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
   new_entry->af = af;
   if (af == FW_AF_INET6) {
     new_entry->addr.ipv6 = *(const struct in6_addr *)ip;
+    /* 修复：验证 IPv6 前缀长度合法性 */
+    if (prefix_len < 0 || prefix_len > 128) {
+      kfree(new_entry);
+      fw_pr_warn("Invalid IPv6 prefix length: %d", prefix_len);
+      return -EINVAL;
+    }
     new_entry->mask.prefix_len = (u8)prefix_len;
   } else {
     __be32 ipv4 = *(__be32 *)ip;
     __be32 msk = *(__be32 *)mask;
+    /* 修复：验证 IPv4 子网掩码合法性（必须为连续的 1 后跟连续的 0） */
+    if (msk != 0 && msk != 0xFFFFFFFF) {
+      __be32 inverted = ~ntohl(msk);
+      /* 检查 inverted 是否为 2 的幂减 1（即连续的低位 1） */
+      if ((inverted & (inverted + 1)) != 0) {
+        kfree(new_entry);
+        fw_pr_warn("Invalid IPv4 subnet mask: %pI4", &msk);
+        return -EINVAL;
+      }
+    }
     new_entry->addr.ipv4 = ipv4 & msk;
     new_entry->mask.ipv4_mask = msk;
   }
