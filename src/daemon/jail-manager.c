@@ -577,8 +577,10 @@ int clone_jail(struct jail *dst, const struct jail *src) {
 
   /* 不克隆已编译的正则表达式 - 将重新编译（已在函数开头清零） */
 
-  /* 不克隆运行时状态 */
+  /* M6 修复：不克隆运行时状态，确保新 jail 的 failed_hash_table 和
+   * failed_hash 被正确清零，防止克隆后的 jail 误用源 jail 的运行时状态 */
   memset(dst->failed_hash_table, 0, sizeof(dst->failed_hash_table));
+  dst->failed_hash = NULL; /* 已在函数开头设置，此处显式注释说明 */
   atomic_store(&dst->partial_line_len, 0);
   dst->partial_line_buffer[0] = '\0';
 
