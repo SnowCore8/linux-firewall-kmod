@@ -59,15 +59,19 @@ fw_test_header() {
 # 返回 0 表示安全，1 表示不安全
 assert_condition_safe() {
     local cond="$1"
-    # 拒绝命令链式操作符：分号、双与号、双竖线（不在 [[ ]] 内的）
-    if [[ "$cond" =~ \; ]] || [[ "$cond" =~ \&\& ]] || [[ "$cond" =~ \|\| ]]; then
-        fw_log_error "拒绝不安全的断言条件（包含命令链式操作符）: $cond"
-        return 1
-    fi
-    # 拒绝命令替换：$() 和 反引号
-    if [[ "$cond" =~ \$\( ]] || [[ "$cond" =~ \` ]]; then
-        fw_log_error "拒绝不安全的断言条件（包含命令替换）: $cond"
-        return 1
+    # 如果条件以 [[ 开头，允许其中的 && 和 ||（它们是 [[ ]] 内的合法操作符）
+    if [[ "$cond" == "[["* ]]; then
+        # [[ ]] 内部：只拒绝分号（命令分隔符）和命令替换
+        if [[ "$cond" =~ \; ]] || [[ "$cond" =~ \$\( ]] || [[ "$cond" =~ \` ]]; then
+            fw_log_error "拒绝不安全的断言条件（包含命令注入模式）: $cond"
+            return 1
+        fi
+    else
+        # 非 [[ ]] 表达式：拒绝所有命令链式操作符和命令替换
+        if [[ "$cond" =~ \; ]] || [[ "$cond" =~ \&\& ]] || [[ "$cond" =~ \|\| ]] || [[ "$cond" =~ \$\( ]] || [[ "$cond" =~ \` ]]; then
+            fw_log_error "拒绝不安全的断言条件（包含命令注入模式）: $cond"
+            return 1
+        fi
     fi
     return 0
 }
