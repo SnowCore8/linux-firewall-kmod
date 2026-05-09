@@ -258,6 +258,10 @@ static int apply_defaults_string_config(struct config *target, const char *key,
                                         const char *value,
                                         const char *config_dir,
                                         int *has_error) {
+  /* H1 修复：添加 has_error 空指针检查，防止传入 NULL 时解引用崩溃 */
+  if (!target || !key || !value) {
+    return -1;
+  }
   if (strcmp(key, "metrics_bind_address") == 0) {
     int rc = parse_config_string(value, 64, &target->metrics_bind_address);
     if (rc < 0 && has_error)
@@ -655,7 +659,7 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
           }
         }
         if (ctx.current_jail) {
-          /* 释放旧 jail 资源 */
+          /* C3 修复：释放旧 jail 资源，包括 failed_hash 哈希表防止内存泄漏 */
           for (int k = 0; k < ctx.current_jail->log_count; k++)
             free(ctx.current_jail->log_files[k]);
           if (ctx.current_jail->regex_compiled) {
@@ -666,6 +670,17 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
           }
           if (ctx.current_jail->regex_pattern)
             free(ctx.current_jail->regex_pattern);
+          /* C3 修复：在 memset 之前释放 failed_hash 哈希表及其键 */
+          if (ctx.current_jail->failed_hash) {
+            khint_t k;
+            for (k = kh_begin(ctx.current_jail->failed_hash);
+                 k != kh_end(ctx.current_jail->failed_hash); ++k) {
+              if (kh_exist(ctx.current_jail->failed_hash, k))
+                free((char *)kh_key(ctx.current_jail->failed_hash, k));
+            }
+            kh_destroy(ip_map, ctx.current_jail->failed_hash);
+            ctx.current_jail->failed_hash = NULL;
+          }
           memset(ctx.current_jail, 0, sizeof(struct jail));
         }
         ctx.current_key = NULL;
@@ -1026,10 +1041,19 @@ int load_config_directory(const char *config_dir) {
         continue;
       }
 
-      /* 如果需要则扩展列表 */
+      /* H5 修复：使用 check_mul_overflow 检查乘法溢出，防止 file_capacity
+       * 溢出导致分配过小的缓冲区 */
       if (file_count >= file_capacity) {
-        file_capacity *= 2;
-        char **new_list = realloc(file_list, file_capacity * sizeof(char *));
+        size_t new_capacity;
+        if (check_mul_overflow((size_t)file_capacity, (size_t)2, &new_capacity)) {
+          daemon_log_err("file_capacity overflow detected");
+          for (int i = 0; i < file_count; i++)
+            free(file_list[i]);
+          free(file_list);
+          closedir(dir);
+          return -1;
+        }
+        char **new_list = realloc(file_list, new_capacity * sizeof(char *));
         if (!new_list) {
           daemon_log_err("Out of memory expanding file list");
           for (int i = 0; i < file_count; i++)
@@ -1039,6 +1063,7 @@ int load_config_directory(const char *config_dir) {
           return -1;
         }
         file_list = new_list;
+        file_capacity = (int)new_capacity;
         /* 修复 W2-8：初始化新扩容的元素为 NULL，防止未初始化指针被误用 */
         for (int i = file_count; i < file_capacity; i++)
           file_list[i] = NULL;
