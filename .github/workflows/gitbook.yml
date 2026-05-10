@@ -40,11 +40,17 @@ jobs:
         run: |
           cd docs
           npx honkit build zh _book/zh
+          echo "--- Chinese docs built ---"
+          find _book/zh -type f | head -20
+          du -sh _book/zh
 
       - name: Build English docs
         run: |
           cd docs
           npx honkit build en _book/en
+          echo "--- English docs built ---"
+          find _book/en -type f | head -20
+          du -sh _book/en
 
       - name: Create language selector entry
         run: |
@@ -112,6 +118,12 @@ jobs:
           </body>
           </html>
           HTMLEOF
+
+      - name: List output files
+        run: |
+          echo "--- All output files ---"
+          find docs/_book -type f | wc -l
+          du -sh docs/_book
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
