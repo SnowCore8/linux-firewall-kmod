@@ -82,21 +82,18 @@ sudo ./build/daemon/firewall-daemon -c config/default.yaml  # 指定配置
 sudo ./build/daemon/firewall-daemon --help                  # 帮助
 ```
 
-> 📖 完整 procfs 接口：[docs/user-guide/operations.md](docs/user-guide/operations.md)
+> 📖 文档: [中文](docs/zh/) | [English](docs/en/)
 
 ## 📚 文档导航
 
 | 文档 | 内容说明 | 适合人群 |
 |------|----------|----------|
-| [配置指南](docs/user-guide/configuration.md) | YAML Jail 格式、参数详解、热重载 | 配置管理 |
-| [运维手册](docs/user-guide/operations.md) | 安装部署、procfs API、故障排查 | 运维人员 |
-| [架构设计](docs/developer/architecture.md) | 内核模块设计、数据流、组件交互 | 开发者 |
-| [测试框架](docs/developer/testing.md) | 105 项测试覆盖、运行方式 | 测试人员 |
-| [安全策略](SECURITY.md) | 安全报告与漏洞提交流程 | 安全工程师 |
-| [安全特性](docs/security/security.md) | 编译选项、systemd 加固、防护机制 | 安全工程师 |
-| [永久封禁指南](docs/user-guide/permanent-ban.md) | SQLite 持久化、数据库 schema | 高级用户 |
-| [常见问题](docs/user-guide/faq.md) | 常见问题解答 | 所有用户 |
-| [迁移指南](docs/getting-started/migration.md) | 从 fail2ban 迁移指南 | 迁移用户 |
+| [快速开始](docs/zh/getting-started/) | 安装、编译、首次使用 | 新用户 |
+| [配置指南](docs/zh/configuration/) | YAML Jail 格式、参数详解、示例 | 配置管理 |
+| [架构设计](docs/zh/architecture/) | 内核模块设计、数据流、组件交互 | 开发者 |
+| [运维手册](docs/zh/operations/) | 管理命令、监控、故障排查 | 运维人员 |
+| [开发指南](docs/zh/development/) | 构建、测试、贡献 | 贡献者 |
+| [迁移指南](docs/zh/migration/) | 从 fail2ban 迁移指南 | 迁移用户 |
 | [CHANGELOG.md](CHANGELOG.md) | v1.0 至 v2.1 变更记录 | 所有用户 |
 
 ## 适用场景

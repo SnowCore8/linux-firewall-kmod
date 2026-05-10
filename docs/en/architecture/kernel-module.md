@@ -1,0 +1,281 @@
+# Kernel Module
+
+This document describes the implementation details of the Linux Firewall kernel module.
+
+## Module Overview
+
+The kernel module `fw_fire.ko` is the core of the system, responsible for intercepting and filtering packets at the network stack level.
+
+### Module Information
+
+| Attribute | Value |
+|-----------|-------|
+| Module Name | `fw_fire` |
+| Source File | `src/kernel/fw_fire.c` |
+| License | GPL |
+| Load Path | `/lib/modules/$(uname -r)/extra/fw_fire.ko` |
+
+## Netfilter Hook
+
+### Hook Registration Point
+
+The module registers a hook on the `NF_INET_PRE_ROUTING` chain, one of the earliest processing points after packets enter the network stack.
+
+```c
+static struct nf_hook_ops fw_fire_hook_ops[] __read_mostly = {
+    {
+        .hook     = fw_fire_hook_func,
+        .pf       = NFPROTO_IPV4,
+        .hooknum  = NF_INET_PRE_ROUTING,
+        .priority = NF_IP_PRI_FIRST,
+    },
+};
+```
+
+### Hook Function Flow
+
+```
+Network Packet Arrives
+            │
+            ▼
+┌─────────────────┐
+│  nf_hook_func() │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Check Whitelist │◄── ACCEPT if matched
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Lookup Hash     │◄── DROP if in ban table
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ NF_ACCEPT       │◄── ACCEPT if not banned
+└─────────────────┘
+```
+
+### Return Values
+
+| Return Value | Description |
+|--------------|-------------|
+| `NF_ACCEPT` | Allow packet to pass |
+| `NF_DROP` | Drop the packet |
+
+## Hash Table
+
+### Data Structure
+
+The kernel uses a hash table to store banned IP addresses with a capacity of 4096.
+
+```c
+#define HASH_TABLE_SIZE 4096
+
+struct banned_ip {
+    __be32 ip;                // IPv4 address
+    u32 port;                 // Port
+    u8 protocol;              // Protocol
+    ktime_t ban_time;         // Ban time
+    ktime_t expire_time;      // Expiration time
+    char jail_name[64];       // Jail name
+    struct hlist_node node;   // Hash list node
+};
+```
+
+### Hash Function
+
+```c
+static inline u32 hash_ip(__be32 ip, u32 port)
+{
+    return jhash_2words((__force u32)ip, port, HASH_SEED) % HASH_TABLE_SIZE;
+}
+```
+
+### Operation Complexity
+
+| Operation | Complexity | Description |
+|-----------|------------|-------------|
+| Lookup | O(1) average | Hash lookup |
+| Insert | O(1) average | Head insertion |
+| Delete | O(1) average | List deletion |
+
+## RCU Concurrency Control
+
+### Read Operations
+
+The packet processing path uses RCU read locks, ensuring multi-CPU concurrency safety without lock contention:
+
+```c
+rcu_read_lock();
+entry = fw_fire_lookup(ip, port);
+rcu_read_unlock();
+```
+
+### Write Operations
+
+Adding/removing bans uses RCU write synchronization:
+
+```c
+spin_lock(&hash_lock);
+hlist_add_head_rcu(&entry->node, &hash_table[hash]);
+spin_unlock(&hash_lock);
+synchronize_rcu();
+```
+
+### Advantages
+
+| Feature | Description |
+|---------|-------------|
+| Lock-free reads | Packet processing path has no locks, extremely low latency |
+| Multi-CPU | Supports all CPU cores processing in parallel |
+| Safe | Guarantees readers see consistent data |
+
+## Whitelist
+
+### Data Structure
+
+The whitelist uses a fixed-size array with a capacity of 64.
+
+```c
+#define WHITELIST_SIZE 64
+
+struct whitelist_entry {
+    __be32 ip;          // IP address
+    __be32 mask;        // Subnet mask
+    bool active;        // Whether active
+};
+```
+
+### Matching Logic
+
+Whitelist check is performed before hash table lookup, ensuring whitelisted IPs are never banned:
+
+```c
+if (is_whitelisted(ip)) {
+    return NF_ACCEPT;
+}
+```
+
+### CIDR Support
+
+The whitelist supports CIDR notation, matching via subnet mask:
+
+```c
+static bool match_cidr(__be32 ip, __be32 entry_ip, __be32 mask)
+{
+    return (ip & mask) == (entry_ip & mask);
+}
+```
+
+## Auto-Expiry Cleanup
+
+### Cleanup Thread
+
+The kernel module creates a kernel thread that periodically cleans expired ban entries:
+
+```c
+static int cleanup_thread(void *data)
+{
+    while (!kthread_should_stop()) {
+        msleep(CLEANUP_INTERVAL_MS);
+        cleanup_expired();
+    }
+    return 0;
+}
+```
+
+### Cleanup Strategy
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| Cleanup interval | 30 seconds | Frequency to check expired entries |
+| Batch processing | 100 entries | Maximum entries processed per cycle |
+
+### Cleanup Flow
+
+```
+Cleanup Thread Wakes
+        │
+        ▼
+Iterate Hash Table
+        │
+        ▼
+Check expire_time < now
+        │
+        ├── Yes ──► Remove Entry ──► Notify Userspace
+        │
+        └── No ──► Continue
+```
+
+## ProcFS Interface
+
+### Registration
+
+```c
+static int __init fw_fire_proc_init(void)
+{
+    proc_create("fw_fire/status", 0444, NULL, &status_fops);
+    proc_create("fw_fire/banned_ips", 0444, NULL, &banned_fops);
+    proc_create("fw_fire/config", 0200, NULL, &config_fops);
+    return 0;
+}
+```
+
+### File Operations
+
+| File | Permission | Operation |
+|------|------------|-----------|
+| `status` | 0444 | Read-only, returns module status |
+| `banned_ips` | 0444 | Read-only, returns ban list |
+| `whitelist` | 0444 | Read-only, returns whitelist |
+| `stats` | 0444 | Read-only, returns statistics |
+| `config` | 0200 | Write-only, receives config commands |
+| `clear` | 0200 | Write-only, clears bans |
+| `version` | 0444 | Read-only, returns version |
+
+## Module Lifecycle
+
+### Initialization
+
+```
+module_init()
+    ├── Register Netfilter Hook
+    ├── Initialize hash table
+    ├── Initialize whitelist
+    ├── Create ProcFS interface
+    └── Start cleanup thread
+```
+
+### Exit
+
+```
+module_exit()
+    ├── Stop cleanup thread
+    ├── Remove ProcFS interface
+    ├── Unregister Netfilter Hook
+    ├── Free hash table memory
+    └── Free whitelist memory
+```
+
+## Kernel Logging
+
+Uses `pr_*` macros for logging:
+
+```c
+pr_info("fw_fire: module loaded\n");
+pr_warn("fw_fire: hash table full\n");
+pr_err("fw_fire: failed to register hook\n");
+```
+
+Debug level is controlled via compile-time macro:
+
+```bash
+make debug DL=2    # Enable debug level 2
+```
+
+---
+
+[中文版本](../../zh/architecture/kernel-module.md)

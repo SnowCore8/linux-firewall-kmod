@@ -1,0 +1,15 @@
+{
+  "title": "Linux Firewall Kernel Module",
+  "description": "Linux kernel module version of fail2ban",
+  "language": "zh",
+  "plugins": [],
+  "links": {
+    "sidebar": {
+      "GitHub": "https://github.com/SnowCore8/linux-firewall-kmod"
+    }
+  },
+  "structure": {
+    "readme": "README.md",
+    "summary": "SUMMARY.md"
+  }
+}
