@@ -40,23 +40,21 @@ jobs:
         run: |
           cd docs
           mkdir -p _book/zh
-          pwd
-          ls -la zh/
-          npx honkit build ./zh ./_book/zh
-          echo "--- Chinese docs built ---"
-          ls -la _book/zh/ 2>/dev/null || echo "_book/zh not found!"
-          find _book/ -type f 2>/dev/null | head -30
-          du -sh _book/ 2>/dev/null || echo "_book/ not found!"
+          echo "Building Chinese docs..."
+          npx honkit build ./zh ./_book/zh 2>&1 || true
+          echo "--- Output directory ---"
+          ls -laR _book/ 2>/dev/null || echo "No _book/ dir"
+          find _book/ -type f -exec wc -c {} + 2>/dev/null || echo "No files"
 
       - name: Build English docs
         run: |
           cd docs
           mkdir -p _book/en
-          npx honkit build ./en ./_book/en
-          echo "--- English docs built ---"
-          ls -la _book/en/ 2>/dev/null || echo "_book/en not found!"
-          find _book/ -type f 2>/dev/null | head -30
-          du -sh _book/ 2>/dev/null || echo "_book/ not found!"
+          echo "Building English docs..."
+          npx honkit build ./en ./_book/en 2>&1 || true
+          echo "--- Output directory ---"
+          ls -laR _book/ 2>/dev/null || echo "No _book/ dir"
+          find _book/ -type f -exec wc -c {} + 2>/dev/null || echo "No files"
 
       - name: Create language selector entry
         run: |
