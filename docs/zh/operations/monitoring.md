@@ -47,7 +47,7 @@ scrape_configs:
 
 ### 查询示例
 
-```promql
+```yaml
 # 当前封禁 IP 数
 fw_fire_banned_ips_total
 

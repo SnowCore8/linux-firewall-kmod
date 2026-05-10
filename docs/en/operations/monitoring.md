@@ -47,7 +47,7 @@ scrape_configs:
 
 ### Query Examples
 
-```promql
+```yaml
 # Current banned IP count
 fw_fire_banned_ips_total
 
