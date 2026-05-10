@@ -39,18 +39,24 @@ jobs:
       - name: Build Chinese docs
         run: |
           cd docs
-          npx honkit build zh _book/zh
+          mkdir -p _book/zh
+          pwd
+          ls -la zh/
+          npx honkit build ./zh ./_book/zh
           echo "--- Chinese docs built ---"
-          find _book/zh -type f | head -20
-          du -sh _book/zh
+          ls -la _book/zh/ 2>/dev/null || echo "_book/zh not found!"
+          find _book/ -type f 2>/dev/null | head -30
+          du -sh _book/ 2>/dev/null || echo "_book/ not found!"
 
       - name: Build English docs
         run: |
           cd docs
-          npx honkit build en _book/en
+          mkdir -p _book/en
+          npx honkit build ./en ./_book/en
           echo "--- English docs built ---"
-          find _book/en -type f | head -20
-          du -sh _book/en
+          ls -la _book/en/ 2>/dev/null || echo "_book/en not found!"
+          find _book/ -type f 2>/dev/null | head -30
+          du -sh _book/ 2>/dev/null || echo "_book/ not found!"
 
       - name: Create language selector entry
         run: |
