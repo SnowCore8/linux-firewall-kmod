@@ -65,6 +65,7 @@ desktop.ini
 agents/
 AGENTS.md
 opencode.json
+.opencode/
 
 # ---- 安全 ----
 *.key
