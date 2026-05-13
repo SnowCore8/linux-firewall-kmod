@@ -19,7 +19,17 @@ extern u32 fw_hash_seed;
 
 extern void free_ban_entry_rcu(struct rcu_head *head);
 
-/* 修复：将 RECHECK_WHITELIST_* 宏提取为静态内联函数 */
+/* 白名单二次检查：在每桶锁保护下验证 IP 是否被加入白名单
+ *
+ * 为什么需要二次检查：
+ * 全局锁下的白名单检查与封禁表插入之间存在时间窗口，
+ * 在此期间 IP 可能被加入白名单。二次检查确保不会封禁白名单 IP。
+ */
+static inline int __recheck_whitelist_ipv6(struct firewall_info *fw,
+                                           const struct in6_addr *ip6);
+static inline int __recheck_whitelist_ipv4(struct firewall_info *fw,
+                                           __be32 ipv4);
+
 static inline int __recheck_whitelist_ipv6(struct firewall_info *fw,
                                            const struct in6_addr *ip6) {
   int bkt;
@@ -48,6 +58,19 @@ static inline int __recheck_whitelist_ipv4(struct firewall_info *fw,
   return 0;
 }
 
+/* __do_ban_ip - 封禁 IP 的核心实现
+ *
+ * 采用两阶段锁策略：
+ *   阶段 1（全局锁）：白名单检查 + 容量检查
+ *     - 快速失败：如果 IP 在白名单或表已满，立即返回
+ *   阶段 2（每桶锁）：封禁表插入
+ *     - 细粒度锁：不同桶的插入操作可并行
+ *     - 二次白名单检查：防止阶段 1 到阶段 2 之间白名单状态变化
+ *
+ * 为什么不在全局锁下直接插入：
+ * 全局锁是所有封禁/解封操作的瓶颈，将其限制在检查阶段，
+ * 让插入阶段使用每桶锁，可大幅提升并发性能。
+ */
 static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
                        unsigned long unban_time, bool is_permanent,
                        const char *log_msg, unsigned long log_arg);
@@ -60,10 +83,124 @@ int ban_ip_with_duration(struct firewall_info *fw, u8 af, const void *ip,
                          unsigned long seconds);
 int check_flood_protection(void);
 
-/* 辅助：IPv6 哈希值计算 */
+/* 计算 IPv6 地址在封禁表中的哈希桶索引
+ *
+ * 使用 jhash 确保地址分布均匀，减少哈希冲突。
+ * fw_hash_seed 在模块初始化时随机生成，防止攻击者构造哈希碰撞。
+ */
 static u32 hash_ipv6(const struct in6_addr *addr) {
   return jhash(addr, sizeof(struct in6_addr), fw_hash_seed) &
          ((1 << BAN_HASH_BITS) - 1);
+}
+
+/* __do_ban_ip_ipv6 - 将 IPv6 地址插入封禁表
+ *
+ * 在每桶锁保护下执行，不同桶的插入操作可并行。
+ * 执行流程：
+ *   1. 二次白名单检查（防 TOCTTOU）
+ *   2. 查找是否已有封禁条目：
+ *      - 永久封禁或未过期：拒绝重复插入
+ *      - 已过期：刷新时间戳
+ *   3. 新条目：初始化并插入哈希表
+ */
+static int __do_ban_ip_ipv6(struct firewall_info *fw,
+                            const struct in6_addr *ip6, struct ban_entry *entry,
+                            unsigned long unban_time, bool is_permanent) {
+  u32 bkt6 = hash_ipv6(ip6);
+  struct ban_entry *existing;
+
+  spin_lock(&fw->ban_locks_ipv6[bkt6]);
+
+  rcu_read_lock();
+  int ret = __recheck_whitelist_ipv6(fw, ip6);
+  rcu_read_unlock();
+  if (ret == -EPERM) {
+    spin_unlock(&fw->ban_locks_ipv6[bkt6]);
+    kfree(entry);
+    atomic_inc(&fw->whitelist_reject_count);
+    return ret;
+  }
+
+  hlist_for_each_entry(existing, &fw->ban_table_ipv6[bkt6], hash) {
+    if (existing->af == FW_AF_INET6 &&
+        ipv6_addr_equal(&existing->addr.ipv6, ip6)) {
+      bool is_perm = READ_ONCE(existing->is_permanent);
+      unsigned long ubt = READ_ONCE(existing->unban_time);
+      if (is_perm || time_before(jiffies, ubt)) {
+        spin_unlock(&fw->ban_locks_ipv6[bkt6]);
+        kfree(entry);
+        return 0;
+      }
+      WRITE_ONCE(existing->ban_time, jiffies);
+      WRITE_ONCE(existing->unban_time, unban_time);
+      atomic_set(&existing->retry_count, 0);
+      spin_unlock(&fw->ban_locks_ipv6[bkt6]);
+      kfree(entry);
+      return 0;
+    }
+  }
+
+  entry->af = FW_AF_INET6;
+  entry->addr.ipv6 = *ip6;
+  entry->ban_time = jiffies;
+  entry->unban_time = unban_time;
+  entry->is_permanent = is_permanent;
+  atomic_set(&entry->retry_count, 0);
+  hash_add_rcu(fw->ban_table_ipv6, &entry->hash, bkt6);
+  spin_unlock(&fw->ban_locks_ipv6[bkt6]);
+  return 0;
+}
+
+/* __do_ban_ip_ipv4 - 将 IPv4 地址插入封禁表
+ *
+ * 逻辑与 __do_ban_ip_ipv6 相同，仅地址族和哈希计算不同。
+ * 使用 hash_min 替代 jhash，因为 IPv4 地址本身就是 32 位哈希值。
+ */
+static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4,
+                            struct ban_entry *entry, unsigned long unban_time,
+                            bool is_permanent) {
+  u32 bkt4 = hash_min(ipv4, BAN_HASH_BITS);
+  struct ban_entry *existing;
+
+  spin_lock(&fw->ban_locks_ipv4[bkt4]);
+
+  rcu_read_lock();
+  int ret = __recheck_whitelist_ipv4(fw, ipv4);
+  rcu_read_unlock();
+  if (ret == -EPERM) {
+    spin_unlock(&fw->ban_locks_ipv4[bkt4]);
+    kfree(entry);
+    atomic_inc(&fw->whitelist_reject_count);
+    return ret;
+  }
+
+  hlist_for_each_entry(existing, &fw->ban_table_ipv4[bkt4], hash) {
+    if (existing->af == FW_AF_INET && existing->addr.ipv4 == ipv4) {
+      bool is_perm = READ_ONCE(existing->is_permanent);
+      unsigned long ubt = READ_ONCE(existing->unban_time);
+      if (is_perm || time_before(jiffies, ubt)) {
+        spin_unlock(&fw->ban_locks_ipv4[bkt4]);
+        kfree(entry);
+        return 0;
+      }
+      WRITE_ONCE(existing->ban_time, jiffies);
+      WRITE_ONCE(existing->unban_time, unban_time);
+      atomic_set(&existing->retry_count, 0);
+      spin_unlock(&fw->ban_locks_ipv4[bkt4]);
+      kfree(entry);
+      return 0;
+    }
+  }
+
+  entry->af = FW_AF_INET;
+  entry->addr.ipv4 = ipv4;
+  entry->ban_time = jiffies;
+  entry->unban_time = unban_time;
+  entry->is_permanent = is_permanent;
+  atomic_set(&entry->retry_count, 0);
+  hash_add_rcu(fw->ban_table_ipv4, &entry->hash, ipv4);
+  spin_unlock(&fw->ban_locks_ipv4[bkt4]);
+  return 0;
 }
 
 static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
@@ -88,12 +225,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     return -ENOMEM;
   }
 
-  /* R9-4 修复：将白名单检查放在全局锁下（防止 TOCTOU），
-   * 封禁表操作放在每桶锁下（减少并发竞争）。
-   * C1 修复：在每桶锁保护下再次验证白名单，确保从白名单检查到封禁条目插入
-   * 的整个操作是原子的，防止在容量检查和插入之间白名单状态发生变化。 */
-
-  /* 步骤 1：全局锁保护下的白名单检查（快速失败） */
+  /* 阶段 1：全局锁保护下的白名单检查（快速失败） */
   spin_lock(&fw->lock);
   rcu_read_lock();
   if (af == FW_AF_INET6) {
@@ -127,7 +259,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
   }
   rcu_read_unlock();
 
-  /* 步骤 2：检查封禁表容量（仍在全局锁下） */
+  /* 阶段 2：检查封禁表容量（仍在全局锁下） */
   if (atomic_read(&fw->ban_count) >= MAX_BAN_ENTRIES) {
     spin_unlock(&fw->lock);
     kfree(entry);
@@ -137,99 +269,20 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
   }
   spin_unlock(&fw->lock);
 
-  /* C1 修复辅助：在每桶锁下再次验证白名单的静态内联函数
-   * 修复 RCU 锁泄漏：函数不再直接 return，而是通过返回值通知调用者 */
-
-  /* 步骤 3：使用每桶锁操作封禁表（不同桶可并行） */
+  /* 阶段 3：使用每桶锁操作封禁表（不同桶可并行） */
   if (af == FW_AF_INET6) {
-    struct in6_addr *ip6 = (struct in6_addr *)ip;
-    u32 bkt6 = hash_ipv6(ip6);
-    struct ban_entry *existing;
-
-    spin_lock(&fw->ban_locks_ipv6[bkt6]);
-    /* C1 修复：在每桶锁保护下再次验证白名单 */
-    rcu_read_lock();
-    ret = __recheck_whitelist_ipv6(fw, ip6);
-    rcu_read_unlock();
-    if (ret == -EPERM) {
-      spin_unlock(&fw->ban_locks_ipv6[bkt6]);
-      kfree(entry);
-      atomic_inc(&fw->whitelist_reject_count);
-      fw_pr_warn("REFUSED to ban whitelisted IP %s (recheck)", ip_str);
-      return ret;
-    }
-
-    hlist_for_each_entry(existing, &fw->ban_table_ipv6[bkt6], hash) {
-      if (existing->af == af && ipv6_addr_equal(&existing->addr.ipv6, ip6)) {
-        bool is_perm = READ_ONCE(existing->is_permanent);
-        unsigned long ubt = READ_ONCE(existing->unban_time);
-        if (is_perm || time_before(jiffies, ubt)) {
-          spin_unlock(&fw->ban_locks_ipv6[bkt6]);
-          kfree(entry);
-          return 0;
-        }
-        WRITE_ONCE(existing->ban_time, jiffies);
-        WRITE_ONCE(existing->unban_time, unban_time);
-        atomic_set(&existing->retry_count, 0);
-        spin_unlock(&fw->ban_locks_ipv6[bkt6]);
-        kfree(entry);
-        return 0;
-      }
-    }
-
-    entry->af = af;
-    entry->addr.ipv6 = *(const struct in6_addr *)ip;
-    entry->ban_time = jiffies;
-    entry->unban_time = unban_time;
-    entry->is_permanent = is_permanent;
-    atomic_set(&entry->retry_count, 0);
-    hash_add_rcu(fw->ban_table_ipv6, &entry->hash, bkt6);
-    spin_unlock(&fw->ban_locks_ipv6[bkt6]);
+    ret = __do_ban_ip_ipv6(fw, (struct in6_addr *)ip, entry, unban_time,
+                           is_permanent);
   } else {
-    __be32 ipv4 = *(__be32 *)ip;
-    u32 bkt4 = hash_min(ipv4, BAN_HASH_BITS);
-    struct ban_entry *existing;
-
-    spin_lock(&fw->ban_locks_ipv4[bkt4]);
-    /* C1 修复：在每桶锁保护下再次验证白名单 */
-    rcu_read_lock();
-    ret = __recheck_whitelist_ipv4(fw, ipv4);
-    rcu_read_unlock();
-    if (ret == -EPERM) {
-      spin_unlock(&fw->ban_locks_ipv4[bkt4]);
-      kfree(entry);
-      atomic_inc(&fw->whitelist_reject_count);
-      fw_pr_warn("REFUSED to ban whitelisted IP %s (recheck)", ip_str);
-      return ret;
-    }
-
-    hlist_for_each_entry(existing, &fw->ban_table_ipv4[bkt4], hash) {
-      if (existing->af == af && existing->addr.ipv4 == ipv4) {
-        bool is_perm = READ_ONCE(existing->is_permanent);
-        unsigned long ubt = READ_ONCE(existing->unban_time);
-        if (is_perm || time_before(jiffies, ubt)) {
-          spin_unlock(&fw->ban_locks_ipv4[bkt4]);
-          kfree(entry);
-          return 0;
-        }
-        WRITE_ONCE(existing->ban_time, jiffies);
-        WRITE_ONCE(existing->unban_time, unban_time);
-        atomic_set(&existing->retry_count, 0);
-        spin_unlock(&fw->ban_locks_ipv4[bkt4]);
-        kfree(entry);
-        return 0;
-      }
-    }
-
-    entry->af = af;
-    entry->addr.ipv4 = *(__be32 *)ip;
-    entry->ban_time = jiffies;
-    entry->unban_time = unban_time;
-    entry->is_permanent = is_permanent;
-    atomic_set(&entry->retry_count, 0);
-    hash_add_rcu(fw->ban_table_ipv4, &entry->hash, *(__be32 *)ip);
-    spin_unlock(&fw->ban_locks_ipv4[bkt4]);
+    ret = __do_ban_ip_ipv4(fw, *(__be32 *)ip, entry, unban_time, is_permanent);
   }
+
+  if (ret == -EPERM) {
+    fw_pr_warn("REFUSED to ban whitelisted IP %s (recheck)", ip_str);
+    return ret;
+  }
+  if (ret < 0)
+    return ret;
 
   atomic_inc(&fw->ban_count);
   atomic_inc(&fw->total_ban_count);
@@ -264,6 +317,11 @@ static struct ban_entry *__find_ban_entry_rcu(struct firewall_info *fw, u8 af,
   return NULL;
 }
 
+/* __do_unban_ip - 解封 IP 的核心实现
+ *
+ * 使用每桶锁而非全局锁，不同桶的解封操作可并行执行。
+ * permanent_only 参数用于区分普通解封和永久封禁移除。
+ */
 static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip,
                          bool permanent_only) {
   struct ban_entry *entry;
@@ -271,7 +329,6 @@ static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip,
   char ip_str[INET6_STR_LEN];
   ip_to_str(af, ip, ip_str, sizeof(ip_str));
 
-  /* R9-4: 使用每桶锁替代全局锁，不同桶的解封操作可并行执行 */
   if (af == FW_AF_INET6) {
     struct in6_addr *ip6 = (struct in6_addr *)ip;
     u32 bkt = hash_ipv6(ip6);
@@ -401,6 +458,11 @@ int is_permanently_banned(struct firewall_info *fw, u8 af, const void *ip) {
 }
 EXPORT_SYMBOL_GPL(is_permanently_banned);
 
+/* check_flood_protection - 泛洪保护检查
+ *
+ * 限制每秒最大封禁次数，防止恶意请求导致系统资源耗尽。
+ * 使用滑动窗口计数：每秒重置计数器，超过阈值返回 -EBUSY。
+ */
 int check_flood_protection(void) {
   unsigned long now = jiffies;
   unsigned long one_second = HZ;

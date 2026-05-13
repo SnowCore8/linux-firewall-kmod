@@ -552,8 +552,13 @@ static char *extract_command_token(char **ptr, char *cmd_buf,
     **ptr = '\0';
 
     if (strcmp(cmd_start, "add") == 0 || strcmp(cmd_start, "remove") == 0) {
-      strncpy(cmd_buf, cmd_start, cmd_buf_size - 1);
-      cmd_buf[cmd_buf_size - 1] = '\0';
+      size_t cmd_len = strlen(cmd_start);
+      if (cmd_len >= cmd_buf_size) {
+        **ptr = saved;
+        return NULL;
+      }
+      memcpy(cmd_buf, cmd_start, cmd_len);
+      cmd_buf[cmd_len] = '\0';
       **ptr = saved;
       (*ptr)++;
       while (**ptr && (**ptr == ' ' || **ptr == '\t'))
@@ -582,8 +587,8 @@ static int parse_whitelist_command(char *input, char *cmd_buf,
 
   char *subnet_start = extract_command_token(&ptr, cmd_buf, cmd_buf_size);
 
-  if (*subnet_start == '\0') {
-    fw_pr_warn("Missing subnet");
+  if (!subnet_start || *subnet_start == '\0') {
+    fw_pr_warn("Missing subnet or invalid command");
     return -EINVAL;
   }
 

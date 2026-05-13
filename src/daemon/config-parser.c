@@ -1007,17 +1007,33 @@ cleanup:
   return ret;
 }
 
-/* 从配置目录加载所有 .yaml/.yml 文件
- * 文件按字母顺序加载，后面的文件会覆盖前面的标量值，
- * 数组则会追加。 */
-int load_config_directory(const char *config_dir) {
+/* ============================================================================
+ * 配置目录加载辅助函数
+ * ========================================================================== */
+
+/* 检查文件名是否为 YAML 配置文件 */
+static int is_yaml_file(const char *name) {
+  size_t len = strlen(name);
+  return (len > 5 && strcmp(name + len - 5, ".yaml") == 0) ||
+         (len > 4 && strcmp(name + len - 4, ".yml") == 0);
+}
+
+/* 释放文件列表 */
+static void free_file_list(char **file_list, int count) {
+  for (int i = 0; i < count; i++)
+    free(file_list[i]);
+  free(file_list);
+}
+
+/* 收集目录中的所有 YAML 配置文件 */
+static int collect_config_files(const char *config_dir, char ***out_file_list,
+                                int *out_file_count) {
   DIR *dir;
   struct dirent *entry;
   char **file_list = NULL;
   int file_count = 0;
   int file_capacity = 16;
-  int ret = 0;
-  const int MAX_CONFIG_FILES = 50; /* 限制数量以防止加载过多文件 */
+  const int MAX_CONFIG_FILES = 50;
 
   dir = opendir(config_dir);
   if (!dir) {
@@ -1025,9 +1041,6 @@ int load_config_directory(const char *config_dir) {
     return -1;
   }
 
-  daemon_log_info("Loading configuration directory: %s", config_dir);
-
-  /* 分配文件列表 */
   file_list = malloc(file_capacity * sizeof(char *));
   if (!file_list) {
     daemon_log_err("Out of memory allocating file list");
@@ -1035,64 +1048,172 @@ int load_config_directory(const char *config_dir) {
     return -1;
   }
 
-  /* 收集所有 .yaml 和 .yml 文件 */
   while ((entry = readdir(dir)) != NULL) {
     const char *name = entry->d_name;
-    size_t len = strlen(name);
 
-    /* 检查 .yaml 或 .yml 扩展名 */
-    if ((len > 5 && strcmp(name + len - 5, ".yaml") == 0) ||
-        (len > 4 && strcmp(name + len - 4, ".yml") == 0)) {
+    if (!is_yaml_file(name))
+      continue;
 
-      /* 强制执行文件数量限制 */
-      if (file_count >= MAX_CONFIG_FILES) {
-        daemon_log_warn("Config file limit reached (%d), skipping: %s",
-                        MAX_CONFIG_FILES, name);
-        continue;
-      }
+    if (file_count >= MAX_CONFIG_FILES) {
+      daemon_log_warn("Config file limit reached (%d), skipping: %s",
+                      MAX_CONFIG_FILES, name);
+      continue;
+    }
 
-      /* H5 修复：使用 check_mul_overflow 检查乘法溢出，防止 file_capacity
-       * 溢出导致分配过小的缓冲区 */
-      if (file_count >= file_capacity) {
-        size_t new_capacity;
-        if (check_mul_overflow((size_t)file_capacity, (size_t)2,
-                               &new_capacity)) {
-          daemon_log_err("file_capacity overflow detected");
-          for (int i = 0; i < file_count; i++)
-            free(file_list[i]);
-          free(file_list);
-          closedir(dir);
-          return -1;
-        }
-        char **new_list = realloc(file_list, new_capacity * sizeof(char *));
-        if (!new_list) {
-          daemon_log_err("Out of memory expanding file list");
-          for (int i = 0; i < file_count; i++)
-            free(file_list[i]);
-          free(file_list);
-          closedir(dir);
-          return -1;
-        }
-        file_list = new_list;
-        file_capacity = (int)new_capacity;
-        /* 修复 W2-8：初始化新扩容的元素为 NULL，防止未初始化指针被误用 */
-        for (int i = file_count; i < file_capacity; i++)
-          file_list[i] = NULL;
-      }
-
-      file_list[file_count] = strdup(name);
-      if (!file_list[file_count]) {
-        daemon_log_err("Out of memory allocating file name");
-        for (int i = 0; i < file_count; i++)
-          free(file_list[i]);
-        free(file_list);
+    if (file_count >= file_capacity) {
+      size_t new_capacity;
+      if (check_mul_overflow((size_t)file_capacity, (size_t)2, &new_capacity)) {
+        daemon_log_err("file_capacity overflow detected");
+        free_file_list(file_list, file_count);
         closedir(dir);
         return -1;
       }
-      file_count++;
+      char **new_list = realloc(file_list, new_capacity * sizeof(char *));
+      if (!new_list) {
+        daemon_log_err("Out of memory expanding file list");
+        free_file_list(file_list, file_count);
+        closedir(dir);
+        return -1;
+      }
+      file_list = new_list;
+      file_capacity = (int)new_capacity;
+      for (int i = file_count; i < file_capacity; i++)
+        file_list[i] = NULL;
     }
+
+    file_list[file_count] = strdup(name);
+    if (!file_list[file_count]) {
+      daemon_log_err("Out of memory allocating file name");
+      free_file_list(file_list, file_count);
+      closedir(dir);
+      return -1;
+    }
+    file_count++;
   }
   closedir(dir);
+
+  *out_file_list = file_list;
+  *out_file_count = file_count;
+  return 0;
+}
+
+/* 初始化临时配置结构的默认值 */
+static void init_temp_config(struct config *file_cfg, const char *full_path,
+                             const char *config_dir) {
+  pthread_rwlock_rdlock(&config_rwlock);
+  file_cfg->default_max_retries = cfg.default_max_retries;
+  file_cfg->default_findtime = cfg.default_findtime;
+  file_cfg->default_ban_time = cfg.default_ban_time;
+  file_cfg->daemon = cfg.daemon;
+  file_cfg->interval = cfg.interval;
+  file_cfg->metrics_port = cfg.metrics_port;
+  file_cfg->jail_count = 0;
+  pthread_rwlock_unlock(&config_rwlock);
+
+  file_cfg->config_file = strdup(full_path);
+  file_cfg->config_dir = strdup(config_dir);
+}
+
+/* 将单个配置合并到全局配置中 */
+static int merge_config_into_global(struct config *file_cfg,
+                                    const char *full_path) {
+  pthread_rwlock_wrlock(&config_rwlock);
+
+  int added_count = 0;
+  int updated_count = 0;
+
+  for (int j = 0; j < file_cfg->jail_count; j++) {
+    int found = 0;
+    for (int k = 0; k < cfg.jail_count; k++) {
+      if (strcmp(cfg.jails[k].name, file_cfg->jails[j].name) == 0) {
+        struct jail *old_jail = &cfg.jails[k];
+        for (int m = 0; m < old_jail->log_count; m++) {
+          free(old_jail->log_files[m]);
+        }
+        if (old_jail->regex_compiled) {
+          if (old_jail->compiled_regex)
+            pcre2_code_free(old_jail->compiled_regex);
+          if (old_jail->match_data)
+            pcre2_match_data_free(old_jail->match_data);
+        }
+        if (old_jail->regex_pattern)
+          free(old_jail->regex_pattern);
+
+        memcpy(old_jail, &file_cfg->jails[j], sizeof(struct jail));
+        memset(&file_cfg->jails[j], 0, sizeof(struct jail));
+        found = 1;
+        updated_count++;
+        daemon_log_info("Updated existing jail '%s' from: %s", old_jail->name,
+                        full_path);
+        break;
+      }
+    }
+    if (found)
+      continue;
+
+    if (cfg.jail_count >= MAX_JAILS) {
+      daemon_log_warn("MAX_JAILS limit reached, cannot add more jails");
+      break;
+    }
+    memcpy(&cfg.jails[cfg.jail_count], &file_cfg->jails[j],
+           sizeof(struct jail));
+    memset(&file_cfg->jails[j], 0, sizeof(struct jail));
+    cfg.jail_count++;
+    added_count++;
+  }
+
+  cfg.default_max_retries = file_cfg->default_max_retries;
+  cfg.default_findtime = file_cfg->default_findtime;
+  cfg.default_ban_time = file_cfg->default_ban_time;
+  cfg.daemon = file_cfg->daemon;
+  cfg.interval = file_cfg->interval;
+  cfg.metrics_port = file_cfg->metrics_port;
+  if (file_cfg->metrics_bind_address) {
+    if (cfg.metrics_bind_address)
+      free(cfg.metrics_bind_address);
+    cfg.metrics_bind_address = file_cfg->metrics_bind_address;
+    file_cfg->metrics_bind_address = NULL;
+  }
+  if (file_cfg->metrics_username) {
+    if (cfg.metrics_username)
+      free(cfg.metrics_username);
+    cfg.metrics_username = file_cfg->metrics_username;
+    file_cfg->metrics_username = NULL;
+  }
+  if (file_cfg->metrics_password) {
+    if (cfg.metrics_password)
+      free(cfg.metrics_password);
+    cfg.metrics_password = file_cfg->metrics_password;
+    file_cfg->metrics_password = NULL;
+  }
+  if (file_cfg->permanent_db_path) {
+    if (cfg.permanent_db_path)
+      free(cfg.permanent_db_path);
+    cfg.permanent_db_path = file_cfg->permanent_db_path;
+    file_cfg->permanent_db_path = NULL;
+    cfg.permanent_ban_enabled = file_cfg->permanent_ban_enabled;
+  }
+
+  pthread_rwlock_unlock(&config_rwlock);
+
+  daemon_log_info("Added %d new jail(s), updated %d existing jail(s) from: %s",
+                  added_count, updated_count, full_path);
+  return 0;
+}
+
+/* 从配置目录加载所有 .yaml/.yml 文件
+ * 文件按字母顺序加载，后面的文件会覆盖前面的标量值，
+ * 数组则会追加。 */
+int load_config_directory(const char *config_dir) {
+  char **file_list = NULL;
+  int file_count = 0;
+  int ret = 0;
+
+  daemon_log_info("Loading configuration directory: %s", config_dir);
+
+  if (collect_config_files(config_dir, &file_list, &file_count) < 0) {
+    return -1;
+  }
 
   if (file_count == 0) {
     daemon_log_warn("No .yaml/.yml files found in: %s", config_dir);
@@ -1100,12 +1221,8 @@ int load_config_directory(const char *config_dir) {
     return 0;
   }
 
-  /* 使用 qsort 按字母顺序对文件排序以提高性能 */
   qsort(file_list, (size_t)file_count, sizeof(char *), compare_config_files);
 
-  /* 加载每个配置文件 - 每个文件可以定义独立的 jail
-   * 修复：使用临时配置解析每个文件，然后累加 jail 到全局 cfg，
-   * 而不是调用 parse_config_file（它会重置 jail_count 导致覆盖）。 */
   for (int i = 0; i < file_count; i++) {
     char full_path[1024];
     snprintf(full_path, sizeof(full_path), "%s/%s", config_dir, file_list[i]);
@@ -1113,7 +1230,6 @@ int load_config_directory(const char *config_dir) {
     daemon_log_info("Loading config file [%d/%d]: %s", i + 1, file_count,
                     full_path);
 
-    /* 解析到临时配置 */
     struct config *file_cfg = calloc(1, sizeof(struct config));
     if (!file_cfg) {
       daemon_log_err("Out of memory allocating temp config for: %s", full_path);
@@ -1121,29 +1237,12 @@ int load_config_directory(const char *config_dir) {
       continue;
     }
 
-    /* 修复 R4-9：在读锁内直接赋值到 file_cfg，避免锁释放后赋值窗口期内
-     * cfg 被其他线程修改的风险。 */
-    pthread_rwlock_rdlock(&config_rwlock);
-    file_cfg->default_max_retries = cfg.default_max_retries;
-    file_cfg->default_findtime = cfg.default_findtime;
-    file_cfg->default_ban_time = cfg.default_ban_time;
-    file_cfg->daemon = cfg.daemon;
-    file_cfg->interval = cfg.interval;
-    file_cfg->metrics_port = cfg.metrics_port;
-    file_cfg->jail_count = 0;
-    pthread_rwlock_unlock(&config_rwlock);
+    init_temp_config(file_cfg, full_path, config_dir);
 
-    file_cfg->config_file = strdup(full_path);
-    if (!file_cfg->config_file) {
-      daemon_log_err("Out of memory allocating config_file for: %s", full_path);
-      free(file_cfg);
-      ret = -1;
-      continue;
-    }
-    file_cfg->config_dir = strdup(config_dir);
-    if (!file_cfg->config_dir) {
-      daemon_log_err("Out of memory allocating config_dir for: %s", config_dir);
-      free(file_cfg->config_file);
+    if (!file_cfg->config_file || !file_cfg->config_dir) {
+      daemon_log_err("Out of memory allocating config paths for: %s",
+                     full_path);
+      free_config_partial(file_cfg);
       free(file_cfg);
       ret = -1;
       continue;
@@ -1166,106 +1265,12 @@ int load_config_directory(const char *config_dir) {
       continue;
     }
 
-    /* 修复 R4-3：在写锁内先累加 jail 数组，最后再更新默认值。
-     * 这样读者在锁外看到的结果是：要么旧默认值+旧 jail 数组，
-     * 要么新默认值+新 jail 数组，不会出现中间状态。 */
-    pthread_rwlock_wrlock(&config_rwlock);
+    merge_config_into_global(file_cfg, full_path);
 
-    /* 第一步：累加 jail 到全局 cfg（同名 jail
-     * 采用"后到优先"策略：更新现有条目） */
-    int added_count = 0;
-    int updated_count = 0;
-    for (int j = 0; j < file_cfg->jail_count; j++) {
-      /* 检查是否已存在同名 jail */
-      int found = 0;
-      for (int k = 0; k < cfg.jail_count; k++) {
-        if (strcmp(cfg.jails[k].name, file_cfg->jails[j].name) == 0) {
-          /* 同名 jail 已存在：释放旧条目资源，用新条目覆盖 */
-          struct jail *old_jail = &cfg.jails[k];
-          for (int m = 0; m < old_jail->log_count; m++) {
-            free(old_jail->log_files[m]);
-          }
-          if (old_jail->regex_compiled) {
-            if (old_jail->compiled_regex)
-              pcre2_code_free(old_jail->compiled_regex);
-            if (old_jail->match_data)
-              pcre2_match_data_free(old_jail->match_data);
-          }
-          if (old_jail->regex_pattern)
-            free(old_jail->regex_pattern);
-
-          /* 用新条目覆盖 */
-          memcpy(old_jail, &file_cfg->jails[j], sizeof(struct jail));
-          /* 清空源以防止重复释放 */
-          memset(&file_cfg->jails[j], 0, sizeof(struct jail));
-          found = 1;
-          updated_count++;
-          daemon_log_info("Updated existing jail '%s' from: %s", old_jail->name,
-                          full_path);
-          break;
-        }
-      }
-      if (found)
-        continue;
-
-      /* 新 jail：追加到全局 cfg */
-      if (cfg.jail_count >= MAX_JAILS) {
-        daemon_log_warn("MAX_JAILS limit reached, cannot add more jails");
-        break;
-      }
-      memcpy(&cfg.jails[cfg.jail_count], &file_cfg->jails[j],
-             sizeof(struct jail));
-      /* 清空源以防止重复释放 */
-      memset(&file_cfg->jails[j], 0, sizeof(struct jail));
-      cfg.jail_count++;
-      added_count++;
-    }
-
-    /* 第二步：更新全局默认值（所有 jail 已累加完成后） */
-    cfg.default_max_retries = file_cfg->default_max_retries;
-    cfg.default_findtime = file_cfg->default_findtime;
-    cfg.default_ban_time = file_cfg->default_ban_time;
-    cfg.daemon = file_cfg->daemon;
-    cfg.interval = file_cfg->interval;
-    cfg.metrics_port = file_cfg->metrics_port;
-    if (file_cfg->metrics_bind_address) {
-      if (cfg.metrics_bind_address)
-        free(cfg.metrics_bind_address);
-      cfg.metrics_bind_address = file_cfg->metrics_bind_address;
-      file_cfg->metrics_bind_address = NULL;
-    }
-    if (file_cfg->metrics_username) {
-      if (cfg.metrics_username)
-        free(cfg.metrics_username);
-      cfg.metrics_username = file_cfg->metrics_username;
-      file_cfg->metrics_username = NULL;
-    }
-    if (file_cfg->metrics_password) {
-      if (cfg.metrics_password)
-        free(cfg.metrics_password);
-      cfg.metrics_password = file_cfg->metrics_password;
-      file_cfg->metrics_password = NULL;
-    }
-    if (file_cfg->permanent_db_path) {
-      if (cfg.permanent_db_path)
-        free(cfg.permanent_db_path);
-      cfg.permanent_db_path = file_cfg->permanent_db_path;
-      file_cfg->permanent_db_path = NULL;
-      cfg.permanent_ban_enabled = file_cfg->permanent_ban_enabled;
-    }
-
-    pthread_rwlock_unlock(&config_rwlock);
-
-    daemon_log_info(
-        "Added %d new jail(s), updated %d existing jail(s) from: %s",
-        added_count, updated_count, full_path);
-
-    /* 清理临时配置 */
     free_config_partial(file_cfg);
     free(file_cfg);
   }
 
-  /* 记录已加载 jail 的摘要 */
   pthread_rwlock_rdlock(&config_rwlock);
   daemon_log_info("Loaded %d jails from directory: %s", cfg.jail_count,
                   config_dir);
@@ -1276,12 +1281,7 @@ int load_config_directory(const char *config_dir) {
   }
   pthread_rwlock_unlock(&config_rwlock);
 
-  /* 清理 */
-  for (int i = 0; i < file_count; i++) {
-    free(file_list[i]);
-  }
-  free(file_list);
-
+  free_file_list(file_list, file_count);
   return ret;
 }
 

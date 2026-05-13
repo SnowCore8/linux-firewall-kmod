@@ -7,6 +7,10 @@
 
 extern u32 fw_hash_seed;
 
+/* 计算 IPv6 白名单条目的哈希桶索引
+ *
+ * 与封禁表使用相同的哈希种子，确保地址分布均匀。
+ */
 static u32 hash_wl_ipv6(const struct in6_addr *addr) {
   return jhash(addr, sizeof(struct in6_addr), fw_hash_seed) &
          ((1 << WHITELIST_HASH_BITS) - 1);
@@ -22,7 +26,7 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
   FW_DEBUG(1, "ENTRY: add_whitelist_entry(af=%d, prefix=%d, dev=%s)", af,
            prefix_len, dev_name ?: "null");
 
-  /* Fast-path capacity check (lockless, may be stale) */
+  /* 快速容量检查（无锁，可能 stale 但可接受） */
   if (atomic_read(&fw->whitelist_count) >= MAX_WHITELIST_ENTRIES) {
     fw_pr_warn("Whitelist full, cannot add entry");
     return -ENOSPC;
@@ -37,7 +41,7 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
   new_entry->af = af;
   if (af == FW_AF_INET6) {
     new_entry->addr.ipv6 = *(const struct in6_addr *)ip;
-    /* 修复：验证 IPv6 前缀长度合法性 */
+    /* 验证 IPv6 前缀长度合法性（0-128） */
     if (prefix_len < 0 || prefix_len > 128) {
       kfree(new_entry);
       fw_pr_warn("Invalid IPv6 prefix length: %d", prefix_len);
@@ -47,10 +51,10 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
   } else {
     __be32 ipv4 = *(__be32 *)ip;
     __be32 msk = *(__be32 *)mask;
-    /* 修复：验证 IPv4 子网掩码合法性（必须为连续的 1 后跟连续的 0） */
+    /* 验证 IPv4 子网掩码合法性（必须为连续的 1 后跟连续的 0） */
     if (msk != 0 && msk != 0xFFFFFFFF) {
       __be32 inverted = ~ntohl(msk);
-      /* 检查 inverted 是否为 2 的幂减 1（即连续的低位 1） */
+      /* 检查 inverted 是否为 2 的幂减 1（连续的低位 1 表示合法掩码） */
       if ((inverted & (inverted + 1)) != 0) {
         kfree(new_entry);
         fw_pr_warn("Invalid IPv4 subnet mask: %pI4", &msk);
@@ -106,7 +110,7 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
     hash_add_rcu(fw->whitelist_table_ipv4, &new_entry->hash,
                  new_entry->addr.ipv4);
 
-  /* R9-3: 将子网条目（非精确匹配）添加到子网链表，加速后续查找 */
+  /* 子网条目加入专用链表，加速后续子网匹配查找 */
   if (af == FW_AF_INET6) {
     if (new_entry->mask.prefix_len < 128)
       list_add_tail_rcu(&new_entry->subnet_node, &fw->ipv6_subnet_wl);
@@ -145,7 +149,7 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
           ipv6_addr_equal(&entry->addr.ipv6, (const struct in6_addr *)ip) &&
           entry->mask.prefix_len == (u8)prefix_len) {
         hlist_del_rcu(&entry->hash);
-        /* R9-3: 从子网链表中移除（如果是子网条目） */
+        /* 从子网链表中移除（非精确匹配条目） */
         if (prefix_len < 128)
           list_del_rcu(&entry->subnet_node);
         atomic_dec(&fw->whitelist_count);
@@ -164,7 +168,7 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
       if (entry->af == af && entry->addr.ipv4 == net_ipv4 &&
           entry->mask.ipv4_mask == mask4) {
         hlist_del_rcu(&entry->hash);
-        /* R9-3: 从子网链表中移除（如果是子网条目） */
+        /* 从子网链表中移除（非精确匹配条目） */
         if (mask4 != 0xFFFFFFFF)
           list_del_rcu(&entry->subnet_node);
         atomic_dec(&fw->whitelist_count);
@@ -204,7 +208,7 @@ bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip) {
         return true;
       }
     }
-    /* R9-3 优化：使用专用子网链表进行前缀匹配 */
+    /* 子网匹配：使用专用子网链表加速前缀匹配 */
     list_for_each_entry_rcu(entry, &fw->ipv6_subnet_wl, subnet_node) {
       u8 prefix = READ_ONCE(entry->mask.prefix_len);
       if (ipv6_prefix_equal(ip6, &entry->addr.ipv6, prefix)) {
@@ -222,7 +226,7 @@ bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip) {
         return true;
       }
     }
-    /* R9-3 优化：使用专用子网链表进行前缀匹配 */
+    /* 子网匹配：使用专用子网链表加速前缀匹配 */
     list_for_each_entry_rcu(entry, &fw->ipv4_subnet_wl, subnet_node) {
       __be32 wl_mask = READ_ONCE(entry->mask.ipv4_mask);
       __be32 wl_ip = READ_ONCE(entry->addr.ipv4);

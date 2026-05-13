@@ -564,7 +564,8 @@ static int check_basic_auth_header(const char *auth_header) {
 
   pthread_rwlock_rdlock(&config_rwlock);
   /* 修复：如果密码长度超过缓冲区大小，直接返回失败，防止截断比较 */
-  if (strlen(cfg.metrics_password) >= sizeof(cfg_pass)) {
+  if (cfg.metrics_password == NULL ||
+      strlen(cfg.metrics_password) >= sizeof(cfg_pass)) {
     pthread_rwlock_unlock(&config_rwlock);
     memset(cfg_pass, 0, sizeof(cfg_pass));
     atomic_fetch_add(&auth_failures, 1);
