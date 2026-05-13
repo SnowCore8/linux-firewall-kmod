@@ -436,6 +436,7 @@ help:
 	@echo "  daemon        - 仅编译守护进程"
 	@echo "  debug         - 调试版本编译 (DL=1/2/3, 默认 1)"
 	@echo "  asan          - AddressSanitizer 版本编译"
+	@echo "  deb           - 构建 Debian 软件包 (可选 VERSION=x.x.x)"
 	@echo "  install       - 安装到系统"
 	@echo "  uninstall     - 从系统卸载"
 	@echo "  clean         - 清理编译产物"
@@ -452,11 +453,120 @@ test: $(KERNEL_MODULE) $(DAEMON_BIN)
 	sudo ./tests/run_tests.sh
 
 # ============================================================================
+# 12b. Debian 软件包构建
+# ============================================================================
+
+# 自动从 CHANGELOG.md 提取最新已发布版本号
+CHANGELOG_FILE := CHANGELOG.md
+DEB_VERSION ?= $(shell grep -m1 '^## v' $(CHANGELOG_FILE) | sed 's/^## v//;s/[^0-9.].*//' || echo "2.1.1")
+
+DEB_PACKAGE_NAME := linux-firewall-kmod
+DEB_BUILD_DIR := $(BUILD_DIR)/deb
+
+.PHONY: deb
+deb: clean $(KERNEL_MODULE) $(DAEMON_BIN)
+	@echo "=== 构建 Debian 软件包 ==="
+	@echo "版本: $(DEB_VERSION)"
+	@rm -rf $(DEB_BUILD_DIR)
+	@mkdir -p $(DEB_BUILD_DIR)
+	@# 使用 make install DESTDIR= 复用安装逻辑
+	$(MAKE) install-kernel-module install-daemon install-config install-state install-systemd \
+		DESTDIR=$(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION) PREFIX=/usr
+	@# 安装文档
+	@echo "安装文档..."
+	install -d $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/usr/share/doc/$(DEB_PACKAGE_NAME)
+	install -m 644 README.md $(CHANGELOG_FILE) LICENSE \
+		$(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/usr/share/doc/$(DEB_PACKAGE_NAME)/ 2>/dev/null || true
+	@# 创建 DEBIAN 目录
+	@echo "创建 DEBIAN 控制文件..."
+	install -d $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN
+	@# 创建 control 文件
+	@echo "Package: $(DEB_PACKAGE_NAME)" > $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo "Version: $(DEB_VERSION)" >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo "Section: net" >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo "Priority: optional" >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo "Architecture: amd64" >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo "Depends: libyaml-0-2, libsqlite3-0, libmicrohttpd12, libpcre2-8-0" >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo "Maintainer: SnowCore8 <snowcore8@gmail.com>" >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo "Description: Linux kernel module version of fail2ban" >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo " Firewall is a high-performance real-time IP ban protection system." >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo " It moves fail2ban's core functionality from userspace to the kernel," >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo " using netfilter framework for packet-level banning with lower latency." >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo " ." >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo " Features:" >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo "  - Kernel-space IP banning via netfilter hooks" >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo "  - Jail system for multi-service isolation" >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo "  - Hash table for O(1) IP lookup (4096 capacity)" >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo "  - RCU concurrency safety + spinlock protection" >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo "  - PCRE2 regex log parsing with JIT acceleration" >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo "  - SQLite persistence for permanent bans" >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@echo "  - Prometheus metrics export" >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/control
+	@# 创建 postinst 脚本
+	@install -d $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN
+	@echo '#!/bin/bash' > $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo 'set -e' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '# 更新模块依赖' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo 'if command -v depmod &> /dev/null; then' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '    depmod -a' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo 'fi' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '# 加载内核模块' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo 'if ! lsmod | grep -q "^firewall"; then' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '    echo "Loading firewall kernel module..."' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '    if ! modprobe firewall; then' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '        echo "ERROR: Failed to load firewall kernel module" >&2' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '        echo "Please check dmesg for details" >&2' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '        exit 1' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '    fi' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo 'fi' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '# 启用并启动 systemd 服务' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo 'if command -v systemctl &> /dev/null; then' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '    systemctl daemon-reload' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '    systemctl enable firewall-daemon || true' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '    systemctl start firewall-daemon || true' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo 'fi' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo '' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@echo 'echo "linux-firewall-kmod installed successfully."' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@chmod 755 $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postinst
+	@# 创建 postrm 脚本
+	@echo '#!/bin/bash' > $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo 'set -e' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo 'if [ "$$1" = "remove" ] || [ "$$1" = "purge" ]; then' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '    # 停止并禁用 systemd 服务' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '    if command -v systemctl &> /dev/null; then' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '        systemctl stop firewall-daemon 2>/dev/null || true' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '        systemctl disable firewall-daemon 2>/dev/null || true' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '        systemctl daemon-reload 2>/dev/null || true' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '    fi' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '    # 卸载内核模块' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '    if lsmod | grep -q "^firewall "; then' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '        echo "Unloading firewall kernel module..."' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '        rmmod firewall 2>/dev/null || true' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '    fi' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '    # 更新模块依赖' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '    if command -v depmod &> /dev/null; then' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '        depmod -a 2>/dev/null || true' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo '    fi' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@echo 'fi' >> $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@chmod 755 $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION)/DEBIAN/postrm
+	@# 构建 deb 包
+	@echo "构建 deb 包..."
+	@cd $(DEB_BUILD_DIR) && dpkg-deb --build --root-owner-group $(DEB_PACKAGE_NAME)-$(DEB_VERSION)
+	@echo "=== 构建完成 ==="
+	@echo "deb 包位置: $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION).deb"
+	@ls -lh $(DEB_BUILD_DIR)/$(DEB_PACKAGE_NAME)-$(DEB_VERSION).deb
+
+# ============================================================================
 # 13. .PHONY 声明（按功能分组）
 # ============================================================================
 
 # 构建相关
-.PHONY: all build kernel-module daemon debug asan
+.PHONY: all build kernel-module daemon debug asan deb
 # 代码质量
 .PHONY: format-check format ci
 # 安装相关
