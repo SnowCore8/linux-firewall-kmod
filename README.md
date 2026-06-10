@@ -108,4 +108,4 @@ sudo ./build/daemon/firewall-daemon --help                  # 帮助
 
 - **许可证**: [MIT License](LICENSE)
 - **贡献**: [Issues](https://github.com/SnowCore8/linux-firewall-kmod/issues) | [PRs](https://github.com/SnowCore8/linux-firewall-kmod/pulls)
-- **作者**: [SnowCore8](https://github.com/SnowCore8) — 使用 [OpenCode](https://opencode.ai) 辅助开发
+- **作者**: [SnowCore8](https://github.com/SnowCore8) — 使用 [Code CLI](https://github.com/github/code-cli) 辅助开发

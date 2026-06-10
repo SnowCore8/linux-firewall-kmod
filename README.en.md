@@ -107,4 +107,4 @@ Browse the full documentation via the sidebar. Quick links:
 
 - **License**: [MIT License](LICENSE)
 - **Contribute**: [Issues](https://github.com/SnowCore8/linux-firewall-kmod/issues) | [PRs](https://github.com/SnowCore8/linux-firewall-kmod/pulls)
-- **Author**: [SnowCore8](https://github.com/SnowCore8) — Built with [OpenCode](https://opencode.ai)
+- **Author**: [SnowCore8](https://github.com/SnowCore8) — Built with [Code CLI](https://github.com/github/code-cli)
