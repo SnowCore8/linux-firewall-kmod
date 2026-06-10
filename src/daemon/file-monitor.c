@@ -659,8 +659,18 @@ void monitor_loop(void) {
     }
 
     if (ret == 0) {
-      /* 超时 - 定期清理 */
-      cleanup_expired_bans();
+      /* 超时 - 定期清理 partial_line_buffer。
+       * 节流到每 60 秒一次,避免日志洪水(bug 修复):
+       * 原逻辑每秒调用一次,SSH 持续攻击时 partial_line_buffer 总是非空,
+       * 导致 daemon_log_debug 每秒打一次但实际不处理数据,污染日志。*/
+      {
+        static time_t last_partial_cleanup = 0;
+        time_t now_partial = time(NULL);
+        if (now_partial - last_partial_cleanup >= 60) {
+          last_partial_cleanup = now_partial;
+          cleanup_partial_line_buffer();
+        }
+      }
 
       /* 定期检查是否有新日志文件创建（每60秒） */
       {

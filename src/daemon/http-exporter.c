@@ -391,7 +391,7 @@ static int format_daemon_uptime_metric(char *buf, size_t buf_size, int offset, t
  * @offset: 当前写入偏移
  * @stats: 守护进程统计信息
  * @uptime: 运行时间（秒）
- * 返回: 写入的字节数
+ * 返回: 累计写入字节数（counter + uptime）
  */
 static int format_daemon_metrics(char *buf, size_t buf_size, int offset,
                                  const daemon_stats_snapshot_t *stats, time_t uptime) {
@@ -402,7 +402,12 @@ static int format_daemon_metrics(char *buf, size_t buf_size, int offset,
     return -1;
   offset += written;
 
-  return format_daemon_uptime_metric(buf, buf_size, offset, uptime);
+  written = format_daemon_uptime_metric(buf, buf_size, offset, uptime);
+  if (written < 0 || (size_t)written >= buf_size - offset)
+    return -1;
+  offset += written;
+
+  return offset;
 }
 
 /* 生成 Prometheus 指标文本 */
@@ -556,7 +561,10 @@ static int check_basic_auth_header(const char *auth_header) {
 
   pthread_rwlock_rdlock(&config_rwlock);
   /* 修复：如果密码长度超过缓冲区大小，直接返回失败，防止截断比较 */
-  if (cfg.metrics_password == NULL || strlen(cfg.metrics_password) >= sizeof(cfg_pass)) {
+  /* 修复：仅当 password 已配置但长度超限时返回失败；
+   * password == NULL 表示未配置认证，应继续走到下面的
+   * "未配置时返回 -1 跳过认证"逻辑（向后兼容）。 */
+  if (cfg.metrics_password && strlen(cfg.metrics_password) >= sizeof(cfg_pass)) {
     pthread_rwlock_unlock(&config_rwlock);
     memset(cfg_pass, 0, sizeof(cfg_pass));
     atomic_fetch_add(&auth_failures, 1);

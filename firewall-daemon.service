@@ -1,14 +1,13 @@
 [Unit]
 Description=Firewall Daemon for IP Ban Protection
 After=network.target systemd-modules-load.service
-Requires=systemd-modules-load.service
 
 [Service]
 Type=forking
 PIDFile=/run/firewall-daemon.pid
 User=root
 Group=root
-ExecStart=/usr/local/sbin/firewall-daemon -C /etc/firewall --daemon
+ExecStart=__SBINDIR__/firewall-daemon -C /etc/firewall --daemon
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5

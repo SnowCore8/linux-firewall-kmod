@@ -1,0 +1,13 @@
+# Makefile.dkms - DKMS 构建入口
+# 由 DKMS 在 build 根目录调用，源码在 src/kernel-module/
+
+KVER  ?= $(shell uname -r)
+KDIR  := /lib/modules/$(KVER)/build
+PWD   := $(shell pwd)
+
+.PHONY: modules clean
+modules:
+	$(MAKE) -C $(KDIR) M=$(PWD)/src/kernel-module modules
+
+clean:
+	$(MAKE) -C $(KDIR) M=$(PWD)/src/kernel-module clean
