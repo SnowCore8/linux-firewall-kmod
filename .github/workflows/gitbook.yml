@@ -40,6 +40,10 @@ jobs:
         working-directory: docs
         run: npx honkit build . _book
 
+      - name: Strip build artifacts
+        working-directory: docs/_book
+        run: rm -f package.json package-lock.json
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
