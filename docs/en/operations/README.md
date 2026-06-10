@@ -9,7 +9,7 @@ This section covers daily operations for the Linux Firewall Kernel Module.
 | Check Item | Frequency | Command |
 |------------|-----------|---------|
 | Service status | Daily | `systemctl status firewall` |
-| Ban count | Daily | `fwctl stats` |
+| Ban count | Daily | `cat /proc/firewall/stats` |
 | Log size | Weekly | `ls -lh /var/log/firewall.log` |
 | Database size | Weekly | `ls -lh /var/lib/firewall/bans.db` |
 | Disk space | Weekly | `df -h /var` |

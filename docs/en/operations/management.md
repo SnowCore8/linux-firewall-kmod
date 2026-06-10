@@ -1,15 +1,15 @@
 # Management Commands
 
-This document describes all commands available in the `fwctl` command-line tool.
+This document describes all commands available in the `firewall-daemon` command-line tool.
 
-## fwctl Overview
+## firewall-daemon Overview
 
-`fwctl` is the userspace management tool for Linux Firewall, providing a complete command-line interface for managing bans, whitelists, and viewing status.
+`firewall-daemon` is the userspace management tool for Linux Firewall, providing a complete command-line interface for managing bans, whitelists, and viewing status.
 
 ### Syntax
 
 ```bash
-fwctl <command> [arguments]
+firewall-daemon <command> [arguments]
 ```
 
 ### Global Options
@@ -26,7 +26,7 @@ fwctl <command> [arguments]
 ### Start
 
 ```bash
-fwctl start
+firewall-daemon start
 ```
 
 Start the daemon and load the kernel module.
@@ -34,7 +34,7 @@ Start the daemon and load the kernel module.
 ### Stop
 
 ```bash
-fwctl stop
+firewall-daemon stop
 ```
 
 Stop the daemon and unload the kernel module.
@@ -42,7 +42,7 @@ Stop the daemon and unload the kernel module.
 ### Restart
 
 ```bash
-fwctl restart
+firewall-daemon restart
 ```
 
 Restart the daemon.
@@ -50,7 +50,7 @@ Restart the daemon.
 ### Status
 
 ```bash
-fwctl status
+cat /proc/firewall/config
 ```
 
 Example output:
@@ -68,7 +68,7 @@ Uptime:     2d 5h 30m
 ### Reload Configuration
 
 ```bash
-fwctl reload
+firewall-daemon reload
 ```
 
 Sends SIGHUP signal to the daemon to reload YAML configuration without interrupting service.
@@ -78,7 +78,7 @@ Sends SIGHUP signal to the daemon to reload YAML configuration without interrupt
 ### View Banned List
 
 ```bash
-fwctl banned
+cat /proc/firewall/bans
 ```
 
 Example output:
@@ -95,20 +95,20 @@ IP              Jail      Remaining   Protocol  Port
 ### Ban IP
 
 ```bash
-fwctl ban <ip> [duration] [protocol] [port]
+firewall-daemon ban <ip> [duration] [protocol] [port]
 ```
 
 Examples:
 
 ```bash
 # Ban for 1 hour
-fwctl ban 192.168.1.100 3600
+echo "192.168.1.100 3600" | sudo tee /proc/firewall/bans
 
 # Ban for 30 minutes, TCP port 80
-fwctl ban 192.168.1.100 1800 tcp 80
+firewall-daemon ban 192.168.1.100 1800 tcp 80
 
 # Permanent ban, all ports
-fwctl ban 192.168.1.100 0 all 0
+firewall-daemon ban 192.168.1.100 0 all 0
 ```
 
 | Parameter | Default | Description |
@@ -120,19 +120,19 @@ fwctl ban 192.168.1.100 0 all 0
 ### Unban IP
 
 ```bash
-fwctl unban <ip>
+echo "unban <ip>" | sudo tee /proc/firewall/bans
 ```
 
 Example:
 
 ```bash
-fwctl unban 192.168.1.100
+echo "unban 192.168.1.100" | sudo tee /proc/firewall/bans
 ```
 
 ### Bulk Ban
 
 ```bash
-fwctl ban-file <file>
+firewall-daemon ban-file <file>
 ```
 
 File format (one IP per line):
@@ -146,7 +146,7 @@ File format (one IP per line):
 ### Clear All Bans
 
 ```bash
-fwctl clear
+firewall-daemon clear
 ```
 
 Confirmation prompt:
@@ -158,7 +158,7 @@ Are you sure you want to unban all IPs? [y/N]
 Force clear (no prompt):
 
 ```bash
-fwctl clear --force
+firewall-daemon clear --force
 ```
 
 ## Whitelist Management
@@ -166,7 +166,7 @@ fwctl clear --force
 ### View Whitelist
 
 ```bash
-fwctl whitelist
+cat /proc/firewall/whitelist
 ```
 
 Example output:
@@ -182,26 +182,26 @@ Whitelist (3/64)
 ### Add to Whitelist
 
 ```bash
-fwctl whitelist-add <ip[/cidr]>
+firewall-daemon whitelist-add <ip[/cidr]>
 ```
 
 Examples:
 
 ```bash
-fwctl whitelist-add 192.168.1.50
-fwctl whitelist-add 10.0.0.0/8
+firewall-daemon whitelist-add 192.168.1.50
+firewall-daemon whitelist-add 10.0.0.0/8
 ```
 
 ### Remove from Whitelist
 
 ```bash
-fwctl whitelist-remove <ip[/cidr]>
+firewall-daemon whitelist-remove <ip[/cidr]>
 ```
 
 Example:
 
 ```bash
-fwctl whitelist-remove 192.168.1.50
+firewall-daemon whitelist-remove 192.168.1.50
 ```
 
 ## Statistics
@@ -209,7 +209,7 @@ fwctl whitelist-remove 192.168.1.50
 ### View Statistics
 
 ```bash
-fwctl stats
+cat /proc/firewall/stats
 ```
 
 Example output:
@@ -228,7 +228,7 @@ Hash table usage:       0.37%
 ### View Jail Statistics
 
 ```bash
-fwctl jail-stats
+firewall-daemon jail-stats
 ```
 
 Example output:
@@ -245,7 +245,7 @@ postfix     yes      89        3
 ### Real-time Statistics
 
 ```bash
-watch -n 1 fwctl stats
+watch -n 1 firewall-daemon stats
 ```
 
 ## Logging
@@ -253,7 +253,7 @@ watch -n 1 fwctl stats
 ### View Daemon Log
 
 ```bash
-fwctl log
+firewall-daemon log
 ```
 
 Equivalent to:
@@ -265,7 +265,7 @@ tail -f /var/log/firewall.log
 ### View Kernel Log
 
 ```bash
-fwctl dmesg
+firewall-daemon dmesg
 ```
 
 Equivalent to:
@@ -279,7 +279,7 @@ dmesg | grep firewall
 ### Validate Configuration
 
 ```bash
-fwctl check-config
+firewall-daemon check-config
 ```
 
 Checks YAML configuration file syntax and validity.
@@ -287,7 +287,7 @@ Checks YAML configuration file syntax and validity.
 ### Show Current Configuration
 
 ```bash
-fwctl show-config
+firewall-daemon show-config
 ```
 
 Displays the parsed current configuration.
@@ -296,21 +296,21 @@ Displays the parsed current configuration.
 
 | Command | Description |
 |---------|-------------|
-| `fwctl start` | Start service |
-| `fwctl stop` | Stop service |
-| `fwctl restart` | Restart service |
-| `fwctl status` | View status |
-| `fwctl reload` | Reload configuration |
-| `fwctl banned` | View banned list |
-| `fwctl ban <ip>` | Ban IP |
-| `fwctl unban <ip>` | Unban IP |
-| `fwctl clear` | Clear all bans |
-| `fwctl whitelist` | View whitelist |
-| `fwctl whitelist-add <ip>` | Add to whitelist |
-| `fwctl whitelist-remove <ip>` | Remove from whitelist |
-| `fwctl stats` | View statistics |
-| `fwctl jail-stats` | View jail statistics |
-| `fwctl log` | View log |
-| `fwctl dmesg` | View kernel log |
-| `fwctl check-config` | Validate configuration |
-| `fwctl show-config` | Show configuration |
+| `firewall-daemon start` | Start service |
+| `firewall-daemon stop` | Stop service |
+| `firewall-daemon restart` | Restart service |
+| `cat /proc/firewall/config` | View status |
+| `firewall-daemon reload` | Reload configuration |
+| `cat /proc/firewall/bans` | View banned list |
+| `echo "<ip>" | sudo tee /proc/firewall/bans` | Ban IP |
+| `echo "unban <ip>" | sudo tee /proc/firewall/bans` | Unban IP |
+| `sudo rmmod firewall && sudo insmod firewall.ko` | Clear all bans |
+| `cat /proc/firewall/whitelist` | View whitelist |
+| `firewall-daemon whitelist-add <ip>` | Add to whitelist |
+| `firewall-daemon whitelist-remove <ip>` | Remove from whitelist |
+| `cat /proc/firewall/stats` | View statistics |
+| `firewall-daemon jail-stats` | View jail statistics |
+| `firewall-daemon log` | View log |
+| `firewall-daemon dmesg` | View kernel log |
+| `firewall-daemon check-config` | Validate configuration |
+| `firewall-daemon show-config` | Show configuration |

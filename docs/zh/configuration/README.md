@@ -51,7 +51,7 @@ default.yaml
 |------|------|------------|
 | ProcFS 接口 | 直接写入 `/proc/firewall/` | 否 |
 | 编辑 YAML + 重启 | `systemctl restart firewall` | 是 |
-| fwctl 命令 | 动态管理 | 部分（取决于操作） |
+| firewall-daemon 命令 | 动态管理 | 部分（取决于操作） |
 
 ## 配置验证
 

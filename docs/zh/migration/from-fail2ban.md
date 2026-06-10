@@ -27,7 +27,7 @@
 ### Linux Firewall 架构
 
 ```
-日志 → fwctl (C) → /proc/firewall → Netfilter Hook
+日志 → firewall-daemon (C) → /proc/firewall → Netfilter Hook
                                     │
                               O(1) 哈希查找
 ```
@@ -182,7 +182,7 @@ grep -oP 'ignoreip\s*=\s*\K.*' /etc/fail2ban/jail.local | \
 sudo fail2ban-client status sshd | \
     grep -oP '\d+\.\d+\.\d+\.\d+' | \
     while read ip; do
-        sudo fwctl ban "$ip" 3600
+        sudo firewall-daemon ban "$ip" 3600
     done
 ```
 
@@ -205,15 +205,15 @@ sudo systemctl start firewall
 
 ```bash
 # 检查状态
-fwctl status
+cat /proc/firewall/config
 
 # 查看封禁列表
-fwctl banned
+cat /proc/firewall/bans
 
 # 测试封禁
-fwctl ban 1.2.3.4 60
-fwctl banned
-fwctl unban 1.2.3.4
+echo "1.2.3.4 60" | sudo tee /proc/firewall/bans
+cat /proc/firewall/bans
+echo "unban 1.2.3.4" | sudo tee /proc/firewall/bans
 ```
 
 ## 已知差异

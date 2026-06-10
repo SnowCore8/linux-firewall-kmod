@@ -27,7 +27,7 @@ Log → fail2ban (Python) → iptables/nftables → Netfilter
 ### Linux Firewall Architecture
 
 ```
-Log → fwctl (C) → /proc/firewall → Netfilter Hook
+Log → firewall-daemon (C) → /proc/firewall → Netfilter Hook
                                     │
                               O(1) hash lookup
 ```
@@ -182,7 +182,7 @@ grep -oP 'ignoreip\s*=\s*\K.*' /etc/fail2ban/jail.local | \
 sudo fail2ban-client status sshd | \
     grep -oP '\d+\.\d+\.\d+\.\d+' | \
     while read ip; do
-        sudo fwctl ban "$ip" 3600
+        sudo firewall-daemon ban "$ip" 3600
     done
 ```
 
@@ -205,15 +205,15 @@ sudo systemctl start firewall
 
 ```bash
 # Check status
-fwctl status
+cat /proc/firewall/config
 
 # View banned list
-fwctl banned
+cat /proc/firewall/bans
 
 # Test ban
-fwctl ban 1.2.3.4 60
-fwctl banned
-fwctl unban 1.2.3.4
+echo "1.2.3.4 60" | sudo tee /proc/firewall/bans
+cat /proc/firewall/bans
+echo "unban 1.2.3.4" | sudo tee /proc/firewall/bans
 ```
 
 ## Known Differences

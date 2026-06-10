@@ -104,7 +104,7 @@ sudo make install
 安装完成后：
 
 - 内核模块 `firewall.ko` 安装到 `/lib/modules/$(uname -r)/extra/`
-- 守护进程 `fwctl` 安装到 `/usr/local/sbin/`
+- 守护进程 `firewall-daemon` 安装到 `/usr/local/sbin/`
 - 配置文件安装到 `/etc/firewall/default.yaml`
 - systemd 服务文件安装到 `/etc/systemd/system/`
 
@@ -138,7 +138,7 @@ sudo systemctl status firewall
 ### 检查内核模块
 
 ```bash
-cat /proc/firewall/status
+cat /proc/firewall/config
 ```
 
 应输出类似：
@@ -157,7 +157,7 @@ Whitelist capacity: 64
 ### 检查守护进程
 
 ```bash
-fwctl status
+cat /proc/firewall/config
 ```
 
 ### 检查 Prometheus 指标

@@ -76,7 +76,7 @@ make daemon
 输出：
 
 ```
-gcc -Wall -Wextra -O2 -o fwctl \
+gcc -Wall -Wextra -O2 -o firewall-daemon \
     src/daemon/main.c \
     src/daemon/config.c \
     src/daemon/jail.c \
@@ -103,7 +103,7 @@ make asan
 使用：
 
 ```bash
-sudo ./fwctl asan
+sudo ./firewall-daemon asan
 # 运行一段时间后检查输出
 ```
 
@@ -211,14 +211,14 @@ pkg-config --libs libpcre2
 
 | 文件 | 说明 |
 |------|------|
-| `fwctl` | 守护进程二进制 |
+| `firewall-daemon` | 守护进程二进制 |
 
 ### 安装位置
 
 | 文件 | 安装路径 |
 |------|----------|
 | `firewall.ko` | `/lib/modules/$(uname -r)/extra/` |
-| `fwctl` | `/usr/local/sbin/` |
+| `firewall-daemon` | `/usr/local/sbin/` |
 | `default.yaml` | `/etc/firewall/` |
 | `firewall-daemon.service` | `/etc/systemd/system/` |
 

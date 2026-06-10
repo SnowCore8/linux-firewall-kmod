@@ -9,7 +9,7 @@
 | 检查项 | 频率 | 命令 |
 |--------|------|------|
 | 服务状态 | 每日 | `systemctl status firewall` |
-| 封禁数量 | 每日 | `fwctl stats` |
+| 封禁数量 | 每日 | `cat /proc/firewall/stats` |
 | 日志大小 | 每周 | `ls -lh /var/log/firewall.log` |
 | 数据库大小 | 每周 | `ls -lh /var/lib/firewall/bans.db` |
 | 磁盘空间 | 每周 | `df -h /var` |

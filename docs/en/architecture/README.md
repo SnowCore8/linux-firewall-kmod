@@ -10,7 +10,7 @@ The system consists of two main components:
 ┌──────────────────────────────────────────────────────┐
 │                    Userspace                           │
 │  ┌────────────────────────────────────────────────┐  │
-│  │              fwctl Daemon                       │  │
+│  │              firewall-daemon Daemon                       │  │
 │  │  ┌─────────┐  ┌──────────┐  ┌──────────────┐  │  │
 │  │  │ inotify │  │  PCRE2   │  │ SQLite/HTTP  │  │  │
 │  │  │ Monitor │  │  Regex   │  │ Persist/Metrics│ │  │

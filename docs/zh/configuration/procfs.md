@@ -6,47 +6,44 @@ Linux Firewall 内核模块通过 `/proc/firewall/` 目录提供运行时管理�
 
 ```
 /proc/firewall/
-├── status          # 模块状态
-├── banned_ips      # 当前封禁 IP 列表
-├── whitelist       # 当前白名单 IP 列表
-├── stats           # 统计信息
-├── config          # 运行时配置
-├── clear           # 清空封禁列表（写入触发）
-└── version         # 模块版本
+├── bans           # 封禁列表（可写：ban / unban）
+├── whitelist       # 白名单（可写：添加条目）
+├── stats           # 计数器（只读）
+└── config          # 运行时配置（只读）
 ```
+
+> 上表即真实接口。早期文档中曾出现 `status` / `clear` / `version`
+> 等条目，源码中并不存在；`config` 同样为只读文件，写入会返回
+> `-EINVAL`。如需清空封禁，请逐条 `unban` 或重新加载模块。
 
 ## 读取接口
 
-### 模块状态
+### 运行时配置
 
 ```bash
-cat /proc/firewall/status
+cat /proc/firewall/config
 ```
 
 输出：
 
 ```
-Firewall Module Status
-======================
-Module: loaded
-Version: 1.0.0
-State: active
-Banned IPs: 15 / 4096
-Whitelisted IPs: 3 / 64
+Current Firewall Configuration:
+--------------------------------
+ban_time: 3600 seconds
+Ban entries: 15
+Whitelist entries: 3
 ```
 
 | 字段 | 说明 |
 |------|------|
-| `Module` | 模块加载状态 |
-| `Version` | 模块版本号 |
-| `State` | 运行状态：`active`, `inactive` |
-| `Banned IPs` | 当前封禁数 / 总容量 |
-| `Whitelisted IPs` | 当前白名单数 / 总容量 |
+| `ban_time` | 默认封禁时长（秒） |
+| `Ban entries` | 当前封禁条目数 |
+| `Whitelist entries` | 当前白名单条目数 |
 
 ### 封禁 IP 列表
 
 ```bash
-cat /proc/firewall/banned_ips
+cat /proc/firewall/bans
 ```
 
 输出：
@@ -113,40 +110,33 @@ Current banned:       15
 
 ### 模块版本
 
-```bash
-cat /proc/firewall/version
-```
-
-输出：
-
-```
-1.0.0
-```
+模块不提供单独 `version` 接口；版本信息通过内核模块标识与
+`dmesg | grep firewall` 启动日志获取。
 
 ## 写入接口
 
+`/proc/firewall/config` 与 `/proc/firewall/stats` 为只读文件，
+所有写入操作都通过 `/proc/firewall/bans` 与 `/proc/firewall/whitelist`。
+
 ### 添加封禁
 
-向 `config` 写入封禁指令：
-
 ```bash
-echo "ban 192.168.1.100 3600 tcp 22 sshd" | sudo tee /proc/firewall/config
+# 默认时长（fw_ban_time）
+echo "1.2.3.4" | sudo tee /proc/firewall/bans
+
+# 指定时长（秒）
+echo "1.2.3.4 3600" | sudo tee /proc/firewall/bans
+
+# 永久封禁
+echo "1.2.3.4 0" | sudo tee /proc/firewall/bans
 ```
 
-格式：`ban <ip> <duration> <protocol> <port> <jail>`
+格式：`<ip>` 或 `<ip> <seconds>`（秒，0 表示永久）
 
-| 参数 | 说明 |
-|------|------|
-| `ip` | 要封禁的 IP 地址 |
-| `duration` | 封禁时长（秒），0 表示永久 |
-| `protocol` | `tcp`, `udp`, `all` |
-| `port` | 目标端口 |
-| `jail` | jail 名称（可选） |
-
-### 移除封禁
+### 解除封禁
 
 ```bash
-echo "unban 192.168.1.100" | sudo tee /proc/firewall/config
+echo "unban 1.2.3.4" | sudo tee /proc/firewall/bans
 ```
 
 格式：`unban <ip>`
@@ -154,56 +144,36 @@ echo "unban 192.168.1.100" | sudo tee /proc/firewall/config
 ### 添加白名单
 
 ```bash
-echo "whitelist 192.168.1.50" | sudo tee /proc/firewall/config
-```
+# 单个 IP
+echo "10.0.0.1" | sudo tee /proc/firewall/whitelist
 
-格式：`whitelist <ip>`
+# CIDR 网段
+echo "10.0.0.0/8" | sudo tee /proc/firewall/whitelist
+```
 
 > **限制**：白名单最多 64 个条目。
 
 ### 移除白名单
 
 ```bash
-echo "unwhitelist 192.168.1.50" | sudo tee /proc/firewall/config
+echo "remove 10.0.0.0/8" | sudo tee /proc/firewall/whitelist
 ```
 
-格式：`unwhitelist <ip>`
+格式：`remove <ip-or-cidr>`
 
 ### 清空所有封禁
 
-```bash
-echo "clear" | sudo tee /proc/firewall/clear
-```
-
-或写入 `config`：
+源码未提供「一键清空」接口。如需清空：
 
 ```bash
-echo "clear" | sudo tee /proc/firewall/config
+# 方案一：逐条 unban（脚本中可循环）
+while read -r ip _; do
+  [ -n "$ip" ] && echo "unban $ip" | sudo tee /proc/firewall/bans >/dev/null
+done < <(awk '/^[0-9]/ {print $1}' /proc/firewall/bans)
+
+# 方案二：重载模块（清空所有内核态封禁/白名单）
+sudo rmmod firewall && sudo insmod $(modinfo -n firewall) fw_ban_time=600
 ```
-
-### 启用/禁用模块
-
-```bash
-# 禁用（停止处理数据包）
-echo "disable" | sudo tee /proc/firewall/config
-
-# 启用
-echo "enable" | sudo tee /proc/firewall/config
-```
-
-## 通过 fwctl 访问
-
-`fwctl` 工具封装了 ProcFS 操作：
-
-| fwctl 命令 | ProcFS 操作 |
-|------------|-------------|
-| `fwctl status` | 读取 `/proc/firewall/status` |
-| `fwctl banned` | 读取 `/proc/firewall/banned_ips` |
-| `fwctl whitelist` | 读取 `/proc/firewall/whitelist` |
-| `fwctl stats` | 读取 `/proc/firewall/stats` |
-| `fwctl ban <ip> <time>` | 写入 `/proc/firewall/config` |
-| `fwctl unban <ip>` | 写入 `/proc/firewall/config` |
-| `fwctl clear` | 写入 `/proc/firewall/clear` |
 
 ## 权限要求
 

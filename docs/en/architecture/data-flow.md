@@ -178,7 +178,7 @@ Packet (src_ip, dst_port, protocol)
 ### Manual Unban
 
 ```
-    fwctl unban <ip>
+    echo "unban <ip>" | sudo tee /proc/firewall/bans
             │
             ▼
     ┌───────────────┐
@@ -211,15 +211,15 @@ Packet (src_ip, dst_port, protocol)
 | Method | Path | Purpose |
 |--------|------|---------|
 | ProcFS write | `/proc/firewall/config` | Add/remove bans |
-| ProcFS write | `/proc/firewall/clear` | Clear all bans |
+| ProcFS write | `/proc/firewall/bans` | Clear all bans |
 | ProcFS write | `/proc/firewall/config` | Manage whitelist |
 
 ### Kernel → Userspace
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| ProcFS read | `/proc/firewall/status` | Get status |
-| ProcFS read | `/proc/firewall/banned_ips` | Get ban list |
+| ProcFS read | `/proc/firewall/config` | Get status |
+| ProcFS read | `/proc/firewall/bans` | Get ban list |
 | ProcFS read | `/proc/firewall/stats` | Get statistics |
 
 ### Internal Communication

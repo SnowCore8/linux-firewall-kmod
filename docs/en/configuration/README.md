@@ -51,7 +51,7 @@ Configuration can be modified at runtime via:
 |--------|-------------|----------------------|
 | ProcFS interface | Write directly to `/proc/firewall/` | No |
 | Edit YAML + restart | `systemctl restart firewall` | Yes |
-| fwctl commands | Dynamic management | Partial (depends on operation) |
+| firewall-daemon commands | Dynamic management | Partial (depends on operation) |
 
 ## Configuration Validation
 

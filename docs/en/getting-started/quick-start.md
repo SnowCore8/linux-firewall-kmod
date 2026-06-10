@@ -80,30 +80,30 @@ sudo systemctl status firewall
 ### Method 1: Check ProcFS
 
 ```bash
-cat /proc/firewall/banned_ips
+cat /proc/firewall/bans
 ```
 
-### Method 2: Using fwctl
+### Method 2: Using firewall-daemon
 
 ```bash
 # View banned list
-fwctl banned
+cat /proc/firewall/bans
 
 # View statistics
-fwctl stats
+cat /proc/firewall/stats
 ```
 
 ### Method 3: Manual Test
 
 ```bash
 # Manually ban a test IP
-fwctl ban 192.168.1.100 3600
+echo "192.168.1.100 3600" | sudo tee /proc/firewall/bans
 
 # Confirm banned
-fwctl banned
+cat /proc/firewall/bans
 
 # Unban
-fwctl unban 192.168.1.100
+echo "unban 192.168.1.100" | sudo tee /proc/firewall/bans
 ```
 
 ## Step 5: Monitoring
@@ -117,8 +117,8 @@ curl http://localhost:9119/metrics
 Key metrics:
 
 ```
-# TYPE firewall_banned_ips_total gauge
-firewall_banned_ips_total 5
+# TYPE firewall_kernel_banned_ips_current gauge
+firewall_kernel_banned_ips_current 5
 
 # TYPE firewall_ban_events_total counter
 firewall_ban_events_total 12

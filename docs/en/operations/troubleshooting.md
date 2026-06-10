@@ -26,7 +26,7 @@ echo ""
 
 # 3. ProcFS
 echo "3. ProcFS"
-cat /proc/firewall/status
+cat /proc/firewall/config
 echo ""
 
 # 4. Ban statistics
@@ -83,13 +83,13 @@ Job for firewall-daemon.service failed because the control process exited with e
 journalctl -u firewall -n 50
 
 # Check configuration file
-fwctl check-config
+firewall-daemon check-config
 
 # Check port usage
 ss -tlnp | grep 9119
 
 # Check dependency libraries
-ldd /usr/local/sbin/fwctl
+ldd /usr/local/sbin/firewall-daemon
 ```
 
 **Common Causes**:
@@ -116,7 +116,7 @@ lsmod | grep firewall
 cat /proc/firewall/whitelist
 
 # 3. Check if ban was written successfully
-cat /proc/firewall/banned_ips
+cat /proc/firewall/bans
 
 # 4. Check kernel log
 dmesg | grep firewall
@@ -144,7 +144,7 @@ dmesg | grep firewall
 ```bash
 # 1. Enable debug mode
 sudo systemctl stop firewall
-sudo fwctl -d start
+sudo firewall-daemon -d start
 
 # 2. View match logs
 tail -f /var/log/firewall.log | grep "match"
@@ -171,7 +171,7 @@ echo "Failed password for root from 192.168.1.100" | \
 
 ```bash
 # 1. Check ban count
-fwctl stats
+cat /proc/firewall/stats
 
 # 2. Check hash table usage
 curl -s http://localhost:9119/metrics | grep hash_table
@@ -279,7 +279,7 @@ cat /sys/kernel/debug/rcu/rcu_pending
 
 ```bash
 # Collect full diagnostic package
-sudo fwctl diagnose > firewall-diag-$(date +%Y%m%d).txt
+sudo firewall-daemon diagnose > firewall-diag-$(date +%Y%m%d).txt
 ```
 
 ### Report Issues

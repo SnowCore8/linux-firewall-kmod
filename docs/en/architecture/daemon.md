@@ -1,10 +1,10 @@
 # Userspace Daemon
 
-This document describes the design and implementation of the userspace daemon `fwctl`.
+This document describes the design and implementation of the userspace daemon `firewall-daemon`.
 
 ## Overview
 
-The daemon `fwctl` runs in userspace and is responsible for:
+The daemon `firewall-daemon` runs in userspace and is responsible for:
 
 - Monitoring log file changes
 - Matching ban patterns using PCRE2 regex
@@ -27,7 +27,7 @@ The daemon `fwctl` runs in userspace and is responsible for:
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                    fwctl Daemon                       │
+│                    firewall-daemon Daemon                       │
 │                                                      │
 │  ┌─────────────────────────────────────────────┐    │
 │  │               Main Loop (epoll)              │    │
@@ -265,7 +265,7 @@ http://<host>:9119/metrics
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `firewall_banned_ips_total` | gauge | Current number of banned IPs |
+| `firewall_kernel_banned_ips_current` | gauge | Current number of banned IPs |
 | `firewall_ban_events_total` | counter | Total ban events since startup |
 | `firewall_unban_events_total` | counter | Total unban events since startup |
 | `firewall_packets_dropped_total` | counter | Total packets dropped |
@@ -277,9 +277,9 @@ http://<host>:9119/metrics
 ### Example Output
 
 ```
-# HELP firewall_banned_ips_total Current number of banned IPs
-# TYPE firewall_banned_ips_total gauge
-firewall_banned_ips_total 15
+# HELP firewall_kernel_banned_ips_current Current number of banned IPs
+# TYPE firewall_kernel_banned_ips_current gauge
+firewall_kernel_banned_ips_current 15
 
 # HELP firewall_ban_events_total Total ban events since startup
 # TYPE firewall_ban_events_total counter

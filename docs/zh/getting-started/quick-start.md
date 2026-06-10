@@ -80,30 +80,30 @@ sudo systemctl status firewall
 ### 方法一：查看 ProcFS
 
 ```bash
-cat /proc/firewall/banned_ips
+cat /proc/firewall/bans
 ```
 
-### 方法二：使用 fwctl
+### 方法二：使用 firewall-daemon
 
 ```bash
 # 查看封禁列表
-fwctl banned
+cat /proc/firewall/bans
 
 # 查看统计信息
-fwctl stats
+cat /proc/firewall/stats
 ```
 
 ### 方法三：手动测试
 
 ```bash
 # 手动封禁一个测试 IP
-fwctl ban 192.168.1.100 3600
+echo "192.168.1.100 3600" | sudo tee /proc/firewall/bans
 
 # 确认已封禁
-fwctl banned
+cat /proc/firewall/bans
 
 # 解除封禁
-fwctl unban 192.168.1.100
+echo "unban 192.168.1.100" | sudo tee /proc/firewall/bans
 ```
 
 ## 第五步：监控
@@ -117,8 +117,8 @@ curl http://localhost:9119/metrics
 关键指标：
 
 ```
-# TYPE firewall_banned_ips_total gauge
-firewall_banned_ips_total 5
+# TYPE firewall_kernel_banned_ips_current gauge
+firewall_kernel_banned_ips_current 5
 
 # TYPE firewall_ban_events_total counter
 firewall_ban_events_total 12

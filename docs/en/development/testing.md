@@ -260,7 +260,7 @@ make daemon CFLAGS="-g -O0"
 
 # Run valgrind
 sudo valgrind --leak-check=full --show-leak-kinds=all \
-    ./fwctl start
+    ./firewall-daemon start
 
 # Run for a while then stop, check report
 ```
@@ -272,7 +272,7 @@ sudo valgrind --leak-check=full --show-leak-kinds=all \
 make asan
 
 # Run
-sudo ./fwctl asan
+sudo ./firewall-daemon asan
 
 # Check ASan output
 ```

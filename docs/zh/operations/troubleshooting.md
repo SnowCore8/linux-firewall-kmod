@@ -26,7 +26,7 @@ echo ""
 
 # 3. ProcFS
 echo "3. ProcFS"
-cat /proc/firewall/status
+cat /proc/firewall/config
 echo ""
 
 # 4. 封禁统计
@@ -83,13 +83,13 @@ Job for firewall-daemon.service failed because the control process exited with e
 journalctl -u firewall -n 50
 
 # 检查配置文件
-fwctl check-config
+firewall-daemon check-config
 
 # 检查端口占用
 ss -tlnp | grep 9119
 
 # 检查依赖库
-ldd /usr/local/sbin/fwctl
+ldd /usr/local/sbin/firewall-daemon
 ```
 
 **常见原因**：
@@ -116,7 +116,7 @@ lsmod | grep firewall
 cat /proc/firewall/whitelist
 
 # 3. 检查封禁是否成功写入
-cat /proc/firewall/banned_ips
+cat /proc/firewall/bans
 
 # 4. 检查内核日志
 dmesg | grep firewall
@@ -144,7 +144,7 @@ dmesg | grep firewall
 ```bash
 # 1. 启用调试模式
 sudo systemctl stop firewall
-sudo fwctl -d start
+sudo firewall-daemon -d start
 
 # 2. 查看匹配日志
 tail -f /var/log/firewall.log | grep "match"
@@ -171,7 +171,7 @@ echo "Failed password for root from 192.168.1.100" | \
 
 ```bash
 # 1. 检查封禁数量
-fwctl stats
+cat /proc/firewall/stats
 
 # 2. 检查哈希表使用率
 curl -s http://localhost:9119/metrics | grep hash_table
@@ -279,7 +279,7 @@ cat /sys/kernel/debug/rcu/rcu_pending
 
 ```bash
 # 收集完整诊断包
-sudo fwctl diagnose > firewall-diag-$(date +%Y%m%d).txt
+sudo firewall-daemon diagnose > firewall-diag-$(date +%Y%m%d).txt
 ```
 
 ### 报告问题

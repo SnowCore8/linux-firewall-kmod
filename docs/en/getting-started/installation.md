@@ -104,7 +104,7 @@ sudo make install
 After installation:
 
 - Kernel module `firewall.ko` is installed to `/lib/modules/$(uname -r)/extra/`
-- Daemon `fwctl` is installed to `/usr/local/sbin/`
+- Daemon `firewall-daemon` is installed to `/usr/local/sbin/`
 - Configuration file is installed to `/etc/firewall/default.yaml`
 - systemd service file is installed to `/etc/systemd/system/`
 
@@ -138,7 +138,7 @@ sudo systemctl status firewall
 ### Check Kernel Module
 
 ```bash
-cat /proc/firewall/status
+cat /proc/firewall/config
 ```
 
 Expected output:
@@ -157,7 +157,7 @@ Whitelist capacity: 64
 ### Check Daemon
 
 ```bash
-fwctl status
+cat /proc/firewall/config
 ```
 
 ### Check Prometheus Metrics

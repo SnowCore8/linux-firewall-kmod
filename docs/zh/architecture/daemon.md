@@ -1,10 +1,10 @@
 # 用户态守护进程
 
-本文档介绍用户态守护进程 `fwctl` 的设计和实现。
+本文档介绍用户态守护进程 `firewall-daemon` 的设计和实现。
 
 ## 概述
 
-守护进程 `fwctl` 运行在用户空间，负责：
+守护进程 `firewall-daemon` 运行在用户空间，负责：
 
 - 监控日志文件变化
 - 使用 PCRE2 正则匹配封禁模式
@@ -27,7 +27,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                    fwctl 守护进程                     │
+│                    firewall-daemon 守护进程                     │
 │                                                      │
 │  ┌─────────────────────────────────────────────┐    │
 │  │               主循环 (epoll)                 │    │
@@ -264,7 +264,7 @@ http://<host>:9119/metrics
 
 | 指标 | 类型 | 说明 |
 |------|------|------|
-| `firewall_banned_ips_total` | gauge | 当前封禁 IP 数 |
+| `firewall_kernel_banned_ips_current` | gauge | 当前封禁 IP 数 |
 | `firewall_ban_events_total` | counter | 累计封禁次数 |
 | `firewall_unban_events_total` | counter | 累计解封次数 |
 | `firewall_packets_dropped_total` | counter | 累计丢弃数据包数 |
@@ -276,9 +276,9 @@ http://<host>:9119/metrics
 ### 示例输出
 
 ```
-# HELP firewall_banned_ips_total Current number of banned IPs
-# TYPE firewall_banned_ips_total gauge
-firewall_banned_ips_total 15
+# HELP firewall_kernel_banned_ips_current Current number of banned IPs
+# TYPE firewall_kernel_banned_ips_current gauge
+firewall_kernel_banned_ips_current 15
 
 # HELP firewall_ban_events_total Total ban events since startup
 # TYPE firewall_ban_events_total counter

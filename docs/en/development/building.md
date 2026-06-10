@@ -76,7 +76,7 @@ make daemon
 Output:
 
 ```
-gcc -Wall -Wextra -O2 -o fwctl \
+gcc -Wall -Wextra -O2 -o firewall-daemon \
     src/daemon/main.c \
     src/daemon/config.c \
     src/daemon/jail.c \
@@ -103,7 +103,7 @@ For detecting memory errors:
 Usage:
 
 ```bash
-sudo ./fwctl asan
+sudo ./firewall-daemon asan
 # Run for a while and check output
 ```
 
@@ -211,14 +211,14 @@ pkg-config --libs libpcre2
 
 | File | Description |
 |------|-------------|
-| `fwctl` | Daemon binary |
+| `firewall-daemon` | Daemon binary |
 
 ### Installation Locations
 
 | File | Install Path |
 |------|-------------|
 | `firewall.ko` | `/lib/modules/$(uname -r)/extra/` |
-| `fwctl` | `/usr/local/sbin/` |
+| `firewall-daemon` | `/usr/local/sbin/` |
 | `default.yaml` | `/etc/firewall/` |
 | `firewall-daemon.service` | `/etc/systemd/system/` |
 

@@ -94,5 +94,5 @@ make
 sudo make install
 
 # Start the daemon
-sudo fwctl start
+sudo firewall-daemon start
 ```

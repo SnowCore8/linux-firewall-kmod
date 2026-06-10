@@ -6,47 +6,45 @@ The Linux Firewall Kernel Module provides runtime management and monitoring thro
 
 ```
 /proc/firewall/
-├── status          # Module status
-├── banned_ips      # Currently banned IP list
-├── whitelist       # Current whitelist IP list
-├── stats           # Statistics
-├── config          # Runtime configuration (write)
-├── clear           # Clear banned list (write triggers)
-└── version         # Module version
+├── bans           # Banned list (writable: ban / unban)
+├── whitelist       # Whitelist (writable: add entries)
+├── stats           # Counters (read-only)
+└── config          # Runtime configuration (read-only)
 ```
+
+> The table above reflects the real interface. Earlier drafts documented
+> `status` / `clear` / `version` entries that do not exist in the source;
+> `config` is also read-only — writes return `-EINVAL`. To clear all
+> bans, either `unban` one by one or reload the module.
 
 ## Read Interfaces
 
-### Module Status
+### Runtime Configuration
 
 ```bash
-cat /proc/firewall/status
+cat /proc/firewall/config
 ```
 
 Output:
 
 ```
-Firewall Module Status
-======================
-Module: loaded
-Version: 1.0.0
-State: active
-Banned IPs: 15 / 4096
-Whitelisted IPs: 3 / 64
+Current Firewall Configuration:
+--------------------------------
+ban_time: 3600 seconds
+Ban entries: 15
+Whitelist entries: 3
 ```
 
 | Field | Description |
 |-------|-------------|
-| `Module` | Module load status |
-| `Version` | Module version |
-| `State` | Running state: `active`, `inactive` |
-| `Banned IPs` | Current bans / total capacity |
-| `Whitelisted IPs` | Current whitelist / total capacity |
+| `ban_time` | Default ban duration (seconds) |
+| `Ban entries` | Current ban count |
+| `Whitelist entries` | Current whitelist count |
 
 ### Banned IP List
 
 ```bash
-cat /proc/firewall/banned_ips
+cat /proc/firewall/bans
 ```
 
 Output:
@@ -113,40 +111,35 @@ Current banned:       15
 
 ### Module Version
 
-```bash
-cat /proc/firewall/version
-```
-
-Output:
-
-```
-1.0.0
-```
+The module does not expose a dedicated `version` file. The version is
+available through the kernel module identifier and `dmesg | grep firewall`
+boot log.
 
 ## Write Interfaces
 
+`/proc/firewall/config` and `/proc/firewall/stats` are read-only. All
+write operations go through `/proc/firewall/bans` and
+`/proc/firewall/whitelist`.
+
 ### Add Ban
 
-Write ban command to `config`:
-
 ```bash
-echo "ban 192.168.1.100 3600 tcp 22 sshd" | sudo tee /proc/firewall/config
+# Default duration (fw_ban_time)
+echo "1.2.3.4" | sudo tee /proc/firewall/bans
+
+# Specific duration (seconds)
+echo "1.2.3.4 3600" | sudo tee /proc/firewall/bans
+
+# Permanent ban
+echo "1.2.3.4 0" | sudo tee /proc/firewall/bans
 ```
 
-Format: `ban <ip> <duration> <protocol> <port> <jail>`
-
-| Parameter | Description |
-|-----------|-------------|
-| `ip` | IP address to ban |
-| `duration` | Ban duration (seconds), 0 = permanent |
-| `protocol` | `tcp`, `udp`, `all` |
-| `port` | Target port |
-| `jail` | Jail name (optional) |
+Format: `<ip>` or `<ip> <seconds>` (seconds, 0 = permanent)
 
 ### Remove Ban
 
 ```bash
-echo "unban 192.168.1.100" | sudo tee /proc/firewall/config
+echo "unban 1.2.3.4" | sudo tee /proc/firewall/bans
 ```
 
 Format: `unban <ip>`
@@ -154,63 +147,44 @@ Format: `unban <ip>`
 ### Add to Whitelist
 
 ```bash
-echo "whitelist 192.168.1.50" | sudo tee /proc/firewall/config
-```
+# Single IP
+echo "10.0.0.1" | sudo tee /proc/firewall/whitelist
 
-Format: `whitelist <ip>`
+# CIDR range
+echo "10.0.0.0/8" | sudo tee /proc/firewall/whitelist
+```
 
 > **Limit**: Maximum 64 whitelist entries.
 
 ### Remove from Whitelist
 
 ```bash
-echo "unwhitelist 192.168.1.50" | sudo tee /proc/firewall/config
+echo "remove 10.0.0.0/8" | sudo tee /proc/firewall/whitelist
 ```
 
-Format: `unwhitelist <ip>`
+Format: `remove <ip-or-cidr>`
 
 ### Clear All Bans
 
-```bash
-echo "clear" | sudo tee /proc/firewall/clear
-```
-
-Or write to `config`:
+The kernel module does not provide a one-shot "clear" command. To
+clear all bans:
 
 ```bash
-echo "clear" | sudo tee /proc/firewall/config
+# Option 1: unban one by one (loop in scripts)
+while read -r ip _; do
+  [ -n "$ip" ] && echo "unban $ip" | sudo tee /proc/firewall/bans >/dev/null
+done < <(awk '/^[0-9]/ {print $1}' /proc/firewall/bans)
+
+# Option 2: reload the module (resets all kernel state)
+sudo rmmod firewall && sudo insmod $(modinfo -n firewall) fw_ban_time=600
 ```
-
-### Enable/Disable Module
-
-```bash
-# Disable (stop processing packets)
-echo "disable" | sudo tee /proc/firewall/config
-
-# Enable
-echo "enable" | sudo tee /proc/firewall/config
-```
-
-## Access via fwctl
-
-The `fwctl` tool wraps ProcFS operations:
-
-| fwctl Command | ProcFS Operation |
-|---------------|-----------------|
-| `fwctl status` | Read `/proc/firewall/status` |
-| `fwctl banned` | Read `/proc/firewall/banned_ips` |
-| `fwctl whitelist` | Read `/proc/firewall/whitelist` |
-| `fwctl stats` | Read `/proc/firewall/stats` |
-| `fwctl ban <ip> <time>` | Write `/proc/firewall/config` |
-| `fwctl unban <ip>` | Write `/proc/firewall/config` |
-| `fwctl clear` | Write `/proc/firewall/clear` |
 
 ## Permission Requirements
 
 | Operation | Permission |
 |-----------|------------|
-| Read | Root or `firewall` group |
-| Write | Root |
+| Read | root or `firewall` group |
+| Write | root |
 
 ```bash
 # Create firewall group
@@ -219,7 +193,7 @@ sudo groupadd firewall
 # Add user to group
 sudo usermod -aG firewall $USER
 
-# Modify ProcFS file permissions (requires udev rule)
+# Adjust ProcFS file permissions (requires udev rule)
 ```
 
 ## Debugging

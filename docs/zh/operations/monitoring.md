@@ -22,7 +22,7 @@ scrape_configs:
 
 | 指标 | 类型 | 说明 |
 |------|------|------|
-| `firewall_banned_ips_total` | gauge | 当前封禁 IP 数量 |
+| `firewall_kernel_banned_ips_current` | gauge | 当前封禁 IP 数量 |
 | `firewall_ban_events_total` | counter | 累计封禁事件数 |
 | `firewall_unban_events_total` | counter | 累计解封事件数 |
 | `firewall_packets_dropped_total` | counter | 累计丢弃数据包数 |
@@ -49,7 +49,7 @@ scrape_configs:
 
 ```yaml
 # 当前封禁 IP 数
-firewall_banned_ips_total
+firewall_kernel_banned_ips_current
 
 # 最近 5 分钟封禁速率
 rate(firewall_ban_events_total[5m])
@@ -79,7 +79,7 @@ rate(firewall_packets_dropped_total[5m])
 ```
 Title: Current Banned IPs
 Panel: Stat
-Query: firewall_banned_ips_total
+Query: firewall_kernel_banned_ips_current
 Thresholds: 100 (warning), 1000 (critical)
 ```
 
@@ -193,7 +193,7 @@ groups:
           description: "Usage is {{ $value | humanizePercentage }}"
 
       - alert: FirewallDown
-        expr: firewall_banned_ips_total == -1
+        expr: firewall_kernel_banned_ips_current == -1
         for: 1m
         labels:
           severity: critical
@@ -231,7 +231,7 @@ if ! systemctl is-active --quiet firewall; then
 fi
 
 # 检查 ProcFS
-if [ ! -f /proc/firewall/status ]; then
+if [ ! -f /proc/firewall/config ]; then
     echo "CRITICAL: ProcFS interface not available"
     exit 2
 fi
