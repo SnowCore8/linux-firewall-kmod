@@ -7,5 +7,7 @@ jails:
     log_files:
       - /var/log/docker.log
     # 智能推断参数：max_retries=3, findtime=300, ban_time=3600
-    # 匹配 Docker 未授权访问日志
-    regex: 'http: TLS handshake error from ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+).*'
+    # 匹配 Docker API TLS 握手错误日志
+    regexes:
+      tls_error:
+        pattern: 'http: TLS handshake error from ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+).*'

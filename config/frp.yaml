@@ -5,7 +5,9 @@ jails:
   frp:
     enabled: true
     # 智能推断参数：max_retries=10, findtime=300, ban_time=1800
-    # 匹配 FRP 的 "get a user connection" 日志，提取发起连接的客户端 IP
-    regex: ".*get a user connection \\[([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+):\\d+\\]"
+    # 匹配 FRP 用户连接日志，提取发起连接的客户端 IP
+    regexes:
+      user_connection:
+        pattern: ".*get a user connection \\[([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+):\\d+\\]"
     log_files:
       - /var/log/frp.log

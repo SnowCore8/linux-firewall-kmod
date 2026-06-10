@@ -8,4 +8,6 @@ jails:
       - /var/log/mail.log
       - /var/log/maillog
     # 智能推断参数：max_retries=5, findtime=300, ban_time=1800
-    regex: "warning:.*\\[([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)\\]: SASL.*authentication failure"
+    regexes:
+      sasl_auth_failed:
+        pattern: "warning:.*\\[([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)\\]: SASL.*authentication failure"

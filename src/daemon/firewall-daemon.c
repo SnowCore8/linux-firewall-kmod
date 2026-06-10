@@ -178,12 +178,8 @@ void cleanup(void) {
     }
     jail->log_count = 0;
 
-    /* 释放正则表达式 */
-    free_jail_regex(jail);
-    if (jail->regex_pattern) {
-      free(jail->regex_pattern);
-      jail->regex_pattern = NULL;
-    }
+    /* 释放正则表达式（完全释放） */
+    free_jail_regex_full(jail);
 
     /* 修复 2.3：删除废弃的 failed_table 清理代码（仅使用 khash） */
     memset(jail->failed_hash_table, 0, sizeof(jail->failed_hash_table));

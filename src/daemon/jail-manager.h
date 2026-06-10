@@ -10,8 +10,11 @@
 /* 使用全局配置的默认值初始化 jail */
 void init_jail_defaults(struct jail *j);
 
-/* 释放 jail 正则表达式 */
+/* 释放 jail 正则表达式（仅释放编译对象，保留 pattern） */
 void free_jail_regex(struct jail *j);
+
+/* 完全释放 jail 正则表达式（释放 pattern 和编译对象） */
+void free_jail_regex_full(struct jail *j);
 
 /* 查找现有 jail 或创建新的 */
 struct jail *find_or_create_jail(const char *name);

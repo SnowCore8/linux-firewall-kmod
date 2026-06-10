@@ -9,4 +9,6 @@ jails:
       - /var/log/redis/redis-server.log
     # 智能推断参数：max_retries=3, findtime=300, ban_time=3600
     # 匹配 Redis 密码错误日志
-    regex: 'Client ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+).*invalid password'
+    regexes:
+      invalid_password:
+        pattern: 'Client ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+).*invalid password'

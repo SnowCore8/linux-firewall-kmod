@@ -145,9 +145,9 @@ void apply_smart_defaults_to_all(struct config *target_cfg) {
 void init_jail_defaults(struct jail *j) {
   j->enabled = true;
   j->log_count = 0;
-  j->regex_pattern = NULL;
+  j->regex_count = 0;
   j->regex_compiled = 0;
-  memset(&j->compiled_regex, 0, sizeof(j->compiled_regex));
+  memset(j->regexes, 0, sizeof(j->regexes));
   /* 注意：max_retries/findtime/ban_time 将在 apply_smart_defaults 中设置 */
   j->_max_retries_set = false;
   j->_findtime_set = false;
@@ -162,17 +162,41 @@ void init_jail_defaults(struct jail *j) {
   }
 }
 
-/* 释放 jail 正则表达式 */
+/* 释放 jail 正则表达式 - 仅释放编译对象，保留 pattern */
 void free_jail_regex(struct jail *j) {
-  if (j && j->regex_compiled) {
-    if (j->compiled_regex)
-      pcre2_code_free(j->compiled_regex);
-    if (j->match_data)
-      pcre2_match_data_free(j->match_data);
-    j->compiled_regex = NULL;
-    j->match_data = NULL;
-    j->regex_compiled = 0;
+  if (!j)
+    return;
+  for (int i = 0; i < j->regex_count; i++) {
+    if (j->regexes[i].compiled) {
+      pcre2_code_free(j->regexes[i].compiled);
+      j->regexes[i].compiled = NULL;
+    }
+    if (j->regexes[i].match_data) {
+      pcre2_match_data_free(j->regexes[i].match_data);
+      j->regexes[i].match_data = NULL;
+    }
   }
+  j->regex_compiled = 0;
+}
+
+/* 完全释放 jail 正则表达式 - 释放 pattern 和编译对象 */
+void free_jail_regex_full(struct jail *j) {
+  if (!j)
+    return;
+  for (int i = 0; i < j->regex_count; i++) {
+    free(j->regexes[i].pattern);
+    j->regexes[i].pattern = NULL;
+    if (j->regexes[i].compiled) {
+      pcre2_code_free(j->regexes[i].compiled);
+      j->regexes[i].compiled = NULL;
+    }
+    if (j->regexes[i].match_data) {
+      pcre2_match_data_free(j->regexes[i].match_data);
+      j->regexes[i].match_data = NULL;
+    }
+  }
+  j->regex_count = 0;
+  j->regex_compiled = 0;
 }
 
 /* 查找现有 jail 或创建新的 */
@@ -220,12 +244,8 @@ void destroy_jail(struct jail *j) {
   }
   j->log_count = 0;
 
-  /* 释放正则表达式 */
-  free_jail_regex(j);
-  if (j->regex_pattern) {
-    free(j->regex_pattern);
-    j->regex_pattern = NULL;
-  }
+  /* 释放正则表达式（完全释放，包括 pattern） */
+  free_jail_regex_full(j);
 
   /* 修复 2.3：删除废弃的 failed_table 清理代码（仅使用 khash） */
   memset(j->failed_hash_table, 0, sizeof(j->failed_hash_table));
@@ -255,8 +275,8 @@ static int validate_regex_safety(struct jail *j, const char *pattern) {
   size_t pattern_len;
   int pipe_count = 0;
 
-  if (!j->regex_pattern || strlen(j->regex_pattern) == 0)
-    return 0; /* 使用内置默认模式，跳过验证 */
+  if (!pattern || strlen(pattern) == 0)
+    return 0; /* 空模式跳过验证 */
 
   pattern_len = strlen(pattern);
 
@@ -390,58 +410,55 @@ static int compile_pcre2_pattern(struct jail *j, const char *pattern,
   return 0;
 }
 
-/* 使用 PCRE2 编译 jail 的正则表达式 */
+/* 使用 PCRE2 编译 jail 的所有正则表达式 */
 int compile_jail_regex(struct jail *j) {
-  int ret = -1;
-  pcre2_code *re = NULL;
-  pcre2_match_data *md = NULL;
-
   if (!j)
-    goto cleanup;
+    return -1;
 
-  /* 如果已编译则释放现有正则表达式 */
-  if (j->regex_compiled) {
-    if (j->compiled_regex)
-      pcre2_code_free(j->compiled_regex);
-    if (j->match_data)
-      pcre2_match_data_free(j->match_data);
-    j->compiled_regex = NULL;
-    j->match_data = NULL;
-    j->regex_compiled = 0;
+  /* 如果已编译则释放现有正则表达式的编译对象（保留 pattern） */
+  free_jail_regex(j);
+
+  /* 如果没有配置正则表达式，使用内置默认值 */
+  if (j->regex_count == 0) {
+    const char *default_pattern =
+        "Failed password for (invalid user )?[a-zA-Z0-9_.-]{1,64} from "
+        "([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})";
+    j->regexes[0].name[0] = '\0';
+    strncat(j->regexes[0].name, "default", MAX_REGEX_NAME_LEN - 1);
+    j->regexes[0].pattern = strdup(default_pattern);
+    if (!j->regexes[0].pattern)
+      return -1;
+    j->regex_count = 1;
   }
 
-  /* 使用 jail 的自定义正则表达式或内置默认值 */
-  const char *pattern =
-      (j->regex_pattern && strlen(j->regex_pattern) > 0)
-          ? j->regex_pattern
-          : "Failed password for (invalid user )?[a-zA-Z0-9_.-]{1,64} from "
-            "([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})";
+  /* 编译所有正则表达式 */
+  int compiled_count = 0;
+  for (int i = 0; i < j->regex_count; i++) {
+    if (!j->regexes[i].pattern || strlen(j->regexes[i].pattern) == 0)
+      continue;
 
-  /* 验证正则表达式模式以防止 ReDoS 攻击 */
-  if (validate_regex_safety(j, pattern) < 0)
-    goto cleanup;
+    /* 验证正则表达式模式以防止 ReDoS 攻击 */
+    if (validate_regex_safety(j, j->regexes[i].pattern) < 0)
+      continue;
 
-  /* 编译 PCRE2 模式 */
-  if (compile_pcre2_pattern(j, pattern, &re, &md) < 0)
-    goto cleanup;
+    pcre2_code *re = NULL;
+    pcre2_match_data *md = NULL;
 
-  /* 编译成功，更新 jail 结构 */
-  j->compiled_regex = re;
-  j->match_data = md;
-  j->regex_compiled = 1;
-  re = NULL; /* 防止 cleanup 释放 */
-  md = NULL; /* 防止 cleanup 释放 */
-  daemon_log_debug("Compiled regex for jail '%s'", j->name);
-  ret = 0;
+    if (compile_pcre2_pattern(j, j->regexes[i].pattern, &re, &md) < 0)
+      continue;
 
-cleanup:
-  /* 统一资源清理 */
-  if (re)
-    pcre2_code_free(re);
-  if (md)
-    pcre2_match_data_free(md);
+    /* 编译成功，存储到结构体 */
+    j->regexes[i].compiled = re;
+    j->regexes[i].match_data = md;
+    compiled_count++;
+    daemon_log_info("Compiled regex '%s' for jail '%s': %s",
+                    j->regexes[i].name, j->name, j->regexes[i].pattern);
+  }
 
-  return ret;
+  j->regex_compiled = (compiled_count > 0) ? 1 : 0;
+  daemon_log_info("Compiled %d regex pattern(s) for jail '%s'", compiled_count,
+                  j->name);
+  return (compiled_count > 0) ? 0 : -1;
 }
 
 /* 获取 jail 日志文件的全局 file_states 索引 */
@@ -507,9 +524,9 @@ struct jail *find_or_create_jail_in_cfg(const char *name,
   struct jail *j = &target_cfg->jails[target_cfg->jail_count++];
   j->enabled = true;
   j->log_count = 0;
-  j->regex_pattern = NULL;
-  memset(&j->compiled_regex, 0, sizeof(j->compiled_regex));
+  j->regex_count = 0;
   j->regex_compiled = 0;
+  memset(j->regexes, 0, sizeof(j->regexes));
   /* 注意：max_retries/findtime/ban_time 保持为 0，等待
    * apply_smart_defaults_to_all() 设置 */
   j->max_retries = 0;
@@ -539,9 +556,13 @@ int clone_jail(struct jail *dst, const struct jail *src) {
   memcpy(dst, src, sizeof(*dst));
 
   /* 清零指针以防止 memcpy 后残留源指针导致 double-free */
-  dst->regex_pattern = NULL;
-  memset(&dst->compiled_regex, 0, sizeof(dst->compiled_regex));
+  dst->regex_count = 0;
   dst->regex_compiled = 0;
+  for (int i = 0; i < src->regex_count; i++) {
+    dst->regexes[i].pattern = NULL;
+    dst->regexes[i].compiled = NULL;
+    dst->regexes[i].match_data = NULL;
+  }
   dst->failed_hash = NULL;
 
   dst->log_count = 0;
@@ -562,16 +583,26 @@ int clone_jail(struct jail *dst, const struct jail *src) {
     }
   }
 
-  /* 克隆 regex_pattern 字符串 */
-  if (src->regex_pattern) {
-    dst->regex_pattern = strdup(src->regex_pattern);
-    if (!dst->regex_pattern) {
-      for (int j = 0; j < dst->log_count; j++) {
-        free(dst->log_files[j]);
-        dst->log_files[j] = NULL; /* 防止 double-free */
+  /* 克隆正则表达式字符串 */
+  for (int i = 0; i < src->regex_count; i++) {
+    if (src->regexes[i].pattern) {
+      dst->regexes[i].pattern = strdup(src->regexes[i].pattern);
+      if (!dst->regexes[i].pattern) {
+        for (int j = 0; j < dst->log_count; j++) {
+          free(dst->log_files[j]);
+          dst->log_files[j] = NULL;
+        }
+        for (int j = 0; j < i; j++) {
+          free(dst->regexes[j].pattern);
+        }
+        dst->log_count = 0;
+        dst->regex_count = 0;
+        return -1;
       }
-      dst->log_count = 0; /* 重置计数 */
-      return -1;
+      strncpy(dst->regexes[i].name, src->regexes[i].name,
+              MAX_REGEX_NAME_LEN - 1);
+      dst->regexes[i].name[MAX_REGEX_NAME_LEN - 1] = '\0';
+      dst->regex_count++;
     }
   }
 
@@ -659,8 +690,9 @@ fail:
     for (int j = 0; j < dst->jails[i].log_count; j++) {
       free(dst->jails[i].log_files[j]);
     }
-    if (dst->jails[i].regex_pattern)
-      free(dst->jails[i].regex_pattern);
+    for (int j = 0; j < dst->jails[i].regex_count; j++) {
+      free(dst->jails[i].regexes[j].pattern);
+    }
   }
   free(dst);
   return NULL;
@@ -758,18 +790,21 @@ void free_config_partial(struct config *cfg) {
       free(jail->log_files[j]);
     }
 
-    if (jail->regex_compiled) {
-      if (jail->compiled_regex)
-        pcre2_code_free(jail->compiled_regex);
-      if (jail->match_data)
-        pcre2_match_data_free(jail->match_data);
-      jail->compiled_regex = NULL;
-      jail->match_data = NULL;
-      jail->regex_compiled = 0;
+    /* 释放正则表达式 */
+    for (int j = 0; j < jail->regex_count; j++) {
+      free(jail->regexes[j].pattern);
+      jail->regexes[j].pattern = NULL;
+      if (jail->regexes[j].compiled) {
+        pcre2_code_free(jail->regexes[j].compiled);
+        jail->regexes[j].compiled = NULL;
+      }
+      if (jail->regexes[j].match_data) {
+        pcre2_match_data_free(jail->regexes[j].match_data);
+        jail->regexes[j].match_data = NULL;
+      }
     }
-    if (jail->regex_pattern) {
-      free(jail->regex_pattern);
-    }
+    jail->regex_count = 0;
+    jail->regex_compiled = 0;
 
     /* 防御性清理：如果 failed_hash 未被迁移（如错误路径），释放防止泄漏 */
     if (jail->failed_hash) {
@@ -818,13 +853,14 @@ int init_log_patterns(void) {
       continue;
     }
 
-    if (jail->regex_pattern && strlen(jail->regex_pattern) > 0) {
+    if (jail->regex_count > 0) {
       if (compile_jail_regex(jail) < 0) {
         daemon_log_warn("Failed to compile regex for jail '%s'", jail->name);
         ret = -1;
         /* 继续为其他 jail 编译 */
       } else {
-        daemon_log_info("Compiled regex for jail '%s'", jail->name);
+        daemon_log_info("Compiled %d regex pattern(s) for jail '%s'",
+                        jail->regex_count, jail->name);
       }
     } else {
       /* Jail 将使用内置默认模式 */

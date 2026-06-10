@@ -207,61 +207,73 @@ static int match_pcre2_regex(struct jail *j, const char *line, size_t line_len,
   size_t ip_len;
   char ip_buf[INET6_ADDRSTRLEN];
 
-  regex_result = pcre2_match(j->compiled_regex, (PCRE2_SPTR)line,
-                             (PCRE2_SIZE)line_len, 0, 0, j->match_data, NULL);
+  /* 遍历所有编译后的正则表达式，任何一个匹配就返回 */
+  for (int i = 0; i < j->regex_count; i++) {
+    if (!j->regexes[i].compiled || !j->regexes[i].match_data)
+      continue;
 
-  if (regex_result < 0) {
-    if (regex_result != PCRE2_ERROR_NOMATCH) {
-      PCRE2_UCHAR errbuf[256];
-      pcre2_get_error_message(regex_result, errbuf, sizeof(errbuf));
-      daemon_log_warn("Regex error in jail '%s' pattern: %s", j->name, errbuf);
+    regex_result = pcre2_match(j->regexes[i].compiled, (PCRE2_SPTR)line,
+                               (PCRE2_SIZE)line_len, 0, 0,
+                               j->regexes[i].match_data, NULL);
+
+    if (regex_result < 0) {
+      if (regex_result != PCRE2_ERROR_NOMATCH) {
+        PCRE2_UCHAR errbuf[256];
+        pcre2_get_error_message(regex_result, errbuf, sizeof(errbuf));
+        daemon_log_warn("Regex error in jail '%s' regex '%s': %s", j->name,
+                        j->regexes[i].name, errbuf);
+      }
+      continue; /* 尝试下一个正则 */
     }
-    return 0;
-  }
 
-  ovector = pcre2_get_ovector_pointer(j->match_data);
-  num_groups = regex_result;
+    /* 匹配成功，提取 IP */
+    ovector = pcre2_get_ovector_pointer(j->regexes[i].match_data);
+    num_groups = regex_result;
 
-  /* 动态查找IP捕获组 */
-  for (int g = num_groups - 1; g >= 1; g--) {
-    if (ovector[g * 2] != PCRE2_UNSET && ovector[g * 2 + 1] > ovector[g * 2]) {
-      size_t capture_len = ovector[g * 2 + 1] - ovector[g * 2];
-      if (capture_len >= 7 && capture_len < INET6_ADDRSTRLEN) {
-        const char *capture_start = line + ovector[g * 2];
-        if (isxdigit((unsigned char)capture_start[0])) {
-          ip_group = g;
-          break;
+    /* 动态查找IP捕获组 */
+    for (int g = num_groups - 1; g >= 1; g--) {
+      if (ovector[g * 2] != PCRE2_UNSET && ovector[g * 2 + 1] > ovector[g * 2]) {
+        size_t capture_len = ovector[g * 2 + 1] - ovector[g * 2];
+        if (capture_len >= 7 && capture_len < INET6_ADDRSTRLEN) {
+          const char *capture_start = line + ovector[g * 2];
+          if (isxdigit((unsigned char)capture_start[0])) {
+            ip_group = g;
+            break;
+          }
         }
       }
     }
+
+    if (ip_group < 0) {
+      daemon_log_warn(
+          "No valid IP capture group found in regex match for jail '%s'",
+          j->name);
+      continue; /* 尝试下一个正则 */
+    }
+
+    if ((size_t)ovector[ip_group * 2 + 1] > line_len) {
+      daemon_log_warn("Regex match exceeds line length in jail '%s'", j->name);
+      continue;
+    }
+
+    ip_start = line + ovector[ip_group * 2];
+    ip_len = ovector[ip_group * 2 + 1] - ovector[ip_group * 2];
+
+    if (ip_len >= INET6_ADDRSTRLEN || ip_len == 0) {
+      daemon_log_warn("Invalid IP length in jail '%s' log: %zu", j->name,
+                      ip_len);
+      continue;
+    }
+
+    memcpy(ip_buf, ip_start, ip_len);
+    ip_buf[ip_len] = '\0';
+    strncpy(ip_out, ip_buf, ip_size - 1);
+    ip_out[ip_size - 1] = '\0';
+    atomic_fetch_add(&daemon_stats.regex_matches, 1);
+    return 1; /* 成功匹配 */
   }
 
-  if (ip_group < 0) {
-    daemon_log_warn(
-        "No valid IP capture group found in regex match for jail '%s'",
-        j->name);
-    return -1;
-  }
-
-  if ((size_t)ovector[ip_group * 2 + 1] > line_len) {
-    daemon_log_warn("Regex match exceeds line length in jail '%s'", j->name);
-    return -1;
-  }
-
-  ip_start = line + ovector[ip_group * 2];
-  ip_len = ovector[ip_group * 2 + 1] - ovector[ip_group * 2];
-
-  if (ip_len >= INET6_ADDRSTRLEN || ip_len == 0) {
-    daemon_log_warn("Invalid IP length in jail '%s' log: %zu", j->name, ip_len);
-    return -1;
-  }
-
-  memcpy(ip_buf, ip_start, ip_len);
-  ip_buf[ip_len] = '\0';
-  strncpy(ip_out, ip_buf, ip_size - 1);
-  ip_out[ip_size - 1] = '\0';
-  atomic_fetch_add(&daemon_stats.regex_matches, 1);
-  return 1;
+  return 0; /* 所有正则都不匹配 */
 }
 
 static int fallback_string_match(const char *line, char *ip_out,
@@ -283,14 +295,10 @@ int parse_log_line(struct jail *j, const char *line, char *ip_out,
     return 0;
   }
 
-  if (j && j->regex_compiled && j->compiled_regex && j->match_data) {
+  if (j && j->regex_compiled && j->regex_count > 0) {
     result = match_pcre2_regex(j, line, line_len, ip_out, ip_size);
     if (result == 1)
       return 1;
-    if (result == -1) {
-      daemon_log_err("Jail '%s' regex has no valid IP capture group", j->name);
-      return 0;
-    }
   }
 
   if (!j || !j->regex_compiled)

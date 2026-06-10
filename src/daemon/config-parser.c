@@ -26,6 +26,8 @@ struct yaml_parse_ctx {
   int in_jails_section;
   int in_defaults_section;
   int in_log_files_array;
+  int in_regexes_section; /* 标记是否在 regexes 映射中 */
+  char *current_regex_name; /* 当前正在解析的正则名称 */
   char *current_key;
   char *current_jail_name;
   int strict_mode;         /* 1=严格模式，0=兼容模式 */
@@ -58,7 +60,7 @@ static int is_valid_defaults_key(const char *key) {
 static int is_valid_jail_key(const char *key) {
   const char *valid_keys[] = {"enabled",  "log_files", "max_retries",
                               "findtime", "ban_time",  "regex",
-                              NULL};
+                              "regexes",  NULL};
   for (int i = 0; valid_keys[i]; i++) {
     if (strcmp(key, valid_keys[i]) == 0)
       return 1;
@@ -417,17 +419,30 @@ static int apply_jail_string_config(struct jail *jail, const char *key,
     daemon_log_info("Jail '%s' enabled: %s", jail->name, value);
     return 0;
   } else if (strcmp(key, "regex") == 0) {
-    /* 修复 R3-4：使用临时变量避免 OOM 时指针悬空 */
+    /* 多正则表达式支持：添加到数组 */
+    if (jail->regex_count >= MAX_REGEX_PATTERNS) {
+      daemon_log_warn("Too many regex patterns for jail '%s' (max %d)",
+                      jail->name, MAX_REGEX_PATTERNS);
+      return -1;
+    }
     char *tmp = strdup(value);
     if (!tmp) {
       if (has_error)
         *has_error = 1;
       return -1;
     }
-    if (jail->regex_pattern)
-      free(jail->regex_pattern);
-    jail->regex_pattern = tmp;
-    daemon_log_info("Jail '%s' regex set to: %s", jail->name, value);
+    /* 向后兼容：单个 regex 字符串配置 */
+    if (jail->regex_count < MAX_REGEX_PATTERNS) {
+      int idx = jail->regex_count;
+      strncpy(jail->regexes[idx].name, "default", MAX_REGEX_NAME_LEN - 1);
+      jail->regexes[idx].name[MAX_REGEX_NAME_LEN - 1] = '\0';
+      jail->regexes[idx].pattern = tmp;
+      jail->regex_count++;
+      daemon_log_info("Jail '%s' regex '%s' set to: %s", jail->name,
+                      jail->regexes[idx].name, value);
+    } else {
+      free(tmp);
+    }
     return 0;
   }
 
@@ -559,7 +574,7 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
         free(ctx.current_key);
         ctx.current_key = NULL;
       } else if (ctx.in_jails_section && ctx.current_jail_name &&
-                 !ctx.in_log_files_array) {
+                 !ctx.in_log_files_array && !ctx.in_regexes_section) {
         /* 在 jail 部分中 - 这可能是 jail 键或 jail 属性 */
         if (!ctx.current_key) {
           /* 这是当前 jail 的属性键 */
@@ -611,6 +626,31 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
             ctx.current_jail->log_count++;
           }
         }
+      } else if (ctx.in_regexes_section && ctx.current_jail &&
+                 ctx.current_regex_name) {
+        /* 在 regexes 中解析 pattern 值 */
+        if (ctx.current_key == NULL) {
+          /* 这是键（如 "pattern"） */
+          ctx.current_key = strdup(value);
+        } else if (strcmp(ctx.current_key, "pattern") == 0) {
+          int idx = ctx.current_jail->regex_count - 1;
+          if (idx >= 0 && idx < ctx.current_jail->regex_count) {
+            ctx.current_jail->regexes[idx].pattern = strdup(value);
+            if (!ctx.current_jail->regexes[idx].pattern) {
+              daemon_log_err("Out of memory allocating regex pattern");
+              error = 1;
+            } else {
+              daemon_log_info("Jail '%s' regex '%s' pattern set to: %s",
+                              ctx.current_jail->name,
+                              ctx.current_jail->regexes[idx].name, value);
+            }
+          }
+          free(ctx.current_key);
+          ctx.current_key = NULL;
+        } else {
+          free(ctx.current_key);
+          ctx.current_key = NULL;
+        }
       } else if (ctx.current_key) {
         /* 顶层键值对（不在 jails 或 defaults 中）— 复用 apply_defaults_config
          */
@@ -633,6 +673,8 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
     case YAML_SEQUENCE_START_EVENT: {
       if (ctx.current_key && strcmp(ctx.current_key, "log_files") == 0) {
         ctx.in_log_files_array = 1;
+      } else if (ctx.current_key && strcmp(ctx.current_key, "regex") == 0) {
+        ctx.in_regexes_section = 1;
       }
       /* 无论是否匹配，都需要释放 current_key */
       if (ctx.current_key) {
@@ -644,6 +686,7 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
 
     case YAML_SEQUENCE_END_EVENT:
       ctx.in_log_files_array = 0;
+      ctx.in_regexes_section = 0;
       break;
 
     case YAML_MAPPING_START_EVENT: {
@@ -655,6 +698,37 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
         ctx.in_defaults_section = 1;
         free(ctx.current_key);
         ctx.current_key = NULL;
+      } else if (ctx.in_jails_section && ctx.current_key &&
+                 strcmp(ctx.current_key, "regexes") == 0) {
+        /* 进入 regexes 映射 */
+        ctx.in_regexes_section = 1;
+        free(ctx.current_key);
+        ctx.current_key = NULL;
+      } else if (ctx.in_regexes_section && ctx.current_key &&
+                 ctx.current_jail && strcmp(ctx.current_key, "pattern") != 0) {
+        /* 在 regexes 中遇到新的正则名称（不是 pattern 键） */
+        if (ctx.current_regex_name)
+          free(ctx.current_regex_name);
+        ctx.current_regex_name = ctx.current_key;
+        ctx.current_key = NULL;
+
+        /* 分配新的正则条目 */
+        if (ctx.current_jail->regex_count >= MAX_REGEX_PATTERNS) {
+          daemon_log_warn("Too many regex patterns for jail '%s' (max %d)",
+                          ctx.current_jail->name, MAX_REGEX_PATTERNS);
+        } else {
+          int idx = ctx.current_jail->regex_count;
+          strncpy(ctx.current_jail->regexes[idx].name,
+                  ctx.current_regex_name, MAX_REGEX_NAME_LEN - 1);
+          ctx.current_jail->regexes[idx].name[MAX_REGEX_NAME_LEN - 1] = '\0';
+          ctx.current_jail->regexes[idx].pattern = NULL;
+          ctx.current_jail->regexes[idx].compiled = NULL;
+          ctx.current_jail->regexes[idx].match_data = NULL;
+          ctx.current_jail->regex_count++;
+          daemon_log_info("Jail '%s' created regex entry: '%s'",
+                          ctx.current_jail->name,
+                          ctx.current_jail->regexes[idx].name);
+        }
       } else if (ctx.in_jails_section && ctx.current_key) {
         /* 开始一个新的 jail 映射 */
         if (ctx.current_jail_name)
@@ -672,14 +746,14 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
           /* C3 修复：释放旧 jail 资源，包括 failed_hash 哈希表防止内存泄漏 */
           for (int k = 0; k < ctx.current_jail->log_count; k++)
             free(ctx.current_jail->log_files[k]);
-          if (ctx.current_jail->regex_compiled) {
-            if (ctx.current_jail->compiled_regex)
-              pcre2_code_free(ctx.current_jail->compiled_regex);
-            if (ctx.current_jail->match_data)
-              pcre2_match_data_free(ctx.current_jail->match_data);
+          /* 释放所有正则表达式 */
+          for (int k = 0; k < ctx.current_jail->regex_count; k++) {
+            free(ctx.current_jail->regexes[k].pattern);
+            if (ctx.current_jail->regexes[k].compiled)
+              pcre2_code_free(ctx.current_jail->regexes[k].compiled);
+            if (ctx.current_jail->regexes[k].match_data)
+              pcre2_match_data_free(ctx.current_jail->regexes[k].match_data);
           }
-          if (ctx.current_jail->regex_pattern)
-            free(ctx.current_jail->regex_pattern);
           /* C3 修复：在 memset 之前释放 failed_hash 哈希表及其键 */
           if (ctx.current_jail->failed_hash) {
             khint_t k;
@@ -702,17 +776,28 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
     } break;
 
     case YAML_MAPPING_END_EVENT: {
-      if (ctx.in_jails_section && !ctx.in_log_files_array) {
-        /* jail 部分结束 - 如果存在模式则编译正则表达式 */
+      if (ctx.in_regexes_section) {
+        /* 结束单个 regex 映射或 regexes section */
+        if (ctx.current_key && strcmp(ctx.current_key, "regexes") == 0) {
+          ctx.in_regexes_section = 0;
+        }
+        if (ctx.current_regex_name) {
+          free(ctx.current_regex_name);
+          ctx.current_regex_name = NULL;
+        }
+        if (ctx.current_key) {
+          free(ctx.current_key);
+          ctx.current_key = NULL;
+        }
+      } else if (ctx.in_jails_section && !ctx.in_log_files_array) {
+        /* jail 部分结束 - 编译所有正则表达式 */
         if (ctx.current_jail_name && ctx.current_jail) {
-          if (ctx.current_jail->regex_pattern &&
-              strlen(ctx.current_jail->regex_pattern) > 0) {
-            compile_jail_regex(ctx.current_jail);
-          }
+          compile_jail_regex(ctx.current_jail);
           daemon_log_info("Finished parsing jail '%s': enabled=%d, "
-                          "log_count=%d, max_retries=%u",
+                          "log_count=%d, regex_count=%d, max_retries=%u",
                           ctx.current_jail->name, ctx.current_jail->enabled,
                           ctx.current_jail->log_count,
+                          ctx.current_jail->regex_count,
                           ctx.current_jail->max_retries);
         }
         if (ctx.current_jail_name) {
@@ -925,14 +1010,14 @@ int parse_config_file(const char *config_path) {
     for (int j = 0; j < old_jail->log_count; j++) {
       free(old_jail->log_files[j]);
     }
-    if (old_jail->regex_compiled) {
-      if (old_jail->compiled_regex)
-        pcre2_code_free(old_jail->compiled_regex);
-      if (old_jail->match_data)
-        pcre2_match_data_free(old_jail->match_data);
+    /* 释放正则表达式 */
+    for (int j = 0; j < old_jail->regex_count; j++) {
+      free(old_jail->regexes[j].pattern);
+      if (old_jail->regexes[j].compiled)
+        pcre2_code_free(old_jail->regexes[j].compiled);
+      if (old_jail->regexes[j].match_data)
+        pcre2_match_data_free(old_jail->regexes[j].match_data);
     }
-    if (old_jail->regex_pattern)
-      free(old_jail->regex_pattern);
     /* failed_hash 已迁移到 new_cfg，不在此处释放 */
     memset(old_jail, 0, sizeof(struct jail));
   }
@@ -1130,14 +1215,14 @@ static int merge_config_into_global(struct config *file_cfg,
         for (int m = 0; m < old_jail->log_count; m++) {
           free(old_jail->log_files[m]);
         }
-        if (old_jail->regex_compiled) {
-          if (old_jail->compiled_regex)
-            pcre2_code_free(old_jail->compiled_regex);
-          if (old_jail->match_data)
-            pcre2_match_data_free(old_jail->match_data);
+        /* 释放正则表达式 */
+        for (int m = 0; m < old_jail->regex_count; m++) {
+          free(old_jail->regexes[m].pattern);
+          if (old_jail->regexes[m].compiled)
+            pcre2_code_free(old_jail->regexes[m].compiled);
+          if (old_jail->regexes[m].match_data)
+            pcre2_match_data_free(old_jail->regexes[m].match_data);
         }
-        if (old_jail->regex_pattern)
-          free(old_jail->regex_pattern);
 
         memcpy(old_jail, &file_cfg->jails[j], sizeof(struct jail));
         memset(&file_cfg->jails[j], 0, sizeof(struct jail));
@@ -1348,7 +1433,7 @@ int parse_config(int argc, char *argv[]) {
     cfg.jails[i].name[0] = '\0';
     cfg.jails[i].enabled = false;
     cfg.jails[i].log_count = 0;
-    cfg.jails[i].regex_pattern = NULL;
+    cfg.jails[i].regex_count = 0;
     cfg.jails[i].regex_compiled = 0;
     cfg.jails[i].failed_hash = NULL;
     for (int j = 0; j < MAX_LOG_FILES; j++) {

@@ -75,6 +75,12 @@ KHASH_MAP_INIT_STR(ip_map, struct failed_entry *)
 /* 每个 jail 最多监控的日志文件数 */
 #define MAX_LOG_FILES 10
 
+/* 每个 jail 最多支持的正则表达式数量 */
+#define MAX_REGEX_PATTERNS 10
+
+/* 正则表达式名称最大长度 */
+#define MAX_REGEX_NAME_LEN 64
+
 /* 最大 jail 数量 */
 #define MAX_JAILS 16
 
@@ -91,16 +97,24 @@ struct file_state {
   bool symlink_detected; /* 修复：标记文件是否为符号链接，防止重复处理 */
 };
 
+/* 命名正则表达式结构 */
+struct regex_info {
+  char name[MAX_REGEX_NAME_LEN];    /* 正则表达式名称（如 invalid_user） */
+  char *pattern;                    /* 正则表达式模式 */
+  pcre2_code *compiled;             /* 编译后的 PCRE2 对象 */
+  pcre2_match_data *match_data;     /* PCRE2 匹配数据 */
+};
+
 /* Jail 结构体 - 独立的监控单元 */
 struct jail {
   char name[64];                  /* Jail 名称（sshd、nginx 等） */
   bool enabled;                   /* 此 jail 是否处于活动状态 */
   char *log_files[MAX_LOG_FILES]; /* 此 jail 的日志文件 */
   int log_count;                  /* 日志文件数量 */
-  char *regex_pattern; /* 自定义正则表达式模式（NULL = 内置） */
-  pcre2_code *compiled_regex;   /* 编译后的正则表达式（PCRE2） */
-  pcre2_match_data *match_data; /* PCRE2 匹配数据缓冲区 */
-  int regex_compiled;           /* 正则表达式是否已编译 */
+  /* 多正则表达式支持 */
+  struct regex_info regexes[MAX_REGEX_PATTERNS]; /* 命名正则表达式数组 */
+  int regex_count;                              /* 正则表达式数量 */
+  int regex_compiled;                           /* 是否已编译 */
   unsigned int max_retries;     /* 封禁前的最大失败次数 */
   unsigned int findtime;        /* 统计失败次数的时间窗口 */
   unsigned int ban_time;        /* 封禁持续时间 */

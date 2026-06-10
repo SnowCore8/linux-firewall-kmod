@@ -9,4 +9,6 @@ jails:
       - /var/log/nginx/error.log
     # 智能推断参数：max_retries=10, findtime=300, ban_time=1800
     # 匹配 WordPress 认证失败日志（需要插件支持）
-    regex: 'Authentication failure for.*from ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)'
+    regexes:
+      auth_failure:
+        pattern: 'Authentication failure for.*from ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)'
