@@ -1,376 +1,137 @@
 # Testing
 
-This document describes the test framework and test cases for the Linux Firewall Kernel Module.
+This document covers the test framework and test suites for the Linux
+Firewall project.
 
-## Test Types
+## Architecture
 
-| Type | Location | Description |
-|------|----------|-------------|
-| Unit Tests | `tests/unit/` | Test individual functions and modules |
-| Integration Tests | `tests/integration/` | Test inter-component interaction |
-| Stress Tests | `tests/stress/` | Test performance and edge cases |
+```
+tests/
+├── run_tests.sh            # unified entry point
+├── test_framework.sh       # assertion functions, color output, reports
+├── test_config.sh          # path/parameter variables (KERNEL_MODULE_PATH, …)
+├── suites/                 # numbered suites (executed in 01–12 order)
+│   ├── 01_module_basic.sh
+│   ├── 02_procfs_interface.sh
+│   ├── 03_ban_unban.sh
+│   ├── 04_whitelist.sh
+│   ├── 07_concurrency.sh
+│   ├── 08_stress_perf.sh
+│   ├── 09_daemon_config.sh
+│   ├── 10_daemon_logparse.sh
+│   ├── 11_resource_mgmt.sh
+│   └── 12_permanent_ban.sh
+└── reports/                # generated reports (after running)
+```
+
+> Earlier versions split tests into `tests/{unit,integration,stress}/`.
+> Since v1.5 they have been reorganized into numbered suites sharing a
+> single framework to remove duplication.
 
 ## Running Tests
 
-### Run All Tests
-
 ```bash
+# After building, run all suites
 make test
+# Underlying command: sudo ./tests/run_tests.sh
 ```
-
-### Run Specific Tests
 
 ```bash
-# Unit tests only
-make test-unit
-
-# Integration tests only
-make test-integration
-
-# Run a single test file
-./tests/unit/test_hash_table
+# Call run_tests.sh directly
+./tests/run_tests.sh                    # run all suites
+./tests/run_tests.sh --suite 03         # only 03_ban_unban
+./tests/run_tests.sh --category security   # filter by category
+./tests/run_tests.sh --report           # write report to tests/reports/
+./tests/run_tests.sh --help             # help
 ```
 
-## Unit Tests
+## Test Suites
 
-### Hash Table Tests
+| # | File | Coverage |
+|---|------|----------|
+| 01 | `01_module_basic.sh` | Module load/unload, parameter load, sysfs readable |
+| 02 | `02_procfs_interface.sh` | `/proc/firewall/{bans,whitelist,config,stats}` R/W |
+| 03 | `03_ban_unban.sh` | Ban, unban, temporary/permanent, expiry cleanup |
+| 04 | `04_whitelist.sh` | Exact match, CIDR subnet match, capacity limit |
+| 07 | `07_concurrency.sh` | Multi-process R/W, RCU correctness |
+| 08 | `08_stress_perf.sh` | Full 4096-entry table operations, latency |
+| 09 | `09_daemon_config.sh` | YAML loading, strict-mode validation, jail parsing |
+| 10 | `10_daemon_logparse.sh` | inotify monitoring, PCRE2 matching, jail trigger |
+| 11 | `11_resource_mgmt.sh` | Memory, fds, procfs resource lifecycle |
+| 12 | `12_permanent_ban.sh` | SQLite permanent ban, cross-restart recovery |
 
-Tests kernel hash table insert, lookup, and delete operations.
+> Numbering skips 05/06: those slots were used by old suites that have
+> since been merged into the ones above.
 
-```bash
-./tests/unit/test_hash_table
-```
+## Framework Assertions
 
-Test cases:
+Suites use helpers from `tests/test_framework.sh`:
 
-| Case | Description |
-|------|-------------|
-| `test_insert` | Insert single IP |
-| `test_lookup` | Lookup existing IP |
-| `test_delete` | Delete IP |
-| `test_duplicate` | Insert duplicate IP |
-| `test_capacity` | Test 4096 capacity limit |
-| `test_expiry` | Test expiry cleanup |
+| Function | Purpose |
+|----------|---------|
+| `fw_test_header` | Print suite title |
+| `fw_subsection` | Print subsection title |
+| `fw_pass` / `fw_fail` | Mark a single case as passed/failed |
+| `assert_success <cmd> <msg>` | Assert command exits 0 |
+| `assert_true <expr> <msg>` | Assert expression is true |
+| `assert_file_exists <path>` | Assert file exists |
+| `assert_dir_exists <path>` | Assert directory exists |
+| `warn_test <msg>` | Soft warning (not counted as failure) |
 
-### Whitelist Tests
+## Module-Loading Constraints
 
-Tests whitelist add, remove, and match operations.
-
-```bash
-./tests/unit/test_whitelist
-```
-
-Test cases:
-
-| Case | Description |
-|------|-------------|
-| `test_add` | Add single IP |
-| `test_remove` | Remove IP |
-| `test_match` | Match IP |
-| `test_cidr` | CIDR subnet matching |
-| `test_capacity` | Test 64 capacity limit |
-
-### Regex Tests
-
-Tests PCRE2 regex compilation and matching.
-
-```bash
-./tests/unit/test_regex
-```
-
-Test cases:
-
-| Case | Description |
-|------|-------------|
-| `test_compile` | Compile regex expression |
-| `test_host_placeholder` | `<HOST>` placeholder replacement |
-| `test_match_ipv4` | Match IPv4 address |
-| `test_no_match` | Non-matching cases |
-| `test_invalid_regex` | Invalid regex handling |
-
-### Configuration Parsing Tests
-
-Tests YAML configuration file parsing.
-
-```bash
-./tests/unit/test_config
-```
-
-Test cases:
-
-| Case | Description |
-|------|-------------|
-| `test_parse_global` | Parse global config |
-| `test_parse_jail` | Parse jail config |
-| `test_parse_whitelist` | Parse whitelist |
-| `test_invalid_yaml` | Invalid YAML handling |
-| `test_missing_fields` | Missing required fields handling |
-
-## Integration Tests
-
-### Complete Ban Flow Test
-
-Tests the full flow from log matching to kernel banning.
-
-```bash
-sudo ./tests/integration/test_full_ban
-```
-
-Test steps:
-
-```
-1. Start test environment
-2. Load kernel module
-3. Start daemon
-4. Write test log lines
-5. Wait for inotify trigger
-6. Verify PCRE2 match
-7. Verify counter increment
-8. Verify threshold trigger
-9. Verify kernel ban
-10. Verify packets are dropped
-11. Clean up test environment
-```
-
-### Auto-Unban Test
-
-Tests automatic unban when ban expires.
-
-```bash
-sudo ./tests/integration/test_auto_unban
-```
-
-Test steps:
-
-```
-1. Ban test IP (short duration)
-2. Verify ban is active
-3. Wait for expiry
-4. Verify automatic unban
-5. Verify packets pass again
-```
-
-### ProcFS Interface Test
-
-Tests ProcFS read/write operations.
-
-```bash
-sudo ./tests/integration/test_procfs
-```
-
-Test cases:
-
-| Case | Description |
-|------|-------------|
-| `test_read_status` | Read module status |
-| `test_read_banned` | Read banned list |
-| `test_write_ban` | Write ban command |
-| `test_write_unban` | Write unban command |
-| `test_write_clear` | Write clear command |
-
-## Stress Tests
-
-### Hash Table Stress Test
-
-Tests performance at 4096 capacity.
-
-```bash
-sudo ./tests/stress/test_hash_table_stress
-```
-
-Test scenarios:
-
-| Scenario | Description |
-|----------|-------------|
-| Full table insert | Insert 4096 IPs |
-| Full table lookup | Lookup in full table |
-| Full table delete | Delete from full table |
-| Mixed operations | Insert/lookup/delete mix |
-
-### Concurrency Test
-
-Tests multi-CPU concurrent access.
-
-```bash
-sudo ./tests/stress/test_concurrent
-```
-
-Test scenarios:
-
-| Scenario | Description |
-|----------|-------------|
-| Concurrent reads | Multi-CPU concurrent lookup |
-| Concurrent writes | Multi-CPU concurrent insert |
-| Mixed R/W | Concurrent read + write |
-
-### Packet Stress Test
-
-Tests performance under high traffic.
-
-```bash
-sudo ./tests/stress/test_packet_stress
-```
-
-Use `hping3` or `nping` to generate high traffic:
-
-```bash
-# Install hping3
-sudo apt install hping3
-
-# Generate test traffic
-hping3 --flood -p 22 -S <target_ip>
-```
-
-## Test Coverage
-
-### Generate Coverage Report
-
-```bash
-# Install lcov
-sudo apt install lcov
-
-# Build with coverage flags
-make clean
-CFLAGS="--coverage" make
-
-# Run tests
-make test
-
-# Generate report
-lcov --capture --directory . --output-file coverage.info
-genhtml coverage.info --output-directory coverage-html
-```
-
-### View Report
-
-```bash
-# Open in browser
-xdg-open coverage-html/index.html
-```
+Several suites need the kernel module to be loadable. On GitHub Actions
+Azure VMs the running kernel frequently does not match the installed
+headers, so module loading can fail while functional tests still pass.
+The CI runner automatically skips module-dependent suites when this
+happens (see [ci.yml](../../../../.github/workflows/ci.yml)).
 
 ## Memory Detection
 
 ### Valgrind
 
-Detect daemon memory issues:
-
 ```bash
-# Build with debug info
 make daemon CFLAGS="-g -O0"
-
-# Run valgrind
 sudo valgrind --leak-check=full --show-leak-kinds=all \
     ./firewall-daemon -c config/default.yaml
-
-# Run for a while then stop, check report
 ```
 
 ### AddressSanitizer
 
 ```bash
-# Build ASan version
 make asan
-
-# Run
-sudo ./firewall-daemon asan
-
-# Check ASan output
+sudo ./build/daemon/firewall-daemon-asan
 ```
 
-## Kernel Module Test Tools
+Any `ERROR:` line in the ASan output indicates a memory defect.
 
-### Using kselftest
+## Writing a New Suite
 
-Linux kernel self-test framework:
+Place new tests in `tests/suites/` with the file name `NN_description.sh`
+(NN being the next available number). Each suite `source`s the framework
+and config, then uses the assertions above:
 
 ```bash
-# Run network-related self-tests
-sudo make -C tools/testing/selftests run_tests=net
+#!/bin/bash
+# 13_my_feature.sh - new feature tests
+
+source ../test_framework.sh
+source ../test_config.sh
+
+fw_test_header "New feature tests"
+
+fw_subsection "Basic behavior"
+assert_true "[[ 1 -eq 1 ]]" "trivial equality holds"
+
+fw_subsection "Boundary"
+assert_true "[[ -n \"$KERNEL_MODULE_PATH\" ]]" "KERNEL_MODULE_PATH is set"
 ```
 
-### Using ktap
+## CI Integration
 
-Kernel TAP testing:
+Tests are orchestrated by the `test` job in `.github/workflows/ci.yml`:
 
-```bash
-sudo modprobe firewall
-./tests/kernel/test_firewall.ktap
-```
-
-## CI/CD Integration
-
-### GitHub Actions Example
-
-```yaml
-name: Tests
-on: [push, pull_request]
-
-jobs:
-  build:
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            build-essential \
-            linux-headers-$(uname -r) \
-            libyaml-dev \
-            libsqlite3-dev \
-            libmicrohttpd-dev \
-            libpcre2-dev
-
-      - name: Build
-        run: make
-
-      - name: Run tests
-        run: sudo make test
-
-      - name: Run ASan tests
-        run: sudo make asan
-```
-
-## Writing New Tests
-
-### Unit Test Template
-
-```c
-#include <stdio.h>
-#include <assert.h>
-#include "../src/include/common.h"
-
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define TEST(name) \
-    void test_##name(void)
-
-#define ASSERT(cond) \
-    do { \
-        if (cond) { tests_passed++; } \
-        else { tests_failed++; printf("FAIL: %s\n", #cond); } \
-    } while(0)
-
-TEST(my_feature) {
-    // Setup
-    ...
-
-    // Execute
-    ...
-
-    // Verify
-    ASSERT(result == expected);
-}
-
-int main(void) {
-    printf("Running tests...\n");
-
-    test_my_feature();
-
-    printf("\nResults: %d passed, %d failed\n",
-           tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
-}
-```
+1. Reuses artifacts from the `build` job
+2. Runs `sudo ./tests/run_tests.sh --report` on the runner
+3. Auto-skips module-dependent suites if the module cannot load
+4. Uploads the report as a CI artifact
