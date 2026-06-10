@@ -18,18 +18,22 @@
 
 ### fail2ban 架构
 
-```
-日志 → fail2ban (Python) → iptables/nftables → Netfilter
-                              │
-                        遍历所有规则
+```mermaid
+graph TB
+    A[日志] --> B[fail2ban<br/>Python]
+    B --> C[iptables/nftables]
+    C --> D[Netfilter]
+    C -.-> E[遍历所有规则]
 ```
 
 ### Linux Firewall 架构
 
-```
-日志 → firewall-daemon (C) → /proc/firewall → Netfilter Hook
-                                    │
-                              O(1) 哈希查找
+```mermaid
+graph TB
+    A[日志] --> B[firewall-daemon<br/>C]
+    B --> C[/proc/firewall]
+    C --> D[Netfilter Hook]
+    C -.-> E[O(1) 哈希查找]
 ```
 
 ## 配置映射

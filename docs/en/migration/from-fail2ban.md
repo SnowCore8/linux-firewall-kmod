@@ -18,18 +18,22 @@ This document guides you through migrating existing fail2ban configurations to t
 
 ### fail2ban Architecture
 
-```
-Log → fail2ban (Python) → iptables/nftables → Netfilter
-                              │
-                        Traverse all rules
+```mermaid
+graph TB
+    Log[Log] --> Fail2Ban["fail2ban (Python)"]
+    Fail2Ban --> IPTables["iptables/nftables"]
+    IPTables --> Netfilter[Netfilter]
+    IPTables -. "Traverse all rules" .-> Netfilter
 ```
 
 ### Linux Firewall Architecture
 
-```
-Log → firewall-daemon (C) → /proc/firewall → Netfilter Hook
-                                    │
-                              O(1) hash lookup
+```mermaid
+graph TB
+    Log2[Log] --> Daemon["firewall-daemon (C)"]
+    Daemon --> ProcFS["/proc/firewall"]
+    ProcFS --> Hook[Netfilter Hook]
+    ProcFS -. "O(1) hash lookup" .-> Hook
 ```
 
 ## Configuration Mapping

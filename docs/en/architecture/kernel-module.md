@@ -39,29 +39,14 @@ struct nf_hook_ops nf_ops_ipv6 __read_mostly = {
 
 ### Hook Function Flow
 
-```
-Network Packet Arrives
-            │
-            ▼
-┌────────────────────┐
-│ nf_hook_func_ipv4  │ (IPv4 packets)
-│  / _ipv6           │ (IPv6 packets)
-└────────┬───────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Check Whitelist │◄── ACCEPT if matched
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Lookup Hash     │◄── DROP if in ban table
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ NF_ACCEPT       │◄── ACCEPT if not banned
-└─────────────────┘
+```mermaid
+graph TB
+    A[Network Packet Arrives] --> B[nf_hook_func_ipv4 / nf_hook_func_ipv6]
+    B --> C{Check Whitelist}
+    C -->|Matched| D[NF_ACCEPT]
+    C -->|Not Matched| E{Lookup Hash}
+    E -->|In Ban Table| F[NF_DROP]
+    E -->|Not Banned| G[NF_ACCEPT]
 ```
 
 ### Return Values
@@ -207,18 +192,13 @@ void cleanup_timer_callback(struct timer_list *t)
 
 ### Cleanup Flow
 
-```
-Cleanup Thread Wakes
-        │
-        ▼
-Iterate Hash Table
-        │
-        ▼
-Check expire_time < now
-        │
-        ├── Yes ──► Remove Entry ──► Notify Userspace
-        │
-        └── No ──► Continue
+```mermaid
+graph TB
+    A[Cleanup Thread Wakes] --> B[Iterate Hash Table]
+    B --> C{Check expire_time < now}
+    C -->|Yes| D[Remove Entry]
+    D --> E[Notify Userspace]
+    C -->|No| F[Continue]
 ```
 
 ## ProcFS Interface
@@ -251,24 +231,24 @@ static int __init firewall_proc_init(void)
 
 ### Initialization
 
-```
-module_init()
-    ├── Register Netfilter Hook
-    ├── Initialize hash table
-    ├── Initialize whitelist
-    ├── Create ProcFS interface
-    └── Start cleanup thread
+```mermaid
+graph TB
+    A[module_init] --> B[Register Netfilter Hook]
+    A --> C[Initialize hash table]
+    A --> D[Initialize whitelist]
+    A --> E[Create ProcFS interface]
+    A --> F[Start cleanup thread]
 ```
 
 ### Exit
 
-```
-module_exit()
-    ├── Stop cleanup thread
-    ├── Remove ProcFS interface
-    ├── Unregister Netfilter Hook
-    ├── Free hash table memory
-    └── Free whitelist memory
+```mermaid
+graph TB
+    A[module_exit] --> B[Stop cleanup thread]
+    A --> C[Remove ProcFS interface]
+    A --> D[Unregister Netfilter Hook]
+    A --> E[Free hash table memory]
+    A --> F[Free whitelist memory]
 ```
 
 ## Kernel Logging

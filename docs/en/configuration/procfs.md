@@ -4,12 +4,13 @@ The Linux Firewall Kernel Module provides runtime management and monitoring thro
 
 ## Interface Overview
 
-```
-/proc/firewall/
-├── bans           # Banned list (writable: ban / unban)
-├── whitelist       # Whitelist (writable: add entries)
-├── stats           # Counters (read-only)
-└── config          # Runtime configuration (read-only)
+```mermaid
+graph TB
+    root["/proc/firewall/"]
+    root --> bans["bans — Banned list (writable: ban / unban)"]
+    root --> wl["whitelist — Whitelist (writable: add entries)"]
+    root --> stats["stats — Counters (read-only)"]
+    root --> cfg["config — Runtime configuration (read-only)"]
 ```
 
 > The table above reflects the real interface. Earlier drafts documented

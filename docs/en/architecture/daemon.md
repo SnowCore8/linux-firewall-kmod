@@ -25,73 +25,60 @@ The daemon `firewall-daemon` runs in userspace and is responsible for:
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────┐
-│                    firewall-daemon Daemon                       │
-│                                                      │
-│  ┌─────────────────────────────────────────────┐    │
-│  │               Main Loop (epoll)              │    │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  │    │
-│  │  │ inotify  │  │  Timer   │  │  Signal  │  │    │
-│  │  │  Events  │  │  Events  │  │  Events  │  │    │
-│  │  └────┬─────┘  └────┬─────┘  └────┬─────┘  │    │
-│  │       │              │              │        │    │
-│  └───────┼──────────────┼──────────────┼────────┘    │
-│          │              │              │             │
-│  ┌───────▼──────────────┴──────────────┴────────┐   │
-│  │                Event Handler                  │   │
-│  │  ┌─────────────┐  ┌───────────────────────┐  │   │
-│  │  │  Log Read   │  │  Scheduled Tasks       │  │   │
-│  │  │  & PCRE2    │  │  - Expired cleanup     │  │   │
-│  │  │  Match      │  │  - Persistence sync    │  │   │
-│  │  └──────┬──────┘  └───────────────────────┘  │   │
-│  │         │                                     │   │
-│  └─────────┼─────────────────────────────────────┘   │
-│            │                                          │
-│  ┌─────────▼─────────────────────────────────────┐  │
-│  │              Jail Manager                       │  │
-│  │  ┌───────────┐  ┌───────────┐  ┌──────────┐  │  │
-│  │  │ Failure   │  │ Ban       │  │ Whitelist│  │  │
-│  │  │ Counters  │  │ Trigger   │  │ Manager  │  │  │
-│  │  └───────────┘  └───────────┘  └──────────┘  │  │
-│  └────────────────────┬──────────────────────────┘  │
-│                       │                              │
-│  ┌────────────────────┼──────────────────────────┐  │
-│  │              Output Interfaces                 │  │
-│  │  ┌──────────┐  ┌──────────┐  ┌────────────┐  │  │
-│  │  │  ProcFS  │  │  SQLite  │  │ Prometheus │  │  │
-│  │  │ (Kernel) │  │ (Persist)│  │  (:9119)   │  │  │
-│  │  └──────────┘  └──────────┘  └────────────┘  │  │
-│  └───────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Daemon["firewall-daemon Daemon"]
+        subgraph MainLoop["Main Loop (epoll)"]
+            Inotify["inotify Events"]
+            Timer["Timer Events"]
+            Signal["Signal Events"]
+        end
+
+        subgraph EventHandler["Event Handler"]
+            LogRead["Log Read & PCRE2 Match"]
+            ScheduledTasks["Scheduled Tasks<br/>- Expired cleanup<br/>- Persistence sync"]
+        end
+
+        subgraph JailManager["Jail Manager"]
+            FailureCounters["Failure Counters"]
+            BanTrigger["Ban Trigger"]
+            WhitelistManager["Whitelist Manager"]
+        end
+
+        subgraph OutputInterfaces["Output Interfaces"]
+            ProcFS["ProcFS (Kernel)"]
+            SQLite["SQLite (Persist)"]
+            Prometheus["Prometheus (:9119)"]
+        end
+
+        Inotify --> EventHandler
+        Timer --> EventHandler
+        Signal --> EventHandler
+        EventHandler --> JailManager
+        JailManager --> OutputInterfaces
+    end
 ```
 
 ## Startup Flow
 
-```
-main()
-    │
-    ├── Parse command-line arguments
-    │
-    ├── Read YAML configuration
-    │
-    ├── Initialize logging
-    │
-    ├── Initialize SQLite database
-    │   └── Restore unexpired ban records
-    │
-    ├── Compile PCRE2 regexes
-    │   └── Compile regex for each jail
-    │
-    ├── Register inotify watches
-    │   └── Add watch for each jail's log_path
-    │
-    ├── Start Prometheus HTTP server (:9119)
-    │
-    ├── Restore bans to kernel
-    │   └── Write to kernel module via ProcFS
-    │
-    └── Enter epoll main loop
+```mermaid
+graph TB
+    Start["main()"]
+    A["Parse command-line arguments"]
+    B["Read YAML configuration"]
+    C["Initialize logging"]
+    D["Initialize SQLite database"]
+    D1["Restore unexpired ban records"]
+    E["Compile PCRE2 regexes"]
+    E1["Compile regex for each jail"]
+    F["Register inotify watches"]
+    F1["Add watch for each jail's log_path"]
+    G["Start Prometheus HTTP server (:9119)"]
+    H["Restore bans to kernel"]
+    H1["Write to kernel module via ProcFS"]
+    I["Enter epoll main loop"]
+
+    Start --> A --> B --> C --> D --> D1 --> E --> E1 --> F --> F1 --> G --> H --> H1 --> I
 ```
 
 ## Log Monitoring
@@ -150,29 +137,14 @@ char *expanded = replace_all(regex, "<HOST>", HOST_PATTERN);
 
 ### Matching Flow
 
-```
-New Log Line
-    │
-    ▼
-┌──────────────┐
-│ PCRE2 Match  │
-└──────┬───────┘
-       │
-       ├── Match Success
-       │      │
-       │      ▼
-       │  Extract IP Address
-       │      │
-       │      ▼
-       │  Update Counter
-       │      │
-       │      ▼
-       │  Check Threshold ──► Reached ──► Trigger Ban
-       │
-       └── No Match
-              │
-              ▼
-           Ignore Line
+```mermaid
+graph TB
+    A["New Log Line"] --> B["PCRE2 Match"]
+    B -->|Match Success| C["Extract IP Address"]
+    C --> D["Update Counter"]
+    D --> E["Check Threshold"]
+    E -->|Reached| F["Trigger Ban"]
+    B -->|No Match| G["Ignore Line"]
 ```
 
 ## Jail Manager
@@ -192,36 +164,42 @@ struct failure_counter {
 
 ### Ban Trigger
 
-```
-Counter Updated
-    │
-    ▼
-Check: count >= max_retries?
-    │
-    ├── Yes ──► Check if within find_time window
-    │              │
-    │              ├── Yes ──► Trigger Ban
-    │              │            │
-    │              │            ├── Write to kernel (ProcFS)
-    │              │            ├── Record to SQLite
-    │              │            └── Update metrics
-    │              │
-    │              └── No ──► Reset counter
-    │
-    └── No ──► Continue monitoring
+```mermaid
+graph TB
+    A["Counter Updated"] --> B{"count >= max_retries?"}
+    B -->|Yes| C{"Within find_time window?"}
+    C -->|Yes| D["Trigger Ban"]
+    D --> E["Write to kernel (ProcFS)"]
+    D --> F["Record to SQLite"]
+    D --> G["Update metrics"]
+    C -->|No| H["Reset counter"]
+    B -->|No| I["Continue monitoring"]
 ```
 
 ### find_time Window
 
-```
-find_time = 600s
+```mermaid
+graph LR
+    subgraph Timeline["find_time = 600s"]
+        T0["t=0"]
+        T300["t=300"]
+        T600["t=600"]
+        T900["t=900"]
 
-t=0          t=300        t=600        t=900
-│            │            │            │
-├──── window ─────────────┤
-             ├──────────── window ─────┤
+        T0 --- T300 --- T600 --- T900
+    end
 
-Fail 1 ───► Fail 2 ───► Fail 3 ──► Fail 1 expires
+    F1["Fail 1"] -.-> T0
+    F2["Fail 2"] -.-> T300
+    F3["Fail 3"] -.-> T600
+    F4["Fail 1 expires"] -.-> T900
+
+    subgraph Window1["window 0-600"]
+        W1[" "]
+    end
+    subgraph Window2["window 300-900"]
+        W2[" "]
+    end
 ```
 
 ## SQLite Persistence
@@ -326,20 +304,12 @@ firewall_daemon_lines_parsed_total 1250340
 
 Triggered by `SIGHUP` signal:
 
-```
-Received SIGHUP
-    │
-    ▼
-Re-read YAML config
-    │
-    ▼
-Compare old and new config
-    │
-    ├── New jail ──► Initialize and register inotify
-    │
-    ├── Removed jail ──► Remove inotify watch
-    │
-    ├── Modified regex ──► Recompile PCRE2
-    │
-    └── Modified whitelist ──► Update kernel whitelist
+```mermaid
+graph TB
+    A["Received SIGHUP"] --> B["Re-read YAML config"]
+    B --> C["Compare old and new config"]
+    C -->|New jail| D["Initialize and register inotify"]
+    C -->|Removed jail| E["Remove inotify watch"]
+    C -->|Modified regex| F["Recompile PCRE2"]
+    C -->|Modified whitelist| G["Update kernel whitelist"]
 ```

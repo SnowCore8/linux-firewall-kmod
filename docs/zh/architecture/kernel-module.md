@@ -239,24 +239,24 @@ static int __init firewall_proc_init(void)
 
 ### 初始化
 
-```
-module_init()
-    ├── 注册 Netfilter Hook
-    ├── 初始化哈希表
-    ├── 初始化白名单
-    ├── 创建 ProcFS 接口
-    └── 启动清理线程
+```mermaid
+graph TB
+    A["module_init()"] --> B["注册 Netfilter Hook"]
+    A --> C["初始化哈希表"]
+    A --> D["初始化白名单"]
+    A --> E["创建 ProcFS 接口"]
+    A --> F["启动清理线程"]
 ```
 
 ### 退出
 
-```
-module_exit()
-    ├── 停止清理线程
-    ├── 移除 ProcFS 接口
-    ├── 注销 Netfilter Hook
-    ├── 释放哈希表内存
-    └── 释放白名单内存
+```mermaid
+graph TB
+    A["module_exit()"] --> B["停止清理线程"]
+    A --> C["移除 ProcFS 接口"]
+    A --> D["注销 Netfilter Hook"]
+    A --> E["释放哈希表内存"]
+    A --> F["释放白名单内存"]
 ```
 
 ## 内核日志

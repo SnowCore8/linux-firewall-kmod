@@ -5,23 +5,44 @@ Firewall project.
 
 ## Architecture
 
-```
-tests/
-├── run_tests.sh            # unified entry point
-├── test_framework.sh       # assertion functions, color output, reports
-├── test_config.sh          # path/parameter variables (KERNEL_MODULE_PATH, …)
-├── suites/                 # numbered suites (executed in 01–12 order)
-│   ├── 01_module_basic.sh
-│   ├── 02_procfs_interface.sh
-│   ├── 03_ban_unban.sh
-│   ├── 04_whitelist.sh
-│   ├── 07_concurrency.sh
-│   ├── 08_stress_perf.sh
-│   ├── 09_daemon_config.sh
-│   ├── 10_daemon_logparse.sh
-│   ├── 11_resource_mgmt.sh
-│   └── 12_permanent_ban.sh
-└── reports/                # generated reports (after running)
+```mermaid
+graph TD
+    ROOT["tests/"]
+    RUN["run_tests.sh unified entry point"]
+    FW["test_framework.sh assertion functions, color output, reports"]
+    CFG["test_config.sh path/parameter variables (KERNEL_MODULE_PATH, ...)"]
+
+    subgraph SUITES["suites/ numbered suites (executed in 01-12 order)"]
+        S01["01_module_basic.sh"]
+        S02["02_procfs_interface.sh"]
+        S03["03_ban_unban.sh"]
+        S04["04_whitelist.sh"]
+        S07["07_concurrency.sh"]
+        S08["08_stress_perf.sh"]
+        S09["09_daemon_config.sh"]
+        S10["10_daemon_logparse.sh"]
+        S11["11_resource_mgmt.sh"]
+        S12["12_permanent_ban.sh"]
+    end
+
+    subgraph REPORTS["reports/ generated reports (after running)"]
+    end
+
+    ROOT --> RUN
+    ROOT --> FW
+    ROOT --> CFG
+    ROOT --> SUITES
+    SUITES --> S01
+    SUITES --> S02
+    SUITES --> S03
+    SUITES --> S04
+    SUITES --> S07
+    SUITES --> S08
+    SUITES --> S09
+    SUITES --> S10
+    SUITES --> S11
+    SUITES --> S12
+    ROOT --> REPORTS
 ```
 
 > Earlier versions split tests into `tests/{unit,integration,stress}/`.

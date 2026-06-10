@@ -32,38 +32,77 @@ sudo apt install -y \
 
 ## 项目结构
 
-```
-linux-firewall-kmod/
-├── Makefile              # 主 Makefile（all / kernel-module / daemon / test）
-├── src/
-│   ├── kernel-module/    # 内核模块源码
-│   │   ├── firewall-main.c   # 模块入口 / netfilter hook 注册
-│   │   ├── ban-manager.c     # 哈希表封禁管理
-│   │   ├── whitelist.c       # 白名单（精确 + CIDR 两阶段匹配）
-│   │   ├── netfilter.c       # 包处理与封禁判定
-│   │   ├── netdev.c          # 网络设备辅助
-│   │   ├── procfs.c          # /proc/firewall/* 接口
-│   │   ├── state-persist.c   # 内核态状态保存/恢复
-│   │   ├── cleanup.c         # 模块退出清理
-│   │   └── firewall.h        # 公共头文件
-│   └── daemon/           # 用户态守护进程
-│       ├── firewall-daemon.c   # 守护进程入口
-│       ├── config-parser.c     # YAML 配置解析（严格模式）
-│       ├── file-monitor.c      # inotify 日志监听
-│       ├── failed-tracker.c    # Jail 失败计数
-│       ├── ban-manager.c       # 封禁/解封调度
-│       ├── metrics.c           # Prometheus exporter
-│       └── *.h                 # 对应头文件
-├── tests/                # 测试
-│   ├── run_tests.sh
-│   ├── test_framework.sh
-│   ├── test_config.sh
-│   ├── suites/           # 测试套件
-│   └── reports/          # 生成的报告
-├── docs/                 # HonKit 文档
-├── config/               # 示例 YAML 配置
-├── scripts/              # 辅助脚本（构建、验证、deb 打包）
-└── debian/               # Debian 打包元数据
+```mermaid
+graph TD
+    ROOT["linux-firewall-kmod/"]
+    MAKEFILE["Makefile 主 Makefile（all / kernel-module / daemon / test）"]
+
+    subgraph SRC["src/"]
+        subgraph KERNEL["kernel-module/ 内核模块源码"]
+            K_MAIN["firewall-main.c 模块入口 / netfilter hook 注册"]
+            K_BAN["ban-manager.c 哈希表封禁管理"]
+            K_WL["whitelist.c 白名单（精确 + CIDR 两阶段匹配）"]
+            K_NF["netfilter.c 包处理与封禁判定"]
+            K_ND["netdev.c 网络设备辅助"]
+            K_PF["procfs.c /proc/firewall/* 接口"]
+            K_SP["state-persist.c 内核态状态保存/恢复"]
+            K_CL["cleanup.c 模块退出清理"]
+            K_H["firewall.h 公共头文件"]
+        end
+        subgraph DAEMON["daemon/ 用户态守护进程"]
+            D_MAIN["firewall-daemon.c 守护进程入口"]
+            D_CFG["config-parser.c YAML 配置解析（严格模式）"]
+            D_MON["file-monitor.c inotify 日志监听"]
+            D_TRK["failed-tracker.c Jail 失败计数"]
+            D_BAN["ban-manager.c 封禁/解封调度"]
+            D_MET["metrics.c Prometheus exporter"]
+            D_H["*.h 对应头文件"]
+        end
+    end
+
+    subgraph TESTS["tests/ 测试"]
+        T_RUN["run_tests.sh"]
+        T_FW["test_framework.sh"]
+        T_CFG["test_config.sh"]
+        T_SUITES["suites/ 测试套件"]
+        T_RPT["reports/ 生成的报告"]
+    end
+
+    DOCS["docs/ HonKit 文档"]
+    CONFIG["config/ 示例 YAML 配置"]
+    SCRIPTS["scripts/ 辅助脚本（构建、验证、deb 打包）"]
+    DEBIAN["debian/ Debian 打包元数据"]
+
+    ROOT --> MAKEFILE
+    ROOT --> SRC
+    SRC --> KERNEL
+    KERNEL --> K_MAIN
+    KERNEL --> K_BAN
+    KERNEL --> K_WL
+    KERNEL --> K_NF
+    KERNEL --> K_ND
+    KERNEL --> K_PF
+    KERNEL --> K_SP
+    KERNEL --> K_CL
+    KERNEL --> K_H
+    SRC --> DAEMON
+    DAEMON --> D_MAIN
+    DAEMON --> D_CFG
+    DAEMON --> D_MON
+    DAEMON --> D_TRK
+    DAEMON --> D_BAN
+    DAEMON --> D_MET
+    DAEMON --> D_H
+    ROOT --> TESTS
+    TESTS --> T_RUN
+    TESTS --> T_FW
+    TESTS --> T_CFG
+    TESTS --> T_SUITES
+    TESTS --> T_RPT
+    ROOT --> DOCS
+    ROOT --> CONFIG
+    ROOT --> SCRIPTS
+    ROOT --> DEBIAN
 ```
 
 ## 代码规范

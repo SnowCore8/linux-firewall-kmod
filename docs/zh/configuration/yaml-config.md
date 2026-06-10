@@ -56,16 +56,11 @@ defaults:
 
 ### 时间参数关系
 
-```
-findtime (600s)
-├── 在此时间窗口内统计失败次数
-│
-max_retries (5)
-├── 达到此次数触发封禁
-│
-ban_time (900s)
-├── 封禁持续此时长
-└── 到期后自动解封
+```mermaid
+graph TB
+    A["findtime (600s)"] -->|"在此时间窗口内统计失败次数"| B["max_retries (5)"]
+    B -->|"达到此次数触发封禁"| C["ban_time (900s)"]
+    C -->|"封禁持续此时长"| D["到期后自动解封"]
 ```
 
 ## Jail 配置
@@ -238,10 +233,11 @@ sudo firewall-daemon -C /etc/firewall
 
 示例目录结构：
 
-```
-/etc/firewall/
-├── default.yaml      # 基础配置
-├── nginx.yaml        # 额外 nginx 防护
-├── mysql.yaml        # 额外 mysql 防护
-└── ...
+```mermaid
+graph TB
+    root["/etc/firewall/"]
+    root --> default["default.yaml — 基础配置"]
+    root --> nginx["nginx.yaml — 额外 nginx 防护"]
+    root --> mysql["mysql.yaml — 额外 mysql 防护"]
+    root --> other["..."]
 ```

@@ -12,26 +12,54 @@
 
 ## 配置层次结构
 
-```
-default.yaml
-├── global          # 全局设置
-│   ├── log_level
-│   ├── log_file
-│   └── db_path
-├── whitelist       # IP 白名单列表
-│   └[]- <IP/CIDR>
-└── jails           # Jail 定义
-    └[]- name
-        ├── enabled
-        ├── log_path
-        ├── filter
-        │   └── regex
-        ├── action
-        │   ├── ban_time
-        │   ├── find_time
-        │   └── max_retries
-        ├── port
-        └── protocol
+```mermaid
+graph TD
+    ROOT["default.yaml"]
+
+    subgraph GLOBAL["global 全局设置"]
+        G1[log_level]
+        G2[log_file]
+        G3[db_path]
+    end
+
+    subgraph WHITELIST["whitelist IP 白名单列表"]
+        W1["<IP/CIDR>"]
+    end
+
+    subgraph JAILS["jails Jail 定义"]
+        J_NAME[name]
+        J1[enabled]
+        J2[log_path]
+        J_FILTER[filter]
+        J_REGEX[regex]
+        J_ACTION[action]
+        J_BAN[ban_time]
+        J_FIND[find_time]
+        J_MAX[max_retries]
+        J_PORT[port]
+        J_PROTO[protocol]
+    end
+
+    ROOT --> GLOBAL
+    GLOBAL --> G1
+    GLOBAL --> G2
+    GLOBAL --> G3
+
+    ROOT --> WHITELIST
+    WHITELIST --> W1
+
+    ROOT --> JAILS
+    JAILS --> J_NAME
+    J_NAME --> J1
+    J_NAME --> J2
+    J_NAME --> J_FILTER
+    J_FILTER --> J_REGEX
+    J_NAME --> J_ACTION
+    J_ACTION --> J_BAN
+    J_ACTION --> J_FIND
+    J_ACTION --> J_MAX
+    J_NAME --> J_PORT
+    J_NAME --> J_PROTO
 ```
 
 ## 配置加载顺序

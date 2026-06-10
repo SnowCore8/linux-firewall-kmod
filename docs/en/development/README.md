@@ -32,38 +32,77 @@ sudo apt install -y \
 
 ## Project Structure
 
-```
-linux-firewall-kmod/
-├── Makefile              # Main Makefile (all / kernel-module / daemon / test)
-├── src/
-│   ├── kernel-module/    # Kernel module source
-│   │   ├── firewall-main.c   # Module entry / netfilter hook registration
-│   │   ├── ban-manager.c     # Hash-table ban management
-│   │   ├── whitelist.c       # Whitelist (exact + CIDR two-stage matching)
-│   │   ├── netfilter.c       # Packet handling and ban decision
-│   │   ├── netdev.c          # Network device helpers
-│   │   ├── procfs.c          # /proc/firewall/* interface
-│   │   ├── state-persist.c   # Kernel state save/restore
-│   │   ├── cleanup.c         # Module exit cleanup
-│   │   └── firewall.h        # Common header
-│   └── daemon/           # Userspace daemon
-│       ├── firewall-daemon.c   # Daemon entry
-│       ├── config-parser.c     # YAML config parsing (strict mode)
-│       ├── file-monitor.c      # inotify log monitoring
-│       ├── failed-tracker.c    # Jail failure counter
-│       ├── ban-manager.c       # Ban/unban scheduler
-│       ├── metrics.c           # Prometheus exporter
-│       └── *.h                 # Matching headers
-├── tests/                # Tests
-│   ├── run_tests.sh
-│   ├── test_framework.sh
-│   ├── test_config.sh
-│   ├── suites/           # Test suites
-│   └── reports/          # Generated reports
-├── docs/                 # HonKit documentation
-├── config/               # Example YAML configs
-├── scripts/              # Helper scripts (build, verify, deb packaging)
-└── debian/               # Debian packaging metadata
+```mermaid
+graph TD
+    ROOT["linux-firewall-kmod/"]
+    MAKEFILE["Makefile Main Makefile (all / kernel-module / daemon / test)"]
+
+    subgraph SRC["src/"]
+        subgraph KERNEL["kernel-module/ Kernel module source"]
+            K_MAIN["firewall-main.c Module entry / netfilter hook registration"]
+            K_BAN["ban-manager.c Hash-table ban management"]
+            K_WL["whitelist.c Whitelist (exact + CIDR two-stage matching)"]
+            K_NF["netfilter.c Packet handling and ban decision"]
+            K_ND["netdev.c Network device helpers"]
+            K_PF["procfs.c /proc/firewall/* interface"]
+            K_SP["state-persist.c Kernel state save/restore"]
+            K_CL["cleanup.c Module exit cleanup"]
+            K_H["firewall.h Common header"]
+        end
+        subgraph DAEMON["daemon/ Userspace daemon"]
+            D_MAIN["firewall-daemon.c Daemon entry"]
+            D_CFG["config-parser.c YAML config parsing (strict mode)"]
+            D_MON["file-monitor.c inotify log monitoring"]
+            D_TRK["failed-tracker.c Jail failure counter"]
+            D_BAN["ban-manager.c Ban/unban scheduler"]
+            D_MET["metrics.c Prometheus exporter"]
+            D_H["*.h Matching headers"]
+        end
+    end
+
+    subgraph TESTS["tests/ Tests"]
+        T_RUN["run_tests.sh"]
+        T_FW["test_framework.sh"]
+        T_CFG["test_config.sh"]
+        T_SUITES["suites/ Test suites"]
+        T_RPT["reports/ Generated reports"]
+    end
+
+    DOCS["docs/ HonKit documentation"]
+    CONFIG["config/ Example YAML configs"]
+    SCRIPTS["scripts/ Helper scripts (build, verify, deb packaging)"]
+    DEBIAN["debian/ Debian packaging metadata"]
+
+    ROOT --> MAKEFILE
+    ROOT --> SRC
+    SRC --> KERNEL
+    KERNEL --> K_MAIN
+    KERNEL --> K_BAN
+    KERNEL --> K_WL
+    KERNEL --> K_NF
+    KERNEL --> K_ND
+    KERNEL --> K_PF
+    KERNEL --> K_SP
+    KERNEL --> K_CL
+    KERNEL --> K_H
+    SRC --> DAEMON
+    DAEMON --> D_MAIN
+    DAEMON --> D_CFG
+    DAEMON --> D_MON
+    DAEMON --> D_TRK
+    DAEMON --> D_BAN
+    DAEMON --> D_MET
+    DAEMON --> D_H
+    ROOT --> TESTS
+    TESTS --> T_RUN
+    TESTS --> T_FW
+    TESTS --> T_CFG
+    TESTS --> T_SUITES
+    TESTS --> T_RPT
+    ROOT --> DOCS
+    ROOT --> CONFIG
+    ROOT --> SCRIPTS
+    ROOT --> DEBIAN
 ```
 
 ## Code Standards

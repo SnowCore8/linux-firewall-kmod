@@ -12,26 +12,54 @@ This section describes the configuration methods and options for the Linux Firew
 
 ## Configuration Hierarchy
 
-```
-default.yaml
-├── global          # Global settings
-│   ├── log_level
-│   ├── log_file
-│   └── db_path
-├── whitelist       # IP whitelist entries
-│   └[]- <IP/CIDR>
-└── jails           # Jail definitions
-    └[]- name
-        ├── enabled
-        ├── log_path
-        ├── filter
-        │   └── regex
-        ├── action
-        │   ├── ban_time
-        │   ├── find_time
-        │   └── max_retries
-        ├── port
-        └── protocol
+```mermaid
+graph TD
+    ROOT["default.yaml"]
+
+    subgraph GLOBAL["global Global settings"]
+        G1[log_level]
+        G2[log_file]
+        G3[db_path]
+    end
+
+    subgraph WHITELIST["whitelist IP whitelist entries"]
+        W1["<IP/CIDR>"]
+    end
+
+    subgraph JAILS["jails Jail definitions"]
+        J_NAME[name]
+        J1[enabled]
+        J2[log_path]
+        J_FILTER[filter]
+        J_REGEX[regex]
+        J_ACTION[action]
+        J_BAN[ban_time]
+        J_FIND[find_time]
+        J_MAX[max_retries]
+        J_PORT[port]
+        J_PROTO[protocol]
+    end
+
+    ROOT --> GLOBAL
+    GLOBAL --> G1
+    GLOBAL --> G2
+    GLOBAL --> G3
+
+    ROOT --> WHITELIST
+    WHITELIST --> W1
+
+    ROOT --> JAILS
+    JAILS --> J_NAME
+    J_NAME --> J1
+    J_NAME --> J2
+    J_NAME --> J_FILTER
+    J_FILTER --> J_REGEX
+    J_NAME --> J_ACTION
+    J_ACTION --> J_BAN
+    J_ACTION --> J_FIND
+    J_ACTION --> J_MAX
+    J_NAME --> J_PORT
+    J_NAME --> J_PROTO
 ```
 
 ## Configuration Loading Order

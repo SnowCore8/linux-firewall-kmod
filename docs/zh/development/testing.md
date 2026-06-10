@@ -4,23 +4,44 @@
 
 ## 测试架构
 
-```
-tests/
-├── run_tests.sh            # 统一测试入口
-├── test_framework.sh       # 断言函数、彩色输出、报告生成
-├── test_config.sh          # 路径与参数变量（KERNEL_MODULE_PATH 等）
-├── suites/                 # 编号测试套件（按 01–12 顺序执行）
-│   ├── 01_module_basic.sh
-│   ├── 02_procfs_interface.sh
-│   ├── 03_ban_unban.sh
-│   ├── 04_whitelist.sh
-│   ├── 07_concurrency.sh
-│   ├── 08_stress_perf.sh
-│   ├── 09_daemon_config.sh
-│   ├── 10_daemon_logparse.sh
-│   ├── 11_resource_mgmt.sh
-│   └── 12_permanent_ban.sh
-└── reports/                # 测试报告输出（运行后生成）
+```mermaid
+graph TD
+    ROOT["tests/"]
+    RUN["run_tests.sh 统一测试入口"]
+    FW["test_framework.sh 断言函数、彩色输出、报告生成"]
+    CFG["test_config.sh 路径与参数变量（KERNEL_MODULE_PATH 等）"]
+
+    subgraph SUITES["suites/ 编号测试套件（按 01-12 顺序执行）"]
+        S01["01_module_basic.sh"]
+        S02["02_procfs_interface.sh"]
+        S03["03_ban_unban.sh"]
+        S04["04_whitelist.sh"]
+        S07["07_concurrency.sh"]
+        S08["08_stress_perf.sh"]
+        S09["09_daemon_config.sh"]
+        S10["10_daemon_logparse.sh"]
+        S11["11_resource_mgmt.sh"]
+        S12["12_permanent_ban.sh"]
+    end
+
+    subgraph REPORTS["reports/ 测试报告输出（运行后生成）"]
+    end
+
+    ROOT --> RUN
+    ROOT --> FW
+    ROOT --> CFG
+    ROOT --> SUITES
+    SUITES --> S01
+    SUITES --> S02
+    SUITES --> S03
+    SUITES --> S04
+    SUITES --> S07
+    SUITES --> S08
+    SUITES --> S09
+    SUITES --> S10
+    SUITES --> S11
+    SUITES --> S12
+    ROOT --> REPORTS
 ```
 
 > 早期版本按 `tests/{unit,integration,stress}/` 拆分；v1.5 起重构为

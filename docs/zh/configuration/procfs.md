@@ -4,12 +4,13 @@ Linux Firewall 内核模块通过 `/proc/firewall/` 目录提供运行时管理�
 
 ## 接口总览
 
-```
-/proc/firewall/
-├── bans           # 封禁列表（可写：ban / unban）
-├── whitelist       # 白名单（可写：添加条目）
-├── stats           # 计数器（只读）
-└── config          # 运行时配置（只读）
+```mermaid
+graph TB
+    root["/proc/firewall/"]
+    root --> bans["bans — 封禁列表（可写：ban / unban）"]
+    root --> wl["whitelist — 白名单（可写：添加条目）"]
+    root --> stats["stats — 计数器（只读）"]
+    root --> cfg["config — 运行时配置（只读）"]
 ```
 
 > 上表即真实接口。早期文档中曾出现 `status` / `clear` / `version`

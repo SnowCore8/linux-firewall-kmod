@@ -56,16 +56,11 @@ defaults:
 
 ### Time Parameter Relationship
 
-```
-findtime (600s)
-├── Failure count accumulates within this window
-│
-max_retries (5)
-├── Ban triggers when count reaches this
-│
-ban_time (900s)
-├── Ban lasts for this duration
-└── Auto-unban after expiry
+```mermaid
+graph TB
+    A["findtime (600s)"] -->|"Failure count accumulates within this window"| B["max_retries (5)"]
+    B -->|"Ban triggers when count reaches this"| C["ban_time (900s)"]
+    C -->|"Ban lasts for this duration"| D["Auto-unban after expiry"]
 ```
 
 ## Jail Configuration
@@ -238,10 +233,11 @@ Loading order:
 
 Example directory structure:
 
-```
-/etc/firewall/
-├── default.yaml      # Base configuration
-├── nginx.yaml        # Additional nginx protection
-├── mysql.yaml        # Additional mysql protection
-└── ...
+```mermaid
+graph TB
+    root["/etc/firewall/"]
+    root --> default["default.yaml — Base configuration"]
+    root --> nginx["nginx.yaml — Additional nginx protection"]
+    root --> mysql["mysql.yaml — Additional mysql protection"]
+    root --> other["..."]
 ```

@@ -6,208 +6,78 @@ This document describes the packet flow and event flow in the Linux Firewall Ker
 
 ### Inbound Packet Flow
 
-```
-                    Network Interface
-                           │
-                           ▼
-                   ┌───────────────┐
-                   │  NIC Driver    │
-                   └───────┬───────┘
-                           │
-                           ▼
-                   ┌───────────────┐
-                   │  IP Layer Input│
-                   └───────┬───────┘
-                           │
-                           ▼
-               ╔═══════════════════════╗
-               ║  Netfilter:           ║
-               ║  PREROUTING Hook     ║
-               ║  ┌──────────────────┐ ║
-               ║  │ nf_hook_func_ipv4│ ║
-               ║  │  / _ipv6         │ ║
-               ║  └────────┬─────────┘ ║
-               ╚═══════════╪═══════════╝
-                           │
-                  ┌────────┴────────┐
-                  ▼                 ▼
-            ┌──────────┐      ┌──────────┐
-            │ In        │  Yes  │          │
-            │ Whitelist?│──────►│ ACCEPT   │
-            └────┬─────┘      └──────────┘
-                 │ No
-                 ▼
-            ┌──────────┐
-            │ In Ban    │─── Yes ──► DROP
-            │ Table?    │
-            └────┬─────┘
-                 │ No
-                 ▼
-            ┌──────────┐
-            │ ACCEPT    │
-            └──────────┘
+```mermaid
+graph TB
+    A[Network Interface] --> B[NIC Driver]
+    B --> C[IP Layer Input]
+    C --> D[Netfilter: PREROUTING Hook]
+    D --> E{In Whitelist?}
+    E -->|Yes| F[ACCEPT]
+    E -->|No| G{In Ban Table?}
+    G -->|Yes| H[DROP]
+    G -->|No| I[ACCEPT]
 ```
 
 ### Ban Decision Tree
 
-```
-Packet (src_ip, dst_port, protocol)
-            │
-            ▼
-    ┌───────────────┐
-    │ src_ip in      │
-    │ whitelist?     │
-    └───┬───────┬───┘
-        │ Yes    │ No
-        ▼       ▼
-    ACCEPT  ┌───────────────┐
-            │ (ip,port,proto)│
-            │ in ban table?  │
-            └───┬───────┬───┘
-                │ Yes    │ No
-                ▼       ▼
-            DROP    ACCEPT
+```mermaid
+graph TB
+    A["Packet (src_ip, dst_port, protocol)"] --> B{src_ip in whitelist?}
+    B -->|Yes| C[ACCEPT]
+    B -->|No| D{"(ip,port,proto) in ban table?"}
+    D -->|Yes| E[DROP]
+    D -->|No| F[ACCEPT]
 ```
 
 ## Ban Event Flow
 
 ### Complete Ban Flow
 
-```
-        Log File
-            │
-            ▼ inotify notification
-    ┌───────────────┐
-    │ Daemon reads   │
-    │ new lines      │
-    └───────┬───────┘
-            │
-            ▼ PCRE2 match
-    ┌───────────────┐
-    │ Regex match    │
-    │ successful?    │
-    └───┬───────┬───┘
-        │ No     │ Yes
-        │       ▼
-        │  ┌───────────────┐
-        │  │ Extract IP     │
-        │  └───────┬───────┘
-        │          │
-        │          ▼
-        │  ┌───────────────┐
-        │  │ Update Counter │
-        │  └───────┬───────┘
-        │          │
-        │          ▼
-        │  ┌───────────────┐
-        │  │ count >= max? │
-        │  └───┬───────┬───┘
-        │      │ No     │ Yes
-        │      │       ▼
-        │      │  ┌───────────────┐
-        │      │  │ IP in          │
-        │      │  │ whitelist?     │
-        │      │  └───┬───────┬───┘
-        │      │      │ Yes    │ No
-        │      │      │       ▼
-        │      │      │  ┌───────────────┐
-        │      │      │  │ Write to Kernel│
-        │      │      │  │ /proc/.../config│
-        │      │      │  └───────┬───────┘
-        │      │      │          │
-        │      │      │          ▼
-        │      │      │  ┌───────────────┐
-        │      │      │  │ Kernel adds to │
-        │      │      │  │ hash table     │
-        │      │      │  └───────┬───────┘
-        │      │      │          │
-        │      │      │          ▼
-        │      │      │  ┌───────────────┐
-        │      │      │  │ Record to SQLite│
-        │      │      │  └───────┬───────┘
-        │      │      │          │
-        │      │      │          ▼
-        │      │      │  ┌───────────────┐
-        │      │      │  │ Update Prometheus│
-        │      │      │  │ metrics         │
-        │      │      │  └───────────────┘
-        │      │      │
-        ▼      ▼      ▼
-     Ignore Ignore  Ban Active
+```mermaid
+graph TB
+    A[Log File] -->|inotify notification| B[Daemon reads new lines]
+    B -->|PCRE2 match| C{Regex match successful?}
+    C -->|No| D[Ignore]
+    C -->|Yes| E[Extract IP]
+    E --> F[Update Counter]
+    F --> G{count >= max?}
+    G -->|No| H[Ignore]
+    G -->|Yes| I{IP in whitelist?}
+    I -->|Yes| J[Ban Active]
+    I -->|No| K[Write to Kernel /proc/.../config]
+    K --> L[Kernel adds to hash table]
+    L --> M[Record to SQLite]
+    M --> N[Update Prometheus metrics]
+    N --> O[Ban Active]
 ```
 
 ## Unban Event Flow
 
 ### Automatic Unban
 
-```
-    Kernel Cleanup Thread (30s)
-            │
-            ▼
-    ┌───────────────┐
-    │ Iterate Hash   │
-    │ Table          │
-    └───────┬───────┘
-            │
-            ▼
-    ┌───────────────┐
-    │ expire_time   │
-    │ < current?    │
-    └───┬───────┬───┘
-        │ No     │ Yes
-        │       ▼
-        │  ┌───────────────┐
-        │  │ Remove from    │
-        │  │ hash table     │
-        │  └───────┬───────┘
-        │          │
-        │          ▼
-        │  ┌───────────────┐
-        │  │ Delete from    │
-        │  │ SQLite         │
-        │  └───────┬───────┘
-        │          │
-        │          ▼
-        │  ┌───────────────┐
-        │  │ Update Metrics │
-        │  └───────────────┘
-        │
-        ▼
-      Retain
+```mermaid
+graph TB
+    A[Kernel Cleanup Thread (30s)] --> B[Iterate Hash Table]
+    B --> C{expire_time < current?}
+    C -->|No| D[Retain]
+    C -->|Yes| E[Remove from hash table]
+    E --> F[Delete from SQLite]
+    F --> G[Update Metrics]
 ```
 
 ### Manual Unban
 
-```
-    echo "unban <ip>" | sudo tee /proc/firewall/bans
-            │
-            ▼
-    ┌───────────────┐
-    │ Write to ProcFS│
-    │ echo "unban"  │
-    └───────┬───────┘
-            │
-            ▼
-    ┌───────────────┐
-    │ Kernel removes │
-    │ from hash table│
-    └───────┬───────┘
-            │
-            ▼
-    ┌───────────────┐
-    │ Delete from    │
-    │ SQLite         │
-    └───────┬───────┘
-            │
-            ▼
-    ┌───────────────┐
-    │ Update Metrics │
-    └───────────────┘
+```mermaid
+graph TB
+    A["echo 'unban <ip>' | sudo tee /proc/firewall/bans"] --> B[Write to ProcFS echo "unban"]
+    B --> C[Kernel removes from hash table]
+    C --> D[Delete from SQLite]
+    D --> E[Update Metrics]
 ```
 
 ## Inter-Component Communication
 
-### Userspace → Kernel
+### Userspace -> Kernel
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -218,7 +88,7 @@ Packet (src_ip, dst_port, protocol)
 > The module does not provide a "clear all" command — unban one by one
 > or reload the module.
 
-### Kernel → Userspace
+### Kernel -> Userspace
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -231,56 +101,52 @@ Packet (src_ip, dst_port, protocol)
 
 | Component | Communication | Data |
 |-----------|---------------|------|
-| Daemon → SQLite | File I/O | Ban records |
-| Daemon → Prometheus | HTTP (libmicrohttpd) | Metrics data |
-| Daemon → Log | File I/O | Operation logs |
+| Daemon -> SQLite | File I/O | Ban records |
+| Daemon -> Prometheus | HTTP (libmicrohttpd) | Metrics data |
+| Daemon -> Log | File I/O | Operation logs |
 
 ## Sequence Diagrams
 
 ### Ban Sequence
 
-```
-LogFile    Daemon          Kernel        SQLite      Prometheus
-   │           │              │              │            │
-   │──IN_MODIFY─►              │              │            │
-   │           │──read line───►│              │            │
-   │           │◄──new line─── │              │            │
-   │           │                │              │            │
-   │           │──PCRE2 match──►│              │            │
-   │           │                │              │            │
-   │           │──count+1      │              │            │
-   │           │──check thresh │              │            │
-   │           │                │              │            │
-   │           │──ban 1.2.3.4──►│              │            │
-   │           │  (ProcFS)     │              │            │
-   │           │                │──add ban     │            │
-   │           │                │──►INSERT─────►            │
-   │           │                │              │            │
-   │           │                │              │◄─update metrics
-   │           │                │              │            │
-   ▼           ▼                ▼              ▼            ▼
+```mermaid
+sequenceDiagram
+    participant L as LogFile
+    participant D as Daemon
+    participant K as Kernel
+    participant S as SQLite
+    participant P as Prometheus
+
+    L->>D: IN_MODIFY
+    D->>L: read line
+    L-->>D: new line
+    D->>D: PCRE2 match
+    D->>D: count+1
+    D->>D: check thresh
+    D->>K: ban 1.2.3.4 (ProcFS)
+    K->>S: add ban / INSERT
+    D->>P: update metrics
 ```
 
 ### Packet Processing Sequence
 
-```
-Network       Kernel          Whitelist    Hash Table
-   │              │                │            │
-   │──packet──────►│                │            │
-   │              │──check whitelist─►            │
-   │              │◄──not whitelisted│            │
-   │              │                │            │
-   │              │──lookup hash─────┼───────────►│
-   │              │◄────────────────┼──not found──│
-   │              │                │            │
-   │◄──NF_ACCEPT──│                │            │
-   │              │                │            │
-   │──packet──────►│                │            │
-   │              │──lookup hash─────┼───────────►│
-   │              │◄────────────────┼──found──────│
-   │              │                │            │
-   │◄──NF_DROP────│                │            │
-   ▼              ▼                ▼            ▼
+```mermaid
+sequenceDiagram
+    participant N as Network
+    participant K as Kernel
+    participant W as Whitelist
+    participant H as Hash Table
+
+    N->>K: packet
+    K->>W: check whitelist
+    W-->>K: not whitelisted
+    K->>H: lookup hash
+    H-->>K: not found
+    K-->>N: NF_ACCEPT
+    N->>K: packet
+    K->>H: lookup hash
+    H-->>K: found
+    K-->>N: NF_DROP
 ```
 
 ## Performance Characteristics

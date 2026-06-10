@@ -23,43 +23,39 @@ Linux Firewall Kernel Module is a high-performance IP banning solution designed 
 
 ## System Architecture
 
-```
-┌─────────────────────────────────────────────────────┐
-│                   Network Packets                    │
-└──────────────────────┬──────────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│              Linux Kernel Space                       │
-│  ┌─────────────────────────────────────────────┐    │
-│  │         Netfilter Hook (PREROUTING)         │    │
-│  │  ┌─────────────┐  ┌──────────────────────┐  │    │
-│  │  │  Whitelist  │  │   Hash Table (4096)  │  │    │
-│  │  │  (64 ents)  │  │   Banned IP List     │  │    │
-│  │  └─────────────┘  └──────────────────────┘  │    │
-│  │         │                    │               │    │
-│  │         ▼                    ▼               │    │
-│  │     ALLOW              DROP Packets          │    │
-│  └─────────────────────────────────────────────┘    │
-│                       │                              │
-│              ┌────────┴────────┐                     │
-│              │   ProcFS        │                     │
-│              │  /proc/firewall  │                     │
-│              └────────┬────────┘                     │
-└───────────────────────┼──────────────────────────────┘
-                        │
-┌───────────────────────┼──────────────────────────────┐
-│              Userspace  │                              │
-│  ┌────────────────────┴─────────────────────────┐   │
-│  │           Daemon (C Language)                 │   │
-│  │  ┌───────────┐  ┌────────────┐  ┌──────────┐ │   │
-│  │  │  inotify  │  │  PCRE2     │  │ SQLite   │ │   │
-│  │  │  Monitor  │  │  Regex     │  │ Persist  │ │   │
-│  │  └───────────┘  └────────────┘  └──────────┘ │   │
-│  │  ┌────────────────────────────────────────┐  │   │
-│  │  │      Prometheus Metrics (:9119)        │  │   │
-│  │  └────────────────────────────────────────┘  │   │
-│  └──────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    NetworkPackets["Network Packets"] --> NetfilterHook
+
+    subgraph KernelSpace["Linux Kernel Space"]
+        NetfilterHook["Netfilter Hook (PREROUTING)"]
+        Whitelist["Whitelist (64 ents)"]
+        HashTable["Hash Table (4096) Banned IP List"]
+        Allow["ALLOW"]
+        Drop["DROP Packets"]
+        ProcFS["ProcFS /proc/firewall"]
+
+        NetfilterHook --> Whitelist
+        NetfilterHook --> HashTable
+        Whitelist --> Allow
+        HashTable --> Drop
+    end
+
+    subgraph Userspace["Userspace"]
+        Daemon["Daemon (C Language)"]
+        Inotify["inotify Monitor"]
+        PCRE2["PCRE2 Regex"]
+        SQLite["SQLite Persist"]
+        Prometheus["Prometheus Metrics (:9119)"]
+
+        Daemon --> Inotify
+        Daemon --> PCRE2
+        Daemon --> SQLite
+        Daemon --> Prometheus
+    end
+
+    KernelSpace --> ProcFS
+    ProcFS --> Daemon
 ```
 
 ## System Requirements
