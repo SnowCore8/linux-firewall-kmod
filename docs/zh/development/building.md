@@ -42,11 +42,11 @@ make kernel-module
 输出：
 
 ```
-make -C /lib/modules/$(uname -r)/build M=$(PWD) modules
+make -C /lib/modules/$(uname -r)/build M=$(PWD)/src/kernel-module modules
 make[1]: Entering directory '/usr/src/linux-headers-...'
-  CC [M]  /path/to/src/kernel/firewall.o
-  LD [M]  /path/to/firewall.ko
-  MODPOST /path/to/Module.symvers
+  CC [M]  src/kernel-module/firewall-main.o
+  LD [M]  src/kernel-module/firewall.ko
+  MODPOST modules
 make[1]: Leaving directory '/usr/src/linux-headers-...'
 ```
 
@@ -73,20 +73,26 @@ make debug DL=2
 make daemon
 ```
 
-输出：
+实际由 Makefile 自动生成 object 与链接命令，文档仅展示概念性
+gcc 命令（仅作示例，不可直接复制运行——源码文件列表已在
+v2.x 重构）：
 
 ```
 gcc -Wall -Wextra -O2 -o firewall-daemon \
-    src/daemon/main.c \
-    src/daemon/config.c \
-    src/daemon/jail.c \
-    src/daemon/monitor.c \
-    src/daemon/regex.c \
-    src/daemon/database.c \
-    src/daemon/metrics.c \
-    src/daemon/procfs.c \
-    -lyaml -lsqlite3 -lmicrohttpd -lpcre2-8
+    src/daemon/firewall-daemon.c \
+    src/daemon/jail-manager.c \
+    src/daemon/config-parser.c \
+    src/daemon/log-parser.c \
+    src/daemon/failed-tracker.c \
+    src/daemon/ban-manager.c \
+    src/daemon/file-monitor.c \
+    src/daemon/http-exporter.c \
+    src/daemon/sqlite-persistent.c \
+    -lpthread -lyaml -lsqlite3 -lmicrohttpd -lpcre2-8
 ```
+
+> 实际构建请使用 `make daemon`，由 Makefile 决定 source/object
+> 文件列表与编译参数。上方命令仅展示大致形状。
 
 ### AddressSanitizer 编译
 

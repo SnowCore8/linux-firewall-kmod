@@ -42,11 +42,11 @@ make kernel-module
 Output:
 
 ```
-make -C /lib/modules/$(uname -r)/build M=$(PWD) modules
+make -C /lib/modules/$(uname -r)/build M=$(PWD)/src/kernel-module modules
 make[1]: Entering directory '/usr/src/linux-headers-...'
-  CC [M]  /path/to/src/kernel/firewall.o
-  LD [M]  /path/to/firewall.ko
-  MODPOST /path/to/Module.symvers
+  CC [M]  src/kernel-module/firewall-main.o
+  LD [M]  src/kernel-module/firewall.ko
+  MODPOST modules
 make[1]: Leaving directory '/usr/src/linux-headers-...'
 ```
 
@@ -73,20 +73,25 @@ Debug level descriptions:
 make daemon
 ```
 
-Output:
+The actual build is driven by the Makefile; this gcc invocation is
+illustrative only (the source list was refactored in v2.x):
 
 ```
 gcc -Wall -Wextra -O2 -o firewall-daemon \
-    src/daemon/main.c \
-    src/daemon/config.c \
-    src/daemon/jail.c \
-    src/daemon/monitor.c \
-    src/daemon/regex.c \
-    src/daemon/database.c \
-    src/daemon/metrics.c \
-    src/daemon/procfs.c \
-    -lyaml -lsqlite3 -lmicrohttpd -lpcre2-8
+    src/daemon/firewall-daemon.c \
+    src/daemon/jail-manager.c \
+    src/daemon/config-parser.c \
+    src/daemon/log-parser.c \
+    src/daemon/failed-tracker.c \
+    src/daemon/ban-manager.c \
+    src/daemon/file-monitor.c \
+    src/daemon/http-exporter.c \
+    src/daemon/sqlite-persistent.c \
+    -lpthread -lyaml -lsqlite3 -lmicrohttpd -lpcre2-8
 ```
+
+> For actual builds, use `make daemon` — the Makefile drives the
+> object list and flags. The command above is conceptual.
 
 ### AddressSanitizer Build
 
