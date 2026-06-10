@@ -105,7 +105,3 @@ linux-firewall-kmod/
 4. Run tests (`make test`)
 5. Push branch (`git push origin feat/amazing-feature`)
 6. Create a Pull Request
-
----
-
-[中文版本](../../zh/development/README.md)

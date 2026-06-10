@@ -246,7 +246,3 @@ sudo dmesg | grep fw_fire
 | `DL=1` | 关键调试信息 |
 | `DL=2` | 详细调试信息 |
 | `DL=3` | 所有调试信息 |
-
----
-
-[English Version](../../en/configuration/procfs.md)

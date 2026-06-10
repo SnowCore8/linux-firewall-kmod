@@ -294,7 +294,3 @@
 | Netfilter Hook | 无 | RCU 读，零锁竞争 |
 | 哈希查找 | 哈希冲突 | jhash 均匀分布 |
 | 白名单查找 | 线性扫描 | 容量小（64），影响可忽略 |
-
----
-
-[English Version](../../en/architecture/data-flow.md)

@@ -89,7 +89,3 @@ CPU 0          CPU 1          CPU 2          CPU 3
 | ProcFS | 内核/用户 | 配置接口、状态查询 |
 | SQLite | 用户 | 封禁记录持久化 |
 | libmicrohttpd | 用户 | Prometheus 指标服务器 |
-
----
-
-[English Version](../../en/architecture/README.md)

@@ -172,7 +172,3 @@ sudo tail -f /var/log/fw_fire.log
 - Read [YAML Configuration](../configuration/yaml-config.md) for all configuration options
 - Check [Configuration Examples](../configuration/examples.md) for more templates
 - Learn about [Architecture](../architecture/) to understand how it works
-
----
-
-[中文版本](../../zh/getting-started/quick-start.md)

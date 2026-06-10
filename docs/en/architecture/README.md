@@ -89,7 +89,3 @@ CPU 0          CPU 1          CPU 2          CPU 3
 | ProcFS | Kernel/Userspace | Configuration interface, status queries |
 | SQLite | Userspace | Ban record persistence |
 | libmicrohttpd | Userspace | Prometheus metrics server |
-
----
-
-[中文版本](../../zh/architecture/README.md)

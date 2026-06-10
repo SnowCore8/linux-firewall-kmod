@@ -314,7 +314,3 @@ Displays the parsed current configuration.
 | `fwctl dmesg` | View kernel log |
 | `fwctl check-config` | Validate configuration |
 | `fwctl show-config` | Show configuration |
-
----
-
-[中文版本](../../zh/operations/management.md)

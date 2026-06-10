@@ -16,7 +16,3 @@
 - Linux 命令行基本操作
 - 内核模块的基本概念
 - 日志文件格式和正则表达式
-
----
-
-[English Version](../../en/getting-started/README.md)

@@ -275,7 +275,3 @@ pr_err("fw_fire: failed to register hook\n");
 ```bash
 make debug DL=2    # 启用调试级别 2
 ```
-
----
-
-[English Version](../../en/architecture/kernel-module.md)

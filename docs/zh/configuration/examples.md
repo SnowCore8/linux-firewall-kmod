@@ -332,7 +332,3 @@ jails:
     port: 25
     protocol: tcp
 ```
-
----
-
-[English Version](../../en/configuration/examples.md)

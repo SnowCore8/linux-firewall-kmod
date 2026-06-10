@@ -314,7 +314,3 @@ fwctl show-config
 | `fwctl dmesg` | 查看内核日志 |
 | `fwctl check-config` | 验证配置 |
 | `fwctl show-config` | 显示配置 |
-
----
-
-[English Version](../../en/operations/management.md)

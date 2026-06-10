@@ -204,7 +204,3 @@ sudo mokutil --import /path/to/signing_key.der
 ### Insufficient Permissions
 
 Ensure you use `sudo` or run as root for installation commands.
-
----
-
-[中文版本](../../zh/getting-started/installation.md)

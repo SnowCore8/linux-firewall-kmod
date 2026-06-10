@@ -193,7 +193,3 @@ jails:
     port: 143
     protocol: tcp
 ```
-
----
-
-[English Version](../../en/configuration/yaml-config.md)

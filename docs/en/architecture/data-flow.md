@@ -304,7 +304,3 @@ Network       Kernel          Whitelist    Hash Table
 | Netfilter Hook | None | RCU read, zero lock contention |
 | Hash lookup | Hash collisions | jhash uniform distribution |
 | Whitelist lookup | Linear scan | Small capacity (64), negligible impact |
-
----
-
-[中文版本](../../zh/architecture/data-flow.md)

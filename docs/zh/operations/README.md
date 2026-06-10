@@ -57,7 +57,3 @@ fi
 echo ""
 echo "=== Check Complete ==="
 ```
-
----
-
-[English Version](../../en/operations/README.md)

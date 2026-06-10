@@ -259,7 +259,3 @@ Solution:
 ```bash
 sudo make install
 ```
-
----
-
-[中文版本](../../zh/development/building.md)

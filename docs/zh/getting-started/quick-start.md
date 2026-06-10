@@ -172,7 +172,3 @@ sudo tail -f /var/log/fw_fire.log
 - 阅读 [YAML 配置详解](../configuration/yaml-config.md) 了解所有配置选项
 - 查看 [配置示例](../configuration/examples.md) 获取更多模板
 - 了解 [架构设计](../architecture/) 深入理解工作原理
-
----
-
-[English Version](../../en/getting-started/quick-start.md)

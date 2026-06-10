@@ -292,7 +292,3 @@ Not directly. Ban records need to be re-triggered.
 ### Q: How do I monitor post-migration effects?
 
 Use Prometheus metrics to compare ban rates and performance before and after migration.
-
----
-
-[中文版本](../../zh/migration/from-fail2ban.md)

@@ -275,7 +275,3 @@ Debug level is controlled via compile-time macro:
 ```bash
 make debug DL=2    # Enable debug level 2
 ```
-
----
-
-[中文版本](../../zh/architecture/kernel-module.md)

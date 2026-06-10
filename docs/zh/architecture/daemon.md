@@ -319,7 +319,3 @@ fw_fire_packets_dropped_total 45230
     │
     └── 修改 whitelist ──► 更新内核白名单
 ```
-
----
-
-[English Version](../../en/architecture/daemon.md)

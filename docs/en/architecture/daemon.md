@@ -320,7 +320,3 @@ Compare old and new config
     │
     └── Modified whitelist ──► Update kernel whitelist
 ```
-
----
-
-[中文版本](../../zh/architecture/daemon.md)

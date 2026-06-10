@@ -65,7 +65,3 @@ cat /etc/fw_fire/fw_fire.yaml | python3 -c "import yaml,sys; yaml.safe_load(sys.
 sudo systemctl restart fw_fire
 sudo systemctl status fw_fire
 ```
-
----
-
-[中文版本](../../zh/configuration/README.md)

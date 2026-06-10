@@ -374,7 +374,3 @@ int main(void) {
     return tests_failed > 0 ? 1 : 0;
 }
 ```
-
----
-
-[English Version](../../en/development/testing.md)

@@ -246,7 +246,3 @@ sudo dmesg | grep fw_fire
 | `DL=1` | Critical debug info |
 | `DL=2` | Verbose debug info |
 | `DL=3` | All debug info |
-
----
-
-[中文版本](../../zh/configuration/procfs.md)

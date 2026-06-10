@@ -259,7 +259,3 @@ make install: Permission denied
 ```bash
 sudo make install
 ```
-
----
-
-[English Version](../../en/development/building.md)

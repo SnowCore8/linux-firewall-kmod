@@ -292,7 +292,3 @@ sudo systemctl restart fail2ban
 ### Q: 如何监控迁移后的效果？
 
 使用 Prometheus 指标对比迁移前后的封禁率和性能。
-
----
-
-[English Version](../../en/migration/from-fail2ban.md)

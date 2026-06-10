@@ -265,7 +265,3 @@ OnUnitActiveSec=5min
 [Install]
 WantedBy=timers.target
 ```
-
----
-
-[中文版本](../../zh/operations/monitoring.md)

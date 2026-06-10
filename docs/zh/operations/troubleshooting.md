@@ -296,7 +296,3 @@ sudo fwctl diagnose > fw_fire-diag-$(date +%Y%m%d).txt
 
 - GitHub Issues: https://github.com/SnowCore8/linux-firewall-kmod/issues
 - 文档: 本 GitBook
-
----
-
-[English Version](../../en/operations/troubleshooting.md)

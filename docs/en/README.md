@@ -105,7 +105,3 @@ sudo fwctl start
 - [Operations](operations/) - Daily operations and troubleshooting
 - [Development](development/) - Building and testing
 - [Migrating from fail2ban](migration/from-fail2ban.md) - Migration guide
-
----
-
-[中文版本](../zh/README.md)

@@ -105,7 +105,3 @@ sudo fwctl start
 - [运维管理](operations/) - 日常运维和故障排查
 - [开发指南](development/) - 构建和测试
 - [从 fail2ban 迁移](migration/from-fail2ban.md) - 迁移指南
-
----
-
-[English Version](../en/README.md)

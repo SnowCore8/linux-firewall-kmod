@@ -296,7 +296,3 @@ When submitting an Issue on GitHub, please include:
 
 - GitHub Issues: https://github.com/SnowCore8/linux-firewall-kmod/issues
 - Documentation: This GitBook
-
----
-
-[中文版本](../../zh/operations/troubleshooting.md)

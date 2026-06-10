@@ -16,7 +16,3 @@ Using this project requires knowledge of:
 - Basic Linux command line operations
 - Basic concepts of kernel modules
 - Log file formats and regular expressions
-
----
-
-[中文版本](../../zh/getting-started/README.md)
