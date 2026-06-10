@@ -2,7 +2,7 @@
 
 所有重要的项目变更记录都在此文件中。
 
-## [Unreleased]
+## v2.2.0 - 统计不变量修复与文档全面升级（2026-06-10）
 
 ### 修复
 - **`/proc/firewall/stats` 重复封禁过度计数 Bug** - `__do_ban_ip_ipv4/ipv6` 在"已存在且仍有效"路径错误地既无操作又返回 0,导致上层 `__do_ban_ip` 盲目 `atomic_inc(&ban_count)` 与 `atomic_inc(&total_ban_count)`,每次重复 ban 都会污染 `total_bans`/`current_bans` 计数。修复方案:内层新增 `-EEXIST` 返回值明确区分"已有效封禁(no-op)"与"新插入"两种语义,刷新过期条目同样不再计入任一计数器(条目未离开表)。修复后统计不变量 `total_bans == current_bans + total_unbans + cleanup_expired_total` 严格成立
