@@ -4,34 +4,60 @@
 
 ## Makefile 目标
 
+> 与 `make help` 一一对齐。`make` 默认行为 = `make all`（含格式检查）。
+
 ### 主要目标
 
 | 目标 | 说明 |
 |------|------|
-| `make` | 编译全部（内核模块 + 守护进程） |
+| `make` / `make all` / `make build` | 编译全部（内核模块 + 守护进程，默认含 clang-format 检查） |
+| `make build-quick` | 同上但跳过格式检查（CI 增量构建友好） |
 | `make kernel-module` | 仅编译内核模块 |
 | `make daemon` | 仅编译守护进程 |
 | `make install` | 安装到系统 |
 | `make uninstall` | 从系统卸载 |
-| `make clean` | 清理编译产物 |
+| `make help` | 显示完整帮助 |
 
-### 调试目标
+### 调试 / Sanitizer 目标
 
 | 目标 | 说明 |
 |------|------|
-| `make debug` | 编译调试版本 |
-| `make debug DL=2` | 编译调试版本（级别 2） |
+| `make debug` | 编译调试版本（`DL=1`） |
+| `make debug DL=2` | 编译调试版本（级别 2，更详细） |
 | `make asan` | 编译 AddressSanitizer 版本 |
+| `make deb [VERSION=x.x.x]` | 构建 Debian 软件包（不指定 VERSION 则从 CHANGELOG 推断） |
 
-### 测试目标
+### 维护目标
+
+| 目标 | 说明 |
+|------|------|
+| `make format` | 自动格式化全部 C 代码（应用 clang-format） |
+| `make format-check` | 检查 C 代码格式（CI 默认调用，不合规则失败） |
+| `make clean` | 清理 `build/` 产物 |
+| `make distclean` | 清理所有生成文件（含内核模块 `.ko` / `.o` / `Module.symvers`） |
+
+### 测试与 CI 目标
 
 | 目标 | 说明 |
 |------|------|
 | `make test` | 运行所有测试（`sudo ./tests/run_tests.sh`） |
+| `make ci` | CI 完整构建：format-check + build + test |
 
 > Makefile 仅暴露 `make test`；按套件或类别过滤请直接调用
 > `./tests/run_tests.sh --suite NN` / `--category X` / `--report`，
 > 详见 [测试](testing.md)。
+
+### 跳过格式检查
+
+格式检查（clang-format）首次构建可能下载工具链较慢。两种跳过方式：
+
+```bash
+# 通过目标
+make build-quick
+
+# 通过变量
+make SKIP_FORMAT_CHECK=1 all
+```
 
 ## 构建内核模块
 

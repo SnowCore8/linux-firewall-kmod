@@ -4,34 +4,62 @@ This document describes the build system and compilation options for the Linux F
 
 ## Makefile Targets
 
+> Aligned 1:1 with `make help`. The default `make` is equivalent to
+> `make all` (runs clang-format check first).
+
 ### Primary Targets
 
 | Target | Description |
 |--------|-------------|
-| `make` | Build all (kernel module + daemon) |
+| `make` / `make all` / `make build` | Build everything (kernel module + daemon; runs clang-format check by default) |
+| `make build-quick` | Same as above, skipping format check (faster for iterative CI) |
 | `make kernel-module` | Build only the kernel module |
 | `make daemon` | Build only the daemon |
 | `make install` | Install to system |
 | `make uninstall` | Uninstall from system |
-| `make clean` | Clean build artifacts |
+| `make help` | Show full help |
 
-### Debug Targets
+### Debug / Sanitizer Targets
 
 | Target | Description |
 |--------|-------------|
-| `make debug` | Build debug version |
-| `make debug DL=2` | Build debug version (level 2) |
+| `make debug` | Build debug version (`DL=1`) |
+| `make debug DL=2` | Build debug version (level 2, more verbose) |
 | `make asan` | Build AddressSanitizer version |
+| `make deb [VERSION=x.x.x]` | Build Debian package (VERSION inferred from CHANGELOG if omitted) |
 
-### Test Targets
+### Maintenance Targets
+
+| Target | Description |
+|--------|-------------|
+| `make format` | Auto-format all C code (applies clang-format) |
+| `make format-check` | Check C code formatting (default CI gate; fails on violation) |
+| `make clean` | Clean `build/` artifacts |
+| `make distclean` | Clean all generated files (incl. kernel module `.ko` / `.o` / `Module.symvers`) |
+
+### Test and CI Targets
 
 | Target | Description |
 |--------|-------------|
 | `make test` | Run all tests (`sudo ./tests/run_tests.sh`) |
+| `make ci` | Full CI build: format-check + build + test |
 
-> The Makefile exposes only `make test`. To filter by suite or category,
-> call `./tests/run_tests.sh --suite NN` / `--category X` / `--report`
-> directly. See [Testing](testing.md) for details.
+> The Makefile exposes only `make test`. To filter by suite or
+> category, call `./tests/run_tests.sh --suite NN` /
+> `--category X` / `--report` directly. See [Testing](testing.md).
+
+### Skipping the Format Check
+
+The format check (clang-format) may take a while on first build while
+it downloads the toolchain. Two ways to skip:
+
+```bash
+# Via target
+make build-quick
+
+# Via variable
+make SKIP_FORMAT_CHECK=1 all
+```
 
 ## Building the Kernel Module
 
