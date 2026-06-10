@@ -23,9 +23,10 @@ This document describes the packet flow and event flow in the Linux Firewall Ker
                ╔═══════════════════════╗
                ║  Netfilter:           ║
                ║  PREROUTING Hook     ║
-               ║  ┌─────────────────┐  ║
-               ║  │ firewall_hook()  │  ║
-               ║  └────────┬────────┘  ║
+               ║  ┌──────────────────┐ ║
+               ║  │ nf_hook_func_ipv4│ ║
+               ║  │  / _ipv6         │ ║
+               ║  └────────┬─────────┘ ║
                ╚═══════════╪═══════════╝
                            │
                   ┌────────┴────────┐

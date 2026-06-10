@@ -22,13 +22,18 @@
 模块在 `NF_INET_PRE_ROUTING` 链上注册 Hook，这是数据包进入网络栈后的最早处理点之一。
 
 ```c
-static struct nf_hook_ops firewall_hook_ops[] __read_mostly = {
-    {
-        .hook     = firewall_hook_func,
-        .pf       = NFPROTO_IPV4,
-        .hooknum  = NF_INET_PRE_ROUTING,
-        .priority = NF_IP_PRI_FIRST,
-    },
+struct nf_hook_ops nf_ops_ipv4 __read_mostly = {
+    .hook     = nf_hook_func_ipv4,
+    .pf       = NFPROTO_IPV4,
+    .hooknum  = NF_INET_PRE_ROUTING,
+    .priority = NF_IP_PRI_FIRST,
+};
+
+struct nf_hook_ops nf_ops_ipv6 __read_mostly = {
+    .hook     = nf_hook_func_ipv6,
+    .pf       = NFPROTO_IPV6,
+    .hooknum  = NF_INET_PRE_ROUTING,
+    .priority = NF_IP_PRI_FIRST,
 };
 ```
 
@@ -38,9 +43,10 @@ static struct nf_hook_ops firewall_hook_ops[] __read_mostly = {
 网络数据包到达
       │
       ▼
-┌─────────────────┐
-│  nf_hook_func() │
-└────────┬────────┘
+┌────────────────────┐
+│ nf_hook_func_ipv4  │ （IPv4 数据包）
+│  / _ipv6           │ （IPv6 数据包）
+└────────┬───────────┘
          │
          ▼
 ┌─────────────────┐

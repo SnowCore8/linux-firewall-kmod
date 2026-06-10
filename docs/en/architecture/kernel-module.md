@@ -22,13 +22,18 @@ The kernel module `firewall.ko` is the core of the system, responsible for inter
 The module registers a hook on the `NF_INET_PRE_ROUTING` chain, one of the earliest processing points after packets enter the network stack.
 
 ```c
-static struct nf_hook_ops firewall_hook_ops[] __read_mostly = {
-    {
-        .hook     = firewall_hook_func,
-        .pf       = NFPROTO_IPV4,
-        .hooknum  = NF_INET_PRE_ROUTING,
-        .priority = NF_IP_PRI_FIRST,
-    },
+struct nf_hook_ops nf_ops_ipv4 __read_mostly = {
+    .hook     = nf_hook_func_ipv4,
+    .pf       = NFPROTO_IPV4,
+    .hooknum  = NF_INET_PRE_ROUTING,
+    .priority = NF_IP_PRI_FIRST,
+};
+
+struct nf_hook_ops nf_ops_ipv6 __read_mostly = {
+    .hook     = nf_hook_func_ipv6,
+    .pf       = NFPROTO_IPV6,
+    .hooknum  = NF_INET_PRE_ROUTING,
+    .priority = NF_IP_PRI_FIRST,
 };
 ```
 
@@ -38,9 +43,10 @@ static struct nf_hook_ops firewall_hook_ops[] __read_mostly = {
 Network Packet Arrives
             │
             ▼
-┌─────────────────┐
-│  nf_hook_func() │
-└────────┬────────┘
+┌────────────────────┐
+│ nf_hook_func_ipv4  │ (IPv4 packets)
+│  / _ipv6           │ (IPv6 packets)
+└────────┬───────────┘
          │
          ▼
 ┌─────────────────┐
