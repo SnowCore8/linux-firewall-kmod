@@ -11,5 +11,8 @@
   "license": "ISC",
   "dependencies": {
     "honkit": "^6.1.7"
+  },
+  "overrides": {
+    "tmp": ">=0.2.6"
   }
 }
