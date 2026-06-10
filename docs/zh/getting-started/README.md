@@ -2,11 +2,6 @@
 
 本章节将引导你完成 Linux Firewall 内核模块的安装和初始配置。
 
-## 目录
-
-- [安装](installation.md) - 系统要求和安装步骤
-- [快速上手](quick-start.md) - 5 分钟快速配置指南
-
 ## 工作流程
 
 1. 确认系统满足 [要求](installation.md#系统要求)

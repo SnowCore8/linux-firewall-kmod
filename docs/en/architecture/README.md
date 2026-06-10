@@ -2,12 +2,6 @@
 
 This section describes the overall architecture and core components of the Linux Firewall Kernel Module.
 
-## Table of Contents
-
-- [Kernel Module](kernel-module.md) - Kernel space implementation details
-- [Userspace Daemon](daemon.md) - Userspace daemon process
-- [Data Flow](data-flow.md) - Packet and event flows
-
 ## Overall Architecture
 
 The system consists of two main components:

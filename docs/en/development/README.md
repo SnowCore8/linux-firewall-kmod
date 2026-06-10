@@ -2,11 +2,6 @@
 
 This section covers how to develop, build, and test the Linux Firewall Kernel Module.
 
-## Table of Contents
-
-- [Building](building.md) - Build options and process
-- [Testing](testing.md) - Test framework and cases
-
 ## Development Environment
 
 ### Recommended Configuration

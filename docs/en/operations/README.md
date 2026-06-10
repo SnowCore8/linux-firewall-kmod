@@ -2,12 +2,6 @@
 
 This section covers daily operations for the Linux Firewall Kernel Module.
 
-## Table of Contents
-
-- [Management Commands](management.md) - fwctl command reference
-- [Monitoring](monitoring.md) - Prometheus and log monitoring
-- [Troubleshooting](troubleshooting.md) - Common issues and solutions
-
 ## Operations Overview
 
 ### Daily Checklist

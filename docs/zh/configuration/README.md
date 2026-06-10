@@ -2,12 +2,6 @@
 
 本章节介绍 Linux Firewall 内核模块的配置方法和选项。
 
-## 目录
-
-- [YAML 配置](yaml-config.md) - 配置文件详解
-- [配置示例](examples.md) - 常用场景配置模板
-- [ProcFS 接口](procfs.md) - 运行时配置接口
-
 ## 配置文件位置
 
 | 文件 | 路径 | 用途 |

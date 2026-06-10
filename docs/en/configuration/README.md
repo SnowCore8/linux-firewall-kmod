@@ -2,12 +2,6 @@
 
 This section describes the configuration methods and options for the Linux Firewall Kernel Module.
 
-## Table of Contents
-
-- [YAML Config](yaml-config.md) - Configuration file reference
-- [Examples](examples.md) - Common scenario templates
-- [ProcFS Interface](procfs.md) - Runtime configuration interface
-
 ## Configuration File Locations
 
 | File | Path | Purpose |

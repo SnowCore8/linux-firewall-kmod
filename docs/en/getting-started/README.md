@@ -2,11 +2,6 @@
 
 This section guides you through installing and configuring the Linux Firewall Kernel Module.
 
-## Table of Contents
-
-- [Installation](installation.md) - System requirements and installation steps
-- [Quick Start](quick-start.md) - 5-minute quick configuration guide
-
 ## Workflow
 
 1. Verify your system meets the [requirements](installation.md#system-requirements)

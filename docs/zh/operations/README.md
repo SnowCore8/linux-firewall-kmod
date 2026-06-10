@@ -2,12 +2,6 @@
 
 本章节介绍 Linux Firewall 内核模块的日常运维操作。
 
-## 目录
-
-- [管理命令](management.md) - fwctl 命令参考
-- [监控](monitoring.md) - Prometheus 和日志监控
-- [故障排查](troubleshooting.md) - 常见问题和解决方案
-
 ## 运维概览
 
 ### 日常检查清单
