@@ -1,316 +1,155 @@
 # 管理命令
 
-本文档介绍 `firewall-daemon` 命令行工具的所有命令。
-
-## firewall-daemon 概览
-
-`firewall-daemon` 是 Linux Firewall 的用户态管理工具，提供完整的命令行接口来管理封禁、白名单和查看状态。
-
-### 语法
-
-```bash
-firewall-daemon <command> [arguments]
-```
-
-### 全局选项
-
-| 选项 | 说明 |
-|------|------|
-| `-c, --config <path>` | 指定配置文件路径（默认 `/etc/firewall/default.yaml`） |
-| `-h, --help` | 显示帮助信息 |
-| `-v, --version` | 显示版本信息 |
-| `-d, --debug` | 启用调试模式 |
+本节列出 Linux Firewall 日常管理涉及的真实命令。所有运行时操作都通过
+`/proc/firewall/`（见 [ProcFS 接口](../configuration/procfs.md)）和
+systemd 完成——项目未提供额外的 CLI 封装。
 
 ## 服务管理
 
-### 启动
+| 操作 | 命令 |
+|------|------|
+| 启动守护进程 | `sudo systemctl start firewall-daemon` |
+| 停止守护进程 | `sudo systemctl stop firewall-daemon` |
+| 重启守护进程 | `sudo systemctl restart firewall-daemon` |
+| 查看服务状态 | `systemctl status firewall-daemon` |
+| 开机自启 | `sudo systemctl enable firewall-daemon` |
+| 重新加载 YAML 配置（不中断） | `sudo systemctl reload firewall-daemon` |
+| 验证配置语法 | `sudo firewall-daemon -c /etc/firewall/default.yaml` （前台运行，便于检查报错） |
 
-```bash
-firewall-daemon start
-```
+`firewall-daemon` 守护进程接受的参数：
 
-启动守护进程和加载内核模块。
+| 参数 | 含义 |
+|------|------|
+| `-c <file>` | 加载单个 YAML 配置文件 |
+| `-C <dir>` | 加载目录下所有 YAML 配置（按字母序） |
+| `--daemon` | 守护模式（fork 到后台） |
 
-### 停止
+## 内核模块
 
-```bash
-firewall-daemon stop
-```
-
-停止守护进程并卸载内核模块。
-
-### 重启
-
-```bash
-firewall-daemon restart
-```
-
-重启守护进程。
-
-### 状态
-
-```bash
-cat /proc/firewall/config
-```
-
-输出示例：
-
-```
-firewall Status
-==============
-Daemon:     running (PID: 12345)
-Module:     loaded
-Banned:     15 IPs
-Whitelisted: 3 IPs
-Uptime:     2d 5h 30m
-```
-
-### 重新加载配置
-
-```bash
-firewall-daemon reload
-```
-
-发送 SIGHUP 信号给守护进程，重新加载 YAML 配置而不中断服务。
+| 操作 | 命令 |
+|------|------|
+| 加载模块 | `sudo modprobe firewall` |
+| 带参数加载 | `sudo modprobe firewall fw_ban_time=600 fw_max_bans=4096` |
+| 查看已加载 | `lsmod \| grep firewall` |
+| 卸载模块 | `sudo rmmod firewall` |
+| 查看模块信息 | `modinfo firewall` |
 
 ## 封禁管理
 
-### 查看封禁列表
+```bash
+# 封禁（默认时长，fw_ban_time）
+echo "1.2.3.4" | sudo tee /proc/firewall/bans
+
+# 封禁（指定秒数）
+echo "1.2.3.4 3600" | sudo tee /proc/firewall/bans
+
+# 永久封禁
+echo "1.2.3.4 0" | sudo tee /proc/firewall/bans
+
+# 解封
+echo "unban 1.2.3.4" | sudo tee /proc/firewall/bans
+
+# 批量封禁（IP 列表）
+while read ip; do echo "$ip" | sudo tee -a /proc/firewall/bans; done < ip_list.txt
+
+# 清空所有封禁（无原生命令，见下方）
+```
+
+清空所有封禁：模块未提供「一键清空」接口。可逐条 `unban`：
 
 ```bash
-cat /proc/firewall/bans
+# 解析 bans 中的 IP 列表，循环 unban
+while read -r line; do
+  ip=$(echo "$line" | awk '/^[0-9]/ {print $1}')
+  [ -n "$ip" ] && echo "unban $ip" | sudo tee /proc/firewall/bans >/dev/null
+done < <(cat /proc/firewall/bans)
 ```
 
-输出示例：
-
-```
-Banned IPs (15)
-================
-IP              Jail      Remaining   Protocol  Port
-192.168.1.100   sshd      3452s       tcp       22
-10.0.0.50       nginx     1200s       tcp       80
-172.16.0.1      postfix   5800s       tcp       25
-```
-
-### 封禁 IP
+或重载模块彻底重置内核态状态（注意：会丢失所有非持久化封禁）：
 
 ```bash
-firewall-daemon ban <ip> [duration] [protocol] [port]
-```
-
-示例：
-
-```bash
-# 封禁 1 小时
-echo "192.168.1.100 3600" | sudo tee /proc/firewall/bans
-
-# 封禁 30 分钟，指定 TCP 80 端口
-firewall-daemon ban 192.168.1.100 1800 tcp 80
-
-# 永久封禁所有端口
-firewall-daemon ban 192.168.1.100 0 all 0
-```
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `duration` | 3600 | 封禁时长（秒），0 = 永久 |
-| `protocol` | tcp | `tcp`, `udp`, `all` |
-| `port` | 0 | 端口，0 = 所有端口 |
-
-### 解封 IP
-
-```bash
-echo "unban <ip>" | sudo tee /proc/firewall/bans
-```
-
-示例：
-
-```bash
-echo "unban 192.168.1.100" | sudo tee /proc/firewall/bans
-```
-
-### 批量封禁
-
-```bash
-firewall-daemon ban-file <file>
-```
-
-文件格式（每行一个 IP）：
-
-```
-192.168.1.100
-10.0.0.50
-172.16.0.1
-```
-
-### 清空所有封禁
-
-```bash
-firewall-daemon clear
-```
-
-确认提示：
-
-```
-Are you sure you want to unban all IPs? [y/N]
-```
-
-强制清空（无提示）：
-
-```bash
-firewall-daemon clear --force
+sudo rmmod firewall && sudo modprobe firewall fw_ban_time=600
 ```
 
 ## 白名单管理
 
-### 查看白名单
-
 ```bash
+# 查看
 cat /proc/firewall/whitelist
+
+# 添加 IP / CIDR
+echo "10.0.0.1" | sudo tee /proc/firewall/whitelist
+echo "10.0.0.0/8" | sudo tee /proc/firewall/whitelist
+
+# 移除
+echo "remove 10.0.0.0/8" | sudo tee /proc/firewall/whitelist
 ```
 
-输出示例：
+> 白名单上限 64 条目。`/etc/firewall/*.yaml` 中预先定义的条目
+> 在 `systemctl restart firewall-daemon` 时由守护进程自动下发。
 
-```
-Whitelist (3/64)
-================
-127.0.0.1
-192.168.1.0/24
-10.0.0.1
-```
-
-### 添加白名单
+## 状态与统计
 
 ```bash
-firewall-daemon whitelist-add <ip[/cidr]>
-```
+# 运行时配置（ban_time、当前条目数）
+cat /proc/firewall/config
 
-示例：
-
-```bash
-firewall-daemon whitelist-add 192.168.1.50
-firewall-daemon whitelist-add 10.0.0.0/8
-```
-
-### 移除白名单
-
-```bash
-firewall-daemon whitelist-remove <ip[/cidr]>
-```
-
-示例：
-
-```bash
-firewall-daemon whitelist-remove 192.168.1.50
-```
-
-## 统计信息
-
-### 查看统计
-
-```bash
+# 计数器（total_bans、total_unbans、packets_dropped 等）
 cat /proc/firewall/stats
+
+# Prometheus 指标（默认 :9119）
+curl http://localhost:9119/metrics
 ```
 
-输出示例：
-
-```
-Statistics
-==========
-Total ban events:       125
-Total unban events:     98
-Total packets dropped:  45230
-Total packets passed:   1250340
-Current banned:         15
-Hash table usage:       0.37%
-```
-
-### 查看 Jail 统计
-
-```bash
-firewall-daemon jail-stats
-```
-
-输出示例：
-
-```
-Jail Statistics
-===============
-Jail        Enabled  Failures  Bans
-sshd        yes      523       15
-nginx       yes      1250      45
-postfix     yes      89        3
-```
-
-### 实时统计
-
-```bash
-watch -n 1 firewall-daemon stats
-```
+Jail 维度的统计需要从 Prometheus 指标 `firewall_kernel_*` 与守护进程
+日志中获取，procfs 不直接暴露 jail 表格。
 
 ## 日志
 
-### 查看守护进程日志
-
 ```bash
-firewall-daemon log
-```
-
-等同于：
-
-```bash
+# 守护进程日志
 tail -f /var/log/firewall.log
+
+# 内核日志（含模块输出）
+sudo dmesg --follow | grep -i firewall
+
+# 按严重级别过滤
+sudo dmesg --level=err,warn | grep -i firewall
 ```
 
-### 查看内核日志
-
-```bash
-firewall-daemon dmesg
-```
-
-等同于：
-
-```bash
-dmesg | grep firewall
-```
+修改守护进程日志级别：编辑 `/etc/firewall/default.yaml` 的 `global.log_level`
+字段后 `systemctl reload firewall-daemon`。
 
 ## 配置
 
-### 验证配置
+| 操作 | 命令 |
+|------|------|
+| 验证 YAML 语法 | `yamllint /etc/firewall/` |
+| 模拟运行（看启动日志而不实际常驻） | `sudo firewall-daemon -c /etc/firewall/default.yaml` |
+| 应用配置（热重载） | `sudo systemctl reload firewall-daemon` |
+| 查看当前生效的配置 | `cat /proc/firewall/config`（仅运行时字段） |
 
-```bash
-firewall-daemon check-config
-```
-
-检查 YAML 配置文件的语法和有效性。
-
-### 显示当前配置
-
-```bash
-firewall-daemon show-config
-```
-
-显示解析后的当前配置。
+> YAML 配置的字段说明与示例参见
+> [配置指南 - YAML 配置](../configuration/yaml-config.md)。
 
 ## 命令速查表
 
-| 命令 | 说明 |
+| 用途 | 命令 |
 |------|------|
-| `firewall-daemon start` | 启动服务 |
-| `firewall-daemon stop` | 停止服务 |
-| `firewall-daemon restart` | 重启服务 |
-| `cat /proc/firewall/config` | 查看状态 |
-| `firewall-daemon reload` | 重载配置 |
-| `cat /proc/firewall/bans` | 查看封禁列表 |
-| `echo "<ip>" | sudo tee /proc/firewall/bans` | 封禁 IP |
-| `echo "unban <ip>" | sudo tee /proc/firewall/bans` | 解封 IP |
-| `sudo rmmod firewall && sudo insmod firewall.ko` | 清空所有封禁 |
-| `cat /proc/firewall/whitelist` | 查看白名单 |
-| `firewall-daemon whitelist-add <ip>` | 添加白名单 |
-| `firewall-daemon whitelist-remove <ip>` | 移除白名单 |
-| `cat /proc/firewall/stats` | 查看统计 |
-| `firewall-daemon jail-stats` | 查看 Jail 统计 |
-| `firewall-daemon log` | 查看日志 |
-| `firewall-daemon dmesg` | 查看内核日志 |
-| `firewall-daemon check-config` | 验证配置 |
-| `firewall-daemon show-config` | 显示配置 |
+| 启动 | `sudo systemctl start firewall-daemon` |
+| 停止 | `sudo systemctl stop firewall-daemon` |
+| 重启 | `sudo systemctl restart firewall-daemon` |
+| 重载配置 | `sudo systemctl reload firewall-daemon` |
+| 加载模块 | `sudo modprobe firewall` |
+| 卸载模块 | `sudo rmmod firewall` |
+| 查看封禁 | `cat /proc/firewall/bans` |
+| 封禁 IP | `echo "<ip> [<seconds>]" \| sudo tee /proc/firewall/bans` |
+| 解封 IP | `echo "unban <ip>" \| sudo tee /proc/firewall/bans` |
+| 查看白名单 | `cat /proc/firewall/whitelist` |
+| 添加白名单 | `echo "<ip-or-cidr>" \| sudo tee /proc/firewall/whitelist` |
+| 移除白名单 | `echo "remove <ip-or-cidr>" \| sudo tee /proc/firewall/whitelist` |
+| 查看运行时配置 | `cat /proc/firewall/config` |
+| 查看计数器 | `cat /proc/firewall/stats` |
+| 守护进程日志 | `tail -f /var/log/firewall.log` |
+| 内核日志 | `sudo dmesg \| grep -i firewall` |
+| Prometheus 指标 | `curl http://localhost:9119/metrics` |

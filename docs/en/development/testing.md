@@ -260,7 +260,7 @@ make daemon CFLAGS="-g -O0"
 
 # Run valgrind
 sudo valgrind --leak-check=full --show-leak-kinds=all \
-    ./firewall-daemon start
+    ./firewall-daemon -c config/default.yaml
 
 # Run for a while then stop, check report
 ```

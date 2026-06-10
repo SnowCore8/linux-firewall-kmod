@@ -82,8 +82,10 @@ Job for firewall-daemon.service failed because the control process exited with e
 # View detailed errors
 journalctl -u firewall -n 50
 
-# Check configuration file
-firewall-daemon check-config
+# Validate config syntax
+sudo firewall-daemon -c /etc/firewall/default.yaml
+# or with yamllint
+yamllint /etc/firewall/
 
 # Check port usage
 ss -tlnp | grep 9119
@@ -144,7 +146,13 @@ dmesg | grep firewall
 ```bash
 # 1. Enable debug mode
 sudo systemctl stop firewall
-sudo firewall-daemon -d start
+
+# Rebuild kernel module with debug symbols
+make clean && make debug DL=2
+sudo rmmod firewall 2>/dev/null
+sudo modprobe firewall fw_ban_time=600
+# Also set global.log_level: debug in /etc/firewall/default.yaml
+sudo systemctl restart firewall-daemon
 
 # 2. View match logs
 tail -f /var/log/firewall.log | grep "match"
@@ -279,7 +287,13 @@ cat /sys/kernel/debug/rcu/rcu_pending
 
 ```bash
 # Collect full diagnostic package
-sudo firewall-daemon diagnose > firewall-diag-$(date +%Y%m%d).txt
+journalctl -u firewall-daemon --since "1 day ago" > firewall-diag-journal.txt
+dmesg | grep -i firewall > firewall-diag-dmesg.txt
+cat /proc/firewall/bans /proc/firewall/whitelist /proc/firewall/config /proc/firewall/stats \
+    > firewall-diag-procfs.txt
+echo "# Captured $(date)" > firewall-diag-$(date +%Y%m%d).txt
+cat firewall-diag-journal.txt firewall-diag-dmesg.txt firewall-diag-procfs.txt \
+    >> firewall-diag-$(date +%Y%m%d).txt
 ```
 
 ### Report Issues

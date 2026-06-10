@@ -1,316 +1,159 @@
 # Management Commands
 
-This document describes all commands available in the `firewall-daemon` command-line tool.
-
-## firewall-daemon Overview
-
-`firewall-daemon` is the userspace management tool for Linux Firewall, providing a complete command-line interface for managing bans, whitelists, and viewing status.
-
-### Syntax
-
-```bash
-firewall-daemon <command> [arguments]
-```
-
-### Global Options
-
-| Option | Description |
-|--------|-------------|
-| `-c, --config <path>` | Specify config file path (default `/etc/firewall/default.yaml`) |
-| `-h, --help` | Show help information |
-| `-v, --version` | Show version information |
-| `-d, --debug` | Enable debug mode |
+This page lists the real commands for day-to-day management of Linux
+Firewall. All runtime operations are performed through `/proc/firewall/`
+(see [ProcFS Interface](../configuration/procfs.md)) and systemd — the
+project does not provide a separate CLI wrapper.
 
 ## Service Management
 
-### Start
+| Action | Command |
+|--------|---------|
+| Start daemon | `sudo systemctl start firewall-daemon` |
+| Stop daemon | `sudo systemctl stop firewall-daemon` |
+| Restart daemon | `sudo systemctl restart firewall-daemon` |
+| Check service status | `systemctl status firewall-daemon` |
+| Enable at boot | `sudo systemctl enable firewall-daemon` |
+| Reload YAML config (no interruption) | `sudo systemctl reload firewall-daemon` |
+| Validate config syntax | `sudo firewall-daemon -c /etc/firewall/default.yaml` (runs in foreground so errors are visible) |
 
-```bash
-firewall-daemon start
-```
+`firewall-daemon` accepts only these options:
 
-Start the daemon and load the kernel module.
+| Option | Meaning |
+|--------|---------|
+| `-c <file>` | Load a single YAML config file |
+| `-C <dir>` | Load all YAML files in the directory (alphabetical order) |
+| `--daemon` | Daemonize (fork into background) |
 
-### Stop
+## Kernel Module
 
-```bash
-firewall-daemon stop
-```
-
-Stop the daemon and unload the kernel module.
-
-### Restart
-
-```bash
-firewall-daemon restart
-```
-
-Restart the daemon.
-
-### Status
-
-```bash
-cat /proc/firewall/config
-```
-
-Example output:
-
-```
-firewall Status
-==============
-Daemon:     running (PID: 12345)
-Module:     loaded
-Banned:     15 IPs
-Whitelisted: 3 IPs
-Uptime:     2d 5h 30m
-```
-
-### Reload Configuration
-
-```bash
-firewall-daemon reload
-```
-
-Sends SIGHUP signal to the daemon to reload YAML configuration without interrupting service.
+| Action | Command |
+|--------|---------|
+| Load module | `sudo modprobe firewall` |
+| Load with parameters | `sudo modprobe firewall fw_ban_time=600 fw_max_bans=4096` |
+| Check if loaded | `lsmod \| grep firewall` |
+| Unload module | `sudo rmmod firewall` |
+| Module metadata | `modinfo firewall` |
 
 ## Ban Management
 
-### View Banned List
+```bash
+# Ban (default duration fw_ban_time)
+echo "1.2.3.4" | sudo tee /proc/firewall/bans
+
+# Ban (specific seconds)
+echo "1.2.3.4 3600" | sudo tee /proc/firewall/bans
+
+# Permanent ban
+echo "1.2.3.4 0" | sudo tee /proc/firewall/bans
+
+# Unban
+echo "unban 1.2.3.4" | sudo tee /proc/firewall/bans
+
+# Batch ban from file (one IP per line)
+while read ip; do echo "$ip" | sudo tee -a /proc/firewall/bans; done < ip_list.txt
+
+# Clear all bans (no built-in command — see below)
+```
+
+Clear all bans: the module does not provide a one-shot "clear" command.
+Unban each IP in a loop:
 
 ```bash
-cat /proc/firewall/bans
+while read -r line; do
+  ip=$(echo "$line" | awk '/^[0-9]/ {print $1}')
+  [ -n "$ip" ] && echo "unban $ip" | sudo tee /proc/firewall/bans >/dev/null
+done < <(cat /proc/firewall/bans)
 ```
 
-Example output:
-
-```
-Banned IPs (15)
-================
-IP              Jail      Remaining   Protocol  Port
-192.168.1.100   sshd      3452s       tcp       22
-10.0.0.50       nginx     1200s       tcp       80
-172.16.0.1      postfix   5800s       tcp       25
-```
-
-### Ban IP
+Or reload the module to fully reset kernel state (warning: also wipes
+non-persistent bans):
 
 ```bash
-firewall-daemon ban <ip> [duration] [protocol] [port]
-```
-
-Examples:
-
-```bash
-# Ban for 1 hour
-echo "192.168.1.100 3600" | sudo tee /proc/firewall/bans
-
-# Ban for 30 minutes, TCP port 80
-firewall-daemon ban 192.168.1.100 1800 tcp 80
-
-# Permanent ban, all ports
-firewall-daemon ban 192.168.1.100 0 all 0
-```
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `duration` | 3600 | Ban duration (seconds), 0 = permanent |
-| `protocol` | tcp | `tcp`, `udp`, `all` |
-| `port` | 0 | Port, 0 = all ports |
-
-### Unban IP
-
-```bash
-echo "unban <ip>" | sudo tee /proc/firewall/bans
-```
-
-Example:
-
-```bash
-echo "unban 192.168.1.100" | sudo tee /proc/firewall/bans
-```
-
-### Bulk Ban
-
-```bash
-firewall-daemon ban-file <file>
-```
-
-File format (one IP per line):
-
-```
-192.168.1.100
-10.0.0.50
-172.16.0.1
-```
-
-### Clear All Bans
-
-```bash
-firewall-daemon clear
-```
-
-Confirmation prompt:
-
-```
-Are you sure you want to unban all IPs? [y/N]
-```
-
-Force clear (no prompt):
-
-```bash
-firewall-daemon clear --force
+sudo rmmod firewall && sudo modprobe firewall fw_ban_time=600
 ```
 
 ## Whitelist Management
 
-### View Whitelist
-
 ```bash
+# View
 cat /proc/firewall/whitelist
+
+# Add IP / CIDR
+echo "10.0.0.1" | sudo tee /proc/firewall/whitelist
+echo "10.0.0.0/8" | sudo tee /proc/firewall/whitelist
+
+# Remove
+echo "remove 10.0.0.0/8" | sudo tee /proc/firewall/whitelist
 ```
 
-Example output:
+> Whitelist is capped at 64 entries. Entries declared in
+> `/etc/firewall/*.yaml` are pushed by the daemon on
+> `systemctl restart firewall-daemon`.
 
-```
-Whitelist (3/64)
-================
-127.0.0.1
-192.168.1.0/24
-10.0.0.1
-```
-
-### Add to Whitelist
+## Status and Statistics
 
 ```bash
-firewall-daemon whitelist-add <ip[/cidr]>
-```
+# Runtime configuration (ban_time, current entry counts)
+cat /proc/firewall/config
 
-Examples:
-
-```bash
-firewall-daemon whitelist-add 192.168.1.50
-firewall-daemon whitelist-add 10.0.0.0/8
-```
-
-### Remove from Whitelist
-
-```bash
-firewall-daemon whitelist-remove <ip[/cidr]>
-```
-
-Example:
-
-```bash
-firewall-daemon whitelist-remove 192.168.1.50
-```
-
-## Statistics
-
-### View Statistics
-
-```bash
+# Counters (total_bans, total_unbans, packets_dropped, etc.)
 cat /proc/firewall/stats
+
+# Prometheus metrics (default :9119)
+curl http://localhost:9119/metrics
 ```
 
-Example output:
+Jail-level statistics are exposed through Prometheus metrics
+(`firewall_kernel_*`) and the daemon log. The procfs interface does not
+provide a per-jail table directly.
 
-```
-Statistics
-==========
-Total ban events:       125
-Total unban events:     98
-Total packets dropped:  45230
-Total packets passed:   1250340
-Current banned:         15
-Hash table usage:       0.37%
-```
-
-### View Jail Statistics
+## Logs
 
 ```bash
-firewall-daemon jail-stats
-```
-
-Example output:
-
-```
-Jail Statistics
-===============
-Jail        Enabled  Failures  Bans
-sshd        yes      523       15
-nginx       yes      1250      45
-postfix     yes      89        3
-```
-
-### Real-time Statistics
-
-```bash
-watch -n 1 firewall-daemon stats
-```
-
-## Logging
-
-### View Daemon Log
-
-```bash
-firewall-daemon log
-```
-
-Equivalent to:
-
-```bash
+# Daemon log
 tail -f /var/log/firewall.log
+
+# Kernel log (module output)
+sudo dmesg --follow | grep -i firewall
+
+# By severity
+sudo dmesg --level=err,warn | grep -i firewall
 ```
 
-### View Kernel Log
-
-```bash
-firewall-daemon dmesg
-```
-
-Equivalent to:
-
-```bash
-dmesg | grep firewall
-```
+To change the daemon log level, edit `global.log_level` in
+`/etc/firewall/default.yaml` and `systemctl reload firewall-daemon`.
 
 ## Configuration
 
-### Validate Configuration
+| Action | Command |
+|--------|---------|
+| Validate YAML syntax | `yamllint /etc/firewall/` |
+| Dry-run (foreground; see startup log without staying resident) | `sudo firewall-daemon -c /etc/firewall/default.yaml` |
+| Apply config (hot reload) | `sudo systemctl reload firewall-daemon` |
+| View current runtime config | `cat /proc/firewall/config` (runtime fields only) |
 
-```bash
-firewall-daemon check-config
-```
-
-Checks YAML configuration file syntax and validity.
-
-### Show Current Configuration
-
-```bash
-firewall-daemon show-config
-```
-
-Displays the parsed current configuration.
+> Field reference and examples: see
+> [Configuration — YAML Config](../configuration/yaml-config.md).
 
 ## Command Quick Reference
 
-| Command | Description |
-|---------|-------------|
-| `firewall-daemon start` | Start service |
-| `firewall-daemon stop` | Stop service |
-| `firewall-daemon restart` | Restart service |
-| `cat /proc/firewall/config` | View status |
-| `firewall-daemon reload` | Reload configuration |
-| `cat /proc/firewall/bans` | View banned list |
-| `echo "<ip>" | sudo tee /proc/firewall/bans` | Ban IP |
-| `echo "unban <ip>" | sudo tee /proc/firewall/bans` | Unban IP |
-| `sudo rmmod firewall && sudo insmod firewall.ko` | Clear all bans |
-| `cat /proc/firewall/whitelist` | View whitelist |
-| `firewall-daemon whitelist-add <ip>` | Add to whitelist |
-| `firewall-daemon whitelist-remove <ip>` | Remove from whitelist |
-| `cat /proc/firewall/stats` | View statistics |
-| `firewall-daemon jail-stats` | View jail statistics |
-| `firewall-daemon log` | View log |
-| `firewall-daemon dmesg` | View kernel log |
-| `firewall-daemon check-config` | Validate configuration |
-| `firewall-daemon show-config` | Show configuration |
+| Purpose | Command |
+|---------|---------|
+| Start | `sudo systemctl start firewall-daemon` |
+| Stop | `sudo systemctl stop firewall-daemon` |
+| Restart | `sudo systemctl restart firewall-daemon` |
+| Reload config | `sudo systemctl reload firewall-daemon` |
+| Load module | `sudo modprobe firewall` |
+| Unload module | `sudo rmmod firewall` |
+| View bans | `cat /proc/firewall/bans` |
+| Ban IP | `echo "<ip> [<seconds>]" \| sudo tee /proc/firewall/bans` |
+| Unban IP | `echo "unban <ip>" \| sudo tee /proc/firewall/bans` |
+| View whitelist | `cat /proc/firewall/whitelist` |
+| Add whitelist | `echo "<ip-or-cidr>" \| sudo tee /proc/firewall/whitelist` |
+| Remove whitelist | `echo "remove <ip-or-cidr>" \| sudo tee /proc/firewall/whitelist` |
+| View runtime config | `cat /proc/firewall/config` |
+| View counters | `cat /proc/firewall/stats` |
+| Daemon log | `tail -f /var/log/firewall.log` |
+| Kernel log | `sudo dmesg \| grep -i firewall` |
+| Prometheus metrics | `curl http://localhost:9119/metrics` |

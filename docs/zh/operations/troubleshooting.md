@@ -82,8 +82,10 @@ Job for firewall-daemon.service failed because the control process exited with e
 # 查看详细错误
 journalctl -u firewall -n 50
 
-# 检查配置文件
-firewall-daemon check-config
+# 验证配置文件语法
+sudo firewall-daemon -c /etc/firewall/default.yaml
+# 或用 yamllint
+yamllint /etc/firewall/
 
 # 检查端口占用
 ss -tlnp | grep 9119
@@ -143,8 +145,12 @@ dmesg | grep firewall
 
 ```bash
 # 1. 启用调试模式
-sudo systemctl stop firewall
-sudo firewall-daemon -d start
+# 重新编译并加载带 DL=2 的模块
+make clean && make debug DL=2
+sudo rmmod firewall 2>/dev/null
+sudo modprobe firewall fw_ban_time=600
+# 同时编辑 /etc/firewall/default.yaml 的 global.log_level: debug
+sudo systemctl restart firewall-daemon
 
 # 2. 查看匹配日志
 tail -f /var/log/firewall.log | grep "match"
@@ -279,7 +285,13 @@ cat /sys/kernel/debug/rcu/rcu_pending
 
 ```bash
 # 收集完整诊断包
-sudo firewall-daemon diagnose > firewall-diag-$(date +%Y%m%d).txt
+journalctl -u firewall-daemon --since "1 day ago" > firewall-diag-journal.txt
+dmesg | grep -i firewall > firewall-diag-dmesg.txt
+cat /proc/firewall/bans /proc/firewall/whitelist /proc/firewall/config /proc/firewall/stats \
+    > firewall-diag-procfs.txt
+echo "# Captured $(date)" > firewall-diag-$(date +%Y%m%d).txt
+cat firewall-diag-journal.txt firewall-diag-dmesg.txt firewall-diag-procfs.txt \
+    >> firewall-diag-$(date +%Y%m%d).txt
 ```
 
 ### 报告问题

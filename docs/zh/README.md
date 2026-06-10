@@ -94,5 +94,5 @@ make
 sudo make install
 
 # 启动守护进程
-sudo firewall-daemon start
+sudo systemctl start firewall-daemon
 ```

@@ -200,17 +200,20 @@
 
 | 方式 | 路径 | 用途 |
 |------|------|------|
-| ProcFS 写入 | `/proc/firewall/config` | 添加/移除封禁 |
-| ProcFS 写入 | `/proc/firewall/bans` | 清空封禁 |
-| ProcFS 写入 | `/proc/firewall/config` | 管理白名单 |
+| ProcFS 写入 | `/proc/firewall/bans` | 封禁 / 解封（`unban <ip>`） |
+| ProcFS 写入 | `/proc/firewall/whitelist` | 添加 / 移除白名单 |
+
+> `/proc/firewall/config` 与 `/proc/firewall/stats` 为只读；模块不
+> 提供「清空」原生命令，需逐条 `unban` 或重载模块。
 
 ### 内核态 → 用户态
 
 | 方式 | 路径 | 用途 |
 |------|------|------|
-| ProcFS 读取 | `/proc/firewall/config` | 获取状态 |
-| ProcFS 读取 | `/proc/firewall/bans` | 获取封禁列表 |
-| ProcFS 读取 | `/proc/firewall/stats` | 获取统计 |
+| ProcFS 读取 | `/proc/firewall/config` | 获取 ban_time、当前封禁/白名单数 |
+| ProcFS 读取 | `/proc/firewall/bans` | 获取封禁 IP 列表 |
+| ProcFS 读取 | `/proc/firewall/whitelist` | 获取白名单 |
+| ProcFS 读取 | `/proc/firewall/stats` | 获取计数器 |
 
 ### 内部通信
 

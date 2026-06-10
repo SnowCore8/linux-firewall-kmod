@@ -182,7 +182,7 @@ grep -oP 'ignoreip\s*=\s*\K.*' /etc/fail2ban/jail.local | \
 sudo fail2ban-client status sshd | \
     grep -oP '\d+\.\d+\.\d+\.\d+' | \
     while read ip; do
-        sudo firewall-daemon ban "$ip" 3600
+        echo "$ip 3600" | sudo tee /proc/firewall/bans >/dev/null
     done
 ```
 

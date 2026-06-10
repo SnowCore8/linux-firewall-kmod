@@ -210,17 +210,21 @@ Packet (src_ip, dst_port, protocol)
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| ProcFS write | `/proc/firewall/config` | Add/remove bans |
-| ProcFS write | `/proc/firewall/bans` | Clear all bans |
-| ProcFS write | `/proc/firewall/config` | Manage whitelist |
+| ProcFS write | `/proc/firewall/bans` | Ban / unban (`unban <ip>`) |
+| ProcFS write | `/proc/firewall/whitelist` | Add / remove whitelist entries |
+
+> `/proc/firewall/config` and `/proc/firewall/stats` are read-only.
+> The module does not provide a "clear all" command — unban one by one
+> or reload the module.
 
 ### Kernel → Userspace
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| ProcFS read | `/proc/firewall/config` | Get status |
-| ProcFS read | `/proc/firewall/bans` | Get ban list |
-| ProcFS read | `/proc/firewall/stats` | Get statistics |
+| ProcFS read | `/proc/firewall/config` | Get ban_time, current ban/whitelist counts |
+| ProcFS read | `/proc/firewall/bans` | Get banned IP list |
+| ProcFS read | `/proc/firewall/whitelist` | Get whitelist |
+| ProcFS read | `/proc/firewall/stats` | Get counters |
 
 ### Internal Communication
 
