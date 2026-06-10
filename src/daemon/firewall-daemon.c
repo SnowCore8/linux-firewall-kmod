@@ -280,11 +280,14 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
-  /* 初始化日志模式 */
+  /* 初始化日志模式 - 即使部分失败也允许守护进程启动 */
   if (init_log_patterns() < 0) {
-    daemon_log_err("Failed to initialize log patterns");
-    cleanup();
-    return EXIT_FAILURE;
+    daemon_log_warn(
+        "Some jail regex patterns failed to compile, continuing with "
+        "remaining jails");
+    /* 不退出，允许其他 jail 继续工作 */
+  } else {
+    daemon_log_info("All jail regex patterns compiled successfully");
   }
 
   /* 初始化统计信息 */
