@@ -14,11 +14,9 @@ int extract_ipv4(const char *line, char *ip_out, size_t ip_size);
 int extract_ip(const char *line, char *ip_out, size_t ip_size);
 
 /* 从日志行提取并验证 IP 的辅助函数 */
-int extract_and_validate_ip(struct jail *j, const char *log_line, char *ip_out,
-                            size_t ip_size);
+int extract_and_validate_ip(struct jail *j, const char *log_line, char *ip_out, size_t ip_size);
 
 /* 解析日志行，如果是失败登录则提取 IP - 使用 jail 的 PCRE2 正则 */
-int parse_log_line(struct jail *j, const char *line, char *ip_out,
-                   size_t ip_size);
+int parse_log_line(struct jail *j, const char *line, char *ip_out, size_t ip_size);
 
 #endif /* LOG_PARSER_H */

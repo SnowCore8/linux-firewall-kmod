@@ -79,8 +79,7 @@ int sqlite_remove_permanent_ban(sqlite_db_t *db, const char *ip);
  * @return 0 成功，-1 失败
  */
 int sqlite_load_all_permanent_bans(sqlite_db_t *db,
-                                   struct permanent_ban_entry **entries,
-                                   int *count);
+                                   struct permanent_ban_entry **entries, int *count);
 
 /**
  * 更新命中统计

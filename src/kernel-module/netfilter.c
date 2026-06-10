@@ -64,8 +64,7 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
      * 必须遍历所有桶进行前缀比较，O(n) 查找。
      * 这是哈希桶设计的固有限制：不同前缀长度的子网条目
      * 可能分布在不同的桶中，无法通过单一哈希定位。 */
-    hlist_for_each_entry_rcu(wl_entry, &fw_info.whitelist_table_ipv6[wl_bkt],
-                             hash) {
+    hlist_for_each_entry_rcu(wl_entry, &fw_info.whitelist_table_ipv6[wl_bkt], hash) {
       if (wl_entry->mask.prefix_len == 128) {
         /* struct in6_addr 16 字节，超出 READ_ONCE 支持范围。
          * 安全保证：白名单条目在 RCU 发布后不可变（仅增删，不修改），
@@ -111,8 +110,7 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
       u32 ban_bkt = ip6_hash & ((1 << BAN_HASH_BITS) - 1);
       hlist_for_each_entry_rcu(entry, &fw_info.ban_table_ipv6[ban_bkt], hash) {
         if (entry->af == af && ipv6_addr_equal(&entry->addr.ipv6, ip6)) {
-          if (READ_ONCE(entry->is_permanent) ||
-              time_before(now, READ_ONCE(entry->unban_time)))
+          if (READ_ONCE(entry->is_permanent) || time_before(now, READ_ONCE(entry->unban_time)))
             is_banned = true;
           break;
         }
@@ -122,10 +120,8 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
     __be32 ipv4 = *(__be32 *)src_ip;
     u32 wl_bkt = hash_min(ipv4, WHITELIST_HASH_BITS);
 
-    hlist_for_each_entry_rcu(wl_entry, &fw_info.whitelist_table_ipv4[wl_bkt],
-                             hash) {
-      if (wl_entry->mask.ipv4_mask == 0xFFFFFFFF &&
-          wl_entry->addr.ipv4 == ipv4) {
+    hlist_for_each_entry_rcu(wl_entry, &fw_info.whitelist_table_ipv4[wl_bkt], hash) {
+      if (wl_entry->mask.ipv4_mask == 0xFFFFFFFF && wl_entry->addr.ipv4 == ipv4) {
         is_whitelisted = true;
         break;
       }
@@ -148,8 +144,7 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
       u32 ban_bkt = hash_min(ipv4, BAN_HASH_BITS);
       hlist_for_each_entry_rcu(entry, &fw_info.ban_table_ipv4[ban_bkt], hash) {
         if (entry->af == af && entry->addr.ipv4 == ipv4) {
-          if (READ_ONCE(entry->is_permanent) ||
-              time_before(now, READ_ONCE(entry->unban_time)))
+          if (READ_ONCE(entry->is_permanent) || time_before(now, READ_ONCE(entry->unban_time)))
             is_banned = true;
           break;
         }
@@ -195,16 +190,14 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
   {
     __be16 frag_off = iph->frag_off;
     if ((ntohs(frag_off) & IP_MF) || (ntohs(frag_off) & IP_OFFSET)) {
-      fw_pr_warn_ratelimited("Fragmented packet from %pI4 dropped",
-                             &iph->saddr);
+      fw_pr_warn_ratelimited("Fragmented packet from %pI4 dropped", &iph->saddr);
       /* 安全：分片包可能绕过基于完整报头的封禁检查，直接丢弃 */
       return NF_DROP;
     }
   }
 
   src_ip = iph->saddr;
-  if (unlikely(src_ip == 0 || src_ip == 0xFFFFFFFF ||
-               (ntohl(src_ip) & 0xFF000000) == 0x7F000000 ||
+  if (unlikely(src_ip == 0 || src_ip == 0xFFFFFFFF || (ntohl(src_ip) & 0xFF000000) == 0x7F000000 ||
                (ntohl(src_ip) & 0xF0000000) == 0xE0000000 ||
                (ntohl(src_ip) & 0xFF000000) == 0x00000000))
     return NF_ACCEPT;
@@ -240,8 +233,7 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
            nexthdr == NEXTHDR_DEST || nexthdr == NEXTHDR_AUTH) {
       /* 修复：深度限制，防止循环或过多扩展头 */
       if (++ext_hdr_depth > MAX_EXT_HDR_DEPTH) {
-        fw_pr_warn_ratelimited(
-            "IPv6 extension header depth exceeded, dropping");
+        fw_pr_warn_ratelimited("IPv6 extension header depth exceeded, dropping");
         return NF_DROP;
       }
       if (!pskb_may_pull(skb, offset + sizeof(struct ipv6_opt_hdr)))
@@ -263,23 +255,22 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
                ipv6_addr_is_multicast(&src_ip)))
     return NF_ACCEPT;
 
-  if (unlikely((src_ip.s6_addr[0] == 0xFE) &&
-               ((src_ip.s6_addr[1] & 0xC0) == 0x80)))
+  if (unlikely((src_ip.s6_addr[0] == 0xFE) && ((src_ip.s6_addr[1] & 0xC0) == 0x80)))
     return NF_ACCEPT;
 
   return handle_ban_check(FW_AF_INET6, &src_ip);
 }
 
 struct nf_hook_ops nf_ops_ipv4 __read_mostly = {
-    .hook = nf_hook_func_ipv4,
-    .pf = NFPROTO_IPV4,
-    .hooknum = NF_INET_PRE_ROUTING,
-    .priority = NF_IP_PRI_FILTER - 1,
+  .hook = nf_hook_func_ipv4,
+  .pf = NFPROTO_IPV4,
+  .hooknum = NF_INET_PRE_ROUTING,
+  .priority = NF_IP_PRI_FILTER - 1,
 };
 
 struct nf_hook_ops nf_ops_ipv6 __read_mostly = {
-    .hook = nf_hook_func_ipv6,
-    .pf = NFPROTO_IPV6,
-    .hooknum = NF_INET_PRE_ROUTING,
-    .priority = NF_IP_PRI_FILTER - 1,
+  .hook = nf_hook_func_ipv6,
+  .pf = NFPROTO_IPV6,
+  .hooknum = NF_INET_PRE_ROUTING,
+  .priority = NF_IP_PRI_FILTER - 1,
 };

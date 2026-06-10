@@ -18,8 +18,7 @@ int setup_inotify(void) {
   /* 设置为非阻塞 */
   int flags = fcntl(inotify_fd, F_GETFL);
   if (flags == -1) {
-    daemon_log_err("Failed to get fcntl flags for inotify: %s",
-                   strerror(errno));
+    daemon_log_err("Failed to get fcntl flags for inotify: %s", strerror(errno));
     close(inotify_fd);
     inotify_fd = -1;
     return -1;
@@ -44,14 +43,12 @@ int setup_inotify(void) {
   for (int j = 0; j < cfg.jail_count && j < MAX_JAILS; j++) {
     jail_snapshots[j].enabled = cfg.jails[j].enabled;
     jail_snapshots[j].log_count = cfg.jails[j].log_count;
-    strncpy(jail_snapshots[j].name, cfg.jails[j].name,
-            sizeof(jail_snapshots[j].name) - 1);
+    strncpy(jail_snapshots[j].name, cfg.jails[j].name, sizeof(jail_snapshots[j].name) - 1);
     jail_snapshots[j].name[sizeof(jail_snapshots[j].name) - 1] = '\0';
     for (int i = 0; i < cfg.jails[j].log_count && i < MAX_LOG_FILES; i++) {
       strncpy(jail_snapshots[j].log_files[i], cfg.jails[j].log_files[i],
               sizeof(jail_snapshots[j].log_files[i]) - 1);
-      jail_snapshots[j]
-          .log_files[i][sizeof(jail_snapshots[j].log_files[i]) - 1] = '\0';
+      jail_snapshots[j].log_files[i][sizeof(jail_snapshots[j].log_files[i]) - 1] = '\0';
     }
   }
   snapshot_count = cfg.jail_count;
@@ -74,13 +71,11 @@ int setup_inotify(void) {
       file_states[global_idx].inode = 0;
       file_states[global_idx].wd = -1;      /* 标记为尚未监控 */
       file_states[global_idx].jail_idx = j; /* 记录此文件属于哪个jail */
-      file_states[global_idx].symlink_detected =
-          false; /* 修复：初始化为非符号链接 */
+      file_states[global_idx].symlink_detected = false; /* 修复：初始化为非符号链接 */
 
       strncpy(file_states[global_idx].path, jail_snapshots[j].log_files[i],
               sizeof(file_states[global_idx].path) - 1);
-      file_states[global_idx].path[sizeof(file_states[global_idx].path) - 1] =
-          '\0';
+      file_states[global_idx].path[sizeof(file_states[global_idx].path) - 1] = '\0';
 
       /* 在 stat 之前检查是否为符号链接 */
       struct stat lstat_st;
@@ -102,8 +97,8 @@ int setup_inotify(void) {
 
       /* 监控修改、移动、删除操作 */
       file_states[global_idx].wd = inotify_add_watch(
-          inotify_fd, jail_snapshots[j].log_files[i],
-          IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE | IN_CREATE);
+        inotify_fd, jail_snapshots[j].log_files[i],
+        IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE | IN_CREATE);
       if (file_states[global_idx].wd < 0) {
         daemon_log_warn("Failed to watch %s (jail=%s): %s (skipping)",
                         jail_snapshots[j].log_files[i], jail_snapshots[j].name,
@@ -111,15 +106,13 @@ int setup_inotify(void) {
         file_states[global_idx].wd = -1;
         /* 继续处理其他日志文件而不是完全失败 */
       } else {
-        daemon_log_info("Watching %s (jail=%s, wd=%d)",
-                        jail_snapshots[j].log_files[i], jail_snapshots[j].name,
-                        file_states[global_idx].wd);
+        daemon_log_info("Watching %s (jail=%s, wd=%d)", jail_snapshots[j].log_files[i],
+                        jail_snapshots[j].name, file_states[global_idx].wd);
       }
 
       global_idx++;
       if (global_idx >= MAX_JAILS * MAX_LOG_FILES) {
-        daemon_log_warn("达到最大文件状态数（%d），停止添加监控",
-                        MAX_JAILS * MAX_LOG_FILES);
+        daemon_log_warn("达到最大文件状态数（%d），停止添加监控", MAX_JAILS * MAX_LOG_FILES);
         goto watch_summary;
       }
     }
@@ -196,13 +189,11 @@ void process_lines_in_buffer(struct jail *j, char *data, size_t len,
 
   *consumed = 0;
 
-  while (remaining > 0 &&
-         (line_end = memchr(line_start, '\n', remaining)) != NULL) {
+  while (remaining > 0 && (line_end = memchr(line_start, '\n', remaining)) != NULL) {
     size_t line_len = line_end - line_start;
 
     if (line_len >= 8192) {
-      daemon_log_warn("Extremely long line (%zu bytes) in %s, skipping",
-                      line_len, log_path);
+      daemon_log_warn("Extremely long line (%zu bytes) in %s, skipping", line_len, log_path);
     } else {
       /* 临时null终止以便处理 */
       char saved = *line_end;
@@ -223,17 +214,15 @@ void process_lines_in_buffer(struct jail *j, char *data, size_t len,
 
 /* 辅助函数：将剩余数据存储为部分行（无需锁 - 每个jail的缓冲区）。
  * 如果部分缓冲区将溢出，则处理累积数据并重置。*/
-void store_partial_line(struct jail *j, const char *data, size_t len,
-                        const char *log_path, unsigned int max_retries,
-                        unsigned int findtime) {
+void store_partial_line(struct jail *j, const char *data, size_t len, const char *log_path,
+                        unsigned int max_retries, unsigned int findtime) {
   size_t current_len;
 
   if (len == 0)
     return;
 
   if (len >= sizeof(j->partial_line_buffer)) {
-    daemon_log_warn("Partial line too long (%zu bytes) in %s, discarding", len,
-                    log_path);
+    daemon_log_warn("Partial line too long (%zu bytes) in %s, discarding", len, log_path);
     atomic_store(&j->partial_line_len, 0);
     return;
   }
@@ -282,8 +271,7 @@ void flush_partial_line(struct jail *j, const char *log_path,
   memcpy(temp, j->partial_line_buffer, old_len);
   temp[old_len] = '\0';
 
-  daemon_log_debug("Flushing partial line buffer with %zu bytes from %s",
-                   old_len, log_path);
+  daemon_log_debug("Flushing partial line buffer with %zu bytes from %s", old_len, log_path);
   process_single_line(j, temp, log_path, max_retries, findtime);
 }
 
@@ -296,8 +284,7 @@ void process_new_lines(int idx) {
   const char *log_path;
   struct jail *j = NULL;
   unsigned int max_retries, findtime;
-  char *batch_buf =
-      NULL; /* 提前声明，避免 goto cleanup_restore_partial 时未初始化 */
+  char *batch_buf = NULL; /* 提前声明，避免 goto cleanup_restore_partial 时未初始化 */
 
   /* 验证idx参数 */
   if (idx < 0 || idx >= MAX_JAILS * MAX_LOG_FILES) {
@@ -330,8 +317,7 @@ void process_new_lines(int idx) {
   if (jail_idx >= cfg.jail_count) {
     /* 锁获取后再次检查，防止配置重载 */
     pthread_rwlock_unlock(&config_rwlock);
-    daemon_log_err("Jail index %d became invalid after lock acquisition",
-                   jail_idx);
+    daemon_log_err("Jail index %d became invalid after lock acquisition", jail_idx);
     return;
   }
   /* 修复 R4-5：j 指针仅在锁内用于复制数据到局部变量。
@@ -357,8 +343,7 @@ void process_new_lines(int idx) {
     if (errno == ELOOP) {
       /* 修复：标记符号链接状态，防止后续重复处理 */
       file_states[idx].symlink_detected = true;
-      daemon_log_warn("Log file is a symlink, skipping and marking: %s",
-                      log_path);
+      daemon_log_warn("Log file is a symlink, skipping and marking: %s", log_path);
     } else {
       daemon_log_err("Failed to open %s: %s", log_path, strerror(errno));
     }
@@ -408,8 +393,7 @@ void process_new_lines(int idx) {
   ssize_t chunk_read;
 
   while (batch_total < BATCH_READ_MAX - 1 &&
-         (chunk_read = read(fd, batch_buf + batch_total,
-                            BATCH_READ_MAX - 1 - batch_total)) > 0) {
+         (chunk_read = read(fd, batch_buf + batch_total, BATCH_READ_MAX - 1 - batch_total)) > 0) {
     batch_total += (size_t)chunk_read;
   }
 
@@ -502,8 +486,7 @@ cleanup_restore_partial:
   pthread_rwlock_wrlock(&config_rwlock);
   if (jail_idx < cfg.jail_count) {
     if (local_partial_len > 0 && local_partial_len < sizeof(local_partial_buf))
-      memcpy(cfg.jails[jail_idx].partial_line_buffer, local_partial_buf,
-             local_partial_len);
+      memcpy(cfg.jails[jail_idx].partial_line_buffer, local_partial_buf, local_partial_len);
     atomic_store(&cfg.jails[jail_idx].partial_line_len, local_partial_len);
   }
   pthread_rwlock_unlock(&config_rwlock);
@@ -536,8 +519,7 @@ void cleanup_partial_line_buffer(void) {
   pthread_rwlock_rdlock(&config_rwlock);
   snapshot_count = cfg.jail_count;
   for (int i = 0; i < snapshot_count && i < MAX_JAILS; i++) {
-    jail_snapshots[i].partial_len =
-        atomic_exchange(&cfg.jails[i].partial_line_len, 0);
+    jail_snapshots[i].partial_len = atomic_exchange(&cfg.jails[i].partial_line_len, 0);
     if (jail_snapshots[i].partial_len > 0 &&
         jail_snapshots[i].partial_len < sizeof(jail_snapshots[i].partial_buf)) {
       memcpy(jail_snapshots[i].partial_buf, cfg.jails[i].partial_line_buffer,
@@ -545,8 +527,7 @@ void cleanup_partial_line_buffer(void) {
     }
     jail_snapshots[i].max_retries = cfg.jails[i].max_retries;
     jail_snapshots[i].findtime = cfg.jails[i].findtime;
-    strncpy(jail_snapshots[i].name, cfg.jails[i].name,
-            sizeof(jail_snapshots[i].name) - 1);
+    strncpy(jail_snapshots[i].name, cfg.jails[i].name, sizeof(jail_snapshots[i].name) - 1);
     jail_snapshots[i].name[sizeof(jail_snapshots[i].name) - 1] = '\0';
   }
   pthread_rwlock_unlock(&config_rwlock);
@@ -575,8 +556,7 @@ void handle_log_rotation(int idx) {
    */
   int need_process = 0;
   size_t local_len = 0;
-  char local_buf[sizeof(
-      ((struct jail *)0)->partial_line_buffer)]; /* 修复 R6-3：使用与
+  char local_buf[sizeof(((struct jail *)0)->partial_line_buffer)]; /* 修复 R6-3：使用与
                                                     jail.partial_line_buffer
                                                     一致的大小（8192字节） */
 
@@ -634,8 +614,8 @@ void handle_log_rotation(int idx) {
       file_states[idx].wd = -1; /* 修复：先重置 wd，防止使用已失效的描述符 */
     }
     file_states[idx].wd = inotify_add_watch(
-        inotify_fd, file_states[idx].path,
-        IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE | IN_CREATE);
+      inotify_fd, file_states[idx].path,
+      IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE | IN_CREATE);
     if (file_states[idx].wd < 0) {
       daemon_log_err("Failed to re-add watch for %s: %s", file_states[idx].path,
                      strerror(errno));
@@ -698,23 +678,18 @@ void monitor_loop(void) {
           int log_entry_count = 0;
 
           pthread_rwlock_rdlock(&config_rwlock);
-          for (int j = 0; j < cfg.jail_count &&
-                          log_entry_count < MAX_JAILS * MAX_LOG_FILES;
-               j++) {
+          for (int j = 0;
+               j < cfg.jail_count && log_entry_count < MAX_JAILS * MAX_LOG_FILES; j++) {
             if (!cfg.jails[j].enabled)
               continue;
-            for (int i = 0; i < cfg.jails[j].log_count &&
-                            log_entry_count < MAX_JAILS * MAX_LOG_FILES;
+            for (int i = 0; i < cfg.jails[j].log_count && log_entry_count < MAX_JAILS * MAX_LOG_FILES;
                  i++) {
               strncpy(log_entries[log_entry_count].path,
-                      cfg.jails[j].log_files[i],
-                      sizeof(log_entries[0].path) - 1);
-              log_entries[log_entry_count]
-                  .path[sizeof(log_entries[0].path) - 1] = '\0';
+                      cfg.jails[j].log_files[i], sizeof(log_entries[0].path) - 1);
+              log_entries[log_entry_count].path[sizeof(log_entries[0].path) - 1] = '\0';
               strncpy(log_entries[log_entry_count].name, cfg.jails[j].name,
                       sizeof(log_entries[0].name) - 1);
-              log_entries[log_entry_count]
-                  .name[sizeof(log_entries[0].name) - 1] = '\0';
+              log_entries[log_entry_count].name[sizeof(log_entries[0].name) - 1] = '\0';
               log_entry_count++;
             }
           }
@@ -754,8 +729,7 @@ void monitor_loop(void) {
               file_states[i].inode = 0;
               file_states[i].path[0] = '\0';
               file_states[i].jail_idx = -1;
-              file_states[i].symlink_detected =
-                  false; /* 修复：重置符号链接标记 */
+              file_states[i].symlink_detected = false; /* 修复：重置符号链接标记 */
             }
             close(inotify_fd);
             inotify_fd = -1;
@@ -764,8 +738,7 @@ void monitor_loop(void) {
               daemon_log_warn("Failed to re-setup inotify for new log files. "
                               "Will retry later.");
             } else {
-              daemon_log_info(
-                  "Successfully re-setup inotify with new log files");
+              daemon_log_info("Successfully re-setup inotify with new log files");
             }
           }
         }
@@ -773,8 +746,7 @@ void monitor_loop(void) {
 
       /* 检查是否请求了配置重载 - 使用原子交换防止信号丢失 */
       if (atomic_exchange(&reload_config, 0)) {
-        atomic_fetch_add(&daemon_stats.config_reloads,
-                         1); /* 记录配置重载次数 */
+        atomic_fetch_add(&daemon_stats.config_reloads, 1); /* 记录配置重载次数 */
         daemon_log_info("Reloading configuration...");
 
         unsigned int old_max_retries, old_findtime, old_ban_time;
@@ -819,8 +791,7 @@ void monitor_loop(void) {
           /* 配置目录模式：重载整个目录 */
           daemon_log_info("Reloading config directory: %s", reload_config_dir);
           if (load_config_directory(reload_config_dir) < 0) {
-            daemon_log_warn(
-                "Failed to reload config directory, keeping old config");
+            daemon_log_warn("Failed to reload config directory, keeping old config");
             /* 重载失败，保留 jail 数量 */
           } else {
             reload_ok = 1;
@@ -829,15 +800,13 @@ void monitor_loop(void) {
         } else if (reload_config_file) {
           /* 单文件模式：重载单个文件 */
           if (parse_config_file(reload_config_file) < 0) {
-            daemon_log_err("Failed to reload configuration from %s",
-                           reload_config_file);
+            daemon_log_err("Failed to reload configuration from %s", reload_config_file);
           } else {
             reload_ok = 1;
             daemon_log_info("Configuration reloaded successfully");
           }
         } else {
-          daemon_log_warn(
-              "No config file or directory specified, cannot reload");
+          daemon_log_warn("No config file or directory specified, cannot reload");
         }
 
         if (reload_config_dir)
@@ -860,8 +829,7 @@ void monitor_loop(void) {
               file_states[i].inode = 0;
               file_states[i].path[0] = '\0';
               file_states[i].jail_idx = -1;
-              file_states[i].symlink_detected =
-                  false; /* 修复：重置符号链接标记 */
+              file_states[i].symlink_detected = false; /* 修复：重置符号链接标记 */
             }
             close(inotify_fd);
             inotify_fd = -1;
@@ -888,8 +856,7 @@ void monitor_loop(void) {
                             old_ban_time, cfg.default_ban_time);
           }
           if (old_interval != cfg.interval) {
-            daemon_log_info("interval changed from %d to %d", old_interval,
-                            cfg.interval);
+            daemon_log_info("interval changed from %d to %d", old_interval, cfg.interval);
           }
           if (old_metrics_port != cfg.metrics_port) {
             daemon_log_info("metrics_port changed from %d to %d",
@@ -940,24 +907,21 @@ void monitor_loop(void) {
 
       /* 额外边界检查：确保 event->len 在合理范围内 */
       if (event->len > EVENT_BUF_LEN) {
-        daemon_log_warn(
-            "inotify event length too large, skipping (len=%u, max=%d)",
-            event->len, (int)EVENT_BUF_LEN);
+        daemon_log_warn("inotify event length too large, skipping (len=%u, max=%d)",
+                        event->len, (int)EVENT_BUF_LEN);
         break;
       }
 
       /* 验证 event->len 不会导致缓冲区溢出 */
       if (sizeof(struct inotify_event) + event->len > (size_t)(len - i)) {
-        daemon_log_warn(
-            "inotify event too large for remaining buffer, skipping");
+        daemon_log_warn("inotify event too large for remaining buffer, skipping");
         break;
       }
 
       /* 额外安全检查：确保我们不会有意外的大的事件长度 */
       if (event->len > 1024) { /* 大多数 inotify 事件名称较小 */
         daemon_log_warn(
-            "Suspiciously large inotify event length, skipping (len=%u)",
-            event->len);
+          "Suspiciously large inotify event length, skipping (len=%u)", event->len);
         /* 即使 event->len 很大也安全计算下一个位置 */
         size_t next_pos = i + sizeof(struct inotify_event) + event->len;
         if (next_pos < i) { // 溢出检查

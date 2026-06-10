@@ -89,8 +89,7 @@ void remove_entry_for_jail(struct jail *j, const char *ip) {
 }
 
 /* 统计时间窗口内的近期失败次数 */
-unsigned int count_recent(struct failed_entry *entry, time_t window,
-                          unsigned int max_retries) {
+unsigned int count_recent(struct failed_entry *entry, time_t window, unsigned int max_retries) {
   time_t now = time(NULL);
   unsigned int count = 0;
 
@@ -136,8 +135,7 @@ unsigned int count_recent(struct failed_entry *entry, time_t window,
  * @now: 当前时间戳
  * @findtime: 统计失败次数的时间窗口
  */
-void process_failed_timestamps(struct failed_entry *entry, time_t now,
-                               time_t findtime) {
+void process_failed_timestamps(struct failed_entry *entry, time_t now, time_t findtime) {
   /* 修复 W2-1：编译时检查 memmove 大小计算不会溢出 */
   _Static_assert(MAX_FAILED_TIMESTAMPS < (SIZE_MAX / sizeof(time_t)),
                  "MAX_FAILED_TIMESTAMPS * sizeof(time_t) would overflow");
@@ -180,16 +178,14 @@ void process_failed_timestamps(struct failed_entry *entry, time_t now,
  * @findtime: 统计失败次数的时间窗口
  * @jail_name: Jail名称用于日志记录（NULL表示全局）
  */
-void check_and_ban(struct failed_entry *entry, const char *ip,
-                   unsigned int max_retries, unsigned int findtime,
-                   const char *jail_name) {
+void check_and_ban(struct failed_entry *entry, const char *ip, unsigned int max_retries,
+                   unsigned int findtime, const char *jail_name) {
   unsigned int recent_fails = count_recent(entry, findtime, max_retries);
 
   if (recent_fails >= max_retries) {
     if (jail_name) {
-      daemon_log_warn(
-          "IP %s exceeded %d failures in %d seconds in jail '%s', banning", ip,
-          recent_fails, findtime, jail_name);
+      daemon_log_warn("IP %s exceeded %d failures in %d seconds in jail '%s', banning",
+                      ip, recent_fails, findtime, jail_name);
     } else {
       daemon_log_warn("IP %s exceeded %d failures in %d seconds, banning", ip,
                       recent_fails, findtime);
@@ -197,12 +193,10 @@ void check_and_ban(struct failed_entry *entry, const char *ip,
 
     if (ban_ip(ip) == 0) {
       if (jail_name) {
-        daemon_log_info(
-            "Successfully banned IP %s after %d failed attempts in jail '%s'",
-            ip, recent_fails, jail_name);
+        daemon_log_info("Successfully banned IP %s after %d failed attempts in jail '%s'",
+                        ip, recent_fails, jail_name);
       } else {
-        daemon_log_info("Successfully banned IP %s after %d failed attempts",
-                        ip, recent_fails);
+        daemon_log_info("Successfully banned IP %s after %d failed attempts", ip, recent_fails);
       }
     } else {
       if (jail_name) {
@@ -217,9 +211,8 @@ void check_and_ban(struct failed_entry *entry, const char *ip,
     }
   } else {
     if (jail_name) {
-      daemon_log_debug(
-          "IP %s has %d failed attempts in %d seconds in jail '%s'", ip,
-          recent_fails, findtime, jail_name);
+      daemon_log_debug("IP %s has %d failed attempts in %d seconds in jail '%s'",
+                       ip, recent_fails, findtime, jail_name);
     } else {
       daemon_log_debug("IP %s has %d failed attempts in %d seconds", ip,
                        recent_fails, findtime);
@@ -229,14 +222,12 @@ void check_and_ban(struct failed_entry *entry, const char *ip,
 
 /* 处理失败登录尝试 - 支持jail的版本 */
 void handle_failed_attempt_for_jail(struct jail *j, const char *ip,
-                                    unsigned int max_retries,
-                                    unsigned int findtime) {
+                                    unsigned int max_retries, unsigned int findtime) {
   struct failed_entry *entry;
   time_t now;
 
   if (!ip || !*ip) {
-    daemon_log_err(
-        "Invalid IP address provided to handle_failed_attempt_for_jail");
+    daemon_log_err("Invalid IP address provided to handle_failed_attempt_for_jail");
     return;
   }
 

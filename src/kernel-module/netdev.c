@@ -42,8 +42,7 @@ void sync_work_handler(struct work_struct *work) {
     return;
   }
 
-  current_ips = kmalloc_array(MAX_DISCOVERED_IPS, sizeof(struct temp_ip_entry),
-                              GFP_KERNEL);
+  current_ips = kmalloc_array(MAX_DISCOVERED_IPS, sizeof(struct temp_ip_entry), GFP_KERNEL);
   if (!current_ips) {
     fw_pr_err("Failed to allocate current_ips");
     return;
@@ -114,8 +113,7 @@ void sync_work_handler(struct work_struct *work) {
     bool found;
   };
   struct current_ip_lookup *lookup_table;
-  lookup_table = kmalloc_array(current_count, sizeof(struct current_ip_lookup),
-                               GFP_KERNEL);
+  lookup_table = kmalloc_array(current_count, sizeof(struct current_ip_lookup), GFP_KERNEL);
   if (!lookup_table) {
     fw_pr_err("Failed to allocate lookup_table");
     kfree(current_ips);
@@ -127,8 +125,7 @@ void sync_work_handler(struct work_struct *work) {
       lookup_table[i].addr.ipv6 = current_ips[i].addr.ipv6;
       lookup_table[i].mask.prefix_len = current_ips[i].mask.prefix_len;
     } else {
-      lookup_table[i].addr.ipv4 =
-          current_ips[i].addr.ipv4 & current_ips[i].mask.ipv4_mask;
+      lookup_table[i].addr.ipv4 = current_ips[i].addr.ipv4 & current_ips[i].mask.ipv4_mask;
       lookup_table[i].mask.ipv4_mask = current_ips[i].mask.ipv4_mask;
     }
     lookup_table[i].found = false;
@@ -179,14 +176,12 @@ void sync_work_handler(struct work_struct *work) {
     if (!lookup_table[i].found) {
       int ret;
       if (current_ips[i].af == FW_AF_INET6) {
-        ret = add_whitelist_entry(fw, FW_AF_INET6, &current_ips[i].addr.ipv6,
-                                  NULL, current_ips[i].mask.prefix_len,
-                                  current_ips[i].name);
+        ret = add_whitelist_entry(fw, FW_AF_INET6, &current_ips[i].addr.ipv6, NULL,
+                                  current_ips[i].mask.prefix_len, current_ips[i].name);
       } else {
-        ret = add_whitelist_entry(fw, FW_AF_INET, &current_ips[i].addr.ipv4,
-                                  &current_ips[i].mask.ipv4_mask,
-                                  inet_mask_len(current_ips[i].mask.ipv4_mask),
-                                  current_ips[i].name);
+        ret = add_whitelist_entry(
+          fw, FW_AF_INET, &current_ips[i].addr.ipv4, &current_ips[i].mask.ipv4_mask,
+          inet_mask_len(current_ips[i].mask.ipv4_mask), current_ips[i].name);
       }
       if (ret < 0)
         fw_pr_warn("Failed to add system IP to whitelist during sync");
@@ -224,8 +219,7 @@ EXPORT_SYMBOL_GPL(sync_system_ips);
 /*
  * netdev_event_handler - 网络设备事件回调函数
  */
-static int netdev_event_handler(struct notifier_block *nb, unsigned long event,
-                                void *ptr) {
+static int netdev_event_handler(struct notifier_block *nb, unsigned long event, void *ptr) {
   struct firewall_info *fw;
   struct net_device *dev;
 
@@ -306,8 +300,7 @@ void auto_discover_system_ips(struct firewall_info *fw) {
 
   FW_DEBUG(1, "ENTRY: auto_discover_system_ips");
 
-  temp_ips = kmalloc_array(MAX_DISCOVERED_IPS, sizeof(struct temp_ip_entry),
-                           GFP_KERNEL);
+  temp_ips = kmalloc_array(MAX_DISCOVERED_IPS, sizeof(struct temp_ip_entry), GFP_KERNEL);
   if (!temp_ips) {
     fw_pr_err("Failed to allocate temp_ips");
     return;
@@ -368,15 +361,15 @@ void auto_discover_system_ips(struct firewall_info *fw) {
                                 temp_ips[i].mask.prefix_len, temp_ips[i].name);
     } else {
       ret = add_whitelist_entry(
-          fw, FW_AF_INET, &temp_ips[i].addr.ipv4, &temp_ips[i].mask.ipv4_mask,
-          inet_mask_len(temp_ips[i].mask.ipv4_mask), temp_ips[i].name);
+        fw, FW_AF_INET, &temp_ips[i].addr.ipv4, &temp_ips[i].mask.ipv4_mask,
+        inet_mask_len(temp_ips[i].mask.ipv4_mask), temp_ips[i].name);
     }
     if (ret < 0)
       fw_pr_warn("Failed to add system IP to whitelist");
   }
 
-  fw_pr_info_ratelimited("Auto-discovery complete. %d entries",
-                         atomic_read(&fw->whitelist_count));
+  fw_pr_info_ratelimited(
+    "Auto-discovery complete. %d entries", atomic_read(&fw->whitelist_count));
 
   kfree(temp_ips);
 

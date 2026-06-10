@@ -61,10 +61,8 @@ static int validate_state_path(const char *filename) {
   }
 
   if (strncmp(filename, "/var/lib/", 9) != 0 &&
-      strncmp(filename, "/tmp/", 5) != 0 &&
-      strncmp(filename, "/etc/", 5) != 0) {
-    fw_pr_err("State file path outside allowed directories, rejected: %s",
-              filename);
+      strncmp(filename, "/tmp/", 5) != 0 && strncmp(filename, "/etc/", 5) != 0) {
+    fw_pr_err("State file path outside allowed directories, rejected: %s", filename);
     return -EPERM;
   }
 
@@ -119,14 +117,12 @@ int save_state_to_file(const char *filename) {
   if (validate_state_path(filename) < 0)
     return -EINVAL;
 
-  ban_entries_v4 = kmalloc_array(MAX_SAVE_BAN,
-                                 sizeof(struct saved_ban_entry_v4), GFP_KERNEL);
-  ban_entries_v6 = kmalloc_array(MAX_SAVE_BAN,
-                                 sizeof(struct saved_ban_entry_v6), GFP_KERNEL);
+  ban_entries_v4 = kmalloc_array(MAX_SAVE_BAN, sizeof(struct saved_ban_entry_v4), GFP_KERNEL);
+  ban_entries_v6 = kmalloc_array(MAX_SAVE_BAN, sizeof(struct saved_ban_entry_v6), GFP_KERNEL);
   wl_entries_v4 = kmalloc_array(
-      MAX_SAVE_WL, sizeof(struct saved_whitelist_entry_v4), GFP_KERNEL);
+    MAX_SAVE_WL, sizeof(struct saved_whitelist_entry_v4), GFP_KERNEL);
   wl_entries_v6 = kmalloc_array(
-      MAX_SAVE_WL, sizeof(struct saved_whitelist_entry_v6), GFP_KERNEL);
+    MAX_SAVE_WL, sizeof(struct saved_whitelist_entry_v6), GFP_KERNEL);
   if (!ban_entries_v4 || !ban_entries_v6 || !wl_entries_v4 || !wl_entries_v6) {
     kfree(ban_entries_v4);
     kfree(ban_entries_v6);
@@ -165,8 +161,7 @@ int save_state_to_file(const char *filename) {
     else
       continue;
     if (ban_count_v6 < MAX_SAVE_BAN) {
-      memcpy(&ban_entries_v6[ban_count_v6].ipv6, &entry->addr.ipv6,
-             sizeof(struct in6_addr));
+      memcpy(&ban_entries_v6[ban_count_v6].ipv6, &entry->addr.ipv6, sizeof(struct in6_addr));
       ban_entries_v6[ban_count_v6].remaining_time = remaining_time;
       ban_count_v6++;
     }
@@ -190,10 +185,8 @@ int save_state_to_file(const char *filename) {
   rcu_read_lock();
   hash_for_each_rcu(fw_info.whitelist_table_ipv6, hash, wl_entry, hash) {
     if (wl_count_v6 < MAX_SAVE_WL) {
-      memcpy(&wl_entries_v6[wl_count_v6].ipv6, &wl_entry->addr.ipv6,
-             sizeof(struct in6_addr));
-      wl_entries_v6[wl_count_v6].prefix_len =
-          READ_ONCE(wl_entry->mask.prefix_len);
+      memcpy(&wl_entries_v6[wl_count_v6].ipv6, &wl_entry->addr.ipv6, sizeof(struct in6_addr));
+      wl_entries_v6[wl_count_v6].prefix_len = READ_ONCE(wl_entry->mask.prefix_len);
       strscpy(wl_entries_v6[wl_count_v6].device_name, wl_entry->device_name,
               sizeof(wl_entries_v6[wl_count_v6].device_name));
       wl_count_v6++;
@@ -213,8 +206,8 @@ int save_state_to_file(const char *filename) {
   {
     struct kstat open_stat;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
-    int getattr_err = vfs_getattr(&file->f_path, &open_stat, STATX_BASIC_STATS,
-                                  AT_STATX_SYNC_AS_STAT);
+    int getattr_err = vfs_getattr(
+      &file->f_path, &open_stat, STATX_BASIC_STATS, AT_STATX_SYNC_AS_STAT);
 #else
     int getattr_err = vfs_getattr(&file->f_path, &open_stat);
 #endif
@@ -262,8 +255,7 @@ int save_state_to_file(const char *filename) {
     __be32 net_addr = wl_entries_v4[i].ipv4 & wl_entries_v4[i].mask;
     ip_to_str(FW_AF_INET, &net_addr, ip_str, sizeof(ip_str));
     written = snprintf(buffer, sizeof(buffer), "WL_V4 %s %d %s\n", ip_str,
-                       inet_mask_len(wl_entries_v4[i].mask),
-                       wl_entries_v4[i].device_name);
+                       inet_mask_len(wl_entries_v4[i].mask), wl_entries_v4[i].device_name);
     if (kernel_write(file, buffer, written, &pos) != written) {
       fw_pr_err("Failed to write whitelist entry to state file");
       filp_close(file, NULL);
@@ -289,16 +281,13 @@ int save_state_to_file(const char *filename) {
   {
     struct kstat close_stat;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
-    int getattr_err = vfs_getattr(&file->f_path, &close_stat, STATX_BASIC_STATS,
-                                  AT_STATX_SYNC_AS_STAT);
+    int getattr_err = vfs_getattr(
+      &file->f_path, &close_stat, STATX_BASIC_STATS, AT_STATX_SYNC_AS_STAT);
 #else
     int getattr_err = vfs_getattr(&file->f_path, &close_stat);
 #endif
-    if (getattr_err || close_stat.ino != saved_ino ||
-        close_stat.dev != saved_dev) {
-      fw_pr_err(
-          "State file inode changed during write (possible TOCTOU attack): %s",
-          filename);
+    if (getattr_err || close_stat.ino != saved_ino || close_stat.dev != saved_dev) {
+      fw_pr_err("State file inode changed during write (possible TOCTOU attack): %s", filename);
       filp_close(file, NULL);
       ret = -EIO;
       goto out_free;
@@ -366,8 +355,7 @@ int restore_state_from_file(const char *filename) {
   {
     struct kstat stat;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
-    int stat_err = vfs_getattr(&file->f_path, &stat, STATX_BASIC_STATS,
-                               AT_STATX_SYNC_AS_STAT);
+    int stat_err = vfs_getattr(&file->f_path, &stat, STATX_BASIC_STATS, AT_STATX_SYNC_AS_STAT);
 #else
     int stat_err = vfs_getattr(&file->f_path, &stat);
 #endif
@@ -382,8 +370,8 @@ int restore_state_from_file(const char *filename) {
   bytes_read = 0;
   while (bytes_read < MAX_STATE_FILE_SIZE - 1) {
     ssize_t chunk;
-    chunk = kernel_read(file, buffer + bytes_read,
-                        MAX_STATE_FILE_SIZE - 1 - bytes_read, &pos);
+    chunk = kernel_read(
+      file, buffer + bytes_read, MAX_STATE_FILE_SIZE - 1 - bytes_read, &pos);
     if (chunk <= 0)
       break;
     bytes_read += chunk;
@@ -422,8 +410,7 @@ int restore_state_from_file(const char *filename) {
             }
 
             if (restored_ban_count >= max_restore_bans) {
-              fw_pr_warn("Maximum ban entries (%d) reached during restore",
-                         max_restore_bans);
+              fw_pr_warn("Maximum ban entries (%d) reached during restore", max_restore_bans);
               continue;
             }
 
@@ -436,15 +423,12 @@ int restore_state_from_file(const char *filename) {
               if (remaining_time == 0) {
                 is_permanent = true;
               } else if (remaining_time > 365UL * 24 * 60 * 60) {
-                fw_pr_warn("Skipping ban with invalid remaining time: %lu",
-                           remaining_time);
+                fw_pr_warn("Skipping ban with invalid remaining time: %lu", remaining_time);
                 continue;
               } else {
                 unsigned long ban_duration;
-                if (check_mul_overflow(remaining_time, (unsigned long)HZ,
-                                       &ban_duration)) {
-                  fw_pr_warn("Ban duration overflow for IP %s, skipping",
-                             ip_str);
+                if (check_mul_overflow(remaining_time, (unsigned long)HZ, &ban_duration)) {
+                  fw_pr_warn("Ban duration overflow for IP %s, skipping", ip_str);
                   continue;
                 }
                 unban_time = jiffies + ban_duration;
@@ -470,8 +454,7 @@ int restore_state_from_file(const char *filename) {
                 bool duplicate = false;
 
                 spin_lock(&fw_info.ban_locks_ipv4[bkt4]);
-                hlist_for_each_entry_rcu(existing,
-                                         &fw_info.ban_table_ipv4[bkt4], hash) {
+                hlist_for_each_entry_rcu(existing, &fw_info.ban_table_ipv4[bkt4], hash) {
                   if (existing->af == FW_AF_INET && existing->addr.ipv4 == ip) {
                     duplicate = true;
                     break;
@@ -521,10 +504,8 @@ int restore_state_from_file(const char *filename) {
                 continue;
               } else {
                 unsigned long ban_duration;
-                if (check_mul_overflow(remaining_time, (unsigned long)HZ,
-                                       &ban_duration)) {
-                  fw_pr_warn("Ban duration overflow for IP %s, skipping",
-                             ip_str);
+                if (check_mul_overflow(remaining_time, (unsigned long)HZ, &ban_duration)) {
+                  fw_pr_warn("Ban duration overflow for IP %s, skipping", ip_str);
                   continue;
                 }
                 unban_time = jiffies + ban_duration;
@@ -549,8 +530,7 @@ int restore_state_from_file(const char *filename) {
                 bool duplicate = false;
 
                 spin_lock(&fw_info.ban_locks_ipv6[bkt6]);
-                hlist_for_each_entry_rcu(existing,
-                                         &fw_info.ban_table_ipv6[bkt6], hash) {
+                hlist_for_each_entry_rcu(existing, &fw_info.ban_table_ipv6[bkt6], hash) {
                   if (existing->af == FW_AF_INET6 &&
                       ipv6_addr_equal(&existing->addr.ipv6, &ip6)) {
                     duplicate = true;
@@ -587,14 +567,13 @@ int restore_state_from_file(const char *filename) {
             continue;
 
           if (kstrtoint(mask_str, 10, &prefix_len) == 0) {
-            mask =
-                prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1));
+            mask = prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1));
 
             if (in4_pton(ip_str, -1, (u8 *)&ip, -1, NULL)) {
               __be32 normalized_ip = ip & mask;
-              int result = add_whitelist_entry(
-                  &fw_info, FW_AF_INET, &normalized_ip, &mask, prefix_len,
-                  dev_name ? dev_name : "restored");
+              int result = add_whitelist_entry(&fw_info, FW_AF_INET,
+                                               &normalized_ip, &mask, prefix_len,
+                                               dev_name ? dev_name : "restored");
               if (result == 0)
                 restored_wl_count++;
             }
@@ -615,9 +594,8 @@ int restore_state_from_file(const char *filename) {
 
           if (kstrtoint(prefix_str, 10, &prefix_len) == 0) {
             if (in6_pton(ip_str, -1, (u8 *)&ip6, -1, NULL)) {
-              int result = add_whitelist_entry(
-                  &fw_info, FW_AF_INET6, &ip6, NULL, prefix_len,
-                  dev_name ? dev_name : "restored");
+              int result = add_whitelist_entry(&fw_info, FW_AF_INET6, &ip6, NULL, prefix_len,
+                                               dev_name ? dev_name : "restored");
               if (result == 0)
                 restored_wl_count++;
             }

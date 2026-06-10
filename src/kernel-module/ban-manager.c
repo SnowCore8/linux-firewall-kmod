@@ -27,8 +27,7 @@ extern void free_ban_entry_rcu(struct rcu_head *head);
  */
 static inline int __recheck_whitelist_ipv6(struct firewall_info *fw,
                                            const struct in6_addr *ip6);
-static inline int __recheck_whitelist_ipv4(struct firewall_info *fw,
-                                           __be32 ipv4);
+static inline int __recheck_whitelist_ipv4(struct firewall_info *fw, __be32 ipv4);
 
 static inline int __recheck_whitelist_ipv6(struct firewall_info *fw,
                                            const struct in6_addr *ip6) {
@@ -44,8 +43,7 @@ static inline int __recheck_whitelist_ipv6(struct firewall_info *fw,
   return 0;
 }
 
-static inline int __recheck_whitelist_ipv4(struct firewall_info *fw,
-                                           __be32 ipv4) {
+static inline int __recheck_whitelist_ipv4(struct firewall_info *fw, __be32 ipv4) {
   int bkt;
   struct whitelist_entry *wl_entry;
 
@@ -76,8 +74,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
                        const char *log_msg, unsigned long log_arg);
 static struct ban_entry *__find_ban_entry_rcu(struct firewall_info *fw, u8 af,
                                               const void *ip);
-static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip,
-                         bool permanent_only);
+static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip, bool permanent_only);
 
 int ban_ip_with_duration(struct firewall_info *fw, u8 af, const void *ip,
                          unsigned long seconds);
@@ -89,8 +86,7 @@ int check_flood_protection(void);
  * fw_hash_seed 在模块初始化时随机生成，防止攻击者构造哈希碰撞。
  */
 static u32 hash_ipv6(const struct in6_addr *addr) {
-  return jhash(addr, sizeof(struct in6_addr), fw_hash_seed) &
-         ((1 << BAN_HASH_BITS) - 1);
+  return jhash(addr, sizeof(struct in6_addr), fw_hash_seed) & ((1 << BAN_HASH_BITS) - 1);
 }
 
 /* __do_ban_ip_ipv6 - 将 IPv6 地址插入封禁表
@@ -122,8 +118,7 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw,
   }
 
   hlist_for_each_entry(existing, &fw->ban_table_ipv6[bkt6], hash) {
-    if (existing->af == FW_AF_INET6 &&
-        ipv6_addr_equal(&existing->addr.ipv6, ip6)) {
+    if (existing->af == FW_AF_INET6 && ipv6_addr_equal(&existing->addr.ipv6, ip6)) {
       bool is_perm = READ_ONCE(existing->is_permanent);
       unsigned long ubt = READ_ONCE(existing->unban_time);
       if (is_perm || time_before(jiffies, ubt)) {
@@ -156,9 +151,8 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw,
  * 逻辑与 __do_ban_ip_ipv6 相同，仅地址族和哈希计算不同。
  * 使用 hash_min 替代 jhash，因为 IPv4 地址本身就是 32 位哈希值。
  */
-static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4,
-                            struct ban_entry *entry, unsigned long unban_time,
-                            bool is_permanent) {
+static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4, struct ban_entry *entry,
+                            unsigned long unban_time, bool is_permanent) {
   u32 bkt4 = hash_min(ipv4, BAN_HASH_BITS);
   struct ban_entry *existing;
 
@@ -271,8 +265,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
 
   /* 阶段 3：使用每桶锁操作封禁表（不同桶可并行） */
   if (af == FW_AF_INET6) {
-    ret = __do_ban_ip_ipv6(fw, (struct in6_addr *)ip, entry, unban_time,
-                           is_permanent);
+    ret = __do_ban_ip_ipv6(fw, (struct in6_addr *)ip, entry, unban_time, is_permanent);
   } else {
     ret = __do_ban_ip_ipv4(fw, *(__be32 *)ip, entry, unban_time, is_permanent);
   }
@@ -322,8 +315,7 @@ static struct ban_entry *__find_ban_entry_rcu(struct firewall_info *fw, u8 af,
  * 使用每桶锁而非全局锁，不同桶的解封操作可并行执行。
  * permanent_only 参数用于区分普通解封和永久封禁移除。
  */
-static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip,
-                         bool permanent_only) {
+static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip, bool permanent_only) {
   struct ban_entry *entry;
   int found = 0;
   char ip_str[INET6_STR_LEN];
@@ -412,8 +404,7 @@ int is_banned(struct firewall_info *fw, u8 af, const void *ip) {
     }
   }
   rcu_read_unlock();
-  FW_DEBUG(3, "Result for IP (af=%d) ban check: %s", af,
-           found ? "BANNED" : "NOT BANNED");
+  FW_DEBUG(3, "Result for IP (af=%d) ban check: %s", af, found ? "BANNED" : "NOT BANNED");
   return found;
 }
 EXPORT_SYMBOL_GPL(is_banned);

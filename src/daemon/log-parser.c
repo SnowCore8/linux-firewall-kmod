@@ -30,8 +30,7 @@ static const char *find_ip_candidate(const char **ptr, const char *line) {
 }
 
 static int validate_ip_candidate(const char *start, const char *end,
-                                 const char *line, char *ip_out,
-                                 size_t ip_size) {
+                                 const char *line, char *ip_out, size_t ip_size) {
   size_t ip_len;
   struct in_addr addr4;
   struct in6_addr addr6;
@@ -43,8 +42,8 @@ static int validate_ip_candidate(const char *start, const char *end,
     return 0;
 
   /* 验证词边界 */
-  if (start > line && (isxdigit((unsigned char)start[-1]) || start[-1] == '.' ||
-                       start[-1] == ':'))
+  if (start > line &&
+      (isxdigit((unsigned char)start[-1]) || start[-1] == '.' || start[-1] == ':'))
     return 0;
   if (*end && (isxdigit((unsigned char)*end) || *end == '.' || *end == ':'))
     return 0;
@@ -57,8 +56,7 @@ static int validate_ip_candidate(const char *start, const char *end,
   if (inet_pton(AF_INET, ip_buf, &addr4) == 1) {
     unsigned int ip_num = ntohl(addr4.s_addr);
     unsigned int ip_class_a = (ip_num >> 24) & 0xFF;
-    if (ip_num == 0 || ip_num == 0xFFFFFFFF || ip_class_a == 127 ||
-        ip_class_a >= 224)
+    if (ip_num == 0 || ip_num == 0xFFFFFFFF || ip_class_a == 127 || ip_class_a >= 224)
       return 0;
     strncpy(ip_out, ip_buf, ip_size - 1);
     ip_out[ip_size - 1] = '\0';
@@ -114,8 +112,7 @@ int extract_ipv4(const char *line, char *ip_out, size_t ip_size) {
     if (inet_pton(AF_INET, ip_buf, &addr) == 1) {
       unsigned int ip_num = ntohl(addr.s_addr);
       unsigned int ip_class_a = (ip_num >> 24) & 0xFF;
-      if (ip_num == 0 || ip_num == 0xFFFFFFFF || ip_class_a == 127 ||
-          ip_class_a >= 224)
+      if (ip_num == 0 || ip_num == 0xFFFFFFFF || ip_class_a == 127 || ip_class_a >= 224)
         continue;
 
       strncpy(ip_out, ip_buf, ip_size - 1);
@@ -140,8 +137,7 @@ int extract_ip(const char *line, char *ip_out, size_t ip_size) {
 
     end = start;
     /* 修复 W2-5：限制贪婪匹配长度，避免捕获过长字符串导致误识别 */
-    while (*end &&
-           (isxdigit((unsigned char)*end) || *end == '.' || *end == ':') &&
+    while (*end && (isxdigit((unsigned char)*end) || *end == '.' || *end == ':') &&
            (size_t)(end - start) < INET6_ADDRSTRLEN)
       end++;
 
@@ -153,8 +149,7 @@ int extract_ip(const char *line, char *ip_out, size_t ip_size) {
 }
 
 /* 辅助函数：从日志行中提取并验证IP (支持 IPv4/IPv6) */
-int extract_and_validate_ip(struct jail *j, const char *log_line, char *ip_out,
-                            size_t ip_size) {
+int extract_and_validate_ip(struct jail *j, const char *log_line, char *ip_out, size_t ip_size) {
   char ip_buf[INET6_ADDRSTRLEN];
   struct in_addr addr4;
   struct in6_addr addr6;
@@ -212,9 +207,8 @@ static int match_pcre2_regex(struct jail *j, const char *line, size_t line_len,
     if (!j->regexes[i].compiled || !j->regexes[i].match_data)
       continue;
 
-    regex_result = pcre2_match(j->regexes[i].compiled, (PCRE2_SPTR)line,
-                               (PCRE2_SIZE)line_len, 0, 0,
-                               j->regexes[i].match_data, NULL);
+    regex_result = pcre2_match(j->regexes[i].compiled, (PCRE2_SPTR)line, (PCRE2_SIZE)line_len,
+                               0, 0, j->regexes[i].match_data, NULL);
 
     if (regex_result < 0) {
       if (regex_result != PCRE2_ERROR_NOMATCH) {
@@ -246,8 +240,7 @@ static int match_pcre2_regex(struct jail *j, const char *line, size_t line_len,
 
     if (ip_group < 0) {
       daemon_log_warn(
-          "No valid IP capture group found in regex match for jail '%s'",
-          j->name);
+        "No valid IP capture group found in regex match for jail '%s'", j->name);
       continue; /* 尝试下一个正则 */
     }
 
@@ -260,8 +253,7 @@ static int match_pcre2_regex(struct jail *j, const char *line, size_t line_len,
     ip_len = ovector[ip_group * 2 + 1] - ovector[ip_group * 2];
 
     if (ip_len >= INET6_ADDRSTRLEN || ip_len == 0) {
-      daemon_log_warn("Invalid IP length in jail '%s' log: %zu", j->name,
-                      ip_len);
+      daemon_log_warn("Invalid IP length in jail '%s' log: %zu", j->name, ip_len);
       continue;
     }
 
@@ -276,17 +268,14 @@ static int match_pcre2_regex(struct jail *j, const char *line, size_t line_len,
   return 0; /* 所有正则都不匹配 */
 }
 
-static int fallback_string_match(const char *line, char *ip_out,
-                                 size_t ip_size) {
-  if (strstr(line, "Failed password for") ||
-      strstr(line, "authentication failure")) {
+static int fallback_string_match(const char *line, char *ip_out, size_t ip_size) {
+  if (strstr(line, "Failed password for") || strstr(line, "authentication failure")) {
     return extract_ip(line, ip_out, ip_size);
   }
   return 0;
 }
 
-int parse_log_line(struct jail *j, const char *line, char *ip_out,
-                   size_t ip_size) {
+int parse_log_line(struct jail *j, const char *line, char *ip_out, size_t ip_size) {
   int result;
 
   size_t line_len = strlen(line);

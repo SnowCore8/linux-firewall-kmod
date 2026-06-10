@@ -63,11 +63,11 @@ static _Atomic(time_t) last_failure_time = 0;
 /* ============================================================================
  * 日志辅助函数（使用 syslog 以保持与守护进程一致）
  * ========================================================================== */
-#define exporter_log_err(fmt, ...)                                             \
+#define exporter_log_err(fmt, ...) \
   syslog(LOG_ERR, "firewall[exporter]: ERROR: " fmt, ##__VA_ARGS__)
-#define exporter_log_warn(fmt, ...)                                            \
+#define exporter_log_warn(fmt, ...) \
   syslog(LOG_WARNING, "firewall[exporter]: WARN: " fmt, ##__VA_ARGS__)
-#define exporter_log_info(fmt, ...)                                            \
+#define exporter_log_info(fmt, ...) \
   syslog(LOG_INFO, "firewall[exporter]: " fmt, ##__VA_ARGS__)
 
 /* 安全审计日志速率限制：防止认证失败日志淹没系统日志 */
@@ -85,9 +85,7 @@ static inline void exporter_log_warn_ratelimited(const char *fmt, ...) {
   /* 每秒最多输出 1 条，超额仅在每分钟输出一次汇总 */
   if (warn_count > 1) {
     if (warn_count == 2)
-      syslog(
-          LOG_WARNING,
-          "firewall[exporter]: WARN: suppressing repeated auth failure logs");
+      syslog(LOG_WARNING, "firewall[exporter]: WARN: suppressing repeated auth failure logs");
     return;
   }
 
@@ -113,8 +111,7 @@ static inline void exporter_log_warn_ratelimited(const char *fmt, ...) {
 static void add_security_headers(struct MHD_Response *response) {
   MHD_add_response_header(response, "X-Content-Type-Options", "nosniff");
   MHD_add_response_header(response, "X-Frame-Options", "DENY");
-  MHD_add_response_header(response, "X-Content-Security-Policy",
-                          "default-src 'none'");
+  MHD_add_response_header(response, "X-Content-Security-Policy", "default-src 'none'");
   MHD_add_response_header(response, "Cache-Control", "no-store");
 }
 
@@ -284,29 +281,28 @@ static void read_daemon_stats(daemon_stats_snapshot_t *stats) {
 static int format_kernel_metrics(char *buf, size_t buf_size, int offset,
                                  const kernel_stats_t *stats) {
   return snprintf(
-      buf + offset, buf_size - offset,
-      "# HELP firewall_kernel_banned_ips_current Current number of banned IPs "
-      "in kernel\n"
-      "# TYPE firewall_kernel_banned_ips_current gauge\n"
-      "firewall_kernel_banned_ips_current %lu\n"
-      "\n"
-      "# HELP firewall_kernel_bans_total Total number of ban operations "
-      "in kernel\n"
-      "# TYPE firewall_kernel_bans_total counter\n"
-      "firewall_kernel_bans_total %lu\n"
-      "\n"
-      "# HELP firewall_kernel_unbans_total Total number of unban "
-      "operations in kernel\n"
-      "# TYPE firewall_kernel_unbans_total counter\n"
-      "firewall_kernel_unbans_total %lu\n"
-      "\n"
-      "# HELP firewall_kernel_whitelist_count Current number of whitelisted "
-      "IPs\n"
-      "# TYPE firewall_kernel_whitelist_count gauge\n"
-      "firewall_kernel_whitelist_count %lu\n"
-      "\n",
-      stats->banned, stats->total_bans, stats->total_unbans,
-      stats->whitelist_count);
+    buf + offset, buf_size - offset,
+    "# HELP firewall_kernel_banned_ips_current Current number of banned IPs "
+    "in kernel\n"
+    "# TYPE firewall_kernel_banned_ips_current gauge\n"
+    "firewall_kernel_banned_ips_current %lu\n"
+    "\n"
+    "# HELP firewall_kernel_bans_total Total number of ban operations "
+    "in kernel\n"
+    "# TYPE firewall_kernel_bans_total counter\n"
+    "firewall_kernel_bans_total %lu\n"
+    "\n"
+    "# HELP firewall_kernel_unbans_total Total number of unban "
+    "operations in kernel\n"
+    "# TYPE firewall_kernel_unbans_total counter\n"
+    "firewall_kernel_unbans_total %lu\n"
+    "\n"
+    "# HELP firewall_kernel_whitelist_count Current number of whitelisted "
+    "IPs\n"
+    "# TYPE firewall_kernel_whitelist_count gauge\n"
+    "firewall_kernel_whitelist_count %lu\n"
+    "\n",
+    stats->banned, stats->total_bans, stats->total_unbans, stats->whitelist_count);
 }
 
 /**
@@ -320,55 +316,55 @@ static int format_kernel_metrics(char *buf, size_t buf_size, int offset,
 static int format_daemon_counter_metrics(char *buf, size_t buf_size, int offset,
                                          const daemon_stats_snapshot_t *stats) {
   return snprintf(
-      buf + offset, buf_size - offset,
-      "# HELP firewall_daemon_lines_parsed_total Total log lines parsed by "
-      "daemon\n"
-      "# TYPE firewall_daemon_lines_parsed_total counter\n"
-      "firewall_daemon_lines_parsed_total %lu\n"
-      "\n"
-      "# HELP firewall_daemon_ips_extracted_total Total IP addresses extracted "
-      "from logs\n"
-      "# TYPE firewall_daemon_ips_extracted_total counter\n"
-      "firewall_daemon_ips_extracted_total %lu\n"
-      "\n"
-      "# HELP firewall_daemon_ips_banned_total Total IP addresses banned by "
-      "daemon\n"
-      "# TYPE firewall_daemon_ips_banned_total counter\n"
-      "firewall_daemon_ips_banned_total %lu\n"
-      "\n"
-      "# HELP firewall_daemon_failed_attempts_total Total failed login "
-      "attempts detected\n"
-      "# TYPE firewall_daemon_failed_attempts_total counter\n"
-      "firewall_daemon_failed_attempts_total %lu\n"
-      "\n"
-      "# HELP firewall_daemon_config_reloads_total Total configuration "
-      "reloads\n"
-      "# TYPE firewall_daemon_config_reloads_total counter\n"
-      "firewall_daemon_config_reloads_total %lu\n"
-      "\n"
-      "# HELP firewall_daemon_inotify_events_total Total inotify events "
-      "received\n"
-      "# TYPE firewall_daemon_inotify_events_total counter\n"
-      "firewall_daemon_inotify_events_total %lu\n"
-      "\n"
-      "# HELP firewall_daemon_log_rotations_total Total log rotation events "
-      "detected\n"
-      "# TYPE firewall_daemon_log_rotations_total counter\n"
-      "firewall_daemon_log_rotations_total %lu\n"
-      "\n"
-      "# HELP firewall_daemon_lines_skipped_total Total log lines skipped (too "
-      "long or invalid)\n"
-      "# TYPE firewall_daemon_lines_skipped_total counter\n"
-      "firewall_daemon_lines_skipped_total %lu\n"
-      "\n"
-      "# HELP firewall_daemon_regex_matches_total Total regex pattern matches "
-      "across all jails\n"
-      "# TYPE firewall_daemon_regex_matches_total counter\n"
-      "firewall_daemon_regex_matches_total %lu\n"
-      "\n",
-      stats->lines_parsed, stats->ips_extracted, stats->ips_banned,
-      stats->failed_attempts, stats->config_reloads, stats->inotify_events,
-      stats->log_rotations, stats->lines_skipped, stats->regex_matches);
+    buf + offset, buf_size - offset,
+    "# HELP firewall_daemon_lines_parsed_total Total log lines parsed by "
+    "daemon\n"
+    "# TYPE firewall_daemon_lines_parsed_total counter\n"
+    "firewall_daemon_lines_parsed_total %lu\n"
+    "\n"
+    "# HELP firewall_daemon_ips_extracted_total Total IP addresses extracted "
+    "from logs\n"
+    "# TYPE firewall_daemon_ips_extracted_total counter\n"
+    "firewall_daemon_ips_extracted_total %lu\n"
+    "\n"
+    "# HELP firewall_daemon_ips_banned_total Total IP addresses banned by "
+    "daemon\n"
+    "# TYPE firewall_daemon_ips_banned_total counter\n"
+    "firewall_daemon_ips_banned_total %lu\n"
+    "\n"
+    "# HELP firewall_daemon_failed_attempts_total Total failed login "
+    "attempts detected\n"
+    "# TYPE firewall_daemon_failed_attempts_total counter\n"
+    "firewall_daemon_failed_attempts_total %lu\n"
+    "\n"
+    "# HELP firewall_daemon_config_reloads_total Total configuration "
+    "reloads\n"
+    "# TYPE firewall_daemon_config_reloads_total counter\n"
+    "firewall_daemon_config_reloads_total %lu\n"
+    "\n"
+    "# HELP firewall_daemon_inotify_events_total Total inotify events "
+    "received\n"
+    "# TYPE firewall_daemon_inotify_events_total counter\n"
+    "firewall_daemon_inotify_events_total %lu\n"
+    "\n"
+    "# HELP firewall_daemon_log_rotations_total Total log rotation events "
+    "detected\n"
+    "# TYPE firewall_daemon_log_rotations_total counter\n"
+    "firewall_daemon_log_rotations_total %lu\n"
+    "\n"
+    "# HELP firewall_daemon_lines_skipped_total Total log lines skipped (too "
+    "long or invalid)\n"
+    "# TYPE firewall_daemon_lines_skipped_total counter\n"
+    "firewall_daemon_lines_skipped_total %lu\n"
+    "\n"
+    "# HELP firewall_daemon_regex_matches_total Total regex pattern matches "
+    "across all jails\n"
+    "# TYPE firewall_daemon_regex_matches_total counter\n"
+    "firewall_daemon_regex_matches_total %lu\n"
+    "\n",
+    stats->lines_parsed, stats->ips_extracted, stats->ips_banned,
+    stats->failed_attempts, stats->config_reloads, stats->inotify_events,
+    stats->log_rotations, stats->lines_skipped, stats->regex_matches);
 }
 
 /**
@@ -379,15 +375,13 @@ static int format_daemon_counter_metrics(char *buf, size_t buf_size, int offset,
  * @uptime: 运行时间（秒）
  * 返回: 写入的字节数
  */
-static int format_daemon_uptime_metric(char *buf, size_t buf_size, int offset,
-                                       time_t uptime) {
-  return snprintf(
-      buf + offset, buf_size - offset,
-      "# HELP firewall_daemon_uptime_seconds Daemon uptime in seconds\n"
-      "# TYPE firewall_daemon_uptime_seconds gauge\n"
-      "firewall_daemon_uptime_seconds %ld\n"
-      "\n",
-      (long)uptime);
+static int format_daemon_uptime_metric(char *buf, size_t buf_size, int offset, time_t uptime) {
+  return snprintf(buf + offset, buf_size - offset,
+                  "# HELP firewall_daemon_uptime_seconds Daemon uptime in seconds\n"
+                  "# TYPE firewall_daemon_uptime_seconds gauge\n"
+                  "firewall_daemon_uptime_seconds %ld\n"
+                  "\n",
+                  (long)uptime);
 }
 
 /**
@@ -400,8 +394,7 @@ static int format_daemon_uptime_metric(char *buf, size_t buf_size, int offset,
  * 返回: 写入的字节数
  */
 static int format_daemon_metrics(char *buf, size_t buf_size, int offset,
-                                 const daemon_stats_snapshot_t *stats,
-                                 time_t uptime) {
+                                 const daemon_stats_snapshot_t *stats, time_t uptime) {
   int written;
 
   written = format_daemon_counter_metrics(buf, buf_size, offset, stats);
@@ -454,26 +447,25 @@ static int generate_metrics(char *buf, size_t buf_size) {
  * @output_size: 输出缓冲区大小
  * 返回: 解码后的字节数，失败返回 -1
  */
-static int base64_decode_simple(const char *input, char *output,
-                                size_t output_size) {
+static int base64_decode_simple(const char *input, char *output, size_t output_size) {
   /* 安全考虑：全部初始化为 0xFF（无效值），防止未初始化条目默认为 0
    * 与 'A' 的值相同，导致攻击者可通过特殊字符伪造 Base64 输入 */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Woverride-init"
   static const unsigned char decode_table[256] = {
-      [0 ... 255] = 0xFF, ['A'] = 0,  ['B'] = 1,  ['C'] = 2,  ['D'] = 3,
-      ['E'] = 4,          ['F'] = 5,  ['G'] = 6,  ['H'] = 7,  ['I'] = 8,
-      ['J'] = 9,          ['K'] = 10, ['L'] = 11, ['M'] = 12, ['N'] = 13,
-      ['O'] = 14,         ['P'] = 15, ['Q'] = 16, ['R'] = 17, ['S'] = 18,
-      ['T'] = 19,         ['U'] = 20, ['V'] = 21, ['W'] = 22, ['X'] = 23,
-      ['Y'] = 24,         ['Z'] = 25, ['a'] = 26, ['b'] = 27, ['c'] = 28,
-      ['d'] = 29,         ['e'] = 30, ['f'] = 31, ['g'] = 32, ['h'] = 33,
-      ['i'] = 34,         ['j'] = 35, ['k'] = 36, ['l'] = 37, ['m'] = 38,
-      ['n'] = 39,         ['o'] = 40, ['p'] = 41, ['q'] = 42, ['r'] = 43,
-      ['s'] = 44,         ['t'] = 45, ['u'] = 46, ['v'] = 47, ['w'] = 48,
-      ['x'] = 49,         ['y'] = 50, ['z'] = 51, ['0'] = 52, ['1'] = 53,
-      ['2'] = 54,         ['3'] = 55, ['4'] = 56, ['5'] = 57, ['6'] = 58,
-      ['7'] = 59,         ['8'] = 60, ['9'] = 61, ['+'] = 62, ['/'] = 63,
+    [0 ... 255] = 0xFF, ['A'] = 0,  ['B'] = 1,  ['C'] = 2,  ['D'] = 3,
+    ['E'] = 4,          ['F'] = 5,  ['G'] = 6,  ['H'] = 7,  ['I'] = 8,
+    ['J'] = 9,          ['K'] = 10, ['L'] = 11, ['M'] = 12, ['N'] = 13,
+    ['O'] = 14,         ['P'] = 15, ['Q'] = 16, ['R'] = 17, ['S'] = 18,
+    ['T'] = 19,         ['U'] = 20, ['V'] = 21, ['W'] = 22, ['X'] = 23,
+    ['Y'] = 24,         ['Z'] = 25, ['a'] = 26, ['b'] = 27, ['c'] = 28,
+    ['d'] = 29,         ['e'] = 30, ['f'] = 31, ['g'] = 32, ['h'] = 33,
+    ['i'] = 34,         ['j'] = 35, ['k'] = 36, ['l'] = 37, ['m'] = 38,
+    ['n'] = 39,         ['o'] = 40, ['p'] = 41, ['q'] = 42, ['r'] = 43,
+    ['s'] = 44,         ['t'] = 45, ['u'] = 46, ['v'] = 47, ['w'] = 48,
+    ['x'] = 49,         ['y'] = 50, ['z'] = 51, ['0'] = 52, ['1'] = 53,
+    ['2'] = 54,         ['3'] = 55, ['4'] = 56, ['5'] = 57, ['6'] = 58,
+    ['7'] = 59,         ['8'] = 60, ['9'] = 61, ['+'] = 62, ['/'] = 63,
   };
 #pragma GCC diagnostic pop
   size_t in_len = strlen(input);
@@ -559,13 +551,12 @@ static int constant_time_compare(const void *a, const void *b, size_t len) {
  * 注意：当未配置用户名/密码时，跳过认证（向后兼容）。
  */
 static int check_basic_auth_header(const char *auth_header) {
-  char cfg_user[64] = {0};
-  char cfg_pass[128] = {0};
+  char cfg_user[64] = { 0 };
+  char cfg_pass[128] = { 0 };
 
   pthread_rwlock_rdlock(&config_rwlock);
   /* 修复：如果密码长度超过缓冲区大小，直接返回失败，防止截断比较 */
-  if (cfg.metrics_password == NULL ||
-      strlen(cfg.metrics_password) >= sizeof(cfg_pass)) {
+  if (cfg.metrics_password == NULL || strlen(cfg.metrics_password) >= sizeof(cfg_pass)) {
     pthread_rwlock_unlock(&config_rwlock);
     memset(cfg_pass, 0, sizeof(cfg_pass));
     atomic_fetch_add(&auth_failures, 1);
@@ -593,10 +584,9 @@ static int check_basic_auth_header(const char *auth_header) {
   time_t last = atomic_load(&last_failure_time);
   if (atomic_load(&auth_failures) >= AUTH_FAILURE_THRESHOLD &&
       (now - last) < AUTH_LOCKOUT_DURATION) {
-    exporter_log_warn_ratelimited(
-        "Auth temporarily locked due to too many failures (%lu failures in "
-        "%ld seconds)",
-        atomic_load(&auth_failures), (long)(now - last));
+    exporter_log_warn_ratelimited("Auth temporarily locked due to too many failures (%lu failures in "
+                                  "%ld seconds)",
+                                  atomic_load(&auth_failures), (long)(now - last));
     return 0;
   }
 
@@ -611,8 +601,7 @@ static int check_basic_auth_header(const char *auth_header) {
   /* 安全考虑：缓冲区增大至 256 字节，与输入缓冲区一致，
    * 防止 Base64 解码后长度接近边界时 null 终止符写入越界 */
   char decoded[256];
-  int decoded_len =
-      base64_decode_simple(auth_header + 6, decoded, sizeof(decoded) - 1);
+  int decoded_len = base64_decode_simple(auth_header + 6, decoded, sizeof(decoded) - 1);
   if (decoded_len <= 0) {
     /* 修复 R8-2：记录 Base64 解码失败 */
     atomic_fetch_add(&auth_failures, 1);
@@ -655,22 +644,18 @@ static int check_basic_auth_header(const char *auth_header) {
     total_max = sizeof(decoded);
 
   /* 使用局部缓冲区填充零，确保比较长度一致 */
-  char user_cmp[256] = {0};
-  char auth_user_cmp[256] = {0};
-  char pass_cmp[256] = {0};
-  char auth_pass_cmp[256] = {0};
+  char user_cmp[256] = { 0 };
+  char auth_user_cmp[256] = { 0 };
+  char pass_cmp[256] = { 0 };
+  char auth_pass_cmp[256] = { 0 };
 
   /* 安全复制（不会溢出，因为 max_len < sizeof(decoded) < 256） */
-  memcpy(user_cmp, cfg_user,
-         user_len < sizeof(user_cmp) ? user_len : sizeof(user_cmp));
+  memcpy(user_cmp, cfg_user, user_len < sizeof(user_cmp) ? user_len : sizeof(user_cmp));
   memcpy(auth_user_cmp, auth_user,
-         auth_user_len < sizeof(auth_user_cmp) ? auth_user_len
-                                               : sizeof(auth_user_cmp));
-  memcpy(pass_cmp, cfg_pass,
-         pass_len < sizeof(pass_cmp) ? pass_len : sizeof(pass_cmp));
+         auth_user_len < sizeof(auth_user_cmp) ? auth_user_len : sizeof(auth_user_cmp));
+  memcpy(pass_cmp, cfg_pass, pass_len < sizeof(pass_cmp) ? pass_len : sizeof(pass_cmp));
   memcpy(auth_pass_cmp, auth_pass,
-         auth_pass_len < sizeof(auth_pass_cmp) ? auth_pass_len
-                                               : sizeof(auth_pass_cmp));
+         auth_pass_len < sizeof(auth_pass_cmp) ? auth_pass_len : sizeof(auth_pass_cmp));
 
   /* 恒定时间比较：使用异或累加，即使长度不同也执行完整比较
    * 长度差异也通过异或纳入结果，防止早期退出 */
@@ -701,18 +686,15 @@ static int check_basic_auth_header(const char *auth_header) {
  * @connection: MHD 连接
  * 返回: MHD_Result
  */
-static enum MHD_Result
-send_unauthorized_response(struct MHD_Connection *connection) {
+static enum MHD_Result send_unauthorized_response(struct MHD_Connection *connection) {
   struct MHD_Response *response;
   const char *body = "401 Unauthorized\r\n";
   int ret;
 
-  response = MHD_create_response_from_buffer(strlen(body), (void *)body,
-                                             MHD_RESPMEM_PERSISTENT);
+  response = MHD_create_response_from_buffer(strlen(body), (void *)body, MHD_RESPMEM_PERSISTENT);
   if (!response)
     return MHD_NO;
-  MHD_add_response_header(response, "WWW-Authenticate",
-                          "Basic realm=\"firewall-metrics\"");
+  MHD_add_response_header(response, "WWW-Authenticate", "Basic realm=\"firewall-metrics\"");
   /* 修复 R8-4：401 响应同样需要安全头 */
   add_security_headers(response);
   ret = MHD_queue_response(connection, MHD_HTTP_UNAUTHORIZED, response);
@@ -732,8 +714,7 @@ static enum MHD_Result send_error_response(struct MHD_Connection *connection,
   struct MHD_Response *response;
   int ret;
 
-  response = MHD_create_response_from_buffer(strlen(body), (void *)body,
-                                             MHD_RESPMEM_PERSISTENT);
+  response = MHD_create_response_from_buffer(strlen(body), (void *)body, MHD_RESPMEM_PERSISTENT);
   if (!response)
     return MHD_NO;
   /* 修复 R8-4：错误响应同样需要安全头 */
@@ -748,8 +729,7 @@ static enum MHD_Result send_error_response(struct MHD_Connection *connection,
  * @connection: MHD 连接
  * 返回: MHD_Result
  */
-static enum MHD_Result
-handle_metrics_request(struct MHD_Connection *connection) {
+static enum MHD_Result handle_metrics_request(struct MHD_Connection *connection) {
   char metrics_buf[EXPORTER_BUFFER_SIZE];
   struct MHD_Response *response;
   int len;
@@ -762,12 +742,10 @@ handle_metrics_request(struct MHD_Connection *connection) {
                                "500 Internal Server Error\r\n");
   }
 
-  response =
-      MHD_create_response_from_buffer(len, metrics_buf, MHD_RESPMEM_MUST_COPY);
+  response = MHD_create_response_from_buffer(len, metrics_buf, MHD_RESPMEM_MUST_COPY);
   if (!response)
     return MHD_NO;
-  MHD_add_response_header(response, "Content-Type",
-                          "text/plain; version=0.0.4; charset=utf-8");
+  MHD_add_response_header(response, "Content-Type", "text/plain; version=0.0.4; charset=utf-8");
   /* 修复 R8-1：添加安全头防止 MIME 嗅探、点击劫持等攻击 */
   add_security_headers(response);
   ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
@@ -780,14 +758,13 @@ handle_metrics_request(struct MHD_Connection *connection) {
  * @connection: MHD 连接
  * 返回: MHD_Result
  */
-static enum MHD_Result
-handle_health_request(struct MHD_Connection *connection) {
+static enum MHD_Result handle_health_request(struct MHD_Connection *connection) {
   const char *health_body = "{\"status\":\"ok\"}\n";
   struct MHD_Response *response;
   int ret;
 
   response = MHD_create_response_from_buffer(
-      strlen(health_body), (void *)health_body, MHD_RESPMEM_PERSISTENT);
+    strlen(health_body), (void *)health_body, MHD_RESPMEM_PERSISTENT);
   if (!response)
     return MHD_NO;
   MHD_add_response_header(response, "Content-Type", "application/json");
@@ -798,11 +775,10 @@ handle_health_request(struct MHD_Connection *connection) {
   return ret == MHD_YES ? MHD_YES : MHD_NO;
 }
 
-static enum MHD_Result
-answer_to_connection(void *cls, struct MHD_Connection *connection,
-                     const char *url, const char *method, const char *version,
-                     const char *upload_data, size_t *upload_data_size,
-                     void **con_cls) {
+static enum MHD_Result answer_to_connection(void *cls, struct MHD_Connection *connection,
+                                            const char *url, const char *method,
+                                            const char *version, const char *upload_data,
+                                            size_t *upload_data_size, void **con_cls) {
   const char *auth_header;
 
   /* 忽略未使用参数的警告 */
@@ -814,14 +790,13 @@ answer_to_connection(void *cls, struct MHD_Connection *connection,
 
   /* 仅接受 GET 请求 */
   if (strcmp(method, "GET") != 0) {
-    return send_error_response(connection, MHD_HTTP_METHOD_NOT_ALLOWED,
-                               "405 Method Not Allowed\r\n");
+    return send_error_response(
+      connection, MHD_HTTP_METHOD_NOT_ALLOWED, "405 Method Not Allowed\r\n");
   }
 
   /* Basic Auth 认证检查（/health 端点跳过认证） */
   if (strcmp(url, "/health") != 0 && strcmp(url, "/healthz") != 0) {
-    auth_header = MHD_lookup_connection_value(connection, MHD_HEADER_KIND,
-                                              "Authorization");
+    auth_header = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "Authorization");
     int auth_result = check_basic_auth_header(auth_header);
     if (auth_result == 0) {
       /* M3 修复：安全日志 - 只记录 URL，不记录 Authorization 头或其他敏感凭据
@@ -838,8 +813,7 @@ answer_to_connection(void *cls, struct MHD_Connection *connection,
   } else if (strcmp(url, "/health") == 0 || strcmp(url, "/healthz") == 0) {
     return handle_health_request(connection);
   } else {
-    return send_error_response(connection, MHD_HTTP_NOT_FOUND,
-                               "404 Not Found\r\n");
+    return send_error_response(connection, MHD_HTTP_NOT_FOUND, "404 Not Found\r\n");
   }
 }
 
@@ -876,8 +850,7 @@ static const char *setup_bind_address(struct sockaddr_in *bind_addr,
   bind_addr->sin_family = AF_INET;
   bind_addr->sin_port = htons((uint16_t)listen_port);
   if (inet_pton(AF_INET, bind_address, &bind_addr->sin_addr) != 1) {
-    exporter_log_err("Invalid bind address: %s, falling back to 127.0.0.1",
-                     bind_address);
+    exporter_log_err("Invalid bind address: %s, falling back to 127.0.0.1", bind_address);
     inet_pton(AF_INET, "127.0.0.1", &bind_addr->sin_addr);
   }
 
@@ -890,14 +863,13 @@ static const char *setup_bind_address(struct sockaddr_in *bind_addr,
  * @bind_addr: 绑定地址结构
  * 返回: MHD_Daemon指针，失败返回NULL
  */
-static struct MHD_Daemon *
-start_mhd_daemon(int listen_port, const struct sockaddr_in *bind_addr) {
+static struct MHD_Daemon *start_mhd_daemon(int listen_port,
+                                           const struct sockaddr_in *bind_addr) {
   return MHD_start_daemon(
-      MHD_USE_SELECT_INTERNALLY | MHD_USE_ERROR_LOG, (uint16_t)listen_port,
-      NULL, NULL, &answer_to_connection, NULL, MHD_OPTION_CONNECTION_LIMIT,
-      EXPORTER_MAX_CONNECTIONS, MHD_OPTION_CONNECTION_TIMEOUT,
-      EXPORTER_CONNECTION_TIMEOUT, MHD_OPTION_SOCK_ADDR, bind_addr,
-      MHD_OPTION_NOTIFY_COMPLETED, NULL, NULL, MHD_OPTION_END);
+    MHD_USE_SELECT_INTERNALLY | MHD_USE_ERROR_LOG, (uint16_t)listen_port, NULL, NULL,
+    &answer_to_connection, NULL, MHD_OPTION_CONNECTION_LIMIT, EXPORTER_MAX_CONNECTIONS,
+    MHD_OPTION_CONNECTION_TIMEOUT, EXPORTER_CONNECTION_TIMEOUT, MHD_OPTION_SOCK_ADDR,
+    bind_addr, MHD_OPTION_NOTIFY_COMPLETED, NULL, NULL, MHD_OPTION_END);
 }
 
 /**

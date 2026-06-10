@@ -16,12 +16,10 @@ unsigned int fw_max_bans_per_second = 200;
 module_param(fw_ban_time, uint, 0400);
 MODULE_PARM_DESC(fw_ban_time, "封禁持续时间（秒）（默认 600）");
 module_param(state_file, charp, 0444);
-MODULE_PARM_DESC(state_file,
-                 "用于保存/恢复封禁和白名单条目的状态文件路径（默认 "
-                 "/var/lib/firewall/state）");
+MODULE_PARM_DESC(state_file, "用于保存/恢复封禁和白名单条目的状态文件路径（默认 "
+                             "/var/lib/firewall/state）");
 module_param(fw_max_bans_per_second, uint, 0400);
-MODULE_PARM_DESC(fw_max_bans_per_second,
-                 "泛洪保护下每秒最大封禁添加次数（默认 200）");
+MODULE_PARM_DESC(fw_max_bans_per_second, "泛洪保护下每秒最大封禁添加次数（默认 200）");
 
 /* 全局防火墙信息 */
 struct firewall_info fw_info;
@@ -30,7 +28,9 @@ struct firewall_info fw_info;
 u32 fw_hash_seed;
 
 /* 导出函数，提供对 fw_info 的受控访问 */
-struct firewall_info *get_fw_info(void) { return &fw_info; }
+struct firewall_info *get_fw_info(void) {
+  return &fw_info;
+}
 EXPORT_SYMBOL_GPL(get_fw_info);
 
 /*
@@ -173,8 +173,7 @@ static int __init firewall_init(void) {
     goto err_nf_ipv4;
   }
 
-  fw_pr_info("Module loaded successfully (ban_time=%u, state_file=%s)",
-             fw_ban_time, state_file);
+  fw_pr_info("Module loaded successfully (ban_time=%u, state_file=%s)", fw_ban_time, state_file);
   return 0;
 
 err_nf_ipv4:
@@ -232,6 +231,5 @@ module_exit(firewall_exit);
 
 MODULE_LICENSE("Dual MIT/GPL");
 MODULE_AUTHOR("Firewall Authors");
-MODULE_DESCRIPTION(
-    "Kernel-level IP banning module (fail2ban alternative, IPv4/IPv6)");
+MODULE_DESCRIPTION("Kernel-level IP banning module (fail2ban alternative, IPv4/IPv6)");
 MODULE_VERSION("2.2");

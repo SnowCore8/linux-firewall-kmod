@@ -49,13 +49,13 @@ KHASH_MAP_INIT_STR(ip_map, struct failed_entry *)
  * 所有守护进程日志使用 syslog，带有统一的 "firewall: " 前缀。
  * 标准错误输出仅在 syslog 初始化之前使用。
  * ========================================================================== */
-#define daemon_log_err(fmt, ...)                                               \
+#define daemon_log_err(fmt, ...) \
   syslog(LOG_ERR, "firewall: " fmt, ##__VA_ARGS__)
-#define daemon_log_warn(fmt, ...)                                              \
+#define daemon_log_warn(fmt, ...) \
   syslog(LOG_WARNING, "firewall: " fmt, ##__VA_ARGS__)
-#define daemon_log_info(fmt, ...)                                              \
+#define daemon_log_info(fmt, ...) \
   syslog(LOG_INFO, "firewall: " fmt, ##__VA_ARGS__)
-#define daemon_log_debug(fmt, ...)                                             \
+#define daemon_log_debug(fmt, ...) \
   syslog(LOG_DEBUG, "firewall: " fmt, ##__VA_ARGS__)
 
 /* Procfs 路径 - 统一 bans 接口 */
@@ -99,10 +99,10 @@ struct file_state {
 
 /* 命名正则表达式结构 */
 struct regex_info {
-  char name[MAX_REGEX_NAME_LEN];    /* 正则表达式名称（如 invalid_user） */
-  char *pattern;                    /* 正则表达式模式 */
-  pcre2_code *compiled;             /* 编译后的 PCRE2 对象 */
-  pcre2_match_data *match_data;     /* PCRE2 匹配数据 */
+  char name[MAX_REGEX_NAME_LEN]; /* 正则表达式名称（如 invalid_user） */
+  char *pattern;                 /* 正则表达式模式 */
+  pcre2_code *compiled;          /* 编译后的 PCRE2 对象 */
+  pcre2_match_data *match_data; /* PCRE2 匹配数据 */
 };
 
 /* Jail 结构体 - 独立的监控单元 */
@@ -113,19 +113,18 @@ struct jail {
   int log_count;                  /* 日志文件数量 */
   /* 多正则表达式支持 */
   struct regex_info regexes[MAX_REGEX_PATTERNS]; /* 命名正则表达式数组 */
-  int regex_count;                              /* 正则表达式数量 */
-  int regex_compiled;                           /* 是否已编译 */
-  unsigned int max_retries;     /* 封禁前的最大失败次数 */
-  unsigned int findtime;        /* 统计失败次数的时间窗口 */
-  unsigned int ban_time;        /* 封禁持续时间 */
-  bool _max_retries_set;        /* 用户是否显式配置了 max_retries */
-  bool _findtime_set;           /* 用户是否显式配置了 findtime */
-  bool _ban_time_set;           /* 用户是否显式配置了 ban_time */
+  int regex_count;                               /* 正则表达式数量 */
+  int regex_compiled;                            /* 是否已编译 */
+  unsigned int max_retries; /* 封禁前的最大失败次数 */
+  unsigned int findtime;    /* 统计失败次数的时间窗口 */
+  unsigned int ban_time;    /* 封禁持续时间 */
+  bool _max_retries_set;    /* 用户是否显式配置了 max_retries */
+  bool _findtime_set;       /* 用户是否显式配置了 findtime */
+  bool _ban_time_set;       /* 用户是否显式配置了 ban_time */
   struct failed_entry *failed_hash_table[256]; /* 手动哈希表（废弃） */
   khash_t(ip_map) * failed_hash;               /* khash 用于 O(1) 查找 */
   char partial_line_buffer[8192]; /* 不完整日志行的缓冲区 */
-  atomic_size_t
-      partial_line_len; /* 修复 P2-7：使用原子类型，允许无锁读取和原子清零 */
+  atomic_size_t partial_line_len; /* 修复 P2-7：使用原子类型，允许无锁读取和原子清零 */
 };
 
 /* 全局运行标志 - 修复：统一使用 _Atomic(int) 替代 volatile sig_atomic_t */

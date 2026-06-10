@@ -74,44 +74,44 @@ void fw_flush_cpu_stats(void);
 #define fw_pr_debug(fmt, ...) pr_debug("firewall: " fmt, ##__VA_ARGS__)
 
 /* 限流变体，用于高频日志 */
-#define fw_pr_info_ratelimited(fmt, ...)                                       \
+#define fw_pr_info_ratelimited(fmt, ...) \
   pr_info_ratelimited("firewall: " fmt, ##__VA_ARGS__)
-#define fw_pr_warn_ratelimited(fmt, ...)                                       \
+#define fw_pr_warn_ratelimited(fmt, ...) \
   pr_warn_ratelimited("firewall: " fmt, ##__VA_ARGS__)
-#define fw_pr_err_ratelimited(fmt, ...)                                        \
+#define fw_pr_err_ratelimited(fmt, ...) \
   pr_err_ratelimited("firewall: " fmt, ##__VA_ARGS__)
-#define fw_pr_debug_ratelimited(fmt, ...)                                      \
+#define fw_pr_debug_ratelimited(fmt, ...) \
   pr_debug_ratelimited("firewall: " fmt, ##__VA_ARGS__)
 
 /* 动态级别日志宏 - 由编译时 DEBUG_LEVEL 控制 */
-#define fw_log(level, fmt, ...)                                                \
-  do {                                                                         \
-    if (level <= DEBUG_LEVEL) {                                                \
-      switch (level) {                                                         \
-      case FW_LOG_LEVEL_ERR:                                                   \
-        fw_pr_err(fmt, ##__VA_ARGS__);                                         \
-        break;                                                                 \
-      case FW_LOG_LEVEL_WARN:                                                  \
-        fw_pr_warn(fmt, ##__VA_ARGS__);                                        \
-        break;                                                                 \
-      case FW_LOG_LEVEL_INFO:                                                  \
-        fw_pr_info(fmt, ##__VA_ARGS__);                                        \
-        break;                                                                 \
-      case FW_LOG_LEVEL_DEBUG:                                                 \
-        fw_pr_debug(fmt, ##__VA_ARGS__);                                       \
-        break;                                                                 \
-      }                                                                        \
-    }                                                                          \
+#define fw_log(level, fmt, ...)          \
+  do {                                   \
+    if (level <= DEBUG_LEVEL) {          \
+      switch (level) {                   \
+      case FW_LOG_LEVEL_ERR:             \
+        fw_pr_err(fmt, ##__VA_ARGS__);   \
+        break;                           \
+      case FW_LOG_LEVEL_WARN:            \
+        fw_pr_warn(fmt, ##__VA_ARGS__);  \
+        break;                           \
+      case FW_LOG_LEVEL_INFO:            \
+        fw_pr_info(fmt, ##__VA_ARGS__);  \
+        break;                           \
+      case FW_LOG_LEVEL_DEBUG:           \
+        fw_pr_debug(fmt, ##__VA_ARGS__); \
+        break;                           \
+      }                                  \
+    }                                    \
   } while (0)
 
 /* 遗留 FW_DEBUG 宏兼容性 - 将旧级别 1-3 映射到新系统 */
 #ifdef DEBUG_LEVEL
-#define FW_DEBUG(level, fmt, args...)                                          \
-  fw_log(FW_LOG_LEVEL_DEBUG - (level) + 1, fmt, ##args)
+#  define FW_DEBUG(level, fmt, args...) \
+    fw_log(FW_LOG_LEVEL_DEBUG - (level) + 1, fmt, ##args)
 #else
-#define FW_DEBUG(level, fmt, args...)                                          \
-  do {                                                                         \
-  } while (0)
+#  define FW_DEBUG(level, fmt, args...) \
+    do {                                \
+    } while (0)
 #endif
 
 #define BAN_HASH_BITS 12
@@ -244,8 +244,7 @@ int check_flood_protection(void);
 /* whitelist.c */
 int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
                         const void *mask, int prefix_len, const char *dev_name);
-int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
-                           int prefix_len);
+int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip, int prefix_len);
 bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip);
 
 /* netdev.c */
@@ -325,8 +324,7 @@ static inline void ip_to_str(u8 af, const void *ip, char *buf, size_t len) {
  */
 static inline bool compare_ips(u8 af, const void *ip1, const void *ip2) {
   if (af == FW_AF_INET6)
-    return ipv6_addr_equal((const struct in6_addr *)ip1,
-                           (const struct in6_addr *)ip2);
+    return ipv6_addr_equal((const struct in6_addr *)ip1, (const struct in6_addr *)ip2);
   return *(__be32 *)ip1 == *(__be32 *)ip2;
 }
 
@@ -340,8 +338,7 @@ static inline bool compare_ips(u8 af, const void *ip1, const void *ip2) {
 static inline u32 hash_ip(u8 af, const void *ip, int bits) {
   if (af == FW_AF_INET6) {
     const struct in6_addr *addr = ip;
-    return jhash(addr, sizeof(struct in6_addr), fw_hash_seed) &
-           ((1 << bits) - 1);
+    return jhash(addr, sizeof(struct in6_addr), fw_hash_seed) & ((1 << bits) - 1);
   }
   return hash_min(*(__be32 *)ip, bits);
 }
@@ -364,8 +361,7 @@ static inline u32 hash_ip_for_whitelist(u8 af, const void *ip, int bits) {
 /**
  * get_ban_table - 获取对应地址族的 ban 哈希表
  */
-static inline struct hlist_head *get_ban_table(struct firewall_info *fw,
-                                               u8 af) {
+static inline struct hlist_head *get_ban_table(struct firewall_info *fw, u8 af) {
   if (af == FW_AF_INET6)
     return fw->ban_table_ipv6;
   return fw->ban_table_ipv4;
@@ -374,8 +370,7 @@ static inline struct hlist_head *get_ban_table(struct firewall_info *fw,
 /**
  * get_whitelist_table - 获取对应地址族的 whitelist 哈希表
  */
-static inline struct hlist_head *get_whitelist_table(struct firewall_info *fw,
-                                                     u8 af) {
+static inline struct hlist_head *get_whitelist_table(struct firewall_info *fw, u8 af) {
   if (af == FW_AF_INET6)
     return fw->whitelist_table_ipv6;
   return fw->whitelist_table_ipv4;
@@ -390,8 +385,7 @@ static inline struct hlist_head *get_whitelist_table(struct firewall_info *fw,
  * 返回: 0 表示合法，-EINVAL 表示非法
  */
 static inline int validate_ipv4_address(__be32 ip, const char *ip_str,
-                                        const char *context,
-                                        bool allow_loopback) {
+                                        const char *context, bool allow_loopback) {
   unsigned int ip_num = ntohl(ip);
 
   if (ip == 0 || ip == 0xFFFFFFFF) {
@@ -408,13 +402,11 @@ static inline int validate_ipv4_address(__be32 ip, const char *ip_str,
     return -EINVAL;
   }
   if ((ip_num & 0xFF000000) == 0x00000000) {
-    fw_pr_warn("Attempt to %s invalid IPv4 (0.0.0.0/8): %s", context,
-               ip_str ?: "(null)");
+    fw_pr_warn("Attempt to %s invalid IPv4 (0.0.0.0/8): %s", context, ip_str ?: "(null)");
     return -EINVAL;
   }
   if ((ip_num & 0xFF000000) == 0xFF000000) {
-    fw_pr_warn("Attempt to %s invalid IPv4 (255.0.0.0/8): %s", context,
-               ip_str ?: "(null)");
+    fw_pr_warn("Attempt to %s invalid IPv4 (255.0.0.0/8): %s", context, ip_str ?: "(null)");
     return -EINVAL;
   }
 
@@ -429,9 +421,8 @@ static inline int validate_ipv4_address(__be32 ip, const char *ip_str,
  * @allow_loopback: 是否允许回环地址
  * 返回: 0 表示合法，-EINVAL 表示非法
  */
-static inline int validate_ipv6_address(const struct in6_addr *addr,
-                                        const char *ip_str, const char *context,
-                                        bool allow_loopback) {
+static inline int validate_ipv6_address(const struct in6_addr *addr, const char *ip_str,
+                                        const char *context, bool allow_loopback) {
   if (ipv6_addr_any(addr)) {
     fw_pr_warn("Attempt to %s invalid IPv6: %s", context, ip_str ?: "(null)");
     return -EINVAL;
@@ -457,11 +448,9 @@ static inline int validate_ipv6_address(const struct in6_addr *addr,
  * @allow_loopback: 是否允许回环地址
  */
 static inline int validate_ip_address(u8 af, const void *ip, const char *ip_str,
-                                      const char *context,
-                                      bool allow_loopback) {
+                                      const char *context, bool allow_loopback) {
   if (af == FW_AF_INET6)
-    return validate_ipv6_address((const struct in6_addr *)ip, ip_str, context,
-                                 allow_loopback);
+    return validate_ipv6_address((const struct in6_addr *)ip, ip_str, context, allow_loopback);
   return validate_ipv4_address(*(__be32 *)ip, ip_str, context, allow_loopback);
 }
 

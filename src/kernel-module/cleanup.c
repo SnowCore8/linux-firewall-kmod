@@ -18,8 +18,7 @@ void free_ban_entry_rcu(struct rcu_head *head) {
 }
 
 void free_whitelist_entry_rcu(struct rcu_head *head) {
-  struct whitelist_entry *entry =
-      container_of(head, struct whitelist_entry, rcu_head);
+  struct whitelist_entry *entry = container_of(head, struct whitelist_entry, rcu_head);
   FW_DEBUG(3, "Freeing whitelist entry via RCU callback");
   kfree(entry);
 }
@@ -39,8 +38,7 @@ static int cleanup_table_ipv4(struct firewall_info *fw) {
     int current_bucket = (start_bucket + i) % table_size;
     /* R9-4: 使用每桶锁替代全局锁 */
     spin_lock(&fw->ban_locks_ipv4[current_bucket]);
-    hlist_for_each_entry_safe(entry, tmp, &fw->ban_table_ipv4[current_bucket],
-                              hash) {
+    hlist_for_each_entry_safe(entry, tmp, &fw->ban_table_ipv4[current_bucket], hash) {
       if (processed >= max_processed_per_call)
         break;
       if (READ_ONCE(entry->is_permanent)) {
@@ -75,8 +73,7 @@ static int cleanup_table_ipv6(struct firewall_info *fw) {
     int current_bucket = (start_bucket + i) % table_size;
     /* R9-4: 使用每桶锁替代全局锁 */
     spin_lock(&fw->ban_locks_ipv6[current_bucket]);
-    hlist_for_each_entry_safe(entry, tmp, &fw->ban_table_ipv6[current_bucket],
-                              hash) {
+    hlist_for_each_entry_safe(entry, tmp, &fw->ban_table_ipv6[current_bucket], hash) {
       if (processed >= max_processed_per_call)
         break;
       if (READ_ONCE(entry->is_permanent)) {
@@ -99,8 +96,7 @@ static int cleanup_table_ipv6(struct firewall_info *fw) {
 static bool cleanup_expired_bans(struct firewall_info *fw) {
   int removed = 0;
 
-  FW_DEBUG(2, "ENTRY: cleanup_expired_bans(current_count=%d)",
-           atomic_read(&fw->ban_count));
+  FW_DEBUG(2, "ENTRY: cleanup_expired_bans(current_count=%d)", atomic_read(&fw->ban_count));
 
   atomic_inc(&fw->cleanup_cycles);
 
@@ -120,10 +116,10 @@ static bool cleanup_expired_bans(struct firewall_info *fw) {
   removed += cleanup_table_ipv6(fw);
 
   /* 修复：分别更新 IPv4 和 IPv6 独立的清理进度索引 */
-  fw->cleanup_last_bucket_ipv4 =
-      (fw->cleanup_last_bucket_ipv4 + (1 << 3)) % (1 << BAN_HASH_BITS);
-  fw->cleanup_last_bucket_ipv6 =
-      (fw->cleanup_last_bucket_ipv6 + (1 << 3)) % (1 << BAN_HASH_BITS);
+  fw->cleanup_last_bucket_ipv4 = (fw->cleanup_last_bucket_ipv4 + (1 << 3)) %
+                                 (1 << BAN_HASH_BITS);
+  fw->cleanup_last_bucket_ipv6 = (fw->cleanup_last_bucket_ipv6 + (1 << 3)) %
+                                 (1 << BAN_HASH_BITS);
 
   if (removed > 0) {
     atomic_add(removed, &fw->cleanup_expired_total);
@@ -137,8 +133,7 @@ static bool cleanup_expired_bans(struct firewall_info *fw) {
 }
 
 void cleanup_timer_callback(struct timer_list *t) {
-  struct firewall_info *fw =
-      container_of(t, struct firewall_info, cleanup_timer);
+  struct firewall_info *fw = container_of(t, struct firewall_info, cleanup_timer);
 
   FW_DEBUG(3, "ENTRY: cleanup_timer_callback");
 
@@ -161,8 +156,7 @@ void cleanup_timer_callback(struct timer_list *t) {
   if (has_more_entries) {
     cleanup_interval = HZ;
   } else {
-    cleanup_interval =
-        max(HZ * 30UL, ((unsigned long)READ_ONCE(fw_ban_time) * HZ) / 4);
+    cleanup_interval = max(HZ * 30UL, ((unsigned long)READ_ONCE(fw_ban_time) * HZ) / 4);
   }
 
   mod_timer(&fw->cleanup_timer, jiffies + cleanup_interval);

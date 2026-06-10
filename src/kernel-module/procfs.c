@@ -49,8 +49,7 @@ static int bans_show(struct seq_file *m, void *v) {
       count++;
     } else if (!time_after(now, unban_time)) {
       ip_to_str(FW_AF_INET, &entry->addr.ipv4, ip_str, sizeof(ip_str));
-      seq_printf(m, "%-40s (expires in %lu seconds)\n", ip_str,
-                 (unban_time - now) / HZ);
+      seq_printf(m, "%-40s (expires in %lu seconds)\n", ip_str, (unban_time - now) / HZ);
       temporary_count++;
       count++;
     }
@@ -67,8 +66,7 @@ static int bans_show(struct seq_file *m, void *v) {
       count++;
     } else if (!time_after(now, unban_time)) {
       ip_to_str(FW_AF_INET6, &entry->addr.ipv6, ip_str, sizeof(ip_str));
-      seq_printf(m, "%-40s (expires in %lu seconds)\n", ip_str,
-                 (unban_time - now) / HZ);
+      seq_printf(m, "%-40s (expires in %lu seconds)\n", ip_str, (unban_time - now) / HZ);
       temporary_count++;
       count++;
     }
@@ -111,8 +109,7 @@ static int validate_ban_input(const char *input) {
     }
     lower_input[i] = '\0';
 
-    if (strstr(lower_input, "%2e") != NULL ||
-        strstr(lower_input, "%2f") != NULL) {
+    if (strstr(lower_input, "%2e") != NULL || strstr(lower_input, "%2f") != NULL) {
       fw_pr_warn("URL encoded path traversal attempt detected: %s", input);
       return -EINVAL;
     }
@@ -131,10 +128,8 @@ static int validate_and_copy_ip(const char *ip_start, const char *ip_end,
 
   /* M5 修复：确保 ip_str_size 至少为 1（容纳 null 终止符），
    * 并且 ip_len + 1 <= ip_str_size（容纳 IP 地址和 null 终止符） */
-  if (ip_len == 0 || ip_str_size == 0 || ip_len >= INET6_ADDRSTRLEN ||
-      ip_len + 1 > ip_str_size) {
-    fw_pr_warn("Invalid IP address length: %zu (buffer size: %zu)", ip_len,
-               ip_str_size);
+  if (ip_len == 0 || ip_str_size == 0 || ip_len >= INET6_ADDRSTRLEN || ip_len + 1 > ip_str_size) {
+    fw_pr_warn("Invalid IP address length: %zu (buffer size: %zu)", ip_len, ip_str_size);
     return -EINVAL;
   }
 
@@ -185,8 +180,7 @@ static int parse_ban_command(const char *input, char *ip_str,
     return -EINVAL;
   }
 
-  if (strncmp(cmd_ptr, "unban ", 6) == 0 ||
-      strncmp(cmd_ptr, "unban\t", 6) == 0) {
+  if (strncmp(cmd_ptr, "unban ", 6) == 0 || strncmp(cmd_ptr, "unban\t", 6) == 0) {
     int ret = parse_unban_command(cmd_ptr, input, ip_str, ip_str_size);
     if (ret == 0)
       *is_unban = true;
@@ -199,9 +193,9 @@ static int parse_ban_command(const char *input, char *ip_str,
   while (*ptr && *ptr != ' ' && *ptr != '\t')
     ptr++;
 
-  return validate_and_copy_ip(ip_start, ptr, ip_str, ip_str_size) == 0
-             ? (*is_unban = false, 0)
-             : -EINVAL;
+  return validate_and_copy_ip(ip_start, ptr, ip_str, ip_str_size) == 0 ?
+           (*is_unban = false, 0) :
+           -EINVAL;
 }
 
 /**
@@ -229,8 +223,7 @@ static const char *find_duration_start(const char *input) {
 /**
  * validate_duration_string - 验证持续时间字符串并解析为数值
  */
-static long validate_duration_string(const char *duration_str,
-                                     const char *input) {
+static long validate_duration_string(const char *duration_str, const char *input) {
   long seconds;
   int ret = kstrtol(duration_str, 10, &seconds);
 
@@ -253,8 +246,7 @@ static long validate_duration_string(const char *duration_str,
   }
 
   if (seconds > MAX_BAN_TIME) {
-    fw_pr_warn("Ban duration %ld exceeds maximum %d seconds", seconds,
-               MAX_BAN_TIME);
+    fw_pr_warn("Ban duration %ld exceeds maximum %d seconds", seconds, MAX_BAN_TIME);
     return -EINVAL;
   }
 
@@ -299,16 +291,13 @@ static int execute_permanent_ban(struct firewall_info *fw, u8 af,
 
   if (result < 0) {
     if (result == -EPERM)
-      fw_pr_info("Requested IP %s is in whitelist, not permanently banned",
-                 ip_str);
+      fw_pr_info("Requested IP %s is in whitelist, not permanently banned", ip_str);
     else if (result == -ENOMEM)
-      fw_pr_err("Failed to allocate memory for permanent ban entry for IP %s",
-                ip_str);
+      fw_pr_err("Failed to allocate memory for permanent ban entry for IP %s", ip_str);
     else if (result == -ENOSPC)
       fw_pr_warn("Ban table full, cannot permanently ban IP %s", ip_str);
     else
-      fw_pr_err("Unknown error %d when trying to permanently ban IP %s", result,
-                ip_str);
+      fw_pr_err("Unknown error %d when trying to permanently ban IP %s", result, ip_str);
     return result;
   }
   return 0;
@@ -317,9 +306,8 @@ static int execute_permanent_ban(struct firewall_info *fw, u8 af,
 /**
  * execute_temporary_ban - 执行临时封禁操作（带泛洪保护）
  */
-static int execute_temporary_ban(struct firewall_info *fw, u8 af,
-                                 const void *ip, const char *ip_str,
-                                 long seconds) {
+static int execute_temporary_ban(struct firewall_info *fw, u8 af, const void *ip,
+                                 const char *ip_str, long seconds) {
   int result;
 
   if (check_flood_protection() < 0) {
@@ -457,12 +445,9 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
   if (af == FW_AF_INET) {
     unsigned int ip_class_a = (ntohl(ip_addr.ipv4) >> 24) & 0xFF;
     unsigned int ip_class_b = (ntohl(ip_addr.ipv4) >> 16) & 0xFF;
-    if ((ip_class_a == 10) ||
-        (ip_class_a == 172 && ip_class_b >= 16 && ip_class_b <= 31) ||
+    if ((ip_class_a == 10) || (ip_class_a == 172 && ip_class_b >= 16 && ip_class_b <= 31) ||
         (ip_class_a == 192 && ip_class_b == 168)) {
-      fw_pr_warn(
-          "Attempt to ban private IPv4 range %s - this may be unintended",
-          ip_str);
+      fw_pr_warn("Attempt to ban private IPv4 range %s - this may be unintended", ip_str);
     }
   }
 
@@ -483,11 +468,11 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
 }
 
 static const struct proc_ops bans_fops = {
-    .proc_open = bans_open,
-    .proc_read = seq_read,
-    .proc_write = bans_write,
-    .proc_lseek = seq_lseek,
-    .proc_release = single_release,
+  .proc_open = bans_open,
+  .proc_read = seq_read,
+  .proc_write = bans_write,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
 };
 
 /*
@@ -511,8 +496,7 @@ static int whitelist_read(struct seq_file *m, void *v) {
     __be32 wl_mask = READ_ONCE(entry->mask.ipv4_mask);
     __be32 network_addr = wl_ip & wl_mask;
     ip_to_str(FW_AF_INET, &network_addr, ip_str, sizeof(ip_str));
-    seq_printf(m, "%s/%d  on %s\n", ip_str, inet_mask_len(wl_mask),
-               entry->device_name);
+    seq_printf(m, "%s/%d  on %s\n", ip_str, inet_mask_len(wl_mask), entry->device_name);
     count++;
   }
 
@@ -520,8 +504,7 @@ static int whitelist_read(struct seq_file *m, void *v) {
   hash_for_each_rcu(fw->whitelist_table_ipv6, hash, entry, hash) {
     u8 prefix_len = READ_ONCE(entry->mask.prefix_len);
     struct in6_addr addr_copy = entry->addr.ipv6;
-    seq_printf(m, "%pI6/%d  on %s\n", &addr_copy, prefix_len,
-               entry->device_name);
+    seq_printf(m, "%pI6/%d  on %s\n", &addr_copy, prefix_len, entry->device_name);
     count++;
   }
 
@@ -540,8 +523,7 @@ static int whitelist_open(struct inode *inode, struct file *file) {
  * whitelist_write 辅助函数
  * ========================================================================== */
 
-static char *extract_command_token(char **ptr, char *cmd_buf,
-                                   size_t cmd_buf_size) {
+static char *extract_command_token(char **ptr, char *cmd_buf, size_t cmd_buf_size) {
   char *cmd_start = *ptr;
 
   while (**ptr && **ptr != ' ' && **ptr != '\t')
@@ -625,8 +607,7 @@ static int parse_whitelist_subnet(char *subnet_str, u8 *af_out, void *ip_out,
       fw_pr_warn("Invalid prefix length: %d", prefix_len);
       return -EINVAL;
     }
-    if (validate_ipv4_address(*(__be32 *)ip_out, subnet_str, "whitelist",
-                              true) < 0)
+    if (validate_ipv4_address(*(__be32 *)ip_out, subnet_str, "whitelist", true) < 0)
       return -EINVAL;
   } else if (in6_pton(subnet_str, -1, (u8 *)ip_out, -1, NULL)) {
     af = FW_AF_INET6;
@@ -636,8 +617,8 @@ static int parse_whitelist_subnet(char *subnet_str, u8 *af_out, void *ip_out,
       fw_pr_warn("Invalid prefix length: %d", prefix_len);
       return -EINVAL;
     }
-    if (validate_ipv6_address((const struct in6_addr *)ip_out, subnet_str,
-                              "whitelist", true) < 0)
+    if (validate_ipv6_address(
+          (const struct in6_addr *)ip_out, subnet_str, "whitelist", true) < 0)
       return -EINVAL;
   } else {
     fw_pr_warn("Invalid IP address format: %s", subnet_str);
@@ -649,8 +630,7 @@ static int parse_whitelist_subnet(char *subnet_str, u8 *af_out, void *ip_out,
   return 0;
 }
 
-static int execute_whitelist_action(u8 af, void *ip, int prefix_len,
-                                    const char *cmd) {
+static int execute_whitelist_action(u8 af, void *ip, int prefix_len, const char *cmd) {
   int result;
 
   if (strcmp(cmd, "remove") == 0) {
@@ -678,9 +658,9 @@ static int execute_whitelist_action(u8 af, void *ip, int prefix_len,
       if (prefix_len > 0) {
         int i;
         for (i = 0; i < 16; i++) {
-          int bits = (prefix_len > (i * 8 + 8)) ? 8
-                     : (prefix_len > (i * 8))   ? (prefix_len - i * 8)
-                                                : 0;
+          int bits = (prefix_len > (i * 8 + 8)) ? 8 :
+                     (prefix_len > (i * 8))     ? (prefix_len - i * 8) :
+                                                  0;
           mask.s6_addr[i] = (u8)(0xFF << (8 - bits));
         }
       }
@@ -689,20 +669,17 @@ static int execute_whitelist_action(u8 af, void *ip, int prefix_len,
       for (i = 0; i < 16; i++)
         normalized.ipv6.s6_addr[i] = addr->s6_addr[i] & mask.s6_addr[i];
     } else {
-      __be32 mask4 =
-          prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1));
+      __be32 mask4 = prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1));
       normalized.ipv4 = *(__be32 *)ip & mask4;
       af = FW_AF_INET;
     }
 
     result = add_whitelist_entry(
-        &fw_info, af, &normalized,
-        af == FW_AF_INET6
-            ? NULL
-            : (__be32[]){prefix_len == 0
-                             ? 0
-                             : htonl(~((1ULL << (32 - prefix_len)) - 1))},
-        prefix_len, "manual");
+      &fw_info, af, &normalized,
+      af == FW_AF_INET6 ?
+        NULL :
+        (__be32[]){ prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1)) },
+      prefix_len, "manual");
     if (result < 0) {
       if (result == -ENOMEM) {
         fw_pr_err("Failed to allocate memory for whitelist entry");
@@ -748,8 +725,7 @@ static ssize_t whitelist_write(struct file *file, const char __user *buf,
     return 0;
   }
   if (count > sizeof(input) - 1) {
-    FW_DEBUG(1, "EXIT: whitelist_write -> -EINVAL (input too large: %zu)",
-             count);
+    FW_DEBUG(1, "EXIT: whitelist_write -> -EINVAL (input too large: %zu)", count);
     return -EINVAL;
   }
   len = min(count, (size_t)(sizeof(input) - 1));
@@ -768,8 +744,7 @@ static ssize_t whitelist_write(struct file *file, const char __user *buf,
     return -EINVAL;
   }
 
-  result =
-      parse_whitelist_command(input, cmd_buf, sizeof(cmd_buf), &subnet_str);
+  result = parse_whitelist_command(input, cmd_buf, sizeof(cmd_buf), &subnet_str);
   if (result < 0)
     return result;
 
@@ -786,11 +761,11 @@ static ssize_t whitelist_write(struct file *file, const char __user *buf,
 }
 
 static const struct proc_ops whitelist_fops = {
-    .proc_open = whitelist_open,
-    .proc_read = seq_read,
-    .proc_write = whitelist_write,
-    .proc_lseek = seq_lseek,
-    .proc_release = single_release,
+  .proc_open = whitelist_open,
+  .proc_read = seq_read,
+  .proc_write = whitelist_write,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
 };
 
 /*
@@ -801,8 +776,7 @@ static int config_show(struct seq_file *m, void *v) {
   seq_printf(m, "--------------------------------\n");
   seq_printf(m, "ban_time: %u seconds\n", READ_ONCE(fw_ban_time));
   seq_printf(m, "Ban entries: %d\n", atomic_read(&fw_info.ban_count));
-  seq_printf(m, "Whitelist entries: %d\n",
-             atomic_read(&fw_info.whitelist_count));
+  seq_printf(m, "Whitelist entries: %d\n", atomic_read(&fw_info.whitelist_count));
   return 0;
 }
 
@@ -814,8 +788,7 @@ static int config_open(struct inode *inode, struct file *file) {
  * config_write 辅助函数
  * ========================================================================== */
 
-static int parse_config_input(char *input, char *param, size_t param_size,
-                              char **value_str_out) {
+static int parse_config_input(char *input, char *param, size_t param_size, char **value_str_out) {
   char *input_ptr = input;
   char *token;
 
@@ -914,11 +887,11 @@ static ssize_t config_write(struct file *file, const char __user *buf,
 }
 
 static const struct proc_ops config_fops = {
-    .proc_open = config_open,
-    .proc_read = seq_read,
-    .proc_write = config_write,
-    .proc_lseek = seq_lseek,
-    .proc_release = single_release,
+  .proc_open = config_open,
+  .proc_read = seq_read,
+  .proc_write = config_write,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
 };
 
 /*
@@ -929,18 +902,15 @@ static int stats_show(struct seq_file *m, void *v) {
 
   seq_printf(m, "total_bans %u\n", atomic_read(&fw->total_ban_count));
   seq_printf(m, "total_unbans %u\n", atomic_read(&fw->total_unban_count));
-  seq_printf(m, "whitelist_rejects %u\n",
-             atomic_read(&fw->whitelist_reject_count));
-  seq_printf(m, "ban_table_full_rejects %u\n",
-             atomic_read(&fw->ban_table_full_count));
+  seq_printf(m, "whitelist_rejects %u\n", atomic_read(&fw->whitelist_reject_count));
+  seq_printf(m, "ban_table_full_rejects %u\n", atomic_read(&fw->ban_table_full_count));
   seq_printf(m, "alloc_failures %u\n", atomic_read(&fw->alloc_failure_count));
   seq_printf(m, "packets_dropped %llu\n",
              (unsigned long long)atomic64_read(&fw->packets_dropped));
   seq_printf(m, "packets_accepted %llu\n",
              (unsigned long long)atomic64_read(&fw->packets_accepted));
   seq_printf(m, "cleanup_cycles %u\n", atomic_read(&fw->cleanup_cycles));
-  seq_printf(m, "cleanup_expired_total %u\n",
-             atomic_read(&fw->cleanup_expired_total));
+  seq_printf(m, "cleanup_expired_total %u\n", atomic_read(&fw->cleanup_expired_total));
   seq_printf(m, "current_bans %d\n", atomic_read(&fw->ban_count));
   seq_printf(m, "current_whitelist %d\n", atomic_read(&fw->whitelist_count));
   {
@@ -959,10 +929,10 @@ static int stats_open(struct inode *inode, struct file *file) {
 }
 
 static const struct proc_ops stats_fops = {
-    .proc_open = stats_open,
-    .proc_read = seq_read,
-    .proc_lseek = seq_lseek,
-    .proc_release = single_release,
+  .proc_open = stats_open,
+  .proc_read = seq_read,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
 };
 
 /*

@@ -155,8 +155,7 @@ static int validate_procfs_path(const char *path) {
   const char *p;
 
   if (strncmp(path, PROCFS_DIR "/", strlen(PROCFS_DIR) + 1) != 0) {
-    daemon_log_err("secure_procfs_write: path outside %s: %s", PROCFS_DIR,
-                   path);
+    daemon_log_err("secure_procfs_write: path outside %s: %s", PROCFS_DIR, path);
     return -1;
   }
 
@@ -167,8 +166,7 @@ static int validate_procfs_path(const char *path) {
 
   for (p = path + sizeof(PROCFS_DIR); *p; p++) {
     if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
-          (*p >= '0' && *p <= '9') || *p == '/' || *p == '-' || *p == '_' ||
-          *p == '.')) {
+          (*p >= '0' && *p <= '9') || *p == '/' || *p == '-' || *p == '_' || *p == '.')) {
       daemon_log_err("secure_procfs_write: invalid character in path: %s "
                      "(char: '%c' at offset %ld)",
                      path, *p, (long)(p - path));
@@ -217,8 +215,7 @@ static int write_to_procfs_fd(int fd, const char *data, size_t data_len) {
     if (written < 0) {
       if (errno == EINTR || errno == EAGAIN)
         continue;
-      daemon_log_err("Failed to write to procfs fd %d: %s", fd,
-                     strerror(errno));
+      daemon_log_err("Failed to write to procfs fd %d: %s", fd, strerror(errno));
       return -1;
     }
     total_written += written;
@@ -241,8 +238,7 @@ int secure_procfs_write(const char *path, const char *data, size_t data_len) {
     goto cleanup;
 
   if (data_len > 64) {
-    daemon_log_err("Data too long for procfs write (%zu bytes, max 64)",
-                   data_len);
+    daemon_log_err("Data too long for procfs write (%zu bytes, max 64)", data_len);
     goto cleanup;
   }
 
@@ -313,16 +309,15 @@ static int format_ban_command(ban_action_t action, const char *ip,
   return cmd_len;
 }
 
-static int execute_sqlite_action(ban_action_t action, const char *ip,
-                                 validated_ip_t validated) {
+static int execute_sqlite_action(ban_action_t action, const char *ip, validated_ip_t validated) {
   int sqlite_rc = 0;
 
   if (!sqlite_db)
     return 0;
 
   if (action == BAN_ACTION_PERMANENT) {
-    sqlite_rc = sqlite_add_permanent_ban(sqlite_db, ip, validated.ip_num,
-                                         "manual permanent ban", "manual");
+    sqlite_rc = sqlite_add_permanent_ban(
+      sqlite_db, ip, validated.ip_num, "manual permanent ban", "manual");
   } else if (action == BAN_ACTION_UNBAN_PERM) {
     sqlite_rc = sqlite_remove_permanent_ban(sqlite_db, ip);
   }
@@ -400,7 +395,9 @@ int execute_ban_action(ban_action_t action, const char *ip) {
 }
 
 /* 向后兼容的包装函数 */
-int ban_ip(const char *ip) { return execute_ban_action(BAN_ACTION_TEMP, ip); }
+int ban_ip(const char *ip) {
+  return execute_ban_action(BAN_ACTION_TEMP, ip);
+}
 
 int ban_ip_permanent(const char *ip) {
   return execute_ban_action(BAN_ACTION_PERMANENT, ip);
@@ -415,4 +412,6 @@ int unban_permanent_ip(const char *ip) {
 }
 
 /* 清理过期封禁和部分行缓冲区（可选，内核已处理） */
-void cleanup_expired_bans(void) { cleanup_partial_line_buffer(); }
+void cleanup_expired_bans(void) {
+  cleanup_partial_line_buffer();
+}

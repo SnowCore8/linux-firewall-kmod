@@ -112,8 +112,8 @@ void daemonize_process(void) {
 
   /* 写入 PID 文件以支持 systemd Type=forking
    * 使用 open() + O_CREAT|O_EXCL|O_NOFOLLOW 防止符号链接攻击 */
-  int pidfd = open("/run/firewall-daemon.pid",
-                   O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+  int pidfd = open(
+    "/run/firewall-daemon.pid", O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
   if (pidfd >= 0) {
     char pid_str[32];
     int len = snprintf(pid_str, sizeof(pid_str), "%d\n", getpid());
@@ -188,8 +188,7 @@ void cleanup(void) {
     if (jail->failed_hash) {
       /* 在销毁哈希表之前释放堆分配的键 */
       khint_t k;
-      for (k = kh_begin(jail->failed_hash); k != kh_end(jail->failed_hash);
-           ++k) {
+      for (k = kh_begin(jail->failed_hash); k != kh_end(jail->failed_hash); ++k) {
         if (kh_exist(jail->failed_hash, k)) {
           free((char *)kh_key(jail->failed_hash, k));
         }
@@ -259,9 +258,7 @@ int main(int argc, char *argv[]) {
 
   /* 在继续之前检查 procfs 接口是否存在 */
   if (access(PROCFS_DIR, F_OK) != 0) {
-    daemon_log_err(
-        "Procfs directory %s does not exist. Is the kernel module loaded?",
-        PROCFS_DIR);
+    daemon_log_err("Procfs directory %s does not exist. Is the kernel module loaded?", PROCFS_DIR);
     fprintf(stderr,
             "Error: Procfs directory %s does not exist. Is the kernel module "
             "loaded?\n",
@@ -273,8 +270,7 @@ int main(int argc, char *argv[]) {
 
   if (access(BANS_PATH, F_OK) != 0) {
     daemon_log_err("Bans procfs interface %s does not exist", BANS_PATH);
-    fprintf(stderr, "Error: Bans procfs interface %s does not exist\n",
-            BANS_PATH);
+    fprintf(stderr, "Error: Bans procfs interface %s does not exist\n", BANS_PATH);
     /* H3 修复：在返回前调用 cleanup() 释放已分配的资源 */
     cleanup();
     return EXIT_FAILURE;
@@ -282,9 +278,8 @@ int main(int argc, char *argv[]) {
 
   /* 初始化日志模式 - 即使部分失败也允许守护进程启动 */
   if (init_log_patterns() < 0) {
-    daemon_log_warn(
-        "Some jail regex patterns failed to compile, continuing with "
-        "remaining jails");
+    daemon_log_warn("Some jail regex patterns failed to compile, continuing with "
+                    "remaining jails");
     /* 不退出，允许其他 jail 继续工作 */
   } else {
     daemon_log_info("All jail regex patterns compiled successfully");
@@ -297,9 +292,8 @@ int main(int argc, char *argv[]) {
   if (cfg.permanent_ban_enabled && cfg.permanent_db_path) {
     sqlite_db = sqlite_init(cfg.permanent_db_path);
     if (!sqlite_db) {
-      daemon_log_warn(
-          "Failed to initialize SQLite database for permanent bans at %s",
-          cfg.permanent_db_path);
+      daemon_log_warn("Failed to initialize SQLite database for permanent bans at %s",
+                      cfg.permanent_db_path);
       daemon_log_warn("Permanent bans will not be available");
     } else {
       daemon_log_info("SQLite database initialized for permanent bans at %s",
@@ -308,20 +302,17 @@ int main(int argc, char *argv[]) {
       /* 从 SQLite 加载永久封禁并应用到内核模块 */
       struct permanent_ban_entry *entries = NULL;
       int count = 0;
-      if (sqlite_load_all_permanent_bans(sqlite_db, &entries, &count) == 0 &&
-          count > 0) {
-        daemon_log_info("Loading %d permanent bans from SQLite database",
-                        count);
+      if (sqlite_load_all_permanent_bans(sqlite_db, &entries, &count) == 0 && count > 0) {
+        daemon_log_info("Loading %d permanent bans from SQLite database", count);
         for (int i = 0; i < count; i++) {
           char ip_with_newline[64]; /* 足够容纳 IPv6 地址 + "permanent " 前缀 +
                                        换行 */
           snprintf(ip_with_newline, sizeof(ip_with_newline), "permanent %s\n",
                    entries[i].ip);
 
-          if (secure_procfs_write(BANS_PATH, ip_with_newline,
-                                  strlen(ip_with_newline)) < 0) {
-            daemon_log_warn("Failed to restore permanent ban for %s to kernel",
-                            entries[i].ip);
+          if (secure_procfs_write(BANS_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
+            daemon_log_warn(
+              "Failed to restore permanent ban for %s to kernel", entries[i].ip);
           } else {
             daemon_log_info("Restored permanent ban for %s (reason: %s)",
                             entries[i].ip, entries[i].reason);
@@ -351,8 +342,7 @@ int main(int argc, char *argv[]) {
     }
   }
   daemon_log_info("Global defaults: max_retries=%u, findtime=%u, ban_time=%u",
-                  cfg.default_max_retries, cfg.default_findtime,
-                  cfg.default_ban_time);
+                  cfg.default_max_retries, cfg.default_findtime, cfg.default_ban_time);
 
   /* 如果请求则守护进程化 */
   if (cfg.daemon) {
@@ -375,8 +365,7 @@ int main(int argc, char *argv[]) {
                        (void *)(long)cfg.metrics_port) != 0) {
       daemon_log_warn("Failed to start Prometheus exporter thread");
     } else {
-      daemon_log_info("Prometheus exporter started on port %d",
-                      cfg.metrics_port);
+      daemon_log_info("Prometheus exporter started on port %d", cfg.metrics_port);
       /* 不 detach 线程，由 stop_http_exporter 负责 join 清理 */
     }
   } else {
