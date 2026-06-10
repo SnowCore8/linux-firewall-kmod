@@ -466,7 +466,8 @@ int restore_state_from_file(const char *filename) {
                   kfree(entry);
                   fw_pr_info("Skipping duplicate ban entry for IP %s", ip_str);
                 } else {
-                  hash_add_rcu(fw_info.ban_table_ipv4, &entry->hash, ip);
+                  /* 与 ban-manager.c IPv4 路径保持一致:直接用桶索引 hlist_add_head_rcu */
+                  hlist_add_head_rcu(&entry->hash, &fw_info.ban_table_ipv4[bkt4]);
                   atomic_inc(&fw_info.ban_count);
                   atomic_inc(&fw_info.total_ban_count);
                   spin_unlock(&fw_info.ban_locks_ipv4[bkt4]);
@@ -543,7 +544,9 @@ int restore_state_from_file(const char *filename) {
                   kfree(entry);
                   fw_pr_info("Skipping duplicate ban entry for IP %s", ip_str);
                 } else {
-                  hash_add_rcu(fw_info.ban_table_ipv6, &entry->hash, bkt6);
+                  /* 修复：直接用桶索引 hlist_add_head_rcu，避免 hash_add_rcu 以 bkt6 为 key
+                   * 重新 hash_min 落到错误桶(同 ban-manager.c 路径) */
+                  hlist_add_head_rcu(&entry->hash, &fw_info.ban_table_ipv6[bkt6]);
                   atomic_inc(&fw_info.ban_count);
                   atomic_inc(&fw_info.total_ban_count);
                   spin_unlock(&fw_info.ban_locks_ipv6[bkt6]);

@@ -24,12 +24,25 @@ scrape_configs:
 
 #### 内核侧（来自 `/proc/firewall/stats`）
 
+`/proc/firewall/stats` 完整暴露 12 个字段，映射到以下内核级计数器。
+字段名与不变量见 `docs/configuration/procfs.md`。
+
 | 指标 | 类型 | 说明 |
 |------|------|------|
-| `firewall_kernel_banned_ips_current` | gauge | 当前封禁 IP 数 |
-| `firewall_kernel_bans_total` | counter | 累计封禁操作数 |
-| `firewall_kernel_unbans_total` | counter | 累计解封操作数 |
-| `firewall_kernel_whitelist_count` | gauge | 当前白名单条目数 |
+| `firewall_kernel_banned_ips_current` | gauge | 当前封禁 IP 数（`current_bans`） |
+| `firewall_kernel_bans_total` | counter | 累计封禁操作数（`total_bans`） |
+| `firewall_kernel_unbans_total` | counter | 累计解封操作数（`total_unbans`） |
+| `firewall_kernel_whitelist_count` | gauge | 当前白名单条目数（`current_whitelist`） |
+| `firewall_kernel_whitelist_rejects_total` | counter | 白名单拒绝的封禁请求数 |
+| `firewall_kernel_ban_table_full_rejects_total` | counter | 因封禁表满而拒绝的请求数 |
+| `firewall_kernel_alloc_failures_total` | counter | `kmalloc` 失败次数 |
+| `firewall_kernel_packets_dropped_total` | counter | 因命中封禁而丢弃的数据包数 |
+| `firewall_kernel_packets_accepted_total` | counter | 经 netfilter 钩子放行的数据包数 |
+| `firewall_kernel_cleanup_cycles_total` | counter | 清理定时器周期数 |
+| `firewall_kernel_cleanup_expired_total` | counter | 清理定时器累计移除的条目数 |
+| `firewall_kernel_recent_additions` | gauge | 当前 1 秒窗口内的封禁操作数 |
+
+**不变量**：`total_bans == current_bans + total_unbans + cleanup_expired_total`
 
 #### 守护进程侧
 

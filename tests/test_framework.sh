@@ -385,9 +385,11 @@ fw_unban_multiple() {
 }
 
 # 断言：IP 未被封禁（不在封禁列表中）
+# 使用 grep -qF 固定字符串匹配,避免 "." 等正则元字符误匹配
+# (例如 IPv6 展开形式 "0000:0000:0000:0000" 中的子序列会被 "0.0.0.0" 误命中)
 fw_assert_ip_not_banned() {
     local ip="$1" desc="${2:-IP $1 未进入封禁列表}"
-    assert_true "! grep -q '$ip' '$PROC_BANS' 2>/dev/null" "$desc"
+    assert_true "! grep -qF '$ip' '$PROC_BANS' 2>/dev/null" "$desc"
 }
 
 # 断言：procfs 列表计数未变化

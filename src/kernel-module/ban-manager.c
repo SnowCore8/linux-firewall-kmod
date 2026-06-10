@@ -95,9 +95,17 @@ static u32 hash_ipv6(const struct in6_addr *addr) {
  * 执行流程：
  *   1. 二次白名单检查（防 TOCTTOU）
  *   2. 查找是否已有封禁条目：
- *      - 永久封禁或未过期：拒绝重复插入
- *      - 已过期：刷新时间戳
- *   3. 新条目：初始化并插入哈希表
+ *      - 永久封禁或未过期：返回 -EEXIST（无变化，不计入任何统计）
+ *      - 已过期：刷新时间戳（仅续期，不计入任何统计）
+ *   3. 新条目：初始化、插入哈希表，同时计入 ban_count 和 total_ban_count
+ *
+ * 返回值约定：
+ *   0      - 成功执行了实际变更（新插入）
+ *   -EEXIST - 条目已存在（永久/未过期或刷新过期条目），无变化、无统计影响
+ *   -EPERM  - 白名单 recheck 拒绝（已计入 whitelist_reject_count）
+ *
+ * 统计不变量（任一时刻都应成立）:
+ *   total_bans == current_bans + total_unbans + cleanup_expired_total
  */
 static int __do_ban_ip_ipv6(struct firewall_info *fw,
                             const struct in6_addr *ip6, struct ban_entry *entry,
@@ -124,13 +132,15 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw,
       if (is_perm || time_before(jiffies, ubt)) {
         spin_unlock(&fw->ban_locks_ipv6[bkt6]);
         kfree(entry);
-        return 0;
+        return -EEXIST;
       }
       WRITE_ONCE(existing->ban_time, jiffies);
       WRITE_ONCE(existing->unban_time, unban_time);
       atomic_set(&existing->retry_count, 0);
       spin_unlock(&fw->ban_locks_ipv6[bkt6]);
       kfree(entry);
+      /* 刷新已过期条目：条目仍在表中，仅续期，不计入任何统计计数器。
+       * 这样保证不变量: total_bans == current_bans + total_unbans + cleanup_expired_total */
       return 0;
     }
   }
@@ -141,8 +151,14 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw,
   entry->unban_time = unban_time;
   entry->is_permanent = is_permanent;
   atomic_set(&entry->retry_count, 0);
-  hash_add_rcu(fw->ban_table_ipv6, &entry->hash, bkt6);
+  /* 修复：直接用桶索引 hlist_add_head_rcu，避免 hash_add_rcu 以 bkt6 为 key
+   * 重新 hash_min 落到错误桶(会导致重复检查失效、产生重复条目)。
+   * IPv4 路径不受影响(其 key=ipv4,hash_min(ipv4,...) 与 bkt4 巧合一致)。*/
+  hlist_add_head_rcu(&entry->hash, &fw->ban_table_ipv6[bkt6]);
   spin_unlock(&fw->ban_locks_ipv6[bkt6]);
+  /* 新插入：同时增加表内计数与累计操作次数 */
+  atomic_inc(&fw->ban_count);
+  atomic_inc(&fw->total_ban_count);
   return 0;
 }
 
@@ -150,6 +166,14 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw,
  *
  * 逻辑与 __do_ban_ip_ipv6 相同，仅地址族和哈希计算不同。
  * 使用 hash_min 替代 jhash，因为 IPv4 地址本身就是 32 位哈希值。
+ *
+ * 返回值约定：
+ *   0      - 成功执行了实际变更（新插入）
+ *   -EEXIST - 条目已存在（永久/未过期或刷新过期条目），无变化、无统计影响
+ *   -EPERM  - 白名单 recheck 拒绝（已计入 whitelist_reject_count）
+ *
+ * 统计不变量（任一时刻都应成立）:
+ *   total_bans == current_bans + total_unbans + cleanup_expired_total
  */
 static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4, struct ban_entry *entry,
                             unsigned long unban_time, bool is_permanent) {
@@ -175,13 +199,15 @@ static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4, struct ban_en
       if (is_perm || time_before(jiffies, ubt)) {
         spin_unlock(&fw->ban_locks_ipv4[bkt4]);
         kfree(entry);
-        return 0;
+        return -EEXIST;
       }
       WRITE_ONCE(existing->ban_time, jiffies);
       WRITE_ONCE(existing->unban_time, unban_time);
       atomic_set(&existing->retry_count, 0);
       spin_unlock(&fw->ban_locks_ipv4[bkt4]);
       kfree(entry);
+      /* 刷新已过期条目：条目仍在表中，仅续期，不计入任何统计计数器。
+       * 这样保证不变量: total_bans == current_bans + total_unbans + cleanup_expired_total */
       return 0;
     }
   }
@@ -192,8 +218,13 @@ static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4, struct ban_en
   entry->unban_time = unban_time;
   entry->is_permanent = is_permanent;
   atomic_set(&entry->retry_count, 0);
-  hash_add_rcu(fw->ban_table_ipv4, &entry->hash, ipv4);
+  /* 与 IPv6 路径保持一致:直接用桶索引 hlist_add_head_rcu,
+   * 杜绝 hash_add_rcu(key) API 误用导致桶错位。*/
+  hlist_add_head_rcu(&entry->hash, &fw->ban_table_ipv4[bkt4]);
   spin_unlock(&fw->ban_locks_ipv4[bkt4]);
+  /* 新插入：同时增加表内计数与累计操作次数 */
+  atomic_inc(&fw->ban_count);
+  atomic_inc(&fw->total_ban_count);
   return 0;
 }
 
@@ -274,11 +305,15 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     fw_pr_warn("REFUSED to ban whitelisted IP %s (recheck)", ip_str);
     return ret;
   }
+  if (ret == -EEXIST) {
+    /* 条目已存在且仍有效：no-op，不计入任何统计、不打日志以避免刷屏 */
+    return 0;
+  }
   if (ret < 0)
     return ret;
 
-  atomic_inc(&fw->ban_count);
-  atomic_inc(&fw->total_ban_count);
+  /* ret == 0：实际变更（新插入或刷新过期条目），
+   * ban_count / total_ban_count 已在 __do_ban_ip_ipv4/ipv6 中按语义更新。 */
 
   if (log_msg && log_arg)
     fw_pr_info_ratelimited("%s %s %lu", log_msg, ip_str, log_arg);

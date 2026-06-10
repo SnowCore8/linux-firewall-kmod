@@ -26,12 +26,26 @@ scrape_configs:
 
 #### Kernel-side (from `/proc/firewall/stats`)
 
+The full 12-field stats interface maps to the following kernel-level
+counters. Refer to `docs/configuration/procfs.md` for the exact
+key names and the conservation law.
+
 | Metric | Type | Description |
 |--------|------|-------------|
-| `firewall_kernel_banned_ips_current` | gauge | Currently banned IPs |
-| `firewall_kernel_bans_total` | counter | Cumulative ban operations |
-| `firewall_kernel_unbans_total` | counter | Cumulative unban operations |
-| `firewall_kernel_whitelist_count` | gauge | Current whitelist entries |
+| `firewall_kernel_banned_ips_current` | gauge | Currently banned IPs (`current_bans`) |
+| `firewall_kernel_bans_total` | counter | Cumulative ban operations (`total_bans`) |
+| `firewall_kernel_unbans_total` | counter | Cumulative unban operations (`total_unbans`) |
+| `firewall_kernel_whitelist_count` | gauge | Current whitelist entries (`current_whitelist`) |
+| `firewall_kernel_whitelist_rejects_total` | counter | Whitelist-rejected ban attempts |
+| `firewall_kernel_ban_table_full_rejects_total` | counter | Rejected due to full ban table |
+| `firewall_kernel_alloc_failures_total` | counter | `kmalloc` failures for ban entries |
+| `firewall_kernel_packets_dropped_total` | counter | Packets dropped due to ban match |
+| `firewall_kernel_packets_accepted_total` | counter | Packets accepted by netfilter hook |
+| `firewall_kernel_cleanup_cycles_total` | counter | Cleanup timer cycles |
+| `firewall_kernel_cleanup_expired_total` | counter | Entries removed by cleanup timer |
+| `firewall_kernel_recent_additions` | gauge | Bans within the 1-second flood window |
+
+**Invariant**: `total_bans == current_bans + total_unbans + cleanup_expired_total`
 
 #### Daemon-side
 

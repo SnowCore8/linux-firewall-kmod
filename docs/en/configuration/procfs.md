@@ -89,25 +89,46 @@ IP/Range
 cat /proc/firewall/stats
 ```
 
-Output:
+Output (key-value format, one metric per line):
 
 ```
-Statistics
-==========
-Total ban events:     125
-Total unban events:   98
-Total packets dropped: 45230
-Total packets passed:  1250340
-Current banned:       15
+total_bans 0
+total_unbans 0
+whitelist_rejects 0
+ban_table_full_rejects 0
+alloc_failures 0
+packets_dropped 0
+packets_accepted 0
+cleanup_cycles 0
+cleanup_expired_total 0
+current_bans 0
+current_whitelist 19
+recent_additions 0
 ```
 
-| Field | Description |
-|-------|-------------|
-| `Total ban events` | Cumulative ban count |
-| `Total unban events` | Cumulative unban count |
-| `Total packets dropped` | Cumulative dropped packets |
-| `Total packets passed` | Cumulative passed packets |
-| `Current banned` | Currently banned IP count |
+| Field | Type | Description |
+|-------|------|-------------|
+| `total_bans` | counter | Cumulative ban operations that produced a new entry (duplicate bans of an already-valid entry are NOT counted) |
+| `total_unbans` | counter | Cumulative unban operations (manual + permanent unban) |
+| `whitelist_rejects` | counter | Ban attempts rejected because the IP is whitelisted (phase 1 + per-bucket recheck) |
+| `ban_table_full_rejects` | counter | Ban attempts rejected because the ban table is at capacity (4096 entries) |
+| `alloc_failures` | counter | kmalloc failures when allocating a ban entry |
+| `packets_dropped` | counter | Packets dropped by the netfilter hook due to ban match. Fragmented packets and packets with invalid source IPs are not counted here. |
+| `packets_accepted` | counter | Packets accepted by the netfilter hook after passing the ban/whitelist check. Same scope caveat as `packets_dropped`. |
+| `cleanup_cycles` | counter | Number of times the cleanup timer fired |
+| `cleanup_expired_total` | counter | Total ban entries removed by the cleanup timer |
+| `current_bans` | gauge | Currently banned IP count (sum of permanent + temporary) |
+| `current_whitelist` | gauge | Currently whitelisted entries |
+| `recent_additions` | gauge | Ban operations within the current 1-second flood-protection window |
+
+**Conservation law** (holds at any instant after my recent fix):
+
+```
+total_bans == current_bans + total_unbans + cleanup_expired_total
+```
+
+Duplicate ban attempts on already-valid bans and refreshes of expired entries
+do not contribute to `total_bans`, ensuring this invariant holds.
 
 ### Module Version
 

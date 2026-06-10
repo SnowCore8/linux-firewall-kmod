@@ -102,11 +102,15 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
     return -ENOSPC;
   }
 
+  /* 修复：IPv6 路径用预计算桶索引直接 hlist_add_head_rcu,
+   * 避免 hash_add_rcu 把 hash_wl_ipv6 结果再次 hash_min 落到错误桶
+   * (会导致重复检查失效、netfilter 热路径查找 miss)
+   * IPv4 路径同样改用 hlist_add_head_rcu 直写预计算桶,
+   * 与 ban-manager.c 保持完全一致,杜绝 hash_add_rcu(key) API 误用。 */
   if (af == FW_AF_INET6)
-    hash_add_rcu(fw->whitelist_table_ipv6, &new_entry->hash,
-                 hash_wl_ipv6(&new_entry->addr.ipv6));
+    hlist_add_head_rcu(&new_entry->hash, &fw->whitelist_table_ipv6[bkt]);
   else
-    hash_add_rcu(fw->whitelist_table_ipv4, &new_entry->hash, new_entry->addr.ipv4);
+    hlist_add_head_rcu(&new_entry->hash, &fw->whitelist_table_ipv4[bkt]);
 
   /* 子网条目加入专用链表，加速后续子网匹配查找 */
   if (af == FW_AF_INET6) {

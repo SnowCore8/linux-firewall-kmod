@@ -4,6 +4,35 @@
 
 ## [Unreleased]
 
+### 修复
+- **`/proc/firewall/stats` 重复封禁过度计数 Bug** - `__do_ban_ip_ipv4/ipv6` 在"已存在且仍有效"路径错误地既无操作又返回 0,导致上层 `__do_ban_ip` 盲目 `atomic_inc(&ban_count)` 与 `atomic_inc(&total_ban_count)`,每次重复 ban 都会污染 `total_bans`/`current_bans` 计数。修复方案:内层新增 `-EEXIST` 返回值明确区分"已有效封禁(no-op)"与"新插入"两种语义,刷新过期条目同样不再计入任一计数器(条目未离开表)。修复后统计不变量 `total_bans == current_bans + total_unbans + cleanup_expired_total` 严格成立
+- **IPv6 封禁表桶错位严重 Bug** - `__do_ban_ip_ipv6` 使用 `hash_add_rcu(fw->ban_table_ipv6, &entry->hash, bkt6)`,但 `bkt6` 已是桶索引,`hash_add_rcu` 会以其为 key 重新 `hash_min` 落到错误桶,导致:(1) 重复 ban 检查失效,IPv6 表中出现 6+ 条重复条目;(2) 配对每桶锁保护的桶与实际存储桶不一致,存在 race 窗口。修复:直接用 `hlist_add_head_rcu(&entry->hash, &fw->ban_table_ipv6[bkt6])` 用已计算好的桶。IPv4 路径不受影响(其 key=ipv4,`hash_min(ipv4,...)` 巧合与 `bkt4` 一致)
+- **同源 Bug 扩散修复**:
+  - `state-persist.c:546` IPv6 封禁表恢复路径同样误用 `bkt6` 为 key,改为 `hlist_add_head_rcu(..., &ban_table_ipv6[bkt6])`
+  - `whitelist.c:106` IPv6 白名单表使用 `hash_wl_ipv6` 结果作 key,`hash_min` 二次哈希落到错误桶,导致:(1) 重复 add 检查失效(白名单中 5 个重复 ::1);(2) netfilter 热路径查找 miss(白名单保护可能失效)。修复:改用 `hlist_add_head_rcu(..., &whitelist_table_ipv6[bkt])`
+- **`fw_flush_cpu_stats()` 冗余调用** - `cleanup_expired_bans` 入口与 `cleanup_timer_callback` 在同一 tick 内先后各调用一次,合并为单次
+- **`cleanup_last_bucket_ipv4/ipv6` 缺内存屏障** - 加 `READ_ONCE`/`WRITE_ONCE` 防御未来并发读取场景下的撕裂读
+- **`atomic_t` 格式符误用** - `procfs.c` 中 `atomic_read` 结果用 `%u` 显示,改用显式 `(unsigned int)` 强转避免有符号/无符号误用
+
+### 代码质量
+- **`stats_show` 文档化** - 补充 `packets_dropped`/`packets_accepted` 统计范围注释(分片/非法源 IP 不计入)
+- **统计不变量入代码注释** - `__do_ban_ip_ipv4/ipv6` 函数级注释记录 `total_bans == current_bans + total_unbans + cleanup_expired_total` 契约
+- **运行时守护 `WARN_ON_ONCE`** - `cleanup_expired_bans` 末尾每秒检测不变量,采用 `±MAX_BAN_ENTRIES` (4096) 容差避免高并发误报,任何计数漂移超阈值即打印 backtrace + delta
+- **API 一致性收敛** - `ban-manager.c`/`whitelist.c`/`state-persist.c` 所有桶插入统一改用 `hlist_add_head_rcu(node, &table[bkt])` 直写预计算桶,彻底消除 `hash_add_rcu(table, node, KEY)` API 误用面(IPv4 路径此前为"巧合正确",重构风险高)
+
+### 测试
+- **回归测试 03.5** - 验证 IPv4 重复 ban 3 次后 `total_bans`/`current_bans` 仅 +1
+- **回归测试 03.6** - 验证 IPv6 重复 ban 3 次后 `total_bans`/`current_bans` 仅 +1(覆盖 `__do_ban_ip_ipv6` 路径)
+- **测试 04.3 增强** - 验证 `whitelist_rejects` 计数器在白名单保护下正确递增
+- **测试 04.2/12.5 鲁棒性提升** - 在白名单容量(64/64)满的测试环境下优雅跳过而非失败
+- **测试框架加固** - `fw_assert_ip_not_banned` 改用 `grep -qF` 固定字符串匹配,避免 IPv6 展开形式(`0000:0000:...`)中的"0.0.0.0"子序列被正则元字符 `.` 误命中
+- **守恒律实测** - 模块重载后立即满足 `0=0+0+0`,操作后保持平衡
+- **压力与并发测试** - 通过套件 07(并发 4/4)与套件 08(压力 5/5),`WARN_ON_ONCE` 在压力下无误报
+
+### 文档
+- **`docs/{en,zh}/configuration/procfs.md`** - 统计接口从 5 字段文档更新到完整 12 字段,补充不变量说明
+- **`docs/{en,zh}/operations/monitoring.md`** - 补充缺失的 8 个 Prometheus 指标映射
+
 ### 安全修复
 - **守护进程 9 项中高危代码缺陷修复** - 包括 pthread_rwlock 自死锁、分离线程无法 join、Use-After-Free 竞态、clone_jail 失败路径状态不一致、严格模式静默失效、procfs 写入长度限制过松、strtoul 无 errno 检查、Base64 解码越界风险、strdup OOM 未处理
 - **procfs 接口输出统一为英文** - 修复国际化兼容性问题

@@ -88,25 +88,45 @@ IP/Range
 cat /proc/firewall/stats
 ```
 
-输出：
+输出（key-value 格式，每行一个指标）：
 
 ```
-Statistics
-==========
-Total ban events:     125
-Total unban events:   98
-Total packets dropped: 45230
-Total packets passed:  1250340
-Current banned:       15
+total_bans 0
+total_unbans 0
+whitelist_rejects 0
+ban_table_full_rejects 0
+alloc_failures 0
+packets_dropped 0
+packets_accepted 0
+cleanup_cycles 0
+cleanup_expired_total 0
+current_bans 0
+current_whitelist 19
+recent_additions 0
 ```
 
-| 字段 | 说明 |
-|------|------|
-| `Total ban events` | 累计封禁次数 |
-| `Total unban events` | 累计解封次数 |
-| `Total packets dropped` | 累计丢弃数据包数 |
-| `Total packets passed` | 累计放行数据包数 |
-| `Current banned` | 当前封禁 IP 数 |
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `total_bans` | counter | 累计产生新条目的封禁操作数（对已封禁 IP 的重复封禁**不计入**） |
+| `total_unbans` | counter | 累计解封操作数（含永久解封） |
+| `whitelist_rejects` | counter | 因命中白名单而被拒绝的封禁请求（阶段 1 检查 + 每桶锁重检） |
+| `ban_table_full_rejects` | counter | 因封禁表满（4096 条）而被拒绝的封禁请求 |
+| `alloc_failures` | counter | 申请 `ban_entry` 内存失败的次数 |
+| `packets_dropped` | counter | netfilter 钩子因命中封禁而丢弃的数据包。分片包与非法源 IP 包**不计入**。 |
+| `packets_accepted` | counter | netfilter 钩子经白名单/封禁检查后放行的数据包。范围同 `packets_dropped`。 |
+| `cleanup_cycles` | counter | 清理定时器已触发的周期数 |
+| `cleanup_expired_total` | counter | 清理定时器累计移除的过期条目数 |
+| `current_bans` | gauge | 当前封禁条目数（永久 + 临时） |
+| `current_whitelist` | gauge | 当前白名单条目数 |
+| `recent_additions` | gauge | 当前 1 秒洪水保护窗口内的封禁操作数 |
+
+**统计不变量**（修复后任一时刻成立）：
+
+```
+total_bans == current_bans + total_unbans + cleanup_expired_total
+```
+
+对已有效封禁的重复 ban、对过期条目的续期刷新均不计入 `total_bans`，保证该等式恒成立。
 
 ### 模块版本
 

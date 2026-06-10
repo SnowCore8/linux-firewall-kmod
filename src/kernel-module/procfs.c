@@ -896,21 +896,28 @@ static const struct proc_ops config_fops = {
 
 /*
  * stats_show - 显示防火墙统计信息
+ *
+ * 说明：
+ * - 以下计数器仅反映经过 ban 检查的包(分片 / 非法源 IP 不计入)。
+ * - atomic_t 为有符号整型,通过显式强转避免有符号/无符号格式符误用。
  */
 static int stats_show(struct seq_file *m, void *v) {
   struct firewall_info *fw = &fw_info;
 
-  seq_printf(m, "total_bans %u\n", atomic_read(&fw->total_ban_count));
-  seq_printf(m, "total_unbans %u\n", atomic_read(&fw->total_unban_count));
-  seq_printf(m, "whitelist_rejects %u\n", atomic_read(&fw->whitelist_reject_count));
-  seq_printf(m, "ban_table_full_rejects %u\n", atomic_read(&fw->ban_table_full_count));
-  seq_printf(m, "alloc_failures %u\n", atomic_read(&fw->alloc_failure_count));
+  seq_printf(m, "total_bans %u\n", (unsigned int)atomic_read(&fw->total_ban_count));
+  seq_printf(m, "total_unbans %u\n", (unsigned int)atomic_read(&fw->total_unban_count));
+  seq_printf(m, "whitelist_rejects %u\n",
+             (unsigned int)atomic_read(&fw->whitelist_reject_count));
+  seq_printf(m, "ban_table_full_rejects %u\n",
+             (unsigned int)atomic_read(&fw->ban_table_full_count));
+  seq_printf(m, "alloc_failures %u\n", (unsigned int)atomic_read(&fw->alloc_failure_count));
   seq_printf(m, "packets_dropped %llu\n",
              (unsigned long long)atomic64_read(&fw->packets_dropped));
   seq_printf(m, "packets_accepted %llu\n",
              (unsigned long long)atomic64_read(&fw->packets_accepted));
-  seq_printf(m, "cleanup_cycles %u\n", atomic_read(&fw->cleanup_cycles));
-  seq_printf(m, "cleanup_expired_total %u\n", atomic_read(&fw->cleanup_expired_total));
+  seq_printf(m, "cleanup_cycles %u\n", (unsigned int)atomic_read(&fw->cleanup_cycles));
+  seq_printf(m, "cleanup_expired_total %u\n",
+             (unsigned int)atomic_read(&fw->cleanup_expired_total));
   seq_printf(m, "current_bans %d\n", atomic_read(&fw->ban_count));
   seq_printf(m, "current_whitelist %d\n", atomic_read(&fw->whitelist_count));
   {
