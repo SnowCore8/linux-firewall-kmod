@@ -96,12 +96,3 @@ sudo make install
 # 启动守护进程
 sudo fwctl start
 ```
-
-## 文档导航
-
-- [快速开始](getting-started/) - 安装和入门指南
-- [配置指南](configuration/) - 配置选项和示例
-- [架构设计](architecture/) - 内核模块和守护进程架构
-- [运维管理](operations/) - 日常运维和故障排查
-- [开发指南](development/) - 构建和测试
-- [从 fail2ban 迁移](migration/from-fail2ban.md) - 迁移指南

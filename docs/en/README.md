@@ -96,12 +96,3 @@ sudo make install
 # Start the daemon
 sudo fwctl start
 ```
-
-## Documentation Navigation
-
-- [Getting Started](getting-started/) - Installation and入门 guide
-- [Configuration](configuration/) - Configuration options and examples
-- [Architecture](architecture/) - Kernel module and daemon architecture
-- [Operations](operations/) - Daily operations and troubleshooting
-- [Development](development/) - Building and testing
-- [Migrating from fail2ban](migration/from-fail2ban.md) - Migration guide
