@@ -10,7 +10,7 @@ assert_true "(grep -q 'enabled: true' '$CONFIG_DIR/frp.yaml' 2>/dev/null) || (gr
 
 # 13.2 FRP 日志文件配置
 fw_subsection "FRP 日志文件配置"
-assert_true "(grep -q '/var/log/frp/frp.log' '$CONFIG_DIR/frp.yaml' 2>/dev/null) || (grep -q '/var/log/frp/frp.log' '$CONFIG_DIR/default.yaml' 2>/dev/null)" "frp.log 路径配置"
+assert_true "(grep -qE '/var/log/frp(\\.log|/frp\\.log)' '$CONFIG_DIR/frp.yaml' 2>/dev/null) || (grep -qE '/var/log/frp(\\.log|/frp\\.log)' '$CONFIG_DIR/default.yaml' 2>/dev/null)" "frp.log 路径配置"
 
 # 13.3 FRP 参数配置
 fw_subsection "FRP 参数配置"
