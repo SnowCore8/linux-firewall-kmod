@@ -5,6 +5,8 @@
 # ---- 构建产物 ----
 build/
 site/
+docs/_book/
+docs/node_modules/.package-lock.json
 
 # 内核模块编译产物（in-tree 构建时产生，Makefile 会在构建后清理但需防御性忽略）
 *.ko

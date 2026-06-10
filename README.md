@@ -82,19 +82,19 @@ sudo ./build/daemon/firewall-daemon -c config/default.yaml  # 指定配置
 sudo ./build/daemon/firewall-daemon --help                  # 帮助
 ```
 
-> 📖 文档: [中文](docs/zh/) | [English](docs/en/)
+> 📖 文档: [中文](docs/zh/) | [English](docs/en/) | [在线浏览](https://snowcore8.github.io/linux-firewall-kmod/)
 
 ## 📚 文档导航
 
-| 文档 | 内容说明 | 适合人群 |
-|------|----------|----------|
-| [快速开始](docs/zh/getting-started/) | 安装、编译、首次使用 | 新用户 |
-| [配置指南](docs/zh/configuration/) | YAML Jail 格式、参数详解、示例 | 配置管理 |
-| [架构设计](docs/zh/architecture/) | 内核模块设计、数据流、组件交互 | 开发者 |
-| [运维手册](docs/zh/operations/) | 管理命令、监控、故障排查 | 运维人员 |
-| [开发指南](docs/zh/development/) | 构建、测试、贡献 | 贡献者 |
-| [迁移指南](docs/zh/migration/) | 从 fail2ban 迁移指南 | 迁移用户 |
-| [CHANGELOG.md](CHANGELOG.md) | v1.0 至 v2.1 变更记录 | 所有用户 |
+完整文档请通过侧边栏浏览，章节速查：
+
+- [快速开始](docs/zh/getting-started/README.md) - 安装、编译、首次使用
+- [配置指南](docs/zh/configuration/README.md) - YAML Jail 格式、参数详解
+- [架构设计](docs/zh/architecture/README.md) - 内核模块与守护进程设计
+- [运维手册](docs/zh/operations/README.md) - 管理命令、监控、故障排查
+- [开发指南](docs/zh/development/README.md) - 构建、测试、贡献流程
+- [迁移指南](docs/zh/migration/from-fail2ban.md) - 从 fail2ban 迁移
+- [CHANGELOG.md](CHANGELOG.md) - v1.0 至 v2.1 变更记录
 
 ## 适用场景
 

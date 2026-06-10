@@ -7,9 +7,8 @@
 ## 开始之前
 
 - 阅读 [README.md](README.md) 了解项目目标和核心特性
-- 浏览 [文档索引](docs/README.md) 熟悉项目文档
+- 浏览 [文档目录](docs/zh/) 熟悉项目文档
 - 查看现有 [Issues](https://github.com/SnowCore8/linux-firewall-kmod/issues) 避免重复
-- 阅读 [Git 工作流规范](docs/developer/git-workflow.md) 了解协作流程
 
 ## 开发环境设置
 

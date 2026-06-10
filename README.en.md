@@ -81,22 +81,19 @@ sudo ./build/daemon/firewall-daemon -c config/default.yaml  # Custom config
 sudo ./build/daemon/firewall-daemon --help                  # Help
 ```
 
-> 📖 Full procfs interface: [docs/user-guide/operations.md](docs/user-guide/operations.md)
+> 📖 Docs: [中文](docs/zh/) | [English](docs/en/) | [Online Viewer](https://snowcore8.github.io/linux-firewall-kmod/)
 
 ## 📚 Documentation Navigation
 
-| Document | Description | For |
-|----------|-------------|-----|
-| [Configuration](docs/user-guide/configuration.md) | YAML Jail format, parameters, hot-reload | Configuration |
-| [Operations](docs/user-guide/operations.md) | Deployment, procfs API, troubleshooting | Operations |
-| [Architecture](docs/developer/architecture.md) | Kernel design, data flow, components | Developers |
-| [Testing](docs/developer/testing.md) | 105 tests, how to run/write | Testers |
-| [Security Policy](SECURITY.md) | Security reporting & vulnerability process | Security |
-| [Security Details](docs/security/security.md) | Build options, systemd hardening | Security |
-| [Permanent Ban](docs/user-guide/permanent-ban.md) | SQLite persistence, DB schema | Advanced users |
-| [FAQ](docs/user-guide/faq.md) | Frequently asked questions | All users |
-| [Migration](docs/getting-started/migration.md) | Migration guide from fail2ban | Migrating users |
-| [CHANGELOG.md](CHANGELOG.md) | v1.0 to v2.1 changelog | All users |
+Browse the full documentation via the sidebar. Quick links:
+
+- [Getting Started](docs/en/getting-started/README.md) - Install, build, first use
+- [Configuration](docs/en/configuration/README.md) - YAML Jail format, parameters
+- [Architecture](docs/en/architecture/README.md) - Kernel module & daemon design
+- [Operations](docs/en/operations/README.md) - Management, monitoring, troubleshooting
+- [Development](docs/en/development/README.md) - Build, test, contribution
+- [Migration](docs/en/migration/from-fail2ban.md) - From fail2ban
+- [CHANGELOG.md](CHANGELOG.md) - v1.0 to v2.1 changelog
 
 ## Use Cases
 

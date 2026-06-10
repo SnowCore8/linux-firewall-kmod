@@ -15,7 +15,8 @@ ESSENTIAL_FILES=(
     "src/kernel-module/firewall.h"
     "src/daemon/firewall-daemon.c"
     "Makefile"
-    "docs/developer/architecture.md"
+    "docs/zh/README.md"
+    "docs/en/README.md"
     "tests/run_tests.sh"
 )
 

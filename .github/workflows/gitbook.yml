@@ -29,111 +29,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: docs/package-lock.json
 
-      - name: Install Honkit
-        run: |
-          cd docs
-          npm init -y
-          npm install honkit
+      - name: Install HonKit and plugins
+        working-directory: docs
+        run: npm ci --no-audit --no-fund
 
-      - name: Build Chinese docs
-        run: |
-          cd docs
-          rm -rf _book zh/_book
-          cd zh
-          npx honkit build . ./_book
-          echo "--- Chinese output ---"
-          ls -laR _book/ 2>/dev/null | head -30
-          cd ..
-          mkdir -p _book
-          mv zh/_book/* _book/zh/ 2>/dev/null || echo "Move failed"
-          ls -la _book/ 2>/dev/null || echo "No _book/"
-
-      - name: Build English docs
-        run: |
-          cd docs
-          rm -rf en/_book
-          cd en
-          npx honkit build . ./_book
-          echo "--- English output ---"
-          ls -laR _book/ 2>/dev/null | head -30
-          cd ..
-          mkdir -p _book
-          mv en/_book/* _book/en/ 2>/dev/null || echo "Move failed"
-          ls -la _book/ 2>/dev/null || echo "No _book/"
-
-      - name: Create language selector entry
-        run: |
-          mkdir -p docs/_book
-          cat > docs/_book/index.html << 'HTMLEOF'
-          <!DOCTYPE html>
-          <html lang="zh">
-          <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Linux Firewall - Documentation</title>
-            <style>
-              * { margin: 0; padding: 0; box-sizing: border-box; }
-              body {
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-                background: #0d1117;
-                color: #e6edf3;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                min-height: 100vh;
-              }
-              .container { text-align: center; max-width: 600px; padding: 2rem; }
-              h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #58a6ff; }
-              .subtitle { color: #8b949e; margin-bottom: 2rem; font-size: 1.1rem; }
-              .lang-grid { display: flex; gap: 1.5rem; justify-content: center; flex-wrap: wrap; }
-              .lang-card {
-                display: block;
-                background: #161b22;
-                border: 1px solid #30363d;
-                border-radius: 12px;
-                padding: 1.5rem 2rem;
-                text-decoration: none;
-                color: inherit;
-                transition: all 0.2s ease;
-                min-width: 220px;
-              }
-              .lang-card:hover {
-                border-color: #58a6ff;
-                transform: translateY(-2px);
-                box-shadow: 0 4px 12px rgba(88,166,255,0.15);
-              }
-              .lang-flag { font-size: 2.5rem; margin-bottom: 0.5rem; }
-              .lang-name { font-size: 1.2rem; font-weight: 600; margin-bottom: 0.25rem; }
-              .lang-desc { font-size: 0.85rem; color: #8b949e; }
-            </style>
-          </head>
-          <body>
-            <div class="container">
-              <h1>Linux Firewall</h1>
-              <p class="subtitle">Kernel Module — Documentation</p>
-              <div class="lang-grid">
-                <a class="lang-card" href="zh/">
-                  <div class="lang-flag">🇨🇳</div>
-                  <div class="lang-name">中文</div>
-                  <div class="lang-desc">简体中文文档</div>
-                </a>
-                <a class="lang-card" href="en/">
-                  <div class="lang-flag">🇬🇧</div>
-                  <div class="lang-name">English</div>
-                  <div class="lang-desc">English Documentation</div>
-                </a>
-              </div>
-            </div>
-          </body>
-          </html>
-          HTMLEOF
-
-      - name: List output files
-        run: |
-          echo "--- All output files ---"
-          find docs/_book -type f | wc -l
-          du -sh docs/_book
+      - name: Build multilingual site
+        working-directory: docs
+        run: npx honkit build . _book
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

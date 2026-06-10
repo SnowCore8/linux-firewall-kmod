@@ -1,6 +1,6 @@
 # 安全策略
 
-> 详细的安全特性技术文档已迁移至：[docs/security/security.md](docs/security/security.md)
+> 详细的安全特性技术说明已整合至：[架构设计](docs/zh/architecture/README.md)
 
 ## 支持的版本
 
@@ -44,7 +44,7 @@
 - **内存安全**：预分配策略、RCU 安全释放、TOCTOU 防护
 - **正则安全**：ReDoS 危险模式检测、长度限制、超时保护
 
-> 详细技术实现请参考 [安全特性文档](docs/security/security.md)。
+> 详细技术实现请参考 [架构设计](docs/zh/architecture/README.md)。
 
 ## 安全修复历史
 
@@ -55,6 +55,6 @@
 | v1.8 | libmicrohttpd 替换（安全更新） |
 | v1.7 | PCRE2 替换（ReDoS 防护） |
 
-完整修复详情请参阅 [安全特性文档](docs/security/security.md)。
+完整修复详情请参阅 [架构设计](docs/zh/architecture/README.md)。
 
 感谢您的协助，共同维护项目安全！
