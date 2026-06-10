@@ -6,193 +6,74 @@
 
 ### 入站数据包流程
 
-```
-                    网络接口
-                       │
-                       ▼
-               ┌───────────────┐
-               │  网卡驱动      │
-               └───────┬───────┘
-                       │
-                       ▼
-               ┌───────────────┐
-               │  IP 层输入    │
-               └───────┬───────┘
-                       │
-                       ▼
-           ╔═══════════════════════╗
-           ║  Netfilter:           ║
-           ║  PREROUTING Hook     ║
-           ║  ┌──────────────────┐ ║
-           ║  │ nf_hook_func_ipv4│ ║
-           ║  │  / _ipv6         │ ║
-           ║  └────────┬─────────┘ ║
-           ╚═══════════╪═══════════╝
-                       │
-              ┌────────┴────────┐
-              ▼                 ▼
-        ┌──────────┐      ┌──────────┐
-        │ 白名单?   │  是   │          │
-        └────┬─────┘──────►│ ACCEPT   │
-             │ 否          └──────────┘
-             ▼
-        ┌──────────┐
-        │ 封禁表?   │─── 是 ──► DROP
-        └────┬─────┘
-             │ 否
-             ▼
-        ┌──────────┐
-        │ ACCEPT    │
-        └──────────┘
+```mermaid
+graph TB
+    A["网络接口"] --> B["网卡驱动"]
+    B --> C["IP 层输入"]
+    C --> D["Netfilter PREROUTING Hook"]
+    D --> E["nf_hook_func_ipv4 / ipv6"]
+    E --> F{"白名单?"}
+    F -->|是| G["ACCEPT"]
+    F -->|否| H{"封禁表?"}
+    H -->|是| I["DROP"]
+    H -->|否| J["ACCEPT"]
 ```
 
 ### 封禁决策树
 
-```
-数据包 (src_ip, dst_port, protocol)
-            │
-            ▼
-    ┌───────────────┐
-    │ src_ip 在白名单?│
-    └───┬───────┬───┘
-        │ 是     │ 否
-        ▼       ▼
-    ACCEPT  ┌───────────────┐
-            │ (ip,port,proto)│
-            │ 在封禁表?      │
-            └───┬───────┬───┘
-                │ 是     │ 否
-                ▼       ▼
-            DROP    ACCEPT
+```mermaid
+graph TB
+    A["数据包 src_ip, dst_port, protocol"] --> B{"src_ip 在白名单?"}
+    B -->|是| C["ACCEPT"]
+    B -->|否| D{"ip,port,proto 在封禁表?"}
+    D -->|是| E["DROP"]
+    D -->|否| F["ACCEPT"]
 ```
 
 ## 封禁事件流
 
 ### 完整封禁流程
 
-```
-        日志文件
-            │
-            ▼ inotify 通知
-    ┌───────────────┐
-    │ 守护进程读取新行 │
-    └───────┬───────┘
-            │
-            ▼ PCRE2 匹配
-    ┌───────────────┐
-    │ 正则匹配成功?  │
-    └───┬───────┬───┘
-        │ 否     │ 是
-        │       ▼
-        │  ┌───────────────┐
-        │  │ 提取 IP 地址   │
-        │  └───────┬───────┘
-        │          │
-        │          ▼
-        │  ┌───────────────┐
-        │  │ 更新计数器     │
-        │  └───────┬───────┘
-        │          │
-        │          ▼
-        │  ┌───────────────┐
-        │  │ count >= max? │
-        │  └───┬───────┬───┘
-        │      │ 否     │ 是
-        │      │       ▼
-        │      │  ┌───────────────┐
-        │      │  │ IP 在白名单?   │
-        │      │  └───┬───────┬───┘
-        │      │      │ 是     │ 否
-        │      │      │       ▼
-        │      │      │  ┌───────────────┐
-        │      │      │  │ 写入内核       │
-        │      │      │  │ /proc/.../config│
-        │      │      │  └───────┬───────┘
-        │      │      │          │
-        │      │      │          ▼
-        │      │      │  ┌───────────────┐
-        │      │      │  │ 内核添加到    │
-        │      │      │  │ 哈希表        │
-        │      │      │  └───────┬───────┘
-        │      │      │          │
-        │      │      │          ▼
-        │      │      │  ┌───────────────┐
-        │      │      │  │ 记录到 SQLite  │
-        │      │      │  └───────┬───────┘
-        │      │      │          │
-        │      │      │          ▼
-        │      │      │  ┌───────────────┐
-        │      │      │  │ 更新 Prometheus│
-        │      │      │  │ 指标           │
-        │      │      │  └───────────────┘
-        │      │      │
-        ▼      ▼      ▼
-     忽略   忽略    封禁生效
+```mermaid
+sequenceDiagram
+    participant Log as 日志文件
+    participant Daemon as 守护进程
+    participant Kernel as 内核模块
+    participant SQLite as SQLite
+    participant Prometheus as Prometheus
+
+    Log->>Daemon: IN_MODIFY 通知
+    Daemon->>Daemon: 读取日志行
+    Daemon->>Daemon: PCRE2 匹配
+    Daemon->>Daemon: 计数+1, 检查阈值
+    Daemon->>Kernel: ban 1.2.3.4 (ProcFS)
+    Kernel->>Kernel: 添加封禁到哈希表
+    Kernel->>SQLite: INSERT 记录
+    Kernel->>Prometheus: 更新指标
 ```
 
 ## 解封事件流
 
 ### 自动解封
 
-```
-    内核清理线程 (30s)
-            │
-            ▼
-    ┌───────────────┐
-    │ 遍历哈希表     │
-    └───────┬───────┘
-            │
-            ▼
-    ┌───────────────┐
-    │ expire_time   │
-    │ < current?    │
-    └───┬───────┬───┘
-        │ 否     │ 是
-        │       ▼
-        │  ┌───────────────┐
-        │  │ 从哈希表移除   │
-        │  └───────┬───────┘
-        │          │
-        │          ▼
-        │  ┌───────────────┐
-        │  │ 从 SQLite 删除 │
-        │  └───────┬───────┘
-        │          │
-        │          ▼
-        │  ┌───────────────┐
-        │  │ 更新指标       │
-        │  └───────────────┘
-        │
-        ▼
-      保留
+```mermaid
+graph TB
+    A["内核清理线程 30s"] --> B["遍历哈希表"]
+    B --> C{"expire_time < current?"}
+    C -->|否| D["保留"]
+    C -->|是| E["从哈希表移除"]
+    E --> F["从 SQLite 删除"]
+    F --> G["更新指标"]
 ```
 
 ### 手动解封
 
-```
-    echo "unban <ip>" | sudo tee /proc/firewall/bans
-            │
-            ▼
-    ┌───────────────┐
-    │ 写入 ProcFS    │
-    │ echo "unban"  │
-    └───────┬───────┘
-            │
-            ▼
-    ┌───────────────┐
-    │ 内核从哈希表   │
-    │ 移除条目       │
-    └───────┬───────┘
-            │
-            ▼
-    ┌───────────────┐
-    │ 从 SQLite 删除 │
-    └───────┬───────┘
-            │
-            ▼
-    ┌───────────────┐
-    │ 更新指标       │
-    └───────────────┘
+```mermaid
+graph TB
+    A["echo unban ip | sudo tee /proc/firewall/bans"] --> B["写入 ProcFS"]
+    B --> C["内核从哈希表移除条目"]
+    C --> D["从 SQLite 删除"]
+    D --> E["更新指标"]
 ```
 
 ## 组件间通信
@@ -228,48 +109,44 @@
 
 ### 封禁时序
 
-```
-日志文件    守护进程          内核模块        SQLite      Prometheus
-   │           │                │              │            │
-   │──IN_MODIFY─►               │              │            │
-   │           │──读取日志行──► │              │            │
-   │           │◄──新行内容──── │              │            │
-   │           │                │              │            │
-   │           │──PCRE2 匹配───►│              │            │
-   │           │                │              │            │
-   │           │──计数+1       │              │            │
-   │           │──检查阈值     │              │            │
-   │           │                │              │            │
-   │           │──ban 1.2.3.4──►│              │            │
-   │           │  (ProcFS)     │              │            │
-   │           │                │──添加封禁    │            │
-   │           │                │──►INSERT─────►            │
-   │           │                │              │            │
-   │           │                │              │◄─更新指标───│
-   │           │                │              │            │
-   ▼           ▼                ▼              ▼            ▼
+```mermaid
+sequenceDiagram
+    participant Log as 日志文件
+    participant Daemon as 守护进程
+    participant Kernel as 内核模块
+    participant SQLite as SQLite
+    participant Prometheus as Prometheus
+
+    Log->>Daemon: IN_MODIFY
+    Daemon->>Daemon: 读取日志行
+    Daemon->>Daemon: PCRE2 匹配
+    Daemon->>Daemon: 计数+1, 检查阈值
+    Daemon->>Kernel: ban 1.2.3.4 (ProcFS)
+    Kernel->>Kernel: 添加封禁
+    Kernel->>SQLite: INSERT
+    Kernel->>Prometheus: 更新指标
 ```
 
 ### 数据包处理时序
 
-```
-网络           内核模块           白名单        哈希表
-  │                │                │            │
-  │──数据包────────►│                │            │
-  │                │──检查白名单────►│            │
-  │                │◄──不在白名单    │            │
-  │                │                │            │
-  │                │──查询哈希表─────┼───────────►│
-  │                │◄───────────────┼──不在表中───│
-  │                │                │            │
-  │◄──NF_ACCEPT───│                │            │
-  │                │                │            │
-  │──数据包────────►│                │            │
-  │                │──查询哈希表─────┼───────────►│
-  │                │◄───────────────┼──在表中─────│
-  │                │                │            │
-  │◄──NF_DROP─────│                │            │
-  ▼                ▼                ▼            ▼
+```mermaid
+sequenceDiagram
+    participant Net as 网络
+    participant Kernel as 内核模块
+    participant Whitelist as 白名单
+    participant HashTable as 哈希表
+
+    Net->>Kernel: 数据包
+    Kernel->>Whitelist: 检查白名单
+    Whitelist-->>Kernel: 不在白名单
+    Kernel->>HashTable: 查询哈希表
+    HashTable-->>Kernel: 不在表中
+    Kernel-->>Net: NF_ACCEPT
+    
+    Net->>Kernel: 数据包
+    Kernel->>HashTable: 查询哈希表
+    HashTable-->>Kernel: 在表中
+    Kernel-->>Net: NF_DROP
 ```
 
 ## 性能特征

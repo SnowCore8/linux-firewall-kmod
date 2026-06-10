@@ -6,43 +6,39 @@ This section describes the overall architecture and core components of the Linux
 
 The system consists of two main components:
 
-```
-┌──────────────────────────────────────────────────────┐
-│                    Userspace                           │
-│  ┌────────────────────────────────────────────────┐  │
-│  │              firewall-daemon Daemon                       │  │
-│  │  ┌─────────┐  ┌──────────┐  ┌──────────────┐  │  │
-│  │  │ inotify │  │  PCRE2   │  │ SQLite/HTTP  │  │  │
-│  │  │ Monitor │  │  Regex   │  │ Persist/Metrics│ │  │
-│  │  └────┬────┘  └────┬─────┘  └──────┬───────┘  │  │
-│  │       │             │               │          │  │
-│  │       └─────────────┼───────────────┘          │  │
-│  │                     ▼                          │  │
-│  │              Config Dispatch (ProcFS)           │  │
-│  └────────────────────┬───────────────────────────┘  │
-└───────────────────────┼──────────────────────────────┘
-                        │
-┌───────────────────────┼──────────────────────────────┐
-│                    Kernel Space │                      │
-│  ┌────────────────────┴───────────────────────────┐  │
-│  │            Linux Firewall Module               │  │
-│  │  ┌────────────────────────────────────────┐   │  │
-│  │  │        Netfilter Hook (PREROUTING)     │   │  │
-│  │  │         │                              │   │  │
-│  │  │    ┌────┴─────┐                        │   │  │
-│  │  │    ▼          ▼                        │   │  │
-│  │  │  Whitelist   Hash Table                │   │  │
-│  │  │  (64)       (4096)                     │   │  │
-│  │  │    │          │                        │   │  │
-│  │  │    ▼          ▼                        │   │  │
-│  │  │  ACCEPT     DROP                        │   │  │
-│  │  └────────────────────────────────────────┘   │  │
-│  │  ┌────────────────────────────────────────┐   │  │
-│  │  │           ProcFS Interface             │   │  │
-│  │  │      /proc/firewall/*                   │   │  │
-│  │  └────────────────────────────────────────┘   │  │
-│  └────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph UserSpace["Userspace"]
+        subgraph Daemon["firewall-daemon Daemon"]
+            Inotify["inotify Monitor"]
+            PCRE2["PCRE2 Regex"]
+            SQLite["SQLite/HTTP Persist/Metrics"]
+            ProcFS_Client["Config Dispatch ProcFS"]
+            
+            Inotify --> ProcFS_Client
+            PCRE2 --> ProcFS_Client
+            SQLite --> ProcFS_Client
+        end
+    end
+
+    subgraph KernelSpace["Kernel Space"]
+        subgraph Firewall["Linux Firewall Module"]
+            Netfilter["Netfilter Hook PREROUTING"]
+            Whitelist["Whitelist 64 entries"]
+            HashTable["Hash Table 4096 entries"]
+            Accept["ACCEPT"]
+            Drop["DROP"]
+            ProcFS_Server["ProcFS Interface"]
+            
+            Netfilter --> Whitelist
+            Netfilter --> HashTable
+            Whitelist --> Accept
+            HashTable --> Accept
+            HashTable --> Drop
+        end
+    end
+
+    ProcFS_Client -->|"write"| ProcFS_Server
 ```
 
 ## Core Design Principles
@@ -65,15 +61,18 @@ The system consists of two main components:
 
 ## Concurrency Model
 
-```
-CPU 0          CPU 1          CPU 2          CPU 3
-  │              │              │              │
-  ├─ RCU Read ───┤              ├─ RCU Read ───┤
-  │              │              │              │
-  │              ├─ RCU Write ──┤              │
-  │              │              │              │
-  ├─ RCU Read ───┤              ├─ RCU Read ───┤
-  │              │              │              │
+```mermaid
+sequenceDiagram
+    participant CPU0 as CPU 0
+    participant CPU1 as CPU 1
+    participant CPU2 as CPU 2
+    participant CPU3 as CPU 3
+
+    CPU0->>CPU0: RCU Read
+    CPU2->>CPU2: RCU Read
+    CPU1->>CPU1: RCU Write
+    CPU0->>CPU0: RCU Read
+    CPU3->>CPU3: RCU Read
 ```
 
 - **Read operations**: RCU protected, completely lock-free, multi-CPU parallel
