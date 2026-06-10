@@ -327,6 +327,15 @@ skip_test() {
     TEST_RESULTS+=("SKIP|$CURRENT_SUITE|$msg")
 }
 
+# 强制失败测试（用于关键依赖缺失场景）
+fail_test() {
+    local msg="$1"
+    TEST_FAIL=$((TEST_FAIL + 1))
+    TEST_TOTAL=$((TEST_TOTAL + 1))
+    echo -e "  ${RED}[FAIL]${NC} $msg"
+    TEST_RESULTS+=("FAIL|$CURRENT_SUITE|$msg")
+}
+
 # ============================================================================
 # Procfs 辅助函数
 # ============================================================================

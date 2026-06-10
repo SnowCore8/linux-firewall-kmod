@@ -93,7 +93,7 @@ done
 fw_subsection "SQLite 数据库独立功能测试"
 
 if ! command -v sqlite3 &>/dev/null; then
-    skip_test "sqlite3 命令行工具未安装，跳过数据库测试"
+    fail_test "sqlite3 命令行工具未安装，无法运行数据库测试（必须安装 sqlite3）"
 else
     sqlite3 "$TEST_DB_PATH" <<EOF
 CREATE TABLE permanent_banlist (
@@ -153,7 +153,26 @@ fi
 fw_subsection "守护进程 SQLite 集成测试"
 
 if pgrep -x "firewall-daemon" > /dev/null 2>&1; then
-    local_daemon_db=$(find "$PROJECT_ROOT" -name "bans.db" 2>/dev/null | head -1)
+    # 在多个常见位置查找守护进程的 bans.db（按优先级排序）
+    local_daemon_db=""
+    for db_path in \
+        "$PROJECT_ROOT/var/lib/firewall/bans.db" \
+        "/var/lib/firewall/bans.db" \
+        "/usr/local/var/lib/firewall/bans.db" \
+        "$PROJECT_ROOT/build/var/lib/firewall/bans.db"; do
+        if [[ -f "$db_path" ]]; then
+            local_daemon_db="$db_path"
+            break
+        fi
+    done
+    # 也尝试从配置中读取路径
+    if [[ -z "$local_daemon_db" && -f "$CONFIG_DIR/default.yaml" ]]; then
+        local_db_config=$(grep "permanent_db_path:" "$CONFIG_DIR/default.yaml" 2>/dev/null | awk -F'"' '{print $2}')
+        if [[ -n "$local_db_config" && -f "$local_db_config" ]]; then
+            local_daemon_db="$local_db_config"
+        fi
+    fi
+
     if [[ -n "$local_daemon_db" && -f "$local_daemon_db" ]]; then
         assert_file_exists "$local_daemon_db" "守护进程 SQLite 数据库存在"
 
@@ -166,7 +185,7 @@ if pgrep -x "firewall-daemon" > /dev/null 2>&1; then
 
         fw_log_info "守护进程 SQLite 集成验证通过"
     else
-        warn_test "守护进程运行中但 SQLite 数据库文件未找到"
+        fail_test "守护进程运行中但 SQLite 数据库文件未找到（应在以下位置之一: /var/lib/firewall/bans.db）"
     fi
 else
     fw_log_info "守护进程未运行，跳过集成测试"
