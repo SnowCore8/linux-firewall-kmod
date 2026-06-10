@@ -99,11 +99,17 @@ ASAN_DEPS := $(ASAN_OBJS:.o=.d)
 # 5. 主要构建目标 (all, build, kernel-module, daemon)
 # ============================================================================
 
-# P1-4: all 不再依赖 format-check，仅执行构建
+# P0-5: 默认编译流程包含 clang-format 格式检查
+# 通过 SKIP_FORMAT_CHECK=1 可跳过检查（用于紧急调试场景）
 .PHONY: all build
-all: build
+all: format-check build
 build: kernel-module daemon
 	@echo "Build complete: $(KERNEL_MODULE) and $(DAEMON_BIN)"
+
+# 跳过格式检查的快捷目标（用于本地调试）
+.PHONY: build-quick
+build-quick: kernel-module daemon
+	@echo "Quick build (format-check skipped): $(KERNEL_MODULE) and $(DAEMON_BIN)"
 
 # P2-7: 内核模块编译 — 使用 MAKEFLAGS 继承父 make 的 jobserver
 # 如果 MAKEFLAGS 中没有 -j/--jobserver，则不传递并行标志（由内核构建系统自行决定）
@@ -208,19 +214,23 @@ ci: format-check build test
 
 .PHONY: format-check
 format-check:
-	@echo "Checking C code formatting..."
-	@clang-format --dry-run --Werror \
-		$(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h \
-		$(DAEMON_SRC_DIR)/*.c $(DAEMON_SRC_DIR)/*.h || \
-		(echo "ERROR: Code formatting check failed. Run 'make format' to auto-fix." && exit 1)
-	@echo "✓ C code formatting check passed"
-	@if command -v yamllint >/dev/null 2>&1; then \
-		echo "Checking YAML configuration..."; \
-		yamllint config/; \
+	@if [ "$(SKIP_FORMAT_CHECK)" = "1" ]; then \
+		echo "⚠ Format check skipped (SKIP_FORMAT_CHECK=1)"; \
 	else \
-		echo "yamllint not found, skipping YAML check"; \
+		echo "Checking C code formatting..."; \
+		clang-format --dry-run --Werror \
+			$(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h \
+			$(DAEMON_SRC_DIR)/*.c $(DAEMON_SRC_DIR)/*.h || \
+			(echo "ERROR: Code formatting check failed. Run 'make format' to auto-fix." && exit 1); \
+		echo "✓ C code formatting check passed"; \
+		if command -v yamllint >/dev/null 2>&1; then \
+			echo "Checking YAML configuration..."; \
+			yamllint config/; \
+		else \
+			echo "yamllint not found, skipping YAML check"; \
+		fi; \
+		echo "Format check passed."; \
 	fi
-	@echo "Format check passed."
 
 .PHONY: format
 format:
@@ -431,21 +441,26 @@ distclean: clean
 .PHONY: help
 help:
 	@echo "可用目标:"
-	@echo "  all/build     - 编译内核模块和守护进程（默认）"
-	@echo "  kernel-module - 仅编译内核模块"
-	@echo "  daemon        - 仅编译守护进程"
-	@echo "  debug         - 调试版本编译 (DL=1/2/3, 默认 1)"
-	@echo "  asan          - AddressSanitizer 版本编译"
-	@echo "  deb           - 构建 Debian 软件包 (可选 VERSION=x.x.x)"
-	@echo "  install       - 安装到系统"
-	@echo "  uninstall     - 从系统卸载"
-	@echo "  clean         - 清理编译产物"
-	@echo "  distclean     - 清理所有生成文件（含内核中间文件）"
-	@echo "  test          - 运行测试套件 (需要 sudo)"
-	@echo "  format        - 格式化代码"
-	@echo "  format-check  - 检查代码格式"
-	@echo "  ci            - CI 完整构建（格式检查 + 编译 + 测试）"
-	@echo "  help          - 显示此帮助信息"
+	@echo "  all/build      - 编译内核模块和守护进程（默认，含格式检查）"
+	@echo "  build-quick    - 跳过格式检查的快速编译"
+	@echo "  kernel-module  - 仅编译内核模块"
+	@echo "  daemon         - 仅编译守护进程"
+	@echo "  debug          - 调试版本编译 (DL=1/2/3, 默认 1)"
+	@echo "  asan           - AddressSanitizer 版本编译"
+	@echo "  deb            - 构建 Debian 软件包 (可选 VERSION=x.x.x)"
+	@echo "  install        - 安装到系统"
+	@echo "  uninstall      - 从系统卸载"
+	@echo "  clean          - 清理编译产物"
+	@echo "  distclean      - 清理所有生成文件（含内核中间文件）"
+	@echo "  test           - 运行测试套件 (需要 sudo)"
+	@echo "  format         - 自动格式化 C 代码"
+	@echo "  format-check   - 检查 C 代码格式"
+	@echo "  ci             - CI 完整构建（格式检查 + 编译 + 测试）"
+	@echo "  help           - 显示此帮助信息"
+	@echo ""
+	@echo "跳过格式检查选项:"
+	@echo "  make SKIP_FORMAT_CHECK=1 all  - 通过变量跳过"
+	@echo "  make build-quick              - 通过目标跳过"
 
 # 运行综合测试套件
 .PHONY: test

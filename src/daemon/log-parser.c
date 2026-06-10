@@ -1,6 +1,6 @@
 /*
- * log-parser.c - 日志解析和IP提取函数 (支持 IPv4/IPv6)
- */
+         * log-parser.c - 日志解析和IP提取函数 (支持 IPv4/IPv6)
+         */
 
 #include "log-parser.h"
 #include "firewall-daemon.h"
