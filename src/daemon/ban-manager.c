@@ -154,7 +154,7 @@ int validate_ip(const char *ip, validated_ip_t *out) {
 static int validate_procfs_path(const char *path) {
   const char *p;
 
-  if (strncmp(path, PROCFS_DIR "/", sizeof(PROCFS_DIR) + 1) != 0) {
+  if (strncmp(path, PROCFS_DIR "/", strlen(PROCFS_DIR) + 1) != 0) {
     daemon_log_err("secure_procfs_write: path outside %s: %s", PROCFS_DIR,
                    path);
     return -1;
