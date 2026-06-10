@@ -92,9 +92,10 @@ jobs:
       - name: 编译守护进程
         run: |
           set -e
-          echo "=== 编译守护进程 ==="
+          echo "=== 编译守护进程（包含格式检查）==="
           make clean || true
-          make daemon -j$(nproc)
+          # 使用 make all 会自动执行 format-check
+          make all -j$(nproc)
           echo "✓ 守护进程编译完成"
 
           echo "--- 编译产物检查 ---"
@@ -199,6 +200,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libyaml-0-2 libsqlite3-0 libmicrohttpd12 libpcre2-8-0
+          # 测试套件强制要求 sqlite3 CLI（禁止跳过）
+          sudo apt-get install -y sqlite3
+          sqlite3 --version
 
       - name: 执行测试并生成报告
         run: sudo -E ./tests/run_tests.sh --report
