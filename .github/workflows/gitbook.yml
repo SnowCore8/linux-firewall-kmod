@@ -42,7 +42,11 @@ jobs:
 
       - name: Strip build artifacts
         working-directory: docs/_book
-        run: rm -f package.json package-lock.json
+        run: |
+          rm -f package.json package-lock.json
+          # Each language's pages fetch <lang>/search_index.json (relative
+          # to basePath). The root copy is unused; drop it to save 1MB.
+          rm -f search_index.json
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
