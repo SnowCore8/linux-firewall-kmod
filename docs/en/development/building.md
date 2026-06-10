@@ -27,9 +27,11 @@ This document describes the build system and compilation options for the Linux F
 
 | Target | Description |
 |--------|-------------|
-| `make test` | Run all tests |
-| `make test-unit` | Run unit tests |
-| `make test-integration` | Run integration tests |
+| `make test` | Run all tests (`sudo ./tests/run_tests.sh`) |
+
+> The Makefile exposes only `make test`. To filter by suite or category,
+> call `./tests/run_tests.sh --suite NN` / `--category X` / `--report`
+> directly. See [Testing](testing.md) for details.
 
 ## Building the Kernel Module
 

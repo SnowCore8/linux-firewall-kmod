@@ -27,9 +27,11 @@
 
 | 目标 | 说明 |
 |------|------|
-| `make test` | 运行所有测试 |
-| `make test-unit` | 运行单元测试 |
-| `make test-integration` | 运行集成测试 |
+| `make test` | 运行所有测试（`sudo ./tests/run_tests.sh`） |
+
+> Makefile 仅暴露 `make test`；按套件或类别过滤请直接调用
+> `./tests/run_tests.sh --suite NN` / `--category X` / `--report`，
+> 详见 [测试](testing.md)。
 
 ## 构建内核模块
 
