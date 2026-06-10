@@ -170,9 +170,12 @@ if (is_whitelisted(ip)) {
 白名单支持 CIDR 表示法，通过子网掩码匹配：
 
 ```c
-static bool match_cidr(__be32 ip, __be32 entry_ip, __be32 mask)
+/* 真实实现见 src/kernel-module/whitelist.c */
+bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip)
 {
-    return (ip & mask) == (entry_ip & mask);
+    struct whitelist_entry *entry;
+    /* 两阶段匹配：先精确匹配（O(1) 哈希桶），再遍历 CIDR 子网 */
+    ...
 }
 ```
 
@@ -180,16 +183,17 @@ static bool match_cidr(__be32 ip, __be32 entry_ip, __be32 mask)
 
 ### 清理线程
 
-内核模块创建内核线程定期清理过期的封禁条目：
+内核模块通过 timer 定期清理过期的封禁条目（实现见
+`src/kernel-module/cleanup.c`）：
 
 ```c
-static int cleanup_thread(void *data)
+/* 真实实现见 src/kernel-module/cleanup.c */
+void cleanup_timer_callback(struct timer_list *t)
 {
-    while (!kthread_should_stop()) {
-        msleep(CLEANUP_INTERVAL_MS);
-        cleanup_expired();
-    }
-    return 0;
+    struct firewall_info *fw = container_of(t, struct firewall_info, cleanup_timer);
+    cleanup_expired_bans(fw);  /* 清理 expired 封禁 */
+    /* 重新调度下一次清理 */
+    mod_timer(&fw->cleanup_timer, jiffies + CLEANUP_INTERVAL);
 }
 ```
 

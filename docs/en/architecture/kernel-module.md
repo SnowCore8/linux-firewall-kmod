@@ -170,9 +170,13 @@ if (is_whitelisted(ip)) {
 The whitelist supports CIDR notation, matching via subnet mask:
 
 ```c
-static bool match_cidr(__be32 ip, __be32 entry_ip, __be32 mask)
+/* Real implementation in src/kernel-module/whitelist.c */
+bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip)
 {
-    return (ip & mask) == (entry_ip & mask);
+    struct whitelist_entry *entry;
+    /* Two-stage matching: exact match (O(1) hash bucket) first,
+     * then walk CIDR subnets. */
+    ...
 }
 ```
 
@@ -180,16 +184,17 @@ static bool match_cidr(__be32 ip, __be32 entry_ip, __be32 mask)
 
 ### Cleanup Thread
 
-The kernel module creates a kernel thread that periodically cleans expired ban entries:
+The kernel module uses a timer to periodically clean up expired ban
+entries (see `src/kernel-module/cleanup.c`):
 
 ```c
-static int cleanup_thread(void *data)
+/* Real implementation in src/kernel-module/cleanup.c */
+void cleanup_timer_callback(struct timer_list *t)
 {
-    while (!kthread_should_stop()) {
-        msleep(CLEANUP_INTERVAL_MS);
-        cleanup_expired();
-    }
-    return 0;
+    struct firewall_info *fw = container_of(t, struct firewall_info, cleanup_timer);
+    cleanup_expired_bans(fw);  /* remove expired bans */
+    /* Reschedule next cleanup */
+    mod_timer(&fw->cleanup_timer, jiffies + CLEANUP_INTERVAL);
 }
 ```
 
