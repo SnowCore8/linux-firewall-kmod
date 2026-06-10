@@ -103,34 +103,34 @@ sudo make install
 
 After installation:
 
-- Kernel module `fw_fire.ko` is installed to `/lib/modules/$(uname -r)/extra/`
+- Kernel module `firewall.ko` is installed to `/lib/modules/$(uname -r)/extra/`
 - Daemon `fwctl` is installed to `/usr/local/sbin/`
-- Configuration file is installed to `/etc/fw_fire/fw_fire.yaml`
+- Configuration file is installed to `/etc/firewall/default.yaml`
 - systemd service file is installed to `/etc/systemd/system/`
 
 ### 4. Load the Kernel Module
 
 ```bash
-sudo modprobe fw_fire
+sudo modprobe firewall
 ```
 
 Verify the module is loaded:
 
 ```bash
-lsmod | grep fw_fire
+lsmod | grep firewall
 ```
 
 ### 5. Start the Daemon
 
 ```bash
-sudo systemctl enable fw_fire
-sudo systemctl start fw_fire
+sudo systemctl enable firewall
+sudo systemctl start firewall
 ```
 
 Check service status:
 
 ```bash
-sudo systemctl status fw_fire
+sudo systemctl status firewall
 ```
 
 ## Verifying Installation
@@ -138,7 +138,7 @@ sudo systemctl status fw_fire
 ### Check Kernel Module
 
 ```bash
-cat /proc/fw_fire/status
+cat /proc/firewall/status
 ```
 
 Expected output:
@@ -169,8 +169,8 @@ curl http://localhost:9119/metrics
 ## Uninstallation
 
 ```bash
-sudo systemctl stop fw_fire
-sudo systemctl disable fw_fire
+sudo systemctl stop firewall
+sudo systemctl disable firewall
 sudo make uninstall
 ```
 

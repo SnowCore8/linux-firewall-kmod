@@ -4,16 +4,16 @@ This document describes the implementation details of the Linux Firewall kernel 
 
 ## Module Overview
 
-The kernel module `fw_fire.ko` is the core of the system, responsible for intercepting and filtering packets at the network stack level.
+The kernel module `firewall.ko` is the core of the system, responsible for intercepting and filtering packets at the network stack level.
 
 ### Module Information
 
 | Attribute | Value |
 |-----------|-------|
-| Module Name | `fw_fire` |
-| Source File | `src/kernel/fw_fire.c` |
+| Module Name | `firewall` |
+| Source File | `src/kernel/firewall.c` |
 | License | GPL |
-| Load Path | `/lib/modules/$(uname -r)/extra/fw_fire.ko` |
+| Load Path | `/lib/modules/$(uname -r)/extra/firewall.ko` |
 
 ## Netfilter Hook
 
@@ -22,9 +22,9 @@ The kernel module `fw_fire.ko` is the core of the system, responsible for interc
 The module registers a hook on the `NF_INET_PRE_ROUTING` chain, one of the earliest processing points after packets enter the network stack.
 
 ```c
-static struct nf_hook_ops fw_fire_hook_ops[] __read_mostly = {
+static struct nf_hook_ops firewall_hook_ops[] __read_mostly = {
     {
-        .hook     = fw_fire_hook_func,
+        .hook     = firewall_hook_func,
         .pf       = NFPROTO_IPV4,
         .hooknum  = NF_INET_PRE_ROUTING,
         .priority = NF_IP_PRI_FIRST,
@@ -110,7 +110,7 @@ The packet processing path uses RCU read locks, ensuring multi-CPU concurrency s
 
 ```c
 rcu_read_lock();
-entry = fw_fire_lookup(ip, port);
+entry = firewall_lookup(ip, port);
 rcu_read_unlock();
 ```
 
@@ -215,11 +215,11 @@ Check expire_time < now
 ### Registration
 
 ```c
-static int __init fw_fire_proc_init(void)
+static int __init firewall_proc_init(void)
 {
-    proc_create("fw_fire/status", 0444, NULL, &status_fops);
-    proc_create("fw_fire/banned_ips", 0444, NULL, &banned_fops);
-    proc_create("fw_fire/config", 0200, NULL, &config_fops);
+    proc_create("firewall/status", 0444, NULL, &status_fops);
+    proc_create("firewall/banned_ips", 0444, NULL, &banned_fops);
+    proc_create("firewall/config", 0200, NULL, &config_fops);
     return 0;
 }
 ```
@@ -265,9 +265,9 @@ module_exit()
 Uses `pr_*` macros for logging:
 
 ```c
-pr_info("fw_fire: module loaded\n");
-pr_warn("fw_fire: hash table full\n");
-pr_err("fw_fire: failed to register hook\n");
+pr_info("firewall: module loaded\n");
+pr_warn("firewall: hash table full\n");
+pr_err("firewall: failed to register hook\n");
 ```
 
 Debug level is controlled via compile-time macro:

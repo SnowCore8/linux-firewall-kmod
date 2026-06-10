@@ -10,7 +10,7 @@ Add a job to `prometheus.yml`:
 
 ```yaml
 scrape_configs:
-  - job_name: 'fw_fire'
+  - job_name: 'firewall'
     static_configs:
       - targets: ['localhost:9119']
     scrape_interval: 15s
@@ -22,46 +22,46 @@ scrape_configs:
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `fw_fire_banned_ips_total` | gauge | Current number of banned IPs |
-| `fw_fire_ban_events_total` | counter | Total ban events |
-| `fw_fire_unban_events_total` | counter | Total unban events |
-| `fw_fire_packets_dropped_total` | counter | Total dropped packets |
-| `fw_fire_packets_passed_total` | counter | Total passed packets |
+| `firewall_banned_ips_total` | gauge | Current number of banned IPs |
+| `firewall_ban_events_total` | counter | Total ban events |
+| `firewall_unban_events_total` | counter | Total unban events |
+| `firewall_packets_dropped_total` | counter | Total dropped packets |
+| `firewall_packets_passed_total` | counter | Total passed packets |
 
 #### Capacity Metrics
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `fw_fire_whitelist_entries_total` | gauge | Current whitelist entries |
-| `fw_fire_hash_table_usage` | gauge | Hash table usage (0.0-1.0) |
-| `fw_fire_hash_table_capacity` | gauge | Hash table capacity (4096) |
-| `fw_fire_whitelist_capacity` | gauge | Whitelist capacity (64) |
+| `firewall_whitelist_entries_total` | gauge | Current whitelist entries |
+| `firewall_hash_table_usage` | gauge | Hash table usage (0.0-1.0) |
+| `firewall_hash_table_capacity` | gauge | Hash table capacity (4096) |
+| `firewall_whitelist_capacity` | gauge | Whitelist capacity (64) |
 
 #### Jail Metrics
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `fw_fire_jail_failures_total` | counter | `jail` | Failure matches per jail |
-| `fw_fire_jail_bans_total` | counter | `jail` | Bans triggered per jail |
-| `fw_fire_jail_active` | gauge | `jail` | Whether jail is enabled (0/1) |
+| `firewall_jail_failures_total` | counter | `jail` | Failure matches per jail |
+| `firewall_jail_bans_total` | counter | `jail` | Bans triggered per jail |
+| `firewall_jail_active` | gauge | `jail` | Whether jail is enabled (0/1) |
 
 ### Query Examples
 
 ```yaml
 # Current banned IP count
-fw_fire_banned_ips_total
+firewall_banned_ips_total
 
 # Ban rate over last 5 minutes
-rate(fw_fire_ban_events_total[5m])
+rate(firewall_ban_events_total[5m])
 
 # Bans by jail
-sum by (jail) (fw_fire_jail_bans_total)
+sum by (jail) (firewall_jail_bans_total)
 
 # Hash table usage percentage
-fw_fire_hash_table_usage * 100
+firewall_hash_table_usage * 100
 
 # Packet drop rate
-rate(fw_fire_packets_dropped_total[5m])
+rate(firewall_packets_dropped_total[5m])
 ```
 
 ## Grafana Dashboard
@@ -79,7 +79,7 @@ rate(fw_fire_packets_dropped_total[5m])
 ```
 Title: Current Banned IPs
 Panel: Stat
-Query: fw_fire_banned_ips_total
+Query: firewall_banned_ips_total
 Thresholds: 100 (warning), 1000 (critical)
 ```
 
@@ -88,7 +88,7 @@ Thresholds: 100 (warning), 1000 (critical)
 ```
 Title: Ban Events Rate
 Panel: Time Series
-Query: rate(fw_fire_ban_events_total[5m])
+Query: rate(firewall_ban_events_total[5m])
 ```
 
 #### Jail Distribution
@@ -96,7 +96,7 @@ Query: rate(fw_fire_ban_events_total[5m])
 ```
 Title: Bans by Jail
 Panel: Pie Chart
-Query: sum by (jail) (fw_fire_jail_bans_total)
+Query: sum by (jail) (firewall_jail_bans_total)
 ```
 
 #### Packet Statistics
@@ -105,8 +105,8 @@ Query: sum by (jail) (fw_fire_jail_bans_total)
 Title: Packets Processed
 Panel: Time Series
 Query: 
-  rate(fw_fire_packets_dropped_total[5m])  # Dropped
-  rate(fw_fire_packets_passed_total[5m])   # Passed
+  rate(firewall_packets_dropped_total[5m])  # Dropped
+  rate(firewall_packets_passed_total[5m])   # Passed
 ```
 
 ## Log Monitoring
@@ -134,9 +134,9 @@ Query:
 Configure logrotate:
 
 ```
-/etc/logrotate.d/fw_fire
+/etc/logrotate.d/firewall
 
-/var/log/fw_fire.log {
+/var/log/firewall.log {
     daily
     rotate 30
     compress
@@ -145,7 +145,7 @@ Configure logrotate:
     notifempty
     create 0640 root adm
     postrotate
-        systemctl reload fw_fire > /dev/null 2>&1 || true
+        systemctl reload firewall > /dev/null 2>&1 || true
     endscript
 }
 ```
@@ -154,16 +154,16 @@ Configure logrotate:
 
 ```bash
 # Count today's bans
-grep "$(date +%Y-%m-%d)" /var/log/fw_fire.log | grep "Banned" | wc -l
+grep "$(date +%Y-%m-%d)" /var/log/firewall.log | grep "Banned" | wc -l
 
 # Most frequently banned IPs
-grep "Banned" /var/log/fw_fire.log | grep -oP '\d+\.\d+\.\d+\.\d+' | sort | uniq -c | sort -rn | head -20
+grep "Banned" /var/log/firewall.log | grep -oP '\d+\.\d+\.\d+\.\d+' | sort | uniq -c | sort -rn | head -20
 
 # Bans per jail
-grep "Banned" /var/log/fw_fire.log | grep -oP '\[\w+\]' | sort | uniq -c | sort -rn
+grep "Banned" /var/log/firewall.log | grep -oP '\[\w+\]' | sort | uniq -c | sort -rn
 
 # Last 10 bans
-grep "Banned" /var/log/fw_fire.log | tail -10
+grep "Banned" /var/log/firewall.log | tail -10
 ```
 
 ## Alert Rules
@@ -172,10 +172,10 @@ grep "Banned" /var/log/fw_fire.log | tail -10
 
 ```yaml
 groups:
-  - name: fw_fire
+  - name: firewall
     rules:
       - alert: HighBanRate
-        expr: rate(fw_fire_ban_events_total[5m]) > 10
+        expr: rate(firewall_ban_events_total[5m]) > 10
         for: 5m
         labels:
           severity: warning
@@ -184,7 +184,7 @@ groups:
           description: "Ban rate is {{ $value }} per second"
 
       - alert: HashTableNearlyFull
-        expr: fw_fire_hash_table_usage > 0.8
+        expr: firewall_hash_table_usage > 0.8
         for: 5m
         labels:
           severity: critical
@@ -193,7 +193,7 @@ groups:
           description: "Usage is {{ $value | humanizePercentage }}"
 
       - alert: FirewallDown
-        expr: fw_fire_banned_ips_total == -1
+        expr: firewall_banned_ips_total == -1
         for: 1m
         labels:
           severity: critical
@@ -201,7 +201,7 @@ groups:
           summary: "Firewall module is not responding"
 
       - alert: HighDropRate
-        expr: rate(fw_fire_packets_dropped_total[5m]) > 1000
+        expr: rate(firewall_packets_dropped_total[5m]) > 1000
         for: 10m
         labels:
           severity: warning
@@ -216,22 +216,22 @@ groups:
 
 ```bash
 #!/bin/bash
-# /usr/local/bin/fw_fire-health.sh
+# /usr/local/bin/firewall-health.sh
 
 # Check kernel module
-if ! lsmod | grep -q fw_fire; then
+if ! lsmod | grep -q firewall; then
     echo "CRITICAL: Kernel module not loaded"
     exit 2
 fi
 
 # Check daemon
-if ! systemctl is-active --quiet fw_fire; then
+if ! systemctl is-active --quiet firewall; then
     echo "CRITICAL: Daemon not running"
     exit 2
 fi
 
 # Check ProcFS
-if [ ! -f /proc/fw_fire/status ]; then
+if [ ! -f /proc/firewall/status ]; then
     echo "CRITICAL: ProcFS interface not available"
     exit 2
 fi
@@ -249,14 +249,14 @@ exit 0
 ### systemd Integration
 
 ```ini
-# /etc/systemd/system/fw_fire-health.service
+# /etc/systemd/system/firewall-health.service
 [Unit]
 Description=Linux Firewall Health Check
-After=fw_fire.service
+After=firewall-daemon.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/fw_fire-health.sh
+ExecStart=/usr/local/bin/firewall-health.sh
 
 [Timer]
 OnBootSec=5min

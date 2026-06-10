@@ -1,11 +1,11 @@
 # ProcFS Interface
 
-The Linux Firewall Kernel Module provides runtime management and monitoring through the `/proc/fw_fire/` directory.
+The Linux Firewall Kernel Module provides runtime management and monitoring through the `/proc/firewall/` directory.
 
 ## Interface Overview
 
 ```
-/proc/fw_fire/
+/proc/firewall/
 ├── status          # Module status
 ├── banned_ips      # Currently banned IP list
 ├── whitelist       # Current whitelist IP list
@@ -20,7 +20,7 @@ The Linux Firewall Kernel Module provides runtime management and monitoring thro
 ### Module Status
 
 ```bash
-cat /proc/fw_fire/status
+cat /proc/firewall/status
 ```
 
 Output:
@@ -46,7 +46,7 @@ Whitelisted IPs: 3 / 64
 ### Banned IP List
 
 ```bash
-cat /proc/fw_fire/banned_ips
+cat /proc/firewall/banned_ips
 ```
 
 Output:
@@ -71,7 +71,7 @@ IP              Jail      Remaining(s)  Protocol  Port
 ### Whitelist
 
 ```bash
-cat /proc/fw_fire/whitelist
+cat /proc/firewall/whitelist
 ```
 
 Output:
@@ -88,7 +88,7 @@ IP/Range
 ### Statistics
 
 ```bash
-cat /proc/fw_fire/stats
+cat /proc/firewall/stats
 ```
 
 Output:
@@ -114,7 +114,7 @@ Current banned:       15
 ### Module Version
 
 ```bash
-cat /proc/fw_fire/version
+cat /proc/firewall/version
 ```
 
 Output:
@@ -130,7 +130,7 @@ Output:
 Write ban command to `config`:
 
 ```bash
-echo "ban 192.168.1.100 3600 tcp 22 sshd" | sudo tee /proc/fw_fire/config
+echo "ban 192.168.1.100 3600 tcp 22 sshd" | sudo tee /proc/firewall/config
 ```
 
 Format: `ban <ip> <duration> <protocol> <port> <jail>`
@@ -146,7 +146,7 @@ Format: `ban <ip> <duration> <protocol> <port> <jail>`
 ### Remove Ban
 
 ```bash
-echo "unban 192.168.1.100" | sudo tee /proc/fw_fire/config
+echo "unban 192.168.1.100" | sudo tee /proc/firewall/config
 ```
 
 Format: `unban <ip>`
@@ -154,7 +154,7 @@ Format: `unban <ip>`
 ### Add to Whitelist
 
 ```bash
-echo "whitelist 192.168.1.50" | sudo tee /proc/fw_fire/config
+echo "whitelist 192.168.1.50" | sudo tee /proc/firewall/config
 ```
 
 Format: `whitelist <ip>`
@@ -164,7 +164,7 @@ Format: `whitelist <ip>`
 ### Remove from Whitelist
 
 ```bash
-echo "unwhitelist 192.168.1.50" | sudo tee /proc/fw_fire/config
+echo "unwhitelist 192.168.1.50" | sudo tee /proc/firewall/config
 ```
 
 Format: `unwhitelist <ip>`
@@ -172,23 +172,23 @@ Format: `unwhitelist <ip>`
 ### Clear All Bans
 
 ```bash
-echo "clear" | sudo tee /proc/fw_fire/clear
+echo "clear" | sudo tee /proc/firewall/clear
 ```
 
 Or write to `config`:
 
 ```bash
-echo "clear" | sudo tee /proc/fw_fire/config
+echo "clear" | sudo tee /proc/firewall/config
 ```
 
 ### Enable/Disable Module
 
 ```bash
 # Disable (stop processing packets)
-echo "disable" | sudo tee /proc/fw_fire/config
+echo "disable" | sudo tee /proc/firewall/config
 
 # Enable
-echo "enable" | sudo tee /proc/fw_fire/config
+echo "enable" | sudo tee /proc/firewall/config
 ```
 
 ## Access via fwctl
@@ -197,27 +197,27 @@ The `fwctl` tool wraps ProcFS operations:
 
 | fwctl Command | ProcFS Operation |
 |---------------|-----------------|
-| `fwctl status` | Read `/proc/fw_fire/status` |
-| `fwctl banned` | Read `/proc/fw_fire/banned_ips` |
-| `fwctl whitelist` | Read `/proc/fw_fire/whitelist` |
-| `fwctl stats` | Read `/proc/fw_fire/stats` |
-| `fwctl ban <ip> <time>` | Write `/proc/fw_fire/config` |
-| `fwctl unban <ip>` | Write `/proc/fw_fire/config` |
-| `fwctl clear` | Write `/proc/fw_fire/clear` |
+| `fwctl status` | Read `/proc/firewall/status` |
+| `fwctl banned` | Read `/proc/firewall/banned_ips` |
+| `fwctl whitelist` | Read `/proc/firewall/whitelist` |
+| `fwctl stats` | Read `/proc/firewall/stats` |
+| `fwctl ban <ip> <time>` | Write `/proc/firewall/config` |
+| `fwctl unban <ip>` | Write `/proc/firewall/config` |
+| `fwctl clear` | Write `/proc/firewall/clear` |
 
 ## Permission Requirements
 
 | Operation | Permission |
 |-----------|------------|
-| Read | Root or `fw_fire` group |
+| Read | Root or `firewall` group |
 | Write | Root |
 
 ```bash
-# Create fw_fire group
-sudo groupadd fw_fire
+# Create firewall group
+sudo groupadd firewall
 
 # Add user to group
-sudo usermod -aG fw_fire $USER
+sudo usermod -aG firewall $USER
 
 # Modify ProcFS file permissions (requires udev rule)
 ```
@@ -235,7 +235,7 @@ make debug DL=2
 View kernel log:
 
 ```bash
-sudo dmesg | grep fw_fire
+sudo dmesg | grep firewall
 ```
 
 ### Debug Levels

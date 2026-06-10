@@ -1,11 +1,11 @@
 # ProcFS 接口
 
-Linux Firewall 内核模块通过 `/proc/fw_fire/` 目录提供运行时管理和监控接口。
+Linux Firewall 内核模块通过 `/proc/firewall/` 目录提供运行时管理和监控接口。
 
 ## 接口总览
 
 ```
-/proc/fw_fire/
+/proc/firewall/
 ├── status          # 模块状态
 ├── banned_ips      # 当前封禁 IP 列表
 ├── whitelist       # 当前白名单 IP 列表
@@ -20,7 +20,7 @@ Linux Firewall 内核模块通过 `/proc/fw_fire/` 目录提供运行时管理�
 ### 模块状态
 
 ```bash
-cat /proc/fw_fire/status
+cat /proc/firewall/status
 ```
 
 输出：
@@ -46,7 +46,7 @@ Whitelisted IPs: 3 / 64
 ### 封禁 IP 列表
 
 ```bash
-cat /proc/fw_fire/banned_ips
+cat /proc/firewall/banned_ips
 ```
 
 输出：
@@ -71,7 +71,7 @@ IP              Jail      Remaining(s)  Protocol  Port
 ### 白名单列表
 
 ```bash
-cat /proc/fw_fire/whitelist
+cat /proc/firewall/whitelist
 ```
 
 输出：
@@ -88,7 +88,7 @@ IP/Range
 ### 统计信息
 
 ```bash
-cat /proc/fw_fire/stats
+cat /proc/firewall/stats
 ```
 
 输出：
@@ -114,7 +114,7 @@ Current banned:       15
 ### 模块版本
 
 ```bash
-cat /proc/fw_fire/version
+cat /proc/firewall/version
 ```
 
 输出：
@@ -130,7 +130,7 @@ cat /proc/fw_fire/version
 向 `config` 写入封禁指令：
 
 ```bash
-echo "ban 192.168.1.100 3600 tcp 22 sshd" | sudo tee /proc/fw_fire/config
+echo "ban 192.168.1.100 3600 tcp 22 sshd" | sudo tee /proc/firewall/config
 ```
 
 格式：`ban <ip> <duration> <protocol> <port> <jail>`
@@ -146,7 +146,7 @@ echo "ban 192.168.1.100 3600 tcp 22 sshd" | sudo tee /proc/fw_fire/config
 ### 移除封禁
 
 ```bash
-echo "unban 192.168.1.100" | sudo tee /proc/fw_fire/config
+echo "unban 192.168.1.100" | sudo tee /proc/firewall/config
 ```
 
 格式：`unban <ip>`
@@ -154,7 +154,7 @@ echo "unban 192.168.1.100" | sudo tee /proc/fw_fire/config
 ### 添加白名单
 
 ```bash
-echo "whitelist 192.168.1.50" | sudo tee /proc/fw_fire/config
+echo "whitelist 192.168.1.50" | sudo tee /proc/firewall/config
 ```
 
 格式：`whitelist <ip>`
@@ -164,7 +164,7 @@ echo "whitelist 192.168.1.50" | sudo tee /proc/fw_fire/config
 ### 移除白名单
 
 ```bash
-echo "unwhitelist 192.168.1.50" | sudo tee /proc/fw_fire/config
+echo "unwhitelist 192.168.1.50" | sudo tee /proc/firewall/config
 ```
 
 格式：`unwhitelist <ip>`
@@ -172,23 +172,23 @@ echo "unwhitelist 192.168.1.50" | sudo tee /proc/fw_fire/config
 ### 清空所有封禁
 
 ```bash
-echo "clear" | sudo tee /proc/fw_fire/clear
+echo "clear" | sudo tee /proc/firewall/clear
 ```
 
 或写入 `config`：
 
 ```bash
-echo "clear" | sudo tee /proc/fw_fire/config
+echo "clear" | sudo tee /proc/firewall/config
 ```
 
 ### 启用/禁用模块
 
 ```bash
 # 禁用（停止处理数据包）
-echo "disable" | sudo tee /proc/fw_fire/config
+echo "disable" | sudo tee /proc/firewall/config
 
 # 启用
-echo "enable" | sudo tee /proc/fw_fire/config
+echo "enable" | sudo tee /proc/firewall/config
 ```
 
 ## 通过 fwctl 访问
@@ -197,27 +197,27 @@ echo "enable" | sudo tee /proc/fw_fire/config
 
 | fwctl 命令 | ProcFS 操作 |
 |------------|-------------|
-| `fwctl status` | 读取 `/proc/fw_fire/status` |
-| `fwctl banned` | 读取 `/proc/fw_fire/banned_ips` |
-| `fwctl whitelist` | 读取 `/proc/fw_fire/whitelist` |
-| `fwctl stats` | 读取 `/proc/fw_fire/stats` |
-| `fwctl ban <ip> <time>` | 写入 `/proc/fw_fire/config` |
-| `fwctl unban <ip>` | 写入 `/proc/fw_fire/config` |
-| `fwctl clear` | 写入 `/proc/fw_fire/clear` |
+| `fwctl status` | 读取 `/proc/firewall/status` |
+| `fwctl banned` | 读取 `/proc/firewall/banned_ips` |
+| `fwctl whitelist` | 读取 `/proc/firewall/whitelist` |
+| `fwctl stats` | 读取 `/proc/firewall/stats` |
+| `fwctl ban <ip> <time>` | 写入 `/proc/firewall/config` |
+| `fwctl unban <ip>` | 写入 `/proc/firewall/config` |
+| `fwctl clear` | 写入 `/proc/firewall/clear` |
 
 ## 权限要求
 
 | 操作 | 权限 |
 |------|------|
-| 读取 | 需要 root 或 `fw_fire` 组 |
+| 读取 | 需要 root 或 `firewall` 组 |
 | 写入 | 需要 root |
 
 ```bash
-# 创建 fw_fire 组
-sudo groupadd fw_fire
+# 创建 firewall 组
+sudo groupadd firewall
 
 # 将用户加入组
-sudo usermod -aG fw_fire $USER
+sudo usermod -aG firewall $USER
 
 # 修改 ProcFS 文件权限（需要 udev 规则）
 ```
@@ -235,7 +235,7 @@ make debug DL=2
 查看内核日志：
 
 ```bash
-sudo dmesg | grep fw_fire
+sudo dmesg | grep firewall
 ```
 
 ### 调试级别

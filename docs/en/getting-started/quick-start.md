@@ -8,10 +8,10 @@ Ensure you have completed [Installation](installation.md) and verified the modul
 
 ## Step 1: Configuration File
 
-Edit the main configuration file `/etc/fw_fire/fw_fire.yaml`:
+Edit the main configuration file `/etc/firewall/default.yaml`:
 
 ```bash
-sudo vim /etc/fw_fire/fw_fire.yaml
+sudo vim /etc/firewall/default.yaml
 ```
 
 ### Basic Configuration
@@ -20,8 +20,8 @@ sudo vim /etc/fw_fire/fw_fire.yaml
 # Global settings
 global:
   log_level: info
-  log_file: /var/log/fw_fire.log
-  db_path: /var/lib/fw_fire/bans.db
+  log_file: /var/log/firewall.log
+  db_path: /var/lib/firewall/bans.db
 
 # SSH Protection Jail
 jails:
@@ -69,10 +69,10 @@ whitelist:
 
 ```bash
 # Reload configuration and start
-sudo systemctl restart fw_fire
+sudo systemctl restart firewall
 
 # Check status
-sudo systemctl status fw_fire
+sudo systemctl status firewall
 ```
 
 ## Step 4: Verify Banning
@@ -80,7 +80,7 @@ sudo systemctl status fw_fire
 ### Method 1: Check ProcFS
 
 ```bash
-cat /proc/fw_fire/banned_ips
+cat /proc/firewall/banned_ips
 ```
 
 ### Method 2: Using fwctl
@@ -117,20 +117,20 @@ curl http://localhost:9119/metrics
 Key metrics:
 
 ```
-# TYPE fw_fire_banned_ips_total gauge
-fw_fire_banned_ips_total 5
+# TYPE firewall_banned_ips_total gauge
+firewall_banned_ips_total 5
 
-# TYPE fw_fire_ban_events_total counter
-fw_fire_ban_events_total 12
+# TYPE firewall_ban_events_total counter
+firewall_ban_events_total 12
 
-# TYPE fw_fire_unban_events_total counter
-fw_fire_unban_events_total 7
+# TYPE firewall_unban_events_total counter
+firewall_unban_events_total 7
 ```
 
 ### View Logs
 
 ```bash
-sudo tail -f /var/log/fw_fire.log
+sudo tail -f /var/log/firewall.log
 ```
 
 ## Configuring More Jails

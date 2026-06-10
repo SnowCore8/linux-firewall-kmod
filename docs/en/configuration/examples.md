@@ -271,8 +271,8 @@ A complete configuration for an internet-facing web server:
 ```yaml
 global:
   log_level: info
-  log_file: /var/log/fw_fire.log
-  db_path: /var/lib/fw_fire/bans.db
+  log_file: /var/log/firewall.log
+  db_path: /var/lib/firewall/bans.db
 
 whitelist:
   - 127.0.0.1

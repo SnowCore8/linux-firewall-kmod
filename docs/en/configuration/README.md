@@ -6,14 +6,14 @@ This section describes the configuration methods and options for the Linux Firew
 
 | File | Path | Purpose |
 |------|------|---------|
-| Main config | `/etc/fw_fire/fw_fire.yaml` | Global settings and jail definitions |
-| Database | `/var/lib/fw_fire/bans.db` | SQLite persistent ban records |
-| Log file | `/var/log/fw_fire.log` | Daemon log |
+| Main config | `/etc/firewall/default.yaml` | Global settings and jail definitions |
+| Database | `/var/lib/firewall/bans.db` | SQLite persistent ban records |
+| Log file | `/var/log/firewall.log` | Daemon log |
 
 ## Configuration Hierarchy
 
 ```
-fw_fire.yaml
+default.yaml
 ├── global          # Global settings
 │   ├── log_level
 │   ├── log_file
@@ -36,7 +36,7 @@ fw_fire.yaml
 
 ## Configuration Loading Order
 
-1. Reads `/etc/fw_fire/fw_fire.yaml` on system startup
+1. Reads `/etc/firewall/default.yaml` on system startup
 2. Parses global configuration
 3. Loads whitelist into kernel (up to 64 entries)
 4. Initializes each enabled jail
@@ -49,8 +49,8 @@ Configuration can be modified at runtime via:
 
 | Method | Description | Persists After Restart |
 |--------|-------------|----------------------|
-| ProcFS interface | Write directly to `/proc/fw_fire/` | No |
-| Edit YAML + restart | `systemctl restart fw_fire` | Yes |
+| ProcFS interface | Write directly to `/proc/firewall/` | No |
+| Edit YAML + restart | `systemctl restart firewall` | Yes |
 | fwctl commands | Dynamic management | Partial (depends on operation) |
 
 ## Configuration Validation
@@ -59,9 +59,9 @@ After modifying the configuration, verify it is correct:
 
 ```bash
 # Check YAML syntax
-cat /etc/fw_fire/fw_fire.yaml | python3 -c "import yaml,sys; yaml.safe_load(sys.stdin)"
+cat /etc/firewall/default.yaml | python3 -c "import yaml,sys; yaml.safe_load(sys.stdin)"
 
 # Reload and check status
-sudo systemctl restart fw_fire
-sudo systemctl status fw_fire
+sudo systemctl restart firewall
+sudo systemctl status firewall
 ```

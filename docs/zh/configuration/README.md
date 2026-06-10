@@ -6,14 +6,14 @@
 
 | 文件 | 路径 | 用途 |
 |------|------|------|
-| 主配置文件 | `/etc/fw_fire/fw_fire.yaml` | 全局配置和 jail 定义 |
-| 数据库 | `/var/lib/fw_fire/bans.db` | SQLite 持久化封禁记录 |
-| 日志文件 | `/var/log/fw_fire.log` | 守护进程日志 |
+| 主配置文件 | `/etc/firewall/default.yaml` | 全局配置和 jail 定义 |
+| 数据库 | `/var/lib/firewall/bans.db` | SQLite 持久化封禁记录 |
+| 日志文件 | `/var/log/firewall.log` | 守护进程日志 |
 
 ## 配置层次结构
 
 ```
-fw_fire.yaml
+default.yaml
 ├── global          # 全局设置
 │   ├── log_level
 │   ├── log_file
@@ -36,7 +36,7 @@ fw_fire.yaml
 
 ## 配置加载顺序
 
-1. 系统启动时读取 `/etc/fw_fire/fw_fire.yaml`
+1. 系统启动时读取 `/etc/firewall/default.yaml`
 2. 解析全局配置
 3. 加载白名单到内核（最多 64 条）
 4. 初始化每个启用的 jail
@@ -49,8 +49,8 @@ fw_fire.yaml
 
 | 方式 | 说明 | 重启后保留 |
 |------|------|------------|
-| ProcFS 接口 | 直接写入 `/proc/fw_fire/` | 否 |
-| 编辑 YAML + 重启 | `systemctl restart fw_fire` | 是 |
+| ProcFS 接口 | 直接写入 `/proc/firewall/` | 否 |
+| 编辑 YAML + 重启 | `systemctl restart firewall` | 是 |
 | fwctl 命令 | 动态管理 | 部分（取决于操作） |
 
 ## 配置验证
@@ -59,9 +59,9 @@ fw_fire.yaml
 
 ```bash
 # 检查 YAML 语法
-cat /etc/fw_fire/fw_fire.yaml | python3 -c "import yaml,sys; yaml.safe_load(sys.stdin)"
+cat /etc/firewall/default.yaml | python3 -c "import yaml,sys; yaml.safe_load(sys.stdin)"
 
 # 重新加载并检查状态
-sudo systemctl restart fw_fire
-sudo systemctl status fw_fire
+sudo systemctl restart firewall
+sudo systemctl status firewall
 ```

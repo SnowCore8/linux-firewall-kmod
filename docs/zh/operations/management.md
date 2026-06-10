@@ -16,7 +16,7 @@ fwctl <command> [arguments]
 
 | 选项 | 说明 |
 |------|------|
-| `-c, --config <path>` | 指定配置文件路径（默认 `/etc/fw_fire/fw_fire.yaml`） |
+| `-c, --config <path>` | 指定配置文件路径（默认 `/etc/firewall/default.yaml`） |
 | `-h, --help` | 显示帮助信息 |
 | `-v, --version` | 显示版本信息 |
 | `-d, --debug` | 启用调试模式 |
@@ -56,7 +56,7 @@ fwctl status
 输出示例：
 
 ```
-fw_fire Status
+firewall Status
 ==============
 Daemon:     running (PID: 12345)
 Module:     loaded
@@ -259,7 +259,7 @@ fwctl log
 等同于：
 
 ```bash
-tail -f /var/log/fw_fire.log
+tail -f /var/log/firewall.log
 ```
 
 ### 查看内核日志
@@ -271,7 +271,7 @@ fwctl dmesg
 等同于：
 
 ```bash
-dmesg | grep fw_fire
+dmesg | grep firewall
 ```
 
 ## 配置

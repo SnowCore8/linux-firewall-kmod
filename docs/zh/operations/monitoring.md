@@ -10,7 +10,7 @@
 
 ```yaml
 scrape_configs:
-  - job_name: 'fw_fire'
+  - job_name: 'firewall'
     static_configs:
       - targets: ['localhost:9119']
     scrape_interval: 15s
@@ -22,46 +22,46 @@ scrape_configs:
 
 | 指标 | 类型 | 说明 |
 |------|------|------|
-| `fw_fire_banned_ips_total` | gauge | 当前封禁 IP 数量 |
-| `fw_fire_ban_events_total` | counter | 累计封禁事件数 |
-| `fw_fire_unban_events_total` | counter | 累计解封事件数 |
-| `fw_fire_packets_dropped_total` | counter | 累计丢弃数据包数 |
-| `fw_fire_packets_passed_total` | counter | 累计放行数据包数 |
+| `firewall_banned_ips_total` | gauge | 当前封禁 IP 数量 |
+| `firewall_ban_events_total` | counter | 累计封禁事件数 |
+| `firewall_unban_events_total` | counter | 累计解封事件数 |
+| `firewall_packets_dropped_total` | counter | 累计丢弃数据包数 |
+| `firewall_packets_passed_total` | counter | 累计放行数据包数 |
 
 #### 容量指标
 
 | 指标 | 类型 | 说明 |
 |------|------|------|
-| `fw_fire_whitelist_entries_total` | gauge | 当前白名单条目数 |
-| `fw_fire_hash_table_usage` | gauge | 哈希表使用率 (0.0-1.0) |
-| `fw_fire_hash_table_capacity` | gauge | 哈希表总容量 (4096) |
-| `fw_fire_whitelist_capacity` | gauge | 白名单总容量 (64) |
+| `firewall_whitelist_entries_total` | gauge | 当前白名单条目数 |
+| `firewall_hash_table_usage` | gauge | 哈希表使用率 (0.0-1.0) |
+| `firewall_hash_table_capacity` | gauge | 哈希表总容量 (4096) |
+| `firewall_whitelist_capacity` | gauge | 白名单总容量 (64) |
 
 #### Jail 指标
 
 | 指标 | 类型 | 标签 | 说明 |
 |------|------|------|------|
-| `fw_fire_jail_failures_total` | counter | `jail` | 各 jail 失败匹配次数 |
-| `fw_fire_jail_bans_total` | counter | `jail` | 各 jail 触发的封禁数 |
-| `fw_fire_jail_active` | gauge | `jail` | jail 是否启用 (0/1) |
+| `firewall_jail_failures_total` | counter | `jail` | 各 jail 失败匹配次数 |
+| `firewall_jail_bans_total` | counter | `jail` | 各 jail 触发的封禁数 |
+| `firewall_jail_active` | gauge | `jail` | jail 是否启用 (0/1) |
 
 ### 查询示例
 
 ```yaml
 # 当前封禁 IP 数
-fw_fire_banned_ips_total
+firewall_banned_ips_total
 
 # 最近 5 分钟封禁速率
-rate(fw_fire_ban_events_total[5m])
+rate(firewall_ban_events_total[5m])
 
 # 各 Jail 封禁数
-sum by (jail) (fw_fire_jail_bans_total)
+sum by (jail) (firewall_jail_bans_total)
 
 # 哈希表使用百分比
-fw_fire_hash_table_usage * 100
+firewall_hash_table_usage * 100
 
 # 数据包丢弃率
-rate(fw_fire_packets_dropped_total[5m])
+rate(firewall_packets_dropped_total[5m])
 ```
 
 ## Grafana 仪表板
@@ -79,7 +79,7 @@ rate(fw_fire_packets_dropped_total[5m])
 ```
 Title: Current Banned IPs
 Panel: Stat
-Query: fw_fire_banned_ips_total
+Query: firewall_banned_ips_total
 Thresholds: 100 (warning), 1000 (critical)
 ```
 
@@ -88,7 +88,7 @@ Thresholds: 100 (warning), 1000 (critical)
 ```
 Title: Ban Events Rate
 Panel: Time Series
-Query: rate(fw_fire_ban_events_total[5m])
+Query: rate(firewall_ban_events_total[5m])
 ```
 
 #### Jail 分布
@@ -96,7 +96,7 @@ Query: rate(fw_fire_ban_events_total[5m])
 ```
 Title: Bans by Jail
 Panel: Pie Chart
-Query: sum by (jail) (fw_fire_jail_bans_total)
+Query: sum by (jail) (firewall_jail_bans_total)
 ```
 
 #### 数据包统计
@@ -105,8 +105,8 @@ Query: sum by (jail) (fw_fire_jail_bans_total)
 Title: Packets Processed
 Panel: Time Series
 Query: 
-  rate(fw_fire_packets_dropped_total[5m])  # 丢弃
-  rate(fw_fire_packets_passed_total[5m])   # 放行
+  rate(firewall_packets_dropped_total[5m])  # 丢弃
+  rate(firewall_packets_passed_total[5m])   # 放行
 ```
 
 ## 日志监控
@@ -134,9 +134,9 @@ Query:
 配置 logrotate：
 
 ```
-/etc/logrotate.d/fw_fire
+/etc/logrotate.d/firewall
 
-/var/log/fw_fire.log {
+/var/log/firewall.log {
     daily
     rotate 30
     compress
@@ -145,7 +145,7 @@ Query:
     notifempty
     create 0640 root adm
     postrotate
-        systemctl reload fw_fire > /dev/null 2>&1 || true
+        systemctl reload firewall > /dev/null 2>&1 || true
     endscript
 }
 ```
@@ -154,16 +154,16 @@ Query:
 
 ```bash
 # 统计今日封禁数
-grep "$(date +%Y-%m-%d)" /var/log/fw_fire.log | grep "Banned" | wc -l
+grep "$(date +%Y-%m-%d)" /var/log/firewall.log | grep "Banned" | wc -l
 
 # 查看最常被封禁的 IP
-grep "Banned" /var/log/fw_fire.log | grep -oP '\d+\.\d+\.\d+\.\d+' | sort | uniq -c | sort -rn | head -20
+grep "Banned" /var/log/firewall.log | grep -oP '\d+\.\d+\.\d+\.\d+' | sort | uniq -c | sort -rn | head -20
 
 # 查看各 Jail 封禁数
-grep "Banned" /var/log/fw_fire.log | grep -oP '\[\w+\]' | sort | uniq -c | sort -rn
+grep "Banned" /var/log/firewall.log | grep -oP '\[\w+\]' | sort | uniq -c | sort -rn
 
 # 查看最近 10 次封禁
-grep "Banned" /var/log/fw_fire.log | tail -10
+grep "Banned" /var/log/firewall.log | tail -10
 ```
 
 ## 告警规则
@@ -172,10 +172,10 @@ grep "Banned" /var/log/fw_fire.log | tail -10
 
 ```yaml
 groups:
-  - name: fw_fire
+  - name: firewall
     rules:
       - alert: HighBanRate
-        expr: rate(fw_fire_ban_events_total[5m]) > 10
+        expr: rate(firewall_ban_events_total[5m]) > 10
         for: 5m
         labels:
           severity: warning
@@ -184,7 +184,7 @@ groups:
           description: "Ban rate is {{ $value }} per second"
 
       - alert: HashTableNearlyFull
-        expr: fw_fire_hash_table_usage > 0.8
+        expr: firewall_hash_table_usage > 0.8
         for: 5m
         labels:
           severity: critical
@@ -193,7 +193,7 @@ groups:
           description: "Usage is {{ $value | humanizePercentage }}"
 
       - alert: FirewallDown
-        expr: fw_fire_banned_ips_total == -1
+        expr: firewall_banned_ips_total == -1
         for: 1m
         labels:
           severity: critical
@@ -201,7 +201,7 @@ groups:
           summary: "Firewall module is not responding"
 
       - alert: HighDropRate
-        expr: rate(fw_fire_packets_dropped_total[5m]) > 1000
+        expr: rate(firewall_packets_dropped_total[5m]) > 1000
         for: 10m
         labels:
           severity: warning
@@ -216,22 +216,22 @@ groups:
 
 ```bash
 #!/bin/bash
-# /usr/local/bin/fw_fire-health.sh
+# /usr/local/bin/firewall-health.sh
 
 # 检查内核模块
-if ! lsmod | grep -q fw_fire; then
+if ! lsmod | grep -q firewall; then
     echo "CRITICAL: Kernel module not loaded"
     exit 2
 fi
 
 # 检查守护进程
-if ! systemctl is-active --quiet fw_fire; then
+if ! systemctl is-active --quiet firewall; then
     echo "CRITICAL: Daemon not running"
     exit 2
 fi
 
 # 检查 ProcFS
-if [ ! -f /proc/fw_fire/status ]; then
+if [ ! -f /proc/firewall/status ]; then
     echo "CRITICAL: ProcFS interface not available"
     exit 2
 fi
@@ -249,14 +249,14 @@ exit 0
 ### systemd 集成
 
 ```ini
-# /etc/systemd/system/fw_fire-health.service
+# /etc/systemd/system/firewall-health.service
 [Unit]
 Description=Linux Firewall Health Check
-After=fw_fire.service
+After=firewall-daemon.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/fw_fire-health.sh
+ExecStart=/usr/local/bin/firewall-health.sh
 
 [Timer]
 OnBootSec=5min

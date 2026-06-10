@@ -43,7 +43,7 @@ Linux Firewall Kernel Module is a high-performance IP banning solution designed 
 │                       │                              │
 │              ┌────────┴────────┐                     │
 │              │   ProcFS        │                     │
-│              │  /proc/fw_fire  │                     │
+│              │  /proc/firewall  │                     │
 │              └────────┬────────┘                     │
 └───────────────────────┼──────────────────────────────┘
                         │

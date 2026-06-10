@@ -24,7 +24,7 @@ This document describes the packet flow and event flow in the Linux Firewall Ker
                ║  Netfilter:           ║
                ║  PREROUTING Hook     ║
                ║  ┌─────────────────┐  ║
-               ║  │ fw_fire_hook()  │  ║
+               ║  │ firewall_hook()  │  ║
                ║  └────────┬────────┘  ║
                ╚═══════════╪═══════════╝
                            │
@@ -210,17 +210,17 @@ Packet (src_ip, dst_port, protocol)
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| ProcFS write | `/proc/fw_fire/config` | Add/remove bans |
-| ProcFS write | `/proc/fw_fire/clear` | Clear all bans |
-| ProcFS write | `/proc/fw_fire/config` | Manage whitelist |
+| ProcFS write | `/proc/firewall/config` | Add/remove bans |
+| ProcFS write | `/proc/firewall/clear` | Clear all bans |
+| ProcFS write | `/proc/firewall/config` | Manage whitelist |
 
 ### Kernel → Userspace
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| ProcFS read | `/proc/fw_fire/status` | Get status |
-| ProcFS read | `/proc/fw_fire/banned_ips` | Get ban list |
-| ProcFS read | `/proc/fw_fire/stats` | Get statistics |
+| ProcFS read | `/proc/firewall/status` | Get status |
+| ProcFS read | `/proc/firewall/banned_ips` | Get ban list |
+| ProcFS read | `/proc/firewall/stats` | Get statistics |
 
 ### Internal Communication
 

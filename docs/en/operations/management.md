@@ -16,7 +16,7 @@ fwctl <command> [arguments]
 
 | Option | Description |
 |--------|-------------|
-| `-c, --config <path>` | Specify config file path (default `/etc/fw_fire/fw_fire.yaml`) |
+| `-c, --config <path>` | Specify config file path (default `/etc/firewall/default.yaml`) |
 | `-h, --help` | Show help information |
 | `-v, --version` | Show version information |
 | `-d, --debug` | Enable debug mode |
@@ -56,7 +56,7 @@ fwctl status
 Example output:
 
 ```
-fw_fire Status
+firewall Status
 ==============
 Daemon:     running (PID: 12345)
 Module:     loaded
@@ -259,7 +259,7 @@ fwctl log
 Equivalent to:
 
 ```bash
-tail -f /var/log/fw_fire.log
+tail -f /var/log/firewall.log
 ```
 
 ### View Kernel Log
@@ -271,7 +271,7 @@ fwctl dmesg
 Equivalent to:
 
 ```bash
-dmesg | grep fw_fire
+dmesg | grep firewall
 ```
 
 ## Configuration

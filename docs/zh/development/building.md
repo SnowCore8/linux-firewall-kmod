@@ -44,8 +44,8 @@ make kernel-module
 ```
 make -C /lib/modules/$(uname -r)/build M=$(PWD) modules
 make[1]: Entering directory '/usr/src/linux-headers-...'
-  CC [M]  /path/to/src/kernel/fw_fire.o
-  LD [M]  /path/to/fw_fire.ko
+  CC [M]  /path/to/src/kernel/firewall.o
+  LD [M]  /path/to/firewall.ko
   MODPOST /path/to/Module.symvers
 make[1]: Leaving directory '/usr/src/linux-headers-...'
 ```
@@ -202,8 +202,8 @@ pkg-config --libs libpcre2
 
 | 文件 | 说明 |
 |------|------|
-| `fw_fire.ko` | 内核模块 |
-| `fw_fire.mod.c` | 模块元数据 |
+| `firewall.ko` | 内核模块 |
+| `firewall.mod.c` | 模块元数据 |
 | `Module.symvers` | 符号版本 |
 | `modules.order` | 模块顺序 |
 
@@ -217,10 +217,10 @@ pkg-config --libs libpcre2
 
 | 文件 | 安装路径 |
 |------|----------|
-| `fw_fire.ko` | `/lib/modules/$(uname -r)/extra/` |
+| `firewall.ko` | `/lib/modules/$(uname -r)/extra/` |
 | `fwctl` | `/usr/local/sbin/` |
-| `fw_fire.yaml` | `/etc/fw_fire/` |
-| `fw_fire.service` | `/etc/systemd/system/` |
+| `default.yaml` | `/etc/firewall/` |
+| `firewall-daemon.service` | `/etc/systemd/system/` |
 
 ## 构建问题排查
 

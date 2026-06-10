@@ -1,21 +1,21 @@
 # YAML 配置详解
 
-本文档详细介绍 `/etc/fw_fire/fw_fire.yaml` 配置文件的所有选项。
+本文档详细介绍 `/etc/firewall/default.yaml` 配置文件的所有选项。
 
 ## 全局配置 (global)
 
 ```yaml
 global:
   log_level: info
-  log_file: /var/log/fw_fire.log
-  db_path: /var/lib/fw_fire/bans.db
+  log_file: /var/log/firewall.log
+  db_path: /var/lib/firewall/bans.db
 ```
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `log_level` | string | `info` | 日志级别：`debug`, `info`, `warn`, `error` |
-| `log_file` | string | `/var/log/fw_fire.log` | 日志文件路径 |
-| `db_path` | string | `/var/lib/fw_fire/bans.db` | SQLite 数据库路径 |
+| `log_file` | string | `/var/log/firewall.log` | 日志文件路径 |
+| `db_path` | string | `/var/lib/firewall/bans.db` | SQLite 数据库路径 |
 
 ### 日志级别
 
@@ -144,12 +144,12 @@ ban_time (3600s)
 ## 完整配置示例
 
 ```yaml
-# /etc/fw_fire/fw_fire.yaml
+# /etc/firewall/default.yaml
 
 global:
   log_level: info
-  log_file: /var/log/fw_fire.log
-  db_path: /var/lib/fw_fire/bans.db
+  log_file: /var/log/firewall.log
+  db_path: /var/lib/firewall/bans.db
 
 whitelist:
   - 127.0.0.1

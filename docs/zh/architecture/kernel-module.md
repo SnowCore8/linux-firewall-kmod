@@ -4,16 +4,16 @@
 
 ## 模块概览
 
-内核模块 `fw_fire.ko` 是整个系统的核心，负责在网络栈层面拦截和过滤数据包。
+内核模块 `firewall.ko` 是整个系统的核心，负责在网络栈层面拦截和过滤数据包。
 
 ### 模块信息
 
 | 属性 | 值 |
 |------|-----|
-| 模块名称 | `fw_fire` |
-| 源文件 | `src/kernel/fw_fire.c` |
+| 模块名称 | `firewall` |
+| 源文件 | `src/kernel/firewall.c` |
 | 许可证 | GPL |
-| 加载路径 | `/lib/modules/$(uname -r)/extra/fw_fire.ko` |
+| 加载路径 | `/lib/modules/$(uname -r)/extra/firewall.ko` |
 
 ## Netfilter Hook
 
@@ -22,9 +22,9 @@
 模块在 `NF_INET_PRE_ROUTING` 链上注册 Hook，这是数据包进入网络栈后的最早处理点之一。
 
 ```c
-static struct nf_hook_ops fw_fire_hook_ops[] __read_mostly = {
+static struct nf_hook_ops firewall_hook_ops[] __read_mostly = {
     {
-        .hook     = fw_fire_hook_func,
+        .hook     = firewall_hook_func,
         .pf       = NFPROTO_IPV4,
         .hooknum  = NF_INET_PRE_ROUTING,
         .priority = NF_IP_PRI_FIRST,
@@ -110,7 +110,7 @@ static inline u32 hash_ip(__be32 ip, u32 port)
 
 ```c
 rcu_read_lock();
-entry = fw_fire_lookup(ip, port);
+entry = firewall_lookup(ip, port);
 rcu_read_unlock();
 ```
 
@@ -215,11 +215,11 @@ static int cleanup_thread(void *data)
 ### 注册
 
 ```c
-static int __init fw_fire_proc_init(void)
+static int __init firewall_proc_init(void)
 {
-    proc_create("fw_fire/status", 0444, NULL, &status_fops);
-    proc_create("fw_fire/banned_ips", 0444, NULL, &banned_fops);
-    proc_create("fw_fire/config", 0200, NULL, &config_fops);
+    proc_create("firewall/status", 0444, NULL, &status_fops);
+    proc_create("firewall/banned_ips", 0444, NULL, &banned_fops);
+    proc_create("firewall/config", 0200, NULL, &config_fops);
     return 0;
 }
 ```
@@ -265,9 +265,9 @@ module_exit()
 使用 `pr_*` 宏输出日志：
 
 ```c
-pr_info("fw_fire: module loaded\n");
-pr_warn("fw_fire: hash table full\n");
-pr_err("fw_fire: failed to register hook\n");
+pr_info("firewall: module loaded\n");
+pr_warn("firewall: hash table full\n");
+pr_err("firewall: failed to register hook\n");
 ```
 
 调试级别通过编译时宏控制：

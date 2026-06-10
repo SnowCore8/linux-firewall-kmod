@@ -8,10 +8,10 @@
 
 | 检查项 | 频率 | 命令 |
 |--------|------|------|
-| 服务状态 | 每日 | `systemctl status fw_fire` |
+| 服务状态 | 每日 | `systemctl status firewall` |
 | 封禁数量 | 每日 | `fwctl stats` |
-| 日志大小 | 每周 | `ls -lh /var/log/fw_fire.log` |
-| 数据库大小 | 每周 | `ls -lh /var/lib/fw_fire/bans.db` |
+| 日志大小 | 每周 | `ls -lh /var/log/firewall.log` |
+| 数据库大小 | 每周 | `ls -lh /var/lib/firewall/bans.db` |
 | 磁盘空间 | 每周 | `df -h /var` |
 
 ### 关键指标阈值
@@ -27,13 +27,13 @@
 
 ```bash
 #!/bin/bash
-# fw_fire-health-check.sh
+# firewall-health-check.sh
 
-echo "=== fw_fire Health Check ==="
+echo "=== firewall Health Check ==="
 echo ""
 
 # 检查服务状态
-if systemctl is-active --quiet fw_fire; then
+if systemctl is-active --quiet firewall; then
     echo "[OK] Service is running"
 else
     echo "[FAIL] Service is not running"
@@ -41,14 +41,14 @@ else
 fi
 
 # 检查封禁数量
-banned=$(cat /proc/fw_fire/stats | grep "Current banned" | awk '{print $NF}')
+banned=$(cat /proc/firewall/stats | grep "Current banned" | awk '{print $NF}')
 echo "Banned IPs: $banned"
 if [ "$banned" -gt 3000 ]; then
     echo "[WARN] High number of banned IPs!"
 fi
 
 # 检查磁盘空间
-log_size=$(du -m /var/log/fw_fire.log | cut -f1)
+log_size=$(du -m /var/log/firewall.log | cut -f1)
 echo "Log size: ${log_size}MB"
 if [ "$log_size" -gt 500 ]; then
     echo "[WARN] Log file is too large!"

@@ -293,8 +293,8 @@ sudo make -C tools/testing/selftests run_tests=net
 Kernel TAP testing:
 
 ```bash
-sudo modprobe fw_fire
-./tests/kernel/test_fw_fire.ktap
+sudo modprobe firewall
+./tests/kernel/test_firewall.ktap
 ```
 
 ## CI/CD Integration

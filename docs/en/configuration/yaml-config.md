@@ -1,21 +1,21 @@
 # YAML Configuration
 
-This document details all options in the `/etc/fw_fire/fw_fire.yaml` configuration file.
+This document details all options in the `/etc/firewall/default.yaml` configuration file.
 
 ## Global Configuration (global)
 
 ```yaml
 global:
   log_level: info
-  log_file: /var/log/fw_fire.log
-  db_path: /var/lib/fw_fire/bans.db
+  log_file: /var/log/firewall.log
+  db_path: /var/lib/firewall/bans.db
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `log_level` | string | `info` | Log level: `debug`, `info`, `warn`, `error` |
-| `log_file` | string | `/var/log/fw_fire.log` | Log file path |
-| `db_path` | string | `/var/lib/fw_fire/bans.db` | SQLite database path |
+| `log_file` | string | `/var/log/firewall.log` | Log file path |
+| `db_path` | string | `/var/lib/firewall/bans.db` | SQLite database path |
 
 ### Log Levels
 
@@ -144,12 +144,12 @@ ban_time (3600s)
 ## Complete Configuration Example
 
 ```yaml
-# /etc/fw_fire/fw_fire.yaml
+# /etc/firewall/default.yaml
 
 global:
   log_level: info
-  log_file: /var/log/fw_fire.log
-  db_path: /var/lib/fw_fire/bans.db
+  log_file: /var/log/firewall.log
+  db_path: /var/lib/firewall/bans.db
 
 whitelist:
   - 127.0.0.1

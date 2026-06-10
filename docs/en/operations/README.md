@@ -8,10 +8,10 @@ This section covers daily operations for the Linux Firewall Kernel Module.
 
 | Check Item | Frequency | Command |
 |------------|-----------|---------|
-| Service status | Daily | `systemctl status fw_fire` |
+| Service status | Daily | `systemctl status firewall` |
 | Ban count | Daily | `fwctl stats` |
-| Log size | Weekly | `ls -lh /var/log/fw_fire.log` |
-| Database size | Weekly | `ls -lh /var/lib/fw_fire/bans.db` |
+| Log size | Weekly | `ls -lh /var/log/firewall.log` |
+| Database size | Weekly | `ls -lh /var/lib/firewall/bans.db` |
 | Disk space | Weekly | `df -h /var` |
 
 ### Key Metric Thresholds
@@ -27,13 +27,13 @@ This section covers daily operations for the Linux Firewall Kernel Module.
 
 ```bash
 #!/bin/bash
-# fw_fire-health-check.sh
+# firewall-health-check.sh
 
-echo "=== fw_fire Health Check ==="
+echo "=== firewall Health Check ==="
 echo ""
 
 # Check service status
-if systemctl is-active --quiet fw_fire; then
+if systemctl is-active --quiet firewall; then
     echo "[OK] Service is running"
 else
     echo "[FAIL] Service is not running"
@@ -41,14 +41,14 @@ else
 fi
 
 # Check ban count
-banned=$(cat /proc/fw_fire/stats | grep "Current banned" | awk '{print $NF}')
+banned=$(cat /proc/firewall/stats | grep "Current banned" | awk '{print $NF}')
 echo "Banned IPs: $banned"
 if [ "$banned" -gt 3000 ]; then
     echo "[WARN] High number of banned IPs!"
 fi
 
 # Check disk space
-log_size=$(du -m /var/log/fw_fire.log | cut -f1)
+log_size=$(du -m /var/log/firewall.log | cut -f1)
 echo "Log size: ${log_size}MB"
 if [ "$log_size" -gt 500 ]; then
     echo "[WARN] Log file is too large!"

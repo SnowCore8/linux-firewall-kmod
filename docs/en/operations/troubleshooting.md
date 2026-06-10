@@ -8,40 +8,40 @@ This document describes common issues and solutions for the Linux Firewall Kerne
 
 ```bash
 #!/bin/bash
-# fw_fire-diagnose.sh
+# firewall-diagnose.sh
 
 echo "=== Linux Firewall Diagnosis ==="
 echo ""
 
 # 1. Kernel module
 echo "1. Kernel Module"
-echo "   Loaded: $(lsmod | grep -c fw_fire)"
-lsmod | grep fw_fire
+echo "   Loaded: $(lsmod | grep -c firewall)"
+lsmod | grep firewall
 echo ""
 
 # 2. Daemon
 echo "2. Daemon"
-systemctl status fw_fire --no-pager
+systemctl status firewall --no-pager
 echo ""
 
 # 3. ProcFS
 echo "3. ProcFS"
-cat /proc/fw_fire/status
+cat /proc/firewall/status
 echo ""
 
 # 4. Ban statistics
 echo "4. Statistics"
-cat /proc/fw_fire/stats
+cat /proc/firewall/stats
 echo ""
 
 # 5. Kernel log
 echo "5. Kernel Log (last 20 lines)"
-dmesg | grep fw_fire | tail -20
+dmesg | grep firewall | tail -20
 echo ""
 
 # 6. Daemon log
 echo "6. Daemon Log (last 20 lines)"
-tail -20 /var/log/fw_fire.log
+tail -20 /var/log/firewall.log
 echo ""
 
 # 7. Prometheus
@@ -56,14 +56,14 @@ curl -s http://localhost:9119/metrics | head -20
 **Symptoms**:
 
 ```
-modprobe: ERROR: could not insert 'fw_fire': Operation not permitted
+modprobe: ERROR: could not insert 'firewall': Operation not permitted
 ```
 
 **Causes and Solutions**:
 
 | Cause | Solution |
 |-------|----------|
-| Not root user | Use `sudo modprobe fw_fire` |
+| Not root user | Use `sudo modprobe firewall` |
 | Secure Boot enabled | Sign module or disable Secure Boot |
 | Kernel version mismatch | Recompile: `make clean && make` |
 | Missing kernel headers | Install: `apt install linux-headers-$(uname -r)` |
@@ -73,14 +73,14 @@ modprobe: ERROR: could not insert 'fw_fire': Operation not permitted
 **Symptoms**:
 
 ```
-Job for fw_fire.service failed because the control process exited with error code.
+Job for firewall-daemon.service failed because the control process exited with error code.
 ```
 
 **Troubleshooting Steps**:
 
 ```bash
 # View detailed errors
-journalctl -u fw_fire -n 50
+journalctl -u firewall -n 50
 
 # Check configuration file
 fwctl check-config
@@ -99,8 +99,8 @@ ldd /usr/local/sbin/fwctl
 | Config syntax error | Fix YAML format |
 | Port in use | Change config or stop occupying process |
 | Missing library | Install missing library |
-| Log directory missing | `mkdir -p /var/lib/fw_fire` |
-| Database directory permissions | `chown root:root /var/lib/fw_fire` |
+| Log directory missing | `mkdir -p /var/lib/firewall` |
+| Database directory permissions | `chown root:root /var/lib/firewall` |
 
 ### IP Not Being Banned
 
@@ -110,16 +110,16 @@ ldd /usr/local/sbin/fwctl
 
 ```bash
 # 1. Check if kernel module is loaded
-lsmod | grep fw_fire
+lsmod | grep firewall
 
 # 2. Check if IP is in whitelist
-cat /proc/fw_fire/whitelist
+cat /proc/firewall/whitelist
 
 # 3. Check if ban was written successfully
-cat /proc/fw_fire/banned_ips
+cat /proc/firewall/banned_ips
 
 # 4. Check kernel log
-dmesg | grep fw_fire
+dmesg | grep firewall
 
 # 5. Verify packets go through Hook
 # Add pr_info debug output in module
@@ -130,7 +130,7 @@ dmesg | grep fw_fire
 | Cause | Solution |
 |-------|----------|
 | IP in whitelist | Remove IP from whitelist |
-| Module not loaded | `sudo modprobe fw_fire` |
+| Module not loaded | `sudo modprobe firewall` |
 | Port mismatch | Check jail's port config |
 | Protocol mismatch | Check jail's protocol config |
 | Hash table full | Clear expired bans or increase capacity |
@@ -143,11 +143,11 @@ dmesg | grep fw_fire
 
 ```bash
 # 1. Enable debug mode
-sudo systemctl stop fw_fire
+sudo systemctl stop firewall
 sudo fwctl -d start
 
 # 2. View match logs
-tail -f /var/log/fw_fire.log | grep "match"
+tail -f /var/log/firewall.log | grep "match"
 
 # 3. Test regex
 echo "Failed password for root from 192.168.1.100" | \
@@ -222,13 +222,13 @@ fs.inotify.max_queued_events = 32768
 
 ```bash
 # Check SQLite database
-ls -la /var/lib/fw_fire/bans.db
+ls -la /var/lib/firewall/bans.db
 
 # Check database content
-sqlite3 /var/lib/fw_fire/bans.db "SELECT COUNT(*) FROM bans;"
+sqlite3 /var/lib/firewall/bans.db "SELECT COUNT(*) FROM bans;"
 
 # Check daemon startup log
-journalctl -u fw_fire | grep -i "restore\|recover"
+journalctl -u firewall | grep -i "restore\|recover"
 ```
 
 **Common Causes**:
@@ -236,7 +236,7 @@ journalctl -u fw_fire | grep -i "restore\|recover"
 | Cause | Solution |
 |-------|----------|
 | Wrong database path | Check `db_path` config |
-| Database permissions | `chmod 644 /var/lib/fw_fire/bans.db` |
+| Database permissions | `chmod 644 /var/lib/firewall/bans.db` |
 | SQLite corruption | Backup and rebuild database |
 
 ## Kernel Debugging
@@ -249,11 +249,11 @@ make debug DL=2
 
 # Reinstall
 sudo make install
-sudo modprobe -r fw_fire
-sudo modprobe fw_fire
+sudo modprobe -r firewall
+sudo modprobe firewall
 
 # View kernel log
-dmesg -w | grep fw_fire
+dmesg -w | grep firewall
 ```
 
 ### Debug Levels
@@ -279,7 +279,7 @@ cat /sys/kernel/debug/rcu/rcu_pending
 
 ```bash
 # Collect full diagnostic package
-sudo fwctl diagnose > fw_fire-diag-$(date +%Y%m%d).txt
+sudo fwctl diagnose > firewall-diag-$(date +%Y%m%d).txt
 ```
 
 ### Report Issues

@@ -264,29 +264,29 @@ http://<host>:9119/metrics
 
 | 指标 | 类型 | 说明 |
 |------|------|------|
-| `fw_fire_banned_ips_total` | gauge | 当前封禁 IP 数 |
-| `fw_fire_ban_events_total` | counter | 累计封禁次数 |
-| `fw_fire_unban_events_total` | counter | 累计解封次数 |
-| `fw_fire_packets_dropped_total` | counter | 累计丢弃数据包数 |
-| `fw_fire_packets_passed_total` | counter | 累计放行数据包数 |
-| `fw_fire_jail_failures_total{jail="sshd"}` | counter | 各 jail 失败次数 |
-| `fw_fire_whitelist_entries_total` | gauge | 白名单条目数 |
-| `fw_fire_hash_table_usage` | gauge | 哈希表使用率 (0-1) |
+| `firewall_banned_ips_total` | gauge | 当前封禁 IP 数 |
+| `firewall_ban_events_total` | counter | 累计封禁次数 |
+| `firewall_unban_events_total` | counter | 累计解封次数 |
+| `firewall_packets_dropped_total` | counter | 累计丢弃数据包数 |
+| `firewall_packets_passed_total` | counter | 累计放行数据包数 |
+| `firewall_jail_failures_total{jail="sshd"}` | counter | 各 jail 失败次数 |
+| `firewall_whitelist_entries_total` | gauge | 白名单条目数 |
+| `firewall_hash_table_usage` | gauge | 哈希表使用率 (0-1) |
 
 ### 示例输出
 
 ```
-# HELP fw_fire_banned_ips_total Current number of banned IPs
-# TYPE fw_fire_banned_ips_total gauge
-fw_fire_banned_ips_total 15
+# HELP firewall_banned_ips_total Current number of banned IPs
+# TYPE firewall_banned_ips_total gauge
+firewall_banned_ips_total 15
 
-# HELP fw_fire_ban_events_total Total ban events since startup
-# TYPE fw_fire_ban_events_total counter
-fw_fire_ban_events_total 125
+# HELP firewall_ban_events_total Total ban events since startup
+# TYPE firewall_ban_events_total counter
+firewall_ban_events_total 125
 
-# HELP fw_fire_packets_dropped_total Total packets dropped by the firewall
-# TYPE fw_fire_packets_dropped_total counter
-fw_fire_packets_dropped_total 45230
+# HELP firewall_packets_dropped_total Total packets dropped by the firewall
+# TYPE firewall_packets_dropped_total counter
+firewall_packets_dropped_total 45230
 ```
 
 ## 信号处理

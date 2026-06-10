@@ -8,40 +8,40 @@
 
 ```bash
 #!/bin/bash
-# fw_fire-diagnose.sh
+# firewall-diagnose.sh
 
 echo "=== Linux Firewall Diagnosis ==="
 echo ""
 
 # 1. 内核模块
 echo "1. Kernel Module"
-echo "   Loaded: $(lsmod | grep -c fw_fire)"
-lsmod | grep fw_fire
+echo "   Loaded: $(lsmod | grep -c firewall)"
+lsmod | grep firewall
 echo ""
 
 # 2. 守护进程
 echo "2. Daemon"
-systemctl status fw_fire --no-pager
+systemctl status firewall --no-pager
 echo ""
 
 # 3. ProcFS
 echo "3. ProcFS"
-cat /proc/fw_fire/status
+cat /proc/firewall/status
 echo ""
 
 # 4. 封禁统计
 echo "4. Statistics"
-cat /proc/fw_fire/stats
+cat /proc/firewall/stats
 echo ""
 
 # 5. 内核日志
 echo "5. Kernel Log (last 20 lines)"
-dmesg | grep fw_fire | tail -20
+dmesg | grep firewall | tail -20
 echo ""
 
 # 6. 守护进程日志
 echo "6. Daemon Log (last 20 lines)"
-tail -20 /var/log/fw_fire.log
+tail -20 /var/log/firewall.log
 echo ""
 
 # 7. Prometheus
@@ -56,14 +56,14 @@ curl -s http://localhost:9119/metrics | head -20
 **症状**：
 
 ```
-modprobe: ERROR: could not insert 'fw_fire': Operation not permitted
+modprobe: ERROR: could not insert 'firewall': Operation not permitted
 ```
 
 **原因和解决方案**：
 
 | 原因 | 解决方案 |
 |------|----------|
-| 不是 root 用户 | 使用 `sudo modprobe fw_fire` |
+| 不是 root 用户 | 使用 `sudo modprobe firewall` |
 | Secure Boot 启用 | 签名模块或禁用 Secure Boot |
 | 内核版本不匹配 | 重新编译：`make clean && make` |
 | 缺少内核头文件 | 安装：`apt install linux-headers-$(uname -r)` |
@@ -73,14 +73,14 @@ modprobe: ERROR: could not insert 'fw_fire': Operation not permitted
 **症状**：
 
 ```
-Job for fw_fire.service failed because the control process exited with error code.
+Job for firewall-daemon.service failed because the control process exited with error code.
 ```
 
 **排查步骤**：
 
 ```bash
 # 查看详细错误
-journalctl -u fw_fire -n 50
+journalctl -u firewall -n 50
 
 # 检查配置文件
 fwctl check-config
@@ -99,8 +99,8 @@ ldd /usr/local/sbin/fwctl
 | 配置文件语法错误 | 修复 YAML 格式 |
 | 端口被占用 | 修改配置或关闭占用进程 |
 | 缺少依赖库 | 安装缺失的库 |
-| 日志目录不存在 | `mkdir -p /var/lib/fw_fire` |
-| 数据库目录权限 | `chown root:root /var/lib/fw_fire` |
+| 日志目录不存在 | `mkdir -p /var/lib/firewall` |
+| 数据库目录权限 | `chown root:root /var/lib/firewall` |
 
 ### IP 未被封禁
 
@@ -110,16 +110,16 @@ ldd /usr/local/sbin/fwctl
 
 ```bash
 # 1. 检查内核模块是否加载
-lsmod | grep fw_fire
+lsmod | grep firewall
 
 # 2. 检查 IP 是否在白名单
-cat /proc/fw_fire/whitelist
+cat /proc/firewall/whitelist
 
 # 3. 检查封禁是否成功写入
-cat /proc/fw_fire/banned_ips
+cat /proc/firewall/banned_ips
 
 # 4. 检查内核日志
-dmesg | grep fw_fire
+dmesg | grep firewall
 
 # 5. 验证数据包是否经过 Hook
 # 在模块中添加 pr_info 调试输出
@@ -130,7 +130,7 @@ dmesg | grep fw_fire
 | 原因 | 解决方案 |
 |------|----------|
 | IP 在白名单 | 从白名单移除该 IP |
-| 模块未加载 | `sudo modprobe fw_fire` |
+| 模块未加载 | `sudo modprobe firewall` |
 | 端口不匹配 | 检查 jail 的 port 配置 |
 | 协议不匹配 | 检查 jail 的 protocol 配置 |
 | 哈希表已满 | 清空过期封禁或增加容量 |
@@ -143,11 +143,11 @@ dmesg | grep fw_fire
 
 ```bash
 # 1. 启用调试模式
-sudo systemctl stop fw_fire
+sudo systemctl stop firewall
 sudo fwctl -d start
 
 # 2. 查看匹配日志
-tail -f /var/log/fw_fire.log | grep "match"
+tail -f /var/log/firewall.log | grep "match"
 
 # 3. 测试正则
 echo "Failed password for root from 192.168.1.100" | \
@@ -222,13 +222,13 @@ fs.inotify.max_queued_events = 32768
 
 ```bash
 # 检查 SQLite 数据库
-ls -la /var/lib/fw_fire/bans.db
+ls -la /var/lib/firewall/bans.db
 
 # 检查数据库内容
-sqlite3 /var/lib/fw_fire/bans.db "SELECT COUNT(*) FROM bans;"
+sqlite3 /var/lib/firewall/bans.db "SELECT COUNT(*) FROM bans;"
 
 # 检查守护进程启动日志
-journalctl -u fw_fire | grep -i "restore\|recover"
+journalctl -u firewall | grep -i "restore\|recover"
 ```
 
 **常见原因**：
@@ -236,7 +236,7 @@ journalctl -u fw_fire | grep -i "restore\|recover"
 | 原因 | 解决方案 |
 |------|----------|
 | 数据库路径错误 | 检查 `db_path` 配置 |
-| 数据库权限 | `chmod 644 /var/lib/fw_fire/bans.db` |
+| 数据库权限 | `chmod 644 /var/lib/firewall/bans.db` |
 | SQLite 损坏 | 备份并重建数据库 |
 
 ## 内核调试
@@ -249,11 +249,11 @@ make debug DL=2
 
 # 重新安装
 sudo make install
-sudo modprobe -r fw_fire
-sudo modprobe fw_fire
+sudo modprobe -r firewall
+sudo modprobe firewall
 
 # 查看内核日志
-dmesg -w | grep fw_fire
+dmesg -w | grep firewall
 ```
 
 ### 调试级别
@@ -279,7 +279,7 @@ cat /sys/kernel/debug/rcu/rcu_pending
 
 ```bash
 # 收集完整诊断包
-sudo fwctl diagnose > fw_fire-diag-$(date +%Y%m%d).txt
+sudo fwctl diagnose > firewall-diag-$(date +%Y%m%d).txt
 ```
 
 ### 报告问题

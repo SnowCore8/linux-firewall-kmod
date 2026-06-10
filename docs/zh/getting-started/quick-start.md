@@ -8,10 +8,10 @@
 
 ## 第一步：配置文件
 
-编辑主配置文件 `/etc/fw_fire/fw_fire.yaml`：
+编辑主配置文件 `/etc/firewall/default.yaml`：
 
 ```bash
-sudo vim /etc/fw_fire/fw_fire.yaml
+sudo vim /etc/firewall/default.yaml
 ```
 
 ### 基本配置
@@ -20,8 +20,8 @@ sudo vim /etc/fw_fire/fw_fire.yaml
 # 全局设置
 global:
   log_level: info
-  log_file: /var/log/fw_fire.log
-  db_path: /var/lib/fw_fire/bans.db
+  log_file: /var/log/firewall.log
+  db_path: /var/lib/firewall/bans.db
 
 # SSH 防护 Jail
 jails:
@@ -69,10 +69,10 @@ whitelist:
 
 ```bash
 # 重新加载配置并启动
-sudo systemctl restart fw_fire
+sudo systemctl restart firewall
 
 # 检查状态
-sudo systemctl status fw_fire
+sudo systemctl status firewall
 ```
 
 ## 第四步：验证封禁
@@ -80,7 +80,7 @@ sudo systemctl status fw_fire
 ### 方法一：查看 ProcFS
 
 ```bash
-cat /proc/fw_fire/banned_ips
+cat /proc/firewall/banned_ips
 ```
 
 ### 方法二：使用 fwctl
@@ -117,20 +117,20 @@ curl http://localhost:9119/metrics
 关键指标：
 
 ```
-# TYPE fw_fire_banned_ips_total gauge
-fw_fire_banned_ips_total 5
+# TYPE firewall_banned_ips_total gauge
+firewall_banned_ips_total 5
 
-# TYPE fw_fire_ban_events_total counter
-fw_fire_ban_events_total 12
+# TYPE firewall_ban_events_total counter
+firewall_ban_events_total 12
 
-# TYPE fw_fire_unban_events_total counter
-fw_fire_unban_events_total 7
+# TYPE firewall_unban_events_total counter
+firewall_unban_events_total 7
 ```
 
 ### 查看日志
 
 ```bash
-sudo tail -f /var/log/fw_fire.log
+sudo tail -f /var/log/firewall.log
 ```
 
 ## 配置更多 Jail

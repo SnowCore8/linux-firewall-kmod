@@ -27,7 +27,7 @@
 ### Linux Firewall 架构
 
 ```
-日志 → fwctl (C) → /proc/fw_fire → Netfilter Hook
+日志 → fwctl (C) → /proc/firewall → Netfilter Hook
                                     │
                               O(1) 哈希查找
 ```
@@ -36,7 +36,7 @@
 
 ### Jail 配置对照
 
-| fail2ban (jail.local) | Linux Firewall (fw_fire.yaml) |
+| fail2ban (jail.local) | Linux Firewall (default.yaml) |
 |----------------------|-------------------------------|
 | `[sshd]` | `- name: sshd` |
 | `enabled = true` | `enabled: true` |
@@ -108,12 +108,12 @@ maxretry = 5
 #### 转换后的 Linux Firewall 配置
 
 ```yaml
-# /etc/fw_fire/fw_fire.yaml
+# /etc/firewall/default.yaml
 
 global:
   log_level: info
-  log_file: /var/log/fw_fire.log
-  db_path: /var/lib/fw_fire/bans.db
+  log_file: /var/log/firewall.log
+  db_path: /var/lib/firewall/bans.db
 
 whitelist:
   - 127.0.0.1/8
@@ -172,7 +172,7 @@ filter:
 # 从 fail2ban 提取白名单
 grep -oP 'ignoreip\s*=\s*\K.*' /etc/fail2ban/jail.local | \
     tr ' ' '\n' | \
-    sed 's/^/  - /' >> /etc/fw_fire/fw_fire.yaml
+    sed 's/^/  - /' >> /etc/firewall/default.yaml
 ```
 
 ### 6. 恢复封禁状态（可选）
@@ -196,9 +196,9 @@ sudo systemctl disable fail2ban
 ### 8. 启动 Linux Firewall
 
 ```bash
-sudo modprobe fw_fire
-sudo systemctl enable fw_fire
-sudo systemctl start fw_fire
+sudo modprobe firewall
+sudo systemctl enable firewall
+sudo systemctl start firewall
 ```
 
 ### 9. 验证
@@ -243,9 +243,9 @@ fwctl unban 1.2.3.4
 
 ```bash
 # 停止 Linux Firewall
-sudo systemctl stop fw_fire
-sudo systemctl disable fw_fire
-sudo rmmod fw_fire
+sudo systemctl stop firewall
+sudo systemctl disable firewall
+sudo rmmod firewall
 
 # 恢复 fail2ban
 sudo systemctl enable fail2ban

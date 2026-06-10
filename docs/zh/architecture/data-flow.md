@@ -24,7 +24,7 @@
            ║  Netfilter:           ║
            ║  PREROUTING Hook     ║
            ║  ┌─────────────────┐  ║
-           ║  │ fw_fire_hook()  │  ║
+           ║  │ firewall_hook()  │  ║
            ║  └────────┬────────┘  ║
            ╚═══════════╪═══════════╝
                        │
@@ -200,17 +200,17 @@
 
 | 方式 | 路径 | 用途 |
 |------|------|------|
-| ProcFS 写入 | `/proc/fw_fire/config` | 添加/移除封禁 |
-| ProcFS 写入 | `/proc/fw_fire/clear` | 清空封禁 |
-| ProcFS 写入 | `/proc/fw_fire/config` | 管理白名单 |
+| ProcFS 写入 | `/proc/firewall/config` | 添加/移除封禁 |
+| ProcFS 写入 | `/proc/firewall/clear` | 清空封禁 |
+| ProcFS 写入 | `/proc/firewall/config` | 管理白名单 |
 
 ### 内核态 → 用户态
 
 | 方式 | 路径 | 用途 |
 |------|------|------|
-| ProcFS 读取 | `/proc/fw_fire/status` | 获取状态 |
-| ProcFS 读取 | `/proc/fw_fire/banned_ips` | 获取封禁列表 |
-| ProcFS 读取 | `/proc/fw_fire/stats` | 获取统计 |
+| ProcFS 读取 | `/proc/firewall/status` | 获取状态 |
+| ProcFS 读取 | `/proc/firewall/banned_ips` | 获取封禁列表 |
+| ProcFS 读取 | `/proc/firewall/stats` | 获取统计 |
 
 ### 内部通信
 

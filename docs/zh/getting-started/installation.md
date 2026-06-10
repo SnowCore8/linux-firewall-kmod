@@ -103,34 +103,34 @@ sudo make install
 
 安装完成后：
 
-- 内核模块 `fw_fire.ko` 安装到 `/lib/modules/$(uname -r)/extra/`
+- 内核模块 `firewall.ko` 安装到 `/lib/modules/$(uname -r)/extra/`
 - 守护进程 `fwctl` 安装到 `/usr/local/sbin/`
-- 配置文件安装到 `/etc/fw_fire/fw_fire.yaml`
+- 配置文件安装到 `/etc/firewall/default.yaml`
 - systemd 服务文件安装到 `/etc/systemd/system/`
 
 ### 4. 加载内核模块
 
 ```bash
-sudo modprobe fw_fire
+sudo modprobe firewall
 ```
 
 验证模块已加载：
 
 ```bash
-lsmod | grep fw_fire
+lsmod | grep firewall
 ```
 
 ### 5. 启动守护进程
 
 ```bash
-sudo systemctl enable fw_fire
-sudo systemctl start fw_fire
+sudo systemctl enable firewall
+sudo systemctl start firewall
 ```
 
 检查服务状态：
 
 ```bash
-sudo systemctl status fw_fire
+sudo systemctl status firewall
 ```
 
 ## 验证安装
@@ -138,7 +138,7 @@ sudo systemctl status fw_fire
 ### 检查内核模块
 
 ```bash
-cat /proc/fw_fire/status
+cat /proc/firewall/status
 ```
 
 应输出类似：
@@ -169,8 +169,8 @@ curl http://localhost:9119/metrics
 ## 卸载
 
 ```bash
-sudo systemctl stop fw_fire
-sudo systemctl disable fw_fire
+sudo systemctl stop firewall
+sudo systemctl disable firewall
 sudo make uninstall
 ```
 
