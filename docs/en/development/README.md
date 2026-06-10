@@ -34,29 +34,36 @@ sudo apt install -y \
 
 ```
 linux-firewall-kmod/
-├── Makefile              # Main Makefile
+├── Makefile              # Main Makefile (all / kernel-module / daemon / test)
 ├── src/
-│   ├── kernel/           # Kernel module source
-│   │   ├── fw_fire.c
-│   │   └── fw_fire.h
-│   ├── daemon/           # Daemon source
-│   │   ├── main.c
-│   │   ├── config.c      # YAML config parsing
-│   │   ├── jail.c        # Jail management
-│   │   ├── monitor.c     # Log monitoring (inotify)
-│   │   ├── regex.c       # PCRE2 matching
-│   │   ├── database.c    # SQLite persistence
-│   │   ├── metrics.c     # Prometheus metrics
-│   │   └── procfs.c      # ProcFS communication
-│   └── include/          # Common headers
-│       └── common.h
-├── tests/                # Test files
-│   ├── unit/             # Unit tests
-│   └── integration/      # Integration tests
-├── docs/                 # Documentation
-├── config/
-│   └── fw_fire.yaml      # Example config
-└── scripts/              # Helper scripts
+│   ├── kernel-module/    # Kernel module source
+│   │   ├── firewall-main.c   # Module entry / netfilter hook registration
+│   │   ├── ban-manager.c     # Hash-table ban management
+│   │   ├── whitelist.c       # Whitelist (exact + CIDR two-stage matching)
+│   │   ├── netfilter.c       # Packet handling and ban decision
+│   │   ├── netdev.c          # Network device helpers
+│   │   ├── procfs.c          # /proc/firewall/* interface
+│   │   ├── state-persist.c   # Kernel state save/restore
+│   │   ├── cleanup.c         # Module exit cleanup
+│   │   └── firewall.h        # Common header
+│   └── daemon/           # Userspace daemon
+│       ├── firewall-daemon.c   # Daemon entry
+│       ├── config-parser.c     # YAML config parsing (strict mode)
+│       ├── file-monitor.c      # inotify log monitoring
+│       ├── failed-tracker.c    # Jail failure counter
+│       ├── ban-manager.c       # Ban/unban scheduler
+│       ├── metrics.c           # Prometheus exporter
+│       └── *.h                 # Matching headers
+├── tests/                # Tests
+│   ├── run_tests.sh
+│   ├── test_framework.sh
+│   ├── test_config.sh
+│   ├── suites/           # Test suites
+│   └── reports/          # Generated reports
+├── docs/                 # HonKit documentation
+├── config/               # Example YAML configs
+├── scripts/              # Helper scripts (build, verify, deb packaging)
+└── debian/               # Debian packaging metadata
 ```
 
 ## Code Standards

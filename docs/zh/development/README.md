@@ -34,29 +34,36 @@ sudo apt install -y \
 
 ```
 linux-firewall-kmod/
-├── Makefile              # 主 Makefile
+├── Makefile              # 主 Makefile（all / kernel-module / daemon / test）
 ├── src/
-│   ├── kernel/           # 内核模块源码
-│   │   ├── fw_fire.c
-│   │   └── fw_fire.h
-│   ├── daemon/           # 守护进程源码
-│   │   ├── main.c
-│   │   ├── config.c      # YAML 配置解析
-│   │   ├── jail.c        # Jail 管理
-│   │   ├── monitor.c     # 日志监控 (inotify)
-│   │   ├── regex.c       # PCRE2 匹配
-│   │   ├── database.c    # SQLite 持久化
-│   │   ├── metrics.c     # Prometheus 指标
-│   │   └── procfs.c      # ProcFS 通信
-│   └── include/          # 公共头文件
-│       └── common.h
-├── tests/                # 测试文件
-│   ├── unit/             # 单元测试
-│   └── integration/      # 集成测试
-├── docs/                 # 文档
-├── config/
-│   └── fw_fire.yaml      # 示例配置
-└── scripts/              # 辅助脚本
+│   ├── kernel-module/    # 内核模块源码
+│   │   ├── firewall-main.c   # 模块入口 / netfilter hook 注册
+│   │   ├── ban-manager.c     # 哈希表封禁管理
+│   │   ├── whitelist.c       # 白名单（精确 + CIDR 两阶段匹配）
+│   │   ├── netfilter.c       # 包处理与封禁判定
+│   │   ├── netdev.c          # 网络设备辅助
+│   │   ├── procfs.c          # /proc/firewall/* 接口
+│   │   ├── state-persist.c   # 内核态状态保存/恢复
+│   │   ├── cleanup.c         # 模块退出清理
+│   │   └── firewall.h        # 公共头文件
+│   └── daemon/           # 用户态守护进程
+│       ├── firewall-daemon.c   # 守护进程入口
+│       ├── config-parser.c     # YAML 配置解析（严格模式）
+│       ├── file-monitor.c      # inotify 日志监听
+│       ├── failed-tracker.c    # Jail 失败计数
+│       ├── ban-manager.c       # 封禁/解封调度
+│       ├── metrics.c           # Prometheus exporter
+│       └── *.h                 # 对应头文件
+├── tests/                # 测试
+│   ├── run_tests.sh
+│   ├── test_framework.sh
+│   ├── test_config.sh
+│   ├── suites/           # 测试套件
+│   └── reports/          # 生成的报告
+├── docs/                 # HonKit 文档
+├── config/               # 示例 YAML 配置
+├── scripts/              # 辅助脚本（构建、验证、deb 打包）
+└── debian/               # Debian 打包元数据
 ```
 
 ## 代码规范
