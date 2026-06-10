@@ -55,7 +55,7 @@ while read ip; do echo "$ip" | sudo tee -a /proc/firewall/bans; done < ip_list.t
 # 清空所有封禁（无原生命令，见下方）
 ```
 
-清空所有封禁：模块未提供「一键清空」接口。可逐条 `unban`：
+清空所有封禁：模块未提供“一键清空”接口。可逐条 `unban`：
 
 ```bash
 # 解析 bans 中的 IP 列表，循环 unban

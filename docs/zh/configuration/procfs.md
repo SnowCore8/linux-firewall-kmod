@@ -183,7 +183,7 @@ echo "remove 10.0.0.0/8" | sudo tee /proc/firewall/whitelist
 
 ### 清空所有封禁
 
-源码未提供「一键清空」接口。如需清空：
+源码未提供“一键清空”接口。如需清空：
 
 ```bash
 # 方案一：逐条 unban（脚本中可循环）

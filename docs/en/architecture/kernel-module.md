@@ -12,7 +12,7 @@ The kernel module `firewall.ko` is the core of the system, responsible for inter
 |-----------|-------|
 | Module Name | `firewall` |
 | Source File | `src/kernel/firewall.c` |
-| License | GPL |
+| License | MIT |
 | Load Path | `/lib/modules/$(uname -r)/extra/firewall.ko` |
 
 ## Netfilter Hook

@@ -205,7 +205,7 @@
 | ProcFS 写入 | `/proc/firewall/whitelist` | 添加 / 移除白名单 |
 
 > `/proc/firewall/config` 与 `/proc/firewall/stats` 为只读；模块不
-> 提供「清空」原生命令，需逐条 `unban` 或重载模块。
+> 提供“清空”原生命令，需逐条 `unban` 或重载模块。
 
 ### 内核态 → 用户态
 

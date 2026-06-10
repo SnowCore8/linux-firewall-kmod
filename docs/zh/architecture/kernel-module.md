@@ -12,7 +12,7 @@
 |------|-----|
 | 模块名称 | `firewall` |
 | 源文件 | `src/kernel/firewall.c` |
-| 许可证 | GPL |
+| 许可证 | MIT |
 | 加载路径 | `/lib/modules/$(uname -r)/extra/firewall.ko` |
 
 ## Netfilter Hook
