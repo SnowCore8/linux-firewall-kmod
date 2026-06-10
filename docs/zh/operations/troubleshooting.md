@@ -21,7 +21,7 @@ echo ""
 
 # 2. 守护进程
 echo "2. Daemon"
-systemctl status firewall --no-pager
+systemctl status firewall-daemon --no-pager
 echo ""
 
 # 3. ProcFS
@@ -80,7 +80,7 @@ Job for firewall-daemon.service failed because the control process exited with e
 
 ```bash
 # 查看详细错误
-journalctl -u firewall -n 50
+journalctl -u firewall-daemon -n 50
 
 # 验证配置文件语法
 sudo firewall-daemon -c /etc/firewall/default.yaml
@@ -234,7 +234,7 @@ ls -la /var/lib/firewall/bans.db
 sqlite3 /var/lib/firewall/bans.db "SELECT COUNT(*) FROM bans;"
 
 # 检查守护进程启动日志
-journalctl -u firewall | grep -i "restore\|recover"
+journalctl -u firewall-daemon | grep -i "restore\|recover"
 ```
 
 **常见原因**：

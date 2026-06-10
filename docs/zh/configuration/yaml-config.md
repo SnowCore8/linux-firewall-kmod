@@ -2,29 +2,135 @@
 
 本文档详细介绍 `/etc/firewall/default.yaml` 配置文件的所有选项。
 
-## 全局配置 (global)
+## 配置结构概览
+
+当前配置采用**智能推断**设计：只需配置 `log_files` 和 `regexes`，其他参数使用合理默认值。
 
 ```yaml
-global:
-  log_level: info
-  log_file: /var/log/firewall.log
-  db_path: /var/lib/firewall/bans.db
+# 全局默认值
+defaults:
+  max_retries: 5
+  findtime: 600         # 10 分钟
+  ban_time: 900         # 15 分钟
+  interval: 1           # 检查间隔（秒）
+  metrics_port: 9119    # Prometheus 指标端口
+
+# Jail 定义
+jails:
+  sshd:
+    enabled: true
+    log_files:
+      - /var/log/auth.log
+    max_retries: 3
+    findtime: 600
+    ban_time: 1800
+    regexes:
+      failed_password:
+        pattern: "Failed password for (?:invalid user )?.+ from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
+
+# 持久化
+permanent_db_path: "/var/lib/firewall/bans.db"
+permanent_ban_enabled: true
 ```
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `log_level` | string | `info` | 日志级别：`debug`, `info`, `warn`, `error` |
-| `log_file` | string | `/var/log/firewall.log` | 日志文件路径 |
-| `db_path` | string | `/var/lib/firewall/bans.db` | SQLite 数据库路径 |
+## 全局默认值 (defaults)
 
-### 日志级别
+`defaults` 区块定义所有 jail 的默认行为，单个 jail 可覆盖这些值。
 
-| 级别 | 说明 |
-|------|------|
-| `debug` | 调试信息，包含所有详细操作日志 |
-| `info` | 一般信息，封禁/解封事件 |
-| `warn` | 警告信息，配置问题、资源不足 |
-| `error` | 错误信息，模块加载失败、数据库错误 |
+```yaml
+defaults:
+  max_retries: 5
+  findtime: 600         # 10 分钟
+  ban_time: 900         # 15 分钟
+  interval: 1           # 检查间隔（秒）
+  metrics_port: 9119    # Prometheus 指标端口
+```
+
+| 参数 | 类型 | 默认值 | 范围 | 说明 |
+|------|------|--------|------|------|
+| `max_retries` | int | `5` | 1-100 | 最大失败次数，超过则封禁 |
+| `findtime` | int | `600` | 1-3600 | 时间窗口（秒），在此时间内累积计数 |
+| `ban_time` | int | `900` | 0 或 1-86400 | 封禁时长（秒），0 表示永久 |
+| `interval` | int | `1` | 1-60 | 日志文件检查间隔（秒） |
+| `metrics_port` | int | `9119` | 1024-65535 | Prometheus 指标暴露端口 |
+
+### 时间参数关系
+
+```
+findtime (600s)
+├── 在此时间窗口内统计失败次数
+│
+max_retries (5)
+├── 达到此次数触发封禁
+│
+ban_time (900s)
+├── 封禁持续此时长
+└── 到期后自动解封
+```
+
+## Jail 配置
+
+每个 jail 定义一个独立的日志监控和封禁规则。
+
+### Jail 结构
+
+```yaml
+jails:
+  sshd:                           # jail 名称（键名即名称）
+    enabled: true                 # 是否启用
+    log_files:                    # 监控的日志文件列表
+      - /var/log/auth.log
+      - /var/log/secure
+    max_retries: 3                # 覆盖 defaults
+    findtime: 600                 # 覆盖 defaults
+    ban_time: 1800                # 覆盖 defaults
+    regexes:                      # 命名正则集合
+      failed_password:
+        pattern: "..."
+      invalid_user:
+        pattern: "..."
+```
+
+### Jail 参数
+
+| 参数 | 类型 | 必需 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `<name>` (键名) | string | 是 | - | Jail 名称，全局唯一 |
+| `enabled` | bool | 否 | `true` | 是否启用该 jail |
+| `log_files` | list | 是 | - | 要监控的日志文件路径列表 |
+| `max_retries` | int | 否 | 继承 `defaults` | 最大失败次数 |
+| `findtime` | int | 否 | 继承 `defaults` | 时间窗口（秒） |
+| `ban_time` | int | 否 | 继承 `defaults` | 封禁时长（秒） |
+| `regexes` | map | 是 | - | 命名正则表达式集合 |
+
+### 正则表达式配置 (regexes)
+
+```yaml
+regexes:
+  failed_password:                          # 正则模式名称
+    pattern: "Failed password for (?:invalid user )?.+ from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
+  invalid_user:
+    pattern: "Invalid user [a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
+```
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `<name>` (键名) | string | 是 | 正则模式名称，用于日志标识 |
+| `pattern` | string | 是 | PCRE2 正则表达式，使用捕获组 `()` 提取 IP |
+
+### PCRE2 正则语法
+
+当前版本**不再使用 `<HOST>` 占位符**，直接在 `pattern` 中编写完整正则。
+
+| 特性 | 示例 | 说明 |
+|------|------|------|
+| 捕获组 | `([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})` | 提取 IP 地址 |
+| 非捕获组 | `(?:pattern)` | 分组但不捕获 |
+| 字符类 | `[a-zA-Z0-9_.-]` | 字符范围 |
+| 量词 | `*`, `+`, `?`, `{n,m}` | 重复匹配 |
+| 锚点 | `^`, `$` | 行首/行尾 |
+
+> **YAML 转义注意**：在 YAML 中反斜杠需双写 `\\.` 而非 `\.`，或使用双引号包裹。
 
 ## 白名单配置 (whitelist)
 
@@ -49,147 +155,93 @@ whitelist:
 
 - `127.0.0.1` - 本地回环地址
 
-## Jail 配置
-
-每个 jail 定义一个独立的监控和封禁规则。
-
-### 完整示例
+## 持久化配置
 
 ```yaml
-jails:
-  - name: sshd
-    enabled: true
-    log_path: /var/log/auth.log
-    filter:
-      regex: 'Failed password for (?:invalid user )?.+ from <HOST>'
-    action:
-      ban_time: 3600
-      find_time: 600
-      max_retries: 5
-    port: 22
-    protocol: tcp
+permanent_db_path: "/var/lib/firewall/bans.db"
+permanent_ban_enabled: true
 ```
 
-### 基本参数
-
-| 参数 | 类型 | 必需 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `name` | string | 是 | - | Jail 名称，全局唯一 |
-| `enabled` | bool | 否 | `true` | 是否启用该 jail |
-| `log_path` | string | 是 | - | 要监控的日志文件路径 |
-| `port` | int | 是 | - | 监控的目标端口 |
-| `protocol` | string | 是 | - | 协议：`tcp`, `udp`, `all` |
-
-### 过滤器配置 (filter)
-
-```yaml
-filter:
-  regex: 'Failed password for .* from <HOST>'
-```
-
-| 参数 | 类型 | 必需 | 说明 |
-|------|------|------|------|
-| `regex` | string | 是 | PCRE2 正则表达式，使用 `<HOST>` 占位符匹配 IP |
-
-### 正则表达式语法
-
-使用 PCRE2 引擎，支持以下特性：
-
-| 特性 | 示例 | 说明 |
-|------|------|------|
-| `<HOST>` 占位符 | `from <HOST>` | 匹配 IPv4/IPv6 地址 |
-| 捕获组 | `(?:pattern)` | 非捕获组 |
-| 字符类 | `[a-z]` | 字符范围 |
-| 量词 | `*`, `+`, `?` | 重复匹配 |
-| 锚点 | `^`, `$` | 行首/行尾 |
-
-### `<HOST>` 占位符
-
-`<HOST>` 是特殊占位符，自动匹配 IP 地址：
-
-```
-# 等效正则
-<HOST> => (?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)
-```
-
-### 动作配置 (action)
-
-```yaml
-action:
-  ban_time: 3600
-  find_time: 600
-  max_retries: 5
-```
-
-| 参数 | 类型 | 必需 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `ban_time` | int | 否 | `3600` | 封禁时长（秒），0 表示永久 |
-| `find_time` | int | 否 | `600` | 时间窗口（秒），在此时间内计数 |
-| `max_retries` | int | 否 | `5` | 最大失败次数，超过则封禁 |
-
-### 时间参数关系
-
-```
-find_time (600s)
-├── 在此时间窗口内统计失败次数
-│
-max_retries (5)
-├── 达到此次数触发封禁
-│
-ban_time (3600s)
-├── 封禁持续此时长
-└── 到期后自动解封
-```
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `permanent_db_path` | string | `/var/lib/firewall/bans.db` | SQLite 数据库路径 |
+| `permanent_ban_enabled` | bool | `true` | 是否启用永久封禁持久化 |
 
 ## 完整配置示例
 
 ```yaml
 # /etc/firewall/default.yaml
 
-global:
-  log_level: info
-  log_file: /var/log/firewall.log
-  db_path: /var/lib/firewall/bans.db
+# ============================================================
+# 全局默认值 - 应用于所有 jail，除非被覆盖
+# ============================================================
+defaults:
+  max_retries: 5
+  findtime: 600         # 10 分钟
+  ban_time: 900         # 15 分钟
+  interval: 1           # 检查间隔（秒）
+  metrics_port: 9119    # Prometheus 指标端口
 
-whitelist:
-  - 127.0.0.1
-  - 192.168.1.0/24
-  - 10.0.0.1
-
+# ============================================================
+# Jail 定义 - 每个服务独立监控
+# ============================================================
 jails:
-  - name: sshd
+  # SSH 服务防护
+  sshd:
     enabled: true
-    log_path: /var/log/auth.log
-    filter:
-      regex: 'Failed password for (?:invalid user )?.+ from <HOST>'
-    action:
-      ban_time: 3600
-      find_time: 600
-      max_retries: 5
-    port: 22
-    protocol: tcp
+    log_files:
+      - /var/log/auth.log       # Debian/Ubuntu
+      - /var/log/secure         # RHEL/CentOS
+    max_retries: 3
+    findtime: 600               # 10 分钟
+    ban_time: 1800              # 30 分钟
+    regexes:
+      invalid_user:
+        pattern: "Invalid user [a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
+      failed_password:
+        pattern: "Failed password for (?:invalid user )?[a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
+      connection_closed:
+        pattern: "Connection closed by invalid user [a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
 
-  - name: nginx-auth
+  # Nginx 认证防护
+  nginx-auth:
     enabled: true
-    log_path: /var/log/nginx/error.log
-    filter:
-      regex: 'no user/password.*client: <HOST>'
-    action:
-      ban_time: 1800
-      find_time: 300
-      max_retries: 10
-    port: 80
-    protocol: tcp
+    log_files:
+      - /var/log/nginx/error.log
+    max_retries: 10
+    findtime: 300               # 5 分钟
+    ban_time: 1800              # 30 分钟
+    regexes:
+      no_auth:
+        pattern: "no user/password was provided for basic authentication.*client: ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
 
-  - name: dovecot
-    enabled: false
-    log_path: /var/log/mail.log
-    filter:
-      regex: 'auth failed.*rip=<HOST>'
-    action:
-      ban_time: 7200
-      find_time: 600
-      max_retries: 3
-    port: 143
-    protocol: tcp
+# ============================================================
+# 永久封禁配置（SQLite 持久化）
+# ============================================================
+permanent_db_path: "/var/lib/firewall/bans.db"
+permanent_ban_enabled: true
+```
+
+## 多配置文件加载
+
+守护进程支持 `-C <dir>` 参数加载目录下所有 YAML：
+
+```bash
+sudo firewall-daemon -C /etc/firewall
+```
+
+加载顺序：
+
+1. 按文件名**字母序**加载
+2. 后加载的配置**累加** jail（不会覆盖）
+3. 同名 jail 采用**后到优先**策略
+
+示例目录结构：
+
+```
+/etc/firewall/
+├── default.yaml      # 基础配置
+├── nginx.yaml        # 额外 nginx 防护
+├── mysql.yaml        # 额外 mysql 防护
+└── ...
 ```

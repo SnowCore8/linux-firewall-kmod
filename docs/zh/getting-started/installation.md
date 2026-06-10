@@ -123,14 +123,14 @@ lsmod | grep firewall
 ### 5. 启动守护进程
 
 ```bash
-sudo systemctl enable firewall
-sudo systemctl start firewall
+sudo systemctl enable firewall-daemon
+sudo systemctl start firewall-daemon
 ```
 
 检查服务状态：
 
 ```bash
-sudo systemctl status firewall
+sudo systemctl status firewall-daemon
 ```
 
 ## 验证安装
@@ -169,8 +169,8 @@ curl http://localhost:9119/metrics
 ## 卸载
 
 ```bash
-sudo systemctl stop firewall
-sudo systemctl disable firewall
+sudo systemctl stop firewall-daemon
+sudo systemctl disable firewall-daemon
 sudo make uninstall
 ```
 

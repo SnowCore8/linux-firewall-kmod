@@ -123,14 +123,14 @@ lsmod | grep firewall
 ### 5. Start the Daemon
 
 ```bash
-sudo systemctl enable firewall
-sudo systemctl start firewall
+sudo systemctl enable firewall-daemon
+sudo systemctl start firewall-daemon
 ```
 
 Check service status:
 
 ```bash
-sudo systemctl status firewall
+sudo systemctl status firewall-daemon
 ```
 
 ## Verifying Installation
@@ -169,8 +169,8 @@ curl http://localhost:9119/metrics
 ## Uninstallation
 
 ```bash
-sudo systemctl stop firewall
-sudo systemctl disable firewall
+sudo systemctl stop firewall-daemon
+sudo systemctl disable firewall-daemon
 sudo make uninstall
 ```
 

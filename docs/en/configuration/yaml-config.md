@@ -2,29 +2,135 @@
 
 This document details all options in the `/etc/firewall/default.yaml` configuration file.
 
-## Global Configuration (global)
+## Configuration Overview
+
+The current design uses **smart inference**: you only need to configure `log_files` and `regexes`; other parameters use sensible defaults.
 
 ```yaml
-global:
-  log_level: info
-  log_file: /var/log/firewall.log
-  db_path: /var/lib/firewall/bans.db
+# Global defaults
+defaults:
+  max_retries: 5
+  findtime: 600         # 10 minutes
+  ban_time: 900         # 15 minutes
+  interval: 1           # Check interval (seconds)
+  metrics_port: 9119    # Prometheus metrics port
+
+# Jail definitions
+jails:
+  sshd:
+    enabled: true
+    log_files:
+      - /var/log/auth.log
+    max_retries: 3
+    findtime: 600
+    ban_time: 1800
+    regexes:
+      failed_password:
+        pattern: "Failed password for (?:invalid user )?.+ from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
+
+# Persistence
+permanent_db_path: "/var/lib/firewall/bans.db"
+permanent_ban_enabled: true
 ```
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `log_level` | string | `info` | Log level: `debug`, `info`, `warn`, `error` |
-| `log_file` | string | `/var/log/firewall.log` | Log file path |
-| `db_path` | string | `/var/lib/firewall/bans.db` | SQLite database path |
+## Global Defaults (defaults)
 
-### Log Levels
+The `defaults` block defines default behavior for all jails. Individual jails can override these values.
 
-| Level | Description |
-|-------|-------------|
-| `debug` | Debug information, including all detailed operation logs |
-| `info` | General information, ban/unban events |
-| `warn` | Warnings, configuration issues, resource limits |
-| `error` | Errors, module load failures, database errors |
+```yaml
+defaults:
+  max_retries: 5
+  findtime: 600         # 10 minutes
+  ban_time: 900         # 15 minutes
+  interval: 1           # Check interval (seconds)
+  metrics_port: 9119    # Prometheus metrics port
+```
+
+| Parameter | Type | Default | Range | Description |
+|-----------|------|---------|-------|-------------|
+| `max_retries` | int | `5` | 1-100 | Maximum failures before a ban is triggered |
+| `findtime` | int | `600` | 1-3600 | Time window (seconds) over which failures are counted |
+| `ban_time` | int | `900` | 0 or 1-86400 | Ban duration (seconds); 0 = permanent |
+| `interval` | int | `1` | 1-60 | Log file check interval (seconds) |
+| `metrics_port` | int | `9119` | 1024-65535 | Prometheus metrics port |
+
+### Time Parameter Relationship
+
+```
+findtime (600s)
+├── Failure count accumulates within this window
+│
+max_retries (5)
+├── Ban triggers when count reaches this
+│
+ban_time (900s)
+├── Ban lasts for this duration
+└── Auto-unban after expiry
+```
+
+## Jail Configuration
+
+Each jail defines an independent log monitoring and ban rule.
+
+### Jail Structure
+
+```yaml
+jails:
+  sshd:                           # Jail name (key name = name)
+    enabled: true                 # Whether enabled
+    log_files:                    # Log files to monitor
+      - /var/log/auth.log
+      - /var/log/secure
+    max_retries: 3                # Override defaults
+    findtime: 600                 # Override defaults
+    ban_time: 1800                # Override defaults
+    regexes:                      # Named regex patterns
+      failed_password:
+        pattern: "..."
+      invalid_user:
+        pattern: "..."
+```
+
+### Jail Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `<name>` (key) | string | Yes | - | Jail name, globally unique |
+| `enabled` | bool | No | `true` | Whether this jail is active |
+| `log_files` | list | Yes | - | List of log file paths to monitor |
+| `max_retries` | int | No | Inherited from `defaults` | Max failures before ban |
+| `findtime` | int | No | Inherited from `defaults` | Time window (seconds) |
+| `ban_time` | int | No | Inherited from `defaults` | Ban duration (seconds) |
+| `regexes` | map | Yes | - | Named regex pattern collection |
+
+### Regex Configuration (regexes)
+
+```yaml
+regexes:
+  failed_password:                          # Pattern name
+    pattern: "Failed password for (?:invalid user )?.+ from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
+  invalid_user:
+    pattern: "Invalid user [a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `<name>` (key) | string | Yes | Pattern name, used for log identification |
+| `pattern` | string | Yes | PCRE2 regex; use capture group `()` to extract IP |
+
+### PCRE2 Regex Syntax
+
+The current version **no longer uses the `<HOST>` placeholder**. Write the full regex directly in `pattern`.
+
+| Feature | Example | Description |
+|---------|---------|-------------|
+| Capture group | `([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})` | Extract IP address |
+| Non-capture group | `(?:pattern)` | Group without capturing |
+| Character class | `[a-zA-Z0-9_.-]` | Character range |
+| Quantifiers | `*`, `+`, `?`, `{n,m}` | Repetition |
+| Anchors | `^`, `$` | Line start/end |
+
+> **YAML Escaping Note**: In YAML, backslashes must be doubled `\\.` instead of `\.`, or wrap the value in double quotes.
 
 ## Whitelist Configuration (whitelist)
 
@@ -41,155 +147,101 @@ whitelist:
 | Single IP | `192.168.1.100` | Skip this IP when banning |
 | CIDR range | `192.168.1.0/24` | Skip all IPs in this subnet |
 
-> **Limit**: The whitelist supports up to 64 entries. Excess entries are ignored with a warning.
+> **Limit**: Maximum 64 whitelist entries. Excess entries are ignored with a warning.
 
 ### Built-in Whitelist
 
-The following IPs are always whitelisted and do not need manual configuration:
+The following IP is always protected, no manual configuration needed:
 
 - `127.0.0.1` - Loopback address
 
-## Jail Configuration
-
-Each jail defines an independent monitoring and banning rule.
-
-### Complete Example
+## Persistence Configuration
 
 ```yaml
-jails:
-  - name: sshd
-    enabled: true
-    log_path: /var/log/auth.log
-    filter:
-      regex: 'Failed password for (?:invalid user )?.+ from <HOST>'
-    action:
-      ban_time: 3600
-      find_time: 600
-      max_retries: 5
-    port: 22
-    protocol: tcp
+permanent_db_path: "/var/lib/firewall/bans.db"
+permanent_ban_enabled: true
 ```
 
-### Basic Parameters
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `name` | string | Yes | - | Jail name, globally unique |
-| `enabled` | bool | No | `true` | Whether the jail is enabled |
-| `log_path` | string | Yes | - | Log file path to monitor |
-| `port` | int | Yes | - | Target port to monitor |
-| `protocol` | string | Yes | - | Protocol: `tcp`, `udp`, `all` |
-
-### Filter Configuration (filter)
-
-```yaml
-filter:
-  regex: 'Failed password for .* from <HOST>'
-```
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `regex` | string | Yes | PCRE2 regex, uses `<HOST>` placeholder to match IPs |
-
-### Regular Expression Syntax
-
-Uses the PCRE2 engine, supporting:
-
-| Feature | Example | Description |
-|---------|---------|-------------|
-| `<HOST>` placeholder | `from <HOST>` | Matches IPv4/IPv6 addresses |
-| Capture groups | `(?:pattern)` | Non-capturing group |
-| Character classes | `[a-z]` | Character range |
-| Quantifiers | `*`, `+`, `?` | Repetition |
-| Anchors | `^`, `$` | Start/end of line |
-
-### `<HOST>` Placeholder
-
-`<HOST>` is a special placeholder that automatically matches IP addresses:
-
-```
-# Equivalent regex
-<HOST> => (?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)
-```
-
-### Action Configuration (action)
-
-```yaml
-action:
-  ban_time: 3600
-  find_time: 600
-  max_retries: 5
-```
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `ban_time` | int | No | `3600` | Ban duration (seconds), 0 = permanent |
-| `find_time` | int | No | `600` | Time window (seconds) for counting |
-| `max_retries` | int | No | `5` | Maximum failures before ban |
-
-### Time Parameter Relationship
-
-```
-find_time (600s)
-├── Count failures within this window
-│
-max_retries (5)
-├── Trigger ban when this count is reached
-│
-ban_time (3600s)
-├── Ban lasts for this duration
-└── Auto-unban when expired
-```
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `permanent_db_path` | string | `/var/lib/firewall/bans.db` | SQLite database path |
+| `permanent_ban_enabled` | bool | `true` | Enable permanent ban persistence |
 
 ## Complete Configuration Example
 
 ```yaml
 # /etc/firewall/default.yaml
 
-global:
-  log_level: info
-  log_file: /var/log/firewall.log
-  db_path: /var/lib/firewall/bans.db
+# ============================================================
+# Global defaults - applied to all jails unless overridden
+# ============================================================
+defaults:
+  max_retries: 5
+  findtime: 600         # 10 minutes
+  ban_time: 900         # 15 minutes
+  interval: 1           # Check interval (seconds)
+  metrics_port: 9119    # Prometheus metrics port
 
-whitelist:
-  - 127.0.0.1
-  - 192.168.1.0/24
-  - 10.0.0.1
-
+# ============================================================
+# Jail definitions - each service monitored independently
+# ============================================================
 jails:
-  - name: sshd
+  # SSH protection
+  sshd:
     enabled: true
-    log_path: /var/log/auth.log
-    filter:
-      regex: 'Failed password for (?:invalid user )?.+ from <HOST>'
-    action:
-      ban_time: 3600
-      find_time: 600
-      max_retries: 5
-    port: 22
-    protocol: tcp
+    log_files:
+      - /var/log/auth.log       # Debian/Ubuntu
+      - /var/log/secure         # RHEL/CentOS
+    max_retries: 3
+    findtime: 600               # 10 minutes
+    ban_time: 1800              # 30 minutes
+    regexes:
+      invalid_user:
+        pattern: "Invalid user [a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
+      failed_password:
+        pattern: "Failed password for (?:invalid user )?[a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
+      connection_closed:
+        pattern: "Connection closed by invalid user [a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
 
-  - name: nginx-auth
+  # Nginx auth protection
+  nginx-auth:
     enabled: true
-    log_path: /var/log/nginx/error.log
-    filter:
-      regex: 'no user/password.*client: <HOST>'
-    action:
-      ban_time: 1800
-      find_time: 300
-      max_retries: 10
-    port: 80
-    protocol: tcp
+    log_files:
+      - /var/log/nginx/error.log
+    max_retries: 10
+    findtime: 300               # 5 minutes
+    ban_time: 1800              # 30 minutes
+    regexes:
+      no_auth:
+        pattern: "no user/password was provided for basic authentication.*client: ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
 
-  - name: dovecot
-    enabled: false
-    log_path: /var/log/mail.log
-    filter:
-      regex: 'auth failed.*rip=<HOST>'
-    action:
-      ban_time: 7200
-      find_time: 600
-      max_retries: 3
-    port: 143
-    protocol: tcp
+# ============================================================
+# Permanent ban persistence (SQLite)
+# ============================================================
+permanent_db_path: "/var/lib/firewall/bans.db"
+permanent_ban_enabled: true
+```
+
+## Multi-Config Loading
+
+The daemon supports `-C <dir>` to load all YAML files in a directory:
+
+```bash
+sudo firewall-daemon -C /etc/firewall
+```
+
+Loading order:
+
+1. Files loaded in **alphabetical order**
+2. Jails are **accumulated** (later configs do not overwrite earlier ones)
+3. Duplicate jail names use **last-wins** strategy
+
+Example directory structure:
+
+```
+/etc/firewall/
+├── default.yaml      # Base configuration
+├── nginx.yaml        # Additional nginx protection
+├── mysql.yaml        # Additional mysql protection
+└── ...
 ```

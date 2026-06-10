@@ -227,24 +227,33 @@ void cleanup_timer_callback(struct timer_list *t)
 ```c
 static int __init firewall_proc_init(void)
 {
-    proc_create("firewall/status", 0444, NULL, &status_fops);
-    proc_create("firewall/banned_ips", 0444, NULL, &banned_fops);
-    proc_create("firewall/config", 0200, NULL, &config_fops);
+    struct firewall_info *fw = get_fw_info();
+    struct proc_dir_entry *entry;
+
+    fw->proc_dir = proc_mkdir("firewall", NULL);
+    if (!fw->proc_dir)
+        return -ENOMEM;
+
+    entry = proc_create("bans", 0600, fw->proc_dir, &bans_fops);
+    entry = proc_create("config", 0600, fw->proc_dir, &config_fops);
+    entry = proc_create("whitelist", 0600, fw->proc_dir, &whitelist_fops);
+    entry = proc_create("stats", 0400, fw->proc_dir, &stats_fops);
+
     return 0;
 }
 ```
 
-### 文件操作
+### 文件权限与操作
 
 | 文件 | 权限 | 操作 |
 |------|------|------|
-| `status` | 0444 | 只读，返回模块状态 |
-| `banned_ips` | 0444 | 只读，返回封禁列表 |
-| `whitelist` | 0444 | 只读，返回白名单 |
-| `stats` | 0444 | 只读，返回统计信息 |
-| `config` | 0200 | 只写，接收配置命令 |
-| `clear` | 0200 | 只写，清空封禁 |
-| `version` | 0444 | 只读，返回版本号 |
+| `bans` | 0600 | 读写，封禁/解封操作 |
+| `config` | 0600 | 只读，运行时配置信息 |
+| `whitelist` | 0600 | 读写，白名单管理 |
+| `stats` | 0400 | 只读，统计计数器 |
+
+> **注意**：早期文档中提到的 `status` / `clear` / `version` 文件不存在。
+> `config` 和 `stats` 为只读；所有写入操作通过 `bans` 和 `whitelist`。
 
 ## 模块生命周期
 

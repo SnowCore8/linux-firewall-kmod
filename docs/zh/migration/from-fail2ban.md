@@ -38,23 +38,23 @@
 
 | fail2ban (jail.local) | Linux Firewall (default.yaml) |
 |----------------------|-------------------------------|
-| `[sshd]` | `- name: sshd` |
+| `[sshd]` | `sshd:` (jail 键名) |
 | `enabled = true` | `enabled: true` |
-| `filter = sshd` | `filter:\n  regex: '...'` |
-| `logpath = /var/log/auth.log` | `log_path: /var/log/auth.log` |
-| `maxretry = 5` | `action:\n  max_retries: 5` |
-| `findtime = 600` | `action:\n  find_time: 600` |
-| `bantime = 3600` | `action:\n  ban_time: 3600` |
-| `port = ssh` | `port: 22` |
-| `protocol = tcp` | `protocol: tcp` |
+| `filter = sshd` | `regexes:\n  failed_password:\n    pattern: '...'` |
+| `logpath = /var/log/auth.log` | `log_files:\n  - /var/log/auth.log` |
+| `maxretry = 5` | `max_retries: 5` |
+| `findtime = 600` | `findtime: 600` |
+| `bantime = 3600` | `ban_time: 3600` |
+| `port = ssh` | 不需要（通过正则提取 IP） |
+| `protocol = tcp` | 不需要（通过正则提取 IP） |
 
 ### 过滤器配置对照
 
 | fail2ban (filter.d/sshd.conf) | Linux Firewall |
 |-------------------------------|----------------|
-| `failregex = ^%(__prefix_line)sFailed password...` | `regex: 'Failed password for .* from <HOST>'` |
-| `<HOST>` 自动匹配 | `<HOST>` 占位符（相同） |
-| `ignoreregex` | 在守护进程中处理 |
+| `failregex = ^%(__prefix_line)sFailed password...` | `pattern: 'Failed password for .* from ([0-9]{1,3}\\...)'` |
+| `<HOST>` 自动匹配 | 直接使用捕获组 `()` 提取 IP |
+| `ignoreregex` | 在守护进程中处理（不匹配的正则忽略） |
 
 ## 迁移步骤
 
@@ -110,39 +110,39 @@ maxretry = 5
 ```yaml
 # /etc/firewall/default.yaml
 
-global:
-  log_level: info
-  log_file: /var/log/firewall.log
-  db_path: /var/lib/firewall/bans.db
+defaults:
+  max_retries: 5
+  findtime: 600
+  ban_time: 900
+  interval: 1
+  metrics_port: 9119
 
 whitelist:
   - 127.0.0.1/8
   - 192.168.1.0/24
 
 jails:
-  - name: sshd
+  sshd:
     enabled: true
-    log_path: /var/log/auth.log
-    filter:
-      regex: 'Failed password for (?:invalid user )?.+ from <HOST>'
-    action:
-      ban_time: 3600
-      find_time: 600
-      max_retries: 3
-    port: 22
-    protocol: tcp
+    log_files:
+      - /var/log/auth.log
+    max_retries: 3
+    findtime: 600
+    ban_time: 3600
+    regexes:
+      failed_password:
+        pattern: "Failed password for (?:invalid user )?.+ from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
 
-  - name: nginx-http-auth
+  nginx-http-auth:
     enabled: true
-    log_path: /var/log/nginx/error.log
-    filter:
-      regex: 'no user/password was provided for basic authentication.*client: <HOST>'
-    action:
-      ban_time: 3600
-      find_time: 600
-      max_retries: 5
-    port: 80
-    protocol: tcp
+    log_files:
+      - /var/log/nginx/error.log
+    max_retries: 5
+    findtime: 600
+    ban_time: 3600
+    regexes:
+      no_auth:
+        pattern: "no user/password was provided for basic authentication.*client: ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
 ```
 
 ### 4. 转换过滤器
@@ -160,11 +160,13 @@ failregex = ^%(__prefix_line)sFailed password for (?:illegal user )?\S+ from <HO
 #### Linux Firewall 正则
 
 ```yaml
-filter:
-  regex: 'Failed password for (?:illegal user )?\S+ from <HOST>'
+regexes:
+  failed_password:
+    pattern: "Failed password for (?:illegal user )?\\S+ from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
 ```
 
 > **注意**：移除 fail2ban 特有的 `%(__prefix_line)s` 前缀，简化正则。
+> 当前版本不再使用 `<HOST>` 占位符，直接编写完整正则表达式。
 
 ### 5. 迁移白名单
 
@@ -197,8 +199,8 @@ sudo systemctl disable fail2ban
 
 ```bash
 sudo modprobe firewall
-sudo systemctl enable firewall
-sudo systemctl start firewall
+sudo systemctl enable firewall-daemon
+sudo systemctl start firewall-daemon
 ```
 
 ### 9. 验证
@@ -243,8 +245,8 @@ echo "unban 1.2.3.4" | sudo tee /proc/firewall/bans
 
 ```bash
 # 停止 Linux Firewall
-sudo systemctl stop firewall
-sudo systemctl disable firewall
+sudo systemctl stop firewall-daemon
+sudo systemctl disable firewall-daemon
 sudo rmmod firewall
 
 # 恢复 fail2ban
