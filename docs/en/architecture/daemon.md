@@ -263,31 +263,54 @@ http://<host>:9119/metrics
 
 ### Available Metrics
 
+> The 14 metrics below are actually exposed by
+> `src/daemon/http-exporter.c`. Earlier drafts listed
+> `firewall_ban_events_total` / `firewall_packets_*` /
+> `firewall_hash_table_*` / `firewall_jail_*` — none of which exist
+> in the source — and have been removed.
+
+#### Kernel-side
+
 | Metric | Type | Description |
 |--------|------|-------------|
-| `firewall_kernel_banned_ips_current` | gauge | Current number of banned IPs |
-| `firewall_ban_events_total` | counter | Total ban events since startup |
-| `firewall_unban_events_total` | counter | Total unban events since startup |
-| `firewall_packets_dropped_total` | counter | Total packets dropped |
-| `firewall_packets_passed_total` | counter | Total packets passed |
-| `firewall_jail_failures_total{jail="sshd"}` | counter | Failures per jail |
-| `firewall_whitelist_entries_total` | gauge | Whitelist entry count |
-| `firewall_hash_table_usage` | gauge | Hash table usage (0-1) |
+| `firewall_kernel_banned_ips_current` | gauge | Currently banned IPs |
+| `firewall_kernel_bans_total` | counter | Cumulative ban operations |
+| `firewall_kernel_unbans_total` | counter | Cumulative unban operations |
+| `firewall_kernel_whitelist_count` | gauge | Current whitelist entries |
+
+#### Daemon-side
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `firewall_daemon_uptime_seconds` | counter | Daemon uptime |
+| `firewall_daemon_config_reloads_total` | counter | SIGHUP-triggered config reloads |
+| `firewall_daemon_inotify_events_total` | counter | inotify events received |
+| `firewall_daemon_log_rotations_total` | counter | Log rotation events |
+| `firewall_daemon_lines_parsed_total` | counter | Log lines parsed |
+| `firewall_daemon_lines_skipped_total` | counter | Log lines skipped (unparseable) |
+| `firewall_daemon_regex_matches_total` | counter | PCRE2 regex matches |
+| `firewall_daemon_ips_extracted_total` | counter | IPs extracted from logs |
+| `firewall_daemon_ips_banned_total` | counter | IPs that triggered a kernel ban |
+| `firewall_daemon_failed_attempts_total` | counter | Ban failures (e.g. table full) |
 
 ### Example Output
 
 ```
-# HELP firewall_kernel_banned_ips_current Current number of banned IPs
+# HELP firewall_kernel_banned_ips_current Currently banned IPs
 # TYPE firewall_kernel_banned_ips_current gauge
 firewall_kernel_banned_ips_current 15
 
-# HELP firewall_ban_events_total Total ban events since startup
-# TYPE firewall_ban_events_total counter
-firewall_ban_events_total 125
+# HELP firewall_kernel_bans_total Total ban operations
+# TYPE firewall_kernel_bans_total counter
+firewall_kernel_bans_total 125
 
-# HELP firewall_packets_dropped_total Total packets dropped by the firewall
-# TYPE firewall_packets_dropped_total counter
-firewall_packets_dropped_total 45230
+# HELP firewall_kernel_unbans_total Total unban operations
+# TYPE firewall_kernel_unbans_total counter
+firewall_kernel_unbans_total 98
+
+# HELP firewall_daemon_lines_parsed_total Lines parsed by the daemon
+# TYPE firewall_daemon_lines_parsed_total counter
+firewall_daemon_lines_parsed_total 1250340
 ```
 
 ## Signal Handling

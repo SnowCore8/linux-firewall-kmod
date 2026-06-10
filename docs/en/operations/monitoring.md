@@ -18,50 +18,58 @@ scrape_configs:
 
 ### Available Metrics
 
-#### General Metrics
+> The 14 metrics below are actually exposed by
+> `src/daemon/http-exporter.c`. Earlier drafts listed
+> `firewall_ban_events_total` / `firewall_packets_dropped_total` /
+> `firewall_hash_table_*` / `firewall_jail_*` — none of which exist in
+> the source — and have been removed.
+
+#### Kernel-side (from `/proc/firewall/stats`)
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `firewall_kernel_banned_ips_current` | gauge | Current number of banned IPs |
-| `firewall_ban_events_total` | counter | Total ban events |
-| `firewall_unban_events_total` | counter | Total unban events |
-| `firewall_packets_dropped_total` | counter | Total dropped packets |
-| `firewall_packets_passed_total` | counter | Total passed packets |
+| `firewall_kernel_banned_ips_current` | gauge | Currently banned IPs |
+| `firewall_kernel_bans_total` | counter | Cumulative ban operations |
+| `firewall_kernel_unbans_total` | counter | Cumulative unban operations |
+| `firewall_kernel_whitelist_count` | gauge | Current whitelist entries |
 
-#### Capacity Metrics
+#### Daemon-side
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `firewall_whitelist_entries_total` | gauge | Current whitelist entries |
-| `firewall_hash_table_usage` | gauge | Hash table usage (0.0-1.0) |
-| `firewall_hash_table_capacity` | gauge | Hash table capacity (4096) |
-| `firewall_whitelist_capacity` | gauge | Whitelist capacity (64) |
-
-#### Jail Metrics
-
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `firewall_jail_failures_total` | counter | `jail` | Failure matches per jail |
-| `firewall_jail_bans_total` | counter | `jail` | Bans triggered per jail |
-| `firewall_jail_active` | gauge | `jail` | Whether jail is enabled (0/1) |
+| `firewall_daemon_uptime_seconds` | counter | Daemon uptime |
+| `firewall_daemon_config_reloads_total` | counter | SIGHUP-triggered config reloads |
+| `firewall_daemon_inotify_events_total` | counter | inotify events received |
+| `firewall_daemon_log_rotations_total` | counter | Log rotation events |
+| `firewall_daemon_lines_parsed_total` | counter | Log lines parsed |
+| `firewall_daemon_lines_skipped_total` | counter | Log lines skipped (unparseable) |
+| `firewall_daemon_regex_matches_total` | counter | PCRE2 regex matches |
+| `firewall_daemon_ips_extracted_total` | counter | IPs extracted from logs |
+| `firewall_daemon_ips_banned_total` | counter | IPs that triggered a kernel ban |
+| `firewall_daemon_failed_attempts_total` | counter | Ban failures (e.g. table full) |
 
 ### Query Examples
 
-```yaml
+```promql
 # Current banned IP count
 firewall_kernel_banned_ips_current
 
-# Ban rate over last 5 minutes
-rate(firewall_ban_events_total[5m])
+# 5-minute ban rate (kernel-side)
+rate(firewall_kernel_bans_total[5m])
 
-# Bans by jail
-sum by (jail) (firewall_jail_bans_total)
+# 5-minute IP extraction rate
+rate(firewall_daemon_ips_extracted_total[5m])
 
-# Hash table usage percentage
-firewall_hash_table_usage * 100
+# Pending: extracted but not yet banned (within find_time window)
+rate(firewall_daemon_ips_extracted_total[5m])
+  - rate(firewall_daemon_ips_banned_total[5m])
 
-# Packet drop rate
-rate(firewall_packets_dropped_total[5m])
+# Daemon uptime in hours
+firewall_daemon_uptime_seconds / 3600
+
+# Parsing-vs-match ratio (health indicator)
+rate(firewall_daemon_regex_matches_total[5m])
+  / rate(firewall_daemon_lines_parsed_total[5m])
 ```
 
 ## Grafana Dashboard
@@ -74,7 +82,7 @@ rate(firewall_packets_dropped_total[5m])
 
 ### Recommended Panels
 
-#### Ban Overview
+#### Current Banned IPs
 
 ```
 Title: Current Banned IPs
@@ -83,30 +91,42 @@ Query: firewall_kernel_banned_ips_current
 Thresholds: 100 (warning), 1000 (critical)
 ```
 
-#### Ban Trend
+#### Ban Rate Trend
 
 ```
-Title: Ban Events Rate
+Title: Ban Rate (kernel)
 Panel: Time Series
-Query: rate(firewall_ban_events_total[5m])
+Query: rate(firewall_kernel_bans_total[5m])
 ```
 
-#### Jail Distribution
+#### Unban Rate Trend
 
 ```
-Title: Bans by Jail
-Panel: Pie Chart
-Query: sum by (jail) (firewall_jail_bans_total)
-```
-
-#### Packet Statistics
-
-```
-Title: Packets Processed
+Title: Unban Rate (kernel)
 Panel: Time Series
-Query: 
-  rate(firewall_packets_dropped_total[5m])  # Dropped
-  rate(firewall_packets_passed_total[5m])   # Passed
+Query: rate(firewall_kernel_unbans_total[5m])
+```
+
+#### Daemon Health
+
+```
+Title: Daemon Health
+Panel: Time Series
+Queries:
+  - rate(firewall_daemon_lines_parsed_total[5m])    # parsed
+  - rate(firewall_daemon_regex_matches_total[5m])   # matched
+  - rate(firewall_daemon_lines_skipped_total[5m])   # skipped
+  - rate(firewall_daemon_failed_attempts_total[5m])  # failed
+```
+
+#### Capacity Usage
+
+```
+Title: Whitelist Capacity
+Panel: Gauge
+Query: firewall_kernel_whitelist_count
+Thresholds: 50 (warning), 60 (critical)
+Max: 64
 ```
 
 ## Log Monitoring
@@ -175,39 +195,42 @@ groups:
   - name: firewall
     rules:
       - alert: HighBanRate
-        expr: rate(firewall_ban_events_total[5m]) > 10
+        expr: rate(firewall_kernel_bans_total[5m]) > 10
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "High ban rate detected"
+          summary: "High kernel ban rate detected"
           description: "Ban rate is {{ $value }} per second"
 
-      - alert: HashTableNearlyFull
-        expr: firewall_hash_table_usage > 0.8
+      - alert: WhitelistNearlyFull
+        expr: firewall_kernel_whitelist_count > 50
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "Hash table nearly full"
-          description: "Usage is {{ $value | humanizePercentage }}"
+          summary: "Whitelist nearing 64-entry cap"
+          description: "{{ $value }} entries used (max 64)"
 
-      - alert: FirewallDown
-        expr: firewall_kernel_banned_ips_current == -1
+      - alert: DaemonDown
+        # When the daemon crashes or is not running, the uptime
+        # counter stops advancing.
+        expr: rate(firewall_daemon_uptime_seconds[5m]) == 0
         for: 1m
         labels:
           severity: critical
         annotations:
-          summary: "Firewall module is not responding"
+          summary: "firewall-daemon not running"
+          description: "Daemon uptime counter not advancing"
 
-      - alert: HighDropRate
-        expr: rate(firewall_packets_dropped_total[5m]) > 1000
+      - alert: DaemonFailingExtraction
+        expr: rate(firewall_daemon_failed_attempts_total[5m]) > 100
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "High packet drop rate"
-          description: "Drop rate is {{ $value }} per second"
+          summary: "High daemon failure rate"
+          description: "Failure rate is {{ $value }} per second"
 ```
 
 ## Health Checks

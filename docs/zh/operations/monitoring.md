@@ -18,50 +18,56 @@ scrape_configs:
 
 ### 可用指标
 
-#### 通用指标
+> 以下 14 个指标由 `src/daemon/http-exporter.c` 实际暴露。
+> 早期文档中 `firewall_ban_events_total` / `firewall_packets_dropped_total` /
+> `firewall_hash_table_*` / `firewall_jail_*` 等条目均不存在，已删除。
+
+#### 内核侧（来自 `/proc/firewall/stats`）
 
 | 指标 | 类型 | 说明 |
 |------|------|------|
-| `firewall_kernel_banned_ips_current` | gauge | 当前封禁 IP 数量 |
-| `firewall_ban_events_total` | counter | 累计封禁事件数 |
-| `firewall_unban_events_total` | counter | 累计解封事件数 |
-| `firewall_packets_dropped_total` | counter | 累计丢弃数据包数 |
-| `firewall_packets_passed_total` | counter | 累计放行数据包数 |
+| `firewall_kernel_banned_ips_current` | gauge | 当前封禁 IP 数 |
+| `firewall_kernel_bans_total` | counter | 累计封禁操作数 |
+| `firewall_kernel_unbans_total` | counter | 累计解封操作数 |
+| `firewall_kernel_whitelist_count` | gauge | 当前白名单条目数 |
 
-#### 容量指标
+#### 守护进程侧
 
 | 指标 | 类型 | 说明 |
 |------|------|------|
-| `firewall_whitelist_entries_total` | gauge | 当前白名单条目数 |
-| `firewall_hash_table_usage` | gauge | 哈希表使用率 (0.0-1.0) |
-| `firewall_hash_table_capacity` | gauge | 哈希表总容量 (4096) |
-| `firewall_whitelist_capacity` | gauge | 白名单总容量 (64) |
-
-#### Jail 指标
-
-| 指标 | 类型 | 标签 | 说明 |
-|------|------|------|------|
-| `firewall_jail_failures_total` | counter | `jail` | 各 jail 失败匹配次数 |
-| `firewall_jail_bans_total` | counter | `jail` | 各 jail 触发的封禁数 |
-| `firewall_jail_active` | gauge | `jail` | jail 是否启用 (0/1) |
+| `firewall_daemon_uptime_seconds` | counter | 守护进程运行时长 |
+| `firewall_daemon_config_reloads_total` | counter | SIGHUP 触发的配置重载次数 |
+| `firewall_daemon_inotify_events_total` | counter | inotify 事件总数 |
+| `firewall_daemon_log_rotations_total` | counter | 日志轮转次数 |
+| `firewall_daemon_lines_parsed_total` | counter | 已解析日志行数 |
+| `firewall_daemon_lines_skipped_total` | counter | 跳过的日志行数 |
+| `firewall_daemon_regex_matches_total` | counter | PCRE2 匹配命中数 |
+| `firewall_daemon_ips_extracted_total` | counter | 提取出的 IP 数 |
+| `firewall_daemon_ips_banned_total` | counter | 实际触发内核封禁的 IP 数 |
+| `firewall_daemon_failed_attempts_total` | counter | 封禁失败次数（与 max_retries 相关） |
 
 ### 查询示例
 
-```yaml
+```promql
 # 当前封禁 IP 数
 firewall_kernel_banned_ips_current
 
-# 最近 5 分钟封禁速率
-rate(firewall_ban_events_total[5m])
+# 最近 5 分钟封禁速率（内核态）
+rate(firewall_kernel_bans_total[5m])
 
-# 各 Jail 封禁数
-sum by (jail) (firewall_jail_bans_total)
+# 最近 5 分钟 IP 提取速率
+rate(firewall_daemon_ips_extracted_total[5m])
 
-# 哈希表使用百分比
-firewall_hash_table_usage * 100
+# 匹配率（提取但未触发封禁 = 仍在窗口内累积）
+rate(firewall_daemon_ips_extracted_total[5m])
+  - rate(firewall_daemon_ips_banned_total[5m])
 
-# 数据包丢弃率
-rate(firewall_packets_dropped_total[5m])
+# 守护进程 uptime（小时）
+firewall_daemon_uptime_seconds / 3600
+
+# 解析与匹配比（健康度）
+rate(firewall_daemon_regex_matches_total[5m])
+  / rate(firewall_daemon_lines_parsed_total[5m])
 ```
 
 ## Grafana 仪表板
@@ -74,7 +80,7 @@ rate(firewall_packets_dropped_total[5m])
 
 ### 推荐面板
 
-#### 封禁概览
+#### 当前封禁 IP
 
 ```
 Title: Current Banned IPs
@@ -83,30 +89,42 @@ Query: firewall_kernel_banned_ips_current
 Thresholds: 100 (warning), 1000 (critical)
 ```
 
-#### 封禁趋势
+#### 封禁速率趋势
 
 ```
-Title: Ban Events Rate
+Title: Ban Rate (kernel)
 Panel: Time Series
-Query: rate(firewall_ban_events_total[5m])
+Query: rate(firewall_kernel_bans_total[5m])
 ```
 
-#### Jail 分布
+#### 解封速率趋势
 
 ```
-Title: Bans by Jail
-Panel: Pie Chart
-Query: sum by (jail) (firewall_jail_bans_total)
-```
-
-#### 数据包统计
-
-```
-Title: Packets Processed
+Title: Unban Rate (kernel)
 Panel: Time Series
-Query: 
-  rate(firewall_packets_dropped_total[5m])  # 丢弃
-  rate(firewall_packets_passed_total[5m])   # 放行
+Query: rate(firewall_kernel_unbans_total[5m])
+```
+
+#### 守护进程健康度
+
+```
+Title: Daemon Health
+Panel: Time Series
+Queries:
+  - rate(firewall_daemon_lines_parsed_total[5m])    # 解析
+  - rate(firewall_daemon_regex_matches_total[5m])   # 匹配
+  - rate(firewall_daemon_lines_skipped_total[5m])   # 跳过
+  - rate(firewall_daemon_failed_attempts_total[5m])  # 失败
+```
+
+#### 容量使用
+
+```
+Title: Whitelist Capacity
+Panel: Gauge
+Query: firewall_kernel_whitelist_count
+Thresholds: 50 (warning), 60 (critical)
+Max: 64
 ```
 
 ## 日志监控
@@ -175,39 +193,41 @@ groups:
   - name: firewall
     rules:
       - alert: HighBanRate
-        expr: rate(firewall_ban_events_total[5m]) > 10
+        expr: rate(firewall_kernel_bans_total[5m]) > 10
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "High ban rate detected"
+          summary: "High kernel ban rate detected"
           description: "Ban rate is {{ $value }} per second"
 
-      - alert: HashTableNearlyFull
-        expr: firewall_hash_table_usage > 0.8
+      - alert: WhitelistNearlyFull
+        expr: firewall_kernel_whitelist_count > 50
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "Hash table nearly full"
-          description: "Usage is {{ $value | humanizePercentage }}"
+          summary: "Whitelist nearing 64-entry cap"
+          description: "{{ $value }} entries used (max 64)"
 
-      - alert: FirewallDown
-        expr: firewall_kernel_banned_ips_current == -1
+      - alert: DaemonDown
+        # 守护进程崩溃或未运行时，uptime 计数器停止递增
+        expr: rate(firewall_daemon_uptime_seconds[5m]) == 0
         for: 1m
         labels:
           severity: critical
         annotations:
-          summary: "Firewall module is not responding"
+          summary: "firewall-daemon not running"
+          description: "Daemon uptime counter not advancing"
 
-      - alert: HighDropRate
-        expr: rate(firewall_packets_dropped_total[5m]) > 1000
+      - alert: DaemonFailingExtraction
+        expr: rate(firewall_daemon_failed_attempts_total[5m]) > 100
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "High packet drop rate"
-          description: "Drop rate is {{ $value }} per second"
+          summary: "High daemon failure rate"
+          description: "Failure rate is {{ $value }} per second"
 ```
 
 ## 健康检查

@@ -120,11 +120,11 @@ curl http://localhost:9119/metrics
 # TYPE firewall_kernel_banned_ips_current gauge
 firewall_kernel_banned_ips_current 5
 
-# TYPE firewall_ban_events_total counter
-firewall_ban_events_total 12
+# TYPE firewall_kernel_bans_total counter
+firewall_kernel_bans_total 12
 
-# TYPE firewall_unban_events_total counter
-firewall_unban_events_total 7
+# TYPE firewall_kernel_unbans_total counter
+firewall_kernel_unbans_total 7
 ```
 
 ### 查看日志

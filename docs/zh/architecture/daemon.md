@@ -262,31 +262,52 @@ http://<host>:9119/metrics
 
 ### 指标列表
 
+> 实际由 `src/daemon/http-exporter.c` 暴露的 14 个指标。
+> 早期文档中 `firewall_ban_events_total` / `firewall_packets_*` /
+> `firewall_hash_table_*` / `firewall_jail_*` 等条目均不存在。
+
+#### 内核侧
+
 | 指标 | 类型 | 说明 |
 |------|------|------|
 | `firewall_kernel_banned_ips_current` | gauge | 当前封禁 IP 数 |
-| `firewall_ban_events_total` | counter | 累计封禁次数 |
-| `firewall_unban_events_total` | counter | 累计解封次数 |
-| `firewall_packets_dropped_total` | counter | 累计丢弃数据包数 |
-| `firewall_packets_passed_total` | counter | 累计放行数据包数 |
-| `firewall_jail_failures_total{jail="sshd"}` | counter | 各 jail 失败次数 |
-| `firewall_whitelist_entries_total` | gauge | 白名单条目数 |
-| `firewall_hash_table_usage` | gauge | 哈希表使用率 (0-1) |
+| `firewall_kernel_bans_total` | counter | 累计封禁操作数 |
+| `firewall_kernel_unbans_total` | counter | 累计解封操作数 |
+| `firewall_kernel_whitelist_count` | gauge | 当前白名单条目数 |
+
+#### 守护进程侧
+
+| 指标 | 类型 | 说明 |
+|------|------|------|
+| `firewall_daemon_uptime_seconds` | counter | 守护进程运行时长 |
+| `firewall_daemon_config_reloads_total` | counter | SIGHUP 触发的配置重载次数 |
+| `firewall_daemon_inotify_events_total` | counter | inotify 事件总数 |
+| `firewall_daemon_log_rotations_total` | counter | 日志轮转次数 |
+| `firewall_daemon_lines_parsed_total` | counter | 已解析日志行数 |
+| `firewall_daemon_lines_skipped_total` | counter | 跳过的日志行数 |
+| `firewall_daemon_regex_matches_total` | counter | PCRE2 匹配命中数 |
+| `firewall_daemon_ips_extracted_total` | counter | 提取出的 IP 数 |
+| `firewall_daemon_ips_banned_total` | counter | 实际触发内核封禁的 IP 数 |
+| `firewall_daemon_failed_attempts_total` | counter | 封禁失败次数 |
 
 ### 示例输出
 
 ```
-# HELP firewall_kernel_banned_ips_current Current number of banned IPs
+# HELP firewall_kernel_banned_ips_current Currently banned IPs
 # TYPE firewall_kernel_banned_ips_current gauge
 firewall_kernel_banned_ips_current 15
 
-# HELP firewall_ban_events_total Total ban events since startup
-# TYPE firewall_ban_events_total counter
-firewall_ban_events_total 125
+# HELP firewall_kernel_bans_total Total ban operations
+# TYPE firewall_kernel_bans_total counter
+firewall_kernel_bans_total 125
 
-# HELP firewall_packets_dropped_total Total packets dropped by the firewall
-# TYPE firewall_packets_dropped_total counter
-firewall_packets_dropped_total 45230
+# HELP firewall_kernel_unbans_total Total unban operations
+# TYPE firewall_kernel_unbans_total counter
+firewall_kernel_unbans_total 98
+
+# HELP firewall_daemon_lines_parsed_total Lines parsed by the daemon
+# TYPE firewall_daemon_lines_parsed_total counter
+firewall_daemon_lines_parsed_total 1250340
 ```
 
 ## 信号处理
