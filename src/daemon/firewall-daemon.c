@@ -138,7 +138,7 @@ void daemonize_process(void) {
 
 /* 清理资源 */
 void cleanup(void) {
-  daemon_log_info("Cleaning up");
+  LOG_INFO("Cleaning up");
 
   /* 优雅地停止 HTTP 导出器线程 */
   stop_http_exporter();
@@ -150,14 +150,14 @@ void cleanup(void) {
       if (file_states[i].wd >= 0) {
         /* 仅在 inotify_fd 仍然有效时尝试移除监视 */
         if (inotify_rm_watch(inotify_fd, file_states[i].wd) < 0) {
-          daemon_log_warn("Failed to remove watch for %s: %s",
-                          file_states[i].path, strerror(errno));
+          LOG_WARN("Failed to remove watch for %s: %s", file_states[i].path,
+                   strerror(errno));
         }
         file_states[i].wd = -1; /* 标记为已移除 */
       }
     }
     if (close(inotify_fd) < 0) {
-      daemon_log_warn("Failed to close inotify fd: %s", strerror(errno));
+      LOG_WARN("Failed to close inotify fd: %s", strerror(errno));
     }
     inotify_fd = -1;
   }
@@ -197,7 +197,7 @@ void cleanup(void) {
       jail->failed_hash = NULL;
     }
 
-    daemon_log_info("Cleaned up jail: %s", jail->name);
+    LOG_INFO("Cleaned up jail: %s", jail->name);
   }
   cfg.jail_count = 0;
 
@@ -221,7 +221,7 @@ void cleanup(void) {
   if (sqlite_db) {
     sqlite_close(sqlite_db);
     sqlite_db = NULL;
-    daemon_log_info("SQLite database closed");
+    LOG_INFO("SQLite database closed");
   }
 
   /* R9-9: 关闭缓存的 procfs bans fd */
@@ -245,7 +245,7 @@ int main(int argc, char *argv[]) {
   /* 解析配置 */
   ret = parse_config(argc, argv);
   if (ret < 0) {
-    fprintf(stderr, "Error: invalid configuration\n");
+    bootstrap_emit_err("invalid configuration");
     return EXIT_FAILURE;
   }
   if (ret > 0) {
@@ -258,19 +258,17 @@ int main(int argc, char *argv[]) {
 
   /* 在继续之前检查 procfs 接口是否存在 */
   if (access(PROCFS_DIR, F_OK) != 0) {
-    daemon_log_err("Procfs directory %s does not exist. Is the kernel module loaded?", PROCFS_DIR);
-    fprintf(stderr,
-            "Error: Procfs directory %s does not exist. Is the kernel module "
-            "loaded?\n",
-            PROCFS_DIR);
+    LOG_ERR("Procfs directory %s does not exist. Is the kernel module loaded?", PROCFS_DIR);
+    bootstrap_emit_err(
+      "Procfs directory %s does not exist. Is the kernel module loaded?", PROCFS_DIR);
     /* H3 修复：在返回前调用 cleanup() 释放已分配的资源 */
     cleanup();
     return EXIT_FAILURE;
   }
 
   if (access(BANS_PATH, F_OK) != 0) {
-    daemon_log_err("Bans procfs interface %s does not exist", BANS_PATH);
-    fprintf(stderr, "Error: Bans procfs interface %s does not exist\n", BANS_PATH);
+    LOG_ERR("Bans procfs interface %s does not exist", BANS_PATH);
+    bootstrap_emit_err("Bans procfs interface %s does not exist", BANS_PATH);
     /* H3 修复：在返回前调用 cleanup() 释放已分配的资源 */
     cleanup();
     return EXIT_FAILURE;
@@ -278,11 +276,11 @@ int main(int argc, char *argv[]) {
 
   /* 初始化日志模式 - 即使部分失败也允许守护进程启动 */
   if (init_log_patterns() < 0) {
-    daemon_log_warn("Some jail regex patterns failed to compile, continuing with "
-                    "remaining jails");
+    LOG_WARN("Some jail regex patterns failed to compile, continuing with "
+             "remaining jails");
     /* 不退出，允许其他 jail 继续工作 */
   } else {
-    daemon_log_info("All jail regex patterns compiled successfully");
+    LOG_INFO("All jail regex patterns compiled successfully");
   }
 
   /* 初始化统计信息 */
@@ -292,18 +290,17 @@ int main(int argc, char *argv[]) {
   if (cfg.permanent_ban_enabled && cfg.permanent_db_path) {
     sqlite_db = sqlite_init(cfg.permanent_db_path);
     if (!sqlite_db) {
-      daemon_log_warn("Failed to initialize SQLite database for permanent bans at %s",
-                      cfg.permanent_db_path);
-      daemon_log_warn("Permanent bans will not be available");
+      LOG_WARN("Failed to initialize SQLite database for permanent bans at %s",
+               cfg.permanent_db_path);
+      LOG_WARN("Permanent bans will not be available");
     } else {
-      daemon_log_info("SQLite database initialized for permanent bans at %s",
-                      cfg.permanent_db_path);
+      LOG_INFO("SQLite database initialized for permanent bans at %s", cfg.permanent_db_path);
 
       /* 从 SQLite 加载永久封禁并应用到内核模块 */
       struct permanent_ban_entry *entries = NULL;
       int count = 0;
       if (sqlite_load_all_permanent_bans(sqlite_db, &entries, &count) == 0 && count > 0) {
-        daemon_log_info("Loading %d permanent bans from SQLite database", count);
+        LOG_INFO("Loading %d permanent bans from SQLite database", count);
         for (int i = 0; i < count; i++) {
           char ip_with_newline[64]; /* 足够容纳 IPv6 地址 + "permanent " 前缀 +
                                        换行 */
@@ -311,18 +308,18 @@ int main(int argc, char *argv[]) {
                    entries[i].ip);
 
           if (secure_procfs_write(BANS_PATH, ip_with_newline, strlen(ip_with_newline)) < 0) {
-            daemon_log_warn(
+            LOG_WARN(
               "Failed to restore permanent ban for %s to kernel", entries[i].ip);
           } else {
-            daemon_log_info("Restored permanent ban for %s (reason: %s)",
-                            entries[i].ip, entries[i].reason);
+            LOG_INFO("Restored permanent ban for %s (reason: %s)",
+                     entries[i].ip, entries[i].reason);
           }
         }
         free(entries);
       } else if (count == 0) {
-        daemon_log_info("No permanent bans found in SQLite database");
+        LOG_INFO("No permanent bans found in SQLite database");
       } else {
-        daemon_log_warn("Failed to load permanent bans from SQLite database");
+        LOG_WARN("Failed to load permanent bans from SQLite database");
       }
     }
   }
@@ -330,19 +327,18 @@ int main(int argc, char *argv[]) {
   /* 设置信号处理函数 */
   setup_signals();
 
-  daemon_log_info("Daemon starting up");
-  daemon_log_info("Loaded %d jails", cfg.jail_count);
+  LOG_INFO("Daemon starting up");
+  LOG_INFO("Loaded %d jails", cfg.jail_count);
   for (int i = 0; i < cfg.jail_count; i++) {
     if (cfg.jails[i].enabled) {
-      daemon_log_info("  Jail[%d]: %s (enabled=%d, log_count=%d, "
-                      "max_retries=%u, findtime=%u, ban_time=%u)",
-                      i, cfg.jails[i].name, cfg.jails[i].enabled,
-                      cfg.jails[i].log_count, cfg.jails[i].max_retries,
-                      cfg.jails[i].findtime, cfg.jails[i].ban_time);
+      LOG_INFO("  Jail[%d]: %s (enabled=%d, log_count=%d, "
+               "max_retries=%u, findtime=%u, ban_time=%u)",
+               i, cfg.jails[i].name, cfg.jails[i].enabled, cfg.jails[i].log_count,
+               cfg.jails[i].max_retries, cfg.jails[i].findtime, cfg.jails[i].ban_time);
     }
   }
-  daemon_log_info("Global defaults: max_retries=%u, findtime=%u, ban_time=%u",
-                  cfg.default_max_retries, cfg.default_findtime, cfg.default_ban_time);
+  LOG_INFO("Global defaults: max_retries=%u, findtime=%u, ban_time=%u",
+           cfg.default_max_retries, cfg.default_findtime, cfg.default_ban_time);
 
   /* 如果请求则守护进程化 */
   if (cfg.daemon) {
@@ -351,7 +347,7 @@ int main(int argc, char *argv[]) {
 
   /* 设置 inotify */
   if (setup_inotify() < 0) {
-    daemon_log_err("Failed to setup inotify: %s", strerror(errno));
+    LOG_ERR("Failed to setup inotify: %s", strerror(errno));
     cleanup();
     return EXIT_FAILURE;
   }
@@ -363,20 +359,20 @@ int main(int argc, char *argv[]) {
   if (cfg.metrics_port > 0) {
     if (pthread_create(&exporter_thread, NULL, start_http_exporter,
                        (void *)(long)cfg.metrics_port) != 0) {
-      daemon_log_warn("Failed to start Prometheus exporter thread");
+      LOG_WARN("Failed to start Prometheus exporter thread");
     } else {
-      daemon_log_info("Prometheus exporter started on port %d", cfg.metrics_port);
+      LOG_INFO("Prometheus exporter started on port %d", cfg.metrics_port);
       /* 不 detach 线程，由 stop_http_exporter 负责 join 清理 */
     }
   } else {
-    daemon_log_info("Prometheus exporter disabled (metrics_port=0)");
+    LOG_INFO("Prometheus exporter disabled (metrics_port=0)");
   }
 
   monitor_loop();
 
   /* 清理 */
   cleanup();
-  daemon_log_info("Daemon stopped");
+  LOG_INFO("Daemon stopped");
 
   return EXIT_SUCCESS;
 }

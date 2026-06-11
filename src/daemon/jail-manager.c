@@ -84,9 +84,9 @@ static void apply_service_defaults(struct jail *j, const char *name,
   if (!j->_ban_time_set)
     j->ban_time = ban_time;
 
-  daemon_log_info("Jail '%s': applying %s smart defaults (retries=%u, "
-                  "findtime=%u, ban=%u)",
-                  name, service_type, j->max_retries, j->findtime, j->ban_time);
+  LOG_INFO("Jail '%s': applying %s smart defaults (retries=%u, "
+           "findtime=%u, ban=%u)",
+           name, service_type, j->max_retries, j->findtime, j->ban_time);
 }
 
 /* 根据服务名称智能推断推荐参数（仅当用户未显式配置时应用） */
@@ -124,8 +124,8 @@ static void apply_smart_defaults_single(struct jail *j, const char *name,
       j->findtime = target_cfg->default_findtime;
     if (!j->_ban_time_set)
       j->ban_time = target_cfg->default_ban_time;
-    daemon_log_info("Jail '%s': using global defaults (retries=%u, findtime=%u, ban=%u)",
-                    name, j->max_retries, j->findtime, j->ban_time);
+    LOG_INFO("Jail '%s': using global defaults (retries=%u, findtime=%u, ban=%u)",
+             name, j->max_retries, j->findtime, j->ban_time);
   }
 }
 
@@ -210,7 +210,7 @@ struct jail *find_or_create_jail(const char *name) {
   /* 创建新 jail */
   if (cfg.jail_count >= MAX_JAILS) {
     pthread_rwlock_unlock(&config_rwlock);
-    daemon_log_warn("Max jails reached (%d), cannot create jail '%s'", MAX_JAILS, name);
+    LOG_WARN("Max jails reached (%d), cannot create jail '%s'", MAX_JAILS, name);
     return NULL;
   }
 
@@ -220,7 +220,7 @@ struct jail *find_or_create_jail(const char *name) {
   j->name[sizeof(j->name) - 1] = '\0';
 
   pthread_rwlock_unlock(&config_rwlock);
-  daemon_log_info("Created new jail: %s", name);
+  LOG_INFO("Created new jail: %s", name);
   return j;
 }
 
@@ -256,7 +256,7 @@ void destroy_jail(struct jail *j) {
     j->failed_hash = NULL;
   }
 
-  daemon_log_info("Destroyed jail: %s", j->name);
+  LOG_INFO("Destroyed jail: %s", j->name);
 }
 
 /**
@@ -276,9 +276,9 @@ static int validate_regex_safety(struct jail *j, const char *pattern) {
 
   /* 拒绝过长的模式 */
   if (pattern_len > 1024) {
-    daemon_log_err("Rejected unsafe regex for jail '%s': pattern too long "
-                   "(%zu bytes, max 1024)",
-                   j->name, pattern_len);
+    LOG_ERR("Rejected unsafe regex for jail '%s': pattern too long "
+            "(%zu bytes, max 1024)",
+            j->name, pattern_len);
     return -1;
   }
 
@@ -287,10 +287,10 @@ static int validate_regex_safety(struct jail *j, const char *pattern) {
     if (p[0] == ')') {
       char next = p[1];
       if (next == '+' || next == '*') {
-        daemon_log_err("Rejected unsafe regex for jail '%s': nested "
-                       "quantifiers detected "
-                       "(pattern like (a+)+ or (a*)* at offset %ld)",
-                       j->name, (long)(p - pattern));
+        LOG_ERR("Rejected unsafe regex for jail '%s': nested "
+                "quantifiers detected "
+                "(pattern like (a+)+ or (a*)* at offset %ld)",
+                j->name, (long)(p - pattern));
         return -1;
       }
     }
@@ -298,10 +298,10 @@ static int validate_regex_safety(struct jail *j, const char *pattern) {
 
   /* 拒绝占有量词: ++ 或 *+ */
   if (strstr(pattern, "++") || strstr(pattern, "*+")) {
-    daemon_log_err("Rejected unsafe regex for jail '%s': possessive "
-                   "quantifiers detected "
-                   "(patterns like ++  *+ are not allowed)",
-                   j->name);
+    LOG_ERR("Rejected unsafe regex for jail '%s': possessive "
+            "quantifiers detected "
+            "(patterns like ++  *+ are not allowed)",
+            j->name);
     return -1;
   }
 
@@ -310,9 +310,9 @@ static int validate_regex_safety(struct jail *j, const char *pattern) {
     if (p[0] == '(' && p[1] == '?') {
       char next = p[2];
       if (next == '+' || next == '*' || next == '{' || next == '?') {
-        daemon_log_err("Rejected unsafe regex for jail '%s': invalid quantifier after "
-                       "'(?' at offset %ld",
-                       j->name, (long)(p - pattern));
+        LOG_ERR("Rejected unsafe regex for jail '%s': invalid quantifier after "
+                "'(?' at offset %ld",
+                j->name, (long)(p - pattern));
         return -1;
       }
     }
@@ -324,9 +324,9 @@ static int validate_regex_safety(struct jail *j, const char *pattern) {
       pipe_count++;
   }
   if (pipe_count > 50) {
-    daemon_log_err("Rejected unsafe regex for jail '%s': too many "
-                   "alternations (%d, max 50)",
-                   j->name, pipe_count);
+    LOG_ERR("Rejected unsafe regex for jail '%s': too many "
+            "alternations (%d, max 50)",
+            j->name, pipe_count);
     return -1;
   }
 
@@ -343,10 +343,10 @@ static int validate_regex_safety(struct jail *j, const char *pattern) {
           /* 检查右括号后是否紧跟量词 */
           char next = p[1];
           if (next == '+' || next == '*' || next == '{' || next == '?') {
-            daemon_log_err("Rejected unsafe regex for jail '%s': alternation inside "
-                           "quantified group detected (pattern like (a|aa)+ at offset "
-                           "%ld)",
-                           j->name, (long)(p - pattern));
+            LOG_ERR("Rejected unsafe regex for jail '%s': alternation inside "
+                    "quantified group detected (pattern like (a|aa)+ at offset "
+                    "%ld)",
+                    j->name, (long)(p - pattern));
             return -1;
           }
         }
@@ -383,15 +383,15 @@ static int compile_pcre2_pattern(struct jail *j, const char *pattern,
   if (!re) {
     PCRE2_UCHAR buffer[256];
     pcre2_get_error_message(error_number, buffer, sizeof(buffer));
-    daemon_log_err("Failed to compile regex for jail '%s' at offset %d: %s",
-                   j->name, (int)error_offset, buffer);
+    LOG_ERR("Failed to compile regex for jail '%s' at offset %d: %s", j->name,
+            (int)error_offset, buffer);
     return -1;
   }
 
   /* 创建匹配数据缓冲区 */
   md = pcre2_match_data_create_from_pattern(re, NULL);
   if (!md) {
-    daemon_log_err("Failed to create match data for jail '%s'", j->name);
+    LOG_ERR("Failed to create match data for jail '%s'", j->name);
     pcre2_code_free(re);
     return -1;
   }
@@ -441,12 +441,12 @@ int compile_jail_regex(struct jail *j) {
     j->regexes[i].compiled = re;
     j->regexes[i].match_data = md;
     compiled_count++;
-    daemon_log_info("Compiled regex '%s' for jail '%s': %s", j->regexes[i].name,
-                    j->name, j->regexes[i].pattern);
+    LOG_INFO("Compiled regex '%s' for jail '%s': %s", j->regexes[i].name,
+             j->name, j->regexes[i].pattern);
   }
 
   j->regex_compiled = (compiled_count > 0) ? 1 : 0;
-  daemon_log_info("Compiled %d regex pattern(s) for jail '%s'", compiled_count, j->name);
+  LOG_INFO("Compiled %d regex pattern(s) for jail '%s'", compiled_count, j->name);
   return (compiled_count > 0) ? 0 : -1;
 }
 
@@ -457,12 +457,12 @@ int get_global_file_state_index(int jail_idx, int file_idx) {
 
   if (jail_idx < 0 || jail_idx >= cfg.jail_count) {
     pthread_rwlock_unlock(&config_rwlock);
-    daemon_log_err("Invalid jail index: %d", jail_idx);
+    LOG_ERR("Invalid jail index: %d", jail_idx);
     return -1;
   }
   if (file_idx < 0 || file_idx >= cfg.jails[jail_idx].log_count) {
     pthread_rwlock_unlock(&config_rwlock);
-    daemon_log_err("Invalid file index for jail %d: %d", jail_idx, file_idx);
+    LOG_ERR("Invalid file index for jail %d: %d", jail_idx, file_idx);
     return -1;
   }
 
@@ -475,7 +475,7 @@ int get_global_file_state_index(int jail_idx, int file_idx) {
   pthread_rwlock_unlock(&config_rwlock);
 
   if (global_idx >= MAX_JAILS * MAX_LOG_FILES) {
-    daemon_log_err("Global file index out of bounds: %d", global_idx);
+    LOG_ERR("Global file index out of bounds: %d", global_idx);
     return -1;
   }
 
@@ -492,7 +492,7 @@ void cleanup_all_jails(void) {
   }
   cfg.jail_count = 0;
   pthread_rwlock_unlock(&config_rwlock);
-  daemon_log_info("All jails resources cleaned up");
+  LOG_INFO("All jails resources cleaned up");
 }
 
 /* 在特定配置中查找或创建 jail（用于双缓冲重新加载） */
@@ -504,7 +504,7 @@ struct jail *find_or_create_jail_in_cfg(const char *name, struct config *target_
   }
 
   if (target_cfg->jail_count >= MAX_JAILS) {
-    daemon_log_warn("Max jails reached (%d), cannot create jail '%s'", MAX_JAILS, name);
+    LOG_WARN("Max jails reached (%d), cannot create jail '%s'", MAX_JAILS, name);
     return NULL;
   }
 
@@ -534,7 +534,7 @@ struct jail *find_or_create_jail_in_cfg(const char *name, struct config *target_
   strncpy(j->name, name, sizeof(j->name) - 1);
   j->name[sizeof(j->name) - 1] = '\0';
 
-  daemon_log_info("Created new jail: %s", name);
+  LOG_INFO("Created new jail: %s", name);
   return j;
 }
 
@@ -687,30 +687,29 @@ fail:
 /* 验证配置完整性 */
 int config_validate(const struct config *cfg) {
   if (!cfg) {
-    daemon_log_err("Config validation failed: cfg is NULL");
+    LOG_ERR("Config validation failed: cfg is NULL");
     return -1;
   }
   if (cfg->jail_count <= 0 || cfg->jail_count > MAX_JAILS) {
-    daemon_log_err("Config validation failed: invalid jail_count=%d (must be 1..%d)",
-                   cfg->jail_count, MAX_JAILS);
+    LOG_ERR("Config validation failed: invalid jail_count=%d (must be 1..%d)",
+            cfg->jail_count, MAX_JAILS);
     return -1;
   }
   if (cfg->interval <= 0 || cfg->interval > 60) {
-    daemon_log_err("Config validation failed: invalid interval=%d (must be 1..60)",
-                   cfg->interval);
+    LOG_ERR("Config validation failed: invalid interval=%d (must be 1..60)", cfg->interval);
     return -1;
   }
   if (cfg->metrics_port < 0 || cfg->metrics_port > 65535) {
-    daemon_log_err("Config validation failed: invalid metrics_port=%d (must be 0..65535)",
-                   cfg->metrics_port);
+    LOG_ERR("Config validation failed: invalid metrics_port=%d (must be 0..65535)",
+            cfg->metrics_port);
     return -1;
   }
   if (cfg->default_max_retries == 0) {
-    daemon_log_err("Config validation failed: default_max_retries is 0");
+    LOG_ERR("Config validation failed: default_max_retries is 0");
     return -1;
   }
   if (cfg->default_findtime == 0) {
-    daemon_log_err("Config validation failed: default_findtime is 0");
+    LOG_ERR("Config validation failed: default_findtime is 0");
     return -1;
   }
   /* ban_time=0 表示永久封禁，config-parser.c 中已允许此值 */
@@ -721,20 +720,20 @@ int config_validate(const struct config *cfg) {
     if (!j->enabled)
       continue;
     if (j->log_count == 0) {
-      daemon_log_err("Jail '%s' has no log files", j->name);
+      LOG_ERR("Jail '%s' has no log files", j->name);
       return -1;
     }
     if (j->max_retries == 0) {
-      daemon_log_err("Jail '%s' has max_retries=0", j->name);
+      LOG_ERR("Jail '%s' has max_retries=0", j->name);
       return -1;
     }
     if (j->findtime == 0) {
-      daemon_log_err("Jail '%s' has findtime=0", j->name);
+      LOG_ERR("Jail '%s' has findtime=0", j->name);
       return -1;
     }
     /* ban_time=0 表示永久封禁，config-parser.c 中已允许此值 */
     if (j->ban_time == 0) {
-      daemon_log_debug("Jail '%s' ban_time=0 (permanent ban)", j->name);
+      LOG_DEBUG("Jail '%s' ban_time=0 (permanent ban)", j->name);
     }
   }
 
@@ -753,7 +752,7 @@ void migrate_failed_entries(struct config *old, struct config *new) {
       if (strcmp(old_jail->name, new_jail->name) == 0) {
         new_jail->failed_hash = old_jail->failed_hash;
         old_jail->failed_hash = NULL;
-        daemon_log_debug("Migrated failed entries for jail '%s'", new_jail->name);
+        LOG_DEBUG("Migrated failed entries for jail '%s'", new_jail->name);
         break;
       }
     }
@@ -829,27 +828,27 @@ int init_log_patterns(void) {
     struct jail *jail = &cfg.jails[i];
 
     if (!jail->enabled) {
-      daemon_log_debug("Skipping disabled jail '%s' for regex compilation", jail->name);
+      LOG_DEBUG("Skipping disabled jail '%s' for regex compilation", jail->name);
       continue;
     }
 
     if (jail->regex_count > 0) {
       if (compile_jail_regex(jail) < 0) {
-        daemon_log_warn("Failed to compile regex for jail '%s'", jail->name);
+        LOG_WARN("Failed to compile regex for jail '%s'", jail->name);
         ret = -1;
         /* 继续为其他 jail 编译 */
       } else {
-        daemon_log_info("Compiled %d regex pattern(s) for jail '%s'",
-                        jail->regex_count, jail->name);
+        LOG_INFO("Compiled %d regex pattern(s) for jail '%s'",
+                 jail->regex_count, jail->name);
       }
     } else {
       /* Jail 将使用内置默认模式 */
-      daemon_log_info("Jail '%s' will use built-in default regex pattern", jail->name);
+      LOG_INFO("Jail '%s' will use built-in default regex pattern", jail->name);
     }
   }
 
   if (ret == 0) {
-    daemon_log_info("All jail regex patterns compiled successfully");
+    LOG_INFO("All jail regex patterns compiled successfully");
   }
 
   return ret;

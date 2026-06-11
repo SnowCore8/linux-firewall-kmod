@@ -30,6 +30,15 @@
 #include <time.h>
 #include <unistd.h>
 
+/* 统一日志系统 - 组件名 "exporter"
+ * 切换到"exporter"组件:重定义 LOG_COMPONENT 与 LOG_FMT_PREFIX。
+ * 任何使用 LOG_* 宏的 .c 文件都必须 #include "log.h" 引入宏定义。 */
+#include "log.h"
+#undef LOG_COMPONENT
+#define LOG_COMPONENT "exporter"
+#undef LOG_FMT_PREFIX
+#define LOG_FMT_PREFIX "firewall[exporter]: "
+
 /* ============================================================================
  * 配置参数
  * ========================================================================== */
@@ -61,38 +70,14 @@ static _Atomic(time_t) last_failure_time = 0;
 #define AUTH_LOCKOUT_DURATION 60  /* 锁定 60 秒 */
 
 /* ============================================================================
- * 日志辅助函数（使用 syslog 以保持与守护进程一致）
+ * 日志 - 使用统一的 log.h (组件名 "exporter")
+ * ============================================================================
+ * 旧 exporter_log_err/warn/info 宏已被 LOG_ERR/WARN/INFO 取代。
+ * 旧内联 exporter_log_warn_ratelimited 函数已被 LOG_WARN_RATELIMITED
+ * 统一限流宏取代,行为与原实现等价:
+ *   - 每秒最多 1 条真实日志
+ *   - 同一秒内第 2 条起丢弃,每分钟输出 1 条"压制中"汇总
  * ========================================================================== */
-#define exporter_log_err(fmt, ...) \
-  syslog(LOG_ERR, "firewall[exporter]: ERROR: " fmt, ##__VA_ARGS__)
-#define exporter_log_warn(fmt, ...) \
-  syslog(LOG_WARNING, "firewall[exporter]: WARN: " fmt, ##__VA_ARGS__)
-#define exporter_log_info(fmt, ...) \
-  syslog(LOG_INFO, "firewall[exporter]: " fmt, ##__VA_ARGS__)
-
-/* 安全审计日志速率限制：防止认证失败日志淹没系统日志 */
-static inline void exporter_log_warn_ratelimited(const char *fmt, ...) {
-  static time_t last_warn = 0;
-  static int warn_count = 0;
-  time_t now = time(NULL);
-  va_list args;
-
-  if (now != last_warn) {
-    last_warn = now;
-    warn_count = 0;
-  }
-  warn_count++;
-  /* 每秒最多输出 1 条，超额仅在每分钟输出一次汇总 */
-  if (warn_count > 1) {
-    if (warn_count == 2)
-      syslog(LOG_WARNING, "firewall[exporter]: WARN: suppressing repeated auth failure logs");
-    return;
-  }
-
-  va_start(args, fmt);
-  vsyslog(LOG_WARNING, fmt, args);
-  va_end(args);
-}
 
 /* ============================================================================
  * HTTP 安全头辅助函数（修复 R8-1 + R8-4）
@@ -592,9 +577,9 @@ static int check_basic_auth_header(const char *auth_header) {
   time_t last = atomic_load(&last_failure_time);
   if (atomic_load(&auth_failures) >= AUTH_FAILURE_THRESHOLD &&
       (now - last) < AUTH_LOCKOUT_DURATION) {
-    exporter_log_warn_ratelimited("Auth temporarily locked due to too many failures (%lu failures in "
-                                  "%ld seconds)",
-                                  atomic_load(&auth_failures), (long)(now - last));
+    LOG_WARN_RATELIMITED("Auth temporarily locked due to too many failures (%lu failures in "
+                         "%ld seconds)",
+                         atomic_load(&auth_failures), (long)(now - last));
     return 0;
   }
 
@@ -745,7 +730,7 @@ static enum MHD_Result handle_metrics_request(struct MHD_Connection *connection)
 
   len = generate_metrics(metrics_buf, sizeof(metrics_buf));
   if (len < 0 || (size_t)len >= sizeof(metrics_buf)) {
-    exporter_log_err("Metrics buffer overflow");
+    LOG_ERR("Metrics buffer overflow");
     return send_error_response(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
                                "500 Internal Server Error\r\n");
   }
@@ -809,7 +794,7 @@ static enum MHD_Result answer_to_connection(void *cls, struct MHD_Connection *co
     if (auth_result == 0) {
       /* M3 修复：安全日志 - 只记录 URL，不记录 Authorization 头或其他敏感凭据
        * 使用 ratelimited 日志防止攻击者通过频繁请求淹没系统日志 */
-      exporter_log_warn_ratelimited("Unauthorized access attempt to %s", url);
+      LOG_WARN_RATELIMITED("Unauthorized access attempt to %s", url);
       return send_unauthorized_response(connection);
     }
     /* auth_result == -1 表示未配置认证，跳过 */
@@ -858,7 +843,7 @@ static const char *setup_bind_address(struct sockaddr_in *bind_addr,
   bind_addr->sin_family = AF_INET;
   bind_addr->sin_port = htons((uint16_t)listen_port);
   if (inet_pton(AF_INET, bind_address, &bind_addr->sin_addr) != 1) {
-    exporter_log_err("Invalid bind address: %s, falling back to 127.0.0.1", bind_address);
+    LOG_ERR("Invalid bind address: %s, falling back to 127.0.0.1", bind_address);
     inet_pton(AF_INET, "127.0.0.1", &bind_addr->sin_addr);
   }
 
@@ -916,15 +901,14 @@ void *start_http_exporter(void *port) {
   daemon = start_mhd_daemon(listen_port, &bind_addr);
 
   if (daemon == NULL) {
-    exporter_log_err("Failed to start HTTP daemon on %s:%d: %s", bind_address,
-                     listen_port, strerror(errno));
-    exporter_log_info("Prometheus exporter disabled (port may be in use)");
+    LOG_ERR("Failed to start HTTP daemon on %s:%d: %s", bind_address,
+            listen_port, strerror(errno));
+    LOG_INFO("Prometheus exporter disabled (port may be in use)");
     atomic_store(&http_exporter_running, false);
     return NULL;
   }
 
-  exporter_log_info("Prometheus exporter listening on %s:%d (libmicrohttpd)",
-                    bind_address, listen_port);
+  LOG_INFO("Prometheus exporter listening on %s:%d (libmicrohttpd)", bind_address, listen_port);
 
   /* 阻塞直到线程收到停止信号 */
   while (atomic_load(&http_exporter_running)) {
@@ -932,7 +916,7 @@ void *start_http_exporter(void *port) {
   }
 
   MHD_stop_daemon(daemon);
-  exporter_log_info("Prometheus exporter stopped");
+  LOG_INFO("Prometheus exporter stopped");
   return NULL;
 }
 
@@ -960,7 +944,7 @@ void stop_http_exporter(void) {
       int join_err = pthread_join(exporter_thread_id, NULL);
       if (join_err != 0 && join_err != ESRCH) {
         /* ESRCH 表示线程已退出，其他错误记录日志 */
-        exporter_log_warn("pthread_join failed: %s", strerror(join_err));
+        LOG_WARN("pthread_join failed: %s", strerror(join_err));
       }
     }
   }

@@ -214,8 +214,8 @@ static int match_pcre2_regex(struct jail *j, const char *line, size_t line_len,
       if (regex_result != PCRE2_ERROR_NOMATCH) {
         PCRE2_UCHAR errbuf[256];
         pcre2_get_error_message(regex_result, errbuf, sizeof(errbuf));
-        daemon_log_warn("Regex error in jail '%s' regex '%s': %s", j->name,
-                        j->regexes[i].name, errbuf);
+        LOG_WARN("Regex error in jail '%s' regex '%s': %s", j->name,
+                 j->regexes[i].name, errbuf);
       }
       continue; /* 尝试下一个正则 */
     }
@@ -239,13 +239,12 @@ static int match_pcre2_regex(struct jail *j, const char *line, size_t line_len,
     }
 
     if (ip_group < 0) {
-      daemon_log_warn(
-        "No valid IP capture group found in regex match for jail '%s'", j->name);
+      LOG_WARN("No valid IP capture group found in regex match for jail '%s'", j->name);
       continue; /* 尝试下一个正则 */
     }
 
     if ((size_t)ovector[ip_group * 2 + 1] > line_len) {
-      daemon_log_warn("Regex match exceeds line length in jail '%s'", j->name);
+      LOG_WARN("Regex match exceeds line length in jail '%s'", j->name);
       continue;
     }
 
@@ -253,7 +252,7 @@ static int match_pcre2_regex(struct jail *j, const char *line, size_t line_len,
     ip_len = ovector[ip_group * 2 + 1] - ovector[ip_group * 2];
 
     if (ip_len >= INET6_ADDRSTRLEN || ip_len == 0) {
-      daemon_log_warn("Invalid IP length in jail '%s' log: %zu", j->name, ip_len);
+      LOG_WARN("Invalid IP length in jail '%s' log: %zu", j->name, ip_len);
       continue;
     }
 
@@ -280,7 +279,7 @@ int parse_log_line(struct jail *j, const char *line, char *ip_out, size_t ip_siz
 
   size_t line_len = strlen(line);
   if (line_len > 8192) {
-    daemon_log_warn("Log line too long (%zu bytes), skipping", line_len);
+    LOG_WARN("Log line too long (%zu bytes), skipping", line_len);
     return 0;
   }
 

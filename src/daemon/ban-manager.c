@@ -39,7 +39,7 @@ static int get_cached_bans_fd(void) {
 
   fd = open(BANS_PATH, O_WRONLY | O_NOFOLLOW);
   if (fd < 0) {
-    daemon_log_err("Failed to open %s: %s", BANS_PATH, strerror(errno));
+    LOG_ERR("Failed to open %s: %s", BANS_PATH, strerror(errno));
     pthread_mutex_unlock(&bans_fd_mutex);
     return -1;
   }
@@ -155,28 +155,28 @@ static int validate_procfs_path(const char *path) {
   const char *p;
 
   if (strncmp(path, PROCFS_DIR "/", strlen(PROCFS_DIR) + 1) != 0) {
-    daemon_log_err("secure_procfs_write: path outside %s: %s", PROCFS_DIR, path);
+    LOG_ERR("secure_procfs_write: path outside %s: %s", PROCFS_DIR, path);
     return -1;
   }
 
   if (strstr(path, "..") != NULL) {
-    daemon_log_err("secure_procfs_write: path traversal attempt: %s", path);
+    LOG_ERR("secure_procfs_write: path traversal attempt: %s", path);
     return -1;
   }
 
   for (p = path + sizeof(PROCFS_DIR); *p; p++) {
     if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
           (*p >= '0' && *p <= '9') || *p == '/' || *p == '-' || *p == '_' || *p == '.')) {
-      daemon_log_err("secure_procfs_write: invalid character in path: %s "
-                     "(char: '%c' at offset %ld)",
-                     path, *p, (long)(p - path));
+      LOG_ERR("secure_procfs_write: invalid character in path: %s "
+              "(char: '%c' at offset %ld)",
+              path, *p, (long)(p - path));
       return -1;
     }
   }
 
   size_t path_len = strlen(path);
   if (path_len > 0 && path[path_len - 1] == '/') {
-    daemon_log_err("secure_procfs_write: path ends with '/': %s", path);
+    LOG_ERR("secure_procfs_write: path ends with '/': %s", path);
     return -1;
   }
 
@@ -191,15 +191,15 @@ static int verify_procfs_fd(int fd) {
   snprintf(proc_fd_path, sizeof(proc_fd_path), "/proc/self/fd/%d", fd);
   link_len = readlink(proc_fd_path, link_target, sizeof(link_target) - 1);
   if (link_len < 0) {
-    daemon_log_err("Failed to read link for fd %d: %s", fd, strerror(errno));
+    LOG_ERR("Failed to read link for fd %d: %s", fd, strerror(errno));
     return -1;
   }
   link_target[link_len] = '\0';
 
   if (strncmp(link_target, "/proc/firewall/", 15) != 0) {
-    daemon_log_err("secure_procfs_write: fd %d points to non-procfs path: "
-                   "%s (expected /proc/firewall/...)",
-                   fd, link_target);
+    LOG_ERR("secure_procfs_write: fd %d points to non-procfs path: "
+            "%s (expected /proc/firewall/...)",
+            fd, link_target);
     return -1;
   }
 
@@ -215,7 +215,7 @@ static int write_to_procfs_fd(int fd, const char *data, size_t data_len) {
     if (written < 0) {
       if (errno == EINTR || errno == EAGAIN)
         continue;
-      daemon_log_err("Failed to write to procfs fd %d: %s", fd, strerror(errno));
+      LOG_ERR("Failed to write to procfs fd %d: %s", fd, strerror(errno));
       return -1;
     }
     total_written += written;
@@ -230,7 +230,7 @@ int secure_procfs_write(const char *path, const char *data, size_t data_len) {
   bool using_cached = false;
 
   if (!path || !data || data_len == 0) {
-    daemon_log_err("Invalid parameters to secure_procfs_write");
+    LOG_ERR("Invalid parameters to secure_procfs_write");
     goto cleanup;
   }
 
@@ -238,7 +238,7 @@ int secure_procfs_write(const char *path, const char *data, size_t data_len) {
     goto cleanup;
 
   if (data_len > 64) {
-    daemon_log_err("Data too long for procfs write (%zu bytes, max 64)", data_len);
+    LOG_ERR("Data too long for procfs write (%zu bytes, max 64)", data_len);
     goto cleanup;
   }
 
@@ -251,7 +251,7 @@ int secure_procfs_write(const char *path, const char *data, size_t data_len) {
   } else {
     fd = open(path, O_WRONLY | O_NOFOLLOW);
     if (fd < 0) {
-      daemon_log_err("Failed to open %s: %s", path, strerror(errno));
+      LOG_ERR("Failed to open %s: %s", path, strerror(errno));
       goto cleanup;
     }
     if (verify_procfs_fd(fd) < 0)
@@ -274,7 +274,7 @@ cleanup:
   /* R9-9: 缓存 fd 不关闭，仅关闭非缓存路径的 fd */
   if (fd >= 0 && !using_cached) {
     if (close(fd) < 0 && ret == 0)
-      daemon_log_warn("Failed to close %s: %s", path, strerror(errno));
+      LOG_WARN("Failed to close %s: %s", path, strerror(errno));
   }
 
   return ret;
@@ -297,12 +297,12 @@ static int format_ban_command(ban_action_t action, const char *ip,
     cmd_len = snprintf(cmd_buf, cmd_buf_size, "unban %s\n", ip);
     break;
   default:
-    daemon_log_err("Unknown ban action type: %d", action);
+    LOG_ERR("Unknown ban action type: %d", action);
     return -1;
   }
 
   if (cmd_len < 0 || (size_t)cmd_len >= cmd_buf_size) {
-    daemon_log_err("Command buffer overflow for IP %s", ip);
+    LOG_ERR("Command buffer overflow for IP %s", ip);
     return -1;
   }
 
@@ -323,8 +323,7 @@ static int execute_sqlite_action(ban_action_t action, const char *ip, validated_
   }
 
   if (sqlite_rc != 0 && sqlite_rc != -2) {
-    daemon_log_warn("SQLite operation failed for IP %s (action=%d, rc=%d)", ip,
-                    action, sqlite_rc);
+    LOG_WARN("SQLite operation failed for IP %s (action=%d, rc=%d)", ip, action, sqlite_rc);
     if (action == BAN_ACTION_PERMANENT || action == BAN_ACTION_UNBAN_PERM) {
       return sqlite_rc;
     }
@@ -339,16 +338,16 @@ static void log_ban_action(ban_action_t action, const char *ip) {
 
   switch (action) {
   case BAN_ACTION_TEMP:
-    daemon_log_info("Banned IP %s", ip);
+    LOG_INFO("Banned IP %s", ip);
     break;
   case BAN_ACTION_PERMANENT:
-    daemon_log_info("Permanently banned IP %s", ip);
+    LOG_INFO("Permanently banned IP %s", ip);
     break;
   case BAN_ACTION_UNBAN:
-    daemon_log_info("Unbanned IP %s", ip);
+    LOG_INFO("Unbanned IP %s", ip);
     break;
   case BAN_ACTION_UNBAN_PERM:
-    daemon_log_info("Removed permanent ban for IP %s", ip);
+    LOG_INFO("Removed permanent ban for IP %s", ip);
     break;
   default:
     break;
@@ -364,12 +363,12 @@ int execute_ban_action(ban_action_t action, const char *ip) {
   int cmd_len;
 
   if (!ip) {
-    daemon_log_err("NULL IP address provided to execute_ban_action");
+    LOG_ERR("NULL IP address provided to execute_ban_action");
     return -1;
   }
 
   if (validate_ip(ip, &validated) < 0) {
-    daemon_log_err("Invalid IP address: %s", ip);
+    LOG_ERR("Invalid IP address: %s", ip);
     return -1;
   }
 
@@ -378,14 +377,13 @@ int execute_ban_action(ban_action_t action, const char *ip) {
     return -1;
 
   if (secure_procfs_write(BANS_PATH, cmd_buf, (size_t)cmd_len) < 0) {
-    daemon_log_err("Failed to write to %s: %s", BANS_PATH, strerror(errno));
+    LOG_ERR("Failed to write to %s: %s", BANS_PATH, strerror(errno));
     return -1;
   }
 
   int sqlite_rc = execute_sqlite_action(action, ip, validated);
   if (sqlite_rc < 0) {
-    daemon_log_err("SQLite persistence failed for IP %s (action=%d, rc=%d)", ip,
-                   action, sqlite_rc);
+    LOG_ERR("SQLite persistence failed for IP %s (action=%d, rc=%d)", ip, action, sqlite_rc);
     return -1;
   }
 

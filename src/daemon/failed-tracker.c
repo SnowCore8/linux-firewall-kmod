@@ -28,7 +28,7 @@ struct failed_entry *create_entry_for_jail(struct jail *j, const char *ip) {
   if (!j->failed_hash) {
     j->failed_hash = kh_init(ip_map);
     if (!j->failed_hash) {
-      daemon_log_err("Failed to initialize hash table for jail '%s'", j->name);
+      LOG_ERR("Failed to initialize hash table for jail '%s'", j->name);
       return NULL;
     }
   }
@@ -40,14 +40,14 @@ struct failed_entry *create_entry_for_jail(struct jail *j, const char *ip) {
     return kh_value(j->failed_hash, k); /* 已存在 */
   }
   if (ret < 0) {
-    daemon_log_err("Failed to resize hash table for jail '%s'", j->name);
+    LOG_ERR("Failed to resize hash table for jail '%s'", j->name);
     return NULL;
   }
 
   /* 键所有权：用堆分配的副本替换栈指针 */
   char *key_copy = strdup(ip);
   if (!key_copy) {
-    daemon_log_err("Failed to allocate memory for hash key");
+    LOG_ERR("Failed to allocate memory for hash key");
     /* 注意：此时 kh_key 仍指向原始 ip 参数（非堆分配），无需释放 */
     kh_del(ip_map, j->failed_hash, k); /* 移除空槽位 */
     return NULL;
@@ -57,7 +57,7 @@ struct failed_entry *create_entry_for_jail(struct jail *j, const char *ip) {
   /* 创建新条目 */
   struct failed_entry *entry = calloc(1, sizeof(*entry));
   if (!entry) {
-    daemon_log_err("Failed to allocate memory for failed entry");
+    LOG_ERR("Failed to allocate memory for failed entry");
     /* 键已设置为 key_copy，必须先释放键再删除条目 */
     free((char *)kh_key(j->failed_hash, k));
     kh_key(j->failed_hash, k) = NULL;
@@ -95,7 +95,7 @@ unsigned int count_recent(struct failed_entry *entry, time_t window, unsigned in
 
   /* 验证参数以防止潜在问题 */
   if (!entry || window <= 0) {
-    daemon_log_debug("Invalid parameters to count_recent");
+    LOG_DEBUG("Invalid parameters to count_recent");
     return 0;
   }
 
@@ -184,38 +184,36 @@ void check_and_ban(struct failed_entry *entry, const char *ip, unsigned int max_
 
   if (recent_fails >= max_retries) {
     if (jail_name) {
-      daemon_log_warn("IP %s exceeded %d failures in %d seconds in jail '%s', banning",
-                      ip, recent_fails, findtime, jail_name);
+      LOG_WARN("IP %s exceeded %d failures in %d seconds in jail '%s', banning",
+               ip, recent_fails, findtime, jail_name);
     } else {
-      daemon_log_warn("IP %s exceeded %d failures in %d seconds, banning", ip,
-                      recent_fails, findtime);
+      LOG_WARN("IP %s exceeded %d failures in %d seconds, banning", ip, recent_fails, findtime);
     }
 
     if (ban_ip(ip) == 0) {
       if (jail_name) {
-        daemon_log_info("Successfully banned IP %s after %d failed attempts in jail '%s'",
-                        ip, recent_fails, jail_name);
+        LOG_INFO("Successfully banned IP %s after %d failed attempts in jail '%s'",
+                 ip, recent_fails, jail_name);
       } else {
-        daemon_log_info("Successfully banned IP %s after %d failed attempts", ip, recent_fails);
+        LOG_INFO("Successfully banned IP %s after %d failed attempts", ip, recent_fails);
       }
     } else {
       if (jail_name) {
-        daemon_log_err("Failed to ban IP %s after %d failed attempts in jail "
-                       "'%s', keeping entry for retry",
-                       ip, recent_fails, jail_name);
+        LOG_ERR("Failed to ban IP %s after %d failed attempts in jail "
+                "'%s', keeping entry for retry",
+                ip, recent_fails, jail_name);
       } else {
-        daemon_log_err("Failed to ban IP %s after %d failed attempts, keeping "
-                       "entry for retry",
-                       ip, recent_fails);
+        LOG_ERR("Failed to ban IP %s after %d failed attempts, keeping "
+                "entry for retry",
+                ip, recent_fails);
       }
     }
   } else {
     if (jail_name) {
-      daemon_log_debug("IP %s has %d failed attempts in %d seconds in jail '%s'",
-                       ip, recent_fails, findtime, jail_name);
+      LOG_DEBUG("IP %s has %d failed attempts in %d seconds in jail '%s'", ip,
+                recent_fails, findtime, jail_name);
     } else {
-      daemon_log_debug("IP %s has %d failed attempts in %d seconds", ip,
-                       recent_fails, findtime);
+      LOG_DEBUG("IP %s has %d failed attempts in %d seconds", ip, recent_fails, findtime);
     }
   }
 }
@@ -227,7 +225,7 @@ void handle_failed_attempt_for_jail(struct jail *j, const char *ip,
   time_t now;
 
   if (!ip || !*ip) {
-    daemon_log_err("Invalid IP address provided to handle_failed_attempt_for_jail");
+    LOG_ERR("Invalid IP address provided to handle_failed_attempt_for_jail");
     return;
   }
 
@@ -237,7 +235,7 @@ void handle_failed_attempt_for_jail(struct jail *j, const char *ip,
   if (!entry) {
     entry = create_entry_for_jail(j, ip);
     if (!entry) {
-      daemon_log_err("Failed to create entry for IP %s", ip);
+      LOG_ERR("Failed to create entry for IP %s", ip);
       return;
     }
   }

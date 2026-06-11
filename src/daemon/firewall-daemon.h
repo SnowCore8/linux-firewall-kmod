@@ -46,17 +46,15 @@ KHASH_MAP_INIT_STR(ip_map, struct failed_entry *)
 /* ============================================================================
  * 守护进程统一日志系统
  * ============================================================================
- * 所有守护进程日志使用 syslog，带有统一的 "firewall: " 前缀。
- * 标准错误输出仅在 syslog 初始化之前使用。
+ * 所有守护进程日志通过统一的 LOG_* 宏族输出，详见 log.h。
+ * 标准错误输出仅在 syslog 初始化之前(由 bootstrap_emit_* 提供)。
+ *
+ * LOG_COMPONENT 在此处显式声明为主守护进程("daemon")以触发
+ * "firewall: " 无方括号的历史前缀格式，保持向后兼容。
+ * 各子模块可通过 #define LOG_COMPONENT "xxx" 切换。
  * ========================================================================== */
-#define daemon_log_err(fmt, ...) \
-  syslog(LOG_ERR, "firewall: " fmt, ##__VA_ARGS__)
-#define daemon_log_warn(fmt, ...) \
-  syslog(LOG_WARNING, "firewall: " fmt, ##__VA_ARGS__)
-#define daemon_log_info(fmt, ...) \
-  syslog(LOG_INFO, "firewall: " fmt, ##__VA_ARGS__)
-#define daemon_log_debug(fmt, ...) \
-  syslog(LOG_DEBUG, "firewall: " fmt, ##__VA_ARGS__)
+#define LOG_COMPONENT_DAEMON
+#include "log.h"
 
 /* Procfs 路径 - 统一 bans 接口 */
 #define PROCFS_DIR "/proc/firewall"

@@ -16,13 +16,14 @@
 #include <sys/types.h>
 #include <syslog.h>
 
-/* 日志辅助宏 - 使用 syslog 与守护进程日志系统集成 */
-#define sqlite_log_err(fmt, ...) \
-  syslog(LOG_ERR, "firewall[sqlite]: ERROR: " fmt, ##__VA_ARGS__)
-#define sqlite_log_warn(fmt, ...) \
-  syslog(LOG_WARNING, "firewall[sqlite]: WARN: " fmt, ##__VA_ARGS__)
-#define sqlite_log_info(fmt, ...) \
-  syslog(LOG_INFO, "firewall[sqlite]: " fmt, ##__VA_ARGS__)
+/* 统一日志系统 - 组件名 "sqlite"
+ * 切换到"sqlite"组件:重定义 LOG_COMPONENT 与 LOG_FMT_PREFIX。
+ * 任何使用 LOG_* 宏的 .c 文件都必须 #include "log.h" 引入宏定义。 */
+#include "log.h"
+#undef LOG_COMPONENT
+#define LOG_COMPONENT "sqlite"
+#undef LOG_FMT_PREFIX
+#define LOG_FMT_PREFIX "firewall[sqlite]: "
 
 /* 数据库句柄结构 */
 struct sqlite_db {
@@ -52,7 +53,7 @@ struct sqlite_db {
 static int ensure_db_dir(const char *db_path) {
   char *path_copy = strdup(db_path);
   if (!path_copy) {
-    sqlite_log_err("Out of memory ensuring database directory");
+    LOG_ERR("Out of memory ensuring database directory");
     return -1;
   }
 
@@ -62,7 +63,7 @@ static int ensure_db_dir(const char *db_path) {
   /* 验证目录不在敏感位置 */
   if (strcmp(dir, "/") == 0 || strcmp(dir, "/etc") == 0 || strcmp(dir, "/usr") == 0 ||
       strcmp(dir, "/bin") == 0 || strcmp(dir, "/sbin") == 0) {
-    sqlite_log_err("Unsafe database directory path: %s", dir);
+    LOG_ERR("Unsafe database directory path: %s", dir);
     free(path_copy);
     return -1;
   }
@@ -70,12 +71,12 @@ static int ensure_db_dir(const char *db_path) {
   if (stat(dir, &st) != 0) {
     /* 目录不存在，尝试创建 */
     if (mkdir(dir, 0700) != 0) {
-      sqlite_log_err("Failed to create database directory %s: %s", dir, strerror(errno));
+      LOG_ERR("Failed to create database directory %s: %s", dir, strerror(errno));
       free(path_copy);
       return -1;
     }
   } else if (!S_ISDIR(st.st_mode)) {
-    sqlite_log_err("Database path %s is not a directory", dir);
+    LOG_ERR("Database path %s is not a directory", dir);
     free(path_copy);
     return -1;
   }
@@ -98,7 +99,7 @@ static int prepare_cached_statements(sqlite_db_t *db) {
                           "VALUES (?, ?, ?, ?, ?, 0, 0, 1);",
                           -1, &db->stmt_add_ban, NULL);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("Failed to prepare INSERT statement: %s", sqlite3_errmsg(db->conn));
+    LOG_ERR("Failed to prepare INSERT statement: %s", sqlite3_errmsg(db->conn));
     return -1;
   }
 
@@ -108,7 +109,7 @@ static int prepare_cached_statements(sqlite_db_t *db) {
                           "= ? AND is_active = 1;",
                           -1, &db->stmt_remove_ban, NULL);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("Failed to prepare REMOVE statement: %s", sqlite3_errmsg(db->conn));
+    LOG_ERR("Failed to prepare REMOVE statement: %s", sqlite3_errmsg(db->conn));
     return -1;
   }
 
@@ -118,7 +119,7 @@ static int prepare_cached_statements(sqlite_db_t *db) {
                           "AND is_active = 1 LIMIT 1;",
                           -1, &db->stmt_check_ban, NULL);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("Failed to prepare CHECK statement: %s", sqlite3_errmsg(db->conn));
+    LOG_ERR("Failed to prepare CHECK statement: %s", sqlite3_errmsg(db->conn));
     return -1;
   }
 
@@ -128,8 +129,7 @@ static int prepare_cached_statements(sqlite_db_t *db) {
                           "WHERE ip_num = ? AND is_active = 1;",
                           -1, &db->stmt_update_stats, NULL);
   if (rc != SQLITE_OK) {
-    sqlite_log_err(
-      "Failed to prepare UPDATE_STATS statement: %s", sqlite3_errmsg(db->conn));
+    LOG_ERR("Failed to prepare UPDATE_STATS statement: %s", sqlite3_errmsg(db->conn));
     return -1;
   }
 
@@ -140,7 +140,7 @@ static int prepare_cached_statements(sqlite_db_t *db) {
                           "FROM permanent_banlist WHERE is_active = 1 ORDER BY created_at;",
                           -1, &db->stmt_load_all, NULL);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("Failed to prepare LOAD_ALL statement: %s", sqlite3_errmsg(db->conn));
+    LOG_ERR("Failed to prepare LOAD_ALL statement: %s", sqlite3_errmsg(db->conn));
     return -1;
   }
 
@@ -148,7 +148,7 @@ static int prepare_cached_statements(sqlite_db_t *db) {
   rc = sqlite3_prepare_v2(db->conn, "SELECT COUNT(*) FROM permanent_banlist;",
                           -1, &db->stmt_stats_total, NULL);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("Failed to prepare STATS_TOTAL statement: %s", sqlite3_errmsg(db->conn));
+    LOG_ERR("Failed to prepare STATS_TOTAL statement: %s", sqlite3_errmsg(db->conn));
     return -1;
   }
 
@@ -156,8 +156,7 @@ static int prepare_cached_statements(sqlite_db_t *db) {
   rc = sqlite3_prepare_v2(db->conn, "SELECT COUNT(*) FROM permanent_banlist WHERE is_active = 1;",
                           -1, &db->stmt_stats_active, NULL);
   if (rc != SQLITE_OK) {
-    sqlite_log_err(
-      "Failed to prepare STATS_ACTIVE statement: %s", sqlite3_errmsg(db->conn));
+    LOG_ERR("Failed to prepare STATS_ACTIVE statement: %s", sqlite3_errmsg(db->conn));
     return -1;
   }
 
@@ -165,7 +164,7 @@ static int prepare_cached_statements(sqlite_db_t *db) {
   rc = sqlite3_prepare_v2(db->conn, "DELETE FROM permanent_banlist WHERE is_active = 0 AND last_hit_at < ?;",
                           -1, &db->stmt_purge_days, NULL);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("Failed to prepare PURGE_DAYS statement: %s", sqlite3_errmsg(db->conn));
+    LOG_ERR("Failed to prepare PURGE_DAYS statement: %s", sqlite3_errmsg(db->conn));
     return -1;
   }
 
@@ -173,7 +172,7 @@ static int prepare_cached_statements(sqlite_db_t *db) {
   rc = sqlite3_prepare_v2(db->conn, "DELETE FROM permanent_banlist WHERE is_active = 0;",
                           -1, &db->stmt_purge_all, NULL);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("Failed to prepare PURGE_ALL statement: %s", sqlite3_errmsg(db->conn));
+    LOG_ERR("Failed to prepare PURGE_ALL statement: %s", sqlite3_errmsg(db->conn));
     return -1;
   }
 
@@ -253,7 +252,7 @@ static int init_db_schema(sqlite3 *conn) {
   /* 第一步：创建新表 */
   rc = sqlite3_exec(conn, create_new_table_sql, NULL, NULL, &err_msg);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("Failed to create permanent_banlist_new table: %s", err_msg);
+    LOG_ERR("Failed to create permanent_banlist_new table: %s", err_msg);
     sqlite3_free(err_msg);
     return -1;
   }
@@ -285,12 +284,12 @@ static int init_db_schema(sqlite3 *conn) {
 
   if (new_table_empty && old_table_exists) {
     /* 需要迁移：从旧表去重后复制到新表 */
-    syslog(LOG_INFO, "firewall: SQLite 迁移：检测到旧表结构，开始去重迁移到 UNIQUE(ip)");
+    LOG_INFO("Detected legacy table structure, starting deduplication migration to UNIQUE(ip)");
 
     /* 用事务包裹整个迁移流程，确保原子性 */
     rc = sqlite3_exec(conn, "BEGIN TRANSACTION;", NULL, NULL, &err_msg);
     if (rc != SQLITE_OK) {
-      sqlite_log_err("Failed to begin migration transaction: %s", err_msg);
+      LOG_ERR("Failed to begin migration transaction: %s", err_msg);
       sqlite3_free(err_msg);
       return -1;
     }
@@ -303,7 +302,7 @@ static int init_db_schema(sqlite3 *conn) {
                       ");",
                       NULL, NULL, &err_msg);
     if (rc != SQLITE_OK) {
-      sqlite_log_err("Failed to clean duplicate records: %s", err_msg);
+      LOG_ERR("Failed to clean duplicate records: %s", err_msg);
       sqlite3_free(err_msg);
       sqlite3_exec(conn, "ROLLBACK;", NULL, NULL, NULL);
       return -1;
@@ -318,7 +317,7 @@ static int init_db_schema(sqlite3 *conn) {
                       "last_hit_at, is_active FROM permanent_banlist;",
                       NULL, NULL, &err_msg);
     if (rc != SQLITE_OK) {
-      sqlite_log_err("Failed to migrate data to new table: %s", err_msg);
+      LOG_ERR("Failed to migrate data to new table: %s", err_msg);
       sqlite3_free(err_msg);
       sqlite3_exec(conn, "ROLLBACK;", NULL, NULL, NULL);
       sqlite3_exec(conn, "DROP TABLE IF EXISTS permanent_banlist_new;", NULL, NULL, NULL);
@@ -331,7 +330,7 @@ static int init_db_schema(sqlite3 *conn) {
                       "ALTER TABLE permanent_banlist_new RENAME TO permanent_banlist;",
                       NULL, NULL, &err_msg);
     if (rc != SQLITE_OK) {
-      sqlite_log_err("Failed to replace old table: %s", err_msg);
+      LOG_ERR("Failed to replace old table: %s", err_msg);
       sqlite3_free(err_msg);
       sqlite3_exec(conn, "ROLLBACK;", NULL, NULL, NULL);
       return -1;
@@ -340,13 +339,13 @@ static int init_db_schema(sqlite3 *conn) {
     /* 提交事务 */
     rc = sqlite3_exec(conn, "COMMIT;", NULL, NULL, &err_msg);
     if (rc != SQLITE_OK) {
-      sqlite_log_err("Failed to commit migration transaction: %s", err_msg);
+      LOG_ERR("Failed to commit migration transaction: %s", err_msg);
       sqlite3_free(err_msg);
       /* COMMIT 失败后事务自动回滚 */
       return -1;
     }
 
-    syslog(LOG_INFO, "firewall: SQLite 迁移完成");
+    LOG_INFO("SQLite migration completed successfully");
   } else if (!new_table_empty) {
     /* 新表已有数据（迁移已完成过的二次启动），清理临时表 */
     sqlite3_exec(conn, "DROP TABLE IF EXISTS permanent_banlist_new;", NULL, NULL, NULL);
@@ -368,14 +367,14 @@ static int init_db_schema(sqlite3 *conn) {
 
   rc = sqlite3_exec(conn, create_index1_sql, NULL, NULL, &err_msg);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("Failed to create idx_ip_num index: %s", err_msg);
+    LOG_ERR("Failed to create idx_ip_num index: %s", err_msg);
     sqlite3_free(err_msg);
     return -1;
   }
 
   rc = sqlite3_exec(conn, create_index2_sql, NULL, NULL, &err_msg);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("Failed to create idx_is_active index: %s", err_msg);
+    LOG_ERR("Failed to create idx_is_active index: %s", err_msg);
     sqlite3_free(err_msg);
     return -1;
   }
@@ -392,14 +391,14 @@ static int enable_wal_mode(sqlite3 *conn) {
 
   rc = sqlite3_exec(conn, "PRAGMA journal_mode=WAL;", NULL, NULL, &err_msg);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("Failed to enable WAL mode: %s", err_msg ? err_msg : "未知错误");
+    LOG_ERR("Failed to enable WAL mode: %s", err_msg ? err_msg : "未知错误");
     sqlite3_free(err_msg);
     return -1;
   }
 
   rc = sqlite3_exec(conn, "PRAGMA synchronous=FULL;", NULL, NULL, &err_msg);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("Failed to set synchronous=FULL: %s", err_msg ? err_msg : "unknown error");
+    LOG_ERR("Failed to set synchronous=FULL: %s", err_msg ? err_msg : "unknown error");
     sqlite3_free(err_msg);
     return -1;
   }
@@ -416,13 +415,13 @@ static int enable_wal_mode(sqlite3 *conn) {
  */
 sqlite_db_t *sqlite_init(const char *db_path) {
   if (!db_path) {
-    sqlite_log_err("sqlite_init: db_path is NULL");
+    LOG_ERR("sqlite_init: db_path is NULL");
     return NULL;
   }
 
   sqlite_db_t *db = calloc(1, sizeof(sqlite_db_t));
   if (!db) {
-    sqlite_log_err("Failed to allocate sqlite_db_t");
+    LOG_ERR("Failed to allocate sqlite_db_t");
     return NULL;
   }
 
@@ -442,8 +441,7 @@ sqlite_db_t *sqlite_init(const char *db_path) {
   /* 打开数据库连接 */
   int rc = sqlite3_open(db_path, &db->conn);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("Failed to open SQLite database %s: %s", db_path,
-                   sqlite3_errmsg(db->conn));
+    LOG_ERR("Failed to open SQLite database %s: %s", db_path, sqlite3_errmsg(db->conn));
     sqlite3_close(db->conn);
     pthread_mutex_destroy(&db->lock);
     free(db);
@@ -452,12 +450,12 @@ sqlite_db_t *sqlite_init(const char *db_path) {
 
   /* 启用 WAL 模式 */
   if (enable_wal_mode(db->conn) != 0) {
-    sqlite_log_warn("WAL mode not enabled");
+    LOG_WARN("WAL mode not enabled");
   }
 
   /* 初始化表结构 */
   if (init_db_schema(db->conn) != 0) {
-    sqlite_log_err("Failed to initialize database schema");
+    LOG_ERR("Failed to initialize database schema");
     sqlite3_close(db->conn);
     pthread_mutex_destroy(&db->lock);
     free(db);
@@ -466,14 +464,14 @@ sqlite_db_t *sqlite_init(const char *db_path) {
 
   /* 准备缓存的 prepared statements，避免高频操作时重复编译 SQL */
   if (prepare_cached_statements(db) != 0) {
-    sqlite_log_err("Failed to prepare cached statements");
+    LOG_ERR("Failed to prepare cached statements");
     sqlite3_close(db->conn);
     pthread_mutex_destroy(&db->lock);
     free(db);
     return NULL;
   }
 
-  syslog(LOG_INFO, "firewall: SQLite 持久化黑名单初始化：%s", db_path);
+  LOG_INFO("SQLite persistent banlist initialized at %s", db_path);
   return db;
 }
 
@@ -501,7 +499,7 @@ void sqlite_close(sqlite_db_t *db) {
 int sqlite_add_permanent_ban(sqlite_db_t *db, const char *ip, uint32_t ip_num,
                              const char *reason, const char *created_by) {
   if (!db || !ip || !reason || !created_by) {
-    sqlite_log_err("sqlite_add_permanent_ban: invalid parameter");
+    LOG_ERR("sqlite_add_permanent_ban: invalid parameter");
     return -1;
   }
 
@@ -528,7 +526,7 @@ int sqlite_add_permanent_ban(sqlite_db_t *db, const char *ip, uint32_t ip_num,
   } else if (rc == SQLITE_CONSTRAINT) {
     return -2; /* 已存在 */
   } else {
-    sqlite_log_err("Failed to insert permanent ban: %s", sqlite3_errmsg(db->conn));
+    LOG_ERR("Failed to insert permanent ban: %s", sqlite3_errmsg(db->conn));
     return -1;
   }
 }
@@ -541,7 +539,7 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db, const char **ips,
                                     const uint32_t *ip_nums, const char **reasons,
                                     const char **created_bys, int count) {
   if (!db || !ips || !ip_nums || !reasons || !created_bys || count <= 0) {
-    sqlite_log_err("firewall: sqlite_add_permanent_bans_batch: invalid parameter\n");
+    LOG_ERR("sqlite_add_permanent_bans_batch: invalid parameter\n");
     return -1;
   }
 
@@ -553,7 +551,7 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db, const char **ips,
   /* 开始事务 */
   rc = sqlite3_exec(db->conn, "BEGIN TRANSACTION;", NULL, NULL, NULL);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("firewall: 开始事务失败：%s\n", sqlite3_errmsg(db->conn));
+    LOG_ERR("开始事务失败：%s\n", sqlite3_errmsg(db->conn));
     pthread_mutex_unlock(&db->lock);
     return -1;
   }
@@ -582,8 +580,7 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db, const char **ips,
       /* M4 修复：遇到非约束错误时立即回滚事务，防止部分提交
        * 注意：SQLITE_CONSTRAINT（重复 IP）是预期错误，跳过但不回滚，
        * 因为其他有效条目仍应被提交 */
-      sqlite_log_err("firewall: Failed to insert permanent ban %d: %s\n", i,
-                     sqlite3_errmsg(db->conn));
+      LOG_ERR("Failed to insert permanent ban %d: %s\n", i, sqlite3_errmsg(db->conn));
       sqlite3_exec(db->conn, "ROLLBACK;", NULL, NULL, NULL);
       pthread_mutex_unlock(&db->lock);
       return -1;
@@ -593,7 +590,7 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db, const char **ips,
   /* 提交事务 */
   rc = sqlite3_exec(db->conn, "COMMIT;", NULL, NULL, NULL);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("firewall: 提交事务失败：%s\n", sqlite3_errmsg(db->conn));
+    LOG_ERR("提交事务失败：%s\n", sqlite3_errmsg(db->conn));
     /* M4 修复：COMMIT 失败后 SQLite 会自动回滚事务，但显式回滚更安全 */
     sqlite3_exec(db->conn, "ROLLBACK;", NULL, NULL, NULL);
     pthread_mutex_unlock(&db->lock);
@@ -611,7 +608,7 @@ int sqlite_add_permanent_bans_batch(sqlite_db_t *db, const char **ips,
  */
 int sqlite_remove_permanent_ban(sqlite_db_t *db, const char *ip) {
   if (!db || !ip) {
-    sqlite_log_err("firewall: sqlite_remove_permanent_ban: invalid parameter\n");
+    LOG_ERR("sqlite_remove_permanent_ban: invalid parameter\n");
     return -1;
   }
 
@@ -634,7 +631,7 @@ int sqlite_remove_permanent_ban(sqlite_db_t *db, const char *ip) {
       return -2; /* 不存在 */
     }
   } else {
-    sqlite_log_err("firewall: 移除永久封禁失败：%s\n", sqlite3_errmsg(db->conn));
+    LOG_ERR("移除永久封禁失败：%s\n", sqlite3_errmsg(db->conn));
     return -1;
   }
 }
@@ -645,7 +642,7 @@ int sqlite_remove_permanent_ban(sqlite_db_t *db, const char *ip) {
  */
 int sqlite_is_permanent_banned(sqlite_db_t *db, uint32_t ip_num) {
   if (!db) {
-    sqlite_log_err("firewall: sqlite_is_permanent_banned: db is NULL\n");
+    LOG_ERR("sqlite_is_permanent_banned: db is NULL\n");
     return -1;
   }
 
@@ -665,7 +662,7 @@ int sqlite_is_permanent_banned(sqlite_db_t *db, uint32_t ip_num) {
   } else if (rc == SQLITE_DONE) {
     return 0; /* 不在 */
   } else {
-    sqlite_log_err("firewall: 查询永久封禁失败：%s\n", sqlite3_errmsg(db->conn));
+    LOG_ERR("查询永久封禁失败：%s\n", sqlite3_errmsg(db->conn));
     return -1;
   }
 }
@@ -676,7 +673,7 @@ int sqlite_is_permanent_banned(sqlite_db_t *db, uint32_t ip_num) {
  */
 int sqlite_is_permanent_banned_ipv6(sqlite_db_t *db, const char *ip) {
   if (!db || !ip) {
-    sqlite_log_err("firewall: sqlite_is_permanent_banned_ipv6: invalid parameter\n");
+    LOG_ERR("sqlite_is_permanent_banned_ipv6: invalid parameter\n");
     return -1;
   }
 
@@ -688,7 +685,7 @@ int sqlite_is_permanent_banned_ipv6(sqlite_db_t *db, const char *ip) {
                               "AND is_active = 1 LIMIT 1;",
                               -1, &stmt, NULL);
   if (rc != SQLITE_OK) {
-    sqlite_log_err("firewall: 准备 IPv6 CHECK 语句失败：%s\n", sqlite3_errmsg(db->conn));
+    LOG_ERR("准备 IPv6 CHECK 语句失败：%s\n", sqlite3_errmsg(db->conn));
     pthread_mutex_unlock(&db->lock);
     return -1;
   }
@@ -704,7 +701,7 @@ int sqlite_is_permanent_banned_ipv6(sqlite_db_t *db, const char *ip) {
   } else if (rc == SQLITE_DONE) {
     return 0;
   } else {
-    sqlite_log_err("firewall: 查询 IPv6 永久封禁失败：%s\n", sqlite3_errmsg(db->conn));
+    LOG_ERR("查询 IPv6 永久封禁失败：%s\n", sqlite3_errmsg(db->conn));
     return -1;
   }
 }
@@ -716,7 +713,7 @@ int sqlite_is_permanent_banned_ipv6(sqlite_db_t *db, const char *ip) {
 int sqlite_load_all_permanent_bans(sqlite_db_t *db,
                                    struct permanent_ban_entry **entries, int *count) {
   if (!db || !entries || !count) {
-    sqlite_log_err("firewall: sqlite_load_all_permanent_bans: invalid parameter\n");
+    LOG_ERR("sqlite_load_all_permanent_bans: invalid parameter\n");
     return -1;
   }
 
@@ -745,7 +742,7 @@ int sqlite_load_all_permanent_bans(sqlite_db_t *db,
   /* 分配内存 */
   *entries = calloc(n, sizeof(struct permanent_ban_entry));
   if (!*entries) {
-    sqlite_log_err("firewall: Out of memory allocating ban entries\n");
+    LOG_ERR("Out of memory allocating ban entries\n");
     pthread_mutex_unlock(&db->lock);
     return -1;
   }
@@ -790,8 +787,7 @@ int sqlite_load_all_permanent_bans(sqlite_db_t *db,
   pthread_mutex_unlock(&db->lock);
 
   if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
-    sqlite_log_err("firewall: Error reading permanent ban list: %s\n",
-                   sqlite3_errmsg(db->conn));
+    LOG_ERR("Error reading permanent ban list: %s\n", sqlite3_errmsg(db->conn));
     free(*entries);
     *entries = NULL;
     *count = 0;
@@ -807,7 +803,7 @@ int sqlite_load_all_permanent_bans(sqlite_db_t *db,
  */
 int sqlite_update_hit_stats(sqlite_db_t *db, uint32_t ip_num) {
   if (!db) {
-    sqlite_log_err("firewall: sqlite_update_hit_stats: db is NULL\n");
+    LOG_ERR("sqlite_update_hit_stats: db is NULL\n");
     return -1;
   }
 
@@ -824,7 +820,7 @@ int sqlite_update_hit_stats(sqlite_db_t *db, uint32_t ip_num) {
   pthread_mutex_unlock(&db->lock);
 
   if (rc != SQLITE_DONE) {
-    sqlite_log_err("firewall: Failed to update hit stats: %s\n", sqlite3_errmsg(db->conn));
+    LOG_ERR("Failed to update hit stats: %s\n", sqlite3_errmsg(db->conn));
     return -1;
   }
 
@@ -837,7 +833,7 @@ int sqlite_update_hit_stats(sqlite_db_t *db, uint32_t ip_num) {
  */
 int sqlite_get_stats(sqlite_db_t *db, int *total_count, int *active_count) {
   if (!db) {
-    sqlite_log_err("firewall: sqlite_get_stats: db is NULL\n");
+    LOG_ERR("sqlite_get_stats: db is NULL\n");
     return -1;
   }
 
@@ -872,7 +868,7 @@ int sqlite_get_stats(sqlite_db_t *db, int *total_count, int *active_count) {
  */
 int sqlite_purge_deleted(sqlite_db_t *db, int days) {
   if (!db) {
-    sqlite_log_err("firewall: sqlite_purge_deleted: db is NULL\n");
+    LOG_ERR("sqlite_purge_deleted: db is NULL\n");
     return -1;
   }
 
@@ -899,8 +895,7 @@ int sqlite_purge_deleted(sqlite_db_t *db, int days) {
   pthread_mutex_unlock(&db->lock);
 
   if (rc != SQLITE_DONE) {
-    sqlite_log_err("firewall: Failed to purge deleted records: %s\n",
-                   sqlite3_errmsg(db->conn));
+    LOG_ERR("Failed to purge deleted records: %s\n", sqlite3_errmsg(db->conn));
     return -1;
   }
 

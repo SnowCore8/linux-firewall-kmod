@@ -94,20 +94,19 @@ static int parse_config_integer(const char *key, const char *value,
 
   if (errno != 0 || *endptr != '\0' || val < min_val || val > max_val) {
     if (strict_mode) {
-      daemon_log_err("Invalid value for '%s': '%s' (must be integer between %ld and %ld) "
-                     "in %s of %s",
-                     key, value, min_val, max_val, context,
-                     config_file ? config_file : "unknown");
+      LOG_ERR("Invalid value for '%s': '%s' (must be integer between %ld and %ld) "
+              "in %s of %s",
+              key, value, min_val, max_val, context, config_file ? config_file : "unknown");
       if (has_error)
         *has_error = 1;
     } else {
-      daemon_log_warn("Invalid %s %s: %s", context, key, value);
+      LOG_WARN("Invalid %s %s: %s", context, key, value);
     }
     return -1;
   }
 
   *out = (unsigned int)val;
-  daemon_log_info("%s %s set to %u", context, key, *out);
+  LOG_INFO("%s %s set to %u", context, key, *out);
   return 0;
 }
 
@@ -217,18 +216,18 @@ static int apply_defaults_integer_config(struct config *target, const char *key,
     long val = strtol(value, &endptr, 10);
     if (errno != 0 || *endptr != '\0' || (val != 0 && (val < 1 || val > 86400))) {
       if (strict_mode) {
-        daemon_log_err("Invalid value for 'ban_time': '%s' (must be 0 or integer "
-                       "between 1 and 86400) in defaults of %s",
-                       value, config_file ? config_file : "unknown");
+        LOG_ERR("Invalid value for 'ban_time': '%s' (must be 0 or integer "
+                "between 1 and 86400) in defaults of %s",
+                value, config_file ? config_file : "unknown");
         if (has_error)
           *has_error = 1;
       } else {
-        daemon_log_warn("Invalid default ban_time: %s", value);
+        LOG_WARN("Invalid default ban_time: %s", value);
       }
       return -1;
     }
     target->default_ban_time = (unsigned int)val;
-    daemon_log_info("defaults ban_time set to %u", target->default_ban_time);
+    LOG_INFO("default ban_time set to %u", target->default_ban_time);
     return 0;
   } else if (strcmp(key, "interval") == 0) {
     unsigned int uint_val;
@@ -288,7 +287,7 @@ static int apply_defaults_string_config(struct config *target, const char *key,
     if (rc < 0 && has_error)
       *has_error = 1;
     if (rc == 0) {
-      daemon_log_info("Default permanent_db_path set to: %s", target->permanent_db_path);
+      LOG_INFO("Default permanent_db_path set to: %s", target->permanent_db_path);
     }
     return rc < 0 ? -1 : 0;
   } else if (strcmp(key, "permanent_ban_enabled") == 0) {
@@ -326,12 +325,12 @@ static int apply_defaults_config(struct config *target, const char *key,
 
   /* 未知参数处理 */
   if (strict_mode) {
-    daemon_log_err("Invalid config parameter '%s' with value '%s' in [defaults] of %s",
-                   key, value, config_file ? config_file : "unknown");
+    LOG_ERR("Invalid config parameter '%s' with value '%s' in [defaults] of %s",
+            key, value, config_file ? config_file : "unknown");
     if (has_error)
       *has_error = 1;
   } else {
-    daemon_log_warn("Ignoring unknown parameter in [defaults]: %s = %s", key, value);
+    LOG_WARN("Ignoring unknown parameter in [defaults]: %s = %s", key, value);
   }
   return -1;
 }
@@ -368,19 +367,19 @@ static int apply_jail_integer_config(struct jail *jail, const char *key,
     long val = strtol(value, &endptr, 10);
     if (errno != 0 || *endptr != '\0' || (val != 0 && (val < 1 || val > 86400))) {
       if (strict_mode) {
-        daemon_log_err("Invalid value for 'ban_time': '%s' in jail '%s' of %s "
-                       "(must be 0 or integer between 1 and 86400)",
-                       value, jail->name, config_file);
+        LOG_ERR("Invalid value for 'ban_time': '%s' in jail '%s' of %s "
+                "(must be 0 or integer between 1 and 86400)",
+                value, jail->name, config_file);
         if (has_error)
           *has_error = 1;
       } else {
-        daemon_log_warn("Invalid ban_time for jail '%s': %s", jail->name, value);
+        LOG_WARN("Invalid ban_time for jail '%s': %s", jail->name, value);
       }
       return -1;
     }
     jail->ban_time = (unsigned int)val;
     jail->_ban_time_set = true;
-    daemon_log_info("Jail '%s' ban_time set to %u", jail->name, jail->ban_time);
+    LOG_INFO("Jail '%s' ban_time set to %u", jail->name, jail->ban_time);
     return 0;
   }
 
@@ -399,13 +398,12 @@ static int apply_jail_string_config(struct jail *jail, const char *key,
                                     const char *value, int *has_error) {
   if (strcmp(key, "enabled") == 0) {
     jail->enabled = parse_config_bool(value);
-    daemon_log_info("Jail '%s' enabled: %s", jail->name, value);
+    LOG_INFO("Jail '%s' enabled: %s", jail->name, value);
     return 0;
   } else if (strcmp(key, "regex") == 0) {
     /* 多正则表达式支持：添加到数组 */
     if (jail->regex_count >= MAX_REGEX_PATTERNS) {
-      daemon_log_warn("Too many regex patterns for jail '%s' (max %d)",
-                      jail->name, MAX_REGEX_PATTERNS);
+      LOG_WARN("Too many regex patterns for jail '%s' (max %d)", jail->name, MAX_REGEX_PATTERNS);
       return -1;
     }
     char *tmp = strdup(value);
@@ -421,8 +419,7 @@ static int apply_jail_string_config(struct jail *jail, const char *key,
       jail->regexes[idx].name[MAX_REGEX_NAME_LEN - 1] = '\0';
       jail->regexes[idx].pattern = tmp;
       jail->regex_count++;
-      daemon_log_info("Jail '%s' regex '%s' set to: %s", jail->name,
-                      jail->regexes[idx].name, value);
+      LOG_INFO("Jail '%s' regex '%s' set to: %s", jail->name, jail->regexes[idx].name, value);
     } else {
       free(tmp);
     }
@@ -456,13 +453,12 @@ static int apply_jail_config(struct jail *jail, const char *key, const char *val
 
   /* 未知 jail 参数 */
   if (strict_mode) {
-    daemon_log_err("Invalid config parameter '%s' with value '%s' in jail '%s' of %s",
-                   key, value, jail->name, config_file);
+    LOG_ERR("Invalid config parameter '%s' with value '%s' in jail '%s' of %s",
+            key, value, jail->name, config_file);
     if (has_error)
       *has_error = 1;
   } else {
-    daemon_log_warn("Ignoring unknown parameter in jail '%s': %s = %s",
-                    jail->name, key, value);
+    LOG_WARN("Ignoring unknown parameter in jail '%s': %s = %s", jail->name, key, value);
   }
   return -1;
 }
@@ -485,8 +481,7 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
   char config_dir[1024];
   size_t path_len = strlen(config_path);
   if (path_len >= sizeof(config_dir)) {
-    daemon_log_err("Config path too long (%zu >= %zu): %s", path_len,
-                   sizeof(config_dir), config_path);
+    LOG_ERR("Config path too long (%zu >= %zu): %s", path_len, sizeof(config_dir), config_path);
     return -1;
   }
   memcpy(config_dir, config_path, path_len + 1); /* 安全：已检查长度 */
@@ -500,15 +495,15 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
   /* 打开配置文件 */
   file = fopen(config_path, "r");
   if (!file) {
-    daemon_log_warn("Cannot open config file: %s", config_path);
+    LOG_WARN("Cannot open config file: %s", config_path);
     return -1;
   }
 
-  daemon_log_info("Reading config file: %s", config_path);
+  LOG_INFO("Reading config file: %s", config_path);
 
   /* 初始化 YAML 解析器 */
   if (!yaml_parser_initialize(&parser)) {
-    daemon_log_err("Failed to initialize YAML parser");
+    LOG_ERR("Failed to initialize YAML parser");
     fclose(file);
     return -1;
   }
@@ -518,7 +513,7 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
   /* 解析 YAML 事件 */
   while (!done) {
     if (!yaml_parser_parse(&parser, &event)) {
-      daemon_log_err("YAML parse error: %s", parser.problem ? parser.problem : "unknown");
+      LOG_ERR("YAML parse error: %s", parser.problem ? parser.problem : "unknown");
       error = 1;
       goto cleanup;
     }
@@ -540,7 +535,7 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
 
       /* 拒绝过长的值以防止内存耗尽 */
       if (strlen(value) > 1024) {
-        daemon_log_warn("YAML value too long (%zu bytes), rejecting", strlen(value));
+        LOG_WARN("YAML value too long (%zu bytes), rejecting", strlen(value));
         error = 1;
         goto cleanup;
       }
@@ -558,7 +553,7 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
           /* 这是当前 jail 的属性键 */
           ctx.current_key = strdup(value);
           if (!ctx.current_key) {
-            daemon_log_err("Out of memory allocating current key");
+            LOG_ERR("Out of memory allocating current key");
             error = 1;
             goto cleanup;
           }
@@ -568,7 +563,7 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
           if (!ctx.current_jail) {
             ctx.current_jail = find_or_create_jail_in_cfg(ctx.current_jail_name, target);
             if (!ctx.current_jail) {
-              daemon_log_warn("Failed to create jail '%s'", ctx.current_jail_name);
+              LOG_WARN("Failed to create jail '%s'", ctx.current_jail_name);
               free(ctx.current_key);
               ctx.current_key = NULL;
               break;
@@ -584,19 +579,18 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
       } else if (ctx.in_log_files_array && ctx.current_jail) {
         /* 解析当前 jail 的 log_files 数组 */
         if (ctx.current_jail->log_count >= MAX_LOG_FILES) {
-          daemon_log_warn("Too many log files for jail '%s' (max %d)",
-                          ctx.current_jail->name, MAX_LOG_FILES);
+          LOG_WARN("Too many log files for jail '%s' (max %d)",
+                   ctx.current_jail->name, MAX_LOG_FILES);
         } else if (validate_and_normalize_path(value) < 0) {
-          daemon_log_warn("Invalid log file path for jail '%s': %s",
-                          ctx.current_jail->name, value);
+          LOG_WARN("Invalid log file path for jail '%s': %s", ctx.current_jail->name, value);
         } else {
           ctx.current_jail->log_files[ctx.current_jail->log_count] = strdup(value);
           if (!ctx.current_jail->log_files[ctx.current_jail->log_count]) {
-            daemon_log_err("Out of memory allocating log file path");
+            LOG_ERR("Out of memory allocating log file path");
             error = 1;
           } else {
-            daemon_log_info("Jail '%s' added log file: %s", ctx.current_jail->name,
-                            ctx.current_jail->log_files[ctx.current_jail->log_count]);
+            LOG_INFO("Jail '%s' added log file: %s", ctx.current_jail->name,
+                     ctx.current_jail->log_files[ctx.current_jail->log_count]);
             ctx.current_jail->log_count++;
           }
         }
@@ -610,12 +604,11 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
           if (idx >= 0 && idx < ctx.current_jail->regex_count) {
             ctx.current_jail->regexes[idx].pattern = strdup(value);
             if (!ctx.current_jail->regexes[idx].pattern) {
-              daemon_log_err("Out of memory allocating regex pattern");
+              LOG_ERR("Out of memory allocating regex pattern");
               error = 1;
             } else {
-              daemon_log_info("Jail '%s' regex '%s' pattern set to: %s",
-                              ctx.current_jail->name,
-                              ctx.current_jail->regexes[idx].name, value);
+              LOG_INFO("Jail '%s' regex '%s' pattern set to: %s",
+                       ctx.current_jail->name, ctx.current_jail->regexes[idx].name, value);
             }
           }
           free(ctx.current_key);
@@ -635,7 +628,7 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
         /* 这是一个还没有值的键 */
         ctx.current_key = strdup(value);
         if (!ctx.current_key) {
-          daemon_log_err("Out of memory allocating current key");
+          LOG_ERR("Out of memory allocating current key");
           error = 1;
           goto cleanup;
         }
@@ -687,8 +680,8 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
 
         /* 分配新的正则条目 */
         if (ctx.current_jail->regex_count >= MAX_REGEX_PATTERNS) {
-          daemon_log_warn("Too many regex patterns for jail '%s' (max %d)",
-                          ctx.current_jail->name, MAX_REGEX_PATTERNS);
+          LOG_WARN("Too many regex patterns for jail '%s' (max %d)",
+                   ctx.current_jail->name, MAX_REGEX_PATTERNS);
         } else {
           int idx = ctx.current_jail->regex_count;
           strncpy(ctx.current_jail->regexes[idx].name, ctx.current_regex_name,
@@ -698,8 +691,8 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
           ctx.current_jail->regexes[idx].compiled = NULL;
           ctx.current_jail->regexes[idx].match_data = NULL;
           ctx.current_jail->regex_count++;
-          daemon_log_info("Jail '%s' created regex entry: '%s'",
-                          ctx.current_jail->name, ctx.current_jail->regexes[idx].name);
+          LOG_INFO("Jail '%s' created regex entry: '%s'",
+                   ctx.current_jail->name, ctx.current_jail->regexes[idx].name);
         }
       } else if (ctx.in_jails_section && ctx.current_key) {
         /* 开始一个新的 jail 映射 */
@@ -765,11 +758,11 @@ static int parse_yaml_into(const char *config_path, struct config *target) {
         /* jail 部分结束 - 编译所有正则表达式 */
         if (ctx.current_jail_name && ctx.current_jail) {
           compile_jail_regex(ctx.current_jail);
-          daemon_log_info("Finished parsing jail '%s': enabled=%d, "
-                          "log_count=%d, regex_count=%d, max_retries=%u",
-                          ctx.current_jail->name, ctx.current_jail->enabled,
-                          ctx.current_jail->log_count, ctx.current_jail->regex_count,
-                          ctx.current_jail->max_retries);
+          LOG_INFO("Finished parsing jail '%s': enabled=%d, "
+                   "log_count=%d, regex_count=%d, max_retries=%u",
+                   ctx.current_jail->name, ctx.current_jail->enabled,
+                   ctx.current_jail->log_count, ctx.current_jail->regex_count,
+                   ctx.current_jail->max_retries);
         }
         if (ctx.current_jail_name) {
           free(ctx.current_jail_name);
@@ -810,7 +803,7 @@ cleanup:
 
   /* 严格模式下如果有任何错误则返回失败 */
   if (ctx.has_error && ctx.strict_mode) {
-    daemon_log_err("Config loading failed due to invalid parameters in %s", config_path);
+    LOG_ERR("Config loading failed due to invalid parameters in %s", config_path);
     return -1;
   }
 
@@ -835,7 +828,7 @@ int parse_config_file(const char *config_path) {
   /* 分配临时配置 */
   new_cfg = calloc(1, sizeof(*new_cfg));
   if (!new_cfg) {
-    daemon_log_err("Out of memory allocating temporary config");
+    LOG_ERR("Out of memory allocating temporary config");
     return -1;
   }
 
@@ -878,13 +871,13 @@ int parse_config_file(const char *config_path) {
   /* 在不持有锁的情况下将 YAML 解析到 new_cfg */
   parse_rc = parse_yaml_into(config_path, new_cfg);
   if (parse_rc < 0) {
-    daemon_log_warn("Failed to parse config file: %s", config_path);
+    LOG_WARN("Failed to parse config file: %s", config_path);
     goto cleanup;
   }
 
   /* 验证新配置 */
   if (config_validate(new_cfg) < 0) {
-    daemon_log_warn("Config validation failed for: %s", config_path);
+    LOG_WARN("Config validation failed for: %s", config_path);
     goto cleanup;
   }
 
@@ -906,7 +899,7 @@ int parse_config_file(const char *config_path) {
   old_cfg_snapshot = config_clone(&cfg);
   if (!old_cfg_snapshot) {
     pthread_rwlock_unlock(&config_rwlock);
-    daemon_log_err("Failed to clone config for migration");
+    LOG_ERR("Failed to clone config for migration");
     goto cleanup;
   }
   /* 在锁内提取 failed_hash 指针到本地数组（不修改 cfg） */
@@ -935,7 +928,7 @@ int parse_config_file(const char *config_path) {
       if (strcmp(failed_hash_pairs[i].name, new_jail->name) == 0) {
         new_jail->failed_hash = failed_hash_pairs[i].failed_hash;
         failed_hash_pairs[i].failed_hash = NULL;
-        daemon_log_debug("Migrated failed entries for jail '%s'", new_jail->name);
+        LOG_DEBUG("Migrated failed entries for jail '%s'", new_jail->name);
         break;
       }
     }
@@ -1045,7 +1038,7 @@ int parse_config_file(const char *config_path) {
     free(old_cfg_snapshot);
   }
 
-  daemon_log_info("Configuration loaded successfully from: %s", config_path);
+  LOG_INFO("Configuration loaded successfully from: %s", config_path);
   return 0;
 
 /* 统一错误处理路径，防止内存泄漏 */
@@ -1091,13 +1084,13 @@ static int collect_config_files(const char *config_dir, char ***out_file_list,
 
   dir = opendir(config_dir);
   if (!dir) {
-    daemon_log_warn("Cannot open config directory: %s", config_dir);
+    LOG_WARN("Cannot open config directory: %s", config_dir);
     return -1;
   }
 
   file_list = malloc(file_capacity * sizeof(char *));
   if (!file_list) {
-    daemon_log_err("Out of memory allocating file list");
+    LOG_ERR("Out of memory allocating file list");
     closedir(dir);
     return -1;
   }
@@ -1109,21 +1102,21 @@ static int collect_config_files(const char *config_dir, char ***out_file_list,
       continue;
 
     if (file_count >= MAX_CONFIG_FILES) {
-      daemon_log_warn("Config file limit reached (%d), skipping: %s", MAX_CONFIG_FILES, name);
+      LOG_WARN("Config file limit reached (%d), skipping: %s", MAX_CONFIG_FILES, name);
       continue;
     }
 
     if (file_count >= file_capacity) {
       size_t new_capacity;
       if (check_mul_overflow((size_t)file_capacity, (size_t)2, &new_capacity)) {
-        daemon_log_err("file_capacity overflow detected");
+        LOG_ERR("file_capacity overflow detected during dynamic resize");
         free_file_list(file_list, file_count);
         closedir(dir);
         return -1;
       }
       char **new_list = realloc(file_list, new_capacity * sizeof(char *));
       if (!new_list) {
-        daemon_log_err("Out of memory expanding file list");
+        LOG_ERR("Out of memory expanding file list");
         free_file_list(file_list, file_count);
         closedir(dir);
         return -1;
@@ -1136,7 +1129,7 @@ static int collect_config_files(const char *config_dir, char ***out_file_list,
 
     file_list[file_count] = strdup(name);
     if (!file_list[file_count]) {
-      daemon_log_err("Out of memory allocating file name");
+      LOG_ERR("Out of memory allocating file name");
       free_file_list(file_list, file_count);
       closedir(dir);
       return -1;
@@ -1195,7 +1188,7 @@ static int merge_config_into_global(struct config *file_cfg, const char *full_pa
         memset(&file_cfg->jails[j], 0, sizeof(struct jail));
         found = 1;
         updated_count++;
-        daemon_log_info("Updated existing jail '%s' from: %s", old_jail->name, full_path);
+        LOG_INFO("Updated existing jail '%s' from: %s", old_jail->name, full_path);
         break;
       }
     }
@@ -1203,7 +1196,7 @@ static int merge_config_into_global(struct config *file_cfg, const char *full_pa
       continue;
 
     if (cfg.jail_count >= MAX_JAILS) {
-      daemon_log_warn("MAX_JAILS limit reached, cannot add more jails");
+      LOG_WARN("MAX_JAILS limit reached, cannot add more jails");
       break;
     }
     memcpy(&cfg.jails[cfg.jail_count], &file_cfg->jails[j], sizeof(struct jail));
@@ -1246,8 +1239,8 @@ static int merge_config_into_global(struct config *file_cfg, const char *full_pa
 
   pthread_rwlock_unlock(&config_rwlock);
 
-  daemon_log_info("Added %d new jail(s), updated %d existing jail(s) from: %s",
-                  added_count, updated_count, full_path);
+  LOG_INFO("Added %d new jail(s), updated %d existing jail(s) from: %s",
+           added_count, updated_count, full_path);
   return 0;
 }
 
@@ -1259,14 +1252,14 @@ int load_config_directory(const char *config_dir) {
   int file_count = 0;
   int ret = 0;
 
-  daemon_log_info("Loading configuration directory: %s", config_dir);
+  LOG_INFO("Loading configuration directory: %s", config_dir);
 
   if (collect_config_files(config_dir, &file_list, &file_count) < 0) {
     return -1;
   }
 
   if (file_count == 0) {
-    daemon_log_warn("No .yaml/.yml files found in: %s", config_dir);
+    LOG_WARN("No .yaml/.yml files found in: %s", config_dir);
     free(file_list);
     return 0;
   }
@@ -1277,11 +1270,11 @@ int load_config_directory(const char *config_dir) {
     char full_path[1024];
     snprintf(full_path, sizeof(full_path), "%s/%s", config_dir, file_list[i]);
 
-    daemon_log_info("Loading config file [%d/%d]: %s", i + 1, file_count, full_path);
+    LOG_INFO("Loading config file [%d/%d]: %s", i + 1, file_count, full_path);
 
     struct config *file_cfg = calloc(1, sizeof(struct config));
     if (!file_cfg) {
-      daemon_log_err("Out of memory allocating temp config for: %s", full_path);
+      LOG_ERR("Out of memory allocating temp config for: %s", full_path);
       ret = -1;
       continue;
     }
@@ -1289,7 +1282,7 @@ int load_config_directory(const char *config_dir) {
     init_temp_config(file_cfg, full_path, config_dir);
 
     if (!file_cfg->config_file || !file_cfg->config_dir) {
-      daemon_log_err("Out of memory allocating config paths for: %s", full_path);
+      LOG_ERR("Out of memory allocating config paths for: %s", full_path);
       free_config_partial(file_cfg);
       free(file_cfg);
       ret = -1;
@@ -1297,14 +1290,14 @@ int load_config_directory(const char *config_dir) {
     }
 
     if (parse_yaml_into(full_path, file_cfg) < 0) {
-      daemon_log_warn("Failed to parse config file: %s (continuing with others)", full_path);
+      LOG_WARN("Failed to parse config file: %s (continuing with others)", full_path);
       free_config_partial(file_cfg);
       free(file_cfg);
       continue;
     }
 
     if (config_validate(file_cfg) < 0) {
-      daemon_log_warn("Config validation failed for: %s (continuing)", full_path);
+      LOG_WARN("Config validation failed for: %s (continuing)", full_path);
       free_config_partial(file_cfg);
       free(file_cfg);
       continue;
@@ -1317,11 +1310,11 @@ int load_config_directory(const char *config_dir) {
   }
 
   pthread_rwlock_rdlock(&config_rwlock);
-  daemon_log_info("Loaded %d jails from directory: %s", cfg.jail_count, config_dir);
+  LOG_INFO("Loaded %d jails from directory: %s", cfg.jail_count, config_dir);
   for (int i = 0; i < cfg.jail_count; i++) {
-    daemon_log_info("  Jail[%d]: %s (enabled=%d, log_count=%d, max_retries=%u)",
-                    i, cfg.jails[i].name, cfg.jails[i].enabled,
-                    cfg.jails[i].log_count, cfg.jails[i].max_retries);
+    LOG_INFO("  Jail[%d]: %s (enabled=%d, log_count=%d, max_retries=%u)", i,
+             cfg.jails[i].name, cfg.jails[i].enabled, cfg.jails[i].log_count,
+             cfg.jails[i].max_retries);
   }
   pthread_rwlock_unlock(&config_rwlock);
 
@@ -1339,19 +1332,19 @@ void setup_signals(void) {
   sa.sa_flags = 0;
 
   if (sigaction(SIGTERM, &sa, NULL) == -1) {
-    daemon_log_err("Failed to setup SIGTERM handler: %s", strerror(errno));
+    LOG_ERR("Failed to setup SIGTERM handler: %s", strerror(errno));
   }
   if (sigaction(SIGINT, &sa, NULL) == -1) {
-    daemon_log_err("Failed to setup SIGINT handler: %s", strerror(errno));
+    LOG_ERR("Failed to setup SIGINT handler: %s", strerror(errno));
   }
   if (sigaction(SIGHUP, &sa, NULL) == -1) {
-    daemon_log_err("Failed to setup SIGHUP handler: %s", strerror(errno));
+    LOG_ERR("Failed to setup SIGHUP handler: %s", strerror(errno));
   }
 
   /* 忽略 SIGPIPE */
   sa.sa_handler = SIG_IGN;
   if (sigaction(SIGPIPE, &sa, NULL) == -1) {
-    daemon_log_err("Failed to ignore SIGPIPE: %s", strerror(errno));
+    LOG_ERR("Failed to ignore SIGPIPE: %s", strerror(errno));
   }
 }
 
@@ -1375,7 +1368,7 @@ int parse_config(int argc, char *argv[]) {
   cfg.metrics_port = DEFAULT_METRICS_PORT;
   cfg.metrics_bind_address = strdup("127.0.0.1"); /* 修复 P1-5：默认绑定 localhost */
   if (!cfg.metrics_bind_address) {
-    fprintf(stderr, "Error: out of memory allocating metrics bind address\n");
+    bootstrap_emit_err("out of memory allocating metrics bind address");
     return -1;
   }
   cfg.jail_count = 0;
@@ -1408,11 +1401,11 @@ int parse_config(int argc, char *argv[]) {
       if (config_path) {
         cfg.config_file = strdup(config_path);
         if (!cfg.config_file) {
-          fprintf(stderr, "Error: out of memory allocating config file path\n");
+          bootstrap_emit_err("out of memory allocating config file path");
           return -1;
         }
         if (parse_config_file(config_path) < 0) {
-          fprintf(stderr, "Error: failed to parse config file: %s\n", config_path);
+          bootstrap_emit_err("failed to parse config file: %s", config_path);
           free(cfg.config_file);
           cfg.config_file = NULL;
           return -1;
@@ -1423,11 +1416,11 @@ int parse_config(int argc, char *argv[]) {
       const char *config_path = argv[i] + 9;
       cfg.config_file = strdup(config_path);
       if (!cfg.config_file) {
-        fprintf(stderr, "Error: out of memory allocating config file path\n");
+        bootstrap_emit_err("out of memory allocating config file path");
         return -1;
       }
       if (parse_config_file(config_path) < 0) {
-        fprintf(stderr, "Error: failed to parse config file: %s\n", config_path);
+        bootstrap_emit_err("failed to parse config file: %s", config_path);
         free(cfg.config_file);
         cfg.config_file = NULL;
         return -1;
@@ -1439,11 +1432,11 @@ int parse_config(int argc, char *argv[]) {
       if (dir_path) {
         cfg.config_dir = strdup(dir_path);
         if (!cfg.config_dir) {
-          fprintf(stderr, "Error: out of memory allocating config dir path\n");
+          bootstrap_emit_err("out of memory allocating config dir path");
           return -1;
         }
         if (load_config_directory(dir_path) < 0) {
-          fprintf(stderr, "Warning: failed to load config directory: %s\n", dir_path);
+          bootstrap_emit_warn("failed to load config directory: %s", dir_path);
           /* 非致命错误：在没有配置的情况下继续 */
         }
         break;
@@ -1452,11 +1445,11 @@ int parse_config(int argc, char *argv[]) {
       const char *dir_path = argv[i] + 13;
       cfg.config_dir = strdup(dir_path);
       if (!cfg.config_dir) {
-        fprintf(stderr, "Error: out of memory allocating config dir path\n");
+        bootstrap_emit_err("out of memory allocating config dir path");
         return -1;
       }
       if (load_config_directory(dir_path) < 0) {
-        fprintf(stderr, "Warning: failed to load config directory: %s\n", dir_path);
+        bootstrap_emit_warn("failed to load config directory: %s", dir_path);
       }
     }
     /* 检查 --strict 或 -s（严格模式） */
@@ -1475,15 +1468,15 @@ int parse_config(int argc, char *argv[]) {
       if (access(default_config_dirs[i], F_OK) == 0) {
         cfg.config_dir = strdup(default_config_dirs[i]);
         if (!cfg.config_dir) {
-          fprintf(stderr, "Error: out of memory allocating config dir path\n");
+          bootstrap_emit_err("out of memory allocating config dir path");
           return -1;
         }
         if (load_config_directory(default_config_dirs[i]) < 0) {
-          daemon_log_warn("No config files found in: %s", default_config_dirs[i]);
+          LOG_WARN("No config files found in: %s", default_config_dirs[i]);
           free(cfg.config_dir);
           cfg.config_dir = NULL;
         } else {
-          daemon_log_info("Using default config directory: %s", default_config_dirs[i]);
+          LOG_INFO("Using default config directory: %s", default_config_dirs[i]);
           break;
         }
       }
@@ -1502,13 +1495,13 @@ int parse_config(int argc, char *argv[]) {
       break;
     case 's':
       config_strict_mode = 1;
-      fprintf(stderr, "Strict mode enabled: invalid config parameters will "
-                      "cause loading failure\n");
+      bootstrap_emit_info("strict mode enabled: invalid config parameters will "
+                          "cause loading failure");
       break;
     case 'p':
       config_strict_mode = 0;
-      fprintf(stderr, "Permissive mode enabled: invalid config parameters will "
-                      "be ignored with warnings\n");
+      bootstrap_emit_info("permissive mode enabled: invalid config parameters will "
+                          "be ignored with warnings");
       break;
     case 'h':
       printf("Usage: %s [OPTIONS]\n", argv[0]);
@@ -1548,13 +1541,13 @@ int parse_config(int argc, char *argv[]) {
   }
 
   if (total_log_files == 0) {
-    fprintf(stderr, "Error: no jails configured. Use jails: section in config file.\n");
-    fprintf(stderr, "Example:\n");
-    fprintf(stderr, "  jails:\n");
-    fprintf(stderr, "    sshd:\n");
-    fprintf(stderr, "      enabled: true\n");
-    fprintf(stderr, "      log_files:\n");
-    fprintf(stderr, "        - /var/log/auth.log\n");
+    bootstrap_emit_err("no jails configured. Use jails: section in config file.");
+    bootstrap_emit_info("example:");
+    bootstrap_emit_info("  jails:");
+    bootstrap_emit_info("    sshd:");
+    bootstrap_emit_info("      enabled: true");
+    bootstrap_emit_info("      log_files:");
+    bootstrap_emit_info("        - /var/log/auth.log");
     return -1;
   }
 
