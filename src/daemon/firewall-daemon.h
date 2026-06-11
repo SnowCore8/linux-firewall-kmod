@@ -146,7 +146,11 @@ struct config {
   char *config_file;      /* 运行时更新的单个配置文件路径 */
   char *config_dir; /* 配置目录路径（自动加载所有 .yaml/.yml） */
   char *permanent_db_path; /* 永久封禁的 SQLite 数据库路径（NULL = 禁用） */
-  int permanent_ban_enabled;    /* 是否启用永久封禁 */
+  int permanent_ban_enabled; /* 是否启用永久封禁 */
+  char *log_file;        /* 守护进程独立日志文件路径 (NULL = 仅 syslog) */
+  int log_level;         /* 运行时日志级别 (0=NONE..4=DEBUG), 默认 3 (INFO) */
+  int log_destination;   /* 输出目的地 (0=syslog, 1=file, 2=both, 3=journal), 默认 2 */
+  int log_format;        /* 文件输出格式 (0=plain, 1=json), 默认 0 (向后兼容) */
   struct jail jails[MAX_JAILS]; /* 所有 jails */
   int jail_count;
 };

@@ -10,6 +10,11 @@ defaults:
   ban_time: 900         # 15 分钟
   interval: 1           # 检查间隔（秒）
   metrics_port: 9119    # Prometheus 指标端口
+  # 守护进程独立日志文件（NULL/留空 = 仅 syslog）
+  # 文档承诺的 /var/log/firewall.log 路径
+  log_file: /var/log/firewall.log
+  # 运行时日志级别: 0=NONE, 1=ERR, 2=WARN, 3=INFO(默认), 4=DEBUG
+  log_level: 3
 
 # ============================================================
 # Jail 定义 - 每个服务独立监控

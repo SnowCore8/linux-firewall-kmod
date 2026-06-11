@@ -243,6 +243,7 @@ declare -A SUITE_FILES=(
     ["12_permanent_ban"]="suites/12_permanent_ban.sh"
     ["13_frp_jail"]="suites/13_frp_jail.sh"
     ["14_ban_netfilter"]="suites/14_ban_netfilter.sh"
+    ["15_daemon_logfile"]="suites/15_daemon_logfile.sh"
 )
 
 declare -A SUITE_CATEGORIES=(
@@ -281,6 +282,7 @@ declare -A SUITE_GROUPS=(
     ["12_permanent_ban"]="1"
     ["13_frp_jail"]="2"
     ["14_ban_netfilter"]="1"
+    ["15_daemon_logfile"]="2"
 )
 
 run_suites_parallel() {

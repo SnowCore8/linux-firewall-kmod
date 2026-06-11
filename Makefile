@@ -81,7 +81,8 @@ DAEMON_SRCS := $(DAEMON_SRC_DIR)/firewall-daemon.c \
                $(DAEMON_SRC_DIR)/ban-manager.c \
                $(DAEMON_SRC_DIR)/file-monitor.c \
                $(DAEMON_SRC_DIR)/http-exporter.c \
-               $(DAEMON_SRC_DIR)/sqlite-persistent.c
+               $(DAEMON_SRC_DIR)/sqlite-persistent.c \
+               $(DAEMON_SRC_DIR)/log.c
 
 # P0-1: 普通编译对象文件
 DAEMON_OBJS := $(patsubst $(DAEMON_SRC_DIR)/%.c,$(DAEMON_OBJ_DIR)/%.o,$(DAEMON_SRCS))

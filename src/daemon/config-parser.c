@@ -48,6 +48,10 @@ static int is_valid_defaults_key(const char *key) {
                                "daemon",
                                "permanent_db_path",
                                "permanent_ban_enabled",
+                               "log_file",
+                               "log_level",
+                               "log_destination",
+                               "log_format",
                                NULL };
   for (int i = 0; valid_keys[i]; i++) {
     if (strcmp(key, valid_keys[i]) == 0)
@@ -243,6 +247,14 @@ static int apply_defaults_integer_config(struct config *target, const char *key,
     if (rc == 0)
       target->metrics_port = (int)uint_val;
     return rc;
+  } else if (strcmp(key, "log_level") == 0) {
+    /* log_level: 0=NONE, 1=ERR, 2=WARN, 3=INFO (默认), 4=DEBUG */
+    unsigned int uint_val;
+    int rc = parse_config_integer(key, value, 0, 4, &uint_val, strict_mode,
+                                  "defaults", config_file, has_error);
+    if (rc == 0)
+      target->log_level = (int)uint_val;
+    return rc;
   }
 
   return -1; /* 未知整数配置项 */
@@ -292,6 +304,52 @@ static int apply_defaults_string_config(struct config *target, const char *key,
     return rc < 0 ? -1 : 0;
   } else if (strcmp(key, "permanent_ban_enabled") == 0) {
     target->permanent_ban_enabled = parse_config_bool(value);
+    return 0;
+  } else if (strcmp(key, "log_file") == 0) {
+    /* 解析日志文件路径，使用与 permanent_db_path 相同的路径语义 */
+    int rc = parse_config_path(value, config_dir, &target->log_file);
+    if (rc < 0 && has_error)
+      *has_error = 1;
+    if (rc == 0) {
+      LOG_INFO("Default log_file set to: %s", target->log_file);
+    }
+    return rc < 0 ? -1 : 0;
+  } else if (strcmp(key, "log_destination") == 0) {
+    /* log_destination: 字符串配置,syslog|file|both|journal */
+    int dest = -1;
+    if (strcmp(value, "syslog") == 0)
+      dest = 0;
+    else if (strcmp(value, "file") == 0)
+      dest = 1;
+    else if (strcmp(value, "both") == 0)
+      dest = 2;
+    else if (strcmp(value, "journal") == 0)
+      dest = 3;
+    if (dest < 0) {
+      if (has_error)
+        *has_error = 1;
+      LOG_ERR("Invalid log_destination '%s' (must be syslog|file|both|journal)",
+              value);
+      return -1;
+    }
+    target->log_destination = dest;
+    LOG_INFO("Default log_destination set to: %s", value);
+    return 0;
+  } else if (strcmp(key, "log_format") == 0) {
+    /* log_format: 字符串配置,plain|json */
+    int fmt = -1;
+    if (strcmp(value, "plain") == 0)
+      fmt = 0;
+    else if (strcmp(value, "json") == 0)
+      fmt = 1;
+    if (fmt < 0) {
+      if (has_error)
+        *has_error = 1;
+      LOG_ERR("Invalid log_format '%s' (must be plain|json)", value);
+      return -1;
+    }
+    target->log_format = fmt;
+    LOG_INFO("Default log_format set to: %s", value);
     return 0;
   }
 
@@ -857,6 +915,13 @@ int parse_config_file(const char *config_path) {
     }
     new_cfg->permanent_ban_enabled = cfg.permanent_ban_enabled;
   }
+  if (cfg.log_file) {
+    new_cfg->log_file = strdup(cfg.log_file);
+    if (!new_cfg->log_file) {
+      pthread_rwlock_unlock(&config_rwlock);
+      goto cleanup;
+    }
+  }
 
   /* 复制当前默认值作为基准 */
   new_cfg->default_max_retries = cfg.default_max_retries;
@@ -865,6 +930,9 @@ int parse_config_file(const char *config_path) {
   new_cfg->daemon = cfg.daemon;
   new_cfg->interval = cfg.interval;
   new_cfg->metrics_port = cfg.metrics_port;
+  new_cfg->log_level = cfg.log_level;
+  new_cfg->log_destination = cfg.log_destination;
+  new_cfg->log_format = cfg.log_format;
   new_cfg->jail_count = 0;
   pthread_rwlock_unlock(&config_rwlock);
 
@@ -1017,6 +1085,50 @@ int parse_config_file(const char *config_path) {
     cfg.permanent_ban_enabled = new_cfg->permanent_ban_enabled;
   }
 
+  /* 应用日志配置（运行时级别 + 文件路径 + destination + format） */
+  if (new_cfg->log_level != cfg.log_level) {
+    int old_level = cfg.log_level;
+    cfg.log_level = new_cfg->log_level;
+    log_set_level(cfg.log_level);
+    LOG_INFO("Log level changed from %d to %d (runtime)", old_level, cfg.log_level);
+  }
+  if (new_cfg->log_destination != cfg.log_destination) {
+    int old_dest = cfg.log_destination;
+    cfg.log_destination = new_cfg->log_destination;
+    log_set_destination((log_destination_t)cfg.log_destination);
+    LOG_INFO("Log destination changed from %d to %d (runtime)", old_dest, cfg.log_destination);
+  }
+  if (new_cfg->log_format != cfg.log_format) {
+    int old_fmt = cfg.log_format;
+    cfg.log_format = new_cfg->log_format;
+    log_set_format((log_format_t)cfg.log_format);
+    LOG_INFO("Log format changed from %d to %d (runtime)", old_fmt, cfg.log_format);
+  }
+  if (new_cfg->log_file) {
+    /* 路径变化：重打开文件（关闭旧的 + 打开新的） */
+    if (!cfg.log_file || strcmp(cfg.log_file, new_cfg->log_file) != 0) {
+      char *old_path = cfg.log_file;
+      cfg.log_file = new_cfg->log_file;
+      new_cfg->log_file = NULL;
+      if (log_init_file(cfg.log_file) == 0) {
+        LOG_INFO("Log file switched to: %s", cfg.log_file);
+      } else {
+        LOG_WARN("Failed to switch log file to %s: %s (keeping previous)",
+                 cfg.log_file, strerror(errno));
+        /* 回滚 */
+        if (cfg.log_file) {
+          free(cfg.log_file);
+          cfg.log_file = old_path;
+        } else {
+          cfg.log_file = old_path;
+        }
+        log_init_file(cfg.log_file ? cfg.log_file : "");
+      }
+      if (old_path)
+        free(old_path);
+    }
+  }
+
   pthread_rwlock_unlock(&config_rwlock);
 
   /* 释放 new_cfg（jail 已移动，路径已移动） */
@@ -1030,6 +1142,8 @@ int parse_config_file(const char *config_path) {
     free(new_cfg->metrics_username);
   if (new_cfg->metrics_password)
     free(new_cfg->metrics_password);
+  if (new_cfg->log_file)
+    free(new_cfg->log_file);
   free(new_cfg);
 
   /* 释放旧配置快照（运行时状态已迁移） */
@@ -1153,6 +1267,9 @@ static void init_temp_config(struct config *file_cfg, const char *full_path,
   file_cfg->daemon = cfg.daemon;
   file_cfg->interval = cfg.interval;
   file_cfg->metrics_port = cfg.metrics_port;
+  file_cfg->log_level = cfg.log_level; /* 默认继承当前运行时级别 */
+  file_cfg->log_destination = cfg.log_destination;
+  file_cfg->log_format = cfg.log_format;
   file_cfg->jail_count = 0;
   pthread_rwlock_unlock(&config_rwlock);
 
@@ -1235,6 +1352,43 @@ static int merge_config_into_global(struct config *file_cfg, const char *full_pa
     cfg.permanent_db_path = file_cfg->permanent_db_path;
     file_cfg->permanent_db_path = NULL;
     cfg.permanent_ban_enabled = file_cfg->permanent_ban_enabled;
+  }
+
+  /* 日志配置（运行时级别 + 文件路径 + destination + format） */
+  if (file_cfg->log_level != cfg.log_level) {
+    int old_level = cfg.log_level;
+    cfg.log_level = file_cfg->log_level;
+    log_set_level(cfg.log_level);
+    LOG_INFO("Log level changed from %d to %d", old_level, cfg.log_level);
+  }
+  if (file_cfg->log_destination != cfg.log_destination) {
+    int old_dest = cfg.log_destination;
+    cfg.log_destination = file_cfg->log_destination;
+    log_set_destination((log_destination_t)cfg.log_destination);
+    LOG_INFO("Log destination changed from %d to %d", old_dest, cfg.log_destination);
+  }
+  if (file_cfg->log_format != cfg.log_format) {
+    int old_fmt = cfg.log_format;
+    cfg.log_format = file_cfg->log_format;
+    log_set_format((log_format_t)cfg.log_format);
+    LOG_INFO("Log format changed from %d to %d", old_fmt, cfg.log_format);
+  }
+  if (file_cfg->log_file &&
+      (!cfg.log_file || strcmp(cfg.log_file, file_cfg->log_file) != 0)) {
+    char *old_path = cfg.log_file;
+    cfg.log_file = file_cfg->log_file;
+    file_cfg->log_file = NULL;
+    if (log_init_file(cfg.log_file) == 0) {
+      LOG_INFO("Log file switched to: %s", cfg.log_file);
+    } else {
+      LOG_WARN("Failed to switch log file to %s: %s", cfg.log_file, strerror(errno));
+      if (cfg.log_file) {
+        free(cfg.log_file);
+        cfg.log_file = old_path;
+      }
+    }
+    if (old_path)
+      free(old_path);
   }
 
   pthread_rwlock_unlock(&config_rwlock);
@@ -1376,6 +1530,10 @@ int parse_config(int argc, char *argv[]) {
   cfg.config_dir = NULL;
   cfg.permanent_db_path = NULL;
   cfg.permanent_ban_enabled = 0;
+  cfg.log_file = NULL;
+  cfg.log_level = LOG_LEVEL_INFO; /* 默认 INFO 级别，与编译时一致 */
+  cfg.log_destination = 2;     /* LOG_DEST_BOTH: 双写 syslog + 文件(向后兼容) */
+  cfg.log_format = 0;          /* LOG_FORMAT_PLAIN: 纯文本,兼容现有 grep */
 
   /* 初始化 jails */
   for (int i = 0; i < MAX_JAILS; i++) {

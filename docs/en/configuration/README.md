@@ -8,7 +8,7 @@ This section describes the configuration methods and options for the Linux Firew
 |------|------|---------|
 | Main config | `/etc/firewall/default.yaml` | Global settings and jail definitions |
 | Database | `/var/lib/firewall/bans.db` | SQLite persistent ban records |
-| Log file | `/var/log/firewall.log` | Daemon log |
+| Log file | `/var/log/firewall.log` | Daemon log (independent of syslog) |
 
 ## Configuration Hierarchy
 
@@ -60,6 +60,40 @@ graph TD
     J_ACTION --> J_MAX
     J_NAME --> J_PORT
     J_NAME --> J_PROTO
+```
+
+## Global Configuration Reference
+
+### `log_file` (Independent log file)
+
+- **Type**: string path
+- **Default**: `/var/log/firewall.log` (pre-created by debian package)
+- **Description**: The daemon tees logs to this file in addition to syslog. File uses `O_APPEND` mode for atomic appends, with `fflush` after each write.
+- **Typical usage**: `grep Banned /var/log/firewall.log | tail -10` to analyze ban records
+- **Leave empty**: syslog-only, no file is created
+- **Path restriction**: must be under `/var/log`, `/etc`, `/home`, or `/srv` (security whitelist)
+- **Hot reload**: sending SIGHUP while `log_file` changes will close the old file and open the new one without restart
+
+### `log_level` (Runtime log level)
+
+- **Type**: integer (0..4)
+- **Default**: `3` (INFO)
+- **Description**: Runtime filter threshold; logs above this level are discarded
+- **Allowed values**:
+  - `0` = NONE (no logs at all)
+  - `1` = ERR (errors only)
+  - `2` = WARN (errors + warnings)
+  - `3` = INFO (default, day-to-day operations)
+  - `4` = DEBUG (all levels, including development debugging)
+- **Hot reload**: SIGHUP-triggered config reload applies `log_level` change immediately
+
+### Example
+
+```yaml
+defaults:
+  # ... other defaults ...
+  log_file: /var/log/firewall.log
+  log_level: 3
 ```
 
 ## Configuration Loading Order

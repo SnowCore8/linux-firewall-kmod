@@ -29,6 +29,16 @@ override_dh_auto_install:
 	# 创建状态目录
 	install -d -m 700 $(CURDIR)/debian/linux-firewall-kmod/var/lib/firewall
 
+	# 预创建独立日志文件 /var/log/firewall.log（0640 root:adm）
+	# 守护进程启动时会以 O_APPEND 模式打开此文件（无需预先存在也能自动创建）
+	touch $(CURDIR)/debian/linux-firewall-kmod/var/log/firewall.log
+	chmod 0640 $(CURDIR)/debian/linux-firewall-kmod/var/log/firewall.log
+	chown root:adm $(CURDIR)/debian/linux-firewall-kmod/var/log/firewall.log 2>/dev/null || true
+
+	# 安装 logrotate 配置
+	install -d $(CURDIR)/debian/linux-firewall-kmod/etc/logrotate.d
+	install -m 644 config/logrotate/firewall-daemon $(CURDIR)/debian/linux-firewall-kmod/etc/logrotate.d/
+
 	# 安装文档
 	install -d $(CURDIR)/debian/linux-firewall-kmod/usr/share/doc/linux-firewall-kmod
 	install -m 644 README.md CHANGELOG.md LICENSE $(CURDIR)/debian/linux-firewall-kmod/usr/share/doc/linux-firewall-kmod/

@@ -214,6 +214,10 @@ void cleanup(void) {
     free(cfg.permanent_db_path);
     cfg.permanent_db_path = NULL;
   }
+  if (cfg.log_file) {
+    free(cfg.log_file);
+    cfg.log_file = NULL;
+  }
 
   pthread_rwlock_unlock(&config_rwlock);
 
@@ -226,6 +230,9 @@ void cleanup(void) {
 
   /* R9-9: 关闭缓存的 procfs bans fd */
   close_cached_bans_fd();
+
+  /* 关闭独立日志文件（log.c 后端） */
+  log_close_file();
 
   closelog();
 }
@@ -255,6 +262,31 @@ int main(int argc, char *argv[]) {
 
   /* 打开 syslog */
   openlog("firewall", LOG_PID | LOG_CONS, LOG_DAEMON);
+
+  /* 应用运行时日志配置（必须在 openlog 之后以确保 _log_emit_* helper 已可用） */
+  pthread_rwlock_rdlock(&config_rwlock);
+  int runtime_log_level = cfg.log_level;
+  const char *runtime_log_file = cfg.log_file;
+  int runtime_log_dest = cfg.log_destination;
+  int runtime_log_fmt = cfg.log_format;
+  pthread_rwlock_unlock(&config_rwlock);
+  log_set_level(runtime_log_level);
+  log_set_destination((log_destination_t)runtime_log_dest);
+  log_set_format((log_format_t)runtime_log_fmt);
+
+  /* 可选：初始化独立日志文件（cfg.log_file 非空时）。
+   * 注: 即便 destination=syslog 或 journal,cfg.log_file 非空仍会打开文件,
+   * 后续 LOG_* 宏根据 destination 决定是否调用 log_emit_file,
+   * 但文件 fp 保持打开以便 reload 切换 destination 时立即可用。 */
+  if (runtime_log_file && *runtime_log_file) {
+    if (log_init_file(runtime_log_file) == 0) {
+      LOG_INFO("Logging to file: %s (level=%d dest=%d format=%d)",
+               runtime_log_file, runtime_log_level, runtime_log_dest, runtime_log_fmt);
+    } else {
+      LOG_WARN("Failed to open log file %s: %s (falling back to syslog-only)",
+               runtime_log_file, strerror(errno));
+    }
+  }
 
   /* 在继续之前检查 procfs 接口是否存在 */
   if (access(PROCFS_DIR, F_OK) != 0) {

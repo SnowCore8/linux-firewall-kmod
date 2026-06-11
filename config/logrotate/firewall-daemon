@@ -1,0 +1,16 @@
+/var/log/firewall.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+    sharedscripts
+    postrotate
+        # 守护进程以 O_APPEND 写入,无需 reopen
+        # 仅记录轮转事件
+        [ -f /var/run/firewall-daemon.pid ] && \
+            /bin/kill -USR1 $(cat /var/run/firewall-daemon.pid) 2>/dev/null || true
+    endscript
+}
