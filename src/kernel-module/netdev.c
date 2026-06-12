@@ -5,6 +5,7 @@
  */
 
 #include "firewall.h"
+#include <linux/printk.h>
 
 /* 自动发现的临时存储结构 */
 struct temp_ip_entry {
@@ -41,6 +42,7 @@ void sync_work_handler(struct work_struct *work) {
 
   current_ips = kmalloc_array(MAX_DISCOVERED_IPS, sizeof(struct temp_ip_entry), GFP_KERNEL);
   if (!current_ips) {
+    pr_err("IP 发现临时数组内存分配失败\n");
     return;
   }
 

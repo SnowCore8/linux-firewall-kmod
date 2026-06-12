@@ -6,6 +6,7 @@
  */
 
 #include "firewall.h"
+#include <linux/printk.h>
 
 /* 外部变量声明 */
 extern unsigned int fw_ban_time;
