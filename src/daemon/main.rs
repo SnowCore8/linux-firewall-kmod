@@ -244,7 +244,10 @@ fn main() -> Result<()> {
     }
 
     jail::apply_smart_defaults_to_all(&mut cfg);
-    jail::config_validate(&cfg).map_err(|e| anyhow::anyhow!("{}", e))?;
+    if let Err(e) = jail::config_validate(&cfg) {
+        error!(logger::get(), "配置验证失败"; "error" => %e);
+        return Err(anyhow::anyhow!("{}", e));
+    }
     cfg.daemon = daemon_mode;
 
     let running = make_running();
