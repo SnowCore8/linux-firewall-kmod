@@ -16,10 +16,79 @@ The daemon `firewall-daemon` runs in userspace and is responsible for:
 
 | Component | Purpose |
 |-----------|---------|
-| Rust | Primary programming language |
-| tiny_http | Prometheus HTTP metrics server |
-| libsqlite3 | Ban record persistent storage |
-| inotify | Linux file change monitoring |
+| Rust | Primary programming language (12 modules, ~7000 lines) |
+| regex | PCRE2 regex compilation and matching |
+| rusqlite + bundled SQLite | Ban record persistent storage (`rusqlite` statically links SQLite — zero runtime dependency) |
+| tiny_http | Prometheus HTTP metrics server (port 9119) |
+| inotify | Linux file change monitoring (uses the `inotify` crate directly, not the `notify` abstraction) |
+
+## Module Structure
+
+The daemon is split into 12 Rust modules (including `lib.rs`) under `daemon/`, each with a single responsibility. Modules are wired together via explicit `use` imports — no circular dependencies.
+
+| Module | Responsibility |
+|--------|----------------|
+| `lib.rs` | Library entry point; exposes the public API. `main.rs` is a thin wrapper that parses CLI args and calls `run_daemon()`. |
+| `log` | Structured logging macros (`log_info!` / `log_warn!` / `log_error!` / `log_debug!`), filtered at runtime by the `log_level` config. |
+| `types` | Shared data types: `BanRecord`, `FailureEntry`, `JailConfig`, `Protocol`, etc. |
+| `config_parser` | YAML parsing, field validation, default merging — invalid config fails fast at startup. |
+| `log_parser` | Per-line regex matching and IP extraction; wraps the `regex` crate. |
+| `failed_tracker` | Per-jail sliding-window `(ip, count, first_seen, last_seen)` counters. |
+| `ban` | Ban-trigger logic: `max_retries` / `findtime` / `ban_time` evaluation, ProcFS issuance. |
+| `jail` | Jail lifecycle management: create / enable / disable, hot-reload diff merging. |
+| `file_monitor` | `inotify` watches, log-rotation detection, inode re-attach. |
+| `sqlite_store` | `rusqlite` wrapper: schema bootstrap, ban INSERT, expired DELETE, startup restore. |
+| `http_exporter` | `tiny_http` HTTP server exposing 14 Prometheus metrics (10 daemon + 4 kernel). |
+| `main` | CLI parsing, signal registration, `epoll` main loop, tokio runtime bootstrap. |
+
+```mermaid
+graph LR
+    main["main"] --> lib["lib.rs"]
+    lib --> config_parser
+    lib --> log_parser
+    lib --> failed_tracker
+    lib --> ban
+    lib --> jail
+    lib --> file_monitor
+    lib --> sqlite_store
+    lib --> http_exporter
+    lib --> log
+    config_parser --> types
+    log_parser --> types
+    failed_tracker --> types
+    ban --> types
+    jail --> types
+    sqlite_store --> types
+    ban --> sqlite_store
+    ban --> file_monitor
+    file_monitor --> log
+    http_exporter --> log
+```
+
+## Memory Safety
+
+The daemon is implemented in Rust, and every `unsafe { }` block carries a `// SAFETY:` comment documenting the prerequisites. The codebase currently contains **19** `unsafe` blocks, concentrated in:
+
+- `libc` syscall wrappers (`read` / `write` / `ioctl` / `fcntl`)
+- Raw `inotify` fd manipulation
+- C-string ↔ Rust `&str` conversion (with explicit length checks)
+- ProcFS file path construction
+
+Each `unsafe` block is annotated with two parts:
+
+1. **Prerequisites** — what the caller must guarantee (e.g. fd is valid, buffer length is correct, C string is NUL-terminated).
+2. **Invariant preservation** — which Rust safety invariants remain intact after the block returns.
+
+`Cargo.toml` configures an ASAN runtime-detection profile (`[profile.dev-with-debug]`):
+
+```toml
+[profile.dev-with-debug]
+inherits = "dev"
+debug = true
+# RUSTFLAGS="-Z sanitizer=address" cargo build --profile dev-with-debug
+```
+
+The CI pipeline runs `cargo test --profile dev-with-debug` to execute all unit tests under AddressSanitizer, automatically catching use-after-free, buffer-overflow, double-free, and other undefined behavior.
 
 ## Architecture
 
@@ -279,6 +348,7 @@ firewall_daemon_lines_parsed_total 1250340
 | `SIGINT` | Graceful exit, save state |
 | `SIGHUP` | Reload configuration |
 | `SIGUSR1` | Output current status to log |
+| `SIGPIPE` | Ignored (prevents daemon exit when a Prometheus scraper disconnects) |
 
 ## Configuration Hot-Reload
 

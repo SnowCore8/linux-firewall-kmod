@@ -245,6 +245,137 @@ journalctl -u firewall-daemon | grep -i "restore\|recover"
 | 数据库权限 | `chmod 644 /var/lib/firewall/bans.db` |
 | SQLite 损坏 | 备份并重建数据库 |
 
+### 永久黑名单 SQLite 不创建
+
+**症状**：
+
+- 守护进程运行但 `/var/lib/firewall/bans.db` 不存在
+- prometheus `firewall_daemon_*` 指标工作正常
+- `journalctl -u firewall-daemon` 没有 "SQLite database initialized" 日志
+
+**诊断**：
+
+1. 查 `cfg.permanent_ban_enabled` 的实际值(daemon 启动时若为 `false` 就不会初始化 SQLite)。
+2. 查 `/etc/firewall/default.yaml` 中 `permanent_ban_enabled` 和 `permanent_db_path` 的位置。
+3. 如果这俩字段在顶层(在 `jails:` 之后),Rust parser 静默忽略 — 整个 `defaults:` 块以外的字段都不会进入 `Config` 结构体。
+
+**修复**：
+
+```yaml
+# 错误 (字段在顶层,被静默忽略):
+jails:
+  sshd: ...
+permanent_ban_enabled: true        # ← 顶层,parser 看不到
+permanent_db_path: "/var/lib/firewall/bans.db"
+
+# 正确 (字段必须在 defaults: 内):
+defaults:
+  ...
+  permanent_ban_enabled: true      # ← defaults: 内部
+  permanent_db_path: "/var/lib/firewall/bans.db"
+jails:
+  sshd: ...
+```
+
+### 守护进程无法打开 /var/log/firewall.log
+
+**症状**：启动时日志出现：
+
+```
+WARN  Failed to open log file /var/log/firewall.log: Read-only file system (os error 30) (falling back to syslog-only)
+```
+
+**原因**：systemd 单元的 `ProtectSystem=strict` 让 `/var/log` 在 daemon 视角下是只读。`/var/log` 属 `system` 命名空间,daemon 没有写权限。
+
+**修复(不推荐)**：修改 systemd 单元加 `ReadWritePaths=/var/log`:
+
+```bash
+sudo systemctl edit firewall-daemon
+# 写入:
+# [Service]
+# ReadWritePaths=/var/log
+```
+
+但这是设计上的"安全默认值" — daemon 不应该有写任意位置的权限,日志落 syslog-only 是合理选择。`journalctl -u firewall-daemon` 仍能查看全部日志。
+
+**替代方案**：把 `log_file` 路径改成 `/var/log/firewall/` 子目录,然后编辑 systemd 单元加 `ReadWritePaths=/var/log/firewall`(只对该子目录放权,比全开 `/var/log` 收敛得多):
+
+```yaml
+# /etc/firewall/default.yaml
+log_file: /var/log/firewall/firewall.log
+```
+
+```bash
+sudo mkdir -p /var/log/firewall
+sudo chown root:root /var/log/firewall
+sudo chmod 755 /var/log/firewall
+sudo systemctl edit firewall-daemon
+# [Service]
+# ReadWritePaths=/var/lib/firewall /var/log/firewall
+sudo systemctl restart firewall-daemon
+```
+
+### 测试报 "bans.db 未找到"
+
+**症状**：`make test` 跑 `tests/suites/12_permanent_ban.sh` 时部分 case 失败,提示 "bans.db not found" 或 "no such file or directory"。
+
+**原因**：与 [永久黑名单 SQLite 不创建](#永久黑名单-sqlite-不创建) 同根因 — `permanent_ban_enabled: true` 没写在 `defaults:` 内,daemon 跳过了 SQLite 初始化。
+
+**修复**：把 `permanent_ban_enabled` 和 `permanent_db_path` 移到 `defaults:` 块内,然后:
+
+```bash
+sudo systemctl restart firewall-daemon
+ls -la /var/lib/firewall/bans.db   # 应该存在了
+make test
+```
+
+### `make deb` 报 "没有规则可制作目标"
+
+**症状**：
+
+```
+make: *** 没有规则可制作目标 'deb'。 停止。
+```
+
+**原因**：旧版 Makefile(v2.2.0 之前)没有 `deb:` 规则。v2.2.1 起已修复(`make help` 也列了 `deb`)。
+
+**修复**：
+
+- 升级到 v2.2.1+:
+  ```bash
+  git pull origin main
+  make deb
+  ```
+- 或直接用 `./build-deb.sh`(不走 `make`):
+  ```bash
+  ./build-deb.sh
+  ```
+
+### `cargo: not found` 在 sudo 下
+
+**症状**：`sudo ./tests/run_tests.sh` 报：
+
+```
+make: cargo: 没有那个文件或目录
+make: *** [Makefile:100: daemon] 错误 127
+```
+
+**原因**：`sudo` 默认 `secure_path` 不含 `~/.cargo/bin`,而 rustup 装在 `~/.cargo/bin/cargo`。
+
+**修复**：
+
+- 先 `source ~/.cargo/env` 再 sudo:
+  ```bash
+  source ~/.cargo/env
+  sudo -E ./tests/run_tests.sh
+  ```
+- 或 `sudo -E` 保留当前 PATH(同样需要先 source):
+  ```bash
+  source ~/.cargo/env
+  sudo -E make test
+  ```
+- v2.2.1 起 `tests/run_tests.sh` 已自动 source `~/.cargo/env`(见 `tests/run_tests.sh:134-139`),所以重跑应该 OK。
+
 ## 内核调试
 
 ### 启用调试输出

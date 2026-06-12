@@ -247,6 +247,137 @@ journalctl -u firewall | grep -i "restore\|recover"
 | Database permissions | `chmod 644 /var/lib/firewall/bans.db` |
 | SQLite corruption | Backup and rebuild database |
 
+### Permanent ban SQLite not created
+
+**Symptoms**:
+
+- Daemon is running but `/var/lib/firewall/bans.db` does not exist
+- Prometheus `firewall_daemon_*` metrics are working normally
+- `journalctl -u firewall-daemon` does not contain "SQLite database initialized"
+
+**Diagnosis**:
+
+1. Check the actual value of `cfg.permanent_ban_enabled`. If it is `false`, the daemon skips SQLite initialization entirely.
+2. Check the location of `permanent_ban_enabled` and `permanent_db_path` in `/etc/firewall/default.yaml`.
+3. If those fields are at the top level (after `jails:`), the Rust parser silently ignores them — any field outside the `defaults:` block never makes it into the `Config` struct.
+
+**Fix**:
+
+```yaml
+# Wrong (fields at top level, silently ignored):
+jails:
+  sshd: ...
+permanent_ban_enabled: true        # ← top level, parser can't see it
+permanent_db_path: "/var/lib/firewall/bans.db"
+
+# Correct (fields must live inside defaults:):
+defaults:
+  ...
+  permanent_ban_enabled: true      # ← inside defaults:
+  permanent_db_path: "/var/lib/firewall/bans.db"
+jails:
+  sshd: ...
+```
+
+### Daemon cannot open /var/log/firewall.log
+
+**Symptoms**: At startup the log shows:
+
+```
+WARN  Failed to open log file /var/log/firewall.log: Read-only file system (os error 30) (falling back to syslog-only)
+```
+
+**Cause**: The systemd unit's `ProtectSystem=strict` makes `/var/log` read-only from the daemon's point of view. `/var/log` is owned by the `system` namespace, and the daemon has no write access.
+
+**Fix (not recommended)**: Add `ReadWritePaths=/var/log` to the systemd unit:
+
+```bash
+sudo systemctl edit firewall-daemon
+# Add:
+# [Service]
+# ReadWritePaths=/var/log
+```
+
+But this is the deliberate "secure default" — the daemon should not have permission to write anywhere, and falling back to syslog-only is a sensible choice. `journalctl -u firewall-daemon` still shows all log output.
+
+**Alternative**: Point `log_file` at a `/var/log/firewall/` subdirectory, then grant write access to that subdirectory only (much narrower than opening all of `/var/log`):
+
+```yaml
+# /etc/firewall/default.yaml
+log_file: /var/log/firewall/firewall.log
+```
+
+```bash
+sudo mkdir -p /var/log/firewall
+sudo chown root:root /var/log/firewall
+sudo chmod 755 /var/log/firewall
+sudo systemctl edit firewall-daemon
+# [Service]
+# ReadWritePaths=/var/lib/firewall /var/log/firewall
+sudo systemctl restart firewall-daemon
+```
+
+### Tests report "bans.db not found"
+
+**Symptoms**: `make test` running `tests/suites/12_permanent_ban.sh` fails with "bans.db not found" or "no such file or directory".
+
+**Cause**: Same root cause as [Permanent ban SQLite not created](#permanent-ban-sqlite-not-created) — `permanent_ban_enabled: true` was not placed inside `defaults:`, so the daemon skipped SQLite initialization.
+
+**Fix**: Move `permanent_ban_enabled` and `permanent_db_path` into the `defaults:` block, then:
+
+```bash
+sudo systemctl restart firewall-daemon
+ls -la /var/lib/firewall/bans.db   # should now exist
+make test
+```
+
+### `make deb` reports "no rule to make target"
+
+**Symptoms**:
+
+```
+make: *** No rule to make target 'deb'.  Stop.
+```
+
+**Cause**: Older Makefiles (pre-v2.2.0) did not have a `deb:` rule. Fixed in v2.2.1 onwards (`make help` also lists `deb`).
+
+**Fix**:
+
+- Upgrade to v2.2.1+:
+  ```bash
+  git pull origin main
+  make deb
+  ```
+- Or invoke `./build-deb.sh` directly (bypasses `make`):
+  ```bash
+  ./build-deb.sh
+  ```
+
+### `cargo: not found` under sudo
+
+**Symptoms**: `sudo ./tests/run_tests.sh` reports:
+
+```
+make: cargo: No such file or directory
+make: *** [Makefile:100: daemon] Error 127
+```
+
+**Cause**: `sudo`'s default `secure_path` does not include `~/.cargo/bin`, but rustup installs `cargo` there.
+
+**Fix**:
+
+- `source ~/.cargo/env` before invoking sudo:
+  ```bash
+  source ~/.cargo/env
+  sudo -E ./tests/run_tests.sh
+  ```
+- Or use `sudo -E` to preserve the current PATH (still requires `source` first):
+  ```bash
+  source ~/.cargo/env
+  sudo -E make test
+  ```
+- v2.2.1 onwards `tests/run_tests.sh` auto-sources `~/.cargo/env` (see `tests/run_tests.sh:134-139`), so re-running should just work.
+
 ## Kernel Debugging
 
 ### Enable Debug Output

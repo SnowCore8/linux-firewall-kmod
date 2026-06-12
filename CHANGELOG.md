@@ -2,22 +2,44 @@
 
 所有重要的项目变更记录都在此文件中。
 
-## [Unreleased] - 守护进程独立日志文件落地
+## [Unreleased] - C→Rust 翻译 + 二进制优化 + CI 升级（v2.2.1）
 
 ### 新增
-- **守护进程独立日志文件** - 实现 `cfg.log_file` 配置项（默认 `/var/log/firewall.log`），守护进程现在同时输出到 syslog 与独立日志文件，文档承诺的 `/var/log/firewall.log` 路径正式落地
-- **运行时日志级别** - 实现 `cfg.log_level`（0=NONE..4=DEBUG），可在 reload 时通过 SIGHUP 动态调整
-- **统一日志系统（log.h）** - 将 `daemon_log_*` / `sqlite_log_*` / `exporter_log_*` 4 套分散宏合并为单一 `LOG_*` 宏族（5 级：ERR/WARN/INFO/DEBUG）
-- **logrotate 配置** - 新增 `config/logrotate/firewall-daemon`，默认 30 天保留
-- **debian 安装脚本** - `debian/rules` 创建 `/var/log/` 目录并预创建 0640 权限的空日志文件
+- **守护进程 C→Rust 翻译** - 12 个模块从 C 翻译为 Rust（log / ban / sqlite_store / types / failed_tracker / log_parser / jail / file_monitor / http_exporter / config_parser / main + lib.rs），约 7000 行，行为与 C 版严格等价。111 项集成测试以 `RUST=1` 全过，108 Rust 单元测试 + 1 doctest（真跑不 `no_run`/`ignore`）全过。Makefile 默认 `RUST=1`，`RUST=0` 保留 C 版回退路径
+- **`[profile.dev-with-debug]`** - 现场 crash 调试用 release 副本：32MB 带 DWARF + 符号表，配 `lto=true + opt-level=2`（继承 release），`addr2line` 可反推栈
+- **`[profile.asan]`** - ASAN 内存错误检测 profile：仅 nightly 可用，检测堆/栈越界、UAF、double-free
 
-### 行为变更
-- 默认 `config/default.yaml` 增加 `log_file: /var/log/firewall.log` 与 `log_level: 3`
-- 守护进程启动时如果 `cfg.log_file` 非空且 open 成功，启用双写（syslog + 文件）；失败则回退 syslog-only 并 LOG_WARN
-- 通过 SIGHUP 重载配置时，如 `log_file`/`log_level` 变化，运行时热切换（关闭旧文件、打开新文件、调整级别）
+### 变更
+- **默认 release 二进制 30MB → 3.8MB（7.9× 缩）** - `Cargo.toml` 加 `lto=true + codegen-units=1 + debug=false + strip=true + panic="abort"`，消除 26MB 调试信息。`cargo build --release` 产物 3.8MB stripped
+- **`build-deb.sh` 弃用 `VERSION=`** - 版本统一从 `Cargo.toml` 读取
+- **`tests/run_tests.sh` 加 `source ~/.cargo/env`** - 修复 sudo 默认 `secure_path` 不含 `~/.cargo/bin` 导致 `make daemon` 报 "cargo: 没有那个文件或目录"
+- **CI 工作流升级** - `代码质量检查` 步骤从 C daemon 的 `clang-format` 切换为 `cargo fmt --check` + `cargo clippy -- -D warnings`（Rust 后 `src/daemon/*.c` 已删，原 glob 报 "No such file or directory"）。CI 工作流自动 `rustup` 安装 stable toolchain
+- **`tests/run_tests.sh` 加 `cargo fmt` 一次性 fix** - 翻译后 12 个 .rs 文件有 rustfmt 违规，PR 修一次后 CI 卡口生效
+
+### 修复
+- **`make deb` 目标缺失** - help 列了 `deb` 但 Makefile 无 `deb:` 规则（2026-06-11 移除后没同步 help），新增 `deb: build` 调 `./build-deb.sh`
+- **`config/default.yaml` schema bug** - `permanent_db_path` / `permanent_ban_enabled` 误放顶层（`jails:` 之后），Rust parser 静默忽略，导致 systemd 模式下 `/var/lib/firewall/bans.db` 永不创建。修复：移到 `defaults:` 内部
+- **`debian/control` 虚拟包声明** - 移除 `Build-Depends: linux-headers-amd64 | linux-headers-generic`（Azure 内核 apt 源中不存在），改用 `dkms` 显式依赖
+- **`log::open_syslog` 参数** - `syslog` 调用从 `format_args!` 改为显式 `%s` 格式串 + NUL 结尾字面量
+- **`http_exporter` 认证锁定** - `log_warn_ratelimited!` 改 `log_warn!`（原唯一外部调用点）
 
 ### 移除
-- **日志限流层** - 删除 `RATELIMIT_STATE` / `RatelimitState` / `emit_ratelimited` / 4 个 `log_*_ratelimited!` 宏 / 1 个单元测试。全局 Mutex 与 60s 节流窗口不再需要,日志每条都真实 emit。原唯一调用点 `http_exporter::check_basic_auth` 认证锁定警告改为普通 `log_warn!`(每请求 1 条而非 1 秒 1 条,反而让攻击事件更易追踪)
+- **日志限流层** - 删除 `RATELIMIT_STATE` / `RatelimitState` / `emit_ratelimited` / 4 个 `log_*_ratelimited!` 宏 / 1 个单元测试。全局 Mutex 与 60s 节流窗口不再需要，日志每条都真实 emit
+- **`once_cell` 依赖** - `sqlite_store` 迁到 `std::sync::OnceLock`（Rust 1.70+）后 0 引用，删除 cargo 依赖
+
+### 优化
+- **代码质量** - 12 个 .rs 文件 `cargo fmt`（+472/-212 行），加 `cargo clippy` strict 检查后 CI 零警告
+- **19 个 `unsafe` 块加 `// SAFETY:` 注释** - 涵盖 `ban.rs` (10) / `log.rs` (3) / `file_monitor.rs` (1) / `main.rs` (5)，逐块说明前置条件 / 后置不变量
+
+### 测试
+- 集成测试 106 → **115**（+9 项），从 12 套件扩到 **13 套件**（新增 `15_daemon_logfile.sh`）。`tests/run_tests.sh` 引入 `source ~/.cargo/env` 后 100% 可在 `sudo` 下跑通
+- `cargo test --release`：**108 单元 + 1 doctest**（doctest 实际跑 `libc::syslog` 验证宏展开路径无问题）
+- GitHub Actions CI 全过：`代码质量检查` + `编译` + `运行测试` 三 job 全绿
+
+### 文档
+- `README.md` / `README.en.md` - 版本徽章 v2.1.1 → v2.2.0，"Python 运行时 + 依赖" 行（描述 fail2ban 不是本项目）移除
+- 13 个 docs/{zh,en}/*.md - 同步 Rust daemon 描述、新 profile、`make deb` 重新可用、SAFETY 注释约定、sudo PATH 修复说明
+- `CONTRIBUTING.md` - 测试数 12 套件/106 项 → 13 套件/115 项，新增 Rust unsafe SAFETY 注释约定 + Cargo release profile 章节
 
 ## v2.2.0 - 统计不变量修复与文档全面升级（2026-06-10）
 

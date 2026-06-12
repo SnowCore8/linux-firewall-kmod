@@ -25,7 +25,7 @@
 | `make debug` | 编译调试版本（`DL=1`） |
 | `make debug DL=2` | 编译调试版本（级别 2，更详细） |
 | `make asan` | 编译 AddressSanitizer 版本 |
-| `make deb [VERSION=x.x.x]` | 构建 Debian 软件包（不指定 VERSION 则从 CHANGELOG 推断） |
+| `make deb` | 构建 Debian 软件包（调用 `./build-deb.sh`，产物在 `build/deb/`） |
 
 ### 维护目标
 
@@ -95,39 +95,67 @@ make debug DL=2
 
 ## 构建守护进程
 
-### 标准编译
+守护进程（v2.2.0 起）已翻译为 Rust，由 `cargo` 构建。`make daemon`
+实际命令：
 
 ```bash
-make daemon
+cargo build --release
+cp target/release/firewall-daemon build/daemon/firewall-daemon
 ```
 
-守护进程使用 Rust 编写，由 `cargo` 构建：
+### Rust release profile（`Cargo.toml`）
 
+`Cargo.toml` 预定义 3 个 profile，对应不同用途：
+
+| Profile | 体积 | 用途 | 编译命令 |
+|---------|------|------|----------|
+| `release`（默认） | **3.8MB stripped** | 生产部署 | `cargo build --release` |
+| `dev-with-debug` | 32MB（含 DWARF + 符号） | 现场 crash 分析，配合 `addr2line` 反推栈 | `cargo build --release --profile dev-with-debug` |
+| `asan` | （含 ASAN 运行时） | 内存安全检测，需 nightly | `cargo +nightly build --profile asan` |
+
+#### release（默认）
+
+```toml
+[profile.release]
+opt-level = 2
+lto = true            # 链接时优化
+codegen-units = 1     # 单代码生成单元，更好的内联
+debug = false
+strip = true
+panic = "abort"       # 减小体积、避免 unwinding 表
 ```
-cargo build --release --bin firewall-daemon
+
+产出 3.8MB stripped 二进制，适合 `make deb` / `make install` 分发。
+
+#### dev-with-debug
+
+```toml
+[profile.dev-with-debug]
+inherits = "release"
+debug = true
+strip = false
 ```
 
-> 实际构建请使用 `make daemon`，Makefile 会调用 `cargo build` 并
-> 传递正确的 `--manifest-path` 和输出路径。
-
-### AddressSanitizer 编译
+继承 release 全部优化（`opt-level=2` + `lto=true`），**保留 DWARF +
+符号表**。生产等效速度但可定位 crash：
 
 ```bash
-make asan
+cargo build --profile dev-with-debug
+addr2line -e build/daemon/firewall-daemon 0x401a23
 ```
 
-用于检测内存错误：
+#### asan（nightly opt-in）
 
-- 缓冲区溢出
-- 释放后使用
-- 内存泄漏
-
-使用：
-
-```bash
-sudo ./firewall-daemon asan
-# 运行一段时间后检查输出
+```toml
+[profile.asan]
+inherits = "dev"
+opt-level = 1
+debug = true
+lto = false
 ```
+
+**需要 nightly toolchain**（`rustup install nightly`），用于
+AddressSanitizer 内存检测。`make asan` 目标会自动选择该 profile。
 
 ## 完整构建
 
@@ -141,6 +169,44 @@ make
 # 安装
 sudo make install
 ```
+
+## 构建 Debian 软件包
+
+`make deb` 依赖 `build` 目标（先编译内核模块与守护进程），再调用
+`./build-deb.sh` 生成 `.deb` 包：
+
+```bash
+make deb
+# 产物：build/deb/linux-firewall-kmod-<VERSION>.deb
+ls -lh build/deb/
+```
+
+包内布局（`build-deb.sh` 模板目录，DKMS 模式）：
+
+| 路径 | 内容 |
+|------|------|
+| `/usr/sbin/firewall-daemon` | 守护进程二进制（已 `strip`，约 3.8MB） |
+| `/usr/src/linux-firewall-kmod-<VERSION>/` | DKMS 源码（首次安装时由 dkms 编译） |
+| `/etc/firewall/*.yaml` | YAML 配置 |
+| `/etc/systemd/system/firewall-daemon.service` | systemd 单元 |
+| `/var/log/firewall.log` | 守护进程独立日志（`logrotate` 30 天） |
+| `/var/lib/firewall/` | 运行时状态目录（SQLite 库等） |
+
+### 版本号行为
+
+- **不传参数**：`build-deb.sh` 自动从 `CHANGELOG.md` 第一条
+  `## v` 记录提取（如 `## v2.2.0` → `2.2.0`），找不到则回退
+  硬编码默认值
+- **位置参数**：`./build-deb.sh 2.2.0` 显式指定
+- **不接受 `VERSION=` 环境变量形式**——`build-deb.sh` 只解析
+  `$1`，不读 `VERSION` 环境变量。试图 `make deb VERSION=2.2.0`
+  不会改变产物版本
+
+> 守护进程在 .deb 中安装到 `/usr/sbin/`，而 `make install` 默认
+> 走 `PREFIX=/usr/local` → `/usr/local/sbin/`。两者路径不同是因为
+> .deb 走系统包约定（`/usr/sbin/`），而 `make install` 走 FHS
+> 兼容约定。如需 `make install` 也装到 `/usr/sbin/`：
+> `sudo make install PREFIX=/usr`
 
 ## 交叉编译
 
@@ -171,15 +237,15 @@ make kernel-module KDIR=/path/to/kernel/source
 | `-O2` | 优化级别 2 |
 | `-DLINUX_VERSION_CODE` | 内核版本检测 |
 
-### 守护进程标志
+### 守护进程（Rust）profile
 
-| 标志 | 说明 |
-|------|------|
-| `-Wall -Wextra` | 启用警告 |
-| `-O2` | 发布模式优化 |
-| `-O0 -g` | 调试模式 |
-| `-fsanitize=address` | AddressSanitizer |
-| `-DDEBUG` | 启用调试代码 |
+守护进程已无 C 标志配置项，编译行为完全由 `Cargo.toml` 的
+`[profile.*]` 控制。详见 [构建守护进程 → Rust release profile](#rust-release-profile-cargotoml)。
+
+- `release`：`lto=true` + `strip=true` + `debug=false` + `panic="abort"`
+  → 3.8MB stripped
+- `dev-with-debug`：继承 release，保留 DWARF + 符号 → 32MB
+- `asan`：nightly opt-in，含 ASAN 运行时
 
 ## 构建产物
 
@@ -196,14 +262,20 @@ make kernel-module KDIR=/path/to/kernel/source
 
 | 文件 | 说明 |
 |------|------|
-| `firewall-daemon` | 守护进程二进制 |
+| `build/daemon/firewall-daemon` | 守护进程二进制（**3.8MB stripped**，默认 `release` profile） |
+| `target/release/firewall-daemon` | `cargo` 原始输出位置（`make daemon` 复制到 `build/daemon/`） |
+| `build/daemon/firewall-daemon-asan` | ASAN 版本（`make asan` 产物，体积较大含 ASAN 运行时） |
+
+> `dev-with-debug` profile 的产物不通过 `make daemon` 复制到
+> `build/daemon/`，需手动从 `target/dev-with-debug/` 取。
 
 ### 安装位置
 
 | 文件 | 安装路径 |
 |------|----------|
 | `firewall.ko` | `/lib/modules/$(uname -r)/extra/` |
-| `firewall-daemon` | `/usr/local/sbin/` |
+| `firewall-daemon`（`make deb` 产物） | `/usr/sbin/firewall-daemon` |
+| `firewall-daemon`（`make install` 产物） | `/usr/local/sbin/firewall-daemon`（默认 `PREFIX=/usr/local`） |
 | `default.yaml` | `/etc/firewall/` |
 | `firewall-daemon.service` | `/etc/systemd/system/` |
 
@@ -221,10 +293,37 @@ ERROR: Kernel configuration is invalid.
 sudo apt install --reinstall linux-headers-$(uname -r)
 ```
 
+### `cargo: not found` under sudo
+
+`sudo` 默认 `secure_path` 不含 `~/.cargo/bin`，常见于 rustup 用户级
+安装。`make test` 内部已 `sudo ./tests/run_tests.sh`，脚本入口会
+`source ~/.cargo/env` 并 `export PATH=$HOME/.cargo/bin:$PATH`，
+问题自动规避。但如果手动 `sudo make daemon` 直接调用会失败：
+
+```
+sudo make daemon
+make: cargo: 没有那个文件或目录
+make: *** [Makefile:101: daemon] 错误 127
+```
+
+解决方案（任选其一）：
+
+```bash
+# 1) sudo 前先 source
+source ~/.cargo/env
+sudo make daemon
+
+# 2) 用 --preserve-env 显式带 PATH
+sudo --preserve-env=PATH make daemon
+
+# 3) 装到系统路径（不推荐，与 rustup 用户隔离理念冲突）
+sudo cp ~/.cargo/bin/cargo /usr/local/bin/
+```
+
 ### 库版本不兼容
 
 ```
-error[E0432]: unresolved import `rusqlite`
+error[E0432]: unresolved import `regex`
 ```
 
 解决方案：

@@ -12,7 +12,7 @@ graph TD
     FW["test_framework.sh assertion functions, color output, reports"]
     CFG["test_config.sh path/parameter variables (KERNEL_MODULE_PATH, ...)"]
 
-    subgraph SUITES["suites/ numbered suites (executed in 01-12 order)"]
+    subgraph SUITES["suites/ numbered suites (executed in 01-15 order, 05/06 skipped, 13 suites / 115 assertions)"]
         S01["01_module_basic.sh"]
         S02["02_procfs_interface.sh"]
         S03["03_ban_unban.sh"]
@@ -23,6 +23,9 @@ graph TD
         S10["10_daemon_logparse.sh"]
         S11["11_resource_mgmt.sh"]
         S12["12_permanent_ban.sh"]
+        S13["13_frp_jail.sh"]
+        S14["14_ban_netfilter.sh"]
+        S15["15_daemon_logfile.sh"]
     end
 
     subgraph REPORTS["reports/ generated reports (after running)"]
@@ -49,7 +52,34 @@ graph TD
 > Since v1.5 they have been reorganized into numbered suites sharing a
 > single framework to remove duplication.
 
-## Running Tests
+## Unit Tests (Rust)
+
+The daemon (since v2.2.0) has been ported to Rust; unit tests run via
+`cargo test`:
+
+```bash
+# All unit tests + doctests
+cargo test
+
+# Only doctests
+cargo test --doc
+
+# A specific module
+cargo test config::
+```
+
+Current count: **108 unit tests + 1 doctest** (the doctest actually
+executes — it is not `no_run`).
+
+`cargo test` exercises the `#[cfg(test)]` modules inside the daemon
+crate; the 13-suite shell-driven integration test in
+`tests/run_tests.sh` complements it — unit tests verify logic at the
+source level, integration tests verify end-to-end behavior at the
+shell level.
+
+## Integration Tests
+
+### Running Tests
 
 ```bash
 # After building, run all suites
@@ -66,6 +96,62 @@ make test
 ./tests/run_tests.sh --help             # help
 ```
 
+The entry point is `tests/run_tests.sh`, which dispatches the numbered
+suites in `suites/`. Current count: 13 suites / **115** assertions.
+
+### Running under sudo
+
+`make test` internally runs `sudo ./tests/run_tests.sh`. The test
+runner fixes up `cargo`'s PATH at entry, before invoking `make daemon`:
+
+```bash
+# tests/run_tests.sh internal (~line 134-139)
+if [[ -f "$HOME/.cargo/env" ]]; then
+    source "$HOME/.cargo/env"
+fi
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+This is necessary because `sudo`'s default `secure_path` does NOT
+include `~/.cargo/bin` (the standard location when Rust is installed
+via rustup), so a bare `sudo make daemon` will fail:
+
+```
+sudo make daemon
+make: cargo: Command not found
+make: *** [Makefile:101: daemon] Error 127
+```
+
+Going through `make test` is fine, but if you run
+`sudo ./tests/run_tests.sh` manually and `cargo` is missing for the
+same reason, the symptom is `make: cargo: Command not found` — fix by
+`source ~/.cargo/env` before sudo.
+
+### Filters and Output
+
+| Flag | Purpose |
+|------|---------|
+| `--suite NN` | Run only suite `NN` (`01`..`15`) |
+| `--category X` | Filter by category (`security` / `performance` / `daemon` / `module`) |
+| `--report` | Generate a Markdown report under `tests/reports/` |
+| `--parallel` | Run suites in parallel (default: serial, to avoid shared-state races) |
+| `--help` | Full help |
+
+Each case prints a `pass` / `fail` / `warn` marker; at the end of each
+suite the runner prints a summary:
+
+```
+Suite 03_ban_unban: passed 12, failed 0, warned 0, skipped 0
+Suite 09_daemon_config: passed 8, failed 0, warned 0, skipped 0
+...
+
+Total: passed 113, failed 0, warned 2, skipped 0
+```
+
+With `--report`, results are written to
+`tests/reports/<timestamp>.md` (one entry per assertion, with output
+and elapsed time) and uploaded as a CI artifact.
+
 ## Test Suites
 
 | # | File | Coverage |
@@ -77,12 +163,16 @@ make test
 | 07 | `07_concurrency.sh` | Multi-process R/W, RCU correctness |
 | 08 | `08_stress_perf.sh` | Full 4096-entry table operations, latency |
 | 09 | `09_daemon_config.sh` | YAML loading, strict-mode validation, jail parsing |
-| 10 | `10_daemon_logparse.sh` | inotify monitoring, PCRE2 matching, jail trigger |
+| 10 | `10_daemon_logparse.sh` | inotify monitoring, regex matching, jail trigger |
 | 11 | `11_resource_mgmt.sh` | Memory, fds, procfs resource lifecycle |
 | 12 | `12_permanent_ban.sh` | SQLite permanent ban, cross-restart recovery |
+| 13 | `13_frp_jail.sh` | FRP (Fail2ban-Recover-Pattern) jail config loading and trigger |
+| 14 | `14_ban_netfilter.sh` | Blacklist netfilter chain entry format and function (real routable IP) |
+| 15 | `15_daemon_logfile.sh` | Daemon's standalone log system (`log_file` / `log_destination` / `log_format` / `log_level`) |
 
 > Numbering skips 05/06: those slots were used by old suites that have
-> since been merged into the ones above.
+> since been merged into the ones above. Current count: 13 suites
+> totaling **115** integration-test assertions.
 
 ## Framework Assertions
 
@@ -107,24 +197,67 @@ headers, so module loading can fail while functional tests still pass.
 The CI runner automatically skips module-dependent suites when this
 happens (see [ci.yml](../../../../.github/workflows/ci.yml)).
 
-## Memory Detection
+## Memory-Safety Detection (ASAN / Miri)
 
-### Valgrind
-
-```bash
-make daemon CFLAGS="-g -O0"
-sudo valgrind --leak-check=full --show-leak-kinds=all \
-    ./firewall-daemon -c config/default.yaml
-```
+The daemon (Rust) contains 19 `unsafe { }` blocks, all of them in
+`src/daemon/{ban,log,file_monitor,main}.rs`, and every one of them
+carries a `// SAFETY:` comment documenting the invariants and
+reasoning. The CI runs three layers of checks in a matrix:
 
 ### AddressSanitizer
 
+`make asan` selects the `[profile.asan]` profile (requires the
+nightly toolchain):
+
 ```bash
+# One-time install of nightly (skip if already installed)
+rustup install nightly
+
+# Build + run
 make asan
 sudo ./build/daemon/firewall-daemon-asan
 ```
 
-Any `ERROR:` line in the ASan output indicates a memory defect.
+Any `ERROR:` line in the ASan output is a memory defect.
+`build/daemon/firewall-daemon-asan` is the `make asan`-copied
+artifact (it includes the ASAN runtime, so it is larger than the
+stripped release binary).
+
+### Valgrind
+
+Useful for "same binary, swap the analyzer" workflows (e.g.
+comparing against a baseline):
+
+```bash
+cargo build --profile dev-with-debug   # 32MB with DWARF
+sudo valgrind --leak-check=full --show-leak-kinds=all \
+    ./target/dev-with-debug/firewall-daemon -c config/default.yaml
+```
+
+> The `dev-with-debug` profile is ideal for Valgrind / `addr2line` /
+> `perf`: full symbols retained while keeping release-equivalent
+> optimization.
+
+### Miri (UB detection)
+
+The Rust interpreter; catches undefined behavior (pointer aliasing,
+alignment violations, etc.):
+
+```bash
+cargo +nightly miri test
+```
+
+Miri interprets the code, so it does not require a rebuilt std
+toolchain. CI runs it as a nightly opt-in (sharing the same nightly
+toolchain as ASAN).
+
+### Unsafe-block inventory
+
+`grep -rn "unsafe {" src/daemon/` lists all 19 blocks; each sits
+next to a `// SAFETY:` comment explaining the invariants. **Any new
+`unsafe` block MUST come with a `// SAFETY:` comment**, otherwise
+the tightened `cargo clippy` rules (configured in the repo's
+`clippy.toml`) will block the merge.
 
 ## Writing a New Suite
 
@@ -150,9 +283,21 @@ assert_true "[[ -n \"$KERNEL_MODULE_PATH\" ]]" "KERNEL_MODULE_PATH is set"
 
 ## CI Integration
 
-Tests are orchestrated by the `test` job in `.github/workflows/ci.yml`:
+`.github/workflows/ci.yml` defines **3 jobs**, all of which must pass
+before a merge:
 
-1. Reuses artifacts from the `build` job
+| Job | Checks | Failure → merge |
+|-----|--------|-----------------|
+| `lint` | rustfmt + clippy (`--all-targets --all-features`) + yamllint + kernel-module clang-format | blocks merge |
+| `build` | Kernel module (`make kernel-module`) + daemon (`make daemon`) | blocks merge |
+| `test` | `sudo ./tests/run_tests.sh --report`, currently **115** assertions | any fail blocks merge |
+
+`test` job orchestration details:
+
+1. Reuses artifacts from the `build` job (`build/kernel-module/firewall.ko` + `build/daemon/firewall-daemon`)
 2. Runs `sudo ./tests/run_tests.sh --report` on the runner
-3. Auto-skips module-dependent suites if the module cannot load
-4. Uploads the report as a CI artifact
+3. Auto-skips module-dependent suites if the kernel module cannot load (Azure VM environment limitation)
+4. Uploads the report as a CI artifact (kept for 14 days)
+
+> `lint` failures usually mean a missing `// SAFETY:` comment, a
+> formatting drift, or an unjustified `unsafe` block. Fix and re-run.

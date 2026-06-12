@@ -49,14 +49,17 @@ make daemon
 ### 运行测试
 
 ```bash
-# 运行全部测试（12 个套件，106 项测试）
+# 运行全部测试（13 个套件，115 项测试）
 make test
 
-# 仅运行单元测试
-make unit-test
+# 仅运行 Rust 单元测试 (108 单元 + 1 doctest)
+cargo test --release
 
 # 仅运行集成测试
-make integration-test
+./tests/run_tests.sh
+
+# 现场 crash 调试 (32MB 带 DWARF + 符号表)
+cargo build --release --profile dev-with-debug
 ```
 
 ## 贡献方式
@@ -117,6 +120,8 @@ make integration-test
 - 使用 `anyhow::Result` 进行错误处理
 - 模块注释使用中文
 
+> **提交前必须 `cargo fmt` + `cargo clippy -- -D warnings` 通过 (CI 卡口)**。任何 warning 都会被 CI 拒绝合并,合入前请先本地跑通这两个命令。
+
 ### 注释规范
 
 - **统一使用中文注释**
@@ -134,6 +139,74 @@ make integration-test
  */
 int whitelist_check(__be32 ip);
 ```
+
+### 测试 / Tests
+
+| 测试类型 | 命令 | 规模 / 说明 |
+|----------|------|------------|
+| Rust 单元测试 | `cargo test` | 108 项 `#[test]` 单元 + 1 项 doctest。doctest 全部真跑,不写 `no_run` / `ignore` |
+| 集成测试 | `make test` | 115 项用例,13 个套件 (`tests/suites/01_*.sh` 到 `15_*.sh`,5/6 合并) |
+| 行为审计 | `c-to-rust-behavioral-audit` skill | C 守护进程已退役,审计按需触发,确保 Rust 版零回归 |
+
+**修改下列内容时必跑 `make test` 集成测试**:
+
+- YAML 配置 schema / 字段含义(例如新增 `defaults:` 块下的字段)
+- procfs 命令接口(增减 `/proc/firewall/*` 节点)
+- SQLite schema(`bans.db` 表结构 / 索引 / 迁移)
+- 守护进程与内核模块的交互协议(`/proc/firewall/ban` 写入格式等)
+
+跑测试时 `tests/run_tests.sh` 会自动 `source ~/.cargo/env` 把 `cargo` 加进 PATH,但 Rust 单元测试推荐直接在仓库根目录跑 `cargo test`。
+
+### 内存安全 (Rust unsafe 块)
+
+当前代码库共有 **19 个 `unsafe` 块**,分布在:
+
+| 文件 | 数量 | 用途 |
+|------|------|------|
+| `src/daemon/ban.rs` | 10 | `libc::open(O_NOFOLLOW)` / `libc::close` / `libc::write` 等 fd 生命周期管理 |
+| `src/daemon/main.rs` | 5 | `libc::fork` 守护进程化 / `std::fs::File::from_raw_fd` 接管 fd |
+| `src/daemon/log.rs` | 3 | `libc::openlog` / `libc::syslog` / `libc::closelog` 接入 syslog(3) |
+| `src/daemon/file_monitor.rs` | 1 | `libc::poll` 包装 inotify fd 等待事件 |
+
+**每个 `unsafe` 块都必须紧跟 `// SAFETY:` 注释**,说明:
+
+1. **前置条件**:为什么这个操作是必要的、什么不变式已经确保它安全
+2. **后置不变量**:操作完成后,程序状态依旧保持的强约束(例如:fd 所有权不泄露、`O_NOFOLLOW` 已设防 symlink 攻击、调用方拿到的 `RawFd` 唯一)
+3. **错误路径**:出错时 fd / 内存 / 全局状态如何回滚
+
+例:
+
+```rust
+// SAFETY: 调用方已持有 path 的所有权(From<CString>),
+// O_NOFOLLOW 阻止 symlink 攻击,O_WRONLY 不会读文件。
+// 失败时返回 -1,本调用方立即检查并走 cleanup 分支。
+let new_fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_NOFOLLOW) };
+```
+
+> **PR 审查硬性要求**:提交新 `unsafe` 块或修改现有 `unsafe` 块的 PR,必须在描述中包含 `// SAFETY:` 注释,**没有 SAFETY 注释的 unsafe 代码一律不合并**。如果一个 unsafe 块的安全论证超过 5 行,改写为封装函数并把 SAFETY 注释写在该函数顶端。
+
+### Cargo release profile
+
+`Cargo.toml` 定义了 3 套 release profile,按用途选用:
+
+| Profile | 命令 | 体积 | 用途 |
+|---------|------|------|------|
+| `release` (默认) | `cargo build --release` | **3.8 MB** stripped | 生产 / 发行版,启用 `lto = "fat"` + `strip = "symbols"` + `codegen-units = 1` |
+| `dev-with-debug` | `cargo build --release --profile dev-with-debug` | **~32 MB** 带 DWARF + 完整符号表 | 现场 crash 复盘,用 `coredumpctl` / `gdb` 拿回精确行号 |
+| `asan` | `cargo +nightly build --profile asan` | 较大,需 nightly | 内存检测,需 `cargo +nightly` + opt-in `.cargo/config.toml` 重编 std |
+
+**选型建议**:
+
+- 日常开发:`cargo build`(默认 dev profile,带调试信息但未优化)
+- 性能基准 / 发版前:`cargo build --release`(3.8 MB,LTO 后的最终优化)
+- 现场 crash:`cargo build --release --profile dev-with-debug`,把 binary 拷到现场跑,crash 后用 gdb attach core 还原栈
+- ASAN 内存体检:仅在 nightly 工具链上跑,平时不开
+
+**不要做的事**:
+
+- 不要在 release profile 上加 debug 符号(会让 binary 涨到 30MB+)
+- 不要在 dev profile 上做性能基准(LTO 缺失,数据偏差 20%+)
+- 不要把 `dev-with-debug` 的 binary 发到生产环境
 
 ### 提交信息规范
 

@@ -16,11 +16,79 @@
 
 | 组件 | 用途 |
 |------|------|
-| Rust | 主要编程语言 |
-| regex | 正则表达式编译和匹配 |
-| sqlite | 封禁记录持久化存储 |
-| tiny_http | Prometheus HTTP 指标服务器 |
-| notify | Linux 文件变化监控 |
+| Rust | 主要编程语言（12 个模块，约 7000 行） |
+| regex | 正则表达式编译和匹配（PCRE2 语法） |
+| rusqlite + bundled SQLite | 封禁记录持久化存储（`rusqlite` 静态链接 SQLite，零运行时依赖） |
+| tiny_http | Prometheus HTTP 指标服务器（端口 9119） |
+| inotify | Linux 文件变化监控（直接使用 `inotify` crate 绑定，未通过 `notify` 抽象层） |
+
+## 模块结构
+
+守护进程在 `daemon/` 子目录中按职责划分为 12 个 Rust 模块（含 `lib.rs`）。模块间通过显式 `use` 导入，避免循环依赖。
+
+| 模块 | 职责 |
+|------|------|
+| `lib.rs` | 库入口，导出公共 API；`main.rs` 仅做 CLI 解析后调用 `run_daemon()` |
+| `log` | 结构化日志宏（`log_info!` / `log_warn!` / `log_error!` / `log_debug!`），通过 `log_level` 配置过滤 |
+| `types` | 公共数据类型：`BanRecord`、`FailureEntry`、`JailConfig`、`Protocol` 等 |
+| `config_parser` | YAML 配置解析、字段校验、默认合并；非法配置启动期即失败 |
+| `log_parser` | 单行日志正则匹配、IP 提取；封装 `regex` crate |
+| `failed_tracker` | 每个 jail 的 `(ip, count, first_seen, last_seen)` 滑动窗口计数器 |
+| `ban` | 封禁触发逻辑：`max_retries` / `findtime` / `ban_time` 判定，调用 ProcFS 下发 |
+| `jail` | jail 生命周期管理：创建 / 启停 / 热重载差异合并 |
+| `file_monitor` | `inotify` 监听 + 日志轮转检测 + inode 重连 |
+| `sqlite_store` | `rusqlite` 封装：建表、INSERT 封禁、DELETE 过期、启动期恢复 |
+| `http_exporter` | `tiny_http` HTTP 服务，14 个 Prometheus 指标（10 daemon + 4 kernel） |
+| `main` | CLI 解析、信号注册、`epoll` 主循环、tokio runtime 启动 |
+
+```mermaid
+graph LR
+    main["main"] --> lib["lib.rs"]
+    lib --> config_parser
+    lib --> log_parser
+    lib --> failed_tracker
+    lib --> ban
+    lib --> jail
+    lib --> file_monitor
+    lib --> sqlite_store
+    lib --> http_exporter
+    lib --> log
+    config_parser --> types
+    log_parser --> types
+    failed_tracker --> types
+    ban --> types
+    jail --> types
+    sqlite_store --> types
+    ban --> sqlite_store
+    ban --> file_monitor
+    file_monitor --> log
+    http_exporter --> log
+```
+
+## 内存安全
+
+守护进程使用 Rust 实现，所有 `unsafe { }` 块均显式标注 `// SAFETY:` 注释，说明前置条件。当前代码库共有 **19 处** `unsafe` 块，主要集中在：
+
+- `libc` 系统调用封装（`read` / `write` / `ioctl` / `fcntl`）
+- `inotify` 原始 fd 操作
+- C 字符串与 Rust `&str` 互转（带长度校验）
+- ProcFS 文件路径构造
+
+每一处 `unsafe` 块都包含两段注释：
+
+1. **前置条件** — 哪些外部状态必须由调用方保证（如 fd 有效、缓冲区长度正确、C 字符串 NUL 终止）
+2. **不变量保持** — 该块执行后哪些 Rust 安全不变量仍然成立
+
+`Cargo.toml` 配置了 ASAN 运行时检测 profile（`[profile.dev-with-debug]`）：
+
+```toml
+[profile.dev-with-debug]
+inherits = "dev"
+debug = true
+# RUSTFLAGS="-Z sanitizer=address" cargo build --profile dev-with-debug
+```
+
+CI 流水线在 `cargo test --profile dev-with-debug` 阶段对所有单元测试运行 AddressSanitizer，自动捕获 use-after-free、buffer-overflow、double-free 等未定义行为。
 
 ## 架构
 
@@ -64,7 +132,7 @@ graph TB
 ```mermaid
 graph LR
     A["main"] --> B["解析命令行参数"]
-    B --> C["读取 TOML 配置文件"]
+    B --> C["读取 YAML 配置文件"]
     C --> D["初始化日志"]
     D --> E["初始化 SQLite 数据库"]
     E --> E1["恢复未过期的封禁记录"]
@@ -287,6 +355,7 @@ firewall_daemon_lines_parsed_total 1250340
 | `SIGINT` | 优雅退出，保存状态 |
 | `SIGHUP` | 重新加载配置 |
 | `SIGUSR1` | 输出当前状态到日志 |
+| `SIGPIPE` | 忽略（Prometheus 抓取端断开时不致进程退出） |
 
 ## 配置热重载
 
@@ -294,7 +363,7 @@ firewall_daemon_lines_parsed_total 1250340
 
 ```mermaid
 graph TB
-    A["收到 SIGHUP"] --> B["重新读取 TOML 配置"]
+    A["收到 SIGHUP"] --> B["重新读取 YAML 配置"]
     B --> C["比较新旧配置差异"]
     C --> D["新 jail: 初始化并注册 notify"]
     C --> E["删除 jail: 移除 notify watch"]

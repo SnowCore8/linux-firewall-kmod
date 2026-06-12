@@ -14,6 +14,9 @@ defaults:
   ban_time: 900         # 15 分钟
   interval: 1           # 检查间隔（秒）
   metrics_port: 9119    # Prometheus 指标端口
+  # 永久黑名单字段必须放在 defaults 下，不要写在顶层
+  permanent_db_path: "/var/lib/firewall/bans.db"
+  permanent_ban_enabled: true   # 默认 false
 
 # Jail 定义
 jails:
@@ -27,10 +30,6 @@ jails:
     regexes:
       failed_password:
         pattern: "Failed password for (?:invalid user )?.+ from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
-
-# 持久化
-permanent_db_path: "/var/lib/firewall/bans.db"
-permanent_ban_enabled: true
 ```
 
 ## 全局默认值 (defaults)
@@ -150,17 +149,74 @@ whitelist:
 
 - `127.0.0.1` - 本地回环地址
 
-## 持久化配置
+## 永久黑名单
+
+`ban_time: 0` 的封禁（永久封禁）会被写入 SQLite 数据库，重启后自动恢复，进程崩溃也不丢失。
 
 ```yaml
-permanent_db_path: "/var/lib/firewall/bans.db"
-permanent_ban_enabled: true
+defaults:
+  # ... 其他字段
+  permanent_db_path: "/var/lib/firewall/bans.db"
+  permanent_ban_enabled: true   # 默认 false
 ```
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `permanent_db_path` | string | `/var/lib/firewall/bans.db` | SQLite 数据库路径 |
-| `permanent_ban_enabled` | bool | `true` | 是否启用永久封禁持久化 |
+| `permanent_ban_enabled` | bool | `false` | 是否启用永久封禁持久化；设为 `true` 时 SQLite 才会被初始化和写入 |
+
+> **关键**：`permanent_db_path` 和 `permanent_ban_enabled` **必须**放在 `defaults:` 块下，**不要**写在顶层（`jails:` 同级或之后）。这是 v2.2.1 修复的一个真实 bug —— 写在顶层时解析器会**静默忽略**，SQLite 永远不会初始化。详见下一节「陷阱」。
+
+## 陷阱 (Pitfalls)
+
+YAML 配置在结构上容易写错，遇到"配置没生效"先看这一节。
+
+### 字段必须放在 `defaults:` 下
+
+所有 `defaults.*` 字段（包括 `permanent_db_path` / `permanent_ban_enabled` / `log_level` 等）**必须**写在 `defaults:` 块内，**不允许**在顶层出现同名键。解析器只读取 `defaults:` 下的字段，顶层同名字段会被静默忽略，没有任何警告或错误。
+
+**错误示例**（顶层 `permanent_*` —— v2.2.1 修复的真实 bug）：
+
+```yaml
+defaults:
+  max_retries: 5
+  # ... 没有 permanent_* 字段
+
+jails:
+  sshd: ...
+
+# 顶层字段 —— 解析器会静默忽略
+permanent_db_path: "/var/lib/firewall/bans.db"
+permanent_ban_enabled: true
+```
+
+启动后 `/var/lib/firewall/bans.db` 不会被创建，永久封禁也"看起来没生效"，但日志不会有任何报错。
+
+**正确示例**：
+
+```yaml
+defaults:
+  max_retries: 5
+  # ... 其他字段
+  permanent_db_path: "/var/lib/firewall/bans.db"
+  permanent_ban_enabled: true   # 默认 false
+
+jails:
+  sshd: ...
+```
+
+### 排查清单
+
+如果启用了永久黑名单但没看到 SQLite 数据库被创建：
+
+1. 用 `grep -n "permanent_" /etc/firewall/default.yaml` 确认字段在文件中
+2. 检查缩进 —— 字段必须**与** `max_retries` / `findtime` 等**同级**，都在 `defaults:` 下
+3. 用 `firewall-daemon -t` 跑一次 dry-run，看是否有 "DB initialized at ..." 日志
+4. 看启动日志确认是否出现 "permanent ban persistence enabled" 字样
+
+## 日志速率
+
+`log_info!` / `log_warn!` / `log_error!` / `log_debug!` 宏已经**不再提供**带速率限制的变体（例如旧的 `log_warn_ratelimited!` / 全局 `RATELIMIT_STATE` 互斥锁 + 60 秒节流已被移除）。每次调用都会**直接发出**，不做合并或去重。如需降噪，请在配置中调整 `log_level`（`info` / `warn` / `error` / `debug`）。
 
 ## 完整配置示例
 
@@ -176,6 +232,9 @@ defaults:
   ban_time: 900         # 15 分钟
   interval: 1           # 检查间隔（秒）
   metrics_port: 9119    # Prometheus 指标端口
+  # 永久封禁（SQLite 持久化）—— 必须放在 defaults 下
+  permanent_db_path: "/var/lib/firewall/bans.db"
+  permanent_ban_enabled: true   # 默认 false
 
 # ============================================================
 # Jail 定义 - 每个服务独立监控
@@ -209,12 +268,6 @@ jails:
     regexes:
       no_auth:
         pattern: "no user/password was provided for basic authentication.*client: ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
-
-# ============================================================
-# 永久封禁配置（SQLite 持久化）
-# ============================================================
-permanent_db_path: "/var/lib/firewall/bans.db"
-permanent_ban_enabled: true
 ```
 
 ## 多配置文件加载

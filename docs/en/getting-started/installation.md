@@ -86,6 +86,35 @@ Build only the daemon:
 make daemon
 ```
 
+### Building .deb from source
+
+The recommended way to build a distributable .deb package (for Debian/Ubuntu-family distributions) is `make deb`.
+
+```bash
+# Build artifacts
+make                    # Compile kernel module + Rust daemon
+                        # Kernel module: build/kernel-module/firewall.ko
+                        # Daemon:        build/daemon/firewall-daemon (3.8MB stripped)
+
+# Build .deb
+make deb                # Output: build/deb/linux-firewall-kmod-2.2.0.deb (1.5MB)
+
+# Install
+sudo dpkg -i build/deb/linux-firewall-kmod-2.2.0.deb
+# Equivalent to:
+#   1. dkms add + build + install firewall/2.2.0
+#   2. modprobe firewall
+#   3. systemctl enable --now firewall-daemon
+#   4. cp /etc/firewall/*.yaml (from /usr/share/firewall/)
+
+# Verify
+systemctl status firewall-daemon
+lsmod | grep firewall
+ls /proc/firewall/
+```
+
+> If `make deb` fails with `make: cargo: No such file or directory`, `cargo` is not on your `PATH`. Run `source ~/.cargo/env` and retry, or install rustup (https://rustup.rs).
+
 ### 3. Install
 
 ```bash
@@ -156,6 +185,39 @@ cat /proc/firewall/config
 ```bash
 curl http://localhost:9119/metrics
 ```
+
+## Post-install Behavior
+
+Whether you install via `sudo make install` or `sudo dpkg -i *.deb`, the system automatically performs the following actions:
+
+1. **systemd starts `firewall-daemon.service`**
+   - Unit file lives at `/etc/systemd/system/firewall-daemon.service`
+   - `enable --now` starts the daemon immediately and registers it for boot
+   - The unit runs under a hardened sandbox: `ProtectSystem=strict`, `ReadOnlyPaths=/etc/firewall`, `ReadWritePaths=/var/lib/firewall`
+
+2. **Loads the kernel module `firewall.ko`**
+   - Done via `modprobe firewall` or the `install-systemd` hook
+   - The module exports the following procfs files under `/proc/firewall/`: `config`, `stats`, `bans`, `whitelist`, `log_level`
+
+3. **Daemon startup sequence**
+   - Loads all YAML config files from `/etc/firewall/*.yaml` (in lexicographic order; later files override earlier ones)
+   - Compiles each jail's regex patterns (`regex::Regex::new`)
+   - Starts the Prometheus HTTP exporter on `:9119/metrics`
+   - Starts inotify watches on the `log_path` files
+   - Enters the main monitoring loop: regex match → failure counter → threshold check → write to procfs to trigger a ban
+
+4. **First-boot observation**
+   ```bash
+   journalctl -u firewall-daemon -f
+   # Expected output:
+   #   Loaded config: /etc/firewall/default.yaml
+   #   Compiled regex for jail 'sshd' (12 patterns)
+   #   Prometheus exporter listening on 0.0.0.0:9119
+   #   inotify watching /var/log/auth.log
+   #   Daemon ready
+   ```
+
+> Note: if the daemon fails to open `log_file: /var/log/firewall.log` at startup, it logs a warning "Failed to open log file ... (falling back to syslog-only)". This is by design — the systemd unit's `ProtectSystem=strict` makes `/var/log` read-only for the daemon. See [Troubleshooting - Daemon cannot open /var/log/firewall.log](../operations/troubleshooting.md#daemon-cannot-open-varlogfirewalllog).
 
 ## Uninstallation
 

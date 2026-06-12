@@ -86,6 +86,35 @@ make kernel-module
 make daemon
 ```
 
+### 从源码构建 .deb 包
+
+推荐使用 `make deb` 一步构建可分发的 .deb 安装包(适用于 Debian/Ubuntu 系发行版)。
+
+```bash
+# 编译产物
+make                    # 编译内核模块 + Rust 守护进程
+                        # 内核模块: build/kernel-module/firewall.ko
+                        # 守护进程: build/daemon/firewall-daemon (3.8MB stripped)
+
+# 构建 .deb
+make deb                # 输出: build/deb/linux-firewall-kmod-2.2.0.deb (1.5MB)
+
+# 安装
+sudo dpkg -i build/deb/linux-firewall-kmod-2.2.0.deb
+# 等同于:
+#   1. dkms add + build + install firewall/2.2.0
+#   2. modprobe firewall
+#   3. systemctl enable --now firewall-daemon
+#   4. cp /etc/firewall/*.yaml (从 /usr/share/firewall/ 复制)
+
+# 验证
+systemctl status firewall-daemon
+lsmod | grep firewall
+ls /proc/firewall/
+```
+
+> 如果 `make deb` 报 `make: cargo: 没有那个文件或目录`,说明 PATH 里没有 cargo。可以 `source ~/.cargo/env` 后重试,或安装 rustup (https://rustup.rs)。
+
 ### 3. 安装
 
 ```bash
@@ -156,6 +185,39 @@ cat /proc/firewall/config
 ```bash
 curl http://localhost:9119/metrics
 ```
+
+## 安装后行为
+
+无论是 `sudo make install` 还是 `sudo dpkg -i *.deb` 安装完成,系统会自动执行以下动作:
+
+1. **systemd 启动 `firewall-daemon.service`**
+   - 单元文件位于 `/etc/systemd/system/firewall-daemon.service`
+   - `enable --now` 后立即启动并设为开机自启
+   - 单元配置已启用安全沙箱:`ProtectSystem=strict`、`ReadOnlyPaths=/etc/firewall`、`ReadWritePaths=/var/lib/firewall`
+
+2. **加载内核模块 `firewall.ko`**
+   - 通过 `modprobe firewall` 或 `install-systemd` 钩子加载
+   - 模块在 `/proc/firewall/` 下导出 config / stats / bans / whitelist / log_level 等 procfs 文件
+
+3. **守护进程启动流程**
+   - 读取 `/etc/firewall/*.yaml` 下的所有配置文件(按字典序加载,后加载的覆盖前加载的)
+   - 编译各 jail 的正则表达式(`regex::Regex::new`)
+   - 启动 Prometheus HTTP exporter 监听 `:9119/metrics`
+   - 启动 inotify 监听 `log_path` 配置的日志文件
+   - 进入主监控循环:正则匹配 → 失败计数 → 阈值判定 → 调用 procfs 触发封禁
+
+4. **首次启动观察**
+   ```bash
+   journalctl -u firewall-daemon -f
+   # 正常输出:
+   #   Loaded config: /etc/firewall/default.yaml
+   #   Compiled regex for jail 'sshd' (12 patterns)
+   #   Prometheus exporter listening on 0.0.0.0:9119
+   #   inotify watching /var/log/auth.log
+   #   Daemon ready
+   ```
+
+> 注意:守护进程启动后若 `log_file: /var/log/firewall.log` 打开失败,会以 warning 级别记录 "Failed to open log file ... (falling back to syslog-only)"。这是 systemd 单元 `ProtectSystem=strict` 故意让 `/var/log` 不可写的设计 — 详见 [故障排查 - 守护进程无法打开 /var/log/firewall.log](../operations/troubleshooting.md#守护进程无法打开-varlogfirewalllog)。
 
 ## 卸载
 

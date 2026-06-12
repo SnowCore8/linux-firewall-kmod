@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml/badge.svg)](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v2.1-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
+[![Release](https://img.shields.io/badge/release-v2.2.0-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
 [![Language](https://img.shields.io/badge/Language-Rust%20%2B%20C-blue.svg)]()
 [![Platform](https://img.shields.io/badge/Platform-Linux%205.x%20%7C%206.x-orange.svg)]()
 
@@ -12,7 +12,7 @@
 
 ## Overview
 
-Firewall is a Linux kernel module version of fail2ban, moving the ban logic from userspace to kernelspace using the netfilter framework for real-time IP banning at the packet level with lower latency and higher performance.
+Firewall is a Linux kernel module version of fail2ban, moving the ban logic from userspace to kernelspace using the netfilter framework for real-time IP banning at the packet level with lower latency and higher performance. The userspace daemon is now written in Rust (translated from C in v2.2.0), producing a 3.8MB stripped binary; 111 integration tests pass with `RUST=1`.
 
 ## Why This Project
 
@@ -20,8 +20,9 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 |---------|---------------------|----------------------|
 | Ban Location | iptables/nftables userspace | netfilter kernel hooks |
 | Response Time | Seconds | Milliseconds |
-| Resource Usage | Python runtime + dependencies | Rust daemon |
+| Resource Usage | Python interpreter + full dep chain | Single-file 3.8MB Rust binary |
 | Lookup Performance | Linear rule scan | Hash table O(1) lookup |
+| Permanent Ban | Config file | SQLite WAL + soft-delete + startup restore |
 
 ## Core Features
 
@@ -31,15 +32,16 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 - ✅ **Auto-expire cleanup** — periodic cleanup of expired bans
 - ✅ **IP whitelist protection** — auto-discovery + manual entries (64 capacity)
 - ✅ **procfs interface** — ban/unban/whitelist/config operations
-- ✅ **Rust daemon** — no Python dependency, safe and efficient
+- ✅ **Rust daemon (v2.2.0+)** — 12 modules / 7000 lines, 3.8MB stripped binary, behaviorally equivalent to the C version
 - ✅ **Regex parsing** — named capture groups for IP extraction
 - ✅ **RCU concurrency safety** — spinlock protected, high-concurrency safe
 - ✅ **Strict config validation** — unknown params rejected by default
-- ✅ **State persistence** — SQLite for permanent ban recovery
-- ✅ **Prometheus metrics** — exported on port 9119
-- ✅ **Security Hardening** — Integer overflow protection, Use-After-Free fix, RCU consistency
-- ✅ **Performance Optimization** — Hash table capacity 4096, SQLite statement cache, whitelist two-stage matching
-- ✅ **Code Quality** — Unified goto cleanup pattern, extracted common config parsing functions
+- ✅ **State persistence** — SQLite WAL + soft-delete for permanent ban recovery
+- ✅ **Prometheus metrics** — 14 metrics on port 9119 (4 kernel + 10 user-space)
+- ✅ **Independent log file** — `cfg.log_file` default `/var/log/firewall.log`, falls back to syslog-only on open failure
+- ✅ **Security hardening** — Integer overflow protection, UAF fix, RCU consistency, 19 `unsafe` blocks all with `// SAFETY:` comments
+- ✅ **Performance optimization** — Hash table 4096, SQLite statement cache, whitelist two-stage match, LTO compilation
+- ✅ **Code quality** — 108 unit tests + 1 real-running doctest + 115 integration tests 100% pass, CI three jobs all green
 
 ## Quick Start
 
@@ -81,6 +83,14 @@ sudo ./build/daemon/firewall-daemon -c config/default.yaml  # Custom config
 sudo ./build/daemon/firewall-daemon --help                  # Help
 ```
 
+### Build .deb Package
+
+```bash
+make deb                 # Calls ./build-deb.sh
+                         # Output: build/deb/linux-firewall-kmod-2.2.0.deb (1.5MB)
+sudo dpkg -i build/deb/linux-firewall-kmod-2.2.0.deb  # Install (DKMS auto-builds + systemd start)
+```
+
 > 📖 Docs: [中文](docs/zh/) | [English](docs/en/) | [Online Viewer](https://snowcore8.github.io/linux-firewall-kmod/)
 
 ## 📚 Documentation Navigation
@@ -90,10 +100,12 @@ Browse the full documentation via the sidebar. Quick links:
 - [Getting Started](docs/en/getting-started/README.md) - Install, build, first use
 - [Configuration](docs/en/configuration/README.md) - YAML Jail format, parameters
 - [Architecture](docs/en/architecture/README.md) - Kernel module & daemon design
-- [Operations](docs/en/operations/README.md) - Management, monitoring, troubleshooting
-- [Development](docs/en/development/README.md) - Build, test, contribution
+- [Operations](docs/en/operations/README.md) - Management, monitoring
+  - [Troubleshooting](docs/en/operations/troubleshooting.md)
+- [Development](docs/en/development/README.md) - Build, contribution
+  - [Testing](docs/en/development/testing.md)
 - [Migration](docs/en/migration/from-fail2ban.md) - From fail2ban
-- [CHANGELOG.md](CHANGELOG.md) - v1.0 to v2.1 changelog
+- [CHANGELOG.md](CHANGELOG.md) - v1.0 to v2.2 changelog
 
 ## Use Cases
 

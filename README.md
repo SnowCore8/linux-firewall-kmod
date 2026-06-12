@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml/badge.svg)](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v2.1.1-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
+[![Release](https://img.shields.io/badge/release-v2.2.0-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
 [![Language](https://img.shields.io/badge/Language-Rust%20%2B%20C-blue.svg)]()
 [![Platform](https://img.shields.io/badge/Platform-Linux%205.x%20%7C%206.x-orange.svg)]()
 
@@ -12,7 +12,7 @@
 
 ## 概述
 
-Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用户空间移至内核空间，使用 netfilter 框架在数据包级别进行实时 IP 封禁，具有更低的延迟和更高的性能。
+Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用户空间移至内核空间，使用 netfilter 框架在数据包级别进行实时 IP 封禁，具有更低的延迟和更高的性能。守护进程用 Rust 实现（v2.2.0 起从 C 翻译），二进制 3.8MB stripped，111 项集成测试以 `RUST=1` 跑通。
 
 ## 为什么选择本项目
 
@@ -20,8 +20,9 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 |--------|-------------------|-------------------|
 | 封禁位置 | iptables/nftables 用户态 | netfilter 内核钩子 |
 | 响应延迟 | 秒级 | 毫秒级 |
-| 资源占用 | Python 运行时 + 依赖 | Rust 守护进程 |
+| 资源占用 | Python 解释器 + 完整依赖链 | 单文件 3.8MB Rust 二进制 |
 | 查找性能 | 线性遍历规则 | 哈希表 O(1) 查找 |
+| 永久封禁 | 配置文件 | SQLite WAL + 软删除 + 启动恢复 |
 
 ## 核心特性
 
@@ -31,15 +32,16 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 - ✅ **自动过期清理** — 定时清理过期封禁记录
 - ✅ **IP 白名单保护** — 自动发现系统 IP + 手动添加（64 容量）
 - ✅ **procfs 用户接口** — 封禁/解封/白名单/配置操作
-- ✅ **Rust 守护进程** — 无 Python 依赖，安全高效
+- ✅ **Rust 守护进程（v2.2.0+）** — 12 个模块 / 7000 行，3.8MB stripped 二进制，行为与 C 版严格等价
 - ✅ **正则解析** — 支持命名捕获组提取 IP
 - ✅ **RCU 并发安全** — spinlock 保护，高并发安全
 - ✅ **严格配置校验** — 未知参数或无效值直接报错拒绝加载
-- ✅ **状态持久化** — SQLite 保存/恢复永久封禁
-- ✅ **Prometheus 指标** — 端口 9119 导出监控指标
-- ✅ **安全加固** — 整数溢出防护、Use-After-Free 修复、RCU 一致性增强
-- ✅ **性能优化** — 哈希表容量 4096、SQLite 语句缓存、白名单两阶段匹配
-- ✅ **代码质量** — 统一 goto cleanup 模式、提取通用配置解析函数
+- ✅ **状态持久化** — SQLite WAL + 软删除保存/恢复永久封禁
+- ✅ **Prometheus 指标** — 端口 9119 导出 14 个监控指标（4 内核 + 10 用户态）
+- ✅ **独立日志文件** — `cfg.log_file` 默认 `/var/log/firewall.log`，失败回退 syslog-only
+- ✅ **安全加固** — 整数溢出防护、Use-After-Free 修复、RCU 一致性增强、19 个 unsafe 块全部带 `// SAFETY:` 注释
+- ✅ **性能优化** — 哈希表容量 4096、SQLite 语句缓存、白名单两阶段匹配、LTO 编译优化
+- ✅ **代码质量** — 108 单元测试 + 1 真跑 doctest + 115 集成测试 100% 通过，CI 三 job 全绿
 
 ## 快速开始
 
@@ -81,6 +83,14 @@ sudo ./build/daemon/firewall-daemon -c config/default.yaml  # 指定配置
 sudo ./build/daemon/firewall-daemon --help                  # 帮助
 ```
 
+### 构建 .deb 包
+
+```bash
+make deb                 # 调用 ./build-deb.sh
+                         # 产物: build/deb/linux-firewall-kmod-2.2.0.deb (1.5MB)
+sudo dpkg -i build/deb/linux-firewall-kmod-2.2.0.deb  # 安装（DKMS 自动编译 + systemd 启动）
+```
+
 > 📖 文档: [中文](docs/zh/) | [English](docs/en/) | [在线浏览](https://snowcore8.github.io/linux-firewall-kmod/)
 
 ## 📚 文档导航
@@ -90,10 +100,12 @@ sudo ./build/daemon/firewall-daemon --help                  # 帮助
 - [快速开始](docs/zh/getting-started/README.md) - 安装、编译、首次使用
 - [配置指南](docs/zh/configuration/README.md) - YAML Jail 格式、参数详解
 - [架构设计](docs/zh/architecture/README.md) - 内核模块与守护进程设计
-- [运维手册](docs/zh/operations/README.md) - 管理命令、监控、故障排查
-- [开发指南](docs/zh/development/README.md) - 构建、测试、贡献流程
+- [运维手册](docs/zh/operations/README.md) - 管理命令、监控
+  - [故障排查](docs/zh/operations/troubleshooting.md)
+- [开发指南](docs/zh/development/README.md) - 构建、贡献流程
+  - [测试](docs/zh/development/testing.md)
 - [迁移指南](docs/zh/migration/from-fail2ban.md) - 从 fail2ban 迁移
-- [CHANGELOG.md](CHANGELOG.md) - v1.0 至 v2.1 变更记录
+- [CHANGELOG.md](CHANGELOG.md) - v1.0 至 v2.2 变更记录
 
 ## 适用场景
 
