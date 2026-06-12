@@ -11,6 +11,7 @@
  */
 
 #include "firewall.h"
+#include <linux/printk.h>
 
 extern unsigned int fw_ban_time;
 extern unsigned int fw_max_bans_per_second;
@@ -122,6 +123,7 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw,
     spin_unlock(&fw->ban_locks_ipv6[bkt6]);
     kfree(entry);
     atomic_inc(&fw->whitelist_reject_count);
+    pr_debug("IPv6 封禁被白名单拒绝\n");
     return ret;
   }
 
@@ -189,6 +191,7 @@ static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4, struct ban_en
     spin_unlock(&fw->ban_locks_ipv4[bkt4]);
     kfree(entry);
     atomic_inc(&fw->whitelist_reject_count);
+    pr_debug("IPv4 封禁被白名单拒绝\n");
     return ret;
   }
 
@@ -242,6 +245,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
   entry = kmalloc(sizeof(*entry), GFP_KERNEL);
   if (!entry) {
     atomic_inc(&fw->alloc_failure_count);
+    pr_err("封禁条目内存分配失败\n");
     return -ENOMEM;
   }
 
@@ -282,6 +286,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     spin_unlock(&fw->lock);
     kfree(entry);
     atomic_inc(&fw->ban_table_full_count);
+    pr_warn("封禁表已满 (%d 条目)\n", MAX_BAN_ENTRIES);
     return -ENOSPC;
   }
   spin_unlock(&fw->lock);
