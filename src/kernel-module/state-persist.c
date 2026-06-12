@@ -15,13 +15,11 @@ extern u32 fw_hash_seed;
 /* 辅助函数：验证文件路径安全 */
 static int validate_state_path(const char *filename) {
   if (!filename || !*filename) {
-    fw_pr_err("Invalid filename for state save");
     return -EINVAL;
   }
 
   if (strstr(filename, "%2e") || strstr(filename, "%2E") ||
       strstr(filename, "%2f") || strstr(filename, "%2F")) {
-    fw_pr_err("URL-encoded path traversal attempt: %s", filename);
     return -EINVAL;
   }
 
@@ -29,7 +27,6 @@ static int validate_state_path(const char *filename) {
     const char *dangerous_chars = "|;&`$(){}<>!~*?[]";
     for (const char *p = filename; *p; p++) {
       if (strchr(dangerous_chars, *p)) {
-        fw_pr_err("Dangerous character '%c' in path: %s", *p, filename);
         return -EINVAL;
       }
     }
@@ -39,12 +36,10 @@ static int validate_state_path(const char *filename) {
     const char *p = filename;
     while (*p) {
       if (p[0] == '.' && p[1] == '.' && p[2] == '/') {
-        fw_pr_err("Potential directory traversal in filename: %s", filename);
         return -EINVAL;
       }
       if (p[0] == '/' && p[1] == '.' && p[2] == '.') {
         if (p[3] == '\0' || p[3] == '/') {
-          fw_pr_err("Potential directory traversal in filename: %s", filename);
           return -EINVAL;
         }
       }
@@ -52,7 +47,6 @@ static int validate_state_path(const char *filename) {
         bool prev_sep = (p == filename) || (p[-1] == '/');
         bool next_sep = (p[2] == '\0') || (p[2] == '/');
         if (prev_sep && next_sep) {
-          fw_pr_err("Potential directory traversal in filename: %s", filename);
           return -EINVAL;
         }
       }
@@ -62,7 +56,6 @@ static int validate_state_path(const char *filename) {
 
   if (strncmp(filename, "/var/lib/", 9) != 0 &&
       strncmp(filename, "/tmp/", 5) != 0 && strncmp(filename, "/etc/", 5) != 0) {
-    fw_pr_err("State file path outside allowed directories, rejected: %s", filename);
     return -EPERM;
   }
 
@@ -128,7 +121,6 @@ int save_state_to_file(const char *filename) {
     kfree(ban_entries_v6);
     kfree(wl_entries_v4);
     kfree(wl_entries_v6);
-    fw_pr_err("Failed to allocate memory for saving state entries");
     return -ENOMEM;
   }
 
@@ -196,7 +188,6 @@ int save_state_to_file(const char *filename) {
 
   file = filp_open(filename, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW, 0600);
   if (IS_ERR(file)) {
-    fw_pr_err("Failed to open file for saving state: %s", filename);
     ret = -EIO;
     goto out_free;
   }
@@ -212,7 +203,6 @@ int save_state_to_file(const char *filename) {
     int getattr_err = vfs_getattr(&file->f_path, &open_stat);
 #endif
     if (getattr_err || !S_ISREG(open_stat.mode)) {
-      fw_pr_err("Failed to stat state file or not regular: %s", filename);
       filp_close(file, NULL);
       ret = -EIO;
       goto out_free;
@@ -228,7 +218,6 @@ int save_state_to_file(const char *filename) {
     written = snprintf(buffer, sizeof(buffer), "BAN_V4 %s %lu\n", ip_str,
                        ban_entries_v4[i].remaining_time);
     if (kernel_write(file, buffer, written, &pos) != written) {
-      fw_pr_err("Failed to write ban entry to state file");
       filp_close(file, NULL);
       ret = -EIO;
       goto out_free;
@@ -242,7 +231,6 @@ int save_state_to_file(const char *filename) {
     written = snprintf(buffer, sizeof(buffer), "BAN_V6 %s %lu\n", ip_str,
                        ban_entries_v6[i].remaining_time);
     if (kernel_write(file, buffer, written, &pos) != written) {
-      fw_pr_err("Failed to write ban entry to state file");
       filp_close(file, NULL);
       ret = -EIO;
       goto out_free;
@@ -257,7 +245,6 @@ int save_state_to_file(const char *filename) {
     written = snprintf(buffer, sizeof(buffer), "WL_V4 %s %d %s\n", ip_str,
                        inet_mask_len(wl_entries_v4[i].mask), wl_entries_v4[i].device_name);
     if (kernel_write(file, buffer, written, &pos) != written) {
-      fw_pr_err("Failed to write whitelist entry to state file");
       filp_close(file, NULL);
       ret = -EIO;
       goto out_free;
@@ -270,7 +257,6 @@ int save_state_to_file(const char *filename) {
                        &wl_entries_v6[i].ipv6, wl_entries_v6[i].prefix_len,
                        wl_entries_v6[i].device_name);
     if (kernel_write(file, buffer, written, &pos) != written) {
-      fw_pr_err("Failed to write whitelist entry to state file");
       filp_close(file, NULL);
       ret = -EIO;
       goto out_free;
@@ -287,7 +273,6 @@ int save_state_to_file(const char *filename) {
     int getattr_err = vfs_getattr(&file->f_path, &close_stat);
 #endif
     if (getattr_err || close_stat.ino != saved_ino || close_stat.dev != saved_dev) {
-      fw_pr_err("State file inode changed during write (possible TOCTOU attack): %s", filename);
       filp_close(file, NULL);
       ret = -EIO;
       goto out_free;
@@ -295,9 +280,6 @@ int save_state_to_file(const char *filename) {
   }
 
   filp_close(file, NULL);
-  fw_pr_info("State saved to %s (ban v4: %d, ban v6: %d, wl v4: %d, wl v6: %d)",
-             filename, ban_count_v4, ban_count_v6, wl_count_v4, wl_count_v6);
-
 out_free:
   kfree(ban_entries_v4);
   kfree(ban_entries_v6);
@@ -328,7 +310,6 @@ int restore_state_from_file(const char *filename) {
     return 0;
 
   if (!filename || !*filename) {
-    fw_pr_err("Invalid filename for state restore");
     return -EINVAL;
   }
 
@@ -338,16 +319,11 @@ int restore_state_from_file(const char *filename) {
 #define MAX_STATE_FILE_SIZE (128 * 1024)
   buffer = kmalloc(MAX_STATE_FILE_SIZE, GFP_KERNEL);
   if (!buffer) {
-    fw_pr_err("Failed to allocate buffer for state restore");
     return -ENOMEM;
   }
 
   file = filp_open(filename, O_RDONLY | O_NOFOLLOW, 0);
   if (IS_ERR(file)) {
-    if (PTR_ERR(file) == -ELOOP)
-      fw_pr_warn("State restore: symlink detected and rejected: %s", filename);
-    else
-      fw_pr_info("State file does not exist: %s", filename);
     kfree(buffer);
     return 0;
   }
@@ -360,7 +336,6 @@ int restore_state_from_file(const char *filename) {
     int stat_err = vfs_getattr(&file->f_path, &stat);
 #endif
     if (stat_err == 0 && !S_ISREG(stat.mode)) {
-      fw_pr_err("State restore: not a regular file: %s", filename);
       filp_close(file, NULL);
       kfree(buffer);
       return -EINVAL;
@@ -377,11 +352,6 @@ int restore_state_from_file(const char *filename) {
     bytes_read += chunk;
   }
 
-  /* 修复 R6-5：状态文件超过大小时添加警告日志 */
-  if (bytes_read >= MAX_STATE_FILE_SIZE - 1) {
-    fw_pr_warn("State file truncated at %d bytes (max %d)", (int)bytes_read,
-               MAX_STATE_FILE_SIZE - 1);
-  }
 
   if (bytes_read > 0) {
     buffer[bytes_read] = '\0';
@@ -405,12 +375,10 @@ int restore_state_from_file(const char *filename) {
           __be32 ip;
           if (in4_pton(ip_str, -1, (u8 *)&ip, -1, NULL)) {
             if (is_in_whitelist(&fw_info, FW_AF_INET, &ip)) {
-              fw_pr_info("Skipping restored ban for whitelisted IP %s", ip_str);
               continue;
             }
 
             if (restored_ban_count >= max_restore_bans) {
-              fw_pr_warn("Maximum ban entries (%d) reached during restore", max_restore_bans);
               continue;
             }
 
@@ -423,12 +391,10 @@ int restore_state_from_file(const char *filename) {
               if (remaining_time == 0) {
                 is_permanent = true;
               } else if (remaining_time > 365UL * 24 * 60 * 60) {
-                fw_pr_warn("Skipping ban with invalid remaining time: %lu", remaining_time);
                 continue;
               } else {
                 unsigned long ban_duration;
                 if (check_mul_overflow(remaining_time, (unsigned long)HZ, &ban_duration)) {
-                  fw_pr_warn("Ban duration overflow for IP %s, skipping", ip_str);
                   continue;
                 }
                 unban_time = jiffies + ban_duration;
@@ -436,7 +402,6 @@ int restore_state_from_file(const char *filename) {
 
               entry = kmalloc(sizeof(*entry), GFP_KERNEL);
               if (!entry) {
-                fw_pr_err("Failed to allocate memory for restored ban entry");
                 continue;
               }
 
@@ -464,7 +429,6 @@ int restore_state_from_file(const char *filename) {
                 if (duplicate) {
                   spin_unlock(&fw_info.ban_locks_ipv4[bkt4]);
                   kfree(entry);
-                  fw_pr_info("Skipping duplicate ban entry for IP %s", ip_str);
                 } else {
                   /* 与 ban-manager.c IPv4 路径保持一致:直接用桶索引 hlist_add_head_rcu */
                   hlist_add_head_rcu(&entry->hash, &fw_info.ban_table_ipv4[bkt4]);
@@ -486,7 +450,6 @@ int restore_state_from_file(const char *filename) {
           struct in6_addr ip6;
           if (in6_pton(ip_str, -1, (u8 *)&ip6, -1, NULL)) {
             if (is_in_whitelist(&fw_info, FW_AF_INET6, &ip6)) {
-              fw_pr_info("Skipping restored ban for whitelisted IP %s", ip_str);
               continue;
             }
 
@@ -506,7 +469,6 @@ int restore_state_from_file(const char *filename) {
               } else {
                 unsigned long ban_duration;
                 if (check_mul_overflow(remaining_time, (unsigned long)HZ, &ban_duration)) {
-                  fw_pr_warn("Ban duration overflow for IP %s, skipping", ip_str);
                   continue;
                 }
                 unban_time = jiffies + ban_duration;
@@ -542,7 +504,6 @@ int restore_state_from_file(const char *filename) {
                 if (duplicate) {
                   spin_unlock(&fw_info.ban_locks_ipv6[bkt6]);
                   kfree(entry);
-                  fw_pr_info("Skipping duplicate ban entry for IP %s", ip_str);
                 } else {
                   /* 修复：直接用桶索引 hlist_add_head_rcu，避免 hash_add_rcu 以 bkt6 为 key
                    * 重新 hash_min 落到错误桶(同 ban-manager.c 路径) */
@@ -614,8 +575,6 @@ int restore_state_from_file(const char *filename) {
   /* 修复 S2-3：标记已恢复，防止重复调用 */
   state_restored = true;
 
-  fw_pr_info("State restored from %s (ban: %d, wl: %d)", filename,
-             restored_ban_count, restored_wl_count);
   return 0;
 }
 EXPORT_SYMBOL_GPL(restore_state_from_file);

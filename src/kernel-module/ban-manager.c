@@ -235,18 +235,13 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
   struct whitelist_entry *wl_entry;
   int bkt;
   int ret;
-  char ip_str[INET6_STR_LEN];
-  ip_to_str(af, ip, ip_str, sizeof(ip_str));
-
   if (!ip) {
-    fw_pr_err("Invalid IP address for banning: %s", ip_str);
     return -EINVAL;
   }
 
   entry = kmalloc(sizeof(*entry), GFP_KERNEL);
   if (!entry) {
     atomic_inc(&fw->alloc_failure_count);
-    fw_pr_err("Failed to allocate memory for ban entry for IP %s", ip_str);
     return -ENOMEM;
   }
 
@@ -263,7 +258,6 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
         spin_unlock(&fw->lock);
         kfree(entry);
         atomic_inc(&fw->whitelist_reject_count);
-        fw_pr_warn("REFUSED to ban whitelisted IP %s", ip_str);
         return -EPERM;
       }
     }
@@ -277,7 +271,6 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
         spin_unlock(&fw->lock);
         kfree(entry);
         atomic_inc(&fw->whitelist_reject_count);
-        fw_pr_warn("REFUSED to ban whitelisted IP %s", ip_str);
         return -EPERM;
       }
     }
@@ -289,7 +282,6 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     spin_unlock(&fw->lock);
     kfree(entry);
     atomic_inc(&fw->ban_table_full_count);
-    fw_pr_warn("Ban table full, cannot ban %s", ip_str);
     return -ENOSPC;
   }
   spin_unlock(&fw->lock);
@@ -302,7 +294,6 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
   }
 
   if (ret == -EPERM) {
-    fw_pr_warn("REFUSED to ban whitelisted IP %s (recheck)", ip_str);
     return ret;
   }
   if (ret == -EEXIST) {
@@ -314,11 +305,6 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
 
   /* ret == 0：实际变更（新插入或刷新过期条目），
    * ban_count / total_ban_count 已在 __do_ban_ip_ipv4/ipv6 中按语义更新。 */
-
-  if (log_msg && log_arg)
-    fw_pr_info_ratelimited("%s %s %lu", log_msg, ip_str, log_arg);
-  else if (log_msg)
-    fw_pr_info_ratelimited("%s %s", log_msg, ip_str);
 
   return 0;
 }
@@ -353,8 +339,6 @@ static struct ban_entry *__find_ban_entry_rcu(struct firewall_info *fw, u8 af,
 static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip, bool permanent_only) {
   struct ban_entry *entry;
   int found = 0;
-  char ip_str[INET6_STR_LEN];
-  ip_to_str(af, ip, ip_str, sizeof(ip_str));
 
   if (af == FW_AF_INET6) {
     struct in6_addr *ip6 = (struct in6_addr *)ip;
@@ -394,29 +378,19 @@ static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip, bool p
 
   if (found) {
     atomic_inc(&fw->total_unban_count);
-    if (permanent_only)
-      fw_pr_info("IP %s permanently unbanned", ip_str);
-    else
-      fw_pr_info_ratelimited("IP %s unbanned", ip_str);
     return 0;
   }
   return -ENOENT;
 }
 
 int unban_ip(struct firewall_info *fw, u8 af, const void *ip) {
-  FW_DEBUG(1, "ENTRY: unban_ip(af=%d)", af);
   int ret = __do_unban_ip(fw, af, ip, false);
-  FW_DEBUG(1, "EXIT: unban_ip -> %d", ret);
   return ret;
 }
 EXPORT_SYMBOL_GPL(unban_ip);
 
 int unban_permanent_ip(struct firewall_info *fw, u8 af, const void *ip) {
-  FW_DEBUG(1, "ENTRY: unban_permanent_ip(af=%d)", af);
   int ret = __do_unban_ip(fw, af, ip, true);
-  if (ret == -ENOENT)
-    fw_pr_warn("IP not found in permanent ban list");
-  FW_DEBUG(1, "EXIT: unban_permanent_ip -> %d", ret);
   return ret;
 }
 EXPORT_SYMBOL_GPL(unban_permanent_ip);
@@ -426,7 +400,6 @@ int is_banned(struct firewall_info *fw, u8 af, const void *ip) {
   unsigned long now = jiffies;
   int found = 0;
 
-  FW_DEBUG(3, "Checking if IP (af=%d) is banned", af);
   rcu_read_lock();
   entry = __find_ban_entry_rcu(fw, af, ip);
   if (entry) {
@@ -439,7 +412,6 @@ int is_banned(struct firewall_info *fw, u8 af, const void *ip) {
     }
   }
   rcu_read_unlock();
-  FW_DEBUG(3, "Result for IP (af=%d) ban check: %s", af, found ? "BANNED" : "NOT BANNED");
   return found;
 }
 EXPORT_SYMBOL_GPL(is_banned);
@@ -447,24 +419,17 @@ EXPORT_SYMBOL_GPL(is_banned);
 int ban_ip(struct firewall_info *fw, u8 af, const void *ip) {
   unsigned long ban_secs = READ_ONCE(fw_ban_time);
   unsigned long ban_duration;
-  FW_DEBUG(1, "ENTRY: ban_ip(af=%d)", af);
   if (check_mul_overflow(ban_secs, (unsigned long)HZ, &ban_duration)) {
-    fw_pr_err("ban_time overflow detected");
     return -EINVAL;
   }
-  FW_DEBUG(2, "Attempting to ban IP (af=%d)", af);
   int ret = __do_ban_ip(fw, af, ip, jiffies + ban_duration, false,
                         "banned for %u seconds", ban_secs);
-  FW_DEBUG(1, "EXIT: ban_ip -> %d", ret);
   return ret;
 }
 EXPORT_SYMBOL_GPL(ban_ip);
 
 int ban_ip_permanent(struct firewall_info *fw, u8 af, const void *ip) {
-  FW_DEBUG(1, "ENTRY: ban_ip_permanent(af=%d)", af);
-  FW_DEBUG(2, "Attempting to permanently ban IP (af=%d)", af);
   int ret = __do_ban_ip(fw, af, ip, 0, true, "permanently banned", 0);
-  FW_DEBUG(1, "EXIT: ban_ip_permanent -> %d", ret);
   return ret;
 }
 EXPORT_SYMBOL_GPL(ban_ip_permanent);
@@ -472,14 +437,11 @@ EXPORT_SYMBOL_GPL(ban_ip_permanent);
 int is_permanently_banned(struct firewall_info *fw, u8 af, const void *ip) {
   struct ban_entry *entry;
   int found = 0;
-  FW_DEBUG(3, "Checking if IP (af=%d) is permanently banned", af);
   rcu_read_lock();
   entry = __find_ban_entry_rcu(fw, af, ip);
   if (entry && READ_ONCE(entry->is_permanent))
     found = 1;
   rcu_read_unlock();
-  FW_DEBUG(3, "Result for IP (af=%d) permanent ban check: %s", af,
-           found ? "PERMANENTLY BANNED" : "NOT PERMANENTLY BANNED");
   return found;
 }
 EXPORT_SYMBOL_GPL(is_permanently_banned);
@@ -512,22 +474,16 @@ int check_flood_protection(void) {
 int ban_ip_with_duration(struct firewall_info *fw, u8 af, const void *ip,
                          unsigned long seconds) {
   unsigned long ban_duration;
-  FW_DEBUG(1, "ENTRY: ban_ip_with_duration(af=%d, seconds=%lu)", af, seconds);
   if (!ip) {
-    fw_pr_err("Invalid IP address for banning");
     return -EINVAL;
   }
   if (seconds == 0) {
-    fw_pr_err("Invalid ban duration: 0 seconds");
     return -EINVAL;
   }
   if (check_mul_overflow(seconds, (unsigned long)HZ, &ban_duration)) {
-    fw_pr_err("ban duration overflow");
     return -EINVAL;
   }
-  FW_DEBUG(2, "Attempting to ban IP (af=%d) for %lu seconds", af, seconds);
   int ret = __do_ban_ip(fw, af, ip, jiffies + ban_duration, false,
                         "banned for %lu seconds", seconds);
-  FW_DEBUG(1, "EXIT: ban_ip_with_duration -> %d", ret);
   return ret;
 }

@@ -22,7 +22,6 @@
 
 use std::net::IpAddr;
 
-use crate::log_warn;
 use crate::types::{Jail, DAEMON_STATS};
 
 // ============================================================================
@@ -229,7 +228,6 @@ pub fn extract_ip(line: &str) -> Option<String> {
 pub fn parse_log_line(jail: &Jail, line: &str) -> Option<String> {
     let line_len = line.len();
     if line_len > 8192 {
-        log_warn!("Log line too long ({} bytes), skipping", line_len);
         return None;
     }
 
@@ -316,10 +314,6 @@ fn match_regex(jail: &Jail, line: &str) -> Option<String> {
                     }
                 }
             }
-            log_warn!(
-                "No valid IP capture group found in regex match for jail '{}'",
-                jail.name
-            );
         }
     }
 

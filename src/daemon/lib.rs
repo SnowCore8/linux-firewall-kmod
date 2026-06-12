@@ -41,7 +41,6 @@ pub mod failed_tracker;
 pub mod file_monitor;
 pub mod http_exporter;
 pub mod jail;
-pub mod log;
 pub mod log_parser;
 pub mod sqlite_store;
 pub mod types;

@@ -13,13 +13,11 @@ extern void fw_flush_cpu_stats(void);
 
 void free_ban_entry_rcu(struct rcu_head *head) {
   struct ban_entry *entry = container_of(head, struct ban_entry, rcu_head);
-  FW_DEBUG(3, "Freeing ban entry via RCU callback");
   kfree(entry);
 }
 
 void free_whitelist_entry_rcu(struct rcu_head *head) {
   struct whitelist_entry *entry = container_of(head, struct whitelist_entry, rcu_head);
-  FW_DEBUG(3, "Freeing whitelist entry via RCU callback");
   kfree(entry);
 }
 
@@ -96,8 +94,6 @@ static int cleanup_table_ipv6(struct firewall_info *fw) {
 static bool cleanup_expired_bans(struct firewall_info *fw) {
   int removed = 0;
 
-  FW_DEBUG(2, "ENTRY: cleanup_expired_bans(current_count=%d)", atomic_read(&fw->ban_count));
-
   atomic_inc(&fw->cleanup_cycles);
 
   /* 注意：fw_flush_cpu_stats() 由调用方 cleanup_timer_callback 负责调用，
@@ -107,7 +103,6 @@ static bool cleanup_expired_bans(struct firewall_info *fw) {
     /* 修复：分别重置 IPv4 和 IPv6 独立的清理进度索引 */
     WRITE_ONCE(fw->cleanup_last_bucket_ipv4, 0);
     WRITE_ONCE(fw->cleanup_last_bucket_ipv6, 0);
-    FW_DEBUG(2, "EXIT: cleanup_expired_bans -> false (no entries)");
     return false;
   }
 
@@ -123,7 +118,6 @@ static bool cleanup_expired_bans(struct firewall_info *fw) {
 
   if (removed > 0) {
     atomic_add(removed, &fw->cleanup_expired_total);
-    fw_pr_info_ratelimited("Cleaned up %d expired ban entries", removed);
   }
 
   /* 守护统计不变量(每秒一次,WARN_ON_ONCE 仅警告一次):
@@ -140,27 +134,17 @@ static bool cleanup_expired_bans(struct firewall_info *fw) {
     int tu = atomic_read(&fw->total_unban_count);
     int ce = atomic_read(&fw->cleanup_expired_total);
     int delta = tb - (cb + tu + ce);
-    if (WARN_ON_ONCE(delta > MAX_BAN_ENTRIES || delta < -MAX_BAN_ENTRIES)) {
-      fw_pr_warn("stats invariant severely violated: "
-                 "total_bans(%d) - (current_bans(%d) + total_unbans(%d) + "
-                 "cleanup_expired_total(%d)) = %d (threshold ±%d)",
-                 tb, cb, tu, ce, delta, MAX_BAN_ENTRIES);
-    }
+    WARN_ON_ONCE(delta > MAX_BAN_ENTRIES || delta < -MAX_BAN_ENTRIES);
   }
 
   bool has_more = (removed > 0 && atomic_read(&fw->ban_count) > 0);
-  FW_DEBUG(2, "EXIT: cleanup_expired_bans -> %s (removed=%d)",
-           has_more ? "true" : "false", removed);
   return has_more;
 }
 
 void cleanup_timer_callback(struct timer_list *t) {
   struct firewall_info *fw = container_of(t, struct firewall_info, cleanup_timer);
 
-  FW_DEBUG(3, "ENTRY: cleanup_timer_callback");
-
   if (unlikely(atomic_read(&fw->shutting_down))) {
-    FW_DEBUG(2, "EXIT: cleanup_timer_callback -> void (shutting down)");
     return;
   }
 
@@ -177,18 +161,12 @@ void cleanup_timer_callback(struct timer_list *t) {
     int tu = atomic_read(&fw->total_unban_count);
     int ce = atomic_read(&fw->cleanup_expired_total);
     int delta = tb - (cb + tu + ce);
-    if (WARN_ON_ONCE(delta > MAX_BAN_ENTRIES || delta < -MAX_BAN_ENTRIES)) {
-      fw_pr_warn("stats invariant violated (timer cb): "
-                 "total_bans(%d) - (current_bans(%d) + total_unbans(%d) + "
-                 "cleanup_expired_total(%d)) = %d (threshold ±%d)",
-                 tb, cb, tu, ce, delta, MAX_BAN_ENTRIES);
-    }
+    WARN_ON_ONCE(delta > MAX_BAN_ENTRIES || delta < -MAX_BAN_ENTRIES);
   }
 
   bool has_more_entries = cleanup_expired_bans(fw);
 
   if (unlikely(atomic_read(&fw->shutting_down))) {
-    FW_DEBUG(2, "EXIT: cleanup_timer_callback (shutting down after cleanup)");
     return;
   }
 
@@ -200,5 +178,4 @@ void cleanup_timer_callback(struct timer_list *t) {
   }
 
   mod_timer(&fw->cleanup_timer, jiffies + cleanup_interval);
-  FW_DEBUG(3, "EXIT: cleanup_timer_callback -> void (timer re-armed)");
 }

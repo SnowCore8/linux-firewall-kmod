@@ -39,80 +39,11 @@ struct fw_per_cpu_stats {
 /* R9-1: Per-CPU counter flush function (called from cleanup timer) */
 void fw_flush_cpu_stats(void);
 
-/* ============================================================================
- * 统一日志系统
- * ============================================================================
- * 日志级别:
- *   FW_LOG_LEVEL_NONE  (0) - 无日志
- *   FW_LOG_LEVEL_ERR   (1) - 错误日志 - 始终输出
- *   FW_LOG_LEVEL_WARN  (2) - 警告日志 - 重要警告
- *   FW_LOG_LEVEL_INFO  (3) - 信息日志 - 正常操作
- *   FW_LOG_LEVEL_DEBUG (4) - 调试日志 - 开发调试
- *
- * 用法:
- *   fw_pr_err(fmt, ...)    - 错误级别 (始终输出)
- *   fw_pr_warn(fmt, ...)   - 警告级别
- *   fw_pr_info(fmt, ...)   - 信息级别
- *   fw_pr_debug(fmt, ...)  - 调试级别 (由 DEBUG_LEVEL 控制)
- *   fw_log(level, fmt, ...) - 动态级别日志
- *
- * 向后兼容:
- *   FW_DEBUG(level, fmt, args...) - 遗留宏，映射到新系统
- * ========================================================================== */
 
-/* 日志级别定义 */
-#define FW_LOG_LEVEL_NONE 0  /* 无日志 */
-#define FW_LOG_LEVEL_ERR 1   /* 错误日志 - 始终输出 */
-#define FW_LOG_LEVEL_WARN 2  /* 警告日志 - 重要警告 */
-#define FW_LOG_LEVEL_INFO 3  /* 信息日志 - 正常操作 */
-#define FW_LOG_LEVEL_DEBUG 4 /* 调试日志 - 开发调试 */
 
-/* 统一日志宏 - 使用 pr_* 系列 (推荐) */
-#define fw_pr_err(fmt, ...) pr_err("firewall: " fmt, ##__VA_ARGS__)
-#define fw_pr_warn(fmt, ...) pr_warn("firewall: " fmt, ##__VA_ARGS__)
-#define fw_pr_info(fmt, ...) pr_info("firewall: " fmt, ##__VA_ARGS__)
-#define fw_pr_debug(fmt, ...) pr_debug("firewall: " fmt, ##__VA_ARGS__)
 
-/* 限流变体，用于高频日志 */
-#define fw_pr_info_ratelimited(fmt, ...) \
-  pr_info_ratelimited("firewall: " fmt, ##__VA_ARGS__)
-#define fw_pr_warn_ratelimited(fmt, ...) \
-  pr_warn_ratelimited("firewall: " fmt, ##__VA_ARGS__)
-#define fw_pr_err_ratelimited(fmt, ...) \
-  pr_err_ratelimited("firewall: " fmt, ##__VA_ARGS__)
-#define fw_pr_debug_ratelimited(fmt, ...) \
-  pr_debug_ratelimited("firewall: " fmt, ##__VA_ARGS__)
 
-/* 动态级别日志宏 - 由编译时 DEBUG_LEVEL 控制 */
-#define fw_log(level, fmt, ...)          \
-  do {                                   \
-    if (level <= DEBUG_LEVEL) {          \
-      switch (level) {                   \
-      case FW_LOG_LEVEL_ERR:             \
-        fw_pr_err(fmt, ##__VA_ARGS__);   \
-        break;                           \
-      case FW_LOG_LEVEL_WARN:            \
-        fw_pr_warn(fmt, ##__VA_ARGS__);  \
-        break;                           \
-      case FW_LOG_LEVEL_INFO:            \
-        fw_pr_info(fmt, ##__VA_ARGS__);  \
-        break;                           \
-      case FW_LOG_LEVEL_DEBUG:           \
-        fw_pr_debug(fmt, ##__VA_ARGS__); \
-        break;                           \
-      }                                  \
-    }                                    \
-  } while (0)
 
-/* 遗留 FW_DEBUG 宏兼容性 - 将旧级别 1-3 映射到新系统 */
-#ifdef DEBUG_LEVEL
-#  define FW_DEBUG(level, fmt, args...) \
-    fw_log(FW_LOG_LEVEL_DEBUG - (level) + 1, fmt, ##args)
-#else
-#  define FW_DEBUG(level, fmt, args...) \
-    do {                                \
-    } while (0)
-#endif
 
 #define BAN_HASH_BITS 12
 #define MAX_BAN_ENTRIES (1 << BAN_HASH_BITS) /* 4096 个条目 */
@@ -389,24 +320,18 @@ static inline int validate_ipv4_address(__be32 ip, const char *ip_str,
   unsigned int ip_num = ntohl(ip);
 
   if (ip == 0 || ip == 0xFFFFFFFF) {
-    fw_pr_warn("Attempt to %s invalid IPv4: %s", context, ip_str ?: "(null)");
     return -EINVAL;
   }
   if (!allow_loopback && (ip_num & 0xFF000000) == 0x7F000000) {
-    fw_pr_warn("Attempt to %s loopback IPv4: %s", context, ip_str ?: "(null)");
     return -EINVAL;
   }
   if ((ip_num & 0xF0000000) == 0xE0000000) {
-    fw_pr_warn("Attempt to %s reserved IPv4 (multicast/Class E): %s", context,
-               ip_str ?: "(null)");
     return -EINVAL;
   }
   if ((ip_num & 0xFF000000) == 0x00000000) {
-    fw_pr_warn("Attempt to %s invalid IPv4 (0.0.0.0/8): %s", context, ip_str ?: "(null)");
     return -EINVAL;
   }
   if ((ip_num & 0xFF000000) == 0xFF000000) {
-    fw_pr_warn("Attempt to %s invalid IPv4 (255.0.0.0/8): %s", context, ip_str ?: "(null)");
     return -EINVAL;
   }
 
@@ -424,16 +349,13 @@ static inline int validate_ipv4_address(__be32 ip, const char *ip_str,
 static inline int validate_ipv6_address(const struct in6_addr *addr, const char *ip_str,
                                         const char *context, bool allow_loopback) {
   if (ipv6_addr_any(addr)) {
-    fw_pr_warn("Attempt to %s invalid IPv6: %s", context, ip_str ?: "(null)");
     return -EINVAL;
   }
   if (!allow_loopback && ipv6_addr_loopback(addr)) {
-    fw_pr_warn("Attempt to %s loopback IPv6: %s", context, ip_str ?: "(null)");
     return -EINVAL;
   }
   /* 拒绝 multicast 和 link-local */
   if (ipv6_addr_is_multicast(addr)) {
-    fw_pr_warn("Attempt to %s multicast IPv6: %s", context, ip_str ?: "(null)");
     return -EINVAL;
   }
   return 0;

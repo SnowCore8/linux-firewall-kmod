@@ -35,16 +35,12 @@ void sync_work_handler(struct work_struct *work) {
 
   fw = container_of(work, struct firewall_info, sync_work.work);
 
-  FW_DEBUG(1, "ENTRY: sync_work_handler");
-
   if (unlikely(atomic_read(&fw->shutting_down))) {
-    FW_DEBUG(2, "EXIT: sync_work_handler -> void (shutting down)");
     return;
   }
 
   current_ips = kmalloc_array(MAX_DISCOVERED_IPS, sizeof(struct temp_ip_entry), GFP_KERNEL);
   if (!current_ips) {
-    fw_pr_err("Failed to allocate current_ips");
     return;
   }
 
@@ -95,7 +91,6 @@ void sync_work_handler(struct work_struct *work) {
   rcu_read_unlock();
 
   if (current_count == 0) {
-    fw_pr_debug("No active network interfaces found");
     kfree(current_ips);
     return;
   }
@@ -115,7 +110,6 @@ void sync_work_handler(struct work_struct *work) {
   struct current_ip_lookup *lookup_table;
   lookup_table = kmalloc_array(current_count, sizeof(struct current_ip_lookup), GFP_KERNEL);
   if (!lookup_table) {
-    fw_pr_err("Failed to allocate lookup_table");
     kfree(current_ips);
     return;
   }
@@ -183,18 +177,12 @@ void sync_work_handler(struct work_struct *work) {
           fw, FW_AF_INET, &current_ips[i].addr.ipv4, &current_ips[i].mask.ipv4_mask,
           inet_mask_len(current_ips[i].mask.ipv4_mask), current_ips[i].name);
       }
-      if (ret < 0)
-        fw_pr_warn("Failed to add system IP to whitelist during sync");
     }
   }
 
   kfree(lookup_table);
   kfree(current_ips);
 
-  fw_pr_info_ratelimited("Sync complete. Current whitelist entries: %d",
-                         atomic_read(&fw->whitelist_count));
-  FW_DEBUG(1, "EXIT: sync_work_handler -> void (success, wl_count=%d)",
-           atomic_read(&fw->whitelist_count));
 }
 
 /*
@@ -203,16 +191,12 @@ void sync_work_handler(struct work_struct *work) {
 void sync_system_ips(struct firewall_info *fw) {
   unsigned long delay = msecs_to_jiffies(500);
 
-  FW_DEBUG(1, "ENTRY: sync_system_ips (scheduling with 500ms debounce)");
-
   if (unlikely(atomic_read(&fw->shutting_down))) {
-    FW_DEBUG(2, "EXIT: sync_system_ips -> void (shutting down)");
     return;
   }
 
   mod_delayed_work(system_wq, &fw->sync_work, delay);
 
-  FW_DEBUG(1, "EXIT: sync_system_ips -> void (work scheduled)");
 }
 EXPORT_SYMBOL_GPL(sync_system_ips);
 
@@ -236,7 +220,6 @@ static int netdev_event_handler(struct notifier_block *nb, unsigned long event, 
   case NETDEV_UP:
   case NETDEV_DOWN:
   case NETDEV_CHANGE:
-    fw_pr_debug_ratelimited("Network event %lu on device %s", event, dev->name);
     sync_system_ips(fw);
     break;
   default:
@@ -252,21 +235,15 @@ static int netdev_event_handler(struct notifier_block *nb, unsigned long event, 
 int register_netdev_notifier(struct firewall_info *fw) {
   int ret;
 
-  FW_DEBUG(1, "ENTRY: register_netdev_notifier");
-
   fw->netdev_notifier.notifier_call = netdev_event_handler;
 
   ret = register_netdevice_notifier(&fw->netdev_notifier);
   if (ret) {
-    fw_pr_err("Failed to register netdevice notifier: %d", ret);
     fw->netdev_notifier_registered = false;
-    FW_DEBUG(1, "EXIT: register_netdev_notifier -> %d", ret);
     return ret;
   }
 
   fw->netdev_notifier_registered = true;
-  fw_pr_info("Network device notifier registered");
-  FW_DEBUG(1, "EXIT: register_netdev_notifier -> 0");
   return 0;
 }
 EXPORT_SYMBOL_GPL(register_netdev_notifier);
@@ -275,17 +252,12 @@ EXPORT_SYMBOL_GPL(register_netdev_notifier);
  * unregister_netdev_notifier - 注销网络设备事件监听器
  */
 void unregister_netdev_notifier(struct firewall_info *fw) {
-  FW_DEBUG(1, "ENTRY: unregister_netdev_notifier");
 
   if (fw->netdev_notifier_registered) {
     unregister_netdevice_notifier(&fw->netdev_notifier);
     fw->netdev_notifier_registered = false;
-    fw_pr_info("Network device notifier unregistered");
   } else {
-    fw_pr_debug("Network device notifier was not registered");
   }
-
-  FW_DEBUG(1, "EXIT: unregister_netdev_notifier -> void");
 }
 EXPORT_SYMBOL_GPL(unregister_netdev_notifier);
 
@@ -298,15 +270,10 @@ void auto_discover_system_ips(struct firewall_info *fw) {
 
   struct net_device *dev;
 
-  FW_DEBUG(1, "ENTRY: auto_discover_system_ips");
-
   temp_ips = kmalloc_array(MAX_DISCOVERED_IPS, sizeof(struct temp_ip_entry), GFP_KERNEL);
   if (!temp_ips) {
-    fw_pr_err("Failed to allocate temp_ips");
     return;
   }
-
-  fw_pr_info_ratelimited("Auto-discovering system IPs...");
 
   rcu_read_lock();
   for_each_netdev_rcu(&init_net, dev) {
@@ -364,16 +331,9 @@ void auto_discover_system_ips(struct firewall_info *fw) {
         fw, FW_AF_INET, &temp_ips[i].addr.ipv4, &temp_ips[i].mask.ipv4_mask,
         inet_mask_len(temp_ips[i].mask.ipv4_mask), temp_ips[i].name);
     }
-    if (ret < 0)
-      fw_pr_warn("Failed to add system IP to whitelist");
   }
-
-  fw_pr_info_ratelimited(
-    "Auto-discovery complete. %d entries", atomic_read(&fw->whitelist_count));
 
   kfree(temp_ips);
 
-  FW_DEBUG(1, "EXIT: auto_discover_system_ips -> void (success, wl_count=%d)",
-           atomic_read(&fw->whitelist_count));
 }
 EXPORT_SYMBOL_GPL(auto_discover_system_ips);

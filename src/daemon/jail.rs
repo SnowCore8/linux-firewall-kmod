@@ -22,8 +22,6 @@
 //! | 未知 | `default_*` | 同左     | 同左     |
 
 use crate::types::{Config, Jail, RegexInfo, MAX_JAILS};
-use crate::{log_debug, log_err, log_info, log_warn};
-
 // ============================================================================
 // 服务名称模式
 // ============================================================================
@@ -112,8 +110,8 @@ fn is_service_name_match(name: &str, patterns: &[&str]) -> bool {
 /// - `retries` / `findtime` / `ban_time`: 智能默认值
 fn apply_service_defaults(
     jail: &mut Jail,
-    name: &str,
-    service_type: &str,
+    _name: &str,
+    _service_type: &str,
     retries: u32,
     findtime: u32,
     ban_time: u32,
@@ -128,14 +126,7 @@ fn apply_service_defaults(
         jail.ban_time = ban_time;
     }
 
-    log_info!(
-        "Jail '{}': applying {} smart defaults (retries={}, findtime={}, ban={})",
-        name,
-        service_type,
-        jail.max_retries,
-        jail.findtime,
-        jail.ban_time
-    );
+
 }
 
 /// 对单个 jail 套用智能默认。匹配优先级: SSH > WEB > FTP > MAIL > FRP > DB > 全局默认。
@@ -176,13 +167,7 @@ fn apply_smart_defaults_single(
         if !jail.ban_time_set {
             jail.ban_time = default_ban_time;
         }
-        log_info!(
-            "Jail '{}': using global defaults (retries={}, findtime={}, ban={})",
-            name,
-            jail.max_retries,
-            jail.findtime,
-            jail.ban_time
-        );
+
     }
 }
 
@@ -388,8 +373,8 @@ pub fn compile_jail_regex(jail: &mut Jail) -> Result<(), String> {
             continue;
         }
 
-        if let Err(e) = validate_regex_safety(jail, &pattern) {
-            log_err!("{}", e);
+        if let Err(_e) = validate_regex_safety(jail, &pattern) {
+
             continue;
         }
 
@@ -397,24 +382,15 @@ pub fn compile_jail_regex(jail: &mut Jail) -> Result<(), String> {
             Ok(re) => {
                 jail.regexes[i].compiled = Some(re);
                 compiled_count += 1;
-                log_info!(
-                    "Compiled regex '{}' for jail '{}': {}",
-                    jail.regexes[i].name,
-                    jail.name,
-                    pattern
-                );
+
             }
-            Err(e) => {
-                log_err!("Failed to compile regex for jail '{}': {}", jail.name, e);
+            Err(_e) => {
+
             }
         }
     }
 
-    log_info!(
-        "Compiled {} regex pattern(s) for jail '{}'",
-        compiled_count,
-        jail.name
-    );
+
 
     if compiled_count > 0 {
         Ok(())
@@ -449,11 +425,7 @@ pub fn find_or_create_jail<'a>(cfg: &'a mut Config, name: &str) -> Option<&'a mu
     }
 
     if cfg.jails.len() >= MAX_JAILS {
-        log_warn!(
-            "Max jails reached ({}), cannot create jail '{}'",
-            MAX_JAILS,
-            name
-        );
+
         return None;
     }
 
@@ -461,7 +433,7 @@ pub fn find_or_create_jail<'a>(cfg: &'a mut Config, name: &str) -> Option<&'a mu
     cfg.jails.push(jail);
     let jail = cfg.jails.last_mut().unwrap();
 
-    log_info!("Created new jail: {}", name);
+
     Some(jail)
 }
 
@@ -475,7 +447,7 @@ pub fn destroy_jail(jail: &mut Jail) {
     jail.failed_hash.write().clear();
     jail.partial_line_buffer.write().clear();
 
-    log_info!("Destroyed jail: {}", jail.name);
+
 }
 
 /// 销毁 `Config` 中所有 jail 并清空列表。`cleanup` 阶段使用。
@@ -487,7 +459,7 @@ pub fn cleanup_all_jails(cfg: &mut Config) {
         destroy_jail(jail);
     }
     cfg.jails.clear();
-    log_info!("All jails resources cleaned up");
+
 }
 
 // ============================================================================
@@ -630,7 +602,7 @@ pub fn config_validate(cfg: &Config) -> Result<(), String> {
             return Err(format!("Jail '{}' has findtime=0", jail.name));
         }
         if jail.ban_time == 0 {
-            log_debug!("Jail '{}' ban_time=0 (permanent ban)", jail.name);
+
         }
     }
 
@@ -656,7 +628,7 @@ pub fn migrate_failed_entries(old: &mut Config, new: &mut Config) {
                 for (ip, entry) in old_hash.drain() {
                     new_hash.insert(ip, entry);
                 }
-                log_debug!("Migrated failed entries for jail '{}'", new_jail.name);
+
                 break;
             }
         }
@@ -709,28 +681,18 @@ pub fn init_log_patterns(cfg: &mut Config) -> Result<(), String> {
 
     for jail in &mut cfg.jails {
         if !jail.enabled {
-            log_debug!(
-                "Skipping disabled jail '{}' for regex compilation",
-                jail.name
-            );
+
             continue;
         }
 
         if jail.regexes.is_empty() {
-            log_info!(
-                "Jail '{}' will use built-in default regex pattern",
-                jail.name
-            );
+
         } else if let Err(e) = compile_jail_regex(jail) {
-            log_warn!("Failed to compile regex for jail '{}': {}", jail.name, e);
+
             ret = Err(e);
             // 继续为其他 jail 编译
         } else {
-            log_info!(
-                "Compiled {} regex pattern(s) for jail '{}'",
-                jail.regexes.iter().filter(|r| r.compiled.is_some()).count(),
-                jail.name
-            );
+
         }
     }
 

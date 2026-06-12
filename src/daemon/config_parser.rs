@@ -39,7 +39,6 @@ use serde::Deserialize;
 
 use crate::jail;
 use crate::types::{Config, Jail, RegexInfo, MAX_JAILS};
-use crate::{log_err, log_info, log_warn};
 
 // ============================================================================
 // YAML 反序列化结构
@@ -336,7 +335,6 @@ pub fn parse_config_file(config_path: &str, cfg: &mut Config, strict_mode: bool)
                     cfg.metrics_bind_address = saved_metrics_bind_address;
                     cfg.metrics_username = saved_metrics_username;
                     cfg.metrics_password = saved_metrics_password;
-                    log_err!("Invalid log_destination value: {}", v);
                     bail!("Invalid log_destination value: {v}");
                 }
             };
@@ -354,7 +352,6 @@ pub fn parse_config_file(config_path: &str, cfg: &mut Config, strict_mode: bool)
                     cfg.metrics_bind_address = saved_metrics_bind_address;
                     cfg.metrics_username = saved_metrics_username;
                     cfg.metrics_password = saved_metrics_password;
-                    log_err!("Invalid log_format value: {}", v);
                     bail!("Invalid log_format value: {v}");
                 }
             };
@@ -364,11 +361,6 @@ pub fn parse_config_file(config_path: &str, cfg: &mut Config, strict_mode: bool)
     if let Some(jails) = &yaml_config.jails {
         for (name, yaml_jail) in jails {
             if cfg.jails.len() >= MAX_JAILS {
-                log_warn!(
-                    "Max jails reached ({}), skipping jail '{}'",
-                    MAX_JAILS,
-                    name
-                );
                 continue;
             }
 
@@ -379,7 +371,7 @@ pub fn parse_config_file(config_path: &str, cfg: &mut Config, strict_mode: bool)
                 for lf in log_files {
                     match validate_and_normalize_path(lf) {
                         Ok(normalized) => jail.log_files.push(normalized),
-                        Err(e) => log_warn!("Skipping invalid log file '{}': {}", lf, e),
+                        Err(_) => {},
                     }
                 }
             }
@@ -418,7 +410,6 @@ pub fn parse_config_file(config_path: &str, cfg: &mut Config, strict_mode: bool)
         }
     }
 
-    log_info!("Loaded config from {}", config_path);
     Ok(())
 }
 
@@ -456,17 +447,10 @@ pub fn load_config_directory(config_dir: &str, cfg: &mut Config, strict_mode: bo
 
     for path in &yaml_files {
         if let Some(path_str) = path.to_str() {
-            if let Err(e) = parse_config_file(path_str, cfg, strict_mode) {
-                log_warn!("Failed to load config file {}: {}", path_str, e);
-            }
+            let _ = parse_config_file(path_str, cfg, strict_mode);
         }
     }
 
-    log_info!(
-        "Loaded {} config file(s) from {}",
-        yaml_files.len(),
-        config_dir
-    );
     Ok(())
 }
 
@@ -623,13 +607,6 @@ pub fn parse_config(args: &[String]) -> Result<Config> {
 
     jail::apply_smart_defaults_to_all(&mut cfg);
     jail::config_validate(&cfg).map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    log_info!(
-        "Configuration loaded: {} jails, interval={}s, metrics_port={}",
-        cfg.jails.len(),
-        cfg.interval,
-        cfg.metrics_port
-    );
 
     Ok(cfg)
 }

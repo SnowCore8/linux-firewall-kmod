@@ -45,7 +45,6 @@ use anyhow::{bail, Context, Result};
 use parking_lot::Mutex;
 use rusqlite::{params, Connection, OpenFlags};
 
-use crate::{log_err, log_info};
 
 // ============================================================================
 // 永久封禁条目
@@ -143,7 +142,6 @@ pub fn sqlite_init(db_path: &str) -> Result<Arc<SqliteDb>> {
         conn: Mutex::new(conn),
     });
 
-    log_info!("SQLite persistent banlist initialized at {}", db_path);
     Ok(db)
 }
 
@@ -253,7 +251,6 @@ pub fn sqlite_add_permanent_ban(
             _,
         )) => Ok(-2),
         Err(e) => {
-            log_err!("Failed to insert permanent ban: {}", e);
             bail!("SQLite insert failed: {e}");
         }
     }
@@ -316,7 +313,6 @@ pub fn sqlite_add_permanent_bans_batch(
                 _,
             )) => {}
             Err(e) => {
-                log_err!("Failed to insert permanent ban {}: {}", i, e);
                 let _ = tx.rollback();
                 bail!("Batch insert failed at index {i}: {e}");
             }
@@ -552,10 +548,6 @@ fn init_db_schema(conn: &mut Connection) -> Result<()> {
     )?;
 
     if new_table_empty && old_table_exists {
-        log_info!(
-            "Detected legacy table structure, starting deduplication migration to UNIQUE(ip)"
-        );
-
         let tx = conn.transaction()?;
 
         tx.execute(
@@ -579,7 +571,6 @@ fn init_db_schema(conn: &mut Connection) -> Result<()> {
         )?;
 
         tx.commit()?;
-        log_info!("SQLite migration completed successfully");
     } else if !new_table_empty {
         // 迁移已完成的二次启动, 清理临时新表
         let _ = conn.execute_batch("DROP TABLE IF EXISTS permanent_banlist_new;");

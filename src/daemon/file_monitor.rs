@@ -34,8 +34,6 @@ use parking_lot::RwLock;
 use crate::failed_tracker;
 use crate::log_parser;
 use crate::types::{Config, Jail, DAEMON_STATS};
-use crate::{log_debug, log_err, log_info, log_warn};
-
 // ============================================================================
 // 文件状态
 // ============================================================================
@@ -110,16 +108,14 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
 
     let mut file_states = Vec::new();
     let mut watched_count = 0;
-    let mut total_files = 0;
 
     for (j_idx, jail) in cfg.jails.iter().enumerate() {
         if !jail.enabled {
-            log_info!("Skipping disabled jail: {}", jail.name);
+
             continue;
         }
 
         for log_file in &jail.log_files {
-            total_files += 1;
 
             let mut state = FileState::new();
             state.path.clone_from(log_file);
@@ -128,19 +124,14 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
             // 启动时拒绝符号链接日志文件: 攻击者可借此动态切换目标
             let path = Path::new(log_file);
             if path.is_symlink() {
-                log_warn!("Log file is a symlink, rejecting: {}", log_file);
+
                 continue;
             }
 
             if let Ok(metadata) = path.metadata() {
                 state.inode = metadata.ino();
                 state.offset = metadata.len();
-                log_info!(
-                    "Initial offset for {} (jail={}): {} bytes",
-                    log_file,
-                    jail.name,
-                    state.offset
-                );
+
             }
 
             let mask = WatchMask::MODIFY
@@ -153,15 +144,10 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
                 Ok(wd) => {
                     state.wd = Some(wd.clone());
                     watched_count += 1;
-                    log_info!("Watching {} (jail={}, wd={:?})", log_file, jail.name, wd);
+
                 }
-                Err(e) => {
-                    log_warn!(
-                        "Failed to watch {} (jail={}): {} (skipping)",
-                        log_file,
-                        jail.name,
-                        e
-                    );
+                Err(_e) => {
+
                 }
             }
 
@@ -174,16 +160,11 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
     *INOTIFY_FD.write() = Some(inotify);
     INOTIFY_RAW_FD.store(raw_fd, Ordering::Relaxed);
 
-    log_info!(
-        "Watching {}/{} log files across {} jails",
-        watched_count,
-        total_files,
-        cfg.jails.len()
-    );
+
 
     // 一个文件都没监控成功: 启动无意义, 直接退出
     if watched_count == 0 {
-        log_err!("No log files could be watched initially");
+
         return Err(anyhow::anyhow!("No log files could be watched initially"));
     }
 
@@ -205,7 +186,7 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
 pub fn process_single_line(
     jail: &Jail,
     line: &str,
-    log_path: &str,
+    _log_path: &str,
     max_retries: u32,
     findtime: u32,
 ) {
@@ -215,7 +196,7 @@ pub fn process_single_line(
 
     let len = line.len();
     if len >= 8192 {
-        log_warn!("Line too long ({} bytes) in {}, skipping", len, log_path);
+
         DAEMON_STATS.lines_skipped.fetch_add(1, Ordering::Relaxed);
         return;
     }
@@ -255,11 +236,7 @@ pub fn process_lines_in_buffer(
             let line_len = line_end - line_start;
 
             if line_len >= 8192 {
-                log_warn!(
-                    "Extremely long line ({} bytes) in {}, skipping",
-                    line_len,
-                    log_path
-                );
+
             } else {
                 let line = std::str::from_utf8(&data[line_start..line_end]).unwrap_or("");
                 process_single_line(jail, line, log_path, max_retries, findtime);
@@ -293,11 +270,7 @@ pub fn store_partial_line(
     }
 
     if data.len() >= 8192 {
-        log_warn!(
-            "Partial line too long ({} bytes) in {}, discarding",
-            data.len(),
-            log_path
-        );
+
         jail.partial_line_buffer.write().clear();
         return;
     }
@@ -337,16 +310,12 @@ pub fn flush_partial_line(jail: &Jail, log_path: &str, max_retries: u32, findtim
         return;
     }
 
-    let old_len = buf.len();
+    let _old_len = buf.len();
     let temp = buf.clone();
     buf.clear();
     drop(buf);
 
-    log_debug!(
-        "Flushing partial line buffer with {} bytes from {}",
-        old_len,
-        log_path
-    );
+
     if let Ok(line) = std::str::from_utf8(&temp) {
         process_single_line(jail, line, log_path, max_retries, findtime);
     }
@@ -390,7 +359,7 @@ pub fn process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
     drop(file_states);
 
     if jail_idx >= cfg.jails.len() {
-        log_err!("Invalid jail index {} in process_new_lines", jail_idx);
+
         return Ok(());
     }
 
@@ -416,9 +385,9 @@ pub fn process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
                 if let Some(state) = file_states.get_mut(idx) {
                     state.symlink_detected = true;
                 }
-                log_warn!("Log file is a symlink, skipping and marking: {}", log_path);
+
             } else {
-                log_err!("Failed to open {}: {}", log_path, e);
+
             }
             return Ok(());
         }
@@ -432,12 +401,12 @@ pub fn process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
         let mut file_states = FILE_STATES.write();
         if let Some(state) = file_states.get_mut(idx) {
             if state.inode != 0 && current_inode != state.inode {
-                log_info!("Log file rotated: {}", log_path);
+
                 state.inode = current_inode;
                 state.offset = 0;
                 local_partial_buf.clear();
             } else if current_size < state.offset {
-                log_info!("Log file truncated: {}", log_path);
+
                 state.inode = current_inode;
                 state.offset = 0;
                 local_partial_buf.clear();
@@ -469,8 +438,8 @@ pub fn process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
                     break;
                 }
             }
-            Err(e) => {
-                log_warn!("Read error in {}: {}", log_path, e);
+            Err(_e) => {
+
                 return Ok(());
             }
         }
@@ -563,7 +532,7 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
 
     let path_obj = Path::new(&path);
     if !path_obj.exists() {
-        log_warn!("Log file disappeared: {}", path);
+
         let mut file_states = FILE_STATES.write();
         if let Some(state) = file_states.get_mut(idx) {
             state.offset = 0;
@@ -576,7 +545,7 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
         let mut file_states = FILE_STATES.write();
         if let Some(state) = file_states.get_mut(idx) {
             if current_inode != state.inode {
-                log_info!("Log file rotated: {}", path);
+
                 state.inode = current_inode;
                 state.offset = 0;
 
@@ -594,10 +563,10 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
                     match inotify.watches().add(&path, mask) {
                         Ok(new_wd) => {
                             state.wd = Some(new_wd.clone());
-                            log_info!("Re-added watch for {} (wd={:?})", path, new_wd);
+
                         }
-                        Err(e) => {
-                            log_err!("Failed to re-add watch for {}: {}", path, e);
+                        Err(_e) => {
+
                             state.wd = None;
                         }
                     }
@@ -635,14 +604,14 @@ pub fn monitor_loop(
     running: &Arc<AtomicBool>,
     reload_config: &Arc<AtomicBool>,
 ) -> Result<()> {
-    log_info!("Starting monitoring loop");
+
 
     let mut last_partial_cleanup = SystemTime::now();
     let mut last_new_file_check = SystemTime::now();
 
     let raw_fd = INOTIFY_RAW_FD.load(Ordering::Relaxed);
     if raw_fd < 0 {
-        log_err!("No inotify fd available");
+
         return Ok(());
     }
 
@@ -696,11 +665,11 @@ pub fn monitor_loop(
             // 超时: 利用间隙检查 SIGHUP 和周期维护
             if reload_config.load(Ordering::Relaxed) {
                 reload_config.store(false, Ordering::Relaxed);
-                log_info!("SIGHUP received, reloading configuration...");
-                if let Err(e) = reload_configuration(cfg) {
-                    log_err!("Configuration reload failed: {}", e);
+
+                if let Err(_e) = reload_configuration(cfg) {
+
                 } else {
-                    log_info!("Configuration reloaded successfully");
+
                 }
                 continue;
             }
@@ -730,12 +699,12 @@ pub fn monitor_loop(
             if err.kind() == std::io::ErrorKind::Interrupted {
                 continue; // EINTR: 信号唤醒, 重试
             }
-            log_err!("poll error: {}", err);
+
             break;
         }
     }
 
-    log_info!("Monitoring loop exited");
+
     Ok(())
 }
 
@@ -795,24 +764,21 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
                 for (ip, entry) in old_hash.drain() {
                     new_hash.insert(ip, entry);
                 }
-                log_info!("Migrated failed entries for jail '{}'", new_jail.name);
+
                 break;
             }
         }
     }
 
-    if let Err(e) = jail::init_log_patterns(&mut new_cfg) {
-        log_warn!(
-            "Some jail regex patterns failed to compile during reload: {}",
-            e
-        );
+    if let Err(_e) = jail::init_log_patterns(&mut new_cfg) {
+
     }
 
     *cfg = new_cfg;
     DAEMON_STATS.config_reloads.fetch_add(1, Ordering::Relaxed);
     setup_inotify(cfg)?;
 
-    log_info!("Configuration reloaded: {} jails", cfg.jails.len());
+
     Ok(())
 }
 
@@ -826,11 +792,7 @@ pub fn cleanup_partial_line_buffer(cfg: &Config) {
     for jail in &cfg.jails {
         let mut buf = jail.partial_line_buffer.write();
         if !buf.is_empty() {
-            log_debug!(
-                "Flushing partial line buffer with {} bytes from jail '{}' (periodic_cleanup)",
-                buf.len(),
-                jail.name
-            );
+
             buf.clear();
         }
     }
@@ -850,11 +812,7 @@ fn check_for_new_log_files(cfg: &Config) {
                     .iter()
                     .any(|s| s.wd.is_some() && s.path == *log_file);
                 if !already_watched {
-                    log_info!(
-                        "New log file detected: {} (jail={}), will re-setup inotify",
-                        log_file,
-                        jail.name
-                    );
+
                     needs_resetup = true;
                 }
             }
@@ -862,12 +820,12 @@ fn check_for_new_log_files(cfg: &Config) {
     }
 
     if needs_resetup {
-        log_info!("Re-setting up inotify for new log files");
+
         drop(file_states);
-        if let Err(e) = setup_inotify(cfg) {
-            log_warn!("Failed to re-setup inotify for new log files: {}", e);
+        if let Err(_e) = setup_inotify(cfg) {
+
         } else {
-            log_info!("Successfully re-setup inotify with new log files");
+
         }
     }
 }

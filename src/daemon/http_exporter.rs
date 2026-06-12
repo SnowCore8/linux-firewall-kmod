@@ -49,7 +49,6 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 use crate::types::{Config, DAEMON_STATS};
-use crate::{log_err, log_info, log_warn};
 
 // ============================================================================
 // 配置参数
@@ -303,11 +302,6 @@ fn check_basic_auth(auth_header: Option<&str>, cfg_user: &str, cfg_pass: &str) -
     if AUTH_FAILURES.load(Ordering::Relaxed) >= AUTH_FAILURE_THRESHOLD
         && (now - last) < AUTH_LOCKOUT_DURATION
     {
-        log_warn!(
-            "Auth temporarily locked due to too many failures ({} failures in {} seconds)",
-            AUTH_FAILURES.load(Ordering::Relaxed),
-            now - last
-        );
         return 0;
     }
 
@@ -494,23 +488,20 @@ pub fn start_http_exporter(port: u16, cfg: &Config) -> thread::JoinHandle<()> {
         let addr = format!("{bind_address}:{port}");
         let listener = match TcpListener::bind(&addr) {
             Ok(l) => l,
-            Err(e) => {
-                log_err!("Failed to bind to {}: {}", addr, e);
+            Err(_) => {
                 return;
             }
         };
 
         let server = match Server::from_listener(listener, None) {
             Ok(s) => s,
-            Err(e) => {
-                log_err!("Failed to create HTTP server: {}", e);
+            Err(_) => {
                 return;
             }
         };
 
         EXPORTER_RUNNING.store(true, Ordering::Relaxed);
         EXPORTER_PORT.store(port, Ordering::Relaxed);
-        log_info!("Prometheus exporter started on port {}", port);
 
         loop {
             if !EXPORTER_RUNNING.load(Ordering::Relaxed) {
@@ -524,7 +515,6 @@ pub fn start_http_exporter(port: u16, cfg: &Config) -> thread::JoinHandle<()> {
         }
 
         EXPORTER_RUNNING.store(false, Ordering::Relaxed);
-        log_info!("Prometheus exporter stopped");
     })
 }
 

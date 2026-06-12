@@ -33,11 +33,8 @@ use firewall_daemon::config_parser;
 use firewall_daemon::file_monitor;
 use firewall_daemon::http_exporter;
 use firewall_daemon::jail;
-use firewall_daemon::log;
 use firewall_daemon::sqlite_store;
 use firewall_daemon::types::{Config, DAEMON_STATS};
-use firewall_daemon::{bootstrap_err, log_err, log_info, log_warn};
-
 use std::sync::Arc;
 
 /// 构造 `running` 标志原子。SIGINT/SIGTERM 触发置 false,主循环退出。
@@ -117,8 +114,8 @@ fn daemonize_process() -> Result<()> {
         Err(e) => bail!("second fork failed: {}", e),
     }
 
-    if let Err(e) = std::env::set_current_dir("/") {
-        log_warn!("chdir / failed: {}", e);
+    if let Err(_e) = std::env::set_current_dir("/") {
+
     }
 
     // PID 文件用 O_NOFOLLOW 防止符号链接攻击覆盖其他进程
@@ -177,21 +174,17 @@ fn cleanup(
     _cfg: &Config,
     sqlite_db: &Option<std::sync::Arc<sqlite_store::SqliteDb>>,
 ) {
-    log_info!("Cleaning up");
+
 
     http_exporter::stop_http_exporter();
     running.store(false, Ordering::Relaxed);
     ban::close_cached_bans_fd();
-    log::log_close_file();
-
     // 清理顺序: 先清全局引用, 再关 db, 防止收尾期间 ban 模块再访问
     sqlite_store::clear_global_db();
     if let Some(db) = sqlite_db {
         sqlite_store::sqlite_close(db);
-        log_info!("SQLite database closed");
-    }
 
-    log::close_syslog();
+    }
     let _ = fs::remove_file("/run/firewall-daemon.pid");
 }
 
@@ -205,10 +198,6 @@ fn main() -> Result<()> {
         Some((path, daemon, strict)) => (path, daemon, strict),
         None => return Ok(()),
     };
-
-    log::open_syslog();
-    log::set_log_component("daemon");
-
     let mut cfg = Config {
         strict_mode,
         ..Config::default()
@@ -232,53 +221,15 @@ fn main() -> Result<()> {
     let reload_config = make_reload_flag();
     setup_signals(running.clone(), reload_config.clone())?;
 
-    log::log_set_level(cfg.log_level);
-    log::log_set_destination(match cfg.log_destination {
-        0 => log::LogDestination::Syslog,
-        1 => log::LogDestination::File,
-        2 => log::LogDestination::Both,
-        3 => log::LogDestination::Journal,
-        _ => log::LogDestination::Both,
-    });
-    log::log_set_format(match cfg.log_format {
-        0 => log::LogFormat::Plain,
-        1 => log::LogFormat::Json,
-        _ => log::LogFormat::Plain,
-    });
-
-    if let Some(ref log_file) = cfg.log_file {
-        if let Err(e) = log::log_init_file(log_file) {
-            log_warn!(
-                "Failed to open log file {}: {} (falling back to syslog-only)",
-                log_file,
-                e
-            );
-        } else {
-            log_info!(
-                "Logging to file: {} (level={} dest={} format={})",
-                log_file,
-                cfg.log_level,
-                cfg.log_destination,
-                cfg.log_format
-            );
-        }
-    }
-
     if !Path::new(PROCFS_DIR).exists() {
-        log_err!(
-            "Procfs directory {} does not exist. Is the kernel module loaded?",
-            PROCFS_DIR
-        );
-        bootstrap_err!(
-            "Procfs directory {} does not exist. Is the kernel module loaded?",
-            PROCFS_DIR
-        );
+
+
         bail!("Procfs directory not found");
     }
 
     if !Path::new(BANS_PATH).exists() {
-        log_err!("Bans procfs interface {} does not exist", BANS_PATH);
-        bootstrap_err!("Bans procfs interface {} does not exist", BANS_PATH);
+
+
         bail!("Bans procfs interface not found");
     }
 
@@ -295,54 +246,30 @@ fn main() -> Result<()> {
                 Ok(db) => {
                     sqlite_store::set_global_db(db.clone());
                     sqlite_db = Some(db);
-                    log_info!(
-                        "SQLite database initialized for permanent bans at {}",
-                        db_path
-                    );
+
 
                     if let Some(ref db) = sqlite_db {
                         match sqlite_store::sqlite_load_all_permanent_bans(db) {
                             Ok(entries) if !entries.is_empty() => {
-                                log_info!(
-                                    "Loading {} permanent bans from SQLite database",
-                                    entries.len()
-                                );
+
                                 for entry in &entries {
                                     // 用 ban::ban_ip_permanent 而非手写 procfs 命令:
                                     //   1) 内核 procfs 不识别 "permanent" 前缀, 只认 "<ip> 0"
                                     //   2) 复用 execute_ban_action 自动写 SQLite + 更新 ips_banned 计数
-                                    match ban::ban_ip_permanent(&entry.ip) {
-                                        Ok(()) => log_info!(
-                                            "Restored permanent ban for {} (reason: {})",
-                                            entry.ip,
-                                            entry.reason
-                                        ),
-                                        Err(e) => log_warn!(
-                                            "Failed to restore permanent ban for {} to kernel: {}",
-                                            entry.ip,
-                                            e
-                                        ),
-                                    }
+                                    let _ = ban::ban_ip_permanent(&entry.ip);
                                 }
                             }
                             Ok(_) => {
-                                log_info!("No permanent bans found in SQLite database");
+
                             }
-                            Err(e) => {
-                                log_warn!(
-                                    "Failed to load permanent bans from SQLite database: {}",
-                                    e
-                                );
+                            Err(_e) => {
+
                             }
                         }
                     }
                 }
-                Err(e) => {
-                    log_warn!(
-                        "Failed to initialize SQLite database for permanent bans at {}: {}",
-                        db_path,
-                        e
-                    );
+                Err(_e) => {
+
                 }
             }
         }
@@ -357,47 +284,35 @@ fn main() -> Result<()> {
 
     file_monitor::setup_inotify(&cfg)?;
 
-    log_info!("Daemon starting up");
-    log_info!("Loaded {} jails", cfg.jails.len());
-    for (i, jail) in cfg.jails.iter().enumerate() {
+
+
+    for (_i, jail) in cfg.jails.iter().enumerate() {
         if jail.enabled {
-            log_info!(
-                "  Jail[{}]: {} (enabled={}, log_count={}, max_retries={}, findtime={}, ban_time={})",
-                i, jail.name, jail.enabled, jail.log_files.len(),
-                jail.max_retries, jail.findtime, jail.ban_time
-            );
+
         }
     }
-    log_info!(
-        "Global defaults: max_retries={}, findtime={}, ban_time={}",
-        cfg.default_max_retries,
-        cfg.default_findtime,
-        cfg.default_ban_time
-    );
 
-    if let Err(e) = jail::init_log_patterns(&mut cfg) {
-        log_warn!(
-            "Some jail regex patterns failed to compile, continuing with remaining jails: {}",
-            e
-        );
+
+    if let Err(_e) = jail::init_log_patterns(&mut cfg) {
+
     } else {
-        log_info!("All jail regex patterns compiled successfully");
+
     }
 
     let mut exporter_handle = None;
     if cfg.metrics_port > 0 {
         exporter_handle = Some(http_exporter::start_http_exporter(cfg.metrics_port, &cfg));
-        log_info!("Prometheus exporter started on port {}", cfg.metrics_port);
+
     } else {
-        log_info!("Prometheus exporter disabled (metrics_port=0)");
+
     }
 
-    if let Err(e) = file_monitor::monitor_loop(&mut cfg, &running, &reload_config) {
-        log_err!("Monitor loop error: {}", e);
+    if let Err(_e) = file_monitor::monitor_loop(&mut cfg, &running, &reload_config) {
+
     }
 
     cleanup(&running, &cfg, &sqlite_db);
-    log_info!("Daemon stopped");
+
 
     if let Some(handle) = exporter_handle {
         let _ = handle.join();

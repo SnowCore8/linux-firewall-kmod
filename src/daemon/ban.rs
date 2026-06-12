@@ -35,7 +35,6 @@ use parking_lot::Mutex;
 
 use crate::sqlite_store;
 use crate::types::DAEMON_STATS;
-use crate::{log_err, log_info, log_warn};
 
 // ============================================================================
 // 常量
@@ -121,7 +120,6 @@ fn get_cached_bans_fd() -> Result<RawFd> {
     let new_fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_NOFOLLOW) };
     if new_fd < 0 {
         let err = std::io::Error::last_os_error();
-        log_err!("Failed to open {}: {}", BANS_PATH, err);
         bail!("open {BANS_PATH} failed: {err}");
     }
 
@@ -248,31 +246,22 @@ pub fn validate_ip(ip: &str) -> Result<ValidatedIp> {
 /// - 以 `/` 结尾
 fn validate_procfs_path(path: &str) -> Result<()> {
     if !path.starts_with(&format!("{PROCFS_DIR}/")) {
-        log_err!("secure_procfs_write: path outside {}: {}", PROCFS_DIR, path);
         bail!("path outside {PROCFS_DIR}");
     }
 
     if path.contains("..") {
-        log_err!("secure_procfs_write: path traversal attempt: {}", path);
         bail!("path traversal attempt");
     }
 
     // 跳过 PROCFS_DIR 前缀后逐字符验证
     let safe_start = PROCFS_DIR.len() + 1;
-    for (i, c) in path[safe_start..].chars().enumerate() {
+    for (_i, c) in path[safe_start..].chars().enumerate() {
         if !c.is_ascii_alphanumeric() && !matches!(c, '/' | '-' | '_' | '.') {
-            log_err!(
-                "secure_procfs_write: invalid character in path: {} (char: '{}' at offset {})",
-                path,
-                c,
-                safe_start + i
-            );
             bail!("invalid character in path");
         }
     }
 
     if path.ends_with('/') {
-        log_err!("secure_procfs_write: path ends with '/': {}", path);
         bail!("path ends with '/'");
     }
 
@@ -295,11 +284,6 @@ fn verify_procfs_fd(fd: RawFd) -> Result<()> {
 
     let target_str = link_target.to_string_lossy();
     if !target_str.starts_with("/proc/firewall/") {
-        log_err!(
-            "secure_procfs_write: fd {} points to non-procfs path: {} (expected /proc/firewall/...)",
-            fd,
-            target_str
-        );
         bail!("fd points to non-procfs path");
     }
 
@@ -332,7 +316,6 @@ fn write_to_fd(fd: RawFd, data: &[u8]) -> Result<()> {
             {
                 continue; // EINTR / EAGAIN → 重试
             }
-            log_err!("Failed to write to procfs fd {}: {}", fd, err);
             bail!("write failed: {err}");
         }
         total_written += written as usize;
@@ -356,14 +339,9 @@ fn write_to_fd(fd: RawFd, data: &[u8]) -> Result<()> {
 /// 内部 `validate_procfs_path` 已禁止非 `[A-Za-z0-9/_.-]` 字符,实际不可能
 pub fn secure_procfs_write(path: &str, data: &[u8]) -> Result<()> {
     if data.is_empty() {
-        log_err!("Invalid parameters to secure_procfs_write");
         bail!("empty data");
     }
     if data.len() > 64 {
-        log_err!(
-            "Data too long for procfs write ({} bytes, max 64)",
-            data.len()
-        );
         bail!("data too long");
     }
 
@@ -379,7 +357,6 @@ pub fn secure_procfs_write(path: &str, data: &[u8]) -> Result<()> {
         let fd = unsafe { libc::open(path_c.as_ptr(), libc::O_WRONLY | libc::O_NOFOLLOW) };
         if fd < 0 {
             let err = std::io::Error::last_os_error();
-            log_err!("Failed to open {}: {}", path, err);
             bail!("open {path} failed: {err}");
         }
         if verify_procfs_fd(fd).is_err() {
@@ -404,10 +381,7 @@ pub fn secure_procfs_write(path: &str, data: &[u8]) -> Result<()> {
     if !using_cached {
         // SAFETY: fd 是本函数 `open` 拿到的非缓存 fd,作用域结束必须 close
         let close_result = unsafe { libc::close(fd) };
-        if close_result < 0 {
-            let err = std::io::Error::last_os_error();
-            log_warn!("Failed to close {}: {}", path, err);
-        }
+        let _ = close_result;
     }
 
     Ok(())
@@ -458,7 +432,6 @@ fn format_ban_command(action: BanAction, ip: &str) -> Result<String> {
 /// - `SQLite` 写入失败 (仅 Permanent/UnbanPerm)
 pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
     if ip.is_empty() {
-        log_err!("NULL IP address provided to execute_ban_action");
         bail!("NULL IP address");
     }
 
@@ -510,12 +483,8 @@ fn log_ban_action(action: BanAction, ip: &str) {
         DAEMON_STATS.ips_banned.fetch_add(1, Ordering::Relaxed);
     }
 
-    match action {
-        BanAction::Temp => log_info!("Banned IP {}", ip),
-        BanAction::Permanent => log_info!("Permanently banned IP {}", ip),
-        BanAction::Unban => log_info!("Unbanned IP {}", ip),
-        BanAction::UnbanPerm => log_info!("Removed permanent ban for IP {}", ip),
-    }
+    let _ = action;
+    let _ = ip;
 }
 
 // ============================================================================

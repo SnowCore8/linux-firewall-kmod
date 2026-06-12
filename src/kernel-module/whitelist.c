@@ -22,18 +22,13 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
   struct whitelist_entry *tmp_entry;
   u32 bkt;
 
-  FW_DEBUG(1, "ENTRY: add_whitelist_entry(af=%d, prefix=%d, dev=%s)", af,
-           prefix_len, dev_name ?: "null");
-
   /* 快速容量检查（无锁，可能 stale 但可接受） */
   if (atomic_read(&fw->whitelist_count) >= MAX_WHITELIST_ENTRIES) {
-    fw_pr_warn("Whitelist full, cannot add entry");
     return -ENOSPC;
   }
 
   new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
   if (!new_entry) {
-    fw_pr_warn("Failed to allocate memory for whitelist entry");
     return -ENOMEM;
   }
 
@@ -43,7 +38,6 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
     /* 验证 IPv6 前缀长度合法性（0-128） */
     if (prefix_len < 0 || prefix_len > 128) {
       kfree(new_entry);
-      fw_pr_warn("Invalid IPv6 prefix length: %d", prefix_len);
       return -EINVAL;
     }
     new_entry->mask.prefix_len = (u8)prefix_len;
@@ -56,7 +50,6 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
       /* 检查 inverted 是否为 2 的幂减 1（连续的低位 1 表示合法掩码） */
       if ((inverted & (inverted + 1)) != 0) {
         kfree(new_entry);
-        fw_pr_warn("Invalid IPv4 subnet mask: %pI4", &msk);
         return -EINVAL;
       }
     }
@@ -98,7 +91,6 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
   if (atomic_read(&fw->whitelist_count) >= MAX_WHITELIST_ENTRIES) {
     spin_unlock(&fw->whitelist_lock);
     kfree(new_entry);
-    fw_pr_warn("Whitelist full, cannot add entry");
     return -ENOSPC;
   }
 
@@ -124,12 +116,6 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
   atomic_inc(&fw->whitelist_count);
   spin_unlock(&fw->whitelist_lock);
 
-  if (af == FW_AF_INET6)
-    fw_pr_info("Whitelisted %pI6/%d on %s", &new_entry->addr.ipv6,
-               new_entry->mask.prefix_len, dev_name ?: "unknown");
-  else
-    fw_pr_info("Whitelisted %pI4/%d on %s", &new_entry->addr.ipv4,
-               inet_mask_len(new_entry->mask.ipv4_mask), dev_name ?: "unknown");
   return 0;
 }
 EXPORT_SYMBOL_GPL(add_whitelist_entry);
@@ -138,8 +124,6 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip, int 
   struct whitelist_entry *entry;
   u32 bkt;
   int found = 0;
-
-  FW_DEBUG(1, "ENTRY: remove_whitelist_entry(af=%d, prefix=%d)", af, prefix_len);
 
   spin_lock(&fw->whitelist_lock);
   if (af == FW_AF_INET6) {
@@ -178,13 +162,9 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip, int 
   }
   spin_unlock(&fw->whitelist_lock);
 
-  char ip_str[INET6_STR_LEN];
-  ip_to_str(af, ip, ip_str, sizeof(ip_str));
   if (found) {
-    fw_pr_info("Removed %s from whitelist", ip_str);
     return 0;
   }
-  fw_pr_warn("%s not found in whitelist", ip_str);
   return -ENOENT;
 }
 EXPORT_SYMBOL_GPL(remove_whitelist_entry);
@@ -193,7 +173,6 @@ bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip) {
   struct whitelist_entry *entry;
   u32 bkt;
 
-  FW_DEBUG(3, "ENTRY: is_in_whitelist(af=%d)", af);
   rcu_read_lock();
 
   if (af == FW_AF_INET6) {

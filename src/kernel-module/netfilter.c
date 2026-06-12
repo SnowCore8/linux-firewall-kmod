@@ -190,7 +190,6 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
   {
     __be16 frag_off = iph->frag_off;
     if ((ntohs(frag_off) & IP_MF) || (ntohs(frag_off) & IP_OFFSET)) {
-      fw_pr_warn_ratelimited("Fragmented packet from %pI4 dropped", &iph->saddr);
       /* 安全：分片包可能绕过基于完整报头的封禁检查，直接丢弃 */
       return NF_DROP;
     }
@@ -233,7 +232,6 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
            nexthdr == NEXTHDR_DEST || nexthdr == NEXTHDR_AUTH) {
       /* 修复：深度限制，防止循环或过多扩展头 */
       if (++ext_hdr_depth > MAX_EXT_HDR_DEPTH) {
-        fw_pr_warn_ratelimited("IPv6 extension header depth exceeded, dropping");
         return NF_DROP;
       }
       if (!pskb_may_pull(skb, offset + sizeof(struct ipv6_opt_hdr)))
@@ -245,7 +243,6 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
     }
   }
   if (nexthdr == NEXTHDR_FRAGMENT) {
-    fw_pr_warn_ratelimited("IPv6 fragmented packet dropped");
     /* 安全：分片包可能绕过封禁检查，直接丢弃 */
     return NF_DROP;
   }

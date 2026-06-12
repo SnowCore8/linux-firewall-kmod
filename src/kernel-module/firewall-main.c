@@ -75,18 +75,14 @@ static void cleanup_all_entries(void) {
 static int __init firewall_init(void) {
   int ret;
 
-  fw_pr_info("Loading firewall module v2.2 (IPv4/IPv6)");
-
   /* 初始化全局哈希种子（防止哈希碰撞攻击） */
   get_random_bytes(&fw_hash_seed, sizeof(fw_hash_seed));
 
   if (READ_ONCE(fw_ban_time) < 1) {
-    fw_pr_err("fw_ban_time must be >= 1");
     return -EINVAL;
   }
 
   if (READ_ONCE(fw_ban_time) > 365 * 24 * 60 * 60) {
-    fw_pr_err("fw_ban_time too large (max 1 year)");
     return -EINVAL;
   }
 
@@ -133,12 +129,7 @@ static int __init firewall_init(void) {
   atomic_set(&fw_info.cleanup_expired_total, 0);
 
   if (state_file && strlen(state_file) > 0) {
-    int restore_ret = restore_state_from_file(state_file);
-    if (restore_ret < 0) {
-      fw_pr_err("Failed to restore state from %s (error %d), starting with "
-                "clean state",
-                state_file, restore_ret);
-    }
+    restore_state_from_file(state_file);
   }
 
   INIT_DELAYED_WORK(&fw_info.sync_work, sync_work_handler);
@@ -147,7 +138,6 @@ static int __init firewall_init(void) {
 
   ret = register_netdev_notifier(&fw_info);
   if (ret) {
-    fw_pr_warn("Failed to register netdev notifier, IP auto-update disabled");
   }
 
   timer_setup(&fw_info.cleanup_timer, cleanup_timer_callback, 0);
@@ -162,18 +152,15 @@ static int __init firewall_init(void) {
   /* 注册 IPv4 Netfilter 钩子 */
   ret = nf_register_net_hook(&init_net, &nf_ops_ipv4);
   if (ret) {
-    fw_pr_err("Failed to register IPv4 netfilter hook: %d", ret);
     goto err_procfs;
   }
 
   /* 注册 IPv6 Netfilter 钩子 */
   ret = nf_register_net_hook(&init_net, &nf_ops_ipv6);
   if (ret) {
-    fw_pr_err("Failed to register IPv6 netfilter hook: %d", ret);
     goto err_nf_ipv4;
   }
 
-  fw_pr_info("Module loaded successfully (ban_time=%u, state_file=%s)", fw_ban_time, state_file);
   return 0;
 
 err_nf_ipv4:
@@ -194,7 +181,6 @@ err_notifier:
  * firewall_exit - 模块清理
  */
 static void __exit firewall_exit(void) {
-  fw_pr_info("Unloading firewall module");
 
   atomic_set(&fw_info.shutting_down, 1);
 
@@ -222,8 +208,6 @@ static void __exit firewall_exit(void) {
   }
 
   cleanup_all_entries();
-
-  fw_pr_info("Module unloaded");
 }
 
 module_init(firewall_init);
