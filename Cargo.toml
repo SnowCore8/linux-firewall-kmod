@@ -43,21 +43,31 @@ tiny_http = "0.12"
 signal-hook = "0.3"
 inotify = "0.10"
 parking_lot = "0.12"
-once_cell = "1"  # 暂时保留(测试代码可能用到),sqlite_store 已迁到 std::sync::OnceLock
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 anyhow = "1"
 thiserror = "1"
 base64 = "0.22"
 
 [profile.release]
+# 生产 release: 4MB (LTO + strip + 关 debug)
 opt-level = 2
-lto = false
-debug = 1
-strip = false
+lto = true
+codegen-units = 1
+debug = false
+strip = true
+panic = "abort"
 
 [profile.dev]
 opt-level = 0
 debug = true
+
+# 调试用 release 副本: 与 release 同等优化但保留 DWARF + 符号表
+# (现场 crash 时用 `addr2line -e firewall-daemon <addr>` 反推栈)
+# 用法: cargo build --release --profile dev-with-debug
+[profile.dev-with-debug]
+inherits = "release"
+debug = true
+strip = false
 
 # Rust 版 ASAN 需要 nightly + `-Z sanitizer=address` (std 重编),
 # 当前项目只通过 Makefile 的 gcc 流水线提供 ASAN (make asan),

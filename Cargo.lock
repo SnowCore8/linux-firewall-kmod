@@ -163,7 +163,6 @@ dependencies = [
  "inotify",
  "libc",
  "nix",
- "once_cell",
  "parking_lot",
  "regex",
  "rusqlite",
