@@ -6,6 +6,7 @@
 
 #include "firewall.h"
 #include <linux/namei.h>
+#include <linux/printk.h>
 #include <linux/version.h>
 
 /* 外部变量声明 */
@@ -107,8 +108,10 @@ int save_state_to_file(const char *filename) {
   struct whitelist_entry *wl_entry;
   u32 hash;
 
-  if (validate_state_path(filename) < 0)
+  if (validate_state_path(filename) < 0) {
+    pr_debug("状态文件路径验证失败: %s\n", filename);
     return -EINVAL;
+  }
 
   ban_entries_v4 = kmalloc_array(MAX_SAVE_BAN, sizeof(struct saved_ban_entry_v4), GFP_KERNEL);
   ban_entries_v6 = kmalloc_array(MAX_SAVE_BAN, sizeof(struct saved_ban_entry_v6), GFP_KERNEL);
@@ -121,6 +124,7 @@ int save_state_to_file(const char *filename) {
     kfree(ban_entries_v6);
     kfree(wl_entries_v4);
     kfree(wl_entries_v6);
+    pr_err("状态保存内存分配失败\n");
     return -ENOMEM;
   }
 
@@ -310,15 +314,19 @@ int restore_state_from_file(const char *filename) {
     return 0;
 
   if (!filename || !*filename) {
+    pr_debug("状态文件名为空\n");
     return -EINVAL;
   }
 
-  if (validate_state_path(filename) < 0)
+  if (validate_state_path(filename) < 0) {
+    pr_debug("状态文件路径验证失败: %s\n", filename);
     return -EINVAL;
+  }
 
 #define MAX_STATE_FILE_SIZE (128 * 1024)
   buffer = kmalloc(MAX_STATE_FILE_SIZE, GFP_KERNEL);
   if (!buffer) {
+    pr_err("状态恢复内存分配失败\n");
     return -ENOMEM;
   }
 

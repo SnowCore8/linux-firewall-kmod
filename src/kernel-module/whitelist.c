@@ -4,6 +4,7 @@
 
 #include "firewall.h"
 #include <linux/list.h>
+#include <linux/printk.h>
 
 extern u32 fw_hash_seed;
 
@@ -24,11 +25,13 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
 
   /* 快速容量检查（无锁，可能 stale 但可接受） */
   if (atomic_read(&fw->whitelist_count) >= MAX_WHITELIST_ENTRIES) {
+    pr_warn("白名单表已满 (%d 条目)\n", MAX_WHITELIST_ENTRIES);
     return -ENOSPC;
   }
 
   new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
   if (!new_entry) {
+    pr_err("白名单条目内存分配失败\n");
     return -ENOMEM;
   }
 
@@ -38,6 +41,7 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
     /* 验证 IPv6 前缀长度合法性（0-128） */
     if (prefix_len < 0 || prefix_len > 128) {
       kfree(new_entry);
+      pr_debug("无效的 IPv6 前缀长度: %d\n", prefix_len);
       return -EINVAL;
     }
     new_entry->mask.prefix_len = (u8)prefix_len;
@@ -50,6 +54,7 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
       /* 检查 inverted 是否为 2 的幂减 1（连续的低位 1 表示合法掩码） */
       if ((inverted & (inverted + 1)) != 0) {
         kfree(new_entry);
+        pr_debug("无效的 IPv4 子网掩码\n");
         return -EINVAL;
       }
     }
@@ -91,6 +96,7 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
   if (atomic_read(&fw->whitelist_count) >= MAX_WHITELIST_ENTRIES) {
     spin_unlock(&fw->whitelist_lock);
     kfree(new_entry);
+    pr_warn("白名单表已满 (%d 条目)\n", MAX_WHITELIST_ENTRIES);
     return -ENOSPC;
   }
 
