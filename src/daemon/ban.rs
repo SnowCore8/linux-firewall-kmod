@@ -99,6 +99,8 @@ fn get_cached_bans_fd() -> Result<RawFd> {
         return Ok(fd);
     }
     if fd >= 0 {
+        // SAFETY: fd 来自先前的 `libc::open` 或另一个成功 `open`,我们已先检查 `fd >= 0`
+        // 并通过 `verify_procfs_fd` 确认它仍指向合法 procfs 路径。关闭后立即重置全局。
         unsafe { libc::close(fd) };
         CACHED_BANS_FD.store(-1, Ordering::SeqCst);
     }
@@ -109,10 +111,13 @@ fn get_cached_bans_fd() -> Result<RawFd> {
         return Ok(fd);
     }
     if fd >= 0 {
+        // SAFETY: 同上,锁内再次检查 fd 仍合法才关闭
         unsafe { libc::close(fd) };
     }
 
     let path = CString::new(BANS_PATH).unwrap();
+    // SAFETY: `BANS_PATH` 是 `&'static str` 常量,不含 NUL,`CString::new` 已 unwrap 验证。
+    // `O_WRONLY | O_NOFOLLOW` 不需要额外权限
     let new_fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_NOFOLLOW) };
     if new_fd < 0 {
         let err = std::io::Error::last_os_error();
@@ -121,6 +126,7 @@ fn get_cached_bans_fd() -> Result<RawFd> {
     }
 
     if verify_procfs_fd(new_fd).is_err() {
+        // SAFETY: new_fd 是本函数刚 `open` 的有效 fd,验证失败需要立即释放
         unsafe { libc::close(new_fd) };
         bail!("fd verification failed for {BANS_PATH}");
     }
@@ -133,6 +139,7 @@ fn get_cached_bans_fd() -> Result<RawFd> {
 pub fn close_cached_bans_fd() {
     let fd = CACHED_BANS_FD.swap(-1, Ordering::SeqCst);
     if fd >= 0 {
+        // SAFETY: `swap` 已保证 fd 是之前 `get_cached_bans_fd` 写入的有效值
         unsafe { libc::close(fd) };
     }
 }
@@ -304,6 +311,11 @@ fn verify_procfs_fd(fd: RawFd) -> Result<()> {
 fn write_to_fd(fd: RawFd, data: &[u8]) -> Result<()> {
     let mut total_written: usize = 0;
     while total_written < data.len() {
+        // SAFETY: `data.as_ptr().add(total_written)` 算术安全,因为循环不变量
+        // `total_written <= data.len()` 始终成立 (初始化 + 每次 `total_written += written`
+        // 后 `written <= data.len() - total_written` 由 libc::write 契约保证)。
+        // 长度参数 `data.len() - total_written` 是剩余字节数,不会越界。
+        // fd 在调用方 (`secure_procfs_write`) 已通过 `verify_procfs_fd` 校验。
         let written = unsafe {
             libc::write(fd, data.as_ptr().add(total_written).cast::<libc::c_void>(), data.len() - total_written)
         };
@@ -351,6 +363,8 @@ pub fn secure_procfs_write(path: &str, data: &[u8]) -> Result<()> {
         get_cached_bans_fd()?
     } else {
         let path_c = CString::new(path).unwrap();
+        // SAFETY: `path` 已通过 `validate_procfs_path` 校验 (白名单目录 + 字符白名单 + 无 NUL),
+        // CString::new 成功表示无内嵌 NUL 字节。O_WRONLY | O_NOFOLLOW 不会触发额外权限要求。
         let fd = unsafe { libc::open(path_c.as_ptr(), libc::O_WRONLY | libc::O_NOFOLLOW) };
         if fd < 0 {
             let err = std::io::Error::last_os_error();
@@ -358,6 +372,7 @@ pub fn secure_procfs_write(path: &str, data: &[u8]) -> Result<()> {
             bail!("open {path} failed: {err}");
         }
         if verify_procfs_fd(fd).is_err() {
+            // SAFETY: fd 是本函数刚 `open` 拿到的有效值,验证失败立即释放
             unsafe { libc::close(fd) };
             bail!("fd verification failed for {path}");
         }
@@ -369,12 +384,14 @@ pub fn secure_procfs_write(path: &str, data: &[u8]) -> Result<()> {
         if using_cached {
             // 缓存 fd 写入失败时关闭并标记为无效, 下次重新打开
             CACHED_BANS_FD.store(-1, Ordering::SeqCst);
+            // SAFETY: fd 来自 `get_cached_bans_fd` 仍可能合法的 fd,失败时关闭并重置
             unsafe { libc::close(fd) };
         }
         return write_result;
     }
 
     if !using_cached {
+        // SAFETY: fd 是本函数 `open` 拿到的非缓存 fd,作用域结束必须 close
         let close_result = unsafe { libc::close(fd) };
         if close_result < 0 {
             let err = std::io::Error::last_os_error();

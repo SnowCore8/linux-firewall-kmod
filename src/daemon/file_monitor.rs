@@ -625,6 +625,11 @@ pub fn monitor_loop(
         };
 
         let timeout_ms = (current_interval as i32) * 1000;
+        // SAFETY: `poll_fds` 是栈上的 `pollfd` 数组,fds 字段是 `setup_inotify` 中
+        // 已打开并通过 inotify API 管理的 fd。`nfds=1` 严格匹配数组长度。
+        // `timeout_ms` 是 i32 类型且 config_validate 保证 `current_interval ∈ [1, 60]`,
+        // 乘 1000 后仍在 i32 正数范围 (`60 * 1000 = 60000 << i32::MAX`)。
+        // `libc::poll` 不修改 `pollfd` 数组其他字段,只更新 `revents`。
         let poll_result = unsafe { libc::poll(&mut poll_fds, 1, timeout_ms) };
 
         // poll_result 分 3 段处理: > 0 = 有事件 / = 0 = 超时 / < 0 = 错误

@@ -323,6 +323,9 @@ fn log_fmt_prefix(component: &str, is_daemon: bool) -> String {
 fn emit_syslog(prio: libc::c_int, msg: &str) {
     // syslog(3) 期望 printf 格式, % 需要转义避免格式字符串攻击
     let escaped = msg.replace('%', "%%");
+    // SAFETY: `b"%s\0"` 是合法的 C 字符串字面量(以 NUL 结尾),`escaped.as_ptr()`
+    // 指向有效 UTF-8 字节,`libc::syslog` 内部把它当 C 字符串读(读到 NUL 终止,
+    // 我们保证 `escaped` 不含 NUL 字节因为来源是 `String`,不会在中间截断)
     unsafe {
         libc::syslog(prio, b"%s\0".as_ptr().cast::<libc::c_char>(), escaped.as_ptr());
     }
@@ -513,6 +516,9 @@ pub fn open_syslog() {
     const LOG_PID: libc::c_int = 1 << 0;
     const LOG_CONS: libc::c_int = 1 << 1;
     const LOG_DAEMON: libc::c_int = 3 << 3;
+    // SAFETY: `b"firewall\0"` 是合法的 NUL 结尾 C 字符串。`openlog` 内部
+    // 复制 identifier,不会保留指针(详见 man 3 openlog)。flags 和
+    // facility 参数是合法 libc::c_int 值。
     unsafe {
         libc::openlog(b"firewall\0".as_ptr().cast::<libc::c_char>(), LOG_PID | LOG_CONS, LOG_DAEMON);
     }
@@ -520,6 +526,8 @@ pub fn open_syslog() {
 
 /// `closelog()` 包装。`main()` 的 `cleanup` 阶段调用,释放 syslog fd。
 pub fn close_syslog() {
+    // SAFETY: `closelog` 没有参数也无前置条件(全局状态由 `openlog` 初始化),
+    // 多次调用安全,无未初始化副作用
     unsafe { libc::closelog() };
 }
 
