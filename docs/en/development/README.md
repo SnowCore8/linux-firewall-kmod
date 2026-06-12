@@ -20,10 +20,7 @@ This section covers how to develop, build, and test the Linux Firewall Kernel Mo
 sudo apt install -y \
     build-essential \
     linux-headers-$(uname -r) \
-    libyaml-dev \
     libsqlite3-dev \
-    libmicrohttpd-dev \
-    libpcre2-dev \
     pkg-config \
     valgrind \
     clang \
@@ -49,14 +46,17 @@ graph TD
             K_CL["cleanup.c Module exit cleanup"]
             K_H["firewall.h Common header"]
         end
-        subgraph DAEMON["daemon/ Userspace daemon"]
-            D_MAIN["firewall-daemon.c Daemon entry"]
-            D_CFG["config-parser.c YAML config parsing (strict mode)"]
-            D_MON["file-monitor.c inotify log monitoring"]
-            D_TRK["failed-tracker.c Jail failure counter"]
-            D_BAN["ban-manager.c Ban/unban scheduler"]
-            D_MET["metrics.c Prometheus exporter"]
-            D_H["*.h Matching headers"]
+        subgraph DAEMON["src/ Userspace daemon (Rust)"]
+            D_MAIN["main.rs Daemon entry"]
+            D_CFG["config_parser.rs YAML config parsing"]
+            D_MON["file_monitor.rs inotify log monitoring"]
+            D_TRK["failed_tracker.rs Jail failure counter"]
+            D_BAN["ban.rs Ban/unban scheduler"]
+            D_MET["http_exporter.rs Prometheus exporter"]
+            D_LOG["log_parser.rs Log parsing"]
+            D_SQLITE["sqlite_store.rs Persistence"]
+            D_JAIL["jail.rs Jail definitions"]
+            D_TYPES["types.rs Type definitions"]
         end
     end
 

@@ -23,12 +23,10 @@
 ```bash
 # Debian/Ubuntu
 sudo apt install build-essential linux-headers-$(uname -r) \
-  libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev \
   pkg-config git
 
 # RHEL/CentOS/Fedora
 sudo dnf install gcc make kernel-devel kernel-headers \
-  libyaml-devel sqlite-devel libmicrohttpd-devel pcre2-devel \
   pkg-config git
 ```
 
@@ -101,7 +99,7 @@ make integration-test
 
 ## 代码规范
 
-### C 语言编码规范
+### 内核模块 C 语言编码规范
 
 | 规则 | 说明 |
 |------|------|
@@ -110,6 +108,14 @@ make integration-test
 | 行宽 | 最大 100 字符 |
 | 括号 | K&R 风格，左括号不换行 |
 | 函数长度 | 单个函数不超过 50 行，复杂逻辑拆分为子函数 |
+
+### 守护进程 Rust 编码规范
+
+守护进程使用 Rust 编写,遵循:
+- `cargo fmt` 格式化代码
+- `cargo clippy` 通过 lint 检查
+- 使用 `anyhow::Result` 进行错误处理
+- 模块注释使用中文
 
 ### 注释规范
 

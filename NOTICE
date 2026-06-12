@@ -2,7 +2,62 @@ Third-Party Notices
 
 This project includes the following third-party software:
 
-khash.h - klib hash table library
-Copyright (c) 2008-2023 by Attractive Chaos <attractivechaos@gmail.com>
-License: MIT License
-Source: https://github.com/attractivechaos/klib
+## Rust Crates
+
+The Rust daemon uses the following crates (full dependency list in Cargo.lock):
+
+- **anyhow** — Error handling with context
+  License: MIT/Apache-2.0
+  Source: https://github.com/dtolnay/anyhow
+
+- **parking_lot** — Advanced synchronization primitives
+  License: MIT/Apache-2.0
+  Source: https://github.com/Amanieu/parking_lot
+
+- **serde + serde_yaml** — YAML configuration parsing
+  License: MIT/Apache-2.0
+  Source: https://github.com/dtolnay/serde
+
+- **regex** — Regular expression matching
+  License: MIT/Apache-2.0
+  Source: https://github.com/rust-lang/regex
+
+- **rusqlite** — SQLite bindings
+  License: MIT
+  Source: https://github.com/rusqlite/rusqlite
+
+- **tiny_http** — HTTP server for Prometheus metrics
+  License: Apache-2.0
+  Source: https://github.com/tiny-http/tiny-http
+
+- **inotify** — Linux inotify bindings
+  License: MIT
+  Source: https://github.com/notify-rs/inotify
+
+- **signal-hook** — Unix signal handling
+  License: MIT/Apache-2.0
+  Source: https://github.com/vorner/signal-hook
+
+- **nix** — Unix system call bindings
+  License: MIT
+  Source: https://github.com/nix-rust/nix
+
+- **chrono** — Date and time handling
+  License: MIT/Apache-2.0
+  Source: https://github.com/chronotope/chrono
+
+- **base64** — Base64 encoding/decoding
+  License: MIT/Apache-2.0
+  Source: https://github.com/marshallpierce/rust-base64
+
+- **once_cell** — Lazy initialization primitives
+  License: MIT/Apache-2.0
+  Source: https://github.com/matklad/once_cell
+
+- **subtle** — Constant-time comparison utilities
+  License: BSD
+  Source: https://github.com/dalek-cryptography/subtle
+
+## C Code
+
+The kernel module is written in C and follows the Linux kernel coding style.

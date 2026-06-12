@@ -7,7 +7,7 @@
 守护进程 `firewall-daemon` 运行在用户空间，负责：
 
 - 监控日志文件变化
-- 使用 PCRE2 正则匹配封禁模式
+- 使用正则表达式匹配封禁模式
 - 统计失败次数并触发封禁
 - 管理封禁持久化
 - 暴露 Prometheus 指标
@@ -16,12 +16,11 @@
 
 | 组件 | 用途 |
 |------|------|
-| C 语言 | 主要编程语言 |
-| libyaml | YAML 配置文件解析 |
-| libpcre2 | 正则表达式编译和匹配 |
-| libsqlite3 | 封禁记录持久化存储 |
-| libmicrohttpd | Prometheus HTTP 指标服务器 |
-| inotify | Linux 文件变化监控 |
+| Rust | 主要编程语言 |
+| regex | 正则表达式编译和匹配 |
+| sqlite | 封禁记录持久化存储 |
+| tiny_http | Prometheus HTTP 指标服务器 |
+| notify | Linux 文件变化监控 |
 
 ## 架构
 
@@ -35,7 +34,7 @@ graph TB
         end
         
         subgraph EventHandler["事件处理"]
-            LogParser["日志读取 & PCRE2 匹配"]
+            LogParser["日志读取 & 正则匹配"]
             ScheduledTasks["定时任务: 过期清理 / 持久化同步"]
         end
         
@@ -65,13 +64,13 @@ graph TB
 ```mermaid
 graph LR
     A["main"] --> B["解析命令行参数"]
-    B --> C["读取 YAML 配置文件"]
+    B --> C["读取 TOML 配置文件"]
     C --> D["初始化日志"]
     D --> E["初始化 SQLite 数据库"]
     E --> E1["恢复未过期的封禁记录"]
-    E --> F["初始化 PCRE2 正则"]
+    E --> F["初始化正则表达式"]
     F --> F1["为每个 jail 编译 regex"]
-    F --> G["注册 inotify 监听"]
+    F --> G["注册 notify 监听"]
     G --> G1["为每个 jail 的 log_files 添加 watch"]
     G --> H["启动 Prometheus HTTP 服务器 :9119"]
     H --> I["恢复封禁到内核"]
@@ -81,63 +80,56 @@ graph LR
 
 ## 日志监控
 
-### inotify 事件
+### notify 事件
 
-```c
-int fd = inotify_init();
-inotify_add_watch(fd, "/var/log/auth.log", IN_MODIFY);
+```rust
+use notify::{Watcher, RecursiveMode, recommended_watcher, Event};
 ```
 
 | 事件 | 说明 |
 |------|------|
-| `IN_MODIFY` | 文件被修改（新日志写入） |
-| `IN_CLOSE_WRITE` | 文件写入后关闭 |
-| `IN_MOVED_TO` | 文件被移入（日志轮转） |
+| `Modify` | 文件被修改（新日志写入） |
+| `CloseWrite` | 文件写入后关闭 |
+| `RenamedTo` | 文件被移入（日志轮转） |
 
 ### 日志轮转处理
 
-守护进程检测日志轮转并重新注册 inotify watch：
+守护进程检测日志轮转并重新注册 notify watch：
 
-```c
-if (event->mask & IN_IGNORED) {
+```rust
+if event.kind.contains(notify::event::Kind::Remove) {
     // 日志文件被轮转，重新 watch
-    inotify_add_watch(fd, log_path, IN_MODIFY);
+    watcher.watch(log_path, RecursiveMode::NonRecursive)?;
 }
 ```
 
-## PCRE2 正则匹配
+## 正则匹配
 
 ### 正则编译
 
-```c
-pcre2_code *re = pcre2_compile(
-    (PCRE2_SPTR)pattern,
-    PCRE2_ZERO_TERMINATED,
-    PCRE2_UTF | PCRE2_NO_UTF_CHECK,
-    &error_code,
-    &error_offset,
-    NULL
-);
+```rust
+use regex::Regex;
+let re = Regex::new(pattern).expect("invalid regex");
 ```
 
 ### `<HOST>` 替换
 
 配置中的 `<HOST>` 占位符被替换为 IP 匹配正则：
 
-```c
-#define HOST_PATTERN \
-    "(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}" \
-    "(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)"
+```rust
+const HOST_PATTERN: &str =
+    r"(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}"
+    r"(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)";
 
 // 替换 <HOST> 为 HOST_PATTERN
-char *expanded = replace_all(regex, "<HOST>", HOST_PATTERN);
+let expanded = pattern.replace("<HOST>", HOST_PATTERN);
 ```
 
 ### 匹配流程
 
 ```mermaid
 graph TB
-    A["新日志行"] --> B["PCRE2 匹配"]
+    A["新日志行"] --> B["正则匹配"]
     B --> C{"匹配成功?"}
     C -->|是| D["提取 IP 地址"]
     C -->|否| E["忽略该行"]
@@ -153,13 +145,13 @@ graph TB
 
 每个 jail 维护一个 `(ip, count)` 映射：
 
-```c
-struct failure_counter {
-    uint32_t ip;              // IP 地址
-    uint32_t count;           // 当前计数
-    time_t first_seen;        // 首次出现时间
-    time_t last_seen;         // 最后出现时间
-};
+```rust
+struct FailureCounter {
+    ip: u32,              // IP 地址
+    count: u32,           // 当前计数
+    first_seen: SystemTime, // 首次出现时间
+    last_seen: SystemTime,  // 最后出现时间
+}
 ```
 
 ### 封禁触发
@@ -239,7 +231,7 @@ http://<host>:9119/metrics
 
 ### 指标列表
 
-> 实际由 `src/daemon/http-exporter.c` 暴露的 14 个指标。
+> 实际由 `src/http_exporter.rs` 暴露的 14 个指标。
 > 早期文档中 `firewall_ban_events_total` / `firewall_packets_*` /
 > `firewall_hash_table_*` / `firewall_jail_*` 等条目均不存在。
 
@@ -262,7 +254,7 @@ http://<host>:9119/metrics
 | `firewall_daemon_log_rotations_total` | counter | 日志轮转次数 |
 | `firewall_daemon_lines_parsed_total` | counter | 已解析日志行数 |
 | `firewall_daemon_lines_skipped_total` | counter | 跳过的日志行数 |
-| `firewall_daemon_regex_matches_total` | counter | PCRE2 匹配命中数 |
+| `firewall_daemon_regex_matches_total` | counter | 正则匹配命中数 |
 | `firewall_daemon_ips_extracted_total` | counter | 提取出的 IP 数 |
 | `firewall_daemon_ips_banned_total` | counter | 实际触发内核封禁的 IP 数 |
 | `firewall_daemon_failed_attempts_total` | counter | 封禁失败次数 |
@@ -302,10 +294,10 @@ firewall_daemon_lines_parsed_total 1250340
 
 ```mermaid
 graph TB
-    A["收到 SIGHUP"] --> B["重新读取 YAML 配置"]
+    A["收到 SIGHUP"] --> B["重新读取 TOML 配置"]
     B --> C["比较新旧配置差异"]
-    C --> D["新 jail: 初始化并注册 inotify"]
-    C --> E["删除 jail: 移除 inotify watch"]
-    C --> F["修改 regex: 重新编译 PCRE2"]
+    C --> D["新 jail: 初始化并注册 notify"]
+    C --> E["删除 jail: 移除 notify watch"]
+    C --> F["修改 regex: 重新编译"]
     C --> G["修改 whitelist: 更新内核白名单"]
 ```

@@ -5,7 +5,7 @@
 [![CI](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml/badge.svg)](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Release](https://img.shields.io/badge/release-v2.1-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
-[![Language](https://img.shields.io/badge/Language-C-blue.svg)]()
+[![Language](https://img.shields.io/badge/Language-Rust%20%2B%20C-blue.svg)]()
 [![Platform](https://img.shields.io/badge/Platform-Linux%205.x%20%7C%206.x-orange.svg)]()
 
 > 🌍 [中文文档](README.md)
@@ -20,7 +20,7 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 |---------|---------------------|----------------------|
 | Ban Location | iptables/nftables userspace | netfilter kernel hooks |
 | Response Time | Seconds | Milliseconds |
-| Resource Usage | Python runtime + dependencies | Lightweight C daemon |
+| Resource Usage | Python runtime + dependencies | Rust daemon |
 | Lookup Performance | Linear rule scan | Hash table O(1) lookup |
 
 ## Core Features
@@ -31,8 +31,8 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 - ✅ **Auto-expire cleanup** — periodic cleanup of expired bans
 - ✅ **IP whitelist protection** — auto-discovery + manual entries (64 capacity)
 - ✅ **procfs interface** — ban/unban/whitelist/config operations
-- ✅ **C language daemon** — no Python dependency, lightweight
-- ✅ **PCRE2 regex parsing** — JIT accelerated, ReDoS protected
+- ✅ **Rust daemon** — no Python dependency, safe and efficient
+- ✅ **Regex parsing** — named capture groups for IP extraction
 - ✅ **RCU concurrency safety** — spinlock protected, high-concurrency safe
 - ✅ **Strict config validation** — unknown params rejected by default
 - ✅ **State persistence** — SQLite for permanent ban recovery
@@ -46,9 +46,9 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 ### Build
 
 ```bash
-make                    # Build all
+make                    # Build kernel module + Rust daemon
 make kernel-module      # Kernel module only
-make daemon             # Daemon only
+make daemon             # Rust daemon only (cargo build --release)
 make clean              # Clean
 ```
 

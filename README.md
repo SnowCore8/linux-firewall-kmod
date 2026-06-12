@@ -5,7 +5,7 @@
 [![CI](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml/badge.svg)](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Release](https://img.shields.io/badge/release-v2.1.1-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
-[![Language](https://img.shields.io/badge/Language-C-blue.svg)]()
+[![Language](https://img.shields.io/badge/Language-Rust%20%2B%20C-blue.svg)]()
 [![Platform](https://img.shields.io/badge/Platform-Linux%205.x%20%7C%206.x-orange.svg)]()
 
 > 🌍 [English README](README.en.md)
@@ -20,7 +20,7 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 |--------|-------------------|-------------------|
 | 封禁位置 | iptables/nftables 用户态 | netfilter 内核钩子 |
 | 响应延迟 | 秒级 | 毫秒级 |
-| 资源占用 | Python 运行时 + 依赖 | 轻量 C 守护进程 |
+| 资源占用 | Python 运行时 + 依赖 | Rust 守护进程 |
 | 查找性能 | 线性遍历规则 | 哈希表 O(1) 查找 |
 
 ## 核心特性
@@ -31,8 +31,8 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 - ✅ **自动过期清理** — 定时清理过期封禁记录
 - ✅ **IP 白名单保护** — 自动发现系统 IP + 手动添加（64 容量）
 - ✅ **procfs 用户接口** — 封禁/解封/白名单/配置操作
-- ✅ **C 语言守护进程** — 无 Python 依赖，轻量高效
-- ✅ **PCRE2 正则解析** — JIT 加速，ReDoS 防护
+- ✅ **Rust 守护进程** — 无 Python 依赖，安全高效
+- ✅ **正则解析** — 支持命名捕获组提取 IP
 - ✅ **RCU 并发安全** — spinlock 保护，高并发安全
 - ✅ **严格配置校验** — 未知参数或无效值直接报错拒绝加载
 - ✅ **状态持久化** — SQLite 保存/恢复永久封禁
@@ -46,10 +46,9 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 ### 编译
 
 ```bash
-make                    # 编译全部
+make                    # 编译内核模块 + Rust 守护进程
 make kernel-module      # 仅内核模块
-make daemon             # 仅守护进程
-make debug DL=2         # 调试版本编译 (DL=1/2/3，默认 1)
+make daemon             # 仅 Rust 守护进程 (cargo build --release)
 make clean              # 清理
 ```
 

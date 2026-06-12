@@ -101,26 +101,14 @@ make debug DL=2
 make daemon
 ```
 
-实际由 Makefile 自动生成 object 与链接命令，文档仅展示概念性
-gcc 命令（仅作示例，不可直接复制运行——源码文件列表已在
-v2.x 重构）：
+守护进程使用 Rust 编写，由 `cargo` 构建：
 
 ```
-gcc -Wall -Wextra -O2 -o firewall-daemon \
-    src/daemon/firewall-daemon.c \
-    src/daemon/jail-manager.c \
-    src/daemon/config-parser.c \
-    src/daemon/log-parser.c \
-    src/daemon/failed-tracker.c \
-    src/daemon/ban-manager.c \
-    src/daemon/file-monitor.c \
-    src/daemon/http-exporter.c \
-    src/daemon/sqlite-persistent.c \
-    -lpthread -lyaml -lsqlite3 -lmicrohttpd -lpcre2-8
+cargo build --release --bin firewall-daemon
 ```
 
-> 实际构建请使用 `make daemon`，由 Makefile 决定 source/object
-> 文件列表与编译参数。上方命令仅展示大致形状。
+> 实际构建请使用 `make daemon`，Makefile 会调用 `cargo build` 并
+> 传递正确的 `--manifest-path` 和输出路径。
 
 ### AddressSanitizer 编译
 
@@ -193,43 +181,6 @@ make kernel-module KDIR=/path/to/kernel/source
 | `-fsanitize=address` | AddressSanitizer |
 | `-DDEBUG` | 启用调试代码 |
 
-## 依赖检查
-
-### 自动检查
-
-构建系统自动检查依赖：
-
-```bash
-make
-```
-
-如果缺少依赖：
-
-```
-Checking dependencies...
-  linux-headers: OK
-  libyaml:       NOT FOUND
-  libsqlite3:    OK
-  libmicrohttpd: OK
-  libpcre2:      OK
-
-Error: Missing dependencies. Install:
-  sudo apt install libyaml-dev
-```
-
-### 手动检查
-
-```bash
-# 检查内核头文件
-ls /lib/modules/$(uname -r)/build
-
-# 检查库
-pkg-config --libs libyaml
-pkg-config --libs sqlite3
-pkg-config --libs libmicrohttpd
-pkg-config --libs libpcre2
-```
-
 ## 构建产物
 
 ### 内核模块
@@ -273,13 +224,14 @@ sudo apt install --reinstall linux-headers-$(uname -r)
 ### 库版本不兼容
 
 ```
-undefined reference to `pcre2_compile_8'
+error[E0432]: unresolved import `rusqlite`
 ```
 
 解决方案：
 
 ```bash
-sudo apt install --reinstall libpcre2-dev
+cargo build
+# cargo 会自动下载并编译依赖
 ```
 
 ### 权限不足

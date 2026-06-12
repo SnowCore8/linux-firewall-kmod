@@ -20,12 +20,8 @@
 sudo apt install -y \
     build-essential \
     linux-headers-$(uname -r) \
-    libyaml-dev \
     libsqlite3-dev \
-    libmicrohttpd-dev \
-    libpcre2-dev \
     pkg-config \
-    valgrind \
     clang \
     cmake
 ```
@@ -49,14 +45,14 @@ graph TD
             K_CL["cleanup.c 模块退出清理"]
             K_H["firewall.h 公共头文件"]
         end
-        subgraph DAEMON["daemon/ 用户态守护进程"]
-            D_MAIN["firewall-daemon.c 守护进程入口"]
-            D_CFG["config-parser.c YAML 配置解析（严格模式）"]
-            D_MON["file-monitor.c inotify 日志监听"]
-            D_TRK["failed-tracker.c Jail 失败计数"]
-            D_BAN["ban-manager.c 封禁/解封调度"]
-            D_MET["metrics.c Prometheus exporter"]
-            D_H["*.h 对应头文件"]
+        subgraph DAEMON["daemon/ 用户态守护进程 (Rust)"]
+            D_MAIN["lib.rs / main.rs 守护进程入口"]
+            D_CFG["config.rs 配置解析"]
+            D_MON["file_monitor.rs notify 日志监听"]
+            D_TRK["tracker.rs Jail 失败计数"]
+            D_BAN["ban_manager.rs 封禁/解封调度"]
+            D_MET["http_exporter.rs Prometheus exporter"]
+            D_H["对应 Rust 模块文件"]
         end
     end
 

@@ -32,10 +32,7 @@ sudo apt update
 sudo apt install -y \
     build-essential \
     linux-headers-$(uname -r) \
-    libyaml-dev \
     libsqlite3-dev \
-    libmicrohttpd-dev \
-    libpcre2-dev \
     pkg-config
 ```
 
@@ -46,10 +43,7 @@ sudo dnf install -y \
     gcc gcc-c++ make \
     kernel-devel-$(uname -r) \
     kernel-headers-$(uname -r) \
-    libyaml-devel \
     sqlite-devel \
-    libmicrohttpd-devel \
-    pcre2-devel \
     pkg-config
 ```
 
@@ -59,10 +53,7 @@ sudo dnf install -y \
 sudo pacman -S --needed \
     base-devel \
     linux-headers \
-    libyaml \
     sqlite \
-    libmicrohttpd \
-    pcre2 \
     pkg-config
 ```
 

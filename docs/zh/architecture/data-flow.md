@@ -44,7 +44,7 @@ sequenceDiagram
 
     Log->>Daemon: IN_MODIFY 通知
     Daemon->>Daemon: 读取日志行
-    Daemon->>Daemon: PCRE2 匹配
+    Daemon->>Daemon: 正则匹配
     Daemon->>Daemon: 计数+1, 检查阈值
     Daemon->>Kernel: ban 1.2.3.4 (ProcFS)
     Kernel->>Kernel: 添加封禁到哈希表
@@ -102,7 +102,7 @@ graph TB
 | 组件 | 通信方式 | 数据 |
 |------|----------|------|
 | 守护进程 → SQLite | 文件 I/O | 封禁记录 |
-| 守护进程 → Prometheus | HTTP (libmicrohttpd) | 指标数据 |
+| 守护进程 → Prometheus | HTTP (tiny_http) | 指标数据 |
 | 守护进程 → 日志 | 文件 I/O | 运行日志 |
 
 ## 时序图
@@ -119,7 +119,7 @@ sequenceDiagram
 
     Log->>Daemon: IN_MODIFY
     Daemon->>Daemon: 读取日志行
-    Daemon->>Daemon: PCRE2 匹配
+    Daemon->>Daemon: 正则匹配
     Daemon->>Daemon: 计数+1, 检查阈值
     Daemon->>Kernel: ban 1.2.3.4 (ProcFS)
     Kernel->>Kernel: 添加封禁

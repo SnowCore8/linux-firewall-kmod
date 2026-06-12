@@ -19,7 +19,7 @@ scrape_configs:
 ### Available Metrics
 
 > The 14 metrics below are actually exposed by
-> `src/daemon/http-exporter.c`. Earlier drafts listed
+> `src/http_exporter.rs`. Earlier drafts listed
 > `firewall_ban_events_total` / `firewall_packets_dropped_total` /
 > `firewall_hash_table_*` / `firewall_jail_*` — none of which exist in
 > the source — and have been removed.
@@ -57,7 +57,7 @@ key names and the conservation law.
 | `firewall_daemon_log_rotations_total` | counter | Log rotation events |
 | `firewall_daemon_lines_parsed_total` | counter | Log lines parsed |
 | `firewall_daemon_lines_skipped_total` | counter | Log lines skipped (unparseable) |
-| `firewall_daemon_regex_matches_total` | counter | PCRE2 regex matches |
+| `firewall_daemon_regex_matches_total` | counter | Regex matches |
 | `firewall_daemon_ips_extracted_total` | counter | IPs extracted from logs |
 | `firewall_daemon_ips_banned_total` | counter | IPs that triggered a kernel ban |
 | `firewall_daemon_failed_attempts_total` | counter | Ban failures (e.g. table full) |

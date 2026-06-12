@@ -156,10 +156,10 @@ else
         exit 1
     fi
 
-    # 编译守护进程
+    # 编译守护进程 (支持 RUST=1 环境变量)
     DAEMON_BIN="$PROJECT_ROOT/build/daemon/firewall-daemon"
     fw_log_info "编译用户态守护进程..."
-    cd "$PROJECT_ROOT" && make daemon 2>/tmp/fw_compile_stderr_$$.log || {
+    cd "$PROJECT_ROOT" && make daemon RUST="${RUST:-0}" 2>/tmp/fw_compile_stderr_$$.log || {
         rm -f /tmp/fw_compile_stderr_$$.log
         fw_log_warn "守护进程编译失败（部分测试可能跳过）"
     }

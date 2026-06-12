@@ -36,7 +36,7 @@ graph TB
 ```mermaid
 graph TB
     A[Log File] -->|inotify notification| B[Daemon reads new lines]
-    B -->|PCRE2 match| C{Regex match successful?}
+    B -->|regex match| C{Regex match successful?}
     C -->|No| D[Ignore]
     C -->|Yes| E[Extract IP]
     E --> F[Update Counter]
@@ -102,7 +102,7 @@ graph TB
 | Component | Communication | Data |
 |-----------|---------------|------|
 | Daemon -> SQLite | File I/O | Ban records |
-| Daemon -> Prometheus | HTTP (libmicrohttpd) | Metrics data |
+| Daemon -> Prometheus | HTTP (tiny_http) | Metrics data |
 | Daemon -> Log | File I/O | Operation logs |
 
 ## Sequence Diagrams
@@ -120,7 +120,7 @@ sequenceDiagram
     L->>D: IN_MODIFY
     D->>L: read line
     L-->>D: new line
-    D->>D: PCRE2 match
+    D->>D: regex match
     D->>D: count+1
     D->>D: check thresh
     D->>K: ban 1.2.3.4 (ProcFS)

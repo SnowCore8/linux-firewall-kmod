@@ -16,7 +16,7 @@ Linux Firewall Kernel Module is a high-performance IP banning solution designed 
 | Auto-Expiry Cleanup | Background timer thread automatically cleans expired bans |
 | IP Whitelist | 64-capacity whitelist to prevent banning critical IPs |
 | ProcFS Interface | Management and monitoring via `/proc` filesystem |
-| PCRE2 Regex | Userspace daemon supports PCRE2 regex for log matching |
+| Regex Matching | Userspace daemon supports configurable regex for log matching |
 | RCU Concurrency | Read-Copy-Update for high-concurrency safety |
 | SQLite Persistence | Banned records persisted across reboots |
 | Prometheus Metrics | Built-in HTTP server exposing metrics on port 9119 |
@@ -42,14 +42,14 @@ graph TB
     end
 
     subgraph Userspace["Userspace"]
-        Daemon["Daemon (C Language)"]
+        Daemon["Daemon (Rust)"]
         Inotify["inotify Monitor"]
-        PCRE2["PCRE2 Regex"]
+        Regex["Regex Engine"]
         SQLite["SQLite Persist"]
         Prometheus["Prometheus Metrics (:9119)"]
 
         Daemon --> Inotify
-        Daemon --> PCRE2
+        Daemon --> Regex
         Daemon --> SQLite
         Daemon --> Prometheus
     end
@@ -71,10 +71,7 @@ graph TB
 | Dependency | Purpose |
 |------------|---------|
 | linux-headers | Kernel module compilation |
-| libyaml | YAML configuration parsing |
 | libsqlite3 | Ban record persistence |
-| libmicrohttpd | Prometheus HTTP server |
-| libpcre2 | Regular expression matching |
 
 ## Quick Start
 

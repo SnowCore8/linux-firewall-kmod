@@ -7,8 +7,7 @@
 ### 新增
 - **守护进程独立日志文件** - 实现 `cfg.log_file` 配置项（默认 `/var/log/firewall.log`），守护进程现在同时输出到 syslog 与独立日志文件，文档承诺的 `/var/log/firewall.log` 路径正式落地
 - **运行时日志级别** - 实现 `cfg.log_level`（0=NONE..4=DEBUG），可在 reload 时通过 SIGHUP 动态调整
-- **限流型日志后端** - 新增 `LOG_*_RATELIMITED` 宏族（每秒最多 1 条真实日志 + 每分钟 1 条汇总），替换 `http-exporter.c` 中散落的内联限流实现
-- **统一日志系统（log.h）** - 将 `daemon_log_*` / `sqlite_log_*` / `exporter_log_*` 4 套分散宏合并为单一 `LOG_*` 宏族（5 级：ERR/WARN/INFO/DEBUG + 限流变体）
+- **统一日志系统（log.h）** - 将 `daemon_log_*` / `sqlite_log_*` / `exporter_log_*` 4 套分散宏合并为单一 `LOG_*` 宏族（5 级：ERR/WARN/INFO/DEBUG）
 - **logrotate 配置** - 新增 `config/logrotate/firewall-daemon`，默认 30 天保留
 - **debian 安装脚本** - `debian/rules` 创建 `/var/log/` 目录并预创建 0640 权限的空日志文件
 
@@ -16,6 +15,9 @@
 - 默认 `config/default.yaml` 增加 `log_file: /var/log/firewall.log` 与 `log_level: 3`
 - 守护进程启动时如果 `cfg.log_file` 非空且 open 成功，启用双写（syslog + 文件）；失败则回退 syslog-only 并 LOG_WARN
 - 通过 SIGHUP 重载配置时，如 `log_file`/`log_level` 变化，运行时热切换（关闭旧文件、打开新文件、调整级别）
+
+### 移除
+- **日志限流层** - 删除 `RATELIMIT_STATE` / `RatelimitState` / `emit_ratelimited` / 4 个 `log_*_ratelimited!` 宏 / 1 个单元测试。全局 Mutex 与 60s 节流窗口不再需要,日志每条都真实 emit。原唯一调用点 `http_exporter::check_basic_auth` 认证锁定警告改为普通 `log_warn!`(每请求 1 条而非 1 秒 1 条,反而让攻击事件更易追踪)
 
 ## v2.2.0 - 统计不变量修复与文档全面升级（2026-06-10）
 

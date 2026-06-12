@@ -584,16 +584,19 @@ fw_ensure_module_loaded() {
 }
 
 fw_ensure_module_unloaded() {
-    if lsmod | grep -q "^firewall"; then
+    local lsmod_snapshot
+    lsmod_snapshot=$(lsmod)
+    if echo "$lsmod_snapshot" | grep -q "^firewall"; then
         if ! rmmod firewall 2>/dev/null; then
             fw_log_warn "模块卸载失败，可能被其他进程引用"
             return 1
         fi
     fi
     sleep 0.3
-    
+
     # 验证卸载
-    if lsmod | grep -q "^firewall"; then
+    lsmod_snapshot=$(lsmod)
+    if echo "$lsmod_snapshot" | grep -q "^firewall"; then
         fw_log_error "模块卸载验证失败: 模块仍在运行"
         return 1
     fi
@@ -703,6 +706,8 @@ fw_print_summary() {
 # 清理模块状态文件（防止模块卸载时保存的残余条目影响测试）
 fw_cleanup_state() {
     rm -f /var/lib/firewall/state 2>/dev/null
+    # 清理之前测试残留的 firewall-daemon 进程 (timeout kill 可能没杀干净)
+    pkill -9 -f "firewall-daemon -c /var/log/firewall_test_" 2>/dev/null || true
 }
 
 # 测试小节清理（在 subsection 结束时调用）

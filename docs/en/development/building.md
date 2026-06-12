@@ -103,25 +103,14 @@ Debug level descriptions:
 make daemon
 ```
 
-The actual build is driven by the Makefile; this gcc invocation is
-illustrative only (the source list was refactored in v2.x):
+The daemon is written in Rust and built via `cargo build`. The Makefile drives the build:
 
-```
-gcc -Wall -Wextra -O2 -o firewall-daemon \
-    src/daemon/firewall-daemon.c \
-    src/daemon/jail-manager.c \
-    src/daemon/config-parser.c \
-    src/daemon/log-parser.c \
-    src/daemon/failed-tracker.c \
-    src/daemon/ban-manager.c \
-    src/daemon/file-monitor.c \
-    src/daemon/http-exporter.c \
-    src/daemon/sqlite-persistent.c \
-    -lpthread -lyaml -lsqlite3 -lmicrohttpd -lpcre2-8
+```bash
+cargo build --release --bin firewall-daemon
 ```
 
 > For actual builds, use `make daemon` — the Makefile drives the
-> object list and flags. The command above is conceptual.
+> cargo build and links required libraries.
 
 ### AddressSanitizer Build
 
@@ -204,19 +193,7 @@ The build system checks dependencies automatically:
 make
 ```
 
-If dependencies are missing:
-
-```
-Checking dependencies...
-  linux-headers: OK
-  libyaml:       NOT FOUND
-  libsqlite3:    OK
-  libmicrohttpd: OK
-  libpcre2:      OK
-
-Error: Missing dependencies. Install:
-  sudo apt install libyaml-dev
-```
+If dependencies are missing, the build will report which packages are required.
 
 ### Manual Check
 
@@ -224,11 +201,12 @@ Error: Missing dependencies. Install:
 # Check kernel headers
 ls /lib/modules/$(uname -r)/build
 
+# Check Rust toolchain
+rustc --version
+cargo --version
+
 # Check libraries
-pkg-config --libs libyaml
 pkg-config --libs sqlite3
-pkg-config --libs libmicrohttpd
-pkg-config --libs libpcre2
 ```
 
 ## Build Artifacts
@@ -271,17 +249,19 @@ Solution:
 sudo apt install --reinstall linux-headers-$(uname -r)
 ```
 
-### Library Version Incompatibility
+### Rust Build Issues
 
 ```
-undefined reference to `pcre2_compile_8'
+error[E0432]: unresolved import `regex`
 ```
 
 Solution:
 
 ```bash
-sudo apt install --reinstall libpcre2-dev
+cargo build
 ```
+
+Cargo will automatically fetch required dependencies from `Cargo.toml`.
 
 ### Insufficient Permissions
 

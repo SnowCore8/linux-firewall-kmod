@@ -75,7 +75,7 @@ make test
 | 07 | `07_concurrency.sh` | 多进程并发读写、RCU 正确性 |
 | 08 | `08_stress_perf.sh` | 4096 容量满表操作、延迟统计 |
 | 09 | `09_daemon_config.sh` | YAML 配置加载、严格模式校验、jail 解析 |
-| 10 | `10_daemon_logparse.sh` | 日志监听（inotify）、PCRE2 匹配、jail 触发 |
+| 10 | `10_daemon_logparse.sh` | 日志监听（notify）、正则匹配、jail 触发 |
 | 11 | `11_resource_mgmt.sh` | 内存、句柄、procfs 资源生命周期 |
 | 12 | `12_permanent_ban.sh` | SQLite 永久封禁、跨重启恢复 |
 

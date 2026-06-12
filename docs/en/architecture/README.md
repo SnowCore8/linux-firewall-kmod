@@ -11,12 +11,12 @@ graph TB
     subgraph UserSpace["Userspace"]
         subgraph Daemon["firewall-daemon Daemon"]
             Inotify["inotify Monitor"]
-            PCRE2["PCRE2 Regex"]
+            Regex["Regex Engine"]
             SQLite["SQLite/HTTP Persist/Metrics"]
             ProcFS_Client["Config Dispatch ProcFS"]
-            
+
             Inotify --> ProcFS_Client
-            PCRE2 --> ProcFS_Client
+            Regex --> ProcFS_Client
             SQLite --> ProcFS_Client
         end
     end
@@ -87,4 +87,3 @@ sequenceDiagram
 | Daemon | Userspace | Log monitoring, regex matching, config dispatch |
 | ProcFS | Kernel/Userspace | Configuration interface, status queries |
 | SQLite | Userspace | Ban record persistence |
-| libmicrohttpd | Userspace | Prometheus metrics server |

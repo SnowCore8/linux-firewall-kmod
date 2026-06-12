@@ -1,8 +1,7 @@
 # Makefile for firewall project
 # Out-of-tree build: all artifacts go to build/ directory
 #
-# Refactored: added header dependency tracking, DESTDIR support,
-# parameterized debug builds, and ASAN isolation.
+# Daemon is built in Rust (cargo). C daemon source has been removed.
 
 # ============================================================================
 # 1. 版本与元信息
@@ -21,9 +20,6 @@ KERNEL_MODDIR ?= /lib/modules/$(shell uname -r)/extra
 # DESTDIR 支持打包和暂存安装，默认为空（直接安装到系统）
 DESTDIR     ?=
 
-# 并行编译线程数（自动检测）
-NPROC ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
-
 # 内核构建目录
 KDIR        ?= /lib/modules/$(shell uname -r)/build
 
@@ -32,75 +28,21 @@ PWD := $(CURDIR)
 
 # 源码目录
 KERNEL_SRC_DIR := src/kernel-module
-DAEMON_SRC_DIR := src/daemon
 
 # 构建输出目录
 BUILD_DIR        := build
 KERNEL_BUILD_DIR := $(BUILD_DIR)/kernel-module
 DAEMON_BUILD_DIR := $(BUILD_DIR)/daemon
-DAEMON_OBJ_DIR   := $(DAEMON_BUILD_DIR)/obj
-
-# ASAN 专用对象目录（P0-2: 隔离 ASAN 和普通编译产物）
-ASAN_OBJ_DIR := $(BUILD_DIR)/daemon/asan-obj
 
 # 最终输出路径
 KERNEL_MODULE := $(KERNEL_BUILD_DIR)/firewall.ko
 DAEMON_BIN    := $(DAEMON_BUILD_DIR)/firewall-daemon
 
 # ============================================================================
-# 3. 编译器与标志配置
-# ============================================================================
-CC ?= gcc
-
-# 尝试使用 pkg-config 获取 yaml 库名（解决不同发行版库名差异）
-# 优先使用 pkg-config（如果可用），其次检查 libyaml.so（通用），最后回退 -lyaml
-YAML_LIBS := $(shell pkg-config --libs libyaml 2>/dev/null || (ldconfig -p 2>/dev/null | grep -q 'libyaml\.so' && echo "-lyaml" || echo "-lyaml"))
-
-# 安全编译标志（普通构建）
-SECURITY_CFLAGS  := -Wall -Wextra -Werror=format-security -O2 \
-                    -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE
-SECURITY_LDFLAGS := -pie -Wl,-z,relro,-z,now
-
-# ASAN 专用编译标志（独立于 SECURITY_CFLAGS，避免混用）
-ASAN_CFLAGS  := -Wall -Wextra -Werror=format-security -g -O1 \
-                -fstack-protector-strong -fPIE \
-                -fsanitize=address -fno-omit-frame-pointer
-ASAN_LDFLAGS := -pie -Wl,-z,relro,-z,now -fsanitize=address
-
-# 调试级别（0 = 无调试, 1-3 = 递增详细度）
-DEBUG_LEVEL ?= 0
-
-# ============================================================================
-# 4. 源文件与目标文件声明
-# ============================================================================
-DAEMON_SRCS := $(DAEMON_SRC_DIR)/firewall-daemon.c \
-               $(DAEMON_SRC_DIR)/jail-manager.c \
-               $(DAEMON_SRC_DIR)/config-parser.c \
-               $(DAEMON_SRC_DIR)/log-parser.c \
-               $(DAEMON_SRC_DIR)/failed-tracker.c \
-               $(DAEMON_SRC_DIR)/ban-manager.c \
-               $(DAEMON_SRC_DIR)/file-monitor.c \
-               $(DAEMON_SRC_DIR)/http-exporter.c \
-               $(DAEMON_SRC_DIR)/sqlite-persistent.c \
-               $(DAEMON_SRC_DIR)/log.c
-
-# P0-1: 普通编译对象文件
-DAEMON_OBJS := $(patsubst $(DAEMON_SRC_DIR)/%.c,$(DAEMON_OBJ_DIR)/%.o,$(DAEMON_SRCS))
-
-# P0-2: ASAN 编译对象文件（独立目录，避免与普通 .o 混用）
-ASAN_OBJS := $(patsubst $(DAEMON_SRC_DIR)/%.c,$(ASAN_OBJ_DIR)/%.o,$(DAEMON_SRCS))
-
-# P0-1: 头文件依赖文件（由 -MMD -MP 自动生成）
-DEPS := $(DAEMON_OBJS:.o=.d)
-
-# P0-2: ASAN 编译头文件依赖文件（由 -MMD -MP 自动生成）
-ASAN_DEPS := $(ASAN_OBJS:.o=.d)
-
-# ============================================================================
-# 5. 主要构建目标 (all, build, kernel-module, daemon)
+# 3. 主要构建目标
 # ============================================================================
 
-# P0-5: 默认编译流程包含 clang-format 格式检查
+# 默认编译流程包含 clang-format 格式检查
 # 通过 SKIP_FORMAT_CHECK=1 可跳过检查（用于紧急调试场景）
 .PHONY: all build
 all: format-check build
@@ -112,10 +54,8 @@ build: kernel-module daemon
 build-quick: kernel-module daemon
 	@echo "Quick build (format-check skipped): $(KERNEL_MODULE) and $(DAEMON_BIN)"
 
-# P2-7: 内核模块编译 — 使用 MAKEFLAGS 继承父 make 的 jobserver
-# 如果 MAKEFLAGS 中没有 -j/--jobserver，则不传递并行标志（由内核构建系统自行决定）
-# KDIR 不存在时提供友好错误提示和替代方案
-KERNEL_PARALLEL := $(if $(filter -j% --jobserver%,$(MAKEFLAGS)),,)
+# 内核模块编译
+.PHONY: kernel-module
 kernel-module: $(KERNEL_MODULE)
 
 $(KERNEL_MODULE): $(KERNEL_SRC_DIR)/firewall-main.c $(KERNEL_SRC_DIR)/firewall.h
@@ -147,7 +87,6 @@ $(KERNEL_MODULE): $(KERNEL_SRC_DIR)/firewall-main.c $(KERNEL_SRC_DIR)/firewall.h
 	@mkdir -p $(KERNEL_BUILD_DIR)
 	@echo "  CC      kernel-module"
 	+$(MAKE) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) \
-		ccflags-y="-DDEBUG_LEVEL=$(DEBUG_LEVEL)" \
 		modules
 	@cp $(KERNEL_SRC_DIR)/firewall.ko $(KERNEL_BUILD_DIR)/firewall.ko
 	@# 清理源码目录中的中间文件
@@ -156,60 +95,19 @@ $(KERNEL_MODULE): $(KERNEL_SRC_DIR)/firewall-main.c $(KERNEL_SRC_DIR)/firewall.h
 		$(KERNEL_SRC_DIR)/modules.order $(KERNEL_SRC_DIR)/Module.symvers \
 		$(KERNEL_SRC_DIR)/.module-common.o
 
-# 守护进程包装目标
-daemon: $(DAEMON_BIN)
-
-# 守护进程链接
-$(DAEMON_BIN): $(DAEMON_OBJS)
+# 守护进程 (Rust)
+.PHONY: daemon
+daemon:
+	@echo "  CARGO   building Rust daemon"
+	@cargo build --release --quiet
 	@mkdir -p $(DAEMON_BUILD_DIR)
-	@echo "  LD      $@"
-	$(CC) $(SECURITY_CFLAGS) $(SECURITY_LDFLAGS) -Wno-unused-function -o $@ $^ \
-		-lpthread $(YAML_LIBS) -lsqlite3 -lmicrohttpd -lpcre2-8
+	@cp target/release/firewall-daemon $(DAEMON_BIN)
+	@echo "  ✓ Rust daemon built: $(DAEMON_BIN)"
 
 # ============================================================================
-# 6. 自动依赖生成 (-MMD -MP)
+# 4. 代码质量目标 (format-check, format, ci)
 # ============================================================================
 
-# P0-1: 守护进程编译规则 — 添加 -MMD -MP 生成头文件依赖
-$(DAEMON_OBJ_DIR)/%.o: $(DAEMON_SRC_DIR)/%.c
-	@mkdir -p $(DAEMON_OBJ_DIR)
-	@echo "  CC      $<"
-	$(CC) $(SECURITY_CFLAGS) -MMD -MP -Wno-unused-function -c $< -o $@
-
-# 包含自动生成的依赖文件（如果存在）
--include $(DEPS)
--include $(ASAN_DEPS)
-
-# ============================================================================
-# 7. 调试与诊断目标 (debug, asan)
-# ============================================================================
-
-# P1-6: Debug 目标参数化 — 使用 DL 变量指定调试级别
-.PHONY: debug
-debug:
-	$(MAKE) build DEBUG_LEVEL=$(or $(DL),1)
-
-# P0-2: ASAN 使用独立对象目录，避免与普通编译产物冲突
-.PHONY: asan
-asan: $(ASAN_OBJS)
-	@mkdir -p $(DAEMON_BUILD_DIR)
-	@echo "  LD      $(DAEMON_BUILD_DIR)/firewall-daemon-asan"
-	$(CC) $(ASAN_CFLAGS) $(ASAN_LDFLAGS) -Wno-unused-function -o \
-		$(DAEMON_BUILD_DIR)/firewall-daemon-asan $(ASAN_OBJS) \
-		-lpthread $(YAML_LIBS) -lsqlite3 -lmicrohttpd -lpcre2-8
-	@echo "ASAN build completed: $(DAEMON_BUILD_DIR)/firewall-daemon-asan"
-	@echo "Run with: ASAN_OPTIONS=detect_leaks=1 $(DAEMON_BUILD_DIR)/firewall-daemon-asan"
-
-$(ASAN_OBJ_DIR)/%.o: $(DAEMON_SRC_DIR)/%.c
-	@mkdir -p $(ASAN_OBJ_DIR)
-	@echo "  CC [asan] $<"
-	$(CC) $(ASAN_CFLAGS) -MMD -MP -Wno-unused-function -c $< -o $@
-
-# ============================================================================
-# 8. 代码质量目标 (format-check, format, ci)
-# ============================================================================
-
-# P1-4: CI 专用目标（包含格式检查 + 构建 + 测试）
 .PHONY: ci
 ci: format-check build test
 
@@ -218,12 +116,11 @@ format-check:
 	@if [ "$(SKIP_FORMAT_CHECK)" = "1" ]; then \
 		echo "⚠ Format check skipped (SKIP_FORMAT_CHECK=1)"; \
 	else \
-		echo "Checking C code formatting..."; \
+		echo "Checking kernel module code formatting..."; \
 		clang-format --dry-run --Werror \
-			$(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h \
-			$(DAEMON_SRC_DIR)/*.c $(DAEMON_SRC_DIR)/*.h || \
+			$(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h || \
 			(echo "ERROR: Code formatting check failed. Run 'make format' to auto-fix." && exit 1); \
-		echo "✓ C code formatting check passed"; \
+		echo "✓ Kernel module formatting check passed"; \
 		if command -v yamllint >/dev/null 2>&1; then \
 			echo "Checking YAML configuration..."; \
 			yamllint config/; \
@@ -237,14 +134,13 @@ format-check:
 format:
 	@echo "Formatting code..."
 	@clang-format -i \
-		$(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h \
-		$(DAEMON_SRC_DIR)/*.c $(DAEMON_SRC_DIR)/*.h
+		$(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h
 	@echo "✓ Code formatted successfully"
 
 # ============================================================================
-# 9. 安装目标 (Install Targets)
+# 5. 安装目标 (Install Targets)
 # ============================================================================
-# P0-3: 所有 install 子目标统一使用 $(DESTDIR) 前缀，支持打包暂存安装
+# 所有 install 子目标统一使用 $(DESTDIR) 前缀，支持打包暂存安装
 
 .PHONY: install install-kernel-module install-daemon install-config install-state install-systemd install-start
 install: install-kernel-module install-daemon install-config install-state install-systemd install-start
@@ -312,9 +208,8 @@ install-start:
 	@echo "  ✓ Service started"
 
 # ============================================================================
-# 10. 卸载目标 (Uninstall Targets)
+# 6. 卸载目标 (Uninstall Targets)
 # ============================================================================
-# P0-3: 所有 uninstall 子目标统一使用 $(DESTDIR) 前缀
 
 .PHONY: uninstall uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel uninstall-modload uninstall-verify
 uninstall: uninstall-stop uninstall-kernel uninstall-systemd uninstall-modload uninstall-files uninstall-config uninstall-state uninstall-verify
@@ -369,7 +264,6 @@ uninstall-state:
 	rm -rf $(DESTDIR)$(RUNSTATEDIR)/firewall
 	@echo "  ✓ State directory removed"
 
-# uninstall-kernel 不再依赖 uninstall-stop，避免在 uninstall 链中重复执行
 uninstall-kernel:
 	@echo "Safely removing kernel module..."
 	@if lsmod | grep -q "^firewall "; then \
@@ -424,15 +318,16 @@ uninstall-verify:
 	@echo "  ✓ Verification complete"
 
 # ============================================================================
-# 11. 清理目标 (clean, distclean)
+# 7. 清理目标 (clean, distclean)
 # ============================================================================
 
 .PHONY: clean distclean
 clean:
 	rm -rf $(BUILD_DIR)
+	cargo clean 2>/dev/null || true
 	@echo "Build directory cleaned."
 
-# P2-10: distclean 额外清理内核源码目录中可能残留的隐藏文件
+# distclean 额外清理内核源码目录中可能残留的隐藏文件
 distclean: clean
 	find $(KERNEL_SRC_DIR) -name ".*.cmd" -delete 2>/dev/null || true
 	find $(KERNEL_SRC_DIR) -name ".*.o" -delete 2>/dev/null || true
@@ -442,27 +337,24 @@ distclean: clean
 	@echo "All generated files cleaned."
 
 # ============================================================================
-# 12. 辅助目标 (help, test)
+# 8. 辅助目标 (help, test)
 # ============================================================================
 
-# P2-9: help 目标
 .PHONY: help
 help:
 	@echo "可用目标:"
 	@echo "  all/build      - 编译内核模块和守护进程（默认，含格式检查）"
 	@echo "  build-quick    - 跳过格式检查的快速编译"
 	@echo "  kernel-module  - 仅编译内核模块"
-	@echo "  daemon         - 仅编译守护进程"
-	@echo "  debug          - 调试版本编译 (DL=1/2/3, 默认 1)"
-	@echo "  asan           - AddressSanitizer 版本编译"
+	@echo "  daemon         - 仅编译守护进程 (Rust)"
 	@echo "  deb            - 构建 Debian 软件包 (使用 ./build-deb.sh)"
 	@echo "  install        - 安装到系统"
 	@echo "  uninstall      - 从系统卸载"
 	@echo "  clean          - 清理编译产物"
 	@echo "  distclean      - 清理所有生成文件（含内核中间文件）"
 	@echo "  test           - 运行测试套件 (需要 sudo)"
-	@echo "  format         - 自动格式化 C 代码"
-	@echo "  format-check   - 检查 C 代码格式"
+	@echo "  format         - 自动格式化内核模块 C 代码"
+	@echo "  format-check   - 检查内核模块 C 代码格式"
 	@echo "  ci             - CI 完整构建（格式检查 + 编译 + 测试）"
 	@echo "  help           - 显示此帮助信息"
 	@echo ""
@@ -476,18 +368,17 @@ test: $(KERNEL_MODULE) $(DAEMON_BIN)
 	sudo ./tests/run_tests.sh
 
 # ============================================================================
-# 12b. Debian 软件包构建
+# 9. Debian 软件包构建
 # ============================================================================
 # 已迁移至 build-deb.sh(DKMS 模式,安装时编译内核模块)。
 # 使用方式: ./build-deb.sh [版本号]
-# 不再保留 make deb 目标,避免与 build-deb.sh 产生两套方案冲突。
 
 # ============================================================================
-# 13. .PHONY 声明（按功能分组）
+# 10. .PHONY 声明
 # ============================================================================
 
 # 构建相关
-.PHONY: all build kernel-module daemon debug asan
+.PHONY: all build kernel-module daemon
 # 代码质量
 .PHONY: format-check format ci
 # 安装相关

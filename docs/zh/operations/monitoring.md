@@ -18,7 +18,7 @@ scrape_configs:
 
 ### 可用指标
 
-> 以下 14 个指标由 `src/daemon/http-exporter.c` 实际暴露。
+> 以下 14 个指标由 `src/http_exporter.rs` 实际暴露。
 > 早期文档中 `firewall_ban_events_total` / `firewall_packets_dropped_total` /
 > `firewall_hash_table_*` / `firewall_jail_*` 等条目均不存在，已删除。
 
@@ -54,7 +54,7 @@ scrape_configs:
 | `firewall_daemon_log_rotations_total` | counter | 日志轮转次数 |
 | `firewall_daemon_lines_parsed_total` | counter | 已解析日志行数 |
 | `firewall_daemon_lines_skipped_total` | counter | 跳过的日志行数 |
-| `firewall_daemon_regex_matches_total` | counter | PCRE2 匹配命中数 |
+| `firewall_daemon_regex_matches_total` | counter | 正则匹配命中数 |
 | `firewall_daemon_ips_extracted_total` | counter | 提取出的 IP 数 |
 | `firewall_daemon_ips_banned_total` | counter | 实际触发内核封禁的 IP 数 |
 | `firewall_daemon_failed_attempts_total` | counter | 封禁失败次数（与 max_retries 相关） |

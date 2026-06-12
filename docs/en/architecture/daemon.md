@@ -7,7 +7,7 @@ This document describes the design and implementation of the userspace daemon `f
 The daemon `firewall-daemon` runs in userspace and is responsible for:
 
 - Monitoring log file changes
-- Matching ban patterns using PCRE2 regex
+- Matching ban patterns using regex
 - Counting failures and triggering bans
 - Managing ban persistence
 - Exposing Prometheus metrics
@@ -16,11 +16,9 @@ The daemon `firewall-daemon` runs in userspace and is responsible for:
 
 | Component | Purpose |
 |-----------|---------|
-| C Language | Primary programming language |
-| libyaml | YAML configuration parsing |
-| libpcre2 | Regular expression compilation and matching |
+| Rust | Primary programming language |
+| tiny_http | Prometheus HTTP metrics server |
 | libsqlite3 | Ban record persistent storage |
-| libmicrohttpd | Prometheus HTTP metrics server |
 | inotify | Linux file change monitoring |
 
 ## Architecture
@@ -35,7 +33,7 @@ graph TB
         end
 
         subgraph EventHandler["Event Handler"]
-            LogRead["Log Read & PCRE2 Match"]
+            LogRead["Log Read & Regex Match"]
             ScheduledTasks["Scheduled Tasks<br/>- Expired cleanup<br/>- Persistence sync"]
         end
 
@@ -69,7 +67,7 @@ graph TB
     C["Initialize logging"]
     D["Initialize SQLite database"]
     D1["Restore unexpired ban records"]
-    E["Compile PCRE2 regexes"]
+    E["Compile regexes"]
     E1["Compile regex for each jail"]
     F["Register inotify watches"]
     F1["Add watch for each jail's log_path"]
@@ -107,39 +105,21 @@ if (event->mask & IN_IGNORED) {
 }
 ```
 
-## PCRE2 Regex Matching
+## Regex Matching
 
 ### Regex Compilation
 
-```c
-pcre2_code *re = pcre2_compile(
-    (PCRE2_SPTR)pattern,
-    PCRE2_ZERO_TERMINATED,
-    PCRE2_UTF | PCRE2_NO_UTF_CHECK,
-    &error_code,
-    &error_offset,
-    NULL
-);
-```
+The daemon uses Rust's built-in regex crate for pattern matching.
 
 ### `<HOST>` Expansion
 
-The `<HOST>` placeholder in configuration is replaced with an IP matching regex:
-
-```c
-#define HOST_PATTERN \
-    "(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}" \
-    "(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)"
-
-// Replace <HOST> with HOST_PATTERN
-char *expanded = replace_all(regex, "<HOST>", HOST_PATTERN);
-```
+The `<HOST>` placeholder in configuration is replaced with an IP matching regex pattern. The daemon expands this placeholder at startup for each jail's regex pattern.
 
 ### Matching Flow
 
 ```mermaid
 graph TB
-    A["New Log Line"] --> B["PCRE2 Match"]
+    A["New Log Line"] --> B["Regex Match"]
     B -->|Match Success| C["Extract IP Address"]
     C --> D["Update Counter"]
     D --> E["Check Threshold"]
@@ -242,7 +222,7 @@ http://<host>:9119/metrics
 ### Available Metrics
 
 > The 14 metrics below are actually exposed by
-> `src/daemon/http-exporter.c`. Earlier drafts listed
+> `src/http_exporter.rs`. Earlier drafts listed
 > `firewall_ban_events_total` / `firewall_packets_*` /
 > `firewall_hash_table_*` / `firewall_jail_*` — none of which exist
 > in the source — and have been removed.
@@ -266,7 +246,7 @@ http://<host>:9119/metrics
 | `firewall_daemon_log_rotations_total` | counter | Log rotation events |
 | `firewall_daemon_lines_parsed_total` | counter | Log lines parsed |
 | `firewall_daemon_lines_skipped_total` | counter | Log lines skipped (unparseable) |
-| `firewall_daemon_regex_matches_total` | counter | PCRE2 regex matches |
+| `firewall_daemon_regex_matches_total` | counter | Regex matches |
 | `firewall_daemon_ips_extracted_total` | counter | IPs extracted from logs |
 | `firewall_daemon_ips_banned_total` | counter | IPs that triggered a kernel ban |
 | `firewall_daemon_failed_attempts_total` | counter | Ban failures (e.g. table full) |
@@ -310,6 +290,6 @@ graph TB
     B --> C["Compare old and new config"]
     C -->|New jail| D["Initialize and register inotify"]
     C -->|Removed jail| E["Remove inotify watch"]
-    C -->|Modified regex| F["Recompile PCRE2"]
+    C -->|Modified regex| F["Recompile regex"]
     C -->|Modified whitelist| G["Update kernel whitelist"]
 ```

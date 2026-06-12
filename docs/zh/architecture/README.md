@@ -11,12 +11,12 @@ graph TB
     subgraph UserSpace["用户空间"]
         subgraph Daemon["firewall-daemon 守护进程"]
             Inotify["inotify 监控"]
-            PCRE2["PCRE2 正则匹配"]
+            REGEX["正则匹配"]
             SQLite["SQLite/HTTP 持久化/指标"]
             ProcFS_Client["配置下发 ProcFS"]
-            
+
             Inotify --> ProcFS_Client
-            PCRE2 --> ProcFS_Client
+            REGEX --> ProcFS_Client
             SQLite --> ProcFS_Client
         end
     end
@@ -80,4 +80,3 @@ graph TB
 | 守护进程 | 用户 | 日志监控、正则匹配、配置下发 |
 | ProcFS | 内核/用户 | 配置接口、状态查询 |
 | SQLite | 用户 | 封禁记录持久化 |
-| libmicrohttpd | 用户 | Prometheus 指标服务器 |

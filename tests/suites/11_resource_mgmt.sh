@@ -45,19 +45,17 @@ for i in $(seq 1 200); do
     fi
 done
 
+# 诊断: 11.3 结束后模块是否还在
+fw_log_info "11.3 结束后: lsmod=$(lsmod | grep '^firewall' || echo 'NOT FOUND')"
+
 # 11.4 模块卸载后 procfs 清理
 fw_subsection "模块卸载后 procfs 清理"
 fw_ensure_module_unloaded
-sleep 1
+sleep 2
 if [[ ! -d "$PROC_DIR" ]]; then
     fw_pass "模块卸载后 proc 目录消失"
 else
-    sleep 1
-    if [[ ! -d "$PROC_DIR" ]]; then
-        fw_pass "模块卸载后 proc 目录消失（延迟清理）"
-    else
-        warn_test "proc 目录在模块卸载后仍存在（内核延迟清理）"
-    fi
+    fw_fail "模块卸载后 proc 目录仍存在"
 fi
 
 # 重新加载模块供后续测试使用
@@ -65,12 +63,3 @@ if ! fw_ensure_module_loaded "$KERNEL_MODULE_PATH"; then
     fw_log_error "模块重新加载失败，后续测试套件将跳过"
 fi
 
-# 11.5 守护进程资源检查
-fw_subsection "守护进程资源检查"
-if [[ -x "$DAEMON_PATH" ]]; then
-    local_bin_size=$(stat -c%s "$DAEMON_PATH" 2>/dev/null || echo 0)
-    fw_log_info "守护进程二进制大小: $local_bin_size bytes"
-    assert_le "$local_bin_size" 1048576 "守护进程二进制 < 1MB"
-else
-    warn_test "守护进程未编译，跳过检查"
-fi
