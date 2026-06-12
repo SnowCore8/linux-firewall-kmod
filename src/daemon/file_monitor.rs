@@ -116,6 +116,11 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
             // 启动时拒绝符号链接日志文件
             let path = Path::new(log_file);
             if path.is_symlink() {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "跳过符号链接日志文件";
+                    "path" => log_file
+                );
                 continue;
             }
 
@@ -134,6 +139,14 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
                 Ok(wd) => {
                     state.wd = Some(wd.clone());
                     watched_count += 1;
+                }
+                Err(e) => {
+                    crate::logger::warn!(
+                        crate::logger::get(),
+                        "添加 inotify watch 失败";
+                        "path" => log_file,
+                        "error" => %e
+                    );
                 }
                 Err(_e) => {}
             }
@@ -179,7 +192,12 @@ pub fn process_single_line(
 
     let len = line.len();
     if len >= 8192 {
-
+        crate::logger::debug!(
+            crate::logger::get(),
+            "跳过超长日志行";
+            "length" => len,
+            "limit" => 8192
+        );
         DAEMON_STATS.lines_skipped.fetch_add(1, Ordering::Relaxed);
         return;
     }
@@ -342,7 +360,12 @@ pub fn process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
     drop(file_states);
 
     if jail_idx >= cfg.jails.len() {
-
+        crate::logger::warn!(
+            crate::logger::get(),
+            "jail_idx 越界";
+            "jail_idx" => jail_idx,
+            "jails_count" => cfg.jails.len()
+        );
         return Ok(());
     }
 
@@ -368,9 +391,18 @@ pub fn process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
                 if let Some(state) = file_states.get_mut(idx) {
                     state.symlink_detected = true;
                 }
-
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "检测到符号链接，跳过文件";
+                    "path" => &log_path
+                );
             } else {
-
+                crate::logger::debug!(
+                    crate::logger::get(),
+                    "打开日志文件失败";
+                    "path" => &log_path,
+                    "error" => %e
+                );
             }
             return Ok(());
         }
@@ -421,8 +453,13 @@ pub fn process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
                     break;
                 }
             }
-            Err(_e) => {
-
+            Err(e) => {
+                crate::logger::debug!(
+                    crate::logger::get(),
+                    "读取日志文件失败";
+                    "path" => &log_path,
+                    "error" => %e
+                );
                 return Ok(());
             }
         }
@@ -515,7 +552,11 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
 
     let path_obj = Path::new(&path);
     if !path_obj.exists() {
-
+        crate::logger::debug!(
+            crate::logger::get(),
+            "日志轮转后文件不存在";
+            "path" => &path
+        );
         let mut file_states = FILE_STATES.write();
         if let Some(state) = file_states.get_mut(idx) {
             state.offset = 0;
@@ -552,10 +593,14 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
                     match inotify.watches().add(&path, mask) {
                         Ok(new_wd) => {
                             state.wd = Some(new_wd.clone());
-
                         }
-                        Err(_e) => {
-
+                        Err(e) => {
+                            crate::logger::warn!(
+                                crate::logger::get(),
+                                "重新注册 inotify watch 失败";
+                                "path" => &path,
+                                "error" => %e
+                            );
                             state.wd = None;
                         }
                     }
@@ -578,14 +623,19 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
 /// 3. `running` 标志为 false 时优雅退出
 pub fn monitor_loop(
     cfg: &mut Config,
-    running: &Arc<AtomicBool>,
-    reload_config: &Arc<AtomicBool>,
+    running: &AtomicBool,
+    reload_config: &AtomicBool,
 ) -> Result<()> {
     let mut last_partial_cleanup = SystemTime::now();
     let mut last_new_file_check = SystemTime::now();
 
     let raw_fd = INOTIFY_RAW_FD.load(Ordering::Relaxed);
     if raw_fd < 0 {
+        crate::logger::error!(
+            crate::logger::get(),
+            "inotify raw fd 无效";
+            "raw_fd" => raw_fd
+        );
         return Ok(());
     }
 
@@ -684,6 +734,12 @@ pub fn monitor_loop(
             if err.kind() == std::io::ErrorKind::Interrupted {
                 continue;
             }
+
+            crate::logger::error!(
+                crate::logger::get(),
+                "poll 错误，退出主循环";
+                "error" => %err
+            );
             break;
         }
     }
@@ -779,7 +835,12 @@ pub fn cleanup_partial_line_buffer(cfg: &Config) {
     for jail in &cfg.jails {
         let mut buf = jail.partial_line_buffer.write();
         if !buf.is_empty() {
-
+            crate::logger::debug!(
+                crate::logger::get(),
+                "清理 partial 行缓冲";
+                "jail" => &jail.name,
+                "size" => buf.len()
+            );
             buf.clear();
         }
     }
@@ -799,7 +860,11 @@ fn check_for_new_log_files(cfg: &Config) {
                     .iter()
                     .any(|s| s.wd.is_some() && s.path == *log_file);
                 if !already_watched {
-
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "发现新的日志文件";
+                        "path" => log_file
+                    );
                     needs_resetup = true;
                 }
             }

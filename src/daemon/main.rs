@@ -37,46 +37,75 @@ use firewall_daemon::jail;
 use firewall_daemon::logger;
 use firewall_daemon::sqlite;
 use firewall_daemon::types::{Config, DAEMON_STATS};
-use std::sync::Arc;
-
-/// 构造 `running` 标志原子。SIGINT/SIGTERM 触发置 false,主循环退出。
-fn make_running() -> Arc<AtomicBool> {
-    Arc::new(AtomicBool::new(true))
-}
-
-/// 构造 `reload` 标志原子。SIGHUP 触发置 true,主循环超时分支检测到后
-/// 调 [`file_monitor::reload_configuration`].
-fn make_reload_flag() -> Arc<AtomicBool> {
-    Arc::new(AtomicBool::new(false))
-}
 
 /// 内核模块 procfs 根目录。启动期存在性检查
 const PROCFS_DIR: &str = "/proc/firewall";
 /// 内核模块封禁命令接口。启动期存在性检查
 const BANS_PATH: &str = "/proc/firewall/bans";
 
-/// 注册 4 个信号到 atomic 标志。
+/// 全局运行标志，供信号处理器访问
+pub static GLOBAL_RUNNING: AtomicBool = AtomicBool::new(true);
+/// 全局重载标志，供信号处理器访问
+pub static GLOBAL_RELOAD: AtomicBool = AtomicBool::new(false);
+
+/// SIGTERM/SIGINT 信号处理器：设置全局运行标志为 false
+extern "C" fn handle_sigterm(_sig: libc::c_int) {
+    GLOBAL_RUNNING.store(false, Ordering::Relaxed);
+}
+
+/// SIGHUP 信号处理器：设置全局重载标志为 true
+extern "C" fn handle_sighup(_sig: libc::c_int) {
+    GLOBAL_RELOAD.store(true, Ordering::Relaxed);
+}
+
+/// 注册 4 个信号到全局原子标志。
 ///
-/// - `SIGTERM` / `SIGINT` → `running` (主循环退出)
-/// - `SIGHUP` → `reload_config` (主循环触发热重载)
+/// - `SIGTERM` / `SIGINT` → `GLOBAL_RUNNING` (主循环退出)
+/// - `SIGHUP` → `GLOBAL_RELOAD` (主循环触发热重载)
 /// - `SIGPIPE` → 忽略 (HTTP 客户端断开时不被信号杀死)
 ///
-/// # Arguments
-/// - `running`: 主循环运行标志
-/// - `reload_config`: 配置重载标志
-///
 /// # Errors
-/// `signal_hook::flag::register` 失败
-fn setup_signals(running: Arc<AtomicBool>, reload_config: Arc<AtomicBool>) -> Result<()> {
-    use signal_hook::consts::{SIGHUP, SIGINT, SIGPIPE, SIGTERM};
+/// `sigaction` 失败
+fn setup_signals() -> Result<()> {
+    // SAFETY: `sigaction` 是 POSIX 标准系统调用。`sigaction_t` 结构体初始化为零是合法的。
+    // 信号处理器函数指针是 `extern "C"` 函数，符合 C ABI。
+    // 注意：不使用 SA_RESTART，这样 poll() 等系统调用会被信号中断返回 EINTR，
+    // 主循环可以在 EINTR 时检查 running 标志并退出。
+    unsafe {
+        // SIGTERM 处理器
+        let mut sa_term: libc::sigaction = std::mem::zeroed();
+        sa_term.sa_sigaction = handle_sigterm as *const () as usize;
+        sa_term.sa_flags = 0; // 不使用 SA_RESTART，让 poll() 被中断
+        libc::sigemptyset(&mut sa_term.sa_mask);
+        if libc::sigaction(libc::SIGTERM, &sa_term, std::ptr::null_mut()) != 0 {
+            bail!("sigaction(SIGTERM) failed: {}", std::io::Error::last_os_error());
+        }
 
-    signal_hook::flag::register(SIGTERM, running.clone())?;
-    signal_hook::flag::register(SIGINT, running)?;
+        // SIGINT 处理器
+        let mut sa_int: libc::sigaction = std::mem::zeroed();
+        sa_int.sa_sigaction = handle_sigterm as *const () as usize;
+        sa_int.sa_flags = 0; // 不使用 SA_RESTART
+        libc::sigemptyset(&mut sa_int.sa_mask);
+        if libc::sigaction(libc::SIGINT, &sa_int, std::ptr::null_mut()) != 0 {
+            bail!("sigaction(SIGINT) failed: {}", std::io::Error::last_os_error());
+        }
 
-    signal_hook::flag::register(SIGHUP, reload_config)?;
+        // SIGHUP 处理器
+        let mut sa_hup: libc::sigaction = std::mem::zeroed();
+        sa_hup.sa_sigaction = handle_sighup as *const () as usize;
+        sa_hup.sa_flags = 0; // 不使用 SA_RESTART
+        libc::sigemptyset(&mut sa_hup.sa_mask);
+        if libc::sigaction(libc::SIGHUP, &sa_hup, std::ptr::null_mut()) != 0 {
+            bail!("sigaction(SIGHUP) failed: {}", std::io::Error::last_os_error());
+        }
 
-    // SIGPIPE 忽略: HTTP 导出器在客户端断开时不应被信号杀死
-    signal_hook::flag::register(SIGPIPE, Arc::new(AtomicBool::new(true)))?;
+        // SIGPIPE 忽略
+        let mut sa_pipe: libc::sigaction = std::mem::zeroed();
+        sa_pipe.sa_sigaction = libc::SIG_IGN;
+        if libc::sigaction(libc::SIGPIPE, &sa_pipe, std::ptr::null_mut()) != 0 {
+            bail!("sigaction(SIGPIPE) failed: {}", std::io::Error::last_os_error());
+        }
+    }
 
     Ok(())
 }
@@ -118,7 +147,7 @@ fn daemonize_process() -> Result<()> {
 
     if let Err(_e) = std::env::set_current_dir("/") {}
     if let Err(e) = std::env::set_current_dir("/") {
-        crate::logger::debug!(
+        crate::logger::warn!(
             crate::logger::get(),
             "切换工作目录到 / 失败";
             "error" => %e
@@ -185,16 +214,14 @@ fn daemonize_process() -> Result<()> {
 /// 顺序敏感:先清全局引用再关 db,防止收尾期间 ban 模块再访问。
 ///
 /// # Arguments
-/// - `running`: 运行标志 (置 false 以防主循环死灰复燃)
 /// - `_cfg`: 保留参数,占位
 /// - `sqlite_db`: 可选 db 句柄 (来自 [`sqlite::sqlite_init`])
 fn cleanup(
-    running: &Arc<AtomicBool>,
     _cfg: &Config,
     sqlite_db: &Option<std::sync::Arc<sqlite::SqliteDb>>,
 ) {
     http_exporter::stop_http_exporter();
-    running.store(false, Ordering::Relaxed);
+    GLOBAL_RUNNING.store(false, Ordering::Relaxed);
     ban::close_cached_bans_fd();
     // 清理顺序: 先清全局引用, 再关 db, 防止收尾期间 ban 模块再访问
     sqlite::clear_global_db();
@@ -250,9 +277,9 @@ fn main() -> Result<()> {
     }
     cfg.daemon = daemon_mode;
 
-    let running = make_running();
-    let reload_config = make_reload_flag();
-    setup_signals(running.clone(), reload_config.clone())?;
+    // 重置全局标志（可能因为之前的运行而改变了）
+    GLOBAL_RUNNING.store(true, Ordering::Relaxed);
+    GLOBAL_RELOAD.store(false, Ordering::Relaxed);
 
     if !Path::new(PROCFS_DIR).exists() {
         bail!("Procfs directory not found");
@@ -303,9 +330,13 @@ fn main() -> Result<()> {
         daemonize_process()?;
         // 守护进程化后清 reload 标志, 防止该窗口期收到的 SIGHUP 在主循环首次检查时误触
         // 对齐 C 版: 守护进程化期间用 sigaction(SIGHUP, SIG_IGN) 临时忽略
-        reload_config.store(false, Ordering::Relaxed);
+        GLOBAL_RELOAD.store(false, Ordering::Relaxed);
         info!(logger::get(), "守护进程化完成");
     }
+
+    // 在守护进程化之后设置信号处理器，确保 fork 后信号处理正常工作
+    setup_signals()?;
+    info!(logger::get(), "信号处理器已注册");
 
     file_monitor::setup_inotify(&cfg)?;
     info!(logger::get(), "inotify 监控启动");
@@ -328,13 +359,29 @@ fn main() -> Result<()> {
     }
 
     if let Err(_e) = file_monitor::monitor_loop(&mut cfg, &running, &reload_config) {}
+    if let Err(e) = file_monitor::monitor_loop(&mut cfg, &GLOBAL_RUNNING, &GLOBAL_RELOAD) {
+        error!(logger::get(), "主循环异常退出"; "error" => %e);
+    }
 
+    info!(logger::get(), "主循环退出，running={}", GLOBAL_RUNNING.load(Ordering::Relaxed));
     info!(logger::get(), "开始清理流程");
-    cleanup(&running, &cfg, &sqlite_db);
+    cleanup(&cfg, &sqlite_db);
 
     if let Some(handle) = exporter_handle {
-        if let Err(e) = handle.join() {
-            warn!(logger::get(), "HTTP metrics 导出器线程 join 失败"; "error" => ?e);
+        // 给 HTTP 导出器线程最多 2 秒优雅退出
+        let start = std::time::Instant::now();
+        loop {
+            if handle.is_finished() {
+                if let Err(e) = handle.join() {
+                    warn!(logger::get(), "HTTP metrics 导出器线程 join 失败"; "error" => ?e);
+                }
+                break;
+            }
+            if start.elapsed() > std::time::Duration::from_secs(2) {
+                warn!(logger::get(), "HTTP metrics 导出器线程超时，强制继续");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
     }
 
