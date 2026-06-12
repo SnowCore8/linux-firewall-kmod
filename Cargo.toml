@@ -69,6 +69,40 @@ inherits = "release"
 debug = true
 strip = false
 
-# Rust 版 ASAN 需要 nightly + `-Z sanitizer=address` (std 重编),
-# 当前项目只通过 Makefile 的 gcc 流水线提供 ASAN (make asan),
-# 如需 Rust ASAN 后续可在此追加 profile.asan + .cargo/config.toml 的 runner 配置
+# ============================================================================
+# 内存检测 profile
+# ============================================================================
+# ASAN (AddressSanitizer): 重编 std + 所有 crate,检测堆/栈越界、
+# use-after-free、double-free。运行时性能开销 2-3×,**仅 nightly** 可用。
+#
+# 用法 (本机装好 rustup + nightly 后):
+#   rustup install nightly
+#   cargo +nightly build --profile asan
+#   cargo +nightly test --profile asan
+#
+# Miri (Rust 解释器): 不需 ASAN 那种重编 std,直接解释执行 unsafe 代码,
+# 抓指针算术 UB、对齐违反、别名违规等 ASAN 抓不到的问题。
+# 适合跑 [ban] 模块的 `write_to_fd` 单元测试。
+#
+# 用法:
+#   rustup +nightly component add miri
+#   cargo +nightly miri test
+#
+# 本项目 21 处 unsafe 块均带 `// SAFETY:` 注释(ban.rs / log.rs /
+# file_monitor.rs / main.rs),ASAN/Miri 仍能再挡一层意外的 libc 误用。
+[profile.asan]
+inherits = "dev"
+opt-level = 1
+debug = true
+lto = false
+
+# ASAN 标志需要在 .cargo/config.toml 的 `[unstable] build-std = ["std"]`
+# 才能重编 std。示例 .cargo/config.toml (项目未启用,需 opt-in):
+#
+# [unstable]
+# build-std = ["std", "core", "alloc"]
+# build-std-features = ["panic_abort"]
+#
+# [profile.asan]
+# inherits = "dev"
+# sanitizer = "address"
