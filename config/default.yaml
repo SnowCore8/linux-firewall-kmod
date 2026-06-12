@@ -15,6 +15,9 @@ defaults:
   log_file: /var/log/firewall.log
   # 运行时日志级别: 0=NONE, 1=ERR, 2=WARN, 3=INFO(默认), 4=DEBUG
   log_level: 3
+  # 永久封禁（SQLite 持久化）配置
+  permanent_db_path: "/var/lib/firewall/bans.db"
+  permanent_ban_enabled: true
 
 # ============================================================
 # Jail 定义 - 每个服务独立监控
@@ -37,9 +40,3 @@ jails:
         pattern: "Failed password for (?:invalid user )?[a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
       connection_closed:
         pattern: "Connection closed by invalid user [a-zA-Z0-9_.-]{1,64} from ([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})"
-
-# ============================================================
-# 永久封禁配置（SQLite 持久化）
-# ============================================================
-permanent_db_path: "/var/lib/firewall/bans.db"
-permanent_ban_enabled: true
