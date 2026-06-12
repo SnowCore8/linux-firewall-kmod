@@ -131,6 +131,13 @@ else
     cd "$PROJECT_ROOT" && make clean >/dev/null 2>&1
     cd "$SCRIPT_DIR"
 
+    # sudo 默认 secure_path 不含 ~/.cargo/bin,需要先 source rustup env 把 cargo
+    # 加进 PATH,否则 make daemon 失败
+    if [[ -f "$HOME/.cargo/env" ]]; then
+        source "$HOME/.cargo/env"
+    fi
+    export PATH="$HOME/.cargo/bin:$PATH"
+
     # 编译内核模块
     fw_log_info "编译内核模块..."
     cd "$PROJECT_ROOT" && make kernel-module 2>/tmp/fw_compile_stderr_$$.log || {

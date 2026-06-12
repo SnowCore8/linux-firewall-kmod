@@ -2,7 +2,7 @@ Source: linux-firewall-kmod
 Section: net
 Priority: optional
 Maintainer: SnowCore8 <snowcore8@gmail.com>
-Build-Depends: debhelper (>= 12), build-essential, linux-headers-amd64 | linux-headers-generic
+Build-Depends: debhelper (>= 12), build-essential, dkms
 Standards-Version: 4.5.1
 Rules-Requires-Root: no
 
