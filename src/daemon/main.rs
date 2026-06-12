@@ -117,6 +117,13 @@ fn daemonize_process() -> Result<()> {
     }
 
     if let Err(_e) = std::env::set_current_dir("/") {}
+    if let Err(e) = std::env::set_current_dir("/") {
+        crate::logger::debug!(
+            crate::logger::get(),
+            "切换工作目录到 / 失败";
+            "error" => %e
+        );
+    }
 
     // PID 文件用 O_NOFOLLOW 防止符号链接攻击覆盖其他进程
     let pid = process::id();
@@ -136,8 +143,20 @@ fn daemonize_process() -> Result<()> {
         // SAFETY: `fd` 是上一行 `libc::open` 返回的有效 fd,且未通过其他
         // 途径转移所有权,直接包装为 `File` 取得独占所有权。
         let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
-        let _ = writeln!(f, "{}", pid);
-        let _ = f.flush();
+        if let Err(e) = writeln!(f, "{}", pid) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "写入 PID 文件失败";
+                "error" => %e
+            );
+        }
+        if let Err(e) = f.flush() {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "刷新 PID 文件失败";
+                "error" => %e
+            );
+        }
     }
 
     // 标准 fd 重定向到 /dev/null
@@ -254,7 +273,9 @@ fn main() -> Result<()> {
                                     // 用 ban::ban_ip_permanent 而非手写 procfs 命令:
                                     //   1) 内核 procfs 不识别 "permanent" 前缀, 只认 "<ip> 0"
                                     //   2) 复用 execute_ban_action 自动写 SQLite + 更新 ips_banned 计数
-                                    let _ = ban::ban_ip_permanent(&entry.ip);
+                                    if let Err(e) = ban::ban_ip_permanent(&entry.ip) {
+                                        warn!(logger::get(), "恢复永久封禁失败"; "ip" => &entry.ip, "error" => %e);
+                                    }
                                 }
                             }
                             Ok(_) => {}
@@ -287,6 +308,8 @@ fn main() -> Result<()> {
 
     if let Err(_e) = jail::init_log_patterns(&mut cfg) {
         // 正则编译失败,继续使用旧正则
+    if let Err(e) = jail::init_log_patterns(&mut cfg) {
+        warn!(logger::get(), "初始化日志模式失败"; "error" => %e);
     }
 
     let mut exporter_handle = None;
@@ -300,7 +323,9 @@ fn main() -> Result<()> {
     cleanup(&running, &cfg, &sqlite_db);
 
     if let Some(handle) = exporter_handle {
-        let _ = handle.join();
+        if let Err(e) = handle.join() {
+            warn!(logger::get(), "HTTP metrics 导出器线程 join 失败"; "error" => ?e);
+        }
     }
 
     Ok(())

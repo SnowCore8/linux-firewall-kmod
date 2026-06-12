@@ -226,6 +226,17 @@ pub fn monitor_loop(
 
                 if let Err(_e) = reload_configuration(cfg) {
                     // 重载失败,继续使用旧配置
+                if let Err(e) = reload_configuration(cfg) {
+                    crate::logger::warn!(
+                        crate::logger::get(),
+                        "配置重载失败";
+                        "error" => %e
+                    );
+                } else {
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "配置重载成功"
+                    );
                 }
                 continue;
             }
