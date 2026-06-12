@@ -25,8 +25,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 
-use crate::types::{FailedEntry, Jail, DAEMON_STATS, MAX_FAILED_TIMESTAMPS};
 use crate::ban;
+use crate::types::{FailedEntry, Jail, DAEMON_STATS, MAX_FAILED_TIMESTAMPS};
 use crate::{log_debug, log_err, log_info, log_warn};
 
 /// 当前 Unix 秒 (内部时间源)。所有时间戳统一基于此函数。
@@ -46,8 +46,11 @@ fn now_secs() -> i64 {
 ///
 /// # Returns
 /// 找到的 `&FailedEntry`,无则 `None`。
-#[must_use] 
-pub fn find_entry<'a>(hash: &'a std::collections::HashMap<String, FailedEntry>, ip: &str) -> Option<&'a FailedEntry> {
+#[must_use]
+pub fn find_entry<'a>(
+    hash: &'a std::collections::HashMap<String, FailedEntry>,
+    ip: &str,
+) -> Option<&'a FailedEntry> {
     hash.get(ip)
 }
 
@@ -118,7 +121,9 @@ pub fn count_recent(entry: &FailedEntry, window: i64, max_retries: u32) -> u32 {
     {
         start += 1;
     }
-    entry.recent_head.store(start, std::sync::atomic::Ordering::Relaxed);
+    entry
+        .recent_head
+        .store(start, std::sync::atomic::Ordering::Relaxed);
 
     let mut count: u32 = 0;
     for i in start..entry.timestamps.len() {
@@ -160,14 +165,18 @@ pub fn process_failed_timestamps(entry: &mut FailedEntry, now: i64, findtime: i6
         entry.timestamps.push(now);
 
         if entry.recent_head.load(std::sync::atomic::Ordering::Relaxed) > 0 {
-            entry.recent_head.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            entry
+                .recent_head
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         }
 
         // 移动后立即过滤一次过期, 避免下次 count_recent 重做
         let oldest_valid = now - findtime;
         entry.timestamps.retain(|&ts| ts >= oldest_valid);
 
-        entry.recent_head.store(0, std::sync::atomic::Ordering::Relaxed);
+        entry
+            .recent_head
+            .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -189,13 +198,17 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
         return;
     }
 
-    DAEMON_STATS.failed_attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    DAEMON_STATS
+        .failed_attempts
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     let findtime_i64 = i64::from(findtime);
     let now = now_secs();
 
     let mut hash = jail.failed_hash.write();
-    let entry = hash.entry(ip.to_string()).or_insert_with(|| FailedEntry::new(ip.to_string()));
+    let entry = hash
+        .entry(ip.to_string())
+        .or_insert_with(|| FailedEntry::new(ip.to_string()));
 
     process_failed_timestamps(entry, now, findtime_i64);
 
@@ -203,7 +216,10 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
     if recent_fails >= max_retries {
         log_warn!(
             "IP {} exceeded {} failures in {} seconds in jail '{}', banning",
-            ip, recent_fails, findtime, jail.name
+            ip,
+            recent_fails,
+            findtime,
+            jail.name
         );
 
         // 必须先释放写锁再调 ban_ip, 否则 ban 内部可能触发的日志写会与本锁死锁
@@ -212,7 +228,9 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
         if ban::ban_ip(ip).is_ok() {
             log_info!(
                 "Successfully banned IP {} after {} failed attempts in jail '{}'",
-                ip, recent_fails, jail.name
+                ip,
+                recent_fails,
+                jail.name
             );
             // 成功封禁后移除条目, 避免重复封禁计数
             let mut hash2 = jail.failed_hash.write();

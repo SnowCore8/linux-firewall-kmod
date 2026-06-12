@@ -21,13 +21,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang-format
           pip install yamllint
+          # Rust 守护进程的格式 / lint 工具 (rustup 默认装在 ~/.cargo/bin)
+          curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      - name: 检查代码风格（clang-format）
+      - name: 检查代码风格（clang-format 内核模块 / rustfmt 守护进程）
         run: |
           echo "检查内核模块代码..."
           clang-format --dry-run --Werror src/kernel-module/*.c src/kernel-module/*.h
           echo "检查守护进程代码..."
-          clang-format --dry-run --Werror src/daemon/*.c src/daemon/*.h
+          cargo fmt --check
+
+      - name: 检查守护进程 lint（clippy）
+        run: cargo clippy --release --lib -- -D warnings
 
       - name: 检查 YAML 配置（yamllint）
         run: yamllint -c .yamllint config/*.yaml

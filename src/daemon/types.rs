@@ -21,7 +21,7 @@
 //! - `DaemonStats` 全字段使用 `AtomicU64` (Relaxed 序,统计不要求严格同步)
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, AtomicU64};
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 
 use parking_lot::RwLock;
 
@@ -51,7 +51,8 @@ pub const MAX_JAILS: usize = 16;
 
 /// inotify 事件缓冲大小:`1024` 个事件 × 单事件 `~16B` + 16KB 安全裕量。
 /// 典型负载下保证单次 `read_events` 不丢事件。
-pub const EVENT_BUF_LEN: usize = 1024 * std::mem::size_of::<nix::sys::inotify::InotifyEvent>() + 16 * 1024;
+pub const EVENT_BUF_LEN: usize =
+    1024 * std::mem::size_of::<nix::sys::inotify::InotifyEvent>() + 16 * 1024;
 
 // ============================================================================
 // 失败条目
@@ -80,7 +81,7 @@ impl FailedEntry {
     ///
     /// # Arguments
     /// - `ip`: 原始 IP 字符串 (由调用方保证已通过 [`crate::ban::validate_ip`])
-    #[must_use] 
+    #[must_use]
     pub fn new(ip: String) -> Self {
         Self {
             ip,
@@ -154,7 +155,7 @@ impl Jail {
     ///
     /// # Arguments
     /// - `name`: 唯一名称,需在 `Config.jails` 中保持唯一
-    #[must_use] 
+    #[must_use]
     pub fn new(name: String) -> Self {
         Self {
             name,
@@ -247,9 +248,9 @@ impl Default for Config {
             permanent_db_path: None,
             permanent_ban_enabled: false,
             log_file: None,
-            log_level: 3,      // INFO
+            log_level: 3,       // INFO
             log_destination: 2, // BOTH
-            log_format: 0,     // PLAIN
+            log_format: 0,      // PLAIN
             strict_mode: true,
             jails: Vec::with_capacity(MAX_JAILS),
         }
@@ -296,7 +297,7 @@ impl Default for DaemonStats {
 impl DaemonStats {
     /// `const fn` 构造,允许 `pub static DAEMON_STATS` 在静态上下文求值
     /// (普通 `new()` 涉及 `AtomicU64::new` 的非 const 包装函数时无法静态初始化)。
-    #[must_use] 
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             lines_parsed: AtomicU64::new(0),

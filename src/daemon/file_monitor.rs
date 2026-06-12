@@ -23,17 +23,17 @@ use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use inotify::{Inotify, WatchDescriptor, WatchMask};
 use parking_lot::RwLock;
 
-use crate::types::{Config, Jail, DAEMON_STATS};
 use crate::failed_tracker;
 use crate::log_parser;
+use crate::types::{Config, Jail, DAEMON_STATS};
 use crate::{log_debug, log_err, log_info, log_warn};
 
 // ============================================================================
@@ -66,7 +66,7 @@ impl Default for FileState {
 
 impl FileState {
     /// 构造空 `FileState`,所有字段为默认值
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             path: String::new(),
@@ -106,8 +106,7 @@ pub static MONITOR_RUNNING: AtomicBool = AtomicBool::new(true);
 /// # Errors
 /// 没有任何文件能被 watch (配置错误 / kmod 未加载 / 权限不足)
 pub fn setup_inotify(cfg: &Config) -> Result<()> {
-    let inotify = Inotify::init()
-        .context("Failed to initialize inotify")?;
+    let inotify = Inotify::init().context("Failed to initialize inotify")?;
 
     let mut file_states = Vec::new();
     let mut watched_count = 0;
@@ -138,7 +137,9 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
                 state.offset = metadata.len();
                 log_info!(
                     "Initial offset for {} (jail={}): {} bytes",
-                    log_file, jail.name, state.offset
+                    log_file,
+                    jail.name,
+                    state.offset
                 );
             }
 
@@ -157,7 +158,9 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
                 Err(e) => {
                     log_warn!(
                         "Failed to watch {} (jail={}): {} (skipping)",
-                        log_file, jail.name, e
+                        log_file,
+                        jail.name,
+                        e
                     );
                 }
             }
@@ -173,7 +176,9 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
 
     log_info!(
         "Watching {}/{} log files across {} jails",
-        watched_count, total_files, cfg.jails.len()
+        watched_count,
+        total_files,
+        cfg.jails.len()
     );
 
     // 一个文件都没监控成功: 启动无意义, 直接退出
@@ -197,7 +202,13 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
 /// - `line`: 不含 `\n` 的单行
 /// - `log_path`: 源文件路径 (日志用)
 /// - `max_retries` / `findtime`: 失败阈值参数 (透传给 `failed_tracker`)
-pub fn process_single_line(jail: &Jail, line: &str, log_path: &str, max_retries: u32, findtime: u32) {
+pub fn process_single_line(
+    jail: &Jail,
+    line: &str,
+    log_path: &str,
+    max_retries: u32,
+    findtime: u32,
+) {
     if line.is_empty() {
         return;
     }
@@ -244,7 +255,11 @@ pub fn process_lines_in_buffer(
             let line_len = line_end - line_start;
 
             if line_len >= 8192 {
-                log_warn!("Extremely long line ({} bytes) in {}, skipping", line_len, log_path);
+                log_warn!(
+                    "Extremely long line ({} bytes) in {}, skipping",
+                    line_len,
+                    log_path
+                );
             } else {
                 let line = std::str::from_utf8(&data[line_start..line_end]).unwrap_or("");
                 process_single_line(jail, line, log_path, max_retries, findtime);
@@ -278,7 +293,11 @@ pub fn store_partial_line(
     }
 
     if data.len() >= 8192 {
-        log_warn!("Partial line too long ({} bytes) in {}, discarding", data.len(), log_path);
+        log_warn!(
+            "Partial line too long ({} bytes) in {}, discarding",
+            data.len(),
+            log_path
+        );
         jail.partial_line_buffer.write().clear();
         return;
     }
@@ -323,7 +342,11 @@ pub fn flush_partial_line(jail: &Jail, log_path: &str, max_retries: u32, findtim
     buf.clear();
     drop(buf);
 
-    log_debug!("Flushing partial line buffer with {} bytes from {}", old_len, log_path);
+    log_debug!(
+        "Flushing partial line buffer with {} bytes from {}",
+        old_len,
+        log_path
+    );
     if let Ok(line) = std::str::from_utf8(&temp) {
         process_single_line(jail, line, log_path, max_retries, findtime);
     }
@@ -354,7 +377,9 @@ pub fn process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
     const BATCH_READ_MAX: usize = 256 * 1024;
 
     let file_states = FILE_STATES.read();
-    let state = file_states.get(idx).ok_or_else(|| anyhow::anyhow!("Invalid index {idx}"))?;
+    let state = file_states
+        .get(idx)
+        .ok_or_else(|| anyhow::anyhow!("Invalid index {idx}"))?;
 
     if state.symlink_detected {
         return Ok(());
@@ -474,7 +499,13 @@ pub fn process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
         );
 
         if consumed < process_buf.len() {
-            store_partial_line(jail, &process_buf[consumed..], &log_path, max_retries, findtime);
+            store_partial_line(
+                jail,
+                &process_buf[consumed..],
+                &log_path,
+                max_retries,
+                findtime,
+            );
         }
 
         let mut file_states = FILE_STATES.write();
@@ -675,12 +706,22 @@ pub fn monitor_loop(
             }
 
             let now = SystemTime::now();
-            if now.duration_since(last_partial_cleanup).unwrap_or_default().as_secs() >= 60 {
+            if now
+                .duration_since(last_partial_cleanup)
+                .unwrap_or_default()
+                .as_secs()
+                >= 60
+            {
                 last_partial_cleanup = now;
                 cleanup_partial_line_buffer(cfg);
             }
 
-            if now.duration_since(last_new_file_check).unwrap_or_default().as_secs() >= 60 {
+            if now
+                .duration_since(last_new_file_check)
+                .unwrap_or_default()
+                .as_secs()
+                >= 60
+            {
                 last_new_file_check = now;
                 check_for_new_log_files(cfg);
             }
@@ -720,7 +761,9 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
     } else if let Some(ref d) = cfg.config_dir {
         d.clone()
     } else {
-        return Err(anyhow::anyhow!("No config file or directory specified for reload"));
+        return Err(anyhow::anyhow!(
+            "No config file or directory specified for reload"
+        ));
     };
 
     let old_cfg = jail::config_clone(cfg);
@@ -759,7 +802,10 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
     }
 
     if let Err(e) = jail::init_log_patterns(&mut new_cfg) {
-        log_warn!("Some jail regex patterns failed to compile during reload: {}", e);
+        log_warn!(
+            "Some jail regex patterns failed to compile during reload: {}",
+            e
+        );
     }
 
     *cfg = new_cfg;
@@ -800,9 +846,15 @@ fn check_for_new_log_files(cfg: &Config) {
         }
         for log_file in &jail.log_files {
             if Path::new(log_file).exists() {
-                let already_watched = file_states.iter().any(|s| s.wd.is_some() && s.path == *log_file);
+                let already_watched = file_states
+                    .iter()
+                    .any(|s| s.wd.is_some() && s.path == *log_file);
                 if !already_watched {
-                    log_info!("New log file detected: {} (jail={}), will re-setup inotify", log_file, jail.name);
+                    log_info!(
+                        "New log file detected: {} (jail={}), will re-setup inotify",
+                        log_file,
+                        jail.name
+                    );
                     needs_resetup = true;
                 }
             }

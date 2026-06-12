@@ -35,13 +35,13 @@
 //! - **配置双缓冲**:SIGHUP 重载时先 clone 旧配置,失败时旧配置不受影响
 //! - **path 安全 3 重检查**:`..` 遍历 / URL 编码绕过 / shell 元字符注入
 
-pub mod log;
 pub mod ban;
-pub mod sqlite_store;
-pub mod types;
+pub mod config_parser;
 pub mod failed_tracker;
-pub mod log_parser;
-pub mod jail;
 pub mod file_monitor;
 pub mod http_exporter;
-pub mod config_parser;
+pub mod jail;
+pub mod log;
+pub mod log_parser;
+pub mod sqlite_store;
+pub mod types;

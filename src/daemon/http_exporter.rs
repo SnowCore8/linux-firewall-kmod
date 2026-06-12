@@ -2,7 +2,11 @@
 //!
 //! 本文件内 `u64 → i64` 是 Unix 时间戳常规做法;`isize → usize`
 //! 来自 `now - last` 表达式(已确认 `now >= last`)
-#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation
+)]
 //!
 //! # 端点清单
 //!
@@ -41,7 +45,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 use crate::types::{Config, DAEMON_STATS};
@@ -137,11 +141,7 @@ fn read_kernel_stats() -> (u64, u64, u64, u64) {
                         _ => {}
                     }
                     // 4 个 key 都找到后提前退出
-                    if has_banned
-                        && has_total_bans
-                        && has_total_unbans
-                        && has_whitelist_count
-                    {
+                    if has_banned && has_total_bans && has_total_unbans && has_whitelist_count {
                         break;
                     }
                 }
@@ -314,7 +314,10 @@ fn check_basic_auth(auth_header: Option<&str>, cfg_user: &str, cfg_pass: &str) -
     let Some(auth_header) = auth_header else {
         AUTH_FAILURES.fetch_add(1, Ordering::Relaxed);
         LAST_FAILURE_TIME.store(
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             Ordering::Relaxed,
         );
         return 0;
@@ -323,7 +326,10 @@ fn check_basic_auth(auth_header: Option<&str>, cfg_user: &str, cfg_pass: &str) -
     if !auth_header.starts_with("Basic ") {
         AUTH_FAILURES.fetch_add(1, Ordering::Relaxed);
         LAST_FAILURE_TIME.store(
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             Ordering::Relaxed,
         );
         return 0;
@@ -332,7 +338,10 @@ fn check_basic_auth(auth_header: Option<&str>, cfg_user: &str, cfg_pass: &str) -
     let Ok(decoded) = STANDARD.decode(&auth_header[6..]) else {
         AUTH_FAILURES.fetch_add(1, Ordering::Relaxed);
         LAST_FAILURE_TIME.store(
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             Ordering::Relaxed,
         );
         return 0;
@@ -341,7 +350,10 @@ fn check_basic_auth(auth_header: Option<&str>, cfg_user: &str, cfg_pass: &str) -
     let Ok(decoded_str) = String::from_utf8(decoded) else {
         AUTH_FAILURES.fetch_add(1, Ordering::Relaxed);
         LAST_FAILURE_TIME.store(
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             Ordering::Relaxed,
         );
         return 0;
@@ -351,7 +363,10 @@ fn check_basic_auth(auth_header: Option<&str>, cfg_user: &str, cfg_pass: &str) -
     if parts.len() != 2 {
         AUTH_FAILURES.fetch_add(1, Ordering::Relaxed);
         LAST_FAILURE_TIME.store(
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             Ordering::Relaxed,
         );
         return 0;
@@ -369,7 +384,10 @@ fn check_basic_auth(auth_header: Option<&str>, cfg_user: &str, cfg_pass: &str) -
     } else {
         AUTH_FAILURES.fetch_add(1, Ordering::Relaxed);
         LAST_FAILURE_TIME.store(
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             Ordering::Relaxed,
         );
         0
@@ -411,15 +429,18 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         let body = "401 Unauthorized\r\n";
         let response = Response::from_string(body)
             .with_status_code(StatusCode(401))
-            .with_header(Header::from_bytes("WWW-Authenticate", "Basic realm=\"firewall-metrics\"").unwrap());
+            .with_header(
+                Header::from_bytes("WWW-Authenticate", "Basic realm=\"firewall-metrics\"").unwrap(),
+            );
         let _ = request.respond(add_security_headers(response));
         return;
     }
 
     if let (&Method::Get, "/metrics") = (request.method(), url.as_str()) {
         let metrics = generate_metrics();
-        let response = Response::from_string(metrics)
-            .with_header(Header::from_bytes("Content-Type", "text/plain; version=0.0.4; charset=utf-8").unwrap());
+        let response = Response::from_string(metrics).with_header(
+            Header::from_bytes("Content-Type", "text/plain; version=0.0.4; charset=utf-8").unwrap(),
+        );
         let _ = request.respond(add_security_headers(response));
     } else {
         let body = "404 Not Found\r\n";
@@ -433,7 +454,11 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
 /// # Arguments
 /// - `request`: HTTP 请求
 /// - `metrics_user` / `metrics_pass`: `Option<String>` 形式的凭据 (`None` 视为空)
-fn handle_request_with_auth(request: Request, metrics_user: Option<&String>, metrics_pass: Option<&String>) {
+fn handle_request_with_auth(
+    request: Request,
+    metrics_user: Option<&String>,
+    metrics_pass: Option<&String>,
+) {
     let user = metrics_user.map(String::as_str).unwrap_or_default();
     let pass = metrics_pass.map(String::as_str).unwrap_or_default();
     handle_request(request, user, pass);
@@ -455,7 +480,7 @@ fn handle_request_with_auth(request: Request, metrics_user: Option<&String>, met
 ///
 /// # Returns
 /// 子线程 `JoinHandle<()>`,`main()` 在 cleanup 后 join
-#[must_use] 
+#[must_use]
 pub fn start_http_exporter(port: u16, cfg: &Config) -> thread::JoinHandle<()> {
     let metrics_user = cfg.metrics_username.clone();
     let metrics_pass = cfg.metrics_password.clone();
@@ -517,10 +542,7 @@ pub fn stop_http_exporter() {
         use std::net::TcpStream;
         use std::time::Duration;
         let addr = format!("127.0.0.1:{port}");
-        let _ = TcpStream::connect_timeout(
-            &addr.parse().unwrap(),
-            Duration::from_millis(10),
-        );
+        let _ = TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_millis(10));
     }
 }
 

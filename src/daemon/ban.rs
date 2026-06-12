@@ -30,12 +30,12 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::fd::RawFd;
 use std::sync::atomic::{AtomicI32, Ordering};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use parking_lot::Mutex;
 
-use crate::{log_err, log_info, log_warn};
 use crate::sqlite_store;
 use crate::types::DAEMON_STATS;
+use crate::{log_err, log_info, log_warn};
 
 // ============================================================================
 // 常量
@@ -166,7 +166,9 @@ pub fn validate_ipv4(ip: &str) -> Result<ValidatedIp> {
         bail!("invalid IPv4 length");
     }
 
-    let addr: Ipv4Addr = ip.parse().map_err(|e| anyhow::anyhow!("invalid IPv4: {e}"))?;
+    let addr: Ipv4Addr = ip
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid IPv4: {e}"))?;
     let ip_num = u32::from_ne_bytes(addr.octets());
     let ip_num_host = u32::from_be(ip_num);
 
@@ -206,7 +208,9 @@ pub fn validate_ip(ip: &str) -> Result<ValidatedIp> {
         return Ok(validated);
     }
 
-    let addr: Ipv6Addr = ip.parse().map_err(|e| anyhow::anyhow!("invalid IPv6: {e}"))?;
+    let addr: Ipv6Addr = ip
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid IPv6: {e}"))?;
 
     if addr.is_loopback()
         || addr.is_multicast()
@@ -214,9 +218,7 @@ pub fn validate_ip(ip: &str) -> Result<ValidatedIp> {
         || (addr.segments()[0] & 0xFFC0 == 0xFE80)
     {
         // fe80::/10 link-local: 前 10 位为 1111111010
-        bail!(
-            "rejected IPv6 address: {ip} (loopback/multicast/unspecified/link-local)"
-        );
+        bail!("rejected IPv6 address: {ip} (loopback/multicast/unspecified/link-local)");
     }
 
     Ok(ValidatedIp {
@@ -317,11 +319,17 @@ fn write_to_fd(fd: RawFd, data: &[u8]) -> Result<()> {
         // 长度参数 `data.len() - total_written` 是剩余字节数,不会越界。
         // fd 在调用方 (`secure_procfs_write`) 已通过 `verify_procfs_fd` 校验。
         let written = unsafe {
-            libc::write(fd, data.as_ptr().add(total_written).cast::<libc::c_void>(), data.len() - total_written)
+            libc::write(
+                fd,
+                data.as_ptr().add(total_written).cast::<libc::c_void>(),
+                data.len() - total_written,
+            )
         };
         if written < 0 {
             let err = std::io::Error::last_os_error();
-            if err.kind() == std::io::ErrorKind::Interrupted || err.kind() == std::io::ErrorKind::WouldBlock {
+            if err.kind() == std::io::ErrorKind::Interrupted
+                || err.kind() == std::io::ErrorKind::WouldBlock
+            {
                 continue; // EINTR / EAGAIN → 重试
             }
             log_err!("Failed to write to procfs fd {}: {}", fd, err);
@@ -352,7 +360,10 @@ pub fn secure_procfs_write(path: &str, data: &[u8]) -> Result<()> {
         bail!("empty data");
     }
     if data.len() > 64 {
-        log_err!("Data too long for procfs write ({} bytes, max 64)", data.len());
+        log_err!(
+            "Data too long for procfs write ({} bytes, max 64)",
+            data.len()
+        );
         bail!("data too long");
     }
 
@@ -459,15 +470,15 @@ pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
 
     match action {
         BanAction::Permanent => {
-            if let Some(rc) =
-                sqlite_store::with_global_db(|db| sqlite_store::sqlite_add_permanent_ban(
+            if let Some(rc) = sqlite_store::with_global_db(|db| {
+                sqlite_store::sqlite_add_permanent_ban(
                     db,
                     ip,
                     validated.ip_num,
                     "manual permanent ban",
                     "manual",
-                ))
-            {
+                )
+            }) {
                 rc.with_context(|| {
                     format!("SQLite add_permanent_ban failed for permanent ban {ip}")
                 })?;
@@ -475,9 +486,9 @@ pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
             // 全局 db 未注册 (sqlite_init 失败) → 静默跳过, 等同 C 版 sqlite_db==NULL
         }
         BanAction::UnbanPerm => {
-            if let Some(rc) = sqlite_store::with_global_db(|db| {
-                sqlite_store::sqlite_remove_permanent_ban(db, ip)
-            }) {
+            if let Some(rc) =
+                sqlite_store::with_global_db(|db| sqlite_store::sqlite_remove_permanent_ban(db, ip))
+            {
                 rc.with_context(|| {
                     format!("SQLite remove_permanent_ban failed for permanent unban {ip}")
                 })?;
@@ -672,11 +683,18 @@ mod tests {
 
         log_ban_action(BanAction::Permanent, "10.0.0.2");
         let after_perm = DAEMON_STATS.ips_banned.load(Ordering::Relaxed);
-        assert_eq!(after_perm, before + 2, "Permanent ban must increment ips_banned");
+        assert_eq!(
+            after_perm,
+            before + 2,
+            "Permanent ban must increment ips_banned"
+        );
 
         log_ban_action(BanAction::Unban, "10.0.0.1");
         log_ban_action(BanAction::UnbanPerm, "10.0.0.2");
         let after_unban = DAEMON_STATS.ips_banned.load(Ordering::Relaxed);
-        assert_eq!(after_unban, after_perm, "Unban must NOT increment ips_banned");
+        assert_eq!(
+            after_unban, after_perm,
+            "Unban must NOT increment ips_banned"
+        );
     }
 }

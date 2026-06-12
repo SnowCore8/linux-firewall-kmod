@@ -22,8 +22,8 @@
 
 use std::net::IpAddr;
 
-use crate::types::{Jail, DAEMON_STATS};
 use crate::log_warn;
+use crate::types::{Jail, DAEMON_STATS};
 
 // ============================================================================
 // 内部: IP 候选定位
@@ -60,8 +60,7 @@ fn find_ip_candidate(line: &str, start_from: usize) -> Option<(usize, usize)> {
         }
     }
 
-    while i < bytes.len()
-        && (bytes[i].is_ascii_hexdigit() || bytes[i] == b'.' || bytes[i] == b':')
+    while i < bytes.len() && (bytes[i].is_ascii_hexdigit() || bytes[i] == b'.' || bytes[i] == b':')
     {
         i += 1;
     }
@@ -99,7 +98,10 @@ fn validate_ip_candidate(candidate: &str) -> Option<IpAddr> {
             IpAddr::V4(v4) => {
                 let octets = v4.octets();
                 if octets[0] == 0
-                    || (octets[0] == 255 && octets[1] == 255 && octets[2] == 255 && octets[3] == 255)
+                    || (octets[0] == 255
+                        && octets[1] == 255
+                        && octets[2] == 255
+                        && octets[3] == 255)
                     || octets[0] == 127
                     || (octets[0] >= 224 && octets[0] <= 239)
                 {
@@ -139,7 +141,7 @@ fn validate_ip_candidate(candidate: &str) -> Option<IpAddr> {
 ///
 /// # Returns
 /// 第一个合法 IPv4 字符串;无则返回 `None`。
-#[must_use] 
+#[must_use]
 pub fn extract_ipv4(line: &str) -> Option<String> {
     let bytes = line.as_bytes();
     let mut i = 0;
@@ -195,7 +197,7 @@ pub fn extract_ipv4(line: &str) -> Option<String> {
 ///
 /// # Returns
 /// 第一个合法 IP 字符串 (v4 或 v6);无则返回 `None`。
-#[must_use] 
+#[must_use]
 pub fn extract_ip(line: &str) -> Option<String> {
     let mut pos = 0;
 
@@ -265,14 +267,20 @@ pub fn extract_and_validate_ip(jail: &Jail, line: &str) -> Option<String> {
             }
         }
         Ok(IpAddr::V6(v6)) => {
-            if v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() || (v6.segments()[0] & 0xFFC0 == 0xFE80) {
+            if v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || (v6.segments()[0] & 0xFFC0 == 0xFE80)
+            {
                 return None;
             }
         }
         Err(_) => return None,
     }
 
-    DAEMON_STATS.ips_extracted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    DAEMON_STATS
+        .ips_extracted
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Some(ip_buf)
 }
 
@@ -300,13 +308,18 @@ fn match_regex(jail: &Jail, line: &str) -> Option<String> {
                     let capture_len = capture.len();
                     if (7..46).contains(&capture_len) && capture.as_bytes()[0].is_ascii_hexdigit() {
                         if let Some(ip) = validate_ip_candidate(capture) {
-                            DAEMON_STATS.regex_matches.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            DAEMON_STATS
+                                .regex_matches
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             return Some(ip.to_string());
                         }
                     }
                 }
             }
-            log_warn!("No valid IP capture group found in regex match for jail '{}'", jail.name);
+            log_warn!(
+                "No valid IP capture group found in regex match for jail '{}'",
+                jail.name
+            );
         }
     }
 
@@ -431,7 +444,8 @@ mod tests {
     #[test]
     fn parse_log_line_no_regex_fallback() {
         let jail = make_test_jail();
-        let line = "Jun 11 15:30:00 server sshd[12345]: Failed password for root from 172.16.0.1 port 22";
+        let line =
+            "Jun 11 15:30:00 server sshd[12345]: Failed password for root from 172.16.0.1 port 22";
         let ip = parse_log_line(&jail, line).unwrap();
         assert_eq!(ip, "172.16.0.1");
     }
@@ -441,9 +455,13 @@ mod tests {
         let jail = make_test_jail();
         let line = "Failed password for root from 192.168.1.100 port 22";
 
-        let before = DAEMON_STATS.ips_extracted.load(std::sync::atomic::Ordering::Relaxed);
+        let before = DAEMON_STATS
+            .ips_extracted
+            .load(std::sync::atomic::Ordering::Relaxed);
         let ip = extract_and_validate_ip(&jail, line).unwrap();
-        let after = DAEMON_STATS.ips_extracted.load(std::sync::atomic::Ordering::Relaxed);
+        let after = DAEMON_STATS
+            .ips_extracted
+            .load(std::sync::atomic::Ordering::Relaxed);
 
         assert_eq!(ip, "192.168.1.100");
         assert_eq!(after, before + 1);

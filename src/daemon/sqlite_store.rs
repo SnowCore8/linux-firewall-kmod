@@ -4,7 +4,12 @@
 //! (`u64` 范围远超 1970-2100 年 32-bit 上限,实际不可能 wrap),`usize → i32`
 //! 仅出现在 SQL `INTEGER` 字段处,目标 SQL 内无 64-bit 支持
 // 文件级 cast 警告抑制(详见模块文档)
-#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss, clippy::cast_possible_truncation, clippy::cast_lossless)]
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_lossless
+)]
 //!
 //! # 关键设计
 //!
@@ -36,9 +41,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use parking_lot::Mutex;
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{params, Connection, OpenFlags};
 
 use crate::{log_err, log_info};
 
@@ -240,9 +245,13 @@ pub fn sqlite_add_permanent_ban(
 
     match result {
         Ok(_) => Ok(0),
-        Err(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error { code: rusqlite::ErrorCode::ConstraintViolation, .. }, _)) => {
-            Ok(-2)
-        }
+        Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ErrorCode::ConstraintViolation,
+                ..
+            },
+            _,
+        )) => Ok(-2),
         Err(e) => {
             log_err!("Failed to insert permanent ban: {}", e);
             bail!("SQLite insert failed: {e}");
@@ -299,7 +308,13 @@ pub fn sqlite_add_permanent_bans_batch(
 
         match result {
             Ok(_) => success_count += 1,
-            Err(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error { code: rusqlite::ErrorCode::ConstraintViolation, .. }, _)) => {}
+            Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error {
+                    code: rusqlite::ErrorCode::ConstraintViolation,
+                    ..
+                },
+                _,
+            )) => {}
             Err(e) => {
                 log_err!("Failed to insert permanent ban {}: {}", i, e);
                 let _ = tx.rollback();
@@ -330,7 +345,9 @@ pub fn sqlite_is_permanent_banned(db: &SqliteDb, ip_num: u32) -> Result<i32> {
         "SELECT 1 FROM permanent_banlist WHERE ip_num = ?1 AND is_active = 1 LIMIT 1",
     )?;
 
-    let exists: Option<i32> = stmt.query_row(params![i64::from(ip_num)], |row| row.get(0)).ok();
+    let exists: Option<i32> = stmt
+        .query_row(params![i64::from(ip_num)], |row| row.get(0))
+        .ok();
     Ok(exists.unwrap_or(0))
 }
 
@@ -396,20 +413,21 @@ pub fn sqlite_load_all_permanent_bans(db: &SqliteDb) -> Result<Vec<PermanentBanE
          FROM permanent_banlist WHERE is_active = 1 ORDER BY created_at",
     )?;
 
-    let entries = stmt.query_map([], |row| {
-        Ok(PermanentBanEntry {
-            id: row.get(0)?,
-            ip: row.get(1)?,
-            ip_num: row.get::<_, i64>(2)? as u32,
-            reason: row.get(3)?,
-            created_at: row.get(4)?,
-            created_by: row.get(5)?,
-            hit_count: row.get(6)?,
-            last_hit_at: row.get(7)?,
-            is_active: row.get(8)?,
-        })
-    })?
-    .collect::<rusqlite::Result<Vec<_>>>()?;
+    let entries = stmt
+        .query_map([], |row| {
+            Ok(PermanentBanEntry {
+                id: row.get(0)?,
+                ip: row.get(1)?,
+                ip_num: row.get::<_, i64>(2)? as u32,
+                reason: row.get(3)?,
+                created_at: row.get(4)?,
+                created_by: row.get(5)?,
+                hit_count: row.get(6)?,
+                last_hit_at: row.get(7)?,
+                is_active: row.get(8)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
 
     Ok(entries)
 }
@@ -450,7 +468,9 @@ pub fn sqlite_update_hit_stats(db: &SqliteDb, ip_num: u32) -> Result<()> {
 /// - `query_row` 失败 (数据库损坏或迁移异常)
 pub fn sqlite_get_stats(db: &SqliteDb) -> Result<(i32, i32)> {
     let conn = db.conn.lock();
-    let total: i32 = conn.query_row("SELECT COUNT(*) FROM permanent_banlist", [], |row| row.get(0))?;
+    let total: i32 = conn.query_row("SELECT COUNT(*) FROM permanent_banlist", [], |row| {
+        row.get(0)
+    })?;
     let active: i32 = conn.query_row(
         "SELECT COUNT(*) FROM permanent_banlist WHERE is_active = 1",
         [],
@@ -490,10 +510,7 @@ pub fn sqlite_purge_deleted(db: &SqliteDb, days: i32) -> Result<i32> {
         )?;
         Ok(changes as i32)
     } else {
-        let changes = conn.execute(
-            "DELETE FROM permanent_banlist WHERE is_active = 0",
-            [],
-        )?;
+        let changes = conn.execute("DELETE FROM permanent_banlist WHERE is_active = 0", [])?;
         Ok(changes as i32)
     }
 }
@@ -535,7 +552,9 @@ fn init_db_schema(conn: &mut Connection) -> Result<()> {
     )?;
 
     if new_table_empty && old_table_exists {
-        log_info!("Detected legacy table structure, starting deduplication migration to UNIQUE(ip)");
+        log_info!(
+            "Detected legacy table structure, starting deduplication migration to UNIQUE(ip)"
+        );
 
         let tx = conn.transaction()?;
 
@@ -596,7 +615,8 @@ mod tests {
 
     fn temp_db_path() -> String {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let tmpdir = std::env::temp_dir().join(format!("fw_sqlite_test_{}_{}", std::process::id(), n));
+        let tmpdir =
+            std::env::temp_dir().join(format!("fw_sqlite_test_{}_{}", std::process::id(), n));
         fs::create_dir_all(&tmpdir).unwrap();
         let path = tmpdir.join("test.db").to_string_lossy().to_string();
         let _ = fs::remove_file(&path);
@@ -624,7 +644,8 @@ mod tests {
         let path = temp_db_path();
         let db = sqlite_init(&path).unwrap();
 
-        let rc = sqlite_add_permanent_ban(&db, "192.168.1.100", 0xC0A80164, "test ban", "auto").unwrap();
+        let rc =
+            sqlite_add_permanent_ban(&db, "192.168.1.100", 0xC0A80164, "test ban", "auto").unwrap();
         assert_eq!(rc, 0);
 
         let banned = sqlite_is_permanent_banned(&db, 0xC0A80164).unwrap();
@@ -714,14 +735,8 @@ mod tests {
         let reasons = vec!["reason1", "reason2", "reason3"];
         let created_bys = vec!["auto", "auto", "manual"];
 
-        let success_count = sqlite_add_permanent_bans_batch(
-            &db,
-            &ips,
-            &ip_nums,
-            &reasons,
-            &created_bys,
-        )
-        .unwrap();
+        let success_count =
+            sqlite_add_permanent_bans_batch(&db, &ips, &ip_nums, &reasons, &created_bys).unwrap();
         assert_eq!(success_count, 3);
 
         let entries = sqlite_load_all_permanent_bans(&db).unwrap();
@@ -743,14 +758,8 @@ mod tests {
         let reasons = vec!["dup", "new"];
         let created_bys = vec!["auto", "auto"];
 
-        let success_count = sqlite_add_permanent_bans_batch(
-            &db,
-            &ips,
-            &ip_nums,
-            &reasons,
-            &created_bys,
-        )
-        .unwrap();
+        let success_count =
+            sqlite_add_permanent_bans_batch(&db, &ips, &ip_nums, &reasons, &created_bys).unwrap();
         assert_eq!(success_count, 1);
 
         let entries = sqlite_load_all_permanent_bans(&db).unwrap();
@@ -770,13 +779,7 @@ mod tests {
         let reasons = vec!["r1", "r2"];
         let created_bys = vec!["auto", "auto"];
 
-        let result = sqlite_add_permanent_bans_batch(
-            &db,
-            &ips,
-            &ip_nums,
-            &reasons,
-            &created_bys,
-        );
+        let result = sqlite_add_permanent_bans_batch(&db, &ips, &ip_nums, &reasons, &created_bys);
         assert!(result.is_err());
 
         sqlite_close(&db);

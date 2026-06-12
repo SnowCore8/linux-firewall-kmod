@@ -26,7 +26,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 
 use firewall_daemon::ban;
 use firewall_daemon::config_parser;
@@ -69,7 +69,7 @@ const BANS_PATH: &str = "/proc/firewall/bans";
 /// # Errors
 /// `signal_hook::flag::register` 失败
 fn setup_signals(running: Arc<AtomicBool>, reload_config: Arc<AtomicBool>) -> Result<()> {
-    use signal_hook::consts::{SIGINT, SIGTERM, SIGHUP, SIGPIPE};
+    use signal_hook::consts::{SIGHUP, SIGINT, SIGPIPE, SIGTERM};
 
     signal_hook::flag::register(SIGTERM, running.clone())?;
     signal_hook::flag::register(SIGINT, running)?;
@@ -134,8 +134,8 @@ fn daemonize_process() -> Result<()> {
         )
     };
     if fd >= 0 {
-        use std::os::unix::io::FromRawFd;
         use std::io::Write;
+        use std::os::unix::io::FromRawFd;
         // SAFETY: `fd` 是上一行 `libc::open` 返回的有效 fd,且未通过其他
         // 途径转移所有权,直接包装为 `File` 取得独占所有权。
         let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
@@ -172,7 +172,11 @@ fn daemonize_process() -> Result<()> {
 /// - `running`: 运行标志 (置 false 以防主循环死灰复燃)
 /// - `_cfg`: 保留参数,占位
 /// - `sqlite_db`: 可选 db 句柄 (来自 [`sqlite_store::sqlite_init`])
-fn cleanup(running: &Arc<AtomicBool>, _cfg: &Config, sqlite_db: &Option<std::sync::Arc<sqlite_store::SqliteDb>>) {
+fn cleanup(
+    running: &Arc<AtomicBool>,
+    _cfg: &Config,
+    sqlite_db: &Option<std::sync::Arc<sqlite_store::SqliteDb>>,
+) {
     log_info!("Cleaning up");
 
     http_exporter::stop_http_exporter();
@@ -246,12 +250,16 @@ fn main() -> Result<()> {
         if let Err(e) = log::log_init_file(log_file) {
             log_warn!(
                 "Failed to open log file {}: {} (falling back to syslog-only)",
-                log_file, e
+                log_file,
+                e
             );
         } else {
             log_info!(
                 "Logging to file: {} (level={} dest={} format={})",
-                log_file, cfg.log_level, cfg.log_destination, cfg.log_format
+                log_file,
+                cfg.log_level,
+                cfg.log_destination,
+                cfg.log_format
             );
         }
     }
@@ -306,11 +314,13 @@ fn main() -> Result<()> {
                                     match ban::ban_ip_permanent(&entry.ip) {
                                         Ok(()) => log_info!(
                                             "Restored permanent ban for {} (reason: {})",
-                                            entry.ip, entry.reason
+                                            entry.ip,
+                                            entry.reason
                                         ),
                                         Err(e) => log_warn!(
                                             "Failed to restore permanent ban for {} to kernel: {}",
-                                            entry.ip, e
+                                            entry.ip,
+                                            e
                                         ),
                                     }
                                 }
@@ -319,7 +329,10 @@ fn main() -> Result<()> {
                                 log_info!("No permanent bans found in SQLite database");
                             }
                             Err(e) => {
-                                log_warn!("Failed to load permanent bans from SQLite database: {}", e);
+                                log_warn!(
+                                    "Failed to load permanent bans from SQLite database: {}",
+                                    e
+                                );
                             }
                         }
                     }
@@ -327,7 +340,8 @@ fn main() -> Result<()> {
                 Err(e) => {
                     log_warn!(
                         "Failed to initialize SQLite database for permanent bans at {}: {}",
-                        db_path, e
+                        db_path,
+                        e
                     );
                 }
             }
@@ -356,11 +370,16 @@ fn main() -> Result<()> {
     }
     log_info!(
         "Global defaults: max_retries={}, findtime={}, ban_time={}",
-        cfg.default_max_retries, cfg.default_findtime, cfg.default_ban_time
+        cfg.default_max_retries,
+        cfg.default_findtime,
+        cfg.default_ban_time
     );
 
     if let Err(e) = jail::init_log_patterns(&mut cfg) {
-        log_warn!("Some jail regex patterns failed to compile, continuing with remaining jails: {}", e);
+        log_warn!(
+            "Some jail regex patterns failed to compile, continuing with remaining jails: {}",
+            e
+        );
     } else {
         log_info!("All jail regex patterns compiled successfully");
     }

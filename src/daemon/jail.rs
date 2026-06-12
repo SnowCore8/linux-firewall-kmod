@@ -130,7 +130,11 @@ fn apply_service_defaults(
 
     log_info!(
         "Jail '{}': applying {} smart defaults (retries={}, findtime={}, ban={})",
-        name, service_type, jail.max_retries, jail.findtime, jail.ban_time
+        name,
+        service_type,
+        jail.max_retries,
+        jail.findtime,
+        jail.ban_time
     );
 }
 
@@ -142,7 +146,12 @@ fn apply_service_defaults(
 /// - `jail`: 目标 jail (可变引用)
 /// - `default_max_retries` / `default_findtime` / `default_ban_time`: 全局默认
 ///   (用户未匹配任何服务类型时使用)
-fn apply_smart_defaults_single(jail: &mut Jail, default_max_retries: u32, default_findtime: u32, default_ban_time: u32) {
+fn apply_smart_defaults_single(
+    jail: &mut Jail,
+    default_max_retries: u32,
+    default_findtime: u32,
+    default_ban_time: u32,
+) {
     let name = jail.name.clone();
 
     if is_service_name_match(&name, SSH_PATTERNS) {
@@ -169,7 +178,10 @@ fn apply_smart_defaults_single(jail: &mut Jail, default_max_retries: u32, defaul
         }
         log_info!(
             "Jail '{}': using global defaults (retries={}, findtime={}, ban={})",
-            name, jail.max_retries, jail.findtime, jail.ban_time
+            name,
+            jail.max_retries,
+            jail.findtime,
+            jail.ban_time
         );
     }
 }
@@ -184,7 +196,12 @@ pub fn apply_smart_defaults_to_all(target_cfg: &mut Config) {
     let default_findtime = target_cfg.default_findtime;
     let default_ban_time = target_cfg.default_ban_time;
     for jail in &mut target_cfg.jails {
-        apply_smart_defaults_single(jail, default_max_retries, default_findtime, default_ban_time);
+        apply_smart_defaults_single(
+            jail,
+            default_max_retries,
+            default_findtime,
+            default_ban_time,
+        );
     }
 }
 
@@ -314,7 +331,11 @@ fn validate_regex_safety(jail: &Jail, pattern: &str) -> Result<(), String> {
             ')' => {
                 if has_alternation_in_group {
                     let next = pattern.chars().nth(i + 1);
-                    if next == Some('+') || next == Some('*') || next == Some('{') || next == Some('?') {
+                    if next == Some('+')
+                        || next == Some('*')
+                        || next == Some('{')
+                        || next == Some('?')
+                    {
                         return Err(format!(
                             "Rejected unsafe regex for jail '{}': alternation inside quantified group at offset {}",
                             jail.name, i
@@ -378,27 +399,30 @@ pub fn compile_jail_regex(jail: &mut Jail) -> Result<(), String> {
                 compiled_count += 1;
                 log_info!(
                     "Compiled regex '{}' for jail '{}': {}",
-                    jail.regexes[i].name, jail.name, pattern
+                    jail.regexes[i].name,
+                    jail.name,
+                    pattern
                 );
             }
             Err(e) => {
-                log_err!(
-                    "Failed to compile regex for jail '{}': {}",
-                    jail.name, e
-                );
+                log_err!("Failed to compile regex for jail '{}': {}", jail.name, e);
             }
         }
     }
 
     log_info!(
         "Compiled {} regex pattern(s) for jail '{}'",
-        compiled_count, jail.name
+        compiled_count,
+        jail.name
     );
 
     if compiled_count > 0 {
         Ok(())
     } else {
-        Err(format!("No regex patterns compiled for jail '{}'", jail.name))
+        Err(format!(
+            "No regex patterns compiled for jail '{}'",
+            jail.name
+        ))
     }
 }
 
@@ -425,7 +449,11 @@ pub fn find_or_create_jail<'a>(cfg: &'a mut Config, name: &str) -> Option<&'a mu
     }
 
     if cfg.jails.len() >= MAX_JAILS {
-        log_warn!("Max jails reached ({}), cannot create jail '{}'", MAX_JAILS, name);
+        log_warn!(
+            "Max jails reached ({}), cannot create jail '{}'",
+            MAX_JAILS,
+            name
+        );
         return None;
     }
 
@@ -492,11 +520,15 @@ pub fn clone_jail(dst: &mut Jail, src: &Jail) -> Result<(), String> {
 
     dst.log_files.clone_from(&src.log_files);
 
-    dst.regexes = src.regexes.iter().map(|r| RegexInfo {
-        name: r.name.clone(),
-        pattern: r.pattern.clone(),
-        compiled: None,
-    }).collect();
+    dst.regexes = src
+        .regexes
+        .iter()
+        .map(|r| RegexInfo {
+            name: r.name.clone(),
+            pattern: r.pattern.clone(),
+            compiled: None,
+        })
+        .collect();
 
     dst.failed_hash.write().clear();
     dst.partial_line_buffer.write().clear();
@@ -514,7 +546,7 @@ pub fn clone_jail(dst: &mut Jail, src: &Jail) -> Result<(), String> {
 ///
 /// # Returns
 /// 与 `src` 等值的全新 `Config`(无运行时态)
-#[must_use] 
+#[must_use]
 pub fn config_clone(src: &Config) -> Config {
     // 一次性初始化,避免 `Config::default()` + 17 次字段赋值的低效模式
     let mut dst = Config {
@@ -566,7 +598,8 @@ pub fn config_validate(cfg: &Config) -> Result<(), String> {
     if cfg.jails.is_empty() || cfg.jails.len() > MAX_JAILS {
         return Err(format!(
             "Config validation failed: invalid jail_count={} (must be 1..{})",
-            cfg.jails.len(), MAX_JAILS
+            cfg.jails.len(),
+            MAX_JAILS
         ));
     }
     if cfg.interval == 0 || cfg.interval > 60 {
@@ -676,12 +709,18 @@ pub fn init_log_patterns(cfg: &mut Config) -> Result<(), String> {
 
     for jail in &mut cfg.jails {
         if !jail.enabled {
-            log_debug!("Skipping disabled jail '{}' for regex compilation", jail.name);
+            log_debug!(
+                "Skipping disabled jail '{}' for regex compilation",
+                jail.name
+            );
             continue;
         }
 
         if jail.regexes.is_empty() {
-            log_info!("Jail '{}' will use built-in default regex pattern", jail.name);
+            log_info!(
+                "Jail '{}' will use built-in default regex pattern",
+                jail.name
+            );
         } else if let Err(e) = compile_jail_regex(jail) {
             log_warn!("Failed to compile regex for jail '{}': {}", jail.name, e);
             ret = Err(e);
@@ -745,7 +784,11 @@ mod tests {
     #[test]
     fn apply_smart_defaults_ssh() {
         let mut cfg = Config::default();
-        let (mr, ft, bt) = (cfg.default_max_retries, cfg.default_findtime, cfg.default_ban_time);
+        let (mr, ft, bt) = (
+            cfg.default_max_retries,
+            cfg.default_findtime,
+            cfg.default_ban_time,
+        );
         let jail = find_or_create_jail(&mut cfg, "sshd").unwrap();
         apply_smart_defaults_single(jail, mr, ft, bt);
         assert_eq!(jail.max_retries, 5);
@@ -756,7 +799,11 @@ mod tests {
     #[test]
     fn apply_smart_defaults_web() {
         let mut cfg = Config::default();
-        let (mr, ft, bt) = (cfg.default_max_retries, cfg.default_findtime, cfg.default_ban_time);
+        let (mr, ft, bt) = (
+            cfg.default_max_retries,
+            cfg.default_findtime,
+            cfg.default_ban_time,
+        );
         let jail = find_or_create_jail(&mut cfg, "nginx").unwrap();
         apply_smart_defaults_single(jail, mr, ft, bt);
         assert_eq!(jail.max_retries, 10);
@@ -770,7 +817,11 @@ mod tests {
         cfg.default_max_retries = 7;
         cfg.default_findtime = 120;
         cfg.default_ban_time = 300;
-        let (mr, ft, bt) = (cfg.default_max_retries, cfg.default_findtime, cfg.default_ban_time);
+        let (mr, ft, bt) = (
+            cfg.default_max_retries,
+            cfg.default_findtime,
+            cfg.default_ban_time,
+        );
         let jail = find_or_create_jail(&mut cfg, "unknown-service").unwrap();
         apply_smart_defaults_single(jail, mr, ft, bt);
         assert_eq!(jail.max_retries, 7);
@@ -844,6 +895,8 @@ mod tests {
     #[test]
     fn validate_regex_safety_accepts_valid() {
         let jail = Jail::new("test".to_string());
-        assert!(validate_regex_safety(&jail, r"Failed password for .* from \d+\.\d+\.\d+\.\d+").is_ok());
+        assert!(
+            validate_regex_safety(&jail, r"Failed password for .* from \d+\.\d+\.\d+\.\d+").is_ok()
+        );
     }
 }

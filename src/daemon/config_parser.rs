@@ -34,11 +34,11 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
-use crate::types::{Config, Jail, RegexInfo, MAX_JAILS};
 use crate::jail;
+use crate::types::{Config, Jail, RegexInfo, MAX_JAILS};
 use crate::{log_err, log_info, log_warn};
 
 // ============================================================================
@@ -136,16 +136,32 @@ pub fn validate_and_normalize_path(input_path: &str) -> Result<String> {
 
 /// `defaults:` 段允许的 key 列表
 const VALID_DEFAULTS_KEYS: &[&str] = &[
-    "max_retries", "findtime", "ban_time", "interval", "metrics_port",
-    "metrics_bind_address", "metrics_username", "metrics_password",
-    "permanent_db_path", "permanent_ban_enabled", "log_file", "log_level",
-    "log_destination", "log_format",
+    "max_retries",
+    "findtime",
+    "ban_time",
+    "interval",
+    "metrics_port",
+    "metrics_bind_address",
+    "metrics_username",
+    "metrics_password",
+    "permanent_db_path",
+    "permanent_ban_enabled",
+    "log_file",
+    "log_level",
+    "log_destination",
+    "log_format",
 ];
 
 /// `jails[name]:` 段允许的 key 列表
 const VALID_JAIL_KEYS: &[&str] = &[
-    "enabled", "log_files", "max_retries", "findtime", "ban_time",
-    "regex", "regex_name", "regexes",
+    "enabled",
+    "log_files",
+    "max_retries",
+    "findtime",
+    "ban_time",
+    "regex",
+    "regex_name",
+    "regexes",
 ];
 
 /// 在 strict 模式下预先校验 YAML 中所有 key 都在白名单内。
@@ -157,8 +173,8 @@ const VALID_JAIL_KEYS: &[&str] = &[
 /// 任何未知 key 在 `defaults` / `jails[*]` 段命中,返回 `Err` 包含 key 名和
 /// 合法 key 列表
 fn validate_yaml_keys(content: &str) -> Result<()> {
-    let value: serde_yaml::Value = serde_yaml::from_str(content)
-        .context("Failed to parse YAML for key validation")?;
+    let value: serde_yaml::Value =
+        serde_yaml::from_str(content).context("Failed to parse YAML for key validation")?;
 
     if let Some(defaults) = value.get("defaults") {
         if let Some(map) = defaults.as_mapping() {
@@ -320,7 +336,11 @@ pub fn parse_config_file(config_path: &str, cfg: &mut Config, strict_mode: bool)
     if let Some(jails) = &yaml_config.jails {
         for (name, yaml_jail) in jails {
             if cfg.jails.len() >= MAX_JAILS {
-                log_warn!("Max jails reached ({}), skipping jail '{}'", MAX_JAILS, name);
+                log_warn!(
+                    "Max jails reached ({}), skipping jail '{}'",
+                    MAX_JAILS,
+                    name
+                );
                 continue;
             }
 
@@ -414,7 +434,11 @@ pub fn load_config_directory(config_dir: &str, cfg: &mut Config, strict_mode: bo
         }
     }
 
-    log_info!("Loaded {} config file(s) from {}", yaml_files.len(), config_dir);
+    log_info!(
+        "Loaded {} config file(s) from {}",
+        yaml_files.len(),
+        config_dir
+    );
     Ok(())
 }
 
@@ -508,7 +532,9 @@ pub fn parse_config_args(args: &[String]) -> Result<Option<(String, bool, bool)>
     }
 
     Ok(Some((
-        config_file.or(config_dir).unwrap_or_else(|| "/etc/firewall".to_string()),
+        config_file
+            .or(config_dir)
+            .unwrap_or_else(|| "/etc/firewall".to_string()),
         daemon,
         strict_mode,
     )))
@@ -593,7 +619,8 @@ mod tests {
 
     fn write_temp_yaml(content: &str) -> std::path::PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let tmpdir = std::env::temp_dir().join(format!("fw_config_test_{}_{}", std::process::id(), n));
+        let tmpdir =
+            std::env::temp_dir().join(format!("fw_config_test_{}_{}", std::process::id(), n));
         std::fs::create_dir_all(&tmpdir).unwrap();
         let path = tmpdir.join("test.yaml");
         let mut f = std::fs::File::create(&path).unwrap();
@@ -762,7 +789,11 @@ jails:
 
     #[test]
     fn parse_args_config_file() {
-        let args = vec!["firewall-daemon".to_string(), "-c".to_string(), "/etc/firewall/sshd.yaml".to_string()];
+        let args = vec![
+            "firewall-daemon".to_string(),
+            "-c".to_string(),
+            "/etc/firewall/sshd.yaml".to_string(),
+        ];
         let result = parse_config_args(&args).unwrap();
         let (path, daemon, strict) = result.unwrap();
         assert_eq!(path, "/etc/firewall/sshd.yaml");
@@ -860,7 +891,11 @@ jails:
 
         assert_eq!(cfg.jails.len(), 1);
         assert_eq!(cfg.jails[0].regexes.len(), 2);
-        let names: Vec<&str> = cfg.jails[0].regexes.iter().map(|r| r.name.as_str()).collect();
+        let names: Vec<&str> = cfg.jails[0]
+            .regexes
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect();
         assert!(names.contains(&"invalid_user"));
         assert!(names.contains(&"root_login"));
         for regex in &cfg.jails[0].regexes {

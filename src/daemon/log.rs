@@ -327,7 +327,11 @@ fn emit_syslog(prio: libc::c_int, msg: &str) {
     // 指向有效 UTF-8 字节,`libc::syslog` 内部把它当 C 字符串读(读到 NUL 终止,
     // 我们保证 `escaped` 不含 NUL 字节因为来源是 `String`,不会在中间截断)
     unsafe {
-        libc::syslog(prio, b"%s\0".as_ptr().cast::<libc::c_char>(), escaped.as_ptr());
+        libc::syslog(
+            prio,
+            b"%s\0".as_ptr().cast::<libc::c_char>(),
+            escaped.as_ptr(),
+        );
     }
 }
 
@@ -351,7 +355,10 @@ fn emit_file(level: u8, prio: libc::c_int, full_msg: &str) {
         // msg 字段做最少 JSON 转义: " → \" , \ → \\
         let _ = write!(bw, "{{\"ts\":\"");
         let _ = bw.write_all(ts_json.as_bytes());
-        let _ = write!(bw, "\",\"prio\":{prio},\"component\":\"{component}\",\"level\":\"{lvl_str}\",\"msg\":\"");
+        let _ = write!(
+            bw,
+            "\",\"prio\":{prio},\"component\":\"{component}\",\"level\":\"{lvl_str}\",\"msg\":\""
+        );
         for c in full_msg.chars() {
             match c {
                 '"' => {
@@ -520,7 +527,11 @@ pub fn open_syslog() {
     // 复制 identifier,不会保留指针(详见 man 3 openlog)。flags 和
     // facility 参数是合法 libc::c_int 值。
     unsafe {
-        libc::openlog(b"firewall\0".as_ptr().cast::<libc::c_char>(), LOG_PID | LOG_CONS, LOG_DAEMON);
+        libc::openlog(
+            b"firewall\0".as_ptr().cast::<libc::c_char>(),
+            LOG_PID | LOG_CONS,
+            LOG_DAEMON,
+        );
     }
 }
 
@@ -599,7 +610,12 @@ mod tests {
 
     #[test]
     fn level_str_prio_match() {
-        for level in [LOG_LEVEL_ERR, LOG_LEVEL_WARN, LOG_LEVEL_INFO, LOG_LEVEL_DEBUG] {
+        for level in [
+            LOG_LEVEL_ERR,
+            LOG_LEVEL_WARN,
+            LOG_LEVEL_INFO,
+            LOG_LEVEL_DEBUG,
+        ] {
             let s = level_str(level);
             let p = level_prio(level);
             assert!(!s.is_empty());
@@ -615,7 +631,8 @@ mod tests {
 
     #[test]
     fn log_init_close_file_roundtrip() {
-        let tmpdir = std::env::temp_dir().join(format!("fw_test_log_{}_roundtrip", std::process::id()));
+        let tmpdir =
+            std::env::temp_dir().join(format!("fw_test_log_{}_roundtrip", std::process::id()));
         std::fs::create_dir_all(&tmpdir).unwrap();
         let path = tmpdir.join("test.log");
         let path_str = path.to_str().unwrap();
@@ -647,7 +664,8 @@ mod tests {
 
     #[test]
     fn json_format_escapes_quotes_and_backslashes() {
-        let tmpdir = std::env::temp_dir().join(format!("fw_test_log_json_{}_escape", std::process::id()));
+        let tmpdir =
+            std::env::temp_dir().join(format!("fw_test_log_json_{}_escape", std::process::id()));
         std::fs::create_dir_all(&tmpdir).unwrap();
         let path = tmpdir.join("test_json.log");
         let path_str = path.to_str().unwrap();
@@ -663,7 +681,10 @@ mod tests {
         log_set_format(LogFormat::Json);
         log_set_level(LOG_LEVEL_DEBUG);
         set_log_component("test");
-        emit(LOG_LEVEL_INFO, format_args!("msg with \"quote\" and \\backslash"));
+        emit(
+            LOG_LEVEL_INFO,
+            format_args!("msg with \"quote\" and \\backslash"),
+        );
         log_close_file();
 
         let content = std::fs::read_to_string(path_str).unwrap();
