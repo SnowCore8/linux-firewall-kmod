@@ -155,6 +155,417 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
 }
 
 // ============================================================================
+// 行处理
+// ============================================================================
+
+/// 处理单行日志:长度校验 + 解析 + 失败计数。空行直接跳过;>8KB 跳过并
+/// 累加 `lines_skipped`。
+///
+/// # Arguments
+/// - `jail`: 关联 jail (正则集)
+/// - `line`: 不含 `\n` 的单行
+/// - `log_path`: 源文件路径 (日志用)
+/// - `max_retries` / `findtime`: 失败阈值参数 (透传给 `failed_tracker`)
+pub fn process_single_line(
+    jail: &Jail,
+    line: &str,
+    _log_path: &str,
+    max_retries: u32,
+    findtime: u32,
+) {
+    if line.is_empty() {
+        return;
+    }
+
+    let len = line.len();
+    if len >= 8192 {
+
+        DAEMON_STATS.lines_skipped.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+
+    DAEMON_STATS.lines_parsed.fetch_add(1, Ordering::Relaxed);
+
+    if let Some(ip) = log_parser::extract_and_validate_ip(jail, line) {
+        failed_tracker::handle_failed_attempt_for_jail(jail, &ip, max_retries, findtime);
+    }
+}
+
+/// 按 `\n` 分割 `data` 缓冲,逐行调 [`process_single_line`],返回 `consumed`
+/// (已处理字节数) 给调用方用于 partial 行缓冲。
+///
+/// # Arguments
+/// - `jail`: 关联 jail
+/// - `data`: 字节缓冲
+/// - `log_path`: 源文件路径
+/// - `consumed`: 出参,已消费的字节数 (= 完整行总长)
+/// - `max_retries` / `findtime`: 失败阈值
+pub fn process_lines_in_buffer(
+    jail: &Jail,
+    data: &[u8],
+    log_path: &str,
+    consumed: &mut usize,
+    max_retries: u32,
+    findtime: u32,
+) {
+    let mut line_start = 0;
+    let len = data.len();
+
+    *consumed = 0;
+
+    while line_start < len {
+        if let Some(pos) = data[line_start..].iter().position(|&b| b == b'\n') {
+            let line_end = line_start + pos;
+            let line_len = line_end - line_start;
+
+            if line_len >= 8192 {
+
+            } else {
+                let line = std::str::from_utf8(&data[line_start..line_end]).unwrap_or("");
+                process_single_line(jail, line, log_path, max_retries, findtime);
+            }
+
+            line_start = line_end + 1;
+        } else {
+            break;
+        }
+    }
+
+    *consumed = line_start;
+}
+
+/// 追加 `data` 到 `jail.partial_line_buffer`。接近 8KB 上限前主动 flush 旧数据。
+///
+/// # Arguments
+/// - `jail`: 关联 jail
+/// - `data`: 待追加的字节片段 (不完整行尾)
+/// - `log_path`: 源文件路径
+/// - `max_retries` / `findtime`: 失败阈值
+pub fn store_partial_line(
+    jail: &Jail,
+    data: &[u8],
+    log_path: &str,
+    max_retries: u32,
+    findtime: u32,
+) {
+    if data.is_empty() {
+        return;
+    }
+
+    if data.len() >= 8192 {
+
+        jail.partial_line_buffer.write().clear();
+        return;
+    }
+
+    let mut buf = jail.partial_line_buffer.write();
+    let current_len = buf.len();
+
+    if current_len + data.len() >= 8192 {
+        // 缓冲区将溢出: 先处理累积数据, 再写入新片段
+        if current_len > 0 {
+            let temp = buf.clone();
+            drop(buf);
+            if let Ok(line) = std::str::from_utf8(&temp) {
+                process_single_line(jail, line, log_path, max_retries, findtime);
+            }
+            buf = jail.partial_line_buffer.write();
+        }
+
+        buf.clear();
+        buf.extend_from_slice(data);
+    } else {
+        buf.extend_from_slice(data);
+    }
+}
+
+/// 强制 flush partial 行缓冲 (将残余不完整行作为完整行处理)。
+///
+/// 文件关闭 / truncate 之前调用,避免丢失最后一个不完整行。
+///
+/// # Arguments
+/// - `jail`: 关联 jail
+/// - `log_path`: 源文件路径
+/// - `max_retries` / `findtime`: 失败阈值
+pub fn flush_partial_line(jail: &Jail, log_path: &str, max_retries: u32, findtime: u32) {
+    let mut buf = jail.partial_line_buffer.write();
+    if buf.is_empty() {
+        return;
+    }
+
+    let _old_len = buf.len();
+    let temp = buf.clone();
+    buf.clear();
+    drop(buf);
+
+
+    if let Ok(line) = std::str::from_utf8(&temp) {
+        process_single_line(jail, line, log_path, max_retries, findtime);
+    }
+}
+
+// ============================================================================
+// 处理新行
+// ============================================================================
+
+/// 处理 `FILE_STATES[idx]` 文件从 `offset` 起的新增内容。
+///
+/// 流程:打开 (`O_NOFOLLOW`) → 检测轮转 (inode 变化 / size 缩小) → seek 到
+/// `offset` → 批量 read → 行分割 + 失败计数 → 更新 `offset`。
+///
+/// # Arguments
+/// - `idx`: `FILE_STATES` 索引
+/// - `cfg`: 全局配置
+///
+/// # Returns
+/// `Ok(())` 即便内部错误 (e.g. `O_NOFOLLOW` 撞到 symlink),会标记 `symlink_detected`
+/// 但不 bail
+///
+/// # Errors
+/// - `idx` 越界 (即 `FILE_STATES.len() <= idx`)
+/// - `jail_idx` 越界
+pub fn process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
+    // 256KB 批量读: 平衡系统调用次数与内存占用
+    const BATCH_READ_MAX: usize = 256 * 1024;
+
+    let file_states = FILE_STATES.read();
+    let state = file_states
+        .get(idx)
+        .ok_or_else(|| anyhow::anyhow!("Invalid index {idx}"))?;
+
+    if state.symlink_detected {
+        return Ok(());
+    }
+
+    let log_path = state.path.clone();
+    let jail_idx = state.jail_idx;
+    drop(file_states);
+
+    if jail_idx >= cfg.jails.len() {
+
+        return Ok(());
+    }
+
+    let jail = &cfg.jails[jail_idx];
+    let max_retries = jail.max_retries;
+    let findtime = jail.findtime;
+
+    let mut local_partial_buf = jail.partial_line_buffer.read().clone();
+    jail.partial_line_buffer.write().clear();
+    // 复制完后 NLL 立即释放锁, 后续 file.open() 等 IO 操作可与其他 reader 并发
+
+    // O_NOFOLLOW: 启动后文件若被替换为符号链接, 拒绝 follow
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&log_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            // ELOOP = O_NOFOLLOW 撞到符号链接, 标记后跳过避免重复报错
+            if e.raw_os_error() == Some(libc::ELOOP) {
+                let mut file_states = FILE_STATES.write();
+                if let Some(state) = file_states.get_mut(idx) {
+                    state.symlink_detected = true;
+                }
+
+            } else {
+
+            }
+            return Ok(());
+        }
+    };
+
+    // 轮转检测: inode 变化 或 文件大小缩小 (truncate/rotate)
+    if let Ok(metadata) = file.metadata() {
+        let current_inode = metadata.ino();
+        let current_size = metadata.len();
+
+        let mut file_states = FILE_STATES.write();
+        if let Some(state) = file_states.get_mut(idx) {
+            if state.inode != 0 && current_inode != state.inode {
+
+                state.inode = current_inode;
+                state.offset = 0;
+                local_partial_buf.clear();
+            } else if current_size < state.offset {
+
+                state.inode = current_inode;
+                state.offset = 0;
+                local_partial_buf.clear();
+            }
+        }
+    }
+
+    let current_offset = {
+        let file_states = FILE_STATES.read();
+        file_states.get(idx).map_or(0, |s| s.offset)
+    };
+
+    if current_offset > 0 {
+        use std::io::Seek;
+        file.seek(std::io::SeekFrom::Start(current_offset))
+            .with_context(|| format!("Failed to seek in {log_path}"))?;
+    }
+
+    // 256KB 批量读: 平衡系统调用次数与内存占用
+    let mut batch_buf = vec![0u8; BATCH_READ_MAX];
+    let mut batch_total = 0;
+
+    loop {
+        match file.read(&mut batch_buf[batch_total..]) {
+            Ok(0) => break,
+            Ok(n) => {
+                batch_total += n;
+                if batch_total >= BATCH_READ_MAX - 1 {
+                    break;
+                }
+            }
+            Err(_e) => {
+
+                return Ok(());
+            }
+        }
+    }
+
+    if batch_total > 0 {
+        let mut process_buf = Vec::new();
+        if local_partial_buf.is_empty() {
+            process_buf.extend_from_slice(&batch_buf[..batch_total]);
+        } else {
+            process_buf.reserve(local_partial_buf.len() + batch_total);
+            process_buf.extend_from_slice(&local_partial_buf);
+            process_buf.extend_from_slice(&batch_buf[..batch_total]);
+            local_partial_buf.clear();
+        }
+
+        let jail = &cfg.jails[jail_idx];
+        let mut consumed = 0;
+        process_lines_in_buffer(
+            jail,
+            &process_buf,
+            &log_path,
+            &mut consumed,
+            max_retries,
+            findtime,
+        );
+
+        if consumed < process_buf.len() {
+            store_partial_line(
+                jail,
+                &process_buf[consumed..],
+                &log_path,
+                max_retries,
+                findtime,
+            );
+        }
+
+        let mut file_states = FILE_STATES.write();
+        if let Some(state) = file_states.get_mut(idx) {
+            state.offset = current_offset + batch_total as u64;
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// 日志轮转处理
+// ============================================================================
+
+/// 处理日志轮转:inotify DELETE / `MOVED_FROM` 事件触发,先 flush partial 行,
+/// 再更新 inode + offset,最后重新注册 inotify watch。
+///
+/// # Arguments
+/// - `idx`: `FILE_STATES` 索引
+/// - `cfg`: 全局配置
+pub fn handle_log_rotation(idx: usize, cfg: &Config) {
+    let file_states = FILE_STATES.read();
+    let Some(state) = file_states.get(idx) else {
+        return;
+    };
+
+    let path = state.path.clone();
+    let wd = state.wd.clone();
+    let jail_idx = state.jail_idx;
+    drop(file_states);
+
+    if jail_idx >= cfg.jails.len() {
+        return;
+    }
+
+    let jail = &cfg.jails[jail_idx];
+    let max_retries = jail.max_retries;
+    let findtime = jail.findtime;
+
+    let mut buf = jail.partial_line_buffer.write();
+    if buf.is_empty() {
+        drop(buf);
+    } else {
+        let temp = buf.clone();
+        buf.clear();
+        drop(buf);
+
+        if let Ok(line) = std::str::from_utf8(&temp) {
+            process_single_line(jail, line, &path, max_retries, findtime);
+        }
+    }
+
+    DAEMON_STATS.log_rotations.fetch_add(1, Ordering::Relaxed);
+
+    let path_obj = Path::new(&path);
+    if !path_obj.exists() {
+
+        let mut file_states = FILE_STATES.write();
+        if let Some(state) = file_states.get_mut(idx) {
+            state.offset = 0;
+        }
+        return;
+    }
+
+    if let Ok(metadata) = path_obj.metadata() {
+        let current_inode = metadata.ino();
+        let mut file_states = FILE_STATES.write();
+        if let Some(state) = file_states.get_mut(idx) {
+            if current_inode != state.inode {
+
+                state.inode = current_inode;
+                state.offset = 0;
+
+                if let Some(inotify) = INOTIFY_FD.write().as_mut() {
+                    if let Some(old_wd) = wd {
+                        if let Err(e) = inotify.watches().remove(old_wd) {
+                            crate::logger::debug!(
+                                crate::logger::get(),
+                                "移除 inotify watch 失败";
+                                "error" => %e
+                            );
+                        }
+                    }
+
+                    let mask = WatchMask::MODIFY
+                        | WatchMask::MOVED_FROM
+                        | WatchMask::MOVED_TO
+                        | WatchMask::DELETE
+                        | WatchMask::CREATE;
+
+                    match inotify.watches().add(&path, mask) {
+                        Ok(new_wd) => {
+                            state.wd = Some(new_wd.clone());
+
+                        }
+                        Err(_e) => {
+
+                            state.wd = None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
 // 主监控循环
 // ============================================================================
 
@@ -208,6 +619,13 @@ pub fn monitor_loop(
                                     || event.mask.contains(inotify::EventMask::MOVED_TO)
                                 {
                                     let _ = read_and_process_new_lines(idx, cfg);
+                                    if let Err(e) = process_new_lines(idx, cfg) {
+                                        crate::logger::debug!(
+                                            crate::logger::get(),
+                                            "处理日志行失败";
+                                            "error" => %e
+                                        );
+                                    }
                                 }
                                 if event.mask.contains(inotify::EventMask::DELETE)
                                     || event.mask.contains(inotify::EventMask::MOVED_FROM)
@@ -271,6 +689,138 @@ pub fn monitor_loop(
     }
 
     Ok(())
+}
+
+/// SIGHUP 热重载 (双缓冲):任何步骤失败旧配置不受影响。
+///
+/// 步骤: clone 旧 → 解析到新 → 应用默认 → 验证 → 迁移 `failed_hash` →
+/// 编译正则 → 原子替换 → 重建 inotify。
+///
+/// # Arguments
+/// - `cfg`: 旧配置 (会被新配置原子替换)
+///
+/// # Returns
+/// 成功时 `Ok(())`,`DAEMON_STATS.config_reloads` +1
+///
+/// # Errors
+/// 配置源缺失 / 解析失败 / 验证失败 / inotify 重建失败
+pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
+    use crate::config_parser;
+    use crate::jail;
+
+    let config_path = if let Some(ref f) = cfg.config_file {
+        f.clone()
+    } else if let Some(ref d) = cfg.config_dir {
+        d.clone()
+    } else {
+        return Err(anyhow::anyhow!(
+            "No config file or directory specified for reload"
+        ));
+    };
+
+    let old_cfg = jail::config_clone(cfg);
+
+    // 保留 config_file / config_dir 供 SIGHUP 后继 reload 复用
+    let mut new_cfg = crate::types::Config {
+        config_file: old_cfg.config_file.clone(),
+        config_dir: old_cfg.config_dir.clone(),
+        ..crate::types::Config::default()
+    };
+
+    let path = std::path::Path::new(&config_path);
+    if path.is_file() {
+        config_parser::parse_config_file(&config_path, &mut new_cfg, cfg.strict_mode)?;
+    } else if path.is_dir() {
+        config_parser::load_config_directory(&config_path, &mut new_cfg, cfg.strict_mode)?;
+    } else {
+        return Err(anyhow::anyhow!("Config path does not exist: {config_path}"));
+    }
+
+    jail::apply_smart_defaults_to_all(&mut new_cfg);
+    jail::config_validate(&new_cfg).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    for old_jail in &old_cfg.jails {
+        for new_jail in &mut new_cfg.jails {
+            if old_jail.name == new_jail.name {
+                let mut old_hash = old_jail.failed_hash.write();
+                let mut new_hash = new_jail.failed_hash.write();
+                for (ip, entry) in old_hash.drain() {
+                    new_hash.insert(ip, entry);
+                }
+
+                break;
+            }
+        }
+    }
+
+    if let Err(e) = jail::init_log_patterns(&mut new_cfg) {
+        crate::logger::warn!(
+            crate::logger::get(),
+            "重载时初始化日志模式失败";
+            "error" => %e
+        );
+    }
+
+    *cfg = new_cfg;
+    DAEMON_STATS.config_reloads.fetch_add(1, Ordering::Relaxed);
+    setup_inotify(cfg)?;
+
+
+    Ok(())
+}
+
+/// 周期维护: flush 所有 jail 的 partial 行缓冲。`monitor_loop` 超时 60s 触发。
+///
+/// 防止 partial 缓冲无限增长(异常日志最后一行无 `\n`)。
+///
+/// # Arguments
+/// - `cfg`: 全局配置
+pub fn cleanup_partial_line_buffer(cfg: &Config) {
+    for jail in &cfg.jails {
+        let mut buf = jail.partial_line_buffer.write();
+        if !buf.is_empty() {
+
+            buf.clear();
+        }
+    }
+}
+
+fn check_for_new_log_files(cfg: &Config) {
+    let file_states = FILE_STATES.read();
+    let mut needs_resetup = false;
+
+    for jail in &cfg.jails {
+        if !jail.enabled {
+            continue;
+        }
+        for log_file in &jail.log_files {
+            if Path::new(log_file).exists() {
+                let already_watched = file_states
+                    .iter()
+                    .any(|s| s.wd.is_some() && s.path == *log_file);
+                if !already_watched {
+
+                    needs_resetup = true;
+                }
+            }
+        }
+    }
+
+    if needs_resetup {
+        drop(file_states);
+        if let Err(e) = setup_inotify(cfg) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "重新设置 inotify 失败";
+                "error" => %e
+            );
+        } else {
+            crate::logger::info!(
+                crate::logger::get(),
+                "重新设置 inotify 成功"
+            );
+        }
+    }
 }
 
 // ============================================================================

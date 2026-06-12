@@ -200,8 +200,15 @@ fn cleanup(
     sqlite::clear_global_db();
     if let Some(db) = sqlite_db {
         sqlite::sqlite_close(db);
+        sqlite_store::sqlite_close(db);
     }
-    let _ = fs::remove_file("/run/firewall-daemon.pid");
+    if let Err(e) = fs::remove_file("/run/firewall-daemon.pid") {
+        crate::logger::debug!(
+            crate::logger::get(),
+            "删除 PID 文件失败";
+            "error" => %e
+        );
+    }
 }
 
 /// `firewall-daemon` 主入口。返回值:
