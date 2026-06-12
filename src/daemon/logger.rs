@@ -3,7 +3,14 @@
 //! # 设计
 //!
 //! 使用 `slog-scope` 设置全局 logger，所有模块可直接使用 `info!`, `warn!`, `error!`, `debug!` 宏。
-//! 输出目的地为 stderr（异步模式），格式包含时间戳、日志级别、模块名和消息。
+//! 输出格式为 JSON Lines（每行一条 JSON 对象），适合日志收集器（filebeat、Vector 等）处理。
+//!
+//! # JSON Lines 格式
+//!
+//! ```json
+//! {"timestamp":"2024-01-13T02:15:30.123Z","level":"INFO","component":"main","message":"启动成功","version":"2.2.0"}
+//! {"timestamp":"2024-01-13T02:15:31.456Z","level":"INFO","component":"ban","message":"IP 封禁成功","ip":"192.168.1.100","jail":"sshd"}
+//! ```
 //!
 //! # 使用示例
 //!
@@ -21,7 +28,7 @@
 
 use slog::{self, Drain, Logger};
 use slog_async::Async;
-use slog_term::{FullFormat, TermDecorator};
+use slog_json::Json;
 use std::sync::OnceLock;
 
 /// 全局 logger 实例
@@ -29,20 +36,23 @@ static GLOBAL_LOGGER: OnceLock<Logger> = OnceLock::new();
 
 /// 初始化全局 logger
 ///
-/// 创建异步终端输出的 slog logger，并设置为全局 logger。
+/// 创建 JSON Lines 格式的 slog logger，输出到 stderr（异步模式）。
 /// 应在程序启动时调用一次。
 pub fn init_logger() -> Logger {
-    // 创建终端装饰器
-    let decorator = TermDecorator::new().stderr().build();
-
-    // 创建完整格式化的 drain（包含时间戳、级别、模块等）
-    let drain = FullFormat::new(decorator).build().fuse();
+    // 创建 JSON Lines 格式的 drain
+    // 输出到 stderr，适合 systemd/journald 捕获
+    let drain = Json::default(std::io::stderr()).fuse();
 
     // 包装为异步 drain
     let drain = Async::new(drain).build().fuse();
 
-    // 创建根 logger
-    let logger = Logger::root(drain, slog::o!("version" => env!("CARGO_PKG_VERSION")));
+    // 创建根 logger，添加全局字段
+    let logger = Logger::root(
+        drain,
+        slog::o!(
+            "version" => env!("CARGO_PKG_VERSION")
+        ),
+    );
 
     // 设置为全局 logger
     let _guard = slog_scope::set_global_logger(logger.clone());

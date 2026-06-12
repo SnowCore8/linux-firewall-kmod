@@ -30,7 +30,7 @@ path = "src/daemon/lib.rs"
 # chrono: 替换 localtime_r/strftime, 时间格式化
 # anyhow: 统一错误处理
 # base64: HTTP Basic Auth 解码
-# slog: 结构化日志门面 + 异步终端输出 (替换自研 log.rs)
+# slog: 结构化日志门面 + JSON Lines 输出 (替换自研 log.rs)
 # ============================================================================
 [dependencies]
 libc = "0.2"
@@ -50,6 +50,7 @@ slog = "2.7"
 slog-term = "2.9"
 slog-async = "2.8"
 slog-scope = "4.4"
+slog-json = "2.6"
 
 [profile.release]
 # 生产 release: 4MB (LTO + strip + 关 debug)
