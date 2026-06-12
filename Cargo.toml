@@ -27,9 +27,8 @@ path = "src/daemon/lib.rs"
 # signal-hook: 替换 signal() + sa_handler 自定义实现
 # inotify: 替换 inotify_init1/inotify_add_watch 系统调用包装
 # parking_lot: 替换 pthread_rwlock, 性能更好且 API 简单
-# once_cell: 替换 C 全局变量 + init 函数模式
 # chrono: 替换 localtime_r/strftime, 时间格式化
-# anyhow/thiserror: 统一错误处理
+# anyhow: 统一错误处理
 # base64: HTTP Basic Auth 解码
 # ============================================================================
 [dependencies]
@@ -45,7 +44,6 @@ inotify = "0.10"
 parking_lot = "0.12"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 anyhow = "1"
-thiserror = "1"
 base64 = "0.22"
 
 [profile.release]

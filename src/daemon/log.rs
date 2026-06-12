@@ -323,9 +323,13 @@ fn log_fmt_prefix(component: &str, is_daemon: bool) -> String {
 fn emit_syslog(prio: libc::c_int, msg: &str) {
     // syslog(3) 期望 printf 格式, % 需要转义避免格式字符串攻击
     let escaped = msg.replace('%', "%%");
-    // SAFETY: `b"%s\0"` 是合法的 C 字符串字面量(以 NUL 结尾),`escaped.as_ptr()`
-    // 指向有效 UTF-8 字节,`libc::syslog` 内部把它当 C 字符串读(读到 NUL 终止,
-    // 我们保证 `escaped` 不含 NUL 字节因为来源是 `String`,不会在中间截断)
+    // SAFETY:
+    // - `b"%s\0"` 是合法的 NUL 结尾 C 字符串字面量
+    // - `escaped.as_ptr()` 指向 `String` 的内部字节(连续内存)
+    // - `libc::syslog` 把第二个参数当 C 字符串读(读到 NUL 终止)
+    // - 注: Rust 的 `String` 可以含 NUL 字节。如果 `msg` 含 NUL,syslog 会在第一个
+    //   NUL 处截断。生产中日志格式串几乎不含 NUL(无人会故意 log NUL),此风险可接受。
+    //   真要严格防御应在 `emit` 入口 reject 含 NUL 的 `args`,但当前未做。
     unsafe {
         libc::syslog(
             prio,

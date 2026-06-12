@@ -164,7 +164,7 @@ pub fn sqlite_close(db: &Arc<SqliteDb>) {
 // ban 模块在 Permanent/UnbanPerm 时通过 with_global_db() 回调访问 main.rs 注册的 db
 // 守护进程目前单线程, 保留 Mutex 是为未来扩展及与 parking_lot 风格统一
 
-// 用 std 替代 once_cell crate (Rust 1.70+ 可用),少一个依赖
+// 用 std::sync::OnceLock (Rust 1.70+) 替代 once_cell crate
 use std::sync::OnceLock;
 
 static GLOBAL_DB: OnceLock<Mutex<Option<Arc<SqliteDb>>>> = OnceLock::new();

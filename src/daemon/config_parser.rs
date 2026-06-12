@@ -110,9 +110,17 @@ struct YamlRegexEntry {
 /// - 包含 `..` 路径遍历
 /// - 包含 URL 编码绕过 (`%2e` / `%2f` / `%5c` 大小写不敏感)
 /// - 包含 shell 元字符(详见源码 `shell_chars` 常量)
+/// - **包含嵌入 NUL 字节**(`'\0'`/`U+0000`): Rust 的 `Path` 在 Unix 上静默接受 NUL,
+///   但 `OpenOptions::open` 内部转 C 字符串时 NUL 截断,导致 daemon 打开与用户预期
+///   不同的文件(`/var/log/foo\0/etc/shadow` 实际打开 `/var/log/foo`)。这是静默
+///   错误而非安全漏洞,但仍应在校验阶段拒绝以避免混淆。
 pub fn validate_and_normalize_path(input_path: &str) -> Result<String> {
     if input_path.contains("..") {
         bail!("Log file path contains '..' (path traversal): {input_path}");
+    }
+
+    if input_path.contains('\0') {
+        bail!("Log file path contains embedded NUL byte (U+0000): {input_path:?}");
     }
 
     let lower = input_path.to_lowercase();
@@ -164,17 +172,37 @@ const VALID_JAIL_KEYS: &[&str] = &[
     "regexes",
 ];
 
+/// 顶层允许的 key 列表 (与 `defaults:` / `jails:` 同级)
+const VALID_TOP_LEVEL_KEYS: &[&str] = &["defaults", "jails"];
+
 /// 在 strict 模式下预先校验 YAML 中所有 key 都在白名单内。
 ///
 /// 解析两次 YAML (一次为 `serde_yaml::Value` 检查 keys,一次为 `YamlConfig`
 /// 反序列化) 故意保留:严格模式是"早失败"防御,普通解析错误晚于 key 检查。
 ///
+/// v2.2.1 bug 修复:先前**只校验 defaults:/jails:[*] 内部 key**,不校验顶层 key,
+/// 导致 `permanent_db_path` 误放顶层时被静默忽略(整个 `defaults:` 块之外的字段
+/// 都被 parser 跳过)。修复:同时拒绝顶层未知 key。
+///
 /// # Errors
-/// 任何未知 key 在 `defaults` / `jails[*]` 段命中,返回 `Err` 包含 key 名和
+/// 任何未知 key 在顶层 / `defaults` / `jails[*]` 段命中,返回 `Err` 包含 key 名和
 /// 合法 key 列表
 fn validate_yaml_keys(content: &str) -> Result<()> {
     let value: serde_yaml::Value =
         serde_yaml::from_str(content).context("Failed to parse YAML for key validation")?;
+
+    // 顶层 key 校验:仅 `defaults` 和 `jails` 是合法顶层 key
+    if let Some(map) = value.as_mapping() {
+        for (key, _) in map {
+            if let Some(key_str) = key.as_str() {
+                if !VALID_TOP_LEVEL_KEYS.contains(&key_str) {
+                    bail!(
+                        "Unknown top-level key '{key_str}' (strict mode). Valid top-level keys: {VALID_TOP_LEVEL_KEYS:?}"
+                    );
+                }
+            }
+        }
+    }
 
     if let Some(defaults) = value.get("defaults") {
         if let Some(map) = defaults.as_mapping() {
@@ -733,6 +761,14 @@ jails:
     fn validate_path_allows_normal_paths() {
         assert!(validate_and_normalize_path("/var/log/auth.log").is_ok());
         assert!(validate_and_normalize_path("/home/user/app.log").is_ok());
+    }
+
+    #[test]
+    fn validate_path_rejects_embedded_nul() {
+        // 嵌入 NUL 字节: Rust 的 Path 静默接受,但 OpenOptions::open 内部转 C 字符串
+        // 时会 NUL 截断,导致打开与用户预期不同的文件。静默错误非漏洞,仍应拒绝。
+        assert!(validate_and_normalize_path("/var/log/firewall.log\0").is_err());
+        assert!(validate_and_normalize_path("/tmp/foo\0/etc/shadow").is_err());
     }
 
     #[test]
