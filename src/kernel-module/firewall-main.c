@@ -5,6 +5,7 @@
  */
 
 #include "firewall.h"
+#include <linux/printk.h>
 #include <linux/random.h>
 #include <linux/version.h>
 
@@ -75,14 +76,18 @@ static void cleanup_all_entries(void) {
 static int __init firewall_init(void) {
   int ret;
 
+  pr_info("模块初始化开始\n");
+
   /* 初始化全局哈希种子（防止哈希碰撞攻击） */
   get_random_bytes(&fw_hash_seed, sizeof(fw_hash_seed));
 
   if (READ_ONCE(fw_ban_time) < 1) {
+    pr_err("无效的 fw_ban_time 参数: %u (必须 >= 1)\n", fw_ban_time);
     return -EINVAL;
   }
 
   if (READ_ONCE(fw_ban_time) > 365 * 24 * 60 * 60) {
+    pr_err("无效的 fw_ban_time 参数: %u (必须 <= 1年)\n", fw_ban_time);
     return -EINVAL;
   }
 
@@ -138,6 +143,7 @@ static int __init firewall_init(void) {
 
   ret = register_netdev_notifier(&fw_info);
   if (ret) {
+    pr_warn("注册 netdev notifier 失败: %d\n", ret);
   }
 
   timer_setup(&fw_info.cleanup_timer, cleanup_timer_callback, 0);
@@ -146,21 +152,27 @@ static int __init firewall_init(void) {
             jiffies + ((unsigned long)READ_ONCE(fw_ban_time) * HZ) / 2);
 
   ret = create_procfs_entries(&fw_info);
-  if (ret)
+  if (ret) {
+    pr_err("创建 procfs 条目失败: %d\n", ret);
     goto err_notifier;
+  }
 
   /* 注册 IPv4 Netfilter 钩子 */
   ret = nf_register_net_hook(&init_net, &nf_ops_ipv4);
   if (ret) {
+    pr_err("注册 IPv4 netfilter 钩子失败: %d\n", ret);
     goto err_procfs;
   }
 
   /* 注册 IPv6 Netfilter 钩子 */
   ret = nf_register_net_hook(&init_net, &nf_ops_ipv6);
   if (ret) {
+    pr_err("注册 IPv6 netfilter 钩子失败: %d\n", ret);
     goto err_nf_ipv4;
   }
 
+  pr_info("模块初始化成功 (ban_time=%u, max_bans/s=%u)\n",
+          fw_ban_time, fw_max_bans_per_second);
   return 0;
 
 err_nf_ipv4:
@@ -181,6 +193,7 @@ err_notifier:
  * firewall_exit - 模块清理
  */
 static void __exit firewall_exit(void) {
+  pr_info("模块清理开始\n");
 
   atomic_set(&fw_info.shutting_down, 1);
 
@@ -208,6 +221,7 @@ static void __exit firewall_exit(void) {
   }
 
   cleanup_all_entries();
+  pr_info("模块清理完成\n");
 }
 
 module_init(firewall_init);
