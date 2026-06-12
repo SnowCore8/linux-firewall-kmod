@@ -27,12 +27,14 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{bail, Context, Result};
+use slog::{error, info, warn};
 
 use firewall_daemon::ban;
 use firewall_daemon::config;
 use firewall_daemon::file_monitor;
 use firewall_daemon::http_exporter;
 use firewall_daemon::jail;
+use firewall_daemon::logger;
 use firewall_daemon::sqlite;
 use firewall_daemon::types::{Config, DAEMON_STATS};
 use std::sync::Arc;
@@ -187,6 +189,10 @@ fn cleanup(
 /// - `Ok(())` 正常退出
 /// - `Err(_)` 启动失败或运行错误
 fn main() -> Result<()> {
+    // 初始化日志系统
+    let log = logger::init_logger();
+    info!(log, "firewall-daemon 启动"; "version" => env!("CARGO_PKG_VERSION"));
+
     let args: Vec<String> = env::args().collect();
 
     let (config_path, daemon_mode, strict_mode) = match config::parse_config_args(&args)? {
@@ -201,10 +207,13 @@ fn main() -> Result<()> {
     if path.is_file() {
         config::parse_config_file(&config_path, &mut cfg, strict_mode)?;
         cfg.config_file = Some(config_path.clone());
+        info!(logger::get(), "配置文件加载成功"; "path" => %config_path);
     } else if path.is_dir() {
         config::load_config_directory(&config_path, &mut cfg, strict_mode)?;
         cfg.config_dir = Some(config_path.clone());
+        info!(logger::get(), "配置目录加载成功"; "path" => %config_path);
     } else {
+        error!(logger::get(), "配置路径不存在"; "path" => %config_path);
         bail!("Config path does not exist: {}", config_path);
     }
 
@@ -259,13 +268,16 @@ fn main() -> Result<()> {
     }
 
     if cfg.daemon {
+        info!(logger::get(), "开始守护进程化");
         daemonize_process()?;
         // 守护进程化后清 reload 标志, 防止该窗口期收到的 SIGHUP 在主循环首次检查时误触
         // 对齐 C 版: 守护进程化期间用 sigaction(SIGHUP, SIG_IGN) 临时忽略
         reload_config.store(false, Ordering::Relaxed);
+        info!(logger::get(), "守护进程化完成");
     }
 
     file_monitor::setup_inotify(&cfg)?;
+    info!(logger::get(), "inotify 监控启动");
 
     for jail in cfg.jails.iter() {
         if jail.enabled {
@@ -284,6 +296,7 @@ fn main() -> Result<()> {
 
     if let Err(_e) = file_monitor::monitor_loop(&mut cfg, &running, &reload_config) {}
 
+    info!(logger::get(), "开始清理流程");
     cleanup(&running, &cfg, &sqlite_db);
 
     if let Some(handle) = exporter_handle {

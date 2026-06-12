@@ -9,8 +9,7 @@
 //! - `main` (`main.rs`): 入口,负责 CLI 解析、信号注册、守护进程化与主循环调度
 //! - `types`: 跨模块共享的数据结构 (`Jail` / `Config` / `FailedEntry` / `DaemonStats`)
 //!   以及系统级常量
-//! - `log`: 5 级 (NONE/ERR/WARN/INFO/DEBUG) × 4 目的地 (syslog/file/both/journal)
-//!   × 2 格式 (plain/JSON Lines) 的统一日志系统
+//! - `logger`: 基于 slog 的结构化日志系统 (异步终端输出)
 //! - `ban`: 与 `/proc/firewall/bans` procfs 的安全交互,支持 IPv4/IPv6 封禁、解封、
 //!   永久黑名单同步
 //! - `log_parser`: 从日志行提取 IP (正则 + 字符串回退)
@@ -46,5 +45,6 @@ pub mod jail;
 pub mod line_processor;
 pub mod log_parser;
 pub mod log_rotation;
+pub mod logger;
 pub mod sqlite;
 pub mod types;
