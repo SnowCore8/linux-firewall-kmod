@@ -1,0 +1,64 @@
+[package]
+name = "firewall-daemon"
+version = "2.2.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Linux firewall user-space daemon (Rust port of fail2ban's fail2ban functionality)"
+license = "MIT"
+authors = ["SnowCore8 <snowcore8@gmail.com>"]
+
+# 二进制名固定为 firewall-daemon, 与 C 版完全一致, 保证所有 bash 测试套件无需修改
+[[bin]]
+name = "firewall-daemon"
+path = "src/daemon/main.rs"
+
+[lib]
+name = "firewall_daemon"
+path = "src/daemon/lib.rs"
+
+# ============================================================================
+# 依赖 - 选型理由
+# ============================================================================
+# libc + nix: 系统调用 (signal/inotify/poll/fs 等)
+# serde/serde_yaml: 替换 libyaml 解析 YAML 配置
+# rusqlite (bundled): 替换 sqlite3 C API, 静态链接避免系统依赖
+# regex: 替换 PCRE2, 语法与 PCRE 等价, 性能足够
+# tiny_http: 替换 libmicrohttpd, 同步 API, 无 async 复杂度
+# signal-hook: 替换 signal() + sa_handler 自定义实现
+# inotify: 替换 inotify_init1/inotify_add_watch 系统调用包装
+# parking_lot: 替换 pthread_rwlock, 性能更好且 API 简单
+# once_cell: 替换 C 全局变量 + init 函数模式
+# chrono: 替换 localtime_r/strftime, 时间格式化
+# anyhow/thiserror: 统一错误处理
+# base64: HTTP Basic Auth 解码
+# ============================================================================
+[dependencies]
+libc = "0.2"
+nix = { version = "0.29", features = ["signal", "fs", "poll", "inotify", "time", "process", "mount", "user"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+rusqlite = { version = "0.31", features = ["bundled"] }
+regex = "1"
+tiny_http = "0.12"
+signal-hook = "0.3"
+inotify = "0.10"
+parking_lot = "0.12"
+once_cell = "1"  # 暂时保留(测试代码可能用到),sqlite_store 已迁到 std::sync::OnceLock
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+anyhow = "1"
+thiserror = "1"
+base64 = "0.22"
+
+[profile.release]
+opt-level = 2
+lto = false
+debug = 1
+strip = false
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+# Rust 版 ASAN 需要 nightly + `-Z sanitizer=address` (std 重编),
+# 当前项目只通过 Makefile 的 gcc 流水线提供 ASAN (make asan),
+# 如需 Rust ASAN 后续可在此追加 profile.asan + .cargo/config.toml 的 runner 配置
