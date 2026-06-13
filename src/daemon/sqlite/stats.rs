@@ -5,6 +5,7 @@
 //! - 更新命中统计 (hit_count + last_hit_at)
 //! - 获取统计信息 (总条数/活跃条数)
 //! - 清理软删除记录
+//! 统计查询 + 数据清理
 
 use anyhow::Result;
 use rusqlite::params;
@@ -18,6 +19,11 @@ use super::connection::SqliteDb;
 /// 累加 `hit_count` + 更新 `last_hit_at`。每次拦截命中永久黑名单的 IP 时调。
 pub fn sqlite_update_hit_stats(db: &SqliteDb, ip_num: u32) -> Result<()> {
     let conn = db.conn.lock();
+use super::SqliteDb;
+
+/// 累加 `hit_count` + 更新 `last_hit_at`
+pub fn sqlite_update_hit_stats(db: &SqliteDb, ip_num: u32) -> Result<()> {
+    let conn = db.lock_conn();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -34,6 +40,9 @@ pub fn sqlite_update_hit_stats(db: &SqliteDb, ip_num: u32) -> Result<()> {
 /// 统计 (总条数, 活跃条数)。`/metrics` 或管理命令用。
 pub fn sqlite_get_stats(db: &SqliteDb) -> Result<(i32, i32)> {
     let conn = db.conn.lock();
+/// 统计 (总条数, 活跃条数)
+pub fn sqlite_get_stats(db: &SqliteDb) -> Result<(i32, i32)> {
+    let conn = db.lock_conn();
     let total: i32 = conn.query_row("SELECT COUNT(*) FROM permanent_banlist", [], |row| {
         row.get(0)
     })?;
@@ -48,6 +57,9 @@ pub fn sqlite_get_stats(db: &SqliteDb) -> Result<(i32, i32)> {
 /// 清理软删除记录。
 pub fn sqlite_purge_deleted(db: &SqliteDb, days: i32) -> Result<i32> {
     let conn = db.conn.lock();
+/// 清理软删除记录
+pub fn sqlite_purge_deleted(db: &SqliteDb, days: i32) -> Result<i32> {
+    let conn = db.lock_conn();
     if days > 0 {
         let cutoff = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -80,6 +92,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(2000);
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(200);
 
     fn temp_db_path() -> String {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -111,6 +124,7 @@ mod tests {
         sqlite_remove_permanent_ban(&db, "3.3.3.3").unwrap();
         let (total2, active2) = sqlite_get_stats(&db).unwrap();
         assert_eq!(total2, 1); // 软删除, 记录仍在
+        assert_eq!(total2, 1);
         assert_eq!(active2, 0);
 
         sqlite_close(&db);

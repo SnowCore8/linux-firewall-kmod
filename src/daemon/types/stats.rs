@@ -10,6 +10,12 @@
 //! 统计读数的一致性不要求因果序,Prometheus 抓取间隔天然容忍轻微偏差。
 
 use std::sync::atomic::AtomicU64;
+//! 统计相关数据结构：DaemonStats、JailStatsCounters
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use parking_lot::RwLock;
 
 // ============================================================================
 // 守护进程统计
@@ -70,3 +76,101 @@ impl DaemonStats {
 
 /// 全局单例统计对象。跨模块共享,任何位置可直接 `DAEMON_STATS.ips_banned.fetch_add(1, ...)`。
 pub static DAEMON_STATS: DaemonStats = DaemonStats::new();
+
+// ============================================================================
+// Jail 统计计数器
+// ============================================================================
+
+/// 单个 Jail 的运行期原子计数器 — per-jail 维度的 Prometheus 指标源
+///
+/// 与全局 `DaemonStats` 互补:全局指标是聚合值,`JailStatsCounters` 按 jail
+/// 拆分,支持 Grafana 按服务下钻分析。
+#[derive(Debug)]
+pub struct JailStatsCounters {
+    /// Jail 名称 (标识用)
+    pub jail_name: String,
+    /// 已解析日志行数
+    pub lines_parsed: AtomicU64,
+    /// 成功提取的 IP 数
+    pub ips_extracted: AtomicU64,
+    /// 触发的封禁数
+    pub bans_triggered: AtomicU64,
+    /// 失败尝试总数
+    pub failed_attempts: AtomicU64,
+    /// 正则匹配命中数
+    pub regex_matches: AtomicU64,
+}
+
+impl JailStatsCounters {
+    #[must_use]
+    pub fn new(jail_name: String) -> Self {
+        Self {
+            jail_name,
+            lines_parsed: AtomicU64::new(0),
+            ips_extracted: AtomicU64::new(0),
+            bans_triggered: AtomicU64::new(0),
+            failed_attempts: AtomicU64::new(0),
+            regex_matches: AtomicU64::new(0),
+        }
+    }
+
+    /// 快照当前计数值 (用于定期写入 SQLite 和 metrics 导出)
+    #[must_use]
+    pub fn snapshot(&self) -> JailStatsSnapshot {
+        JailStatsSnapshot {
+            jail_name: self.jail_name.clone(),
+            lines_parsed: self.lines_parsed.load(Ordering::Relaxed),
+            ips_extracted: self.ips_extracted.load(Ordering::Relaxed),
+            bans_triggered: self.bans_triggered.load(Ordering::Relaxed),
+            failed_attempts: self.failed_attempts.load(Ordering::Relaxed),
+            regex_matches: self.regex_matches.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Jail 统计快照 — 从 `JailStatsCounters` 读取的瞬时值,用于 SQLite 写入
+#[derive(Debug, Clone)]
+pub struct JailStatsSnapshot {
+    pub jail_name: String,
+    pub lines_parsed: u64,
+    pub ips_extracted: u64,
+    pub bans_triggered: u64,
+    pub failed_attempts: u64,
+    pub regex_matches: u64,
+}
+
+// ============================================================================
+// 全局实例和辅助函数
+// ============================================================================
+
+/// 全局 per-jail 统计计数器映射
+///
+/// `jail_name` → `JailStatsCounters`,使用 `RwLock` 保护并发读写。
+/// 每个 jail 首次访问时自动创建计数器 (lazy initialization)。
+pub static JAIL_STATS: std::sync::OnceLock<RwLock<HashMap<String, JailStatsCounters>>> =
+    std::sync::OnceLock::new();
+
+/// 直接获取 jail 统计计数器的引用 (用于累加操作)
+///
+/// 如果 jail 不存在，自动创建。返回的是映射中的实际引用，可直接调用 fetch_add 等方法。
+pub fn with_jail_stats<F, R>(jail_name: &str, f: F) -> R
+where
+    F: FnOnce(&JailStatsCounters) -> R,
+{
+    let map = JAIL_STATS.get_or_init(|| RwLock::new(HashMap::new()));
+
+    // 先尝试读锁
+    {
+        let read_guard = map.read();
+        if let Some(counters) = read_guard.get(jail_name) {
+            return f(counters);
+        }
+    }
+
+    // 读锁未命中，升级为写锁创建新计数器
+    let mut write_guard = map.write();
+    let counters = write_guard
+        .entry(jail_name.to_string())
+        .or_insert_with(|| JailStatsCounters::new(jail_name.to_string()));
+    f(counters)
+}

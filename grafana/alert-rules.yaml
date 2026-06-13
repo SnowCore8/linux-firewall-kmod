@@ -1,0 +1,56 @@
+groups:
+  - name: firewall-daemon-alerts
+    rules:
+      - alert: HighBanRate
+        expr: rate(firewall_daemon_ips_banned_total[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High ban rate detected"
+          description: "Firewall daemon is banning more than 10 IPs per second for 2 minutes"
+
+      - alert: HighFailedAttemptRate
+        expr: rate(firewall_daemon_failed_attempts_total[5m]) > 100
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High failed attempt rate detected"
+          description: "Firewall daemon is detecting more than 100 failed attempts per second for 2 minutes"
+
+      - alert: LargeSQLiteWAL
+        expr: firewall_sqlite_wal_size_bytes > 104857600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SQLite WAL file is large"
+          description: "SQLite WAL file is larger than 100MB for 5 minutes"
+
+      - alert: DaemonDown
+        expr: up{job="firewall-daemon"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Firewall daemon is down"
+          description: "Firewall daemon has been down for more than 1 minute"
+
+      - alert: HighActiveBans
+        expr: firewall_active_ban_count > 10000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High number of active bans"
+          description: "More than 10,000 IPs are currently banned"
+
+      - alert: JailSpecificHighBanRate
+        expr: rate(firewall_jail_bans_triggered_total[5m]) > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High ban rate in jail {{ $labels.jail }}"
+          description: "Jail {{ $labels.jail }} is triggering more than 5 bans per second"

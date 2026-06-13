@@ -36,6 +36,7 @@ use firewall_daemon::http_exporter;
 use firewall_daemon::jail;
 use firewall_daemon::logger;
 use firewall_daemon::sqlite;
+use firewall_daemon::sqlite_writer;
 use firewall_daemon::types::{Config, DAEMON_STATS};
 
 /// 内核模块 procfs 根目录。启动期存在性检查
@@ -78,7 +79,10 @@ fn setup_signals() -> Result<()> {
         sa_term.sa_flags = 0; // 不使用 SA_RESTART，让 poll() 被中断
         libc::sigemptyset(&mut sa_term.sa_mask);
         if libc::sigaction(libc::SIGTERM, &sa_term, std::ptr::null_mut()) != 0 {
-            bail!("sigaction(SIGTERM) failed: {}", std::io::Error::last_os_error());
+            bail!(
+                "sigaction(SIGTERM) failed: {}",
+                std::io::Error::last_os_error()
+            );
         }
 
         // SIGINT 处理器
@@ -87,7 +91,10 @@ fn setup_signals() -> Result<()> {
         sa_int.sa_flags = 0; // 不使用 SA_RESTART
         libc::sigemptyset(&mut sa_int.sa_mask);
         if libc::sigaction(libc::SIGINT, &sa_int, std::ptr::null_mut()) != 0 {
-            bail!("sigaction(SIGINT) failed: {}", std::io::Error::last_os_error());
+            bail!(
+                "sigaction(SIGINT) failed: {}",
+                std::io::Error::last_os_error()
+            );
         }
 
         // SIGHUP 处理器
@@ -96,14 +103,20 @@ fn setup_signals() -> Result<()> {
         sa_hup.sa_flags = 0; // 不使用 SA_RESTART
         libc::sigemptyset(&mut sa_hup.sa_mask);
         if libc::sigaction(libc::SIGHUP, &sa_hup, std::ptr::null_mut()) != 0 {
-            bail!("sigaction(SIGHUP) failed: {}", std::io::Error::last_os_error());
+            bail!(
+                "sigaction(SIGHUP) failed: {}",
+                std::io::Error::last_os_error()
+            );
         }
 
         // SIGPIPE 忽略
         let mut sa_pipe: libc::sigaction = std::mem::zeroed();
         sa_pipe.sa_sigaction = libc::SIG_IGN;
         if libc::sigaction(libc::SIGPIPE, &sa_pipe, std::ptr::null_mut()) != 0 {
-            bail!("sigaction(SIGPIPE) failed: {}", std::io::Error::last_os_error());
+            bail!(
+                "sigaction(SIGPIPE) failed: {}",
+                std::io::Error::last_os_error()
+            );
         }
     }
 
@@ -220,6 +233,7 @@ fn cleanup(
     _cfg: &Config,
     sqlite_db: &Option<std::sync::Arc<sqlite::SqliteDb>>,
 ) {
+fn cleanup(_cfg: &Config, sqlite_db: &Option<std::sync::Arc<sqlite::SqliteDb>>) {
     http_exporter::stop_http_exporter();
     GLOBAL_RUNNING.store(false, Ordering::Relaxed);
     ban::close_cached_bans_fd();
@@ -242,9 +256,7 @@ fn cleanup(
 /// - `Ok(())` 正常退出
 /// - `Err(_)` 启动失败或运行错误
 fn main() -> Result<()> {
-    // 初始化日志系统
-    let log = logger::init_logger();
-    info!(log, "firewall-daemon 启动"; "version" => env!("CARGO_PKG_VERSION"));
+    // 注意：logger 在守护进程化之后初始化，避免 fork 导致异步日志线程丢失
 
     let args: Vec<String> = env::args().collect();
 
@@ -300,6 +312,7 @@ fn main() -> Result<()> {
         if let Some(ref db_path) = cfg.permanent_db_path {
             match sqlite::sqlite_init(db_path) {
                 Ok(db) => {
+                    info!(logger::get(), "SQLite 数据库初始化成功"; "path" => %db_path);
                     sqlite::set_global_db(db.clone());
                     sqlite_db = Some(db);
 
@@ -326,17 +339,59 @@ fn main() -> Result<()> {
     }
 
     if cfg.daemon {
-        info!(logger::get(), "开始守护进程化");
+        // 守护进程化前不记录日志到文件，因为 fork 会导致异步日志线程丢失
         daemonize_process()?;
         // 守护进程化后清 reload 标志, 防止该窗口期收到的 SIGHUP 在主循环首次检查时误触
         // 对齐 C 版: 守护进程化期间用 sigaction(SIGHUP, SIG_IGN) 临时忽略
         GLOBAL_RELOAD.store(false, Ordering::Relaxed);
-        info!(logger::get(), "守护进程化完成");
     }
+
+    // 在守护进程化之后初始化日志系统，确保异步日志线程正确运行
+    let _log = logger::init_logger();
+    info!(logger::get(), "firewall-daemon 启动"; "mode" => if cfg.daemon { "daemon" } else { "foreground" });
 
     // 在守护进程化之后设置信号处理器，确保 fork 后信号处理正常工作
     setup_signals()?;
     info!(logger::get(), "信号处理器已注册");
+
+    // 初始化混合存储表结构并恢复活跃封禁
+    if let Some(ref db) = sqlite_db {
+        let conn = sqlite::get_conn(db);
+        if let Err(e) = sqlite_writer::init_tables(&conn) {
+            warn!(logger::get(), "初始化混合存储表失败"; "error" => %e);
+        } else {
+            info!(logger::get(), "混合存储表初始化成功");
+
+            // 从 ban_history 恢复活跃封禁到内存缓存 + 内核
+            match sqlite_writer::load_active_bans(&conn) {
+                Ok(bans) if !bans.is_empty() => {
+                    info!(logger::get(), "恢复活跃封禁条目"; "count" => bans.len());
+                    let mut restored_count = 0;
+                    for ban_info in &bans {
+                        // 重新写入内核 procfs
+                        if let Err(e) = ban::ban_ip(&ban_info.ip) {
+                            warn!(logger::get(), "恢复封禁到内核失败"; "ip" => &ban_info.ip, "error" => %e);
+                            continue;
+                        }
+
+                        // 插入内存缓存
+                        firewall_daemon::types::ACTIVE_BAN_CACHE
+                            .get_or_init(firewall_daemon::types::ActiveBanCache::new)
+                            .insert(ban_info.clone());
+
+                        restored_count += 1;
+                    }
+                    info!(logger::get(), "活跃封禁恢复完成"; "restored" => restored_count, "total" => bans.len());
+                }
+                Ok(_) => {
+                    info!(logger::get(), "无活跃封禁条目需要恢复");
+                }
+                Err(e) => {
+                    warn!(logger::get(), "加载活跃封禁条目失败"; "error" => %e);
+                }
+            }
+        }
+    }
 
     file_monitor::setup_inotify(&cfg)?;
     info!(logger::get(), "inotify 监控启动");
@@ -363,7 +418,11 @@ fn main() -> Result<()> {
         error!(logger::get(), "主循环异常退出"; "error" => %e);
     }
 
-    info!(logger::get(), "主循环退出，running={}", GLOBAL_RUNNING.load(Ordering::Relaxed));
+    info!(
+        logger::get(),
+        "主循环退出，running={}",
+        GLOBAL_RUNNING.load(Ordering::Relaxed)
+    );
     info!(logger::get(), "开始清理流程");
     cleanup(&cfg, &sqlite_db);
 

@@ -27,6 +27,31 @@ mod stats;
 pub use config::Config;
 pub use jail::{FailedEntry, Jail, RegexInfo};
 pub use stats::{DaemonStats, DAEMON_STATS};
+//! # 子模块划分
+//!
+//! - [`jail`]: `Jail` / `FailedEntry` / `RegexInfo`
+//! - [`config`]: `Config` / `StorageConfig` / `RetentionConfig` / `WriterConfig`
+//! - [`ban`]: `BanInfo` / `BanReason` / `BanStatus` / `ActiveBanCache`
+//! - [`stats`]: `DaemonStats` / `JailStatsCounters` / per-jail 统计
+//! - [`ddos`]: `DdosConfig` / `ConnRateEntry` / `DdosEvent` / `DdosStats`
+
+mod ban;
+mod config;
+mod ddos;
+mod jail;
+mod stats;
+
+// Re-export 所有公共类型，保持向后兼容
+pub use ban::{ActiveBanCache, BanInfo, BanReason, BanStatus, ACTIVE_BAN_CACHE};
+pub use config::{Config, RetentionConfig, StorageConfig, WriterConfig};
+pub use ddos::{ConnRateEntry, DdosConfig, DdosEvent, DdosStats, DDOS_STATS};
+pub use jail::{
+    FailedEntry, Jail, RegexInfo, MAX_FAILED_TIMESTAMPS, MAX_JAILS, MAX_LOG_FILES,
+    MAX_REGEX_NAME_LEN, MAX_REGEX_PATTERNS,
+};
+pub use stats::{
+    with_jail_stats, DaemonStats, JailStatsCounters, JailStatsSnapshot, DAEMON_STATS, JAIL_STATS,
+};
 
 // ============================================================================
 // 常量

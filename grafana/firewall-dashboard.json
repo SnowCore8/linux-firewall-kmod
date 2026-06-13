@@ -1,0 +1,138 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "firewall-daemon",
+    "title": "Firewall Daemon Dashboard",
+    "tags": ["firewall", "security"],
+    "timezone": "browser",
+    "schemaVersion": 16,
+    "version": 0,
+    "refresh": "10s",
+    "panels": [
+      {
+        "type": "stat",
+        "title": "Uptime",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "firewall_daemon_uptime_seconds",
+            "legendFormat": "Uptime"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s"
+          }
+        }
+      },
+      {
+        "type": "stat",
+        "title": "Active Bans",
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+        "targets": [
+          {
+            "expr": "firewall_active_ban_count",
+            "legendFormat": "Active Bans"
+          }
+        ]
+      },
+      {
+        "type": "stat",
+        "title": "Kernel Banned IPs",
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "firewall_kernel_banned_ips_current",
+            "legendFormat": "Kernel Bans"
+          }
+        ]
+      },
+      {
+        "type": "stat",
+        "title": "SQLite WAL Size",
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+        "targets": [
+          {
+            "expr": "firewall_sqlite_wal_size_bytes",
+            "legendFormat": "WAL Size"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "bytes"
+          }
+        }
+      },
+      {
+        "type": "graph",
+        "title": "Lines Parsed Rate",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+        "targets": [
+          {
+            "expr": "rate(firewall_daemon_lines_parsed_total[5m])",
+            "legendFormat": "Lines/sec"
+          }
+        ]
+      },
+      {
+        "type": "graph",
+        "title": "Bans Triggered Rate",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+        "targets": [
+          {
+            "expr": "rate(firewall_daemon_ips_banned_total[5m])",
+            "legendFormat": "Bans/sec"
+          }
+        ]
+      },
+      {
+        "type": "graph",
+        "title": "Failed Attempts Rate",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+        "targets": [
+          {
+            "expr": "rate(firewall_daemon_failed_attempts_total[5m])",
+            "legendFormat": "Failed/sec"
+          }
+        ]
+      },
+      {
+        "type": "graph",
+        "title": "Per-Jail Bans Triggered",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+        "targets": [
+          {
+            "expr": "rate(firewall_jail_bans_triggered_total[5m])",
+            "legendFormat": "{{jail}}"
+          }
+        ]
+      },
+      {
+        "type": "table",
+        "title": "Per-Jail Statistics",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 20},
+        "targets": [
+          {
+            "expr": "firewall_jail_lines_parsed_total",
+            "legendFormat": "{{jail}} - Lines Parsed",
+            "format": "table",
+            "instant": true
+          },
+          {
+            "expr": "firewall_jail_bans_triggered_total",
+            "legendFormat": "{{jail}} - Bans",
+            "format": "table",
+            "instant": true
+          },
+          {
+            "expr": "firewall_jail_failed_attempts_total",
+            "legendFormat": "{{jail}} - Failed",
+            "format": "table",
+            "instant": true
+          }
+        ]
+      }
+    ]
+  },
+  "overwrite": true
+}

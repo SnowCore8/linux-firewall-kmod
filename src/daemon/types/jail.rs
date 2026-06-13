@@ -7,12 +7,37 @@
 //! - **`Jail`**:单个服务监狱的所有配置 + 运行时状态 (`failed_hash` / `partial_line_buffer`)
 
 use std::collections::HashMap;
+//! Jail 相关数据结构：Jail、FailedEntry、RegexInfo
+
 use std::sync::atomic::AtomicUsize;
 
 use parking_lot::RwLock;
 
 use super::MAX_FAILED_TIMESTAMPS;
 use super::{MAX_LOG_FILES, MAX_REGEX_PATTERNS};
+// ============================================================================
+// 常量
+// ============================================================================
+
+/// 单个 IP 在 `FailedEntry.timestamps` 中最多保留的失败时间戳数。
+///
+/// 满后采用 FIFO 移出最旧时间戳。100 兼顾"高频攻击者最近 100 次"和"内存占用
+/// 上界 (100 × `i64` × `MAX_JAILS` × IP 数)"。
+pub const MAX_FAILED_TIMESTAMPS: usize = 100;
+
+/// 单个 `Jail` 可配置的日志文件数上限。10 覆盖典型多通道日志场景 (e.g. sshd +
+/// 4×web + 邮件) 同时限制单 jail 的 fd 占用。
+pub const MAX_LOG_FILES: usize = 10;
+
+/// 单个 `Jail` 可配置的正则表达式数上限。10 留足自定义空间但限制编译开销。
+pub const MAX_REGEX_PATTERNS: usize = 10;
+
+/// 正则名称字符串的最大长度 (字节)。`compile_jail_regex` 不强制,但 UI/日志截断时
+/// 依赖此上界避免异常长名称。
+pub const MAX_REGEX_NAME_LEN: usize = 64;
+
+/// 全局可同时活跃的 `Jail` 数上限。`config_parser` 在解析时检查此上界。
+pub const MAX_JAILS: usize = 16;
 
 // ============================================================================
 // 失败条目
@@ -122,6 +147,7 @@ pub struct Jail {
     pub ban_time_set: bool,
     /// IP → 失败条目。读写并发由 `parking_lot::RwLock` 保护
     pub failed_hash: RwLock<HashMap<String, FailedEntry>>,
+    pub failed_hash: RwLock<std::collections::HashMap<String, FailedEntry>>,
     /// 不完整行的字节缓冲,避免单行跨多次 read 时被切碎
     pub partial_line_buffer: RwLock<Vec<u8>>,
 }
@@ -145,6 +171,7 @@ impl Jail {
             findtime_set: false,
             ban_time_set: false,
             failed_hash: RwLock::new(HashMap::new()),
+            failed_hash: RwLock::new(std::collections::HashMap::new()),
             partial_line_buffer: RwLock::new(Vec::with_capacity(8192)),
         }
     }

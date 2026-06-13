@@ -10,6 +10,12 @@
 //!
 //! - 单行硬上限 8KB,超长行跳过 (避免 OOM)
 //! - `partial_line_buffer` 容量 8KB
+//! 日志行处理：单行解析、缓冲分割、partial 行管理
+//!
+//! 职责：
+//! - 单行日志解析 + IP 提取 + 失败计数
+//! - 按 `\n` 分割字节缓冲并逐行处理
+//! - partial 行缓冲管理（接近 8KB 时 flush）
 
 use std::sync::atomic::Ordering;
 
@@ -22,6 +28,7 @@ use crate::types::{Jail, DAEMON_STATS};
 // ============================================================================
 
 /// 处理单行日志:长度校验 + 解析 + 失败计数。空行直接跳过;>8KB 跳过并
+/// 处理单行日志：长度校验 + 解析 + 失败计数。空行直接跳过；>8KB 跳过并
 /// 累加 `lines_skipped`。
 ///
 /// # Arguments
@@ -42,6 +49,12 @@ pub fn process_single_line(
 
     let len = line.len();
     if len >= 8192 {
+        crate::logger::debug!(
+            crate::logger::get(),
+            "跳过超长日志行";
+            "length" => len,
+            "limit" => 8192
+        );
         DAEMON_STATS.lines_skipped.fetch_add(1, Ordering::Relaxed);
         return;
     }
@@ -49,6 +62,9 @@ pub fn process_single_line(
     DAEMON_STATS.lines_parsed.fetch_add(1, Ordering::Relaxed);
 
     if let Some(ip) = log_parser::extract_and_validate_ip(jail, line) {
+        // DDoS 检测：记录连接
+        crate::ddos_detector::get_conn_rate_tracker().record_connection(&ip);
+
         failed_tracker::handle_failed_attempt_for_jail(jail, &ip, max_retries, findtime);
     }
 }
@@ -58,6 +74,7 @@ pub fn process_single_line(
 // ============================================================================
 
 /// 按 `\n` 分割 `data` 缓冲,逐行调 [`process_single_line`],返回 `consumed`
+/// 按 `\n` 分割 `data` 缓冲，逐行调 [`process_single_line`]，返回 `consumed`
 /// (已处理字节数) 给调用方用于 partial 行缓冲。
 ///
 /// # Arguments
@@ -65,6 +82,7 @@ pub fn process_single_line(
 /// - `data`: 字节缓冲
 /// - `log_path`: 源文件路径
 /// - `consumed`: 出参,已消费的字节数 (= 完整行总长)
+/// - `consumed`: 出参，已消费的字节数 (= 完整行总长)
 /// - `max_retries` / `findtime`: 失败阈值
 pub fn process_lines_in_buffer(
     jail: &Jail,
@@ -132,6 +150,7 @@ pub fn store_partial_line(
 
     if current_len + data.len() >= 8192 {
         // 缓冲区将溢出: 先处理累积数据, 再写入新片段
+        // 缓冲区将溢出：先处理累积数据，再写入新片段
         if current_len > 0 {
             let temp = buf.clone();
             drop(buf);
@@ -151,6 +170,7 @@ pub fn store_partial_line(
 /// 强制 flush partial 行缓冲 (将残余不完整行作为完整行处理)。
 ///
 /// 文件关闭 / truncate 之前调用,避免丢失最后一个不完整行。
+/// 文件关闭 / truncate 之前调用，避免丢失最后一个不完整行。
 ///
 /// # Arguments
 /// - `jail`: 关联 jail

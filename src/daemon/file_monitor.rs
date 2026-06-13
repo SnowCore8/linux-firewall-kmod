@@ -1,10 +1,16 @@
-//! inotify 监控日志文件 → 行分割 (不完整行缓冲) → 日志轮转检测 (inode/大小) → 主循环 (poll + SIGHUP 重载)
+//! inotify 监控日志文件 → 行分割 → 主循环 (poll + SIGHUP 重载)
 //!
 //! # 模块结构
 //!
 //! 1. **文件状态**:`FileState` 跟踪每个监控文件的 path/offset/inode/watch descriptor
 //! 2. **inotify 设置**:`setup_inotify` 给所有 enabled jail 的日志文件加 watch
 //! 3. **主循环**:`monitor_loop` 调 `poll` 等待 inotify 事件 / SIGHUP / 周期维护
+//! 3. **新行处理**:`process_new_lines` 读自上次 offset 的新内容
+//! 4. **主循环**:`monitor_loop` 调 `poll` 等待 inotify 事件 / SIGHUP / 周期维护
+//!
+//! 行处理逻辑 → [`crate::line_processor`]
+//! 日志轮转处理 → [`crate::log_rotation`]
+//! 配置热重载 → [`crate::config_reloader`]
 //!
 //! # 关键不变量
 //!
@@ -25,6 +31,7 @@ use parking_lot::RwLock;
 
 use crate::config_reloader::{cleanup_partial_line_buffer, reload_configuration};
 use crate::file_reader::read_and_process_new_lines;
+use crate::line_processor::{process_lines_in_buffer, store_partial_line};
 use crate::log_rotation::{check_for_new_log_files, handle_log_rotation};
 use crate::types::{Config, DAEMON_STATS};
 
@@ -160,166 +167,12 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
     *INOTIFY_FD.write() = Some(inotify);
     INOTIFY_RAW_FD.store(raw_fd, Ordering::Relaxed);
 
+    // 一个文件都没监控成功: 启动无意义, 直接退出
     if watched_count == 0 {
         return Err(anyhow::anyhow!("No log files could be watched initially"));
     }
 
     Ok(())
-}
-
-// ============================================================================
-// 行处理
-// ============================================================================
-
-/// 处理单行日志:长度校验 + 解析 + 失败计数。空行直接跳过;>8KB 跳过并
-/// 累加 `lines_skipped`。
-///
-/// # Arguments
-/// - `jail`: 关联 jail (正则集)
-/// - `line`: 不含 `\n` 的单行
-/// - `log_path`: 源文件路径 (日志用)
-/// - `max_retries` / `findtime`: 失败阈值参数 (透传给 `failed_tracker`)
-pub fn process_single_line(
-    jail: &Jail,
-    line: &str,
-    _log_path: &str,
-    max_retries: u32,
-    findtime: u32,
-) {
-    if line.is_empty() {
-        return;
-    }
-
-    let len = line.len();
-    if len >= 8192 {
-        crate::logger::debug!(
-            crate::logger::get(),
-            "跳过超长日志行";
-            "length" => len,
-            "limit" => 8192
-        );
-        DAEMON_STATS.lines_skipped.fetch_add(1, Ordering::Relaxed);
-        return;
-    }
-
-    DAEMON_STATS.lines_parsed.fetch_add(1, Ordering::Relaxed);
-
-    if let Some(ip) = log_parser::extract_and_validate_ip(jail, line) {
-        failed_tracker::handle_failed_attempt_for_jail(jail, &ip, max_retries, findtime);
-    }
-}
-
-/// 按 `\n` 分割 `data` 缓冲,逐行调 [`process_single_line`],返回 `consumed`
-/// (已处理字节数) 给调用方用于 partial 行缓冲。
-///
-/// # Arguments
-/// - `jail`: 关联 jail
-/// - `data`: 字节缓冲
-/// - `log_path`: 源文件路径
-/// - `consumed`: 出参,已消费的字节数 (= 完整行总长)
-/// - `max_retries` / `findtime`: 失败阈值
-pub fn process_lines_in_buffer(
-    jail: &Jail,
-    data: &[u8],
-    log_path: &str,
-    consumed: &mut usize,
-    max_retries: u32,
-    findtime: u32,
-) {
-    let mut line_start = 0;
-    let len = data.len();
-
-    *consumed = 0;
-
-    while line_start < len {
-        if let Some(pos) = data[line_start..].iter().position(|&b| b == b'\n') {
-            let line_end = line_start + pos;
-            let line_len = line_end - line_start;
-
-            if line_len >= 8192 {
-
-            } else {
-                let line = std::str::from_utf8(&data[line_start..line_end]).unwrap_or("");
-                process_single_line(jail, line, log_path, max_retries, findtime);
-            }
-
-            line_start = line_end + 1;
-        } else {
-            break;
-        }
-    }
-
-    *consumed = line_start;
-}
-
-/// 追加 `data` 到 `jail.partial_line_buffer`。接近 8KB 上限前主动 flush 旧数据。
-///
-/// # Arguments
-/// - `jail`: 关联 jail
-/// - `data`: 待追加的字节片段 (不完整行尾)
-/// - `log_path`: 源文件路径
-/// - `max_retries` / `findtime`: 失败阈值
-pub fn store_partial_line(
-    jail: &Jail,
-    data: &[u8],
-    log_path: &str,
-    max_retries: u32,
-    findtime: u32,
-) {
-    if data.is_empty() {
-        return;
-    }
-
-    if data.len() >= 8192 {
-
-        jail.partial_line_buffer.write().clear();
-        return;
-    }
-
-    let mut buf = jail.partial_line_buffer.write();
-    let current_len = buf.len();
-
-    if current_len + data.len() >= 8192 {
-        // 缓冲区将溢出: 先处理累积数据, 再写入新片段
-        if current_len > 0 {
-            let temp = buf.clone();
-            drop(buf);
-            if let Ok(line) = std::str::from_utf8(&temp) {
-                process_single_line(jail, line, log_path, max_retries, findtime);
-            }
-            buf = jail.partial_line_buffer.write();
-        }
-
-        buf.clear();
-        buf.extend_from_slice(data);
-    } else {
-        buf.extend_from_slice(data);
-    }
-}
-
-/// 强制 flush partial 行缓冲 (将残余不完整行作为完整行处理)。
-///
-/// 文件关闭 / truncate 之前调用,避免丢失最后一个不完整行。
-///
-/// # Arguments
-/// - `jail`: 关联 jail
-/// - `log_path`: 源文件路径
-/// - `max_retries` / `findtime`: 失败阈值
-pub fn flush_partial_line(jail: &Jail, log_path: &str, max_retries: u32, findtime: u32) {
-    let mut buf = jail.partial_line_buffer.write();
-    if buf.is_empty() {
-        return;
-    }
-
-    let _old_len = buf.len();
-    let temp = buf.clone();
-    buf.clear();
-    drop(buf);
-
-
-    if let Ok(line) = std::str::from_utf8(&temp) {
-        process_single_line(jail, line, log_path, max_retries, findtime);
-    }
 }
 
 // ============================================================================
@@ -415,13 +268,8 @@ pub fn process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
 
         let mut file_states = FILE_STATES.write();
         if let Some(state) = file_states.get_mut(idx) {
-            if state.inode != 0 && current_inode != state.inode {
-
-                state.inode = current_inode;
-                state.offset = 0;
-                local_partial_buf.clear();
-            } else if current_size < state.offset {
-
+            if (state.inode != 0 && current_inode != state.inode) || current_size < state.offset {
+                // inode 变化或文件缩小，重置状态
                 state.inode = current_inode;
                 state.offset = 0;
                 local_partial_buf.clear();
@@ -507,110 +355,6 @@ pub fn process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
 }
 
 // ============================================================================
-// 日志轮转处理
-// ============================================================================
-
-/// 处理日志轮转:inotify DELETE / `MOVED_FROM` 事件触发,先 flush partial 行,
-/// 再更新 inode + offset,最后重新注册 inotify watch。
-///
-/// # Arguments
-/// - `idx`: `FILE_STATES` 索引
-/// - `cfg`: 全局配置
-pub fn handle_log_rotation(idx: usize, cfg: &Config) {
-    let file_states = FILE_STATES.read();
-    let Some(state) = file_states.get(idx) else {
-        return;
-    };
-
-    let path = state.path.clone();
-    let wd = state.wd.clone();
-    let jail_idx = state.jail_idx;
-    drop(file_states);
-
-    if jail_idx >= cfg.jails.len() {
-        return;
-    }
-
-    let jail = &cfg.jails[jail_idx];
-    let max_retries = jail.max_retries;
-    let findtime = jail.findtime;
-
-    let mut buf = jail.partial_line_buffer.write();
-    if buf.is_empty() {
-        drop(buf);
-    } else {
-        let temp = buf.clone();
-        buf.clear();
-        drop(buf);
-
-        if let Ok(line) = std::str::from_utf8(&temp) {
-            process_single_line(jail, line, &path, max_retries, findtime);
-        }
-    }
-
-    DAEMON_STATS.log_rotations.fetch_add(1, Ordering::Relaxed);
-
-    let path_obj = Path::new(&path);
-    if !path_obj.exists() {
-        crate::logger::debug!(
-            crate::logger::get(),
-            "日志轮转后文件不存在";
-            "path" => &path
-        );
-        let mut file_states = FILE_STATES.write();
-        if let Some(state) = file_states.get_mut(idx) {
-            state.offset = 0;
-        }
-        return;
-    }
-
-    if let Ok(metadata) = path_obj.metadata() {
-        let current_inode = metadata.ino();
-        let mut file_states = FILE_STATES.write();
-        if let Some(state) = file_states.get_mut(idx) {
-            if current_inode != state.inode {
-
-                state.inode = current_inode;
-                state.offset = 0;
-
-                if let Some(inotify) = INOTIFY_FD.write().as_mut() {
-                    if let Some(old_wd) = wd {
-                        if let Err(e) = inotify.watches().remove(old_wd) {
-                            crate::logger::debug!(
-                                crate::logger::get(),
-                                "移除 inotify watch 失败";
-                                "error" => %e
-                            );
-                        }
-                    }
-
-                    let mask = WatchMask::MODIFY
-                        | WatchMask::MOVED_FROM
-                        | WatchMask::MOVED_TO
-                        | WatchMask::DELETE
-                        | WatchMask::CREATE;
-
-                    match inotify.watches().add(&path, mask) {
-                        Ok(new_wd) => {
-                            state.wd = Some(new_wd.clone());
-                        }
-                        Err(e) => {
-                            crate::logger::warn!(
-                                crate::logger::get(),
-                                "重新注册 inotify watch 失败";
-                                "path" => &path,
-                                "error" => %e
-                            );
-                            state.wd = None;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ============================================================================
 // 主监控循环
 // ============================================================================
 
@@ -628,6 +372,10 @@ pub fn monitor_loop(
 ) -> Result<()> {
     let mut last_partial_cleanup = SystemTime::now();
     let mut last_new_file_check = SystemTime::now();
+    let mut last_sqlite_sync = SystemTime::now();
+    let mut last_stats_snapshot = SystemTime::now();
+    let mut last_data_cleanup = SystemTime::now();
+    let mut last_ddos_check = SystemTime::now();
 
     let raw_fd = INOTIFY_RAW_FD.load(Ordering::Relaxed);
     if raw_fd < 0 {
@@ -685,7 +433,51 @@ pub fn monitor_loop(
                                 break;
                             }
                         }
+        // poll_result 分 3 段处理: > 0 = 有事件 / = 0 = 超时 / < 0 = 错误
+        if poll_result > 0 {
+            // 1. 读取 inotify 事件到 Vec 后立即释放 INOTIFY_FD 写锁
+            let collected_events: Vec<(WatchDescriptor, inotify::EventMask)> = {
+                if let Some(inotify) = INOTIFY_FD.write().as_mut() {
+                    let mut buffer = [0u8; 4096];
+                    if let Ok(events) = inotify.read_events(&mut buffer) {
+                        DAEMON_STATS.inotify_events.fetch_add(1, Ordering::Relaxed);
+                        events.map(|e| (e.wd, e.mask)).collect()
+                    } else {
+                        Vec::new()
                     }
+                } else {
+                    Vec::new()
+                }
+            };
+
+            // 2. 事件分发: 不持有任何全局锁调用处理函数
+            for (wd, mask) in collected_events {
+                let file_idx = {
+                    let file_states = FILE_STATES.read();
+                    file_states
+                        .iter()
+                        .enumerate()
+                        .find(|(_, state)| state.wd.as_ref() == Some(&wd))
+                        .map(|(idx, _)| idx)
+                };
+
+                let Some(idx) = file_idx else { continue };
+
+                if mask.contains(inotify::EventMask::MODIFY)
+                    || mask.contains(inotify::EventMask::MOVED_TO)
+                {
+                    if let Err(e) = process_new_lines(idx, cfg) {
+                        crate::logger::debug!(
+                            crate::logger::get(),
+                            "处理日志行失败";
+                            "error" => %e
+                        );
+                    }
+                }
+                if mask.contains(inotify::EventMask::DELETE)
+                    || mask.contains(inotify::EventMask::MOVED_FROM)
+                {
+                    handle_log_rotation(idx, cfg);
                 }
             }
         } else if poll_result == 0 {
@@ -701,10 +493,7 @@ pub fn monitor_loop(
                         "error" => %e
                     );
                 } else {
-                    crate::logger::info!(
-                        crate::logger::get(),
-                        "配置重载成功"
-                    );
+                    crate::logger::info!(crate::logger::get(), "配置重载成功");
                 }
                 continue;
             }
@@ -729,6 +518,233 @@ pub fn monitor_loop(
                 last_new_file_check = now;
                 check_for_new_log_files(cfg);
             }
+
+            // SQLite 定时器批量同步 (每 5 秒检查 dirty 标志)
+            if crate::sqlite_writer::is_dirty()
+                && now
+                    .duration_since(last_sqlite_sync)
+                    .unwrap_or_default()
+                    .as_secs()
+                    >= cfg.storage.writer.flush_interval_secs as u64
+            {
+                last_sqlite_sync = now;
+                if let Some(db) = crate::sqlite::get_global_db() {
+                    let conn = crate::sqlite::get_conn(&db);
+
+                    // 同步活跃封禁到 ban_history
+                    let active_bans = crate::types::ACTIVE_BAN_CACHE
+                        .get()
+                        .map(|cache| cache.snapshot())
+                        .unwrap_or_default();
+
+                    if !active_bans.is_empty() {
+                        if let Err(e) =
+                            crate::sqlite_writer::insert_ban_history_batch(&conn, &active_bans)
+                        {
+                            crate::logger::warn!(
+                                crate::logger::get(),
+                                "批量同步封禁历史失败";
+                                "error" => %e
+                            );
+                        }
+                    }
+
+                    crate::sqlite_writer::clear_dirty();
+
+                    crate::logger::debug!(
+                        crate::logger::get(),
+                        "SQLite 定时器同步完成";
+                        "bans_synced" => active_bans.len()
+                    );
+                }
+            }
+
+            // Jail 统计快照 (每 60 秒)
+            if now
+                .duration_since(last_stats_snapshot)
+                .unwrap_or_default()
+                .as_secs()
+                >= 60
+            {
+                last_stats_snapshot = now;
+                if let Some(db) = crate::sqlite::get_global_db() {
+                    let conn = crate::sqlite::get_conn(&db);
+                    let now_secs = now
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+
+                    // 写入全局守护进程统计快照
+                    let daemon_stats = crate::sqlite_writer::DaemonStatsSnapshot {
+                        snapshot_time: now_secs,
+                        uptime_seconds: (now_secs
+                            - crate::types::DAEMON_STATS
+                                .start_time
+                                .load(Ordering::Relaxed) as i64)
+                            .max(0) as u64,
+                        total_lines_parsed: crate::types::DAEMON_STATS
+                            .lines_parsed
+                            .load(Ordering::Relaxed),
+                        total_ips_banned: crate::types::DAEMON_STATS
+                            .ips_banned
+                            .load(Ordering::Relaxed),
+                        total_failed: crate::types::DAEMON_STATS
+                            .failed_attempts
+                            .load(Ordering::Relaxed),
+                        active_ban_count: crate::types::ACTIVE_BAN_CACHE
+                            .get()
+                            .map(|c| c.len())
+                            .unwrap_or(0) as u64,
+                        kernel_ban_count: 0,
+                    };
+                    if let Err(e) = crate::sqlite_writer::insert_daemon_stats(&conn, &daemon_stats)
+                    {
+                        crate::logger::warn!(
+                            crate::logger::get(),
+                            "写入守护进程统计快照失败";
+                            "error" => %e
+                        );
+                    }
+
+                    // 写入 per-jail 统计快照
+                    if let Some(map) = crate::types::JAIL_STATS.get() {
+                        let read_guard = map.read();
+                        for (_jail_name, counters) in read_guard.iter() {
+                            let snapshot = counters.snapshot();
+                            let jail_stats = crate::sqlite_writer::JailStatsSnapshot {
+                                jail_name: snapshot.jail_name.clone(),
+                                snapshot_time: now_secs,
+                                lines_parsed: snapshot.lines_parsed,
+                                ips_extracted: snapshot.ips_extracted,
+                                bans_triggered: snapshot.bans_triggered,
+                                failed_attempts: snapshot.failed_attempts,
+                                active_bans: crate::types::ACTIVE_BAN_CACHE
+                                    .get()
+                                    .map(|cache| cache.get_by_jail(&snapshot.jail_name).len())
+                                    .unwrap_or(0)
+                                    as u64,
+                            };
+                            if let Err(e) =
+                                crate::sqlite_writer::insert_jail_stats(&conn, &jail_stats)
+                            {
+                                crate::logger::warn!(
+                                    crate::logger::get(),
+                                    "写入 jail 统计快照失败";
+                                    "jail" => &snapshot.jail_name,
+                                    "error" => %e
+                                );
+                            }
+                        }
+                    }
+
+                    crate::logger::debug!(crate::logger::get(), "统计快照写入完成");
+                }
+            }
+
+            // 数据清理 (按 retention 策略)
+            if now
+                .duration_since(last_data_cleanup)
+                .unwrap_or_default()
+                .as_secs()
+                >= cfg.storage.retention.cleanup_interval_secs as u64
+            {
+                last_data_cleanup = now;
+                if let Some(db) = crate::sqlite::get_global_db() {
+                    let conn = crate::sqlite::get_conn(&db);
+
+                    if let Err(e) = crate::sqlite_writer::cleanup_old_data(
+                        &conn,
+                        cfg.storage.retention.ban_history_days,
+                        cfg.storage.retention.failed_logs_days,
+                        cfg.storage.retention.jail_stats_days,
+                        cfg.storage.retention.ddos_events_days,
+                    ) {
+                        crate::logger::warn!(
+                            crate::logger::get(),
+                            "清理过期数据失败";
+                            "error" => %e
+                        );
+                    } else {
+                        crate::logger::debug!(
+                            crate::logger::get(),
+                            "过期数据清理完成";
+                            "ban_history_days" => cfg.storage.retention.ban_history_days,
+                            "failed_logs_days" => cfg.storage.retention.failed_logs_days
+                        );
+                    }
+                }
+            }
+
+            // DDoS 检测 (按 check_interval 间隔)
+            if cfg.ddos.enabled
+                && now
+                    .duration_since(last_ddos_check)
+                    .unwrap_or_default()
+                    .as_secs()
+                    >= cfg.ddos.check_interval as u64
+            {
+                last_ddos_check = now;
+
+                let tracker = crate::ddos_detector::get_conn_rate_tracker();
+                let events = tracker.detect(&cfg.ddos);
+
+                if !events.is_empty() {
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "DDoS 检测完成";
+                        "events_detected" => events.len()
+                    );
+
+                    for event in &events {
+                        if event.action_taken == "ban" && event.ip != "global" {
+                            if let Err(e) = crate::ban::ban_ip_with_history(
+                                &event.ip,
+                                "ddos_detector",
+                                0,
+                                cfg.ddos.auto_ban_duration as u64,
+                            ) {
+                                crate::logger::warn!(
+                                    crate::logger::get(),
+                                    "DDoS 自动封禁失败";
+                                    "ip" => &event.ip,
+                                    "error" => %e
+                                );
+                            } else {
+                                crate::logger::info!(
+                                    crate::logger::get(),
+                                    "DDoS 自动封禁成功";
+                                    "ip" => &event.ip,
+                                    "event_type" => &event.event_type,
+                                    "rate" => event.rate_per_second,
+                                    "threshold" => event.threshold
+                                );
+                            }
+                        }
+
+                        if let Some(db) = crate::sqlite::get_global_db() {
+                            let conn = crate::sqlite::get_conn(&db);
+                            if let Err(e) = crate::sqlite_writer::insert_ddos_event(
+                                &conn,
+                                &event.ip,
+                                &event.event_type,
+                                event.rate_per_second,
+                                event.threshold,
+                                event.detected_at,
+                                &event.action_taken,
+                            ) {
+                                crate::logger::warn!(
+                                    crate::logger::get(),
+                                    "记录 DDoS 事件失败";
+                                    "ip" => &event.ip,
+                                    "error" => %e
+                                );
+                            }
+                        }
+                    }
+                }
+
+                tracker.cleanup_stale_entries();
+            }
         } else {
             let err = std::io::Error::last_os_error();
             if err.kind() == std::io::ErrorKind::Interrupted {
@@ -745,147 +761,6 @@ pub fn monitor_loop(
     }
 
     Ok(())
-}
-
-/// SIGHUP 热重载 (双缓冲):任何步骤失败旧配置不受影响。
-///
-/// 步骤: clone 旧 → 解析到新 → 应用默认 → 验证 → 迁移 `failed_hash` →
-/// 编译正则 → 原子替换 → 重建 inotify。
-///
-/// # Arguments
-/// - `cfg`: 旧配置 (会被新配置原子替换)
-///
-/// # Returns
-/// 成功时 `Ok(())`,`DAEMON_STATS.config_reloads` +1
-///
-/// # Errors
-/// 配置源缺失 / 解析失败 / 验证失败 / inotify 重建失败
-pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
-    use crate::config_parser;
-    use crate::jail;
-
-    let config_path = if let Some(ref f) = cfg.config_file {
-        f.clone()
-    } else if let Some(ref d) = cfg.config_dir {
-        d.clone()
-    } else {
-        return Err(anyhow::anyhow!(
-            "No config file or directory specified for reload"
-        ));
-    };
-
-    let old_cfg = jail::config_clone(cfg);
-
-    // 保留 config_file / config_dir 供 SIGHUP 后继 reload 复用
-    let mut new_cfg = crate::types::Config {
-        config_file: old_cfg.config_file.clone(),
-        config_dir: old_cfg.config_dir.clone(),
-        ..crate::types::Config::default()
-    };
-
-    let path = std::path::Path::new(&config_path);
-    if path.is_file() {
-        config_parser::parse_config_file(&config_path, &mut new_cfg, cfg.strict_mode)?;
-    } else if path.is_dir() {
-        config_parser::load_config_directory(&config_path, &mut new_cfg, cfg.strict_mode)?;
-    } else {
-        return Err(anyhow::anyhow!("Config path does not exist: {config_path}"));
-    }
-
-    jail::apply_smart_defaults_to_all(&mut new_cfg);
-    jail::config_validate(&new_cfg).map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    for old_jail in &old_cfg.jails {
-        for new_jail in &mut new_cfg.jails {
-            if old_jail.name == new_jail.name {
-                let mut old_hash = old_jail.failed_hash.write();
-                let mut new_hash = new_jail.failed_hash.write();
-                for (ip, entry) in old_hash.drain() {
-                    new_hash.insert(ip, entry);
-                }
-
-                break;
-            }
-        }
-    }
-
-    if let Err(e) = jail::init_log_patterns(&mut new_cfg) {
-        crate::logger::warn!(
-            crate::logger::get(),
-            "重载时初始化日志模式失败";
-            "error" => %e
-        );
-    }
-
-    *cfg = new_cfg;
-    DAEMON_STATS.config_reloads.fetch_add(1, Ordering::Relaxed);
-    setup_inotify(cfg)?;
-
-
-    Ok(())
-}
-
-/// 周期维护: flush 所有 jail 的 partial 行缓冲。`monitor_loop` 超时 60s 触发。
-///
-/// 防止 partial 缓冲无限增长(异常日志最后一行无 `\n`)。
-///
-/// # Arguments
-/// - `cfg`: 全局配置
-pub fn cleanup_partial_line_buffer(cfg: &Config) {
-    for jail in &cfg.jails {
-        let mut buf = jail.partial_line_buffer.write();
-        if !buf.is_empty() {
-            crate::logger::debug!(
-                crate::logger::get(),
-                "清理 partial 行缓冲";
-                "jail" => &jail.name,
-                "size" => buf.len()
-            );
-            buf.clear();
-        }
-    }
-}
-
-fn check_for_new_log_files(cfg: &Config) {
-    let file_states = FILE_STATES.read();
-    let mut needs_resetup = false;
-
-    for jail in &cfg.jails {
-        if !jail.enabled {
-            continue;
-        }
-        for log_file in &jail.log_files {
-            if Path::new(log_file).exists() {
-                let already_watched = file_states
-                    .iter()
-                    .any(|s| s.wd.is_some() && s.path == *log_file);
-                if !already_watched {
-                    crate::logger::info!(
-                        crate::logger::get(),
-                        "发现新的日志文件";
-                        "path" => log_file
-                    );
-                    needs_resetup = true;
-                }
-            }
-        }
-    }
-
-    if needs_resetup {
-        drop(file_states);
-        if let Err(e) = setup_inotify(cfg) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "重新设置 inotify 失败";
-                "error" => %e
-            );
-        } else {
-            crate::logger::info!(
-                crate::logger::get(),
-                "重新设置 inotify 成功"
-            );
-        }
-    }
 }
 
 // ============================================================================

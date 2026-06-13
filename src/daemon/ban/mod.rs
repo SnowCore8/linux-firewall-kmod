@@ -6,6 +6,11 @@
 //! - IP 合法性校验 (拒绝 loopback/multicast/link-local 等)
 //! - 缓存 bans fd (R9-9 优化) 避免每次封禁都 `open`/`close`
 //! - Permanent/UnbanPerm 同步写 `SQLite` 永久黑名单
+//! # 子模块划分
+//!
+//! - [`procfs`][]: 安全 procfs 文件操作 + fd 缓存
+//! - [`ip_validation`][]: IP 合法性校验
+//! - [`operations`][]: 封禁/解封操作
 //!
 //! # procfs 命令格式
 //!
@@ -26,6 +31,7 @@
 //! 关被拒。
 
 // 模块声明
+
 mod ip_validation;
 mod operations;
 mod procfs;
@@ -64,3 +70,11 @@ pub enum BanAction {
     /// 解封永久封禁 (写 `unban <ip>\n`,同时 `SQLite` `is_active=0`)
     UnbanPerm,
 }
+// Re-export 所有公共类型和函数
+pub use ip_validation::{validate_ip, validate_ipv4, ValidatedIp};
+pub use operations::{
+    ban_ip, ban_ip_permanent, ban_ip_permanent_with_history, ban_ip_with_history,
+    cleanup_expired_bans, execute_ban_action, unban_ip, unban_ip_with_history, unban_permanent_ip,
+    BanAction,
+};
+pub use procfs::{close_cached_bans_fd, secure_procfs_write, BANS_PATH, PROCFS_DIR};

@@ -7,16 +7,17 @@ Type=forking
 PIDFile=/run/firewall-daemon.pid
 User=root
 Group=root
-ExecStart=__SBINDIR__/firewall-daemon -C /etc/firewall --daemon
+ExecStart=/usr/local/sbin/firewall-daemon -C /etc/firewall --daemon
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=30
+TimeoutStopSec=10
 
 # Security Hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/firewall
+ReadWritePaths=/var/lib/firewall /var/log
 ReadOnlyPaths=/etc/firewall
 PrivateTmp=yes
 ProtectHome=yes

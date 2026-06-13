@@ -4,6 +4,20 @@
 //! (`u64` 范围远超 1970-2100 年 32-bit 上限,实际不可能 wrap),`usize → i32`
 //! 仅出现在 SQL `INTEGER` 字段处,目标 SQL 内无 64-bit 支持
 // 文件级 cast 警告抑制(详见模块文档)
+//! `SQLite` 永久黑名单：WAL 模式 + 软删除 + 启动时迁移
+//!
+//! # 子模块划分
+//!
+//! - [`connection`][]: 连接管理 + 全局 DB 注册 + schema 初始化
+//! - [`permanent_bans`][]: 永久封禁 CRUD 操作
+//! - [`stats`][]: 统计查询 + 数据清理
+//!
+//! # 关键设计
+//!
+//! - **WAL 模式**:`PRAGMA journal_mode=WAL` + `synchronous=FULL`
+//! - **软删除**:`is_active=0` 而非真删除,审计可追溯
+//! - **启动迁移**:旧表去重 + UNIQUE 约束 + 原子重命名
+
 #![allow(
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
@@ -22,6 +36,7 @@
 //!   系统目录,防止误把数据库建到根分区
 
 // 模块声明
+
 mod connection;
 mod permanent_bans;
 mod stats;
@@ -30,9 +45,14 @@ mod stats;
 pub use connection::{
     clear_global_db, set_global_db, sqlite_close, sqlite_init, with_global_db, PermanentBanEntry,
     SqliteDb,
+// Re-export 所有公共类型和函数
+pub use connection::{
+    clear_global_db, get_conn, get_global_db, set_global_db, sqlite_close, sqlite_init,
+    with_global_db, SqliteDb,
 };
 pub use permanent_bans::{
     sqlite_add_permanent_ban, sqlite_add_permanent_bans_batch, sqlite_is_permanent_banned,
     sqlite_is_permanent_banned_ipv6, sqlite_load_all_permanent_bans, sqlite_remove_permanent_ban,
+    PermanentBanEntry,
 };
 pub use stats::{sqlite_get_stats, sqlite_purge_deleted, sqlite_update_hit_stats};

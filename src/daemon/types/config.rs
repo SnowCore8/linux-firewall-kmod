@@ -15,6 +15,9 @@
 //! - **配置来源追踪**:`config_file` / `config_dir` (SIGHUP 重载时复用)
 
 use super::{Jail, MAX_JAILS};
+//! 配置相关数据结构：Config、StorageConfig 及其子配置
+
+use super::jail::{Jail, MAX_JAILS};
 
 // ============================================================================
 // 配置结构
@@ -67,6 +70,10 @@ pub struct Config {
     pub strict_mode: bool,
     /// 已加载的 Jail 列表
     pub jails: Vec<Jail>,
+    /// 混合存储配置 (Phase 1 新增)
+    pub storage: StorageConfig,
+    /// DDoS 防护配置 (Phase 3 新增)
+    pub ddos: super::DdosConfig,
 }
 
 impl Default for Config {
@@ -97,4 +104,72 @@ impl Default for Config {
             jails: Vec::with_capacity(MAX_JAILS),
         }
     }
+}
+            storage: StorageConfig::default(),
+            ddos: super::DdosConfig::default(),
+        }
+    }
+}
+
+// ============================================================================
+// 存储配置
+// ============================================================================
+
+/// 数据保留策略配置
+#[derive(Debug, Clone)]
+pub struct RetentionConfig {
+    /// 封禁历史保留天数 (默认 90)
+    pub ban_history_days: u32,
+    /// 失败日志保留天数 (默认 30)
+    pub failed_logs_days: u32,
+    /// Jail 统计保留天数 (默认 365)
+    pub jail_stats_days: u32,
+    /// DDoS 事件保留天数 (默认 30)
+    pub ddos_events_days: u32,
+    /// 清理间隔 (秒,默认 86400 = 每天)
+    pub cleanup_interval_secs: u32,
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            ban_history_days: 90,
+            failed_logs_days: 30,
+            jail_stats_days: 365,
+            ddos_events_days: 30,
+            cleanup_interval_secs: 86400,
+        }
+    }
+}
+
+/// 异步 SQLite 写入器配置
+#[derive(Debug, Clone)]
+pub struct WriterConfig {
+    /// bounded channel 容量 (默认 1000)
+    pub channel_size: usize,
+    /// 批量写入大小 (默认 50)
+    pub batch_size: usize,
+    /// 最大 flush 间隔 (秒,默认 5)
+    pub flush_interval_secs: u32,
+}
+
+impl Default for WriterConfig {
+    fn default() -> Self {
+        Self {
+            channel_size: 1000,
+            batch_size: 50,
+            flush_interval_secs: 5,
+        }
+    }
+}
+
+/// 混合存储配置
+#[derive(Debug, Clone, Default)]
+pub struct StorageConfig {
+    /// SQLite 数据库路径 (None 表示使用默认路径，向后兼容 `permanent_db_path`)
+    pub db_path: Option<String>,
+    /// 数据保留策略
+    pub retention: RetentionConfig,
+    /// 异步写入器配置
+    pub writer: WriterConfig,
 }

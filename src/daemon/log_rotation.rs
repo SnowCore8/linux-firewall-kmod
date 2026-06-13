@@ -10,6 +10,11 @@
 //!
 //! - 每个日志文件 inode 在 `setup_inotify` 时记录,变化时认为是轮转
 //! - 轮转前先 flush partial 行缓冲,避免丢失数据
+//! 日志轮转检测 + 新文件发现
+//!
+//! 职责：
+//! - `handle_log_rotation`: 处理 inotify DELETE/MOVED_FROM 事件
+//! - `check_for_new_log_files`: 周期性检查新增日志文件并重新 setup inotify
 
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
@@ -27,6 +32,8 @@ use crate::types::{Config, DAEMON_STATS};
 
 /// 处理日志轮转:inotify DELETE / `MOVED_FROM` 事件触发,先 flush partial 行,
 /// 再更新 inode + offset,最后重新注册 inotify watch。
+/// 处理日志轮转：inotify DELETE / `MOVED_FROM` 事件触发，先 flush partial 行，
+/// 再更新 inode + offset，最后重新注册 inotify watch。
 ///
 /// # Arguments
 /// - `idx`: `FILE_STATES` 索引
@@ -69,6 +76,11 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
     let path_obj = Path::new(&path);
     if !path_obj.exists() {
         // 文件已删除,重置 offset
+        crate::logger::debug!(
+            crate::logger::get(),
+            "日志轮转后文件不存在";
+            "path" => &path
+        );
         let mut file_states = FILE_STATES.write();
         if let Some(state) = file_states.get_mut(idx) {
             state.offset = 0;
@@ -83,12 +95,20 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
         if let Some(state) = file_states.get_mut(idx) {
             if current_inode != state.inode {
                 // inode 变化,认为是轮转
+                // inode 变化，更新状态
                 state.inode = current_inode;
                 state.offset = 0;
 
                 if let Some(inotify) = INOTIFY_FD.write().as_mut() {
                     if let Some(old_wd) = wd {
                         let _ = inotify.watches().remove(old_wd);
+                        if let Err(e) = inotify.watches().remove(old_wd) {
+                            crate::logger::debug!(
+                                crate::logger::get(),
+                                "移除 inotify watch 失败";
+                                "error" => %e
+                            );
+                        }
                     }
 
                     let mask = WatchMask::MODIFY
@@ -102,6 +122,13 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
                             state.wd = Some(new_wd.clone());
                         }
                         Err(_e) => {
+                        Err(e) => {
+                            crate::logger::warn!(
+                                crate::logger::get(),
+                                "重新注册 inotify watch 失败";
+                                "path" => &path,
+                                "error" => %e
+                            );
                             state.wd = None;
                         }
                     }
@@ -123,6 +150,12 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
 /// # Arguments
 /// - `cfg`: 全局配置
 pub fn check_for_new_log_files(cfg: &Config) {
+/// 周期检查新增日志文件：遍历所有 enabled jail 的 log_files，若发现未 watch 的
+/// 已存在文件则重新 `setup_inotify`。
+///
+/// # Arguments
+/// - `cfg`: 全局配置
+pub(crate) fn check_for_new_log_files(cfg: &Config) {
     let file_states = FILE_STATES.read();
     let mut needs_resetup = false;
 
@@ -137,6 +170,11 @@ pub fn check_for_new_log_files(cfg: &Config) {
                     .any(|s| s.wd.is_some() && s.path == *log_file);
                 if !already_watched {
                     // 发现新文件,需要重新 setup
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "发现新的日志文件";
+                        "path" => log_file
+                    );
                     needs_resetup = true;
                 }
             }
@@ -149,6 +187,14 @@ pub fn check_for_new_log_files(cfg: &Config) {
             // setup 失败,保持现状
         } else {
             // setup 成功,新文件已加入监控
+        if let Err(e) = setup_inotify(cfg) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "重新设置 inotify 失败";
+                "error" => %e
+            );
+        } else {
+            crate::logger::info!(crate::logger::get(), "重新设置 inotify 成功");
         }
     }
 }

@@ -5,6 +5,7 @@
 //! - 缓存 bans fd (R9-9 优化) 避免每次封禁都 open/close
 //! - 安全 procfs 写入:路径白名单 + 字符白名单 + fd 重定向检查
 //! - 三道防线防止恶意输入击穿到 procfs
+//! 安全 procfs 文件操作 + bans fd 缓存
 
 use std::ffi::CString;
 use std::os::fd::RawFd;
@@ -14,6 +15,15 @@ use anyhow::{bail, Context, Result};
 use parking_lot::Mutex;
 
 use super::{BANS_PATH, PROCFS_DIR};
+// ============================================================================
+// 常量
+// ============================================================================
+
+/// 内核模块 procfs 根目录。所有 `secure_procfs_write` 只能在此目录下写入。
+pub const PROCFS_DIR: &str = "/proc/firewall";
+
+/// 封禁命令的 procfs 文件。命令格式见模块级文档。
+pub const BANS_PATH: &str = "/proc/firewall/bans";
 
 // ============================================================================
 // 缓存的 bans procfs fd (R9-9 优化: 避免每次封禁都 open/close)
@@ -243,6 +253,13 @@ pub fn secure_procfs_write(path: &str, data: &[u8]) -> Result<()> {
         // SAFETY: fd 是本函数 `open` 拿到的非缓存 fd,作用域结束必须 close
         let close_result = unsafe { libc::close(fd) };
         let _ = close_result;
+        if close_result != 0 {
+            crate::logger::debug!(
+                crate::logger::get(),
+                "关闭 bans fd 失败";
+                "fd" => fd
+            );
+        }
     }
 
     Ok(())

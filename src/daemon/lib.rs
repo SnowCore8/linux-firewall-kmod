@@ -18,7 +18,7 @@
 //! - `config`: YAML 解析 (严格模式 key 白名单 + 路径安全 3 重检查 + 失败回滚)
 //! - `file_monitor`: inotify 文件监控 + 轮转检测 + 主事件循环 (poll + SIGHUP 重载)
 //! - `http_exporter`: Prometheus `/metrics` 端点 + Basic Auth + 暴力破解防护
-//! - `sqlite_store`: 永久黑名单持久化 (WAL 模式 + 软删除 + 启动去重迁移)
+//! - `sqlite`: 永久黑名单持久化 (WAL 模式 + 软删除 + 启动去重迁移)
 //!
 //! # 行为对齐
 //!
@@ -37,6 +37,9 @@
 pub mod ban;
 pub mod config;
 pub mod config_reloader;
+pub mod config_parser;
+pub mod config_reloader;
+pub mod ddos_detector;
 pub mod failed_tracker;
 pub mod file_monitor;
 pub mod file_reader;
@@ -47,4 +50,5 @@ pub mod log_parser;
 pub mod log_rotation;
 pub mod logger;
 pub mod sqlite;
+pub mod sqlite_writer;
 pub mod types;

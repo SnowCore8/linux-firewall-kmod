@@ -5,6 +5,7 @@
 //! - 校验 IPv4 字符串:拒绝 loopback/broadcast/multicast/全 0 地址
 //! - 校验通用 IP (IPv4 或 IPv6):先尝试 IPv4,失败回退 IPv6
 //! - IPv6 时额外拒绝 loopback/multicast/unspecified/link-local
+//! IP 合法性校验 (拒绝 loopback/multicast/link-local 等)
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -12,6 +13,20 @@ use anyhow::{bail, Result};
 
 // ============================================================================
 // IP 验证
+// ValidatedIp 结构
+// ============================================================================
+
+/// 校验通过的 IP 描述。
+#[derive(Debug, Clone)]
+pub struct ValidatedIp {
+    /// 标准库 `IpAddr` 表示
+    pub ip: IpAddr,
+    /// 仅 IPv4 有效 (网络字节序)。IPv6 时为 0
+    pub ip_num: u32,
+}
+
+// ============================================================================
+// IP 验证函数
 // ============================================================================
 
 /// 校验 IPv4 字符串。拒绝 loopback / broadcast / multicast / 全 0 地址。

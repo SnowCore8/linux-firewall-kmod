@@ -1,0 +1,275 @@
+//! DDoS 检测模块
+//!
+//! # 核心职责
+//!
+//! - 跟踪 per-IP 连接速率和失败速率
+//! - 检测全局连接速率
+//! - 超阈值时自动封禁并记录到 SQLite
+//!
+//! # 检测策略
+//!
+//! 1. **Per-IP 连接速率**: 单 IP 每秒连接数超过 `per_ip_conn_rate`
+//! 2. **Per-IP 失败速率**: 单 IP 每分钟失败次数超过 `per_ip_fail_rate`
+//! 3. **全局连接速率**: 所有 IP 每秒总连接数超过 `global_conn_rate`
+//!
+//! # 封禁触发
+//!
+//! 超阈值 `auto_ban_threshold` 次后自动封禁，封禁时长为 `auto_ban_duration` 秒。
+
+use std::collections::HashMap;
+use std::sync::atomic::Ordering;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use parking_lot::RwLock;
+
+use crate::types::{ConnRateEntry, DdosConfig, DdosEvent, DDOS_STATS};
+
+/// 连接速率跟踪器
+///
+/// 维护所有 IP 的连接速率统计，支持 per-IP 和全局限速检测。
+pub struct ConnRateTracker {
+    /// IP → 连接速率条目
+    entries: RwLock<HashMap<String, ConnRateEntry>>,
+    /// 全局连接计数 (每秒重置)
+    global_conn_count: RwLock<u64>,
+    /// 上次重置时间 (Unix 秒)
+    last_reset_time: RwLock<i64>,
+}
+
+impl ConnRateTracker {
+    /// 创建新的连接速率跟踪器
+    pub fn new() -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        Self {
+            entries: RwLock::new(HashMap::new()),
+            global_conn_count: RwLock::new(0),
+            last_reset_time: RwLock::new(now),
+        }
+    }
+
+    /// 记录一次连接
+    ///
+    /// # Arguments
+    /// * `ip` - 来源 IP 地址
+    pub fn record_connection(&self, ip: &str) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        // 更新全局计数
+        {
+            let mut global = self.global_conn_count.write();
+            *global += 1;
+        }
+
+        // 更新 per-IP 计数
+        {
+            let mut entries = self.entries.write();
+            let entry = entries
+                .entry(ip.to_string())
+                .or_insert_with(|| ConnRateEntry::new(ip.to_string(), now));
+
+            entry.conn_count += 1;
+            entry.last_activity = now;
+
+            DDOS_STATS
+                .tracked_ips
+                .store(entries.len() as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// 记录一次失败尝试
+    ///
+    /// # Arguments
+    /// * `ip` - 来源 IP 地址
+    pub fn record_failure(&self, ip: &str) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let mut entries = self.entries.write();
+        let entry = entries
+            .entry(ip.to_string())
+            .or_insert_with(|| ConnRateEntry::new(ip.to_string(), now));
+
+        entry.fail_count += 1;
+        entry.last_activity = now;
+    }
+
+    /// 检测 DDoS 攻击
+    ///
+    /// # Arguments
+    /// * `config` - DDoS 配置
+    ///
+    /// # Returns
+    /// 检测到的 DDoS 事件列表
+    pub fn detect(&self, config: &DdosConfig) -> Vec<DdosEvent> {
+        if !config.enabled {
+            return Vec::new();
+        }
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let mut events = Vec::new();
+
+        // 检查是否需要重置计数器 (每秒重置)
+        {
+            let mut last_reset = self.last_reset_time.write();
+            if now > *last_reset {
+                // 重置全局计数
+                {
+                    let mut global = self.global_conn_count.write();
+                    *global = 0;
+                }
+
+                // 重置 per-IP 计数
+                {
+                    let mut entries = self.entries.write();
+                    for entry in entries.values_mut() {
+                        entry.reset(now);
+                    }
+                }
+
+                *last_reset = now;
+            }
+        }
+
+        // 检测全局连接速率
+        {
+            let global_count = *self.global_conn_count.read();
+            let global_rate = global_count as f64;
+
+            if global_rate > config.global_conn_rate as f64 {
+                DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
+
+                events.push(DdosEvent {
+                    ip: "global".to_string(),
+                    event_type: "global_rate".to_string(),
+                    rate_per_second: global_rate,
+                    threshold: config.global_conn_rate as f64,
+                    detected_at: now,
+                    action_taken: "log".to_string(),
+                });
+            }
+        }
+
+        // 检测 per-IP 速率
+        //
+        // 两阶段处理：读锁下检测违规并收集快照，写锁下更新 violation_count 并判断封禁。
+        // 直接在读锁内 `.cloned()` 后修改副本会导致 violation_count 写回丢失，
+        // auto_ban_threshold 比较永远基于 1，自动封禁完全失效。
+
+        struct PerIpViolation {
+            ip: String,
+            event_type: &'static str,
+            rate_for_event: f64,
+            threshold_for_event: f64,
+        }
+
+        let mut violations: Vec<PerIpViolation> = Vec::new();
+
+        // 阶段 1: 读锁下收集违规 IP 及事件快照
+        {
+            let entries = self.entries.read();
+            for entry in entries.values() {
+                let conn_rate = entry.conn_count as f64;
+                let fail_rate_per_min = entry.fail_count as f64 * 60.0;
+
+                if conn_rate > config.per_ip_conn_rate as f64 {
+                    DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
+                    violations.push(PerIpViolation {
+                        ip: entry.ip.clone(),
+                        event_type: "conn_rate",
+                        rate_for_event: conn_rate,
+                        threshold_for_event: config.per_ip_conn_rate as f64,
+                    });
+                }
+
+                if fail_rate_per_min > config.per_ip_fail_rate as f64 {
+                    DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
+                    violations.push(PerIpViolation {
+                        ip: entry.ip.clone(),
+                        event_type: "fail_rate",
+                        rate_for_event: fail_rate_per_min / 60.0,
+                        threshold_for_event: config.per_ip_fail_rate as f64 / 60.0,
+                    });
+                }
+            }
+        } // 读锁释放
+
+        // 阶段 2: 写锁下更新 violation_count 并判断是否触发封禁
+        {
+            let mut entries = self.entries.write();
+            for v in &violations {
+                if let Some(entry) = entries.get_mut(&v.ip) {
+                    entry.violation_count += 1;
+
+                    let action = if entry.violation_count >= config.auto_ban_threshold {
+                        DDOS_STATS
+                            .auto_bans_triggered
+                            .fetch_add(1, Ordering::Relaxed);
+                        "ban"
+                    } else {
+                        "log"
+                    };
+
+                    events.push(DdosEvent {
+                        ip: v.ip.clone(),
+                        event_type: v.event_type.to_string(),
+                        rate_per_second: v.rate_for_event,
+                        threshold: v.threshold_for_event,
+                        detected_at: now,
+                        action_taken: action.to_string(),
+                    });
+                }
+            }
+        } // 写锁释放
+
+        events
+    }
+
+    /// 获取当前跟踪的 IP 数量
+    pub fn tracked_ip_count(&self) -> usize {
+        self.entries.read().len()
+    }
+
+    /// 清理过期条目 (超过 5 分钟无活动)
+    pub fn cleanup_stale_entries(&self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let cutoff = now - 300; // 5 分钟
+
+        let mut entries = self.entries.write();
+        entries.retain(|_, entry| entry.last_activity > cutoff);
+
+        DDOS_STATS
+            .tracked_ips
+            .store(entries.len() as u64, Ordering::Relaxed);
+    }
+}
+
+impl Default for ConnRateTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 全局连接速率跟踪器实例
+pub static CONN_RATE_TRACKER: std::sync::OnceLock<ConnRateTracker> = std::sync::OnceLock::new();
+
+/// 获取或创建全局连接速率跟踪器
+pub fn get_conn_rate_tracker() -> &'static ConnRateTracker {
+    CONN_RATE_TRACKER.get_or_init(ConnRateTracker::new)
+}
