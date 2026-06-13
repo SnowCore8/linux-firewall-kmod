@@ -11,7 +11,7 @@ use anyhow::{bail, Context, Result};
 use super::ip_validation::validate_ip;
 use super::procfs::secure_procfs_write;
 use super::{BanAction, BANS_PATH};
-use crate::sqlite_store;
+use crate::sqlite;
 use crate::types::DAEMON_STATS;
 
 use std::sync::atomic::Ordering;
@@ -72,8 +72,8 @@ pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
 
     match action {
         BanAction::Permanent => {
-            if let Some(rc) = sqlite_store::with_global_db(|db| {
-                sqlite_store::sqlite_add_permanent_ban(
+            if let Some(rc) = sqlite::with_global_db(|db| {
+                sqlite::sqlite_add_permanent_ban(
                     db,
                     ip,
                     validated.ip_num,
@@ -89,7 +89,7 @@ pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
         }
         BanAction::UnbanPerm => {
             if let Some(rc) =
-                sqlite_store::with_global_db(|db| sqlite_store::sqlite_remove_permanent_ban(db, ip))
+                sqlite::with_global_db(|db| sqlite::sqlite_remove_permanent_ban(db, ip))
             {
                 rc.with_context(|| {
                     format!("SQLite remove_permanent_ban failed for permanent unban {ip}")

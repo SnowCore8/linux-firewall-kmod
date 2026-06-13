@@ -46,5 +46,5 @@ pub mod jail;
 pub mod line_processor;
 pub mod log_parser;
 pub mod log_rotation;
-pub mod sqlite_store;
+pub mod sqlite;
 pub mod types;

@@ -33,7 +33,7 @@ use firewall_daemon::config_parser;
 use firewall_daemon::file_monitor;
 use firewall_daemon::http_exporter;
 use firewall_daemon::jail;
-use firewall_daemon::sqlite_store;
+use firewall_daemon::sqlite;
 use firewall_daemon::types::{Config, DAEMON_STATS};
 use std::sync::Arc;
 
@@ -166,19 +166,19 @@ fn daemonize_process() -> Result<()> {
 /// # Arguments
 /// - `running`: 运行标志 (置 false 以防主循环死灰复燃)
 /// - `_cfg`: 保留参数,占位
-/// - `sqlite_db`: 可选 db 句柄 (来自 [`sqlite_store::sqlite_init`])
+/// - `sqlite_db`: 可选 db 句柄 (来自 [`sqlite::sqlite_init`])
 fn cleanup(
     running: &Arc<AtomicBool>,
     _cfg: &Config,
-    sqlite_db: &Option<std::sync::Arc<sqlite_store::SqliteDb>>,
+    sqlite_db: &Option<std::sync::Arc<sqlite::SqliteDb>>,
 ) {
     http_exporter::stop_http_exporter();
     running.store(false, Ordering::Relaxed);
     ban::close_cached_bans_fd();
     // 清理顺序: 先清全局引用, 再关 db, 防止收尾期间 ban 模块再访问
-    sqlite_store::clear_global_db();
+    sqlite::clear_global_db();
     if let Some(db) = sqlite_db {
-        sqlite_store::sqlite_close(db);
+        sqlite::sqlite_close(db);
     }
     let _ = fs::remove_file("/run/firewall-daemon.pid");
 }
@@ -230,16 +230,16 @@ fn main() -> Result<()> {
         .as_secs();
     DAEMON_STATS.start_time.store(now, Ordering::Relaxed);
 
-    let mut sqlite_db: Option<std::sync::Arc<sqlite_store::SqliteDb>> = None;
+    let mut sqlite_db: Option<std::sync::Arc<sqlite::SqliteDb>> = None;
     if cfg.permanent_ban_enabled {
         if let Some(ref db_path) = cfg.permanent_db_path {
-            match sqlite_store::sqlite_init(db_path) {
+            match sqlite::sqlite_init(db_path) {
                 Ok(db) => {
-                    sqlite_store::set_global_db(db.clone());
+                    sqlite::set_global_db(db.clone());
                     sqlite_db = Some(db);
 
                     if let Some(ref db) = sqlite_db {
-                        match sqlite_store::sqlite_load_all_permanent_bans(db) {
+                        match sqlite::sqlite_load_all_permanent_bans(db) {
                             Ok(entries) if !entries.is_empty() => {
                                 for entry in &entries {
                                     // 用 ban::ban_ip_permanent 而非手写 procfs 命令:
