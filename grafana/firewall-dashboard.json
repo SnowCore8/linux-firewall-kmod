@@ -129,6 +129,112 @@
             "legendFormat": "{{jail}} - Failed",
             "format": "table",
             "instant": true
+          },
+          {
+            "expr": "firewall_jail_active_bans",
+            "legendFormat": "{{jail}} - Active Bans",
+            "format": "table",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "type": "row",
+        "title": "DDoS Protection",
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 28}
+      },
+      {
+        "type": "graph",
+        "title": "DDoS Events Timeline",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 29},
+        "targets": [
+          {
+            "expr": "rate(firewall_ddos_events_total[5m])",
+            "legendFormat": "Events/sec"
+          },
+          {
+            "expr": "rate(firewall_ddos_auto_bans_total[5m])",
+            "legendFormat": "Auto Bans/sec"
+          }
+        ]
+      },
+      {
+        "type": "stat",
+        "title": "DDoS Tracked IPs",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 29},
+        "targets": [
+          {
+            "expr": "firewall_ddos_tracked_ips",
+            "legendFormat": "Tracked IPs"
+          }
+        ]
+      },
+      {
+        "type": "row",
+        "title": "Kernel Module",
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 37}
+      },
+      {
+        "type": "graph",
+        "title": "Kernel Ban/Unban Operations",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 38},
+        "targets": [
+          {
+            "expr": "rate(firewall_kernel_bans_total[5m])",
+            "legendFormat": "Bans/sec"
+          },
+          {
+            "expr": "rate(firewall_kernel_unbans_total[5m])",
+            "legendFormat": "Unbans/sec"
+          }
+        ]
+      },
+      {
+        "type": "stat",
+        "title": "Kernel Whitelist Count",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 38},
+        "targets": [
+          {
+            "expr": "firewall_kernel_whitelist_count",
+            "legendFormat": "Whitelist IPs"
+          }
+        ]
+      },
+      {
+        "type": "row",
+        "title": "Operations",
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 46}
+      },
+      {
+        "type": "stat",
+        "title": "Config Reloads",
+        "gridPos": {"h": 4, "w": 8, "x": 0, "y": 47},
+        "targets": [
+          {
+            "expr": "firewall_daemon_config_reloads_total",
+            "legendFormat": "Reloads"
+          }
+        ]
+      },
+      {
+        "type": "stat",
+        "title": "Log Rotations",
+        "gridPos": {"h": 4, "w": 8, "x": 8, "y": 47},
+        "targets": [
+          {
+            "expr": "firewall_daemon_log_rotations_total",
+            "legendFormat": "Rotations"
+          }
+        ]
+      },
+      {
+        "type": "stat",
+        "title": "Lines Skipped",
+        "gridPos": {"h": 4, "w": 8, "x": 16, "y": 47},
+        "targets": [
+          {
+            "expr": "firewall_daemon_lines_skipped_total",
+            "legendFormat": "Skipped"
           }
         ]
       }
