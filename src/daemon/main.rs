@@ -114,9 +114,7 @@ fn daemonize_process() -> Result<()> {
         Err(e) => bail!("second fork failed: {}", e),
     }
 
-    if let Err(_e) = std::env::set_current_dir("/") {
-
-    }
+    if let Err(_e) = std::env::set_current_dir("/") {}
 
     // PID 文件用 O_NOFOLLOW 防止符号链接攻击覆盖其他进程
     let pid = process::id();
@@ -174,8 +172,6 @@ fn cleanup(
     _cfg: &Config,
     sqlite_db: &Option<std::sync::Arc<sqlite_store::SqliteDb>>,
 ) {
-
-
     http_exporter::stop_http_exporter();
     running.store(false, Ordering::Relaxed);
     ban::close_cached_bans_fd();
@@ -183,7 +179,6 @@ fn cleanup(
     sqlite_store::clear_global_db();
     if let Some(db) = sqlite_db {
         sqlite_store::sqlite_close(db);
-
     }
     let _ = fs::remove_file("/run/firewall-daemon.pid");
 }
@@ -222,14 +217,10 @@ fn main() -> Result<()> {
     setup_signals(running.clone(), reload_config.clone())?;
 
     if !Path::new(PROCFS_DIR).exists() {
-
-
         bail!("Procfs directory not found");
     }
 
     if !Path::new(BANS_PATH).exists() {
-
-
         bail!("Bans procfs interface not found");
     }
 
@@ -247,11 +238,9 @@ fn main() -> Result<()> {
                     sqlite_store::set_global_db(db.clone());
                     sqlite_db = Some(db);
 
-
                     if let Some(ref db) = sqlite_db {
                         match sqlite_store::sqlite_load_all_permanent_bans(db) {
                             Ok(entries) if !entries.is_empty() => {
-
                                 for entry in &entries {
                                     // 用 ban::ban_ip_permanent 而非手写 procfs 命令:
                                     //   1) 内核 procfs 不识别 "permanent" 前缀, 只认 "<ip> 0"
@@ -259,18 +248,12 @@ fn main() -> Result<()> {
                                     let _ = ban::ban_ip_permanent(&entry.ip);
                                 }
                             }
-                            Ok(_) => {
-
-                            }
-                            Err(_e) => {
-
-                            }
+                            Ok(_) => {}
+                            Err(_e) => {}
                         }
                     }
                 }
-                Err(_e) => {
-
-                }
+                Err(_e) => {}
             }
         }
     }
@@ -284,35 +267,24 @@ fn main() -> Result<()> {
 
     file_monitor::setup_inotify(&cfg)?;
 
-
-
-    for (_i, jail) in cfg.jails.iter().enumerate() {
+    for jail in cfg.jails.iter() {
         if jail.enabled {
-
+            // jail 已启用
         }
     }
 
-
     if let Err(_e) = jail::init_log_patterns(&mut cfg) {
-
-    } else {
-
+        // 正则编译失败,继续使用旧正则
     }
 
     let mut exporter_handle = None;
     if cfg.metrics_port > 0 {
         exporter_handle = Some(http_exporter::start_http_exporter(cfg.metrics_port, &cfg));
-
-    } else {
-
     }
 
-    if let Err(_e) = file_monitor::monitor_loop(&mut cfg, &running, &reload_config) {
-
-    }
+    if let Err(_e) = file_monitor::monitor_loop(&mut cfg, &running, &reload_config) {}
 
     cleanup(&running, &cfg, &sqlite_db);
-
 
     if let Some(handle) = exporter_handle {
         let _ = handle.join();

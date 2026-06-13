@@ -255,7 +255,7 @@ fn validate_procfs_path(path: &str) -> Result<()> {
 
     // 跳过 PROCFS_DIR 前缀后逐字符验证
     let safe_start = PROCFS_DIR.len() + 1;
-    for (_i, c) in path[safe_start..].chars().enumerate() {
+    for c in path[safe_start..].chars() {
         if !c.is_ascii_alphanumeric() && !matches!(c, '/' | '-' | '_' | '.') {
             bail!("invalid character in path");
         }

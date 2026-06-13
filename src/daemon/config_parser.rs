@@ -369,9 +369,8 @@ pub fn parse_config_file(config_path: &str, cfg: &mut Config, strict_mode: bool)
 
             if let Some(ref log_files) = yaml_jail.log_files {
                 for lf in log_files {
-                    match validate_and_normalize_path(lf) {
-                        Ok(normalized) => jail.log_files.push(normalized),
-                        Err(_) => {},
+                    if let Ok(normalized) = validate_and_normalize_path(lf) {
+                        jail.log_files.push(normalized);
                     }
                 }
             }

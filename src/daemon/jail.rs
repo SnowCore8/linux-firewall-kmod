@@ -125,8 +125,6 @@ fn apply_service_defaults(
     if !jail.ban_time_set {
         jail.ban_time = ban_time;
     }
-
-
 }
 
 /// 对单个 jail 套用智能默认。匹配优先级: SSH > WEB > FTP > MAIL > FRP > DB > 全局默认。
@@ -167,7 +165,6 @@ fn apply_smart_defaults_single(
         if !jail.ban_time_set {
             jail.ban_time = default_ban_time;
         }
-
     }
 }
 
@@ -374,7 +371,6 @@ pub fn compile_jail_regex(jail: &mut Jail) -> Result<(), String> {
         }
 
         if let Err(_e) = validate_regex_safety(jail, &pattern) {
-
             continue;
         }
 
@@ -382,15 +378,10 @@ pub fn compile_jail_regex(jail: &mut Jail) -> Result<(), String> {
             Ok(re) => {
                 jail.regexes[i].compiled = Some(re);
                 compiled_count += 1;
-
             }
-            Err(_e) => {
-
-            }
+            Err(_e) => {}
         }
     }
-
-
 
     if compiled_count > 0 {
         Ok(())
@@ -425,14 +416,12 @@ pub fn find_or_create_jail<'a>(cfg: &'a mut Config, name: &str) -> Option<&'a mu
     }
 
     if cfg.jails.len() >= MAX_JAILS {
-
         return None;
     }
 
     let jail = Jail::new(name.to_string());
     cfg.jails.push(jail);
     let jail = cfg.jails.last_mut().unwrap();
-
 
     Some(jail)
 }
@@ -446,8 +435,6 @@ pub fn destroy_jail(jail: &mut Jail) {
     free_jail_regex_full(jail);
     jail.failed_hash.write().clear();
     jail.partial_line_buffer.write().clear();
-
-
 }
 
 /// 销毁 `Config` 中所有 jail 并清空列表。`cleanup` 阶段使用。
@@ -459,7 +446,6 @@ pub fn cleanup_all_jails(cfg: &mut Config) {
         destroy_jail(jail);
     }
     cfg.jails.clear();
-
 }
 
 // ============================================================================
@@ -601,9 +587,7 @@ pub fn config_validate(cfg: &Config) -> Result<(), String> {
         if jail.findtime == 0 {
             return Err(format!("Jail '{}' has findtime=0", jail.name));
         }
-        if jail.ban_time == 0 {
-
-        }
+        if jail.ban_time == 0 {}
     }
 
     Ok(())
@@ -681,18 +665,14 @@ pub fn init_log_patterns(cfg: &mut Config) -> Result<(), String> {
 
     for jail in &mut cfg.jails {
         if !jail.enabled {
-
             continue;
         }
 
         if jail.regexes.is_empty() {
-
+            // 跳过无正则的 jail
         } else if let Err(e) = compile_jail_regex(jail) {
-
             ret = Err(e);
             // 继续为其他 jail 编译
-        } else {
-
         }
     }
 

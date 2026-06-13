@@ -70,7 +70,6 @@ pub fn create_entry_for_jail(jail: &Jail, ip: &str) -> Result<()> {
     let entry = FailedEntry::new(ip.to_string());
     hash.insert(ip.to_string(), entry);
 
-
     Ok(())
 }
 
@@ -104,7 +103,6 @@ pub fn count_recent(entry: &FailedEntry, window: i64, max_retries: u32) -> u32 {
     let now = now_secs();
 
     if window <= 0 {
-
         return 0;
     }
 
@@ -192,7 +190,6 @@ pub fn process_failed_timestamps(entry: &mut FailedEntry, now: i64, findtime: i6
 /// - 封禁成功后清理 `failed_hash` 中对应条目
 pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, findtime: u32) {
     if ip.is_empty() {
-
         return;
     }
 
@@ -212,18 +209,13 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
 
     let recent_fails = count_recent(entry, findtime_i64, max_retries);
     if recent_fails >= max_retries {
-
-
         // 必须先释放写锁再调 ban_ip, 否则 ban 内部可能触发的日志写会与本锁死锁
         drop(hash);
 
         if ban::ban_ip(ip).is_ok() {
-
             // 成功封禁后移除条目, 避免重复封禁计数
             let mut hash2 = jail.failed_hash.write();
             hash2.remove(ip);
-        } else {
-
         }
     }
 }
