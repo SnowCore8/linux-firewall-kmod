@@ -150,6 +150,53 @@ pub struct JailStatsSnapshot {
 pub static JAIL_STATS: std::sync::OnceLock<RwLock<HashMap<String, JailStatsCounters>>> =
     std::sync::OnceLock::new();
 
+// ============================================================================
+// 封禁时长 Histogram
+// ============================================================================
+
+/// 封禁时长分布桶边界（秒）
+///
+/// Prometheus histogram 标准格式：`le="60"` 表示 ≤60 秒的累计计数。
+/// 桶边界选择依据：
+/// - 60s: 短期暴力破解封禁（典型 findtime=600 的 1/10）
+/// - 300s (5min): 中等时长封禁
+/// - 3600s (1h): 标准封禁时长（bantime 默认值）
+/// - +Inf: 超长封禁（含永久封禁的实际持续时间）
+const BUCKET_BOUNDARIES: [i64; 3] = [60, 300, 3600];
+
+/// 封禁时长 histogram 桶计数器
+///
+/// 索引 0-2 对应 `BUCKET_BOUNDARIES`，索引 3 为 +Inf（所有封禁均计入）。
+/// 使用 `AtomicU64` + `Relaxed` 序，与 `DaemonStats` 一致。
+pub static BAN_DURATION_BUCKETS: [AtomicU64; 4] = [
+    AtomicU64::new(0), // ≤60s
+    AtomicU64::new(0), // ≤300s
+    AtomicU64::new(0), // ≤3600s
+    AtomicU64::new(0), // +Inf
+];
+
+/// 记录一次封禁的持续时长到 histogram
+///
+/// 在解封（`unban_ip_with_history`）时调用。永久封禁按实际持续时间计入对应桶。
+///
+/// # Arguments
+/// * `duration_secs` — 封禁持续秒数（`expires_at - banned_at` 或 `now - banned_at`）
+pub fn record_ban_duration(duration_secs: i64) {
+    // +Inf 桶始终累加
+    BAN_DURATION_BUCKETS[3].fetch_add(1, Ordering::Relaxed);
+
+    // 按桶边界累加（histogram 语义：每个桶包含所有 ≤ 该边界的样本）
+    if duration_secs <= BUCKET_BOUNDARIES[0] {
+        BAN_DURATION_BUCKETS[0].fetch_add(1, Ordering::Relaxed);
+    }
+    if duration_secs <= BUCKET_BOUNDARIES[1] {
+        BAN_DURATION_BUCKETS[1].fetch_add(1, Ordering::Relaxed);
+    }
+    if duration_secs <= BUCKET_BOUNDARIES[2] {
+        BAN_DURATION_BUCKETS[2].fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// 直接获取 jail 统计计数器的引用 (用于累加操作)
 ///
 /// 如果 jail 不存在，自动创建。返回的是映射中的实际引用，可直接调用 fetch_add 等方法。

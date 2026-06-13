@@ -384,18 +384,23 @@ pub fn unban_ip_with_history(ip: &str, manual: bool) -> Result<()> {
         .get_or_init(ActiveBanCache::new)
         .remove(ip)
     {
+        let duration = info.duration_secs(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        );
+
+        // 记录封禁时长到 histogram（Prometheus 指标）
+        crate::types::record_ban_duration(duration);
+
         slog::info!(
             crate::logger::get(),
             "IP 解封成功 (混合存储)";
             "ip" => ip,
             "jail" => info.jail_name,
             "manual" => manual,
-            "duration_secs" => info.duration_secs(
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64
-            ),
+            "duration_secs" => duration,
         );
     }
 

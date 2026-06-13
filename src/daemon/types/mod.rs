@@ -50,7 +50,8 @@ pub use jail::{
     MAX_REGEX_NAME_LEN, MAX_REGEX_PATTERNS,
 };
 pub use stats::{
-    with_jail_stats, DaemonStats, JailStatsCounters, JailStatsSnapshot, DAEMON_STATS, JAIL_STATS,
+    record_ban_duration, with_jail_stats, DaemonStats, JailStatsCounters, JailStatsSnapshot,
+    BAN_DURATION_BUCKETS, DAEMON_STATS, JAIL_STATS,
 };
 
 // ============================================================================
