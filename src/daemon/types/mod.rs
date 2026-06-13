@@ -49,7 +49,7 @@ pub const MAX_REGEX_PATTERNS: usize = 10;
 /// 依赖此上界避免异常长名称。
 pub const MAX_REGEX_NAME_LEN: usize = 64;
 
-/// 全局可同时活跃的 `Jail` 数上限。`config_parser` 在解析时检查此上界。
+/// 全局可同时活跃的 `Jail` 数上限。`config` 在解析时检查此上界。
 pub const MAX_JAILS: usize = 16;
 
 /// inotify 事件缓冲大小:`1024` 个事件 × 单事件 `~16B` + 16KB 安全裕量。

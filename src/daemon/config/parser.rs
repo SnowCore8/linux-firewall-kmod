@@ -1,0 +1,225 @@
+//! YAML 配置解析 + 路径安全 3 重检查
+
+use crate::types::{Config, Jail, RegexInfo};
+use anyhow::{bail, Context, Result};
+use serde::Deserialize;
+use std::collections::HashMap;
+
+// ============================================================================
+// 路径安全
+// ============================================================================
+
+/// 3 重安全检查,任一命中返回 `Err` (拒绝路径):
+/// 1. 包含 `..` 路径遍历
+/// 2. 包含 `%2e`/`%2f`/`%5c` URL 编码绕过
+/// 3. 包含 shell 元字符命令注入
+///
+/// 故意不做白名单检查,与 C 版 `validate_and_normalize_path` 行为等价
+pub fn validate_and_normalize_path(path: &str) -> Result<()> {
+    let lower = path.to_ascii_lowercase();
+
+    // 1) `..` 路径遍历
+    if lower.contains("..") {
+        bail!("Path validation failed (path traversal detected): {}", path);
+    }
+
+    // 2) URL 编码绕过: %2e (.), %2f (/), %5c (\)
+    if lower.contains("%2e") || lower.contains("%2f") || lower.contains("%5c") {
+        bail!("Path validation failed (URL encoding detected): {}", path);
+    }
+
+    // 3) Shell 元字符
+    if lower.contains('|')
+        || lower.contains('&')
+        || lower.contains(';')
+        || lower.contains('$')
+        || lower.contains('`')
+        || lower.contains('(')
+        || lower.contains(')')
+        || lower.contains('<')
+        || lower.contains('>')
+        || lower.contains('{')
+        || lower.contains('}')
+    {
+        bail!(
+            "Path validation failed (shell metacharacter detected): {}",
+            path
+        );
+    }
+
+    // 4) 长度上限
+    if path.len() > 4096 {
+        bail!("Path validation failed (path too long, max 4096): {}", path);
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// YAML 反序列化结构
+// ============================================================================
+
+/// 顶层 YAML 结构:`defaults` (全局默认) + `jails` (命名 jail 映射)
+#[derive(Debug, Deserialize)]
+struct YamlConfig {
+    #[serde(default)]
+    defaults: Option<YamlDefaults>,
+    #[serde(default)]
+    jails: Option<HashMap<String, YamlJail>>,
+}
+
+/// 全局默认字段集合。所有 `Option` 都是"未设置 = 使用 `Config::default()`"
+#[derive(Debug, Deserialize)]
+struct YamlDefaults {
+    max_retries: Option<u32>,
+    findtime: Option<u32>,
+    ban_time: Option<u32>,
+    interval: Option<u32>,
+    metrics_port: Option<u16>,
+    metrics_bind_address: Option<String>,
+    metrics_username: Option<String>,
+    metrics_password: Option<String>,
+    permanent_db_path: Option<String>,
+    permanent_ban_enabled: Option<bool>,
+    log_file: Option<String>,
+    log_level: Option<u8>,
+    log_destination: Option<String>,
+    log_format: Option<String>,
+}
+
+/// 单个 jail 的 YAML 表示。支持 `regex` 单条 + `regexes` 嵌套映射两种写法
+#[derive(Debug, Deserialize)]
+struct YamlJail {
+    enabled: Option<bool>,
+    log_files: Option<Vec<String>>,
+    max_retries: Option<u32>,
+    findtime: Option<u32>,
+    ban_time: Option<u32>,
+    regex: Option<String>,
+    regex_name: Option<String>,
+    /// 嵌套 regexes 映射: `{ name: { pattern: "..." }, ... }`
+    #[serde(default)]
+    regexes: HashMap<String, YamlRegexEntry>,
+}
+
+/// 嵌套 `regexes` 映射的 value 结构
+#[derive(Debug, Deserialize)]
+struct YamlRegexEntry {
+    pattern: String,
+}
+
+// ============================================================================
+// YAML 解析
+// ============================================================================
+
+/// 将 YAML 内容解析到 Config 结构体中。
+///
+/// 失败时不修改 `cfg` (原子性): 解析完的临时值收集在局部变量中,
+/// 所有字段都成功后再一次性写入 `cfg`。
+///
+/// # Arguments
+/// - `content`: YAML 字符串
+/// - `cfg`: 目标 Config (成功时原地修改, 失败时保持原值)
+pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
+    let yaml_config: YamlConfig =
+        serde_yaml::from_str(content).context("Failed to parse YAML config")?;
+
+    // 1. 应用 defaults 部分到 cfg
+    if let Some(defaults) = &yaml_config.defaults {
+        if let Some(v) = defaults.max_retries {
+            cfg.default_max_retries = v;
+        }
+        if let Some(v) = defaults.findtime {
+            cfg.default_findtime = v;
+        }
+        if let Some(v) = defaults.ban_time {
+            cfg.default_ban_time = v;
+        }
+        if let Some(v) = defaults.interval {
+            cfg.interval = v;
+        }
+        if let Some(v) = defaults.metrics_port {
+            cfg.metrics_port = v;
+        }
+        if let Some(v) = &defaults.metrics_bind_address {
+            cfg.metrics_bind_address = v.clone();
+        }
+        if let Some(v) = &defaults.metrics_username {
+            cfg.metrics_username = Some(v.clone());
+        }
+        if let Some(v) = &defaults.metrics_password {
+            cfg.metrics_password = Some(v.clone());
+        }
+        if let Some(v) = &defaults.permanent_db_path {
+            cfg.permanent_db_path = Some(v.clone());
+        }
+        if let Some(v) = defaults.permanent_ban_enabled {
+            cfg.permanent_ban_enabled = v;
+        }
+        if let Some(v) = &defaults.log_file {
+            cfg.log_file = Some(v.clone());
+        }
+        cfg.log_level = defaults.log_level.unwrap_or(cfg.log_level);
+        if let Some(v) = &defaults.log_destination {
+            cfg.log_destination = match v.as_str() {
+                "syslog" => 0,
+                "file" => 1,
+                "both" => 2,
+                "journal" => 3,
+                _ => bail!("Invalid log_destination value: {v}"),
+            };
+        }
+        if let Some(v) = &defaults.log_format {
+            cfg.log_format = match v.as_str() {
+                "plain" => 0,
+                "json" => 1,
+                _ => bail!("Invalid log_format value: {v}"),
+            };
+        }
+    }
+
+    // 2. 解析 jails 部分
+    if let Some(jails_map) = &yaml_config.jails {
+        for (name, yaml_jail) in jails_map {
+            let mut jail = Jail::new(name.clone());
+
+            if let Some(enabled) = yaml_jail.enabled {
+                jail.enabled = enabled;
+            }
+            if let Some(ref log_files) = yaml_jail.log_files {
+                jail.log_files = log_files.clone();
+            }
+            if let Some(max_retries) = yaml_jail.max_retries {
+                jail.max_retries = max_retries;
+                jail.max_retries_set = true;
+            }
+            if let Some(findtime) = yaml_jail.findtime {
+                jail.findtime = findtime;
+                jail.findtime_set = true;
+            }
+            if let Some(ban_time) = yaml_jail.ban_time {
+                jail.ban_time = ban_time;
+                jail.ban_time_set = true;
+            }
+
+            // 支持单条 regex
+            if let Some(ref regex) = yaml_jail.regex {
+                let regex_name = yaml_jail
+                    .regex_name
+                    .clone()
+                    .unwrap_or_else(|| "default".to_string());
+                jail.regexes.push(RegexInfo::new(regex_name, regex.clone()));
+            }
+
+            // 支持多条 regexes
+            for (name, entry) in &yaml_jail.regexes {
+                jail.regexes
+                    .push(RegexInfo::new(name.clone(), entry.pattern.clone()));
+            }
+
+            cfg.jails.push(jail);
+        }
+    }
+
+    Ok(())
+}

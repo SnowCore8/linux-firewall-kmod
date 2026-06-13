@@ -70,6 +70,22 @@ pub struct RegexInfo {
     pub compiled: Option<regex::Regex>,
 }
 
+impl RegexInfo {
+    /// 创建新的正则条目,`compiled` 初始化为 `None`。
+    ///
+    /// # Arguments
+    /// - `name`: 正则名称
+    /// - `pattern`: 原始模式串
+    #[must_use]
+    pub fn new(name: String, pattern: String) -> Self {
+        Self {
+            name,
+            pattern,
+            compiled: None,
+        }
+    }
+}
+
 // ============================================================================
 // Jail 结构
 // ============================================================================

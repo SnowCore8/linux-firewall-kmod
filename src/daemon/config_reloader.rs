@@ -38,7 +38,7 @@ use crate::types::{Config, DAEMON_STATS};
 /// # Errors
 /// 配置源缺失 / 解析失败 / 验证失败 / inotify 重建失败
 pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
-    use crate::config_parser;
+    use crate::config;
 
     let config_path = if let Some(ref f) = cfg.config_file {
         f.clone()
@@ -61,9 +61,9 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
 
     let path = std::path::Path::new(&config_path);
     if path.is_file() {
-        config_parser::parse_config_file(&config_path, &mut new_cfg, cfg.strict_mode)?;
+        config::parse_config_file(&config_path, &mut new_cfg, cfg.strict_mode)?;
     } else if path.is_dir() {
-        config_parser::load_config_directory(&config_path, &mut new_cfg, cfg.strict_mode)?;
+        config::load_config_directory(&config_path, &mut new_cfg, cfg.strict_mode)?;
     } else {
         return Err(anyhow::anyhow!("Config path does not exist: {config_path}"));
     }

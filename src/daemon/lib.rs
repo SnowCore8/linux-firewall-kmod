@@ -16,7 +16,7 @@
 //! - `log_parser`: 从日志行提取 IP (正则 + 字符串回退)
 //! - `failed_tracker`: 滑动窗口失败计数与封禁触发 (O(1) 平均复杂度)
 //! - `jail`: 服务名智能匹配 + 智能默认参数推断 + `ReDoS` 防护正则编译 + 配置克隆
-//! - `config_parser`: YAML 解析 (严格模式 key 白名单 + 路径安全 3 重检查 + 失败回滚)
+//! - `config`: YAML 解析 (严格模式 key 白名单 + 路径安全 3 重检查 + 失败回滚)
 //! - `file_monitor`: inotify 文件监控 + 轮转检测 + 主事件循环 (poll + SIGHUP 重载)
 //! - `http_exporter`: Prometheus `/metrics` 端点 + Basic Auth + 暴力破解防护
 //! - `sqlite_store`: 永久黑名单持久化 (WAL 模式 + 软删除 + 启动去重迁移)
@@ -36,7 +36,7 @@
 //! - **path 安全 3 重检查**:`..` 遍历 / URL 编码绕过 / shell 元字符注入
 
 pub mod ban;
-pub mod config_parser;
+pub mod config;
 pub mod config_reloader;
 pub mod failed_tracker;
 pub mod file_monitor;

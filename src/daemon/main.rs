@@ -2,8 +2,8 @@
 //!
 //! # 启动流程
 //!
-//! 1. **CLI 解析** ([`config_parser::parse_config_args`]):`--help` 时直接 `Ok(())` 退出
-//! 2. **配置加载** ([`config_parser::parse_config_file`] / [`load_config_directory`]):支持文件 / 目录两种源
+//! 1. **CLI 解析** ([`config::parse_config_args`]):`--help` 时直接 `Ok(())` 退出
+//! 2. **配置加载** ([`config::parse_config_file`] / [`load_config_directory`]):支持文件 / 目录两种源
 //! 3. **智能默认 + 校验** ([`jail::apply_smart_defaults_to_all`] / [`jail::config_validate`])
 //! 4. **信号注册** ([`setup_signals`]):SIGTERM/SIGINT 触发优雅退出、SIGHUP 触发热重载、SIGPIPE 忽略
 //! 5. **procfs 前置检查**:`/proc/firewall` 存在性 + `/proc/firewall/bans` 存在性
@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{bail, Context, Result};
 
 use firewall_daemon::ban;
-use firewall_daemon::config_parser;
+use firewall_daemon::config;
 use firewall_daemon::file_monitor;
 use firewall_daemon::http_exporter;
 use firewall_daemon::jail;
@@ -189,7 +189,7 @@ fn cleanup(
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
 
-    let (config_path, daemon_mode, strict_mode) = match config_parser::parse_config_args(&args)? {
+    let (config_path, daemon_mode, strict_mode) = match config::parse_config_args(&args)? {
         Some((path, daemon, strict)) => (path, daemon, strict),
         None => return Ok(()),
     };
@@ -199,10 +199,10 @@ fn main() -> Result<()> {
     };
     let path = Path::new(&config_path);
     if path.is_file() {
-        config_parser::parse_config_file(&config_path, &mut cfg, strict_mode)?;
+        config::parse_config_file(&config_path, &mut cfg, strict_mode)?;
         cfg.config_file = Some(config_path.clone());
     } else if path.is_dir() {
-        config_parser::load_config_directory(&config_path, &mut cfg, strict_mode)?;
+        config::load_config_directory(&config_path, &mut cfg, strict_mode)?;
         cfg.config_dir = Some(config_path.clone());
     } else {
         bail!("Config path does not exist: {}", config_path);
