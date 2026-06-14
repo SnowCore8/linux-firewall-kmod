@@ -5,10 +5,10 @@
 //! 1. **CLI 解析** ([`config::parse_config_args`]):`--help` 时直接 `Ok(())` 退出
 //! 2. **配置加载** ([`config::parse_config_file`] / [`load_config_directory`]):支持文件 / 目录两种源
 //! 3. **智能默认 + 校验** ([`jail::apply_smart_defaults_to_all`] / [`jail::config_validate`])
-//! 4. **信号注册** ([`setup_signals`]):SIGTERM/SIGINT 触发优雅退出、SIGHUP 触发热重载、SIGPIPE 忽略
+//! 4. **信号注册** ([`signals::setup_signals`]):SIGTERM/SIGINT 触发优雅退出、SIGHUP 触发热重载、SIGPIPE 忽略
 //! 5. **procfs 前置检查**:`/proc/firewall` 存在性 + `/proc/firewall/bans` 存在性
 //! 6. **SQLite 初始化** (可选):加载 → 注册全局 → 恢复所有永久黑名单到内核
-//! 7. **守护进程化** ([`daemonize_process`]):双 fork + setsid + chdir / + 写 PID + 重定向 fd
+//! 7. **守护进程化** ([`daemonizer::daemonize_process`]):双 fork + setsid + chdir / + 写 PID + 重定向 fd
 //! 8. **inotify 启动** ([`file_monitor::setup_inotify`])
 //! 9. **Metrics 导出器启动** ([`http_exporter::start_http_exporter`])
 //! 10. **主循环** ([`file_monitor::monitor_loop`]):阻塞直到 `running=false`
@@ -24,17 +24,19 @@
 use std::env;
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use slog::{error, info, warn};
 
 use firewall_daemon::ban;
 use firewall_daemon::config;
+use firewall_daemon::daemonizer::daemonize_process;
 use firewall_daemon::file_monitor;
 use firewall_daemon::http_exporter;
 use firewall_daemon::jail;
 use firewall_daemon::logger;
+use firewall_daemon::signals::{setup_signals, GLOBAL_RELOAD, GLOBAL_RUNNING};
 use firewall_daemon::sqlite;
 use firewall_daemon::sqlite_writer;
 use firewall_daemon::types::{Config, DAEMON_STATS};
@@ -43,193 +45,6 @@ use firewall_daemon::types::{Config, DAEMON_STATS};
 const PROCFS_DIR: &str = "/proc/firewall";
 /// 内核模块封禁命令接口。启动期存在性检查
 const BANS_PATH: &str = "/proc/firewall/bans";
-
-/// 全局运行标志，供信号处理器访问
-pub static GLOBAL_RUNNING: AtomicBool = AtomicBool::new(true);
-/// 全局重载标志，供信号处理器访问
-pub static GLOBAL_RELOAD: AtomicBool = AtomicBool::new(false);
-
-/// SIGTERM/SIGINT 信号处理器：设置全局运行标志为 false
-extern "C" fn handle_sigterm(_sig: libc::c_int) {
-    GLOBAL_RUNNING.store(false, Ordering::SeqCst);
-}
-
-/// SIGHUP 信号处理器：设置全局重载标志为 true
-extern "C" fn handle_sighup(_sig: libc::c_int) {
-    GLOBAL_RELOAD.store(true, Ordering::SeqCst);
-}
-
-/// 注册 4 个信号到全局原子标志。
-///
-/// - `SIGTERM` / `SIGINT` → `GLOBAL_RUNNING` (主循环退出)
-/// - `SIGHUP` → `GLOBAL_RELOAD` (主循环触发热重载)
-/// - `SIGPIPE` → 忽略 (HTTP 客户端断开时不被信号杀死)
-///
-/// # Errors
-/// `sigaction` 失败
-fn setup_signals() -> Result<()> {
-    // SAFETY: `sigaction` 是 POSIX 标准系统调用。`sigaction_t` 结构体初始化为零是合法的。
-    // 信号处理器函数指针是 `extern "C"` 函数，符合 C ABI。
-    // 注意：不使用 SA_RESTART，这样 poll() 等系统调用会被信号中断返回 EINTR，
-    // 主循环可以在 EINTR 时检查 running 标志并退出。
-    unsafe {
-        // SIGTERM 处理器
-        let mut sa_term: libc::sigaction = std::mem::zeroed();
-        sa_term.sa_sigaction = handle_sigterm as *const () as usize;
-        sa_term.sa_flags = 0; // 不使用 SA_RESTART，让 poll() 被中断
-        libc::sigemptyset(&mut sa_term.sa_mask);
-        if libc::sigaction(libc::SIGTERM, &sa_term, std::ptr::null_mut()) != 0 {
-            bail!(
-                "sigaction(SIGTERM) failed: {}",
-                std::io::Error::last_os_error()
-            );
-        }
-
-        // SIGINT 处理器
-        let mut sa_int: libc::sigaction = std::mem::zeroed();
-        sa_int.sa_sigaction = handle_sigterm as *const () as usize;
-        sa_int.sa_flags = 0; // 不使用 SA_RESTART
-        libc::sigemptyset(&mut sa_int.sa_mask);
-        if libc::sigaction(libc::SIGINT, &sa_int, std::ptr::null_mut()) != 0 {
-            bail!(
-                "sigaction(SIGINT) failed: {}",
-                std::io::Error::last_os_error()
-            );
-        }
-
-        // SIGHUP 处理器
-        let mut sa_hup: libc::sigaction = std::mem::zeroed();
-        sa_hup.sa_sigaction = handle_sighup as *const () as usize;
-        sa_hup.sa_flags = 0; // 不使用 SA_RESTART
-        libc::sigemptyset(&mut sa_hup.sa_mask);
-        if libc::sigaction(libc::SIGHUP, &sa_hup, std::ptr::null_mut()) != 0 {
-            bail!(
-                "sigaction(SIGHUP) failed: {}",
-                std::io::Error::last_os_error()
-            );
-        }
-
-        // SIGPIPE 忽略
-        let mut sa_pipe: libc::sigaction = std::mem::zeroed();
-        sa_pipe.sa_sigaction = libc::SIG_IGN;
-        if libc::sigaction(libc::SIGPIPE, &sa_pipe, std::ptr::null_mut()) != 0 {
-            bail!(
-                "sigaction(SIGPIPE) failed: {}",
-                std::io::Error::last_os_error()
-            );
-        }
-    }
-
-    Ok(())
-}
-
-/// 守护进程化:双 fork + setsid + chdir / + 写 PID + 重定向 fd。
-///
-/// 经典 Unix 守护进程化模式,故意用 `process::exit` 而非 `std::process::exit`
-/// 以避免刷新 stdio 缓冲区(fork 后的子进程中 stdio 状态未定义)。
-///
-/// # Errors
-/// 任何 fork 失败
-fn daemonize_process() -> Result<()> {
-    use nix::unistd::{fork, setsid, ForkResult};
-    use std::process;
-
-    // 第一次 fork: 父进程退出
-    // SAFETY: `fork` 是 POSIX 进程创建原语,无内存安全前置条件;
-    // `ForkResult` 区分父子进程使父进程可立即 exit (避免 stdio 缓冲区双写)
-    match unsafe { fork() } {
-        Ok(ForkResult::Child) => {}
-        Ok(ForkResult::Parent { child: _, .. }) => {
-            // _exit 避免刷新 stdio 缓冲区 (fork 后的子进程中 stdio 状态未定义)
-            process::exit(0);
-        }
-        Err(e) => bail!("fork failed: {}", e),
-    }
-
-    setsid().context("setsid failed")?;
-
-    // 第二次 fork: 防止重新获得控制终端, 创建非会话领头进程
-    // SAFETY: 同上
-    match unsafe { fork() } {
-        Ok(ForkResult::Child) => {}
-        Ok(ForkResult::Parent { .. }) => {
-            process::exit(0);
-        }
-        Err(e) => bail!("second fork failed: {}", e),
-    }
-
-    if let Err(_e) = std::env::set_current_dir("/") {}
-    if let Err(e) = std::env::set_current_dir("/") {
-        crate::logger::warn!(
-            crate::logger::get(),
-            "切换工作目录到 / 失败";
-            "error" => %e
-        );
-    }
-
-    // PID 文件用 O_NOFOLLOW 防止符号链接攻击覆盖其他进程
-    let pid = process::id();
-    let pid_path = "/run/firewall-daemon.pid";
-    // SAFETY: `pid_path` 是 `&'static str` 常量,无 NUL 字节。`open` 标志是
-    // 合法 libc 常量。`mode 0o644` 只在 `O_CREAT` 时生效。
-    let fd = unsafe {
-        libc::open(
-            std::ffi::CString::new(pid_path).unwrap().as_ptr(),
-            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_NOFOLLOW,
-            0o644,
-        )
-    };
-    if fd >= 0 {
-        use std::io::Write;
-        use std::os::unix::io::FromRawFd;
-        // SAFETY: `fd` 是上一行 `libc::open` 返回的有效 fd,且未通过其他
-        // 途径转移所有权,直接包装为 `File` 取得独占所有权。
-        let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
-        if let Err(e) = writeln!(f, "{}", pid) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "写入 PID 文件失败";
-                "error" => %e
-            );
-        }
-        if let Err(e) = f.flush() {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "刷新 PID 文件失败";
-                "error" => %e
-            );
-        }
-    } else {
-        // PID 文件创建失败，记录错误但继续运行（非致命错误）
-        let errno = std::io::Error::last_os_error();
-        crate::logger::warn!(
-            crate::logger::get(),
-            "创建 PID 文件失败（守护进程仍正常运行）";
-            "path" => pid_path,
-            "error" => %errno
-        );
-    }
-
-    // 标准 fd 重定向到 /dev/null
-    if let Ok(devnull) = fs::File::open("/dev/null") {
-        use std::os::unix::io::IntoRawFd;
-        let fd = devnull.into_raw_fd();
-        // SAFETY: `devnull.into_raw_fd()` 返回的 fd 来自刚 `File::open` 成功的
-        // `/dev/null`,仍是有效文件描述符。`dup2` 复制 fd 后原 fd 仍可独立 close。
-        // 目标 fd 0/1/2 必为进程启动时的 stdin/stdout/stderr 有效 fd。
-        unsafe {
-            libc::dup2(fd, 0);
-            libc::dup2(fd, 1);
-            libc::dup2(fd, 2);
-            if fd > 2 {
-                // SAFETY: 上面 dup2 已复制,原 fd 可安全关闭(非 stdio 三个之一)
-                libc::close(fd);
-            }
-        }
-    }
-
-    Ok(())
-}
 
 /// 优雅清理：关 metrics → 释放 fd → 关闭 SQLite → 关 syslog → 删 PID 文件。
 ///
