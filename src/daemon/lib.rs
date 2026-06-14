@@ -37,7 +37,7 @@
 pub mod ban;
 pub mod config;
 pub mod config_reloader;
-pub mod config_parser;
+pub mod config;
 pub mod config_reloader;
 pub mod ddos_detector;
 pub mod failed_tracker;

@@ -13,11 +13,11 @@
 //! - `config_file` / `config_dir` 保留供后续 reload 复用
 
 use std::sync::atomic::Ordering;
-//! SIGHUP 配置热重载 + partial 缓冲周期清理
-//!
-//! 职责：
-//! - `reload_configuration`: 双缓冲热重载（clone → 解析 → 验证 → 迁移 → 替换）
-//! - `cleanup_partial_line_buffer`: flush 所有 jail 的 partial 行缓冲
+// SIGHUP 配置热重载 + partial 缓冲周期清理
+//
+// 职责：
+// - `reload_configuration`: 双缓冲热重载（clone → 解析 → 验证 → 迁移 → 替换）
+// - `cleanup_partial_line_buffer`: flush 所有 jail 的 partial 行缓冲
 
 use anyhow::Result;
 
