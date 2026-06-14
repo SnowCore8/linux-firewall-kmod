@@ -58,7 +58,10 @@ fn get_cached_bans_fd() -> Result<RawFd> {
         unsafe { libc::close(fd) };
     }
 
-    let path = CString::new(BANS_PATH).unwrap();
+    let path = match CString::new(BANS_PATH) {
+        Ok(p) => p,
+        Err(_) => bail!("BANS_PATH contains NUL byte"),
+    };
     // SAFETY: `BANS_PATH` 是 `&'static str` 常量,不含 NUL,`CString::new` 已 unwrap 验证。
     // `O_WRONLY | O_NOFOLLOW` 不需要额外权限
     let new_fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_NOFOLLOW) };
@@ -212,7 +215,10 @@ pub fn secure_procfs_write(path: &str, data: &[u8]) -> Result<()> {
     let fd: RawFd = if using_cached {
         get_cached_bans_fd()?
     } else {
-        let path_c = CString::new(path).unwrap();
+        let path_c = match CString::new(path) {
+            Ok(p) => p,
+            Err(_) => bail!("procfs path contains NUL byte: {path}"),
+        };
         // SAFETY: `path` 已通过 `validate_procfs_path` 校验 (白名单目录 + 字符白名单 + 无 NUL),
         // CString::new 成功表示无内嵌 NUL 字节。O_WRONLY | O_NOFOLLOW 不会触发额外权限要求。
         let fd = unsafe { libc::open(path_c.as_ptr(), libc::O_WRONLY | libc::O_NOFOLLOW) };
@@ -242,7 +248,6 @@ pub fn secure_procfs_write(path: &str, data: &[u8]) -> Result<()> {
     if !using_cached {
         // SAFETY: fd 是本函数 `open` 拿到的非缓存 fd,作用域结束必须 close
         let close_result = unsafe { libc::close(fd) };
-        let _ = close_result;
         if close_result != 0 {
             crate::logger::debug!(
                 crate::logger::get(),

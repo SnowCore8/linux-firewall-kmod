@@ -48,7 +48,13 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         let body = "{\"status\":\"ok\"}\n";
         let response = Response::from_string(body)
             .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
-        let _ = request.respond(add_security_headers(response));
+        if let Err(e) = request.respond(add_security_headers(response)) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "发送 /health 响应失败";
+                "error" => %e
+            );
+        }
         return;
     }
 
@@ -66,7 +72,13 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
             .with_header(
                 Header::from_bytes("WWW-Authenticate", "Basic realm=\"firewall-metrics\"").unwrap(),
             );
-        let _ = request.respond(add_security_headers(response));
+        if let Err(e) = request.respond(add_security_headers(response)) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "发送 401 响应失败";
+                "error" => %e
+            );
+        }
         return;
     }
 
@@ -75,11 +87,23 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         let response = Response::from_string(metrics).with_header(
             Header::from_bytes("Content-Type", "text/plain; version=0.0.4; charset=utf-8").unwrap(),
         );
-        let _ = request.respond(add_security_headers(response));
+        if let Err(e) = request.respond(add_security_headers(response)) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "发送 /metrics 响应失败";
+                "error" => %e
+            );
+        }
     } else {
         let body = "404 Not Found\r\n";
         let response = Response::from_string(body).with_status_code(StatusCode(404));
-        let _ = request.respond(add_security_headers(response));
+        if let Err(e) = request.respond(add_security_headers(response)) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "发送 404 响应失败";
+                "error" => %e
+            );
+        }
     }
 }
 

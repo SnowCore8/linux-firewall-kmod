@@ -209,8 +209,8 @@ pub fn ban_ip_with_history(
             // 更新内存缓存
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64;
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
             let ip_num = ip.parse::<std::net::Ipv4Addr>().map(u32::from).unwrap_or(0);
             let ban_info = crate::types::BanInfo {
                 ip: ip.to_string(),

@@ -356,8 +356,8 @@ pub fn cleanup_old_data(
 ) -> Result<()> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
 
     let tx = conn.unchecked_transaction()?;
 
