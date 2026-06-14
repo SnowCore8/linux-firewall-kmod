@@ -273,3 +273,177 @@ pub static CONN_RATE_TRACKER: std::sync::OnceLock<ConnRateTracker> = std::sync::
 pub fn get_conn_rate_tracker() -> &'static ConnRateTracker {
     CONN_RATE_TRACKER.get_or_init(ConnRateTracker::new)
 }
+
+// ============================================================================
+// 单元测试
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::DdosConfig;
+
+    /// 创建低阈值的测试配置，便于触发检测
+    fn test_config() -> DdosConfig {
+        DdosConfig {
+            enabled: true,
+            per_ip_conn_rate: 5,
+            per_ip_fail_rate: 10,
+            global_conn_rate: 100,
+            auto_ban_duration: 3600,
+            auto_ban_threshold: 3,
+            check_interval: 5,
+        }
+    }
+
+    // ---- ConnRateEntry 测试 ----
+
+    #[test]
+    fn test_conn_rate_entry_new() {
+        let entry = ConnRateEntry::new("1.2.3.4".to_string(), 1000);
+        assert_eq!(entry.ip, "1.2.3.4");
+        assert_eq!(entry.conn_count, 0);
+        assert_eq!(entry.fail_count, 0);
+        assert_eq!(entry.window_start, 1000);
+        assert_eq!(entry.last_activity, 1000);
+        assert_eq!(entry.violation_count, 0);
+    }
+
+    #[test]
+    fn test_conn_rate_entry_reset() {
+        let mut entry = ConnRateEntry::new("1.2.3.4".to_string(), 1000);
+        entry.conn_count = 50;
+        entry.fail_count = 20;
+        entry.violation_count = 3;
+
+        entry.reset(2000);
+        assert_eq!(entry.conn_count, 0);
+        assert_eq!(entry.fail_count, 0);
+        assert_eq!(entry.window_start, 2000);
+        assert_eq!(entry.violation_count, 0);
+    }
+
+    // ---- ConnRateTracker 基础测试 ----
+
+    #[test]
+    fn test_tracker_new_empty() {
+        let tracker = ConnRateTracker::new();
+        assert_eq!(tracker.tracked_ip_count(), 0);
+    }
+
+    #[test]
+    fn test_record_connection_creates_entry() {
+        let tracker = ConnRateTracker::new();
+        tracker.record_connection("10.0.0.1");
+        tracker.record_connection("10.0.0.1");
+        tracker.record_connection("10.0.0.2");
+
+        assert_eq!(tracker.tracked_ip_count(), 2);
+    }
+
+    #[test]
+    fn test_record_failure_creates_entry() {
+        let tracker = ConnRateTracker::new();
+        tracker.record_failure("10.0.0.1");
+        tracker.record_failure("10.0.0.1");
+
+        assert_eq!(tracker.tracked_ip_count(), 1);
+    }
+
+    // ---- detect 测试 ----
+
+    #[test]
+    fn test_detect_disabled_returns_empty() {
+        let tracker = ConnRateTracker::new();
+        tracker.record_connection("10.0.0.1");
+
+        let mut config = test_config();
+        config.enabled = false;
+
+        let events = tracker.detect(&config);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_detect_no_violation_returns_empty() {
+        let tracker = ConnRateTracker::new();
+        // 记录低于阈值的连接数
+        for _ in 0..3 {
+            tracker.record_connection("10.0.0.1");
+        }
+
+        let config = test_config(); // per_ip_conn_rate = 5
+        let events = tracker.detect(&config);
+        assert!(events.is_empty(), "低于阈值不应产生事件");
+    }
+
+    #[test]
+    fn test_detect_conn_rate_violation() {
+        let tracker = ConnRateTracker::new();
+        // 超过 per_ip_conn_rate (5) 阈值
+        for _ in 0..10 {
+            tracker.record_connection("10.0.0.1");
+        }
+
+        let config = test_config();
+        let events = tracker.detect(&config);
+
+        assert!(!events.is_empty(), "超阈值应产生事件");
+        assert_eq!(events[0].ip, "10.0.0.1");
+        assert_eq!(events[0].event_type, "conn_rate");
+        assert_eq!(events[0].action_taken, "log"); // 首次违规,未达 auto_ban_threshold
+    }
+
+    #[test]
+    fn test_detect_fail_rate_violation() {
+        let tracker = ConnRateTracker::new();
+        // 超过 per_ip_fail_rate (10/min) 阈值
+        for _ in 0..15 {
+            tracker.record_failure("10.0.0.1");
+        }
+
+        let config = test_config();
+        let events = tracker.detect(&config);
+
+        assert!(!events.is_empty(), "失败率超阈值应产生事件");
+        assert_eq!(events[0].event_type, "fail_rate");
+    }
+
+    #[test]
+    fn test_detect_auto_ban_after_threshold() {
+        let tracker = ConnRateTracker::new();
+        let config = test_config(); // auto_ban_threshold = 3
+
+        // 多次调用 detect 使 violation_count 达到阈值
+        for _ in 0..3 {
+            // 每次 detect 前需要重新记录连接 (计数器在 detect 内被重置)
+            for _ in 0..10 {
+                tracker.record_connection("10.0.0.1");
+            }
+            let events = tracker.detect(&config);
+            // 最后一次违规应触发 "ban"
+            if let Some(last) = events.last() {
+                if last.action_taken == "ban" {
+                    assert_eq!(last.ip, "10.0.0.1");
+                    return; // 测试通过
+                }
+            }
+        }
+
+        panic!("连续 3 次违规后应触发 auto-ban");
+    }
+
+    // ---- cleanup 测试 ----
+
+    #[test]
+    fn test_cleanup_stale_entries() {
+        let tracker = ConnRateTracker::new();
+        // 记录连接 — last_activity 为当前时间
+        tracker.record_connection("10.0.0.1");
+        tracker.record_connection("10.0.0.2");
+
+        // 刚记录的条目不应被清理 (last_activity > now - 300)
+        tracker.cleanup_stale_entries();
+        assert_eq!(tracker.tracked_ip_count(), 2);
+    }
+}
