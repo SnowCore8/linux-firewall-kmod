@@ -2,18 +2,13 @@
 
 #![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use crate::ban;
 use crate::types::{FailedEntry, Jail, DAEMON_STATS, MAX_FAILED_TIMESTAMPS};
 
-/// 当前 Unix 秒 (内部时间源)。所有时间戳统一基于此函数。
+/// 当前 Unix 秒 (内部时间源)。委托 [`crate::types::now_secs`] 避免重复 unwrap。
 #[inline]
 pub(super) fn now_secs() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64
+    crate::types::now_secs()
 }
 
 // ============================================================================

@@ -61,7 +61,9 @@ pub fn daemonize_process() -> Result<()> {
     // 合法 libc 常量。`mode 0o644` 只在 `O_CREAT` 时生效。
     let fd = unsafe {
         libc::open(
-            std::ffi::CString::new(pid_path).unwrap().as_ptr(),
+            std::ffi::CString::new(pid_path)
+                .expect("路径无 NUL 字节")
+                .as_ptr(),
             libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_NOFOLLOW,
             0o644,
         )

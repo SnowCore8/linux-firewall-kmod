@@ -18,11 +18,10 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::RwLock;
 
-use crate::types::{ConnRateEntry, DdosConfig, DdosEvent, DDOS_STATS};
+use crate::types::{now_secs, ConnRateEntry, DdosConfig, DdosEvent, DDOS_STATS};
 
 /// 连接速率跟踪器
 ///
@@ -39,10 +38,7 @@ pub struct ConnRateTracker {
 impl ConnRateTracker {
     /// 创建新的连接速率跟踪器
     pub fn new() -> Self {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = now_secs();
 
         Self {
             entries: RwLock::new(HashMap::new()),
@@ -56,10 +52,7 @@ impl ConnRateTracker {
     /// # Arguments
     /// * `ip` - 来源 IP 地址
     pub fn record_connection(&self, ip: &str) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = now_secs();
 
         // 更新全局计数
         {
@@ -88,10 +81,7 @@ impl ConnRateTracker {
     /// # Arguments
     /// * `ip` - 来源 IP 地址
     pub fn record_failure(&self, ip: &str) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = now_secs();
 
         let mut entries = self.entries.write();
         let entry = entries
@@ -114,10 +104,7 @@ impl ConnRateTracker {
             return Vec::new();
         }
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = now_secs();
 
         let mut events = Vec::new();
 
@@ -244,10 +231,7 @@ impl ConnRateTracker {
 
     /// 清理过期条目 (超过 5 分钟无活动)
     pub fn cleanup_stale_entries(&self) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = now_secs();
 
         let cutoff = now - 300; // 5 分钟
 

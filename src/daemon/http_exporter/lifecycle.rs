@@ -72,10 +72,6 @@ pub fn start_http_exporter(port: u16, cfg: &Config) -> thread::JoinHandle<()> {
 
 /// 优雅停止导出器:置 `EXPORTER_RUNNING=false` + 发 dummy TCP 连接唤醒
 /// `incoming_requests` 阻塞。
-///
-/// # Panics
-/// `addr.parse().unwrap()` 仅在 `addr` 不是合法 IP:port 时 panic。
-/// `addr` 是 `"{}:{}"` 形式字符串(刚由 `format!` 拼接),实际不可能
 pub fn stop_http_exporter() {
     EXPORTER_RUNNING.store(false, Ordering::Relaxed);
     // 发个 dummy 连接唤醒阻塞的 incoming_requests()

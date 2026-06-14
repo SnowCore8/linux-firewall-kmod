@@ -1,9 +1,8 @@
 //! 内核统计读取 + Prometheus 指标生成
 
 use std::sync::atomic::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::types::DAEMON_STATS;
+use crate::types::{now_secs, DAEMON_STATS};
 
 // ============================================================================
 // 内核统计信息读取
@@ -91,11 +90,7 @@ pub(super) fn generate_metrics() -> String {
 
     let start_time = DAEMON_STATS.start_time.load(Ordering::Relaxed);
     let uptime = if start_time > 0 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            - start_time
+        now_secs() as u64 - start_time
     } else {
         0
     };

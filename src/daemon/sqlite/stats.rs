@@ -18,10 +18,7 @@ use super::connection::SqliteDb;
 /// 累加 `hit_count` + 更新 `last_hit_at`。每次拦截命中永久黑名单的 IP 时调。
 pub fn sqlite_update_hit_stats(db: &SqliteDb, ip_num: u32) -> Result<()> {
     let conn = db.conn.lock();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    let now = crate::types::now_secs();
 
     conn.execute(
         "UPDATE permanent_banlist SET hit_count = hit_count + 1, last_hit_at = ?1 \
@@ -50,11 +47,7 @@ pub fn sqlite_get_stats(db: &SqliteDb) -> Result<(i32, i32)> {
 pub fn sqlite_purge_deleted(db: &SqliteDb, days: i32) -> Result<i32> {
     let conn = db.conn.lock();
     if days > 0 {
-        let cutoff = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64
-            - (i64::from(days) * 86400);
+        let cutoff = crate::types::now_secs() - (i64::from(days) * 86400);
 
         let changes = conn.execute(
             "DELETE FROM permanent_banlist WHERE is_active = 0 AND last_hit_at < ?1",

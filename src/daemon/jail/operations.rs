@@ -31,7 +31,7 @@ pub fn find_or_create_jail<'a>(cfg: &'a mut Config, name: &str) -> Option<&'a mu
 
     let jail = Jail::new(name.to_string());
     cfg.jails.push(jail);
-    let jail = cfg.jails.last_mut().unwrap();
+    let jail = cfg.jails.last_mut().expect("push 后立即取值，不为空");
 
     Some(jail)
 }

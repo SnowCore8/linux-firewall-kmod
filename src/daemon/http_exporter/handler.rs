@@ -22,10 +22,15 @@ use super::metrics::generate_metrics;
 /// 4 个 header 名 + 值都是静态 ASCII 字符串,实际不可能 panic
 fn add_security_headers(response: Response<Cursor<Vec<u8>>>) -> Response<Cursor<Vec<u8>>> {
     response
-        .with_header(Header::from_bytes("X-Content-Type-Options", "nosniff").unwrap())
-        .with_header(Header::from_bytes("X-Frame-Options", "DENY").unwrap())
-        .with_header(Header::from_bytes("X-Content-Security-Policy", "default-src 'none'").unwrap())
-        .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap())
+        .with_header(
+            Header::from_bytes("X-Content-Type-Options", "nosniff").expect("静态 ASCII 头"),
+        )
+        .with_header(Header::from_bytes("X-Frame-Options", "DENY").expect("静态 ASCII 头"))
+        .with_header(
+            Header::from_bytes("X-Content-Security-Policy", "default-src 'none'")
+                .expect("静态 ASCII 头"),
+        )
+        .with_header(Header::from_bytes("Cache-Control", "no-store").expect("静态 ASCII 头"))
 }
 
 // ============================================================================
@@ -46,8 +51,9 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
     // 供 K8s livenessProbe 等场景使用, 不应被 auth 拖累
     if url == "/health" || url == "/healthz" {
         let body = "{\"status\":\"ok\"}\n";
-        let response = Response::from_string(body)
-            .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+        let response = Response::from_string(body).with_header(
+            Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
+        );
         if let Err(e) = request.respond(add_security_headers(response)) {
             crate::logger::warn!(
                 crate::logger::get(),
@@ -70,7 +76,8 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         let response = Response::from_string(body)
             .with_status_code(StatusCode(401))
             .with_header(
-                Header::from_bytes("WWW-Authenticate", "Basic realm=\"firewall-metrics\"").unwrap(),
+                Header::from_bytes("WWW-Authenticate", "Basic realm=\"firewall-metrics\"")
+                    .expect("静态 ASCII 头"),
             );
         if let Err(e) = request.respond(add_security_headers(response)) {
             crate::logger::warn!(
@@ -85,7 +92,8 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
     if let (&Method::Get, "/metrics") = (request.method(), url.as_str()) {
         let metrics = generate_metrics();
         let response = Response::from_string(metrics).with_header(
-            Header::from_bytes("Content-Type", "text/plain; version=0.0.4; charset=utf-8").unwrap(),
+            Header::from_bytes("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+                .expect("静态 ASCII 头"),
         );
         if let Err(e) = request.respond(add_security_headers(response)) {
             crate::logger::warn!(

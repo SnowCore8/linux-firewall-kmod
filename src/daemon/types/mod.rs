@@ -43,6 +43,19 @@ pub use stats::{
 pub const EVENT_BUF_LEN: usize =
     1024 * std::mem::size_of::<nix::sys::inotify::InotifyEvent>() + 16 * 1024;
 
+/// 获取当前 Unix 时间戳（秒）。
+///
+/// 封装 `SystemTime::now().duration_since(UNIX_EPOCH)` 模式，
+/// 仅在系统时钟早于 1970 时返回 0（理论上不可能）。
+/// 消除跨模块重复的 `.unwrap()` 调用。
+#[must_use]
+pub fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 // ============================================================================
 // 单元测试
 // ============================================================================
