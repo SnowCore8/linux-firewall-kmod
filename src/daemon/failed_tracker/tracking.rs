@@ -172,36 +172,41 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
 
     let recent_fails = count_recent(entry, findtime_i64, max_retries);
     if recent_fails >= max_retries {
-        // 检查 IP 是否已被封禁（避免重复封禁导致 ban_history 出现多条 active 记录）
-        let already_banned = crate::types::ACTIVE_BAN_CACHE
-            .get()
-            .map(|cache| {
-                cache
-                    .get(ip)
-                    .map(|info| !info.is_expired(now))
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
-
-        if already_banned {
-            // 已封禁且未过期，跳过本次封禁
-            drop(hash);
-            return;
-        }
-
         // 记录触发封禁的失败统计
         let fail_count = recent_fails;
         let window_start = entry.timestamps.first().copied().unwrap_or(now) - findtime_i64;
         let window_end = now;
 
+        // 复用 validate_ip 统一处理 IPv4/IPv6，避免 parse::<Ipv4Addr> 将 IPv6 截断为 0
+        let ip_num = crate::ban::validate_ip(ip).map(|v| v.ip_num).unwrap_or(0);
+        let ban_info = crate::types::BanInfo {
+            ip: ip.to_string(),
+            ip_num,
+            jail_name: jail.name.clone(),
+            reason: crate::types::BanReason::FailedAttempts,
+            banned_at: now,
+            expires_at: now + findtime_i64,
+            is_permanent: false,
+            fail_count,
+        };
+
         // 必须先释放写锁再调 ban_ip, 否则 ban 内部可能触发的日志写会与本锁死锁
         drop(hash);
 
+        // 原子性检查并插入缓存：消除 check-then-act 竞态条件
+        // 多线程同时触发同一 IP 封禁时，只有一个线程的 try_insert 返回 true
+        let cache = crate::types::ACTIVE_BAN_CACHE.get_or_init(crate::types::ActiveBanCache::new);
+        if !cache.try_insert(ban_info.clone()) {
+            // 已被其他线程先行封禁，跳过本次操作
+            return;
+        }
+
         if let Err(e) = ban::ban_ip(ip) {
-            // 封禁失败，记录日志但不中断处理
+            // 封禁失败，回滚缓存标记（允许下次重试）
+            cache.remove(ip);
             crate::logger::warn!(
                 crate::logger::get(),
-                "内核封禁失败，跳过缓存更新";
+                "内核封禁失败，已回滚缓存标记";
                 "ip" => ip,
                 "jail" => &jail.name,
                 "error" => %e
@@ -209,26 +214,16 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
             return;
         }
         {
-            // 更新内存缓存
-            let ip_num = ip.parse::<std::net::Ipv4Addr>().map(u32::from).unwrap_or(0);
-            let ban_info = crate::types::BanInfo {
-                ip: ip.to_string(),
-                ip_num,
-                jail_name: jail.name.clone(),
-                reason: crate::types::BanReason::FailedAttempts,
-                banned_at: now,
-                expires_at: now + findtime_i64,
-                is_permanent: false,
-                fail_count,
-            };
-
             // 立即写入 SQLite ban_history（避免定时批量同步导致重复插入）
+            // 设计决策：内核封禁是 critical path，SQLite 仅用于审计/持久化。
+            // 写入失败时不回滚内核封禁（procfs 不可逆），但升级日志级别为 error
+            // 以触发告警。dirty 标志仍被设置，主循环会尝试同步。
             if let Some(db) = crate::sqlite::get_global_db() {
                 let conn = crate::sqlite::get_conn(&db);
                 if let Err(e) = crate::sqlite_writer::insert_ban_history(&conn, &ban_info) {
-                    crate::logger::warn!(
+                    crate::logger::error!(
                         crate::logger::get(),
-                        "写入 ban_history 失败";
+                        "写入 ban_history 失败（内核封禁已生效但审计记录丢失）";
                         "ip" => ip,
                         "jail" => &jail.name,
                         "error" => %e
@@ -245,9 +240,9 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
                     window_end,
                     true,
                 ) {
-                    crate::logger::warn!(
+                    crate::logger::error!(
                         crate::logger::get(),
-                        "写入 failed_attempt_logs 失败";
+                        "写入 failed_attempt_logs 失败（审计 trail 丢失）";
                         "ip" => ip,
                         "jail" => &jail.name,
                         "error" => %e
@@ -262,10 +257,6 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
                     "jail" => &jail.name
                 );
             }
-
-            crate::types::ACTIVE_BAN_CACHE
-                .get_or_init(crate::types::ActiveBanCache::new)
-                .insert(ban_info);
 
             // 标记 dirty，触发主循环同步
             crate::sqlite_writer::mark_dirty();
@@ -295,9 +286,9 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
                 window_end,
                 false, // triggered_ban=false
             ) {
-                crate::logger::warn!(
+                crate::logger::error!(
                     crate::logger::get(),
-                    "写入 failed_attempt_logs 失败";
+                    "写入 failed_attempt_logs 失败（审计 trail 丢失）";
                     "ip" => ip,
                     "jail" => &jail.name,
                     "error" => %e

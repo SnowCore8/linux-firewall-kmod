@@ -25,8 +25,11 @@ pub fn insert_ban_history(conn: &Connection, info: &BanInfo) -> Result<i64> {
 }
 
 /// 批量插入封禁历史（定时器调用，事务保证原子性）
+///
+/// 使用 `INSERT OR IGNORE` 跳过重复记录。返回值为实际插入的行数（不包含被跳过的重复项）。
 pub fn insert_ban_history_batch(conn: &Connection, infos: &[BanInfo]) -> Result<usize> {
-    let mut count = 0;
+    let mut inserted = 0;
+    let mut skipped = 0;
     let tx = conn.unchecked_transaction()?;
     {
         let mut stmt = tx.prepare(
@@ -34,7 +37,7 @@ pub fn insert_ban_history_batch(conn: &Connection, infos: &[BanInfo]) -> Result<
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?;
         for info in infos {
-            stmt.execute(rusqlite::params![
+            let affected = stmt.execute(rusqlite::params![
                 info.ip,
                 info.ip_num,
                 info.jail_name,
@@ -44,11 +47,24 @@ pub fn insert_ban_history_batch(conn: &Connection, infos: &[BanInfo]) -> Result<
                 BanStatus::Active.as_str(),
                 info.fail_count,
             ])?;
-            count += 1;
+            if affected > 0 {
+                inserted += 1;
+            } else {
+                skipped += 1;
+            }
         }
     }
     tx.commit()?;
-    Ok(count)
+    if skipped > 0 {
+        crate::logger::warn!(
+            crate::logger::get(),
+            "批量插入 ban_history 跳过重复记录";
+            "inserted" => inserted,
+            "skipped" => skipped,
+            "total" => infos.len()
+        );
+    }
+    Ok(inserted)
 }
 
 /// 更新封禁状态（解封/过期时调用）

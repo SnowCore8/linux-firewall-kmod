@@ -109,7 +109,7 @@ pub fn read_and_process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
 
 /// 打开日志文件（O_NOFOLLOW）。
 ///
-/// ELOOP 错误表示文件被替换为符号链接，标记后跳过。
+/// ELOOP 错误表示文件被替换为符号链接，标记后跳过并记录安全告警。
 fn open_log_file(log_path: &str, idx: usize) -> Option<std::fs::File> {
     match OpenOptions::new()
         .read(true)
@@ -119,6 +119,13 @@ fn open_log_file(log_path: &str, idx: usize) -> Option<std::fs::File> {
         Ok(f) => Some(f),
         Err(e) => {
             if e.raw_os_error() == Some(libc::ELOOP) {
+                // 符号链接攻击检测：可能是攻击者将日志文件替换为指向敏感文件的符号链接
+                crate::logger::error!(
+                    crate::logger::get(),
+                    "安全告警：日志文件被替换为符号链接（可能为攻击行为）";
+                    "path" => log_path,
+                    "file_index" => idx
+                );
                 let mut file_states = FILE_STATES.write();
                 if let Some(state) = file_states.get_mut(idx) {
                     state.symlink_detected = true;

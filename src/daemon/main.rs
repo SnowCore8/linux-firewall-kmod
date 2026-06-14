@@ -138,21 +138,30 @@ fn main() -> Result<()> {
                     if let Some(ref db) = sqlite_db {
                         match sqlite::sqlite_load_all_permanent_bans(db) {
                             Ok(entries) if !entries.is_empty() => {
+                                let mut fail_count = 0u32;
                                 for entry in &entries {
                                     // 用 ban::ban_ip_permanent 而非手写 procfs 命令:
                                     //   1) 内核 procfs 不识别 "permanent" 前缀, 只认 "<ip> 0"
                                     //   2) 复用 execute_ban_action 自动写 SQLite + 更新 ips_banned 计数
                                     if let Err(e) = ban::ban_ip_permanent(&entry.ip) {
-                                        warn!(logger::get(), "恢复永久封禁失败"; "ip" => &entry.ip, "error" => %e);
+                                        fail_count += 1;
+                                        error!(logger::get(), "恢复永久封禁失败（安全规则缺失）"; "ip" => &entry.ip, "error" => %e);
                                     }
+                                }
+                                if fail_count > 0 {
+                                    error!(logger::get(), "永久封禁恢复存在失败"; "failed" => fail_count, "total" => entries.len());
                                 }
                             }
                             Ok(_) => {}
-                            Err(_e) => {}
+                            Err(e) => {
+                                eprintln!("[ERROR] 加载永久封禁列表失败: {e}");
+                            }
                         }
                     }
                 }
-                Err(_e) => {}
+                Err(e) => {
+                    eprintln!("[ERROR] SQLite 数据库初始化失败（永久封禁持久化不可用）: {e}");
+                }
             }
         }
     }
@@ -166,7 +175,7 @@ fn main() -> Result<()> {
     }
 
     // 在守护进程化之后初始化日志系统，确保异步日志线程正确运行
-    let _log = logger::init_logger();
+    let _log = logger::init_logger(cfg.log_file.as_deref());
     info!(logger::get(), "firewall-daemon 启动"; "mode" => if cfg.daemon { "daemon" } else { "foreground" });
 
     // 在守护进程化之后设置信号处理器，确保 fork 后信号处理正常工作
@@ -177,7 +186,8 @@ fn main() -> Result<()> {
     if let Some(ref db) = sqlite_db {
         let conn = sqlite::get_conn(db);
         if let Err(e) = sqlite_writer::init_tables(&conn) {
-            warn!(logger::get(), "初始化混合存储表失败"; "error" => %e);
+            error!(logger::get(), "初始化混合存储表失败（致命错误，守护进程无法正常运行）"; "error" => %e);
+            bail!("Failed to initialize SQLite tables: {}", e);
         } else {
             info!(logger::get(), "混合存储表初始化成功");
 
@@ -197,7 +207,7 @@ fn main() -> Result<()> {
 
                         // 重新写入内核 procfs
                         if let Err(e) = ban::ban_ip(&ban_info.ip) {
-                            warn!(logger::get(), "恢复封禁到内核失败"; "ip" => &ban_info.ip, "error" => %e);
+                            error!(logger::get(), "恢复封禁到内核失败（安全规则缺失）"; "ip" => &ban_info.ip, "error" => %e);
                             skipped_count += 1;
                             continue;
                         }
@@ -215,7 +225,7 @@ fn main() -> Result<()> {
                     info!(logger::get(), "无活跃封禁条目需要恢复");
                 }
                 Err(e) => {
-                    warn!(logger::get(), "加载活跃封禁条目失败"; "error" => %e);
+                    error!(logger::get(), "加载活跃封禁条目失败（重启后安全规则可能缺失）"; "error" => %e);
                 }
             }
         }

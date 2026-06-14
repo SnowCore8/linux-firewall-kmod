@@ -177,6 +177,36 @@ impl ActiveBanCache {
         }
     }
 
+    /// 原子性检查并插入：仅当 IP 不在缓存中（或已过期）时插入。
+    ///
+    /// 消除 check-then-act 竞态：多线程同时调用时，只有一个线程成功插入。
+    ///
+    /// # Returns
+    /// - `true`: IP 新插入（调用方可安全执行内核封禁）
+    /// - `false`: IP 已存在且未过期（调用方应跳过封禁）
+    pub fn try_insert(&self, info: BanInfo) -> bool {
+        let ip = info.ip.clone();
+        let jail = info.jail_name.clone();
+        let now = crate::types::now_secs();
+
+        let mut bans = self.bans.write();
+
+        // 检查是否已存在且未过期
+        if let Some(existing) = bans.get(&ip) {
+            if !existing.is_expired(now) {
+                return false; // 已存在且活跃，跳过
+            }
+        }
+
+        // 不存在或已过期 → 插入
+        bans.insert(ip.clone(), info);
+        drop(bans); // 释放 bans 锁后再获取 by_jail 锁，保持锁序一致
+
+        let mut by_jail = self.by_jail.write();
+        by_jail.entry(jail).or_default().insert(ip);
+        true
+    }
+
     /// 移除封禁条目,同时清理反向索引
     pub fn remove(&self, ip: &str) -> Option<BanInfo> {
         let info = {

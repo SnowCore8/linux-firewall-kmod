@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 /// 3 重安全检查,任一命中返回 `Err` (拒绝路径):
 /// 1. 包含 `..` 路径遍历
-/// 2. 包含 `%2e`/`%2f`/`%5c` URL 编码绕过
+/// 2. 包含 URL 编码绕过（单层 + 双重编码）
 /// 3. 包含 shell 元字符命令注入
 ///
 /// 故意不做白名单检查,与 C 版 `validate_and_normalize_path` 行为等价
@@ -23,8 +23,16 @@ pub fn validate_and_normalize_path(path: &str) -> Result<()> {
         bail!("Path validation failed (path traversal detected): {}", path);
     }
 
-    // 2) URL 编码绕过: %2e (.), %2f (/), %5c (\)
-    if lower.contains("%2e") || lower.contains("%2f") || lower.contains("%5c") {
+    // 2) URL 编码绕过：单层（%2e/. %2f// %5c/\）+ 双重编码（%25xx 形式）
+    //    双重编码示例：%252e%252e → 解码一次为 %2e%2e → 再解码为 ..
+    if lower.contains("%2e")
+        || lower.contains("%2f")
+        || lower.contains("%5c")
+        || lower.contains("%252e")
+        || lower.contains("%252f")
+        || lower.contains("%255c")
+        || lower.contains("%25")
+    {
         bail!("Path validation failed (URL encoding detected): {}", path);
     }
 

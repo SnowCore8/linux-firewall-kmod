@@ -57,7 +57,8 @@ pub struct SqliteDb {
 // 内部辅助
 // ============================================================================
 
-/// 确保 db 父目录存在且安全。拒绝 `/`、`/etc`、`/usr`、`/bin`、`/sbin`。
+/// 确保 db 父目录存在且安全。拒绝系统敏感目录（`/`、`/etc`、`/usr`、`/bin`、`/sbin`、
+/// `/boot`、`/dev`、`/lib`、`/opt`、`/proc`、`/sys`、`/run`、`/var`）。
 ///
 /// # Arguments
 /// - `db_path`: `SQLite` 数据库文件路径
@@ -68,7 +69,22 @@ pub struct SqliteDb {
 pub(crate) fn ensure_db_dir(db_path: &str) -> Result<()> {
     if let Some(dir) = Path::new(db_path).parent() {
         let dir_str = dir.to_string_lossy();
-        if matches!(dir_str.as_ref(), "/" | "/etc" | "/usr" | "/bin" | "/sbin") {
+        if matches!(
+            dir_str.as_ref(),
+            "/" | "/etc"
+                | "/usr"
+                | "/bin"
+                | "/sbin"
+                | "/boot"
+                | "/dev"
+                | "/lib"
+                | "/lib64"
+                | "/opt"
+                | "/proc"
+                | "/sys"
+                | "/run"
+                | "/var"
+        ) {
             bail!("Unsafe database directory path: {dir_str}");
         }
         if !dir.exists() {

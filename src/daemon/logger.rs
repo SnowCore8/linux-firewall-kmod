@@ -17,12 +17,12 @@
 //!
 //! # 使用示例
 //!
-//! ```rust
+//! ```rust,no_run
 //! use firewall_daemon::logger;
 //! use slog::{info, warn, error};
 //!
-//! // 在 main.rs 中初始化
-//! logger::init_logger();
+//! // 在 main.rs 中初始化（传入配置中的日志路径，None 使用默认路径）
+//! logger::init_logger(None);
 //!
 //! // 在任何模块中使用
 //! info!(logger::get(), "启动成功"; "module" => "main");
@@ -40,26 +40,28 @@ use std::fs::OpenOptions;
 /// 日志静默丢失。parking_lot::Mutex 不支持 poisoning，更安全。
 static GLOBAL_LOGGER: parking_lot::Mutex<Option<Logger>> = parking_lot::Mutex::new(None);
 
-/// 日志文件路径
-const LOG_FILE_PATH: &str = "/var/log/firewall-daemon.log";
+/// 默认日志文件路径（当配置未指定 log_file 时使用）
+const DEFAULT_LOG_FILE_PATH: &str = "/var/log/firewall-daemon.log";
 
 /// 初始化全局 logger
 ///
 /// 创建 JSON Lines 格式的 slog logger，输出到日志文件（异步模式）。
 /// 应在程序启动时调用一次。如果在 fork 后调用，会重新创建文件句柄和异步线程。
-pub fn init_logger() -> Logger {
+///
+/// # Arguments
+/// - `log_file_override`: 可选的日志路径覆盖（来自配置 `log_file` 字段）。
+///   为 `None` 或空字符串时使用默认路径 `/var/log/firewall-daemon.log`。
+pub fn init_logger(log_file_override: Option<&str>) -> Logger {
+    let log_path = match log_file_override {
+        Some(p) if !p.is_empty() => p,
+        _ => DEFAULT_LOG_FILE_PATH,
+    };
+
     // 打开日志文件（追加模式，不存在则创建）
-    let file = match OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(LOG_FILE_PATH)
-    {
+    let file = match OpenOptions::new().create(true).append(true).open(log_path) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!(
-                "警告: 无法打开日志文件 {}: {}，回退到 stderr",
-                LOG_FILE_PATH, e
-            );
+            eprintln!("警告: 无法打开日志文件 {}: {}，回退到 stderr", log_path, e);
             // 回退到 stderr
             use std::os::unix::io::FromRawFd;
             unsafe { std::fs::File::from_raw_fd(2) } // fd 2 = stderr

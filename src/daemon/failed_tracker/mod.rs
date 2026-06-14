@@ -145,7 +145,7 @@ mod tests {
             handle_failed_attempt_for_jail(&jail, "10.0.0.7", max_retries, findtime);
         }
 
-        let _ = jail.failed_hash.read();
+        let _guard = jail.failed_hash.read();
     }
 
     #[test]
