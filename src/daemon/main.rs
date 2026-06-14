@@ -56,6 +56,7 @@ const BANS_PATH: &str = "/proc/firewall/bans";
 fn cleanup(_cfg: &Config, sqlite_db: &Option<std::sync::Arc<sqlite::SqliteDb>>) {
     http_exporter::stop_http_exporter();
     GLOBAL_RUNNING.store(false, Ordering::SeqCst);
+    file_monitor::close_inotify();
     ban::close_cached_bans_fd();
     // 清理顺序：先清全局引用，再关 db，防止收尾期间 ban 模块再访问
     sqlite::clear_global_db();

@@ -17,6 +17,8 @@
 //! - 单行硬上限 8KB,异常超长行会跳过 (避免 OOM)
 //! - `O_NOFOLLOW` 防止日志文件被替换为符号链接后 readlink 到攻击者文件
 
+use std::sync::atomic::Ordering;
+
 pub mod inotify_setup;
 pub mod monitor_loop;
 pub mod periodic_tasks;
@@ -28,6 +30,15 @@ pub use monitor_loop::monitor_loop;
 pub use periodic_tasks::{check_and_handle_ddos, perform_data_cleanup, write_stats_snapshot};
 pub use processor::process_new_lines;
 pub use state::{FileState, InotifyState, FILE_STATES, INOTIFY_STATE};
+
+/// 关闭 inotify 文件描述符。
+///
+/// 将 `INOTIFY_STATE.fd` 设为 `None`,触发 `Inotify` drop 自动关闭 fd。
+/// 应在进程退出清理时调用。
+pub fn close_inotify() {
+    *INOTIFY_STATE.fd.write() = None;
+    INOTIFY_STATE.raw_fd.store(-1, Ordering::Relaxed);
+}
 
 // ============================================================================
 // 单元测试
@@ -43,6 +54,5 @@ mod tests {
         assert_eq!(state.offset, 0);
         assert_eq!(state.inode, 0);
         assert!(state.wd.is_none());
-        assert!(!state.symlink_detected);
     }
 }

@@ -40,16 +40,12 @@ const BATCH_READ_MAX: usize = 256 * 1024;
 /// - `cfg`: 全局配置
 ///
 /// # Returns
-/// `Ok(())` 即便内部错误（如 ELOOP）也会标记 symlink_detected 但不 bail
+/// `Ok(())` 即便内部错误（如 ELOOP）也会记录告警但不 bail
 pub fn read_and_process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
     let file_states = FILE_STATES.read();
     let state = file_states
         .get(idx)
         .ok_or_else(|| anyhow::anyhow!("Invalid index {idx}"))?;
-
-    if state.symlink_detected {
-        return Ok(());
-    }
 
     let log_path = state.path.clone();
     let jail_idx = state.jail_idx;
@@ -109,7 +105,8 @@ pub fn read_and_process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
 
 /// 打开日志文件（O_NOFOLLOW）。
 ///
-/// ELOOP 错误表示文件被替换为符号链接，标记后跳过并记录安全告警。
+/// ELOOP 错误表示文件被替换为符号链接，记录安全告警并返回 None。
+/// 不设置永久标志 — 每次读取周期重试,符号链接被移除后自动恢复监控。
 fn open_log_file(log_path: &str, idx: usize) -> Option<std::fs::File> {
     match OpenOptions::new()
         .read(true)
@@ -122,14 +119,10 @@ fn open_log_file(log_path: &str, idx: usize) -> Option<std::fs::File> {
                 // 符号链接攻击检测：可能是攻击者将日志文件替换为指向敏感文件的符号链接
                 crate::logger::error!(
                     crate::logger::get(),
-                    "安全告警：日志文件被替换为符号链接（可能为攻击行为）";
+                    "安全告警：日志文件被替换为符号链接（可能为攻击行为），本次跳过";
                     "path" => log_path,
                     "file_index" => idx
                 );
-                let mut file_states = FILE_STATES.write();
-                if let Some(state) = file_states.get_mut(idx) {
-                    state.symlink_detected = true;
-                }
             }
             None
         }

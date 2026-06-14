@@ -217,7 +217,10 @@ fn handle_timeout(cfg: &mut Config, reload_config: &AtomicBool, state: &mut Time
         check_for_new_log_files(cfg);
     }
 
-    // SQLite dirty 标志清理
+    // SQLite dirty 标志清理 + 缓存同步
+    // 设计说明: 关键路径 (封禁/解封) 已立即写入 SQLite, dirty 标志用于标记
+    // "有待确认的写入"。此处定期同步 ActiveBanCache 到 SQLite 作为安全网,
+    // 捕获任何可能的漏写情况。
     if crate::sqlite_writer::is_dirty()
         && now
             .duration_since(state.last_sqlite_sync)
@@ -226,8 +229,13 @@ fn handle_timeout(cfg: &mut Config, reload_config: &AtomicBool, state: &mut Time
             >= cfg.storage.writer.flush_interval_secs as u64
     {
         state.last_sqlite_sync = now;
+        // 同步 ActiveBanCache 到 SQLite (安全网: 确保内存状态与数据库一致)
+        sync_ban_cache_to_sqlite();
         crate::sqlite_writer::clear_dirty();
-        crate::logger::debug!(crate::logger::get(), "SQLite dirty 标志已清理");
+        crate::logger::debug!(
+            crate::logger::get(),
+            "SQLite dirty 标志已清理，缓存同步完成"
+        );
     }
 
     // 统计快照 (每 60 秒)
@@ -262,5 +270,33 @@ fn handle_timeout(cfg: &mut Config, reload_config: &AtomicBool, state: &mut Time
     {
         state.last_ddos_check = now;
         check_and_handle_ddos(cfg);
+    }
+}
+
+/// 将 ActiveBanCache 中的活跃封禁同步到 SQLite ban_history 表。
+///
+/// 作为安全网: 关键路径已立即写入 SQLite, 此函数捕获可能的漏写。
+/// 使用 INSERT OR IGNORE 避免重复插入。
+fn sync_ban_cache_to_sqlite() {
+    let Some(cache) = crate::types::ACTIVE_BAN_CACHE.get() else {
+        return;
+    };
+    let Some(db) = crate::sqlite::get_global_db() else {
+        return;
+    };
+
+    let snapshot = cache.snapshot();
+    if snapshot.is_empty() {
+        return;
+    }
+
+    let conn = crate::sqlite::get_conn(&db);
+    if let Err(e) = crate::sqlite_writer::insert_ban_history_batch(&conn, &snapshot) {
+        crate::logger::warn!(
+            crate::logger::get(),
+            "ActiveBanCache 同步到 SQLite 失败";
+            "count" => snapshot.len(),
+            "error" => %e
+        );
     }
 }

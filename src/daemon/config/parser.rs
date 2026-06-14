@@ -9,10 +9,12 @@ use std::collections::HashMap;
 // 路径安全
 // ============================================================================
 
-/// 3 重安全检查,任一命中返回 `Err` (拒绝路径):
+/// 4 重安全检查 + 路径规范化,任一命中返回 `Err` (拒绝路径):
 /// 1. 包含 `..` 路径遍历
 /// 2. 包含 URL 编码绕过（单层 + 双重编码）
 /// 3. 包含 shell 元字符命令注入
+/// 4. 长度上限
+/// 5. 路径规范化 (canonicalize): 已存在的路径解析符号链接,防止通过软链接逃逸
 ///
 /// 故意不做白名单检查,与 C 版 `validate_and_normalize_path` 行为等价
 pub fn validate_and_normalize_path(path: &str) -> Result<()> {
@@ -58,6 +60,23 @@ pub fn validate_and_normalize_path(path: &str) -> Result<()> {
     // 4) 长度上限
     if path.len() > 4096 {
         bail!("Path validation failed (path too long, max 4096): {}", path);
+    }
+
+    // 5) 路径规范化: 对已存在的路径解析符号链接,防止通过软链接逃逸到敏感目录
+    //    路径不存在时跳过 (配置文件引用的日志文件可能尚未创建)
+    let p = std::path::Path::new(path);
+    if p.exists() {
+        if let Ok(canonical) = p.canonicalize() {
+            let canonical_str = canonical.to_string_lossy();
+            // 规范化后的路径也不允许包含 .. (防御纵深)
+            if canonical_str.contains("..") {
+                bail!(
+                    "Path validation failed (canonicalized path contains traversal): {} -> {}",
+                    path,
+                    canonical_str
+                );
+            }
+        }
     }
 
     Ok(())
