@@ -202,7 +202,18 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
         // 必须先释放写锁再调 ban_ip, 否则 ban 内部可能触发的日志写会与本锁死锁
         drop(hash);
 
-        if ban::ban_ip(ip).is_ok() {
+        if let Err(e) = ban::ban_ip(ip) {
+            // 封禁失败，记录日志但不中断处理
+            crate::logger::warn!(
+                crate::logger::get(),
+                "内核封禁失败，跳过缓存更新";
+                "ip" => ip,
+                "jail" => &jail.name,
+                "error" => %e
+            );
+            return;
+        }
+        {
             // 更新内存缓存
             let ip_num = ip.parse::<std::net::Ipv4Addr>().map(u32::from).unwrap_or(0);
             let ban_info = crate::types::BanInfo {
@@ -261,13 +272,42 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
                 .get_or_init(crate::types::ActiveBanCache::new)
                 .insert(ban_info);
 
+            // 标记 dirty，触发主循环同步
+            crate::sqlite_writer::mark_dirty();
+
             // 成功封禁后移除条目, 避免重复封禁计数
             let mut hash2 = jail.failed_hash.write();
             hash2.remove(ip);
         }
     } else {
-        // 未达到阈值，也记录一次失败尝试（可选，用于审计）
-        // 为了避免频繁写入，这里不写入，只在触发封禁时写入
+        // 未达到阈值，也记录一次失败尝试（用于审计）
+        // 记录当前 IP 的失败状态，triggered_ban=false
+        let fail_count = recent_fails;
+        let window_start = entry.timestamps.first().copied().unwrap_or(now) - findtime_i64;
+        let window_end = now;
+
+        // 释放写锁后再写入 SQLite（避免锁内 IO）
         drop(hash);
+
+        if let Some(db) = crate::sqlite::get_global_db() {
+            let conn = crate::sqlite::get_conn(&db);
+            if let Err(e) = crate::sqlite_writer::insert_failed_log(
+                &conn,
+                ip,
+                &jail.name,
+                fail_count,
+                window_start,
+                window_end,
+                false, // triggered_ban=false
+            ) {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "写入 failed_attempt_logs 失败";
+                    "ip" => ip,
+                    "jail" => &jail.name,
+                    "error" => %e
+                );
+            }
+        }
     }
 }

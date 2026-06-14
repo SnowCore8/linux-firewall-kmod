@@ -46,6 +46,15 @@ pub fn parse_config_file(path: &str, cfg: &mut Config, strict: bool) -> Result<(
     let saved_metrics_username = cfg.metrics_username.clone();
     let saved_metrics_password = cfg.metrics_password.clone();
     let saved_jails_len = cfg.jails.len();
+    // 补充缺失的字段快照
+    let saved_default_max_retries = cfg.default_max_retries;
+    let saved_default_findtime = cfg.default_findtime;
+    let saved_default_ban_time = cfg.default_ban_time;
+    let saved_interval = cfg.interval;
+    let saved_metrics_port = cfg.metrics_port;
+    let saved_log_level = cfg.log_level;
+    let saved_log_destination = cfg.log_destination;
+    let saved_log_format = cfg.log_format;
 
     cfg.strict_mode = strict;
 
@@ -66,6 +75,15 @@ pub fn parse_config_file(path: &str, cfg: &mut Config, strict: bool) -> Result<(
             cfg.metrics_username = saved_metrics_username;
             cfg.metrics_password = saved_metrics_password;
             cfg.jails.truncate(saved_jails_len);
+            // 补充缺失的字段回滚
+            cfg.default_max_retries = saved_default_max_retries;
+            cfg.default_findtime = saved_default_findtime;
+            cfg.default_ban_time = saved_default_ban_time;
+            cfg.interval = saved_interval;
+            cfg.metrics_port = saved_metrics_port;
+            cfg.log_level = saved_log_level;
+            cfg.log_destination = saved_log_destination;
+            cfg.log_format = saved_log_format;
             Err(e)
         }
     }

@@ -51,12 +51,12 @@ pub static GLOBAL_RELOAD: AtomicBool = AtomicBool::new(false);
 
 /// SIGTERM/SIGINT 信号处理器：设置全局运行标志为 false
 extern "C" fn handle_sigterm(_sig: libc::c_int) {
-    GLOBAL_RUNNING.store(false, Ordering::Relaxed);
+    GLOBAL_RUNNING.store(false, Ordering::SeqCst);
 }
 
 /// SIGHUP 信号处理器：设置全局重载标志为 true
 extern "C" fn handle_sighup(_sig: libc::c_int) {
-    GLOBAL_RELOAD.store(true, Ordering::Relaxed);
+    GLOBAL_RELOAD.store(true, Ordering::SeqCst);
 }
 
 /// 注册 4 个信号到全局原子标志。
@@ -199,6 +199,15 @@ fn daemonize_process() -> Result<()> {
                 "error" => %e
             );
         }
+    } else {
+        // PID 文件创建失败，记录错误但继续运行（非致命错误）
+        let errno = std::io::Error::last_os_error();
+        crate::logger::warn!(
+            crate::logger::get(),
+            "创建 PID 文件失败（守护进程仍正常运行）";
+            "path" => pid_path,
+            "error" => %errno
+        );
     }
 
     // 标准 fd 重定向到 /dev/null
@@ -231,7 +240,7 @@ fn daemonize_process() -> Result<()> {
 /// - `sqlite_db`：可选 db 句柄（来自 [`sqlite::sqlite_init`]）
 fn cleanup(_cfg: &Config, sqlite_db: &Option<std::sync::Arc<sqlite::SqliteDb>>) {
     http_exporter::stop_http_exporter();
-    GLOBAL_RUNNING.store(false, Ordering::Relaxed);
+    GLOBAL_RUNNING.store(false, Ordering::SeqCst);
     ban::close_cached_bans_fd();
     // 清理顺序：先清全局引用，再关 db，防止收尾期间 ban 模块再访问
     sqlite::clear_global_db();
@@ -286,7 +295,7 @@ fn main() -> Result<()> {
 
     // 重置全局标志（可能因为之前的运行而改变了）
     GLOBAL_RUNNING.store(true, Ordering::Relaxed);
-    GLOBAL_RELOAD.store(false, Ordering::Relaxed);
+    GLOBAL_RELOAD.store(false, Ordering::SeqCst);
 
     if !Path::new(PROCFS_DIR).exists() {
         bail!("Procfs directory not found");
@@ -338,7 +347,7 @@ fn main() -> Result<()> {
         daemonize_process()?;
         // 守护进程化后清 reload 标志, 防止该窗口期收到的 SIGHUP 在主循环首次检查时误触
         // 对齐 C 版: 守护进程化期间用 sigaction(SIGHUP, SIG_IGN) 临时忽略
-        GLOBAL_RELOAD.store(false, Ordering::Relaxed);
+        GLOBAL_RELOAD.store(false, Ordering::SeqCst);
     }
 
     // 在守护进程化之后初始化日志系统，确保异步日志线程正确运行
@@ -422,7 +431,7 @@ fn main() -> Result<()> {
     info!(
         logger::get(),
         "主循环退出，running={}",
-        GLOBAL_RUNNING.load(Ordering::Relaxed)
+        GLOBAL_RUNNING.load(Ordering::SeqCst)
     );
     info!(logger::get(), "开始清理流程");
     cleanup(&cfg, &sqlite_db);

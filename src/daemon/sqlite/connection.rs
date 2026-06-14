@@ -269,7 +269,6 @@ mod tests {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
         let tmpdir =
             std::env::temp_dir().join(format!("fw_sqlite_conn_test_{}_{}", std::process::id(), n));
-        std::env::temp_dir().join(format!("fw_sqlite_test_{}_{}", std::process::id(), n));
         fs::create_dir_all(&tmpdir).unwrap();
         let path = tmpdir.join("test.db").to_string_lossy().to_string();
         let _ = fs::remove_file(&path);

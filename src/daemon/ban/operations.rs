@@ -117,11 +117,11 @@ pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
                             );
                         }
                     } else {
-                        // SQLite 不可用时记录警告（降级模式）
-                        crate::logger::warn!(
-                            crate::logger::get(),
-                            "SQLite 全局数据库未初始化，跳过 ban_history 状态更新（降级模式）";
-                            "ip" => ip
+                        // SQLite 不可用时返回错误（而非静默跳过）
+                        // 调用方可根据错误决定重试或记录
+                        anyhow::bail!(
+                            "SQLite 数据库未初始化，无法更新 ban_history 状态（IP: {}）",
+                            ip
                         );
                     }
                     // 标记 dirty
@@ -140,13 +140,10 @@ pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
 /// 内部:累加 `ips_banned` 统计并 emit 用户可见的日志。
 ///
 /// Temp / Permanent 都累加,Prometheus `ips_banned_total` 来源。
-fn log_ban_action(action: BanAction, ip: &str) {
+fn log_ban_action(action: BanAction, _ip: &str) {
     if matches!(action, BanAction::Temp | BanAction::Permanent) {
         DAEMON_STATS.ips_banned.fetch_add(1, Ordering::Relaxed);
     }
-
-    let _ = action;
-    let _ = ip;
 }
 
 // ============================================================================
@@ -204,7 +201,11 @@ pub fn ban_ip_with_history(
     if ban_duration == 0 {
         ban_ip_permanent(ip)
     } else {
-        if ban_ip(ip).is_ok() {
+        if let Err(e) = ban_ip(ip) {
+            // 内核封禁失败，直接返回错误
+            return Err(e).context("Failed to ban IP in kernel");
+        }
+        {
             // 更新内存缓存
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -248,8 +249,8 @@ pub fn ban_ip_with_history(
                 .get_or_init(crate::types::ActiveBanCache::new)
                 .insert(ban_info);
 
-            // 记录封禁原因到日志（审计用）
-            let _ = reason;
+            // 标记 dirty，触发主循环同步
+            crate::sqlite_writer::mark_dirty();
         }
         Ok(())
     }

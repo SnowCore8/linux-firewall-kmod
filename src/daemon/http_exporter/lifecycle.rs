@@ -84,6 +84,8 @@ pub fn stop_http_exporter() {
         use std::net::TcpStream;
         use std::time::Duration;
         let addr = format!("127.0.0.1:{port}");
-        let _ = TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_millis(10));
+        if let Ok(parsed) = addr.parse() {
+            let _ = TcpStream::connect_timeout(&parsed, Duration::from_millis(10));
+        }
     }
 }
