@@ -33,6 +33,40 @@
 //! - **滑动窗口 `recent_head`**:`FailedEntry` 维护 O(1) 平均的前缀跳过 (R9-7 优化)
 //! - **配置双缓冲**:SIGHUP 重载时先 clone 旧配置,失败时旧配置不受影响
 //! - **path 安全 3 重检查**:`..` 遍历 / URL 编码绕过 / shell 元字符注入
+//!
+//! # 并发模型与锁顺序
+//!
+//! ## 全局 static 分布
+//!
+//! | 类别 | static | 说明 |
+//! |------|--------|------|
+//! | 信号控制 | `GLOBAL_RUNNING` / `GLOBAL_RELOAD` | 信号处理函数写，主循环读 |
+//! | 文件监控 | `FILE_STATES` / `INOTIFY_STATE` | 主循环独占读写 |
+//! | 封禁缓存 | `ACTIVE_BAN_CACHE` (OnceLock) | 启动时初始化，运行时 ban/unban 操作 |
+//! | 统计计数 | `DAEMON_STATS` / `JAIL_STATS` / `DDOS_STATS` / `BAN_DURATION_BUCKETS` | 全 Atomic，Relaxed 序 |
+//! | SQLite | `GLOBAL_DB` (OnceLock) | 启动时初始化，各模块通过 `with_global_db` 访问 |
+//! | HTTP 导出 | `EXPORTER_RUNNING` / `EXPORTER_PORT` / `AUTH_STATE` | 导出器线程 + auth 逻辑 |
+//! | 基础设施 | `GLOBAL_LOGGER` / `CACHED_BANS_FD` / `BANS_FD_MUTEX` / `SYNC_DIRTY` | 日志 / fd 缓存 / 同步标志 |
+//!
+//! ## 锁获取顺序（防死锁）
+//!
+//! 当需要同时获取多把锁时，必须按以下顺序获取：
+//!
+//! ```text
+//! 1. GLOBAL_RUNNING / GLOBAL_RELOAD       (AtomicBool, 无锁竞争)
+//! 2. FILE_STATES.read() / .write()        (RwLock)
+//! 3. INOTIFY_STATE.fd.write()             (RwLock)
+//! 4. ACTIVE_BAN_CACHE.bans.write()        (RwLock, 内部)
+//! 5. ACTIVE_BAN_CACHE.by_jail.write()     (RwLock, 内部)
+//! 6. JAIL_STATS.write()                   (RwLock, OnceLock 内部)
+//! 7. GLOBAL_DB / SqliteDb.conn.lock()     (Mutex)
+//! 8. BANS_FD_MUTEX.lock()                 (Mutex, procfs fd 缓存)
+//! ```
+//!
+//! **规则**：
+//! - 禁止在持锁时执行 IO（网络、磁盘、procfs 写入）
+//! - Atomic 操作（Relaxed 序）不视为"持锁"
+//! - `parking_lot` 锁无写线程饥饿，但仍须遵守顺序避免 ABBA 死锁
 
 pub mod ban;
 pub mod config;

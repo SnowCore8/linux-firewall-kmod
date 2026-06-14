@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 
-use super::{AUTH_FAILURES, AUTH_FAILURE_THRESHOLD, AUTH_LOCKOUT_DURATION, LAST_FAILURE_TIME};
+use super::{AUTH_FAILURE_THRESHOLD, AUTH_LOCKOUT_DURATION, AUTH_STATE};
 use crate::types::now_secs;
 
 // ============================================================================
@@ -53,41 +53,51 @@ pub(super) fn check_basic_auth(auth_header: Option<&str>, cfg_user: &str, cfg_pa
 
     // 暴力破解防护: 10 次失败后 60s 内拒绝所有请求
     let now = now_secs();
-    let last = LAST_FAILURE_TIME.load(Ordering::Relaxed) as i64;
-    if AUTH_FAILURES.load(Ordering::Relaxed) >= AUTH_FAILURE_THRESHOLD
+    let last = AUTH_STATE.last_failure_time.load(Ordering::Relaxed) as i64;
+    if AUTH_STATE.failures.load(Ordering::Relaxed) >= AUTH_FAILURE_THRESHOLD
         && (now - last) < AUTH_LOCKOUT_DURATION
     {
         return 0;
     }
 
     let Some(auth_header) = auth_header else {
-        AUTH_FAILURES.fetch_add(1, Ordering::Relaxed);
-        LAST_FAILURE_TIME.store(now_secs() as u64, Ordering::Relaxed);
+        AUTH_STATE.failures.fetch_add(1, Ordering::Relaxed);
+        AUTH_STATE
+            .last_failure_time
+            .store(now_secs() as u64, Ordering::Relaxed);
         return 0;
     };
 
     if !auth_header.starts_with("Basic ") {
-        AUTH_FAILURES.fetch_add(1, Ordering::Relaxed);
-        LAST_FAILURE_TIME.store(now_secs() as u64, Ordering::Relaxed);
+        AUTH_STATE.failures.fetch_add(1, Ordering::Relaxed);
+        AUTH_STATE
+            .last_failure_time
+            .store(now_secs() as u64, Ordering::Relaxed);
         return 0;
     }
 
     let Ok(decoded) = STANDARD.decode(&auth_header[6..]) else {
-        AUTH_FAILURES.fetch_add(1, Ordering::Relaxed);
-        LAST_FAILURE_TIME.store(now_secs() as u64, Ordering::Relaxed);
+        AUTH_STATE.failures.fetch_add(1, Ordering::Relaxed);
+        AUTH_STATE
+            .last_failure_time
+            .store(now_secs() as u64, Ordering::Relaxed);
         return 0;
     };
 
     let Ok(decoded_str) = String::from_utf8(decoded) else {
-        AUTH_FAILURES.fetch_add(1, Ordering::Relaxed);
-        LAST_FAILURE_TIME.store(now_secs() as u64, Ordering::Relaxed);
+        AUTH_STATE.failures.fetch_add(1, Ordering::Relaxed);
+        AUTH_STATE
+            .last_failure_time
+            .store(now_secs() as u64, Ordering::Relaxed);
         return 0;
     };
 
     let parts: Vec<&str> = decoded_str.splitn(2, ':').collect();
     if parts.len() != 2 {
-        AUTH_FAILURES.fetch_add(1, Ordering::Relaxed);
-        LAST_FAILURE_TIME.store(now_secs() as u64, Ordering::Relaxed);
+        AUTH_STATE.failures.fetch_add(1, Ordering::Relaxed);
+        AUTH_STATE
+            .last_failure_time
+            .store(now_secs() as u64, Ordering::Relaxed);
         return 0;
     }
 
@@ -98,11 +108,13 @@ pub(super) fn check_basic_auth(auth_header: Option<&str>, cfg_user: &str, cfg_pa
     let pass_ok = constant_time_compare(auth_pass, cfg_pass.as_bytes());
 
     if user_ok && pass_ok {
-        AUTH_FAILURES.store(0, Ordering::Relaxed);
+        AUTH_STATE.failures.store(0, Ordering::Relaxed);
         1
     } else {
-        AUTH_FAILURES.fetch_add(1, Ordering::Relaxed);
-        LAST_FAILURE_TIME.store(now_secs() as u64, Ordering::Relaxed);
+        AUTH_STATE.failures.fetch_add(1, Ordering::Relaxed);
+        AUTH_STATE
+            .last_failure_time
+            .store(now_secs() as u64, Ordering::Relaxed);
         0
     }
 }

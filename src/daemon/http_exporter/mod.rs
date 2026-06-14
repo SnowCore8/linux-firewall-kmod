@@ -30,12 +30,36 @@ const AUTH_LOCKOUT_DURATION: i64 = 60;
 /// 导出器运行标志。`stop_http_exporter` 置 false 后,`incoming_requests` 阻塞
 /// 会被 dummy 连接唤醒,然后循环检测到 false 退出
 static EXPORTER_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// 累计认证失败次数。`>= AUTH_FAILURE_THRESHOLD` 触发锁定
-static AUTH_FAILURES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// 上次失败时间 (Unix 秒)。用于计算锁定窗口剩余时间
-static LAST_FAILURE_TIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// 导出器实际监听端口 (供 `stop_http_exporter` 发 dummy 唤醒连接)
 static EXPORTER_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+/// Basic Auth 暴力破解防护状态 — 连续失败计数 + 最后失败时间
+///
+/// 两个原子量总是一起读写（`check_basic_auth` 失败时同时更新），
+/// 聚合为一个 struct 减少全局 static 数量并明确逻辑关联。
+pub(super) struct AuthFailureState {
+    /// 累计认证失败次数。`>= AUTH_FAILURE_THRESHOLD` 触发锁定
+    pub failures: std::sync::atomic::AtomicU64,
+    /// 上次失败时间 (Unix 秒)。用于计算锁定窗口剩余时间
+    pub last_failure_time: std::sync::atomic::AtomicU64,
+}
+
+impl AuthFailureState {
+    pub const fn new() -> Self {
+        Self {
+            failures: std::sync::atomic::AtomicU64::new(0),
+            last_failure_time: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+}
+
+impl Default for AuthFailureState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+static AUTH_STATE: AuthFailureState = AuthFailureState::new();
 
 // ============================================================================
 // 单元测试
