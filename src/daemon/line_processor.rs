@@ -146,7 +146,8 @@ pub fn store_partial_line(
         // 缓冲区将溢出: 先处理累积数据, 再写入新片段
         // 缓冲区将溢出：先处理累积数据，再写入新片段
         if current_len > 0 {
-            let temp = buf.clone();
+            // 使用 mem::take 避免 clone，在锁内处理数据
+            let temp = std::mem::take(&mut *buf);
             drop(buf);
             if let Ok(line) = std::str::from_utf8(&temp) {
                 process_single_line(jail, line, log_path, max_retries, findtime);

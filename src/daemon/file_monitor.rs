@@ -224,9 +224,11 @@ pub fn process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
     let max_retries = jail.max_retries;
     let findtime = jail.findtime;
 
-    let mut local_partial_buf = jail.partial_line_buffer.read().clone();
-    jail.partial_line_buffer.write().clear();
-    // 复制完后 NLL 立即释放锁, 后续 file.open() 等 IO 操作可与其他 reader 并发
+    let mut local_partial_buf = {
+        let mut buf = jail.partial_line_buffer.write();
+        std::mem::take(&mut *buf)
+    };
+    // mem::take 后 NLL 立即释放锁, 后续 file.open() 等 IO 操作可与其他 reader 并发
 
     // O_NOFOLLOW: 启动后文件若被替换为符号链接, 拒绝 follow
     let mut file = match OpenOptions::new()

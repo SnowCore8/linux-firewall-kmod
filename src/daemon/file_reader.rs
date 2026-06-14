@@ -63,8 +63,10 @@ pub fn read_and_process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
     let max_retries = jail.max_retries;
     let findtime = jail.findtime;
 
-    let mut local_partial_buf = jail.partial_line_buffer.read().clone();
-    jail.partial_line_buffer.write().clear();
+    let mut local_partial_buf = {
+        let mut buf = jail.partial_line_buffer.write();
+        std::mem::take(&mut *buf)
+    };
 
     // 打开文件（O_NOFOLLOW 防符号链接攻击）
     let mut file = match open_log_file(&log_path, idx) {

@@ -164,13 +164,13 @@ impl ActiveBanCache {
         let ip = info.ip.clone();
         let jail = info.jail_name.clone();
 
-        // 先更新主表
+        // 先更新主表（ip 需要 clone，因为后面还要用于 by_jail）
         {
             let mut bans = self.bans.write();
             bans.insert(ip.clone(), info);
         }
 
-        // 再更新反向索引
+        // 再更新反向索引（ip 移动进 HashSet）
         {
             let mut by_jail = self.by_jail.write();
             by_jail.entry(jail).or_default().insert(ip);
