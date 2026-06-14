@@ -27,8 +27,7 @@ use super::state::FILE_STATES;
 /// - `cfg`: 全局配置
 ///
 /// # Returns
-/// `Ok(())` 即便内部错误 (e.g. `O_NOFOLLOW` 撞到 symlink),会标记 `symlink_detected`
-/// 但不 bail
+/// `Ok(())` 即便内部错误 (e.g. `O_NOFOLLOW` 撞到 symlink),会记录告警但不 bail
 ///
 /// # Errors
 /// - `idx` 越界 (即 `FILE_STATES.len() <= idx`)
@@ -41,10 +40,6 @@ pub fn process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
     let state = file_states
         .get(idx)
         .ok_or_else(|| anyhow::anyhow!("Invalid index {idx}"))?;
-
-    if state.symlink_detected {
-        return Ok(());
-    }
 
     let log_path = state.path.clone();
     let jail_idx = state.jail_idx;
@@ -78,15 +73,11 @@ pub fn process_new_lines(idx: usize, cfg: &Config) -> Result<()> {
     {
         Ok(f) => f,
         Err(e) => {
-            // ELOOP = O_NOFOLLOW 撞到符号链接, 标记后跳过避免重复报错
+            // ELOOP = O_NOFOLLOW 撞到符号链接, 记录告警但下次仍重试 (不设置永久标志)
             if e.raw_os_error() == Some(libc::ELOOP) {
-                let mut file_states = FILE_STATES.write();
-                if let Some(state) = file_states.get_mut(idx) {
-                    state.symlink_detected = true;
-                }
                 crate::logger::warn!(
                     crate::logger::get(),
-                    "检测到符号链接，跳过文件";
+                    "检测到符号链接，本次跳过文件（下次读取周期将重试）";
                     "path" => &log_path
                 );
             } else {

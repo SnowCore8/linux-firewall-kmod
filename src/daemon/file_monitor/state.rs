@@ -25,8 +25,6 @@ pub struct FileState {
     pub wd: Option<WatchDescriptor>,
     /// 关联的 jail 在 `Config.jails` 中的索引
     pub jail_idx: usize,
-    /// 文件被检测为符号链接,标记后跳过
-    pub symlink_detected: bool,
 }
 
 impl Default for FileState {
@@ -45,7 +43,6 @@ impl FileState {
             inode: 0,
             wd: None,
             jail_idx: 0,
-            symlink_detected: false,
         }
     }
 }

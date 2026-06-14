@@ -208,13 +208,26 @@ pub fn ban_ip_with_history(
         let validated =
             validate_ip(ip).with_context(|| format!("Invalid IP for ban history: {ip}"))?;
         let ip_num = validated.ip_num;
+        // 防止整数溢出: ban_duration 转为 i64 后与 now 相加可能超出 i64 范围
+        // 使用 saturating_add 确保 expires_at 不会回绕为负数
+        let duration_i64 = if ban_duration > i64::MAX as u64 {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "ban_duration 超出 i64 范围，截断为 i64::MAX";
+                "ban_duration" => ban_duration
+            );
+            i64::MAX
+        } else {
+            ban_duration as i64
+        };
+        let expires_at = now.saturating_add(duration_i64);
         let ban_info = crate::types::BanInfo {
             ip: ip.to_string(),
             ip_num,
             jail_name: "ddos".to_string(),
             reason: crate::types::BanReason::DDoSRateLimit,
             banned_at: now,
-            expires_at: now + ban_duration as i64,
+            expires_at,
             is_permanent: false,
             fail_count: 0,
         };

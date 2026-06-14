@@ -45,7 +45,6 @@ pub fn daemonize_process() -> Result<()> {
         Err(e) => bail!("second fork failed: {}", e),
     }
 
-    if let Err(_e) = std::env::set_current_dir("/") {}
     if let Err(e) = std::env::set_current_dir("/") {
         crate::logger::warn!(
             crate::logger::get(),

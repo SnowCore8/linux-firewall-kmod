@@ -6,7 +6,7 @@
 //! - 全局 DB 注册（`set_global_db` / `clear_global_db` / `with_global_db`）
 //! - 优雅关闭（触发 WAL checkpoint）
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -72,7 +72,10 @@ pub(crate) fn ensure_db_dir(db_path: &str) -> Result<()> {
     }
 
     if let Some(dir) = Path::new(db_path).parent() {
-        let dir_str = dir.to_string_lossy();
+        // 路径规范化: 将 //etc 等双斜杠归一化为 /etc, 防止绕过前缀匹配
+        // components() 自动合并连续斜杠并解析 . 和 ..
+        let normalized: PathBuf = dir.components().collect();
+        let dir_str = normalized.to_string_lossy();
 
         // 前缀匹配: 阻止系统敏感目录及其所有子目录
         // 例如 /var/lib/firewall/db.sqlite → 前缀 /var → 拒绝
