@@ -96,7 +96,40 @@ pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
                 })?;
             }
         }
-        _ => {}
+        BanAction::Unban => {
+            // 从内存缓存移除
+            if let Some(cache) = crate::types::ACTIVE_BAN_CACHE.get() {
+                if cache.remove(ip).is_some() {
+                    // 更新 ban_history 状态
+                    if let Some(db) = crate::sqlite::get_global_db() {
+                        let conn = crate::sqlite::get_conn(&db);
+                        if let Err(e) = crate::sqlite_writer::update_ban_status(
+                            &conn,
+                            ip,
+                            crate::types::BanStatus::UnbannedManual,
+                        ) {
+                            crate::logger::warn!(
+                                crate::logger::get(),
+                                "更新 ban_history 状态失败";
+                                "ip" => ip,
+                                "status" => "unbanned_manual",
+                                "error" => %e
+                            );
+                        }
+                    } else {
+                        // SQLite 不可用时记录警告（降级模式）
+                        crate::logger::warn!(
+                            crate::logger::get(),
+                            "SQLite 全局数据库未初始化，跳过 ban_history 状态更新（降级模式）";
+                            "ip" => ip
+                        );
+                    }
+                    // 标记 dirty
+                    crate::sqlite_writer::mark_dirty();
+                }
+            }
+        }
+        BanAction::Temp => {}
     }
 
     log_ban_action(action, ip);
@@ -150,6 +183,76 @@ pub fn unban_ip(ip: &str) -> Result<()> {
 /// 同 [`execute_ban_action`]
 pub fn unban_permanent_ip(ip: &str) -> Result<()> {
     execute_ban_action(BanAction::UnbanPerm, ip)
+}
+
+/// 封禁 IP 并记录封禁历史（供 DDoS 检测器等模块使用）。
+///
+/// 当前实现：`ban_duration == 0` 时走永久封禁，否则走临时封禁。
+/// 临时封禁会更新 `ACTIVE_BAN_CACHE` 并标记 dirty，以便主循环同步到 SQLite。
+///
+/// # Arguments
+/// - `ip`：待封禁的 IP
+/// - `reason`：封禁原因（审计用）
+/// - `_jail_idx`：关联 jail 索引（暂未使用）
+/// - `ban_duration`：封禁时长（秒），0 表示永久封禁
+pub fn ban_ip_with_history(
+    ip: &str,
+    reason: &str,
+    _jail_idx: u32,
+    ban_duration: u64,
+) -> Result<()> {
+    if ban_duration == 0 {
+        ban_ip_permanent(ip)
+    } else {
+        if ban_ip(ip).is_ok() {
+            // 更新内存缓存
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            let ip_num = ip.parse::<std::net::Ipv4Addr>().map(u32::from).unwrap_or(0);
+            let ban_info = crate::types::BanInfo {
+                ip: ip.to_string(),
+                ip_num,
+                jail_name: "ddos".to_string(),
+                reason: crate::types::BanReason::DDoSRateLimit,
+                banned_at: now,
+                expires_at: now + ban_duration as i64,
+                is_permanent: false,
+                fail_count: 0,
+            };
+
+            // 立即写入 SQLite ban_history（避免定时批量同步导致重复插入）
+            if let Some(db) = crate::sqlite::get_global_db() {
+                let conn = crate::sqlite::get_conn(&db);
+                if let Err(e) = crate::sqlite_writer::insert_ban_history(&conn, &ban_info) {
+                    crate::logger::warn!(
+                        crate::logger::get(),
+                        "写入 ban_history 失败";
+                        "ip" => ip,
+                        "reason" => reason,
+                        "error" => %e
+                    );
+                }
+            } else {
+                // SQLite 不可用时记录警告（降级模式）
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "SQLite 全局数据库未初始化，跳过 ban_history 写入（降级模式）";
+                    "ip" => ip,
+                    "reason" => reason
+                );
+            }
+
+            crate::types::ACTIVE_BAN_CACHE
+                .get_or_init(crate::types::ActiveBanCache::new)
+                .insert(ban_info);
+
+            // 记录封禁原因到日志（审计用）
+            let _ = reason;
+        }
+        Ok(())
+    }
 }
 
 /// 占位函数: 内核模块负责定期清理过期封禁, 用户态无需轮询。

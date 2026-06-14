@@ -2,15 +2,12 @@
 //!
 //! # 核心结构
 //!
-//! - **`DaemonStats`**:跨模块共享的原子计数器,供 Prometheus 导出器读取
+//! - **`DaemonStats`**：跨模块共享的原子计数器，供 Prometheus 导出器读取
 //!
 //! # 并发模型
 //!
-//! 所有字段使用 `AtomicU64` + `Relaxed` 序,牺牲严格可见性换取性能。
-//! 统计读数的一致性不要求因果序,Prometheus 抓取间隔天然容忍轻微偏差。
-
-use std::sync::atomic::AtomicU64;
-//! 统计相关数据结构：DaemonStats、JailStatsCounters
+//! 所有字段使用 `AtomicU64` + `Relaxed` 序，牺牲严格可见性换取性能。
+//! 统计读数的一致性不要求因果序，Prometheus 抓取间隔天然容忍轻微偏差。
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

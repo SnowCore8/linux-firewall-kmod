@@ -145,4 +145,3 @@ pub fn apply_smart_defaults_to_all(target_cfg: &mut Config) {
         );
     }
 }
-

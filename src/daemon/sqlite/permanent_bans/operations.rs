@@ -94,7 +94,6 @@ pub fn sqlite_add_permanent_bans_batch(
     Ok(success_count)
 }
 
-
 // ============================================================================
 // 删除操作
 // ============================================================================
@@ -112,4 +111,3 @@ pub fn sqlite_remove_permanent_ban(db: &SqliteDb, ip: &str) -> Result<i32> {
         Ok(-2)
     }
 }
-

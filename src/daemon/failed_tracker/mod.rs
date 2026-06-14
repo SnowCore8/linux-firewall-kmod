@@ -1,18 +1,18 @@
-//! 失败尝试跟踪: 滑动窗口计数 (R9-7 优化) + 阈值检查 + 触发封禁
+//! 失败尝试跟踪：滑动窗口计数（R9-7 优化）+ 阈值检查 + 触发封禁
 //!
 //! 本文件内 `u64 → i64` 是 Unix 时间戳常规做法
-#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 //!
 //! # 模块结构
 //!
-//! - `entry_ops`: 失败条目管理 (查找、创建、移除)
-//! - `tracking`: 失败跟踪逻辑 (计数、时间戳处理、触发封禁)
+//! - `entry_ops`：失败条目管理（查找、创建、移除）
+//! - `tracking`：失败跟踪逻辑（计数、时间戳处理、触发封禁）
 //!
 //! # 数据流
 //!
 //! 1. [`crate::file_monitor::process_single_line`] 解析日志行得到 IP
 //! 2. 调 [`handle_failed_attempt_for_jail`] 累计 `FailedEntry.timestamps`
 //! 3. [`count_recent`] 统计窗口内失败次数
+#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 //! 4. 达到 `max_retries` 时调 [`crate::ban::ban_ip`] 封禁,成功后清理条目
 //!
 //! # 关键优化 (R9-7)
@@ -30,7 +30,10 @@ mod entry_ops;
 mod tracking;
 
 pub use entry_ops::{create_entry_for_jail, find_entry, remove_entry_for_jail};
-pub use tracking::{count_recent, handle_failed_attempt_for_jail, process_failed_timestamps};
+pub use tracking::{
+    cleanup_expired_entries, count_recent, handle_failed_attempt_for_jail,
+    process_failed_timestamps,
+};
 
 // ============================================================================
 // 单元测试

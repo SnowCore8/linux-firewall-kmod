@@ -10,11 +10,6 @@
 //!
 //! - 每个日志文件 inode 在 `setup_inotify` 时记录,变化时认为是轮转
 //! - 轮转前先 flush partial 行缓冲,避免丢失数据
-//! 日志轮转检测 + 新文件发现
-//!
-//! 职责：
-//! - `handle_log_rotation`: 处理 inotify DELETE/MOVED_FROM 事件
-//! - `check_for_new_log_files`: 周期性检查新增日志文件并重新 setup inotify
 
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
@@ -30,8 +25,6 @@ use crate::types::{Config, DAEMON_STATS};
 // 日志轮转处理
 // ============================================================================
 
-/// 处理日志轮转:inotify DELETE / `MOVED_FROM` 事件触发,先 flush partial 行,
-/// 再更新 inode + offset,最后重新注册 inotify watch。
 /// 处理日志轮转：inotify DELETE / `MOVED_FROM` 事件触发，先 flush partial 行，
 /// 再更新 inode + offset，最后重新注册 inotify watch。
 ///
@@ -101,7 +94,6 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
 
                 if let Some(inotify) = INOTIFY_FD.write().as_mut() {
                     if let Some(old_wd) = wd {
-                        let _ = inotify.watches().remove(old_wd);
                         if let Err(e) = inotify.watches().remove(old_wd) {
                             crate::logger::debug!(
                                 crate::logger::get(),
@@ -121,7 +113,6 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
                         Ok(new_wd) => {
                             state.wd = Some(new_wd.clone());
                         }
-                        Err(_e) => {
                         Err(e) => {
                             crate::logger::warn!(
                                 crate::logger::get(),
@@ -142,14 +133,6 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
 // 新日志文件发现
 // ============================================================================
 
-/// 周期性检查新增的日志文件:遍历所有 enabled jail 的 log_files,
-/// 发现未被 watch 的新文件时重新 setup_inotify。
-///
-/// 由 `monitor_loop` 每 60 秒调用一次。
-///
-/// # Arguments
-/// - `cfg`: 全局配置
-pub fn check_for_new_log_files(cfg: &Config) {
 /// 周期检查新增日志文件：遍历所有 enabled jail 的 log_files，若发现未 watch 的
 /// 已存在文件则重新 `setup_inotify`。
 ///
@@ -183,10 +166,6 @@ pub(crate) fn check_for_new_log_files(cfg: &Config) {
 
     if needs_resetup {
         drop(file_states);
-        if let Err(_e) = setup_inotify(cfg) {
-            // setup 失败,保持现状
-        } else {
-            // setup 成功,新文件已加入监控
         if let Err(e) = setup_inotify(cfg) {
             crate::logger::warn!(
                 crate::logger::get(),

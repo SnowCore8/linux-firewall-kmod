@@ -6,9 +6,9 @@ use std::thread;
 
 use tiny_http::Server;
 
-use crate::types::Config;
 use super::handler::handle_request_with_auth;
 use super::{EXPORTER_PORT, EXPORTER_RUNNING};
+use crate::types::Config;
 
 // ============================================================================
 // 启动/停止
@@ -87,4 +87,3 @@ pub fn stop_http_exporter() {
         let _ = TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_millis(10));
     }
 }
-

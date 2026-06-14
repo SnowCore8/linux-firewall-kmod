@@ -14,9 +14,6 @@
 //! - **日志系统**:`log_file` / `log_level` / `log_destination` / `log_format`
 //! - **配置来源追踪**:`config_file` / `config_dir` (SIGHUP 重载时复用)
 
-use super::{Jail, MAX_JAILS};
-//! 配置相关数据结构：Config、StorageConfig 及其子配置
-
 use super::jail::{Jail, MAX_JAILS};
 
 // ============================================================================
@@ -79,7 +76,7 @@ pub struct Config {
 impl Default for Config {
     /// 与 C 版 `config_defaults` 严格一致的默认值。
     ///
-    /// 任何字段的修改都必须验证 111 项集成测试仍能通过,以保证
+    /// 任何字段的修改都必须验证 111 项集成测试仍能通过，以保证
     /// C ↔ Rust 行为等价。
     fn default() -> Self {
         Self {
@@ -102,9 +99,6 @@ impl Default for Config {
             log_format: 0,      // PLAIN
             strict_mode: true,
             jails: Vec::with_capacity(MAX_JAILS),
-        }
-    }
-}
             storage: StorageConfig::default(),
             ddos: super::DdosConfig::default(),
         }

@@ -1,7 +1,7 @@
 //! 配置克隆 + 验证 + 失败条目迁移
 
-use crate::types::{Config, Jail, MAX_JAILS};
 use super::regex::free_jail_regex_full;
+use crate::types::{Config, Jail, MAX_JAILS};
 
 use super::operations::clone_jail;
 
@@ -84,8 +84,7 @@ pub fn config_validate(cfg: &Config) -> Result<(), String> {
         if jail.findtime == 0 {
             return Err(format!("Jail '{}' has findtime=0", jail.name));
         }
-        if jail.ban_time == 0 {
-        }
+        if jail.ban_time == 0 {}
     }
 
     Ok(())
