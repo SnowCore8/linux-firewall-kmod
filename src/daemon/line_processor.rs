@@ -99,8 +99,8 @@ pub fn process_lines_in_buffer(
             if line_len >= 8192 {
                 // 超长行跳过
             } else {
-                let line = std::str::from_utf8(&data[line_start..line_end]).unwrap_or("");
-                process_single_line(jail, line, log_path, max_retries, findtime);
+                let line = String::from_utf8_lossy(&data[line_start..line_end]);
+                process_single_line(jail, &line, log_path, max_retries, findtime);
             }
 
             line_start = line_end + 1;

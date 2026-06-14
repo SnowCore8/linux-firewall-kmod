@@ -194,6 +194,8 @@ fn handle_timeout(cfg: &mut Config, reload_config: &AtomicBool, state: &mut Time
     let now = SystemTime::now();
 
     // Partial line 清理 (每 60 秒)
+    // duration_since 在时钟回拨时返回 Err, unwrap_or_default() → Duration::ZERO,
+    // 0 >= 60 为 false, 定时器不触发, 直到时钟恢复 → 正确行为, 无需 saturating_duration_since
     if now
         .duration_since(state.last_partial_cleanup)
         .unwrap_or_default()

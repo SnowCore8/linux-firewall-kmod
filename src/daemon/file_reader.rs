@@ -208,7 +208,10 @@ fn process_batch(
     }
 
     let jail = &cfg.jails[jail_idx];
-    let log_path = &jail.log_files.first().cloned().unwrap_or_default();
+    let Some(log_path) = jail.log_files.first() else {
+        // log_files 为空: 无日志文件可关联, 跳过处理 (不应出现在正确配置中)
+        return;
+    };
     let mut consumed = 0;
     process_lines_in_buffer(
         jail,

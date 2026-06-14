@@ -15,10 +15,12 @@ pub fn sqlite_is_permanent_banned(db: &SqliteDb, ip_num: u32) -> Result<i32> {
         "SELECT 1 FROM permanent_banlist WHERE ip_num = ?1 AND is_active = 1 LIMIT 1",
     )?;
 
-    let exists: Option<i32> = stmt
-        .query_row(params![i64::from(ip_num)], |row| row.get(0))
-        .ok();
-    Ok(exists.unwrap_or(0))
+    let exists: i32 = match stmt.query_row(params![i64::from(ip_num)], |row| row.get(0)) {
+        Ok(v) => v,
+        Err(rusqlite::Error::QueryReturnedNoRows) => 0,
+        Err(e) => return Err(e.into()),
+    };
+    Ok(exists)
 }
 
 /// 检查 IPv6 字符串是否在永久黑名单中 (按 `ip` 文本查)。
@@ -28,8 +30,12 @@ pub fn sqlite_is_permanent_banned_ipv6(db: &SqliteDb, ip: &str) -> Result<i32> {
         "SELECT 1 FROM permanent_banlist WHERE ip = ?1 AND is_active = 1 LIMIT 1",
     )?;
 
-    let exists: Option<i32> = stmt.query_row(params![ip], |row| row.get(0)).ok();
-    Ok(exists.unwrap_or(0))
+    let exists: i32 = match stmt.query_row(params![ip], |row| row.get(0)) {
+        Ok(v) => v,
+        Err(rusqlite::Error::QueryReturnedNoRows) => 0,
+        Err(e) => return Err(e.into()),
+    };
+    Ok(exists)
 }
 
 /// 软删除 (`is_active=0`),实际记录保留供审计。

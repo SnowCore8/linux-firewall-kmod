@@ -11,10 +11,7 @@ pub fn cleanup_old_data(
     jail_stats_days: u32,
     ddos_events_days: u32,
 ) -> Result<()> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let now = crate::types::now_secs();
 
     let tx = conn.unchecked_transaction()?;
 

@@ -120,10 +120,7 @@ fn main() -> Result<()> {
         bail!("Bans procfs interface not found");
     }
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let now = firewall_daemon::types::now_secs() as u64;
     DAEMON_STATS.start_time.store(now, Ordering::Relaxed);
 
     let mut sqlite_db: Option<std::sync::Arc<sqlite::SqliteDb>> = None;

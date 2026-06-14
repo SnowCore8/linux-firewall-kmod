@@ -204,8 +204,10 @@ pub fn ban_ip_with_history(
         ban_ip_permanent(ip)
     } else {
         let now = crate::types::now_secs();
-        // 复用 validate_ip 统一处理 IPv4/IPv6，避免 parse::<Ipv4Addr> 将 IPv6 截断为 0
-        let ip_num = validate_ip(ip).map(|v| v.ip_num).unwrap_or(0);
+        // 复用 validate_ip 统一处理 IPv4/IPv6，验证失败时返回错误而非静默使用 0
+        let validated =
+            validate_ip(ip).with_context(|| format!("Invalid IP for ban history: {ip}"))?;
+        let ip_num = validated.ip_num;
         let ban_info = crate::types::BanInfo {
             ip: ip.to_string(),
             ip_num,

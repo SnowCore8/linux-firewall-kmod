@@ -57,36 +57,41 @@ pub struct SqliteDb {
 // 内部辅助
 // ============================================================================
 
-/// 确保 db 父目录存在且安全。拒绝系统敏感目录（`/`、`/etc`、`/usr`、`/bin`、`/sbin`、
-/// `/boot`、`/dev`、`/lib`、`/opt`、`/proc`、`/sys`、`/run`、`/var`）。
+/// 确保 db 父目录存在且安全。拒绝系统敏感目录及其子目录（`/etc`、`/usr`、`/bin`、`/sbin`、
+/// `/boot`、`/dev`、`/lib`、`/lib64`、`/opt`、`/proc`、`/sys`、`/run`、`/var`、`/`）。
 ///
 /// # Arguments
 /// - `db_path`: `SQLite` 数据库文件路径
 ///
 /// # Errors
-/// - 父目录是系统敏感路径
+/// - 父目录是系统敏感路径或其子目录
 /// - 创建目录失败
 pub(crate) fn ensure_db_dir(db_path: &str) -> Result<()> {
+    if db_path.is_empty() {
+        bail!("Empty database path");
+    }
+
     if let Some(dir) = Path::new(db_path).parent() {
         let dir_str = dir.to_string_lossy();
-        if matches!(
-            dir_str.as_ref(),
-            "/" | "/etc"
-                | "/usr"
-                | "/bin"
-                | "/sbin"
-                | "/boot"
-                | "/dev"
-                | "/lib"
-                | "/lib64"
-                | "/opt"
-                | "/proc"
-                | "/sys"
-                | "/run"
-                | "/var"
-        ) {
-            bail!("Unsafe database directory path: {dir_str}");
+
+        // 前缀匹配: 阻止系统敏感目录及其所有子目录
+        // 例如 /var/lib/firewall/db.sqlite → 前缀 /var → 拒绝
+        const BLOCKED_PREFIXES: &[&str] = &[
+            "/etc", "/usr", "/bin", "/sbin", "/boot", "/dev", "/lib", "/lib64", "/opt", "/proc",
+            "/sys", "/run", "/var",
+        ];
+
+        for prefix in BLOCKED_PREFIXES {
+            if dir_str.as_ref() == *prefix || dir_str.starts_with(&format!("{prefix}/")) {
+                bail!("Unsafe database directory path: {dir_str}");
+            }
         }
+
+        // 根目录单独检查
+        if dir_str.as_ref() == "/" {
+            bail!("Unsafe database directory path: /");
+        }
+
         if !dir.exists() {
             std::fs::create_dir_all(dir)
                 .with_context(|| format!("Failed to create database directory {dir_str}"))?;
