@@ -14,15 +14,16 @@ USAGE:
     firewall-daemon [OPTIONS]
 
 OPTIONS:
-    -c, --config <FILE|DIR>   配置文件或目录路径 (默认: /etc/firewall-daemon/config.yml)
-    -d, --daemon              以守护进程模式运行 (后台化 + PID 文件)
-        --no-strict           宽松模式: 忽略未知配置 key (默认: 严格模式)
-    -h, --help                显示帮助信息
+    -c, --config <FILE>     配置文件路径 (默认: /etc/firewall-daemon/config.yml)
+    -C, --config-dir <DIR>  配置目录路径 (加载目录下所有 .yaml 文件)
+    -d, --daemon            以守护进程模式运行 (后台化 + PID 文件)
+        --no-strict         宽松模式: 忽略未知配置 key (默认: 严格模式)
+    -h, --help              显示帮助信息
 
 EXAMPLES:
     firewall-daemon -c /etc/firewall-daemon/config.yml
-    firewall-daemon -c /etc/firewall-daemon/jail.d/ -d
-    firewall-daemon --config /etc/firewall-daemon/config.yml --no-strict
+    firewall-daemon -C /etc/firewall -d
+    firewall-daemon --config-dir /etc/firewall --daemon
 
 CONFIGURATION:
     配置文件为 YAML 格式, 必须包含 'jails' 列表。
@@ -84,9 +85,20 @@ pub fn parse_config_args(args: &[String]) -> Result<Option<(String, bool, bool)>
                 }
                 config_path = args[i].clone();
             }
+            "-C" | "--config-dir" => {
+                i += 1;
+                if i >= args.len() {
+                    anyhow::bail!("--config-dir requires a value");
+                }
+                config_path = args[i].clone();
+            }
             s if s.starts_with("--config=") => {
                 // 支持 --config=FILE 形式
                 config_path = s["--config=".len()..].to_string();
+            }
+            s if s.starts_with("--config-dir=") => {
+                // 支持 --config-dir=DIR 形式
+                config_path = s["--config-dir=".len()..].to_string();
             }
             "-d" | "--daemon" => {
                 daemon_mode = true;
