@@ -1,7 +1,7 @@
 //! Jail CRUD 操作 + 日志模式初始化/释放
 
-use crate::types::{Config, Jail, RegexInfo, MAX_JAILS};
 use super::regex::free_jail_regex_full;
+use crate::types::{Config, Jail, RegexInfo, MAX_JAILS};
 
 use super::regex::compile_jail_regex;
 

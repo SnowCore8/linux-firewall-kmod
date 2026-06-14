@@ -2,11 +2,10 @@
 //!
 //! # 模块结构
 //!
-//! 1. **文件状态**:`FileState` 跟踪每个监控文件的 path/offset/inode/watch descriptor
-//! 2. **inotify 设置**:`setup_inotify` 给所有 enabled jail 的日志文件加 watch
-//! 3. **主循环**:`monitor_loop` 调 `poll` 等待 inotify 事件 / SIGHUP / 周期维护
-//! 3. **新行处理**:`process_new_lines` 读自上次 offset 的新内容
-//! 4. **主循环**:`monitor_loop` 调 `poll` 等待 inotify 事件 / SIGHUP / 周期维护
+//! 1. **文件状态**：`FileState` 跟踪每个监控文件的 path/offset/inode/watch descriptor
+//! 2. **inotify 设置**：`setup_inotify` 给所有 enabled jail 的日志文件加 watch
+//! 3. **新行处理**：`process_new_lines` 读自上次 offset 的新内容
+//! 4. **主循环**：`monitor_loop` 调 `poll` 等待 inotify 事件 / SIGHUP / 周期维护
 //!
 //! 行处理逻辑 → [`crate::line_processor`]
 //! 日志轮转处理 → [`crate::log_rotation`]
@@ -18,11 +17,12 @@
 //! - 单行硬上限 8KB,异常超长行会跳过 (避免 OOM)
 //! - `O_NOFOLLOW` 防止日志文件被替换为符号链接后 readlink 到攻击者文件
 
-use std::os::unix::fs::MetadataExt;
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
@@ -30,7 +30,6 @@ use inotify::{Inotify, WatchDescriptor, WatchMask};
 use parking_lot::RwLock;
 
 use crate::config_reloader::{cleanup_partial_line_buffer, reload_configuration};
-use crate::file_reader::read_and_process_new_lines;
 use crate::line_processor::{process_lines_in_buffer, store_partial_line};
 use crate::log_rotation::{check_for_new_log_files, handle_log_rotation};
 use crate::types::{Config, DAEMON_STATS};
@@ -155,7 +154,6 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
                         "error" => %e
                     );
                 }
-                Err(_e) => {}
             }
 
             file_states.push(state);
@@ -403,36 +401,6 @@ pub fn monitor_loop(
         // 乘 1000 后仍在 i32 正数范围 (`60 * 1000 = 60000 << i32::MAX`)。
         let poll_result = unsafe { libc::poll(&mut poll_fds, 1, timeout_ms) };
 
-        if poll_result > 0 {
-            if let Some(inotify) = INOTIFY_FD.write().as_mut() {
-                let mut buffer = [0u8; 4096];
-                if let Ok(events) = inotify.read_events(&mut buffer) {
-                    DAEMON_STATS.inotify_events.fetch_add(1, Ordering::Relaxed);
-                    for event in events {
-                        let wd = event.wd;
-                        let file_states = FILE_STATES.read();
-                        for (idx, state) in file_states.iter().enumerate() {
-                            if state.wd.as_ref() == Some(&wd) {
-                                if event.mask.contains(inotify::EventMask::MODIFY)
-                                    || event.mask.contains(inotify::EventMask::MOVED_TO)
-                                {
-                                    let _ = read_and_process_new_lines(idx, cfg);
-                                    if let Err(e) = process_new_lines(idx, cfg) {
-                                        crate::logger::debug!(
-                                            crate::logger::get(),
-                                            "处理日志行失败";
-                                            "error" => %e
-                                        );
-                                    }
-                                }
-                                if event.mask.contains(inotify::EventMask::DELETE)
-                                    || event.mask.contains(inotify::EventMask::MOVED_FROM)
-                                {
-                                    handle_log_rotation(idx, cfg);
-                                }
-                                break;
-                            }
-                        }
         // poll_result 分 3 段处理: > 0 = 有事件 / = 0 = 超时 / < 0 = 错误
         if poll_result > 0 {
             // 1. 读取 inotify 事件到 Vec 后立即释放 INOTIFY_FD 写锁
@@ -484,8 +452,6 @@ pub fn monitor_loop(
             if reload_config.load(Ordering::Relaxed) {
                 reload_config.store(false, Ordering::Relaxed);
 
-                if let Err(_e) = reload_configuration(cfg) {
-                    // 重载失败,继续使用旧配置
                 if let Err(e) = reload_configuration(cfg) {
                     crate::logger::warn!(
                         crate::logger::get(),
@@ -519,7 +485,7 @@ pub fn monitor_loop(
                 check_for_new_log_files(cfg);
             }
 
-            // SQLite 定时器批量同步 (每 5 秒检查 dirty 标志)
+            // SQLite dirty 标志清理（封禁/解封时立即写入，此处仅清理标志）
             if crate::sqlite_writer::is_dirty()
                 && now
                     .duration_since(last_sqlite_sync)
@@ -528,35 +494,8 @@ pub fn monitor_loop(
                     >= cfg.storage.writer.flush_interval_secs as u64
             {
                 last_sqlite_sync = now;
-                if let Some(db) = crate::sqlite::get_global_db() {
-                    let conn = crate::sqlite::get_conn(&db);
-
-                    // 同步活跃封禁到 ban_history
-                    let active_bans = crate::types::ACTIVE_BAN_CACHE
-                        .get()
-                        .map(|cache| cache.snapshot())
-                        .unwrap_or_default();
-
-                    if !active_bans.is_empty() {
-                        if let Err(e) =
-                            crate::sqlite_writer::insert_ban_history_batch(&conn, &active_bans)
-                        {
-                            crate::logger::warn!(
-                                crate::logger::get(),
-                                "批量同步封禁历史失败";
-                                "error" => %e
-                            );
-                        }
-                    }
-
-                    crate::sqlite_writer::clear_dirty();
-
-                    crate::logger::debug!(
-                        crate::logger::get(),
-                        "SQLite 定时器同步完成";
-                        "bans_synced" => active_bans.len()
-                    );
-                }
+                crate::sqlite_writer::clear_dirty();
+                crate::logger::debug!(crate::logger::get(), "SQLite dirty 标志已清理");
             }
 
             // Jail 统计快照 (每 60 秒)
@@ -638,6 +577,12 @@ pub fn monitor_loop(
                     }
 
                     crate::logger::debug!(crate::logger::get(), "统计快照写入完成");
+                } else {
+                    // SQLite 不可用时记录警告（降级模式）
+                    crate::logger::warn!(
+                        crate::logger::get(),
+                        "SQLite 全局数据库未初始化，跳过统计快照写入（降级模式）"
+                    );
                 }
             }
 
@@ -649,6 +594,59 @@ pub fn monitor_loop(
                 >= cfg.storage.retention.cleanup_interval_secs as u64
             {
                 last_data_cleanup = now;
+
+                // 清理过期的临时封禁
+                let now_secs = now
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                if let Some(cache) = crate::types::ACTIVE_BAN_CACHE.get() {
+                    let expired = cache.purge_expired(now_secs);
+                    if !expired.is_empty() {
+                        crate::logger::info!(
+                            crate::logger::get(),
+                            "清理过期临时封禁";
+                            "count" => expired.len()
+                        );
+                        for ban_info in &expired {
+                            // 从内核移除
+                            if let Err(e) = crate::ban::unban_ip(&ban_info.ip) {
+                                crate::logger::warn!(
+                                    crate::logger::get(),
+                                    "解封过期封禁失败";
+                                    "ip" => &ban_info.ip,
+                                    "error" => %e
+                                );
+                            }
+                        }
+                        // 标记 dirty，同步到 SQLite
+                        crate::sqlite_writer::mark_dirty();
+                    }
+                }
+
+                // 清理各 jail 的 failed_hash 中过期条目（防止内存泄漏）
+                let now_secs_for_cleanup = now
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                for jail in cfg.jails.iter() {
+                    if jail.enabled {
+                        let removed = crate::failed_tracker::cleanup_expired_entries(
+                            jail,
+                            now_secs_for_cleanup,
+                            jail.findtime as i64,
+                        );
+                        if removed > 0 {
+                            crate::logger::debug!(
+                                crate::logger::get(),
+                                "清理 failed_hash 过期条目";
+                                "jail" => &jail.name,
+                                "removed" => removed
+                            );
+                        }
+                    }
+                }
+
                 if let Some(db) = crate::sqlite::get_global_db() {
                     let conn = crate::sqlite::get_conn(&db);
 
@@ -672,6 +670,12 @@ pub fn monitor_loop(
                             "failed_logs_days" => cfg.storage.retention.failed_logs_days
                         );
                     }
+                } else {
+                    // SQLite 不可用时记录警告（降级模式）
+                    crate::logger::warn!(
+                        crate::logger::get(),
+                        "SQLite 全局数据库未初始化，跳过过期数据清理（降级模式）"
+                    );
                 }
             }
 

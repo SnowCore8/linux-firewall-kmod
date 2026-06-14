@@ -2,9 +2,8 @@
 //!
 //! # 模块结构
 //!
-//! - `operations`: 永久封禁增删操作
-//! - `queries`: 永久封禁查询操作
-//! - `schema`: 表结构初始化 + 迁移
+//! - `operations`：永久封禁增删操作
+//! - `queries`：永久封禁查询操作
 //!
 //! # 核心职责
 //!
@@ -12,15 +11,16 @@
 //! - 批量添加永久封禁
 //! - 检查 IP 是否在永久黑名单中
 //! - 加载所有活跃永久封禁
-//! - 表结构初始化和迁移
 
 mod operations;
 mod queries;
-mod schema;
 
-pub use operations::{sqlite_add_permanent_ban, sqlite_add_permanent_bans_batch, sqlite_remove_permanent_ban};
-pub use queries::{sqlite_is_permanent_banned, sqlite_is_permanent_banned_ipv6, sqlite_load_all_permanent_bans};
-pub(crate) use schema::init_db_schema;
+pub use operations::{
+    sqlite_add_permanent_ban, sqlite_add_permanent_bans_batch, sqlite_remove_permanent_ban,
+};
+pub use queries::{
+    sqlite_is_permanent_banned, sqlite_is_permanent_banned_ipv6, sqlite_load_all_permanent_bans,
+};
 
 // ============================================================================
 // 单元测试

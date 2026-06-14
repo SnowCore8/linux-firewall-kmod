@@ -222,26 +222,21 @@ fn daemonize_process() -> Result<()> {
     Ok(())
 }
 
-/// 优雅清理:关 metrics → 释放 fd → 关闭 SQLite → 关 syslog → 删 PID 文件。
+/// 优雅清理：关 metrics → 释放 fd → 关闭 SQLite → 关 syslog → 删 PID 文件。
 ///
-/// 顺序敏感:先清全局引用再关 db,防止收尾期间 ban 模块再访问。
+/// 顺序敏感：先清全局引用再关 db，防止收尾期间 ban 模块再访问。
 ///
 /// # Arguments
-/// - `_cfg`: 保留参数,占位
-/// - `sqlite_db`: 可选 db 句柄 (来自 [`sqlite::sqlite_init`])
-fn cleanup(
-    _cfg: &Config,
-    sqlite_db: &Option<std::sync::Arc<sqlite::SqliteDb>>,
-) {
+/// - `_cfg`：保留参数，占位
+/// - `sqlite_db`：可选 db 句柄（来自 [`sqlite::sqlite_init`]）
 fn cleanup(_cfg: &Config, sqlite_db: &Option<std::sync::Arc<sqlite::SqliteDb>>) {
     http_exporter::stop_http_exporter();
     GLOBAL_RUNNING.store(false, Ordering::Relaxed);
     ban::close_cached_bans_fd();
-    // 清理顺序: 先清全局引用, 再关 db, 防止收尾期间 ban 模块再访问
+    // 清理顺序：先清全局引用，再关 db，防止收尾期间 ban 模块再访问
     sqlite::clear_global_db();
     if let Some(db) = sqlite_db {
         sqlite::sqlite_close(db);
-        sqlite_store::sqlite_close(db);
     }
     if let Err(e) = fs::remove_file("/run/firewall-daemon.pid") {
         crate::logger::debug!(
@@ -367,10 +362,19 @@ fn main() -> Result<()> {
                 Ok(bans) if !bans.is_empty() => {
                     info!(logger::get(), "恢复活跃封禁条目"; "count" => bans.len());
                     let mut restored_count = 0;
+                    let mut skipped_count = 0;
                     for ban_info in &bans {
+                        // 跳过空 IP（防御性检查，防止脏数据导致恢复失败）
+                        if ban_info.ip.is_empty() {
+                            warn!(logger::get(), "跳过空 IP 封禁记录（脏数据）"; "jail" => &ban_info.jail_name);
+                            skipped_count += 1;
+                            continue;
+                        }
+
                         // 重新写入内核 procfs
                         if let Err(e) = ban::ban_ip(&ban_info.ip) {
                             warn!(logger::get(), "恢复封禁到内核失败"; "ip" => &ban_info.ip, "error" => %e);
+                            skipped_count += 1;
                             continue;
                         }
 
@@ -381,7 +385,7 @@ fn main() -> Result<()> {
 
                         restored_count += 1;
                     }
-                    info!(logger::get(), "活跃封禁恢复完成"; "restored" => restored_count, "total" => bans.len());
+                    info!(logger::get(), "活跃封禁恢复完成"; "restored" => restored_count, "skipped" => skipped_count, "total" => bans.len());
                 }
                 Ok(_) => {
                     info!(logger::get(), "无活跃封禁条目需要恢复");
@@ -402,8 +406,6 @@ fn main() -> Result<()> {
         }
     }
 
-    if let Err(_e) = jail::init_log_patterns(&mut cfg) {
-        // 正则编译失败,继续使用旧正则
     if let Err(e) = jail::init_log_patterns(&mut cfg) {
         warn!(logger::get(), "初始化日志模式失败"; "error" => %e);
     }
@@ -413,7 +415,6 @@ fn main() -> Result<()> {
         exporter_handle = Some(http_exporter::start_http_exporter(cfg.metrics_port, &cfg));
     }
 
-    if let Err(_e) = file_monitor::monitor_loop(&mut cfg, &running, &reload_config) {}
     if let Err(e) = file_monitor::monitor_loop(&mut cfg, &GLOBAL_RUNNING, &GLOBAL_RELOAD) {
         error!(logger::get(), "主循环异常退出"; "error" => %e);
     }

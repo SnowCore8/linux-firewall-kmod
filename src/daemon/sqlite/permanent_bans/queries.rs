@@ -33,9 +33,7 @@ pub fn sqlite_is_permanent_banned_ipv6(db: &SqliteDb, ip: &str) -> Result<i32> {
 }
 
 /// 软删除 (`is_active=0`),实际记录保留供审计。
-pub fn sqlite_load_all_permanent_bans(
-    db: &SqliteDb,
-) -> Result<Vec<PermanentBanEntry>> {
+pub fn sqlite_load_all_permanent_bans(db: &SqliteDb) -> Result<Vec<PermanentBanEntry>> {
     let conn = db.conn.lock();
     let mut stmt = conn.prepare(
         "SELECT id, ip, ip_num, reason, created_at, created_by, hit_count, last_hit_at, is_active

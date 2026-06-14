@@ -2,19 +2,14 @@
 //!
 //! # 核心结构
 //!
-//! - **`FailedEntry`**:单个 IP 的失败时间戳环形缓冲 + 滑动窗口 head 索引
-//! - **`RegexInfo`**:命名正则表达式 (含编译结果,避免每次匹配重复编译)
-//! - **`Jail`**:单个服务监狱的所有配置 + 运行时状态 (`failed_hash` / `partial_line_buffer`)
+//! - **`FailedEntry`**：单个 IP 的失败时间戳环形缓冲 + 滑动窗口 head 索引
+//! - **`RegexInfo`**：命名正则表达式（含编译结果，避免每次匹配重复编译）
+//! - **`Jail`**：单个服务监狱的所有配置 + 运行时状态
 
 use std::collections::HashMap;
-//! Jail 相关数据结构：Jail、FailedEntry、RegexInfo
-
 use std::sync::atomic::AtomicUsize;
 
 use parking_lot::RwLock;
-
-use super::MAX_FAILED_TIMESTAMPS;
-use super::{MAX_LOG_FILES, MAX_REGEX_PATTERNS};
 // ============================================================================
 // 常量
 // ============================================================================
@@ -147,7 +142,6 @@ pub struct Jail {
     pub ban_time_set: bool,
     /// IP → 失败条目。读写并发由 `parking_lot::RwLock` 保护
     pub failed_hash: RwLock<HashMap<String, FailedEntry>>,
-    pub failed_hash: RwLock<std::collections::HashMap<String, FailedEntry>>,
     /// 不完整行的字节缓冲,避免单行跨多次 read 时被切碎
     pub partial_line_buffer: RwLock<Vec<u8>>,
 }
@@ -171,7 +165,6 @@ impl Jail {
             findtime_set: false,
             ban_time_set: false,
             failed_hash: RwLock::new(HashMap::new()),
-            failed_hash: RwLock::new(std::collections::HashMap::new()),
             partial_line_buffer: RwLock::new(Vec::with_capacity(8192)),
         }
     }

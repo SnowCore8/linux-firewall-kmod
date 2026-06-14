@@ -63,14 +63,21 @@ pub(crate) fn validate_regex_safety(jail: &Jail, pattern: &str) -> Result<(), St
         ));
     }
 
-    for (i, c) in pattern.chars().enumerate() {
-        if c == '(' {
-            let next = pattern.chars().nth(i + 1);
-            if next == Some('+') || next == Some('*') || next == Some('{') || next == Some('?') {
-                return Err(format!(
-                    "Rejected unsafe regex for jail '{}': invalid quantifier after '(?' at offset {}",
-                    jail.name, i
-                ));
+    // 检查 (? 结构：只拒绝 (?+  (?*  (?{ 等非法组合
+    // 合法的 (?...) 包括：(?:非捕获组) (?=前瞻) (?!负向前瞻) (?<命名组) 等
+    let chars: Vec<char> = pattern.chars().collect();
+    for i in 0..chars.len() {
+        if chars[i] == '(' && i + 1 < chars.len() && chars[i + 1] == '?' {
+            // 检查 (? 后面的第三个字符
+            if i + 2 < chars.len() {
+                let third = chars[i + 2];
+                // (?+  (?*  (?{  是非法的（量词直接跟在 (? 后）
+                if third == '+' || third == '*' || third == '{' {
+                    return Err(format!(
+                        "Rejected unsafe regex for jail '{}': invalid quantifier after '(?' at offset {}",
+                        jail.name, i
+                    ));
+                }
             }
         }
     }
@@ -154,7 +161,13 @@ pub fn compile_jail_regex(jail: &mut Jail) -> Result<(), String> {
             continue;
         }
 
-        if let Err(_e) = validate_regex_safety(jail, &pattern) {
+        if let Err(e) = validate_regex_safety(jail, &pattern) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "正则安全检查失败，跳过编译";
+                "jail" => &jail.name,
+                "error" => &e
+            );
             continue;
         }
 
@@ -163,7 +176,13 @@ pub fn compile_jail_regex(jail: &mut Jail) -> Result<(), String> {
                 jail.regexes[i].compiled = Some(re);
                 compiled_count += 1;
             }
-            Err(_e) => {
+            Err(e) => {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "正则编译失败";
+                    "jail" => &jail.name,
+                    "error" => %e
+                );
             }
         }
     }
@@ -177,4 +196,3 @@ pub fn compile_jail_regex(jail: &mut Jail) -> Result<(), String> {
         ))
     }
 }
-

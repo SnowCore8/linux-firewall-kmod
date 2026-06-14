@@ -2,21 +2,17 @@
 //!
 //! # 核心职责
 //!
-//! - 初始化数据库 (打开 + 启用 WAL + 迁移表结构)
-//! - 全局 DB 注册 (set_global_db / clear_global_db / with_global_db)
-//! - 优雅关闭 (触发 WAL checkpoint)
-//! SQLite 连接管理 + 全局 DB 注册 + schema 初始化
+//! - 初始化数据库（打开 + 启用 WAL + 迁移表结构）
+//! - 全局 DB 注册（`set_global_db` / `clear_global_db` / `with_global_db`）
+//! - 优雅关闭（触发 WAL checkpoint）
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use anyhow::{bail, Context, Result};
 use parking_lot::Mutex;
 use rusqlite::{Connection, OpenFlags};
-
-use std::sync::OnceLock;
-
-use super::permanent_bans::init_db_schema;
 
 // ============================================================================
 // 永久封禁条目
@@ -54,15 +50,7 @@ pub struct PermanentBanEntry {
 /// 通常通过 `Arc<SqliteDb>` 跨函数 / 跨线程共享。
 pub struct SqliteDb {
     pub(crate) conn: Mutex<Connection>,
-    conn: Mutex<Connection>,
     pub db_path: String,
-}
-
-impl SqliteDb {
-    /// 获取连接的内部引用 (供同模块其他函数使用)
-    pub(crate) fn lock_conn(&self) -> parking_lot::MutexGuard<'_, Connection> {
-        self.conn.lock()
-    }
 }
 
 // ============================================================================
@@ -78,10 +66,6 @@ impl SqliteDb {
 /// - 父目录是系统敏感路径
 /// - 创建目录失败
 pub(crate) fn ensure_db_dir(db_path: &str) -> Result<()> {
-    if let Some(dir) = Path::new(db_path).parent() {
-        let dir_str = dir.to_string_lossy();
-        // 拒绝敏感路径, 防止误把数据库建到系统目录
-fn ensure_db_dir(db_path: &str) -> Result<()> {
     if let Some(dir) = Path::new(db_path).parent() {
         let dir_str = dir.to_string_lossy();
         if matches!(dir_str.as_ref(), "/" | "/etc" | "/usr" | "/bin" | "/sbin") {
@@ -207,18 +191,15 @@ pub fn sqlite_init(db_path: &str) -> Result<Arc<SqliteDb>> {
     Ok(db)
 }
 
-/// 优雅关闭:触发 WAL checkpoint (TRUNCATE) 后让 `Connection` 随 `Arc` drop 自动关闭。
-///
-/// # Arguments
-/// - `db`: 待关闭的 db (通常来自 `sqlite_init` 的返回值)
-pub fn sqlite_close(db: &Arc<SqliteDb>) {
-    // Connection 随 Arc drop 自动关闭, 显式 flush WAL
 /// 获取数据库连接的只读引用
 pub fn get_conn(db: &Arc<SqliteDb>) -> parking_lot::MutexGuard<'_, Connection> {
     db.conn.lock()
 }
 
-/// 优雅关闭:触发 WAL checkpoint
+/// 优雅关闭：触发 WAL checkpoint (TRUNCATE) 后让 `Connection` 随 `Arc` drop 自动关闭。
+///
+/// # Arguments
+/// - `db`: 待关闭的 db（通常来自 `sqlite_init` 的返回值）
 pub fn sqlite_close(db: &Arc<SqliteDb>) {
     if let Some(conn) = db.conn.try_lock() {
         let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
@@ -231,39 +212,32 @@ pub fn sqlite_close(db: &Arc<SqliteDb>) {
 
 static GLOBAL_DB: OnceLock<Mutex<Option<Arc<SqliteDb>>>> = OnceLock::new();
 
-/// 将 `db` 注册为全局单例,供 [`with_global_db`] 回调访问。`main()` 启动
+/// 将 `db` 注册为全局单例，供 [`with_global_db`] 回调访问。`main()` 启动
 /// `SQLite` 成功后调用一次。
 ///
 /// # Arguments
-/// - `db`: 来自 [`sqlite_init`] 的 `Arc<SqliteDb>`
-use std::sync::OnceLock;
-
-static GLOBAL_DB: OnceLock<Mutex<Option<Arc<SqliteDb>>>> = OnceLock::new();
-
-/// 将 `db` 注册为全局单例
+/// - `db`：来自 [`sqlite_init`] 的 `Arc<SqliteDb>`
 pub fn set_global_db(db: Arc<SqliteDb>) {
     let cell = GLOBAL_DB.get_or_init(|| Mutex::new(None));
     *cell.lock() = Some(db);
 }
 
-/// 清空全局 db 注册。`main()` 的 `cleanup` 阶段调,确保收尾期间 ban 模块
+/// 清空全局 db 注册。`main()` 的 `cleanup` 阶段调，确保收尾期间 ban 模块
 /// 不再访问 db。
-/// 清空全局 db 注册
 pub fn clear_global_db() {
     if let Some(cell) = GLOBAL_DB.get() {
         *cell.lock() = None;
     }
 }
 
-/// 若全局 db 已注册,以回调方式借用;否则返回 `None`。
+/// 若全局 db 已注册，以回调方式借用；否则返回 `None`。
 ///
 /// # Arguments
-/// - `f`: 接受 `&Arc<SqliteDb>` 的闭包,执行所需操作
+/// - `f`：接受 `&Arc<SqliteDb>` 的闭包，执行所需操作
 ///
 /// # Returns
-/// - `Some(R)`: 回调返回值
-/// - `None`: 全局 db 未注册 (`SQLite` 未启用或已 clear)
-/// 若全局 db 已注册,以回调方式借用
+/// - `Some(R)`：回调返回值
+/// - `None`：全局 db 未注册（`SQLite` 未启用或已 clear）
 pub fn with_global_db<F, R>(f: F) -> Option<R>
 where
     F: FnOnce(&Arc<SqliteDb>) -> R,
@@ -295,7 +269,7 @@ mod tests {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
         let tmpdir =
             std::env::temp_dir().join(format!("fw_sqlite_conn_test_{}_{}", std::process::id(), n));
-            std::env::temp_dir().join(format!("fw_sqlite_test_{}_{}", std::process::id(), n));
+        std::env::temp_dir().join(format!("fw_sqlite_test_{}_{}", std::process::id(), n));
         fs::create_dir_all(&tmpdir).unwrap();
         let path = tmpdir.join("test.db").to_string_lossy().to_string();
         let _ = fs::remove_file(&path);
