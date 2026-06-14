@@ -177,8 +177,19 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
         let window_start = entry.timestamps.first().copied().unwrap_or(now) - findtime_i64;
         let window_end = now;
 
-        // 复用 validate_ip 统一处理 IPv4/IPv6，避免 parse::<Ipv4Addr> 将 IPv6 截断为 0
-        let ip_num = crate::ban::validate_ip(ip).map(|v| v.ip_num).unwrap_or(0);
+        // 复用 validate_ip 统一处理 IPv4/IPv6，验证失败时跳过而非静默使用 0
+        let ip_num = match crate::ban::validate_ip(ip) {
+            Ok(v) => v.ip_num,
+            Err(e) => {
+                crate::logger::error!(
+                    crate::logger::get(),
+                    "IP 验证失败，跳过封禁";
+                    "ip" => ip,
+                    "error" => %e
+                );
+                return;
+            }
+        };
         let ban_info = crate::types::BanInfo {
             ip: ip.to_string(),
             ip_num,

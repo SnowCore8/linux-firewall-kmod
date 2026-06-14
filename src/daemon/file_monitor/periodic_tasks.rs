@@ -2,8 +2,6 @@
 //!
 //! 包含主循环中超时触发的周期性维护任务：统计快照、数据清理、DDoS 检测。
 
-use std::time::SystemTime;
-
 use crate::types::Config;
 
 // ============================================================================
@@ -17,11 +15,7 @@ use crate::types::Config;
 /// # Arguments
 /// - `cfg`: 全局配置（预留，当前未使用）
 pub fn write_stats_snapshot(_cfg: &Config) {
-    let now = SystemTime::now();
-    let now_secs = now
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
+    let now_secs = crate::types::now_secs();
 
     if let Some(db) = crate::sqlite::get_global_db() {
         let conn = crate::sqlite::get_conn(&db);
@@ -106,11 +100,7 @@ pub fn write_stats_snapshot(_cfg: &Config) {
 /// # Arguments
 /// - `cfg`: 全局配置
 pub fn perform_data_cleanup(cfg: &Config) {
-    let now = SystemTime::now();
-    let now_secs = now
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
+    let now_secs = crate::types::now_secs();
 
     // 清理过期的临时封禁
     if let Some(cache) = crate::types::ACTIVE_BAN_CACHE.get() {
@@ -138,15 +128,11 @@ pub fn perform_data_cleanup(cfg: &Config) {
     }
 
     // 清理各 jail 的 failed_hash 中过期条目（防止内存泄漏）
-    let now_secs_for_cleanup = now
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
     for jail in cfg.jails.iter() {
         if jail.enabled {
             let removed = crate::failed_tracker::cleanup_expired_entries(
                 jail,
-                now_secs_for_cleanup,
+                now_secs,
                 jail.findtime as i64,
             );
             if removed > 0 {

@@ -47,7 +47,7 @@ pub const EVENT_BUF_LEN: usize =
 ///
 /// 封装 `SystemTime::now().duration_since(UNIX_EPOCH)` 模式，
 /// 仅在系统时钟早于 1970 时返回 0（理论上不可能）。
-/// 消除跨模块重复的 `.unwrap()` 调用。
+/// 消除跨模块重复的 `.unwrap_or(0)` 调用。
 #[must_use]
 pub fn now_secs() -> i64 {
     std::time::SystemTime::now()

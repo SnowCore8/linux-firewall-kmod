@@ -58,13 +58,14 @@ pub fn init_logger(log_file_override: Option<&str>) -> Logger {
     };
 
     // 打开日志文件（追加模式，不存在则创建）
-    let file = match OpenOptions::new().create(true).append(true).open(log_path) {
+    let file: std::fs::File = match OpenOptions::new().create(true).append(true).open(log_path) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("警告: 无法打开日志文件 {}: {}，回退到 stderr", log_path, e);
-            // 回退到 stderr
+            // 回退到 stderr。使用 dup 复制 fd 2，防止 File drop 时关闭原始 stderr
             use std::os::unix::io::FromRawFd;
-            unsafe { std::fs::File::from_raw_fd(2) } // fd 2 = stderr
+            let dup_fd = nix::unistd::dup(2).unwrap_or(2);
+            unsafe { std::fs::File::from_raw_fd(dup_fd) }
         }
     };
 
