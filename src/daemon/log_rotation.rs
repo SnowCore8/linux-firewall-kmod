@@ -17,7 +17,7 @@ use std::sync::atomic::Ordering;
 
 use inotify::WatchMask;
 
-use crate::file_monitor::{setup_inotify, FILE_STATES, INOTIFY_FD};
+use crate::file_monitor::{setup_inotify, FILE_STATES, INOTIFY_STATE};
 use crate::line_processor::process_single_line;
 use crate::types::{Config, DAEMON_STATS};
 
@@ -92,7 +92,7 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
                 state.inode = current_inode;
                 state.offset = 0;
 
-                if let Some(inotify) = INOTIFY_FD.write().as_mut() {
+                if let Some(inotify) = INOTIFY_STATE.fd.write().as_mut() {
                     if let Some(old_wd) = wd {
                         if let Err(e) = inotify.watches().remove(old_wd) {
                             crate::logger::debug!(

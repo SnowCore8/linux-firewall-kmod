@@ -12,7 +12,7 @@ use inotify::{Inotify, WatchMask};
 
 use crate::types::Config;
 
-use super::state::{FileState, FILE_STATES, INOTIFY_FD, INOTIFY_RAW_FD};
+use super::state::{FileState, FILE_STATES, INOTIFY_STATE};
 
 // ============================================================================
 // inotify 设置
@@ -90,8 +90,8 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
 
     *FILE_STATES.write() = file_states;
     let raw_fd = inotify.as_raw_fd();
-    *INOTIFY_FD.write() = Some(inotify);
-    INOTIFY_RAW_FD.store(raw_fd, Ordering::Relaxed);
+    *INOTIFY_STATE.fd.write() = Some(inotify);
+    INOTIFY_STATE.raw_fd.store(raw_fd, Ordering::Relaxed);
 
     // 一个文件都没监控成功: 启动无意义, 直接退出
     if watched_count == 0 {

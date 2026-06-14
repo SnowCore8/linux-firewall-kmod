@@ -14,7 +14,7 @@ use crate::types::{Config, DAEMON_STATS};
 
 use super::periodic_tasks::{check_and_handle_ddos, perform_data_cleanup, write_stats_snapshot};
 use super::processor::process_new_lines;
-use super::state::{FILE_STATES, INOTIFY_FD, INOTIFY_RAW_FD};
+use super::state::{FILE_STATES, INOTIFY_STATE};
 
 // ============================================================================
 // 超时状态
@@ -77,7 +77,7 @@ pub fn monitor_loop(
 ) -> Result<()> {
     let mut timeout_state = TimeoutState::new();
 
-    let raw_fd = INOTIFY_RAW_FD.load(Ordering::Relaxed);
+    let raw_fd = INOTIFY_STATE.raw_fd.load(Ordering::Relaxed);
     if raw_fd < 0 {
         crate::logger::error!(
             crate::logger::get(),
@@ -128,9 +128,9 @@ pub fn monitor_loop(
 
 /// 处理 inotify 事件：读取事件并分发到相应的处理函数。
 fn handle_inotify_events(cfg: &mut Config) {
-    // 读取 inotify 事件到 Vec 后立即释放 INOTIFY_FD 写锁
+    // 读取 inotify 事件到 Vec 后立即释放 INOTIFY_STATE.fd 写锁
     let collected_events: Vec<(WatchDescriptor, inotify::EventMask)> = {
-        if let Some(inotify) = INOTIFY_FD.write().as_mut() {
+        if let Some(inotify) = INOTIFY_STATE.fd.write().as_mut() {
             let mut buffer = [0u8; 4096];
             if let Ok(events) = inotify.read_events(&mut buffer) {
                 DAEMON_STATS.inotify_events.fetch_add(1, Ordering::Relaxed);

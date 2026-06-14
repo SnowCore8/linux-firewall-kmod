@@ -27,7 +27,7 @@ pub use inotify_setup::setup_inotify;
 pub use monitor_loop::monitor_loop;
 pub use periodic_tasks::{check_and_handle_ddos, perform_data_cleanup, write_stats_snapshot};
 pub use processor::process_new_lines;
-pub use state::{FileState, FILE_STATES, INOTIFY_FD, INOTIFY_RAW_FD, MONITOR_RUNNING};
+pub use state::{FileState, InotifyState, FILE_STATES, INOTIFY_STATE};
 
 // ============================================================================
 // 单元测试
