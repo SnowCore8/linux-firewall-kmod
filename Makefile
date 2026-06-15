@@ -301,12 +301,13 @@ uninstall: uninstall-stop uninstall-kernel uninstall-systemd uninstall-modload u
 	@echo "  ✓ Kernel module safely unloaded"
 	@echo "  ✓ Systemd service disabled and removed"
 	@echo "  ✓ Module autoload config removed"
-	@echo "  ✓ Binary files removed"
+	@echo "  ✓ Binary and runtime files removed"
 	@echo "  ✓ Configuration directory removed"
 	@echo "  ✓ State directory removed"
+	@echo "  ✓ Log files removed"
 	@echo ""
-	@echo "Note: Some system logs (e.g., /var/log/auth.log) may still contain firewall activity records."
-	@echo "Note: SQLite database backups, if any, should be manually removed."
+	@echo "Note: System logs (e.g., /var/log/auth.log, journalctl) may still contain firewall activity records."
+	@echo "These are managed by the system and not removed by uninstall."
 
 uninstall-stop:
 	@echo "Stopping daemon..."
@@ -326,13 +327,18 @@ uninstall-systemd:
 	@echo "  ✓ Systemd service removed"
 
 uninstall-files:
-	@echo "Removing binary files..."
-	rm -f $(DESTDIR)$(SBINDIR)/firewall-daemon
-	rm -f /run/firewall-daemon.pid
-	rm -f /var/run/firewall-daemon.pid
-	rm -rf /run/firewall
-	rm -rf /var/run/firewall
-	@echo "  ✓ Binary files removed"
+	@echo "Removing binary and runtime files..."
+	@rm -f $(DESTDIR)$(SBINDIR)/firewall-daemon
+	@rm -f /run/firewall-daemon.pid
+	@rm -f /var/run/firewall-daemon.pid
+	@rm -rf /run/firewall
+	@rm -rf /var/run/firewall
+	@rm -f /tmp/firewall-*.log
+	@rm -f /tmp/firewall-*.tmp
+	@echo "  ✓ Daemon binary removed ($(SBINDIR)/firewall-daemon)"
+	@echo "  ✓ PID files removed (/run/, /var/run/)"
+	@echo "  ✓ Runtime directories removed (/run/firewall, /var/run/firewall)"
+	@echo "  ✓ Temporary files removed (/tmp/firewall-*)"
 
 uninstall-config:
 	@echo "Removing configuration directory..."
@@ -340,9 +346,12 @@ uninstall-config:
 	@echo "  ✓ Configuration directory removed"
 
 uninstall-state:
-	@echo "Removing state directory..."
-	rm -rf $(DESTDIR)$(RUNSTATEDIR)/firewall
-	@echo "  ✓ State directory removed"
+	@echo "Removing state and log files..."
+	@rm -rf $(DESTDIR)$(RUNSTATEDIR)/firewall
+	@rm -f /var/log/firewall.log
+	@rm -f /var/log/firewall.log.*
+	@echo "  ✓ State directory removed ($(RUNSTATEDIR)/firewall/)"
+	@echo "  ✓ Log files removed (/var/log/firewall.log*)"
 
 uninstall-kernel:
 	@echo "Safely removing kernel module..."
@@ -403,9 +412,13 @@ uninstall-verify:
 
 .PHONY: clean distclean
 clean:
-	rm -rf $(BUILD_DIR)
-	cargo clean 2>/dev/null || true
-	@echo "Build directory cleaned."
+	@echo "Cleaning build artifacts..."
+	@rm -rf $(BUILD_DIR)
+	@rm -rf target
+	@cargo clean 2>/dev/null || true
+	@echo "  ✓ Build directory removed (build/, target/)"
+	@echo "  ✓ Cargo cache cleaned"
+	@echo "Build artifacts cleaned."
 
 # distclean 额外清理内核源码目录中可能残留的隐藏文件
 distclean: clean
