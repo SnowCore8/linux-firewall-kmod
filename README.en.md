@@ -52,9 +52,27 @@ make                    # Build kernel module + Rust daemon
 make kernel-module      # Kernel module only
 make daemon             # Rust daemon only (cargo build --release)
 make clean              # Clean
+make build-quick        # Quick build (skip format check)
 ```
 
-### Load Module
+
+### Install
+
+```bash
+# Method 1: One-click install (auto-build + verify)
+sudo env "PATH=$PATH" make install
+
+# Method 2: Build first, then install
+make build
+sudo env "PATH=$PATH" make install
+
+# Uninstall
+sudo make uninstall
+```
+
+> 💡 **Tip**: `make install` automatically builds, installs, verifies, and starts the systemd service. Use `sudo env "PATH=$PATH"` to ensure cargo is in PATH.
+
+### Load Module (manual)
 
 ```bash
 sudo insmod build/kernel-module/firewall.ko fw_ban_time=600

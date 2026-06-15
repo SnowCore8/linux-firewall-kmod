@@ -117,18 +117,72 @@ ls /proc/firewall/
 
 ### 3. 安装
 
+#### 方式一：一键安装（推荐）
+
 ```bash
-sudo make install
+sudo env "PATH=$PATH" make install
 ```
+
+此命令会自动：
+1. 构建内核模块和守护进程（如果尚未构建）
+2. 安装所有组件到系统目录
+3. 验证安装完整性
+4. 加载内核模块
+5. 启动 systemd 服务
+
+> 💡 **提示**：使用 `sudo env "PATH=$PATH"` 确保 cargo 在 PATH 中。如果不加，sudo 环境下可能找不到 cargo。
+
+#### 方式二：先构建后安装
+
+```bash
+# 先构建
+make build
+
+# 再安装
+sudo env "PATH=$PATH" make install
+```
+
+#### 安装流程说明
+
+`make install` 按以下顺序执行：
+1. **build** - 构建内核模块和守护进程
+2. **install-kernel-module** - 安装内核模块到 `/lib/modules/$(uname -r)/extra/`
+3. **install-daemon** - 安装守护进程到 `/usr/local/sbin/`
+4. **install-config** - 安装配置文件到 `/etc/firewall/`
+5. **install-state** - 创建状态目录 `/var/lib/firewall/`
+6. **install-systemd** - 安装 systemd 服务单元
+7. **install-start** - 加载内核模块并启动守护进程
+8. **install-verify** - 验证所有组件安装成功
 
 安装完成后：
 
 - 内核模块 `firewall.ko` 安装到 `/lib/modules/$(uname -r)/extra/`
 - 守护进程 `firewall-daemon` 安装到 `/usr/local/sbin/`
-- 配置文件安装到 `/etc/firewall/default.yaml`
+- 配置文件安装到 `/etc/firewall/`（包含 12 个 jail 配置）
+- 状态数据目录 `/var/lib/firewall/`
 - systemd 服务文件安装到 `/etc/systemd/system/`
 
-### 4. 加载内核模块
+### 4. 验证安装
+
+安装完成后，验证服务状态：
+
+```bash
+# 检查服务状态
+sudo systemctl status firewall-daemon
+
+# 检查内核模块
+lsmod | grep firewall
+
+# 查看 procfs 接口
+ls /proc/firewall/
+
+# 查看日志
+journalctl -u firewall-daemon.service -f
+```
+
+### 5. 手动加载内核模块（可选）
+
+如果服务未自动加载内核模块：
 
 ```bash
 sudo modprobe firewall
@@ -138,19 +192,6 @@ sudo modprobe firewall
 
 ```bash
 lsmod | grep firewall
-```
-
-### 5. 启动守护进程
-
-```bash
-sudo systemctl enable firewall-daemon
-sudo systemctl start firewall-daemon
-```
-
-检查服务状态：
-
-```bash
-sudo systemctl status firewall-daemon
 ```
 
 ## 验证安装

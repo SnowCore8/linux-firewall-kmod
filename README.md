@@ -51,10 +51,27 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 make                    # 编译内核模块 + Rust 守护进程
 make kernel-module      # 仅内核模块
 make daemon             # 仅 Rust 守护进程 (cargo build --release)
+make build-quick        # 快速编译（跳过格式检查）
 make clean              # 清理
 ```
 
-### 加载模块
+### 安装
+
+```bash
+# 方式一：一键安装（自动构建 + 验证）
+sudo env "PATH=$PATH" make install
+
+# 方式二：先构建后安装
+make build
+sudo env "PATH=$PATH" make install
+
+# 卸载
+sudo make uninstall
+```
+
+> 💡 **提示**：`make install` 会自动构建、安装、验证，并启动 systemd 服务。使用 `sudo env "PATH=$PATH"` 确保 cargo 在 PATH 中。
+
+### 加载模块（手动方式）
 
 ```bash
 sudo insmod build/kernel-module/firewall.ko fw_ban_time=600

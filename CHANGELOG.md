@@ -5,6 +5,10 @@
 ## [Unreleased] - C→Rust 翻译 + 二进制优化 + CI 升级（v2.2.1）
 
 ### 新增
+- **`make install` 自动化改进** - install 目标添加 build 依赖，`make clean && make install` 一步完成，无需手动 `make build`
+- **安装流程标准化** - 新增 `install-verify` 目标，安装后自动验证关键组件（内核模块、守护进程、配置文件、状态目录、systemd 服务）
+- **安装错误处理增强** - 关键步骤（daemon 启动、文件安装）失败时显式报错，不再静默忽略；服务启动检查验证 daemon 是否真正运行
+- **安装完成提示优化** - 提供清晰的后续步骤（查看日志、检查状态），DESTDIR 模式下提示手动启用服务
 - **守护进程 C→Rust 翻译** - 12 个模块从 C 翻译为 Rust（log / ban / sqlite_store / types / failed_tracker / log_parser / jail / file_monitor / http_exporter / config_parser / main + lib.rs），约 7000 行，行为与 C 版严格等价。111 项集成测试以 `RUST=1` 全过，108 Rust 单元测试 + 1 doctest（真跑不 `no_run`/`ignore`）全过。Makefile 默认 `RUST=1`，`RUST=0` 保留 C 版回退路径
 - **`[profile.dev-with-debug]`** - 现场 crash 调试用 release 副本：32MB 带 DWARF + 符号表，配 `lto=true + opt-level=2`（继承 release），`addr2line` 可反推栈
 - **`[profile.asan]`** - ASAN 内存错误检测 profile：仅 nightly 可用，检测堆/栈越界、UAF、double-free

@@ -117,18 +117,72 @@ ls /proc/firewall/
 
 ### 3. Install
 
+#### Method 1: One-click install (recommended)
+
 ```bash
-sudo make install
+sudo env "PATH=$PATH" make install
 ```
+
+This command automatically:
+1. Builds kernel module and daemon (if not already built)
+2. Installs all components to system directories
+3. Verifies installation integrity
+4. Loads kernel module
+5. Starts systemd service
+
+> 💡 **Tip**: Use `sudo env "PATH=$PATH"` to ensure cargo is in PATH. Without it, sudo environment may not find cargo.
+
+#### Method 2: Build first, then install
+
+```bash
+# Build first
+make build
+
+# Then install
+sudo env "PATH=$PATH" make install
+```
+
+#### Installation process
+
+`make install` executes in the following order:
+1. **build** - Build kernel module and daemon
+2. **install-kernel-module** - Install kernel module to `/lib/modules/$(uname -r)/extra/`
+3. **install-daemon** - Install daemon to `/usr/local/sbin/`
+4. **install-config** - Install configuration files to `/etc/firewall/`
+5. **install-state** - Create state directory `/var/lib/firewall/`
+6. **install-systemd** - Install systemd service unit
+7. **install-start** - Load kernel module and start daemon
+8. **install-verify** - Verify all components installed successfully
 
 After installation:
 
 - Kernel module `firewall.ko` is installed to `/lib/modules/$(uname -r)/extra/`
 - Daemon `firewall-daemon` is installed to `/usr/local/sbin/`
-- Configuration file is installed to `/etc/firewall/default.yaml`
+- Configuration files are installed to `/etc/firewall/` (includes 12 jail configs)
+- State data directory `/var/lib/firewall/`
 - systemd service file is installed to `/etc/systemd/system/`
 
-### 4. Load the Kernel Module
+### 4. Verify installation
+
+After installation, verify service status:
+
+```bash
+# Check service status
+sudo systemctl status firewall-daemon
+
+# Check kernel module
+lsmod | grep firewall
+
+# View procfs interface
+ls /proc/firewall/
+
+# View logs
+journalctl -u firewall-daemon.service -f
+```
+
+### 5. Manually load kernel module (optional)
+
+If the service didn't auto-load the kernel module:
 
 ```bash
 sudo modprobe firewall
@@ -138,19 +192,6 @@ Verify the module is loaded:
 
 ```bash
 lsmod | grep firewall
-```
-
-### 5. Start the Daemon
-
-```bash
-sudo systemctl enable firewall-daemon
-sudo systemctl start firewall-daemon
-```
-
-Check service status:
-
-```bash
-sudo systemctl status firewall-daemon
 ```
 
 ## Verifying Installation
