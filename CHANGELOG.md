@@ -9,7 +9,7 @@
 - **安装流程标准化** - 新增 `install-verify` 目标，安装后自动验证关键组件（内核模块、守护进程、配置文件、状态目录、systemd 服务）
 - **安装错误处理增强** - 关键步骤（daemon 启动、文件安装）失败时显式报错，不再静默忽略；服务启动检查验证 daemon 是否真正运行
 - **安装完成提示优化** - 提供清晰的后续步骤（查看日志、检查状态），DESTDIR 模式下提示手动启用服务
-- **守护进程 C→Rust 翻译** - 12 个模块从 C 翻译为 Rust（log / ban / sqlite_store / types / failed_tracker / log_parser / jail / file_monitor / http_exporter / config_parser / main + lib.rs），约 7000 行，行为与 C 版严格等价。111 项集成测试以 `RUST=1` 全过，108 Rust 单元测试 + 1 doctest（真跑不 `no_run`/`ignore`）全过。Makefile 默认 `RUST=1`，`RUST=0` 保留 C 版回退路径
+- **守护进程 C→Rust 翻译** - 守护进程从 C 翻译为 Rust，58 个源文件，行为与 C 版严格等价。107 项集成测试以 `RUST=1` 全过，108 Rust 单元测试全过。Makefile 默认 `RUST=1`
 - **`[profile.dev-with-debug]`** - 现场 crash 调试用 release 副本：32MB 带 DWARF + 符号表，配 `lto=true + opt-level=2`（继承 release），`addr2line` 可反推栈
 - **`[profile.asan]`** - ASAN 内存错误检测 profile：仅 nightly 可用，检测堆/栈越界、UAF、double-free
 
@@ -36,8 +36,8 @@
 - **19 个 `unsafe` 块加 `// SAFETY:` 注释** - 涵盖 `ban.rs` (10) / `log.rs` (3) / `file_monitor.rs` (1) / `main.rs` (5)，逐块说明前置条件 / 后置不变量
 
 ### 测试
-- 集成测试 106 → **115**（+9 项），从 12 套件扩到 **13 套件**（新增 `15_daemon_logfile.sh`）。`tests/run_tests.sh` 引入 `source ~/.cargo/env` 后 100% 可在 `sudo` 下跑通
-- `cargo test --release`：**108 单元 + 1 doctest**（doctest 实际跑 `libc::syslog` 验证宏展开路径无问题）
+- 集成测试 **107 项**全部通过。`tests/run_tests.sh` 引入 `source ~/.cargo/env` 后 100% 可在 `sudo` 下跑通
+- `cargo test --release`：**108 单元测试**全部通过
 - GitHub Actions CI 全过：`代码质量检查` + `编译` + `运行测试` 三 job 全绿
 
 ### 文档

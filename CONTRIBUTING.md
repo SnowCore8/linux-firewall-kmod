@@ -49,10 +49,10 @@ make daemon
 ### 运行测试
 
 ```bash
-# 运行全部测试（13 个套件，115 项测试）
+# 运行全部测试（107 项测试）
 make test
 
-# 仅运行 Rust 单元测试 (108 单元 + 1 doctest)
+# 仅运行 Rust 单元测试 (108 项)
 cargo test --release
 
 # 仅运行集成测试

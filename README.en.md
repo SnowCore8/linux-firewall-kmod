@@ -32,7 +32,7 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 - ✅ **Auto-expire cleanup** — periodic cleanup of expired bans
 - ✅ **IP whitelist protection** — auto-discovery + manual entries (64 capacity)
 - ✅ **procfs interface** — ban/unban/whitelist/config operations
-- ✅ **Rust daemon (v2.2.0+)** — 12 modules / 7000 lines, 3.8MB stripped binary, behaviorally equivalent to the C version
+- ✅ **Rust daemon (v2.2.0+)** — 58 source files, 3.8MB stripped binary, behaviorally equivalent to the C version
 - ✅ **Regex parsing** — named capture groups for IP extraction
 - ✅ **RCU concurrency safety** — spinlock protected, high-concurrency safe
 - ✅ **Strict config validation** — unknown params rejected by default
@@ -41,7 +41,7 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 - ✅ **Independent log file** — `cfg.log_file` default `/var/log/firewall.log`, falls back to syslog-only on open failure
 - ✅ **Security hardening** — Integer overflow protection, UAF fix, RCU consistency, 19 `unsafe` blocks all with `// SAFETY:` comments
 - ✅ **Performance optimization** — Hash table 4096, SQLite statement cache, whitelist two-stage match, LTO compilation
-- ✅ **Code quality** — 108 unit tests + 1 real-running doctest + 115 integration tests 100% pass, CI three jobs all green
+- ✅ **Code quality** — 108 unit tests + 107 integration tests 100% pass, CI three jobs all green
 
 ## Quick Start
 
