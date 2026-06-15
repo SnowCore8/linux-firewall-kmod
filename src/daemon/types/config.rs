@@ -8,7 +8,7 @@
 //!
 //! - **Jail 缺省参数**:`default_*` 在 `apply_smart_defaults_to_all` 阶段对未
 //!   显式设置的 Jail 生效
-//! - **行为开关**:`daemon` (是否后台化) / `permanent_ban_enabled` (`SQLite` 同步)
+//! - **行为开关**:`daemon` (是否后台化)
 //! - **Metrics 端点**:`metrics_port` / `metrics_bind_address` / `metrics_username`
 //!   / `metrics_password`
 //! - **日志系统**:`log_file` / `log_level` / `log_destination` / `log_format`
@@ -25,7 +25,7 @@ use super::jail::{Jail, MAX_JAILS};
 /// 字段分组:
 /// - **Jail 缺省参数**:`default_*` 在 `apply_smart_defaults_to_all` 阶段对未
 ///   显式设置的 Jail 生效
-/// - **行为开关**:`daemon` (是否后台化) / `permanent_ban_enabled` (`SQLite` 同步)
+/// - **行为开关**:`daemon` (是否后台化)
 /// - **Metrics 端点**:`metrics_port` / `metrics_bind_address` / `metrics_username`
 ///   / `metrics_password`
 /// - **日志系统**:`log_file` / `log_level` / `log_destination` / `log_format`
@@ -51,10 +51,6 @@ pub struct Config {
     pub config_file: Option<String>,
     /// 已加载的配置目录路径。SIGHUP 重载时复用
     pub config_dir: Option<String>,
-    /// 永久黑名单 `SQLite` 数据库路径
-    pub permanent_db_path: Option<String>,
-    /// 是否启用永久黑名单持久化
-    pub permanent_ban_enabled: bool,
     /// 独立日志文件路径 (覆盖默认 syslog)
     pub log_file: Option<String>,
     /// 日志级别 (0..=4, 见 `log::LOG_LEVEL_*`)
@@ -91,8 +87,6 @@ impl Default for Config {
             metrics_password: None,
             config_file: None,
             config_dir: None,
-            permanent_db_path: None,
-            permanent_ban_enabled: false,
             log_file: None,
             log_level: 3,       // INFO
             log_destination: 2, // BOTH
@@ -160,8 +154,6 @@ impl Default for WriterConfig {
 /// 混合存储配置
 #[derive(Debug, Clone, Default)]
 pub struct StorageConfig {
-    /// SQLite 数据库路径 (None 表示使用默认路径，向后兼容 `permanent_db_path`)
-    pub db_path: Option<String>,
     /// 数据保留策略
     pub retention: RetentionConfig,
     /// 异步写入器配置

@@ -106,29 +106,15 @@ impl ConnRateTracker {
 
         let now = now_secs();
 
+        crate::logger::info!(
+            crate::logger::get(),
+            "DDoS 检测开始";
+            "timestamp" => now,
+            "tracked_ips" => self.entries.read().len(),
+            "global_conn_count" => *self.global_conn_count.read()
+        );
+
         let mut events = Vec::new();
-
-        // 检查是否需要重置计数器 (每秒重置)
-        {
-            let mut last_reset = self.last_reset_time.write();
-            if now > *last_reset {
-                // 重置全局计数
-                {
-                    let mut global = self.global_conn_count.write();
-                    *global = 0;
-                }
-
-                // 重置 per-IP 计数
-                {
-                    let mut entries = self.entries.write();
-                    for entry in entries.values_mut() {
-                        entry.reset(now);
-                    }
-                }
-
-                *last_reset = now;
-            }
-        }
 
         // 检测全局连接速率
         {
@@ -170,6 +156,21 @@ impl ConnRateTracker {
             for entry in entries.values() {
                 let conn_rate = entry.conn_count as f64;
                 let fail_rate_per_min = entry.fail_count as f64 * 60.0;
+
+                // 调试日志：输出当前连接数和失败数
+                if conn_rate > 0.0 || fail_rate_per_min > 0.0 {
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "DDoS 检测：IP 统计";
+                        "ip" => &entry.ip,
+                        "conn_count" => entry.conn_count,
+                        "fail_count" => entry.fail_count,
+                        "conn_rate" => conn_rate,
+                        "fail_rate_per_min" => fail_rate_per_min,
+                        "threshold_conn" => config.per_ip_conn_rate,
+                        "threshold_fail" => config.per_ip_fail_rate
+                    );
+                }
 
                 if conn_rate > config.per_ip_conn_rate as f64 {
                     DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
@@ -220,6 +221,28 @@ impl ConnRateTracker {
                 }
             }
         } // 写锁释放
+
+        // 重置计数器 (每秒重置) - 必须在检测后执行
+        {
+            let mut last_reset = self.last_reset_time.write();
+            if now > *last_reset {
+                // 重置全局计数
+                {
+                    let mut global = self.global_conn_count.write();
+                    *global = 0;
+                }
+
+                // 重置 per-IP 计数
+                {
+                    let mut entries = self.entries.write();
+                    for entry in entries.values_mut() {
+                        entry.reset(now);
+                    }
+                }
+
+                *last_reset = now;
+            }
+        }
 
         events
     }
@@ -304,7 +327,8 @@ mod tests {
         assert_eq!(entry.conn_count, 0);
         assert_eq!(entry.fail_count, 0);
         assert_eq!(entry.window_start, 2000);
-        assert_eq!(entry.violation_count, 0);
+        // violation_count 不重置，需要跨检测周期累积以判断是否触发自动封禁
+        assert_eq!(entry.violation_count, 3);
     }
 
     // ---- ConnRateTracker 基础测试 ----

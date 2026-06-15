@@ -21,7 +21,6 @@ path = "src/daemon/lib.rs"
 # ============================================================================
 # libc + nix: 系统调用 (signal/inotify/poll/fs 等)
 # serde/serde_yaml: 替换 libyaml 解析 YAML 配置
-# rusqlite (bundled): 替换 sqlite3 C API, 静态链接避免系统依赖
 # regex: 替换 PCRE2, 语法与 PCRE 等价, 性能足够
 # tiny_http: 替换 libmicrohttpd, 同步 API, 无 async 复杂度
 # signal-hook: 替换 signal() + sa_handler 自定义实现
@@ -37,7 +36,6 @@ libc = "0.2"
 nix = { version = "0.29", features = ["signal", "fs", "poll", "inotify", "time", "process", "mount", "user"] }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
-rusqlite = { version = "0.31", features = ["bundled"] }
 regex = "1"
 tiny_http = "0.12"
 signal-hook = "0.3"

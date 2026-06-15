@@ -28,8 +28,6 @@ struct TimeoutState {
     last_partial_cleanup: SystemTime,
     /// 新日志文件检查
     last_new_file_check: SystemTime,
-    /// SQLite dirty 标志同步
-    last_sqlite_sync: SystemTime,
     /// 统计快照写入
     last_stats_snapshot: SystemTime,
     /// 数据清理
@@ -51,7 +49,6 @@ impl TimeoutState {
         Self {
             last_partial_cleanup: now,
             last_new_file_check: now,
-            last_sqlite_sync: now,
             last_stats_snapshot: now,
             last_data_cleanup: now,
             last_ddos_check: now,
@@ -77,18 +74,26 @@ pub fn monitor_loop(
 ) -> Result<()> {
     let mut timeout_state = TimeoutState::new();
 
-    let raw_fd = INOTIFY_STATE.raw_fd.load(Ordering::Relaxed);
-    if raw_fd < 0 {
+    // 初始 fd 有效性检查
+    if INOTIFY_STATE.raw_fd.load(Ordering::Relaxed) < 0 {
         crate::logger::error!(
             crate::logger::get(),
             "inotify raw fd 无效";
-            "raw_fd" => raw_fd
+            "raw_fd" => INOTIFY_STATE.raw_fd.load(Ordering::Relaxed)
         );
         return Ok(());
     }
 
     while running.load(Ordering::Relaxed) {
         let current_interval = cfg.interval;
+
+        // 每次迭代重新读取 raw_fd（支持 reload 时更换 inotify 实例）
+        let raw_fd = INOTIFY_STATE.raw_fd.load(Ordering::Relaxed);
+        if raw_fd < 0 {
+            // reload 失败导致 fd 无效，等待后重试
+            std::thread::sleep(std::time::Duration::from_secs(current_interval as u64));
+            continue;
+        }
 
         let mut poll_fds = libc::pollfd {
             fd: raw_fd,
@@ -105,8 +110,14 @@ pub fn monitor_loop(
 
         // poll_result 分 3 段处理: > 0 = 有事件 / = 0 = 超时 / < 0 = 错误
         if poll_result > 0 {
+            crate::logger::debug!(
+                crate::logger::get(),
+                "poll 返回有事件";
+                "poll_result" => poll_result
+            );
             handle_inotify_events(cfg);
         } else if poll_result == 0 {
+            // poll 超时：执行周期性维护任务（配置重载、数据清理、DDoS 检测等）
             handle_timeout(cfg, reload_config, &mut timeout_state);
         } else {
             let err = std::io::Error::last_os_error();
@@ -217,27 +228,6 @@ fn handle_timeout(cfg: &mut Config, reload_config: &AtomicBool, state: &mut Time
         check_for_new_log_files(cfg);
     }
 
-    // SQLite dirty 标志清理 + 缓存同步
-    // 设计说明: 关键路径 (封禁/解封) 已立即写入 SQLite, dirty 标志用于标记
-    // "有待确认的写入"。此处定期同步 ActiveBanCache 到 SQLite 作为安全网,
-    // 捕获任何可能的漏写情况。
-    if crate::sqlite_writer::is_dirty()
-        && now
-            .duration_since(state.last_sqlite_sync)
-            .unwrap_or_default()
-            .as_secs()
-            >= cfg.storage.writer.flush_interval_secs as u64
-    {
-        state.last_sqlite_sync = now;
-        // 同步 ActiveBanCache 到 SQLite (安全网: 确保内存状态与数据库一致)
-        sync_ban_cache_to_sqlite();
-        crate::sqlite_writer::clear_dirty();
-        crate::logger::debug!(
-            crate::logger::get(),
-            "SQLite dirty 标志已清理，缓存同步完成"
-        );
-    }
-
     // 统计快照 (每 60 秒)
     if now
         .duration_since(state.last_stats_snapshot)
@@ -270,33 +260,5 @@ fn handle_timeout(cfg: &mut Config, reload_config: &AtomicBool, state: &mut Time
     {
         state.last_ddos_check = now;
         check_and_handle_ddos(cfg);
-    }
-}
-
-/// 将 ActiveBanCache 中的活跃封禁同步到 SQLite ban_history 表。
-///
-/// 作为安全网: 关键路径已立即写入 SQLite, 此函数捕获可能的漏写。
-/// 使用 INSERT OR IGNORE 避免重复插入。
-fn sync_ban_cache_to_sqlite() {
-    let Some(cache) = crate::types::ACTIVE_BAN_CACHE.get() else {
-        return;
-    };
-    let Some(db) = crate::sqlite::get_global_db() else {
-        return;
-    };
-
-    let snapshot = cache.snapshot();
-    if snapshot.is_empty() {
-        return;
-    }
-
-    let conn = crate::sqlite::get_conn(&db);
-    if let Err(e) = crate::sqlite_writer::insert_ban_history_batch(&conn, &snapshot) {
-        crate::logger::warn!(
-            crate::logger::get(),
-            "ActiveBanCache 同步到 SQLite 失败";
-            "count" => snapshot.len(),
-            "error" => %e
-        );
     }
 }

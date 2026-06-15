@@ -19,8 +19,6 @@ pub fn config_clone(src: &Config) -> Config {
         metrics_password: src.metrics_password.clone(),
         config_file: src.config_file.clone(),
         config_dir: src.config_dir.clone(),
-        permanent_db_path: src.permanent_db_path.clone(),
-        permanent_ban_enabled: src.permanent_ban_enabled,
         log_file: src.log_file.clone(),
         log_level: src.log_level,
         log_destination: src.log_destination,
@@ -119,7 +117,7 @@ pub fn migrate_failed_entries(old: &mut Config, new: &mut Config) {
 /// 部分释放 `Config`:清空所有 jail + 配置来源追踪 + 敏感字段。
 ///
 /// 与 `cleanup_all_jails` 的区别:还清空 `config_file` / `config_dir` /
-/// `permanent_db_path` / `metrics_*` 字段,适用于"完全卸载配置"的场景。
+/// `metrics_*` 字段,适用于"完全卸载配置"的场景。
 ///
 /// # Arguments
 /// - `cfg`: 目标配置 (可变引用)
@@ -132,7 +130,6 @@ pub fn free_config_partial(cfg: &mut Config) {
     cfg.jails.clear();
     cfg.config_file = None;
     cfg.config_dir = None;
-    cfg.permanent_db_path = None;
     cfg.metrics_bind_address.clear();
     cfg.metrics_username = None;
     cfg.metrics_password = None;

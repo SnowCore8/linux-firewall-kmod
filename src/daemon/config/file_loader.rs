@@ -39,8 +39,6 @@ pub fn parse_config_file(path: &str, cfg: &mut Config, strict: bool) -> Result<(
     let old_strict = cfg.strict_mode;
     let saved_config_file = cfg.config_file.clone();
     let saved_config_dir = cfg.config_dir.clone();
-    let saved_permanent_db_path = cfg.permanent_db_path.clone();
-    let saved_permanent_ban_enabled = cfg.permanent_ban_enabled;
     let saved_log_file = cfg.log_file.clone();
     let saved_metrics_bind_address = cfg.metrics_bind_address.clone();
     let saved_metrics_username = cfg.metrics_username.clone();
@@ -68,8 +66,6 @@ pub fn parse_config_file(path: &str, cfg: &mut Config, strict: bool) -> Result<(
             cfg.strict_mode = old_strict;
             cfg.config_file = saved_config_file;
             cfg.config_dir = saved_config_dir;
-            cfg.permanent_db_path = saved_permanent_db_path;
-            cfg.permanent_ban_enabled = saved_permanent_ban_enabled;
             cfg.log_file = saved_log_file;
             cfg.metrics_bind_address = saved_metrics_bind_address;
             cfg.metrics_username = saved_metrics_username;
@@ -147,8 +143,6 @@ pub fn load_config_directory(dir: &str, cfg: &mut Config, strict: bool) -> Resul
     let old_strict = cfg.strict_mode;
     let saved_config_file = cfg.config_file.clone();
     let saved_config_dir = cfg.config_dir.clone();
-    let saved_permanent_db_path = cfg.permanent_db_path.clone();
-    let saved_permanent_ban_enabled = cfg.permanent_ban_enabled;
     let saved_log_file = cfg.log_file.clone();
     let saved_metrics_bind_address = cfg.metrics_bind_address.clone();
     let saved_metrics_username = cfg.metrics_username.clone();
@@ -164,8 +158,6 @@ pub fn load_config_directory(dir: &str, cfg: &mut Config, strict: bool) -> Resul
             cfg.strict_mode = old_strict;
             cfg.config_file = saved_config_file;
             cfg.config_dir = saved_config_dir;
-            cfg.permanent_db_path = saved_permanent_db_path;
-            cfg.permanent_ban_enabled = saved_permanent_ban_enabled;
             cfg.log_file = saved_log_file;
             cfg.metrics_bind_address = saved_metrics_bind_address;
             cfg.metrics_username = saved_metrics_username;
@@ -177,6 +169,8 @@ pub fn load_config_directory(dir: &str, cfg: &mut Config, strict: bool) -> Resul
         }
     }
 
+    // 目录加载模式：设置 config_dir，清除 config_file（避免 reload 时只加载单个文件）
     cfg.config_dir = Some(dir.to_string());
+    cfg.config_file = None;
     Ok(())
 }

@@ -11,7 +11,6 @@ use anyhow::{bail, Context, Result};
 use super::ip_validation::validate_ip;
 use super::procfs::secure_procfs_write;
 use super::{BanAction, BANS_PATH};
-use crate::sqlite;
 use crate::types::DAEMON_STATS;
 
 use std::sync::atomic::Ordering;
@@ -64,74 +63,22 @@ pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
         bail!("NULL IP address");
     }
 
-    let validated = validate_ip(ip).with_context(|| format!("Invalid IP address: {ip}"))?;
+    let _validated = validate_ip(ip).with_context(|| format!("Invalid IP address: {ip}"))?;
 
     let cmd = format_ban_command(action, ip)?;
     secure_procfs_write(BANS_PATH, cmd.as_bytes())
         .with_context(|| format!("Failed to write to {BANS_PATH}"))?;
 
     match action {
-        BanAction::Permanent => {
-            if let Some(rc) = sqlite::with_global_db(|db| {
-                sqlite::sqlite_add_permanent_ban(
-                    db,
-                    ip,
-                    validated.ip_num,
-                    "manual permanent ban",
-                    "manual",
-                )
-            }) {
-                rc.with_context(|| {
-                    format!("SQLite add_permanent_ban failed for permanent ban {ip}")
-                })?;
-            }
-            // 全局 db 未注册 (sqlite_init 失败) → 静默跳过, 等同 C 版 sqlite_db==NULL
+        BanAction::Permanent | BanAction::Temp => {
+            // 内核封禁已通过 procfs 写入完成
         }
-        BanAction::UnbanPerm => {
-            if let Some(rc) =
-                sqlite::with_global_db(|db| sqlite::sqlite_remove_permanent_ban(db, ip))
-            {
-                rc.with_context(|| {
-                    format!("SQLite remove_permanent_ban failed for permanent unban {ip}")
-                })?;
-            }
-        }
-        BanAction::Unban => {
-            // 从内存缓存移除并更新 ban_history 状态
+        BanAction::UnbanPerm | BanAction::Unban => {
+            // 从内存缓存移除
             if let Some(cache) = crate::types::ACTIVE_BAN_CACHE.get() {
-                if cache.remove(ip).is_some() {
-                    // 更新 ban_history 状态（SQLite 不可用时降级为警告，不阻塞内核解封结果）
-                    if let Some(db) = crate::sqlite::get_global_db() {
-                        let conn = crate::sqlite::get_conn(&db);
-                        if let Err(e) = crate::sqlite_writer::update_ban_status(
-                            &conn,
-                            ip,
-                            crate::types::BanStatus::UnbannedManual,
-                        ) {
-                            crate::logger::error!(
-                                crate::logger::get(),
-                                "更新 ban_history 状态失败（数据库写入异常）";
-                                "ip" => ip,
-                                "status" => "unbanned_manual",
-                                "error" => %e
-                            );
-                        }
-                    } else {
-                        // SQLite 不可用：内核解封已生效，仅记录警告（降级模式）
-                        // 下次启动时该 IP 会从 ban_history 恢复但内核无对应规则，属预期降级
-                        crate::logger::warn!(
-                            crate::logger::get(),
-                            "SQLite 未初始化，跳过 ban_history 状态更新（降级模式）";
-                            "ip" => ip,
-                            "status" => "unbanned_manual"
-                        );
-                    }
-                    // 标记 dirty
-                    crate::sqlite_writer::mark_dirty();
-                }
+                cache.remove(ip);
             }
         }
-        BanAction::Temp => {}
     }
 
     log_ban_action(action, ip);
@@ -196,7 +143,7 @@ pub fn unban_permanent_ip(ip: &str) -> Result<()> {
 /// - `ban_duration`：封禁时长（秒），0 表示永久封禁
 pub fn ban_ip_with_history(
     ip: &str,
-    reason: &str,
+    _reason: &str,
     _jail_idx: u32,
     ban_duration: u64,
 ) -> Result<()> {
@@ -244,34 +191,6 @@ pub fn ban_ip_with_history(
             cache.remove(ip);
             return Err(e).context("Failed to ban IP in kernel");
         }
-
-        // 立即写入 SQLite ban_history（避免定时批量同步导致重复插入）
-        // 设计决策：内核封禁是 critical path，SQLite 仅用于审计/持久化。
-        // 写入失败时不回滚内核封禁（procfs 不可逆），但升级日志级别为 error
-        // 以触发告警。dirty 标志仍被设置，主循环会尝试同步。
-        if let Some(db) = crate::sqlite::get_global_db() {
-            let conn = crate::sqlite::get_conn(&db);
-            if let Err(e) = crate::sqlite_writer::insert_ban_history(&conn, &ban_info) {
-                crate::logger::error!(
-                    crate::logger::get(),
-                    "写入 ban_history 失败（内核封禁已生效但审计记录丢失）";
-                    "ip" => ip,
-                    "reason" => reason,
-                    "error" => %e
-                );
-            }
-        } else {
-            // SQLite 不可用时记录警告（降级模式）
-            crate::logger::warn!(
-                crate::logger::get(),
-                "SQLite 全局数据库未初始化，跳过 ban_history 写入（降级模式）";
-                "ip" => ip,
-                "reason" => reason
-            );
-        }
-
-        // 标记 dirty，触发主循环同步
-        crate::sqlite_writer::mark_dirty();
 
         Ok(())
     }

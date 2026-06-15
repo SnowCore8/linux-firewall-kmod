@@ -174,8 +174,8 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
     if recent_fails >= max_retries {
         // 记录触发封禁的失败统计
         let fail_count = recent_fails;
-        let window_start = entry.timestamps.first().copied().unwrap_or(now) - findtime_i64;
-        let window_end = now;
+        let _window_start = entry.timestamps.first().copied().unwrap_or(now) - findtime_i64;
+        let _window_end = now;
 
         // 复用 validate_ip 统一处理 IPv4/IPv6，验证失败时跳过而非静默使用 0
         let ip_num = match crate::ban::validate_ip(ip) {
@@ -225,86 +225,9 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
             return;
         }
         {
-            // 立即写入 SQLite ban_history（避免定时批量同步导致重复插入）
-            // 设计决策：内核封禁是 critical path，SQLite 仅用于审计/持久化。
-            // 写入失败时不回滚内核封禁（procfs 不可逆），但升级日志级别为 error
-            // 以触发告警。dirty 标志仍被设置，主循环会尝试同步。
-            if let Some(db) = crate::sqlite::get_global_db() {
-                let conn = crate::sqlite::get_conn(&db);
-                if let Err(e) = crate::sqlite_writer::insert_ban_history(&conn, &ban_info) {
-                    crate::logger::error!(
-                        crate::logger::get(),
-                        "写入 ban_history 失败（内核封禁已生效但审计记录丢失）";
-                        "ip" => ip,
-                        "jail" => &jail.name,
-                        "error" => %e
-                    );
-                }
-
-                // 写入 SQLite 失败尝试记录
-                if let Err(e) = crate::sqlite_writer::insert_failed_log(
-                    &conn,
-                    ip,
-                    &jail.name,
-                    fail_count,
-                    window_start,
-                    window_end,
-                    true,
-                ) {
-                    crate::logger::error!(
-                        crate::logger::get(),
-                        "写入 failed_attempt_logs 失败（审计 trail 丢失）";
-                        "ip" => ip,
-                        "jail" => &jail.name,
-                        "error" => %e
-                    );
-                }
-            } else {
-                // SQLite 不可用时记录警告（降级模式）
-                crate::logger::warn!(
-                    crate::logger::get(),
-                    "SQLite 全局数据库未初始化，跳过 ban_history 写入（降级模式）";
-                    "ip" => ip,
-                    "jail" => &jail.name
-                );
-            }
-
-            // 标记 dirty，触发主循环同步
-            crate::sqlite_writer::mark_dirty();
-
             // 成功封禁后移除条目, 避免重复封禁计数
             let mut hash2 = jail.failed_hash.write();
             hash2.remove(ip);
-        }
-    } else {
-        // 未达到阈值，也记录一次失败尝试（用于审计）
-        // 记录当前 IP 的失败状态，triggered_ban=false
-        let fail_count = recent_fails;
-        let window_start = entry.timestamps.first().copied().unwrap_or(now) - findtime_i64;
-        let window_end = now;
-
-        // 释放写锁后再写入 SQLite（避免锁内 IO）
-        drop(hash);
-
-        if let Some(db) = crate::sqlite::get_global_db() {
-            let conn = crate::sqlite::get_conn(&db);
-            if let Err(e) = crate::sqlite_writer::insert_failed_log(
-                &conn,
-                ip,
-                &jail.name,
-                fail_count,
-                window_start,
-                window_end,
-                false, // triggered_ban=false
-            ) {
-                crate::logger::error!(
-                    crate::logger::get(),
-                    "写入 failed_attempt_logs 失败（审计 trail 丢失）";
-                    "ip" => ip,
-                    "jail" => &jail.name,
-                    "error" => %e
-                );
-            }
         }
     }
 }

@@ -2,7 +2,7 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::types::{now_secs, DAEMON_STATS};
+use crate::types::{now_secs, DAEMON_STATS, DDOS_STATS};
 
 // ============================================================================
 // 内核统计信息读取
@@ -88,6 +88,11 @@ pub(super) fn generate_metrics() -> String {
     let lines_skipped = DAEMON_STATS.lines_skipped.load(Ordering::Relaxed);
     let regex_matches = DAEMON_STATS.regex_matches.load(Ordering::Relaxed);
 
+    // DDoS 检测指标
+    let ddos_events_detected = DDOS_STATS.events_detected.load(Ordering::Relaxed);
+    let ddos_auto_bans = DDOS_STATS.auto_bans_triggered.load(Ordering::Relaxed);
+    let ddos_tracked_ips = DDOS_STATS.tracked_ips.load(Ordering::Relaxed);
+
     let start_time = DAEMON_STATS.start_time.load(Ordering::Relaxed);
     let uptime = if start_time > 0 {
         now_secs() as u64 - start_time
@@ -147,6 +152,18 @@ pub(super) fn generate_metrics() -> String {
          # HELP firewall_daemon_regex_matches_total Total regex pattern matches across all jails\n\
          # TYPE firewall_daemon_regex_matches_total counter\n\
          firewall_daemon_regex_matches_total {regex_matches}\n\
+         \n\
+         # HELP firewall_ddos_events_detected_total Total DDoS events detected\n\
+         # TYPE firewall_ddos_events_detected_total counter\n\
+         firewall_ddos_events_detected_total {ddos_events_detected}\n\
+         \n\
+         # HELP firewall_ddos_auto_bans_total Total automatic bans triggered by DDoS detection\n\
+         # TYPE firewall_ddos_auto_bans_total counter\n\
+         firewall_ddos_auto_bans_total {ddos_auto_bans}\n\
+         \n\
+         # HELP firewall_ddos_tracked_ips_current Current number of IPs tracked for DDoS detection\n\
+         # TYPE firewall_ddos_tracked_ips_current gauge\n\
+         firewall_ddos_tracked_ips_current {ddos_tracked_ips}\n\
          \n\
          # HELP firewall_daemon_uptime_seconds Daemon uptime in seconds\n\
          # TYPE firewall_daemon_uptime_seconds gauge\n\

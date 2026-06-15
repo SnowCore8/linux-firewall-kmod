@@ -78,7 +78,7 @@ impl ConnRateEntry {
         self.conn_count = 0;
         self.fail_count = 0;
         self.window_start = now;
-        self.violation_count = 0;
+        // violation_count 不重置，需要跨检测周期累积以判断是否触发自动封禁
     }
 }
 

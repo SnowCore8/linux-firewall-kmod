@@ -37,8 +37,6 @@ use firewall_daemon::http_exporter;
 use firewall_daemon::jail;
 use firewall_daemon::logger;
 use firewall_daemon::signals::{setup_signals, GLOBAL_RELOAD, GLOBAL_RUNNING};
-use firewall_daemon::sqlite;
-use firewall_daemon::sqlite_writer;
 use firewall_daemon::types::{Config, DAEMON_STATS};
 
 /// 内核模块 procfs 根目录。启动期存在性检查
@@ -46,23 +44,15 @@ const PROCFS_DIR: &str = "/proc/firewall";
 /// 内核模块封禁命令接口。启动期存在性检查
 const BANS_PATH: &str = "/proc/firewall/bans";
 
-/// 优雅清理：关 metrics → 释放 fd → 关闭 SQLite → 关 syslog → 删 PID 文件。
-///
-/// 顺序敏感：先清全局引用再关 db，防止收尾期间 ban 模块再访问。
+/// 优雅清理：关 metrics → 释放 fd → 关 syslog → 删 PID 文件。
 ///
 /// # Arguments
 /// - `_cfg`：保留参数，占位
-/// - `sqlite_db`：可选 db 句柄（来自 [`sqlite::sqlite_init`]）
-fn cleanup(_cfg: &Config, sqlite_db: &Option<std::sync::Arc<sqlite::SqliteDb>>) {
+fn cleanup(_cfg: &Config) {
     http_exporter::stop_http_exporter();
     GLOBAL_RUNNING.store(false, Ordering::SeqCst);
     file_monitor::close_inotify();
     ban::close_cached_bans_fd();
-    // 清理顺序：先清全局引用，再关 db，防止收尾期间 ban 模块再访问
-    sqlite::clear_global_db();
-    if let Some(db) = sqlite_db {
-        sqlite::sqlite_close(db);
-    }
     if let Err(e) = fs::remove_file("/run/firewall-daemon.pid") {
         crate::logger::debug!(
             crate::logger::get(),
@@ -124,46 +114,6 @@ fn main() -> Result<()> {
     let now = firewall_daemon::types::now_secs() as u64;
     DAEMON_STATS.start_time.store(now, Ordering::Relaxed);
 
-    let mut sqlite_db: Option<std::sync::Arc<sqlite::SqliteDb>> = None;
-    if cfg.permanent_ban_enabled {
-        if let Some(ref db_path) = cfg.permanent_db_path {
-            match sqlite::sqlite_init(db_path) {
-                Ok(db) => {
-                    info!(logger::get(), "SQLite 数据库初始化成功"; "path" => %db_path);
-                    sqlite::set_global_db(db.clone());
-                    sqlite_db = Some(db);
-
-                    if let Some(ref db) = sqlite_db {
-                        match sqlite::sqlite_load_all_permanent_bans(db) {
-                            Ok(entries) if !entries.is_empty() => {
-                                let mut fail_count = 0u32;
-                                for entry in &entries {
-                                    // 用 ban::ban_ip_permanent 而非手写 procfs 命令:
-                                    //   1) 内核 procfs 不识别 "permanent" 前缀, 只认 "<ip> 0"
-                                    //   2) 复用 execute_ban_action 自动写 SQLite + 更新 ips_banned 计数
-                                    if let Err(e) = ban::ban_ip_permanent(&entry.ip) {
-                                        fail_count += 1;
-                                        error!(logger::get(), "恢复永久封禁失败（安全规则缺失）"; "ip" => &entry.ip, "error" => %e);
-                                    }
-                                }
-                                if fail_count > 0 {
-                                    error!(logger::get(), "永久封禁恢复存在失败"; "failed" => fail_count, "total" => entries.len());
-                                }
-                            }
-                            Ok(_) => {}
-                            Err(e) => {
-                                eprintln!("[ERROR] 加载永久封禁列表失败: {e}");
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[ERROR] SQLite 数据库初始化失败（永久封禁持久化不可用）: {e}");
-                }
-            }
-        }
-    }
-
     if cfg.daemon {
         // 守护进程化前不记录日志到文件，因为 fork 会导致异步日志线程丢失
         daemonize_process()?;
@@ -179,55 +129,6 @@ fn main() -> Result<()> {
     // 在守护进程化之后设置信号处理器，确保 fork 后信号处理正常工作
     setup_signals()?;
     info!(logger::get(), "信号处理器已注册");
-
-    // 初始化混合存储表结构并恢复活跃封禁
-    if let Some(ref db) = sqlite_db {
-        let conn = sqlite::get_conn(db);
-        if let Err(e) = sqlite_writer::init_tables(&conn) {
-            error!(logger::get(), "初始化混合存储表失败（致命错误，守护进程无法正常运行）"; "error" => %e);
-            bail!("Failed to initialize SQLite tables: {}", e);
-        } else {
-            info!(logger::get(), "混合存储表初始化成功");
-
-            // 从 ban_history 恢复活跃封禁到内存缓存 + 内核
-            match sqlite_writer::load_active_bans(&conn) {
-                Ok(bans) if !bans.is_empty() => {
-                    info!(logger::get(), "恢复活跃封禁条目"; "count" => bans.len());
-                    let mut restored_count = 0;
-                    let mut skipped_count = 0;
-                    for ban_info in &bans {
-                        // 跳过空 IP（防御性检查，防止脏数据导致恢复失败）
-                        if ban_info.ip.is_empty() {
-                            warn!(logger::get(), "跳过空 IP 封禁记录（脏数据）"; "jail" => &ban_info.jail_name);
-                            skipped_count += 1;
-                            continue;
-                        }
-
-                        // 重新写入内核 procfs
-                        if let Err(e) = ban::ban_ip(&ban_info.ip) {
-                            error!(logger::get(), "恢复封禁到内核失败（安全规则缺失）"; "ip" => &ban_info.ip, "error" => %e);
-                            skipped_count += 1;
-                            continue;
-                        }
-
-                        // 插入内存缓存
-                        firewall_daemon::types::ACTIVE_BAN_CACHE
-                            .get_or_init(firewall_daemon::types::ActiveBanCache::new)
-                            .insert(ban_info.clone());
-
-                        restored_count += 1;
-                    }
-                    info!(logger::get(), "活跃封禁恢复完成"; "restored" => restored_count, "skipped" => skipped_count, "total" => bans.len());
-                }
-                Ok(_) => {
-                    info!(logger::get(), "无活跃封禁条目需要恢复");
-                }
-                Err(e) => {
-                    error!(logger::get(), "加载活跃封禁条目失败（重启后安全规则可能缺失）"; "error" => %e);
-                }
-            }
-        }
-    }
 
     file_monitor::setup_inotify(&cfg)?;
     info!(logger::get(), "inotify 监控启动");
@@ -257,7 +158,7 @@ fn main() -> Result<()> {
         GLOBAL_RUNNING.load(Ordering::SeqCst)
     );
     info!(logger::get(), "开始清理流程");
-    cleanup(&cfg, &sqlite_db);
+    cleanup(&cfg);
 
     if let Some(handle) = exporter_handle {
         // 给 HTTP 导出器线程最多 2 秒优雅退出

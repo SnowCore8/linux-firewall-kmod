@@ -32,6 +32,11 @@ use super::state::{FileState, FILE_STATES, INOTIFY_STATE};
 /// # Errors
 /// 没有任何文件能被 watch (配置错误 / kmod 未加载 / 权限不足)
 pub fn setup_inotify(cfg: &Config) -> Result<()> {
+    // 关闭旧的 inotify 实例（reload 时避免 fd 泄漏）
+    if let Some(old) = INOTIFY_STATE.fd.write().take() {
+        drop(old);
+    }
+
     let inotify = Inotify::init().context("Failed to initialize inotify")?;
 
     let mut file_states = Vec::new();
@@ -73,30 +78,42 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
                 Ok(wd) => {
                     state.wd = Some(wd.clone());
                     watched_count += 1;
+                    // 只有 watch 成功时才加入列表
+                    file_states.push(state);
                 }
                 Err(e) => {
-                    crate::logger::warn!(
-                        crate::logger::get(),
-                        "添加 inotify watch 失败";
-                        "path" => log_file,
-                        "error" => %e
-                    );
+                    // 日志文件不存在是正常情况（多配置兼容），只记录 debug
+                    if !path.exists() {
+                        crate::logger::debug!(
+                            crate::logger::get(),
+                            "日志文件不存在，跳过";
+                            "path" => log_file
+                        );
+                    } else {
+                        crate::logger::warn!(
+                            crate::logger::get(),
+                            "添加 inotify watch 失败";
+                            "path" => log_file,
+                            "error" => %e
+                        );
+                    }
                 }
             }
-
-            file_states.push(state);
         }
     }
 
+    // 只有至少有一个文件 watch 成功时，才更新全局状态
+    if watched_count == 0 {
+        // 清理新创建的 inotify 实例
+        drop(inotify);
+        return Err(anyhow::anyhow!("No log files could be watched"));
+    }
+
+    // 更新全局状态
     *FILE_STATES.write() = file_states;
     let raw_fd = inotify.as_raw_fd();
     *INOTIFY_STATE.fd.write() = Some(inotify);
     INOTIFY_STATE.raw_fd.store(raw_fd, Ordering::Relaxed);
-
-    // 一个文件都没监控成功: 启动无意义, 直接退出
-    if watched_count == 0 {
-        return Err(anyhow::anyhow!("No log files could be watched initially"));
-    }
 
     Ok(())
 }

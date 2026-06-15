@@ -93,6 +93,8 @@ struct YamlConfig {
     defaults: Option<YamlDefaults>,
     #[serde(default)]
     jails: Option<HashMap<String, YamlJail>>,
+    #[serde(default)]
+    ddos: Option<YamlDdos>,
 }
 
 /// 全局默认字段集合。所有 `Option` 都是"未设置 = 使用 `Config::default()`"
@@ -106,8 +108,6 @@ struct YamlDefaults {
     metrics_bind_address: Option<String>,
     metrics_username: Option<String>,
     metrics_password: Option<String>,
-    permanent_db_path: Option<String>,
-    permanent_ban_enabled: Option<bool>,
     log_file: Option<String>,
     log_level: Option<u8>,
     log_destination: Option<String>,
@@ -133,6 +133,18 @@ struct YamlJail {
 #[derive(Debug, Deserialize)]
 struct YamlRegexEntry {
     pattern: String,
+}
+
+/// DDoS 防护配置的 YAML 表示
+#[derive(Debug, Deserialize)]
+struct YamlDdos {
+    enabled: Option<bool>,
+    per_ip_conn_rate: Option<u32>,
+    per_ip_fail_rate: Option<u32>,
+    global_conn_rate: Option<u32>,
+    auto_ban_duration: Option<u32>,
+    auto_ban_threshold: Option<u32>,
+    check_interval: Option<u32>,
 }
 
 // ============================================================================
@@ -176,12 +188,6 @@ pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
         }
         if let Some(v) = &defaults.metrics_password {
             cfg.metrics_password = Some(v.clone());
-        }
-        if let Some(v) = &defaults.permanent_db_path {
-            cfg.permanent_db_path = Some(v.clone());
-        }
-        if let Some(v) = defaults.permanent_ban_enabled {
-            cfg.permanent_ban_enabled = v;
         }
         if let Some(v) = &defaults.log_file {
             cfg.log_file = Some(v.clone());
@@ -245,6 +251,31 @@ pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
             }
 
             cfg.jails.push(jail);
+        }
+    }
+
+    // 3. 解析 ddos 部分
+    if let Some(ddos) = &yaml_config.ddos {
+        if let Some(enabled) = ddos.enabled {
+            cfg.ddos.enabled = enabled;
+        }
+        if let Some(rate) = ddos.per_ip_conn_rate {
+            cfg.ddos.per_ip_conn_rate = rate;
+        }
+        if let Some(rate) = ddos.per_ip_fail_rate {
+            cfg.ddos.per_ip_fail_rate = rate;
+        }
+        if let Some(rate) = ddos.global_conn_rate {
+            cfg.ddos.global_conn_rate = rate;
+        }
+        if let Some(duration) = ddos.auto_ban_duration {
+            cfg.ddos.auto_ban_duration = duration;
+        }
+        if let Some(threshold) = ddos.auto_ban_threshold {
+            cfg.ddos.auto_ban_threshold = threshold;
+        }
+        if let Some(interval) = ddos.check_interval {
+            cfg.ddos.check_interval = interval;
         }
     }
 
