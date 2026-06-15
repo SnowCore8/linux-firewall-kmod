@@ -196,16 +196,16 @@ pub fn get_active_bans() -> Vec<BanResponse> {
 }
 
 /// 获取 Jail 列表
-pub fn get_jails(config: &crate::types::Config) -> Vec<JailResponse> {
-    config.jails.iter()
-        .map(|jail| {
+pub fn get_jails(jail_infos: &[crate::http_exporter::JailInfo]) -> Vec<JailResponse> {
+    jail_infos.iter()
+        .map(|jail_info| {
             let ban_count = ACTIVE_BAN_CACHE.get()
-                .map(|cache| cache.get_by_jail(&jail.name).len())
+                .map(|cache| cache.get_by_jail(&jail_info.name).len())
                 .unwrap_or(0);
 
             JailResponse {
-                name: jail.name.clone(),
-                enabled: jail.enabled,
+                name: jail_info.name.clone(),
+                enabled: jail_info.enabled,
                 ban_count,
             }
         })

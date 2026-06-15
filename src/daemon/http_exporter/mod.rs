@@ -15,6 +15,30 @@ mod metrics;
 pub use lifecycle::{start_http_exporter, stop_http_exporter};
 
 // ============================================================================
+// 全局 Jail 信息存储
+// ============================================================================
+
+/// 简化的 Jail 信息（用于 /api/jails 端点，避免存储包含 RwLock 的完整 Config）
+#[derive(Clone)]
+pub struct JailInfo {
+    pub name: String,
+    pub enabled: bool,
+}
+
+/// 全局 Jail 信息存储
+static GLOBAL_JAILS: std::sync::OnceLock<Vec<JailInfo>> = std::sync::OnceLock::new();
+
+/// 设置全局 Jail 信息（在启动时调用）
+pub fn set_global_jails(jails: Vec<JailInfo>) {
+    let _ = GLOBAL_JAILS.set(jails);
+}
+
+/// 获取全局 Jail 信息（在 handler 中调用）
+pub fn get_global_jails() -> Option<&'static Vec<JailInfo>> {
+    GLOBAL_JAILS.get()
+}
+
+// ============================================================================
 // 配置参数
 // ============================================================================
 
