@@ -33,6 +33,7 @@ use firewall_daemon::ban;
 use firewall_daemon::config;
 use firewall_daemon::daemonizer::daemonize_process;
 use firewall_daemon::file_monitor;
+use firewall_daemon::history_snapshot;
 use firewall_daemon::http_exporter;
 use firewall_daemon::jail;
 use firewall_daemon::logger;
@@ -53,6 +54,7 @@ fn cleanup(_cfg: &Config) {
     GLOBAL_RUNNING.store(false, Ordering::SeqCst);
     file_monitor::close_inotify();
     ban::close_cached_bans_fd();
+    history_snapshot::close_history_db();
     if let Err(e) = fs::remove_file("/run/firewall-daemon.pid") {
         crate::logger::debug!(
             crate::logger::get(),
@@ -141,6 +143,13 @@ fn main() -> Result<()> {
 
     if let Err(e) = jail::init_log_patterns(&mut cfg) {
         warn!(logger::get(), "初始化日志模式失败"; "error" => %e);
+    }
+
+    // 初始化历史数据快照数据库
+    if let Err(e) = history_snapshot::init_history_db() {
+        warn!(logger::get(), "初始化历史数据库失败"; "error" => %e);
+    } else {
+        info!(logger::get(), "历史数据库初始化成功");
     }
 
     let mut exporter_handle = None;

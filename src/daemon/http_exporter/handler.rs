@@ -6,6 +6,7 @@ use tiny_http::{Header, Method, Request, Response, StatusCode};
 
 use super::auth::check_basic_auth;
 use super::metrics::generate_metrics;
+use crate::web_ui;
 
 // ============================================================================
 // 安全头
@@ -99,6 +100,98 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
             crate::logger::warn!(
                 crate::logger::get(),
                 "发送 /metrics 响应失败";
+                "error" => %e
+            );
+        }
+    } else if let (&Method::Get, "/") = (request.method(), url.as_str()) {
+        // 根路径重定向到 /dashboard
+        let response = Response::from_string("")
+            .with_status_code(StatusCode(302))
+            .with_header(Header::from_bytes("Location", "/dashboard").expect("静态 ASCII 头"));
+        if let Err(e) = request.respond(add_security_headers(response)) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "发送重定向响应失败";
+                "error" => %e
+            );
+        }
+    } else if let (&Method::Get, "/dashboard") = (request.method(), url.as_str()) {
+        // Dashboard 页面
+        let html = web_ui::render_dashboard();
+        let response = Response::from_string(html).with_header(
+            Header::from_bytes("Content-Type", "text/html; charset=utf-8").expect("静态 ASCII 头"),
+        );
+        if let Err(e) = request.respond(add_security_headers(response)) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "发送 /dashboard 响应失败";
+                "error" => %e
+            );
+        }
+    } else if url.starts_with("/static/") {
+        // 静态资源
+        let path = url.trim_start_matches("/static/");
+        if let Some((data, mime_type)) = web_ui::get_static_asset(path) {
+            let response = Response::from_data(data)
+                .with_header(Header::from_bytes("Content-Type", mime_type).expect("静态 ASCII 头"));
+            if let Err(e) = request.respond(add_security_headers(response)) {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "发送静态资源失败";
+                    "path" => path,
+                    "error" => %e
+                );
+            }
+        } else {
+            let body = "404 Not Found\r\n";
+            let response = Response::from_string(body).with_status_code(StatusCode(404));
+            if let Err(e) = request.respond(add_security_headers(response)) {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "发送 404 响应失败";
+                    "error" => %e
+                );
+            }
+        }
+    } else if let (&Method::Get, "/api/stats") = (request.method(), url.as_str()) {
+        // API: 统计数据
+        let stats = web_ui::api::get_stats();
+        let json = serde_json::to_string(&stats).unwrap_or_else(|_| "{}".to_string());
+        let response = Response::from_string(json).with_header(
+            Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
+        );
+        if let Err(e) = request.respond(add_security_headers(response)) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "发送 /api/stats 响应失败";
+                "error" => %e
+            );
+        }
+    } else if let (&Method::Get, "/api/bans") = (request.method(), url.as_str()) {
+        // API: 活跃封禁列表
+        let bans = web_ui::api::get_active_bans();
+        let json = serde_json::to_string(&bans).unwrap_or_else(|_| "[]".to_string());
+        let response = Response::from_string(json).with_header(
+            Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
+        );
+        if let Err(e) = request.respond(add_security_headers(response)) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "发送 /api/bans 响应失败";
+                "error" => %e
+            );
+        }
+    } else if let (&Method::Get, "/api/jails") = (request.method(), url.as_str()) {
+        // API: Jail 列表（需要配置信息）
+        let jails = Vec::<web_ui::api::JailResponse>::new(); // TODO: 从全局配置读取
+        let json = serde_json::to_string(&jails).unwrap_or_else(|_| "[]".to_string());
+        let response = Response::from_string(json).with_header(
+            Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
+        );
+        if let Err(e) = request.respond(add_security_headers(response)) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "发送 /api/jails 响应失败";
                 "error" => %e
             );
         }

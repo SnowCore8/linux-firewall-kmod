@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firewall Daemon - 监控大盘</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🛡️ Firewall Daemon 监控大盘</h1>
+            <div class="header-controls">
+                <span id="status" class="status-badge">加载中...</span>
+                <button id="refresh-btn" class="btn">手动刷新</button>
+                <select id="refresh-interval" class="select">
+                    <option value="5">5秒刷新</option>
+                    <option value="10" selected>10秒刷新</option>
+                    <option value="30">30秒刷新</option>
+                    <option value="60">60秒刷新</option>
+                    <option value="0">关闭自动刷新</option>
+                </select>
+            </div>
+        </header>
+
+        <!-- 统计卡片 -->
+        <section class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon">🚫</div>
+                <div class="stat-content">
+                    <div class="stat-label">活跃封禁</div>
+                    <div class="stat-value" id="active-bans">0</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">📊</div>
+                <div class="stat-content">
+                    <div class="stat-label">今日封禁</div>
+                    <div class="stat-value" id="today-bans">0</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">⚠️</div>
+                <div class="stat-content">
+                    <div class="stat-label">失败尝试</div>
+                    <div class="stat-value" id="failed-attempts">0</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🔥</div>
+                <div class="stat-content">
+                    <div class="stat-label">DDoS 事件</div>
+                    <div class="stat-value" id="ddos-events">0</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">⏱️</div>
+                <div class="stat-content">
+                    <div class="stat-label">运行时间</div>
+                    <div class="stat-value" id="uptime">0s</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 图表区 -->
+        <section class="charts-grid">
+            <div class="chart-card">
+                <h3>封禁趋势（24小时）</h3>
+                <canvas id="ban-trend-chart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>Jail 分布</h3>
+                <canvas id="jail-distribution-chart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>失败原因统计</h3>
+                <canvas id="failure-reasons-chart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>实时流量</h3>
+                <canvas id="traffic-chart"></canvas>
+            </div>
+        </section>
+
+        <!-- 活跃封禁列表 -->
+        <section class="table-section">
+            <h2>活跃封禁列表</h2>
+            <div class="table-controls">
+                <input type="text" id="search-input" placeholder="搜索 IP..." class="search-input">
+                <select id="jail-filter" class="select">
+                    <option value="">所有 Jail</option>
+                </select>
+            </div>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>IP 地址</th>
+                        <th>Jail</th>
+                        <th>封禁时间</th>
+                        <th>剩余时间</th>
+                        <th>原因</th>
+                    </tr>
+                </thead>
+                <tbody id="bans-table-body">
+                    <tr>
+                        <td colspan="5" class="loading">加载中...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <footer>
+            <p>Firewall Daemon v2.2.0 | <a href="/metrics">Prometheus Metrics</a></p>
+        </footer>
+    </div>
+
+    <script src="/static/chart.min.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>

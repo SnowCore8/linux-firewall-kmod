@@ -18,7 +18,8 @@
 //! - `config`: YAML 解析 (严格模式 key 白名单 + 路径安全 3 重检查 + 失败回滚)
 //! - `file_monitor`: inotify 文件监控 + 轮转检测 + 主事件循环 (poll + SIGHUP 重载)
 //! - `http_exporter`: Prometheus `/metrics` 端点 + Basic Auth + 暴力破解防护
-//! - //!
+//! - `web_ui`: Web 监控大盘 + JSON API（静态资源嵌入）
+//!
 //! # 行为对齐
 //!
 //! 所有模块均与已删除的 C 版 (`src/daemon/*.c`) 严格行为等价,通过 111 项集成测试套件
@@ -43,7 +44,7 @@
 //! | 文件监控 | `FILE_STATES` / `INOTIFY_STATE` | 主循环独占读写 |
 //! | 封禁缓存 | `ACTIVE_BAN_CACHE` (OnceLock) | 启动时初始化，运行时 ban/unban 操作 |
 //! | 统计计数 | `DAEMON_STATS` / `JAIL_STATS` / `DDOS_STATS` / `BAN_DURATION_BUCKETS` | 全 Atomic，Relaxed 序 |
-//! //! | HTTP 导出 | `EXPORTER_RUNNING` / `EXPORTER_PORT` / `AUTH_STATE` | 导出器线程 + auth 逻辑 |
+//! | HTTP 导出 | `EXPORTER_RUNNING` / `EXPORTER_PORT` / `AUTH_STATE` | 导出器线程 + auth 逻辑 |
 //! | 基础设施 | `GLOBAL_LOGGER` / `CACHED_BANS_FD` / `BANS_FD_MUTEX` / `SYNC_DIRTY` | 日志 / fd 缓存 / 同步标志 |
 //!
 //! ## 锁获取顺序（防死锁）
@@ -57,7 +58,7 @@
 //! 4. ACTIVE_BAN_CACHE.bans.write()        (RwLock, 内部)
 //! 5. ACTIVE_BAN_CACHE.by_jail.write()     (RwLock, 内部)
 //! 6. JAIL_STATS.write()                   (RwLock, OnceLock 内部)
-//! //! 7. BANS_FD_MUTEX.lock()                 (Mutex, procfs fd 缓存)
+//! 7. BANS_FD_MUTEX.lock()                 (Mutex, procfs fd 缓存)
 //! ```
 //!
 //! **规则**：
@@ -73,6 +74,7 @@ pub mod ddos_detector;
 pub mod failed_tracker;
 pub mod file_monitor;
 pub mod file_reader;
+pub mod history_snapshot;
 pub mod http_exporter;
 pub mod jail;
 pub mod line_processor;
@@ -81,3 +83,4 @@ pub mod log_rotation;
 pub mod logger;
 pub mod signals;
 pub mod types;
+pub mod web_ui;
