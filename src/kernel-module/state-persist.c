@@ -360,7 +360,6 @@ int restore_state_from_file(const char *filename) {
     bytes_read += chunk;
   }
 
-
   if (bytes_read > 0) {
     buffer[bytes_read] = '\0';
 

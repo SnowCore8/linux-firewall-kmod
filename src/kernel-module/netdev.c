@@ -184,7 +184,6 @@ void sync_work_handler(struct work_struct *work) {
 
   kfree(lookup_table);
   kfree(current_ips);
-
 }
 
 /*
@@ -198,7 +197,6 @@ void sync_system_ips(struct firewall_info *fw) {
   }
 
   mod_delayed_work(system_wq, &fw->sync_work, delay);
-
 }
 EXPORT_SYMBOL_GPL(sync_system_ips);
 
@@ -254,7 +252,6 @@ EXPORT_SYMBOL_GPL(register_netdev_notifier);
  * unregister_netdev_notifier - 注销网络设备事件监听器
  */
 void unregister_netdev_notifier(struct firewall_info *fw) {
-
   if (fw->netdev_notifier_registered) {
     unregister_netdevice_notifier(&fw->netdev_notifier);
     fw->netdev_notifier_registered = false;
@@ -336,6 +333,5 @@ void auto_discover_system_ips(struct firewall_info *fw) {
   }
 
   kfree(temp_ips);
-
 }
 EXPORT_SYMBOL_GPL(auto_discover_system_ips);

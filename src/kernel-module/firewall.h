@@ -39,12 +39,6 @@ struct fw_per_cpu_stats {
 /* R9-1: Per-CPU counter flush function (called from cleanup timer) */
 void fw_flush_cpu_stats(void);
 
-
-
-
-
-
-
 #define BAN_HASH_BITS 12
 #define MAX_BAN_ENTRIES (1 << BAN_HASH_BITS) /* 4096 个条目 */
 #define DEFAULT_BAN_TIME 600                 /* 10 分钟（秒） */

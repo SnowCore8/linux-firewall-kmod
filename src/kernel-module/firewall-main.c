@@ -171,8 +171,7 @@ static int __init firewall_init(void) {
     goto err_nf_ipv4;
   }
 
-  pr_info("模块初始化成功 (ban_time=%u, max_bans/s=%u)\n",
-          fw_ban_time, fw_max_bans_per_second);
+  pr_info("模块初始化成功 (ban_time=%u, max_bans/s=%u)\n", fw_ban_time, fw_max_bans_per_second);
   return 0;
 
 err_nf_ipv4:
