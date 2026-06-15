@@ -78,10 +78,10 @@ pub(crate) fn ensure_db_dir(db_path: &str) -> Result<()> {
         let dir_str = normalized.to_string_lossy();
 
         // 前缀匹配: 阻止系统敏感目录及其所有子目录
-        // 例如 /var/lib/firewall/db.sqlite → 前缀 /var → 拒绝
+        // 注意: /var 不在黑名单中，因为 /var/lib 是应用程序状态数据的标准位置 (FHS)
         const BLOCKED_PREFIXES: &[&str] = &[
             "/etc", "/usr", "/bin", "/sbin", "/boot", "/dev", "/lib", "/lib64", "/opt", "/proc",
-            "/sys", "/run", "/var",
+            "/sys", "/run",
         ];
 
         for prefix in BLOCKED_PREFIXES {
