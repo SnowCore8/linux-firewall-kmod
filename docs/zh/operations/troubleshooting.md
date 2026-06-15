@@ -220,63 +220,6 @@ fs.inotify.max_user_watches = 524288
 fs.inotify.max_queued_events = 32768
 ```
 
-### 封禁重启后丢失
-
-**症状**：重启服务器后所有封禁记录丢失。
-
-**排查步骤**：
-
-```bash
-# 检查 SQLite 数据库
-ls -la /var/lib/firewall/bans.db
-
-# 检查数据库内容
-sqlite3 /var/lib/firewall/bans.db "SELECT COUNT(*) FROM bans;"
-
-# 检查守护进程启动日志
-journalctl -u firewall-daemon | grep -i "restore\|recover"
-```
-
-**常见原因**：
-
-| 原因 | 解决方案 |
-|------|----------|
-| 数据库路径错误 | 检查 `db_path` 配置 |
-| 数据库权限 | `chmod 644 /var/lib/firewall/bans.db` |
-| SQLite 损坏 | 备份并重建数据库 |
-
-### 永久黑名单 SQLite 不创建
-
-**症状**：
-
-- 守护进程运行但 `/var/lib/firewall/bans.db` 不存在
-- prometheus `firewall_daemon_*` 指标工作正常
-- `journalctl -u firewall-daemon` 没有 "SQLite database initialized" 日志
-
-**诊断**：
-
-1. 查 `cfg.permanent_ban_enabled` 的实际值(daemon 启动时若为 `false` 就不会初始化 SQLite)。
-2. 查 `/etc/firewall/default.yaml` 中 `permanent_ban_enabled` 和 `permanent_db_path` 的位置。
-3. 如果这俩字段在顶层(在 `jails:` 之后),Rust parser 静默忽略 — 整个 `defaults:` 块以外的字段都不会进入 `Config` 结构体。
-
-**修复**：
-
-```yaml
-# 错误 (字段在顶层,被静默忽略):
-jails:
-  sshd: ...
-permanent_ban_enabled: true        # ← 顶层,parser 看不到
-permanent_db_path: "/var/lib/firewall/bans.db"
-
-# 正确 (字段必须在 defaults: 内):
-defaults:
-  ...
-  permanent_ban_enabled: true      # ← defaults: 内部
-  permanent_db_path: "/var/lib/firewall/bans.db"
-jails:
-  sshd: ...
-```
-
 ### 守护进程无法打开 /var/log/firewall.log
 
 **症状**：启动时日志出现：
@@ -318,8 +261,6 @@ sudo systemctl restart firewall-daemon
 ### 测试报 "bans.db 未找到"
 
 **症状**：`make test` 跑 `tests/suites/12_permanent_ban.sh` 时部分 case 失败,提示 "bans.db not found" 或 "no such file or directory"。
-
-**原因**：与 [永久黑名单 SQLite 不创建](#永久黑名单-sqlite-不创建) 同根因 — `permanent_ban_enabled: true` 没写在 `defaults:` 内,daemon 跳过了 SQLite 初始化。
 
 **修复**：把 `permanent_ban_enabled` 和 `permanent_db_path` 移到 `defaults:` 块内,然后:
 

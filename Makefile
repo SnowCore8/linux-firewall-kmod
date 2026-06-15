@@ -163,7 +163,7 @@ ifeq ($(DESTDIR),)
 	@echo "Next Steps:"
 	@echo "  • View logs:    journalctl -u firewall-daemon.service -f"
 	@echo "  • Check status: systemctl status firewall-daemon.service"
-	@echo "  • View bans:    sqlite3 /var/lib/firewall/bans.db 'SELECT * FROM permanent_banlist;'"
+	@echo "  • View metrics: curl http://localhost:9119/metrics"
 	@echo ""
 else
 	@echo "Note: DESTDIR mode - service not started. After package installation:"

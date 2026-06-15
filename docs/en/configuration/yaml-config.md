@@ -151,8 +151,7 @@ The following IP is always protected, no manual configuration needed:
 
 ## Permanent Ban
 
-Permanent bans (`ban_time: 0`) are written to a SQLite database so they survive daemon restarts and crashes.
-
+Permanent bans (`ban_time: 0`) are kept in memory and lost on restart.
 ```yaml
 defaults:
   # ... other fields
@@ -162,10 +161,6 @@ defaults:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `permanent_db_path` | string | `/var/lib/firewall/bans.db` | SQLite database path |
-| `permanent_ban_enabled` | bool | `false` | Enable permanent-ban persistence. The SQLite store is only initialized and written when this is `true`. |
-
-> **Critical**: `permanent_db_path` and `permanent_ban_enabled` **must** live under the `defaults:` block — **do not** place them at the top level (sibling of `jails:` or after it). This is a real bug fixed in v2.2.1 — top-level placement is **silently ignored** by the parser, so SQLite is never initialized. See the next section, "Pitfalls", for details.
 
 ## Pitfalls
 
@@ -205,15 +200,6 @@ jails:
   sshd: ...
 ```
 
-### Troubleshooting checklist
-
-If permanent-ban is enabled but the SQLite database is never created:
-
-1. Run `grep -n "permanent_" /etc/firewall/default.yaml` to confirm the fields are present.
-2. Check indentation — the fields must be **siblings** of `max_retries` / `findtime`, all under `defaults:`.
-3. Run `firewall-daemon -t` for a dry-run and look for a "DB initialized at ..." log line.
-4. Check the startup log for a "permanent ban persistence enabled" message.
-
 ## Logging
 
 The `log_info!` / `log_warn!` / `log_error!` / `log_debug!` macros **no longer have rate-limited variants** (the old `log_warn_ratelimited!` and the global `RATELIMIT_STATE` mutex + 60-second throttle have been removed). Every call is emitted directly — no merging or dedup. To reduce noise, set `log_level` (`info` / `warn` / `error` / `debug`) in the config.
@@ -232,7 +218,6 @@ defaults:
   ban_time: 900         # 15 minutes
   interval: 1           # Check interval (seconds)
   metrics_port: 9119    # Prometheus metrics port
-  # Permanent-ban persistence (SQLite) — must live under defaults:
   permanent_db_path: "/var/lib/firewall/bans.db"
   permanent_ban_enabled: true   # default false
 

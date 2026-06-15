@@ -20,7 +20,6 @@
 sudo apt install -y \
     build-essential \
     linux-headers-$(uname -r) \
-    libsqlite3-dev \
     pkg-config \
     clang \
     cmake

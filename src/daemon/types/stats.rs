@@ -111,7 +111,7 @@ impl JailStatsCounters {
         }
     }
 
-    /// 快照当前计数值 (用于定期写入 SQLite 和 metrics 导出)
+    /// 快照当前计数值 (用于 metrics 导出)
     #[must_use]
     pub fn snapshot(&self) -> JailStatsSnapshot {
         JailStatsSnapshot {
@@ -125,7 +125,7 @@ impl JailStatsCounters {
     }
 }
 
-/// Jail 统计快照 — 从 `JailStatsCounters` 读取的瞬时值,用于 SQLite 写入
+/// Jail 统计快照 — 从 `JailStatsCounters` 读取的瞬时值,用于指标导出
 #[derive(Debug, Clone)]
 pub struct JailStatsSnapshot {
     pub jail_name: String,

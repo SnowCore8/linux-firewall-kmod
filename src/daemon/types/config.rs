@@ -130,7 +130,7 @@ impl Default for RetentionConfig {
     }
 }
 
-/// 异步 SQLite 写入器配置
+/// 异步写入器配置
 #[derive(Debug, Clone)]
 pub struct WriterConfig {
     /// bounded channel 容量 (默认 1000)

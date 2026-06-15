@@ -10,7 +10,7 @@ This document guides you through migrating existing fail2ban configurations to t
 | Performance | Slower with more rules | O(1) hash lookup, constant performance |
 | Regex Engine | Python re | PCRE2 |
 | Config Format | INI format | YAML format |
-| Persistence | None (requires extra config) | SQLite built-in |
+| Persistence | None (in-memory only) | None (in-memory only) |
 | Monitoring | None built-in | Prometheus metrics |
 | Language | Python | C (kernel + userspace) |
 

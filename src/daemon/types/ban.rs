@@ -22,7 +22,7 @@ pub enum BanReason {
 }
 
 impl BanReason {
-    /// 转为 SQLite 存储的文本标识
+    /// 转为文本标识
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -33,7 +33,7 @@ impl BanReason {
         }
     }
 
-    /// 从 SQLite 文本标识还原枚举,未知值回退到 `FailedAttempts`
+    /// 从文本标识还原枚举,未知值回退到 `FailedAttempts`
     #[must_use]
     pub fn parse(s: &str) -> Self {
         match s {
@@ -84,7 +84,7 @@ impl BanStatus {
 // 封禁信息
 // ============================================================================
 
-/// 单条封禁的完整信息 — 同时用于内存缓存 (`ActiveBanCache`) 和 SQLite 行映射
+/// 单条封禁的完整信息 — 用于内存缓存 (`ActiveBanCache`)
 #[derive(Debug, Clone)]
 pub struct BanInfo {
     /// IP 文本表示 (IPv4 或 IPv6)
@@ -127,12 +127,11 @@ impl BanInfo {
 // 活跃封禁缓存
 // ============================================================================
 
-/// 活跃封禁内存缓存 — L1 层权威源,SQLite 为 L2 持久化备份
+/// 活跃封禁内存缓存 — 内存权威存储
 ///
 /// 设计要点:
 /// - `bans`: IP → BanInfo,`parking_lot::RwLock` 保护读写并发
 /// - `by_jail`: jail_name → IP 集合,支持按 jail 维度快速查询
-/// - 所有写操作先更新内存,再通过 `SqliteWriter` 异步持久化
 #[derive(Debug)]
 pub struct ActiveBanCache {
     /// IP → 封禁信息
@@ -295,6 +294,6 @@ impl ActiveBanCache {
 /// 全局活跃封禁缓存实例
 ///
 /// 与 `ActiveBanCache::new()` 等价,但作为全局单例供所有模块访问。
-/// 启动时从 SQLite 恢复,运行时由 `ban` 模块更新。
+/// 运行时由 `ban` 模块更新。
 /// 使用 `OnceLock` 延迟初始化,避免 const 构造限制。
 pub static ACTIVE_BAN_CACHE: std::sync::OnceLock<ActiveBanCache> = std::sync::OnceLock::new();

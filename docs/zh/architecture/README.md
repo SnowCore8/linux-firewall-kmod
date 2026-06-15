@@ -12,12 +12,10 @@ graph TB
         subgraph Daemon["firewall-daemon 守护进程"]
             Inotify["inotify 监控"]
             REGEX["正则匹配"]
-            SQLite["SQLite/HTTP 持久化/指标"]
             ProcFS_Client["配置下发 ProcFS"]
 
             Inotify --> ProcFS_Client
             REGEX --> ProcFS_Client
-            SQLite --> ProcFS_Client
         end
     end
 
@@ -47,7 +45,7 @@ graph TB
 |------|------|
 | 高性能 | Netfilter Hook 直接处理，无 iptables 规则遍历 |
 | 低延迟 | O(1) 哈希查找，RCU 无锁读 |
-| 高可用 | SQLite 持久化，重启恢复封禁状态 |
+| 高可用 | 内存缓存，重启后封禁失效 |
 | 安全性 | 白名单保护，防止误封关键服务 |
 | 可观测性 | ProcFS + Prometheus 双重监控 |
 
@@ -79,4 +77,4 @@ graph TB
 | 内核模块 | 内核 | 数据包过滤、IP 封禁管理 |
 | 守护进程 | 用户 | 日志监控、正则匹配、配置下发 |
 | ProcFS | 内核/用户 | 配置接口、状态查询 |
-| SQLite | 用户 | 封禁记录持久化 |
+| 内存缓存 | 用户 | 运行时封禁跟踪 |

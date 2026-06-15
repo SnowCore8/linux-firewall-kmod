@@ -7,12 +7,12 @@
 //! 3. **智能默认 + 校验** ([`jail::apply_smart_defaults_to_all`] / [`jail::config_validate`])
 //! 4. **信号注册** ([`signals::setup_signals`]):SIGTERM/SIGINT 触发优雅退出、SIGHUP 触发热重载、SIGPIPE 忽略
 //! 5. **procfs 前置检查**:`/proc/firewall` 存在性 + `/proc/firewall/bans` 存在性
-//! 6. **SQLite 初始化** (可选):加载 → 注册全局 → 恢复所有永久黑名单到内核
+//! 
 //! 7. **守护进程化** ([`daemonizer::daemonize_process`]):双 fork + setsid + chdir / + 写 PID + 重定向 fd
 //! 8. **inotify 启动** ([`file_monitor::setup_inotify`])
 //! 9. **Metrics 导出器启动** ([`http_exporter::start_http_exporter`])
 //! 10. **主循环** ([`file_monitor::monitor_loop`]):阻塞直到 `running=false`
-//! 11. **清理** ([`cleanup`]):关 metrics → 释放 fd → 关闭 SQLite → 关 syslog → 删 PID 文件
+//! 11. **清理** ([`cleanup`]):关 metrics → 释放 fd → 关 syslog → 删 PID 文件
 //!
 //! # 关键不变量
 //!

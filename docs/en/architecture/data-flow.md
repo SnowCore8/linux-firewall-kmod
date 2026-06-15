@@ -46,8 +46,7 @@ graph TB
     I -->|Yes| J[Ban Active]
     I -->|No| K[Write to Kernel /proc/.../config]
     K --> L[Kernel adds to hash table]
-    L --> M[Record to SQLite]
-    M --> N[Update Prometheus metrics]
+        M --> N[Update Prometheus metrics]
     N --> O[Ban Active]
 ```
 
@@ -61,8 +60,7 @@ graph TB
     B --> C{expire_time < current?}
     C -->|No| D[Retain]
     C -->|Yes| E[Remove from hash table]
-    E --> F[Delete from SQLite]
-    F --> G[Update Metrics]
+        F --> G[Update Metrics]
 ```
 
 ### Manual Unban
@@ -71,8 +69,7 @@ graph TB
 graph TB
     A["echo 'unban <ip>' | sudo tee /proc/firewall/bans"] --> B[Write to ProcFS echo "unban"]
     B --> C[Kernel removes from hash table]
-    C --> D[Delete from SQLite]
-    D --> E[Update Metrics]
+        D --> E[Update Metrics]
 ```
 
 ## Inter-Component Communication
@@ -101,7 +98,6 @@ graph TB
 
 | Component | Communication | Data |
 |-----------|---------------|------|
-| Daemon -> SQLite | File I/O | Ban records |
 | Daemon -> Prometheus | HTTP (tiny_http) | Metrics data |
 | Daemon -> Log | File I/O | Operation logs |
 
@@ -114,7 +110,6 @@ sequenceDiagram
     participant L as LogFile
     participant D as Daemon
     participant K as Kernel
-    participant S as SQLite
     participant P as Prometheus
 
     L->>D: IN_MODIFY

@@ -7,7 +7,6 @@ This section describes the configuration methods and options for the Linux Firew
 | File | Path | Purpose |
 |------|------|---------|
 | Main config | `/etc/firewall/default.yaml` | Global settings and jail definitions |
-| Database | `/var/lib/firewall/bans.db` | SQLite persistent ban records |
 | Log file | `/var/log/firewall.log` | Daemon log (independent of syslog) |
 
 ## Configuration Hierarchy
@@ -103,7 +102,6 @@ defaults:
 3. Loads whitelist into kernel (up to 64 entries)
 4. Initializes each enabled jail
 5. Registers inotify watches for log files
-6. Restores unexpired bans from SQLite
 
 ## Runtime Modifications
 

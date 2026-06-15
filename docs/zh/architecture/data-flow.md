@@ -39,7 +39,6 @@ sequenceDiagram
     participant Log as 日志文件
     participant Daemon as 守护进程
     participant Kernel as 内核模块
-    participant SQLite as SQLite
     participant Prometheus as Prometheus
 
     Log->>Daemon: IN_MODIFY 通知
@@ -48,7 +47,6 @@ sequenceDiagram
     Daemon->>Daemon: 计数+1, 检查阈值
     Daemon->>Kernel: ban 1.2.3.4 (ProcFS)
     Kernel->>Kernel: 添加封禁到哈希表
-    Kernel->>SQLite: INSERT 记录
     Kernel->>Prometheus: 更新指标
 ```
 
@@ -62,8 +60,7 @@ graph TB
     B --> C{"expire_time < current?"}
     C -->|否| D["保留"]
     C -->|是| E["从哈希表移除"]
-    E --> F["从 SQLite 删除"]
-    F --> G["更新指标"]
+        F --> G["更新指标"]
 ```
 
 ### 手动解封
@@ -72,8 +69,7 @@ graph TB
 graph TB
     A["echo unban ip | sudo tee /proc/firewall/bans"] --> B["写入 ProcFS"]
     B --> C["内核从哈希表移除条目"]
-    C --> D["从 SQLite 删除"]
-    D --> E["更新指标"]
+        D --> E["更新指标"]
 ```
 
 ## 组件间通信
@@ -101,7 +97,6 @@ graph TB
 
 | 组件 | 通信方式 | 数据 |
 |------|----------|------|
-| 守护进程 → SQLite | 文件 I/O | 封禁记录 |
 | 守护进程 → Prometheus | HTTP (tiny_http) | 指标数据 |
 | 守护进程 → 日志 | 文件 I/O | 运行日志 |
 
@@ -114,7 +109,6 @@ sequenceDiagram
     participant Log as 日志文件
     participant Daemon as 守护进程
     participant Kernel as 内核模块
-    participant SQLite as SQLite
     participant Prometheus as Prometheus
 
     Log->>Daemon: IN_MODIFY
@@ -123,7 +117,6 @@ sequenceDiagram
     Daemon->>Daemon: 计数+1, 检查阈值
     Daemon->>Kernel: ban 1.2.3.4 (ProcFS)
     Kernel->>Kernel: 添加封禁
-    Kernel->>SQLite: INSERT
     Kernel->>Prometheus: 更新指标
 ```
 

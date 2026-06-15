@@ -18,7 +18,6 @@
 |------|------|
 | Rust | 主要编程语言（12 个模块，约 7000 行） |
 | regex | 正则表达式编译和匹配（PCRE2 语法） |
-| rusqlite + bundled SQLite | 封禁记录持久化存储（`rusqlite` 静态链接 SQLite，零运行时依赖） |
 | tiny_http | Prometheus HTTP 指标服务器（端口 9119） |
 | inotify | Linux 文件变化监控（直接使用 `inotify` crate 绑定，未通过 `notify` 抽象层） |
 
@@ -37,7 +36,6 @@
 | `ban` | 封禁触发逻辑：`max_retries` / `findtime` / `ban_time` 判定，调用 ProcFS 下发 |
 | `jail` | jail 生命周期管理：创建 / 启停 / 热重载差异合并 |
 | `file_monitor` | `inotify` 监听 + 日志轮转检测 + inode 重连 |
-| `sqlite_store` | `rusqlite` 封装：建表、INSERT 封禁、DELETE 过期、启动期恢复 |
 | `http_exporter` | `tiny_http` HTTP 服务，14 个 Prometheus 指标（10 daemon + 4 kernel） |
 | `main` | CLI 解析、信号注册、`epoll` 主循环、tokio runtime 启动 |
 
@@ -50,7 +48,6 @@ graph LR
     lib --> ban
     lib --> jail
     lib --> file_monitor
-    lib --> sqlite_store
     lib --> http_exporter
     lib --> log
     config_parser --> types
@@ -58,8 +55,6 @@ graph LR
     failed_tracker --> types
     ban --> types
     jail --> types
-    sqlite_store --> types
-    ban --> sqlite_store
     ban --> file_monitor
     file_monitor --> log
     http_exporter --> log
@@ -114,7 +109,6 @@ graph TB
         
         subgraph Output["输出接口"]
             ProcFS["ProcFS 内核"]
-            SQLite["SQLite 持久化"]
             Prometheus["Prometheus :9119"]
         end
         
@@ -134,7 +128,6 @@ graph LR
     A["main"] --> B["解析命令行参数"]
     B --> C["读取 YAML 配置文件"]
     C --> D["初始化日志"]
-    D --> E["初始化 SQLite 数据库"]
     E --> E1["恢复未过期的封禁记录"]
     E --> F["初始化正则表达式"]
     F --> F1["为每个 jail 编译 regex"]
@@ -232,7 +225,6 @@ graph TB
     D -->|否| E["重置计数器"]
     D -->|是| F["触发封禁"]
     F --> G["写入内核 ProcFS"]
-    F --> H["记录到 SQLite"]
     F --> I["更新指标"]
 ```
 
@@ -260,7 +252,6 @@ graph LR
     T900 ~~~ W4
 ```
 
-## SQLite 持久化
 
 ### 数据库 Schema
 

@@ -18,7 +18,6 @@ Linux Firewall 内核模块是一个高性能的 IP 封禁解决方案，作为�
 | ProcFS 接口 | 通过 `/proc` 文件系统进行管理和监控 |
 | 正则匹配 | 用户态守护进程支持正则表达式匹配日志 |
 | RCU 并发 | 使用 Read-Copy-Update 实现高并发安全 |
-| SQLite 持久化 | 封禁记录持久化存储，重启不丢失 |
 | Prometheus 指标 | 内置 HTTP 服务器，端口 9119 暴露指标 |
 
 ## 系统架构
@@ -42,7 +41,7 @@ graph TB
     subgraph USERSPACE[用户空间]
         DAEMON --> INOTIFY[inotify 日志监控]
         DAEMON --> REGEX[正则匹配]
-        DAEMON --> SQLITE[SQLite 持久化]
+        DAEMON -->
         DAEMON --> PROM[Prometheus Metrics :9119]
     end
 ```
@@ -60,7 +59,6 @@ graph TB
 | 依赖 | 用途 |
 |------|------|
 | linux-headers | 内核模块编译 |
-| libsqlite3 | 封禁记录持久化 |
 
 ## 快速开始
 

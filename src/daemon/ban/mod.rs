@@ -53,10 +53,10 @@ pub const BANS_PATH: &str = "/proc/firewall/bans";
 pub enum BanAction {
     /// 临时封禁（写 `<ip>\n`，内核按 `ban_time` 自动解封）
     Temp,
-    /// 永久封禁（写 `<ip> 0\n`，同时写 `SQLite`）
+    /// 永久封禁（写 `<ip> 0\n`）
     Permanent,
     /// 解封临时封禁（写 `unban <ip>\n`）
     Unban,
-    /// 解封永久封禁（写 `unban <ip>\n`，同时 `SQLite` `is_active=0`）
+    /// 解封永久封禁（写 `unban <ip>\n`）
     UnbanPerm,
 }

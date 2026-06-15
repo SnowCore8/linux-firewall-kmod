@@ -86,7 +86,7 @@ impl ConnRateEntry {
 // DDoS 事件记录
 // ============================================================================
 
-/// DDoS 事件记录 (用于 SQLite 持久化)
+/// DDoS 事件记录 
 #[derive(Debug, Clone)]
 pub struct DdosEvent {
     /// 触发事件的 IP 地址

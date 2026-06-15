@@ -32,7 +32,6 @@ sudo apt update
 sudo apt install -y \
     build-essential \
     linux-headers-$(uname -r) \
-    libsqlite3-dev \
     pkg-config
 ```
 
@@ -43,7 +42,6 @@ sudo dnf install -y \
     gcc gcc-c++ make \
     kernel-devel-$(uname -r) \
     kernel-headers-$(uname -r) \
-    sqlite-devel \
     pkg-config
 ```
 
@@ -53,7 +51,6 @@ sudo dnf install -y \
 sudo pacman -S --needed \
     base-devel \
     linux-headers \
-    sqlite \
     pkg-config
 ```
 

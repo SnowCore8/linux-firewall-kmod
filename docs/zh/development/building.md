@@ -190,7 +190,7 @@ ls -lh build/deb/
 | `/etc/firewall/*.yaml` | YAML 配置 |
 | `/etc/systemd/system/firewall-daemon.service` | systemd 单元 |
 | `/var/log/firewall.log` | 守护进程独立日志（`logrotate` 30 天） |
-| `/var/lib/firewall/` | 运行时状态目录（SQLite 库等） |
+| `/var/lib/firewall/` | 运行时状态目录 |
 
 ### 版本号行为
 

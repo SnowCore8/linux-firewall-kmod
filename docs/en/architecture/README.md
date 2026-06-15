@@ -12,12 +12,10 @@ graph TB
         subgraph Daemon["firewall-daemon Daemon"]
             Inotify["inotify Monitor"]
             Regex["Regex Engine"]
-            SQLite["SQLite/HTTP Persist/Metrics"]
             ProcFS_Client["Config Dispatch ProcFS"]
 
             Inotify --> ProcFS_Client
             Regex --> ProcFS_Client
-            SQLite --> ProcFS_Client
         end
     end
 
@@ -47,7 +45,7 @@ graph TB
 |-----------|----------------|
 | High Performance | Netfilter Hook direct processing, no iptables rule traversal |
 | Low Latency | O(1) hash lookup, RCU lock-free reads |
-| High Availability | SQLite persistence, ban state recovery on reboot |
+| High Availability | In-memory cache, bans lost on reboot |
 | Security | Whitelist protection, prevents banning critical services |
 | Observability | Dual monitoring via ProcFS + Prometheus |
 
@@ -86,4 +84,4 @@ sequenceDiagram
 | Kernel Module | Kernel | Packet filtering, IP ban management |
 | Daemon | Userspace | Log monitoring, regex matching, config dispatch |
 | ProcFS | Kernel/Userspace | Configuration interface, status queries |
-| SQLite | Userspace | Ban record persistence |
+| Memory Cache | Userspace | Runtime ban tracking |

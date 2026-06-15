@@ -48,22 +48,6 @@
         ]
       },
       {
-        "type": "stat",
-        "title": "SQLite WAL Size",
-        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
-        "targets": [
-          {
-            "expr": "firewall_sqlite_wal_size_bytes",
-            "legendFormat": "WAL Size"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "unit": "bytes"
-          }
-        }
-      },
-      {
         "type": "graph",
         "title": "Lines Parsed Rate",
         "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},

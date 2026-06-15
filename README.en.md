@@ -22,7 +22,7 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 | Response Time | Seconds | Milliseconds |
 | Resource Usage | Python interpreter + full dep chain | Single-file 3.8MB Rust binary |
 | Lookup Performance | Linear rule scan | Hash table O(1) lookup |
-| Permanent Ban | Config file | SQLite WAL + soft-delete + startup restore |
+| Permanent Ban | Config file | In-memory, lost on restart |
 
 ## Core Features
 
@@ -36,11 +36,10 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 - ✅ **Regex parsing** — named capture groups for IP extraction
 - ✅ **RCU concurrency safety** — spinlock protected, high-concurrency safe
 - ✅ **Strict config validation** — unknown params rejected by default
-- ✅ **State persistence** — SQLite WAL + soft-delete for permanent ban recovery
 - ✅ **Prometheus metrics** — 14 metrics on port 9119 (4 kernel + 10 user-space)
 - ✅ **Independent log file** — `cfg.log_file` default `/var/log/firewall.log`, falls back to syslog-only on open failure
 - ✅ **Security hardening** — Integer overflow protection, UAF fix, RCU consistency, 19 `unsafe` blocks all with `// SAFETY:` comments
-- ✅ **Performance optimization** — Hash table 4096, SQLite statement cache, whitelist two-stage match, LTO compilation
+- ✅ **Performance optimization** — Hash table 4096, whitelist two-stage match, LTO compilation
 - ✅ **Code quality** — 108 unit tests + 107 integration tests 100% pass, CI three jobs all green
 
 ## Quick Start

@@ -152,7 +152,6 @@ int whitelist_check(__be32 ip);
 
 - YAML 配置 schema / 字段含义(例如新增 `defaults:` 块下的字段)
 - procfs 命令接口(增减 `/proc/firewall/*` 节点)
-- SQLite schema(`bans.db` 表结构 / 索引 / 迁移)
 - 守护进程与内核模块的交互协议(`/proc/firewall/ban` 写入格式等)
 
 跑测试时 `tests/run_tests.sh` 会自动 `source ~/.cargo/env` 把 `cargo` 加进 PATH,但 Rust 单元测试推荐直接在仓库根目录跑 `cargo test`。

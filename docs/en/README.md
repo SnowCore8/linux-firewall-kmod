@@ -18,7 +18,7 @@ Linux Firewall Kernel Module is a high-performance IP banning solution designed 
 | ProcFS Interface | Management and monitoring via `/proc` filesystem |
 | Regex Matching | Userspace daemon supports configurable regex for log matching |
 | RCU Concurrency | Read-Copy-Update for high-concurrency safety |
-| SQLite Persistence | Banned records persisted across reboots |
+| In-Memory Cache | Runtime ban tracking, lost on reboot |
 | Prometheus Metrics | Built-in HTTP server exposing metrics on port 9119 |
 
 ## System Architecture
@@ -45,12 +45,10 @@ graph TB
         Daemon["Daemon (Rust)"]
         Inotify["inotify Monitor"]
         Regex["Regex Engine"]
-        SQLite["SQLite Persist"]
         Prometheus["Prometheus Metrics (:9119)"]
 
         Daemon --> Inotify
         Daemon --> Regex
-        Daemon --> SQLite
         Daemon --> Prometheus
     end
 
@@ -71,7 +69,6 @@ graph TB
 | Dependency | Purpose |
 |------------|---------|
 | linux-headers | Kernel module compilation |
-| libsqlite3 | Ban record persistence |
 
 ## Quick Start
 

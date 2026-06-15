@@ -18,7 +18,6 @@ The daemon `firewall-daemon` runs in userspace and is responsible for:
 |-----------|---------|
 | Rust | Primary programming language (12 modules, ~7000 lines) |
 | regex | PCRE2 regex compilation and matching |
-| rusqlite + bundled SQLite | Ban record persistent storage (`rusqlite` statically links SQLite — zero runtime dependency) |
 | tiny_http | Prometheus HTTP metrics server (port 9119) |
 | inotify | Linux file change monitoring (uses the `inotify` crate directly, not the `notify` abstraction) |
 
@@ -37,7 +36,6 @@ The daemon is split into 12 Rust modules (including `lib.rs`) under `daemon/`, e
 | `ban` | Ban-trigger logic: `max_retries` / `findtime` / `ban_time` evaluation, ProcFS issuance. |
 | `jail` | Jail lifecycle management: create / enable / disable, hot-reload diff merging. |
 | `file_monitor` | `inotify` watches, log-rotation detection, inode re-attach. |
-| `sqlite_store` | `rusqlite` wrapper: schema bootstrap, ban INSERT, expired DELETE, startup restore. |
 | `http_exporter` | `tiny_http` HTTP server exposing 14 Prometheus metrics (10 daemon + 4 kernel). |
 | `main` | CLI parsing, signal registration, `epoll` main loop, tokio runtime bootstrap. |
 
@@ -50,7 +48,6 @@ graph LR
     lib --> ban
     lib --> jail
     lib --> file_monitor
-    lib --> sqlite_store
     lib --> http_exporter
     lib --> log
     config_parser --> types
@@ -58,8 +55,6 @@ graph LR
     failed_tracker --> types
     ban --> types
     jail --> types
-    sqlite_store --> types
-    ban --> sqlite_store
     ban --> file_monitor
     file_monitor --> log
     http_exporter --> log
@@ -114,7 +109,6 @@ graph TB
 
         subgraph OutputInterfaces["Output Interfaces"]
             ProcFS["ProcFS (Kernel)"]
-            SQLite["SQLite (Persist)"]
             Prometheus["Prometheus (:9119)"]
         end
 
@@ -134,7 +128,6 @@ graph TB
     A["Parse command-line arguments"]
     B["Read YAML configuration"]
     C["Initialize logging"]
-    D["Initialize SQLite database"]
     D1["Restore unexpired ban records"]
     E["Compile regexes"]
     E1["Compile regex for each jail"]
@@ -219,7 +212,6 @@ graph TB
     B -->|Yes| C{"Within find_time window?"}
     C -->|Yes| D["Trigger Ban"]
     D --> E["Write to kernel (ProcFS)"]
-    D --> F["Record to SQLite"]
     D --> G["Update metrics"]
     C -->|No| H["Reset counter"]
     B -->|No| I["Continue monitoring"]
@@ -251,7 +243,6 @@ graph LR
     end
 ```
 
-## SQLite Persistence
 
 ### Database Schema
 

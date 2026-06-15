@@ -7,7 +7,6 @@
 | 文件 | 路径 | 用途 |
 |------|------|------|
 | 主配置文件 | `/etc/firewall/default.yaml` | 全局配置和 jail 定义 |
-| 数据库 | `/var/lib/firewall/bans.db` | SQLite 持久化封禁记录 |
 | 日志文件 | `/var/log/firewall.log` | 守护进程独立日志（与 syslog 并行） |
 
 ## 配置层次结构
@@ -103,7 +102,6 @@ defaults:
 3. 加载白名单到内核（最多 64 条）
 4. 初始化每个启用的 jail
 5. 注册 inotify 监听日志文件
-6. 恢复 SQLite 中未过期的封禁记录
 
 ## 运行时修改
 

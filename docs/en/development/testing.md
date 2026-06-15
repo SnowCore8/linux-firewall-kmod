@@ -165,7 +165,7 @@ and elapsed time) and uploaded as a CI artifact.
 | 09 | `09_daemon_config.sh` | YAML loading, strict-mode validation, jail parsing |
 | 10 | `10_daemon_logparse.sh` | inotify monitoring, regex matching, jail trigger |
 | 11 | `11_resource_mgmt.sh` | Memory, fds, procfs resource lifecycle |
-| 12 | `12_permanent_ban.sh` | SQLite permanent ban, cross-restart recovery |
+| 12 | `12_permanent_ban.sh` | Permanent ban (in-memory) |
 | 13 | `13_frp_jail.sh` | FRP (Fail2ban-Recover-Pattern) jail config loading and trigger |
 | 14 | `14_ban_netfilter.sh` | Blacklist netfilter chain entry format and function (real routable IP) |
 | 15 | `15_daemon_logfile.sh` | Daemon's standalone log system (`log_file` / `log_destination` / `log_format` / `log_level`) |

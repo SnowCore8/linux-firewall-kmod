@@ -2,7 +2,7 @@
 //!
 //! 本 crate 是 `linux-firewall-kmod` 项目的用户态守护进程,提供与 fail2ban 类似但更轻量、
 //! 面向嵌入式 Linux 防火墙内核模块 (`/proc/firewall/bans` procfs 接口) 的"日志 → 失败
-//! 计数 → 封禁决策 → 写 procfs → 写 `SQLite` 永久黑名单"完整链路。
+//! 计数 → 封禁决策 → 写 procfs → "完整链路。
 //!
 //! # 架构概览
 //!
@@ -18,8 +18,7 @@
 //! - `config`: YAML 解析 (严格模式 key 白名单 + 路径安全 3 重检查 + 失败回滚)
 //! - `file_monitor`: inotify 文件监控 + 轮转检测 + 主事件循环 (poll + SIGHUP 重载)
 //! - `http_exporter`: Prometheus `/metrics` 端点 + Basic Auth + 暴力破解防护
-//! - `sqlite`: 永久黑名单持久化 (WAL 模式 + 软删除 + 启动去重迁移)
-//!
+//! - //!
 //! # 行为对齐
 //!
 //! 所有模块均与已删除的 C 版 (`src/daemon/*.c`) 严格行为等价,通过 111 项集成测试套件
@@ -44,8 +43,7 @@
 //! | 文件监控 | `FILE_STATES` / `INOTIFY_STATE` | 主循环独占读写 |
 //! | 封禁缓存 | `ACTIVE_BAN_CACHE` (OnceLock) | 启动时初始化，运行时 ban/unban 操作 |
 //! | 统计计数 | `DAEMON_STATS` / `JAIL_STATS` / `DDOS_STATS` / `BAN_DURATION_BUCKETS` | 全 Atomic，Relaxed 序 |
-//! | SQLite | `GLOBAL_DB` (OnceLock) | 启动时初始化，各模块通过 `with_global_db` 访问 |
-//! | HTTP 导出 | `EXPORTER_RUNNING` / `EXPORTER_PORT` / `AUTH_STATE` | 导出器线程 + auth 逻辑 |
+//! //! | HTTP 导出 | `EXPORTER_RUNNING` / `EXPORTER_PORT` / `AUTH_STATE` | 导出器线程 + auth 逻辑 |
 //! | 基础设施 | `GLOBAL_LOGGER` / `CACHED_BANS_FD` / `BANS_FD_MUTEX` / `SYNC_DIRTY` | 日志 / fd 缓存 / 同步标志 |
 //!
 //! ## 锁获取顺序（防死锁）
@@ -59,8 +57,7 @@
 //! 4. ACTIVE_BAN_CACHE.bans.write()        (RwLock, 内部)
 //! 5. ACTIVE_BAN_CACHE.by_jail.write()     (RwLock, 内部)
 //! 6. JAIL_STATS.write()                   (RwLock, OnceLock 内部)
-//! 7. GLOBAL_DB / SqliteDb.conn.lock()     (Mutex)
-//! 8. BANS_FD_MUTEX.lock()                 (Mutex, procfs fd 缓存)
+//! //! 7. BANS_FD_MUTEX.lock()                 (Mutex, procfs fd 缓存)
 //! ```
 //!
 //! **规则**：

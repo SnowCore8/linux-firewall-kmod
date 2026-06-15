@@ -3,7 +3,7 @@
 //! # 核心职责
 //!
 //! - 统一的封禁/解封操作入口 (支持 IPv4/IPv6)
-//! - 流程:校验 IP → 格式化命令 → procfs 写入 → 同步 SQLite (仅 Permanent/UnbanPerm)
+//! - 流程:校验 IP → 格式化命令 → procfs 写入 → 
 //! - 向后兼容的包装函数:ban_ip / ban_ip_permanent / unban_ip / unban_permanent_ip
 
 use anyhow::{bail, Context, Result};
@@ -47,8 +47,7 @@ fn format_ban_command(action: BanAction, ip: &str) -> Result<String> {
 
 /// 统一的封禁/解封操作入口 (支持 IPv4/IPv6)。
 ///
-/// 流程: 校验 IP → 格式化命令 → `secure_procfs_write` → 同步 `SQLite`
-/// (仅 Permanent/UnbanPerm) → 记日志 + `ips_banned` 累加。
+/// 流程: 校验 IP → 格式化命令 → `secure_procfs_write` → 记日志 + `ips_banned` 累加。
 ///
 /// # Arguments
 /// - `action`: 见 [`BanAction`]
@@ -57,7 +56,7 @@ fn format_ban_command(action: BanAction, ip: &str) -> Result<String> {
 /// # Errors
 /// - IP 校验失败
 /// - procfs 写入失败
-/// - `SQLite` 写入失败 (仅 Permanent/UnbanPerm)
+/// - 
 pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
     if ip.is_empty() {
         bail!("NULL IP address");
@@ -107,7 +106,7 @@ pub fn ban_ip(ip: &str) -> Result<()> {
     execute_ban_action(BanAction::Temp, ip)
 }
 
-/// 永久封禁。启动时从 `SQLite` 恢复永久黑名单用此函数。
+/// 永久封禁。永久封禁。
 ///
 /// # Errors
 /// 同 [`execute_ban_action`]
@@ -123,7 +122,7 @@ pub fn unban_ip(ip: &str) -> Result<()> {
     execute_ban_action(BanAction::Unban, ip)
 }
 
-/// 解封永久封禁 (同步写 `SQLite` `is_active=0`)。
+/// 解封永久封禁。
 ///
 /// # Errors
 /// 同 [`execute_ban_action`]
@@ -134,7 +133,7 @@ pub fn unban_permanent_ip(ip: &str) -> Result<()> {
 /// 封禁 IP 并记录封禁历史（供 DDoS 检测器等模块使用）。
 ///
 /// 当前实现：`ban_duration == 0` 时走永久封禁，否则走临时封禁。
-/// 临时封禁会更新 `ACTIVE_BAN_CACHE` 并标记 dirty，以便主循环同步到 SQLite。
+/// 临时封禁会更新 `ACTIVE_BAN_CACHE` 并标记 dirty，。
 ///
 /// # Arguments
 /// - `ip`：待封禁的 IP

@@ -222,63 +222,6 @@ fs.inotify.max_user_watches = 524288
 fs.inotify.max_queued_events = 32768
 ```
 
-### Bans Lost After Reboot
-
-**Symptoms**: All ban records lost after server restart.
-
-**Troubleshooting Steps**:
-
-```bash
-# Check SQLite database
-ls -la /var/lib/firewall/bans.db
-
-# Check database content
-sqlite3 /var/lib/firewall/bans.db "SELECT COUNT(*) FROM bans;"
-
-# Check daemon startup log
-journalctl -u firewall | grep -i "restore\|recover"
-```
-
-**Common Causes**:
-
-| Cause | Solution |
-|-------|----------|
-| Wrong database path | Check `db_path` config |
-| Database permissions | `chmod 644 /var/lib/firewall/bans.db` |
-| SQLite corruption | Backup and rebuild database |
-
-### Permanent ban SQLite not created
-
-**Symptoms**:
-
-- Daemon is running but `/var/lib/firewall/bans.db` does not exist
-- Prometheus `firewall_daemon_*` metrics are working normally
-- `journalctl -u firewall-daemon` does not contain "SQLite database initialized"
-
-**Diagnosis**:
-
-1. Check the actual value of `cfg.permanent_ban_enabled`. If it is `false`, the daemon skips SQLite initialization entirely.
-2. Check the location of `permanent_ban_enabled` and `permanent_db_path` in `/etc/firewall/default.yaml`.
-3. If those fields are at the top level (after `jails:`), the Rust parser silently ignores them — any field outside the `defaults:` block never makes it into the `Config` struct.
-
-**Fix**:
-
-```yaml
-# Wrong (fields at top level, silently ignored):
-jails:
-  sshd: ...
-permanent_ban_enabled: true        # ← top level, parser can't see it
-permanent_db_path: "/var/lib/firewall/bans.db"
-
-# Correct (fields must live inside defaults:):
-defaults:
-  ...
-  permanent_ban_enabled: true      # ← inside defaults:
-  permanent_db_path: "/var/lib/firewall/bans.db"
-jails:
-  sshd: ...
-```
-
 ### Daemon cannot open /var/log/firewall.log
 
 **Symptoms**: At startup the log shows:
@@ -320,8 +263,6 @@ sudo systemctl restart firewall-daemon
 ### Tests report "bans.db not found"
 
 **Symptoms**: `make test` running `tests/suites/12_permanent_ban.sh` fails with "bans.db not found" or "no such file or directory".
-
-**Cause**: Same root cause as [Permanent ban SQLite not created](#permanent-ban-sqlite-not-created) — `permanent_ban_enabled: true` was not placed inside `defaults:`, so the daemon skipped SQLite initialization.
 
 **Fix**: Move `permanent_ban_enabled` and `permanent_db_path` into the `defaults:` block, then:
 

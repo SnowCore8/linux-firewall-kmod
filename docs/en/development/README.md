@@ -20,7 +20,6 @@ This section covers how to develop, build, and test the Linux Firewall Kernel Mo
 sudo apt install -y \
     build-essential \
     linux-headers-$(uname -r) \
-    libsqlite3-dev \
     pkg-config \
     valgrind \
     clang \
@@ -54,7 +53,7 @@ graph TD
             D_BAN["ban.rs Ban/unban scheduler"]
             D_MET["http_exporter.rs Prometheus exporter"]
             D_LOG["log_parser.rs Log parsing"]
-            D_SQLITE["sqlite_store.rs Persistence"]
+            D_
             D_JAIL["jail.rs Jail definitions"]
             D_TYPES["types.rs Type definitions"]
         end

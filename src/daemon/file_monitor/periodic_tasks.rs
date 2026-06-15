@@ -15,7 +15,7 @@ use crate::types::Config;
 /// # Arguments
 /// - `cfg`: 全局配置（预留，当前未使用）
 pub fn write_stats_snapshot(_cfg: &Config) {
-    // SQLite 已移除，统计信息仅通过 Prometheus 指标暴露
+    // 统计信息仅通过 Prometheus 指标暴露
     crate::logger::debug!(crate::logger::get(), "统计快照更新完成（纯内存）");
 }
 

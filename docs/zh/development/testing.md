@@ -157,7 +157,7 @@ Total: passed 113, failed 0, warned 2, skipped 0
 | 09 | `09_daemon_config.sh` | YAML 配置加载、严格模式校验、jail 解析 |
 | 10 | `10_daemon_logparse.sh` | 日志监听（inotify）、正则匹配、jail 触发 |
 | 11 | `11_resource_mgmt.sh` | 内存、句柄、procfs 资源生命周期 |
-| 12 | `12_permanent_ban.sh` | SQLite 永久封禁、跨重启恢复 |
+| 12 | `12_permanent_ban.sh` | 永久封禁（内存中） |
 | 13 | `13_frp_jail.sh` | FRP（Fail2ban-Recover-Pattern）jail 配置加载与触发 |
 | 14 | `14_ban_netfilter.sh` | 黑名单 netfilter 链表条目格式与功能（真实可路由 IP） |
 | 15 | `15_daemon_logfile.sh` | 守护进程独立日志系统（`log_file` / `log_destination` / `log_format` / `log_level`） |

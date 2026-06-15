@@ -151,8 +151,7 @@ whitelist:
 
 ## 永久黑名单
 
-`ban_time: 0` 的封禁（永久封禁）会被写入 SQLite 数据库，重启后自动恢复，进程崩溃也不丢失。
-
+`ban_time: 0` 的封禁（永久封禁）在内存中保持，重启后失效。
 ```yaml
 defaults:
   # ... 其他字段
@@ -162,10 +161,6 @@ defaults:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `permanent_db_path` | string | `/var/lib/firewall/bans.db` | SQLite 数据库路径 |
-| `permanent_ban_enabled` | bool | `false` | 是否启用永久封禁持久化；设为 `true` 时 SQLite 才会被初始化和写入 |
-
-> **关键**：`permanent_db_path` 和 `permanent_ban_enabled` **必须**放在 `defaults:` 块下，**不要**写在顶层（`jails:` 同级或之后）。这是 v2.2.1 修复的一个真实 bug —— 写在顶层时解析器会**静默忽略**，SQLite 永远不会初始化。详见下一节「陷阱」。
 
 ## 陷阱 (Pitfalls)
 
@@ -205,15 +200,6 @@ jails:
   sshd: ...
 ```
 
-### 排查清单
-
-如果启用了永久黑名单但没看到 SQLite 数据库被创建：
-
-1. 用 `grep -n "permanent_" /etc/firewall/default.yaml` 确认字段在文件中
-2. 检查缩进 —— 字段必须**与** `max_retries` / `findtime` 等**同级**，都在 `defaults:` 下
-3. 用 `firewall-daemon -t` 跑一次 dry-run，看是否有 "DB initialized at ..." 日志
-4. 看启动日志确认是否出现 "permanent ban persistence enabled" 字样
-
 ## 日志速率
 
 `log_info!` / `log_warn!` / `log_error!` / `log_debug!` 宏已经**不再提供**带速率限制的变体（例如旧的 `log_warn_ratelimited!` / 全局 `RATELIMIT_STATE` 互斥锁 + 60 秒节流已被移除）。每次调用都会**直接发出**，不做合并或去重。如需降噪，请在配置中调整 `log_level`（`info` / `warn` / `error` / `debug`）。
@@ -232,7 +218,6 @@ defaults:
   ban_time: 900         # 15 分钟
   interval: 1           # 检查间隔（秒）
   metrics_port: 9119    # Prometheus 指标端口
-  # 永久封禁（SQLite 持久化）—— 必须放在 defaults 下
   permanent_db_path: "/var/lib/firewall/bans.db"
   permanent_ban_enabled: true   # 默认 false
 

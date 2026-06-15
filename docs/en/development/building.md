@@ -196,7 +196,7 @@ Package layout (the `build-deb.sh` staging directory, DKMS mode):
 | `/etc/firewall/*.yaml` | YAML config files |
 | `/etc/systemd/system/firewall-daemon.service` | systemd unit |
 | `/var/log/firewall.log` | Daemon log file (`logrotate` keeps 30 days) |
-| `/var/lib/firewall/` | Runtime state directory (SQLite DB, etc.) |
+| `/var/lib/firewall/` | Runtime state directory |
 
 ### Version-number behavior
 
@@ -280,7 +280,6 @@ rustc --version
 cargo --version
 
 # Check libraries
-pkg-config --libs sqlite3
 ```
 
 ## Build Artifacts
