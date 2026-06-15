@@ -141,71 +141,143 @@ format:
 # 5. 安装目标 (Install Targets)
 # ============================================================================
 # 所有 install 子目标统一使用 $(DESTDIR) 前缀，支持打包暂存安装
+# 安装顺序：内核模块 → 守护进程 → 配置 → 状态目录 → systemd → 启动服务
 
-.PHONY: install install-kernel-module install-daemon install-config install-state install-systemd install-start
-install: build install-kernel-module install-daemon install-config install-state install-systemd install-start
+.PHONY: install install-kernel-module install-daemon install-config install-state install-systemd install-start install-verify
+install: build install-kernel-module install-daemon install-config install-state install-systemd install-start install-verify
 	@echo ""
-	@echo "Installation complete!"
-	@echo "  Kernel module: $(DESTDIR)$(KERNEL_MODDIR)/firewall.ko"
-	@echo "  Daemon:        $(DESTDIR)$(SBINDIR)/firewall-daemon"
-	@echo "  Config:        $(DESTDIR)$(FIREWALLETC)/"
-	@echo "  State:         $(DESTDIR)$(RUNSTATEDIR)/firewall/"
+	@echo "=========================================="
+	@echo "Firewall Installation Complete"
+	@echo "=========================================="
+	@echo "Components:"
+	@echo "  ✓ Kernel module: $(DESTDIR)$(KERNEL_MODDIR)/firewall.ko"
+	@echo "  ✓ Daemon:        $(DESTDIR)$(SBINDIR)/firewall-daemon"
+	@echo "  ✓ Configuration: $(DESTDIR)$(FIREWALLETC)/"
+	@echo "  ✓ State data:    $(DESTDIR)$(RUNSTATEDIR)/firewall/"
+	@echo "  ✓ Systemd unit:  $(DESTDIR)/etc/systemd/system/firewall-daemon.service"
 	@echo ""
-	@echo "Service status:"
-	-systemctl status firewall-daemon.service --no-pager 2>/dev/null || true
+ifeq ($(DESTDIR),)
+	@echo "Service Status:"
+	@systemctl status firewall-daemon.service --no-pager 2>/dev/null || true
+	@echo ""
+	@echo "Next Steps:"
+	@echo "  • View logs:    journalctl -u firewall-daemon.service -f"
+	@echo "  • Check status: systemctl status firewall-daemon.service"
+	@echo "  • View bans:    cat /var/lib/firewall/ban_history.db (SQLite)"
+	@echo ""
+else
+	@echo "Note: DESTDIR mode - service not started. After package installation:"
+	@echo "  • systemctl enable firewall-daemon.service"
+	@echo "  • systemctl start firewall-daemon.service"
+	@echo ""
+endif
 
 install-kernel-module: $(KERNEL_MODULE)
 	@echo "Installing kernel module..."
-	install -D -m 644 $(KERNEL_MODULE) $(DESTDIR)$(KERNEL_MODDIR)/firewall.ko
-	if [ -z "$(DESTDIR)" ]; then \
-		depmod -a; \
+	@install -D -m 644 $(KERNEL_MODULE) $(DESTDIR)$(KERNEL_MODDIR)/firewall.ko
+	@if [ -z "$(DESTDIR)" ]; then \
+		depmod -a || echo "Warning: depmod failed, module may not auto-load"; \
 	fi
-	@echo "  ✓ Kernel module installed"
+	@if [ -f "$(DESTDIR)$(KERNEL_MODDIR)/firewall.ko" ]; then \
+		echo "  ✓ Kernel module installed ($(KERNEL_MODDIR)/firewall.ko)"; \
+	else \
+		echo "  ✗ Kernel module installation failed"; \
+		exit 1; \
+	fi
 
 install-daemon: $(DAEMON_BIN)
 	@echo "Installing daemon..."
-	install -D -m 755 $(DAEMON_BIN) $(DESTDIR)$(SBINDIR)/firewall-daemon
-	@echo "  ✓ Daemon installed"
+	@install -D -m 755 $(DAEMON_BIN) $(DESTDIR)$(SBINDIR)/firewall-daemon
+	@if [ -x "$(DESTDIR)$(SBINDIR)/firewall-daemon" ]; then \
+		echo "  ✓ Daemon installed ($(SBINDIR)/firewall-daemon)"; \
+	else \
+		echo "  ✗ Daemon installation failed"; \
+		exit 1; \
+	fi
 
 install-config:
 	@echo "Installing configuration files..."
-	install -d -m 700 $(DESTDIR)$(FIREWALLETC)
-	install -m 600 config/*.yaml $(DESTDIR)$(FIREWALLETC)/
-	if [ -z "$(DESTDIR)" ]; then \
+	@install -d -m 700 $(DESTDIR)$(FIREWALLETC)
+	@install -m 600 config/*.yaml $(DESTDIR)$(FIREWALLETC)/
+	@if [ -z "$(DESTDIR)" ]; then \
 		chown root:root $(DESTDIR)$(FIREWALLETC) $(DESTDIR)$(FIREWALLETC)/*.yaml; \
 	fi
-	@echo "  ✓ Configuration files installed"
+	@echo "  ✓ Configuration files installed ($(FIREWALLETC)/)"
 
 install-state:
 	@echo "Creating state directory..."
-	install -d -m 700 $(DESTDIR)$(RUNSTATEDIR)/firewall
-	if [ -z "$(DESTDIR)" ]; then \
+	@install -d -m 700 $(DESTDIR)$(RUNSTATEDIR)/firewall
+	@if [ -z "$(DESTDIR)" ]; then \
 		chown root:root $(DESTDIR)$(RUNSTATEDIR)/firewall; \
 	fi
-	@echo "  ✓ State directory created"
+	@echo "  ✓ State directory created ($(RUNSTATEDIR)/firewall/)"
 
 install-systemd:
 	@echo "Installing systemd service..."
 	@sed 's|__SBINDIR__|$(SBINDIR)|g' firewall-daemon.service | \
 		install -D -m 644 /dev/stdin $(DESTDIR)/etc/systemd/system/firewall-daemon.service
 	@echo "Installing kernel module autoload config..."
-	install -D -m 644 config/modules-load.d/firewall.conf $(DESTDIR)/etc/modules-load.d/firewall.conf
-	if [ -z "$(DESTDIR)" ]; then \
-		systemctl daemon-reload 2>/dev/null || true; \
+	@install -D -m 644 config/modules-load.d/firewall.conf $(DESTDIR)/etc/modules-load.d/firewall.conf
+	@if [ -z "$(DESTDIR)" ]; then \
+		systemctl daemon-reload 2>/dev/null || echo "Warning: systemctl daemon-reload failed"; \
 	fi
-	@echo "  ✓ Systemd service installed"
+	@echo "  ✓ Systemd service and autoload config installed"
 
 install-start:
 	@echo "Loading kernel module and starting daemon..."
-	if [ -z "$(DESTDIR)" ]; then \
+	@if [ -z "$(DESTDIR)" ]; then \
 		insmod $(KERNEL_MODULE) 2>/dev/null || modprobe firewall 2>/dev/null || true; \
-		systemctl enable firewall-daemon.service 2>/dev/null || true; \
-		systemctl start firewall-daemon.service 2>/dev/null || true; \
-		sleep 2; \
+		if ! lsmod | grep -q "^firewall "; then \
+			echo "  Warning: Kernel module not loaded, daemon may fail to start"; \
+		fi; \
+		systemctl enable firewall-daemon.service 2>/dev/null || echo "Warning: systemctl enable failed"; \
+		if systemctl start firewall-daemon.service 2>/dev/null; then \
+			sleep 2; \
+			if systemctl is-active --quiet firewall-daemon.service; then \
+				echo "  ✓ Daemon started successfully"; \
+			else \
+				echo "  ✗ Daemon failed to start, check logs: journalctl -u firewall-daemon.service"; \
+				exit 1; \
+			fi; \
+		else \
+			echo "  ✗ Failed to start daemon"; \
+			exit 1; \
+		fi; \
 	else \
-		echo "Skipping system services setup in DESTDIR mode"; \
+		echo "  Skipping service startup in DESTDIR mode"; \
 	fi
-	@echo "  ✓ Service started"
+
+install-verify:
+	@echo "Verifying installation..."
+	@if [ ! -f "$(DESTDIR)$(KERNEL_MODDIR)/firewall.ko" ]; then \
+		echo "  ✗ Kernel module not found"; \
+		exit 1; \
+	fi
+	@if [ ! -x "$(DESTDIR)$(SBINDIR)/firewall-daemon" ]; then \
+		echo "  ✗ Daemon binary not found or not executable"; \
+		exit 1; \
+	fi
+	@if [ ! -d "$(DESTDIR)$(FIREWALLETC)" ]; then \
+		echo "  ✗ Configuration directory not found"; \
+		exit 1; \
+	fi
+	@if [ ! -d "$(DESTDIR)$(RUNSTATEDIR)/firewall" ]; then \
+		echo "  ✗ State directory not found"; \
+		exit 1; \
+	fi
+ifeq ($(DESTDIR),)
+	@if ! systemctl list-unit-files | grep -q "firewall-daemon.service"; then \
+		echo "  ✗ Systemd service not registered"; \
+		exit 1; \
+	fi
+	@if ! lsmod | grep -q "^firewall "; then \
+		echo "  Warning: Kernel module not loaded"; \
+	fi
+	@if ! systemctl is-active --quiet firewall-daemon.service; then \
+		echo "  Warning: Daemon not running"; \
+	fi
+endif
+	@echo "  ✓ Installation verified"
 
 # ============================================================================
 # 构建 .deb 包
