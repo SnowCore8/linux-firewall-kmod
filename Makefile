@@ -143,7 +143,7 @@ format:
 # 所有 install 子目标统一使用 $(DESTDIR) 前缀，支持打包暂存安装
 
 .PHONY: install install-kernel-module install-daemon install-config install-state install-systemd install-start
-install: install-kernel-module install-daemon install-config install-state install-systemd install-start
+install: build install-kernel-module install-daemon install-config install-state install-systemd install-start
 	@echo ""
 	@echo "Installation complete!"
 	@echo "  Kernel module: $(DESTDIR)$(KERNEL_MODDIR)/firewall.ko"
