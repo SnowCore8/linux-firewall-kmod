@@ -34,8 +34,10 @@ static int cleanup_table_ipv4(struct firewall_info *fw) {
 
   for (int i = 0; i < (1 << 3) && processed < max_processed_per_call; i++) {
     int current_bucket = (start_bucket + i) % table_size;
-    /* R9-4: 使用每桶锁替代全局锁 */
-    spin_lock(&fw->ban_locks_ipv4[current_bucket]);
+    /* R9-4: 使用每桶锁替代全局锁
+     * 使用 spin_lock_bh：此函数在定时器回调（softirq 上下文）中执行
+     * 禁用 softirq 避免与 netfilter hook 的死锁风险 */
+    spin_lock_bh(&fw->ban_locks_ipv4[current_bucket]);
     hlist_for_each_entry_safe(entry, tmp, &fw->ban_table_ipv4[current_bucket], hash) {
       if (processed >= max_processed_per_call)
         break;
@@ -51,7 +53,7 @@ static int cleanup_table_ipv4(struct firewall_info *fw) {
       }
       processed++;
     }
-    spin_unlock(&fw->ban_locks_ipv4[current_bucket]);
+    spin_unlock_bh(&fw->ban_locks_ipv4[current_bucket]);
   }
   return removed;
 }
@@ -69,8 +71,10 @@ static int cleanup_table_ipv6(struct firewall_info *fw) {
 
   for (int i = 0; i < (1 << 3) && processed < max_processed_per_call; i++) {
     int current_bucket = (start_bucket + i) % table_size;
-    /* R9-4: 使用每桶锁替代全局锁 */
-    spin_lock(&fw->ban_locks_ipv6[current_bucket]);
+    /* R9-4: 使用每桶锁替代全局锁
+     * 使用 spin_lock_bh：此函数在定时器回调（softirq 上下文）中执行
+     * 禁用 softirq 避免与 netfilter hook 的死锁风险 */
+    spin_lock_bh(&fw->ban_locks_ipv6[current_bucket]);
     hlist_for_each_entry_safe(entry, tmp, &fw->ban_table_ipv6[current_bucket], hash) {
       if (processed >= max_processed_per_call)
         break;
@@ -86,7 +90,7 @@ static int cleanup_table_ipv6(struct firewall_info *fw) {
       }
       processed++;
     }
-    spin_unlock(&fw->ban_locks_ipv6[current_bucket]);
+    spin_unlock_bh(&fw->ban_locks_ipv6[current_bucket]);
   }
   return removed;
 }
