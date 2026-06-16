@@ -10,6 +10,7 @@ defaults:
   ban_time: 900         # 15 分钟
   interval: 1           # 检查间隔（秒）
   metrics_port: 9119    # Prometheus 指标端口
+  metrics_bind_address: "0.0.0.0"  # 监听地址（0.0.0.0 = 所有接口，支持局域网访问；127.0.0.1 = 仅本地）
   # 守护进程独立日志文件（NULL/留空 = 仅 syslog）
   # 文档承诺的 /var/log/firewall.log 路径
   log_file: /var/log/firewall.log
