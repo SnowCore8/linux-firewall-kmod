@@ -166,6 +166,9 @@ void cleanup_timer_callback(struct timer_list *t) {
 
   bool has_more_entries = cleanup_expired_bans(fw);
 
+  /* 清理过期的速率条目（DDoS 防护） */
+  cleanup_rate_entries(fw);
+
   if (unlikely(atomic_read(&fw->shutting_down))) {
     return;
   }

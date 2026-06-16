@@ -35,7 +35,7 @@ void fw_flush_cpu_stats(void) {
   }
 }
 
-static unsigned int handle_ban_check(u8 af, const void *src_ip) {
+static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *skb) {
   unsigned long now;
   struct ban_entry *entry;
   struct whitelist_entry *wl_entry;
@@ -162,6 +162,35 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip) {
     return NF_DROP;
   }
 
+  /* 速率检测（DDoS 防护）：更新速率统计并检查是否超过阈值 */
+  if (likely(!is_whitelisted)) {
+    u32 packet_len = skb->len;
+    int ret = update_rate_stats(&fw_info, af, src_ip, packet_len);
+
+    if (ret == 0) {
+      /* 检查是否超过速率阈值 */
+      rcu_read_lock();
+      if (check_rate_violation(&fw_info, af, src_ip)) {
+        rcu_read_unlock();
+
+        /* 超过阈值，自动封禁 */
+        char ip_str[INET6_STR_LEN];
+        ip_to_str(af, src_ip, ip_str, sizeof(ip_str));
+        pr_warn("firewall: DDoS detected from %s, auto-banning\n", ip_str);
+
+        ban_ip(&fw_info, af, src_ip);
+
+        /* 丢弃当前数据包 */
+        struct fw_per_cpu_stats *stats = this_cpu_ptr(&fw_cpu_stats);
+        stats->packets_dropped++;
+        if (unlikely(stats->packets_dropped >= FW_PER_CPU_BATCH_SIZE))
+          fw_flush_cpu_stats();
+        return NF_DROP;
+      }
+      rcu_read_unlock();
+    }
+  }
+
   {
     struct fw_per_cpu_stats *stats = this_cpu_ptr(&fw_cpu_stats);
     stats->packets_accepted++;
@@ -201,7 +230,7 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
                (ntohl(src_ip) & 0xFF000000) == 0x00000000))
     return NF_ACCEPT;
 
-  return handle_ban_check(FW_AF_INET, &src_ip);
+  return handle_ban_check(FW_AF_INET, &src_ip, skb);
 }
 
 static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
@@ -255,7 +284,7 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
   if (unlikely((src_ip.s6_addr[0] == 0xFE) && ((src_ip.s6_addr[1] & 0xC0) == 0x80)))
     return NF_ACCEPT;
 
-  return handle_ban_check(FW_AF_INET6, &src_ip);
+  return handle_ban_check(FW_AF_INET6, &src_ip, skb);
 }
 
 struct nf_hook_ops nf_ops_ipv4 __read_mostly = {
