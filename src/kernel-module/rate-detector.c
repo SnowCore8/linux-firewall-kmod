@@ -156,7 +156,7 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip, u32 packe
   if (entry) {
     /* 检查窗口是否过期 */
     elapsed = now - entry->window_start;
-    if (time_after(elapsed, fw->rate_window_jiffies)) {
+    if (time_after(now, entry->window_start + fw->rate_window_jiffies)) {
       /* 窗口过期，重置计数器（需要获取锁） */
       rcu_read_unlock();
 
@@ -165,7 +165,7 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip, u32 packe
       spin_lock_bh(lock);
 
       /* 双重检查：可能其他 CPU 已经重置 */
-      if (time_after(now - entry->window_start, fw->rate_window_jiffies)) {
+      if (time_after(now, entry->window_start + fw->rate_window_jiffies)) {
         atomic64_set(&entry->packet_count, 1);
         atomic64_set(&entry->byte_count, packet_len);
         atomic64_set(&entry->syn_count, 0);
@@ -404,7 +404,7 @@ void cleanup_rate_entries(struct firewall_info *fw) {
 
     spin_lock_bh(lock);
     hlist_for_each_entry_safe(entry, tmp, head, hash) {
-      if (time_after(now - entry->last_activity, expire_time)) {
+      if (time_after(now, entry->last_activity + expire_time)) {
         hlist_del_rcu(&entry->hash);
         call_rcu(&entry->rcu_head, free_rate_entry_rcu);
         atomic_dec(&fw->rate_count);
@@ -421,7 +421,7 @@ void cleanup_rate_entries(struct firewall_info *fw) {
 
     spin_lock_bh(lock);
     hlist_for_each_entry_safe(entry, tmp, head, hash) {
-      if (time_after(now - entry->last_activity, expire_time)) {
+      if (time_after(now, entry->last_activity + expire_time)) {
         hlist_del_rcu(&entry->hash);
         call_rcu(&entry->rcu_head, free_rate_entry_rcu);
         atomic_dec(&fw->rate_count);
