@@ -199,6 +199,20 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
                 "error" => %e
             );
         }
+    } else if let (&Method::Get, "/api/config") = (request.method(), url.as_str()) {
+        // API: Web UI 配置
+        let config = web_ui::api::get_webui_config();
+        let json = serde_json::to_string(&config).unwrap_or_else(|_| "{}".to_string());
+        let response = Response::from_string(json).with_header(
+            Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
+        );
+        if let Err(e) = request.respond(add_security_headers(response)) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "发送 /api/config 响应失败";
+                "error" => %e
+            );
+        }
     } else if let (&Method::Get, "/api/events") = (request.method(), url.as_str()) {
         // SSE: 实时事件推送（Server-Sent Events）
         web_ui::sse::handle_sse_connection(request);

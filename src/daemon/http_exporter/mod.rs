@@ -38,6 +38,23 @@ pub fn get_global_jails() -> Option<&'static Vec<JailInfo>> {
     GLOBAL_JAILS.get()
 }
 
+
+// ============================================================================
+// 全局 Web UI 配置存储
+// ============================================================================
+
+/// 全局 Web UI 配置存储（用于 SSE 推送间隔等）
+static GLOBAL_WEBUI_CONFIG: std::sync::OnceLock<crate::types::WebuiConfig> = std::sync::OnceLock::new();
+
+/// 设置全局 Web UI 配置（在启动时调用）
+pub fn set_global_webui_config(config: crate::types::WebuiConfig) {
+    let _ = GLOBAL_WEBUI_CONFIG.set(config);
+}
+
+/// 获取全局 Web UI 配置（在 handler 中调用）
+pub fn get_global_webui_config() -> Option<&'static crate::types::WebuiConfig> {
+    GLOBAL_WEBUI_CONFIG.get()
+}
 // ============================================================================
 // 配置参数
 // ============================================================================

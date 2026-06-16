@@ -17,6 +17,37 @@
 use super::jail::{Jail, MAX_JAILS};
 
 // ============================================================================
+// Web UI 配置
+// ============================================================================
+
+/// Web UI 配置（SSE 推送和速率告警阈值）
+#[derive(Debug, Clone)]
+pub struct WebuiConfig {
+    /// SSE 推送间隔（秒）
+    pub sse_push_interval: u32,
+    /// 速率警告阈值（包/秒）
+    pub rate_warning_pps: u64,
+    /// 速率严重告警阈值（包/秒）
+    pub rate_critical_pps: u64,
+    /// SYN 速率警告阈值（包/秒）
+    pub rate_warning_syn: u64,
+    /// SYN 速率严重告警阈值（包/秒）
+    pub rate_critical_syn: u64,
+}
+
+impl Default for WebuiConfig {
+    fn default() -> Self {
+        Self {
+            sse_push_interval: 1,
+            rate_warning_pps: 1000,
+            rate_critical_pps: 10000,
+            rate_warning_syn: 100,
+            rate_critical_syn: 1000,
+        }
+    }
+}
+
+// ============================================================================
 // 配置结构
 // ============================================================================
 
@@ -67,6 +98,8 @@ pub struct Config {
     pub storage: StorageConfig,
     /// DDoS 防护配置 (Phase 3 新增)
     pub ddos: super::DdosConfig,
+    /// Web UI 配置（SSE 推送和速率告警阈值）
+    pub webui: WebuiConfig,
 }
 
 impl Default for Config {
@@ -95,6 +128,7 @@ impl Default for Config {
             jails: Vec::with_capacity(MAX_JAILS),
             storage: StorageConfig::default(),
             ddos: super::DdosConfig::default(),
+            webui: WebuiConfig::default(),
         }
     }
 }

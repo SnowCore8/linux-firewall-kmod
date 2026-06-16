@@ -102,6 +102,11 @@ impl Read for SseReader {
 pub fn handle_sse_connection(request: Request) {
     let (sender, receiver) = mpsc::channel::<SseMessage>();
 
+    // 获取全局 Web UI 配置
+    let push_interval = crate::http_exporter::get_global_webui_config()
+        .map(|c| c.sse_push_interval as u64)
+        .unwrap_or(1);
+
     // 启动后台线程：定期收集并推送数据
     thread::spawn(move || {
         // 初始连接，发送欢迎注释
@@ -113,7 +118,7 @@ pub fn handle_sse_connection(request: Request) {
             let stats_json = match serde_json::to_string(&stats) {
                 Ok(j) => j,
                 Err(_) => {
-                    thread::sleep(Duration::from_secs(1));
+                    thread::sleep(Duration::from_secs(push_interval));
                     continue;
                 }
             };
@@ -132,7 +137,7 @@ pub fn handle_sse_connection(request: Request) {
             let bans_json = match serde_json::to_string(&bans) {
                 Ok(j) => j,
                 Err(_) => {
-                    thread::sleep(Duration::from_secs(1));
+                    thread::sleep(Duration::from_secs(push_interval));
                     continue;
                 }
             };
@@ -152,7 +157,7 @@ pub fn handle_sse_connection(request: Request) {
                 let jails_json = match serde_json::to_string(&jails) {
                     Ok(j) => j,
                     Err(_) => {
-                        thread::sleep(Duration::from_secs(1));
+                        thread::sleep(Duration::from_secs(push_interval));
                         continue;
                     }
                 };
@@ -172,7 +177,7 @@ pub fn handle_sse_connection(request: Request) {
             let rates_json = match serde_json::to_string(&rates) {
                 Ok(j) => j,
                 Err(_) => {
-                    thread::sleep(Duration::from_secs(1));
+                    thread::sleep(Duration::from_secs(push_interval));
                     continue;
                 }
             };
@@ -187,7 +192,7 @@ pub fn handle_sse_connection(request: Request) {
             }
 
             // 等待 1 秒后推送下一轮
-            thread::sleep(Duration::from_secs(1));
+            thread::sleep(Duration::from_secs(push_interval));
         }
     });
 

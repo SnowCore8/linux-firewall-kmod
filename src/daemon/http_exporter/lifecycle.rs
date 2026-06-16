@@ -35,6 +35,9 @@ pub fn start_http_exporter(port: u16, cfg: &Config) -> thread::JoinHandle<()> {
     }).collect();
     super::set_global_jails(jail_infos);
 
+
+    // 保存全局 Web UI 配置（用于 SSE 推送间隔等）
+    super::set_global_webui_config(cfg.webui.clone());
     let metrics_user = cfg.metrics_username.clone();
     let metrics_pass = cfg.metrics_password.clone();
     let bind_address = if cfg.metrics_bind_address.is_empty() {

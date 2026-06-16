@@ -95,6 +95,8 @@ struct YamlConfig {
     jails: Option<HashMap<String, YamlJail>>,
     #[serde(default)]
     ddos: Option<YamlDdos>,
+    #[serde(default)]
+    webui: Option<YamlWebui>,
 }
 
 /// 全局默认字段集合。所有 `Option` 都是"未设置 = 使用 `Config::default()`"
@@ -145,6 +147,15 @@ struct YamlDdos {
     auto_ban_duration: Option<u32>,
     auto_ban_threshold: Option<u32>,
     check_interval: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct YamlWebui {
+    sse_push_interval: Option<u32>,
+    rate_warning_pps: Option<u64>,
+    rate_critical_pps: Option<u64>,
+    rate_warning_syn: Option<u64>,
+    rate_critical_syn: Option<u64>,
 }
 
 // ============================================================================
@@ -276,6 +287,25 @@ pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
         }
         if let Some(interval) = ddos.check_interval {
             cfg.ddos.check_interval = interval;
+        }
+    }
+
+    // 4. 解析 webui 部分
+    if let Some(webui) = &yaml_config.webui {
+        if let Some(interval) = webui.sse_push_interval {
+            cfg.webui.sse_push_interval = interval;
+        }
+        if let Some(rate) = webui.rate_warning_pps {
+            cfg.webui.rate_warning_pps = rate;
+        }
+        if let Some(rate) = webui.rate_critical_pps {
+            cfg.webui.rate_critical_pps = rate;
+        }
+        if let Some(rate) = webui.rate_warning_syn {
+            cfg.webui.rate_warning_syn = rate;
+        }
+        if let Some(rate) = webui.rate_critical_syn {
+            cfg.webui.rate_critical_syn = rate;
         }
     }
 

@@ -5,11 +5,19 @@
 let charts = {};
 let eventSource = null;
 
+// Web UI 配置（从 API 加载）
+let webuiConfig = {
+    rate_warning_pps: 1000,
+    rate_critical_pps: 10000,
+    rate_warning_syn: 100,
+    rate_critical_syn: 1000
+};
 // SSE endpoint
 const SSE_ENDPOINT = '/api/events';
 
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', () => {
+    loadWebuiConfig();
     initializeCharts();
     setupEventListeners();
     connectSSE();
@@ -32,6 +40,20 @@ function setupEventListeners() {
 }
 
 // Connect to SSE endpoint
+
+// 加载 Web UI 配置
+async function loadWebuiConfig() {
+    try {
+        const response = await fetch('/api/config');
+        if (response.ok) {
+            const config = await response.json();
+            webuiConfig = { ...webuiConfig, ...config };
+            console.log('Web UI config loaded:', webuiConfig);
+        }
+    } catch (error) {
+        console.warn('Failed to load Web UI config, using defaults:', error);
+    }
+}
 function connectSSE() {
     if (eventSource) {
         eventSource.close();
@@ -458,9 +480,9 @@ function updateRatesPanel(rates) {
 
         // 根据速率确定告警级别
         let alertLevel = 'normal';
-        if (totalPps > 10000 || synPps > 1000) {
+        if (totalPps > webuiConfig.rate_critical_pps || synPps > webuiConfig.rate_critical_syn) {
             alertLevel = 'critical';
-        } else if (totalPps > 1000 || synPps > 100) {
+        } else if (totalPps > webuiConfig.rate_warning_pps || synPps > webuiConfig.rate_warning_syn) {
             alertLevel = 'warning';
         }
 

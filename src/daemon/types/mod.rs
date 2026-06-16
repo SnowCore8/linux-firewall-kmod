@@ -27,7 +27,7 @@ mod stats;
 
 // Re-export 所有公共类型，保持向后兼容
 pub use ban::{ActiveBanCache, BanInfo, BanReason, BanStatus, ACTIVE_BAN_CACHE};
-pub use config::{Config, RetentionConfig, StorageConfig, WriterConfig};
+pub use config::{Config, RetentionConfig, StorageConfig, WebuiConfig, WriterConfig};
 pub use ddos::{ConnRateEntry, DdosConfig, DdosEvent, DdosStats, DDOS_STATS};
 pub use jail::{
     FailedEntry, Jail, RegexInfo, MAX_FAILED_TIMESTAMPS, MAX_JAILS, MAX_LOG_FILES,

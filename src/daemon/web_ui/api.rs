@@ -58,6 +58,31 @@ pub struct RateResponse {
     pub icmp_packets_per_sec: u64,
 }
 
+/// Web UI 配置响应
+#[derive(Serialize)]
+pub struct WebuiConfigResponse {
+    pub sse_push_interval: u32,
+    pub rate_warning_pps: u64,
+    pub rate_critical_pps: u64,
+    pub rate_warning_syn: u64,
+    pub rate_critical_syn: u64,
+}
+
+/// 获取 Web UI 配置
+pub fn get_webui_config() -> WebuiConfigResponse {
+    let config = crate::http_exporter::get_global_webui_config()
+        .cloned()
+        .unwrap_or_default();
+    
+    WebuiConfigResponse {
+        sse_push_interval: config.sse_push_interval,
+        rate_warning_pps: config.rate_warning_pps,
+        rate_critical_pps: config.rate_critical_pps,
+        rate_warning_syn: config.rate_warning_syn,
+        rate_critical_syn: config.rate_critical_syn,
+    }
+}
+
 /// 获取 DDoS 速率数据（从内核 procfs 读取）
 pub fn get_ddos_rates() -> Vec<RateResponse> {
     use std::fs;
