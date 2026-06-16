@@ -103,6 +103,9 @@ static struct ip_rate_entry *create_rate_entry(struct firewall_info *fw, u8 af,
 
   atomic64_set(&entry->packet_count, 0);
   atomic64_set(&entry->byte_count, 0);
+  atomic64_set(&entry->syn_count, 0);
+  atomic64_set(&entry->udp_count, 0);
+  atomic64_set(&entry->icmp_count, 0);
   entry->window_start = jiffies;
   entry->last_activity = jiffies;
 
@@ -119,6 +122,7 @@ static struct ip_rate_entry *create_rate_entry(struct firewall_info *fw, u8 af,
  * @af: 地址族
  * @ip: IP 地址
  * @packet_len: 数据包长度（字节）
+ * @protocol: 协议类型（IPPROTO_TCP/IPPROTO_UDP/IPPROTO_ICMP/0）
  *
  * 返回: 0 成功，负数失败
  *
@@ -132,7 +136,8 @@ static struct ip_rate_entry *create_rate_entry(struct firewall_info *fw, u8 af,
  * - 热路径（已存在条目）：无锁，只有原子操作
  * - 冷路径（新条目）：per-bucket 锁，减少竞争
  */
-int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip, u32 packet_len) {
+int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip, u32 packet_len,
+                      u8 protocol) {
   struct ip_rate_entry *entry;
   unsigned long now = jiffies;
   unsigned long elapsed;
@@ -163,11 +168,32 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip, u32 packe
       if (time_after(now - entry->window_start, fw->rate_window_jiffies)) {
         atomic64_set(&entry->packet_count, 1);
         atomic64_set(&entry->byte_count, packet_len);
+        atomic64_set(&entry->syn_count, 0);
+        atomic64_set(&entry->udp_count, 0);
+        atomic64_set(&entry->icmp_count, 0);
         entry->window_start = now;
+
+        /* 根据协议类型更新计数器 */
+        if (protocol == IPPROTO_TCP) {
+          atomic64_set(&entry->syn_count, 1);
+        } else if (protocol == IPPROTO_UDP) {
+          atomic64_set(&entry->udp_count, 1);
+        } else if (protocol == IPPROTO_ICMP) {
+          atomic64_set(&entry->icmp_count, 1);
+        }
       } else {
         /* 其他 CPU 已经重置，只更新计数器 */
         atomic64_inc(&entry->packet_count);
         atomic64_add(packet_len, &entry->byte_count);
+
+        /* 根据协议类型更新计数器 */
+        if (protocol == IPPROTO_TCP) {
+          atomic64_inc(&entry->syn_count);
+        } else if (protocol == IPPROTO_UDP) {
+          atomic64_inc(&entry->udp_count);
+        } else if (protocol == IPPROTO_ICMP) {
+          atomic64_inc(&entry->icmp_count);
+        }
       }
 
       entry->last_activity = now;
@@ -178,6 +204,16 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip, u32 packe
     /* 窗口未过期，原子更新计数器（无锁） */
     atomic64_inc(&entry->packet_count);
     atomic64_add(packet_len, &entry->byte_count);
+
+    /* 根据协议类型更新计数器 */
+    if (protocol == IPPROTO_TCP) {
+      atomic64_inc(&entry->syn_count);
+    } else if (protocol == IPPROTO_UDP) {
+      atomic64_inc(&entry->udp_count);
+    } else if (protocol == IPPROTO_ICMP) {
+      atomic64_inc(&entry->icmp_count);
+    }
+
     entry->last_activity = now;
 
     rcu_read_unlock();
@@ -200,6 +236,16 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip, u32 packe
     /* 其他 CPU 已经创建，更新计数器 */
     atomic64_inc(&entry->packet_count);
     atomic64_add(packet_len, &entry->byte_count);
+
+    /* 根据协议类型更新计数器 */
+    if (protocol == IPPROTO_TCP) {
+      atomic64_inc(&entry->syn_count);
+    } else if (protocol == IPPROTO_UDP) {
+      atomic64_inc(&entry->udp_count);
+    } else if (protocol == IPPROTO_ICMP) {
+      atomic64_inc(&entry->icmp_count);
+    }
+
     entry->last_activity = now;
     spin_unlock_bh(lock);
     return 0;
@@ -215,6 +261,19 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip, u32 packe
   /* 初始化计数器 */
   atomic64_set(&entry->packet_count, 1);
   atomic64_set(&entry->byte_count, packet_len);
+  atomic64_set(&entry->syn_count, 0);
+  atomic64_set(&entry->udp_count, 0);
+  atomic64_set(&entry->icmp_count, 0);
+
+  /* 根据协议类型设置初始值 */
+  if (protocol == IPPROTO_TCP) {
+    atomic64_set(&entry->syn_count, 1);
+  } else if (protocol == IPPROTO_UDP) {
+    atomic64_set(&entry->udp_count, 1);
+  } else if (protocol == IPPROTO_ICMP) {
+    atomic64_set(&entry->icmp_count, 1);
+  }
+
   entry->window_start = now;
   entry->last_activity = now;
 
@@ -256,6 +315,62 @@ bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip) {
 
   if (bytes > fw->max_bytes_per_second) {
     return true;
+  }
+
+  return false;
+}
+
+/**
+ * check_protocol_violation - 检查 IP 是否超过协议专项速率阈值
+ * @fw: 防火墙信息
+ * @af: 地址族
+ * @ip: IP 地址
+ * @protocol: 协议类型（IPPROTO_TCP/IPPROTO_UDP/IPPROTO_ICMP）
+ *
+ * 返回: true 超过阈值，false 未超过或未找到
+ *
+ * 用途：SYN Flood、UDP Flood、ICMP Flood 专项检测
+ *
+ * 注意：调用方必须持有 rcu_read_lock()
+ */
+bool check_protocol_violation(struct firewall_info *fw, u8 af, const void *ip, u8 protocol) {
+  struct ip_rate_entry *entry;
+  u64 count;
+
+  if (!fw || !ip) {
+    return false;
+  }
+
+  entry = find_rate_entry_rcu(fw, af, ip);
+  if (!entry) {
+    return false;
+  }
+
+  /* 根据协议类型检查对应的计数器 */
+  switch (protocol) {
+    case IPPROTO_TCP:
+      count = atomic64_read(&entry->syn_count);
+      if (count > fw->max_syn_per_second) {
+        return true;
+      }
+      break;
+
+    case IPPROTO_UDP:
+      count = atomic64_read(&entry->udp_count);
+      if (count > fw->max_udp_per_second) {
+        return true;
+      }
+      break;
+
+    case IPPROTO_ICMP:
+      count = atomic64_read(&entry->icmp_count);
+      if (count > fw->max_icmp_per_second) {
+        return true;
+      }
+      break;
+
+    default:
+      break;
   }
 
   return false;

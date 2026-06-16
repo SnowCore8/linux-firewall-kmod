@@ -155,6 +155,11 @@ static int __init firewall_init(void) {
   fw_info.max_packets_per_second = DEFAULT_MAX_PACKETS_PER_SECOND;
   fw_info.max_bytes_per_second = DEFAULT_MAX_BYTES_PER_SECOND;
 
+  /* 设置协议专项检测默认配置 */
+  fw_info.max_syn_per_second = DEFAULT_MAX_SYN_PER_SECOND;
+  fw_info.max_udp_per_second = DEFAULT_MAX_UDP_PER_SECOND;
+  fw_info.max_icmp_per_second = DEFAULT_MAX_ICMP_PER_SECOND;
+
   /* 修复：初始化 IPv4 和 IPv6 独立的清理进度索引 */
   fw_info.cleanup_last_bucket_ipv4 = 0;
   fw_info.cleanup_last_bucket_ipv6 = 0;

@@ -35,7 +35,8 @@ void fw_flush_cpu_stats(void) {
   }
 }
 
-static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *skb) {
+static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *skb,
+                                     u8 protocol) {
   unsigned long now;
   struct ban_entry *entry;
   struct whitelist_entry *wl_entry;
@@ -165,18 +166,41 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *
   /* 速率检测（DDoS 防护）：更新速率统计并检查是否超过阈值 */
   if (likely(!is_whitelisted)) {
     u32 packet_len = skb->len;
-    int ret = update_rate_stats(&fw_info, af, src_ip, packet_len);
+    int ret = update_rate_stats(&fw_info, af, src_ip, packet_len, protocol);
 
     if (ret == 0) {
-      /* 检查是否超过速率阈值 */
+      bool should_ban = false;
+      const char *ban_reason = NULL;
+
+      /* 检查是否超过总速率阈值 */
       rcu_read_lock();
       if (check_rate_violation(&fw_info, af, src_ip)) {
-        rcu_read_unlock();
+        should_ban = true;
+        ban_reason = "total rate";
+      } else if (protocol == IPPROTO_TCP || protocol == IPPROTO_UDP || protocol == IPPROTO_ICMP) {
+        /* 检查是否超过协议专项阈值 */
+        if (check_protocol_violation(&fw_info, af, src_ip, protocol)) {
+          should_ban = true;
+          switch (protocol) {
+            case IPPROTO_TCP:
+              ban_reason = "SYN flood";
+              break;
+            case IPPROTO_UDP:
+              ban_reason = "UDP flood";
+              break;
+            case IPPROTO_ICMP:
+              ban_reason = "ICMP flood";
+              break;
+          }
+        }
+      }
+      rcu_read_unlock();
 
+      if (should_ban) {
         /* 超过阈值，自动封禁 */
         char ip_str[INET6_STR_LEN];
         ip_to_str(af, src_ip, ip_str, sizeof(ip_str));
-        pr_warn("firewall: DDoS detected from %s, auto-banning\n", ip_str);
+        pr_warn("firewall: DDoS detected from %s (%s), auto-banning\n", ip_str, ban_reason);
 
         ban_ip(&fw_info, af, src_ip);
 
@@ -187,7 +211,6 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *
           fw_flush_cpu_stats();
         return NF_DROP;
       }
-      rcu_read_unlock();
     }
   }
 
@@ -230,7 +253,7 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
                (ntohl(src_ip) & 0xFF000000) == 0x00000000))
     return NF_ACCEPT;
 
-  return handle_ban_check(FW_AF_INET, &src_ip, skb);
+  return handle_ban_check(FW_AF_INET, &src_ip, skb, iph->protocol);
 }
 
 static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
@@ -284,7 +307,7 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
   if (unlikely((src_ip.s6_addr[0] == 0xFE) && ((src_ip.s6_addr[1] & 0xC0) == 0x80)))
     return NF_ACCEPT;
 
-  return handle_ban_check(FW_AF_INET6, &src_ip, skb);
+  return handle_ban_check(FW_AF_INET6, &src_ip, skb, nexthdr);
 }
 
 struct nf_hook_ops nf_ops_ipv4 __read_mostly = {

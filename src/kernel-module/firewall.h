@@ -58,6 +58,11 @@ void fw_flush_cpu_stats(void);
 #define DEFAULT_MAX_PACKETS_PER_SECOND 10000 /* 默认 10000 PPS */
 #define DEFAULT_MAX_BYTES_PER_SECOND (10 * 1024 * 1024) /* 默认 10 MB/s */
 
+/* 协议专项检测默认配置 */
+#define DEFAULT_MAX_SYN_PER_SECOND 1000   /* 默认 1000 SYN/s */
+#define DEFAULT_MAX_UDP_PER_SECOND 5000   /* 默认 5000 UDP/s */
+#define DEFAULT_MAX_ICMP_PER_SECOND 1000  /* 默认 1000 ICMP/s */
+
 /* 自动发现 IP 的最大数量（与白名单容量一致） */
 #define MAX_DISCOVERED_IPS MAX_WHITELIST_ENTRIES
 
@@ -120,6 +125,11 @@ struct ip_rate_entry {
   /* 速率统计（原子计数器，无锁更新） */
   atomic64_t packet_count; /* 当前窗口内的数据包数 */
   atomic64_t byte_count;   /* 当前窗口内的字节数 */
+
+  /* 协议专项统计（用于 SYN/UDP/ICMP Flood 检测） */
+  atomic64_t syn_count;      /* TCP SYN 包数（SYN Flood 检测） */
+  atomic64_t udp_count;      /* UDP 包数（UDP Flood 检测） */
+  atomic64_t icmp_count;     /* ICMP Echo Request 数（ICMP Flood 检测） */
 
   /* 时间戳（jiffies） */
   unsigned long window_start;  /* 当前窗口的起始时间 */
@@ -191,6 +201,11 @@ struct firewall_info {
   unsigned long max_packets_per_second;  /* 每秒最大数据包数 */
   unsigned long max_bytes_per_second;    /* 每秒最大字节数 */
 
+  /* 协议专项检测配置（Flood 攻击） */
+  unsigned long max_syn_per_second;   /* 每秒最大 TCP SYN 包数（SYN Flood） */
+  unsigned long max_udp_per_second;   /* 每秒最大 UDP 包数（UDP Flood） */
+  unsigned long max_icmp_per_second;  /* 每秒最大 ICMP Echo Request 数（ICMP Flood） */
+
   /* procfs 条目 */
   struct proc_dir_entry *proc_dir;
   struct proc_dir_entry *proc_bans;      /* 统一封禁接口（读/写） */
@@ -226,8 +241,10 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip, int 
 bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip);
 
 /* rate-detector.c - 速率检测（DDoS 防护） */
-int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip, u32 packet_len);
+int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip, u32 packet_len,
+                      u8 protocol);
 bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip);
+bool check_protocol_violation(struct firewall_info *fw, u8 af, const void *ip, u8 protocol);
 void cleanup_rate_entries(struct firewall_info *fw);
 void free_rate_entry_rcu(struct rcu_head *head);
 
