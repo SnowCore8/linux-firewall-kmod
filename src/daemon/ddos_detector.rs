@@ -31,6 +31,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crossbeam::queue::SegQueue;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 
@@ -154,9 +155,9 @@ pub struct ConnRateTracker {
     global_conn_count: AtomicU64,
     /// 上次重置时间 (Unix 秒)
     last_reset_time: RwLock<i64>,
-    /// 全局批量缓冲区（用于 flush 时合并所有线程的缓冲）
-    /// 注意：线程本地缓冲消除写竞争，此锁仅在 flush 时使用
-    global_batch_buffer: RwLock<Vec<ThreadLocalEvent>>,
+    /// 全局批量缓冲区（无锁队列，消除 RwLock 竞争）
+    /// 使用 crossbeam::queue::SegQueue，支持高并发 push/pop
+    global_batch_buffer: SegQueue<ThreadLocalEvent>,
 }
 
 // 线程本地缓冲区（每个线程独立，无锁写入）+ 自适应状态
@@ -166,7 +167,7 @@ thread_local! {
 }
 
 impl ConnRateTracker {
-    /// 创建新的连接速率跟踪器（10Gbps+ 优化：IP 数值化 + 线程本地缓冲 + DashMap 16 分片）
+    /// 创建新的连接速率跟踪器（10Gbps+ 优化：IP 数值化 + 线程本地缓冲 + 无锁队列）
     pub fn new() -> Self {
         let now = now_secs();
 
@@ -177,8 +178,8 @@ impl ConnRateTracker {
             entries_ipv6: DashMap::with_capacity(10_000),
             global_conn_count: AtomicU64::new(0),
             last_reset_time: RwLock::new(now),
-            // 全局缓冲区仅在 flush 时使用（减少锁竞争）
-            global_batch_buffer: RwLock::new(Vec::with_capacity(BATCH_BUFFER_SIZE)),
+            // 全局缓冲区使用无锁队列（消除 RwLock 竞争）
+            global_batch_buffer: SegQueue::new(),
         }
     }
 
@@ -289,13 +290,13 @@ impl ConnRateTracker {
             });
         });
 
-        // 将线程本地缓冲的事件转移到全局缓冲区
-        let mut global_buf = self.global_batch_buffer.write();
-        global_buf.extend(events);
+        // 将线程本地缓冲的事件转移到全局无锁队列
+        for event in events {
+            self.global_batch_buffer.push(event);
+        }
 
-        // 全局缓冲区达到阈值时，刷新到 DashMap
-        if global_buf.len() >= BATCH_BUFFER_SIZE {
-            drop(global_buf); // 释放锁，避免死锁
+        // 全局队列达到阈值时，刷新到 DashMap
+        if self.global_batch_buffer.len() >= BATCH_BUFFER_SIZE {
             self.flush_batch_buffer();
         }
     }
@@ -306,12 +307,14 @@ impl ConnRateTracker {
     ///
     /// - 将 1000 个 DashMap 操作合并为一次批量更新
     /// - 使用 HashMap 聚合相同 IP 的事件，减少 DashMap 访问次数
-    /// - IPv4 使用 u32 键（避免字符串哈希），IPv6 使用 Arc<str> 键
+    /// - IPv4 使用 u32 键（避免字符串哈希），IPv6 使用 [u8; 16] 键
+    /// - **无锁队列**：使用 SegQueue::pop 逐个取出事件，无锁竞争
     fn flush_batch_buffer(&self) {
-        let events = {
-            let mut buffer = self.global_batch_buffer.write();
-            std::mem::take(&mut *buffer)
-        };
+        // 从无锁队列中取出所有事件
+        let mut events = Vec::with_capacity(BATCH_BUFFER_SIZE);
+        while let Some(event) = self.global_batch_buffer.pop() {
+            events.push(event);
+        }
 
         if events.is_empty() {
             return;
