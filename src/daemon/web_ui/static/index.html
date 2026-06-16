@@ -11,15 +11,11 @@
         <header>
             <h1>🛡️ Firewall Daemon 监控大盘</h1>
             <div class="header-controls">
-                <span id="status" class="status-badge">加载中...</span>
-                <button id="refresh-btn" class="btn">手动刷新</button>
-                <select id="refresh-interval" class="select">
-                    <option value="5">5秒刷新</option>
-                    <option value="10" selected>10秒刷新</option>
-                    <option value="30">30秒刷新</option>
-                    <option value="60">60秒刷新</option>
-                    <option value="0">关闭自动刷新</option>
-                </select>
+                <span id="status" class="status-badge">
+                    <span class="status-dot"></span>
+                    <span class="status-text">加载中...</span>
+                </span>
+                <button id="refresh-btn" class="btn" title="重新连接 SSE">重新连接</button>
             </div>
         </header>
 
@@ -62,6 +58,14 @@
             </div>
         </section>
 
+        <!-- DDoS 速率面板 -->
+        <section class="rates-section">
+            <h2>🔥 DDoS 速率监控（实时）</h2>
+            <div class="rates-grid" id="rates-grid">
+                <div class="rates-empty">暂无活跃速率数据</div>
+            </div>
+        </section>
+
         <!-- 图表区 -->
         <section class="charts-grid">
             <div class="chart-card">
@@ -79,6 +83,10 @@
             <div class="chart-card">
                 <h3>实时流量</h3>
                 <canvas id="traffic-chart"></canvas>
+            </div>
+            <div class="chart-card chart-card-wide">
+                <h3>📈 实时速率时间轴（最近 5 分钟）</h3>
+                <canvas id="rate-timeline-chart"></canvas>
             </div>
         </section>
 

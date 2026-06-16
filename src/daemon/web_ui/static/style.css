@@ -67,11 +67,37 @@ header h1 {
     font-weight: 500;
     background: var(--bg-tertiary);
     color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .status-badge.online {
     background: var(--accent-green);
     color: white;
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    display: inline-block;
+}
+
+.status-badge.online .status-dot {
+    animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.6;
+        transform: scale(1.2);
+    }
 }
 
 .btn {
@@ -159,6 +185,10 @@ header h1 {
     padding: 24px;
     border-radius: var(--card-radius);
     box-shadow: 0 4px 6px var(--shadow);
+}
+
+.chart-card-wide {
+    grid-column: 1 / -1;
 }
 
 .chart-card h3 {
@@ -297,3 +327,194 @@ footer a:hover {
 .table-section {
     animation: fadeIn 0.5s ease-out;
 }
+
+/* DDoS Rates Section */
+.rates-section {
+    background: var(--bg-secondary);
+    padding: 24px;
+    border-radius: var(--card-radius);
+    box-shadow: 0 4px 6px var(--shadow);
+    margin-bottom: 30px;
+    animation: fadeIn 0.5s ease-out;
+}
+
+.rates-section h2 {
+    margin-bottom: 20px;
+    font-size: 22px;
+    font-weight: 600;
+}
+
+.rates-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 20px;
+}
+
+.rates-empty {
+    grid-column: 1 / -1;
+    text-align: center;
+    color: var(--text-muted);
+    padding: 40px;
+    font-size: 16px;
+}
+
+.rate-card {
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    padding: 16px;
+    border: 2px solid transparent;
+    transition: all 0.3s ease;
+}
+
+.rate-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 12px var(--shadow);
+}
+
+.rate-card.rate-normal {
+    border-color: var(--accent-green);
+}
+
+.rate-card.rate-warning {
+    border-color: var(--accent-yellow);
+    background: rgba(245, 158, 11, 0.1);
+}
+
+.rate-card.rate-critical {
+    border-color: var(--accent-red);
+    background: rgba(239, 68, 68, 0.1);
+    animation: pulse-border 2s ease-in-out infinite;
+}
+
+@keyframes pulse-border {
+    0%, 100% {
+        border-color: var(--accent-red);
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+    }
+    50% {
+        border-color: #ff6b6b;
+        box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+    }
+}
+
+.rate-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.rate-ip {
+    font-family: 'Courier New', monospace;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.rate-alert {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.rate-alert.rate-normal {
+    background: var(--accent-green);
+    color: white;
+}
+
+.rate-alert.rate-warning {
+    background: var(--accent-yellow);
+    color: white;
+}
+
+.rate-alert.rate-critical {
+    background: var(--accent-red);
+    color: white;
+    animation: blink 1s ease-in-out infinite;
+}
+
+@keyframes blink {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.6;
+    }
+}
+
+.rate-stats {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+}
+
+.rate-stat {
+    text-align: center;
+}
+
+.rate-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.rate-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-family: 'Courier New', monospace;
+    transition: all 0.3s ease;
+}
+
+/* Value change animation */
+.rate-value.updated {
+    animation: value-flash 0.5s ease-out;
+}
+
+@keyframes value-flash {
+    0% {
+        color: var(--accent-blue);
+        transform: scale(1.1);
+    }
+    100% {
+        color: var(--text-primary);
+        transform: scale(1);
+    }
+}
+
+/* Responsive rates */
+@media (max-width: 768px) {
+    .rates-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .rate-stats {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+/* Stat card value animation */
+.stat-value {
+    transition: all 0.3s ease;
+}
+
+.stat-value.updated {
+    animation: value-update 0.5s ease-out;
+}
+
+@keyframes value-update {
+    0% {
+        color: var(--accent-blue);
+        transform: scale(1.05);
+    }
+    100% {
+        color: var(--text-primary);
+        transform: scale(1);
+    }
+}
+

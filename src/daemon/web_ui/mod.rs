@@ -3,11 +3,13 @@
 //! # 功能
 //! - 静态资源服务（HTML/CSS/JS 嵌入二进制）
 //! - JSON API 端点（统计数据、封禁列表、Jail 配置）
+//! - SSE 实时推送（Server-Sent Events）
 //! - 与现有 HTTP 导出器集成
 
 use rust_embed::RustEmbed;
 
 pub mod api;
+pub mod sse;
 
 /// 嵌入的静态资源
 #[derive(RustEmbed)]

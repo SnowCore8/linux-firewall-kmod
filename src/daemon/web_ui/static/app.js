@@ -2,34 +2,26 @@
 'use strict';
 
 // Global state
-let refreshInterval = 10000; // 10 seconds
-let refreshTimer = null;
 let charts = {};
+let eventSource = null;
 
-// API endpoints
-const API_ENDPOINTS = {
-    stats: '/api/stats',
-    bans: '/api/bans',
-    jails: '/api/jails'
-};
+// SSE endpoint
+const SSE_ENDPOINT = '/api/events';
 
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', () => {
     initializeCharts();
     setupEventListeners();
-    loadData();
-    startAutoRefresh();
+    connectSSE();
 });
 
 // Setup event listeners
 function setupEventListeners() {
-    // Manual refresh button
-    document.getElementById('refresh-btn').addEventListener('click', loadData);
-
-    // Refresh interval selector
-    document.getElementById('refresh-interval').addEventListener('change', (e) => {
-        refreshInterval = parseInt(e.target.value) * 1000;
-        startAutoRefresh();
+    // Manual refresh button (fallback for SSE)
+    document.getElementById('refresh-btn').addEventListener('click', () => {
+        if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+            connectSSE();
+        }
     });
 
     // Search input
@@ -39,64 +31,87 @@ function setupEventListeners() {
     document.getElementById('jail-filter').addEventListener('change', filterTable);
 }
 
-// Start auto-refresh
-function startAutoRefresh() {
-    if (refreshTimer) {
-        clearInterval(refreshTimer);
+// Connect to SSE endpoint
+function connectSSE() {
+    if (eventSource) {
+        eventSource.close();
     }
 
-    if (refreshInterval > 0) {
-        refreshTimer = setInterval(loadData, refreshInterval);
-    }
-}
+    updateStatus('loading');
+    eventSource = new EventSource(SSE_ENDPOINT);
 
-// Load all data
-async function loadData() {
-    try {
-        updateStatus('loading');
+    // Listen for stats events
+    eventSource.addEventListener('stats', (event) => {
+        try {
+            const stats = JSON.parse(event.data);
+            updateStats(stats);
+            updateCharts(stats);
+            updateStatus('online');
+        } catch (error) {
+            console.error('Failed to parse stats event:', error);
+        }
+    });
 
-        const [stats, bans, jails] = await Promise.all([
-            fetchJSON(API_ENDPOINTS.stats),
-            fetchJSON(API_ENDPOINTS.bans),
-            fetchJSON(API_ENDPOINTS.jails)
-        ]);
+    // Listen for bans events
+    eventSource.addEventListener('bans', (event) => {
+        try {
+            const bans = JSON.parse(event.data);
+            updateBansTable(bans);
+        } catch (error) {
+            console.error('Failed to parse bans event:', error);
+        }
+    });
 
-        updateStats(stats);
-        updateCharts(stats);
-        updateBansTable(bans);
-        updateJailFilter(jails);
+    // Listen for jails events
+    eventSource.addEventListener('jails', (event) => {
+        try {
+            const jails = JSON.parse(event.data);
+            updateJailFilter(jails);
+        } catch (error) {
+            console.error('Failed to parse jails event:', error);
+        }
+    });
 
-        updateStatus('online');
-    } catch (error) {
-        console.error('Failed to load data:', error);
+    // Listen for rates events
+    eventSource.addEventListener('rates', (event) => {
+        try {
+            const rates = JSON.parse(event.data);
+            updateRatesPanel(rates);
+        } catch (error) {
+            console.error('Failed to parse rates event:', error);
+        }
+    });
+
+    // Handle connection errors
+    eventSource.onerror = () => {
+        console.error('SSE connection error');
         updateStatus('offline');
-    }
-}
+        // EventSource will auto-reconnect
+    };
 
-// Fetch JSON from API
-async function fetchJSON(url) {
-    const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-    return response.json();
+    // Handle connection open
+    eventSource.onopen = () => {
+        console.log('SSE connection established');
+        updateStatus('online');
+    };
 }
 
 // Update status badge
 function updateStatus(status) {
     const badge = document.getElementById('status');
+    const text = badge.querySelector('.status-text');
     badge.className = 'status-badge';
 
     switch (status) {
         case 'online':
-            badge.textContent = '在线';
+            text.textContent = '实时连接';
             badge.classList.add('online');
             break;
         case 'loading':
-            badge.textContent = '加载中...';
+            text.textContent = '连接中...';
             break;
         case 'offline':
-            badge.textContent = '离线';
+            text.textContent = '连接断开';
             break;
     }
 }
@@ -256,6 +271,100 @@ function initializeCharts() {
             }
         }
     });
+
+    // Rate timeline chart (real-time, 5 minutes)
+    const rateTimelineCtx = document.getElementById('rate-timeline-chart').getContext('2d');
+    charts.rateTimeline = new Chart(rateTimelineCtx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [
+                {
+                    label: '总速率 (pps)',
+                    data: [],
+                    borderColor: '#3b82f6',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    tension: 0.4,
+                    fill: true,
+                    borderWidth: 2
+                },
+                {
+                    label: 'SYN',
+                    data: [],
+                    borderColor: '#ef4444',
+                    backgroundColor: 'rgba(239, 68, 68, 0.05)',
+                    tension: 0.4,
+                    fill: false,
+                    borderWidth: 1
+                },
+                {
+                    label: 'UDP',
+                    data: [],
+                    borderColor: '#f59e0b',
+                    backgroundColor: 'rgba(245, 158, 11, 0.05)',
+                    tension: 0.4,
+                    fill: false,
+                    borderWidth: 1
+                },
+                {
+                    label: 'ICMP',
+                    data: [],
+                    borderColor: '#8b5cf6',
+                    backgroundColor: 'rgba(139, 92, 246, 0.05)',
+                    tension: 0.4,
+                    fill: false,
+                    borderWidth: 1
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            animation: {
+                duration: 300
+            },
+            plugins: {
+                legend: {
+                    position: 'top',
+                    labels: {
+                        usePointStyle: true,
+                        padding: 15
+                    }
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    grid: { color: 'rgba(71, 85, 105, 0.3)' },
+                    ticks: {
+                        callback: function(value) {
+                            if (value >= 1000000) return (value / 1000000).toFixed(1) + 'M';
+                            if (value >= 1000) return (value / 1000).toFixed(1) + 'K';
+                            return value;
+                        }
+                    }
+                },
+                x: {
+                    grid: { display: false },
+                    ticks: {
+                        maxTicksLimit: 10,
+                        maxRotation: 0
+                    }
+                }
+            }
+        }
+    });
+
+    // Initialize rate timeline with empty data (5 minutes = 300 seconds)
+    const maxTimelinePoints = 300;
+    charts.rateTimeline.data.labels = Array(maxTimelinePoints).fill('');
+    charts.rateTimeline.data.datasets.forEach(dataset => {
+        dataset.data = Array(maxTimelinePoints).fill(0);
+    });
 }
 
 // Update charts with new data
@@ -328,6 +437,132 @@ function updateJailFilter(jails) {
 
     // Restore previous selection
     select.value = currentValue;
+}
+
+// Update DDoS rates panel
+function updateRatesPanel(rates) {
+    const grid = document.getElementById('rates-grid');
+
+    if (!rates || rates.length === 0) {
+        grid.innerHTML = '<div class="rates-empty">暂无活跃速率数据</div>';
+        return;
+    }
+
+    // Update rate cards
+    grid.innerHTML = rates.map(rate => {
+        const totalPps = rate.packets_per_sec;
+        const totalBps = rate.bytes_per_sec;
+        const synPps = rate.syn_packets_per_sec;
+        const udpPps = rate.udp_packets_per_sec;
+        const icmpPps = rate.icmp_packets_per_sec;
+
+        // 根据速率确定告警级别
+        let alertLevel = 'normal';
+        if (totalPps > 10000 || synPps > 1000) {
+            alertLevel = 'critical';
+        } else if (totalPps > 1000 || synPps > 100) {
+            alertLevel = 'warning';
+        }
+
+        return `
+            <div class="rate-card rate-${alertLevel}">
+                <div class="rate-header">
+                    <span class="rate-ip">${rate.ip}</span>
+                    <span class="rate-alert rate-${alertLevel}">${alertLevel === 'critical' ? '🚨 严重' : alertLevel === 'warning' ? '⚠️ 警告' : '✓ 正常'}</span>
+                </div>
+                <div class="rate-stats">
+                    <div class="rate-stat">
+                        <div class="rate-label">总速率</div>
+                        <div class="rate-value">${formatRate(totalPps, 'pps')}</div>
+                    </div>
+                    <div class="rate-stat">
+                        <div class="rate-label">带宽</div>
+                        <div class="rate-value">${formatRate(totalBps, 'bps')}</div>
+                    </div>
+                    <div class="rate-stat">
+                        <div class="rate-label">SYN</div>
+                        <div class="rate-value">${formatRate(synPps, 'pps')}</div>
+                    </div>
+                    <div class="rate-stat">
+                        <div class="rate-label">UDP</div>
+                        <div class="rate-value">${formatRate(udpPps, 'pps')}</div>
+                    </div>
+                    <div class="rate-stat">
+                        <div class="rate-label">ICMP</div>
+                        <div class="rate-value">${formatRate(icmpPps, 'pps')}</div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    // Update rate timeline chart
+    updateRateTimeline(rates);
+}
+
+// Update rate timeline chart (real-time rolling window)
+function updateRateTimeline(rates) {
+    if (!charts.rateTimeline) return;
+
+    const maxTimelinePoints = 300; // 5 minutes
+
+    // Calculate total rates across all IPs
+    let totalPps = 0;
+    let totalSyn = 0;
+    let totalUdp = 0;
+    let totalIcmp = 0;
+
+    rates.forEach(rate => {
+        totalPps += rate.packets_per_sec;
+        totalSyn += rate.syn_packets_per_sec;
+        totalUdp += rate.udp_packets_per_sec;
+        totalIcmp += rate.icmp_packets_per_sec;
+    });
+
+    // Get current time label
+    const now = new Date();
+    const timeLabel = now.toLocaleTimeString('zh-CN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+    });
+
+    // Add new data point
+    charts.rateTimeline.data.labels.push(timeLabel);
+    charts.rateTimeline.data.datasets[0].data.push(totalPps);
+    charts.rateTimeline.data.datasets[1].data.push(totalSyn);
+    charts.rateTimeline.data.datasets[2].data.push(totalUdp);
+    charts.rateTimeline.data.datasets[3].data.push(totalIcmp);
+
+    // Remove oldest data point if exceeding max
+    if (charts.rateTimeline.data.labels.length > maxTimelinePoints) {
+        charts.rateTimeline.data.labels.shift();
+        charts.rateTimeline.data.datasets.forEach(dataset => {
+            dataset.data.shift();
+        });
+    }
+
+    // Update chart with animation
+    charts.rateTimeline.update('default');
+}
+
+// Format rate with appropriate unit
+function formatRate(value, type) {
+    if (value === 0) return '0';
+
+    const units = type === 'bps'
+        ? ['bps', 'Kbps', 'Mbps', 'Gbps']
+        : ['pps', 'Kpps', 'Mpps', 'Gpps'];
+
+    let unitIndex = 0;
+    let formattedValue = value;
+
+    while (formattedValue >= 1000 && unitIndex < units.length - 1) {
+        formattedValue /= 1000;
+        unitIndex++;
+    }
+
+    return `${formattedValue.toFixed(unitIndex === 0 ? 0 : 2)} ${units[unitIndex]}`;
 }
 
 // Filter table based on search and jail filter

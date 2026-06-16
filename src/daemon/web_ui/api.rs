@@ -47,6 +47,77 @@ pub struct JailResponse {
     pub ban_count: usize,
 }
 
+/// DDoS 速率信息响应
+#[derive(Serialize)]
+pub struct RateResponse {
+    pub ip: String,
+    pub packets_per_sec: u64,
+    pub bytes_per_sec: u64,
+    pub syn_packets_per_sec: u64,
+    pub udp_packets_per_sec: u64,
+    pub icmp_packets_per_sec: u64,
+}
+
+/// 获取 DDoS 速率数据（从内核 procfs 读取）
+pub fn get_ddos_rates() -> Vec<RateResponse> {
+    use std::fs;
+
+    let rates_path = "/proc/firewall/rates";
+    let content = match fs::read_to_string(rates_path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut rates = Vec::new();
+
+    // 解析 procfs 输出格式：
+    // ip=<ip> packets=<n> bytes=<n> syn=<n> udp=<n> icmp=<n>
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let mut ip = String::new();
+        let mut packets = 0u64;
+        let mut bytes = 0u64;
+        let mut syn = 0u64;
+        let mut udp = 0u64;
+        let mut icmp = 0u64;
+
+        for part in line.split_whitespace() {
+            if let Some((key, value)) = part.split_once('=') {
+                match key {
+                    "ip" => ip = value.to_string(),
+                    "packets" => packets = value.parse().unwrap_or(0),
+                    "bytes" => bytes = value.parse().unwrap_or(0),
+                    "syn" => syn = value.parse().unwrap_or(0),
+                    "udp" => udp = value.parse().unwrap_or(0),
+                    "icmp" => icmp = value.parse().unwrap_or(0),
+                    _ => {}
+                }
+            }
+        }
+
+        if !ip.is_empty() {
+            rates.push(RateResponse {
+                ip,
+                packets_per_sec: packets,
+                bytes_per_sec: bytes,
+                syn_packets_per_sec: syn,
+                udp_packets_per_sec: udp,
+                icmp_packets_per_sec: icmp,
+            });
+        }
+    }
+
+    // 按包速率降序排序，显示最活跃的 IP
+    rates.sort_by(|a, b| b.packets_per_sec.cmp(&a.packets_per_sec));
+
+    // 只返回前 10 个最活跃的 IP
+    rates.truncate(10);
+    rates
+}
+
 /// 获取统计数据
 pub fn get_stats() -> StatsResponse {
     let now = crate::types::now_secs();

@@ -199,6 +199,9 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
                 "error" => %e
             );
         }
+    } else if let (&Method::Get, "/api/events") = (request.method(), url.as_str()) {
+        // SSE: 实时事件推送（Server-Sent Events）
+        web_ui::sse::handle_sse_connection(request);
     } else {
         let body = "404 Not Found\r\n";
         let response = Response::from_string(body).with_status_code(StatusCode(404));
