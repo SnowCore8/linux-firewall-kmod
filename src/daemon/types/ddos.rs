@@ -1,6 +1,11 @@
 //! DDoS 防护相关数据结构：DdosConfig、ConnRateEntry、DdosEvent、DdosStats
+//!
+//! # 10Gbps 优化
+//!
+//! - `ConnRateEntry.ip`: 使用 `Arc<str>` 共享字符串，避免重复分配
 
 use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 
 // ============================================================================
 // DDoS 配置
@@ -43,11 +48,11 @@ impl Default for DdosConfig {
 // 连接速率跟踪
 // ============================================================================
 
-/// 连接速率跟踪条目
+/// 连接速率跟踪条目（10Gbps 优化：使用 Arc<str> 共享 IP 字符串）
 #[derive(Debug, Clone)]
 pub struct ConnRateEntry {
-    /// IP 地址
-    pub ip: String,
+    /// IP 地址（Arc 共享，避免重复分配）
+    pub ip: Arc<str>,
     /// 时间窗口内的连接计数
     pub conn_count: u64,
     /// 时间窗口内的失败计数
@@ -62,9 +67,9 @@ pub struct ConnRateEntry {
 
 impl ConnRateEntry {
     /// 创建新的连接速率条目
-    pub fn new(ip: String, now: i64) -> Self {
+    pub fn new(ip: impl Into<Arc<str>>, now: i64) -> Self {
         Self {
-            ip,
+            ip: ip.into(),
             conn_count: 0,
             fail_count: 0,
             window_start: now,

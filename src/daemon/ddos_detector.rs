@@ -24,6 +24,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use parking_lot::RwLock;
 
@@ -36,10 +37,11 @@ use crate::types::{now_secs, ConnRateEntry, DdosConfig, DdosEvent, DDOS_STATS};
 /// # 性能特性
 ///
 /// - `global_conn_count`: 原子计数器，无锁更新（10Gbps 关键路径）
+/// - `entries`: HashMap<Arc<str>, ConnRateEntry>，Arc 共享 IP 字符串
 /// - `entries`: RwLock 保护，每线程本地缓存可进一步优化（未来）
 pub struct ConnRateTracker {
-    /// IP → 连接速率条目（写锁保护，热路径瓶颈）
-    entries: RwLock<HashMap<String, ConnRateEntry>>,
+    /// IP → 连接速率条目（Arc<str> 作为 key，共享字符串）
+    entries: RwLock<HashMap<Arc<str>, ConnRateEntry>>,
     /// 全局连接计数（原子操作，无锁）
     global_conn_count: AtomicU64,
     /// 上次重置时间 (Unix 秒)
@@ -59,7 +61,7 @@ impl ConnRateTracker {
         }
     }
 
-    /// 记录一次连接（10Gbps 优化：原子操作更新全局计数）
+    /// 记录一次连接（10Gbps 优化：原子操作更新全局计数 + Arc<str> 共享 IP）
     ///
     /// # Arguments
     /// * `ip` - 来源 IP 地址
@@ -69,12 +71,13 @@ impl ConnRateTracker {
         // 原子更新全局计数（无锁，10Gbps 关键路径）
         self.global_conn_count.fetch_add(1, Ordering::Relaxed);
 
-        // 更新 per-IP 计数（仍需写锁，未来可优化为线程本地缓存）
+        // 更新 per-IP 计数（仍需写锁，但使用 Arc<str> 减少分配）
         {
             let mut entries = self.entries.write();
+            let ip_arc: Arc<str> = Arc::from(ip);
             let entry = entries
-                .entry(ip.to_string())
-                .or_insert_with(|| ConnRateEntry::new(ip.to_string(), now));
+                .entry(ip_arc.clone())
+                .or_insert_with(|| ConnRateEntry::new(ip_arc, now));
 
             entry.conn_count += 1;
             entry.last_activity = now;
@@ -85,7 +88,7 @@ impl ConnRateTracker {
         }
     }
 
-    /// 记录一次失败尝试
+    /// 记录一次失败尝试（10Gbps 优化：Arc<str> 共享 IP）
     ///
     /// # Arguments
     /// * `ip` - 来源 IP 地址
@@ -93,9 +96,10 @@ impl ConnRateTracker {
         let now = now_secs();
 
         let mut entries = self.entries.write();
+        let ip_arc: Arc<str> = Arc::from(ip);
         let entry = entries
-            .entry(ip.to_string())
-            .or_insert_with(|| ConnRateEntry::new(ip.to_string(), now));
+            .entry(ip_arc.clone())
+            .or_insert_with(|| ConnRateEntry::new(ip_arc, now));
 
         entry.fail_count += 1;
         entry.last_activity = now;
@@ -142,7 +146,7 @@ impl ConnRateTracker {
         // auto_ban_threshold 比较永远基于 1，自动封禁完全失效。
 
         struct PerIpViolation {
-            ip: String,
+            ip: Arc<str>,
             event_type: &'static str,
             rate_for_event: f64,
             threshold_for_event: f64,
@@ -214,7 +218,7 @@ impl ConnRateTracker {
         {
             let mut entries = self.entries.write();
             for v in &violations {
-                if let Some(entry) = entries.get_mut(&v.ip) {
+                if let Some(entry) = entries.get_mut(v.ip.as_ref()) {
                     entry.violation_count += 1;
 
                     let action = if entry.violation_count >= config.auto_ban_threshold {
@@ -227,7 +231,7 @@ impl ConnRateTracker {
                     };
 
                     events.push(DdosEvent {
-                        ip: v.ip.clone(),
+                        ip: v.ip.to_string(),
                         event_type: v.event_type.to_string(),
                         rate_per_second: v.rate_for_event,
                         threshold: v.threshold_for_event,
@@ -320,8 +324,8 @@ mod tests {
 
     #[test]
     fn test_conn_rate_entry_new() {
-        let entry = ConnRateEntry::new("1.2.3.4".to_string(), 1000);
-        assert_eq!(entry.ip, "1.2.3.4");
+        let entry = ConnRateEntry::new("1.2.3.4", 1000);
+        assert_eq!(&*entry.ip, "1.2.3.4");
         assert_eq!(entry.conn_count, 0);
         assert_eq!(entry.fail_count, 0);
         assert_eq!(entry.window_start, 1000);
