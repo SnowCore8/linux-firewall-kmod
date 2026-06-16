@@ -35,6 +35,12 @@ jobs:
       - name: 检查守护进程 lint（clippy）
         run: cargo clippy --release --lib -- -D warnings
 
+      - name: 运行守护进程单元测试（cargo test）
+        run: |
+          echo "=== 运行 Rust 单元测试 ==="
+          cargo test --release --lib
+          echo "✓ 单元测试通过"
+
       - name: 检查 YAML 配置（yamllint）
         run: yamllint -c .yamllint config/*.yaml
 
@@ -114,7 +120,6 @@ jobs:
           fi
 
       - name: 编译内核模块
-        continue-on-error: true
         id: kernel-module-build
         run: |
           set -x
@@ -122,6 +127,7 @@ jobs:
             echo "=== 步骤 2: 编译内核模块 ==="
             echo "使用 KDIR=${{ steps.kdir.outputs.KDIR }}"
             echo "内核版本: $(ls $(echo ${{ steps.kdir.outputs.KDIR }} | head -c 20)/.. 2>/dev/null | head -1 || echo '未知')"
+            # 内核头文件可用时，编译必须成功（不允许静默失败）
             make kernel-module KDIR=${{ steps.kdir.outputs.KDIR }}
             echo "✓ 内核模块编译完成"
           else
@@ -132,17 +138,10 @@ jobs:
       - name: 编译结果总结
         run: |
           echo "=== 编译结果总结 ==="
-          if [[ "${{ steps.kernel-module-build.outcome }}" == "success" ]]; then
-            echo "✓ 内核模块: 编译成功"
-          elif [[ "${{ steps.kernel-module-build.outputs.skip }}" == "true" ]]; then
+          if [[ "${{ steps.kernel-module-build.outputs.skip }}" == "true" ]]; then
             echo "⚠ 内核模块: 跳过（内核头文件不可用）"
           else
-            echo "⚠ 内核模块: 编译失败（不影响 CI 继续）"
-            echo "可能的原因:"
-            echo "  1. 内核头文件版本与代码不兼容"
-            echo "  2. 编译器版本差异"
-            echo "  3. 内核 API 变更"
-            echo "建议: 检查内核模块编译日志中的具体错误信息"
+            echo "✓ 内核模块: 编译成功"
           fi
           if [[ -f build/daemon/firewall-daemon ]]; then
             echo "✓ 守护进程: 编译成功"

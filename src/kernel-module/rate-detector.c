@@ -56,8 +56,15 @@ static struct ip_rate_entry *find_rate_entry_rcu(struct firewall_info *fw,
   struct ip_rate_entry *entry;
 
   hlist_for_each_entry_rcu(entry, &table[hash], hash) {
-    if (entry->af == af && compare_ips(af, &entry->addr, ip)) {
-      return entry;
+    if (entry->af != af)
+      continue;
+    /* 热路径优化：根据 af 直接比较，避免 compare_ips 的分支开销 */
+    if (af == FW_AF_INET) {
+      if (entry->addr.ipv4 == *(__be32 *)ip)
+        return entry;
+    } else {
+      if (ipv6_addr_equal(&entry->addr.ipv6, (const struct in6_addr *)ip))
+        return entry;
     }
   }
 

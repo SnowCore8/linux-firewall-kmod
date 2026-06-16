@@ -46,14 +46,23 @@ pub const MAX_JAILS: usize = 16;
 ///   实现滑动窗口的 O(1) 平均复杂度 (R9-7 优化)
 ///
 /// 典型使用流程见 [`crate::failed_tracker::handle_failed_attempt_for_jail`].
+use std::collections::VecDeque;
+
+/// 失败尝试条目: 记录单个 IP 的失败历史
 #[derive(Debug)]
 pub struct FailedEntry {
     /// 失败 IP 的字符串形式 (原样保留,未归一化)
     pub ip: String,
-    /// 失败时间戳 (Unix 秒) 的有序追加数组
-    pub timestamps: Vec<i64>,
+    /// 失败时间戳 (Unix 秒) 的有序追加队列
+    ///
+    /// # 性能优化
+    ///
+    /// 使用 `VecDeque` 而非 `Vec`，FIFO 移出操作从 O(n) 降低到 O(1)。
+    /// 在 10Gbps 场景下，大量失败事件涌入时，`Vec::remove(0)` 会在持有
+    /// 写锁期间执行 O(100) 元素移动，阻塞同一 jail 的所有其他 IP 处理。
+    pub timestamps: VecDeque<i64>,
     /// 滑动窗口起始索引 (R9-7 优化: 避免每次 `count_recent` 从头线性扫描过期时间戳)
-    pub recent_head: AtomicUsize,
+    pub recent_head: std::sync::atomic::AtomicUsize,
 }
 
 impl FailedEntry {
@@ -65,7 +74,7 @@ impl FailedEntry {
     pub fn new(ip: String) -> Self {
         Self {
             ip,
-            timestamps: Vec::with_capacity(MAX_FAILED_TIMESTAMPS),
+            timestamps: VecDeque::with_capacity(MAX_FAILED_TIMESTAMPS),
             recent_head: AtomicUsize::new(0),
         }
     }

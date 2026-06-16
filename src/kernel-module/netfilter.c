@@ -42,15 +42,16 @@ void ddos_ban_worker(struct work_struct *work) {
   if (unlikely(atomic_read(&fw->shutting_down)))
     return;
 
-  if (fw->ddos_ban_pending) {
+  /* 使用 smp_load_acquire 确保看到热路径中先写入的数据 */
+  if (smp_load_acquire(&fw->ddos_ban_pending)) {
     char ip_str[INET6_STR_LEN];
     ip_to_str(fw->ddos_ban_af, &fw->ddos_ban_ip, ip_str, sizeof(ip_str));
     pr_warn("firewall: DDoS detected from %s (%s), auto-banning\n", ip_str, fw->ddos_ban_reason);
 
     ban_ip(fw, fw->ddos_ban_af, &fw->ddos_ban_ip);
 
-    // 重置标志
-    fw->ddos_ban_pending = false;
+    /* 重置标志，使用 WRITE_ONCE 防止编译器优化 */
+    WRITE_ONCE(fw->ddos_ban_pending, false);
   }
 }
 EXPORT_SYMBOL_GPL(ddos_ban_worker);
@@ -219,8 +220,8 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip,
 
       if (should_ban) {
         /* 超过阈值，准备封禁 - 使用工作队列而不是直接封禁，避免netfilter钩子中耗时操作 */
-        if (!fw_info.ddos_ban_pending) { // 避免覆盖未处理的请求
-          fw_info.ddos_ban_pending = true;
+        if (!READ_ONCE(fw_info.ddos_ban_pending)) { // 避免覆盖未处理的请求
+          /* 先准备数据，确保数据写入后再设置 pending 标志 */
           fw_info.ddos_ban_af = af;
           if (af == FW_AF_INET) {
             fw_info.ddos_ban_ip.ipv4 = *(__be32 *)src_ip;
@@ -228,6 +229,9 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip,
             fw_info.ddos_ban_ip.ipv6 = *(struct in6_addr *)src_ip;
           }
           strscpy(fw_info.ddos_ban_reason, ban_reason, sizeof(fw_info.ddos_ban_reason));
+
+          /* 使用 smp_store_release 确保数据写入在设置 pending 之前完成 */
+          smp_store_release(&fw_info.ddos_ban_pending, true);
 
           // 调度工作队列处理封禁
           if (fw_info.ddos_ban_wq) {
@@ -289,9 +293,11 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
   if (unlikely(pkt_len > skb->len))
     return NF_ACCEPT;
 
-  /* 验证校验和 */
-  if (unlikely(ip_fast_csum(iph, iph->ihl) != 0))
-    return NF_ACCEPT;
+  /* 验证校验和（跳过硬件已校验的数据包，优化 10Gbps 性能） */
+  if (skb->ip_summed != CHECKSUM_UNNECESSARY) {
+    if (unlikely(ip_fast_csum(iph, iph->ihl) != 0))
+      return NF_ACCEPT;
+  }
 
   {
     __be16 frag_off = iph->frag_off;

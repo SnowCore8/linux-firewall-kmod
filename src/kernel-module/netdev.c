@@ -143,6 +143,9 @@ void sync_work_handler(struct work_struct *work) {
     }
     if (i == current_count) {
       hlist_del_rcu(&entry->hash);
+      /* 从子网链表中移除（非精确匹配条目） */
+      if (entry->mask.ipv4_mask != 0xFFFFFFFF)
+        list_del_rcu(&entry->subnet_node);
       atomic_dec(&fw->whitelist_count);
       call_rcu(&entry->rcu_head, free_whitelist_entry_rcu);
     }
@@ -162,6 +165,9 @@ void sync_work_handler(struct work_struct *work) {
     }
     if (i == current_count) {
       hlist_del_rcu(&entry->hash);
+      /* 从子网链表中移除（非精确匹配条目） */
+      if (entry->mask.prefix_len < 128)
+        list_del_rcu(&entry->subnet_node);
       atomic_dec(&fw->whitelist_count);
       call_rcu(&entry->rcu_head, free_whitelist_entry_rcu);
     }

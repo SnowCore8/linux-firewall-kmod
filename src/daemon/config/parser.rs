@@ -87,7 +87,12 @@ pub fn validate_and_normalize_path(path: &str) -> Result<()> {
 // ============================================================================
 
 /// 顶层 YAML 结构:`defaults` (全局默认) + `jails` (命名 jail 映射)
+///
+/// # 严格模式
+///
+/// 使用 `deny_unknown_fields` 拒绝未知字段，防止配置错误。
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct YamlConfig {
     #[serde(default)]
     defaults: Option<YamlDefaults>,
@@ -101,6 +106,7 @@ struct YamlConfig {
 
 /// 全局默认字段集合。所有 `Option` 都是"未设置 = 使用 `Config::default()`"
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct YamlDefaults {
     max_retries: Option<u32>,
     findtime: Option<u32>,
@@ -118,6 +124,7 @@ struct YamlDefaults {
 
 /// 单个 jail 的 YAML 表示。支持 `regex` 单条 + `regexes` 嵌套映射两种写法
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct YamlJail {
     enabled: Option<bool>,
     log_files: Option<Vec<String>>,
@@ -133,12 +140,14 @@ struct YamlJail {
 
 /// 嵌套 `regexes` 映射的 value 结构
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct YamlRegexEntry {
     pattern: String,
 }
 
 /// DDoS 防护配置的 YAML 表示
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct YamlDdos {
     enabled: Option<bool>,
     per_ip_conn_rate: Option<u32>,
@@ -150,6 +159,7 @@ struct YamlDdos {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct YamlWebui {
     sse_push_interval: Option<u32>,
     rate_warning_pps: Option<u64>,

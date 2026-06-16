@@ -73,7 +73,6 @@ pub mod daemonizer;
 pub mod ddos_detector;
 pub mod failed_tracker;
 pub mod file_monitor;
-pub mod file_reader;
 pub mod history_snapshot;
 pub mod http_exporter;
 pub mod ip_utils;

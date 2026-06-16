@@ -83,9 +83,9 @@ mod tests {
         let mut hash = jail.failed_hash.write();
         let entry = hash.get_mut("10.0.0.3").unwrap();
 
-        entry.timestamps.push(now - 10);
-        entry.timestamps.push(now - 5);
-        entry.timestamps.push(now - 1);
+        entry.timestamps.push_back(now - 10);
+        entry.timestamps.push_back(now - 5);
+        entry.timestamps.push_back(now - 1);
 
         let count = count_recent(entry, 60, 5);
         assert_eq!(count, 3);
@@ -100,9 +100,9 @@ mod tests {
         let mut hash = jail.failed_hash.write();
         let entry = hash.get_mut("10.0.0.4").unwrap();
 
-        entry.timestamps.push(now - 120);
-        entry.timestamps.push(now - 100);
-        entry.timestamps.push(now - 5);
+        entry.timestamps.push_back(now - 120);
+        entry.timestamps.push_back(now - 100);
+        entry.timestamps.push_back(now - 5);
 
         let count = count_recent(entry, 60, 5);
         assert_eq!(count, 1);

@@ -184,8 +184,10 @@ unsafe fn write_to_fd(fd: RawFd, data: &[u8]) -> Result<()> {
         total_written += written as usize;
     }
 
-    // 确保数据被写入（对于 procfs 文件可能不需要，但为了安全起见）
-    libc::fsync(fd);
+    // 性能优化：移除 fsync 调用
+    // procfs 是虚拟文件系统，write 系统调用直接触发内核操作，
+    // fsync 无实际意义但增加系统调用开销。在 10Gbps 高频封禁场景下，
+    // 每次封禁都执行 fsync 是不必要的性能损耗。
 
     Ok(())
 }

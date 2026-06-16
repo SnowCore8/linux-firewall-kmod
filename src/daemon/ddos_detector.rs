@@ -124,9 +124,15 @@ enum BatchEvent {
 }
 
 /// 批量事件（线程本地缓冲使用）
+///
+/// # 性能优化
+///
+/// 使用 `String` 而非 `Arc<str>`，延迟 Arc 构造到 flush 阶段。
+/// 在 10Gbps 场景下，每次事件都进行 Arc 分配的开销显著。
+/// 改为 flush 时批量构造 Arc，减少堆分配次数。
 #[derive(Debug, Clone)]
 struct ThreadLocalEvent {
-    ip: Arc<str>,
+    ip: String,
     ip_num: u32,
     ipv6_num: [u8; 16],
     is_ipv6: bool,
@@ -199,13 +205,14 @@ impl ConnRateTracker {
 
         // IP 数值化：IPv4 → u32，IPv6 保持字符串
         let parsed = crate::ip_utils::parse_ip(ip);
-        let ip_arc: Arc<str> = Arc::from(ip);
+        // 性能优化：使用 String 而非 Arc<str>，延迟 Arc 构造到 flush 阶段
+        let ip_string = String::from(ip);
 
         // 线程本地缓冲：无锁写入（消除 RwLock 竞争）+ 自适应大小
         let should_flush = THREAD_BUFFER.with(|buffer| {
             let mut buf = buffer.borrow_mut();
             buf.push(ThreadLocalEvent {
-                ip: ip_arc,
+                ip: ip_string,
                 ip_num: parsed.ip_num,
                 ipv6_num: parsed.ipv6_num,
                 is_ipv6: parsed.is_ipv6,
@@ -234,13 +241,14 @@ impl ConnRateTracker {
     pub fn record_failure(&self, ip: &str) {
         // IP 数值化：IPv4 → u32，IPv6 保持字符串
         let parsed = crate::ip_utils::parse_ip(ip);
-        let ip_arc: Arc<str> = Arc::from(ip);
+        // 性能优化：使用 String 而非 Arc<str>，延迟 Arc 构造到 flush 阶段
+        let ip_string = String::from(ip);
 
         // 线程本地缓冲：无锁写入 + 自适应大小
         let should_flush = THREAD_BUFFER.with(|buffer| {
             let mut buf = buffer.borrow_mut();
             buf.push(ThreadLocalEvent {
-                ip: ip_arc,
+                ip: ip_string,
                 ip_num: parsed.ip_num,
                 ipv6_num: parsed.ipv6_num,
                 is_ipv6: parsed.is_ipv6,
@@ -327,11 +335,14 @@ impl ConnRateTracker {
         let mut aggregated_ipv6: HashMap<[u8; 16], (Arc<str>, u64, u64)> = HashMap::new();
 
         for event in events {
+            // 性能优化：在 flush 阶段批量构造 Arc<str>，而非每次事件都构造
+            let ip_arc: Arc<str> = Arc::from(event.ip.as_str());
+
             if event.is_ipv6 {
                 // IPv6: 使用 [u8; 16] 键（快速哈希）
                 let entry = aggregated_ipv6
                     .entry(event.ipv6_num)
-                    .or_insert((event.ip, 0, 0));
+                    .or_insert((ip_arc, 0, 0));
                 match event.event_type {
                     BatchEvent::Connection => entry.1 += 1,
                     BatchEvent::Failure => entry.2 += 1,
@@ -340,7 +351,7 @@ impl ConnRateTracker {
                 // IPv4: 使用 u32 键（快速哈希）
                 let entry = aggregated_ipv4
                     .entry(event.ip_num)
-                    .or_insert((event.ip, 0, 0));
+                    .or_insert((ip_arc, 0, 0));
                 match event.event_type {
                     BatchEvent::Connection => entry.1 += 1,
                     BatchEvent::Failure => entry.2 += 1,

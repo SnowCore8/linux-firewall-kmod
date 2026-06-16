@@ -82,11 +82,12 @@ pub fn count_recent(entry: &FailedEntry, window: i64, max_retries: u32) -> u32 {
 /// - `findtime`: 滑动窗口大小 (秒),用于过期过滤
 pub fn process_failed_timestamps(entry: &mut FailedEntry, now: i64, findtime: i64) {
     if entry.timestamps.len() < MAX_FAILED_TIMESTAMPS {
-        entry.timestamps.push(now);
+        entry.timestamps.push_back(now);
     } else {
-        // 满后移出最旧时间戳腾出空间, 同时维护 recent_head 索引
-        entry.timestamps.remove(0);
-        entry.timestamps.push(now);
+        // 性能优化：使用 VecDeque::pop_front() 替代 Vec::remove(0)
+        // FIFO 移出操作从 O(n) 降低到 O(1)，避免在持有写锁期间阻塞其他 IP 处理
+        entry.timestamps.pop_front();
+        entry.timestamps.push_back(now);
 
         if entry.recent_head.load(std::sync::atomic::Ordering::Relaxed) > 0 {
             entry
@@ -128,7 +129,7 @@ pub fn cleanup_expired_entries(jail: &Jail, now: i64, findtime: i64) -> usize {
 
         // 检查最后一个时间戳是否已过期
         // timestamps 是单调追加的,所以最后一个就是最新的
-        if let Some(&last_ts) = entry.timestamps.last() {
+        if let Some(&last_ts) = entry.timestamps.back() {
             let expired = now - last_ts > findtime;
             !expired // 返回 true 表示保留
         } else {
@@ -174,7 +175,7 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
     if recent_fails >= max_retries {
         // 记录触发封禁的失败统计
         let fail_count = recent_fails;
-        let _window_start = entry.timestamps.first().copied().unwrap_or(now) - findtime_i64;
+        let _window_start = entry.timestamps.front().copied().unwrap_or(now) - findtime_i64;
         let _window_end = now;
 
         // 复用 validate_ip 统一处理 IPv4/IPv6，验证失败时跳过而非静默使用 0
@@ -196,7 +197,9 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
             jail_name: jail.name.clone(),
             reason: crate::types::BanReason::FailedAttempts,
             banned_at: now,
-            expires_at: now + findtime_i64,
+            // 修复：使用 ban_time（封禁时长）而非 findtime（检测窗口）
+            // 与 fail2ban 行为一致：bantime 决定封禁持续时间
+            expires_at: now + i64::from(jail.ban_time),
             is_permanent: false,
             fail_count,
         };

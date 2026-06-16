@@ -134,11 +134,31 @@ pub fn init_logger(log_file_override: Option<&str>) -> Logger {
 ///
 /// 如果 logger 未初始化，返回一个静默 logger（丢弃所有日志）。
 /// 建议在初始化后使用。
+///
+/// # 性能优化
+///
+/// 使用 thread-local 缓存避免每次调用都获取全局 Mutex 锁。
+/// 在 10Gbps 日志解析热路径中，每行日志至少调用一次 `get()`，
+/// Mutex 争用会严重影响吞吐量。thread-local 缓存将锁争用从
+/// 每行日志降低到每线程一次。
 pub fn get() -> Logger {
-    GLOBAL_LOGGER
-        .lock()
-        .clone()
-        .unwrap_or_else(|| Logger::root(slog::Discard, slog::o!()))
+    use std::cell::RefCell;
+
+    thread_local! {
+        static CACHED_LOGGER: RefCell<Option<Logger>> = RefCell::new(None);
+    }
+
+    CACHED_LOGGER.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.is_none() {
+            // 首次调用：从全局 logger 克隆并缓存
+            *cache = GLOBAL_LOGGER
+                .lock()
+                .clone()
+                .or_else(|| Some(Logger::root(slog::Discard, slog::o!())));
+        }
+        cache.as_ref().unwrap().clone()
+    })
 }
 
 /// 重新导出 slog 的日志宏，方便其他模块使用

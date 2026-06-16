@@ -177,6 +177,9 @@ static int __init firewall_init(void) {
   atomic_set(&fw_info.cleanup_cycles, 0);
   atomic_set(&fw_info.cleanup_expired_total, 0);
 
+  /* 初始化延迟工作（必须在可能失败的分配之前，确保错误路径安全） */
+  INIT_DELAYED_WORK(&fw_info.sync_work, sync_work_handler);
+
   /* 初始化 DDoS 封禁延迟处理队列 */
   fw_info.ddos_ban_pending = false;
   fw_info.ddos_ban_wq = alloc_workqueue("firewall_ddos_ban", WQ_UNBOUND, 1);
@@ -190,8 +193,6 @@ static int __init firewall_init(void) {
   if (state_file && strlen(state_file) > 0) {
     restore_state_from_file(state_file);
   }
-
-  INIT_DELAYED_WORK(&fw_info.sync_work, sync_work_handler);
 
   auto_discover_system_ips(&fw_info);
 

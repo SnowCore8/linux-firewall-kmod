@@ -133,17 +133,17 @@ pub fn unban_permanent_ip(ip: &str) -> Result<()> {
 /// 封禁 IP 并记录封禁历史（供 DDoS 检测器等模块使用）。
 ///
 /// 当前实现：`ban_duration == 0` 时走永久封禁，否则走临时封禁。
-/// 临时封禁会更新 `ACTIVE_BAN_CACHE` 并标记 dirty，。
+/// 临时封禁会更新 `ACTIVE_BAN_CACHE` 并标记 dirty。
 ///
 /// # Arguments
 /// - `ip`：待封禁的 IP
 /// - `reason`：封禁原因（审计用）
-/// - `_jail_idx`：关联 jail 索引（暂未使用）
+/// - `jail_name`：关联 jail 名称（用于 /api/bans 和 Prometheus 指标）
 /// - `ban_duration`：封禁时长（秒），0 表示永久封禁
 pub fn ban_ip_with_history(
     ip: &str,
     _reason: &str,
-    _jail_idx: u32,
+    jail_name: &str,
     ban_duration: u64,
 ) -> Result<()> {
     if ban_duration == 0 {
@@ -170,7 +170,7 @@ pub fn ban_ip_with_history(
         let ban_info = crate::types::BanInfo {
             ip: ip.to_string(),
             ip_num,
-            jail_name: "ddos".to_string(),
+            jail_name: jail_name.to_string(),
             reason: crate::types::BanReason::DDoSRateLimit,
             banned_at: now,
             expires_at,

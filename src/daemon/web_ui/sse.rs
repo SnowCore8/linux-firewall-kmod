@@ -4,6 +4,7 @@
 //! 每个连接一个后台线程，定期从数据源读取并推送事件。
 
 use std::io::{self, Read};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -12,6 +13,16 @@ use tiny_http::{Header, Request, Response, StatusCode};
 
 use super::api;
 use crate::http_exporter::get_global_jails;
+
+/// SSE 连接数限制（防止资源耗尽攻击）
+///
+/// 每个 SSE 连接创建一个后台线程，每秒触发完整数据收集。
+/// 恶意客户端可建立大量连接导致 CPU/内存耗尽。
+/// 10 个连接足以满足正常监控需求，同时防止滥用。
+const MAX_SSE_CONNECTIONS: usize = 10;
+
+/// 全局 SSE 连接计数器
+static SSE_CONNECTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// SSE 流式 Reader
 ///
@@ -95,7 +106,37 @@ impl Read for SseReader {
 /// 处理 SSE 连接请求
 ///
 /// 创建后台线程定期推送事件，返回流式响应。
+///
+/// # 安全限制
+///
+/// 全局最多允许 MAX_SSE_CONNECTIONS 个并发连接。超过限制时返回 503 Service Unavailable。
 pub fn handle_sse_connection(request: Request) {
+    // 检查连接数限制
+    let current_count = SSE_CONNECTION_COUNT.load(Ordering::Relaxed);
+    if current_count >= MAX_SSE_CONNECTIONS {
+        crate::logger::warn!(
+            crate::logger::get(),
+            "SSE 连接数达到上限，拒绝新连接";
+            "current" => current_count,
+            "max" => MAX_SSE_CONNECTIONS
+        );
+        let response = Response::new(
+            StatusCode(503),
+            vec![
+                Header::from_bytes("Content-Type", "text/plain").expect("静态 ASCII 头"),
+                Header::from_bytes("Retry-After", "60").expect("静态 ASCII 头"),
+            ],
+            "SSE connection limit reached. Please retry later.".as_bytes(),
+            None,
+            None,
+        );
+        let _ = request.respond(response);
+        return;
+    }
+
+    // 增加连接计数
+    SSE_CONNECTION_COUNT.fetch_add(1, Ordering::Relaxed);
+
     let (sender, receiver) = mpsc::channel::<SseMessage>();
 
     // 获取全局 Web UI 配置
@@ -105,6 +146,15 @@ pub fn handle_sse_connection(request: Request) {
 
     // 启动后台线程：定期收集并推送数据
     thread::spawn(move || {
+        // Guard：线程结束时自动减少连接计数
+        struct ConnectionGuard;
+        impl Drop for ConnectionGuard {
+            fn drop(&mut self) {
+                SSE_CONNECTION_COUNT.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+        let _guard = ConnectionGuard;
+
         // 初始连接，发送欢迎注释
         let _ = sender.send(SseMessage::Comment("SSE 连接已建立".to_string()));
 
