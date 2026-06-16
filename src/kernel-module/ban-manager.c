@@ -238,7 +238,28 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
   struct whitelist_entry *wl_entry;
   int bkt;
   int ret;
+
   if (!ip) {
+    return -EINVAL;
+  }
+
+  /* 验证 IP 地址的合法性 */
+  if (af == FW_AF_INET) {
+    __be32 ipv4 = *(__be32 *)ip;
+    ret = validate_ipv4_address(ipv4, NULL, "ban", false);
+    if (ret != 0) {
+      pr_warn("Invalid IPv4 address for banning: %pI4\n", &ipv4);
+      return ret;
+    }
+  } else if (af == FW_AF_INET6) {
+    const struct in6_addr *ipv6 = (const struct in6_addr *)ip;
+    ret = validate_ipv6_address(ipv6, NULL, "ban", false);
+    if (ret != 0) {
+      pr_warn("Invalid IPv6 address for banning: %pI6\n", ipv6);
+      return ret;
+    }
+  } else {
+    pr_warn("Invalid address family for banning: %d\n", af);
     return -EINVAL;
   }
 

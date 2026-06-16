@@ -55,8 +55,8 @@ void ddos_ban_worker(struct work_struct *work) {
 }
 EXPORT_SYMBOL_GPL(ddos_ban_worker);
 
-static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *skb,
-                                     u8 protocol) {
+static unsigned int handle_ban_check(u8 af, const void *src_ip,
+                                     struct sk_buff *skb, u8 protocol) {
   unsigned long now;
   struct ban_entry *entry;
   struct whitelist_entry *wl_entry;
@@ -203,15 +203,15 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *
         if (check_protocol_violation(&fw_info, af, src_ip, protocol)) {
           should_ban = true;
           switch (protocol) {
-            case IPPROTO_TCP:
-              ban_reason = "SYN flood";
-              break;
-            case IPPROTO_UDP:
-              ban_reason = "UDP flood";
-              break;
-            case IPPROTO_ICMP:
-              ban_reason = "ICMP flood";
-              break;
+          case IPPROTO_TCP:
+            ban_reason = "SYN flood";
+            break;
+          case IPPROTO_UDP:
+            ban_reason = "UDP flood";
+            break;
+          case IPPROTO_ICMP:
+            ban_reason = "ICMP flood";
+            break;
           }
         }
       }
@@ -219,7 +219,7 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *
 
       if (should_ban) {
         /* 超过阈值，准备封禁 - 使用工作队列而不是直接封禁，避免netfilter钩子中耗时操作 */
-        if (!fw_info.ddos_ban_pending) {  // 避免覆盖未处理的请求
+        if (!fw_info.ddos_ban_pending) { // 避免覆盖未处理的请求
           fw_info.ddos_ban_pending = true;
           fw_info.ddos_ban_af = af;
           if (af == FW_AF_INET) {
@@ -228,7 +228,7 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *
             fw_info.ddos_ban_ip.ipv6 = *(struct in6_addr *)src_ip;
           }
           strscpy(fw_info.ddos_ban_reason, ban_reason, sizeof(fw_info.ddos_ban_reason));
-          
+
           // 调度工作队列处理封禁
           if (fw_info.ddos_ban_wq) {
             queue_work(fw_info.ddos_ban_wq, &fw_info.ddos_ban_work);
@@ -259,15 +259,38 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
   struct iphdr iph_copy;
   struct iphdr *iph;
   __be32 src_ip;
+  unsigned int pkt_len;
 
-  if (unlikely(!skb) || unlikely(!pskb_may_pull(skb, sizeof(struct iphdr))))
+  if (unlikely(!skb))
+    return NF_ACCEPT;
+
+  /* 验证 IP 头的最小长度 */
+  if (unlikely(!pskb_may_pull(skb, sizeof(struct iphdr))))
     return NF_ACCEPT;
 
   iph = skb_header_pointer(skb, 0, sizeof(iph_copy), &iph_copy);
-  if (!iph || iph->version != 4 || iph->ihl < 5 || iph->ihl > 15)
+  if (!iph)
     return NF_ACCEPT;
 
-  if (iph->ihl * 4 > ntohs(iph->tot_len))
+  /* 验证 IP 版本 */
+  if (unlikely(iph->version != 4))
+    return NF_ACCEPT;
+
+  /* 验证头部长度 (IHL) */
+  if (unlikely(iph->ihl < 5 || iph->ihl > 15))
+    return NF_ACCEPT;
+
+  /* 验证头部长度与总长度的一致性 */
+  if (unlikely(iph->ihl * 4 > ntohs(iph->tot_len)))
+    return NF_ACCEPT;
+
+  /* 验证数据包总长度与 skb 长度的一致性 */
+  pkt_len = ntohs(iph->tot_len);
+  if (unlikely(pkt_len > skb->len))
+    return NF_ACCEPT;
+
+  /* 验证校验和 */
+  if (unlikely(ip_fast_csum(iph, iph->ihl) != 0))
     return NF_ACCEPT;
 
   {
@@ -295,12 +318,26 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
   u8 nexthdr;
   struct ipv6_opt_hdr opt;
   unsigned int offset;
+  unsigned int pkt_len;
 
-  if (unlikely(!skb) || unlikely(!pskb_may_pull(skb, sizeof(struct ipv6hdr))))
+  if (unlikely(!skb))
+    return NF_ACCEPT;
+
+  /* 验证 IPv6 头的最小长度 */
+  if (unlikely(!pskb_may_pull(skb, sizeof(struct ipv6hdr))))
     return NF_ACCEPT;
 
   iph6 = skb_header_pointer(skb, 0, sizeof(iph6_copy), &iph6_copy);
-  if (!iph6 || iph6->version != 6)
+  if (!iph6)
+    return NF_ACCEPT;
+
+  /* 验证 IP 版本 */
+  if (unlikely(iph6->version != 6))
+    return NF_ACCEPT;
+
+  /* 验证数据包总长度与 skb 长度的一致性 */
+  pkt_len = ntohs(iph6->payload_len) + sizeof(struct ipv6hdr);
+  if (unlikely(pkt_len > skb->len))
     return NF_ACCEPT;
 
   /* 检查 IPv6 分片扩展头：分片包可能绕过基于完整报头的封禁检查 */
