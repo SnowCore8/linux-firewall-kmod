@@ -33,6 +33,38 @@ use slog::{self, Drain, Logger};
 use slog_async::Async;
 use slog_json::Json;
 use std::fs::OpenOptions;
+use std::sync::atomic::{AtomicI64, Ordering};
+
+/// 日志节流器：限制相同消息的输出频率
+pub struct LogThrottler {
+    /// 上次记录相同消息的时间
+    last_log_time: AtomicI64,
+    /// 日志间隔（秒）
+    interval: i64,
+}
+
+impl LogThrottler {
+    /// 创建新的日志节流器
+    pub fn new(interval: i64) -> Self {
+        Self {
+            last_log_time: AtomicI64::new(0),
+            interval,
+        }
+    }
+
+    /// 检查是否可以记录日志
+    pub fn can_log(&self) -> bool {
+        let now = crate::types::now_secs();
+        let last_time = self.last_log_time.load(Ordering::Relaxed);
+
+        if now - last_time >= self.interval {
+            self.last_log_time.store(now, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+}
 
 /// 全局 logger 实例（使用 parking_lot::Mutex 避免 std::sync::Mutex 中毒问题）
 ///
@@ -111,3 +143,46 @@ pub fn get() -> Logger {
 
 /// 重新导出 slog 的日志宏，方便其他模块使用
 pub use slog::{debug, error, info, warn};
+
+#[macro_export]
+macro_rules! log_throttled {
+    ($level:expr, $logger:expr, $msg:expr, $interval:expr, $($args:tt)*) => {{
+        use crate::logger::LogThrottler;
+        use std::sync::{Mutex, OnceLock};
+
+        static THROTTLER: OnceLock<Mutex<LogThrottler>> = OnceLock::new();
+
+        let throttler = THROTTLER.get_or_init(|| Mutex::new(LogThrottler::new($interval)));
+        if throttler.lock().unwrap().can_log() {
+            slog::log!($logger, $level, $msg, $($args)*);
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! info_throttled {
+    ($logger:expr, $msg:expr, $interval:expr, $($args:tt)*) => {
+        log_throttled!(slog::Level::Info, $logger, $msg, $interval, $($args)*)
+    };
+}
+
+#[macro_export]
+macro_rules! warn_throttled {
+    ($logger:expr, $msg:expr, $interval:expr, $($args:tt)*) => {
+        log_throttled!(slog::Level::Warning, $logger, $msg, $interval, $($args)*)
+    };
+}
+
+#[macro_export]
+macro_rules! error_throttled {
+    ($logger:expr, $msg:expr, $interval:expr, $($args:tt)*) => {
+        log_throttled!(slog::Level::Error, $logger, $msg, $interval, $($args)*)
+    };
+}
+
+#[macro_export]
+macro_rules! debug_throttled {
+    ($logger:expr, $msg:expr, $interval:expr, $($args:tt)*) => {
+        log_throttled!(slog::Level::Debug, $logger, $msg, $interval, $($args)*)
+    };
+}
