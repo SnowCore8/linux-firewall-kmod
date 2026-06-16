@@ -242,7 +242,9 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
     return -EINVAL;
   }
 
-  entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+  /* 使用 GFP_ATOMIC：此函数可能在 softirq 上下文（netfilter hook）中被调用
+   * GFP_KERNEL 可能会睡眠，在 softirq 上下文中会导致 panic */
+  entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
   if (!entry) {
     atomic_inc(&fw->alloc_failure_count);
     pr_err("封禁条目内存分配失败\n");
