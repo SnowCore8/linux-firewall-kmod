@@ -16,14 +16,14 @@
 
 | 组件 | 用途 |
 |------|------|
-| Rust | 主要编程语言（12 个模块，约 7000 行） |
+| Rust | 主要编程语言（19 个模块，约 7000 行） |
 | regex | 正则表达式编译和匹配（PCRE2 语法） |
 | tiny_http | Prometheus HTTP 指标服务器（端口 9119） |
-| inotify | Linux 文件变化监控（直接使用 `inotify` crate 绑定，未通过 `notify` 抽象层） |
+| inotify | Linux 文件变化监控（直接使用 `inotify` crate 绑定） |
 
 ## 模块结构
 
-守护进程在 `daemon/` 子目录中按职责划分为 12 个 Rust 模块（含 `lib.rs`）。模块间通过显式 `use` 导入，避免循环依赖。
+守护进程在 `daemon/` 子目录中按职责划分为 19 个 Rust 模块（含 `lib.rs`）。模块间通过显式 `use` 导入，避免循环依赖。
 
 | 模块 | 职责 |
 |------|------|
@@ -62,7 +62,7 @@ graph LR
 
 ## 内存安全
 
-守护进程使用 Rust 实现，所有 `unsafe { }` 块均显式标注 `// SAFETY:` 注释，说明前置条件。当前代码库共有 **19 处** `unsafe` 块，主要集中在：
+守护进程使用 Rust 实现，所有 `unsafe { }` 块均显式标注 `// SAFETY:` 注释，说明前置条件。当前代码库共有 **20 处** `unsafe` 块，主要集中在：
 
 - `libc` 系统调用封装（`read` / `write` / `ioctl` / `fcntl`）
 - `inotify` 原始 fd 操作

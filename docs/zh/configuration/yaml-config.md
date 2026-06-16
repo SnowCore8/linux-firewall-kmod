@@ -9,14 +9,11 @@
 ```yaml
 # 全局默认值
 defaults:
-  max_retries: 5
+  max_retries: 3
   findtime: 600         # 10 分钟
   ban_time: 900         # 15 分钟
   interval: 1           # 检查间隔（秒）
   metrics_port: 9119    # Prometheus 指标端口
-  # 永久黑名单字段必须放在 defaults 下，不要写在顶层
-  permanent_db_path: "/var/lib/firewall/bans.db"
-  permanent_ban_enabled: true   # 默认 false
 
 # Jail 定义
 jails:
@@ -38,7 +35,7 @@ jails:
 
 ```yaml
 defaults:
-  max_retries: 5
+  max_retries: 3
   findtime: 600         # 10 分钟
   ban_time: 900         # 15 分钟
   interval: 1           # 检查间隔（秒）
@@ -47,7 +44,7 @@ defaults:
 
 | 参数 | 类型 | 默认值 | 范围 | 说明 |
 |------|------|--------|------|------|
-| `max_retries` | int | `5` | 1-100 | 最大失败次数，超过则封禁 |
+| `max_retries` | int | `3` | 1-100 | 最大失败次数，超过则封禁 |
 | `findtime` | int | `600` | 1-3600 | 时间窗口（秒），在此时间内累积计数 |
 | `ban_time` | int | `900` | 0 或 1-86400 | 封禁时长（秒），0 表示永久 |
 | `interval` | int | `1` | 1-60 | 日志文件检查间隔（秒） |
@@ -149,52 +146,37 @@ whitelist:
 
 - `127.0.0.1` - 本地回环地址
 
-## 永久黑名单
-
-`ban_time: 0` 的封禁（永久封禁）在内存中保持，重启后失效。
-```yaml
-defaults:
-  # ... 其他字段
-  permanent_db_path: "/var/lib/firewall/bans.db"
-  permanent_ban_enabled: true   # 默认 false
-```
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-
 ## 陷阱 (Pitfalls)
 
 YAML 配置在结构上容易写错，遇到"配置没生效"先看这一节。
 
 ### 字段必须放在 `defaults:` 下
 
-所有 `defaults.*` 字段（包括 `permanent_db_path` / `permanent_ban_enabled` / `log_level` 等）**必须**写在 `defaults:` 块内，**不允许**在顶层出现同名键。解析器只读取 `defaults:` 下的字段，顶层同名字段会被静默忽略，没有任何警告或错误。
+所有 `defaults.*` 字段（包括 `log_level` / `metrics_port` 等）**必须**写在 `defaults:` 块内，**不允许**在顶层出现同名键。解析器只读取 `defaults:` 下的字段，顶层同名字段会被静默忽略，没有任何警告或错误。
 
-**错误示例**（顶层 `permanent_*` —— v2.2.1 修复的真实 bug）：
+**错误示例**（顶层字段）：
 
 ```yaml
 defaults:
-  max_retries: 5
-  # ... 没有 permanent_* 字段
+  max_retries: 3
+  # ... 其他字段
 
 jails:
   sshd: ...
 
 # 顶层字段 —— 解析器会静默忽略
-permanent_db_path: "/var/lib/firewall/bans.db"
-permanent_ban_enabled: true
+log_level: 2
 ```
 
-启动后 `/var/lib/firewall/bans.db` 不会被创建，永久封禁也"看起来没生效"，但日志不会有任何报错。
+启动后配置不会生效，但日志不会有任何报错。
 
 **正确示例**：
 
 ```yaml
 defaults:
-  max_retries: 5
+  max_retries: 3
   # ... 其他字段
-  permanent_db_path: "/var/lib/firewall/bans.db"
-  permanent_ban_enabled: true   # 默认 false
+  log_level: 2
 
 jails:
   sshd: ...
@@ -213,13 +195,11 @@ jails:
 # 全局默认值 - 应用于所有 jail，除非被覆盖
 # ============================================================
 defaults:
-  max_retries: 5
+  max_retries: 3
   findtime: 600         # 10 分钟
   ban_time: 900         # 15 分钟
   interval: 1           # 检查间隔（秒）
   metrics_port: 9119    # Prometheus 指标端口
-  permanent_db_path: "/var/lib/firewall/bans.db"
-  permanent_ban_enabled: true   # 默认 false
 
 # ============================================================
 # Jail 定义 - 每个服务独立监控

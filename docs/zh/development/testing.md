@@ -11,7 +11,7 @@ graph TD
     FW["test_framework.sh 断言函数、彩色输出、报告生成"]
     CFG["test_config.sh 路径与参数变量（KERNEL_MODULE_PATH 等）"]
 
-    subgraph SUITES["suites/ 编号测试套件（按 01-15 顺序执行，05/06 跳过，13 套件共 115 项）"]
+    subgraph SUITES["suites/ 编号测试套件（按 01-14 顺序执行，05/06 跳过，12 套件共 103 项）"]
         S01["01_module_basic.sh"]
         S02["02_procfs_interface.sh"]
         S03["03_ban_unban.sh"]
@@ -24,7 +24,6 @@ graph TD
         S12["12_permanent_ban.sh"]
         S13["13_frp_jail.sh"]
         S14["14_ban_netfilter.sh"]
-        S15["15_daemon_logfile.sh"]
     end
 
     subgraph REPORTS["reports/ 测试报告输出（运行后生成）"]
@@ -92,7 +91,7 @@ make test
 ```
 
 测试入口是 `tests/run_tests.sh`，统一调度 `suites/` 下编号套件。
-当前 13 套件共 **115 项**断言。
+当前 12 套件共 **103 项**断言。
 
 ### 在 sudo 下运行
 
@@ -188,9 +187,9 @@ host headers 常不匹配，模块加载会失败但不影响功能测试——r
 
 ## 内存安全检测（ASAN / Miri）
 
-守护进程（Rust）含 19 处 `unsafe { }` 块，全部位于
+守护进程（Rust）含 20 处 `unsafe { }` 块，全部位于
 `src/daemon/{ban,log,file_monitor,main}.rs`，每处都有 `// SAFETY:`
-注释说明不变量与理由。CI 矩阵化运行以下三层检测：
+注释说明不变量与理由。以下检测工具可手动运行（CI 当前未集成）：
 
 ### AddressSanitizer
 
@@ -234,7 +233,7 @@ nightly toolchain）。
 
 ### Unsafe 块清单
 
-`grep -rn "unsafe {" src/daemon/` 可列出全部 19 处，每处紧邻
+`grep -rn "unsafe {" src/daemon/` 可列出全部 20 处，每处紧邻
 `// SAFETY:` 注释说明不变量。新增 unsafe 必须**同时**补全
 `// SAFETY:` 注释，否则 `cargo clippy` lint（仓库已配
 `clippy.toml` 收紧规则）会拒绝合入。
