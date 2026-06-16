@@ -9,6 +9,9 @@
 #include <linux/random.h>
 #include <linux/version.h>
 
+/* 外部函数声明 */
+extern void ddos_ban_worker(struct work_struct *work);
+
 /* 模块参数（非静态，可从 procfs 访问） */
 unsigned int fw_ban_time = DEFAULT_BAN_TIME;
 char *state_file = "/var/lib/firewall/state";
@@ -174,6 +177,16 @@ static int __init firewall_init(void) {
   atomic_set(&fw_info.cleanup_cycles, 0);
   atomic_set(&fw_info.cleanup_expired_total, 0);
 
+  /* 初始化 DDoS 封禁延迟处理队列 */
+  fw_info.ddos_ban_pending = false;
+  fw_info.ddos_ban_wq = alloc_workqueue("firewall_ddos_ban", WQ_UNBOUND, 1);
+  if (!fw_info.ddos_ban_wq) {
+    pr_err("Failed to allocate DDoS ban workqueue\n");
+    ret = -ENOMEM;
+    goto err_notifier;
+  }
+  INIT_WORK(&fw_info.ddos_ban_work, ddos_ban_worker);
+
   if (state_file && strlen(state_file) > 0) {
     restore_state_from_file(state_file);
   }
@@ -261,6 +274,14 @@ static void __exit firewall_exit(void) {
   }
 
   cleanup_all_entries();
+  
+  /* 清理 DDoS 封禁延迟处理队列 */
+  if (fw_info.ddos_ban_wq) {
+    flush_workqueue(fw_info.ddos_ban_wq);
+    destroy_workqueue(fw_info.ddos_ban_wq);
+    fw_info.ddos_ban_wq = NULL;
+  }
+
   pr_info("模块清理完成\n");
 }
 

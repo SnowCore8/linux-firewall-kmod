@@ -35,6 +35,26 @@ void fw_flush_cpu_stats(void) {
   }
 }
 
+/* 封禁延迟工作处理函数 */
+void ddos_ban_worker(struct work_struct *work) {
+  struct firewall_info *fw = &fw_info;
+
+  if (unlikely(atomic_read(&fw->shutting_down)))
+    return;
+
+  if (fw->ddos_ban_pending) {
+    char ip_str[INET6_STR_LEN];
+    ip_to_str(fw->ddos_ban_af, &fw->ddos_ban_ip, ip_str, sizeof(ip_str));
+    pr_warn("firewall: DDoS detected from %s (%s), auto-banning\n", ip_str, fw->ddos_ban_reason);
+
+    ban_ip(fw, fw->ddos_ban_af, &fw->ddos_ban_ip);
+
+    // 重置标志
+    fw->ddos_ban_pending = false;
+  }
+}
+EXPORT_SYMBOL_GPL(ddos_ban_worker);
+
 static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *skb,
                                      u8 protocol) {
   unsigned long now;
@@ -198,12 +218,22 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *
       rcu_read_unlock();
 
       if (should_ban) {
-        /* 超过阈值，自动封禁 */
-        char ip_str[INET6_STR_LEN];
-        ip_to_str(af, src_ip, ip_str, sizeof(ip_str));
-        pr_warn("firewall: DDoS detected from %s (%s), auto-banning\n", ip_str, ban_reason);
-
-        ban_ip(&fw_info, af, src_ip);
+        /* 超过阈值，准备封禁 - 使用工作队列而不是直接封禁，避免netfilter钩子中耗时操作 */
+        if (!fw_info.ddos_ban_pending) {  // 避免覆盖未处理的请求
+          fw_info.ddos_ban_pending = true;
+          fw_info.ddos_ban_af = af;
+          if (af == FW_AF_INET) {
+            fw_info.ddos_ban_ip.ipv4 = *(__be32 *)src_ip;
+          } else {
+            fw_info.ddos_ban_ip.ipv6 = *(struct in6_addr *)src_ip;
+          }
+          strscpy(fw_info.ddos_ban_reason, ban_reason, sizeof(fw_info.ddos_ban_reason));
+          
+          // 调度工作队列处理封禁
+          if (fw_info.ddos_ban_wq) {
+            queue_work(fw_info.ddos_ban_wq, &fw_info.ddos_ban_work);
+          }
+        }
 
         /* 丢弃当前数据包 */
         struct fw_per_cpu_stats *stats = this_cpu_ptr(&fw_cpu_stats);

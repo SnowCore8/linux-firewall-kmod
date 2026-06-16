@@ -219,6 +219,17 @@ struct firewall_info {
   struct notifier_block netdev_notifier;
   struct delayed_work sync_work;   /* 防抖同步工作队列 */
   bool netdev_notifier_registered; /* 跟踪通知器是否成功注册 */
+  
+  /* DDoS 封禁延迟队列 */
+  struct workqueue_struct *ddos_ban_wq;  /* 用于 DDoS 检测封禁的工作队列 */
+  struct work_struct ddos_ban_work;      /* 延迟执行的封禁工作 */
+  bool ddos_ban_pending;                /* 标识有待处理的封禁请求 */
+  u8 ddos_ban_af;                      /* 待封禁 IP 的地址族 */
+  union {
+    __be32 ipv4;                       /* 待封禁的 IPv4 地址 */
+    struct in6_addr ipv6;              /* 待封禁的 IPv6 地址 */
+  } ddos_ban_ip;                       /* 待封禁的 IP 地址 */
+  char ddos_ban_reason[32];            /* 封禁原因 */
 };
 
 /* 函数声明 */
