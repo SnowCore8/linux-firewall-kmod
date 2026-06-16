@@ -1,6 +1,7 @@
 //! 封禁相关数据结构：BanInfo、BanReason、BanStatus、ActiveBanCache
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use parking_lot::RwLock;
 
@@ -130,12 +131,13 @@ impl BanInfo {
 /// 活跃封禁内存缓存 — 内存权威存储
 ///
 /// 设计要点:
-/// - `bans`: IP → BanInfo,`parking_lot::RwLock` 保护读写并发
+/// - `bans`: IP → Arc<BanInfo>,`parking_lot::RwLock` 保护读写并发
 /// - `by_jail`: jail_name → IP 集合,支持按 jail 维度快速查询
+/// - 使用 Arc 共享 BanInfo，避免频繁克隆（metrics/snapshot 场景）
 #[derive(Debug)]
 pub struct ActiveBanCache {
-    /// IP → 封禁信息
-    bans: RwLock<HashMap<String, BanInfo>>,
+    /// IP → 封禁信息（Arc 共享，减少克隆开销）
+    bans: RwLock<HashMap<String, Arc<BanInfo>>>,
     /// jail 名称 → 该 jail 封禁的 IP 集合 (反向索引)
     by_jail: RwLock<HashMap<String, HashSet<String>>>,
 }
@@ -147,12 +149,14 @@ impl Default for ActiveBanCache {
 }
 
 impl ActiveBanCache {
-    /// 构造新的空缓存
+    /// 构造新的空缓存（10Gbps 优化：预分配容量）
     #[must_use]
     pub fn new() -> Self {
         Self {
-            bans: RwLock::new(HashMap::new()),
-            by_jail: RwLock::new(HashMap::new()),
+            // 预分配 1 万封禁容量（10Gbps 场景下可能的活跃封禁数）
+            bans: RwLock::new(HashMap::with_capacity(10_000)),
+            // 预分配 100 个 jail 容量
+            by_jail: RwLock::new(HashMap::with_capacity(100)),
         }
     }
 
@@ -162,14 +166,15 @@ impl ActiveBanCache {
     pub fn insert(&self, info: BanInfo) {
         let ip = info.ip.clone();
         let jail = info.jail_name.clone();
+        let info_arc = Arc::new(info);
 
-        // 先更新主表（ip 需要 clone，因为后面还要用于 by_jail）
+        // 先更新主表
         {
             let mut bans = self.bans.write();
-            bans.insert(ip.clone(), info);
+            bans.insert(ip.clone(), info_arc);
         }
 
-        // 再更新反向索引（ip 移动进 HashSet）
+        // 再更新反向索引
         {
             let mut by_jail = self.by_jail.write();
             by_jail.entry(jail).or_default().insert(ip);
@@ -187,6 +192,7 @@ impl ActiveBanCache {
         let ip = info.ip.clone();
         let jail = info.jail_name.clone();
         let now = crate::types::now_secs();
+        let info_arc = Arc::new(info);
 
         let mut bans = self.bans.write();
 
@@ -198,7 +204,7 @@ impl ActiveBanCache {
         }
 
         // 不存在或已过期 → 插入
-        bans.insert(ip.clone(), info);
+        bans.insert(ip.clone(), info_arc);
         drop(bans); // 释放 bans 锁后再获取 by_jail 锁，保持锁序一致
 
         let mut by_jail = self.by_jail.write();
@@ -206,8 +212,8 @@ impl ActiveBanCache {
         true
     }
 
-    /// 移除封禁条目,同时清理反向索引
-    pub fn remove(&self, ip: &str) -> Option<BanInfo> {
+    /// 移除封禁条目,同时清理反向索引（返回 Arc，零克隆开销）
+    pub fn remove(&self, ip: &str) -> Option<Arc<BanInfo>> {
         let info = {
             let mut bans = self.bans.write();
             bans.remove(ip)?
@@ -227,10 +233,16 @@ impl ActiveBanCache {
         Some(info)
     }
 
-    /// 查询单个 IP 是否被封禁
+    /// 查询单个 IP 是否被封禁（返回 Arc，零克隆开销）
     #[must_use]
-    pub fn get(&self, ip: &str) -> Option<BanInfo> {
+    pub fn get(&self, ip: &str) -> Option<Arc<BanInfo>> {
         self.bans.read().get(ip).cloned()
+    }
+
+    /// 检查 IP 是否被封禁（不返回数据，最快路径）
+    #[must_use]
+    pub fn contains(&self, ip: &str) -> bool {
+        self.bans.read().contains_key(ip)
     }
 
     /// 获取当前活跃封禁总数
@@ -255,14 +267,14 @@ impl ActiveBanCache {
             .unwrap_or_default()
     }
 
-    /// 获取所有活跃封禁的快照 (用于 metrics 导出和 API)
+    /// 获取所有活跃封禁的快照 (用于 metrics 导出和 API，返回 Arc 避免克隆)
     #[must_use]
-    pub fn snapshot(&self) -> Vec<BanInfo> {
+    pub fn snapshot(&self) -> Vec<Arc<BanInfo>> {
         self.bans.read().values().cloned().collect()
     }
 
     /// 清理过期封禁,返回被清理的条目列表
-    pub fn purge_expired(&self, now: i64) -> Vec<BanInfo> {
+    pub fn purge_expired(&self, now: i64) -> Vec<Arc<BanInfo>> {
         let mut expired = Vec::new();
         let mut bans = self.bans.write();
         let mut by_jail = self.by_jail.write();
@@ -276,7 +288,7 @@ impl ActiveBanCache {
                         by_jail.remove(&info.jail_name);
                     }
                 }
-                expired.push(info.clone());
+                expired.push(Arc::clone(info));
                 false
             } else {
                 true
