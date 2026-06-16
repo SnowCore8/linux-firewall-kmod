@@ -575,7 +575,10 @@ mod tests {
         // 完整格式
         assert_eq!(
             parse_ipv6_fast("2001:0db8:85a3:0000:0000:8a2e:0370:7334"),
-            Some([0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03, 0x70, 0x73, 0x34])
+            Some([
+                0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03, 0x70,
+                0x73, 0x34
+            ])
         );
 
         // 压缩格式
@@ -619,7 +622,10 @@ mod tests {
         let result = parse_ip("::1");
         assert!(result.is_ipv6);
         assert_eq!(result.ip_num, 0);
-        assert_eq!(result.ipv6_num, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        assert_eq!(
+            result.ipv6_num,
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        );
 
         let result = parse_ip("2001:db8::1");
         assert!(result.is_ipv6);

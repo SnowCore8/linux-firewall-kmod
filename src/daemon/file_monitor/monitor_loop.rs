@@ -12,7 +12,9 @@ use crate::config_reloader::{cleanup_partial_line_buffer, reload_configuration};
 use crate::log_rotation::{check_for_new_log_files, handle_log_rotation};
 use crate::types::{Config, DAEMON_STATS};
 
-use super::periodic_tasks::{check_and_handle_ddos, perform_data_cleanup, record_history_snapshot, write_stats_snapshot};
+use super::periodic_tasks::{
+    check_and_handle_ddos, perform_data_cleanup, record_history_snapshot, write_stats_snapshot,
+};
 use super::processor::process_new_lines;
 use super::state::{FILE_STATES, INOTIFY_STATE};
 

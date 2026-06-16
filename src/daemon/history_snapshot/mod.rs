@@ -12,7 +12,7 @@
 //! - 运行时定期写入新快照
 
 use anyhow::Result;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -110,7 +110,7 @@ pub fn get_trend_data(metric_name: &str, hours: i64) -> Result<Vec<(i64, u64)>> 
         let mut stmt = conn.prepare(
             "SELECT timestamp, metric_value FROM historical_stats
              WHERE metric_name = ?1 AND timestamp >= ?2
-             ORDER BY timestamp ASC"
+             ORDER BY timestamp ASC",
         )?;
 
         let rows = stmt.query_map(params![metric_name, start_time], |row| {

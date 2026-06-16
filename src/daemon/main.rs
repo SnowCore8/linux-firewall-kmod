@@ -7,7 +7,7 @@
 //! 3. **智能默认 + 校验** ([`jail::apply_smart_defaults_to_all`] / [`jail::config_validate`])
 //! 4. **信号注册** ([`signals::setup_signals`]):SIGTERM/SIGINT 触发优雅退出、SIGHUP 触发热重载、SIGPIPE 忽略
 //! 5. **procfs 前置检查**:`/proc/firewall` 存在性 + `/proc/firewall/bans` 存在性
-//! 
+//!
 //! 7. **守护进程化** ([`daemonizer::daemonize_process`]):双 fork + setsid + chdir / + 写 PID + 重定向 fd
 //! 8. **inotify 启动** ([`file_monitor::setup_inotify`])
 //! 9. **Metrics 导出器启动** ([`http_exporter::start_http_exporter`])

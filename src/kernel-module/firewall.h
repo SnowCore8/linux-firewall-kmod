@@ -54,14 +54,14 @@ void fw_flush_cpu_stats(void);
 #define MAX_RATE_ENTRIES (1 << RATE_HASH_BITS) /* 4096 个条目 */
 
 /* 速率检测默认配置 */
-#define DEFAULT_RATE_WINDOW_SECONDS 1        /* 默认 1 秒窗口 */
-#define DEFAULT_MAX_PACKETS_PER_SECOND 10000 /* 默认 10000 PPS */
+#define DEFAULT_RATE_WINDOW_SECONDS 1                   /* 默认 1 秒窗口 */
+#define DEFAULT_MAX_PACKETS_PER_SECOND 10000            /* 默认 10000 PPS */
 #define DEFAULT_MAX_BYTES_PER_SECOND (10 * 1024 * 1024) /* 默认 10 MB/s */
 
 /* 协议专项检测默认配置 */
-#define DEFAULT_MAX_SYN_PER_SECOND 1000   /* 默认 1000 SYN/s */
-#define DEFAULT_MAX_UDP_PER_SECOND 5000   /* 默认 5000 UDP/s */
-#define DEFAULT_MAX_ICMP_PER_SECOND 1000  /* 默认 1000 ICMP/s */
+#define DEFAULT_MAX_SYN_PER_SECOND 1000  /* 默认 1000 SYN/s */
+#define DEFAULT_MAX_UDP_PER_SECOND 5000  /* 默认 5000 UDP/s */
+#define DEFAULT_MAX_ICMP_PER_SECOND 1000 /* 默认 1000 ICMP/s */
 
 /* 自动发现 IP 的最大数量（与白名单容量一致） */
 #define MAX_DISCOVERED_IPS MAX_WHITELIST_ENTRIES
@@ -127,9 +127,9 @@ struct ip_rate_entry {
   atomic64_t byte_count;   /* 当前窗口内的字节数 */
 
   /* 协议专项统计（用于 SYN/UDP/ICMP Flood 检测） */
-  atomic64_t syn_count;      /* TCP SYN 包数（SYN Flood 检测） */
-  atomic64_t udp_count;      /* UDP 包数（UDP Flood 检测） */
-  atomic64_t icmp_count;     /* ICMP Echo Request 数（ICMP Flood 检测） */
+  atomic64_t syn_count;  /* TCP SYN 包数（SYN Flood 检测） */
+  atomic64_t udp_count;  /* UDP 包数（UDP Flood 检测） */
+  atomic64_t icmp_count; /* ICMP Echo Request 数（ICMP Flood 检测） */
 
   /* 时间戳（jiffies） */
   unsigned long window_start;  /* 当前窗口的起始时间 */
@@ -193,18 +193,18 @@ struct firewall_info {
   DECLARE_HASHTABLE(rate_table_ipv6, RATE_HASH_BITS); /* IPv6 速率统计表 */
   spinlock_t rate_locks_ipv4[1 << RATE_HASH_BITS];    /* per-bucket 自旋锁 */
   spinlock_t rate_locks_ipv6[1 << RATE_HASH_BITS];
-  atomic_t rate_count;                                /* 当前速率条目总数 */
+  atomic_t rate_count; /* 当前速率条目总数 */
 
   /* 速率检测配置 */
-  unsigned int rate_window_seconds;      /* 滑动窗口大小（秒） */
-  unsigned long rate_window_jiffies;     /* 窗口大小（jiffies，缓存值） */
-  unsigned long max_packets_per_second;  /* 每秒最大数据包数 */
-  unsigned long max_bytes_per_second;    /* 每秒最大字节数 */
+  unsigned int rate_window_seconds;  /* 滑动窗口大小（秒） */
+  unsigned long rate_window_jiffies; /* 窗口大小（jiffies，缓存值） */
+  unsigned long max_packets_per_second; /* 每秒最大数据包数 */
+  unsigned long max_bytes_per_second;   /* 每秒最大字节数 */
 
   /* 协议专项检测配置（Flood 攻击） */
-  unsigned long max_syn_per_second;   /* 每秒最大 TCP SYN 包数（SYN Flood） */
-  unsigned long max_udp_per_second;   /* 每秒最大 UDP 包数（UDP Flood） */
-  unsigned long max_icmp_per_second;  /* 每秒最大 ICMP Echo Request 数（ICMP Flood） */
+  unsigned long max_syn_per_second; /* 每秒最大 TCP SYN 包数（SYN Flood） */
+  unsigned long max_udp_per_second; /* 每秒最大 UDP 包数（UDP Flood） */
+  unsigned long max_icmp_per_second; /* 每秒最大 ICMP Echo Request 数（ICMP Flood） */
 
   /* procfs 条目 */
   struct proc_dir_entry *proc_dir;
@@ -212,24 +212,24 @@ struct firewall_info {
   struct proc_dir_entry *proc_whitelist; /* 统一白名单接口（读/写） */
   struct proc_dir_entry *proc_config;    /* 配置（读/写） */
   struct proc_dir_entry *proc_settings;
-  struct proc_dir_entry *proc_stats;     /* 统计端点（只读） */
-  struct proc_dir_entry *proc_rates;     /* 速率统计（只读） */
+  struct proc_dir_entry *proc_stats; /* 统计端点（只读） */
+  struct proc_dir_entry *proc_rates; /* 速率统计（只读） */
 
   /* 网络事件监听器 */
   struct notifier_block netdev_notifier;
   struct delayed_work sync_work;   /* 防抖同步工作队列 */
   bool netdev_notifier_registered; /* 跟踪通知器是否成功注册 */
-  
+
   /* DDoS 封禁延迟队列 */
-  struct workqueue_struct *ddos_ban_wq;  /* 用于 DDoS 检测封禁的工作队列 */
-  struct work_struct ddos_ban_work;      /* 延迟执行的封禁工作 */
-  bool ddos_ban_pending;                /* 标识有待处理的封禁请求 */
-  u8 ddos_ban_af;                      /* 待封禁 IP 的地址族 */
+  struct workqueue_struct *ddos_ban_wq; /* 用于 DDoS 检测封禁的工作队列 */
+  struct work_struct ddos_ban_work; /* 延迟执行的封禁工作 */
+  bool ddos_ban_pending;            /* 标识有待处理的封禁请求 */
+  u8 ddos_ban_af;                   /* 待封禁 IP 的地址族 */
   union {
-    __be32 ipv4;                       /* 待封禁的 IPv4 地址 */
-    struct in6_addr ipv6;              /* 待封禁的 IPv6 地址 */
-  } ddos_ban_ip;                       /* 待封禁的 IP 地址 */
-  char ddos_ban_reason[32];            /* 封禁原因 */
+    __be32 ipv4;            /* 待封禁的 IPv4 地址 */
+    struct in6_addr ipv6;   /* 待封禁的 IPv6 地址 */
+  } ddos_ban_ip;            /* 待封禁的 IP 地址 */
+  char ddos_ban_reason[32]; /* 封禁原因 */
 };
 
 /* 函数声明 */
@@ -252,8 +252,8 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip, int 
 bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip);
 
 /* rate-detector.c - 速率检测（DDoS 防护） */
-int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip, u32 packet_len,
-                      u8 protocol);
+int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
+                      u32 packet_len, u8 protocol);
 bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip);
 bool check_protocol_violation(struct firewall_info *fw, u8 af, const void *ip, u8 protocol);
 void cleanup_rate_entries(struct firewall_info *fw);

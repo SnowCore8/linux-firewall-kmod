@@ -29,12 +29,15 @@ use crate::types::Config;
 #[must_use]
 pub fn start_http_exporter(port: u16, cfg: &Config) -> thread::JoinHandle<()> {
     // 保存全局 Jail 信息（用于 /api/jails 端点）
-    let jail_infos: Vec<super::JailInfo> = cfg.jails.iter().map(|j| super::JailInfo {
-        name: j.name.clone(),
-        enabled: j.enabled,
-    }).collect();
+    let jail_infos: Vec<super::JailInfo> = cfg
+        .jails
+        .iter()
+        .map(|j| super::JailInfo {
+            name: j.name.clone(),
+            enabled: j.enabled,
+        })
+        .collect();
     super::set_global_jails(jail_infos);
-
 
     // 保存全局 Web UI 配置（用于 SSE 推送间隔等）
     super::set_global_webui_config(cfg.webui.clone());

@@ -3,7 +3,7 @@
 //! # 核心职责
 //!
 //! - 统一的封禁/解封操作入口 (支持 IPv4/IPv6)
-//! - 流程:校验 IP → 格式化命令 → procfs 写入 → 
+//! - 流程:校验 IP → 格式化命令 → procfs 写入 →
 //! - 向后兼容的包装函数:ban_ip / ban_ip_permanent / unban_ip / unban_permanent_ip
 
 use anyhow::{bail, Context, Result};
@@ -56,7 +56,7 @@ fn format_ban_command(action: BanAction, ip: &str) -> Result<String> {
 /// # Errors
 /// - IP 校验失败
 /// - procfs 写入失败
-/// - 
+/// -
 pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
     if ip.is_empty() {
         bail!("NULL IP address");

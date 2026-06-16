@@ -50,12 +50,8 @@ impl SseReader {
             SseMessage::Event { name, data } => {
                 format!("event: {}\ndata: {}\n\n", name, data).into_bytes()
             }
-            SseMessage::Data(data) => {
-                format!("data: {}\n\n", data).into_bytes()
-            }
-            SseMessage::Comment(comment) => {
-                format!(": {}\n\n", comment).into_bytes()
-            }
+            SseMessage::Data(data) => format!("data: {}\n\n", data).into_bytes(),
+            SseMessage::Comment(comment) => format!(": {}\n\n", comment).into_bytes(),
             SseMessage::Close => Vec::new(),
         }
     }

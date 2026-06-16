@@ -274,7 +274,7 @@ static void __exit firewall_exit(void) {
   }
 
   cleanup_all_entries();
-  
+
   /* 清理 DDoS 封禁延迟处理队列 */
   if (fw_info.ddos_ban_wq) {
     flush_workqueue(fw_info.ddos_ban_wq);

@@ -43,22 +43,35 @@ pub fn record_history_snapshot(_cfg: &Config) {
 
     // 获取当前统计数据
     let current_stats = SnapshotStats {
-        ips_banned: crate::types::DAEMON_STATS.ips_banned.load(Ordering::Relaxed),
-        failed_attempts: crate::types::DAEMON_STATS.failed_attempts.load(Ordering::Relaxed),
-        ddos_events: crate::types::DDOS_STATS.events_detected.load(Ordering::Relaxed),
+        ips_banned: crate::types::DAEMON_STATS
+            .ips_banned
+            .load(Ordering::Relaxed),
+        failed_attempts: crate::types::DAEMON_STATS
+            .failed_attempts
+            .load(Ordering::Relaxed),
+        ddos_events: crate::types::DDOS_STATS
+            .events_detected
+            .load(Ordering::Relaxed),
     };
 
     // 计算差值
     let mut last_stats = LAST_SNAPSHOT_STATS.lock().unwrap();
-    let bans_diff = current_stats.ips_banned.saturating_sub(last_stats.ips_banned);
-    let failed_diff = current_stats.failed_attempts.saturating_sub(last_stats.failed_attempts);
-    let ddos_diff = current_stats.ddos_events.saturating_sub(last_stats.ddos_events);
+    let bans_diff = current_stats
+        .ips_banned
+        .saturating_sub(last_stats.ips_banned);
+    let failed_diff = current_stats
+        .failed_attempts
+        .saturating_sub(last_stats.failed_attempts);
+    let ddos_diff = current_stats
+        .ddos_events
+        .saturating_sub(last_stats.ddos_events);
 
     // 更新上次快照
     *last_stats = current_stats;
 
     // 记录到历史数据库
-    if let Err(e) = crate::history_snapshot::record_snapshot(now, bans_diff, failed_diff, ddos_diff) {
+    if let Err(e) = crate::history_snapshot::record_snapshot(now, bans_diff, failed_diff, ddos_diff)
+    {
         crate::logger::warn!(
             crate::logger::get(),
             "记录历史快照失败";

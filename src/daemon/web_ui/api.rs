@@ -5,8 +5,8 @@
 //! - `/api/bans` - 活跃封禁列表
 //! - `/api/jails` - Jail 配置
 
+use crate::types::{ACTIVE_BAN_CACHE, DAEMON_STATS, DDOS_STATS};
 use serde::Serialize;
-use crate::types::{DAEMON_STATS, DDOS_STATS, ACTIVE_BAN_CACHE};
 
 /// 统计数据响应
 #[derive(Serialize)]
@@ -73,7 +73,7 @@ pub fn get_webui_config() -> WebuiConfigResponse {
     let config = crate::http_exporter::get_global_webui_config()
         .cloned()
         .unwrap_or_default();
-    
+
     WebuiConfigResponse {
         sse_push_interval: config.sse_push_interval,
         rate_warning_pps: config.rate_warning_pps,
@@ -146,16 +146,22 @@ pub fn get_ddos_rates() -> Vec<RateResponse> {
 /// 获取统计数据
 pub fn get_stats() -> StatsResponse {
     let now = crate::types::now_secs();
-    let start_time = DAEMON_STATS.start_time.load(std::sync::atomic::Ordering::Relaxed) as i64;
+    let start_time = DAEMON_STATS
+        .start_time
+        .load(std::sync::atomic::Ordering::Relaxed) as i64;
     let uptime = if start_time > 0 { now - start_time } else { 0 };
 
-    let active_bans = ACTIVE_BAN_CACHE.get()
-        .map(|cache| cache.len())
-        .unwrap_or(0);
+    let active_bans = ACTIVE_BAN_CACHE.get().map(|cache| cache.len()).unwrap_or(0);
 
-    let today_bans = DAEMON_STATS.ips_banned.load(std::sync::atomic::Ordering::Relaxed);
-    let failed_attempts = DAEMON_STATS.failed_attempts.load(std::sync::atomic::Ordering::Relaxed);
-    let ddos_events = DDOS_STATS.events_detected.load(std::sync::atomic::Ordering::Relaxed);
+    let today_bans = DAEMON_STATS
+        .ips_banned
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let failed_attempts = DAEMON_STATS
+        .failed_attempts
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let ddos_events = DDOS_STATS
+        .events_detected
+        .load(std::sync::atomic::Ordering::Relaxed);
 
     StatsResponse {
         active_bans,
@@ -175,10 +181,11 @@ fn generate_ban_trend() -> ChartData {
     // 从历史数据库读取最近 24 小时的数据
     match crate::history_snapshot::get_trend_data("bans", 24) {
         Ok(data) if !data.is_empty() => {
-            let labels: Vec<String> = data.iter()
+            let labels: Vec<String> = data
+                .iter()
                 .map(|(ts, _)| {
-                    let dt = chrono::DateTime::from_timestamp(*ts, 0)
-                        .unwrap_or_else(chrono::Utc::now);
+                    let dt =
+                        chrono::DateTime::from_timestamp(*ts, 0).unwrap_or_else(chrono::Utc::now);
                     dt.format("%H:%M").to_string()
                 })
                 .collect();
@@ -216,19 +223,17 @@ fn generate_jail_distribution() -> ChartData {
 /// 生成失败原因数据（使用累计统计数据）
 fn generate_failure_reasons() -> ChartData {
     // 从 DAEMON_STATS 读取累计统计数据
-    let failed_attempts = crate::types::DAEMON_STATS.failed_attempts.load(std::sync::atomic::Ordering::Relaxed);
-    let ddos_events = crate::types::DDOS_STATS.events_detected.load(std::sync::atomic::Ordering::Relaxed);
+    let failed_attempts = crate::types::DAEMON_STATS
+        .failed_attempts
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let ddos_events = crate::types::DDOS_STATS
+        .events_detected
+        .load(std::sync::atomic::Ordering::Relaxed);
 
     // 简单分类：大部分是失败尝试，部分是 DDoS
-    let labels = vec![
-        "失败尝试".to_string(),
-        "DDoS 检测".to_string(),
-    ];
+    let labels = vec!["失败尝试".to_string(), "DDoS 检测".to_string()];
 
-    let values = vec![
-        failed_attempts,
-        ddos_events,
-    ];
+    let values = vec![failed_attempts, ddos_events];
 
     ChartData { labels, values }
 }
@@ -238,10 +243,11 @@ fn generate_traffic_data() -> ChartData {
     // 从历史数据库读取最近 1 小时的失败尝试数据
     match crate::history_snapshot::get_trend_data("failed_attempts", 1) {
         Ok(data) if !data.is_empty() => {
-            let labels: Vec<String> = data.iter()
+            let labels: Vec<String> = data
+                .iter()
                 .map(|(ts, _)| {
-                    let dt = chrono::DateTime::from_timestamp(*ts, 0)
-                        .unwrap_or_else(chrono::Utc::now);
+                    let dt =
+                        chrono::DateTime::from_timestamp(*ts, 0).unwrap_or_else(chrono::Utc::now);
                     dt.format("%H:%M").to_string()
                 })
                 .collect();
@@ -262,9 +268,11 @@ fn generate_traffic_data() -> ChartData {
 pub fn get_active_bans() -> Vec<BanResponse> {
     let now = crate::types::now_secs();
 
-    ACTIVE_BAN_CACHE.get()
+    ACTIVE_BAN_CACHE
+        .get()
         .map(|cache| {
-            cache.snapshot()
+            cache
+                .snapshot()
                 .into_iter()
                 .map(|ban| {
                     let remaining = if ban.is_permanent {
@@ -293,9 +301,11 @@ pub fn get_active_bans() -> Vec<BanResponse> {
 
 /// 获取 Jail 列表
 pub fn get_jails(jail_infos: &[crate::http_exporter::JailInfo]) -> Vec<JailResponse> {
-    jail_infos.iter()
+    jail_infos
+        .iter()
         .map(|jail_info| {
-            let ban_count = ACTIVE_BAN_CACHE.get()
+            let ban_count = ACTIVE_BAN_CACHE
+                .get()
                 .map(|cache| cache.get_by_jail(&jail_info.name).len())
                 .unwrap_or(0);
 
