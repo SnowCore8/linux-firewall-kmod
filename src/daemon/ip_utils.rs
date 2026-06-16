@@ -221,7 +221,22 @@ pub fn parse_ipv6_fast(ip: &str) -> Option<[u8; 16]> {
             }
             b'.' => {
                 // IPv4 映射地址（::ffff:192.168.1.1）
-                // 简化处理：返回 None，不支持 IPv4 映射
+                // 检查是否是 ::ffff: 前缀
+                if ip.starts_with("::ffff:") {
+                    // 解析 IPv4 部分
+                    let ipv4_part = &ip[7..]; // 跳过 "::ffff:"
+                    if let Some(ipv4_num) = parse_ipv4_fast(ipv4_part) {
+                        // 构造 IPv4 映射地址：前 80 位为 0，接下来 16 位为 0xffff，最后 32 位为 IPv4
+                        let mut result = [0u8; 16];
+                        result[10] = 0xff;
+                        result[11] = 0xff;
+                        result[12] = ((ipv4_num >> 24) & 0xFF) as u8;
+                        result[13] = ((ipv4_num >> 16) & 0xFF) as u8;
+                        result[14] = ((ipv4_num >> 8) & 0xFF) as u8;
+                        result[15] = (ipv4_num & 0xFF) as u8;
+                        return Some(result);
+                    }
+                }
                 return None;
             }
             _ => return None, // 非法字符
@@ -438,6 +453,17 @@ mod tests {
             parse_ipv6_fast("fe80::1:2:3"),
             Some([0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0, 3])
         );
+
+        // IPv4 映射地址
+        assert_eq!(
+            parse_ipv6_fast("::ffff:192.168.1.1"),
+            Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 1, 1])
+        );
+
+        assert_eq!(
+            parse_ipv6_fast("::ffff:10.0.0.1"),
+            Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 10, 0, 0, 1])
+        );
     }
 
     #[test]
@@ -448,6 +474,8 @@ mod tests {
         assert_eq!(parse_ipv6_fast("1:2:3:4:5:6:7"), None); // 段数不足（无 ::）
         assert_eq!(parse_ipv6_fast("1:2:3:4:5:6:7:8:9"), None); // 段数过多
         assert_eq!(parse_ipv6_fast("gggg::1"), None); // 非法字符
+        assert_eq!(parse_ipv6_fast("::ffff:256.1.1.1"), None); // IPv4 映射，但 IP 无效
+        assert_eq!(parse_ipv6_fast("::ffff:1.2.3"), None); // IPv4 映射，但段数不足
     }
 
     #[test]
