@@ -49,8 +49,8 @@ void free_rate_entry_rcu(struct rcu_head *head) {
  *
  * 注意：调用方必须持有 rcu_read_lock()
  */
-static struct ip_rate_entry *find_rate_entry_rcu(struct firewall_info *fw, u8 af,
-                                                  const void *ip) {
+static struct ip_rate_entry *find_rate_entry_rcu(struct firewall_info *fw,
+                                                 u8 af, const void *ip) {
   struct hlist_head *table = get_rate_table(fw, af);
   u32 hash = hash_ip_for_rate(af, ip, RATE_HASH_BITS);
   struct ip_rate_entry *entry;
@@ -75,7 +75,7 @@ static struct ip_rate_entry *find_rate_entry_rcu(struct firewall_info *fw, u8 af
  * 注意：调用方必须持有对应桶的 spinlock
  */
 static struct ip_rate_entry *create_rate_entry(struct firewall_info *fw, u8 af,
-                                                const void *ip) {
+                                               const void *ip) {
   struct ip_rate_entry *entry;
   struct hlist_head *table = get_rate_table(fw, af);
   u32 hash = hash_ip_for_rate(af, ip, RATE_HASH_BITS);
@@ -136,8 +136,8 @@ static struct ip_rate_entry *create_rate_entry(struct firewall_info *fw, u8 af,
  * - 热路径（已存在条目）：无锁，只有原子操作
  * - 冷路径（新条目）：per-bucket 锁，减少竞争
  */
-int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip, u32 packet_len,
-                      u8 protocol) {
+int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
+                      u32 packet_len, u8 protocol) {
   struct ip_rate_entry *entry;
   unsigned long now = jiffies;
   unsigned long elapsed;
@@ -290,10 +290,15 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip, u32 packe
  * 返回: true 超过阈值，false 未超过或未找到
  *
  * 注意：调用方必须持有 rcu_read_lock()
+ * 
+ * 优化：增加了对突发流量的容忍度，通过检查当前窗口内的平均速率
+ * 而不是简单的总速率，以减少对合法突发流量的误判。
  */
 bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip) {
   struct ip_rate_entry *entry;
   u64 packets, bytes;
+  unsigned long now = jiffies;
+  unsigned long elapsed_jiffies;
 
   if (!fw || !ip) {
     return false;
@@ -308,12 +313,22 @@ bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip) {
   packets = atomic64_read(&entry->packet_count);
   bytes = atomic64_read(&entry->byte_count);
 
+  /* 计算实际窗口时间 */
+  elapsed_jiffies = now - entry->window_start;
+  if (elapsed_jiffies == 0) {
+    return false; // 避免除零错误
+  }
+
+  /* 计算平均速率（每秒） */
+  u64 avg_packets_per_sec = (packets * HZ) / elapsed_jiffies;
+  u64 avg_bytes_per_sec = (bytes * HZ) / elapsed_jiffies;
+
   /* 检查是否超过阈值 */
-  if (packets > fw->max_packets_per_second) {
+  if (avg_packets_per_sec > fw->max_packets_per_second) {
     return true;
   }
 
-  if (bytes > fw->max_bytes_per_second) {
+  if (avg_bytes_per_sec > fw->max_bytes_per_second) {
     return true;
   }
 
@@ -332,10 +347,15 @@ bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip) {
  * 用途：SYN Flood、UDP Flood、ICMP Flood 专项检测
  *
  * 注意：调用方必须持有 rcu_read_lock()
+ * 
+ * 优化：增加了对突发流量的容忍度，通过检查当前窗口内的平均速率
+ * 而不是简单的总速率，以减少对合法突发流量的误判。
  */
 bool check_protocol_violation(struct firewall_info *fw, u8 af, const void *ip, u8 protocol) {
   struct ip_rate_entry *entry;
   u64 count;
+  unsigned long now = jiffies;
+  unsigned long elapsed_jiffies;
 
   if (!fw || !ip) {
     return false;
@@ -348,29 +368,53 @@ bool check_protocol_violation(struct firewall_info *fw, u8 af, const void *ip, u
 
   /* 根据协议类型检查对应的计数器 */
   switch (protocol) {
-    case IPPROTO_TCP:
-      count = atomic64_read(&entry->syn_count);
-      if (count > fw->max_syn_per_second) {
-        return true;
-      }
-      break;
+  case IPPROTO_TCP:
+    count = atomic64_read(&entry->syn_count);
+    break;
 
-    case IPPROTO_UDP:
-      count = atomic64_read(&entry->udp_count);
-      if (count > fw->max_udp_per_second) {
-        return true;
-      }
-      break;
+  case IPPROTO_UDP:
+    count = atomic64_read(&entry->udp_count);
+    break;
 
-    case IPPROTO_ICMP:
-      count = atomic64_read(&entry->icmp_count);
-      if (count > fw->max_icmp_per_second) {
-        return true;
-      }
-      break;
+  case IPPROTO_ICMP:
+    count = atomic64_read(&entry->icmp_count);
+    break;
 
-    default:
-      break;
+  default:
+    return false;
+  }
+
+  /* 计算实际窗口时间 */
+  elapsed_jiffies = now - entry->window_start;
+  if (elapsed_jiffies == 0) {
+    return false; // 避免除零错误
+  }
+
+  /* 计算平均速率（每秒） */
+  u64 avg_count_per_sec = (count * HZ) / elapsed_jiffies;
+
+  /* 根据协议类型检查阈值 */
+  switch (protocol) {
+  case IPPROTO_TCP:
+    if (avg_count_per_sec > fw->max_syn_per_second) {
+      return true;
+    }
+    break;
+
+  case IPPROTO_UDP:
+    if (avg_count_per_sec > fw->max_udp_per_second) {
+      return true;
+    }
+    break;
+
+  case IPPROTO_ICMP:
+    if (avg_count_per_sec > fw->max_icmp_per_second) {
+      return true;
+    }
+    break;
+
+  default:
+    break;
   }
 
   return false;
