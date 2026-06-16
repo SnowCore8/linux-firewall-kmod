@@ -329,14 +329,18 @@ impl ConnRateTracker {
         for event in events {
             if event.is_ipv6 {
                 // IPv6: 使用 [u8; 16] 键（快速哈希）
-                let entry = aggregated_ipv6.entry(event.ipv6_num).or_insert((event.ip, 0, 0));
+                let entry = aggregated_ipv6
+                    .entry(event.ipv6_num)
+                    .or_insert((event.ip, 0, 0));
                 match event.event_type {
                     BatchEvent::Connection => entry.1 += 1,
                     BatchEvent::Failure => entry.2 += 1,
                 }
             } else {
                 // IPv4: 使用 u32 键（快速哈希）
-                let entry = aggregated_ipv4.entry(event.ip_num).or_insert((event.ip, 0, 0));
+                let entry = aggregated_ipv4
+                    .entry(event.ip_num)
+                    .or_insert((event.ip, 0, 0));
                 match event.event_type {
                     BatchEvent::Connection => entry.1 += 1,
                     BatchEvent::Failure => entry.2 += 1,
@@ -346,9 +350,10 @@ impl ConnRateTracker {
 
         // 一次性更新 IPv4 DashMap（u32 键，快速哈希）
         for (ip_num, (ip_arc, conn_count, fail_count)) in aggregated_ipv4 {
-            let mut entry = self.entries_ipv4.entry(ip_num).or_insert_with(|| {
-                ConnRateEntry::new(ip_arc, ip_num, [0; 16], now)
-            });
+            let mut entry = self
+                .entries_ipv4
+                .entry(ip_num)
+                .or_insert_with(|| ConnRateEntry::new(ip_arc, ip_num, [0; 16], now));
             entry.conn_count += conn_count;
             entry.fail_count += fail_count;
             entry.last_activity = now;
@@ -356,9 +361,10 @@ impl ConnRateTracker {
 
         // 一次性更新 IPv6 DashMap（[u8; 16] 键，快速哈希）
         for (ipv6_num, (ip_arc, conn_count, fail_count)) in aggregated_ipv6 {
-            let mut entry = self.entries_ipv6.entry(ipv6_num).or_insert_with(|| {
-                ConnRateEntry::new(ip_arc, 0, ipv6_num, now)
-            });
+            let mut entry = self
+                .entries_ipv6
+                .entry(ipv6_num)
+                .or_insert_with(|| ConnRateEntry::new(ip_arc, 0, ipv6_num, now));
             entry.conn_count += conn_count;
             entry.fail_count += fail_count;
             entry.last_activity = now;
@@ -433,17 +439,17 @@ impl ConnRateTracker {
 
             // 检测 IPv4 违规
             for entry in self.entries_ipv4.iter() {
-                let entry = entry.value();
-                let conn_rate = entry.conn_count as f64;
-                let fail_rate_per_min = entry.fail_count as f64 * 60.0;
+                let entry_ref = entry.value();
+                let conn_rate = entry_ref.conn_count as f64;
+                let fail_rate_per_min = entry_ref.fail_count as f64 * 60.0;
 
                 // 仅记录违规 IP（避免日志洪泛：不再每条 IP 都输出）
                 if conn_rate > config.per_ip_conn_rate as f64 {
                     DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
                     violation_count += 1;
                     violations.push(PerIpViolation {
-                        ip: entry.ip.clone(),
-                        ip_num: entry.ip_num,
+                        ip: entry_ref.ip.clone(),
+                        ip_num: entry_ref.ip_num,
                         ipv6_num: [0; 16],
                         is_ipv6: false,
                         event_type: "conn_rate",
@@ -454,7 +460,7 @@ impl ConnRateTracker {
                     crate::logger::info!(
                         crate::logger::get(),
                         "DDoS 检测：IP 连接速率违规";
-                        "ip" => &entry.ip,
+                        "ip" => &entry_ref.ip,
                         "conn_rate" => conn_rate,
                         "threshold" => config.per_ip_conn_rate
                     );
@@ -464,8 +470,8 @@ impl ConnRateTracker {
                     DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
                     violation_count += 1;
                     violations.push(PerIpViolation {
-                        ip: entry.ip.clone(),
-                        ip_num: entry.ip_num,
+                        ip: entry_ref.ip.clone(),
+                        ip_num: entry_ref.ip_num,
                         ipv6_num: [0; 16],
                         is_ipv6: false,
                         event_type: "fail_rate",
@@ -476,7 +482,7 @@ impl ConnRateTracker {
                     crate::logger::info!(
                         crate::logger::get(),
                         "DDoS 检测：IP 失败速率违规";
-                        "ip" => &entry.ip,
+                        "ip" => &entry_ref.ip,
                         "fail_rate" => fail_rate_per_min / 60.0,
                         "threshold" => config.per_ip_fail_rate as f64 / 60.0
                     );
@@ -485,17 +491,17 @@ impl ConnRateTracker {
 
             // 检测 IPv6 违规
             for entry in self.entries_ipv6.iter() {
-                let entry = entry.value();
-                let conn_rate = entry.conn_count as f64;
-                let fail_rate_per_min = entry.fail_count as f64 * 60.0;
+                let entry_ref = entry.value();
+                let conn_rate = entry_ref.conn_count as f64;
+                let fail_rate_per_min = entry_ref.fail_count as f64 * 60.0;
 
                 if conn_rate > config.per_ip_conn_rate as f64 {
                     DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
                     violation_count += 1;
                     violations.push(PerIpViolation {
-                        ip: entry.ip.clone(),
+                        ip: entry_ref.ip.clone(),
                         ip_num: 0,
-                        ipv6_num: entry.ipv6_num,
+                        ipv6_num: entry_ref.ipv6_num,
                         is_ipv6: true,
                         event_type: "conn_rate",
                         rate_for_event: conn_rate,
@@ -505,7 +511,7 @@ impl ConnRateTracker {
                     crate::logger::info!(
                         crate::logger::get(),
                         "DDoS 检测：IP 连接速率违规";
-                        "ip" => &entry.ip,
+                        "ip" => &entry_ref.ip,
                         "conn_rate" => conn_rate,
                         "threshold" => config.per_ip_conn_rate
                     );
@@ -515,9 +521,9 @@ impl ConnRateTracker {
                     DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
                     violation_count += 1;
                     violations.push(PerIpViolation {
-                        ip: entry.ip.clone(),
+                        ip: entry_ref.ip.clone(),
                         ip_num: 0,
-                        ipv6_num: entry.ipv6_num,
+                        ipv6_num: entry_ref.ipv6_num,
                         is_ipv6: true,
                         event_type: "fail_rate",
                         rate_for_event: fail_rate_per_min / 60.0,
@@ -527,7 +533,7 @@ impl ConnRateTracker {
                     crate::logger::info!(
                         crate::logger::get(),
                         "DDoS 检测：IP 失败速率违规";
-                        "ip" => &entry.ip,
+                        "ip" => &entry_ref.ip,
                         "fail_rate" => fail_rate_per_min / 60.0,
                         "threshold" => config.per_ip_fail_rate as f64 / 60.0
                     );
@@ -550,9 +556,10 @@ impl ConnRateTracker {
                 if v.is_ipv6 {
                     // IPv6: 使用 [u8; 16] 键查找
                     if let Some(mut entry) = self.entries_ipv6.get_mut(&v.ipv6_num) {
-                        entry.violation_count += 1;
+                        let prev_count = entry.violation_count.fetch_add(1, Ordering::Relaxed);
+                        let new_count = prev_count + 1;
 
-                        let action = if entry.violation_count >= config.auto_ban_threshold {
+                        let action = if new_count >= config.auto_ban_threshold {
                             DDOS_STATS
                                 .auto_bans_triggered
                                 .fetch_add(1, Ordering::Relaxed);
@@ -573,9 +580,10 @@ impl ConnRateTracker {
                 } else {
                     // IPv4: 使用 u32 键查找
                     if let Some(mut entry) = self.entries_ipv4.get_mut(&v.ip_num) {
-                        entry.violation_count += 1;
+                        let prev_count = entry.violation_count.fetch_add(1, Ordering::Relaxed);
+                        let new_count = prev_count + 1;
 
-                        let action = if entry.violation_count >= config.auto_ban_threshold {
+                        let action = if new_count >= config.auto_ban_threshold {
                             DDOS_STATS
                                 .auto_bans_triggered
                                 .fetch_add(1, Ordering::Relaxed);
@@ -650,10 +658,12 @@ impl ConnRateTracker {
         let cutoff = now - 300; // 5 分钟
 
         // DashMap retain API: 清理 IPv4
-        self.entries_ipv4.retain(|_, entry| entry.last_activity > cutoff);
+        self.entries_ipv4
+            .retain(|_, entry| entry.last_activity > cutoff);
 
         // DashMap retain API: 清理 IPv6
-        self.entries_ipv6.retain(|_, entry| entry.last_activity > cutoff);
+        self.entries_ipv6
+            .retain(|_, entry| entry.last_activity > cutoff);
 
         // 更新统计
         let total_ips = self.entries_ipv4.len() + self.entries_ipv6.len();
@@ -703,7 +713,10 @@ mod tests {
 
         let new_capacity = state.maybe_resize();
         // 应该增长 20%
-        assert_eq!(new_capacity, (THREAD_BUFFER_INITIAL * 12 / 10).min(THREAD_BUFFER_MAX));
+        assert_eq!(
+            new_capacity,
+            (THREAD_BUFFER_INITIAL * 12 / 10).min(THREAD_BUFFER_MAX)
+        );
         assert_eq!(state.flush_count, 0); // 应该重置
     }
 
@@ -715,7 +728,10 @@ mod tests {
 
         let new_capacity = state.maybe_resize();
         // 应该缩减 20%
-        assert_eq!(new_capacity, (THREAD_BUFFER_INITIAL * 8 / 10).max(THREAD_BUFFER_MIN));
+        assert_eq!(
+            new_capacity,
+            (THREAD_BUFFER_INITIAL * 8 / 10).max(THREAD_BUFFER_MIN)
+        );
         assert_eq!(state.flush_count, 0); // 应该重置
     }
 
@@ -787,7 +803,7 @@ mod tests {
         assert_eq!(entry.fail_count, 0);
         assert_eq!(entry.window_start, 1000);
         assert_eq!(entry.last_activity, 1000);
-        assert_eq!(entry.violation_count, 0);
+        assert_eq!(entry.violation_count.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -795,14 +811,14 @@ mod tests {
         let mut entry = ConnRateEntry::new("1.2.3.4".to_string(), 16909060, [0; 16], 1000);
         entry.conn_count = 50;
         entry.fail_count = 20;
-        entry.violation_count = 3;
+        entry.violation_count.store(3, Ordering::Relaxed);
 
         entry.reset(2000);
         assert_eq!(entry.conn_count, 0);
         assert_eq!(entry.fail_count, 0);
         assert_eq!(entry.window_start, 2000);
         // violation_count 不重置，需要跨检测周期累积以判断是否触发自动封禁
-        assert_eq!(entry.violation_count, 3);
+        assert_eq!(entry.violation_count.load(Ordering::Relaxed), 3);
     }
 
     // ---- ConnRateTracker 基础测试 ----

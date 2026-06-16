@@ -5,7 +5,7 @@
 //! - `ConnRateEntry.ip`: 使用 `Arc<str>` 共享字符串，避免重复分配
 //! - `ConnRateEntry.ip_num`: IPv4 数值化（u32），用于快速哈希查找
 
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::Arc;
 
 // ============================================================================
@@ -50,7 +50,7 @@ impl Default for DdosConfig {
 // ============================================================================
 
 /// 连接速率跟踪条目（10Gbps 优化：使用 Arc<str> 共享 IP 字符串）
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ConnRateEntry {
     /// IP 地址（Arc 共享，避免重复分配）
     pub ip: Arc<str>,
@@ -66,8 +66,8 @@ pub struct ConnRateEntry {
     pub window_start: i64,
     /// 最后活动时间 (Unix 秒)
     pub last_activity: i64,
-    /// 超阈值次数 (用于触发封禁)
-    pub violation_count: u32,
+    /// 超阈值次数 (用于触发封禁) - 使用原子类型确保并发安全
+    pub violation_count: AtomicU32,
 }
 
 impl ConnRateEntry {
@@ -87,7 +87,7 @@ impl ConnRateEntry {
             fail_count: 0,
             window_start: now,
             last_activity: now,
-            violation_count: 0,
+            violation_count: AtomicU32::new(0),
         }
     }
 
@@ -104,7 +104,7 @@ impl ConnRateEntry {
 // DDoS 事件记录
 // ============================================================================
 
-/// DDoS 事件记录 
+/// DDoS 事件记录
 #[derive(Debug, Clone)]
 pub struct DdosEvent {
     /// 触发事件的 IP 地址
