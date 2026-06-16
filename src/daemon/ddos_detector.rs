@@ -105,15 +105,6 @@ impl ConnRateTracker {
         }
 
         let now = now_secs();
-
-        crate::logger::info!(
-            crate::logger::get(),
-            "DDoS 检测开始";
-            "timestamp" => now,
-            "tracked_ips" => self.entries.read().len(),
-            "global_conn_count" => *self.global_conn_count.read()
-        );
-
         let mut events = Vec::new();
 
         // 检测全局连接速率
@@ -153,45 +144,61 @@ impl ConnRateTracker {
         // 阶段 1: 读锁下收集违规 IP 及事件快照
         {
             let entries = self.entries.read();
+            let total_ips = entries.len();
+            let mut violation_count = 0;
+
             for entry in entries.values() {
                 let conn_rate = entry.conn_count as f64;
                 let fail_rate_per_min = entry.fail_count as f64 * 60.0;
 
-                // 调试日志：输出当前连接数和失败数
-                if conn_rate > 0.0 || fail_rate_per_min > 0.0 {
-                    crate::logger::info!(
-                        crate::logger::get(),
-                        "DDoS 检测：IP 统计";
-                        "ip" => &entry.ip,
-                        "conn_count" => entry.conn_count,
-                        "fail_count" => entry.fail_count,
-                        "conn_rate" => conn_rate,
-                        "fail_rate_per_min" => fail_rate_per_min,
-                        "threshold_conn" => config.per_ip_conn_rate,
-                        "threshold_fail" => config.per_ip_fail_rate
-                    );
-                }
-
+                // 仅记录违规 IP（避免日志洪泛：不再每条 IP 都输出）
                 if conn_rate > config.per_ip_conn_rate as f64 {
                     DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
+                    violation_count += 1;
                     violations.push(PerIpViolation {
                         ip: entry.ip.clone(),
                         event_type: "conn_rate",
                         rate_for_event: conn_rate,
                         threshold_for_event: config.per_ip_conn_rate as f64,
                     });
+
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "DDoS 检测：IP 连接速率违规";
+                        "ip" => &entry.ip,
+                        "conn_rate" => conn_rate,
+                        "threshold" => config.per_ip_conn_rate
+                    );
                 }
 
                 if fail_rate_per_min > config.per_ip_fail_rate as f64 {
                     DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
+                    violation_count += 1;
                     violations.push(PerIpViolation {
                         ip: entry.ip.clone(),
                         event_type: "fail_rate",
                         rate_for_event: fail_rate_per_min / 60.0,
                         threshold_for_event: config.per_ip_fail_rate as f64 / 60.0,
                     });
+
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "DDoS 检测：IP 失败速率违规";
+                        "ip" => &entry.ip,
+                        "fail_rate" => fail_rate_per_min / 60.0,
+                        "threshold" => config.per_ip_fail_rate as f64 / 60.0
+                    );
                 }
             }
+
+            // 汇总日志：每次检测输出一次总体统计（替代每条 IP 都输出）
+            crate::logger::info!(
+                crate::logger::get(),
+                "DDoS 检测汇总";
+                "tracked_ips" => total_ips,
+                "violations" => violation_count,
+                "global_conn_count" => *self.global_conn_count.read()
+            );
         } // 读锁释放
 
         // 阶段 2: 写锁下更新 violation_count 并判断是否触发封禁
