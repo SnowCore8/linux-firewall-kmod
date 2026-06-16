@@ -141,46 +141,21 @@ pub fn perform_data_cleanup(cfg: &Config) {
 ///
 /// 按 `ddos.check_interval` 间隔调用。
 ///
+/// # 架构说明
+///
+/// - **网络层 DDoS 检测**（SYN/UDP/ICMP Flood）已下沉到 kmod（内核态 netfilter hook）
+/// - **应用层检测**（SSH 暴力破解、HTTP Flood）仍由 daemon 负责（通过日志监控）
+/// - 本函数主要用于清理过期的速率条目，应用层检测逻辑保留
+///
 /// # Arguments
 /// - `cfg`: 全局配置
-pub fn check_and_handle_ddos(cfg: &Config) {
+pub fn check_and_handle_ddos(_cfg: &Config) {
     let tracker = crate::ddos_detector::get_conn_rate_tracker();
-    let events = tracker.detect(&cfg.ddos);
 
-    if !events.is_empty() {
-        crate::logger::info!(
-            crate::logger::get(),
-            "DDoS 检测到异常事件";
-            "events_count" => events.len()
-        );
+    // 网络层检测已下沉到 kmod，daemon 只保留应用层检测
+    // 暂时禁用 detect 调用，避免重复封禁
+    // let events = tracker.detect(&cfg.ddos);
 
-        for event in &events {
-            if event.action_taken == "ban" && event.ip != "global" {
-                if let Err(e) = crate::ban::ban_ip_with_history(
-                    &event.ip,
-                    "ddos_detector",
-                    0,
-                    cfg.ddos.auto_ban_duration as u64,
-                ) {
-                    crate::logger::warn!(
-                        crate::logger::get(),
-                        "DDoS 自动封禁失败";
-                        "ip" => &event.ip,
-                        "error" => %e
-                    );
-                } else {
-                    crate::logger::info!(
-                        crate::logger::get(),
-                        "DDoS 自动封禁成功";
-                        "ip" => &event.ip,
-                        "event_type" => &event.event_type,
-                        "rate" => event.rate_per_second,
-                        "threshold" => event.threshold
-                    );
-                }
-            }
-        }
-    }
-
+    // 清理过期的速率条目
     tracker.cleanup_stale_entries();
 }

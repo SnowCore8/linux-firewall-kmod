@@ -66,6 +66,22 @@ static void cleanup_all_entries(void) {
     call_rcu(&wl->rcu_head, free_whitelist_entry_rcu);
   }
 
+  /* 清理速率表 */
+  {
+    struct ip_rate_entry *rate_entry;
+    u32 rate_hash;
+
+    hash_for_each_safe(fw_info.rate_table_ipv4, rate_hash, tmp, rate_entry, hash) {
+      hlist_del_rcu(&rate_entry->hash);
+      call_rcu(&rate_entry->rcu_head, free_rate_entry_rcu);
+    }
+
+    hash_for_each_safe(fw_info.rate_table_ipv6, rate_hash, tmp, rate_entry, hash) {
+      hlist_del_rcu(&rate_entry->hash);
+      call_rcu(&rate_entry->rcu_head, free_rate_entry_rcu);
+    }
+  }
+
   /* 等待所有 RCU 回调完成，确保条目内存被完全释放 */
   synchronize_rcu();
 }
@@ -118,6 +134,31 @@ static int __init firewall_init(void) {
   /* R9-3: 初始化子网白名单 RCU 链表 */
   INIT_LIST_HEAD(&fw_info.ipv4_subnet_wl);
   INIT_LIST_HEAD(&fw_info.ipv6_subnet_wl);
+
+  /* 初始化速率检测（DDoS 防护） */
+  hash_init(fw_info.rate_table_ipv4);
+  hash_init(fw_info.rate_table_ipv6);
+  atomic_set(&fw_info.rate_count, 0);
+
+  /* 初始化速率检测 per-bucket 自旋锁 */
+  {
+    int i;
+    for (i = 0; i < (1 << RATE_HASH_BITS); i++) {
+      spin_lock_init(&fw_info.rate_locks_ipv4[i]);
+      spin_lock_init(&fw_info.rate_locks_ipv6[i]);
+    }
+  }
+
+  /* 设置速率检测默认配置 */
+  fw_info.rate_window_seconds = DEFAULT_RATE_WINDOW_SECONDS;
+  fw_info.rate_window_jiffies = msecs_to_jiffies(DEFAULT_RATE_WINDOW_SECONDS * 1000);
+  fw_info.max_packets_per_second = DEFAULT_MAX_PACKETS_PER_SECOND;
+  fw_info.max_bytes_per_second = DEFAULT_MAX_BYTES_PER_SECOND;
+
+  /* 设置协议专项检测默认配置 */
+  fw_info.max_syn_per_second = DEFAULT_MAX_SYN_PER_SECOND;
+  fw_info.max_udp_per_second = DEFAULT_MAX_UDP_PER_SECOND;
+  fw_info.max_icmp_per_second = DEFAULT_MAX_ICMP_PER_SECOND;
 
   /* 修复：初始化 IPv4 和 IPv6 独立的清理进度索引 */
   fw_info.cleanup_last_bucket_ipv4 = 0;
