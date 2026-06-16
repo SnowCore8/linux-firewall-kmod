@@ -56,8 +56,9 @@ pub fn process_single_line(
     DAEMON_STATS.lines_parsed.fetch_add(1, Ordering::Relaxed);
 
     if let Some(ip) = log_parser::extract_and_validate_ip(jail, line) {
-        // DDoS 检测：记录连接
-        crate::ddos_detector::get_conn_rate_tracker().record_connection(&ip);
+        // 网络层 DDoS 检测已下沉到 kmod（内核态 netfilter hook）
+        // daemon 只保留应用层检测（SSH 暴力破解等）
+        // crate::ddos_detector::get_conn_rate_tracker().record_connection(&ip);
 
         failed_tracker::handle_failed_attempt_for_jail(jail, &ip, max_retries, findtime);
     }
