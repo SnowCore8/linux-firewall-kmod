@@ -859,6 +859,70 @@ static const struct proc_ops stats_fops = {
   .proc_release = single_release,
 };
 
+/* ============================================================================
+ * rates procfs 接口 - 速率统计（DDoS 防护）
+ * ========================================================================== */
+
+/**
+ * rates_show - 显示当前速率统计表
+ */
+static int rates_show(struct seq_file *m, void *v) {
+  struct firewall_info *fw = &fw_info;
+  struct ip_rate_entry *entry;
+  u32 hash;
+  unsigned long now = jiffies;
+  char ip_str[INET6_STR_LEN];
+  int count = 0;
+
+  seq_printf(m, "IP Rate Statistics (DDoS Detection):\n");
+  seq_printf(m, "------------------------------------\n");
+  seq_printf(m, "Configuration:\n");
+  seq_printf(m, "  rate_window_seconds: %u\n", fw->rate_window_seconds);
+  seq_printf(m, "  max_packets_per_second: %lu\n", fw->max_packets_per_second);
+  seq_printf(m, "  max_bytes_per_second: %lu\n", fw->max_bytes_per_second);
+  seq_printf(m, "------------------------------------\n");
+  seq_printf(m, "%-40s %12s %12s %8s\n", "IP Address", "Packets", "Bytes", "Window");
+
+  /* IPv4 速率统计 */
+  rcu_read_lock();
+  hash_for_each_rcu(fw->rate_table_ipv4, hash, entry, hash) {
+    u64 packets = atomic64_read(&entry->packet_count);
+    u64 bytes = atomic64_read(&entry->byte_count);
+    unsigned long elapsed = (now - entry->window_start) / HZ;
+
+    ip_to_str(FW_AF_INET, &entry->addr.ipv4, ip_str, sizeof(ip_str));
+    seq_printf(m, "%-40s %12llu %12llu %6lus\n", ip_str, packets, bytes, elapsed);
+    count++;
+  }
+
+  /* IPv6 的速率统计 */
+  hash_for_each_rcu(fw->rate_table_ipv6, hash, entry, hash) {
+    u64 packets = atomic64_read(&entry->packet_count);
+    u64 bytes = atomic64_read(&entry->byte_count);
+    unsigned long elapsed = (now - entry->window_start) / HZ;
+
+    ip_to_str(FW_AF_INET6, &entry->addr.ipv6, ip_str, sizeof(ip_str));
+    seq_printf(m, "%-40s %12llu %12llu %6lus\n", ip_str, packets, bytes, elapsed);
+    count++;
+  }
+  rcu_read_unlock();
+
+  seq_printf(m, "------------------------------------\n");
+  seq_printf(m, "Total: %d active rate entries\n", count);
+  return 0;
+}
+
+static int rates_open(struct inode *inode, struct file *file) {
+  return single_open(file, rates_show, NULL);
+}
+
+static const struct proc_ops rates_fops = {
+  .proc_open = rates_open,
+  .proc_read = seq_read,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
+};
+
 /*
  * create_procfs_entries - 创建 procfs 接口
  */
@@ -891,6 +955,12 @@ int create_procfs_entries(struct firewall_info *fw) {
   }
   fw->proc_stats = entry;
 
+  entry = proc_create("rates", 0400, fw->proc_dir, &rates_fops);
+  if (!entry) {
+    goto err_cleanup;
+  }
+  fw->proc_rates = entry;
+
   return 0;
 
 err_cleanup:
@@ -903,6 +973,8 @@ EXPORT_SYMBOL_GPL(create_procfs_entries);
  * destroy_procfs_entries - 移除 procfs 条目
  */
 void destroy_procfs_entries(struct firewall_info *fw) {
+  if (fw->proc_rates)
+    proc_remove(fw->proc_rates);
   if (fw->proc_stats)
     proc_remove(fw->proc_stats);
   if (fw->proc_whitelist)
