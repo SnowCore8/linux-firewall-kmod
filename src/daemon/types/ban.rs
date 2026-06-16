@@ -149,12 +149,14 @@ impl Default for ActiveBanCache {
 }
 
 impl ActiveBanCache {
-    /// 构造新的空缓存
+    /// 构造新的空缓存（10Gbps 优化：预分配容量）
     #[must_use]
     pub fn new() -> Self {
         Self {
-            bans: RwLock::new(HashMap::new()),
-            by_jail: RwLock::new(HashMap::new()),
+            // 预分配 1 万封禁容量（10Gbps 场景下可能的活跃封禁数）
+            bans: RwLock::new(HashMap::with_capacity(10_000)),
+            // 预分配 100 个 jail 容量
+            by_jail: RwLock::new(HashMap::with_capacity(100)),
         }
     }
 
