@@ -39,8 +39,81 @@ use crate::types::{now_secs, ConnRateEntry, DdosConfig, DdosEvent, DDOS_STATS};
 /// 批量处理缓冲区大小（10Gbps+ 优化：收集 1000 个事件后一次性更新）
 const BATCH_BUFFER_SIZE: usize = 1000;
 
-/// 线程本地缓冲区大小（每个线程独立缓冲，减少全局锁竞争）
-const THREAD_LOCAL_BUFFER_SIZE: usize = 100;
+/// 线程本地缓冲区最小大小（自适应下限）
+const THREAD_BUFFER_MIN: usize = 50;
+
+/// 线程本地缓冲区最大大小（自适应上限）
+const THREAD_BUFFER_MAX: usize = 500;
+
+/// 线程本地缓冲区初始大小
+const THREAD_BUFFER_INITIAL: usize = 100;
+
+/// 自适应缓冲调整周期（秒）
+const ADAPTIVE_RESIZE_INTERVAL: i64 = 10;
+
+/// 自适应缓冲区状态跟踪
+#[derive(Debug)]
+struct AdaptiveBufferState {
+    /// 当前缓冲容量
+    capacity: usize,
+    /// 上次调整时间
+    last_resize_time: i64,
+    /// 周期内 flush 次数
+    flush_count: u32,
+}
+
+impl Default for AdaptiveBufferState {
+    fn default() -> Self {
+        Self {
+            capacity: THREAD_BUFFER_INITIAL,
+            last_resize_time: now_secs(),
+            flush_count: 0,
+        }
+    }
+}
+
+impl AdaptiveBufferState {
+    /// 根据负载动态调整缓冲大小
+    ///
+    /// # 策略
+    ///
+    /// - 高负载（flush 频繁）：增大缓冲，减少 flush 次数
+    /// - 低负载（flush 稀少）：减小缓冲，节省内存
+    /// - 调整间隔：至少 10 秒，避免抖动
+    fn maybe_resize(&mut self) -> usize {
+        let now = now_secs();
+        let elapsed = now - self.last_resize_time;
+
+        // 未到调整周期，保持当前大小
+        if elapsed < ADAPTIVE_RESIZE_INTERVAL {
+            return self.capacity;
+        }
+
+        // 根据 flush 频率调整
+        let new_capacity = if self.flush_count > 10 {
+            // 高负载：增大缓冲（每次增长 20%，上限 500）
+            (self.capacity * 12 / 10).min(THREAD_BUFFER_MAX)
+        } else if self.flush_count < 2 {
+            // 低负载：减小缓冲（每次缩减 20%，下限 50）
+            (self.capacity * 8 / 10).max(THREAD_BUFFER_MIN)
+        } else {
+            // 中等负载：保持不变
+            self.capacity
+        };
+
+        // 更新状态
+        self.capacity = new_capacity;
+        self.last_resize_time = now;
+        self.flush_count = 0;
+
+        new_capacity
+    }
+
+    /// 记录一次 flush
+    fn record_flush(&mut self) {
+        self.flush_count += 1;
+    }
+}
 
 /// 批量事件类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,9 +159,10 @@ pub struct ConnRateTracker {
     global_batch_buffer: RwLock<Vec<ThreadLocalEvent>>,
 }
 
-// 线程本地缓冲区（每个线程独立，无锁写入）
+// 线程本地缓冲区（每个线程独立，无锁写入）+ 自适应状态
 thread_local! {
-    static THREAD_BUFFER: RefCell<Vec<ThreadLocalEvent>> = RefCell::new(Vec::with_capacity(THREAD_LOCAL_BUFFER_SIZE));
+    static THREAD_BUFFER: RefCell<Vec<ThreadLocalEvent>> = RefCell::new(Vec::new());
+    static BUFFER_STATE: RefCell<AdaptiveBufferState> = RefCell::new(AdaptiveBufferState::default());
 }
 
 impl ConnRateTracker {
@@ -126,7 +200,7 @@ impl ConnRateTracker {
         let parsed = crate::ip_utils::parse_ip(ip);
         let ip_arc: Arc<str> = Arc::from(ip);
 
-        // 线程本地缓冲：无锁写入（消除 RwLock 竞争）
+        // 线程本地缓冲：无锁写入（消除 RwLock 竞争）+ 自适应大小
         let should_flush = THREAD_BUFFER.with(|buffer| {
             let mut buf = buffer.borrow_mut();
             buf.push(ThreadLocalEvent {
@@ -136,7 +210,9 @@ impl ConnRateTracker {
                 is_ipv6: parsed.is_ipv6,
                 event_type: BatchEvent::Connection,
             });
-            buf.len() >= THREAD_LOCAL_BUFFER_SIZE
+            // 使用自适应缓冲容量
+            let capacity = BUFFER_STATE.with(|state| state.borrow().capacity);
+            buf.len() >= capacity
         });
 
         // 本地缓冲区满时，刷新到全局缓冲区
@@ -159,7 +235,7 @@ impl ConnRateTracker {
         let parsed = crate::ip_utils::parse_ip(ip);
         let ip_arc: Arc<str> = Arc::from(ip);
 
-        // 线程本地缓冲：无锁写入
+        // 线程本地缓冲：无锁写入 + 自适应大小
         let should_flush = THREAD_BUFFER.with(|buffer| {
             let mut buf = buffer.borrow_mut();
             buf.push(ThreadLocalEvent {
@@ -169,7 +245,9 @@ impl ConnRateTracker {
                 is_ipv6: parsed.is_ipv6,
                 event_type: BatchEvent::Failure,
             });
-            buf.len() >= THREAD_LOCAL_BUFFER_SIZE
+            // 使用自适应缓冲容量
+            let capacity = BUFFER_STATE.with(|state| state.borrow().capacity);
+            buf.len() >= capacity
         });
 
         // 本地缓冲区满时，刷新到全局缓冲区
@@ -185,6 +263,7 @@ impl ConnRateTracker {
     /// - 线程本地缓冲区满时调用，将事件转移到全局缓冲区
     /// - 使用 `std::mem::take` 零拷贝转移数据
     /// - 全局缓冲区仅在 flush 时统一处理，减少锁竞争
+    /// - **自适应调整**：根据 flush 频率动态调整缓冲大小
     fn flush_thread_buffer(&self) {
         let events = THREAD_BUFFER.with(|buffer| {
             let mut buf = buffer.borrow_mut();
@@ -194,6 +273,21 @@ impl ConnRateTracker {
         if events.is_empty() {
             return;
         }
+
+        // 记录 flush 并可能调整缓冲大小
+        BUFFER_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.record_flush();
+            let new_capacity = state.maybe_resize();
+            // 预分配新的缓冲容量
+            THREAD_BUFFER.with(|buffer| {
+                let mut buf = buffer.borrow_mut();
+                let current_capacity = buf.capacity();
+                if new_capacity > current_capacity {
+                    buf.reserve(new_capacity - current_capacity);
+                }
+            });
+        });
 
         // 将线程本地缓冲的事件转移到全局缓冲区
         let mut global_buf = self.global_batch_buffer.write();
@@ -588,6 +682,82 @@ pub fn get_conn_rate_tracker() -> &'static ConnRateTracker {
 mod tests {
     use super::*;
     use crate::types::DdosConfig;
+
+    // ---- AdaptiveBufferState 测试 ----
+
+    #[test]
+    fn test_adaptive_buffer_initial_state() {
+        let state = AdaptiveBufferState::default();
+        assert_eq!(state.capacity, THREAD_BUFFER_INITIAL);
+        assert_eq!(state.flush_count, 0);
+    }
+
+    #[test]
+    fn test_adaptive_buffer_high_load_growth() {
+        let mut state = AdaptiveBufferState::default();
+        state.last_resize_time = now_secs() - ADAPTIVE_RESIZE_INTERVAL - 1;
+        state.flush_count = 15; // 高负载
+
+        let new_capacity = state.maybe_resize();
+        // 应该增长 20%
+        assert_eq!(new_capacity, (THREAD_BUFFER_INITIAL * 12 / 10).min(THREAD_BUFFER_MAX));
+        assert_eq!(state.flush_count, 0); // 应该重置
+    }
+
+    #[test]
+    fn test_adaptive_buffer_low_load_shrink() {
+        let mut state = AdaptiveBufferState::default();
+        state.last_resize_time = now_secs() - ADAPTIVE_RESIZE_INTERVAL - 1;
+        state.flush_count = 1; // 低负载
+
+        let new_capacity = state.maybe_resize();
+        // 应该缩减 20%
+        assert_eq!(new_capacity, (THREAD_BUFFER_INITIAL * 8 / 10).max(THREAD_BUFFER_MIN));
+        assert_eq!(state.flush_count, 0); // 应该重置
+    }
+
+    #[test]
+    fn test_adaptive_buffer_medium_load_stable() {
+        let mut state = AdaptiveBufferState::default();
+        state.last_resize_time = now_secs() - ADAPTIVE_RESIZE_INTERVAL - 1;
+        state.flush_count = 5; // 中等负载
+
+        let new_capacity = state.maybe_resize();
+        // 应该保持不变
+        assert_eq!(new_capacity, THREAD_BUFFER_INITIAL);
+        assert_eq!(state.flush_count, 0); // 应该重置
+    }
+
+    #[test]
+    fn test_adaptive_buffer_not_resized_within_interval() {
+        let mut state = AdaptiveBufferState::default();
+        state.last_resize_time = now_secs(); // 刚刚调整过
+        state.flush_count = 100; // 即使 flush 很多
+
+        let new_capacity = state.maybe_resize();
+        // 未到调整周期，应该保持不变
+        assert_eq!(new_capacity, THREAD_BUFFER_INITIAL);
+        assert_eq!(state.flush_count, 100); // 不应该重置
+    }
+
+    #[test]
+    fn test_adaptive_buffer_respects_bounds() {
+        let mut state = AdaptiveBufferState::default();
+
+        // 测试上限
+        state.capacity = THREAD_BUFFER_MAX;
+        state.last_resize_time = now_secs() - ADAPTIVE_RESIZE_INTERVAL - 1;
+        state.flush_count = 100;
+        let new_capacity = state.maybe_resize();
+        assert!(new_capacity <= THREAD_BUFFER_MAX);
+
+        // 测试下限
+        state.capacity = THREAD_BUFFER_MIN;
+        state.last_resize_time = now_secs() - ADAPTIVE_RESIZE_INTERVAL - 1;
+        state.flush_count = 0;
+        let new_capacity = state.maybe_resize();
+        assert!(new_capacity >= THREAD_BUFFER_MIN);
+    }
 
     /// 创建低阈值的测试配置，便于触发检测
     fn test_config() -> DdosConfig {
