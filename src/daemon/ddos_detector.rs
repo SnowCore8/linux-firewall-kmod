@@ -12,6 +12,7 @@
 //! 2. **DashMap 分片锁**：替代 RwLock<HashMap>，16 分片减少锁竞争
 //! 3. **Arc<str> 共享**：IP 字符串共享，避免重复分配
 //! 4. **预分配容量**：HashMap 预分配 10 万容量，避免运行时扩容
+//! 5. **批量处理**：收集 1000 个事件后一次性更新 DashMap，减少锁获取次数
 //!
 //! # 检测策略
 //!
@@ -23,6 +24,7 @@
 //!
 //! 超阈值 `auto_ban_threshold` 次后自动封禁，封禁时长为 `auto_ban_duration` 秒。
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -31,7 +33,17 @@ use parking_lot::RwLock;
 
 use crate::types::{now_secs, ConnRateEntry, DdosConfig, DdosEvent, DDOS_STATS};
 
-/// 连接速率跟踪器 — 10Gbps+ 优化版（DashMap 分片锁）
+/// 批量处理缓冲区大小（10Gbps+ 优化：收集 1000 个事件后一次性更新）
+const BATCH_BUFFER_SIZE: usize = 1000;
+
+/// 批量事件类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatchEvent {
+    Connection,
+    Failure,
+}
+
+/// 连接速率跟踪器 — 10Gbps+ 优化版（DashMap 分片锁 + 批量处理）
 ///
 /// 维护所有 IP 的连接速率统计，支持 per-IP 和全局限速检测。
 ///
@@ -40,6 +52,7 @@ use crate::types::{now_secs, ConnRateEntry, DdosConfig, DdosEvent, DDOS_STATS};
 /// - `global_conn_count`: 原子计数器，无锁更新
 /// - `entries`: DashMap 16 分片，并发读写性能比 RwLock<HashMap> 高 5-10x
 /// - `Arc<str>` 共享 IP 字符串，减少内存分配
+/// - `batch_buffer`: 批量缓冲区，收集 1000 个事件后一次性更新，减少锁获取次数
 pub struct ConnRateTracker {
     /// IP → 连接速率条目（DashMap 16 分片，无全局锁）
     entries: DashMap<Arc<str>, ConnRateEntry>,
@@ -47,10 +60,12 @@ pub struct ConnRateTracker {
     global_conn_count: AtomicU64,
     /// 上次重置时间 (Unix 秒)
     last_reset_time: RwLock<i64>,
+    /// 批量处理缓冲区（收集事件后一次性更新 DashMap）
+    batch_buffer: RwLock<Vec<(Arc<str>, BatchEvent)>>,
 }
 
 impl ConnRateTracker {
-    /// 创建新的连接速率跟踪器（10Gbps+ 优化：DashMap 16 分片）
+    /// 创建新的连接速率跟踪器（10Gbps+ 优化：DashMap 16 分片 + 批量缓冲）
     pub fn new() -> Self {
         let now = now_secs();
 
@@ -59,49 +74,91 @@ impl ConnRateTracker {
             entries: DashMap::with_capacity(100_000),
             global_conn_count: AtomicU64::new(0),
             last_reset_time: RwLock::new(now),
+            // 批量缓冲区预分配 1000 容量
+            batch_buffer: RwLock::new(Vec::with_capacity(BATCH_BUFFER_SIZE)),
         }
     }
 
-    /// 记录一次连接（10Gbps+ 优化：DashMap 分片锁 + 原子计数）
+    /// 记录一次连接（10Gbps+ 优化：批量缓冲 + DashMap 分片锁 + 原子计数）
     ///
     /// # Arguments
     /// * `ip` - 来源 IP 地址
     pub fn record_connection(&self, ip: &str) {
-        let now = now_secs();
-
         // 原子更新全局计数（无锁，10Gbps+ 关键路径）
         self.global_conn_count.fetch_add(1, Ordering::Relaxed);
 
-        // DashMap 分片锁更新 per-IP 计数（16 分片，锁竞争降低 16x）
+        // 批量缓冲：先加入缓冲区，达到阈值后一次性刷新
         let ip_arc: Arc<str> = Arc::from(ip);
-        {
+        let should_flush = {
+            let mut buffer = self.batch_buffer.write();
+            buffer.push((ip_arc, BatchEvent::Connection));
+            buffer.len() >= BATCH_BUFFER_SIZE
+        };
+
+        if should_flush {
+            self.flush_batch_buffer();
+        }
+    }
+
+    /// 记录一次失败尝试（10Gbps+ 优化：批量缓冲 + DashMap 分片锁）
+    ///
+    /// # Arguments
+    /// * `ip` - 来源 IP 地址
+    pub fn record_failure(&self, ip: &str) {
+        // 批量缓冲：先加入缓冲区，达到阈值后一次性刷新
+        let ip_arc: Arc<str> = Arc::from(ip);
+        let should_flush = {
+            let mut buffer = self.batch_buffer.write();
+            buffer.push((ip_arc, BatchEvent::Failure));
+            buffer.len() >= BATCH_BUFFER_SIZE
+        };
+
+        if should_flush {
+            self.flush_batch_buffer();
+        }
+    }
+
+    /// 刷新批量缓冲区，将收集的事件一次性更新到 DashMap
+    ///
+    /// # 性能优化
+    ///
+    /// - 将 1000 个 DashMap 操作合并为一次批量更新
+    /// - 使用 HashMap 聚合相同 IP 的事件，减少 DashMap 访问次数
+    fn flush_batch_buffer(&self) {
+        let events = {
+            let mut buffer = self.batch_buffer.write();
+            std::mem::take(&mut *buffer)
+        };
+
+        if events.is_empty() {
+            return;
+        }
+
+        let now = now_secs();
+
+        // 聚合相同 IP 的事件，减少 DashMap 访问次数
+        let mut aggregated: HashMap<Arc<str>, (u64, u64)> = HashMap::new();
+        for (ip_arc, event_type) in events {
+            let entry = aggregated.entry(ip_arc).or_insert((0, 0));
+            match event_type {
+                BatchEvent::Connection => entry.0 += 1,
+                BatchEvent::Failure => entry.1 += 1,
+            }
+        }
+
+        // 一次性更新 DashMap（批量操作）
+        for (ip_arc, (conn_count, fail_count)) in aggregated {
             let mut entry = self.entries.entry(ip_arc.clone()).or_insert_with(|| {
                 ConnRateEntry::new(ip_arc, now)
             });
-
-            entry.conn_count += 1;
+            entry.conn_count += conn_count;
+            entry.fail_count += fail_count;
             entry.last_activity = now;
         }
 
         DDOS_STATS
             .tracked_ips
             .store(self.entries.len() as u64, Ordering::Relaxed);
-    }
-
-    /// 记录一次失败尝试（10Gbps+ 优化：DashMap 分片锁）
-    ///
-    /// # Arguments
-    /// * `ip` - 来源 IP 地址
-    pub fn record_failure(&self, ip: &str) {
-        let now = now_secs();
-
-        let ip_arc: Arc<str> = Arc::from(ip);
-        let mut entry = self.entries.entry(ip_arc.clone()).or_insert_with(|| {
-            ConnRateEntry::new(ip_arc, now)
-        });
-
-        entry.fail_count += 1;
-        entry.last_activity = now;
     }
 
     /// 检测 DDoS 攻击
@@ -115,6 +172,9 @@ impl ConnRateTracker {
         if !config.enabled {
             return Vec::new();
         }
+
+        // 检测前强制刷新缓冲区，确保所有事件已处理
+        self.flush();
 
         let now = now_secs();
         let mut events = Vec::new();
@@ -261,6 +321,11 @@ impl ConnRateTracker {
         events
     }
 
+    /// 强制刷新批量缓冲区（用于测试或检测前确保数据最新）
+    pub fn flush(&self) {
+        self.flush_batch_buffer();
+    }
+
     /// 获取当前跟踪的 IP 数量
     pub fn tracked_ip_count(&self) -> usize {
         self.entries.len()
@@ -359,6 +424,7 @@ mod tests {
         tracker.record_connection("10.0.0.1");
         tracker.record_connection("10.0.0.1");
         tracker.record_connection("10.0.0.2");
+        tracker.flush(); // 强制刷新缓冲区
 
         assert_eq!(tracker.tracked_ip_count(), 2);
     }
@@ -368,6 +434,7 @@ mod tests {
         let tracker = ConnRateTracker::new();
         tracker.record_failure("10.0.0.1");
         tracker.record_failure("10.0.0.1");
+        tracker.flush(); // 强制刷新缓冲区
 
         assert_eq!(tracker.tracked_ip_count(), 1);
     }
@@ -463,6 +530,7 @@ mod tests {
         // 记录连接 — last_activity 为当前时间
         tracker.record_connection("10.0.0.1");
         tracker.record_connection("10.0.0.2");
+        tracker.flush(); // 强制刷新缓冲区
 
         // 刚记录的条目不应被清理 (last_activity > now - 300)
         tracker.cleanup_stale_entries();
