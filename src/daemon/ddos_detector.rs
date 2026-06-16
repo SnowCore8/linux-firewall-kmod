@@ -52,7 +52,8 @@ impl ConnRateTracker {
         let now = now_secs();
 
         Self {
-            entries: RwLock::new(HashMap::new()),
+            // 预分配容量：10Gbps 场景下预计跟踪 10 万 IP（避免运行时扩容）
+            entries: RwLock::new(HashMap::with_capacity(100_000)),
             global_conn_count: AtomicU64::new(0),
             last_reset_time: RwLock::new(now),
         }
