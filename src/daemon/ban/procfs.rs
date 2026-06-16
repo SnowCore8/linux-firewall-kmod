@@ -156,23 +156,21 @@ fn verify_procfs_fd(fd: RawFd) -> Result<()> {
 
 /// 阻塞写整个 `data` 到 `fd`。EINTR / EAGAIN 自动重试。
 ///
+/// # Safety
+/// 调用方必须确保 `fd` 是有效的文件描述符，并且指向正确的 procfs 文件
+///
 /// # Errors
 /// - 非 EINTR/EAGAIN 的 write 错误
-fn write_to_fd(fd: RawFd, data: &[u8]) -> Result<()> {
+unsafe fn write_to_fd(fd: RawFd, data: &[u8]) -> Result<()> {
     let mut total_written: usize = 0;
     while total_written < data.len() {
-        // SAFETY: `data.as_ptr().add(total_written)` 算术安全,因为循环不变量
-        // `total_written <= data.len()` 始终成立 (初始化 + 每次 `total_written += written`
-        // 后 `written <= data.len() - total_written` 由 libc::write 契约保证)。
-        // 长度参数 `data.len() - total_written` 是剩余字节数,不会越界。
-        // fd 在调用方 (`secure_procfs_write`) 已通过 `verify_procfs_fd` 校验。
-        let written = unsafe {
-            libc::write(
-                fd,
-                data.as_ptr().add(total_written).cast::<libc::c_void>(),
-                data.len() - total_written,
-            )
-        };
+        // 使用 libc::write 系统调用来写入数据
+        let written = libc::write(
+            fd,
+            data.as_ptr().add(total_written).cast::<libc::c_void>(),
+            data.len() - total_written,
+        );
+
         if written < 0 {
             let err = std::io::Error::last_os_error();
             if err.kind() == std::io::ErrorKind::Interrupted
@@ -180,10 +178,15 @@ fn write_to_fd(fd: RawFd, data: &[u8]) -> Result<()> {
             {
                 continue; // EINTR / EAGAIN → 重试
             }
-            bail!("write failed: {err}");
+            return Err(err.into());
         }
+
         total_written += written as usize;
     }
+
+    // 确保数据被写入（对于 procfs 文件可能不需要，但为了安全起见）
+    libc::fsync(fd);
+
     Ok(())
 }
 
@@ -226,20 +229,23 @@ pub fn secure_procfs_write(path: &str, data: &[u8]) -> Result<()> {
             let err = std::io::Error::last_os_error();
             bail!("open {path} failed: {err}");
         }
-        if verify_procfs_fd(fd).is_err() {
+        if let Err(e) = verify_procfs_fd(fd) {
             // SAFETY: fd 是本函数刚 `open` 拿到的有效值,验证失败立即释放
             unsafe { libc::close(fd) };
-            bail!("fd verification failed for {path}");
+            bail!("fd verification failed for {path}: {e}");
         }
         fd
     };
 
-    let write_result = write_to_fd(fd, data);
+    let write_result = unsafe { write_to_fd(fd, data) };
     if write_result.is_err() {
         if using_cached {
             // 缓存 fd 写入失败时关闭并标记为无效, 下次重新打开
             CACHED_BANS_FD.store(-1, Ordering::SeqCst);
             // SAFETY: fd 来自 `get_cached_bans_fd` 仍可能合法的 fd,失败时关闭并重置
+            unsafe { libc::close(fd) };
+        } else {
+            // SAFETY: 非缓存 fd，需要手动关闭
             unsafe { libc::close(fd) };
         }
         return write_result;
@@ -249,10 +255,11 @@ pub fn secure_procfs_write(path: &str, data: &[u8]) -> Result<()> {
         // SAFETY: fd 是本函数 `open` 拿到的非缓存 fd,作用域结束必须 close
         let close_result = unsafe { libc::close(fd) };
         if close_result != 0 {
-            crate::logger::debug!(
+            crate::logger::warn!(
                 crate::logger::get(),
-                "关闭 bans fd 失败";
-                "fd" => fd
+                "关闭 procfs fd 失败";
+                "fd" => fd,
+                "path" => path
             );
         }
     }
