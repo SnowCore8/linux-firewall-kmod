@@ -250,6 +250,10 @@ declare -A SUITE_FILES=(
     ["12_permanent_ban"]="suites/12_permanent_ban.sh"
     ["13_frp_jail"]="suites/13_frp_jail.sh"
     ["14_ban_netfilter"]="suites/14_ban_netfilter.sh"
+    ["15_ddos_detection"]="suites/15_ddos_detection.sh"
+    ["16_webui_api"]="suites/16_webui_api.sh"
+    ["17_config_reload"]="suites/17_config_reload.sh"
+    ["18_log_rotation"]="suites/18_log_rotation.sh"
 )
 
 declare -A SUITE_CATEGORIES=(
@@ -265,6 +269,10 @@ declare -A SUITE_CATEGORIES=(
     ["12_permanent_ban"]="permanent ban"
     ["13_frp_jail"]="daemon frp"
     ["14_ban_netfilter"]="ban netfilter security"
+    ["15_ddos_detection"]="daemon ddos security"
+    ["16_webui_api"]="daemon webui api"
+    ["17_config_reload"]="daemon config reload"
+    ["18_log_rotation"]="daemon log rotation"
 )
 
 # ============================================================================
