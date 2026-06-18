@@ -55,9 +55,7 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
             state.inode = metadata.ino();
         }
 
-        let mask = WatchMask::MODIFY
-            | WatchMask::MOVED_TO
-            | WatchMask::CLOSE_WRITE;
+        let mask = WatchMask::MODIFY | WatchMask::MOVED_TO | WatchMask::CLOSE_WRITE;
 
         match inotify.watches().add(config_path, mask) {
             Ok(wd) => {

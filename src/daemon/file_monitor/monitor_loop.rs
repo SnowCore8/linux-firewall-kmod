@@ -184,7 +184,9 @@ fn handle_inotify_events(cfg: &mut Config) {
                 .map(|(idx, state)| (idx, state.is_config))
         };
 
-        let Some((idx, is_config)) = file_info else { continue };
+        let Some((idx, is_config)) = file_info else {
+            continue;
+        };
 
         // 配置文件变化：触发热重载
         if is_config {
