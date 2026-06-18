@@ -146,6 +146,86 @@ whitelist:
 
 - `127.0.0.1` - 本地回环地址
 
+## 可信 IP 白名单 (trusted_ips)
+
+```yaml
+trusted_ips:
+  - 43.100.123.123          # FRP 服务器
+  - 8.140.211.27            # 另一台服务器
+  - 10.0.0.0/8              # 内网网段
+```
+
+| 格式 | 示例 | 说明 |
+|------|------|------|
+| 单个 IP | `43.100.123.123` | 自动添加 `/32` 前缀，写入内核白名单 |
+| CIDR 网段 | `10.0.0.0/8` | 直接写入内核白名单 |
+
+**功能说明**：
+
+- **启动时自动写入**：daemon 启动时将 `trusted_ips` 列表写入内核白名单（`/proc/firewall/whitelist`）
+- **防止误封**：确保关键基础设施（如 FRP 服务器、跳板机）不会被 DDoS 自动封禁误杀
+- **热重载支持**：修改配置后发送 `SIGHUP` 信号，daemon 会自动对比新旧列表，增量添加/移除白名单条目
+- **与 `whitelist` 的区别**：`whitelist` 是内核模块的静态白名单（需手动写入），`trusted_ips` 由 daemon 管理，支持配置化和热重载
+
+> **注意**：`trusted_ips` 中的 IP 会标记为 `on manual`，与自动发现的网络接口白名单区分。
+
+## DDoS 防护配置 (ddos)
+
+```yaml
+ddos:
+  enabled: true
+  per_ip_conn_rate: 50        # 单 IP 每秒最大连接数
+  per_ip_fail_rate: 30        # 单 IP 每分钟最大失败次数
+  global_conn_rate: 10000     # 全局每秒最大连接数
+  auto_ban_duration: 3600     # 自动封禁时长（秒）
+  auto_ban_threshold: 3       # 超阈值几次后封禁
+  check_interval: 5           # 检测间隔（秒）
+```
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `enabled` | bool | `true` | 是否启用 DDoS 检测 |
+| `per_ip_conn_rate` | int | `50` | 单 IP 每秒最大新建连接数 |
+| `per_ip_fail_rate` | int | `30` | 单 IP 每分钟最大失败连接数 |
+| `global_conn_rate` | int | `10000` | 全局每秒最大新建连接数 |
+| `auto_ban_duration` | int | `3600` | 触发自动封禁后的封禁时长（秒） |
+| `auto_ban_threshold` | int | `3` | 超过阈值几次后触发封禁 |
+| `check_interval` | int | `5` | 检测间隔（秒） |
+
+**检测逻辑**：
+
+1. 内核模块实时统计每个 IP 的连接速率
+2. 超过 `per_ip_conn_rate` 或 `per_ip_fail_rate` 阈值时，计数器 +1
+3. 计数器达到 `auto_ban_threshold` 时，自动封禁该 IP `auto_ban_duration` 秒
+4. 全局连接速率超过 `global_conn_rate` 时，触发全局告警
+
+> **建议**：将关键服务器 IP 添加到 `trusted_ips`，防止 DDoS 检测误封。
+
+## Web UI 配置 (webui)
+
+```yaml
+webui:
+  sse_push_interval: 1        # SSE 推送间隔（秒）
+  rate_warning_pps: 1000      # 速率警告阈值（包/秒）
+  rate_critical_pps: 10000    # 速率严重告警阈值（包/秒）
+  rate_warning_syn: 100       # SYN 速率警告阈值（包/秒）
+  rate_critical_syn: 1000     # SYN 速率严重告警阈值（包/秒）
+```
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `sse_push_interval` | int | `1` | Server-Sent Events 推送间隔（秒） |
+| `rate_warning_pps` | int | `1000` | 总速率警告阈值（包/秒） |
+| `rate_critical_pps` | int | `10000` | 总速率严重告警阈值（包/秒） |
+| `rate_warning_syn` | int | `100` | SYN 包速率警告阈值（包/秒） |
+| `rate_critical_syn` | int | `1000` | SYN 包速率严重告警阈值（包/秒） |
+
+**功能说明**：
+
+- **SSE 推送**：Web UI 通过 Server-Sent Events 实时接收状态更新
+- **速率告警**：当包速率超过阈值时，Web UI 显示警告/严重告警状态
+- **SYN 告警**：专门针对 SYN Flood 攻击的告警阈值
+
 ## 陷阱 (Pitfalls)
 
 YAML 配置在结构上容易写错，遇到"配置没生效"先看这一节。

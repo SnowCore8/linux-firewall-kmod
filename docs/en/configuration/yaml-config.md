@@ -149,6 +149,86 @@ The following IP is always protected, no manual configuration needed:
 
 - `127.0.0.1` - Loopback address
 
+## Trusted IPs (trusted_ips)
+
+```yaml
+trusted_ips:
+  - 43.100.123.123          # FRP server
+  - 8.140.211.27            # Another server
+  - 10.0.0.0/8              # Internal network
+```
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| Single IP | `43.100.123.123` | Automatically adds `/32` prefix, writes to kernel whitelist |
+| CIDR range | `10.0.0.0/8` | Writes directly to kernel whitelist |
+
+**Features**:
+
+- **Auto-write on startup**: daemon writes `trusted_ips` list to kernel whitelist (`/proc/firewall/whitelist`) on startup
+- **Prevent false bans**: Ensures critical infrastructure (e.g., FRP servers, jump hosts) won't be accidentally banned by DDoS auto-ban
+- **Hot reload support**: After modifying config and sending `SIGHUP`, daemon compares old/new lists and incrementally adds/removes whitelist entries
+- **Difference from `whitelist`**: `whitelist` is a static kernel module whitelist (requires manual write), `trusted_ips` is managed by daemon, supports configuration and hot reload
+
+> **Note**: IPs in `trusted_ips` are marked as `on manual`, distinguished from auto-discovered network interface whitelist entries.
+
+## DDoS Protection (ddos)
+
+```yaml
+ddos:
+  enabled: true
+  per_ip_conn_rate: 50        # Max connections per IP per second
+  per_ip_fail_rate: 30        # Max failed connections per IP per minute
+  global_conn_rate: 10000     # Max global connections per second
+  auto_ban_duration: 3600     # Auto-ban duration (seconds)
+  auto_ban_threshold: 3       # Ban after exceeding threshold N times
+  check_interval: 5           # Check interval (seconds)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable DDoS detection |
+| `per_ip_conn_rate` | int | `50` | Max new connections per IP per second |
+| `per_ip_fail_rate` | int | `30` | Max failed connections per IP per minute |
+| `global_conn_rate` | int | `10000` | Max global new connections per second |
+| `auto_ban_duration` | int | `3600` | Ban duration after auto-ban triggered (seconds) |
+| `auto_ban_threshold` | int | `3` | Ban after exceeding threshold N times |
+| `check_interval` | int | `5` | Detection interval (seconds) |
+
+**Detection Logic**:
+
+1. Kernel module tracks connection rate per IP in real-time
+2. Counter increments when exceeding `per_ip_conn_rate` or `per_ip_fail_rate`
+3. Auto-ban triggers when counter reaches `auto_ban_threshold`, banning IP for `auto_ban_duration` seconds
+4. Global alert triggers when global connection rate exceeds `global_conn_rate`
+
+> **Recommendation**: Add critical server IPs to `trusted_ips` to prevent DDoS detection false bans.
+
+## Web UI Configuration (webui)
+
+```yaml
+webui:
+  sse_push_interval: 1        # SSE push interval (seconds)
+  rate_warning_pps: 1000      # Rate warning threshold (packets/sec)
+  rate_critical_pps: 10000    # Rate critical threshold (packets/sec)
+  rate_warning_syn: 100       # SYN rate warning threshold (packets/sec)
+  rate_critical_syn: 1000     # SYN rate critical threshold (packets/sec)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `sse_push_interval` | int | `1` | Server-Sent Events push interval (seconds) |
+| `rate_warning_pps` | int | `1000` | Total rate warning threshold (packets/sec) |
+| `rate_critical_pps` | int | `10000` | Total rate critical threshold (packets/sec) |
+| `rate_warning_syn` | int | `100` | SYN packet rate warning threshold (packets/sec) |
+| `rate_critical_syn` | int | `1000` | SYN packet rate critical threshold (packets/sec) |
+
+**Features**:
+
+- **SSE Push**: Web UI receives real-time status updates via Server-Sent Events
+- **Rate Alerts**: Web UI displays warning/critical status when packet rate exceeds thresholds
+- **SYN Alerts**: Dedicated alert thresholds for SYN Flood attacks
+
 ## Permanent Ban
 
 Permanent bans (`ban_time: 0`) are kept in memory and lost on restart.
