@@ -304,6 +304,51 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
   }
   rcu_read_unlock();
 
+  /* 阶段 1.5：保护本机接口 IP，防止误封自身导致网络中断 */
+  if (af == FW_AF_INET) {
+    __be32 target_ipv4 = *(__be32 *)ip;
+    struct net_device *dev;
+    rcu_read_lock();
+    for_each_netdev_rcu(&init_net, dev) {
+      struct in_device *in_dev = __in_dev_get_rcu(dev);
+      if (in_dev) {
+        struct in_ifaddr *ifa;
+        for (ifa = rcu_dereference(in_dev->ifa_list); ifa;
+             ifa = rcu_dereference(ifa->ifa_next)) {
+          if (ifa->ifa_local == target_ipv4) {
+            rcu_read_unlock();
+            kfree(entry);
+            pr_warn("拒绝封禁本机接口 IP: %pI4 (dev=%s)\n", &target_ipv4, dev->name);
+            return -EPERM;
+          }
+        }
+      }
+    }
+    rcu_read_unlock();
+  } else if (af == FW_AF_INET6) {
+    const struct in6_addr *target_ipv6 = (const struct in6_addr *)ip;
+    struct net_device *dev;
+    rcu_read_lock();
+    for_each_netdev_rcu(&init_net, dev) {
+      struct inet6_dev *idev = __in6_dev_get(dev);
+      if (idev) {
+        struct inet6_ifaddr *ifp;
+        read_lock_bh(&idev->lock);
+        list_for_each_entry(ifp, &idev->addr_list, if_list) {
+          if (ipv6_addr_equal(&ifp->addr, target_ipv6)) {
+            read_unlock_bh(&idev->lock);
+            rcu_read_unlock();
+            kfree(entry);
+            pr_warn("拒绝封禁本机接口 IPv6: %pI6c (dev=%s)\n", target_ipv6, dev->name);
+            return -EPERM;
+          }
+        }
+        read_unlock_bh(&idev->lock);
+      }
+    }
+    rcu_read_unlock();
+  }
+
   /* 阶段 2：检查封禁表容量（仍在全局锁下） */
   if (atomic_read(&fw->ban_count) >= MAX_BAN_ENTRIES) {
     spin_unlock(&fw->lock);

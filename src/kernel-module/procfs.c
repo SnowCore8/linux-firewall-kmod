@@ -584,6 +584,46 @@ static int execute_whitelist_action(u8 af, void *ip, int prefix_len, const char 
   int result;
 
   if (strcmp(cmd, "remove") == 0) {
+    /* 检查是否是本机接口 IP，禁止删除 */
+    struct net_device *dev;
+    rcu_read_lock();
+    for_each_netdev_rcu(&init_net, dev) {
+      if (af == FW_AF_INET) {
+        struct in_device *in_dev = __in_dev_get_rcu(dev);
+        if (in_dev) {
+          struct in_ifaddr *ifa;
+          for (ifa = rcu_dereference(in_dev->ifa_list); ifa;
+               ifa = rcu_dereference(ifa->ifa_next)) {
+            __be32 net_addr = *(__be32 *)ip & ifa->ifa_mask;
+            __be32 ifa_addr = ifa->ifa_local & ifa->ifa_mask;
+            if (net_addr == ifa_addr) {
+              rcu_read_unlock();
+              pr_warn("拒绝删除本机接口 IP 白名单: %pI4/%d (dev=%s)\n", ip,
+                      prefix_len, dev->name);
+              return -EPERM;
+            }
+          }
+        }
+      } else if (af == FW_AF_INET6) {
+        struct inet6_dev *idev = __in6_dev_get(dev);
+        if (idev) {
+          struct inet6_ifaddr *ifp;
+          read_lock_bh(&idev->lock);
+          list_for_each_entry(ifp, &idev->addr_list, if_list) {
+            if (ipv6_prefix_equal((struct in6_addr *)ip, &ifp->addr, prefix_len)) {
+              read_unlock_bh(&idev->lock);
+              rcu_read_unlock();
+              pr_warn("拒绝删除本机接口 IPv6 白名单: %pI6c/%d (dev=%s)\n", ip,
+                      prefix_len, dev->name);
+              return -EPERM;
+            }
+          }
+          read_unlock_bh(&idev->lock);
+        }
+      }
+    }
+    rcu_read_unlock();
+
     result = remove_whitelist_entry(&fw_info, af, ip, prefix_len);
     if (result < 0) {
       return result;
