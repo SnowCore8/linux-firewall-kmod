@@ -114,6 +114,29 @@ impl DdosDecisionEngine {
                     "ip" => %ip,
                     "error" => %e
                 );
+            } else {
+                // 封禁指令发送成功，同步到 ACTIVE_BAN_CACHE（Web UI 需要）
+                use crate::types::{BanInfo, BanReason, ACTIVE_BAN_CACHE};
+                let ban_info = BanInfo {
+                    ip: ip.to_string(),
+                    ip_num: match ip {
+                        std::net::IpAddr::V4(v4) => u32::from(v4),
+                        std::net::IpAddr::V6(_) => 0,
+                    },
+                    jail_name: "ddos".to_string(),
+                    reason: BanReason::DDoSRateLimit,
+                    banned_at: now,
+                    expires_at: if duration > 0 {
+                        now + duration as i64
+                    } else {
+                        0
+                    },
+                    is_permanent: duration == 0,
+                    fail_count: count,
+                };
+                if let Some(cache) = ACTIVE_BAN_CACHE.get() {
+                    cache.insert(ban_info);
+                }
             }
 
             // 重置违规计数（避免重复封禁）

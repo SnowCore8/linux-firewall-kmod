@@ -567,23 +567,14 @@ impl ConnRateTracker {
             );
         } // 读锁释放
 
-        // 阶段 2: DashMap 更新 violation_count 并判断是否触发封禁
+        // 阶段 2: DashMap 更新 violation_count（封禁决策已迁移到 netlink 决策引擎）
+        // 注意：此处仅记录违规次数，不再触发封禁。封禁由 DdosDecisionEngine 通过 netlink 处理。
         {
             for v in &violations {
                 if v.is_ipv6 {
                     // IPv6: 使用 [u8; 16] 键查找
                     if let Some(entry) = self.entries_ipv6.get_mut(&v.ipv6_num) {
-                        let prev_count = entry.violation_count.fetch_add(1, Ordering::Relaxed);
-                        let new_count = prev_count + 1;
-
-                        let action = if new_count >= config.auto_ban_threshold {
-                            DDOS_STATS
-                                .auto_bans_triggered
-                                .fetch_add(1, Ordering::Relaxed);
-                            "ban"
-                        } else {
-                            "log"
-                        };
+                        let _prev_count = entry.violation_count.fetch_add(1, Ordering::Relaxed);
 
                         events.push(DdosEvent {
                             ip: v.ip.to_string(),
@@ -591,23 +582,13 @@ impl ConnRateTracker {
                             rate_per_second: v.rate_for_event,
                             threshold: v.threshold_for_event,
                             detected_at: now,
-                            action_taken: action.to_string(),
+                            action_taken: "log".to_string(), // 封禁决策已迁移到 netlink 决策引擎
                         });
                     }
                 } else {
                     // IPv4: 使用 u32 键查找
                     if let Some(entry) = self.entries_ipv4.get_mut(&v.ip_num) {
-                        let prev_count = entry.violation_count.fetch_add(1, Ordering::Relaxed);
-                        let new_count = prev_count + 1;
-
-                        let action = if new_count >= config.auto_ban_threshold {
-                            DDOS_STATS
-                                .auto_bans_triggered
-                                .fetch_add(1, Ordering::Relaxed);
-                            "ban"
-                        } else {
-                            "log"
-                        };
+                        let _prev_count = entry.violation_count.fetch_add(1, Ordering::Relaxed);
 
                         events.push(DdosEvent {
                             ip: v.ip.to_string(),
@@ -615,7 +596,7 @@ impl ConnRateTracker {
                             rate_per_second: v.rate_for_event,
                             threshold: v.threshold_for_event,
                             detected_at: now,
-                            action_taken: action.to_string(),
+                            action_taken: "log".to_string(), // 封禁决策已迁移到 netlink 决策引擎
                         });
                     }
                 }

@@ -5,6 +5,8 @@
 ## [Unreleased] - C→Rust 翻译 + 二进制优化 + CI 升级（v2.2.1）
 
 ### 新增
+- **Netlink 深度联动架构** - 内核模块与守护进程通过 netlink socket 双向实时通信。内核检测到 DDoS 后推送事件给守护进程，守护进程决策引擎判断后下发封禁指令。消除状态同步问题，实现真正的深度联动
+- **DDoS 决策引擎** - 守护进程新增 `DdosDecisionEngine`，接收内核 netlink 事件后根据违规次数决定是否封禁，通过 netlink 下发封禁指令。封禁同步到 `ACTIVE_BAN_CACHE`，Web UI 实时可见
 - **`make install` 自动化改进** - install 目标添加 build 依赖，`make clean && make install` 一步完成，无需手动 `make build`
 - **安装流程标准化** - 新增 `install-verify` 目标，安装后自动验证关键组件（内核模块、守护进程、配置文件、状态目录、systemd 服务）
 - **安装错误处理增强** - 关键步骤（daemon 启动、文件安装）失败时显式报错，不再静默忽略；服务启动检查验证 daemon 是否真正运行

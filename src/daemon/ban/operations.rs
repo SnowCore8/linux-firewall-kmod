@@ -277,11 +277,13 @@ pub fn sync_bans_from_kernel() -> Result<usize> {
         };
 
         // 创建 BanInfo
+        // 注意：从内核同步的封禁无法区分来源（Jail 或 DDoS），统一标记为 "kernel" jail
+        // 实际原因可能是 Jail 日志解析触发，也可能是 DDoS 检测触发
         let ban_info = BanInfo {
             ip: ip.to_string(),
-            ip_num: 0,                        // IPv6 或暂不计算
-            jail_name: "kernel".to_string(),  // 内核模块封禁的归为 "kernel" jail
-            reason: BanReason::DDoSRateLimit, // 假设是 DDoS 检测触发
+            ip_num: 0,                       // IPv6 或暂不计算
+            jail_name: "kernel".to_string(), // 内核模块封禁的归为 "kernel" jail
+            reason: BanReason::ManualBan,    // 标记为手动封禁（来源不明）
             banned_at: now,
             expires_at,
             is_permanent,

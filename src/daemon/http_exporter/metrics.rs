@@ -157,7 +157,7 @@ pub(super) fn generate_metrics() -> String {
          # TYPE firewall_ddos_events_detected_total counter\n\
          firewall_ddos_events_detected_total {ddos_events_detected}\n\
          \n\
-         # HELP firewall_ddos_auto_bans_total Total automatic bans triggered by DDoS detection\n\
+         # HELP firewall_ddos_auto_bans_total Total ban decisions made by DDoS decision engine via netlink\n\
          # TYPE firewall_ddos_auto_bans_total counter\n\
          firewall_ddos_auto_bans_total {ddos_auto_bans}\n\
          \n\

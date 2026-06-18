@@ -82,8 +82,8 @@ if curl -s http://localhost:9119/metrics > /dev/null 2>&1; then
             assert_true "[[ true ]]" "firewall_ddos_events_total 指标存在"
         fi
         
-        if echo "$local_metrics" | grep -q "firewall_ddos_bans_total"; then
-            assert_true "[[ true ]]" "firewall_ddos_bans_total 指标存在"
+        if echo "$local_metrics" | grep -q "firewall_ddos_auto_bans_total"; then
+            assert_true "[[ true ]]" "firewall_ddos_auto_bans_total 指标存在"
         fi
     else
         fw_log_warn "DDoS 相关 Prometheus 指标不存在"
@@ -99,7 +99,7 @@ fw_subsection "自动封禁触发测试"
 # 这里我们只验证自动封禁机制的配置和状态
 
 # 检查是否有自动封禁的 IP（通过 Prometheus 指标或日志）
-if curl -s http://localhost:9119/metrics 2>/dev/null | grep -q "firewall_ddos_bans_total [1-9]"; then
+if curl -s http://localhost:9119/metrics 2>/dev/null | grep -q "firewall_ddos_auto_bans_total [1-9]"; then
     assert_true "[[ true ]]" "检测到 DDoS 自动封禁事件"
 else
     fw_log_info "未检测到 DDoS 自动封禁事件（正常，需要真实流量触发）"

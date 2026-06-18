@@ -195,9 +195,12 @@ ddos:
 **检测逻辑**：
 
 1. 内核模块实时统计每个 IP 的连接速率
-2. 超过 `per_ip_conn_rate` 或 `per_ip_fail_rate` 阈值时，计数器 +1
-3. 计数器达到 `auto_ban_threshold` 时，自动封禁该 IP `auto_ban_duration` 秒
-4. 全局连接速率超过 `global_conn_rate` 时，触发全局告警
+2. 超过 `per_ip_conn_rate` 或 `per_ip_fail_rate` 阈值时，内核通过 netlink 推送事件给守护进程
+3. 守护进程决策引擎累计违规次数，达到 `auto_ban_threshold` 时，通过 netlink 下发封禁指令
+4. 封禁时长为 `auto_ban_duration` 秒，封禁信息同步到 Web UI
+5. 全局连接速率超过 `global_conn_rate` 时，触发全局告警
+
+> **架构说明**：DDoS 检测分为两层——内核模块负责实时速率检测和事件推送（毫秒级响应），守护进程负责决策和封禁指令下发。两者通过 netlink socket 双向通信。
 
 > **建议**：将关键服务器 IP 添加到 `trusted_ips`，防止 DDoS 检测误封。
 
