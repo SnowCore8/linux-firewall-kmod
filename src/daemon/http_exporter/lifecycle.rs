@@ -53,14 +53,27 @@ pub fn start_http_exporter(port: u16, cfg: &Config) -> thread::JoinHandle<()> {
         let addr = format!("{bind_address}:{port}");
         let listener = match TcpListener::bind(&addr) {
             Ok(l) => l,
-            Err(_) => {
+            Err(e) => {
+                eprintln!("[ERROR] HTTP 导出器绑定 {addr} 失败: {e}");
+                crate::logger::error!(
+                    crate::logger::get(),
+                    "HTTP 导出器绑定失败";
+                    "address" => &addr,
+                    "error" => %e,
+                );
                 return;
             }
         };
 
         let server = match Server::from_listener(listener, None) {
             Ok(s) => s,
-            Err(_) => {
+            Err(e) => {
+                eprintln!("[ERROR] HTTP 导出器启动失败: {e}");
+                crate::logger::error!(
+                    crate::logger::get(),
+                    "HTTP 导出器启动失败";
+                    "error" => %e,
+                );
                 return;
             }
         };

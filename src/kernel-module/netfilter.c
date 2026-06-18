@@ -6,9 +6,6 @@
 #include <linux/if_ether.h>
 #include <linux/ipv6.h>
 
-#define IP_MF 0x2000
-#define IP_OFFSET 0x1FFF
-
 extern struct firewall_info fw_info;
 extern u32 fw_hash_seed;
 
@@ -299,21 +296,18 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
       return NF_ACCEPT;
   }
 
-  {
-    __be16 frag_off = iph->frag_off;
-    if ((ntohs(frag_off) & IP_MF) || (ntohs(frag_off) & IP_OFFSET)) {
-      /* 安全：分片包可能绕过基于完整报头的封禁检查，直接丢弃 */
-      return NF_DROP;
-    }
-  }
-
   src_ip = iph->saddr;
   if (unlikely(src_ip == 0 || src_ip == 0xFFFFFFFF || (ntohl(src_ip) & 0xFF000000) == 0x7F000000 ||
                (ntohl(src_ip) & 0xF0000000) == 0xE0000000 ||
                (ntohl(src_ip) & 0xFF000000) == 0x00000000))
     return NF_ACCEPT;
 
-  return handle_ban_check(FW_AF_INET, &src_ip, skb, iph->protocol);
+  /* 非首片无传输层头部，传 protocol=0 跳过协议专项速率检测 */
+  {
+    __be16 frag_off = iph->frag_off;
+    u8 proto = (ntohs(frag_off) & IP_OFFSET) ? 0 : iph->protocol;
+    return handle_ban_check(FW_AF_INET, &src_ip, skb, proto);
+  }
 }
 
 static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
@@ -369,8 +363,15 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
     }
   }
   if (nexthdr == NEXTHDR_FRAGMENT) {
-    /* 安全：分片包可能绕过封禁检查，直接丢弃 */
-    return NF_DROP;
+    /* 分片包：源 IP 在 IPv6 头中可用，正常执行封禁检查。
+     * 但无传输层头部，传 protocol=0 跳过协议专项速率检测 */
+    src_ip = iph6->saddr;
+    if (unlikely(ipv6_addr_any(&src_ip) || ipv6_addr_loopback(&src_ip) ||
+                 ipv6_addr_is_multicast(&src_ip)))
+      return NF_ACCEPT;
+    if (unlikely((src_ip.s6_addr[0] == 0xFE) && ((src_ip.s6_addr[1] & 0xC0) == 0x80)))
+      return NF_ACCEPT;
+    return handle_ban_check(FW_AF_INET6, &src_ip, skb, 0);
   }
 
   src_ip = iph6->saddr;

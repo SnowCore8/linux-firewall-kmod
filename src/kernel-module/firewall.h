@@ -281,6 +281,9 @@ void free_whitelist_entry_rcu(struct rcu_head *head);
 /* 清理定时器回调（cleanup.c 中定义） */
 void cleanup_timer_callback(struct timer_list *t);
 
+/* DDoS 封禁工作队列回调（netfilter.c 中定义） */
+void ddos_ban_worker(struct work_struct *work);
+
 /* 导出函数，提供对 fw_info 的受控访问 */
 struct firewall_info *get_fw_info(void);
 

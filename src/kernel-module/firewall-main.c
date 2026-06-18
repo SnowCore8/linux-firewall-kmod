@@ -9,9 +9,6 @@
 #include <linux/random.h>
 #include <linux/version.h>
 
-/* 外部函数声明 */
-extern void ddos_ban_worker(struct work_struct *work);
-
 /* 模块参数（非静态，可从 procfs 访问） */
 unsigned int fw_ban_time = DEFAULT_BAN_TIME;
 char *state_file = "/var/lib/firewall/state";
