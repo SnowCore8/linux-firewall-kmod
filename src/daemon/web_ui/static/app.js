@@ -146,19 +146,32 @@ function updateStats(stats) {
     document.getElementById('ddos-events').textContent = formatNumber(stats.ddos_events);
     document.getElementById('uptime').textContent = formatUptime(stats.uptime_seconds);
 
-    // 更新内核统计数据
+    // 更新内核统计数据（使用单位换算）
     if (stats.kernel_current_bans !== undefined) {
         document.getElementById('kernel-current-bans').textContent = formatNumber(stats.kernel_current_bans);
         document.getElementById('kernel-total-bans').textContent = formatNumber(stats.kernel_total_bans);
         document.getElementById('kernel-total-unbans').textContent = formatNumber(stats.kernel_total_unbans);
         document.getElementById('kernel-whitelist-count').textContent = formatNumber(stats.kernel_whitelist_count);
-        document.getElementById('kernel-packets-dropped').textContent = formatNumber(stats.kernel_packets_dropped);
-        document.getElementById('kernel-packets-accepted').textContent = formatNumber(stats.kernel_packets_accepted);
+        document.getElementById('kernel-packets-dropped').textContent = formatNumber(stats.kernel_packets_dropped, true);
+        document.getElementById('kernel-packets-accepted').textContent = formatNumber(stats.kernel_packets_accepted, true);
     }
 }
 
-// Format number with commas
-function formatNumber(num) {
+// Format number with commas and optional unit conversion for large numbers
+function formatNumber(num, convertUnits = false) {
+    if (convertUnits && num >= 1000) {
+        const units = ['', 'K', 'M', 'G', 'T', 'P'];
+        let unitIndex = 0;
+        let value = num;
+        
+        while (value >= 1000 && unitIndex < units.length - 1) {
+            value /= 1000;
+            unitIndex++;
+        }
+        
+        return value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2) + units[unitIndex];
+    }
+    
     return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
