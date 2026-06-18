@@ -220,16 +220,17 @@ struct firewall_info {
   struct delayed_work sync_work;   /* 防抖同步工作队列 */
   bool netdev_notifier_registered; /* 跟踪通知器是否成功注册 */
 
-  /* DDoS 封禁延迟队列 */
-  struct workqueue_struct *ddos_ban_wq; /* 用于 DDoS 检测封禁的工作队列 */
-  struct work_struct ddos_ban_work; /* 延迟执行的封禁工作 */
-  bool ddos_ban_pending;            /* 标识有待处理的封禁请求 */
-  u8 ddos_ban_af;                   /* 待封禁 IP 的地址族 */
+  /* DDoS 事件通知（通过 netlink 推送给守护进程） */
+  struct workqueue_struct *ddos_notify_wq; /* DDoS 事件通知工作队列 */
+  struct work_struct ddos_notify_work;     /* 延迟通知工作 */
+  bool ddos_notify_pending;                /* 标识有待发送的通知 */
+  u8 ddos_notify_af;                       /* 待通知 IP 的地址族 */
   union {
-    __be32 ipv4;            /* 待封禁的 IPv4 地址 */
-    struct in6_addr ipv6;   /* 待封禁的 IPv6 地址 */
-  } ddos_ban_ip;            /* 待封禁的 IP 地址 */
-  char ddos_ban_reason[32]; /* 封禁原因 */
+    __be32 ipv4;               /* 待通知的 IPv4 地址 */
+    struct in6_addr ipv6;      /* 待通知的 IPv6 地址 */
+  } ddos_notify_ip;            /* 待通知的 IP 地址 */
+  char ddos_notify_reason[32]; /* 通知原因 */
+  u32 ddos_notify_rate;        /* 当前速率（包/秒） */
 };
 
 /* 函数声明 */
@@ -281,8 +282,13 @@ void free_whitelist_entry_rcu(struct rcu_head *head);
 /* 清理定时器回调（cleanup.c 中定义） */
 void cleanup_timer_callback(struct timer_list *t);
 
-/* DDoS 封禁工作队列回调（netfilter.c 中定义） */
-void ddos_ban_worker(struct work_struct *work);
+/* DDoS 事件通知工作队列回调（netfilter.c 中定义） */
+void ddos_notify_worker(struct work_struct *work);
+
+/* netlink.c - Netlink 通信层 */
+int fw_netlink_init(void);
+void fw_netlink_exit(void);
+int fw_netlink_send_event(u8 af, const void *ip, const char *reason, u32 rate_pps);
 
 /* 导出函数，提供对 fw_info 的受控访问 */
 struct firewall_info *get_fw_info(void);

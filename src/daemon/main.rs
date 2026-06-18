@@ -37,6 +37,7 @@ use firewall_daemon::history_snapshot;
 use firewall_daemon::http_exporter;
 use firewall_daemon::jail;
 use firewall_daemon::logger;
+use firewall_daemon::netlink::NetlinkContext;
 use firewall_daemon::signals::{setup_signals, GLOBAL_RELOAD, GLOBAL_RUNNING};
 use firewall_daemon::types::{Config, DAEMON_STATS};
 
@@ -49,12 +50,14 @@ const BANS_PATH: &str = "/proc/firewall/bans";
 ///
 /// # Arguments
 /// - `_cfg`：保留参数，占位
-fn cleanup(_cfg: &Config) {
+/// - `_netlink_ctx`：netlink 通信上下文（自动 drop 时关闭）
+fn cleanup(_cfg: &Config, _netlink_ctx: Option<NetlinkContext>) {
     http_exporter::stop_http_exporter();
     GLOBAL_RUNNING.store(false, Ordering::SeqCst);
     file_monitor::close_inotify();
     ban::close_cached_bans_fd();
     history_snapshot::close_history_db();
+    // netlink_ctx 会在函数结束时自动 drop，关闭 socket
     if let Err(e) = fs::remove_file("/run/firewall-daemon.pid") {
         crate::logger::debug!(
             crate::logger::get(),
@@ -174,6 +177,26 @@ fn main() -> Result<()> {
         }
     }
 
+    // 初始化 netlink 通信（接收内核 DDoS 事件）
+    let netlink_ctx = match NetlinkContext::new() {
+        Ok(ctx) => {
+            info!(logger::get(), "Netlink 通信层初始化成功");
+            match ctx.start_receiver() {
+                Ok(_handle) => {
+                    info!(logger::get(), "Netlink 接收线程已启动");
+                }
+                Err(e) => {
+                    warn!(logger::get(), "启动 Netlink 接收线程失败"; "error" => %e);
+                }
+            }
+            Some(ctx)
+        }
+        Err(e) => {
+            warn!(logger::get(), "Netlink 通信层初始化失败"; "error" => %e);
+            None
+        }
+    };
+
     let mut exporter_handle = None;
     if cfg.metrics_port > 0 {
         exporter_handle = Some(http_exporter::start_http_exporter(cfg.metrics_port, &cfg));
@@ -189,7 +212,7 @@ fn main() -> Result<()> {
         GLOBAL_RUNNING.load(Ordering::SeqCst)
     );
     info!(logger::get(), "开始清理流程");
-    cleanup(&cfg);
+    cleanup(&cfg, netlink_ctx);
 
     if let Some(handle) = exporter_handle {
         // 给 HTTP 导出器线程最多 2 秒优雅退出

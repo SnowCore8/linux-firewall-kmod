@@ -177,15 +177,22 @@ static int __init firewall_init(void) {
   /* 初始化延迟工作（必须在可能失败的分配之前，确保错误路径安全） */
   INIT_DELAYED_WORK(&fw_info.sync_work, sync_work_handler);
 
-  /* 初始化 DDoS 封禁延迟处理队列 */
-  fw_info.ddos_ban_pending = false;
-  fw_info.ddos_ban_wq = alloc_workqueue("firewall_ddos_ban", WQ_UNBOUND, 1);
-  if (!fw_info.ddos_ban_wq) {
-    pr_err("Failed to allocate DDoS ban workqueue\n");
+  /* 初始化 DDoS 事件通知工作队列 */
+  fw_info.ddos_notify_pending = false;
+  fw_info.ddos_notify_wq = alloc_workqueue("firewall_ddos_notify", WQ_UNBOUND, 1);
+  if (!fw_info.ddos_notify_wq) {
+    pr_err("Failed to allocate DDoS notify workqueue\n");
     ret = -ENOMEM;
     goto err_notifier;
   }
-  INIT_WORK(&fw_info.ddos_ban_work, ddos_ban_worker);
+  INIT_WORK(&fw_info.ddos_notify_work, ddos_notify_worker);
+
+  /* 初始化 netlink 通信层 */
+  ret = fw_netlink_init();
+  if (ret) {
+    pr_err("初始化 netlink 通信层失败: %d\n", ret);
+    goto err_workqueue;
+  }
 
   if (state_file && strlen(state_file) > 0) {
     restore_state_from_file(state_file);
@@ -230,6 +237,12 @@ err_nf_ipv4:
   nf_unregister_net_hook(&init_net, &nf_ops_ipv4);
 err_procfs:
   destroy_procfs_entries(&fw_info);
+  fw_netlink_exit();
+err_workqueue:
+  if (fw_info.ddos_notify_wq) {
+    flush_workqueue(fw_info.ddos_notify_wq);
+    destroy_workqueue(fw_info.ddos_notify_wq);
+  }
 err_notifier:
   atomic_set(&fw_info.shutting_down, 1);
   cancel_delayed_work_sync(&fw_info.sync_work);
@@ -273,11 +286,14 @@ static void __exit firewall_exit(void) {
 
   cleanup_all_entries();
 
-  /* 清理 DDoS 封禁延迟处理队列 */
-  if (fw_info.ddos_ban_wq) {
-    flush_workqueue(fw_info.ddos_ban_wq);
-    destroy_workqueue(fw_info.ddos_ban_wq);
-    fw_info.ddos_ban_wq = NULL;
+  /* 清理 netlink 通信层 */
+  fw_netlink_exit();
+
+  /* 清理 DDoS 事件通知工作队列 */
+  if (fw_info.ddos_notify_wq) {
+    flush_workqueue(fw_info.ddos_notify_wq);
+    destroy_workqueue(fw_info.ddos_notify_wq);
+    fw_info.ddos_notify_wq = NULL;
   }
 
   pr_info("模块清理完成\n");
