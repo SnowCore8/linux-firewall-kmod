@@ -58,6 +58,53 @@
             </div>
         </section>
 
+        <!-- 内核统计卡片 -->
+        <section class="stats-grid">
+            <h2 style="grid-column: 1/-1; margin: 0;">🔧 内核模块统计</h2>
+            <div class="stat-card">
+                <div class="stat-icon">🛡️</div>
+                <div class="stat-content">
+                    <div class="stat-label">当前封禁</div>
+                    <div class="stat-value" id="kernel-current-bans">0</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">📈</div>
+                <div class="stat-content">
+                    <div class="stat-label">累计封禁</div>
+                    <div class="stat-value" id="kernel-total-bans">0</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">✅</div>
+                <div class="stat-content">
+                    <div class="stat-label">累计解封</div>
+                    <div class="stat-value" id="kernel-total-unbans">0</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">📋</div>
+                <div class="stat-content">
+                    <div class="stat-label">白名单数</div>
+                    <div class="stat-value" id="kernel-whitelist-count">0</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🚫</div>
+                <div class="stat-content">
+                    <div class="stat-label">丢弃数据包</div>
+                    <div class="stat-value" id="kernel-packets-dropped">0</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">✅</div>
+                <div class="stat-content">
+                    <div class="stat-label">通过数据包</div>
+                    <div class="stat-value" id="kernel-packets-accepted">0</div>
+                </div>
+            </div>
+        </section>
+
         <!-- DDoS 速率面板 -->
         <section class="rates-section">
             <h2>🔥 DDoS 速率监控（实时）</h2>

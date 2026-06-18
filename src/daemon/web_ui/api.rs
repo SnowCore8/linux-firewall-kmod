@@ -8,6 +8,44 @@
 use crate::types::{ACTIVE_BAN_CACHE, DAEMON_STATS, DDOS_STATS};
 use serde::Serialize;
 
+/// 从 `/proc/firewall/stats` 读取内核统计数据
+fn read_kernel_stats() -> (u64, u64, u64, u64, u64, u64) {
+    let mut current_bans: u64 = 0;
+    let mut total_bans: u64 = 0;
+    let mut total_unbans: u64 = 0;
+    let mut current_whitelist: u64 = 0;
+    let mut packets_dropped: u64 = 0;
+    let mut packets_accepted: u64 = 0;
+
+    if let Ok(content) = std::fs::read_to_string("/proc/firewall/stats") {
+        for line in content.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() == 2 {
+                if let Ok(val) = parts[1].parse::<u64>() {
+                    match parts[0] {
+                        "current_bans" => current_bans = val,
+                        "total_bans" => total_bans = val,
+                        "total_unbans" => total_unbans = val,
+                        "current_whitelist" => current_whitelist = val,
+                        "packets_dropped" => packets_dropped = val,
+                        "packets_accepted" => packets_accepted = val,
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    (
+        current_bans,
+        total_bans,
+        total_unbans,
+        current_whitelist,
+        packets_dropped,
+        packets_accepted,
+    )
+}
+
 /// 统计数据响应
 #[derive(Serialize)]
 pub struct StatsResponse {
@@ -20,6 +58,13 @@ pub struct StatsResponse {
     pub jail_distribution: ChartData,
     pub failure_reasons: ChartData,
     pub traffic: ChartData,
+    // 内核统计数据
+    pub kernel_current_bans: u64,
+    pub kernel_total_bans: u64,
+    pub kernel_total_unbans: u64,
+    pub kernel_whitelist_count: u64,
+    pub kernel_packets_dropped: u64,
+    pub kernel_packets_accepted: u64,
 }
 
 /// 图表数据
@@ -163,6 +208,16 @@ pub fn get_stats() -> StatsResponse {
         .events_detected
         .load(std::sync::atomic::Ordering::Relaxed);
 
+    // 从内核模块读取统计数据
+    let (
+        kernel_current_bans,
+        kernel_total_bans,
+        kernel_total_unbans,
+        kernel_whitelist_count,
+        kernel_packets_dropped,
+        kernel_packets_accepted,
+    ) = read_kernel_stats();
+
     StatsResponse {
         active_bans,
         today_bans,
@@ -173,6 +228,12 @@ pub fn get_stats() -> StatsResponse {
         jail_distribution: generate_jail_distribution(),
         failure_reasons: generate_failure_reasons(),
         traffic: generate_traffic_data(),
+        kernel_current_bans,
+        kernel_total_bans,
+        kernel_total_unbans,
+        kernel_whitelist_count,
+        kernel_packets_dropped,
+        kernel_packets_accepted,
     }
 }
 

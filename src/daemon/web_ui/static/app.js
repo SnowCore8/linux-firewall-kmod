@@ -145,6 +145,16 @@ function updateStats(stats) {
     document.getElementById('failed-attempts').textContent = formatNumber(stats.failed_attempts);
     document.getElementById('ddos-events').textContent = formatNumber(stats.ddos_events);
     document.getElementById('uptime').textContent = formatUptime(stats.uptime_seconds);
+
+    // 更新内核统计数据
+    if (stats.kernel_current_bans !== undefined) {
+        document.getElementById('kernel-current-bans').textContent = formatNumber(stats.kernel_current_bans);
+        document.getElementById('kernel-total-bans').textContent = formatNumber(stats.kernel_total_bans);
+        document.getElementById('kernel-total-unbans').textContent = formatNumber(stats.kernel_total_unbans);
+        document.getElementById('kernel-whitelist-count').textContent = formatNumber(stats.kernel_whitelist_count);
+        document.getElementById('kernel-packets-dropped').textContent = formatNumber(stats.kernel_packets_dropped);
+        document.getElementById('kernel-packets-accepted').textContent = formatNumber(stats.kernel_packets_accepted);
+    }
 }
 
 // Format number with commas
