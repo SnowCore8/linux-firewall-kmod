@@ -100,6 +100,8 @@ pub struct Config {
     pub ddos: super::DdosConfig,
     /// Web UI 配置（SSE 推送和速率告警阈值）
     pub webui: WebuiConfig,
+    /// 可信 IP 列表（启动时自动加入内核白名单，防止误封）
+    pub trusted_ips: Vec<String>,
 }
 
 impl Default for Config {
@@ -129,6 +131,7 @@ impl Default for Config {
             storage: StorageConfig::default(),
             ddos: super::DdosConfig::default(),
             webui: WebuiConfig::default(),
+            trusted_ips: Vec::new(),
         }
     }
 }

@@ -128,6 +128,16 @@ fn main() -> Result<()> {
     let _log = logger::init_logger(cfg.log_file.as_deref());
     info!(logger::get(), "firewall-daemon 启动"; "mode" => if cfg.daemon { "daemon" } else { "foreground" });
 
+    // 初始化可信 IP 白名单（在日志初始化之后，以便记录日志）
+    if !cfg.trusted_ips.is_empty() {
+        let failed = ban::init_trusted_ips(&cfg.trusted_ips);
+        if !failed.is_empty() {
+            warn!(logger::get(), "部分可信 IP 写入白名单失败"; "failed" => ?failed);
+        } else {
+            info!(logger::get(), "可信 IP 白名单初始化完成"; "count" => cfg.trusted_ips.len());
+        }
+    }
+
     // 在守护进程化之后设置信号处理器，确保 fork 后信号处理正常工作
     setup_signals()?;
     info!(logger::get(), "信号处理器已注册");

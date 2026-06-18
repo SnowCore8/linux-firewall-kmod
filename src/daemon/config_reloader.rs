@@ -93,6 +93,9 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
         );
     }
 
+    // 更新可信 IP 白名单
+    update_trusted_ips(&old_cfg.trusted_ips, &new_cfg.trusted_ips);
+
     *cfg = new_cfg;
     DAEMON_STATS.config_reloads.fetch_add(1, Ordering::Relaxed);
     setup_inotify(cfg)?;
@@ -121,6 +124,71 @@ pub fn cleanup_partial_line_buffer(cfg: &Config) {
                 "size" => buf.len()
             );
             buf.clear();
+        }
+    }
+}
+
+// ============================================================================
+// 可信 IP 白名单更新
+// ============================================================================
+
+/// 热重载时更新可信 IP 白名单。
+///
+/// 对比新旧列表，添加新增的 IP，移除不再需要的 IP。
+///
+/// # Arguments
+/// - `old_ips`: 旧的可信 IP 列表
+/// - `new_ips`: 新的可信 IP 列表
+fn update_trusted_ips(old_ips: &[String], new_ips: &[String]) {
+    use crate::ban;
+    use std::collections::HashSet;
+
+    let old_set: HashSet<&str> = old_ips.iter().map(|s| s.as_str()).collect();
+    let new_set: HashSet<&str> = new_ips.iter().map(|s| s.as_str()).collect();
+
+    // 新增的 IP（在 new 中但不在 old 中）
+    let added: Vec<String> = new_set
+        .difference(&old_set)
+        .map(|s| s.to_string())
+        .collect();
+
+    // 移除的 IP（在 old 中但不在 new 中）
+    let removed: Vec<String> = old_set
+        .difference(&new_set)
+        .map(|s| s.to_string())
+        .collect();
+
+    if !added.is_empty() {
+        crate::logger::info!(
+            crate::logger::get(),
+            "热重载：添加新的可信 IP";
+            "count" => added.len(),
+            "ips" => ?added
+        );
+        let failed = ban::init_trusted_ips(&added);
+        if !failed.is_empty() {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "热重载：部分可信 IP 添加失败";
+                "failed" => ?failed
+            );
+        }
+    }
+
+    if !removed.is_empty() {
+        crate::logger::info!(
+            crate::logger::get(),
+            "热重载：移除不再信任的 IP";
+            "count" => removed.len(),
+            "ips" => ?removed
+        );
+        let failed = ban::remove_trusted_ips(&removed);
+        if !failed.is_empty() {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "热重载：部分可信 IP 移除失败";
+                "failed" => ?failed
+            );
         }
     }
 }

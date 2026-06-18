@@ -23,6 +23,7 @@ pub fn config_clone(src: &Config) -> Config {
         log_level: src.log_level,
         log_destination: src.log_destination,
         log_format: src.log_format,
+        trusted_ips: src.trusted_ips.clone(),
         ..Config::default()
     };
 

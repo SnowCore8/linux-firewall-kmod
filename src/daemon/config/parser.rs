@@ -102,6 +102,8 @@ struct YamlConfig {
     ddos: Option<YamlDdos>,
     #[serde(default)]
     webui: Option<YamlWebui>,
+    #[serde(default)]
+    trusted_ips: Option<Vec<String>>,
 }
 
 /// 全局默认字段集合。所有 `Option` 都是"未设置 = 使用 `Config::default()`"
@@ -317,6 +319,11 @@ pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
         if let Some(rate) = webui.rate_critical_syn {
             cfg.webui.rate_critical_syn = rate;
         }
+    }
+
+    // 5. 解析 trusted_ips 部分
+    if let Some(trusted_ips) = &yaml_config.trusted_ips {
+        cfg.trusted_ips = trusted_ips.clone();
     }
 
     Ok(())

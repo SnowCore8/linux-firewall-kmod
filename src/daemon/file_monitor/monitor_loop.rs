@@ -120,7 +120,21 @@ pub fn monitor_loop(
                 "poll 返回有事件";
                 "poll_result" => poll_result
             );
-            handle_inotify_events(cfg);
+            // 优先检查配置重载标志（SIGHUP 可能在 inotify 事件期间到达）
+            if reload_config.load(Ordering::Relaxed) {
+                reload_config.store(false, Ordering::Relaxed);
+                if let Err(e) = reload_configuration(cfg) {
+                    crate::logger::warn!(
+                        crate::logger::get(),
+                        "配置重载失败";
+                        "error" => %e
+                    );
+                } else {
+                    crate::logger::info!(crate::logger::get(), "配置重载成功");
+                }
+            } else {
+                handle_inotify_events(cfg);
+            }
         } else if poll_result == 0 {
             // poll 超时：执行周期性维护任务（配置重载、数据清理、DDoS 检测等）
             handle_timeout(cfg, reload_config, &mut timeout_state);
