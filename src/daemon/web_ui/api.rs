@@ -136,7 +136,7 @@ pub fn get_ddos_rates() -> Vec<RateResponse> {
     }
 
     // 按包速率降序排序，显示最活跃的 IP
-    rates.sort_by(|a, b| b.packets_per_sec.cmp(&a.packets_per_sec));
+    rates.sort_by_key(|b| std::cmp::Reverse(b.packets_per_sec));
 
     // 只返回前 10 个最活跃的 IP
     rates.truncate(10);

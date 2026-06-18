@@ -358,9 +358,8 @@ pub fn parse_ipv6_fast(ip: &str) -> Option<[u8; 16]> {
             b'.' => {
                 // IPv4 映射地址（::ffff:192.168.1.1）
                 // 检查是否是 ::ffff: 前缀
-                if ip.starts_with("::ffff:") {
+                if let Some(ipv4_part) = ip.strip_prefix("::ffff:") {
                     // 解析 IPv4 部分
-                    let ipv4_part = &ip[7..]; // 跳过 "::ffff:"
                     if let Some(ipv4_num) = parse_ipv4_fast(ipv4_part) {
                         // 构造 IPv4 映射地址：前 80 位为 0，接下来 16 位为 0xffff，最后 32 位为 IPv4
                         let mut result = [0u8; 16];

@@ -35,6 +35,7 @@ struct SseReader {
 }
 
 /// SSE 消息类型
+#[allow(dead_code)]
 enum SseMessage {
     /// 命名事件（带 event 字段）
     Event { name: String, data: String },

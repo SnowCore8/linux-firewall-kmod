@@ -63,13 +63,19 @@ struct AdaptiveBufferState {
     flush_count: u32,
 }
 
-impl Default for AdaptiveBufferState {
-    fn default() -> Self {
+impl AdaptiveBufferState {
+    const fn new_const() -> Self {
         Self {
             capacity: THREAD_BUFFER_INITIAL,
-            last_resize_time: now_secs(),
+            last_resize_time: 0,
             flush_count: 0,
         }
+    }
+}
+
+impl Default for AdaptiveBufferState {
+    fn default() -> Self {
+        Self::new_const()
     }
 }
 
@@ -168,8 +174,8 @@ pub struct ConnRateTracker {
 
 // 线程本地缓冲区（每个线程独立，无锁写入）+ 自适应状态
 thread_local! {
-    static THREAD_BUFFER: RefCell<Vec<ThreadLocalEvent>> = RefCell::new(Vec::new());
-    static BUFFER_STATE: RefCell<AdaptiveBufferState> = RefCell::new(AdaptiveBufferState::default());
+    static THREAD_BUFFER: RefCell<Vec<ThreadLocalEvent>> = const { RefCell::new(Vec::new()) };
+    static BUFFER_STATE: RefCell<AdaptiveBufferState> = const { RefCell::new(AdaptiveBufferState::new_const()) };
 }
 
 impl ConnRateTracker {
@@ -566,7 +572,7 @@ impl ConnRateTracker {
             for v in &violations {
                 if v.is_ipv6 {
                     // IPv6: 使用 [u8; 16] 键查找
-                    if let Some(mut entry) = self.entries_ipv6.get_mut(&v.ipv6_num) {
+                    if let Some(entry) = self.entries_ipv6.get_mut(&v.ipv6_num) {
                         let prev_count = entry.violation_count.fetch_add(1, Ordering::Relaxed);
                         let new_count = prev_count + 1;
 
@@ -590,7 +596,7 @@ impl ConnRateTracker {
                     }
                 } else {
                     // IPv4: 使用 u32 键查找
-                    if let Some(mut entry) = self.entries_ipv4.get_mut(&v.ip_num) {
+                    if let Some(entry) = self.entries_ipv4.get_mut(&v.ip_num) {
                         let prev_count = entry.violation_count.fetch_add(1, Ordering::Relaxed);
                         let new_count = prev_count + 1;
 

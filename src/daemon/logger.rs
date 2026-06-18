@@ -167,7 +167,7 @@ pub use slog::{debug, error, info, warn};
 #[macro_export]
 macro_rules! log_throttled {
     ($level:expr, $logger:expr, $msg:expr, $interval:expr, $($args:tt)*) => {{
-        use crate::logger::LogThrottler;
+        use $crate::logger::LogThrottler;
         use std::sync::{Mutex, OnceLock};
 
         static THROTTLER: OnceLock<Mutex<LogThrottler>> = OnceLock::new();
