@@ -4,14 +4,18 @@
 //! - 接收内核推送的 DDoS 检测事件
 //! - 向内核发送封禁/解封指令
 
+mod decision;
 mod protocol;
 
 use anyhow::Result;
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use protocol::{FwNlDdosEvent, FwNlMsgType, FW_NL_MAGIC};
+use protocol::{FwNlBanCmd, FwNlDdosEvent, FwNlMsgType, FW_NL_MAGIC};
+
+pub use decision::DdosDecisionEngine;
 
 /// Netlink 协议号（NETLINK_USERSOCK）
 const NETLINK_USERSOCK: i32 = 2;
@@ -20,6 +24,7 @@ const NETLINK_USERSOCK: i32 = 2;
 pub struct NetlinkContext {
     fd: i32,
     running: Arc<AtomicBool>,
+    decision_engine: Option<Arc<DdosDecisionEngine>>,
 }
 
 impl NetlinkContext {
@@ -59,13 +64,20 @@ impl NetlinkContext {
         Ok(Self {
             fd,
             running: Arc::new(AtomicBool::new(false)),
+            decision_engine: None,
         })
+    }
+
+    /// 设置 DDoS 决策引擎
+    pub fn set_decision_engine(&mut self, engine: Arc<DdosDecisionEngine>) {
+        self.decision_engine = Some(engine);
     }
 
     /// 启动接收线程
     pub fn start_receiver(&self) -> Result<thread::JoinHandle<()>> {
         let fd = self.fd;
         let running = self.running.clone();
+        let decision_engine = self.decision_engine.clone();
         running.store(true, Ordering::SeqCst);
 
         let handle = thread::spawn(move || {
@@ -98,12 +110,11 @@ impl NetlinkContext {
 
                 if pollfd.revents & nix::libc::POLLIN != 0 {
                     // 读取数据
-                    let n = unsafe {
-                        nix::libc::recv(fd, buf.as_mut_ptr() as *mut _, buf.len(), 0)
-                    };
+                    let n =
+                        unsafe { nix::libc::recv(fd, buf.as_mut_ptr() as *mut _, buf.len(), 0) };
 
                     if n > 0 {
-                        if let Err(e) = Self::handle_message(&buf[..n as usize]) {
+                        if let Err(e) = Self::handle_message(&buf[..n as usize], &decision_engine) {
                             crate::logger::warn!(
                                 crate::logger::get(),
                                 "处理 netlink 消息失败";
@@ -128,7 +139,10 @@ impl NetlinkContext {
     }
 
     /// 处理接收到的消息
-    fn handle_message(data: &[u8]) -> Result<()> {
+    fn handle_message(
+        data: &[u8],
+        decision_engine: &Option<Arc<DdosDecisionEngine>>,
+    ) -> Result<()> {
         use nix::libc::nlmsghdr;
 
         if data.len() < std::mem::size_of::<nlmsghdr>() {
@@ -136,7 +150,7 @@ impl NetlinkContext {
         }
 
         // 解析 netlink 消息头
-        let nlh: &nlmsghdr = unsafe { &*(data.as_ptr() as *const nlmsghdr) };
+        let _nlh: &nlmsghdr = unsafe { &*(data.as_ptr() as *const nlmsghdr) };
 
         // 获取自定义消息头
         let hdr_data = &data[std::mem::size_of::<nlmsghdr>()..];
@@ -162,15 +176,30 @@ impl NetlinkContext {
                 }
 
                 let event = FwNlDdosEvent::from_bytes(event_data)?;
+                let ip_str = event.ip_str();
+                let reason = event.reason_str();
+                let rate_pps = event.rate_pps;
+
                 crate::logger::info!(
                     crate::logger::get(),
                     "收到 DDoS 事件";
-                    "ip" => event.ip_str(),
-                    "reason" => event.reason_str(),
-                    "rate_pps" => event.rate_pps
+                    "ip" => &ip_str,
+                    "reason" => &reason,
+                    "rate_pps" => rate_pps
                 );
 
-                // TODO: 触发封禁决策
+                // 调用决策引擎
+                if let Some(engine) = decision_engine {
+                    if let Ok(ip) = ip_str.parse::<IpAddr>() {
+                        engine.handle_event(ip, &reason, rate_pps);
+                    } else {
+                        crate::logger::warn!(
+                            crate::logger::get(),
+                            "无法解析 IP 地址";
+                            "ip" => &ip_str
+                        );
+                    }
+                }
             }
             _ => {
                 crate::logger::warn!(
@@ -179,6 +208,54 @@ impl NetlinkContext {
                     "msg_type" => msg_type
                 );
             }
+        }
+
+        Ok(())
+    }
+
+    /// 发送封禁指令到内核
+    pub fn send_ban(&self, ip: IpAddr, duration_secs: u32) -> Result<()> {
+        let cmd = FwNlBanCmd::new_ban(ip, duration_secs);
+        self.send_command(&cmd.to_bytes())
+    }
+
+    /// 发送解封指令到内核
+    pub fn send_unban(&self, ip: IpAddr) -> Result<()> {
+        let cmd = FwNlBanCmd::new_unban(ip);
+        self.send_command(&cmd.to_bytes())
+    }
+
+    /// 发送原始命令到内核
+    fn send_command(&self, data: &[u8]) -> Result<()> {
+        use nix::libc::{sockaddr_nl, AF_NETLINK};
+
+        // 构造内核地址（pid=0 表示内核）
+        let mut addr: sockaddr_nl = unsafe { std::mem::zeroed() };
+        addr.nl_family = AF_NETLINK as u16;
+        addr.nl_pid = 0; // 内核
+
+        let n = unsafe {
+            nix::libc::sendto(
+                self.fd,
+                data.as_ptr() as *const _,
+                data.len(),
+                0,
+                &addr as *const sockaddr_nl as *const _,
+                std::mem::size_of::<sockaddr_nl>() as u32,
+            )
+        };
+
+        if n < 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(anyhow::anyhow!("发送 netlink 消息失败: {}", err));
+        }
+
+        if n as usize != data.len() {
+            return Err(anyhow::anyhow!(
+                "发送 netlink 消息不完整: {} / {}",
+                n,
+                data.len()
+            ));
         }
 
         Ok(())

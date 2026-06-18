@@ -25,6 +25,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use anyhow::{bail, Result};
 use slog::{error, info, warn};
@@ -37,7 +38,7 @@ use firewall_daemon::history_snapshot;
 use firewall_daemon::http_exporter;
 use firewall_daemon::jail;
 use firewall_daemon::logger;
-use firewall_daemon::netlink::NetlinkContext;
+use firewall_daemon::netlink::{DdosDecisionEngine, NetlinkContext};
 use firewall_daemon::signals::{setup_signals, GLOBAL_RELOAD, GLOBAL_RUNNING};
 use firewall_daemon::types::{Config, DAEMON_STATS};
 
@@ -50,14 +51,15 @@ const BANS_PATH: &str = "/proc/firewall/bans";
 ///
 /// # Arguments
 /// - `_cfg`：保留参数，占位
-/// - `_netlink_ctx`：netlink 通信上下文（自动 drop 时关闭）
-fn cleanup(_cfg: &Config, _netlink_ctx: Option<NetlinkContext>) {
+/// - `netlink_ctx`：netlink 通信上下文（自动 drop 时关闭）
+fn cleanup(_cfg: &Config, netlink_ctx: Option<NetlinkContext>) {
     http_exporter::stop_http_exporter();
     GLOBAL_RUNNING.store(false, Ordering::SeqCst);
     file_monitor::close_inotify();
     ban::close_cached_bans_fd();
     history_snapshot::close_history_db();
     // netlink_ctx 会在函数结束时自动 drop，关闭 socket
+    drop(netlink_ctx);
     if let Err(e) = fs::remove_file("/run/firewall-daemon.pid") {
         crate::logger::debug!(
             crate::logger::get(),
@@ -178,17 +180,9 @@ fn main() -> Result<()> {
     }
 
     // 初始化 netlink 通信（接收内核 DDoS 事件）
-    let netlink_ctx = match NetlinkContext::new() {
+    let mut netlink_ctx = match NetlinkContext::new() {
         Ok(ctx) => {
             info!(logger::get(), "Netlink 通信层初始化成功");
-            match ctx.start_receiver() {
-                Ok(_handle) => {
-                    info!(logger::get(), "Netlink 接收线程已启动");
-                }
-                Err(e) => {
-                    warn!(logger::get(), "启动 Netlink 接收线程失败"; "error" => %e);
-                }
-            }
             Some(ctx)
         }
         Err(e) => {
@@ -196,6 +190,34 @@ fn main() -> Result<()> {
             None
         }
     };
+
+    // 如果有 netlink 上下文，创建并设置决策引擎
+    if let Some(ref mut ctx) = netlink_ctx {
+        // 创建 netlink 的 Arc 引用（用于决策引擎发送封禁指令）
+        // 注意：这里使用 unsafe 是因为 NetlinkContext 没有实现 Clone
+        // 我们确保在 netlink_ctx 的生命周期内，Arc 引用是有效的
+        let netlink_for_engine = unsafe {
+            let ptr = ctx as *const NetlinkContext;
+            Arc::from_raw(ptr)
+        };
+        let decision_engine = Arc::new(DdosDecisionEngine::new(
+            cfg.ddos.clone(),
+            netlink_for_engine.clone(),
+        ));
+        ctx.set_decision_engine(decision_engine);
+
+        match ctx.start_receiver() {
+            Ok(_handle) => {
+                info!(logger::get(), "Netlink 接收线程已启动");
+            }
+            Err(e) => {
+                warn!(logger::get(), "启动 Netlink 接收线程失败"; "error" => %e);
+            }
+        }
+
+        // 防止 Arc 释放内存（因为我们使用了 from_raw）
+        std::mem::forget(netlink_for_engine);
+    }
 
     let mut exporter_handle = None;
     if cfg.metrics_port > 0 {

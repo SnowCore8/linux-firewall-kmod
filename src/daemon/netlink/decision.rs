@@ -1,0 +1,153 @@
+//! DDoS 决策引擎
+//!
+//! 接收内核推送的 DDoS 事件，根据策略决定是否封禁。
+//! 通过 netlink 发送封禁指令给内核。
+
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
+use std::sync::Arc;
+
+use parking_lot::RwLock;
+
+use crate::netlink::NetlinkContext;
+use crate::types::{now_secs, DdosConfig, DDOS_STATS};
+
+/// 每 IP 违规跟踪条目
+#[derive(Debug)]
+struct IpViolationTracker {
+    /// IP 地址
+    ip: IpAddr,
+    /// 违规次数
+    violation_count: AtomicU32,
+    /// 首次违规时间
+    first_violation: i64,
+    /// 最后违规时间（原子类型，支持并发访问）
+    last_violation: AtomicI64,
+}
+
+impl IpViolationTracker {
+    fn new(ip: IpAddr, now: i64) -> Self {
+        Self {
+            ip,
+            violation_count: AtomicU32::new(1),
+            first_violation: now,
+            last_violation: AtomicI64::new(now),
+        }
+    }
+
+    fn increment(&self, now: i64) -> u32 {
+        self.last_violation.store(now, Ordering::Relaxed);
+        self.violation_count.fetch_add(1, Ordering::Relaxed) + 1
+    }
+}
+
+/// DDoS 决策引擎
+pub struct DdosDecisionEngine {
+    /// DDoS 配置
+    config: DdosConfig,
+    /// Netlink 上下文（用于发送封禁指令）
+    netlink: Arc<NetlinkContext>,
+    /// 每 IP 违规跟踪（使用 DashMap 或 RwLock<HashMap>）
+    ip_trackers: RwLock<HashMap<IpAddr, Arc<IpViolationTracker>>>,
+}
+
+impl DdosDecisionEngine {
+    /// 创建决策引擎
+    pub fn new(config: DdosConfig, netlink: Arc<NetlinkContext>) -> Self {
+        Self {
+            config,
+            netlink,
+            ip_trackers: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// 处理 DDoS 事件
+    ///
+    /// 根据违规次数决定是否封禁：
+    /// - 违规次数 < auto_ban_threshold: 仅记录日志
+    /// - 违规次数 >= auto_ban_threshold: 发送封禁指令
+    pub fn handle_event(&self, ip: IpAddr, reason: &str, rate_pps: u32) {
+        let now = now_secs();
+
+        // 更新统计
+        DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
+
+        // 获取或创建 IP 跟踪器
+        let tracker = {
+            let mut trackers = self.ip_trackers.write();
+            if let Some(existing) = trackers.get(&ip) {
+                existing.clone()
+            } else {
+                let new_tracker = Arc::new(IpViolationTracker::new(ip, now));
+                trackers.insert(ip, new_tracker.clone());
+                new_tracker
+            }
+        };
+
+        // 递增违规次数
+        let count = tracker.increment(now);
+
+        // 决策：是否封禁
+        if count >= self.config.auto_ban_threshold {
+            // 触发封禁
+            DDOS_STATS
+                .auto_bans_triggered
+                .fetch_add(1, Ordering::Relaxed);
+
+            let duration = self.config.auto_ban_duration;
+            crate::logger::info!(
+                crate::logger::get(),
+                "DDoS 决策：触发封禁";
+                "ip" => %ip,
+                "reason" => reason,
+                "rate_pps" => rate_pps,
+                "violation_count" => count,
+                "duration_secs" => duration
+            );
+
+            // 通过 netlink 发送封禁指令
+            if let Err(e) = self.netlink.send_ban(ip, duration) {
+                crate::logger::error!(
+                    crate::logger::get(),
+                    "发送封禁指令失败";
+                    "ip" => %ip,
+                    "error" => %e
+                );
+            }
+
+            // 重置违规计数（避免重复封禁）
+            tracker.violation_count.store(0, Ordering::Relaxed);
+        } else {
+            // 仅记录日志
+            crate::logger::info!(
+                crate::logger::get(),
+                "DDoS 决策：记录违规";
+                "ip" => %ip,
+                "reason" => reason,
+                "rate_pps" => rate_pps,
+                "violation_count" => count,
+                "threshold" => self.config.auto_ban_threshold
+            );
+        }
+    }
+
+    /// 清理过期的 IP 跟踪器
+    ///
+    /// 定期调用，清理长时间未活动的 IP 跟踪器，避免内存泄漏。
+    pub fn cleanup_stale_trackers(&self) {
+        let now = now_secs();
+        let stale_threshold = 300; // 5 分钟未活动视为过期
+
+        let mut trackers = self.ip_trackers.write();
+        trackers.retain(|_, tracker| {
+            let last = tracker.last_violation.load(Ordering::Relaxed);
+            now - last < stale_threshold
+        });
+    }
+
+    /// 获取当前跟踪的 IP 数量
+    pub fn tracked_ips_count(&self) -> usize {
+        self.ip_trackers.read().len()
+    }
+}

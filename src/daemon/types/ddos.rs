@@ -34,7 +34,7 @@ pub struct DdosConfig {
 impl Default for DdosConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true, // 默认启用 DDoS 检测
             per_ip_conn_rate: 50,
             per_ip_fail_rate: 30,
             global_conn_rate: 10000,

@@ -70,7 +70,10 @@ impl FwNlDdosEvent {
     pub fn ip_str(&self) -> String {
         if self.af == 2 {
             // AF_INET
-            format!("{}.{}.{}.{}", self.addr[0], self.addr[1], self.addr[2], self.addr[3])
+            format!(
+                "{}.{}.{}.{}",
+                self.addr[0], self.addr[1], self.addr[2], self.addr[3]
+            )
         } else if self.af == 10 {
             // AF_INET6
             let addr: std::net::Ipv6Addr = std::net::Ipv6Addr::from(self.addr);
@@ -82,7 +85,11 @@ impl FwNlDdosEvent {
 
     /// 获取原因字符串
     pub fn reason_str(&self) -> String {
-        let end = self.reason.iter().position(|&b| b == 0).unwrap_or(self.reason.len());
+        let end = self
+            .reason
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.reason.len());
         String::from_utf8_lossy(&self.reason[..end]).to_string()
     }
 }

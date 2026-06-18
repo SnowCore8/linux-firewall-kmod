@@ -11,7 +11,7 @@ use anyhow::{bail, Context, Result};
 use super::ip_validation::validate_ip;
 use super::procfs::secure_procfs_write;
 use super::{BanAction, BANS_PATH};
-use crate::types::{ActiveBanCache, BanInfo, BanReason, DAEMON_STATS, ACTIVE_BAN_CACHE};
+use crate::types::{ActiveBanCache, BanInfo, BanReason, ACTIVE_BAN_CACHE, DAEMON_STATS};
 
 use std::sync::atomic::Ordering;
 
@@ -211,8 +211,8 @@ pub fn sync_bans_from_kernel() -> Result<usize> {
     use std::fs;
 
     // 读取 /proc/firewall/bans
-    let content = fs::read_to_string("/proc/firewall/bans")
-        .context("Failed to read /proc/firewall/bans")?;
+    let content =
+        fs::read_to_string("/proc/firewall/bans").context("Failed to read /proc/firewall/bans")?;
 
     let cache = ACTIVE_BAN_CACHE.get_or_init(ActiveBanCache::new);
     let now = crate::types::now_secs();
@@ -279,8 +279,8 @@ pub fn sync_bans_from_kernel() -> Result<usize> {
         // 创建 BanInfo
         let ban_info = BanInfo {
             ip: ip.to_string(),
-            ip_num: 0, // IPv6 或暂不计算
-            jail_name: "kernel".to_string(), // 内核模块封禁的归为 "kernel" jail
+            ip_num: 0,                        // IPv6 或暂不计算
+            jail_name: "kernel".to_string(),  // 内核模块封禁的归为 "kernel" jail
             reason: BanReason::DDoSRateLimit, // 假设是 DDoS 检测触发
             banned_at: now,
             expires_at,
