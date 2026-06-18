@@ -62,6 +62,7 @@ desktop.ini
 
 # ---- AI 工具 ----
 .qwen/
+!.qwen/skills/
 .cursor/
 .cursorrules
 .claude/
