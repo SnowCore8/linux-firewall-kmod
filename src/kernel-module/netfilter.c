@@ -3,8 +3,11 @@
  */
 
 #include "firewall.h"
+#include <linux/icmp.h>
+#include <linux/icmpv6.h>
 #include <linux/if_ether.h>
 #include <linux/ipv6.h>
+#include <linux/tcp.h>
 
 extern struct firewall_info fw_info;
 extern u32 fw_hash_seed;
@@ -302,10 +305,30 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
                (ntohl(src_ip) & 0xFF000000) == 0x00000000))
     return NF_ACCEPT;
 
-  /* 非首片无传输层头部，传 protocol=0 跳过协议专项速率检测 */
+  /* 协议专项速率检测：
+   * - 非首片无传输层头部，传 protocol=0 跳过
+   * - TCP 仅对 SYN 包（SYN=1, ACK=0）做 SYN flood 检测
+   * - ICMP 仅对 Echo Request（type=8）做 ICMP flood 检测 */
   {
     __be16 frag_off = iph->frag_off;
-    u8 proto = (ntohs(frag_off) & IP_OFFSET) ? 0 : iph->protocol;
+    u8 proto = iph->protocol;
+
+    if (ntohs(frag_off) & IP_OFFSET) {
+      proto = 0;
+    } else if (proto == IPPROTO_TCP) {
+      unsigned int ihl = iph->ihl * 4;
+      struct tcphdr tcph_copy;
+      struct tcphdr *tcph = skb_header_pointer(skb, ihl, sizeof(tcph_copy), &tcph_copy);
+      if (!tcph || !tcph->syn || tcph->ack)
+        proto = 0;
+    } else if (proto == IPPROTO_ICMP) {
+      unsigned int ihl = iph->ihl * 4;
+      struct icmphdr icmph_copy;
+      struct icmphdr *icmph = skb_header_pointer(skb, ihl, sizeof(icmph_copy), &icmph_copy);
+      if (!icmph || icmph->type != ICMP_ECHO)
+        proto = 0;
+    }
+
     return handle_ban_check(FW_AF_INET, &src_ip, skb, proto);
   }
 }
@@ -381,6 +404,20 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
 
   if (unlikely((src_ip.s6_addr[0] == 0xFE) && ((src_ip.s6_addr[1] & 0xC0) == 0x80)))
     return NF_ACCEPT;
+
+  /* TCP 仅对 SYN 包做 SYN flood 检测，避免误判正常连接
+   * ICMPv6 仅对 Echo Request（type=128）做 ICMP flood 检测 */
+  if (nexthdr == IPPROTO_TCP) {
+    struct tcphdr tcph_copy;
+    struct tcphdr *tcph = skb_header_pointer(skb, offset, sizeof(tcph_copy), &tcph_copy);
+    if (!tcph || !tcph->syn || tcph->ack)
+      nexthdr = 0;
+  } else if (nexthdr == IPPROTO_ICMPV6) {
+    struct icmp6hdr icmp6h_copy;
+    struct icmp6hdr *icmp6h = skb_header_pointer(skb, offset, sizeof(icmp6h_copy), &icmp6h_copy);
+    if (!icmp6h || icmp6h->icmp6_type != ICMPV6_ECHO_REQUEST)
+      nexthdr = 0;
+  }
 
   return handle_ban_check(FW_AF_INET6, &src_ip, skb, nexthdr);
 }
