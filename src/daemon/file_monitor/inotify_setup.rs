@@ -1,6 +1,7 @@
 //! inotify 监控设置模块
 //!
 //! 负责为所有 enabled jail 的日志文件建立 inotify watch。
+//! 同时监控配置文件变化，自动触发热重载。
 
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::AsRawFd;
@@ -19,6 +20,7 @@ use super::state::{FileState, FILE_STATES, INOTIFY_STATE};
 // ============================================================================
 
 /// 为 `Config` 中所有 enabled jail 的日志文件建立 inotify watch。
+/// 同时监控配置文件变化，自动触发热重载。
 ///
 /// 启动时拒绝符号链接(攻击者可借此动态切换目标);运行期改用 `O_NOFOLLOW`
 /// 二次防御。
@@ -41,6 +43,43 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
 
     let mut file_states = Vec::new();
     let mut watched_count = 0;
+
+    // 监控配置文件变化
+    if let Some(ref config_path) = cfg.config_file {
+        let mut state = FileState::new();
+        state.path.clone_from(config_path);
+        state.is_config = true;
+
+        let path = Path::new(config_path);
+        if let Ok(metadata) = path.metadata() {
+            state.inode = metadata.ino();
+        }
+
+        let mask = WatchMask::MODIFY
+            | WatchMask::MOVED_TO
+            | WatchMask::CLOSE_WRITE;
+
+        match inotify.watches().add(config_path, mask) {
+            Ok(wd) => {
+                state.wd = Some(wd);
+                watched_count += 1;
+                file_states.push(state);
+                crate::logger::info!(
+                    crate::logger::get(),
+                    "已添加配置文件监控";
+                    "path" => %config_path
+                );
+            }
+            Err(e) => {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "添加配置文件监控失败";
+                    "path" => %config_path,
+                    "error" => %e
+                );
+            }
+        }
+    }
 
     for (j_idx, jail) in cfg.jails.iter().enumerate() {
         if !jail.enabled {

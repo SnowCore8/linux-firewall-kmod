@@ -175,17 +175,42 @@ fn handle_inotify_events(cfg: &mut Config) {
 
     // 事件分发: 不持有任何全局锁调用处理函数
     for (wd, mask) in collected_events {
-        let file_idx = {
+        let file_info = {
             let file_states = FILE_STATES.read();
             file_states
                 .iter()
                 .enumerate()
                 .find(|(_, state)| state.wd.as_ref() == Some(&wd))
-                .map(|(idx, _)| idx)
+                .map(|(idx, state)| (idx, state.is_config))
         };
 
-        let Some(idx) = file_idx else { continue };
+        let Some((idx, is_config)) = file_info else { continue };
 
+        // 配置文件变化：触发热重载
+        if is_config {
+            if mask.contains(inotify::EventMask::MODIFY)
+                || mask.contains(inotify::EventMask::MOVED_TO)
+                || mask.contains(inotify::EventMask::CLOSE_WRITE)
+            {
+                crate::logger::info!(
+                    crate::logger::get(),
+                    "检测到配置文件变化，自动重载";
+                    "path" => &FILE_STATES.read()[idx].path
+                );
+                if let Err(e) = reload_configuration(cfg) {
+                    crate::logger::warn!(
+                        crate::logger::get(),
+                        "配置自动重载失败";
+                        "error" => %e
+                    );
+                } else {
+                    crate::logger::info!(crate::logger::get(), "配置自动重载成功");
+                }
+            }
+            continue;
+        }
+
+        // 日志文件事件
         if mask.contains(inotify::EventMask::MODIFY) || mask.contains(inotify::EventMask::MOVED_TO)
         {
             if let Err(e) = process_new_lines(idx, cfg) {

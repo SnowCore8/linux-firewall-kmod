@@ -25,6 +25,8 @@ pub struct FileState {
     pub wd: Option<WatchDescriptor>,
     /// 关联的 jail 在 `Config.jails` 中的索引
     pub jail_idx: usize,
+    /// 是否为配置文件（非日志文件）
+    pub is_config: bool,
 }
 
 impl Default for FileState {
@@ -43,6 +45,7 @@ impl FileState {
             inode: 0,
             wd: None,
             jail_idx: 0,
+            is_config: false,
         }
     }
 }
