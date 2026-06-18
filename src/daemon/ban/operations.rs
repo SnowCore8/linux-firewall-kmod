@@ -11,7 +11,7 @@ use anyhow::{bail, Context, Result};
 use super::ip_validation::validate_ip;
 use super::procfs::secure_procfs_write;
 use super::{BanAction, BANS_PATH};
-use crate::types::DAEMON_STATS;
+use crate::types::{ActiveBanCache, BanInfo, BanReason, DAEMON_STATS, ACTIVE_BAN_CACHE};
 
 use std::sync::atomic::Ordering;
 
@@ -198,6 +198,101 @@ pub fn ban_ip_with_history(
 /// 占位函数: 内核模块负责定期清理过期封禁, 用户态无需轮询。
 pub fn cleanup_expired_bans() {
     // 内核模块负责定期清理, 此处仅占位
+}
+
+/// 从内核模块同步现有封禁列表到内存缓存
+///
+/// 解析 `/proc/firewall/bans` 输出，将封禁 IP 同步到 `ACTIVE_BAN_CACHE`。
+/// 用于守护进程启动时恢复内核模块的封禁状态。
+///
+/// # Returns
+/// 同步的封禁数量
+pub fn sync_bans_from_kernel() -> Result<usize> {
+    use std::fs;
+
+    // 读取 /proc/firewall/bans
+    let content = fs::read_to_string("/proc/firewall/bans")
+        .context("Failed to read /proc/firewall/bans")?;
+
+    let cache = ACTIVE_BAN_CACHE.get_or_init(ActiveBanCache::new);
+    let now = crate::types::now_secs();
+    let mut synced = 0;
+
+    // 解析格式：
+    // Banned IP List:
+    // -------------------
+    // 1.2.3.4                            (expires in 300 seconds)
+    // 5.6.7.8                            (permanent)
+    // -------------------
+    // Total: 2 active bans (1 permanent, 1 temporary)
+    for line in content.lines() {
+        let line = line.trim();
+
+        // 跳过标题、分隔线、统计行
+        if line.is_empty()
+            || line.starts_with("Banned IP List")
+            || line.starts_with("---")
+            || line.starts_with("Total:")
+        {
+            continue;
+        }
+
+        // 解析 IP 和过期信息
+        // 格式: "1.2.3.4                            (expires in 300 seconds)"
+        //    或: "1.2.3.4                            (permanent)"
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.is_empty() {
+            continue;
+        }
+
+        let ip = parts[0];
+
+        // 验证 IP 格式
+        if validate_ip(ip).is_err() {
+            continue;
+        }
+
+        // 判断是否已存在
+        if cache.contains(ip) {
+            continue;
+        }
+
+        // 解析过期时间
+        let (is_permanent, expires_at) = if line.contains("(permanent)") {
+            (true, 0)
+        } else if let Some(idx) = line.find("expires in") {
+            // 提取秒数
+            let rest = &line[idx + 10..];
+            if let Some(secs_str) = rest.split_whitespace().next() {
+                if let Ok(secs) = secs_str.parse::<i64>() {
+                    (false, now + secs)
+                } else {
+                    (false, now + 600) // 默认 10 分钟
+                }
+            } else {
+                (false, now + 600)
+            }
+        } else {
+            (false, now + 600) // 默认 10 分钟
+        };
+
+        // 创建 BanInfo
+        let ban_info = BanInfo {
+            ip: ip.to_string(),
+            ip_num: 0, // IPv6 或暂不计算
+            jail_name: "kernel".to_string(), // 内核模块封禁的归为 "kernel" jail
+            reason: BanReason::DDoSRateLimit, // 假设是 DDoS 检测触发
+            banned_at: now,
+            expires_at,
+            is_permanent,
+            fail_count: 0,
+        };
+
+        cache.insert(ban_info);
+        synced += 1;
+    }
+
+    Ok(synced)
 }
 
 // ============================================================================

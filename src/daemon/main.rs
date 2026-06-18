@@ -162,6 +162,18 @@ fn main() -> Result<()> {
         info!(logger::get(), "历史数据库初始化成功");
     }
 
+    // 从内核模块同步现有封禁列表到内存缓存
+    match ban::sync_bans_from_kernel() {
+        Ok(count) => {
+            if count > 0 {
+                info!(logger::get(), "从内核模块同步封禁列表"; "count" => count);
+            }
+        }
+        Err(e) => {
+            warn!(logger::get(), "从内核模块同步封禁列表失败"; "error" => %e);
+        }
+    }
+
     let mut exporter_handle = None;
     if cfg.metrics_port > 0 {
         exporter_handle = Some(http_exporter::start_http_exporter(cfg.metrics_port, &cfg));
