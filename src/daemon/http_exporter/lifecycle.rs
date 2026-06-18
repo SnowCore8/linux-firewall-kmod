@@ -85,10 +85,24 @@ pub fn start_http_exporter(port: u16, cfg: &Config) -> thread::JoinHandle<()> {
             if !EXPORTER_RUNNING.load(Ordering::Relaxed) {
                 break;
             }
-            if let Some(request) = server.incoming_requests().next() {
-                handle_request_with_auth(request, metrics_user.as_ref(), metrics_pass.as_ref());
-            } else {
-                break;
+            // 使用 try_recv 非阻塞获取请求，避免 SSE 长连接阻塞整个服务器
+            match server.try_recv() {
+                Ok(Some(request)) => {
+                    // 为每个请求创建独立线程处理，避免 SSE 阻塞其他请求
+                    let user = metrics_user.clone();
+                    let pass = metrics_pass.clone();
+                    thread::spawn(move || {
+                        handle_request_with_auth(request, user.as_ref(), pass.as_ref());
+                    });
+                }
+                Ok(None) => {
+                    // 没有请求，短暂休眠避免 CPU 空转
+                    thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(_) => {
+                    // 服务器关闭或出错
+                    break;
+                }
             }
         }
 
