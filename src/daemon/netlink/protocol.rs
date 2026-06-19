@@ -163,30 +163,6 @@ impl FwNlBanCmd {
         }
     }
 
-    /// 创建解封命令
-    pub fn new_unban(ip: IpAddr) -> Self {
-        let (af, addr) = match ip {
-            IpAddr::V4(v4) => (2u8, {
-                let mut a = [0u8; 16];
-                a[..4].copy_from_slice(&v4.octets());
-                a
-            }),
-            IpAddr::V6(v6) => (10u8, v6.octets()),
-        };
-
-        Self {
-            hdr: FwNlMsgHdr {
-                magic: FW_NL_MAGIC.to_be(),
-                msg_type: (FwNlMsgType::UnbanIp as u16).to_be(),
-                msg_len: (std::mem::size_of::<Self>() as u16).to_be(),
-                seq: 0,
-            },
-            af,
-            duration_secs: 0,
-            addr,
-        }
-    }
-
     /// 转换为字节数组
     pub fn to_bytes(self) -> Vec<u8> {
         let ptr = &self as *const Self as *const u8;

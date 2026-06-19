@@ -220,12 +220,6 @@ impl NetlinkContext {
         self.send_command(&cmd.to_bytes())
     }
 
-    /// 发送解封指令到内核
-    pub fn send_unban(&self, ip: IpAddr) -> Result<()> {
-        let cmd = FwNlBanCmd::new_unban(ip);
-        self.send_command(&cmd.to_bytes())
-    }
-
     /// 发送配置更新到内核
     pub fn send_config_update(&self, config: &FwNlConfigUpdate) -> Result<()> {
         self.send_command(&config.to_bytes())
