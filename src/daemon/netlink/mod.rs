@@ -174,36 +174,11 @@ impl NetlinkContext {
         let _nlh: &nlmsghdr = unsafe { &*(data.as_ptr() as *const nlmsghdr) };
 
         // 获取自定义消息头（从 nlmsghdr 之后开始）
-        // 解析 netlink 消息头
-        let nlh: &nlmsghdr = unsafe { &*(data.as_ptr() as *const nlmsghdr) };
-        crate::logger::warn!(
-            crate::logger::get(),
-            "nlmsghdr 调试信息";
-            "nlmsg_len" => nlh.nlmsg_len,
-            "nlmsg_type" => nlh.nlmsg_type,
-            "nlmsg_flags" => nlh.nlmsg_flags,
-            "nlmsg_seq" => nlh.nlmsg_seq,
-            "nlmsg_pid" => nlh.nlmsg_pid,
-            "data_len" => data.len()
-        );
-
-        // 获取自定义消息头（从 nlmsghdr 之后开始）
         let hdr_data = &data[std::mem::size_of::<nlmsghdr>()..];
-        // 解析魔数、类型、长度（从 hdr_data 起始位置读取）
-        let magic = u32::from_be_bytes([hdr_data[0], hdr_data[1], hdr_data[2], hdr_data[3]]);
+
+        // 解析魔数
         let magic = u32::from_be_bytes([hdr_data[0], hdr_data[1], hdr_data[2], hdr_data[3]]);
         if magic != FW_NL_MAGIC {
-            let debug_bytes: Vec<String> = hdr_data[..std::cmp::min(32, hdr_data.len())]
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect();
-            crate::logger::warn!(
-                crate::logger::get(),
-                "魔数不匹配，调试信息";
-                "expected" => format!("0x{:08x}", FW_NL_MAGIC),
-                "actual" => format!("0x{:08x}", magic),
-                "first_32_bytes" => debug_bytes.join(" ")
-            );
             anyhow::bail!("魔数不匹配：0x{:08x}", magic);
         }
 
@@ -279,6 +254,10 @@ impl NetlinkContext {
                         fail_count: 0,
                     };
                     cache.insert(ban_info);
+                    // 更新 DAEMON_STATS 计数器
+                    crate::types::DAEMON_STATS
+                        .ips_banned
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     crate::logger::info!(
                         crate::logger::get(),
                         "已更新 ACTIVE_BAN_CACHE";
@@ -296,6 +275,10 @@ impl NetlinkContext {
                     let cache = crate::types::ACTIVE_BAN_CACHE
                         .get_or_init(crate::types::ActiveBanCache::new);
                     cache.remove(&ip_str);
+                    // 更新 DAEMON_STATS 计数器
+                    crate::types::DAEMON_STATS
+                        .total_unbans
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
             }
             Some(FwNlMsgType::ListBansResponse) => {
@@ -394,6 +377,12 @@ impl NetlinkContext {
 
     /// 发送封禁指令到内核
     pub fn send_ban(&self, ip: IpAddr, duration_secs: u32) -> Result<()> {
+        crate::logger::info!(
+            crate::logger::get(),
+            "send_ban 被调用";
+            "ip" => %ip,
+            "duration_secs" => duration_secs
+        );
         let cmd = FwNlBanCmd::new_ban(ip, duration_secs);
         self.send_command(&cmd.to_bytes())
     }
@@ -423,7 +412,30 @@ impl NetlinkContext {
 
     /// 发送原始命令到内核
     fn send_command(&self, data: &[u8]) -> Result<()> {
-        use nix::libc::{sockaddr_nl, AF_NETLINK};
+        use nix::libc::{nlmsghdr, sockaddr_nl, AF_NETLINK};
+
+        // 构造标准 nlmsghdr + 自定义消息
+        let nlmsg_len = std::mem::size_of::<nlmsghdr>() + data.len();
+        let mut buf = vec![0u8; nlmsg_len];
+
+        // 填充 nlmsghdr
+        let nlh: &mut nlmsghdr = unsafe { &mut *(buf.as_mut_ptr() as *mut nlmsghdr) };
+        nlh.nlmsg_len = nlmsg_len as u32;
+        nlh.nlmsg_type = 0; // 自定义消息类型
+        nlh.nlmsg_flags = 0;
+        nlh.nlmsg_seq = 0;
+        nlh.nlmsg_pid = 0;
+
+        // 复制自定义消息到 nlmsghdr 之后
+        buf[std::mem::size_of::<nlmsghdr>()..].copy_from_slice(data);
+
+        crate::logger::info!(
+            crate::logger::get(),
+            "发送 netlink 命令";
+            "nlmsg_len" => nlmsg_len,
+            "data_len" => data.len(),
+            "sizeof_nlmsghdr" => std::mem::size_of::<nlmsghdr>()
+        );
 
         // 构造内核地址（pid=0 表示内核）
         let mut addr: sockaddr_nl = unsafe { std::mem::zeroed() };
@@ -433,8 +445,8 @@ impl NetlinkContext {
         let n = unsafe {
             nix::libc::sendto(
                 self.fd,
-                data.as_ptr() as *const _,
-                data.len(),
+                buf.as_ptr() as *const _,
+                buf.len(),
                 0,
                 &addr as *const sockaddr_nl as *const _,
                 std::mem::size_of::<sockaddr_nl>() as u32,
@@ -446,11 +458,11 @@ impl NetlinkContext {
             return Err(anyhow::anyhow!("发送 netlink 消息失败: {}", err));
         }
 
-        if n as usize != data.len() {
+        if n as usize != buf.len() {
             return Err(anyhow::anyhow!(
                 "发送 netlink 消息不完整: {} / {}",
                 n,
-                data.len()
+                buf.len()
             ));
         }
 
