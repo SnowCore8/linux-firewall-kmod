@@ -25,37 +25,44 @@ pub struct JailInfo {
     pub enabled: bool,
 }
 
-/// 全局 Jail 信息存储（使用 RwLock 支持热更新）
-static GLOBAL_JAILS: std::sync::LazyLock<parking_lot::RwLock<Vec<JailInfo>>> =
-    std::sync::LazyLock::new(|| parking_lot::RwLock::new(Vec::new()));
+/// 全局 Jail 信息存储（使用 OnceLock<RwLock> 支持热更新，兼容 Rust 1.75 MSRV）
+static GLOBAL_JAILS: std::sync::OnceLock<parking_lot::RwLock<Vec<JailInfo>>> =
+    std::sync::OnceLock::new();
 
 /// 设置全局 Jail 信息（启动时和热重载时调用）
 pub fn set_global_jails(jails: Vec<JailInfo>) {
-    *GLOBAL_JAILS.write() = jails;
+    let lock = GLOBAL_JAILS.get_or_init(|| parking_lot::RwLock::new(Vec::new()));
+    *lock.write() = jails;
 }
 
 /// 获取全局 Jail 信息（在 handler 中调用）
 pub fn get_global_jails() -> Vec<JailInfo> {
-    GLOBAL_JAILS.read().clone()
+    GLOBAL_JAILS
+        .get()
+        .map(|lock| lock.read().clone())
+        .unwrap_or_default()
 }
 
 // ============================================================================
 // 全局 Web UI 配置存储（支持热更新）
 // ============================================================================
 
-/// 全局 Web UI 配置存储（使用 RwLock 支持热更新）
-static GLOBAL_WEBUI_CONFIG: std::sync::LazyLock<
+/// 全局 Web UI 配置存储（使用 OnceLock<RwLock> 支持热更新，兼容 Rust 1.75 MSRV）
+static GLOBAL_WEBUI_CONFIG: std::sync::OnceLock<
     parking_lot::RwLock<Option<crate::types::WebuiConfig>>,
-> = std::sync::LazyLock::new(|| parking_lot::RwLock::new(None));
+> = std::sync::OnceLock::new();
 
 /// 设置全局 Web UI 配置（启动时和热重载时调用）
 pub fn set_global_webui_config(config: crate::types::WebuiConfig) {
-    *GLOBAL_WEBUI_CONFIG.write() = Some(config);
+    let lock = GLOBAL_WEBUI_CONFIG.get_or_init(|| parking_lot::RwLock::new(None));
+    *lock.write() = Some(config);
 }
 
 /// 获取全局 Web UI 配置（在 handler 中调用）
 pub fn get_global_webui_config() -> Option<crate::types::WebuiConfig> {
-    GLOBAL_WEBUI_CONFIG.read().clone()
+    GLOBAL_WEBUI_CONFIG
+        .get()
+        .and_then(|lock| lock.read().clone())
 }
 
 // ============================================================================

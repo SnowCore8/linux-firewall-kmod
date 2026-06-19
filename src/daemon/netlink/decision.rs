@@ -15,6 +15,7 @@ use crate::types::{now_secs, DdosConfig, DDOS_STATS};
 
 /// 每 IP 违规跟踪条目
 #[derive(Debug)]
+#[allow(dead_code)] // ip/first_violation 通过 Debug trait 间接使用
 struct IpViolationTracker {
     /// IP 地址
     ip: IpAddr,

@@ -30,9 +30,14 @@ use crate::types::{Config, DAEMON_STATS};
 /// 配置版本历史（最多保留 5 个版本）
 const MAX_CONFIG_VERSIONS: usize = 5;
 
-/// 全局配置版本历史
-static CONFIG_HISTORY: std::sync::LazyLock<parking_lot::RwLock<Vec<ConfigSnapshot>>> =
-    std::sync::LazyLock::new(|| parking_lot::RwLock::new(Vec::new()));
+/// 全局配置版本历史（使用 OnceLock<RwLock> 兼容 Rust 1.75 MSRV）
+static CONFIG_HISTORY: std::sync::OnceLock<parking_lot::RwLock<Vec<ConfigSnapshot>>> =
+    std::sync::OnceLock::new();
+
+/// 获取配置历史锁
+fn config_history_lock() -> &'static parking_lot::RwLock<Vec<ConfigSnapshot>> {
+    CONFIG_HISTORY.get_or_init(|| parking_lot::RwLock::new(Vec::new()))
+}
 
 /// 配置快照（用于版本历史和回滚）
 #[derive(Clone)]
@@ -56,7 +61,7 @@ fn save_config_snapshot(cfg: &Config) {
         trusted_ips: cfg.trusted_ips.clone(),
     };
 
-    let mut history = CONFIG_HISTORY.write();
+    let mut history = config_history_lock().write();
     history.push(snapshot);
     // 保留最近的 MAX_CONFIG_VERSIONS 个版本
     while history.len() > MAX_CONFIG_VERSIONS {
@@ -66,7 +71,7 @@ fn save_config_snapshot(cfg: &Config) {
 
 /// 回滚到上一个配置版本
 pub fn rollback_config(cfg: &mut Config) -> Result<()> {
-    let mut history = CONFIG_HISTORY.write();
+    let mut history = config_history_lock().write();
     if history.len() < 2 {
         return Err(anyhow::anyhow!("没有可回滚的历史版本"));
     }
