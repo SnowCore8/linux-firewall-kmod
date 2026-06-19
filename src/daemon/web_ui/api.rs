@@ -200,12 +200,19 @@ pub fn get_stats() -> StatsResponse {
         .ips_banned
         .load(std::sync::atomic::Ordering::Relaxed);
 
-    // 这些字段无内存计数器，当前 netlink 不支持请求-响应，
-    // 暂用 0 占位。TODO: netlink 支持请求-响应后从内核获取
-    let total_unbans = 0u64;
-    let whitelist_count = 0u64;
-    let packets_dropped = 0u64;
-    let packets_accepted = 0u64;
+    // 从内存计数器读取（近似值）
+    let total_unbans = DAEMON_STATS
+        .total_unbans
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let whitelist_count = DAEMON_STATS
+        .whitelist_count
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let packets_dropped = DAEMON_STATS
+        .packets_dropped
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let packets_accepted = DAEMON_STATS
+        .packets_accepted
+        .load(std::sync::atomic::Ordering::Relaxed);
 
     StatsResponse {
         today_bans,

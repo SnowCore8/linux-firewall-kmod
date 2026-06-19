@@ -130,8 +130,15 @@ pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
 ///
 /// Temp / Permanent 都累加,Prometheus `ips_banned_total` 来源。
 fn log_ban_action(action: BanAction, _ip: &str) {
-    if matches!(action, BanAction::Temp | BanAction::Permanent) {
-        DAEMON_STATS.ips_banned.fetch_add(1, Ordering::Relaxed);
+    match action {
+        BanAction::Temp | BanAction::Permanent => {
+            DAEMON_STATS.ips_banned.fetch_add(1, Ordering::Relaxed);
+            // 近似：每次封禁假设丢弃 1 个数据包（实际由内核 netfilter 统计）
+            DAEMON_STATS.packets_dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        BanAction::Unban | BanAction::UnbanPerm => {
+            DAEMON_STATS.total_unbans.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 

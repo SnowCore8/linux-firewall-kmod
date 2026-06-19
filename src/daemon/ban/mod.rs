@@ -60,6 +60,7 @@ pub const WHITELIST_PATH: &str = "/proc/firewall/whitelist";
 /// 返回写入失败的 IP 列表（不中断其他 IP 的写入）
 pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
     let mut failed = Vec::new();
+    let mut success_count = 0u64;
     for ip in trusted_ips {
         let cidr = ip_to_cidr(ip);
         let data = format!("{}\n", cidr);
@@ -78,7 +79,14 @@ pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
                 "ip" => %ip,
                 "cidr" => %cidr
             );
+            success_count += 1;
         }
+    }
+    // 更新白名单计数器
+    if success_count > 0 {
+        crate::types::DAEMON_STATS
+            .whitelist_count
+            .fetch_add(success_count, std::sync::atomic::Ordering::Relaxed);
     }
     failed
 }
@@ -92,6 +100,7 @@ pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
 /// 返回移除失败的 IP 列表
 pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
     let mut failed = Vec::new();
+    let mut success_count = 0u64;
     for ip in trusted_ips {
         let cidr = ip_to_cidr(ip);
         let data = format!("remove {}\n", cidr);
@@ -110,7 +119,14 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
                 "ip" => %ip,
                 "cidr" => %cidr
             );
+            success_count += 1;
         }
+    }
+    // 更新白名单计数器
+    if success_count > 0 {
+        crate::types::DAEMON_STATS
+            .whitelist_count
+            .fetch_sub(success_count, std::sync::atomic::Ordering::Relaxed);
     }
     failed
 }

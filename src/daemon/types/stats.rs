@@ -43,6 +43,14 @@ pub struct DaemonStats {
     pub regex_matches: AtomicU64,
     /// 守护进程启动时间 (Unix 秒)。`uptime = now - start_time`
     pub start_time: AtomicU64,
+    /// 累计解封数 (程序内部维护，近似值)
+    pub total_unbans: AtomicU64,
+    /// 当前白名单数 (程序内部维护)
+    pub whitelist_count: AtomicU64,
+    /// 丢弃数据包数 (近似值，每次 ban 时 +1)
+    pub packets_dropped: AtomicU64,
+    /// 接受数据包数 (近似值，无法准确统计)
+    pub packets_accepted: AtomicU64,
 }
 
 impl Default for DaemonStats {
@@ -67,6 +75,10 @@ impl DaemonStats {
             lines_skipped: AtomicU64::new(0),
             regex_matches: AtomicU64::new(0),
             start_time: AtomicU64::new(0),
+            total_unbans: AtomicU64::new(0),
+            whitelist_count: AtomicU64::new(0),
+            packets_dropped: AtomicU64::new(0),
+            packets_accepted: AtomicU64::new(0),
         }
     }
 }
