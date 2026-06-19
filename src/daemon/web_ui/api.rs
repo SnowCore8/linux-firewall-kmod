@@ -8,44 +8,6 @@
 use crate::types::{ACTIVE_BAN_CACHE, DAEMON_STATS, DDOS_STATS};
 use serde::Serialize;
 
-/// 从 `/proc/firewall/stats` 读取内核统计数据
-fn read_kernel_stats() -> (u64, u64, u64, u64, u64, u64) {
-    let mut current_bans: u64 = 0;
-    let mut total_bans: u64 = 0;
-    let mut total_unbans: u64 = 0;
-    let mut current_whitelist: u64 = 0;
-    let mut packets_dropped: u64 = 0;
-    let mut packets_accepted: u64 = 0;
-
-    if let Ok(content) = std::fs::read_to_string("/proc/firewall/stats") {
-        for line in content.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() == 2 {
-                if let Ok(val) = parts[1].parse::<u64>() {
-                    match parts[0] {
-                        "current_bans" => current_bans = val,
-                        "total_bans" => total_bans = val,
-                        "total_unbans" => total_unbans = val,
-                        "current_whitelist" => current_whitelist = val,
-                        "packets_dropped" => packets_dropped = val,
-                        "packets_accepted" => packets_accepted = val,
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-
-    (
-        current_bans,
-        total_bans,
-        total_unbans,
-        current_whitelist,
-        packets_dropped,
-        packets_accepted,
-    )
-}
-
 /// 统一 API 响应信封
 #[derive(Serialize)]
 pub struct ApiResponse<T> {
@@ -229,15 +191,21 @@ pub fn get_stats() -> StatsResponse {
         .events_detected
         .load(std::sync::atomic::Ordering::Relaxed);
 
-    // 从内核模块读取统计数据
-    let (
-        current_bans,
-        total_bans,
-        total_unbans,
-        whitelist_count,
-        packets_dropped,
-        packets_accepted,
-    ) = read_kernel_stats();
+    // 封禁数据全部走内存，与 /api/bans 保持一致
+    let current_bans = ACTIVE_BAN_CACHE
+        .get()
+        .map(|cache| cache.len() as u64)
+        .unwrap_or(0);
+    let total_bans = DAEMON_STATS
+        .ips_banned
+        .load(std::sync::atomic::Ordering::Relaxed);
+
+    // 这些字段无内存计数器，当前 netlink 不支持请求-响应，
+    // 暂用 0 占位。TODO: netlink 支持请求-响应后从内核获取
+    let total_unbans = 0u64;
+    let whitelist_count = 0u64;
+    let packets_dropped = 0u64;
+    let packets_accepted = 0u64;
 
     StatsResponse {
         today_bans,
@@ -348,9 +316,6 @@ fn generate_failed_attempts_trend() -> ChartData {
 /// 获取活跃封禁列表
 pub fn get_active_bans() -> Vec<BanResponse> {
     let now = crate::types::now_secs();
-
-    // 从内核同步最新封禁状态（确保 procfs 手动添加的封禁也能显示）
-    let _ = crate::ban::sync_bans_from_kernel();
 
     ACTIVE_BAN_CACHE
         .get()

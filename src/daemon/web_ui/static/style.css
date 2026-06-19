@@ -466,7 +466,7 @@ body {
 
 .stats-grid {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 16px;
 }
 
@@ -763,7 +763,7 @@ body {
 
 .kernel-grid {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 14px;
 }
 
@@ -1003,16 +1003,10 @@ body {
    ============================================ */
 
 @media (max-width: 1280px) {
-    .kernel-grid {
-        grid-template-columns: repeat(3, 1fr);
-    }
+    /* kernel-grid 使用 auto-fit，自动适应 */
 }
 
 @media (max-width: 1024px) {
-    .stats-grid {
-        grid-template-columns: repeat(3, 1fr);
-    }
-
     .charts-grid {
         grid-template-columns: 1fr;
     }
@@ -1045,14 +1039,6 @@ body {
         display: none;
     }
 
-    .stats-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-
-    .kernel-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-
     .rates-grid {
         grid-template-columns: 1fr;
     }
@@ -1067,14 +1053,6 @@ body {
 }
 
 @media (max-width: 480px) {
-    .stats-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .kernel-grid {
-        grid-template-columns: 1fr;
-    }
-
     .stat-value {
         font-size: 24px;
     }

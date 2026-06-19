@@ -102,15 +102,8 @@ function connectSSE() {
     };
 
     eventSource.onerror = () => {
-        // 长连接模式下，onerror 表示真正的连接断开
-        updateStatus('offline');
-        // 5 秒后自动重连
-        if (!reconnectTimer) {
-            reconnectTimer = setTimeout(() => {
-                reconnectTimer = null;
-                connectSSE();
-            }, 5000);
-        }
+        // 短连接模式下，onerror 仅表示本次连接关闭
+        // 不修改状态——状态由 connected / 数据事件控制
     };
 }
 

@@ -13,52 +13,10 @@ use crate::types::{now_secs, DAEMON_STATS, DDOS_STATS};
 ///
 /// 提前退出:4 个 key 都找到后立即 break,避免读完整文件。
 ///
-/// # Returns
-/// `(banned, total_bans, total_unbans, whitelist_count)` 元组
+/// 程序内部走内存（`/proc/firewall/*` 是用户操作接口）
+/// 当前 netlink 不支持请求-响应，无内存计数器的字段暂返回 0。
 fn read_kernel_stats() -> (u64, u64, u64, u64) {
-    let mut banned: u64 = 0;
-    let mut total_bans: u64 = 0;
-    let mut total_unbans: u64 = 0;
-    let mut whitelist_count: u64 = 0;
-    let mut has_banned = false;
-    let mut has_total_bans = false;
-    let mut has_total_unbans = false;
-    let mut has_whitelist_count = false;
-
-    if let Ok(content) = std::fs::read_to_string("/proc/firewall/stats") {
-        for line in content.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() == 2 {
-                if let Ok(val) = parts[1].parse::<u64>() {
-                    match parts[0] {
-                        "current_bans" => {
-                            banned = val;
-                            has_banned = true;
-                        }
-                        "total_bans" => {
-                            total_bans = val;
-                            has_total_bans = true;
-                        }
-                        "total_unbans" => {
-                            total_unbans = val;
-                            has_total_unbans = true;
-                        }
-                        "current_whitelist" => {
-                            whitelist_count = val;
-                            has_whitelist_count = true;
-                        }
-                        _ => {}
-                    }
-                    // 4 个 key 都找到后提前退出
-                    if has_banned && has_total_bans && has_total_unbans && has_whitelist_count {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    (banned, total_bans, total_unbans, whitelist_count)
+    (0, 0, 0, 0)
 }
 
 // ============================================================================
