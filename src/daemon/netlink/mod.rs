@@ -348,14 +348,8 @@ impl NetlinkContext {
                     "packets_accepted" => stats.packets_accepted()
                 );
 
-                // 更新 DAEMON_STATS
-                crate::types::DAEMON_STATS
-                    .total_unbans
-                    .store(stats.total_unbans(), std::sync::atomic::Ordering::Relaxed);
-                crate::types::DAEMON_STATS.whitelist_count.store(
-                    stats.whitelist_count(),
-                    std::sync::atomic::Ordering::Relaxed,
-                );
+                // 更新 DAEMON_STATS（仅更新内核独有的统计）
+                // total_unbans 和 whitelist_count 由本地维护，不被内核响应覆盖
                 crate::types::DAEMON_STATS.packets_dropped.store(
                     stats.packets_dropped(),
                     std::sync::atomic::Ordering::Relaxed,
