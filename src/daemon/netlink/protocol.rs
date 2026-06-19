@@ -34,6 +34,10 @@ pub enum FwNlMsgType {
     ListWhitelistQuery = 10,
     /// 内核 → 守护进程：白名单列表响应
     ListWhitelistResponse = 11,
+    /// 守护进程 → 内核：添加白名单条目
+    AddWhitelist = 12,
+    /// 守护进程 → 内核：移除白名单条目
+    RemoveWhitelist = 13,
 }
 
 impl FwNlMsgType {
@@ -50,6 +54,8 @@ impl FwNlMsgType {
             9 => Some(Self::StatsResponse),
             10 => Some(Self::ListWhitelistQuery),
             11 => Some(Self::ListWhitelistResponse),
+            12 => Some(Self::AddWhitelist),
+            13 => Some(Self::RemoveWhitelist),
             _ => None,
         }
     }
@@ -604,5 +610,82 @@ impl FwNlListWhitelistResponse {
         }
 
         Ok((resp, entries))
+    }
+}
+
+// ============================================================================
+// 白名单操作命令
+// ============================================================================
+
+/// 白名单操作命令（守护进程 → 内核）
+/// 用于添加或移除白名单条目
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlWhitelistCmd {
+    pub hdr: FwNlMsgHdr,
+    pub af: u8,           // 地址族
+    pub prefix_len: u8,   // 前缀长度
+    pub addr: [u8; 16],   // IP 地址
+    pub device: [u8; 16], // 网络设备名称
+}
+
+impl FwNlWhitelistCmd {
+    /// 创建添加白名单命令
+    pub fn new_add(ip: &str, prefix_len: u8, device: &str) -> Result<Self> {
+        let (af, addr) = Self::parse_ip(ip)?;
+        let mut dev = [0u8; 16];
+        let dev_bytes = device.as_bytes();
+        let copy_len = dev_bytes.len().min(15);
+        dev[..copy_len].copy_from_slice(&dev_bytes[..copy_len]);
+
+        Ok(Self {
+            hdr: FwNlMsgHdr {
+                magic: FW_NL_MAGIC.to_be(),
+                msg_type: (FwNlMsgType::AddWhitelist as u16).to_be(),
+                msg_len: (std::mem::size_of::<Self>() as u16).to_be(),
+                seq: 0,
+            },
+            af,
+            prefix_len,
+            addr,
+            device: dev,
+        })
+    }
+
+    /// 创建移除白名单命令
+    pub fn new_remove(ip: &str, prefix_len: u8) -> Result<Self> {
+        let (af, addr) = Self::parse_ip(ip)?;
+
+        Ok(Self {
+            hdr: FwNlMsgHdr {
+                magic: FW_NL_MAGIC.to_be(),
+                msg_type: (FwNlMsgType::RemoveWhitelist as u16).to_be(),
+                msg_len: (std::mem::size_of::<Self>() as u16).to_be(),
+                seq: 0,
+            },
+            af,
+            prefix_len,
+            addr,
+            device: [0u8; 16],
+        })
+    }
+
+    /// 解析 IP 地址
+    fn parse_ip(ip: &str) -> Result<(u8, [u8; 16])> {
+        let addr: std::net::IpAddr = ip.parse().map_err(|_| anyhow::anyhow!("无效 IP 地址"))?;
+        match addr {
+            std::net::IpAddr::V4(v4) => {
+                let mut a = [0u8; 16];
+                a[..4].copy_from_slice(&v4.octets());
+                Ok((2, a)) // AF_INET
+            }
+            std::net::IpAddr::V6(v6) => Ok((10, v6.octets())), // AF_INET6
+        }
+    }
+
+    /// 转换为字节数组
+    pub fn to_bytes(self) -> Vec<u8> {
+        let ptr = &self as *const Self as *const u8;
+        unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
     }
 }

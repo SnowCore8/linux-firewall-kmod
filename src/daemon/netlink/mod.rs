@@ -16,7 +16,7 @@ use std::thread;
 use protocol::{
     FwNlBanCmd, FwNlBanStateChange, FwNlConfigUpdate, FwNlDdosEvent, FwNlListBansQuery,
     FwNlListBansResponse, FwNlListWhitelistQuery, FwNlListWhitelistResponse, FwNlMsgType,
-    FwNlStatsQuery, FwNlStatsResponse, FW_NL_MAGIC,
+    FwNlStatsQuery, FwNlStatsResponse, FwNlWhitelistCmd, FW_NL_MAGIC,
 };
 
 pub use decision::DdosDecisionEngine;
@@ -428,6 +428,18 @@ impl NetlinkContext {
     pub fn send_list_whitelist_query(&self, seq: u32) -> Result<()> {
         let query = FwNlListWhitelistQuery::new(seq);
         self.send_command(&query.to_bytes())
+    }
+
+    /// 发送添加白名单命令到内核
+    pub fn send_add_whitelist(&self, ip: &str, prefix_len: u8, device: &str) -> Result<()> {
+        let cmd = FwNlWhitelistCmd::new_add(ip, prefix_len, device)?;
+        self.send_command(&cmd.to_bytes())
+    }
+
+    /// 发送移除白名单命令到内核
+    pub fn send_remove_whitelist(&self, ip: &str, prefix_len: u8) -> Result<()> {
+        let cmd = FwNlWhitelistCmd::new_remove(ip, prefix_len)?;
+        self.send_command(&cmd.to_bytes())
     }
 
     /// 发送原始命令到内核

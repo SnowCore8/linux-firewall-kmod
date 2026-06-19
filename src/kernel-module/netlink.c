@@ -34,6 +34,8 @@ enum {
   FW_NL_STATS_RESPONSE = 9, /* 内核 → 守护进程：统计数据响应 */
   FW_NL_LIST_WHITELIST_QUERY = 10,    /* 守护进程 → 内核：查询白名单列表 */
   FW_NL_LIST_WHITELIST_RESPONSE = 11, /* 内核 → 守护进程：白名单列表响应 */
+  FW_NL_ADD_WHITELIST = 12,           /* 守护进程 → 内核：添加白名单条目 */
+  FW_NL_REMOVE_WHITELIST = 13,        /* 守护进程 → 内核：移除白名单条目 */
 };
 
 /* 消息头结构（20 字节） */
@@ -132,6 +134,15 @@ struct fw_nl_list_whitelist_response {
   struct fw_nlmsg_hdr hdr;
   __u32 count;
   /* 后面紧跟 count 个 fw_nl_whitelist_entry */
+} __packed;
+
+/* 白名单操作命令（守护进程 → 内核） */
+struct fw_nl_whitelist_cmd {
+  struct fw_nlmsg_hdr hdr;
+  __u8 af;             /* 地址族 */
+  __u8 prefix_len;     /* 前缀长度 */
+  __u8 addr[16];       /* IP 地址 */
+  __u8 device[16];     /* 网络设备名称 */
 } __packed;
 
 /* 全局 netlink socket */
@@ -726,6 +737,51 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       pr_info("netlink: list whitelist query received, seq=%u\n", be32_to_cpu(hdr->seq));
       fw_netlink_send_list_whitelist_response(be32_to_cpu(hdr->seq));
       break;
+
+    case FW_NL_ADD_WHITELIST: {
+      struct fw_nl_whitelist_cmd *cmd = (struct fw_nl_whitelist_cmd *)hdr;
+      char ip_str[INET6_STR_LEN];
+      int ret;
+
+      ip_to_str(cmd->af, cmd->addr, ip_str, sizeof(ip_str));
+      pr_info("netlink: add whitelist %s/%u dev %s\n", ip_str, cmd->prefix_len,
+              cmd->device[0] ? (char *)cmd->device : "(none)");
+
+      if (cmd->af == FW_AF_INET) {
+        /* IPv4: 根据 prefix_len 计算子网掩码 */
+        __be32 mask;
+        if (cmd->prefix_len == 0) {
+          mask = 0;
+        } else {
+          mask = htonl(~((1 << (32 - cmd->prefix_len)) - 1));
+        }
+        ret = add_whitelist_entry(&fw_info, cmd->af, cmd->addr, &mask, cmd->prefix_len,
+                                  cmd->device[0] ? (char *)cmd->device : NULL);
+      } else {
+        /* IPv6: 直接使用 prefix_len */
+        ret = add_whitelist_entry(&fw_info, cmd->af, cmd->addr, NULL, cmd->prefix_len,
+                                  cmd->device[0] ? (char *)cmd->device : NULL);
+      }
+      if (ret < 0) {
+        pr_warn("netlink: add whitelist failed: %d\n", ret);
+      }
+      break;
+    }
+
+    case FW_NL_REMOVE_WHITELIST: {
+      struct fw_nl_whitelist_cmd *cmd = (struct fw_nl_whitelist_cmd *)hdr;
+      char ip_str[INET6_STR_LEN];
+      int ret;
+
+      ip_to_str(cmd->af, cmd->addr, ip_str, sizeof(ip_str));
+      pr_info("netlink: remove whitelist %s/%u\n", ip_str, cmd->prefix_len);
+
+      ret = remove_whitelist_entry(&fw_info, cmd->af, cmd->addr, cmd->prefix_len);
+      if (ret < 0) {
+        pr_warn("netlink: remove whitelist failed: %d\n", ret);
+      }
+      break;
+    }
 
     default:
       pr_warn("unknown netlink message type: %u\n", be16_to_cpu(hdr->msg_type));

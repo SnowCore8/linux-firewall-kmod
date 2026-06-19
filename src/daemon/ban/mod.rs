@@ -62,24 +62,51 @@ pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
     let mut failed = Vec::new();
     let mut success_count = 0u64;
     for ip in trusted_ips {
-        let cidr = ip_to_cidr(ip);
-        let data = format!("{}\n", cidr);
-        if let Err(e) = secure_procfs_write(WHITELIST_PATH, data.as_bytes()) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "写入可信 IP 到白名单失败";
-                "ip" => %ip,
-                "error" => %e
-            );
-            failed.push(ip.clone());
+        let (ip_addr, prefix_len) = parse_cidr(ip);
+        // 优先走 netlink（程序内部通信走 netlink）
+        if let Some(netlink_ctx) = crate::netlink::get_global_netlink_ctx() {
+            if let Err(e) = netlink_ctx.send_add_whitelist(&ip_addr, prefix_len, "") {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "netlink 添加白名单失败，降级到 procfs";
+                    "ip" => %ip,
+                    "error" => %e
+                );
+                // 降级到 procfs
+                if let Err(e2) = secure_procfs_write(WHITELIST_PATH, format!("{}\n", ip).as_bytes())
+                {
+                    crate::logger::warn!(
+                        crate::logger::get(),
+                        "写入可信 IP 到白名单失败";
+                        "ip" => %ip,
+                        "error" => %e2
+                    );
+                    failed.push(ip.clone());
+                } else {
+                    success_count += 1;
+                }
+            } else {
+                crate::logger::info!(
+                    crate::logger::get(),
+                    "已添加可信 IP 到白名单（netlink）";
+                    "ip" => %ip
+                );
+                success_count += 1;
+            }
         } else {
-            crate::logger::info!(
-                crate::logger::get(),
-                "已添加可信 IP 到白名单";
-                "ip" => %ip,
-                "cidr" => %cidr
-            );
-            success_count += 1;
+            // netlink 不可用，直接写 procfs
+            let data = format!("{}\n", ip);
+            if let Err(e) = secure_procfs_write(WHITELIST_PATH, data.as_bytes()) {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "写入可信 IP 到白名单失败";
+                    "ip" => %ip,
+                    "error" => %e
+                );
+                failed.push(ip.clone());
+            } else {
+                success_count += 1;
+            }
         }
     }
     // 更新白名单计数器
@@ -102,24 +129,51 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
     let mut failed = Vec::new();
     let mut success_count = 0u64;
     for ip in trusted_ips {
-        let cidr = ip_to_cidr(ip);
-        let data = format!("remove {}\n", cidr);
-        if let Err(e) = secure_procfs_write(WHITELIST_PATH, data.as_bytes()) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "从白名单移除可信 IP 失败";
-                "ip" => %ip,
-                "error" => %e
-            );
-            failed.push(ip.clone());
+        let (ip_addr, prefix_len) = parse_cidr(ip);
+        // 优先走 netlink（程序内部通信走 netlink）
+        if let Some(netlink_ctx) = crate::netlink::get_global_netlink_ctx() {
+            if let Err(e) = netlink_ctx.send_remove_whitelist(&ip_addr, prefix_len) {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "netlink 移除白名单失败，降级到 procfs";
+                    "ip" => %ip,
+                    "error" => %e
+                );
+                // 降级到 procfs
+                let data = format!("remove {}\n", ip);
+                if let Err(e2) = secure_procfs_write(WHITELIST_PATH, data.as_bytes()) {
+                    crate::logger::warn!(
+                        crate::logger::get(),
+                        "从白名单移除可信 IP 失败";
+                        "ip" => %ip,
+                        "error" => %e2
+                    );
+                    failed.push(ip.clone());
+                } else {
+                    success_count += 1;
+                }
+            } else {
+                crate::logger::info!(
+                    crate::logger::get(),
+                    "已从白名单移除可信 IP（netlink）";
+                    "ip" => %ip
+                );
+                success_count += 1;
+            }
         } else {
-            crate::logger::info!(
-                crate::logger::get(),
-                "已从白名单移除可信 IP";
-                "ip" => %ip,
-                "cidr" => %cidr
-            );
-            success_count += 1;
+            // netlink 不可用，直接写 procfs
+            let data = format!("remove {}\n", ip);
+            if let Err(e) = secure_procfs_write(WHITELIST_PATH, data.as_bytes()) {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "从白名单移除可信 IP 失败";
+                    "ip" => %ip,
+                    "error" => %e
+                );
+                failed.push(ip.clone());
+            } else {
+                success_count += 1;
+            }
         }
     }
     // 更新白名单计数器
@@ -129,6 +183,19 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
             .fetch_sub(success_count, std::sync::atomic::Ordering::Relaxed);
     }
     failed
+}
+
+/// 解析 CIDR 格式，返回 (IP地址, 前缀长度)
+fn parse_cidr(ip: &str) -> (String, u8) {
+    if let Some(pos) = ip.find('/') {
+        let ip_addr = &ip[..pos];
+        let prefix_len = ip[pos + 1..].parse::<u8>().unwrap_or(if ip.contains(':') { 128 } else { 32 });
+        (ip_addr.to_string(), prefix_len)
+    } else if ip.contains(':') {
+        (ip.to_string(), 128)
+    } else {
+        (ip.to_string(), 32)
+    }
 }
 
 /// 将 IP 或 CIDR 转换为标准 CIDR 格式。
