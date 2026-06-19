@@ -298,23 +298,24 @@ impl NetlinkContext {
                 // 更新 ACTIVE_BAN_CACHE
                 let cache =
                     crate::types::ACTIVE_BAN_CACHE.get_or_init(crate::types::ActiveBanCache::new);
-                let now = crate::types::now_secs();
 
                 for entry in &entries {
                     let ip_str = FwNlListBansResponse::ip_str(entry);
                     let duration = u32::from_be(entry.duration_secs);
                     let is_permanent = entry.is_permanent != 0;
+                    // 使用内核提供的实际封禁时间（unix 时间戳）
+                    let banned_at = u64::from_be(entry.banned_at) as i64;
 
                     let ban_info = crate::types::BanInfo {
                         ip: ip_str.clone(),
                         ip_num: 0,
                         jail_name: "kernel".to_string(),
                         reason: crate::types::BanReason::ManualBan,
-                        banned_at: now,
+                        banned_at,
                         expires_at: if is_permanent {
                             0
                         } else {
-                            now + duration as i64
+                            banned_at + duration as i64
                         },
                         is_permanent,
                         fail_count: 0,

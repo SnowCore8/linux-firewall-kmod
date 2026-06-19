@@ -329,6 +329,7 @@ int fw_netlink_send_list_bans_response(u32 seq) {
     unsigned long ban_time = READ_ONCE(entry->ban_time);
     unsigned long unban_time = READ_ONCE(entry->unban_time);
     u32 duration_secs;
+    s64 banned_at;
 
     if (count >= max_entries) {
       break;
@@ -345,6 +346,10 @@ int fw_netlink_send_list_bans_response(u32 seq) {
     }
     entries[count].duration_secs = cpu_to_be32(duration_secs);
 
+    /* 计算封禁时间（unix 时间戳） */
+    banned_at = ktime_get_real_seconds() - (jiffies - ban_time) / HZ;
+    entries[count].banned_at = cpu_to_be64(banned_at);
+
     memset(entries[count].addr, 0, sizeof(entries[count].addr));
     memcpy(entries[count].addr, &entry->addr.ipv4, 4);
     count++;
@@ -355,6 +360,7 @@ int fw_netlink_send_list_bans_response(u32 seq) {
     unsigned long ban_time = READ_ONCE(entry->ban_time);
     unsigned long unban_time = READ_ONCE(entry->unban_time);
     u32 duration_secs;
+    s64 banned_at;
 
     if (count >= max_entries) {
       break;
@@ -370,6 +376,10 @@ int fw_netlink_send_list_bans_response(u32 seq) {
       duration_secs = (unban_time > ban_time) ? ((unban_time - ban_time) / HZ) : 0;
     }
     entries[count].duration_secs = cpu_to_be32(duration_secs);
+
+    /* 计算封禁时间（unix 时间戳） */
+    banned_at = ktime_get_real_seconds() - (jiffies - ban_time) / HZ;
+    entries[count].banned_at = cpu_to_be64(banned_at);
 
     memcpy(entries[count].addr, &entry->addr.ipv6, 16);
     count++;
