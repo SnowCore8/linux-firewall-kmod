@@ -188,9 +188,8 @@ impl FwNlBanCmd {
     }
 
     /// 转换为字节数组
-    #[allow(clippy::wrong_self_convention)] // `&self` 显式表达"读取结构体生成字节"语义
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let ptr = self as *const Self as *const u8;
+    pub fn to_bytes(self) -> Vec<u8> {
+        let ptr = &self as *const Self as *const u8;
         unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
     }
 }
@@ -259,9 +258,8 @@ impl FwNlConfigUpdate {
     }
 
     /// 转换为字节数组
-    #[allow(clippy::wrong_self_convention)] // `&self` 显式表达"读取结构体生成字节"语义
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let ptr = self as *const Self as *const u8;
+    pub fn to_bytes(self) -> Vec<u8> {
+        let ptr = &self as *const Self as *const u8;
         unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
     }
 }

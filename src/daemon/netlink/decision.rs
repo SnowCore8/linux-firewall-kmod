@@ -14,25 +14,21 @@ use crate::netlink::NetlinkContext;
 use crate::types::{now_secs, DdosConfig, DDOS_STATS};
 
 /// 每 IP 违规跟踪条目
+///
+/// IP 地址作为 HashMap key 已存储，此处仅记录运行时状态。
+/// 移除冗余 `ip` 字段和未被读取的 `first_violation` 字段。
 #[derive(Debug)]
-#[allow(dead_code)] // ip/first_violation 通过 Debug trait 间接使用
 struct IpViolationTracker {
-    /// IP 地址
-    ip: IpAddr,
     /// 违规次数
     violation_count: AtomicU32,
-    /// 首次违规时间
-    first_violation: i64,
     /// 最后违规时间（原子类型，支持并发访问）
     last_violation: AtomicI64,
 }
 
 impl IpViolationTracker {
-    fn new(ip: IpAddr, now: i64) -> Self {
+    fn new(now: i64) -> Self {
         Self {
-            ip,
             violation_count: AtomicU32::new(1),
-            first_violation: now,
             last_violation: AtomicI64::new(now),
         }
     }
@@ -92,7 +88,7 @@ impl DdosDecisionEngine {
             if let Some(existing) = trackers.get(&ip) {
                 existing.clone()
             } else {
-                let new_tracker = Arc::new(IpViolationTracker::new(ip, now));
+                let new_tracker = Arc::new(IpViolationTracker::new(now));
                 trackers.insert(ip, new_tracker.clone());
                 new_tracker
             }
