@@ -8,7 +8,7 @@ use std::time::SystemTime;
 use anyhow::Result;
 use inotify::WatchDescriptor;
 
-use crate::config_reloader::{cleanup_partial_line_buffer, reload_configuration};
+use crate::config_reloader::{cleanup_partial_line_buffer, reload_configuration, rollback_config};
 use crate::log_rotation::{check_for_new_log_files, handle_log_rotation};
 use crate::types::{Config, DAEMON_STATS};
 
@@ -120,8 +120,19 @@ pub fn monitor_loop(
                 "poll 返回有事件";
                 "poll_result" => poll_result
             );
-            // 优先检查配置重载标志（SIGHUP 可能在 inotify 事件期间到达）
-            if reload_config.load(Ordering::Relaxed) {
+            // 优先检查配置回滚标志（SIGUSR1 触发）
+            if crate::signals::GLOBAL_ROLLBACK.load(Ordering::Relaxed) {
+                crate::signals::GLOBAL_ROLLBACK.store(false, Ordering::Relaxed);
+                if let Err(e) = rollback_config(cfg) {
+                    crate::logger::warn!(
+                        crate::logger::get(),
+                        "配置回滚失败";
+                        "error" => %e
+                    );
+                } else {
+                    crate::logger::info!(crate::logger::get(), "配置回滚成功");
+                }
+            } else if reload_config.load(Ordering::Relaxed) {
                 reload_config.store(false, Ordering::Relaxed);
                 if let Err(e) = reload_configuration(cfg) {
                     crate::logger::warn!(

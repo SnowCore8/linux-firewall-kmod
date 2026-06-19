@@ -1,4 +1,4 @@
-//! CLI 参数解析 (`--config`, `--daemon`, `--strict`, `--help`)
+//! CLI 参数解析 (`--config`, `--daemon`, `--strict`, `--rollback`, `--help`)
 
 use anyhow::Result;
 
@@ -18,12 +18,14 @@ OPTIONS:
     -C, --config-dir <DIR>  配置目录路径 (加载目录下所有 .yaml 文件)
     -d, --daemon            以守护进程模式运行 (后台化 + PID 文件)
         --no-strict         宽松模式: 忽略未知配置 key (默认: 严格模式)
+        --rollback          回滚到上一个配置版本 (需守护进程运行中)
     -h, --help              显示帮助信息
 
 EXAMPLES:
     firewall-daemon -c /etc/firewall-daemon/config.yml
     firewall-daemon -C /etc/firewall -d
     firewall-daemon --config-dir /etc/firewall --daemon
+    firewall-daemon --rollback
 
 CONFIGURATION:
     配置文件为 YAML 格式, 必须包含 'jails' 列表。
@@ -33,7 +35,7 @@ CONFIGURATION:
     后加载的文件可覆盖先加载的配置。
 
 EXIT CODES:
-    0   正常退出 (含 --help)
+    0   正常退出 (含 --help / --rollback 成功)
     1   启动失败 (配置错误 / 内核模块未加载 / procfs 不可用)
     2   运行时错误 (日志文件不可读 / 权限不足)
 
@@ -48,7 +50,7 @@ VERSION:
 // 参数解析
 // ============================================================================
 
-/// 解析命令行参数, 返回 `(config_path, daemon_mode, strict_mode)`。
+/// 解析命令行参数, 返回 `(config_path, daemon_mode, strict_mode, rollback)`。
 ///
 /// # 支持的参数形式
 ///
@@ -57,19 +59,21 @@ VERSION:
 /// | `-c FILE` | `--config=FILE`, `--config FILE` | `/etc/firewall-daemon/config.yml` |
 /// | `-d` | `--daemon` | `false` |
 /// | `--no-strict` | - | `false` (默认严格模式) |
+/// | `--rollback` | - | `false` |
 /// | `-h` | `--help` | - |
 ///
 /// # Returns
-/// - `Some((path, daemon, strict))`: 正常解析结果
+/// - `Some((path, daemon, strict, rollback))`: 正常解析结果
 /// - `None`: `--help` 已打印帮助, 调用方应直接 `Ok(())` 退出
 ///
 /// # Errors
 /// - 未知参数
 /// - `-c` / `--config` 缺少值
-pub fn parse_config_args(args: &[String]) -> Result<Option<(String, bool, bool)>> {
+pub fn parse_config_args(args: &[String]) -> Result<Option<(String, bool, bool, bool)>> {
     let mut config_path = "/etc/firewall-daemon/config.yml".to_string();
     let mut daemon_mode = false;
     let mut strict_mode = true;
+    let mut rollback = false;
     let mut i = 1; // 跳过 args[0] (程序名)
 
     while i < args.len() {
@@ -106,6 +110,9 @@ pub fn parse_config_args(args: &[String]) -> Result<Option<(String, bool, bool)>
             "--no-strict" => {
                 strict_mode = false;
             }
+            "--rollback" => {
+                rollback = true;
+            }
             other => {
                 anyhow::bail!("Unknown argument: {}", other);
             }
@@ -113,5 +120,5 @@ pub fn parse_config_args(args: &[String]) -> Result<Option<(String, bool, bool)>
         i += 1;
     }
 
-    Ok(Some((config_path, daemon_mode, strict_mode)))
+    Ok(Some((config_path, daemon_mode, strict_mode, rollback)))
 }

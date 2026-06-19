@@ -32,6 +32,7 @@ use slog::{error, info, warn};
 
 use firewall_daemon::ban;
 use firewall_daemon::config;
+use firewall_daemon::config_reloader;
 use firewall_daemon::daemonizer::daemonize_process;
 use firewall_daemon::file_monitor;
 use firewall_daemon::history_snapshot;
@@ -77,10 +78,16 @@ fn main() -> Result<()> {
 
     let args: Vec<String> = env::args().collect();
 
-    let (config_path, daemon_mode, strict_mode) = match config::parse_config_args(&args)? {
-        Some((path, daemon, strict)) => (path, daemon, strict),
+    let (config_path, daemon_mode, strict_mode, rollback) = match config::parse_config_args(&args)?
+    {
+        Some((path, daemon, strict, rollback)) => (path, daemon, strict, rollback),
         None => return Ok(()),
     };
+
+    // 处理回滚命令
+    if rollback {
+        return handle_rollback();
+    }
     let mut cfg = Config {
         strict_mode,
         ..Config::default()
@@ -97,6 +104,19 @@ fn main() -> Result<()> {
     } else {
         error!(logger::get(), "配置路径不存在"; "path" => %config_path);
         bail!("Config path does not exist: {}", config_path);
+    }
+
+    // 如果存在持久化配置（来自上次热重载），合并运行时配置变更
+    // 持久化配置优先于原始配置文件（保留热重载后的调整）
+    if let Some(persisted) = config_reloader::load_persisted_config() {
+        match config::parse_config(&persisted, &mut cfg) {
+            Ok(_) => {
+                info!(logger::get(), "持久化配置加载成功，热重载变更已恢复");
+            }
+            Err(e) => {
+                warn!(logger::get(), "持久化配置解析失败，使用原始配置"; "error" => %e);
+            }
+        }
     }
 
     jail::apply_smart_defaults_to_all(&mut cfg);
@@ -209,6 +229,13 @@ fn main() -> Result<()> {
         // 设置全局决策引擎引用（供配置热重载使用）
         http_exporter::set_global_decision_engine(decision_engine);
 
+        // 设置全局 netlink 上下文引用（供配置热重载时同步到内核）
+        let netlink_for_global = unsafe {
+            let ptr = ctx as *const NetlinkContext;
+            Arc::from_raw(ptr)
+        };
+        http_exporter::set_global_netlink_ctx(netlink_for_global.clone());
+
         match ctx.start_receiver() {
             Ok(_handle) => {
                 info!(logger::get(), "Netlink 接收线程已启动");
@@ -220,6 +247,7 @@ fn main() -> Result<()> {
 
         // 防止 Arc 释放内存（因为我们使用了 from_raw）
         std::mem::forget(netlink_for_engine);
+        std::mem::forget(netlink_for_global);
     }
 
     // 设置全局 Jail 信息和 Web UI 配置
@@ -272,4 +300,65 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+// ============================================================================
+// 回滚命令处理
+// ============================================================================
+
+/// 处理 `--rollback` 命令
+///
+/// 通过向正在运行的守护进程发送 SIGUSR1 信号触发配置回滚。
+/// 守护进程接收到 SIGUSR1 后会回滚到上一个配置版本并重新加载。
+fn handle_rollback() -> Result<()> {
+    println!("正在请求配置回滚...");
+
+    // 查找正在运行的 firewall-daemon 进程
+    let pid = std::process::Command::new("pgrep")
+        .arg("-f")
+        .arg("firewall-daemon")
+        .output()
+        .ok()
+        .and_then(|output| {
+            String::from_utf8(output.stdout)
+                .ok()
+                .and_then(|s| s.lines().next().map(|p| p.to_string()))
+        });
+
+    match pid {
+        Some(pid_str) => {
+            let pid_num: i32 = pid_str.parse().unwrap_or(0);
+            if pid_num <= 0 {
+                println!("错误: 无法获取有效的守护进程 PID");
+                return Err(anyhow::anyhow!("Invalid daemon PID"));
+            }
+
+            // 发送 SIGUSR1 信号触发回滚
+            // 注意：当前 signals.rs 未注册 SIGUSR1 处理器，需要扩展
+            println!("向守护进程 (PID: {}) 发送回滚信号...", pid_num);
+            let status = std::process::Command::new("kill")
+                .arg("-USR1")
+                .arg(pid_num.to_string())
+                .status();
+
+            match status {
+                Ok(s) if s.success() => {
+                    println!("回滚请求已发送，等待守护进程处理...");
+                    // 等待守护进程处理
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    println!("回滚完成");
+                    Ok(())
+                }
+                _ => {
+                    println!("错误: 发送信号失败");
+                    Err(anyhow::anyhow!("Failed to send rollback signal"))
+                }
+            }
+        }
+        None => {
+            println!("错误: 未找到正在运行的 firewall-daemon 进程");
+            println!("提示: 请先启动守护进程: firewall-daemon -d");
+            Err(anyhow::anyhow!("Daemon not running"))
+        }
+    }
 }

@@ -14,6 +14,8 @@ use anyhow::{bail, Result};
 pub static GLOBAL_RUNNING: AtomicBool = AtomicBool::new(true);
 /// 全局重载标志，供信号处理器访问
 pub static GLOBAL_RELOAD: AtomicBool = AtomicBool::new(false);
+/// 全局回滚标志，供信号处理器访问
+pub static GLOBAL_ROLLBACK: AtomicBool = AtomicBool::new(false);
 
 // ============================================================================
 // 信号处理器
@@ -29,14 +31,20 @@ extern "C" fn handle_sighup(_sig: libc::c_int) {
     GLOBAL_RELOAD.store(true, Ordering::SeqCst);
 }
 
+/// SIGUSR1 信号处理器：设置全局回滚标志为 true
+extern "C" fn handle_sigusr1(_sig: libc::c_int) {
+    GLOBAL_ROLLBACK.store(true, Ordering::SeqCst);
+}
+
 // ============================================================================
 // 信号注册
 // ============================================================================
 
-/// 注册 4 个信号到全局原子标志。
+/// 注册 5 个信号到全局原子标志。
 ///
 /// - `SIGTERM` / `SIGINT` → `GLOBAL_RUNNING` (主循环退出)
 /// - `SIGHUP` → `GLOBAL_RELOAD` (主循环触发热重载)
+/// - `SIGUSR1` → `GLOBAL_ROLLBACK` (主循环触发配置回滚)
 /// - `SIGPIPE` → 忽略 (HTTP 客户端断开时不被信号杀死)
 ///
 /// # Errors
@@ -79,6 +87,18 @@ pub fn setup_signals() -> Result<()> {
         if libc::sigaction(libc::SIGHUP, &sa_hup, std::ptr::null_mut()) != 0 {
             bail!(
                 "sigaction(SIGHUP) failed: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+
+        // SIGUSR1 处理器（配置回滚）
+        let mut sa_usr1: libc::sigaction = std::mem::zeroed();
+        sa_usr1.sa_sigaction = handle_sigusr1 as *const () as usize;
+        sa_usr1.sa_flags = 0; // 不使用 SA_RESTART
+        libc::sigemptyset(&mut sa_usr1.sa_mask);
+        if libc::sigaction(libc::SIGUSR1, &sa_usr1, std::ptr::null_mut()) != 0 {
+            bail!(
+                "sigaction(SIGUSR1) failed: {}",
                 std::io::Error::last_os_error()
             );
         }

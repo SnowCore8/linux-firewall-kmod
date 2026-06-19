@@ -16,6 +16,7 @@ use std::thread;
 use protocol::{FwNlBanCmd, FwNlConfigUpdate, FwNlDdosEvent, FwNlMsgType, FW_NL_MAGIC};
 
 pub use decision::DdosDecisionEngine;
+pub use protocol::{config_flags, FwNlConfigUpdate as ConfigUpdate};
 
 /// Netlink 协议号（NETLINK_USERSOCK）
 const NETLINK_USERSOCK: i32 = 2;

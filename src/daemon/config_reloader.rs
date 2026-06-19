@@ -207,8 +207,29 @@ fn sync_config_to_components(cfg: &Config) -> Result<()> {
     }
 
     // 2. 同步到内核模块（通过 netlink）
-    // 注意：当前架构下 netlink 上下文不在全局存储中，暂时跳过内核同步
-    // 需要重启守护进程或手动发送 netlink 消息
+    if let Some(netlink) = crate::http_exporter::get_global_netlink_ctx() {
+        use crate::netlink::{config_flags, ConfigUpdate};
+
+        // 构建配置更新消息
+        let config_update = ConfigUpdate::new(config_flags::BAN_TIME | config_flags::MAX_PPS)
+            .with_ban_time(cfg.ddos.auto_ban_duration)
+            .with_max_pps(cfg.ddos.global_conn_rate as u64);
+
+        if let Err(e) = netlink.send_config_update(&config_update) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "同步配置到内核模块失败";
+                "error" => %e
+            );
+        } else {
+            crate::logger::info!(
+                crate::logger::get(),
+                "配置已同步到内核模块";
+                "ban_time" => cfg.ddos.auto_ban_duration,
+                "max_pps" => cfg.ddos.global_conn_rate
+            );
+        }
+    }
 
     // 3. 更新全局 Web UI 配置
     crate::http_exporter::set_global_webui_config(cfg.webui.clone());
