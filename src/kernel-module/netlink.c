@@ -28,6 +28,10 @@ enum {
   FW_NL_UNBAN_IP = 3,         /* 守护进程 → 内核：解封 IP */
   FW_NL_SET_CONFIG = 4,       /* 守护进程 → 内核：配置更新 */
   FW_NL_BAN_STATE_CHANGE = 5, /* 内核 → 守护进程：封禁状态变更 */
+  FW_NL_LIST_BANS_QUERY = 6,  /* 守护进程 → 内核：查询封禁列表 */
+  FW_NL_LIST_BANS_RESPONSE = 7, /* 内核 → 守护进程：封禁列表响应 */
+  FW_NL_STATS_QUERY = 8,    /* 守护进程 → 内核：查询统计数据 */
+  FW_NL_STATS_RESPONSE = 9, /* 内核 → 守护进程：统计数据响应 */
 };
 
 /* 消息头结构（20 字节） */
@@ -85,6 +89,33 @@ struct fw_nl_config_update {
 #define FW_NL_CFG_MAX_SYN (1 << 4)
 #define FW_NL_CFG_MAX_UDP (1 << 5)
 #define FW_NL_CFG_MAX_ICMP (1 << 6)
+
+/* 封禁条目（内核 → 守护进程） */
+struct fw_nl_ban_entry {
+  __u8 af;
+  __u8 is_permanent;
+  __u32 duration_secs;
+  __u64 banned_at;
+  __u8 addr[16];
+} __packed;
+
+/* 封禁列表响应（内核 → 守护进程） */
+struct fw_nl_list_bans_response {
+  struct fw_nlmsg_hdr hdr;
+  __u32 count;
+  /* 后面紧跟 count 个 fw_nl_ban_entry */
+} __packed;
+
+/* 统计数据响应（内核 → 守护进程） */
+struct fw_nl_stats_response {
+  struct fw_nlmsg_hdr hdr;
+  __u64 current_bans;
+  __u64 total_bans;
+  __u64 total_unbans;
+  __u64 whitelist_count;
+  __u64 packets_dropped;
+  __u64 packets_accepted;
+} __packed;
 
 /* 全局 netlink socket */
 static struct sock *fw_nl_sock = NULL;
@@ -217,6 +248,62 @@ int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 durat
   if (ret < 0 && ret != -ESRCH) {
     /* -ESRCH 表示没有监听者，这是正常情况 */
     pr_warn_ratelimited("netlink broadcast ban state change failed: %d\n", ret);
+    return ret;
+  }
+
+  return 0;
+}
+
+/**
+ * fw_netlink_send_stats_response - 向守护进程发送统计数据响应
+ * @seq: 请求序列号
+ *
+ * 响应守护进程的 StatsQuery 请求，发送当前统计数据。
+ */
+int fw_netlink_send_stats_response(u32 seq) {
+  struct sk_buff *skb;
+  struct nlmsghdr *nlh;
+  struct fw_nl_stats_response *resp;
+  int ret;
+
+  if (!fw_nl_sock) {
+    return -ENOTCONN;
+  }
+
+  /* 分配 netlink 消息缓冲区 */
+  skb = nlmsg_new(sizeof(*resp), GFP_ATOMIC);
+  if (!skb) {
+    return -ENOMEM;
+  }
+
+  /* 构造消息头 */
+  nlh = nlmsg_put(skb, 0, 0, FW_NL_STATS_RESPONSE, sizeof(*resp), 0);
+  if (!nlh) {
+    kfree_skb(skb);
+    return -ENOMEM;
+  }
+
+  /* 获取 payload 指针 */
+  resp = (struct fw_nl_stats_response *)nlmsg_data(nlh);
+
+  /* 填充消息头 */
+  resp->hdr.magic = cpu_to_be32(FW_NL_MAGIC);
+  resp->hdr.msg_type = cpu_to_be16(FW_NL_STATS_RESPONSE);
+  resp->hdr.msg_len = cpu_to_be16(sizeof(*resp));
+  resp->hdr.seq = cpu_to_be32(seq);
+
+  /* 填充统计数据 */
+  resp->current_bans = cpu_to_be64(atomic_read(&fw_info.ban_count));
+  resp->total_bans = cpu_to_be64(atomic_read(&fw_info.total_ban_count));
+  resp->total_unbans = cpu_to_be64(atomic_read(&fw_info.total_unban_count));
+  resp->whitelist_count = cpu_to_be64(atomic_read(&fw_info.whitelist_count));
+  resp->packets_dropped = cpu_to_be64(atomic64_read(&fw_info.packets_dropped));
+  resp->packets_accepted = cpu_to_be64(atomic64_read(&fw_info.packets_accepted));
+
+  /* 单播消息给守护进程（pid=0 表示广播） */
+  ret = netlink_unicast(fw_nl_sock, skb, 0, MSG_DONTWAIT);
+  if (ret < 0) {
+    pr_warn_ratelimited("netlink unicast stats response failed: %d\n", ret);
     return ret;
   }
 
@@ -362,6 +449,11 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       pr_info("netlink: config updated, %d items changed\n", updated);
       break;
     }
+
+    case FW_NL_STATS_QUERY:
+      pr_info("netlink: stats query received, seq=%u\n", be32_to_cpu(hdr->seq));
+      fw_netlink_send_stats_response(be32_to_cpu(hdr->seq));
+      break;
 
     default:
       pr_warn("unknown netlink message type: %u\n", be16_to_cpu(hdr->msg_type));
