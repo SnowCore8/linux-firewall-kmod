@@ -202,48 +202,79 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       __u32 flags = be32_to_cpu(cfg->flags);
       int updated = 0;
 
-      /* 根据标志位更新对应配置项 */
+      /* 配置验证：拒绝危险值 */
       if (flags & FW_NL_CFG_BAN_TIME) {
-        fw_info.ban_time = be32_to_cpu(cfg->ban_time);
-        pr_info("netlink: ban_time updated to %u seconds\n", fw_info.ban_time);
+        __u32 new_ban_time = be32_to_cpu(cfg->ban_time);
+        if (new_ban_time == 0) {
+          pr_warn("netlink: reject ban_time=0 (ambiguous, use procfs for permanent ban)\n");
+          flags &= ~FW_NL_CFG_BAN_TIME;
+        }
+      }
+
+      if (flags & FW_NL_CFG_MAX_PPS) {
+        __u64 new_pps = be64_to_cpu(cfg->max_packets_per_second);
+        if (new_pps == 0) {
+          pr_warn("netlink: reject max_packets_per_second=0 (would drop all traffic)\n");
+          flags &= ~FW_NL_CFG_MAX_PPS;
+        }
+      }
+
+      if (flags & FW_NL_CFG_MAX_BPS) {
+        __u64 new_bps = be64_to_cpu(cfg->max_bytes_per_second);
+        if (new_bps == 0) {
+          pr_warn("netlink: reject max_bytes_per_second=0 (would drop all traffic)\n");
+          flags &= ~FW_NL_CFG_MAX_BPS;
+        }
+      }
+
+      /* 使用 WRITE_ONCE 确保原子写入和内存可见性 */
+      if (flags & FW_NL_CFG_BAN_TIME) {
+        WRITE_ONCE(fw_info.ban_time, be32_to_cpu(cfg->ban_time));
+        pr_info("netlink: ban_time updated to %u seconds\n", READ_ONCE(fw_info.ban_time));
         updated++;
       }
 
       if (flags & FW_NL_CFG_RATE_WINDOW) {
-        fw_info.rate_window_seconds = be32_to_cpu(cfg->rate_window_seconds);
-        fw_info.rate_window_jiffies = msecs_to_jiffies(fw_info.rate_window_seconds * 1000);
-        pr_info("netlink: rate_window updated to %u seconds\n", fw_info.rate_window_seconds);
+        __u32 new_window = be32_to_cpu(cfg->rate_window_seconds);
+        WRITE_ONCE(fw_info.rate_window_seconds, new_window);
+        smp_wmb(); /* 确保 seconds 写入在 jiffies 之前可见 */
+        WRITE_ONCE(fw_info.rate_window_jiffies, msecs_to_jiffies(new_window * 1000));
+        pr_info("netlink: rate_window updated to %u seconds\n", new_window);
         updated++;
       }
 
       if (flags & FW_NL_CFG_MAX_PPS) {
-        fw_info.max_packets_per_second = be64_to_cpu(cfg->max_packets_per_second);
+        WRITE_ONCE(fw_info.max_packets_per_second, be64_to_cpu(cfg->max_packets_per_second));
         pr_info("netlink: max_packets_per_second updated to %lu\n",
-                fw_info.max_packets_per_second);
+                READ_ONCE(fw_info.max_packets_per_second));
         updated++;
       }
 
       if (flags & FW_NL_CFG_MAX_BPS) {
-        fw_info.max_bytes_per_second = be64_to_cpu(cfg->max_bytes_per_second);
-        pr_info("netlink: max_bytes_per_second updated to %lu\n", fw_info.max_bytes_per_second);
+        WRITE_ONCE(fw_info.max_bytes_per_second, be64_to_cpu(cfg->max_bytes_per_second));
+        pr_info("netlink: max_bytes_per_second updated to %lu\n",
+                READ_ONCE(fw_info.max_bytes_per_second));
         updated++;
       }
 
       if (flags & FW_NL_CFG_MAX_SYN) {
-        fw_info.max_syn_per_second = be64_to_cpu(cfg->max_syn_per_second);
-        pr_info("netlink: max_syn_per_second updated to %lu\n", fw_info.max_syn_per_second);
+        WRITE_ONCE(fw_info.max_syn_per_second, be64_to_cpu(cfg->max_syn_per_second));
+        pr_info("netlink: max_syn_per_second updated to %lu\n",
+                READ_ONCE(fw_info.max_syn_per_second));
         updated++;
       }
 
       if (flags & FW_NL_CFG_MAX_UDP) {
-        fw_info.max_udp_per_second = be64_to_cpu(cfg->max_udp_per_second);
-        pr_info("netlink: max_udp_per_second updated to %lu\n", fw_info.max_udp_per_second);
+        WRITE_ONCE(fw_info.max_udp_per_second, be64_to_cpu(cfg->max_udp_per_second));
+        pr_info("netlink: max_udp_per_second updated to %lu\n",
+                READ_ONCE(fw_info.max_udp_per_second));
         updated++;
       }
 
       if (flags & FW_NL_CFG_MAX_ICMP) {
-        fw_info.max_icmp_per_second = be64_to_cpu(cfg->max_icmp_per_second);
-        pr_info("netlink: max_icmp_per_second updated to %lu\n", fw_info.max_icmp_per_second);
+        WRITE_ONCE(fw_info.max_icmp_per_second, be64_to_cpu(cfg->max_icmp_per_second));
+        pr_info("netlink: max_icmp_per_second updated to %lu\n",
+                READ_ONCE(fw_info.max_icmp_per_second));
         updated++;
       }
 
