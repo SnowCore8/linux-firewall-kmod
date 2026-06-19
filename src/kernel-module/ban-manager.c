@@ -458,12 +458,18 @@ static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip, bool p
 
 int unban_ip(struct firewall_info *fw, u8 af, const void *ip) {
   int ret = __do_unban_ip(fw, af, ip, false);
+  if (ret == 0) {
+    fw_netlink_send_ban_state_change(af, ip, 2, 0);
+  }
   return ret;
 }
 EXPORT_SYMBOL_GPL(unban_ip);
 
 int unban_permanent_ip(struct firewall_info *fw, u8 af, const void *ip) {
   int ret = __do_unban_ip(fw, af, ip, true);
+  if (ret == 0) {
+    fw_netlink_send_ban_state_change(af, ip, 2, 0);
+  }
   return ret;
 }
 EXPORT_SYMBOL_GPL(unban_permanent_ip);

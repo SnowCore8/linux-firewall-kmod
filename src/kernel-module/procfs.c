@@ -421,12 +421,12 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
     return result;
 
   /* 通过 netlink 推送封禁状态变更事件给守护进程 */
-  {
-    u8 action = is_unban ? 2 : 1; /* 1=ban, 2=unban */
+  /* 注意：解封事件由 unban_ip() 内部推送，这里只推送封禁事件 */
+  if (!is_unban) {
     u32 duration = (seconds < 0) ? 0 : (u32)seconds;
     const void *ip_ptr = (af == FW_AF_INET) ? (const void *)&ip_addr.ipv4 :
                                               (const void *)&ip_addr.ipv6;
-    fw_netlink_send_ban_state_change(af, ip_ptr, action, duration);
+    fw_netlink_send_ban_state_change(af, ip_ptr, 1, duration);
   }
 
   return count;
