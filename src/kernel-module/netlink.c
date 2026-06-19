@@ -176,8 +176,8 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       break;
 
     case FW_NL_SET_CONFIG:
-      /* TODO: 实现配置热更新 */
-      pr_info("netlink: config update (not implemented)\n");
+      /* 配置热更新暂未实现，守护进程通过重启应用新配置 */
+      pr_warn("netlink: SET_CONFIG not supported, restart daemon instead\n");
       break;
 
     default:
