@@ -137,6 +137,11 @@ impl FwNlBanStateChange {
         }
     }
 
+    /// 获取封禁时长（秒），转换字节序
+    pub fn duration_secs(&self) -> u32 {
+        u32::from_be(self.duration_secs)
+    }
+
     /// 是否为封禁操作
     pub fn is_ban(&self) -> bool {
         self.action == 1

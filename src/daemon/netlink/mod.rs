@@ -172,16 +172,38 @@ impl NetlinkContext {
         // 解析 netlink 消息头
         let _nlh: &nlmsghdr = unsafe { &*(data.as_ptr() as *const nlmsghdr) };
 
-        // 获取自定义消息头
-        let hdr_data = &data[std::mem::size_of::<nlmsghdr>()..];
-        if hdr_data.len() < 12 {
-            anyhow::bail!("自定义消息头太短");
-        }
+        // 获取自定义消息头（从 nlmsghdr 之后开始）
+        // 解析 netlink 消息头
+        let nlh: &nlmsghdr = unsafe { &*(data.as_ptr() as *const nlmsghdr) };
+        crate::logger::warn!(
+            crate::logger::get(),
+            "nlmsghdr 调试信息";
+            "nlmsg_len" => nlh.nlmsg_len,
+            "nlmsg_type" => nlh.nlmsg_type,
+            "nlmsg_flags" => nlh.nlmsg_flags,
+            "nlmsg_seq" => nlh.nlmsg_seq,
+            "nlmsg_pid" => nlh.nlmsg_pid,
+            "data_len" => data.len()
+        );
 
-        // 解析魔数、类型、长度
+        // 获取自定义消息头（从 nlmsghdr 之后开始）
+        let hdr_data = &data[std::mem::size_of::<nlmsghdr>()..];
+        // 解析魔数、类型、长度（从 hdr_data 起始位置读取）
+        let magic = u32::from_be_bytes([hdr_data[0], hdr_data[1], hdr_data[2], hdr_data[3]]);
         let magic = u32::from_be_bytes([hdr_data[0], hdr_data[1], hdr_data[2], hdr_data[3]]);
         if magic != FW_NL_MAGIC {
-            anyhow::bail!("魔数不匹配: 0x{:08x}", magic);
+            let debug_bytes: Vec<String> = hdr_data[..std::cmp::min(32, hdr_data.len())]
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect();
+            crate::logger::warn!(
+                crate::logger::get(),
+                "魔数不匹配，调试信息";
+                "expected" => format!("0x{:08x}", FW_NL_MAGIC),
+                "actual" => format!("0x{:08x}", magic),
+                "first_32_bytes" => debug_bytes.join(" ")
+            );
+            anyhow::bail!("魔数不匹配：0x{:08x}", magic);
         }
 
         let msg_type = u16::from_be_bytes([hdr_data[4], hdr_data[5]]);
@@ -189,13 +211,12 @@ impl NetlinkContext {
 
         match FwNlMsgType::from_u16(msg_type) {
             Some(FwNlMsgType::DdosEvent) => {
-                // 解析 DDoS 事件
-                let event_data = &hdr_data[12..];
-                if event_data.len() < std::mem::size_of::<FwNlDdosEvent>() - 12 {
+                // 解析 DDoS 事件（从 hdr_data 起始位置读取完整结构）
+                if hdr_data.len() < std::mem::size_of::<FwNlDdosEvent>() {
                     anyhow::bail!("DDoS 事件数据太短");
                 }
 
-                let event = FwNlDdosEvent::from_bytes(event_data)?;
+                let event = FwNlDdosEvent::from_bytes(hdr_data)?;
                 let ip_str = event.ip_str();
                 let reason = event.reason_str();
                 let rate_pps = event.rate_pps;
@@ -222,13 +243,12 @@ impl NetlinkContext {
                 }
             }
             Some(FwNlMsgType::BanStateChange) => {
-                // 解析封禁状态变更事件
-                let event_data = &hdr_data[12..];
-                if event_data.len() < std::mem::size_of::<FwNlBanStateChange>() - 12 {
+                // 解析封禁状态变更事件（从 hdr_data 起始位置读取完整结构）
+                if hdr_data.len() < std::mem::size_of::<FwNlBanStateChange>() {
                     anyhow::bail!("BanStateChange 事件数据太短");
                 }
 
-                let event = FwNlBanStateChange::from_bytes(event_data)?;
+                let event = FwNlBanStateChange::from_bytes(hdr_data)?;
                 let ip_str = event.ip_str();
 
                 if event.is_ban() {
@@ -236,28 +256,34 @@ impl NetlinkContext {
                         crate::logger::get(),
                         "收到封禁状态变更：封禁";
                         "ip" => &ip_str,
-                        "duration_secs" => event.duration_secs
+                        "duration_secs" => event.duration_secs()
                     );
 
                     // 更新 ACTIVE_BAN_CACHE
-                    if let Some(cache) = crate::types::ACTIVE_BAN_CACHE.get() {
-                        let now = crate::types::now_secs();
-                        let ban_info = crate::types::BanInfo {
-                            ip: ip_str.clone(),
-                            ip_num: 0,
-                            jail_name: "kernel".to_string(),
-                            reason: crate::types::BanReason::ManualBan,
-                            banned_at: now,
-                            expires_at: if event.duration_secs == 0 {
-                                0
-                            } else {
-                                now + event.duration_secs as i64
-                            },
-                            is_permanent: event.duration_secs == 0,
-                            fail_count: 0,
-                        };
-                        cache.insert(ban_info);
-                    }
+                    let cache = crate::types::ACTIVE_BAN_CACHE
+                        .get_or_init(crate::types::ActiveBanCache::new);
+                    let now = crate::types::now_secs();
+                    let ban_info = crate::types::BanInfo {
+                        ip: ip_str.clone(),
+                        ip_num: 0,
+                        jail_name: "kernel".to_string(),
+                        reason: crate::types::BanReason::ManualBan,
+                        banned_at: now,
+                        expires_at: if event.duration_secs() == 0 {
+                            0
+                        } else {
+                            now + event.duration_secs() as i64
+                        },
+                        is_permanent: event.duration_secs() == 0,
+                        fail_count: 0,
+                    };
+                    cache.insert(ban_info);
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "已更新 ACTIVE_BAN_CACHE";
+                        "ip" => &ip_str,
+                        "cache_len" => cache.len()
+                    );
                 } else if event.is_unban() {
                     crate::logger::info!(
                         crate::logger::get(),
@@ -266,9 +292,9 @@ impl NetlinkContext {
                     );
 
                     // 从 ACTIVE_BAN_CACHE 移除
-                    if let Some(cache) = crate::types::ACTIVE_BAN_CACHE.get() {
-                        cache.remove(&ip_str);
-                    }
+                    let cache = crate::types::ACTIVE_BAN_CACHE
+                        .get_or_init(crate::types::ActiveBanCache::new);
+                    cache.remove(&ip_str);
                 }
             }
             _ => {

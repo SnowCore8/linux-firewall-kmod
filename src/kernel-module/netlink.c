@@ -104,6 +104,7 @@ static atomic_t fw_nl_seq = ATOMIC_INIT(0);
  */
 int fw_netlink_send_event(u8 af, const void *ip, const char *reason, u32 rate_pps) {
   struct sk_buff *skb;
+  struct nlmsghdr *nlh;
   struct fw_nl_ddos_event *event;
   int ret;
 
@@ -117,12 +118,15 @@ int fw_netlink_send_event(u8 af, const void *ip, const char *reason, u32 rate_pp
     return -ENOMEM;
   }
 
-  /* 构造消息 */
-  event = (struct fw_nl_ddos_event *)nlmsg_put(skb, 0, 0, 0, sizeof(*event), 0);
-  if (!event) {
+  /* 构造消息头 */
+  nlh = nlmsg_put(skb, 0, 0, FW_NL_DDOS_EVENT, sizeof(*event), 0);
+  if (!nlh) {
     kfree_skb(skb);
     return -ENOMEM;
   }
+
+  /* 获取 payload 指针 */
+  event = (struct fw_nl_ddos_event *)nlmsg_data(nlh);
 
   /* 填充消息头 */
   event->hdr.magic = cpu_to_be32(FW_NL_MAGIC);
@@ -166,6 +170,7 @@ int fw_netlink_send_event(u8 af, const void *ip, const char *reason, u32 rate_pp
  */
 int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 duration_secs) {
   struct sk_buff *skb;
+  struct nlmsghdr *nlh;
   struct fw_nl_ban_state_change *event;
   int ret;
 
@@ -179,12 +184,15 @@ int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 durat
     return -ENOMEM;
   }
 
-  /* 构造消息 */
-  event = (struct fw_nl_ban_state_change *)nlmsg_put(skb, 0, 0, 0, sizeof(*event), 0);
-  if (!event) {
+  /* 构造消息头 */
+  nlh = nlmsg_put(skb, 0, 0, FW_NL_BAN_STATE_CHANGE, sizeof(*event), 0);
+  if (!nlh) {
     kfree_skb(skb);
     return -ENOMEM;
   }
+
+  /* 获取 payload 指针 */
+  event = (struct fw_nl_ban_state_change *)nlmsg_data(nlh);
 
   /* 填充消息头 */
   event->hdr.magic = cpu_to_be32(FW_NL_MAGIC);
