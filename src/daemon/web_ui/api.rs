@@ -46,10 +46,35 @@ fn read_kernel_stats() -> (u64, u64, u64, u64, u64, u64) {
     )
 }
 
+/// 统一 API 响应信封
+#[derive(Serialize)]
+pub struct ApiResponse<T> {
+    pub code: i32,
+    pub data: T,
+    pub message: String,
+}
+
+impl<T> ApiResponse<T> {
+    pub fn ok(data: T) -> Self {
+        Self {
+            code: 0,
+            data,
+            message: String::new(),
+        }
+    }
+
+    pub fn error(code: i32, message: String) -> ApiResponse<()> {
+        ApiResponse {
+            code,
+            data: (),
+            message,
+        }
+    }
+}
+
 /// 统计数据响应
 #[derive(Serialize)]
 pub struct StatsResponse {
-    pub active_bans: usize,
     pub today_bans: u64,
     pub failed_attempts: u64,
     pub ddos_events: u64,
@@ -57,14 +82,14 @@ pub struct StatsResponse {
     pub ban_trend: ChartData,
     pub jail_distribution: ChartData,
     pub failure_reasons: ChartData,
-    pub traffic: ChartData,
+    pub failed_attempts_trend: ChartData,
     // 内核统计数据
-    pub kernel_current_bans: u64,
-    pub kernel_total_bans: u64,
-    pub kernel_total_unbans: u64,
-    pub kernel_whitelist_count: u64,
-    pub kernel_packets_dropped: u64,
-    pub kernel_packets_accepted: u64,
+    pub current_bans: u64,
+    pub total_bans: u64,
+    pub total_unbans: u64,
+    pub whitelist_count: u64,
+    pub packets_dropped: u64,
+    pub packets_accepted: u64,
 }
 
 /// 图表数据
@@ -194,8 +219,6 @@ pub fn get_stats() -> StatsResponse {
         .load(std::sync::atomic::Ordering::Relaxed) as i64;
     let uptime = if start_time > 0 { now - start_time } else { 0 };
 
-    let active_bans = ACTIVE_BAN_CACHE.get().map(|cache| cache.len()).unwrap_or(0);
-
     let today_bans = DAEMON_STATS
         .ips_banned
         .load(std::sync::atomic::Ordering::Relaxed);
@@ -208,16 +231,15 @@ pub fn get_stats() -> StatsResponse {
 
     // 从内核模块读取统计数据
     let (
-        kernel_current_bans,
-        kernel_total_bans,
-        kernel_total_unbans,
-        kernel_whitelist_count,
-        kernel_packets_dropped,
-        kernel_packets_accepted,
+        current_bans,
+        total_bans,
+        total_unbans,
+        whitelist_count,
+        packets_dropped,
+        packets_accepted,
     ) = read_kernel_stats();
 
     StatsResponse {
-        active_bans,
         today_bans,
         failed_attempts,
         ddos_events,
@@ -225,13 +247,13 @@ pub fn get_stats() -> StatsResponse {
         ban_trend: generate_ban_trend(),
         jail_distribution: generate_jail_distribution(),
         failure_reasons: generate_failure_reasons(),
-        traffic: generate_traffic_data(),
-        kernel_current_bans,
-        kernel_total_bans,
-        kernel_total_unbans,
-        kernel_whitelist_count,
-        kernel_packets_dropped,
-        kernel_packets_accepted,
+        failed_attempts_trend: generate_failed_attempts_trend(),
+        current_bans,
+        total_bans,
+        total_unbans,
+        whitelist_count,
+        packets_dropped,
+        packets_accepted,
     }
 }
 
@@ -297,8 +319,8 @@ fn generate_failure_reasons() -> ChartData {
     ChartData { labels, values }
 }
 
-/// 生成流量数据（使用失败尝试趋势）
-fn generate_traffic_data() -> ChartData {
+/// 生成失败尝试趋势数据
+fn generate_failed_attempts_trend() -> ChartData {
     // 从历史数据库读取最近 1 小时的失败尝试数据
     match crate::history_snapshot::get_trend_data("failed_attempts", 1) {
         Ok(data) if !data.is_empty() => {

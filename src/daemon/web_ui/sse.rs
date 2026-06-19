@@ -64,12 +64,16 @@ pub fn handle_sse_connection(request: Request) {
     }
     let _guard = ConnectionGuard;
 
+    // 获取推送间隔配置
     let push_interval = crate::http_exporter::get_global_webui_config()
         .map(|c| c.sse_push_interval as u64)
         .unwrap_or(1);
 
     // 收集一轮完整数据
     let mut sse_data = Vec::with_capacity(4096);
+
+    // 发送连接确认
+    sse_data.extend_from_slice("event: connected\ndata: SSE 连接已建立\n\n".as_bytes());
 
     // 统计数据
     let stats = api::get_stats();
@@ -99,8 +103,8 @@ pub fn handle_sse_connection(request: Request) {
         sse_data.extend_from_slice(format!("event: rates\ndata: {}\n\n", rates_json).as_bytes());
     }
 
-    // 等待配置间隔后发送
-    thread::sleep(Duration::from_secs(push_interval));
+    // 等待配置间隔后发送（移除 sleep，立即发送）
+    // thread::sleep(Duration::from_secs(push_interval));
 
     let response = Response::new(
         StatusCode(200),

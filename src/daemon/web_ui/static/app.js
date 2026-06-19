@@ -61,15 +61,17 @@ async function loadWebuiConfig() {
     }
 }
 
-// ─ SSE 连接 ──
-let consecutiveErrors = 0;
-const MAX_CONSECUTIVE_ERRORS = 5;
+// ─ SSE 连接（长连接模式） ──
+let reconnectTimer = null;
 
 function connectSSE() {
     if (eventSource) {
         eventSource.close();
     }
-    consecutiveErrors = 0;
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
 
     updateStatus('loading');
     eventSource = new EventSource(SSE_ENDPOINT);
@@ -77,15 +79,15 @@ function connectSSE() {
     const handleData = (parser, updater) => (event) => {
         try {
             const data = parser(event.data);
-            console.log('[SSE] Event received:', event.type, 'data length:', event.data.length);
             updater(data);
-            console.log('[SSE] Updater called for:', event.type);
-            consecutiveErrors = 0;
-            updateStatus('online');
         } catch (e) {
             console.error('Failed to parse event:', e);
         }
     };
+
+    eventSource.addEventListener('connected', (event) => {
+        updateStatus('online');
+    });
 
     eventSource.addEventListener('stats', handleData(
         JSON.parse,
@@ -96,14 +98,18 @@ function connectSSE() {
     eventSource.addEventListener('rates', handleData(JSON.parse, updateRatesPanel));
 
     eventSource.onopen = () => {
-        consecutiveErrors = 0;
         updateStatus('online');
     };
 
     eventSource.onerror = () => {
-        consecutiveErrors++;
-        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-            updateStatus('offline');
+        // 长连接模式下，onerror 表示真正的连接断开
+        updateStatus('offline');
+        // 5 秒后自动重连
+        if (!reconnectTimer) {
+            reconnectTimer = setTimeout(() => {
+                reconnectTimer = null;
+                connectSSE();
+            }, 5000);
         }
     };
 }
@@ -131,34 +137,33 @@ function updateStatus(status) {
 
 // ── 统计数据更新 ──
 function updateStats(stats) {
-    updateStatValue('active-bans', formatNumber(stats.active_bans));
+    // 统一使用 current_bans（合并了原来的 active_bans 和 kernel_current_bans）
+    updateStatValue('active-bans', formatNumber(stats.current_bans));
     updateStatValue('today-bans', formatNumber(stats.today_bans));
     updateStatValue('failed-attempts', formatNumber(stats.failed_attempts));
     updateStatValue('ddos-events', formatNumber(stats.ddos_events));
     updateStatValue('uptime', formatUptime(stats.uptime_seconds));
 
     // 顶栏快捷统计
-    updateStatValue('header-active-bans', formatNumber(stats.active_bans));
+    updateStatValue('header-active-bans', formatNumber(stats.current_bans));
     updateStatValue('header-today-bans', formatNumber(stats.today_bans));
 
     // 内核统计
-    if (stats.kernel_current_bans !== undefined) {
-        updateStatValue('kernel-current-bans', formatNumber(stats.kernel_current_bans));
-        updateStatValue('kernel-total-bans', formatNumber(stats.kernel_total_bans));
-        updateStatValue('kernel-total-unbans', formatNumber(stats.kernel_total_unbans));
-        updateStatValue('kernel-whitelist-count', formatNumber(stats.kernel_whitelist_count));
-        updateStatValue('kernel-packets-dropped', formatNumber(stats.kernel_packets_dropped, true));
-        updateStatValue('kernel-packets-accepted', formatNumber(stats.kernel_packets_accepted, true));
-    }
+    updateStatValue('kernel-current-bans', formatNumber(stats.current_bans));
+    updateStatValue('kernel-total-bans', formatNumber(stats.total_bans));
+    updateStatValue('kernel-total-unbans', formatNumber(stats.total_unbans));
+    updateStatValue('kernel-whitelist-count', formatNumber(stats.whitelist_count));
+    updateStatValue('kernel-packets-dropped', formatNumber(stats.packets_dropped, true));
+    updateStatValue('kernel-packets-accepted', formatNumber(stats.packets_accepted, true));
 
     // 封禁计数徽章
     const badge = document.getElementById('ban-count-badge');
     if (badge) {
-        badge.textContent = formatNumber(stats.active_bans);
+        badge.textContent = formatNumber(stats.current_bans);
     }
 
     // 更新迷你图数据
-    pushSparkData('activeBans', stats.active_bans);
+    pushSparkData('activeBans', stats.current_bans);
     pushSparkData('todayBans', stats.today_bans);
     pushSparkData('failed', stats.failed_attempts);
     pushSparkData('ddos', stats.ddos_events);
@@ -569,9 +574,9 @@ function updateCharts(stats) {
         charts.failureReasons.data.datasets[0].data = stats.failure_reasons.values;
         charts.failureReasons.update('none');
     }
-    if (stats.traffic) {
-        charts.traffic.data.labels = stats.traffic.labels;
-        charts.traffic.data.datasets[0].data = stats.traffic.values;
+    if (stats.failed_attempts_trend) {
+        charts.traffic.data.labels = stats.failed_attempts_trend.labels;
+        charts.traffic.data.datasets[0].data = stats.failed_attempts_trend.values;
         charts.traffic.update('none');
     }
 }

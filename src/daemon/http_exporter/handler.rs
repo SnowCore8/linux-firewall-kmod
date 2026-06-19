@@ -159,7 +159,8 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
     } else if let (&Method::Get, "/api/stats") = (request.method(), url.as_str()) {
         // API: 统计数据
         let stats = web_ui::api::get_stats();
-        let json = serde_json::to_string(&stats).unwrap_or_else(|_| "{}".to_string());
+        let envelope = web_ui::api::ApiResponse::ok(stats);
+        let json = serde_json::to_string(&envelope).unwrap_or_else(|_| r#"{"code":-1,"data":null,"message":"序列化失败"}"#.to_string());
         let response = Response::from_string(json).with_header(
             Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
         );
@@ -173,7 +174,8 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
     } else if let (&Method::Get, "/api/bans") = (request.method(), url.as_str()) {
         // API: 活跃封禁列表
         let bans = web_ui::api::get_active_bans();
-        let json = serde_json::to_string(&bans).unwrap_or_else(|_| "[]".to_string());
+        let envelope = web_ui::api::ApiResponse::ok(bans);
+        let json = serde_json::to_string(&envelope).unwrap_or_else(|_| r#"{"code":-1,"data":[],"message":"序列化失败"}"#.to_string());
         let response = Response::from_string(json).with_header(
             Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
         );
@@ -188,7 +190,8 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         // API: Jail 列表（从全局 Jail 信息读取）
         let jail_infos = super::get_global_jails();
         let jails = web_ui::api::get_jails(&jail_infos);
-        let json = serde_json::to_string(&jails).unwrap_or_else(|_| "[]".to_string());
+        let envelope = web_ui::api::ApiResponse::ok(jails);
+        let json = serde_json::to_string(&envelope).unwrap_or_else(|_| r#"{"code":-1,"data":[],"message":"序列化失败"}"#.to_string());
         let response = Response::from_string(json).with_header(
             Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
         );
@@ -202,7 +205,8 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
     } else if let (&Method::Get, "/api/config") = (request.method(), url.as_str()) {
         // API: Web UI 配置
         let config = web_ui::api::get_webui_config();
-        let json = serde_json::to_string(&config).unwrap_or_else(|_| "{}".to_string());
+        let envelope = web_ui::api::ApiResponse::ok(config);
+        let json = serde_json::to_string(&envelope).unwrap_or_else(|_| r#"{"code":-1,"data":null,"message":"序列化失败"}"#.to_string());
         let response = Response::from_string(json).with_header(
             Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
         );
