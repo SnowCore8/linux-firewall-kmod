@@ -10,7 +10,7 @@ mod protocol;
 use anyhow::Result;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 use protocol::{FwNlBanCmd, FwNlConfigUpdate, FwNlDdosEvent, FwNlMsgType, FW_NL_MAGIC};
@@ -21,11 +21,26 @@ pub use protocol::{config_flags, FwNlConfigUpdate as ConfigUpdate};
 /// Netlink 协议号（NETLINK_USERSOCK）
 const NETLINK_USERSOCK: i32 = 2;
 
+/// 全局 NetlinkContext 实例（程序内部共享）
+static GLOBAL_NETLINK_CTX: OnceLock<Arc<NetlinkContext>> = OnceLock::new();
+
+/// 获取全局 NetlinkContext
+pub fn get_global_netlink_ctx() -> Option<Arc<NetlinkContext>> {
+    GLOBAL_NETLINK_CTX.get().cloned()
+}
+
+/// 设置全局 NetlinkContext（仅在启动时调用一次）
+pub fn set_global_netlink_ctx(ctx: Arc<NetlinkContext>) -> Result<()> {
+    GLOBAL_NETLINK_CTX
+        .set(ctx)
+        .map_err(|_| anyhow::anyhow!("Global NetlinkContext already set"))
+}
+
 /// Netlink 通信上下文
 pub struct NetlinkContext {
     fd: i32,
     running: Arc<AtomicBool>,
-    decision_engine: Option<Arc<DdosDecisionEngine>>,
+    decision_engine: Mutex<Option<Arc<DdosDecisionEngine>>>,
 }
 
 impl NetlinkContext {
@@ -65,20 +80,22 @@ impl NetlinkContext {
         Ok(Self {
             fd,
             running: Arc::new(AtomicBool::new(false)),
-            decision_engine: None,
+            decision_engine: Mutex::new(None),
         })
     }
 
-    /// 设置 DDoS 决策引擎
-    pub fn set_decision_engine(&mut self, engine: Arc<DdosDecisionEngine>) {
-        self.decision_engine = Some(engine);
+    /// 设置 DDoS 决策引擎（线程安全）
+    pub fn set_decision_engine(&self, engine: Arc<DdosDecisionEngine>) {
+        if let Ok(mut de) = self.decision_engine.lock() {
+            *de = Some(engine);
+        }
     }
 
     /// 启动接收线程
     pub fn start_receiver(&self) -> Result<thread::JoinHandle<()>> {
         let fd = self.fd;
         let running = self.running.clone();
-        let decision_engine = self.decision_engine.clone();
+        let decision_engine = self.decision_engine.lock().ok().and_then(|de| de.clone());
         running.store(true, Ordering::SeqCst);
 
         let handle = thread::spawn(move || {
@@ -217,6 +234,12 @@ impl NetlinkContext {
     /// 发送封禁指令到内核
     pub fn send_ban(&self, ip: IpAddr, duration_secs: u32) -> Result<()> {
         let cmd = FwNlBanCmd::new_ban(ip, duration_secs);
+        self.send_command(&cmd.to_bytes())
+    }
+
+    /// 发送解封指令到内核
+    pub fn send_unban(&self, ip: IpAddr) -> Result<()> {
+        let cmd = FwNlBanCmd::new_unban(ip);
         self.send_command(&cmd.to_bytes())
     }
 

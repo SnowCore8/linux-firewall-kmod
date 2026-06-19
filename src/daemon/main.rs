@@ -39,7 +39,7 @@ use firewall_daemon::history_snapshot;
 use firewall_daemon::http_exporter;
 use firewall_daemon::jail;
 use firewall_daemon::logger;
-use firewall_daemon::netlink::{DdosDecisionEngine, NetlinkContext};
+use firewall_daemon::netlink::{self, DdosDecisionEngine, NetlinkContext};
 use firewall_daemon::signals::{setup_signals, GLOBAL_RELOAD, GLOBAL_RUNNING};
 use firewall_daemon::types::{Config, DAEMON_STATS};
 
@@ -52,15 +52,13 @@ const BANS_PATH: &str = "/proc/firewall/bans";
 ///
 /// # Arguments
 /// - `_cfg`：保留参数，占位
-/// - `netlink_ctx`：netlink 通信上下文（自动 drop 时关闭）
-fn cleanup(_cfg: &Config, netlink_ctx: Option<NetlinkContext>) {
+fn cleanup(_cfg: &Config) {
     http_exporter::stop_http_exporter();
     GLOBAL_RUNNING.store(false, Ordering::SeqCst);
     file_monitor::close_inotify();
     ban::close_cached_bans_fd();
     history_snapshot::close_history_db();
-    // netlink_ctx 会在函数结束时自动 drop，关闭 socket
-    drop(netlink_ctx);
+    // netlink_ctx 通过 Arc 管理，最后一个 Arc drop 时自动关闭 socket
     if let Err(e) = fs::remove_file("/run/firewall-daemon.pid") {
         crate::logger::debug!(
             crate::logger::get(),
@@ -193,7 +191,7 @@ fn main() -> Result<()> {
     // 已知限制：用户通过 /proc/firewall/bans 手动封禁的 IP 不会反映在 Web UI 中。
 
     // 初始化 netlink 通信（接收内核 DDoS 事件）
-    let mut netlink_ctx = match NetlinkContext::new() {
+    let netlink_ctx = match NetlinkContext::new() {
         Ok(ctx) => {
             info!(logger::get(), "Netlink 通信层初始化成功");
             Some(ctx)
@@ -205,31 +203,22 @@ fn main() -> Result<()> {
     };
 
     // 如果有 netlink 上下文，创建并设置决策引擎
-    if let Some(ref mut ctx) = netlink_ctx {
-        // 创建 netlink 的 Arc 引用（用于决策引擎发送封禁指令）
-        // 注意：这里使用 unsafe 是因为 NetlinkContext 没有实现 Clone
-        // 我们确保在 netlink_ctx 的生命周期内，Arc 引用是有效的
-        let netlink_for_engine = unsafe {
-            let ptr = ctx as *const NetlinkContext;
-            Arc::from_raw(ptr)
-        };
-        let decision_engine = Arc::new(DdosDecisionEngine::new(
-            cfg.ddos.clone(),
-            netlink_for_engine.clone(),
-        ));
-        ctx.set_decision_engine(decision_engine.clone());
+    if let Some(ctx) = netlink_ctx {
+        let ctx_arc = Arc::new(ctx);
+
+        // 设置全局 netlink 上下文（程序内部共享）
+        if let Err(e) = netlink::set_global_netlink_ctx(ctx_arc.clone()) {
+            warn!(logger::get(), "设置全局 NetlinkContext 失败"; "error" => %e);
+        }
+
+        // 创建决策引擎
+        let decision_engine = Arc::new(DdosDecisionEngine::new(cfg.ddos.clone(), ctx_arc.clone()));
+        ctx_arc.set_decision_engine(decision_engine.clone());
 
         // 设置全局决策引擎引用（供配置热重载使用）
         http_exporter::set_global_decision_engine(decision_engine);
 
-        // 设置全局 netlink 上下文引用（供配置热重载时同步到内核）
-        let netlink_for_global = unsafe {
-            let ptr = ctx as *const NetlinkContext;
-            Arc::from_raw(ptr)
-        };
-        http_exporter::set_global_netlink_ctx(netlink_for_global.clone());
-
-        match ctx.start_receiver() {
+        match ctx_arc.start_receiver() {
             Ok(_handle) => {
                 info!(logger::get(), "Netlink 接收线程已启动");
             }
@@ -237,10 +226,6 @@ fn main() -> Result<()> {
                 warn!(logger::get(), "启动 Netlink 接收线程失败"; "error" => %e);
             }
         }
-
-        // 防止 Arc 释放内存（因为我们使用了 from_raw）
-        std::mem::forget(netlink_for_engine);
-        std::mem::forget(netlink_for_global);
     }
 
     // 设置全局 Jail 信息和 Web UI 配置
@@ -272,7 +257,7 @@ fn main() -> Result<()> {
         GLOBAL_RUNNING.load(Ordering::SeqCst)
     );
     info!(logger::get(), "开始清理流程");
-    cleanup(&cfg, netlink_ctx);
+    cleanup(&cfg);
 
     if let Some(handle) = exporter_handle {
         // 给 HTTP 导出器线程最多 2 秒优雅退出

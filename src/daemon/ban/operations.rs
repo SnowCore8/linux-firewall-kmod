@@ -7,11 +7,12 @@
 //! - 向后兼容的包装函数:ban_ip / ban_ip_permanent / unban_ip / unban_permanent_ip
 
 use anyhow::{bail, Context, Result};
+use std::net::IpAddr;
 
 use super::ip_validation::validate_ip;
 use super::procfs::secure_procfs_write;
 use super::{BanAction, BANS_PATH};
-use crate::types::DAEMON_STATS;
+use crate::types::{BanInfo, BanReason, DAEMON_STATS};
 
 use std::sync::atomic::Ordering;
 
@@ -47,7 +48,7 @@ fn format_ban_command(action: BanAction, ip: &str) -> Result<String> {
 
 /// 统一的封禁/解封操作入口 (支持 IPv4/IPv6)。
 ///
-/// 流程: 校验 IP → 格式化命令 → `secure_procfs_write` → 记日志 + `ips_banned` 累加。
+/// 流程: 校验 IP → 通过 netlink 发送指令 → 更新内存缓存 → 记日志 + `ips_banned` 累加。
 ///
 /// # Arguments
 /// - `action`: 见 [`BanAction`]
@@ -55,7 +56,7 @@ fn format_ban_command(action: BanAction, ip: &str) -> Result<String> {
 ///
 /// # Errors
 /// - IP 校验失败
-/// - procfs 写入失败
+/// - netlink 发送失败
 /// -
 pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
     if ip.is_empty() {
@@ -64,16 +65,56 @@ pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
 
     let _validated = validate_ip(ip).with_context(|| format!("Invalid IP address: {ip}"))?;
 
-    let cmd = format_ban_command(action, ip)?;
-    secure_procfs_write(BANS_PATH, cmd.as_bytes())
-        .with_context(|| format!("Failed to write to {BANS_PATH}"))?;
+    // 通过 netlink 发送指令到内核（程序内部通信走 netlink）
+    if let Some(netlink_ctx) = crate::netlink::get_global_netlink_ctx() {
+        let ip_addr: IpAddr = ip.parse().context("Invalid IP address")?;
+        match action {
+            BanAction::Temp => {
+                // 默认 600 秒封禁时长（TODO: 从配置获取）
+                netlink_ctx.send_ban(ip_addr, 600)?;
+            }
+            BanAction::Permanent => {
+                netlink_ctx.send_ban(ip_addr, 0)?; // 0 = 永久
+            }
+            BanAction::Unban | BanAction::UnbanPerm => {
+                netlink_ctx.send_unban(ip_addr)?;
+            }
+        }
+    } else {
+        // 降级方案：netlink 不可用时写 procfs（用户操作接口）
+        let cmd = format_ban_command(action, ip)?;
+        secure_procfs_write(BANS_PATH, cmd.as_bytes())
+            .with_context(|| format!("Failed to write to {BANS_PATH}"))?;
+    }
 
+    // 更新内存缓存
     match action {
         BanAction::Permanent | BanAction::Temp => {
-            // 内核封禁已通过 procfs 写入完成
+            if let Some(cache) = crate::types::ACTIVE_BAN_CACHE.get() {
+                let now = crate::types::now_secs();
+                let duration = if matches!(action, BanAction::Permanent) {
+                    0 // 永久
+                } else {
+                    600 // 默认 600 秒（TODO: 从配置获取）
+                };
+                let ban_info = BanInfo {
+                    ip: ip.to_string(),
+                    ip_num: 0,
+                    jail_name: "kernel".to_string(),
+                    reason: BanReason::ManualBan,
+                    banned_at: now,
+                    expires_at: if duration == 0 {
+                        0
+                    } else {
+                        now + duration as i64
+                    },
+                    is_permanent: duration == 0,
+                    fail_count: 0,
+                };
+                cache.insert(ban_info);
+            }
         }
         BanAction::UnbanPerm | BanAction::Unban => {
-            // 从内存缓存移除
             if let Some(cache) = crate::types::ACTIVE_BAN_CACHE.get() {
                 cache.remove(ip);
             }

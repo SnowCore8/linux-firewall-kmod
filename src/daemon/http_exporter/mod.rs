@@ -90,17 +90,9 @@ pub fn get_global_decision_engine() -> Option<&'static Arc<DdosDecisionEngine>> 
 // 全局 Netlink 上下文引用（供配置热重载时同步到内核）
 // ============================================================================
 
-/// 全局 netlink 上下文引用（供配置热重载时同步到内核模块）
-static GLOBAL_NETLINK_CTX: std::sync::OnceLock<Arc<NetlinkContext>> = std::sync::OnceLock::new();
-
-/// 设置全局 netlink 上下文引用（启动时调用）
-pub fn set_global_netlink_ctx(ctx: Arc<NetlinkContext>) {
-    let _ = GLOBAL_NETLINK_CTX.set(ctx);
-}
-
-/// 获取全局 netlink 上下文引用
-pub fn get_global_netlink_ctx() -> Option<&'static Arc<NetlinkContext>> {
-    GLOBAL_NETLINK_CTX.get()
+/// 获取全局 netlink 上下文引用（委托给 netlink 模块）
+pub fn get_global_netlink_ctx() -> Option<Arc<NetlinkContext>> {
+    crate::netlink::get_global_netlink_ctx()
 }
 // ============================================================================
 // 配置参数
