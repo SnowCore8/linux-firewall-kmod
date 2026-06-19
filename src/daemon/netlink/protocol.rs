@@ -30,6 +30,10 @@ pub enum FwNlMsgType {
     StatsQuery = 8,
     /// 内核 → 守护进程：统计数据响应
     StatsResponse = 9,
+    /// 守护进程 → 内核：查询白名单列表
+    ListWhitelistQuery = 10,
+    /// 内核 → 守护进程：白名单列表响应
+    ListWhitelistResponse = 11,
 }
 
 impl FwNlMsgType {
@@ -44,6 +48,8 @@ impl FwNlMsgType {
             7 => Some(Self::ListBansResponse),
             8 => Some(Self::StatsQuery),
             9 => Some(Self::StatsResponse),
+            10 => Some(Self::ListWhitelistQuery),
+            11 => Some(Self::ListWhitelistResponse),
             _ => None,
         }
     }
@@ -493,5 +499,110 @@ impl FwNlStatsResponse {
 
     pub fn packets_accepted(&self) -> u64 {
         u64::from_be(self.packets_accepted)
+    }
+}
+
+// ============================================================================
+// 白名单查询协议
+// ============================================================================
+
+/// 白名单列表查询请求（守护进程 → 内核）
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlListWhitelistQuery {
+    pub hdr: FwNlMsgHdr,
+}
+
+impl FwNlListWhitelistQuery {
+    pub fn new(seq: u32) -> Self {
+        Self {
+            hdr: FwNlMsgHdr {
+                magic: FW_NL_MAGIC.to_be(),
+                msg_type: (FwNlMsgType::ListWhitelistQuery as u16).to_be(),
+                msg_len: (std::mem::size_of::<Self>() as u16).to_be(),
+                seq: seq.to_be(),
+            },
+        }
+    }
+
+    pub fn to_bytes(self) -> Vec<u8> {
+        let ptr = &self as *const Self as *const u8;
+        unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
+    }
+}
+
+/// 白名单条目（内核 → 守护进程）
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlWhitelistEntry {
+    pub af: u8,
+    pub prefix_len: u8,
+    pub addr: [u8; 16],
+    pub device: [u8; 16],
+}
+
+impl FwNlWhitelistEntry {
+    /// 获取 IP/CIDR 字符串（如 "10.0.0.0/8" 或 "eth0"）
+    pub fn to_cidr_string(&self) -> String {
+        let ip_str = if self.af == 2 {
+            format!(
+                "{}.{}.{}.{}",
+                self.addr[0], self.addr[1], self.addr[2], self.addr[3]
+            )
+        } else if self.af == 10 {
+            let addr: std::net::Ipv6Addr = std::net::Ipv6Addr::from(self.addr);
+            addr.to_string()
+        } else {
+            "unknown".to_string()
+        };
+
+        // 提取设备名
+        let dev_end = self
+            .device
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.device.len());
+        let device = String::from_utf8_lossy(&self.device[..dev_end]);
+
+        if device.is_empty() {
+            format!("{}/{}", ip_str, self.prefix_len)
+        } else {
+            format!("{}/{} dev {}", ip_str, self.prefix_len, device)
+        }
+    }
+}
+
+/// 白名单列表响应（内核 → 守护进程）
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlListWhitelistResponse {
+    pub hdr: FwNlMsgHdr,
+    pub count: u32,
+    // 后面紧跟 count 个 FwNlWhitelistEntry
+}
+
+impl FwNlListWhitelistResponse {
+    pub fn from_bytes(data: &[u8]) -> Result<(Self, Vec<FwNlWhitelistEntry>)> {
+        if data.len() < std::mem::size_of::<Self>() {
+            anyhow::bail!("白名单响应数据太短");
+        }
+
+        let resp: Self = unsafe { std::ptr::read(data.as_ptr() as *const Self) };
+        let count = u32::from_be(resp.count) as usize;
+        let entries_data = &data[std::mem::size_of::<Self>()..];
+
+        let mut entries = Vec::with_capacity(count);
+        for i in 0..count {
+            let offset = i * std::mem::size_of::<FwNlWhitelistEntry>();
+            if offset + std::mem::size_of::<FwNlWhitelistEntry>() > entries_data.len() {
+                anyhow::bail!("白名单条目数据不完整");
+            }
+            let entry: FwNlWhitelistEntry = unsafe {
+                std::ptr::read(entries_data.as_ptr().add(offset) as *const FwNlWhitelistEntry)
+            };
+            entries.push(entry);
+        }
+
+        Ok((resp, entries))
     }
 }

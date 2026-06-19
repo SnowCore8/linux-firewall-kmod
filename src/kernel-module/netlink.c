@@ -32,6 +32,8 @@ enum {
   FW_NL_LIST_BANS_RESPONSE = 7, /* 内核 → 守护进程：封禁列表响应 */
   FW_NL_STATS_QUERY = 8,    /* 守护进程 → 内核：查询统计数据 */
   FW_NL_STATS_RESPONSE = 9, /* 内核 → 守护进程：统计数据响应 */
+  FW_NL_LIST_WHITELIST_QUERY = 10,    /* 守护进程 → 内核：查询白名单列表 */
+  FW_NL_LIST_WHITELIST_RESPONSE = 11, /* 内核 → 守护进程：白名单列表响应 */
 };
 
 /* 消息头结构（20 字节） */
@@ -115,6 +117,21 @@ struct fw_nl_stats_response {
   __u64 whitelist_count;
   __u64 packets_dropped;
   __u64 packets_accepted;
+} __packed;
+
+/* 白名单条目（内核 → 守护进程） */
+struct fw_nl_whitelist_entry {
+  __u8 af;             /* 地址族 */
+  __u8 prefix_len;     /* 前缀长度（IPv4: 从掩码转换，IPv6: 直接使用） */
+  __u8 addr[16];       /* IP 地址 */
+  __u8 device[16];     /* 网络设备名称 */
+} __packed;
+
+/* 白名单列表响应（内核 → 守护进程） */
+struct fw_nl_list_whitelist_response {
+  struct fw_nlmsg_hdr hdr;
+  __u32 count;
+  /* 后面紧跟 count 个 fw_nl_whitelist_entry */
 } __packed;
 
 /* 全局 netlink socket */
@@ -430,6 +447,122 @@ int fw_netlink_send_stats_response(u32 seq) {
 }
 
 /**
+ * ipv4_mask_to_prefix_len - 将 IPv4 子网掩码转换为前缀长度
+ * @mask: IPv4 子网掩码（网络字节序）
+ *
+ * 返回前缀长度（0-32），无效掩码返回 0。
+ */
+static u8 ipv4_mask_to_prefix_len(__be32 mask) {
+  u32 m = be32_to_cpu(mask);
+  u8 len = 0;
+
+  while (m & 0x80000000) {
+    len++;
+    m <<= 1;
+  }
+  return len;
+}
+
+/**
+ * fw_netlink_send_list_whitelist_response - 向守护进程发送白名单列表响应
+ * @seq: 请求序列号
+ *
+ * 响应守护进程的 ListWhitelistQuery 请求，发送当前所有白名单条目。
+ * 最多返回 64 个条目（MAX_WHITELIST_ENTRIES）。
+ */
+int fw_netlink_send_list_whitelist_response(u32 seq) {
+  struct sk_buff *skb;
+  struct nlmsghdr *nlh;
+  struct fw_nl_list_whitelist_response *resp;
+  struct fw_nl_whitelist_entry *entries;
+  struct whitelist_entry *entry;
+  u32 hash;
+  int max_entries = MAX_WHITELIST_ENTRIES;
+  int resp_size;
+  int ret;
+  int count = 0;
+
+  if (!fw_nl_sock) {
+    return -ENOTCONN;
+  }
+
+  /* 计算响应大小：头 + max_entries * 条目大小 */
+  resp_size = sizeof(*resp) + max_entries * sizeof(struct fw_nl_whitelist_entry);
+
+  /* 分配 netlink 消息缓冲区 */
+  skb = nlmsg_new(resp_size, GFP_ATOMIC);
+  if (!skb) {
+    return -ENOMEM;
+  }
+
+  /* 构造消息头 */
+  nlh = nlmsg_put(skb, 0, 0, FW_NL_LIST_WHITELIST_RESPONSE, resp_size, 0);
+  if (!nlh) {
+    kfree_skb(skb);
+    return -ENOMEM;
+  }
+
+  /* 获取 payload 指针 */
+  resp = (struct fw_nl_list_whitelist_response *)nlmsg_data(nlh);
+  entries = (struct fw_nl_whitelist_entry *)(resp + 1);
+
+  /* 先填充响应头 */
+  resp->hdr.magic = cpu_to_be32(FW_NL_MAGIC);
+  resp->hdr.msg_type = cpu_to_be16(FW_NL_LIST_WHITELIST_RESPONSE);
+  resp->hdr.msg_len = cpu_to_be16(resp_size);
+  resp->hdr.seq = cpu_to_be32(seq);
+  resp->count = 0;
+
+  /* 遍历白名单表填充条目 */
+  rcu_read_lock();
+
+  /* IPv4 白名单 */
+  hash_for_each_rcu(fw_info.whitelist_table_ipv4, hash, entry, hash) {
+    if (count >= max_entries) {
+      break;
+    }
+
+    entries[count].af = FW_AF_INET;
+    entries[count].prefix_len = ipv4_mask_to_prefix_len(entry->mask.ipv4_mask);
+    memset(entries[count].addr, 0, sizeof(entries[count].addr));
+    memcpy(entries[count].addr, &entry->addr.ipv4, 4);
+    memset(entries[count].device, 0, sizeof(entries[count].device));
+    strncpy((char *)entries[count].device, entry->device_name,
+            sizeof(entries[count].device) - 1);
+    count++;
+  }
+
+  /* IPv6 白名单 */
+  hash_for_each_rcu(fw_info.whitelist_table_ipv6, hash, entry, hash) {
+    if (count >= max_entries) {
+      break;
+    }
+
+    entries[count].af = FW_AF_INET6;
+    entries[count].prefix_len = entry->mask.prefix_len;
+    memcpy(entries[count].addr, &entry->addr.ipv6, 16);
+    memset(entries[count].device, 0, sizeof(entries[count].device));
+    strncpy((char *)entries[count].device, entry->device_name,
+            sizeof(entries[count].device) - 1);
+    count++;
+  }
+
+  rcu_read_unlock();
+
+  /* 更新实际数量 */
+  resp->count = cpu_to_be32(count);
+
+  /* 广播消息给守护进程（组 1） */
+  ret = netlink_broadcast(fw_nl_sock, skb, 0, 1, GFP_ATOMIC);
+  if (ret < 0 && ret != -ESRCH) {
+    pr_warn_ratelimited("netlink broadcast list whitelist response failed: %d\n", ret);
+    return ret;
+  }
+
+  return 0;
+}
+
+/**
  * fw_netlink_recv_msg - 处理守护进程发来的消息
  * @skb: 接收到的 netlink 消息
  * 
@@ -577,6 +710,11 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
     case FW_NL_LIST_BANS_QUERY:
       pr_info("netlink: list bans query received, seq=%u\n", be32_to_cpu(hdr->seq));
       fw_netlink_send_list_bans_response(be32_to_cpu(hdr->seq));
+      break;
+
+    case FW_NL_LIST_WHITELIST_QUERY:
+      pr_info("netlink: list whitelist query received, seq=%u\n", be32_to_cpu(hdr->seq));
+      fw_netlink_send_list_whitelist_response(be32_to_cpu(hdr->seq));
       break;
 
     default:

@@ -15,7 +15,8 @@ use std::thread;
 
 use protocol::{
     FwNlBanCmd, FwNlBanStateChange, FwNlConfigUpdate, FwNlDdosEvent, FwNlListBansQuery,
-    FwNlListBansResponse, FwNlMsgType, FwNlStatsQuery, FwNlStatsResponse, FW_NL_MAGIC,
+    FwNlListBansResponse, FwNlListWhitelistQuery, FwNlListWhitelistResponse, FwNlMsgType,
+    FwNlStatsQuery, FwNlStatsResponse, FW_NL_MAGIC,
 };
 
 pub use decision::DdosDecisionEngine;
@@ -363,6 +364,24 @@ impl NetlinkContext {
                     std::sync::atomic::Ordering::Relaxed,
                 );
             }
+            Some(FwNlMsgType::ListWhitelistResponse) => {
+                // 处理白名单列表响应
+                if hdr_data.len() < std::mem::size_of::<FwNlListWhitelistResponse>() {
+                    anyhow::bail!("白名单列表响应数据太短");
+                }
+
+                let (_resp, entries) = FwNlListWhitelistResponse::from_bytes(hdr_data)?;
+                crate::logger::info!(
+                    crate::logger::get(),
+                    "收到白名单列表响应";
+                    "count" => entries.len()
+                );
+
+                // 更新 DAEMON_STATS.whitelist_count
+                crate::types::DAEMON_STATS
+                    .whitelist_count
+                    .store(entries.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
             _ => {
                 crate::logger::warn!(
                     crate::logger::get(),
@@ -401,6 +420,12 @@ impl NetlinkContext {
     /// 发送统计数据查询（启动时恢复状态）
     pub fn send_stats_query(&self, seq: u32) -> Result<()> {
         let query = FwNlStatsQuery::new(seq);
+        self.send_command(&query.to_bytes())
+    }
+
+    /// 发送白名单列表查询（启动时恢复状态）
+    pub fn send_list_whitelist_query(&self, seq: u32) -> Result<()> {
+        let query = FwNlListWhitelistQuery::new(seq);
         self.send_command(&query.to_bytes())
     }
 

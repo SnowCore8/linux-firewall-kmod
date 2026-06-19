@@ -248,6 +248,13 @@ fn main() -> Result<()> {
             info!(logger::get(), "已发送统计数据查询"; "seq" => seq + 1);
         }
 
+        // 查询白名单列表
+        if let Err(e) = ctx_arc.send_list_whitelist_query(seq + 2) {
+            warn!(logger::get(), "发送白名单列表查询失败"; "error" => %e);
+        } else {
+            info!(logger::get(), "已发送白名单列表查询"; "seq" => seq + 2);
+        }
+
         // 等待响应（给内核一些时间处理）
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
