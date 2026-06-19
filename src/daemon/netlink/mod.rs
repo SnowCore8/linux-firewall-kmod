@@ -14,9 +14,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 use protocol::{
-    FwNlBanCmd, FwNlBanStateChange, FwNlConfigUpdate, FwNlDdosEvent, FwNlListBansQuery,
-    FwNlListBansResponse, FwNlListWhitelistQuery, FwNlListWhitelistResponse, FwNlMsgType,
-    FwNlStatsQuery, FwNlStatsResponse, FwNlWhitelistCmd, FW_NL_MAGIC,
+    FwNlBanCmd, FwNlBanStateChange, FwNlConfigAck, FwNlConfigUpdate, FwNlDdosEvent,
+    FwNlListBansQuery, FwNlListBansResponse, FwNlListWhitelistQuery, FwNlListWhitelistResponse,
+    FwNlMsgType, FwNlStatsQuery, FwNlStatsResponse, FwNlWhitelistCmd, FW_NL_MAGIC,
 };
 
 pub use decision::DdosDecisionEngine;
@@ -382,6 +382,31 @@ impl NetlinkContext {
                 crate::types::DAEMON_STATS
                     .whitelist_count
                     .store(entries.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+            Some(FwNlMsgType::ConfigAck) => {
+                // 处理配置更新确认
+                if hdr_data.len() < std::mem::size_of::<FwNlConfigAck>() {
+                    anyhow::bail!("配置确认数据太短");
+                }
+
+                let ack = FwNlConfigAck::from_bytes(hdr_data)?;
+                let applied = ack.applied_flags();
+                let rejected = ack.rejected_flags();
+
+                if rejected != 0 {
+                    crate::logger::warn!(
+                        crate::logger::get(),
+                        "配置更新部分被拒绝";
+                        "applied_flags" => format!("0x{:x}", applied),
+                        "rejected_flags" => format!("0x{:x}", rejected)
+                    );
+                } else {
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "配置更新已确认";
+                        "applied_flags" => format!("0x{:x}", applied)
+                    );
+                }
             }
             _ => {
                 crate::logger::warn!(

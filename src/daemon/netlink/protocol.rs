@@ -38,6 +38,8 @@ pub enum FwNlMsgType {
     AddWhitelist = 12,
     /// 守护进程 → 内核：移除白名单条目
     RemoveWhitelist = 13,
+    /// 内核 → 守护进程：配置更新确认
+    ConfigAck = 14,
 }
 
 impl FwNlMsgType {
@@ -56,6 +58,7 @@ impl FwNlMsgType {
             11 => Some(Self::ListWhitelistResponse),
             12 => Some(Self::AddWhitelist),
             13 => Some(Self::RemoveWhitelist),
+            14 => Some(Self::ConfigAck),
             _ => None,
         }
     }
@@ -687,5 +690,38 @@ impl FwNlWhitelistCmd {
     pub fn to_bytes(self) -> Vec<u8> {
         let ptr = &self as *const Self as *const u8;
         unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
+    }
+}
+
+// ============================================================================
+// 配置确认响应
+// ============================================================================
+
+/// 配置更新确认（内核 → 守护进程）
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlConfigAck {
+    pub hdr: FwNlMsgHdr,
+    /// 实际生效的配置项标志位
+    pub applied_flags: u32,
+    /// 被拒绝的配置项标志位（如 ban_time=0）
+    pub rejected_flags: u32,
+}
+
+impl FwNlConfigAck {
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() < std::mem::size_of::<Self>() {
+            anyhow::bail!("配置确认数据太短");
+        }
+        let ack: Self = unsafe { std::ptr::read(data.as_ptr() as *const Self) };
+        Ok(ack)
+    }
+
+    pub fn applied_flags(&self) -> u32 {
+        u32::from_be(self.applied_flags)
+    }
+
+    pub fn rejected_flags(&self) -> u32 {
+        u32::from_be(self.rejected_flags)
     }
 }

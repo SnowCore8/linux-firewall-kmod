@@ -36,6 +36,7 @@ enum {
   FW_NL_LIST_WHITELIST_RESPONSE = 11, /* 内核 → 守护进程：白名单列表响应 */
   FW_NL_ADD_WHITELIST = 12,           /* 守护进程 → 内核：添加白名单条目 */
   FW_NL_REMOVE_WHITELIST = 13,        /* 守护进程 → 内核：移除白名单条目 */
+  FW_NL_CONFIG_ACK = 14,              /* 内核 → 守护进程：配置更新确认 */
 };
 
 /* 消息头结构（20 字节） */
@@ -143,6 +144,13 @@ struct fw_nl_whitelist_cmd {
   __u8 prefix_len;     /* 前缀长度 */
   __u8 addr[16];       /* IP 地址 */
   __u8 device[16];     /* 网络设备名称 */
+} __packed;
+
+/* 配置更新确认（内核 → 守护进程） */
+struct fw_nl_config_ack {
+  struct fw_nlmsg_hdr hdr;
+  __u32 applied_flags;  /* 实际生效的配置项标志位 */
+  __u32 rejected_flags; /* 被拒绝的配置项标志位 */
 } __packed;
 
 /* 全局 netlink socket */
@@ -468,6 +476,50 @@ int fw_netlink_send_stats_response(u32 seq) {
 }
 
 /**
+ * fw_netlink_send_config_ack - 向守护进程发送配置更新确认
+ * @seq: 请求序列号
+ * @applied_flags: 实际生效的配置项标志位
+ * @rejected_flags: 被拒绝的配置项标志位
+ */
+int fw_netlink_send_config_ack(u32 seq, u32 applied_flags, u32 rejected_flags) {
+  struct sk_buff *skb;
+  struct nlmsghdr *nlh;
+  struct fw_nl_config_ack *ack;
+  int ret;
+
+  if (!fw_nl_sock) {
+    return -ENOTCONN;
+  }
+
+  skb = nlmsg_new(sizeof(*ack), GFP_ATOMIC);
+  if (!skb) {
+    return -ENOMEM;
+  }
+
+  nlh = nlmsg_put(skb, 0, 0, FW_NL_CONFIG_ACK, sizeof(*ack), 0);
+  if (!nlh) {
+    kfree_skb(skb);
+    return -ENOMEM;
+  }
+
+  ack = (struct fw_nl_config_ack *)nlmsg_data(nlh);
+  ack->hdr.magic = cpu_to_be32(FW_NL_MAGIC);
+  ack->hdr.msg_type = cpu_to_be16(FW_NL_CONFIG_ACK);
+  ack->hdr.msg_len = cpu_to_be16(sizeof(*ack));
+  ack->hdr.seq = cpu_to_be32(seq);
+  ack->applied_flags = cpu_to_be32(applied_flags);
+  ack->rejected_flags = cpu_to_be32(rejected_flags);
+
+  ret = netlink_broadcast(fw_nl_sock, skb, 0, 1, GFP_ATOMIC);
+  if (ret < 0 && ret != -ESRCH) {
+    pr_warn_ratelimited("netlink broadcast config ack failed: %d\n", ret);
+    return ret;
+  }
+
+  return 0;
+}
+
+/**
  * ipv4_mask_to_prefix_len - 将 IPv4 子网掩码转换为前缀长度
  * @mask: IPv4 子网掩码（网络字节序）
  *
@@ -639,6 +691,8 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
     case FW_NL_SET_CONFIG: {
       struct fw_nl_config_update *cfg = (struct fw_nl_config_update *)hdr;
       __u32 flags = be32_to_cpu(cfg->flags);
+      __u32 original_flags = flags;
+      __u32 rejected_flags = 0;
       int updated = 0;
 
       /* 配置验证：拒绝危险值 */
@@ -646,6 +700,7 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
         __u32 new_ban_time = be32_to_cpu(cfg->ban_time);
         if (new_ban_time == 0) {
           pr_warn("netlink: reject ban_time=0 (ambiguous, use procfs for permanent ban)\n");
+          rejected_flags |= FW_NL_CFG_BAN_TIME;
           flags &= ~FW_NL_CFG_BAN_TIME;
         }
       }
@@ -654,6 +709,7 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
         __u64 new_pps = be64_to_cpu(cfg->max_packets_per_second);
         if (new_pps == 0) {
           pr_warn("netlink: reject max_packets_per_second=0 (would drop all traffic)\n");
+          rejected_flags |= FW_NL_CFG_MAX_PPS;
           flags &= ~FW_NL_CFG_MAX_PPS;
         }
       }
@@ -662,6 +718,7 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
         __u64 new_bps = be64_to_cpu(cfg->max_bytes_per_second);
         if (new_bps == 0) {
           pr_warn("netlink: reject max_bytes_per_second=0 (would drop all traffic)\n");
+          rejected_flags |= FW_NL_CFG_MAX_BPS;
           flags &= ~FW_NL_CFG_MAX_BPS;
         }
       }
@@ -720,6 +777,11 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       }
 
       pr_info("netlink: config updated, %d items changed\n", updated);
+
+      /* 发送配置确认响应 */
+      fw_netlink_send_config_ack(be32_to_cpu(hdr->seq),
+                                  original_flags & ~rejected_flags,
+                                  rejected_flags);
       break;
     }
 
