@@ -54,6 +54,28 @@ struct fw_nl_ban_cmd {
   __u8 addr[16];       /* IP 地址 */
 } __packed;
 
+/* 配置更新载荷 */
+struct fw_nl_config_update {
+  struct fw_nlmsg_hdr hdr;
+  __u32 flags;                  /* 配置项标志位 */
+  __u32 ban_time;               /* 封禁时长（秒） */
+  __u32 rate_window_seconds;    /* 速率检测窗口（秒） */
+  __u64 max_packets_per_second; /* 每秒最大数据包数 */
+  __u64 max_bytes_per_second;   /* 每秒最大字节数 */
+  __u64 max_syn_per_second;     /* 每秒最大 SYN 包数 */
+  __u64 max_udp_per_second;     /* 每秒最大 UDP 包数 */
+  __u64 max_icmp_per_second;    /* 每秒最大 ICMP 包数 */
+} __packed;
+
+/* 配置项标志位 */
+#define FW_NL_CFG_BAN_TIME (1 << 0)
+#define FW_NL_CFG_RATE_WINDOW (1 << 1)
+#define FW_NL_CFG_MAX_PPS (1 << 2)
+#define FW_NL_CFG_MAX_BPS (1 << 3)
+#define FW_NL_CFG_MAX_SYN (1 << 4)
+#define FW_NL_CFG_MAX_UDP (1 << 5)
+#define FW_NL_CFG_MAX_ICMP (1 << 6)
+
 /* 全局 netlink socket */
 static struct sock *fw_nl_sock = NULL;
 
@@ -175,10 +197,59 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       unban_ip(&fw_info, cmd->af, cmd->addr);
       break;
 
-    case FW_NL_SET_CONFIG:
-      /* 配置热更新暂未实现，守护进程通过重启应用新配置 */
-      pr_warn("netlink: SET_CONFIG not supported, restart daemon instead\n");
+    case FW_NL_SET_CONFIG: {
+      struct fw_nl_config_update *cfg = (struct fw_nl_config_update *)hdr;
+      __u32 flags = be32_to_cpu(cfg->flags);
+      int updated = 0;
+
+      /* 根据标志位更新对应配置项 */
+      if (flags & FW_NL_CFG_BAN_TIME) {
+        fw_info.ban_time = be32_to_cpu(cfg->ban_time);
+        pr_info("netlink: ban_time updated to %u seconds\n", fw_info.ban_time);
+        updated++;
+      }
+
+      if (flags & FW_NL_CFG_RATE_WINDOW) {
+        fw_info.rate_window_seconds = be32_to_cpu(cfg->rate_window_seconds);
+        fw_info.rate_window_jiffies = msecs_to_jiffies(fw_info.rate_window_seconds * 1000);
+        pr_info("netlink: rate_window updated to %u seconds\n", fw_info.rate_window_seconds);
+        updated++;
+      }
+
+      if (flags & FW_NL_CFG_MAX_PPS) {
+        fw_info.max_packets_per_second = be64_to_cpu(cfg->max_packets_per_second);
+        pr_info("netlink: max_packets_per_second updated to %lu\n",
+                fw_info.max_packets_per_second);
+        updated++;
+      }
+
+      if (flags & FW_NL_CFG_MAX_BPS) {
+        fw_info.max_bytes_per_second = be64_to_cpu(cfg->max_bytes_per_second);
+        pr_info("netlink: max_bytes_per_second updated to %lu\n", fw_info.max_bytes_per_second);
+        updated++;
+      }
+
+      if (flags & FW_NL_CFG_MAX_SYN) {
+        fw_info.max_syn_per_second = be64_to_cpu(cfg->max_syn_per_second);
+        pr_info("netlink: max_syn_per_second updated to %lu\n", fw_info.max_syn_per_second);
+        updated++;
+      }
+
+      if (flags & FW_NL_CFG_MAX_UDP) {
+        fw_info.max_udp_per_second = be64_to_cpu(cfg->max_udp_per_second);
+        pr_info("netlink: max_udp_per_second updated to %lu\n", fw_info.max_udp_per_second);
+        updated++;
+      }
+
+      if (flags & FW_NL_CFG_MAX_ICMP) {
+        fw_info.max_icmp_per_second = be64_to_cpu(cfg->max_icmp_per_second);
+        pr_info("netlink: max_icmp_per_second updated to %lu\n", fw_info.max_icmp_per_second);
+        updated++;
+      }
+
+      pr_info("netlink: config updated, %d items changed\n", updated);
       break;
+    }
 
     default:
       pr_warn("unknown netlink message type: %u\n", be16_to_cpu(hdr->msg_type));

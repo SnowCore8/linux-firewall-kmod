@@ -104,6 +104,40 @@ pub struct FwNlBanCmd {
     pub addr: [u8; 16],
 }
 
+/// 配置更新载荷（守护进程 → 内核）
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlConfigUpdate {
+    pub hdr: FwNlMsgHdr,
+    /// 配置项标志位（哪些字段有效）
+    pub flags: u32,
+    /// 封禁时长（秒）
+    pub ban_time: u32,
+    /// 速率检测窗口（秒）
+    pub rate_window_seconds: u32,
+    /// 每秒最大数据包数
+    pub max_packets_per_second: u64,
+    /// 每秒最大字节数
+    pub max_bytes_per_second: u64,
+    /// 每秒最大 SYN 包数
+    pub max_syn_per_second: u64,
+    /// 每秒最大 UDP 包数
+    pub max_udp_per_second: u64,
+    /// 每秒最大 ICMP 包数
+    pub max_icmp_per_second: u64,
+}
+
+/// 配置项标志位
+pub mod config_flags {
+    pub const BAN_TIME: u32 = 1 << 0;
+    pub const RATE_WINDOW: u32 = 1 << 1;
+    pub const MAX_PPS: u32 = 1 << 2;
+    pub const MAX_BPS: u32 = 1 << 3;
+    pub const MAX_SYN: u32 = 1 << 4;
+    pub const MAX_UDP: u32 = 1 << 5;
+    pub const MAX_ICMP: u32 = 1 << 6;
+}
+
 impl FwNlBanCmd {
     /// 创建封禁命令
     pub fn new_ban(ip: IpAddr, duration_secs: u32) -> Self {
@@ -151,6 +185,76 @@ impl FwNlBanCmd {
             duration_secs: 0,
             addr,
         }
+    }
+
+    /// 转换为字节数组
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let ptr = self as *const Self as *const u8;
+        unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
+    }
+}
+
+impl FwNlConfigUpdate {
+    /// 创建配置更新消息
+    pub fn new(flags: u32) -> Self {
+        Self {
+            hdr: FwNlMsgHdr {
+                magic: FW_NL_MAGIC.to_be(),
+                msg_type: (FwNlMsgType::SetConfig as u16).to_be(),
+                msg_len: (std::mem::size_of::<Self>() as u16).to_be(),
+                seq: 0,
+            },
+            flags: flags.to_be(),
+            ban_time: 0,
+            rate_window_seconds: 0,
+            max_packets_per_second: 0,
+            max_bytes_per_second: 0,
+            max_syn_per_second: 0,
+            max_udp_per_second: 0,
+            max_icmp_per_second: 0,
+        }
+    }
+
+    /// 设置封禁时长
+    pub fn with_ban_time(mut self, secs: u32) -> Self {
+        self.ban_time = secs.to_be();
+        self
+    }
+
+    /// 设置速率窗口
+    pub fn with_rate_window(mut self, secs: u32) -> Self {
+        self.rate_window_seconds = secs.to_be();
+        self
+    }
+
+    /// 设置最大 PPS
+    pub fn with_max_pps(mut self, pps: u64) -> Self {
+        self.max_packets_per_second = pps.to_be();
+        self
+    }
+
+    /// 设置最大 BPS
+    pub fn with_max_bps(mut self, bps: u64) -> Self {
+        self.max_bytes_per_second = bps.to_be();
+        self
+    }
+
+    /// 设置最大 SYN/s
+    pub fn with_max_syn(mut self, syn: u64) -> Self {
+        self.max_syn_per_second = syn.to_be();
+        self
+    }
+
+    /// 设置最大 UDP/s
+    pub fn with_max_udp(mut self, udp: u64) -> Self {
+        self.max_udp_per_second = udp.to_be();
+        self
+    }
+
+    /// 设置最大 ICMP/s
+    pub fn with_max_icmp(mut self, icmp: u64) -> Self {
+        self.max_icmp_per_second = icmp.to_be();
+        self
     }
 
     /// 转换为字节数组

@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use protocol::{FwNlBanCmd, FwNlDdosEvent, FwNlMsgType, FW_NL_MAGIC};
+use protocol::{FwNlBanCmd, FwNlConfigUpdate, FwNlDdosEvent, FwNlMsgType, FW_NL_MAGIC};
 
 pub use decision::DdosDecisionEngine;
 
@@ -223,6 +223,11 @@ impl NetlinkContext {
     pub fn send_unban(&self, ip: IpAddr) -> Result<()> {
         let cmd = FwNlBanCmd::new_unban(ip);
         self.send_command(&cmd.to_bytes())
+    }
+
+    /// 发送配置更新到内核
+    pub fn send_config_update(&self, config: &FwNlConfigUpdate) -> Result<()> {
+        self.send_command(&config.to_bytes())
     }
 
     /// 发送原始命令到内核
