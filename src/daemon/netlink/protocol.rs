@@ -20,6 +20,8 @@ pub enum FwNlMsgType {
     UnbanIp = 3,
     /// 守护进程 → 内核：配置更新
     SetConfig = 4,
+    /// 内核 → 守护进程：封禁状态变更（用户通过 procfs 操作时推送）
+    BanStateChange = 5,
 }
 
 impl FwNlMsgType {
@@ -29,6 +31,7 @@ impl FwNlMsgType {
             2 => Some(Self::BanIp),
             3 => Some(Self::UnbanIp),
             4 => Some(Self::SetConfig),
+            5 => Some(Self::BanStateChange),
             _ => None,
         }
     }
@@ -91,6 +94,57 @@ impl FwNlDdosEvent {
             .position(|&b| b == 0)
             .unwrap_or(self.reason.len());
         String::from_utf8_lossy(&self.reason[..end]).to_string()
+    }
+}
+
+/// 封禁状态变更事件（内核 → 守护进程）
+/// 当用户通过 /proc/firewall/bans 手动封禁/解封时推送
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlBanStateChange {
+    pub hdr: FwNlMsgHdr,
+    pub action: u8, // 1=ban, 2=unban
+    pub af: u8,
+    pub duration_secs: u32,
+    pub addr: [u8; 16],
+}
+
+impl FwNlBanStateChange {
+    /// 从字节数组解析
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() < std::mem::size_of::<Self>() {
+            anyhow::bail!("数据太短");
+        }
+
+        let event: Self = unsafe { std::ptr::read(data.as_ptr() as *const Self) };
+        Ok(event)
+    }
+
+    /// 获取 IP 地址字符串
+    pub fn ip_str(&self) -> String {
+        if self.af == 2 {
+            // AF_INET
+            format!(
+                "{}.{}.{}.{}",
+                self.addr[0], self.addr[1], self.addr[2], self.addr[3]
+            )
+        } else if self.af == 10 {
+            // AF_INET6
+            let addr: std::net::Ipv6Addr = std::net::Ipv6Addr::from(self.addr);
+            addr.to_string()
+        } else {
+            "unknown".to_string()
+        }
+    }
+
+    /// 是否为封禁操作
+    pub fn is_ban(&self) -> bool {
+        self.action == 1
+    }
+
+    /// 是否为解封操作
+    pub fn is_unban(&self) -> bool {
+        self.action == 2
     }
 }
 

@@ -290,6 +290,7 @@ void ddos_notify_worker(struct work_struct *work);
 int fw_netlink_init(void);
 void fw_netlink_exit(void);
 int fw_netlink_send_event(u8 af, const void *ip, const char *reason, u32 rate_pps);
+int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 duration_secs);
 
 /* 导出函数，提供对 fw_info 的受控访问 */
 struct firewall_info *get_fw_info(void);

@@ -23,10 +23,11 @@ extern struct firewall_info fw_info;
 
 /* 消息类型定义 */
 enum {
-  FW_NL_DDOS_EVENT = 1, /* 内核 → 守护进程：DDoS 违规事件 */
-  FW_NL_BAN_IP = 2,     /* 守护进程 → 内核：封禁 IP */
-  FW_NL_UNBAN_IP = 3,   /* 守护进程 → 内核：解封 IP */
-  FW_NL_SET_CONFIG = 4, /* 守护进程 → 内核：配置更新 */
+  FW_NL_DDOS_EVENT = 1,       /* 内核 → 守护进程：DDoS 违规事件 */
+  FW_NL_BAN_IP = 2,           /* 守护进程 → 内核：封禁 IP */
+  FW_NL_UNBAN_IP = 3,         /* 守护进程 → 内核：解封 IP */
+  FW_NL_SET_CONFIG = 4,       /* 守护进程 → 内核：配置更新 */
+  FW_NL_BAN_STATE_CHANGE = 5, /* 内核 → 守护进程：封禁状态变更 */
 };
 
 /* 消息头结构（20 字节） */
@@ -44,6 +45,15 @@ struct fw_nl_ddos_event {
   __u8 reason[32]; /* 违规原因：SYN flood / UDP flood 等 */
   __u32 rate_pps;  /* 当前速率（包/秒） */
   __u8 addr[16];   /* IP 地址（IPv4 用前 4 字节） */
+} __packed;
+
+/* 封禁状态变更事件载荷（内核 → 守护进程） */
+struct fw_nl_ban_state_change {
+  struct fw_nlmsg_hdr hdr;
+  __u8 action;         /* 1=ban, 2=unban */
+  __u8 af;             /* 地址族 */
+  __u32 duration_secs; /* 封禁时长（秒），0 = 永久 */
+  __u8 addr[16];       /* IP 地址 */
 } __packed;
 
 /* 封禁/解封命令载荷 */
@@ -138,6 +148,67 @@ int fw_netlink_send_event(u8 af, const void *ip, const char *reason, u32 rate_pp
   if (ret < 0 && ret != -ESRCH) {
     /* -ESRCH 表示没有监听者，这是正常情况 */
     pr_warn_ratelimited("netlink broadcast failed: %d\n", ret);
+    return ret;
+  }
+
+  return 0;
+}
+
+/**
+ * fw_netlink_send_ban_state_change - 向守护进程发送封禁状态变更事件
+ * @af: 地址族
+ * @ip: IP 地址指针
+ * @action: 操作类型（1=ban, 2=unban）
+ * @duration_secs: 封禁时长（秒），0 = 永久
+ *
+ * 当用户通过 /proc/firewall/bans 手动封禁/解封时调用，
+ * 通知守护进程更新 ACTIVE_BAN_CACHE。
+ */
+int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 duration_secs) {
+  struct sk_buff *skb;
+  struct fw_nl_ban_state_change *event;
+  int ret;
+
+  if (!fw_nl_sock) {
+    return -ENOTCONN;
+  }
+
+  /* 分配 netlink 消息缓冲区 */
+  skb = nlmsg_new(sizeof(*event), GFP_ATOMIC);
+  if (!skb) {
+    return -ENOMEM;
+  }
+
+  /* 构造消息 */
+  event = (struct fw_nl_ban_state_change *)nlmsg_put(skb, 0, 0, 0, sizeof(*event), 0);
+  if (!event) {
+    kfree_skb(skb);
+    return -ENOMEM;
+  }
+
+  /* 填充消息头 */
+  event->hdr.magic = cpu_to_be32(FW_NL_MAGIC);
+  event->hdr.msg_type = cpu_to_be16(FW_NL_BAN_STATE_CHANGE);
+  event->hdr.msg_len = cpu_to_be16(sizeof(*event));
+  event->hdr.seq = cpu_to_be32(atomic_inc_return(&fw_nl_seq));
+
+  /* 填充事件数据 */
+  event->action = action;
+  event->af = af;
+  event->duration_secs = cpu_to_be32(duration_secs);
+
+  /* 复制 IP 地址 */
+  if (af == FW_AF_INET) {
+    memcpy(event->addr, ip, 4);
+  } else {
+    memcpy(event->addr, ip, 16);
+  }
+
+  /* 广播消息（端口 0 表示广播给所有监听者） */
+  ret = netlink_broadcast(fw_nl_sock, skb, 0, 1, GFP_ATOMIC);
+  if (ret < 0 && ret != -ESRCH) {
+    /* -ESRCH 表示没有监听者，这是正常情况 */
+    pr_warn_ratelimited("netlink broadcast ban state change failed: %d\n", ret);
     return ret;
   }
 

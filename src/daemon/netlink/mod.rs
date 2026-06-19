@@ -13,7 +13,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
-use protocol::{FwNlBanCmd, FwNlConfigUpdate, FwNlDdosEvent, FwNlMsgType, FW_NL_MAGIC};
+use protocol::{
+    FwNlBanCmd, FwNlBanStateChange, FwNlConfigUpdate, FwNlDdosEvent, FwNlMsgType, FW_NL_MAGIC,
+};
 
 pub use decision::DdosDecisionEngine;
 pub use protocol::{config_flags, FwNlConfigUpdate as ConfigUpdate};
@@ -216,6 +218,56 @@ impl NetlinkContext {
                             "无法解析 IP 地址";
                             "ip" => &ip_str
                         );
+                    }
+                }
+            }
+            Some(FwNlMsgType::BanStateChange) => {
+                // 解析封禁状态变更事件
+                let event_data = &hdr_data[12..];
+                if event_data.len() < std::mem::size_of::<FwNlBanStateChange>() - 12 {
+                    anyhow::bail!("BanStateChange 事件数据太短");
+                }
+
+                let event = FwNlBanStateChange::from_bytes(event_data)?;
+                let ip_str = event.ip_str();
+
+                if event.is_ban() {
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "收到封禁状态变更：封禁";
+                        "ip" => &ip_str,
+                        "duration_secs" => event.duration_secs
+                    );
+
+                    // 更新 ACTIVE_BAN_CACHE
+                    if let Some(cache) = crate::types::ACTIVE_BAN_CACHE.get() {
+                        let now = crate::types::now_secs();
+                        let ban_info = crate::types::BanInfo {
+                            ip: ip_str.clone(),
+                            ip_num: 0,
+                            jail_name: "kernel".to_string(),
+                            reason: crate::types::BanReason::ManualBan,
+                            banned_at: now,
+                            expires_at: if event.duration_secs == 0 {
+                                0
+                            } else {
+                                now + event.duration_secs as i64
+                            },
+                            is_permanent: event.duration_secs == 0,
+                            fail_count: 0,
+                        };
+                        cache.insert(ban_info);
+                    }
+                } else if event.is_unban() {
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "收到封禁状态变更：解封";
+                        "ip" => &ip_str
+                    );
+
+                    // 从 ACTIVE_BAN_CACHE 移除
+                    if let Some(cache) = crate::types::ACTIVE_BAN_CACHE.get() {
+                        cache.remove(&ip_str);
                     }
                 }
             }
