@@ -160,7 +160,8 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         // API: 统计数据
         let stats = web_ui::api::get_stats();
         let envelope = web_ui::api::ApiResponse::ok(stats);
-        let json = serde_json::to_string(&envelope).unwrap_or_else(|_| r#"{"code":-1,"data":null,"message":"序列化失败"}"#.to_string());
+        let json = serde_json::to_string(&envelope)
+            .unwrap_or_else(|_| r#"{"code":-1,"data":null,"message":"序列化失败"}"#.to_string());
         let response = Response::from_string(json).with_header(
             Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
         );
@@ -175,7 +176,8 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         // API: 活跃封禁列表
         let bans = web_ui::api::get_active_bans();
         let envelope = web_ui::api::ApiResponse::ok(bans);
-        let json = serde_json::to_string(&envelope).unwrap_or_else(|_| r#"{"code":-1,"data":[],"message":"序列化失败"}"#.to_string());
+        let json = serde_json::to_string(&envelope)
+            .unwrap_or_else(|_| r#"{"code":-1,"data":[],"message":"序列化失败"}"#.to_string());
         let response = Response::from_string(json).with_header(
             Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
         );
@@ -191,7 +193,8 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         let jail_infos = super::get_global_jails();
         let jails = web_ui::api::get_jails(&jail_infos);
         let envelope = web_ui::api::ApiResponse::ok(jails);
-        let json = serde_json::to_string(&envelope).unwrap_or_else(|_| r#"{"code":-1,"data":[],"message":"序列化失败"}"#.to_string());
+        let json = serde_json::to_string(&envelope)
+            .unwrap_or_else(|_| r#"{"code":-1,"data":[],"message":"序列化失败"}"#.to_string());
         let response = Response::from_string(json).with_header(
             Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
         );
@@ -206,7 +209,8 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         // API: Web UI 配置
         let config = web_ui::api::get_webui_config();
         let envelope = web_ui::api::ApiResponse::ok(config);
-        let json = serde_json::to_string(&envelope).unwrap_or_else(|_| r#"{"code":-1,"data":null,"message":"序列化失败"}"#.to_string());
+        let json = serde_json::to_string(&envelope)
+            .unwrap_or_else(|_| r#"{"code":-1,"data":null,"message":"序列化失败"}"#.to_string());
         let response = Response::from_string(json).with_header(
             Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
         );

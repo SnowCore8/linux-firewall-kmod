@@ -187,17 +187,10 @@ fn main() -> Result<()> {
         info!(logger::get(), "历史数据库初始化成功");
     }
 
-    // 从内核模块同步现有封禁列表到内存缓存
-    match ban::sync_bans_from_kernel() {
-        Ok(count) => {
-            if count > 0 {
-                info!(logger::get(), "从内核模块同步封禁列表"; "count" => count);
-            }
-        }
-        Err(e) => {
-            warn!(logger::get(), "从内核模块同步封禁列表失败"; "error" => %e);
-        }
-    }
+    // TODO: 守护进程启动时通过 netlink 请求-响应恢复 ACTIVE_BAN_CACHE
+    // 当前 netlink 不支持请求-响应，守护进程重启后内存为空，
+    // 直到下次 DDoS 事件或日志解析触发封禁。
+    // 已知限制：用户通过 /proc/firewall/bans 手动封禁的 IP 不会反映在 Web UI 中。
 
     // 初始化 netlink 通信（接收内核 DDoS 事件）
     let mut netlink_ctx = match NetlinkContext::new() {

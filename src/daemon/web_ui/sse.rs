@@ -9,8 +9,6 @@
 //! io::copy 永不返回，导致 HTTP 头和 SSE 数据永远卡在缓冲区中。
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
-use std::time::Duration;
 
 use tiny_http::{Header, Request, Response, StatusCode};
 
@@ -63,11 +61,6 @@ pub fn handle_sse_connection(request: Request) {
         }
     }
     let _guard = ConnectionGuard;
-
-    // 获取推送间隔配置
-    let push_interval = crate::http_exporter::get_global_webui_config()
-        .map(|c| c.sse_push_interval as u64)
-        .unwrap_or(1);
 
     // 收集一轮完整数据
     let mut sse_data = Vec::with_capacity(4096);

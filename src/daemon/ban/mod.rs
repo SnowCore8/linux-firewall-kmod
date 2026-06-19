@@ -30,7 +30,7 @@ mod procfs;
 pub use ip_validation::{validate_ip, validate_ipv4, ValidatedIp};
 pub use operations::{
     ban_ip, ban_ip_permanent, ban_ip_with_history, cleanup_expired_bans, execute_ban_action,
-    sync_bans_from_kernel, unban_ip, unban_permanent_ip,
+    unban_ip, unban_permanent_ip,
 };
 pub use procfs::{close_cached_bans_fd, secure_procfs_write};
 
