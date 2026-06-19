@@ -327,6 +327,9 @@ fn generate_traffic_data() -> ChartData {
 pub fn get_active_bans() -> Vec<BanResponse> {
     let now = crate::types::now_secs();
 
+    // 从内核同步最新封禁状态（确保 procfs 手动添加的封禁也能显示）
+    let _ = crate::ban::sync_bans_from_kernel();
+
     ACTIVE_BAN_CACHE
         .get()
         .map(|cache| {

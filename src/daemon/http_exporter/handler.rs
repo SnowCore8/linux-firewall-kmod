@@ -12,24 +12,27 @@ use crate::web_ui;
 // 安全头
 // ============================================================================
 
-/// 给响应添加 4 个安全头:`X-Content-Type-Options` / `X-Frame-Options` /
+/// 给响应添加安全头:`X-Content-Type-Options` / `X-Frame-Options` /
 /// `X-Content-Security-Policy` / `Cache-Control: no-store`。
 ///
-/// # Arguments
-/// - `response`: 原始 `tiny_http` 响应
-///
-/// # Panics
-/// `Header::from_bytes` 仅在 header 名/值含非 ASCII 或 CRLF 时 panic。
-/// 4 个 header 名 + 值都是静态 ASCII 字符串,实际不可能 panic
-fn add_security_headers(response: Response<Cursor<Vec<u8>>>) -> Response<Cursor<Vec<u8>>> {
+/// Web UI 路径（`/dashboard`、`/static/*`）使用 `default-src 'self'` 允许加载同源资源。
+/// 其他路径使用 `default-src 'none'` 严格限制。
+fn add_security_headers(
+    response: Response<Cursor<Vec<u8>>>,
+    is_webui: bool,
+) -> Response<Cursor<Vec<u8>>> {
+    let csp_value = if is_webui {
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    } else {
+        "default-src 'none'"
+    };
     response
         .with_header(
             Header::from_bytes("X-Content-Type-Options", "nosniff").expect("静态 ASCII 头"),
         )
         .with_header(Header::from_bytes("X-Frame-Options", "DENY").expect("静态 ASCII 头"))
         .with_header(
-            Header::from_bytes("X-Content-Security-Policy", "default-src 'none'")
-                .expect("静态 ASCII 头"),
+            Header::from_bytes("Content-Security-Policy", csp_value).expect("静态 ASCII 头"),
         )
         .with_header(Header::from_bytes("Cache-Control", "no-store").expect("静态 ASCII 头"))
 }
@@ -55,7 +58,7 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         let response = Response::from_string(body).with_header(
             Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
         );
-        if let Err(e) = request.respond(add_security_headers(response)) {
+        if let Err(e) = request.respond(add_security_headers(response, false)) {
             crate::logger::warn!(
                 crate::logger::get(),
                 "发送 /health 响应失败";
@@ -80,7 +83,7 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
                 Header::from_bytes("WWW-Authenticate", "Basic realm=\"firewall-metrics\"")
                     .expect("静态 ASCII 头"),
             );
-        if let Err(e) = request.respond(add_security_headers(response)) {
+        if let Err(e) = request.respond(add_security_headers(response, false)) {
             crate::logger::warn!(
                 crate::logger::get(),
                 "发送 401 响应失败";
@@ -96,7 +99,7 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
             Header::from_bytes("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
                 .expect("静态 ASCII 头"),
         );
-        if let Err(e) = request.respond(add_security_headers(response)) {
+        if let Err(e) = request.respond(add_security_headers(response, false)) {
             crate::logger::warn!(
                 crate::logger::get(),
                 "发送 /metrics 响应失败";
@@ -108,7 +111,7 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         let response = Response::from_string("")
             .with_status_code(StatusCode(302))
             .with_header(Header::from_bytes("Location", "/dashboard").expect("静态 ASCII 头"));
-        if let Err(e) = request.respond(add_security_headers(response)) {
+        if let Err(e) = request.respond(add_security_headers(response, false)) {
             crate::logger::warn!(
                 crate::logger::get(),
                 "发送重定向响应失败";
@@ -121,7 +124,7 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         let response = Response::from_string(html).with_header(
             Header::from_bytes("Content-Type", "text/html; charset=utf-8").expect("静态 ASCII 头"),
         );
-        if let Err(e) = request.respond(add_security_headers(response)) {
+        if let Err(e) = request.respond(add_security_headers(response, true)) {
             crate::logger::warn!(
                 crate::logger::get(),
                 "发送 /dashboard 响应失败";
@@ -134,7 +137,7 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         if let Some((data, mime_type)) = web_ui::get_static_asset(path) {
             let response = Response::from_data(data)
                 .with_header(Header::from_bytes("Content-Type", mime_type).expect("静态 ASCII 头"));
-            if let Err(e) = request.respond(add_security_headers(response)) {
+            if let Err(e) = request.respond(add_security_headers(response, true)) {
                 crate::logger::warn!(
                     crate::logger::get(),
                     "发送静态资源失败";
@@ -145,7 +148,7 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         } else {
             let body = "404 Not Found\r\n";
             let response = Response::from_string(body).with_status_code(StatusCode(404));
-            if let Err(e) = request.respond(add_security_headers(response)) {
+            if let Err(e) = request.respond(add_security_headers(response, false)) {
                 crate::logger::warn!(
                     crate::logger::get(),
                     "发送 404 响应失败";
@@ -160,7 +163,7 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         let response = Response::from_string(json).with_header(
             Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
         );
-        if let Err(e) = request.respond(add_security_headers(response)) {
+        if let Err(e) = request.respond(add_security_headers(response, false)) {
             crate::logger::warn!(
                 crate::logger::get(),
                 "发送 /api/stats 响应失败";
@@ -174,7 +177,7 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         let response = Response::from_string(json).with_header(
             Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
         );
-        if let Err(e) = request.respond(add_security_headers(response)) {
+        if let Err(e) = request.respond(add_security_headers(response, false)) {
             crate::logger::warn!(
                 crate::logger::get(),
                 "发送 /api/bans 响应失败";
@@ -189,7 +192,7 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         let response = Response::from_string(json).with_header(
             Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
         );
-        if let Err(e) = request.respond(add_security_headers(response)) {
+        if let Err(e) = request.respond(add_security_headers(response, false)) {
             crate::logger::warn!(
                 crate::logger::get(),
                 "发送 /api/jails 响应失败";
@@ -203,7 +206,7 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         let response = Response::from_string(json).with_header(
             Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
         );
-        if let Err(e) = request.respond(add_security_headers(response)) {
+        if let Err(e) = request.respond(add_security_headers(response, false)) {
             crate::logger::warn!(
                 crate::logger::get(),
                 "发送 /api/config 响应失败";
@@ -216,7 +219,7 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
     } else {
         let body = "404 Not Found\r\n";
         let response = Response::from_string(body).with_status_code(StatusCode(404));
-        if let Err(e) = request.respond(add_security_headers(response)) {
+        if let Err(e) = request.respond(add_security_headers(response, false)) {
             crate::logger::warn!(
                 crate::logger::get(),
                 "发送 404 响应失败";

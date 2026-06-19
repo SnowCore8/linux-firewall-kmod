@@ -245,6 +245,16 @@ impl ActiveBanCache {
         self.bans.read().contains_key(ip)
     }
 
+    /// 更新指定 IP 的过期时间（用于内核同步时刷新）
+    pub fn update_expires(&self, ip: &str, expires_at: i64) {
+        let mut bans = self.bans.write();
+        if let Some(info) = bans.get_mut(ip) {
+            // 使用 Arc::make_mut 获取可变引用
+            let info_mut = Arc::make_mut(info);
+            info_mut.expires_at = expires_at;
+        }
+    }
+
     /// 获取当前活跃封禁总数
     #[must_use]
     pub fn len(&self) -> usize {

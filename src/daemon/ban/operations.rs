@@ -252,11 +252,6 @@ pub fn sync_bans_from_kernel() -> Result<usize> {
             continue;
         }
 
-        // 判断是否已存在
-        if cache.contains(ip) {
-            continue;
-        }
-
         // 解析过期时间
         let (is_permanent, expires_at) = if line.contains("(permanent)") {
             (true, 0)
@@ -275,6 +270,12 @@ pub fn sync_bans_from_kernel() -> Result<usize> {
         } else {
             (false, now + 600) // 默认 10 分钟
         };
+
+        // 判断是否已存在（如果已存在，更新过期时间）
+        if cache.contains(ip) {
+            cache.update_expires(ip, expires_at);
+            continue;
+        }
 
         // 创建 BanInfo
         // 注意：从内核同步的封禁无法区分来源（Jail 或 DDoS），统一标记为 "kernel" jail

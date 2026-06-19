@@ -66,6 +66,7 @@ desktop.ini
 .cursor/
 .cursorrules
 .claude/
+.agents/
 agents/
 AGENTS.md
 opencode.json
