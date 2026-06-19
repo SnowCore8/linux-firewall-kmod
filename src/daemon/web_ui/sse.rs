@@ -199,8 +199,9 @@ pub fn handle_sse_connection(request: Request) {
             }
 
             // 收集 Jail 列表
-            if let Some(jail_infos) = get_global_jails() {
-                let jails = api::get_jails(jail_infos);
+            let jail_infos = get_global_jails();
+            if !jail_infos.is_empty() {
+                let jails = api::get_jails(&jail_infos);
                 let jails_json = match serde_json::to_string(&jails) {
                     Ok(j) => j,
                     Err(_) => {

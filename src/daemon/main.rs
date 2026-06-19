@@ -204,7 +204,10 @@ fn main() -> Result<()> {
             cfg.ddos.clone(),
             netlink_for_engine.clone(),
         ));
-        ctx.set_decision_engine(decision_engine);
+        ctx.set_decision_engine(decision_engine.clone());
+
+        // 设置全局决策引擎引用（供配置热重载使用）
+        http_exporter::set_global_decision_engine(decision_engine);
 
         match ctx.start_receiver() {
             Ok(_handle) => {
@@ -217,6 +220,20 @@ fn main() -> Result<()> {
 
         // 防止 Arc 释放内存（因为我们使用了 from_raw）
         std::mem::forget(netlink_for_engine);
+    }
+
+    // 设置全局 Jail 信息和 Web UI 配置
+    {
+        let jail_infos: Vec<http_exporter::JailInfo> = cfg
+            .jails
+            .iter()
+            .map(|j| http_exporter::JailInfo {
+                name: j.name.clone(),
+                enabled: j.enabled,
+            })
+            .collect();
+        http_exporter::set_global_jails(jail_infos);
+        http_exporter::set_global_webui_config(cfg.webui.clone());
     }
 
     let mut exporter_handle = None;

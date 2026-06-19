@@ -115,9 +115,7 @@ pub struct WebuiConfigResponse {
 
 /// 获取 Web UI 配置
 pub fn get_webui_config() -> WebuiConfigResponse {
-    let config = crate::http_exporter::get_global_webui_config()
-        .cloned()
-        .unwrap_or_default();
+    let config = crate::http_exporter::get_global_webui_config().unwrap_or_default();
 
     WebuiConfigResponse {
         sse_push_interval: config.sse_push_interval,

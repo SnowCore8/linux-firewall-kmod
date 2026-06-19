@@ -183,11 +183,8 @@ fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
         }
     } else if let (&Method::Get, "/api/jails") = (request.method(), url.as_str()) {
         // API: Jail 列表（从全局 Jail 信息读取）
-        let jails = if let Some(jail_infos) = super::get_global_jails() {
-            web_ui::api::get_jails(jail_infos)
-        } else {
-            Vec::new()
-        };
+        let jail_infos = super::get_global_jails();
+        let jails = web_ui::api::get_jails(&jail_infos);
         let json = serde_json::to_string(&jails).unwrap_or_else(|_| "[]".to_string());
         let response = Response::from_string(json).with_header(
             Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),

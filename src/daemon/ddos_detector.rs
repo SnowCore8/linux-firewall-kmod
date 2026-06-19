@@ -908,7 +908,8 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_auto_ban_after_threshold() {
+    fn test_detect_records_violations_without_auto_ban() {
+        // 封禁决策已迁移到 DdosDecisionEngine，detect() 仅记录违规
         let tracker = ConnRateTracker::new();
         let config = test_config(); // auto_ban_threshold = 3
 
@@ -919,16 +920,11 @@ mod tests {
                 tracker.record_connection("10.0.0.1");
             }
             let events = tracker.detect(&config);
-            // 最后一次违规应触发 "ban"
-            if let Some(last) = events.last() {
-                if last.action_taken == "ban" {
-                    assert_eq!(last.ip, "10.0.0.1");
-                    return; // 测试通过
-                }
+            // 所有事件的 action_taken 应为 "log"（封禁决策已迁移）
+            for event in &events {
+                assert_eq!(event.action_taken, "log");
             }
         }
-
-        panic!("连续 3 次违规后应触发 auto-ban");
     }
 
     // ---- cleanup 测试 ----

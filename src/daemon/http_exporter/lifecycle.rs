@@ -28,19 +28,7 @@ use crate::types::Config;
 /// 子线程 `JoinHandle<()>`,`main()` 在 cleanup 后 join
 #[must_use]
 pub fn start_http_exporter(port: u16, cfg: &Config) -> thread::JoinHandle<()> {
-    // 保存全局 Jail 信息（用于 /api/jails 端点）
-    let jail_infos: Vec<super::JailInfo> = cfg
-        .jails
-        .iter()
-        .map(|j| super::JailInfo {
-            name: j.name.clone(),
-            enabled: j.enabled,
-        })
-        .collect();
-    super::set_global_jails(jail_infos);
-
-    // 保存全局 Web UI 配置（用于 SSE 推送间隔等）
-    super::set_global_webui_config(cfg.webui.clone());
+    // 全局 Jail 信息和 Web UI 配置已在 main.rs 中设置
     let metrics_user = cfg.metrics_username.clone();
     let metrics_pass = cfg.metrics_password.clone();
     let bind_address = if cfg.metrics_bind_address.is_empty() {

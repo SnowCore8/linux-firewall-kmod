@@ -15,7 +15,7 @@ mod metrics;
 pub use lifecycle::{start_http_exporter, stop_http_exporter};
 
 // ============================================================================
-// 全局 Jail 信息存储
+// 全局 Jail 信息存储（支持热更新）
 // ============================================================================
 
 /// 简化的 Jail 信息（用于 /api/jails 端点，避免存储包含 RwLock 的完整 Config）
@@ -25,35 +25,58 @@ pub struct JailInfo {
     pub enabled: bool,
 }
 
-/// 全局 Jail 信息存储
-static GLOBAL_JAILS: std::sync::OnceLock<Vec<JailInfo>> = std::sync::OnceLock::new();
+/// 全局 Jail 信息存储（使用 RwLock 支持热更新）
+static GLOBAL_JAILS: std::sync::LazyLock<parking_lot::RwLock<Vec<JailInfo>>> =
+    std::sync::LazyLock::new(|| parking_lot::RwLock::new(Vec::new()));
 
-/// 设置全局 Jail 信息（在启动时调用）
+/// 设置全局 Jail 信息（启动时和热重载时调用）
 pub fn set_global_jails(jails: Vec<JailInfo>) {
-    let _ = GLOBAL_JAILS.set(jails);
+    *GLOBAL_JAILS.write() = jails;
 }
 
 /// 获取全局 Jail 信息（在 handler 中调用）
-pub fn get_global_jails() -> Option<&'static Vec<JailInfo>> {
-    GLOBAL_JAILS.get()
+pub fn get_global_jails() -> Vec<JailInfo> {
+    GLOBAL_JAILS.read().clone()
 }
 
 // ============================================================================
-// 全局 Web UI 配置存储
+// 全局 Web UI 配置存储（支持热更新）
 // ============================================================================
 
-/// 全局 Web UI 配置存储（用于 SSE 推送间隔等）
-static GLOBAL_WEBUI_CONFIG: std::sync::OnceLock<crate::types::WebuiConfig> =
-    std::sync::OnceLock::new();
+/// 全局 Web UI 配置存储（使用 RwLock 支持热更新）
+static GLOBAL_WEBUI_CONFIG: std::sync::LazyLock<
+    parking_lot::RwLock<Option<crate::types::WebuiConfig>>,
+> = std::sync::LazyLock::new(|| parking_lot::RwLock::new(None));
 
-/// 设置全局 Web UI 配置（在启动时调用）
+/// 设置全局 Web UI 配置（启动时和热重载时调用）
 pub fn set_global_webui_config(config: crate::types::WebuiConfig) {
-    let _ = GLOBAL_WEBUI_CONFIG.set(config);
+    *GLOBAL_WEBUI_CONFIG.write() = Some(config);
 }
 
 /// 获取全局 Web UI 配置（在 handler 中调用）
-pub fn get_global_webui_config() -> Option<&'static crate::types::WebuiConfig> {
-    GLOBAL_WEBUI_CONFIG.get()
+pub fn get_global_webui_config() -> Option<crate::types::WebuiConfig> {
+    GLOBAL_WEBUI_CONFIG.read().clone()
+}
+
+// ============================================================================
+// 全局 DDoS 决策引擎引用（供配置热重载使用）
+// ============================================================================
+
+use crate::netlink::DdosDecisionEngine;
+use std::sync::Arc;
+
+/// 全局决策引擎引用（供配置热重载时同步更新）
+static GLOBAL_DECISION_ENGINE: std::sync::OnceLock<Arc<DdosDecisionEngine>> =
+    std::sync::OnceLock::new();
+
+/// 设置全局决策引擎引用（启动时调用）
+pub fn set_global_decision_engine(engine: Arc<DdosDecisionEngine>) {
+    let _ = GLOBAL_DECISION_ENGINE.set(engine);
+}
+
+/// 获取全局决策引擎引用
+pub fn get_global_decision_engine() -> Option<&'static Arc<DdosDecisionEngine>> {
+    GLOBAL_DECISION_ENGINE.get()
 }
 // ============================================================================
 // 配置参数
