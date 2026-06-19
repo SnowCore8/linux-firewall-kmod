@@ -255,6 +255,125 @@ int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 durat
 }
 
 /**
+ * fw_netlink_send_list_bans_response - 向守护进程发送封禁列表响应
+ * @seq: 请求序列号
+ *
+ * 响应守护进程的 ListBansQuery 请求，发送当前所有封禁条目。
+ * 最多返回 4096 个条目。
+ */
+int fw_netlink_send_list_bans_response(u32 seq) {
+  struct sk_buff *skb;
+  struct nlmsghdr *nlh;
+  struct fw_nl_list_bans_response *resp;
+  struct fw_nl_ban_entry *entries;
+  struct ban_entry *entry;
+  u32 hash;
+  int max_entries = 4096;
+  int resp_size;
+  int ret;
+  int count = 0;
+
+  if (!fw_nl_sock) {
+    return -ENOTCONN;
+  }
+
+  /* 计算响应大小：头 + max_entries * 条目大小 */
+  resp_size = sizeof(*resp) + max_entries * sizeof(struct fw_nl_ban_entry);
+
+  /* 分配 netlink 消息缓冲区 */
+  skb = nlmsg_new(resp_size, GFP_ATOMIC);
+  if (!skb) {
+    return -ENOMEM;
+  }
+
+  /* 构造消息头 */
+  nlh = nlmsg_put(skb, 0, 0, FW_NL_LIST_BANS_RESPONSE, resp_size, 0);
+  if (!nlh) {
+    kfree_skb(skb);
+    return -ENOMEM;
+  }
+
+  /* 获取 payload 指针 */
+  resp = (struct fw_nl_list_bans_response *)nlmsg_data(nlh);
+  entries = (struct fw_nl_ban_entry *)(resp + 1);
+
+  /* 先填充响应头（count=0），后面再更新 */
+  resp->hdr.magic = cpu_to_be32(FW_NL_MAGIC);
+  resp->hdr.msg_type = cpu_to_be16(FW_NL_LIST_BANS_RESPONSE);
+  resp->hdr.msg_len = cpu_to_be16(resp_size);
+  resp->hdr.seq = cpu_to_be32(seq);
+  resp->count = 0;
+
+  /* 遍历封禁表填充条目 */
+  rcu_read_lock();
+
+  /* IPv4 封禁 */
+  hash_for_each_rcu(fw_info.ban_table_ipv4, hash, entry, hash) {
+    unsigned long ban_time = READ_ONCE(entry->ban_time);
+    unsigned long unban_time = READ_ONCE(entry->unban_time);
+    u32 duration_secs;
+
+    if (count >= max_entries) {
+      break;
+    }
+
+    entries[count].af = FW_AF_INET;
+    entries[count].is_permanent = READ_ONCE(entry->is_permanent) ? 1 : 0;
+
+    /* 计算封禁时长（秒） */
+    if (entries[count].is_permanent) {
+      duration_secs = 0;
+    } else {
+      duration_secs = (unban_time > ban_time) ? ((unban_time - ban_time) / HZ) : 0;
+    }
+    entries[count].duration_secs = cpu_to_be32(duration_secs);
+
+    memset(entries[count].addr, 0, sizeof(entries[count].addr));
+    memcpy(entries[count].addr, &entry->addr.ipv4, 4);
+    count++;
+  }
+
+  /* IPv6 封禁 */
+  hash_for_each_rcu(fw_info.ban_table_ipv6, hash, entry, hash) {
+    unsigned long ban_time = READ_ONCE(entry->ban_time);
+    unsigned long unban_time = READ_ONCE(entry->unban_time);
+    u32 duration_secs;
+
+    if (count >= max_entries) {
+      break;
+    }
+
+    entries[count].af = FW_AF_INET6;
+    entries[count].is_permanent = READ_ONCE(entry->is_permanent) ? 1 : 0;
+
+    /* 计算封禁时长（秒） */
+    if (entries[count].is_permanent) {
+      duration_secs = 0;
+    } else {
+      duration_secs = (unban_time > ban_time) ? ((unban_time - ban_time) / HZ) : 0;
+    }
+    entries[count].duration_secs = cpu_to_be32(duration_secs);
+
+    memcpy(entries[count].addr, &entry->addr.ipv6, 16);
+    count++;
+  }
+
+  rcu_read_unlock();
+
+  /* 更新实际数量 */
+  resp->count = cpu_to_be32(count);
+
+  /* 广播消息给守护进程（组 1） */
+  ret = netlink_broadcast(fw_nl_sock, skb, 0, 1, GFP_ATOMIC);
+  if (ret < 0 && ret != -ESRCH) {
+    pr_warn_ratelimited("netlink broadcast list bans response failed: %d\n", ret);
+    return ret;
+  }
+
+  return 0;
+}
+
+/**
  * fw_netlink_send_stats_response - 向守护进程发送统计数据响应
  * @seq: 请求序列号
  *
@@ -300,10 +419,10 @@ int fw_netlink_send_stats_response(u32 seq) {
   resp->packets_dropped = cpu_to_be64(atomic64_read(&fw_info.packets_dropped));
   resp->packets_accepted = cpu_to_be64(atomic64_read(&fw_info.packets_accepted));
 
-  /* 单播消息给守护进程（pid=0 表示广播） */
-  ret = netlink_unicast(fw_nl_sock, skb, 0, MSG_DONTWAIT);
-  if (ret < 0) {
-    pr_warn_ratelimited("netlink unicast stats response failed: %d\n", ret);
+  /* 广播消息给守护进程（组 1） */
+  ret = netlink_broadcast(fw_nl_sock, skb, 0, 1, GFP_ATOMIC);
+  if (ret < 0 && ret != -ESRCH) {
+    pr_warn_ratelimited("netlink broadcast stats response failed: %d\n", ret);
     return ret;
   }
 
@@ -453,6 +572,11 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
     case FW_NL_STATS_QUERY:
       pr_info("netlink: stats query received, seq=%u\n", be32_to_cpu(hdr->seq));
       fw_netlink_send_stats_response(be32_to_cpu(hdr->seq));
+      break;
+
+    case FW_NL_LIST_BANS_QUERY:
+      pr_info("netlink: list bans query received, seq=%u\n", be32_to_cpu(hdr->seq));
+      fw_netlink_send_list_bans_response(be32_to_cpu(hdr->seq));
       break;
 
     default:

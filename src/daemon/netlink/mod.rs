@@ -377,12 +377,6 @@ impl NetlinkContext {
 
     /// 发送封禁指令到内核
     pub fn send_ban(&self, ip: IpAddr, duration_secs: u32) -> Result<()> {
-        crate::logger::info!(
-            crate::logger::get(),
-            "send_ban 被调用";
-            "ip" => %ip,
-            "duration_secs" => duration_secs
-        );
         let cmd = FwNlBanCmd::new_ban(ip, duration_secs);
         self.send_command(&cmd.to_bytes())
     }
@@ -428,14 +422,6 @@ impl NetlinkContext {
 
         // 复制自定义消息到 nlmsghdr 之后
         buf[std::mem::size_of::<nlmsghdr>()..].copy_from_slice(data);
-
-        crate::logger::info!(
-            crate::logger::get(),
-            "发送 netlink 命令";
-            "nlmsg_len" => nlmsg_len,
-            "data_len" => data.len(),
-            "sizeof_nlmsghdr" => std::mem::size_of::<nlmsghdr>()
-        );
 
         // 构造内核地址（pid=0 表示内核）
         let mut addr: sockaddr_nl = unsafe { std::mem::zeroed() };
