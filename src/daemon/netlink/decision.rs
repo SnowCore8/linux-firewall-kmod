@@ -44,8 +44,8 @@ impl IpViolationTracker {
 
 /// DDoS 决策引擎
 pub struct DdosDecisionEngine {
-    /// DDoS 配置
-    config: DdosConfig,
+    /// DDoS 配置（使用 RwLock 支持运行时更新）
+    config: RwLock<DdosConfig>,
     /// Netlink 上下文（用于发送封禁指令）
     netlink: Arc<NetlinkContext>,
     /// 每 IP 违规跟踪（使用 DashMap 或 RwLock<HashMap>）
@@ -56,10 +56,22 @@ impl DdosDecisionEngine {
     /// 创建决策引擎
     pub fn new(config: DdosConfig, netlink: Arc<NetlinkContext>) -> Self {
         Self {
-            config,
+            config: RwLock::new(config),
             netlink,
             ip_trackers: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// 更新配置
+    pub fn update_config(&self, new_config: DdosConfig) {
+        let mut config = self.config.write();
+        crate::logger::info!(
+            crate::logger::get(),
+            "DDoS 决策引擎配置更新";
+            "auto_ban_threshold" => new_config.auto_ban_threshold,
+            "auto_ban_duration" => new_config.auto_ban_duration
+        );
+        *config = new_config;
     }
 
     /// 处理 DDoS 事件
@@ -88,14 +100,19 @@ impl DdosDecisionEngine {
         // 递增违规次数
         let count = tracker.increment(now);
 
+        // 读取配置（加锁）
+        let (threshold, duration) = {
+            let config = self.config.read();
+            (config.auto_ban_threshold, config.auto_ban_duration)
+        };
+
         // 决策：是否封禁
-        if count >= self.config.auto_ban_threshold {
+        if count >= threshold {
             // 触发封禁
             DDOS_STATS
                 .auto_bans_triggered
                 .fetch_add(1, Ordering::Relaxed);
 
-            let duration = self.config.auto_ban_duration;
             crate::logger::info!(
                 crate::logger::get(),
                 "DDoS 决策：触发封禁";
@@ -150,7 +167,7 @@ impl DdosDecisionEngine {
                 "reason" => reason,
                 "rate_pps" => rate_pps,
                 "violation_count" => count,
-                "threshold" => self.config.auto_ban_threshold
+                "threshold" => threshold
             );
         }
     }

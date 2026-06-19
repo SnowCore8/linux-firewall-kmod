@@ -239,6 +239,8 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
         WRITE_ONCE(fw_info.rate_window_seconds, new_window);
         smp_wmb(); /* 确保 seconds 写入在 jiffies 之前可见 */
         WRITE_ONCE(fw_info.rate_window_jiffies, msecs_to_jiffies(new_window * 1000));
+        /* 清除旧速率条目，确保所有条目使用新窗口 */
+        clear_all_rate_entries(&fw_info);
         pr_info("netlink: rate_window updated to %u seconds\n", new_window);
         updated++;
       }

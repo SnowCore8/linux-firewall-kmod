@@ -486,3 +486,54 @@ void cleanup_rate_entries(struct firewall_info *fw) {
     pr_debug("firewall: cleaned up %d rate entries\n", cleaned);
   }
 }
+
+/**
+ * clear_all_rate_entries - 清除所有速率统计条目
+ * @fw: 防火墙信息结构
+ *
+ * 在速率窗口配置更新时调用，确保所有条目使用新窗口。
+ */
+void clear_all_rate_entries(struct firewall_info *fw) {
+  struct ip_rate_entry *entry;
+  struct hlist_node *tmp;
+  int i;
+  int cleared = 0;
+
+  if (!fw) {
+    return;
+  }
+
+  /* 清除 IPv4 表 */
+  for (i = 0; i < (1 << RATE_HASH_BITS); i++) {
+    spinlock_t *lock = &fw->rate_locks_ipv4[i];
+    struct hlist_head *head = &fw->rate_table_ipv4[i];
+
+    spin_lock_bh(lock);
+    hlist_for_each_entry_safe(entry, tmp, head, hash) {
+      hlist_del_rcu(&entry->hash);
+      call_rcu(&entry->rcu_head, free_rate_entry_rcu);
+      atomic_dec(&fw->rate_count);
+      cleared++;
+    }
+    spin_unlock_bh(lock);
+  }
+
+  /* 清除 IPv6 表 */
+  for (i = 0; i < (1 << RATE_HASH_BITS); i++) {
+    spinlock_t *lock = &fw->rate_locks_ipv6[i];
+    struct hlist_head *head = &fw->rate_table_ipv6[i];
+
+    spin_lock_bh(lock);
+    hlist_for_each_entry_safe(entry, tmp, head, hash) {
+      hlist_del_rcu(&entry->hash);
+      call_rcu(&entry->rcu_head, free_rate_entry_rcu);
+      atomic_dec(&fw->rate_count);
+      cleared++;
+    }
+    spin_unlock_bh(lock);
+  }
+
+  if (cleared > 0) {
+    pr_info("firewall: cleared %d rate entries (config update)\n", cleared);
+  }
+}

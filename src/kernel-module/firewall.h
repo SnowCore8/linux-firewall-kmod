@@ -258,6 +258,7 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
 bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip);
 bool check_protocol_violation(struct firewall_info *fw, u8 af, const void *ip, u8 protocol);
 void cleanup_rate_entries(struct firewall_info *fw);
+void clear_all_rate_entries(struct firewall_info *fw);
 void free_rate_entry_rcu(struct rcu_head *head);
 
 /* netdev.c */
