@@ -226,6 +226,30 @@ fn main() -> Result<()> {
                 warn!(logger::get(), "启动 Netlink 接收线程失败"; "error" => %e);
             }
         }
+
+        // 启动时通过 netlink 请求-响应恢复状态
+        info!(logger::get(), "开始通过 netlink 恢复状态");
+        let seq = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as u32;
+
+        // 查询封禁列表
+        if let Err(e) = ctx_arc.send_list_bans_query(seq) {
+            warn!(logger::get(), "发送封禁列表查询失败"; "error" => %e);
+        } else {
+            info!(logger::get(), "已发送封禁列表查询"; "seq" => seq);
+        }
+
+        // 查询统计数据
+        if let Err(e) = ctx_arc.send_stats_query(seq + 1) {
+            warn!(logger::get(), "发送统计数据查询失败"; "error" => %e);
+        } else {
+            info!(logger::get(), "已发送统计数据查询"; "seq" => seq + 1);
+        }
+
+        // 等待响应（给内核一些时间处理）
+        std::thread::sleep(std::time::Duration::from_millis(500));
     }
 
     // 设置全局 Jail 信息和 Web UI 配置

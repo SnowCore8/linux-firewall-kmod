@@ -22,6 +22,14 @@ pub enum FwNlMsgType {
     SetConfig = 4,
     /// 内核 → 守护进程：封禁状态变更（用户通过 procfs 操作时推送）
     BanStateChange = 5,
+    /// 守护进程 → 内核：查询封禁列表
+    ListBansQuery = 6,
+    /// 内核 → 守护进程：封禁列表响应
+    ListBansResponse = 7,
+    /// 守护进程 → 内核：查询统计数据
+    StatsQuery = 8,
+    /// 内核 → 守护进程：统计数据响应
+    StatsResponse = 9,
 }
 
 impl FwNlMsgType {
@@ -32,6 +40,10 @@ impl FwNlMsgType {
             3 => Some(Self::UnbanIp),
             4 => Some(Self::SetConfig),
             5 => Some(Self::BanStateChange),
+            6 => Some(Self::ListBansQuery),
+            7 => Some(Self::ListBansResponse),
+            8 => Some(Self::StatsQuery),
+            9 => Some(Self::StatsResponse),
             _ => None,
         }
     }
@@ -320,5 +332,166 @@ impl FwNlConfigUpdate {
     pub fn to_bytes(self) -> Vec<u8> {
         let ptr = &self as *const Self as *const u8;
         unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
+    }
+}
+
+// ============================================================================
+// 请求 - 响应协议（守护进程启动时恢复状态）
+// ============================================================================
+
+/// 封禁列表查询请求（守护进程 → 内核）
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlListBansQuery {
+    pub hdr: FwNlMsgHdr,
+}
+
+impl FwNlListBansQuery {
+    pub fn new(seq: u32) -> Self {
+        Self {
+            hdr: FwNlMsgHdr {
+                magic: FW_NL_MAGIC.to_be(),
+                msg_type: (FwNlMsgType::ListBansQuery as u16).to_be(),
+                msg_len: (std::mem::size_of::<Self>() as u16).to_be(),
+                seq: seq.to_be(),
+            },
+        }
+    }
+
+    pub fn to_bytes(self) -> Vec<u8> {
+        let ptr = &self as *const Self as *const u8;
+        unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
+    }
+}
+
+/// 封禁条目（内核 → 守护进程）
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlBanEntry {
+    pub af: u8,
+    pub is_permanent: u8,
+    pub duration_secs: u32,
+    pub banned_at: u64,
+    pub addr: [u8; 16],
+}
+
+/// 封禁列表响应（内核 → 守护进程）
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlListBansResponse {
+    pub hdr: FwNlMsgHdr,
+    pub count: u32,
+    // 后面紧跟 count 个 FwNlBanEntry
+}
+
+impl FwNlListBansResponse {
+    pub fn from_bytes(data: &[u8]) -> Result<(Self, Vec<FwNlBanEntry>)> {
+        if data.len() < std::mem::size_of::<Self>() {
+            anyhow::bail!("响应数据太短");
+        }
+
+        let resp: Self = unsafe { std::ptr::read(data.as_ptr() as *const Self) };
+        let count = u32::from_be(resp.count) as usize;
+        let entries_data = &data[std::mem::size_of::<Self>()..];
+
+        let mut entries = Vec::with_capacity(count);
+        for i in 0..count {
+            let offset = i * std::mem::size_of::<FwNlBanEntry>();
+            if offset + std::mem::size_of::<FwNlBanEntry>() > entries_data.len() {
+                anyhow::bail!("封禁条目数据不完整");
+            }
+            let entry: FwNlBanEntry =
+                unsafe { std::ptr::read(entries_data.as_ptr().add(offset) as *const FwNlBanEntry) };
+            entries.push(entry);
+        }
+
+        Ok((resp, entries))
+    }
+
+    pub fn ip_str(entry: &FwNlBanEntry) -> String {
+        if entry.af == 2 {
+            format!(
+                "{}.{}.{}.{}",
+                entry.addr[0], entry.addr[1], entry.addr[2], entry.addr[3]
+            )
+        } else if entry.af == 10 {
+            let addr: std::net::Ipv6Addr = std::net::Ipv6Addr::from(entry.addr);
+            addr.to_string()
+        } else {
+            "unknown".to_string()
+        }
+    }
+}
+
+/// 统计数据查询请求（守护进程 → 内核）
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlStatsQuery {
+    pub hdr: FwNlMsgHdr,
+}
+
+impl FwNlStatsQuery {
+    pub fn new(seq: u32) -> Self {
+        Self {
+            hdr: FwNlMsgHdr {
+                magic: FW_NL_MAGIC.to_be(),
+                msg_type: (FwNlMsgType::StatsQuery as u16).to_be(),
+                msg_len: (std::mem::size_of::<Self>() as u16).to_be(),
+                seq: seq.to_be(),
+            },
+        }
+    }
+
+    pub fn to_bytes(self) -> Vec<u8> {
+        let ptr = &self as *const Self as *const u8;
+        unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
+    }
+}
+
+/// 统计数据响应（内核 → 守护进程）
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlStatsResponse {
+    pub hdr: FwNlMsgHdr,
+    pub current_bans: u64,
+    pub total_bans: u64,
+    pub total_unbans: u64,
+    pub whitelist_count: u64,
+    pub packets_dropped: u64,
+    pub packets_accepted: u64,
+}
+
+impl FwNlStatsResponse {
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() < std::mem::size_of::<Self>() {
+            anyhow::bail!("统计数据响应太短");
+        }
+
+        let resp: Self = unsafe { std::ptr::read(data.as_ptr() as *const Self) };
+        Ok(resp)
+    }
+
+    pub fn current_bans(&self) -> u64 {
+        u64::from_be(self.current_bans)
+    }
+
+    pub fn total_bans(&self) -> u64 {
+        u64::from_be(self.total_bans)
+    }
+
+    pub fn total_unbans(&self) -> u64 {
+        u64::from_be(self.total_unbans)
+    }
+
+    pub fn whitelist_count(&self) -> u64 {
+        u64::from_be(self.whitelist_count)
+    }
+
+    pub fn packets_dropped(&self) -> u64 {
+        u64::from_be(self.packets_dropped)
+    }
+
+    pub fn packets_accepted(&self) -> u64 {
+        u64::from_be(self.packets_accepted)
     }
 }

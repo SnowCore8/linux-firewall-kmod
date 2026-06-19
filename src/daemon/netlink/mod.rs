@@ -14,7 +14,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 use protocol::{
-    FwNlBanCmd, FwNlBanStateChange, FwNlConfigUpdate, FwNlDdosEvent, FwNlMsgType, FW_NL_MAGIC,
+    FwNlBanCmd, FwNlBanStateChange, FwNlConfigUpdate, FwNlDdosEvent, FwNlListBansQuery,
+    FwNlListBansResponse, FwNlMsgType, FwNlStatsQuery, FwNlStatsResponse, FW_NL_MAGIC,
 };
 
 pub use decision::DdosDecisionEngine;
@@ -297,6 +298,88 @@ impl NetlinkContext {
                     cache.remove(&ip_str);
                 }
             }
+            Some(FwNlMsgType::ListBansResponse) => {
+                // 处理封禁列表响应
+                if hdr_data.len() < std::mem::size_of::<FwNlListBansResponse>() {
+                    anyhow::bail!("封禁列表响应数据太短");
+                }
+
+                let (_resp, entries) = FwNlListBansResponse::from_bytes(hdr_data)?;
+                crate::logger::info!(
+                    crate::logger::get(),
+                    "收到封禁列表响应";
+                    "count" => entries.len()
+                );
+
+                // 更新 ACTIVE_BAN_CACHE
+                let cache =
+                    crate::types::ACTIVE_BAN_CACHE.get_or_init(crate::types::ActiveBanCache::new);
+                let now = crate::types::now_secs();
+
+                for entry in &entries {
+                    let ip_str = FwNlListBansResponse::ip_str(entry);
+                    let duration = u32::from_be(entry.duration_secs);
+                    let is_permanent = entry.is_permanent != 0;
+
+                    let ban_info = crate::types::BanInfo {
+                        ip: ip_str.clone(),
+                        ip_num: 0,
+                        jail_name: "kernel".to_string(),
+                        reason: crate::types::BanReason::ManualBan,
+                        banned_at: now,
+                        expires_at: if is_permanent {
+                            0
+                        } else {
+                            now + duration as i64
+                        },
+                        is_permanent,
+                        fail_count: 0,
+                    };
+                    cache.insert(ban_info);
+                }
+
+                crate::logger::info!(
+                    crate::logger::get(),
+                    "已恢复封禁状态";
+                    "restored_count" => entries.len(),
+                    "cache_len" => cache.len()
+                );
+            }
+            Some(FwNlMsgType::StatsResponse) => {
+                // 处理统计数据响应
+                if hdr_data.len() < std::mem::size_of::<FwNlStatsResponse>() {
+                    anyhow::bail!("统计数据响应太短");
+                }
+
+                let stats = FwNlStatsResponse::from_bytes(hdr_data)?;
+                crate::logger::info!(
+                    crate::logger::get(),
+                    "收到统计数据响应";
+                    "current_bans" => stats.current_bans(),
+                    "total_bans" => stats.total_bans(),
+                    "total_unbans" => stats.total_unbans(),
+                    "whitelist_count" => stats.whitelist_count(),
+                    "packets_dropped" => stats.packets_dropped(),
+                    "packets_accepted" => stats.packets_accepted()
+                );
+
+                // 更新 DAEMON_STATS
+                crate::types::DAEMON_STATS
+                    .total_unbans
+                    .store(stats.total_unbans(), std::sync::atomic::Ordering::Relaxed);
+                crate::types::DAEMON_STATS.whitelist_count.store(
+                    stats.whitelist_count(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                crate::types::DAEMON_STATS.packets_dropped.store(
+                    stats.packets_dropped(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                crate::types::DAEMON_STATS.packets_accepted.store(
+                    stats.packets_accepted(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
             _ => {
                 crate::logger::warn!(
                     crate::logger::get(),
@@ -324,6 +407,18 @@ impl NetlinkContext {
     /// 发送配置更新到内核
     pub fn send_config_update(&self, config: &FwNlConfigUpdate) -> Result<()> {
         self.send_command(&config.to_bytes())
+    }
+
+    /// 发送封禁列表查询（启动时恢复状态）
+    pub fn send_list_bans_query(&self, seq: u32) -> Result<()> {
+        let query = FwNlListBansQuery::new(seq);
+        self.send_command(&query.to_bytes())
+    }
+
+    /// 发送统计数据查询（启动时恢复状态）
+    pub fn send_stats_query(&self, seq: u32) -> Result<()> {
+        let query = FwNlStatsQuery::new(seq);
+        self.send_command(&query.to_bytes())
     }
 
     /// 发送原始命令到内核
