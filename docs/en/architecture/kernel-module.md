@@ -11,7 +11,7 @@ The kernel module `firewall.ko` is the core of the system, responsible for inter
 | Attribute | Value |
 |-----------|-------|
 | Module Name | `firewall` |
-| Source File | `src/kernel/firewall.c` |
+| Source File | `src/kernel-module/firewall-main.c` |
 | License | MIT |
 | Load Path | `/lib/modules/$(uname -r)/extra/firewall.ko` |
 

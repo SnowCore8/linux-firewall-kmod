@@ -258,18 +258,6 @@ sudo systemctl edit firewall-daemon
 sudo systemctl restart firewall-daemon
 ```
 
-### 测试报 "bans.db 未找到"
-
-**症状**：`make test` 跑 `tests/suites/12_permanent_ban.sh` 时部分 case 失败,提示 "bans.db not found" 或 "no such file or directory"。
-
-**修复**：把 `permanent_ban_enabled` 和 `permanent_db_path` 移到 `defaults:` 块内,然后:
-
-```bash
-sudo systemctl restart firewall-daemon
-ls -la /var/lib/firewall/bans.db   # 应该存在了
-make test
-```
-
 ### `make deb` 报 "没有规则可制作目标"
 
 **症状**：

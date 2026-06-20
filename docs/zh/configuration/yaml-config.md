@@ -54,7 +54,7 @@ defaults:
 
 ```mermaid
 graph TB
-    A["findtime (600s)"] -->|"在此时间窗口内统计失败次数"| B["max_retries (5)"]
+    A["findtime (600s)"] -->|"在此时间窗口内统计失败次数"| B["max_retries (3)"]
     B -->|"达到此次数触发封禁"| C["ban_time (900s)"]
     C -->|"封禁持续此时长"| D["到期后自动解封"]
 ```

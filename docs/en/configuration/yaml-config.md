@@ -9,14 +9,11 @@ The current design uses **smart inference**: you only need to configure `log_fil
 ```yaml
 # Global defaults
 defaults:
-  max_retries: 5
+  max_retries: 3
   findtime: 600         # 10 minutes
   ban_time: 900         # 15 minutes
   interval: 1           # Check interval (seconds)
   metrics_port: 9119    # Prometheus metrics port
-  # Permanent-ban fields MUST live under defaults:, not at the top level
-  permanent_db_path: "/var/lib/firewall/bans.db"
-  permanent_ban_enabled: true   # default false
 
 # Jail definitions
 jails:
@@ -232,11 +229,6 @@ webui:
 ## Permanent Ban
 
 Permanent bans (`ban_time: 0`) are kept in memory and lost on restart.
-```yaml
-defaults:
-  # ... other fields
-  permanent_db_path: "/var/lib/firewall/bans.db"
-  permanent_ban_enabled: true   # default false
 ```
 
 | Parameter | Type | Default | Description |
@@ -248,33 +240,30 @@ The YAML schema is strict and easy to mis-author. If a setting "has no effect", 
 
 ### Fields must live under `defaults:`
 
-All `defaults.*` fields (including `permanent_db_path`, `permanent_ban_enabled`, `log_level`, …) **must** be written inside the `defaults:` block. Same-named keys at the top level are **not allowed** — the parser only reads the `defaults:` keys and silently ignores any top-level duplicates. There is **no warning, no error**.
+All `defaults.*` fields (including `log_level`, …) **must** be written inside the `defaults:` block. Same-named keys at the top level are **not allowed** — the parser only reads the `defaults:` keys and silently ignores any top-level duplicates. There is **no warning, no error**.
 
-**Bad example** (top-level `permanent_*` — the real v2.2.1 bug):
+**Bad example** (top-level fields — silently ignored):
 
 ```yaml
 defaults:
-  max_retries: 5
-  # ... no permanent_* fields here
+  max_retries: 3
+  # ... other fields
 
 jails:
   sshd: ...
 
 # Top-level fields — silently ignored by the parser
-permanent_db_path: "/var/lib/firewall/bans.db"
-permanent_ban_enabled: true
+max_retries: 999
 ```
 
-After startup, `/var/lib/firewall/bans.db` is never created and permanent bans "appear not to work", but the log shows no error.
+After startup, the setting is silently ignored and the default value (3) is used, but the log shows no error.
 
 **Good example**:
 
 ```yaml
 defaults:
-  max_retries: 5
+  max_retries: 3
   # ... other fields
-  permanent_db_path: "/var/lib/firewall/bans.db"
-  permanent_ban_enabled: true   # default false
 
 jails:
   sshd: ...
@@ -293,13 +282,11 @@ The `log_info!` / `log_warn!` / `log_error!` / `log_debug!` macros **no longer h
 # Global defaults - applied to all jails unless overridden
 # ============================================================
 defaults:
-  max_retries: 5
+  max_retries: 3
   findtime: 600         # 10 minutes
   ban_time: 900         # 15 minutes
   interval: 1           # Check interval (seconds)
   metrics_port: 9119    # Prometheus metrics port
-  permanent_db_path: "/var/lib/firewall/bans.db"
-  permanent_ban_enabled: true   # default false
 
 # ============================================================
 # Jail definitions - each service monitored independently

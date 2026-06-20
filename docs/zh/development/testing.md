@@ -159,10 +159,13 @@ Total: passed 113, failed 0, warned 2, skipped 0
 | 12 | `12_permanent_ban.sh` | 永久封禁（内存中） |
 | 13 | `13_frp_jail.sh` | FRP（Fail2ban-Recover-Pattern）jail 配置加载与触发 |
 | 14 | `14_ban_netfilter.sh` | 黑名单 netfilter 链表条目格式与功能（真实可路由 IP） |
-| 15 | `15_daemon_logfile.sh` | 守护进程独立日志系统（`log_file` / `log_destination` / `log_format` / `log_level`） |
+| 15 | `15_ddos_detection.sh` | DDoS 检测（PPS/BPS/SYN/UDP/ICMP 速率违规） |
+| 16 | `16_webui_api.sh` | Web UI API 端点测试 |
+| 17 | `17_config_reload.sh` | 配置热重载（SIGHUP） |
+| 18 | `18_log_rotation.sh` | 日志轮转检测（inotify + inode 重连） |
 
 > 编号不连续（05、06 缺失）：原对应旧测试套件，重构时已合并到
-> 现有套件中。当前 13 套件共 **115 项**集成测试。
+> 现有套件中。当前 16 套件共 **115 项**集成测试。
 
 ## 框架断言
 
