@@ -345,6 +345,10 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
 
     *cfg = new_cfg;
     DAEMON_STATS.config_reloads.fetch_add(1, Ordering::Relaxed);
+
+    // 应用动态阈值基线配置（热重载时同步更新）
+    crate::types::set_baseline_warmup_samples(cfg.ddos.baseline_warmup_samples);
+
     setup_inotify(cfg)?;
 
     // 同步配置到各组件

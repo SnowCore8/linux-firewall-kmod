@@ -40,6 +40,10 @@ pub enum FwNlMsgType {
     RemoveWhitelist = 13,
     /// 内核 → 守护进程：配置更新确认
     ConfigAck = 14,
+    /// 守护进程 → 内核：查询速率统计
+    ListRatesQuery = 15,
+    /// 内核 → 守护进程：速率统计响应
+    ListRatesResponse = 16,
 }
 
 impl FwNlMsgType {
@@ -59,6 +63,8 @@ impl FwNlMsgType {
             12 => Some(Self::AddWhitelist),
             13 => Some(Self::RemoveWhitelist),
             14 => Some(Self::ConfigAck),
+            15 => Some(Self::ListRatesQuery),
+            16 => Some(Self::ListRatesResponse),
             _ => None,
         }
     }
@@ -215,6 +221,20 @@ pub struct FwNlConfigUpdate {
     pub max_udp_per_second: u64,
     /// 每秒最大 ICMP 包数
     pub max_icmp_per_second: u64,
+    /// 每秒最大 ACK 包数
+    pub max_ack_per_second: u64,
+    /// 每秒最大 RST 包数
+    pub max_rst_per_second: u64,
+    /// 每秒最大 FIN 包数
+    pub max_fin_per_second: u64,
+    /// 动态阈值标志（bit0: enabled）
+    pub dynamic_threshold_flags: u32,
+    /// 动态阈值倍数 × 100
+    pub dynamic_threshold_ratio_x100: u32,
+    /// 基线 PPS（用于动态阈值更新）
+    pub baseline_pps: u64,
+    /// 基线 BPS（用于动态阈值更新）
+    pub baseline_bps: u64,
 }
 
 /// 配置项标志位
@@ -226,6 +246,18 @@ pub mod config_flags {
     pub const MAX_SYN: u32 = 1 << 4;
     pub const MAX_UDP: u32 = 1 << 5;
     pub const MAX_ICMP: u32 = 1 << 6;
+    pub const MAX_ACK: u32 = 1 << 7;
+    pub const MAX_RST: u32 = 1 << 8;
+    pub const MAX_FIN: u32 = 1 << 9;
+    pub const DYNAMIC_THRESHOLD: u32 = 1 << 10;
+    pub const BASELINE_UPDATE: u32 = 1 << 11;
+}
+
+/// 动态阈值标志位
+pub mod dt_flags {
+    /// 启用动态阈值
+    #[allow(dead_code)]
+    pub const ENABLED: u32 = 1 << 0;
 }
 
 impl FwNlBanCmd {
@@ -304,6 +336,13 @@ impl FwNlConfigUpdate {
             max_syn_per_second: 0,
             max_udp_per_second: 0,
             max_icmp_per_second: 0,
+            max_ack_per_second: 0,
+            max_rst_per_second: 0,
+            max_fin_per_second: 0,
+            dynamic_threshold_flags: 0,
+            dynamic_threshold_ratio_x100: 0,
+            baseline_pps: 0,
+            baseline_bps: 0,
         }
     }
 
@@ -346,6 +385,13 @@ impl FwNlConfigUpdate {
     /// 设置最大 ICMP/s
     pub fn with_max_icmp(mut self, icmp: u64) -> Self {
         self.max_icmp_per_second = icmp.to_be();
+        self
+    }
+
+    /// 设置基线 PPS/BPS（用于动态阈值更新）
+    pub fn with_baseline(mut self, pps: u64, bps: u64) -> Self {
+        self.baseline_pps = pps.to_be();
+        self.baseline_bps = bps.to_be();
         self
     }
 
@@ -725,5 +771,123 @@ impl FwNlConfigAck {
 
     pub fn rejected_flags(&self) -> u32 {
         u32::from_be(self.rejected_flags)
+    }
+}
+
+// ============================================================================
+// 速率统计查询/响应
+// ============================================================================
+
+/// 速率统计查询请求（守护进程 → 内核）
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlListRatesQuery {
+    pub hdr: FwNlMsgHdr,
+}
+
+impl FwNlListRatesQuery {
+    pub fn new(seq: u32) -> Self {
+        Self {
+            hdr: FwNlMsgHdr {
+                magic: FW_NL_MAGIC.to_be(),
+                msg_type: (FwNlMsgType::ListRatesQuery as u16).to_be(),
+                msg_len: (std::mem::size_of::<Self>() as u16).to_be(),
+                seq: seq.to_be(),
+            },
+        }
+    }
+
+    pub fn to_bytes(self) -> Vec<u8> {
+        let ptr = &self as *const Self as *const u8;
+        // SAFETY: &self 是有效的已初始化结构体引用，#[repr(C, packed)] 保证连续内存布局，
+        // size_of::<Self>() 不会超出结构体范围，to_vec() 拷贝数据后原始引用不再需要。
+        unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
+    }
+}
+
+/// 速率统计条目（内核 → 守护进程）
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlRateEntry {
+    pub af: u8,
+    pub pad: [u8; 3],
+    pub packets: u64,
+    pub bytes: u64,
+    pub syn_packets: u64,
+    pub udp_packets: u64,
+    pub icmp_packets: u64,
+    pub ack_packets: u64,
+    pub rst_packets: u64,
+    pub fin_packets: u64,
+    pub addr: [u8; 16],
+}
+
+/// 速率统计响应（内核 → 守护进程）
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlListRatesResponse {
+    pub hdr: FwNlMsgHdr,
+    pub count: u32,
+    pub total: u32,      /* 内核中实际条目总数（用于感知截断） */
+    pub global_pps: u64, /* 全局 PPS（自上次查询以来的平均包速率） */
+    pub global_bps: u64, /* 全局 BPS（自上次查询以来的平均字节速率） */
+                         // 后面紧跟 count 个 FwNlRateEntry
+}
+
+impl FwNlListRatesResponse {
+    pub fn from_bytes(data: &[u8]) -> Result<(Self, Vec<FwNlRateEntry>)> {
+        if data.len() < std::mem::size_of::<Self>() {
+            anyhow::bail!("响应数据太短");
+        }
+
+        let resp: Self = unsafe {
+            // SAFETY: data 长度已验证 >= size_of::<Self>()，
+            // Self 是 #[repr(C, packed)] 无对齐要求，ptr::read 按值拷贝不保留别名。
+            std::ptr::read(data.as_ptr() as *const Self)
+        };
+        let count = u32::from_be(resp.count) as usize;
+        let entries_data = &data[std::mem::size_of::<Self>()..];
+
+        let mut entries = Vec::with_capacity(count);
+        for i in 0..count {
+            let offset = i * std::mem::size_of::<FwNlRateEntry>();
+            if offset + std::mem::size_of::<FwNlRateEntry>() > entries_data.len() {
+                anyhow::bail!("速率条目数据不完整");
+            }
+            let entry: FwNlRateEntry = unsafe {
+                // SAFETY: 上方已验证 offset + size_of::<FwNlRateEntry>() <= entries_data.len()，
+                // FwNlRateEntry 是 #[repr(C, packed)] 无对齐要求，ptr::read 按值拷贝。
+                std::ptr::read(entries_data.as_ptr().add(offset) as *const FwNlRateEntry)
+            };
+            entries.push(entry);
+        }
+
+        Ok((resp, entries))
+    }
+
+    pub fn ip_str(entry: &FwNlRateEntry) -> String {
+        if entry.af == 2 {
+            // AF_INET
+            format!(
+                "{}.{}.{}.{}",
+                entry.addr[0], entry.addr[1], entry.addr[2], entry.addr[3]
+            )
+        } else if entry.af == 10 {
+            // AF_INET6
+            let addr: std::net::Ipv6Addr = std::net::Ipv6Addr::from(entry.addr);
+            addr.to_string()
+        } else {
+            "unknown".to_string()
+        }
+    }
+
+    /// 获取全局 PPS（字节序转换）
+    pub fn global_pps(&self) -> u64 {
+        u64::from_be(self.global_pps)
+    }
+
+    /// 获取全局 BPS（字节序转换）
+    pub fn global_bps(&self) -> u64 {
+        u64::from_be(self.global_bps)
     }
 }

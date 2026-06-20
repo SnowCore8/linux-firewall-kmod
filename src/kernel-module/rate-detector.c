@@ -72,6 +72,55 @@ static struct ip_rate_entry *find_rate_entry_rcu(struct firewall_info *fw,
 }
 
 /**
+ * evict_lru_rate_entry - 踢出最不活跃的速率条目（LRU 替换）
+ * @fw: 防火墙信息
+ * @af: 地址族
+ *
+ * 遍历速率表，找到 last_activity 最旧的条目并删除。
+ * 调用方必须持有全局 rate_lock（或遍历期间保证安全）。
+ *
+ * 返回: 0 成功，-ENOENT 无条目可踢
+ */
+static int evict_lru_rate_entry(struct firewall_info *fw, u8 af) {
+  struct ip_rate_entry *entry, *oldest = NULL;
+  struct hlist_node *tmp;
+  unsigned long oldest_time = ULONG_MAX;
+  struct hlist_head *table = get_rate_table(fw, af);
+  int i;
+
+  for (i = 0; i < (1 << RATE_HASH_BITS); i++) {
+    spinlock_t *lock = get_rate_lock(fw, af, i);
+    spin_lock_bh(lock);
+
+    hlist_for_each_entry_safe(entry, tmp, &table[i], hash) {
+      /* 跳过 pinned 条目（白名单 IP 不被 LRU 踢出） */
+      if (entry->pinned)
+        continue;
+      if (time_before(entry->last_activity, oldest_time)) {
+        oldest_time = entry->last_activity;
+        oldest = entry;
+      }
+    }
+
+    spin_unlock_bh(lock);
+  }
+
+  if (!oldest) {
+    return -ENOENT;
+  }
+
+  /* 删除最旧条目 */
+  i = hash_ip_for_rate(af, &oldest->addr, RATE_HASH_BITS);
+  spin_lock_bh(get_rate_lock(fw, af, i));
+  hlist_del_rcu(&oldest->hash);
+  spin_unlock_bh(get_rate_lock(fw, af, i));
+  call_rcu(&oldest->rcu_head, free_rate_entry_rcu);
+  atomic_dec(&fw->rate_count);
+
+  return 0;
+}
+
+/**
  * create_rate_entry - 创建新的速率条目
  * @fw: 防火墙信息
  * @af: 地址族
@@ -80,6 +129,9 @@ static struct ip_rate_entry *find_rate_entry_rcu(struct firewall_info *fw,
  * 返回: 新创建的条目，失败返回 ERR_PTR
  *
  * 注意：调用方必须持有对应桶的 spinlock
+ *
+ * 改进：表满时 LRU 替换（踢出 last_activity 最旧的条目），而非拒绝新条目。
+ * 支持 10Gbps+ 大规模 DDoS 场景（>65536 源 IP 时自动淘汰不活跃条目）。
  */
 static struct ip_rate_entry *create_rate_entry(struct firewall_info *fw, u8 af,
                                                const void *ip) {
@@ -87,10 +139,12 @@ static struct ip_rate_entry *create_rate_entry(struct firewall_info *fw, u8 af,
   struct hlist_head *table = get_rate_table(fw, af);
   u32 hash = hash_ip_for_rate(af, ip, RATE_HASH_BITS);
 
-  /* 检查是否超过最大条目数 */
-  if (atomic_read(&fw->rate_count) >= MAX_RATE_ENTRIES) {
-    atomic_inc(&fw->ban_table_full_count);
-    return ERR_PTR(-ENOSPC);
+  /* 表满时 LRU 替换：踢出最不活跃的条目 */
+  if (atomic_read(&fw->rate_count) >= fw_max_rate_entries) {
+    if (evict_lru_rate_entry(fw, af) < 0) {
+      atomic_inc(&fw->ban_table_full_count);
+      return ERR_PTR(-ENOSPC);
+    }
   }
 
   /* 分配内存 */
@@ -108,11 +162,25 @@ static struct ip_rate_entry *create_rate_entry(struct firewall_info *fw, u8 af,
     entry->addr.ipv6 = *(struct in6_addr *)ip;
   }
 
+  /* 检查 IP 是否在白名单中，如果是则设置 pinned 标志（LRU 不踢出） */
+  entry->pinned = is_in_whitelist(fw, af, ip) ? 1 : 0;
+
   atomic64_set(&entry->packet_count, 0);
   atomic64_set(&entry->byte_count, 0);
   atomic64_set(&entry->syn_count, 0);
   atomic64_set(&entry->udp_count, 0);
   atomic64_set(&entry->icmp_count, 0);
+  atomic64_set(&entry->ack_count, 0);
+  atomic64_set(&entry->rst_count, 0);
+  atomic64_set(&entry->fin_count, 0);
+  atomic64_set(&entry->smoothed_pps, 0);
+  atomic64_set(&entry->smoothed_bps, 0);
+  atomic64_set(&entry->smoothed_syn, 0);
+  atomic64_set(&entry->smoothed_udp, 0);
+  atomic64_set(&entry->smoothed_icmp, 0);
+  atomic64_set(&entry->smoothed_ack, 0);
+  atomic64_set(&entry->smoothed_rst, 0);
+  atomic64_set(&entry->smoothed_fin, 0);
   entry->window_start = jiffies;
   entry->last_activity = jiffies;
 
@@ -144,7 +212,7 @@ static struct ip_rate_entry *create_rate_entry(struct firewall_info *fw, u8 af,
  * - 冷路径（新条目）：per-bucket 锁，减少竞争
  */
 int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
-                      u32 packet_len, u8 protocol) {
+                      u32 packet_len, u8 protocol, u8 tcp_flags) {
   struct ip_rate_entry *entry;
   unsigned long now = jiffies;
   unsigned long elapsed;
@@ -173,16 +241,79 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
 
       /* 双重检查：可能其他 CPU 已经重置 */
       if (time_after(now, entry->window_start + fw->rate_window_jiffies)) {
+        /* 窗口过期，先更新 EWMA 平滑速率，再重置计数器
+         * EWMA 公式：smoothed = (3 * current + 7 * smoothed) / 10
+         * 作用：过滤突发流量，只有持续高速才触发封禁 */
+        {
+          unsigned long win_elapsed = now - entry->window_start;
+          u64 old_packets, old_bytes, old_syn, old_udp, old_icmp, old_ack, old_rst, old_fin;
+          u64 cur_pps, cur_bps, cur_syn, cur_udp, cur_icmp, cur_ack, cur_rst, cur_fin;
+          u64 s_pps, s_bps, s_syn, s_udp, s_icmp, s_ack, s_rst, s_fin;
+
+          if (win_elapsed == 0)
+            win_elapsed = 1;
+
+          /* 计算当前窗口的实际速率 */
+          old_packets = atomic64_read(&entry->packet_count);
+          old_bytes = atomic64_read(&entry->byte_count);
+          old_syn = atomic64_read(&entry->syn_count);
+          old_udp = atomic64_read(&entry->udp_count);
+          old_icmp = atomic64_read(&entry->icmp_count);
+          old_ack = atomic64_read(&entry->ack_count);
+          old_rst = atomic64_read(&entry->rst_count);
+          old_fin = atomic64_read(&entry->fin_count);
+
+          cur_pps = (old_packets * HZ) / win_elapsed;
+          cur_bps = (old_bytes * HZ) / win_elapsed;
+          cur_syn = (old_syn * HZ) / win_elapsed;
+          cur_udp = (old_udp * HZ) / win_elapsed;
+          cur_icmp = (old_icmp * HZ) / win_elapsed;
+          cur_ack = (old_ack * HZ) / win_elapsed;
+          cur_rst = (old_rst * HZ) / win_elapsed;
+          cur_fin = (old_fin * HZ) / win_elapsed;
+
+          /* 读取旧的平滑值 */
+          s_pps = atomic64_read(&entry->smoothed_pps);
+          s_bps = atomic64_read(&entry->smoothed_bps);
+          s_syn = atomic64_read(&entry->smoothed_syn);
+          s_udp = atomic64_read(&entry->smoothed_udp);
+          s_icmp = atomic64_read(&entry->smoothed_icmp);
+          s_ack = atomic64_read(&entry->smoothed_ack);
+          s_rst = atomic64_read(&entry->smoothed_rst);
+          s_fin = atomic64_read(&entry->smoothed_fin);
+
+          /* EWMA 更新：smoothed = (3 * current + 7 * smoothed) / 10 */
+          atomic64_set(&entry->smoothed_pps, (3 * cur_pps + 7 * s_pps) / 10);
+          atomic64_set(&entry->smoothed_bps, (3 * cur_bps + 7 * s_bps) / 10);
+          atomic64_set(&entry->smoothed_syn, (3 * cur_syn + 7 * s_syn) / 10);
+          atomic64_set(&entry->smoothed_udp, (3 * cur_udp + 7 * s_udp) / 10);
+          atomic64_set(&entry->smoothed_icmp, (3 * cur_icmp + 7 * s_icmp) / 10);
+          atomic64_set(&entry->smoothed_ack, (3 * cur_ack + 7 * s_ack) / 10);
+          atomic64_set(&entry->smoothed_rst, (3 * cur_rst + 7 * s_rst) / 10);
+          atomic64_set(&entry->smoothed_fin, (3 * cur_fin + 7 * s_fin) / 10);
+        }
+
+        /* 重置计数器 */
         atomic64_set(&entry->packet_count, 1);
         atomic64_set(&entry->byte_count, packet_len);
         atomic64_set(&entry->syn_count, 0);
         atomic64_set(&entry->udp_count, 0);
         atomic64_set(&entry->icmp_count, 0);
+        atomic64_set(&entry->ack_count, 0);
+        atomic64_set(&entry->rst_count, 0);
+        atomic64_set(&entry->fin_count, 0);
         entry->window_start = now;
 
         /* 根据协议类型更新计数器 */
         if (protocol == IPPROTO_TCP) {
-          atomic64_set(&entry->syn_count, 1);
+          if (tcp_flags & TCP_FLAGS_SYN)
+            atomic64_set(&entry->syn_count, 1);
+          if (tcp_flags & TCP_FLAGS_ACK)
+            atomic64_set(&entry->ack_count, 1);
+          if (tcp_flags & TCP_FLAGS_RST)
+            atomic64_set(&entry->rst_count, 1);
+          if (tcp_flags & TCP_FLAGS_FIN)
+            atomic64_set(&entry->fin_count, 1);
         } else if (protocol == IPPROTO_UDP) {
           atomic64_set(&entry->udp_count, 1);
         } else if (protocol == IPPROTO_ICMP) {
@@ -195,7 +326,14 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
 
         /* 根据协议类型更新计数器 */
         if (protocol == IPPROTO_TCP) {
-          atomic64_inc(&entry->syn_count);
+          if (tcp_flags & TCP_FLAGS_SYN)
+            atomic64_inc(&entry->syn_count);
+          if (tcp_flags & TCP_FLAGS_ACK)
+            atomic64_inc(&entry->ack_count);
+          if (tcp_flags & TCP_FLAGS_RST)
+            atomic64_inc(&entry->rst_count);
+          if (tcp_flags & TCP_FLAGS_FIN)
+            atomic64_inc(&entry->fin_count);
         } else if (protocol == IPPROTO_UDP) {
           atomic64_inc(&entry->udp_count);
         } else if (protocol == IPPROTO_ICMP) {
@@ -214,7 +352,14 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
 
     /* 根据协议类型更新计数器 */
     if (protocol == IPPROTO_TCP) {
-      atomic64_inc(&entry->syn_count);
+      if (tcp_flags & TCP_FLAGS_SYN)
+        atomic64_inc(&entry->syn_count);
+      if (tcp_flags & TCP_FLAGS_ACK)
+        atomic64_inc(&entry->ack_count);
+      if (tcp_flags & TCP_FLAGS_RST)
+        atomic64_inc(&entry->rst_count);
+      if (tcp_flags & TCP_FLAGS_FIN)
+        atomic64_inc(&entry->fin_count);
     } else if (protocol == IPPROTO_UDP) {
       atomic64_inc(&entry->udp_count);
     } else if (protocol == IPPROTO_ICMP) {
@@ -246,7 +391,14 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
 
     /* 根据协议类型更新计数器 */
     if (protocol == IPPROTO_TCP) {
-      atomic64_inc(&entry->syn_count);
+      if (tcp_flags & TCP_FLAGS_SYN)
+        atomic64_inc(&entry->syn_count);
+      if (tcp_flags & TCP_FLAGS_ACK)
+        atomic64_inc(&entry->ack_count);
+      if (tcp_flags & TCP_FLAGS_RST)
+        atomic64_inc(&entry->rst_count);
+      if (tcp_flags & TCP_FLAGS_FIN)
+        atomic64_inc(&entry->fin_count);
     } else if (protocol == IPPROTO_UDP) {
       atomic64_inc(&entry->udp_count);
     } else if (protocol == IPPROTO_ICMP) {
@@ -271,10 +423,20 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
   atomic64_set(&entry->syn_count, 0);
   atomic64_set(&entry->udp_count, 0);
   atomic64_set(&entry->icmp_count, 0);
+  atomic64_set(&entry->ack_count, 0);
+  atomic64_set(&entry->rst_count, 0);
+  atomic64_set(&entry->fin_count, 0);
 
   /* 根据协议类型设置初始值 */
   if (protocol == IPPROTO_TCP) {
-    atomic64_set(&entry->syn_count, 1);
+    if (tcp_flags & TCP_FLAGS_SYN)
+      atomic64_set(&entry->syn_count, 1);
+    if (tcp_flags & TCP_FLAGS_ACK)
+      atomic64_set(&entry->ack_count, 1);
+    if (tcp_flags & TCP_FLAGS_RST)
+      atomic64_set(&entry->rst_count, 1);
+    if (tcp_flags & TCP_FLAGS_FIN)
+      atomic64_set(&entry->fin_count, 1);
   } else if (protocol == IPPROTO_UDP) {
     atomic64_set(&entry->udp_count, 1);
   } else if (protocol == IPPROTO_ICMP) {
@@ -297,15 +459,18 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
  * 返回: true 超过阈值，false 未超过或未找到
  *
  * 注意：调用方必须持有 rcu_read_lock()
- * 
- * 优化：增加了对突发流量的容忍度，通过检查当前窗口内的平均速率
- * 而不是简单的总速率，以减少对合法突发流量的误判。
+ *
+ * 使用 EWMA 平滑速率进行检测，过滤突发流量误判。
+ * 只有持续高速（多个窗口）才会触发封禁。
+ *
+ * 动态阈值（方案 C 混合模式）：
+ * 当 dynamic_threshold_enabled 时，实际阈值 = max(静态阈值, 基线 × 倍数)。
+ * 基线由守护进程通过 netlink 定期下发（EWMA α=0.01 跟踪全局流量趋势）。
  */
 bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip) {
   struct ip_rate_entry *entry;
-  u64 packets, bytes;
-  unsigned long now = jiffies;
-  unsigned long elapsed_jiffies;
+  u64 pps, bps;
+  u64 pps_threshold, bps_threshold;
 
   if (!fw || !ip) {
     return false;
@@ -316,26 +481,35 @@ bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip) {
     return false;
   }
 
-  /* 读取计数器（原子操作） */
-  packets = atomic64_read(&entry->packet_count);
-  bytes = atomic64_read(&entry->byte_count);
+  /* 读取 EWMA 平滑速率（原子操作） */
+  pps = atomic64_read(&entry->smoothed_pps);
+  bps = atomic64_read(&entry->smoothed_bps);
 
-  /* 计算实际窗口时间 */
-  elapsed_jiffies = now - entry->window_start;
-  if (elapsed_jiffies == 0) {
-    return false; // 避免除零错误
+  /* 计算实际阈值：动态阈值 = max(静态阈值, 基线 × 倍数) */
+  pps_threshold = fw->max_packets_per_second;
+  bps_threshold = fw->max_bytes_per_second;
+
+  if (READ_ONCE(fw->dynamic_threshold_enabled)) {
+    u64 baseline_pps = atomic64_read(&fw->global_baseline_pps);
+    u64 baseline_bps = atomic64_read(&fw->global_baseline_bps);
+    u32 ratio = READ_ONCE(fw->dynamic_threshold_ratio_x100);
+
+    if (ratio > 0) {
+      u64 dynamic_pps = baseline_pps * ratio / 100;
+      u64 dynamic_bps = baseline_bps * ratio / 100;
+      if (dynamic_pps > pps_threshold)
+        pps_threshold = dynamic_pps;
+      if (dynamic_bps > bps_threshold)
+        bps_threshold = dynamic_bps;
+    }
   }
 
-  /* 计算平均速率（每秒） */
-  u64 avg_packets_per_sec = (packets * HZ) / elapsed_jiffies;
-  u64 avg_bytes_per_sec = (bytes * HZ) / elapsed_jiffies;
-
   /* 检查是否超过阈值 */
-  if (avg_packets_per_sec > fw->max_packets_per_second) {
+  if (pps > pps_threshold) {
     return true;
   }
 
-  if (avg_bytes_per_sec > fw->max_bytes_per_second) {
+  if (bps > bps_threshold) {
     return true;
   }
 
@@ -354,15 +528,12 @@ bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip) {
  * 用途：SYN Flood、UDP Flood、ICMP Flood 专项检测
  *
  * 注意：调用方必须持有 rcu_read_lock()
- * 
- * 优化：增加了对突发流量的容忍度，通过检查当前窗口内的平均速率
- * 而不是简单的总速率，以减少对合法突发流量的误判。
+ *
+ * 使用 EWMA 平滑速率进行检测，过滤突发流量误判。
  */
 bool check_protocol_violation(struct firewall_info *fw, u8 af, const void *ip, u8 protocol) {
   struct ip_rate_entry *entry;
   u64 count;
-  unsigned long now = jiffies;
-  unsigned long elapsed_jiffies;
 
   if (!fw || !ip) {
     return false;
@@ -373,58 +544,121 @@ bool check_protocol_violation(struct firewall_info *fw, u8 af, const void *ip, u
     return false;
   }
 
-  /* 根据协议类型检查对应的计数器 */
+  /* 读取 EWMA 平滑速率（原子操作） */
   switch (protocol) {
   case IPPROTO_TCP:
-    count = atomic64_read(&entry->syn_count);
+    count = atomic64_read(&entry->smoothed_syn);
     break;
-
   case IPPROTO_UDP:
-    count = atomic64_read(&entry->udp_count);
+    count = atomic64_read(&entry->smoothed_udp);
     break;
-
   case IPPROTO_ICMP:
-    count = atomic64_read(&entry->icmp_count);
+    count = atomic64_read(&entry->smoothed_icmp);
     break;
-
   default:
     return false;
   }
 
-  /* 计算实际窗口时间 */
-  elapsed_jiffies = now - entry->window_start;
-  if (elapsed_jiffies == 0) {
-    return false; // 避免除零错误
-  }
-
-  /* 计算平均速率（每秒） */
-  u64 avg_count_per_sec = (count * HZ) / elapsed_jiffies;
-
   /* 根据协议类型检查阈值 */
   switch (protocol) {
   case IPPROTO_TCP:
-    if (avg_count_per_sec > fw->max_syn_per_second) {
+    if (count > fw->max_syn_per_second) {
       return true;
     }
     break;
-
   case IPPROTO_UDP:
-    if (avg_count_per_sec > fw->max_udp_per_second) {
+    if (count > fw->max_udp_per_second) {
       return true;
     }
     break;
-
   case IPPROTO_ICMP:
-    if (avg_count_per_sec > fw->max_icmp_per_second) {
+    if (count > fw->max_icmp_per_second) {
       return true;
     }
     break;
-
   default:
     break;
   }
 
   return false;
+}
+
+/**
+ * check_tcp_flood_violation - 检查 TCP 子类型 Flood 违规
+ * @fw: 防火墙信息
+ * @af: 地址族
+ * @ip: IP 地址
+ * @tcp_flags: TCP 标志位
+ *
+ * 返回: 违规类型字符串（"ACK flood"/"RST flood"/"FIN flood"），无违规返回 NULL
+ *
+ * 用途：ACK/RST/FIN Flood 专项检测
+ *
+ * 注意：调用方必须持有 rcu_read_lock()
+ */
+const char *check_tcp_flood_violation(struct firewall_info *fw, u8 af,
+                                      const void *ip, u8 tcp_flags) {
+  struct ip_rate_entry *entry;
+  u64 count;
+
+  if (!fw || !ip) {
+    return NULL;
+  }
+
+  entry = find_rate_entry_rcu(fw, af, ip);
+  if (!entry) {
+    return NULL;
+  }
+
+  /* 检查 ACK flood */
+  if (tcp_flags & TCP_FLAGS_ACK) {
+    count = atomic64_read(&entry->smoothed_ack);
+    if (count > fw->max_ack_per_second) {
+      return "ACK flood";
+    }
+  }
+
+  /* 检查 RST flood */
+  if (tcp_flags & TCP_FLAGS_RST) {
+    count = atomic64_read(&entry->smoothed_rst);
+    if (count > fw->max_rst_per_second) {
+      return "RST flood";
+    }
+  }
+
+  /* 检查 FIN flood */
+  if (tcp_flags & TCP_FLAGS_FIN) {
+    count = atomic64_read(&entry->smoothed_fin);
+    if (count > fw->max_fin_per_second) {
+      return "FIN flood";
+    }
+  }
+
+  return NULL;
+}
+
+/**
+ * update_global_baseline - 更新全局流量基线（动态阈值）
+ * @fw: 防火墙信息
+ * @total_pps: 当前总 PPS
+ * @total_bps: 当前总 BPS
+ *
+ * 使用 EWMA（α=0.01）跟踪长期流量趋势。
+ * 每 2 秒由守护进程调用一次。
+ */
+void update_global_baseline(struct firewall_info *fw, u64 total_pps, u64 total_bps) {
+  u64 old_pps, old_bps;
+
+  if (!fw) {
+    return;
+  }
+
+  old_pps = atomic64_read(&fw->global_baseline_pps);
+  old_bps = atomic64_read(&fw->global_baseline_bps);
+
+  /* EWMA 更新：baseline = (1 * current + 99 * baseline) / 100（α=0.01） */
+  atomic64_set(&fw->global_baseline_pps, (total_pps + 99 * old_pps) / 100);
+  atomic64_set(&fw->global_baseline_bps, (total_bps + 99 * old_bps) / 100);
 }
 
 /**

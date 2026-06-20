@@ -34,10 +34,15 @@
 struct fw_per_cpu_stats {
   u64 packets_accepted;
   u64 packets_dropped;
+  u64 global_packets; /* 全局流量计数（per-CPU 本地，flush 时写入全局 atomic） */
+  u64 global_bytes; /* 全局字节计数（per-CPU 本地，flush 时写入全局 atomic） */
 };
 
 /* R9-1: Per-CPU counter flush function (called from cleanup timer) */
 void fw_flush_cpu_stats(void);
+
+/* 跨 CPU 刷新所有 per-CPU 计数器（速率查询前调用，确保数据完整） */
+void fw_flush_all_cpu_stats(void);
 
 #define BAN_HASH_BITS 12
 #define MAX_BAN_ENTRIES (1 << BAN_HASH_BITS) /* 4096 个条目 */
@@ -50,8 +55,8 @@ void fw_flush_cpu_stats(void);
 #define MAX_WHITELIST_ENTRIES (1 << WHITELIST_HASH_BITS) /* 64 个条目 */
 
 /* 速率检测哈希表结构 */
-#define RATE_HASH_BITS 12
-#define MAX_RATE_ENTRIES (1 << RATE_HASH_BITS) /* 4096 个条目 */
+#define RATE_HASH_BITS 16
+#define MAX_RATE_ENTRIES (1 << RATE_HASH_BITS) /* 65536 个条目 */
 
 /* 速率检测默认配置 */
 #define DEFAULT_RATE_WINDOW_SECONDS 1                   /* 默认 1 秒窗口 */
@@ -62,6 +67,13 @@ void fw_flush_cpu_stats(void);
 #define DEFAULT_MAX_SYN_PER_SECOND 1000  /* 默认 1000 SYN/s */
 #define DEFAULT_MAX_UDP_PER_SECOND 5000  /* 默认 5000 UDP/s */
 #define DEFAULT_MAX_ICMP_PER_SECOND 1000 /* 默认 1000 ICMP/s */
+#define DEFAULT_MAX_ACK_PER_SECOND 5000  /* 默认 5000 ACK/s */
+#define DEFAULT_MAX_RST_PER_SECOND 1000  /* 默认 1000 RST/s */
+#define DEFAULT_MAX_FIN_PER_SECOND 1000  /* 默认 1000 FIN/s */
+
+/* 动态阈值默认配置 */
+#define DEFAULT_DYNAMIC_THRESHOLD_ENABLED 0      /* 默认关闭 */
+#define DEFAULT_DYNAMIC_THRESHOLD_RATIO_X100 300 /* 默认 3.0 倍（× 100） */
 
 /* 自动发现 IP 的最大数量（与白名单容量一致） */
 #define MAX_DISCOVERED_IPS MAX_WHITELIST_ENTRIES
@@ -72,6 +84,12 @@ void fw_flush_cpu_stats(void);
 /* IP 地址族标识 */
 #define FW_AF_INET 2   /* AF_INET */
 #define FW_AF_INET6 10 /* AF_INET6 */
+
+/* TCP 标志位（用于协议子分类检测） */
+#define TCP_FLAGS_FIN 0x01
+#define TCP_FLAGS_SYN 0x02
+#define TCP_FLAGS_RST 0x04
+#define TCP_FLAGS_ACK 0x10
 
 /* 白名单条目结构 - 支持 IPv4/IPv6 */
 struct whitelist_entry {
@@ -112,6 +130,7 @@ struct ban_entry {
  * 2. 原子计数器：使用 atomic64_t 避免锁竞争（热路径优化）
  * 3. RCU 保护：读操作无锁，写操作使用 per-bucket spinlock
  * 4. 内存布局：IP 地址在前（缓存友好），时间戳在后
+ * 5. EWMA 平滑：窗口重置时更新平滑速率，过滤突发流量误判
  *
  * 性能目标：10Gbps（~1500 万 PPS）场景下，每个数据包的处理开销 < 100ns
  */
@@ -131,9 +150,29 @@ struct ip_rate_entry {
   atomic64_t udp_count;  /* UDP 包数（UDP Flood 检测） */
   atomic64_t icmp_count; /* ICMP Echo Request 数（ICMP Flood 检测） */
 
+  /* TCP 子分类统计（ACK/RST/FIN Flood 检测） */
+  atomic64_t ack_count; /* TCP ACK 包数 */
+  atomic64_t rst_count; /* TCP RST 包数 */
+  atomic64_t fin_count; /* TCP FIN 包数 */
+
+  /* EWMA 平滑速率（窗口重置时更新，检测时使用）
+   * 公式：smoothed = (3 * current + 7 * smoothed) / 10（α=0.3 定点运算）
+   * 作用：过滤突发流量误判，只有持续高速才触发封禁 */
+  atomic64_t smoothed_pps;  /* 平滑后的包速率（packets/sec） */
+  atomic64_t smoothed_bps;  /* 平滑后的字节速率（bytes/sec） */
+  atomic64_t smoothed_syn;  /* 平滑后的 SYN 速率 */
+  atomic64_t smoothed_udp;  /* 平滑后的 UDP 速率 */
+  atomic64_t smoothed_icmp; /* 平滑后的 ICMP 速率 */
+  atomic64_t smoothed_ack;  /* 平滑后的 ACK 速率 */
+  atomic64_t smoothed_rst;  /* 平滑后的 RST 速率 */
+  atomic64_t smoothed_fin;  /* 平滑后的 FIN 速率 */
+
   /* 时间戳（jiffies） */
-  unsigned long window_start;  /* 当前窗口的起始时间 */
-  unsigned long last_activity; /* 最后活动时间（用于过期清理） */
+  unsigned long window_start; /* 当前窗口的起始时间 */
+  unsigned long last_activity; /* 最后活动时间（用于过期清理和 LRU 替换） */
+
+  /* LRU 保护标志：白名单 IP 的条目不被踢出 */
+  u8 pinned;
 
   /* 哈希表和 RCU */
   struct hlist_node hash;
@@ -205,6 +244,22 @@ struct firewall_info {
   unsigned long max_syn_per_second; /* 每秒最大 TCP SYN 包数（SYN Flood） */
   unsigned long max_udp_per_second; /* 每秒最大 UDP 包数（UDP Flood） */
   unsigned long max_icmp_per_second; /* 每秒最大 ICMP Echo Request 数（ICMP Flood） */
+  unsigned long max_ack_per_second; /* 每秒最大 TCP ACK 包数（ACK Flood） */
+  unsigned long max_rst_per_second; /* 每秒最大 TCP RST 包数（RST Flood） */
+  unsigned long max_fin_per_second; /* 每秒最大 TCP FIN 包数（FIN Flood） */
+
+  /* 动态阈值（方案 C 混合模式）
+   * 当 dynamic_threshold_enabled 时，实际阈值 = max(静态阈值, 基线 × 倍数)
+   * 基线使用全局 EWMA（α=0.01，极慢衰减），跟踪长期流量趋势 */
+  bool dynamic_threshold_enabled;   /* 是否启用动态阈值 */
+  u32 dynamic_threshold_ratio_x100; /* 倍数 × 100（如 300 = 3.0 倍） */
+  atomic64_t global_baseline_pps;   /* 全局 PPS 基线（EWMA α=0.01） */
+  atomic64_t global_baseline_bps;   /* 全局 BPS 基线（EWMA α=0.01） */
+
+  /* 全局流量计数器（netfilter 热路径递增，守护进程每 2 秒读取）
+   * 使用 atomic64_xchg 读取并重置，守护进程计算 PPS/BPS 后下发基线 */
+  atomic64_t global_traffic_packets; /* 自上次查询以来的数据包总数 */
+  atomic64_t global_traffic_bytes;   /* 自上次查询以来的字节总数 */
 
   /* procfs 条目 */
   struct proc_dir_entry *proc_dir;
@@ -254,12 +309,15 @@ bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip);
 
 /* rate-detector.c - 速率检测（DDoS 防护） */
 int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
-                      u32 packet_len, u8 protocol);
+                      u32 packet_len, u8 protocol, u8 tcp_flags);
 bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip);
 bool check_protocol_violation(struct firewall_info *fw, u8 af, const void *ip, u8 protocol);
+const char *check_tcp_flood_violation(struct firewall_info *fw, u8 af,
+                                      const void *ip, u8 tcp_flags);
 void cleanup_rate_entries(struct firewall_info *fw);
 void clear_all_rate_entries(struct firewall_info *fw);
 void free_rate_entry_rcu(struct rcu_head *head);
+void update_global_baseline(struct firewall_info *fw, u64 total_pps, u64 total_bps);
 
 /* netdev.c */
 void auto_discover_system_ips(struct firewall_info *fw);
@@ -295,6 +353,7 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid);
 int fw_netlink_send_stats_response(u32 seq, u32 portid);
 int fw_netlink_send_config_ack(u32 seq, u32 portid, u32 applied_flags, u32 rejected_flags);
 int fw_netlink_send_list_whitelist_response(u32 seq, u32 portid);
+int fw_netlink_send_list_rates_response(u32 seq, u32 portid);
 
 /* 导出函数，提供对 fw_info 的受控访问 */
 struct firewall_info *get_fw_info(void);
@@ -305,6 +364,9 @@ extern struct nf_hook_ops nf_ops_ipv6;
 
 /* 全局哈希种子（在 firewall-main.c 中初始化） */
 extern u32 fw_hash_seed;
+
+/* 速率表最大条目数（模块参数，可在加载时配置） */
+extern unsigned int fw_max_rate_entries;
 
 /* ============================================================================
  * 公共内联辅助函数

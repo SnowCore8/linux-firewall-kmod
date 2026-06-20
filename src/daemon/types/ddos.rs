@@ -29,6 +29,9 @@ pub struct DdosConfig {
     pub auto_ban_threshold: u32,
     /// 检测间隔 (秒, 默认 5)
     pub check_interval: u32,
+    /// 动态阈值基线收敛样本数（默认 50，约 100 秒）
+    /// 启动期使用 α=0.1 快速收敛，达到此样本数后切换到 α=0.01 长期跟踪
+    pub baseline_warmup_samples: u32,
 }
 
 impl Default for DdosConfig {
@@ -41,6 +44,7 @@ impl Default for DdosConfig {
             auto_ban_duration: 3600,
             auto_ban_threshold: 3,
             check_interval: 5,
+            baseline_warmup_samples: 50,
         }
     }
 }

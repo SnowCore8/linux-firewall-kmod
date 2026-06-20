@@ -13,6 +13,8 @@
 unsigned int fw_ban_time = DEFAULT_BAN_TIME;
 char *state_file = "/var/lib/firewall/state";
 unsigned int fw_max_bans_per_second = 200;
+unsigned int fw_max_rate_entries = MAX_RATE_ENTRIES;
+unsigned int fw_dynamic_threshold = 0; /* 默认关闭，设为 1 启用动态阈值 */
 
 module_param(fw_ban_time, uint, 0400);
 MODULE_PARM_DESC(fw_ban_time, "封禁持续时间（秒）（默认 600）");
@@ -21,6 +23,13 @@ MODULE_PARM_DESC(state_file, "用于保存/恢复封禁和白名单条目的状�
                              "/var/lib/firewall/state）");
 module_param(fw_max_bans_per_second, uint, 0400);
 MODULE_PARM_DESC(fw_max_bans_per_second, "泛洪保护下每秒最大封禁添加次数（默认 200）");
+module_param(fw_max_rate_entries, uint, 0644);
+MODULE_PARM_DESC(fw_max_rate_entries, "速率表最大条目数（默认 65536，范围 1024-262144）。"
+                                      "较小值节省内存，较大值支持更多并发源 IP");
+module_param(fw_dynamic_threshold, uint, 0644);
+MODULE_PARM_DESC(fw_dynamic_threshold, "启用动态阈值（默认 0 关闭，设为 1 启用）。"
+                                       "启用后实际阈值 = max(静态阈值, 基线 × 倍数)，"
+                                       "基线由守护进程通过 netlink 定期下发");
 
 /* 全局防火墙信息 */
 struct firewall_info fw_info;
@@ -159,6 +168,17 @@ static int __init firewall_init(void) {
   fw_info.max_syn_per_second = DEFAULT_MAX_SYN_PER_SECOND;
   fw_info.max_udp_per_second = DEFAULT_MAX_UDP_PER_SECOND;
   fw_info.max_icmp_per_second = DEFAULT_MAX_ICMP_PER_SECOND;
+  fw_info.max_ack_per_second = DEFAULT_MAX_ACK_PER_SECOND;
+  fw_info.max_rst_per_second = DEFAULT_MAX_RST_PER_SECOND;
+  fw_info.max_fin_per_second = DEFAULT_MAX_FIN_PER_SECOND;
+
+  /* 设置动态阈值默认配置（可通过模块参数 fw_dynamic_threshold=1 启用） */
+  fw_info.dynamic_threshold_enabled = fw_dynamic_threshold ? true : false;
+  fw_info.dynamic_threshold_ratio_x100 = DEFAULT_DYNAMIC_THRESHOLD_RATIO_X100;
+  atomic64_set(&fw_info.global_baseline_pps, 0);
+  atomic64_set(&fw_info.global_baseline_bps, 0);
+  atomic64_set(&fw_info.global_traffic_packets, 0);
+  atomic64_set(&fw_info.global_traffic_bytes, 0);
 
   /* 设置默认封禁时长（来自模块参数） */
   fw_info.ban_time = fw_ban_time;

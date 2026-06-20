@@ -37,6 +37,8 @@ enum {
   FW_NL_ADD_WHITELIST = 12, /* 守护进程 → 内核：添加白名单条目 */
   FW_NL_REMOVE_WHITELIST = 13, /* 守护进程 → 内核：移除白名单条目 */
   FW_NL_CONFIG_ACK = 14, /* 内核 → 守护进程：配置更新确认 */
+  FW_NL_LIST_RATES_QUERY = 15, /* 守护进程 → 内核：查询速率统计 */
+  FW_NL_LIST_RATES_RESPONSE = 16, /* 内核 → 守护进程：速率统计响应 */
 };
 
 /* 消息头结构（20 字节） */
@@ -76,14 +78,21 @@ struct fw_nl_ban_cmd {
 /* 配置更新载荷 */
 struct fw_nl_config_update {
   struct fw_nlmsg_hdr hdr;
-  __u32 flags;                  /* 配置项标志位 */
-  __u32 ban_time;               /* 封禁时长（秒） */
-  __u32 rate_window_seconds;    /* 速率检测窗口（秒） */
-  __u64 max_packets_per_second; /* 每秒最大数据包数 */
-  __u64 max_bytes_per_second;   /* 每秒最大字节数 */
-  __u64 max_syn_per_second;     /* 每秒最大 SYN 包数 */
-  __u64 max_udp_per_second;     /* 每秒最大 UDP 包数 */
-  __u64 max_icmp_per_second;    /* 每秒最大 ICMP 包数 */
+  __u32 flags;                   /* 配置项标志位 */
+  __u32 ban_time;                /* 封禁时长（秒） */
+  __u32 rate_window_seconds;     /* 速率检测窗口（秒） */
+  __u64 max_packets_per_second;  /* 每秒最大数据包数 */
+  __u64 max_bytes_per_second;    /* 每秒最大字节数 */
+  __u64 max_syn_per_second;      /* 每秒最大 SYN 包数 */
+  __u64 max_udp_per_second;      /* 每秒最大 UDP 包数 */
+  __u64 max_icmp_per_second;     /* 每秒最大 ICMP 包数 */
+  __u64 max_ack_per_second;      /* 每秒最大 ACK 包数 */
+  __u64 max_rst_per_second;      /* 每秒最大 RST 包数 */
+  __u64 max_fin_per_second;      /* 每秒最大 FIN 包数 */
+  __u32 dynamic_threshold_flags; /* 动态阈值标志（bit0: enabled） */
+  __u32 dynamic_threshold_ratio_x100; /* 动态阈值倍数 × 100 */
+  __u64 baseline_pps; /* 基线 PPS（用于动态阈值更新） */
+  __u64 baseline_bps; /* 基线 BPS（用于动态阈值更新） */
 } __packed;
 
 /* 配置项标志位 */
@@ -94,6 +103,14 @@ struct fw_nl_config_update {
 #define FW_NL_CFG_MAX_SYN (1 << 4)
 #define FW_NL_CFG_MAX_UDP (1 << 5)
 #define FW_NL_CFG_MAX_ICMP (1 << 6)
+#define FW_NL_CFG_MAX_ACK (1 << 7)
+#define FW_NL_CFG_MAX_RST (1 << 8)
+#define FW_NL_CFG_MAX_FIN (1 << 9)
+#define FW_NL_CFG_DYNAMIC_THRESHOLD (1 << 10)
+#define FW_NL_CFG_BASELINE_UPDATE (1 << 11)
+
+/* 动态阈值标志位 */
+#define FW_NL_CFG_DT_ENABLED (1 << 0)
 
 /* 封禁条目（内核 → 守护进程） */
 struct fw_nl_ban_entry {
@@ -152,6 +169,34 @@ struct fw_nl_config_ack {
   __u32 applied_flags;  /* 实际生效的配置项标志位 */
   __u32 rejected_flags; /* 被拒绝的配置项标志位 */
 } __packed;
+
+/* 速率统计条目（内核 → 守护进程） */
+struct fw_nl_rate_entry {
+  __u8 af;            /* 地址族 */
+  __u8 pad[3];        /* 对齐填充 */
+  __u64 packets;      /* 数据包数 */
+  __u64 bytes;        /* 字节数 */
+  __u64 syn_packets;  /* SYN 包数 */
+  __u64 udp_packets;  /* UDP 包数 */
+  __u64 icmp_packets; /* ICMP 包数 */
+  __u64 ack_packets;  /* ACK 包数 */
+  __u64 rst_packets;  /* RST 包数 */
+  __u64 fin_packets;  /* FIN 包数 */
+  __u8 addr[16];      /* IP 地址 */
+} __packed;
+
+/* 速率统计响应（内核 → 守护进程） */
+struct fw_nl_list_rates_response {
+  struct fw_nlmsg_hdr hdr;
+  __u32 count;
+  __u32 total; /* 内核中实际条目总数（用于守护进程感知截断） */
+  __u64 global_pps; /* 全局 PPS（自上次查询以来的平均包速率） */
+  __u64 global_bps; /* 全局 BPS（自上次查询以来的平均字节速率） */
+  /* 后面紧跟 count 个 fw_nl_rate_entry */
+} __packed;
+
+/* 单次速率响应最大条目数（避免 4MB GFP_ATOMIC 分配） */
+#define MAX_RATE_RESPONSE_ENTRIES 4096
 
 /* 全局 netlink socket */
 static struct sock *fw_nl_sock = NULL;
@@ -639,6 +684,170 @@ int fw_netlink_send_list_whitelist_response(u32 seq, u32 portid) {
 }
 
 /**
+ * fill_rate_entry - 填充单个速率条目（消除 IPv4/IPv6 重复代码）
+ * @out: 输出缓冲区
+ * @entry: 速率条目（RCU 保护下读取）
+ * @af: 地址族
+ * @now: 当前 jiffies
+ *
+ * 直接计算实时速率：rate = count * HZ / elapsed_jiffies
+ */
+static void fill_rate_entry(struct fw_nl_rate_entry *out,
+                            struct ip_rate_entry *entry, u8 af, unsigned long now) {
+  u64 packets, bytes, syn, udp, icmp, ack, rst, fin;
+  unsigned long elapsed;
+
+  /* 读取原始计数（原子操作） */
+  packets = atomic64_read(&entry->packet_count);
+  bytes = atomic64_read(&entry->byte_count);
+  syn = atomic64_read(&entry->syn_count);
+  udp = atomic64_read(&entry->udp_count);
+  icmp = atomic64_read(&entry->icmp_count);
+  ack = atomic64_read(&entry->ack_count);
+  rst = atomic64_read(&entry->rst_count);
+  fin = atomic64_read(&entry->fin_count);
+
+  /* 计算经过时间（jiffies），避免除零 */
+  elapsed = now - entry->window_start;
+  if (elapsed == 0) {
+    elapsed = 1;
+  }
+
+  out->af = af;
+  memset(out->pad, 0, sizeof(out->pad));
+  out->packets = cpu_to_be64((packets * HZ) / elapsed);
+  out->bytes = cpu_to_be64((bytes * HZ) / elapsed);
+  out->syn_packets = cpu_to_be64((syn * HZ) / elapsed);
+  out->udp_packets = cpu_to_be64((udp * HZ) / elapsed);
+  out->icmp_packets = cpu_to_be64((icmp * HZ) / elapsed);
+  out->ack_packets = cpu_to_be64((ack * HZ) / elapsed);
+  out->rst_packets = cpu_to_be64((rst * HZ) / elapsed);
+  out->fin_packets = cpu_to_be64((fin * HZ) / elapsed);
+  memset(out->addr, 0, sizeof(out->addr));
+
+  if (af == FW_AF_INET) {
+    memcpy(out->addr, &entry->addr.ipv4, 4);
+  } else {
+    memcpy(out->addr, &entry->addr.ipv6, 16);
+  }
+}
+
+/**
+ * fw_netlink_send_list_rates_response - 向守护进程发送速率统计响应
+ * @seq: 请求序列号
+ * @portid: 守护进程 netlink 端口 ID（用于单播回复）
+ *
+ * 响应守护进程的 ListRatesQuery 请求，发送当前所有速率统计条目。
+ *
+ * 性能优化：
+ * 1. 动态内存分配：基于实际条目数，避免 4MB GFP_ATOMIC 分配
+ * 2. 单次响应上限 4096 条（MAX_RATE_RESPONSE_ENTRIES），超出截断
+ * 3. 响应携带 total 字段，守护进程可感知截断
+ * 4. 提取 fill_rate_entry 辅助函数消除 IPv4/IPv6 重复代码
+ */
+int fw_netlink_send_list_rates_response(u32 seq, u32 portid) {
+  struct sk_buff *skb;
+  struct nlmsghdr *nlh;
+  struct fw_nl_list_rates_response *resp;
+  struct fw_nl_rate_entry *entries;
+  struct ip_rate_entry *entry;
+  u32 hash;
+  int max_entries = MAX_RATE_RESPONSE_ENTRIES;
+  int resp_size;
+  int ret;
+  int count = 0;
+  int total;
+  unsigned long now = jiffies;
+
+  if (!fw_nl_sock) {
+    return -ENOTCONN;
+  }
+
+  /* 动态计算分配大小：基于实际条目数，避免 4MB 分配 */
+  total = atomic_read(&fw_info.rate_count);
+  if (total > max_entries) {
+    total = max_entries;
+  }
+  resp_size = sizeof(*resp) + total * sizeof(struct fw_nl_rate_entry);
+
+  /* 分配 netlink 消息缓冲区 */
+  skb = nlmsg_new(resp_size, GFP_ATOMIC);
+  if (!skb) {
+    return -ENOMEM;
+  }
+
+  /* 构造消息头 */
+  nlh = nlmsg_put(skb, 0, 0, FW_NL_LIST_RATES_RESPONSE, resp_size, 0);
+  if (!nlh) {
+    kfree_skb(skb);
+    return -ENOMEM;
+  }
+
+  /* 获取 payload 指针 */
+  resp = (struct fw_nl_list_rates_response *)nlmsg_data(nlh);
+  entries = (struct fw_nl_rate_entry *)(resp + 1);
+
+  /* 先填充响应头 */
+  resp->hdr.magic = cpu_to_be32(FW_NL_MAGIC);
+  resp->hdr.msg_type = cpu_to_be16(FW_NL_LIST_RATES_RESPONSE);
+  resp->hdr.msg_len = cpu_to_be16(resp_size);
+  resp->hdr.seq = cpu_to_be32(seq);
+  resp->count = 0;
+  resp->total = 0;
+
+  /* 读取并重置全局流量计数器，计算自上次查询以来的平均速率
+   * 先 flush 所有 per-CPU 计数器，确保全局计数器包含所有 CPU 的最新数据，
+   * 消除最大 1023 包/CPU 的统计延迟。
+   * atomic64_xchg 保证原子性地读取当前值并重置为 0，
+   * 两次查询间隔约 2 秒，除以间隔得到平均 PPS/BPS */
+  {
+    u64 pkts, bytes;
+    fw_flush_all_cpu_stats();
+    pkts = atomic64_xchg(&fw_info.global_traffic_packets, 0);
+    bytes = atomic64_xchg(&fw_info.global_traffic_bytes, 0);
+    /* 查询间隔约 2 秒，除以 2 得到平均速率 */
+    resp->global_pps = cpu_to_be64(pkts / 2);
+    resp->global_bps = cpu_to_be64(bytes / 2);
+  }
+
+  /* 遍历速率表填充条目 - 直接计算实时速率 */
+  rcu_read_lock();
+
+  /* IPv4 的速率统计 */
+  hash_for_each_rcu(fw_info.rate_table_ipv4, hash, entry, hash) {
+    if (count >= max_entries) {
+      break;
+    }
+    fill_rate_entry(&entries[count], entry, FW_AF_INET, now);
+    count++;
+  }
+
+  /* IPv6 的速率统计 */
+  hash_for_each_rcu(fw_info.rate_table_ipv6, hash, entry, hash) {
+    if (count >= max_entries) {
+      break;
+    }
+    fill_rate_entry(&entries[count], entry, FW_AF_INET6, now);
+    count++;
+  }
+
+  rcu_read_unlock();
+
+  /* 更新实际数量和总数 */
+  resp->count = cpu_to_be32(count);
+  resp->total = cpu_to_be32(atomic_read(&fw_info.rate_count));
+
+  /* 单播回复给守护进程 */
+  ret = netlink_unicast(fw_nl_sock, skb, portid, MSG_DONTWAIT);
+  if (ret < 0 && ret != -ESRCH) {
+    pr_warn_ratelimited("netlink unicast list rates response failed: %d\n", ret);
+    return ret;
+  }
+
+  return 0;
+}
+
+/**
  * fw_netlink_recv_msg - 处理守护进程发来的消息
  * @skb: 接收到的 netlink 消息
  * 
@@ -782,6 +991,46 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
         updated++;
       }
 
+      if (flags & FW_NL_CFG_MAX_ACK) {
+        WRITE_ONCE(fw_info.max_ack_per_second, be64_to_cpu(cfg->max_ack_per_second));
+        pr_info("netlink: max_ack_per_second updated to %lu\n",
+                READ_ONCE(fw_info.max_ack_per_second));
+        updated++;
+      }
+
+      if (flags & FW_NL_CFG_MAX_RST) {
+        WRITE_ONCE(fw_info.max_rst_per_second, be64_to_cpu(cfg->max_rst_per_second));
+        pr_info("netlink: max_rst_per_second updated to %lu\n",
+                READ_ONCE(fw_info.max_rst_per_second));
+        updated++;
+      }
+
+      if (flags & FW_NL_CFG_MAX_FIN) {
+        WRITE_ONCE(fw_info.max_fin_per_second, be64_to_cpu(cfg->max_fin_per_second));
+        pr_info("netlink: max_fin_per_second updated to %lu\n",
+                READ_ONCE(fw_info.max_fin_per_second));
+        updated++;
+      }
+
+      if (flags & FW_NL_CFG_DYNAMIC_THRESHOLD) {
+        __u32 dt_flags = be32_to_cpu(cfg->dynamic_threshold_flags);
+        fw_info.dynamic_threshold_enabled = (dt_flags & FW_NL_CFG_DT_ENABLED) ? true : false;
+        WRITE_ONCE(fw_info.dynamic_threshold_ratio_x100,
+                   be32_to_cpu(cfg->dynamic_threshold_ratio_x100));
+        pr_info("netlink: dynamic_threshold %s, ratio=%u/100\n",
+                fw_info.dynamic_threshold_enabled ? "enabled" : "disabled",
+                READ_ONCE(fw_info.dynamic_threshold_ratio_x100));
+        updated++;
+      }
+
+      if (flags & FW_NL_CFG_BASELINE_UPDATE) {
+        __u64 pps = be64_to_cpu(cfg->baseline_pps);
+        __u64 bps = be64_to_cpu(cfg->baseline_bps);
+        update_global_baseline(&fw_info, pps, bps);
+        pr_info("netlink: baseline updated to pps=%llu bps=%llu\n", pps, bps);
+        updated++;
+      }
+
       pr_info("netlink: config updated, %d items changed\n", updated);
 
       /* 发送配置确认响应 */
@@ -804,6 +1053,11 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       pr_info("netlink: list whitelist query received, seq=%u\n",
               be32_to_cpu(hdr->seq));
       fw_netlink_send_list_whitelist_response(be32_to_cpu(hdr->seq), sender_portid);
+      break;
+
+    case FW_NL_LIST_RATES_QUERY:
+      pr_info("netlink: list rates query received, seq=%u\n", be32_to_cpu(hdr->seq));
+      fw_netlink_send_list_rates_response(be32_to_cpu(hdr->seq), sender_portid);
       break;
 
     case FW_NL_ADD_WHITELIST: {

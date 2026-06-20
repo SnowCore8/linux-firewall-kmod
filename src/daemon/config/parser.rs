@@ -158,6 +158,7 @@ struct YamlDdos {
     auto_ban_duration: Option<u32>,
     auto_ban_threshold: Option<u32>,
     check_interval: Option<u32>,
+    baseline_warmup_samples: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -299,6 +300,9 @@ pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
         }
         if let Some(interval) = ddos.check_interval {
             cfg.ddos.check_interval = interval;
+        }
+        if let Some(samples) = ddos.baseline_warmup_samples {
+            cfg.ddos.baseline_warmup_samples = samples;
         }
     }
 

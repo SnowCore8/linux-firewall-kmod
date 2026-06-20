@@ -38,6 +38,8 @@ struct TimeoutState {
     last_ddos_check: SystemTime,
     /// 历史数据快照（每 5 分钟）
     last_history_snapshot: SystemTime,
+    /// 速率统计查询（每秒）
+    last_rates_query: SystemTime,
 }
 
 impl Default for TimeoutState {
@@ -57,6 +59,7 @@ impl TimeoutState {
             last_data_cleanup: now,
             last_ddos_check: now,
             last_history_snapshot: now,
+            last_rates_query: now,
         }
     }
 }
@@ -328,5 +331,71 @@ fn handle_timeout(cfg: &mut Config, reload_config: &AtomicBool, state: &mut Time
     {
         state.last_history_snapshot = now;
         record_history_snapshot(cfg);
+    }
+
+    // 速率统计查询（每 2 秒）- 通过 netlink 从内核获取
+    // 改进：从 5 秒缩短到 2 秒，提升 Web UI 数据实时性
+    // 开销：~1.3ms / 2s = 0.65ms/s（可忽略）
+    if now
+        .duration_since(state.last_rates_query)
+        .unwrap_or_default()
+        .as_secs()
+        >= 2
+    {
+        state.last_rates_query = now;
+        query_rates_from_kernel();
+
+        // 下发基线更新到内核（动态阈值）
+        // 在速率查询后立即发送，确保内核使用最新基线进行违规检测
+        send_baseline_update();
+    }
+}
+
+/// 通过 netlink 查询内核的速率统计数据
+fn query_rates_from_kernel() {
+    use crate::netlink::get_global_netlink_ctx;
+
+    if let Some(ctx) = get_global_netlink_ctx() {
+        // 使用递增的序列号
+        static RATES_SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1000);
+        let seq = RATES_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        if let Err(e) = ctx.send_list_rates_query(seq) {
+            crate::logger::debug!(
+                crate::logger::get(),
+                "发送速率查询失败";
+                "error" => %e
+            );
+        }
+    }
+}
+
+/// 下发基线更新到内核（动态阈值）
+///
+/// 从全局 EWMA 基线缓存读取当前值，通过 netlink BASELINE_UPDATE 发送到内核。
+/// 内核在 check_rate_violation 中使用 max(静态阈值, 基线×倍数) 作为实际阈值。
+fn send_baseline_update() {
+    use crate::netlink::get_global_netlink_ctx;
+    use crate::netlink::{config_flags, ConfigUpdate};
+
+    let baseline_pps = crate::types::get_baseline_pps();
+    let baseline_bps = crate::types::get_baseline_bps();
+
+    // 基线为零时不下发（尚未收敛）
+    if baseline_pps == 0 && baseline_bps == 0 {
+        return;
+    }
+
+    if let Some(ctx) = get_global_netlink_ctx() {
+        let config = ConfigUpdate::new(config_flags::BASELINE_UPDATE)
+            .with_baseline(baseline_pps, baseline_bps);
+
+        if let Err(e) = ctx.send_config_update(&config) {
+            crate::logger::debug!(
+                crate::logger::get(),
+                "发送基线更新失败";
+                "error" => %e
+            );
+        }
     }
 }

@@ -19,11 +19,13 @@ static DEFINE_PER_CPU(struct fw_per_cpu_stats, fw_cpu_stats);
 /* 刷新 per-CPU 计数器到全局 atomic 计数器（cleanup.c 中也会调用） */
 void fw_flush_cpu_stats(void) {
   struct fw_per_cpu_stats *stats;
-  u64 acc, drop;
+  u64 acc, drop, gpkt, gbyt;
 
   stats = this_cpu_ptr(&fw_cpu_stats);
   acc = READ_ONCE(stats->packets_accepted);
   drop = READ_ONCE(stats->packets_dropped);
+  gpkt = READ_ONCE(stats->global_packets);
+  gbyt = READ_ONCE(stats->global_bytes);
 
   if (acc > 0) {
     atomic64_add(acc, &fw_info.packets_accepted);
@@ -33,6 +35,28 @@ void fw_flush_cpu_stats(void) {
     atomic64_add(drop, &fw_info.packets_dropped);
     WRITE_ONCE(stats->packets_dropped, 0);
   }
+  /* 全局流量计数器：守护进程每 2 秒通过 netlink 读取并用于基线计算 */
+  if (gpkt > 0) {
+    atomic64_add(gpkt, &fw_info.global_traffic_packets);
+    WRITE_ONCE(stats->global_packets, 0);
+  }
+  if (gbyt > 0) {
+    atomic64_add(gbyt, &fw_info.global_traffic_bytes);
+    WRITE_ONCE(stats->global_bytes, 0);
+  }
+}
+
+/* on_each_cpu 回调：在每个 CPU 上执行 per-CPU flush */
+static void fw_flush_cpu_stats_ipi(void *info __maybe_unused) {
+  fw_flush_cpu_stats();
+}
+
+/* 跨 CPU 刷新所有 per-CPU 计数器
+ * 在速率查询响应发送前调用，确保全局计数器包含所有 CPU 的最新数据。
+ * 使用 IPI（核间中断）在每个 CPU 上执行 flush，开销约 10-50μs，
+ * 每 2 秒调用一次，完全可忽略。 */
+void fw_flush_all_cpu_stats(void) {
+  on_each_cpu(fw_flush_cpu_stats_ipi, NULL, 1);
 }
 
 /* DDoS 事件通知工作处理函数 - 通过 netlink 推送给守护进程 */
@@ -59,8 +83,8 @@ void ddos_notify_worker(struct work_struct *work) {
 }
 EXPORT_SYMBOL_GPL(ddos_notify_worker);
 
-static unsigned int handle_ban_check(u8 af, const void *src_ip,
-                                     struct sk_buff *skb, u8 protocol) {
+static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *skb,
+                                     u8 protocol, u8 tcp_flags) {
   unsigned long now;
   struct ban_entry *entry;
   struct whitelist_entry *wl_entry;
@@ -191,7 +215,7 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip,
    * 注意：必须在 RCU 读侧临界区外调用，因为 update_rate_stats 可能获取 spinlock */
   if (likely(!is_whitelisted)) {
     u32 packet_len = skb->len;
-    int ret = update_rate_stats(&fw_info, af, src_ip, packet_len, protocol);
+    int ret = update_rate_stats(&fw_info, af, src_ip, packet_len, protocol, tcp_flags);
 
     if (ret == 0) {
       bool should_ban = false;
@@ -202,21 +226,22 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip,
       if (check_rate_violation(&fw_info, af, src_ip)) {
         should_ban = true;
         ban_reason = "total rate";
-      } else if (protocol == IPPROTO_TCP || protocol == IPPROTO_UDP || protocol == IPPROTO_ICMP) {
-        /* 检查是否超过协议专项阈值 */
+      } else if (protocol == IPPROTO_TCP) {
+        /* TCP: 先检查 SYN flood，再检查 ACK/RST/FIN flood */
+        if (check_protocol_violation(&fw_info, af, src_ip, IPPROTO_TCP)) {
+          should_ban = true;
+          ban_reason = "SYN flood";
+        } else {
+          ban_reason = check_tcp_flood_violation(&fw_info, af, src_ip, tcp_flags);
+          if (ban_reason) {
+            should_ban = true;
+          }
+        }
+      } else if (protocol == IPPROTO_UDP || protocol == IPPROTO_ICMP) {
+        /* UDP/ICMP: 检查协议专项阈值 */
         if (check_protocol_violation(&fw_info, af, src_ip, protocol)) {
           should_ban = true;
-          switch (protocol) {
-          case IPPROTO_TCP:
-            ban_reason = "SYN flood";
-            break;
-          case IPPROTO_UDP:
-            ban_reason = "UDP flood";
-            break;
-          case IPPROTO_ICMP:
-            ban_reason = "ICMP flood";
-            break;
-          }
+          ban_reason = (protocol == IPPROTO_UDP) ? "UDP flood" : "ICMP flood";
         }
       }
       rcu_read_unlock();
@@ -313,11 +338,12 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
 
   /* 协议专项速率检测：
    * - 非首片无传输层头部，传 protocol=0 跳过
-   * - TCP 仅对 SYN 包（SYN=1, ACK=0）做 SYN flood 检测
+   * - TCP 提取标志位用于 SYN/ACK/RST/FIN 子分类检测
    * - ICMP 仅对 Echo Request（type=8）做 ICMP flood 检测 */
   {
     __be16 frag_off = iph->frag_off;
     u8 proto = iph->protocol;
+    u8 tcp_flags = 0;
 
     if (ntohs(frag_off) & IP_OFFSET) {
       proto = 0;
@@ -325,8 +351,19 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
       unsigned int ihl = iph->ihl * 4;
       struct tcphdr tcph_copy;
       struct tcphdr *tcph = skb_header_pointer(skb, ihl, sizeof(tcph_copy), &tcph_copy);
-      if (!tcph || !tcph->syn || tcph->ack)
+      if (!tcph) {
         proto = 0;
+      } else {
+        /* 提取 TCP 标志位用于子分类检测 */
+        if (tcph->syn)
+          tcp_flags |= TCP_FLAGS_SYN;
+        if (tcph->ack)
+          tcp_flags |= TCP_FLAGS_ACK;
+        if (tcph->rst)
+          tcp_flags |= TCP_FLAGS_RST;
+        if (tcph->fin)
+          tcp_flags |= TCP_FLAGS_FIN;
+      }
     } else if (proto == IPPROTO_ICMP) {
       unsigned int ihl = iph->ihl * 4;
       struct icmphdr icmph_copy;
@@ -335,7 +372,17 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
         proto = 0;
     }
 
-    return handle_ban_check(FW_AF_INET, &src_ip, skb, proto);
+    /* 递增全局流量计数器（per-CPU 本地写入，flush 时批量写入全局 atomic）
+     * 避免每包 atomic64 操作的跨 CPU 缓存一致性开销 */
+    {
+      struct fw_per_cpu_stats *gstats = this_cpu_ptr(&fw_cpu_stats);
+      gstats->global_packets++;
+      gstats->global_bytes += skb->len;
+      if (unlikely(gstats->global_packets >= FW_PER_CPU_BATCH_SIZE))
+        fw_flush_cpu_stats();
+    }
+
+    return handle_ban_check(FW_AF_INET, &src_ip, skb, proto, tcp_flags);
   }
 }
 
@@ -400,7 +447,7 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
       return NF_ACCEPT;
     if (unlikely((src_ip.s6_addr[0] == 0xFE) && ((src_ip.s6_addr[1] & 0xC0) == 0x80)))
       return NF_ACCEPT;
-    return handle_ban_check(FW_AF_INET6, &src_ip, skb, 0);
+    return handle_ban_check(FW_AF_INET6, &src_ip, skb, 0, 0);
   }
 
   src_ip = iph6->saddr;
@@ -411,21 +458,47 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
   if (unlikely((src_ip.s6_addr[0] == 0xFE) && ((src_ip.s6_addr[1] & 0xC0) == 0x80)))
     return NF_ACCEPT;
 
-  /* TCP 仅对 SYN 包做 SYN flood 检测，避免误判正常连接
+  /* TCP 提取标志位用于 SYN/ACK/RST/FIN 子分类检测
    * ICMPv6 仅对 Echo Request（type=128）做 ICMP flood 检测 */
-  if (nexthdr == IPPROTO_TCP) {
-    struct tcphdr tcph_copy;
-    struct tcphdr *tcph = skb_header_pointer(skb, offset, sizeof(tcph_copy), &tcph_copy);
-    if (!tcph || !tcph->syn || tcph->ack)
-      nexthdr = 0;
-  } else if (nexthdr == IPPROTO_ICMPV6) {
-    struct icmp6hdr icmp6h_copy;
-    struct icmp6hdr *icmp6h = skb_header_pointer(skb, offset, sizeof(icmp6h_copy), &icmp6h_copy);
-    if (!icmp6h || icmp6h->icmp6_type != ICMPV6_ECHO_REQUEST)
-      nexthdr = 0;
-  }
+  {
+    u8 tcp_flags = 0;
 
-  return handle_ban_check(FW_AF_INET6, &src_ip, skb, nexthdr);
+    if (nexthdr == IPPROTO_TCP) {
+      struct tcphdr tcph_copy;
+      struct tcphdr *tcph = skb_header_pointer(skb, offset, sizeof(tcph_copy), &tcph_copy);
+      if (!tcph) {
+        nexthdr = 0;
+      } else {
+        /* 提取 TCP 标志位用于子分类检测 */
+        if (tcph->syn)
+          tcp_flags |= TCP_FLAGS_SYN;
+        if (tcph->ack)
+          tcp_flags |= TCP_FLAGS_ACK;
+        if (tcph->rst)
+          tcp_flags |= TCP_FLAGS_RST;
+        if (tcph->fin)
+          tcp_flags |= TCP_FLAGS_FIN;
+      }
+    } else if (nexthdr == IPPROTO_ICMPV6) {
+      struct icmp6hdr icmp6h_copy;
+      struct icmp6hdr *icmp6h = skb_header_pointer(
+        skb, offset, sizeof(icmp6h_copy), &icmp6h_copy);
+      if (!icmp6h || icmp6h->icmp6_type != ICMPV6_ECHO_REQUEST)
+        nexthdr = 0;
+    }
+
+    /* 递增全局流量计数器（per-CPU 本地写入，flush 时批量写入全局 atomic）
+     * 避免每包 atomic64 操作的跨 CPU 缓存一致性开销 */
+    {
+      struct fw_per_cpu_stats *gstats = this_cpu_ptr(&fw_cpu_stats);
+      gstats->global_packets++;
+      gstats->global_bytes += skb->len;
+      if (unlikely(gstats->global_packets >= FW_PER_CPU_BATCH_SIZE))
+        fw_flush_cpu_stats();
+    }
+
+    return handle_ban_check(FW_AF_INET6, &src_ip, skb, nexthdr, tcp_flags);
+  }
 }
 
 struct nf_hook_ops nf_ops_ipv4 __read_mostly = {

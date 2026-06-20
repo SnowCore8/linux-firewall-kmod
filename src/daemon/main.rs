@@ -124,6 +124,9 @@ fn main() -> Result<()> {
     }
     cfg.daemon = daemon_mode;
 
+    // 应用动态阈值基线配置
+    firewall_daemon::types::set_baseline_warmup_samples(cfg.ddos.baseline_warmup_samples);
+
     // 重置全局标志（可能因为之前的运行而改变了）
     GLOBAL_RUNNING.store(true, Ordering::Relaxed);
     GLOBAL_RELOAD.store(false, Ordering::SeqCst);

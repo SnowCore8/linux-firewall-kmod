@@ -34,8 +34,10 @@ pub use jail::{
     MAX_REGEX_NAME_LEN, MAX_REGEX_PATTERNS,
 };
 pub use stats::{
-    record_ban_duration, with_jail_stats, DaemonStats, JailStatsCounters, JailStatsSnapshot,
-    BAN_DURATION_BUCKETS, DAEMON_STATS, JAIL_STATS,
+    get_baseline_bps, get_baseline_pps, record_ban_duration, record_rate_history,
+    set_baseline_warmup_samples, update_traffic_baseline, with_jail_stats, DaemonStats,
+    JailStatsCounters, JailStatsSnapshot, RateEntry, RateHistoryEntry, WhitelistEntry,
+    BAN_DURATION_BUCKETS, DAEMON_STATS, JAIL_STATS, RATE_CACHE, RATE_HISTORY, WHITELIST_CACHE,
 };
 
 /// inotify 事件缓冲大小：`1024` 个事件 × 单事件 `~16B` + 16KB 安全裕量。

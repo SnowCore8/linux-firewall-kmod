@@ -15,8 +15,9 @@ use std::thread;
 
 use protocol::{
     FwNlBanCmd, FwNlBanStateChange, FwNlConfigAck, FwNlConfigUpdate, FwNlDdosEvent,
-    FwNlListBansQuery, FwNlListBansResponse, FwNlListWhitelistQuery, FwNlListWhitelistResponse,
-    FwNlMsgType, FwNlStatsQuery, FwNlStatsResponse, FwNlWhitelistCmd, FW_NL_MAGIC,
+    FwNlListBansQuery, FwNlListBansResponse, FwNlListRatesQuery, FwNlListRatesResponse,
+    FwNlListWhitelistQuery, FwNlListWhitelistResponse, FwNlMsgType, FwNlStatsQuery,
+    FwNlStatsResponse, FwNlWhitelistCmd, FW_NL_MAGIC,
 };
 
 pub use decision::DdosDecisionEngine;
@@ -395,10 +396,95 @@ impl NetlinkContext {
                     "count" => entries.len()
                 );
 
+                // 更新 WHITELIST_CACHE
+                let whitelist_entries: Vec<crate::types::WhitelistEntry> = entries
+                    .iter()
+                    .map(|e| {
+                        let ip_str = if e.af == 2 {
+                            // AF_INET
+                            format!("{}.{}.{}.{}", e.addr[0], e.addr[1], e.addr[2], e.addr[3])
+                        } else if e.af == 10 {
+                            // AF_INET6
+                            let addr: std::net::Ipv6Addr = std::net::Ipv6Addr::from(e.addr);
+                            addr.to_string()
+                        } else {
+                            "unknown".to_string()
+                        };
+
+                        // 构建 CIDR 格式
+                        let cidr = format!("{}/{}", ip_str, e.prefix_len);
+
+                        // 设备名（null 结尾的字节数组）
+                        let device = String::from_utf8_lossy(&e.device)
+                            .trim_end_matches('\0')
+                            .to_string();
+
+                        crate::types::WhitelistEntry { cidr, device }
+                    })
+                    .collect();
+
+                *crate::types::WHITELIST_CACHE.write() = whitelist_entries;
+
                 // 更新 DAEMON_STATS.whitelist_count
                 crate::types::DAEMON_STATS
                     .whitelist_count
                     .store(entries.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+            Some(FwNlMsgType::ListRatesResponse) => {
+                // 处理速率统计响应
+                if hdr_data.len() < std::mem::size_of::<FwNlListRatesResponse>() {
+                    anyhow::bail!("速率统计响应数据太短");
+                }
+
+                let (resp, entries) = FwNlListRatesResponse::from_bytes(hdr_data)?;
+
+                // 提取全局流量速率（内核 atomic64_xchg 读取并重置）
+                let global_pps = resp.global_pps();
+                let global_bps = resp.global_bps();
+
+                // 更新速率基线（EWMA α=0.01 平滑，用于动态阈值）
+                if global_pps > 0 || global_bps > 0 {
+                    crate::types::update_traffic_baseline(global_pps, global_bps);
+                }
+
+                // 更新 RATE_CACHE 并计算总速率
+                let mut total_pps = 0u64;
+                let mut total_bps = 0u64;
+                let rate_entries: Vec<crate::types::RateEntry> = entries
+                    .iter()
+                    .map(|e| {
+                        let pps = u64::from_be(e.packets);
+                        let bps = u64::from_be(e.bytes);
+                        total_pps += pps;
+                        total_bps += bps;
+                        crate::types::RateEntry {
+                            ip: FwNlListRatesResponse::ip_str(e),
+                            packets_per_sec: pps,
+                            bytes_per_sec: bps,
+                            syn_packets_per_sec: u64::from_be(e.syn_packets),
+                            udp_packets_per_sec: u64::from_be(e.udp_packets),
+                            icmp_packets_per_sec: u64::from_be(e.icmp_packets),
+                            ack_packets_per_sec: u64::from_be(e.ack_packets),
+                            rst_packets_per_sec: u64::from_be(e.rst_packets),
+                            fin_packets_per_sec: u64::from_be(e.fin_packets),
+                        }
+                    })
+                    .collect();
+
+                *crate::types::RATE_CACHE.write() = rate_entries;
+
+                // 记录速率历史快照（每 2 秒一次，保留 1 小时）
+                crate::types::record_rate_history(total_pps, total_bps, entries.len() as u32);
+
+                crate::logger::debug!(
+                    crate::logger::get(),
+                    "收到速率统计响应";
+                    "count" => entries.len(),
+                    "total_pps" => total_pps,
+                    "total_bps" => total_bps,
+                    "global_pps" => global_pps,
+                    "global_bps" => global_bps
+                );
             }
             Some(FwNlMsgType::ConfigAck) => {
                 // 处理配置更新确认
@@ -482,6 +568,12 @@ impl NetlinkContext {
     pub fn send_remove_whitelist(&self, ip: &str, prefix_len: u8) -> Result<()> {
         let cmd = FwNlWhitelistCmd::new_remove(ip, prefix_len)?;
         self.send_command(&cmd.to_bytes())
+    }
+
+    /// 发送速率统计查询
+    pub fn send_list_rates_query(&self, seq: u32) -> Result<()> {
+        let query = FwNlListRatesQuery::new(seq);
+        self.send_command(&query.to_bytes())
     }
 
     /// 发送原始命令到内核

@@ -768,6 +768,7 @@ mod tests {
             auto_ban_duration: 3600,
             auto_ban_threshold: 3,
             check_interval: 5,
+            baseline_warmup_samples: 50,
         }
     }
 

@@ -230,3 +230,188 @@ where
         .or_insert_with(|| JailStatsCounters::new(jail_name.to_string()));
     f(counters)
 }
+
+// ============================================================================
+// 速率统计缓存（从内核 netlink 获取）
+// ============================================================================
+
+/// 单个 IP 的速率统计条目
+#[derive(Debug, Clone)]
+pub struct RateEntry {
+    /// IP 地址字符串
+    pub ip: String,
+    /// 数据包数/秒
+    pub packets_per_sec: u64,
+    /// 字节数/秒
+    pub bytes_per_sec: u64,
+    /// SYN 包数/秒
+    pub syn_packets_per_sec: u64,
+    /// UDP 包数/秒
+    pub udp_packets_per_sec: u64,
+    /// ICMP 包数/秒
+    pub icmp_packets_per_sec: u64,
+    /// ACK 包数/秒
+    pub ack_packets_per_sec: u64,
+    /// RST 包数/秒
+    pub rst_packets_per_sec: u64,
+    /// FIN 包数/秒
+    pub fin_packets_per_sec: u64,
+}
+
+/// 全局速率统计缓存
+///
+/// 由 netlink 接收线程定期更新，HTTP API 读取。
+/// 使用 `RwLock<Vec<RateEntry>>` 保护，读多写少场景。
+pub static RATE_CACHE: once_cell::sync::Lazy<parking_lot::RwLock<Vec<RateEntry>>> =
+    once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(Vec::new()));
+
+// ============================================================================
+// 白名单缓存
+// ============================================================================
+
+/// 白名单条目（从内核 netlink 同步）
+#[derive(Debug, Clone)]
+pub struct WhitelistEntry {
+    /// IP 地址或 CIDR（如 "10.0.0.0/8"）
+    pub cidr: String,
+    /// 网络设备名（如 "eth0"）
+    pub device: String,
+}
+
+/// 全局白名单缓存
+///
+/// 由 netlink 接收线程在收到 ListWhitelistResponse 时更新，HTTP API 读取。
+pub static WHITELIST_CACHE: once_cell::sync::Lazy<parking_lot::RwLock<Vec<WhitelistEntry>>> =
+    once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(Vec::new()));
+
+// ============================================================================
+// 速率历史趋势（环形缓冲区）
+// ============================================================================
+
+/// 速率历史快照（每 2 秒记录一次）
+#[derive(Debug, Clone)]
+pub struct RateHistoryEntry {
+    /// Unix 时间戳（秒）
+    pub timestamp: u64,
+    /// 所有 IP 的总 PPS
+    pub total_pps: u64,
+    /// 所有 IP 的总 BPS
+    pub total_bps: u64,
+    /// 当前跟踪的 IP 数量
+    pub tracked_ips: u32,
+}
+
+/// 速率历史环形缓冲区容量（1800 条 × 2 秒 = 1 小时）
+const RATE_HISTORY_CAPACITY: usize = 1800;
+
+/// 全局速率历史环形缓冲区
+///
+/// 每次 netlink 速率查询时记录一个快照，保留最近 1 小时的历史。
+/// Web UI 可读取此数据绘制速率趋势图。
+pub static RATE_HISTORY: once_cell::sync::Lazy<parking_lot::RwLock<Vec<RateHistoryEntry>>> =
+    once_cell::sync::Lazy::new(|| {
+        parking_lot::RwLock::new(Vec::with_capacity(RATE_HISTORY_CAPACITY))
+    });
+
+/// 记录一次速率快照到历史环形缓冲区
+///
+/// 在 netlink 速率查询响应处理时调用。缓冲区满时移除最旧的条目。
+pub fn record_rate_history(total_pps: u64, total_bps: u64, tracked_ips: u32) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let mut history = RATE_HISTORY.write();
+    if history.len() >= RATE_HISTORY_CAPACITY {
+        history.remove(0);
+    }
+    history.push(RateHistoryEntry {
+        timestamp,
+        total_pps,
+        total_bps,
+        tracked_ips,
+    });
+}
+
+// ============================================================================
+// 动态阈值基线（EWMA 平滑全局流量）
+// ============================================================================
+
+/// 基线 EWMA 平滑因子
+/// 公式：baseline = (α_num * current + (α_den - α_num) * baseline) / α_den
+///
+/// 自适应策略：
+/// - 启动期（前 50 次更新，约 100 秒）：α=0.1，快速收敛到实际流量水平
+///   收敛速度：50 次后初始权重 0.9^50 ≈ 0.005，即 99.5% 已收敛
+/// - 稳定期：α=0.01，极慢衰减，跟踪长期趋势
+///   半衰期：约 69 次更新（~138 秒），对突发流量不敏感
+const BASELINE_ALPHA_FAST_NUM: u64 = 10; // α=0.1（启动期）
+const BASELINE_ALPHA_SLOW_NUM: u64 = 1; // α=0.01（稳定期）
+const BASELINE_ALPHA_DEN: u64 = 100;
+
+/// 启动期→稳定期的切换阈值（默认 50 次更新 ≈ 100 秒）
+/// 可通过 `set_baseline_warmup_samples` 配置，适配不同启动场景
+static BASELINE_WARMUP_SAMPLES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(50);
+
+/// 全局流量基线（PPS）— EWMA 平滑值
+///
+/// 由 netlink 接收线程在每次速率查询响应时更新。
+/// 守护进程定期将此值下发到内核，用于动态阈值计算。
+static BASELINE_PPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 全局流量基线（BPS）— EWMA 平滑值
+static BASELINE_BPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 基线更新次数（用于自适应 α 切换）
+static BASELINE_SAMPLE_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 更新全局流量基线（自适应 EWMA）
+///
+/// 在 netlink 速率查询响应处理时调用，传入内核返回的全局 PPS/BPS。
+/// 启动期使用 α=0.1 快速收敛（约 100 秒达到 99.5%），
+/// 稳定期切换到 α=0.01 长期跟踪。
+pub fn update_traffic_baseline(global_pps: u64, global_bps: u64) {
+    use std::sync::atomic::Ordering;
+
+    let sample = BASELINE_SAMPLE_COUNT.fetch_add(1, Ordering::Relaxed);
+    let warmup = BASELINE_WARMUP_SAMPLES.load(Ordering::Relaxed);
+    let alpha_num = if sample < warmup {
+        BASELINE_ALPHA_FAST_NUM
+    } else {
+        BASELINE_ALPHA_SLOW_NUM
+    };
+
+    let old_pps = BASELINE_PPS.load(Ordering::Relaxed);
+    let old_bps = BASELINE_BPS.load(Ordering::Relaxed);
+
+    let new_pps =
+        (alpha_num * global_pps + (BASELINE_ALPHA_DEN - alpha_num) * old_pps) / BASELINE_ALPHA_DEN;
+    let new_bps =
+        (alpha_num * global_bps + (BASELINE_ALPHA_DEN - alpha_num) * old_bps) / BASELINE_ALPHA_DEN;
+
+    BASELINE_PPS.store(new_pps, Ordering::Relaxed);
+    BASELINE_BPS.store(new_bps, Ordering::Relaxed);
+}
+
+/// 获取当前基线 PPS
+pub fn get_baseline_pps() -> u64 {
+    BASELINE_PPS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 获取当前基线 BPS
+pub fn get_baseline_bps() -> u64 {
+    BASELINE_BPS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 设置基线收敛样本数（配置加载时调用）
+///
+/// 控制启动期→稳定期的切换时机：
+/// - 值越小（如 20）：更快进入稳定期，适合流量稳定的环境
+/// - 值越大（如 100）：启动期更长，适合流量波动大的环境
+///
+/// 默认 50（约 100 秒，2 秒/次查询）
+pub fn set_baseline_warmup_samples(samples: u32) {
+    BASELINE_WARMUP_SAMPLES.store(samples as u64, std::sync::atomic::Ordering::Relaxed);
+}
