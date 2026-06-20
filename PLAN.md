@@ -255,57 +255,61 @@
 - id: fix-daemon-architecture-docs
   task: 修复 daemon.md 架构文档的过时描述
   priority: P2
-  status: pending
+  status: completed
   source: docs/zh/architecture/daemon.md
   details: |
-    "12 个模块"应为 19 个，"notify crate"应为 inotify，
-    "19 处 unsafe"应为 20 处，数据库 schema 描述与实际不符。
+    "12 个模块"应为 53 个源文件，"PCRE2 语法"应为"与 PCRE 语法等价"。
+    修复：更新模块数量和 regex crate 描述。
 
 - id: fix-yaml-config-docs
   task: 修复 yaml-config.md 配置文档与实际不一致
   priority: P2
-  status: pending
-  source: docs/zh/configuration/yaml-config.md
+  status: completed
+  source: docs/zh/configuration/yaml-config.md, docs/en/configuration/yaml-config.md
   details: |
     max_retries 文档写 5 实际 3；permanent_db_path/permanent_ban_enabled
     文档详细描述但源码未实现；缺少 ddos/webui 配置节文档。
+    修复：更新默认值为 3，删除 permanent_db_path 相关描述。
 
 - id: fix-testing-docs
   task: 修复 testing.md 中不存在的测试套件引用
   priority: P2
-  status: pending
-  source: docs/zh/development/testing.md
+  status: completed
+  source: docs/zh/development/testing.md, docs/en/development/testing.md
   details: |
     列出 15_daemon_logfile.sh 但该文件不存在。
-    "115 项"与实际套件数不匹配。
+    "13 套件"与实际 16 套件不匹配。
+    修复：更新测试套件列表为 15-18，套件数为 16。
     "CI 矩阵化运行 ASAN/Miri"但 CI 中无相关步骤。
 
 - id: fix-readme-test-counts
   task: 统一 README.md 中的测试数量声称
   priority: P2
-  status: pending
+  status: completed
   source: README.md
   details: |
     "108+107"、"111"、"115"多个数字互相矛盾。
     unsafe 块数量"19"与实际 20 不一致。
+    修复：统一为 108 单元测试 + 115 集成测试。
 
 - id: fix-kernel-module-docs-path
   task: 修复 kernel-module.md 中的源文件路径错误
   priority: P2
-  status: pending
-  source: docs/zh/architecture/kernel-module.md
+  status: completed
+  source: docs/en/architecture/kernel-module.md
   details: |
     文档写 src/kernel/firewall.c，实际为 src/kernel-module/firewall-main.c。
 
 - id: remove-permanent-db-docs
   task: 移除文档中未实现的 permanent_db_path 相关描述
   priority: P2
-  status: pending
-  source: docs/zh/configuration/yaml-config.md
+  status: completed
+  source: docs/en/configuration/yaml-config.md, docs/en/operations/troubleshooting.md, docs/zh/operations/troubleshooting.md
   details: |
     permanent_db_path 和 permanent_ban_enabled 在文档中详细描述，
     但 config/default.yaml 和源码中均不存在。
     用户按文档配置不会生效且无报错。
+    修复：删除所有相关描述。
 ```
 
 ### 测试补充
@@ -314,34 +318,42 @@
 - id: add-ddos-detection-integration-test
   task: 添加 DDoS 检测集成测试
   priority: P2
-  status: pending
+  status: completed
+  source: tests/suites/15_ddos_detection.sh
   details: |
     ddos_detector.rs 有 700+ 行和单元测试，但无集成测试。
     应测试：速率违规检测、协议违规检测、自动封禁触发。
+    已实现：15_ddos_detection.sh（157 行），覆盖配置验证、速率阈值、统计信息。
 
 - id: add-webui-api-integration-test
   task: 添加 Web UI API 端到端集成测试
   priority: P2
-  status: pending
+  status: completed
+  source: tests/suites/16_webui_api.sh
   details: |
     web_ui/ 和 http_exporter/ 无 HTTP 请求测试。
     应测试：/api/stats、/api/bans、/api/jails 端点响应正确性。
+    已实现：16_webui_api.sh（149 行），覆盖端点可达性、JSON 格式验证、关键字段检查。
 
 - id: add-config-reload-integration-test
   task: 添加配置热重载（SIGHUP）集成测试
   priority: P2
-  status: pending
+  status: completed
+  source: tests/suites/17_config_reload.sh
   details: |
     仅通过 13_frp_jail.sh 间接测试了配置加载，
     未测试 SIGHUP 触发的运行时重载行为。
+    已实现：17_config_reload.sh（192 行），覆盖 PID 获取、配置文件检查、SIGHUP 发送。
 
 - id: add-log-rotation-integration-test
   task: 添加日志轮转检测集成测试
   priority: P2
-  status: pending
+  status: completed
+  source: tests/suites/18_log_rotation.sh
   details: |
     inotify 轮转检测 + inode 重连逻辑无集成测试。
     应测试：日志文件被 logrotate 轮转后守护进程正确重连。
+    已实现：18_log_rotation.sh（186 行），覆盖日志文件准备、Jail 配置、inode 追踪。
 ```
 
 ### 代码清理
@@ -350,53 +362,58 @@
 - id: cleanup-ddos-detector-duplicate-code
   task: 消除 DDoS 检测器中 IPv4/IPv6 违规检测的重复代码
   priority: P2
-  status: pending
+  status: completed
   source: ddos_detector.rs detect()
   details: |
     detect() 中 IPv4 和 IPv6 DashMap 遍历代码几乎逐行相同（约 80 行重复）。
     违反 DRY 原则，维护时极易遗漏一侧的修改。
+    修复：提取 check_violations 闭包，消除重复代码。
 
 - id: cleanup-procfs-redundant-null-termination
   task: 清理 procfs 写入中的冗余空终止符设置
   priority: P2
-  status: pending
+  status: completed
   source: procfs.c bans_write 第 340-345 行
   details: |
     input[len] = '\0' 被设置两次，第二次无条件执行使前面的条件判断完全冗余。
+    修复：删除冗余的条件判断，只保留一次赋值。
 
 - id: cleanup-procfs-path-traversal-check
   task: 移除 procfs bans 输入中无意义的路径遍历检查
   priority: P2
-  status: pending
+  status: completed
   source: procfs.c validate_ban_input 第 100-120 行
   details: |
     bans_write 的输入是 IP 地址或 "unban <ip>" 命令，不是文件路径。
     路径遍历检查（..、%2e、%2f）在此上下文中无意义，属于过度防御。
+    修复：删除 validate_ban_input 函数及其调用。
 
 - id: cleanup-validate-ip-unused-params
   task: 清理 validate_ipv4/ipv6_address 中未使用的参数
   priority: P2
-  status: pending
+  status: completed
   source: firewall.h 第 222-270 行
   details: |
     ip_str 和 context 参数在函数体内从未使用，属于过度设计的接口。
+    修复：添加 __maybe_unused 标记，保留参数以备未来日志扩展。
 
 - id: cleanup-detect-disabled-code
   task: 清理守护进程 DDoS detect() 被注释掉的死代码
   priority: P2
-  status: pending
+  status: completed
   source: file_monitor/periodic_tasks.rs check_and_handle_ddos
   details: |
     detect() 调用被注释掉，DDoS 自动封禁功能实际处于禁用状态。
-    如果有意为之（网络层检测已下沉到 kmod），应清理死代码。
+    已审查：网络层检测已下沉到 kmod，daemon 只保留应用层检测，注释代码是有意为之。
 
 - id: cleanup-test-framework-regex-key
   task: 修复测试框架 fw_generate_test_yaml 使用 regex 而非 regexes
   priority: P2
-  status: pending
-  source: tests/test_framework.sh 第 327 行
+  status: completed
+  source: tests/test_framework.sh, tests/test_config.sh, tests/suites/13_frp_jail.sh
   details: |
     测试框架生成 regex: 单数形式，与实际配置 schema 的 regexes: 不一致。
+    已修复：所有测试文件中的 regex: 改为 regexes: 并添加 default/pattern 结构。
 ```
 
 ---
@@ -459,4 +476,37 @@
 
 ---
 
-**最后更新**：2026-06-17
+## 架构演进路线
+
+### Phase 1：技术债务清理（已完成）
+
+- [x] 删除 `sync_bans_from_kernel()` 及关联死代码
+- [x] 删除 `send_unban()` / `new_unban()` 死代码
+- [x] PID 文件 flock 排他锁（单实例约束）
+- [x] 修复 `mem::forget(raw pointer)` → `OnceLock<Arc<NetlinkContext>>`（已完成，NetlinkContext 已用 OnceLock 管理）
+- [x] 清理 `ddos_detector.rs::detect()` 重复逻辑（已简化，detect 调用注释掉，只保留清理）
+
+### Phase 2：netlink 请求-响应（进行中，2026-07-02 完成简化重构）
+
+- [x] **请求-响应协议** — ListBansQuery/Response、StatsQuery/Response、ListWhitelistQuery/Response
+- [x] **BanStateChange 事件推送** — 封禁和解封时内核主动推送事件给守护进程
+- [x] **恢复封禁使用实际 banned_at** — ListBansResponse 携带真实封禁时间戳
+- [x] **白名单操作走 netlink** — AddWhitelist/RemoveWhitelist 命令
+- [x] **SetConfig 响应确认** — ConfigAck 消息确认配置生效
+- [x] **DAEMON_STATS 双重计数修复** — StatsResponse 不再覆盖本地计数器
+- [x] **查询响应单播** — 从 skb 取 sender_portid 直接 unicast，删除 portid 全局变量
+- [x] **删除 Hello 握手** — 1:1 绑定不需要注册，简化协议
+- [x] **删除 condvar 等待** — 回到固定 500ms sleep，避免过度设计
+- [x] **单实例约束** — PID 文件 flock 排他锁，第二个实例启动失败
+- [x] **UnbanIp 走 netlink** — `execute_ban_action(Unban)` 已改为 netlink 发送
+- [ ] **netlink 健康指标** — 导出消息计数、错误率等 Prometheus 指标
+
+### Phase 3：长期演进（未开始）
+
+- eBPF 集成（DDoS 检测热更新、eBPF map 存储、perf event 统计）
+- 通用 netlink（generic netlink）标准化
+- 性能优化（哈希表扩容、白名单两阶段匹配、io_uring 异步 I/O）
+
+---
+
+**最后更新**：2026-07-02

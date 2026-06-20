@@ -361,7 +361,6 @@ sudo insmod build/kernel-module/firewall.ko
 | 文档 | 说明 |
 |------|------|
 | [README.md](README.md) | 项目介绍、快速开始、核心特性 |
-| [README.en.md](README.en.md) | 英文版 README |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南、代码规范、PR 流程 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
 | [SECURITY.md](SECURITY.md) | 安全策略和漏洞报告流程 |
