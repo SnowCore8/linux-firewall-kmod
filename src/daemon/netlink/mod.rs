@@ -114,7 +114,8 @@ impl NetlinkContext {
         running.store(true, Ordering::SeqCst);
 
         let handle = thread::spawn(move || {
-            let mut buf = vec![0u8; 4096];
+            // 256KB 缓冲区：ListBansResponse 最大约 168KB（4096 条目 × ~41 字节）
+            let mut buf = vec![0u8; 256 * 1024];
             let mut pollfd = nix::libc::pollfd {
                 fd,
                 events: nix::libc::POLLIN,
@@ -144,15 +145,34 @@ impl NetlinkContext {
                 }
 
                 if pollfd.revents & nix::libc::POLLIN != 0 {
-                    // 读取数据
+                    // 读取数据（MSG_TRUNC 标志使 recv 返回实际消息长度，即使被截断）
                     // SAFETY: fd 是有效的 socket 文件描述符，buf.as_mut_ptr() 指向
-                    // 4096 字节的有效缓冲区，buf.len() 是合法的缓冲区大小。
+                    // 256KB 的有效缓冲区，buf.len() 是合法的缓冲区大小。
                     // recv 返回值 n 用于切片 buf[..n]，负值表示错误。
-                    let n =
-                        unsafe { nix::libc::recv(fd, buf.as_mut_ptr() as *mut _, buf.len(), 0) };
+                    let n = unsafe {
+                        nix::libc::recv(
+                            fd,
+                            buf.as_mut_ptr() as *mut _,
+                            buf.len(),
+                            nix::libc::MSG_TRUNC,
+                        )
+                    };
 
                     if n > 0 {
-                        if let Err(e) = Self::handle_message(&buf[..n as usize], &decision_engine) {
+                        let n = n as usize;
+                        // 检测截断：MSG_TRUNC 使 recv 返回实际消息长度
+                        // netlink 消息已被消费，无法重新读取，只能丢弃
+                        if n > buf.len() {
+                            crate::logger::error!(
+                                crate::logger::get(),
+                                "netlink 消息被截断丢弃：实际 {} 字节，缓冲区 {} 字节",
+                                n,
+                                buf.len()
+                            );
+                            continue;
+                        }
+
+                        if let Err(e) = Self::handle_message(&buf[..n], &decision_engine) {
                             crate::logger::warn!(
                                 crate::logger::get(),
                                 "处理 netlink 消息失败";

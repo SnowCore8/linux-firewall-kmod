@@ -858,6 +858,7 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
   struct fw_nlmsg_hdr *hdr;
   struct fw_nl_ban_cmd *cmd;
   char ip_str[INET6_STR_LEN];
+  int payload_len;
 
   while (skb->len >= nlmsg_total_size(0)) {
     nlh = nlmsg_hdr(skb);
@@ -870,9 +871,19 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
     /* 获取自定义消息头 */
     hdr = (struct fw_nlmsg_hdr *)nlmsg_data(nlh);
 
+    /* 计算有效载荷长度（nlmsg_data 之后的字节数） */
+    payload_len = nlh->nlmsg_len - NLMSG_HDRLEN;
+
     /* 验证魔数 */
     if (be32_to_cpu(hdr->magic) != FW_NL_MAGIC) {
       pr_warn("invalid netlink magic: 0x%x\n", be32_to_cpu(hdr->magic));
+      goto next;
+    }
+
+    /* 所有消息至少包含 fw_nlmsg_hdr */
+    if (payload_len < (int)sizeof(struct fw_nlmsg_hdr)) {
+      pr_warn("netlink: payload too short: %d < %zu\n", payload_len,
+              sizeof(struct fw_nlmsg_hdr));
       goto next;
     }
 
@@ -882,6 +893,10 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
     /* 根据消息类型处理 */
     switch (be16_to_cpu(hdr->msg_type)) {
     case FW_NL_BAN_IP:
+      if (payload_len < (int)sizeof(struct fw_nl_ban_cmd)) {
+        pr_warn("netlink: BAN_IP payload too short: %d\n", payload_len);
+        break;
+      }
       cmd = (struct fw_nl_ban_cmd *)hdr;
       ip_to_str(cmd->af, cmd->addr, ip_str, sizeof(ip_str));
       pr_info("netlink: ban IP %s for %u seconds\n", ip_str, be32_to_cpu(cmd->duration_secs));
@@ -895,6 +910,10 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       break;
 
     case FW_NL_UNBAN_IP:
+      if (payload_len < (int)sizeof(struct fw_nl_ban_cmd)) {
+        pr_warn("netlink: UNBAN_IP payload too short: %d\n", payload_len);
+        break;
+      }
       cmd = (struct fw_nl_ban_cmd *)hdr;
       ip_to_str(cmd->af, cmd->addr, ip_str, sizeof(ip_str));
       pr_info("netlink: unban IP %s\n", ip_str);
@@ -904,6 +923,10 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       break;
 
     case FW_NL_SET_CONFIG: {
+      if (payload_len < (int)sizeof(struct fw_nl_config_update)) {
+        pr_warn("netlink: SET_CONFIG payload too short: %d\n", payload_len);
+        break;
+      }
       struct fw_nl_config_update *cfg = (struct fw_nl_config_update *)hdr;
       __u32 flags = be32_to_cpu(cfg->flags);
       __u32 original_flags = flags;
@@ -1061,6 +1084,10 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       break;
 
     case FW_NL_ADD_WHITELIST: {
+      if (payload_len < (int)sizeof(struct fw_nl_whitelist_cmd)) {
+        pr_warn("netlink: ADD_WHITELIST payload too short: %d\n", payload_len);
+        break;
+      }
       struct fw_nl_whitelist_cmd *cmd = (struct fw_nl_whitelist_cmd *)hdr;
       char ip_str[INET6_STR_LEN];
       int ret;
@@ -1092,6 +1119,10 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
     }
 
     case FW_NL_REMOVE_WHITELIST: {
+      if (payload_len < (int)sizeof(struct fw_nl_whitelist_cmd)) {
+        pr_warn("netlink: REMOVE_WHITELIST payload too short: %d\n", payload_len);
+        break;
+      }
       struct fw_nl_whitelist_cmd *cmd = (struct fw_nl_whitelist_cmd *)hdr;
       char ip_str[INET6_STR_LEN];
       int ret;

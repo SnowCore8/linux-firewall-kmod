@@ -495,8 +495,20 @@ bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip) {
     u32 ratio = READ_ONCE(fw->dynamic_threshold_ratio_x100);
 
     if (ratio > 0) {
-      u64 dynamic_pps = baseline_pps * ratio / 100;
-      u64 dynamic_bps = baseline_bps * ratio / 100;
+      u64 dynamic_pps, dynamic_bps;
+      u64 ratio64 = (u64)ratio;
+
+      /* 溢出防护：baseline × ratio 可能超过 U64_MAX */
+      if (check_mul_overflow(baseline_pps, ratio64, &dynamic_pps))
+        dynamic_pps = U64_MAX;
+      else
+        dynamic_pps /= 100;
+
+      if (check_mul_overflow(baseline_bps, ratio64, &dynamic_bps))
+        dynamic_bps = U64_MAX;
+      else
+        dynamic_bps /= 100;
+
       if (dynamic_pps > pps_threshold)
         pps_threshold = dynamic_pps;
       if (dynamic_bps > bps_threshold)

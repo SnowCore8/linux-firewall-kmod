@@ -1,6 +1,13 @@
 // Firewall Daemon Dashboard — Dark Theme
 'use strict';
 
+// ── HTML 转义（防止 XSS）──
+function escapeHtml(str) {
+    if (typeof str !== 'string') return str;
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 // ── 全局状态 ──
 let charts = {};
 let eventSource = null;
@@ -598,11 +605,11 @@ function updateBansTable(bans) {
 
     tbody.innerHTML = bans.map(ban => `
         <tr>
-            <td><span class="table-ip">${ban.ip}</span></td>
-            <td><span class="table-jail">${ban.jail}</span></td>
+            <td><span class="table-ip">${escapeHtml(ban.ip)}</span></td>
+            <td><span class="table-jail">${escapeHtml(ban.jail)}</span></td>
             <td><span class="table-time">${formatDateTime(ban.banned_at)}</span></td>
             <td><span class="table-time">${formatDuration(ban.remaining_seconds)}</span></td>
-            <td>${ban.reason}</td>
+            <td>${escapeHtml(ban.reason)}</td>
         </tr>
     `).join('');
 }
@@ -666,7 +673,7 @@ function updateRatesPanel(rates) {
 
         return `<div class="rate-card rate-${level}">
             <div class="rate-header">
-                <span class="rate-ip">${rate.ip}</span>
+                <span class="rate-ip">${escapeHtml(rate.ip)}</span>
                 <span class="rate-badge rate-${level}">${text}</span>
             </div>
             <div class="rate-stats">

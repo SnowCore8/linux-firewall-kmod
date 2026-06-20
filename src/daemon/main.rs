@@ -274,6 +274,15 @@ fn main() -> Result<()> {
     let mut exporter_handle = None;
     if cfg.metrics_port > 0 {
         exporter_handle = Some(http_exporter::start_http_exporter(cfg.metrics_port, &cfg));
+        // 等待 HTTP 服务启动（最多 500ms），检测启动失败
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if !http_exporter::is_exporter_running() {
+            warn!(
+                logger::get(),
+                "HTTP 服务启动失败，Web UI 和 API 不可用";
+                "port" => cfg.metrics_port
+            );
+        }
     }
 
     if let Err(e) = file_monitor::monitor_loop(&mut cfg, &GLOBAL_RUNNING, &GLOBAL_RELOAD) {

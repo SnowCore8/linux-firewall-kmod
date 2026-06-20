@@ -431,6 +431,11 @@ pub fn create_ban(req: CreateBanRequest) -> Result<BanOperationResponse, String>
         return Err("IP 地址不能为空".to_string());
     }
 
+    // 验证 IP 地址格式
+    if ip.parse::<std::net::IpAddr>().is_err() {
+        return Err(format!("无效的 IP 地址格式: {}", ip));
+    }
+
     let permanent = req.duration == Some(0);
     let duration = req.duration.unwrap_or(0);
 
@@ -489,6 +494,29 @@ pub fn create_whitelist(req: CreateWhitelistRequest) -> Result<WhitelistOperatio
     let cidr = req.cidr.trim();
     if cidr.is_empty() {
         return Err("CIDR 不能为空".to_string());
+    }
+
+    // 验证 CIDR 格式：支持 "ip/prefix" 或纯 "ip"
+    if let Some((ip_part, prefix_str)) = cidr.split_once('/') {
+        if ip_part.parse::<std::net::IpAddr>().is_err() {
+            return Err(format!("无效的 IP 地址: {}", ip_part));
+        }
+        let prefix: u8 = prefix_str
+            .parse()
+            .map_err(|_| format!("无效的前缀长度: {}", prefix_str))?;
+        let max_prefix = if ip_part.parse::<std::net::Ipv4Addr>().is_ok() {
+            32
+        } else {
+            128
+        };
+        if prefix > max_prefix {
+            return Err(format!(
+                "前缀长度 {} 超出范围（最大 {}）",
+                prefix, max_prefix
+            ));
+        }
+    } else if cidr.parse::<std::net::IpAddr>().is_err() {
+        return Err(format!("无效的 IP/CIDR 格式: {}", cidr));
     }
 
     let failed = crate::ban::init_trusted_ips(&[cidr.to_string()]);

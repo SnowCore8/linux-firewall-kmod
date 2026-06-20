@@ -14,6 +14,11 @@ mod metrics;
 
 pub use lifecycle::{start_http_exporter, stop_http_exporter};
 
+/// 检查 HTTP 导出器是否正在运行
+pub fn is_exporter_running() -> bool {
+    EXPORTER_RUNNING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 // ============================================================================
 // 全局 Jail 信息存储（支持热更新）
 // ============================================================================

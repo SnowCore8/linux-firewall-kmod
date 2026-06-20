@@ -455,6 +455,13 @@ pub struct FwNlListBansResponse {
     // 后面紧跟 count 个 FwNlBanEntry
 }
 
+/// 封禁表最大条目数（与内核 MAX_BAN_ENTRIES 一致）
+const MAX_BAN_ENTRIES: usize = 4096;
+/// 白名单表最大条目数（与内核 WHITELIST_MAX_ENTRIES 一致）
+const MAX_WHITELIST_ENTRIES: usize = 64;
+/// 速率表最大条目数（与内核 RATE_HASH_SIZE 一致）
+const MAX_RATE_ENTRIES: usize = 4096;
+
 impl FwNlListBansResponse {
     pub fn from_bytes(data: &[u8]) -> Result<(Self, Vec<FwNlBanEntry>)> {
         if data.len() < std::mem::size_of::<Self>() {
@@ -467,6 +474,9 @@ impl FwNlListBansResponse {
             std::ptr::read(data.as_ptr() as *const Self)
         };
         let count = u32::from_be(resp.count) as usize;
+        if count > MAX_BAN_ENTRIES {
+            anyhow::bail!("封禁条目数 {} 超出上限 {}", count, MAX_BAN_ENTRIES);
+        }
         let entries_data = &data[std::mem::size_of::<Self>()..];
 
         let mut entries = Vec::with_capacity(count);
@@ -640,6 +650,9 @@ impl FwNlListWhitelistResponse {
             std::ptr::read(data.as_ptr() as *const Self)
         };
         let count = u32::from_be(resp.count) as usize;
+        if count > MAX_WHITELIST_ENTRIES {
+            anyhow::bail!("白名单条目数 {} 超出上限 {}", count, MAX_WHITELIST_ENTRIES);
+        }
         let entries_data = &data[std::mem::size_of::<Self>()..];
 
         let mut entries = Vec::with_capacity(count);
@@ -846,6 +859,9 @@ impl FwNlListRatesResponse {
             std::ptr::read(data.as_ptr() as *const Self)
         };
         let count = u32::from_be(resp.count) as usize;
+        if count > MAX_RATE_ENTRIES {
+            anyhow::bail!("速率条目数 {} 超出上限 {}", count, MAX_RATE_ENTRIES);
+        }
         let entries_data = &data[std::mem::size_of::<Self>()..];
 
         let mut entries = Vec::with_capacity(count);

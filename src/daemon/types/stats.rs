@@ -386,10 +386,15 @@ pub fn update_traffic_baseline(global_pps: u64, global_bps: u64) {
     let old_pps = BASELINE_PPS.load(Ordering::Relaxed);
     let old_bps = BASELINE_BPS.load(Ordering::Relaxed);
 
-    let new_pps =
-        (alpha_num * global_pps + (BASELINE_ALPHA_DEN - alpha_num) * old_pps) / BASELINE_ALPHA_DEN;
-    let new_bps =
-        (alpha_num * global_bps + (BASELINE_ALPHA_DEN - alpha_num) * old_bps) / BASELINE_ALPHA_DEN;
+    // saturating 运算防止极端流量场景下的整数溢出
+    let new_pps = alpha_num
+        .saturating_mul(global_pps)
+        .saturating_add((BASELINE_ALPHA_DEN - alpha_num).saturating_mul(old_pps))
+        / BASELINE_ALPHA_DEN;
+    let new_bps = alpha_num
+        .saturating_mul(global_bps)
+        .saturating_add((BASELINE_ALPHA_DEN - alpha_num).saturating_mul(old_bps))
+        / BASELINE_ALPHA_DEN;
 
     BASELINE_PPS.store(new_pps, Ordering::Relaxed);
     BASELINE_BPS.store(new_bps, Ordering::Relaxed);

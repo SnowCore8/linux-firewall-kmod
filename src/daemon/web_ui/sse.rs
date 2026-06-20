@@ -42,19 +42,26 @@ impl Drop for ConnectionGuard {
 /// 全局最多允许 MAX_SSE_CONNECTIONS 个并发连接。超过限制时返回 503。
 pub async fn handle_sse() -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode>
 {
-    // 连接数限制检查（复用现有 AtomicUsize + ConnectionGuard 机制）
-    let current_count = SSE_CONNECTION_COUNT.load(Ordering::Relaxed);
-    if current_count >= MAX_SSE_CONNECTIONS {
-        crate::logger::warn!(
-            crate::logger::get(),
-            "SSE 连接数达到上限，拒绝新连接";
-            "current" => current_count,
-            "max" => MAX_SSE_CONNECTIONS
-        );
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    // 连接数限制检查（原子 compare_exchange 消除 TOCTOU 竞态）
+    loop {
+        let current = SSE_CONNECTION_COUNT.load(Ordering::Relaxed);
+        if current >= MAX_SSE_CONNECTIONS {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "SSE 连接数达到上限，拒绝新连接";
+                "current" => current,
+                "max" => MAX_SSE_CONNECTIONS
+            );
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        // compare_exchange: 仅当值未变时递增，失败则重试
+        if SSE_CONNECTION_COUNT
+            .compare_exchange_weak(current, current + 1, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            break;
+        }
     }
-
-    SSE_CONNECTION_COUNT.fetch_add(1, Ordering::Relaxed);
     let _guard = ConnectionGuard; // Drop 时自动减计数
 
     // 获取推送间隔（默认 1 秒）
