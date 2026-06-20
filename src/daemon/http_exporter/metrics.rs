@@ -2,21 +2,24 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::types::{now_secs, DAEMON_STATS, DDOS_STATS};
+use crate::types::{now_secs, ACTIVE_BAN_CACHE, DAEMON_STATS, DDOS_STATS};
 
 // ============================================================================
 // 内核统计信息读取
 // ============================================================================
 
-/// 从 `/proc/firewall/stats` 解析 4 个内核态指标:当前封禁数 / 总封禁 /
-/// 总解封 / 当前白名单数。文件不存在时全部为 0。
+/// 从内存缓存读取 4 个内核态指标：当前封禁数 / 总封禁 / 总解封 / 当前白名单数。
 ///
-/// 提前退出:4 个 key 都找到后立即 break,避免读完整文件。
-///
-/// 程序内部走内存（`/proc/firewall/*` 是用户操作接口）
-/// 当前 netlink 不支持请求-响应，无内存计数器的字段暂返回 0。
+/// 程序内部走内存（`/proc/firewall/*` 是用户操作接口）。
 fn read_kernel_stats() -> (u64, u64, u64, u64) {
-    (0, 0, 0, 0)
+    let banned = ACTIVE_BAN_CACHE
+        .get()
+        .map(|cache| cache.len() as u64)
+        .unwrap_or(0);
+    let total_bans = DAEMON_STATS.ips_banned.load(Ordering::Relaxed);
+    let total_unbans = DAEMON_STATS.total_unbans.load(Ordering::Relaxed);
+    let whitelist_count = DAEMON_STATS.whitelist_count.load(Ordering::Relaxed);
+    (banned, total_bans, total_unbans, whitelist_count)
 }
 
 // ============================================================================

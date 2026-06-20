@@ -1,253 +1,268 @@
-//! HTTP 请求处理 + 安全头 + 路由分发
+//! HTTP 路由构建 + handler 函数 + 安全头中间件
 
-use std::io::Cursor;
+use axum::{
+    extract::{Path, Query},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    middleware,
+    response::{Html, IntoResponse, Json, Redirect, Response},
+    routing::{delete, get, post},
+    Router,
+};
 
-use tiny_http::{Header, Method, Request, Response, StatusCode};
-
-use super::auth::check_basic_auth;
+use super::auth::{auth_middleware, AuthCredentials};
 use super::metrics::generate_metrics;
 use crate::web_ui;
 
 // ============================================================================
-// 安全头
+// 路由构建
 // ============================================================================
 
-/// 给响应添加安全头:`X-Content-Type-Options` / `X-Frame-Options` /
-/// `X-Content-Security-Policy` / `Cache-Control: no-store`。
+/// 构建 axum Router。
 ///
-/// Web UI 路径（`/dashboard`、`/static/*`）使用 `default-src 'self'` 允许加载同源资源。
+/// 路由分层：
+/// - 无认证路由组：`/health`、`/healthz`（K8s livenessProbe 跳过认证）
+/// - 需认证路由组：其余所有路由（通过 auth middleware 保护）
+/// - 安全头：所有路由共享
+pub fn build_router(metrics_user: String, metrics_pass: String) -> Router {
+    // 无认证路由组
+    let public_routes = Router::new()
+        .route("/health", get(handle_health))
+        .route("/healthz", get(handle_health));
+
+    // 需认证路由组（RESTful v1 API）
+    let protected_routes = Router::new()
+        .route("/metrics", get(handle_metrics))
+        .route("/", get(handle_redirect))
+        .route("/dashboard", get(handle_dashboard))
+        .route("/static/*path", get(handle_static))
+        // v1 RESTful API
+        .route("/api/v1/stats", get(handle_api_stats))
+        .route("/api/v1/bans", get(handle_api_bans))
+        .route("/api/v1/bans", post(handle_create_ban))
+        .route("/api/v1/bans/:ip", delete(handle_delete_ban))
+        .route("/api/v1/jails", get(handle_api_jails))
+        .route("/api/v1/config", get(handle_api_config))
+        .route("/api/v1/whitelist", get(handle_api_whitelist))
+        .route("/api/v1/whitelist", post(handle_create_whitelist))
+        .route("/api/v1/whitelist/:cidr", delete(handle_delete_whitelist))
+        .route("/api/v1/rates/current", get(handle_api_rates_current))
+        .route("/api/v1/rates/history", get(handle_api_rates_history))
+        .route("/api/v1/events", get(handle_sse))
+        .layer(middleware::from_fn(auth_middleware))
+        .layer(axum::Extension(AuthCredentials {
+            username: metrics_user,
+            password: metrics_pass,
+        }));
+
+    // 合并 + 安全头中间件（所有路由共享）
+    public_routes
+        .merge(protected_routes)
+        .layer(middleware::from_fn(security_headers_middleware))
+}
+
+// ============================================================================
+// 安全头中间件
+// ============================================================================
+
+/// 安全头中间件：为所有响应添加 CSP / X-Frame-Options / X-Content-Type-Options。
+///
+/// Web UI 路径（`/dashboard`、`/static/*`）使用宽松 CSP 允许同源资源加载。
 /// 其他路径使用 `default-src 'none'` 严格限制。
-fn add_security_headers(
-    response: Response<Cursor<Vec<u8>>>,
-    is_webui: bool,
-) -> Response<Cursor<Vec<u8>>> {
+async fn security_headers_middleware(
+    request: axum::http::Request<axum::body::Body>,
+    next: middleware::Next,
+) -> Response {
+    let path = request.uri().path().to_string();
+    let is_webui = path == "/dashboard" || path.starts_with("/static/");
+
+    let mut response = next.run(request).await;
+
     let csp_value = if is_webui {
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
     } else {
         "default-src 'none'"
     };
+
+    let headers = response.headers_mut();
+    headers.insert(
+        "X-Content-Type-Options",
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
+    headers.insert(
+        "Content-Security-Policy",
+        HeaderValue::from_str(csp_value).expect("CSP 值为合法 ASCII"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+
     response
-        .with_header(
-            Header::from_bytes("X-Content-Type-Options", "nosniff").expect("静态 ASCII 头"),
-        )
-        .with_header(Header::from_bytes("X-Frame-Options", "DENY").expect("静态 ASCII 头"))
-        .with_header(
-            Header::from_bytes("Content-Security-Policy", csp_value).expect("静态 ASCII 头"),
-        )
-        .with_header(Header::from_bytes("Cache-Control", "no-store").expect("静态 ASCII 头"))
 }
 
 // ============================================================================
-// 请求处理
+// Handler 函数
 // ============================================================================
 
-/// 单个 HTTP 请求的分发器:路由到 `/health` / `/metrics` / 404。
-///
-/// `/health` 走完全跳过 auth 路径,其他路径先 auth 再分发。
-///
-/// # Arguments
-/// - `request`: 来自 `tiny_http` 的请求
-/// - `cfg_user` / `cfg_pass`: Basic Auth 凭据 (空 = 跳过 auth)
-fn handle_request(request: Request, cfg_user: &str, cfg_pass: &str) {
-    let url = request.url().to_string();
+/// `GET /health` 和 `GET /healthz` — 健康检查（跳过认证）
+async fn handle_health() -> (StatusCode, HeaderMap, &'static str) {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    (StatusCode::OK, headers, "{\"status\":\"ok\"}\n")
+}
 
-    // /health 和 /healthz 完全跳过 Basic Auth, 即使配置了认证
-    // 供 K8s livenessProbe 等场景使用, 不应被 auth 拖累
-    if url == "/health" || url == "/healthz" {
-        let body = "{\"status\":\"ok\"}\n";
-        let response = Response::from_string(body).with_header(
-            Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
-        );
-        if let Err(e) = request.respond(add_security_headers(response, false)) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "发送 /health 响应失败";
-                "error" => %e
+/// `GET /metrics` — Prometheus 指标
+async fn handle_metrics() -> (StatusCode, HeaderMap, String) {
+    let metrics = generate_metrics();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
+    );
+    (StatusCode::OK, headers, metrics)
+}
+
+/// `GET /` — 重定向到 /dashboard
+async fn handle_redirect() -> Redirect {
+    Redirect::to("/dashboard")
+}
+
+/// `GET /dashboard` — Web UI 主页
+async fn handle_dashboard() -> Html<String> {
+    Html(web_ui::render_dashboard())
+}
+
+/// `GET /static/{*path}` — 静态资源服务
+async fn handle_static(Path(path): Path<String>) -> impl IntoResponse {
+    match web_ui::get_static_asset(&path) {
+        Some((data, mime_type)) => {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_str(mime_type).expect("MIME 类型为合法 ASCII"),
             );
+            (StatusCode::OK, headers, data).into_response()
         }
-        return;
+        None => (StatusCode::NOT_FOUND, "404 Not Found\n").into_response(),
     }
+}
 
-    let auth_header = request
-        .headers()
-        .iter()
-        .find(|h| h.field.as_str() == "Authorization")
-        .map(|h| h.value.as_str());
+/// `GET /api/v1/stats` — 统计数据 JSON
+async fn handle_api_stats() -> Json<web_ui::api::ApiResponse<web_ui::api::StatsResponse>> {
+    let stats = web_ui::api::get_stats();
+    Json(web_ui::api::ApiResponse::ok(stats))
+}
 
-    let auth_result = check_basic_auth(auth_header, cfg_user, cfg_pass);
-    if auth_result == 0 {
-        let body = "401 Unauthorized\r\n";
-        let response = Response::from_string(body)
-            .with_status_code(StatusCode(401))
-            .with_header(
-                Header::from_bytes("WWW-Authenticate", "Basic realm=\"firewall-metrics\"")
-                    .expect("静态 ASCII 头"),
-            );
-        if let Err(e) = request.respond(add_security_headers(response, false)) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "发送 401 响应失败";
-                "error" => %e
-            );
-        }
-        return;
-    }
+/// `GET /api/v1/bans` — 活跃封禁列表 JSON（支持分页）
+async fn handle_api_bans(Query(params): Query<web_ui::api::PaginationParams>) -> impl IntoResponse {
+    let page = params.page.unwrap_or(1);
+    let page_size = params.page_size.unwrap_or(20);
+    let sort_by = params.sort_by;
 
-    if let (&Method::Get, "/metrics") = (request.method(), url.as_str()) {
-        let metrics = generate_metrics();
-        let response = Response::from_string(metrics).with_header(
-            Header::from_bytes("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-                .expect("静态 ASCII 头"),
-        );
-        if let Err(e) = request.respond(add_security_headers(response, false)) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "发送 /metrics 响应失败";
-                "error" => %e
-            );
-        }
-    } else if let (&Method::Get, "/") = (request.method(), url.as_str()) {
-        // 根路径重定向到 /dashboard
-        let response = Response::from_string("")
-            .with_status_code(StatusCode(302))
-            .with_header(Header::from_bytes("Location", "/dashboard").expect("静态 ASCII 头"));
-        if let Err(e) = request.respond(add_security_headers(response, false)) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "发送重定向响应失败";
-                "error" => %e
-            );
-        }
-    } else if let (&Method::Get, "/dashboard") = (request.method(), url.as_str()) {
-        // Dashboard 页面
-        let html = web_ui::render_dashboard();
-        let response = Response::from_string(html).with_header(
-            Header::from_bytes("Content-Type", "text/html; charset=utf-8").expect("静态 ASCII 头"),
-        );
-        if let Err(e) = request.respond(add_security_headers(response, true)) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "发送 /dashboard 响应失败";
-                "error" => %e
-            );
-        }
-    } else if url.starts_with("/static/") {
-        // 静态资源
-        let path = url.trim_start_matches("/static/");
-        if let Some((data, mime_type)) = web_ui::get_static_asset(path) {
-            let response = Response::from_data(data)
-                .with_header(Header::from_bytes("Content-Type", mime_type).expect("静态 ASCII 头"));
-            if let Err(e) = request.respond(add_security_headers(response, true)) {
-                crate::logger::warn!(
-                    crate::logger::get(),
-                    "发送静态资源失败";
-                    "path" => path,
-                    "error" => %e
-                );
-            }
-        } else {
-            let body = "404 Not Found\r\n";
-            let response = Response::from_string(body).with_status_code(StatusCode(404));
-            if let Err(e) = request.respond(add_security_headers(response, false)) {
-                crate::logger::warn!(
-                    crate::logger::get(),
-                    "发送 404 响应失败";
-                    "error" => %e
-                );
-            }
-        }
-    } else if let (&Method::Get, "/api/stats") = (request.method(), url.as_str()) {
-        // API: 统计数据
-        let stats = web_ui::api::get_stats();
-        let envelope = web_ui::api::ApiResponse::ok(stats);
-        let json = serde_json::to_string(&envelope)
-            .unwrap_or_else(|_| r#"{"code":-1,"data":null,"message":"序列化失败"}"#.to_string());
-        let response = Response::from_string(json).with_header(
-            Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
-        );
-        if let Err(e) = request.respond(add_security_headers(response, false)) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "发送 /api/stats 响应失败";
-                "error" => %e
-            );
-        }
-    } else if let (&Method::Get, "/api/bans") = (request.method(), url.as_str()) {
-        // API: 活跃封禁列表
-        let bans = web_ui::api::get_active_bans();
-        let envelope = web_ui::api::ApiResponse::ok(bans);
-        let json = serde_json::to_string(&envelope)
-            .unwrap_or_else(|_| r#"{"code":-1,"data":[],"message":"序列化失败"}"#.to_string());
-        let response = Response::from_string(json).with_header(
-            Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
-        );
-        if let Err(e) = request.respond(add_security_headers(response, false)) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "发送 /api/bans 响应失败";
-                "error" => %e
-            );
-        }
-    } else if let (&Method::Get, "/api/jails") = (request.method(), url.as_str()) {
-        // API: Jail 列表（从全局 Jail 信息读取）
-        let jail_infos = super::get_global_jails();
-        let jails = web_ui::api::get_jails(&jail_infos);
-        let envelope = web_ui::api::ApiResponse::ok(jails);
-        let json = serde_json::to_string(&envelope)
-            .unwrap_or_else(|_| r#"{"code":-1,"data":[],"message":"序列化失败"}"#.to_string());
-        let response = Response::from_string(json).with_header(
-            Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
-        );
-        if let Err(e) = request.respond(add_security_headers(response, false)) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "发送 /api/jails 响应失败";
-                "error" => %e
-            );
-        }
-    } else if let (&Method::Get, "/api/config") = (request.method(), url.as_str()) {
-        // API: Web UI 配置
-        let config = web_ui::api::get_webui_config();
-        let envelope = web_ui::api::ApiResponse::ok(config);
-        let json = serde_json::to_string(&envelope)
-            .unwrap_or_else(|_| r#"{"code":-1,"data":null,"message":"序列化失败"}"#.to_string());
-        let response = Response::from_string(json).with_header(
-            Header::from_bytes("Content-Type", "application/json").expect("静态 ASCII 头"),
-        );
-        if let Err(e) = request.respond(add_security_headers(response, false)) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "发送 /api/config 响应失败";
-                "error" => %e
-            );
-        }
-    } else if let (&Method::Get, "/api/events") = (request.method(), url.as_str()) {
-        // SSE: 实时事件推送（Server-Sent Events）
-        web_ui::sse::handle_sse_connection(request);
+    // 如果有分页参数，返回分页格式；否则返回全量（向后兼容）
+    if params.page.is_some() || params.page_size.is_some() {
+        let paginated = web_ui::api::get_active_bans_paginated(page, page_size, sort_by);
+        Json(web_ui::api::ApiResponse::ok(paginated)).into_response()
     } else {
-        let body = "404 Not Found\r\n";
-        let response = Response::from_string(body).with_status_code(StatusCode(404));
-        if let Err(e) = request.respond(add_security_headers(response, false)) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "发送 404 响应失败";
-                "error" => %e
-            );
-        }
+        let bans = web_ui::api::get_active_bans();
+        Json(web_ui::api::ApiResponse::ok(bans)).into_response()
     }
 }
 
-/// `handle_request` 的可选认证版本。把 `Option<String>` 展开为 `&str` 后透传。
-///
-/// # Arguments
-/// - `request`: HTTP 请求
-/// - `metrics_user` / `metrics_pass`: `Option<String>` 形式的凭据 (`None` 视为空)
-pub(super) fn handle_request_with_auth(
-    request: Request,
-    metrics_user: Option<&String>,
-    metrics_pass: Option<&String>,
-) {
-    let user = metrics_user.map(String::as_str).unwrap_or_default();
-    let pass = metrics_pass.map(String::as_str).unwrap_or_default();
-    handle_request(request, user, pass);
+/// `POST /api/v1/bans` — 封禁 IP
+async fn handle_create_ban(Json(req): Json<web_ui::api::CreateBanRequest>) -> impl IntoResponse {
+    match web_ui::api::create_ban(req) {
+        Ok(resp) => (
+            StatusCode::CREATED,
+            Json(web_ui::api::ApiResponse::ok(resp)),
+        )
+            .into_response(),
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(web_ui::api::ApiResponse::<()>::error(40001, msg)),
+        )
+            .into_response(),
+    }
+}
+
+/// `DELETE /api/v1/bans/:ip` — 解封 IP
+async fn handle_delete_ban(Path(ip): Path<String>) -> impl IntoResponse {
+    match web_ui::api::delete_ban(&ip) {
+        Ok(resp) => (StatusCode::OK, Json(web_ui::api::ApiResponse::ok(resp))).into_response(),
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(web_ui::api::ApiResponse::<()>::error(40002, msg)),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/v1/jails` — Jail 列表 JSON
+async fn handle_api_jails() -> Json<web_ui::api::ApiResponse<Vec<web_ui::api::JailResponse>>> {
+    let jail_infos = super::get_global_jails();
+    let jails = web_ui::api::get_jails(&jail_infos);
+    Json(web_ui::api::ApiResponse::ok(jails))
+}
+
+/// `GET /api/v1/config` — Web UI 配置 JSON
+async fn handle_api_config() -> Json<web_ui::api::ApiResponse<web_ui::api::WebuiConfigResponse>> {
+    let config = web_ui::api::get_webui_config();
+    Json(web_ui::api::ApiResponse::ok(config))
+}
+
+/// `GET /api/v1/whitelist` — 白名单列表 JSON
+async fn handle_api_whitelist(
+) -> Json<web_ui::api::ApiResponse<Vec<web_ui::api::WhitelistEntryResponse>>> {
+    let whitelist = web_ui::api::get_whitelist();
+    Json(web_ui::api::ApiResponse::ok(whitelist))
+}
+
+/// `POST /api/v1/whitelist` — 添加白名单
+async fn handle_create_whitelist(
+    Json(req): Json<web_ui::api::CreateWhitelistRequest>,
+) -> impl IntoResponse {
+    match web_ui::api::create_whitelist(req) {
+        Ok(resp) => (
+            StatusCode::CREATED,
+            Json(web_ui::api::ApiResponse::ok(resp)),
+        )
+            .into_response(),
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(web_ui::api::ApiResponse::<()>::error(40003, msg)),
+        )
+            .into_response(),
+    }
+}
+
+/// `DELETE /api/v1/whitelist/:cidr` — 移除白名单
+async fn handle_delete_whitelist(Path(cidr): Path<String>) -> impl IntoResponse {
+    match web_ui::api::delete_whitelist(&cidr) {
+        Ok(resp) => (StatusCode::OK, Json(web_ui::api::ApiResponse::ok(resp))).into_response(),
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(web_ui::api::ApiResponse::<()>::error(40004, msg)),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/v1/rates/current` — 当前 DDoS 速率 JSON
+async fn handle_api_rates_current() -> Json<web_ui::api::ApiResponse<Vec<web_ui::api::RateResponse>>>
+{
+    let rates = web_ui::api::get_ddos_rates();
+    Json(web_ui::api::ApiResponse::ok(rates))
+}
+
+/// `GET /api/v1/rates/history` — 速率历史趋势 JSON（最近 1 小时，每 2 秒一条）
+async fn handle_api_rates_history(
+) -> Json<web_ui::api::ApiResponse<Vec<web_ui::api::RateHistoryResponse>>> {
+    let history = web_ui::api::get_rate_history();
+    Json(web_ui::api::ApiResponse::ok(history))
+}
+
+/// `GET /api/v1/events` — SSE 实时事件推送（长连接）
+async fn handle_sse() -> impl IntoResponse {
+    web_ui::sse::handle_sse().await
 }

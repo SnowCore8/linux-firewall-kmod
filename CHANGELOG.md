@@ -16,7 +16,8 @@
 - **`[profile.asan]`** - ASAN 内存错误检测 profile：仅 nightly 可用，检测堆/栈越界、UAF、double-free
 
 ### 变更
-- **默认 release 二进制 30MB → 3.8MB（7.9× 缩）** - `Cargo.toml` 加 `lto=true + codegen-units=1 + debug=false + strip=true + panic="abort"`，消除 26MB 调试信息。`cargo build --release` 产物 3.8MB stripped
+- **HTTP 框架迁移：tiny_http → axum** - HTTP 服务从同步的 `tiny_http` 迁移到异步的 `axum` + `tokio`。SSE 从短连接（每次发送后关闭）改为**长连接不间断推送**，前端状态指示器更准确。二进制体积从 3.8MB 增至 4.6MB（+0.8MB，来自 tokio runtime）。路由使用 axum 的 Router 分层 merge 实现认证排除（`/health` 跳过认证）。新增依赖：`axum 0.7`、`tokio`、`tower-http`、`tokio-stream`、`async-stream`
+- **默认 release 二进制 30MB → 4.6MB** - HTTP 框架迁移后体积略有增加（tokio runtime），但仍保持轻量
 - **`build-deb.sh` 弃用 `VERSION=`** - 版本统一从 `Cargo.toml` 读取
 - **`tests/run_tests.sh` 加 `source ~/.cargo/env`** - 修复 sudo 默认 `secure_path` 不含 `~/.cargo/bin` 导致 `make daemon` 报 "cargo: 没有那个文件或目录"
 - **CI 工作流升级** - `代码质量检查` 步骤从 C daemon 的 `clang-format` 切换为 `cargo fmt --check` + `cargo clippy -- -D warnings`（Rust 后 `src/daemon/*.c` 已删，原 glob 报 "No such file or directory"）。CI 工作流自动 `rustup` 安装 stable toolchain

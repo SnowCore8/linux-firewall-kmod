@@ -1,16 +1,18 @@
-//! SSE（Server-Sent Events）事件推送实现
+//! SSE（Server-Sent Events）长连接推送实现
 //!
-//! 每次连接收集一轮完整数据后发送，然后关闭连接。
-//! 客户端 EventSource 会自动重连，实现"准实时"更新。
+//! 使用 axum 原生 SSE 支持，保持连接不间断推送。
+//! 按 `sse_push_interval` 配置间隔循环发送数据。
 //!
-//! 这种设计避免了 tiny_http BufWriter 不 flush 的问题：
-//! tiny_http 的 respond() 内部用 BufWriter 包装 socket，
-//! flush() 仅在 io::copy 返回后调用。对于永不 EOF 的流式 Reader，
-//! io::copy 永不返回，导致 HTTP 头和 SSE 数据永远卡在缓冲区中。
+//! 客户端 EventSource 建立一次连接后持续接收，
+//! 仅在客户端主动断开、网络中断或服务端停止时关闭。
 
+use std::convert::Infallible;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
-use tiny_http::{Header, Request, Response, StatusCode};
+use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
+use tokio_stream::Stream;
 
 use super::api;
 use crate::http_exporter::get_global_jails;
@@ -21,15 +23,26 @@ const MAX_SSE_CONNECTIONS: usize = 10;
 /// 全局 SSE 连接计数器
 static SSE_CONNECTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-/// 处理 SSE 连接请求
+/// SSE 连接守卫——Drop 时自动减少连接计数
+struct ConnectionGuard;
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        SSE_CONNECTION_COUNT.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// 处理 SSE 连接请求，返回长连接流。
 ///
-/// 收集一轮完整数据后发送响应，然后关闭连接。
-/// 客户端 EventSource API 会自动重连。
+/// 连接建立后按配置间隔循环推送完整数据（stats/bans/jails/rates），
+/// 永不主动关闭连接。
 ///
 /// # 安全限制
 ///
 /// 全局最多允许 MAX_SSE_CONNECTIONS 个并发连接。超过限制时返回 503。
-pub fn handle_sse_connection(request: Request) {
+pub async fn handle_sse() -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode>
+{
+    // 连接数限制检查（复用现有 AtomicUsize + ConnectionGuard 机制）
     let current_count = SSE_CONNECTION_COUNT.load(Ordering::Relaxed);
     if current_count >= MAX_SSE_CONNECTIONS {
         crate::logger::warn!(
@@ -38,84 +51,58 @@ pub fn handle_sse_connection(request: Request) {
             "current" => current_count,
             "max" => MAX_SSE_CONNECTIONS
         );
-        let response = Response::new(
-            StatusCode(503),
-            vec![
-                Header::from_bytes("Content-Type", "text/plain").expect("静态 ASCII 头"),
-                Header::from_bytes("Retry-After", "60").expect("静态 ASCII 头"),
-            ],
-            "SSE connection limit reached. Please retry later.".as_bytes(),
-            None,
-            None,
-        );
-        let _ = request.respond(response);
-        return;
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
 
     SSE_CONNECTION_COUNT.fetch_add(1, Ordering::Relaxed);
+    let _guard = ConnectionGuard; // Drop 时自动减计数
 
-    struct ConnectionGuard;
-    impl Drop for ConnectionGuard {
-        fn drop(&mut self) {
-            SSE_CONNECTION_COUNT.fetch_sub(1, Ordering::Relaxed);
+    // 获取推送间隔（默认 1 秒）
+    let interval_secs = crate::http_exporter::get_global_webui_config()
+        .map(|c| c.sse_push_interval)
+        .unwrap_or(1)
+        .max(1) as u64;
+
+    let stream = async_stream::stream! {
+        // 发送连接确认事件
+        yield Ok(Event::default().event("connected").data("SSE 连接已建立"));
+
+        loop {
+            // 统计数据
+            let stats = api::get_stats();
+            if let Ok(stats_json) = serde_json::to_string(&stats) {
+                yield Ok(Event::default().event("stats").data(stats_json));
+            }
+
+            // 封禁列表
+            let bans = api::get_active_bans();
+            if let Ok(bans_json) = serde_json::to_string(&bans) {
+                yield Ok(Event::default().event("bans").data(bans_json));
+            }
+
+            // Jail 列表
+            let jail_infos = get_global_jails();
+            if !jail_infos.is_empty() {
+                let jails = api::get_jails(&jail_infos);
+                if let Ok(jails_json) = serde_json::to_string(&jails) {
+                    yield Ok(Event::default().event("jails").data(jails_json));
+                }
+            }
+
+            // DDoS 速率数据
+            let rates = api::get_ddos_rates();
+            if let Ok(rates_json) = serde_json::to_string(&rates) {
+                yield Ok(Event::default().event("rates").data(rates_json));
+            }
+
+            // 按配置间隔等待后推送下一轮
+            tokio::time::sleep(Duration::from_secs(interval_secs)).await;
         }
-    }
-    let _guard = ConnectionGuard;
+    };
 
-    // 收集一轮完整数据
-    let mut sse_data = Vec::with_capacity(4096);
-
-    // 发送连接确认
-    sse_data.extend_from_slice("event: connected\ndata: SSE 连接已建立\n\n".as_bytes());
-
-    // 统计数据
-    let stats = api::get_stats();
-    if let Ok(stats_json) = serde_json::to_string(&stats) {
-        sse_data.extend_from_slice(format!("event: stats\ndata: {}\n\n", stats_json).as_bytes());
-    }
-
-    // 封禁列表
-    let bans = api::get_active_bans();
-    if let Ok(bans_json) = serde_json::to_string(&bans) {
-        sse_data.extend_from_slice(format!("event: bans\ndata: {}\n\n", bans_json).as_bytes());
-    }
-
-    // Jail 列表
-    let jail_infos = get_global_jails();
-    if !jail_infos.is_empty() {
-        let jails = api::get_jails(&jail_infos);
-        if let Ok(jails_json) = serde_json::to_string(&jails) {
-            sse_data
-                .extend_from_slice(format!("event: jails\ndata: {}\n\n", jails_json).as_bytes());
-        }
-    }
-
-    // DDoS 速率数据
-    let rates = api::get_ddos_rates();
-    if let Ok(rates_json) = serde_json::to_string(&rates) {
-        sse_data.extend_from_slice(format!("event: rates\ndata: {}\n\n", rates_json).as_bytes());
-    }
-
-    // 等待配置间隔后发送（移除 sleep，立即发送）
-    // thread::sleep(Duration::from_secs(push_interval));
-
-    let response = Response::new(
-        StatusCode(200),
-        vec![
-            Header::from_bytes("Content-Type", "text/event-stream").expect("静态 ASCII 头"),
-            Header::from_bytes("Cache-Control", "no-cache").expect("静态 ASCII 头"),
-            Header::from_bytes("X-Accel-Buffering", "no").expect("静态 ASCII 头"),
-        ],
-        sse_data.as_slice(),
-        Some(sse_data.len()),
-        None,
-    );
-
-    if let Err(e) = request.respond(response) {
-        crate::logger::warn!(
-            crate::logger::get(),
-            "SSE 响应发送失败";
-            "error" => %e
-        );
-    }
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
 }

@@ -102,8 +102,15 @@ function connectSSE() {
     };
 
     eventSource.onerror = () => {
-        // 短连接模式下，onerror 仅表示本次连接关闭
-        // 不修改状态——状态由 connected / 数据事件控制
+        // 长连接模式下，onerror 表示连接断开或出错
+        // EventSource 会自动尝试重连，但我们需要更新 UI 状态
+        if (eventSource.readyState === EventSource.CLOSED) {
+            updateStatus('offline');
+            // 可选：手动触发重连（EventSource 默认会自动重连）
+            // reconnectTimer = setTimeout(connectSSE, 3000);
+        } else if (eventSource.readyState === EventSource.CONNECTING) {
+            updateStatus('loading');
+        }
     };
 }
 

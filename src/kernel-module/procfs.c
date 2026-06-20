@@ -98,7 +98,8 @@ static int validate_and_copy_ip(const char *ip_start, const char *ip_end,
    * 并且 ip_len + 1 <= ip_str_size（容纳 IP 地址和 null 终止符）
    * 注意：INET6_ADDRSTRLEN=46 包含终止符，有效 IPv6 最长 45 字符，
    * 使用 ip_len > INET6_ADDRSTRLEN - 1 允许 45 字符的 IPv6 地址 */
-  if (ip_len == 0 || ip_str_size == 0 || ip_len > INET6_ADDRSTRLEN - 1 || ip_len + 1 > ip_str_size) {
+  if (ip_len == 0 || ip_str_size == 0 || ip_len > INET6_ADDRSTRLEN - 1 ||
+      ip_len + 1 > ip_str_size) {
     return -EINVAL;
   }
 

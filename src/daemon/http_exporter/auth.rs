@@ -1,14 +1,19 @@
-//! Basic Auth 验证 + 暴力破解防护
+//! Basic Auth 验证 + 暴力破解防护 + axum middleware 适配
 
 use std::sync::atomic::Ordering;
 
+use axum::{
+    http::StatusCode,
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
 use base64::{engine::general_purpose::STANDARD, Engine};
 
 use super::{AUTH_FAILURE_THRESHOLD, AUTH_LOCKOUT_DURATION, AUTH_STATE};
 use crate::types::now_secs;
 
 // ============================================================================
-// Basic Auth
+// Basic Auth 核心逻辑
 // ============================================================================
 
 /// 恒定时间字符串比较:零填充到等长后做完整 XOR,防止时序攻击泄露密码长度 / 内容。
@@ -116,5 +121,55 @@ pub(super) fn check_basic_auth(auth_header: Option<&str>, cfg_user: &str, cfg_pa
             .last_failure_time
             .store(now_secs() as u64, Ordering::Relaxed);
         0
+    }
+}
+
+// ============================================================================
+// axum middleware 适配
+// ============================================================================
+
+/// Basic Auth 中间件状态（通过 axum Extension 传递）
+#[derive(Clone)]
+pub struct AuthCredentials {
+    pub username: String,
+    pub password: String,
+}
+
+/// axum Basic Auth middleware。
+///
+/// 从请求头提取 `Authorization`，调用 `check_basic_auth` 验证。
+/// 通过则放行，失败则返回 401 + `WWW-Authenticate` 头。
+pub async fn auth_middleware(
+    request: axum::http::Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    // 从 Extension 获取凭据（在 Router 中通过 layer 注入）
+    let creds = request
+        .extensions()
+        .get::<AuthCredentials>()
+        .cloned()
+        .unwrap_or(AuthCredentials {
+            username: String::new(),
+            password: String::new(),
+        });
+
+    let auth_header = request
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok());
+
+    let result = check_basic_auth(auth_header, &creds.username, &creds.password);
+
+    match result {
+        1 | -1 => next.run(request).await,
+        _ => (
+            StatusCode::UNAUTHORIZED,
+            [(
+                axum::http::header::WWW_AUTHENTICATE,
+                "Basic realm=\"firewall-metrics\"",
+            )],
+            "401 Unauthorized\n",
+        )
+            .into_response(),
     }
 }

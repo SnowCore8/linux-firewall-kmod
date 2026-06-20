@@ -1,12 +1,21 @@
 //! Web UI API - 提供 JSON 数据端点
 //!
-//! # 端点
-//! - `/api/stats` - 统计数据
-//! - `/api/bans` - 活跃封禁列表
-//! - `/api/jails` - Jail 配置
+//! # RESTful 端点（v1）
+//! - `GET /api/v1/stats` - 统计数据
+//! - `GET /api/v1/bans` - 封禁列表
+//! - `POST /api/v1/bans` - 封禁 IP
+//! - `DELETE /api/v1/bans/:ip` - 解封 IP
+//! - `GET /api/v1/jails` - Jail 列表
+//! - `GET /api/v1/config` - 配置
+//! - `GET /api/v1/whitelist` - 白名单列表
+//! - `POST /api/v1/whitelist` - 添加白名单
+//! - `DELETE /api/v1/whitelist/:cidr` - 移除白名单
+//! - `GET /api/v1/rates/current` - 当前速率
+//! - `GET /api/v1/rates/history` - 速率历史
+//! - `GET /api/v1/events` - SSE 实时推送
 
 use crate::types::{ACTIVE_BAN_CACHE, DAEMON_STATS, DDOS_STATS};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// 统一 API 响应信封
 #[derive(Serialize)]
@@ -62,7 +71,7 @@ pub struct ChartData {
 }
 
 /// 封禁信息响应
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct BanResponse {
     pub ip: String,
     pub jail: String,
@@ -88,6 +97,18 @@ pub struct RateResponse {
     pub syn_packets_per_sec: u64,
     pub udp_packets_per_sec: u64,
     pub icmp_packets_per_sec: u64,
+    pub ack_packets_per_sec: u64,
+    pub rst_packets_per_sec: u64,
+    pub fin_packets_per_sec: u64,
+}
+
+/// 速率历史趋势响应
+#[derive(Serialize)]
+pub struct RateHistoryResponse {
+    pub timestamp: u64,
+    pub total_pps: u64,
+    pub total_bps: u64,
+    pub tracked_ips: u32,
 }
 
 /// Web UI 配置响应
@@ -113,64 +134,43 @@ pub fn get_webui_config() -> WebuiConfigResponse {
     }
 }
 
-/// 获取 DDoS 速率数据（从内核 procfs 读取）
+/// 获取 DDoS 速率数据
+///
+/// 从全局 `RATE_CACHE` 读取，该缓存由 netlink 接收线程定期更新。
+/// 程序内部走内存（`/proc/firewall/*` 是用户操作接口）。
 pub fn get_ddos_rates() -> Vec<RateResponse> {
-    use std::fs;
+    crate::types::RATE_CACHE
+        .read()
+        .iter()
+        .map(|entry| RateResponse {
+            ip: entry.ip.clone(),
+            packets_per_sec: entry.packets_per_sec,
+            bytes_per_sec: entry.bytes_per_sec,
+            syn_packets_per_sec: entry.syn_packets_per_sec,
+            udp_packets_per_sec: entry.udp_packets_per_sec,
+            icmp_packets_per_sec: entry.icmp_packets_per_sec,
+            ack_packets_per_sec: entry.ack_packets_per_sec,
+            rst_packets_per_sec: entry.rst_packets_per_sec,
+            fin_packets_per_sec: entry.fin_packets_per_sec,
+        })
+        .collect()
+}
 
-    let rates_path = "/proc/firewall/rates";
-    let content = match fs::read_to_string(rates_path) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut rates = Vec::new();
-
-    // 解析 procfs 输出格式：
-    // ip=<ip> packets=<n> bytes=<n> syn=<n> udp=<n> icmp=<n>
-    for line in content.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let mut ip = String::new();
-        let mut packets = 0u64;
-        let mut bytes = 0u64;
-        let mut syn = 0u64;
-        let mut udp = 0u64;
-        let mut icmp = 0u64;
-
-        for part in line.split_whitespace() {
-            if let Some((key, value)) = part.split_once('=') {
-                match key {
-                    "ip" => ip = value.to_string(),
-                    "packets" => packets = value.parse().unwrap_or(0),
-                    "bytes" => bytes = value.parse().unwrap_or(0),
-                    "syn" => syn = value.parse().unwrap_or(0),
-                    "udp" => udp = value.parse().unwrap_or(0),
-                    "icmp" => icmp = value.parse().unwrap_or(0),
-                    _ => {}
-                }
-            }
-        }
-
-        if !ip.is_empty() {
-            rates.push(RateResponse {
-                ip,
-                packets_per_sec: packets,
-                bytes_per_sec: bytes,
-                syn_packets_per_sec: syn,
-                udp_packets_per_sec: udp,
-                icmp_packets_per_sec: icmp,
-            });
-        }
-    }
-
-    // 按包速率降序排序，显示最活跃的 IP
-    rates.sort_by_key(|b| std::cmp::Reverse(b.packets_per_sec));
-
-    // 只返回前 10 个最活跃的 IP
-    rates.truncate(10);
-    rates
+/// 获取速率历史趋势数据
+///
+/// 从全局 `RATE_HISTORY` 读取，保留最近 1 小时的速率快照（每 2 秒一条）。
+/// Web UI 可读取此数据绘制速率趋势图。
+pub fn get_rate_history() -> Vec<RateHistoryResponse> {
+    crate::types::RATE_HISTORY
+        .read()
+        .iter()
+        .map(|entry| RateHistoryResponse {
+            timestamp: entry.timestamp,
+            total_pps: entry.total_pps,
+            total_bps: entry.total_bps,
+            tracked_ips: entry.tracked_ips,
+        })
+        .collect()
 }
 
 /// 获取统计数据
@@ -372,4 +372,244 @@ pub fn get_jails(jail_infos: &[crate::http_exporter::JailInfo]) -> Vec<JailRespo
             }
         })
         .collect()
+}
+
+// ============================================================================
+// v1 RESTful API - 封禁/白名单操作
+// ============================================================================
+
+/// 封禁请求
+#[derive(Deserialize)]
+pub struct CreateBanRequest {
+    /// 待封禁的 IP 地址
+    pub ip: String,
+    /// 封禁时长（秒）。0 或 null 表示永久封禁，省略则使用默认时长
+    pub duration: Option<u64>,
+    /// 封禁原因（可选，审计用）
+    pub reason: Option<String>,
+}
+
+/// 封禁操作响应
+#[derive(Serialize)]
+pub struct BanOperationResponse {
+    pub ip: String,
+    /// "banned" 或 "unbanned"
+    pub action: String,
+    pub permanent: bool,
+    pub duration_seconds: Option<u64>,
+}
+
+/// 白名单请求
+#[derive(Deserialize)]
+pub struct CreateWhitelistRequest {
+    /// CIDR 格式，如 "10.0.0.0/8" 或 "192.168.1.1"
+    pub cidr: String,
+}
+
+/// 白名单操作响应
+#[derive(Serialize)]
+pub struct WhitelistOperationResponse {
+    pub cidr: String,
+    /// "added" 或 "removed"
+    pub action: String,
+}
+
+/// 白名单条目响应
+#[derive(Serialize)]
+pub struct WhitelistEntryResponse {
+    pub cidr: String,
+    pub device: String,
+}
+
+/// 封禁 IP（POST /api/v1/bans）
+///
+/// 调用 `ban::ban_ip()` 或 `ban::ban_ip_permanent()`。
+/// duration=0 或 None 时永久封禁。
+pub fn create_ban(req: CreateBanRequest) -> Result<BanOperationResponse, String> {
+    let ip = req.ip.trim();
+    if ip.is_empty() {
+        return Err("IP 地址不能为空".to_string());
+    }
+
+    let permanent = req.duration == Some(0);
+    let duration = req.duration.unwrap_or(0);
+
+    let result = if permanent {
+        crate::ban::ban_ip_permanent(ip)
+    } else if duration > 0 {
+        crate::ban::ban_ip_with_history(
+            ip,
+            req.reason.as_deref().unwrap_or("API 手动封禁"),
+            "api",
+            duration,
+        )
+    } else {
+        crate::ban::ban_ip(ip)
+    };
+
+    match result {
+        Ok(()) => Ok(BanOperationResponse {
+            ip: ip.to_string(),
+            action: "banned".to_string(),
+            permanent,
+            duration_seconds: if permanent { None } else { Some(duration) },
+        }),
+        Err(e) => Err(format!("封禁失败: {}", e)),
+    }
+}
+
+/// 解封 IP（DELETE /api/v1/bans/:ip）
+///
+/// 同时尝试解封临时封禁和永久封禁。
+pub fn delete_ban(ip: &str) -> Result<BanOperationResponse, String> {
+    let ip = ip.trim();
+    if ip.is_empty() {
+        return Err("IP 地址不能为空".to_string());
+    }
+
+    // 尝试解封（临时 + 永久）
+    let _ = crate::ban::unban_ip(ip);
+    let _ = crate::ban::unban_permanent_ip(ip);
+
+    // 从缓存中移除
+    if let Some(cache) = ACTIVE_BAN_CACHE.get() {
+        cache.remove(ip);
+    }
+
+    Ok(BanOperationResponse {
+        ip: ip.to_string(),
+        action: "unbanned".to_string(),
+        permanent: false,
+        duration_seconds: None,
+    })
+}
+
+/// 添加白名单（POST /api/v1/whitelist）
+pub fn create_whitelist(req: CreateWhitelistRequest) -> Result<WhitelistOperationResponse, String> {
+    let cidr = req.cidr.trim();
+    if cidr.is_empty() {
+        return Err("CIDR 不能为空".to_string());
+    }
+
+    let failed = crate::ban::init_trusted_ips(&[cidr.to_string()]);
+    if !failed.is_empty() {
+        return Err(format!("添加白名单失败: {}", failed.join(", ")));
+    }
+
+    // 立即更新缓存（设备名留空，下次内核查询时补全）
+    crate::types::WHITELIST_CACHE
+        .write()
+        .push(crate::types::WhitelistEntry {
+            cidr: cidr.to_string(),
+            device: String::new(),
+        });
+
+    Ok(WhitelistOperationResponse {
+        cidr: cidr.to_string(),
+        action: "added".to_string(),
+    })
+}
+
+/// 移除白名单（DELETE /api/v1/whitelist/:cidr）
+pub fn delete_whitelist(cidr: &str) -> Result<WhitelistOperationResponse, String> {
+    let cidr = cidr.trim();
+    if cidr.is_empty() {
+        return Err("CIDR 不能为空".to_string());
+    }
+
+    let failed = crate::ban::remove_trusted_ips(&[cidr.to_string()]);
+    if !failed.is_empty() {
+        return Err(format!("移除白名单失败: {}", failed.join(", ")));
+    }
+
+    // 立即从缓存移除
+    crate::types::WHITELIST_CACHE
+        .write()
+        .retain(|e| e.cidr != cidr);
+
+    Ok(WhitelistOperationResponse {
+        cidr: cidr.to_string(),
+        action: "removed".to_string(),
+    })
+}
+
+/// 获取白名单列表（GET /api/v1/whitelist）
+///
+/// 从 WHITELIST_CACHE 读取，该缓存由 netlink 接收线程在收到 ListWhitelistResponse 时更新。
+pub fn get_whitelist() -> Vec<WhitelistEntryResponse> {
+    crate::types::WHITELIST_CACHE
+        .read()
+        .iter()
+        .map(|entry| WhitelistEntryResponse {
+            cidr: entry.cidr.clone(),
+            device: entry.device.clone(),
+        })
+        .collect()
+}
+
+// ============================================================================
+// 分页支持
+// ============================================================================
+
+/// 分页请求参数
+#[derive(Deserialize)]
+pub struct PaginationParams {
+    /// 页码（从 1 开始，默认 1）
+    pub page: Option<u32>,
+    /// 每页大小（默认 20，最大 100）
+    pub page_size: Option<u32>,
+    /// 排序字段（可选）：banned_at_desc（默认）、banned_at_asc、ip_asc、jail_asc
+    pub sort_by: Option<String>,
+}
+
+/// 分页响应包装
+#[derive(Serialize)]
+pub struct PaginatedResponse<T> {
+    pub items: Vec<T>,
+    pub total: u64,
+    pub page: u32,
+    pub page_size: u32,
+    pub total_pages: u32,
+}
+
+/// 获取分页后的封禁列表
+pub fn get_active_bans_paginated(
+    page: u32,
+    page_size: u32,
+    sort_by: Option<String>,
+) -> PaginatedResponse<BanResponse> {
+    let mut all_bans = get_active_bans();
+    let total = all_bans.len() as u64;
+
+    // 排序（默认按封禁时间降序）
+    match sort_by.as_deref() {
+        Some("banned_at_asc") => all_bans.sort_by_key(|b| b.banned_at),
+        Some("ip_asc") => all_bans.sort_by(|a, b| a.ip.cmp(&b.ip)),
+        Some("jail_asc") => all_bans.sort_by(|a, b| a.jail.cmp(&b.jail)),
+        _ => all_bans.sort_by_key(|b| std::cmp::Reverse(b.banned_at)), // banned_at_desc
+    }
+
+    // 限制 page_size 范围
+    let page_size = page_size.clamp(1, 100);
+    let page = page.max(1);
+
+    // 计算分页
+    let start = ((page - 1) * page_size) as usize;
+    let end = (start + page_size as usize).min(all_bans.len());
+
+    let items = if start < all_bans.len() {
+        all_bans[start..end].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    let total_pages = total.div_ceil(page_size as u64) as u32;
+
+    PaginatedResponse {
+        items,
+        total,
+        page,
+        page_size,
+        total_pages,
+    }
 }

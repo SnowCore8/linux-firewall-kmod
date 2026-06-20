@@ -22,7 +22,7 @@ path = "src/daemon/lib.rs"
 # libc + nix: 系统调用 (signal/inotify/poll/fs 等)
 # serde/serde_yaml: 替换 libyaml 解析 YAML 配置
 # regex: 替换 PCRE2, 语法与 PCRE 等价, 性能足够
-# tiny_http: 替换 libmicrohttpd, 同步 API, 无 async 复杂度
+# axum + tokio: HTTP 服务框架, async SSE 长连接支持
 # signal-hook: 替换 signal() + sa_handler 自定义实现
 # inotify: 替换 inotify_init1/inotify_add_watch 系统调用包装
 # parking_lot: 替换 pthread_rwlock, 性能更好且 API 简单
@@ -39,7 +39,11 @@ serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1"
 regex = "1"
-tiny_http = "0.12"
+axum = "0.7"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "macros", "time", "sync"] }
+tower-http = { version = "0.5", features = ["set-header"] }
+tokio-stream = "0.1"
+async-stream = "0.3"
 signal-hook = "0.3"
 inotify = "0.10"
 parking_lot = "0.12"
