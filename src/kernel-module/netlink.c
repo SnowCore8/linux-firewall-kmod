@@ -816,12 +816,13 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
               cmd->device[0] ? (char *)cmd->device : "(none)");
 
       if (cmd->af == FW_AF_INET) {
-        /* IPv4: 根据 prefix_len 计算子网掩码 */
+        /* IPv4: 根据 prefix_len 计算子网掩码
+         * 使用 htonl(~0U << (32 - prefix_len)) 避免 1 << 32 的未定义行为 */
         __be32 mask;
         if (cmd->prefix_len == 0) {
           mask = 0;
         } else {
-          mask = htonl(~((1 << (32 - cmd->prefix_len)) - 1));
+          mask = htonl(~0U << (32 - cmd->prefix_len));
         }
         ret = add_whitelist_entry(&fw_info, cmd->af, cmd->addr, &mask, cmd->prefix_len,
                                   cmd->device[0] ? (char *)cmd->device : NULL);

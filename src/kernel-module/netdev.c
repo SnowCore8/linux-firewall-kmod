@@ -277,6 +277,7 @@ void auto_discover_system_ips(struct firewall_info *fw) {
 
   temp_ips = kmalloc_array(MAX_DISCOVERED_IPS, sizeof(struct temp_ip_entry), GFP_KERNEL);
   if (!temp_ips) {
+    pr_err("自动发现系统 IP：临时数组内存分配失败\n");
     return;
   }
 

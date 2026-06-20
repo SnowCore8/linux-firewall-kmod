@@ -36,7 +36,7 @@
 | `ban` | 封禁触发逻辑：`max_retries` / `findtime` / `ban_time` 判定，调用 ProcFS 下发 |
 | `jail` | jail 生命周期管理：创建 / 启停 / 热重载差异合并 |
 | `file_monitor` | `inotify` 监听 + 日志轮转检测 + inode 重连 |
-| `http_exporter` | `tiny_http` HTTP 服务，14 个 Prometheus 指标（10 daemon + 4 kernel） |
+| `http_exporter` | `tiny_http` HTTP 服务，17 个 Prometheus 指标（13 daemon + 4 kernel） |
 | `main` | CLI 解析、信号注册、`epoll` 主循环、tokio runtime 启动 |
 
 ```mermaid
@@ -62,12 +62,16 @@ graph LR
 
 ## 内存安全
 
-守护进程使用 Rust 实现，所有 `unsafe { }` 块均显式标注 `// SAFETY:` 注释，说明前置条件。当前代码库共有 **20 处** `unsafe` 块，主要集中在：
+守护进程使用 Rust 实现，所有 `unsafe { }` 块均显式标注 `// SAFETY:` 注释，说明前置条件。当前代码库共有 **49 处** `unsafe` 块，主要集中在：
 
-- `libc` 系统调用封装（`read` / `write` / `ioctl` / `fcntl`）
-- `inotify` 原始 fd 操作
-- C 字符串与 Rust `&str` 互转（带长度校验）
-- ProcFS 文件路径构造
+- `netlink/protocol.rs`（14）— netlink 消息序列化/反序列化
+- `netlink/mod.rs`（13）— netlink socket 操作
+- `ban/procfs.rs`（11）— ProcFS 文件描述符生命周期管理
+- `daemonizer.rs`（7）— `fork`/`setsid`/PID 文件管理
+- `file_monitor/monitor_loop.rs`（1）— `poll` 系统调用封装
+- `ip_utils.rs`（1）— IP 地址原始操作
+- `logger.rs`（1）— syslog 接入
+- `signals.rs`（1）— 信号掩码操作
 
 每一处 `unsafe` 块都包含两段注释：
 
@@ -131,7 +135,7 @@ graph LR
     E --> E1["恢复未过期的封禁记录"]
     E --> F["初始化正则表达式"]
     F --> F1["为每个 jail 编译 regex"]
-    F --> G["注册 notify 监听"]
+    F --> G["注册 inotify 监听"]
     G --> G1["为每个 jail 的 log_files 添加 watch"]
     G --> H["启动 Prometheus HTTP 服务器 :9119"]
     H --> I["恢复封禁到内核"]
@@ -141,26 +145,29 @@ graph LR
 
 ## 日志监控
 
-### notify 事件
+### inotify 事件
 
 ```rust
-use notify::{Watcher, RecursiveMode, recommended_watcher, Event};
+use inotify::{Inotify, WatchMask};
+
+let mut inotify = Inotify::init()?;
+inotify.watches().add("/var/log/auth.log", WatchMask::MODIFY)?;
 ```
 
 | 事件 | 说明 |
 |------|------|
-| `Modify` | 文件被修改（新日志写入） |
-| `CloseWrite` | 文件写入后关闭 |
-| `RenamedTo` | 文件被移入（日志轮转） |
+| `IN_MODIFY` | 文件被修改（新日志写入） |
+| `IN_CLOSE_WRITE` | 文件写入后关闭 |
+| `IN_MOVED_TO` | 文件被移入（日志轮转） |
 
 ### 日志轮转处理
 
-守护进程检测日志轮转并重新注册 notify watch：
+守护进程检测日志轮转并重新注册 inotify watch：
 
 ```rust
-if event.kind.contains(notify::event::Kind::Remove) {
-    // 日志文件被轮转，重新 watch
-    watcher.watch(log_path, RecursiveMode::NonRecursive)?;
+if event.mask.contains(WatchMask::MOVED_TO) {
+    // 日志文件被轮转，重新添加 watch
+    inotify.watches().add(log_path, WatchMask::MODIFY)?;
 }
 ```
 
@@ -290,7 +297,7 @@ http://<host>:9119/metrics
 
 ### 指标列表
 
-> 实际由 `src/http_exporter.rs` 暴露的 14 个指标。
+> 实际由 `src/daemon/http_exporter/metrics.rs` 暴露的 17 个指标。
 > 早期文档中 `firewall_ban_events_total` / `firewall_packets_*` /
 > `firewall_hash_table_*` / `firewall_jail_*` 等条目均不存在。
 
@@ -356,8 +363,8 @@ firewall_daemon_lines_parsed_total 1250340
 graph TB
     A["收到 SIGHUP"] --> B["重新读取 YAML 配置"]
     B --> C["比较新旧配置差异"]
-    C --> D["新 jail: 初始化并注册 notify"]
-    C --> E["删除 jail: 移除 notify watch"]
+    C --> D["新 jail: 初始化并注册 inotify"]
+    C --> E["删除 jail: 移除 inotify watch"]
     C --> F["修改 regex: 重新编译"]
     C --> G["修改 whitelist: 更新内核白名单"]
 ```

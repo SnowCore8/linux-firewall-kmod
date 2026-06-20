@@ -49,10 +49,10 @@ make daemon
 ### 运行测试
 
 ```bash
-# 运行全部测试（107 项测试）
+# 运行全部测试（115 项集成测试）
 make test
 
-# 仅运行 Rust 单元测试 (108 项)
+# 仅运行 Rust 单元测试 (88 项)
 cargo test --release
 
 # 仅运行集成测试
@@ -144,8 +144,8 @@ int whitelist_check(__be32 ip);
 
 | 测试类型 | 命令 | 规模 / 说明 |
 |----------|------|------------|
-| Rust 单元测试 | `cargo test` | 108 项 `#[test]` 单元 + 1 项 doctest。doctest 全部真跑,不写 `no_run` / `ignore` |
-| 集成测试 | `make test` | 115 项用例,13 个套件 (`tests/suites/01_*.sh` 到 `15_*.sh`,5/6 合并) |
+| Rust 单元测试 | `cargo test` | 88 项 `#[test]` 单元 + 6 项 doctest。doctest 全部真跑,不写 `no_run` / `ignore` |
+| 集成测试 | `make test` | 115 项用例,16 个套件 (`tests/suites/01_*.sh` 到 `18_*.sh`,5/6 合并) |
 | 行为审计 | `c-to-rust-behavioral-audit` skill | C 守护进程已退役,审计按需触发,确保 Rust 版零回归 |
 
 **修改下列内容时必跑 `make test` 集成测试**:
@@ -158,14 +158,18 @@ int whitelist_check(__be32 ip);
 
 ### 内存安全 (Rust unsafe 块)
 
-当前代码库共有 **19 个 `unsafe` 块**,分布在:
+当前代码库共有 **49 个 `unsafe` 块**,分布在:
 
 | 文件 | 数量 | 用途 |
 |------|------|------|
-| `src/daemon/ban.rs` | 10 | `libc::open(O_NOFOLLOW)` / `libc::close` / `libc::write` 等 fd 生命周期管理 |
-| `src/daemon/main.rs` | 5 | `libc::fork` 守护进程化 / `std::fs::File::from_raw_fd` 接管 fd |
-| `src/daemon/log.rs` | 3 | `libc::openlog` / `libc::syslog` / `libc::closelog` 接入 syslog(3) |
-| `src/daemon/file_monitor.rs` | 1 | `libc::poll` 包装 inotify fd 等待事件 |
+| `src/daemon/netlink/protocol.rs` | 14 | `ptr::read` / `from_raw_parts` 反序列化 `#[repr(C, packed)]` 结构体 |
+| `src/daemon/netlink/mod.rs` | 13 | `socket` / `bind` / `poll` / `recv` / `sendto` / `close` 等 netlink socket 操作 |
+| `src/daemon/ban/procfs.rs` | 11 | `libc::open(O_NOFOLLOW)` / `libc::close` / `libc::write` 等 fd 生命周期管理 |
+| `src/daemon/daemonizer.rs` | 7 | `libc::fork` 守护进程化 / `libc::flock` / `from_raw_fd` 接管 fd |
+| `src/daemon/file_monitor/monitor_loop.rs` | 1 | `libc::poll` 包装 inotify fd 等待事件 |
+| `src/daemon/ip_utils.rs` | 1 | 原始 IP 地址操作 |
+| `src/daemon/logger.rs` | 1 | `libc::openlog` / `libc::syslog` / `libc::closelog` 接入 syslog(3) |
+| `src/daemon/signals.rs` | 1 | `libc::sigaction` 信号处理器注册 |
 
 **每个 `unsafe` 块都必须紧跟 `// SAFETY:` 注释**,说明:
 

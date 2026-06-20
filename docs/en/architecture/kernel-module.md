@@ -208,9 +208,10 @@ graph TB
 ```c
 static int __init firewall_proc_init(void)
 {
-    proc_create("firewall/status", 0444, NULL, &status_fops);
-    proc_create("firewall/banned_ips", 0444, NULL, &banned_fops);
-    proc_create("firewall/config", 0200, NULL, &config_fops);
+    proc_create("firewall/bans", 0200, NULL, &bans_fops);
+    proc_create("firewall/whitelist", 0200, NULL, &whitelist_fops);
+    proc_create("firewall/config", 0444, NULL, &config_fops);
+    proc_create("firewall/stats", 0444, NULL, &stats_fops);
     return 0;
 }
 ```
@@ -219,13 +220,10 @@ static int __init firewall_proc_init(void)
 
 | File | Permission | Operation |
 |------|------------|-----------|
-| `status` | 0444 | Read-only, returns module status |
-| `banned_ips` | 0444 | Read-only, returns ban list |
-| `whitelist` | 0444 | Read-only, returns whitelist |
+| `bans` | 0200 | Write-only, ban/unban IP addresses |
+| `whitelist` | 0200 | Write-only, add/remove whitelist entries |
+| `config` | 0444 | Read-only, returns current configuration |
 | `stats` | 0444 | Read-only, returns statistics |
-| `config` | 0200 | Write-only, receives config commands |
-| `clear` | 0200 | Write-only, clears bans |
-| `version` | 0444 | Read-only, returns version |
 
 ## Module Lifecycle
 

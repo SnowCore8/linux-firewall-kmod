@@ -16,14 +16,14 @@ The daemon `firewall-daemon` runs in userspace and is responsible for:
 
 | Component | Purpose |
 |-----------|---------|
-| Rust | Primary programming language (12 modules, ~7000 lines) |
-| regex | PCRE2 regex compilation and matching |
+| Rust | Primary programming language (53 source files) |
+| regex | Rust regex crate for pattern matching (PCRE-compatible syntax) |
 | tiny_http | Prometheus HTTP metrics server (port 9119) |
 | inotify | Linux file change monitoring (uses the `inotify` crate directly, not the `notify` abstraction) |
 
 ## Module Structure
 
-The daemon is split into 12 Rust modules (including `lib.rs`) under `daemon/`, each with a single responsibility. Modules are wired together via explicit `use` imports — no circular dependencies.
+The daemon is split into 53 Rust source files under `src/daemon/`, organized by responsibility. Modules are wired together via explicit `use` imports — no circular dependencies.
 
 | Module | Responsibility |
 |--------|----------------|
@@ -36,7 +36,7 @@ The daemon is split into 12 Rust modules (including `lib.rs`) under `daemon/`, e
 | `ban` | Ban-trigger logic: `max_retries` / `findtime` / `ban_time` evaluation, ProcFS issuance. |
 | `jail` | Jail lifecycle management: create / enable / disable, hot-reload diff merging. |
 | `file_monitor` | `inotify` watches, log-rotation detection, inode re-attach. |
-| `http_exporter` | `tiny_http` HTTP server exposing 14 Prometheus metrics (10 daemon + 4 kernel). |
+| `http_exporter` | `tiny_http` HTTP server exposing 17 Prometheus metrics (13 daemon + 4 kernel). |
 | `main` | CLI parsing, signal registration, `epoll` main loop, tokio runtime bootstrap. |
 
 ```mermaid
@@ -62,12 +62,16 @@ graph LR
 
 ## Memory Safety
 
-The daemon is implemented in Rust, and every `unsafe { }` block carries a `// SAFETY:` comment documenting the prerequisites. The codebase currently contains **19** `unsafe` blocks, concentrated in:
+The daemon is implemented in Rust, and every `unsafe { }` block carries a `// SAFETY:` comment documenting the prerequisites. The codebase currently contains **49** `unsafe` blocks, concentrated in:
 
-- `libc` syscall wrappers (`read` / `write` / `ioctl` / `fcntl`)
-- Raw `inotify` fd manipulation
-- C-string ↔ Rust `&str` conversion (with explicit length checks)
-- ProcFS file path construction
+- `netlink/protocol.rs` (14) — netlink message serialization/deserialization
+- `netlink/mod.rs` (13) — netlink socket operations
+- `ban/procfs.rs` (11) — ProcFS file descriptor lifecycle
+- `daemonizer.rs` (7) — `fork`/`setsid`/PID file management
+- `file_monitor/monitor_loop.rs` (1) — `poll` syscall wrapper
+- `ip_utils.rs` (1) — raw IP address manipulation
+- `logger.rs` (1) — syslog integration
+- `signals.rs` (1) — signal mask operations
 
 Each `unsafe` block is annotated with two parts:
 
@@ -145,9 +149,11 @@ graph TB
 
 ### inotify Events
 
-```c
-int fd = inotify_init();
-inotify_add_watch(fd, "/var/log/auth.log", IN_MODIFY);
+```rust
+use inotify::{Inotify, WatchMask};
+
+let mut inotify = Inotify::init()?;
+inotify.watches().add("/var/log/auth.log", WatchMask::MODIFY)?;
 ```
 
 | Event | Description |
@@ -160,10 +166,10 @@ inotify_add_watch(fd, "/var/log/auth.log", IN_MODIFY);
 
 The daemon detects log rotation and re-registers inotify watches:
 
-```c
-if (event->mask & IN_IGNORED) {
-    // Log file was rotated, re-watch
-    inotify_add_watch(fd, log_path, IN_MODIFY);
+```rust
+if event.mask.contains(WatchMask::MOVED_TO) {
+    // Log file was rotated, re-add watch
+    inotify.watches().add(log_path, WatchMask::MODIFY)?;
 }
 ```
 
@@ -281,8 +287,8 @@ http://<host>:9119/metrics
 
 ### Available Metrics
 
-> The 14 metrics below are actually exposed by
-> `src/http_exporter.rs`. Earlier drafts listed
+> The 17 metrics below are actually exposed by
+> `src/daemon/http_exporter/metrics.rs`. Earlier drafts listed
 > `firewall_ban_events_total` / `firewall_packets_*` /
 > `firewall_hash_table_*` / `firewall_jail_*` — none of which exist
 > in the source — and have been removed.

@@ -53,17 +53,23 @@ impl NetlinkContext {
         use nix::libc::{AF_NETLINK, SOCK_RAW};
 
         // 创建 netlink socket
+        // SAFETY: socket() 是 POSIX 系统调用，AF_NETLINK/SOCK_RAW 是合法参数组合，
+        // 返回值 fd 在后续 bind 失败时通过 close(fd) 释放，不泄露文件描述符。
         let fd = unsafe { nix::libc::socket(AF_NETLINK, SOCK_RAW, NETLINK_USERSOCK) };
         if fd < 0 {
             return Err(anyhow::anyhow!("创建 netlink socket 失败"));
         }
 
         // 绑定到 netlink 地址
+        // SAFETY: sockaddr_nl 是 POD 类型，zeroed() 后手动设置各字段是安全的，
+        // nl_pid=0 让内核分配，nl_groups=1 监听内核广播组。
         let mut addr: nix::libc::sockaddr_nl = unsafe { std::mem::zeroed() };
         addr.nl_family = AF_NETLINK as u16;
         addr.nl_pid = 0; // 让内核分配
         addr.nl_groups = 1; // 监听组 1（内核广播组）
 
+        // SAFETY: fd 是有效的 socket 文件描述符，addr 已正确初始化，
+        // size_of::<sockaddr_nl>() 是合法的地址长度。bind 失败时走 close(fd) 清理路径。
         let ret = unsafe {
             nix::libc::bind(
                 fd,
@@ -73,11 +79,15 @@ impl NetlinkContext {
         };
 
         if ret < 0 {
+            // SAFETY: fd 是有效的 socket 文件描述符，close 释放资源。
+            // 此处是错误清理路径，close 返回值不影响后续错误传播。
             unsafe { nix::libc::close(fd) };
             return Err(anyhow::anyhow!("绑定 netlink socket 失败"));
         }
 
         // 设置非阻塞模式
+        // SAFETY: fd 是有效的 socket 文件描述符，F_GETFL/F_SETFL 是合法的 fcntl 命令，
+        // O_NONBLOCK 是合法的文件标志。fcntl 返回值在下一步使用。
         let flags = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFL) };
         unsafe { nix::libc::fcntl(fd, nix::libc::F_SETFL, flags | nix::libc::O_NONBLOCK) };
 
@@ -112,6 +122,8 @@ impl NetlinkContext {
 
             while running.load(Ordering::Relaxed) {
                 // 等待数据可读（100ms 超时）
+                // SAFETY: pollfd 是有效的 pollfd 结构体指针，nfds=1 表示监控一个 fd，
+                // timeout=100ms 是合法的超时值。poll 返回值用于判断超时/错误/数据就绪。
                 let ret = unsafe { nix::libc::poll(&mut pollfd, 1, 100) };
 
                 if ret == 0 {
@@ -132,6 +144,9 @@ impl NetlinkContext {
 
                 if pollfd.revents & nix::libc::POLLIN != 0 {
                     // 读取数据
+                    // SAFETY: fd 是有效的 socket 文件描述符，buf.as_mut_ptr() 指向
+                    // 4096 字节的有效缓冲区，buf.len() 是合法的缓冲区大小。
+                    // recv 返回值 n 用于切片 buf[..n]，负值表示错误。
                     let n =
                         unsafe { nix::libc::recv(fd, buf.as_mut_ptr() as *mut _, buf.len(), 0) };
 
@@ -172,10 +187,18 @@ impl NetlinkContext {
         }
 
         // 解析 netlink 消息头
+        // SAFETY: data 长度已验证 >= size_of::<nlmsghdr>()，
+        // data.as_ptr() 指向有效的字节缓冲区，转换为 &nlmsghdr 只读引用。
+        // nlmsghdr 是 POD 类型，无对齐问题（x86_64 上对齐要求 <= 8 字节）。
         let _nlh: &nlmsghdr = unsafe { &*(data.as_ptr() as *const nlmsghdr) };
 
         // 获取自定义消息头（从 nlmsghdr 之后开始）
         let hdr_data = &data[std::mem::size_of::<nlmsghdr>()..];
+
+        // 验证自定义消息头长度（至少需要 8 字节：magic + type + len）
+        if hdr_data.len() < 8 {
+            anyhow::bail!("自定义消息头太短: {} 字节", hdr_data.len());
+        }
 
         // 解析魔数
         let magic = u32::from_be_bytes([hdr_data[0], hdr_data[1], hdr_data[2], hdr_data[3]]);
@@ -470,6 +493,9 @@ impl NetlinkContext {
         let mut buf = vec![0u8; nlmsg_len];
 
         // 填充 nlmsghdr
+        // SAFETY: buf 是新分配的 Vec，容量 >= nlmsg_len，
+        // buf.as_mut_ptr() 指向有效的可写缓冲区，转换为 &mut nlmsghdr 是安全的。
+        // 后续 copy_from_slice 填充 nlmsghdr 之后的数据，不会越界。
         let nlh: &mut nlmsghdr = unsafe { &mut *(buf.as_mut_ptr() as *mut nlmsghdr) };
         nlh.nlmsg_len = nlmsg_len as u32;
         nlh.nlmsg_type = 0; // 自定义消息类型
@@ -481,10 +507,15 @@ impl NetlinkContext {
         buf[std::mem::size_of::<nlmsghdr>()..].copy_from_slice(data);
 
         // 构造内核地址（pid=0 表示内核）
+        // SAFETY: sockaddr_nl 是 POD 类型，zeroed() 后手动设置各字段是安全的，
+        // nl_pid=0 表示发送给内核。
         let mut addr: sockaddr_nl = unsafe { std::mem::zeroed() };
         addr.nl_family = AF_NETLINK as u16;
         addr.nl_pid = 0; // 内核
 
+        // SAFETY: self.fd 是有效的 socket 文件描述符，buf 是有效的只读缓冲区，
+        // addr 已正确初始化，size_of::<sockaddr_nl>() 是合法的地址长度。
+        // sendto 返回值 n 用于验证发送是否完整。
         let n = unsafe {
             nix::libc::sendto(
                 self.fd,
@@ -521,6 +552,9 @@ impl NetlinkContext {
 impl Drop for NetlinkContext {
     fn drop(&mut self) {
         if self.fd >= 0 {
+            // SAFETY: self.fd 是有效的 socket 文件描述符（>= 0 已验证），
+            // Drop 保证只执行一次，close 释放内核资源。
+            // close 返回值不影响析构语义，忽略即可。
             unsafe { nix::libc::close(self.fd) };
         }
     }

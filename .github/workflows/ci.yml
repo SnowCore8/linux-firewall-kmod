@@ -235,10 +235,6 @@ jobs:
           else
             echo "运行环境：守护进程功能测试（模块不兼容）"
             echo "注：内核模块测试套件（01/02/03/04/07/08/14）需要模块可加载"
-            # 仍然运行所有测试，但允许一些测试因环境限制失败
-            sudo -E ./tests/run_tests.sh --report || {
-              echo "::warning::部分测试因 CI 内核模块不兼容而失败"
-              echo "这不是代码问题，是 GitHub Actions Azure VM 环境限制"
-              exit 0
-            }
+            echo "仅运行 daemon 类别测试（09/10/13/15/16/17/18）"
+            sudo -E ./tests/run_tests.sh --category daemon --report
           fi

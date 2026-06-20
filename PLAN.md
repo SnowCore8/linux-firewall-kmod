@@ -8,10 +8,10 @@
 
 ---
 
-## 当前版本：v2.2.0
+## 当前版本：v2.2.1
 
-**最后审查**：2026-06-17  
-**状态**：全面代码审查完成，发现 2 Critical + 15 High + 20+ Medium 问题
+**最后审查**：2026-06-20
+**状态**：全面架构审查完成，发现 6 Critical + 13 High + 16 Medium + 12 Low（共 47 项）
 
 ---
 
@@ -91,6 +91,40 @@
     内核模块编译步骤使用 continue-on-error: true，
     编译失败不阻断 CI，内核代码退化不会被发现。
     修复：移除 continue-on-error: true，内核头文件可用时编译必须成功。
+```
+
+### 2026-06-20 审查新增 P0
+
+```yaml
+- id: fix-netdev-sync-work-deadlock
+  task: 修复 netdev.c sync_work_handler 死锁风险
+  priority: P0
+  status: pending
+  source: src/kernel-module/netdev.c 第 118-147 行
+  details: |
+    sync_work_handler 持有 whitelist_lock 时调用 add_whitelist_entry，
+    后者内部也需要获取 whitelist_lock，可能触发死锁。
+    修复：先收集新 IP 到临时列表，释放锁后再调用 add_whitelist_entry。
+
+- id: add-safety-comments-to-unsafe-blocks
+  task: 为 30 个缺少 SAFETY 注释的 unsafe 块补充注释
+  priority: P0
+  status: pending
+  source: src/daemon/netlink/protocol.rs, netlink/mod.rs, daemonizer.rs, ban/procfs.rs
+  details: |
+    项目有 49 个 unsafe 块，但只有 19 个（38.8%）有 // SAFETY: 注释。
+    CONTRIBUTING.md 明确规定"没有 SAFETY 注释的 unsafe 代码一律不合并"。
+    缺失最严重：netlink/protocol.rs（17 处 0 注释）、netlink/mod.rs（10 处 0 注释）。
+
+- id: fix-ci-test-silent-ignore
+  task: 修复 CI 测试失败被静默忽略的问题
+  priority: P0
+  status: pending
+  source: .github/workflows/ci.yml 第 165-170 行
+  details: |
+    test job 在测试失败时使用 exit 0 静默忽略，
+    导致即使测试失败 CI 也显示绿色，开发者可能错过真实回归。
+    修复：区分"内核模块不兼容"和"真实测试失败"。
 ```
 
 ---
@@ -422,57 +456,67 @@
 
 ### v2.2.1（计划中）
 
-**预计发布**：2026-07  
-**主题**：严重缺陷修复 + 热路径性能优化
+**预计发布**：2026-07
+**主题**：严重缺陷修复 + 热路径性能优化 + unsafe 安全注释
 
 **包含任务**：
-- fix-ddos-ban-worker-data-race
-- fix-netdev-whitelist-subnet-list-uaf
-- fix-init-order-sync-work
-- remove-file-reader-dead-code
-- add-cargo-test-to-ci
-- fix-ci-kernel-build-silent-failure
-- optimize-checksum-verification
-- optimize-rate-detector-ip-compare
-- optimize-logger-get-mutex
-- optimize-ddos-detector-arc-alloc
-- fix-failed-tracker-vec-remove-performance
-- fix-ban-ip-hardcoded-jail-name
-- fix-failed-tracker-ban-duration
-- fix-sse-connection-limit
-- remove-procfs-fsync-overhead
+- fix-ddos-ban-worker-data-race ✅
+- fix-netdev-whitelist-subnet-list-uaf ✅
+- fix-init-order-sync-work ✅
+- remove-file-reader-dead-code ✅
+- add-cargo-test-to-ci ✅
+- fix-ci-kernel-build-silent-failure ✅
+- optimize-checksum-verification ✅
+- optimize-rate-detector-ip-compare ✅
+- optimize-logger-get-mutex ✅
+- optimize-ddos-detector-arc-alloc ✅
+- fix-failed-tracker-vec-remove-performance ✅
+- fix-ban-ip-hardcoded-jail-name ✅
+- fix-failed-tracker-ban-duration ✅
+- fix-sse-connection-limit ✅
+- remove-procfs-fsync-overhead ✅
+- fix-netdev-sync-work-deadlock（2026-06-20 新发现）
+- add-safety-comments-to-unsafe-blocks（2026-06-20 新发现）
+- fix-ci-test-silent-ignore（2026-06-20 新发现）
+- fix-netfilter-ddos-notify-memory-barrier（2026-06-20 新发现）
+- add-netlink-size-validation（2026-06-20 新发现）
+- unify-docs-test-counts（2026-06-20 新发现）
 
 ### v2.3.0（计划中）
 
-**预计发布**：2026-09  
+**预计发布**：2026-09
 **主题**：接口统一 + 文档修复 + 测试补充
 
 **包含任务**：
 - unify-whitelist-add-remove-interface
 - unify-ip-validation-path
-- implement-strict-mode
+- implement-strict-mode ✅
 - fix-daemon-architecture-docs
 - fix-yaml-config-docs
 - fix-testing-docs
 - fix-readme-test-counts
 - remove-permanent-db-docs
-- add-ddos-detection-integration-test
-- add-webui-api-integration-test
-- add-config-reload-integration-test
-- add-log-rotation-integration-test
+- add-ddos-detection-integration-test ✅
+- add-webui-api-integration-test ✅
+- add-config-reload-integration-test ✅
+- add-log-rotation-integration-test ✅
+- add-netlink-integration-test（2026-06-20 新发现）
+- add-daemon-lifecycle-test（2026-06-20 新发现）
+- add-multi-jail-concurrent-test（2026-06-20 新发现）
+- fix-test-isolation（2026-06-20 新发现）
 - 所有 P2 代码清理任务
 
 ---
 
-## 审查发现汇总
+## 审查发现汇总（2026-06-20 更新）
 
 | 严重程度 | 内核模块 | 守护进程 | 测试/CI/文档 | 合计 |
 |---------|---------|---------|-------------|------|
-| Critical | 1 | 1 | 2 | 4 |
-| High | 6 | 7 | 4 | 17 |
-| Medium | 8 | 8 | 6 | 22 |
-| Low | 6 | 4 | 4 | 14 |
-| **合计** | **21** | **20** | **16** | **57** |
+| Critical | 1 | 1 | 4 | 6 |
+| High | 2 | 3 | 8 | 13 |
+| Medium | 5 | 2 | 9 | 16 |
+| Low | 4 | 1 | 7 | 12 |
+| **合计** | **12** | **7** | **28** | **47** |
 
 ---
 
@@ -509,4 +553,4 @@
 
 ---
 
-**最后更新**：2026-07-02
+**最后更新**：2026-06-20

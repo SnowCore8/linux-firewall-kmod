@@ -3,6 +3,19 @@
 
 fw_test_header "配置热重载（SIGHUP）集成测试"
 
+# 配置恢复 trap（确保测试中断时也能恢复配置）
+cleanup_config() {
+    if [[ -f /etc/firewall/default.yaml.bak ]]; then
+        mv /etc/firewall/default.yaml.bak /etc/firewall/default.yaml 2>/dev/null
+        # 重载配置
+        local pid=$(pgrep -f "firewall-daemon" | head -1)
+        if [[ -n "$pid" ]]; then
+            kill -HUP "$pid" 2>/dev/null
+        fi
+    fi
+}
+trap cleanup_config EXIT ERR INT TERM
+
 # 检查守护进程是否运行
 if ! pgrep -f "firewall-daemon" > /dev/null; then
     fw_log_warn "守护进程未运行，跳过配置热重载测试"

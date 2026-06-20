@@ -32,15 +32,15 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 - ✅ **Auto-expire cleanup** — periodic cleanup of expired bans
 - ✅ **IP whitelist protection** — auto-discovery + manual entries (64 capacity)
 - ✅ **procfs interface** — ban/unban/whitelist/config operations
-- ✅ **Rust daemon (v2.2.0+)** — 58 source files, 3.8MB stripped binary, behaviorally equivalent to the C version
+- ✅ **Rust daemon (v2.2.0+)** — 53 source files, 3.8MB stripped binary, behaviorally equivalent to the C version
 - ✅ **Regex parsing** — named capture groups for IP extraction
 - ✅ **RCU concurrency safety** — spinlock protected, high-concurrency safe
 - ✅ **Strict config validation** — unknown params rejected by default
-- ✅ **Prometheus metrics** — 14 metrics on port 9119 (4 kernel + 10 user-space)
+- ✅ **Prometheus metrics** — 17 metrics on port 9119 (4 kernel + 13 user-space)
 - ✅ **Independent log file** — `cfg.log_file` default `/var/log/firewall.log`, falls back to syslog-only on open failure
-- ✅ **Security hardening** — Integer overflow protection, UAF fix, RCU consistency, 19 `unsafe` blocks all with `// SAFETY:` comments
+- ✅ **Security hardening** — Integer overflow protection, UAF fix, RCU consistency, 49 `unsafe` blocks all with `// SAFETY:` comments
 - ✅ **Performance optimization** — Hash table 4096, whitelist two-stage match, LTO compilation
-- ✅ **Code quality** — 108 unit tests + 107 integration tests 100% pass, CI three jobs all green
+- ✅ **Code quality** — 88 unit tests + 115 integration tests 100% pass, CI three jobs all green
 
 ## Quick Start
 

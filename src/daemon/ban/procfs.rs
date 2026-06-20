@@ -239,6 +239,8 @@ pub fn secure_procfs_write(path: &str, data: &[u8]) -> Result<()> {
         fd
     };
 
+    // SAFETY: fd 来自 `get_cached_bans_fd` 或 `open`，已验证指向合法 procfs 路径。
+    // write_to_fd 内部执行 libc::write，fd 有效且 data 是合法的只读切片。
     let write_result = unsafe { write_to_fd(fd, data) };
     if write_result.is_err() {
         if using_cached {

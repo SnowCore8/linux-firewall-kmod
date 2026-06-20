@@ -95,8 +95,10 @@ static int validate_and_copy_ip(const char *ip_start, const char *ip_end,
   size_t ip_len = (size_t)(ip_end - ip_start);
 
   /* M5 修复：确保 ip_str_size 至少为 1（容纳 null 终止符），
-   * 并且 ip_len + 1 <= ip_str_size（容纳 IP 地址和 null 终止符） */
-  if (ip_len == 0 || ip_str_size == 0 || ip_len >= INET6_ADDRSTRLEN || ip_len + 1 > ip_str_size) {
+   * 并且 ip_len + 1 <= ip_str_size（容纳 IP 地址和 null 终止符）
+   * 注意：INET6_ADDRSTRLEN=46 包含终止符，有效 IPv6 最长 45 字符，
+   * 使用 ip_len > INET6_ADDRSTRLEN - 1 允许 45 字符的 IPv6 地址 */
+  if (ip_len == 0 || ip_str_size == 0 || ip_len > INET6_ADDRSTRLEN - 1 || ip_len + 1 > ip_str_size) {
     return -EINVAL;
   }
 
@@ -364,15 +366,6 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
     return -EINVAL;
   }
 
-  /* 私有 IP 警告 (仅 IPv4) */
-  if (af == FW_AF_INET) {
-    unsigned int ip_class_a = (ntohl(ip_addr.ipv4) >> 24) & 0xFF;
-    unsigned int ip_class_b = (ntohl(ip_addr.ipv4) >> 16) & 0xFF;
-    if ((ip_class_a == 10) || (ip_class_a == 172 && ip_class_b >= 16 && ip_class_b <= 31) ||
-        (ip_class_a == 192 && ip_class_b == 168)) {
-    }
-  }
-
   if (!is_unban) {
     seconds = parse_ban_duration(input);
     if (seconds < 0 && seconds != -1 && seconds != -2)
@@ -388,7 +381,17 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
   /* 通过 netlink 推送封禁状态变更事件给守护进程 */
   /* 注意：解封事件由 unban_ip() 内部推送，这里只推送封禁事件 */
   if (!is_unban) {
-    u32 duration = (seconds < 0) ? 0 : (u32)seconds;
+    /* seconds = -2 表示使用默认时长（fw_info.ban_time）
+     * seconds = 0 表示永久封禁
+     * seconds > 0 表示指定时长 */
+    u32 duration;
+    if (seconds == -2) {
+      duration = fw_info.ban_time;
+    } else if (seconds < 0) {
+      duration = 0; /* 其他负值（不应到达）视为永久 */
+    } else {
+      duration = (u32)seconds;
+    }
     const void *ip_ptr = (af == FW_AF_INET) ? (const void *)&ip_addr.ipv4 :
                                               (const void *)&ip_addr.ipv6;
     fw_netlink_send_ban_state_change(af, ip_ptr, 1, duration);

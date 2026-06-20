@@ -12,7 +12,7 @@ graph TD
     FW["test_framework.sh assertion functions, color output, reports"]
     CFG["test_config.sh path/parameter variables (KERNEL_MODULE_PATH, ...)"]
 
-    subgraph SUITES["suites/ numbered suites (executed in 01-15 order, 05/06 skipped, 13 suites / 115 assertions)"]
+    subgraph SUITES["suites/ numbered suites (executed in 01-18 order, 05/06 skipped, 16 suites / 115 assertions)"]
         S01["01_module_basic.sh"]
         S02["02_procfs_interface.sh"]
         S03["03_ban_unban.sh"]
@@ -25,7 +25,10 @@ graph TD
         S12["12_permanent_ban.sh"]
         S13["13_frp_jail.sh"]
         S14["14_ban_netfilter.sh"]
-        S15["15_daemon_logfile.sh"]
+        S15["15_ddos_detection.sh"]
+        S16["16_webui_api.sh"]
+        S17["17_config_reload.sh"]
+        S18["18_log_rotation.sh"]
     end
 
     subgraph REPORTS["reports/ generated reports (after running)"]
@@ -68,11 +71,11 @@ cargo test --doc
 cargo test config::
 ```
 
-Current count: **108 unit tests + 1 doctest** (the doctest actually
-executes — it is not `no_run`).
+Current count: **88 unit tests + 6 doctests** (doctests actually
+execute — they are not `no_run`).
 
 `cargo test` exercises the `#[cfg(test)]` modules inside the daemon
-crate; the 13-suite shell-driven integration test in
+crate; the 16-suite shell-driven integration test in
 `tests/run_tests.sh` complements it — unit tests verify logic at the
 source level, integration tests verify end-to-end behavior at the
 shell level.
@@ -97,7 +100,7 @@ make test
 ```
 
 The entry point is `tests/run_tests.sh`, which dispatches the numbered
-suites in `suites/`. Current count: 13 suites / **115** assertions.
+suites in `suites/`. Current count: 16 suites / **115** assertions.
 
 ### Running under sudo
 
@@ -168,10 +171,13 @@ and elapsed time) and uploaded as a CI artifact.
 | 12 | `12_permanent_ban.sh` | Permanent ban (in-memory) |
 | 13 | `13_frp_jail.sh` | FRP (Fail2ban-Recover-Pattern) jail config loading and trigger |
 | 14 | `14_ban_netfilter.sh` | Blacklist netfilter chain entry format and function (real routable IP) |
-| 15 | `15_daemon_logfile.sh` | Daemon's standalone log system (`log_file` / `log_destination` / `log_format` / `log_level`) |
+| 15 | `15_ddos_detection.sh` | DDoS detection configuration, rate thresholds, statistics |
+| 16 | `16_webui_api.sh` | Web UI API endpoints, SSE, HTTP response validation |
+| 17 | `17_config_reload.sh` | SIGHUP hot-reload, configuration modification, error tolerance |
+| 18 | `18_log_rotation.sh` | Log rotation detection, inotify monitoring, copytruncate support |
 
 > Numbering skips 05/06: those slots were used by old suites that have
-> since been merged into the ones above. Current count: 13 suites
+> since been merged into the ones above. Current count: 16 suites
 > totaling **115** integration-test assertions.
 
 ## Framework Assertions
@@ -199,10 +205,12 @@ happens (see [ci.yml](../../../../.github/workflows/ci.yml)).
 
 ## Memory-Safety Detection (ASAN / Miri)
 
-The daemon (Rust) contains 19 `unsafe { }` blocks, all of them in
-`src/daemon/{ban,log,file_monitor,main}.rs`, and every one of them
-carries a `// SAFETY:` comment documenting the invariants and
-reasoning. The CI runs three layers of checks in a matrix:
+The daemon (Rust) contains 49 `unsafe { }` blocks across 8 files
+(`netlink/protocol.rs`, `netlink/mod.rs`, `ban/procfs.rs`,
+`daemonizer.rs`, `file_monitor/monitor_loop.rs`, `ip_utils.rs`,
+`logger.rs`, `signals.rs`), and every one of them carries a
+`// SAFETY:` comment documenting the invariants and reasoning.
+The CI runs three layers of checks in a matrix:
 
 ### AddressSanitizer
 
@@ -253,7 +261,7 @@ toolchain as ASAN).
 
 ### Unsafe-block inventory
 
-`grep -rn "unsafe {" src/daemon/` lists all 19 blocks; each sits
+`grep -rn "unsafe {" src/daemon/` lists all 49 blocks; each sits
 next to a `// SAFETY:` comment explaining the invariants. **Any new
 `unsafe` block MUST come with a `// SAFETY:` comment**, otherwise
 the tightened `cargo clippy` rules (configured in the repo's

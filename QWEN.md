@@ -11,7 +11,7 @@
 - **内核模块**：C 语言，Linux Kernel Module + netfilter hooks
 - **守护进程**：Rust（v2.2.0 起从 C 翻译），3.8MB stripped 二进制
 - **构建系统**：Makefile + Cargo
-- **测试框架**：Bash 集成测试（115 项用例，13 个套件）+ Rust 单元测试（108 项）
+- **测试框架**：Bash 集成测试（115 项用例，16 个套件）+ Rust 单元测试（88 项）
 - **配置格式**：YAML（Jail 配置）
 - **监控导出**：Prometheus 指标（端口 9119）
 
@@ -119,7 +119,7 @@ sudo rmmod firewall
 ### 运行测试
 
 ```bash
-# 完整测试套件（115 项集成测试 + 108 项单元测试）
+# 完整测试套件（115 项集成测试 + 88 项单元测试）
 make test
 
 # 仅 Rust 单元测试
@@ -219,16 +219,21 @@ perf(kmod): 优化速率检测使用平均速率
 - 守护进程与内核模块的交互协议
 
 **测试分层**：
-- **单元测试**：`cargo test`（108 项）
-- **集成测试**：`make test`（115 项，13 个套件）
+- **单元测试**：`cargo test`（88 项）
+- **集成测试**：`make test`（115 项，16 个套件）
 - **行为审计**：C 到 Rust 移植时按需触发
 
 ### 内存安全（Rust unsafe）
 
-当前代码库有 **19 个 unsafe 块**，分布在：
-- `ban/procfs.rs` - fd 生命周期管理
-- `main.rs` - fork 守护进程化
-- `logger.rs` - syslog 接入
+当前代码库有 **49 个 unsafe 块**，分布在：
+- `netlink/protocol.rs`（14）— netlink 消息序列化/反序列化
+- `netlink/mod.rs`（13）— netlink socket 操作
+- `ban/procfs.rs`（11）— ProcFS fd 生命周期管理
+- `daemonizer.rs`（7）— fork 守护进程化/PID 文件管理
+- `file_monitor/monitor_loop.rs`（1）— poll 系统调用封装
+- `ip_utils.rs`（1）— IP 地址原始操作
+- `logger.rs`（1）— syslog 接入
+- `signals.rs`（1）— 信号掩码操作
 
 **硬性要求**：
 - 每个 unsafe 块必须紧跟 `// SAFETY:` 注释
@@ -278,12 +283,28 @@ cat /proc/firewall/config
 
 ### Prometheus 指标
 
-端口 9119 导出 14 个监控指标：
-- `firewall_current_bans` - 当前封禁数
-- `firewall_total_bans` - 累计封禁数
-- `firewall_ddos_events` - DDoS 事件数
-- `firewall_packets_dropped` - 丢弃数据包数
-- 等等
+端口 9119 导出 17 个监控指标（4 内核 + 13 用户态）：
+
+**内核侧指标**：
+- `firewall_kernel_banned_ips_current` - 当前封禁 IP 数
+- `firewall_kernel_bans_total` - 累计封禁操作数
+- `firewall_kernel_unbans_total` - 累计解封操作数
+- `firewall_kernel_whitelist_count` - 当前白名单条目数
+
+**守护进程侧指标**：
+- `firewall_daemon_uptime_seconds` - 守护进程运行时长
+- `firewall_daemon_config_reloads_total` - 配置重载次数
+- `firewall_daemon_inotify_events_total` - inotify 事件数
+- `firewall_daemon_log_rotations_total` - 日志轮转次数
+- `firewall_daemon_lines_parsed_total` - 已解析日志行数
+- `firewall_daemon_lines_skipped_total` - 跳过的日志行数
+- `firewall_daemon_regex_matches_total` - 正则匹配次数
+- `firewall_daemon_ips_extracted_total` - 提取的 IP 数
+- `firewall_daemon_ips_banned_total` - 触发封禁的 IP 数
+- `firewall_daemon_failed_attempts_total` - 封禁失败次数
+- `firewall_ddos_events_detected_total` - DDoS 事件检测数
+- `firewall_ddos_auto_bans_total` - DDoS 自动封禁数
+- `firewall_ddos_tracked_ips_current` - DDoS 跟踪 IP 数
 
 ## 质量门禁
 
@@ -351,7 +372,7 @@ sudo insmod build/kernel-module/firewall.ko
 | 哈希表容量 | 4096 条目 |
 | 白名单容量 | 64 条目 |
 | 守护进程体积 | 3.8 MB stripped |
-| 测试覆盖 | 115 集成 + 108 单元 |
+| 测试覆盖 | 115 集成 + 88 单元 |
 | 响应延迟 | 毫秒级 |
 
 ## 相关文档

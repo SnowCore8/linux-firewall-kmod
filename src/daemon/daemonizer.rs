@@ -74,6 +74,8 @@ pub fn daemonize_process() -> Result<()> {
         let lock_ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
         if lock_ret != 0 {
             let errno = std::io::Error::last_os_error();
+            // SAFETY: fd 是上方 libc::open 返回的有效文件描述符，flock 失败后需释放资源。
+            // close 返回值不影响错误传播（bail! 已携带 flock 错误信息）。
             unsafe { libc::close(fd) };
             bail!(
                 "守护进程已在运行（flock 失败: {}）。PID 文件: {}",

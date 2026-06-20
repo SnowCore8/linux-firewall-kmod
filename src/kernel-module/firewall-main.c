@@ -160,6 +160,9 @@ static int __init firewall_init(void) {
   fw_info.max_udp_per_second = DEFAULT_MAX_UDP_PER_SECOND;
   fw_info.max_icmp_per_second = DEFAULT_MAX_ICMP_PER_SECOND;
 
+  /* 设置默认封禁时长（来自模块参数） */
+  fw_info.ban_time = fw_ban_time;
+
   /* 修复：初始化 IPv4 和 IPv6 独立的清理进度索引 */
   fw_info.cleanup_last_bucket_ipv4 = 0;
   fw_info.cleanup_last_bucket_ipv6 = 0;

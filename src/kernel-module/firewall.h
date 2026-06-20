@@ -291,6 +291,10 @@ int fw_netlink_init(void);
 void fw_netlink_exit(void);
 int fw_netlink_send_event(u8 af, const void *ip, const char *reason, u32 rate_pps);
 int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 duration_secs);
+int fw_netlink_send_list_bans_response(u32 seq, u32 portid);
+int fw_netlink_send_stats_response(u32 seq, u32 portid);
+int fw_netlink_send_config_ack(u32 seq, u32 portid, u32 applied_flags, u32 rejected_flags);
+int fw_netlink_send_list_whitelist_response(u32 seq, u32 portid);
 
 /* 导出函数，提供对 fw_info 的受控访问 */
 struct firewall_info *get_fw_info(void);

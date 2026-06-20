@@ -35,7 +35,7 @@ The `defaults` block defines default behavior for all jails. Individual jails ca
 
 ```yaml
 defaults:
-  max_retries: 5
+  max_retries: 3
   findtime: 600         # 10 minutes
   ban_time: 900         # 15 minutes
   interval: 1           # Check interval (seconds)
@@ -44,7 +44,7 @@ defaults:
 
 | Parameter | Type | Default | Range | Description |
 |-----------|------|---------|-------|-------------|
-| `max_retries` | int | `5` | 1-100 | Maximum failures before a ban is triggered |
+| `max_retries` | int | `3` | 1-100 | Maximum failures before a ban is triggered |
 | `findtime` | int | `600` | 1-3600 | Time window (seconds) over which failures are counted |
 | `ban_time` | int | `900` | 0 or 1-86400 | Ban duration (seconds); 0 = permanent |
 | `interval` | int | `1` | 1-60 | Log file check interval (seconds) |
@@ -54,7 +54,7 @@ defaults:
 
 ```mermaid
 graph TB
-    A["findtime (600s)"] -->|"Failure count accumulates within this window"| B["max_retries (5)"]
+    A["findtime (600s)"] -->|"Failure count accumulates within this window"| B["max_retries (3)"]
     B -->|"Ban triggers when count reaches this"| C["ban_time (900s)"]
     C -->|"Ban lasts for this duration"| D["Auto-unban after expiry"]
 ```

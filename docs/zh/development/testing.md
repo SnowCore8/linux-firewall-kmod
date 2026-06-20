@@ -11,7 +11,7 @@ graph TD
     FW["test_framework.sh 断言函数、彩色输出、报告生成"]
     CFG["test_config.sh 路径与参数变量（KERNEL_MODULE_PATH 等）"]
 
-    subgraph SUITES["suites/ 编号测试套件（按 01-14 顺序执行，05/06 跳过，12 套件共 103 项）"]
+    subgraph SUITES["suites/ 编号测试套件（按 01-18 顺序执行，05/06 跳过，16 套件共 115 项）"]
         S01["01_module_basic.sh"]
         S02["02_procfs_interface.sh"]
         S03["03_ban_unban.sh"]
@@ -24,6 +24,10 @@ graph TD
         S12["12_permanent_ban.sh"]
         S13["13_frp_jail.sh"]
         S14["14_ban_netfilter.sh"]
+        S15["15_ddos_detection.sh"]
+        S16["16_webui_api.sh"]
+        S17["17_config_reload.sh"]
+        S18["18_log_rotation.sh"]
     end
 
     subgraph REPORTS["reports/ 测试报告输出（运行后生成）"]
@@ -64,11 +68,11 @@ cargo test --doc
 cargo test config::
 ```
 
-当前统计：**108 个单元测试 + 1 个 doctest**（doctest 真实执行，
+当前统计：**88 个单元测试 + 6 个 doctest**（doctest 真实执行，
 不是 `no_run`）。
 
 `cargo test` 跑守护进程内 `#[cfg(test)]` 模块；与 `tests/run_tests.sh`
-的 13 套件集成测试是互补关系——单元测试在源码层验证逻辑，
+的 16 套件集成测试是互补关系——单元测试在源码层验证逻辑，
 集成测试在 shell 端验证端到端行为。
 
 ## 集成测试
@@ -91,7 +95,7 @@ make test
 ```
 
 测试入口是 `tests/run_tests.sh`，统一调度 `suites/` 下编号套件。
-当前 12 套件共 **103 项**断言。
+当前 16 套件共 **115 项**断言。
 
 ### 在 sudo 下运行
 
@@ -190,8 +194,10 @@ host headers 常不匹配，模块加载会失败但不影响功能测试——r
 
 ## 内存安全检测（ASAN / Miri）
 
-守护进程（Rust）含 20 处 `unsafe { }` 块，全部位于
-`src/daemon/{ban,log,file_monitor,main}.rs`，每处都有 `// SAFETY:`
+守护进程（Rust）含 49 处 `unsafe { }` 块，分布在 8 个文件
+（`netlink/protocol.rs`、`netlink/mod.rs`、`ban/procfs.rs`、
+`daemonizer.rs`、`file_monitor/monitor_loop.rs`、`ip_utils.rs`、
+`logger.rs`、`signals.rs`），每处都有 `// SAFETY:`
 注释说明不变量与理由。以下检测工具可手动运行（CI 当前未集成）：
 
 ### AddressSanitizer
@@ -236,7 +242,7 @@ nightly toolchain）。
 
 ### Unsafe 块清单
 
-`grep -rn "unsafe {" src/daemon/` 可列出全部 20 处，每处紧邻
+`grep -rn "unsafe {" src/daemon/` 可列出全部 49 处，每处紧邻
 `// SAFETY:` 注释说明不变量。新增 unsafe 必须**同时**补全
 `// SAFETY:` 注释，否则 `cargo clippy` lint（仓库已配
 `clippy.toml` 收紧规则）会拒绝合入。

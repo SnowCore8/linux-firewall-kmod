@@ -92,6 +92,8 @@ impl FwNlDdosEvent {
             anyhow::bail!("数据太短");
         }
 
+        // SAFETY: data 长度已验证 >= size_of::<Self>()，
+        // Self 是 #[repr(C, packed)] 无对齐要求，ptr::read 按值拷贝不保留别名。
         let event: Self = unsafe { std::ptr::read(data.as_ptr() as *const Self) };
         Ok(event)
     }
@@ -143,6 +145,8 @@ impl FwNlBanStateChange {
             anyhow::bail!("数据太短");
         }
 
+        // SAFETY: data 长度已验证 >= size_of::<Self>()，
+        // Self 是 #[repr(C, packed)] 无对齐要求，ptr::read 按值拷贝不保留别名。
         let event: Self = unsafe { std::ptr::read(data.as_ptr() as *const Self) };
         Ok(event)
     }
@@ -276,6 +280,8 @@ impl FwNlBanCmd {
     /// 转换为字节数组
     pub fn to_bytes(self) -> Vec<u8> {
         let ptr = &self as *const Self as *const u8;
+        // SAFETY: &self 是有效的已初始化结构体引用，#[repr(C, packed)] 保证连续内存布局，
+        // size_of::<Self>() 不会超出结构体范围，to_vec() 拷贝数据后原始引用不再需要。
         unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
     }
 }
@@ -346,6 +352,8 @@ impl FwNlConfigUpdate {
     /// 转换为字节数组
     pub fn to_bytes(self) -> Vec<u8> {
         let ptr = &self as *const Self as *const u8;
+        // SAFETY: &self 是有效的已初始化结构体引用，#[repr(C, packed)] 保证连续内存布局，
+        // size_of::<Self>() 不会超出结构体范围，to_vec() 拷贝数据后原始引用不再需要。
         unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
     }
 }
@@ -375,6 +383,8 @@ impl FwNlListBansQuery {
 
     pub fn to_bytes(self) -> Vec<u8> {
         let ptr = &self as *const Self as *const u8;
+        // SAFETY: &self 是有效的已初始化结构体引用，#[repr(C, packed)] 保证连续内存布局，
+        // size_of::<Self>() 不会超出结构体范围，to_vec() 拷贝数据后原始引用不再需要。
         unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
     }
 }
@@ -405,7 +415,11 @@ impl FwNlListBansResponse {
             anyhow::bail!("响应数据太短");
         }
 
-        let resp: Self = unsafe { std::ptr::read(data.as_ptr() as *const Self) };
+        let resp: Self = unsafe {
+            // SAFETY: data 长度已验证 >= size_of::<Self>()，
+            // Self 是 #[repr(C, packed)] 无对齐要求，ptr::read 按值拷贝不保留别名。
+            std::ptr::read(data.as_ptr() as *const Self)
+        };
         let count = u32::from_be(resp.count) as usize;
         let entries_data = &data[std::mem::size_of::<Self>()..];
 
@@ -415,8 +429,11 @@ impl FwNlListBansResponse {
             if offset + std::mem::size_of::<FwNlBanEntry>() > entries_data.len() {
                 anyhow::bail!("封禁条目数据不完整");
             }
-            let entry: FwNlBanEntry =
-                unsafe { std::ptr::read(entries_data.as_ptr().add(offset) as *const FwNlBanEntry) };
+            let entry: FwNlBanEntry = unsafe {
+                // SAFETY: 上方已验证 offset + size_of::<FwNlBanEntry>() <= entries_data.len()，
+                // FwNlBanEntry 是 #[repr(C, packed)] 无对齐要求，ptr::read 按值拷贝。
+                std::ptr::read(entries_data.as_ptr().add(offset) as *const FwNlBanEntry)
+            };
             entries.push(entry);
         }
 
@@ -459,6 +476,8 @@ impl FwNlStatsQuery {
 
     pub fn to_bytes(self) -> Vec<u8> {
         let ptr = &self as *const Self as *const u8;
+        // SAFETY: &self 是有效的已初始化结构体引用，#[repr(C, packed)] 保证连续内存布局，
+        // size_of::<Self>() 不会超出结构体范围，to_vec() 拷贝数据后原始引用不再需要。
         unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
     }
 }
@@ -482,6 +501,8 @@ impl FwNlStatsResponse {
             anyhow::bail!("统计数据响应太短");
         }
 
+        // SAFETY: data 长度已验证 >= size_of::<Self>()，
+        // Self 是 #[repr(C, packed)] 无对齐要求，ptr::read 按值拷贝不保留别名。
         let resp: Self = unsafe { std::ptr::read(data.as_ptr() as *const Self) };
         Ok(resp)
     }
@@ -536,6 +557,8 @@ impl FwNlListWhitelistQuery {
 
     pub fn to_bytes(self) -> Vec<u8> {
         let ptr = &self as *const Self as *const u8;
+        // SAFETY: &self 是有效的已初始化结构体引用，#[repr(C, packed)] 保证连续内存布局，
+        // size_of::<Self>() 不会超出结构体范围，to_vec() 拷贝数据后原始引用不再需要。
         unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
     }
 }
@@ -548,37 +571,6 @@ pub struct FwNlWhitelistEntry {
     pub prefix_len: u8,
     pub addr: [u8; 16],
     pub device: [u8; 16],
-}
-
-impl FwNlWhitelistEntry {
-    /// 获取 IP/CIDR 字符串（如 "10.0.0.0/8" 或 "eth0"）
-    pub fn to_cidr_string(&self) -> String {
-        let ip_str = if self.af == 2 {
-            format!(
-                "{}.{}.{}.{}",
-                self.addr[0], self.addr[1], self.addr[2], self.addr[3]
-            )
-        } else if self.af == 10 {
-            let addr: std::net::Ipv6Addr = std::net::Ipv6Addr::from(self.addr);
-            addr.to_string()
-        } else {
-            "unknown".to_string()
-        };
-
-        // 提取设备名
-        let dev_end = self
-            .device
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(self.device.len());
-        let device = String::from_utf8_lossy(&self.device[..dev_end]);
-
-        if device.is_empty() {
-            format!("{}/{}", ip_str, self.prefix_len)
-        } else {
-            format!("{}/{} dev {}", ip_str, self.prefix_len, device)
-        }
-    }
 }
 
 /// 白名单列表响应（内核 → 守护进程）
@@ -596,7 +588,11 @@ impl FwNlListWhitelistResponse {
             anyhow::bail!("白名单响应数据太短");
         }
 
-        let resp: Self = unsafe { std::ptr::read(data.as_ptr() as *const Self) };
+        let resp: Self = unsafe {
+            // SAFETY: data 长度已验证 >= size_of::<Self>()，
+            // Self 是 #[repr(C, packed)] 无对齐要求，ptr::read 按值拷贝不保留别名。
+            std::ptr::read(data.as_ptr() as *const Self)
+        };
         let count = u32::from_be(resp.count) as usize;
         let entries_data = &data[std::mem::size_of::<Self>()..];
 
@@ -607,6 +603,8 @@ impl FwNlListWhitelistResponse {
                 anyhow::bail!("白名单条目数据不完整");
             }
             let entry: FwNlWhitelistEntry = unsafe {
+                // SAFETY: 上方已验证 offset + size_of::<FwNlWhitelistEntry>() <= entries_data.len()，
+                // FwNlWhitelistEntry 是 #[repr(C, packed)] 无对齐要求，ptr::read 按值拷贝。
                 std::ptr::read(entries_data.as_ptr().add(offset) as *const FwNlWhitelistEntry)
             };
             entries.push(entry);
@@ -689,6 +687,8 @@ impl FwNlWhitelistCmd {
     /// 转换为字节数组
     pub fn to_bytes(self) -> Vec<u8> {
         let ptr = &self as *const Self as *const u8;
+        // SAFETY: &self 是有效的已初始化结构体引用，#[repr(C, packed)] 保证连续内存布局，
+        // size_of::<Self>() 不会超出结构体范围，to_vec() 拷贝数据后原始引用不再需要。
         unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
     }
 }
@@ -713,6 +713,8 @@ impl FwNlConfigAck {
         if data.len() < std::mem::size_of::<Self>() {
             anyhow::bail!("配置确认数据太短");
         }
+        // SAFETY: data 长度已验证 >= size_of::<Self>()，
+        // Self 是 #[repr(C, packed)] 无对齐要求，ptr::read 按值拷贝不保留别名。
         let ack: Self = unsafe { std::ptr::read(data.as_ptr() as *const Self) };
         Ok(ack)
     }

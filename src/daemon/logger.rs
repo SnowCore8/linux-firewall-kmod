@@ -97,6 +97,8 @@ pub fn init_logger(log_file_override: Option<&str>) -> Logger {
             // 回退到 stderr。使用 dup 复制 fd 2，防止 File drop 时关闭原始 stderr
             use std::os::unix::io::FromRawFd;
             let dup_fd = nix::unistd::dup(2).unwrap_or(2);
+            // SAFETY: dup_fd 来自 nix::unistd::dup(2)，是有效的文件描述符（dup 失败时回退为 2）。
+            // from_raw_fd 接管 fd 所有权，File drop 时只关闭 dup 出的副本，不影响原始 stderr。
             unsafe { std::fs::File::from_raw_fd(dup_fd) }
         }
     };

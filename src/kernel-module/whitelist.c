@@ -23,12 +23,6 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
   struct whitelist_entry *tmp_entry;
   u32 bkt;
 
-  /* 快速容量检查（无锁，可能 stale 但可接受） */
-  if (atomic_read(&fw->whitelist_count) >= MAX_WHITELIST_ENTRIES) {
-    pr_warn("白名单表已满 (%d 条目)\n", MAX_WHITELIST_ENTRIES);
-    return -ENOSPC;
-  }
-
   new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
   if (!new_entry) {
     pr_err("白名单条目内存分配失败\n");
@@ -150,7 +144,9 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip, int 
     }
   } else {
     __be32 ipv4 = *(__be32 *)ip;
-    __be32 mask4 = prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1));
+    /* 计算 IPv4 子网掩码：prefix_len=0 时为 0，否则为高位 prefix_len 个 1
+     * 使用 htonl(~0U << (32 - prefix_len)) 避免 1ULL << 32 的未定义行为 */
+    __be32 mask4 = prefix_len == 0 ? 0 : htonl(~0U << (32 - prefix_len));
     __be32 net_ipv4 = ipv4 & mask4;
     bkt = hash_min(net_ipv4, WHITELIST_HASH_BITS);
     hlist_for_each_entry(entry, &fw->whitelist_table_ipv4[bkt], hash) {

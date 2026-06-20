@@ -149,6 +149,9 @@ pub fn validate_ipv4_chars_simd(bytes: &[u8]) -> bool {
     {
         // 检测 CPU 是否支持 SSE2
         if is_x86_feature_detected!("sse2") {
+            // SAFETY: 上方 is_x86_feature_detected!("sse2") 已确认运行时 CPU 支持 SSE2，
+            // validate_ipv4_chars_sse2 内部使用 _mm_movemask_epi8 等 SSE2 指令，
+            // bytes 切片指针和长度有效（调用方保证）。
             return unsafe { validate_ipv4_chars_sse2(bytes) };
         }
     }
