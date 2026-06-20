@@ -54,6 +54,7 @@ pub fn daemonize_process() -> Result<()> {
     }
 
     // PID 文件用 O_NOFOLLOW 防止符号链接攻击覆盖其他进程
+    // 使用 flock 排他锁确保单实例——第二个实例启动时 flock 会失败
     let pid = process::id();
     let pid_path = "/run/firewall-daemon.pid";
     // SAFETY: `pid_path` 是 `&'static str` 常量,无 NUL 字节。`open` 标志是
@@ -68,6 +69,19 @@ pub fn daemonize_process() -> Result<()> {
         )
     };
     if fd >= 0 {
+        // 尝试排他锁（非阻塞）——失败说明已有实例在运行
+        // SAFETY: `fd` 是有效的打开文件描述符，`LOCK_EX | LOCK_NB` 是合法 flock 操作
+        let lock_ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+        if lock_ret != 0 {
+            let errno = std::io::Error::last_os_error();
+            unsafe { libc::close(fd) };
+            bail!(
+                "守护进程已在运行（flock 失败: {}）。PID 文件: {}",
+                errno,
+                pid_path
+            );
+        }
+
         use std::io::Write;
         use std::os::unix::io::FromRawFd;
         // SAFETY: `fd` 是上一行 `libc::open` 返回的有效 fd,且未通过其他
@@ -87,6 +101,9 @@ pub fn daemonize_process() -> Result<()> {
                 "error" => %e
             );
         }
+        // 故意不 drop(f)——保持 fd 打开以维持 flock 锁
+        // 进程退出时内核自动释放 flock 和关闭 fd
+        std::mem::forget(f);
     } else {
         // PID 文件创建失败，记录错误但继续运行（非致命错误）
         let errno = std::io::Error::last_os_error();
