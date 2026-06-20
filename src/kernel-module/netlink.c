@@ -32,11 +32,11 @@ enum {
   FW_NL_LIST_BANS_RESPONSE = 7, /* 内核 → 守护进程：封禁列表响应 */
   FW_NL_STATS_QUERY = 8,    /* 守护进程 → 内核：查询统计数据 */
   FW_NL_STATS_RESPONSE = 9, /* 内核 → 守护进程：统计数据响应 */
-  FW_NL_LIST_WHITELIST_QUERY = 10,    /* 守护进程 → 内核：查询白名单列表 */
+  FW_NL_LIST_WHITELIST_QUERY = 10, /* 守护进程 → 内核：查询白名单列表 */
   FW_NL_LIST_WHITELIST_RESPONSE = 11, /* 内核 → 守护进程：白名单列表响应 */
-  FW_NL_ADD_WHITELIST = 12,           /* 守护进程 → 内核：添加白名单条目 */
-  FW_NL_REMOVE_WHITELIST = 13,        /* 守护进程 → 内核：移除白名单条目 */
-  FW_NL_CONFIG_ACK = 14,              /* 内核 → 守护进程：配置更新确认 */
+  FW_NL_ADD_WHITELIST = 12, /* 守护进程 → 内核：添加白名单条目 */
+  FW_NL_REMOVE_WHITELIST = 13, /* 守护进程 → 内核：移除白名单条目 */
+  FW_NL_CONFIG_ACK = 14, /* 内核 → 守护进程：配置更新确认 */
 };
 
 /* 消息头结构（20 字节） */
@@ -124,10 +124,10 @@ struct fw_nl_stats_response {
 
 /* 白名单条目（内核 → 守护进程） */
 struct fw_nl_whitelist_entry {
-  __u8 af;             /* 地址族 */
-  __u8 prefix_len;     /* 前缀长度（IPv4: 从掩码转换，IPv6: 直接使用） */
-  __u8 addr[16];       /* IP 地址 */
-  __u8 device[16];     /* 网络设备名称 */
+  __u8 af;         /* 地址族 */
+  __u8 prefix_len; /* 前缀长度（IPv4: 从掩码转换，IPv6: 直接使用） */
+  __u8 addr[16];   /* IP 地址 */
+  __u8 device[16]; /* 网络设备名称 */
 } __packed;
 
 /* 白名单列表响应（内核 → 守护进程） */
@@ -140,10 +140,10 @@ struct fw_nl_list_whitelist_response {
 /* 白名单操作命令（守护进程 → 内核） */
 struct fw_nl_whitelist_cmd {
   struct fw_nlmsg_hdr hdr;
-  __u8 af;             /* 地址族 */
-  __u8 prefix_len;     /* 前缀长度 */
-  __u8 addr[16];       /* IP 地址 */
-  __u8 device[16];     /* 网络设备名称 */
+  __u8 af;         /* 地址族 */
+  __u8 prefix_len; /* 前缀长度 */
+  __u8 addr[16];   /* IP 地址 */
+  __u8 device[16]; /* 网络设备名称 */
 } __packed;
 
 /* 配置更新确认（内核 → 守护进程） */
@@ -214,11 +214,10 @@ int fw_netlink_send_event(u8 af, const void *ip, const char *reason, u32 rate_pp
     memcpy(event->addr, ip, 16);
   }
 
-  /* 广播消息（端口 0 表示广播给所有监听者） */
+  /* 事件推送用广播（1:1 绑定，只有一个监听者） */
   ret = netlink_broadcast(fw_nl_sock, skb, 0, 1, GFP_ATOMIC);
   if (ret < 0 && ret != -ESRCH) {
-    /* -ESRCH 表示没有监听者，这是正常情况 */
-    pr_warn_ratelimited("netlink broadcast failed: %d\n", ret);
+    pr_warn_ratelimited("netlink broadcast event failed: %d\n", ret);
     return ret;
   }
 
@@ -279,10 +278,9 @@ int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 durat
     memcpy(event->addr, ip, 16);
   }
 
-  /* 广播消息（端口 0 表示广播给所有监听者） */
+  /* 事件推送用广播（1:1 绑定，只有一个监听者） */
   ret = netlink_broadcast(fw_nl_sock, skb, 0, 1, GFP_ATOMIC);
   if (ret < 0 && ret != -ESRCH) {
-    /* -ESRCH 表示没有监听者，这是正常情况 */
     pr_warn_ratelimited("netlink broadcast ban state change failed: %d\n", ret);
     return ret;
   }
@@ -293,11 +291,12 @@ int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 durat
 /**
  * fw_netlink_send_list_bans_response - 向守护进程发送封禁列表响应
  * @seq: 请求序列号
+ * @portid: 守护进程 netlink 端口 ID（用于单播回复）
  *
  * 响应守护进程的 ListBansQuery 请求，发送当前所有封禁条目。
  * 最多返回 4096 个条目。
  */
-int fw_netlink_send_list_bans_response(u32 seq) {
+int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
   struct sk_buff *skb;
   struct nlmsghdr *nlh;
   struct fw_nl_list_bans_response *resp;
@@ -409,10 +408,10 @@ int fw_netlink_send_list_bans_response(u32 seq) {
   /* 更新实际数量 */
   resp->count = cpu_to_be32(count);
 
-  /* 广播消息给守护进程（组 1） */
-  ret = netlink_broadcast(fw_nl_sock, skb, 0, 1, GFP_ATOMIC);
+  /* 单播回复给守护进程 */
+  ret = netlink_unicast(fw_nl_sock, skb, portid, MSG_DONTWAIT);
   if (ret < 0 && ret != -ESRCH) {
-    pr_warn_ratelimited("netlink broadcast list bans response failed: %d\n", ret);
+    pr_warn_ratelimited("netlink unicast list bans response failed: %d\n", ret);
     return ret;
   }
 
@@ -422,10 +421,11 @@ int fw_netlink_send_list_bans_response(u32 seq) {
 /**
  * fw_netlink_send_stats_response - 向守护进程发送统计数据响应
  * @seq: 请求序列号
+ * @portid: 守护进程 netlink 端口 ID（用于单播回复）
  *
  * 响应守护进程的 StatsQuery 请求，发送当前统计数据。
  */
-int fw_netlink_send_stats_response(u32 seq) {
+int fw_netlink_send_stats_response(u32 seq, u32 portid) {
   struct sk_buff *skb;
   struct nlmsghdr *nlh;
   struct fw_nl_stats_response *resp;
@@ -465,10 +465,10 @@ int fw_netlink_send_stats_response(u32 seq) {
   resp->packets_dropped = cpu_to_be64(atomic64_read(&fw_info.packets_dropped));
   resp->packets_accepted = cpu_to_be64(atomic64_read(&fw_info.packets_accepted));
 
-  /* 广播消息给守护进程（组 1） */
-  ret = netlink_broadcast(fw_nl_sock, skb, 0, 1, GFP_ATOMIC);
+  /* 单播回复给守护进程 */
+  ret = netlink_unicast(fw_nl_sock, skb, portid, MSG_DONTWAIT);
   if (ret < 0 && ret != -ESRCH) {
-    pr_warn_ratelimited("netlink broadcast stats response failed: %d\n", ret);
+    pr_warn_ratelimited("netlink unicast stats response failed: %d\n", ret);
     return ret;
   }
 
@@ -480,8 +480,9 @@ int fw_netlink_send_stats_response(u32 seq) {
  * @seq: 请求序列号
  * @applied_flags: 实际生效的配置项标志位
  * @rejected_flags: 被拒绝的配置项标志位
+ * @portid: 守护进程 netlink 端口 ID（用于单播回复）
  */
-int fw_netlink_send_config_ack(u32 seq, u32 applied_flags, u32 rejected_flags) {
+int fw_netlink_send_config_ack(u32 seq, u32 applied_flags, u32 rejected_flags, u32 portid) {
   struct sk_buff *skb;
   struct nlmsghdr *nlh;
   struct fw_nl_config_ack *ack;
@@ -510,9 +511,10 @@ int fw_netlink_send_config_ack(u32 seq, u32 applied_flags, u32 rejected_flags) {
   ack->applied_flags = cpu_to_be32(applied_flags);
   ack->rejected_flags = cpu_to_be32(rejected_flags);
 
-  ret = netlink_broadcast(fw_nl_sock, skb, 0, 1, GFP_ATOMIC);
+  /* 单播回复给守护进程 */
+  ret = netlink_unicast(fw_nl_sock, skb, portid, MSG_DONTWAIT);
   if (ret < 0 && ret != -ESRCH) {
-    pr_warn_ratelimited("netlink broadcast config ack failed: %d\n", ret);
+    pr_warn_ratelimited("netlink unicast config ack failed: %d\n", ret);
     return ret;
   }
 
@@ -539,11 +541,12 @@ static u8 ipv4_mask_to_prefix_len(__be32 mask) {
 /**
  * fw_netlink_send_list_whitelist_response - 向守护进程发送白名单列表响应
  * @seq: 请求序列号
+ * @portid: 守护进程 netlink 端口 ID（用于单播回复）
  *
  * 响应守护进程的 ListWhitelistQuery 请求，发送当前所有白名单条目。
  * 最多返回 64 个条目（MAX_WHITELIST_ENTRIES）。
  */
-int fw_netlink_send_list_whitelist_response(u32 seq) {
+int fw_netlink_send_list_whitelist_response(u32 seq, u32 portid) {
   struct sk_buff *skb;
   struct nlmsghdr *nlh;
   struct fw_nl_list_whitelist_response *resp;
@@ -625,10 +628,10 @@ int fw_netlink_send_list_whitelist_response(u32 seq) {
   /* 更新实际数量 */
   resp->count = cpu_to_be32(count);
 
-  /* 广播消息给守护进程（组 1） */
-  ret = netlink_broadcast(fw_nl_sock, skb, 0, 1, GFP_ATOMIC);
+  /* 单播回复给守护进程 */
+  ret = netlink_unicast(fw_nl_sock, skb, portid, MSG_DONTWAIT);
   if (ret < 0 && ret != -ESRCH) {
-    pr_warn_ratelimited("netlink broadcast list whitelist response failed: %d\n", ret);
+    pr_warn_ratelimited("netlink unicast list whitelist response failed: %d\n", ret);
     return ret;
   }
 
@@ -663,6 +666,9 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       pr_warn("invalid netlink magic: 0x%x\n", be32_to_cpu(hdr->magic));
       goto next;
     }
+
+    /* 获取发送方 portid（用于单播回复） */
+    u32 sender_portid = NETLINK_CB(skb).portid;
 
     /* 根据消息类型处理 */
     switch (be16_to_cpu(hdr->msg_type)) {
@@ -779,25 +785,25 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       pr_info("netlink: config updated, %d items changed\n", updated);
 
       /* 发送配置确认响应 */
-      fw_netlink_send_config_ack(be32_to_cpu(hdr->seq),
-                                  original_flags & ~rejected_flags,
-                                  rejected_flags);
+      fw_netlink_send_config_ack(be32_to_cpu(hdr->seq), original_flags & ~rejected_flags,
+                                 rejected_flags, sender_portid);
       break;
     }
 
     case FW_NL_STATS_QUERY:
       pr_info("netlink: stats query received, seq=%u\n", be32_to_cpu(hdr->seq));
-      fw_netlink_send_stats_response(be32_to_cpu(hdr->seq));
+      fw_netlink_send_stats_response(be32_to_cpu(hdr->seq), sender_portid);
       break;
 
     case FW_NL_LIST_BANS_QUERY:
       pr_info("netlink: list bans query received, seq=%u\n", be32_to_cpu(hdr->seq));
-      fw_netlink_send_list_bans_response(be32_to_cpu(hdr->seq));
+      fw_netlink_send_list_bans_response(be32_to_cpu(hdr->seq), sender_portid);
       break;
 
     case FW_NL_LIST_WHITELIST_QUERY:
-      pr_info("netlink: list whitelist query received, seq=%u\n", be32_to_cpu(hdr->seq));
-      fw_netlink_send_list_whitelist_response(be32_to_cpu(hdr->seq));
+      pr_info("netlink: list whitelist query received, seq=%u\n",
+              be32_to_cpu(hdr->seq));
+      fw_netlink_send_list_whitelist_response(be32_to_cpu(hdr->seq), sender_portid);
       break;
 
     case FW_NL_ADD_WHITELIST: {
