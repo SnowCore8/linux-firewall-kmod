@@ -95,7 +95,9 @@ jails:
     max_retries: 5
     findtime: 600
     ban_time: 900
-    regex: ""
+    regexes:
+      default:
+        pattern: ""
 '
 
 TEST_YAML_CONTENT_FRPS='
@@ -114,7 +116,9 @@ jails:
     max_retries: 10
     findtime: 300
     ban_time: 3600
-    regex: ""
+    regexes:
+      default:
+        pattern: ""
 '
 
 # ============================================================================

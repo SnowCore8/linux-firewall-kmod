@@ -531,7 +531,9 @@ jails:
     max_retries: $max_retries
     findtime: $findtime
     ban_time: $ban_time
-    regex: ""
+    regexes:
+      default:
+        pattern: ""
 EOF
 }
 

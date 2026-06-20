@@ -46,7 +46,9 @@ jails:
     max_retries: 1
     findtime: 1
     ban_time: 5
-    regex: ""
+    regexes:
+      default:
+        pattern: ""
 EOF
 
 fw_run_daemon_captured "$local_frp_yaml" 5
@@ -82,7 +84,9 @@ jails:
     max_retries: 3
     findtime: 120
     ban_time: 600
-    regex: ""
+    regexes:
+      default:
+        pattern: ""
 EOF
 
 fw_daemon_starts_ok "'$DAEMON_PATH' -c '$local_frp_config'" "FRP 独立配置文件加载"
