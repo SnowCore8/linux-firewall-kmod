@@ -430,13 +430,14 @@ static inline spinlock_t *get_rate_lock(struct firewall_info *fw, u8 af, u32 buc
 /**
  * validate_ipv4_address - 验证 IPv4 地址是否合法
  * @ip: IPv4 地址（网络字节序）
- * @ip_str: IP 字符串（用于日志，可为 NULL）
- * @context: 上下文描述（如 "ban"、"whitelist"）
+ * @ip_str: IP 字符串（保留参数，未来用于日志）
+ * @context: 上下文描述（保留参数，未来用于日志）
  * @allow_loopback: 是否允许回环地址
  * 返回: 0 表示合法，-EINVAL 表示非法
  */
-static inline int validate_ipv4_address(__be32 ip, const char *ip_str,
-                                        const char *context, bool allow_loopback) {
+static inline int validate_ipv4_address(__be32 ip, const char *ip_str __maybe_unused,
+                                        const char *context __maybe_unused,
+                                        bool allow_loopback) {
   unsigned int ip_num = ntohl(ip);
 
   if (ip == 0 || ip == 0xFFFFFFFF) {
@@ -461,13 +462,15 @@ static inline int validate_ipv4_address(__be32 ip, const char *ip_str,
 /**
  * validate_ipv6_address - 验证 IPv6 地址是否合法
  * @addr: IPv6 地址
- * @ip_str: IP 字符串（用于日志，可为 NULL）
- * @context: 上下文描述
+ * @ip_str: IP 字符串（保留参数，未来用于日志）
+ * @context: 上下文描述（保留参数，未来用于日志）
  * @allow_loopback: 是否允许回环地址
  * 返回: 0 表示合法，-EINVAL 表示非法
  */
-static inline int validate_ipv6_address(const struct in6_addr *addr, const char *ip_str,
-                                        const char *context, bool allow_loopback) {
+static inline int validate_ipv6_address(const struct in6_addr *addr,
+                                        const char *ip_str __maybe_unused,
+                                        const char *context __maybe_unused,
+                                        bool allow_loopback) {
   if (ipv6_addr_any(addr)) {
     return -EINVAL;
   }

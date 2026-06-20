@@ -189,7 +189,10 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
 fn parse_cidr(ip: &str) -> (String, u8) {
     if let Some(pos) = ip.find('/') {
         let ip_addr = &ip[..pos];
-        let prefix_len = ip[pos + 1..].parse::<u8>().unwrap_or(if ip.contains(':') { 128 } else { 32 });
+        let prefix_len =
+            ip[pos + 1..]
+                .parse::<u8>()
+                .unwrap_or(if ip.contains(':') { 128 } else { 32 });
         (ip_addr.to_string(), prefix_len)
     } else if ip.contains(':') {
         (ip.to_string(), 128)

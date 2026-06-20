@@ -449,6 +449,63 @@ impl ConnRateTracker {
 
         let mut violations: Vec<PerIpViolation> = Vec::new();
 
+        // 辅助闭包：检查单个条目的违规情况
+        let mut check_violations =
+            |ip: &Arc<str>,
+             ip_num: u32,
+             ipv6_num: [u8; 16],
+             is_ipv6: bool,
+             conn_count: u64,
+             fail_count: u64,
+             violation_count: &mut usize| {
+                let conn_rate = conn_count as f64;
+                let fail_rate_per_min = fail_count as f64 * 60.0;
+
+                if conn_rate > config.per_ip_conn_rate as f64 {
+                    DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
+                    *violation_count += 1;
+                    violations.push(PerIpViolation {
+                        ip: ip.clone(),
+                        ip_num,
+                        ipv6_num,
+                        is_ipv6,
+                        event_type: "conn_rate",
+                        rate_for_event: conn_rate,
+                        threshold_for_event: config.per_ip_conn_rate as f64,
+                    });
+
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "DDoS 检测：IP 连接速率违规";
+                        "ip" => ip.as_ref(),
+                        "conn_rate" => conn_rate,
+                        "threshold" => config.per_ip_conn_rate
+                    );
+                }
+
+                if fail_rate_per_min > config.per_ip_fail_rate as f64 {
+                    DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
+                    *violation_count += 1;
+                    violations.push(PerIpViolation {
+                        ip: ip.clone(),
+                        ip_num,
+                        ipv6_num,
+                        is_ipv6,
+                        event_type: "fail_rate",
+                        rate_for_event: fail_rate_per_min / 60.0,
+                        threshold_for_event: config.per_ip_fail_rate as f64 / 60.0,
+                    });
+
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "DDoS 检测：IP 失败速率违规";
+                        "ip" => ip.as_ref(),
+                        "fail_rate" => fail_rate_per_min / 60.0,
+                        "threshold" => config.per_ip_fail_rate as f64 / 60.0
+                    );
+                }
+            };
+
         // 阶段 1: 并发迭代 IPv4 + IPv6 DashMap 收集违规 IP 及事件快照
         {
             let total_ips = self.entries_ipv4.len() + self.entries_ipv6.len();
@@ -457,104 +514,29 @@ impl ConnRateTracker {
             // 检测 IPv4 违规
             for entry in self.entries_ipv4.iter() {
                 let entry_ref = entry.value();
-                let conn_rate = entry_ref.conn_count as f64;
-                let fail_rate_per_min = entry_ref.fail_count as f64 * 60.0;
-
-                // 仅记录违规 IP（避免日志洪泛：不再每条 IP 都输出）
-                if conn_rate > config.per_ip_conn_rate as f64 {
-                    DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
-                    violation_count += 1;
-                    violations.push(PerIpViolation {
-                        ip: entry_ref.ip.clone(),
-                        ip_num: entry_ref.ip_num,
-                        ipv6_num: [0; 16],
-                        is_ipv6: false,
-                        event_type: "conn_rate",
-                        rate_for_event: conn_rate,
-                        threshold_for_event: config.per_ip_conn_rate as f64,
-                    });
-
-                    crate::logger::info!(
-                        crate::logger::get(),
-                        "DDoS 检测：IP 连接速率违规";
-                        "ip" => &entry_ref.ip,
-                        "conn_rate" => conn_rate,
-                        "threshold" => config.per_ip_conn_rate
-                    );
-                }
-
-                if fail_rate_per_min > config.per_ip_fail_rate as f64 {
-                    DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
-                    violation_count += 1;
-                    violations.push(PerIpViolation {
-                        ip: entry_ref.ip.clone(),
-                        ip_num: entry_ref.ip_num,
-                        ipv6_num: [0; 16],
-                        is_ipv6: false,
-                        event_type: "fail_rate",
-                        rate_for_event: fail_rate_per_min / 60.0,
-                        threshold_for_event: config.per_ip_fail_rate as f64 / 60.0,
-                    });
-
-                    crate::logger::info!(
-                        crate::logger::get(),
-                        "DDoS 检测：IP 失败速率违规";
-                        "ip" => &entry_ref.ip,
-                        "fail_rate" => fail_rate_per_min / 60.0,
-                        "threshold" => config.per_ip_fail_rate as f64 / 60.0
-                    );
-                }
+                check_violations(
+                    &entry_ref.ip,
+                    entry_ref.ip_num,
+                    [0; 16],
+                    false,
+                    entry_ref.conn_count,
+                    entry_ref.fail_count,
+                    &mut violation_count,
+                );
             }
 
             // 检测 IPv6 违规
             for entry in self.entries_ipv6.iter() {
                 let entry_ref = entry.value();
-                let conn_rate = entry_ref.conn_count as f64;
-                let fail_rate_per_min = entry_ref.fail_count as f64 * 60.0;
-
-                if conn_rate > config.per_ip_conn_rate as f64 {
-                    DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
-                    violation_count += 1;
-                    violations.push(PerIpViolation {
-                        ip: entry_ref.ip.clone(),
-                        ip_num: 0,
-                        ipv6_num: entry_ref.ipv6_num,
-                        is_ipv6: true,
-                        event_type: "conn_rate",
-                        rate_for_event: conn_rate,
-                        threshold_for_event: config.per_ip_conn_rate as f64,
-                    });
-
-                    crate::logger::info!(
-                        crate::logger::get(),
-                        "DDoS 检测：IP 连接速率违规";
-                        "ip" => &entry_ref.ip,
-                        "conn_rate" => conn_rate,
-                        "threshold" => config.per_ip_conn_rate
-                    );
-                }
-
-                if fail_rate_per_min > config.per_ip_fail_rate as f64 {
-                    DDOS_STATS.events_detected.fetch_add(1, Ordering::Relaxed);
-                    violation_count += 1;
-                    violations.push(PerIpViolation {
-                        ip: entry_ref.ip.clone(),
-                        ip_num: 0,
-                        ipv6_num: entry_ref.ipv6_num,
-                        is_ipv6: true,
-                        event_type: "fail_rate",
-                        rate_for_event: fail_rate_per_min / 60.0,
-                        threshold_for_event: config.per_ip_fail_rate as f64 / 60.0,
-                    });
-
-                    crate::logger::info!(
-                        crate::logger::get(),
-                        "DDoS 检测：IP 失败速率违规";
-                        "ip" => &entry_ref.ip,
-                        "fail_rate" => fail_rate_per_min / 60.0,
-                        "threshold" => config.per_ip_fail_rate as f64 / 60.0
-                    );
-                }
+                check_violations(
+                    &entry_ref.ip,
+                    0,
+                    entry_ref.ipv6_num,
+                    true,
+                    entry_ref.conn_count,
+                    entry_ref.fail_count,
+                    &mut violation_count,
+                );
             }
 
             // 汇总日志：每次检测输出一次总体统计（替代每条 IP 都输出）

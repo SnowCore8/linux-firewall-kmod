@@ -87,34 +87,6 @@ static int bans_open(struct inode *inode, struct file *file) {
  * ========================================================================== */
 
 /**
- * validate_ban_input - 校验用户输入的安全性和格式
- */
-static int validate_ban_input(const char *input) {
-  if (strstr(input, "..") != NULL) {
-    return -EINVAL;
-  }
-
-  {
-    char lower_input[256];
-    size_t i;
-
-    for (i = 0; input[i] && i < sizeof(lower_input) - 1; i++) {
-      if (input[i] >= 'A' && input[i] <= 'Z')
-        lower_input[i] = input[i] - 'A' + 'a';
-      else
-        lower_input[i] = input[i];
-    }
-    lower_input[i] = '\0';
-
-    if (strstr(lower_input, "%2e") != NULL || strstr(lower_input, "%2f") != NULL) {
-      return -EINVAL;
-    }
-  }
-
-  return 0;
-}
-
-/**
  * validate_and_copy_ip - 验证 IP 长度并复制到输出缓冲区
  * M5 修复：增强缓冲区大小检查，确保 ip_str_size 足够容纳 IP 地址和 null 终止符
  */
@@ -355,12 +327,9 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
   }
 
   if (len > 0 && len < sizeof(input)) {
-    size_t actual_len = strnlen(input, len);
-    if (actual_len >= len)
-      input[len] = '\0';
+    input[len] = '\0';
   }
 
-  input[len] = '\0';
   if (len > 0 && input[len - 1] == '\n')
     input[len - 1] = '\0';
 
@@ -377,10 +346,6 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
       }
     }
   }
-
-  result = validate_ban_input(input);
-  if (result < 0)
-    return result;
 
   result = parse_ban_command(input, ip_str, sizeof(ip_str), &is_unban);
   if (result < 0)
