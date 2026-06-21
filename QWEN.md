@@ -9,8 +9,9 @@
 ### 技术栈
 
 - **内核模块**：C 语言，Linux Kernel Module + netfilter hooks
-- **守护进程**：Rust（v2.2.0 起从 C 翻译），3.8MB stripped 二进制
-- **构建系统**：Makefile + Cargo
+- **守护进程**：Rust（v2.2.0 起从 C 翻译），5.2MB stripped 二进制（含 Leptos WASM 前端）
+- **前端**：Leptos 0.6 + trunk（纯 Rust WASM，无 Node.js 依赖），7 个页面 + SVG 图表
+- **构建系统**：Makefile + Cargo + trunk
 - **测试框架**：Bash 集成测试（115 项用例，16 个套件）+ Rust 单元测试（88 项）
 - **配置格式**：YAML（Jail 配置）
 - **监控导出**：Prometheus 指标（端口 9119）

@@ -7,6 +7,7 @@
 ### 新增
 - **Netlink 深度联动架构** - 内核模块与守护进程通过 netlink socket 双向实时通信。内核检测到 DDoS 后推送事件给守护进程，守护进程决策引擎判断后下发封禁指令。消除状态同步问题，实现真正的深度联动
 - **DDoS 决策引擎** - 守护进程新增 `DdosDecisionEngine`，接收内核 netlink 事件后根据违规次数决定是否封禁，通过 netlink 下发封禁指令。封禁同步到 `ACTIVE_BAN_CACHE`，Web UI 实时可见
+- **Leptos WASM 前端** - 从 Vue 3 + npm + Vite 迁移到 Leptos 0.6 + trunk。纯 Rust 前端，无 Node.js 依赖。产物：WASM 639KB + JS 55KB + CSS 19KB = 713KB。7 个页面（仪表盘、封禁管理、白名单、Jails、DDoS 监控、系统日志、设置）+ 原生 SVG 图表组件（折线图、饼图）。Hash 路由模式，SPA fallback 路由
 - **`make install` 自动化改进** - install 目标添加 build 依赖，`make clean && make install` 一步完成，无需手动 `make build`
 - **安装流程标准化** - 新增 `install-verify` 目标，安装后自动验证关键组件（内核模块、守护进程、配置文件、状态目录、systemd 服务）
 - **安装错误处理增强** - 关键步骤（daemon 启动、文件安装）失败时显式报错，不再静默忽略；服务启动检查验证 daemon 是否真正运行
@@ -17,7 +18,8 @@
 
 ### 变更
 - **HTTP 框架迁移：tiny_http → axum** - HTTP 服务从同步的 `tiny_http` 迁移到异步的 `axum` + `tokio`。SSE 从短连接（每次发送后关闭）改为**长连接不间断推送**，前端状态指示器更准确。二进制体积从 3.8MB 增至 4.6MB（+0.8MB，来自 tokio runtime）。路由使用 axum 的 Router 分层 merge 实现认证排除（`/health` 跳过认证）。新增依赖：`axum 0.7`、`tokio`、`tower-http`、`tokio-stream`、`async-stream`
-- **默认 release 二进制 30MB → 4.6MB** - HTTP 框架迁移后体积略有增加（tokio runtime），但仍保持轻量
+- **前端框架迁移：Vue 3 → Leptos WASM** - 完全消除 npm/Node.js 依赖。构建工具从 Vite 切换到 trunk。图表库从 ECharts (500KB) 切换到原生 SVG 组件（零依赖）。状态管理从 Pinia 切换到 Leptos signals。路由从 vue-router 切换到 leptos_router（hash 模式）。Daemon 二进制从 4.6MB 增至 5.2MB（+0.6MB 嵌入 WASM 前端）
+- **默认 release 二进制 30MB → 5.2MB** - HTTP 框架迁移后体积略有增加（tokio runtime + WASM 前端），但仍保持轻量
 - **`build-deb.sh` 弃用 `VERSION=`** - 版本统一从 `Cargo.toml` 读取
 - **`tests/run_tests.sh` 加 `source ~/.cargo/env`** - 修复 sudo 默认 `secure_path` 不含 `~/.cargo/bin` 导致 `make daemon` 报 "cargo: 没有那个文件或目录"
 - **CI 工作流升级** - `代码质量检查` 步骤从 C daemon 的 `clang-format` 切换为 `cargo fmt --check` + `cargo clippy -- -D warnings`（Rust 后 `src/daemon/*.c` 已删，原 glob 报 "No such file or directory"）。CI 工作流自动 `rustup` 安装 stable toolchain

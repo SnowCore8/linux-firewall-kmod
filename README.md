@@ -12,7 +12,7 @@
 
 ## 概述
 
-Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用户空间移至内核空间，使用 netfilter 框架在数据包级别进行实时 IP 封禁，具有更低的延迟和更高的性能。守护进程用 Rust 实现（v2.2.0 起从 C 翻译），二进制 3.8MB stripped，115 项集成测试全部通过。
+Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用户空间移至内核空间，使用 netfilter 框架在数据包级别进行实时 IP 封禁，具有更低的延迟和更高的性能。守护进程用 Rust 实现（v2.2.0 起从 C 翻译），二进制 5.2MB stripped（含 Leptos WASM 前端），115 项集成测试全部通过。
 
 ## 为什么选择本项目
 
@@ -20,7 +20,7 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 |--------|-------------------|-------------------|
 | 封禁位置 | iptables/nftables 用户态 | netfilter 内核钩子 |
 | 响应延迟 | 秒级 | 毫秒级 |
-| 资源占用 | Python 解释器 + 完整依赖链 | 单文件 3.8MB Rust 二进制 |
+| 资源占用 | Python 解释器 + 完整依赖链 | 单文件 5.2MB Rust 二进制（含 WASM 前端） |
 | 查找性能 | 线性遍历规则 | 哈希表 O(1) 查找 |
 | 永久封禁 | 配置文件 | 内存缓存，重启后失效 |
 
@@ -32,7 +32,8 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 - ✅ **自动过期清理** — 定时清理过期封禁记录
 - ✅ **IP 白名单保护** — 自动发现系统 IP + 手动添加（64 容量）
 - ✅ **procfs 用户接口** — 封禁/解封/白名单/配置操作
-- ✅ **Rust 守护进程（v2.2.0+）** — 53 个源文件，3.8MB stripped 二进制，行为与 C 版严格等价
+- ✅ **Rust 守护进程（v2.2.0+）** — 53 个源文件，5.2MB stripped 二进制（含 Leptos WASM 前端），行为与 C 版严格等价
+- ✅ **Leptos WASM 前端（v2.2.1+）** — 纯 Rust 前端框架，无 Node.js 依赖，trunk 构建，7 个页面 + SVG 图表
 - ✅ **正则解析** — 支持命名捕获组提取 IP
 - ✅ **RCU 并发安全** — spinlock 保护，高并发安全
 - ✅ **严格配置校验** — 未知参数或无效值直接报错拒绝加载
@@ -47,9 +48,10 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 ### 编译
 
 ```bash
-make                    # 编译内核模块 + Rust 守护进程
+make                    # 编译内核模块 + Rust 守护进程 + Leptos 前端
 make kernel-module      # 仅内核模块
 make daemon             # 仅 Rust 守护进程 (cargo build --release)
+make frontend           # 仅 Leptos 前端 (trunk build --release)
 make build-quick        # 快速编译（跳过格式检查）
 make clean              # 清理
 ```
