@@ -47,7 +47,8 @@ pub fn format_datetime(timestamp: i64) -> String {
     if timestamp <= 0 {
         return "N/A".to_string();
     }
-    let date = js_sys::Date::new(&(timestamp as u32 * 1000).into());
+    // SAFETY: js_sys::Date 接受毫秒时间戳，i64 转 f64 在合理范围内精度足够
+    let date = js_sys::Date::new(&(timestamp as f64 * 1000.0).into());
     let year = date.get_full_year();
     let month = date.get_month() + 1;
     let day = date.get_date();
