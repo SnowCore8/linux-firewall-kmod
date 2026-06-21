@@ -44,42 +44,42 @@ pub fn Logs() -> impl IntoView {
     });
 
     // SSE 日志流
-    create_effect(move |_| {
-        let source = web_sys::EventSource::new("/api/v1/logs/stream").ok();
-        if let Some(source) = source {
-            let logs_sig = logs;
-            let streaming_sig = streaming;
-
-            let on_log =
-                Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
-                    if !streaming_sig.get() {
-                        return;
-                    }
-                    if let Ok(data) = e.data().dyn_into::<js_sys::JsString>() {
-                        let line: String = data.into();
-                        logs_sig.update(|v| {
-                            let entry = parse_log_line(v.len() as u64 + 1, &line);
-                            v.push(entry);
-                            if v.len() > MAX_LOGS {
-                                v.remove(0);
-                            }
-                        });
-                    }
-                });
-            source
-                .add_event_listener_with_callback_and_add_event_listener_options(
-                    "log",
-                    &on_log.as_ref().unchecked_ref(),
-                    &{
-                        let opts = web_sys::AddEventListenerOptions::new();
-                        opts.set_once(false);
-                        opts
-                    },
-                )
-                .unwrap();
-            on_log.forget();
-        }
-    });
+    let source = web_sys::EventSource::new("/api/v1/logs/stream").ok();
+    if let Some(source) = &source {
+        let on_log =
+            Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
+                if !streaming.get() {
+                    return;
+                }
+                if let Ok(data) = e.data().dyn_into::<js_sys::JsString>() {
+                    let line: String = data.into();
+                    logs.update(|v| {
+                        let entry = parse_log_line(v.len() as u64 + 1, &line);
+                        v.push(entry);
+                        if v.len() > MAX_LOGS {
+                            v.remove(0);
+                        }
+                    });
+                }
+            });
+        source
+            .add_event_listener_with_callback_and_add_event_listener_options(
+                "log",
+                &on_log.as_ref().unchecked_ref(),
+                &{
+                    let opts = web_sys::AddEventListenerOptions::new();
+                    opts.set_once(false);
+                    opts
+                },
+            )
+            .unwrap();
+        // 组件卸载时清理 EventSource 和 closure
+        let source_clone = source.clone();
+        on_cleanup(move || {
+            let _ = source_clone.close();
+        });
+        on_log.forget();
+    }
 
     // 过滤后的日志
     let filtered = move || {

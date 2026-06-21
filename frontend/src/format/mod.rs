@@ -42,54 +42,19 @@ pub fn format_uptime(seconds: u64) -> String {
     }
 }
 
-/// 日期时间格式化
+/// 日期时间格式化（使用浏览器本地时区）
 pub fn format_datetime(timestamp: i64) -> String {
     if timestamp <= 0 {
         return "N/A".to_string();
     }
-    // WASM 环境无 localtime，用 UTC 显示
-    let secs = timestamp as u64;
-    let days_since_epoch = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hours = time_of_day / 3600;
-    let minutes = (time_of_day % 3600) / 60;
-    let seconds = time_of_day % 60;
-
-    // 简单日期计算（从 epoch）
-    let (year, month, day) = days_to_date(days_since_epoch);
+    let date = js_sys::Date::new(&(timestamp as u32 * 1000).into());
+    let year = date.get_full_year();
+    let month = date.get_month() + 1;
+    let day = date.get_date();
+    let hours = date.get_hours();
+    let minutes = date.get_minutes();
+    let seconds = date.get_seconds();
     format!("{year:04}-{month:02}-{day:02} {hours:02}:{minutes:02}:{seconds:02}")
-}
-
-fn days_to_date(days: u64) -> (u64, u64, u64) {
-    // 从 1970-01-01 开始计算
-    let mut y = 1970;
-    let mut remaining = days as i64;
-    loop {
-        let days_in_year = if is_leap_year(y) { 366 } else { 365 };
-        if remaining < days_in_year {
-            break;
-        }
-        remaining -= days_in_year;
-        y += 1;
-    }
-    let days_in_months: [i64; 12] = if is_leap_year(y) {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-    let mut m = 0;
-    for (i, &dim) in days_in_months.iter().enumerate() {
-        if remaining < dim {
-            m = i;
-            break;
-        }
-        remaining -= dim;
-    }
-    (y, (m + 1) as u64, (remaining + 1) as u64)
-}
-
-fn is_leap_year(y: u64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
 /// 剩余时间格式化

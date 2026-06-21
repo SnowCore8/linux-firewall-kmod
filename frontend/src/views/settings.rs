@@ -28,7 +28,12 @@ pub fn Settings() -> impl IntoView {
                 <div class="card settings-card">
                     <h3>"守护进程"</h3>
                     <div class="settings-list">
-                        <SettingItem label="版本" value=|| "v2.2.0".to_string()/>
+                        <SettingItem label="守护进程版本" value=move || {
+                            stats_signal.get().map(|s| format!("v{}", s.daemon_version)).unwrap_or_else(|| "N/A".to_string())
+                        }/>
+                        <SettingItem label="内核模块版本" value=move || {
+                            stats_signal.get().map(|s| format!("v{}", s.kernel_version)).unwrap_or_else(|| "N/A".to_string())
+                        }/>
                         <SettingItem label="运行时间" value=move || {
                             let s = stats_signal.get();
                             s.map(|s| format_uptime(s.uptime_seconds)).unwrap_or_else(|| "N/A".to_string())

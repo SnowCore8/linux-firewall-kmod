@@ -96,6 +96,12 @@ pub async fn handle_sse() -> Result<Sse<impl Stream<Item = Result<Event, Infalli
                 }
             }
 
+            // 白名单列表
+            let whitelist = api::get_whitelist();
+            if let Ok(whitelist_json) = serde_json::to_string(&whitelist) {
+                yield Ok(Event::default().event("whitelist").data(whitelist_json));
+            }
+
             // DDoS 速率数据
             let rates = api::get_ddos_rates();
             if let Ok(rates_json) = serde_json::to_string(&rates) {

@@ -46,6 +46,8 @@ impl<T> ApiResponse<T> {
 /// 统计数据响应
 #[derive(Serialize)]
 pub struct StatsResponse {
+    pub daemon_version: String,
+    pub kernel_version: String,
     pub today_bans: u64,
     pub failed_attempts: u64,
     pub ddos_events: u64,
@@ -215,6 +217,8 @@ pub fn get_stats() -> StatsResponse {
         .load(std::sync::atomic::Ordering::Relaxed);
 
     StatsResponse {
+        daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+        kernel_version: "2.2".to_string(),
         today_bans,
         failed_attempts,
         ddos_events,

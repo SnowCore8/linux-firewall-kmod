@@ -2,7 +2,7 @@
 
 use leptos::*;
 
-use crate::api::RateResponse;
+use crate::api::{self, RateResponse};
 use crate::charts::LineChart;
 use crate::format::format_rate;
 use crate::sse;
@@ -14,12 +14,38 @@ pub fn DdosMonitor() -> impl IntoView {
     // 时间线数据（累积到信号中）
     let time_labels = create_rw_signal(Vec::<String>::new());
     let total_data = create_rw_signal(Vec::<u64>::new());
-    let syn_data = create_rw_signal(Vec::<u64>::new());
-    let udp_data = create_rw_signal(Vec::<u64>::new());
-    let icmp_data = create_rw_signal(Vec::<u64>::new());
     const MAX_POINTS: usize = 300;
 
-    // 监听 rates 变化，更新时间线
+    // 页面加载时从 API 获取历史数据
+    let _history = create_resource(|| (), |_| async { api::get_rates_history().await.ok() });
+
+    // 监听历史数据加载完成，初始化时间线
+    create_effect(move |_| {
+        if let Some(Some(history)) = _history.get() {
+            if time_labels.get().is_empty() && !history.is_empty() {
+                let mut labels = Vec::new();
+                let mut data = Vec::new();
+                for entry in &history {
+                    let ts = entry.timestamp;
+                    let h = (ts / 3600) % 24;
+                    let m = (ts / 60) % 60;
+                    let s = ts % 60;
+                    labels.push(format!("{h:02}:{m:02}:{s:02}"));
+                    data.push(entry.total_pps);
+                }
+                // 只保留最后 MAX_POINTS 个
+                let start = if data.len() > MAX_POINTS {
+                    data.len() - MAX_POINTS
+                } else {
+                    0
+                };
+                time_labels.set(labels[start..].to_vec());
+                total_data.set(data[start..].to_vec());
+            }
+        }
+    });
+
+    // 监听 rates 变化，追加新数据点到时间线
     create_effect(move |_| {
         let rates = rates_signal.get().unwrap_or_default();
         if rates.is_empty() {
@@ -27,17 +53,10 @@ pub fn DdosMonitor() -> impl IntoView {
         }
 
         let mut total_pps = 0_u64;
-        let mut total_syn = 0_u64;
-        let mut total_udp = 0_u64;
-        let mut total_icmp = 0_u64;
         for r in &rates {
             total_pps += r.packets_per_sec;
-            total_syn += r.syn_packets_per_sec;
-            total_udp += r.udp_packets_per_sec;
-            total_icmp += r.icmp_packets_per_sec;
         }
 
-        // 时间标签
         let now = web_sys::window()
             .and_then(|w| w.performance())
             .map(|p| p.now() as u64)
@@ -57,24 +76,6 @@ pub fn DdosMonitor() -> impl IntoView {
         });
         total_data.update(|v| {
             v.push(total_pps);
-            if v.len() > MAX_POINTS {
-                v.remove(0);
-            }
-        });
-        syn_data.update(|v| {
-            v.push(total_syn);
-            if v.len() > MAX_POINTS {
-                v.remove(0);
-            }
-        });
-        udp_data.update(|v| {
-            v.push(total_udp);
-            if v.len() > MAX_POINTS {
-                v.remove(0);
-            }
-        });
-        icmp_data.update(|v| {
-            v.push(total_icmp);
             if v.len() > MAX_POINTS {
                 v.remove(0);
             }
@@ -152,7 +153,7 @@ pub fn DdosMonitor() -> impl IntoView {
                 view! {
                     <div class="card chart-card">
                         <div class="chart-header">
-                            <h3>"协议分布时间线"</h3>
+                            <h3>"速率趋势时间线"</h3>
                         </div>
                         <div class="chart-body" style="height:220px">
                             <LineChart

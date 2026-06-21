@@ -1,12 +1,13 @@
-//! 白名单管理
+//! 白名单管理 — SSE 实时更新
 
 use leptos::*;
 
 use crate::api::{self, WhitelistEntry};
+use crate::sse;
 
 #[component]
 pub fn Whitelist() -> impl IntoView {
-    let entries = create_resource(|| (), |_| async { api::get_whitelist().await.ok() });
+    let whitelist_signal = sse::use_sse_whitelist();
 
     let new_cidr = create_rw_signal(String::new());
     let error = create_rw_signal(String::new());
@@ -63,58 +64,56 @@ pub fn Whitelist() -> impl IntoView {
 
             // 白名单列表
             <div class="card">
-                <Suspense fallback=|| view! { <div class="empty-state"><span>"加载中..."</span></div> }>
-                    {move || {
-                        let list = entries.get().flatten().unwrap_or_default();
-                        if list.is_empty() {
-                            return view! {
-                                <div class="empty-state">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                                        <path d="M9 12l2 2 4-4"/>
-                                        <circle cx="12" cy="12" r="10"/>
-                                    </svg>
-                                    <span>"白名单为空"</span>
-                                </div>
-                            }.into_view();
-                        }
-                        view! {
-                            <div class="table-container">
-                                <table>
-                                    <thead>
-                                        <tr>
-                                            <th>"CIDR"</th>
-                                            <th>"设备"</th>
-                                            <th>"操作"</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <For
-                                            each=move || list.clone()
-                                            key=|e| e.cidr.clone()
-                                            children=move |entry: WhitelistEntry| {
-                                                let cidr = entry.cidr.clone();
-                                                view! {
-                                                    <tr>
-                                                        <td class="mono" style="font-weight:600;color:var(--text-primary)">
-                                                            {&entry.cidr}
-                                                        </td>
-                                                        <td style="color:var(--text-muted)">{&entry.device}</td>
-                                                        <td>
-                                                            <button class="btn btn-sm btn-danger"
-                                                                on:click=move |_| do_remove(cidr.clone())>
-                                                                "移除"
-                                                            </button>
-                                                        </td>
-                                                    </tr>
-                                                }
-                                            }
-                                        />
-                                    </tbody>
-                                </table>
+                {move || {
+                    let list = whitelist_signal.get().unwrap_or_default();
+                    if list.is_empty() {
+                        return view! {
+                            <div class="empty-state">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                    <path d="M9 12l2 2 4-4"/>
+                                    <circle cx="12" cy="12" r="10"/>
+                                </svg>
+                                <span>"白名单为空"</span>
                             </div>
-                        }.into_view()
-                    }}
-                </Suspense>
+                        }.into_view();
+                    }
+                    view! {
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>"CIDR"</th>
+                                        <th>"设备"</th>
+                                        <th>"操作"</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <For
+                                        each=move || list.clone()
+                                        key=|e| e.cidr.clone()
+                                        children=move |entry: WhitelistEntry| {
+                                            let cidr = entry.cidr.clone();
+                                            view! {
+                                                <tr>
+                                                    <td class="mono" style="font-weight:600;color:var(--text-primary)">
+                                                        {&entry.cidr}
+                                                    </td>
+                                                    <td style="color:var(--text-muted)">{&entry.device}</td>
+                                                    <td>
+                                                        <button class="btn btn-sm btn-danger"
+                                                            on:click=move |_| do_remove(cidr.clone())>
+                                                            "移除"
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            }
+                                        }
+                                    />
+                                </tbody>
+                            </table>
+                        </div>
+                    }.into_view()
+                }}
             </div>
         </div>
     }

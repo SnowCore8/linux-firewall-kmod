@@ -1,7 +1,7 @@
 //! 主题切换 — dark/light 双主题
+#![allow(dead_code)]
 
 use leptos::*;
-use wasm_bindgen::JsCast;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Theme {

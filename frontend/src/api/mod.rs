@@ -1,4 +1,5 @@
 //! API 客户端 — 类型定义 + fetch 调用
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +16,8 @@ pub struct ApiResponse<T> {
 
 #[derive(Deserialize, Clone, Default, Serialize)]
 pub struct StatsResponse {
+    pub daemon_version: String,
+    pub kernel_version: String,
     pub today_bans: u64,
     pub failed_attempts: u64,
     pub ddos_events: u64,
@@ -64,6 +67,14 @@ pub struct RateResponse {
     pub ack_packets_per_sec: u64,
     pub rst_packets_per_sec: u64,
     pub fin_packets_per_sec: u64,
+}
+
+#[derive(Deserialize, Clone, Serialize)]
+pub struct RateHistoryEntry {
+    pub timestamp: u64,
+    pub total_pps: u64,
+    pub total_bps: u64,
+    pub tracked_ips: u32,
 }
 
 #[derive(Deserialize, Clone, Serialize)]
@@ -250,6 +261,10 @@ pub async fn delete_whitelist(cidr: &str) -> Result<WhitelistOperationResponse, 
 
 pub async fn get_rates_current() -> Result<Vec<RateResponse>, String> {
     get_json("/api/v1/rates/current").await
+}
+
+pub async fn get_rates_history() -> Result<Vec<RateHistoryEntry>, String> {
+    get_json("/api/v1/rates/history").await
 }
 
 pub async fn get_config() -> Result<WebuiConfig, String> {

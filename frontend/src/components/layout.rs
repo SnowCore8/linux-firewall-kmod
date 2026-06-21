@@ -4,7 +4,7 @@ use leptos::*;
 use leptos_router::*;
 
 use crate::sse::{self, ConnectionStatus};
-use crate::theme::{self, Theme};
+use crate::theme;
 
 #[component]
 pub fn DefaultLayout(children: Children) -> impl IntoView {

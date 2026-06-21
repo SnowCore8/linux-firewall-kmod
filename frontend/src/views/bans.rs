@@ -1,7 +1,6 @@
 //! 封禁管理 — 表格 + 搜索 + 分页 + 手动封禁
 
 use leptos::*;
-use leptos_router::use_location;
 
 use crate::api::{self, BanResponse};
 use crate::format::{format_datetime, format_duration};

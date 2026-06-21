@@ -4,7 +4,7 @@ use leptos::*;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
-use crate::api::{BanResponse, JailResponse, RateResponse, StatsResponse};
+use crate::api::{BanResponse, JailResponse, RateResponse, StatsResponse, WhitelistEntry};
 
 // ============================================================================
 // 全局信号
@@ -23,6 +23,7 @@ thread_local! {
     static SSE_BANS: RwSignal<Option<Vec<BanResponse>>> = create_rw_signal(None);
     static SSE_JAILS: RwSignal<Option<Vec<JailResponse>>> = create_rw_signal(None);
     static SSE_RATES: RwSignal<Option<Vec<RateResponse>>> = create_rw_signal(None);
+    static SSE_WHITELIST: RwSignal<Option<Vec<WhitelistEntry>>> = create_rw_signal(None);
 }
 
 pub fn use_sse_status() -> RwSignal<ConnectionStatus> {
@@ -43,6 +44,10 @@ pub fn use_sse_jails() -> RwSignal<Option<Vec<JailResponse>>> {
 
 pub fn use_sse_rates() -> RwSignal<Option<Vec<RateResponse>>> {
     SSE_RATES.with(|s| *s)
+}
+
+pub fn use_sse_whitelist() -> RwSignal<Option<Vec<WhitelistEntry>>> {
+    SSE_WHITELIST.with(|s| *s)
 }
 
 // ============================================================================
@@ -66,7 +71,6 @@ thread_local! {
 
 /// 建立 SSE 连接，监听 stats/bans/jails/rates 事件并更新全局 signal
 pub fn connect_sse() {
-    let window = web_sys::window().expect("no window");
     let source = web_sys::EventSource::new("/api/v1/events").expect("EventSource::new failed");
 
     let mut callbacks: Vec<Closure<dyn Fn(web_sys::MessageEvent)>> = Vec::new();
@@ -179,6 +183,29 @@ pub fn connect_sse() {
         )
         .unwrap();
     callbacks.push(on_rates);
+
+    // whitelist 事件
+    let on_whitelist =
+        Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
+            if let Ok(data) = e.data().dyn_into::<js_sys::JsString>() {
+                let s: String = data.into();
+                if let Ok(list) = serde_json::from_str::<Vec<WhitelistEntry>>(&s) {
+                    SSE_WHITELIST.with(|sig| sig.set(Some(list)));
+                }
+            }
+        });
+    source
+        .add_event_listener_with_callback_and_add_event_listener_options(
+            "whitelist",
+            &on_whitelist.as_ref().unchecked_ref(),
+            &{
+                let opts = web_sys::AddEventListenerOptions::new();
+                opts.set_once(false);
+                opts
+            },
+        )
+        .unwrap();
+    callbacks.push(on_whitelist);
 
     // onerror — 标记断开
     let on_error = Closure::<dyn Fn(web_sys::Event)>::new(move |_: web_sys::Event| {

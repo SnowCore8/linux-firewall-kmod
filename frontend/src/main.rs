@@ -18,7 +18,7 @@ fn main() {
     console_error_panic_hook::set_once();
     mount_to_body(|| {
         view! {
-            <Router history=HashHistory>
+            <Router>
                 <DefaultLayout>
                     <Routes>
                         <Route path="/" view=|| view! { <Redirect path="/dashboard"/> }/>
