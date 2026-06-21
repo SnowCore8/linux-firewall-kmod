@@ -5,7 +5,7 @@ use axum::{
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware,
     response::{Html, IntoResponse, Json, Redirect, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 
@@ -49,6 +49,7 @@ pub fn build_router(metrics_user: String, metrics_pass: String) -> Router {
         .route("/api/v1/bans/:ip", delete(handle_delete_ban))
         .route("/api/v1/jails", get(handle_api_jails))
         .route("/api/v1/config", get(handle_api_config))
+        .route("/api/v1/config", put(handle_update_config))
         .route("/api/v1/whitelist", get(handle_api_whitelist))
         .route("/api/v1/whitelist", post(handle_create_whitelist))
         .route("/api/v1/whitelist/:cidr", delete(handle_delete_whitelist))
@@ -250,6 +251,20 @@ async fn handle_api_jails() -> Json<web_ui::api::ApiResponse<Vec<web_ui::api::Ja
 async fn handle_api_config() -> Json<web_ui::api::ApiResponse<web_ui::api::WebuiConfigResponse>> {
     let config = web_ui::api::get_webui_config();
     Json(web_ui::api::ApiResponse::ok(config))
+}
+
+/// `PUT /api/v1/config` — 更新 Web UI 配置
+async fn handle_update_config(
+    Json(req): Json<web_ui::api::UpdateConfigRequest>,
+) -> impl IntoResponse {
+    match web_ui::api::update_webui_config(req) {
+        Ok(config) => (StatusCode::OK, Json(web_ui::api::ApiResponse::ok(config))).into_response(),
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(web_ui::api::ApiResponse::<()>::error(40004, msg)),
+        )
+            .into_response(),
+    }
 }
 
 /// `GET /api/v1/whitelist` — 白名单列表 JSON

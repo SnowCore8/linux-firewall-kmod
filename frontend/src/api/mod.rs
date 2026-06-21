@@ -92,6 +92,15 @@ pub struct WebuiConfig {
     pub rate_critical_syn: u64,
 }
 
+#[derive(Serialize)]
+pub struct UpdateConfigRequest {
+    pub sse_push_interval: Option<u32>,
+    pub rate_warning_pps: Option<u64>,
+    pub rate_critical_pps: Option<u64>,
+    pub rate_warning_syn: Option<u64>,
+    pub rate_critical_syn: Option<u64>,
+}
+
 #[derive(Deserialize, Clone, Serialize)]
 pub struct PaginatedResponse<T: Serialize> {
     pub items: Vec<T>,
@@ -199,6 +208,24 @@ async fn delete_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, Str
     Ok(api_resp.data)
 }
 
+async fn put_json<B: Serialize, T: serde::de::DeserializeOwned>(
+    url: &str,
+    body: &B,
+) -> Result<T, String> {
+    let resp = gloo_net::http::Request::put(url)
+        .json(body)
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    let api_resp: ApiResponse<T> = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    if api_resp.code != 0 {
+        return Err(api_resp.message);
+    }
+    Ok(api_resp.data)
+}
+
 // ============================================================================
 // 公共 API
 // ============================================================================
@@ -269,6 +296,10 @@ pub async fn get_rates_history() -> Result<Vec<RateHistoryEntry>, String> {
 
 pub async fn get_config() -> Result<WebuiConfig, String> {
     get_json("/api/v1/config").await
+}
+
+pub async fn update_config(req: UpdateConfigRequest) -> Result<WebuiConfig, String> {
+    put_json("/api/v1/config", &req).await
 }
 
 pub async fn get_logs(page: u32, page_size: u32) -> Result<LogPageResponse, String> {

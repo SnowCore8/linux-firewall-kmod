@@ -10,6 +10,57 @@ use crate::sse;
 pub fn Settings() -> impl IntoView {
     let stats_signal = sse::use_sse_stats();
     let config = create_resource(|| (), |_| async { api::get_config().await.ok() });
+    let saving = create_rw_signal(false);
+    let save_msg = create_rw_signal(String::new());
+
+    // 编辑中的配置值
+    let edit_sse = create_rw_signal(String::new());
+    let edit_warning_pps = create_rw_signal(String::new());
+    let edit_critical_pps = create_rw_signal(String::new());
+    let edit_warning_syn = create_rw_signal(String::new());
+    let edit_critical_syn = create_rw_signal(String::new());
+
+    // 初始化编辑值
+    create_effect(move |_| {
+        if let Some(Some(cfg)) = config.get() {
+            edit_sse.set(cfg.sse_push_interval.to_string());
+            edit_warning_pps.set(cfg.rate_warning_pps.to_string());
+            edit_critical_pps.set(cfg.rate_critical_pps.to_string());
+            edit_warning_syn.set(cfg.rate_warning_syn.to_string());
+            edit_critical_syn.set(cfg.rate_critical_syn.to_string());
+        }
+    });
+
+    let do_save = move |_| {
+        saving.set(true);
+        save_msg.set(String::new());
+
+        let sse_val = edit_sse.get().parse::<u32>().ok();
+        let warning_pps = edit_warning_pps.get().parse::<u64>().ok();
+        let critical_pps = edit_critical_pps.get().parse::<u64>().ok();
+        let warning_syn = edit_warning_syn.get().parse::<u64>().ok();
+        let critical_syn = edit_critical_syn.get().parse::<u64>().ok();
+
+        spawn_local(async move {
+            let req = api::UpdateConfigRequest {
+                sse_push_interval: sse_val,
+                rate_warning_pps: warning_pps,
+                rate_critical_pps: critical_pps,
+                rate_warning_syn: warning_syn,
+                rate_critical_syn: critical_syn,
+            };
+            match api::update_config(req).await {
+                Ok(_) => {
+                    save_msg.set("保存成功".to_string());
+                    saving.set(false);
+                }
+                Err(msg) => {
+                    save_msg.set(format!("保存失败：{}", msg));
+                    saving.set(false);
+                }
+            }
+        });
+    };
 
     let default_config = move || WebuiConfig {
         sse_push_interval: 1,
@@ -24,7 +75,7 @@ pub fn Settings() -> impl IntoView {
             <h2 class="section-title">"系统设置"</h2>
 
             <div class="settings-grid">
-                // 守护进程信息
+                // 守护进程信息（只读）
                 <div class="card settings-card">
                     <h3>"守护进程"</h3>
                     <div class="settings-list">
@@ -50,7 +101,7 @@ pub fn Settings() -> impl IntoView {
                     </div>
                 </div>
 
-                // 内核模块
+                // 内核模块（只读）
                 <div class="card settings-card">
                     <h3>"内核模块"</h3>
                     <div class="settings-list">
@@ -68,19 +119,27 @@ pub fn Settings() -> impl IntoView {
                     </div>
                 </div>
 
-                // Web UI 配置
+                // Web UI 配置（可编辑）
                 <div class="card settings-card">
                     <h3>"Web UI 配置"</h3>
                     <Suspense fallback=|| view! { <div style="padding:12px;color:var(--text-muted)">"加载中..."</div> }>
                         {move || {
-                            let cfg = config.get().flatten().unwrap_or_else(|| default_config());
+                            let _cfg = config.get().flatten().unwrap_or_else(|| default_config());
                             view! {
                                 <div class="settings-list">
-                                    <SettingItem label="SSE 推送间隔" value=move || format!("{}s", cfg.sse_push_interval)/>
-                                    <SettingItem label="速率警告阈值" value=move || format!("{} pps", format_number(cfg.rate_warning_pps, false))/>
-                                    <SettingItem label="速率严重阈值" value=move || format!("{} pps", format_number(cfg.rate_critical_pps, false))/>
-                                    <SettingItem label="SYN 警告阈值" value=move || format!("{} pps", format_number(cfg.rate_warning_syn, false))/>
-                                    <SettingItem label="SYN 严重阈值" value=move || format!("{} pps", format_number(cfg.rate_critical_syn, false))/>
+                                    <EditableItem label="SSE 推送间隔 (秒)" value=edit_sse/>
+                                    <EditableItem label="速率警告阈值 (pps)" value=edit_warning_pps/>
+                                    <EditableItem label="速率严重阈值 (pps)" value=edit_critical_pps/>
+                                    <EditableItem label="SYN 警告阈值 (pps)" value=edit_warning_syn/>
+                                    <EditableItem label="SYN 严重阈值 (pps)" value=edit_critical_syn/>
+                                </div>
+                                <div style="margin-top:16px;display:flex;gap:12px;align-items:center">
+                                    <button class="btn btn-primary" on:click=do_save disabled=move || saving.get()>
+                                        {move || if saving.get() { "保存中..." } else { "保存配置" }}
+                                    </button>
+                                    <span style="color:var(--text-muted);font-size:14px">
+                                        {move || save_msg.get()}
+                                    </span>
                                 </div>
                             }
                         }}
@@ -117,6 +176,25 @@ fn SettingItem(
         <div class="setting-item">
             <span class="setting-label">{label}</span>
             <span class="setting-value mono">{move || value()}</span>
+        </div>
+    }
+}
+
+#[component]
+fn EditableItem(
+    label: &'static str,
+    value: RwSignal<String>,
+) -> impl IntoView {
+    view! {
+        <div class="setting-item">
+            <span class="setting-label">{label}</span>
+            <input
+                type="number"
+                class="setting-input mono"
+                prop:value=move || value.get()
+                on:input=move |e| value.set(event_target_value(&e))
+                style="width:120px;padding:4px 8px;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:4px;color:var(--text-primary);font-family:monospace"
+            />
         </div>
     }
 }

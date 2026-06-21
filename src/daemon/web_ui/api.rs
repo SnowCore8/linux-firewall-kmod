@@ -136,6 +136,57 @@ pub fn get_webui_config() -> WebuiConfigResponse {
     }
 }
 
+/// 更新 Web UI 配置请求
+#[derive(Deserialize)]
+pub struct UpdateConfigRequest {
+    pub sse_push_interval: Option<u32>,
+    pub rate_warning_pps: Option<u64>,
+    pub rate_critical_pps: Option<u64>,
+    pub rate_warning_syn: Option<u64>,
+    pub rate_critical_syn: Option<u64>,
+}
+
+/// 更新 Web UI 配置
+pub fn update_webui_config(req: UpdateConfigRequest) -> Result<WebuiConfigResponse, String> {
+    let mut config = crate::http_exporter::get_global_webui_config().unwrap_or_default();
+
+    // 验证阈值逻辑：warning < critical
+    let new_warning_pps = req.rate_warning_pps.unwrap_or(config.rate_warning_pps);
+    let new_critical_pps = req.rate_critical_pps.unwrap_or(config.rate_critical_pps);
+    let new_warning_syn = req.rate_warning_syn.unwrap_or(config.rate_warning_syn);
+    let new_critical_syn = req.rate_critical_syn.unwrap_or(config.rate_critical_syn);
+
+    if new_warning_pps >= new_critical_pps {
+        return Err("速率警告阈值必须小于严重阈值".to_string());
+    }
+    if new_warning_syn >= new_critical_syn {
+        return Err("SYN 警告阈值必须小于严重阈值".to_string());
+    }
+
+    // 应用更新
+    if let Some(v) = req.sse_push_interval {
+        if v == 0 || v > 60 {
+            return Err("SSE 推送间隔必须在 1-60 秒之间".to_string());
+        }
+        config.sse_push_interval = v;
+    }
+    config.rate_warning_pps = new_warning_pps;
+    config.rate_critical_pps = new_critical_pps;
+    config.rate_warning_syn = new_warning_syn;
+    config.rate_critical_syn = new_critical_syn;
+
+    // 写入全局配置
+    crate::http_exporter::set_global_webui_config(config.clone());
+
+    Ok(WebuiConfigResponse {
+        sse_push_interval: config.sse_push_interval,
+        rate_warning_pps: config.rate_warning_pps,
+        rate_critical_pps: config.rate_critical_pps,
+        rate_warning_syn: config.rate_warning_syn,
+        rate_critical_syn: config.rate_critical_syn,
+    })
+}
+
 /// 获取 DDoS 速率数据
 ///
 /// 从全局 `RATE_CACHE` 读取，该缓存由 netlink 接收线程定期更新。
