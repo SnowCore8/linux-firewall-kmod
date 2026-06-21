@@ -166,7 +166,7 @@ echo "Failed password for root from 192.168.1.100" | \
 
 | Cause | Solution |
 |-------|----------|
-| Regex syntax error | Test PCRE2 with online tools |
+| Regex syntax error | Test regex with online tools |
 | `<HOST>` not replaced | Check spelling in config |
 | Log format changed | Update regex expression |
 | inotify not triggered | Check file permissions and rotation |

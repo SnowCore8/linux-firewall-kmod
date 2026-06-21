@@ -145,7 +145,7 @@ int whitelist_check(__be32 ip);
 | 测试类型 | 命令 | 规模 / 说明 |
 |----------|------|------------|
 | Rust 单元测试 | `cargo test` | 88 项 `#[test]` 单元 + 6 项 doctest。doctest 全部真跑,不写 `no_run` / `ignore` |
-| 集成测试 | `make test` | 115 项用例,16 个套件 (`tests/suites/01_*.sh` 到 `18_*.sh`,5/6 合并) |
+| 集成测试 | `make test` | 115 项用例,19 个套件 (`tests/suites/01_*.sh` 到 `21_*.sh`,5/6 合并) |
 | 行为审计 | `c-to-rust-behavioral-audit` skill | C 守护进程已退役,审计按需触发,确保 Rust 版零回归 |
 
 **修改下列内容时必跑 `make test` 集成测试**:

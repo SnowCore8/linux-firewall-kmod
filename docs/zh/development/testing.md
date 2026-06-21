@@ -11,7 +11,7 @@ graph TD
     FW["test_framework.sh 断言函数、彩色输出、报告生成"]
     CFG["test_config.sh 路径与参数变量（KERNEL_MODULE_PATH 等）"]
 
-    subgraph SUITES["suites/ 编号测试套件（按 01-18 顺序执行，05/06 跳过，16 套件共 115 项）"]
+    subgraph SUITES["suites/ 编号测试套件（按 01-21 顺序执行，05/06 跳过，19 套件）"]
         S01["01_module_basic.sh"]
         S02["02_procfs_interface.sh"]
         S03["03_ban_unban.sh"]
@@ -28,6 +28,9 @@ graph TD
         S16["16_webui_api.sh"]
         S17["17_config_reload.sh"]
         S18["18_log_rotation.sh"]
+        S19["19_netlink_comm.sh"]
+        S20["20_daemon_lifecycle.sh"]
+        S21["21_multi_jail.sh"]
     end
 
     subgraph REPORTS["reports/ 测试报告输出（运行后生成）"]
@@ -72,7 +75,7 @@ cargo test config::
 不是 `no_run`）。
 
 `cargo test` 跑守护进程内 `#[cfg(test)]` 模块；与 `tests/run_tests.sh`
-的 16 套件集成测试是互补关系——单元测试在源码层验证逻辑，
+的 19 套件集成测试是互补关系——单元测试在源码层验证逻辑，
 集成测试在 shell 端验证端到端行为。
 
 ## 集成测试
@@ -95,7 +98,7 @@ make test
 ```
 
 测试入口是 `tests/run_tests.sh`，统一调度 `suites/` 下编号套件。
-当前 16 套件共 **115 项**断言。
+当前 19 套件共 **115 项**断言。
 
 ### 在 sudo 下运行
 
@@ -169,7 +172,7 @@ Total: passed 113, failed 0, warned 2, skipped 0
 | 18 | `18_log_rotation.sh` | 日志轮转检测（inotify + inode 重连） |
 
 > 编号不连续（05、06 缺失）：原对应旧测试套件，重构时已合并到
-> 现有套件中。当前 16 套件共 **115 项**集成测试。
+> 现有套件中。当前 19 套件共 **115 项**集成测试。
 
 ## 框架断言
 

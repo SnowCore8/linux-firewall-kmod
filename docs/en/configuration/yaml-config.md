@@ -107,9 +107,9 @@ regexes:
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `<name>` (key) | string | Yes | Pattern name, used for log identification |
-| `pattern` | string | Yes | PCRE2 regex; use capture group `()` to extract IP |
+| `pattern` | string | Yes | Regex (syntax equivalent to PCRE); use capture group `()` to extract IP |
 
-### PCRE2 Regex Syntax
+### Regex Syntax
 
 The current version **no longer uses the `<HOST>` placeholder**. Write the full regex directly in `pattern`.
 

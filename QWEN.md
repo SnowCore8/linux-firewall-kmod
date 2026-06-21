@@ -12,7 +12,7 @@
 - **守护进程**：Rust（v2.2.0 起从 C 翻译），5.2MB stripped 二进制（含 Leptos WASM 前端）
 - **前端**：Leptos 0.6 + trunk（纯 Rust WASM，无 Node.js 依赖），7 个页面 + SVG 图表
 - **构建系统**：Makefile + Cargo + trunk
-- **测试框架**：Bash 集成测试（115 项用例，16 个套件）+ Rust 单元测试（88 项）
+- **测试框架**：Bash 集成测试（115 项用例，19 个套件）+ Rust 单元测试（88 项）
 - **配置格式**：YAML（Jail 配置）
 - **监控导出**：Prometheus 指标（端口 9119）
 
@@ -221,7 +221,7 @@ perf(kmod): 优化速率检测使用平均速率
 
 **测试分层**：
 - **单元测试**：`cargo test`（88 项）
-- **集成测试**：`make test`（115 项，16 个套件）
+- **集成测试**：`make test`（115 项，19 个套件）
 - **行为审计**：C 到 Rust 移植时按需触发
 
 ### 内存安全（Rust unsafe）
@@ -386,8 +386,6 @@ sudo insmod build/kernel-module/firewall.ko
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南、代码规范、PR 流程 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
 | [SECURITY.md](SECURITY.md) | 安全策略和漏洞报告流程 |
-| [AUDIT.md](AUDIT.md) | 安全审计报告 |
-| [PLAN.md](PLAN.md) | 项目开发计划、待办事项、版本路线图 |
 | [STANDARDS.md](STANDARDS.md) | 统一问题/任务/性能/安全定级规范 |
 
 ### 详细文档（docs/zh/）

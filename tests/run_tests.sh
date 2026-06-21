@@ -254,6 +254,9 @@ declare -A SUITE_FILES=(
     ["16_webui_api"]="suites/16_webui_api.sh"
     ["17_config_reload"]="suites/17_config_reload.sh"
     ["18_log_rotation"]="suites/18_log_rotation.sh"
+    ["19_netlink_comm"]="suites/19_netlink_comm.sh"
+    ["20_daemon_lifecycle"]="suites/20_daemon_lifecycle.sh"
+    ["21_multi_jail"]="suites/21_multi_jail.sh"
 )
 
 declare -A SUITE_CATEGORIES=(
@@ -273,6 +276,9 @@ declare -A SUITE_CATEGORIES=(
     ["16_webui_api"]="daemon webui api"
     ["17_config_reload"]="daemon config reload"
     ["18_log_rotation"]="daemon log rotation"
+    ["19_netlink_comm"]="daemon netlink"
+    ["20_daemon_lifecycle"]="daemon lifecycle"
+    ["21_multi_jail"]="daemon jail"
 )
 
 # ============================================================================
@@ -296,6 +302,13 @@ declare -A SUITE_GROUPS=(
     ["12_permanent_ban"]="1"
     ["13_frp_jail"]="2"
     ["14_ban_netfilter"]="1"
+    ["15_ddos_detection"]="2"
+    ["16_webui_api"]="2"
+    ["17_config_reload"]="2"
+    ["18_log_rotation"]="2"
+    ["19_netlink_comm"]="2"
+    ["20_daemon_lifecycle"]="2"
+    ["21_multi_jail"]="2"
 )
 
 run_suites_parallel() {

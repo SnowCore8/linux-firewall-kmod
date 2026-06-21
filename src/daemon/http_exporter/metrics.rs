@@ -28,7 +28,7 @@ fn read_kernel_stats() -> (u64, u64, u64, u64) {
 
 /// 生成 Prometheus 文本格式 (`text/plain; version=0.0.4`) 的全部指标。
 ///
-/// 包含 4 个内核态 + 10 个用户态 + 1 个 `uptime` gauge。
+/// 包含 4 个内核态 + 13 个用户态 + 4 个 netlink 健康 + 1 个 `uptime` gauge（共 22 个）。
 ///
 /// # Returns
 /// Prometheus exposition 格式字符串
@@ -53,6 +53,14 @@ pub(super) fn generate_metrics() -> String {
     let ddos_events_detected = DDOS_STATS.events_detected.load(Ordering::Relaxed);
     let ddos_auto_bans = DDOS_STATS.auto_bans_triggered.load(Ordering::Relaxed);
     let ddos_tracked_ips = DDOS_STATS.tracked_ips.load(Ordering::Relaxed);
+
+    // Netlink 健康指标
+    let netlink_sent = DAEMON_STATS.netlink_messages_sent.load(Ordering::Relaxed);
+    let netlink_recv = DAEMON_STATS
+        .netlink_messages_received
+        .load(Ordering::Relaxed);
+    let netlink_send_err = DAEMON_STATS.netlink_send_errors.load(Ordering::Relaxed);
+    let netlink_recv_err = DAEMON_STATS.netlink_recv_errors.load(Ordering::Relaxed);
 
     let start_time = DAEMON_STATS.start_time.load(Ordering::Relaxed);
     let uptime = if start_time > 0 {
@@ -125,6 +133,22 @@ pub(super) fn generate_metrics() -> String {
          # HELP firewall_ddos_tracked_ips_current Current number of IPs tracked for DDoS detection\n\
          # TYPE firewall_ddos_tracked_ips_current gauge\n\
          firewall_ddos_tracked_ips_current {ddos_tracked_ips}\n\
+         \n\
+         # HELP firewall_netlink_messages_sent_total Total netlink messages sent to kernel\n\
+         # TYPE firewall_netlink_messages_sent_total counter\n\
+         firewall_netlink_messages_sent_total {netlink_sent}\n\
+         \n\
+         # HELP firewall_netlink_messages_received_total Total netlink messages received from kernel\n\
+         # TYPE firewall_netlink_messages_received_total counter\n\
+         firewall_netlink_messages_received_total {netlink_recv}\n\
+         \n\
+         # HELP firewall_netlink_send_errors_total Total netlink send failures\n\
+         # TYPE firewall_netlink_send_errors_total counter\n\
+         firewall_netlink_send_errors_total {netlink_send_err}\n\
+         \n\
+         # HELP firewall_netlink_recv_errors_total Total netlink receive/parse failures\n\
+         # TYPE firewall_netlink_recv_errors_total counter\n\
+         firewall_netlink_recv_errors_total {netlink_recv_err}\n\
          \n\
          # HELP firewall_daemon_uptime_seconds Daemon uptime in seconds\n\
          # TYPE firewall_daemon_uptime_seconds gauge\n\

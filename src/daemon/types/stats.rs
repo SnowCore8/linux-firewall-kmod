@@ -51,6 +51,14 @@ pub struct DaemonStats {
     pub packets_dropped: AtomicU64,
     /// 接受数据包数 (近似值，无法准确统计)
     pub packets_accepted: AtomicU64,
+    /// netlink 消息发送总数
+    pub netlink_messages_sent: AtomicU64,
+    /// netlink 消息接收总数
+    pub netlink_messages_received: AtomicU64,
+    /// netlink 发送失败数
+    pub netlink_send_errors: AtomicU64,
+    /// netlink 接收/解析失败数
+    pub netlink_recv_errors: AtomicU64,
 }
 
 impl Default for DaemonStats {
@@ -79,6 +87,10 @@ impl DaemonStats {
             whitelist_count: AtomicU64::new(0),
             packets_dropped: AtomicU64::new(0),
             packets_accepted: AtomicU64::new(0),
+            netlink_messages_sent: AtomicU64::new(0),
+            netlink_messages_received: AtomicU64::new(0),
+            netlink_send_errors: AtomicU64::new(0),
+            netlink_recv_errors: AtomicU64::new(0),
         }
     }
 }

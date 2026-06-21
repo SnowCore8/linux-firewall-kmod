@@ -48,7 +48,7 @@ jails:
 | `regex` | Regex for matching failures | `Failed password for .* from <HOST>` |
 | `ban_time` | Ban duration (seconds) | `3600` |
 | `find_time` | Counting window (seconds) | `600` |
-| `max_retries` | Maximum retry count | `5` |
+| `max_retries` | Maximum retry count | `3` |
 | `port` | Monitored port | `22` |
 | `protocol` | Protocol type | `tcp` |
 

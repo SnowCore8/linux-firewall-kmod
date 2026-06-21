@@ -197,5 +197,9 @@ mod tests {
         assert!(metrics.contains("firewall_kernel_banned_ips_current"));
         assert!(metrics.contains("firewall_daemon_lines_parsed_total"));
         assert!(metrics.contains("firewall_daemon_uptime_seconds"));
+        assert!(metrics.contains("firewall_netlink_messages_sent_total"));
+        assert!(metrics.contains("firewall_netlink_messages_received_total"));
+        assert!(metrics.contains("firewall_netlink_send_errors_total"));
+        assert!(metrics.contains("firewall_netlink_recv_errors_total"));
     }
 }

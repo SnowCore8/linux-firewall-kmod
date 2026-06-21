@@ -12,7 +12,7 @@ graph TD
     FW["test_framework.sh assertion functions, color output, reports"]
     CFG["test_config.sh path/parameter variables (KERNEL_MODULE_PATH, ...)"]
 
-    subgraph SUITES["suites/ numbered suites (executed in 01-18 order, 05/06 skipped, 16 suites / 115 assertions)"]
+    subgraph SUITES["suites/ numbered suites (executed in 01-21 order, 05/06 skipped, 19 suites)"]
         S01["01_module_basic.sh"]
         S02["02_procfs_interface.sh"]
         S03["03_ban_unban.sh"]
@@ -29,6 +29,9 @@ graph TD
         S16["16_webui_api.sh"]
         S17["17_config_reload.sh"]
         S18["18_log_rotation.sh"]
+        S19["19_netlink_comm.sh"]
+        S20["20_daemon_lifecycle.sh"]
+        S21["21_multi_jail.sh"]
     end
 
     subgraph REPORTS["reports/ generated reports (after running)"]
@@ -100,7 +103,7 @@ make test
 ```
 
 The entry point is `tests/run_tests.sh`, which dispatches the numbered
-suites in `suites/`. Current count: 16 suites / **115** assertions.
+suites in `suites/`. Current count: 19 suites / **115** assertions.
 
 ### Running under sudo
 
@@ -177,7 +180,7 @@ and elapsed time) and uploaded as a CI artifact.
 | 18 | `18_log_rotation.sh` | Log rotation detection, inotify monitoring, copytruncate support |
 
 > Numbering skips 05/06: those slots were used by old suites that have
-> since been merged into the ones above. Current count: 16 suites
+> since been merged into the ones above. Current count: 19 suites
 > totaling **115** integration-test assertions.
 
 ## Framework Assertions

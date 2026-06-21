@@ -8,7 +8,7 @@ This document guides you through migrating existing fail2ban configurations to t
 |---------|----------|----------------|
 | Ban Method | iptables/nftables rules | Netfilter Hook kernel interception |
 | Performance | Slower with more rules | O(1) hash lookup, constant performance |
-| Regex Engine | Python re | PCRE2 |
+| Regex Engine | Python re | Rust regex (PCRE-equivalent syntax) |
 | Config Format | INI format | YAML format |
 | Persistence | None (in-memory only) | None (in-memory only) |
 | Monitoring | None built-in | Prometheus metrics |

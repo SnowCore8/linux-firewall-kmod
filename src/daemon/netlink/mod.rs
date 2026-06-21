@@ -169,8 +169,15 @@ impl NetlinkContext {
                                 n,
                                 buf.len()
                             );
+                            crate::types::DAEMON_STATS
+                                .netlink_recv_errors
+                                .fetch_add(1, Ordering::Relaxed);
                             continue;
                         }
+
+                        crate::types::DAEMON_STATS
+                            .netlink_messages_received
+                            .fetch_add(1, Ordering::Relaxed);
 
                         if let Err(e) = Self::handle_message(&buf[..n], &decision_engine) {
                             crate::logger::warn!(
@@ -178,6 +185,9 @@ impl NetlinkContext {
                                 "处理 netlink 消息失败";
                                 "error" => %e
                             );
+                            crate::types::DAEMON_STATS
+                                .netlink_recv_errors
+                                .fetch_add(1, Ordering::Relaxed);
                         }
                     } else if n < 0 {
                         let err = std::io::Error::last_os_error();
@@ -187,6 +197,9 @@ impl NetlinkContext {
                                 "接收 netlink 消息失败";
                                 "error" => %err
                             );
+                            crate::types::DAEMON_STATS
+                                .netlink_recv_errors
+                                .fetch_add(1, Ordering::Relaxed);
                         }
                     }
                 }
@@ -641,16 +654,26 @@ impl NetlinkContext {
 
         if n < 0 {
             let err = std::io::Error::last_os_error();
+            crate::types::DAEMON_STATS
+                .netlink_send_errors
+                .fetch_add(1, Ordering::Relaxed);
             return Err(anyhow::anyhow!("发送 netlink 消息失败: {}", err));
         }
 
         if n as usize != buf.len() {
+            crate::types::DAEMON_STATS
+                .netlink_send_errors
+                .fetch_add(1, Ordering::Relaxed);
             return Err(anyhow::anyhow!(
                 "发送 netlink 消息不完整: {} / {}",
                 n,
                 buf.len()
             ));
         }
+
+        crate::types::DAEMON_STATS
+            .netlink_messages_sent
+            .fetch_add(1, Ordering::Relaxed);
 
         Ok(())
     }
