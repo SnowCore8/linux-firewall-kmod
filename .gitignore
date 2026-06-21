@@ -9,6 +9,13 @@ site/
 docs/_book/
 docs/node_modules/
 
+# 前端构建产物（trunk 输出到 rust-embed 目录）
+frontend/target/
+src/daemon/web_ui/static/index.html
+src/daemon/web_ui/static/*.wasm
+src/daemon/web_ui/static/*.js
+src/daemon/web_ui/static/*.css
+
 # 内核模块编译产物（in-tree 构建时产生，Makefile 会在构建后清理但需防御性忽略）
 *.ko
 *.o

@@ -3,16 +3,30 @@
 
 fw_test_header "配置热重载（SIGHUP）集成测试"
 
+# 记录原始配置状态（用于 cleanup 恢复）
+_config_existed=false
+if [[ -f /etc/firewall/default.yaml ]]; then
+    _config_existed=true
+    cp /etc/firewall/default.yaml /etc/firewall/default.yaml.test17bak
+fi
+
 # 配置恢复 trap（确保测试中断时也能恢复配置）
 cleanup_config() {
-    if [[ -f /etc/firewall/default.yaml.bak ]]; then
-        mv /etc/firewall/default.yaml.bak /etc/firewall/default.yaml 2>/dev/null
-        # 重载配置
-        local pid=$(pgrep -f "firewall-daemon" | head -1)
-        if [[ -n "$pid" ]]; then
-            kill -HUP "$pid" 2>/dev/null
+    local pid=$(pgrep -f "firewall-daemon" | head -1)
+    if [[ "$_config_existed" == "true" ]]; then
+        # 原始配置存在：从备份恢复
+        if [[ -f /etc/firewall/default.yaml.test17bak ]]; then
+            mv /etc/firewall/default.yaml.test17bak /etc/firewall/default.yaml 2>/dev/null
+            if [[ -n "$pid" ]]; then
+                kill -HUP "$pid" 2>/dev/null
+            fi
         fi
+    else
+        # 原始配置不存在：删除测试创建的配置
+        rm -f /etc/firewall/default.yaml /etc/firewall/default.yaml.test17bak 2>/dev/null
     fi
+    # 清理任何残留的 .bak 文件
+    rm -f /etc/firewall/default.yaml.bak 2>/dev/null
 }
 trap cleanup_config EXIT ERR INT TERM
 
@@ -125,33 +139,33 @@ fi
 fw_subsection "修改配置文件并重新加载"
 
 # 备份原配置
-cp /etc/firewall/default.yaml /etc/firewall/default.yaml.bak 2>/dev/null
+cp /etc/firewall/default.yaml /etc/firewall/default.yaml.test17bak 2>/dev/null
 
 # 修改配置（改变 max_retries）
 if [[ -f /etc/firewall/default.yaml ]]; then
     # 使用 sed 修改 max_retries 值
     sed -i 's/max_retries: [0-9]\+/max_retries: 10/' /etc/firewall/default.yaml 2>/dev/null
-    
+
     # 验证修改成功
     if grep -q "max_retries: 10" /etc/firewall/default.yaml 2>/dev/null; then
         assert_true "[[ true ]]" "修改配置文件成功（max_retries: 10）"
     else
         fw_log_warn "修改配置文件失败"
     fi
-    
+
     # 再次发送 SIGHUP
     kill -HUP "$local_pid" 2>/dev/null
     sleep 2
-    
+
     # 验证守护进程仍在运行
     if pgrep -f "firewall-daemon" > /dev/null; then
         assert_true "[[ true ]]" "修改配置后 SIGHUP 守护进程仍在运行"
     else
         assert_true "[[ false ]]" "修改配置后 SIGHUP 守护进程仍在运行"
     fi
-    
+
     # 恢复原配置
-    mv /etc/firewall/default.yaml.bak /etc/firewall/default.yaml 2>/dev/null
+    mv /etc/firewall/default.yaml.test17bak /etc/firewall/default.yaml 2>/dev/null
     
     # 再次重载恢复的配置
     kill -HUP "$local_pid" 2>/dev/null
@@ -162,7 +176,7 @@ fi
 fw_subsection "无效配置测试"
 
 # 备份原配置
-cp /etc/firewall/default.yaml /etc/firewall/default.yaml.bak 2>/dev/null
+cp /etc/firewall/default.yaml /etc/firewall/default.yaml.test17bak 2>/dev/null
 
 # 写入无效配置
 echo "invalid_yaml: [" > /etc/firewall/default.yaml 2>/dev/null
@@ -179,7 +193,7 @@ else
 fi
 
 # 恢复原配置
-mv /etc/firewall/default.yaml.bak /etc/firewall/default.yaml 2>/dev/null
+mv /etc/firewall/default.yaml.test17bak /etc/firewall/default.yaml 2>/dev/null
 kill -HUP "$local_pid" 2>/dev/null
 sleep 1
 

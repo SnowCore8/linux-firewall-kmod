@@ -1,0 +1,13 @@
+[build]
+target = "index.html"
+dist = "../src/daemon/web_ui/static"
+public_url = "/static/"
+
+[serve]
+# 开发服务器端口（trunk serve 用，代理 API 到守护进程）
+port = 8080
+
+[[hooks]]
+stage = "pre_build"
+command = "sh"
+command_arguments = ["-c", "echo 'Building firewall frontend...'"]

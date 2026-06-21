@@ -1,0 +1,137 @@
+//! 格式化工具函数
+
+/// 数字格式化（支持 K/M/G 单位转换）
+pub fn format_number(num: u64, convert_units: bool) -> String {
+    if !convert_units {
+        return format_with_separator(num);
+    }
+    if num >= 1_000_000_000 {
+        format!("{:.1}G", num as f64 / 1_000_000_000.0)
+    } else if num >= 1_000_000 {
+        format!("{:.1}M", num as f64 / 1_000_000.0)
+    } else if num >= 1_000 {
+        format!("{:.1}K", num as f64 / 1_000.0)
+    } else {
+        num.to_string()
+    }
+}
+
+fn format_with_separator(num: u64) -> String {
+    let s = num.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.insert(0, ',');
+        }
+        result.insert(0, c);
+    }
+    result
+}
+
+/// 运行时间格式化
+pub fn format_uptime(seconds: u64) -> String {
+    let days = seconds / 86400;
+    let hours = (seconds % 86400) / 3600;
+    let mins = (seconds % 3600) / 60;
+    if days > 0 {
+        format!("{days}d {hours}h")
+    } else if hours > 0 {
+        format!("{hours}h {mins}m")
+    } else {
+        format!("{mins}m")
+    }
+}
+
+/// 日期时间格式化
+pub fn format_datetime(timestamp: i64) -> String {
+    if timestamp <= 0 {
+        return "N/A".to_string();
+    }
+    // WASM 环境无 localtime，用 UTC 显示
+    let secs = timestamp as u64;
+    let days_since_epoch = secs / 86400;
+    let time_of_day = secs % 86400;
+    let hours = time_of_day / 3600;
+    let minutes = (time_of_day % 3600) / 60;
+    let seconds = time_of_day % 60;
+
+    // 简单日期计算（从 epoch）
+    let (year, month, day) = days_to_date(days_since_epoch);
+    format!("{year:04}-{month:02}-{day:02} {hours:02}:{minutes:02}:{seconds:02}")
+}
+
+fn days_to_date(days: u64) -> (u64, u64, u64) {
+    // 从 1970-01-01 开始计算
+    let mut y = 1970;
+    let mut remaining = days as i64;
+    loop {
+        let days_in_year = if is_leap_year(y) { 366 } else { 365 };
+        if remaining < days_in_year {
+            break;
+        }
+        remaining -= days_in_year;
+        y += 1;
+    }
+    let days_in_months: [i64; 12] = if is_leap_year(y) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+    let mut m = 0;
+    for (i, &dim) in days_in_months.iter().enumerate() {
+        if remaining < dim {
+            m = i;
+            break;
+        }
+        remaining -= dim;
+    }
+    (y, (m + 1) as u64, (remaining + 1) as u64)
+}
+
+fn is_leap_year(y: u64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+/// 剩余时间格式化
+pub fn format_duration(seconds: i64) -> String {
+    if seconds < 0 {
+        return "永久".to_string();
+    }
+    let secs = seconds as u64;
+    let hours = secs / 3600;
+    let mins = (secs % 3600) / 60;
+    let s = secs % 60;
+    if hours > 0 {
+        format!("{hours}h {mins}m")
+    } else if mins > 0 {
+        format!("{mins}m {s}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
+/// 速率格式化
+pub fn format_rate(value: u64, kind: &str) -> String {
+    match kind {
+        "bps" => {
+            if value >= 1_000_000_000 {
+                format!("{:.2} Gbps", value as f64 / 1_000_000_000.0)
+            } else if value >= 1_000_000 {
+                format!("{:.1} Mbps", value as f64 / 1_000_000.0)
+            } else if value >= 1_000 {
+                format!("{:.1} Kbps", value as f64 / 1_000.0)
+            } else {
+                format!("{value} bps")
+            }
+        }
+        _ => {
+            if value >= 1_000_000 {
+                format!("{:.1} Mpps", value as f64 / 1_000_000.0)
+            } else if value >= 1_000 {
+                format!("{:.1} Kpps", value as f64 / 1_000.0)
+            } else {
+                format!("{value} pps")
+            }
+        }
+    }
+}

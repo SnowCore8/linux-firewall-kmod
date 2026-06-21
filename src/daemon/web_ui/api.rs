@@ -449,7 +449,7 @@ pub fn create_ban(req: CreateBanRequest) -> Result<BanOperationResponse, String>
             duration,
         )
     } else {
-        crate::ban::ban_ip(ip)
+        crate::ban::ban_ip(ip, 600)
     };
 
     match result {

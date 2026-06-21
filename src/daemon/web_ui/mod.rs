@@ -9,6 +9,7 @@
 use rust_embed::RustEmbed;
 
 pub mod api;
+pub mod log_viewer;
 pub mod sse;
 
 /// 嵌入的静态资源
@@ -25,6 +26,7 @@ pub fn get_static_asset(path: &str) -> Option<(Vec<u8>, &'static str)> {
             p if p.ends_with(".html") => "text/html; charset=utf-8",
             p if p.ends_with(".css") => "text/css; charset=utf-8",
             p if p.ends_with(".js") => "application/javascript; charset=utf-8",
+            p if p.ends_with(".wasm") => "application/wasm",
             p if p.ends_with(".json") => "application/json; charset=utf-8",
             p if p.ends_with(".png") => "image/png",
             p if p.ends_with(".jpg") || p.ends_with(".jpeg") => "image/jpeg",

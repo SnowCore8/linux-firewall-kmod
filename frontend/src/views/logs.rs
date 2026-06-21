@@ -1,0 +1,216 @@
+//! 系统日志 — SSE 实时流 + 级别过滤 + 关键词搜索
+
+use leptos::*;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+
+use crate::api;
+
+#[derive(Clone)]
+struct LogEntry {
+    line_number: u64,
+    time: String,
+    level: String,
+    message: String,
+}
+
+#[component]
+pub fn Logs() -> impl IntoView {
+    let logs = create_rw_signal(Vec::<LogEntry>::new());
+    let loading = create_rw_signal(true);
+    let error = create_rw_signal(String::new());
+    let streaming = create_rw_signal(true);
+    let keyword = create_rw_signal(String::new());
+    let active_levels = create_rw_signal(vec![
+        "ERROR".to_string(),
+        "WARN".to_string(),
+        "INFO".to_string(),
+    ]);
+    const MAX_LOGS: usize = 1000;
+
+    // 加载历史日志
+    let logs_resource = create_resource(|| (), |_| async move { api::get_logs(1, 100).await.ok() });
+
+    create_effect(move |_| {
+        if let Some(Some(page)) = logs_resource.get() {
+            let entries = page
+                .items
+                .into_iter()
+                .map(|item| parse_log_line(item.line_number, &item.content))
+                .collect::<Vec<_>>();
+            logs.set(entries);
+            loading.set(false);
+        }
+    });
+
+    // SSE 日志流
+    create_effect(move |_| {
+        let source = web_sys::EventSource::new("/api/v1/logs/stream").ok();
+        if let Some(source) = source {
+            let logs_sig = logs;
+            let streaming_sig = streaming;
+
+            let on_log =
+                Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
+                    if !streaming_sig.get() {
+                        return;
+                    }
+                    if let Ok(data) = e.data().dyn_into::<js_sys::JsString>() {
+                        let line: String = data.into();
+                        logs_sig.update(|v| {
+                            let entry = parse_log_line(v.len() as u64 + 1, &line);
+                            v.push(entry);
+                            if v.len() > MAX_LOGS {
+                                v.remove(0);
+                            }
+                        });
+                    }
+                });
+            source
+                .add_event_listener_with_callback_and_add_event_listener_options(
+                    "log",
+                    &on_log.as_ref().unchecked_ref(),
+                    &{
+                        let opts = web_sys::AddEventListenerOptions::new();
+                        opts.set_once(false);
+                        opts
+                    },
+                )
+                .unwrap();
+            on_log.forget();
+        }
+    });
+
+    // 过滤后的日志
+    let filtered = move || {
+        let kw = keyword.get().to_lowercase();
+        let levels = active_levels.get();
+        logs.get()
+            .into_iter()
+            .filter(|l| levels.contains(&l.level))
+            .filter(|l| kw.is_empty() || l.message.to_lowercase().contains(&kw))
+            .collect::<Vec<_>>()
+    };
+
+    let toggle_level = move |level: &str| {
+        active_levels.update(|v| {
+            if let Some(pos) = v.iter().position(|l| l == level) {
+                v.remove(pos);
+            } else {
+                v.push(level.to_string());
+            }
+        });
+    };
+
+    let levels = ["ERROR", "WARN", "INFO", "DEBUG"];
+
+    view! {
+        <div class="logs-page">
+            <div class="page-toolbar">
+                <div class="toolbar-left">
+                    <h2 class="section-title">"系统日志"</h2>
+                </div>
+                <div class="toolbar-right">
+                    <div class="level-filters">
+                        {levels.iter().map(|level| {
+                            let level_str = level.to_string();
+                            let lvl_for_class = level_str.clone();
+                            let lvl_for_click = level_str.clone();
+                            let lvl_for_text = level_str.clone();
+                            view! {
+                                <button class=move || {
+                                    if active_levels.get().contains(&lvl_for_class) {
+                                        "btn btn-sm btn-active"
+                                    } else {
+                                        "btn btn-sm"
+                                    }
+                                } on:click=move |_| toggle_level(&lvl_for_click)>
+                                    {lvl_for_text}
+                                </button>
+                            }
+                        }).collect_view()}
+                    </div>
+                    <input class="input" placeholder="搜索关键词..."
+                        style="width:200px"
+                        prop:value=move || keyword.get()
+                        on:input=move |e| keyword.set(event_target_value(&e))/>
+                    <button class="btn btn-sm" on:click=move |_| streaming.update(|v| *v = !*v)>
+                        {move || if streaming.get() { "暂停" } else { "继续" }}
+                    </button>
+                    <button class="btn btn-sm" on:click=move |_| logs.set(Vec::new())>
+                        "清空"
+                    </button>
+                </div>
+            </div>
+
+            <div class="card log-container">
+                {move || {
+                    if loading.get() {
+                        return view! { <div class="empty-state"><span>"加载日志中..."</span></div> }.into_view();
+                    }
+                    let entries = filtered();
+                    if entries.is_empty() {
+                        return view! {
+                            <div class="empty-state">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                                    <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/>
+                                </svg>
+                                <span>{move || {
+                                    let err = error.get();
+                                    if err.is_empty() { "暂无日志".to_string() } else { err }
+                                }}</span>
+                            </div>
+                        }.into_view();
+                    }
+                    view! {
+                        <div class="log-lines">
+                            <For
+                                each=move || entries.clone().into_iter().enumerate()
+                                key=|(i, e)| format!("{i}-{}", e.line_number)
+                                children=move |(_, log)| {
+                                    let log_level = log.level.clone();
+                                    let log_level_badge = log.level.clone();
+                                    let log_level_text = log.level.clone();
+                                    let log_time = log.time.clone();
+                                    let log_msg = log.message.clone();
+                                    let log_num = log.line_number;
+                                    view! {
+                                        <div class=move || format!("log-line {}", log_level)>
+                                            <span class="log-line-num mono">{log_num}</span>
+                                            <span class="log-time mono">{log_time}</span>
+                                            <span class=move || format!("log-level-badge {}", log_level_badge)>{log_level_text}</span>
+                                            <span class="log-message mono">{log_msg}</span>
+                                        </div>
+                                    }
+                                }
+                            />
+                        </div>
+                    }.into_view()
+                }}
+            </div>
+        </div>
+    }
+}
+
+fn parse_log_line(line_number: u64, content: &str) -> LogEntry {
+    // 解析格式：2026-06-21 10:30:45 [INFO] message...
+    if let Some((rest, message)) = content.split_once("] ") {
+        if let Some(bracket_pos) = rest.rfind('[') {
+            let level = &rest[bracket_pos + 1..];
+            let time = rest[..bracket_pos].trim();
+            return LogEntry {
+                line_number,
+                time: time.to_string(),
+                level: level.to_string(),
+                message: message.to_string(),
+            };
+        }
+    }
+    LogEntry {
+        line_number,
+        time: String::new(),
+        level: "INFO".to_string(),
+        message: content.to_string(),
+    }
+}

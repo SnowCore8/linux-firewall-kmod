@@ -27,7 +27,14 @@ pub fn build_router(metrics_user: String, metrics_pass: String) -> Router {
     // 无认证路由组
     let public_routes = Router::new()
         .route("/health", get(handle_health))
-        .route("/healthz", get(handle_health));
+        .route("/healthz", get(handle_health))
+        // SPA 路由（无认证）- 每个路由使用独立的处理函数
+        .route("/bans", get(handle_spa_bans))
+        .route("/whitelist", get(handle_spa_whitelist))
+        .route("/jails", get(handle_spa_jails))
+        .route("/ddos", get(handle_spa_ddos))
+        .route("/logs", get(handle_spa_logs))
+        .route("/settings", get(handle_spa_settings));
 
     // 需认证路由组（RESTful v1 API）
     let protected_routes = Router::new()
@@ -48,6 +55,8 @@ pub fn build_router(metrics_user: String, metrics_pass: String) -> Router {
         .route("/api/v1/rates/current", get(handle_api_rates_current))
         .route("/api/v1/rates/history", get(handle_api_rates_history))
         .route("/api/v1/events", get(handle_sse))
+        .route("/api/v1/logs/stream", get(handle_log_stream))
+        .route("/api/v1/logs", get(handle_api_logs))
         .layer(middleware::from_fn(auth_middleware))
         .layer(axum::Extension(AuthCredentials {
             username: metrics_user,
@@ -73,12 +82,19 @@ async fn security_headers_middleware(
     next: middleware::Next,
 ) -> Response {
     let path = request.uri().path().to_string();
-    let is_webui = path == "/dashboard" || path.starts_with("/static/");
+    let is_webui = path == "/dashboard"
+        || path.starts_with("/static/")
+        || path == "/bans"
+        || path == "/whitelist"
+        || path == "/jails"
+        || path == "/ddos"
+        || path == "/logs"
+        || path == "/settings";
 
     let mut response = next.run(request).await;
 
     let csp_value = if is_webui {
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+        "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:"
     } else {
         "default-src 'none'"
     };
@@ -130,6 +146,31 @@ async fn handle_redirect() -> Redirect {
 
 /// `GET /dashboard` — Web UI 主页
 async fn handle_dashboard() -> Html<String> {
+    Html(web_ui::render_dashboard())
+}
+
+/// SPA 路由处理函数 — 所有前端路由返回 index.html
+async fn handle_spa_bans() -> Html<String> {
+    Html(web_ui::render_dashboard())
+}
+
+async fn handle_spa_whitelist() -> Html<String> {
+    Html(web_ui::render_dashboard())
+}
+
+async fn handle_spa_jails() -> Html<String> {
+    Html(web_ui::render_dashboard())
+}
+
+async fn handle_spa_ddos() -> Html<String> {
+    Html(web_ui::render_dashboard())
+}
+
+async fn handle_spa_logs() -> Html<String> {
+    Html(web_ui::render_dashboard())
+}
+
+async fn handle_spa_settings() -> Html<String> {
     Html(web_ui::render_dashboard())
 }
 
@@ -265,4 +306,23 @@ async fn handle_api_rates_history(
 /// `GET /api/v1/events` — SSE 实时事件推送（长连接）
 async fn handle_sse() -> impl IntoResponse {
     web_ui::sse::handle_sse().await
+}
+
+/// `GET /api/v1/logs/stream` — SSE 实时日志流（tail -f 语义）
+async fn handle_log_stream() -> impl IntoResponse {
+    web_ui::log_viewer::handle_log_stream().await
+}
+
+/// `GET /api/v1/logs` — 历史日志分页查询
+async fn handle_api_logs(
+    Query(params): Query<web_ui::log_viewer::LogQueryParams>,
+) -> impl IntoResponse {
+    match web_ui::log_viewer::get_log_page(&params) {
+        Ok(page) => (StatusCode::OK, Json(web_ui::api::ApiResponse::ok(page))).into_response(),
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(web_ui::api::ApiResponse::<()>::error(40005, msg)),
+        )
+            .into_response(),
+    }
 }

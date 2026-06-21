@@ -208,8 +208,8 @@ fn parse_cidr(ip: &str) -> (String, u8) {
 /// 封禁/解封操作枚举。所有动作经 [`execute_ban_action`] 统一分发。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BanAction {
-    /// 临时封禁（写 `<ip>\n`，内核按 `ban_time` 自动解封）
-    Temp,
+    /// 临时封禁（写 `<ip> <duration>\n`，duration 为秒数）
+    Temp(u64),
     /// 永久封禁（写 `<ip> 0\n`）
     Permanent,
     /// 解封临时封禁（写 `unban <ip>\n`）

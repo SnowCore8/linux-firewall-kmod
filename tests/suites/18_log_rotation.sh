@@ -3,16 +3,28 @@
 
 fw_test_header "日志轮转检测集成测试"
 
+# 记录原始配置状态（用于 cleanup 恢复）
+_config_existed=false
+if [[ -f /etc/firewall/default.yaml ]]; then
+    _config_existed=true
+    cp /etc/firewall/default.yaml /etc/firewall/default.yaml.test18bak
+fi
+
 # 配置恢复 trap（确保测试中断时也能恢复配置）
 cleanup_config() {
-    if [[ -f /etc/firewall/default.yaml.bak ]]; then
-        mv /etc/firewall/default.yaml.bak /etc/firewall/default.yaml 2>/dev/null
-        # 重载配置
-        local pid=$(pgrep -f "firewall-daemon" | head -1)
-        if [[ -n "$pid" ]]; then
-            kill -HUP "$pid" 2>/dev/null
+    local pid=$(pgrep -f "firewall-daemon" | head -1)
+    if [[ "$_config_existed" == "true" ]]; then
+        if [[ -f /etc/firewall/default.yaml.test18bak ]]; then
+            mv /etc/firewall/default.yaml.test18bak /etc/firewall/default.yaml 2>/dev/null
+            if [[ -n "$pid" ]]; then
+                kill -HUP "$pid" 2>/dev/null
+            fi
         fi
+    else
+        rm -f /etc/firewall/default.yaml /etc/firewall/default.yaml.test18bak 2>/dev/null
     fi
+    # 清理任何残留的 .bak 文件
+    rm -f /etc/firewall/default.yaml.bak 2>/dev/null
     # 清理测试日志目录
     rm -rf /var/log/firewall-test 2>/dev/null
 }
@@ -46,7 +58,7 @@ fw_subsection "创建测试 Jail 配置"
 
 # 备份原配置
 if [[ -f /etc/firewall/default.yaml ]]; then
-    cp /etc/firewall/default.yaml /etc/firewall/default.yaml.bak
+    cp /etc/firewall/default.yaml /etc/firewall/default.yaml.test18bak
 fi
 
 # 添加测试 jail 到配置
@@ -184,8 +196,8 @@ assert_true "[[ $local_final_size -gt 0 ]]" "copytruncate 后新内容被写入:
 fw_subsection "清理测试环境"
 
 # 恢复原配置
-if [[ -f /etc/firewall/default.yaml.bak ]]; then
-    mv /etc/firewall/default.yaml.bak /etc/firewall/default.yaml
+if [[ -f /etc/firewall/default.yaml.test18bak ]]; then
+    mv /etc/firewall/default.yaml.test18bak /etc/firewall/default.yaml
     # 重载配置
     if [[ -n "$local_pid" ]]; then
         kill -HUP "$local_pid" 2>/dev/null

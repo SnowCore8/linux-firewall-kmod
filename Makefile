@@ -97,12 +97,19 @@ $(KERNEL_MODULE): $(wildcard $(KERNEL_SRC_DIR)/*.c) $(KERNEL_SRC_DIR)/firewall.h
 
 # 守护进程 (Rust)
 .PHONY: daemon
-daemon:
+daemon: frontend
 	@echo "  CARGO   building Rust daemon"
 	@cargo build --release --quiet
 	@mkdir -p $(DAEMON_BUILD_DIR)
 	@cp target/release/firewall-daemon $(DAEMON_BIN)
 	@echo "  ✓ Rust daemon built: $(DAEMON_BIN)"
+
+# 前端 (Leptos WASM + trunk)
+.PHONY: frontend
+frontend:
+	@echo "  TRUNK   building Leptos WASM frontend"
+	@cd frontend && trunk build --release
+	@echo "  ✓ Frontend built to src/daemon/web_ui/static/"
 
 # ============================================================================
 # 4. 代码质量目标 (format-check, format, ci)

@@ -30,7 +30,7 @@ use std::sync::atomic::Ordering;
 /// - 格式化后命令 > 80 字节 (实际不可能,IP 长度上限 46 + 前缀 7 = 53)
 fn format_ban_command(action: BanAction, ip: &str) -> Result<String> {
     let cmd = match action {
-        BanAction::Temp => format!("{ip}\n"),
+        BanAction::Temp(duration) => format!("{ip} {duration}\n"),
         BanAction::Permanent => format!("{ip} 0\n"),
         BanAction::Unban | BanAction::UnbanPerm => format!("unban {ip}\n"),
     };
@@ -69,9 +69,10 @@ pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
     if let Some(netlink_ctx) = crate::netlink::get_global_netlink_ctx() {
         let ip_addr: IpAddr = ip.parse().context("Invalid IP address")?;
         match action {
-            BanAction::Temp => {
-                // 默认 600 秒封禁时长（TODO: 从配置获取）
-                netlink_ctx.send_ban(ip_addr, 600)?;
+            BanAction::Temp(duration) => {
+                let dur = u32::try_from(duration)
+                    .with_context(|| format!("ban duration {duration} exceeds u32 max"))?;
+                netlink_ctx.send_ban(ip_addr, dur)?;
             }
             BanAction::Permanent => {
                 netlink_ctx.send_ban(ip_addr, 0)?; // 0 = 永久
@@ -89,13 +90,13 @@ pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
 
     // 更新内存缓存
     match action {
-        BanAction::Permanent | BanAction::Temp => {
+        BanAction::Permanent | BanAction::Temp(_) => {
             if let Some(cache) = crate::types::ACTIVE_BAN_CACHE.get() {
                 let now = crate::types::now_secs();
-                let duration = if matches!(action, BanAction::Permanent) {
-                    0 // 永久
-                } else {
-                    600 // 默认 600 秒（TODO: 从配置获取）
+                let duration = match action {
+                    BanAction::Permanent => 0,
+                    BanAction::Temp(d) => d,
+                    _ => unreachable!(),
                 };
                 let ban_info = BanInfo {
                     ip: ip.to_string(),
@@ -131,7 +132,7 @@ pub fn execute_ban_action(action: BanAction, ip: &str) -> Result<()> {
 /// Temp / Permanent 都累加,Prometheus `ips_banned_total` 来源。
 fn log_ban_action(action: BanAction, _ip: &str) {
     match action {
-        BanAction::Temp | BanAction::Permanent => {
+        BanAction::Temp(_) | BanAction::Permanent => {
             DAEMON_STATS.ips_banned.fetch_add(1, Ordering::Relaxed);
             // 近似：每次封禁假设丢弃 1 个数据包（实际由内核 netfilter 统计）
             DAEMON_STATS.packets_dropped.fetch_add(1, Ordering::Relaxed);
@@ -148,10 +149,14 @@ fn log_ban_action(action: BanAction, _ip: &str) {
 
 /// 临时封禁。`failed_tracker` 触发阈值时调此函数。
 ///
+/// # Arguments
+/// - `ip`: 待封禁的 IP
+/// - `duration_secs`: 封禁时长（秒）
+///
 /// # Errors
 /// 同 [`execute_ban_action`]
-pub fn ban_ip(ip: &str) -> Result<()> {
-    execute_ban_action(BanAction::Temp, ip)
+pub fn ban_ip(ip: &str, duration_secs: u64) -> Result<()> {
+    execute_ban_action(BanAction::Temp(duration_secs), ip)
 }
 
 /// 永久封禁。永久封禁。
@@ -233,7 +238,7 @@ pub fn ban_ip_with_history(
             return Ok(());
         }
 
-        if let Err(e) = ban_ip(ip) {
+        if let Err(e) = ban_ip(ip, ban_duration) {
             // 内核封禁失败，回滚缓存标记（允许下次重试）
             cache.remove(ip);
             return Err(e).context("Failed to ban IP in kernel");
@@ -257,8 +262,8 @@ mod tests {
 
     #[test]
     fn format_ban_command_temp() {
-        let cmd = format_ban_command(BanAction::Temp, "1.2.3.4").unwrap();
-        assert_eq!(cmd, "1.2.3.4\n");
+        let cmd = format_ban_command(BanAction::Temp(600), "1.2.3.4").unwrap();
+        assert_eq!(cmd, "1.2.3.4 600\n");
     }
 
     #[test]
@@ -285,7 +290,7 @@ mod tests {
     fn log_ban_action_increments_ips_banned_for_ban_types() {
         let before = DAEMON_STATS.ips_banned.load(Ordering::Relaxed);
 
-        log_ban_action(BanAction::Temp, "10.0.0.1");
+        log_ban_action(BanAction::Temp(600), "10.0.0.1");
         let after_temp = DAEMON_STATS.ips_banned.load(Ordering::Relaxed);
         assert_eq!(after_temp, before + 1, "Temp ban must increment ips_banned");
 

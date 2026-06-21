@@ -42,6 +42,7 @@ use firewall_daemon::logger;
 use firewall_daemon::netlink::{self, DdosDecisionEngine, NetlinkContext};
 use firewall_daemon::signals::{setup_signals, GLOBAL_RELOAD, GLOBAL_RUNNING};
 use firewall_daemon::types::{Config, DAEMON_STATS};
+use firewall_daemon::web_ui;
 
 /// 内核模块 procfs 根目录。启动期存在性检查
 const PROCFS_DIR: &str = "/proc/firewall";
@@ -152,6 +153,10 @@ fn main() -> Result<()> {
 
     // 在守护进程化之后初始化日志系统，确保异步日志线程正确运行
     let _log = logger::init_logger(cfg.log_file.as_deref());
+    // 设置日志文件路径（供 Web UI 日志查看器使用）
+    if let Some(ref log_path) = cfg.log_file {
+        web_ui::log_viewer::set_log_file(log_path.clone());
+    }
     info!(logger::get(), "firewall-daemon 启动"; "mode" => if cfg.daemon { "daemon" } else { "foreground" });
 
     // 在守护进程化之后设置信号处理器，确保 fork 后信号处理正常工作

@@ -215,7 +215,7 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
             return;
         }
 
-        if let Err(e) = ban::ban_ip(ip) {
+        if let Err(e) = ban::ban_ip(ip, u64::from(jail.ban_time)) {
             // 封禁失败，回滚缓存标记（允许下次重试）
             cache.remove(ip);
             crate::logger::warn!(
