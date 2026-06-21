@@ -23,11 +23,11 @@ pub fn Settings() -> impl IntoView {
     // 初始化编辑值
     create_effect(move |_| {
         if let Some(Some(cfg)) = config.get() {
-            edit_sse.set(cfg.sse_push_interval.to_string());
-            edit_warning_pps.set(cfg.rate_warning_pps.to_string());
-            edit_critical_pps.set(cfg.rate_critical_pps.to_string());
-            edit_warning_syn.set(cfg.rate_warning_syn.to_string());
-            edit_critical_syn.set(cfg.rate_critical_syn.to_string());
+            let _ = edit_sse.try_set(cfg.sse_push_interval.to_string());
+            let _ = edit_warning_pps.try_set(cfg.rate_warning_pps.to_string());
+            let _ = edit_critical_pps.try_set(cfg.rate_critical_pps.to_string());
+            let _ = edit_warning_syn.try_set(cfg.rate_warning_syn.to_string());
+            let _ = edit_critical_syn.try_set(cfg.rate_critical_syn.to_string());
         }
     });
 
@@ -51,12 +51,17 @@ pub fn Settings() -> impl IntoView {
             };
             match api::update_config(req).await {
                 Ok(_) => {
-                    save_msg.set("保存成功".to_string());
-                    saving.set(false);
+                    // 检查 signal 是否仍有效
+                    if saving.try_update(|v| *v = false).is_none() {
+                        return; // 组件已卸载
+                    }
+                    let _ = save_msg.try_set("保存成功".to_string());
                 }
                 Err(msg) => {
-                    save_msg.set(format!("保存失败：{}", msg));
-                    saving.set(false);
+                    if saving.try_update(|v| *v = false).is_none() {
+                        return;
+                    }
+                    let _ = save_msg.try_set(format!("保存失败：{}", msg));
                 }
             }
         });
@@ -80,23 +85,22 @@ pub fn Settings() -> impl IntoView {
                     <h3>"守护进程"</h3>
                     <div class="settings-list">
                         <SettingItem label="守护进程版本" value=move || {
-                            stats_signal.get().map(|s| format!("v{}", s.daemon_version)).unwrap_or_else(|| "N/A".to_string())
+                            stats_signal.try_get().flatten().map(|s| format!("v{}", s.daemon_version)).unwrap_or_else(|| "N/A".to_string())
                         }/>
                         <SettingItem label="内核模块版本" value=move || {
-                            stats_signal.get().map(|s| format!("v{}", s.kernel_version)).unwrap_or_else(|| "N/A".to_string())
+                            stats_signal.try_get().flatten().map(|s| format!("v{}", s.kernel_version)).unwrap_or_else(|| "N/A".to_string())
                         }/>
                         <SettingItem label="运行时间" value=move || {
-                            let s = stats_signal.get();
-                            s.map(|s| format_uptime(s.uptime_seconds)).unwrap_or_else(|| "N/A".to_string())
+                            stats_signal.try_get().flatten().map(|s| format_uptime(s.uptime_seconds)).unwrap_or_else(|| "N/A".to_string())
                         }/>
                         <SettingItem label="今日封禁" value=move || {
-                            stats_signal.get().map(|s| format_number(s.today_bans, false)).unwrap_or_else(|| "0".to_string())
+                            stats_signal.try_get().flatten().map(|s| format_number(s.today_bans, false)).unwrap_or_else(|| "0".to_string())
                         }/>
                         <SettingItem label="失败尝试" value=move || {
-                            stats_signal.get().map(|s| format_number(s.failed_attempts, false)).unwrap_or_else(|| "0".to_string())
+                            stats_signal.try_get().flatten().map(|s| format_number(s.failed_attempts, false)).unwrap_or_else(|| "0".to_string())
                         }/>
                         <SettingItem label="DDoS 事件" value=move || {
-                            stats_signal.get().map(|s| format_number(s.ddos_events, false)).unwrap_or_else(|| "0".to_string())
+                            stats_signal.try_get().flatten().map(|s| format_number(s.ddos_events, false)).unwrap_or_else(|| "0".to_string())
                         }/>
                     </div>
                 </div>
@@ -108,13 +112,13 @@ pub fn Settings() -> impl IntoView {
                         <SettingItem label="封禁表容量" value=|| "4096".to_string()/>
                         <SettingItem label="白名单容量" value=|| "64".to_string()/>
                         <SettingItem label="当前封禁" value=move || {
-                            stats_signal.get().map(|s| format_number(s.current_bans, false)).unwrap_or_else(|| "0".to_string())
+                            stats_signal.try_get().flatten().map(|s| format_number(s.current_bans, false)).unwrap_or_else(|| "0".to_string())
                         }/>
                         <SettingItem label="白名单条目" value=move || {
-                            stats_signal.get().map(|s| format_number(s.whitelist_count, false)).unwrap_or_else(|| "0".to_string())
+                            stats_signal.try_get().flatten().map(|s| format_number(s.whitelist_count, false)).unwrap_or_else(|| "0".to_string())
                         }/>
                         <SettingItem label="丢弃数据包" value=move || {
-                            stats_signal.get().map(|s| format_number(s.packets_dropped, true)).unwrap_or_else(|| "0".to_string())
+                            stats_signal.try_get().flatten().map(|s| format_number(s.packets_dropped, true)).unwrap_or_else(|| "0".to_string())
                         }/>
                     </div>
                 </div>

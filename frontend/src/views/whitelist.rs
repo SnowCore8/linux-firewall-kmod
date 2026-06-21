@@ -65,7 +65,7 @@ pub fn Whitelist() -> impl IntoView {
             // 白名单列表
             <div class="card">
                 {move || {
-                    let list = whitelist_signal.get().unwrap_or_default();
+                    let list = whitelist_signal.try_get().flatten().unwrap_or_default();
                     if list.is_empty() {
                         return view! {
                             <div class="empty-state">

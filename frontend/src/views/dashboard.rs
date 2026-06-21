@@ -20,7 +20,7 @@ pub fn Dashboard() -> impl IntoView {
 
     // 监听 stats 变化，更新迷你图
     create_effect(move |_| {
-        if let Some(s) = stats_signal.get() {
+        if let Some(s) = stats_signal.try_get().flatten() {
             push_spark(spark_active, s.current_bans as f64);
             push_spark(spark_today, s.today_bans as f64);
             push_spark(spark_failed, s.failed_attempts as f64);
@@ -37,7 +37,7 @@ pub fn Dashboard() -> impl IntoView {
                 <StatCard
                     label="活跃封禁"
                     value=Signal::derive(move || {
-                        let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                        let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
                         format_number(s.current_bans, false)
                     })
                     accent="danger"
@@ -46,7 +46,7 @@ pub fn Dashboard() -> impl IntoView {
                 <StatCard
                     label="今日封禁"
                     value=Signal::derive(move || {
-                        let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                        let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
                         format_number(s.today_bans, false)
                     })
                     accent="primary"
@@ -55,7 +55,7 @@ pub fn Dashboard() -> impl IntoView {
                 <StatCard
                     label="失败尝试"
                     value=Signal::derive(move || {
-                        let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                        let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
                         format_number(s.failed_attempts, false)
                     })
                     accent="warning"
@@ -64,7 +64,7 @@ pub fn Dashboard() -> impl IntoView {
                 <StatCard
                     label="DDoS 事件"
                     value=Signal::derive(move || {
-                        let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                        let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
                         format_number(s.ddos_events, false)
                     })
                     accent="purple"
@@ -73,7 +73,7 @@ pub fn Dashboard() -> impl IntoView {
                 <StatCard
                     label="运行时间"
                     value=Signal::derive(move || {
-                        let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                        let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
                         format_uptime(s.uptime_seconds)
                     })
                     accent="success"
@@ -81,7 +81,7 @@ pub fn Dashboard() -> impl IntoView {
                 <StatCard
                     label="白名单数"
                     value=Signal::derive(move || {
-                        let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                        let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
                         format_number(s.whitelist_count, false)
                     })
                     accent="info"
@@ -97,10 +97,10 @@ pub fn Dashboard() -> impl IntoView {
                     <div class="chart-body">
                         <LineChart
                             labels=Signal::derive(move || {
-                                stats_signal.get().unwrap_or_else(|| stats_default()).ban_trend.labels
+                                stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).ban_trend.labels
                             })
                             data=Signal::derive(move || {
-                                stats_signal.get().unwrap_or_else(|| stats_default()).ban_trend.values
+                                stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).ban_trend.values
                             })
                         />
                     </div>
@@ -112,10 +112,10 @@ pub fn Dashboard() -> impl IntoView {
                     <div class="chart-body">
                         <PieChart
                             labels=Signal::derive(move || {
-                                stats_signal.get().unwrap_or_else(|| stats_default()).jail_distribution.labels
+                                stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).jail_distribution.labels
                             })
                             data=Signal::derive(move || {
-                                stats_signal.get().unwrap_or_else(|| stats_default()).jail_distribution.values
+                                stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).jail_distribution.values
                             })
                         />
                     </div>
@@ -128,27 +128,27 @@ pub fn Dashboard() -> impl IntoView {
             </div>
             <div class="kernel-grid">
                 <KernelStat label="当前封禁" value=move || {
-                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
                     format_number(s.current_bans, false)
                 }/>
                 <KernelStat label="累计封禁" value=move || {
-                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
                     format_number(s.total_bans, false)
                 }/>
                 <KernelStat label="累计解封" value=move || {
-                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
                     format_number(s.total_unbans, false)
                 }/>
                 <KernelStat label="丢弃数据包" value=move || {
-                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
                     format_number(s.packets_dropped, true)
                 }/>
                 <KernelStat label="通过数据包" value=move || {
-                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
                     format_number(s.packets_accepted, true)
                 }/>
                 <KernelStat label="白名单条目" value=move || {
-                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
                     format_number(s.whitelist_count, false)
                 }/>
             </div>

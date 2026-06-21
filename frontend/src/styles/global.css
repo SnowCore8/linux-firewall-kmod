@@ -816,3 +816,82 @@ tr:hover td {
 @media (max-width: 1024px) {
   .charts-grid { grid-template-columns: 1fr; }
 }
+
+@media (max-width: 768px) {
+  /* 统计卡片 2 列 */
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* 设置页单列 */
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* DDoS 速率卡片单列 */
+  .rates-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Jail 卡片单列 */
+  .jails-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* 内核统计 2 列 */
+  .kernel-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* 日志容器高度调整 */
+  .log-container {
+    height: calc(100vh - 200px);
+    min-height: 300px;
+  }
+
+  /* 表格字体缩小 */
+  table {
+    font-size: 12px;
+  }
+
+  th, td {
+    padding: 8px 10px;
+  }
+
+  /* 页面标题缩小 */
+  .topbar-title {
+    font-size: 13px;
+  }
+
+  /* 统计卡片数值缩小 */
+  .stat-card-value {
+    font-size: 20px;
+  }
+
+  /* 速率统计 3 列 */
+  .rate-stats {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  /* 超小屏幕统计卡片单列 */
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* 内核统计单列 */
+  .kernel-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* 页面内容 padding 更小 */
+  .page-content {
+    padding: 12px;
+  }
+
+  /* 速率统计 2 列 */
+  .rate-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

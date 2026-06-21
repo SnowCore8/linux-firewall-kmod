@@ -47,7 +47,7 @@ pub fn DdosMonitor() -> impl IntoView {
 
     // 监听 rates 变化，追加新数据点到时间线
     create_effect(move |_| {
-        let rates = rates_signal.get().unwrap_or_default();
+        let rates = rates_signal.try_get().flatten().unwrap_or_default();
         if rates.is_empty() {
             return;
         }
@@ -93,7 +93,7 @@ pub fn DdosMonitor() -> impl IntoView {
 
             // 速率卡片
             {move || {
-                let rates = rates_signal.get().unwrap_or_default();
+                let rates = rates_signal.try_get().flatten().unwrap_or_default();
                 if rates.is_empty() {
                     return view! {
                         <div class="card">

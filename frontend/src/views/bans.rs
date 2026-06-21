@@ -26,7 +26,7 @@ pub fn Bans() -> impl IntoView {
     let filtered_bans = move || {
         let kw = search.get().to_lowercase();
         if kw.is_empty() {
-            return bans_signal.get().unwrap_or_default();
+            return bans_signal.try_get().flatten().unwrap_or_default();
         }
         bans_signal
             .get()
@@ -88,7 +88,7 @@ pub fn Bans() -> impl IntoView {
                 <div class="toolbar-left">
                     <h2 class="section-title">"封禁管理"</h2>
                     <span class="badge badge-danger">
-                        {move || format!("{}", bans_signal.get().map(|b| b.len()).unwrap_or(0))}
+                        {move || format!("{}", bans_signal.try_get().flatten().map(|b| b.len()).unwrap_or(0))}
                     </span>
                 </div>
                 <div class="toolbar-right">

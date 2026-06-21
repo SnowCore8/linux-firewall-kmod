@@ -70,7 +70,15 @@ thread_local! {
 }
 
 /// 建立 SSE 连接，监听 stats/bans/jails/rates 事件并更新全局 signal
+///
+/// 如果已存在连接则先关闭旧连接，避免重复创建
 pub fn connect_sse() {
+    // 检查是否已存在连接，避免重复创建
+    let existing = SSE_HANDLES.with(|handles| handles.borrow().is_some());
+    if existing {
+        return;
+    }
+
     let source = web_sys::EventSource::new("/api/v1/events").expect("EventSource::new failed");
 
     let mut callbacks: Vec<Closure<dyn Fn(web_sys::MessageEvent)>> = Vec::new();
