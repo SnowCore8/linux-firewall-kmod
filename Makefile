@@ -150,8 +150,50 @@ format:
 # 所有 install 子目标统一使用 $(DESTDIR) 前缀，支持打包暂存安装
 # 安装顺序：内核模块 → 守护进程 → 配置 → 状态目录 → systemd → 启动服务
 
+# ----------------------------------------------------------------------------
+# 本地部署守卫 (Local Deployment Guard)
+# ----------------------------------------------------------------------------
+# 策略:
+#   * DESTDIR 非空  -> 打包暂存模式，不写本机根文件系统，放行。
+#   * FIREWALL_REMOTE_DEPLOY=1 -> 由 scripts/deploy.sh 通过 SSH 触发，放行。
+#   * 其它情况(直接在本机执行 `make install` / `make uninstall`) -> 拒绝。
+#
+# 目的:
+#   防止开发者 / AI Agent 意外把未审版本直接装到开发机，污染宿主环境。
+#   所有"实机安装"必须走远程部署脚本 (`scripts/deploy.sh <remote_host>`)
+#   或打包成 .deb 后在目标机器安装。
+# ----------------------------------------------------------------------------
+.PHONY: _guard_local_install
+_guard_local_install:
+	@if [ -z "$(DESTDIR)" ] && [ "$(FIREWALL_REMOTE_DEPLOY)" != "1" ]; then \
+		echo ""; \
+		echo "======================================================="; \
+		echo "❌ 拒绝: 禁止直接部署到本机"; \
+		echo "======================================================="; \
+		echo ""; \
+		echo "当前命令会把内核模块 / 守护进程 / systemd 单元直接写入"; \
+		echo "当前宿主机的根文件系统,这在开发环境中是被禁止的。"; \
+		echo ""; \
+		echo "可选的合规路径 (任选其一):"; \
+		echo "  1) 远程部署到目标服务器 (推荐):"; \
+		echo "       ./scripts/deploy.sh <远程主机> [远程用户]"; \
+		echo ""; \
+		echo "  2) 打包暂存, 不写本机 (用于打 .deb 或分发):"; \
+		echo "       make install DESTDIR=\$$(pwd)/build/stage"; \
+		echo "       ./build-deb.sh   # 然后 apt install ./firewall-*.deb"; \
+		echo ""; \
+		echo "  3) 显式授权 (仅限在受控沙箱 / CI 容器内):"; \
+		echo "       make install FIREWALL_REMOTE_DEPLOY=1"; \
+		echo ""; \
+		echo "若你确实需要在物理机本地安装做最终调试, 请在"; \
+		echo "scripts/deploy.sh 内把本机作为 REMOTE_HOST 传入, 以"; \
+		echo "保持审计轨迹。"; \
+		echo "======================================================="; \
+		exit 1; \
+	fi
+
 .PHONY: install install-kernel-module install-daemon install-config install-state install-systemd install-start install-verify
-install: build install-kernel-module install-daemon install-config install-state install-systemd install-start install-verify
+install: _guard_local_install build install-kernel-module install-daemon install-config install-state install-systemd install-start install-verify
 	@echo ""
 	@echo "=========================================="
 	@echo "Firewall Installation Complete"
@@ -299,7 +341,7 @@ deb: build
 # ============================================================================
 
 .PHONY: uninstall uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel uninstall-modload uninstall-verify
-uninstall: uninstall-stop uninstall-kernel uninstall-systemd uninstall-modload uninstall-files uninstall-config uninstall-state uninstall-verify
+uninstall: _guard_local_install uninstall-stop uninstall-kernel uninstall-systemd uninstall-modload uninstall-files uninstall-config uninstall-state uninstall-verify
 	@echo ""
 	@echo "=========================================="
 	@echo "Firewall uninstallation complete!"
@@ -461,6 +503,14 @@ help:
 	@echo "跳过格式检查选项:"
 	@echo "  make SKIP_FORMAT_CHECK=1 all  - 通过变量跳过"
 	@echo "  make build-quick              - 通过目标跳过"
+	@echo ""
+	@echo "部署安全守卫 (Local Deployment Guard):"
+	@echo "  直接 \`make install\` / \`make uninstall\` 在本机被禁止,"
+	@echo "  必须选择以下合规路径之一:"
+	@echo "    1) 远程部署 (推荐): ./scripts/deploy.sh <host> [user]"
+	@echo "    2) 打包暂存:        make install DESTDIR=<暂存目录>"
+	@echo "    3) 显式授权:        make install FIREWALL_REMOTE_DEPLOY=1"
+	@echo "                       (仅限沙箱 / CI 容器, 勿在开发机使用)"
 
 # 运行综合测试套件
 .PHONY: test
