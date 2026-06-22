@@ -1,4 +1,4 @@
-//! 系统日志 — SSE 实时流 + 级别过滤 + 关键词搜索
+//! 系统日志 — 级别分布统计 + SSE 实时流 + 级别过滤 + 关键词搜索
 
 use leptos::*;
 use wasm_bindgen::prelude::*;
@@ -27,6 +27,25 @@ pub fn Logs() -> impl IntoView {
         "INFO".to_string(),
     ]);
     const MAX_LOGS: usize = 1000;
+
+    // 日志级别统计
+    let level_counts = move || {
+        let entries = logs.get();
+        let mut error = 0_u64;
+        let mut warn = 0_u64;
+        let mut info = 0_u64;
+        let mut debug = 0_u64;
+        for e in &entries {
+            match e.level.as_str() {
+                "ERROR" => error += 1,
+                "WARN" => warn += 1,
+                "INFO" => info += 1,
+                "DEBUG" => debug += 1,
+                _ => {}
+            }
+        }
+        (error, warn, info, debug)
+    };
 
     // 加载历史日志
     let logs_resource = create_resource(|| (), |_| async move { api::get_logs(1, 100).await.ok() });
@@ -73,7 +92,6 @@ pub fn Logs() -> impl IntoView {
                 },
             )
             .unwrap();
-        // 组件卸载时清理 EventSource 和 closure
         let source_clone = source.clone();
         on_cleanup(move || {
             let _ = source_clone.close();
@@ -106,6 +124,38 @@ pub fn Logs() -> impl IntoView {
 
     view! {
         <div class="logs-page">
+            // 日志级别统计
+            <div class="kernel-stats-bar">
+                {move || {
+                    let (error, warn, info, debug) = level_counts();
+                    view! {
+                        <>
+                            <div class="kernel-stat">
+                                <span class="kernel-stat-label" style="color:var(--color-red)">"ERROR"</span>
+                                <span class="kernel-stat-value mono" style="color:var(--color-red)">{error}</span>
+                            </div>
+                            <div class="kernel-stat">
+                                <span class="kernel-stat-label" style="color:var(--color-orange)">"WARN"</span>
+                                <span class="kernel-stat-value mono" style="color:var(--color-orange)">{warn}</span>
+                            </div>
+                            <div class="kernel-stat">
+                                <span class="kernel-stat-label" style="color:var(--color-cyan)">"INFO"</span>
+                                <span class="kernel-stat-value mono" style="color:var(--color-cyan)">{info}</span>
+                            </div>
+                            <div class="kernel-stat">
+                                <span class="kernel-stat-label" style="color:var(--text-muted)">"DEBUG"</span>
+                                <span class="kernel-stat-value mono">{debug}</span>
+                            </div>
+                            <div class="kernel-stat">
+                                <span class="kernel-stat-label">"TOTAL"</span>
+                                <span class="kernel-stat-value mono">{error + warn + info + debug}</span>
+                            </div>
+                        </>
+                    }
+                }}
+            </div>
+
+            // 工具栏
             <div class="page-toolbar">
                 <div class="toolbar-left">
                     <h2 class="section-title">"系统日志"</h2>
@@ -131,7 +181,7 @@ pub fn Logs() -> impl IntoView {
                         }).collect_view()}
                     </div>
                     <input class="input" placeholder="搜索关键词..."
-                        style="width:200px"
+                        style="width:180px"
                         prop:value=move || keyword.get()
                         on:input=move |e| keyword.set(event_target_value(&e))/>
                     <button class="btn btn-sm" on:click=move |_| streaming.update(|v| *v = !*v)>
@@ -180,7 +230,7 @@ pub fn Logs() -> impl IntoView {
                                             <span class="log-line-num mono">{log_num}</span>
                                             <span class="log-time mono">{log_time}</span>
                                             <span class=move || format!("log-level-badge {}", log_level_badge)>{log_level_text}</span>
-                                            <span class="log-message mono">{log_msg}</span>
+                                            <span class="log-message">{log_msg}</span>
                                         </div>
                                     }
                                 }
@@ -194,7 +244,6 @@ pub fn Logs() -> impl IntoView {
 }
 
 fn parse_log_line(line_number: u64, content: &str) -> LogEntry {
-    // 解析格式：2026-06-21 10:30:45 [INFO] message...
     if let Some((rest, message)) = content.split_once("] ") {
         if let Some(bracket_pos) = rest.rfind('[') {
             let level = &rest[bracket_pos + 1..];

@@ -1,4 +1,4 @@
-//! 白名单管理 — SSE 实时更新
+//! 白名单管理 — SSE 实时更新 + 设备信息
 
 use leptos::*;
 
@@ -39,18 +39,23 @@ pub fn Whitelist() -> impl IntoView {
     view! {
         <div class="whitelist-page">
             <div class="page-toolbar">
-                <h2 class="section-title">"白名单管理"</h2>
+                <div class="toolbar-left">
+                    <h2 class="section-title">"白名单管理"</h2>
+                    <span class="badge badge-success badge-dot">
+                        {move || format!("{}", whitelist_signal.try_get().flatten().map(|w| w.len()).unwrap_or(0))}
+                    </span>
+                </div>
             </div>
 
             // 添加表单
-            <div class="card" style="padding:16px;margin-bottom:16px">
-                <div style="display:flex;gap:8px;align-items:flex-end">
+            <div class="card" style="padding:14px">
+                <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
                     <div>
-                        <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">
-                            "CIDR 地址（如 10.0.0.0/8 或 192.168.1.1）"
+                        <label style="font-size:9px;color:var(--text-muted);display:block;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em">
+                            "CIDR 地址"
                         </label>
-                        <input class="input" placeholder="10.0.0.0/8"
-                            style="width:260px"
+                        <input class="input mono" placeholder="10.0.0.0/8 或 192.168.1.1"
+                            style="width:280px"
                             prop:value=move || new_cidr.get()
                             on:input=move |e| new_cidr.set(event_target_value(&e))/>
                     </div>
@@ -58,7 +63,7 @@ pub fn Whitelist() -> impl IntoView {
                         disabled=move || loading.get()>
                         {move || if loading.get() { "添加中..." } else { "添加" }}
                     </button>
-                    <span style="color:var(--accent-danger);font-size:12px">{move || error.get()}</span>
+                    <span style="color:var(--color-red);font-size:11px">{move || error.get()}</span>
                 </div>
             </div>
 

@@ -1,4 +1,4 @@
-//! 默认布局 — 侧边栏 + 顶部栏 + 内容区
+//! 默认布局 — 56px 极窄图标侧边栏 + 顶部栏 + 内容区
 
 use leptos::*;
 use leptos_router::*;
@@ -8,7 +8,6 @@ use crate::theme;
 
 #[component]
 pub fn DefaultLayout(children: Children) -> impl IntoView {
-    // 初始化 SSE 和主题
     create_effect(move |_| {
         sse::connect_sse();
         theme::init_theme();
@@ -17,55 +16,52 @@ pub fn DefaultLayout(children: Children) -> impl IntoView {
     let sidebar_open = create_rw_signal(false);
     let status = sse::use_sse_status();
 
-    let nav_items: Vec<(&str, &str, View)> = vec![
-        ("/dashboard", "仪表盘", nav_icon_dashboard().into_view()),
-        ("/bans", "封禁管理", nav_icon_bans().into_view()),
-        ("/whitelist", "白名单", nav_icon_whitelist().into_view()),
-        ("/jails", "Jails", nav_icon_jails().into_view()),
-        ("/ddos", "DDoS 监控", nav_icon_ddos().into_view()),
-        ("/logs", "系统日志", nav_icon_logs().into_view()),
-        ("/settings", "设置", nav_icon_settings().into_view()),
+    let nav_items: Vec<(&str, View)> = vec![
+        ("/dashboard", nav_icon_dashboard().into_view()),
+        ("/bans", nav_icon_bans().into_view()),
+        ("/whitelist", nav_icon_whitelist().into_view()),
+        ("/jails", nav_icon_jails().into_view()),
+        ("/ddos", nav_icon_ddos().into_view()),
+        ("/logs", nav_icon_logs().into_view()),
+        ("/settings", nav_icon_settings().into_view()),
     ];
 
     let page_title = move || {
         let path = use_location().pathname;
         match path.get().as_str() {
-            "/dashboard" => "仪表盘",
-            "/bans" => "封禁管理",
-            "/whitelist" => "白名单",
-            "/jails" => "Jail 配置",
-            "/ddos" => "DDoS 监控",
-            "/logs" => "系统日志",
-            "/settings" => "系统设置",
-            _ => "Firewall",
+            "/dashboard" => "DASHBOARD",
+            "/bans" => "BANS",
+            "/whitelist" => "WHITELIST",
+            "/jails" => "JAILS",
+            "/ddos" => "DDOS MONITOR",
+            "/logs" => "SYSTEM LOGS",
+            "/settings" => "SETTINGS",
+            _ => "FIREWALL",
         }
     };
 
     view! {
         <div class="app-layout">
-            // 移动端遮罩
             <div
                 class=move || if sidebar_open.get() { "sidebar-overlay visible" } else { "sidebar-overlay" }
                 on:click=move |_| sidebar_open.set(false)
             />
 
-            // 侧边栏
             <aside class=move || {
                 if sidebar_open.get() { "sidebar open" } else { "sidebar" }
             }>
                 <div class="sidebar-header">
                     <A href="/dashboard" class="sidebar-brand">
                         <div class="sidebar-brand-icon">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                             </svg>
                         </div>
-                        <span class="sidebar-brand-text">Firewall</span>
                     </A>
                 </div>
 
                 <nav class="sidebar-nav">
-                    {nav_items.into_iter().map(|(path, label, icon)| {
+                    {nav_items.into_iter().map(|(path, icon)| {
                         view! {
                             <A href=path class=move || {
                                 let loc = use_location();
@@ -73,34 +69,35 @@ pub fn DefaultLayout(children: Children) -> impl IntoView {
                                 if active { "nav-item active" } else { "nav-item" }
                             } on:click=move |_| sidebar_open.set(false)>
                                 {icon}
-                                <span>{label}</span>
                             </A>
                         }
                     }).collect_view()}
                 </nav>
 
                 <div class="sidebar-footer">
-                    <span class=move || {
-                        match status.get() {
-                            ConnectionStatus::Connected => "sse-dot",
-                            _ => "sse-dot disconnected",
-                        }
-                    }/>
-                    <span>{move || match status.get() {
-                        ConnectionStatus::Connected => "SSE 已连接",
-                        ConnectionStatus::Connecting => "连接中...",
-                        ConnectionStatus::Disconnected => "已断开",
-                    }}</span>
-                    <a href="/metrics" target="_blank" style="margin-left:auto;color:var(--accent-primary);text-decoration:none;font-size:11px">
-                        "Metrics"
+                    <div class="sse-indicator">
+                        <span class=move || {
+                            match status.get() {
+                                ConnectionStatus::Connected => "sse-dot",
+                                _ => "sse-dot disconnected",
+                            }
+                        }/>
+                        <span>{move || match status.get() {
+                            ConnectionStatus::Connected => "LIVE",
+                            ConnectionStatus::Connecting => "...",
+                            ConnectionStatus::Disconnected => "OFF",
+                        }}</span>
+                    </div>
+                    <a href="/metrics" target="_blank"
+                        style="font-size:8px;color:var(--color-cyan);text-decoration:none;font-weight:700;letter-spacing:0.1em;text-transform:uppercase">
+                        "METRICS"
                     </a>
                 </div>
             </aside>
 
-            // 主内容区
             <div class="main-content">
                 <header class="topbar">
-                    <div style="display:flex;align-items:center;gap:12px">
+                    <div class="topbar-left">
                         <button class="menu-toggle" on:click=move |_| {
                             sidebar_open.update(|v| *v = !*v);
                         }>
@@ -110,9 +107,22 @@ pub fn DefaultLayout(children: Children) -> impl IntoView {
                         </button>
                         <h1 class="topbar-title">{page_title}</h1>
                     </div>
-                    <div class="topbar-actions">
+                    <div class="topbar-right">
+                        <div class="topbar-status">
+                            <span class=move || {
+                                match status.get() {
+                                    ConnectionStatus::Connected => "sse-dot",
+                                    _ => "sse-dot disconnected",
+                                }
+                            }/>
+                            <span>{move || match status.get() {
+                                ConnectionStatus::Connected => "CONNECTED",
+                                ConnectionStatus::Connecting => "CONNECTING",
+                                ConnectionStatus::Disconnected => "DISCONNECTED",
+                            }}</span>
+                        </div>
                         <button class="btn btn-icon" on:click=move |_| theme::toggle_theme()>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
                                 <circle cx="12" cy="12" r="5"/>
                                 <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
                             </svg>
@@ -127,10 +137,6 @@ pub fn DefaultLayout(children: Children) -> impl IntoView {
         </div>
     }
 }
-
-// ============================================================================
-// 导航图标
-// ============================================================================
 
 fn nav_icon_dashboard() -> impl IntoView {
     view! {
@@ -191,7 +197,7 @@ fn nav_icon_settings() -> impl IntoView {
     view! {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="3"/>
-            <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
         </svg>
     }
 }

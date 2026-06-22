@@ -1,25 +1,49 @@
-//! Jail 配置展示
+//! Jail 配置展示 — 封禁统计 + 状态控制
 
 use leptos::*;
 
-use crate::api::{self, JailResponse};
+use crate::api::{self, JailResponse, StatsResponse};
+use crate::charts::PieChart;
+use crate::format::format_number;
 use crate::sse;
 
 #[component]
 pub fn Jails() -> impl IntoView {
     let jails_signal = sse::use_sse_jails();
+    let stats_signal = sse::use_sse_stats();
     let jails_api = create_resource(|| (), |_| async { api::get_jails().await.ok() });
+
+    let stats_default = move || StatsResponse::default();
 
     view! {
         <div class="jails-page">
+            // 顶部 Jail 分布图
+            <div class="card chart-card">
+                <div class="chart-header">
+                    <h3>"Jail 封禁分布"</h3>
+                </div>
+                <div class="chart-body" style="height:200px">
+                    <PieChart
+                        labels=Signal::derive(move || {
+                            stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).jail_distribution.labels
+                        })
+                        data=Signal::derive(move || {
+                            stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).jail_distribution.values
+                        })
+                        size=200
+                    />
+                </div>
+            </div>
+
             <div class="page-toolbar">
-                <h2 class="section-title">"Jail 配置"</h2>
+                <div class="toolbar-left">
+                    <h2 class="section-title">"Jail 配置"</h2>
+                </div>
             </div>
 
             <div class="jails-grid">
                 <Suspense fallback=|| view! { <div class="empty-state"><span>"加载中..."</span></div> }>
                     {move || {
-                        // 优先使用 SSE 数据，回退到 API 数据
                         let jails = jails_signal.get()
                             .or_else(|| jails_api.get().flatten())
                             .unwrap_or_default();
@@ -46,15 +70,15 @@ pub fn Jails() -> impl IntoView {
                                     view! {
                                         <div class="card jail-card">
                                             <div class="jail-header">
-                                                <span class="jail-name mono">{&jail.name}</span>
+                                                <span class="jail-name">{&jail.name}</span>
                                                 <span class=move || {
                                                     if jail.enabled {
-                                                        "badge badge-success"
+                                                        "badge badge-success badge-dot"
                                                     } else {
-                                                        "badge badge-danger"
+                                                        "badge badge-danger badge-dot"
                                                     }
                                                 }>
-                                                    {move || if jail.enabled { "启用" } else { "禁用" }}
+                                                    {move || if jail.enabled { "ENABLED" } else { "DISABLED" }}
                                                 </span>
                                             </div>
                                             <div class="jail-stats">

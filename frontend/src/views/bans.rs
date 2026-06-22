@@ -1,14 +1,16 @@
-//! 封禁管理 — 表格 + 搜索 + 分页 + 手动封禁
+//! 封禁管理 — 封禁原因分布 + 封禁趋势 + 表格 + 搜索 + 手动封禁
 
 use leptos::*;
 
-use crate::api::{self, BanResponse};
-use crate::format::{format_datetime, format_duration};
+use crate::api::{self, BanResponse, StatsResponse};
+use crate::charts::{LineChart, PieChart};
+use crate::format::{format_datetime, format_duration, format_number};
 use crate::sse;
 
 #[component]
 pub fn Bans() -> impl IntoView {
     let bans_signal = sse::use_sse_bans();
+    let stats_signal = sse::use_sse_stats();
 
     // 分页状态
     let page = create_rw_signal(1_u32);
@@ -16,13 +18,13 @@ pub fn Bans() -> impl IntoView {
     let sort_by = create_rw_signal("banned_at_desc".to_string());
     let search = create_rw_signal(String::new());
 
-    // 分页数据（从 API 加载）
+    // 分页数据
     let paginated = create_resource(
         move || (page.get(), sort_by.get()),
         |(p, s)| async move { api::get_bans(p, PAGE_SIZE, Some(&s)).await.ok() },
     );
 
-    // 搜索过滤（客户端）
+    // 搜索过滤
     let filtered_bans = move || {
         let kw = search.get().to_lowercase();
         if kw.is_empty() {
@@ -67,7 +69,6 @@ pub fn Bans() -> impl IntoView {
         });
     };
 
-    // 解封操作
     let do_unban = move |ip: String| {
         spawn_local(async move {
             let _ = api::delete_ban(&ip).await;
@@ -81,13 +82,53 @@ pub fn Bans() -> impl IntoView {
             .unwrap_or(1)
     };
 
+    let stats_default = move || StatsResponse::default();
+
     view! {
         <div class="bans-page">
+            // 顶部统计
+            <div class="dashboard-grid">
+                <div class="card chart-card">
+                    <div class="chart-header">
+                        <h3>"封禁原因分布"</h3>
+                    </div>
+                    <div class="chart-body" style="height:180px">
+                        <PieChart
+                            labels=Signal::derive(move || {
+                                stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).failure_reasons.labels
+                            })
+                            data=Signal::derive(move || {
+                                stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).failure_reasons.values
+                            })
+                            size=180
+                        />
+                    </div>
+                </div>
+
+                <div class="card chart-card">
+                    <div class="chart-header">
+                        <h3>"封禁趋势 (24h)"</h3>
+                    </div>
+                    <div class="chart-body" style="height:180px">
+                        <LineChart
+                            labels=Signal::derive(move || {
+                                stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).ban_trend.labels
+                            })
+                            data=Signal::derive(move || {
+                                stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).ban_trend.values
+                            })
+                            color="var(--color-red)"
+                            height=180
+                        />
+                    </div>
+                </div>
+            </div>
+
             // 工具栏
             <div class="page-toolbar">
                 <div class="toolbar-left">
-                    <h2 class="section-title">"封禁管理"</h2>
-                    <span class="badge badge-danger">
+                    <h2 class="section-title">"封禁列表"</h2>
+                    <span class="badge badge-danger badge-dot">
                         {move || format!("{}", bans_signal.try_get().flatten().map(|b| b.len()).unwrap_or(0))}
                     </span>
                 </div>
@@ -103,19 +144,19 @@ pub fn Bans() -> impl IntoView {
             </div>
 
             // 手动封禁表单
-            <div class="card" style="padding:16px;margin-bottom:16px">
+            <div class="card" style="padding:14px">
                 <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
                     <div>
-                        <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">"IP 地址"</label>
-                        <input class="input" placeholder="1.2.3.4"
+                        <label style="font-size:9px;color:var(--text-muted);display:block;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em">"IP 地址"</label>
+                        <input class="input mono" placeholder="1.2.3.4"
                             style="width:160px"
                             prop:value=move || ban_ip.get()
                             on:input=move |e| ban_ip.set(event_target_value(&e))/>
                     </div>
                     <div>
-                        <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">"时长（秒，0=永久）"</label>
-                        <input class="input" placeholder="600"
-                            style="width:120px"
+                        <label style="font-size:9px;color:var(--text-muted);display:block;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em">"时长 (秒, 0=永久)"</label>
+                        <input class="input mono" placeholder="600"
+                            style="width:130px"
                             prop:value=move || ban_duration.get()
                             on:input=move |e| ban_duration.set(event_target_value(&e))/>
                     </div>
@@ -123,7 +164,7 @@ pub fn Bans() -> impl IntoView {
                         disabled=move || ban_loading.get()>
                         {move || if ban_loading.get() { "封禁中..." } else { "封禁" }}
                     </button>
-                    <span style="color:var(--accent-danger);font-size:12px">{move || ban_error.get()}</span>
+                    <span style="color:var(--color-red);font-size:11px">{move || ban_error.get()}</span>
                 </div>
             </div>
 
@@ -151,9 +192,9 @@ pub fn Bans() -> impl IntoView {
                                         <tr>
                                             <td class="mono" style="font-weight:600;color:var(--text-primary)">{&ban.ip}</td>
                                             <td><span class="badge badge-info">{&ban.jail}</span></td>
-                                            <td>{&ban.reason}</td>
-                                            <td class="mono" style="font-size:12px">{format_datetime(ban.banned_at)}</td>
-                                            <td class="mono" style="font-size:12px">{format_duration(ban.remaining_seconds)}</td>
+                                            <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{&ban.reason}</td>
+                                            <td class="mono" style="font-size:11px;color:var(--text-muted)">{format_datetime(ban.banned_at)}</td>
+                                            <td class="mono" style="font-size:11px">{format_duration(ban.remaining_seconds)}</td>
                                             <td>
                                                 <button class="btn btn-sm btn-danger"
                                                     on:click=move |_| do_unban(ip.clone())>
@@ -168,13 +209,12 @@ pub fn Bans() -> impl IntoView {
                     </table>
                 </div>
 
-                // 分页
                 <Suspense fallback=|| view! { <div style="padding:20px;text-align:center;color:var(--text-muted)">"加载中..."</div> }>
                     {move || {
                         let tp = total_pages();
                         if tp > 1 {
                             view! {
-                                <div class="pagination" style="margin:12px">
+                                <div class="pagination">
                                     <button class="btn btn-sm" disabled=move || page.get() <= 1
                                         on:click=move |_| page.update(|p| *p = (*p).saturating_sub(1))>
                                         "上一页"

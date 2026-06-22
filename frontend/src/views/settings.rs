@@ -13,14 +13,12 @@ pub fn Settings() -> impl IntoView {
     let saving = create_rw_signal(false);
     let save_msg = create_rw_signal(String::new());
 
-    // 编辑中的配置值
     let edit_sse = create_rw_signal(String::new());
     let edit_warning_pps = create_rw_signal(String::new());
     let edit_critical_pps = create_rw_signal(String::new());
     let edit_warning_syn = create_rw_signal(String::new());
     let edit_critical_syn = create_rw_signal(String::new());
 
-    // 初始化编辑值
     create_effect(move |_| {
         if let Some(Some(cfg)) = config.get() {
             let _ = edit_sse.try_set(cfg.sse_push_interval.to_string());
@@ -51,9 +49,8 @@ pub fn Settings() -> impl IntoView {
             };
             match api::update_config(req).await {
                 Ok(_) => {
-                    // 检查 signal 是否仍有效
                     if saving.try_update(|v| *v = false).is_none() {
-                        return; // 组件已卸载
+                        return;
                     }
                     let _ = save_msg.try_set("保存成功".to_string());
                 }
@@ -80,7 +77,6 @@ pub fn Settings() -> impl IntoView {
             <h2 class="section-title">"系统设置"</h2>
 
             <div class="settings-grid">
-                // 守护进程信息（只读）
                 <div class="card settings-card">
                     <h3>"守护进程"</h3>
                     <div class="settings-list">
@@ -105,7 +101,6 @@ pub fn Settings() -> impl IntoView {
                     </div>
                 </div>
 
-                // 内核模块（只读）
                 <div class="card settings-card">
                     <h3>"内核模块"</h3>
                     <div class="settings-list">
@@ -123,7 +118,6 @@ pub fn Settings() -> impl IntoView {
                     </div>
                 </div>
 
-                // Web UI 配置（可编辑）
                 <div class="card settings-card">
                     <h3>"Web UI 配置"</h3>
                     <Suspense fallback=|| view! { <div style="padding:12px;color:var(--text-muted)">"加载中..."</div> }>
@@ -141,7 +135,7 @@ pub fn Settings() -> impl IntoView {
                                     <button class="btn btn-primary" on:click=do_save disabled=move || saving.get()>
                                         {move || if saving.get() { "保存中..." } else { "保存配置" }}
                                     </button>
-                                    <span style="color:var(--text-muted);font-size:14px">
+                                    <span style="color:var(--text-muted);font-size:13px">
                                         {move || save_msg.get()}
                                     </span>
                                 </div>
@@ -150,7 +144,6 @@ pub fn Settings() -> impl IntoView {
                     </Suspense>
                 </div>
 
-                // 关于
                 <div class="card settings-card">
                     <h3>"关于"</h3>
                     <div class="settings-list">
@@ -158,12 +151,12 @@ pub fn Settings() -> impl IntoView {
                         <SettingItem label="许可证" value=|| "MIT License".to_string()/>
                         <div class="setting-item">
                             <span class="setting-label">"仓库"</span>
-                            <a class="setting-value" style="color:var(--accent-primary);text-decoration:none"
+                            <a class="setting-value" style="color:var(--accent-primary);text-decoration:none;font-weight:500"
                                 href="https://github.com/SnowCore8/linux-firewall-kmod" target="_blank">
-                                "GitHub"
+                                "GitHub ↗"
                             </a>
                         </div>
-                        <SettingItem label="技术栈" value=|| "Rust + C Kernel Module + Leptos WASM".to_string()/>
+                        <SettingItem label="技术栈" value=|| "Rust + C + Leptos WASM".to_string()/>
                     </div>
                 </div>
             </div>
@@ -179,25 +172,22 @@ fn SettingItem(
     view! {
         <div class="setting-item">
             <span class="setting-label">{label}</span>
-            <span class="setting-value mono">{move || value()}</span>
+            <span class="setting-value">{move || value()}</span>
         </div>
     }
 }
 
 #[component]
-fn EditableItem(
-    label: &'static str,
-    value: RwSignal<String>,
-) -> impl IntoView {
+fn EditableItem(label: &'static str, value: RwSignal<String>) -> impl IntoView {
     view! {
         <div class="setting-item">
             <span class="setting-label">{label}</span>
             <input
                 type="number"
-                class="setting-input mono"
+                class="input mono"
+                style="width:120px;padding:5px 8px;font-size:12px"
                 prop:value=move || value.get()
                 on:input=move |e| value.set(event_target_value(&e))
-                style="width:120px;padding:4px 8px;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:4px;color:var(--text-primary);font-family:monospace"
             />
         </div>
     }

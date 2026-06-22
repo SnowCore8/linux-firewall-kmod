@@ -6,6 +6,7 @@ mod components;
 mod format;
 mod sse;
 mod theme;
+mod types;
 mod views;
 
 use leptos::*;
