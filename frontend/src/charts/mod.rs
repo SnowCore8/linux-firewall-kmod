@@ -261,12 +261,39 @@ pub fn PieChart(
             return Vec::new();
         }
 
-        let mut start_angle = -90.0_f64;
-        d.iter()
+        // 统计非零值数量
+        let non_zero: Vec<(usize, u64, &String)> = d
+            .iter()
             .zip(l.iter())
             .enumerate()
             .filter(|(_, (&v, _))| v > 0)
-            .map(|(i, (&v, label))| {
+            .map(|(i, (&v, label))| (i, v, label))
+            .collect();
+
+        // 如果只有一个非零值,画一个完整的圆
+        if non_zero.len() == 1 {
+            let (i, v, label) = non_zero[0];
+            let color = COLORS[i % COLORS.len()].to_string();
+            let pct = format!("{:.1}%", v as f64 / total as f64 * 100.0);
+            // 用两个 180° 半圆拼接成完整圆
+            let path = format!(
+                "M{cx},{top} A{r},{r} 0 0 1 {cx},{bottom} A{r},{r} 0 0 1 {cx},{top} \
+                 M{cx},{top2} A{r2},{r2} 0 0 0 {cx},{bottom2} A{r2},{r2} 0 0 0 {cx},{top2} Z",
+                cx = center,
+                top = center - outer_r,
+                bottom = center + outer_r,
+                r = outer_r,
+                top2 = center - inner_r,
+                bottom2 = center + inner_r,
+                r2 = inner_r,
+            );
+            return vec![(path, color, label.clone(), pct)];
+        }
+
+        let mut start_angle = -90.0_f64;
+        non_zero
+            .iter()
+            .map(|&(i, v, label)| {
                 let angle = v as f64 / total as f64 * 360.0;
                 let end_angle = start_angle + angle;
                 let path = arc_path(center, center, outer_r, inner_r, start_angle, end_angle);
