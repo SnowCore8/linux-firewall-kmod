@@ -351,6 +351,49 @@ pub fn sync_bans_from_kernel() -> Result<usize> {
     Ok(count)
 }
 
+/// 从 `/proc/firewall/stats` 读取内核统计并填充 `DAEMON_STATS`。
+///
+/// 守护进程启动时调用,确保内存统计与内核模块状态一致。
+/// 解析格式:
+/// ```text
+/// total_bans 6
+/// packets_accepted 29726
+/// packets_dropped 0
+/// current_whitelist 5
+/// ```
+pub fn sync_stats_from_kernel() -> Result<()> {
+    let content = std::fs::read_to_string("/proc/firewall/stats")
+        .with_context(|| "Failed to read /proc/firewall/stats")?;
+
+    for line in content.lines() {
+        let line = line.trim();
+        if let Some((key, val_str)) = line.split_once(' ') {
+            if let Ok(val) = val_str.trim().parse::<u64>() {
+                match key {
+                    "packets_dropped" => {
+                        crate::types::DAEMON_STATS
+                            .packets_dropped
+                            .store(val, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    "packets_accepted" => {
+                        crate::types::DAEMON_STATS
+                            .packets_accepted
+                            .store(val, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    "current_whitelist" => {
+                        crate::types::DAEMON_STATS
+                            .whitelist_count
+                            .store(val, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // ============================================================================
 // 单元测试
 // ============================================================================

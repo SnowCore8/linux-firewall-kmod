@@ -405,8 +405,7 @@ impl NetlinkContext {
                     "packets_accepted" => stats.packets_accepted()
                 );
 
-                // 更新 DAEMON_STATS（仅更新内核独有的统计）
-                // total_unbans 和 whitelist_count 由本地维护，不被内核响应覆盖
+                // 更新 packets 计数（来自 netlink StatsResponse，由后台线程周期性 send_stats_query 触发）
                 crate::types::DAEMON_STATS.packets_dropped.store(
                     stats.packets_dropped(),
                     std::sync::atomic::Ordering::Relaxed,

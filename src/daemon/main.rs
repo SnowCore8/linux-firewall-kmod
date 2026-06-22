@@ -177,7 +177,6 @@ fn main() -> Result<()> {
     }
 
     // 从内核模块同步现有封禁到内存缓存
-    // 内核模块的封禁是持久化的,但守护进程重启后内存缓存会丢失
     match ban::procfs::sync_bans_from_kernel() {
         Ok(count) => {
             info!(logger::get(), "从内核模块同步封禁成功"; "count" => count);
@@ -262,6 +261,16 @@ fn main() -> Result<()> {
         // 等待响应（给内核一些时间处理）
         std::thread::sleep(std::time::Duration::from_millis(500));
 
+        // 从 /proc/firewall/stats 同步统计数据（在 netlink 查询之后，用 procfs 数据覆盖 netlink 可能返回的旧值）
+        match ban::procfs::sync_stats_from_kernel() {
+            Ok(()) => {
+                info!(logger::get(), "从内核模块同步统计成功");
+            }
+            Err(e) => {
+                warn!(logger::get(), "从内核模块同步统计失败"; "error" => %e);
+            }
+        }
+
         // 初始化可信 IP 白名单（在 netlink 初始化之后，以便走 netlink 通道）
         if !cfg.trusted_ips.is_empty() {
             let failed = ban::init_trusted_ips(&cfg.trusted_ips);
@@ -285,6 +294,36 @@ fn main() -> Result<()> {
             .collect();
         http_exporter::set_global_jails(jail_infos);
         http_exporter::set_global_webui_config(cfg.webui.clone());
+    }
+
+    // 启动后台定时 stats 查询线程（每 5 秒通过 netlink 向内核拉取真实计数）
+    // procfs 是用户接口，守护进程内部通信必须走 netlink。
+    // send_stats_query 仅在启动时调用一次，必须周期触发才能持续同步 packets_dropped/accepted。
+    {
+        std::thread::Builder::new()
+            .name("netlink-stats-poll".into())
+            .spawn(|| {
+                info!(logger::get(), "netlink stats 轮询线程启动");
+                let mut seq_counter: u32 = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as u32;
+                while GLOBAL_RUNNING.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    seq_counter = seq_counter.wrapping_add(1);
+                    if let Some(ctx) = netlink::get_global_netlink_ctx() {
+                        if let Err(e) = ctx.send_stats_query(seq_counter) {
+                            crate::logger::debug!(
+                                crate::logger::get(),
+                                "netlink stats 查询失败";
+                                "error" => %e
+                            );
+                        }
+                    }
+                }
+                info!(logger::get(), "netlink stats 轮询线程退出");
+            })
+            .ok();
     }
 
     let mut exporter_handle = None;
