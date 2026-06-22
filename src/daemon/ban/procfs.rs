@@ -15,8 +15,8 @@ use anyhow::{bail, Context, Result};
 use parking_lot::Mutex;
 
 use super::{BANS_PATH, PROCFS_DIR};
-use crate::types::{ActiveBanCache, BanInfo, BanReason, ACTIVE_BAN_CACHE};
 use crate::types::now_secs;
+use crate::types::{ActiveBanCache, BanInfo, BanReason, ACTIVE_BAN_CACHE};
 
 // ============================================================================
 // 缓存的 bans procfs fd（R9-9 优化：避免每次封禁都 open/close）
@@ -337,8 +337,17 @@ pub fn sync_bans_from_kernel() -> Result<usize> {
                 ip_num: 0, // IPv6 或无法解析时为 0
                 jail_name: "kernel_sync".to_string(),
                 reason: BanReason::ManualBan,
-                banned_at: now_secs() - (if remaining_secs > 0 { remaining_secs } else { 0 }) as i64,
-                expires_at: if is_permanent { 0 } else { now_secs() + remaining_secs },
+                banned_at: now_secs()
+                    - if remaining_secs > 0 {
+                        remaining_secs
+                    } else {
+                        0
+                    },
+                expires_at: if is_permanent {
+                    0
+                } else {
+                    now_secs() + remaining_secs
+                },
                 is_permanent,
                 fail_count: 0,
             };

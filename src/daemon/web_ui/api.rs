@@ -154,7 +154,6 @@ pub struct UpdateJailRequest {
 
 /// 更新 Jail 启用/禁用状态
 pub fn update_jail_enabled(name: &str, enabled: bool) -> Result<JailResponse, String> {
-    let jail_infos = crate::http_exporter::get_global_jails();
     let lock = crate::http_exporter::GLOBAL_JAILS
         .get()
         .ok_or("Jail 存储未初始化".to_string())?;
@@ -166,7 +165,7 @@ pub fn update_jail_enabled(name: &str, enabled: bool) -> Result<JailResponse, St
         .ok_or_else(|| format!("Jail '{}' 不存在", name))?;
 
     jail.enabled = enabled;
-    drop(lock);
+    drop(jails);
 
     // 返回更新后的 Jail 信息
     let ban_count = ACTIVE_BAN_CACHE

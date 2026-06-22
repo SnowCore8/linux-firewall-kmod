@@ -84,6 +84,8 @@ pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
                     failed.push(ip.clone());
                 } else {
                     success_count += 1;
+                    // 本地缓存同步追加（避免依赖 netlink 异步响应）
+                    append_whitelist_cache(&ip_addr, prefix_len);
                 }
             } else {
                 crate::logger::info!(
@@ -92,6 +94,8 @@ pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
                     "ip" => %ip
                 );
                 success_count += 1;
+                // 本地缓存同步追加（避免依赖 netlink 异步响应）
+                append_whitelist_cache(&ip_addr, prefix_len);
             }
         } else {
             // netlink 不可用，直接写 procfs
@@ -106,6 +110,7 @@ pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
                 failed.push(ip.clone());
             } else {
                 success_count += 1;
+                append_whitelist_cache(&ip_addr, prefix_len);
             }
         }
     }
@@ -116,6 +121,28 @@ pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
             .fetch_add(success_count, std::sync::atomic::Ordering::Relaxed);
     }
     failed
+}
+
+/// 向 WHITELIST_CACHE 追加条目（用于守护进程自己添加白名单时的本地缓存同步）。
+///
+/// 由于 ListWhitelistResponse 是请求-响应模式，启动后可能因 race condition 错过，
+/// 导致缓存为空。本函数保证 init_trusted_ips / remove_trusted_ips 后缓存立即一致。
+fn append_whitelist_cache(ip: &str, prefix_len: u8) {
+    let cidr = if ip.contains(':') {
+        format!("{}/{}", ip, if prefix_len == 0 { 128 } else { prefix_len })
+    } else if prefix_len == 32 || prefix_len == 0 {
+        ip.to_string()
+    } else {
+        format!("{}/{}", ip, prefix_len)
+    };
+    let mut cache = crate::types::WHITELIST_CACHE.write();
+    // 去重：避免重复添加
+    if !cache.iter().any(|e| e.cidr == cidr) {
+        cache.push(crate::types::WhitelistEntry {
+            cidr,
+            device: String::new(),
+        });
+    }
 }
 
 /// 从内核白名单移除可信 IP。
@@ -151,6 +178,7 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
                     failed.push(ip.clone());
                 } else {
                     success_count += 1;
+                    remove_whitelist_cache(&ip_addr, prefix_len);
                 }
             } else {
                 crate::logger::info!(
@@ -159,6 +187,7 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
                     "ip" => %ip
                 );
                 success_count += 1;
+                remove_whitelist_cache(&ip_addr, prefix_len);
             }
         } else {
             // netlink 不可用，直接写 procfs
@@ -173,6 +202,7 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
                 failed.push(ip.clone());
             } else {
                 success_count += 1;
+                remove_whitelist_cache(&ip_addr, prefix_len);
             }
         }
     }
@@ -183,6 +213,19 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
             .fetch_sub(success_count, std::sync::atomic::Ordering::Relaxed);
     }
     failed
+}
+
+/// 从 WHITELIST_CACHE 移除条目
+fn remove_whitelist_cache(ip: &str, prefix_len: u8) {
+    let cidr = if ip.contains(':') {
+        format!("{}/{}", ip, if prefix_len == 0 { 128 } else { prefix_len })
+    } else if prefix_len == 32 || prefix_len == 0 {
+        ip.to_string()
+    } else {
+        format!("{}/{}", ip, prefix_len)
+    };
+    let mut cache = crate::types::WHITELIST_CACHE.write();
+    cache.retain(|e| e.cidr != cidr);
 }
 
 /// 解析 CIDR 格式，返回 (IP地址, 前缀长度)
