@@ -176,6 +176,17 @@ fn main() -> Result<()> {
         warn!(logger::get(), "初始化日志模式失败"; "error" => %e);
     }
 
+    // 从内核模块同步现有封禁到内存缓存
+    // 内核模块的封禁是持久化的,但守护进程重启后内存缓存会丢失
+    match ban::procfs::sync_bans_from_kernel() {
+        Ok(count) => {
+            info!(logger::get(), "从内核模块同步封禁成功"; "count" => count);
+        }
+        Err(e) => {
+            warn!(logger::get(), "从内核模块同步封禁失败"; "error" => %e);
+        }
+    }
+
     // 初始化历史数据快照数据库
     if let Err(e) = history_snapshot::init_history_db() {
         warn!(logger::get(), "初始化历史数据库失败"; "error" => %e);

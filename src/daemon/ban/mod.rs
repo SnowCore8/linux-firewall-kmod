@@ -24,7 +24,7 @@
 // 模块声明
 mod ip_validation;
 mod operations;
-mod procfs;
+pub mod procfs;
 
 // Re-export 所有公共类型和函数
 pub use ip_validation::{validate_ip, validate_ipv4, ValidatedIp};

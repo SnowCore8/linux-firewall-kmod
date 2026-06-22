@@ -1,10 +1,11 @@
-//! procfs 安全写入模块
+//! procfs 安全读写模块
 //!
 //! # 核心职责
 //!
 //! - 缓存 bans fd（R9-9 优化）避免每次封禁都 open/close
 //! - 安全 procfs 写入：路径白名单 + 字符白名单 + fd 重定向检查
 //! - 三道防线防止恶意输入击穿到 procfs
+//! - 启动时从内核模块同步现有封禁到 ACTIVE_BAN_CACHE
 
 use std::ffi::CString;
 use std::os::fd::RawFd;
@@ -14,6 +15,8 @@ use anyhow::{bail, Context, Result};
 use parking_lot::Mutex;
 
 use super::{BANS_PATH, PROCFS_DIR};
+use crate::types::{ActiveBanCache, BanInfo, BanReason, ACTIVE_BAN_CACHE};
+use crate::types::now_secs;
 
 // ============================================================================
 // 缓存的 bans procfs fd（R9-9 优化：避免每次封禁都 open/close）
@@ -269,6 +272,83 @@ pub fn secure_procfs_write(path: &str, data: &[u8]) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ============================================================================
+// 启动时从内核模块同步现有封禁
+// ============================================================================
+
+/// 从 `/proc/firewall/bans` 读取现有封禁并填充 `ACTIVE_BAN_CACHE`。
+///
+/// 守护进程启动时调用,确保内存缓存与内核模块状态一致。
+/// 内核模块的封禁是持久化的(重启守护进程不丢失),但守护进程的内存缓存会丢失。
+///
+/// # 格式
+/// ```text
+/// Banned IP List:
+/// -------------------
+/// 80.94.92.187                             (permanent)
+/// 192.168.1.1/24                           (600s remaining)
+/// -------------------
+/// Total: 6 active bans (6 permanent, 0 temporary)
+/// ```
+pub fn sync_bans_from_kernel() -> Result<usize> {
+    let cache = ACTIVE_BAN_CACHE.get_or_init(ActiveBanCache::new);
+    let content = std::fs::read_to_string(BANS_PATH)
+        .with_context(|| format!("Failed to read {}", BANS_PATH))?;
+
+    let mut count = 0;
+    for line in content.lines() {
+        let line = line.trim();
+        // 跳过标题行和分隔线
+        if line.is_empty()
+            || line.starts_with("Banned IP")
+            || line.starts_with("---")
+            || line.starts_with("Total:")
+        {
+            continue;
+        }
+
+        // 解析格式: "IP 地址    (permanent)" 或 "IP 地址    (600s remaining)"
+        if let Some((ip_str, remainder)) = line.split_once('(') {
+            let ip = ip_str.trim();
+            if ip.is_empty() {
+                continue;
+            }
+
+            let is_permanent = remainder.contains("permanent");
+            let remaining_secs: i64 = if is_permanent {
+                -1 // 永久封禁用 -1 表示
+            } else {
+                // 解析 "600s remaining)" 中的数字
+                remainder
+                    .trim_end_matches(')')
+                    .trim()
+                    .trim_end_matches("remaining")
+                    .trim()
+                    .trim_end_matches('s')
+                    .trim()
+                    .parse::<i64>()
+                    .unwrap_or(-1)
+            };
+
+            let ban_info = BanInfo {
+                ip: ip.to_string(),
+                ip_num: 0, // IPv6 或无法解析时为 0
+                jail_name: "kernel_sync".to_string(),
+                reason: BanReason::ManualBan,
+                banned_at: now_secs() - (if remaining_secs > 0 { remaining_secs } else { 0 }) as i64,
+                expires_at: if is_permanent { 0 } else { now_secs() + remaining_secs },
+                is_permanent,
+                fail_count: 0,
+            };
+
+            cache.insert(ban_info);
+            count += 1;
+        }
+    }
+
+    Ok(count)
 }
 
 // ============================================================================
