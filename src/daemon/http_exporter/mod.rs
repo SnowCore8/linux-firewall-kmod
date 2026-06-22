@@ -31,7 +31,7 @@ pub struct JailInfo {
 }
 
 /// 全局 Jail 信息存储（使用 OnceLock<RwLock> 支持热更新，兼容 Rust 1.75 MSRV）
-static GLOBAL_JAILS: std::sync::OnceLock<parking_lot::RwLock<Vec<JailInfo>>> =
+pub static GLOBAL_JAILS: std::sync::OnceLock<parking_lot::RwLock<Vec<JailInfo>>> =
     std::sync::OnceLock::new();
 
 /// 设置全局 Jail 信息（启动时和热重载时调用）

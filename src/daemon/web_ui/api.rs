@@ -6,6 +6,7 @@
 //! - `POST /api/v1/bans` - 封禁 IP
 //! - `DELETE /api/v1/bans/:ip` - 解封 IP
 //! - `GET /api/v1/jails` - Jail 列表
+//! - `PUT /api/v1/jails/:name` - 更新 Jail 状态
 //! - `GET /api/v1/config` - 配置
 //! - `GET /api/v1/whitelist` - 白名单列表
 //! - `POST /api/v1/whitelist` - 添加白名单
@@ -144,6 +145,40 @@ pub struct UpdateConfigRequest {
     pub rate_critical_pps: Option<u64>,
     pub rate_warning_syn: Option<u64>,
     pub rate_critical_syn: Option<u64>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateJailRequest {
+    pub enabled: bool,
+}
+
+/// 更新 Jail 启用/禁用状态
+pub fn update_jail_enabled(name: &str, enabled: bool) -> Result<JailResponse, String> {
+    let jail_infos = crate::http_exporter::get_global_jails();
+    let lock = crate::http_exporter::GLOBAL_JAILS
+        .get()
+        .ok_or("Jail 存储未初始化".to_string())?;
+
+    let mut jails = lock.write();
+    let jail = jails
+        .iter_mut()
+        .find(|j| j.name == name)
+        .ok_or_else(|| format!("Jail '{}' 不存在", name))?;
+
+    jail.enabled = enabled;
+    drop(lock);
+
+    // 返回更新后的 Jail 信息
+    let ban_count = ACTIVE_BAN_CACHE
+        .get()
+        .map(|cache| cache.get_by_jail(name).len())
+        .unwrap_or(0);
+
+    Ok(JailResponse {
+        name: name.to_string(),
+        enabled,
+        ban_count,
+    })
 }
 
 /// 更新 Web UI 配置

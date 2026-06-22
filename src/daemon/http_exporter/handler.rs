@@ -48,6 +48,7 @@ pub fn build_router(metrics_user: String, metrics_pass: String) -> Router {
         .route("/api/v1/bans", post(handle_create_ban))
         .route("/api/v1/bans/:ip", delete(handle_delete_ban))
         .route("/api/v1/jails", get(handle_api_jails))
+        .route("/api/v1/jails/:name", put(handle_update_jail))
         .route("/api/v1/config", get(handle_api_config))
         .route("/api/v1/config", put(handle_update_config))
         .route("/api/v1/whitelist", get(handle_api_whitelist))
@@ -245,6 +246,20 @@ async fn handle_api_jails() -> Json<web_ui::api::ApiResponse<Vec<web_ui::api::Ja
     let jail_infos = super::get_global_jails();
     let jails = web_ui::api::get_jails(&jail_infos);
     Json(web_ui::api::ApiResponse::ok(jails))
+}
+
+/// `PUT /api/v1/jails/:name` — 更新 Jail 启用/禁用状态
+async fn handle_update_jail(
+    Path(name): Path<String>,
+    Json(req): Json<web_ui::api::UpdateJailRequest>,
+) -> impl IntoResponse {
+    match web_ui::api::update_jail_enabled(&name, req.enabled) {
+        Ok(jail) => (StatusCode::OK, Json(web_ui::api::ApiResponse::ok(jail))).into_response(),
+        Err(msg) => {
+            let resp = web_ui::api::ApiResponse::<()>::error(404, msg);
+            (StatusCode::NOT_FOUND, Json(resp)).into_response()
+        }
+    }
 }
 
 /// `GET /api/v1/config` — Web UI 配置 JSON

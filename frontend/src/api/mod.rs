@@ -271,6 +271,16 @@ pub async fn get_jails() -> Result<Vec<JailResponse>, String> {
     get_json("/api/v1/jails").await
 }
 
+#[derive(Serialize)]
+pub struct UpdateJailRequest {
+    pub enabled: bool,
+}
+
+pub async fn update_jail(name: &str, enabled: bool) -> Result<JailResponse, String> {
+    let req = UpdateJailRequest { enabled };
+    put_json(&format!("/api/v1/jails/{name}"), &req).await
+}
+
 pub async fn get_whitelist() -> Result<Vec<WhitelistEntry>, String> {
     get_json("/api/v1/whitelist").await
 }
