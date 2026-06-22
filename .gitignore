@@ -83,3 +83,10 @@ opencode.json
 *.key
 *.pem
 .env
+
+# ---- Node.js / Playwright E2E ----
+node_modules/
+package-lock.json
+test-results/
+playwright-report/
+blob-report/

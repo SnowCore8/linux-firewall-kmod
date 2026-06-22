@@ -1,0 +1,18 @@
+{
+  "name": "linux-firewall-kmod-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Firewall kernel module — E2E test suite powered by Playwright",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:report": "playwright show-report"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.0"
+  }
+}
