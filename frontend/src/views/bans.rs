@@ -160,6 +160,17 @@ pub fn Bans() -> impl IntoView {
                     </span>
                 </div>
                 <div class="toolbar-right">
+                    // 排序选择
+                    <select class="input" style="width:140px;margin-right:8px"
+                        prop:value=move || sort_by.get()
+                        on:change=move |e| sort_by.set(event_target_value(&e))>
+                        <option value="banned_at_desc">"封禁时间 ↓"</option>
+                        <option value="banned_at_asc">"封禁时间 ↑"</option>
+                        <option value="ip_asc">"IP 地址 A-Z"</option>
+                        <option value="ip_desc">"IP 地址 Z-A"</option>
+                        <option value="remaining_asc">"剩余时间 ↑"</option>
+                        <option value="remaining_desc">"剩余时间 ↓"</option>
+                    </select>
                     <input
                         class="input"
                         placeholder="搜索 IP / Jail / 原因..."
