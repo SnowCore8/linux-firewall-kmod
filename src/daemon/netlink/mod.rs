@@ -537,7 +537,7 @@ impl NetlinkContext {
                         "rejected_flags" => format!("0x{:x}", rejected)
                     );
                 } else {
-                    crate::logger::info!(
+                    crate::logger::debug!(
                         crate::logger::get(),
                         "配置更新已确认";
                         "applied_flags" => format!("0x{:x}", applied)

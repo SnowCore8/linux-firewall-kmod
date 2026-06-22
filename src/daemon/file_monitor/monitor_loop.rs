@@ -386,6 +386,20 @@ fn send_baseline_update() {
         return;
     }
 
+    // 只在基线变化时发送，避免每 2 秒重复发送相同值
+    static LAST_SENT_PPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static LAST_SENT_BPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let last_pps = LAST_SENT_PPS.load(std::sync::atomic::Ordering::Relaxed);
+    let last_bps = LAST_SENT_BPS.load(std::sync::atomic::Ordering::Relaxed);
+
+    if baseline_pps == last_pps && baseline_bps == last_bps {
+        return; // 基线未变化，跳过发送
+    }
+
+    LAST_SENT_PPS.store(baseline_pps, std::sync::atomic::Ordering::Relaxed);
+    LAST_SENT_BPS.store(baseline_bps, std::sync::atomic::Ordering::Relaxed);
+
     if let Some(ctx) = get_global_netlink_ctx() {
         let config = ConfigUpdate::new(config_flags::BASELINE_UPDATE)
             .with_baseline(baseline_pps, baseline_bps);
