@@ -21,16 +21,26 @@ pub fn Jails() -> impl IntoView {
                 <div class="chart-header">
                     <h3>"Jail 封禁分布"</h3>
                 </div>
-                <div class="chart-body" style="height:200px">
-                    <PieChart
-                        labels=Signal::derive(move || {
-                            stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).jail_distribution.labels
-                        })
-                        data=Signal::derive(move || {
-                            stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).jail_distribution.values
-                        })
-                        size=200
-                    />
+                <div class="chart-body" style="height:120px;min-height:120px">
+                    {move || {
+                        let stats = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
+                        let total: u64 = stats.jail_distribution.values.iter().sum();
+                        if total == 0 {
+                            view! {
+                                <div style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--text-faint);font-size:13px;letter-spacing:0.05em">
+                                    "暂无封禁数据"
+                                </div>
+                            }.into_view()
+                        } else {
+                            view! {
+                                <PieChart
+                                    labels=Signal::derive(move || stats.jail_distribution.labels.clone())
+                                    data=Signal::derive(move || stats.jail_distribution.values.clone())
+                                    size=120
+                                />
+                            }.into_view()
+                        }
+                    }}
                 </div>
             </div>
 

@@ -7,6 +7,7 @@ mod format;
 mod sse;
 mod theme;
 mod types;
+mod validation;
 mod views;
 
 use leptos::*;

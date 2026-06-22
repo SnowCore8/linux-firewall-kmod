@@ -97,13 +97,30 @@ pub fn LineChart(
             0.0
         };
         let max_labels = 7;
-        let skip = (l.len() / max_labels).max(1);
-        l.iter()
+
+        // 去重:保留每个标签首次出现的索引
+        let mut seen = std::collections::HashSet::new();
+        let mut unique_indices: Vec<usize> = Vec::new();
+        for (i, label) in l.iter().enumerate() {
+            if seen.insert(label.as_str()) {
+                unique_indices.push(i);
+            }
+        }
+
+        // 均匀采样去重后的标签
+        let skip = if unique_indices.len() > max_labels {
+            (unique_indices.len() / max_labels).max(1)
+        } else {
+            1
+        };
+
+        unique_indices
+            .into_iter()
             .enumerate()
             .filter(|(i, _)| i % skip == 0)
-            .map(|(i, label)| {
-                let x = pad_left + i as f64 * step;
-                (x, label.clone())
+            .map(|(_, idx)| {
+                let x = pad_left + idx as f64 * step;
+                (x, l[idx].clone())
             })
             .collect()
     };

@@ -130,6 +130,16 @@ pub fn DefaultLayout(children: Children) -> impl IntoView {
             </aside>
 
             <div class="main-content">
+                // 离线状态全局提示
+                <Show
+                    when=move || status.get() == ConnectionStatus::Disconnected
+                    fallback=|| ()
+                >
+                    <div class="offline-banner">
+                        <span>"⚠ 连接已断开,正在尝试重连..."</span>
+                    </div>
+                </Show>
+
                 <header class="topbar">
                     <div class="topbar-left">
                         <button class="menu-toggle" on:click=move |_| {

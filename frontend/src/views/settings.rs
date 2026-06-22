@@ -131,7 +131,7 @@ pub fn Settings() -> impl IntoView {
                                     <EditableItem label="SYN 警告阈值 (pps)" value=edit_warning_syn/>
                                     <EditableItem label="SYN 严重阈值 (pps)" value=edit_critical_syn/>
                                 </div>
-                                <div style="margin-top:16px;display:flex;gap:12px;align-items:center">
+                                <div style="margin-top:16px;display:flex;gap:12px;align-items:center;justify-content:center">
                                     <button class="btn btn-primary" on:click=do_save disabled=move || saving.get()>
                                         {move || if saving.get() { "保存中..." } else { "保存配置" }}
                                     </button>

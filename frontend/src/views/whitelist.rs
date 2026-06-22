@@ -4,6 +4,7 @@ use leptos::*;
 
 use crate::api::{self, WhitelistEntry};
 use crate::sse;
+use crate::validation;
 
 #[component]
 pub fn Whitelist() -> impl IntoView {
@@ -19,6 +20,17 @@ pub fn Whitelist() -> impl IntoView {
             error.set("CIDR 不能为空".to_string());
             return;
         }
+        if !validation::is_valid_cidr(&cidr) {
+            error.set("CIDR 格式无效(例如:192.168.1.0/24 或 10.0.0.0/8)".to_string());
+            return;
+        }
+        // 检查重复
+        if let Some(list) = whitelist_signal.try_get().flatten() {
+            if list.iter().any(|e| e.cidr == cidr) {
+                error.set("该 CIDR 已存在于白名单中".to_string());
+                return;
+            }
+        }
         loading.set(true);
         error.set(String::new());
         spawn_local(async move {
@@ -31,6 +43,12 @@ pub fn Whitelist() -> impl IntoView {
     };
 
     let do_remove = move |cidr: String| {
+        // 确认对话框
+        let window = web_sys::window().expect("window not available");
+        let message = format!("确定要移除白名单条目 {} 吗?", cidr);
+        if !window.confirm_with_message(&message).unwrap_or(false) {
+            return;
+        }
         spawn_local(async move {
             let _ = api::delete_whitelist(&cidr).await;
         });
@@ -49,18 +67,19 @@ pub fn Whitelist() -> impl IntoView {
 
             // 添加表单
             <div class="card" style="padding:14px">
-                <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-                    <div>
+                <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;max-width:600px">
+                    <div style="flex:1;min-width:200px">
                         <label style="font-size:9px;color:var(--text-muted);display:block;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em">
                             "CIDR 地址"
                         </label>
                         <input class="input mono" placeholder="10.0.0.0/8 或 192.168.1.1"
-                            style="width:280px"
+                            style="width:100%"
                             prop:value=move || new_cidr.get()
                             on:input=move |e| new_cidr.set(event_target_value(&e))/>
                     </div>
                     <button class="btn btn-primary" on:click=do_add
-                        disabled=move || loading.get()>
+                        disabled=move || loading.get()
+                        style="flex-shrink:0;height:36px">
                         {move || if loading.get() { "添加中..." } else { "添加" }}
                     </button>
                     <span style="color:var(--color-red);font-size:11px">{move || error.get()}</span>
@@ -87,9 +106,9 @@ pub fn Whitelist() -> impl IntoView {
                             <table>
                                 <thead>
                                     <tr>
-                                        <th>"CIDR"</th>
-                                        <th>"设备"</th>
-                                        <th>"操作"</th>
+                                        <th style="width:50%">"CIDR"</th>
+                                        <th style="width:25%">"设备"</th>
+                                        <th style="width:25%">"操作"</th>
                                     </tr>
                                 </thead>
                                 <tbody>

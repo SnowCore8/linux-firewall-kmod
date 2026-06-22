@@ -6,6 +6,7 @@ use crate::api::{self, BanResponse, StatsResponse};
 use crate::charts::{LineChart, PieChart};
 use crate::format::{format_datetime, format_duration};
 use crate::sse;
+use crate::validation;
 
 #[component]
 pub fn Bans() -> impl IntoView {
@@ -54,9 +55,29 @@ pub fn Bans() -> impl IntoView {
             ban_error.set("IP 地址不能为空".to_string());
             return;
         }
+        if !validation::is_valid_ip(&ip) {
+            ban_error.set("IP 地址格式无效(例如:192.168.1.1 或 ::1)".to_string());
+            return;
+        }
+        let duration_str = ban_duration.get().trim().to_string();
+        if !duration_str.is_empty() && !validation::is_valid_duration(&duration_str) {
+            ban_error.set("时长范围无效(0-86400 秒,0=永久)".to_string());
+            return;
+        }
+        // 检查重复封禁
+        if let Some(list) = bans_signal.try_get().flatten() {
+            if list.iter().any(|b| b.ip == ip) {
+                ban_error.set("该 IP 已被封禁".to_string());
+                return;
+            }
+        }
         ban_loading.set(true);
         ban_error.set(String::new());
-        let duration = ban_duration.get().parse::<u64>().ok();
+        let duration = if duration_str.is_empty() {
+            None
+        } else {
+            duration_str.parse::<u64>().ok()
+        };
         spawn_local(async move {
             match api::create_ban(&ip, duration, Some("API 手动封禁")).await {
                 Ok(_) => {
@@ -70,6 +91,12 @@ pub fn Bans() -> impl IntoView {
     };
 
     let do_unban = move |ip: String| {
+        // 确认对话框
+        let window = web_sys::window().expect("window not available");
+        let message = format!("确定要解封 IP {} 吗?", ip);
+        if !window.confirm_with_message(&message).unwrap_or(false) {
+            return;
+        }
         spawn_local(async move {
             let _ = api::delete_ban(&ip).await;
         });
@@ -145,26 +172,27 @@ pub fn Bans() -> impl IntoView {
 
             // 手动封禁表单
             <div class="card" style="padding:14px">
-                <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-                    <div>
+                <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;max-width:600px">
+                    <div style="flex:1;min-width:120px">
                         <label style="font-size:9px;color:var(--text-muted);display:block;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em">"IP 地址"</label>
                         <input class="input mono" placeholder="1.2.3.4"
-                            style="width:160px"
+                            style="width:100%"
                             prop:value=move || ban_ip.get()
                             on:input=move |e| ban_ip.set(event_target_value(&e))/>
                     </div>
-                    <div>
+                    <div style="flex:1;min-width:100px">
                         <label style="font-size:9px;color:var(--text-muted);display:block;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em">"时长 (秒, 0=永久)"</label>
                         <input class="input mono" placeholder="600"
-                            style="width:130px"
+                            style="width:100%"
                             prop:value=move || ban_duration.get()
                             on:input=move |e| ban_duration.set(event_target_value(&e))/>
                     </div>
                     <button class="btn btn-primary" on:click=do_ban
-                        disabled=move || ban_loading.get()>
+                        disabled=move || ban_loading.get()
+                        style="flex-shrink:0;height:36px">
                         {move || if ban_loading.get() { "封禁中..." } else { "封禁" }}
                     </button>
-                    <span style="color:var(--color-red);font-size:11px">{move || ban_error.get()}</span>
+                    <span style="color:var(--color-red);font-size:11px;flex-shrink:0">{move || ban_error.get()}</span>
                 </div>
             </div>
 
@@ -174,12 +202,12 @@ pub fn Bans() -> impl IntoView {
                     <table>
                         <thead>
                             <tr>
-                                <th>"IP 地址"</th>
-                                <th>"Jail"</th>
-                                <th>"原因"</th>
-                                <th>"封禁时间"</th>
-                                <th>"剩余时间"</th>
-                                <th>"操作"</th>
+                                <th style="width:20%">"IP 地址"</th>
+                                <th style="width:15%">"Jail"</th>
+                                <th style="width:20%">"原因"</th>
+                                <th style="width:15%">"封禁时间"</th>
+                                <th style="width:15%">"剩余时间"</th>
+                                <th style="width:15%">"操作"</th>
                             </tr>
                         </thead>
                         <tbody>
