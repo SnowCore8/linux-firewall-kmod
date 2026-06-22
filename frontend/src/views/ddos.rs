@@ -2,7 +2,7 @@
 
 use leptos::*;
 
-use crate::api::{self, RateResponse, WebuiConfig};
+use crate::api::{self};
 use crate::charts::LineChart;
 use crate::format::format_rate;
 use crate::sse;

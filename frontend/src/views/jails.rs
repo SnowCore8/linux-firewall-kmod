@@ -4,7 +4,6 @@ use leptos::*;
 
 use crate::api::{self, JailResponse, StatsResponse};
 use crate::charts::PieChart;
-use crate::format::format_number;
 use crate::sse;
 
 #[component]

@@ -67,6 +67,8 @@ impl Drop for SseHandles {
 
 thread_local! {
     static SSE_HANDLES: std::cell::RefCell<Option<SseHandles>> = std::cell::RefCell::new(None);
+    static RECONNECT_ATTEMPTS: std::cell::RefCell<u32> = std::cell::RefCell::new(0);
+    static RECONNECT_ENABLED: std::cell::RefCell<bool> = std::cell::RefCell::new(true);
 }
 
 /// 建立 SSE 连接，监听 stats/bans/jails/rates 事件并更新全局 signal
@@ -215,9 +217,10 @@ pub fn connect_sse() {
         .unwrap();
     callbacks.push(on_whitelist);
 
-    // onerror — 标记断开
+    // onerror — 标记断开并触发重连
     let on_error = Closure::<dyn Fn(web_sys::Event)>::new(move |_: web_sys::Event| {
         SSE_STATUS.with(|s| s.set(ConnectionStatus::Disconnected));
+        schedule_reconnect();
     });
     source.set_onerror(Some(on_error.as_ref().unchecked_ref()));
     // onerror 不用 addEventListener，直接 set_onerror，但需要保持 closure 存活
@@ -225,10 +228,64 @@ pub fn connect_sse() {
     // 简单做法：leak 这个 closure（它生命周期等于页面）
     on_error.forget();
 
+    // 连接成功，重置重连计数
+    RECONNECT_ATTEMPTS.with(|a| *a.borrow_mut() = 0);
+
     SSE_HANDLES.with(|handles| {
         *handles.borrow_mut() = Some(SseHandles {
             source,
             _callbacks: callbacks,
         });
     });
+}
+
+/// 调度重连（指数退避：1s → 2s → 4s → 8s → 最大 30s）
+fn schedule_reconnect() {
+    // 检查是否允许重连
+    let should_reconnect = RECONNECT_ENABLED.with(|e| *e.borrow());
+    if !should_reconnect {
+        return;
+    }
+
+    let attempts = RECONNECT_ATTEMPTS.with(|a| {
+        let mut a = a.borrow_mut();
+        *a += 1;
+        *a
+    });
+
+    // 指数退避：2^attempts 秒，最大 30 秒
+    let delay_ms = (1000 * (1 << attempts.min(5))).min(30000) as i32;
+
+    web_sys::window().map(|w| {
+        let cb = Closure::once(move || {
+            // 先关闭旧连接
+            SSE_HANDLES.with(|handles| {
+                *handles.borrow_mut() = None;
+            });
+            // 重新连接
+            connect_sse();
+        });
+        w.set_timeout_with_callback_and_timeout_and_arguments_0(
+            cb.as_ref().unchecked_ref(),
+            delay_ms,
+        )
+        .map(|_| {
+            // Closure 已转移给 setTimeout，需要 forget 以避免释放
+            cb.forget();
+        })
+        .ok();
+    });
+}
+
+/// 手动断开 SSE 连接（用于页面卸载或显式停止）
+#[allow(dead_code)]
+pub fn disconnect_sse() {
+    // 禁止重连
+    RECONNECT_ENABLED.with(|e| *e.borrow_mut() = false);
+
+    SSE_HANDLES.with(|handles| {
+        *handles.borrow_mut() = None;
+    });
+
+    SSE_STATUS.with(|s| s.set(ConnectionStatus::Disconnected));
 }

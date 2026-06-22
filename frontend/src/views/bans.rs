@@ -4,7 +4,7 @@ use leptos::*;
 
 use crate::api::{self, BanResponse, StatsResponse};
 use crate::charts::{LineChart, PieChart};
-use crate::format::{format_datetime, format_duration, format_number};
+use crate::format::{format_datetime, format_duration};
 use crate::sse;
 
 #[component]

@@ -16,6 +16,37 @@ pub fn DefaultLayout(children: Children) -> impl IntoView {
     let sidebar_open = create_rw_signal(false);
     let status = sse::use_sse_status();
 
+    // 触摸手势支持
+    let touch_start_x = create_rw_signal(0.0);
+    let touch_start_y = create_rw_signal(0.0);
+
+    let on_touch_start = move |e: web_sys::TouchEvent| {
+        if let Some(touch) = e.touches().item(0) {
+            touch_start_x.set(touch.client_x() as f64);
+            touch_start_y.set(touch.client_y() as f64);
+        }
+    };
+
+    let on_touch_end = move |e: web_sys::TouchEvent| {
+        if let Some(touch) = e.changed_touches().item(0) {
+            let end_x = touch.client_x() as f64;
+            let end_y = touch.client_y() as f64;
+            let delta_x = end_x - touch_start_x.get();
+            let delta_y = (end_y - touch_start_y.get()).abs();
+
+            // 水平滑动 > 50px 且大于垂直滑动，判定为横向滑动
+            if delta_x.abs() > 50.0 && delta_x.abs() > delta_y {
+                if delta_x > 0.0 {
+                    // 向右滑动：打开侧边栏
+                    sidebar_open.set(true);
+                } else {
+                    // 向左滑动：关闭侧边栏
+                    sidebar_open.set(false);
+                }
+            }
+        }
+    };
+
     let nav_items: Vec<(&str, View)> = vec![
         ("/dashboard", nav_icon_dashboard().into_view()),
         ("/bans", nav_icon_bans().into_view()),
@@ -41,7 +72,10 @@ pub fn DefaultLayout(children: Children) -> impl IntoView {
     };
 
     view! {
-        <div class="app-layout">
+        <div class="app-layout"
+            on:touchstart=on_touch_start
+            on:touchend=on_touch_end
+        >
             <div
                 class=move || if sidebar_open.get() { "sidebar-overlay visible" } else { "sidebar-overlay" }
                 on:click=move |_| sidebar_open.set(false)

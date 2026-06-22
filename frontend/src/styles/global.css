@@ -1338,3 +1338,119 @@ tr:last-child td { border-bottom: none; }
   .page-content { padding: 8px; }
   .rate-stats { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   移动端触摸优化
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 触摸目标最小尺寸 */
+@media (max-width: 768px) {
+  .nav-item {
+    min-height: 48px; /* Apple HIG 推荐触摸目标 */
+    min-width: 48px;
+  }
+
+  .menu-toggle {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 12px;
+  }
+
+  .btn {
+    min-height: 44px;
+    padding: 12px 16px;
+  }
+
+  /* 表格横向滚动 */
+  .table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  table {
+    min-width: 600px; /* 保证表格不会被压缩得太窄 */
+  }
+
+  /* 卡片内边距优化 */
+  .card {
+    padding: 12px;
+  }
+
+  /* 优化表单输入 */
+  input, select, textarea {
+    font-size: 16px; /* 防止 iOS 自动缩放 */
+  }
+}
+
+/* 安全区域适配 (iPhone 刘海屏) */
+@supports (padding: max(0px)) {
+  .page-content {
+    padding-left: max(8px, env(safe-area-inset-left));
+    padding-right: max(8px, env(safe-area-inset-right));
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+
+  .topbar {
+    padding-top: max(0px, env(safe-area-inset-top));
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   骨架屏 — 首屏加载动画
+   ═══════════════════════════════════════════════════════════════ */
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
+.loading-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+.skeleton-threat-bar {
+  height: 60px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-card) 0%,
+    var(--bg-card-hover) 50%,
+    var(--bg-card) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+}
+
+.skeleton-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.skeleton-card {
+  height: 200px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-card) 0%,
+    var(--bg-card-hover) 50%,
+    var(--bg-card) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@media (max-width: 768px) {
+  .skeleton-grid { grid-template-columns: 1fr; }
+}

@@ -2,9 +2,8 @@
 
 use leptos::*;
 
-use crate::api::{self, RateResponse, StatsResponse};
+use crate::api::{self, StatsResponse};
 use crate::charts::{LineChart, PieChart};
-use crate::components::stat_card::StatCard;
 use crate::types;
 use crate::sse;
 
@@ -99,8 +98,33 @@ pub fn Dashboard() -> impl IntoView {
 
     let stats_default = move || StatsResponse::default();
 
+    // 加载状态
+    let is_loading = move || {
+        let stats = stats_signal.try_get().flatten();
+        let rates = rates_signal.try_get().flatten();
+        stats.is_none() || rates.is_none()
+    };
+
     view! {
         <div class="dashboard">
+            // 加载骨架屏
+            <Show
+                when=move || !is_loading()
+                fallback=|| view! {
+                    <div class="loading-skeleton">
+                        <div class="skeleton-threat-bar"/>
+                        <div class="skeleton-grid">
+                            <div class="skeleton-card"/>
+                            <div class="skeleton-card"/>
+                        </div>
+                        <div class="skeleton-grid">
+                            <div class="skeleton-card"/>
+                            <div class="skeleton-card"/>
+                        </div>
+                    </div>
+                }
+            >
+
             // 顶部威胁状态栏
             <div class="threat-bar">
                 <div class="threat-level">
@@ -259,6 +283,8 @@ pub fn Dashboard() -> impl IntoView {
                     types::format_uptime(s.uptime_seconds)
                 }/>
             </div>
+
+            </Show>
         </div>
     }
 }

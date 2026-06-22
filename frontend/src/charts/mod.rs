@@ -72,7 +72,13 @@ pub fn LineChart(
         let grid_lines = (0..=4)
             .map(|i| {
                 let y = pad_top + chart_h * (1.0 - i as f64 / 4.0);
-                let val = (max_val * i as f64 / 4.0) as u64;
+                let val_f = max_val * i as f64 / 4.0;
+                // 小数值使用浮点精度，避免整除为 0
+                let val = if max_val < 10.0 {
+                    val_f
+                } else {
+                    val_f as u64 as f64
+                };
                 (y, val)
             })
             .collect();
@@ -127,7 +133,7 @@ pub fn LineChart(
                     if grid.is_empty() {
                         (0..=4).map(|i| {
                             let y = pad_top + chart_h * (1.0 - i as f64 / 4.0);
-                            (y, 0_u64)
+                            (y, 0.0_f64)
                         }).collect()
                     } else {
                         grid
@@ -135,12 +141,14 @@ pub fn LineChart(
                 }
                 key=|(y, _)| format!("{y:.0}")
                 children=move |(y, val)| {
-                    let label = if val >= 1_000_000 {
-                        format!("{:.1}M", val as f64 / 1_000_000.0)
-                    } else if val >= 1_000 {
-                        format!("{:.0}K", val as f64 / 1_000.0)
+                    let label = if val >= 1_000_000.0 {
+                        format!("{:.1}M", val / 1_000_000.0)
+                    } else if val >= 1_000.0 {
+                        format!("{:.0}K", val / 1_000.0)
+                    } else if val >= 10.0 {
+                        format!("{:.0}", val)
                     } else {
-                        val.to_string()
+                        format!("{:.1}", val)
                     };
                     view! {
                         <g>

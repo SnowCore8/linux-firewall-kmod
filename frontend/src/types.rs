@@ -1,6 +1,5 @@
 //! 统一数据模型 — 所有页面共享
 
-use serde::{Deserialize, Serialize};
 
 /// 威胁等级（全局统一）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,24 +85,6 @@ pub fn format_uptime(seconds: u64) -> String {
     }
 }
 
-/// 封禁倒计时格式化（所有页面共用）
-pub fn format_duration(remaining_seconds: i64) -> String {
-    if remaining_seconds < 0 {
-        return "永久".to_string();
-    }
-    let secs = remaining_seconds as u64;
-    let hours = secs / 3600;
-    let mins = (secs % 3600) / 60;
-    let seconds = secs % 60;
-    
-    if hours > 0 {
-        format!("{}h {}m", hours, mins)
-    } else if mins > 0 {
-        format!("{}m {}s", mins, seconds)
-    } else {
-        format!("{}s", seconds)
-    }
-}
 
 /// 协议类型判断（所有页面共用）
 pub fn dominant_protocol(rate: &crate::api::RateResponse) -> &'static str {
