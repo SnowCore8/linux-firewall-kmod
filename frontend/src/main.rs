@@ -4,6 +4,7 @@ mod api;
 mod charts;
 mod components;
 mod format;
+mod performance;
 mod sse;
 mod theme;
 mod types;
@@ -17,7 +18,11 @@ use components::layout::DefaultLayout;
 use views::{bans, dashboard, ddos, jails, logs, settings, whitelist};
 
 fn main() {
+    // 设置错误捕获
+    performance::setup_error_handler();
+
     console_error_panic_hook::set_once();
+
     mount_to_body(|| {
         view! {
             <Router>

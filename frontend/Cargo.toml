@@ -48,6 +48,8 @@ web-sys = { version = "0.3", features = [
     "DomRect",
     "MediaQueryList",
     "Storage",
+    "PerformanceEntry",
+    "PromiseRejectionEvent",
 ] }
 console_error_panic_hook = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "wasmbind"] }
