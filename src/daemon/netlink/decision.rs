@@ -1,7 +1,7 @@
 //! DDoS 决策引擎
 //!
-//! 接收内核推送的 DDoS 事件，根据策略决定是否封禁。
-//! 通过 netlink 发送封禁指令给内核。
+//! 接收内核推送的 DDoS 事件，记录日志和统计。
+//! 内核已封禁 IP，守护进程不重复封禁。
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::netlink::NetlinkContext;
 use crate::types::{now_secs, DdosConfig, DDOS_STATS};
 
 /// 每 IP 违规跟踪条目
@@ -43,18 +42,15 @@ impl IpViolationTracker {
 pub struct DdosDecisionEngine {
     /// DDoS 配置（使用 RwLock 支持运行时更新）
     config: RwLock<DdosConfig>,
-    /// Netlink 上下文（用于发送封禁指令）
-    netlink: Arc<NetlinkContext>,
-    /// 每 IP 违规跟踪（使用 DashMap 或 RwLock<HashMap>）
+    /// 每 IP 违规跟踪
     ip_trackers: RwLock<HashMap<IpAddr, Arc<IpViolationTracker>>>,
 }
 
 impl DdosDecisionEngine {
     /// 创建决策引擎
-    pub fn new(config: DdosConfig, netlink: Arc<NetlinkContext>) -> Self {
+    pub fn new(config: DdosConfig) -> Self {
         Self {
             config: RwLock::new(config),
-            netlink,
             ip_trackers: RwLock::new(HashMap::new()),
         }
     }
@@ -73,9 +69,7 @@ impl DdosDecisionEngine {
 
     /// 处理 DDoS 事件
     ///
-    /// 根据违规次数决定是否封禁：
-    /// - 违规次数 < auto_ban_threshold: 仅记录日志
-    /// - 违规次数 >= auto_ban_threshold: 发送封禁指令
+    /// 内核已封禁 IP，守护进程只记录日志和统计（不重复封禁）。
     pub fn handle_event(&self, ip: IpAddr, reason: &str, rate_pps: u32) {
         let now = now_secs();
 
@@ -98,75 +92,21 @@ impl DdosDecisionEngine {
         let count = tracker.increment(now);
 
         // 读取配置（加锁）
-        let (threshold, duration) = {
+        let threshold = {
             let config = self.config.read();
-            (config.auto_ban_threshold, config.auto_ban_duration)
+            config.auto_ban_threshold
         };
 
-        // 决策：是否封禁
-        if count >= threshold {
-            // 触发封禁
-            DDOS_STATS
-                .auto_bans_triggered
-                .fetch_add(1, Ordering::Relaxed);
-
-            crate::logger::info!(
-                crate::logger::get(),
-                "DDoS 决策：触发封禁";
-                "ip" => %ip,
-                "reason" => reason,
-                "rate_pps" => rate_pps,
-                "violation_count" => count,
-                "duration_secs" => duration
-            );
-
-            // 通过 netlink 发送封禁指令
-            if let Err(e) = self.netlink.send_ban(ip, duration, "ddos_rate") {
-                crate::logger::error!(
-                    crate::logger::get(),
-                    "发送封禁指令失败";
-                    "ip" => %ip,
-                    "error" => %e
-                );
-            } else {
-                // 封禁指令发送成功，同步到 ACTIVE_BAN_CACHE（Web UI 需要）
-                use crate::types::{BanInfo, ACTIVE_BAN_CACHE};
-                let ban_info = BanInfo {
-                    ip: ip.to_string(),
-                    ip_num: match ip {
-                        std::net::IpAddr::V4(v4) => u32::from(v4),
-                        std::net::IpAddr::V6(_) => 0,
-                    },
-                    jail_name: "ddos".to_string(),
-                    reason: "ddos_rate".to_string(),
-                    banned_at: now,
-                    expires_at: if duration > 0 {
-                        now + duration as i64
-                    } else {
-                        0
-                    },
-                    is_permanent: duration == 0,
-                    fail_count: count,
-                };
-                if let Some(cache) = ACTIVE_BAN_CACHE.get() {
-                    cache.try_insert(ban_info);
-                }
-            }
-
-            // 重置违规计数（避免重复封禁）
-            tracker.violation_count.store(0, Ordering::Relaxed);
-        } else {
-            // 仅记录日志
-            crate::logger::info!(
-                crate::logger::get(),
-                "DDoS 决策：记录违规";
-                "ip" => %ip,
-                "reason" => reason,
-                "rate_pps" => rate_pps,
-                "violation_count" => count,
-                "threshold" => threshold
-            );
-        }
+        // 内核已封禁，守护进程只记录日志
+        crate::logger::info!(
+            crate::logger::get(),
+            "DDoS 事件：内核已封禁";
+            "ip" => %ip,
+            "reason" => reason,
+            "rate_pps" => rate_pps,
+            "violation_count" => count,
+            "threshold" => threshold
+        );
     }
 
     /// 清理过期的 IP 跟踪器

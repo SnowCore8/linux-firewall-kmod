@@ -204,7 +204,7 @@ fn main() -> Result<()> {
         }
 
         // 创建决策引擎
-        let decision_engine = Arc::new(DdosDecisionEngine::new(cfg.ddos.clone(), ctx_arc.clone()));
+        let decision_engine = Arc::new(DdosDecisionEngine::new(cfg.ddos.clone()));
         ctx_arc.set_decision_engine(decision_engine.clone());
 
         // 设置全局决策引擎引用（供配置热重载使用）

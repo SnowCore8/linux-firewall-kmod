@@ -99,15 +99,18 @@ pub fn Logs() -> impl IntoView {
         on_log.forget();
     }
 
-    // 过滤后的日志
+    // 过滤后的日志（最新在前）
     let filtered = move || {
         let kw = keyword.get().to_lowercase();
         let levels = active_levels.get();
-        logs.get()
+        let mut result = logs
+            .get()
             .into_iter()
             .filter(|l| levels.contains(&l.level))
             .filter(|l| kw.is_empty() || l.message.to_lowercase().contains(&kw))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        result.reverse(); // 最新日志在前
+        result
     };
 
     let toggle_level = move |level: &str| {

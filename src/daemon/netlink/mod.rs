@@ -311,11 +311,13 @@ impl NetlinkContext {
                     } else if reason_str == "procfs"
                         || reason_str == "manual"
                         || reason_str == "api"
+                        || reason_str == "restored"
                     {
                         (reason_str.clone(), "api".to_string())
-                    } else if reason_str == "restored" {
-                        (reason_str.clone(), "kernel".to_string())
-                    } else if reason_str == "expired" || reason_str == "unban" {
+                    } else if reason_str == "expired"
+                        || reason_str == "unban"
+                        || reason_str == "whitelist"
+                    {
                         (reason_str.clone(), "system".to_string())
                     } else {
                         // 无法推断 jail 来源，统一归为 "api"

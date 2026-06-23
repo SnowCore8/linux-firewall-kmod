@@ -76,11 +76,15 @@ int save_state_to_file(const char *filename) {
   struct saved_ban_entry_v4 {
     __be32 ipv4;
     unsigned long remaining_time;
+    char jail_name[32];
+    char reason[32];
   };
 
   struct saved_ban_entry_v6 {
     struct in6_addr ipv6;
     unsigned long remaining_time;
+    char jail_name[32];
+    char reason[32];
   };
 
   struct saved_whitelist_entry_v4 {
@@ -141,6 +145,8 @@ int save_state_to_file(const char *filename) {
     if (ban_count_v4 < MAX_SAVE_BAN) {
       ban_entries_v4[ban_count_v4].ipv4 = READ_ONCE(entry->addr.ipv4);
       ban_entries_v4[ban_count_v4].remaining_time = remaining_time;
+      strscpy(ban_entries_v4[ban_count_v4].jail_name, entry->jail_name, sizeof(ban_entries_v4[ban_count_v4].jail_name));
+      strscpy(ban_entries_v4[ban_count_v4].reason, entry->reason, sizeof(ban_entries_v4[ban_count_v4].reason));
       ban_count_v4++;
     }
   }
@@ -159,6 +165,8 @@ int save_state_to_file(const char *filename) {
     if (ban_count_v6 < MAX_SAVE_BAN) {
       memcpy(&ban_entries_v6[ban_count_v6].ipv6, &entry->addr.ipv6, sizeof(struct in6_addr));
       ban_entries_v6[ban_count_v6].remaining_time = remaining_time;
+      strscpy(ban_entries_v6[ban_count_v6].jail_name, entry->jail_name, sizeof(ban_entries_v6[ban_count_v6].jail_name));
+      strscpy(ban_entries_v6[ban_count_v6].reason, entry->reason, sizeof(ban_entries_v6[ban_count_v6].reason));
       ban_count_v6++;
     }
   }
@@ -219,8 +227,10 @@ int save_state_to_file(const char *filename) {
   for (int i = 0; i < ban_count_v4; i++) {
     char ip_str[INET_ADDRSTRLEN];
     ip_to_str(FW_AF_INET, &ban_entries_v4[i].ipv4, ip_str, sizeof(ip_str));
-    written = snprintf(buffer, sizeof(buffer), "BAN_V4 %s %lu\n", ip_str,
-                       ban_entries_v4[i].remaining_time);
+    written = snprintf(buffer, sizeof(buffer), "BAN_V4 %s %lu %s %s\n", ip_str,
+                       ban_entries_v4[i].remaining_time,
+                       ban_entries_v4[i].jail_name,
+                       ban_entries_v4[i].reason);
     if (kernel_write(file, buffer, written, &pos) != written) {
       filp_close(file, NULL);
       ret = -EIO;
@@ -232,8 +242,10 @@ int save_state_to_file(const char *filename) {
   for (int i = 0; i < ban_count_v6; i++) {
     char ip_str[INET6_STR_LEN];
     ip_to_str(FW_AF_INET6, &ban_entries_v6[i].ipv6, ip_str, sizeof(ip_str));
-    written = snprintf(buffer, sizeof(buffer), "BAN_V6 %s %lu\n", ip_str,
-                       ban_entries_v6[i].remaining_time);
+    written = snprintf(buffer, sizeof(buffer), "BAN_V6 %s %lu %s %s\n", ip_str,
+                       ban_entries_v6[i].remaining_time,
+                       ban_entries_v6[i].jail_name,
+                       ban_entries_v6[i].reason);
     if (kernel_write(file, buffer, written, &pos) != written) {
       filp_close(file, NULL);
       ret = -EIO;
@@ -376,9 +388,11 @@ int restore_state_from_file(const char *filename) {
       if (strcmp(cmd, "BAN_V4") == 0 && token) {
         char *ip_str = strsep(&token, " ");
         char *time_str = strsep(&token, " ");
+        char *jail_str = strsep(&token, " ");
+        char *reason_str = strsep(&token, " ");
 
         /* 修复 W2-6：增强格式校验，确保只有预期的字段 */
-        if (ip_str && time_str && (!token || *token == '\0')) {
+        if (ip_str && time_str) {
           __be32 ip;
           if (in4_pton(ip_str, -1, (u8 *)&ip, -1, NULL)) {
             if (is_in_whitelist(&fw_info, FW_AF_INET, &ip)) {
@@ -417,6 +431,8 @@ int restore_state_from_file(const char *filename) {
               entry->ban_time = jiffies;
               entry->unban_time = unban_time;
               entry->is_permanent = is_permanent;
+              strscpy(entry->jail_name, jail_str ? jail_str : "api", sizeof(entry->jail_name));
+              strscpy(entry->reason, reason_str ? reason_str : "restored", sizeof(entry->reason));
               atomic_set(&entry->retry_count, 0);
 
               /* 修复：使用每桶锁替代全局锁，提高并发性能 */
@@ -444,9 +460,10 @@ int restore_state_from_file(const char *filename) {
                   atomic_inc(&fw_info.total_ban_count);
                   spin_unlock(&fw_info.ban_locks_ipv4[bkt4]);
                   restored_ban_count++;
-                  /* 推送恢复的封禁事件给守护进程 */
+                  /* 推送恢复的封禁事件给守护进程，使用真实的 reason */
                   fw_netlink_send_ban_state_change(
-                    FW_AF_INET, &ip, 1, is_permanent ? 0 : (u32)remaining_time, "restored");
+                    FW_AF_INET, &ip, 1, is_permanent ? 0 : (u32)remaining_time,
+                    reason_str ? reason_str : "restored");
                 }
               }
             }
@@ -456,8 +473,10 @@ int restore_state_from_file(const char *filename) {
       } else if (strcmp(cmd, "BAN_V6") == 0 && token) {
         char *ip_str = strsep(&token, " ");
         char *time_str = strsep(&token, " ");
+        char *jail_str = strsep(&token, " ");
+        char *reason_str = strsep(&token, " ");
 
-        if (ip_str && time_str && (!token || *token == '\0')) {
+        if (ip_str && time_str) {
           struct in6_addr ip6;
           if (in6_pton(ip_str, -1, (u8 *)&ip6, -1, NULL)) {
             if (is_in_whitelist(&fw_info, FW_AF_INET6, &ip6)) {
@@ -494,6 +513,8 @@ int restore_state_from_file(const char *filename) {
               entry->ban_time = jiffies;
               entry->unban_time = unban_time;
               entry->is_permanent = is_permanent;
+              strscpy(entry->jail_name, jail_str ? jail_str : "api", sizeof(entry->jail_name));
+              strscpy(entry->reason, reason_str ? reason_str : "restored", sizeof(entry->reason));
               atomic_set(&entry->retry_count, 0);
 
               /* 修复：使用每桶锁替代全局锁，提高并发性能 */
@@ -524,9 +545,10 @@ int restore_state_from_file(const char *filename) {
                   atomic_inc(&fw_info.total_ban_count);
                   spin_unlock(&fw_info.ban_locks_ipv6[bkt6]);
                   restored_ban_count++;
-                  /* 推送恢复的封禁事件给守护进程 */
+                  /* 推送恢复的封禁事件给守护进程，使用真实的 reason */
                   fw_netlink_send_ban_state_change(
-                    FW_AF_INET6, &ip6, 1, is_permanent ? 0 : (u32)remaining_time, "restored");
+                    FW_AF_INET6, &ip6, 1, is_permanent ? 0 : (u32)remaining_time,
+                    reason_str ? reason_str : "restored");
                 }
               }
             }

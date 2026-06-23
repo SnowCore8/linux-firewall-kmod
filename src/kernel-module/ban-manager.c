@@ -152,6 +152,7 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw, const struct in6_addr *ip6
   entry->ban_time = jiffies;
   entry->unban_time = unban_time;
   entry->is_permanent = is_permanent;
+  strscpy(entry->jail_name, "kernel", sizeof(entry->jail_name));
   strscpy(entry->reason, reason ? reason : "", sizeof(entry->reason));
   atomic_set(&entry->retry_count, 0);
   /* 修复：直接用桶索引 hlist_add_head_rcu，避免 hash_add_rcu 以 bkt6 为 key
@@ -224,6 +225,7 @@ static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4,
   entry->ban_time = jiffies;
   entry->unban_time = unban_time;
   entry->is_permanent = is_permanent;
+  strscpy(entry->jail_name, "kernel", sizeof(entry->jail_name));
   strscpy(entry->reason, reason ? reason : "", sizeof(entry->reason));
   atomic_set(&entry->retry_count, 0);
   /* 与 IPv6 路径保持一致:直接用桶索引 hlist_add_head_rcu,

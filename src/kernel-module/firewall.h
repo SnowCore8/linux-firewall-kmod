@@ -119,7 +119,8 @@ struct ban_entry {
   unsigned long unban_time; /* 解除封禁的时间（0 = 永久） */
   atomic_t retry_count;     /* 保留供将来使用 */
   bool is_permanent;        /* 永久封禁标志 */
-  char reason[32]; /* 封禁原因（如 "DDoS SYN flood"、"Jail sshd" 等） */
+  char jail_name[32]; /* Jail 名称（如 "sshd"、"nginx"、"api" 等） */
+  char reason[32]; /* 封禁原因（如 "DDoS SYN flood"、"failed attempts" 等） */
   struct hlist_node hash;
   struct list_head ban_node; /* 全局活跃封禁链表节点 */
   struct rcu_head rcu_head;  /* 用于 RCU 释放 */
