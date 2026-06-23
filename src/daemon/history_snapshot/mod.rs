@@ -128,9 +128,8 @@ pub fn get_trend_data(metric_name: &str, hours: i64) -> Result<Vec<(i64, u64)>> 
     }
 }
 
-/// 查询 Jail 分布数据（最近 24 小时的总和）
+/// 查询 Jail 分布数据
 pub fn get_jail_distribution() -> Result<Vec<(String, u64)>> {
-    // 从 ACTIVE_BAN_CACHE 获取当前分布
     let cache = crate::types::ACTIVE_BAN_CACHE.get();
     if let Some(cache) = cache {
         let snapshot = cache.snapshot();

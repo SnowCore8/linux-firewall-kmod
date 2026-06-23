@@ -34,7 +34,9 @@ pub fn build_router(metrics_user: String, metrics_pass: String) -> Router {
         .route("/jails", get(handle_spa_jails))
         .route("/ddos", get(handle_spa_ddos))
         .route("/logs", get(handle_spa_logs))
-        .route("/settings", get(handle_spa_settings));
+        .route("/settings", get(handle_spa_settings))
+        // SSE 路由（无认证）- EventSource 无法传递 Authorization header
+        .route("/api/v1/events", get(handle_sse));
 
     // 需认证路由组（RESTful v1 API）
     let protected_routes = Router::new()
@@ -56,7 +58,6 @@ pub fn build_router(metrics_user: String, metrics_pass: String) -> Router {
         .route("/api/v1/whitelist/:cidr", delete(handle_delete_whitelist))
         .route("/api/v1/rates/current", get(handle_api_rates_current))
         .route("/api/v1/rates/history", get(handle_api_rates_history))
-        .route("/api/v1/events", get(handle_sse))
         .route("/api/v1/logs/stream", get(handle_log_stream))
         .route("/api/v1/logs", get(handle_api_logs))
         .layer(middleware::from_fn(auth_middleware))

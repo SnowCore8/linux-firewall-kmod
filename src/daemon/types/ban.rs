@@ -94,8 +94,8 @@ pub struct BanInfo {
     pub ip_num: u32,
     /// 触发封禁的 jail 名称
     pub jail_name: String,
-    /// 封禁原因
-    pub reason: BanReason,
+    /// 封禁原因（原始字符串）
+    pub reason: String,
     /// 封禁时间 (Unix 秒)
     pub banned_at: i64,
     /// 过期时间 (Unix 秒),0 = 永久
@@ -257,7 +257,7 @@ impl ActiveBanCache {
         self.bans.read().is_empty()
     }
 
-    /// 获取指定 jail 的活跃封禁 IP 列表
+    /// 获取指定 jail 的封禁 IP 列表
     #[must_use]
     pub fn get_by_jail(&self, jail_name: &str) -> Vec<String> {
         let by_jail = self.by_jail.read();

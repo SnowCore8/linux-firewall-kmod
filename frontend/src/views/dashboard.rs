@@ -4,53 +4,24 @@ use leptos::*;
 
 use crate::api::{self, StatsResponse};
 use crate::charts::{LineChart, PieChart};
+use crate::sse::{SseState, ConnectionStatus};
 use crate::types;
-use crate::sse;
 
 #[component]
 pub fn Dashboard() -> impl IntoView {
-    let stats_signal = sse::use_sse_stats();
-    let rates_signal = sse::use_sse_rates();
+    let sse = use_context::<SseState>().expect("SseState context not found");
+    let stats_signal = sse.stats;
+    let rates_signal = sse.rates;
+    let rate_history = sse.rate_history;
 
     // 迷你图数据
     let spark_active = create_rw_signal(Vec::<f64>::new());
     let spark_today = create_rw_signal(Vec::<f64>::new());
     let spark_ddos = create_rw_signal(Vec::<f64>::new());
 
-    // 流量趋势数据（从 rates history 加载）
-    let time_labels = create_rw_signal(Vec::<String>::new());
-    let pps_data = create_rw_signal(Vec::<u64>::new());
-    let bps_data = create_rw_signal(Vec::<u64>::new());
-
-    // 加载历史流量数据
-    let _history = create_resource(|| (), |_| async { api::get_rates_history().await.ok() });
-
-    create_effect(move |_| {
-        if let Some(Some(history)) = _history.get() {
-            if time_labels.get().is_empty() && !history.is_empty() {
-                let mut labels = Vec::new();
-                let mut pps = Vec::new();
-                let mut bps = Vec::new();
-                for entry in &history {
-                    let ts = entry.timestamp;
-                    let h = (ts / 3600) % 24;
-                    let m = (ts / 60) % 60;
-                    labels.push(format!("{h:02}:{m:02}"));
-                    pps.push(entry.total_pps);
-                    bps.push(entry.total_bps);
-                }
-                // 只保留最后 60 个点
-                let start = if pps.len() > 60 { pps.len() - 60 } else { 0 };
-                time_labels.set(labels[start..].to_vec());
-                pps_data.set(pps[start..].to_vec());
-                bps_data.set(bps[start..].to_vec());
-            }
-        }
-    });
-
     // 监听 stats 变化，更新迷你图
     create_effect(move |_| {
-        if let Some(s) = stats_signal.try_get().flatten() {
+        if let Some(s) = stats_signal.get() {
             push_spark(spark_active, s.current_bans as f64);
             push_spark(spark_today, s.today_bans as f64);
             push_spark(spark_ddos, s.ddos_events as f64);
@@ -59,13 +30,13 @@ pub fn Dashboard() -> impl IntoView {
 
     // 计算威胁等级
     let threat_level = move || {
-        let rates = rates_signal.try_get().flatten().unwrap_or_default();
+        let rates = rates_signal.get().unwrap_or_default();
         types::ThreatLevel::from_rates(&rates)
     };
 
     // 攻击源 TOP 10
     let top_attackers = move || {
-        let rates = rates_signal.try_get().flatten().unwrap_or_default();
+        let rates = rates_signal.get().unwrap_or_default();
         let mut sorted = rates;
         sorted.sort_by(|a, b| b.packets_per_sec.cmp(&a.packets_per_sec));
         sorted.into_iter().take(10).collect::<Vec<_>>()
@@ -73,7 +44,7 @@ pub fn Dashboard() -> impl IntoView {
 
     // 协议分布
     let protocol_distribution = move || {
-        let rates = rates_signal.try_get().flatten().unwrap_or_default();
+        let rates = rates_signal.get().unwrap_or_default();
         let mut syn = 0_u64;
         let mut udp = 0_u64;
         let mut icmp = 0_u64;
@@ -100,14 +71,11 @@ pub fn Dashboard() -> impl IntoView {
 
     // 加载状态
     let is_loading = move || {
-        let stats = stats_signal.try_get().flatten();
-        let rates = rates_signal.try_get().flatten();
-        stats.is_none() || rates.is_none()
+        stats_signal.get().is_none() || rates_signal.get().is_none()
     };
 
     view! {
         <div class="dashboard">
-            // 加载骨架屏
             <Show
                 when=move || !is_loading()
                 fallback=|| view! {
@@ -138,7 +106,7 @@ pub fn Dashboard() -> impl IntoView {
                         <span class="threat-stat-label">"吞吐量"</span>
                         <span class="threat-stat-value mono">
                             {move || {
-                                let rates = rates_signal.try_get().flatten().unwrap_or_default();
+                                let rates = rates_signal.get().unwrap_or_default();
                                 let pps: u64 = rates.iter().map(|r| r.packets_per_sec).sum();
                                 let bps: u64 = rates.iter().map(|r| r.bytes_per_sec).sum();
                                 format!("{} / {}", types::format_rate(pps, "pps"), types::format_rate(bps, "bps"))
@@ -149,7 +117,7 @@ pub fn Dashboard() -> impl IntoView {
                         <span class="threat-stat-label">"活跃封禁"</span>
                         <span class="threat-stat-value mono">
                             {move || {
-                                let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
+                                let s = stats_signal.get().unwrap_or_else(|| stats_default());
                                 types::format_number(s.current_bans, false)
                             }}
                         </span>
@@ -158,7 +126,7 @@ pub fn Dashboard() -> impl IntoView {
                         <span class="threat-stat-label">"DDoS 事件"</span>
                         <span class="threat-stat-value mono">
                             {move || {
-                                let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
+                                let s = stats_signal.get().unwrap_or_else(|| stats_default());
                                 types::format_number(s.ddos_events, false)
                             }}
                         </span>
@@ -174,8 +142,8 @@ pub fn Dashboard() -> impl IntoView {
                     </div>
                     <div class="chart-body" style="height:200px">
                         <LineChart
-                            labels=Signal::derive(move || time_labels.get())
-                            data=Signal::derive(move || pps_data.get())
+                            labels=Signal::derive(move || rate_history.get().labels.clone())
+                            data=Signal::derive(move || rate_history.get().pps.clone())
                             color="var(--color-cyan)"
                             height=200
                         />
@@ -248,10 +216,10 @@ pub fn Dashboard() -> impl IntoView {
                     <div class="chart-body" style="height:180px">
                         <LineChart
                             labels=Signal::derive(move || {
-                                stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).ban_trend.labels
+                                stats_signal.get().unwrap_or_else(|| stats_default()).ban_trend.labels
                             })
                             data=Signal::derive(move || {
-                                stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).ban_trend.values
+                                stats_signal.get().unwrap_or_else(|| stats_default()).ban_trend.values
                             })
                             color="var(--color-red)"
                             height=180
@@ -263,23 +231,23 @@ pub fn Dashboard() -> impl IntoView {
             // 底部内核统计
             <div class="kernel-stats-bar">
                 <KernelStat label="丢包" value=move || {
-                    let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
                     types::format_number(s.packets_dropped, true)
                 }/>
                 <KernelStat label="通过" value=move || {
-                    let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
                     types::format_number(s.packets_accepted, true)
                 }/>
                 <KernelStat label="封禁表" value=move || {
-                    let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
                     types::format_number(s.current_bans, false)
                 }/>
                 <KernelStat label="白名单" value=move || {
-                    let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
                     types::format_number(s.whitelist_count, false)
                 }/>
                 <KernelStat label="运行时间" value=move || {
-                    let s = stats_signal.try_get().flatten().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
                     types::format_uptime(s.uptime_seconds)
                 }/>
             </div>

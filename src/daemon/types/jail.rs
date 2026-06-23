@@ -143,8 +143,8 @@ pub struct Jail {
     pub max_retries: u32,
     /// 滑动窗口大小 (秒)
     pub findtime: u32,
-    /// 封禁时长 (秒)。`0` 表示永久封禁
-    pub ban_time: u32,
+    /// 封禁时长 (秒)。`-1` 表示永久封禁
+    pub ban_time: i32,
     /// `*_set` 标志区分"用户显式配置"与"智能默认推断",避免被默认值覆盖
     pub max_retries_set: bool,
     pub findtime_set: bool,

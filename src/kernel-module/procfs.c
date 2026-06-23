@@ -246,7 +246,7 @@ static int execute_unban_action(struct firewall_info *fw, u8 af, const void *ip,
  */
 static int execute_permanent_ban(struct firewall_info *fw, u8 af,
                                  const void *ip, const char *ip_str) {
-  int result = ban_ip_permanent(fw, af, ip);
+  int result = ban_ip_permanent(fw, af, ip, "procfs");
 
   if (result < 0) {
     return result;
@@ -266,9 +266,9 @@ static int execute_temporary_ban(struct firewall_info *fw, u8 af, const void *ip
   }
 
   if (seconds == -2) {
-    result = ban_ip(fw, af, ip);
+    result = ban_ip(fw, af, ip, "procfs");
   } else {
-    result = ban_ip_with_duration(fw, af, ip, (unsigned long)seconds);
+    result = ban_ip_with_duration(fw, af, ip, (unsigned long)seconds, "procfs");
   }
 
   if (result < 0) {
@@ -395,7 +395,7 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
     }
     const void *ip_ptr = (af == FW_AF_INET) ? (const void *)&ip_addr.ipv4 :
                                               (const void *)&ip_addr.ipv6;
-    fw_netlink_send_ban_state_change(af, ip_ptr, 1, duration);
+    fw_netlink_send_ban_state_change(af, ip_ptr, 1, duration, "procfs");
   }
 
   return count;
@@ -758,6 +758,10 @@ static int apply_config_ban_time(unsigned int value) {
     return -EINVAL;
   }
   WRITE_ONCE(fw_ban_time, value);
+  /* 同步到 fw_info.ban_time，消除双变量不一致 */
+  WRITE_ONCE(fw_info.ban_time, value);
+  /* 推送配置变更事件给守护进程 */
+  fw_netlink_send_config_change(1, value); /* 1 = BAN_TIME flag */
   return 0;
 }
 

@@ -71,14 +71,14 @@ static inline int __recheck_whitelist_ipv4(struct firewall_info *fw, __be32 ipv4
  * 让插入阶段使用每桶锁，可大幅提升并发性能。
  */
 static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
-                       unsigned long unban_time, bool is_permanent,
-                       const char *log_msg, unsigned long log_arg);
+                       unsigned long unban_time, bool is_permanent, const char *reason,
+                       const char *log_msg, unsigned long log_arg, bool *is_new_ban);
 static struct ban_entry *__find_ban_entry_rcu(struct firewall_info *fw, u8 af,
                                               const void *ip);
 static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip, bool permanent_only);
 
 int ban_ip_with_duration(struct firewall_info *fw, u8 af, const void *ip,
-                         unsigned long seconds);
+                         unsigned long seconds, const char *reason);
 int check_flood_protection(void);
 
 /* 计算 IPv6 地址在封禁表中的哈希桶索引
@@ -86,7 +86,7 @@ int check_flood_protection(void);
  * 使用 jhash 确保地址分布均匀，减少哈希冲突。
  * fw_hash_seed 在模块初始化时随机生成，防止攻击者构造哈希碰撞。
  */
-static u32 hash_ipv6(const struct in6_addr *addr) {
+u32 hash_ipv6(const struct in6_addr *addr) {
   return jhash(addr, sizeof(struct in6_addr), fw_hash_seed) & ((1 << BAN_HASH_BITS) - 1);
 }
 
@@ -108,9 +108,9 @@ static u32 hash_ipv6(const struct in6_addr *addr) {
  * 统计不变量（任一时刻都应成立）:
  *   total_bans == current_bans + total_unbans + cleanup_expired_total
  */
-static int __do_ban_ip_ipv6(struct firewall_info *fw,
-                            const struct in6_addr *ip6, struct ban_entry *entry,
-                            unsigned long unban_time, bool is_permanent) {
+static int __do_ban_ip_ipv6(struct firewall_info *fw, const struct in6_addr *ip6,
+                            struct ban_entry *entry, unsigned long unban_time,
+                            bool is_permanent, const char *reason, bool *is_new_ban) {
   u32 bkt6 = hash_ipv6(ip6);
   struct ban_entry *existing;
 
@@ -152,15 +152,18 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw,
   entry->ban_time = jiffies;
   entry->unban_time = unban_time;
   entry->is_permanent = is_permanent;
+  strscpy(entry->reason, reason ? reason : "", sizeof(entry->reason));
   atomic_set(&entry->retry_count, 0);
   /* 修复：直接用桶索引 hlist_add_head_rcu，避免 hash_add_rcu 以 bkt6 为 key
    * 重新 hash_min 落到错误桶(会导致重复检查失效、产生重复条目)。
    * IPv4 路径不受影响(其 key=ipv4,hash_min(ipv4,...) 与 bkt4 巧合一致)。*/
   hlist_add_head_rcu(&entry->hash, &fw->ban_table_ipv6[bkt6]);
+  list_add_tail_rcu(&entry->ban_node, &fw->active_bans_list);
   spin_unlock(&fw->ban_locks_ipv6[bkt6]);
   /* 新插入：同时增加表内计数与累计操作次数 */
   atomic_inc(&fw->ban_count);
   atomic_inc(&fw->total_ban_count);
+  *is_new_ban = true;
   return 0;
 }
 
@@ -177,8 +180,9 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw,
  * 统计不变量（任一时刻都应成立）:
  *   total_bans == current_bans + total_unbans + cleanup_expired_total
  */
-static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4, struct ban_entry *entry,
-                            unsigned long unban_time, bool is_permanent) {
+static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4,
+                            struct ban_entry *entry, unsigned long unban_time,
+                            bool is_permanent, const char *reason, bool *is_new_ban) {
   u32 bkt4 = hash_min(ipv4, BAN_HASH_BITS);
   struct ban_entry *existing;
 
@@ -220,24 +224,29 @@ static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4, struct ban_en
   entry->ban_time = jiffies;
   entry->unban_time = unban_time;
   entry->is_permanent = is_permanent;
+  strscpy(entry->reason, reason ? reason : "", sizeof(entry->reason));
   atomic_set(&entry->retry_count, 0);
   /* 与 IPv6 路径保持一致:直接用桶索引 hlist_add_head_rcu,
    * 杜绝 hash_add_rcu(key) API 误用导致桶错位。*/
   hlist_add_head_rcu(&entry->hash, &fw->ban_table_ipv4[bkt4]);
+  list_add_tail_rcu(&entry->ban_node, &fw->active_bans_list);
   spin_unlock(&fw->ban_locks_ipv4[bkt4]);
   /* 新插入：同时增加表内计数与累计操作次数 */
   atomic_inc(&fw->ban_count);
   atomic_inc(&fw->total_ban_count);
+  *is_new_ban = true;
   return 0;
 }
 
 static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
-                       unsigned long unban_time, bool is_permanent,
-                       const char *log_msg, unsigned long log_arg) {
+                       unsigned long unban_time, bool is_permanent, const char *reason,
+                       const char *log_msg, unsigned long log_arg, bool *is_new_ban) {
   struct ban_entry *entry;
   struct whitelist_entry *wl_entry;
   int bkt;
   int ret;
+
+  *is_new_ban = false;
 
   if (!ip) {
     return -EINVAL;
@@ -361,9 +370,11 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
 
   /* 阶段 3：使用每桶锁操作封禁表（不同桶可并行） */
   if (af == FW_AF_INET6) {
-    ret = __do_ban_ip_ipv6(fw, (struct in6_addr *)ip, entry, unban_time, is_permanent);
+    ret = __do_ban_ip_ipv6(fw, (struct in6_addr *)ip, entry, unban_time,
+                           is_permanent, reason, is_new_ban);
   } else {
-    ret = __do_ban_ip_ipv4(fw, *(__be32 *)ip, entry, unban_time, is_permanent);
+    ret = __do_ban_ip_ipv4(
+      fw, *(__be32 *)ip, entry, unban_time, is_permanent, reason, is_new_ban);
   }
 
   if (ret == -EPERM) {
@@ -421,6 +432,7 @@ static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip, bool p
     hlist_for_each_entry(entry, &fw->ban_table_ipv6[bkt], hash) {
       if (entry->af == af && ipv6_addr_equal(&entry->addr.ipv6, ip6)) {
         if (!permanent_only || READ_ONCE(entry->is_permanent)) {
+          list_del_rcu(&entry->ban_node);
           hlist_del_rcu(&entry->hash);
           atomic_dec(&fw->ban_count);
           found = 1;
@@ -438,6 +450,7 @@ static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip, bool p
     hlist_for_each_entry(entry, &fw->ban_table_ipv4[bkt], hash) {
       if (entry->af == af && entry->addr.ipv4 == ipv4) {
         if (!permanent_only || READ_ONCE(entry->is_permanent)) {
+          list_del_rcu(&entry->ban_node);
           hlist_del_rcu(&entry->hash);
           atomic_dec(&fw->ban_count);
           found = 1;
@@ -459,7 +472,7 @@ static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip, bool p
 int unban_ip(struct firewall_info *fw, u8 af, const void *ip) {
   int ret = __do_unban_ip(fw, af, ip, false);
   if (ret == 0) {
-    fw_netlink_send_ban_state_change(af, ip, 2, 0);
+    fw_netlink_send_ban_state_change(af, ip, 2, 0, "unban");
   }
   return ret;
 }
@@ -468,7 +481,7 @@ EXPORT_SYMBOL_GPL(unban_ip);
 int unban_permanent_ip(struct firewall_info *fw, u8 af, const void *ip) {
   int ret = __do_unban_ip(fw, af, ip, true);
   if (ret == 0) {
-    fw_netlink_send_ban_state_change(af, ip, 2, 0);
+    fw_netlink_send_ban_state_change(af, ip, 2, 0, "unban");
   }
   return ret;
 }
@@ -495,20 +508,29 @@ int is_banned(struct firewall_info *fw, u8 af, const void *ip) {
 }
 EXPORT_SYMBOL_GPL(is_banned);
 
-int ban_ip(struct firewall_info *fw, u8 af, const void *ip) {
+int ban_ip(struct firewall_info *fw, u8 af, const void *ip, const char *reason) {
   unsigned long ban_secs = READ_ONCE(fw_ban_time);
   unsigned long ban_duration;
+  bool is_new_ban = false;
   if (check_mul_overflow(ban_secs, (unsigned long)HZ, &ban_duration)) {
     return -EINVAL;
   }
-  int ret = __do_ban_ip(fw, af, ip, jiffies + ban_duration, false,
-                        "banned for %u seconds", ban_secs);
+  int ret = __do_ban_ip(fw, af, ip, jiffies + ban_duration, false, reason ? reason : "manual",
+                        "banned for %u seconds", ban_secs, &is_new_ban);
+  if (ret == 0 && is_new_ban) {
+    fw_netlink_send_ban_state_change(af, ip, 1, (u32)ban_secs, reason ? reason : "manual");
+  }
   return ret;
 }
 EXPORT_SYMBOL_GPL(ban_ip);
 
-int ban_ip_permanent(struct firewall_info *fw, u8 af, const void *ip) {
-  int ret = __do_ban_ip(fw, af, ip, 0, true, "permanently banned", 0);
+int ban_ip_permanent(struct firewall_info *fw, u8 af, const void *ip, const char *reason) {
+  bool is_new_ban = false;
+  int ret = __do_ban_ip(fw, af, ip, 0, true, reason ? reason : "manual",
+                        "permanently banned", 0, &is_new_ban);
+  if (ret == 0 && is_new_ban) {
+    fw_netlink_send_ban_state_change(af, ip, 1, 0, reason ? reason : "manual");
+  }
   return ret;
 }
 EXPORT_SYMBOL_GPL(ban_ip_permanent);
@@ -551,8 +573,9 @@ int check_flood_protection(void) {
 }
 
 int ban_ip_with_duration(struct firewall_info *fw, u8 af, const void *ip,
-                         unsigned long seconds) {
+                         unsigned long seconds, const char *reason) {
   unsigned long ban_duration;
+  bool is_new_ban = false;
   if (!ip) {
     return -EINVAL;
   }
@@ -562,7 +585,10 @@ int ban_ip_with_duration(struct firewall_info *fw, u8 af, const void *ip,
   if (check_mul_overflow(seconds, (unsigned long)HZ, &ban_duration)) {
     return -EINVAL;
   }
-  int ret = __do_ban_ip(fw, af, ip, jiffies + ban_duration, false,
-                        "banned for %lu seconds", seconds);
+  int ret = __do_ban_ip(fw, af, ip, jiffies + ban_duration, false, reason ? reason : "manual",
+                        "banned for %lu seconds", seconds, &is_new_ban);
+  if (ret == 0 && is_new_ban) {
+    fw_netlink_send_ban_state_change(af, ip, 1, (u32)seconds, reason ? reason : "manual");
+  }
   return ret;
 }

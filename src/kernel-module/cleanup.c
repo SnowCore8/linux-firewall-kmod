@@ -46,10 +46,15 @@ static int cleanup_table_ipv4(struct firewall_info *fw) {
         continue;
       }
       if (time_after(now, READ_ONCE(entry->unban_time))) {
+        /* 先保存 IP 再删除（call_rcu 后另一 CPU 可能立即释放） */
+        __be32 expired_ip = entry->addr.ipv4;
+        list_del_rcu(&entry->ban_node);
         hlist_del_rcu(&entry->hash);
         atomic_dec(&fw->ban_count);
         removed++;
         call_rcu(&entry->rcu_head, free_ban_entry_rcu);
+        /* 事件推送：通知守护进程移除过期封禁 */
+        fw_netlink_send_ban_state_change(FW_AF_INET, &expired_ip, 2, 0, "expired");
       }
       processed++;
     }
@@ -83,10 +88,15 @@ static int cleanup_table_ipv6(struct firewall_info *fw) {
         continue;
       }
       if (time_after(now, READ_ONCE(entry->unban_time))) {
+        /* 先保存 IP 再删除（call_rcu 后另一 CPU 可能立即释放） */
+        struct in6_addr expired_ip6 = entry->addr.ipv6;
+        list_del_rcu(&entry->ban_node);
         hlist_del_rcu(&entry->hash);
         atomic_dec(&fw->ban_count);
         removed++;
         call_rcu(&entry->rcu_head, free_ban_entry_rcu);
+        /* 事件推送：通知守护进程移除过期封禁 */
+        fw_netlink_send_ban_state_change(FW_AF_INET6, &expired_ip6, 2, 0, "expired");
       }
       processed++;
     }

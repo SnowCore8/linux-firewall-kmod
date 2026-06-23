@@ -57,7 +57,6 @@ fn cleanup(_cfg: &Config) {
     http_exporter::stop_http_exporter();
     GLOBAL_RUNNING.store(false, Ordering::SeqCst);
     file_monitor::close_inotify();
-    ban::close_cached_bans_fd();
     history_snapshot::close_history_db();
     // netlink_ctx 通过 Arc 管理，最后一个 Arc drop 时自动关闭 socket
     if let Err(e) = fs::remove_file("/run/firewall-daemon.pid") {
@@ -176,16 +175,6 @@ fn main() -> Result<()> {
         warn!(logger::get(), "初始化日志模式失败"; "error" => %e);
     }
 
-    // 从内核模块同步现有封禁到内存缓存
-    match ban::procfs::sync_bans_from_kernel() {
-        Ok(count) => {
-            info!(logger::get(), "从内核模块同步封禁成功"; "count" => count);
-        }
-        Err(e) => {
-            warn!(logger::get(), "从内核模块同步封禁失败"; "error" => %e);
-        }
-    }
-
     // 初始化历史数据快照数据库
     if let Err(e) = history_snapshot::init_history_db() {
         warn!(logger::get(), "初始化历史数据库失败"; "error" => %e);
@@ -261,16 +250,6 @@ fn main() -> Result<()> {
         // 等待响应（给内核一些时间处理）
         std::thread::sleep(std::time::Duration::from_millis(500));
 
-        // 从 /proc/firewall/stats 同步统计数据（在 netlink 查询之后，用 procfs 数据覆盖 netlink 可能返回的旧值）
-        match ban::procfs::sync_stats_from_kernel() {
-            Ok(()) => {
-                info!(logger::get(), "从内核模块同步统计成功");
-            }
-            Err(e) => {
-                warn!(logger::get(), "从内核模块同步统计失败"; "error" => %e);
-            }
-        }
-
         // 初始化可信 IP 白名单（在 netlink 初始化之后，以便走 netlink 通道）
         if !cfg.trusted_ips.is_empty() {
             let failed = ban::init_trusted_ips(&cfg.trusted_ips);
@@ -296,9 +275,10 @@ fn main() -> Result<()> {
         http_exporter::set_global_webui_config(cfg.webui.clone());
     }
 
-    // 启动后台定时 stats 查询线程（每 5 秒通过 netlink 向内核拉取真实计数）
+    // 启动后台定时 stats 查询线程（每 1 秒通过 netlink 向内核拉取真实计数）
     // procfs 是用户接口，守护进程内部通信必须走 netlink。
     // send_stats_query 仅在启动时调用一次，必须周期触发才能持续同步 packets_dropped/accepted。
+    // 注意：BanStateChange 事件已携带实时统计字段，此轮询作为兜底同步机制。
     {
         std::thread::Builder::new()
             .name("netlink-stats-poll".into())
@@ -309,7 +289,7 @@ fn main() -> Result<()> {
                     .unwrap_or_default()
                     .as_secs() as u32;
                 while GLOBAL_RUNNING.load(Ordering::Relaxed) {
-                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    std::thread::sleep(std::time::Duration::from_secs(1));
                     seq_counter = seq_counter.wrapping_add(1);
                     if let Some(ctx) = netlink::get_global_netlink_ctx() {
                         if let Err(e) = ctx.send_stats_query(seq_counter) {

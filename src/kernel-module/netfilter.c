@@ -59,30 +59,6 @@ void fw_flush_all_cpu_stats(void) {
   on_each_cpu(fw_flush_cpu_stats_ipi, NULL, 1);
 }
 
-/* DDoS 事件通知工作处理函数 - 通过 netlink 推送给守护进程 */
-void ddos_notify_worker(struct work_struct *work) {
-  struct firewall_info *fw = &fw_info;
-
-  if (unlikely(atomic_read(&fw->shutting_down)))
-    return;
-
-  /* 使用 smp_load_acquire 确保看到热路径中先写入的数据 */
-  if (smp_load_acquire(&fw->ddos_notify_pending)) {
-    char ip_str[INET6_STR_LEN];
-    ip_to_str(fw->ddos_notify_af, &fw->ddos_notify_ip, ip_str, sizeof(ip_str));
-    pr_warn("firewall: DDoS detected from %s (%s), notifying daemon\n", ip_str,
-            fw->ddos_notify_reason);
-
-    /* 通过 netlink 发送事件给守护进程，由守护进程决策是否封禁 */
-    fw_netlink_send_event(fw->ddos_notify_af, &fw->ddos_notify_ip,
-                          fw->ddos_notify_reason, fw->ddos_notify_rate);
-
-    /* 重置标志，使用 WRITE_ONCE 防止编译器优化 */
-    WRITE_ONCE(fw->ddos_notify_pending, false);
-  }
-}
-EXPORT_SYMBOL_GPL(ddos_notify_worker);
-
 static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *skb,
                                      u8 protocol, u8 tcp_flags) {
   unsigned long now;
@@ -247,30 +223,18 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *
       rcu_read_unlock();
 
       if (should_ban) {
-        /* 超过阈值，通过 netlink 通知守护进程决策 - 使用工作队列避免 netfilter 钩子中耗时操作 */
-        if (!READ_ONCE(fw_info.ddos_notify_pending)) { // 避免覆盖未处理的请求
-          /* 先准备数据，确保数据写入后再设置 pending 标志 */
-          fw_info.ddos_notify_af = af;
-          if (af == FW_AF_INET) {
-            fw_info.ddos_notify_ip.ipv4 = *(__be32 *)src_ip;
-          } else {
-            fw_info.ddos_notify_ip.ipv6 = *(struct in6_addr *)src_ip;
-          }
-          strscpy(fw_info.ddos_notify_reason, ban_reason, sizeof(fw_info.ddos_notify_reason));
-
-          /* 使用阈值作为通知速率（已检测到违规，速率必然超过阈值） */
-          fw_info.ddos_notify_rate = (u32)fw_info.max_packets_per_second;
-
-          /* 使用 smp_store_release 确保数据写入在设置 pending 之前完成 */
-          smp_store_release(&fw_info.ddos_notify_pending, true);
-
-          // 调度工作队列发送 netlink 通知
-          if (fw_info.ddos_notify_wq) {
-            queue_work(fw_info.ddos_notify_wq, &fw_info.ddos_notify_work);
-          }
+        /* DDoS 引擎自行决策：直接封禁 + 推送事件上报 */
+        u32 ban_duration = READ_ONCE(fw_info.ddos_ban_duration);
+        if (ban_duration == 0) {
+          /* 永久封禁 */
+          ban_ip_permanent(&fw_info, af, src_ip, ban_reason);
+        } else {
+          ban_ip_with_duration(&fw_info, af, src_ip, ban_duration, ban_reason);
         }
-
-        /* 丢弃当前数据包 */
+        /* 推送事件给守护进程（仅上报统计） */
+        u32 notify_rate = (u32)fw_info.max_packets_per_second;
+        fw_netlink_send_event(af, src_ip, ban_reason, notify_rate);
+        /* 丢包 */
         struct fw_per_cpu_stats *stats = this_cpu_ptr(&fw_cpu_stats);
         stats->packets_dropped++;
         if (unlikely(stats->packets_dropped >= FW_PER_CPU_BATCH_SIZE))

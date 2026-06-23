@@ -73,7 +73,7 @@ pub(crate) fn apply_service_defaults(
     _service_type: &str,
     retries: u32,
     findtime: u32,
-    ban_time: u32,
+    ban_time: i32,
 ) {
     if !jail.max_retries_set {
         jail.max_retries = retries;
@@ -98,7 +98,7 @@ pub fn apply_smart_defaults_single(
     jail: &mut Jail,
     default_max_retries: u32,
     default_findtime: u32,
-    default_ban_time: u32,
+    default_ban_time: i32,
 ) {
     let name = jail.name.clone();
 

@@ -1,8 +1,8 @@
 //! `firewall_daemon` 库根
 //!
 //! 本 crate 是 `linux-firewall-kmod` 项目的用户态守护进程,提供与 fail2ban 类似但更轻量、
-//! 面向嵌入式 Linux 防火墙内核模块 (`/proc/firewall/bans` procfs 接口) 的"日志 → 失败
-//! 计数 → 封禁决策 → 写 procfs → "完整链路。
+//! 面向嵌入式 Linux 防火墙内核模块的"日志 → 失败计数 → 封禁决策 → netlink 下发 → "完整链路。
+//! 守护进程与内核模块之间通过 netlink 双向实时通信,`/proc/firewall/*` 仅作为用户操作接口。
 //!
 //! # 架构概览
 //!
@@ -10,7 +10,7 @@
 //! - `types`: 跨模块共享的数据结构 (`Jail` / `Config` / `FailedEntry` / `DaemonStats`)
 //!   以及系统级常量
 //! - `logger`: 基于 slog 的结构化日志系统 (异步终端输出)
-//! - `ban`: 与 `/proc/firewall/bans` procfs 的安全交互,支持 IPv4/IPv6 封禁、解封、
+//! - `ban`: 通过 netlink 与内核模块通信,支持 IPv4/IPv6 封禁、解封、
 //!   永久黑名单同步
 //! - `log_parser`: 从日志行提取 IP (正则 + 字符串回退)
 //! - `failed_tracker`: 滑动窗口失败计数与封禁触发 (O(1) 平均复杂度)
@@ -29,7 +29,6 @@
 //! # 关键设计决策
 //!
 //! - **单 crate binary**:无 workspace 拆分,简化交叉编译与 DKMS 集成
-//! - **procfs fd 缓存**:`/proc/firewall/bans` 每次封禁避免 open/close (R9-9 优化)
 //! - **滑动窗口 `recent_head`**:`FailedEntry` 维护 O(1) 平均的前缀跳过 (R9-7 优化)
 //! - **配置双缓冲**:SIGHUP 重载时先 clone 旧配置,失败时旧配置不受影响
 //! - **path 安全 3 重检查**:`..` 遍历 / URL 编码绕过 / shell 元字符注入
@@ -45,7 +44,7 @@
 //! | 封禁缓存 | `ACTIVE_BAN_CACHE` (OnceLock) | 启动时初始化，运行时 ban/unban 操作 |
 //! | 统计计数 | `DAEMON_STATS` / `JAIL_STATS` / `DDOS_STATS` / `BAN_DURATION_BUCKETS` | 全 Atomic，Relaxed 序 |
 //! | HTTP 导出 | `EXPORTER_RUNNING` / `EXPORTER_PORT` / `AUTH_STATE` | 导出器线程 + auth 逻辑 |
-//! | 基础设施 | `GLOBAL_LOGGER` / `CACHED_BANS_FD` / `BANS_FD_MUTEX` / `SYNC_DIRTY` | 日志 / fd 缓存 / 同步标志 |
+//! | 基础设施 | `GLOBAL_LOGGER` / `SYNC_DIRTY` | 日志 / 同步标志 |
 //!
 //! ## 锁获取顺序（防死锁）
 //!
@@ -58,11 +57,10 @@
 //! 4. ACTIVE_BAN_CACHE.bans.write()        (RwLock, 内部)
 //! 5. ACTIVE_BAN_CACHE.by_jail.write()     (RwLock, 内部)
 //! 6. JAIL_STATS.write()                   (RwLock, OnceLock 内部)
-//! 7. BANS_FD_MUTEX.lock()                 (Mutex, procfs fd 缓存)
 //! ```
 //!
 //! **规则**：
-//! - 禁止在持锁时执行 IO（网络、磁盘、procfs 写入）
+//! - 禁止在持锁时执行 IO（网络、磁盘）
 //! - Atomic 操作（Relaxed 序）不视为"持锁"
 //! - `parking_lot` 锁无写线程饥饿，但仍须遵守顺序避免 ABBA 死锁
 

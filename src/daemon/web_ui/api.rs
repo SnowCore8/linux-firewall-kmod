@@ -310,7 +310,7 @@ pub fn get_stats() -> StatsResponse {
         uptime_seconds: uptime.max(0) as u64,
         ban_trend: generate_ban_trend(),
         jail_distribution: generate_jail_distribution(),
-        failure_reasons: generate_failure_reasons(),
+        failure_reasons: generate_ban_reason_distribution(),
         failed_attempts_trend: generate_failed_attempts_trend(),
         current_bans,
         total_bans,
@@ -365,22 +365,30 @@ fn generate_jail_distribution() -> ChartData {
     }
 }
 
-/// 生成失败原因数据（使用累计统计数据）
-fn generate_failure_reasons() -> ChartData {
-    // 从 DAEMON_STATS 读取累计统计数据
-    let failed_attempts = crate::types::DAEMON_STATS
-        .failed_attempts
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let ddos_events = crate::types::DDOS_STATS
-        .events_detected
-        .load(std::sync::atomic::Ordering::Relaxed);
+/// 生成封禁原因分布数据（从活跃封禁缓存聚合，按 reason 分组统计）
+fn generate_ban_reason_distribution() -> ChartData {
+    let cache = match ACTIVE_BAN_CACHE.get() {
+        Some(c) => c,
+        None => {
+            return ChartData {
+                labels: vec![],
+                values: vec![],
+            }
+        }
+    };
 
-    // 简单分类：大部分是失败尝试，部分是 DDoS
-    let labels = vec!["失败尝试".to_string(), "DDoS 检测".to_string()];
+    let mut reason_map: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for ban in cache.snapshot() {
+        *reason_map.entry(ban.reason.clone()).or_insert(0) += 1;
+    }
 
-    let values = vec![failed_attempts, ddos_events];
+    let mut pairs: Vec<(String, u64)> = reason_map.into_iter().collect();
+    pairs.sort_by_key(|b| std::cmp::Reverse(b.1));
 
-    ChartData { labels, values }
+    ChartData {
+        labels: pairs.iter().map(|(l, _)| l.clone()).collect(),
+        values: pairs.iter().map(|(_, v)| *v).collect(),
+    }
 }
 
 /// 生成失败尝试趋势数据
@@ -423,7 +431,12 @@ pub fn get_active_bans() -> Vec<BanResponse> {
                     let remaining = if ban.is_permanent {
                         -1
                     } else {
-                        ban.expires_at - now
+                        let r = ban.expires_at - now;
+                        if r < 0 {
+                            0
+                        } else {
+                            r
+                        }
                     };
 
                     BanResponse {
@@ -431,12 +444,7 @@ pub fn get_active_bans() -> Vec<BanResponse> {
                         jail: ban.jail_name.clone(),
                         banned_at: ban.banned_at,
                         remaining_seconds: remaining,
-                        reason: match ban.reason {
-                            crate::types::BanReason::FailedAttempts => "失败尝试".to_string(),
-                            crate::types::BanReason::DDoSRateLimit => "DDoS 检测".to_string(),
-                            crate::types::BanReason::ManualBan => "手动封禁".to_string(),
-                            crate::types::BanReason::PermanentAuto => "自动永久封禁".to_string(),
-                        },
+                        reason: ban.reason.clone(),
                     }
                 })
                 .collect()
@@ -513,7 +521,7 @@ pub struct WhitelistEntryResponse {
 /// 封禁 IP（POST /api/v1/bans）
 ///
 /// 调用 `ban::ban_ip()` 或 `ban::ban_ip_permanent()`。
-/// duration=0 或 None 时永久封禁。
+/// duration=0 或 None 时永久封禁，与内核 ban_time=-1 语义一致。
 pub fn create_ban(req: CreateBanRequest) -> Result<BanOperationResponse, String> {
     let ip = req.ip.trim();
     if ip.is_empty() {
@@ -525,20 +533,31 @@ pub fn create_ban(req: CreateBanRequest) -> Result<BanOperationResponse, String>
         return Err(format!("无效的 IP 地址格式: {}", ip));
     }
 
-    let permanent = req.duration == Some(0);
+    // None 和 Some(0) 均视为永久封禁，与内核 ban_time=-1 语义一致
+    let permanent = req.duration.is_none() || req.duration == Some(0);
     let duration = req.duration.unwrap_or(0);
 
+    // 先写缓存（正确的 reason 和 jail）
+    let now = crate::types::now_secs();
+    let user_reason = req.reason.as_deref().unwrap_or("manual");
+    let ban_info = crate::types::BanInfo {
+        ip: ip.to_string(),
+        ip_num: 0,
+        jail_name: "api".to_string(),
+        reason: user_reason.to_string(),
+        banned_at: now,
+        expires_at: if permanent { 0 } else { now + duration as i64 },
+        is_permanent: permanent,
+        fail_count: 0,
+    };
+    let cache = ACTIVE_BAN_CACHE.get_or_init(crate::types::ActiveBanCache::new);
+    cache.insert(ban_info);
+
+    // 再发 netlink 到内核
     let result = if permanent {
-        crate::ban::ban_ip_permanent(ip)
-    } else if duration > 0 {
-        crate::ban::ban_ip_with_history(
-            ip,
-            req.reason.as_deref().unwrap_or("API 手动封禁"),
-            "api",
-            duration,
-        )
+        crate::ban::ban_ip_permanent(ip, user_reason)
     } else {
-        crate::ban::ban_ip(ip, 600)
+        crate::ban::ban_ip(ip, duration, user_reason)
     };
 
     match result {
@@ -613,14 +632,6 @@ pub fn create_whitelist(req: CreateWhitelistRequest) -> Result<WhitelistOperatio
         return Err(format!("添加白名单失败: {}", failed.join(", ")));
     }
 
-    // 立即更新缓存（设备名留空，下次内核查询时补全）
-    crate::types::WHITELIST_CACHE
-        .write()
-        .push(crate::types::WhitelistEntry {
-            cidr: cidr.to_string(),
-            device: String::new(),
-        });
-
     Ok(WhitelistOperationResponse {
         cidr: cidr.to_string(),
         action: "added".to_string(),
@@ -639,11 +650,6 @@ pub fn delete_whitelist(cidr: &str) -> Result<WhitelistOperationResponse, String
         return Err(format!("移除白名单失败: {}", failed.join(", ")));
     }
 
-    // 立即从缓存移除
-    crate::types::WHITELIST_CACHE
-        .write()
-        .retain(|e| e.cidr != cidr);
-
     Ok(WhitelistOperationResponse {
         cidr: cidr.to_string(),
         action: "removed".to_string(),
@@ -656,7 +662,7 @@ pub fn delete_whitelist(cidr: &str) -> Result<WhitelistOperationResponse, String
 pub fn get_whitelist() -> Vec<WhitelistEntryResponse> {
     crate::types::WHITELIST_CACHE
         .read()
-        .iter()
+        .values()
         .map(|entry| WhitelistEntryResponse {
             cidr: entry.cidr.clone(),
             device: entry.device.clone(),
@@ -702,7 +708,40 @@ pub fn get_active_bans_paginated(
     match sort_by.as_deref() {
         Some("banned_at_asc") => all_bans.sort_by_key(|b| b.banned_at),
         Some("ip_asc") => all_bans.sort_by(|a, b| a.ip.cmp(&b.ip)),
+        Some("ip_desc") => all_bans.sort_by(|a, b| b.ip.cmp(&a.ip)),
         Some("jail_asc") => all_bans.sort_by(|a, b| a.jail.cmp(&b.jail)),
+        Some("remaining_asc") => {
+            // 永久封禁（-1）排在最后，临时封禁按剩余时间升序
+            all_bans.sort_by(|a, b| {
+                let ka = if a.remaining_seconds < 0 {
+                    i64::MAX
+                } else {
+                    a.remaining_seconds
+                };
+                let kb = if b.remaining_seconds < 0 {
+                    i64::MAX
+                } else {
+                    b.remaining_seconds
+                };
+                ka.cmp(&kb)
+            });
+        }
+        Some("remaining_desc") => {
+            // 临时封禁按剩余时间降序，永久封禁（-1）排在最前
+            all_bans.sort_by(|a, b| {
+                let ka = if a.remaining_seconds < 0 {
+                    i64::MAX
+                } else {
+                    a.remaining_seconds
+                };
+                let kb = if b.remaining_seconds < 0 {
+                    i64::MAX
+                } else {
+                    b.remaining_seconds
+                };
+                kb.cmp(&ka)
+            });
+        }
         _ => all_bans.sort_by_key(|b| std::cmp::Reverse(b.banned_at)), // banned_at_desc
     }
 

@@ -319,7 +319,7 @@ pub fn PieChart(
 
     let has_data = move || !data.get().is_empty() && data.get().iter().sum::<u64>() > 0;
 
-    // 始终渲染的图例结构
+    // 始终渲染所有图例（包括 0 值）
     let legend_items = move || {
         let d = data.get();
         let l = labels.get();
@@ -327,13 +327,12 @@ pub fn PieChart(
         l.into_iter()
             .zip(d.into_iter())
             .enumerate()
-            .filter(|(_, (_, v))| *v > 0)
             .map(|(i, (label, v))| {
                 let color = COLORS[i % COLORS.len()].to_string();
                 let pct = if total > 0 {
                     format!("{:.1}%", v as f64 / total as f64 * 100.0)
                 } else {
-                    "0%".to_string()
+                    "0.0%".to_string()
                 };
                 (color, label, v, pct)
             })

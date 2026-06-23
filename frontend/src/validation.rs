@@ -41,13 +41,13 @@ pub fn is_valid_cidr(cidr: &str) -> bool {
     }
 }
 
-/// 验证时长范围(0-86400 秒,0=永久)
+/// 验证时长范围(0-86400 秒, 0=永久, 空值=永久)
 pub fn is_valid_duration(duration: &str) -> bool {
     if duration.is_empty() {
-        return true; // 空值使用默认值
+        return true; // 空值视为永久
     }
     if let Ok(d) = duration.parse::<i64>() {
-        return d >= 0 && d <= 86400; // 0 秒到 24 小时
+        return d >= 0 && d <= 86400; // 0(永久) 到 24 小时
     }
     false
 }

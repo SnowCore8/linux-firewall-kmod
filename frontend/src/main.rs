@@ -18,15 +18,17 @@ use components::layout::DefaultLayout;
 use views::{bans, dashboard, ddos, jails, logs, settings, whitelist};
 
 fn main() {
-    // 设置错误捕获
     performance::setup_error_handler();
-
     console_error_panic_hook::set_once();
 
-    mount_to_body(|| {
+    mount_to_body(move || {
+        // 在顶层 Owner 中创建 SSE 状态——生命周期 = 整个应用，路由切换不丢失
+        let sse_state = sse::SseState::create();
+        provide_context(sse_state.clone());
+
         view! {
             <Router>
-                <DefaultLayout>
+                <DefaultLayout sse_state=sse_state>
                     <Routes>
                         <Route path="/" view=|| view! { <Redirect path="/dashboard"/> }/>
                         <Route path="/dashboard" view=dashboard::Dashboard/>
@@ -40,5 +42,5 @@ fn main() {
                 </DefaultLayout>
             </Router>
         }
-    });
+    })
 }

@@ -66,7 +66,7 @@ pub struct Config {
     /// Jail 未显式配置 `max_retries` 时使用的全局默认
     pub default_max_retries: u32,
     pub default_findtime: u32,
-    pub default_ban_time: u32,
+    pub default_ban_time: i32,
     /// 是否以守护进程模式运行 (`-d` / `--daemon`)
     pub daemon: bool,
     /// 主循环 poll 超时 (秒)。`config_validate` 要求 1..=60

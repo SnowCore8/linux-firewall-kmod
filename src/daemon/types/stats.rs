@@ -198,7 +198,7 @@ pub static BAN_DURATION_BUCKETS: [AtomicU64; 4] = [
 
 /// 记录一次封禁的持续时长到 histogram
 ///
-/// 在解封（`unban_ip_with_history`）时调用。永久封禁按实际持续时间计入对应桶。
+/// 在解封时调用。永久封禁按实际持续时间计入对应桶。
 ///
 /// # Arguments
 /// * `duration_secs` — 封禁持续秒数（`expires_at - banned_at` 或 `now - banned_at`）
@@ -290,11 +290,12 @@ pub struct WhitelistEntry {
     pub device: String,
 }
 
-/// 全局白名单缓存
+/// 全局白名单缓存（HashMap 天然去重，写入即幂等）
 ///
 /// 由 netlink 接收线程在收到 ListWhitelistResponse 时更新，HTTP API 读取。
-pub static WHITELIST_CACHE: once_cell::sync::Lazy<parking_lot::RwLock<Vec<WhitelistEntry>>> =
-    once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(Vec::new()));
+pub static WHITELIST_CACHE: once_cell::sync::Lazy<
+    parking_lot::RwLock<std::collections::HashMap<String, WhitelistEntry>>,
+> = once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(std::collections::HashMap::new()));
 
 // ============================================================================
 // 速率历史趋势（环形缓冲区）

@@ -5,36 +5,32 @@ use leptos::*;
 use crate::api::{self, BanResponse, StatsResponse};
 use crate::charts::{LineChart, PieChart};
 use crate::format::{format_datetime, format_duration};
-use crate::sse;
+use crate::sse::SseState;
 use crate::validation;
 
 #[component]
 pub fn Bans() -> impl IntoView {
-    let bans_signal = sse::use_sse_bans();
-    let stats_signal = sse::use_sse_stats();
+    let sse = use_context::<SseState>().expect("SseState not found");
+    let bans_signal = sse.bans;
+    let stats_signal = sse.stats;
 
-    // 分页状态
     let page = create_rw_signal(1_u32);
     const PAGE_SIZE: u32 = 20;
     let sort_by = create_rw_signal("banned_at_desc".to_string());
     let search = create_rw_signal(String::new());
 
-    // 分页数据
     let paginated = create_resource(
         move || (page.get(), sort_by.get()),
         |(p, s)| async move { api::get_bans(p, PAGE_SIZE, Some(&s)).await.ok() },
     );
 
-    // 搜索过滤
     let filtered_bans = move || {
         let kw = search.get().to_lowercase();
+        let bans = bans_signal.get().unwrap_or_default();
         if kw.is_empty() {
-            return bans_signal.try_get().flatten().unwrap_or_default();
+            return bans;
         }
-        bans_signal
-            .get()
-            .unwrap_or_default()
-            .into_iter()
+        bans.into_iter()
             .filter(|b| {
                 b.ip.to_lowercase().contains(&kw)
                     || b.jail.to_lowercase().contains(&kw)
@@ -43,7 +39,6 @@ pub fn Bans() -> impl IntoView {
             .collect::<Vec<_>>()
     };
 
-    // 手动封禁表单
     let ban_ip = create_rw_signal(String::new());
     let ban_duration = create_rw_signal(String::new());
     let ban_error = create_rw_signal(String::new());
@@ -61,11 +56,10 @@ pub fn Bans() -> impl IntoView {
         }
         let duration_str = ban_duration.get().trim().to_string();
         if !duration_str.is_empty() && !validation::is_valid_duration(&duration_str) {
-            ban_error.set("时长范围无效(0-86400 秒,0=永久)".to_string());
+            ban_error.set("时长范围无效(0-86400 秒,0或留空=永久)".to_string());
             return;
         }
-        // 检查重复封禁
-        if let Some(list) = bans_signal.try_get().flatten() {
+        if let Some(list) = bans_signal.get() {
             if list.iter().any(|b| b.ip == ip) {
                 ban_error.set("该 IP 已被封禁".to_string());
                 return;
@@ -73,17 +67,10 @@ pub fn Bans() -> impl IntoView {
         }
         ban_loading.set(true);
         ban_error.set(String::new());
-        let duration = if duration_str.is_empty() {
-            None
-        } else {
-            duration_str.parse::<u64>().ok()
-        };
+        let duration = if duration_str.is_empty() { None } else { duration_str.parse::<u64>().ok() };
         spawn_local(async move {
             match api::create_ban(&ip, duration, Some("API 手动封禁")).await {
-                Ok(_) => {
-                    ban_ip.set(String::new());
-                    ban_duration.set(String::new());
-                }
+                Ok(_) => { ban_ip.set(String::new()); ban_duration.set(String::new()); }
                 Err(e) => ban_error.set(e),
             }
             ban_loading.set(false);
@@ -91,59 +78,38 @@ pub fn Bans() -> impl IntoView {
     };
 
     let do_unban = move |ip: String| {
-        // 确认对话框
         let window = web_sys::window().expect("window not available");
-        let message = format!("确定要解封 IP {} 吗?", ip);
-        if !window.confirm_with_message(&message).unwrap_or(false) {
+        if !window.confirm_with_message(&format!("确定要解封 IP {} 吗?", ip)).unwrap_or(false) {
             return;
         }
-        spawn_local(async move {
-            let _ = api::delete_ban(&ip).await;
-        });
+        spawn_local(async move { let _ = api::delete_ban(&ip).await; });
     };
 
     let total_pages = move || {
-        paginated
-            .get()
-            .and_then(|p| p.as_ref().map(|p| p.total_pages))
-            .unwrap_or(1)
+        paginated.get().and_then(|p| p.as_ref().map(|p| p.total_pages)).unwrap_or(1)
     };
 
     let stats_default = move || StatsResponse::default();
 
     view! {
         <div class="bans-page">
-            // 顶部统计
             <div class="dashboard-grid">
                 <div class="card chart-card">
-                    <div class="chart-header">
-                        <h3>"封禁原因分布"</h3>
-                    </div>
+                    <div class="chart-header"><h3>"封禁原因分布"</h3></div>
                     <div class="chart-body" style="height:180px">
                         <PieChart
-                            labels=Signal::derive(move || {
-                                stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).failure_reasons.labels
-                            })
-                            data=Signal::derive(move || {
-                                stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).failure_reasons.values
-                            })
+                            labels=Signal::derive(move || stats_signal.get().unwrap_or_else(|| stats_default()).failure_reasons.labels)
+                            data=Signal::derive(move || stats_signal.get().unwrap_or_else(|| stats_default()).failure_reasons.values)
                             size=180
                         />
                     </div>
                 </div>
-
                 <div class="card chart-card">
-                    <div class="chart-header">
-                        <h3>"封禁趋势 (24h)"</h3>
-                    </div>
+                    <div class="chart-header"><h3>"封禁趋势 (24h)"</h3></div>
                     <div class="chart-body" style="height:180px">
                         <LineChart
-                            labels=Signal::derive(move || {
-                                stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).ban_trend.labels
-                            })
-                            data=Signal::derive(move || {
-                                stats_signal.try_get().flatten().unwrap_or_else(|| stats_default()).ban_trend.values
-                            })
+                            labels=Signal::derive(move || stats_signal.get().unwrap_or_else(|| stats_default()).ban_trend.labels)
+                            data=Signal::derive(move || stats_signal.get().unwrap_or_else(|| stats_default()).ban_trend.values)
                             color="var(--color-red)"
                             height=180
                         />
@@ -151,16 +117,14 @@ pub fn Bans() -> impl IntoView {
                 </div>
             </div>
 
-            // 工具栏
             <div class="page-toolbar">
                 <div class="toolbar-left">
                     <h2 class="section-title">"封禁列表"</h2>
                     <span class="badge badge-danger badge-dot">
-                        {move || format!("{}", bans_signal.try_get().flatten().map(|b| b.len()).unwrap_or(0))}
+                        {move || format!("{}", bans_signal.get().map(|b| b.len()).unwrap_or(0))}
                     </span>
                 </div>
                 <div class="toolbar-right">
-                    // 排序选择
                     <select class="input" style="width:140px;margin-right:8px"
                         prop:value=move || sort_by.get()
                         on:change=move |e| sort_by.set(event_target_value(&e))>
@@ -171,30 +135,24 @@ pub fn Bans() -> impl IntoView {
                         <option value="remaining_asc">"剩余时间 ↑"</option>
                         <option value="remaining_desc">"剩余时间 ↓"</option>
                     </select>
-                    <input
-                        class="input"
-                        placeholder="搜索 IP / Jail / 原因..."
+                    <input class="input" placeholder="搜索 IP / Jail / 原因..."
                         style="width:220px"
                         prop:value=move || search.get()
-                        on:input=move |e| search.set(event_target_value(&e))
-                    />
+                        on:input=move |e| search.set(event_target_value(&e))/>
                 </div>
             </div>
 
-            // 手动封禁表单
             <div class="card" style="padding:14px">
                 <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;max-width:600px">
                     <div style="flex:1;min-width:120px">
                         <label style="font-size:9px;color:var(--text-muted);display:block;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em">"IP 地址"</label>
-                        <input class="input mono" placeholder="1.2.3.4"
-                            style="width:100%"
+                        <input class="input mono" placeholder="1.2.3.4" style="width:100%"
                             prop:value=move || ban_ip.get()
                             on:input=move |e| ban_ip.set(event_target_value(&e))/>
                     </div>
                     <div style="flex:1;min-width:100px">
-                        <label style="font-size:9px;color:var(--text-muted);display:block;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em">"时长 (秒, 0=永久)"</label>
-                        <input class="input mono" placeholder="600"
-                            style="width:100%"
+                        <label style="font-size:9px;color:var(--text-muted);display:block;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em">"时长 (秒, 留空=永久)"</label>
+                        <input class="input mono" placeholder="0" style="width:100%"
                             prop:value=move || ban_duration.get()
                             on:input=move |e| ban_duration.set(event_target_value(&e))/>
                     </div>
@@ -207,7 +165,6 @@ pub fn Bans() -> impl IntoView {
                 </div>
             </div>
 
-            // 封禁表格
             <div class="card">
                 <div class="table-container">
                     <table>
@@ -222,9 +179,7 @@ pub fn Bans() -> impl IntoView {
                             </tr>
                         </thead>
                         <tbody>
-                            <For
-                                each=filtered_bans
-                                key=|b| b.ip.clone()
+                            <For each=filtered_bans key=|b| b.ip.clone()
                                 children=move |ban: BanResponse| {
                                     let ip = ban.ip.clone();
                                     view! {
@@ -242,12 +197,10 @@ pub fn Bans() -> impl IntoView {
                                             </td>
                                         </tr>
                                     }
-                                }
-                            />
+                                }/>
                         </tbody>
                     </table>
                 </div>
-
                 <Suspense fallback=|| view! { <div style="padding:20px;text-align:center;color:var(--text-muted)">"加载中..."</div> }>
                     {move || {
                         let tp = total_pages();

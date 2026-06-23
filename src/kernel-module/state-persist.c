@@ -439,10 +439,14 @@ int restore_state_from_file(const char *filename) {
                 } else {
                   /* 与 ban-manager.c IPv4 路径保持一致:直接用桶索引 hlist_add_head_rcu */
                   hlist_add_head_rcu(&entry->hash, &fw_info.ban_table_ipv4[bkt4]);
+                  list_add_tail_rcu(&entry->ban_node, &fw_info.active_bans_list);
                   atomic_inc(&fw_info.ban_count);
                   atomic_inc(&fw_info.total_ban_count);
                   spin_unlock(&fw_info.ban_locks_ipv4[bkt4]);
                   restored_ban_count++;
+                  /* 推送恢复的封禁事件给守护进程 */
+                  fw_netlink_send_ban_state_change(
+                    FW_AF_INET, &ip, 1, is_permanent ? 0 : (u32)remaining_time, "restored");
                 }
               }
             }
@@ -515,10 +519,14 @@ int restore_state_from_file(const char *filename) {
                   /* 修复：直接用桶索引 hlist_add_head_rcu，避免 hash_add_rcu 以 bkt6 为 key
                    * 重新 hash_min 落到错误桶(同 ban-manager.c 路径) */
                   hlist_add_head_rcu(&entry->hash, &fw_info.ban_table_ipv6[bkt6]);
+                  list_add_tail_rcu(&entry->ban_node, &fw_info.active_bans_list);
                   atomic_inc(&fw_info.ban_count);
                   atomic_inc(&fw_info.total_ban_count);
                   spin_unlock(&fw_info.ban_locks_ipv6[bkt6]);
                   restored_ban_count++;
+                  /* 推送恢复的封禁事件给守护进程 */
+                  fw_netlink_send_ban_state_change(
+                    FW_AF_INET6, &ip6, 1, is_permanent ? 0 : (u32)remaining_time, "restored");
                 }
               }
             }

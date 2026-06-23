@@ -7,6 +7,7 @@
 #include <linux/printk.h>
 
 extern u32 fw_hash_seed;
+extern u32 hash_ipv6(const struct in6_addr *addr);
 
 /* 计算 IPv6 白名单条目的哈希桶索引
  *
@@ -116,6 +117,104 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
   atomic_inc(&fw->whitelist_count);
   spin_unlock(&fw->whitelist_lock);
 
+  /* 白名单添加后，解除封禁表中匹配的 IP
+   * 精确匹配（/32 / /128）：O(1) 直接定位哈希桶
+   * CIDR 子网匹配：O(n) 遍历全表 */
+  {
+    struct ban_entry *ban;
+    struct hlist_node *tmp;
+    int removed = 0;
+
+    if (af == FW_AF_INET) {
+      __be32 wl_ip = *(__be32 *)ip;
+      __be32 wl_mask = *(__be32 *)mask;
+      if (wl_mask == 0xFFFFFFFF) {
+        /* 精确匹配：直接定位桶，O(1) */
+        u32 bkt = hash_min(wl_ip, BAN_HASH_BITS);
+        spin_lock_bh(&fw->ban_locks_ipv4[bkt]);
+        hlist_for_each_entry_safe(ban, tmp, &fw->ban_table_ipv4[bkt], hash) {
+          if (ban->addr.ipv4 == wl_ip) {
+            __be32 expired_ip = ban->addr.ipv4;
+            hlist_del_rcu(&ban->hash);
+            atomic_dec(&fw->ban_count);
+            call_rcu(&ban->rcu_head, free_ban_entry_rcu);
+            removed++;
+            fw_netlink_send_ban_state_change(FW_AF_INET, &expired_ip, 2, 0, "whitelist");
+          }
+        }
+        spin_unlock_bh(&fw->ban_locks_ipv4[bkt]);
+      } else {
+        /* CIDR 子网：遍历活跃链表（只扫描实际封禁条目，不遍历 4096 空桶） */
+        struct ban_entry *ban2, *tmp2;
+        rcu_read_lock();
+        list_for_each_entry_safe(ban2, tmp2, &fw->active_bans_list, ban_node) {
+          if (ban2->af != FW_AF_INET)
+            continue;
+          if ((ban2->addr.ipv4 & wl_mask) == (wl_ip & wl_mask)) {
+            u32 bkt = hash_min(ban2->addr.ipv4, BAN_HASH_BITS);
+            spin_lock_bh(&fw->ban_locks_ipv4[bkt]);
+            __be32 expired_ip = ban2->addr.ipv4;
+            list_del_rcu(&ban2->ban_node);
+            hlist_del_rcu(&ban2->hash);
+            atomic_dec(&fw->ban_count);
+            spin_unlock_bh(&fw->ban_locks_ipv4[bkt]);
+            call_rcu(&ban2->rcu_head, free_ban_entry_rcu);
+            removed++;
+            fw_netlink_send_ban_state_change(FW_AF_INET, &expired_ip, 2, 0, "whitelist");
+          }
+        }
+        rcu_read_unlock();
+      }
+    } else {
+      u8 prefix = (u8)prefix_len;
+      if (prefix == 128) {
+        /* 精确匹配：直接定位桶，O(1) */
+        u32 bkt = hash_ipv6((const struct in6_addr *)ip);
+        spin_lock_bh(&fw->ban_locks_ipv6[bkt]);
+        hlist_for_each_entry_safe(ban, tmp, &fw->ban_table_ipv6[bkt], hash) {
+          if (ban->af == FW_AF_INET6 &&
+              ipv6_addr_equal(&ban->addr.ipv6, (const struct in6_addr *)ip)) {
+            struct in6_addr expired_ip6 = ban->addr.ipv6;
+            hlist_del_rcu(&ban->hash);
+            atomic_dec(&fw->ban_count);
+            call_rcu(&ban->rcu_head, free_ban_entry_rcu);
+            removed++;
+            fw_netlink_send_ban_state_change(FW_AF_INET6, &expired_ip6, 2, 0, "whitelist");
+          }
+        }
+        spin_unlock_bh(&fw->ban_locks_ipv6[bkt]);
+      } else {
+        /* CIDR 子网：遍历活跃链表（只扫描实际封禁条目） */
+        struct ban_entry *ban2, *tmp2;
+        rcu_read_lock();
+        list_for_each_entry_safe(ban2, tmp2, &fw->active_bans_list, ban_node) {
+          if (ban2->af != FW_AF_INET6)
+            continue;
+          if (ipv6_prefix_equal(&ban2->addr.ipv6, (const struct in6_addr *)ip, prefix)) {
+            u32 bkt = hash_ipv6(&ban2->addr.ipv6);
+            spin_lock_bh(&fw->ban_locks_ipv6[bkt]);
+            struct in6_addr expired_ip6 = ban2->addr.ipv6;
+            list_del_rcu(&ban2->ban_node);
+            hlist_del_rcu(&ban2->hash);
+            atomic_dec(&fw->ban_count);
+            spin_unlock_bh(&fw->ban_locks_ipv6[bkt]);
+            call_rcu(&ban2->rcu_head, free_ban_entry_rcu);
+            removed++;
+            fw_netlink_send_ban_state_change(FW_AF_INET6, &expired_ip6, 2, 0, "whitelist");
+          }
+        }
+        rcu_read_unlock();
+      }
+    }
+
+    if (removed > 0) {
+      pr_info("白名单添加后解除 %d 个匹配封禁\n", removed);
+    }
+  }
+
+  /* 事件推送：通知守护进程白名单已添加 */
+  fw_netlink_send_whitelist_state_change(af, ip, (u8)prefix_len, 1, dev_name);
+
   return 0;
 }
 EXPORT_SYMBOL_GPL(add_whitelist_entry);
@@ -124,6 +223,7 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip, int 
   struct whitelist_entry *entry;
   u32 bkt;
   int found = 0;
+  char removed_dev[16] = { 0 };
 
   spin_lock(&fw->whitelist_lock);
   if (af == FW_AF_INET6) {
@@ -132,6 +232,8 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip, int 
       if (entry->af == af &&
           ipv6_addr_equal(&entry->addr.ipv6, (const struct in6_addr *)ip) &&
           entry->mask.prefix_len == (u8)prefix_len) {
+        /* 保存设备名（call_rcu 后另一 CPU 可能立即释放） */
+        memcpy(removed_dev, entry->device_name, sizeof(removed_dev));
         hlist_del_rcu(&entry->hash);
         /* 从子网链表中移除（非精确匹配条目） */
         if (prefix_len < 128)
@@ -151,6 +253,8 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip, int 
     bkt = hash_min(net_ipv4, WHITELIST_HASH_BITS);
     hlist_for_each_entry(entry, &fw->whitelist_table_ipv4[bkt], hash) {
       if (entry->af == af && entry->addr.ipv4 == net_ipv4 && entry->mask.ipv4_mask == mask4) {
+        /* 保存设备名（call_rcu 后另一 CPU 可能立即释放） */
+        memcpy(removed_dev, entry->device_name, sizeof(removed_dev));
         hlist_del_rcu(&entry->hash);
         /* 从子网链表中移除（非精确匹配条目） */
         if (mask4 != 0xFFFFFFFF)
@@ -165,6 +269,8 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip, int 
   spin_unlock(&fw->whitelist_lock);
 
   if (found) {
+    /* 事件推送：通知守护进程白名单已移除 */
+    fw_netlink_send_whitelist_state_change(af, ip, (u8)prefix_len, 2, removed_dev);
     return 0;
   }
   return -ENOENT;

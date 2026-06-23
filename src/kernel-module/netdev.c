@@ -142,12 +142,20 @@ void sync_work_handler(struct work_struct *work) {
       }
     }
     if (i == current_count) {
+      /* 先保存被删条目的信息用于推送 */
+      __be32 del_ip = entry->addr.ipv4;
+      __be32 del_mask = entry->mask.ipv4_mask;
+      char del_dev[16];
+      memcpy(del_dev, entry->device_name, sizeof(del_dev));
       hlist_del_rcu(&entry->hash);
       /* 从子网链表中移除（非精确匹配条目） */
       if (entry->mask.ipv4_mask != 0xFFFFFFFF)
         list_del_rcu(&entry->subnet_node);
       atomic_dec(&fw->whitelist_count);
       call_rcu(&entry->rcu_head, free_whitelist_entry_rcu);
+      /* 推送白名单删除事件 */
+      fw_netlink_send_whitelist_state_change(
+        FW_AF_INET, &del_ip, inet_mask_len(del_mask), 2, del_dev);
     }
   }
   hash_for_each_safe(fw->whitelist_table_ipv6, bkt, tmp, entry, hash) {
@@ -164,12 +172,19 @@ void sync_work_handler(struct work_struct *work) {
       }
     }
     if (i == current_count) {
+      /* 先保存被删条目的信息用于推送 */
+      struct in6_addr del_ip6 = entry->addr.ipv6;
+      u8 del_prefix = entry->mask.prefix_len;
+      char del_dev[16];
+      memcpy(del_dev, entry->device_name, sizeof(del_dev));
       hlist_del_rcu(&entry->hash);
       /* 从子网链表中移除（非精确匹配条目） */
       if (entry->mask.prefix_len < 128)
         list_del_rcu(&entry->subnet_node);
       atomic_dec(&fw->whitelist_count);
       call_rcu(&entry->rcu_head, free_whitelist_entry_rcu);
+      /* 推送白名单删除事件 */
+      fw_netlink_send_whitelist_state_change(FW_AF_INET6, &del_ip6, del_prefix, 2, del_dev);
     }
   }
   spin_unlock(&fw->whitelist_lock);

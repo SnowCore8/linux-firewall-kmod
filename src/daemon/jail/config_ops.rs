@@ -83,7 +83,12 @@ pub fn config_validate(cfg: &Config) -> Result<(), String> {
         if jail.findtime == 0 {
             return Err(format!("Jail '{}' has findtime=0", jail.name));
         }
-        if jail.ban_time == 0 {}
+        if jail.ban_time == 0 || jail.ban_time < -1 {
+            return Err(format!(
+                "Jail '{}' has invalid ban_time={} (use -1 for permanent or >0 for timed)",
+                jail.name, jail.ban_time
+            ));
+        }
     }
 
     Ok(())

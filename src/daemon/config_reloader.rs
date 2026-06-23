@@ -216,9 +216,12 @@ fn sync_config_to_components(cfg: &Config) -> Result<()> {
         use crate::netlink::{config_flags, ConfigUpdate};
 
         // 构建配置更新消息
-        let config_update = ConfigUpdate::new(config_flags::BAN_TIME | config_flags::MAX_PPS)
-            .with_ban_time(cfg.ddos.auto_ban_duration)
-            .with_max_pps(cfg.ddos.global_conn_rate as u64);
+        let config_update = ConfigUpdate::new(
+            config_flags::BAN_TIME | config_flags::MAX_PPS | config_flags::DDOS_BAN_DURATION,
+        )
+        .with_ban_time(cfg.ddos.auto_ban_duration)
+        .with_max_pps(cfg.ddos.global_conn_rate as u64)
+        .with_ddos_ban_duration(cfg.ddos.auto_ban_duration);
 
         if let Err(e) = netlink.send_config_update(&config_update) {
             crate::logger::warn!(
@@ -231,7 +234,8 @@ fn sync_config_to_components(cfg: &Config) -> Result<()> {
                 crate::logger::get(),
                 "配置已同步到内核模块";
                 "ban_time" => cfg.ddos.auto_ban_duration,
-                "max_pps" => cfg.ddos.global_conn_rate
+                "max_pps" => cfg.ddos.global_conn_rate,
+                "ddos_ban_duration" => cfg.ddos.auto_ban_duration
             );
         }
     }

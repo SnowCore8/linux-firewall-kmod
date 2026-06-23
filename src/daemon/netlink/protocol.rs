@@ -44,6 +44,12 @@ pub enum FwNlMsgType {
     ListRatesQuery = 15,
     /// 内核 → 守护进程：速率统计响应
     ListRatesResponse = 16,
+    /// 内核 → 守护进程：白名单状态变更
+    WhitelistStateChange = 17,
+    /// 内核 → 守护进程：命令执行失败
+    CmdResult = 18,
+    /// 内核 → 守护进程：procfs 配置变更
+    ConfigChange = 19,
 }
 
 impl FwNlMsgType {
@@ -65,6 +71,9 @@ impl FwNlMsgType {
             14 => Some(Self::ConfigAck),
             15 => Some(Self::ListRatesQuery),
             16 => Some(Self::ListRatesResponse),
+            17 => Some(Self::WhitelistStateChange),
+            18 => Some(Self::CmdResult),
+            19 => Some(Self::ConfigChange),
             _ => None,
         }
     }
@@ -142,6 +151,12 @@ pub struct FwNlBanStateChange {
     pub af: u8,
     pub duration_secs: u32,
     pub addr: [u8; 16],
+    pub reason: [u8; 32], // 封禁原因
+    /// 实时统计字段（事件驱动同步，消除轮询延迟）
+    pub packets_dropped: u64,
+    pub packets_accepted: u64,
+    pub current_bans: u32,
+    pub whitelist_count: u32,
 }
 
 impl FwNlBanStateChange {
@@ -188,6 +203,152 @@ impl FwNlBanStateChange {
     pub fn is_unban(&self) -> bool {
         self.action == 2
     }
+
+    /// 获取封禁原因字符串
+    pub fn reason_str(&self) -> String {
+        let end = self
+            .reason
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.reason.len());
+        String::from_utf8_lossy(&self.reason[..end]).to_string()
+    }
+
+    /// 获取丢弃包数（大端转换）
+    pub fn packets_dropped(&self) -> u64 {
+        u64::from_be(self.packets_dropped)
+    }
+
+    /// 获取接受包数（大端转换）
+    pub fn packets_accepted(&self) -> u64 {
+        u64::from_be(self.packets_accepted)
+    }
+
+    /// 获取当前白名单数（大端转换）
+    pub fn whitelist_count(&self) -> u32 {
+        u32::from_be(self.whitelist_count)
+    }
+}
+
+/// 白名单状态变更事件（内核 → 守护进程）
+/// 当白名单条目被添加或移除时推送
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlWhitelistStateChange {
+    pub hdr: FwNlMsgHdr,
+    pub action: u8, // 1=add, 2=remove
+    pub af: u8,
+    pub prefix_len: u8,
+    pub addr: [u8; 16],
+    pub device: [u8; 16],
+    /// 实时统计字段
+    pub whitelist_count: u32,
+}
+
+impl FwNlWhitelistStateChange {
+    /// 从字节数组解析
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() < std::mem::size_of::<Self>() {
+            anyhow::bail!("数据太短");
+        }
+        // SAFETY: data 长度已验证 >= size_of::<Self>()，
+        // Self 是 #[repr(C, packed)] 无对齐要求，ptr::read 按值拷贝不保留别名。
+        let event: Self = unsafe { std::ptr::read(data.as_ptr() as *const Self) };
+        Ok(event)
+    }
+
+    /// 获取 IP 地址字符串
+    pub fn ip_str(&self) -> String {
+        if self.af == 2 {
+            format!(
+                "{}.{}.{}.{}",
+                self.addr[0], self.addr[1], self.addr[2], self.addr[3]
+            )
+        } else if self.af == 10 {
+            let addr = std::net::Ipv6Addr::from(self.addr);
+            addr.to_string()
+        } else {
+            "unknown".to_string()
+        }
+    }
+
+    /// 获取设备名字符串
+    pub fn device_str(&self) -> String {
+        let end = self
+            .device
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.device.len());
+        String::from_utf8_lossy(&self.device[..end]).to_string()
+    }
+
+    /// 是否为添加操作
+    pub fn is_add(&self) -> bool {
+        self.action == 1
+    }
+
+    /// 是否为移除操作
+    pub fn is_remove(&self) -> bool {
+        self.action == 2
+    }
+
+    /// 获取当前白名单数（大端转换）
+    pub fn whitelist_count(&self) -> u32 {
+        u32::from_be(self.whitelist_count)
+    }
+}
+
+/// 命令执行失败事件（内核 → 守护进程）
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct FwNlCmdResult {
+    pub hdr: FwNlMsgHdr,
+    pub original_cmd: u16,
+    pub pad: i16,
+    pub error_code: i32,
+    pub af: u8,
+    pub addr: [u8; 16],
+}
+
+impl FwNlCmdResult {
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() < std::mem::size_of::<Self>() {
+            anyhow::bail!("CmdResult 数据太短");
+        }
+        let event: Self = unsafe { std::ptr::read(data.as_ptr() as *const Self) };
+        Ok(event)
+    }
+
+    pub fn original_cmd(&self) -> u16 {
+        u16::from_be(self.original_cmd)
+    }
+
+    pub fn error_code(&self) -> i32 {
+        i32::from_be(self.error_code)
+    }
+
+    pub fn ip_str(&self) -> String {
+        if self.af == 2 {
+            format!(
+                "{}.{}.{}.{}",
+                self.addr[0], self.addr[1], self.addr[2], self.addr[3]
+            )
+        } else if self.af == 10 {
+            std::net::Ipv6Addr::from(self.addr).to_string()
+        } else {
+            "unknown".to_string()
+        }
+    }
+
+    pub fn cmd_name(&self) -> &'static str {
+        match self.original_cmd() {
+            2 => "BanIp",
+            3 => "UnbanIp",
+            12 => "AddWhitelist",
+            13 => "RemoveWhitelist",
+            _ => "Unknown",
+        }
+    }
 }
 
 /// 封禁/解封命令载荷（守护进程 → 内核）
@@ -198,6 +359,7 @@ pub struct FwNlBanCmd {
     pub af: u8,
     pub duration_secs: u32,
     pub addr: [u8; 16],
+    pub reason: [u8; 32], // 封禁原因
 }
 
 /// 配置更新载荷（守护进程 → 内核）
@@ -235,6 +397,8 @@ pub struct FwNlConfigUpdate {
     pub baseline_pps: u64,
     /// 基线 BPS（用于动态阈值更新）
     pub baseline_bps: u64,
+    /// DDoS 封禁时长（秒）
+    pub ddos_ban_duration: u32,
 }
 
 /// 配置项标志位
@@ -251,6 +415,7 @@ pub mod config_flags {
     pub const MAX_FIN: u32 = 1 << 9;
     pub const DYNAMIC_THRESHOLD: u32 = 1 << 10;
     pub const BASELINE_UPDATE: u32 = 1 << 11;
+    pub const DDOS_BAN_DURATION: u32 = 1 << 12;
 }
 
 /// 动态阈值标志位
@@ -262,7 +427,7 @@ pub mod dt_flags {
 
 impl FwNlBanCmd {
     /// 创建封禁命令
-    pub fn new_ban(ip: IpAddr, duration_secs: u32) -> Self {
+    pub fn new_ban(ip: IpAddr, duration_secs: u32, reason: &str) -> Self {
         let (af, addr) = match ip {
             IpAddr::V4(v4) => (2u8, {
                 let mut a = [0u8; 16];
@@ -271,6 +436,11 @@ impl FwNlBanCmd {
             }),
             IpAddr::V6(v6) => (10u8, v6.octets()),
         };
+
+        let mut reason_bytes = [0u8; 32];
+        let reason_str = reason.as_bytes();
+        let copy_len = reason_str.len().min(31); // 保留一个字节给 null terminator
+        reason_bytes[..copy_len].copy_from_slice(&reason_str[..copy_len]);
 
         Self {
             hdr: FwNlMsgHdr {
@@ -282,6 +452,7 @@ impl FwNlBanCmd {
             af,
             duration_secs: duration_secs.to_be(),
             addr,
+            reason: reason_bytes,
         }
     }
 
@@ -306,6 +477,7 @@ impl FwNlBanCmd {
             af,
             duration_secs: 0,
             addr,
+            reason: [0u8; 32],
         }
     }
 
@@ -343,6 +515,7 @@ impl FwNlConfigUpdate {
             dynamic_threshold_ratio_x100: 0,
             baseline_pps: 0,
             baseline_bps: 0,
+            ddos_ban_duration: 0,
         }
     }
 
@@ -395,12 +568,37 @@ impl FwNlConfigUpdate {
         self
     }
 
+    /// 设置 DDoS 封禁时长
+    pub fn with_ddos_ban_duration(mut self, secs: u32) -> Self {
+        self.ddos_ban_duration = secs.to_be();
+        self
+    }
+
     /// 转换为字节数组
     pub fn to_bytes(self) -> Vec<u8> {
         let ptr = &self as *const Self as *const u8;
         // SAFETY: &self 是有效的已初始化结构体引用，#[repr(C, packed)] 保证连续内存布局，
         // size_of::<Self>() 不会超出结构体范围，to_vec() 拷贝数据后原始引用不再需要。
         unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()).to_vec() }
+    }
+
+    /// 从字节数组解析（用于 ConfigChange 事件）
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() < std::mem::size_of::<Self>() {
+            anyhow::bail!("ConfigUpdate 数据太短");
+        }
+        let event: Self = unsafe { std::ptr::read(data.as_ptr() as *const Self) };
+        Ok(event)
+    }
+
+    /// 获取配置标志位
+    pub fn flags(&self) -> u32 {
+        u32::from_be(self.flags)
+    }
+
+    /// 获取 ban_time
+    pub fn ban_time(&self) -> u32 {
+        u32::from_be(self.ban_time)
     }
 }
 

@@ -121,7 +121,7 @@ impl DdosDecisionEngine {
             );
 
             // 通过 netlink 发送封禁指令
-            if let Err(e) = self.netlink.send_ban(ip, duration) {
+            if let Err(e) = self.netlink.send_ban(ip, duration, "ddos_rate") {
                 crate::logger::error!(
                     crate::logger::get(),
                     "发送封禁指令失败";
@@ -130,7 +130,7 @@ impl DdosDecisionEngine {
                 );
             } else {
                 // 封禁指令发送成功，同步到 ACTIVE_BAN_CACHE（Web UI 需要）
-                use crate::types::{BanInfo, BanReason, ACTIVE_BAN_CACHE};
+                use crate::types::{BanInfo, ACTIVE_BAN_CACHE};
                 let ban_info = BanInfo {
                     ip: ip.to_string(),
                     ip_num: match ip {
@@ -138,7 +138,7 @@ impl DdosDecisionEngine {
                         std::net::IpAddr::V6(_) => 0,
                     },
                     jail_name: "ddos".to_string(),
-                    reason: BanReason::DDoSRateLimit,
+                    reason: "ddos_rate".to_string(),
                     banned_at: now,
                     expires_at: if duration > 0 {
                         now + duration as i64

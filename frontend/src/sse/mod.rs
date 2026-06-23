@@ -1,4 +1,4 @@
-//! SSE 客户端 — EventSource 长连接 + Leptos signal 分发
+//! SSE 状态管理 — 顶层 context，事件驱动
 
 use leptos::*;
 use wasm_bindgen::prelude::*;
@@ -7,7 +7,7 @@ use wasm_bindgen::JsCast;
 use crate::api::{BanResponse, JailResponse, RateResponse, StatsResponse, WhitelistEntry};
 
 // ============================================================================
-// 全局信号
+// 全局状态
 // ============================================================================
 
 #[derive(Clone, Debug, PartialEq)]
@@ -17,275 +17,175 @@ pub enum ConnectionStatus {
     Disconnected,
 }
 
-thread_local! {
-    static SSE_STATUS: RwSignal<ConnectionStatus> = create_rw_signal(ConnectionStatus::Connecting);
-    static SSE_STATS: RwSignal<Option<StatsResponse>> = create_rw_signal(None);
-    static SSE_BANS: RwSignal<Option<Vec<BanResponse>>> = create_rw_signal(None);
-    static SSE_JAILS: RwSignal<Option<Vec<JailResponse>>> = create_rw_signal(None);
-    static SSE_RATES: RwSignal<Option<Vec<RateResponse>>> = create_rw_signal(None);
-    static SSE_WHITELIST: RwSignal<Option<Vec<WhitelistEntry>>> = create_rw_signal(None);
+/// 速率历史趋势数据（SSE rates 事件直接追加）
+#[derive(Clone, Debug, Default)]
+pub struct RateHistory {
+    pub labels: Vec<String>,
+    pub pps: Vec<u64>,
+    pub bps: Vec<u64>,
+    pub tracked_ips: Vec<u32>,
 }
 
-pub fn use_sse_status() -> RwSignal<ConnectionStatus> {
-    SSE_STATUS.with(|s| *s)
+impl RateHistory {
+    pub fn push(&mut self, rates: &[RateResponse]) {
+        if rates.is_empty() { return; }
+        let total_pps: u64 = rates.iter().map(|r| r.packets_per_sec).sum();
+        let total_bps: u64 = rates.iter().map(|r| r.bytes_per_sec).sum();
+        let now = js_sys::Date::new_0();
+        let label = format!("{:02}:{:02}", now.get_minutes(), now.get_seconds());
+        const MAX: usize = 300;
+        self.labels.push(label);
+        self.pps.push(total_pps);
+        self.bps.push(total_bps);
+        self.tracked_ips.push(rates.len() as u32);
+        if self.labels.len() > MAX {
+            self.labels.remove(0);
+            self.pps.remove(0);
+            self.bps.remove(0);
+            self.tracked_ips.remove(0);
+        }
+    }
 }
 
-pub fn use_sse_stats() -> RwSignal<Option<StatsResponse>> {
-    SSE_STATS.with(|s| *s)
+#[derive(Clone)]
+pub struct SseState {
+    pub status: RwSignal<ConnectionStatus>,
+    pub stats: RwSignal<Option<StatsResponse>>,
+    pub bans: RwSignal<Option<Vec<BanResponse>>>,
+    pub jails: RwSignal<Option<Vec<JailResponse>>>,
+    pub rates: RwSignal<Option<Vec<RateResponse>>>,
+    pub whitelist: RwSignal<Option<Vec<WhitelistEntry>>>,
+    /// 速率历史趋势（SSE rates 事件直接追加，组件只读）
+    pub rate_history: RwSignal<RateHistory>,
 }
 
-pub fn use_sse_bans() -> RwSignal<Option<Vec<BanResponse>>> {
-    SSE_BANS.with(|s| *s)
-}
-
-pub fn use_sse_jails() -> RwSignal<Option<Vec<JailResponse>>> {
-    SSE_JAILS.with(|s| *s)
-}
-
-pub fn use_sse_rates() -> RwSignal<Option<Vec<RateResponse>>> {
-    SSE_RATES.with(|s| *s)
-}
-
-pub fn use_sse_whitelist() -> RwSignal<Option<Vec<WhitelistEntry>>> {
-    SSE_WHITELIST.with(|s| *s)
+impl SseState {
+    pub fn create() -> Self {
+        Self {
+            status: create_rw_signal(ConnectionStatus::Connecting),
+            stats: create_rw_signal(None),
+            bans: create_rw_signal(None),
+            jails: create_rw_signal(None),
+            rates: create_rw_signal(None),
+            whitelist: create_rw_signal(None),
+            rate_history: create_rw_signal(RateHistory::default()),
+        }
+    }
 }
 
 // ============================================================================
-// 连接管理
+// SSE 连接
 // ============================================================================
 
-struct SseHandles {
-    source: web_sys::EventSource,
+struct SseSource {
+    _source: web_sys::EventSource,
     _callbacks: Vec<Closure<dyn Fn(web_sys::MessageEvent)>>,
 }
 
-impl Drop for SseHandles {
+impl Drop for SseSource {
     fn drop(&mut self) {
-        let _ = self.source.close();
+        let _ = self._source.close();
     }
 }
 
-thread_local! {
-    static SSE_HANDLES: std::cell::RefCell<Option<SseHandles>> = std::cell::RefCell::new(None);
-    static RECONNECT_ATTEMPTS: std::cell::RefCell<u32> = std::cell::RefCell::new(0);
-    static RECONNECT_ENABLED: std::cell::RefCell<bool> = std::cell::RefCell::new(true);
-}
-
-/// 建立 SSE 连接，监听 stats/bans/jails/rates 事件并更新全局 signal
-///
-/// 如果已存在连接则先关闭旧连接，避免重复创建
-pub fn connect_sse() {
-    // 检查是否已存在连接，避免重复创建
-    let existing = SSE_HANDLES.with(|handles| handles.borrow().is_some());
-    if existing {
-        return;
-    }
-
-    let source = web_sys::EventSource::new("/api/v1/events").expect("EventSource::new failed");
+pub fn connect_sse(state: SseState) {
+    let source = match web_sys::EventSource::new("/api/v1/events") {
+        Ok(s) => s,
+        Err(_) => { state.status.set(ConnectionStatus::Disconnected); return; }
+    };
 
     let mut callbacks: Vec<Closure<dyn Fn(web_sys::MessageEvent)>> = Vec::new();
 
-    // connected 事件
-    let on_connected =
-        Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |_e: web_sys::MessageEvent| {
-            SSE_STATUS.with(|s| s.set(ConnectionStatus::Connected));
-        });
-    source
-        .add_event_listener_with_callback_and_add_event_listener_options(
-            "connected",
-            &on_connected.as_ref().unchecked_ref(),
-            &{
-                let opts = web_sys::AddEventListenerOptions::new();
-                opts.set_once(false);
-                opts
-            },
-        )
-        .unwrap();
-    callbacks.push(on_connected);
+    // connected
+    let status = state.status;
+    let cb = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |_| {
+        status.set(ConnectionStatus::Connected);
+    });
+    source.add_event_listener_with_callback("connected", cb.as_ref().unchecked_ref()).unwrap();
+    callbacks.push(cb);
 
-    // stats 事件
-    let on_stats =
-        Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
-            if let Ok(data) = e.data().dyn_into::<js_sys::JsString>() {
-                let s: String = data.into();
-                if let Ok(stats) = serde_json::from_str::<StatsResponse>(&s) {
-                    SSE_STATS.with(|sig| sig.set(Some(stats)));
-                }
-            }
-        });
-    source
-        .add_event_listener_with_callback_and_add_event_listener_options(
-            "stats",
-            &on_stats.as_ref().unchecked_ref(),
-            &{
-                let opts = web_sys::AddEventListenerOptions::new();
-                opts.set_once(false);
-                opts
-            },
-        )
-        .unwrap();
-    callbacks.push(on_stats);
-
-    // bans 事件
-    let on_bans = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
-        if let Ok(data) = e.data().dyn_into::<js_sys::JsString>() {
-            let s: String = data.into();
-            if let Ok(bans) = serde_json::from_str::<Vec<BanResponse>>(&s) {
-                SSE_BANS.with(|sig| sig.set(Some(bans)));
+    // stats
+    let stats = state.stats;
+    let cb = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
+        if let Ok(s) = e.data().dyn_into::<js_sys::JsString>() {
+            let json: String = s.into();
+            if let Ok(data) = serde_json::from_str::<StatsResponse>(&json) {
+                stats.set(Some(data));
             }
         }
     });
-    source
-        .add_event_listener_with_callback_and_add_event_listener_options(
-            "bans",
-            &on_bans.as_ref().unchecked_ref(),
-            &{
-                let opts = web_sys::AddEventListenerOptions::new();
-                opts.set_once(false);
-                opts
-            },
-        )
-        .unwrap();
-    callbacks.push(on_bans);
+    source.add_event_listener_with_callback("stats", cb.as_ref().unchecked_ref()).unwrap();
+    callbacks.push(cb);
 
-    // jails 事件
-    let on_jails =
-        Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
-            if let Ok(data) = e.data().dyn_into::<js_sys::JsString>() {
-                let s: String = data.into();
-                if let Ok(jails) = serde_json::from_str::<Vec<JailResponse>>(&s) {
-                    SSE_JAILS.with(|sig| sig.set(Some(jails)));
-                }
+    // bans
+    let bans = state.bans;
+    let cb = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
+        if let Ok(s) = e.data().dyn_into::<js_sys::JsString>() {
+            let json: String = s.into();
+            if let Ok(data) = serde_json::from_str::<Vec<BanResponse>>(&json) {
+                bans.set(Some(data));
             }
-        });
-    source
-        .add_event_listener_with_callback_and_add_event_listener_options(
-            "jails",
-            &on_jails.as_ref().unchecked_ref(),
-            &{
-                let opts = web_sys::AddEventListenerOptions::new();
-                opts.set_once(false);
-                opts
-            },
-        )
-        .unwrap();
-    callbacks.push(on_jails);
+        }
+    });
+    source.add_event_listener_with_callback("bans", cb.as_ref().unchecked_ref()).unwrap();
+    callbacks.push(cb);
 
-    // rates 事件
-    let on_rates =
-        Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
-            if let Ok(data) = e.data().dyn_into::<js_sys::JsString>() {
-                let s: String = data.into();
-                if let Ok(rates) = serde_json::from_str::<Vec<RateResponse>>(&s) {
-                    SSE_RATES.with(|sig| sig.set(Some(rates)));
-                }
+    // jails
+    let jails = state.jails;
+    let cb = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
+        if let Ok(s) = e.data().dyn_into::<js_sys::JsString>() {
+            let json: String = s.into();
+            if let Ok(data) = serde_json::from_str::<Vec<JailResponse>>(&json) {
+                jails.set(Some(data));
             }
-        });
-    source
-        .add_event_listener_with_callback_and_add_event_listener_options(
-            "rates",
-            &on_rates.as_ref().unchecked_ref(),
-            &{
-                let opts = web_sys::AddEventListenerOptions::new();
-                opts.set_once(false);
-                opts
-            },
-        )
-        .unwrap();
-    callbacks.push(on_rates);
+        }
+    });
+    source.add_event_listener_with_callback("jails", cb.as_ref().unchecked_ref()).unwrap();
+    callbacks.push(cb);
 
-    // whitelist 事件
-    let on_whitelist =
-        Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
-            if let Ok(data) = e.data().dyn_into::<js_sys::JsString>() {
-                let s: String = data.into();
-                if let Ok(list) = serde_json::from_str::<Vec<WhitelistEntry>>(&s) {
-                    SSE_WHITELIST.with(|sig| sig.set(Some(list)));
-                }
+    // rates — 同时更新 rates signal 和 rate_history
+    let rates = state.rates;
+    let history = state.rate_history;
+    let cb = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
+        if let Ok(s) = e.data().dyn_into::<js_sys::JsString>() {
+            let json: String = s.into();
+            if let Ok(data) = serde_json::from_str::<Vec<RateResponse>>(&json) {
+                // 追加趋势数据
+                history.update(|h| h.push(&data));
+                // 更新当前 rates
+                rates.set(Some(data));
             }
-        });
-    source
-        .add_event_listener_with_callback_and_add_event_listener_options(
-            "whitelist",
-            &on_whitelist.as_ref().unchecked_ref(),
-            &{
-                let opts = web_sys::AddEventListenerOptions::new();
-                opts.set_once(false);
-                opts
-            },
-        )
-        .unwrap();
-    callbacks.push(on_whitelist);
+        }
+    });
+    source.add_event_listener_with_callback("rates", cb.as_ref().unchecked_ref()).unwrap();
+    callbacks.push(cb);
 
-    // onerror — 标记断开并触发重连
-    let on_error = Closure::<dyn Fn(web_sys::Event)>::new(move |_: web_sys::Event| {
-        SSE_STATUS.with(|s| s.set(ConnectionStatus::Disconnected));
-        schedule_reconnect();
+    // whitelist
+    let whitelist = state.whitelist;
+    let cb = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
+        if let Ok(s) = e.data().dyn_into::<js_sys::JsString>() {
+            let json: String = s.into();
+            if let Ok(data) = serde_json::from_str::<Vec<WhitelistEntry>>(&json) {
+                whitelist.set(Some(data));
+            }
+        }
+    });
+    source.add_event_listener_with_callback("whitelist", cb.as_ref().unchecked_ref()).unwrap();
+    callbacks.push(cb);
+
+    // onerror
+    let status_err = state.status;
+    let on_error = Closure::<dyn Fn(web_sys::Event)>::new(move |_| {
+        status_err.set(ConnectionStatus::Disconnected);
     });
     source.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-    // onerror 不用 addEventListener，直接 set_onerror，但需要保持 closure 存活
-    // 这里我们把它也存进 callbacks（类型不同，需要单独处理）
-    // 简单做法：leak 这个 closure（它生命周期等于页面）
     on_error.forget();
 
-    // 连接成功，重置重连计数
-    RECONNECT_ATTEMPTS.with(|a| *a.borrow_mut() = 0);
-
-    SSE_HANDLES.with(|handles| {
-        *handles.borrow_mut() = Some(SseHandles {
-            source,
-            _callbacks: callbacks,
-        });
-    });
-}
-
-/// 调度重连（指数退避：1s → 2s → 4s → 8s → 最大 30s）
-fn schedule_reconnect() {
-    // 检查是否允许重连
-    let should_reconnect = RECONNECT_ENABLED.with(|e| *e.borrow());
-    if !should_reconnect {
-        return;
+    use std::cell::RefCell;
+    thread_local! {
+        static HANDLE: RefCell<Option<SseSource>> = RefCell::new(None);
     }
-
-    let attempts = RECONNECT_ATTEMPTS.with(|a| {
-        let mut a = a.borrow_mut();
-        *a += 1;
-        *a
+    HANDLE.with(|h| {
+        *h.borrow_mut() = Some(SseSource { _source: source, _callbacks: callbacks });
     });
-
-    // 指数退避：2^attempts 秒，最大 30 秒
-    let delay_ms = (1000 * (1 << attempts.min(5))).min(30000) as i32;
-
-    web_sys::window().map(|w| {
-        let cb = Closure::once(move || {
-            // 先关闭旧连接
-            SSE_HANDLES.with(|handles| {
-                *handles.borrow_mut() = None;
-            });
-            // 重新连接
-            connect_sse();
-        });
-        w.set_timeout_with_callback_and_timeout_and_arguments_0(
-            cb.as_ref().unchecked_ref(),
-            delay_ms,
-        )
-        .map(|_| {
-            // Closure 已转移给 setTimeout，需要 forget 以避免释放
-            cb.forget();
-        })
-        .ok();
-    });
-}
-
-/// 手动断开 SSE 连接（用于页面卸载或显式停止）
-#[allow(dead_code)]
-pub fn disconnect_sse() {
-    // 禁止重连
-    RECONNECT_ENABLED.with(|e| *e.borrow_mut() = false);
-
-    SSE_HANDLES.with(|handles| {
-        *handles.borrow_mut() = None;
-    });
-
-    SSE_STATUS.with(|s| s.set(ConnectionStatus::Disconnected));
 }

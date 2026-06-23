@@ -120,6 +120,7 @@ static int __init firewall_init(void) {
   hash_init(fw_info.ban_table_ipv4);
   hash_init(fw_info.ban_table_ipv6);
   atomic_set(&fw_info.ban_count, 0);
+  INIT_LIST_HEAD(&fw_info.active_bans_list);
   atomic_set(&fw_info.shutting_down, 0);
 
   /* R9-4: 初始化每桶自旋锁 */
@@ -163,6 +164,7 @@ static int __init firewall_init(void) {
   fw_info.rate_window_jiffies = msecs_to_jiffies(DEFAULT_RATE_WINDOW_SECONDS * 1000);
   fw_info.max_packets_per_second = DEFAULT_MAX_PACKETS_PER_SECOND;
   fw_info.max_bytes_per_second = DEFAULT_MAX_BYTES_PER_SECOND;
+  fw_info.ddos_ban_duration = 0; /* 默认 DDoS 永久封禁 */
 
   /* 设置协议专项检测默认配置 */
   fw_info.max_syn_per_second = DEFAULT_MAX_SYN_PER_SECOND;
@@ -200,21 +202,11 @@ static int __init firewall_init(void) {
   /* 初始化延迟工作（必须在可能失败的分配之前，确保错误路径安全） */
   INIT_DELAYED_WORK(&fw_info.sync_work, sync_work_handler);
 
-  /* 初始化 DDoS 事件通知工作队列 */
-  fw_info.ddos_notify_pending = false;
-  fw_info.ddos_notify_wq = alloc_workqueue("firewall_ddos_notify", WQ_UNBOUND, 1);
-  if (!fw_info.ddos_notify_wq) {
-    pr_err("Failed to allocate DDoS notify workqueue\n");
-    ret = -ENOMEM;
-    goto err_notifier;
-  }
-  INIT_WORK(&fw_info.ddos_notify_work, ddos_notify_worker);
-
   /* 初始化 netlink 通信层 */
   ret = fw_netlink_init();
   if (ret) {
     pr_err("初始化 netlink 通信层失败: %d\n", ret);
-    goto err_workqueue;
+    goto err_notifier;
   }
 
   if (state_file && strlen(state_file) > 0) {
@@ -261,11 +253,6 @@ err_nf_ipv4:
 err_procfs:
   destroy_procfs_entries(&fw_info);
   fw_netlink_exit();
-err_workqueue:
-  if (fw_info.ddos_notify_wq) {
-    flush_workqueue(fw_info.ddos_notify_wq);
-    destroy_workqueue(fw_info.ddos_notify_wq);
-  }
 err_notifier:
   atomic_set(&fw_info.shutting_down, 1);
   cancel_delayed_work_sync(&fw_info.sync_work);
@@ -311,13 +298,6 @@ static void __exit firewall_exit(void) {
 
   /* 清理 netlink 通信层 */
   fw_netlink_exit();
-
-  /* 清理 DDoS 事件通知工作队列 */
-  if (fw_info.ddos_notify_wq) {
-    flush_workqueue(fw_info.ddos_notify_wq);
-    destroy_workqueue(fw_info.ddos_notify_wq);
-    fw_info.ddos_notify_wq = NULL;
-  }
 
   pr_info("模块清理完成\n");
 }

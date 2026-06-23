@@ -119,8 +119,10 @@ struct ban_entry {
   unsigned long unban_time; /* 解除封禁的时间（0 = 永久） */
   atomic_t retry_count;     /* 保留供将来使用 */
   bool is_permanent;        /* 永久封禁标志 */
+  char reason[32]; /* 封禁原因（如 "DDoS SYN flood"、"Jail sshd" 等） */
   struct hlist_node hash;
-  struct rcu_head rcu_head; /* 用于 RCU 释放 */
+  struct list_head ban_node; /* 全局活跃封禁链表节点 */
+  struct rcu_head rcu_head;  /* 用于 RCU 释放 */
 };
 
 /* IP 速率统计条目 - 用于 DDoS 检测
@@ -191,6 +193,7 @@ struct firewall_info {
   spinlock_t ban_locks_ipv4[1 << BAN_HASH_BITS];
   spinlock_t ban_locks_ipv6[1 << BAN_HASH_BITS];
   atomic_t ban_count;
+  struct list_head active_bans_list; /* 全局活跃封禁链表，O(n) 遍历实际条目 */
   atomic_t shutting_down; /* 防止关闭期间定时器触发的标志 */
   unsigned int ban_time;
   struct timer_list cleanup_timer;
@@ -256,6 +259,9 @@ struct firewall_info {
   atomic64_t global_baseline_pps;   /* 全局 PPS 基线（EWMA α=0.01） */
   atomic64_t global_baseline_bps;   /* 全局 BPS 基线（EWMA α=0.01） */
 
+  /* DDoS 封禁配置 */
+  u32 ddos_ban_duration; /* DDoS 封禁时长（秒），0 表示使用默认值 3600 */
+
   /* 全局流量计数器（netfilter 热路径递增，守护进程每 2 秒读取）
    * 使用 atomic64_xchg 读取并重置，守护进程计算 PPS/BPS 后下发基线 */
   atomic64_t global_traffic_packets; /* 自上次查询以来的数据包总数 */
@@ -274,27 +280,15 @@ struct firewall_info {
   struct notifier_block netdev_notifier;
   struct delayed_work sync_work;   /* 防抖同步工作队列 */
   bool netdev_notifier_registered; /* 跟踪通知器是否成功注册 */
-
-  /* DDoS 事件通知（通过 netlink 推送给守护进程） */
-  struct workqueue_struct *ddos_notify_wq; /* DDoS 事件通知工作队列 */
-  struct work_struct ddos_notify_work;     /* 延迟通知工作 */
-  bool ddos_notify_pending;                /* 标识有待发送的通知 */
-  u8 ddos_notify_af;                       /* 待通知 IP 的地址族 */
-  union {
-    __be32 ipv4;               /* 待通知的 IPv4 地址 */
-    struct in6_addr ipv6;      /* 待通知的 IPv6 地址 */
-  } ddos_notify_ip;            /* 待通知的 IP 地址 */
-  char ddos_notify_reason[32]; /* 通知原因 */
-  u32 ddos_notify_rate;        /* 当前速率（包/秒） */
 };
 
 /* 函数声明 */
 
 /* ban-manager.c */
-int ban_ip(struct firewall_info *fw, u8 af, const void *ip);
-int ban_ip_permanent(struct firewall_info *fw, u8 af, const void *ip);
+int ban_ip(struct firewall_info *fw, u8 af, const void *ip, const char *reason);
+int ban_ip_permanent(struct firewall_info *fw, u8 af, const void *ip, const char *reason);
 int ban_ip_with_duration(struct firewall_info *fw, u8 af, const void *ip,
-                         unsigned long seconds);
+                         unsigned long seconds, const char *reason);
 int unban_ip(struct firewall_info *fw, u8 af, const void *ip);
 int unban_permanent_ip(struct firewall_info *fw, u8 af, const void *ip);
 int is_banned(struct firewall_info *fw, u8 af, const void *ip);
@@ -341,19 +335,20 @@ void free_whitelist_entry_rcu(struct rcu_head *head);
 /* 清理定时器回调（cleanup.c 中定义） */
 void cleanup_timer_callback(struct timer_list *t);
 
-/* DDoS 事件通知工作队列回调（netfilter.c 中定义） */
-void ddos_notify_worker(struct work_struct *work);
-
 /* netlink.c - Netlink 通信层 */
 int fw_netlink_init(void);
 void fw_netlink_exit(void);
 int fw_netlink_send_event(u8 af, const void *ip, const char *reason, u32 rate_pps);
-int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 duration_secs);
+int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action,
+                                     u32 duration_secs, const char *reason);
+int fw_netlink_send_whitelist_state_change(u8 af, const void *ip, u8 prefix_len,
+                                           u8 action, const char *dev_name);
 int fw_netlink_send_list_bans_response(u32 seq, u32 portid);
 int fw_netlink_send_stats_response(u32 seq, u32 portid);
 int fw_netlink_send_config_ack(u32 seq, u32 portid, u32 applied_flags, u32 rejected_flags);
 int fw_netlink_send_list_whitelist_response(u32 seq, u32 portid);
 int fw_netlink_send_list_rates_response(u32 seq, u32 portid);
+void fw_netlink_send_config_change(u32 flag, u32 value);
 
 /* 导出函数，提供对 fw_info 的受控访问 */
 struct firewall_info *get_fw_info(void);

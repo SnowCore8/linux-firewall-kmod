@@ -150,7 +150,7 @@ pub fn cleanup_expired_entries(jail: &Jail, now: i64, findtime: i64) -> usize {
 ///
 /// 副作用:
 /// - `DAEMON_STATS.failed_attempts` +1
-/// - 达到阈值时调 `ban::ban_ip` 写 procfs
+/// - 达到阈值时调 `ban::ban_ip` 通过 netlink 封禁
 /// - 封禁成功后清理 `failed_hash` 中对应条目
 pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, findtime: u32) {
     if ip.is_empty() {
@@ -195,12 +195,14 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
             ip: ip.to_string(),
             ip_num,
             jail_name: jail.name.clone(),
-            reason: crate::types::BanReason::FailedAttempts,
+            reason: jail.name.clone(),
             banned_at: now,
-            // 修复：使用 ban_time（封禁时长）而非 findtime（检测窗口）
-            // 与 fail2ban 行为一致：bantime 决定封禁持续时间
-            expires_at: now + i64::from(jail.ban_time),
-            is_permanent: false,
+            expires_at: if jail.ban_time < 0 {
+                0
+            } else {
+                now + jail.ban_time as i64
+            },
+            is_permanent: jail.ban_time < 0,
             fail_count,
         };
 
@@ -215,7 +217,12 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
             return;
         }
 
-        if let Err(e) = ban::ban_ip(ip, u64::from(jail.ban_time)) {
+        let ban_duration = if jail.ban_time < 0 {
+            0u64
+        } else {
+            jail.ban_time as u64
+        };
+        if let Err(e) = ban::ban_ip(ip, ban_duration, &jail.name) {
             // 封禁失败，回滚缓存标记（允许下次重试）
             cache.remove(ip);
             crate::logger::warn!(

@@ -112,7 +112,7 @@ struct YamlConfig {
 struct YamlDefaults {
     max_retries: Option<u32>,
     findtime: Option<u32>,
-    ban_time: Option<u32>,
+    ban_time: Option<i32>,
     interval: Option<u32>,
     metrics_port: Option<u16>,
     metrics_bind_address: Option<String>,
@@ -132,7 +132,7 @@ struct YamlJail {
     log_files: Option<Vec<String>>,
     max_retries: Option<u32>,
     findtime: Option<u32>,
-    ban_time: Option<u32>,
+    ban_time: Option<i32>,
     regex: Option<String>,
     regex_name: Option<String>,
     /// 嵌套 regexes 映射: `{ name: { pattern: "..." }, ... }`

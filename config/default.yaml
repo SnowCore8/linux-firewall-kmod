@@ -29,7 +29,7 @@ jails:
       - /var/log/secure         # RHEL/CentOS
     max_retries: 2
     findtime: 600               # 10 分钟
-    ban_time: 0                 # 永久封禁
+    ban_time: -1                # 永久封禁
     # 命名正则表达式匹配：支持多种 SSH 攻击模式
     regexes:
       invalid_user:

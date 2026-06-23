@@ -58,7 +58,7 @@ pub fn format_datetime(timestamp: i64) -> String {
     format!("{year:04}-{month:02}-{day:02} {hours:02}:{minutes:02}:{seconds:02}")
 }
 
-/// 剩余时间格式化
+/// 剩余时间格式化：-1 = 永久，>=0 = 剩余秒数
 pub fn format_duration(seconds: i64) -> String {
     if seconds < 0 {
         return "永久".to_string();

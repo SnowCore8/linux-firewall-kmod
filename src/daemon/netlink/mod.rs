@@ -14,10 +14,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 use protocol::{
-    FwNlBanCmd, FwNlBanStateChange, FwNlConfigAck, FwNlConfigUpdate, FwNlDdosEvent,
+    FwNlBanCmd, FwNlBanStateChange, FwNlCmdResult, FwNlConfigAck, FwNlConfigUpdate, FwNlDdosEvent,
     FwNlListBansQuery, FwNlListBansResponse, FwNlListRatesQuery, FwNlListRatesResponse,
     FwNlListWhitelistQuery, FwNlListWhitelistResponse, FwNlMsgType, FwNlStatsQuery,
-    FwNlStatsResponse, FwNlWhitelistCmd, FW_NL_MAGIC,
+    FwNlStatsResponse, FwNlWhitelistCmd, FwNlWhitelistStateChange, FW_NL_MAGIC,
 };
 
 pub use decision::DdosDecisionEngine;
@@ -284,24 +284,53 @@ impl NetlinkContext {
 
                 let event = FwNlBanStateChange::from_bytes(hdr_data)?;
                 let ip_str = event.ip_str();
+                let reason_str = event.reason_str();
 
                 if event.is_ban() {
                     crate::logger::info!(
                         crate::logger::get(),
                         "收到封禁状态变更：封禁";
                         "ip" => &ip_str,
-                        "duration_secs" => event.duration_secs()
+                        "duration_secs" => event.duration_secs(),
+                        "reason" => &reason_str
                     );
 
-                    // 更新 ACTIVE_BAN_CACHE
+                    // 根据 reason 字符串推断 jail_name
+                    // 解析 reason 和 jail_name
+                    let (actual_reason, jail_name) = if reason_str.starts_with("api:") {
+                        // API 封禁：reason 格式为 "api:用户自定义的reason"
+                        let actual = reason_str.strip_prefix("api:").unwrap_or(&reason_str);
+                        (actual.to_string(), "api".to_string())
+                    } else if reason_str.contains("SYN flood")
+                        || reason_str.contains("UDP flood")
+                        || reason_str.contains("ICMP flood")
+                        || reason_str.contains("total rate")
+                        || reason_str.contains("ddos")
+                    {
+                        (reason_str.clone(), "ddos".to_string())
+                    } else if reason_str == "procfs"
+                        || reason_str == "manual"
+                        || reason_str == "api"
+                    {
+                        (reason_str.clone(), "api".to_string())
+                    } else if reason_str == "restored" {
+                        (reason_str.clone(), "kernel".to_string())
+                    } else if reason_str == "expired" || reason_str == "unban" {
+                        (reason_str.clone(), "system".to_string())
+                    } else {
+                        // 无法推断 jail 来源，统一归为 "api"
+                        (reason_str.clone(), "api".to_string())
+                    };
+
+                    // 更新 ACTIVE_BAN_CACHE（try_insert: 已有条目不覆盖，保留 API 写入的正确 jail_name）
                     let cache = crate::types::ACTIVE_BAN_CACHE
                         .get_or_init(crate::types::ActiveBanCache::new);
                     let now = crate::types::now_secs();
                     let ban_info = crate::types::BanInfo {
                         ip: ip_str.clone(),
                         ip_num: 0,
-                        jail_name: "kernel".to_string(),
-                        reason: crate::types::BanReason::ManualBan,
+                        jail_name,
+                        reason: actual_reason,
                         banned_at: now,
                         expires_at: if event.duration_secs() == 0 {
                             0
@@ -311,11 +340,7 @@ impl NetlinkContext {
                         is_permanent: event.duration_secs() == 0,
                         fail_count: 0,
                     };
-                    cache.insert(ban_info);
-                    // 更新 DAEMON_STATS 计数器
-                    crate::types::DAEMON_STATS
-                        .ips_banned
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    cache.try_insert(ban_info);
                     crate::logger::info!(
                         crate::logger::get(),
                         "已更新 ACTIVE_BAN_CACHE";
@@ -338,6 +363,20 @@ impl NetlinkContext {
                         .total_unbans
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
+
+                // 实时同步统计数据（事件驱动，消除轮询延迟）
+                crate::types::DAEMON_STATS.packets_dropped.store(
+                    event.packets_dropped(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                crate::types::DAEMON_STATS.packets_accepted.store(
+                    event.packets_accepted(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                crate::types::DAEMON_STATS.whitelist_count.store(
+                    event.whitelist_count() as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
             }
             Some(FwNlMsgType::ListBansResponse) => {
                 // 处理封禁列表响应
@@ -367,7 +406,7 @@ impl NetlinkContext {
                         ip: ip_str.clone(),
                         ip_num: 0,
                         jail_name: "kernel".to_string(),
-                        reason: crate::types::BanReason::ManualBan,
+                        reason: "restored".to_string(),
                         banned_at,
                         expires_at: if is_permanent {
                             0
@@ -429,7 +468,10 @@ impl NetlinkContext {
                 );
 
                 // 更新 WHITELIST_CACHE
-                let whitelist_entries: Vec<crate::types::WhitelistEntry> = entries
+                let whitelist_entries: std::collections::HashMap<
+                    String,
+                    crate::types::WhitelistEntry,
+                > = entries
                     .iter()
                     .map(|e| {
                         let ip_str = if e.af == 2 {
@@ -451,7 +493,7 @@ impl NetlinkContext {
                             .trim_end_matches('\0')
                             .to_string();
 
-                        crate::types::WhitelistEntry { cidr, device }
+                        (cidr.clone(), crate::types::WhitelistEntry { cidr, device })
                     })
                     .collect();
 
@@ -543,6 +585,107 @@ impl NetlinkContext {
                     );
                 }
             }
+            Some(FwNlMsgType::WhitelistStateChange) => {
+                // 处理白名单状态变更事件
+                if hdr_data.len() < std::mem::size_of::<FwNlWhitelistStateChange>() {
+                    anyhow::bail!("白名单状态变更事件数据太短");
+                }
+
+                let event = FwNlWhitelistStateChange::from_bytes(hdr_data)?;
+                let ip_str = event.ip_str();
+                let device_str = event.device_str();
+                let prefix_len = event.prefix_len;
+
+                // 构建 CIDR 格式
+                let cidr = if ip_str.contains(':') {
+                    // IPv6
+                    if prefix_len == 128 || prefix_len == 0 {
+                        ip_str.clone()
+                    } else {
+                        format!("{}/{}", ip_str, prefix_len)
+                    }
+                } else {
+                    // IPv4
+                    if prefix_len == 32 || prefix_len == 0 {
+                        ip_str.clone()
+                    } else {
+                        format!("{}/{}", ip_str, prefix_len)
+                    }
+                };
+
+                if event.is_add() {
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "收到白名单状态变更：添加";
+                        "ip" => &ip_str,
+                        "prefix_len" => prefix_len,
+                        "device" => &device_str
+                    );
+
+                    // 更新 WHITELIST_CACHE（HashMap insert 天然幂等，补充 device）
+                    let mut cache = crate::types::WHITELIST_CACHE.write();
+                    match cache.get_mut(&cidr) {
+                        Some(entry) if entry.device.is_empty() && !device_str.is_empty() => {
+                            entry.device = device_str;
+                        }
+                        None => {
+                            cache.insert(
+                                cidr.clone(),
+                                crate::types::WhitelistEntry {
+                                    cidr,
+                                    device: device_str,
+                                },
+                            );
+                        }
+                        _ => {}
+                    }
+                } else if event.is_remove() {
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "收到白名单状态变更：移除";
+                        "ip" => &ip_str,
+                        "prefix_len" => prefix_len
+                    );
+
+                    // 从 WHITELIST_CACHE 移除
+                    crate::types::WHITELIST_CACHE.write().remove(&cidr);
+                }
+
+                // 实时更新白名单计数
+                crate::types::DAEMON_STATS.whitelist_count.store(
+                    event.whitelist_count() as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
+            Some(FwNlMsgType::CmdResult) => {
+                if hdr_data.len() < std::mem::size_of::<FwNlCmdResult>() {
+                    anyhow::bail!("CmdResult 数据太短");
+                }
+                let event = FwNlCmdResult::from_bytes(hdr_data)?;
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "内核命令执行失败";
+                    "cmd" => event.cmd_name(),
+                    "error_code" => event.error_code(),
+                    "ip" => event.ip_str()
+                );
+            }
+            Some(FwNlMsgType::ConfigChange) => {
+                // procfs 配置变更通知——复用 ConfigUpdate 结构体解析
+                if hdr_data.len() < std::mem::size_of::<protocol::FwNlConfigUpdate>() {
+                    anyhow::bail!("ConfigChange 数据太短");
+                }
+                let cfg = protocol::FwNlConfigUpdate::from_bytes(hdr_data)?;
+                let flags = cfg.flags();
+                if flags & protocol::config_flags::BAN_TIME != 0 {
+                    let new_ban_time = cfg.ban_time();
+                    crate::logger::info!(
+                        crate::logger::get(),
+                        "内核 ban_time 已通过 procfs 变更";
+                        "new_ban_time" => new_ban_time
+                    );
+                }
+            }
             _ => {
                 crate::logger::warn!(
                     crate::logger::get(),
@@ -556,8 +699,8 @@ impl NetlinkContext {
     }
 
     /// 发送封禁指令到内核
-    pub fn send_ban(&self, ip: IpAddr, duration_secs: u32) -> Result<()> {
-        let cmd = FwNlBanCmd::new_ban(ip, duration_secs);
+    pub fn send_ban(&self, ip: IpAddr, duration_secs: u32, reason: &str) -> Result<()> {
+        let cmd = FwNlBanCmd::new_ban(ip, duration_secs, reason);
         self.send_command(&cmd.to_bytes())
     }
 

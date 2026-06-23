@@ -3,18 +3,22 @@
 use leptos::*;
 use leptos_router::*;
 
-use crate::sse::{self, ConnectionStatus};
+use crate::sse::{self, ConnectionStatus, SseState};
 use crate::theme;
 
 #[component]
-pub fn DefaultLayout(children: Children) -> impl IntoView {
+pub fn DefaultLayout(
+    sse_state: SseState,
+    children: Children,
+) -> impl IntoView {
+    let status = sse_state.status;
+    let sidebar_open = create_rw_signal(false);
+    // 在 DefaultLayout 挂载时建立 SSE 连接
+    let sse_for_connect = sse_state.clone();
     create_effect(move |_| {
-        sse::connect_sse();
+        sse::connect_sse(sse_for_connect.clone());
         theme::init_theme();
     });
-
-    let sidebar_open = create_rw_signal(false);
-    let status = sse::use_sse_status();
 
     // 触摸手势支持
     let touch_start_x = create_rw_signal(0.0);
@@ -34,13 +38,10 @@ pub fn DefaultLayout(children: Children) -> impl IntoView {
             let delta_x = end_x - touch_start_x.get();
             let delta_y = (end_y - touch_start_y.get()).abs();
 
-            // 水平滑动 > 50px 且大于垂直滑动，判定为横向滑动
             if delta_x.abs() > 50.0 && delta_x.abs() > delta_y {
                 if delta_x > 0.0 {
-                    // 向右滑动：打开侧边栏
                     sidebar_open.set(true);
                 } else {
-                    // 向左滑动：关闭侧边栏
                     sidebar_open.set(false);
                 }
             }
@@ -130,7 +131,6 @@ pub fn DefaultLayout(children: Children) -> impl IntoView {
             </aside>
 
             <div class="main-content">
-                // 离线状态全局提示
                 <Show
                     when=move || status.get() == ConnectionStatus::Disconnected
                     fallback=|| ()
@@ -168,7 +168,7 @@ pub fn DefaultLayout(children: Children) -> impl IntoView {
                         <button class="btn btn-icon" on:click=move |_| theme::toggle_theme()>
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
                                 <circle cx="12" cy="12" r="5"/>
-                                <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+                                <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 4.22l1.42 1.42M18.36 5.64l1.42 1.42"/>
                             </svg>
                         </button>
                     </div>

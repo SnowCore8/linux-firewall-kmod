@@ -39,6 +39,9 @@ enum {
   FW_NL_CONFIG_ACK = 14, /* 内核 → 守护进程：配置更新确认 */
   FW_NL_LIST_RATES_QUERY = 15, /* 守护进程 → 内核：查询速率统计 */
   FW_NL_LIST_RATES_RESPONSE = 16, /* 内核 → 守护进程：速率统计响应 */
+  FW_NL_WHITELIST_STATE_CHANGE = 17, /* 内核 → 守护进程：白名单状态变更 */
+  FW_NL_CMD_RESULT = 18,    /* 内核 → 守护进程：命令执行失败 */
+  FW_NL_CONFIG_CHANGE = 19, /* 内核 → 守护进程：procfs 配置变更 */
 };
 
 /* 消息头结构（20 字节） */
@@ -65,6 +68,34 @@ struct fw_nl_ban_state_change {
   __u8 af;             /* 地址族 */
   __u32 duration_secs; /* 封禁时长（秒），0 = 永久 */
   __u8 addr[16];       /* IP 地址 */
+  __u8 reason[32];     /* 封禁原因 */
+  /* 实时统计字段（事件驱动同步，消除轮询延迟） */
+  __u64 packets_dropped;  /* 当前丢弃包数 */
+  __u64 packets_accepted; /* 当前接受包数 */
+  __u32 current_bans;     /* 当前封禁数 */
+  __u32 whitelist_count;  /* 当前白名单数 */
+} __packed;
+
+/* 白名单状态变更事件载荷（内核 → 守护进程） */
+struct fw_nl_whitelist_state_change {
+  struct fw_nlmsg_hdr hdr;
+  __u8 action;     /* 1=add, 2=remove */
+  __u8 af;         /* 地址族 */
+  __u8 prefix_len; /* 前缀长度 */
+  __u8 addr[16];   /* IP 地址 */
+  __u8 device[16]; /* 网络设备名称 */
+  /* 实时统计字段 */
+  __u32 whitelist_count; /* 当前白名单数 */
+} __packed;
+
+/* 命令执行结果（内核 → 守护进程，仅失败时推送） */
+struct fw_nl_cmd_result {
+  struct fw_nlmsg_hdr hdr;
+  __u16 original_cmd; /* 原始命令类型 */
+  __s16 pad;
+  __s32 error_code; /* 错误码（负值） */
+  __u8 af;          /* 地址族 */
+  __u8 addr[16];    /* 相关 IP */
 } __packed;
 
 /* 封禁/解封命令载荷 */
@@ -73,6 +104,7 @@ struct fw_nl_ban_cmd {
   __u8 af;             /* 地址族 */
   __u32 duration_secs; /* 封禁时长（秒），0 = 永久 */
   __u8 addr[16];       /* IP 地址 */
+  __u8 reason[32];     /* 封禁原因 */
 } __packed;
 
 /* 配置更新载荷 */
@@ -91,8 +123,9 @@ struct fw_nl_config_update {
   __u64 max_fin_per_second;      /* 每秒最大 FIN 包数 */
   __u32 dynamic_threshold_flags; /* 动态阈值标志（bit0: enabled） */
   __u32 dynamic_threshold_ratio_x100; /* 动态阈值倍数 × 100 */
-  __u64 baseline_pps; /* 基线 PPS（用于动态阈值更新） */
-  __u64 baseline_bps; /* 基线 BPS（用于动态阈值更新） */
+  __u64 baseline_pps;      /* 基线 PPS（用于动态阈值更新） */
+  __u64 baseline_bps;      /* 基线 BPS（用于动态阈值更新） */
+  __u32 ddos_ban_duration; /* DDoS 封禁时长（秒） */
 } __packed;
 
 /* 配置项标志位 */
@@ -108,6 +141,7 @@ struct fw_nl_config_update {
 #define FW_NL_CFG_MAX_FIN (1 << 9)
 #define FW_NL_CFG_DYNAMIC_THRESHOLD (1 << 10)
 #define FW_NL_CFG_BASELINE_UPDATE (1 << 11)
+#define FW_NL_CFG_DDOS_BAN_DURATION (1 << 12)
 
 /* 动态阈值标志位 */
 #define FW_NL_CFG_DT_ENABLED (1 << 0)
@@ -275,11 +309,13 @@ int fw_netlink_send_event(u8 af, const void *ip, const char *reason, u32 rate_pp
  * @ip: IP 地址指针
  * @action: 操作类型（1=ban, 2=unban）
  * @duration_secs: 封禁时长（秒），0 = 永久
+ * @reason: 封禁原因字符串
  *
  * 当用户通过 /proc/firewall/bans 手动封禁/解封时调用，
  * 通知守护进程更新 ACTIVE_BAN_CACHE。
  */
-int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 duration_secs) {
+int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action,
+                                     u32 duration_secs, const char *reason) {
   struct sk_buff *skb;
   struct nlmsghdr *nlh;
   struct fw_nl_ban_state_change *event;
@@ -323,6 +359,18 @@ int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 durat
     memcpy(event->addr, ip, 16);
   }
 
+  /* 复制封禁原因 */
+  memset(event->reason, 0, sizeof(event->reason));
+  if (reason) {
+    strscpy(event->reason, reason, sizeof(event->reason));
+  }
+
+  /* 填充实时统计字段（事件驱动同步，消除轮询延迟） */
+  event->packets_dropped = cpu_to_be64(atomic64_read(&fw_info.packets_dropped));
+  event->packets_accepted = cpu_to_be64(atomic64_read(&fw_info.packets_accepted));
+  event->current_bans = cpu_to_be32(atomic_read(&fw_info.ban_count));
+  event->whitelist_count = cpu_to_be32(atomic_read(&fw_info.whitelist_count));
+
   /* 事件推送用广播（1:1 绑定，只有一个监听者） */
   ret = netlink_broadcast(fw_nl_sock, skb, 0, 1, GFP_ATOMIC);
   if (ret < 0 && ret != -ESRCH) {
@@ -331,6 +379,166 @@ int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 durat
   }
 
   return 0;
+}
+
+/**
+ * fw_netlink_send_whitelist_state_change - 向守护进程发送白名单状态变更事件
+ * @af: 地址族
+ * @ip: IP 地址指针
+ * @prefix_len: 前缀长度
+ * @action: 操作类型（1=add, 2=remove）
+ * @dev_name: 网络设备名称（可为 NULL）
+ *
+ * 当白名单条目被添加或移除时调用，通知守护进程更新 WHITELIST_CACHE。
+ */
+int fw_netlink_send_whitelist_state_change(u8 af, const void *ip, u8 prefix_len,
+                                           u8 action, const char *dev_name) {
+  struct sk_buff *skb;
+  struct nlmsghdr *nlh;
+  struct fw_nl_whitelist_state_change *event;
+  int ret;
+
+  if (!fw_nl_sock) {
+    return -ENOTCONN;
+  }
+
+  /* 分配 netlink 消息缓冲区 */
+  skb = nlmsg_new(sizeof(*event), GFP_ATOMIC);
+  if (!skb) {
+    return -ENOMEM;
+  }
+
+  /* 构造消息头 */
+  nlh = nlmsg_put(skb, 0, 0, FW_NL_WHITELIST_STATE_CHANGE, sizeof(*event), 0);
+  if (!nlh) {
+    kfree_skb(skb);
+    return -ENOMEM;
+  }
+
+  /* 获取 payload 指针 */
+  event = (struct fw_nl_whitelist_state_change *)nlmsg_data(nlh);
+
+  /* 填充消息头 */
+  event->hdr.magic = cpu_to_be32(FW_NL_MAGIC);
+  event->hdr.msg_type = cpu_to_be16(FW_NL_WHITELIST_STATE_CHANGE);
+  event->hdr.msg_len = cpu_to_be16(sizeof(*event));
+  event->hdr.seq = cpu_to_be32(atomic_inc_return(&fw_nl_seq));
+
+  /* 填充事件数据 */
+  event->action = action;
+  event->af = af;
+  event->prefix_len = prefix_len;
+
+  /* 复制 IP 地址 */
+  memset(event->addr, 0, sizeof(event->addr));
+  if (af == FW_AF_INET) {
+    memcpy(event->addr, ip, 4);
+  } else {
+    memcpy(event->addr, ip, 16);
+  }
+
+  /* 复制设备名 */
+  memset(event->device, 0, sizeof(event->device));
+  if (dev_name) {
+    strscpy(event->device, dev_name, sizeof(event->device));
+  }
+
+  /* 填充实时统计字段 */
+  event->whitelist_count = cpu_to_be32(atomic_read(&fw_info.whitelist_count));
+
+  /* 事件推送用广播（1:1 绑定，只有一个监听者） */
+  ret = netlink_broadcast(fw_nl_sock, skb, 0, 1, GFP_ATOMIC);
+  if (ret < 0 && ret != -ESRCH) {
+    pr_warn_ratelimited("netlink broadcast whitelist state change failed: %d\n", ret);
+    return ret;
+  }
+
+  return 0;
+}
+
+/**
+ * fw_netlink_send_cmd_result - 命令执行失败时通知守护进程
+ * @original_cmd: 原始命令类型
+ * @error_code: 错误码（负值）
+ * @af: 地址族
+ * @ip: IP 地址指针（可为 NULL）
+ */
+static void fw_netlink_send_cmd_result(u16 original_cmd, s32 error_code, u8 af,
+                                       const void *ip) {
+  struct sk_buff *skb;
+  struct nlmsghdr *nlh;
+  struct fw_nl_cmd_result *result;
+  int ret;
+
+  if (!fw_nl_sock)
+    return;
+
+  skb = nlmsg_new(sizeof(*result), GFP_ATOMIC);
+  if (!skb)
+    return;
+
+  nlh = nlmsg_put(skb, 0, 0, FW_NL_CMD_RESULT, sizeof(*result), 0);
+  if (!nlh) {
+    kfree_skb(skb);
+    return;
+  }
+
+  result = (struct fw_nl_cmd_result *)nlmsg_data(nlh);
+  result->hdr.magic = cpu_to_be32(FW_NL_MAGIC);
+  result->hdr.msg_type = cpu_to_be16(FW_NL_CMD_RESULT);
+  result->hdr.msg_len = cpu_to_be16(sizeof(*result));
+  result->hdr.seq = 0;
+  result->original_cmd = cpu_to_be16(original_cmd);
+  result->pad = 0;
+  result->error_code = cpu_to_be32(error_code);
+  result->af = af;
+  memset(result->addr, 0, sizeof(result->addr));
+  if (ip) {
+    if (af == FW_AF_INET)
+      memcpy(result->addr, ip, 4);
+    else
+      memcpy(result->addr, ip, 16);
+  }
+
+  ret = netlink_broadcast(fw_nl_sock, skb, 0, 1, GFP_ATOMIC);
+  if (ret < 0 && ret != -ESRCH)
+    pr_warn_ratelimited("netlink broadcast cmd_result failed: %d\n", ret);
+}
+
+/**
+ * fw_netlink_send_config_change - procfs 配置变更时通知守护进程
+ */
+void fw_netlink_send_config_change(u32 flag, u32 value) {
+  struct sk_buff *skb;
+  struct nlmsghdr *nlh;
+  struct fw_nl_config_update *cfg;
+  int ret;
+
+  if (!fw_nl_sock)
+    return;
+
+  skb = nlmsg_new(sizeof(*cfg), GFP_ATOMIC);
+  if (!skb)
+    return;
+
+  nlh = nlmsg_put(skb, 0, 0, FW_NL_CONFIG_CHANGE, sizeof(*cfg), 0);
+  if (!nlh) {
+    kfree_skb(skb);
+    return;
+  }
+
+  cfg = (struct fw_nl_config_update *)nlmsg_data(nlh);
+  memset(cfg, 0, sizeof(*cfg));
+  cfg->hdr.magic = cpu_to_be32(FW_NL_MAGIC);
+  cfg->hdr.msg_type = cpu_to_be16(FW_NL_CONFIG_CHANGE);
+  cfg->hdr.msg_len = cpu_to_be16(sizeof(*cfg));
+  cfg->flags = cpu_to_be32(flag);
+  if (flag & FW_NL_CFG_BAN_TIME)
+    cfg->ban_time = cpu_to_be32(value);
+
+  ret = netlink_broadcast(fw_nl_sock, skb, 0, 1, GFP_ATOMIC);
+  if (ret < 0 && ret != -ESRCH)
+    pr_warn_ratelimited("netlink broadcast config_change failed: %d\n", ret);
 }
 
 /**
@@ -479,6 +687,9 @@ int fw_netlink_send_stats_response(u32 seq, u32 portid) {
   if (!fw_nl_sock) {
     return -ENOTCONN;
   }
+
+  /* 刷新所有 CPU 的 per-CPU 计数器，确保统计数据完整 */
+  fw_flush_all_cpu_stats();
 
   /* 分配 netlink 消息缓冲区 */
   skb = nlmsg_new(sizeof(*resp), GFP_ATOMIC);
@@ -899,13 +1110,28 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       }
       cmd = (struct fw_nl_ban_cmd *)hdr;
       ip_to_str(cmd->af, cmd->addr, ip_str, sizeof(ip_str));
-      pr_info("netlink: ban IP %s for %u seconds\n", ip_str, be32_to_cpu(cmd->duration_secs));
+      /* 提取 reason 字符串（null-terminated，最长 31 字符） */
+      {
+        char reason_str[33];
+        memset(reason_str, 0, sizeof(reason_str));
+        memcpy(reason_str, cmd->reason, 32);
+        reason_str[32] = '\0';
+        if (reason_str[0] == '\0')
+          strncpy(reason_str, "manual", sizeof(reason_str));
+        pr_info("netlink: ban IP %s for %u seconds, reason=%s\n", ip_str,
+                be32_to_cpu(cmd->duration_secs), reason_str);
 
-      /* 调用封禁函数 */
-      if (be32_to_cpu(cmd->duration_secs) == 0) {
-        ban_ip_permanent(&fw_info, cmd->af, cmd->addr);
-      } else {
-        ban_ip_with_duration(&fw_info, cmd->af, cmd->addr, be32_to_cpu(cmd->duration_secs));
+        /* 调用封禁函数 */
+        {
+          int ret;
+          if (be32_to_cpu(cmd->duration_secs) == 0)
+            ret = ban_ip_permanent(&fw_info, cmd->af, cmd->addr, reason_str);
+          else
+            ret = ban_ip_with_duration(&fw_info, cmd->af, cmd->addr,
+                                       be32_to_cpu(cmd->duration_secs), reason_str);
+          if (ret < 0)
+            fw_netlink_send_cmd_result(FW_NL_BAN_IP, ret, cmd->af, cmd->addr);
+        }
       }
       break;
 
@@ -919,7 +1145,11 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       pr_info("netlink: unban IP %s\n", ip_str);
 
       /* 调用解封函数 */
-      unban_ip(&fw_info, cmd->af, cmd->addr);
+      {
+        int ret = unban_ip(&fw_info, cmd->af, cmd->addr);
+        if (ret < 0)
+          fw_netlink_send_cmd_result(FW_NL_UNBAN_IP, ret, cmd->af, cmd->addr);
+      }
       break;
 
     case FW_NL_SET_CONFIG: {
@@ -1054,6 +1284,13 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
         updated++;
       }
 
+      if (flags & FW_NL_CFG_DDOS_BAN_DURATION) {
+        WRITE_ONCE(fw_info.ddos_ban_duration, be32_to_cpu(cfg->ddos_ban_duration));
+        pr_info("netlink: ddos_ban_duration updated to %u seconds\n",
+                READ_ONCE(fw_info.ddos_ban_duration));
+        updated++;
+      }
+
       pr_info("netlink: config updated, %d items changed\n", updated);
 
       /* 发送配置确认响应 */
@@ -1114,6 +1351,7 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       }
       if (ret < 0) {
         pr_warn("netlink: add whitelist failed: %d\n", ret);
+        fw_netlink_send_cmd_result(FW_NL_ADD_WHITELIST, ret, cmd->af, cmd->addr);
       }
       break;
     }
@@ -1133,6 +1371,7 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       ret = remove_whitelist_entry(&fw_info, cmd->af, cmd->addr, cmd->prefix_len);
       if (ret < 0) {
         pr_warn("netlink: remove whitelist failed: %d\n", ret);
+        fw_netlink_send_cmd_result(FW_NL_REMOVE_WHITELIST, ret, cmd->af, cmd->addr);
       }
       break;
     }
