@@ -40,6 +40,10 @@ pub struct WebuiConfig {
     pub max_ack_per_second: u32,
     pub max_rst_per_second: u32,
     pub max_fin_per_second: u32,
+    // DDoS 检测算法开关
+    pub static_threshold: bool,
+    pub dynamic_threshold: bool,
+    pub ddos_detection: bool,
 }
 
 impl Default for WebuiConfig {
@@ -57,6 +61,10 @@ impl Default for WebuiConfig {
             max_ack_per_second: 2000,
             max_rst_per_second: 200,
             max_fin_per_second: 200,
+            // DDoS 检测算法开关
+            static_threshold: true,
+            dynamic_threshold: false,
+            ddos_detection: true,
         }
     }
 }

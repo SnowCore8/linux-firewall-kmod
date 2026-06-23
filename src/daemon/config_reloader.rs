@@ -258,6 +258,9 @@ fn sync_config_to_components(cfg: &Config) -> Result<()> {
                 "ddos_ban_duration" => cfg.ddos.auto_ban_duration
             );
         }
+
+        // 同步 DDoS 检测开关到内核模块参数
+        sync_ddos_detection_to_kernel(cfg);
     }
 
     // 3. 更新全局 Web UI 配置
@@ -484,4 +487,28 @@ fn update_trusted_ips(old_ips: &[String], new_ips: &[String]) {
             );
         }
     }
+}
+
+/// 同步 DDoS 检测开关到内核模块参数
+fn sync_ddos_detection_to_kernel(cfg: &crate::types::Config) {
+    let _ = std::fs::write(
+        "/sys/module/firewall/parameters/fw_static_threshold",
+        if cfg.ddos.static_threshold { "1" } else { "0" },
+    );
+    let _ = std::fs::write(
+        "/sys/module/firewall/parameters/fw_dynamic_threshold",
+        if cfg.ddos.dynamic_threshold { "1" } else { "0" },
+    );
+    let _ = std::fs::write(
+        "/sys/module/firewall/parameters/fw_ddos_detection",
+        if cfg.ddos.ddos_detection { "1" } else { "0" },
+    );
+
+    crate::logger::info!(
+        crate::logger::get(),
+        "DDoS 检测开关已同步到内核";
+        "static" => cfg.ddos.static_threshold,
+        "dynamic" => cfg.ddos.dynamic_threshold,
+        "enabled" => cfg.ddos.ddos_detection
+    );
 }

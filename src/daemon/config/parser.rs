@@ -166,6 +166,13 @@ struct YamlDdos {
     max_ack_per_second: Option<u32>,
     max_rst_per_second: Option<u32>,
     max_fin_per_second: Option<u32>,
+    // DDoS 检测算法开关
+    static_threshold: Option<bool>,
+    dynamic_threshold: Option<bool>,
+    ddos_detection: Option<bool>,
+    // 内核模块参数
+    max_bans_per_second: Option<u32>,
+    max_rate_entries: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -329,6 +336,23 @@ pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
         }
         if let Some(rate) = ddos.max_fin_per_second {
             cfg.ddos.max_fin_per_second = rate;
+        }
+        // DDoS 检测算法开关
+        if let Some(v) = ddos.static_threshold {
+            cfg.ddos.static_threshold = v;
+        }
+        if let Some(v) = ddos.dynamic_threshold {
+            cfg.ddos.dynamic_threshold = v;
+        }
+        if let Some(v) = ddos.ddos_detection {
+            cfg.ddos.ddos_detection = v;
+        }
+        // 内核模块参数
+        if let Some(v) = ddos.max_bans_per_second {
+            cfg.ddos.max_bans_per_second = v;
+        }
+        if let Some(v) = ddos.max_rate_entries {
+            cfg.ddos.max_rate_entries = v;
         }
     }
 

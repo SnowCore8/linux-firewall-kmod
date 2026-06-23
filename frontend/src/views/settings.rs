@@ -26,6 +26,10 @@ pub fn Settings() -> impl IntoView {
     let edit_max_ack = create_rw_signal(String::new());
     let edit_max_rst = create_rw_signal(String::new());
     let edit_max_fin = create_rw_signal(String::new());
+    // DDoS 检测开关
+    let static_thresh = create_rw_signal(true);
+    let dynamic_thresh = create_rw_signal(false);
+    let ddos_enabled = create_rw_signal(true);
 
     create_effect(move |_| {
         if let Some(Some(cfg)) = config.get() {
@@ -41,6 +45,10 @@ pub fn Settings() -> impl IntoView {
             let _ = edit_max_ack.try_set(cfg.max_ack_per_second.to_string());
             let _ = edit_max_rst.try_set(cfg.max_rst_per_second.to_string());
             let _ = edit_max_fin.try_set(cfg.max_fin_per_second.to_string());
+            // DDoS 检测开关
+            let _ = static_thresh.try_set(cfg.static_threshold);
+            let _ = dynamic_thresh.try_set(cfg.dynamic_threshold);
+            let _ = ddos_enabled.try_set(cfg.ddos_detection);
         }
     });
 
@@ -59,6 +67,10 @@ pub fn Settings() -> impl IntoView {
         let max_ack = edit_max_ack.get().parse::<u32>().ok();
         let max_rst = edit_max_rst.get().parse::<u32>().ok();
         let max_fin = edit_max_fin.get().parse::<u32>().ok();
+        // DDoS 检测开关
+        let static_thresh = static_thresh.get();
+        let dynamic_thresh = dynamic_thresh.get();
+        let ddos_enabled = ddos_enabled.get();
         spawn_local(async move {
             let req = api::UpdateConfigRequest {
                 sse_push_interval: sse_val,
@@ -72,6 +84,9 @@ pub fn Settings() -> impl IntoView {
                 max_ack_per_second: max_ack,
                 max_rst_per_second: max_rst,
                 max_fin_per_second: max_fin,
+                static_threshold: Some(static_thresh),
+                dynamic_threshold: Some(dynamic_thresh),
+                ddos_detection: Some(ddos_enabled),
             };
             match api::update_config(req).await {
                 Ok(_) => {
@@ -98,6 +113,9 @@ pub fn Settings() -> impl IntoView {
         max_ack_per_second: 2000,
         max_rst_per_second: 200,
         max_fin_per_second: 200,
+        static_threshold: true,
+        dynamic_threshold: false,
+        ddos_detection: true,
     };
 
     view! {
@@ -167,6 +185,21 @@ pub fn Settings() -> impl IntoView {
                     </Suspense>
                 </div>
                 <div class="card settings-card">
+                    <h3>"DDoS 检测算法"</h3>
+                    <Suspense fallback=|| view! { <div style="padding:12px;color:var(--text-muted)">"加载中..."</div> }>
+                        {move || {
+                            let _cfg = config.get().flatten().unwrap_or_else(|| default_config());
+                            view! {
+                                <div class="settings-list">
+                                    <ToggleItem label="DDoS 检测总开关" value=ddos_enabled/>
+                                    <ToggleItem label="静态阈值算法" value=static_thresh/>
+                                    <ToggleItem label="动态阈值算法 (基线×倍数)" value=dynamic_thresh/>
+                                </div>
+                            }
+                        }}
+                    </Suspense>
+                </div>
+                <div class="card settings-card">
                     <h3>"关于"</h3>
                     <div class="settings-list">
                         <SettingItem label="项目" value=|| "Linux Firewall Kernel Module".to_string()/>
@@ -190,6 +223,28 @@ fn SettingItem(label: &'static str, value: impl Fn() -> String + Send + Sync + '
         <div class="setting-item">
             <span class="setting-label">{label}</span>
             <span class="setting-value">{move || value()}</span>
+        </div>
+    }
+}
+
+#[component]
+fn ToggleItem(label: &'static str, value: RwSignal<bool>) -> impl IntoView {
+    view! {
+        <div class="setting-item">
+            <span class="setting-label">{label}</span>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <input type="checkbox"
+                    checked=move || value.get()
+                    on:change=move |e: leptos::ev::Event| {
+                        use wasm_bindgen::JsCast;
+                        let target: web_sys::EventTarget = e.target().unwrap();
+                        let input: web_sys::HtmlInputElement = target.unchecked_into();
+                        value.set(input.checked());
+                    }
+                    style="width:16px;height:16px;accent-color:var(--accent-primary)"
+                />
+                <span style="font-size:14px;color:var(--text-muted)">{move || if value.get() { "开启" } else { "关闭" }}</span>
+            </label>
         </div>
     }
 }

@@ -129,6 +129,10 @@ pub struct WebuiConfigResponse {
     pub max_ack_per_second: u32,
     pub max_rst_per_second: u32,
     pub max_fin_per_second: u32,
+    // DDoS 检测算法开关
+    pub static_threshold: bool,
+    pub dynamic_threshold: bool,
+    pub ddos_detection: bool,
 }
 
 /// 获取 Web UI 配置
@@ -147,6 +151,9 @@ pub fn get_webui_config() -> WebuiConfigResponse {
         max_ack_per_second: config.max_ack_per_second,
         max_rst_per_second: config.max_rst_per_second,
         max_fin_per_second: config.max_fin_per_second,
+        static_threshold: config.static_threshold,
+        dynamic_threshold: config.dynamic_threshold,
+        ddos_detection: config.ddos_detection,
     }
 }
 
@@ -165,6 +172,10 @@ pub struct UpdateConfigRequest {
     pub max_ack_per_second: Option<u32>,
     pub max_rst_per_second: Option<u32>,
     pub max_fin_per_second: Option<u32>,
+    // DDoS 检测算法开关
+    pub static_threshold: Option<bool>,
+    pub dynamic_threshold: Option<bool>,
+    pub ddos_detection: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -266,12 +277,25 @@ pub fn update_webui_config(req: UpdateConfigRequest) -> Result<WebuiConfigRespon
         }
         config.max_fin_per_second = v;
     }
+    // DDoS 检测算法开关
+    if let Some(v) = req.static_threshold {
+        config.static_threshold = v;
+    }
+    if let Some(v) = req.dynamic_threshold {
+        config.dynamic_threshold = v;
+    }
+    if let Some(v) = req.ddos_detection {
+        config.ddos_detection = v;
+    }
 
     // 写入全局配置
     crate::http_exporter::set_global_webui_config(config.clone());
 
     // 同步协议阈值到内核
     sync_protocol_thresholds_to_kernel(&config);
+
+    // 同步 DDoS 检测开关到内核
+    sync_ddos_detection_to_kernel(&config);
 
     Ok(WebuiConfigResponse {
         sse_push_interval: config.sse_push_interval,
@@ -285,7 +309,26 @@ pub fn update_webui_config(req: UpdateConfigRequest) -> Result<WebuiConfigRespon
         max_ack_per_second: config.max_ack_per_second,
         max_rst_per_second: config.max_rst_per_second,
         max_fin_per_second: config.max_fin_per_second,
+        static_threshold: config.static_threshold,
+        dynamic_threshold: config.dynamic_threshold,
+        ddos_detection: config.ddos_detection,
     })
+}
+
+/// 同步 DDoS 检测开关到内核模块参数
+fn sync_ddos_detection_to_kernel(config: &crate::types::WebuiConfig) {
+    let _ = std::fs::write(
+        "/sys/module/firewall/parameters/fw_static_threshold",
+        if config.static_threshold { "1" } else { "0" },
+    );
+    let _ = std::fs::write(
+        "/sys/module/firewall/parameters/fw_dynamic_threshold",
+        if config.dynamic_threshold { "1" } else { "0" },
+    );
+    let _ = std::fs::write(
+        "/sys/module/firewall/parameters/fw_ddos_detection",
+        if config.ddos_detection { "1" } else { "0" },
+    );
 }
 
 /// 同步协议专项阈值到内核模块

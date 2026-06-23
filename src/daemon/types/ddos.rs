@@ -39,6 +39,13 @@ pub struct DdosConfig {
     pub max_ack_per_second: u32,  // ACK flood 阈值（默认 2000）
     pub max_rst_per_second: u32,  // RST flood 阈值（默认 200）
     pub max_fin_per_second: u32,  // FIN flood 阈值（默认 200）
+    // DDoS 检测算法开关
+    pub static_threshold: bool,  // 静态阈值检测（默认 true）
+    pub dynamic_threshold: bool, // 动态阈值检测（默认 false）
+    pub ddos_detection: bool,    // DDoS 检测总开关（默认 true）
+    // 内核模块参数
+    pub max_bans_per_second: u32, // 每秒最大封禁数（默认 200）
+    pub max_rate_entries: u32,    // 速率表容量（默认 65536）
 }
 
 impl Default for DdosConfig {
@@ -59,6 +66,13 @@ impl Default for DdosConfig {
             max_ack_per_second: 2000,
             max_rst_per_second: 200,
             max_fin_per_second: 200,
+            // DDoS 检测算法开关（与内核模块参数默认值一致）
+            static_threshold: true,
+            dynamic_threshold: false,
+            ddos_detection: true,
+            // 内核模块参数
+            max_bans_per_second: 200,
+            max_rate_entries: 65536,
         }
     }
 }

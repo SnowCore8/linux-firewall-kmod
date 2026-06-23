@@ -97,6 +97,10 @@ pub struct WebuiConfig {
     pub max_ack_per_second: u32,
     pub max_rst_per_second: u32,
     pub max_fin_per_second: u32,
+    // DDoS 检测算法开关
+    pub static_threshold: bool,
+    pub dynamic_threshold: bool,
+    pub ddos_detection: bool,
 }
 
 #[derive(Serialize)]
@@ -113,6 +117,10 @@ pub struct UpdateConfigRequest {
     pub max_ack_per_second: Option<u32>,
     pub max_rst_per_second: Option<u32>,
     pub max_fin_per_second: Option<u32>,
+    // DDoS 检测算法开关
+    pub static_threshold: Option<bool>,
+    pub dynamic_threshold: Option<bool>,
+    pub ddos_detection: Option<bool>,
 }
 
 #[derive(Deserialize, Clone, Serialize)]
