@@ -19,6 +19,13 @@ pub fn Settings() -> impl IntoView {
     let edit_critical_pps = create_rw_signal(String::new());
     let edit_warning_syn = create_rw_signal(String::new());
     let edit_critical_syn = create_rw_signal(String::new());
+    // 协议专项阈值
+    let edit_max_syn = create_rw_signal(String::new());
+    let edit_max_udp = create_rw_signal(String::new());
+    let edit_max_icmp = create_rw_signal(String::new());
+    let edit_max_ack = create_rw_signal(String::new());
+    let edit_max_rst = create_rw_signal(String::new());
+    let edit_max_fin = create_rw_signal(String::new());
 
     create_effect(move |_| {
         if let Some(Some(cfg)) = config.get() {
@@ -27,6 +34,13 @@ pub fn Settings() -> impl IntoView {
             let _ = edit_critical_pps.try_set(cfg.rate_critical_pps.to_string());
             let _ = edit_warning_syn.try_set(cfg.rate_warning_syn.to_string());
             let _ = edit_critical_syn.try_set(cfg.rate_critical_syn.to_string());
+            // 协议专项阈值
+            let _ = edit_max_syn.try_set(cfg.max_syn_per_second.to_string());
+            let _ = edit_max_udp.try_set(cfg.max_udp_per_second.to_string());
+            let _ = edit_max_icmp.try_set(cfg.max_icmp_per_second.to_string());
+            let _ = edit_max_ack.try_set(cfg.max_ack_per_second.to_string());
+            let _ = edit_max_rst.try_set(cfg.max_rst_per_second.to_string());
+            let _ = edit_max_fin.try_set(cfg.max_fin_per_second.to_string());
         }
     });
 
@@ -38,11 +52,26 @@ pub fn Settings() -> impl IntoView {
         let critical_pps = edit_critical_pps.get().parse::<u64>().ok();
         let warning_syn = edit_warning_syn.get().parse::<u64>().ok();
         let critical_syn = edit_critical_syn.get().parse::<u64>().ok();
+        // 协议专项阈值
+        let max_syn = edit_max_syn.get().parse::<u32>().ok();
+        let max_udp = edit_max_udp.get().parse::<u32>().ok();
+        let max_icmp = edit_max_icmp.get().parse::<u32>().ok();
+        let max_ack = edit_max_ack.get().parse::<u32>().ok();
+        let max_rst = edit_max_rst.get().parse::<u32>().ok();
+        let max_fin = edit_max_fin.get().parse::<u32>().ok();
         spawn_local(async move {
             let req = api::UpdateConfigRequest {
-                sse_push_interval: sse_val, rate_warning_pps: warning_pps,
-                rate_critical_pps: critical_pps, rate_warning_syn: warning_syn,
+                sse_push_interval: sse_val,
+                rate_warning_pps: warning_pps,
+                rate_critical_pps: critical_pps,
+                rate_warning_syn: warning_syn,
                 rate_critical_syn: critical_syn,
+                max_syn_per_second: max_syn,
+                max_udp_per_second: max_udp,
+                max_icmp_per_second: max_icmp,
+                max_ack_per_second: max_ack,
+                max_rst_per_second: max_rst,
+                max_fin_per_second: max_fin,
             };
             match api::update_config(req).await {
                 Ok(_) => {
@@ -58,8 +87,17 @@ pub fn Settings() -> impl IntoView {
     };
 
     let default_config = move || WebuiConfig {
-        sse_push_interval: 1, rate_warning_pps: 1000, rate_critical_pps: 10000,
-        rate_warning_syn: 100, rate_critical_syn: 1000,
+        sse_push_interval: 1,
+        rate_warning_pps: 1000,
+        rate_critical_pps: 10000,
+        rate_warning_syn: 100,
+        rate_critical_syn: 1000,
+        max_syn_per_second: 200,
+        max_udp_per_second: 1000,
+        max_icmp_per_second: 50,
+        max_ack_per_second: 2000,
+        max_rst_per_second: 200,
+        max_fin_per_second: 200,
     };
 
     view! {
@@ -105,6 +143,24 @@ pub fn Settings() -> impl IntoView {
                                         {move || if saving.get() { "保存中..." } else { "保存配置" }}
                                     </button>
                                     <span style="color:var(--text-muted);font-size:13px">{move || save_msg.get()}</span>
+                                </div>
+                            }
+                        }}
+                    </Suspense>
+                </div>
+                <div class="card settings-card">
+                    <h3>"协议专项阈值 (每秒)"</h3>
+                    <Suspense fallback=|| view! { <div style="padding:12px;color:var(--text-muted)">"加载中..."</div> }>
+                        {move || {
+                            let _cfg = config.get().flatten().unwrap_or_else(|| default_config());
+                            view! {
+                                <div class="settings-list">
+                                    <EditableItem label="SYN Flood" value=edit_max_syn/>
+                                    <EditableItem label="UDP Flood" value=edit_max_udp/>
+                                    <EditableItem label="ICMP Flood" value=edit_max_icmp/>
+                                    <EditableItem label="ACK Flood" value=edit_max_ack/>
+                                    <EditableItem label="RST Flood" value=edit_max_rst/>
+                                    <EditableItem label="FIN Flood" value=edit_max_fin/>
                                 </div>
                             }
                         }}

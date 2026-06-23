@@ -64,12 +64,12 @@ void fw_flush_all_cpu_stats(void);
 #define DEFAULT_MAX_BYTES_PER_SECOND (10 * 1024 * 1024) /* 默认 10 MB/s */
 
 /* 协议专项检测默认配置 */
-#define DEFAULT_MAX_SYN_PER_SECOND 1000  /* 默认 1000 SYN/s */
-#define DEFAULT_MAX_UDP_PER_SECOND 5000  /* 默认 5000 UDP/s */
-#define DEFAULT_MAX_ICMP_PER_SECOND 1000 /* 默认 1000 ICMP/s */
-#define DEFAULT_MAX_ACK_PER_SECOND 5000  /* 默认 5000 ACK/s */
-#define DEFAULT_MAX_RST_PER_SECOND 1000  /* 默认 1000 RST/s */
-#define DEFAULT_MAX_FIN_PER_SECOND 1000  /* 默认 1000 FIN/s */
+#define DEFAULT_MAX_SYN_PER_SECOND 200   /* 正常主机 SYN ≈ 几十/s */
+#define DEFAULT_MAX_UDP_PER_SECOND 1000  /* DNS/流媒体等，正常几百/s */
+#define DEFAULT_MAX_ICMP_PER_SECOND 50   /* 正常 ping ≈ 1/s */
+#define DEFAULT_MAX_ACK_PER_SECOND 2000  /* 正常连接 ACK 较多 */
+#define DEFAULT_MAX_RST_PER_SECOND 200   /* RST 异常通常意味着攻击 */
+#define DEFAULT_MAX_FIN_PER_SECOND 200   /* FIN 同理 */
 
 /* 动态阈值默认配置 */
 #define DEFAULT_DYNAMIC_THRESHOLD_ENABLED 0      /* 默认关闭 */

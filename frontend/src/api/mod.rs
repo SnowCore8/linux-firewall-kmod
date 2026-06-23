@@ -90,6 +90,13 @@ pub struct WebuiConfig {
     pub rate_critical_pps: u64,
     pub rate_warning_syn: u64,
     pub rate_critical_syn: u64,
+    // 协议专项阈值（同步到内核模块）
+    pub max_syn_per_second: u32,
+    pub max_udp_per_second: u32,
+    pub max_icmp_per_second: u32,
+    pub max_ack_per_second: u32,
+    pub max_rst_per_second: u32,
+    pub max_fin_per_second: u32,
 }
 
 #[derive(Serialize)]
@@ -99,6 +106,13 @@ pub struct UpdateConfigRequest {
     pub rate_critical_pps: Option<u64>,
     pub rate_warning_syn: Option<u64>,
     pub rate_critical_syn: Option<u64>,
+    // 协议专项阈值
+    pub max_syn_per_second: Option<u32>,
+    pub max_udp_per_second: Option<u32>,
+    pub max_icmp_per_second: Option<u32>,
+    pub max_ack_per_second: Option<u32>,
+    pub max_rst_per_second: Option<u32>,
+    pub max_fin_per_second: Option<u32>,
 }
 
 #[derive(Deserialize, Clone, Serialize)]

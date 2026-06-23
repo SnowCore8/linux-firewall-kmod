@@ -217,11 +217,31 @@ fn sync_config_to_components(cfg: &Config) -> Result<()> {
 
         // 构建配置更新消息
         let config_update = ConfigUpdate::new(
-            config_flags::BAN_TIME | config_flags::MAX_PPS | config_flags::DDOS_BAN_DURATION,
+            config_flags::BAN_TIME
+                | config_flags::MAX_PPS
+                | config_flags::DDOS_BAN_DURATION
+                | config_flags::MAX_SYN
+                | config_flags::MAX_UDP
+                | config_flags::MAX_ICMP
+                | config_flags::MAX_ACK
+                | config_flags::MAX_RST
+                | config_flags::MAX_FIN,
         )
         .with_ban_time(cfg.ddos.auto_ban_duration)
         .with_max_pps(cfg.ddos.global_conn_rate as u64)
-        .with_ddos_ban_duration(cfg.ddos.auto_ban_duration);
+        .with_ddos_ban_duration(cfg.ddos.auto_ban_duration)
+        .with_max_syn(cfg.ddos.max_syn_per_second as u64)
+        .with_max_udp(cfg.ddos.max_udp_per_second as u64)
+        .with_max_icmp(cfg.ddos.max_icmp_per_second as u64);
+
+        // ACK/RST/FIN 需要手动设置字段（没有 with_max_* 方法）
+        let config_update = {
+            let mut cu = config_update;
+            cu.max_ack_per_second = (cfg.ddos.max_ack_per_second as u64).to_be();
+            cu.max_rst_per_second = (cfg.ddos.max_rst_per_second as u64).to_be();
+            cu.max_fin_per_second = (cfg.ddos.max_fin_per_second as u64).to_be();
+            cu
+        };
 
         if let Err(e) = netlink.send_config_update(&config_update) {
             crate::logger::warn!(

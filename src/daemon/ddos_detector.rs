@@ -769,6 +769,13 @@ mod tests {
             auto_ban_threshold: 3,
             check_interval: 5,
             baseline_warmup_samples: 50,
+            // 协议专项阈值（测试用低值）
+            max_syn_per_second: 200,
+            max_udp_per_second: 1000,
+            max_icmp_per_second: 50,
+            max_ack_per_second: 2000,
+            max_rst_per_second: 200,
+            max_fin_per_second: 200,
         }
     }
 

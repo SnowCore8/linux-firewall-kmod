@@ -122,6 +122,13 @@ pub struct WebuiConfigResponse {
     pub rate_critical_pps: u64,
     pub rate_warning_syn: u64,
     pub rate_critical_syn: u64,
+    // 协议专项阈值
+    pub max_syn_per_second: u32,
+    pub max_udp_per_second: u32,
+    pub max_icmp_per_second: u32,
+    pub max_ack_per_second: u32,
+    pub max_rst_per_second: u32,
+    pub max_fin_per_second: u32,
 }
 
 /// 获取 Web UI 配置
@@ -134,6 +141,12 @@ pub fn get_webui_config() -> WebuiConfigResponse {
         rate_critical_pps: config.rate_critical_pps,
         rate_warning_syn: config.rate_warning_syn,
         rate_critical_syn: config.rate_critical_syn,
+        max_syn_per_second: config.max_syn_per_second,
+        max_udp_per_second: config.max_udp_per_second,
+        max_icmp_per_second: config.max_icmp_per_second,
+        max_ack_per_second: config.max_ack_per_second,
+        max_rst_per_second: config.max_rst_per_second,
+        max_fin_per_second: config.max_fin_per_second,
     }
 }
 
@@ -145,6 +158,13 @@ pub struct UpdateConfigRequest {
     pub rate_critical_pps: Option<u64>,
     pub rate_warning_syn: Option<u64>,
     pub rate_critical_syn: Option<u64>,
+    // 协议专项阈值
+    pub max_syn_per_second: Option<u32>,
+    pub max_udp_per_second: Option<u32>,
+    pub max_icmp_per_second: Option<u32>,
+    pub max_ack_per_second: Option<u32>,
+    pub max_rst_per_second: Option<u32>,
+    pub max_fin_per_second: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -209,8 +229,49 @@ pub fn update_webui_config(req: UpdateConfigRequest) -> Result<WebuiConfigRespon
     config.rate_warning_syn = new_warning_syn;
     config.rate_critical_syn = new_critical_syn;
 
+    // 协议专项阈值（验证并应用）
+    if let Some(v) = req.max_syn_per_second {
+        if v == 0 {
+            return Err("SYN 阈值不能为 0".to_string());
+        }
+        config.max_syn_per_second = v;
+    }
+    if let Some(v) = req.max_udp_per_second {
+        if v == 0 {
+            return Err("UDP 阈值不能为 0".to_string());
+        }
+        config.max_udp_per_second = v;
+    }
+    if let Some(v) = req.max_icmp_per_second {
+        if v == 0 {
+            return Err("ICMP 阈值不能为 0".to_string());
+        }
+        config.max_icmp_per_second = v;
+    }
+    if let Some(v) = req.max_ack_per_second {
+        if v == 0 {
+            return Err("ACK 阈值不能为 0".to_string());
+        }
+        config.max_ack_per_second = v;
+    }
+    if let Some(v) = req.max_rst_per_second {
+        if v == 0 {
+            return Err("RST 阈值不能为 0".to_string());
+        }
+        config.max_rst_per_second = v;
+    }
+    if let Some(v) = req.max_fin_per_second {
+        if v == 0 {
+            return Err("FIN 阈值不能为 0".to_string());
+        }
+        config.max_fin_per_second = v;
+    }
+
     // 写入全局配置
     crate::http_exporter::set_global_webui_config(config.clone());
+
+    // 同步协议阈值到内核
+    sync_protocol_thresholds_to_kernel(&config);
 
     Ok(WebuiConfigResponse {
         sse_push_interval: config.sse_push_interval,
@@ -218,7 +279,60 @@ pub fn update_webui_config(req: UpdateConfigRequest) -> Result<WebuiConfigRespon
         rate_critical_pps: config.rate_critical_pps,
         rate_warning_syn: config.rate_warning_syn,
         rate_critical_syn: config.rate_critical_syn,
+        max_syn_per_second: config.max_syn_per_second,
+        max_udp_per_second: config.max_udp_per_second,
+        max_icmp_per_second: config.max_icmp_per_second,
+        max_ack_per_second: config.max_ack_per_second,
+        max_rst_per_second: config.max_rst_per_second,
+        max_fin_per_second: config.max_fin_per_second,
     })
+}
+
+/// 同步协议专项阈值到内核模块
+fn sync_protocol_thresholds_to_kernel(config: &crate::types::WebuiConfig) {
+    use crate::netlink::{config_flags, ConfigUpdate};
+
+    if let Some(netlink) = crate::netlink::get_global_netlink_ctx() {
+        let config_update = ConfigUpdate::new(
+            config_flags::MAX_SYN
+                | config_flags::MAX_UDP
+                | config_flags::MAX_ICMP
+                | config_flags::MAX_ACK
+                | config_flags::MAX_RST
+                | config_flags::MAX_FIN,
+        )
+        .with_max_syn(config.max_syn_per_second as u64)
+        .with_max_udp(config.max_udp_per_second as u64)
+        .with_max_icmp(config.max_icmp_per_second as u64);
+
+        // ACK/RST/FIN 需要手动设置字段
+        let config_update = {
+            let mut cu = config_update;
+            cu.max_ack_per_second = (config.max_ack_per_second as u64).to_be();
+            cu.max_rst_per_second = (config.max_rst_per_second as u64).to_be();
+            cu.max_fin_per_second = (config.max_fin_per_second as u64).to_be();
+            cu
+        };
+
+        if let Err(e) = netlink.send_config_update(&config_update) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "同步协议阈值到内核失败";
+                "error" => %e
+            );
+        } else {
+            crate::logger::info!(
+                crate::logger::get(),
+                "协议阈值已同步到内核";
+                "SYN" => config.max_syn_per_second,
+                "UDP" => config.max_udp_per_second,
+                "ICMP" => config.max_icmp_per_second,
+                "ACK" => config.max_ack_per_second,
+                "RST" => config.max_rst_per_second,
+                "FIN" => config.max_fin_per_second
+            );
+        }
+    }
 }
 
 /// 获取 DDoS 速率数据

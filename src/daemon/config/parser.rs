@@ -159,6 +159,13 @@ struct YamlDdos {
     auto_ban_threshold: Option<u32>,
     check_interval: Option<u32>,
     baseline_warmup_samples: Option<u32>,
+    // 协议专项阈值（同步到内核模块）
+    max_syn_per_second: Option<u32>,
+    max_udp_per_second: Option<u32>,
+    max_icmp_per_second: Option<u32>,
+    max_ack_per_second: Option<u32>,
+    max_rst_per_second: Option<u32>,
+    max_fin_per_second: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -303,6 +310,25 @@ pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
         }
         if let Some(samples) = ddos.baseline_warmup_samples {
             cfg.ddos.baseline_warmup_samples = samples;
+        }
+        // 协议专项阈值
+        if let Some(rate) = ddos.max_syn_per_second {
+            cfg.ddos.max_syn_per_second = rate;
+        }
+        if let Some(rate) = ddos.max_udp_per_second {
+            cfg.ddos.max_udp_per_second = rate;
+        }
+        if let Some(rate) = ddos.max_icmp_per_second {
+            cfg.ddos.max_icmp_per_second = rate;
+        }
+        if let Some(rate) = ddos.max_ack_per_second {
+            cfg.ddos.max_ack_per_second = rate;
+        }
+        if let Some(rate) = ddos.max_rst_per_second {
+            cfg.ddos.max_rst_per_second = rate;
+        }
+        if let Some(rate) = ddos.max_fin_per_second {
+            cfg.ddos.max_fin_per_second = rate;
         }
     }
 
