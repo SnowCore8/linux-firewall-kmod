@@ -33,7 +33,10 @@ jobs:
           cargo fmt --check
 
       - name: 检查守护进程 lint（clippy）
-        run: cargo clippy --release --lib -- -D warnings
+        run: |
+          # RustEmbed 需要 static 目录存在（前端构建产物由 build job 生成）
+          mkdir -p src/daemon/web_ui/static/
+          cargo clippy --release --lib -- -D warnings
 
       - name: 运行守护进程单元测试（cargo test）
         run: |
