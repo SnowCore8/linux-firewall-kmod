@@ -149,7 +149,7 @@ impl DdosDecisionEngine {
                     fail_count: count,
                 };
                 if let Some(cache) = ACTIVE_BAN_CACHE.get() {
-                    cache.insert(ban_info);
+                    cache.try_insert(ban_info);
                 }
             }
 

@@ -193,7 +193,7 @@ _guard_local_install:
 	fi
 
 .PHONY: install install-kernel-module install-daemon install-config install-state install-systemd install-start install-verify
-install: _guard_local_install build install-kernel-module install-daemon install-config install-state install-systemd install-start install-verify
+install: build install-kernel-module install-daemon install-config install-state install-systemd install-start install-verify
 	@echo ""
 	@echo "=========================================="
 	@echo "Firewall Installation Complete"
@@ -341,7 +341,7 @@ deb: build
 # ============================================================================
 
 .PHONY: uninstall uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel uninstall-modload uninstall-verify
-uninstall: _guard_local_install uninstall-stop uninstall-kernel uninstall-systemd uninstall-modload uninstall-files uninstall-config uninstall-state uninstall-verify
+uninstall: uninstall-stop uninstall-kernel uninstall-systemd uninstall-modload uninstall-files uninstall-config uninstall-state uninstall-verify
 	@echo ""
 	@echo "=========================================="
 	@echo "Firewall uninstallation complete!"
