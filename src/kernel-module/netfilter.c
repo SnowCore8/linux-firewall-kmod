@@ -188,8 +188,9 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *
   }
 
   /* 速率检测（DDoS 防护）：更新速率统计并检查是否超过阈值
-   * 注意：必须在 RCU 读侧临界区外调用，因为 update_rate_stats 可能获取 spinlock */
-  if (likely(!is_whitelisted)) {
+   * 注意：必须在 RCU 读侧临界区外调用，因为 update_rate_stats 可能获取 spinlock
+   * 如果 fw_ddos_detection=0，跳过整个 DDoS 检测路径 */
+  if (likely(!is_whitelisted && READ_ONCE(fw_ddos_detection))) {
     u32 packet_len = skb->len;
     int ret = update_rate_stats(&fw_info, af, src_ip, packet_len, protocol, tcp_flags);
 

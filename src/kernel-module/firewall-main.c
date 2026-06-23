@@ -14,7 +14,9 @@ unsigned int fw_ban_time = DEFAULT_BAN_TIME;
 char *state_file = "/var/lib/firewall/state";
 unsigned int fw_max_bans_per_second = 200;
 unsigned int fw_max_rate_entries = MAX_RATE_ENTRIES;
-unsigned int fw_dynamic_threshold = 0; /* 默认关闭，设为 1 启用动态阈值 */
+unsigned int fw_static_threshold = 1;    /* 默认开启静态阈值检测 */
+unsigned int fw_dynamic_threshold = 0;   /* 默认关闭动态阈值 */
+unsigned int fw_ddos_detection = 1;      /* DDoS 检测总开关 */
 
 module_param(fw_ban_time, uint, 0400);
 MODULE_PARM_DESC(fw_ban_time, "封禁持续时间（秒）（默认 600）");
@@ -26,10 +28,17 @@ MODULE_PARM_DESC(fw_max_bans_per_second, "泛洪保护下每秒最大封禁添�
 module_param(fw_max_rate_entries, uint, 0644);
 MODULE_PARM_DESC(fw_max_rate_entries, "速率表最大条目数（默认 65536，范围 1024-262144）。"
                                       "较小值节省内存，较大值支持更多并发源 IP");
+module_param(fw_static_threshold, uint, 0644);
+MODULE_PARM_DESC(fw_static_threshold, "启用静态阈值检测（默认 1 开启，设为 0 关闭）。"
+                                      "关闭后仅依赖动态阈值检测（如果启用）");
 module_param(fw_dynamic_threshold, uint, 0644);
-MODULE_PARM_DESC(fw_dynamic_threshold, "启用动态阈值（默认 0 关闭，设为 1 启用）。"
+MODULE_PARM_DESC(fw_dynamic_threshold, "启用动态阈值检测（默认 0 关闭，设为 1 启用）。"
                                        "启用后实际阈值 = max(静态阈值, 基线 × 倍数)，"
                                        "基线由守护进程通过 netlink 定期下发");
+module_param(fw_ddos_detection, uint, 0644);
+MODULE_PARM_DESC(fw_ddos_detection, "DDoS 检测总开关（默认 1 开启，设为 0 关闭）。"
+                                    "关闭后跳过所有速率检测和 DDoS 封禁，"
+                                    "仅保留白名单和封禁表功能");
 
 /* 全局防火墙信息 */
 struct firewall_info fw_info;

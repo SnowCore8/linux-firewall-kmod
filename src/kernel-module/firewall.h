@@ -364,6 +364,15 @@ extern u32 fw_hash_seed;
 /* 速率表最大条目数（模块参数，可在加载时配置） */
 extern unsigned int fw_max_rate_entries;
 
+/* 静态阈值检测开关（模块参数） */
+extern unsigned int fw_static_threshold;
+
+/* 动态阈值检测开关（模块参数） */
+extern unsigned int fw_dynamic_threshold;
+
+/* DDoS 检测总开关（模块参数） */
+extern unsigned int fw_ddos_detection;
+
 /* ============================================================================
  * 公共内联辅助函数
  * ============================================================================

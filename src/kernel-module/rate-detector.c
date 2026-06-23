@@ -470,7 +470,6 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
 bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip) {
   struct ip_rate_entry *entry;
   u64 pps, bps;
-  u64 pps_threshold, bps_threshold;
 
   if (!fw || !ip) {
     return false;
@@ -481,15 +480,23 @@ bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip) {
     return false;
   }
 
-  /* 读取 EWMA 平滑速率（原子操作） */
   pps = atomic64_read(&entry->smoothed_pps);
   bps = atomic64_read(&entry->smoothed_bps);
 
-  /* 计算实际阈值：动态阈值 = max(静态阈值, 基线 × 倍数) */
-  pps_threshold = fw->max_packets_per_second;
-  bps_threshold = fw->max_bytes_per_second;
+  u64 pps_threshold = 0, bps_threshold = 0;
+  bool use_static = READ_ONCE(fw_static_threshold);
+  bool use_dynamic = READ_ONCE(fw_dynamic_threshold);
 
-  if (READ_ONCE(fw->dynamic_threshold_enabled)) {
+  if (!use_static && !use_dynamic) {
+    return false;
+  }
+
+  if (use_static) {
+    pps_threshold = fw->max_packets_per_second;
+    bps_threshold = fw->max_bytes_per_second;
+  }
+
+  if (use_dynamic) {
     u64 baseline_pps = atomic64_read(&fw->global_baseline_pps);
     u64 baseline_bps = atomic64_read(&fw->global_baseline_bps);
     u32 ratio = READ_ONCE(fw->dynamic_threshold_ratio_x100);
