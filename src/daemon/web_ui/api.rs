@@ -574,7 +574,7 @@ fn generate_failed_attempts_trend() -> ChartData {
     }
 }
 
-/// 获取活跃封禁列表（过滤已过期的非永久封禁）
+/// 获取活跃封禁列表
 pub fn get_active_bans() -> Vec<BanResponse> {
     let now = crate::types::now_secs();
 
@@ -584,24 +584,25 @@ pub fn get_active_bans() -> Vec<BanResponse> {
             cache
                 .snapshot()
                 .into_iter()
-                .filter_map(|ban| {
+                .map(|ban| {
                     let remaining = if ban.is_permanent {
                         -1
                     } else {
                         let r = ban.expires_at - now;
-                        if r <= 0 {
-                            return None; // 已过期，过滤掉
+                        if r < 0 {
+                            0
+                        } else {
+                            r
                         }
-                        r
                     };
 
-                    Some(BanResponse {
+                    BanResponse {
                         ip: ban.ip.clone(),
                         jail: ban.jail_name.clone(),
                         banned_at: ban.banned_at,
                         remaining_seconds: remaining,
                         reason: ban.reason.clone(),
-                    })
+                    }
                 })
                 .collect()
         })
