@@ -44,6 +44,11 @@ pub struct WebuiConfig {
     pub static_threshold: bool,
     pub dynamic_threshold: bool,
     pub ddos_detection: bool,
+    /// 容量配置（用户自定义上限）
+    pub max_ban_entries: u32,
+    pub max_whitelist_entries: u32,
+    pub max_rate_entries: u32,
+    pub max_local_ip_cache: u32,
 }
 
 impl Default for WebuiConfig {
@@ -65,6 +70,11 @@ impl Default for WebuiConfig {
             static_threshold: true,
             dynamic_threshold: false,
             ddos_detection: true,
+            // 容量配置（默认 65535）
+            max_ban_entries: 65535,
+            max_whitelist_entries: 65535,
+            max_rate_entries: 65535,
+            max_local_ip_cache: 65535,
         }
     }
 }
@@ -124,6 +134,32 @@ pub struct Config {
     pub webui: WebuiConfig,
     /// 可信 IP 列表（启动时自动加入内核白名单，防止误封）
     pub trusted_ips: Vec<String>,
+    /// 容量配置（用户自定义上限，默认 65535）
+    pub capacity: CapacityConfig,
+}
+
+/// 容量配置（用户自定义各项上限）
+#[derive(Debug, Clone)]
+pub struct CapacityConfig {
+    /// 封禁表最大条目数（默认 65535）
+    pub max_ban_entries: u32,
+    /// 白名单最大条目数（默认 65535）
+    pub max_whitelist_entries: u32,
+    /// 速率表最大条目数（默认 65535）
+    pub max_rate_entries: u32,
+    /// 本地 IP 缓存最大条目数（默认 65535）
+    pub max_local_ip_cache: u32,
+}
+
+impl Default for CapacityConfig {
+    fn default() -> Self {
+        Self {
+            max_ban_entries: 65535,
+            max_whitelist_entries: 65535,
+            max_rate_entries: 65535,
+            max_local_ip_cache: 65535,
+        }
+    }
 }
 
 impl Default for Config {
@@ -154,6 +190,7 @@ impl Default for Config {
             ddos: super::DdosConfig::default(),
             webui: WebuiConfig::default(),
             trusted_ips: Vec::new(),
+            capacity: CapacityConfig::default(),
         }
     }
 }
@@ -173,8 +210,6 @@ pub struct RetentionConfig {
     pub jail_stats_days: u32,
     /// DDoS 事件保留天数 (默认 30)
     pub ddos_events_days: u32,
-    /// 清理间隔 (秒,默认 86400 = 每天)
-    pub cleanup_interval_secs: u32,
 }
 
 impl Default for RetentionConfig {
@@ -184,7 +219,6 @@ impl Default for RetentionConfig {
             failed_logs_days: 30,
             jail_stats_days: 365,
             ddos_events_days: 30,
-            cleanup_interval_secs: 86400,
         }
     }
 }
