@@ -7,11 +7,16 @@
 #include "firewall.h"
 #include <linux/namei.h>
 #include <linux/printk.h>
+#include <linux/timer.h>
+
+/* 声明 ban_entry_expire_callback 函数（定义在 ban-manager.c 中） */
+extern void ban_entry_expire_callback(struct timer_list *t);
 #include <linux/version.h>
 
 /* 外部变量声明 */
 extern struct firewall_info fw_info;
 extern u32 fw_hash_seed;
+extern u32 hash_ipv6(const struct in6_addr *addr);
 
 /* 辅助函数：验证文件路径安全 */
 static int validate_state_path(const char *filename) {
@@ -99,8 +104,9 @@ int save_state_to_file(const char *filename) {
     char device_name[16];
   };
 
-#define MAX_SAVE_BAN 1024
-#define MAX_SAVE_WL MAX_DISCOVERED_IPS
+/* 状态保存缓冲区大小（自适应：基于实际条目数动态分配） */
+#define MAX_SAVE_BAN 4096
+#define MAX_SAVE_WL 4096
 
   struct saved_ban_entry_v4 *ban_entries_v4 = NULL;
   struct saved_ban_entry_v6 *ban_entries_v6 = NULL;
@@ -230,7 +236,8 @@ int save_state_to_file(const char *filename) {
   /* 写入 IPv4 封禁 */
   for (int i = 0; i < ban_count_v4; i++) {
     char ip_str[INET_ADDRSTRLEN];
-    const char *reason = ban_entries_v4[i].reason[0] ? ban_entries_v4[i].reason : ban_entries_v4[i].jail_name;
+    const char *reason = ban_entries_v4[i].reason[0] ? ban_entries_v4[i].reason :
+                                                       ban_entries_v4[i].jail_name;
     ip_to_str(FW_AF_INET, &ban_entries_v4[i].ipv4, ip_str, sizeof(ip_str));
     written = snprintf(buffer, sizeof(buffer), "BAN_V4 %s %lu %s %s\n", ip_str,
                        ban_entries_v4[i].remaining_time,
@@ -245,7 +252,8 @@ int save_state_to_file(const char *filename) {
   /* 写入 IPv6 封禁 */
   for (int i = 0; i < ban_count_v6; i++) {
     char ip_str[INET6_STR_LEN];
-    const char *reason = ban_entries_v6[i].reason[0] ? ban_entries_v6[i].reason : ban_entries_v6[i].jail_name;
+    const char *reason = ban_entries_v6[i].reason[0] ? ban_entries_v6[i].reason :
+                                                       ban_entries_v6[i].jail_name;
     ip_to_str(FW_AF_INET6, &ban_entries_v6[i].ipv6, ip_str, sizeof(ip_str));
     written = snprintf(buffer, sizeof(buffer), "BAN_V6 %s %lu %s %s\n", ip_str,
                        ban_entries_v6[i].remaining_time,
@@ -322,8 +330,6 @@ int restore_state_from_file(const char *filename) {
   ssize_t bytes_read;
   char *line, *token;
   int restored_ban_count = 0, restored_wl_count = 0;
-  const int max_restore_bans = MAX_BAN_ENTRIES;
-  const int max_restore_wl = MAX_DISCOVERED_IPS;
 
   /* 修复 S2-3：防止重复恢复状态导致竞态 */
   if (state_restored)
@@ -403,9 +409,7 @@ int restore_state_from_file(const char *filename) {
               continue;
             }
 
-            if (restored_ban_count >= max_restore_bans) {
-              continue;
-            }
+            /* 跳过容量限制（按需恢复） */
 
             unsigned long remaining_time;
             if (kstrtoul(time_str, 10, &remaining_time) == 0) {
@@ -467,6 +471,13 @@ int restore_state_from_file(const char *filename) {
                   /* 与 ban-manager.c IPv4 路径保持一致:直接用桶索引 hlist_add_head_rcu */
                   hlist_add_head_rcu(&entry->hash, &fw_info.ban_table_ipv4[bkt4]);
                   list_add_tail_rcu(&entry->ban_node, &fw_info.active_bans_list);
+
+                  /* 启动 per-entry 过期定时器（非永久封禁时） */
+                  if (!is_permanent) {
+                    timer_setup(&entry->expire_timer, ban_entry_expire_callback, 0);
+                    mod_timer(&entry->expire_timer, unban_time);
+                  }
+
                   atomic_inc(&fw_info.ban_count);
                   atomic_inc(&fw_info.total_ban_count);
                   spin_unlock(&fw_info.ban_locks_ipv4[bkt4]);
@@ -494,8 +505,7 @@ int restore_state_from_file(const char *filename) {
               continue;
             }
 
-            if (restored_ban_count >= max_restore_bans)
-              continue;
+            /* 跳过容量限制（按需恢复） */
 
             unsigned long remaining_time;
             if (kstrtoul(time_str, 10, &remaining_time) == 0) {
@@ -537,8 +547,7 @@ int restore_state_from_file(const char *filename) {
 
               /* 修复：使用每桶锁替代全局锁，提高并发性能 */
               {
-                u32 bkt6 = jhash(&ip6, sizeof(ip6), fw_hash_seed) &
-                           ((1 << BAN_HASH_BITS) - 1);
+                u32 bkt6 = hash_ipv6(&ip6);
                 struct ban_entry *existing;
                 bool duplicate = false;
 
@@ -559,6 +568,12 @@ int restore_state_from_file(const char *filename) {
                    * 重新 hash_min 落到错误桶(同 ban-manager.c 路径) */
                   hlist_add_head_rcu(&entry->hash, &fw_info.ban_table_ipv6[bkt6]);
                   list_add_tail_rcu(&entry->ban_node, &fw_info.active_bans_list);
+
+                  /* 启动 per-entry 过期定时器（非永久封禁时） */
+                  if (!is_permanent) {
+                    timer_setup(&entry->expire_timer, ban_entry_expire_callback, 0);
+                    mod_timer(&entry->expire_timer, unban_time);
+                  }
                   atomic_inc(&fw_info.ban_count);
                   atomic_inc(&fw_info.total_ban_count);
                   spin_unlock(&fw_info.ban_locks_ipv6[bkt6]);
@@ -582,8 +597,7 @@ int restore_state_from_file(const char *filename) {
           __be32 ip, mask;
           int prefix_len;
 
-          if (restored_wl_count >= max_restore_wl)
-            continue;
+          /* 跳过容量限制（按需恢复） */
 
           if (kstrtoint(mask_str, 10, &prefix_len) == 0) {
             mask = prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1));
@@ -608,8 +622,7 @@ int restore_state_from_file(const char *filename) {
           struct in6_addr ip6;
           int prefix_len;
 
-          if (restored_wl_count >= max_restore_wl)
-            continue;
+          /* 跳过容量限制（按需恢复） */
 
           if (kstrtoint(prefix_str, 10, &prefix_len) == 0) {
             if (in6_pton(ip_str, -1, (u8 *)&ip6, -1, NULL)) {
