@@ -296,9 +296,13 @@ impl NetlinkContext {
                     );
 
                     // 优先使用内核传递的 jail_name，为空时根据 reason 推断
+                    // reason 为空时直接使用 jail_name，不 fallback 到 "restored"
                     let (actual_reason, jail_name) = if let Some(jn) = event.jail_name_str() {
-                        // 内核提供了明确的 jail_name，直接使用
-                        (reason_str.clone(), jn)
+                        if reason_str.is_empty() {
+                            (jn.clone(), jn)
+                        } else {
+                            (reason_str.clone(), jn)
+                        }
                     } else if reason_str.starts_with("api:") {
                         // API 封禁：reason 格式为 "api:用户自定义的reason"
                         let actual = reason_str.strip_prefix("api:").unwrap_or(&reason_str);
@@ -313,7 +317,6 @@ impl NetlinkContext {
                     } else if reason_str == "procfs"
                         || reason_str == "manual"
                         || reason_str == "api"
-                        || reason_str == "restored"
                     {
                         (reason_str.clone(), "api".to_string())
                     } else if reason_str == "expired"
@@ -412,7 +415,7 @@ impl NetlinkContext {
                     // 非 "kernel" 的值（如 "sshd"/"nginx"）来自 state-persist，直接使用
                     let jail_name = if raw_jail.is_empty() || raw_jail == "kernel" {
                         let r = if reason.is_empty() {
-                            "restored"
+                            &raw_jail
                         } else {
                             &reason
                         };
@@ -422,10 +425,15 @@ impl NetlinkContext {
                             "api".to_string()
                         }
                     } else {
-                        raw_jail
+                        raw_jail.clone()
                     };
+                    // reason 为空时用 jail_name，不再 fallback 到 "restored"
                     let final_reason = if reason.is_empty() {
-                        "restored".to_string()
+                        if raw_jail.is_empty() || raw_jail == "kernel" {
+                            "api".to_string()
+                        } else {
+                            raw_jail
+                        }
                     } else {
                         reason
                     };
@@ -444,7 +452,8 @@ impl NetlinkContext {
                         is_permanent,
                         fail_count: 0,
                     };
-                    cache.insert(ban_info);
+                    // try_insert: 已有条目不覆盖，保留 BanStateChange 事件推送的真实 reason/jail
+                    cache.try_insert(ban_info);
                 }
 
                 crate::logger::info!(

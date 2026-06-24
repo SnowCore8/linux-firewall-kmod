@@ -230,10 +230,11 @@ int save_state_to_file(const char *filename) {
   /* 写入 IPv4 封禁 */
   for (int i = 0; i < ban_count_v4; i++) {
     char ip_str[INET_ADDRSTRLEN];
+    const char *reason = ban_entries_v4[i].reason[0] ? ban_entries_v4[i].reason : ban_entries_v4[i].jail_name;
     ip_to_str(FW_AF_INET, &ban_entries_v4[i].ipv4, ip_str, sizeof(ip_str));
     written = snprintf(buffer, sizeof(buffer), "BAN_V4 %s %lu %s %s\n", ip_str,
                        ban_entries_v4[i].remaining_time,
-                       ban_entries_v4[i].jail_name, ban_entries_v4[i].reason);
+                       ban_entries_v4[i].jail_name, reason);
     if (kernel_write(file, buffer, written, &pos) != written) {
       filp_close(file, NULL);
       ret = -EIO;
@@ -244,10 +245,11 @@ int save_state_to_file(const char *filename) {
   /* 写入 IPv6 封禁 */
   for (int i = 0; i < ban_count_v6; i++) {
     char ip_str[INET6_STR_LEN];
+    const char *reason = ban_entries_v6[i].reason[0] ? ban_entries_v6[i].reason : ban_entries_v6[i].jail_name;
     ip_to_str(FW_AF_INET6, &ban_entries_v6[i].ipv6, ip_str, sizeof(ip_str));
     written = snprintf(buffer, sizeof(buffer), "BAN_V6 %s %lu %s %s\n", ip_str,
                        ban_entries_v6[i].remaining_time,
-                       ban_entries_v6[i].jail_name, ban_entries_v6[i].reason);
+                       ban_entries_v6[i].jail_name, reason);
     if (kernel_write(file, buffer, written, &pos) != written) {
       filp_close(file, NULL);
       ret = -EIO;
@@ -435,8 +437,13 @@ int restore_state_from_file(const char *filename) {
               entry->is_permanent = is_permanent;
               strscpy(entry->jail_name, jail_str ? jail_str : "api",
                       sizeof(entry->jail_name));
-              strscpy(entry->reason, reason_str ? reason_str : "restored",
-                      sizeof(entry->reason));
+              /* state 文件中的 reason 可能是旧版的 "restored" fallback，
+               * 此时用 jail_name 替代，打破 "restored" 死循环 */
+              if (reason_str && strcmp(reason_str, "restored") != 0) {
+                strscpy(entry->reason, reason_str, sizeof(entry->reason));
+              } else if (jail_str && strcmp(jail_str, "api") != 0) {
+                strscpy(entry->reason, jail_str, sizeof(entry->reason));
+              }
               atomic_set(&entry->retry_count, 0);
 
               /* 修复：使用每桶锁替代全局锁，提高并发性能 */
@@ -467,7 +474,7 @@ int restore_state_from_file(const char *filename) {
                   /* 推送恢复的封禁事件给守护进程，使用真实的 reason 和 jail_name */
                   fw_netlink_send_ban_state_change(
                     FW_AF_INET, &ip, 1, is_permanent ? 0 : (u32)remaining_time,
-                    reason_str ? reason_str : "restored", entry->jail_name);
+                    entry->reason, entry->jail_name);
                 }
               }
             }
@@ -519,8 +526,13 @@ int restore_state_from_file(const char *filename) {
               entry->is_permanent = is_permanent;
               strscpy(entry->jail_name, jail_str ? jail_str : "api",
                       sizeof(entry->jail_name));
-              strscpy(entry->reason, reason_str ? reason_str : "restored",
-                      sizeof(entry->reason));
+              /* state 文件中的 reason 可能是旧版的 "restored" fallback，
+               * 此时用 jail_name 替代，打破 "restored" 死循环 */
+              if (reason_str && strcmp(reason_str, "restored") != 0) {
+                strscpy(entry->reason, reason_str, sizeof(entry->reason));
+              } else if (jail_str && strcmp(jail_str, "api") != 0) {
+                strscpy(entry->reason, jail_str, sizeof(entry->reason));
+              }
               atomic_set(&entry->retry_count, 0);
 
               /* 修复：使用每桶锁替代全局锁，提高并发性能 */
@@ -554,7 +566,7 @@ int restore_state_from_file(const char *filename) {
                   /* 推送恢复的封禁事件给守护进程，使用真实的 reason 和 jail_name */
                   fw_netlink_send_ban_state_change(
                     FW_AF_INET6, &ip6, 1, is_permanent ? 0 : (u32)remaining_time,
-                    reason_str ? reason_str : "restored", entry->jail_name);
+                    entry->reason, entry->jail_name);
                 }
               }
             }
