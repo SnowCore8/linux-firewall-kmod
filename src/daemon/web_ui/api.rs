@@ -133,6 +133,11 @@ pub struct WebuiConfigResponse {
     pub static_threshold: bool,
     pub dynamic_threshold: bool,
     pub ddos_detection: bool,
+    // 容量配置
+    pub max_ban_entries: u32,
+    pub max_whitelist_entries: u32,
+    pub max_rate_entries: u32,
+    pub max_local_ip_cache: u32,
 }
 
 /// 获取 Web UI 配置
@@ -154,6 +159,10 @@ pub fn get_webui_config() -> WebuiConfigResponse {
         static_threshold: config.static_threshold,
         dynamic_threshold: config.dynamic_threshold,
         ddos_detection: config.ddos_detection,
+        max_ban_entries: config.max_ban_entries,
+        max_whitelist_entries: config.max_whitelist_entries,
+        max_rate_entries: config.max_rate_entries,
+        max_local_ip_cache: config.max_local_ip_cache,
     }
 }
 
@@ -176,6 +185,11 @@ pub struct UpdateConfigRequest {
     pub static_threshold: Option<bool>,
     pub dynamic_threshold: Option<bool>,
     pub ddos_detection: Option<bool>,
+    // 容量配置
+    pub max_ban_entries: Option<u32>,
+    pub max_whitelist_entries: Option<u32>,
+    pub max_rate_entries: Option<u32>,
+    pub max_local_ip_cache: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -288,6 +302,32 @@ pub fn update_webui_config(req: UpdateConfigRequest) -> Result<WebuiConfigRespon
         config.ddos_detection = v;
     }
 
+    // 容量配置（验证并应用）
+    if let Some(v) = req.max_ban_entries {
+        if v == 0 {
+            return Err("封禁表容量不能为 0".to_string());
+        }
+        config.max_ban_entries = v;
+    }
+    if let Some(v) = req.max_whitelist_entries {
+        if v == 0 {
+            return Err("白名单容量不能为 0".to_string());
+        }
+        config.max_whitelist_entries = v;
+    }
+    if let Some(v) = req.max_rate_entries {
+        if v == 0 {
+            return Err("速率表容量不能为 0".to_string());
+        }
+        config.max_rate_entries = v;
+    }
+    if let Some(v) = req.max_local_ip_cache {
+        if v == 0 {
+            return Err("本地 IP 缓存容量不能为 0".to_string());
+        }
+        config.max_local_ip_cache = v;
+    }
+
     // 写入全局配置
     crate::http_exporter::set_global_webui_config(config.clone());
 
@@ -312,6 +352,10 @@ pub fn update_webui_config(req: UpdateConfigRequest) -> Result<WebuiConfigRespon
         static_threshold: config.static_threshold,
         dynamic_threshold: config.dynamic_threshold,
         ddos_detection: config.ddos_detection,
+        max_ban_entries: config.max_ban_entries,
+        max_whitelist_entries: config.max_whitelist_entries,
+        max_rate_entries: config.max_rate_entries,
+        max_local_ip_cache: config.max_local_ip_cache,
     })
 }
 
@@ -581,6 +625,8 @@ pub fn get_active_bans() -> Vec<BanResponse> {
     ACTIVE_BAN_CACHE
         .get()
         .map(|cache| {
+            // 清理过期条目（内核已删除，但缓存可能残留）
+            cache.purge_expired(now);
             cache
                 .snapshot()
                 .into_iter()
