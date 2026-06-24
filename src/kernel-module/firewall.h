@@ -64,12 +64,12 @@ void fw_flush_all_cpu_stats(void);
 #define DEFAULT_MAX_BYTES_PER_SECOND (10 * 1024 * 1024) /* 默认 10 MB/s */
 
 /* 协议专项检测默认配置 */
-#define DEFAULT_MAX_SYN_PER_SECOND 200   /* 正常主机 SYN ≈ 几十/s */
-#define DEFAULT_MAX_UDP_PER_SECOND 1000  /* DNS/流媒体等，正常几百/s */
-#define DEFAULT_MAX_ICMP_PER_SECOND 50   /* 正常 ping ≈ 1/s */
-#define DEFAULT_MAX_ACK_PER_SECOND 2000  /* 正常连接 ACK 较多 */
-#define DEFAULT_MAX_RST_PER_SECOND 200   /* RST 异常通常意味着攻击 */
-#define DEFAULT_MAX_FIN_PER_SECOND 200   /* FIN 同理 */
+#define DEFAULT_MAX_SYN_PER_SECOND 200  /* 正常主机 SYN ≈ 几十/s */
+#define DEFAULT_MAX_UDP_PER_SECOND 1000 /* DNS/流媒体等，正常几百/s */
+#define DEFAULT_MAX_ICMP_PER_SECOND 50  /* 正常 ping ≈ 1/s */
+#define DEFAULT_MAX_ACK_PER_SECOND 2000 /* 正常连接 ACK 较多 */
+#define DEFAULT_MAX_RST_PER_SECOND 200  /* RST 异常通常意味着攻击 */
+#define DEFAULT_MAX_FIN_PER_SECOND 200  /* FIN 同理 */
 
 /* 动态阈值默认配置 */
 #define DEFAULT_DYNAMIC_THRESHOLD_ENABLED 0      /* 默认关闭 */
@@ -340,8 +340,8 @@ void cleanup_timer_callback(struct timer_list *t);
 int fw_netlink_init(void);
 void fw_netlink_exit(void);
 int fw_netlink_send_event(u8 af, const void *ip, const char *reason, u32 rate_pps);
-int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action,
-                                     u32 duration_secs, const char *reason);
+int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 duration_secs,
+                                     const char *reason, const char *jail_name);
 int fw_netlink_send_whitelist_state_change(u8 af, const void *ip, u8 prefix_len,
                                            u8 action, const char *dev_name);
 int fw_netlink_send_list_bans_response(u32 seq, u32 portid);

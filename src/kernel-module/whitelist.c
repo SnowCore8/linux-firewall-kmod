@@ -139,7 +139,8 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
             atomic_dec(&fw->ban_count);
             call_rcu(&ban->rcu_head, free_ban_entry_rcu);
             removed++;
-            fw_netlink_send_ban_state_change(FW_AF_INET, &expired_ip, 2, 0, "whitelist");
+            fw_netlink_send_ban_state_change(
+              FW_AF_INET, &expired_ip, 2, 0, "whitelist", NULL);
           }
         }
         spin_unlock_bh(&fw->ban_locks_ipv4[bkt]);
@@ -160,7 +161,8 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
             spin_unlock_bh(&fw->ban_locks_ipv4[bkt]);
             call_rcu(&ban2->rcu_head, free_ban_entry_rcu);
             removed++;
-            fw_netlink_send_ban_state_change(FW_AF_INET, &expired_ip, 2, 0, "whitelist");
+            fw_netlink_send_ban_state_change(
+              FW_AF_INET, &expired_ip, 2, 0, "whitelist", NULL);
           }
         }
         rcu_read_unlock();
@@ -179,7 +181,8 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
             atomic_dec(&fw->ban_count);
             call_rcu(&ban->rcu_head, free_ban_entry_rcu);
             removed++;
-            fw_netlink_send_ban_state_change(FW_AF_INET6, &expired_ip6, 2, 0, "whitelist");
+            fw_netlink_send_ban_state_change(
+              FW_AF_INET6, &expired_ip6, 2, 0, "whitelist", NULL);
           }
         }
         spin_unlock_bh(&fw->ban_locks_ipv6[bkt]);
@@ -200,7 +203,8 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
             spin_unlock_bh(&fw->ban_locks_ipv6[bkt]);
             call_rcu(&ban2->rcu_head, free_ban_entry_rcu);
             removed++;
-            fw_netlink_send_ban_state_change(FW_AF_INET6, &expired_ip6, 2, 0, "whitelist");
+            fw_netlink_send_ban_state_change(
+              FW_AF_INET6, &expired_ip6, 2, 0, "whitelist", NULL);
           }
         }
         rcu_read_unlock();

@@ -54,7 +54,7 @@ static int cleanup_table_ipv4(struct firewall_info *fw) {
         removed++;
         call_rcu(&entry->rcu_head, free_ban_entry_rcu);
         /* 事件推送：通知守护进程移除过期封禁 */
-        fw_netlink_send_ban_state_change(FW_AF_INET, &expired_ip, 2, 0, "expired");
+        fw_netlink_send_ban_state_change(FW_AF_INET, &expired_ip, 2, 0, "expired", NULL);
       }
       processed++;
     }
@@ -96,7 +96,7 @@ static int cleanup_table_ipv6(struct firewall_info *fw) {
         removed++;
         call_rcu(&entry->rcu_head, free_ban_entry_rcu);
         /* 事件推送：通知守护进程移除过期封禁 */
-        fw_netlink_send_ban_state_change(FW_AF_INET6, &expired_ip6, 2, 0, "expired");
+        fw_netlink_send_ban_state_change(FW_AF_INET6, &expired_ip6, 2, 0, "expired", NULL);
       }
       processed++;
     }

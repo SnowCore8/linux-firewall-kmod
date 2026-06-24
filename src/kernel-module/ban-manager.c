@@ -474,7 +474,7 @@ static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip, bool p
 int unban_ip(struct firewall_info *fw, u8 af, const void *ip) {
   int ret = __do_unban_ip(fw, af, ip, false);
   if (ret == 0) {
-    fw_netlink_send_ban_state_change(af, ip, 2, 0, "unban");
+    fw_netlink_send_ban_state_change(af, ip, 2, 0, "unban", NULL);
   }
   return ret;
 }
@@ -483,7 +483,7 @@ EXPORT_SYMBOL_GPL(unban_ip);
 int unban_permanent_ip(struct firewall_info *fw, u8 af, const void *ip) {
   int ret = __do_unban_ip(fw, af, ip, true);
   if (ret == 0) {
-    fw_netlink_send_ban_state_change(af, ip, 2, 0, "unban");
+    fw_netlink_send_ban_state_change(af, ip, 2, 0, "unban", NULL);
   }
   return ret;
 }
@@ -520,7 +520,8 @@ int ban_ip(struct firewall_info *fw, u8 af, const void *ip, const char *reason) 
   int ret = __do_ban_ip(fw, af, ip, jiffies + ban_duration, false, reason ? reason : "manual",
                         "banned for %u seconds", ban_secs, &is_new_ban);
   if (ret == 0 && is_new_ban) {
-    fw_netlink_send_ban_state_change(af, ip, 1, (u32)ban_secs, reason ? reason : "manual");
+    fw_netlink_send_ban_state_change(
+      af, ip, 1, (u32)ban_secs, reason ? reason : "manual", NULL);
   }
   return ret;
 }
@@ -531,7 +532,7 @@ int ban_ip_permanent(struct firewall_info *fw, u8 af, const void *ip, const char
   int ret = __do_ban_ip(fw, af, ip, 0, true, reason ? reason : "manual",
                         "permanently banned", 0, &is_new_ban);
   if (ret == 0 && is_new_ban) {
-    fw_netlink_send_ban_state_change(af, ip, 1, 0, reason ? reason : "manual");
+    fw_netlink_send_ban_state_change(af, ip, 1, 0, reason ? reason : "manual", NULL);
   }
   return ret;
 }
@@ -590,7 +591,8 @@ int ban_ip_with_duration(struct firewall_info *fw, u8 af, const void *ip,
   int ret = __do_ban_ip(fw, af, ip, jiffies + ban_duration, false, reason ? reason : "manual",
                         "banned for %lu seconds", seconds, &is_new_ban);
   if (ret == 0 && is_new_ban) {
-    fw_netlink_send_ban_state_change(af, ip, 1, (u32)seconds, reason ? reason : "manual");
+    fw_netlink_send_ban_state_change(
+      af, ip, 1, (u32)seconds, reason ? reason : "manual", NULL);
   }
   return ret;
 }

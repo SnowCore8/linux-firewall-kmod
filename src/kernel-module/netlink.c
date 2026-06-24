@@ -69,6 +69,7 @@ struct fw_nl_ban_state_change {
   __u32 duration_secs; /* 封禁时长（秒），0 = 永久 */
   __u8 addr[16];       /* IP 地址 */
   __u8 reason[32];     /* 封禁原因 */
+  __u8 jail_name[32];  /* Jail 名称（空串表示由守护进程推断） */
   /* 实时统计字段（事件驱动同步，消除轮询延迟） */
   __u64 packets_dropped;  /* 当前丢弃包数 */
   __u64 packets_accepted; /* 当前接受包数 */
@@ -153,6 +154,8 @@ struct fw_nl_ban_entry {
   __u32 duration_secs;
   __u64 banned_at;
   __u8 addr[16];
+  __u8 jail_name[32]; /* Jail 名称 */
+  __u8 reason[32];    /* 封禁原因 */
 } __packed;
 
 /* 封禁列表响应（内核 → 守护进程） */
@@ -310,12 +313,13 @@ int fw_netlink_send_event(u8 af, const void *ip, const char *reason, u32 rate_pp
  * @action: 操作类型（1=ban, 2=unban）
  * @duration_secs: 封禁时长（秒），0 = 永久
  * @reason: 封禁原因字符串
+ * @jail_name: Jail 名称（可为 NULL 或空串，由守护进程推断）
  *
  * 当用户通过 /proc/firewall/bans 手动封禁/解封时调用，
  * 通知守护进程更新 ACTIVE_BAN_CACHE。
  */
-int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action,
-                                     u32 duration_secs, const char *reason) {
+int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 duration_secs,
+                                     const char *reason, const char *jail_name) {
   struct sk_buff *skb;
   struct nlmsghdr *nlh;
   struct fw_nl_ban_state_change *event;
@@ -363,6 +367,12 @@ int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action,
   memset(event->reason, 0, sizeof(event->reason));
   if (reason) {
     strscpy(event->reason, reason, sizeof(event->reason));
+  }
+
+  /* 复制 Jail 名称 */
+  memset(event->jail_name, 0, sizeof(event->jail_name));
+  if (jail_name) {
+    strscpy(event->jail_name, jail_name, sizeof(event->jail_name));
   }
 
   /* 填充实时统计字段（事件驱动同步，消除轮询延迟） */
@@ -623,6 +633,12 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
 
     memset(entries[count].addr, 0, sizeof(entries[count].addr));
     memcpy(entries[count].addr, &entry->addr.ipv4, 4);
+
+    /* 复制 jail_name 和 reason */
+    memset(entries[count].jail_name, 0, sizeof(entries[count].jail_name));
+    memset(entries[count].reason, 0, sizeof(entries[count].reason));
+    strscpy(entries[count].jail_name, entry->jail_name, sizeof(entries[count].jail_name));
+    strscpy(entries[count].reason, entry->reason, sizeof(entries[count].reason));
     count++;
   }
 
@@ -653,6 +669,12 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
     entries[count].banned_at = cpu_to_be64(banned_at);
 
     memcpy(entries[count].addr, &entry->addr.ipv6, 16);
+
+    /* 复制 jail_name 和 reason */
+    memset(entries[count].jail_name, 0, sizeof(entries[count].jail_name));
+    memset(entries[count].reason, 0, sizeof(entries[count].reason));
+    strscpy(entries[count].jail_name, entry->jail_name, sizeof(entries[count].jail_name));
+    strscpy(entries[count].reason, entry->reason, sizeof(entries[count].reason));
     count++;
   }
 

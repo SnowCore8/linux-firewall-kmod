@@ -295,9 +295,11 @@ impl NetlinkContext {
                         "reason" => &reason_str
                     );
 
-                    // 根据 reason 字符串推断 jail_name
-                    // 解析 reason 和 jail_name
-                    let (actual_reason, jail_name) = if reason_str.starts_with("api:") {
+                    // 优先使用内核传递的 jail_name，为空时根据 reason 推断
+                    let (actual_reason, jail_name) = if let Some(jn) = event.jail_name_str() {
+                        // 内核提供了明确的 jail_name，直接使用
+                        (reason_str.clone(), jn)
+                    } else if reason_str.starts_with("api:") {
                         // API 封禁：reason 格式为 "api:用户自定义的reason"
                         let actual = reason_str.strip_prefix("api:").unwrap_or(&reason_str);
                         (actual.to_string(), "api".to_string())
@@ -403,12 +405,22 @@ impl NetlinkContext {
                     let is_permanent = entry.is_permanent != 0;
                     // 使用内核提供的实际封禁时间（unix 时间戳）
                     let banned_at = u64::from_be(entry.banned_at) as i64;
+                    let jail_name = FwNlListBansResponse::jail_name_str(entry);
+                    let reason = FwNlListBansResponse::reason_str(entry);
 
                     let ban_info = crate::types::BanInfo {
                         ip: ip_str.clone(),
                         ip_num: 0,
-                        jail_name: "kernel".to_string(),
-                        reason: "restored".to_string(),
+                        jail_name: if jail_name.is_empty() {
+                            "kernel".to_string()
+                        } else {
+                            jail_name
+                        },
+                        reason: if reason.is_empty() {
+                            "restored".to_string()
+                        } else {
+                            reason
+                        },
                         banned_at,
                         expires_at: if is_permanent {
                             0

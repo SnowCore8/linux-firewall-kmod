@@ -151,7 +151,8 @@ pub struct FwNlBanStateChange {
     pub af: u8,
     pub duration_secs: u32,
     pub addr: [u8; 16],
-    pub reason: [u8; 32], // 封禁原因
+    pub reason: [u8; 32],    // 封禁原因
+    pub jail_name: [u8; 32], // Jail 名称（空串表示由守护进程推断）
     /// 实时统计字段（事件驱动同步，消除轮询延迟）
     pub packets_dropped: u64,
     pub packets_accepted: u64,
@@ -212,6 +213,20 @@ impl FwNlBanStateChange {
             .position(|&b| b == 0)
             .unwrap_or(self.reason.len());
         String::from_utf8_lossy(&self.reason[..end]).to_string()
+    }
+
+    /// 获取 Jail 名称字符串（空串返回 None）
+    pub fn jail_name_str(&self) -> Option<String> {
+        let end = self
+            .jail_name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.jail_name.len());
+        if end == 0 {
+            None
+        } else {
+            Some(String::from_utf8_lossy(&self.jail_name[..end]).to_string())
+        }
     }
 
     /// 获取丢弃包数（大端转换）
@@ -642,6 +657,8 @@ pub struct FwNlBanEntry {
     pub duration_secs: u32,
     pub banned_at: u64,
     pub addr: [u8; 16],
+    pub jail_name: [u8; 32], // Jail 名称
+    pub reason: [u8; 32],    // 封禁原因
 }
 
 /// 封禁列表响应（内核 → 守护进程）
@@ -706,6 +723,26 @@ impl FwNlListBansResponse {
         } else {
             "unknown".to_string()
         }
+    }
+
+    /// 获取 Jail 名称字符串
+    pub fn jail_name_str(entry: &FwNlBanEntry) -> String {
+        let end = entry
+            .jail_name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(entry.jail_name.len());
+        String::from_utf8_lossy(&entry.jail_name[..end]).to_string()
+    }
+
+    /// 获取封禁原因字符串
+    pub fn reason_str(entry: &FwNlBanEntry) -> String {
+        let end = entry
+            .reason
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(entry.reason.len());
+        String::from_utf8_lossy(&entry.reason[..end]).to_string()
     }
 }
 

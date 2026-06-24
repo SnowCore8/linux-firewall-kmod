@@ -776,6 +776,13 @@ mod tests {
             max_ack_per_second: 2000,
             max_rst_per_second: 200,
             max_fin_per_second: 200,
+            // DDoS 检测算法开关
+            static_threshold: true,
+            dynamic_threshold: false,
+            ddos_detection: true,
+            // 内核模块参数
+            max_bans_per_second: 200,
+            max_rate_entries: 65536,
         }
     }
 

@@ -395,7 +395,7 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
     }
     const void *ip_ptr = (af == FW_AF_INET) ? (const void *)&ip_addr.ipv4 :
                                               (const void *)&ip_addr.ipv6;
-    fw_netlink_send_ban_state_change(af, ip_ptr, 1, duration, "procfs");
+    fw_netlink_send_ban_state_change(af, ip_ptr, 1, duration, "procfs", NULL);
   }
 
   return count;
