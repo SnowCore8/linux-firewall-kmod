@@ -114,8 +114,8 @@ impl NetlinkContext {
         running.store(true, Ordering::SeqCst);
 
         let handle = thread::spawn(move || {
-            // 256KB 缓冲区：ListBansResponse 最大约 168KB（4096 条目 × ~41 字节）
-            let mut buf = vec![0u8; 256 * 1024];
+            // 512KB 缓冲区：ListBansResponse 最大约 385KB（4096 条目 × ~94 字节）
+            let mut buf = vec![0u8; 512 * 1024];
             let mut pollfd = nix::libc::pollfd {
                 fd,
                 events: nix::libc::POLLIN,
@@ -405,22 +405,36 @@ impl NetlinkContext {
                     let is_permanent = entry.is_permanent != 0;
                     // 使用内核提供的实际封禁时间（unix 时间戳）
                     let banned_at = u64::from_be(entry.banned_at) as i64;
-                    let jail_name = FwNlListBansResponse::jail_name_str(entry);
+                    let raw_jail = FwNlListBansResponse::jail_name_str(entry);
                     let reason = FwNlListBansResponse::reason_str(entry);
+
+                    // 内核 jail_name="kernel" 表示来源不明确，需从 reason 推断
+                    // 非 "kernel" 的值（如 "sshd"/"nginx"）来自 state-persist，直接使用
+                    let jail_name = if raw_jail.is_empty() || raw_jail == "kernel" {
+                        let r = if reason.is_empty() {
+                            "restored"
+                        } else {
+                            &reason
+                        };
+                        if r.contains("flood") || r.contains("ddos") || r.contains("total rate") {
+                            "ddos".to_string()
+                        } else {
+                            "api".to_string()
+                        }
+                    } else {
+                        raw_jail
+                    };
+                    let final_reason = if reason.is_empty() {
+                        "restored".to_string()
+                    } else {
+                        reason
+                    };
 
                     let ban_info = crate::types::BanInfo {
                         ip: ip_str.clone(),
                         ip_num: 0,
-                        jail_name: if jail_name.is_empty() {
-                            "kernel".to_string()
-                        } else {
-                            jail_name
-                        },
-                        reason: if reason.is_empty() {
-                            "restored".to_string()
-                        } else {
-                            reason
-                        },
+                        jail_name,
+                        reason: final_reason,
                         banned_at,
                         expires_at: if is_permanent {
                             0

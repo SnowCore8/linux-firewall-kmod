@@ -570,13 +570,29 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
   int resp_size;
   int ret;
   int count = 0;
+  int total;
 
   if (!fw_nl_sock) {
     return -ENOTCONN;
   }
 
-  /* 计算响应大小：头 + max_entries * 条目大小 */
-  resp_size = sizeof(*resp) + max_entries * sizeof(struct fw_nl_ban_entry);
+  /* 第一遍：RCU 下统计实际条目数，动态分配避免浪费 */
+  rcu_read_lock();
+  hash_for_each_rcu(fw_info.ban_table_ipv4, hash, entry, hash) {
+    count++;
+  }
+  hash_for_each_rcu(fw_info.ban_table_ipv6, hash, entry, hash) {
+    count++;
+  }
+  rcu_read_unlock();
+
+  if (count > max_entries) {
+    count = max_entries;
+  }
+  total = count;
+
+  /* 动态计算响应大小：头 + 实际条目数 * 条目大小 */
+  resp_size = sizeof(*resp) + total * sizeof(struct fw_nl_ban_entry);
 
   /* 分配 netlink 消息缓冲区 */
   skb = nlmsg_new(resp_size, GFP_ATOMIC);
@@ -602,6 +618,9 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
   resp->hdr.seq = cpu_to_be32(seq);
   resp->count = 0;
 
+  /* 重置 count，第二遍遍历填充条目 */
+  count = 0;
+
   /* 遍历封禁表填充条目 */
   rcu_read_lock();
 
@@ -612,7 +631,7 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
     u32 duration_secs;
     s64 banned_at;
 
-    if (count >= max_entries) {
+    if (count >= total) {
       break;
     }
 
@@ -649,7 +668,7 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
     u32 duration_secs;
     s64 banned_at;
 
-    if (count >= max_entries) {
+    if (count >= total) {
       break;
     }
 
