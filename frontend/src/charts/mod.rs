@@ -143,41 +143,41 @@ pub fn LineChart(
                 </filter>
             </defs>
 
-            // 网格线（始终渲染，无数据时显示基础网格）
-            <For
-                each=move || {
-                    let (_, _, grid, _) = path_data();
-                    if grid.is_empty() {
-                        (0..=4).map(|i| {
-                            let y = pad_top + chart_h * (1.0 - i as f64 / 4.0);
-                            (y, 0.0_f64)
-                        }).collect()
-                    } else {
-                        grid
-                    }
-                }
-                key=|(y, _)| format!("{y:.0}")
-                children=move |(y, val)| {
-                    let label = if val >= 1_000_000.0 {
-                        format!("{:.1}M", val / 1_000_000.0)
-                    } else if val >= 1_000.0 {
-                        format!("{:.0}K", val / 1_000.0)
-                    } else if val >= 10.0 {
-                        format!("{:.0}", val)
-                    } else {
-                        format!("{:.1}", val)
+            // 网格线（始终渲染，Y 轴标签跟随数据动态更新）
+            <g>
+                {(0..=4).map(|i| {
+                    let grid_y = pad_top + chart_h * (1.0 - i as f64 / 4.0);
+                    let i = i; // capture by value
+                    let grid_val = move || {
+                        let d = data.get();
+                        if d.is_empty() { return 0.0_f64; }
+                        let max_val = d.iter().cloned().max().unwrap_or(1).max(1) as f64;
+                        let v = max_val * i as f64 / 4.0;
+                        if max_val < 10.0 { v } else { v as u64 as f64 }
+                    };
+                    let label = move || {
+                        let v = grid_val();
+                        if v >= 1_000_000.0 {
+                            format!("{:.1}M", v / 1_000_000.0)
+                        } else if v >= 1_000.0 {
+                            format!("{:.0}K", v / 1_000.0)
+                        } else if v >= 10.0 {
+                            format!("{:.0}", v)
+                        } else {
+                            format!("{:.1}", v)
+                        }
                     };
                     view! {
                         <g>
-                            <line x1=pad_left y1=y x2=width - pad_right y2=y
+                            <line x1=pad_left y1=grid_y x2=width - pad_right y2=grid_y
                                 stroke="var(--border-subtle)" stroke-width="1"/>
-                            <text x=pad_left - 6.0 y=y + 3.0
+                            <text x=pad_left - 6.0 y=grid_y + 3.0
                                 text-anchor="end" fill="var(--text-faint)"
                                 font-size="9" font-family="var(--font-mono)">{label}</text>
                         </g>
                     }
-                }
-            />
+                }).collect::<Vec<_>>()}
+            </g>
 
             // 数据图表（有数据时渲染，无数据时不渲染但保持 SVG 结构）
             <Show
