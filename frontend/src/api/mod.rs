@@ -101,6 +101,11 @@ pub struct WebuiConfig {
     pub static_threshold: bool,
     pub dynamic_threshold: bool,
     pub ddos_detection: bool,
+    // 容量配置（用户自定义上限）
+    pub max_ban_entries: u32,
+    pub max_whitelist_entries: u32,
+    pub max_rate_entries: u32,
+    pub max_local_ip_cache: u32,
 }
 
 #[derive(Serialize)]
@@ -121,6 +126,11 @@ pub struct UpdateConfigRequest {
     pub static_threshold: Option<bool>,
     pub dynamic_threshold: Option<bool>,
     pub ddos_detection: Option<bool>,
+    // 容量配置
+    pub max_ban_entries: Option<u32>,
+    pub max_whitelist_entries: Option<u32>,
+    pub max_rate_entries: Option<u32>,
+    pub max_local_ip_cache: Option<u32>,
 }
 
 #[derive(Deserialize, Clone, Serialize)]

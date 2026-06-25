@@ -104,6 +104,8 @@ struct YamlConfig {
     webui: Option<YamlWebui>,
     #[serde(default)]
     trusted_ips: Option<Vec<String>>,
+    #[serde(default)]
+    capacity: Option<YamlCapacity>,
 }
 
 /// 全局默认字段集合。所有 `Option` 都是"未设置 = 使用 `Config::default()`"
@@ -183,6 +185,16 @@ struct YamlWebui {
     rate_critical_pps: Option<u64>,
     rate_warning_syn: Option<u64>,
     rate_critical_syn: Option<u64>,
+}
+
+/// 容量配置的 YAML 表示（用户自定义上限）
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct YamlCapacity {
+    max_ban_entries: Option<u32>,
+    max_whitelist_entries: Option<u32>,
+    max_rate_entries: Option<u32>,
+    max_local_ip_cache: Option<u32>,
 }
 
 // ============================================================================
@@ -378,6 +390,22 @@ pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
     // 5. 解析 trusted_ips 部分
     if let Some(trusted_ips) = &yaml_config.trusted_ips {
         cfg.trusted_ips = trusted_ips.clone();
+    }
+
+    // 6. 解析 capacity 部分
+    if let Some(capacity) = &yaml_config.capacity {
+        if let Some(v) = capacity.max_ban_entries {
+            cfg.capacity.max_ban_entries = v;
+        }
+        if let Some(v) = capacity.max_whitelist_entries {
+            cfg.capacity.max_whitelist_entries = v;
+        }
+        if let Some(v) = capacity.max_rate_entries {
+            cfg.capacity.max_rate_entries = v;
+        }
+        if let Some(v) = capacity.max_local_ip_cache {
+            cfg.capacity.max_local_ip_cache = v;
+        }
     }
 
     Ok(())
