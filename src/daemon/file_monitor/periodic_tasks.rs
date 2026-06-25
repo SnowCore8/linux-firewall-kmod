@@ -92,37 +92,12 @@ pub fn record_history_snapshot(_cfg: &Config) {
 // 数据清理
 // ============================================================================
 
-/// 执行数据清理任务：过期封禁清理、failed_hash 清理。
-///
-/// 按 `retention.cleanup_interval_secs` 间隔调用。
+/// 执行数据清理任务：failed_hash 清理。
 ///
 /// # Arguments
 /// - `cfg`: 全局配置
 pub fn perform_data_cleanup(cfg: &Config) {
     let now_secs = crate::types::now_secs();
-
-    // 清理过期的临时封禁
-    if let Some(cache) = crate::types::ACTIVE_BAN_CACHE.get() {
-        let expired = cache.purge_expired(now_secs);
-        if !expired.is_empty() {
-            crate::logger::info!(
-                crate::logger::get(),
-                "清理过期临时封禁";
-                "count" => expired.len()
-            );
-            for ban_info in &expired {
-                // 从内核移除
-                if let Err(e) = crate::ban::unban_ip(&ban_info.ip) {
-                    crate::logger::warn!(
-                        crate::logger::get(),
-                        "解封过期封禁失败";
-                        "ip" => &ban_info.ip,
-                        "error" => %e
-                    );
-                }
-            }
-        }
-    }
 
     // 清理各 jail 的 failed_hash 中过期条目（防止内存泄漏）
     for jail in cfg.jails.iter() {

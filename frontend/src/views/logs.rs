@@ -1,10 +1,14 @@
 //! 系统日志 — 级别分布统计 + SSE 实时流 + 级别过滤 + 关键词搜索
 
 use leptos::*;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::api;
+
+const MAX_LOGS: usize = 1000;
 
 #[derive(Clone)]
 struct LogEntry {
@@ -26,7 +30,6 @@ pub fn Logs() -> impl IntoView {
         "WARN".to_string(),
         "INFO".to_string(),
     ]);
-    const MAX_LOGS: usize = 1000;
 
     // 日志级别统计
     let level_counts = move || {
@@ -62,42 +65,15 @@ pub fn Logs() -> impl IntoView {
         }
     });
 
-    // SSE 日志流
-    let source = web_sys::EventSource::new("/api/v1/logs/stream").ok();
-    if let Some(source) = &source {
-        let on_log =
-            Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
-                if !streaming.get() {
-                    return;
-                }
-                if let Ok(data) = e.data().dyn_into::<js_sys::JsString>() {
-                    let line: String = data.into();
-                    logs.update(|v| {
-                        let entry = parse_log_line(v.len() as u64 + 1, &line);
-                        v.push(entry);
-                        if v.len() > MAX_LOGS {
-                            v.remove(0);
-                        }
-                    });
-                }
-            });
-        source
-            .add_event_listener_with_callback_and_add_event_listener_options(
-                "log",
-                &on_log.as_ref().unchecked_ref(),
-                &{
-                    let opts = web_sys::AddEventListenerOptions::new();
-                    opts.set_once(false);
-                    opts
-                },
-            )
-            .unwrap();
-        let source_clone = source.clone();
-        on_cleanup(move || {
-            let _ = source_clone.close();
-        });
-        on_log.forget();
-    }
+    // SSE 日志流（含自动重连）
+    let cancelled = Rc::new(Cell::new(false));
+    let reconnect_attempt = Rc::new(Cell::new(0u32));
+    let reconnect_guard = Rc::new(Cell::new(false));
+    connect_logs_sse(logs, streaming, Rc::clone(&cancelled), Rc::clone(&reconnect_attempt), Rc::clone(&reconnect_guard));
+    on_cleanup({
+        let cancelled = Rc::clone(&cancelled);
+        move || cancelled.set(true)
+    });
 
     // 过滤后的日志（最新在前）
     let filtered = move || {
@@ -244,6 +220,140 @@ pub fn Logs() -> impl IntoView {
             </div>
         </div>
     }
+}
+
+// ============================================================================
+// 日志 SSE 连接（含自动重连）
+// ============================================================================
+
+struct LogsSseSource {
+    _source: web_sys::EventSource,
+    _callbacks: Vec<Closure<dyn Fn(web_sys::MessageEvent)>>,
+    _error_callbacks: Vec<Closure<dyn Fn(web_sys::Event)>>,
+}
+
+impl Drop for LogsSseSource {
+    fn drop(&mut self) {
+        let _ = self._source.close();
+    }
+}
+
+thread_local! {
+    static LOGS_HANDLE: RefCell<Option<LogsSseSource>> = RefCell::new(None);
+}
+
+fn connect_logs_sse(
+    logs: RwSignal<Vec<LogEntry>>,
+    streaming: RwSignal<bool>,
+    cancelled: Rc<Cell<bool>>,
+    reconnect_attempt: Rc<Cell<u32>>,
+    reconnect_guard: Rc<Cell<bool>>,
+) {
+    // 新连接周期：重置防护标志
+    reconnect_guard.set(false);
+
+    let source = match web_sys::EventSource::new("/api/v1/logs/stream") {
+        Ok(s) => s,
+        Err(_) => {
+            let can_schedule = !reconnect_guard.get() && !cancelled.get();
+            if can_schedule {
+                reconnect_guard.set(true);
+                schedule_logs_reconnect(logs, streaming, cancelled, reconnect_attempt, reconnect_guard);
+            }
+            return;
+        }
+    };
+
+    // onopen — 连接成功，重置重连计数器
+    let attempt_reset = Rc::clone(&reconnect_attempt);
+    let on_open = Closure::<dyn Fn(web_sys::Event)>::new(move |_: web_sys::Event| {
+        attempt_reset.set(0);
+    });
+    source.set_onopen(Some(on_open.as_ref().unchecked_ref()));
+
+    // on_log — 检查 streaming 暂停状态
+    let logs_ref = logs;
+    let streaming_ref = streaming;
+    let on_log = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
+        if !streaming_ref.get_untracked() {
+            return;
+        }
+        if let Ok(data) = e.data().dyn_into::<js_sys::JsString>() {
+            let line: String = data.into();
+            logs_ref.update(|v| {
+                let entry = parse_log_line(v.len() as u64 + 1, &line);
+                v.push(entry);
+                if v.len() > MAX_LOGS {
+                    v.remove(0);
+                }
+            });
+        }
+    });
+    source
+        .add_event_listener_with_callback_and_add_event_listener_options(
+            "log",
+            &on_log.as_ref().unchecked_ref(),
+            &{
+                let opts = web_sys::AddEventListenerOptions::new();
+                opts.set_once(false);
+                opts
+            },
+        )
+        .unwrap();
+
+    // onerror — 连接异常时触发重连（reconnect_guard 防重入）
+    let logs_reconnect = logs;
+    let streaming_reconnect = streaming;
+    let cancelled_reconnect = Rc::clone(&cancelled);
+    let attempt_counter = Rc::clone(&reconnect_attempt);
+    let guard_ref = Rc::clone(&reconnect_guard);
+    let on_error = Closure::<dyn Fn(web_sys::Event)>::new(move |_: web_sys::Event| {
+        let can_schedule = !guard_ref.get() && !cancelled_reconnect.get();
+        if can_schedule {
+            guard_ref.set(true);
+            schedule_logs_reconnect(
+                logs_reconnect, streaming_reconnect,
+                cancelled_reconnect.clone(), attempt_counter.clone(),
+                guard_ref.clone(),
+            );
+        }
+    });
+    source.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+
+    LOGS_HANDLE.with(|h| {
+        *h.borrow_mut() = Some(LogsSseSource {
+            _source: source,
+            _callbacks: vec![on_log],
+            _error_callbacks: vec![on_open, on_error],
+        });
+    });
+}
+
+fn schedule_logs_reconnect(
+    logs: RwSignal<Vec<LogEntry>>,
+    streaming: RwSignal<bool>,
+    cancelled: Rc<Cell<bool>>,
+    reconnect_attempt: Rc<Cell<u32>>,
+    reconnect_guard: Rc<Cell<bool>>,
+) {
+    let attempt = reconnect_attempt.get();
+    let delay_secs = (1_u64 << attempt).min(30);
+    reconnect_attempt.set(attempt + 1);
+    spawn_local(async move {
+        let promise = js_sys::Promise::new(&mut |resolve, _| {
+            web_sys::window()
+                .unwrap()
+                .set_timeout_with_callback_and_timeout_and_arguments_0(
+                    &resolve,
+                    (delay_secs * 1000) as i32,
+                )
+                .unwrap();
+        });
+        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+        if cancelled.get() { return; }
+        // connect_logs_sse 内部会重置 reconnect_guard
+        connect_logs_sse(logs, streaming, cancelled, reconnect_attempt, reconnect_guard);
+    });
 }
 
 fn parse_log_line(line_number: u64, content: &str) -> LogEntry {

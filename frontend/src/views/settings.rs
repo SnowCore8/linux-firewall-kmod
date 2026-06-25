@@ -30,6 +30,11 @@ pub fn Settings() -> impl IntoView {
     let static_thresh = create_rw_signal(true);
     let dynamic_thresh = create_rw_signal(false);
     let ddos_enabled = create_rw_signal(true);
+    // 容量配置
+    let edit_max_ban_entries = create_rw_signal(String::new());
+    let edit_max_whitelist_entries = create_rw_signal(String::new());
+    let edit_max_rate_entries = create_rw_signal(String::new());
+    let edit_max_local_ip_cache = create_rw_signal(String::new());
 
     create_effect(move |_| {
         if let Some(Some(cfg)) = config.get() {
@@ -49,6 +54,11 @@ pub fn Settings() -> impl IntoView {
             let _ = static_thresh.try_set(cfg.static_threshold);
             let _ = dynamic_thresh.try_set(cfg.dynamic_threshold);
             let _ = ddos_enabled.try_set(cfg.ddos_detection);
+            // 容量配置
+            let _ = edit_max_ban_entries.try_set(cfg.max_ban_entries.to_string());
+            let _ = edit_max_whitelist_entries.try_set(cfg.max_whitelist_entries.to_string());
+            let _ = edit_max_rate_entries.try_set(cfg.max_rate_entries.to_string());
+            let _ = edit_max_local_ip_cache.try_set(cfg.max_local_ip_cache.to_string());
         }
     });
 
@@ -71,6 +81,11 @@ pub fn Settings() -> impl IntoView {
         let static_thresh = static_thresh.get();
         let dynamic_thresh = dynamic_thresh.get();
         let ddos_enabled = ddos_enabled.get();
+        // 容量配置
+        let max_ban_entries = edit_max_ban_entries.get().parse::<u32>().ok();
+        let max_whitelist_entries = edit_max_whitelist_entries.get().parse::<u32>().ok();
+        let max_rate_entries = edit_max_rate_entries.get().parse::<u32>().ok();
+        let max_local_ip_cache = edit_max_local_ip_cache.get().parse::<u32>().ok();
         spawn_local(async move {
             let req = api::UpdateConfigRequest {
                 sse_push_interval: sse_val,
@@ -87,6 +102,10 @@ pub fn Settings() -> impl IntoView {
                 static_threshold: Some(static_thresh),
                 dynamic_threshold: Some(dynamic_thresh),
                 ddos_detection: Some(ddos_enabled),
+                max_ban_entries,
+                max_whitelist_entries,
+                max_rate_entries,
+                max_local_ip_cache,
             };
             match api::update_config(req).await {
                 Ok(_) => {
@@ -116,6 +135,10 @@ pub fn Settings() -> impl IntoView {
         static_threshold: true,
         dynamic_threshold: false,
         ddos_detection: true,
+        max_ban_entries: 65535,
+        max_whitelist_entries: 65535,
+        max_rate_entries: 65535,
+        max_local_ip_cache: 65535,
     };
 
     view! {
@@ -156,12 +179,6 @@ pub fn Settings() -> impl IntoView {
                                     <EditableItem label="SYN 警告阈值 (pps)" value=edit_warning_syn/>
                                     <EditableItem label="SYN 严重阈值 (pps)" value=edit_critical_syn/>
                                 </div>
-                                <div style="margin-top:16px;display:flex;gap:12px;align-items:center;justify-content:center">
-                                    <button class="btn btn-primary" on:click=do_save disabled=move || saving.get()>
-                                        {move || if saving.get() { "保存中..." } else { "保存配置" }}
-                                    </button>
-                                    <span style="color:var(--text-muted);font-size:13px">{move || save_msg.get()}</span>
-                                </div>
                             }
                         }}
                     </Suspense>
@@ -194,6 +211,28 @@ pub fn Settings() -> impl IntoView {
                                     <ToggleItem label="DDoS 检测总开关" value=ddos_enabled/>
                                     <ToggleItem label="静态阈值算法" value=static_thresh/>
                                     <ToggleItem label="动态阈值算法 (基线×倍数)" value=dynamic_thresh/>
+                                </div>
+                            }
+                        }}
+                    </Suspense>
+                </div>
+                <div class="card settings-card">
+                    <h3>"容量配置"</h3>
+                    <Suspense fallback=|| view! { <div style="padding:12px;color:var(--text-muted)">"加载中..."</div> }>
+                        {move || {
+                            let _cfg = config.get().flatten().unwrap_or_else(|| default_config());
+                            view! {
+                                <div class="settings-list">
+                                    <EditableItem label="封禁表最大条目数" value=edit_max_ban_entries/>
+                                    <EditableItem label="白名单最大条目数" value=edit_max_whitelist_entries/>
+                                    <EditableItem label="速率表最大条目数" value=edit_max_rate_entries/>
+                                    <EditableItem label="本地 IP 缓存最大条目数" value=edit_max_local_ip_cache/>
+                                </div>
+                                <div style="margin-top:16px;display:flex;gap:12px;align-items:center;justify-content:center">
+                                    <button class="btn btn-primary" on:click=do_save disabled=move || saving.get()>
+                                        {move || if saving.get() { "保存中..." } else { "保存配置" }}
+                                    </button>
+                                    <span style="color:var(--text-muted);font-size:13px">{move || save_msg.get()}</span>
                                 </div>
                             }
                         }}

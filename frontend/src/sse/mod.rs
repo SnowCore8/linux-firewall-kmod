@@ -1,6 +1,7 @@
-//! SSE 状态管理 — 顶层 context，事件驱动
+//! SSE 状态管理 — 顶层 context，事件驱动，自动重连
 
 use leptos::*;
+use std::cell::Cell;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -10,7 +11,7 @@ use crate::api::{BanResponse, JailResponse, RateResponse, StatsResponse, Whiteli
 // 全局状态
 // ============================================================================
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ConnectionStatus {
     Connecting,
     Connected,
@@ -57,6 +58,8 @@ pub struct SseState {
     pub whitelist: RwSignal<Option<Vec<WhitelistEntry>>>,
     /// 速率历史趋势（SSE rates 事件直接追加，组件只读）
     pub rate_history: RwSignal<RateHistory>,
+    /// 重连尝试次数（UI 显示用，连接成功时归零）
+    pub reconnect_attempt: RwSignal<u32>,
 }
 
 impl SseState {
@@ -69,17 +72,19 @@ impl SseState {
             rates: create_rw_signal(None),
             whitelist: create_rw_signal(None),
             rate_history: create_rw_signal(RateHistory::default()),
+            reconnect_attempt: create_rw_signal(0),
         }
     }
 }
 
 // ============================================================================
-// SSE 连接
+// SSE 连接（含自动重连）
 // ============================================================================
 
 struct SseSource {
     _source: web_sys::EventSource,
     _callbacks: Vec<Closure<dyn Fn(web_sys::MessageEvent)>>,
+    _error_callbacks: Vec<Closure<dyn Fn(web_sys::Event)>>,
 }
 
 impl Drop for SseSource {
@@ -88,18 +93,46 @@ impl Drop for SseSource {
     }
 }
 
+thread_local! {
+    static HANDLE: std::cell::RefCell<Option<SseSource>> = std::cell::RefCell::new(None);
+    /// 每个连接周期的重连防护：防止同一连接的多次 onerror 重复调度
+    /// 每次 schedule_reconnect 开始前重置为 false（新周期）
+    static RECONNECT_SCHEDULED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// 建立 SSE 连接。连接断开时自动指数退避重连。
 pub fn connect_sse(state: SseState) {
+    // 新连接周期：重置防护标志，允许本轮 onerror 调度重连
+    RECONNECT_SCHEDULED.with(|s| s.set(false));
+
     let source = match web_sys::EventSource::new("/api/v1/events") {
         Ok(s) => s,
-        Err(_) => { state.status.set(ConnectionStatus::Disconnected); return; }
+        Err(_) => {
+            state.status.set(ConnectionStatus::Disconnected);
+            schedule_reconnect(state);
+            return;
+        }
     };
 
     let mut callbacks: Vec<Closure<dyn Fn(web_sys::MessageEvent)>> = Vec::new();
+    let mut error_callbacks: Vec<Closure<dyn Fn(web_sys::Event)>> = Vec::new();
 
-    // connected
+    // open — 浏览器标准连接成功事件，重置重连计数器
+    let status_open = state.status;
+    let attempt_reset = state.reconnect_attempt;
+    let on_open = Closure::<dyn Fn(web_sys::Event)>::new(move |_: web_sys::Event| {
+        status_open.set(ConnectionStatus::Connected);
+        attempt_reset.set(0);
+    });
+    source.set_onopen(Some(on_open.as_ref().unchecked_ref()));
+    error_callbacks.push(on_open);
+
+    // connected — 服务端自定义事件，重置重连计数器
     let status = state.status;
+    let reconnect_attempt = state.reconnect_attempt;
     let cb = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |_| {
         status.set(ConnectionStatus::Connected);
+        reconnect_attempt.set(0);
     });
     source.add_event_listener_with_callback("connected", cb.as_ref().unchecked_ref()).unwrap();
     callbacks.push(cb);
@@ -150,9 +183,7 @@ pub fn connect_sse(state: SseState) {
         if let Ok(s) = e.data().dyn_into::<js_sys::JsString>() {
             let json: String = s.into();
             if let Ok(data) = serde_json::from_str::<Vec<RateResponse>>(&json) {
-                // 追加趋势数据
                 history.update(|h| h.push(&data));
-                // 更新当前 rates
                 rates.set(Some(data));
             }
         }
@@ -173,19 +204,52 @@ pub fn connect_sse(state: SseState) {
     source.add_event_listener_with_callback("whitelist", cb.as_ref().unchecked_ref()).unwrap();
     callbacks.push(cb);
 
-    // onerror
+    // onerror — 连接异常时触发重连
+    // RECONNECT_SCHEDULED 防重入：同一连接周期内仅调度一次重连
+    // 新连接周期开始时 RECONNECT_SCHEDULED 重置为 false
     let status_err = state.status;
-    let on_error = Closure::<dyn Fn(web_sys::Event)>::new(move |_| {
+    let state_reconnect = state.clone();
+    let on_error = Closure::<dyn Fn(web_sys::Event)>::new(move |_: web_sys::Event| {
         status_err.set(ConnectionStatus::Disconnected);
+        let can_schedule = RECONNECT_SCHEDULED.with(|s| {
+            if s.get() { return false; }
+            s.set(true);
+            true
+        });
+        if can_schedule {
+            schedule_reconnect(state_reconnect.clone());
+        }
     });
     source.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-    on_error.forget();
+    error_callbacks.push(on_error);
 
-    use std::cell::RefCell;
-    thread_local! {
-        static HANDLE: RefCell<Option<SseSource>> = RefCell::new(None);
-    }
     HANDLE.with(|h| {
-        *h.borrow_mut() = Some(SseSource { _source: source, _callbacks: callbacks });
+        *h.borrow_mut() = Some(SseSource {
+            _source: source,
+            _callbacks: callbacks,
+            _error_callbacks: error_callbacks,
+        });
+    });
+}
+
+/// 指数退避重连：delay = min(2^attempt, 30) 秒
+fn schedule_reconnect(state: SseState) {
+    let attempt = state.reconnect_attempt.get_untracked();
+    let delay_secs = (1_u64 << attempt).min(30);
+    state.reconnect_attempt.set(attempt + 1);
+
+    spawn_local(async move {
+        let promise = js_sys::Promise::new(&mut |resolve, _| {
+            web_sys::window()
+                .unwrap()
+                .set_timeout_with_callback_and_timeout_and_arguments_0(
+                    &resolve,
+                    (delay_secs * 1000) as i32,
+                )
+                .unwrap();
+        });
+        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+        // connect_sse 内部会重置 RECONNECT_SCHEDULED，允许新周期的 onerror 调度
+        connect_sse(state);
     });
 }

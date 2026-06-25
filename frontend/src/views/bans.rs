@@ -98,8 +98,22 @@ pub fn Bans() -> impl IntoView {
                     <div class="chart-header"><h3>"封禁原因分布"</h3></div>
                     <div class="chart-body" style="height:180px">
                         <PieChart
-                            labels=Signal::derive(move || stats_signal.get().unwrap_or_else(|| stats_default()).failure_reasons.labels)
-                            data=Signal::derive(move || stats_signal.get().unwrap_or_else(|| stats_default()).failure_reasons.values)
+                            labels=Signal::derive(move || {
+                                let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                                let mut pairs: Vec<_> = s.failure_reasons.labels.into_iter()
+                                    .zip(s.failure_reasons.values.into_iter())
+                                    .collect();
+                                pairs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                                pairs.into_iter().map(|(l, _)| l).collect()
+                            })
+                            data=Signal::derive(move || {
+                                let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                                let mut pairs: Vec<_> = s.failure_reasons.labels.into_iter()
+                                    .zip(s.failure_reasons.values.into_iter())
+                                    .collect();
+                                pairs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                                pairs.into_iter().map(|(_, v)| v).collect()
+                            })
                             size=180
                         />
                     </div>
@@ -182,16 +196,37 @@ pub fn Bans() -> impl IntoView {
                             <For each=filtered_bans key=|b| b.ip.clone()
                                 children=move |ban: BanResponse| {
                                     let ip = ban.ip.clone();
+                                    let ip2 = ip.clone();
+                                    // 从 signal 读取最新 remaining_seconds，SSE 推送时自动刷新
+                                    let remaining_seconds = Signal::derive(move || {
+                                        bans_signal
+                                            .get()
+                                            .unwrap_or_default()
+                                            .into_iter()
+                                            .find(|b| b.ip == ip)
+                                            .map(|b| b.remaining_seconds)
+                                            .unwrap_or(0)
+                                    });
+                                    let remaining_display = move || {
+                                        let r = remaining_seconds.get();
+                                        if r == -1 {
+                                            "永久".to_string()
+                                        } else if r <= 0 {
+                                            "0s".to_string()
+                                        } else {
+                                            format_duration(r)
+                                        }
+                                    };
                                     view! {
                                         <tr>
                                             <td class="mono" style="font-weight:600;color:var(--text-primary)">{&ban.ip}</td>
                                             <td><span class="badge badge-info">{&ban.jail}</span></td>
                                             <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{&ban.reason}</td>
                                             <td class="mono" style="font-size:11px;color:var(--text-muted)">{format_datetime(ban.banned_at)}</td>
-                                            <td class="mono" style="font-size:11px">{format_duration(ban.remaining_seconds)}</td>
+                                            <td class="mono" style="font-size:11px">{remaining_display}</td>
                                             <td>
                                                 <button class="btn btn-sm btn-danger"
-                                                    on:click=move |_| do_unban(ip.clone())>
+                                                    on:click=move |_| do_unban(ip2.clone())>
                                                     "解封"
                                                 </button>
                                             </td>

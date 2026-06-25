@@ -12,9 +12,7 @@ use crate::config_reloader::{cleanup_partial_line_buffer, reload_configuration, 
 use crate::log_rotation::{check_for_new_log_files, handle_log_rotation};
 use crate::types::{Config, DAEMON_STATS};
 
-use super::periodic_tasks::{
-    check_and_handle_ddos, perform_data_cleanup, record_history_snapshot, write_stats_snapshot,
-};
+use super::periodic_tasks::{check_and_handle_ddos, record_history_snapshot, write_stats_snapshot};
 use super::processor::process_new_lines;
 use super::state::{FILE_STATES, INOTIFY_STATE};
 
@@ -32,8 +30,6 @@ struct TimeoutState {
     last_new_file_check: SystemTime,
     /// 统计快照写入
     last_stats_snapshot: SystemTime,
-    /// 数据清理
-    last_data_cleanup: SystemTime,
     /// DDoS 检测
     last_ddos_check: SystemTime,
     /// 历史数据快照（每 5 分钟）
@@ -56,7 +52,6 @@ impl TimeoutState {
             last_partial_cleanup: now,
             last_new_file_check: now,
             last_stats_snapshot: now,
-            last_data_cleanup: now,
             last_ddos_check: now,
             last_history_snapshot: now,
             last_rates_query: now,
@@ -297,17 +292,6 @@ fn handle_timeout(cfg: &mut Config, reload_config: &AtomicBool, state: &mut Time
     {
         state.last_stats_snapshot = now;
         write_stats_snapshot(cfg);
-    }
-
-    // 数据清理
-    if now
-        .duration_since(state.last_data_cleanup)
-        .unwrap_or_default()
-        .as_secs()
-        >= cfg.storage.retention.cleanup_interval_secs as u64
-    {
-        state.last_data_cleanup = now;
-        perform_data_cleanup(cfg);
     }
 
     // DDoS 检测

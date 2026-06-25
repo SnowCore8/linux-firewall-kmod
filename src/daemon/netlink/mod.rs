@@ -347,7 +347,8 @@ impl NetlinkContext {
                         is_permanent: event.duration_secs() == 0,
                         fail_count: 0,
                     };
-                    cache.try_insert(ban_info);
+                    // SSE 事件必须覆盖以刷新 expires_at（remaining_seconds 倒计时）
+                    cache.insert(ban_info);
                     crate::logger::info!(
                         crate::logger::get(),
                         "已更新 ACTIVE_BAN_CACHE";

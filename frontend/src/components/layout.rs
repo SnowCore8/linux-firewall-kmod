@@ -12,6 +12,7 @@ pub fn DefaultLayout(
     children: Children,
 ) -> impl IntoView {
     let status = sse_state.status;
+    let reconnect_attempt = sse_state.reconnect_attempt;
     let sidebar_open = create_rw_signal(false);
     // 在 DefaultLayout 挂载时建立 SSE 连接
     let sse_for_connect = sse_state.clone();
@@ -136,7 +137,14 @@ pub fn DefaultLayout(
                     fallback=|| ()
                 >
                     <div class="offline-banner">
-                        <span>"⚠ 连接已断开,正在尝试重连..."</span>
+                        <span>{move || {
+                            let n = reconnect_attempt.get();
+                            if n > 0 {
+                                format!("⚠ 连接已断开，第 {} 次重连中...", n)
+                            } else {
+                                "⚠ 连接已断开".to_string()
+                            }
+                        }}</span>
                     </div>
                 </Show>
 
