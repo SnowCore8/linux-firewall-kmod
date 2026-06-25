@@ -52,8 +52,22 @@ pub fn Jails() -> impl IntoView {
                         } else {
                             view! {
                                 <PieChart
-                                    labels=Signal::derive(move || stats.jail_distribution.labels.clone())
-                                    data=Signal::derive(move || stats.jail_distribution.values.clone())
+                                    labels=Signal::derive(move || {
+                                        let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                                        let mut pairs: Vec<_> = s.jail_distribution.labels.into_iter()
+                                            .zip(s.jail_distribution.values.into_iter())
+                                            .collect();
+                                        pairs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                                        pairs.into_iter().map(|(l, _)| l).collect()
+                                    })
+                                    data=Signal::derive(move || {
+                                        let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                                        let mut pairs: Vec<_> = s.jail_distribution.labels.into_iter()
+                                            .zip(s.jail_distribution.values.into_iter())
+                                            .collect();
+                                        pairs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                                        pairs.into_iter().map(|(_, v)| v).collect()
+                                    })
                                     size=120
                                 />
                             }.into_view()
@@ -86,30 +100,44 @@ pub fn Jails() -> impl IntoView {
                             <For each=move || jails.clone() key=|j| j.name.clone()
                                 children=move |jail: JailResponse| {
                                     let name = jail.name.clone();
+                                    let name2 = name.clone();
+                                    // 从 signal 读取最新数据，SSE 推送时自动刷新
+                                    let jail_data = Signal::derive(move || {
+                                        jails_signal
+                                            .get()
+                                            .unwrap_or_default()
+                                            .into_iter()
+                                            .find(|j| j.name == name)
+                                            .unwrap_or_else(|| JailResponse {
+                                                name: name.clone(),
+                                                enabled: false,
+                                                ban_count: 0,
+                                            })
+                                    });
                                     view! {
                                         <div class="card jail-card">
                                             <div class="jail-header">
                                                 <span class="jail-name">{&jail.name}</span>
                                                 <div style="display:flex;gap:8px;align-items:center">
                                                     <span class=move || {
-                                                        if jail.enabled { "badge badge-success badge-dot" } else { "badge badge-danger badge-dot" }
+                                                        if jail_data.get().enabled { "badge badge-success badge-dot" } else { "badge badge-danger badge-dot" }
                                                     }>
-                                                        {move || if jail.enabled { "ENABLED" } else { "DISABLED" }}
+                                                        {move || if jail_data.get().enabled { "ENABLED" } else { "DISABLED" }}
                                                     </span>
                                                     <button
                                                         class=move || {
-                                                            if jail.enabled { "btn btn-sm btn-danger" } else { "btn btn-sm btn-success" }
+                                                            if jail_data.get().enabled { "btn btn-sm btn-danger" } else { "btn btn-sm btn-success" }
                                                         }
                                                         style="padding:4px 8px;font-size:10px"
-                                                        on:click=move |_| do_toggle(name.clone(), jail.enabled)>
-                                                        {move || if jail.enabled { "禁用" } else { "启用" }}
+                                                        on:click=move |_| do_toggle(name2.clone(), jail_data.get().enabled)>
+                                                        {move || if jail_data.get().enabled { "禁用" } else { "启用" }}
                                                     </button>
                                                 </div>
                                             </div>
                                             <div class="jail-stats">
                                                 <div class="jail-stat">
                                                     <span class="jail-stat-label">"封禁数"</span>
-                                                    <span class="jail-stat-value mono">{jail.ban_count}</span>
+                                                    <span class="jail-stat-value mono">{move || jail_data.get().ban_count}</span>
                                                 </div>
                                             </div>
                                         </div>
