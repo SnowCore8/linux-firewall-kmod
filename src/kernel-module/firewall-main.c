@@ -7,13 +7,14 @@
 #include "firewall.h"
 #include <linux/printk.h>
 #include <linux/random.h>
+#include <linux/timer.h>
 #include <linux/version.h>
 
 /* 模块参数（非静态，可从 procfs 访问） */
 unsigned int fw_ban_time = DEFAULT_BAN_TIME;
 char *state_file = "/var/lib/firewall/state";
 unsigned int fw_max_bans_per_second = 200;
-unsigned int fw_max_rate_entries = MAX_RATE_ENTRIES;
+unsigned int fw_max_rate_entries = 65536; /* 速率表哈希桶数（65536 桶），条目数量无上限 */
 unsigned int fw_static_threshold = 1;  /* 默认开启静态阈值检测 */
 unsigned int fw_dynamic_threshold = 0; /* 默认关闭动态阈值 */
 unsigned int fw_ddos_detection = 1;    /* DDoS 检测总开关 */
@@ -65,11 +66,17 @@ static void cleanup_all_entries(void) {
   u32 wl_hash;
 
   hash_for_each_safe(fw_info.ban_table_ipv4, ban_hash, tmp, entry, hash) {
+    /* 取消 per-entry 过期定时器，防止 use-after-free */
+    timer_delete_sync(&entry->expire_timer);
+    list_del_rcu(&entry->ban_node);
     hlist_del_rcu(&entry->hash);
     call_rcu(&entry->rcu_head, free_ban_entry_rcu);
   }
 
   hash_for_each_safe(fw_info.ban_table_ipv6, ban_hash, tmp, entry, hash) {
+    /* 取消 per-entry 过期定时器，防止 use-after-free */
+    timer_delete_sync(&entry->expire_timer);
+    list_del_rcu(&entry->ban_node);
     hlist_del_rcu(&entry->hash);
     call_rcu(&entry->rcu_head, free_ban_entry_rcu);
   }
@@ -97,6 +104,19 @@ static void cleanup_all_entries(void) {
     hash_for_each_safe(fw_info.rate_table_ipv6, rate_hash, tmp, rate_entry, hash) {
       hlist_del_rcu(&rate_entry->hash);
       call_rcu(&rate_entry->rcu_head, free_rate_entry_rcu);
+    }
+  }
+
+  /* 清理本地 IP 缓存（热路径优化结构） */
+  {
+    struct local_ip_cache_entry *old_cache;
+
+    atomic_set(&fw_info.local_ip_cache_count, 0);
+    old_cache = rcu_dereference_protected(fw_info.local_ip_cache, 1);
+    RCU_INIT_POINTER(fw_info.local_ip_cache, NULL);
+    if (old_cache) {
+      synchronize_rcu();
+      kfree(old_cache);
     }
   }
 
@@ -195,8 +215,6 @@ static int __init firewall_init(void) {
   fw_info.ban_time = fw_ban_time;
 
   /* 修复：初始化 IPv4 和 IPv6 独立的清理进度索引 */
-  fw_info.cleanup_last_bucket_ipv4 = 0;
-  fw_info.cleanup_last_bucket_ipv6 = 0;
 
   atomic_set(&fw_info.total_ban_count, 0);
   atomic_set(&fw_info.total_unban_count, 0);
@@ -229,11 +247,6 @@ static int __init firewall_init(void) {
     pr_warn("注册 netdev notifier 失败: %d\n", ret);
   }
 
-  timer_setup(&fw_info.cleanup_timer, cleanup_timer_callback, 0);
-  fw_info.timer_initialized = true;
-  mod_timer(&fw_info.cleanup_timer,
-            jiffies + ((unsigned long)READ_ONCE(fw_ban_time) * HZ) / 2);
-
   ret = create_procfs_entries(&fw_info);
   if (ret) {
     pr_err("创建 procfs 条目失败: %d\n", ret);
@@ -265,7 +278,6 @@ err_procfs:
 err_notifier:
   atomic_set(&fw_info.shutting_down, 1);
   cancel_delayed_work_sync(&fw_info.sync_work);
-  timer_delete_sync(&fw_info.cleanup_timer);
   unregister_netdev_notifier(&fw_info);
   synchronize_rcu();
   cleanup_all_entries();
@@ -289,11 +301,6 @@ static void __exit firewall_exit(void) {
   synchronize_rcu();
 
   unregister_netdev_notifier(&fw_info);
-
-  if (fw_info.timer_initialized) {
-    timer_delete_sync(&fw_info.cleanup_timer);
-    fw_info.timer_initialized = false;
-  }
 
   destroy_procfs_entries(&fw_info);
 

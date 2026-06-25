@@ -78,6 +78,13 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *
     return NF_ACCEPT;
   }
 
+  /* 本地 IP 缓存检查（热路径优化：命中则跳过后续所有查找）
+   * 由 netdev_notifier 事件触发刷新，覆盖 USB 插拔/手动改 IP/DHCP/VPN 等 */
+  if (is_local_ip(&fw_info, af, src_ip)) {
+    rcu_read_unlock();
+    return NF_ACCEPT;
+  }
+
   if (af == FW_AF_INET6) {
     struct in6_addr *ip6 = (struct in6_addr *)src_ip;
     u32 ip6_hash = jhash(ip6, sizeof(struct in6_addr), fw_hash_seed);

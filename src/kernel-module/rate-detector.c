@@ -72,55 +72,6 @@ static struct ip_rate_entry *find_rate_entry_rcu(struct firewall_info *fw,
 }
 
 /**
- * evict_lru_rate_entry - 踢出最不活跃的速率条目（LRU 替换）
- * @fw: 防火墙信息
- * @af: 地址族
- *
- * 遍历速率表，找到 last_activity 最旧的条目并删除。
- * 调用方必须持有全局 rate_lock（或遍历期间保证安全）。
- *
- * 返回: 0 成功，-ENOENT 无条目可踢
- */
-static int evict_lru_rate_entry(struct firewall_info *fw, u8 af) {
-  struct ip_rate_entry *entry, *oldest = NULL;
-  struct hlist_node *tmp;
-  unsigned long oldest_time = ULONG_MAX;
-  struct hlist_head *table = get_rate_table(fw, af);
-  int i;
-
-  for (i = 0; i < (1 << RATE_HASH_BITS); i++) {
-    spinlock_t *lock = get_rate_lock(fw, af, i);
-    spin_lock_bh(lock);
-
-    hlist_for_each_entry_safe(entry, tmp, &table[i], hash) {
-      /* 跳过 pinned 条目（白名单 IP 不被 LRU 踢出） */
-      if (entry->pinned)
-        continue;
-      if (time_before(entry->last_activity, oldest_time)) {
-        oldest_time = entry->last_activity;
-        oldest = entry;
-      }
-    }
-
-    spin_unlock_bh(lock);
-  }
-
-  if (!oldest) {
-    return -ENOENT;
-  }
-
-  /* 删除最旧条目 */
-  i = hash_ip_for_rate(af, &oldest->addr, RATE_HASH_BITS);
-  spin_lock_bh(get_rate_lock(fw, af, i));
-  hlist_del_rcu(&oldest->hash);
-  spin_unlock_bh(get_rate_lock(fw, af, i));
-  call_rcu(&oldest->rcu_head, free_rate_entry_rcu);
-  atomic_dec(&fw->rate_count);
-
-  return 0;
-}
-
-/**
  * create_rate_entry - 创建新的速率条目
  * @fw: 防火墙信息
  * @af: 地址族
@@ -130,8 +81,8 @@ static int evict_lru_rate_entry(struct firewall_info *fw, u8 af) {
  *
  * 注意：调用方必须持有对应桶的 spinlock
  *
- * 改进：表满时 LRU 替换（踢出 last_activity 最旧的条目），而非拒绝新条目。
- * 支持 10Gbps+ 大规模 DDoS 场景（>65536 源 IP 时自动淘汰不活跃条目）。
+ * 无容量上限，按需扩展。
+ * 
  */
 static struct ip_rate_entry *create_rate_entry(struct firewall_info *fw, u8 af,
                                                const void *ip) {
@@ -139,13 +90,7 @@ static struct ip_rate_entry *create_rate_entry(struct firewall_info *fw, u8 af,
   struct hlist_head *table = get_rate_table(fw, af);
   u32 hash = hash_ip_for_rate(af, ip, RATE_HASH_BITS);
 
-  /* 表满时 LRU 替换：踢出最不活跃的条目 */
-  if (atomic_read(&fw->rate_count) >= fw_max_rate_entries) {
-    if (evict_lru_rate_entry(fw, af) < 0) {
-      atomic_inc(&fw->ban_table_full_count);
-      return ERR_PTR(-ENOSPC);
-    }
-  }
+  /* 跳过容量限制（按需扩展，无上限） */
 
   /* 分配内存 */
   entry = kzalloc(sizeof(*entry), GFP_ATOMIC);

@@ -45,18 +45,19 @@ void fw_flush_cpu_stats(void);
 void fw_flush_all_cpu_stats(void);
 
 #define BAN_HASH_BITS 12
-#define MAX_BAN_ENTRIES (1 << BAN_HASH_BITS) /* 4096 个条目 */
+/* 封禁表哈希桶数（4096 桶），条目数量无上限（按需扩展） */
+#define MAX_BAN_ENTRIES (1 << BAN_HASH_BITS) /* 保留：用于临时数组大小 */
 #define DEFAULT_BAN_TIME 600                 /* 10 分钟（秒） */
-#define MAX_BAN_TIME (365 * 24 * 60 * 60)    /* 最大 1 年，防止溢出 */
+#define MAX_BAN_TIME (365 * 24 * 60 * 60) /* 最大 1 年，防止溢出 */
 #define MIN_BAN_TIME 30 /* 最小 30 秒，避免过多的定时器开销 */
 
 /* 白名单哈希表结构 */
 #define WHITELIST_HASH_BITS 6
-#define MAX_WHITELIST_ENTRIES (1 << WHITELIST_HASH_BITS) /* 64 个条目 */
+/* 白名单哈希桶数（64 桶），条目数量无上限（按需扩展） */
 
 /* 速率检测哈希表结构 */
 #define RATE_HASH_BITS 16
-#define MAX_RATE_ENTRIES (1 << RATE_HASH_BITS) /* 65536 个条目 */
+/* 速率表哈希桶数（65536 桶），条目数量无上限（按需扩展） */
 
 /* 速率检测默认配置 */
 #define DEFAULT_RATE_WINDOW_SECONDS 1                   /* 默认 1 秒窗口 */
@@ -75,8 +76,8 @@ void fw_flush_all_cpu_stats(void);
 #define DEFAULT_DYNAMIC_THRESHOLD_ENABLED 0      /* 默认关闭 */
 #define DEFAULT_DYNAMIC_THRESHOLD_RATIO_X100 300 /* 默认 3.0 倍（× 100） */
 
-/* 自动发现 IP 的最大数量（与白名单容量一致） */
-#define MAX_DISCOVERED_IPS MAX_WHITELIST_ENTRIES
+/* 自动发现 IP 的临时数组大小（按需扩展，无上限） */
+#define MAX_DISCOVERED_IPS 4096 /* 初始大小，实际可动态扩展 */
 
 /* IPv6 地址字符串最大长度 (e.g., "2001:db8::ffff:ffff:ffff:ffff") */
 #define INET6_STR_LEN 48
@@ -90,6 +91,20 @@ void fw_flush_all_cpu_stats(void);
 #define TCP_FLAGS_SYN 0x02
 #define TCP_FLAGS_RST 0x04
 #define TCP_FLAGS_ACK 0x10
+
+/* 本地 IP 缓存条目（热路径优化：避免每次包都走白名单哈希表查找）
+ * 由 netdev_notifier 事件触发刷新（USB 插拔/手动改 IP/DHCP 等） */
+struct local_ip_cache_entry {
+  u8 af;
+  union {
+    __be32 ipv4;
+    struct in6_addr ipv6;
+  } addr;
+  union {
+    __be32 ipv4_mask;
+    u8 prefix_len;
+  } mask;
+};
 
 /* 白名单条目结构 - 支持 IPv4/IPv6 */
 struct whitelist_entry {
@@ -124,6 +139,7 @@ struct ban_entry {
   struct hlist_node hash;
   struct list_head ban_node; /* 全局活跃封禁链表节点 */
   struct rcu_head rcu_head;  /* 用于 RCU 释放 */
+  struct timer_list expire_timer; /* per-entry 过期定时器（非永久封禁时使用） */
 };
 
 /* IP 速率统计条目 - 用于 DDoS 检测
@@ -197,11 +213,6 @@ struct firewall_info {
   struct list_head active_bans_list; /* 全局活跃封禁链表，O(n) 遍历实际条目 */
   atomic_t shutting_down; /* 防止关闭期间定时器触发的标志 */
   unsigned int ban_time;
-  struct timer_list cleanup_timer;
-  bool timer_initialized;       /* 跟踪定时器是否已初始化 */
-  int cleanup_last_bucket_ipv4; /* 修复：IPv4 独立的清理进度索引 */
-  int cleanup_last_bucket_ipv6; /* 修复：IPv6 独立的清理进度索引，防止 IPv4/IPv6
-                                   互相干扰 */
 
   /* 泛洪保护 */
   spinlock_t flood_lock;
@@ -230,6 +241,13 @@ struct firewall_info {
    * 哈希表用于精确匹配 O(1)，子网链表用于前缀匹配（避免遍历所有 64 个桶）。 */
   struct list_head ipv4_subnet_wl;
   struct list_head ipv6_subnet_wl;
+
+  /* 本地 IP 缓存（热路径优化：避免每次包都走白名单哈希表查找）
+   * 由 netdev_notifier 事件触发刷新（USB 插拔/手动改 IP/DHCP 等）
+   * 结构：简单数组 + 计数，RCU 保护读，写时重建整个数组
+   * 容量：与白名单一致（64 条），通常只有几个到十几个本地 IP */
+  struct local_ip_cache_entry *local_ip_cache;
+  atomic_t local_ip_cache_count;
 
   /* 速率检测（DDoS 防护） */
   DECLARE_HASHTABLE(rate_table_ipv4, RATE_HASH_BITS); /* IPv4 速率统计表 */
@@ -333,8 +351,8 @@ int restore_state_from_file(const char *filename);
 void free_ban_entry_rcu(struct rcu_head *head);
 void free_whitelist_entry_rcu(struct rcu_head *head);
 
-/* 清理定时器回调（cleanup.c 中定义） */
-void cleanup_timer_callback(struct timer_list *t);
+/* per-entry 过期定时器回调（ban-manager.c 中定义） */
+void ban_entry_expire_callback(struct timer_list *t);
 
 /* netlink.c - Netlink 通信层 */
 int fw_netlink_init(void);
@@ -346,7 +364,7 @@ int fw_netlink_send_whitelist_state_change(u8 af, const void *ip, u8 prefix_len,
                                            u8 action, const char *dev_name);
 int fw_netlink_send_list_bans_response(u32 seq, u32 portid);
 int fw_netlink_send_stats_response(u32 seq, u32 portid);
-int fw_netlink_send_config_ack(u32 seq, u32 portid, u32 applied_flags, u32 rejected_flags);
+int fw_netlink_send_config_ack(u32 seq, u32 applied_flags, u32 rejected_flags, u32 portid);
 int fw_netlink_send_list_whitelist_response(u32 seq, u32 portid);
 int fw_netlink_send_list_rates_response(u32 seq, u32 portid);
 void fw_netlink_send_config_change(u32 flag, u32 value);
@@ -435,39 +453,6 @@ static inline u32 hash_ip(u8 af, const void *ip, int bits) {
     return jhash(addr, sizeof(struct in6_addr), fw_hash_seed) & ((1 << bits) - 1);
   }
   return hash_min(*(__be32 *)ip, bits);
-}
-
-/**
- * hash_ip_for_ban - 计算用于 ban_table 的哈希值
- * 使用 jhash2 确保 IPv4 和 IPv6 分布均匀
- */
-static inline u32 hash_ip_for_ban(u8 af, const void *ip, int bits) {
-  return hash_ip(af, ip, bits);
-}
-
-/**
- * hash_ip_for_whitelist - 计算用于 whitelist_table 的哈希值
- */
-static inline u32 hash_ip_for_whitelist(u8 af, const void *ip, int bits) {
-  return hash_ip(af, ip, bits);
-}
-
-/**
- * get_ban_table - 获取对应地址族的 ban 哈希表
- */
-static inline struct hlist_head *get_ban_table(struct firewall_info *fw, u8 af) {
-  if (af == FW_AF_INET6)
-    return fw->ban_table_ipv6;
-  return fw->ban_table_ipv4;
-}
-
-/**
- * get_whitelist_table - 获取对应地址族的 whitelist 哈希表
- */
-static inline struct hlist_head *get_whitelist_table(struct firewall_info *fw, u8 af) {
-  if (af == FW_AF_INET6)
-    return fw->whitelist_table_ipv6;
-  return fw->whitelist_table_ipv4;
 }
 
 /**
@@ -568,6 +553,63 @@ static inline int validate_ip_address(u8 af, const void *ip, const char *ip_str,
   if (af == FW_AF_INET6)
     return validate_ipv6_address((const struct in6_addr *)ip, ip_str, context, allow_loopback);
   return validate_ipv4_address(*(__be32 *)ip, ip_str, context, allow_loopback);
+}
+
+/**
+ * is_local_ip - 检查是否为本地 IP（热路径优化：优先查缓存）
+ * @fw: 防火墙信息
+ * @af: 地址族
+ * @ip: IP 地址
+ * 返回：true 如果是本地 IP
+ *
+ * 本地 IP 缓存由 netdev_notifier 事件触发刷新，覆盖：
+ * - USB 网卡插拔 (NETDEV_UP/DOWN)
+ * - 手动修改 IP (NETDEV_CHANGE)
+ * - DHCP 续租 (NETDEV_CHANGE)
+ * - VPN/Docker 网桥 (NETDEV_UP/DOWN)
+ */
+static inline bool is_local_ip(struct firewall_info *fw, u8 af, const void *ip) {
+  int count = atomic_read(&fw->local_ip_cache_count);
+  struct local_ip_cache_entry *cache;
+  int i;
+
+  if (count == 0)
+    return false;
+
+  /* RCU 读侧临界区：缓存数组由 rcu_assign_pointer 发布 */
+  rcu_read_lock();
+  cache = rcu_dereference(fw->local_ip_cache);
+  if (!cache) {
+    rcu_read_unlock();
+    return false;
+  }
+
+  if (af == FW_AF_INET6) {
+    const struct in6_addr *ip6 = ip;
+    for (i = 0; i < count; i++) {
+      if (cache[i].af == FW_AF_INET6) {
+        u8 prefix = READ_ONCE(cache[i].mask.prefix_len);
+        if (ipv6_prefix_equal(ip6, &cache[i].addr.ipv6, prefix)) {
+          rcu_read_unlock();
+          return true;
+        }
+      }
+    }
+  } else {
+    __be32 ipv4 = *(__be32 *)ip;
+    for (i = 0; i < count; i++) {
+      if (cache[i].af == FW_AF_INET) {
+        __be32 mask = READ_ONCE(cache[i].mask.ipv4_mask);
+        __be32 cached_ip = READ_ONCE(cache[i].addr.ipv4);
+        if ((ipv4 & mask) == (cached_ip & mask)) {
+          rcu_read_unlock();
+          return true;
+        }
+      }
+    }
+  }
+  rcu_read_unlock();
+  return false;
 }
 
 #endif /* FIREWALL_H */

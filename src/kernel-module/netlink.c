@@ -566,7 +566,6 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
   struct fw_nl_ban_entry *entries;
   struct ban_entry *entry;
   u32 hash;
-  int max_entries = 4096;
   int resp_size;
   int ret;
   int count = 0;
@@ -576,20 +575,15 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
     return -ENOTCONN;
   }
 
-  /* 第一遍：RCU 下统计实际条目数，动态分配避免浪费 */
+  /* 第一遍：RCU 下统计实际条目数（自适应，无上限） */
   rcu_read_lock();
   hash_for_each_rcu(fw_info.ban_table_ipv4, hash, entry, hash) {
-    count++;
+    total++;
   }
   hash_for_each_rcu(fw_info.ban_table_ipv6, hash, entry, hash) {
-    count++;
+    total++;
   }
   rcu_read_unlock();
-
-  if (count > max_entries) {
-    count = max_entries;
-  }
-  total = count;
 
   /* 动态计算响应大小：头 + 实际条目数 * 条目大小 */
   resp_size = sizeof(*resp) + total * sizeof(struct fw_nl_ban_entry);
@@ -631,10 +625,6 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
     u32 duration_secs;
     s64 banned_at;
 
-    if (count >= total) {
-      break;
-    }
-
     entries[count].af = FW_AF_INET;
     entries[count].is_permanent = READ_ONCE(entry->is_permanent) ? 1 : 0;
 
@@ -667,10 +657,6 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
     unsigned long unban_time = READ_ONCE(entry->unban_time);
     u32 duration_secs;
     s64 banned_at;
-
-    if (count >= total) {
-      break;
-    }
 
     entries[count].af = FW_AF_INET6;
     entries[count].is_permanent = READ_ONCE(entry->is_permanent) ? 1 : 0;
@@ -841,7 +827,7 @@ static u8 ipv4_mask_to_prefix_len(__be32 mask) {
  * @portid: 守护进程 netlink 端口 ID（用于单播回复）
  *
  * 响应守护进程的 ListWhitelistQuery 请求，发送当前所有白名单条目。
- * 最多返回 64 个条目（MAX_WHITELIST_ENTRIES）。
+ * 自适应：动态计算实际条目数量，无上限限制。
  */
 int fw_netlink_send_list_whitelist_response(u32 seq, u32 portid) {
   struct sk_buff *skb;
@@ -850,17 +836,27 @@ int fw_netlink_send_list_whitelist_response(u32 seq, u32 portid) {
   struct fw_nl_whitelist_entry *entries;
   struct whitelist_entry *entry;
   u32 hash;
-  int max_entries = MAX_WHITELIST_ENTRIES;
   int resp_size;
   int ret;
   int count = 0;
+  int actual_count = 0;
 
   if (!fw_nl_sock) {
     return -ENOTCONN;
   }
 
-  /* 计算响应大小：头 + max_entries * 条目大小 */
-  resp_size = sizeof(*resp) + max_entries * sizeof(struct fw_nl_whitelist_entry);
+  /* 第一次遍历：计算实际条目数量（自适应） */
+  rcu_read_lock();
+  hash_for_each_rcu(fw_info.whitelist_table_ipv4, hash, entry, hash) {
+    actual_count++;
+  }
+  hash_for_each_rcu(fw_info.whitelist_table_ipv6, hash, entry, hash) {
+    actual_count++;
+  }
+  rcu_read_unlock();
+
+  /* 计算响应大小：头 + 实际条目数量 * 条目大小 */
+  resp_size = sizeof(*resp) + actual_count * sizeof(struct fw_nl_whitelist_entry);
 
   /* 分配 netlink 消息缓冲区 */
   skb = nlmsg_new(resp_size, GFP_ATOMIC);
@@ -886,15 +882,11 @@ int fw_netlink_send_list_whitelist_response(u32 seq, u32 portid) {
   resp->hdr.seq = cpu_to_be32(seq);
   resp->count = 0;
 
-  /* 遍历白名单表填充条目 */
+  /* 第二次遍历：填充条目（自适应数量） */
   rcu_read_lock();
 
   /* IPv4 白名单 */
   hash_for_each_rcu(fw_info.whitelist_table_ipv4, hash, entry, hash) {
-    if (count >= max_entries) {
-      break;
-    }
-
     entries[count].af = FW_AF_INET;
     entries[count].prefix_len = ipv4_mask_to_prefix_len(entry->mask.ipv4_mask);
     memset(entries[count].addr, 0, sizeof(entries[count].addr));
@@ -907,10 +899,6 @@ int fw_netlink_send_list_whitelist_response(u32 seq, u32 portid) {
 
   /* IPv6 白名单 */
   hash_for_each_rcu(fw_info.whitelist_table_ipv6, hash, entry, hash) {
-    if (count >= max_entries) {
-      break;
-    }
-
     entries[count].af = FW_AF_INET6;
     entries[count].prefix_len = entry->mask.prefix_len;
     memcpy(entries[count].addr, &entry->addr.ipv6, 16);
@@ -993,8 +981,8 @@ static void fill_rate_entry(struct fw_nl_rate_entry *out,
  *
  * 性能优化：
  * 1. 动态内存分配：基于实际条目数，避免 4MB GFP_ATOMIC 分配
- * 2. 单次响应上限 4096 条（MAX_RATE_RESPONSE_ENTRIES），超出截断
- * 3. 响应携带 total 字段，守护进程可感知截断
+ * 2. 自适应：无上限限制，返回所有条目
+ * 3. 响应携带 total 字段，守护进程可感知总数
  * 4. 提取 fill_rate_entry 辅助函数消除 IPv4/IPv6 重复代码
  */
 int fw_netlink_send_list_rates_response(u32 seq, u32 portid) {
@@ -1004,7 +992,6 @@ int fw_netlink_send_list_rates_response(u32 seq, u32 portid) {
   struct fw_nl_rate_entry *entries;
   struct ip_rate_entry *entry;
   u32 hash;
-  int max_entries = MAX_RATE_RESPONSE_ENTRIES;
   int resp_size;
   int ret;
   int count = 0;
@@ -1015,11 +1002,8 @@ int fw_netlink_send_list_rates_response(u32 seq, u32 portid) {
     return -ENOTCONN;
   }
 
-  /* 动态计算分配大小：基于实际条目数，避免 4MB 分配 */
+  /* 动态计算分配大小：基于实际条目数（自适应，无上限） */
   total = atomic_read(&fw_info.rate_count);
-  if (total > max_entries) {
-    total = max_entries;
-  }
   resp_size = sizeof(*resp) + total * sizeof(struct fw_nl_rate_entry);
 
   /* 分配 netlink 消息缓冲区 */
@@ -1062,23 +1046,17 @@ int fw_netlink_send_list_rates_response(u32 seq, u32 portid) {
     resp->global_bps = cpu_to_be64(bytes / 2);
   }
 
-  /* 遍历速率表填充条目 - 直接计算实时速率 */
+  /* 遍历速率表填充条目 - 直接计算实时速率（自适应，无上限） */
   rcu_read_lock();
 
   /* IPv4 的速率统计 */
   hash_for_each_rcu(fw_info.rate_table_ipv4, hash, entry, hash) {
-    if (count >= max_entries) {
-      break;
-    }
     fill_rate_entry(&entries[count], entry, FW_AF_INET, now);
     count++;
   }
 
   /* IPv6 的速率统计 */
   hash_for_each_rcu(fw_info.rate_table_ipv6, hash, entry, hash) {
-    if (count >= max_entries) {
-      break;
-    }
     fill_rate_entry(&entries[count], entry, FW_AF_INET6, now);
     count++;
   }

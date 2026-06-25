@@ -4,6 +4,7 @@
 
 #include "firewall.h"
 #include <linux/list.h>
+#include <linux/timer.h>
 #include <linux/printk.h>
 
 extern u32 fw_hash_seed;
@@ -88,12 +89,7 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
     }
   }
 
-  if (atomic_read(&fw->whitelist_count) >= MAX_WHITELIST_ENTRIES) {
-    spin_unlock(&fw->whitelist_lock);
-    kfree(new_entry);
-    pr_warn("白名单表已满 (%d 条目)\n", MAX_WHITELIST_ENTRIES);
-    return -ENOSPC;
-  }
+  /* 跳过容量检查（按需扩展） */
 
   /* 修复：IPv6 路径用预计算桶索引直接 hlist_add_head_rcu,
    * 避免 hash_add_rcu 把 hash_wl_ipv6 结果再次 hash_min 落到错误桶
@@ -135,6 +131,8 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
         hlist_for_each_entry_safe(ban, tmp, &fw->ban_table_ipv4[bkt], hash) {
           if (ban->addr.ipv4 == wl_ip) {
             __be32 expired_ip = ban->addr.ipv4;
+            /* 取消 per-entry 过期定时器，防止 use-after-free */
+            timer_delete_sync(&ban->expire_timer);
             hlist_del_rcu(&ban->hash);
             atomic_dec(&fw->ban_count);
             call_rcu(&ban->rcu_head, free_ban_entry_rcu);
@@ -155,6 +153,8 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
             u32 bkt = hash_min(ban2->addr.ipv4, BAN_HASH_BITS);
             spin_lock_bh(&fw->ban_locks_ipv4[bkt]);
             __be32 expired_ip = ban2->addr.ipv4;
+            /* 取消 per-entry 过期定时器，防止 use-after-free */
+            timer_delete_sync(&ban2->expire_timer);
             list_del_rcu(&ban2->ban_node);
             hlist_del_rcu(&ban2->hash);
             atomic_dec(&fw->ban_count);
@@ -177,6 +177,8 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
           if (ban->af == FW_AF_INET6 &&
               ipv6_addr_equal(&ban->addr.ipv6, (const struct in6_addr *)ip)) {
             struct in6_addr expired_ip6 = ban->addr.ipv6;
+            /* 取消 per-entry 过期定时器，防止 use-after-free */
+            timer_delete_sync(&ban->expire_timer);
             hlist_del_rcu(&ban->hash);
             atomic_dec(&fw->ban_count);
             call_rcu(&ban->rcu_head, free_ban_entry_rcu);
@@ -197,6 +199,8 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
             u32 bkt = hash_ipv6(&ban2->addr.ipv6);
             spin_lock_bh(&fw->ban_locks_ipv6[bkt]);
             struct in6_addr expired_ip6 = ban2->addr.ipv6;
+            /* 取消 per-entry 过期定时器，防止 use-after-free */
+            timer_delete_sync(&ban2->expire_timer);
             list_del_rcu(&ban2->ban_node);
             hlist_del_rcu(&ban2->hash);
             atomic_dec(&fw->ban_count);

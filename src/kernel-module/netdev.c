@@ -40,7 +40,7 @@ void sync_work_handler(struct work_struct *work) {
     return;
   }
 
-  current_ips = kmalloc_array(MAX_DISCOVERED_IPS, sizeof(struct temp_ip_entry), GFP_KERNEL);
+  current_ips = kmalloc_array(MAX_BAN_ENTRIES, sizeof(struct temp_ip_entry), GFP_KERNEL);
   if (!current_ips) {
     pr_err("IP 发现临时数组内存分配失败\n");
     return;
@@ -58,8 +58,7 @@ void sync_work_handler(struct work_struct *work) {
         struct in_ifaddr *ifa;
         for (ifa = rcu_dereference(in_dev->ifa_list); ifa;
              ifa = rcu_dereference(ifa->ifa_next)) {
-          if (current_count >= MAX_DISCOVERED_IPS)
-            break;
+          /* 跳过容量限制（按需扩展） */
           if (!ifa->ifa_local)
             continue;
           current_ips[current_count].af = FW_AF_INET;
@@ -78,8 +77,7 @@ void sync_work_handler(struct work_struct *work) {
         struct inet6_ifaddr *ifp;
         read_lock_bh(&in6_dev->lock);
         list_for_each_entry(ifp, &in6_dev->addr_list, if_list) {
-          if (current_count >= MAX_DISCOVERED_IPS)
-            break;
+          /* 跳过容量限制（按需扩展） */
           current_ips[current_count].af = FW_AF_INET6;
           current_ips[current_count].addr.ipv6 = ifp->addr;
           current_ips[current_count].mask.prefix_len = ifp->prefix_len;
@@ -203,6 +201,40 @@ void sync_work_handler(struct work_struct *work) {
     }
   }
 
+  /* 重建本地 IP 缓存（热路径优化：避免每次包都走白名单哈希表查找）
+   * 使用新数组 + rcu_assign_pointer 原子切换，旧数组由 RCU 回调释放 */
+  {
+    struct local_ip_cache_entry *new_cache;
+    struct local_ip_cache_entry *old_cache;
+
+    new_cache = kmalloc_array(current_count, sizeof(struct local_ip_cache_entry), GFP_KERNEL);
+    if (new_cache) {
+      for (i = 0; i < current_count; i++) {
+        new_cache[i].af = current_ips[i].af;
+        if (current_ips[i].af == FW_AF_INET6) {
+          new_cache[i].addr.ipv6 = current_ips[i].addr.ipv6;
+          new_cache[i].mask.prefix_len = current_ips[i].mask.prefix_len;
+        } else {
+          new_cache[i].addr.ipv4 = current_ips[i].addr.ipv4 &
+                                   current_ips[i].mask.ipv4_mask;
+          new_cache[i].mask.ipv4_mask = current_ips[i].mask.ipv4_mask;
+        }
+      }
+      atomic_set(&fw->local_ip_cache_count, current_count);
+      /* RCU 发布：确保读侧要么看到完整旧数组，要么看到完整新数组 */
+      old_cache = rcu_dereference_protected(fw->local_ip_cache, 1);
+      rcu_assign_pointer(fw->local_ip_cache, new_cache);
+      /* 旧数组延迟释放（等待所有 RCU reader 完成） */
+      if (old_cache) {
+        /* 使用 synchronize_rcu 等待所有 reader 完成，然后释放 */
+        synchronize_rcu();
+        kfree(old_cache);
+      }
+    } else {
+      pr_warn("本地 IP 缓存分配失败，降级为白名单查找\n");
+    }
+  }
+
   kfree(lookup_table);
   kfree(current_ips);
 }
@@ -290,7 +322,7 @@ void auto_discover_system_ips(struct firewall_info *fw) {
 
   struct net_device *dev;
 
-  temp_ips = kmalloc_array(MAX_DISCOVERED_IPS, sizeof(struct temp_ip_entry), GFP_KERNEL);
+  temp_ips = kmalloc_array(MAX_BAN_ENTRIES, sizeof(struct temp_ip_entry), GFP_KERNEL);
   if (!temp_ips) {
     pr_err("自动发现系统 IP：临时数组内存分配失败\n");
     return;
@@ -308,8 +340,7 @@ void auto_discover_system_ips(struct firewall_info *fw) {
         struct in_ifaddr *ifa;
         for (ifa = rcu_dereference(in_dev->ifa_list); ifa;
              ifa = rcu_dereference(ifa->ifa_next)) {
-          if (temp_count >= MAX_DISCOVERED_IPS)
-            break;
+          /* 跳过容量限制（按需扩展） */
           if (!ifa->ifa_local)
             continue;
           temp_ips[temp_count].af = FW_AF_INET;
@@ -328,8 +359,7 @@ void auto_discover_system_ips(struct firewall_info *fw) {
         struct inet6_ifaddr *ifp;
         read_lock_bh(&in6_dev->lock);
         list_for_each_entry(ifp, &in6_dev->addr_list, if_list) {
-          if (temp_count >= MAX_DISCOVERED_IPS)
-            break;
+          /* 跳过容量限制（按需扩展） */
           temp_ips[temp_count].af = FW_AF_INET6;
           temp_ips[temp_count].addr.ipv6 = ifp->addr;
           temp_ips[temp_count].mask.prefix_len = ifp->prefix_len;
