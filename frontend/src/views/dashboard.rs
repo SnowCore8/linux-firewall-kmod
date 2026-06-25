@@ -2,9 +2,9 @@
 
 use leptos::*;
 
-use crate::api::{self, StatsResponse};
+use crate::api::StatsResponse;
 use crate::charts::{LineChart, PieChart};
-use crate::sse::{SseState, ConnectionStatus};
+use crate::sse::SseState;
 use crate::types;
 
 #[component]
