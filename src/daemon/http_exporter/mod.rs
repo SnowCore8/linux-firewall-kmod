@@ -28,6 +28,12 @@ pub fn is_exporter_running() -> bool {
 pub struct JailInfo {
     pub name: String,
     pub enabled: bool,
+    /// 触发封禁的失败次数阈值
+    pub max_retries: u32,
+    /// 滑动窗口大小（秒）
+    pub findtime: u32,
+    /// 封禁时长（秒），-1 表示永久
+    pub ban_time: i32,
 }
 
 /// 全局 Jail 信息存储（使用 OnceLock<RwLock> 支持热更新，兼容 Rust 1.75 MSRV）
@@ -201,5 +207,8 @@ mod tests {
         assert!(metrics.contains("firewall_netlink_messages_received_total"));
         assert!(metrics.contains("firewall_netlink_send_errors_total"));
         assert!(metrics.contains("firewall_netlink_recv_errors_total"));
+        assert!(metrics.contains("firewall_reputation_tracked_ips"));
+        assert!(metrics.contains("firewall_reputation_low_count"));
+        assert!(metrics.contains("firewall_reputation_critical_count"));
     }
 }

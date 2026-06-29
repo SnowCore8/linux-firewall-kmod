@@ -28,7 +28,7 @@ fn read_kernel_stats() -> (u64, u64, u64, u64) {
 
 /// 生成 Prometheus 文本格式 (`text/plain; version=0.0.4`) 的全部指标。
 ///
-/// 包含 4 个内核态 + 13 个用户态 + 4 个 netlink 健康 + 1 个 `uptime` gauge（共 22 个）。
+/// 包含 4 个内核态 + 13 个用户态 + 4 个 netlink 健康 + 1 个 uptime + 3 个信誉分（共 25 个）。
 ///
 /// # Returns
 /// Prometheus exposition 格式字符串
@@ -64,10 +64,25 @@ pub(super) fn generate_metrics() -> String {
 
     let start_time = DAEMON_STATS.start_time.load(Ordering::Relaxed);
     let uptime = if start_time > 0 {
-        now_secs() as u64 - start_time
+        (now_secs() as u64).saturating_sub(start_time)
     } else {
         0
     };
+
+    // IP 信誉分指标（单次 snapshot 避免双重读锁+克隆）
+    let reputation_store = crate::ip_reputation::get_store();
+    let reputation_snapshot = reputation_store.snapshot();
+    let reputation_tracked = reputation_snapshot.len() as u64;
+    let mut reputation_low = 0u64;
+    let mut reputation_critical = 0u64;
+    for entry in &reputation_snapshot {
+        if entry.score < 50 {
+            reputation_critical += 1;
+            reputation_low += 1; // < 50 也是 < 80
+        } else if entry.score < 80 {
+            reputation_low += 1;
+        }
+    }
 
     format!(
         "# HELP firewall_kernel_banned_ips_current Current number of banned IPs in kernel\n\
@@ -153,6 +168,18 @@ pub(super) fn generate_metrics() -> String {
          # HELP firewall_daemon_uptime_seconds Daemon uptime in seconds\n\
          # TYPE firewall_daemon_uptime_seconds gauge\n\
          firewall_daemon_uptime_seconds {uptime}\n\
+         \n\
+         # HELP firewall_reputation_tracked_ips Current number of IPs tracked by reputation system\n\
+         # TYPE firewall_reputation_tracked_ips gauge\n\
+         firewall_reputation_tracked_ips {reputation_tracked}\n\
+         \n\
+         # HELP firewall_reputation_low_count IPs with reputation score below 80 (suspicious)\n\
+         # TYPE firewall_reputation_low_count gauge\n\
+         firewall_reputation_low_count {reputation_low}\n\
+         \n\
+         # HELP firewall_reputation_critical_count IPs with reputation score below 50 (high risk, stricter thresholds)\n\
+         # TYPE firewall_reputation_critical_count gauge\n\
+         firewall_reputation_critical_count {reputation_critical}\n\
          "
     )
 }

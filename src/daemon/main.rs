@@ -106,6 +106,8 @@ fn main() -> Result<()> {
 
     // 如果存在持久化配置（来自上次热重载），合并运行时配置变更
     // 持久化配置优先于原始配置文件（保留热重载后的调整）
+    // 注意：持久化配置仅包含 ddos/webui/capacity/trusted_ips，不含 jails 段，
+    // 因此 parse_config 不会追加 jail，无需清空 cfg.jails
     if let Some(persisted) = config_reloader::load_persisted_config() {
         match config::parse_config(&persisted, &mut cfg) {
             Ok(_) => {
@@ -123,6 +125,10 @@ fn main() -> Result<()> {
         return Err(anyhow::anyhow!("{}", e));
     }
     cfg.daemon = daemon_mode;
+
+    // 缓存 trusted_ips 和 capacity 到全局状态（供 persist_runtime_config 使用）
+    config_reloader::set_global_trusted_ips(&cfg.trusted_ips);
+    config_reloader::set_global_capacity(&cfg.capacity);
 
     // 应用动态阈值基线配置
     firewall_daemon::types::set_baseline_warmup_samples(cfg.ddos.baseline_warmup_samples);
@@ -269,6 +275,9 @@ fn main() -> Result<()> {
             .map(|j| http_exporter::JailInfo {
                 name: j.name.clone(),
                 enabled: j.enabled,
+                max_retries: j.max_retries,
+                findtime: j.findtime,
+                ban_time: j.ban_time,
             })
             .collect();
         http_exporter::set_global_jails(jail_infos);
@@ -280,7 +289,7 @@ fn main() -> Result<()> {
     // send_stats_query 仅在启动时调用一次，必须周期触发才能持续同步 packets_dropped/accepted。
     // 注意：BanStateChange 事件已携带实时统计字段，此轮询作为兜底同步机制。
     {
-        std::thread::Builder::new()
+        if let Err(e) = std::thread::Builder::new()
             .name("netlink-stats-poll".into())
             .spawn(|| {
                 info!(logger::get(), "netlink stats 轮询线程启动");
@@ -299,11 +308,21 @@ fn main() -> Result<()> {
                                 "error" => %e
                             );
                         }
+                        // 同时拉取分析数据（包大小/TTL/分片/UDP/ICMP/端口扫描/服务探测）
+                        if let Err(e) = ctx.send_analysis_query(seq_counter.wrapping_add(1)) {
+                            crate::logger::debug!(
+                                crate::logger::get(),
+                                "netlink analysis 查询失败";
+                                "error" => %e
+                            );
+                        }
                     }
                 }
                 info!(logger::get(), "netlink stats 轮询线程退出");
             })
-            .ok();
+        {
+            warn!(logger::get(), "netlink stats 轮询线程启动失败"; "error" => %e);
+        }
     }
 
     let mut exporter_handle = None;
@@ -364,16 +383,20 @@ fn main() -> Result<()> {
 fn handle_rollback() -> Result<()> {
     println!("正在请求配置回滚...");
 
-    // 查找正在运行的 firewall-daemon 进程
+    // 查找正在运行的 firewall-daemon 进程（排除自身 PID）
+    let my_pid = std::process::id();
     let pid = std::process::Command::new("pgrep")
         .arg("-f")
         .arg("firewall-daemon")
         .output()
         .ok()
         .and_then(|output| {
-            String::from_utf8(output.stdout)
-                .ok()
-                .and_then(|s| s.lines().next().map(|p| p.to_string()))
+            String::from_utf8(output.stdout).ok().and_then(|s| {
+                s.lines()
+                    .filter_map(|l| l.parse::<u32>().ok())
+                    .find(|&p| p != my_pid)
+                    .map(|p| p.to_string())
+            })
         });
 
     match pid {
@@ -384,8 +407,7 @@ fn handle_rollback() -> Result<()> {
                 return Err(anyhow::anyhow!("Invalid daemon PID"));
             }
 
-            // 发送 SIGUSR1 信号触发回滚
-            // 注意：当前 signals.rs 未注册 SIGUSR1 处理器，需要扩展
+            // 发送 SIGUSR1 信号触发回滚（signals.rs 已注册处理器）
             println!("向守护进程 (PID: {}) 发送回滚信号...", pid_num);
             let status = std::process::Command::new("kill")
                 .arg("-USR1")

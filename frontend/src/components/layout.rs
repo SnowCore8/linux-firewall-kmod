@@ -7,10 +7,7 @@ use crate::sse::{self, ConnectionStatus, SseState};
 use crate::theme;
 
 #[component]
-pub fn DefaultLayout(
-    sse_state: SseState,
-    children: Children,
-) -> impl IntoView {
+pub fn DefaultLayout(sse_state: SseState, children: Children) -> impl IntoView {
     let status = sse_state.status;
     let reconnect_attempt = sse_state.reconnect_attempt;
     let sidebar_open = create_rw_signal(false);
@@ -122,6 +119,7 @@ pub fn DefaultLayout(
                             ConnectionStatus::Connected => "LIVE",
                             ConnectionStatus::Connecting => "...",
                             ConnectionStatus::Disconnected => "OFF",
+                            ConnectionStatus::ConnectionLimit => "LIMIT",
                         }}</span>
                     </div>
                     <a href="/metrics" target="_blank"
@@ -133,16 +131,20 @@ pub fn DefaultLayout(
 
             <div class="main-content">
                 <Show
-                    when=move || status.get() == ConnectionStatus::Disconnected
+                    when=move || matches!(status.get(), ConnectionStatus::Disconnected | ConnectionStatus::ConnectionLimit)
                     fallback=|| ()
                 >
                     <div class="offline-banner">
                         <span>{move || {
-                            let n = reconnect_attempt.get();
-                            if n > 0 {
-                                format!("⚠ 连接已断开，第 {} 次重连中...", n)
+                            if status.get() == ConnectionStatus::ConnectionLimit {
+                                "⚠ SSE 连接数已达上限，请关闭其他标签页后刷新".to_string()
                             } else {
-                                "⚠ 连接已断开".to_string()
+                                let n = reconnect_attempt.get();
+                                if n > 0 {
+                                    format!("⚠ 连接已断开，第 {} 次重连中...", n)
+                                } else {
+                                    "⚠ 连接已断开".to_string()
+                                }
                             }
                         }}</span>
                     </div>
@@ -171,6 +173,7 @@ pub fn DefaultLayout(
                                 ConnectionStatus::Connected => "CONNECTED",
                                 ConnectionStatus::Connecting => "CONNECTING",
                                 ConnectionStatus::Disconnected => "DISCONNECTED",
+                                ConnectionStatus::ConnectionLimit => "LIMIT REACHED",
                             }}</span>
                         </div>
                         <button class="btn btn-icon" on:click=move |_| theme::toggle_theme()>

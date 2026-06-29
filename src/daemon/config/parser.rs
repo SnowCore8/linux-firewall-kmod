@@ -185,6 +185,19 @@ struct YamlWebui {
     rate_critical_pps: Option<u64>,
     rate_warning_syn: Option<u64>,
     rate_critical_syn: Option<u64>,
+    max_syn_per_second: Option<u32>,
+    max_udp_per_second: Option<u32>,
+    max_icmp_per_second: Option<u32>,
+    max_ack_per_second: Option<u32>,
+    max_rst_per_second: Option<u32>,
+    max_fin_per_second: Option<u32>,
+    static_threshold: Option<bool>,
+    dynamic_threshold: Option<bool>,
+    ddos_detection: Option<bool>,
+    max_ban_entries: Option<u32>,
+    max_whitelist_entries: Option<u32>,
+    max_rate_entries: Option<u32>,
+    max_local_ip_cache: Option<u32>,
 }
 
 /// 容量配置的 YAML 表示（用户自定义上限）
@@ -384,6 +397,45 @@ pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
         }
         if let Some(rate) = webui.rate_critical_syn {
             cfg.webui.rate_critical_syn = rate;
+        }
+        if let Some(v) = webui.max_syn_per_second {
+            cfg.webui.max_syn_per_second = v;
+        }
+        if let Some(v) = webui.max_udp_per_second {
+            cfg.webui.max_udp_per_second = v;
+        }
+        if let Some(v) = webui.max_icmp_per_second {
+            cfg.webui.max_icmp_per_second = v;
+        }
+        if let Some(v) = webui.max_ack_per_second {
+            cfg.webui.max_ack_per_second = v;
+        }
+        if let Some(v) = webui.max_rst_per_second {
+            cfg.webui.max_rst_per_second = v;
+        }
+        if let Some(v) = webui.max_fin_per_second {
+            cfg.webui.max_fin_per_second = v;
+        }
+        if let Some(v) = webui.static_threshold {
+            cfg.webui.static_threshold = v;
+        }
+        if let Some(v) = webui.dynamic_threshold {
+            cfg.webui.dynamic_threshold = v;
+        }
+        if let Some(v) = webui.ddos_detection {
+            cfg.webui.ddos_detection = v;
+        }
+        if let Some(v) = webui.max_ban_entries {
+            cfg.webui.max_ban_entries = v;
+        }
+        if let Some(v) = webui.max_whitelist_entries {
+            cfg.webui.max_whitelist_entries = v;
+        }
+        if let Some(v) = webui.max_rate_entries {
+            cfg.webui.max_rate_entries = v;
+        }
+        if let Some(v) = webui.max_local_ip_cache {
+            cfg.webui.max_local_ip_cache = v;
         }
     }
 

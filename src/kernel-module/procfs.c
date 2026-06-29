@@ -629,16 +629,14 @@ static int execute_whitelist_action(u8 af, void *ip, int prefix_len, const char 
       for (i = 0; i < 16; i++)
         normalized.ipv6.s6_addr[i] = addr->s6_addr[i] & mask.s6_addr[i];
     } else {
-      __be32 mask4 = prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1));
+      __be32 mask4 = prefix_len == 0 ? 0 : htonl(~0U << (32 - prefix_len));
       normalized.ipv4 = *(__be32 *)ip & mask4;
       af = FW_AF_INET;
     }
 
     result = add_whitelist_entry(
       &fw_info, af, &normalized,
-      af == FW_AF_INET6 ?
-        NULL :
-        (__be32[]){ prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1)) },
+      af == FW_AF_INET6 ? NULL : (__be32[]){ prefix_len == 0 ? 0 : htonl(~0U << (32 - prefix_len)) },
       prefix_len, "manual");
     if (result < 0) {
       return result;
@@ -851,6 +849,8 @@ static int stats_show(struct seq_file *m, void *v) {
              (unsigned long long)atomic64_read(&fw->packets_dropped));
   seq_printf(m, "packets_accepted %llu\n",
              (unsigned long long)atomic64_read(&fw->packets_accepted));
+  seq_printf(m, "tcp_anomaly_dropped %llu\n",
+             (unsigned long long)atomic64_read(&fw->tcp_anomaly_dropped));
   seq_printf(m, "cleanup_cycles %u\n", (unsigned int)atomic_read(&fw->cleanup_cycles));
   seq_printf(m, "cleanup_expired_total %u\n",
              (unsigned int)atomic_read(&fw->cleanup_expired_total));
@@ -942,6 +942,376 @@ static const struct proc_ops rates_fops = {
   .proc_release = single_release,
 };
 
+/* UDP 端口分布统计 */
+static int udp_ports_show(struct seq_file *m, void *v) {
+  struct firewall_info *fw = &fw_info;
+  struct udp_port_entry *entry;
+  u32 hash;
+  unsigned long now = jiffies;
+  int count = 0;
+
+  seq_printf(m, "UDP Port Distribution:\n");
+  seq_printf(m, "----------------------\n");
+  seq_printf(m, "Total entries: %d / %d\n", atomic_read(&fw->udp_port_count),
+             MAX_UDP_PORT_ENTRIES);
+  seq_printf(m, "----------------------\n");
+  seq_printf(m, "%-8s %12s %12s %10s\n", "Port", "Packets", "Bytes", "LastSeen");
+
+  rcu_read_lock();
+  hash_for_each_rcu(fw->udp_port_table, hash, entry, hash) {
+    u64 packets = atomic64_read(&entry->packet_count);
+    u64 bytes = atomic64_read(&entry->byte_count);
+    unsigned long age = (now - entry->last_seen) / HZ;
+
+    seq_printf(m, "%-8u %12llu %12llu %8lus\n", entry->port, packets, bytes, age);
+    count++;
+  }
+  rcu_read_unlock();
+
+  seq_printf(m, "----------------------\n");
+  seq_printf(m, "Displayed: %d ports\n", count);
+  return 0;
+}
+
+static int udp_ports_open(struct inode *inode, struct file *file) {
+  return single_open(file, udp_ports_show, NULL);
+}
+
+static const struct proc_ops udp_ports_fops = {
+  .proc_open = udp_ports_open,
+  .proc_read = seq_read,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
+};
+
+/* ICMP 类型分布统计 */
+static int icmp_types_show(struct seq_file *m, void *v) {
+  struct firewall_info *fw = &fw_info;
+  struct icmp_type_entry *entry;
+  u32 hash;
+  unsigned long now = jiffies;
+  int count = 0;
+
+  seq_printf(m, "ICMP Type Distribution:\n");
+  seq_printf(m, "-----------------------\n");
+  seq_printf(m, "Total entries: %d / %d\n", atomic_read(&fw->icmp_type_count),
+             MAX_ICMP_TYPE_ENTRIES);
+  seq_printf(m, "-----------------------\n");
+  seq_printf(m, "%-6s %-6s %12s %12s %10s\n", "Type", "Code", "Packets", "Bytes", "LastSeen");
+
+  rcu_read_lock();
+  hash_for_each_rcu(fw->icmp_type_table, hash, entry, hash) {
+    u64 packets = atomic64_read(&entry->packet_count);
+    u64 bytes = atomic64_read(&entry->byte_count);
+    unsigned long age = (now - entry->last_seen) / HZ;
+
+    seq_printf(m, "%-6u %-6u %12llu %12llu %8lus\n", entry->type, entry->code,
+               packets, bytes, age);
+    count++;
+  }
+  rcu_read_unlock();
+
+  seq_printf(m, "-----------------------\n");
+  seq_printf(m, "Displayed: %d types\n", count);
+  return 0;
+}
+
+static int icmp_types_open(struct inode *inode, struct file *file) {
+  return single_open(file, icmp_types_show, NULL);
+}
+
+static const struct proc_ops icmp_types_fops = {
+  .proc_open = icmp_types_open,
+  .proc_read = seq_read,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
+};
+
+/* 包大小分布直方图 */
+static int pkt_sizes_show(struct seq_file *m, void *v) {
+  struct firewall_info *fw = &fw_info;
+  u64 tiny, small, medium, large, jumbo, total;
+
+  tiny = atomic64_read(&fw->pkt_size_tiny);
+  small = atomic64_read(&fw->pkt_size_small);
+  medium = atomic64_read(&fw->pkt_size_medium);
+  large = atomic64_read(&fw->pkt_size_large);
+  jumbo = atomic64_read(&fw->pkt_size_jumbo);
+  total = tiny + small + medium + large + jumbo;
+
+  seq_printf(m, "Packet Size Distribution:\n");
+  seq_printf(m, "-------------------------\n");
+  seq_printf(m, "%-12s %12s %8s\n", "Size Range", "Packets", "Percent");
+  seq_printf(m, "-------------------------\n");
+
+  if (total > 0) {
+    seq_printf(m, "%-12s %12llu %7llu%%\n", "<64B", tiny, (tiny * 100) / total);
+    seq_printf(m, "%-12s %12llu %7llu%%\n", "64-256B", small, (small * 100) / total);
+    seq_printf(m, "%-12s %12llu %7llu%%\n", "256B-1KB", medium, (medium * 100) / total);
+    seq_printf(m, "%-12s %12llu %7llu%%\n", "1-1.5KB", large, (large * 100) / total);
+    seq_printf(m, "%-12s %12llu %7llu%%\n", ">1.5KB", jumbo, (jumbo * 100) / total);
+  } else {
+    seq_printf(m, "%-12s %12llu %7d%%\n", "<64B", tiny, 0);
+    seq_printf(m, "%-12s %12llu %7d%%\n", "64-256B", small, 0);
+    seq_printf(m, "%-12s %12llu %7d%%\n", "256B-1KB", medium, 0);
+    seq_printf(m, "%-12s %12llu %7d%%\n", "1-1.5KB", large, 0);
+    seq_printf(m, "%-12s %12llu %7d%%\n", ">1.5KB", jumbo, 0);
+  }
+
+  seq_printf(m, "-------------------------\n");
+  seq_printf(m, "Total: %llu packets\n", total);
+  return 0;
+}
+
+static int pkt_sizes_open(struct inode *inode, struct file *file) {
+  return single_open(file, pkt_sizes_show, NULL);
+}
+
+static const struct proc_ops pkt_sizes_fops = {
+  .proc_open = pkt_sizes_open,
+  .proc_read = seq_read,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
+};
+
+/* TTL 分布直方图 */
+static int ttl_dist_show(struct seq_file *m, void *v) {
+  struct firewall_info *fw = &fw_info;
+  u64 scan, very_short, short_ttl, normal, long_ttl, max_ttl, total;
+
+  scan = atomic64_read(&fw->ttl_scan);
+  very_short = atomic64_read(&fw->ttl_very_short);
+  short_ttl = atomic64_read(&fw->ttl_short);
+  normal = atomic64_read(&fw->ttl_normal);
+  long_ttl = atomic64_read(&fw->ttl_long);
+  max_ttl = atomic64_read(&fw->ttl_max);
+  total = scan + very_short + short_ttl + normal + long_ttl + max_ttl;
+
+  seq_printf(m, "TTL Distribution:\n");
+  seq_printf(m, "-------------------------\n");
+  seq_printf(m, "%-12s %12s %8s\n", "TTL Range", "Packets", "Percent");
+  seq_printf(m, "-------------------------\n");
+
+  if (total > 0) {
+    seq_printf(m, "%-12s %12llu %7llu%%\n", "=1", scan, (scan * 100) / total);
+    seq_printf(m, "%-12s %12llu %7llu%%\n", "2-32", very_short, (very_short * 100) / total);
+    seq_printf(m, "%-12s %12llu %7llu%%\n", "33-64", short_ttl, (short_ttl * 100) / total);
+    seq_printf(m, "%-12s %12llu %7llu%%\n", "65-128", normal, (normal * 100) / total);
+    seq_printf(m, "%-12s %12llu %7llu%%\n", "129-192", long_ttl, (long_ttl * 100) / total);
+    seq_printf(m, "%-12s %12llu %7llu%%\n", "193-255", max_ttl, (max_ttl * 100) / total);
+  } else {
+    seq_printf(m, "%-12s %12llu %7d%%\n", "=1", scan, 0);
+    seq_printf(m, "%-12s %12llu %7d%%\n", "2-32", very_short, 0);
+    seq_printf(m, "%-12s %12llu %7d%%\n", "33-64", short_ttl, 0);
+    seq_printf(m, "%-12s %12llu %7d%%\n", "65-128", normal, 0);
+    seq_printf(m, "%-12s %12llu %7d%%\n", "129-192", long_ttl, 0);
+    seq_printf(m, "%-12s %12llu %7d%%\n", "193-255", max_ttl, 0);
+  }
+
+  seq_printf(m, "-------------------------\n");
+  seq_printf(m, "Total: %llu packets\n", total);
+  return 0;
+}
+
+static int ttl_dist_open(struct inode *inode, struct file *file) {
+  return single_open(file, ttl_dist_show, NULL);
+}
+
+static const struct proc_ops ttl_dist_fops = {
+  .proc_open = ttl_dist_open,
+  .proc_read = seq_read,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
+};
+
+/* IP 分片统计 */
+static int ip_frags_show(struct seq_file *m, void *v) {
+  struct firewall_info *fw = &fw_info;
+  u64 frag_count, total_count, percentage;
+
+  frag_count = atomic64_read(&fw->ip_frag_count);
+  total_count = atomic64_read(&fw->ip_total_count);
+
+  if (total_count > 0)
+    percentage = (frag_count * 100) / total_count;
+  else
+    percentage = 0;
+
+  seq_printf(m, "IP Fragment Statistics:\n");
+  seq_printf(m, "-------------------------\n");
+  seq_printf(m, "Total IP packets:  %llu\n", total_count);
+  seq_printf(m, "Fragmented packets: %llu\n", frag_count);
+  seq_printf(m, "Fragment ratio:    %llu%%\n", percentage);
+  return 0;
+}
+
+static int ip_frags_open(struct inode *inode, struct file *file) {
+  return single_open(file, ip_frags_show, NULL);
+}
+
+static const struct proc_ops ip_frags_fops = {
+  .proc_open = ip_frags_open,
+  .proc_read = seq_read,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
+};
+
+/* 端口扫描检测：遍历速率表，找出 unique_ports >= 阈值的 IP */
+#define PORT_SCAN_THRESHOLD 5 /* 访问 >= 5 个不同端口视为扫描 */
+#define PORT_SCAN_MAX_RESULTS 20
+
+static int port_scanners_show(struct seq_file *m, void *v) {
+  struct firewall_info *fw = &fw_info;
+  int i, count = 0;
+  u32 detected;
+
+  detected = atomic_read(&fw->port_scan_detected);
+
+  seq_printf(m, "Port Scan Detection:\n");
+  seq_printf(m, "Threshold: %d unique ports\n", PORT_SCAN_THRESHOLD);
+  seq_printf(m, "Total scans detected: %u\n", detected);
+  seq_printf(m, "-------------------------\n");
+  seq_printf(m, "%-20s %12s %12s\n", "IP", "Unique Ports", "Packets");
+  seq_printf(m, "-------------------------\n");
+
+  /* 遍历 IPv4 速率表 */
+  rcu_read_lock();
+  for (i = 0; i < (1 << RATE_HASH_BITS) && count < PORT_SCAN_MAX_RESULTS; i++) {
+    struct ip_rate_entry *entry;
+    struct hlist_head *head = &fw->rate_table_ipv4[i];
+
+    hlist_for_each_entry_rcu(entry, head, hash) {
+      int unique = atomic_read(&entry->unique_ports);
+      if (unique >= PORT_SCAN_THRESHOLD && count < PORT_SCAN_MAX_RESULTS) {
+        char ip_str[INET_ADDRSTRLEN];
+        __be32 addr = entry->addr.ipv4;
+        snprintf(ip_str, sizeof(ip_str), "%pI4", &addr);
+        seq_printf(m, "%-20s %12d %12llu\n", ip_str, unique,
+                   (unsigned long long)atomic64_read(&entry->packet_count));
+        count++;
+      }
+    }
+  }
+
+  /* 遍历 IPv6 速率表 */
+  for (i = 0; i < (1 << RATE_HASH_BITS) && count < PORT_SCAN_MAX_RESULTS; i++) {
+    struct ip_rate_entry *entry;
+    struct hlist_head *head = &fw->rate_table_ipv6[i];
+
+    hlist_for_each_entry_rcu(entry, head, hash) {
+      int unique = atomic_read(&entry->unique_ports);
+      if (unique >= PORT_SCAN_THRESHOLD && count < PORT_SCAN_MAX_RESULTS) {
+        char ip_str[INET6_ADDRSTRLEN];
+        snprintf(ip_str, sizeof(ip_str), "%pI6", &entry->addr.ipv6);
+        seq_printf(m, "%-20s %12d %12llu\n", ip_str, unique,
+                   (unsigned long long)atomic64_read(&entry->packet_count));
+        count++;
+      }
+    }
+  }
+  rcu_read_unlock();
+
+  if (count == 0)
+    seq_printf(m, "No port scanners detected\n");
+
+  return 0;
+}
+
+static int port_scanners_open(struct inode *inode, struct file *file) {
+  return single_open(file, port_scanners_show, NULL);
+}
+
+static const struct proc_ops port_scanners_fops = {
+  .proc_open = port_scanners_open,
+  .proc_read = seq_read,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
+};
+
+/* 服务探测检测：找出对多种协议发送数据的 IP（可能在做服务探测） */
+#define SERVICE_PROBE_THRESHOLD 3 /* 使用 >= 3 种不同协议视为探测 */
+#define SERVICE_PROBE_MAX_RESULTS 20
+
+static int service_probes_show(struct seq_file *m, void *v) {
+  struct firewall_info *fw = &fw_info;
+  int i, count = 0;
+
+  seq_printf(m, "Service Probe Detection:\n");
+  seq_printf(m, "Threshold: %d protocol types\n", SERVICE_PROBE_THRESHOLD);
+  seq_printf(m, "-------------------------\n");
+  seq_printf(m, "%-20s %10s %12s\n", "IP", "Protocols", "Packets");
+  seq_printf(m, "-------------------------\n");
+
+  /* 遍历 IPv4 速率表 */
+  rcu_read_lock();
+  for (i = 0; i < (1 << RATE_HASH_BITS) && count < SERVICE_PROBE_MAX_RESULTS; i++) {
+    struct ip_rate_entry *entry;
+    struct hlist_head *head = &fw->rate_table_ipv4[i];
+
+    hlist_for_each_entry_rcu(entry, head, hash) {
+      int proto_count = 0;
+      if (atomic64_read(&entry->syn_count) > 0 || atomic64_read(&entry->ack_count) > 0 ||
+          atomic64_read(&entry->rst_count) > 0 || atomic64_read(&entry->fin_count) > 0)
+        proto_count++; /* TCP 算一种 */
+      if (atomic64_read(&entry->udp_count) > 0)
+        proto_count++;
+      if (atomic64_read(&entry->icmp_count) > 0)
+        proto_count++;
+
+      if (proto_count >= SERVICE_PROBE_THRESHOLD && count < SERVICE_PROBE_MAX_RESULTS) {
+        char ip_str[INET_ADDRSTRLEN];
+        __be32 addr = entry->addr.ipv4;
+        snprintf(ip_str, sizeof(ip_str), "%pI4", &addr);
+        seq_printf(m, "%-20s %10d %12llu\n", ip_str, proto_count,
+                   (unsigned long long)atomic64_read(&entry->packet_count));
+        count++;
+      }
+    }
+  }
+
+  /* 遍历 IPv6 速率表 */
+  for (i = 0; i < (1 << RATE_HASH_BITS) && count < SERVICE_PROBE_MAX_RESULTS; i++) {
+    struct ip_rate_entry *entry;
+    struct hlist_head *head = &fw->rate_table_ipv6[i];
+
+    hlist_for_each_entry_rcu(entry, head, hash) {
+      int proto_count = 0;
+      if (atomic64_read(&entry->syn_count) > 0 || atomic64_read(&entry->ack_count) > 0 ||
+          atomic64_read(&entry->rst_count) > 0 || atomic64_read(&entry->fin_count) > 0)
+        proto_count++;
+      if (atomic64_read(&entry->udp_count) > 0)
+        proto_count++;
+      if (atomic64_read(&entry->icmp_count) > 0)
+        proto_count++;
+
+      if (proto_count >= SERVICE_PROBE_THRESHOLD && count < SERVICE_PROBE_MAX_RESULTS) {
+        char ip_str[INET6_ADDRSTRLEN];
+        snprintf(ip_str, sizeof(ip_str), "%pI6", &entry->addr.ipv6);
+        seq_printf(m, "%-20s %10d %12llu\n", ip_str, proto_count,
+                   (unsigned long long)atomic64_read(&entry->packet_count));
+        count++;
+      }
+    }
+  }
+  rcu_read_unlock();
+
+  if (count == 0)
+    seq_printf(m, "No service probes detected\n");
+
+  return 0;
+}
+
+static int service_probes_open(struct inode *inode, struct file *file) {
+  return single_open(file, service_probes_show, NULL);
+}
+
+static const struct proc_ops service_probes_fops = {
+  .proc_open = service_probes_open,
+  .proc_read = seq_read,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
+};
+
 /*
  * create_procfs_entries - 创建 procfs 接口
  */
@@ -980,6 +1350,48 @@ int create_procfs_entries(struct firewall_info *fw) {
   }
   fw->proc_rates = entry;
 
+  entry = proc_create("udp_ports", 0400, fw->proc_dir, &udp_ports_fops);
+  if (!entry) {
+    goto err_cleanup;
+  }
+  fw->proc_udp_ports = entry;
+
+  entry = proc_create("icmp_types", 0400, fw->proc_dir, &icmp_types_fops);
+  if (!entry) {
+    goto err_cleanup;
+  }
+  fw->proc_icmp_types = entry;
+
+  entry = proc_create("pkt_sizes", 0400, fw->proc_dir, &pkt_sizes_fops);
+  if (!entry) {
+    goto err_cleanup;
+  }
+  fw->proc_pkt_sizes = entry;
+
+  entry = proc_create("ttl_dist", 0400, fw->proc_dir, &ttl_dist_fops);
+  if (!entry) {
+    goto err_cleanup;
+  }
+  fw->proc_ttl_dist = entry;
+
+  entry = proc_create("ip_frags", 0400, fw->proc_dir, &ip_frags_fops);
+  if (!entry) {
+    goto err_cleanup;
+  }
+  fw->proc_ip_frags = entry;
+
+  entry = proc_create("port_scanners", 0400, fw->proc_dir, &port_scanners_fops);
+  if (!entry) {
+    goto err_cleanup;
+  }
+  fw->proc_port_scanners = entry;
+
+  entry = proc_create("service_probes", 0400, fw->proc_dir, &service_probes_fops);
+  if (!entry) {
+    goto err_cleanup;
+  }
+  fw->proc_service_probes = entry;
+
   return 0;
 
 err_cleanup:
@@ -992,17 +1404,57 @@ EXPORT_SYMBOL_GPL(create_procfs_entries);
  * destroy_procfs_entries - 移除 procfs 条目
  */
 void destroy_procfs_entries(struct firewall_info *fw) {
-  if (fw->proc_rates)
+  if (fw->proc_service_probes) {
+    proc_remove(fw->proc_service_probes);
+    fw->proc_service_probes = NULL;
+  }
+  if (fw->proc_port_scanners) {
+    proc_remove(fw->proc_port_scanners);
+    fw->proc_port_scanners = NULL;
+  }
+  if (fw->proc_ip_frags) {
+    proc_remove(fw->proc_ip_frags);
+    fw->proc_ip_frags = NULL;
+  }
+  if (fw->proc_ttl_dist) {
+    proc_remove(fw->proc_ttl_dist);
+    fw->proc_ttl_dist = NULL;
+  }
+  if (fw->proc_pkt_sizes) {
+    proc_remove(fw->proc_pkt_sizes);
+    fw->proc_pkt_sizes = NULL;
+  }
+  if (fw->proc_icmp_types) {
+    proc_remove(fw->proc_icmp_types);
+    fw->proc_icmp_types = NULL;
+  }
+  if (fw->proc_udp_ports) {
+    proc_remove(fw->proc_udp_ports);
+    fw->proc_udp_ports = NULL;
+  }
+  if (fw->proc_rates) {
     proc_remove(fw->proc_rates);
-  if (fw->proc_stats)
+    fw->proc_rates = NULL;
+  }
+  if (fw->proc_stats) {
     proc_remove(fw->proc_stats);
-  if (fw->proc_whitelist)
+    fw->proc_stats = NULL;
+  }
+  if (fw->proc_whitelist) {
     proc_remove(fw->proc_whitelist);
-  if (fw->proc_config)
+    fw->proc_whitelist = NULL;
+  }
+  if (fw->proc_config) {
     proc_remove(fw->proc_config);
-  if (fw->proc_bans)
+    fw->proc_config = NULL;
+  }
+  if (fw->proc_bans) {
     proc_remove(fw->proc_bans);
-  if (fw->proc_dir)
+    fw->proc_bans = NULL;
+  }
+  if (fw->proc_dir) {
     proc_remove(fw->proc_dir);
+    fw->proc_dir = NULL;
+  }
 }
 EXPORT_SYMBOL_GPL(destroy_procfs_entries);

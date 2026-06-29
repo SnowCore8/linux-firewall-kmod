@@ -9,12 +9,12 @@
 ### 技术栈
 
 - **内核模块**：C 语言，Linux Kernel Module + netfilter hooks
-- **守护进程**：Rust（v2.2.0 起从 C 翻译），5.2MB stripped 二进制（含 Leptos WASM 前端）
+- **守护进程**：Rust（v2.2.0 起从 C 翻译），6.2MB stripped 二进制（含 Leptos WASM 前端）
 - **前端**：Leptos 0.6 + trunk（纯 Rust WASM，无 Node.js 依赖），7 个页面 + SVG 图表
 - **构建系统**：Makefile + Cargo + trunk
-- **测试框架**：Bash 集成测试（115 项用例，19 个套件）+ Rust 单元测试（88 项）
+- **测试框架**：Bash 集成测试（19 个套件）+ Rust 单元测试（93 项）
 - **配置格式**：YAML（Jail 配置）
-- **监控导出**：Prometheus 指标（端口 9119）
+- **监控导出**：Prometheus 指标（端口 9119，24 个指标）
 
 ### 核心架构
 
@@ -120,7 +120,7 @@ sudo rmmod firewall
 ### 运行测试
 
 ```bash
-# 完整测试套件（115 项集成测试 + 88 项单元测试）
+# 完整测试套件（集成测试 + 93 项单元测试）
 make test
 
 # 仅 Rust 单元测试
@@ -220,16 +220,16 @@ perf(kmod): 优化速率检测使用平均速率
 - 守护进程与内核模块的交互协议
 
 **测试分层**：
-- **单元测试**：`cargo test`（88 项）
-- **集成测试**：`make test`（115 项，19 个套件）
+- **单元测试**：`cargo test`（93 项）
+- **集成测试**：`make test`（19 个套件）
 - **行为审计**：C 到 Rust 移植时按需触发
 
 ### 内存安全（Rust unsafe）
 
-当前代码库有 **49 个 unsafe 块**，分布在：
-- `netlink/protocol.rs`（14）— netlink 消息序列化/反序列化
+当前代码库有 **46 个 unsafe 块**，分布在：
+- `netlink/responses.rs`（15）— netlink 消息序列化/反序列化
 - `netlink/mod.rs`（13）— netlink socket 操作
-- `ban/procfs.rs`（11）— ProcFS fd 生命周期管理
+- `netlink/protocol.rs`（7）— netlink 协议类型定义
 - `daemonizer.rs`（7）— fork 守护进程化/PID 文件管理
 - `file_monitor/monitor_loop.rs`（1）— poll 系统调用封装
 - `ip_utils.rs`（1）— IP 地址原始操作
@@ -284,7 +284,7 @@ cat /proc/firewall/config
 
 ### Prometheus 指标
 
-端口 9119 导出 17 个监控指标（4 内核 + 13 用户态）：
+端口 9119 导出 24 个监控指标（4 内核 + 12 用户态 + 4 netlink + 1 uptime + 3 信誉分）：
 
 **内核侧指标**：
 - `firewall_kernel_banned_ips_current` - 当前封禁 IP 数
@@ -306,6 +306,17 @@ cat /proc/firewall/config
 - `firewall_ddos_events_detected_total` - DDoS 事件检测数
 - `firewall_ddos_auto_bans_total` - DDoS 自动封禁数
 - `firewall_ddos_tracked_ips_current` - DDoS 跟踪 IP 数
+
+**Netlink 健康指标**：
+- `firewall_netlink_messages_sent_total` - netlink 发送消息数
+- `firewall_netlink_messages_received_total` - netlink 接收消息数
+- `firewall_netlink_send_errors_total` - netlink 发送失败数
+- `firewall_netlink_recv_errors_total` - netlink 接收/解析失败数
+
+**IP 信誉分指标**：
+- `firewall_reputation_tracked_ips` - 信誉系统跟踪 IP 数
+- `firewall_reputation_low_count` - 低信誉 IP 数（< 80）
+- `firewall_reputation_critical_count` - 高危 IP 数（< 50）
 
 ## 质量门禁
 
@@ -372,8 +383,8 @@ sudo insmod build/kernel-module/firewall.ko
 | 封禁查找 | O(1) 哈希表 |
 | 哈希表容量 | 4096 条目 |
 | 白名单容量 | 64 条目 |
-| 守护进程体积 | 3.8 MB stripped |
-| 测试覆盖 | 115 集成 + 88 单元 |
+| 守护进程体积 | 6.2 MB stripped |
+| 测试覆盖 | 19 集成套件 + 93 单元 |
 | 响应延迟 | 毫秒级 |
 
 ## 相关文档

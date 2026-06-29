@@ -112,7 +112,7 @@ use case:
 
 | Profile | Size | Purpose | Build command |
 |---------|------|---------|---------------|
-| `release` (default) | **3.8MB stripped** | Production deployment | `cargo build --release` |
+| `release` (default) | **6.2MB stripped** | Production deployment | `cargo build --release` |
 | `dev-with-debug` | 32MB (with DWARF + symbols) | Field crash analysis; use `addr2line` to unwind stacks | `cargo build --release --profile dev-with-debug` |
 | `asan` | (with ASAN runtime) | Memory-safety checks, requires nightly | `cargo +nightly build --profile asan` |
 
@@ -128,7 +128,7 @@ strip = true
 panic = "abort"       # smaller binary, no unwinding tables
 ```
 
-Produces a 3.8MB stripped binary — the default for `make deb` /
+Produces a 6.2MB stripped binary — the default for `make deb` /
 `make install`.
 
 #### dev-with-debug
@@ -191,7 +191,7 @@ Package layout (the `build-deb.sh` staging directory, DKMS mode):
 
 | Path | Contents |
 |------|----------|
-| `/usr/sbin/firewall-daemon` | Daemon binary (already `strip`-ed, ~3.8MB) |
+| `/usr/sbin/firewall-daemon` | Daemon binary (already `strip`-ed, ~6.2MB) |
 | `/usr/src/linux-firewall-kmod-<VERSION>/` | DKMS source tree (compiled by dkms on first install) |
 | `/etc/firewall/*.yaml` | YAML config files |
 | `/etc/systemd/system/firewall-daemon.service` | systemd unit |
@@ -253,7 +253,7 @@ controlled by the `[profile.*]` sections in `Cargo.toml`. See
 for the full profile matrix.
 
 - `release`: `lto=true` + `strip=true` + `debug=false` + `panic="abort"`
-  → 3.8MB stripped
+  → 6.2MB stripped
 - `dev-with-debug`: inherits release, keeps DWARF + symbols → 32MB
 - `asan`: nightly opt-in, bundles the ASAN runtime
 
@@ -297,7 +297,7 @@ cargo --version
 
 | File | Description |
 |------|-------------|
-| `build/daemon/firewall-daemon` | Daemon binary (**3.8MB stripped**, default `release` profile) |
+| `build/daemon/firewall-daemon` | Daemon binary (**6.2MB stripped**, default `release` profile) |
 | `target/release/firewall-daemon` | `cargo`'s original output location (`make daemon` copies it to `build/daemon/`) |
 | `build/daemon/firewall-daemon-asan` | ASAN build (`make asan` output; larger, includes ASAN runtime) |
 

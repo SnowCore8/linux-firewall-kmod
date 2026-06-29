@@ -14,6 +14,7 @@ use crate::types::{Config, DAEMON_STATS};
 
 use super::periodic_tasks::{check_and_handle_ddos, record_history_snapshot, write_stats_snapshot};
 use super::processor::process_new_lines;
+use super::setup_inotify;
 use super::state::{FILE_STATES, INOTIFY_STATE};
 
 // ============================================================================
@@ -22,7 +23,7 @@ use super::state::{FILE_STATES, INOTIFY_STATE};
 
 /// 周期性任务的最后执行时间戳集合。
 ///
-/// 封装主循环中 6 个独立的超时检查点，避免函数参数过多。
+/// 封装主循环中 7 个独立的超时检查点，避免函数参数过多。
 struct TimeoutState {
     /// Partial line 缓冲清理
     last_partial_cleanup: SystemTime,
@@ -34,8 +35,10 @@ struct TimeoutState {
     last_ddos_check: SystemTime,
     /// 历史数据快照（每 5 分钟）
     last_history_snapshot: SystemTime,
-    /// 速率统计查询（每秒）
+    /// 速率统计查询（每 2 秒）
     last_rates_query: SystemTime,
+    /// 数据清理（封禁历史/信誉分/failed_hash，每 5 分钟）
+    last_data_cleanup: SystemTime,
 }
 
 impl Default for TimeoutState {
@@ -55,6 +58,7 @@ impl TimeoutState {
             last_ddos_check: now,
             last_history_snapshot: now,
             last_rates_query: now,
+            last_data_cleanup: now,
         }
     }
 }
@@ -88,6 +92,38 @@ pub fn monitor_loop(
     }
 
     while running.load(Ordering::Relaxed) {
+        // 同步 GLOBAL_JAILS → cfg.jails 的 enabled 状态
+        // API 修改 jail 启用/禁用时只更新 GLOBAL_JAILS，此处桥接到 cfg.jails
+        // 使监控循环在下一个 poll 周期自动感知变更
+        let mut jail_enabled_changed = false;
+        if let Some(lock) = crate::http_exporter::GLOBAL_JAILS.get() {
+            let global_jails = lock.read();
+            for gj in global_jails.iter() {
+                if let Some(cfg_jail) = cfg.jails.iter_mut().find(|j| j.name == gj.name) {
+                    if cfg_jail.enabled != gj.enabled {
+                        crate::logger::info!(
+                            crate::logger::get(),
+                            "Jail 启用状态同步";
+                            "jail" => &gj.name,
+                            "enabled" => gj.enabled
+                        );
+                        cfg_jail.enabled = gj.enabled;
+                        jail_enabled_changed = true;
+                    }
+                }
+            }
+        }
+        // jail enabled 变化后重建 inotify watch（启用 → 添加 watch，禁用 → 跳过）
+        if jail_enabled_changed {
+            if let Err(e) = setup_inotify(cfg) {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "Jail 启用状态变更后重建 inotify 失败";
+                    "error" => %e
+                );
+            }
+        }
+
         let current_interval = cfg.interval;
 
         // 每次迭代重新读取 raw_fd（支持 reload 时更换 inotify 实例）
@@ -317,6 +353,17 @@ fn handle_timeout(cfg: &mut Config, reload_config: &AtomicBool, state: &mut Time
         record_history_snapshot(cfg);
     }
 
+    // 数据清理：failed_hash 过期条目 + 封禁历史 + 信誉分恢复/清理（每 5 分钟）
+    if now
+        .duration_since(state.last_data_cleanup)
+        .unwrap_or_default()
+        .as_secs()
+        >= 300
+    {
+        state.last_data_cleanup = now;
+        super::perform_data_cleanup(cfg);
+    }
+
     // 速率统计查询（每 2 秒）- 通过 netlink 从内核获取
     // 改进：从 5 秒缩短到 2 秒，提升 Web UI 数据实时性
     // 开销：~1.3ms / 2s = 0.65ms/s（可忽略）
@@ -358,6 +405,9 @@ fn query_rates_from_kernel() {
 ///
 /// 从全局 EWMA 基线缓存读取当前值，通过 netlink BASELINE_UPDATE 发送到内核。
 /// 内核在 check_rate_violation 中使用 max(静态阈值, 基线×倍数) 作为实际阈值。
+///
+/// 基线保护：业务高峰期（9-18 点 UTC）基线自动上调 50%，
+/// 避免正常业务流量增长被误判为攻击。
 fn send_baseline_update() {
     use crate::netlink::get_global_netlink_ctx;
     use crate::netlink::{config_flags, ConfigUpdate};
@@ -370,23 +420,36 @@ fn send_baseline_update() {
         return;
     }
 
-    // 只在基线变化时发送，避免每 2 秒重复发送相同值
+    // 基线保护：业务高峰期上调 50%
+    let now_hour = chrono::Utc::now()
+        .format("%H")
+        .to_string()
+        .parse::<u32>()
+        .unwrap_or(0);
+    let is_peak_hours = (9..18).contains(&now_hour);
+    let (effective_pps, effective_bps) = if is_peak_hours {
+        (baseline_pps * 3 / 2, baseline_bps * 3 / 2)
+    } else {
+        (baseline_pps, baseline_bps)
+    };
+
+    // 只在有效基线变化时发送，避免每 2 秒重复发送相同值
     static LAST_SENT_PPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     static LAST_SENT_BPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     let last_pps = LAST_SENT_PPS.load(std::sync::atomic::Ordering::Relaxed);
     let last_bps = LAST_SENT_BPS.load(std::sync::atomic::Ordering::Relaxed);
 
-    if baseline_pps == last_pps && baseline_bps == last_bps {
-        return; // 基线未变化，跳过发送
+    if effective_pps == last_pps && effective_bps == last_bps {
+        return; // 有效基线未变化，跳过发送
     }
 
-    LAST_SENT_PPS.store(baseline_pps, std::sync::atomic::Ordering::Relaxed);
-    LAST_SENT_BPS.store(baseline_bps, std::sync::atomic::Ordering::Relaxed);
+    LAST_SENT_PPS.store(effective_pps, std::sync::atomic::Ordering::Relaxed);
+    LAST_SENT_BPS.store(effective_bps, std::sync::atomic::Ordering::Relaxed);
 
     if let Some(ctx) = get_global_netlink_ctx() {
         let config = ConfigUpdate::new(config_flags::BASELINE_UPDATE)
-            .with_baseline(baseline_pps, baseline_bps);
+            .with_baseline(effective_pps, effective_bps);
 
         if let Err(e) = ctx.send_config_update(&config) {
             crate::logger::debug!(
@@ -396,4 +459,14 @@ fn send_baseline_update() {
             );
         }
     }
+}
+
+/// 获取基线保护状态（Web UI 显示用）
+pub fn is_baseline_peak_hours() -> bool {
+    let now_hour = chrono::Utc::now()
+        .format("%H")
+        .to_string()
+        .parse::<u32>()
+        .unwrap_or(0);
+    (9..18).contains(&now_hour)
 }

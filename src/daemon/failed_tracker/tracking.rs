@@ -161,8 +161,29 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
         .failed_attempts
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
+    // 记录失败到 IP 信誉分系统（-10 分）
+    let reputation = crate::ip_reputation::get_store();
+    reputation.record_failure(ip);
+
     let findtime_i64 = i64::from(findtime);
     let now = now_secs();
+
+    // 按时间段放宽阈值：业务高峰期（9-18 点 UTC）× 1.5
+    let is_peak_hours = crate::file_monitor::monitor_loop::is_baseline_peak_hours();
+    let peak_hours_multiplier = if is_peak_hours { 1.5 } else { 1.0 };
+
+    // 按来源放宽阈值：内网 IP × 2.0，外网 IP × 1.0
+    let is_internal = crate::ban::is_internal_ip(ip);
+    let source_multiplier = if is_internal { 2.0 } else { 1.0 };
+
+    // 按信誉分调整阈值：信誉 < 50 → × 0.5（严格），50-79 → × 0.8，≥ 80 → × 1.0
+    let reputation_multiplier = reputation.get_threshold_multiplier(ip);
+
+    // 综合计算有效阈值（三种策略叠加）
+    let effective_max_retries =
+        (max_retries as f64 * peak_hours_multiplier * source_multiplier * reputation_multiplier)
+            .ceil()
+            .max(1.0) as u32;
 
     let mut hash = jail.failed_hash.write();
     let entry = hash
@@ -171,12 +192,10 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
 
     process_failed_timestamps(entry, now, findtime_i64);
 
-    let recent_fails = count_recent(entry, findtime_i64, max_retries);
-    if recent_fails >= max_retries {
+    let recent_fails = count_recent(entry, findtime_i64, effective_max_retries);
+    if recent_fails >= effective_max_retries {
         // 记录触发封禁的失败统计
         let fail_count = recent_fails;
-        let _window_start = entry.timestamps.front().copied().unwrap_or(now) - findtime_i64;
-        let _window_end = now;
 
         // 复用 validate_ip 统一处理 IPv4/IPv6，验证失败时跳过而非静默使用 0
         let ip_num = match crate::ban::validate_ip(ip) {
@@ -191,19 +210,52 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
                 return;
             }
         };
+
+        // === 渐进式封禁：根据历史封禁次数递增封禁时长 ===
+        let ban_history = crate::types::BAN_HISTORY.get_or_init(crate::types::BanHistory::new);
+        let ban_count = ban_history.get_ban_count(ip);
+        let base_duration = if jail.ban_time < 0 {
+            0u32
+        } else {
+            jail.ban_time as u32
+        };
+        let progressive_duration = ban_history.calculate_progressive_duration(ip, base_duration);
+        // jail.ban_time < 0 → 配置级永久封禁（如 sshd ban_time=-1）
+        // progressive_duration == 0 && ban_count >= 3 → 渐进式升级永久封禁
+        let is_permanent = jail.ban_time < 0 || (progressive_duration == 0 && ban_count >= 3);
+
+        // 记录渐进式封禁日志
+        if ban_count > 0 {
+            crate::logger::info!(
+                crate::logger::get(),
+                "渐进式封禁：复发 IP 封禁时长递增";
+                "ip" => ip,
+                "ban_count" => ban_count + 1,
+                "base_duration" => base_duration,
+                "progressive_duration" => progressive_duration,
+                "is_permanent" => is_permanent,
+                "jail" => &jail.name
+            );
+        }
+
         let ban_info = crate::types::BanInfo {
             ip: ip.to_string(),
             ip_num,
             jail_name: jail.name.clone(),
             reason: jail.name.clone(),
             banned_at: now,
-            expires_at: if jail.ban_time < 0 {
-                0
+            expires_at: if is_permanent {
+                0 // 永久封禁
+            } else if progressive_duration > 0 {
+                now + progressive_duration as i64
             } else {
-                now + jail.ban_time as i64
+                // progressive_duration == 0 但非永久：ban_time=0 的退化情况
+                // 使用 jail 默认 ban_time 兜底，避免 0 秒即过期
+                now + base_duration.max(1) as i64
             },
-            is_permanent: jail.ban_time < 0,
+            is_permanent,
             fail_count,
+            ban_count: ban_count + 1,
         };
 
         // 必须先释放写锁再调 ban_ip, 否则 ban 内部可能触发的日志写会与本锁死锁
@@ -212,18 +264,19 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
         // 原子性检查并插入缓存：消除 check-then-act 竞态条件
         // 多线程同时触发同一 IP 封禁时，只有一个线程的 try_insert 返回 true
         let cache = crate::types::ACTIVE_BAN_CACHE.get_or_init(crate::types::ActiveBanCache::new);
-        if !cache.try_insert(ban_info.clone()) {
+        if !cache.try_insert(ban_info) {
             // 已被其他线程先行封禁，跳过本次操作
             return;
         }
 
-        let ban_duration = if jail.ban_time < 0 {
+        let ban_duration = if is_permanent {
             0u64
         } else {
-            jail.ban_time as u64
+            progressive_duration as u64
         };
         if let Err(e) = ban::ban_ip(ip, ban_duration, &jail.name) {
             // 封禁失败，回滚缓存标记（允许下次重试）
+            // record_ban / record_ban_event / record_ban(ip_reputation) 尚未调用，无需回滚
             cache.remove(ip);
             crate::logger::warn!(
                 crate::logger::get(),
@@ -234,6 +287,18 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
             );
             return;
         }
+
+        // netlink 成功后才记录副作用（避免封禁失败时 ban_count/信誉分/事件表被污染）
+        // handle_ban_state_change 检测到 cache.contains → 跳过重复 record_ban
+        ban_history.record_ban(ip, is_permanent);
+        crate::history_snapshot::record_ban_event(ip, &jail.name, ban_count + 1);
+        crate::ip_reputation::get_store().record_ban(ip);
+
+        // per-Jail 统计：封禁触发
+        crate::types::with_jail_stats(&jail.name, |s| {
+            s.bans_triggered
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        });
         {
             // 成功封禁后移除条目, 避免重复封禁计数
             let mut hash2 = jail.failed_hash.write();

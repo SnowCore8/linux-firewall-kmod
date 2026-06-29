@@ -6,7 +6,8 @@ use crate::types::{Config, Jail, MAX_JAILS};
 use super::operations::clone_jail;
 
 pub fn config_clone(src: &Config) -> Config {
-    // 一次性初始化,避免 `Config::default()` + 17 次字段赋值的低效模式
+    // 显式列出所有 Config 字段（不使用 `..Config::default()`），
+    // 确保未来新增字段时编译器强制报错，防止热重载静默丢失字段值
     let mut dst = Config {
         default_max_retries: src.default_max_retries,
         default_findtime: src.default_findtime,
@@ -23,8 +24,13 @@ pub fn config_clone(src: &Config) -> Config {
         log_level: src.log_level,
         log_destination: src.log_destination,
         log_format: src.log_format,
+        strict_mode: src.strict_mode,
+        jails: Vec::with_capacity(src.jails.len()),
+        storage: src.storage.clone(),
+        ddos: src.ddos.clone(),
+        webui: src.webui.clone(),
         trusted_ips: src.trusted_ips.clone(),
-        ..Config::default()
+        capacity: src.capacity.clone(),
     };
 
     for src_jail in &src.jails {

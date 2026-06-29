@@ -6,14 +6,54 @@ pub fn is_valid_ipv4(ip: &str) -> bool {
     if parts.len() != 4 {
         return false;
     }
-    parts.iter().all(|p| {
-        p.parse::<u8>().is_ok()
-    })
+    parts.iter().all(|p| p.parse::<u8>().is_ok())
 }
 
-/// 验证 IPv6 地址格式(简化版,检查包含冒号)
+/// 验证 IPv6 地址格式
+///
+/// 支持完整格式、压缩格式（::）、环回地址（::1）、未指定地址（::）
+/// 拒绝含非法字符、段数过多、多个 :: 等无效输入
 pub fn is_valid_ipv6(ip: &str) -> bool {
-    ip.contains(':') && ip.len() >= 2
+    if ip.is_empty() {
+        return false;
+    }
+    // 排除包含 '.' 的非 IPv4 映射地址（如 "192.168.1.1:80"）
+    if ip.contains('.') && !ip.starts_with("::ffff:") {
+        return false;
+    }
+    let has_double_colon = ip.contains("::");
+    if ip.matches("::").count() > 1 {
+        return false;
+    }
+    let segments: Vec<&str> = if has_double_colon {
+        let parts: Vec<&str> = ip.splitn(2, "::").collect();
+        let left = if parts[0].is_empty() {
+            vec![]
+        } else {
+            parts[0].split(':').collect()
+        };
+        let right = if parts.len() < 2 || parts[1].is_empty() {
+            vec![]
+        } else {
+            parts[1].split(':').collect()
+        };
+        let mut combined = left;
+        combined.extend(right);
+        combined
+    } else {
+        ip.split(':').collect()
+    };
+    if !has_double_colon && segments.len() != 8 {
+        return false;
+    }
+    if segments.len() > 8 {
+        return false;
+    }
+    segments.iter().all(|seg| {
+        !seg.is_empty()
+            && seg.len() <= 4
+            && seg.chars().all(|c| c.is_ascii_hexdigit())
+    })
 }
 
 /// 验证 IP 地址(IPv4 或 IPv6)
@@ -70,7 +110,16 @@ mod tests {
         assert!(is_valid_ipv6("::1"));
         assert!(is_valid_ipv6("fe80::1"));
         assert!(is_valid_ipv6("fd9f:92ca:fd45::b2c"));
+        assert!(is_valid_ipv6("::"));
+        assert!(is_valid_ipv6("2001:db8:85a3::8a2e:370:7334"));
         assert!(!is_valid_ipv6("192.168.1.1"));
+        assert!(!is_valid_ipv6("192.168.1.1:80"));
+        assert!(!is_valid_ipv6("a:b"));
+        assert!(!is_valid_ipv6(":::"));
+        assert!(!is_valid_ipv6(""));
+        assert!(!is_valid_ipv6("gggg::1"));
+        assert!(!is_valid_ipv6("1:2:3:4:5:6:7"));
+        assert!(!is_valid_ipv6("1:2:3:4:5:6:7:8:9"));
     }
 
     #[test]

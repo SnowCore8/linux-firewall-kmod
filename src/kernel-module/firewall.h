@@ -59,6 +59,35 @@ void fw_flush_all_cpu_stats(void);
 #define RATE_HASH_BITS 16
 /* 速率表哈希桶数（65536 桶），条目数量无上限（按需扩展） */
 
+/* UDP 端口分布统计 */
+#define UDP_PORT_HASH_BITS 8
+#define UDP_PORT_HASH_SIZE (1 << UDP_PORT_HASH_BITS) /* 256 桶 */
+#define MAX_UDP_PORT_ENTRIES 512 /* 最多跟踪 512 个不同端口 */
+
+struct udp_port_entry {
+  u16 port;                 /* UDP 目标端口（主机字节序） */
+  atomic64_t packet_count;  /* 数据包计数 */
+  atomic64_t byte_count;    /* 字节计数 */
+  unsigned long last_seen;  /* 最后活动时间（jiffies） */
+  struct hlist_node hash;   /* 哈希表节点 */
+  struct rcu_head rcu_head; /* RCU 释放回调 */
+};
+
+/* ICMP 类型分布统计 */
+#define ICMP_TYPE_HASH_BITS 6
+#define ICMP_TYPE_HASH_SIZE (1 << ICMP_TYPE_HASH_BITS) /* 64 桶 */
+#define MAX_ICMP_TYPE_ENTRIES 128 /* 最多跟踪 128 种类型/代码组合 */
+
+struct icmp_type_entry {
+  u8 type;                  /* ICMP 类型（0-255） */
+  u8 code;                  /* ICMP 代码（0-255） */
+  atomic64_t packet_count;  /* 数据包计数 */
+  atomic64_t byte_count;    /* 字节计数 */
+  unsigned long last_seen;  /* 最后活动时间（jiffies） */
+  struct hlist_node hash;   /* 哈希表节点 */
+  struct rcu_head rcu_head; /* RCU 释放回调 */
+};
+
 /* 速率检测默认配置 */
 #define DEFAULT_RATE_WINDOW_SECONDS 1                   /* 默认 1 秒窗口 */
 #define DEFAULT_MAX_PACKETS_PER_SECOND 10000            /* 默认 10000 PPS */
@@ -91,6 +120,28 @@ void fw_flush_all_cpu_stats(void);
 #define TCP_FLAGS_SYN 0x02
 #define TCP_FLAGS_RST 0x04
 #define TCP_FLAGS_ACK 0x10
+
+/* TCP 异常标志位组合检测（扫描/畸形包识别）
+ *
+ * 检测以下无效组合：
+ * 1. SYN+FIN — 协议不允许，扫描特征
+ * 2. SYN+RST — 协议不允许，扫描特征
+ * 3. NULL — 全零标志位（NULL scan）
+ *
+ * 返回 true 表示检测到异常，应丢弃该包 */
+static inline bool is_tcp_flag_anomaly(u8 tcp_flags) {
+  u8 masked = tcp_flags & (TCP_FLAGS_SYN | TCP_FLAGS_FIN | TCP_FLAGS_RST | TCP_FLAGS_ACK);
+
+  /* SYN+FIN 或 SYN+RST：无效组合 */
+  if ((masked & TCP_FLAGS_SYN) && (masked & (TCP_FLAGS_FIN | TCP_FLAGS_RST)))
+    return true;
+
+  /* NULL scan：四个主要标志位全为 0 */
+  if (masked == 0)
+    return true;
+
+  return false;
+}
 
 /* 本地 IP 缓存条目（热路径优化：避免每次包都走白名单哈希表查找）
  * 由 netdev_notifier 事件触发刷新（USB 插拔/手动改 IP/DHCP 等） */
@@ -193,6 +244,12 @@ struct ip_rate_entry {
   /* LRU 保护标志：白名单 IP 的条目不被踢出 */
   u8 pinned;
 
+  /* 端口扫描检测：跟踪目标端口变化
+   * 轻量级近似：每次 dst_port 与 last_dst_port 不同时递增 unique_ports
+   * 对于顺序扫描（端口 1,2,3,...N）精确计数；对于重复访问会高估，但不影响检测 */
+  atomic_t unique_ports; /* 不同目标端口数（近似） */
+  u16 last_dst_port;     /* 上一次看到的目标端口 */
+
   /* 哈希表和 RCU */
   struct hlist_node hash;
   struct rcu_head rcu_head; /* 用于 RCU 释放 */
@@ -227,6 +284,7 @@ struct firewall_info {
   atomic_t alloc_failure_count;    /* 内存分配失败次数 */
   atomic64_t packets_dropped;      /* 被 netfilter 丢弃的数据包 */
   atomic64_t packets_accepted;     /* 被 netfilter 接受的数据包 */
+  atomic64_t tcp_anomaly_dropped;  /* TCP 异常标志位丢弃的数据包 */
   atomic_t cleanup_cycles;         /* 清理定时器周期数 */
   atomic_t cleanup_expired_total;  /* 已清理的过期条目总数 */
 
@@ -286,14 +344,58 @@ struct firewall_info {
   atomic64_t global_traffic_packets; /* 自上次查询以来的数据包总数 */
   atomic64_t global_traffic_bytes;   /* 自上次查询以来的字节总数 */
 
+  /* UDP 端口分布统计（用于分析 UDP 流量模式） */
+  DECLARE_HASHTABLE(udp_port_table, UDP_PORT_HASH_BITS);
+  spinlock_t udp_port_lock; /* 保护 udp_port_table 的写操作 */
+  atomic_t udp_port_count;  /* 当前跟踪的端口数 */
+
+  /* ICMP 类型分布统计（用于分析 ICMP 流量模式） */
+  DECLARE_HASHTABLE(icmp_type_table, ICMP_TYPE_HASH_BITS);
+  spinlock_t icmp_type_lock; /* 保护 icmp_type_table 的写操作 */
+  atomic_t icmp_type_count;  /* 当前跟踪的类型/代码组合数 */
+
+  /* 包大小分布直方图（用于检测小包洪水攻击）
+   * 5 个桶：Tiny(<64B) Small(64-256B) Medium(256-1024B) Large(1024-1500B) Jumbo(>1500B)
+   * 使用 atomic64 计数器，热路径无锁递增 */
+  atomic64_t pkt_size_tiny;   /* < 64 bytes */
+  atomic64_t pkt_size_small;  /* 64-256 bytes */
+  atomic64_t pkt_size_medium; /* 256-1024 bytes */
+  atomic64_t pkt_size_large;  /* 1024-1500 bytes */
+  atomic64_t pkt_size_jumbo;  /* > 1500 bytes */
+
+  /* TTL 分布直方图（用于检测异常 TTL 值，如扫描/伪造包）
+   * 6 个桶：Scan(=1) VeryShort(2-32) Short(33-64) Normal(65-128) Long(129-192) Max(193-255)
+   * 使用 atomic64 计数器，热路径无锁递增 */
+  atomic64_t ttl_scan;       /* TTL = 1（traceroute/扫描） */
+  atomic64_t ttl_very_short; /* TTL 2-32（异常短 TTL） */
+  atomic64_t ttl_short;      /* TTL 33-64（短 TTL，近距离主机） */
+  atomic64_t ttl_normal;     /* TTL 65-128（正常范围） */
+  atomic64_t ttl_long;       /* TTL 129-192（长 TTL） */
+  atomic64_t ttl_max;        /* TTL 193-255（最大 TTL，可能伪造） */
+
+  /* IP 分片统计（用于检测分片洪水攻击）
+   * 使用 atomic64 计数器，热路径无锁递增 */
+  atomic64_t ip_frag_count; /* IP 分片包数（MF=1 或 frag_offset != 0） */
+  atomic64_t ip_total_count; /* 总 IP 数据包数 */
+
+  /* 端口扫描检测统计 */
+  atomic_t port_scan_detected; /* 检测到的端口扫描次数 */
+
   /* procfs 条目 */
   struct proc_dir_entry *proc_dir;
   struct proc_dir_entry *proc_bans;      /* 统一封禁接口（读/写） */
   struct proc_dir_entry *proc_whitelist; /* 统一白名单接口（读/写） */
   struct proc_dir_entry *proc_config;    /* 配置（读/写） */
   struct proc_dir_entry *proc_settings;
-  struct proc_dir_entry *proc_stats; /* 统计端点（只读） */
-  struct proc_dir_entry *proc_rates; /* 速率统计（只读） */
+  struct proc_dir_entry *proc_stats;         /* 统计端点（只读） */
+  struct proc_dir_entry *proc_rates;         /* 速率统计（只读） */
+  struct proc_dir_entry *proc_udp_ports;     /* UDP 端口分布（只读） */
+  struct proc_dir_entry *proc_icmp_types;    /* ICMP 类型分布（只读） */
+  struct proc_dir_entry *proc_pkt_sizes;     /* 包大小分布（只读） */
+  struct proc_dir_entry *proc_ttl_dist;      /* TTL 分布（只读） */
+  struct proc_dir_entry *proc_ip_frags;      /* IP 分片统计（只读） */
+  struct proc_dir_entry *proc_port_scanners; /* 端口扫描检测（只读） */
+  struct proc_dir_entry *proc_service_probes; /* 服务探测检测（只读） */
 
   /* 网络事件监听器 */
   struct notifier_block netdev_notifier;
@@ -313,6 +415,7 @@ int unban_permanent_ip(struct firewall_info *fw, u8 af, const void *ip);
 int is_banned(struct firewall_info *fw, u8 af, const void *ip);
 int is_permanently_banned(struct firewall_info *fw, u8 af, const void *ip);
 int check_flood_protection(void);
+u32 hash_ipv6(const struct in6_addr *addr);
 
 /* whitelist.c */
 int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
@@ -322,7 +425,7 @@ bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip);
 
 /* rate-detector.c - 速率检测（DDoS 防护） */
 int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
-                      u32 packet_len, u8 protocol, u8 tcp_flags);
+                      u32 packet_len, u8 protocol, u8 tcp_flags, u16 dst_port);
 bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip);
 bool check_protocol_violation(struct firewall_info *fw, u8 af, const void *ip, u8 protocol);
 const char *check_tcp_flood_violation(struct firewall_info *fw, u8 af,
@@ -331,6 +434,16 @@ void cleanup_rate_entries(struct firewall_info *fw);
 void clear_all_rate_entries(struct firewall_info *fw);
 void free_rate_entry_rcu(struct rcu_head *head);
 void update_global_baseline(struct firewall_info *fw, u64 total_pps, u64 total_bps);
+
+/* UDP 端口分布统计 */
+void record_udp_port(struct firewall_info *fw, u16 dst_port, u32 packet_len);
+void cleanup_udp_port_entries(struct firewall_info *fw);
+void free_udp_port_entry_rcu(struct rcu_head *head);
+
+/* ICMP 类型分布统计 */
+void record_icmp_type(struct firewall_info *fw, u8 type, u8 code, u32 packet_len);
+void cleanup_icmp_type_entries(struct firewall_info *fw);
+void free_icmp_type_entry_rcu(struct rcu_head *head);
 
 /* netdev.c */
 void auto_discover_system_ips(struct firewall_info *fw);
@@ -364,6 +477,7 @@ int fw_netlink_send_whitelist_state_change(u8 af, const void *ip, u8 prefix_len,
                                            u8 action, const char *dev_name);
 int fw_netlink_send_list_bans_response(u32 seq, u32 portid);
 int fw_netlink_send_stats_response(u32 seq, u32 portid);
+int fw_netlink_send_analysis_response(u32 seq, u32 portid);
 int fw_netlink_send_config_ack(u32 seq, u32 applied_flags, u32 rejected_flags, u32 portid);
 int fw_netlink_send_list_whitelist_response(u32 seq, u32 portid);
 int fw_netlink_send_list_rates_response(u32 seq, u32 portid);
@@ -472,6 +586,75 @@ static inline struct hlist_head *get_rate_table(struct firewall_info *fw, u8 af)
 }
 
 /**
+ * record_packet_size - 记录数据包大小到直方图
+ * @fw: 防火墙信息
+ * @size: 数据包大小（字节）
+ *
+ * 热路径调用，使用 atomic64 无锁递增
+ * 5 个桶：Tiny(<64B) Small(64-256B) Medium(256-1024B) Large(1024-1500B) Jumbo(>1500B)
+ */
+static inline void record_packet_size(struct firewall_info *fw, u32 size) {
+  if (unlikely(!fw))
+    return;
+
+  if (size < 64) {
+    atomic64_inc(&fw->pkt_size_tiny);
+  } else if (size < 256) {
+    atomic64_inc(&fw->pkt_size_small);
+  } else if (size < 1024) {
+    atomic64_inc(&fw->pkt_size_medium);
+  } else if (size <= 1500) {
+    atomic64_inc(&fw->pkt_size_large);
+  } else {
+    atomic64_inc(&fw->pkt_size_jumbo);
+  }
+}
+
+/**
+ * record_ttl - 记录数据包 TTL 值到直方图
+ * @fw: 防火墙信息
+ * @ttl: 数据包 TTL 值（0-255）
+ *
+ * 热路径调用，使用 atomic64 无锁递增
+ * 6 个桶：Scan(=1) VeryShort(2-32) Short(33-64) Normal(65-128) Long(129-192) Max(193-255)
+ */
+static inline void record_ttl(struct firewall_info *fw, u8 ttl) {
+  if (unlikely(!fw))
+    return;
+
+  if (ttl == 1) {
+    atomic64_inc(&fw->ttl_scan);
+  } else if (ttl <= 32) {
+    atomic64_inc(&fw->ttl_very_short);
+  } else if (ttl <= 64) {
+    atomic64_inc(&fw->ttl_short);
+  } else if (ttl <= 128) {
+    atomic64_inc(&fw->ttl_normal);
+  } else if (ttl <= 192) {
+    atomic64_inc(&fw->ttl_long);
+  } else {
+    atomic64_inc(&fw->ttl_max);
+  }
+}
+
+/**
+ * record_ip_frag - 记录 IP 分片统计
+ * @fw: 防火墙信息
+ * @is_fragment: 是否为分片包（MF=1 或 frag_offset != 0）
+ *
+ * 热路径调用，使用 atomic64 无锁递增
+ * 跟踪总分片数和总 IP 包数，用于计算分片比例
+ */
+static inline void record_ip_frag(struct firewall_info *fw, bool is_fragment) {
+  if (unlikely(!fw))
+    return;
+
+  atomic64_inc(&fw->ip_total_count);
+  if (is_fragment)
+    atomic64_inc(&fw->ip_frag_count);
+}
+
+/**
  * get_rate_lock - 获取对应地址族的 per-bucket 自旋锁
  * @fw: 防火墙信息
  * @af: 地址族
@@ -569,17 +752,18 @@ static inline int validate_ip_address(u8 af, const void *ip, const char *ip_str,
  * - VPN/Docker 网桥 (NETDEV_UP/DOWN)
  */
 static inline bool is_local_ip(struct firewall_info *fw, u8 af, const void *ip) {
-  int count = atomic_read(&fw->local_ip_cache_count);
   struct local_ip_cache_entry *cache;
-  int i;
+  int count, i;
 
-  if (count == 0)
-    return false;
-
-  /* RCU 读侧临界区：缓存数组由 rcu_assign_pointer 发布 */
+  /* RCU 读侧临界区：先读指针再读 count，配合写侧 smp_wmb 保证一致性 */
   rcu_read_lock();
   cache = rcu_dereference(fw->local_ip_cache);
   if (!cache) {
+    rcu_read_unlock();
+    return false;
+  }
+  count = atomic_read(&fw->local_ip_cache_count);
+  if (count == 0) {
     rcu_read_unlock();
     return false;
   }

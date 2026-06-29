@@ -16,6 +16,7 @@ pub enum ConnectionStatus {
     Connecting,
     Connected,
     Disconnected,
+    ConnectionLimit,
 }
 
 /// 速率历史趋势数据（SSE rates 事件直接追加）
@@ -29,7 +30,9 @@ pub struct RateHistory {
 
 impl RateHistory {
     pub fn push(&mut self, rates: &[RateResponse]) {
-        if rates.is_empty() { return; }
+        if rates.is_empty() {
+            return;
+        }
         let total_pps: u64 = rates.iter().map(|r| r.packets_per_sec).sum();
         let total_bps: u64 = rates.iter().map(|r| r.bytes_per_sec).sum();
         let now = js_sys::Date::new_0();
@@ -134,7 +137,9 @@ pub fn connect_sse(state: SseState) {
         status.set(ConnectionStatus::Connected);
         reconnect_attempt.set(0);
     });
-    source.add_event_listener_with_callback("connected", cb.as_ref().unchecked_ref()).unwrap();
+    source
+        .add_event_listener_with_callback("connected", cb.as_ref().unchecked_ref())
+        .unwrap();
     callbacks.push(cb);
 
     // stats
@@ -142,12 +147,15 @@ pub fn connect_sse(state: SseState) {
     let cb = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
         if let Ok(s) = e.data().dyn_into::<js_sys::JsString>() {
             let json: String = s.into();
-            if let Ok(data) = serde_json::from_str::<StatsResponse>(&json) {
-                stats.set(Some(data));
+            match serde_json::from_str::<StatsResponse>(&json) {
+                Ok(data) => stats.set(Some(data)),
+                Err(e) => web_sys::console::warn_1(&format!("SSE stats 解析失败: {e}").into()),
             }
         }
     });
-    source.add_event_listener_with_callback("stats", cb.as_ref().unchecked_ref()).unwrap();
+    source
+        .add_event_listener_with_callback("stats", cb.as_ref().unchecked_ref())
+        .unwrap();
     callbacks.push(cb);
 
     // bans
@@ -155,12 +163,15 @@ pub fn connect_sse(state: SseState) {
     let cb = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
         if let Ok(s) = e.data().dyn_into::<js_sys::JsString>() {
             let json: String = s.into();
-            if let Ok(data) = serde_json::from_str::<Vec<BanResponse>>(&json) {
-                bans.set(Some(data));
+            match serde_json::from_str::<Vec<BanResponse>>(&json) {
+                Ok(data) => bans.set(Some(data)),
+                Err(e) => web_sys::console::warn_1(&format!("SSE bans 解析失败: {e}").into()),
             }
         }
     });
-    source.add_event_listener_with_callback("bans", cb.as_ref().unchecked_ref()).unwrap();
+    source
+        .add_event_listener_with_callback("bans", cb.as_ref().unchecked_ref())
+        .unwrap();
     callbacks.push(cb);
 
     // jails
@@ -168,12 +179,15 @@ pub fn connect_sse(state: SseState) {
     let cb = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
         if let Ok(s) = e.data().dyn_into::<js_sys::JsString>() {
             let json: String = s.into();
-            if let Ok(data) = serde_json::from_str::<Vec<JailResponse>>(&json) {
-                jails.set(Some(data));
+            match serde_json::from_str::<Vec<JailResponse>>(&json) {
+                Ok(data) => jails.set(Some(data)),
+                Err(e) => web_sys::console::warn_1(&format!("SSE jails 解析失败: {e}").into()),
             }
         }
     });
-    source.add_event_listener_with_callback("jails", cb.as_ref().unchecked_ref()).unwrap();
+    source
+        .add_event_listener_with_callback("jails", cb.as_ref().unchecked_ref())
+        .unwrap();
     callbacks.push(cb);
 
     // rates — 同时更新 rates signal 和 rate_history
@@ -182,13 +196,18 @@ pub fn connect_sse(state: SseState) {
     let cb = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
         if let Ok(s) = e.data().dyn_into::<js_sys::JsString>() {
             let json: String = s.into();
-            if let Ok(data) = serde_json::from_str::<Vec<RateResponse>>(&json) {
-                history.update(|h| h.push(&data));
-                rates.set(Some(data));
+            match serde_json::from_str::<Vec<RateResponse>>(&json) {
+                Ok(data) => {
+                    history.update(|h| h.push(&data));
+                    rates.set(Some(data));
+                }
+                Err(e) => web_sys::console::warn_1(&format!("SSE rates 解析失败: {e}").into()),
             }
         }
     });
-    source.add_event_listener_with_callback("rates", cb.as_ref().unchecked_ref()).unwrap();
+    source
+        .add_event_listener_with_callback("rates", cb.as_ref().unchecked_ref())
+        .unwrap();
     callbacks.push(cb);
 
     // whitelist
@@ -196,12 +215,15 @@ pub fn connect_sse(state: SseState) {
     let cb = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
         if let Ok(s) = e.data().dyn_into::<js_sys::JsString>() {
             let json: String = s.into();
-            if let Ok(data) = serde_json::from_str::<Vec<WhitelistEntry>>(&json) {
-                whitelist.set(Some(data));
+            match serde_json::from_str::<Vec<WhitelistEntry>>(&json) {
+                Ok(data) => whitelist.set(Some(data)),
+                Err(e) => web_sys::console::warn_1(&format!("SSE whitelist 解析失败: {e}").into()),
             }
         }
     });
-    source.add_event_listener_with_callback("whitelist", cb.as_ref().unchecked_ref()).unwrap();
+    source
+        .add_event_listener_with_callback("whitelist", cb.as_ref().unchecked_ref())
+        .unwrap();
     callbacks.push(cb);
 
     // onerror — 连接异常时触发重连
@@ -212,7 +234,9 @@ pub fn connect_sse(state: SseState) {
     let on_error = Closure::<dyn Fn(web_sys::Event)>::new(move |_: web_sys::Event| {
         status_err.set(ConnectionStatus::Disconnected);
         let can_schedule = RECONNECT_SCHEDULED.with(|s| {
-            if s.get() { return false; }
+            if s.get() {
+                return false;
+            }
             s.set(true);
             true
         });
@@ -233,6 +257,7 @@ pub fn connect_sse(state: SseState) {
 }
 
 /// 指数退避重连：delay = min(2^attempt, 30) 秒
+/// 重连 3 次后检查 SSE 连接限制状态
 fn schedule_reconnect(state: SseState) {
     let attempt = state.reconnect_attempt.get_untracked();
     let delay_secs = (1_u64 << attempt).min(30);
@@ -249,6 +274,18 @@ fn schedule_reconnect(state: SseState) {
                 .unwrap();
         });
         let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+
+        // 重连 3 次后检查是否达到连接上限
+        if attempt >= 2 {
+            if let Ok(info) = crate::api::get_sse_status().await {
+                if info.limit_reached {
+                    state.status.set(ConnectionStatus::ConnectionLimit);
+                    // 连接上限时不继续重连，等待现有连接释放
+                    return;
+                }
+            }
+        }
+
         // connect_sse 内部会重置 RECONNECT_SCHEDULED，允许新周期的 onerror 调度
         connect_sse(state);
     });

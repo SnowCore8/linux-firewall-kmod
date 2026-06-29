@@ -34,9 +34,40 @@ const MAX_CONFIG_VERSIONS: usize = 5;
 static CONFIG_HISTORY: std::sync::OnceLock<parking_lot::RwLock<Vec<ConfigSnapshot>>> =
     std::sync::OnceLock::new();
 
+/// 全局 trusted_ips 缓存（供 persist_runtime_config 使用，避免写入默认空列表）
+static GLOBAL_TRUSTED_IPS: std::sync::OnceLock<parking_lot::RwLock<Vec<String>>> =
+    std::sync::OnceLock::new();
+
+/// 全局 capacity 缓存（供 persist_runtime_config 使用，避免写入默认值）
+static GLOBAL_CAPACITY: std::sync::OnceLock<parking_lot::RwLock<crate::types::CapacityConfig>> =
+    std::sync::OnceLock::new();
+
+/// 更新全局 trusted_ips 缓存（配置加载/热重载时调用）
+pub fn set_global_trusted_ips(ips: &[String]) {
+    let lock = GLOBAL_TRUSTED_IPS.get_or_init(|| parking_lot::RwLock::new(Vec::new()));
+    *lock.write() = ips.to_vec();
+}
+
+/// 更新全局 capacity 缓存（配置加载/热重载时调用）
+pub fn set_global_capacity(capacity: &crate::types::CapacityConfig) {
+    let lock = GLOBAL_CAPACITY
+        .get_or_init(|| parking_lot::RwLock::new(crate::types::CapacityConfig::default()));
+    *lock.write() = capacity.clone();
+}
+
 /// 获取配置历史锁
 fn config_history_lock() -> &'static parking_lot::RwLock<Vec<ConfigSnapshot>> {
     CONFIG_HISTORY.get_or_init(|| parking_lot::RwLock::new(Vec::new()))
+}
+
+/// Jail 可回滚字段的轻量快照（避免 Clone 整个 Jail 含 RwLock）
+#[derive(Clone)]
+struct JailSnapshot {
+    name: String,
+    enabled: bool,
+    max_retries: u32,
+    findtime: u32,
+    ban_time: i32,
 }
 
 /// 配置快照（用于版本历史和回滚）
@@ -48,17 +79,35 @@ struct ConfigSnapshot {
     ddos: crate::types::DdosConfig,
     /// Web UI 配置
     webui: crate::types::WebuiConfig,
+    /// 容量配置
+    capacity: crate::types::CapacityConfig,
     /// 可信 IP 列表
     trusted_ips: Vec<String>,
+    /// Jail 可回滚字段（max_retries/findtime/ban_time/enabled）
+    jails: Vec<JailSnapshot>,
 }
 
 /// 保存配置快照到版本历史
 fn save_config_snapshot(cfg: &Config) {
+    let jails: Vec<JailSnapshot> = cfg
+        .jails
+        .iter()
+        .map(|j| JailSnapshot {
+            name: j.name.clone(),
+            enabled: j.enabled,
+            max_retries: j.max_retries,
+            findtime: j.findtime,
+            ban_time: j.ban_time,
+        })
+        .collect();
+
     let snapshot = ConfigSnapshot {
         timestamp: crate::types::now_secs(),
         ddos: cfg.ddos.clone(),
         webui: cfg.webui.clone(),
+        capacity: cfg.capacity.clone(),
         trusted_ips: cfg.trusted_ips.clone(),
+        jails,
     };
 
     let mut history = config_history_lock().write();
@@ -78,16 +127,39 @@ pub fn rollback_config(cfg: &mut Config) -> Result<()> {
 
     // 移除当前版本
     history.pop();
-    // 获取上一个版本
-    let snapshot = history.last().unwrap().clone();
+    // 获取上一个版本（前置守卫保证 len >= 2，pop 后 len >= 1）
+    let snapshot = history
+        .last()
+        .expect("配置历史在 pop 后为空，前置守卫 len < 2 应已拦截")
+        .clone();
 
     // 应用快照配置
     cfg.ddos = snapshot.ddos;
     cfg.webui = snapshot.webui;
+    cfg.capacity = snapshot.capacity;
     cfg.trusted_ips = snapshot.trusted_ips;
+
+    // 恢复 Jail 可回滚字段
+    for jail_snap in &snapshot.jails {
+        if let Some(jail) = cfg.jails.iter_mut().find(|j| j.name == jail_snap.name) {
+            jail.enabled = jail_snap.enabled;
+            jail.max_retries = jail_snap.max_retries;
+            jail.findtime = jail_snap.findtime;
+            jail.ban_time = jail_snap.ban_time;
+        }
+    }
 
     // 同步到各组件
     sync_config_to_components(cfg)?;
+
+    // 持久化回滚后的配置，防止重启后丢失回滚状态
+    if let Err(e) = persist_config(cfg) {
+        crate::logger::warn!(
+            crate::logger::get(),
+            "回滚后持久化配置失败";
+            "error" => %e
+        );
+    }
 
     crate::logger::info!(
         crate::logger::get(),
@@ -105,13 +177,40 @@ pub fn rollback_config(cfg: &mut Config) -> Result<()> {
 /// 运行时配置文件路径
 const RUNTIME_CONFIG_PATH: &str = "/var/lib/firewall/runtime_config.yaml";
 
+/// 从全局状态构建 Config 并持久化到运行时配置文件。
+///
+/// Web UI API 修改配置后调用此函数，将当前内存状态写入文件，
+/// 确保守护进程重启后通过 `load_persisted_config` 恢复 API 修改。
+/// trusted_ips 和 capacity 从全局缓存读取，避免写入默认值覆盖原始 YAML 配置。
+pub fn persist_runtime_config() -> Result<()> {
+    let trusted_ips = GLOBAL_TRUSTED_IPS
+        .get()
+        .map(|lock| lock.read().clone())
+        .unwrap_or_default();
+    let capacity = GLOBAL_CAPACITY
+        .get()
+        .map(|lock| lock.read().clone())
+        .unwrap_or_default();
+
+    let cfg = Config {
+        webui: crate::http_exporter::get_global_webui_config().unwrap_or_default(),
+        ddos: crate::http_exporter::get_global_decision_engine()
+            .map(|e| e.current_config())
+            .unwrap_or_default(),
+        trusted_ips,
+        capacity,
+        ..Config::default()
+    };
+    persist_config(&cfg)
+}
+
 /// 保存配置到持久化文件
 fn persist_config(cfg: &Config) -> Result<()> {
     use std::io::Write;
 
     let mut yaml = String::new();
 
-    // 写入 DDoS 配置
+    // 写入 DDoS 配置（全部字段）
     yaml.push_str("ddos:\n");
     yaml.push_str(&format!("  enabled: {}\n", cfg.ddos.enabled));
     yaml.push_str(&format!(
@@ -135,8 +234,53 @@ fn persist_config(cfg: &Config) -> Result<()> {
         cfg.ddos.auto_ban_threshold
     ));
     yaml.push_str(&format!("  check_interval: {}\n", cfg.ddos.check_interval));
+    yaml.push_str(&format!(
+        "  baseline_warmup_samples: {}\n",
+        cfg.ddos.baseline_warmup_samples
+    ));
+    yaml.push_str(&format!(
+        "  max_syn_per_second: {}\n",
+        cfg.ddos.max_syn_per_second
+    ));
+    yaml.push_str(&format!(
+        "  max_udp_per_second: {}\n",
+        cfg.ddos.max_udp_per_second
+    ));
+    yaml.push_str(&format!(
+        "  max_icmp_per_second: {}\n",
+        cfg.ddos.max_icmp_per_second
+    ));
+    yaml.push_str(&format!(
+        "  max_ack_per_second: {}\n",
+        cfg.ddos.max_ack_per_second
+    ));
+    yaml.push_str(&format!(
+        "  max_rst_per_second: {}\n",
+        cfg.ddos.max_rst_per_second
+    ));
+    yaml.push_str(&format!(
+        "  max_fin_per_second: {}\n",
+        cfg.ddos.max_fin_per_second
+    ));
+    yaml.push_str(&format!(
+        "  static_threshold: {}\n",
+        cfg.ddos.static_threshold
+    ));
+    yaml.push_str(&format!(
+        "  dynamic_threshold: {}\n",
+        cfg.ddos.dynamic_threshold
+    ));
+    yaml.push_str(&format!("  ddos_detection: {}\n", cfg.ddos.ddos_detection));
+    yaml.push_str(&format!(
+        "  max_bans_per_second: {}\n",
+        cfg.ddos.max_bans_per_second
+    ));
+    yaml.push_str(&format!(
+        "  max_rate_entries: {}\n",
+        cfg.ddos.max_rate_entries
+    ));
 
-    // 写入 Web UI 配置
+    // 写入 Web UI 配置（全部字段）
     yaml.push_str("\nwebui:\n");
     yaml.push_str(&format!(
         "  sse_push_interval: {}\n",
@@ -157,6 +301,74 @@ fn persist_config(cfg: &Config) -> Result<()> {
     yaml.push_str(&format!(
         "  rate_critical_syn: {}\n",
         cfg.webui.rate_critical_syn
+    ));
+    yaml.push_str(&format!(
+        "  max_syn_per_second: {}\n",
+        cfg.webui.max_syn_per_second
+    ));
+    yaml.push_str(&format!(
+        "  max_udp_per_second: {}\n",
+        cfg.webui.max_udp_per_second
+    ));
+    yaml.push_str(&format!(
+        "  max_icmp_per_second: {}\n",
+        cfg.webui.max_icmp_per_second
+    ));
+    yaml.push_str(&format!(
+        "  max_ack_per_second: {}\n",
+        cfg.webui.max_ack_per_second
+    ));
+    yaml.push_str(&format!(
+        "  max_rst_per_second: {}\n",
+        cfg.webui.max_rst_per_second
+    ));
+    yaml.push_str(&format!(
+        "  max_fin_per_second: {}\n",
+        cfg.webui.max_fin_per_second
+    ));
+    yaml.push_str(&format!(
+        "  static_threshold: {}\n",
+        cfg.webui.static_threshold
+    ));
+    yaml.push_str(&format!(
+        "  dynamic_threshold: {}\n",
+        cfg.webui.dynamic_threshold
+    ));
+    yaml.push_str(&format!("  ddos_detection: {}\n", cfg.webui.ddos_detection));
+    yaml.push_str(&format!(
+        "  max_ban_entries: {}\n",
+        cfg.webui.max_ban_entries
+    ));
+    yaml.push_str(&format!(
+        "  max_whitelist_entries: {}\n",
+        cfg.webui.max_whitelist_entries
+    ));
+    yaml.push_str(&format!(
+        "  max_rate_entries: {}\n",
+        cfg.webui.max_rate_entries
+    ));
+    yaml.push_str(&format!(
+        "  max_local_ip_cache: {}\n",
+        cfg.webui.max_local_ip_cache
+    ));
+
+    // 写入容量配置
+    yaml.push_str("\ncapacity:\n");
+    yaml.push_str(&format!(
+        "  max_ban_entries: {}\n",
+        cfg.capacity.max_ban_entries
+    ));
+    yaml.push_str(&format!(
+        "  max_whitelist_entries: {}\n",
+        cfg.capacity.max_whitelist_entries
+    ));
+    yaml.push_str(&format!(
+        "  max_rate_entries: {}\n",
+        cfg.capacity.max_rate_entries
+    ));
+    yaml.push_str(&format!(
+        "  max_local_ip_cache: {}\n",
+        cfg.capacity.max_local_ip_cache
     ));
 
     // 写入可信 IP
@@ -218,6 +430,7 @@ fn sync_config_to_components(cfg: &Config) -> Result<()> {
         // 构建配置更新消息
         let config_update = ConfigUpdate::new(
             config_flags::BAN_TIME
+                | config_flags::RATE_WINDOW
                 | config_flags::MAX_PPS
                 | config_flags::DDOS_BAN_DURATION
                 | config_flags::MAX_SYN
@@ -228,6 +441,7 @@ fn sync_config_to_components(cfg: &Config) -> Result<()> {
                 | config_flags::MAX_FIN,
         )
         .with_ban_time(cfg.ddos.auto_ban_duration)
+        .with_rate_window(cfg.ddos.check_interval)
         .with_max_pps(cfg.ddos.global_conn_rate as u64)
         .with_ddos_ban_duration(cfg.ddos.auto_ban_duration)
         .with_max_syn(cfg.ddos.max_syn_per_second as u64)
@@ -278,6 +492,9 @@ fn sync_config_to_components(cfg: &Config) -> Result<()> {
         .map(|j| crate::http_exporter::JailInfo {
             name: j.name.clone(),
             enabled: j.enabled,
+            max_retries: j.max_retries,
+            findtime: j.findtime,
+            ban_time: j.ban_time,
         })
         .collect();
     let jail_count = jail_infos.len();
@@ -323,12 +540,10 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
 
     let old_cfg = jail::config_clone(cfg);
 
-    // 保留 config_file / config_dir 保留供 SIGHUP 后继 reload 复用
-    let mut new_cfg = Config {
-        config_file: old_cfg.config_file.clone(),
-        config_dir: old_cfg.config_dir.clone(),
-        ..Config::default()
-    };
+    // 从当前配置初始化（保留运行时修改），解析文件后覆盖文件中的字段
+    let mut new_cfg = jail::config_clone(cfg);
+    // 清空 jails：parse_config 会 push 所有 jail，不清空会导致每次重载 jail 翻倍
+    new_cfg.jails.clear();
 
     let path = std::path::Path::new(&config_path);
     if path.is_file() {
@@ -372,6 +587,10 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
 
     *cfg = new_cfg;
     DAEMON_STATS.config_reloads.fetch_add(1, Ordering::Relaxed);
+
+    // 更新全局缓存（供 persist_runtime_config 使用）
+    set_global_trusted_ips(&cfg.trusted_ips);
+    set_global_capacity(&cfg.capacity);
 
     // 应用动态阈值基线配置（热重载时同步更新）
     crate::types::set_baseline_warmup_samples(cfg.ddos.baseline_warmup_samples);
@@ -491,18 +710,9 @@ fn update_trusted_ips(old_ips: &[String], new_ips: &[String]) {
 
 /// 同步 DDoS 检测开关到内核模块参数
 fn sync_ddos_detection_to_kernel(cfg: &crate::types::Config) {
-    let _ = std::fs::write(
-        "/sys/module/firewall/parameters/fw_static_threshold",
-        if cfg.ddos.static_threshold { "1" } else { "0" },
-    );
-    let _ = std::fs::write(
-        "/sys/module/firewall/parameters/fw_dynamic_threshold",
-        if cfg.ddos.dynamic_threshold { "1" } else { "0" },
-    );
-    let _ = std::fs::write(
-        "/sys/module/firewall/parameters/fw_ddos_detection",
-        if cfg.ddos.ddos_detection { "1" } else { "0" },
-    );
+    crate::ban::write_sysfs_bool_param("fw_static_threshold", cfg.ddos.static_threshold);
+    crate::ban::write_sysfs_bool_param("fw_dynamic_threshold", cfg.ddos.dynamic_threshold);
+    crate::ban::write_sysfs_bool_param("fw_ddos_detection", cfg.ddos.ddos_detection);
 
     crate::logger::info!(
         crate::logger::get(),

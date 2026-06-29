@@ -36,7 +36,7 @@
 | `ban` | 封禁触发逻辑：`max_retries` / `findtime` / `ban_time` 判定，调用 ProcFS 下发 |
 | `jail` | jail 生命周期管理：创建 / 启停 / 热重载差异合并 |
 | `file_monitor` | `inotify` 监听 + 日志轮转检测 + inode 重连 |
-| `http_exporter` | `tiny_http` HTTP 服务，17 个 Prometheus 指标（13 daemon + 4 kernel） |
+| `http_exporter` | `tiny_http` HTTP 服务，24 个 Prometheus 指标（4 kernel + 12 daemon + 4 netlink + 1 uptime + 3 信誉分） |
 | `main` | CLI 解析、信号注册、`epoll` 主循环、tokio runtime 启动 |
 
 ```mermaid
@@ -297,7 +297,7 @@ http://<host>:9119/metrics
 
 ### 指标列表
 
-> 实际由 `src/daemon/http_exporter/metrics.rs` 暴露的 17 个指标。
+> 实际由 `src/daemon/http_exporter/metrics.rs` 暴露的 24 个指标。
 > 早期文档中 `firewall_ban_events_total` / `firewall_packets_*` /
 > `firewall_hash_table_*` / `firewall_jail_*` 等条目均不存在。
 

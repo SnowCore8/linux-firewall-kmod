@@ -98,7 +98,7 @@ make test
 ```
 
 测试入口是 `tests/run_tests.sh`，统一调度 `suites/` 下编号套件。
-当前 19 套件共 **115 项**断言。
+当前 19 套件共 **19 套件**断言。
 
 ### 在 sudo 下运行
 
@@ -172,7 +172,7 @@ Total: passed 113, failed 0, warned 2, skipped 0
 | 18 | `18_log_rotation.sh` | 日志轮转检测（inotify + inode 重连） |
 
 > 编号不连续（05、06 缺失）：原对应旧测试套件，重构时已合并到
-> 现有套件中。当前 19 套件共 **115 项**集成测试。
+> 现有套件中。当前 19 套件共 **19 套件**集成测试。
 
 ## 框架断言
 
@@ -279,7 +279,7 @@ assert_true "[[ -n \"$KERNEL_MODULE_PATH\" ]]" "KERNEL_MODULE_PATH 已设置"
 |-----|--------|----------|
 | `lint` | rustfmt + clippy（`--all-targets --all-features`）+ yamllint + 内核模块 clang-format | 不通过则阻断 merge |
 | `build` | 内核模块（`make kernel-module`）+ 守护进程（`make daemon`） | 编译失败阻断 merge |
-| `test` | `sudo ./tests/run_tests.sh --report`，当前 **115 项**断言 | 任何 fail 阻断 merge |
+| `test` | `sudo ./tests/run_tests.sh --report`，当前 **19 套件**断言 | 任何 fail 阻断 merge |
 
 测试编排细节（`test` job）：
 

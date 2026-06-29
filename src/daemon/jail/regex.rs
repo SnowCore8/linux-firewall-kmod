@@ -44,15 +44,44 @@ pub(crate) fn validate_regex_safety(jail: &Jail, pattern: &str) -> Result<(), St
         ));
     }
 
-    for (i, c) in pattern.chars().enumerate() {
-        if c == ')' {
-            let next = pattern.chars().nth(i + 1);
-            if next == Some('+') || next == Some('*') {
-                return Err(format!(
-                    "Rejected unsafe regex for jail '{}': nested quantifiers detected at offset {}",
-                    jail.name, i
-                ));
+    // 第一检查：嵌套量词 (a+)+ / (a*)* — 使用栈跟踪组内量词
+    // 仅拒绝"组内有量词 + 组外再量化"的危险组合，允许 (error)+ 等安全模式
+    {
+        let mut quantifier_stack: Vec<bool> = Vec::new();
+        let chars: Vec<char> = pattern.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            match chars[i] {
+                '\\' => {
+                    i += 1; // 跳过转义字符
+                }
+                '(' => {
+                    quantifier_stack.push(false);
+                }
+                ')' => {
+                    let had_inner = quantifier_stack.pop().unwrap_or(false);
+                    if had_inner && i + 1 < chars.len() {
+                        let next = chars[i + 1];
+                        if next == '+' || next == '*' || next == '{' {
+                            return Err(format!(
+                                "Rejected unsafe regex for jail '{}': nested quantifiers detected at offset {}",
+                                jail.name, i
+                            ));
+                        }
+                    }
+                }
+                '+' | '*' if !quantifier_stack.is_empty() => {
+                    *quantifier_stack.last_mut().unwrap() = true;
+                }
+                '{' if !quantifier_stack.is_empty()
+                    && i + 1 < chars.len()
+                    && chars[i + 1].is_ascii_digit() =>
+                {
+                    *quantifier_stack.last_mut().unwrap() = true;
+                }
+                _ => {}
             }
+            i += 1;
         }
     }
 
@@ -90,37 +119,37 @@ pub(crate) fn validate_regex_safety(jail: &Jail, pattern: &str) -> Result<(), St
         ));
     }
 
-    let mut paren_depth: usize = 0;
-    let mut has_alternation_in_group = false;
-    for (i, c) in pattern.chars().enumerate() {
-        match c {
-            '(' => {
-                let next = pattern.chars().nth(i + 1);
-                if next != Some('?') {
-                    paren_depth += 1;
-                    has_alternation_in_group = false;
+    // 第三检查：量化的交替组 (a|aa)+ — 使用栈跟踪每层嵌套的 alternation
+    {
+        let mut alt_stack: Vec<bool> = Vec::new();
+        let chars: Vec<char> = pattern.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            match chars[i] {
+                '\\' => {
+                    i += 1; // 跳过转义字符
                 }
-            }
-            ')' => {
-                if has_alternation_in_group {
-                    let next = pattern.chars().nth(i + 1);
-                    if next == Some('+')
-                        || next == Some('*')
-                        || next == Some('{')
-                        || next == Some('?')
-                    {
-                        return Err(format!(
-                            "Rejected unsafe regex for jail '{}': alternation inside quantified group at offset {}",
-                            jail.name, i
-                        ));
+                '(' => {
+                    alt_stack.push(false);
+                }
+                ')' => {
+                    let had_alt = alt_stack.pop().unwrap_or(false);
+                    if had_alt && i + 1 < chars.len() {
+                        let next = chars[i + 1];
+                        if next == '+' || next == '*' || next == '{' || next == '?' {
+                            return Err(format!(
+                                "Rejected unsafe regex for jail '{}': alternation inside quantified group at offset {}",
+                                jail.name, i
+                            ));
+                        }
                     }
                 }
-                paren_depth = paren_depth.saturating_sub(1);
+                '|' if !alt_stack.is_empty() => {
+                    *alt_stack.last_mut().unwrap() = true;
+                }
+                _ => {}
             }
-            '|' if paren_depth > 0 => {
-                has_alternation_in_group = true;
-            }
-            _ => {}
+            i += 1;
         }
     }
 

@@ -18,7 +18,7 @@ scrape_configs:
 
 ### Available Metrics
 
-> The 17 metrics below are actually exposed by
+> The 24 metrics below are actually exposed by
 > `src/daemon/http_exporter/metrics.rs`. Earlier drafts listed
 > `firewall_ban_events_total` / `firewall_packets_dropped_total` /
 > `firewall_hash_table_*` / `firewall_jail_*` — none of which exist in

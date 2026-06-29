@@ -1,6 +1,5 @@
 //! 统一数据模型 — 所有页面共享
 
-
 /// 威胁等级（全局统一）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreatLevel {
@@ -32,8 +31,12 @@ impl ThreatLevel {
             return Self::Normal;
         }
         let max_pps = rates.iter().map(|r| r.packets_per_sec).max().unwrap_or(0);
-        let max_syn = rates.iter().map(|r| r.syn_packets_per_sec).max().unwrap_or(0);
-        
+        let max_syn = rates
+            .iter()
+            .map(|r| r.syn_packets_per_sec)
+            .max()
+            .unwrap_or(0);
+
         if max_pps > 10000 || max_syn > 1000 {
             Self::Critical
         } else if max_pps > 1000 || max_syn > 100 {
@@ -75,7 +78,7 @@ pub fn format_uptime(seconds: u64) -> String {
     let days = seconds / 86400;
     let hours = (seconds % 86400) / 3600;
     let mins = (seconds % 3600) / 60;
-    
+
     if days > 0 {
         format!("{}d {}h", days, hours)
     } else if hours > 0 {
@@ -85,11 +88,10 @@ pub fn format_uptime(seconds: u64) -> String {
     }
 }
 
-
 /// 协议类型判断（所有页面共用）
 pub fn dominant_protocol(rate: &crate::api::RateResponse) -> &'static str {
-    if rate.syn_packets_per_sec > rate.udp_packets_per_sec 
-        && rate.syn_packets_per_sec > rate.icmp_packets_per_sec 
+    if rate.syn_packets_per_sec > rate.udp_packets_per_sec
+        && rate.syn_packets_per_sec > rate.icmp_packets_per_sec
     {
         "SYN"
     } else if rate.udp_packets_per_sec > rate.icmp_packets_per_sec {

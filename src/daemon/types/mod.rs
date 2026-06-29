@@ -26,24 +26,26 @@ mod jail;
 mod stats;
 
 // Re-export 所有公共类型，保持向后兼容
-pub use ban::{ActiveBanCache, BanInfo, BanReason, BanStatus, ACTIVE_BAN_CACHE};
-pub use config::{Config, RetentionConfig, StorageConfig, WebuiConfig, WriterConfig};
+pub use ban::{
+    ActiveBanCache, BanHistory, BanHistoryEntry, BanInfo, BanReason, BanStatus, ACTIVE_BAN_CACHE,
+    BAN_HISTORY,
+};
+pub use config::{
+    CapacityConfig, Config, RetentionConfig, StorageConfig, WebuiConfig, WriterConfig,
+};
 pub use ddos::{ConnRateEntry, DdosConfig, DdosEvent, DdosStats, DDOS_STATS};
 pub use jail::{
     FailedEntry, Jail, RegexInfo, MAX_FAILED_TIMESTAMPS, MAX_JAILS, MAX_LOG_FILES,
     MAX_REGEX_NAME_LEN, MAX_REGEX_PATTERNS,
 };
 pub use stats::{
-    get_baseline_bps, get_baseline_pps, record_ban_duration, record_rate_history,
-    set_baseline_warmup_samples, update_traffic_baseline, with_jail_stats, DaemonStats,
-    JailStatsCounters, JailStatsSnapshot, RateEntry, RateHistoryEntry, WhitelistEntry,
-    BAN_DURATION_BUCKETS, DAEMON_STATS, JAIL_STATS, RATE_CACHE, RATE_HISTORY, WHITELIST_CACHE,
+    get_baseline_bps, get_baseline_pps, get_rate_windows, is_baseline_frozen, record_ban_duration,
+    record_rate_history, set_baseline_warmup_samples, update_rate_windows, update_traffic_baseline,
+    with_jail_stats, AnalysisData, AnalysisIcmpTypeEntry, AnalysisScannerEntry,
+    AnalysisUdpPortEntry, DaemonStats, JailStatsCounters, JailStatsSnapshot, RateEntry,
+    RateHistoryEntry, RateWindowSnapshot, WhitelistEntry, ANALYSIS_CACHE, BAN_DURATION_BUCKETS,
+    DAEMON_STATS, JAIL_STATS, RATE_CACHE, RATE_HISTORY, WHITELIST_CACHE,
 };
-
-/// inotify 事件缓冲大小：`1024` 个事件 × 单事件 `~16B` + 16KB 安全裕量。
-/// 典型负载下保证单次 `read_events` 不丢事件。
-pub const EVENT_BUF_LEN: usize =
-    1024 * std::mem::size_of::<nix::sys::inotify::InotifyEvent>() + 16 * 1024;
 
 /// 获取当前 Unix 时间戳（秒）。
 ///
@@ -124,6 +126,7 @@ mod tests {
             expires_at: 0,
             is_permanent: true,
             fail_count: 0,
+            ban_count: 1,
         };
         assert!(!permanent.is_expired(now));
 
@@ -137,6 +140,7 @@ mod tests {
             expires_at: 1100,
             is_permanent: false,
             fail_count: 3,
+            ban_count: 1,
         };
         assert!(!temp_active.is_expired(now));
 
@@ -150,6 +154,7 @@ mod tests {
             expires_at: 950,
             is_permanent: false,
             fail_count: 3,
+            ban_count: 1,
         };
         assert!(temp_expired.is_expired(now));
     }
@@ -168,6 +173,7 @@ mod tests {
             expires_at: 0,
             is_permanent: true,
             fail_count: 0,
+            ban_count: 1,
         };
         assert_eq!(permanent.duration_secs(now), 100);
 
@@ -181,6 +187,7 @@ mod tests {
             expires_at: 1000,
             is_permanent: false,
             fail_count: 3,
+            ban_count: 1,
         };
         assert_eq!(temp.duration_secs(now), 100);
     }
@@ -204,6 +211,7 @@ mod tests {
             expires_at: 1100,
             is_permanent: false,
             fail_count: 3,
+            ban_count: 1,
         };
         cache.insert(ban1.clone());
 
@@ -242,6 +250,7 @@ mod tests {
             expires_at: 1100,
             is_permanent: false,
             fail_count: 3,
+            ban_count: 1,
         });
         cache.insert(BanInfo {
             ip: "5.6.7.8".to_string(),
@@ -252,6 +261,7 @@ mod tests {
             expires_at: 1100,
             is_permanent: false,
             fail_count: 3,
+            ban_count: 1,
         });
         cache.insert(BanInfo {
             ip: "9.10.11.12".to_string(),
@@ -262,6 +272,7 @@ mod tests {
             expires_at: 1100,
             is_permanent: false,
             fail_count: 0,
+            ban_count: 1,
         });
 
         // 查询 ssh jail
@@ -295,6 +306,7 @@ mod tests {
             expires_at: 1100, // 未过期
             is_permanent: false,
             fail_count: 3,
+            ban_count: 1,
         });
         cache.insert(BanInfo {
             ip: "5.6.7.8".to_string(),
@@ -305,6 +317,7 @@ mod tests {
             expires_at: 950, // 已过期
             is_permanent: false,
             fail_count: 3,
+            ban_count: 1,
         });
         cache.insert(BanInfo {
             ip: "9.10.11.12".to_string(),
@@ -315,6 +328,7 @@ mod tests {
             expires_at: 0, // 永久封禁
             is_permanent: true,
             fail_count: 0,
+            ban_count: 1,
         });
 
         assert_eq!(cache.len(), 3);
@@ -349,6 +363,7 @@ mod tests {
             expires_at: 1100,
             is_permanent: false,
             fail_count: 3,
+            ban_count: 1,
         });
         cache.insert(BanInfo {
             ip: "5.6.7.8".to_string(),
@@ -359,6 +374,7 @@ mod tests {
             expires_at: 1100,
             is_permanent: false,
             fail_count: 0,
+            ban_count: 1,
         });
 
         let snapshot = cache.snapshot();

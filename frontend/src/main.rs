@@ -15,6 +15,7 @@ use leptos::*;
 use leptos_router::*;
 
 use components::layout::DefaultLayout;
+use components::toast::ToastState;
 use views::{bans, dashboard, ddos, jails, logs, settings, whitelist};
 
 fn main() {
@@ -26,9 +27,14 @@ fn main() {
         let sse_state = sse::SseState::create();
         provide_context(sse_state.clone());
 
+        // Toast 通知状态——全局操作反馈
+        let toast_state = ToastState::new();
+        provide_context(toast_state);
+
         view! {
             <Router>
                 <DefaultLayout sse_state=sse_state>
+                    <components::toast::ToastContainer/>
                     <Routes>
                         <Route path="/" view=|| view! { <Redirect path="/dashboard"/> }/>
                         <Route path="/dashboard" view=dashboard::Dashboard/>

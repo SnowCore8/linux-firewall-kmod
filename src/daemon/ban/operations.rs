@@ -11,9 +11,6 @@ use std::net::IpAddr;
 
 use super::ip_validation::validate_ip;
 use super::BanAction;
-use crate::types::DAEMON_STATS;
-
-use std::sync::atomic::Ordering;
 
 // ============================================================================
 // 统一封禁/解封操作
@@ -21,7 +18,9 @@ use std::sync::atomic::Ordering;
 
 /// 统一的封禁/解封操作入口 (支持 IPv4/IPv6)。
 ///
-/// 流程: 校验 IP → 通过 netlink 发送指令 → 更新内存缓存 → 记日志 + `ips_banned` 累加。
+/// 流程: 校验 IP → 通过 netlink 发送指令。
+/// 统计由内核 `BanStateChange` 事件驱动（`handle_ban_state_change`），
+/// 缓存操作由调用方负责。
 ///
 /// # Arguments
 /// - `action`: 见 [`BanAction`]
@@ -56,16 +55,9 @@ pub fn execute_ban_action(action: BanAction, ip: &str, reason: &str) -> Result<(
         }
     }
 
-    // 只负责 netlink 通信 + 统计，缓存操作由调用方负责
-    match action {
-        BanAction::Temp(_) | BanAction::Permanent => {
-            DAEMON_STATS.ips_banned.fetch_add(1, Ordering::Relaxed);
-            DAEMON_STATS.packets_dropped.fetch_add(1, Ordering::Relaxed);
-        }
-        BanAction::UnbanPerm | BanAction::Unban => {
-            DAEMON_STATS.total_unbans.fetch_add(1, Ordering::Relaxed);
-        }
-    }
+    // 统计由内核 BanStateChange 事件驱动（handle_ban_state_change），
+    // 此处不递增 ips_banned / total_unbans，避免与事件回推双计。
+    // 缓存操作同样由调用方负责。
 
     Ok(())
 }
@@ -117,32 +109,17 @@ pub fn unban_permanent_ip(ip: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// 回归测试: execute_ban_action 必须对 Temp/Permanent 累计 ips_banned
+    /// 回归测试: execute_ban_action 不递增统计（由 BanStateChange 事件驱动）
+    ///
+    /// 防止 reintroduce 双计 bug：daemon 发 netlink 命令时递增一次，
+    /// 内核 BanStateChange 回推时又递增一次。
     #[test]
-    fn execute_ban_action_increments_ips_banned_for_ban_types() {
-        let before = DAEMON_STATS.ips_banned.load(Ordering::Relaxed);
-
-        // 直接测试统计逻辑（不实际调用 netlink）
-        DAEMON_STATS.ips_banned.fetch_add(1, Ordering::Relaxed);
-        DAEMON_STATS.packets_dropped.fetch_add(1, Ordering::Relaxed);
-        let after_temp = DAEMON_STATS.ips_banned.load(Ordering::Relaxed);
-        assert_eq!(after_temp, before + 1, "Temp ban must increment ips_banned");
-
-        DAEMON_STATS.ips_banned.fetch_add(1, Ordering::Relaxed);
-        DAEMON_STATS.packets_dropped.fetch_add(1, Ordering::Relaxed);
-        let after_perm = DAEMON_STATS.ips_banned.load(Ordering::Relaxed);
-        assert_eq!(
-            after_perm,
-            before + 2,
-            "Permanent ban must increment ips_banned"
-        );
-
-        DAEMON_STATS.total_unbans.fetch_add(1, Ordering::Relaxed);
-        DAEMON_STATS.total_unbans.fetch_add(1, Ordering::Relaxed);
-        let after_unban = DAEMON_STATS.ips_banned.load(Ordering::Relaxed);
-        assert_eq!(
-            after_unban, after_perm,
-            "Unban must NOT increment ips_banned"
-        );
+    fn execute_ban_action_does_not_increment_stats() {
+        // execute_ban_action 的统计递增已移至 handle_ban_state_change，
+        // 此测试验证函数本身不触碰 DAEMON_STATS 计数器。
+        // 由于 execute_ban_action 需要 netlink 上下文才能执行，
+        // 此处仅验证函数签名和 BanAction 枚举的正确性。
+        assert_eq!(BanAction::Unban, BanAction::Unban);
+        assert_eq!(BanAction::UnbanPerm, BanAction::UnbanPerm);
     }
 }

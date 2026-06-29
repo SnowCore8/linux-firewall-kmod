@@ -19,7 +19,7 @@ auto_version() {
     fi
 }
 DEFAULT_VERSION="$(auto_version)"
-: "${DEFAULT_VERSION:=2.1.1}"
+: "${DEFAULT_VERSION:=2.2.0}"
 VERSION="${1:-$DEFAULT_VERSION}"
 # 移除版本号前的 'v' 前缀（deb 版本必须以数字开头）
 VERSION="${VERSION#v}"

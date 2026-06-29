@@ -18,7 +18,7 @@ scrape_configs:
 
 ### 可用指标
 
-> 以下 17 个指标由 `src/daemon/http_exporter/metrics.rs` 实际暴露。
+> 以下 24 个指标由 `src/daemon/http_exporter/metrics.rs` 实际暴露。
 > 早期文档中 `firewall_ban_events_total` / `firewall_packets_dropped_total` /
 > `firewall_hash_table_*` / `firewall_jail_*` 等条目均不存在，已删除。
 

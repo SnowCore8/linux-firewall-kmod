@@ -157,10 +157,9 @@ static struct ip_rate_entry *create_rate_entry(struct firewall_info *fw, u8 af,
  * - 冷路径（新条目）：per-bucket 锁，减少竞争
  */
 int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
-                      u32 packet_len, u8 protocol, u8 tcp_flags) {
+                      u32 packet_len, u8 protocol, u8 tcp_flags, u16 dst_port) {
   struct ip_rate_entry *entry;
   unsigned long now = jiffies;
-  unsigned long elapsed;
   u32 hash;
   spinlock_t *lock;
 
@@ -175,14 +174,13 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
 
   if (entry) {
     /* 检查窗口是否过期 */
-    elapsed = now - entry->window_start;
     if (time_after(now, entry->window_start + fw->rate_window_jiffies)) {
-      /* 窗口过期，重置计数器（需要获取锁） */
-      rcu_read_unlock();
-
+      /* 窗口过期，重置计数器（需要获取锁）
+       * 先获取 spinlock 再释放 RCU，防止 entry 在间隙被 cleanup 释放 */
       hash = hash_ip_for_rate(af, ip, RATE_HASH_BITS);
       lock = get_rate_lock(fw, af, hash);
       spin_lock_bh(lock);
+      rcu_read_unlock();
 
       /* 双重检查：可能其他 CPU 已经重置 */
       if (time_after(now, entry->window_start + fw->rate_window_jiffies)) {
@@ -247,6 +245,8 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
         atomic64_set(&entry->ack_count, 0);
         atomic64_set(&entry->rst_count, 0);
         atomic64_set(&entry->fin_count, 0);
+        atomic_set(&entry->unique_ports, 0);
+        entry->last_dst_port = 0;
         entry->window_start = now;
 
         /* 根据协议类型更新计数器 */
@@ -284,6 +284,12 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
         } else if (protocol == IPPROTO_ICMP) {
           atomic64_inc(&entry->icmp_count);
         }
+
+        /* 端口扫描检测：跟踪目标端口变化 */
+        if (dst_port > 0 && dst_port != READ_ONCE(entry->last_dst_port)) {
+          atomic_inc(&entry->unique_ports);
+          WRITE_ONCE(entry->last_dst_port, dst_port);
+        }
       }
 
       entry->last_activity = now;
@@ -311,7 +317,13 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
       atomic64_inc(&entry->icmp_count);
     }
 
-    entry->last_activity = now;
+    /* 端口扫描检测：跟踪目标端口变化（轻量级近似） */
+    if (dst_port > 0 && dst_port != READ_ONCE(entry->last_dst_port)) {
+      atomic_inc(&entry->unique_ports);
+      WRITE_ONCE(entry->last_dst_port, dst_port);
+    }
+
+    WRITE_ONCE(entry->last_activity, now);
 
     rcu_read_unlock();
     return 0;
@@ -371,6 +383,8 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
   atomic64_set(&entry->ack_count, 0);
   atomic64_set(&entry->rst_count, 0);
   atomic64_set(&entry->fin_count, 0);
+  atomic_set(&entry->unique_ports, 0);
+  entry->last_dst_port = dst_port;
 
   /* 根据协议类型设置初始值 */
   if (protocol == IPPROTO_TCP) {
@@ -450,14 +464,15 @@ bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip) {
       u64 dynamic_pps, dynamic_bps;
       u64 ratio64 = (u64)ratio;
 
-      /* 溢出防护：baseline × ratio 可能超过 U64_MAX */
+      /* 溢出防护：baseline × ratio 可能超过 U64_MAX，
+       * 溢出时回退到静态阈值（dynamic = 0 使条件永不为 true） */
       if (check_mul_overflow(baseline_pps, ratio64, &dynamic_pps))
-        dynamic_pps = U64_MAX;
+        dynamic_pps = 0;
       else
         dynamic_pps /= 100;
 
       if (check_mul_overflow(baseline_bps, ratio64, &dynamic_bps))
-        dynamic_bps = U64_MAX;
+        dynamic_bps = 0;
       else
         dynamic_bps /= 100;
 
@@ -653,7 +668,7 @@ void cleanup_rate_entries(struct firewall_info *fw) {
 
     spin_lock_bh(lock);
     hlist_for_each_entry_safe(entry, tmp, head, hash) {
-      if (time_after(now, entry->last_activity + expire_time)) {
+      if (time_after(now, READ_ONCE(entry->last_activity) + expire_time)) {
         hlist_del_rcu(&entry->hash);
         call_rcu(&entry->rcu_head, free_rate_entry_rcu);
         atomic_dec(&fw->rate_count);
@@ -670,7 +685,7 @@ void cleanup_rate_entries(struct firewall_info *fw) {
 
     spin_lock_bh(lock);
     hlist_for_each_entry_safe(entry, tmp, head, hash) {
-      if (time_after(now, entry->last_activity + expire_time)) {
+      if (time_after(now, READ_ONCE(entry->last_activity) + expire_time)) {
         hlist_del_rcu(&entry->hash);
         call_rcu(&entry->rcu_head, free_rate_entry_rcu);
         atomic_dec(&fw->rate_count);
@@ -733,5 +748,260 @@ void clear_all_rate_entries(struct firewall_info *fw) {
 
   if (cleared > 0) {
     pr_info("firewall: cleared %d rate entries (config update)\n", cleared);
+  }
+}
+
+/* ============================================================================
+ * UDP 端口分布统计
+ * ========================================================================= */
+
+/* UDP 端口条目过期时间（秒）- 超过此时间未活动的条目将被清理 */
+#define UDP_PORT_ENTRY_EXPIRE_SECONDS 300 /* 5 分钟 */
+
+/**
+ * free_udp_port_entry_rcu - RCU 回调函数，释放 UDP 端口条目
+ * @head: RCU 头
+ *
+ * 在 RCU 宽限期结束后调用，安全释放内存
+ */
+void free_udp_port_entry_rcu(struct rcu_head *head) {
+  struct udp_port_entry *entry = container_of(head, struct udp_port_entry, rcu_head);
+  kfree(entry);
+}
+
+/**
+ * record_udp_port - 记录 UDP 目标端口统计
+ * @fw: 防火墙信息
+ * @dst_port: UDP 目标端口（主机字节序）
+ * @packet_len: 数据包长度
+ *
+ * 在 netfilter 钩子中调用，统计 UDP 端口分布
+ * 使用 RCU 保护读操作，spinlock 保护写操作
+ */
+void record_udp_port(struct firewall_info *fw, u16 dst_port, u32 packet_len) {
+  struct udp_port_entry *entry, *new_entry = NULL;
+  struct hlist_head *head;
+  u32 hash;
+
+  if (unlikely(!fw || dst_port == 0))
+    return;
+
+  /* 计算哈希值 */
+  hash = hash_32(dst_port, UDP_PORT_HASH_BITS);
+  head = &fw->udp_port_table[hash];
+
+  /* RCU 读锁查找已有条目 */
+  rcu_read_lock();
+  hlist_for_each_entry_rcu(entry, head, hash) {
+    if (entry->port == dst_port) {
+      /* 找到已有条目，更新计数 */
+      atomic64_inc(&entry->packet_count);
+      atomic64_add(packet_len, &entry->byte_count);
+      WRITE_ONCE(entry->last_seen, jiffies);
+      rcu_read_unlock();
+      return;
+    }
+  }
+  rcu_read_unlock();
+
+  /* 未找到条目，需要创建新条目 */
+  /* 检查是否超过最大条目数 */
+  if (unlikely(atomic_read(&fw->udp_port_count) >= MAX_UDP_PORT_ENTRIES)) {
+    /* 触发清理，但不阻塞当前包 */
+    return;
+  }
+
+  /* 预分配新条目（在锁外分配，减少锁持有时间） */
+  new_entry = kmalloc(sizeof(*new_entry), GFP_ATOMIC);
+  if (unlikely(!new_entry))
+    return;
+
+  /* 获取写锁并插入 */
+  spin_lock_bh(&fw->udp_port_lock);
+
+  /* 再次检查（可能在等待锁期间已被其他 CPU 插入） */
+  hlist_for_each_entry(entry, head, hash) {
+    if (entry->port == dst_port) {
+      atomic64_inc(&entry->packet_count);
+      atomic64_add(packet_len, &entry->byte_count);
+      WRITE_ONCE(entry->last_seen, jiffies);
+      spin_unlock_bh(&fw->udp_port_lock);
+      kfree(new_entry); /* 释放未使用的预分配条目 */
+      return;
+    }
+  }
+
+  /* 初始化并插入新条目 */
+  new_entry->port = dst_port;
+  atomic64_set(&new_entry->packet_count, 1);
+  atomic64_set(&new_entry->byte_count, packet_len);
+  new_entry->last_seen = jiffies;
+
+  hlist_add_head_rcu(&new_entry->hash, head);
+  atomic_inc(&fw->udp_port_count);
+  spin_unlock_bh(&fw->udp_port_lock);
+}
+
+/**
+ * cleanup_udp_port_entries - 清理过期的 UDP 端口条目
+ * @fw: 防火墙信息
+ *
+ * 清理超过 UDP_PORT_ENTRY_EXPIRE_SECONDS 未活动的条目
+ * 由定时器或 procfs 读取时调用
+ */
+void cleanup_udp_port_entries(struct firewall_info *fw) {
+  int i;
+  unsigned long expire_time = jiffies - (UDP_PORT_ENTRY_EXPIRE_SECONDS * HZ);
+  struct udp_port_entry *entry;
+  struct hlist_node *tmp;
+  int cleared = 0;
+
+  if (unlikely(!fw))
+    return;
+
+  for (i = 0; i < UDP_PORT_HASH_SIZE; i++) {
+    struct hlist_head *head = &fw->udp_port_table[i];
+
+    spin_lock_bh(&fw->udp_port_lock);
+    hlist_for_each_entry_safe(entry, tmp, head, hash) {
+      if (time_after(expire_time, READ_ONCE(entry->last_seen))) {
+        hlist_del_rcu(&entry->hash);
+        call_rcu(&entry->rcu_head, free_udp_port_entry_rcu);
+        atomic_dec(&fw->udp_port_count);
+        cleared++;
+      }
+    }
+    spin_unlock_bh(&fw->udp_port_lock);
+  }
+
+  if (cleared > 0) {
+    pr_debug("firewall: cleaned %d expired UDP port entries\n", cleared);
+  }
+}
+
+/**
+ * free_icmp_type_entry_rcu - RCU 回调释放 ICMP 类型条目
+ * @head: RCU 头
+ */
+void free_icmp_type_entry_rcu(struct rcu_head *head) {
+  struct icmp_type_entry *entry = container_of(head, struct icmp_type_entry, rcu_head);
+  kfree(entry);
+}
+
+/* ICMP 类型条目过期时间（秒） */
+#define ICMP_TYPE_ENTRY_EXPIRE_SECONDS 300 /* 5 分钟 */
+
+/**
+ * record_icmp_type - 记录 ICMP 类型/代码统计
+ * @fw: 防火墙信息
+ * @type: ICMP 类型（0-255）
+ * @code: ICMP 代码（0-255）
+ * @packet_len: 数据包长度
+ *
+ * 在 netfilter 钩子中调用，统计 ICMP 类型分布
+ * 使用 RCU 保护读操作，spinlock 保护写操作
+ */
+void record_icmp_type(struct firewall_info *fw, u8 type, u8 code, u32 packet_len) {
+  struct icmp_type_entry *entry, *new_entry = NULL;
+  struct hlist_head *head;
+  u32 hash;
+  u16 type_code;
+
+  if (unlikely(!fw))
+    return;
+
+  /* 将 type 和 code 组合成 16 位值用于哈希 */
+  type_code = ((u16)type << 8) | code;
+
+  /* 计算哈希值 */
+  hash = hash_32(type_code, ICMP_TYPE_HASH_BITS);
+  head = &fw->icmp_type_table[hash];
+
+  /* RCU 读锁查找已有条目 */
+  rcu_read_lock();
+  hlist_for_each_entry_rcu(entry, head, hash) {
+    if (entry->type == type && entry->code == code) {
+      /* 找到已有条目，更新计数 */
+      atomic64_inc(&entry->packet_count);
+      atomic64_add(packet_len, &entry->byte_count);
+      WRITE_ONCE(entry->last_seen, jiffies);
+      rcu_read_unlock();
+      return;
+    }
+  }
+  rcu_read_unlock();
+
+  /* 未找到条目，需要创建新条目 */
+  /* 检查是否超过最大条目数 */
+  if (unlikely(atomic_read(&fw->icmp_type_count) >= MAX_ICMP_TYPE_ENTRIES)) {
+    /* 触发清理，但不阻塞当前包 */
+    return;
+  }
+
+  /* 预分配新条目（在锁外分配，减少锁持有时间） */
+  new_entry = kmalloc(sizeof(*new_entry), GFP_ATOMIC);
+  if (unlikely(!new_entry))
+    return;
+
+  /* 获取写锁并插入 */
+  spin_lock_bh(&fw->icmp_type_lock);
+
+  /* 再次检查（可能在等待锁期间已被其他 CPU 插入） */
+  hlist_for_each_entry(entry, head, hash) {
+    if (entry->type == type && entry->code == code) {
+      atomic64_inc(&entry->packet_count);
+      atomic64_add(packet_len, &entry->byte_count);
+      WRITE_ONCE(entry->last_seen, jiffies);
+      spin_unlock_bh(&fw->icmp_type_lock);
+      kfree(new_entry); /* 释放未使用的预分配条目 */
+      return;
+    }
+  }
+
+  /* 初始化并插入新条目 */
+  new_entry->type = type;
+  new_entry->code = code;
+  atomic64_set(&new_entry->packet_count, 1);
+  atomic64_set(&new_entry->byte_count, packet_len);
+  new_entry->last_seen = jiffies;
+
+  hlist_add_head_rcu(&new_entry->hash, head);
+  atomic_inc(&fw->icmp_type_count);
+  spin_unlock_bh(&fw->icmp_type_lock);
+}
+
+/**
+ * cleanup_icmp_type_entries - 清理过期的 ICMP 类型条目
+ * @fw: 防火墙信息
+ *
+ * 清理超过 ICMP_TYPE_ENTRY_EXPIRE_SECONDS 未活动的条目
+ */
+void cleanup_icmp_type_entries(struct firewall_info *fw) {
+  int i;
+  unsigned long expire_time = jiffies - (ICMP_TYPE_ENTRY_EXPIRE_SECONDS * HZ);
+  struct icmp_type_entry *entry;
+  struct hlist_node *tmp;
+  int cleared = 0;
+
+  if (unlikely(!fw))
+    return;
+
+  for (i = 0; i < ICMP_TYPE_HASH_SIZE; i++) {
+    struct hlist_head *head = &fw->icmp_type_table[i];
+
+    spin_lock_bh(&fw->icmp_type_lock);
+    hlist_for_each_entry_safe(entry, tmp, head, hash) {
+      if (time_after(expire_time, READ_ONCE(entry->last_seen))) {
+        hlist_del_rcu(&entry->hash);
+        call_rcu(&entry->rcu_head, free_icmp_type_entry_rcu);
+        atomic_dec(&fw->icmp_type_count);
+        cleared++;
+      }
+    }
+    spin_unlock_bh(&fw->icmp_type_lock);
+  }
+
+  if (cleared > 0) {
+    pr_debug("firewall: cleaned %d expired ICMP type entries\n", cleared);
   }
 }

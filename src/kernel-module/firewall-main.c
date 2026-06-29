@@ -82,11 +82,17 @@ static void cleanup_all_entries(void) {
   }
 
   hash_for_each_safe(fw_info.whitelist_table_ipv4, wl_hash, tmp, wl, hash) {
+    /* 子网条目需同时从子网链表移除，防止野指针 */
+    if (wl->mask.ipv4_mask != 0xFFFFFFFF)
+      list_del_rcu(&wl->subnet_node);
     hlist_del_rcu(&wl->hash);
     call_rcu(&wl->rcu_head, free_whitelist_entry_rcu);
   }
 
   hash_for_each_safe(fw_info.whitelist_table_ipv6, wl_hash, tmp, wl, hash) {
+    /* 子网条目需同时从子网链表移除，防止野指针 */
+    if (wl->mask.prefix_len < 128)
+      list_del_rcu(&wl->subnet_node);
     hlist_del_rcu(&wl->hash);
     call_rcu(&wl->rcu_head, free_whitelist_entry_rcu);
   }
@@ -118,6 +124,30 @@ static void cleanup_all_entries(void) {
       synchronize_rcu();
       kfree(old_cache);
     }
+  }
+
+  /* 清理 UDP 端口分布统计表 */
+  {
+    struct udp_port_entry *udp_entry;
+    u32 udp_hash;
+
+    hash_for_each_safe(fw_info.udp_port_table, udp_hash, tmp, udp_entry, hash) {
+      hlist_del_rcu(&udp_entry->hash);
+      call_rcu(&udp_entry->rcu_head, free_udp_port_entry_rcu);
+    }
+    atomic_set(&fw_info.udp_port_count, 0);
+  }
+
+  /* 清理 ICMP 类型分布统计表 */
+  {
+    struct icmp_type_entry *icmp_entry;
+    u32 icmp_hash;
+
+    hash_for_each_safe(fw_info.icmp_type_table, icmp_hash, tmp, icmp_entry, hash) {
+      hlist_del_rcu(&icmp_entry->hash);
+      call_rcu(&icmp_entry->rcu_head, free_icmp_type_entry_rcu);
+    }
+    atomic_set(&fw_info.icmp_type_count, 0);
   }
 
   /* 等待所有 RCU 回调完成，确保条目内存被完全释放 */
@@ -188,6 +218,38 @@ static int __init firewall_init(void) {
     }
   }
 
+  /* 初始化 UDP 端口分布统计 */
+  hash_init(fw_info.udp_port_table);
+  spin_lock_init(&fw_info.udp_port_lock);
+  atomic_set(&fw_info.udp_port_count, 0);
+
+  /* 初始化 ICMP 类型分布统计 */
+  hash_init(fw_info.icmp_type_table);
+  spin_lock_init(&fw_info.icmp_type_lock);
+  atomic_set(&fw_info.icmp_type_count, 0);
+
+  /* 初始化包大小分布直方图计数器 */
+  atomic64_set(&fw_info.pkt_size_tiny, 0);
+  atomic64_set(&fw_info.pkt_size_small, 0);
+  atomic64_set(&fw_info.pkt_size_medium, 0);
+  atomic64_set(&fw_info.pkt_size_large, 0);
+  atomic64_set(&fw_info.pkt_size_jumbo, 0);
+
+  /* 初始化 TTL 分布直方图计数器 */
+  atomic64_set(&fw_info.ttl_scan, 0);
+  atomic64_set(&fw_info.ttl_very_short, 0);
+  atomic64_set(&fw_info.ttl_short, 0);
+  atomic64_set(&fw_info.ttl_normal, 0);
+  atomic64_set(&fw_info.ttl_long, 0);
+  atomic64_set(&fw_info.ttl_max, 0);
+
+  /* 初始化 IP 分片统计计数器 */
+  atomic64_set(&fw_info.ip_frag_count, 0);
+  atomic64_set(&fw_info.ip_total_count, 0);
+
+  /* 初始化端口扫描检测计数器 */
+  atomic_set(&fw_info.port_scan_detected, 0);
+
   /* 设置速率检测默认配置 */
   fw_info.rate_window_seconds = DEFAULT_RATE_WINDOW_SECONDS;
   fw_info.rate_window_jiffies = msecs_to_jiffies(DEFAULT_RATE_WINDOW_SECONDS * 1000);
@@ -223,6 +285,7 @@ static int __init firewall_init(void) {
   atomic_set(&fw_info.alloc_failure_count, 0);
   atomic64_set(&fw_info.packets_dropped, 0);
   atomic64_set(&fw_info.packets_accepted, 0);
+  atomic64_set(&fw_info.tcp_anomaly_dropped, 0);
   atomic_set(&fw_info.cleanup_cycles, 0);
   atomic_set(&fw_info.cleanup_expired_total, 0);
 
@@ -279,8 +342,10 @@ err_notifier:
   atomic_set(&fw_info.shutting_down, 1);
   cancel_delayed_work_sync(&fw_info.sync_work);
   unregister_netdev_notifier(&fw_info);
+  destroy_procfs_entries(&fw_info);
   synchronize_rcu();
   cleanup_all_entries();
+  fw_netlink_exit();
   return ret;
 }
 

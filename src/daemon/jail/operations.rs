@@ -104,7 +104,7 @@ pub fn clone_jail(dst: &mut Jail, src: &Jail) -> Result<(), String> {
     Ok(())
 }
 pub fn init_log_patterns(cfg: &mut Config) -> Result<(), String> {
-    let mut ret = Ok(());
+    let mut errors: Vec<String> = Vec::new();
 
     for jail in &mut cfg.jails {
         if !jail.enabled {
@@ -114,12 +114,16 @@ pub fn init_log_patterns(cfg: &mut Config) -> Result<(), String> {
         if jail.regexes.is_empty() {
             // 无正则表达式，跳过
         } else if let Err(e) = compile_jail_regex(jail) {
-            ret = Err(e);
+            errors.push(e);
             // 继续为其他 jail 编译
         }
     }
 
-    ret
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 /// 释放所有全局正则模式。保留函数以与 C 版 API 对齐;当前实现

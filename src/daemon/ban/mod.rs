@@ -10,7 +10,7 @@ mod ip_validation;
 mod operations;
 
 // Re-export 所有公共类型和函数
-pub use ip_validation::{validate_ip, validate_ipv4, ValidatedIp};
+pub use ip_validation::{is_internal_ip, validate_ip, validate_ipv4, ValidatedIp};
 pub use operations::{ban_ip, ban_ip_permanent, execute_ban_action, unban_ip, unban_permanent_ip};
 
 // ============================================================================
@@ -38,7 +38,24 @@ pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
         }
     };
     for ip in trusted_ips {
-        let (ip_addr, prefix_len) = parse_cidr(ip);
+        let (ip_addr, prefix_len) = match parse_cidr(ip) {
+            Ok(v) => v,
+            Err(e) => {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "解析可信 IP CIDR 失败";
+                    "ip" => %ip,
+                    "error" => %e
+                );
+                failed.push(ip.clone());
+                continue;
+            }
+        };
+        // 检查本地缓存：已存在则跳过，避免重复添加导致计数器膨胀
+        let cidr_key = build_cidr_key(&ip_addr, prefix_len);
+        if crate::types::WHITELIST_CACHE.read().contains_key(&cidr_key) {
+            continue;
+        }
         if let Err(e) = netlink_ctx.send_add_whitelist(&ip_addr, prefix_len, "") {
             crate::logger::warn!(
                 crate::logger::get(),
@@ -70,13 +87,7 @@ pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
 /// 由于 ListWhitelistResponse 是请求-响应模式，启动后可能因 race condition 错过，
 /// 导致缓存为空。本函数保证 init_trusted_ips / remove_trusted_ips 后缓存立即一致。
 fn append_whitelist_cache(ip: &str, prefix_len: u8) {
-    let cidr = if ip.contains(':') {
-        format!("{}/{}", ip, if prefix_len == 0 { 128 } else { prefix_len })
-    } else if prefix_len == 32 || prefix_len == 0 {
-        ip.to_string()
-    } else {
-        format!("{}/{}", ip, prefix_len)
-    };
+    let cidr = build_cidr_key(ip, prefix_len);
     // HashMap insert 天然幂等，重复写入即覆盖
     crate::types::WHITELIST_CACHE.write().insert(
         cidr.clone(),
@@ -85,6 +96,17 @@ fn append_whitelist_cache(ip: &str, prefix_len: u8) {
             device: String::new(),
         },
     );
+}
+
+/// 构建 CIDR 缓存键（与 WHITELIST_CACHE 的 key 格式一致）
+fn build_cidr_key(ip: &str, prefix_len: u8) -> String {
+    if ip.contains(':') {
+        format!("{}/{}", ip, if prefix_len == 0 { 128 } else { prefix_len })
+    } else if prefix_len == 32 || prefix_len == 0 {
+        ip.to_string()
+    } else {
+        format!("{}/{}", ip, prefix_len)
+    }
 }
 
 /// 从内核白名单移除可信 IP。
@@ -108,7 +130,24 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
         }
     };
     for ip in trusted_ips {
-        let (ip_addr, prefix_len) = parse_cidr(ip);
+        let (ip_addr, prefix_len) = match parse_cidr(ip) {
+            Ok(v) => v,
+            Err(e) => {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "解析可信 IP CIDR 失败";
+                    "ip" => %ip,
+                    "error" => %e
+                );
+                failed.push(ip.clone());
+                continue;
+            }
+        };
+        // 检查本地缓存：不存在则跳过，避免移除不存在的条目导致计数器下溢
+        let cidr_key = build_cidr_key(&ip_addr, prefix_len);
+        if !crate::types::WHITELIST_CACHE.read().contains_key(&cidr_key) {
+            continue;
+        }
         if let Err(e) = netlink_ctx.send_remove_whitelist(&ip_addr, prefix_len) {
             crate::logger::warn!(
                 crate::logger::get(),
@@ -137,29 +176,52 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
 
 /// 从 WHITELIST_CACHE 移除条目
 fn remove_whitelist_cache(ip: &str, prefix_len: u8) {
-    let cidr = if ip.contains(':') {
-        format!("{}/{}", ip, if prefix_len == 0 { 128 } else { prefix_len })
-    } else if prefix_len == 32 || prefix_len == 0 {
-        ip.to_string()
-    } else {
-        format!("{}/{}", ip, prefix_len)
-    };
+    let cidr = build_cidr_key(ip, prefix_len);
     crate::types::WHITELIST_CACHE.write().remove(&cidr);
 }
 
-/// 解析 CIDR 格式，返回 (IP地址, 前缀长度)
-fn parse_cidr(ip: &str) -> (String, u8) {
+/// 解析 CIDR 格式，返回 (IP地址, 前缀长度)。
+///
+/// 无效前缀（如 `/abc`、`/256`）返回错误而非静默使用默认值。
+fn parse_cidr(ip: &str) -> anyhow::Result<(String, u8)> {
     if let Some(pos) = ip.find('/') {
         let ip_addr = &ip[..pos];
-        let prefix_len =
-            ip[pos + 1..]
-                .parse::<u8>()
-                .unwrap_or(if ip.contains(':') { 128 } else { 32 });
-        (ip_addr.to_string(), prefix_len)
+        let max_prefix = if ip.contains(':') { 128u8 } else { 32u8 };
+        let prefix_len: u8 = ip[pos + 1..]
+            .parse()
+            .map_err(|e| anyhow::anyhow!("无效 CIDR 前缀 '{}': {}", &ip[pos + 1..], e))?;
+        if prefix_len > max_prefix {
+            anyhow::bail!(
+                "CIDR 前缀 {} 超出 {} 地址范围上限 /{}",
+                prefix_len,
+                if max_prefix == 128 { "IPv6" } else { "IPv4" },
+                max_prefix
+            );
+        }
+        Ok((ip_addr.to_string(), prefix_len))
     } else if ip.contains(':') {
-        (ip.to_string(), 128)
+        Ok((ip.to_string(), 128))
     } else {
-        (ip.to_string(), 32)
+        Ok((ip.to_string(), 32))
+    }
+}
+
+// ============================================================================
+// sysfs 内核参数写入（共享工具函数）
+// ============================================================================
+
+/// 写入布尔值到内核模块参数（/sys/module/firewall/parameters/）
+///
+/// 用于同步 DDoS 检测开关到内核。写入失败时记录警告日志。
+pub fn write_sysfs_bool_param(param_name: &str, value: bool) {
+    let path = format!("/sys/module/firewall/parameters/{param_name}");
+    if let Err(e) = std::fs::write(&path, if value { "1" } else { "0" }) {
+        crate::logger::warn!(
+            crate::logger::get(),
+            "写入内核参数失败";
+            "param" => param_name,
+            "error" => %e
+        );
     }
 }
 

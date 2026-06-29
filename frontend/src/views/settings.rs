@@ -86,6 +86,42 @@ pub fn Settings() -> impl IntoView {
         let max_whitelist_entries = edit_max_whitelist_entries.get().parse::<u32>().ok();
         let max_rate_entries = edit_max_rate_entries.get().parse::<u32>().ok();
         let max_local_ip_cache = edit_max_local_ip_cache.get().parse::<u32>().ok();
+        // 输入校验：非空字段必须解析成功且 > 0
+        let parse_errors: Vec<&str> = [
+            ("SSE 推送间隔", edit_sse.get(), sse_val.is_some()),
+            ("速率警告阈值", edit_warning_pps.get(), warning_pps.is_some()),
+            ("速率严重阈值", edit_critical_pps.get(), critical_pps.is_some()),
+            ("SYN 警告阈值", edit_warning_syn.get(), warning_syn.is_some()),
+            ("SYN 严重阈值", edit_critical_syn.get(), critical_syn.is_some()),
+            ("SYN Flood", edit_max_syn.get(), max_syn.is_some()),
+            ("UDP Flood", edit_max_udp.get(), max_udp.is_some()),
+            ("ICMP Flood", edit_max_icmp.get(), max_icmp.is_some()),
+            ("ACK Flood", edit_max_ack.get(), max_ack.is_some()),
+            ("RST Flood", edit_max_rst.get(), max_rst.is_some()),
+            ("FIN Flood", edit_max_fin.get(), max_fin.is_some()),
+            ("封禁表最大条目数", edit_max_ban_entries.get(), max_ban_entries.is_some()),
+            ("白名单最大条目数", edit_max_whitelist_entries.get(), max_whitelist_entries.is_some()),
+            ("速率表最大条目数", edit_max_rate_entries.get(), max_rate_entries.is_some()),
+            ("本地 IP 缓存最大条目数", edit_max_local_ip_cache.get(), max_local_ip_cache.is_some()),
+        ].iter().filter(|(_, raw, parsed)| !raw.trim().is_empty() && !parsed).map(|(label, _, _)| *label).collect();
+        if !parse_errors.is_empty() {
+            let _ = saving.try_set(false);
+            let _ = save_msg.try_set(format!("以下字段包含无效数值：{}", parse_errors.join("、")));
+            return;
+        }
+        // 零值校验
+        let zero_errors: Vec<&str> = [
+            ("SSE 推送间隔", sse_val.map(|v| v > 0)),
+            ("封禁表最大条目数", max_ban_entries.map(|v| v > 0)),
+            ("白名单最大条目数", max_whitelist_entries.map(|v| v > 0)),
+            ("速率表最大条目数", max_rate_entries.map(|v| v > 0)),
+            ("本地 IP 缓存最大条目数", max_local_ip_cache.map(|v| v > 0)),
+        ].iter().filter(|(_, v)| v == &Some(false)).map(|(label, _)| *label).collect();
+        if !zero_errors.is_empty() {
+            let _ = saving.try_set(false);
+            let _ = save_msg.try_set(format!("以下字段必须大于 0：{}", zero_errors.join("、")));
+            return;
+        }
         spawn_local(async move {
             let req = api::UpdateConfigRequest {
                 sse_push_interval: sse_val,
@@ -158,13 +194,20 @@ pub fn Settings() -> impl IntoView {
                 </div>
                 <div class="card settings-card">
                     <h3>"内核模块"</h3>
-                    <div class="settings-list">
-                        <SettingItem label="封禁表容量" value=|| "4096".to_string()/>
-                        <SettingItem label="白名单容量" value=|| "64".to_string()/>
-                        <SettingItem label="当前封禁" value=move || stats_signal.get().map(|s| format_number(s.current_bans, false)).unwrap_or_else(|| "0".to_string())/>
-                        <SettingItem label="白名单条目" value=move || stats_signal.get().map(|s| format_number(s.whitelist_count, false)).unwrap_or_else(|| "0".to_string())/>
-                        <SettingItem label="丢弃数据包" value=move || stats_signal.get().map(|s| format_number(s.packets_dropped, true)).unwrap_or_else(|| "0".to_string())/>
-                    </div>
+                    <Suspense fallback=|| view! { <div style="padding:12px;color:var(--text-muted)">"加载中..."</div> }>
+                        {move || {
+                            let cfg = config.get().flatten().unwrap_or_else(|| default_config());
+                            view! {
+                                <div class="settings-list">
+                                    <SettingItem label="封禁表容量" value=move || cfg.max_ban_entries.to_string()/>
+                                    <SettingItem label="白名单容量" value=move || cfg.max_whitelist_entries.to_string()/>
+                                    <SettingItem label="当前封禁" value=move || stats_signal.get().map(|s| format_number(s.current_bans, false)).unwrap_or_else(|| "0".to_string())/>
+                                    <SettingItem label="白名单条目" value=move || stats_signal.get().map(|s| format_number(s.whitelist_count, false)).unwrap_or_else(|| "0".to_string())/>
+                                    <SettingItem label="丢弃数据包" value=move || stats_signal.get().map(|s| format_number(s.packets_dropped, true)).unwrap_or_else(|| "0".to_string())/>
+                                </div>
+                            }
+                        }}
+                    </Suspense>
                 </div>
                 <div class="card settings-card">
                     <h3>"Web UI 配置"</h3>
@@ -173,11 +216,11 @@ pub fn Settings() -> impl IntoView {
                             let _cfg = config.get().flatten().unwrap_or_else(|| default_config());
                             view! {
                                 <div class="settings-list">
-                                    <EditableItem label="SSE 推送间隔 (秒)" value=edit_sse/>
-                                    <EditableItem label="速率警告阈值 (pps)" value=edit_warning_pps/>
-                                    <EditableItem label="速率严重阈值 (pps)" value=edit_critical_pps/>
-                                    <EditableItem label="SYN 警告阈值 (pps)" value=edit_warning_syn/>
-                                    <EditableItem label="SYN 严重阈值 (pps)" value=edit_critical_syn/>
+                                    <EditableItem label="SSE 推送间隔 (秒)" value=edit_sse min=1u64 max=300u64/>
+                                    <EditableItem label="速率警告阈值 (pps)" value=edit_warning_pps min=1u64/>
+                                    <EditableItem label="速率严重阈值 (pps)" value=edit_critical_pps min=1u64/>
+                                    <EditableItem label="SYN 警告阈值 (pps)" value=edit_warning_syn min=1u64/>
+                                    <EditableItem label="SYN 严重阈值 (pps)" value=edit_critical_syn min=1u64/>
                                 </div>
                             }
                         }}
@@ -190,12 +233,12 @@ pub fn Settings() -> impl IntoView {
                             let _cfg = config.get().flatten().unwrap_or_else(|| default_config());
                             view! {
                                 <div class="settings-list">
-                                    <EditableItem label="SYN Flood" value=edit_max_syn/>
-                                    <EditableItem label="UDP Flood" value=edit_max_udp/>
-                                    <EditableItem label="ICMP Flood" value=edit_max_icmp/>
-                                    <EditableItem label="ACK Flood" value=edit_max_ack/>
-                                    <EditableItem label="RST Flood" value=edit_max_rst/>
-                                    <EditableItem label="FIN Flood" value=edit_max_fin/>
+                                    <EditableItem label="SYN Flood" value=edit_max_syn min=1u64/>
+                                    <EditableItem label="UDP Flood" value=edit_max_udp min=1u64/>
+                                    <EditableItem label="ICMP Flood" value=edit_max_icmp min=1u64/>
+                                    <EditableItem label="ACK Flood" value=edit_max_ack min=1u64/>
+                                    <EditableItem label="RST Flood" value=edit_max_rst min=1u64/>
+                                    <EditableItem label="FIN Flood" value=edit_max_fin min=1u64/>
                                 </div>
                             }
                         }}
@@ -223,16 +266,10 @@ pub fn Settings() -> impl IntoView {
                             let _cfg = config.get().flatten().unwrap_or_else(|| default_config());
                             view! {
                                 <div class="settings-list">
-                                    <EditableItem label="封禁表最大条目数" value=edit_max_ban_entries/>
-                                    <EditableItem label="白名单最大条目数" value=edit_max_whitelist_entries/>
-                                    <EditableItem label="速率表最大条目数" value=edit_max_rate_entries/>
-                                    <EditableItem label="本地 IP 缓存最大条目数" value=edit_max_local_ip_cache/>
-                                </div>
-                                <div style="margin-top:16px;display:flex;gap:12px;align-items:center;justify-content:center">
-                                    <button class="btn btn-primary" on:click=do_save disabled=move || saving.get()>
-                                        {move || if saving.get() { "保存中..." } else { "保存配置" }}
-                                    </button>
-                                    <span style="color:var(--text-muted);font-size:13px">{move || save_msg.get()}</span>
+                                    <EditableItem label="封禁表最大条目数" value=edit_max_ban_entries min=1u64 max=1048576u64/>
+                                    <EditableItem label="白名单最大条目数" value=edit_max_whitelist_entries min=1u64 max=1048576u64/>
+                                    <EditableItem label="速率表最大条目数" value=edit_max_rate_entries min=1u64 max=1048576u64/>
+                                    <EditableItem label="本地 IP 缓存最大条目数" value=edit_max_local_ip_cache min=1u64 max=1048576u64/>
                                 </div>
                             }
                         }}
@@ -252,12 +289,21 @@ pub fn Settings() -> impl IntoView {
                     </div>
                 </div>
             </div>
+            <div style="margin-top:20px;display:flex;gap:12px;align-items:center;justify-content:center">
+                <button class="btn btn-primary" on:click=do_save disabled=move || saving.get()>
+                    {move || if saving.get() { "保存中..." } else { "保存配置" }}
+                </button>
+                <span style="color:var(--text-muted);font-size:13px">{move || save_msg.get()}</span>
+            </div>
         </div>
     }
 }
 
 #[component]
-fn SettingItem(label: &'static str, value: impl Fn() -> String + Send + Sync + 'static) -> impl IntoView {
+fn SettingItem(
+    label: &'static str,
+    value: impl Fn() -> String + Send + Sync + 'static,
+) -> impl IntoView {
     view! {
         <div class="setting-item">
             <span class="setting-label">{label}</span>
@@ -289,13 +335,22 @@ fn ToggleItem(label: &'static str, value: RwSignal<bool>) -> impl IntoView {
 }
 
 #[component]
-fn EditableItem(label: &'static str, value: RwSignal<String>) -> impl IntoView {
+fn EditableItem(
+    label: &'static str,
+    value: RwSignal<String>,
+    #[prop(optional)] min: Option<u64>,
+    #[prop(optional)] max: Option<u64>,
+) -> impl IntoView {
+    let min_attr = min.map(|v| v.to_string());
+    let max_attr = max.map(|v| v.to_string());
     view! {
         <div class="setting-item">
             <span class="setting-label">{label}</span>
             <input type="number" class="input mono" style="width:120px;padding:5px 8px;font-size:12px"
                 prop:value=move || value.get()
-                on:input=move |e| value.set(event_target_value(&e))/>
+                on:input=move |e| value.set(event_target_value(&e))
+                min=min_attr
+                max=max_attr/>
         </div>
     }
 }

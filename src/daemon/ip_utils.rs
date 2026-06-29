@@ -434,40 +434,38 @@ pub fn parse_ipv6_fast(ip: &str) -> Option<[u8; 16]> {
 /// ```
 /// use firewall_daemon::ip_utils::parse_ip;
 ///
-/// let ipv4 = parse_ip("192.168.1.1");
+/// let ipv4 = parse_ip("192.168.1.1").unwrap();
 /// assert_eq!(ipv4.ip_num, 3232235777);
 /// assert!(!ipv4.is_ipv6);
 ///
-/// let ipv6 = parse_ip("::1");
+/// let ipv6 = parse_ip("::1").unwrap();
 /// assert_eq!(ipv6.ipv6_num, [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]);
 /// assert!(ipv6.is_ipv6);
+///
+/// assert!(parse_ip("invalid").is_none());
 /// ```
 #[inline]
-pub fn parse_ip(ip: &str) -> ParsedIp {
+pub fn parse_ip(ip: &str) -> Option<ParsedIp> {
     // 先尝试 IPv4
     if let Some(num) = parse_ipv4_fast(ip) {
-        return ParsedIp {
+        return Some(ParsedIp {
             ip_num: num,
             ipv6_num: [0; 16],
             is_ipv6: false,
-        };
+        });
     }
 
     // 再尝试 IPv6
     if let Some(num) = parse_ipv6_fast(ip) {
-        return ParsedIp {
+        return Some(ParsedIp {
             ip_num: 0,
             ipv6_num: num,
             is_ipv6: true,
-        };
+        });
     }
 
-    // 解析失败，返回默认的 IPv6（全 0）
-    ParsedIp {
-        ip_num: 0,
-        ipv6_num: [0; 16],
-        is_ipv6: true,
-    }
+    // 解析失败，返回 None（调用方必须处理）
+    None
 }
 
 /// 将 u32 转换为 IPv4 字符串（用于日志输出）
@@ -621,7 +619,7 @@ mod tests {
 
     #[test]
     fn test_parse_ipv6_detection() {
-        let result = parse_ip("::1");
+        let result = parse_ip("::1").unwrap();
         assert!(result.is_ipv6);
         assert_eq!(result.ip_num, 0);
         assert_eq!(
@@ -629,11 +627,16 @@ mod tests {
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
         );
 
-        let result = parse_ip("2001:db8::1");
+        let result = parse_ip("2001:db8::1").unwrap();
         assert!(result.is_ipv6);
         assert_eq!(result.ip_num, 0);
         assert_eq!(result.ipv6_num[0], 0x20);
         assert_eq!(result.ipv6_num[1], 0x01);
+
+        // 无效 IP 返回 None
+        assert!(parse_ip("garbage").is_none());
+        assert!(parse_ip("").is_none());
+        assert!(parse_ip("256.1.1.1").is_none());
     }
 
     #[test]

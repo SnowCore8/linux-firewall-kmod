@@ -20,6 +20,14 @@ use crate::http_exporter::get_global_jails;
 /// SSE 连接数限制（防止资源耗尽攻击）
 const MAX_SSE_CONNECTIONS: usize = 10;
 
+/// 获取当前 SSE 连接数和上限（供前端诊断使用）
+pub fn get_sse_connection_info() -> (usize, usize) {
+    (
+        SSE_CONNECTION_COUNT.load(Ordering::Relaxed),
+        MAX_SSE_CONNECTIONS,
+    )
+}
+
 /// 全局 SSE 连接计数器
 static SSE_CONNECTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -62,7 +70,7 @@ pub async fn handle_sse() -> Result<Sse<impl Stream<Item = Result<Event, Infalli
             break;
         }
     }
-    let _guard = ConnectionGuard; // Drop 时自动减计数
+    // guard 不在这里创建——它需要活在 stream 内部，随 stream 结束而 drop
 
     // 获取推送间隔（默认 1 秒）
     let interval_secs = crate::http_exporter::get_global_webui_config()
@@ -71,6 +79,9 @@ pub async fn handle_sse() -> Result<Sse<impl Stream<Item = Result<Event, Infalli
         .max(1) as u64;
 
     let stream = async_stream::stream! {
+        // guard 在 stream 内部创建，stream 结束（连接断开）时自动 drop
+        let _guard = ConnectionGuard;
+
         // 发送连接确认事件
         yield Ok(Event::default().event("connected").data("SSE 连接已建立"));
 

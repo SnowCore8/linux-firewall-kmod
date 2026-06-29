@@ -77,13 +77,14 @@ pub async fn handle_log_stream(
             break;
         }
     }
-    let _guard = LogSseConnectionGuard;
-
     let log_path = get_log_file()
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
         .clone();
 
     let stream = async_stream::stream! {
+        // guard 在 stream 内部创建，stream 结束（连接断开）时自动 drop
+        let _guard = LogSseConnectionGuard;
+
         // 发送连接确认
         yield Ok(Event::default().event("connected").data("日志流已连接"));
 
@@ -116,6 +117,7 @@ pub async fn handle_log_stream(
                             if let Ok(old_meta) = reader.get_ref().metadata() {
                                 if meta.len() < old_meta.len() {
                                     // 文件被截断（logrotate copytruncate）
+                                    // seek 失败时无需处理：下一轮 read_line 会触发 error 分支或重新打开文件
                                     let _ = reader.seek(SeekFrom::Start(0));
                                     continue;
                                 }
@@ -189,6 +191,9 @@ pub struct LogPageResponse {
     pub total_pages: u32,
 }
 
+/// 最大扫描行数（防止大文件 OOM，日志文件通常不超过 50K 行）
+const MAX_SCAN_LINES: usize = 50_000;
+
 /// 获取历史日志（分页）
 pub fn get_log_page(params: &LogQueryParams) -> Result<LogPageResponse, String> {
     let log_path = get_log_file().ok_or_else(|| "日志文件路径未设置".to_string())?;
@@ -197,12 +202,14 @@ pub fn get_log_page(params: &LogQueryParams) -> Result<LogPageResponse, String> 
 
     let reader = std::io::BufReader::new(file);
 
-    // 收集所有行（带行号）
     let level_filter = params.level.as_deref();
     let keyword_filter = params.keyword.as_deref();
+    let keyword_lower = keyword_filter.map(|k| k.to_lowercase());
 
-    let all_lines: Vec<(u64, String)> = reader
+    // 流式扫描：只收集匹配行，上限 MAX_SCAN_LINES 防止大文件 OOM
+    let matched_lines: Vec<(u64, String)> = reader
         .lines()
+        .take(MAX_SCAN_LINES)
         .enumerate()
         .filter_map(|(i, line)| {
             let line = line.ok()?;
@@ -219,8 +226,8 @@ pub fn get_log_page(params: &LogQueryParams) -> Result<LogPageResponse, String> 
             }
 
             // 关键词过滤
-            if let Some(keyword) = keyword_filter {
-                if !line.to_lowercase().contains(&keyword.to_lowercase()) {
+            if let Some(ref kw) = keyword_lower {
+                if !line.to_lowercase().contains(kw) {
                     return None;
                 }
             }
@@ -229,15 +236,15 @@ pub fn get_log_page(params: &LogQueryParams) -> Result<LogPageResponse, String> 
         })
         .collect();
 
-    let total_lines = all_lines.len() as u64;
+    let total_lines = matched_lines.len() as u64;
     let page = params.page.unwrap_or(1).max(1);
     let page_size = params.page_size.unwrap_or(100).clamp(1, 500);
     let total_pages = total_lines.div_ceil(page_size as u64);
 
     let start = ((page - 1) * page_size) as usize;
-    let end = (start + page_size as usize).min(all_lines.len());
+    let end = (start + page_size as usize).min(matched_lines.len());
 
-    let items = all_lines[start..end]
+    let items = matched_lines[start..end]
         .iter()
         .map(|(line_num, content)| LogEntry {
             line_number: *line_num,

@@ -49,6 +49,9 @@ pub fn build_router(metrics_user: String, metrics_pass: String) -> Router {
         .route("/api/v1/bans", get(handle_api_bans))
         .route("/api/v1/bans", post(handle_create_ban))
         .route("/api/v1/bans/:ip", delete(handle_delete_ban))
+        .route("/api/v1/bans/:ip/detail", get(handle_ban_detail))
+        .route("/api/v1/bans/unban-temporary", post(handle_unban_temporary))
+        .route("/api/v1/bans/batch", post(handle_batch_ban))
         .route("/api/v1/jails", get(handle_api_jails))
         .route("/api/v1/jails/:name", put(handle_update_jail))
         .route("/api/v1/config", get(handle_api_config))
@@ -56,8 +59,58 @@ pub fn build_router(metrics_user: String, metrics_pass: String) -> Router {
         .route("/api/v1/whitelist", get(handle_api_whitelist))
         .route("/api/v1/whitelist", post(handle_create_whitelist))
         .route("/api/v1/whitelist/:cidr", delete(handle_delete_whitelist))
+        .route(
+            "/api/v1/whitelist/recommendations",
+            get(handle_whitelist_recommendations),
+        )
         .route("/api/v1/rates/current", get(handle_api_rates_current))
         .route("/api/v1/rates/history", get(handle_api_rates_history))
+        .route("/api/v1/rates/windows", get(handle_api_rates_windows))
+        .route("/api/v1/stats/heatmap", get(handle_api_heatmap))
+        .route("/api/v1/stats/recidivism", get(handle_api_recidivism))
+        .route(
+            "/api/v1/stats/ban-effectiveness",
+            get(handle_api_ban_effectiveness),
+        )
+        .route(
+            "/api/v1/stats/periodic-attackers",
+            get(handle_api_periodic_attackers),
+        )
+        .route(
+            "/api/v1/stats/collaborative-attacks",
+            get(handle_api_collaborative_attacks),
+        )
+        .route("/api/v1/stats/udp-ports", get(handle_api_udp_ports))
+        .route("/api/v1/stats/icmp-types", get(handle_api_icmp_types))
+        .route("/api/v1/stats/sse-status", get(handle_api_sse_status))
+        .route(
+            "/api/v1/stats/ban-duration-histogram",
+            get(handle_api_ban_duration_histogram),
+        )
+        .route("/api/v1/stats/packet-sizes", get(handle_api_packet_sizes))
+        .route(
+            "/api/v1/stats/ttl-distribution",
+            get(handle_api_ttl_distribution),
+        )
+        .route("/api/v1/stats/ip-fragments", get(handle_api_ip_fragments))
+        .route("/api/v1/stats/port-scanners", get(handle_api_port_scanners))
+        .route(
+            "/api/v1/stats/service-probes",
+            get(handle_api_service_probes),
+        )
+        .route(
+            "/api/v1/stats/ban-duration-recommendations",
+            get(handle_api_ban_duration_recommendations),
+        )
+        .route("/api/v1/stats/reputation", get(handle_api_reputation))
+        .route(
+            "/api/v1/stats/threshold-recommendations",
+            get(handle_api_threshold_recommendations),
+        )
+        .route(
+            "/api/v1/stats/network-distribution",
+            get(handle_api_network_distribution),
+        )
         .route("/api/v1/logs/stream", get(handle_log_stream))
         .route("/api/v1/logs", get(handle_api_logs))
         .layer(middleware::from_fn(auth_middleware))
@@ -242,6 +295,66 @@ async fn handle_delete_ban(Path(ip): Path<String>) -> impl IntoResponse {
     }
 }
 
+/// `GET /api/v1/bans/:ip/detail` — 封禁详情（决策链 + 历史）
+async fn handle_ban_detail(Path(ip): Path<String>) -> impl IntoResponse {
+    match web_ui::api::get_ban_detail(&ip) {
+        Ok(resp) => (StatusCode::OK, Json(web_ui::api::ApiResponse::ok(resp))).into_response(),
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(web_ui::api::ApiResponse::<()>::error(40006, msg)),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/v1/bans/unban-temporary` — 批量解封所有临时封禁
+async fn handle_unban_temporary() -> impl IntoResponse {
+    match web_ui::api::unban_all_temporary() {
+        Ok(resp) => (StatusCode::OK, Json(web_ui::api::ApiResponse::ok(resp))).into_response(),
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(web_ui::api::ApiResponse::<()>::error(40003, msg)),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/v1/bans/batch` — 批量封禁多个 IP
+async fn handle_batch_ban(Json(ips): Json<Vec<String>>) -> impl IntoResponse {
+    if ips.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(web_ui::api::ApiResponse::<()>::error(
+                40004,
+                "IP 列表不能为空".to_string(),
+            )),
+        )
+            .into_response();
+    }
+    if ips.len() > 100 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(web_ui::api::ApiResponse::<()>::error(
+                40005,
+                format!("单次最多封禁 100 个 IP，当前 {} 个", ips.len()),
+            )),
+        )
+            .into_response();
+    }
+    match web_ui::api::batch_ban(ips) {
+        Ok(resp) => (
+            StatusCode::CREATED,
+            Json(web_ui::api::ApiResponse::ok(resp)),
+        )
+            .into_response(),
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(web_ui::api::ApiResponse::<()>::error(40005, msg)),
+        )
+            .into_response(),
+    }
+}
+
 /// `GET /api/v1/jails` — Jail 列表 JSON
 async fn handle_api_jails() -> Json<web_ui::api::ApiResponse<Vec<web_ui::api::JailResponse>>> {
     let jail_infos = super::get_global_jails();
@@ -320,6 +433,13 @@ async fn handle_delete_whitelist(Path(cidr): Path<String>) -> impl IntoResponse 
     }
 }
 
+/// `GET /api/v1/whitelist/recommendations` — 智能白名单推荐
+async fn handle_whitelist_recommendations(
+) -> Json<web_ui::api::ApiResponse<Vec<web_ui::api::WhitelistRecommendation>>> {
+    let recs = web_ui::api::get_whitelist_recommendations();
+    Json(web_ui::api::ApiResponse::ok(recs))
+}
+
 /// `GET /api/v1/rates/current` — 当前 DDoS 速率 JSON
 async fn handle_api_rates_current() -> Json<web_ui::api::ApiResponse<Vec<web_ui::api::RateResponse>>>
 {
@@ -332,6 +452,161 @@ async fn handle_api_rates_history(
 ) -> Json<web_ui::api::ApiResponse<Vec<web_ui::api::RateHistoryResponse>>> {
     let history = web_ui::api::get_rate_history();
     Json(web_ui::api::ApiResponse::ok(history))
+}
+
+/// `GET /api/v1/rates/windows` — 多窗口速率 EWMA（短期/中期/长期）
+async fn handle_api_rates_windows(
+) -> Json<web_ui::api::ApiResponse<crate::types::RateWindowSnapshot>> {
+    let windows = web_ui::api::get_rate_windows();
+    Json(web_ui::api::ApiResponse::ok(windows))
+}
+
+/// `GET /api/v1/stats/heatmap` — 24 小时攻击热力图（按小时聚合）
+async fn handle_api_heatmap(
+) -> Json<web_ui::api::ApiResponse<crate::history_snapshot::HourlyHeatmap>> {
+    let heatmap = web_ui::api::get_heatmap();
+    Json(web_ui::api::ApiResponse::ok(heatmap))
+}
+
+/// `GET /api/v1/stats/recidivism` — 封禁效果追踪（复发率 + TOP 10）
+async fn handle_api_recidivism() -> Json<web_ui::api::ApiResponse<web_ui::api::RecidivismResponse>>
+{
+    let recidivism = web_ui::api::get_ban_recidivism();
+    Json(web_ui::api::ApiResponse::ok(recidivism))
+}
+
+/// `GET /api/v1/stats/ban-effectiveness` — 封禁效果分析（按级别统计复发率）
+async fn handle_api_ban_effectiveness(
+) -> Json<web_ui::api::ApiResponse<web_ui::api::BanEffectivenessResponse>> {
+    let effectiveness = web_ui::api::get_ban_effectiveness();
+    Json(web_ui::api::ApiResponse::ok(effectiveness))
+}
+
+/// `GET /api/v1/stats/periodic-attackers` — 周期性攻击者检测
+async fn handle_api_periodic_attackers(
+) -> Json<web_ui::api::ApiResponse<Vec<crate::history_snapshot::PeriodicAttacker>>> {
+    let attackers = web_ui::api::get_periodic_attackers();
+    Json(web_ui::api::ApiResponse::ok(attackers))
+}
+
+/// `GET /api/v1/stats/collaborative-attacks` — 协同攻击检测
+async fn handle_api_collaborative_attacks(
+) -> Json<web_ui::api::ApiResponse<Vec<crate::history_snapshot::CollaborativeAttack>>> {
+    let attacks = web_ui::api::get_collaborative_attacks();
+    Json(web_ui::api::ApiResponse::ok(attacks))
+}
+
+/// `GET /api/v1/stats/udp-ports` — UDP 端口分布统计
+async fn handle_api_udp_ports(
+) -> Json<web_ui::api::ApiResponse<web_ui::api::UdpPortDistributionResponse>> {
+    let distribution = web_ui::api::get_udp_port_distribution();
+    Json(web_ui::api::ApiResponse::ok(distribution))
+}
+
+/// `GET /api/v1/stats/icmp-types` — ICMP 类型分布统计
+async fn handle_api_icmp_types(
+) -> Json<web_ui::api::ApiResponse<web_ui::api::IcmpTypeDistributionResponse>> {
+    let distribution = web_ui::api::get_icmp_type_distribution();
+    Json(web_ui::api::ApiResponse::ok(distribution))
+}
+
+/// `GET /api/v1/stats/sse-status` — SSE 连接状态诊断
+async fn handle_api_sse_status() -> Json<web_ui::api::ApiResponse<serde_json::Value>> {
+    let (current, max) = web_ui::sse::get_sse_connection_info();
+    Json(web_ui::api::ApiResponse::ok(serde_json::json!({
+        "current_connections": current,
+        "max_connections": max,
+        "limit_reached": current >= max
+    })))
+}
+
+/// `GET /api/v1/stats/ban-duration-histogram` — 封禁时长分布直方图
+async fn handle_api_ban_duration_histogram(
+) -> Json<web_ui::api::ApiResponse<web_ui::api::BanDurationHistogramResponse>> {
+    let histogram = web_ui::api::get_ban_duration_histogram();
+    Json(web_ui::api::ApiResponse::ok(histogram))
+}
+
+/// `GET /api/v1/stats/packet-sizes` — 包大小分布直方图
+async fn handle_api_packet_sizes(
+) -> Json<web_ui::api::ApiResponse<web_ui::api::PacketSizeDistributionResponse>> {
+    let distribution = web_ui::api::get_packet_size_distribution();
+    Json(web_ui::api::ApiResponse::ok(distribution))
+}
+
+/// `GET /api/v1/stats/ttl-distribution` — TTL 分布直方图
+async fn handle_api_ttl_distribution(
+) -> Json<web_ui::api::ApiResponse<web_ui::api::TtlDistributionResponse>> {
+    let distribution = web_ui::api::get_ttl_distribution();
+    Json(web_ui::api::ApiResponse::ok(distribution))
+}
+
+/// `GET /api/v1/stats/ip-fragments` — IP 分片统计
+async fn handle_api_ip_fragments(
+) -> Json<web_ui::api::ApiResponse<web_ui::api::IpFragmentStatsResponse>> {
+    let stats = web_ui::api::get_ip_fragment_stats();
+    Json(web_ui::api::ApiResponse::ok(stats))
+}
+
+/// `GET /api/v1/stats/port-scanners` — 端口扫描检测
+async fn handle_api_port_scanners() -> Json<web_ui::api::ApiResponse<web_ui::api::PortScanResponse>>
+{
+    let detection = web_ui::api::get_port_scan_detection();
+    Json(web_ui::api::ApiResponse::ok(detection))
+}
+
+/// `GET /api/v1/stats/service-probes` — 服务探测检测
+async fn handle_api_service_probes(
+) -> Json<web_ui::api::ApiResponse<web_ui::api::ServiceProbeResponse>> {
+    let detection = web_ui::api::get_service_probe_detection();
+    Json(web_ui::api::ApiResponse::ok(detection))
+}
+
+/// `GET /api/v1/stats/ban-duration-recommendations` — 封禁时长推荐
+async fn handle_api_ban_duration_recommendations(
+) -> Json<web_ui::api::ApiResponse<web_ui::api::BanDurationRecommendationResponse>> {
+    let recs = web_ui::api::get_ban_duration_recommendations();
+    Json(web_ui::api::ApiResponse::ok(recs))
+}
+
+/// `GET /api/v1/stats/reputation` — IP 信誉分列表
+async fn handle_api_reputation(
+) -> Json<web_ui::api::ApiResponse<Vec<web_ui::api::ReputationEntryResponse>>> {
+    let store = crate::ip_reputation::get_store();
+    let entries: Vec<web_ui::api::ReputationEntryResponse> = store
+        .snapshot()
+        .into_iter()
+        .map(|e| web_ui::api::ReputationEntryResponse {
+            ip: e.ip,
+            score: e.score,
+            last_failure_at: e.last_failure_at,
+            total_failures: e.total_failures,
+            total_bans: e.total_bans,
+            threshold_multiplier: if e.score >= 80 {
+                1.0
+            } else if e.score >= 50 {
+                0.8
+            } else {
+                0.5
+            },
+        })
+        .collect();
+    Json(web_ui::api::ApiResponse::ok(entries))
+}
+
+/// `GET /api/v1/stats/threshold-recommendations` — 阈值调优建议
+async fn handle_api_threshold_recommendations(
+) -> Json<web_ui::api::ApiResponse<web_ui::api::ThresholdRecommendationResponse>> {
+    let jails = crate::http_exporter::get_global_jails();
+    let recs = crate::history_snapshot::analyze_thresholds(&jails);
+    Json(web_ui::api::ApiResponse::ok(recs))
+}
+
+/// `GET /api/v1/stats/network-distribution` — 攻击源网络分布
+async fn handle_api_network_distribution(
+) -> Json<web_ui::api::ApiResponse<Vec<crate::history_snapshot::NetworkBlock>>> {
+    let blocks = crate::history_snapshot::get_network_distribution();
+    Json(web_ui::api::ApiResponse::ok(blocks))
 }
 
 /// `GET /api/v1/events` — SSE 实时事件推送（长连接）

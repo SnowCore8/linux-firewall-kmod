@@ -31,6 +31,8 @@
 - **`debian/control` 虚拟包声明** - 移除 `Build-Depends: linux-headers-amd64 | linux-headers-generic`（Azure 内核 apt 源中不存在），改用 `dkms` 显式依赖
 - **`log::open_syslog` 参数** - `syslog` 调用从 `format_args!` 改为显式 `%s` 格式串 + NUL 结尾字面量
 - **`http_exporter` 认证锁定** - `log_warn_ratelimited!` 改 `log_warn!`（原唯一外部调用点）
+- **`delete_ban` 解封统计双计** - `web_ui/ban_ops.rs` 的 `delete_ban` 连续调用 `unban_ip` 和 `unban_permanent_ip`，两者最终都走 `send_unban` 并各递增 `total_unbans`，导致每次解封统计多计 1 次。修复：移除冗余调用，仅调用一次 `unban_ip`
+- **27 个确定性 bug 修复（22 轮深度审计）** - 覆盖数据一致性（ban_count 双计、API 配置丢失、统计双计）、安全性（CIDR 静默默认值、IPv6 link-local 遗漏、SSE 连接守生命期）、持久化（ip_reputation persist 缺失、state-persist 语义错误）、并发（handlers.rs ban_count 竞态、ActiveBanCache try_insert 锁序竞态）、配置（ConfigSnapshot 回滚不完整、netlink RATE_WINDOW 同步缺失）、可观测性（metrics uptime 下溢、lines_skipped 计数缺失、阈值标签反转）等
 
 ### 移除
 - **日志限流层** - 删除 `RATELIMIT_STATE` / `RatelimitState` / `emit_ratelimited` / 4 个 `log_*_ratelimited!` 宏 / 1 个单元测试。全局 Mutex 与 60s 节流窗口不再需要，日志每条都真实 emit
@@ -39,10 +41,11 @@
 ### 优化
 - **代码质量** - 12 个 .rs 文件 `cargo fmt`（+472/-212 行），加 `cargo clippy` strict 检查后 CI 零警告
 - **19 个 `unsafe` 块加 `// SAFETY:` 注释** - 涵盖 `ban.rs` (10) / `log.rs` (3) / `file_monitor.rs` (1) / `main.rs` (5)，逐块说明前置条件 / 后置不变量
+- **Prometheus 指标生成优化** - `metrics.rs` 的 `reputation_store.snapshot()` 双重调用（2 次读锁+克隆）合并为单次调用+单次遍历，利用 `< 50` 是 `< 80` 子集的层级关系在单次循环中同时计数
 
 ### 测试
-- 集成测试 **107 项**全部通过。`tests/run_tests.sh` 引入 `source ~/.cargo/env` 后 100% 可在 `sudo` 下跑通
-- `cargo test --release`：**108 单元测试**全部通过
+- 集成测试 **115 项**全部通过（19 个套件）。`tests/run_tests.sh` 引入 `source ~/.cargo/env` 后 100% 可在 `sudo` 下跑通
+- `cargo test --release`：**99 单元测试**全部通过
 - GitHub Actions CI 全过：`代码质量检查` + `编译` + `运行测试` 三 job 全绿
 
 ### 文档

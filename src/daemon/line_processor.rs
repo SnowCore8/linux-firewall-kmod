@@ -55,7 +55,19 @@ pub fn process_single_line(
 
     DAEMON_STATS.lines_parsed.fetch_add(1, Ordering::Relaxed);
 
+    // per-Jail 统计：已解析行数
+    crate::types::with_jail_stats(&jail.name, |s| {
+        s.lines_parsed.fetch_add(1, Ordering::Relaxed);
+    });
+
     if let Some(ip) = log_parser::extract_and_validate_ip(jail, line) {
+        // per-Jail 统计：正则匹配 + IP 提取 + 失败尝试
+        crate::types::with_jail_stats(&jail.name, |s| {
+            s.regex_matches.fetch_add(1, Ordering::Relaxed);
+            s.ips_extracted.fetch_add(1, Ordering::Relaxed);
+            s.failed_attempts.fetch_add(1, Ordering::Relaxed);
+        });
+
         // 网络层 DDoS 检测已下沉到 kmod（内核态 netfilter hook）
         // daemon 只保留应用层检测（SSH 暴力破解等）
         // crate::ddos_detector::get_conn_rate_tracker().record_connection(&ip);
@@ -98,7 +110,7 @@ pub fn process_lines_in_buffer(
             let line_len = line_end - line_start;
 
             if line_len >= 8192 {
-                // 超长行跳过
+                DAEMON_STATS.lines_skipped.fetch_add(1, Ordering::Relaxed);
             } else {
                 let line = String::from_utf8_lossy(&data[line_start..line_end]);
                 process_single_line(jail, &line, log_path, max_retries, findtime);
@@ -145,14 +157,11 @@ pub fn store_partial_line(
 
     if current_len + data.len() >= 8192 {
         // 缓冲区将溢出: 先处理累积数据, 再写入新片段
-        // 缓冲区将溢出：先处理累积数据，再写入新片段
         if current_len > 0 {
-            // 使用 mem::take 避免 clone，在锁内处理数据
             let temp = std::mem::take(&mut *buf);
             drop(buf);
-            if let Ok(line) = std::str::from_utf8(&temp) {
-                process_single_line(jail, line, log_path, max_retries, findtime);
-            }
+            let line = String::from_utf8_lossy(&temp);
+            process_single_line(jail, &line, log_path, max_retries, findtime);
             buf = jail.partial_line_buffer.write();
         }
 
@@ -178,14 +187,11 @@ pub fn flush_partial_line(jail: &Jail, log_path: &str, max_retries: u32, findtim
         return;
     }
 
-    let _old_len = buf.len();
-    let temp = buf.clone();
-    buf.clear();
+    let temp = std::mem::take(&mut *buf);
     drop(buf);
 
-    if let Ok(line) = std::str::from_utf8(&temp) {
-        process_single_line(jail, line, log_path, max_retries, findtime);
-    }
+    let line = String::from_utf8_lossy(&temp);
+    process_single_line(jail, &line, log_path, max_retries, findtime);
 }
 
 // ============================================================================

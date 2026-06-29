@@ -1,6 +1,21 @@
 //! SVG 图表组件 — 安全产品风格（固定结构，无数据时叠加提示）
 
 use leptos::*;
+use std::cell::Cell;
+
+// 全局图表 ID 计数器，确保每个图表实例的 SVG gradient/filter ID 唯一
+thread_local! {
+    static CHART_COUNTER: Cell<u32> = const { Cell::new(0) };
+}
+
+fn next_chart_id() -> String {
+    let id = CHART_COUNTER.with(|c| {
+        let v = c.get();
+        c.set(v + 1);
+        v
+    });
+    format!("chart-{id}")
+}
 
 // ============================================================================
 // 折线图 — 始终渲染固定结构
@@ -22,7 +37,7 @@ pub fn LineChart(
     let chart_w = width - pad_left - pad_right;
     let chart_h = height_f - pad_top - pad_bottom;
 
-    let chart_id = format!("chart-{}", color.as_ptr() as usize);
+    let chart_id = next_chart_id();
 
     let path_data = move || {
         let d = data.get();
@@ -418,4 +433,232 @@ fn arc_path(cx: f64, cy: f64, outer_r: f64, inner_r: f64, start_deg: f64, end_de
         "M{x1:.2},{y1:.2} A{outer_r:.2},{outer_r:.2} 0 {large} 1 {x2:.2},{y2:.2} \
          L{x3:.2},{y3:.2} A{inner_r:.2},{inner_r:.2} 0 {large} 0 {x4:.2},{y4:.2} Z"
     )
+}
+
+// ============================================================================
+// 雷达图（6 轴协议分布）— 纯 SVG
+// ============================================================================
+
+/// 6 轴协议分布雷达图
+///
+/// 6 个轴：SYN / UDP / ICMP / ACK / RST / FIN
+/// 多边形面积表示各协议占比，颜色表示异常程度
+#[component]
+pub fn RadarChart(
+    labels: Signal<Vec<String>>,
+    data: Signal<Vec<u64>>,
+    #[prop(default = 180)] size: u32,
+) -> impl IntoView {
+    let center = size as f64 / 2.0;
+    let max_r = size as f64 * 0.36;
+    let axis_count: usize = 6;
+
+    // 计算每个轴的角度（从顶部开始顺时针）
+    let angle_for = move |i: usize| -> f64 { -90.0_f64 + (i as f64 * 360.0 / axis_count as f64) };
+
+    let point_on_axis = move |i: usize, ratio: f64| -> (f64, f64) {
+        let angle = angle_for(i).to_radians();
+        let r = max_r * ratio;
+        (center + r * angle.cos(), center + r * angle.sin())
+    };
+
+    // 生成同心环多边形路径
+    let ring_path = move |ratio: f64| -> String {
+        (0..axis_count)
+            .map(|i| {
+                let (x, y) = point_on_axis(i, ratio);
+                if i == 0 {
+                    format!("M{x:.1},{y:.1}")
+                } else {
+                    format!("L{x:.1},{y:.1}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("")
+            + "Z"
+    };
+
+    // 数据多边形路径 + 颜色
+    let data_polygon = move || -> (String, String, Vec<(f64, f64, String, u64)>) {
+        let d = data.get();
+        let l = labels.get();
+        let total: u64 = d.iter().sum();
+
+        if total == 0 || d.len() < axis_count {
+            return (String::new(), "var(--color-cyan)".to_string(), Vec::new());
+        }
+
+        let max_val = d.iter().cloned().max().unwrap_or(1).max(1) as f64;
+
+        let points: Vec<(f64, f64, String, u64)> = d
+            .iter()
+            .zip(l.iter())
+            .enumerate()
+            .map(|(i, (&v, label))| {
+                let ratio = v as f64 / max_val;
+                let (x, y) = point_on_axis(i, ratio);
+                (x, y, label.clone(), v)
+            })
+            .collect();
+
+        let path: String = points
+            .iter()
+            .enumerate()
+            .map(|(i, &(x, y, _, _))| {
+                if i == 0 {
+                    format!("M{x:.1},{y:.1}")
+                } else {
+                    format!("L{x:.1},{y:.1}")
+                }
+            })
+            .collect();
+        let path = path + "Z";
+
+        // 根据主导协议决定颜色
+        let dominant_idx = d
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, &v)| v)
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        let dominant_ratio = d[dominant_idx] as f64 / total as f64;
+
+        let color = if dominant_ratio > 0.6 {
+            // 主导协议占比 >60% — 异常
+            match dominant_idx {
+                0 => "#ff0040", // SYN Flood
+                1 => "#ff8800", // UDP Flood
+                2 => "#ffdd00", // ICMP Flood
+                _ => "var(--color-cyan)",
+            }
+        } else {
+            "var(--color-cyan)" // 正常
+        };
+
+        (path, color.to_string(), points)
+    };
+
+    // 缓存 data_polygon 结果，避免在响应式闭包中重复计算
+    let polygon_memo = create_memo(move |_| data_polygon());
+
+    let has_data = move || {
+        let d = data.get();
+        !d.is_empty() && d.iter().sum::<u64>() > 0
+    };
+
+    // 标签和百分比
+    let axis_info = move || {
+        let d = data.get();
+        let l = labels.get();
+        let total: u64 = d.iter().sum();
+        l.into_iter()
+            .zip(d.into_iter())
+            .map(|(label, v)| {
+                let pct = if total > 0 {
+                    format!("{:.0}%", v as f64 / total as f64 * 100.0)
+                } else {
+                    "0%".to_string()
+                };
+                (label, v, pct)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    view! {
+        <div class="radar-chart-wrapper">
+            <svg width=size height=size viewBox=move || format!("0 0 {size} {size}")>
+                // 同心环网格（4 层：25%, 50%, 75%, 100%）
+                <g>
+                    {[0.25, 0.5, 0.75, 1.0].map(|ratio| {
+                        view! {
+                            <path d=ring_path(ratio)
+                                fill="none" stroke="var(--border-subtle)" stroke-width="1"/>
+                        }
+                    }).collect_view()}
+                </g>
+
+                // 6 条轴线
+                <g>
+                    {(0..axis_count).map(|i| {
+                        let (x, y) = point_on_axis(i, 1.0);
+                        view! {
+                            <line x1=center y1=center x2=x y2=y
+                                stroke="var(--border-default)" stroke-width="1"
+                                stroke-dasharray="2,2"/>
+                        }
+                    }).collect_view()}
+                </g>
+
+                // 数据多边形
+                <Show when=has_data fallback=|| ()>
+                    <path d=move || polygon_memo.get().0
+                        fill=move || format!("{}", polygon_memo.get().1)
+                        fill-opacity="0.15"
+                        stroke=move || format!("{}", polygon_memo.get().1)
+                        stroke-width="2"/>
+
+                    // 数据顶点
+                    {move || {
+                        let (_, _, points) = polygon_memo.get();
+                        let color = polygon_memo.get().1;
+                        points.into_iter().map(move |(x, y, label, val)| {
+                            let tooltip = format!("{label}: {val}");
+                            let color_clone = color.clone();
+                            view! {
+                                <circle cx=x cy=y r="3"
+                                    fill=move || color_clone.clone()
+                                    stroke="var(--bg-card)" stroke-width="1">
+                                    <title>{tooltip}</title>
+                                </circle>
+                            }
+                        }).collect_view()
+                    }}
+                </Show>
+
+                // 轴标签
+                <g>
+                    {move || {
+                        let info = axis_info();
+                        (0..axis_count).map(|i| {
+                            let (x, y) = point_on_axis(i, 1.22);
+                            let anchor = if x < center - 5.0 {
+                                "end"
+                            } else if x > center + 5.0 {
+                                "start"
+                            } else {
+                                "middle"
+                            };
+                            let (label, _, pct) = info.get(i).cloned().unwrap_or_default();
+                        view! {
+                            <g>
+                                <text x=x y=y
+                                    text-anchor=anchor fill="var(--text-muted)"
+                                    font-size="9" font-weight="700"
+                                    font-family="var(--font-sans)"
+                                    letter-spacing="0.05em">
+                                    {label}
+                                </text>
+                                <text x=x y=y + 11.0
+                                    text-anchor=anchor fill="var(--text-faint)"
+                                    font-size="8" font-family="var(--font-mono)">
+                                    {pct}
+                                </text>
+                            </g>
+                        }
+                        }).collect_view()
+                    }}
+                </g>
+
+                // 无数据提示
+                <Show when=move || !has_data() fallback=|| ()>
+                    <text x=center y=center
+                        text-anchor="middle" fill="var(--text-faint)"
+                        font-size="12" font-family="var(--font-sans)"
+                        font-weight="500" letter-spacing="0.1em">
+                        "NO DATA"
+                    </text>
+                </Show>
+            </svg>
+        </div>
+    }
 }

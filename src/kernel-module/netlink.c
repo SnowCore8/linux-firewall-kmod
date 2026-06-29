@@ -40,8 +40,10 @@ enum {
   FW_NL_LIST_RATES_QUERY = 15, /* 守护进程 → 内核：查询速率统计 */
   FW_NL_LIST_RATES_RESPONSE = 16, /* 内核 → 守护进程：速率统计响应 */
   FW_NL_WHITELIST_STATE_CHANGE = 17, /* 内核 → 守护进程：白名单状态变更 */
-  FW_NL_CMD_RESULT = 18,    /* 内核 → 守护进程：命令执行失败 */
-  FW_NL_CONFIG_CHANGE = 19, /* 内核 → 守护进程：procfs 配置变更 */
+  FW_NL_CMD_RESULT = 18,     /* 内核 → 守护进程：命令执行失败 */
+  FW_NL_CONFIG_CHANGE = 19,  /* 内核 → 守护进程：procfs 配置变更 */
+  FW_NL_ANALYSIS_QUERY = 20, /* 守护进程 → 内核：查询分析数据 */
+  FW_NL_ANALYSIS_RESPONSE = 21, /* 内核 → 守护进程：分析数据响应 */
 };
 
 /* 消息头结构（20 字节） */
@@ -174,6 +176,65 @@ struct fw_nl_stats_response {
   __u64 whitelist_count;
   __u64 packets_dropped;
   __u64 packets_accepted;
+} __packed;
+
+/* 分析数据子条目（UDP 端口 / ICMP 类型） */
+struct fw_nl_udp_port_item {
+  __u16 port;
+  __u64 packets;
+  __u64 bytes;
+  __u64 last_seen_secs;
+} __packed;
+
+struct fw_nl_icmp_type_item {
+  __u8 type;
+  __u8 code;
+  __u64 packets;
+  __u64 bytes;
+  __u64 last_seen_secs;
+} __packed;
+
+/* 端口扫描 / 服务探测子条目 */
+struct fw_nl_scanner_item {
+  __u8 af;
+  __u8 pad[3];
+  __u8 addr[16];
+  __u32 metric; /* port scanner: unique_ports; service probe: protocol_count */
+  __u64 packets;
+} __packed;
+
+/* 分析数据响应（内核 → 守护进程）
+ * 将包大小分布、TTL 分布、IP 分片、UDP 端口、ICMP 类型、
+ * 端口扫描者、服务探测者一次性打包返回，替代 7 个 procfs 文本接口 */
+#define FW_NL_ANALYSIS_MAX_UDP_PORTS 64
+#define FW_NL_ANALYSIS_MAX_ICMP_TYPES 64
+#define FW_NL_ANALYSIS_MAX_SCANNERS 20
+
+struct fw_nl_analysis_response {
+  struct fw_nlmsg_hdr hdr;
+  /* 包大小分布（5 桶 atomic64） */
+  __u64 pkt_sizes[5];
+  /* TTL 分布（6 桶 atomic64） */
+  __u64 ttl_dist[6];
+  /* IP 分片（2 个 atomic64） */
+  __u64 ip_frag_total;
+  __u64 ip_frag_count;
+  /* UDP 端口分布（变长，最多 64 条目） */
+  __u32 udp_port_count;
+  __u32 udp_port_capacity;
+  struct fw_nl_udp_port_item udp_ports[FW_NL_ANALYSIS_MAX_UDP_PORTS];
+  /* ICMP 类型分布（变长，最多 64 条目） */
+  __u32 icmp_type_count;
+  __u32 icmp_type_capacity;
+  struct fw_nl_icmp_type_item icmp_types[FW_NL_ANALYSIS_MAX_ICMP_TYPES];
+  /* 端口扫描者（变长，最多 20 条目） */
+  __u32 port_scan_count;
+  __u32 port_scan_threshold;
+  struct fw_nl_scanner_item port_scanners[FW_NL_ANALYSIS_MAX_SCANNERS];
+  /* 服务探测者（变长，最多 20 条目） */
+  __u32 service_probe_count;
+  __u32 service_probe_threshold;
+  struct fw_nl_scanner_item service_probes[FW_NL_ANALYSIS_MAX_SCANNERS];
 } __packed;
 
 /* 白名单条目（内核 → 守护进程） */
@@ -569,7 +630,7 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
   int resp_size;
   int ret;
   int count = 0;
-  int total;
+  int total = 0;
 
   if (!fw_nl_sock) {
     return -ENOTCONN;
@@ -625,6 +686,10 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
     u32 duration_secs;
     s64 banned_at;
 
+    /* TOCTOU 保护：第二遍遍历期间可能新增条目，防止越界写入 */
+    if (count >= total)
+      break;
+
     entries[count].af = FW_AF_INET;
     entries[count].is_permanent = READ_ONCE(entry->is_permanent) ? 1 : 0;
 
@@ -657,6 +722,10 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
     unsigned long unban_time = READ_ONCE(entry->unban_time);
     u32 duration_secs;
     s64 banned_at;
+
+    /* TOCTOU 保护：第二遍遍历期间可能新增条目，防止越界写入 */
+    if (count >= total)
+      break;
 
     entries[count].af = FW_AF_INET6;
     entries[count].is_permanent = READ_ONCE(entry->is_permanent) ? 1 : 0;
@@ -752,6 +821,206 @@ int fw_netlink_send_stats_response(u32 seq, u32 portid) {
   ret = netlink_unicast(fw_nl_sock, skb, portid, MSG_DONTWAIT);
   if (ret < 0 && ret != -ESRCH) {
     pr_warn_ratelimited("netlink unicast stats response failed: %d\n", ret);
+    return ret;
+  }
+
+  return 0;
+}
+
+/**
+ * fw_netlink_send_analysis_response - 向守护进程发送分析数据响应
+ * @seq: 请求序列号
+ * @portid: 守护进程 netlink 端口 ID（用于单播回复）
+ *
+ * 将包大小分布、TTL 分布、IP 分片、UDP 端口分布、ICMP 类型分布、
+ * 端口扫描者、服务探测者一次性打包发送，替代 7 个 procfs 文本接口。
+ */
+int fw_netlink_send_analysis_response(u32 seq, u32 portid) {
+  struct firewall_info *fw = &fw_info;
+  struct sk_buff *skb;
+  struct nlmsghdr *nlh;
+  struct fw_nl_analysis_response *resp;
+  int ret;
+  unsigned long now = jiffies;
+
+  if (!fw_nl_sock) {
+    return -ENOTCONN;
+  }
+
+  skb = nlmsg_new(sizeof(*resp), GFP_ATOMIC);
+  if (!skb) {
+    return -ENOMEM;
+  }
+
+  nlh = nlmsg_put(skb, 0, 0, FW_NL_ANALYSIS_RESPONSE, sizeof(*resp), 0);
+  if (!nlh) {
+    kfree_skb(skb);
+    return -ENOMEM;
+  }
+
+  resp = (struct fw_nl_analysis_response *)nlmsg_data(nlh);
+  memset(resp, 0, sizeof(*resp));
+
+  /* 填充消息头 */
+  resp->hdr.magic = cpu_to_be32(FW_NL_MAGIC);
+  resp->hdr.msg_type = cpu_to_be16(FW_NL_ANALYSIS_RESPONSE);
+  resp->hdr.msg_len = cpu_to_be16(sizeof(*resp));
+  resp->hdr.seq = cpu_to_be32(seq);
+
+  /* === 包大小分布（5 桶 atomic64） === */
+  resp->pkt_sizes[0] = cpu_to_be64(atomic64_read(&fw->pkt_size_tiny));
+  resp->pkt_sizes[1] = cpu_to_be64(atomic64_read(&fw->pkt_size_small));
+  resp->pkt_sizes[2] = cpu_to_be64(atomic64_read(&fw->pkt_size_medium));
+  resp->pkt_sizes[3] = cpu_to_be64(atomic64_read(&fw->pkt_size_large));
+  resp->pkt_sizes[4] = cpu_to_be64(atomic64_read(&fw->pkt_size_jumbo));
+
+  /* === TTL 分布（6 桶 atomic64） === */
+  resp->ttl_dist[0] = cpu_to_be64(atomic64_read(&fw->ttl_scan));
+  resp->ttl_dist[1] = cpu_to_be64(atomic64_read(&fw->ttl_very_short));
+  resp->ttl_dist[2] = cpu_to_be64(atomic64_read(&fw->ttl_short));
+  resp->ttl_dist[3] = cpu_to_be64(atomic64_read(&fw->ttl_normal));
+  resp->ttl_dist[4] = cpu_to_be64(atomic64_read(&fw->ttl_long));
+  resp->ttl_dist[5] = cpu_to_be64(atomic64_read(&fw->ttl_max));
+
+  /* === IP 分片（2 个 atomic64） === */
+  resp->ip_frag_total = cpu_to_be64(atomic64_read(&fw->ip_total_count));
+  resp->ip_frag_count = cpu_to_be64(atomic64_read(&fw->ip_frag_count));
+
+  /* === UDP 端口分布（RCU 遍历哈希表，最多 64 条目） === */
+  resp->udp_port_capacity = cpu_to_be32(MAX_UDP_PORT_ENTRIES);
+  {
+    struct udp_port_entry *udp_entry;
+    u32 hash;
+    u32 idx = 0;
+
+    rcu_read_lock();
+    hash_for_each_rcu(fw->udp_port_table, hash, udp_entry, hash) {
+      if (idx >= FW_NL_ANALYSIS_MAX_UDP_PORTS)
+        break;
+      resp->udp_ports[idx].port = cpu_to_be16(udp_entry->port);
+      resp->udp_ports[idx].packets = cpu_to_be64(atomic64_read(&udp_entry->packet_count));
+      resp->udp_ports[idx].bytes = cpu_to_be64(atomic64_read(&udp_entry->byte_count));
+      resp->udp_ports[idx].last_seen_secs = cpu_to_be64((now - udp_entry->last_seen) / HZ);
+      idx++;
+    }
+    rcu_read_unlock();
+    resp->udp_port_count = cpu_to_be32(idx);
+  }
+
+  /* === ICMP 类型分布（RCU 遍历哈希表，最多 64 条目） === */
+  resp->icmp_type_capacity = cpu_to_be32(MAX_ICMP_TYPE_ENTRIES);
+  {
+    struct icmp_type_entry *icmp_entry;
+    u32 hash;
+    u32 idx = 0;
+
+    rcu_read_lock();
+    hash_for_each_rcu(fw->icmp_type_table, hash, icmp_entry, hash) {
+      if (idx >= FW_NL_ANALYSIS_MAX_ICMP_TYPES)
+        break;
+      resp->icmp_types[idx].type = icmp_entry->type;
+      resp->icmp_types[idx].code = icmp_entry->code;
+      resp->icmp_types[idx].packets = cpu_to_be64(atomic64_read(&icmp_entry->packet_count));
+      resp->icmp_types[idx].bytes = cpu_to_be64(atomic64_read(&icmp_entry->byte_count));
+      resp->icmp_types[idx].last_seen_secs = cpu_to_be64((now - icmp_entry->last_seen) / HZ);
+      idx++;
+    }
+    rcu_read_unlock();
+    resp->icmp_type_count = cpu_to_be32(idx);
+  }
+
+  /* === 端口扫描者 + 服务探测者（遍历速率表，单次遍历同时收集） === */
+  resp->port_scan_threshold = cpu_to_be32(5);
+  resp->service_probe_threshold = cpu_to_be32(3);
+  {
+    int i, ps_count = 0, sp_count = 0;
+
+    rcu_read_lock();
+    /* IPv4 速率表 */
+    for (i = 0; i < (1 << RATE_HASH_BITS); i++) {
+      struct ip_rate_entry *entry;
+      struct hlist_head *head = &fw->rate_table_ipv4[i];
+
+      hlist_for_each_entry_rcu(entry, head, hash) {
+        /* 端口扫描检测 */
+        if (ps_count < FW_NL_ANALYSIS_MAX_SCANNERS) {
+          int unique = atomic_read(&entry->unique_ports);
+          if (unique >= 5) {
+            resp->port_scanners[ps_count].af = FW_AF_INET;
+            memcpy(resp->port_scanners[ps_count].addr, &entry->addr.ipv4, 4);
+            resp->port_scanners[ps_count].metric = cpu_to_be32(unique);
+            resp->port_scanners[ps_count].packets = cpu_to_be64(
+              atomic64_read(&entry->packet_count));
+            ps_count++;
+          }
+        }
+        /* 服务探测检测 */
+        if (sp_count < FW_NL_ANALYSIS_MAX_SCANNERS) {
+          int proto_count = 0;
+          if (atomic64_read(&entry->syn_count) > 0 || atomic64_read(&entry->ack_count) > 0 ||
+              atomic64_read(&entry->rst_count) > 0 || atomic64_read(&entry->fin_count) > 0)
+            proto_count++;
+          if (atomic64_read(&entry->udp_count) > 0)
+            proto_count++;
+          if (atomic64_read(&entry->icmp_count) > 0)
+            proto_count++;
+          if (proto_count >= 3) {
+            resp->service_probes[sp_count].af = FW_AF_INET;
+            memcpy(resp->service_probes[sp_count].addr, &entry->addr.ipv4, 4);
+            resp->service_probes[sp_count].metric = cpu_to_be32(proto_count);
+            resp->service_probes[sp_count].packets = cpu_to_be64(
+              atomic64_read(&entry->packet_count));
+            sp_count++;
+          }
+        }
+      }
+    }
+    /* IPv6 速率表 */
+    for (i = 0; i < (1 << RATE_HASH_BITS); i++) {
+      struct ip_rate_entry *entry;
+      struct hlist_head *head = &fw->rate_table_ipv6[i];
+
+      hlist_for_each_entry_rcu(entry, head, hash) {
+        if (ps_count < FW_NL_ANALYSIS_MAX_SCANNERS) {
+          int unique = atomic_read(&entry->unique_ports);
+          if (unique >= 5) {
+            resp->port_scanners[ps_count].af = FW_AF_INET6;
+            memcpy(resp->port_scanners[ps_count].addr, &entry->addr.ipv6, 16);
+            resp->port_scanners[ps_count].metric = cpu_to_be32(unique);
+            resp->port_scanners[ps_count].packets = cpu_to_be64(
+              atomic64_read(&entry->packet_count));
+            ps_count++;
+          }
+        }
+        if (sp_count < FW_NL_ANALYSIS_MAX_SCANNERS) {
+          int proto_count = 0;
+          if (atomic64_read(&entry->syn_count) > 0 || atomic64_read(&entry->ack_count) > 0 ||
+              atomic64_read(&entry->rst_count) > 0 || atomic64_read(&entry->fin_count) > 0)
+            proto_count++;
+          if (atomic64_read(&entry->udp_count) > 0)
+            proto_count++;
+          if (atomic64_read(&entry->icmp_count) > 0)
+            proto_count++;
+          if (proto_count >= 3) {
+            resp->service_probes[sp_count].af = FW_AF_INET6;
+            memcpy(resp->service_probes[sp_count].addr, &entry->addr.ipv6, 16);
+            resp->service_probes[sp_count].metric = cpu_to_be32(proto_count);
+            resp->service_probes[sp_count].packets = cpu_to_be64(
+              atomic64_read(&entry->packet_count));
+            sp_count++;
+          }
+        }
+      }
+    }
+    rcu_read_unlock();
+    resp->port_scan_count = cpu_to_be32(ps_count);
+    resp->service_probe_count = cpu_to_be32(sp_count);
+  }
+
+  /* 单播回复给守护进程 */
+  ret = netlink_unicast(fw_nl_sock, skb, portid, MSG_DONTWAIT);
+  if (ret < 0 && ret != -ESRCH) {
+    pr_warn_ratelimited("netlink unicast analysis response failed: %d\n", ret);
     return ret;
   }
 
@@ -887,6 +1156,9 @@ int fw_netlink_send_list_whitelist_response(u32 seq, u32 portid) {
 
   /* IPv4 白名单 */
   hash_for_each_rcu(fw_info.whitelist_table_ipv4, hash, entry, hash) {
+    /* TOCTOU 保护：第二遍遍历期间可能新增条目，防止越界写入 */
+    if (count >= actual_count)
+      break;
     entries[count].af = FW_AF_INET;
     entries[count].prefix_len = ipv4_mask_to_prefix_len(entry->mask.ipv4_mask);
     memset(entries[count].addr, 0, sizeof(entries[count].addr));
@@ -899,6 +1171,9 @@ int fw_netlink_send_list_whitelist_response(u32 seq, u32 portid) {
 
   /* IPv6 白名单 */
   hash_for_each_rcu(fw_info.whitelist_table_ipv6, hash, entry, hash) {
+    /* TOCTOU 保护：第二遍遍历期间可能新增条目，防止越界写入 */
+    if (count >= actual_count)
+      break;
     entries[count].af = FW_AF_INET6;
     entries[count].prefix_len = entry->mask.prefix_len;
     memcpy(entries[count].addr, &entry->addr.ipv6, 16);
@@ -995,7 +1270,7 @@ int fw_netlink_send_list_rates_response(u32 seq, u32 portid) {
   int resp_size;
   int ret;
   int count = 0;
-  int total;
+  int total = 0;
   unsigned long now = jiffies;
 
   if (!fw_nl_sock) {
@@ -1051,12 +1326,18 @@ int fw_netlink_send_list_rates_response(u32 seq, u32 portid) {
 
   /* IPv4 的速率统计 */
   hash_for_each_rcu(fw_info.rate_table_ipv4, hash, entry, hash) {
+    /* TOCTOU 保护：遍历期间可能新增条目，防止越界写入 */
+    if (count >= total)
+      break;
     fill_rate_entry(&entries[count], entry, FW_AF_INET, now);
     count++;
   }
 
   /* IPv6 的速率统计 */
   hash_for_each_rcu(fw_info.rate_table_ipv6, hash, entry, hash) {
+    /* TOCTOU 保护：遍历期间可能新增条目，防止越界写入 */
+    if (count >= total)
+      break;
     fill_rate_entry(&entries[count], entry, FW_AF_INET6, now);
     count++;
   }
@@ -1210,6 +1491,15 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
         }
       }
 
+      if (flags & FW_NL_CFG_RATE_WINDOW) {
+        __u32 new_window = be32_to_cpu(cfg->rate_window_seconds);
+        if (new_window == 0) {
+          pr_warn("netlink: reject rate_window=0 (would reset window every packet)\n");
+          rejected_flags |= FW_NL_CFG_RATE_WINDOW;
+          flags &= ~FW_NL_CFG_RATE_WINDOW;
+        }
+      }
+
       /* 使用 WRITE_ONCE 确保原子写入和内存可见性 */
       if (flags & FW_NL_CFG_BAN_TIME) {
         WRITE_ONCE(fw_info.ban_time, be32_to_cpu(cfg->ban_time));
@@ -1321,6 +1611,10 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
     case FW_NL_STATS_QUERY:
       pr_info("netlink: stats query received, seq=%u\n", be32_to_cpu(hdr->seq));
       fw_netlink_send_stats_response(be32_to_cpu(hdr->seq), sender_portid);
+      break;
+
+    case FW_NL_ANALYSIS_QUERY:
+      fw_netlink_send_analysis_response(be32_to_cpu(hdr->seq), sender_portid);
       break;
 
     case FW_NL_LIST_BANS_QUERY:

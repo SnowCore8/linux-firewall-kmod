@@ -635,6 +635,80 @@ tr:last-child td { border-bottom: none; }
   margin-top: 16px;
 }
 
+/* ── 封禁详情模态框 ── */
+.ban-detail-modal {
+  max-width: 520px;
+  width: 90%;
+  padding: 0;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.modal-body {
+  padding: 16px 20px;
+}
+
+.detail-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.detail-row:last-child {
+  border-bottom: none;
+}
+
+.detail-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.detail-value {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.detail-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-default);
+}
+
+.detail-section h4 {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 10px;
+}
+
 .page-toolbar {
   display: flex;
   justify-content: space-between;
@@ -724,11 +798,447 @@ tr:last-child td { border-bottom: none; }
   white-space: nowrap;
 }
 
+.threat-factors {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: 16px;
+}
+
+.threat-factor {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+
+/* ── 智能推荐 ── */
+.rec-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rec-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  gap: 12px;
+}
+
+.rec-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.rec-cidr {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.rec-type {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.rec-reason {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.rec-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.rec-confidence {
+  font-size: 12px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+}
+
+/* ── 封禁时间线 ── */
+.ban-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ban-timeline-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  background: var(--bg-main);
+  font-size: 12px;
+}
+
+.ban-tl-ip {
+  font-weight: 700;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ban-tl-jail {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  background: var(--bg-hover);
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.ban-tl-repeat {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--color-orange);
+  flex-shrink: 0;
+}
+
+.ban-tl-time {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+  min-width: 40px;
+  text-align: right;
+}
+
+/* ── 封禁效果分析面板 ── */
+.effectiveness-card {
+  margin-bottom: 16px;
+}
+
+.effectiveness-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.effectiveness-level {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.level-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--bg-main);
+  border-radius: 4px;
+}
+
+.level-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.level-ips {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.level-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 4px;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.stat-label {
+  color: var(--text-muted);
+}
+
+.stat-value {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.level-verdict {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 6px 8px;
+  background: var(--bg-main);
+  border-radius: 4px;
+  line-height: 1.4;
+}
+
+.effectiveness-summary {
+  padding: 10px 12px;
+  background: var(--bg-main);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  border-left: 3px solid var(--color-blue);
+}
+
+/* ── 周期性攻击者面板 ── */
+.periodic-card {
+  margin-bottom: 16px;
+}
+
+.periodic-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.periodic-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--bg-main);
+  border-radius: 6px;
+  border-left: 3px solid var(--color-orange);
+}
+
+.periodic-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.periodic-ip {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.periodic-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-left: auto;
+}
+
+.periodic-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.periodic-stat {
+  font-family: var(--font-mono);
+}
+
+.periodic-sep {
+  color: var(--border-strong);
+}
+
+/* ── 协同攻击面板 ── */
+.collab-card {
+  margin-bottom: 16px;
+}
+
+.collab-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.collab-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--bg-main);
+  border-radius: 6px;
+  border-left: 3px solid var(--color-red);
+}
+
+.collab-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.collab-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-left: auto;
+}
+
+.collab-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.collab-stat {
+  font-family: var(--font-mono);
+}
+
+.collab-sep {
+  color: var(--border-strong);
+}
+
+.collab-ips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.collab-ip {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: var(--bg-hover);
+  border-radius: 3px;
+  color: var(--text-secondary);
+}
+
+.collab-ip-more {
+  font-size: 10px;
+  padding: 2px 6px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── 封禁时长分布直方图 ── */
+.histogram-card {
+  padding: 16px;
+}
+
+.histogram-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.histogram-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.histogram-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  width: 50px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.histogram-bar-bg {
+  flex: 1;
+  height: 20px;
+  background: var(--bg-hover);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.histogram-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+  min-width: 2px;
+}
+
+.histogram-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  width: 40px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+/* ── 快捷操作栏 ── */
+.quick-actions {
+  display: flex;
+  gap: 8px;
+  padding: 8px 0;
+}
+
 /* ── 主网格布局 ── */
 .dashboard-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+.dashboard-grid-3 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+@media (max-width: 1024px) {
+  .dashboard-grid-3 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard-grid-3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── 雷达图容器 ── */
+.radar-chart-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
 }
 
 /* ── 攻击源面板 ── */
@@ -804,6 +1314,88 @@ tr:last-child td { border-bottom: none; }
 .attacker-level.normal {
   background: var(--color-green-dim);
   color: var(--color-green);
+}
+
+/* ── UDP 端口分布面板 ── */
+.udp-ports-panel {
+  padding: 12px;
+}
+
+.udp-ports-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+}
+
+.udp-summary-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.udp-summary-value {
+  color: var(--color-cyan);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.udp-ports-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.udp-port-header {
+  display: grid;
+  grid-template-columns: 60px 1fr 1fr 80px;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.udp-port-row {
+  display: grid;
+  grid-template-columns: 60px 1fr 1fr 80px;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 11px;
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+  transition: background 0.15s ease;
+}
+
+.udp-port-row:hover {
+  background: var(--bg-card-hover);
+}
+
+.udp-port-num {
+  color: var(--color-orange);
+  font-weight: 700;
+}
+
+.udp-port-packets {
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.udp-port-bytes {
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+.udp-port-age {
+  color: var(--text-muted);
+  text-align: right;
+  font-size: 10px;
 }
 
 /* ── 内核统计条 ── */
@@ -996,6 +1588,222 @@ tr:last-child td { border-bottom: none; }
   font-family: var(--font-mono);
 }
 
+/* ── 24h 攻击热力图 ── */
+.heatmap-card {
+  padding: 14px;
+}
+
+.heatmap-card .chart-header {
+  margin-bottom: 8px;
+}
+
+.heatmap-legend {
+  display: flex;
+  gap: 12px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.heatmap-container {
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.heatmap-svg {
+  width: 100%;
+  min-width: 600px;
+  height: auto;
+}
+
+.heatmap-hour-label {
+  font-size: 8px;
+  fill: var(--text-muted);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.heatmap-row-label {
+  font-size: 9px;
+  fill: var(--text-secondary);
+  font-weight: 700;
+}
+
+.heatmap-cell {
+  transition: opacity 150ms ease;
+  cursor: default;
+}
+
+.heatmap-cell:hover {
+  opacity: 1 !important;
+  stroke: var(--text-primary);
+  stroke-width: 1;
+}
+
+.heatmap-cell-value {
+  font-size: 7px;
+  fill: var(--text-primary);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  pointer-events: none;
+  opacity: 0.9;
+}
+
+.heatmap-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 30px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ── 封禁效果追踪 ── */
+.recidivism-card {
+  padding: 14px;
+}
+
+.recidivism-layout {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.recidivism-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.recidivism-stat {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.recidivism-stat-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.recidivism-stat-value {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.recidivism-top {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.recidivism-top-header {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.recidivism-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.recidivism-row {
+  display: grid;
+  grid-template-columns: 24px 1fr 50px 50px;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 8px;
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+
+.recidivism-rank {
+  color: var(--text-muted);
+  font-weight: 700;
+  text-align: center;
+}
+
+.recidivism-ip {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.recidivism-count {
+  text-align: right;
+}
+
+.recidivism-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.recidivism-badge.critical {
+  background: var(--color-red-dim);
+  color: var(--color-red);
+}
+
+.recidivism-badge.warning {
+  background: var(--color-orange-dim);
+  color: var(--color-orange);
+}
+
+.recidivism-badge.normal {
+  background: var(--color-cyan-dim);
+  color: var(--color-cyan);
+}
+
+.recidivism-empty {
+  padding: 20px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 768px) {
+  .recidivism-layout {
+    grid-template-columns: 1fr;
+  }
+  .recidivism-summary {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════
    DDoS 监控页面
    ═══════════════════════════════════════════════════════════════ */
@@ -1091,6 +1899,51 @@ tr:last-child td { border-bottom: none; }
   font-weight: 700;
 }
 
+/* ── 多窗口速率检测 ── */
+.window-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.window-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 8px;
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+}
+
+.window-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.window-value {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.window-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.window-desc {
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  opacity: 0.7;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Bans / Jails / Logs / Settings / Whitelist
    ═══════════════════════════════════════════════════════════════ */
@@ -1140,6 +1993,23 @@ tr:last-child td { border-bottom: none; }
   font-weight: 800;
   color: var(--text-primary);
   font-family: var(--font-mono);
+}
+
+.jail-threshold-info {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.threshold-info {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  display: inline-block;
+  padding: 2px 8px;
+  background: var(--bg-secondary);
+  border-radius: 3px;
+  border-left: 2px solid var(--accent-primary);
 }
 
 .rates-grid {
@@ -1480,4 +2350,82 @@ tr:last-child td { border-bottom: none; }
 
 @media (max-width: 768px) {
   .skeleton-grid { grid-template-columns: 1fr; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Toast 通知系统
+   ═══════════════════════════════════════════════════════════════ */
+
+.toast-container {
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  max-width: 360px;
+}
+
+.toast-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: auto;
+  animation: toast-slide-in 0.2s var(--ease-out);
+  box-shadow: var(--shadow-md);
+  border: 1px solid;
+}
+
+.toast-success {
+  background: var(--color-green-dim);
+  color: var(--color-green);
+  border-color: rgba(0, 255, 136, 0.25);
+}
+
+.toast-error {
+  background: var(--color-red-dim);
+  color: var(--color-red);
+  border-color: rgba(255, 0, 64, 0.25);
+}
+
+.toast-info {
+  background: var(--color-cyan-dim);
+  color: var(--color-cyan);
+  border-color: rgba(0, 240, 255, 0.25);
+}
+
+.toast-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 800;
+  flex-shrink: 0;
+  background: currentColor;
+  color: var(--bg-card);
+}
+
+.toast-message {
+  flex: 1;
+  line-height: 1.4;
+}
+
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }

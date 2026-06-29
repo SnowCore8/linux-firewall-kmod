@@ -49,7 +49,7 @@ make daemon
 ### 运行测试
 
 ```bash
-# 运行全部测试（115 项集成测试）
+# 运行全部测试（19 套件集成测试）
 make test
 
 # 仅运行 Rust 单元测试 (88 项)
@@ -145,7 +145,7 @@ int whitelist_check(__be32 ip);
 | 测试类型 | 命令 | 规模 / 说明 |
 |----------|------|------------|
 | Rust 单元测试 | `cargo test` | 88 项 `#[test]` 单元 + 6 项 doctest。doctest 全部真跑,不写 `no_run` / `ignore` |
-| 集成测试 | `make test` | 115 项用例,19 个套件 (`tests/suites/01_*.sh` 到 `21_*.sh`,5/6 合并) |
+| 集成测试 | `make test` | 19 套件用例,19 个套件 (`tests/suites/01_*.sh` 到 `21_*.sh`,5/6 合并) |
 | 行为审计 | `c-to-rust-behavioral-audit` skill | C 守护进程已退役,审计按需触发,确保 Rust 版零回归 |
 
 **修改下列内容时必跑 `make test` 集成测试**:
@@ -158,13 +158,13 @@ int whitelist_check(__be32 ip);
 
 ### 内存安全 (Rust unsafe 块)
 
-当前代码库共有 **49 个 `unsafe` 块**,分布在:
+当前代码库共有 **46 个 `unsafe` 块**,分布在:
 
 | 文件 | 数量 | 用途 |
 |------|------|------|
-| `src/daemon/netlink/protocol.rs` | 14 | `ptr::read` / `from_raw_parts` 反序列化 `#[repr(C, packed)]` 结构体 |
+| `src/daemon/netlink/responses.rs` | 15 | `ptr::read` / `from_raw_parts` 反序列化 `#[repr(C, packed)]` 结构体 |
 | `src/daemon/netlink/mod.rs` | 13 | `socket` / `bind` / `poll` / `recv` / `sendto` / `close` 等 netlink socket 操作 |
-| `src/daemon/ban/procfs.rs` | 11 | `libc::open(O_NOFOLLOW)` / `libc::close` / `libc::write` 等 fd 生命周期管理 |
+| `src/daemon/netlink/protocol.rs` | 7 | netlink 协议类型定义与序列化 |
 | `src/daemon/daemonizer.rs` | 7 | `libc::fork` 守护进程化 / `libc::flock` / `from_raw_fd` 接管 fd |
 | `src/daemon/file_monitor/monitor_loop.rs` | 1 | `libc::poll` 包装 inotify fd 等待事件 |
 | `src/daemon/ip_utils.rs` | 1 | 原始 IP 地址操作 |
@@ -194,14 +194,14 @@ let new_fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_NOFOLLO
 
 | Profile | 命令 | 体积 | 用途 |
 |---------|------|------|------|
-| `release` (默认) | `cargo build --release` | **3.8 MB** stripped | 生产 / 发行版,启用 `lto = "fat"` + `strip = "symbols"` + `codegen-units = 1` |
+| `release` (默认) | `cargo build --release` | **6.2 MB** stripped | 生产 / 发行版,启用 `lto = "fat"` + `strip = "symbols"` + `codegen-units = 1` |
 | `dev-with-debug` | `cargo build --release --profile dev-with-debug` | **~32 MB** 带 DWARF + 完整符号表 | 现场 crash 复盘,用 `coredumpctl` / `gdb` 拿回精确行号 |
 | `asan` | `cargo +nightly build --profile asan` | 较大,需 nightly | 内存检测,需 `cargo +nightly` + opt-in `.cargo/config.toml` 重编 std |
 
 **选型建议**:
 
 - 日常开发:`cargo build`(默认 dev profile,带调试信息但未优化)
-- 性能基准 / 发版前:`cargo build --release`(3.8 MB,LTO 后的最终优化)
+- 性能基准 / 发版前:`cargo build --release`(6.2 MB,LTO 后的最终优化)
 - 现场 crash:`cargo build --release --profile dev-with-debug`,把 binary 拷到现场跑,crash 后用 gdb attach core 还原栈
 - ASAN 内存体检:仅在 nightly 工具链上跑,平时不开
 

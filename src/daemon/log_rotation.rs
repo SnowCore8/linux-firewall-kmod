@@ -18,7 +18,7 @@ use std::sync::atomic::Ordering;
 use inotify::WatchMask;
 
 use crate::file_monitor::{setup_inotify, FILE_STATES, INOTIFY_STATE};
-use crate::line_processor::process_single_line;
+use crate::line_processor::flush_partial_line;
 use crate::types::{Config, DAEMON_STATS};
 
 // ============================================================================
@@ -51,18 +51,7 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
     let findtime = jail.findtime;
 
     // flush partial 行缓冲
-    let mut buf = jail.partial_line_buffer.write();
-    if buf.is_empty() {
-        drop(buf);
-    } else {
-        let temp = buf.clone();
-        buf.clear();
-        drop(buf);
-
-        if let Ok(line) = std::str::from_utf8(&temp) {
-            process_single_line(jail, line, &path, max_retries, findtime);
-        }
-    }
+    flush_partial_line(jail, &path, max_retries, findtime);
 
     DAEMON_STATS.log_rotations.fetch_add(1, Ordering::Relaxed);
 
@@ -111,7 +100,7 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
 
                     match inotify.watches().add(&path, mask) {
                         Ok(new_wd) => {
-                            state.wd = Some(new_wd.clone());
+                            state.wd = Some(new_wd);
                         }
                         Err(e) => {
                             crate::logger::warn!(

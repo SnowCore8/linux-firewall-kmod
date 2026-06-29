@@ -69,7 +69,13 @@ pub fn Logs() -> impl IntoView {
     let cancelled = Rc::new(Cell::new(false));
     let reconnect_attempt = Rc::new(Cell::new(0u32));
     let reconnect_guard = Rc::new(Cell::new(false));
-    connect_logs_sse(logs, streaming, Rc::clone(&cancelled), Rc::clone(&reconnect_attempt), Rc::clone(&reconnect_guard));
+    connect_logs_sse(
+        logs,
+        streaming,
+        Rc::clone(&cancelled),
+        Rc::clone(&reconnect_attempt),
+        Rc::clone(&reconnect_guard),
+    );
     on_cleanup({
         let cancelled = Rc::clone(&cancelled);
         move || cancelled.set(true)
@@ -195,9 +201,9 @@ pub fn Logs() -> impl IntoView {
                     view! {
                         <div class="log-lines">
                             <For
-                                each=move || entries.clone().into_iter().enumerate()
-                                key=|(i, e)| format!("{i}-{}", e.line_number)
-                                children=move |(_, log)| {
+                                each=move || entries.clone().into_iter()
+                                key=|e| e.line_number
+                                children=move |log| {
                                     let log_level = log.level.clone();
                                     let log_level_badge = log.level.clone();
                                     let log_level_text = log.level.clone();
@@ -252,13 +258,28 @@ fn connect_logs_sse(
     // 新连接周期：重置防护标志
     reconnect_guard.set(false);
 
+    // 单调递增行号计数器（清空后不回退，防止 For key 碰撞）
+    let line_counter = Rc::new(Cell::new(
+        logs.get_untracked()
+            .iter()
+            .map(|e| e.line_number)
+            .max()
+            .unwrap_or(0),
+    ));
+
     let source = match web_sys::EventSource::new("/api/v1/logs/stream") {
         Ok(s) => s,
         Err(_) => {
             let can_schedule = !reconnect_guard.get() && !cancelled.get();
             if can_schedule {
                 reconnect_guard.set(true);
-                schedule_logs_reconnect(logs, streaming, cancelled, reconnect_attempt, reconnect_guard);
+                schedule_logs_reconnect(
+                    logs,
+                    streaming,
+                    cancelled,
+                    reconnect_attempt,
+                    reconnect_guard,
+                );
             }
             return;
         }
@@ -274,6 +295,7 @@ fn connect_logs_sse(
     // on_log — 检查 streaming 暂停状态
     let logs_ref = logs;
     let streaming_ref = streaming;
+    let counter_ref = Rc::clone(&line_counter);
     let on_log = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
         if !streaming_ref.get_untracked() {
             return;
@@ -281,7 +303,9 @@ fn connect_logs_sse(
         if let Ok(data) = e.data().dyn_into::<js_sys::JsString>() {
             let line: String = data.into();
             logs_ref.update(|v| {
-                let entry = parse_log_line(v.len() as u64 + 1, &line);
+                let next_line = counter_ref.get() + 1;
+                counter_ref.set(next_line);
+                let entry = parse_log_line(next_line, &line);
                 v.push(entry);
                 if v.len() > MAX_LOGS {
                     v.remove(0);
@@ -312,8 +336,10 @@ fn connect_logs_sse(
         if can_schedule {
             guard_ref.set(true);
             schedule_logs_reconnect(
-                logs_reconnect, streaming_reconnect,
-                cancelled_reconnect.clone(), attempt_counter.clone(),
+                logs_reconnect,
+                streaming_reconnect,
+                cancelled_reconnect.clone(),
+                attempt_counter.clone(),
                 guard_ref.clone(),
             );
         }
@@ -350,9 +376,17 @@ fn schedule_logs_reconnect(
                 .unwrap();
         });
         let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-        if cancelled.get() { return; }
+        if cancelled.get() {
+            return;
+        }
         // connect_logs_sse 内部会重置 reconnect_guard
-        connect_logs_sse(logs, streaming, cancelled, reconnect_attempt, reconnect_guard);
+        connect_logs_sse(
+            logs,
+            streaming,
+            cancelled,
+            reconnect_attempt,
+            reconnect_guard,
+        );
     });
 }
 

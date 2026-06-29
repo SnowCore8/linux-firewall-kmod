@@ -12,7 +12,7 @@
 
 ## Overview
 
-Firewall is a Linux kernel module version of fail2ban, moving the ban logic from userspace to kernelspace using the netfilter framework for real-time IP banning at the packet level with lower latency and higher performance. The userspace daemon is now written in Rust (translated from C in v2.2.0), producing a 5.2MB stripped binary (including Leptos WASM frontend); 115 integration tests pass.
+Firewall is a Linux kernel module version of fail2ban, moving the ban logic from userspace to kernelspace using the netfilter framework for real-time IP banning at the packet level with lower latency and higher performance. The userspace daemon is now written in Rust (translated from C in v2.2.0), producing a 6.2MB stripped binary (including Leptos WASM frontend); 19 integration test suites pass.
 
 ## Why This Project
 
@@ -20,7 +20,7 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 |---------|---------------------|----------------------|
 | Ban Location | iptables/nftables userspace | netfilter kernel hooks |
 | Response Time | Seconds | Milliseconds |
-| Resource Usage | Python interpreter + full dep chain | Single-file 5.2MB Rust binary (with WASM frontend) |
+| Resource Usage | Python interpreter + full dep chain | Single-file 6.2MB Rust binary (with WASM frontend) |
 | Lookup Performance | Linear rule scan | Hash table O(1) lookup |
 | Permanent Ban | Config file | In-memory, lost on restart |
 
@@ -32,16 +32,16 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 - ✅ **Auto-expire cleanup** — periodic cleanup of expired bans
 - ✅ **IP whitelist protection** — auto-discovery + manual entries (64 capacity)
 - ✅ **procfs interface** — ban/unban/whitelist/config operations
-- ✅ **Rust daemon (v2.2.0+)** — 53 source files, 5.2MB stripped binary (including Leptos WASM frontend), behaviorally equivalent to the C version
+- ✅ **Rust daemon (v2.2.0+)** — 68 source files, 6.2MB stripped binary (including Leptos WASM frontend), behaviorally equivalent to the C version
 - ✅ **Leptos WASM frontend (v2.2.1+)** — Pure Rust frontend framework, no Node.js dependency, trunk build, 7 pages + SVG charts
 - ✅ **Regex parsing** — named capture groups for IP extraction
 - ✅ **RCU concurrency safety** — spinlock protected, high-concurrency safe
 - ✅ **Strict config validation** — unknown params rejected by default
-- ✅ **Prometheus metrics** — 17 metrics on port 9119 (4 kernel + 13 user-space)
+- ✅ **Prometheus metrics** — 24 metrics on port 9119 (4 kernel + 12 user-space + 4 netlink + 1 uptime + 3 reputation)
 - ✅ **Independent log file** — `cfg.log_file` default `/var/log/firewall.log`, falls back to syslog-only on open failure
-- ✅ **Security hardening** — Integer overflow protection, UAF fix, RCU consistency, 49 `unsafe` blocks all with `// SAFETY:` comments
+- ✅ **Security hardening** — Integer overflow protection, UAF fix, RCU consistency, 46 `unsafe` blocks all with `// SAFETY:` comments
 - ✅ **Performance optimization** — Hash table 4096, whitelist two-stage match, LTO compilation
-- ✅ **Code quality** — 88 unit tests + 115 integration tests 100% pass, CI three jobs all green
+- ✅ **Code quality** — 93 unit tests + 19 integration test suites 100% pass, CI three jobs all green
 
 ## Quick Start
 

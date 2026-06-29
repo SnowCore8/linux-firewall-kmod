@@ -16,7 +16,6 @@ extern void ban_entry_expire_callback(struct timer_list *t);
 /* 外部变量声明 */
 extern struct firewall_info fw_info;
 extern u32 fw_hash_seed;
-extern u32 hash_ipv6(const struct in6_addr *addr);
 
 /* 辅助函数：验证文件路径安全 */
 static int validate_state_path(const char *filename) {
@@ -236,8 +235,8 @@ int save_state_to_file(const char *filename) {
   /* 写入 IPv4 封禁 */
   for (int i = 0; i < ban_count_v4; i++) {
     char ip_str[INET_ADDRSTRLEN];
-    const char *reason = ban_entries_v4[i].reason[0] ? ban_entries_v4[i].reason :
-                                                       ban_entries_v4[i].jail_name;
+    /* 保存原始 reason，不使用 jail_name 替代——防止恢复时数据损坏 */
+    const char *reason = ban_entries_v4[i].reason[0] ? ban_entries_v4[i].reason : "(none)";
     ip_to_str(FW_AF_INET, &ban_entries_v4[i].ipv4, ip_str, sizeof(ip_str));
     written = snprintf(buffer, sizeof(buffer), "BAN_V4 %s %lu %s %s\n", ip_str,
                        ban_entries_v4[i].remaining_time,
@@ -252,8 +251,8 @@ int save_state_to_file(const char *filename) {
   /* 写入 IPv6 封禁 */
   for (int i = 0; i < ban_count_v6; i++) {
     char ip_str[INET6_STR_LEN];
-    const char *reason = ban_entries_v6[i].reason[0] ? ban_entries_v6[i].reason :
-                                                       ban_entries_v6[i].jail_name;
+    /* 保存原始 reason，不使用 jail_name 替代——防止恢复时数据损坏 */
+    const char *reason = ban_entries_v6[i].reason[0] ? ban_entries_v6[i].reason : "(none)";
     ip_to_str(FW_AF_INET6, &ban_entries_v6[i].ipv6, ip_str, sizeof(ip_str));
     written = snprintf(buffer, sizeof(buffer), "BAN_V6 %s %lu %s %s\n", ip_str,
                        ban_entries_v6[i].remaining_time,
@@ -416,13 +415,13 @@ int restore_state_from_file(const char *filename) {
               struct ban_entry *entry;
               bool is_permanent = false;
               unsigned long unban_time = 0;
+              unsigned long ban_duration = 0;
 
               if (remaining_time == 0) {
                 is_permanent = true;
               } else if (remaining_time > 365UL * 24 * 60 * 60) {
                 continue;
               } else {
-                unsigned long ban_duration;
                 if (check_mul_overflow(remaining_time, (unsigned long)HZ, &ban_duration)) {
                   continue;
                 }
@@ -436,16 +435,21 @@ int restore_state_from_file(const char *filename) {
 
               entry->af = FW_AF_INET;
               entry->addr.ipv4 = ip;
-              entry->ban_time = jiffies;
+              /* ban_time 保持原始语义：unban_time - 剩余时长 = 原始封禁起点 */
+              entry->ban_time = unban_time ? (unban_time - ban_duration) : jiffies;
               entry->unban_time = unban_time;
               entry->is_permanent = is_permanent;
               strscpy(entry->jail_name, jail_str ? jail_str : "api",
                       sizeof(entry->jail_name));
-              /* state 文件中的 reason 可能是旧版的 "restored" fallback，
-               * 此时用 jail_name 替代，打破 "restored" 死循环 */
-              if (reason_str && strcmp(reason_str, "restored") != 0) {
+              /* 恢复 reason：
+               * - "(none)" 表示原始 reason 为空，保留空字符串
+               * - "restored" 是旧版 fallback 标记，用 jail_name 替代
+               * - 其他值直接使用 */
+              if (reason_str && strcmp(reason_str, "(none)") != 0 &&
+                  strcmp(reason_str, "restored") != 0) {
                 strscpy(entry->reason, reason_str, sizeof(entry->reason));
-              } else if (jail_str && strcmp(jail_str, "api") != 0) {
+              } else if (jail_str && strcmp(jail_str, "api") != 0 &&
+                         (!reason_str || strcmp(reason_str, "restored") == 0)) {
                 strscpy(entry->reason, jail_str, sizeof(entry->reason));
               }
               atomic_set(&entry->retry_count, 0);
@@ -456,7 +460,7 @@ int restore_state_from_file(const char *filename) {
                 struct ban_entry *existing;
                 bool duplicate = false;
 
-                spin_lock(&fw_info.ban_locks_ipv4[bkt4]);
+                spin_lock_bh(&fw_info.ban_locks_ipv4[bkt4]);
                 hlist_for_each_entry_rcu(existing, &fw_info.ban_table_ipv4[bkt4], hash) {
                   if (existing->af == FW_AF_INET && existing->addr.ipv4 == ip) {
                     duplicate = true;
@@ -465,7 +469,7 @@ int restore_state_from_file(const char *filename) {
                 }
 
                 if (duplicate) {
-                  spin_unlock(&fw_info.ban_locks_ipv4[bkt4]);
+                  spin_unlock_bh(&fw_info.ban_locks_ipv4[bkt4]);
                   kfree(entry);
                 } else {
                   /* 与 ban-manager.c IPv4 路径保持一致:直接用桶索引 hlist_add_head_rcu */
@@ -480,7 +484,7 @@ int restore_state_from_file(const char *filename) {
 
                   atomic_inc(&fw_info.ban_count);
                   atomic_inc(&fw_info.total_ban_count);
-                  spin_unlock(&fw_info.ban_locks_ipv4[bkt4]);
+                  spin_unlock_bh(&fw_info.ban_locks_ipv4[bkt4]);
                   restored_ban_count++;
                   /* 推送恢复的封禁事件给守护进程，使用真实的 reason 和 jail_name */
                   fw_netlink_send_ban_state_change(
@@ -512,13 +516,13 @@ int restore_state_from_file(const char *filename) {
               struct ban_entry *entry;
               bool is_permanent = false;
               unsigned long unban_time = 0;
+              unsigned long ban_duration = 0;
 
               if (remaining_time == 0) {
                 is_permanent = true;
               } else if (remaining_time > 365UL * 24 * 60 * 60) {
                 continue;
               } else {
-                unsigned long ban_duration;
                 if (check_mul_overflow(remaining_time, (unsigned long)HZ, &ban_duration)) {
                   continue;
                 }
@@ -531,16 +535,21 @@ int restore_state_from_file(const char *filename) {
 
               entry->af = FW_AF_INET6;
               entry->addr.ipv6 = ip6;
-              entry->ban_time = jiffies;
+              /* ban_time 保持原始语义：unban_time - 剩余时长 = 原始封禁起点 */
+              entry->ban_time = unban_time ? (unban_time - ban_duration) : jiffies;
               entry->unban_time = unban_time;
               entry->is_permanent = is_permanent;
               strscpy(entry->jail_name, jail_str ? jail_str : "api",
                       sizeof(entry->jail_name));
-              /* state 文件中的 reason 可能是旧版的 "restored" fallback，
-               * 此时用 jail_name 替代，打破 "restored" 死循环 */
-              if (reason_str && strcmp(reason_str, "restored") != 0) {
+              /* 恢复 reason：
+               * - "(none)" 表示原始 reason 为空，保留空字符串
+               * - "restored" 是旧版 fallback 标记，用 jail_name 替代
+               * - 其他值直接使用 */
+              if (reason_str && strcmp(reason_str, "(none)") != 0 &&
+                  strcmp(reason_str, "restored") != 0) {
                 strscpy(entry->reason, reason_str, sizeof(entry->reason));
-              } else if (jail_str && strcmp(jail_str, "api") != 0) {
+              } else if (jail_str && strcmp(jail_str, "api") != 0 &&
+                         (!reason_str || strcmp(reason_str, "restored") == 0)) {
                 strscpy(entry->reason, jail_str, sizeof(entry->reason));
               }
               atomic_set(&entry->retry_count, 0);
@@ -551,7 +560,7 @@ int restore_state_from_file(const char *filename) {
                 struct ban_entry *existing;
                 bool duplicate = false;
 
-                spin_lock(&fw_info.ban_locks_ipv6[bkt6]);
+                spin_lock_bh(&fw_info.ban_locks_ipv6[bkt6]);
                 hlist_for_each_entry_rcu(existing, &fw_info.ban_table_ipv6[bkt6], hash) {
                   if (existing->af == FW_AF_INET6 &&
                       ipv6_addr_equal(&existing->addr.ipv6, &ip6)) {
@@ -561,7 +570,7 @@ int restore_state_from_file(const char *filename) {
                 }
 
                 if (duplicate) {
-                  spin_unlock(&fw_info.ban_locks_ipv6[bkt6]);
+                  spin_unlock_bh(&fw_info.ban_locks_ipv6[bkt6]);
                   kfree(entry);
                 } else {
                   /* 修复：直接用桶索引 hlist_add_head_rcu，避免 hash_add_rcu 以 bkt6 为 key
@@ -576,7 +585,7 @@ int restore_state_from_file(const char *filename) {
                   }
                   atomic_inc(&fw_info.ban_count);
                   atomic_inc(&fw_info.total_ban_count);
-                  spin_unlock(&fw_info.ban_locks_ipv6[bkt6]);
+                  spin_unlock_bh(&fw_info.ban_locks_ipv6[bkt6]);
                   restored_ban_count++;
                   /* 推送恢复的封禁事件给守护进程，使用真实的 reason 和 jail_name */
                   fw_netlink_send_ban_state_change(
@@ -600,7 +609,7 @@ int restore_state_from_file(const char *filename) {
           /* 跳过容量限制（按需恢复） */
 
           if (kstrtoint(mask_str, 10, &prefix_len) == 0) {
-            mask = prefix_len == 0 ? 0 : htonl(~((1ULL << (32 - prefix_len)) - 1));
+            mask = prefix_len == 0 ? 0 : htonl(~0U << (32 - prefix_len));
 
             if (in4_pton(ip_str, -1, (u8 *)&ip, -1, NULL)) {
               __be32 normalized_ip = ip & mask;

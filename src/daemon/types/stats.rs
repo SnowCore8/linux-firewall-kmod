@@ -380,13 +380,72 @@ static BASELINE_BPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 /// 基线更新次数（用于自适应 α 切换）
 static BASELINE_SAMPLE_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// 更新全局流量基线（自适应 EWMA）
+/// 基线冻结状态
+///
+/// 当检测到流量突增（当前 PPS > 基线 × 3）时冻结基线更新，
+/// 防止攻击流量污染基线导致阈值跟随上升。
+/// 冻结持续 BASELINE_FREEZE_SAMPLES 个样本后自动恢复。
+static BASELINE_FROZEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static BASELINE_FREEZE_REMAINING: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// 基线冻结阈值：当前流量 > 基线 × 此倍数时触发冻结
+const BASELINE_FREEZE_RATIO: u64 = 3;
+/// 冻结持续样本数（每 2 秒一个样本，150 = 5 分钟）
+const BASELINE_FREEZE_SAMPLES: u64 = 150;
+
+/// 获取基线冻结状态（Web UI 显示用）
+pub fn is_baseline_frozen() -> bool {
+    BASELINE_FROZEN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 更新全局流量基线（自适应 EWMA + 异常冻结）
 ///
 /// 在 netlink 速率查询响应处理时调用，传入内核返回的全局 PPS/BPS。
 /// 启动期使用 α=0.1 快速收敛（约 100 秒达到 99.5%），
 /// 稳定期切换到 α=0.01 长期跟踪。
+///
+/// 异常冻结：当 global_pps > baseline × 3 时，判定为攻击流量，
+/// 冻结基线更新 5 分钟，防止攻击流量污染基线。
 pub fn update_traffic_baseline(global_pps: u64, global_bps: u64) {
     use std::sync::atomic::Ordering;
+
+    let old_pps = BASELINE_PPS.load(Ordering::Relaxed);
+    let old_bps = BASELINE_BPS.load(Ordering::Relaxed);
+
+    // 异常基线检测：流量突增 > 3 倍基线时冻结
+    if old_pps > 0 && global_pps > old_pps.saturating_mul(BASELINE_FREEZE_RATIO) {
+        if !BASELINE_FROZEN.load(Ordering::Relaxed) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "基线冻结：检测到异常流量突增";
+                "current_pps" => global_pps,
+                "baseline_pps" => old_pps,
+                "ratio" => global_pps / old_pps.max(1)
+            );
+        }
+        BASELINE_FROZEN.store(true, Ordering::Relaxed);
+        BASELINE_FREEZE_REMAINING.store(BASELINE_FREEZE_SAMPLES, Ordering::Relaxed);
+        // 冻结期间不更新基线
+        return;
+    }
+
+    // 冻结倒计时
+    if BASELINE_FROZEN.load(Ordering::Relaxed) {
+        let remaining = BASELINE_FREEZE_REMAINING.load(Ordering::Relaxed);
+        if remaining > 1 {
+            BASELINE_FREEZE_REMAINING.store(remaining - 1, Ordering::Relaxed);
+            return; // 仍在冻结期
+        }
+        // 冻结结束
+        BASELINE_FROZEN.store(false, Ordering::Relaxed);
+        BASELINE_FREEZE_REMAINING.store(0, Ordering::Relaxed);
+        crate::logger::info!(
+            crate::logger::get(),
+            "基线冻结结束，恢复 EWMA 更新";
+            "baseline_pps" => old_pps
+        );
+    }
 
     let sample = BASELINE_SAMPLE_COUNT.fetch_add(1, Ordering::Relaxed);
     let warmup = BASELINE_WARMUP_SAMPLES.load(Ordering::Relaxed);
@@ -395,9 +454,6 @@ pub fn update_traffic_baseline(global_pps: u64, global_bps: u64) {
     } else {
         BASELINE_ALPHA_SLOW_NUM
     };
-
-    let old_pps = BASELINE_PPS.load(Ordering::Relaxed);
-    let old_bps = BASELINE_BPS.load(Ordering::Relaxed);
 
     // saturating 运算防止极端流量场景下的整数溢出
     let new_pps = alpha_num
@@ -433,3 +489,188 @@ pub fn get_baseline_bps() -> u64 {
 pub fn set_baseline_warmup_samples(samples: u32) {
     BASELINE_WARMUP_SAMPLES.store(samples as u64, std::sync::atomic::Ordering::Relaxed);
 }
+
+// ============================================================================
+// 多窗口速率检测（短期/中期/长期 EWMA）
+// ============================================================================
+
+/// 多窗口 EWMA 平滑系数（α_den=1000）
+///
+/// - 短期（~5s）：α=0.200，快速响应突发洪水
+/// - 中期（~60s）：α=0.020，检测持续攻击
+/// - 长期（~300s）：α=0.004，识别慢速攻击
+const WINDOW_ALPHA_SHORT: u64 = 200;
+const WINDOW_ALPHA_MID: u64 = 20;
+const WINDOW_ALPHA_LONG: u64 = 4;
+const WINDOW_ALPHA_DEN: u64 = 1000;
+
+/// 短期窗口 PPS（~5s）— 突发洪水检测
+static WINDOW_PPS_SHORT: AtomicU64 = AtomicU64::new(0);
+/// 中期窗口 PPS（~60s）— 持续攻击检测
+static WINDOW_PPS_MID: AtomicU64 = AtomicU64::new(0);
+/// 长期窗口 PPS（~300s）— 慢速攻击检测
+static WINDOW_PPS_LONG: AtomicU64 = AtomicU64::new(0);
+
+/// 短期窗口 BPS
+static WINDOW_BPS_SHORT: AtomicU64 = AtomicU64::new(0);
+/// 中期窗口 BPS
+static WINDOW_BPS_MID: AtomicU64 = AtomicU64::new(0);
+/// 长期窗口 BPS
+static WINDOW_BPS_LONG: AtomicU64 = AtomicU64::new(0);
+
+/// 更新多窗口速率 EWMA
+///
+/// 每 2 秒由 netlink 速率查询响应触发。
+/// 三个窗口独立维护，分别对应不同时间尺度的流量特征：
+/// - 短期窗口（~5s）：捕捉突发洪水（SYN Flood 等）
+/// - 中期窗口（~60s）：识别持续攻击（持续 1 分钟以上的高速）
+/// - 长期窗口（~300s）：检测慢速攻击（低频但持续 5 分钟以上的异常）
+pub fn update_rate_windows(global_pps: u64, global_bps: u64) {
+    use std::sync::atomic::Ordering;
+
+    // 短期窗口（α=0.200）
+    // saturating 运算防止极端流量场景下的整数溢出（与 update_traffic_baseline 一致）
+    let old = WINDOW_PPS_SHORT.load(Ordering::Relaxed);
+    WINDOW_PPS_SHORT.store(
+        (WINDOW_ALPHA_SHORT.saturating_mul(global_pps)
+            + (WINDOW_ALPHA_DEN - WINDOW_ALPHA_SHORT).saturating_mul(old))
+            / WINDOW_ALPHA_DEN,
+        Ordering::Relaxed,
+    );
+    let old_bps = WINDOW_BPS_SHORT.load(Ordering::Relaxed);
+    WINDOW_BPS_SHORT.store(
+        (WINDOW_ALPHA_SHORT.saturating_mul(global_bps)
+            + (WINDOW_ALPHA_DEN - WINDOW_ALPHA_SHORT).saturating_mul(old_bps))
+            / WINDOW_ALPHA_DEN,
+        Ordering::Relaxed,
+    );
+
+    // 中期窗口（α=0.020）
+    let old = WINDOW_PPS_MID.load(Ordering::Relaxed);
+    WINDOW_PPS_MID.store(
+        (WINDOW_ALPHA_MID.saturating_mul(global_pps)
+            + (WINDOW_ALPHA_DEN - WINDOW_ALPHA_MID).saturating_mul(old))
+            / WINDOW_ALPHA_DEN,
+        Ordering::Relaxed,
+    );
+    let old_bps = WINDOW_BPS_MID.load(Ordering::Relaxed);
+    WINDOW_BPS_MID.store(
+        (WINDOW_ALPHA_MID.saturating_mul(global_bps)
+            + (WINDOW_ALPHA_DEN - WINDOW_ALPHA_MID).saturating_mul(old_bps))
+            / WINDOW_ALPHA_DEN,
+        Ordering::Relaxed,
+    );
+
+    // 长期窗口（α=0.004）
+    let old = WINDOW_PPS_LONG.load(Ordering::Relaxed);
+    WINDOW_PPS_LONG.store(
+        (WINDOW_ALPHA_LONG.saturating_mul(global_pps)
+            + (WINDOW_ALPHA_DEN - WINDOW_ALPHA_LONG).saturating_mul(old))
+            / WINDOW_ALPHA_DEN,
+        Ordering::Relaxed,
+    );
+    let old_bps = WINDOW_BPS_LONG.load(Ordering::Relaxed);
+    WINDOW_BPS_LONG.store(
+        (WINDOW_ALPHA_LONG.saturating_mul(global_bps)
+            + (WINDOW_ALPHA_DEN - WINDOW_ALPHA_LONG).saturating_mul(old_bps))
+            / WINDOW_ALPHA_DEN,
+        Ordering::Relaxed,
+    );
+}
+
+/// 多窗口速率快照（用于 API 响应）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RateWindowSnapshot {
+    /// 短期窗口 PPS（~5s，突发洪水）
+    pub pps_short: u64,
+    /// 中期窗口 PPS（~60s，持续攻击）
+    pub pps_mid: u64,
+    /// 长期窗口 PPS（~300s，慢速攻击）
+    pub pps_long: u64,
+    /// 短期窗口 BPS
+    pub bps_short: u64,
+    /// 中期窗口 BPS
+    pub bps_mid: u64,
+    /// 长期窗口 BPS
+    pub bps_long: u64,
+}
+
+/// 获取多窗口速率快照
+pub fn get_rate_windows() -> RateWindowSnapshot {
+    use std::sync::atomic::Ordering;
+    RateWindowSnapshot {
+        pps_short: WINDOW_PPS_SHORT.load(Ordering::Relaxed),
+        pps_mid: WINDOW_PPS_MID.load(Ordering::Relaxed),
+        pps_long: WINDOW_PPS_LONG.load(Ordering::Relaxed),
+        bps_short: WINDOW_BPS_SHORT.load(Ordering::Relaxed),
+        bps_mid: WINDOW_BPS_MID.load(Ordering::Relaxed),
+        bps_long: WINDOW_BPS_LONG.load(Ordering::Relaxed),
+    }
+}
+
+// ============================================================================
+// 分析数据缓存（替代 procfs 读取）
+// ============================================================================
+
+/// UDP 端口分布条目（从内核 netlink 同步）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AnalysisUdpPortEntry {
+    pub port: u16,
+    pub packets: u64,
+    pub bytes: u64,
+    pub last_seen_secs: u64,
+}
+
+/// ICMP 类型分布条目（从内核 netlink 同步）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AnalysisIcmpTypeEntry {
+    pub r#type: u8,
+    pub code: u8,
+    pub packets: u64,
+    pub bytes: u64,
+    pub last_seen_secs: u64,
+}
+
+/// 端口扫描/服务探测条目（从内核 netlink 同步）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AnalysisScannerEntry {
+    pub ip: String,
+    pub metric: u32,
+    pub packets: u64,
+}
+
+/// 内核分析数据快照（由 netlink AnalysisResponse 更新，Web UI API 读取）
+#[derive(Debug, Clone, Default)]
+pub struct AnalysisData {
+    /// 包大小分布（5 桶：<64B, 64-256B, 256B-1KB, 1-1.5KB, >1.5KB）
+    pub pkt_sizes: [u64; 5],
+    /// TTL 分布（6 桶：=1, 2-32, 33-64, 65-128, 129-192, 193-255）
+    pub ttl_dist: [u64; 6],
+    /// IP 总包数
+    pub ip_total_count: u64,
+    /// IP 分片包数
+    pub ip_frag_count: u64,
+    /// UDP 端口分布
+    pub udp_ports: Vec<AnalysisUdpPortEntry>,
+    /// UDP 端口最大容量
+    pub udp_port_capacity: u32,
+    /// ICMP 类型分布
+    pub icmp_types: Vec<AnalysisIcmpTypeEntry>,
+    /// ICMP 类型最大容量
+    pub icmp_type_capacity: u32,
+    /// 端口扫描者
+    pub port_scanners: Vec<AnalysisScannerEntry>,
+    /// 端口扫描阈值
+    pub port_scan_threshold: u32,
+    /// 服务探测者
+    pub service_probes: Vec<AnalysisScannerEntry>,
+    /// 服务探测阈值
+    pub service_probe_threshold: u32,
+}
+
+/// 全局分析数据缓存
+///
+/// 由 netlink 接收线程在收到 AnalysisResponse 时更新，Web UI API 读取。
+/// 替代原来直接读取 /proc/firewall/ 的 7 个接口。
+pub static ANALYSIS_CACHE: once_cell::sync::Lazy<parking_lot::RwLock<AnalysisData>> =
+    once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(AnalysisData::default()));

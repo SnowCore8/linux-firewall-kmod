@@ -67,6 +67,11 @@ impl DdosDecisionEngine {
         *config = new_config;
     }
 
+    /// 获取当前配置快照（用于 API 层同步 webui → ddos 字段）
+    pub fn current_config(&self) -> DdosConfig {
+        self.config.read().clone()
+    }
+
     /// 处理 DDoS 事件
     ///
     /// 内核已封禁 IP，守护进程只记录日志和统计（不重复封禁）。

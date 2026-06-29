@@ -61,6 +61,8 @@ void sync_work_handler(struct work_struct *work) {
           /* 跳过容量限制（按需扩展） */
           if (!ifa->ifa_local)
             continue;
+          if (current_count >= MAX_BAN_ENTRIES)
+            break;
           current_ips[current_count].af = FW_AF_INET;
           current_ips[current_count].addr.ipv4 = ifa->ifa_local;
           current_ips[current_count].mask.ipv4_mask = ifa->ifa_mask;
@@ -78,6 +80,8 @@ void sync_work_handler(struct work_struct *work) {
         read_lock_bh(&in6_dev->lock);
         list_for_each_entry(ifp, &in6_dev->addr_list, if_list) {
           /* 跳过容量限制（按需扩展） */
+          if (current_count >= MAX_BAN_ENTRIES)
+            break;
           current_ips[current_count].af = FW_AF_INET6;
           current_ips[current_count].addr.ipv6 = ifp->addr;
           current_ips[current_count].mask.prefix_len = ifp->prefix_len;
@@ -220,10 +224,12 @@ void sync_work_handler(struct work_struct *work) {
           new_cache[i].mask.ipv4_mask = current_ips[i].mask.ipv4_mask;
         }
       }
-      atomic_set(&fw->local_ip_cache_count, current_count);
-      /* RCU 发布：确保读侧要么看到完整旧数组，要么看到完整新数组 */
+      /* RCU 发布：先发布指针，再发布 count，
+       * 防止读侧看到新 count + 旧指针导致 OOB 访问 */
       old_cache = rcu_dereference_protected(fw->local_ip_cache, 1);
       rcu_assign_pointer(fw->local_ip_cache, new_cache);
+      smp_wmb(); /* 确保指针先于 count 对其他 CPU 可见 */
+      atomic_set(&fw->local_ip_cache_count, current_count);
       /* 旧数组延迟释放（等待所有 RCU reader 完成） */
       if (old_cache) {
         /* 使用 synchronize_rcu 等待所有 reader 完成，然后释放 */
@@ -273,6 +279,7 @@ static int netdev_event_handler(struct notifier_block *nb, unsigned long event, 
   case NETDEV_UP:
   case NETDEV_DOWN:
   case NETDEV_CHANGE:
+  case NETDEV_UNREGISTER:
     sync_system_ips(fw);
     break;
   default:
@@ -343,6 +350,8 @@ void auto_discover_system_ips(struct firewall_info *fw) {
           /* 跳过容量限制（按需扩展） */
           if (!ifa->ifa_local)
             continue;
+          if (temp_count >= MAX_BAN_ENTRIES)
+            break;
           temp_ips[temp_count].af = FW_AF_INET;
           temp_ips[temp_count].addr.ipv4 = ifa->ifa_local;
           temp_ips[temp_count].mask.ipv4_mask = ifa->ifa_mask;
@@ -360,6 +369,8 @@ void auto_discover_system_ips(struct firewall_info *fw) {
         read_lock_bh(&in6_dev->lock);
         list_for_each_entry(ifp, &in6_dev->addr_list, if_list) {
           /* 跳过容量限制（按需扩展） */
+          if (temp_count >= MAX_BAN_ENTRIES)
+            break;
           temp_ips[temp_count].af = FW_AF_INET6;
           temp_ips[temp_count].addr.ipv6 = ifp->addr;
           temp_ips[temp_count].mask.prefix_len = ifp->prefix_len;

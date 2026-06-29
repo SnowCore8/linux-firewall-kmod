@@ -109,7 +109,7 @@ cp target/release/firewall-daemon build/daemon/firewall-daemon
 
 | Profile | 体积 | 用途 | 编译命令 |
 |---------|------|------|----------|
-| `release`（默认） | **3.8MB stripped** | 生产部署 | `cargo build --release` |
+| `release`（默认） | **6.2MB stripped** | 生产部署 | `cargo build --release` |
 | `dev-with-debug` | 32MB（含 DWARF + 符号） | 现场 crash 分析，配合 `addr2line` 反推栈 | `cargo build --release --profile dev-with-debug` |
 | `asan` | （含 ASAN 运行时） | 内存安全检测，需 nightly | `cargo +nightly build --profile asan` |
 
@@ -125,7 +125,7 @@ strip = true
 panic = "abort"       # 减小体积、避免 unwinding 表
 ```
 
-产出 3.8MB stripped 二进制，适合 `make deb` / `make install` 分发。
+产出 6.2MB stripped 二进制，适合 `make deb` / `make install` 分发。
 
 #### dev-with-debug
 
@@ -185,7 +185,7 @@ ls -lh build/deb/
 
 | 路径 | 内容 |
 |------|------|
-| `/usr/sbin/firewall-daemon` | 守护进程二进制（已 `strip`，约 3.8MB） |
+| `/usr/sbin/firewall-daemon` | 守护进程二进制（已 `strip`，约 6.2MB） |
 | `/usr/src/linux-firewall-kmod-<VERSION>/` | DKMS 源码（首次安装时由 dkms 编译） |
 | `/etc/firewall/*.yaml` | YAML 配置 |
 | `/etc/systemd/system/firewall-daemon.service` | systemd 单元 |
@@ -243,7 +243,7 @@ make kernel-module KDIR=/path/to/kernel/source
 `[profile.*]` 控制。详见 [构建守护进程 → Rust release profile](#rust-release-profile-cargotoml)。
 
 - `release`：`lto=true` + `strip=true` + `debug=false` + `panic="abort"`
-  → 3.8MB stripped
+  → 6.2MB stripped
 - `dev-with-debug`：继承 release，保留 DWARF + 符号 → 32MB
 - `asan`：nightly opt-in，含 ASAN 运行时
 
@@ -262,7 +262,7 @@ make kernel-module KDIR=/path/to/kernel/source
 
 | 文件 | 说明 |
 |------|------|
-| `build/daemon/firewall-daemon` | 守护进程二进制（**3.8MB stripped**，默认 `release` profile） |
+| `build/daemon/firewall-daemon` | 守护进程二进制（**6.2MB stripped**，默认 `release` profile） |
 | `target/release/firewall-daemon` | `cargo` 原始输出位置（`make daemon` 复制到 `build/daemon/`） |
 | `build/daemon/firewall-daemon-asan` | ASAN 版本（`make asan` 产物，体积较大含 ASAN 运行时） |
 

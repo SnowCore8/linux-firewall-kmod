@@ -8,6 +8,7 @@
 #include <linux/if_ether.h>
 #include <linux/ipv6.h>
 #include <linux/tcp.h>
+#include <linux/udp.h>
 
 extern struct firewall_info fw_info;
 extern u32 fw_hash_seed;
@@ -60,7 +61,7 @@ void fw_flush_all_cpu_stats(void) {
 }
 
 static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *skb,
-                                     u8 protocol, u8 tcp_flags) {
+                                     u8 protocol, u8 tcp_flags, u16 dst_port) {
   unsigned long now;
   struct ban_entry *entry;
   struct whitelist_entry *wl_entry;
@@ -199,7 +200,8 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *
    * 如果 fw_ddos_detection=0，跳过整个 DDoS 检测路径 */
   if (likely(!is_whitelisted && READ_ONCE(fw_ddos_detection))) {
     u32 packet_len = skb->len;
-    int ret = update_rate_stats(&fw_info, af, src_ip, packet_len, protocol, tcp_flags);
+    int ret = update_rate_stats(
+      &fw_info, af, src_ip, packet_len, protocol, tcp_flags, dst_port);
 
     if (ret == 0) {
       bool should_ban = false;
@@ -308,6 +310,20 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
                (ntohl(src_ip) & 0xFF000000) == 0x00000000))
     return NF_ACCEPT;
 
+  /* 记录包大小到直方图（用于检测小包洪水攻击） */
+  record_packet_size(&fw_info, pkt_len);
+
+  /* 记录 TTL 到直方图（用于检测异常 TTL 值，如扫描/伪造包） */
+  record_ttl(&fw_info, iph->ttl);
+
+  /* 记录 IP 分片统计（用于检测分片洪水攻击）
+   * MF=1（More Fragments）或 frag_offset != 0 表示分片包 */
+  {
+    __be16 frag_off = iph->frag_off;
+    bool is_frag = (frag_off & htons(IP_MF | IP_OFFSET)) != 0;
+    record_ip_frag(&fw_info, is_frag);
+  }
+
   /* 协议专项速率检测：
    * - 非首片无传输层头部，传 protocol=0 跳过
    * - TCP 提取标志位用于 SYN/ACK/RST/FIN 子分类检测
@@ -316,6 +332,7 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
     __be16 frag_off = iph->frag_off;
     u8 proto = iph->protocol;
     u8 tcp_flags = 0;
+    u16 dst_port = 0;
 
     if (ntohs(frag_off) & IP_OFFSET) {
       proto = 0;
@@ -335,13 +352,36 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
           tcp_flags |= TCP_FLAGS_RST;
         if (tcph->fin)
           tcp_flags |= TCP_FLAGS_FIN;
+        dst_port = ntohs(tcph->dest);
       }
     } else if (proto == IPPROTO_ICMP) {
       unsigned int ihl = iph->ihl * 4;
       struct icmphdr icmph_copy;
       struct icmphdr *icmph = skb_header_pointer(skb, ihl, sizeof(icmph_copy), &icmph_copy);
-      if (!icmph || icmph->type != ICMP_ECHO)
+      if (icmph) {
+        /* ICMP 类型分布统计：记录所有 ICMP 类型/代码组合 */
+        record_icmp_type(&fw_info, icmph->type, icmph->code, skb->len);
+        /* 仅对 Echo Request 做 ICMP flood 检测 */
+        if (icmph->type != ICMP_ECHO)
+          proto = 0;
+      } else {
         proto = 0;
+      }
+    } else if (proto == IPPROTO_UDP) {
+      /* UDP 端口分布统计：提取目标端口并记录 */
+      unsigned int ihl = iph->ihl * 4;
+      struct udphdr udph_copy;
+      struct udphdr *udph = skb_header_pointer(skb, ihl, sizeof(udph_copy), &udph_copy);
+      if (udph) {
+        dst_port = ntohs(udph->dest);
+        record_udp_port(&fw_info, dst_port, skb->len);
+      }
+    }
+
+    /* TCP 异常标志位检测：SYN+FIN、SYN+RST、NULL scan 等无效组合直接丢弃 */
+    if (proto == IPPROTO_TCP && is_tcp_flag_anomaly(tcp_flags)) {
+      atomic64_inc(&fw_info.tcp_anomaly_dropped);
+      return NF_DROP;
     }
 
     /* 递增全局流量计数器（per-CPU 本地写入，flush 时批量写入全局 atomic）
@@ -354,7 +394,7 @@ static unsigned int nf_hook_func_ipv4(void *priv, struct sk_buff *skb,
         fw_flush_cpu_stats();
     }
 
-    return handle_ban_check(FW_AF_INET, &src_ip, skb, proto, tcp_flags);
+    return handle_ban_check(FW_AF_INET, &src_ip, skb, proto, tcp_flags, dst_port);
   }
 }
 
@@ -419,7 +459,11 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
       return NF_ACCEPT;
     if (unlikely((src_ip.s6_addr[0] == 0xFE) && ((src_ip.s6_addr[1] & 0xC0) == 0x80)))
       return NF_ACCEPT;
-    return handle_ban_check(FW_AF_INET6, &src_ip, skb, 0, 0);
+    /* 分片包也需记录统计（与 IPv4 路径保持一致） */
+    record_packet_size(&fw_info, pkt_len);
+    record_ttl(&fw_info, iph6->hop_limit);
+    record_ip_frag(&fw_info, true);
+    return handle_ban_check(FW_AF_INET6, &src_ip, skb, 0, 0, 0);
   }
 
   src_ip = iph6->saddr;
@@ -430,10 +474,20 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
   if (unlikely((src_ip.s6_addr[0] == 0xFE) && ((src_ip.s6_addr[1] & 0xC0) == 0x80)))
     return NF_ACCEPT;
 
+  /* 记录包大小到直方图（用于检测小包洪水攻击） */
+  record_packet_size(&fw_info, pkt_len);
+
+  /* 记录 Hop Limit 到 TTL 直方图（用于检测异常值，如扫描/伪造包） */
+  record_ttl(&fw_info, iph6->hop_limit);
+
+  /* 记录 IPv6 分片统计（此处 nexthdr 一定不是 NEXTHDR_FRAGMENT，分片已在上方 early return） */
+  record_ip_frag(&fw_info, false);
+
   /* TCP 提取标志位用于 SYN/ACK/RST/FIN 子分类检测
    * ICMPv6 仅对 Echo Request（type=128）做 ICMP flood 检测 */
   {
     u8 tcp_flags = 0;
+    u16 dst_port = 0;
 
     if (nexthdr == IPPROTO_TCP) {
       struct tcphdr tcph_copy;
@@ -450,13 +504,35 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
           tcp_flags |= TCP_FLAGS_RST;
         if (tcph->fin)
           tcp_flags |= TCP_FLAGS_FIN;
+        dst_port = ntohs(tcph->dest);
       }
     } else if (nexthdr == IPPROTO_ICMPV6) {
       struct icmp6hdr icmp6h_copy;
       struct icmp6hdr *icmp6h = skb_header_pointer(
         skb, offset, sizeof(icmp6h_copy), &icmp6h_copy);
-      if (!icmp6h || icmp6h->icmp6_type != ICMPV6_ECHO_REQUEST)
+      if (icmp6h) {
+        /* ICMPv6 类型分布统计：记录所有 ICMPv6 类型/代码组合 */
+        record_icmp_type(&fw_info, icmp6h->icmp6_type, icmp6h->icmp6_code, skb->len);
+        /* 仅对 Echo Request 做 ICMP flood 检测 */
+        if (icmp6h->icmp6_type != ICMPV6_ECHO_REQUEST)
+          nexthdr = 0;
+      } else {
         nexthdr = 0;
+      }
+    } else if (nexthdr == IPPROTO_UDP) {
+      /* UDP 端口分布统计：提取目标端口并记录 */
+      struct udphdr udph_copy;
+      struct udphdr *udph = skb_header_pointer(skb, offset, sizeof(udph_copy), &udph_copy);
+      if (udph) {
+        dst_port = ntohs(udph->dest);
+        record_udp_port(&fw_info, dst_port, skb->len);
+      }
+    }
+
+    /* TCP 异常标志位检测：SYN+FIN、SYN+RST、NULL scan 等无效组合直接丢弃 */
+    if (nexthdr == IPPROTO_TCP && is_tcp_flag_anomaly(tcp_flags)) {
+      atomic64_inc(&fw_info.tcp_anomaly_dropped);
+      return NF_DROP;
     }
 
     /* 递增全局流量计数器（per-CPU 本地写入，flush 时批量写入全局 atomic）
@@ -469,7 +545,7 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
         fw_flush_cpu_stats();
     }
 
-    return handle_ban_check(FW_AF_INET6, &src_ip, skb, nexthdr, tcp_flags);
+    return handle_ban_check(FW_AF_INET6, &src_ip, skb, nexthdr, tcp_flags, dst_port);
   }
 }
 

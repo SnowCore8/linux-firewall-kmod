@@ -55,7 +55,9 @@ pub fn record_history_snapshot(_cfg: &Config) {
     };
 
     // 计算差值
-    let mut last_stats = LAST_SNAPSHOT_STATS.lock().unwrap();
+    let mut last_stats = LAST_SNAPSHOT_STATS
+        .lock()
+        .expect("LAST_SNAPSHOT_STATS 互斥锁中毒");
     let bans_diff = current_stats
         .ips_banned
         .saturating_sub(last_stats.ips_banned);
@@ -92,7 +94,7 @@ pub fn record_history_snapshot(_cfg: &Config) {
 // 数据清理
 // ============================================================================
 
-/// 执行数据清理任务：failed_hash 清理。
+/// 执行数据清理任务：failed_hash 清理 + 封禁历史清理 + 信誉分恢复/清理。
 ///
 /// # Arguments
 /// - `cfg`: 全局配置
@@ -115,6 +117,39 @@ pub fn perform_data_cleanup(cfg: &Config) {
                     "removed" => removed
                 );
             }
+        }
+    }
+
+    // 清理过期封禁历史（7 天无活动的内存条目，防止长期运行内存泄漏）
+    if let Some(history) = crate::types::BAN_HISTORY.get() {
+        history.cleanup_expired();
+    }
+
+    // 恢复信誉分（每小时 +1，补偿两次快照之间的时间流逝）
+    crate::ip_reputation::get_store().recover_scores();
+
+    // 清理信誉分已恢复至 100 且 24 小时无活动的条目（防止内存泄漏）
+    let rep_cleaned = crate::ip_reputation::get_store().cleanup_stale();
+    if rep_cleaned > 0 {
+        crate::logger::debug!(
+            crate::logger::get(),
+            "清理过期信誉分条目";
+            "removed" => rep_cleaned
+        );
+    }
+
+    // 清理 DDoS 决策引擎中过期的 IP 跟踪器（防止 ip_trackers HashMap 无限增长）
+    if let Some(engine) = crate::http_exporter::get_global_decision_engine() {
+        let before = engine.tracked_ips_count();
+        engine.cleanup_stale_trackers();
+        let after = engine.tracked_ips_count();
+        if before > after {
+            crate::logger::debug!(
+                crate::logger::get(),
+                "清理过期 DDoS IP 跟踪器";
+                "removed" => before - after,
+                "remaining" => after
+            );
         }
     }
 

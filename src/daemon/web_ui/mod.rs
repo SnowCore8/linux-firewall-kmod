@@ -8,9 +8,15 @@
 
 use rust_embed::RustEmbed;
 
+pub mod analysis;
 pub mod api;
+pub mod ban_ops;
+pub mod ddos_stats;
 pub mod log_viewer;
+pub mod packet_analysis;
+pub mod recommendations;
 pub mod sse;
+pub mod stats;
 
 /// 嵌入的静态资源
 #[derive(RustEmbed)]
