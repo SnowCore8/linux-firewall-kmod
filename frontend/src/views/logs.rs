@@ -172,7 +172,12 @@ pub fn Logs() -> impl IntoView {
                     <button class="btn btn-sm" on:click=move |_| streaming.update(|v| *v = !*v)>
                         {move || if streaming.get() { "暂停" } else { "继续" }}
                     </button>
-                    <button class="btn btn-sm" on:click=move |_| logs.set(Vec::new())>
+                    <button class="btn btn-sm" on:click=move |_| {
+                        let window = web_sys::window().expect("window not available");
+                        if window.confirm_with_message("确定要清空所有日志吗？").unwrap_or(false) {
+                            logs.set(Vec::new());
+                        }
+                    }>
                         "清空"
                     </button>
                 </div>
@@ -240,12 +245,12 @@ struct LogsSseSource {
 
 impl Drop for LogsSseSource {
     fn drop(&mut self) {
-        let _ = self._source.close();
+        self._source.close();
     }
 }
 
 thread_local! {
-    static LOGS_HANDLE: RefCell<Option<LogsSseSource>> = RefCell::new(None);
+    static LOGS_HANDLE: RefCell<Option<LogsSseSource>> = const { RefCell::new(None) };
 }
 
 fn connect_logs_sse(
@@ -316,7 +321,7 @@ fn connect_logs_sse(
     source
         .add_event_listener_with_callback_and_add_event_listener_options(
             "log",
-            &on_log.as_ref().unchecked_ref(),
+            on_log.as_ref().unchecked_ref(),
             &{
                 let opts = web_sys::AddEventListenerOptions::new();
                 opts.set_once(false);
@@ -391,6 +396,33 @@ fn schedule_logs_reconnect(
 }
 
 fn parse_log_line(line_number: u64, content: &str) -> LogEntry {
+    // 优先尝试 JSON 解析（日志文件存储 JSON 格式）
+    if content.starts_with('{') {
+        let mut ts = String::new();
+        let mut level = String::new();
+        let mut msg = String::new();
+
+        if let Some(v) = json_field(content, "ts") {
+            ts = format_timestamp(&v);
+        }
+        if let Some(v) = json_field(content, "level") {
+            level = v;
+        }
+        if let Some(v) = json_field(content, "msg") {
+            msg = v;
+        }
+
+        if !level.is_empty() {
+            return LogEntry {
+                line_number,
+                time: ts,
+                level,
+                message: msg,
+            };
+        }
+    }
+
+    // 传统日志格式回退：`2026-07-08T03:02:41 [INFO] 收到统计数据`
     if let Some((rest, message)) = content.split_once("] ") {
         if let Some(bracket_pos) = rest.rfind('[') {
             let level = &rest[bracket_pos + 1..];
@@ -403,10 +435,56 @@ fn parse_log_line(line_number: u64, content: &str) -> LogEntry {
             };
         }
     }
+
     LogEntry {
         line_number,
         time: String::new(),
         level: "INFO".to_string(),
         message: content.to_string(),
     }
+}
+
+/// 从 JSON 字符串中提取指定字段的值（轻量解析，不依赖 serde_json）
+fn json_field(json: &str, field: &str) -> Option<String> {
+    let key = format!("\"{}\"", field);
+    let key_pos = json.find(&key)?;
+    let rest = &json[key_pos + key.len()..];
+    let rest = rest.trim_start();
+    let rest = rest.strip_prefix(':')?.trim_start();
+
+    if rest.starts_with('"') {
+        let inner = &rest[1..];
+        let end = inner.find('"')?;
+        Some(unescape_json(inner[..end].to_string()))
+    } else {
+        let end = rest.find(|c: char| {
+            !c.is_alphanumeric() && c != '.' && c != '-' && c != 'e' && c != 'E' && c != '+'
+        })?;
+        Some(rest[..end].to_string())
+    }
+}
+
+/// 反转义 JSON 字符串中的常见转义序列
+fn unescape_json(s: String) -> String {
+    s.replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace("\\\"", "\"")
+        .replace("\\\\", "\\")
+}
+
+/// 将 ISO 8601 时间戳格式化为可读格式
+fn format_timestamp(ts: &str) -> String {
+    let base = if ts.ends_with('Z') {
+        &ts[..ts.len().saturating_sub(1)]
+    } else if ts.ends_with("+00:00") {
+        &ts[..ts.len().saturating_sub(6)]
+    } else {
+        ts
+    };
+    let trimmed = if let Some(dot_pos) = base.rfind('.') {
+        &base[..dot_pos]
+    } else {
+        base
+    };
+    trimmed.replace('T', " ")
 }
