@@ -143,7 +143,7 @@ pub fn LineChart(
     let has_data = move || !data.get().is_empty();
 
     view! {
-        <svg viewBox=move || format!("0 0 {width} {height_f}") preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%">
+        <svg viewBox=move || format!("0 0 {width} {height_f}") preserveAspectRatio="none" style="width:100%;height:100%">
             <defs>
                 <linearGradient id=chart_id.clone() x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stop-color=color stop-opacity="0.25"/>
@@ -162,7 +162,6 @@ pub fn LineChart(
             <g>
                 {(0..=4).map(|i| {
                     let grid_y = pad_top + chart_h * (1.0 - i as f64 / 4.0);
-                    let i = i; // capture by value
                     let grid_val = move || {
                         let d = data.get();
                         if d.is_empty() { return 0.0_f64; }
@@ -340,7 +339,7 @@ pub fn PieChart(
         let l = labels.get();
         let total: u64 = d.iter().sum();
         l.into_iter()
-            .zip(d.into_iter())
+            .zip(d)
             .enumerate()
             .map(|(i, (label, v))| {
                 let color = COLORS[i % COLORS.len()].to_string();
@@ -479,7 +478,7 @@ pub fn RadarChart(
     };
 
     // 数据多边形路径 + 颜色
-    let data_polygon = move || -> (String, String, Vec<(f64, f64, String, u64)>) {
+    let data_polygon = move || {
         let d = data.get();
         let l = labels.get();
         let total: u64 = d.iter().sum();
@@ -552,7 +551,7 @@ pub fn RadarChart(
         let l = labels.get();
         let total: u64 = d.iter().sum();
         l.into_iter()
-            .zip(d.into_iter())
+            .zip(d)
             .map(|(label, v)| {
                 let pct = if total > 0 {
                     format!("{:.0}%", v as f64 / total as f64 * 100.0)
@@ -592,9 +591,9 @@ pub fn RadarChart(
                 // 数据多边形
                 <Show when=has_data fallback=|| ()>
                     <path d=move || polygon_memo.get().0
-                        fill=move || format!("{}", polygon_memo.get().1)
+                        fill=move || polygon_memo.get().1
                         fill-opacity="0.15"
-                        stroke=move || format!("{}", polygon_memo.get().1)
+                        stroke=move || polygon_memo.get().1
                         stroke-width="2"/>
 
                     // 数据顶点
