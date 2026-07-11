@@ -49,11 +49,9 @@ pub fn is_valid_ipv6(ip: &str) -> bool {
     if segments.len() > 8 {
         return false;
     }
-    segments.iter().all(|seg| {
-        !seg.is_empty()
-            && seg.len() <= 4
-            && seg.chars().all(|c| c.is_ascii_hexdigit())
-    })
+    segments
+        .iter()
+        .all(|seg| !seg.is_empty() && seg.len() <= 4 && seg.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 /// 验证 IP 地址(IPv4 或 IPv6)
@@ -87,7 +85,7 @@ pub fn is_valid_duration(duration: &str) -> bool {
         return true; // 空值视为永久
     }
     if let Ok(d) = duration.parse::<i64>() {
-        return d >= 0 && d <= 86400; // 0(永久) 到 24 小时
+        return (0..=86400).contains(&d); // 0(永久) 到 24 小时
     }
     false
 }

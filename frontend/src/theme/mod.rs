@@ -70,5 +70,16 @@ fn apply_theme(theme: Theme) {
         if let Some(el) = doc.document_element() {
             let _ = el.set_attribute("data-theme", val);
         }
+        // 主题切换平滑过渡：添加 class → 350ms 后移除
+        if let Some(body) = doc.body() {
+            let _ = body.class_list().add_1("theme-transitioning");
+            let body_clone = body.clone();
+            set_timeout(
+                move || {
+                    let _ = body_clone.class_list().remove_1("theme-transitioning");
+                },
+                std::time::Duration::from_millis(350),
+            );
+        }
     }
 }

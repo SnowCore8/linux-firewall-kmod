@@ -1,5 +1,4 @@
 //! API 客户端 — 类型定义 + fetch 调用
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 
@@ -332,10 +331,14 @@ async fn put_json<B: Serialize, T: serde::de::DeserializeOwned>(
 // 公共 API
 // ============================================================================
 
+/// 获取统计数据（SSE 推送替代，保留为手动刷新 fallback）
+#[allow(dead_code)]
 pub async fn get_stats() -> Result<StatsResponse, String> {
     get_json("/api/v1/stats").await
 }
 
+/// 分页获取封禁列表（前端使用客户端分页替代，保留为服务端分页 fallback）
+#[allow(dead_code)]
 pub async fn get_bans(
     page: u32,
     page_size: u32,
@@ -348,6 +351,8 @@ pub async fn get_bans(
     get_json(&url).await
 }
 
+/// 获取全量封禁列表（SSE 推送替代，保留为手动刷新 fallback）
+#[allow(dead_code)]
 pub async fn get_all_bans() -> Result<Vec<BanResponse>, String> {
     get_json("/api/v1/bans").await
 }
@@ -383,6 +388,8 @@ pub async fn update_jail(name: &str, enabled: bool) -> Result<JailResponse, Stri
     put_json(&format!("/api/v1/jails/{name}"), &req).await
 }
 
+/// 获取白名单列表（SSE 推送替代，保留为手动刷新 fallback）
+#[allow(dead_code)]
 pub async fn get_whitelist() -> Result<Vec<WhitelistEntry>, String> {
     get_json("/api/v1/whitelist").await
 }
@@ -398,10 +405,14 @@ pub async fn delete_whitelist(cidr: &str) -> Result<WhitelistOperationResponse, 
     delete_json(&format!("/api/v1/whitelist/{}", encode_path_segment(cidr))).await
 }
 
+/// 获取当前 DDoS 速率（SSE 推送替代，保留为手动刷新 fallback）
+#[allow(dead_code)]
 pub async fn get_rates_current() -> Result<Vec<RateResponse>, String> {
     get_json("/api/v1/rates/current").await
 }
 
+/// 获取速率历史（SSE 推送替代，保留为手动刷新 fallback）
+#[allow(dead_code)]
 pub async fn get_rates_history() -> Result<Vec<RateHistoryEntry>, String> {
     get_json("/api/v1/rates/history").await
 }

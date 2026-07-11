@@ -92,12 +92,12 @@ struct SseSource {
 
 impl Drop for SseSource {
     fn drop(&mut self) {
-        let _ = self._source.close();
+        self._source.close();
     }
 }
 
 thread_local! {
-    static HANDLE: std::cell::RefCell<Option<SseSource>> = std::cell::RefCell::new(None);
+    static HANDLE: std::cell::RefCell<Option<SseSource>> = const { std::cell::RefCell::new(None) };
     /// 每个连接周期的重连防护：防止同一连接的多次 onerror 重复调度
     /// 每次 schedule_reconnect 开始前重置为 false（新周期）
     static RECONNECT_SCHEDULED: Cell<bool> = const { Cell::new(false) };

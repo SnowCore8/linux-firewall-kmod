@@ -101,3 +101,14 @@ pub fn format_rate(value: u64, kind: &str) -> String {
         }
     }
 }
+
+/// 复制文本到剪贴板（异步，静默失败）
+pub fn copy_to_clipboard(text: &str) {
+    if let Some(window) = web_sys::window() {
+        let clipboard = window.navigator().clipboard();
+        let text = text.to_string();
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = clipboard.write_text(&text).await;
+        });
+    }
+}
