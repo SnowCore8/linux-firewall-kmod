@@ -42,6 +42,11 @@ static GLOBAL_TRUSTED_IPS: std::sync::OnceLock<parking_lot::RwLock<Vec<String>>>
 static GLOBAL_CAPACITY: std::sync::OnceLock<parking_lot::RwLock<crate::types::CapacityConfig>> =
     std::sync::OnceLock::new();
 
+/// Jail enabled 状态缓存（供 persist_runtime_config 使用）。
+/// 存储 jail 名称 → enabled 布尔值的映射，仅持久化运行时修改的 enabled 状态。
+static GLOBAL_JAILS_ENABLED: std::sync::OnceLock<parking_lot::RwLock<Vec<(String, bool)>>> =
+    std::sync::OnceLock::new();
+
 /// 更新全局 trusted_ips 缓存（配置加载/热重载时调用）
 pub fn set_global_trusted_ips(ips: &[String]) {
     let lock = GLOBAL_TRUSTED_IPS.get_or_init(|| parking_lot::RwLock::new(Vec::new()));
@@ -53,6 +58,20 @@ pub fn set_global_capacity(capacity: &crate::types::CapacityConfig) {
     let lock = GLOBAL_CAPACITY
         .get_or_init(|| parking_lot::RwLock::new(crate::types::CapacityConfig::default()));
     *lock.write() = capacity.clone();
+}
+
+/// 更新全局 jail enabled 状态缓存（update_jail_enabled / SIGHUP / 启动恢复时调用）
+pub fn set_global_jails_enabled(jails: &[(String, bool)]) {
+    let lock = GLOBAL_JAILS_ENABLED.get_or_init(|| parking_lot::RwLock::new(Vec::new()));
+    *lock.write() = jails.to_vec();
+}
+
+/// 获取全局 jail enabled 状态缓存（供 persist_runtime_config 使用）
+pub fn get_global_jails_enabled() -> Vec<(String, bool)> {
+    GLOBAL_JAILS_ENABLED
+        .get()
+        .map(|lock| lock.read().clone())
+        .unwrap_or_default()
 }
 
 /// 获取配置历史锁
@@ -153,7 +172,7 @@ pub fn rollback_config(cfg: &mut Config) -> Result<()> {
     sync_config_to_components(cfg)?;
 
     // 持久化回滚后的配置，防止重启后丢失回滚状态
-    if let Err(e) = persist_config(cfg) {
+    if let Err(e) = persist_config(cfg, &[]) {
         crate::logger::warn!(
             crate::logger::get(),
             "回滚后持久化配置失败";
@@ -174,14 +193,29 @@ pub fn rollback_config(cfg: &mut Config) -> Result<()> {
 // 配置持久化
 // ============================================================================
 
-/// 运行时配置文件路径
-const RUNTIME_CONFIG_PATH: &str = "/var/lib/firewall/runtime_config.yaml";
-
-/// 从全局状态构建 Config 并持久化到运行时配置文件。
+/// 配置持久化目标路径（原始 YAML 配置文件）。
 ///
-/// Web UI API 修改配置后调用此函数，将当前内存状态写入文件，
-/// 确保守护进程重启后通过 `load_persisted_config` 恢复 API 修改。
-/// trusted_ips 和 capacity 从全局缓存读取，避免写入默认值覆盖原始 YAML 配置。
+/// Web UI API 修改配置后直接回写到原始 YAML，消除双文件覆盖问题。
+static CONFIG_TARGET_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// 设置配置持久化目标路径（启动时调用）
+pub fn set_config_target_path(path: &str) {
+    CONFIG_TARGET_PATH.set(path.to_string()).ok(); // 首次设置成功，后续调用忽略
+}
+
+/// 获取配置持久化目标路径
+fn get_config_target_path() -> Result<&'static str> {
+    CONFIG_TARGET_PATH
+        .get()
+        .map(|s| s.as_str())
+        .ok_or_else(|| anyhow::anyhow!("配置目标路径未设置，启动时未调用 set_config_target_path"))
+}
+
+/// 从全局状态构建 Config 并回写到原始 YAML 配置文件。
+///
+/// Web UI API 修改配置后调用此函数，将当前内存状态直接写入原始 YAML，
+/// 重启后从同一文件加载，无需二级覆盖层。
+/// trusted_ips 和 capacity 从全局缓存读取，避免写入默认值。
 pub fn persist_runtime_config() -> Result<()> {
     let trusted_ips = GLOBAL_TRUSTED_IPS
         .get()
@@ -191,6 +225,7 @@ pub fn persist_runtime_config() -> Result<()> {
         .get()
         .map(|lock| lock.read().clone())
         .unwrap_or_default();
+    let jails_enabled = get_global_jails_enabled();
 
     let cfg = Config {
         webui: crate::http_exporter::get_global_webui_config().unwrap_or_default(),
@@ -201,208 +236,354 @@ pub fn persist_runtime_config() -> Result<()> {
         capacity,
         ..Config::default()
     };
-    persist_config(&cfg)
+    persist_config(&cfg, &jails_enabled)
 }
 
-/// 保存配置到持久化文件
-fn persist_config(cfg: &Config) -> Result<()> {
+/// 运行时覆盖段的起止标记（YAML 注释，不影响解析）
+const RUNTIME_BLOCK_START: &str = "# === BEGIN RUNTIME OVERRIDES (auto-managed, do not edit) ===";
+const RUNTIME_BLOCK_END: &str = "# === END RUNTIME OVERRIDES ===";
+
+/// 保存配置到原始 YAML 文件（原地替换值，保留文件结构、注释和 jail 定义）。
+///
+/// 逐行扫描 YAML，替换 ddos/webui/capacity/trusted_ips 段内的已知 key 值。
+/// 不在原始文件中的 section 追加到末尾。
+fn persist_config(cfg: &Config, jails_enabled: &[(String, bool)]) -> Result<()> {
+    let target = get_config_target_path()?;
+    let target_path = std::path::Path::new(target);
+    let write_path = if target_path.is_dir() {
+        target_path.join("_overrides.yaml")
+    } else {
+        target_path.to_path_buf()
+    };
+
+    // 构建需要替换的 key-value 映射（section → key → value）
+    let ddos_kvs = vec![
+        ("enabled", fmt_bool(cfg.ddos.enabled)),
+        ("per_ip_conn_rate", fmt_u32(cfg.ddos.per_ip_conn_rate)),
+        ("per_ip_fail_rate", fmt_u32(cfg.ddos.per_ip_fail_rate)),
+        ("global_conn_rate", fmt_u32(cfg.ddos.global_conn_rate)),
+        ("auto_ban_duration", fmt_u32(cfg.ddos.auto_ban_duration)),
+        ("auto_ban_threshold", fmt_u32(cfg.ddos.auto_ban_threshold)),
+        ("check_interval", fmt_u32(cfg.ddos.check_interval)),
+        (
+            "baseline_warmup_samples",
+            fmt_u32(cfg.ddos.baseline_warmup_samples),
+        ),
+        ("max_syn_per_second", fmt_u32(cfg.ddos.max_syn_per_second)),
+        ("max_udp_per_second", fmt_u32(cfg.ddos.max_udp_per_second)),
+        ("max_icmp_per_second", fmt_u32(cfg.ddos.max_icmp_per_second)),
+        ("max_ack_per_second", fmt_u32(cfg.ddos.max_ack_per_second)),
+        ("max_rst_per_second", fmt_u32(cfg.ddos.max_rst_per_second)),
+        ("max_fin_per_second", fmt_u32(cfg.ddos.max_fin_per_second)),
+        ("static_threshold", fmt_bool(cfg.ddos.static_threshold)),
+        ("dynamic_threshold", fmt_bool(cfg.ddos.dynamic_threshold)),
+        ("ddos_detection", fmt_bool(cfg.ddos.ddos_detection)),
+        ("max_bans_per_second", fmt_u32(cfg.ddos.max_bans_per_second)),
+        ("max_rate_entries", fmt_u32(cfg.ddos.max_rate_entries)),
+    ];
+    let webui_kvs = vec![
+        ("sse_push_interval", fmt_u32(cfg.webui.sse_push_interval)),
+        ("rate_warning_pps", fmt_u64(cfg.webui.rate_warning_pps)),
+        ("rate_critical_pps", fmt_u64(cfg.webui.rate_critical_pps)),
+        ("rate_warning_syn", fmt_u64(cfg.webui.rate_warning_syn)),
+        ("rate_critical_syn", fmt_u64(cfg.webui.rate_critical_syn)),
+        ("max_syn_per_second", fmt_u32(cfg.webui.max_syn_per_second)),
+        ("max_udp_per_second", fmt_u32(cfg.webui.max_udp_per_second)),
+        (
+            "max_icmp_per_second",
+            fmt_u32(cfg.webui.max_icmp_per_second),
+        ),
+        ("max_ack_per_second", fmt_u32(cfg.webui.max_ack_per_second)),
+        ("max_rst_per_second", fmt_u32(cfg.webui.max_rst_per_second)),
+        ("max_fin_per_second", fmt_u32(cfg.webui.max_fin_per_second)),
+        ("static_threshold", fmt_bool(cfg.webui.static_threshold)),
+        ("dynamic_threshold", fmt_bool(cfg.webui.dynamic_threshold)),
+        ("ddos_detection", fmt_bool(cfg.webui.ddos_detection)),
+        ("max_ban_entries", fmt_u32(cfg.webui.max_ban_entries)),
+        (
+            "max_whitelist_entries",
+            fmt_u32(cfg.webui.max_whitelist_entries),
+        ),
+        ("max_rate_entries", fmt_u32(cfg.webui.max_rate_entries)),
+        ("max_local_ip_cache", fmt_u32(cfg.webui.max_local_ip_cache)),
+    ];
+    let capacity_kvs = vec![
+        ("max_ban_entries", fmt_u32(cfg.capacity.max_ban_entries)),
+        (
+            "max_whitelist_entries",
+            fmt_u32(cfg.capacity.max_whitelist_entries),
+        ),
+        ("max_rate_entries", fmt_u32(cfg.capacity.max_rate_entries)),
+        (
+            "max_local_ip_cache",
+            fmt_u32(cfg.capacity.max_local_ip_cache),
+        ),
+    ];
+
+    // 读取原始文件（不存在则用空内容）
+    let original = if write_path.exists() {
+        std::fs::read_to_string(&write_path)?
+    } else {
+        String::new()
+    };
+
+    // 先移除旧的 runtime 段（如果有）
+    let cleaned = strip_runtime_block(&original);
+
+    // 原地替换已知 section 内的 key 值
+    let mut result = replace_section_values(&cleaned, "ddos:", &ddos_kvs);
+    result = replace_section_values(&result, "webui:", &webui_kvs);
+    result = replace_section_values(&result, "capacity:", &capacity_kvs);
+
+    // trusted_ips: 整段替换（列表型，无法逐 key 替换）
+    result = replace_list_section(&result, "trusted_ips:", &cfg.trusted_ips);
+
+    // jails enabled 状态：逐 jail 替换 enabled 行
+    result = replace_jails_enabled(&result, jails_enabled);
+
+    // 写回文件
+    let mut file = std::fs::File::create(&write_path)?;
     use std::io::Write;
-
-    let mut yaml = String::new();
-
-    // 写入 DDoS 配置（全部字段）
-    yaml.push_str("ddos:\n");
-    yaml.push_str(&format!("  enabled: {}\n", cfg.ddos.enabled));
-    yaml.push_str(&format!(
-        "  per_ip_conn_rate: {}\n",
-        cfg.ddos.per_ip_conn_rate
-    ));
-    yaml.push_str(&format!(
-        "  per_ip_fail_rate: {}\n",
-        cfg.ddos.per_ip_fail_rate
-    ));
-    yaml.push_str(&format!(
-        "  global_conn_rate: {}\n",
-        cfg.ddos.global_conn_rate
-    ));
-    yaml.push_str(&format!(
-        "  auto_ban_duration: {}\n",
-        cfg.ddos.auto_ban_duration
-    ));
-    yaml.push_str(&format!(
-        "  auto_ban_threshold: {}\n",
-        cfg.ddos.auto_ban_threshold
-    ));
-    yaml.push_str(&format!("  check_interval: {}\n", cfg.ddos.check_interval));
-    yaml.push_str(&format!(
-        "  baseline_warmup_samples: {}\n",
-        cfg.ddos.baseline_warmup_samples
-    ));
-    yaml.push_str(&format!(
-        "  max_syn_per_second: {}\n",
-        cfg.ddos.max_syn_per_second
-    ));
-    yaml.push_str(&format!(
-        "  max_udp_per_second: {}\n",
-        cfg.ddos.max_udp_per_second
-    ));
-    yaml.push_str(&format!(
-        "  max_icmp_per_second: {}\n",
-        cfg.ddos.max_icmp_per_second
-    ));
-    yaml.push_str(&format!(
-        "  max_ack_per_second: {}\n",
-        cfg.ddos.max_ack_per_second
-    ));
-    yaml.push_str(&format!(
-        "  max_rst_per_second: {}\n",
-        cfg.ddos.max_rst_per_second
-    ));
-    yaml.push_str(&format!(
-        "  max_fin_per_second: {}\n",
-        cfg.ddos.max_fin_per_second
-    ));
-    yaml.push_str(&format!(
-        "  static_threshold: {}\n",
-        cfg.ddos.static_threshold
-    ));
-    yaml.push_str(&format!(
-        "  dynamic_threshold: {}\n",
-        cfg.ddos.dynamic_threshold
-    ));
-    yaml.push_str(&format!("  ddos_detection: {}\n", cfg.ddos.ddos_detection));
-    yaml.push_str(&format!(
-        "  max_bans_per_second: {}\n",
-        cfg.ddos.max_bans_per_second
-    ));
-    yaml.push_str(&format!(
-        "  max_rate_entries: {}\n",
-        cfg.ddos.max_rate_entries
-    ));
-
-    // 写入 Web UI 配置（全部字段）
-    yaml.push_str("\nwebui:\n");
-    yaml.push_str(&format!(
-        "  sse_push_interval: {}\n",
-        cfg.webui.sse_push_interval
-    ));
-    yaml.push_str(&format!(
-        "  rate_warning_pps: {}\n",
-        cfg.webui.rate_warning_pps
-    ));
-    yaml.push_str(&format!(
-        "  rate_critical_pps: {}\n",
-        cfg.webui.rate_critical_pps
-    ));
-    yaml.push_str(&format!(
-        "  rate_warning_syn: {}\n",
-        cfg.webui.rate_warning_syn
-    ));
-    yaml.push_str(&format!(
-        "  rate_critical_syn: {}\n",
-        cfg.webui.rate_critical_syn
-    ));
-    yaml.push_str(&format!(
-        "  max_syn_per_second: {}\n",
-        cfg.webui.max_syn_per_second
-    ));
-    yaml.push_str(&format!(
-        "  max_udp_per_second: {}\n",
-        cfg.webui.max_udp_per_second
-    ));
-    yaml.push_str(&format!(
-        "  max_icmp_per_second: {}\n",
-        cfg.webui.max_icmp_per_second
-    ));
-    yaml.push_str(&format!(
-        "  max_ack_per_second: {}\n",
-        cfg.webui.max_ack_per_second
-    ));
-    yaml.push_str(&format!(
-        "  max_rst_per_second: {}\n",
-        cfg.webui.max_rst_per_second
-    ));
-    yaml.push_str(&format!(
-        "  max_fin_per_second: {}\n",
-        cfg.webui.max_fin_per_second
-    ));
-    yaml.push_str(&format!(
-        "  static_threshold: {}\n",
-        cfg.webui.static_threshold
-    ));
-    yaml.push_str(&format!(
-        "  dynamic_threshold: {}\n",
-        cfg.webui.dynamic_threshold
-    ));
-    yaml.push_str(&format!("  ddos_detection: {}\n", cfg.webui.ddos_detection));
-    yaml.push_str(&format!(
-        "  max_ban_entries: {}\n",
-        cfg.webui.max_ban_entries
-    ));
-    yaml.push_str(&format!(
-        "  max_whitelist_entries: {}\n",
-        cfg.webui.max_whitelist_entries
-    ));
-    yaml.push_str(&format!(
-        "  max_rate_entries: {}\n",
-        cfg.webui.max_rate_entries
-    ));
-    yaml.push_str(&format!(
-        "  max_local_ip_cache: {}\n",
-        cfg.webui.max_local_ip_cache
-    ));
-
-    // 写入容量配置
-    yaml.push_str("\ncapacity:\n");
-    yaml.push_str(&format!(
-        "  max_ban_entries: {}\n",
-        cfg.capacity.max_ban_entries
-    ));
-    yaml.push_str(&format!(
-        "  max_whitelist_entries: {}\n",
-        cfg.capacity.max_whitelist_entries
-    ));
-    yaml.push_str(&format!(
-        "  max_rate_entries: {}\n",
-        cfg.capacity.max_rate_entries
-    ));
-    yaml.push_str(&format!(
-        "  max_local_ip_cache: {}\n",
-        cfg.capacity.max_local_ip_cache
-    ));
-
-    // 写入可信 IP
-    if !cfg.trusted_ips.is_empty() {
-        yaml.push_str("\ntrusted_ips:\n");
-        for ip in &cfg.trusted_ips {
-            yaml.push_str(&format!("  - \"{}\"\n", ip));
-        }
-    }
-
-    // 写入文件
-    let path = std::path::Path::new(RUNTIME_CONFIG_PATH);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut file = std::fs::File::create(path)?;
-    file.write_all(yaml.as_bytes())?;
+    file.write_all(result.as_bytes())?;
 
     crate::logger::info!(
         crate::logger::get(),
-        "配置已持久化";
-        "path" => RUNTIME_CONFIG_PATH
+        "配置已回写到原始配置文件";
+        "path" => %write_path.display()
     );
 
     Ok(())
 }
 
-/// 加载持久化的配置（启动时调用）
-pub fn load_persisted_config() -> Option<String> {
-    let path = std::path::Path::new(RUNTIME_CONFIG_PATH);
-    if path.exists() {
-        std::fs::read_to_string(path).ok()
+fn fmt_u32(v: u32) -> String {
+    v.to_string()
+}
+fn fmt_u64(v: u64) -> String {
+    v.to_string()
+}
+fn fmt_bool(v: bool) -> String {
+    v.to_string()
+}
+
+/// 在指定 section 内替换 key 的值（保留注释），返回修改后的全文。
+///
+/// 扫描每一行：进入 target_section 后，如果行的 key 匹配替换列表中的项，
+/// 则保留缩进和前缀注释，替换值部分。离开 section（遇到下一个顶级 key）时停止。
+fn replace_section_values(content: &str, section: &str, kvs: &[(&str, String)]) -> String {
+    let mut result = String::new();
+    let mut in_section = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // 检测 section 开始
+        if trimmed == section || trimmed.starts_with(&format!("{} ", section)) {
+            in_section = true;
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+
+        // 检测 section 结束（遇到新的顶级 key）
+        if in_section
+            && !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && !line.starts_with(' ')
+            && !line.starts_with('\t')
+            && trimmed.ends_with(':')
+        {
+            in_section = false;
+        }
+
+        if in_section {
+            // 尝试匹配 key: value 模式
+            let mut replaced = false;
+            for (key, new_val) in kvs {
+                // 匹配 "  key: old_value  # comment" 或 "  key: old_value"
+                let prefix = format!("{}:", key);
+                if let Some(pos) = trimmed.find(&prefix) {
+                    // 确保是行首缩进后的 key（不是子串匹配）
+                    let before_key = &trimmed[..pos];
+                    if before_key.chars().all(|c| c == ' ' || c == '\t') {
+                        // 保留缩进
+                        let indent = &line[..line.len() - trimmed.len()];
+                        // 保留尾部注释
+                        let after_value = trimmed[pos + prefix.len()..].trim();
+                        let comment = if let Some(hash_pos) = after_value.find('#') {
+                            // 找到值后面的 # 注释（跳过值本身中的 #）
+                            let val_part = after_value[..hash_pos].trim();
+                            if !val_part.is_empty() {
+                                format!("  #{}", &after_value[hash_pos + 1..])
+                            } else {
+                                format!("#{}", &after_value[hash_pos + 1..])
+                            }
+                        } else {
+                            String::new()
+                        };
+                        let comment_suffix = if comment.is_empty() {
+                            String::new()
+                        } else {
+                            // 重新构建注释（保留原始注释格式）
+                            if let Some(hash_pos) = after_value.find(" #") {
+                                after_value[hash_pos..].to_string()
+                            } else {
+                                String::new()
+                            }
+                        };
+                        result.push_str(&format!(
+                            "{}{}: {}{}\n",
+                            indent, key, new_val, comment_suffix
+                        ));
+                        replaced = true;
+                        break;
+                    }
+                }
+            }
+            if !replaced {
+                result.push_str(line);
+                result.push('\n');
+            }
+        } else {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+    result
+}
+
+/// 替换列表型 section（如 trusted_ips）
+fn replace_list_section(content: &str, section: &str, items: &[String]) -> String {
+    let mut result = String::new();
+    let mut in_section = false;
+    let mut section_written = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        if trimmed == section || trimmed.starts_with(&format!("{} ", section)) {
+            in_section = true;
+            if !section_written {
+                // 写入新段
+                result.push_str(line);
+                result.push('\n');
+                for item in items {
+                    result.push_str(&format!("  - \"{}\"\n", item));
+                }
+                section_written = true;
+            }
+            continue;
+        }
+
+        if in_section {
+            // 跳过旧的列表项
+            if trimmed.starts_with("- ") || trimmed.starts_with("-\"") {
+                continue;
+            }
+            // 遇到空行或新 section → 结束列表段
+            let is_new_section = (!trimmed.is_empty()
+                && !trimmed.starts_with('#')
+                && !line.starts_with(' ')
+                && !line.starts_with('\t'))
+                || trimmed.is_empty();
+            if is_new_section {
+                in_section = false;
+            }
+            if !in_section {
+                result.push_str(line);
+                result.push('\n');
+            }
+        } else {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+    result
+}
+
+/// 替换 jails section 中各 jail 的 enabled 值
+fn replace_jails_enabled(content: &str, jails: &[(String, bool)]) -> String {
+    if jails.is_empty() {
+        return content.to_string();
+    }
+    let mut result = String::new();
+    let mut in_jails = false;
+    let mut current_jail: Option<&str> = None;
+    let mut indent_level = 0;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // 检测 jails: section
+        if trimmed == "jails:" || trimmed.starts_with("jails: ") {
+            in_jails = true;
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+
+        // 检测 jails section 结束
+        if in_jails
+            && !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && !line.starts_with(' ')
+            && !line.starts_with('\t')
+            && trimmed.ends_with(':')
+        {
+            in_jails = false;
+            current_jail = None;
+        }
+
+        if in_jails {
+            // 检测 jail name（缩进 2 格的 key:）
+            let line_indent = line.len() - line.trim_start().len();
+            if line_indent <= 2 && trimmed.ends_with(':') && !trimmed.starts_with('-') {
+                let jail_name = trimmed.trim_end_matches(':');
+                current_jail = Some(jail_name);
+                indent_level = line_indent;
+            }
+
+            // 检测 enabled: 行（缩进比 jail name 深）
+            if let Some(jail_name) = current_jail {
+                if trimmed.starts_with("enabled:") && line_indent > indent_level {
+                    // 查找这个 jail 的 enabled 值
+                    if let Some((_, enabled)) = jails.iter().find(|(n, _)| n == jail_name) {
+                        let indent = &line[..line.len() - trimmed.len()];
+                        result.push_str(&format!("{}enabled: {}\n", indent, enabled));
+                        continue;
+                    }
+                }
+            }
+        }
+
+        result.push_str(line);
+        result.push('\n');
+    }
+    result
+}
+
+/// 从文件内容中移除旧的运行时覆盖段（兼容旧格式清理）
+fn strip_runtime_block(content: &str) -> String {
+    let mut result = String::new();
+    let mut in_block = false;
+    for line in content.lines() {
+        if line.trim() == RUNTIME_BLOCK_START {
+            in_block = true;
+            continue;
+        }
+        if line.trim() == RUNTIME_BLOCK_END {
+            in_block = false;
+            continue;
+        }
+        if !in_block {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+    let trimmed = result.trim_end().to_string();
+    if trimmed.is_empty() {
+        trimmed
     } else {
-        None
+        trimmed + "\n"
     }
 }
 
@@ -585,6 +766,20 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
     // 保存旧配置快照（用于回滚）
     save_config_snapshot(&old_cfg);
 
+    // 保留 Web UI API 修改的 Jail 启用状态（GLOBAL_JAILS 是运行时权威源）
+    if let Some(lock) = crate::http_exporter::GLOBAL_JAILS.get() {
+        let runtime_jails = lock.read();
+        for runtime_jail in runtime_jails.iter() {
+            if let Some(cfg_jail) = new_cfg
+                .jails
+                .iter_mut()
+                .find(|j| j.name == runtime_jail.name)
+            {
+                cfg_jail.enabled = runtime_jail.enabled;
+            }
+        }
+    }
+
     *cfg = new_cfg;
     DAEMON_STATS.config_reloads.fetch_add(1, Ordering::Relaxed);
 
@@ -607,7 +802,7 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
     }
 
     // 持久化配置
-    if let Err(e) = persist_config(cfg) {
+    if let Err(e) = persist_config(cfg, &get_global_jails_enabled()) {
         crate::logger::warn!(
             crate::logger::get(),
             "持久化配置失败";

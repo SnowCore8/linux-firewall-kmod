@@ -230,6 +230,9 @@ pub fn delete_ban(ip: &str) -> Result<BanOperationResponse, String> {
     if ip.is_empty() {
         return Err("IP 地址不能为空".to_string());
     }
+    if ip.parse::<std::net::IpAddr>().is_err() {
+        return Err(format!("无效的 IP 地址格式: {ip}"));
+    }
 
     // unban_ip 和 unban_permanent_ip 最终都走 send_unban，
     // 只需调用一次，避免 total_unbans 统计双计
@@ -273,6 +276,9 @@ pub fn get_ban_detail(ip: &str) -> Result<BanDetailResponse, String> {
     let ip = ip.trim();
     if ip.is_empty() {
         return Err("IP 地址不能为空".to_string());
+    }
+    if ip.parse::<std::net::IpAddr>().is_err() {
+        return Err(format!("无效的 IP 地址格式: {ip}"));
     }
 
     let now = crate::types::now_secs();
@@ -462,6 +468,21 @@ pub fn delete_whitelist(cidr: &str) -> Result<WhitelistOperationResponse, String
     let cidr = cidr.trim();
     if cidr.is_empty() {
         return Err("CIDR 不能为空".to_string());
+    }
+    // 校验 CIDR 格式：IP 或 IP/prefix
+    if let Some((ip_part, prefix_str)) = cidr.split_once('/') {
+        if ip_part.parse::<std::net::IpAddr>().is_err() {
+            return Err(format!("无效的 IP 地址: {ip_part}"));
+        }
+        let prefix: u32 = prefix_str
+            .parse()
+            .map_err(|_| format!("无效的前缀长度: {prefix_str}"))?;
+        let max_prefix = if ip_part.contains(':') { 128 } else { 32 };
+        if prefix > max_prefix {
+            return Err(format!("前缀 /{prefix} 超出范围 (最大 /{max_prefix})"));
+        }
+    } else if cidr.parse::<std::net::IpAddr>().is_err() {
+        return Err(format!("无效的 IP/CIDR 格式: {cidr}"));
     }
 
     let failed = crate::ban::remove_trusted_ips(&[cidr.to_string()]);

@@ -104,21 +104,8 @@ fn main() -> Result<()> {
         bail!("Config path does not exist: {}", config_path);
     }
 
-    // 如果存在持久化配置（来自上次热重载），合并运行时配置变更
-    // 持久化配置优先于原始配置文件（保留热重载后的调整）
-    // 注意：持久化配置仅包含 ddos/webui/capacity/trusted_ips，不含 jails 段，
-    // 因此 parse_config 不会追加 jail，无需清空 cfg.jails
-    if let Some(persisted) = config_reloader::load_persisted_config() {
-        match config::parse_config(&persisted, &mut cfg) {
-            Ok(_) => {
-                info!(logger::get(), "持久化配置加载成功，热重载变更已恢复");
-            }
-            Err(e) => {
-                warn!(logger::get(), "持久化配置解析失败，使用原始配置"; "error" => %e);
-            }
-        }
-    }
-
+    // 设置配置持久化目标路径（Web UI 修改后回写到原始 YAML）
+    config_reloader::set_config_target_path(&config_path);
     jail::apply_smart_defaults_to_all(&mut cfg);
     if let Err(e) = jail::config_validate(&cfg) {
         error!(logger::get(), "配置验证失败"; "error" => %e);
@@ -282,6 +269,13 @@ fn main() -> Result<()> {
             .collect();
         http_exporter::set_global_jails(jail_infos);
         http_exporter::set_global_webui_config(cfg.webui.clone());
+        // 缓存 Jail enabled 状态（供 persist_runtime_config 回写时使用）
+        let jails_enabled: Vec<(String, bool)> = cfg
+            .jails
+            .iter()
+            .map(|j| (j.name.clone(), j.enabled))
+            .collect();
+        config_reloader::set_global_jails_enabled(&jails_enabled);
     }
 
     // 启动后台定时 stats 查询线程（每 1 秒通过 netlink 向内核拉取真实计数）

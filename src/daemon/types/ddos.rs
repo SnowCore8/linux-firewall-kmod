@@ -33,12 +33,12 @@ pub struct DdosConfig {
     /// 启动期使用 α=0.1 快速收敛，达到此样本数后切换到 α=0.01 长期跟踪
     pub baseline_warmup_samples: u32,
     /// 协议专项阈值（同步到内核模块）
-    pub max_syn_per_second: u32, // SYN flood 阈值（默认 200）
-    pub max_udp_per_second: u32,  // UDP flood 阈值（默认 1000）
-    pub max_icmp_per_second: u32, // ICMP flood 阈值（默认 50）
-    pub max_ack_per_second: u32,  // ACK flood 阈值（默认 2000）
-    pub max_rst_per_second: u32,  // RST flood 阈值（默认 200）
-    pub max_fin_per_second: u32,  // FIN flood 阈值（默认 200）
+    pub max_syn_per_second: u32, // SYN flood 阈值（默认 2000）
+    pub max_udp_per_second: u32,  // UDP flood 阈值（默认 10000）
+    pub max_icmp_per_second: u32, // ICMP flood 阈值（默认 500）
+    pub max_ack_per_second: u32,  // ACK flood 阈值（默认 20000）
+    pub max_rst_per_second: u32,  // RST flood 阈值（默认 2000）
+    pub max_fin_per_second: u32,  // FIN flood 阈值（默认 2000）
     // DDoS 检测算法开关
     pub static_threshold: bool,  // 静态阈值检测（默认 true）
     pub dynamic_threshold: bool, // 动态阈值检测（默认 false）
@@ -52,20 +52,20 @@ impl Default for DdosConfig {
     fn default() -> Self {
         Self {
             enabled: true, // 默认启用 DDoS 检测
-            per_ip_conn_rate: 50,
-            per_ip_fail_rate: 30,
-            global_conn_rate: 10000,
+            per_ip_conn_rate: 500,
+            per_ip_fail_rate: 200,
+            global_conn_rate: 100000,
             auto_ban_duration: 3600,
             auto_ban_threshold: 3,
             check_interval: 5,
             baseline_warmup_samples: 50,
             // 协议专项阈值（与内核模块 DEFAULT_MAX_*_PER_SECOND 保持一致）
-            max_syn_per_second: 200,
-            max_udp_per_second: 1000,
-            max_icmp_per_second: 50,
-            max_ack_per_second: 2000,
-            max_rst_per_second: 200,
-            max_fin_per_second: 200,
+            max_syn_per_second: 2000,
+            max_udp_per_second: 10000,
+            max_icmp_per_second: 500,
+            max_ack_per_second: 20000,
+            max_rst_per_second: 2000,
+            max_fin_per_second: 2000,
             // DDoS 检测算法开关（与内核模块参数默认值一致）
             static_threshold: true,
             dynamic_threshold: false,

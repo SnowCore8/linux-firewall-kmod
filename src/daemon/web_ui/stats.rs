@@ -169,8 +169,8 @@ fn calculate_threat_level(current_bans: u64, ddos_events: u64) -> ThreatLevel {
 
     // 1. 当前 PPS（短期窗口）
     let current_pps = crate::types::get_rate_windows().pps_short;
-    // 使用默认阈值 10000 PPS 作为参考（实际阈值可通过配置获取）
-    let pps_threshold = 10_000u64;
+    // 使用默认阈值 100000 PPS 作为参考（实际阈值可通过配置获取）
+    let pps_threshold = 100_000u64;
     let pps_ratio = if pps_threshold > 0 {
         current_pps as f64 / pps_threshold as f64
     } else {

@@ -55,17 +55,17 @@ impl Default for WebuiConfig {
     fn default() -> Self {
         Self {
             sse_push_interval: 1,
-            rate_warning_pps: 1000,
-            rate_critical_pps: 10000,
-            rate_warning_syn: 100,
-            rate_critical_syn: 1000,
+            rate_warning_pps: 50000,
+            rate_critical_pps: 200000,
+            rate_warning_syn: 1000,
+            rate_critical_syn: 5000,
             // 协议专项阈值（与 DdosConfig 默认值保持一致）
-            max_syn_per_second: 200,
-            max_udp_per_second: 1000,
-            max_icmp_per_second: 50,
-            max_ack_per_second: 2000,
-            max_rst_per_second: 200,
-            max_fin_per_second: 200,
+            max_syn_per_second: 2000,
+            max_udp_per_second: 10000,
+            max_icmp_per_second: 500,
+            max_ack_per_second: 20000,
+            max_rst_per_second: 2000,
+            max_fin_per_second: 2000,
             // DDoS 检测算法开关
             static_threshold: true,
             dynamic_threshold: false,

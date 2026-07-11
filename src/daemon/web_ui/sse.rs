@@ -72,12 +72,6 @@ pub async fn handle_sse() -> Result<Sse<impl Stream<Item = Result<Event, Infalli
     }
     // guard 不在这里创建——它需要活在 stream 内部，随 stream 结束而 drop
 
-    // 获取推送间隔（默认 1 秒）
-    let interval_secs = crate::http_exporter::get_global_webui_config()
-        .map(|c| c.sse_push_interval)
-        .unwrap_or(1)
-        .max(1) as u64;
-
     let stream = async_stream::stream! {
         // guard 在 stream 内部创建，stream 结束（连接断开）时自动 drop
         let _guard = ConnectionGuard;
@@ -120,6 +114,12 @@ pub async fn handle_sse() -> Result<Sse<impl Stream<Item = Result<Event, Infalli
             }
 
             // 按配置间隔等待后推送下一轮
+            // 每轮重新读取推送间隔，确保配置变更实时生效
+            let interval_secs = crate::http_exporter::get_global_webui_config()
+                .map(|c| c.sse_push_interval)
+                .unwrap_or(1)
+                .max(1) as u64;
+
             tokio::time::sleep(Duration::from_secs(interval_secs)).await;
         }
     };

@@ -245,7 +245,7 @@ pub fn update_jail_enabled(name: &str, enabled: bool) -> Result<JailResponse, St
             })
             .unwrap_or((0, 0, 0, 0, 0));
 
-    Ok(JailResponse {
+    let response = JailResponse {
         name: name.to_string(),
         enabled,
         ban_count,
@@ -261,7 +261,37 @@ pub fn update_jail_enabled(name: &str, enabled: bool) -> Result<JailResponse, St
         ips_extracted,
         failed_attempts,
         bans_triggered,
-    })
+    };
+
+    // 同步到全局缓存并持久化（不会改变返回值）
+    sync_jail_enabled_to_persist(name, enabled);
+
+    Ok(response)
+}
+
+/// 更新 Jail 启用状态后，同步到全局缓存并持久化
+fn sync_jail_enabled_to_persist(name: &str, enabled: bool) {
+    // 同步到 GLOBAL_JAILS_ENABLED 缓存
+    let mut jails = crate::http_exporter::GLOBAL_JAILS
+        .get()
+        .map(|lock| lock.read().clone())
+        .unwrap_or_default();
+    // 更新对应条目（保持其他条目不变）
+    if let Some(idx) = jails.iter().position(|j| j.name == name) {
+        jails[idx].enabled = enabled;
+    }
+    let enabled_list: Vec<(String, bool)> =
+        jails.into_iter().map(|j| (j.name, j.enabled)).collect();
+    crate::config_reloader::set_global_jails_enabled(&enabled_list);
+    // 持久化到运行时配置文件
+    if let Err(e) = crate::config_reloader::persist_runtime_config() {
+        crate::logger::warn!(
+            crate::logger::get(),
+            "Jail 启用状态持久化失败";
+            "jail" => name,
+            "error" => %e
+        );
+    }
 }
 
 /// 更新 Web UI 配置

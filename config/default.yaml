@@ -43,28 +43,28 @@ jails:
 # ============================================================
 webui:
   sse_push_interval: 1        # SSE 推送间隔（秒）
-  rate_warning_pps: 1000      # 速率警告阈值（包/秒）
-  rate_critical_pps: 10000    # 速率严重告警阈值（包/秒）
-  rate_warning_syn: 100       # SYN 速率警告阈值（包/秒）
-  rate_critical_syn: 1000     # SYN 速率严重告警阈值（包/秒）
+  rate_warning_pps: 50000     # 速率警告阈值（包/秒）
+  rate_critical_pps: 200000   # 速率严重告警阈值（包/秒）
+  rate_warning_syn: 1000      # SYN 速率警告阈值（包/秒）
+  rate_critical_syn: 5000     # SYN 速率严重告警阈值（包/秒）
 
 # DDoS 防护配置
 # ============================================================
 ddos:
   enabled: true
-  per_ip_conn_rate: 50        # 单 IP 每秒最大连接数
-  per_ip_fail_rate: 30        # 单 IP 每分钟最大失败次数
-  global_conn_rate: 10000     # 全局每秒最大连接数
+  per_ip_conn_rate: 500       # 单 IP 每秒最大连接数
+  per_ip_fail_rate: 200       # 单 IP 每分钟最大失败次数
+  global_conn_rate: 100000    # 全局每秒最大连接数
   auto_ban_duration: 3600     # 自动封禁时长（秒）
   auto_ban_threshold: 3       # 超阈值几次后封禁
   check_interval: 5           # 检测间隔（秒）
   # 协议专项阈值（同步到内核模块，正常主机参考值）
-  max_syn_per_second: 200     # SYN flood 阈值（正常主机 SYN ≈ 几十/s）
-  max_udp_per_second: 1000    # UDP flood 阈值（DNS/流媒体正常几百/s）
-  max_icmp_per_second: 50     # ICMP flood 阈值（正常 ping ≈ 1/s）
-  max_ack_per_second: 2000    # ACK flood 阈值（正常连接 ACK 较多）
-  max_rst_per_second: 200     # RST flood 阈值（RST 异常通常意味着攻击）
-  max_fin_per_second: 200     # FIN flood 阈值（FIN 同理）
+  max_syn_per_second: 2000    # SYN flood 阈值
+  max_udp_per_second: 10000   # UDP flood 阈值
+  max_icmp_per_second: 500    # ICMP flood 阈值
+  max_ack_per_second: 20000   # ACK flood 阈值
+  max_rst_per_second: 2000    # RST flood 阈值
+  max_fin_per_second: 2000    # FIN flood 阈值
   # DDoS 检测算法开关
   static_threshold: true      # 静态阈值检测（默认开启）
   dynamic_threshold: false    # 动态阈值检测（默认关闭，基线×倍数）
