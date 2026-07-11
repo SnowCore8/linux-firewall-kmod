@@ -2440,13 +2440,13 @@ tr:last-child td { border-bottom: none; }
   background: linear-gradient(
     90deg,
     var(--bg-card) 0%,
-    var(--bg-card-hover) 50%,
+    var(--bg-elevated) 50%,
     var(--bg-card) 100%
   );
   background-size: 200% 100%;
   animation: skeleton-shimmer 1.5s ease-in-out infinite;
   border-radius: 8px;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-default);
 }
 
 @keyframes skeleton-shimmer {
@@ -2573,4 +2573,10 @@ tr:last-child td { border-bottom: none; }
 
 .cmd-item.selected {
   box-shadow: inset 2px 0 0 var(--accent-primary);
+}
+
+/* ── 骨架屏 shimmer 动画 ── */
+@keyframes shimmer {
+  0% { left: -100%; }
+  100% { left: 100%; }
 }
