@@ -333,19 +333,20 @@ static int __init firewall_init(void) {
   pr_info("模块初始化成功 (ban_time=%u, max_bans/s=%u)\n", fw_ban_time, fw_max_bans_per_second);
   return 0;
 
+err_nf_ipv6:
+  nf_unregister_net_hook(&init_net, &nf_ops_ipv6);
 err_nf_ipv4:
   nf_unregister_net_hook(&init_net, &nf_ops_ipv4);
 err_procfs:
   destroy_procfs_entries(&fw_info);
+err_netlink:
   fw_netlink_exit();
 err_notifier:
   atomic_set(&fw_info.shutting_down, 1);
   cancel_delayed_work_sync(&fw_info.sync_work);
   unregister_netdev_notifier(&fw_info);
-  destroy_procfs_entries(&fw_info);
   synchronize_rcu();
   cleanup_all_entries();
-  fw_netlink_exit();
   return ret;
 }
 

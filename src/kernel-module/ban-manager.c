@@ -215,11 +215,11 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw, const struct in6_addr *ip6
   hlist_add_head_rcu(&entry->hash, &fw->ban_table_ipv6[bkt6]);
   list_add_tail_rcu(&entry->ban_node, &fw->active_bans_list);
 
-  /* per-entry 过期定时器：非永久封禁时启动，到期自动删除 */
-  if (!is_permanent) {
-    timer_setup(&entry->expire_timer, ban_entry_expire_callback, 0);
+  /* per-entry 过期定时器：始终初始化（避免 cleanup 时对未初始化 timer 操作），
+   * 仅非永久封禁时启动定时器 */
+  timer_setup(&entry->expire_timer, ban_entry_expire_callback, 0);
+  if (!is_permanent)
     mod_timer(&entry->expire_timer, unban_time);
-  }
 
   spin_unlock_bh(&fw->ban_locks_ipv6[bkt6]);
   /* 新插入：同时增加表内计数与累计操作次数 */
@@ -296,11 +296,11 @@ static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4,
   hlist_add_head_rcu(&entry->hash, &fw->ban_table_ipv4[bkt4]);
   list_add_tail_rcu(&entry->ban_node, &fw->active_bans_list);
 
-  /* per-entry 过期定时器：非永久封禁时启动，到期自动删除 */
-  if (!is_permanent) {
-    timer_setup(&entry->expire_timer, ban_entry_expire_callback, 0);
+  /* per-entry 过期定时器：始终初始化（避免 cleanup 时对未初始化 timer 操作），
+   * 仅非永久封禁时启动定时器 */
+  timer_setup(&entry->expire_timer, ban_entry_expire_callback, 0);
+  if (!is_permanent)
     mod_timer(&entry->expire_timer, unban_time);
-  }
 
   spin_unlock_bh(&fw->ban_locks_ipv4[bkt4]);
   /* 新插入：同时增加表内计数与累计操作次数 */

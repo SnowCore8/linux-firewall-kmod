@@ -124,7 +124,19 @@ pub fn get_active_bans() -> Vec<BanResponse> {
         .get()
         .map(|cache| {
             // 清理过期条目（内核已删除，但缓存可能残留）
-            cache.purge_expired(now);
+            let expired = cache.purge_expired(now);
+            // 同步统计：过期条目从缓存移除时补充更新解封计数和封禁时长直方图
+            for ban in &expired {
+                crate::types::DAEMON_STATS
+                    .total_unbans
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let duration = if ban.expires_at > 0 {
+                    ban.expires_at - ban.banned_at
+                } else {
+                    now - ban.banned_at
+                };
+                crate::types::record_ban_duration(duration);
+            }
             cache
                 .snapshot()
                 .into_iter()

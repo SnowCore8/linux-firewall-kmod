@@ -330,16 +330,22 @@ fn persist_config(cfg: &Config, jails_enabled: &[(String, bool)]) -> Result<()> 
     // 先移除旧的 runtime 段（如果有）
     let cleaned = strip_runtime_block(&original);
 
-    // 原地替换已知 section 内的 key 值
-    let mut result = replace_section_values(&cleaned, "ddos:", &ddos_kvs);
-    result = replace_section_values(&result, "webui:", &webui_kvs);
-    result = replace_section_values(&result, "capacity:", &capacity_kvs);
+    // 文件为空时（目录模式首次持久化），从零生成完整 YAML
+    let result = if cleaned.trim().is_empty() {
+        generate_fresh_config_yaml(cfg, &ddos_kvs, &webui_kvs, &capacity_kvs, jails_enabled)
+    } else {
+        // 原地替换已知 section 内的 key 值
+        let mut r = replace_section_values(&cleaned, "ddos:", &ddos_kvs);
+        r = replace_section_values(&r, "webui:", &webui_kvs);
+        r = replace_section_values(&r, "capacity:", &capacity_kvs);
 
-    // trusted_ips: 整段替换（列表型，无法逐 key 替换）
-    result = replace_list_section(&result, "trusted_ips:", &cfg.trusted_ips);
+        // trusted_ips: 整段替换（列表型，无法逐 key 替换）
+        r = replace_list_section(&r, "trusted_ips:", &cfg.trusted_ips);
 
-    // jails enabled 状态：逐 jail 替换 enabled 行
-    result = replace_jails_enabled(&result, jails_enabled);
+        // jails enabled 状态：逐 jail 替换 enabled 行
+        r = replace_jails_enabled(&r, jails_enabled);
+        r
+    };
 
     // 写回文件
     let mut file = std::fs::File::create(&write_path)?;
@@ -363,6 +369,56 @@ fn fmt_u64(v: u64) -> String {
 }
 fn fmt_bool(v: bool) -> String {
     v.to_string()
+}
+
+/// 从零生成完整的运行时覆盖 YAML（目录模式首次持久化时使用）
+fn generate_fresh_config_yaml(
+    cfg: &Config,
+    ddos_kvs: &[(&str, String)],
+    webui_kvs: &[(&str, String)],
+    capacity_kvs: &[(&str, String)],
+    jails_enabled: &[(String, bool)],
+) -> String {
+    let mut out = String::new();
+
+    // ddos section
+    out.push_str("ddos:\n");
+    for (key, val) in ddos_kvs {
+        out.push_str(&format!("  {}: {}\n", key, val));
+    }
+    out.push('\n');
+
+    // webui section
+    out.push_str("webui:\n");
+    for (key, val) in webui_kvs {
+        out.push_str(&format!("  {}: {}\n", key, val));
+    }
+    out.push('\n');
+
+    // capacity section
+    out.push_str("capacity:\n");
+    for (key, val) in capacity_kvs {
+        out.push_str(&format!("  {}: {}\n", key, val));
+    }
+    out.push('\n');
+
+    // trusted_ips section
+    out.push_str("trusted_ips:\n");
+    for ip in &cfg.trusted_ips {
+        out.push_str(&format!("  - \"{}\"\n", ip));
+    }
+    out.push('\n');
+
+    // jails enabled section
+    if !jails_enabled.is_empty() {
+        out.push_str("jails:\n");
+        for (name, enabled) in jails_enabled {
+            out.push_str(&format!("  {}:\n", name));
+            out.push_str(&format!("    enabled: {}\n", enabled));
+        }
+    }
+
+    out
 }
 
 /// 在指定 section 内替换 key 的值（保留注释），返回修改后的全文。
