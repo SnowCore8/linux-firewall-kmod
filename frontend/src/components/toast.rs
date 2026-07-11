@@ -42,7 +42,7 @@ pub struct ToastItem {
 }
 
 /// 全局 Toast 状态 — 通过 Leptos context 共享
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ToastState {
     toasts: RwSignal<Vec<ToastItem>>,
 }
@@ -95,6 +95,11 @@ impl ToastState {
         self.show(message, ToastType::Info);
     }
 
+    /// 手动关闭一条 Toast
+    pub fn dismiss(&self, id: u64) {
+        self.toasts.update(|list| list.retain(|t| t.id != id));
+    }
+
     /// 获取 Toast 列表信号（供 ToastContainer 使用）
     pub fn signal(&self) -> RwSignal<Vec<ToastItem>> {
         self.toasts
@@ -113,16 +118,36 @@ pub fn ToastContainer() -> impl IntoView {
     let state = use_context::<ToastState>()
         .expect("ToastState context not found — 必须在顶层 provide_context");
 
+    // 最多显示 5 条，取最新的 5 条
+    let visible_toasts = move || {
+        let all = state.signal().get();
+        let len = all.len();
+        if len <= 5 {
+            all
+        } else {
+            all[len - 5..].to_vec()
+        }
+    };
+
     view! {
-        <div class="toast-container">
+        <div class="toast-container" role="region" aria-live="polite" aria-label="操作通知">
             <For
-                each=move || state.signal().get()
+                each=visible_toasts
                 key=|item| item.id
-                children=|item| {
+                children=move |item| {
+                    let item_id = item.id;
+                    let dismiss_state = state;
                     view! {
-                        <div class=format!("toast-item {}", item.toast_type.css_class())>
-                            <span class="toast-icon">{item.toast_type.icon()}</span>
+                        <div class=format!("toast-item {}", item.toast_type.css_class())
+                            role="alert"
+                            aria-atomic="true">
+                            <span class="toast-icon" aria-hidden="true">{item.toast_type.icon()}</span>
                             <span class="toast-message">{item.message.clone()}</span>
+                            <button class="toast-close"
+                                aria-label="关闭"
+                                on:click=move |_| dismiss_state.dismiss(item_id)>
+                                "✕"
+                            </button>
                         </div>
                     }
                 }
