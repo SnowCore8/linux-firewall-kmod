@@ -147,7 +147,14 @@ fn main() -> Result<()> {
     let _log = logger::init_logger(cfg.log_file.as_deref());
     // 设置日志文件路径（供 Web UI 日志查看器使用）
     if let Some(ref log_path) = cfg.log_file {
-        web_ui::log_viewer::set_log_file(log_path.clone());
+        if let Err(e) = web_ui::log_viewer::set_log_file(log_path.clone()) {
+            warn!(
+                logger::get(),
+                "设置日志文件路径失败";
+                "error" => e,
+                "log_file" => %log_path
+            );
+        }
     }
     info!(logger::get(), "firewall-daemon 启动"; "mode" => if cfg.daemon { "daemon" } else { "foreground" });
 

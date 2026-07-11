@@ -263,14 +263,18 @@ pub fn update_jail_enabled(name: &str, enabled: bool) -> Result<JailResponse, St
         bans_triggered,
     };
 
-    // 同步到全局缓存并持久化（不会改变返回值）
-    sync_jail_enabled_to_persist(name, enabled);
+    // 同步到全局缓存并持久化
+    sync_jail_enabled_to_persist(name, enabled)?;
 
     Ok(response)
 }
 
 /// 更新 Jail 启用状态后，同步到全局缓存并持久化
-fn sync_jail_enabled_to_persist(name: &str, enabled: bool) {
+///
+/// # 返回
+/// - `Ok(())` — 持久化成功
+/// - `Err(String)` — 持久化失败（缓存更新成功但写入文件失败）
+fn sync_jail_enabled_to_persist(name: &str, enabled: bool) -> Result<(), String> {
     // 同步到 GLOBAL_JAILS_ENABLED 缓存
     let mut jails = crate::http_exporter::GLOBAL_JAILS
         .get()
@@ -284,14 +288,15 @@ fn sync_jail_enabled_to_persist(name: &str, enabled: bool) {
         jails.into_iter().map(|j| (j.name, j.enabled)).collect();
     crate::config_reloader::set_global_jails_enabled(&enabled_list);
     // 持久化到运行时配置文件
-    if let Err(e) = crate::config_reloader::persist_runtime_config() {
-        crate::logger::warn!(
+    crate::config_reloader::persist_runtime_config().map_err(|e| {
+        crate::logger::error!(
             crate::logger::get(),
             "Jail 启用状态持久化失败";
             "jail" => name,
             "error" => %e
         );
-    }
+        format!("配置持久化失败: {e}")
+    })
 }
 
 /// 更新 Web UI 配置
@@ -400,8 +405,14 @@ pub fn update_webui_config(req: UpdateConfigRequest) -> Result<WebuiConfigRespon
     // 写入全局配置
     crate::http_exporter::set_global_webui_config(config.clone());
 
-    // 同步协议阈值到内核
-    sync_protocol_thresholds_to_kernel(&config);
+    // 同步协议阈值到内核（失败时记录 error 日志，不阻断配置保存）
+    if let Err(e) = sync_protocol_thresholds_to_kernel(&config) {
+        crate::logger::error!(
+            crate::logger::get(),
+            "协议阈值内核同步失败，配置已保存但内核未更新";
+            "error" => e
+        );
+    }
 
     // 同步 DDoS 检测开关到内核
     sync_ddos_detection_to_kernel(&config);
@@ -410,10 +421,10 @@ pub fn update_webui_config(req: UpdateConfigRequest) -> Result<WebuiConfigRespon
     sync_webui_to_ddos_config(&config);
 
     // 持久化到运行时配置文件，确保守护进程重启后恢复 API 修改
-    if let Err(e) = crate::config_reloader::persist_runtime_config() {
-        crate::logger::warn!(
+    if let Err(ref e) = crate::config_reloader::persist_runtime_config() {
+        crate::logger::error!(
             crate::logger::get(),
-            "API 配置变更后持久化失败";
+            "API 配置变更后持久化失败，配置已保存但未写入磁盘";
             "error" => %e
         );
     }
@@ -448,38 +459,45 @@ fn sync_ddos_detection_to_kernel(config: &crate::types::WebuiConfig) {
 }
 
 /// 同步协议专项阈值到内核模块
-fn sync_protocol_thresholds_to_kernel(config: &crate::types::WebuiConfig) {
+///
+/// # 返回
+/// - `Ok(())` — 同步成功或 netlink 未初始化（静默跳过）
+/// - `Err(String)` — netlink 存在但发送失败
+fn sync_protocol_thresholds_to_kernel(config: &crate::types::WebuiConfig) -> Result<(), String> {
     use crate::netlink::{config_flags, ConfigUpdate};
 
-    if let Some(netlink) = crate::netlink::get_global_netlink_ctx() {
-        let config_update = ConfigUpdate::new(
-            config_flags::MAX_SYN
-                | config_flags::MAX_UDP
-                | config_flags::MAX_ICMP
-                | config_flags::MAX_ACK
-                | config_flags::MAX_RST
-                | config_flags::MAX_FIN,
-        )
-        .with_max_syn(config.max_syn_per_second as u64)
-        .with_max_udp(config.max_udp_per_second as u64)
-        .with_max_icmp(config.max_icmp_per_second as u64);
+    match crate::netlink::get_global_netlink_ctx() {
+        Some(netlink) => {
+            let config_update = ConfigUpdate::new(
+                config_flags::MAX_SYN
+                    | config_flags::MAX_UDP
+                    | config_flags::MAX_ICMP
+                    | config_flags::MAX_ACK
+                    | config_flags::MAX_RST
+                    | config_flags::MAX_FIN,
+            )
+            .with_max_syn(config.max_syn_per_second as u64)
+            .with_max_udp(config.max_udp_per_second as u64)
+            .with_max_icmp(config.max_icmp_per_second as u64);
 
-        // ACK/RST/FIN 需要手动设置字段
-        let config_update = {
-            let mut cu = config_update;
-            cu.max_ack_per_second = (config.max_ack_per_second as u64).to_be();
-            cu.max_rst_per_second = (config.max_rst_per_second as u64).to_be();
-            cu.max_fin_per_second = (config.max_fin_per_second as u64).to_be();
-            cu
-        };
+            // ACK/RST/FIN 需要手动设置字段
+            let config_update = {
+                let mut cu = config_update;
+                cu.max_ack_per_second = (config.max_ack_per_second as u64).to_be();
+                cu.max_rst_per_second = (config.max_rst_per_second as u64).to_be();
+                cu.max_fin_per_second = (config.max_fin_per_second as u64).to_be();
+                cu
+            };
 
-        if let Err(e) = netlink.send_config_update(&config_update) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "同步协议阈值到内核失败";
-                "error" => %e
-            );
-        } else {
+            netlink.send_config_update(&config_update).map_err(|e| {
+                crate::logger::error!(
+                    crate::logger::get(),
+                    "同步协议阈值到内核失败";
+                    "error" => %e
+                );
+                format!("内核同步失败: {e}")
+            })?;
+
             crate::logger::info!(
                 crate::logger::get(),
                 "协议阈值已同步到内核";
@@ -490,6 +508,12 @@ fn sync_protocol_thresholds_to_kernel(config: &crate::types::WebuiConfig) {
                 "RST" => config.max_rst_per_second,
                 "FIN" => config.max_fin_per_second
             );
+
+            Ok(())
+        }
+        None => {
+            // netlink 未初始化时静默跳过（守护进程启动初期常见）
+            Ok(())
         }
     }
 }
@@ -499,18 +523,27 @@ fn sync_protocol_thresholds_to_kernel(config: &crate::types::WebuiConfig) {
 /// WebUI 和 DdosConfig 共享协议阈值/检测开关字段。API 修改 WebUI 后必须
 /// 同步到 DdosConfig，否则 SIGHUP 热重载会从 YAML 重新加载旧值覆盖 API 变更。
 fn sync_webui_to_ddos_config(webui: &crate::types::WebuiConfig) {
-    if let Some(engine) = crate::http_exporter::get_global_decision_engine() {
-        let mut ddos = engine.current_config();
-        ddos.max_syn_per_second = webui.max_syn_per_second;
-        ddos.max_udp_per_second = webui.max_udp_per_second;
-        ddos.max_icmp_per_second = webui.max_icmp_per_second;
-        ddos.max_ack_per_second = webui.max_ack_per_second;
-        ddos.max_rst_per_second = webui.max_rst_per_second;
-        ddos.max_fin_per_second = webui.max_fin_per_second;
-        ddos.static_threshold = webui.static_threshold;
-        ddos.dynamic_threshold = webui.dynamic_threshold;
-        ddos.ddos_detection = webui.ddos_detection;
-        engine.update_config(ddos);
+    match crate::http_exporter::get_global_decision_engine() {
+        Some(engine) => {
+            let mut ddos = engine.current_config();
+            ddos.max_syn_per_second = webui.max_syn_per_second;
+            ddos.max_udp_per_second = webui.max_udp_per_second;
+            ddos.max_icmp_per_second = webui.max_icmp_per_second;
+            ddos.max_ack_per_second = webui.max_ack_per_second;
+            ddos.max_rst_per_second = webui.max_rst_per_second;
+            ddos.max_fin_per_second = webui.max_fin_per_second;
+            ddos.static_threshold = webui.static_threshold;
+            ddos.dynamic_threshold = webui.dynamic_threshold;
+            ddos.ddos_detection = webui.ddos_detection;
+            engine.update_config(ddos);
+        }
+        None => {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "DDoS 决策引擎未初始化，WebUI DDoS 字段未同步到 DdosConfig";
+                "note" => "SIGHUP 热重载时会重新同步"
+            );
+        }
     }
 }
 

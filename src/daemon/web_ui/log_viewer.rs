@@ -25,8 +25,14 @@ use tokio_stream::Stream;
 static GLOBAL_LOG_FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// 设置全局日志文件路径（启动时调用）
-pub fn set_log_file(path: String) {
-    let _ = GLOBAL_LOG_FILE.set(PathBuf::from(path));
+///
+/// # 返回
+/// - `Ok(())` — 设置成功
+/// - `Err(&str)` — 已被初始化（重复调用）
+pub fn set_log_file(path: String) -> Result<(), &'static str> {
+    GLOBAL_LOG_FILE
+        .set(PathBuf::from(path))
+        .map_err(|_| "日志文件路径已设置，重复初始化")
 }
 
 /// 获取日志文件路径
@@ -88,19 +94,21 @@ pub async fn handle_log_stream(
         // 发送连接确认
         yield Ok(Event::default().event("connected").data("日志流已连接"));
 
-        let mut file = match std::fs::File::open(&log_path) {
-            Ok(f) => f,
-            Err(_) => {
-                yield Ok(Event::default().event("error").data("无法打开日志文件"));
+        // 打开日志文件并定位到末尾（tail -f 语义）
+        let file = {
+            let mut f = match std::fs::File::open(&log_path) {
+                Ok(f) => f,
+                Err(_) => {
+                    yield Ok(Event::default().event("error").data("无法打开日志文件"));
+                    return;
+                }
+            };
+            if f.seek(SeekFrom::End(0)).is_err() {
+                yield Ok(Event::default().event("error").data("无法定位日志文件末尾"));
                 return;
             }
+            f
         };
-
-        // 跳到文件末尾（tail -f 语义）
-        if file.seek(SeekFrom::End(0)).is_err() {
-            yield Ok(Event::default().event("error").data("无法定位日志文件末尾"));
-            return;
-        }
 
         let mut reader = std::io::BufReader::new(file);
         let mut line = String::new();
@@ -117,8 +125,12 @@ pub async fn handle_log_stream(
                             if let Ok(old_meta) = reader.get_ref().metadata() {
                                 if meta.len() < old_meta.len() {
                                     // 文件被截断（logrotate copytruncate）
-                                    // seek 失败时无需处理：下一轮 read_line 会触发 error 分支或重新打开文件
-                                    let _ = reader.seek(SeekFrom::Start(0));
+                                    if reader.seek(SeekFrom::Start(0)).is_err() {
+                                        // seek 失败后放弃当前 reader，重新打开文件
+                                        if let Ok(new_f) = std::fs::File::open(&log_path) {
+                                            reader = std::io::BufReader::new(new_f);
+                                        }
+                                    }
                                     continue;
                                 }
                             }
