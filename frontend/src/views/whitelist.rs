@@ -3,17 +3,20 @@
 use leptos::*;
 
 use crate::api::{self, WhitelistEntry, WhitelistRecommendation};
+use crate::components::toast::ToastState;
 use crate::sse::SseState;
 use crate::validation;
 
 #[component]
 pub fn Whitelist() -> impl IntoView {
     let sse = use_context::<SseState>().expect("SseState not found");
+    let toast_state = use_context::<ToastState>().expect("ToastState not found");
     let whitelist_signal = sse.whitelist;
 
     let new_cidr = create_rw_signal(String::new());
     let error = create_rw_signal(String::new());
     let loading = create_rw_signal(false);
+    let adopting_cidr = create_rw_signal(String::new());
 
     // 智能推荐数据
     let recommendations = create_resource(
@@ -43,9 +46,14 @@ pub fn Whitelist() -> impl IntoView {
         }
         loading.set(true);
         error.set(String::new());
+        let cidr_for_success = cidr.clone();
+        let toast = toast_state;
         spawn_local(async move {
             match api::create_whitelist(&cidr).await {
-                Ok(_) => new_cidr.set(String::new()),
+                Ok(_) => {
+                    new_cidr.set(String::new());
+                    toast.success(format!("已添加 {cidr_for_success}"));
+                }
                 Err(e) => error.set(e),
             }
             loading.set(false);
@@ -60,10 +68,10 @@ pub fn Whitelist() -> impl IntoView {
         {
             return;
         }
+        let toast = toast_state;
         spawn_local(async move {
             if let Err(e) = api::delete_whitelist(&cidr).await {
-                let _ = web_sys::window()
-                    .and_then(|w| w.alert_with_message(&format!("移除失败：{e}")).ok());
+                toast.error(format!("移除失败：{e}"));
             }
         });
     };
@@ -119,6 +127,8 @@ pub fn Whitelist() -> impl IntoView {
                                 <For each=move || recs_for.clone() key=|r| r.cidr.clone()
                                     children=move |rec: WhitelistRecommendation| {
                                         let cidr = rec.cidr.clone();
+                                        let cidr2 = cidr.clone();
+                                        let cidr3 = cidr.clone();
                                         let confidence_color = if rec.confidence >= 70 {
                                             "var(--color-green)"
                                         } else if rec.confidence >= 40 {
@@ -140,16 +150,22 @@ pub fn Whitelist() -> impl IntoView {
                                                         {format!("{}%", rec.confidence)}
                                                     </span>
                                                     <button class="btn btn-sm btn-primary"
-                                                        on:click=move |_| {
-                                                            let cidr = cidr.clone();
-                                                            spawn_local(async move {
-                                                                if let Err(e) = api::create_whitelist(&cidr).await {
-                                                                    let _ = web_sys::window()
-                                                                        .and_then(|w| w.alert_with_message(&format!("采纳失败：{e}")).ok());
-                                                                }
-                                                            });
+                                                        disabled=move || adopting_cidr.get() == cidr2
+                                                        on:click={
+                                                            move |_| {
+                                                                let cidr = cidr.clone();
+                                                                let toast = toast_state;
+                                                                adopting_cidr.set(cidr.clone());
+                                                                spawn_local(async move {
+                                                                    match api::create_whitelist(&cidr).await {
+                                                                        Ok(_) => toast.success(format!("已采纳 {cidr}")),
+                                                                        Err(e) => toast.error(format!("采纳失败：{e}")),
+                                                                    }
+                                                                    adopting_cidr.set(String::new());
+                                                                });
+                                                            }
                                                         }>
-                                                        "采纳"
+                                                        {move || if adopting_cidr.get() == cidr3 { "采纳中..." } else { "采纳" }}
                                                     </button>
                                                 </div>
                                             </div>
@@ -166,11 +182,12 @@ pub fn Whitelist() -> impl IntoView {
                     let list = whitelist_signal.get().unwrap_or_default();
                     if list.is_empty() {
                         return view! {
-                            <div class="empty-state">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                                    <path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/>
-                                </svg>
-                                <span>"白名单为空"</span>
+                            <div style="padding:48px 24px;text-align:center">
+                                <div style="font-size:48px;margin-bottom:16px;opacity:0.3">"🔓"</div>
+                                <h3 style="color:var(--text-secondary);font-weight:600;margin-bottom:8px">"白名单为空"</h3>
+                                <p style="color:var(--text-muted);font-size:13px;max-width:360px;margin:0 auto">
+                                    "白名单中的 IP/CIDR 永远不会被封禁。添加本机地址、办公网络等可信 IP 以防误封。"
+                                </p>
                             </div>
                         }.into_view();
                     }

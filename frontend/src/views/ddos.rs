@@ -4,12 +4,14 @@ use leptos::*;
 
 use crate::api;
 use crate::charts::LineChart;
-use crate::format::format_rate;
+use crate::components::toast::ToastState;
+use crate::format::{copy_to_clipboard, format_rate};
 use crate::sse::SseState;
 
 #[component]
 pub fn DdosMonitor() -> impl IntoView {
     let sse = use_context::<SseState>().expect("SseState not found");
+    let toast_state = use_context::<ToastState>().expect("ToastState not found");
     let rates_signal = sse.rates;
     let rate_history = sse.rate_history;
 
@@ -62,7 +64,7 @@ pub fn DdosMonitor() -> impl IntoView {
 
     let top_attackers = move || {
         let mut sorted = rates_signal.get().unwrap_or_default();
-        sorted.sort_by(|a, b| b.packets_per_sec.cmp(&a.packets_per_sec));
+        sorted.sort_by_key(|r| std::cmp::Reverse(r.packets_per_sec));
         sorted.into_iter().take(10).collect::<Vec<_>>()
     };
 
@@ -224,16 +226,32 @@ pub fn DdosMonitor() -> impl IntoView {
                     {move || {
                         let attackers = top_attackers();
                         if attackers.is_empty() {
-                            return view! { <div class="empty-state"><span>"无活跃攻击"</span></div> }.into_view();
+                            return view! {
+                                <div style="padding:32px 16px;text-align:center">
+                                    <div style="font-size:32px;margin-bottom:8px;opacity:0.3">"✅"</div>
+                                    <p style="color:var(--text-muted);font-size:13px">"当前无活跃攻击源"</p>
+                                </div>
+                            }.into_view();
                         }
                         attackers.into_iter().enumerate().map(|(i, rate)| {
+                            let ip = rate.ip.clone();
                             let level = if rate.packets_per_sec > 10000 || rate.syn_packets_per_sec > 1000 { "critical" }
                                 else if rate.packets_per_sec > 1000 || rate.syn_packets_per_sec > 100 { "warning" }
                                 else { "normal" };
                             view! {
                                 <div class="attacker-row">
                                     <span class="attacker-rank mono">{i + 1}</span>
-                                    <span class="attacker-ip mono">{rate.ip}</span>
+                                    <span class="attacker-ip mono" style="cursor:pointer" title="点击复制 IP"
+                                        on:click={
+                                            let ip = ip.clone();
+                                            let toast = toast_state;
+                                            move |_| {
+                                                copy_to_clipboard(&ip);
+                                                toast.success(format!("已复制 {}", ip.clone()));
+                                            }
+                                        }>
+                                        {rate.ip}
+                                    </span>
                                     <span class="attacker-pps mono">{format_rate(rate.packets_per_sec, "pps")}</span>
                                     <span class="attacker-protocol">
                                         {if rate.syn_packets_per_sec > rate.udp_packets_per_sec && rate.syn_packets_per_sec > rate.icmp_packets_per_sec { "SYN" }

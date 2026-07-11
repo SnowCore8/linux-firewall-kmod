@@ -4,11 +4,13 @@ use leptos::*;
 
 use crate::api::{self, JailResponse, StatsResponse};
 use crate::charts::PieChart;
+use crate::components::toast::ToastState;
 use crate::sse::SseState;
 
 #[component]
 pub fn Jails() -> impl IntoView {
     let sse = use_context::<SseState>().expect("SseState not found");
+    let toast_state = use_context::<ToastState>().expect("ToastState not found");
     let jails_signal = sse.jails;
     let stats_signal = sse.stats;
     let jails_api = create_resource(|| (), |_| async { api::get_jails().await.ok() });
@@ -27,7 +29,8 @@ pub fn Jails() -> impl IntoView {
     );
 
     let stats_default = move || StatsResponse::default();
-    let toggle_error = create_rw_signal(String::new());
+    // 正在切换中的 Jail 名称（用于禁用按钮+显示 loading）
+    let toggling_jail = create_rw_signal(String::new());
 
     let do_toggle = move |name: String, current_enabled: bool| {
         let new_enabled = !current_enabled;
@@ -39,6 +42,8 @@ pub fn Jails() -> impl IntoView {
         {
             return;
         }
+        toggling_jail.set(name.clone());
+        let toast = toast_state;
         spawn_local(async move {
             match api::update_jail(&name, new_enabled).await {
                 Ok(_) => {
@@ -71,22 +76,23 @@ pub fn Jails() -> impl IntoView {
                             .collect();
                         jails_signal.set(Some(updated));
                     }
+                    toast.success(format!("已{} Jail '{}'", action, name));
                 }
                 Err(e) => {
-                    toggle_error.set(format!("操作失败: {e}"));
+                    toast.error(format!("{}失败: {}", action, e));
                 }
             }
+            toggling_jail.set(String::new());
         });
     };
 
     view! {
         <div class="jails-page">
-            <div style="color:var(--color-red);font-size:12px;min-height:16px;text-align:center">{move || toggle_error.get()}</div>
             <div class="card chart-card">
                 <div class="chart-header"><h3>"Jail 封禁分布"</h3></div>
                 <div class="chart-body" style="height:120px;min-height:120px">
                     {move || {
-                        let stats = stats_signal.get().unwrap_or_else(|| stats_default());
+                        let stats = stats_signal.get().unwrap_or_else(&stats_default);
                         let total: u64 = stats.jail_distribution.values.iter().sum();
                         if total == 0 {
                             view! {
@@ -96,7 +102,7 @@ pub fn Jails() -> impl IntoView {
                             view! {
                                 <PieChart
                                     labels=Signal::derive(move || {
-                                        let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                                        let s = stats_signal.get().unwrap_or_else(&stats_default);
                                         let mut pairs: Vec<_> = s.jail_distribution.labels.into_iter()
                                             .zip(s.jail_distribution.values.into_iter())
                                             .collect();
@@ -104,7 +110,7 @@ pub fn Jails() -> impl IntoView {
                                         pairs.into_iter().map(|(l, _)| l).collect()
                                     })
                                     data=Signal::derive(move || {
-                                        let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                                        let s = stats_signal.get().unwrap_or_else(&stats_default);
                                         let mut pairs: Vec<_> = s.jail_distribution.labels.into_iter()
                                             .zip(s.jail_distribution.values.into_iter())
                                             .collect();
@@ -131,12 +137,13 @@ pub fn Jails() -> impl IntoView {
                             .unwrap_or_default();
                         if jails.is_empty() {
                             return view! {
-                                <div class="card"><div class="empty-state">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                                        <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>
-                                    </svg>
-                                    <span>"暂无 Jail 配置"</span>
-                                </div></div>
+                                <div class="card" style="padding:48px 24px;text-align:center">
+                                    <div style="font-size:48px;margin-bottom:16px;opacity:0.3">"📋"</div>
+                                    <h3 style="color:var(--text-secondary);font-weight:600;margin-bottom:8px">"暂无 Jail 配置"</h3>
+                                    <p style="color:var(--text-muted);font-size:13px;max-width:400px;margin:0 auto">
+                                        "Jail 定义了对各服务的日志监控规则。在 config/ 目录添加 YAML 配置文件并重启守护进程即可加载。"
+                                    </p>
+                                </div>
                             }.into_view();
                         }
                         view! {
@@ -144,6 +151,8 @@ pub fn Jails() -> impl IntoView {
                                 children=move |jail: JailResponse| {
                                     let name = jail.name.clone();
                                     let name2 = name.clone();
+                                    let name3 = name.clone();
+                                    let name4 = name.clone();
                                     // 从 signal 读取最新数据，SSE 推送时自动刷新
                                     let jail_data = Signal::derive(move || {
                                         jails_signal
@@ -184,8 +193,17 @@ pub fn Jails() -> impl IntoView {
                                                             if jail_data.get().enabled { "btn btn-sm btn-danger" } else { "btn btn-sm btn-success" }
                                                         }
                                                         style="padding:4px 8px;font-size:10px"
+                                                        disabled=move || toggling_jail.get() == name3
                                                         on:click=move |_| do_toggle(name2.clone(), jail_data.get().enabled)>
-                                                        {move || if jail_data.get().enabled { "禁用" } else { "启用" }}
+                                                        {move || {
+                                                            if toggling_jail.get() == name4 {
+                                                                "处理中..."
+                                                            } else if jail_data.get().enabled {
+                                                                "禁用"
+                                                            } else {
+                                                                "启用"
+                                                            }
+                                                        }}
                                                     </button>
                                                 </div>
                                             </div>

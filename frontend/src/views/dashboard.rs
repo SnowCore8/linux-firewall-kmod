@@ -1,6 +1,7 @@
 //! 安全运营中心仪表盘 — 威胁态势 + 实时流量 + 攻击源 + 协议分布 + 24h 热力图 + 封禁效果
 
 use leptos::*;
+use leptos_router::*;
 
 use crate::api::{self, StatsResponse};
 use crate::charts::{LineChart, PieChart, RadarChart};
@@ -18,11 +19,28 @@ pub fn Dashboard() -> impl IntoView {
     // Toast 通知状态
     let toast_state = use_context::<ToastState>().expect("ToastState context not found");
 
+    // 快捷操作 loading 状态
+    let unban_loading = create_rw_signal(false);
+    let ban_top_loading = create_rw_signal(false);
+
+    // 手动刷新触发器
+    let refresh_trigger = create_rw_signal(0_u32);
+    let refreshing = create_rw_signal(false);
+
+    // 页面导航
+    let navigate = use_navigate();
+
     // 热力图数据（24 小时按小时聚合）
-    let heatmap = create_resource(|| (), |_| async { api::get_heatmap().await.ok() });
+    let heatmap = create_resource(
+        move || refresh_trigger.get(),
+        |_| async { api::get_heatmap().await.ok() },
+    );
 
     // 封禁效果追踪数据（复发率 + TOP 10）
-    let recidivism = create_resource(|| (), |_| async { api::get_recidivism().await.ok() });
+    let recidivism = create_resource(
+        move || refresh_trigger.get(),
+        |_| async { api::get_recidivism().await.ok() },
+    );
 
     // 迷你图数据
     let spark_active = create_rw_signal(Vec::<f64>::new());
@@ -66,7 +84,7 @@ pub fn Dashboard() -> impl IntoView {
     let top_attackers = move || {
         let rates = rates_signal.get().unwrap_or_default();
         let mut sorted = rates;
-        sorted.sort_by(|a, b| b.packets_per_sec.cmp(&a.packets_per_sec));
+        sorted.sort_by_key(|b| std::cmp::Reverse(b.packets_per_sec));
         sorted.into_iter().take(10).collect::<Vec<_>>()
     };
 
@@ -86,11 +104,7 @@ pub fn Dashboard() -> impl IntoView {
             total_all += r.packets_per_sec;
         }
         let accounted = syn + udp + icmp + ack;
-        let other = if total_all > accounted {
-            total_all - accounted
-        } else {
-            0
-        };
+        let other = total_all.saturating_sub(accounted);
         (
             vec![
                 "SYN".to_string(),
@@ -140,11 +154,33 @@ pub fn Dashboard() -> impl IntoView {
 
     view! {
         <div class="dashboard">
+            // 手动刷新按钮
+            <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+                <button class="btn btn-sm"
+                    style="border-color:var(--border-strong);font-size:11px;padding:4px 10px"
+                    disabled=move || refreshing.get()
+                    on:click=move |_| {
+                        refreshing.set(true);
+                        refresh_trigger.update(|v| *v += 1);
+                        // 2 秒后恢复按钮（resource 异步完成）
+                        set_timeout(
+                            move || refreshing.set(false),
+                            std::time::Duration::from_secs(2),
+                        );
+                    }>
+                    {move || if refreshing.get() { "刷新中..." } else { "🔄 刷新分析数据" }}
+                </button>
+            </div>
             <Show
                 when=move || !is_loading()
                 fallback=|| view! {
                     <div class="loading-skeleton">
-                        <div class="skeleton-threat-bar"/>
+                        <div class="skeleton-threat-bar" style="display:flex;align-items:center;gap:8px;padding:12px 16px">
+                            <span style="width:8px;height:8px;border-radius:50%;background:var(--color-green);opacity:0.3"/>
+                            <span style="font-size:11px;font-weight:600;letter-spacing:0.05em;color:var(--color-green);opacity:0.5">"NORMAL"</span>
+                            <span style="flex:1"/>
+                            <span style="font-size:11px;color:var(--text-muted);opacity:0.3">"加载中..."</span>
+                        </div>
                         <div class="skeleton-grid">
                             <div class="skeleton-card"/>
                             <div class="skeleton-card"/>
@@ -166,7 +202,16 @@ pub fn Dashboard() -> impl IntoView {
                     </span>
                 </div>
                 <div class="threat-stats">
-                    <div class="threat-stat">
+                    <div class="threat-stat" style="cursor:pointer" role="button" tabindex="0"
+                        on:click={
+                            let nav = navigate.clone();
+                            move |_| nav("/ddos", Default::default())
+                        }
+                        on:keydown={
+                            let nav = navigate.clone();
+                            move |e| if e.key() == "Enter" { nav("/ddos", Default::default()) }
+                        }
+                        title="查看 DDoS 监控">
                         <span class="threat-stat-label">"吞吐量"</span>
                         <span class="threat-stat-value mono">
                             {move || {
@@ -177,20 +222,38 @@ pub fn Dashboard() -> impl IntoView {
                             }}
                         </span>
                     </div>
-                    <div class="threat-stat">
+                    <div class="threat-stat" style="cursor:pointer" role="button" tabindex="0"
+                        on:click={
+                            let nav = navigate.clone();
+                            move |_| nav("/bans", Default::default())
+                        }
+                        on:keydown={
+                            let nav = navigate.clone();
+                            move |e| if e.key() == "Enter" { nav("/bans", Default::default()) }
+                        }
+                        title="查看封禁列表">
                         <span class="threat-stat-label">"活跃封禁"</span>
                         <span class="threat-stat-value mono">
                             {move || {
-                                let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                                let s = stats_signal.get().unwrap_or_else(&stats_default);
                                 types::format_number(s.current_bans, false)
                             }}
                         </span>
                     </div>
-                    <div class="threat-stat">
+                    <div class="threat-stat" style="cursor:pointer" role="button" tabindex="0"
+                        on:click={
+                            let nav = navigate.clone();
+                            move |_| nav("/ddos", Default::default())
+                        }
+                        on:keydown={
+                            let nav = navigate.clone();
+                            move |e| if e.key() == "Enter" { nav("/ddos", Default::default()) }
+                        }
+                        title="查看 DDoS 监控">
                         <span class="threat-stat-label">"DDoS 事件"</span>
                         <span class="threat-stat-value mono">
                             {move || {
-                                let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                                let s = stats_signal.get().unwrap_or_else(&stats_default);
                                 types::format_number(s.ddos_events, false)
                             }}
                         </span>
@@ -199,7 +262,7 @@ pub fn Dashboard() -> impl IntoView {
                 // 威胁评估因素
                 <Show when=move || {
                     let f = threat_factors();
-                    !f.is_empty() && !(f.len() == 1 && f[0] == "一切正常")
+                    !(f.is_empty() || f.len() == 1 && f[0] == "一切正常")
                 }>
                     <div class="threat-factors">
                         {move || {
@@ -218,10 +281,11 @@ pub fn Dashboard() -> impl IntoView {
             <div class="quick-actions">
                 <button
                     class="btn btn-danger btn-sm"
+                    disabled=move || unban_loading.get()
                     on:click={
-                        let toast_state = toast_state.clone();
                         move |_| {
-                            let toast = toast_state.clone();
+                            unban_loading.set(true);
+                            let toast = toast_state;
                             spawn_local(async move {
                                 match api::unban_all_temporary().await {
                                     Ok(resp) => {
@@ -233,28 +297,31 @@ pub fn Dashboard() -> impl IntoView {
                                         toast.error(format!("解封失败：{e}"));
                                     }
                                 }
+                                unban_loading.set(false);
                             });
                         }
                     }
                 >
-                    "一键解封临时封禁"
+                    {move || if unban_loading.get() { "解封中..." } else { "一键解封临时封禁" }}
                 </button>
                 <button
                     class="btn btn-primary btn-sm"
+                    disabled=move || ban_top_loading.get()
                     on:click={
-                        let toast_state = toast_state.clone();
                         move |_| {
                             let rates = rates_signal.get().unwrap_or_default();
                             let mut sorted = rates;
-                            sorted.sort_by(|a, b| b.packets_per_sec.cmp(&a.packets_per_sec));
+                            sorted.sort_by_key(|b| std::cmp::Reverse(b.packets_per_sec));
                             let ips: Vec<String> = sorted.into_iter()
                                 .take(5)
                                 .map(|r| r.ip.clone())
                                 .collect();
                             if ips.is_empty() {
+                                toast_state.info("当前无活跃攻击源");
                                 return;
                             }
-                            let toast = toast_state.clone();
+                            ban_top_loading.set(true);
+                            let toast = toast_state;
                             spawn_local(async move {
                                 match api::batch_ban(ips).await {
                                     Ok(resp) => {
@@ -266,11 +333,12 @@ pub fn Dashboard() -> impl IntoView {
                                         toast.error(format!("封禁失败：{e}"));
                                     }
                                 }
+                                ban_top_loading.set(false);
                             });
                         }
                     }
                 >
-                    "一键封禁 TOP 5 攻击源"
+                    {move || if ban_top_loading.get() { "封禁中..." } else { "一键封禁 TOP 5 攻击源" }}
                 </button>
             </div>
 
@@ -300,7 +368,7 @@ pub fn Dashboard() -> impl IntoView {
                             }.into_view();
                         }
                         // 按封禁时间降序，取最近 8 条
-                        bans.sort_by(|a, b| b.banned_at.cmp(&a.banned_at));
+                        bans.sort_by_key(|b| std::cmp::Reverse(b.banned_at));
                         bans.truncate(8);
                         bans.into_iter().map(|ban| {
                             let ip = ban.ip.clone();
@@ -414,6 +482,15 @@ pub fn Dashboard() -> impl IntoView {
                     <div class="chart-body" style="height:180px">
                         {move || {
                             let (labels, data) = protocol_radar();
+                            let total: u64 = data.iter().sum();
+                            if total == 0 {
+                                return view! {
+                                    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:12px">
+                                        <span style="font-size:24px;opacity:0.3;margin-bottom:8px">"📡"</span>
+                                        <span>"暂无流量数据"</span>
+                                    </div>
+                                }.into_view();
+                            }
                             view! {
                                 <RadarChart
                                     labels=Signal::derive(move || labels.clone())
@@ -432,10 +509,10 @@ pub fn Dashboard() -> impl IntoView {
                     <div class="chart-body" style="height:180px">
                         <LineChart
                             labels=Signal::derive(move || {
-                                stats_signal.get().unwrap_or_else(|| stats_default()).ban_trend.labels
+                                stats_signal.get().unwrap_or_else(&stats_default).ban_trend.labels
                             })
                             data=Signal::derive(move || {
-                                stats_signal.get().unwrap_or_else(|| stats_default()).ban_trend.values
+                                stats_signal.get().unwrap_or_else(&stats_default).ban_trend.values
                             })
                             color="var(--color-red)"
                             height=180
@@ -490,23 +567,23 @@ pub fn Dashboard() -> impl IntoView {
             // 底部内核统计
             <div class="kernel-stats-bar">
                 <KernelStat label="丢包" value=move || {
-                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.get().unwrap_or_else(&stats_default);
                     types::format_number(s.packets_dropped, true)
                 }/>
                 <KernelStat label="通过" value=move || {
-                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.get().unwrap_or_else(&stats_default);
                     types::format_number(s.packets_accepted, true)
                 }/>
                 <KernelStat label="封禁表" value=move || {
-                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.get().unwrap_or_else(&stats_default);
                     types::format_number(s.current_bans, false)
                 }/>
                 <KernelStat label="白名单" value=move || {
-                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.get().unwrap_or_else(&stats_default);
                     types::format_number(s.whitelist_count, false)
                 }/>
                 <KernelStat label="运行时间" value=move || {
-                    let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                    let s = stats_signal.get().unwrap_or_else(&stats_default);
                     types::format_uptime(s.uptime_seconds)
                 }/>
             </div>
@@ -552,8 +629,8 @@ fn HeatmapChart(data: api::HourlyHeatmap) -> impl IntoView {
     let svg_w = label_w + 24.0 * (cell_w + gap);
     let svg_h = top_pad + 3.0 * (cell_h + gap) + bottom_pad;
 
-    let row_labels = vec!["封禁", "失败", "DDoS"];
-    let row_colors = vec!["#ef4444", "#f59e0b", "#8b5cf6"];
+    let row_labels = ["封禁", "失败", "DDoS"];
+    let row_colors = ["#ef4444", "#f59e0b", "#8b5cf6"];
 
     // 计算每行最大值用于归一化
     let max_bans = data.hours.iter().map(|b| b.bans).max().unwrap_or(1).max(1);
@@ -571,7 +648,7 @@ fn HeatmapChart(data: api::HourlyHeatmap) -> impl IntoView {
         .max()
         .unwrap_or(1)
         .max(1);
-    let row_maxes = vec![max_bans, max_failed, max_ddos];
+    let row_maxes = [max_bans, max_failed, max_ddos];
 
     let row_values: Vec<Vec<u64>> = vec![
         data.hours.iter().map(|b| b.bans).collect(),

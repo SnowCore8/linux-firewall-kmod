@@ -1,16 +1,53 @@
 //! 封禁管理 — 封禁原因分布 + 封禁趋势 + 表格 + 搜索 + 手动封禁 + 封禁详情
 
 use leptos::*;
+use wasm_bindgen::JsCast;
 
 use crate::api::{self, BanDetailResponse, BanEffectivenessResponse, BanResponse, StatsResponse};
 use crate::charts::{LineChart, PieChart};
-use crate::format::{format_datetime, format_duration};
+use crate::components::toast::ToastState;
+use crate::format::{copy_to_clipboard, format_datetime, format_duration};
 use crate::sse::SseState;
 use crate::validation;
+
+/// 搜索关键词高亮 — 将匹配文本包裹在 <mark> 标签中
+fn highlight_text(text: &str, keyword: &str) -> impl IntoView {
+    if keyword.is_empty() {
+        return view! { <span>{text.to_string()}</span> }.into_view();
+    }
+    let lower_text = text.to_lowercase();
+    let lower_kw = keyword.to_lowercase();
+    let mut result: Vec<View> = Vec::new();
+    let mut last = 0usize;
+    for (start, _) in lower_text.match_indices(&lower_kw) {
+        if start > last {
+            result.push(view! { <span>{text[last..start].to_string()}</span> }.into_view());
+        }
+        let matched = text[start..start + lower_kw.len()].to_string();
+        result.push(
+            view! {
+                <mark style="background:var(--color-yellow,#eab308);color:#000;padding:0 1px;border-radius:2px;font-style:normal">
+                    {matched}
+                </mark>
+            }
+            .into_view(),
+        );
+        last = start + lower_kw.len();
+    }
+    if last < text.len() {
+        result.push(view! { <span>{text[last..].to_string()}</span> }.into_view());
+    }
+    if result.is_empty() {
+        view! { <span>{text.to_string()}</span> }.into_view()
+    } else {
+        view! { <span>{result}</span> }.into_view()
+    }
+}
 
 #[component]
 pub fn Bans() -> impl IntoView {
     let sse = use_context::<SseState>().expect("SseState not found");
+    let toast_state = use_context::<ToastState>().expect("ToastState not found");
     let bans_signal = sse.bans;
     let stats_signal = sse.stats;
 
@@ -19,20 +56,74 @@ pub fn Bans() -> impl IntoView {
     let sort_by = create_rw_signal("banned_at_desc".to_string());
     let search = create_rw_signal(String::new());
 
+    // 批量选择状态
+    let selected_ips = create_rw_signal(std::collections::HashSet::new());
+    let batch_loading = create_rw_signal(false);
+    let last_clicked_ip = create_rw_signal(None::<String>);
+
+    // 实时倒计时 tick（每秒递增，驱动剩余时间刷新）
+    let countdown_tick = create_rw_signal(0_u64);
+    set_interval(
+        move || countdown_tick.update(|t| *t = t.wrapping_add(1)),
+        std::time::Duration::from_secs(1),
+    );
+
     // 封禁详情模态框状态
     let detail_ip = create_rw_signal(None::<String>);
     let detail_data = create_rw_signal(None::<BanDetailResponse>);
     let detail_loading = create_rw_signal(false);
+
+    // ESC 键关闭模态框 / 清除搜索，`/` 键聚焦搜索框
+    let search_ref = create_node_ref::<html::Input>();
+    if let Some(window) = web_sys::window() {
+        let search_for_focus = search_ref;
+        let search_for_clear = search;
+        let handler =
+            wasm_bindgen::closure::Closure::wrap(Box::new(move |e: web_sys::KeyboardEvent| {
+                // 如果焦点在输入框内，不拦截 `/`
+                let tag = web_sys::window()
+                    .and_then(|w| w.document())
+                    .and_then(|d| d.active_element())
+                    .map(|el| el.tag_name().to_lowercase())
+                    .unwrap_or_default();
+                let is_input_focused = tag == "input" || tag == "textarea" || tag == "select";
+
+                if e.key() == "Escape" {
+                    // 先关闭模态框
+                    detail_ip.set(None);
+                    detail_data.set(None);
+                    // 如果搜索框有内容，清除搜索
+                    if !search_for_clear.get().is_empty() {
+                        search_for_clear.set(String::new());
+                        // 清除输入框焦点
+                        if let Some(input) = search_for_focus.get() {
+                            input.blur().ok();
+                        }
+                        e.prevent_default();
+                    }
+                } else if e.key() == "/" && !is_input_focused {
+                    e.prevent_default();
+                    if let Some(input) = search_for_focus.get() {
+                        input.focus().ok();
+                        input.select();
+                    }
+                }
+            }) as Box<dyn FnMut(_)>);
+        let _ =
+            window.add_event_listener_with_callback("keydown", handler.as_ref().unchecked_ref());
+        handler.forget();
+    }
 
     // 打开详情模态框
     let show_detail = move |ip: String| {
         detail_ip.set(Some(ip.clone()));
         detail_loading.set(true);
         detail_data.set(None);
+        let toast = toast_state;
         spawn_local(async move {
             match api::get_ban_detail(&ip).await {
                 Ok(detail) => detail_data.set(Some(detail)),
-                Err(_) => {}
+                Err(e) => toast.error(format!("加载详情失败：{e}")),
             }
             detail_loading.set(false);
         });
@@ -44,10 +135,11 @@ pub fn Bans() -> impl IntoView {
         detail_data.set(None);
     };
 
-    // 搜索变化时重置到第 1 页
+    // 搜索变化时重置到第 1 页 + 清空选择
     create_effect(move |_| {
         let _ = search.get();
         page.set(1);
+        selected_ips.set(std::collections::HashSet::new());
     });
 
     // 过滤 + 排序 + 分页（纯客户端，实时跟随 SSE）
@@ -59,24 +151,21 @@ pub fn Bans() -> impl IntoView {
 
         // 过滤
         if !kw.is_empty() {
-            bans = bans
-                .into_iter()
-                .filter(|b| {
-                    b.ip.to_lowercase().contains(&kw)
-                        || b.jail.to_lowercase().contains(&kw)
-                        || b.reason.to_lowercase().contains(&kw)
-                })
-                .collect();
+            bans.retain(|b| {
+                b.ip.to_lowercase().contains(&kw)
+                    || b.jail.to_lowercase().contains(&kw)
+                    || b.reason.to_lowercase().contains(&kw)
+            });
         }
 
         // 排序
         match sort_key.as_str() {
             "ip_asc" => bans.sort_by(|a, b| a.ip.cmp(&b.ip)),
             "ip_desc" => bans.sort_by(|a, b| b.ip.cmp(&a.ip)),
-            "banned_at_asc" => bans.sort_by(|a, b| a.banned_at.cmp(&b.banned_at)),
-            "remaining_asc" => bans.sort_by(|a, b| a.remaining_seconds.cmp(&b.remaining_seconds)),
-            "remaining_desc" => bans.sort_by(|a, b| b.remaining_seconds.cmp(&a.remaining_seconds)),
-            _ => bans.sort_by(|a, b| b.banned_at.cmp(&a.banned_at)),
+            "banned_at_asc" => bans.sort_by_key(|a| a.banned_at),
+            "remaining_asc" => bans.sort_by_key(|a| a.remaining_seconds),
+            "remaining_desc" => bans.sort_by_key(|b| std::cmp::Reverse(b.remaining_seconds)),
+            _ => bans.sort_by_key(|b| std::cmp::Reverse(b.banned_at)),
         }
 
         // 分页
@@ -133,6 +222,8 @@ pub fn Bans() -> impl IntoView {
                 Ok(_) => {
                     ban_ip.set(String::new());
                     ban_duration.set(String::new());
+                    let t = toast_state;
+                    t.success(format!("已封禁 {ip}"));
                 }
                 Err(e) => ban_error.set(e),
             }
@@ -148,11 +239,108 @@ pub fn Bans() -> impl IntoView {
         {
             return;
         }
+        let toast = toast_state;
         spawn_local(async move {
             if let Err(e) = api::delete_ban(&ip).await {
-                let _ = web_sys::window()
-                    .and_then(|w| w.alert_with_message(&format!("解封失败：{e}")).ok());
+                toast.error(format!("解封失败：{e}"));
             }
+        });
+    };
+
+    // 批量选择操作（支持 Shift+点击 范围选择）
+    let toggle_select = move |ip: String, shift: bool| {
+        if shift {
+            // Shift+点击：选中从 last_clicked 到当前 ip 之间的所有行
+            let page_ips: Vec<String> = filtered_bans().iter().map(|b| b.ip.clone()).collect();
+            let last = last_clicked_ip.get();
+            selected_ips.update(|set| {
+                if let Some(last_ip) = &last {
+                    let last_idx = page_ips.iter().position(|x| x == last_ip);
+                    let cur_idx = page_ips.iter().position(|x| x == &ip);
+                    if let (Some(li), Some(ci)) = (last_idx, cur_idx) {
+                        let (start, end) = if li < ci { (li, ci) } else { (ci, li) };
+                        for ip in &page_ips[start..=end] {
+                            set.insert(ip.clone());
+                        }
+                        return;
+                    }
+                }
+                // 无 last_clicked 或找不到索引，退化为普通切换
+                if set.contains(&ip) {
+                    set.remove(&ip);
+                } else {
+                    set.insert(ip.clone());
+                }
+            });
+        } else {
+            selected_ips.update(|set| {
+                if set.contains(&ip) {
+                    set.remove(&ip);
+                } else {
+                    set.insert(ip.clone());
+                }
+            });
+        }
+        last_clicked_ip.set(Some(ip));
+    };
+
+    let toggle_select_all_page = move |_| {
+        let current_page_ips: Vec<String> = filtered_bans().iter().map(|b| b.ip.clone()).collect();
+        selected_ips.update(|set| {
+            let all_selected = current_page_ips.iter().all(|ip| set.contains(ip));
+            if all_selected {
+                for ip in &current_page_ips {
+                    set.remove(ip);
+                }
+            } else {
+                for ip in current_page_ips {
+                    set.insert(ip);
+                }
+            }
+        });
+    };
+
+    let is_all_page_selected = move || {
+        let page_ips = filtered_bans();
+        !page_ips.is_empty() && page_ips.iter().all(|b| selected_ips.get().contains(&b.ip))
+    };
+
+    let selected_count = move || -> usize { selected_ips.get().len() };
+
+    let clear_selection = move |_| {
+        selected_ips.set(std::collections::HashSet::new());
+    };
+
+    let do_batch_unban = move |_| {
+        let ips: Vec<String> = selected_ips.get().into_iter().collect();
+        if ips.is_empty() {
+            return;
+        }
+        let window = web_sys::window().expect("window not available");
+        if !window
+            .confirm_with_message(&format!("确定要批量解封 {} 个 IP 吗?", ips.len()))
+            .unwrap_or(false)
+        {
+            return;
+        }
+        batch_loading.set(true);
+        let toast = toast_state;
+        spawn_local(async move {
+            let mut succeeded = 0u32;
+            let mut failed = 0u32;
+            for ip in &ips {
+                match api::delete_ban(ip).await {
+                    Ok(_) => succeeded += 1,
+                    Err(_) => failed += 1,
+                }
+            }
+            if failed == 0 {
+                toast.success(format!("已批量解封 {} 个 IP", succeeded));
+            } else {
+                toast.error(format!("批量解封完成：成功 {}，失败 {}", succeeded, failed));
+            }
+            batch_loading.set(false);
+            selected_ips.set(std::collections::HashSet::new());
         });
     };
 
@@ -234,7 +422,7 @@ pub fn Bans() -> impl IntoView {
                     <div class="chart-body" style="height:180px">
                         <PieChart
                             labels=Signal::derive(move || {
-                                let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                                let s = stats_signal.get().unwrap_or_else(&stats_default);
                                 let mut pairs: Vec<_> = s.failure_reasons.labels.into_iter()
                                     .zip(s.failure_reasons.values.into_iter())
                                     .collect();
@@ -242,7 +430,7 @@ pub fn Bans() -> impl IntoView {
                                 pairs.into_iter().map(|(l, _)| l).collect()
                             })
                             data=Signal::derive(move || {
-                                let s = stats_signal.get().unwrap_or_else(|| stats_default());
+                                let s = stats_signal.get().unwrap_or_else(&stats_default);
                                 let mut pairs: Vec<_> = s.failure_reasons.labels.into_iter()
                                     .zip(s.failure_reasons.values.into_iter())
                                     .collect();
@@ -257,8 +445,8 @@ pub fn Bans() -> impl IntoView {
                     <div class="chart-header"><h3>"封禁趋势 (24h)"</h3></div>
                     <div class="chart-body" style="height:180px">
                         <LineChart
-                            labels=Signal::derive(move || stats_signal.get().unwrap_or_else(|| stats_default()).ban_trend.labels)
-                            data=Signal::derive(move || stats_signal.get().unwrap_or_else(|| stats_default()).ban_trend.values)
+                            labels=Signal::derive(move || stats_signal.get().unwrap_or_else(&stats_default).ban_trend.labels)
+                            data=Signal::derive(move || stats_signal.get().unwrap_or_else(&stats_default).ban_trend.values)
                             color="var(--color-red)"
                             height=180
                         />
@@ -284,12 +472,34 @@ pub fn Bans() -> impl IntoView {
                         <option value="remaining_asc">"剩余时间 ↑"</option>
                         <option value="remaining_desc">"剩余时间 ↓"</option>
                     </select>
-                    <input class="input" placeholder="搜索 IP / Jail / 原因..."
-                        style="width:220px"
-                        prop:value=move || search.get()
-                        on:input=move |e| search.set(event_target_value(&e))/>
+                    <div style="position:relative">
+                        <input class="input mono" placeholder="搜索 IP / Jail / 原因..."
+                            node_ref=search_ref
+                            style="width:260px;padding-right:28px"
+                            prop:value=move || search.get()
+                            on:input=move |e| search.set(event_target_value(&e))/>
+                        <span style="position:absolute;right:8px;top:50%;transform:translateY(-50%);font-size:10px;color:var(--text-muted);background:var(--bg-tertiary);padding:2px 6px;border-radius:3px;border:1px solid var(--border-color);font-family:monospace;pointer-events:none;opacity:0.6">"/"</span>
+                    </div>
                 </div>
             </div>
+
+            // 批量操作栏（选中时显示）
+            <Show when=move || !selected_ips.get().is_empty()>
+                <div class="card" style="padding:10px 14px;display:flex;align-items:center;gap:12px;background:var(--bg-tertiary);border:1px solid var(--accent-primary);animation:slide-down 0.2s ease-out">
+                    <span style="font-size:13px;font-weight:600;color:var(--accent-primary)">
+                        {move || format!("已选择 {} 项", selected_count())}
+                    </span>
+                    <button class="btn btn-sm btn-danger" on:click=do_batch_unban
+                        disabled=move || batch_loading.get()
+                        style="font-size:12px">
+                        {move || if batch_loading.get() { "解封中..." } else { "批量解封" }}
+                    </button>
+                    <button class="btn btn-sm" on:click=clear_selection
+                        style="font-size:12px;border-color:var(--border-strong)">
+                        "取消选择"
+                    </button>
+                </div>
+            </Show>
 
             <div class="card" style="padding:14px">
                 <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;max-width:600px">
@@ -314,18 +524,57 @@ pub fn Bans() -> impl IntoView {
                 </div>
             </div>
 
+            // 空态展示
+            <Show when=move || {
+                let bans = bans_signal.get().unwrap_or_default();
+                bans.is_empty() && search.get().is_empty()
+            }>
+                <div class="card" style="padding:48px 24px;text-align:center">
+                    <div style="font-size:48px;margin-bottom:16px;opacity:0.3">"🛡️"</div>
+                    <h3 style="color:var(--text-secondary);font-weight:600;margin-bottom:8px">"当前无活跃封禁"</h3>
+                    <p style="color:var(--text-muted);font-size:13px;max-width:360px;margin:0 auto">
+                        "系统正在持续监控日志和流量。当检测到异常行为时，封禁记录将在此显示。"
+                    </p>
+                </div>
+            </Show>
+
+            <Show when=move || {
+                let bans = bans_signal.get().unwrap_or_default();
+                !bans.is_empty() || !search.get().is_empty()
+            }>
+            // 搜索结果空态
+            <Show when=move || {
+                let total = bans_signal.get().map(|b| b.len()).unwrap_or(0);
+                let filtered = filtered_bans();
+                total > 0 && filtered.is_empty() && !search.get().is_empty()
+            }>
+                <div class="card" style="padding:32px 16px;text-align:center">
+                    <div style="font-size:32px;margin-bottom:8px;opacity:0.3">"🔍"</div>
+                    <p style="color:var(--text-muted);font-size:13px">
+                        {move || format!("未找到匹配 \"{}\" 的封禁记录", search.get())}
+                    </p>
+                </div>
+            </Show>
+            <Show when=move || !filtered_bans().is_empty()>
             <div class="card">
                 <div class="table-container">
                     <table>
                         <thead>
                             <tr>
-                                <th style="width:16%">"IP 地址"</th>
+                                <th style="width:32px">
+                                    <input type="checkbox"
+                                        checked=is_all_page_selected
+                                        on:change=toggle_select_all_page
+                                        style="width:15px;height:15px;accent-color:var(--accent-primary);cursor:pointer"
+                                        title="选择当前页全部"/>
+                                </th>
+                                <th style="width:15%">"IP 地址"</th>
                                 <th style="width:10%">"Jail"</th>
-                                <th style="width:16%">"原因"</th>
-                                <th style="width:6%">"次数"</th>
-                                <th style="width:12%">"封禁时间"</th>
-                                <th style="width:12%">"剩余时间"</th>
-                                <th style="width:18%">"操作"</th>
+                                <th style="width:14%">"原因"</th>
+                                <th style="width:5%">"次数"</th>
+                                <th style="width:11%">"封禁时间"</th>
+                                <th style="width:11%">"剩余时间"</th>
+                                <th style="width:16%">"操作"</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -335,30 +584,33 @@ pub fn Bans() -> impl IntoView {
                                     let jail = ban.jail.clone();
                                     let ip2 = ip.clone();
                                     let ip3 = ip.clone();
+                                    let ip4 = ip.clone();
+                                    let ip5 = ip.clone();
+                                    let ip6 = ip.clone();
                                     let ban_count = ban.ban_count;
                                     let is_permanent = ban.is_permanent;
-                                    // 从 signal 读取最新 remaining_seconds，SSE 推送时自动刷新
-                                    let remaining_seconds = Signal::derive(move || {
-                                        bans_signal
-                                            .get()
-                                            .unwrap_or_default()
-                                            .into_iter()
-                                            .find(|b| b.ip == ip && b.jail == jail)
-                                            .map(|b| b.remaining_seconds)
-                                            .unwrap_or(0)
-                                    });
+                                    let banned_at_ts = ban.banned_at;
+                                    // 实时倒计时：依赖 countdown_tick 每秒重新计算
                                     let remaining_display = move || {
                                         if is_permanent {
                                             return "永久".to_string();
                                         }
-                                        let r = remaining_seconds.get();
-                                        if r == -1 {
-                                            "永久".to_string()
-                                        } else if r <= 0 {
-                                            "0s".to_string()
-                                        } else {
-                                            format_duration(r)
+                                        // 触发响应式依赖——每秒刷新
+                                        let _ = countdown_tick.get();
+                                        // 从 SSE 数据推算到期时间戳
+                                        let bans = bans_signal.get().unwrap_or_default();
+                                        let remaining_at_push = bans
+                                            .iter()
+                                            .find(|b| b.ip == ip && b.jail == jail)
+                                            .map(|b| b.remaining_seconds)
+                                            .unwrap_or(0);
+                                        if remaining_at_push <= 0 {
+                                            return if remaining_at_push == -1 { "永久".to_string() } else { "已到期".to_string() };
                                         }
+                                        let expires_at = banned_at_ts + remaining_at_push;
+                                        let now = js_sys::Date::now() as i64 / 1000;
+                                        let remaining = (expires_at - now).max(0);
+                                        format_duration(remaining)
                                     };
                                     // 复发次数颜色：1=正常, 2=橙色, 3+=红色
                                     let count_color = if ban_count >= 3 { "var(--color-red)" }
@@ -370,13 +622,40 @@ pub fn Bans() -> impl IntoView {
                                         else if ban_count >= 2 { "var(--color-yellow, #eab308)" }
                                         else { "transparent" };
                                     view! {
-                                        <tr>
+                                        <tr style=move || if selected_ips.get().contains(&ip4) { "background:color-mix(in srgb, var(--accent-primary) 8%, transparent)".to_string() } else { String::new() }>
+                                            <td style="width:32px;text-align:center">
+                                                <input type="checkbox"
+                                                    checked=move || selected_ips.get().contains(&ip5)
+                                                    on:click=move |e| {
+                                                        let shift = e.shift_key();
+                                                        toggle_select(ip6.clone(), shift);
+                                                    }
+                                                    style="width:15px;height:15px;accent-color:var(--accent-primary);cursor:pointer"/>
+                                            </td>
                                             <td class="mono" style="font-weight:600;color:var(--text-primary)">
                                                 <span style=move || format!("display:inline-block;width:8px;height:8px;border-radius:50%;background:{};margin-right:6px;vertical-align:middle", threat_dot)></span>
-                                                {&ban.ip}
+                                                <span style="cursor:pointer;border-bottom:1px dashed transparent;transition:border-color 0.15s"
+                                                    title="点击复制 IP"
+                                                    on:click={
+                                                        let ip_copy = ban.ip.clone();
+                                                        let toast = toast_state;
+                                                        move |_| {
+                                                            copy_to_clipboard(&ip_copy);
+                                                            toast.success(format!("已复制 {ip_copy}"));
+                                                        }
+                                                    }>
+                                                    {move || highlight_text(&ban.ip, &search.get())}
+                                                </span>
                                             </td>
-                                            <td><span class="badge badge-info">{&ban.jail}</span></td>
-                                            <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{&ban.reason}</td>
+                                            <td>{move || {
+                                                let kw = search.get();
+                                                if kw.is_empty() {
+                                                    view! { <span class="badge badge-info">{&ban.jail}</span> }.into_view()
+                                                } else {
+                                                    view! { <span class="badge badge-info">{highlight_text(&ban.jail, &kw)}</span> }.into_view()
+                                                }
+                                            }}</td>
+                                            <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{move || highlight_text(&ban.reason, &search.get())}</td>
                                             <td class="mono" style=move || format!("font-weight:700;color:{}", count_color)>
                                                 {move || format!("×{}", ban_count)}
                                             </td>
@@ -406,26 +685,76 @@ pub fn Bans() -> impl IntoView {
                 <Suspense fallback=|| view! { <div style="padding:20px;text-align:center;color:var(--text-muted)">"加载中..."</div> }>
                     {move || {
                         let tp = total_pages();
-                        if tp > 1 {
-                            view! {
-                                <div class="pagination">
-                                    <button class="btn btn-sm" disabled=move || page.get() <= 1
-                                        on:click=move |_| page.update(|p| *p = (*p).saturating_sub(1))>
-                                        "上一页"
+                        let current = page.get();
+                        let total_items = filtered_bans().len();
+                        let start_item = if total_items > 0 { (current - 1) * PAGE_SIZE + 1 } else { 0 };
+                        let end_item = ((current - 1) * PAGE_SIZE + total_items as u32).min(total_items as u32);
+                        if tp <= 1 && total_items <= PAGE_SIZE as usize {
+                            // 只有一页且不超过一页大小，不显示分页，但仍显示计数
+                            return view! {
+                                <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;font-size:12px;color:var(--text-muted)">
+                                    <span>{format!("共 {} 条记录", total_items)}</span>
+                                </div>
+                            }.into_view();
+                        }
+                        // 生成页码按钮窗口（最多显示 7 个）
+                        let page_window: Vec<u32> = if tp <= 7 {
+                            (1..=tp).collect()
+                        } else {
+                            let start = if current <= 4 { 1 } else { (current - 3).min(tp - 6) };
+                            let end = start + 6;
+                            (start..=end.min(tp)).collect()
+                        };
+                        view! {
+                            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;flex-wrap:wrap;gap:8px">
+                                <span style="font-size:12px;color:var(--text-muted)">
+                                    {format!("显示 {}-{} / 共 {} 条", start_item, end_item, total_items)}
+                                </span>
+                                <div style="display:flex;gap:4px;align-items:center">
+                                    <button class="btn btn-sm" style="padding:3px 8px;font-size:11px"
+                                        disabled=move || page.get() <= 1
+                                        on:click=move |_| page.set(1)>
+                                        "«"
                                     </button>
-                                    <span class="page-info">{move || format!("{} / {}", page.get(), total_pages())}</span>
-                                    <button class="btn btn-sm" disabled=move || page.get() >= total_pages()
+                                    <button class="btn btn-sm" style="padding:3px 8px;font-size:11px"
+                                        disabled=move || page.get() <= 1
+                                        on:click=move |_| page.update(|p| *p = (*p).saturating_sub(1))>
+                                        "‹"
+                                    </button>
+                                    {page_window.into_iter().map(|p| {
+                                        let is_current = p == current;
+                                        view! {
+                                            <button class="btn btn-sm"
+                                                style=move || {
+                                                    if is_current {
+                                                        "padding:3px 8px;font-size:11px;background:var(--accent-primary);color:#fff;border-color:var(--accent-primary);font-weight:700"
+                                                    } else {
+                                                        "padding:3px 8px;font-size:11px"
+                                                    }
+                                                }
+                                                on:click=move |_| page.set(p)>
+                                                {p}
+                                            </button>
+                                        }
+                                    }).collect_view()}
+                                    <button class="btn btn-sm" style="padding:3px 8px;font-size:11px"
+                                        disabled=move || page.get() >= tp
                                         on:click=move |_| page.update(|p| *p += 1)>
-                                        "下一页"
+                                        "›"
+                                    </button>
+                                    <button class="btn btn-sm" style="padding:3px 8px;font-size:11px"
+                                        disabled=move || page.get() >= tp
+                                        on:click=move |_| page.set(tp)>
+                                        "»"
                                     </button>
                                 </div>
-                            }.into_view()
-                        } else {
-                            view! { <div/> }.into_view()
-                        }
+                            </div>
+                        }.into_view()
                     }}
                 </Suspense>
             </div>
+            </Show>
+            </Show>
 
             // 封禁效果分析面板
             <Suspense fallback=|| view! { <div style="padding:12px;text-align:center;color:var(--text-muted)">"加载封禁效果分析..."</div> }>
@@ -844,10 +1173,11 @@ pub fn Bans() -> impl IntoView {
             // 封禁详情模态框
             <Show when=move || detail_ip.get().is_some()>
                 <div class="modal-overlay" on:click=close_detail>
-                    <div class="modal ban-detail-modal" on:click=move |e| e.stop_propagation()>
+                    <div class="modal ban-detail-modal" role="dialog" aria-modal="true" aria-label="封禁详情"
+                        on:click=move |e| e.stop_propagation()>
                         <div class="modal-header">
                             <h3>"封禁详情"</h3>
-                            <button class="btn btn-icon" on:click=close_detail>"✕"</button>
+                            <button class="btn btn-icon" on:click=close_detail aria-label="关闭">"✕"</button>
                         </div>
                         <Show
                             when=move || !detail_loading.get()
