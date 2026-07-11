@@ -430,19 +430,16 @@ bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip);
 bool check_protocol_violation(struct firewall_info *fw, u8 af, const void *ip, u8 protocol);
 const char *check_tcp_flood_violation(struct firewall_info *fw, u8 af,
                                       const void *ip, u8 tcp_flags);
-void cleanup_rate_entries(struct firewall_info *fw);
 void clear_all_rate_entries(struct firewall_info *fw);
 void free_rate_entry_rcu(struct rcu_head *head);
 void update_global_baseline(struct firewall_info *fw, u64 total_pps, u64 total_bps);
 
 /* UDP 端口分布统计 */
 void record_udp_port(struct firewall_info *fw, u16 dst_port, u32 packet_len);
-void cleanup_udp_port_entries(struct firewall_info *fw);
 void free_udp_port_entry_rcu(struct rcu_head *head);
 
 /* ICMP 类型分布统计 */
 void record_icmp_type(struct firewall_info *fw, u8 type, u8 code, u32 packet_len);
-void cleanup_icmp_type_entries(struct firewall_info *fw);
 void free_icmp_type_entry_rcu(struct rcu_head *head);
 
 /* netdev.c */

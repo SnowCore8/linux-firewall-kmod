@@ -25,9 +25,6 @@
 #include <linux/jiffies.h>
 #include <linux/slab.h>
 
-/* 速率条目过期时间（秒）- 超过此时间未活动的条目将被清理 */
-#define RATE_ENTRY_EXPIRE_SECONDS 10
-
 /**
  * free_rate_entry_rcu - RCU 回调函数，释放速率条目
  * @head: RCU 头
@@ -641,66 +638,6 @@ void update_global_baseline(struct firewall_info *fw, u64 total_pps, u64 total_b
 }
 
 /**
- * cleanup_rate_entries - 清理过期的速率条目
- * @fw: 防火墙信息
- *
- * 定期调用（由 cleanup_timer 触发），清理超过 RATE_ENTRY_EXPIRE_SECONDS
- * 未活动的条目，避免内存泄漏
- *
- * 实现：遍历所有桶，删除过期条目
- */
-void cleanup_rate_entries(struct firewall_info *fw) {
-  struct ip_rate_entry *entry;
-  struct hlist_node *tmp;
-  unsigned long now = jiffies;
-  unsigned long expire_time = msecs_to_jiffies(RATE_ENTRY_EXPIRE_SECONDS * 1000);
-  int i;
-  int cleaned = 0;
-
-  if (!fw) {
-    return;
-  }
-
-  /* 清理 IPv4 表 */
-  for (i = 0; i < (1 << RATE_HASH_BITS); i++) {
-    spinlock_t *lock = &fw->rate_locks_ipv4[i];
-    struct hlist_head *head = &fw->rate_table_ipv4[i];
-
-    spin_lock_bh(lock);
-    hlist_for_each_entry_safe(entry, tmp, head, hash) {
-      if (time_after(now, READ_ONCE(entry->last_activity) + expire_time)) {
-        hlist_del_rcu(&entry->hash);
-        call_rcu(&entry->rcu_head, free_rate_entry_rcu);
-        atomic_dec(&fw->rate_count);
-        cleaned++;
-      }
-    }
-    spin_unlock_bh(lock);
-  }
-
-  /* 清理 IPv6 表 */
-  for (i = 0; i < (1 << RATE_HASH_BITS); i++) {
-    spinlock_t *lock = &fw->rate_locks_ipv6[i];
-    struct hlist_head *head = &fw->rate_table_ipv6[i];
-
-    spin_lock_bh(lock);
-    hlist_for_each_entry_safe(entry, tmp, head, hash) {
-      if (time_after(now, READ_ONCE(entry->last_activity) + expire_time)) {
-        hlist_del_rcu(&entry->hash);
-        call_rcu(&entry->rcu_head, free_rate_entry_rcu);
-        atomic_dec(&fw->rate_count);
-        cleaned++;
-      }
-    }
-    spin_unlock_bh(lock);
-  }
-
-  if (cleaned > 0) {
-    pr_debug("firewall: cleaned up %d rate entries\n", cleaned);
-  }
-}
-
-/**
  * clear_all_rate_entries - 清除所有速率统计条目
  * @fw: 防火墙信息结构
  *
@@ -754,9 +691,6 @@ void clear_all_rate_entries(struct firewall_info *fw) {
 /* ============================================================================
  * UDP 端口分布统计
  * ========================================================================= */
-
-/* UDP 端口条目过期时间（秒）- 超过此时间未活动的条目将被清理 */
-#define UDP_PORT_ENTRY_EXPIRE_SECONDS 300 /* 5 分钟 */
 
 /**
  * free_udp_port_entry_rcu - RCU 回调函数，释放 UDP 端口条目
@@ -843,43 +777,6 @@ void record_udp_port(struct firewall_info *fw, u16 dst_port, u32 packet_len) {
 }
 
 /**
- * cleanup_udp_port_entries - 清理过期的 UDP 端口条目
- * @fw: 防火墙信息
- *
- * 清理超过 UDP_PORT_ENTRY_EXPIRE_SECONDS 未活动的条目
- * 由定时器或 procfs 读取时调用
- */
-void cleanup_udp_port_entries(struct firewall_info *fw) {
-  int i;
-  unsigned long expire_time = jiffies - (UDP_PORT_ENTRY_EXPIRE_SECONDS * HZ);
-  struct udp_port_entry *entry;
-  struct hlist_node *tmp;
-  int cleared = 0;
-
-  if (unlikely(!fw))
-    return;
-
-  for (i = 0; i < UDP_PORT_HASH_SIZE; i++) {
-    struct hlist_head *head = &fw->udp_port_table[i];
-
-    spin_lock_bh(&fw->udp_port_lock);
-    hlist_for_each_entry_safe(entry, tmp, head, hash) {
-      if (time_after(expire_time, READ_ONCE(entry->last_seen))) {
-        hlist_del_rcu(&entry->hash);
-        call_rcu(&entry->rcu_head, free_udp_port_entry_rcu);
-        atomic_dec(&fw->udp_port_count);
-        cleared++;
-      }
-    }
-    spin_unlock_bh(&fw->udp_port_lock);
-  }
-
-  if (cleared > 0) {
-    pr_debug("firewall: cleaned %d expired UDP port entries\n", cleared);
-  }
-}
-
-/**
  * free_icmp_type_entry_rcu - RCU 回调释放 ICMP 类型条目
  * @head: RCU 头
  */
@@ -887,9 +784,6 @@ void free_icmp_type_entry_rcu(struct rcu_head *head) {
   struct icmp_type_entry *entry = container_of(head, struct icmp_type_entry, rcu_head);
   kfree(entry);
 }
-
-/* ICMP 类型条目过期时间（秒） */
-#define ICMP_TYPE_ENTRY_EXPIRE_SECONDS 300 /* 5 分钟 */
 
 /**
  * record_icmp_type - 记录 ICMP 类型/代码统计
@@ -968,40 +862,4 @@ void record_icmp_type(struct firewall_info *fw, u8 type, u8 code, u32 packet_len
   hlist_add_head_rcu(&new_entry->hash, head);
   atomic_inc(&fw->icmp_type_count);
   spin_unlock_bh(&fw->icmp_type_lock);
-}
-
-/**
- * cleanup_icmp_type_entries - 清理过期的 ICMP 类型条目
- * @fw: 防火墙信息
- *
- * 清理超过 ICMP_TYPE_ENTRY_EXPIRE_SECONDS 未活动的条目
- */
-void cleanup_icmp_type_entries(struct firewall_info *fw) {
-  int i;
-  unsigned long expire_time = jiffies - (ICMP_TYPE_ENTRY_EXPIRE_SECONDS * HZ);
-  struct icmp_type_entry *entry;
-  struct hlist_node *tmp;
-  int cleared = 0;
-
-  if (unlikely(!fw))
-    return;
-
-  for (i = 0; i < ICMP_TYPE_HASH_SIZE; i++) {
-    struct hlist_head *head = &fw->icmp_type_table[i];
-
-    spin_lock_bh(&fw->icmp_type_lock);
-    hlist_for_each_entry_safe(entry, tmp, head, hash) {
-      if (time_after(expire_time, READ_ONCE(entry->last_seen))) {
-        hlist_del_rcu(&entry->hash);
-        call_rcu(&entry->rcu_head, free_icmp_type_entry_rcu);
-        atomic_dec(&fw->icmp_type_count);
-        cleared++;
-      }
-    }
-    spin_unlock_bh(&fw->icmp_type_lock);
-  }
-
-  if (cleared > 0) {
-    pr_debug("firewall: cleaned %d expired ICMP type entries\n", cleared);
-  }
 }
