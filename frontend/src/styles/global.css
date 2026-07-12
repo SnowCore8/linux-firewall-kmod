@@ -2574,9 +2574,3 @@ tr:last-child td { border-bottom: none; }
 .cmd-item.selected {
   box-shadow: inset 2px 0 0 var(--accent-primary);
 }
-
-/* ── 骨架屏 shimmer 动画 ── */
-@keyframes shimmer {
-  0% { left: -100%; }
-  100% { left: 100%; }
-}
