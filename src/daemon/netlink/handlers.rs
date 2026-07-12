@@ -32,7 +32,7 @@ impl super::NetlinkContext {
         let reason = event.reason_str();
         let rate_pps = event.rate_pps();
 
-        crate::logger::info!(
+        crate::logger::debug!(
             crate::logger::get(),
             "收到 DDoS 事件";
             "ip" => &ip_str,
@@ -67,7 +67,7 @@ impl super::NetlinkContext {
         let reason_str = event.reason_str();
 
         if event.is_ban() {
-            crate::logger::info!(
+            crate::logger::debug!(
                 crate::logger::get(),
                 "收到封禁状态变更：封禁";
                 "ip" => &ip_str,
@@ -84,7 +84,7 @@ impl super::NetlinkContext {
             let daemon_initiated = cache.contains(&ip_str);
 
             if daemon_initiated {
-                crate::logger::info!(
+                crate::logger::debug!(
                     crate::logger::get(),
                     "BanStateChange: daemon 发起的封禁，跳过重复记录";
                     "ip" => &ip_str
@@ -149,7 +149,7 @@ impl super::NetlinkContext {
                 );
             }
         } else if event.is_unban() {
-            crate::logger::info!(
+            crate::logger::debug!(
                 crate::logger::get(),
                 "收到封禁状态变更：解封";
                 "ip" => &ip_str
@@ -198,7 +198,7 @@ impl super::NetlinkContext {
         }
 
         let (_resp, entries) = FwNlListBansResponse::from_bytes(hdr_data)?;
-        crate::logger::info!(
+        crate::logger::debug!(
             crate::logger::get(),
             "收到封禁列表响应";
             "count" => entries.len()
@@ -281,7 +281,7 @@ impl super::NetlinkContext {
         }
 
         let stats = FwNlStatsResponse::from_bytes(hdr_data)?;
-        crate::logger::info!(
+        crate::logger::debug!(
             crate::logger::get(),
             "收到统计数据响应";
             "current_bans" => stats.current_bans(),
@@ -312,7 +312,7 @@ impl super::NetlinkContext {
         }
 
         let (_resp, entries) = FwNlListWhitelistResponse::from_bytes(hdr_data)?;
-        crate::logger::info!(
+        crate::logger::debug!(
             crate::logger::get(),
             "收到白名单列表响应";
             "count" => entries.len()
@@ -474,7 +474,7 @@ impl super::NetlinkContext {
         };
 
         if event.is_add() {
-            crate::logger::info!(
+            crate::logger::debug!(
                 crate::logger::get(),
                 "收到白名单状态变更：添加";
                 "ip" => &ip_str,
@@ -500,7 +500,7 @@ impl super::NetlinkContext {
                 _ => {}
             }
         } else if event.is_remove() {
-            crate::logger::info!(
+            crate::logger::debug!(
                 crate::logger::get(),
                 "收到白名单状态变更：移除";
                 "ip" => &ip_str,
@@ -545,7 +545,7 @@ impl super::NetlinkContext {
         let flags = cfg.flags();
         if flags & config_flags::BAN_TIME != 0 {
             let new_ban_time = cfg.ban_time();
-            crate::logger::info!(
+            crate::logger::debug!(
                 crate::logger::get(),
                 "内核 ban_time 已通过 procfs 变更";
                 "new_ban_time" => new_ban_time

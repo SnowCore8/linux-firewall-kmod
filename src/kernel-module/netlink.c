@@ -1418,8 +1418,8 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
         reason_str[32] = '\0';
         if (reason_str[0] == '\0')
           strncpy(reason_str, "manual", sizeof(reason_str));
-        pr_info("netlink: ban IP %s for %u seconds, reason=%s\n", ip_str,
-                be32_to_cpu(cmd->duration_secs), reason_str);
+        pr_debug("netlink: ban IP %s for %u seconds, reason=%s\n", ip_str,
+                 be32_to_cpu(cmd->duration_secs), reason_str);
 
         /* 调用封禁函数 */
         {
@@ -1442,7 +1442,7 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       }
       cmd = (struct fw_nl_ban_cmd *)hdr;
       ip_to_str(cmd->af, cmd->addr, ip_str, sizeof(ip_str));
-      pr_info("netlink: unban IP %s\n", ip_str);
+      pr_debug("netlink: unban IP %s\n", ip_str);
 
       /* 调用解封函数 */
       {
@@ -1503,7 +1503,7 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       /* 使用 WRITE_ONCE 确保原子写入和内存可见性 */
       if (flags & FW_NL_CFG_BAN_TIME) {
         WRITE_ONCE(fw_info.ban_time, be32_to_cpu(cfg->ban_time));
-        pr_info("netlink: ban_time updated to %u seconds\n", READ_ONCE(fw_info.ban_time));
+        pr_debug("netlink: ban_time updated to %u seconds\n", READ_ONCE(fw_info.ban_time));
         updated++;
       }
 
@@ -1514,63 +1514,63 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
         WRITE_ONCE(fw_info.rate_window_jiffies, msecs_to_jiffies(new_window * 1000));
         /* 清除旧速率条目，确保所有条目使用新窗口 */
         clear_all_rate_entries(&fw_info);
-        pr_info("netlink: rate_window updated to %u seconds\n", new_window);
+        pr_debug("netlink: rate_window updated to %u seconds\n", new_window);
         updated++;
       }
 
       if (flags & FW_NL_CFG_MAX_PPS) {
         WRITE_ONCE(fw_info.max_packets_per_second, be64_to_cpu(cfg->max_packets_per_second));
-        pr_info("netlink: max_packets_per_second updated to %lu\n",
-                READ_ONCE(fw_info.max_packets_per_second));
+        pr_debug("netlink: max_packets_per_second updated to %lu\n",
+                 READ_ONCE(fw_info.max_packets_per_second));
         updated++;
       }
 
       if (flags & FW_NL_CFG_MAX_BPS) {
         WRITE_ONCE(fw_info.max_bytes_per_second, be64_to_cpu(cfg->max_bytes_per_second));
-        pr_info("netlink: max_bytes_per_second updated to %lu\n",
-                READ_ONCE(fw_info.max_bytes_per_second));
+        pr_debug("netlink: max_bytes_per_second updated to %lu\n",
+                 READ_ONCE(fw_info.max_bytes_per_second));
         updated++;
       }
 
       if (flags & FW_NL_CFG_MAX_SYN) {
         WRITE_ONCE(fw_info.max_syn_per_second, be64_to_cpu(cfg->max_syn_per_second));
-        pr_info("netlink: max_syn_per_second updated to %lu\n",
-                READ_ONCE(fw_info.max_syn_per_second));
+        pr_debug("netlink: max_syn_per_second updated to %lu\n",
+                 READ_ONCE(fw_info.max_syn_per_second));
         updated++;
       }
 
       if (flags & FW_NL_CFG_MAX_UDP) {
         WRITE_ONCE(fw_info.max_udp_per_second, be64_to_cpu(cfg->max_udp_per_second));
-        pr_info("netlink: max_udp_per_second updated to %lu\n",
-                READ_ONCE(fw_info.max_udp_per_second));
+        pr_debug("netlink: max_udp_per_second updated to %lu\n",
+                 READ_ONCE(fw_info.max_udp_per_second));
         updated++;
       }
 
       if (flags & FW_NL_CFG_MAX_ICMP) {
         WRITE_ONCE(fw_info.max_icmp_per_second, be64_to_cpu(cfg->max_icmp_per_second));
-        pr_info("netlink: max_icmp_per_second updated to %lu\n",
-                READ_ONCE(fw_info.max_icmp_per_second));
+        pr_debug("netlink: max_icmp_per_second updated to %lu\n",
+                 READ_ONCE(fw_info.max_icmp_per_second));
         updated++;
       }
 
       if (flags & FW_NL_CFG_MAX_ACK) {
         WRITE_ONCE(fw_info.max_ack_per_second, be64_to_cpu(cfg->max_ack_per_second));
-        pr_info("netlink: max_ack_per_second updated to %lu\n",
-                READ_ONCE(fw_info.max_ack_per_second));
+        pr_debug("netlink: max_ack_per_second updated to %lu\n",
+                 READ_ONCE(fw_info.max_ack_per_second));
         updated++;
       }
 
       if (flags & FW_NL_CFG_MAX_RST) {
         WRITE_ONCE(fw_info.max_rst_per_second, be64_to_cpu(cfg->max_rst_per_second));
-        pr_info("netlink: max_rst_per_second updated to %lu\n",
-                READ_ONCE(fw_info.max_rst_per_second));
+        pr_debug("netlink: max_rst_per_second updated to %lu\n",
+                 READ_ONCE(fw_info.max_rst_per_second));
         updated++;
       }
 
       if (flags & FW_NL_CFG_MAX_FIN) {
         WRITE_ONCE(fw_info.max_fin_per_second, be64_to_cpu(cfg->max_fin_per_second));
-        pr_info("netlink: max_fin_per_second updated to %lu\n",
-                READ_ONCE(fw_info.max_fin_per_second));
+        pr_debug("netlink: max_fin_per_second updated to %lu\n",
+                 READ_ONCE(fw_info.max_fin_per_second));
         updated++;
       }
 
@@ -1579,9 +1579,9 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
         fw_info.dynamic_threshold_enabled = (dt_flags & FW_NL_CFG_DT_ENABLED) ? true : false;
         WRITE_ONCE(fw_info.dynamic_threshold_ratio_x100,
                    be32_to_cpu(cfg->dynamic_threshold_ratio_x100));
-        pr_info("netlink: dynamic_threshold %s, ratio=%u/100\n",
-                fw_info.dynamic_threshold_enabled ? "enabled" : "disabled",
-                READ_ONCE(fw_info.dynamic_threshold_ratio_x100));
+        pr_debug("netlink: dynamic_threshold %s, ratio=%u/100\n",
+                 fw_info.dynamic_threshold_enabled ? "enabled" : "disabled",
+                 READ_ONCE(fw_info.dynamic_threshold_ratio_x100));
         updated++;
       }
 
@@ -1589,18 +1589,19 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
         __u64 pps = be64_to_cpu(cfg->baseline_pps);
         __u64 bps = be64_to_cpu(cfg->baseline_bps);
         update_global_baseline(&fw_info, pps, bps);
-        pr_info("netlink: baseline updated to pps=%llu bps=%llu\n", pps, bps);
+        pr_debug("netlink: baseline updated to pps=%llu bps=%llu\n", pps, bps);
         updated++;
       }
 
       if (flags & FW_NL_CFG_DDOS_BAN_DURATION) {
         WRITE_ONCE(fw_info.ddos_ban_duration, be32_to_cpu(cfg->ddos_ban_duration));
-        pr_info("netlink: ddos_ban_duration updated to %u seconds\n",
-                READ_ONCE(fw_info.ddos_ban_duration));
+        pr_debug("netlink: ddos_ban_duration updated to %u seconds\n",
+                 READ_ONCE(fw_info.ddos_ban_duration));
         updated++;
       }
 
-      pr_info("netlink: config updated, %d items changed\n", updated);
+      if (updated > 0)
+        pr_info("netlink: config updated, %d items changed\n", updated);
 
       /* 发送配置确认响应 */
       fw_netlink_send_config_ack(be32_to_cpu(hdr->seq), original_flags & ~rejected_flags,
@@ -1609,7 +1610,7 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
     }
 
     case FW_NL_STATS_QUERY:
-      pr_info("netlink: stats query received, seq=%u\n", be32_to_cpu(hdr->seq));
+      pr_debug("netlink: stats query received, seq=%u\n", be32_to_cpu(hdr->seq));
       fw_netlink_send_stats_response(be32_to_cpu(hdr->seq), sender_portid);
       break;
 
@@ -1618,18 +1619,18 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       break;
 
     case FW_NL_LIST_BANS_QUERY:
-      pr_info("netlink: list bans query received, seq=%u\n", be32_to_cpu(hdr->seq));
+      pr_debug("netlink: list bans query received, seq=%u\n", be32_to_cpu(hdr->seq));
       fw_netlink_send_list_bans_response(be32_to_cpu(hdr->seq), sender_portid);
       break;
 
     case FW_NL_LIST_WHITELIST_QUERY:
-      pr_info("netlink: list whitelist query received, seq=%u\n",
-              be32_to_cpu(hdr->seq));
+      pr_debug("netlink: list whitelist query received, seq=%u\n",
+               be32_to_cpu(hdr->seq));
       fw_netlink_send_list_whitelist_response(be32_to_cpu(hdr->seq), sender_portid);
       break;
 
     case FW_NL_LIST_RATES_QUERY:
-      pr_info("netlink: list rates query received, seq=%u\n", be32_to_cpu(hdr->seq));
+      pr_debug("netlink: list rates query received, seq=%u\n", be32_to_cpu(hdr->seq));
       fw_netlink_send_list_rates_response(be32_to_cpu(hdr->seq), sender_portid);
       break;
 
@@ -1643,8 +1644,8 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       int ret;
 
       ip_to_str(cmd->af, cmd->addr, ip_str, sizeof(ip_str));
-      pr_info("netlink: add whitelist %s/%u dev %s\n", ip_str, cmd->prefix_len,
-              cmd->device[0] ? (char *)cmd->device : "(none)");
+      pr_debug("netlink: add whitelist %s/%u dev %s\n", ip_str, cmd->prefix_len,
+               cmd->device[0] ? (char *)cmd->device : "(none)");
 
       if (cmd->af == FW_AF_INET) {
         /* IPv4: 根据 prefix_len 计算子网掩码
@@ -1679,7 +1680,7 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       int ret;
 
       ip_to_str(cmd->af, cmd->addr, ip_str, sizeof(ip_str));
-      pr_info("netlink: remove whitelist %s/%u\n", ip_str, cmd->prefix_len);
+      pr_debug("netlink: remove whitelist %s/%u\n", ip_str, cmd->prefix_len);
 
       ret = remove_whitelist_entry(&fw_info, cmd->af, cmd->addr, cmd->prefix_len);
       if (ret < 0) {
