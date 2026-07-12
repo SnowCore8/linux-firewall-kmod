@@ -50,8 +50,19 @@ pub fn Logs() -> impl IntoView {
         (error, warn, info, debug)
     };
 
-    // 加载历史日志
-    let logs_resource = create_resource(|| (), |_| async move { api::get_logs(1, 100).await.ok() });
+    // 加载历史日志（受 clear_logs_at 过滤）
+    let logs_resource = create_resource(
+        || (),
+        |_| async move {
+            // 获取配置中的 clear_logs_at 时间戳
+            let since = api::get_config()
+                .await
+                .ok()
+                .and_then(|c| c.clear_logs_at)
+                .filter(|s| !s.is_empty());
+            api::get_logs(1, 100, since.as_deref()).await.ok()
+        },
+    );
 
     create_effect(move |_| {
         if let Some(Some(page)) = logs_resource.get() {
@@ -175,7 +186,46 @@ pub fn Logs() -> impl IntoView {
                     <button class="btn btn-sm" on:click=move |_| {
                         let window = web_sys::window().expect("window not available");
                         if window.confirm_with_message("确定要清空所有日志吗？").unwrap_or(false) {
-                            logs.set(Vec::new());
+                            // 获取当前时间作为清空时间戳
+                            let now = js_sys::Date::new_0();
+                            let year = now.get_full_year();
+                            let month = format!("{:02}", now.get_month() + 1);
+                            let day = format!("{:02}", now.get_date());
+                            let hour = format!("{:02}", now.get_hours());
+                            let min = format!("{:02}", now.get_minutes());
+                            let sec = format!("{:02}", now.get_seconds());
+                            let timestamp = format!("{year}-{month}-{day}T{hour}:{min}:{sec}");
+
+                            // 调用配置 API 设置 clear_logs_at
+                            let req = api::UpdateConfigRequest {
+                                sse_push_interval: None,
+                                rate_warning_pps: None,
+                                rate_critical_pps: None,
+                                rate_warning_syn: None,
+                                rate_critical_syn: None,
+                                max_syn_per_second: None,
+                                max_udp_per_second: None,
+                                max_icmp_per_second: None,
+                                max_ack_per_second: None,
+                                max_rst_per_second: None,
+                                max_fin_per_second: None,
+                                static_threshold: None,
+                                dynamic_threshold: None,
+                                ddos_detection: None,
+                                max_ban_entries: None,
+                                max_whitelist_entries: None,
+                                max_rate_entries: None,
+                                max_local_ip_cache: None,
+                                clear_logs_at: Some(timestamp),
+                            };
+                            spawn_local(async move {
+                                if let Err(e) = api::update_config(req).await {
+                                    web_sys::console::error_1(&format!("设置清空时间戳失败：{e}").into());
+                                }
+                                // 重新加载日志
+                                logs_resource.refetch();
+                                logs.set(Vec::new());
+                            });
                         }
                     }>
                         "清空"

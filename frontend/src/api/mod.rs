@@ -153,6 +153,8 @@ pub struct WebuiConfig {
     pub max_whitelist_entries: u32,
     pub max_rate_entries: u32,
     pub max_local_ip_cache: u32,
+    /// 日志清空时间戳（过滤早于此时间的日志行）
+    pub clear_logs_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -178,6 +180,8 @@ pub struct UpdateConfigRequest {
     pub max_whitelist_entries: Option<u32>,
     pub max_rate_entries: Option<u32>,
     pub max_local_ip_cache: Option<u32>,
+    /// 日志清空时间戳（设置后过滤早于此时间的日志行，空字符串=取消过滤）
+    pub clear_logs_at: Option<String>,
 }
 
 #[derive(Deserialize, Clone, Serialize)]
@@ -534,8 +538,14 @@ pub async fn update_config(req: UpdateConfigRequest) -> Result<WebuiConfig, Stri
     put_json("/api/v1/config", &req).await
 }
 
-pub async fn get_logs(page: u32, page_size: u32) -> Result<LogPageResponse, String> {
-    get_json(&format!("/api/v1/logs?page={page}&page_size={page_size}")).await
+pub async fn get_logs(page: u32, page_size: u32, since: Option<&str>) -> Result<LogPageResponse, String> {
+    let mut url = format!("/api/v1/logs?page={page}&page_size={page_size}");
+    if let Some(ts) = since {
+        if !ts.is_empty() {
+            url.push_str(&format!("&since={}", ts));
+        }
+    }
+    get_json(&url).await
 }
 
 /// 智能白名单推荐条目

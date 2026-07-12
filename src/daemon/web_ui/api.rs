@@ -137,6 +137,8 @@ pub struct WebuiConfigResponse {
     pub max_whitelist_entries: u32,
     pub max_rate_entries: u32,
     pub max_local_ip_cache: u32,
+    /// 日志清空时间戳（过滤早于此时间的日志）
+    pub clear_logs_at: Option<String>,
 }
 
 /// 获取 Web UI 配置
@@ -162,6 +164,7 @@ pub fn get_webui_config() -> WebuiConfigResponse {
         max_whitelist_entries: config.max_whitelist_entries,
         max_rate_entries: config.max_rate_entries,
         max_local_ip_cache: config.max_local_ip_cache,
+        clear_logs_at: config.clear_logs_at.clone(),
     }
 }
 
@@ -189,6 +192,8 @@ pub struct UpdateConfigRequest {
     pub max_whitelist_entries: Option<u32>,
     pub max_rate_entries: Option<u32>,
     pub max_local_ip_cache: Option<u32>,
+    /// 日志清空时间戳（设置后过滤早于此时间的日志行，传空字符串=取消过滤）
+    pub clear_logs_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -402,6 +407,11 @@ pub fn update_webui_config(req: UpdateConfigRequest) -> Result<WebuiConfigRespon
         config.max_local_ip_cache = v;
     }
 
+    // 日志清空时间戳（None = 无过滤，Some("") = 取消过滤，Some(ts) = 过滤早于 ts 的行）
+    if let Some(v) = req.clear_logs_at {
+        config.clear_logs_at = if v.is_empty() { None } else { Some(v) };
+    }
+
     // 写入全局配置
     crate::http_exporter::set_global_webui_config(config.clone());
 
@@ -448,6 +458,7 @@ pub fn update_webui_config(req: UpdateConfigRequest) -> Result<WebuiConfigRespon
         max_whitelist_entries: config.max_whitelist_entries,
         max_rate_entries: config.max_rate_entries,
         max_local_ip_cache: config.max_local_ip_cache,
+        clear_logs_at: config.clear_logs_at.clone(),
     })
 }
 

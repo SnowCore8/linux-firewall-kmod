@@ -184,6 +184,8 @@ pub struct LogQueryParams {
     pub level: Option<String>,
     /// 关键词搜索
     pub keyword: Option<String>,
+    /// 时间戳过滤（ISO 8601，只返回此时间之后的日志行）
+    pub since: Option<String>,
 }
 
 /// 日志条目
@@ -217,6 +219,7 @@ pub fn get_log_page(params: &LogQueryParams) -> Result<LogPageResponse, String> 
     let level_filter = params.level.as_deref();
     let keyword_filter = params.keyword.as_deref();
     let keyword_lower = keyword_filter.map(|k| k.to_lowercase());
+    let since_filter = params.since.as_deref();
 
     // 流式扫描：只收集匹配行，上限 MAX_SCAN_LINES 防止大文件 OOM
     let matched_lines: Vec<(u64, String)> = reader
@@ -226,6 +229,15 @@ pub fn get_log_page(params: &LogQueryParams) -> Result<LogPageResponse, String> 
         .filter_map(|(i, line)| {
             let line = line.ok()?;
             let line_num = (i + 1) as u64;
+
+            // 时间戳过滤（ISO 8601 可字典序比较）
+            if let Some(since) = since_filter {
+                // 提取行首时间戳（前 19 字符：2026-07-12T07:17:40）
+                let line_ts = line.get(..19).unwrap_or("");
+                if line_ts < since {
+                    return None;
+                }
+            }
 
             // 级别过滤
             if let Some(level) = level_filter {

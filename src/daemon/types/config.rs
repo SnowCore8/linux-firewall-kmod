@@ -49,6 +49,8 @@ pub struct WebuiConfig {
     pub max_whitelist_entries: u32,
     pub max_rate_entries: u32,
     pub max_local_ip_cache: u32,
+    /// 日志清空时间戳（ISO 8601，前端「清空」后设置，过滤早于此时间的日志行）
+    pub clear_logs_at: Option<String>,
 }
 
 impl Default for WebuiConfig {
@@ -75,6 +77,7 @@ impl Default for WebuiConfig {
             max_whitelist_entries: 65535,
             max_rate_entries: 65535,
             max_local_ip_cache: 65535,
+            clear_logs_at: None,
         }
     }
 }

@@ -182,6 +182,7 @@ pub fn Settings() -> impl IntoView {
                 max_whitelist_entries,
                 max_rate_entries,
                 max_local_ip_cache,
+                clear_logs_at: None, // 保存配置时不修改清空状态
             };
             match api::update_config(req).await {
                 Ok(_) => {
@@ -215,6 +216,7 @@ pub fn Settings() -> impl IntoView {
         max_whitelist_entries: 65535,
         max_rate_entries: 65535,
         max_local_ip_cache: 65535,
+        clear_logs_at: None,
     };
 
     view! {

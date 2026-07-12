@@ -32,7 +32,7 @@ pub const MAX_REGEX_PATTERNS: usize = 10;
 pub const MAX_REGEX_NAME_LEN: usize = 64;
 
 /// 全局可同时活跃的 `Jail` 数上限。`config_parser` 在解析时检查此上界。
-pub const MAX_JAILS: usize = 16;
+pub const MAX_JAILS: usize = 32;
 
 // ============================================================================
 // 失败条目
