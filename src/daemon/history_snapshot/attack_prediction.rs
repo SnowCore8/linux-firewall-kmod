@@ -46,7 +46,7 @@ pub struct JailAttackTrend {
 }
 
 /// 攻击预测汇总
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, Default)]
 pub struct AttackPredictionSummary {
     /// per-IP 预测列表（按紧急程度排序）
     pub predictions: Vec<AttackPrediction>,
@@ -79,14 +79,7 @@ pub fn predict_attacks() -> AttackPredictionSummary {
     let db = history_db();
     let conn = match db.as_ref() {
         Some(c) => c,
-        None => {
-            return AttackPredictionSummary {
-                predictions: Vec::new(),
-                jail_trends: Vec::new(),
-                imminent_count: 0,
-                within_24h_count: 0,
-            };
-        }
+        None => return AttackPredictionSummary::default(),
     };
 
     let now = crate::types::now_secs();
@@ -105,14 +98,7 @@ pub fn predict_attacks() -> AttackPredictionSummary {
          LIMIT 100",
     ) {
         Ok(s) => s,
-        Err(_) => {
-            return AttackPredictionSummary {
-                predictions: Vec::new(),
-                jail_trends: Vec::new(),
-                imminent_count: 0,
-                within_24h_count: 0,
-            };
-        }
+        Err(_) => return AttackPredictionSummary::default(),
     };
 
     let rows = match stmt.query_map([cutoff_7d], |row| {
@@ -124,14 +110,7 @@ pub fn predict_attacks() -> AttackPredictionSummary {
         Ok((ip, ban_count, ts_list, jail_name, last_ban_at))
     }) {
         Ok(r) => r,
-        Err(_) => {
-            return AttackPredictionSummary {
-                predictions: Vec::new(),
-                jail_trends: Vec::new(),
-                imminent_count: 0,
-                within_24h_count: 0,
-            };
-        }
+        Err(_) => return AttackPredictionSummary::default(),
     };
 
     let mut predictions = Vec::new();
