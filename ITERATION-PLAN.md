@@ -132,8 +132,8 @@
 - [x] **Jail 配置优化**：per-Jail 正则匹配率统计（修复 `with_jail_stats` 从未调用的技术债），Jails 页面实时显示匹配率/解析行数/触发封禁
 
 #### Phase 3：高级智能
+- [x] **攻击预测**：基于历史封禁模式预测下次攻击时间窗口 — per-IP 中位间隔分析 + 置信度评分（CV 规律性 × 数据量）+ 紧急程度分类 + Jail 攻击趋势（rising/stable/falling）+ API `GET /api/v1/stats/attack-predictions` + Bans 页面预测面板
 - [ ] **异常检测**：无监督学习检测异常流量模式
-- [ ] **攻击预测**：基于历史模式预测下次攻击时间
 - [ ] **自动调优**：根据封禁效果自动调整阈值（强化学习）
 - [ ] **威胁情报集成**：对接外部威胁情报源（已知恶意 IP）
 
@@ -605,3 +605,27 @@
 - ✅ **删除死代码 `dt_flags` 模块**（`protocol.rs`）
   - 整个模块仅含 1 个 `#[allow(dead_code)]` 常量，全项目零调用方
 - 编译验证：`cargo clippy --release` 零警告，`cargo test --release` 98 项全通过，`cargo fmt --check` 通过
+
+### 2026-07-20 — 攻击预测功能
+- ✅ **攻击时间预测算法**：基于 `ban_events` 表分析 per-IP 封禁间隔规律
+  - 对封禁次数 ≥ 3 的 IP 计算相邻封禁间隔的中位数
+  - 预测下次攻击时间 = 最后封禁时间 + 中位间隔
+  - 置信度评分 = 规律性分（CV < 0.3 → 高分）× 0.6 + 数据量分（事件数/5）× 0.4
+  - 紧急程度分类：imminent（<1h）/ soon（<6h）/ later（<24h）/ distant
+- ✅ **Jail 攻击趋势分析**：per-Jail 24h/7d 封禁数对比，判定趋势方向（rising/stable/falling）
+  - 趋势 = 近 24h 日均 vs 7d 日均：ratio > 1.5 → rising，< 0.5 → falling
+  - 统计每个 Jail 预测 24h 内将有攻击的 IP 数
+- ✅ **API 端点**：`GET /api/v1/stats/attack-predictions` 返回预测汇总（predictions + jail_trends + imminent_count + within_24h_count）
+- ✅ **前端可视化**：Bans 页面新增两个面板
+  - 攻击时间预测面板：TOP 15 预测列表（IP、Jail、紧急程度徽章、封禁次数、周期、倒计时、置信度）
+  - Jail 攻击趋势面板：per-Jail 趋势方向（↑↓→）+ 24h/7d 封禁数 + 预测攻击者数
+- ✅ **代码组织**：新增 `history_snapshot/attack_prediction.rs` 子模块，通过 `pub use` 重导出
+- 编译验证：`cargo clippy --release` 零警告，`cargo test --release` 93 项全通过，前端编译成功
+
+**局限性**：
+- 需要至少 3 次封禁事件才能生成预测（7 天窗口内）
+- 中位间隔对突发模式变化反应慢（不如 EWMA 平滑适应趋势变化）
+- 无法预测从未封禁过的新攻击者
+- 置信度依赖间隔规律性，随机间隔的攻击者置信度低
+
+**下一步**：异常检测（无监督学习检测异常流量模式）/ 自动调优
