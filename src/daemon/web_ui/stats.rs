@@ -135,6 +135,42 @@ pub fn get_stats() -> StatsResponse {
         .packets_accepted
         .load(std::sync::atomic::Ordering::Relaxed);
 
+    // 单次快照计算三个维度：Jail 分布 + 原因分布 + 近 5 分钟封禁数
+    let five_min_ago = now - 300;
+    let (jail_distribution, failure_reasons, recent_bans) = {
+        let mut jail_map = std::collections::HashMap::new();
+        let mut reason_map = std::collections::HashMap::new();
+        let mut recent = 0u64;
+
+        if let Some(cache) = ACTIVE_BAN_CACHE.get() {
+            for ban in cache.snapshot() {
+                *jail_map.entry(ban.jail_name.clone()).or_insert(0u64) += 1;
+                *reason_map.entry(ban.reason.clone()).or_insert(0) += 1;
+                if ban.banned_at > five_min_ago {
+                    recent += 1;
+                }
+            }
+        }
+
+        let mut jail_dist: Vec<(String, u64)> = jail_map.into_iter().collect();
+        jail_dist.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut reason_dist: Vec<(String, u64)> = reason_map.into_iter().collect();
+        reason_dist.sort_by_key(|b| std::cmp::Reverse(b.1));
+
+        (
+            ChartData {
+                labels: jail_dist.iter().map(|(l, _)| l.clone()).collect(),
+                values: jail_dist.iter().map(|(_, v)| *v).collect(),
+            },
+            ChartData {
+                labels: reason_dist.iter().map(|(l, _)| l.clone()).collect(),
+                values: reason_dist.iter().map(|(_, v)| *v).collect(),
+            },
+            recent,
+        )
+    };
+
     StatsResponse {
         daemon_version: env!("CARGO_PKG_VERSION").to_string(),
         kernel_version: "2.2".to_string(),
@@ -143,8 +179,8 @@ pub fn get_stats() -> StatsResponse {
         ddos_events,
         uptime_seconds: uptime.max(0) as u64,
         ban_trend: generate_ban_trend(),
-        jail_distribution: generate_jail_distribution(),
-        failure_reasons: generate_ban_reason_distribution(),
+        jail_distribution,
+        failure_reasons,
         failed_attempts_trend: generate_failed_attempts_trend(),
         current_bans,
         total_bans,
@@ -152,7 +188,7 @@ pub fn get_stats() -> StatsResponse {
         whitelist_count,
         packets_dropped,
         packets_accepted,
-        threat_level: calculate_threat_level(current_bans, ddos_events),
+        threat_level: calculate_threat_level(current_bans, ddos_events, recent_bans),
     }
 }
 
@@ -161,9 +197,9 @@ pub fn get_stats() -> StatsResponse {
 /// 综合多个信号源评估当前威胁状态：
 /// - PPS 与阈值的比率
 /// - 封禁表使用率
-/// - 最近 5 分钟封禁数
+/// - 最近 5 分钟封禁数（由调用方预计算，避免重复遍历缓存）
 /// - DDoS 事件计数
-fn calculate_threat_level(current_bans: u64, ddos_events: u64) -> ThreatLevel {
+fn calculate_threat_level(current_bans: u64, ddos_events: u64, recent_bans: u64) -> ThreatLevel {
     let mut factors: Vec<String> = Vec::new();
     let mut score: u8 = 0;
 
@@ -206,20 +242,7 @@ fn calculate_threat_level(current_bans: u64, ddos_events: u64) -> ThreatLevel {
         ));
     }
 
-    // 3. 最近 5 分钟封禁数（从 ACTIVE_BAN_CACHE 统计）
-    let now = crate::types::now_secs();
-    let five_min_ago = now - 300;
-    let recent_bans = ACTIVE_BAN_CACHE
-        .get()
-        .map(|cache| {
-            cache
-                .snapshot()
-                .iter()
-                .filter(|b| b.banned_at > five_min_ago)
-                .count() as u64
-        })
-        .unwrap_or(0);
-
+    // 3. 最近 5 分钟封禁数（调用方已计算）
     if recent_bans > 50 {
         score = score.max(4);
         factors.push(format!("5 分钟内 {} 次封禁", recent_bans));
@@ -295,50 +318,6 @@ fn generate_ban_trend() -> ChartData {
                 values: vec![],
             }
         }
-    }
-}
-
-/// 生成 Jail 分布数据（从当前活跃封禁统计）
-fn generate_jail_distribution() -> ChartData {
-    match crate::history_snapshot::get_jail_distribution() {
-        Ok(data) if !data.is_empty() => {
-            let labels: Vec<String> = data.iter().map(|(name, _)| name.clone()).collect();
-            let values: Vec<u64> = data.iter().map(|(_, count)| *count).collect();
-            ChartData { labels, values }
-        }
-        _ => {
-            // 如果没有封禁数据，返回空的图表
-            ChartData {
-                labels: vec![],
-                values: vec![],
-            }
-        }
-    }
-}
-
-/// 生成封禁原因分布数据（从活跃封禁缓存聚合，按 reason 分组统计）
-fn generate_ban_reason_distribution() -> ChartData {
-    let cache = match ACTIVE_BAN_CACHE.get() {
-        Some(c) => c,
-        None => {
-            return ChartData {
-                labels: vec![],
-                values: vec![],
-            };
-        }
-    };
-
-    let mut reason_map: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-    for ban in cache.snapshot() {
-        *reason_map.entry(ban.reason.clone()).or_insert(0) += 1;
-    }
-
-    let mut pairs: Vec<(String, u64)> = reason_map.into_iter().collect();
-    pairs.sort_by_key(|b| std::cmp::Reverse(b.1));
-
-    ChartData {
-        labels: pairs.iter().map(|(l, _)| l.clone()).collect(),
-        values: pairs.iter().map(|(_, v)| *v).collect(),
     }
 }
 

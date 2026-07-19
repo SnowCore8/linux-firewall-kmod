@@ -294,26 +294,6 @@ pub fn get_hourly_heatmap() -> Result<HourlyHeatmap> {
     }
 }
 
-/// 查询 Jail 分布数据
-pub fn get_jail_distribution() -> Result<Vec<(String, u64)>> {
-    let cache = crate::types::ACTIVE_BAN_CACHE.get();
-    if let Some(cache) = cache {
-        let snapshot = cache.snapshot();
-        let mut jail_counts = std::collections::HashMap::new();
-
-        for ban in snapshot {
-            *jail_counts.entry(ban.jail_name.clone()).or_insert(0u64) += 1;
-        }
-
-        let mut result: Vec<(String, u64)> = jail_counts.into_iter().collect();
-        // 按名称排序保证顺序稳定，防止饼图跳动
-        result.sort_by(|a, b| a.0.cmp(&b.0));
-        Ok(result)
-    } else {
-        Ok(Vec::new())
-    }
-}
-
 /// 清理过期数据
 pub(super) fn cleanup_expired_data(conn: &Connection) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
