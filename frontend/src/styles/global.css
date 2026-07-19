@@ -2574,3 +2574,101 @@ tr:last-child td { border-bottom: none; }
 .cmd-item.selected {
   box-shadow: inset 2px 0 0 var(--accent-primary);
 }
+
+/* ── 攻击预测面板 ── */
+.prediction-card {
+  margin-bottom: 16px;
+}
+
+.prediction-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.prediction-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--bg-main);
+  border-radius: 6px;
+  border-left: 3px solid var(--color-orange);
+}
+
+.prediction-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prediction-ip {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.prediction-urgency {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-left: auto;
+}
+
+.prediction-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.prediction-stat {
+  font-family: var(--font-mono);
+}
+
+.prediction-sep {
+  color: var(--border-strong);
+}
+
+/* ── Jail 攻击趋势面板 ── */
+.trend-card {
+  margin-bottom: 16px;
+}
+
+.trend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+}
+
+.trend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-main);
+  border-radius: 6px;
+}
+
+.trend-jail {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+  min-width: 80px;
+}
+
+.trend-icon {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.trend-counts {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: auto;
+}

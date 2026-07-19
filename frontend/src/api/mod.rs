@@ -538,7 +538,11 @@ pub async fn update_config(req: UpdateConfigRequest) -> Result<WebuiConfig, Stri
     put_json("/api/v1/config", &req).await
 }
 
-pub async fn get_logs(page: u32, page_size: u32, since: Option<&str>) -> Result<LogPageResponse, String> {
+pub async fn get_logs(
+    page: u32,
+    page_size: u32,
+    since: Option<&str>,
+) -> Result<LogPageResponse, String> {
     let mut url = format!("/api/v1/logs?page={page}&page_size={page_size}");
     if let Some(ts) = since {
         if !ts.is_empty() {
@@ -859,4 +863,42 @@ pub struct NetworkBlock {
 /// 获取攻击源网络分布
 pub async fn get_network_distribution() -> Result<Vec<NetworkBlock>, String> {
     get_json("/api/v1/stats/network-distribution").await
+}
+
+/// 攻击预测条目（per-IP）
+#[derive(Deserialize, Clone, Serialize)]
+pub struct AttackPrediction {
+    pub ip: String,
+    pub ban_count: u32,
+    pub jail_name: String,
+    pub last_ban_at: i64,
+    pub median_interval_secs: f64,
+    pub predicted_next_attack: i64,
+    pub remaining_secs: i64,
+    pub confidence: u8,
+    pub urgency: String,
+}
+
+/// Jail 攻击趋势
+#[derive(Deserialize, Clone, Serialize)]
+pub struct JailAttackTrend {
+    pub jail_name: String,
+    pub bans_24h: u32,
+    pub bans_7d: u32,
+    pub trend: String,
+    pub predicted_attackers_24h: u32,
+}
+
+/// 攻击预测汇总响应
+#[derive(Deserialize, Clone, Serialize)]
+pub struct AttackPredictionSummary {
+    pub predictions: Vec<AttackPrediction>,
+    pub jail_trends: Vec<JailAttackTrend>,
+    pub imminent_count: u32,
+    pub within_24h_count: u32,
+}
+
+/// 获取攻击预测
+pub async fn get_attack_predictions() -> Result<AttackPredictionSummary, String> {
+    get_json("/api/v1/stats/attack-predictions").await
 }

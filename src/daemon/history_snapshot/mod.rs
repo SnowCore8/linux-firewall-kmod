@@ -9,12 +9,14 @@
 //!
 //! # 子模块
 //! - [`attack_detection`] — 周期性攻击者检测、协同攻击检测
+//! - [`attack_prediction`] — 攻击时间预测、Jail 攻击趋势
 //! - [`ban_recommendations`] — 封禁时长推荐
 //! - [`threshold_analysis`] — 阈值调优建议
 //! - [`network_distribution`] — 攻击源网络分布
 
 // 子模块
 mod attack_detection;
+mod attack_prediction;
 mod ban_recommendations;
 mod network_distribution;
 mod threshold_analysis;
@@ -22,6 +24,9 @@ mod threshold_analysis;
 // 重导出子模块的公共类型和函数，保持外部引用路径不变
 pub use attack_detection::{
     detect_collaborative_attacks, detect_periodic_attackers, CollaborativeAttack, PeriodicAttacker,
+};
+pub use attack_prediction::{
+    predict_attacks, AttackPrediction, AttackPredictionSummary, JailAttackTrend,
 };
 pub use ban_recommendations::{recommend_ban_durations, JailBanRecommendation};
 pub use network_distribution::{get_network_distribution, NetworkBlock};

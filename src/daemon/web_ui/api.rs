@@ -692,9 +692,9 @@ pub use super::ban_ops::{
 };
 
 pub use super::analysis::{
-    get_ban_effectiveness, get_collaborative_attacks, get_periodic_attackers,
-    get_whitelist_recommendations, BanEffectivenessResponse, BanLevelEffectiveness,
-    WhitelistRecommendation,
+    get_attack_predictions, get_ban_effectiveness, get_collaborative_attacks,
+    get_periodic_attackers, get_whitelist_recommendations, BanEffectivenessResponse,
+    BanLevelEffectiveness, WhitelistRecommendation,
 };
 
 pub use super::ddos_stats::{

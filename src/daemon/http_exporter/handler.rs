@@ -111,6 +111,10 @@ pub fn build_router(metrics_user: String, metrics_pass: String) -> Router {
             "/api/v1/stats/network-distribution",
             get(handle_api_network_distribution),
         )
+        .route(
+            "/api/v1/stats/attack-predictions",
+            get(handle_api_attack_predictions),
+        )
         .route("/api/v1/logs/stream", get(handle_log_stream))
         .route("/api/v1/logs", get(handle_api_logs))
         .layer(middleware::from_fn(auth_middleware))
@@ -607,6 +611,13 @@ async fn handle_api_network_distribution(
 ) -> Json<web_ui::api::ApiResponse<Vec<crate::history_snapshot::NetworkBlock>>> {
     let blocks = crate::history_snapshot::get_network_distribution();
     Json(web_ui::api::ApiResponse::ok(blocks))
+}
+
+/// `GET /api/v1/stats/attack-predictions` — 攻击时间预测 + Jail 攻击趋势
+async fn handle_api_attack_predictions(
+) -> Json<web_ui::api::ApiResponse<crate::history_snapshot::AttackPredictionSummary>> {
+    let summary = web_ui::api::get_attack_predictions();
+    Json(web_ui::api::ApiResponse::ok(summary))
 }
 
 /// `GET /api/v1/events` — SSE 实时事件推送（长连接）

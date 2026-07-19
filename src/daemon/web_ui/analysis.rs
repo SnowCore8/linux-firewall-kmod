@@ -295,3 +295,8 @@ pub fn get_periodic_attackers() -> Vec<crate::history_snapshot::PeriodicAttacker
 pub fn get_collaborative_attacks() -> Vec<crate::history_snapshot::CollaborativeAttack> {
     crate::history_snapshot::detect_collaborative_attacks()
 }
+
+/// 获取攻击预测结果
+pub fn get_attack_predictions() -> crate::history_snapshot::AttackPredictionSummary {
+    crate::history_snapshot::predict_attacks()
+}

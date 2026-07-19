@@ -412,6 +412,21 @@ pub fn Bans() -> impl IntoView {
         |_| async { api::get_network_distribution().await.unwrap_or_default() },
     );
 
+    // 攻击预测
+    let prediction_res = create_resource(
+        || (),
+        |_| async move {
+            api::get_attack_predictions()
+                .await
+                .unwrap_or(api::AttackPredictionSummary {
+                    predictions: Vec::new(),
+                    jail_trends: Vec::new(),
+                    imminent_count: 0,
+                    within_24h_count: 0,
+                })
+        },
+    );
+
     let stats_default = move || StatsResponse::default();
 
     view! {
@@ -1166,6 +1181,133 @@ pub fn Bans() -> impl IntoView {
                                 }).collect_view()}
                             </div>
                         </div>
+                    }.into_view()
+                })}
+            </Suspense>
+
+            // 攻击预测面板
+            <Suspense fallback=|| view! { <div style="padding:12px;text-align:center;color:var(--text-muted)">"加载攻击预测..."</div> }>
+                {move || prediction_res.get().map(|summary| {
+                    if summary.predictions.is_empty() && summary.jail_trends.is_empty() {
+                        return view! { <div/> }.into_view();
+                    }
+                    let pred_section = if !summary.predictions.is_empty() {
+                        let imminent = summary.imminent_count;
+                        let within_24h = summary.within_24h_count;
+                        let preds = summary.predictions.clone();
+                        view! {
+                            <div class="card prediction-card">
+                                <div class="chart-header">
+                                    <h3>"攻击时间预测"</h3>
+                                    <div style="display:flex;gap:6px">
+                                        {if imminent > 0 {
+                                            view! { <span class="badge badge-danger">{format!("紧急 {}", imminent)}</span> }.into_view()
+                                        } else {
+                                            view! { <div/> }.into_view()
+                                        }}
+                                        <span class="badge badge-warning">{format!("24h 内 {}", within_24h)}</span>
+                                    </div>
+                                </div>
+                                <div class="prediction-list">
+                                    {preds.iter().take(15).map(|pred| {
+                                        let urgency_color = match pred.urgency.as_str() {
+                                            "imminent" => "var(--color-red)",
+                                            "soon" => "var(--color-orange)",
+                                            "later" => "var(--color-yellow, #eab308)",
+                                            _ => "var(--color-muted)",
+                                        };
+                                        let urgency_label = match pred.urgency.as_str() {
+                                            "imminent" => "紧急",
+                                            "soon" => "临近",
+                                            "later" => "较远",
+                                            _ => "远期",
+                                        };
+                                        let time_str = if pred.remaining_secs < 0 {
+                                            format!("已超期 {}", format_duration(-pred.remaining_secs))
+                                        } else {
+                                            format!("{} 后", format_duration(pred.remaining_secs))
+                                        };
+                                        let interval_str = if pred.median_interval_secs > 86400.0 {
+                                            format!("{:.1}天", pred.median_interval_secs / 86400.0)
+                                        } else if pred.median_interval_secs > 3600.0 {
+                                            format!("{:.1}h", pred.median_interval_secs / 3600.0)
+                                        } else {
+                                            format!("{:.0}min", pred.median_interval_secs / 60.0)
+                                        };
+                                        view! {
+                                            <div class="prediction-item">
+                                                <div class="prediction-main">
+                                                    <span class="prediction-ip mono">{&pred.ip}</span>
+                                                    <span class="badge badge-info">{&pred.jail_name}</span>
+                                                    <span class="prediction-urgency" style=move || format!("background:{}", urgency_color)>
+                                                        {urgency_label}
+                                                    </span>
+                                                </div>
+                                                <div class="prediction-stats">
+                                                    <span class="prediction-stat">{format!("×{} 封禁", pred.ban_count)}</span>
+                                                    <span class="prediction-sep">"·"</span>
+                                                    <span class="prediction-stat">{format!("周期 {}", interval_str)}</span>
+                                                    <span class="prediction-sep">"·"</span>
+                                                    <span class="prediction-stat" style=move || format!("color:{}", urgency_color)>{time_str}</span>
+                                                    <span class="prediction-sep">"·"</span>
+                                                    <span class="prediction-stat">{format!("置信度 {}%", pred.confidence)}</span>
+                                                </div>
+                                            </div>
+                                        }
+                                    }).collect_view()}
+                                </div>
+                            </div>
+                        }.into_view()
+                    } else {
+                        view! { <div/> }.into_view()
+                    };
+                    let trend_section = if !summary.jail_trends.is_empty() {
+                        let trends = summary.jail_trends.clone();
+                        view! {
+                            <div class="card trend-card">
+                                <div class="chart-header">
+                                    <h3>"Jail 攻击趋势"</h3>
+                                </div>
+                                <div class="trend-list">
+                                    {trends.iter().map(|trend| {
+                                        let trend_icon = match trend.trend.as_str() {
+                                            "rising" => "↑",
+                                            "falling" => "↓",
+                                            _ => "→",
+                                        };
+                                        let trend_color = match trend.trend.as_str() {
+                                            "rising" => "var(--color-red)",
+                                            "falling" => "var(--color-green)",
+                                            _ => "var(--color-muted)",
+                                        };
+                                        view! {
+                                            <div class="trend-item">
+                                                <span class="trend-jail">{&trend.jail_name}</span>
+                                                <span class="trend-icon" style=move || format!("color:{}", trend_color)>
+                                                    {trend_icon}
+                                                </span>
+                                                <span class="trend-counts mono">
+                                                    {format!("24h: {} · 7d: {}", trend.bans_24h, trend.bans_7d)}
+                                                </span>
+                                                {if trend.predicted_attackers_24h > 0 {
+                                                    view! { <span class="badge badge-warning">{format!("预测 {} IP", trend.predicted_attackers_24h)}</span> }.into_view()
+                                                } else {
+                                                    view! { <div/> }.into_view()
+                                                }}
+                                            </div>
+                                        }
+                                    }).collect_view()}
+                                </div>
+                            </div>
+                        }.into_view()
+                    } else {
+                        view! { <div/> }.into_view()
+                    };
+                    view! {
+                        <>
+                            {pred_section}
+                            {trend_section}
+                        </>
                     }.into_view()
                 })}
             </Suspense>
