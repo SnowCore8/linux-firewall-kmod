@@ -116,6 +116,12 @@ pub struct PaginatedResponse<T> {
     pub total_pages: u32,
 }
 
+/// 上次 purge_expired 时间戳（避免每次 SSE 推送都获取写锁）
+static LAST_PURGE_TIME: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// purge 最小间隔（秒）：每 5 秒最多清理一次，减少写锁竞争
+const PURGE_INTERVAL_SECS: i64 = 5;
+
 /// 获取活跃封禁列表
 pub fn get_active_bans() -> Vec<BanResponse> {
     let now = crate::types::now_secs();
@@ -123,19 +129,23 @@ pub fn get_active_bans() -> Vec<BanResponse> {
     ACTIVE_BAN_CACHE
         .get()
         .map(|cache| {
-            // 清理过期条目（内核已删除，但缓存可能残留）
-            let expired = cache.purge_expired(now);
-            // 同步统计：过期条目从缓存移除时补充更新解封计数和封禁时长直方图
-            for ban in &expired {
-                crate::types::DAEMON_STATS
-                    .total_unbans
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let duration = if ban.expires_at > 0 {
-                    ban.expires_at - ban.banned_at
-                } else {
-                    now - ban.banned_at
-                };
-                crate::types::record_ban_duration(duration);
+            // 节流清理：每 5 秒最多 purge 一次，避免每秒获取写锁
+            let last_purge = LAST_PURGE_TIME.load(std::sync::atomic::Ordering::Relaxed);
+            if now - last_purge >= PURGE_INTERVAL_SECS {
+                LAST_PURGE_TIME.store(now, std::sync::atomic::Ordering::Relaxed);
+                let expired = cache.purge_expired(now);
+                // 同步统计：过期条目从缓存移除时补充更新解封计数和封禁时长直方图
+                for ban in &expired {
+                    crate::types::DAEMON_STATS
+                        .total_unbans
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let duration = if ban.expires_at > 0 {
+                        ban.expires_at - ban.banned_at
+                    } else {
+                        now - ban.banned_at
+                    };
+                    crate::types::record_ban_duration(duration);
+                }
             }
             cache
                 .snapshot()
