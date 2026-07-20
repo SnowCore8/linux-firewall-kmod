@@ -10,6 +10,35 @@ use serde::Serialize;
 
 use crate::types::{ACTIVE_BAN_CACHE, DAEMON_STATS, DDOS_STATS};
 
+/// 趋势数据缓存（避免每秒重复查询 SQLite，数据每 5 分钟才更新一次）
+static TREND_CACHE: std::sync::OnceLock<parking_lot::Mutex<TrendCache>> =
+    std::sync::OnceLock::new();
+
+struct TrendCache {
+    ban_trend: ChartData,
+    failed_trend: ChartData,
+    last_update: i64,
+}
+
+/// 趋势数据缓存间隔（秒）：30 秒内复用上次查询结果
+const TREND_CACHE_INTERVAL: i64 = 30;
+
+fn get_trend_cache() -> &'static parking_lot::Mutex<TrendCache> {
+    TREND_CACHE.get_or_init(|| {
+        parking_lot::Mutex::new(TrendCache {
+            ban_trend: ChartData {
+                labels: vec![],
+                values: vec![],
+            },
+            failed_trend: ChartData {
+                labels: vec![],
+                values: vec![],
+            },
+            last_update: 0,
+        })
+    })
+}
+
 /// 威胁等级评估
 #[derive(Serialize)]
 pub struct ThreatLevel {
@@ -58,7 +87,7 @@ pub struct StatsResponse {
 }
 
 /// 图表数据
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct ChartData {
     pub labels: Vec<String>,
     pub values: Vec<u64>,
@@ -171,6 +200,9 @@ pub fn get_stats() -> StatsResponse {
         )
     };
 
+    // 趋势数据共享缓存（30 秒刷新，避免每秒两次 SQLite 查询）
+    let (ban_trend, failed_attempts_trend) = generate_trends_cached();
+
     StatsResponse {
         daemon_version: env!("CARGO_PKG_VERSION").to_string(),
         kernel_version: "2.2".to_string(),
@@ -178,10 +210,10 @@ pub fn get_stats() -> StatsResponse {
         failed_attempts,
         ddos_events,
         uptime_seconds: uptime.max(0) as u64,
-        ban_trend: generate_ban_trend(),
+        ban_trend,
         jail_distribution,
         failure_reasons,
-        failed_attempts_trend: generate_failed_attempts_trend(),
+        failed_attempts_trend,
         current_bans,
         total_bans,
         total_unbans,
@@ -295,38 +327,18 @@ fn calculate_threat_level(current_bans: u64, ddos_events: u64, recent_bans: u64)
     }
 }
 
-/// 生成封禁趋势数据（从 SQLite 读取真实历史数据）
-fn generate_ban_trend() -> ChartData {
-    // 从历史数据库读取最近 24 小时的数据
-    match crate::history_snapshot::get_trend_data("bans", 24) {
-        Ok(data) if !data.is_empty() => {
-            let labels: Vec<String> = data
-                .iter()
-                .map(|(ts, _)| {
-                    let dt =
-                        chrono::DateTime::from_timestamp(*ts, 0).unwrap_or_else(chrono::Utc::now);
-                    dt.format("%H:%M").to_string()
-                })
-                .collect();
-            let values: Vec<u64> = data.iter().map(|(_, v)| *v).collect();
-            ChartData { labels, values }
-        }
-        _ => {
-            // 如果没有历史数据，返回空的图表
-            ChartData {
-                labels: vec![],
-                values: vec![],
-            }
-        }
-    }
-}
+/// 生成封禁趋势 + 失败尝试趋势（共享缓存，30 秒刷新一次）
+fn generate_trends_cached() -> (ChartData, ChartData) {
+    let now = crate::types::now_secs();
+    let mut cache = get_trend_cache().lock();
 
-/// 生成失败尝试趋势数据
-fn generate_failed_attempts_trend() -> ChartData {
-    // 从历史数据库读取最近 1 小时的失败尝试数据
-    match crate::history_snapshot::get_trend_data("failed_attempts", 1) {
+    if now - cache.last_update < TREND_CACHE_INTERVAL && !cache.ban_trend.labels.is_empty() {
+        return (cache.ban_trend.clone(), cache.failed_trend.clone());
+    }
+
+    let ban_trend = match crate::history_snapshot::get_trend_data("bans", 24) {
         Ok(data) if !data.is_empty() => {
-            let labels: Vec<String> = data
+            let labels = data
                 .iter()
                 .map(|(ts, _)| {
                     let dt =
@@ -334,17 +346,39 @@ fn generate_failed_attempts_trend() -> ChartData {
                     dt.format("%H:%M").to_string()
                 })
                 .collect();
-            let values: Vec<u64> = data.iter().map(|(_, v)| *v).collect();
+            let values = data.iter().map(|(_, v)| *v).collect();
             ChartData { labels, values }
         }
-        _ => {
-            // 如果没有历史数据，返回空的图表
-            ChartData {
-                labels: vec![],
-                values: vec![],
-            }
+        _ => ChartData {
+            labels: vec![],
+            values: vec![],
+        },
+    };
+
+    let failed_trend = match crate::history_snapshot::get_trend_data("failed_attempts", 1) {
+        Ok(data) if !data.is_empty() => {
+            let labels = data
+                .iter()
+                .map(|(ts, _)| {
+                    let dt =
+                        chrono::DateTime::from_timestamp(*ts, 0).unwrap_or_else(chrono::Utc::now);
+                    dt.format("%H:%M").to_string()
+                })
+                .collect();
+            let values = data.iter().map(|(_, v)| *v).collect();
+            ChartData { labels, values }
         }
-    }
+        _ => ChartData {
+            labels: vec![],
+            values: vec![],
+        },
+    };
+
+    cache.ban_trend = ban_trend.clone();
+    cache.failed_trend = failed_trend.clone();
+    cache.last_update = now;
+
+    (ban_trend, failed_trend)
 }
 
 /// 封禁效果追踪 — 复发率 + TOP 10
