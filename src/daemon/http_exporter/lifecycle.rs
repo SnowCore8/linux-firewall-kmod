@@ -33,6 +33,21 @@ pub fn start_http_exporter(port: u16, cfg: &Config) -> thread::JoinHandle<()> {
     };
 
     thread::spawn(move || {
+        // 非回环绑定且未配置认证 → 拒绝启动（避免管理 API 对全网开放）
+        let is_loopback = matches!(bind_address.as_str(), "127.0.0.1" | "::1" | "localhost");
+        let auth_configured = !metrics_user.is_empty() && !metrics_pass.is_empty();
+        if !is_loopback && !auth_configured {
+            eprintln!(
+                "[ERROR] 非回环地址 ({bind_address}) 绑定 HTTP 服务必须配置 metrics_username/metrics_password"
+            );
+            crate::logger::error!(
+                crate::logger::get(),
+                "拒绝启动无认证的非回环 HTTP 服务";
+                "address" => &bind_address,
+            );
+            return;
+        }
+
         // 创建多线程 runtime，支持更好的并发性能
         // worker_threads 默认为 CPU 核心数，适合处理 SSE 长连接 + API 请求
         let rt = match tokio::runtime::Builder::new_multi_thread()

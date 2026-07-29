@@ -8,6 +8,7 @@
  */
 
 #include "firewall.h"
+#include <linux/capability.h>
 #include <linux/netlink.h>
 #include <linux/socket.h>
 #include <net/sock.h>
@@ -1395,6 +1396,12 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
     if (payload_len < (int)sizeof(struct fw_nlmsg_hdr)) {
       pr_warn("netlink: payload too short: %d < %zu\n", payload_len,
               sizeof(struct fw_nlmsg_hdr));
+      goto next;
+    }
+
+    /* 控制面权限：任意本地进程可连 NETLINK_USERSOCK，必须要求 CAP_NET_ADMIN */
+    if (!netlink_capable(skb, CAP_NET_ADMIN)) {
+      pr_warn_ratelimited("netlink: denied unauthorized command (need CAP_NET_ADMIN)\n");
       goto next;
     }
 

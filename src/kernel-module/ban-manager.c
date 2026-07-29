@@ -398,6 +398,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
              ifa = rcu_dereference(ifa->ifa_next)) {
           if (ifa->ifa_local == target_ipv4) {
             rcu_read_unlock();
+            spin_unlock_bh(&fw->lock);
             kfree(entry);
             pr_warn("拒绝封禁本机接口 IP: %pI4 (dev=%s)\n", &target_ipv4, dev->name);
             return -EPERM;
@@ -419,6 +420,7 @@ static int __do_ban_ip(struct firewall_info *fw, u8 af, const void *ip,
           if (ipv6_addr_equal(&ifp->addr, target_ipv6)) {
             read_unlock_bh(&idev->lock);
             rcu_read_unlock();
+            spin_unlock_bh(&fw->lock);
             kfree(entry);
             pr_warn("拒绝封禁本机接口 IPv6: %pI6c (dev=%s)\n", target_ipv6, dev->name);
             return -EPERM;

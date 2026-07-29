@@ -168,6 +168,9 @@ impl super::NetlinkContext {
                     crate::types::record_ban_duration(duration);
                 }
             }
+            // 记录解封到 BAN_HISTORY（修复 record_unban 从未被调用的设计缺陷）
+            let ban_history = crate::types::BAN_HISTORY.get_or_init(crate::types::BanHistory::new);
+            ban_history.record_unban(&ip_str);
             // 更新 DAEMON_STATS 计数器
             crate::types::DAEMON_STATS
                 .total_unbans

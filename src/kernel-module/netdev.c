@@ -6,6 +6,7 @@
 
 #include "firewall.h"
 #include <linux/printk.h>
+#include <linux/slab.h>
 
 /* 自动发现的临时存储结构 */
 struct temp_ip_entry {
@@ -95,6 +96,55 @@ void sync_work_handler(struct work_struct *work) {
   rcu_read_unlock();
 
   if (current_count == 0) {
+    /* 无活动地址：清理自动白名单与本地缓存，避免已下线网段继续被信任 */
+    spin_lock(&fw->whitelist_lock);
+    hash_for_each_safe(fw->whitelist_table_ipv4, bkt, tmp, entry, hash) {
+      if (strcmp(entry->device_name, "manual") == 0 ||
+          strcmp(entry->device_name, "restored") == 0)
+        continue;
+      {
+        __be32 del_ip = entry->addr.ipv4;
+        __be32 del_mask = entry->mask.ipv4_mask;
+        char del_dev[16];
+        memcpy(del_dev, entry->device_name, sizeof(del_dev));
+        hlist_del_rcu(&entry->hash);
+        if (entry->mask.ipv4_mask != 0xFFFFFFFF)
+          list_del_rcu(&entry->subnet_node);
+        atomic_dec(&fw->whitelist_count);
+        call_rcu(&entry->rcu_head, free_whitelist_entry_rcu);
+        fw_netlink_send_whitelist_state_change(
+          FW_AF_INET, &del_ip, inet_mask_len(del_mask), 2, del_dev);
+      }
+    }
+    hash_for_each_safe(fw->whitelist_table_ipv6, bkt, tmp, entry, hash) {
+      if (strcmp(entry->device_name, "manual") == 0 ||
+          strcmp(entry->device_name, "restored") == 0)
+        continue;
+      {
+        struct in6_addr del_ip6 = entry->addr.ipv6;
+        u8 del_prefix = entry->mask.prefix_len;
+        char del_dev[16];
+        memcpy(del_dev, entry->device_name, sizeof(del_dev));
+        hlist_del_rcu(&entry->hash);
+        if (entry->mask.prefix_len < 128)
+          list_del_rcu(&entry->subnet_node);
+        atomic_dec(&fw->whitelist_count);
+        call_rcu(&entry->rcu_head, free_whitelist_entry_rcu);
+        fw_netlink_send_whitelist_state_change(
+          FW_AF_INET6, &del_ip6, del_prefix, 2, del_dev);
+      }
+    }
+    spin_unlock(&fw->whitelist_lock);
+
+    {
+      struct local_ip_cache *old_cache =
+        rcu_dereference_protected(fw->local_ip_cache, 1);
+      RCU_INIT_POINTER(fw->local_ip_cache, NULL);
+      if (old_cache) {
+        synchronize_rcu();
+        kfree(old_cache);
+      }
+    }
     kfree(current_ips);
     return;
   }
@@ -206,33 +256,29 @@ void sync_work_handler(struct work_struct *work) {
   }
 
   /* 重建本地 IP 缓存（热路径优化：避免每次包都走白名单哈希表查找）
-   * 使用新数组 + rcu_assign_pointer 原子切换，旧数组由 RCU 回调释放 */
+   * count 与 entries 同对象，经一次 rcu_assign_pointer 发布，避免拆分 TOCTOU */
   {
-    struct local_ip_cache_entry *new_cache;
-    struct local_ip_cache_entry *old_cache;
+    struct local_ip_cache *new_cache;
+    struct local_ip_cache *old_cache;
+    size_t cache_bytes = struct_size(new_cache, entries, current_count);
 
-    new_cache = kmalloc_array(current_count, sizeof(struct local_ip_cache_entry), GFP_KERNEL);
+    new_cache = kzalloc(cache_bytes, GFP_KERNEL);
     if (new_cache) {
+      new_cache->count = current_count;
       for (i = 0; i < current_count; i++) {
-        new_cache[i].af = current_ips[i].af;
+        new_cache->entries[i].af = current_ips[i].af;
         if (current_ips[i].af == FW_AF_INET6) {
-          new_cache[i].addr.ipv6 = current_ips[i].addr.ipv6;
-          new_cache[i].mask.prefix_len = current_ips[i].mask.prefix_len;
+          new_cache->entries[i].addr.ipv6 = current_ips[i].addr.ipv6;
+          new_cache->entries[i].mask.prefix_len = current_ips[i].mask.prefix_len;
         } else {
-          new_cache[i].addr.ipv4 = current_ips[i].addr.ipv4 &
-                                   current_ips[i].mask.ipv4_mask;
-          new_cache[i].mask.ipv4_mask = current_ips[i].mask.ipv4_mask;
+          new_cache->entries[i].addr.ipv4 = current_ips[i].addr.ipv4 &
+                                           current_ips[i].mask.ipv4_mask;
+          new_cache->entries[i].mask.ipv4_mask = current_ips[i].mask.ipv4_mask;
         }
       }
-      /* RCU 发布：先发布指针，再发布 count，
-       * 防止读侧看到新 count + 旧指针导致 OOB 访问 */
       old_cache = rcu_dereference_protected(fw->local_ip_cache, 1);
       rcu_assign_pointer(fw->local_ip_cache, new_cache);
-      smp_wmb(); /* 确保指针先于 count 对其他 CPU 可见 */
-      atomic_set(&fw->local_ip_cache_count, current_count);
-      /* 旧数组延迟释放（等待所有 RCU reader 完成） */
       if (old_cache) {
-        /* 使用 synchronize_rcu 等待所有 reader 完成，然后释放 */
         synchronize_rcu();
         kfree(old_cache);
       }

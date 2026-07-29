@@ -78,7 +78,7 @@ static struct ip_rate_entry *find_rate_entry_rcu(struct firewall_info *fw,
  *
  * 注意：调用方必须持有对应桶的 spinlock
  *
- * 无容量上限，按需扩展。
+ * 无容量上限已被撤销：受 fw_max_rate_entries 硬限制，防止源地址伪造耗尽内存。
  * 
  */
 static struct ip_rate_entry *create_rate_entry(struct firewall_info *fw, u8 af,
@@ -87,7 +87,10 @@ static struct ip_rate_entry *create_rate_entry(struct firewall_info *fw, u8 af,
   struct hlist_head *table = get_rate_table(fw, af);
   u32 hash = hash_ip_for_rate(af, ip, RATE_HASH_BITS);
 
-  /* 跳过容量限制（按需扩展，无上限） */
+  /* 硬容量上限：调用方已持有桶锁，rate_count 在锁保护下增减 */
+  if ((unsigned int)atomic_read(&fw->rate_count) >= fw_max_rate_entries) {
+    return ERR_PTR(-ENOSPC);
+  }
 
   /* 分配内存 */
   entry = kzalloc(sizeof(*entry), GFP_ATOMIC);
