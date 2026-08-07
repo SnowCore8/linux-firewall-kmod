@@ -1654,8 +1654,8 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
         q_offset = be32_to_cpu(q->offset);
         q_limit = be32_to_cpu(q->limit);
       }
-      fw_netlink_send_list_bans_response(be32_to_cpu(hdr->seq), sender_portid, q_offset,
-                                         q_limit);
+      fw_netlink_send_list_bans_response(
+        be32_to_cpu(hdr->seq), sender_portid, q_offset, q_limit);
       break;
     }
 

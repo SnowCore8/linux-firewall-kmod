@@ -71,8 +71,7 @@ static int validate_state_path(const char *filename) {
 }
 
 /* 将 jail 字段中的空白替换为 '_'，避免破坏空格分隔行格式 */
-static void sanitize_field_token(char *s, size_t n)
-{
+static void sanitize_field_token(char *s, size_t n) {
   size_t i;
   for (i = 0; i < n && s[i]; i++) {
     if (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')
@@ -81,8 +80,7 @@ static void sanitize_field_token(char *s, size_t n)
 }
 
 static int write_state_chunk(struct file *file, loff_t *pos, u32 *crc,
-                             const char *buf, int len)
-{
+                             const char *buf, int len) {
   if (len <= 0)
     return -EINVAL;
   if (kernel_write(file, buf, len, pos) != len)
@@ -92,8 +90,7 @@ static int write_state_chunk(struct file *file, loff_t *pos, u32 *crc,
 }
 
 /* 同目录 tmp → final 原子替换（依赖 rename(2) 语义） */
-static int fw_atomic_replace_file(const char *tmp_path, const char *final_path)
-{
+static int fw_atomic_replace_file(const char *tmp_path, const char *final_path) {
   char *argv[] = { "/bin/mv", "-f", (char *)tmp_path, (char *)final_path, NULL };
   char *envp[] = { "HOME=/", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", NULL };
   int ret;
@@ -106,8 +103,7 @@ static int fw_atomic_replace_file(const char *tmp_path, const char *final_path)
   return 0;
 }
 
-static void fw_unlink_path(const char *path)
-{
+static void fw_unlink_path(const char *path) {
   char *argv[] = { "/bin/rm", "-f", (char *)path, NULL };
   char *envp[] = { "HOME=/", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", NULL };
 

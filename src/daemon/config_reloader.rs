@@ -808,9 +808,8 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
     }
 
     // 正则编译失败则中止，不改运行态
-    jail::init_log_patterns(&mut new_cfg).map_err(|e| {
-        anyhow::anyhow!("重载时初始化日志模式失败，已保持旧配置: {e}")
-    })?;
+    jail::init_log_patterns(&mut new_cfg)
+        .map_err(|e| anyhow::anyhow!("重载时初始化日志模式失败，已保持旧配置: {e}"))?;
 
     // 保留 Web UI API 修改的 Jail 启用状态（GLOBAL_JAILS 是运行时权威源）
     if let Some(lock) = crate::http_exporter::GLOBAL_JAILS.get() {
