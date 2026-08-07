@@ -28,77 +28,40 @@ sudo apt install -y \
 ## 项目结构
 
 ```mermaid
-graph TD
+graph LR
     ROOT["linux-firewall-kmod/"]
-    MAKEFILE["Makefile 主 Makefile（all / kernel-module / daemon / test）"]
+    KERNEL["src/kernel-module/<br/>C 内核模块"]
+    DAEMON["src/daemon/<br/>Rust 守护进程"]
+    FRONTEND["frontend/<br/>Leptos WASM 前端"]
+    STATIC["src/daemon/web_ui/static/<br/>编译后静态资源"]
+    SUPPORT["config/ · tests/ · docs/<br/>scripts/ · debian/ · grafana/"]
 
-    subgraph SRC["src/"]
-        subgraph KERNEL["kernel-module/ 内核模块源码"]
-            K_MAIN["firewall-main.c 模块入口 / netfilter hook 注册"]
-            K_BAN["ban-manager.c 哈希表封禁管理"]
-            K_WL["whitelist.c 白名单（精确 + CIDR 两阶段匹配）"]
-            K_NF["netfilter.c 包处理与封禁判定"]
-            K_ND["netdev.c 网络设备辅助"]
-            K_PF["procfs.c /proc/firewall/* 接口"]
-            K_SP["state-persist.c 内核态状态保存/恢复"]
-            K_CL["cleanup.c 模块退出清理"]
-            K_H["firewall.h 公共头文件"]
-        end
-        subgraph DAEMON["daemon/ 用户态守护进程 (Rust)"]
-            D_MAIN["lib.rs / main.rs 守护进程入口"]
-            D_CFG["config.rs 配置解析"]
-            D_MON["file_monitor.rs notify 日志监听"]
-            D_TRK["tracker.rs Jail 失败计数"]
-            D_BAN["ban_manager.rs 封禁/解封调度"]
-            D_MET["http_exporter.rs Prometheus exporter"]
-            D_H["对应 Rust 模块文件"]
-        end
-    end
-
-    subgraph TESTS["tests/ 测试"]
-        T_RUN["run_tests.sh"]
-        T_FW["test_framework.sh"]
-        T_CFG["test_config.sh"]
-        T_SUITES["suites/ 测试套件"]
-        T_RPT["reports/ 生成的报告"]
-    end
-
-    DOCS["docs/ HonKit 文档"]
-    CONFIG["config/ 示例 YAML 配置"]
-    SCRIPTS["scripts/ 辅助脚本（构建、验证、deb 打包）"]
-    DEBIAN["debian/ Debian 打包元数据"]
-
-    ROOT --> MAKEFILE
-    ROOT --> SRC
-    SRC --> KERNEL
-    KERNEL --> K_MAIN
-    KERNEL --> K_BAN
-    KERNEL --> K_WL
-    KERNEL --> K_NF
-    KERNEL --> K_ND
-    KERNEL --> K_PF
-    KERNEL --> K_SP
-    KERNEL --> K_CL
-    KERNEL --> K_H
-    SRC --> DAEMON
-    DAEMON --> D_MAIN
-    DAEMON --> D_CFG
-    DAEMON --> D_MON
-    DAEMON --> D_TRK
-    DAEMON --> D_BAN
-    DAEMON --> D_MET
-    DAEMON --> D_H
-    ROOT --> TESTS
-    TESTS --> T_RUN
-    TESTS --> T_FW
-    TESTS --> T_CFG
-    TESTS --> T_SUITES
-    TESTS --> T_RPT
-    ROOT --> DOCS
-    ROOT --> CONFIG
-    ROOT --> SCRIPTS
-    ROOT --> DEBIAN
+    ROOT --> KERNEL
+    ROOT --> DAEMON
+    ROOT --> FRONTEND
+    ROOT --> SUPPORT
+    FRONTEND -->|"trunk build"| STATIC
+    STATIC -->|"rust-embed"| DAEMON
+    DAEMON <-->|"netlink"| KERNEL
 ```
+
+### 三个运行组件
+
+| 组件 | 入口 | 职责 |
+|------|------|------|
+| 内核模块 | `src/kernel-module/firewall-main.c` | 注册 netfilter hook，维护封禁/白名单并在数据包路径执行判定 |
+| 守护进程 | `src/daemon/main.rs`、`src/daemon/lib.rs` | 解析配置与日志、执行封禁策略、持久化状态，并提供 HTTP 服务 |
+| Web 前端 | `frontend/src/main.rs` | Leptos 管理界面；构建后嵌入守护进程二进制，不单独部署 |
+
+### 构建链路
+
+`make daemon` 会先执行 `make frontend`。Trunk 根据
+`frontend/Trunk.toml` 将前端输出到 `src/daemon/web_ui/static/`，
+随后 `rust-embed` 把这些资源编译进 `firewall-daemon`。
+
+其他目录分别保存 YAML 配置（`config/`）、集成测试（`tests/`）、
+正式文档（`docs/`）、辅助脚本（`scripts/`）、Debian 打包元数据
+（`debian/`）和 Grafana 资源（`grafana/`）。
 
 ## 代码规范
 

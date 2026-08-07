@@ -43,10 +43,11 @@ graph TB
     F --> G{count >= max?}
     G -->|No| H[Ignore]
     G -->|Yes| I{IP in whitelist?}
-    I -->|Yes| J[Ban Active]
-    I -->|No| K[Write to Kernel /proc/.../config]
+    I -->|Yes| J[Ignore ban]
+    I -->|No| K[Send netlink BAN command]
     K --> L[Kernel adds to hash table]
-        M --> N[Update Prometheus metrics]
+    L --> M[Kernel returns response/statistics]
+    M --> N[Daemon updates Prometheus metrics]
     N --> O[Ban Active]
 ```
 
@@ -76,19 +77,22 @@ graph TB
 
 ### Userspace -> Kernel
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| ProcFS write | `/proc/firewall/bans` | Ban / unban (`unban <ip>`) |
-| ProcFS write | `/proc/firewall/whitelist` | Add / remove whitelist entries |
+| Method | Interface | Purpose |
+|--------|-----------|---------|
+| netlink | Kernel-module protocol | Daemon bans, unbans, whitelist changes, and configuration |
+| ProcFS write | `/proc/firewall/bans` | Manual user ban / unban (`unban <ip>`) |
+| ProcFS write | `/proc/firewall/whitelist` | Manual user whitelist changes |
 
 > `/proc/firewall/config` and `/proc/firewall/stats` are read-only.
 > The module does not provide a "clear all" command — unban one by one
-> or reload the module.
+> or reload the module. Daemon-to-kernel traffic uses netlink; ProcFS
+> remains available for users and compatibility.
 
 ### Kernel -> Userspace
 
-| Method | Path | Purpose |
-|--------|------|---------|
+| Method | Interface | Purpose |
+|--------|-----------|---------|
+| netlink | Kernel-module protocol | Command responses, statistics, state snapshots, and DDoS events |
 | ProcFS read | `/proc/firewall/config` | Get ban_time, current ban/whitelist counts |
 | ProcFS read | `/proc/firewall/bans` | Get banned IP list |
 | ProcFS read | `/proc/firewall/whitelist` | Get whitelist |
@@ -98,7 +102,7 @@ graph TB
 
 | Component | Communication | Data |
 |-----------|---------------|------|
-| Daemon -> Prometheus | HTTP (tiny_http) | Metrics data |
+| Daemon -> HTTP clients | HTTP (axum) | Web UI, JSON API, SSE, health checks, and Prometheus metrics |
 | Daemon -> Log | File I/O | Operation logs |
 
 ## Sequence Diagrams
@@ -118,8 +122,9 @@ sequenceDiagram
     D->>D: regex match
     D->>D: count+1
     D->>D: check thresh
-    D->>K: ban 1.2.3.4 (ProcFS)
-    K->>S: add ban / INSERT
+    D->>K: netlink BAN 1.2.3.4
+    K->>K: add ban
+    K-->>D: netlink response/statistics
     D->>P: update metrics
 ```
 

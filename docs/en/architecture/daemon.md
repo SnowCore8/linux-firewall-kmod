@@ -16,41 +16,47 @@ The daemon `firewall-daemon` runs in userspace and is responsible for:
 
 | Component | Purpose |
 |-----------|---------|
-| Rust | Primary programming language (53 source files) |
-| regex | Rust regex crate for pattern matching (PCRE-compatible syntax) |
-| tiny_http | Prometheus HTTP metrics server (port 9119) |
+| Rust | Primary programming language |
+| serde_yaml / regex | YAML configuration parsing and regular-expression matching |
+| axum / tokio | Web UI, JSON API, SSE, and Prometheus HTTP service (port 9119) |
 | inotify | Linux file change monitoring (uses the `inotify` crate directly, not the `notify` abstraction) |
+| netlink | Bidirectional kernel communication for commands, status, and DDoS events |
+| rusqlite | Ban-record persistence |
 
 ## Module Structure
 
-The daemon is split into 53 Rust source files under `src/daemon/`, organized by responsibility. Modules are wired together via explicit `use` imports — no circular dependencies.
+The daemon is organized by responsibility under `src/daemon/`. Modules are wired together via explicit `use` imports with no circular dependencies. This document deliberately avoids source-file counts, which become stale as modules are split.
 
 | Module | Responsibility |
 |--------|----------------|
 | `lib.rs` | Library entry point; exposes the public API. `main.rs` is a thin wrapper that parses CLI args and calls `run_daemon()`. |
 | `log` | Structured logging macros (`log_info!` / `log_warn!` / `log_error!` / `log_debug!`), filtered at runtime by the `log_level` config. |
 | `types` | Shared data types: `BanRecord`, `FailureEntry`, `JailConfig`, `Protocol`, etc. |
-| `config_parser` | YAML parsing, field validation, default merging — invalid config fails fast at startup. |
+| `config` | YAML parsing, field validation, and default merging; invalid config fails fast at startup. |
 | `log_parser` | Per-line regex matching and IP extraction; wraps the `regex` crate. |
 | `failed_tracker` | Per-jail sliding-window `(ip, count, first_seen, last_seen)` counters. |
-| `ban` | Ban-trigger logic: `max_retries` / `findtime` / `ban_time` evaluation, ProcFS issuance. |
+| `ban` | Ban-trigger logic: `max_retries` / `findtime` / `ban_time` evaluation and netlink issuance. |
 | `jail` | Jail lifecycle management: create / enable / disable, hot-reload diff merging. |
 | `file_monitor` | `inotify` watches, log-rotation detection, inode re-attach. |
-| `http_exporter` | `tiny_http` HTTP server exposing 17 Prometheus metrics (13 daemon + 4 kernel). |
+| `netlink` | Bidirectional channel for kernel commands, responses, statistics, and DDoS decisions. |
+| `http_exporter` | axum-based metrics, health, API, SSE, and static-asset service. |
+| `web_ui` | Web API domain logic and compiled frontend static assets. |
 | `main` | CLI parsing, signal registration, `epoll` main loop, tokio runtime bootstrap. |
 
 ```mermaid
 graph LR
     main["main"] --> lib["lib.rs"]
-    lib --> config_parser
+    lib --> config
     lib --> log_parser
     lib --> failed_tracker
     lib --> ban
     lib --> jail
     lib --> file_monitor
     lib --> http_exporter
+    lib --> netlink
+    lib --> web_ui
     lib --> log
-    config_parser --> types
+    config --> types
     log_parser --> types
     failed_tracker --> types
     ban --> types
@@ -58,6 +64,8 @@ graph LR
     ban --> file_monitor
     file_monitor --> log
     http_exporter --> log
+    ban --> netlink
+    http_exporter --> web_ui
 ```
 
 ## Memory Safety
@@ -112,15 +120,19 @@ graph TB
         end
 
         subgraph OutputInterfaces["Output Interfaces"]
-            ProcFS["ProcFS (Kernel)"]
-            Prometheus["Prometheus (:9119)"]
+            Netlink["netlink kernel channel"]
+            ProcFS["ProcFS user/compatibility interface"]
+            HTTP["axum :9119<br/>Web UI / API / SSE / Metrics"]
         end
 
         Inotify --> EventHandler
         Timer --> EventHandler
         Signal --> EventHandler
         EventHandler --> JailManager
-        JailManager --> OutputInterfaces
+        JailManager --> Netlink
+        Netlink --> JailManager
+        JailManager --> ProcFS
+        JailManager --> HTTP
     end
 ```
 
@@ -137,9 +149,9 @@ graph TB
     E1["Compile regex for each jail"]
     F["Register inotify watches"]
     F1["Add watch for each jail's log_path"]
-    G["Start Prometheus HTTP server (:9119)"]
+    G["Start axum HTTP server (:9119)"]
     H["Restore bans to kernel"]
-    H1["Write to kernel module via ProcFS"]
+    H1["Write to kernel module via netlink"]
     I["Enter epoll main loop"]
 
     Start --> A --> B --> C --> D --> D1 --> E --> E1 --> F --> F1 --> G --> H --> H1 --> I
@@ -217,7 +229,7 @@ graph TB
     A["Counter Updated"] --> B{"count >= max_retries?"}
     B -->|Yes| C{"Within find_time window?"}
     C -->|Yes| D["Trigger Ban"]
-    D --> E["Write to kernel (ProcFS)"]
+    D --> E["Write to kernel via netlink"]
     D --> G["Update metrics"]
     C -->|No| H["Reset counter"]
     B -->|No| I["Continue monitoring"]

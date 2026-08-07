@@ -29,80 +29,42 @@ sudo apt install -y \
 ## Project Structure
 
 ```mermaid
-graph TD
+graph LR
     ROOT["linux-firewall-kmod/"]
-    MAKEFILE["Makefile Main Makefile (all / kernel-module / daemon / test)"]
+    KERNEL["src/kernel-module/<br/>C kernel module"]
+    DAEMON["src/daemon/<br/>Rust daemon"]
+    FRONTEND["frontend/<br/>Leptos WASM frontend"]
+    STATIC["src/daemon/web_ui/static/<br/>compiled static assets"]
+    SUPPORT["config/ · tests/ · docs/<br/>scripts/ · debian/ · grafana/"]
 
-    subgraph SRC["src/"]
-        subgraph KERNEL["kernel-module/ Kernel module source"]
-            K_MAIN["firewall-main.c Module entry / netfilter hook registration"]
-            K_BAN["ban-manager.c Hash-table ban management"]
-            K_WL["whitelist.c Whitelist (exact + CIDR two-stage matching)"]
-            K_NF["netfilter.c Packet handling and ban decision"]
-            K_ND["netdev.c Network device helpers"]
-            K_PF["procfs.c /proc/firewall/* interface"]
-            K_SP["state-persist.c Kernel state save/restore"]
-            K_CL["cleanup.c Module exit cleanup"]
-            K_H["firewall.h Common header"]
-        end
-        subgraph DAEMON["src/ Userspace daemon (Rust)"]
-            D_MAIN["main.rs Daemon entry"]
-            D_CFG["config_parser.rs YAML config parsing"]
-            D_MON["file_monitor.rs inotify log monitoring"]
-            D_TRK["failed_tracker.rs Jail failure counter"]
-            D_BAN["ban.rs Ban/unban scheduler"]
-            D_MET["http_exporter.rs Prometheus exporter"]
-            D_LOG["log_parser.rs Log parsing"]
-            D_
-            D_JAIL["jail.rs Jail definitions"]
-            D_TYPES["types.rs Type definitions"]
-        end
-    end
-
-    subgraph TESTS["tests/ Tests"]
-        T_RUN["run_tests.sh"]
-        T_FW["test_framework.sh"]
-        T_CFG["test_config.sh"]
-        T_SUITES["suites/ Test suites"]
-        T_RPT["reports/ Generated reports"]
-    end
-
-    DOCS["docs/ HonKit documentation"]
-    CONFIG["config/ Example YAML configs"]
-    SCRIPTS["scripts/ Helper scripts (build, verify, deb packaging)"]
-    DEBIAN["debian/ Debian packaging metadata"]
-
-    ROOT --> MAKEFILE
-    ROOT --> SRC
-    SRC --> KERNEL
-    KERNEL --> K_MAIN
-    KERNEL --> K_BAN
-    KERNEL --> K_WL
-    KERNEL --> K_NF
-    KERNEL --> K_ND
-    KERNEL --> K_PF
-    KERNEL --> K_SP
-    KERNEL --> K_CL
-    KERNEL --> K_H
-    SRC --> DAEMON
-    DAEMON --> D_MAIN
-    DAEMON --> D_CFG
-    DAEMON --> D_MON
-    DAEMON --> D_TRK
-    DAEMON --> D_BAN
-    DAEMON --> D_MET
-    DAEMON --> D_H
-    ROOT --> TESTS
-    TESTS --> T_RUN
-    TESTS --> T_FW
-    TESTS --> T_CFG
-    TESTS --> T_SUITES
-    TESTS --> T_RPT
-    ROOT --> DOCS
-    ROOT --> CONFIG
-    ROOT --> SCRIPTS
-    ROOT --> DEBIAN
+    ROOT --> KERNEL
+    ROOT --> DAEMON
+    ROOT --> FRONTEND
+    ROOT --> SUPPORT
+    FRONTEND -->|"trunk build"| STATIC
+    STATIC -->|"rust-embed"| DAEMON
+    DAEMON <-->|"netlink"| KERNEL
 ```
+
+### Three Runtime Components
+
+| Component | Entry point | Responsibility |
+|-----------|-------------|----------------|
+| Kernel module | `src/kernel-module/firewall-main.c` | Registers netfilter hooks, maintains bans and whitelists, and makes packet-path decisions |
+| Daemon | `src/daemon/main.rs`, `src/daemon/lib.rs` | Parses configuration and logs, applies ban policy, persists state, and serves HTTP |
+| Web frontend | `frontend/src/main.rs` | Leptos management UI; embedded in the daemon binary rather than deployed separately |
+
+### Build Pipeline
+
+`make daemon` first runs `make frontend`. Trunk follows
+`frontend/Trunk.toml` and writes the frontend bundle to
+`src/daemon/web_ui/static/`; `rust-embed` then compiles those assets into
+`firewall-daemon`.
+
+The remaining top-level directories contain YAML configuration (`config/`),
+integration tests (`tests/`), published documentation (`docs/`), helper scripts
+(`scripts/`), Debian packaging metadata (`debian/`), and Grafana resources
+(`grafana/`).
 
 ## Code Standards
 

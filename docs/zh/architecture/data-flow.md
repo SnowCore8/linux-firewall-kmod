@@ -45,9 +45,10 @@ sequenceDiagram
     Daemon->>Daemon: 读取日志行
     Daemon->>Daemon: 正则匹配
     Daemon->>Daemon: 计数+1, 检查阈值
-    Daemon->>Kernel: ban 1.2.3.4 (ProcFS)
+    Daemon->>Kernel: netlink BAN 1.2.3.4
     Kernel->>Kernel: 添加封禁到哈希表
-    Kernel->>Prometheus: 更新指标
+    Kernel-->>Daemon: netlink 响应/统计
+    Daemon->>Prometheus: 暴露更新后的指标
 ```
 
 ## 解封事件流
@@ -76,18 +77,21 @@ graph TB
 
 ### 用户态 → 内核态
 
-| 方式 | 路径 | 用途 |
+| 方式 | 接口 | 用途 |
 |------|------|------|
-| ProcFS 写入 | `/proc/firewall/bans` | 封禁 / 解封（`unban <ip>`） |
-| ProcFS 写入 | `/proc/firewall/whitelist` | 添加 / 移除白名单 |
+| netlink | 内核模块协议 | 守护进程下发封禁、解封、白名单与配置 |
+| ProcFS 写入 | `/proc/firewall/bans` | 用户手动封禁 / 解封（`unban <ip>`） |
+| ProcFS 写入 | `/proc/firewall/whitelist` | 用户手动添加 / 移除白名单 |
 
 > `/proc/firewall/config` 与 `/proc/firewall/stats` 为只读；模块不
-> 提供“清空”原生命令，需逐条 `unban` 或重载模块。
+> 提供“清空”原生命令，需逐条 `unban` 或重载模块。守护进程内部通信
+> 以 netlink 为主，ProcFS 保留为用户操作和兼容接口。
 
 ### 内核态 → 用户态
 
-| 方式 | 路径 | 用途 |
+| 方式 | 接口 | 用途 |
 |------|------|------|
+| netlink | 内核模块协议 | 命令响应、统计、状态快照与 DDoS 事件 |
 | ProcFS 读取 | `/proc/firewall/config` | 获取 ban_time、当前封禁/白名单数 |
 | ProcFS 读取 | `/proc/firewall/bans` | 获取封禁 IP 列表 |
 | ProcFS 读取 | `/proc/firewall/whitelist` | 获取白名单 |
@@ -97,7 +101,7 @@ graph TB
 
 | 组件 | 通信方式 | 数据 |
 |------|----------|------|
-| 守护进程 → Prometheus | HTTP (tiny_http) | 指标数据 |
+| 守护进程 → HTTP 客户端 | HTTP (axum) | Web UI、JSON API、SSE、健康检查与 Prometheus 指标 |
 | 守护进程 → 日志 | 文件 I/O | 运行日志 |
 
 ## 时序图
@@ -115,9 +119,10 @@ sequenceDiagram
     Daemon->>Daemon: 读取日志行
     Daemon->>Daemon: 正则匹配
     Daemon->>Daemon: 计数+1, 检查阈值
-    Daemon->>Kernel: ban 1.2.3.4 (ProcFS)
+    Daemon->>Kernel: netlink BAN 1.2.3.4
     Kernel->>Kernel: 添加封禁
-    Kernel->>Prometheus: 更新指标
+    Kernel-->>Daemon: netlink 响应/统计
+    Daemon->>Prometheus: 暴露更新后的指标
 ```
 
 ### 数据包处理时序

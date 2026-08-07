@@ -26,7 +26,7 @@ pub fn daemonize_process() -> Result<()> {
     // `ForkResult` 区分父子进程使父进程可立即 exit (避免 stdio 缓冲区双写)
     match unsafe { fork() } {
         Ok(ForkResult::Child) => {}
-        Ok(ForkResult::Parent { child: _, .. }) => {
+        Ok(ForkResult::Parent { .. }) => {
             // _exit 避免刷新 stdio 缓冲区 (fork 后的子进程中 stdio 状态未定义)
             process::exit(0);
         }
