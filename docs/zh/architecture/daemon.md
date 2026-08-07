@@ -16,41 +16,47 @@
 
 | 组件 | 用途 |
 |------|------|
-| Rust | 主要编程语言（53 个源文件，约 7000 行） |
-| regex | 正则表达式编译和匹配（与 PCRE 语法等价） |
-| tiny_http | Prometheus HTTP 指标服务器（端口 9119） |
+| Rust | 主要编程语言 |
+| serde_yaml / regex | YAML 配置解析、正则表达式编译和匹配 |
+| axum / tokio | Web UI、JSON API、SSE 和 Prometheus HTTP 服务（端口 9119） |
 | inotify | Linux 文件变化监控（直接使用 `inotify` crate 绑定） |
+| netlink | 与内核模块双向通信；下发封禁并接收状态与 DDoS 事件 |
+| rusqlite | 封禁记录持久化 |
 
 ## 模块结构
 
-守护进程在 `daemon/` 子目录中按职责划分为 53 个 Rust 源文件。模块间通过显式 `use` 导入，避免循环依赖。
+守护进程在 `src/daemon/` 中按职责划分为多个 Rust 模块。模块间通过显式 `use` 导入，避免循环依赖。文档不记录易随重构失效的源文件数量。
 
 | 模块 | 职责 |
 |------|------|
 | `lib.rs` | 库入口，导出公共 API；`main.rs` 仅做 CLI 解析后调用 `run_daemon()` |
 | `log` | 结构化日志宏（`log_info!` / `log_warn!` / `log_error!` / `log_debug!`），通过 `log_level` 配置过滤 |
 | `types` | 公共数据类型：`BanRecord`、`FailureEntry`、`JailConfig`、`Protocol` 等 |
-| `config_parser` | YAML 配置解析、字段校验、默认合并；非法配置启动期即失败 |
+| `config` | YAML 配置解析、字段校验、默认合并；非法配置启动期即失败 |
 | `log_parser` | 单行日志正则匹配、IP 提取；封装 `regex` crate |
 | `failed_tracker` | 每个 jail 的 `(ip, count, first_seen, last_seen)` 滑动窗口计数器 |
-| `ban` | 封禁触发逻辑：`max_retries` / `findtime` / `ban_time` 判定，调用 ProcFS 下发 |
+| `ban` | 封禁触发逻辑：`max_retries` / `findtime` / `ban_time` 判定，通过 netlink 下发 |
 | `jail` | jail 生命周期管理：创建 / 启停 / 热重载差异合并 |
 | `file_monitor` | `inotify` 监听 + 日志轮转检测 + inode 重连 |
-| `http_exporter` | `tiny_http` HTTP 服务，24 个 Prometheus 指标（4 kernel + 12 daemon + 4 netlink + 1 uptime + 3 信誉分） |
+| `netlink` | 内核命令、响应、统计与 DDoS 决策事件的双向通道 |
+| `http_exporter` | 基于 axum 的指标、健康检查、API、SSE 与静态资源服务 |
+| `web_ui` | Web API 业务逻辑和编译后前端静态资源 |
 | `main` | CLI 解析、信号注册、`epoll` 主循环、tokio runtime 启动 |
 
 ```mermaid
 graph LR
     main["main"] --> lib["lib.rs"]
-    lib --> config_parser
+    lib --> config
     lib --> log_parser
     lib --> failed_tracker
     lib --> ban
     lib --> jail
     lib --> file_monitor
     lib --> http_exporter
+    lib --> netlink
+    lib --> web_ui
     lib --> log
-    config_parser --> types
+    config --> types
     log_parser --> types
     failed_tracker --> types
     ban --> types
@@ -58,6 +64,8 @@ graph LR
     ban --> file_monitor
     file_monitor --> log
     http_exporter --> log
+    ban --> netlink
+    http_exporter --> web_ui
 ```
 
 ## 内存安全
@@ -112,8 +120,9 @@ graph TB
         end
         
         subgraph Output["输出接口"]
-            ProcFS["ProcFS 内核"]
-            Prometheus["Prometheus :9119"]
+            Netlink["netlink 内核通道"]
+            ProcFS["ProcFS 用户/兼容接口"]
+            HTTP["axum :9119<br/>Web UI / API / SSE / Metrics"]
         end
         
         Inotify --> EventHandler
@@ -121,7 +130,10 @@ graph TB
         Signal --> EventHandler
         LogParser --> JailManager
         ScheduledTasks --> JailManager
-        JailManager --> Output
+        JailManager --> Netlink
+        Netlink --> JailManager
+        JailManager --> ProcFS
+        JailManager --> HTTP
     end
 ```
 
@@ -137,9 +149,9 @@ graph LR
     F --> F1["为每个 jail 编译 regex"]
     F --> G["注册 inotify 监听"]
     G --> G1["为每个 jail 的 log_files 添加 watch"]
-    G --> H["启动 Prometheus HTTP 服务器 :9119"]
+    G --> H["启动 axum HTTP 服务器 :9119"]
     H --> I["恢复封禁到内核"]
-    I --> I1["通过 ProcFS 写入内核模块"]
+    I --> I1["通过 netlink 写入内核模块"]
     I --> J["进入 epoll 主循环"]
 ```
 
@@ -231,7 +243,7 @@ graph TB
     B -->|是| D{"在 findtime 窗口内?"}
     D -->|否| E["重置计数器"]
     D -->|是| F["触发封禁"]
-    F --> G["写入内核 ProcFS"]
+    F --> G["通过 netlink 写入内核"]
     F --> I["更新指标"]
 ```
 
