@@ -4,10 +4,12 @@
  * M1 修复：锁顺序文档
  * - 全局锁 (fw->lock): 用于保护白名单检查和容量检查
  * - 每桶锁 (fw->ban_locks_ipv4/ipv6[bkt]): 用于保护封禁表操作
+ * - 活跃链表锁 (fw->active_bans_lock): 保护 active_bans_list 写端
  * 锁顺序规则：
  * 1. 全局锁和每桶锁不能嵌套持有（必须先释放全局锁再获取每桶锁）
  * 2. 不同桶的锁可以并发获取（无顺序要求）
- * 3. RCU 读锁 (rcu_read_lock) 可以与任何锁嵌套（不会阻塞）
+ * 3. 持桶锁后方可获取 active_bans_lock（禁止反向：防与过期回调死锁）
+ * 4. RCU 读锁 (rcu_read_lock) 可以与任何锁嵌套（不会阻塞）
  */
 
 #include "firewall.h"
@@ -36,21 +38,26 @@ void ban_entry_expire_callback(struct timer_list *t) {
 
   if (af == FW_AF_INET) {
     __be32 expired_ip = entry->addr.ipv4;
-    /* 从哈希表中删除 */
     u32 bkt = hash_min(expired_ip, BAN_HASH_BITS);
     spin_lock_bh(&fw->ban_locks_ipv4[bkt]);
-    /* 二次检查：条目是否还在表中（可能已被手动解封） */
+    /* 已被手动解封 / 摘链 */
     if (hlist_unhashed(&entry->hash)) {
       spin_unlock_bh(&fw->ban_locks_ipv4[bkt]);
       return;
     }
-    list_del_rcu(&entry->ban_node);
+    /* 续期竞态：unban_time 已推后，重武装定时器而非误删 */
+    if (!READ_ONCE(entry->is_permanent) &&
+        time_before(jiffies, READ_ONCE(entry->unban_time))) {
+      mod_timer(&entry->expire_timer, READ_ONCE(entry->unban_time));
+      spin_unlock_bh(&fw->ban_locks_ipv4[bkt]);
+      return;
+    }
+    active_bans_del(fw, entry);
     hlist_del_rcu(&entry->hash);
     atomic_dec(&fw->ban_count);
     atomic_inc(&fw->cleanup_expired_total);
     spin_unlock_bh(&fw->ban_locks_ipv4[bkt]);
     call_rcu(&entry->rcu_head, free_ban_entry_rcu);
-    /* 通知守护进程 */
     fw_netlink_send_ban_state_change(FW_AF_INET, &expired_ip, 2, 0, "expired", NULL);
     pr_debug("IPv4 封禁自动过期：%pI4\n", &expired_ip);
   } else if (af == FW_AF_INET6) {
@@ -61,7 +68,13 @@ void ban_entry_expire_callback(struct timer_list *t) {
       spin_unlock_bh(&fw->ban_locks_ipv6[bkt]);
       return;
     }
-    list_del_rcu(&entry->ban_node);
+    if (!READ_ONCE(entry->is_permanent) &&
+        time_before(jiffies, READ_ONCE(entry->unban_time))) {
+      mod_timer(&entry->expire_timer, READ_ONCE(entry->unban_time));
+      spin_unlock_bh(&fw->ban_locks_ipv6[bkt]);
+      return;
+    }
+    active_bans_del(fw, entry);
     hlist_del_rcu(&entry->hash);
     atomic_dec(&fw->ban_count);
     atomic_inc(&fw->cleanup_expired_total);
@@ -213,7 +226,7 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw, const struct in6_addr *ip6
    * 重新 hash_min 落到错误桶(会导致重复检查失效、产生重复条目)。
    * IPv4 路径不受影响(其 key=ipv4,hash_min(ipv4,...) 与 bkt4 巧合一致)。*/
   hlist_add_head_rcu(&entry->hash, &fw->ban_table_ipv6[bkt6]);
-  list_add_tail_rcu(&entry->ban_node, &fw->active_bans_list);
+  active_bans_add(fw, entry);
 
   /* per-entry 过期定时器：始终初始化（避免 cleanup 时对未初始化 timer 操作），
    * 仅非永久封禁时启动定时器 */
@@ -294,7 +307,7 @@ static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4,
   /* 与 IPv6 路径保持一致:直接用桶索引 hlist_add_head_rcu,
    * 杜绝 hash_add_rcu(key) API 误用导致桶错位。*/
   hlist_add_head_rcu(&entry->hash, &fw->ban_table_ipv4[bkt4]);
-  list_add_tail_rcu(&entry->ban_node, &fw->active_bans_list);
+  active_bans_add(fw, entry);
 
   /* per-entry 过期定时器：始终初始化（避免 cleanup 时对未初始化 timer 操作），
    * 仅非永久封禁时启动定时器 */
@@ -502,7 +515,7 @@ static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip, bool p
           /* 取消 per-entry 过期定时器（非 _sync：回调检查 hlist_unhashed 后安全退出，
            * entry 内存在 RCU grace period 内有效，避免持锁等待回调导致死锁） */
           timer_delete(&entry->expire_timer);
-          list_del_rcu(&entry->ban_node);
+          active_bans_del(fw, entry);
           hlist_del_rcu(&entry->hash);
           atomic_dec(&fw->ban_count);
           found = 1;
@@ -523,7 +536,7 @@ static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip, bool p
           /* 取消 per-entry 过期定时器（非 _sync：回调检查 hlist_unhashed 后安全退出，
            * entry 内存在 RCU grace period 内有效，避免持锁等待回调导致死锁） */
           timer_delete(&entry->expire_timer);
-          list_del_rcu(&entry->ban_node);
+          active_bans_del(fw, entry);
           hlist_del_rcu(&entry->hash);
           atomic_dec(&fw->ban_count);
           found = 1;

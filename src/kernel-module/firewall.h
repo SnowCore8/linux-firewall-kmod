@@ -274,6 +274,8 @@ struct firewall_info {
   spinlock_t ban_locks_ipv6[1 << BAN_HASH_BITS];
   atomic_t ban_count;
   struct list_head active_bans_list; /* 全局活跃封禁链表，O(n) 遍历实际条目 */
+  /* 保护 active_bans_list 的写端；读端用 list_for_each_entry_rcu */
+  spinlock_t active_bans_lock;
   atomic_t shutting_down; /* 防止关闭期间定时器触发的标志 */
   unsigned int ban_time;
 
@@ -407,6 +409,25 @@ struct firewall_info {
   struct delayed_work sync_work;   /* 防抖同步工作队列 */
   bool netdev_notifier_registered; /* 跟踪通知器是否成功注册 */
 };
+
+/*
+ * active_bans_list 写锁助手
+ * 锁顺序（必须遵守，防死锁）：
+ *   ban_locks_ipv4/ipv6[bkt]  →  active_bans_lock
+ * 禁止：先持 active_bans_lock 再取桶锁。
+ * CIDR 遍历应 RCU 只读收集 IP，再走桶锁解封路径。
+ */
+static inline void active_bans_add(struct firewall_info *fw, struct ban_entry *entry) {
+  spin_lock(&fw->active_bans_lock);
+  list_add_tail_rcu(&entry->ban_node, &fw->active_bans_list);
+  spin_unlock(&fw->active_bans_lock);
+}
+
+static inline void active_bans_del(struct firewall_info *fw, struct ban_entry *entry) {
+  spin_lock(&fw->active_bans_lock);
+  list_del_rcu(&entry->ban_node);
+  spin_unlock(&fw->active_bans_lock);
+}
 
 /* 函数声明 */
 

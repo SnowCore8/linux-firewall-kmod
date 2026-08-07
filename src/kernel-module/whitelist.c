@@ -132,7 +132,7 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
             __be32 expired_ip = ban->addr.ipv4;
             /* 取消 per-entry 过期定时器（非 _sync，避免持锁死锁） */
             timer_delete(&ban->expire_timer);
-            list_del_rcu(&ban->ban_node);
+            active_bans_del(fw, ban);
             hlist_del_rcu(&ban->hash);
             atomic_dec(&fw->ban_count);
             call_rcu(&ban->rcu_head, free_ban_entry_rcu);
@@ -143,29 +143,45 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
         }
         spin_unlock_bh(&fw->ban_locks_ipv4[bkt]);
       } else {
-        /* CIDR 子网：遍历活跃链表（只扫描实际封禁条目，不遍历 4096 空桶） */
-        struct ban_entry *ban2, *tmp2;
-        rcu_read_lock();
-        list_for_each_entry_safe(ban2, tmp2, &fw->active_bans_list, ban_node) {
-          if (ban2->af != FW_AF_INET)
-            continue;
-          if ((ban2->addr.ipv4 & wl_mask) == (wl_ip & wl_mask)) {
-            u32 bkt = hash_min(ban2->addr.ipv4, BAN_HASH_BITS);
-            spin_lock_bh(&fw->ban_locks_ipv4[bkt]);
-            __be32 expired_ip = ban2->addr.ipv4;
-            /* 取消 per-entry 过期定时器（非 _sync，避免持锁死锁） */
-            timer_delete(&ban2->expire_timer);
-            list_del_rcu(&ban2->ban_node);
-            hlist_del_rcu(&ban2->hash);
-            atomic_dec(&fw->ban_count);
-            spin_unlock_bh(&fw->ban_locks_ipv4[bkt]);
-            call_rcu(&ban2->rcu_head, free_ban_entry_rcu);
-            removed++;
-            fw_netlink_send_ban_state_change(
-              FW_AF_INET, &expired_ip, 2, 0, "whitelist", NULL);
+        /* CIDR：RCU 只读收集匹配 IP，再按桶锁解封（禁止持锁遍历时改链） */
+        __be32 batch[32];
+        int n, i, pass_removed;
+        do {
+          n = 0;
+          pass_removed = 0;
+          rcu_read_lock();
+          list_for_each_entry_rcu(ban, &fw->active_bans_list, ban_node) {
+            if (ban->af != FW_AF_INET)
+              continue;
+            if ((ban->addr.ipv4 & wl_mask) != (wl_ip & wl_mask))
+              continue;
+            if (n < (int)ARRAY_SIZE(batch))
+              batch[n++] = ban->addr.ipv4;
           }
-        }
-        rcu_read_unlock();
+          rcu_read_unlock();
+          for (i = 0; i < n; i++) {
+            u32 bkt = hash_min(batch[i], BAN_HASH_BITS);
+            struct hlist_node *tmp2;
+            spin_lock_bh(&fw->ban_locks_ipv4[bkt]);
+            hlist_for_each_entry_safe(ban, tmp2, &fw->ban_table_ipv4[bkt], hash) {
+              if (ban->addr.ipv4 != batch[i])
+                continue;
+              {
+                __be32 expired_ip = ban->addr.ipv4;
+                timer_delete(&ban->expire_timer);
+                active_bans_del(fw, ban);
+                hlist_del_rcu(&ban->hash);
+                atomic_dec(&fw->ban_count);
+                call_rcu(&ban->rcu_head, free_ban_entry_rcu);
+                pass_removed++;
+                removed++;
+                fw_netlink_send_ban_state_change(
+                  FW_AF_INET, &expired_ip, 2, 0, "whitelist", NULL);
+              }
+            }
+            spin_unlock_bh(&fw->ban_locks_ipv4[bkt]);
+          }
+        } while (n == (int)ARRAY_SIZE(batch) && pass_removed > 0);
       }
     } else {
       u8 prefix = (u8)prefix_len;
@@ -179,7 +195,7 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
             struct in6_addr expired_ip6 = ban->addr.ipv6;
             /* 取消 per-entry 过期定时器（非 _sync，避免持锁死锁） */
             timer_delete(&ban->expire_timer);
-            list_del_rcu(&ban->ban_node);
+            active_bans_del(fw, ban);
             hlist_del_rcu(&ban->hash);
             atomic_dec(&fw->ban_count);
             call_rcu(&ban->rcu_head, free_ban_entry_rcu);
@@ -190,29 +206,45 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
         }
         spin_unlock_bh(&fw->ban_locks_ipv6[bkt]);
       } else {
-        /* CIDR 子网：遍历活跃链表（只扫描实际封禁条目） */
-        struct ban_entry *ban2, *tmp2;
-        rcu_read_lock();
-        list_for_each_entry_safe(ban2, tmp2, &fw->active_bans_list, ban_node) {
-          if (ban2->af != FW_AF_INET6)
-            continue;
-          if (ipv6_prefix_equal(&ban2->addr.ipv6, (const struct in6_addr *)ip, prefix)) {
-            u32 bkt = hash_ipv6(&ban2->addr.ipv6);
-            spin_lock_bh(&fw->ban_locks_ipv6[bkt]);
-            struct in6_addr expired_ip6 = ban2->addr.ipv6;
-            /* 取消 per-entry 过期定时器（非 _sync，避免持锁死锁） */
-            timer_delete(&ban2->expire_timer);
-            list_del_rcu(&ban2->ban_node);
-            hlist_del_rcu(&ban2->hash);
-            atomic_dec(&fw->ban_count);
-            spin_unlock_bh(&fw->ban_locks_ipv6[bkt]);
-            call_rcu(&ban2->rcu_head, free_ban_entry_rcu);
-            removed++;
-            fw_netlink_send_ban_state_change(
-              FW_AF_INET6, &expired_ip6, 2, 0, "whitelist", NULL);
+        /* CIDR：RCU 收集 + 桶锁解封（小批量循环，控制栈帧） */
+        struct in6_addr batch6[16];
+        int n, i, pass_removed;
+        do {
+          n = 0;
+          pass_removed = 0;
+          rcu_read_lock();
+          list_for_each_entry_rcu(ban, &fw->active_bans_list, ban_node) {
+            if (ban->af != FW_AF_INET6)
+              continue;
+            if (!ipv6_prefix_equal(&ban->addr.ipv6, (const struct in6_addr *)ip, prefix))
+              continue;
+            if (n < (int)ARRAY_SIZE(batch6))
+              batch6[n++] = ban->addr.ipv6;
           }
-        }
-        rcu_read_unlock();
+          rcu_read_unlock();
+          for (i = 0; i < n; i++) {
+            u32 bkt = hash_ipv6(&batch6[i]);
+            struct hlist_node *tmp2;
+            spin_lock_bh(&fw->ban_locks_ipv6[bkt]);
+            hlist_for_each_entry_safe(ban, tmp2, &fw->ban_table_ipv6[bkt], hash) {
+              if (ban->af != FW_AF_INET6 || !ipv6_addr_equal(&ban->addr.ipv6, &batch6[i]))
+                continue;
+              {
+                struct in6_addr expired_ip6 = ban->addr.ipv6;
+                timer_delete(&ban->expire_timer);
+                active_bans_del(fw, ban);
+                hlist_del_rcu(&ban->hash);
+                atomic_dec(&fw->ban_count);
+                call_rcu(&ban->rcu_head, free_ban_entry_rcu);
+                pass_removed++;
+                removed++;
+                fw_netlink_send_ban_state_change(
+                  FW_AF_INET6, &expired_ip6, 2, 0, "whitelist", NULL);
+              }
+            }
+            spin_unlock_bh(&fw->ban_locks_ipv6[bkt]);
+          }
+        } while (n == (int)ARRAY_SIZE(batch6) && pass_removed > 0);
       }
     }
 

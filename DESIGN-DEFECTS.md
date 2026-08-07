@@ -28,9 +28,9 @@
 
 ### Critical / High（内核）
 
-1. **`active_bans_list` 无独立锁** — 全局链表写入仅持对应哈希桶锁，跨桶并发可破坏链表。应增加专用锁或废除二级链表。
-2. **定时器生命周期** — 解封路径多用非同步 `timer_delete()`，与 RCU 释放竞态；续期与回调缺 generation 校验。
-3. **模块退出 RCU** — `call_rcu` 后仅 `synchronize_rcu()`，卸载前缺少 `rcu_barrier()`；错误路径可能跳过 netlink 退出。
+1. ✅ **`active_bans_list` 无独立锁** — 已增加 `active_bans_lock`；写端经 `active_bans_add/del`；锁顺序为桶锁 → 活跃链表锁。
+2. ✅ **定时器生命周期** — 过期回调在摘链前校验 `unban_time`（续期则重武装）；持桶锁内仍用非 sync `timer_delete`。
+3. ✅ **模块退出 RCU** — `cleanup_all_entries` 末尾 `synchronize_rcu` + `rcu_barrier`；init 失败路径改为阶梯清理（procfs 失败会 `fw_netlink_exit`）。
 4. **本机“保护”实为信任整段子网** — 接口地址按掩码写入缓存/白名单，同网段主机绕过封禁与速率检测。
 5. **配置双脑** — netlink 写 `fw_info.*`，部分路径仍读模块参数全局量（如 `fw_ban_time` / `fw_dynamic_threshold`）。
 6. **白名单与封禁非原子互斥** — 插入封禁与白名单更新无共享协议，可出现“已白名单仍被封”。
@@ -60,7 +60,7 @@
 
 ## 三、建议修复顺序
 
-1. `active_bans_list` 锁纪律 + 定时器/RCU 生命周期（防内核损坏）
+1. ~~`active_bans_list` 锁纪律 + 定时器/RCU 生命周期（防内核损坏）~~ ✅
 2. Netlink 请求-ACK + 守护进程发送方校验 + 周期对账（消除双脑）
 3. 本机保护改为精确地址；子网信任改为显式策略
 4. 配置单一 RCU/版本化快照；HTTP/SSE 认证与绑定策略统一

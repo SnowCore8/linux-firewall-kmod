@@ -55,8 +55,8 @@ EXPORT_SYMBOL_GPL(get_fw_info);
 
 /*
  * cleanup_all_entries - 清理所有封禁和白名单条目
- * 修复 S2-5：使用 RCU 安全删除（hlist_del_rcu + call_rcu），
- * 防止 use-after-free。删除后调用 synchronize_rcu() 等待所有 RCU 回调完成。
+ * 使用 RCU 安全删除（hlist_del_rcu + call_rcu），结束后 synchronize_rcu +
+ * rcu_barrier，确保回调与释放均完成后再返回（模块卸载安全）。
  */
 static void cleanup_all_entries(void) {
   struct ban_entry *entry;
@@ -68,7 +68,7 @@ static void cleanup_all_entries(void) {
   hash_for_each_safe(fw_info.ban_table_ipv4, ban_hash, tmp, entry, hash) {
     /* 取消 per-entry 过期定时器，防止 use-after-free */
     timer_delete_sync(&entry->expire_timer);
-    list_del_rcu(&entry->ban_node);
+    active_bans_del(&fw_info, entry);
     hlist_del_rcu(&entry->hash);
     call_rcu(&entry->rcu_head, free_ban_entry_rcu);
   }
@@ -76,7 +76,7 @@ static void cleanup_all_entries(void) {
   hash_for_each_safe(fw_info.ban_table_ipv6, ban_hash, tmp, entry, hash) {
     /* 取消 per-entry 过期定时器，防止 use-after-free */
     timer_delete_sync(&entry->expire_timer);
-    list_del_rcu(&entry->ban_node);
+    active_bans_del(&fw_info, entry);
     hlist_del_rcu(&entry->hash);
     call_rcu(&entry->rcu_head, free_ban_entry_rcu);
   }
@@ -149,8 +149,9 @@ static void cleanup_all_entries(void) {
     atomic_set(&fw_info.icmp_type_count, 0);
   }
 
-  /* 等待所有 RCU 回调完成，确保条目内存被完全释放 */
+  /* 等待所有 RCU 读者与回调完成，确保条目内存被完全释放 */
   synchronize_rcu();
+  rcu_barrier();
 }
 
 /*
@@ -179,6 +180,7 @@ static int __init firewall_init(void) {
   hash_init(fw_info.ban_table_ipv6);
   atomic_set(&fw_info.ban_count, 0);
   INIT_LIST_HEAD(&fw_info.active_bans_list);
+  spin_lock_init(&fw_info.active_bans_lock);
   atomic_set(&fw_info.shutting_down, 0);
 
   /* R9-4: 初始化每桶自旋锁 */
@@ -295,7 +297,7 @@ static int __init firewall_init(void) {
   ret = fw_netlink_init();
   if (ret) {
     pr_err("初始化 netlink 通信层失败: %d\n", ret);
-    goto err_notifier;
+    goto err_early;
   }
 
   if (state_file && strlen(state_file) > 0) {
@@ -312,7 +314,7 @@ static int __init firewall_init(void) {
   ret = create_procfs_entries(&fw_info);
   if (ret) {
     pr_err("创建 procfs 条目失败: %d\n", ret);
-    goto err_notifier;
+    goto err_netlink;
   }
 
   /* 注册 IPv4 Netfilter 钩子 */
@@ -332,18 +334,16 @@ static int __init firewall_init(void) {
   pr_info("模块初始化成功 (ban_time=%u, max_bans/s=%u)\n", fw_ban_time, fw_max_bans_per_second);
   return 0;
 
-err_nf_ipv6:
-  nf_unregister_net_hook(&init_net, &nf_ops_ipv6);
 err_nf_ipv4:
   nf_unregister_net_hook(&init_net, &nf_ops_ipv4);
 err_procfs:
   destroy_procfs_entries(&fw_info);
 err_netlink:
   fw_netlink_exit();
-err_notifier:
+  unregister_netdev_notifier(&fw_info);
+err_early:
   atomic_set(&fw_info.shutting_down, 1);
   cancel_delayed_work_sync(&fw_info.sync_work);
-  unregister_netdev_notifier(&fw_info);
   synchronize_rcu();
   cleanup_all_entries();
   return ret;

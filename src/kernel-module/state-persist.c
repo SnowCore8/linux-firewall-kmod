@@ -478,7 +478,7 @@ int restore_state_from_file(const char *filename) {
                 } else {
                   /* 与 ban-manager.c IPv4 路径保持一致:直接用桶索引 hlist_add_head_rcu */
                   hlist_add_head_rcu(&entry->hash, &fw_info.ban_table_ipv4[bkt4]);
-                  list_add_tail_rcu(&entry->ban_node, &fw_info.active_bans_list);
+                  active_bans_add(&fw_info, entry);
 
                   /* 启动 per-entry 过期定时器（非永久封禁时） */
                   if (!is_permanent)
@@ -581,7 +581,7 @@ int restore_state_from_file(const char *filename) {
                   /* 修复：直接用桶索引 hlist_add_head_rcu，避免 hash_add_rcu 以 bkt6 为 key
                    * 重新 hash_min 落到错误桶(同 ban-manager.c 路径) */
                   hlist_add_head_rcu(&entry->hash, &fw_info.ban_table_ipv6[bkt6]);
-                  list_add_tail_rcu(&entry->ban_node, &fw_info.active_bans_list);
+                  active_bans_add(&fw_info, entry);
 
                   /* 启动 per-entry 过期定时器（非永久封禁时） */
                   if (!is_permanent)
