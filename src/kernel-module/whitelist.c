@@ -278,8 +278,7 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip, int 
     ipv6_addr_prefix(&norm, (const struct in6_addr *)ip, prefix_len);
     bkt = hash_wl_ipv6(&norm);
     hlist_for_each_entry(entry, &fw->whitelist_table_ipv6[bkt], hash) {
-      if (entry->af == af &&
-          ipv6_addr_equal(&entry->addr.ipv6, &norm) &&
+      if (entry->af == af && ipv6_addr_equal(&entry->addr.ipv6, &norm) &&
           entry->mask.prefix_len == (u8)prefix_len) {
         /* 保存设备名（call_rcu 后另一 CPU 可能立即释放） */
         memcpy(removed_dev, entry->device_name, sizeof(removed_dev));

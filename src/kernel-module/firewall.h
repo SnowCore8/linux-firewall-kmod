@@ -257,8 +257,8 @@ struct ip_rate_entry {
   /* 端口扫描检测：窗口内去重端口集合（非端口跳变计数） */
   u16 seen_ports[PORT_SCAN_SEEN_MAX]; /* 本窗口见过的端口 */
   u8 seen_port_n;                     /* seen_ports 有效个数 */
-  atomic_t unique_ports;              /* = seen_port_n，供 procfs/netlink 读取 */
-  u8 port_scan_counted;               /* 是否已计入 fw->port_scan_detected */
+  atomic_t unique_ports; /* = seen_port_n，供 procfs/netlink 读取 */
+  u8 port_scan_counted;  /* 是否已计入 fw->port_scan_detected */
 
   /* 哈希表和 RCU */
   struct hlist_node hash;

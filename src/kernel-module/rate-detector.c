@@ -38,8 +38,7 @@ void free_rate_entry_rcu(struct rcu_head *head) {
 }
 
 /** 窗口重置或新建时清零端口扫描状态（调用方持桶锁） */
-static void reset_port_scan_state(struct ip_rate_entry *entry)
-{
+static void reset_port_scan_state(struct ip_rate_entry *entry) {
   memset(entry->seen_ports, 0, sizeof(entry->seen_ports));
   entry->seen_port_n = 0;
   atomic_set(&entry->unique_ports, 0);
@@ -51,8 +50,7 @@ static void reset_port_scan_state(struct ip_rate_entry *entry)
  * 调用方必须持有对应 rate 桶锁。
  */
 static void note_unique_dst_port(struct firewall_info *fw,
-                                 struct ip_rate_entry *entry, u16 dst_port)
-{
+                                 struct ip_rate_entry *entry, u16 dst_port) {
   u8 i, n;
 
   if (dst_port == 0)
@@ -70,8 +68,7 @@ static void note_unique_dst_port(struct firewall_info *fw,
     atomic_set(&entry->unique_ports, n + 1);
   }
 
-  if (!entry->port_scan_counted &&
-      entry->seen_port_n >= PORT_SCAN_THRESHOLD) {
+  if (!entry->port_scan_counted && entry->seen_port_n >= PORT_SCAN_THRESHOLD) {
     entry->port_scan_counted = 1;
     atomic_inc(&fw->port_scan_detected);
   }

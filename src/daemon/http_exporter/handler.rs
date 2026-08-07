@@ -196,9 +196,8 @@ async fn security_headers_middleware(
 /// 关联 Netlink 上下文与 `/proc/firewall`：两者就绪返回 200/`ok`，否则 503/`degraded`。
 async fn handle_health() -> (StatusCode, HeaderMap, String) {
     let snap = crate::runtime_status::runtime_snapshot();
-    let body = serde_json::to_string(&snap).unwrap_or_else(|_| {
-        "{\"status\":\"degraded\",\"error\":\"serialize\"}".to_string()
-    });
+    let body = serde_json::to_string(&snap)
+        .unwrap_or_else(|_| "{\"status\":\"degraded\",\"error\":\"serialize\"}".to_string());
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
