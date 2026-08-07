@@ -42,7 +42,7 @@
 9. ✅ **Netlink 发送成功 ≠ 内核成功** — `CmdResult` 对 BanIp 失败回滚 `ACTIVE_BAN_CACHE`；完整请求-ACK 状态机（延迟 `record_ban`）仍待深化。
 10. ✅ **守护进程接收未校验发送方** — `recvmsg` + 拒绝 `nl_pid != 0`。
 11. ✅ **封禁缓存无周期性对账** — `reconcile_with_kernel` + LIST 响应全量对账；stats 线程每 60s 拉 LIST。
-12. **配置热重载非事务** — 部分失败仍提交；回滚 off-by-one；HTTP 凭据/绑定无法真正热更新。
+12. ✅ **配置热重载非事务** — 提交前失败保持旧配置；inotify/组件同步失败回退；回滚改为弹出最近快照；metrics 绑定/凭据变更告警需重启。
 13. ✅ **SSE `/api/v1/events` 无认证** — 纳入与 API 相同的 Basic Auth 中间件；支持 `?access_token=`（Base64 user:pass）供 EventSource；连接上限仍为 10。
 14. **日志 inotify 事件类型不当** — 监视文件却注册目录子事件，轮转后可能盯死旧 inode。
 15. **SQLite 进热路径** — 失败日志同步写库；查询阻塞 2-worker Tokio。

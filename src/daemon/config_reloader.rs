@@ -102,6 +102,11 @@ struct ConfigSnapshot {
     capacity: crate::types::CapacityConfig,
     /// 可信 IP 列表
     trusted_ips: Vec<String>,
+    /// HTTP Metrics 绑定/鉴权（变更需重启才真正生效，快照仍保存以便回滚内存态）
+    metrics_port: u16,
+    metrics_bind_address: String,
+    metrics_username: Option<String>,
+    metrics_password: Option<String>,
     /// Jail 可回滚字段（max_retries/findtime/ban_time/enabled）
     jails: Vec<JailSnapshot>,
 }
@@ -126,6 +131,10 @@ fn save_config_snapshot(cfg: &Config) {
         webui: cfg.webui.clone(),
         capacity: cfg.capacity.clone(),
         trusted_ips: cfg.trusted_ips.clone(),
+        metrics_port: cfg.metrics_port,
+        metrics_bind_address: cfg.metrics_bind_address.clone(),
+        metrics_username: cfg.metrics_username.clone(),
+        metrics_password: cfg.metrics_password.clone(),
         jails,
     };
 
@@ -140,23 +149,20 @@ fn save_config_snapshot(cfg: &Config) {
 /// 回滚到上一个配置版本
 pub fn rollback_config(cfg: &mut Config) -> Result<()> {
     let mut history = config_history_lock().write();
-    if history.len() < 2 {
-        return Err(anyhow::anyhow!("没有可回滚的历史版本"));
-    }
-
-    // 移除当前版本
-    history.pop();
-    // 获取上一个版本（前置守卫保证 len >= 2，pop 后 len >= 1）
+    // history 仅保存「重载前」快照，不含当前运行配置；弹出最近一条即回滚目标
     let snapshot = history
-        .last()
-        .expect("配置历史在 pop 后为空，前置守卫 len < 2 应已拦截")
-        .clone();
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("没有可回滚的历史版本"))?;
 
     // 应用快照配置
     cfg.ddos = snapshot.ddos;
     cfg.webui = snapshot.webui;
     cfg.capacity = snapshot.capacity;
     cfg.trusted_ips = snapshot.trusted_ips;
+    cfg.metrics_port = snapshot.metrics_port;
+    cfg.metrics_bind_address = snapshot.metrics_bind_address;
+    cfg.metrics_username = snapshot.metrics_username;
+    cfg.metrics_password = snapshot.metrics_password;
 
     // 恢复 Jail 可回滚字段
     for jail_snap in &snapshot.jails {
@@ -749,19 +755,12 @@ fn sync_config_to_components(cfg: &Config) -> Result<()> {
 // 配置热重载
 // ============================================================================
 
-/// SIGHUP 热重载（双缓冲）：任何步骤失败旧配置不受影响。
+/// SIGHUP 热重载（事务）：提交前失败不影响运行态；提交后关键步骤失败则回退内存配置。
 ///
 /// 步骤：clone 旧 → 解析到新 → 应用默认 → 验证 → 迁移 `failed_hash` →
-/// 编译正则 → 原子替换 → 重建 inotify → 同步到各组件 → 持久化。
+/// 编译正则 → 保存快照 → 原子替换 → 重建 inotify → 可信 IP / 组件同步 → 持久化。
 ///
-/// # Arguments
-/// - `cfg`：旧配置（会被新配置原子替换）
-///
-/// # Returns
-/// 成功时 `Ok(())`，`DAEMON_STATS.config_reloads` +1
-///
-/// # Errors
-/// 配置源缺失 / 解析失败 / 验证失败 / inotify 重建失败
+/// HTTP 绑定地址与 metrics 凭据无法在不重启监听器的情况下热更新；若文件中变更则告警。
 pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
     use crate::config;
 
@@ -808,19 +807,10 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
         }
     }
 
-    if let Err(e) = jail::init_log_patterns(&mut new_cfg) {
-        crate::logger::warn!(
-            crate::logger::get(),
-            "重载时初始化日志模式失败";
-            "error" => %e
-        );
-    }
-
-    // 更新可信 IP 白名单
-    update_trusted_ips(&old_cfg.trusted_ips, &new_cfg.trusted_ips);
-
-    // 保存旧配置快照（用于回滚）
-    save_config_snapshot(&old_cfg);
+    // 正则编译失败则中止，不改运行态
+    jail::init_log_patterns(&mut new_cfg).map_err(|e| {
+        anyhow::anyhow!("重载时初始化日志模式失败，已保持旧配置: {e}")
+    })?;
 
     // 保留 Web UI API 修改的 Jail 启用状态（GLOBAL_JAILS 是运行时权威源）
     if let Some(lock) = crate::http_exporter::GLOBAL_JAILS.get() {
@@ -836,28 +826,60 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
         }
     }
 
+    let http_listener_changed = old_cfg.metrics_port != new_cfg.metrics_port
+        || old_cfg.metrics_bind_address != new_cfg.metrics_bind_address
+        || old_cfg.metrics_username != new_cfg.metrics_username
+        || old_cfg.metrics_password != new_cfg.metrics_password;
+
+    // 提交前先入历史，供 --rollback / 失败回退使用
+    save_config_snapshot(&old_cfg);
+
     *cfg = new_cfg;
+
+    if let Err(e) = setup_inotify(cfg) {
+        crate::logger::error!(
+            crate::logger::get(),
+            "重载后重建 inotify 失败，回退到旧配置";
+            "error" => %e
+        );
+        *cfg = old_cfg;
+        let _ = setup_inotify(cfg);
+        // 弹出刚才写入的快照（已回到该版本运行）
+        let _ = config_history_lock().write().pop();
+        return Err(e);
+    }
+
+    update_trusted_ips(&old_cfg.trusted_ips, &cfg.trusted_ips);
+
     DAEMON_STATS.config_reloads.fetch_add(1, Ordering::Relaxed);
 
-    // 更新全局缓存（供 persist_runtime_config 使用）
     set_global_trusted_ips(&cfg.trusted_ips);
     set_global_capacity(&cfg.capacity);
-
-    // 应用动态阈值基线配置（热重载时同步更新）
     crate::types::set_baseline_warmup_samples(cfg.ddos.baseline_warmup_samples);
 
-    setup_inotify(cfg)?;
-
-    // 同步配置到各组件
     if let Err(e) = sync_config_to_components(cfg) {
+        crate::logger::error!(
+            crate::logger::get(),
+            "同步配置到组件失败，回退到旧配置";
+            "error" => %e
+        );
+        update_trusted_ips(&cfg.trusted_ips, &old_cfg.trusted_ips);
+        *cfg = old_cfg;
+        let _ = setup_inotify(cfg);
+        let _ = sync_config_to_components(cfg);
+        let _ = config_history_lock().write().pop();
+        return Err(e);
+    }
+
+    if http_listener_changed {
         crate::logger::warn!(
             crate::logger::get(),
-            "同步配置到组件失败";
-            "error" => %e
+            "metrics 绑定地址或 Basic Auth 凭据已变更，需重启守护进程后监听器才会切换";
+            "bind" => &cfg.metrics_bind_address,
+            "port" => cfg.metrics_port
         );
     }
 
-    // 持久化配置
     if let Err(e) = persist_config(cfg, &get_global_jails_enabled()) {
         crate::logger::warn!(
             crate::logger::get(),
