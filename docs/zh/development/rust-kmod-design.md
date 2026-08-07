@@ -102,11 +102,10 @@ pub struct FirewallInfo {
     pub alloc_failure_count: AtomicU32,
     pub packets_dropped: AtomicI64,
     pub packets_accepted: AtomicI64,
-    pub cleanup_cycles: AtomicU32,
-    pub cleanup_expired_total: AtomicU32,
+    pub cleanup_cycles: AtomicU32,          // 遗留；无全局清理周期
+    pub cleanup_expired_total: AtomicU32,   // per-entry expire_timer 过期移除计数
     
-    // 定时器与工作队列
-    pub cleanup_timer: Timer,
+    // 工作队列（封禁过期由 ban_entry.expire_timer 管理，无全局 cleanup_timer）
     pub sync_work: DelayedWork,
     pub shutting_down: AtomicBool,
     
