@@ -18,10 +18,12 @@ use super::protocol::{FwNlMsgHdr, FwNlMsgType, FW_NL_MAGIC};
 #[derive(Debug, Clone, Copy)]
 pub struct FwNlListBansQuery {
     pub hdr: FwNlMsgHdr,
+    pub offset: u32,
+    pub limit: u32,
 }
 
 impl FwNlListBansQuery {
-    pub fn new(seq: u32) -> Self {
+    pub fn new(seq: u32, offset: u32, limit: u32) -> Self {
         Self {
             hdr: FwNlMsgHdr {
                 magic: FW_NL_MAGIC.to_be(),
@@ -29,6 +31,8 @@ impl FwNlListBansQuery {
                 msg_len: (std::mem::size_of::<Self>() as u16).to_be(),
                 seq: seq.to_be(),
             },
+            offset: offset.to_be(),
+            limit: limit.to_be(),
         }
     }
 
@@ -59,11 +63,13 @@ pub struct FwNlBanEntry {
 pub struct FwNlListBansResponse {
     pub hdr: FwNlMsgHdr,
     pub count: u32,
+    pub total: u32,
+    pub offset: u32,
     // 后面紧跟 count 个 FwNlBanEntry
 }
 
-/// 封禁表最大条目数（与内核 MAX_BAN_ENTRIES 一致）
-const MAX_BAN_ENTRIES: usize = 4096;
+/// 封禁列表单页上限（与内核 FW_NL_LIST_BANS_PAGE_MAX 一致）
+pub const LIST_BANS_PAGE_MAX: u32 = 256;
 /// 白名单表最大条目数（与内核 WHITELIST_MAX_ENTRIES 一致）
 const MAX_WHITELIST_ENTRIES: usize = 64;
 /// 速率表最大条目数（与内核 RATE_HASH_SIZE 一致）
@@ -81,8 +87,8 @@ impl FwNlListBansResponse {
             std::ptr::read(data.as_ptr() as *const Self)
         };
         let count = u32::from_be(resp.count) as usize;
-        if count > MAX_BAN_ENTRIES {
-            anyhow::bail!("封禁条目数 {} 超出上限 {}", count, MAX_BAN_ENTRIES);
+        if count > LIST_BANS_PAGE_MAX as usize {
+            anyhow::bail!("封禁页条目数 {} 超出上限 {}", count, LIST_BANS_PAGE_MAX);
         }
         let entries_data = &data[std::mem::size_of::<Self>()..];
 

@@ -150,6 +150,13 @@ struct fw_nl_config_update {
 /* 动态阈值标志位 */
 #define FW_NL_CFG_DT_ENABLED (1 << 0)
 
+/* 封禁列表查询（守护进程 → 内核） */
+struct fw_nl_list_bans_query {
+  struct fw_nlmsg_hdr hdr;
+  __u32 offset; /* 起始下标（IPv4 表序 + IPv6 表序） */
+  __u32 limit;  /* 本页上限，0=默认页大小 */
+} __packed;
+
 /* 封禁条目（内核 → 守护进程） */
 struct fw_nl_ban_entry {
   __u8 af;
@@ -164,9 +171,14 @@ struct fw_nl_ban_entry {
 /* 封禁列表响应（内核 → 守护进程） */
 struct fw_nl_list_bans_response {
   struct fw_nlmsg_hdr hdr;
-  __u32 count;
+  __u32 count;  /* 本页条目数 */
+  __u32 total;  /* 内核当前总数 */
+  __u32 offset; /* 本页起始下标 */
   /* 后面紧跟 count 个 fw_nl_ban_entry */
 } __packed;
+
+/* 单页最大条目：控制 GFP_ATOMIC 体量，且 payload 须落在 u16 msg_len 内 */
+#define FW_NL_LIST_BANS_PAGE_MAX 256
 
 /* 统计数据响应（内核 → 守护进程） */
 struct fw_nl_stats_response {
@@ -614,14 +626,15 @@ void fw_netlink_send_config_change(u32 flag, u32 value) {
 }
 
 /**
- * fw_netlink_send_list_bans_response - 向守护进程发送封禁列表响应
+ * fw_netlink_send_list_bans_response - 向守护进程发送封禁列表响应（分页）
  * @seq: 请求序列号
  * @portid: 守护进程 netlink 端口 ID（用于单播回复）
+ * @offset: 起始下标
+ * @limit: 本页上限（0 表示默认 FW_NL_LIST_BANS_PAGE_MAX）
  *
- * 响应守护进程的 ListBansQuery 请求，发送当前所有封禁条目。
- * 最多返回 4096 个条目。
+ * 按 IPv4 哈希序再 IPv6 哈希序分页，避免单 skb GFP_ATOMIC 巨页与 u16 msg_len 溢出。
  */
-int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
+int fw_netlink_send_list_bans_response(u32 seq, u32 portid, u32 offset, u32 limit) {
   struct sk_buff *skb;
   struct nlmsghdr *nlh;
   struct fw_nl_list_bans_response *resp;
@@ -632,12 +645,18 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
   int ret;
   int count = 0;
   int total = 0;
+  int idx = 0;
+  u32 page_limit;
 
   if (!fw_nl_sock) {
     return -ENOTCONN;
   }
 
-  /* 第一遍：RCU 下统计实际条目数（自适应，无上限） */
+  page_limit = limit ? limit : FW_NL_LIST_BANS_PAGE_MAX;
+  if (page_limit > FW_NL_LIST_BANS_PAGE_MAX)
+    page_limit = FW_NL_LIST_BANS_PAGE_MAX;
+
+  /* 第一遍：RCU 下统计实际条目数 */
   rcu_read_lock();
   hash_for_each_rcu(fw_info.ban_table_ipv4, hash, entry, hash) {
     total++;
@@ -647,54 +666,61 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
   }
   rcu_read_unlock();
 
-  /* 动态计算响应大小：头 + 实际条目数 * 条目大小 */
-  resp_size = sizeof(*resp) + total * sizeof(struct fw_nl_ban_entry);
+  if (offset > (u32)total)
+    offset = total;
+  {
+    u32 remain = (u32)total - offset;
+    if (page_limit > remain)
+      page_limit = remain;
+  }
 
-  /* 分配 netlink 消息缓冲区 */
+  resp_size = sizeof(*resp) + page_limit * sizeof(struct fw_nl_ban_entry);
+  if (resp_size > 0xFFFF) {
+    pr_warn_ratelimited("list bans page too large: %d\n", resp_size);
+    return -EMSGSIZE;
+  }
+
   skb = nlmsg_new(resp_size, GFP_ATOMIC);
   if (!skb) {
     return -ENOMEM;
   }
 
-  /* 构造消息头 */
   nlh = nlmsg_put(skb, 0, 0, FW_NL_LIST_BANS_RESPONSE, resp_size, 0);
   if (!nlh) {
     kfree_skb(skb);
     return -ENOMEM;
   }
 
-  /* 获取 payload 指针 */
   resp = (struct fw_nl_list_bans_response *)nlmsg_data(nlh);
   entries = (struct fw_nl_ban_entry *)(resp + 1);
 
-  /* 先填充响应头（count=0），后面再更新 */
   resp->hdr.magic = cpu_to_be32(FW_NL_MAGIC);
   resp->hdr.msg_type = cpu_to_be16(FW_NL_LIST_BANS_RESPONSE);
   resp->hdr.msg_len = cpu_to_be16(resp_size);
   resp->hdr.seq = cpu_to_be32(seq);
   resp->count = 0;
+  resp->total = cpu_to_be32(total);
+  resp->offset = cpu_to_be32(offset);
 
-  /* 重置 count，第二遍遍历填充条目 */
   count = 0;
+  idx = 0;
 
-  /* 遍历封禁表填充条目 */
   rcu_read_lock();
 
-  /* IPv4 封禁 */
   hash_for_each_rcu(fw_info.ban_table_ipv4, hash, entry, hash) {
     unsigned long ban_time = READ_ONCE(entry->ban_time);
     unsigned long unban_time = READ_ONCE(entry->unban_time);
     u32 duration_secs;
     s64 banned_at;
 
-    /* TOCTOU 保护：第二遍遍历期间可能新增条目，防止越界写入 */
-    if (count >= total)
+    if (idx++ < (int)offset)
+      continue;
+    if (count >= (int)page_limit)
       break;
 
     entries[count].af = FW_AF_INET;
     entries[count].is_permanent = READ_ONCE(entry->is_permanent) ? 1 : 0;
 
-    /* 计算封禁时长（秒） */
     if (entries[count].is_permanent) {
       duration_secs = 0;
     } else {
@@ -702,14 +728,12 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
     }
     entries[count].duration_secs = cpu_to_be32(duration_secs);
 
-    /* 计算封禁时间（unix 时间戳） */
     banned_at = ktime_get_real_seconds() - (jiffies - ban_time) / HZ;
     entries[count].banned_at = cpu_to_be64(banned_at);
 
     memset(entries[count].addr, 0, sizeof(entries[count].addr));
     memcpy(entries[count].addr, &entry->addr.ipv4, 4);
 
-    /* 复制 jail_name 和 reason */
     memset(entries[count].jail_name, 0, sizeof(entries[count].jail_name));
     memset(entries[count].reason, 0, sizeof(entries[count].reason));
     strscpy(entries[count].jail_name, entry->jail_name, sizeof(entries[count].jail_name));
@@ -717,48 +741,45 @@ int fw_netlink_send_list_bans_response(u32 seq, u32 portid) {
     count++;
   }
 
-  /* IPv6 封禁 */
-  hash_for_each_rcu(fw_info.ban_table_ipv6, hash, entry, hash) {
-    unsigned long ban_time = READ_ONCE(entry->ban_time);
-    unsigned long unban_time = READ_ONCE(entry->unban_time);
-    u32 duration_secs;
-    s64 banned_at;
+  if (count < (int)page_limit) {
+    hash_for_each_rcu(fw_info.ban_table_ipv6, hash, entry, hash) {
+      unsigned long ban_time = READ_ONCE(entry->ban_time);
+      unsigned long unban_time = READ_ONCE(entry->unban_time);
+      u32 duration_secs;
+      s64 banned_at;
 
-    /* TOCTOU 保护：第二遍遍历期间可能新增条目，防止越界写入 */
-    if (count >= total)
-      break;
+      if (idx++ < (int)offset)
+        continue;
+      if (count >= (int)page_limit)
+        break;
 
-    entries[count].af = FW_AF_INET6;
-    entries[count].is_permanent = READ_ONCE(entry->is_permanent) ? 1 : 0;
+      entries[count].af = FW_AF_INET6;
+      entries[count].is_permanent = READ_ONCE(entry->is_permanent) ? 1 : 0;
 
-    /* 计算封禁时长（秒） */
-    if (entries[count].is_permanent) {
-      duration_secs = 0;
-    } else {
-      duration_secs = (unban_time > ban_time) ? ((unban_time - ban_time) / HZ) : 0;
+      if (entries[count].is_permanent) {
+        duration_secs = 0;
+      } else {
+        duration_secs = (unban_time > ban_time) ? ((unban_time - ban_time) / HZ) : 0;
+      }
+      entries[count].duration_secs = cpu_to_be32(duration_secs);
+
+      banned_at = ktime_get_real_seconds() - (jiffies - ban_time) / HZ;
+      entries[count].banned_at = cpu_to_be64(banned_at);
+
+      memcpy(entries[count].addr, &entry->addr.ipv6, 16);
+
+      memset(entries[count].jail_name, 0, sizeof(entries[count].jail_name));
+      memset(entries[count].reason, 0, sizeof(entries[count].reason));
+      strscpy(entries[count].jail_name, entry->jail_name, sizeof(entries[count].jail_name));
+      strscpy(entries[count].reason, entry->reason, sizeof(entries[count].reason));
+      count++;
     }
-    entries[count].duration_secs = cpu_to_be32(duration_secs);
-
-    /* 计算封禁时间（unix 时间戳） */
-    banned_at = ktime_get_real_seconds() - (jiffies - ban_time) / HZ;
-    entries[count].banned_at = cpu_to_be64(banned_at);
-
-    memcpy(entries[count].addr, &entry->addr.ipv6, 16);
-
-    /* 复制 jail_name 和 reason */
-    memset(entries[count].jail_name, 0, sizeof(entries[count].jail_name));
-    memset(entries[count].reason, 0, sizeof(entries[count].reason));
-    strscpy(entries[count].jail_name, entry->jail_name, sizeof(entries[count].jail_name));
-    strscpy(entries[count].reason, entry->reason, sizeof(entries[count].reason));
-    count++;
   }
 
   rcu_read_unlock();
 
-  /* 更新实际数量 */
   resp->count = cpu_to_be32(count);
 
-  /* 单播回复给守护进程 */
   ret = netlink_unicast(fw_nl_sock, skb, portid, MSG_DONTWAIT);
   if (ret < 0 && ret != -ESRCH) {
     pr_warn_ratelimited("netlink unicast list bans response failed: %d\n", ret);
@@ -1625,10 +1646,18 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
       fw_netlink_send_analysis_response(be32_to_cpu(hdr->seq), sender_portid);
       break;
 
-    case FW_NL_LIST_BANS_QUERY:
+    case FW_NL_LIST_BANS_QUERY: {
+      u32 q_offset = 0, q_limit = 0;
       pr_debug("netlink: list bans query received, seq=%u\n", be32_to_cpu(hdr->seq));
-      fw_netlink_send_list_bans_response(be32_to_cpu(hdr->seq), sender_portid);
+      if (payload_len >= (int)sizeof(struct fw_nl_list_bans_query)) {
+        struct fw_nl_list_bans_query *q = (struct fw_nl_list_bans_query *)hdr;
+        q_offset = be32_to_cpu(q->offset);
+        q_limit = be32_to_cpu(q->limit);
+      }
+      fw_netlink_send_list_bans_response(be32_to_cpu(hdr->seq), sender_portid, q_offset,
+                                         q_limit);
       break;
+    }
 
     case FW_NL_LIST_WHITELIST_QUERY:
       pr_debug("netlink: list whitelist query received, seq=%u\n",

@@ -5,6 +5,8 @@
  */
 
 #include "firewall.h"
+#include <linux/crc32.h>
+#include <linux/kmod.h>
 #include <linux/namei.h>
 #include <linux/printk.h>
 #include <linux/slab.h>
@@ -68,6 +70,50 @@ static int validate_state_path(const char *filename) {
   return 0;
 }
 
+/* 将 jail 字段中的空白替换为 '_'，避免破坏空格分隔行格式 */
+static void sanitize_field_token(char *s, size_t n)
+{
+  size_t i;
+  for (i = 0; i < n && s[i]; i++) {
+    if (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')
+      s[i] = '_';
+  }
+}
+
+static int write_state_chunk(struct file *file, loff_t *pos, u32 *crc,
+                             const char *buf, int len)
+{
+  if (len <= 0)
+    return -EINVAL;
+  if (kernel_write(file, buf, len, pos) != len)
+    return -EIO;
+  *crc = crc32_le(*crc, buf, len);
+  return 0;
+}
+
+/* 同目录 tmp → final 原子替换（依赖 rename(2) 语义） */
+static int fw_atomic_replace_file(const char *tmp_path, const char *final_path)
+{
+  char *argv[] = { "/bin/mv", "-f", (char *)tmp_path, (char *)final_path, NULL };
+  char *envp[] = { "HOME=/", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", NULL };
+  int ret;
+
+  ret = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+  if (ret) {
+    pr_err("状态文件原子替换失败 (%s -> %s): %d\n", tmp_path, final_path, ret);
+    return -EIO;
+  }
+  return 0;
+}
+
+static void fw_unlink_path(const char *path)
+{
+  char *argv[] = { "/bin/rm", "-f", (char *)path, NULL };
+  char *envp[] = { "HOME=/", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", NULL };
+
+  (void)call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+}
+
 /*
  * save_state_to_file - 将当前状态保存到文件
  */
@@ -114,12 +160,26 @@ int save_state_to_file(const char *filename) {
   struct saved_whitelist_entry_v6 *wl_entries_v6 = NULL;
   int ban_count_v4 = 0, ban_count_v6 = 0;
   int wl_count_v4 = 0, wl_count_v6 = 0;
+  int truncated = 0;
   struct ban_entry *entry;
   struct whitelist_entry *wl_entry;
   u32 hash;
+  char *tmp_path = NULL;
+  u32 crc = ~0U;
 
   if (validate_state_path(filename) < 0) {
     pr_debug("状态文件路径验证失败: %s\n", filename);
+    return -EINVAL;
+  }
+
+  tmp_path = kasprintf(GFP_KERNEL, "%s.tmp", filename);
+  if (!tmp_path) {
+    pr_err("状态保存临时路径分配失败\n");
+    return -ENOMEM;
+  }
+  if (validate_state_path(tmp_path) < 0) {
+    pr_err("状态临时文件路径验证失败: %s\n", tmp_path);
+    kfree(tmp_path);
     return -EINVAL;
   }
 
@@ -134,6 +194,7 @@ int save_state_to_file(const char *filename) {
     kfree(ban_entries_v6);
     kfree(wl_entries_v4);
     kfree(wl_entries_v6);
+    kfree(tmp_path);
     pr_err("状态保存内存分配失败\n");
     return -ENOMEM;
   }
@@ -156,6 +217,8 @@ int save_state_to_file(const char *filename) {
       strscpy(ban_entries_v4[ban_count_v4].reason, entry->reason,
               sizeof(ban_entries_v4[ban_count_v4].reason));
       ban_count_v4++;
+    } else {
+      truncated = 1;
     }
   }
   rcu_read_unlock();
@@ -178,6 +241,8 @@ int save_state_to_file(const char *filename) {
       strscpy(ban_entries_v6[ban_count_v6].reason, entry->reason,
               sizeof(ban_entries_v6[ban_count_v6].reason));
       ban_count_v6++;
+    } else {
+      truncated = 1;
     }
   }
   rcu_read_unlock();
@@ -191,6 +256,8 @@ int save_state_to_file(const char *filename) {
       strscpy(wl_entries_v4[wl_count_v4].device_name, wl_entry->device_name,
               sizeof(wl_entries_v4[wl_count_v4].device_name));
       wl_count_v4++;
+    } else {
+      truncated = 1;
     }
   }
   rcu_read_unlock();
@@ -204,46 +271,39 @@ int save_state_to_file(const char *filename) {
       strscpy(wl_entries_v6[wl_count_v6].device_name, wl_entry->device_name,
               sizeof(wl_entries_v6[wl_count_v6].device_name));
       wl_count_v6++;
+    } else {
+      truncated = 1;
     }
   }
   rcu_read_unlock();
 
-  file = filp_open(filename, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW, 0600);
+  file = filp_open(tmp_path, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW, 0600);
   if (IS_ERR(file)) {
     ret = -EIO;
     goto out_free;
   }
 
-  ino_t saved_ino = 0;
-  dev_t saved_dev = 0;
-  {
-    struct kstat open_stat;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
-    int getattr_err = vfs_getattr(
-      &file->f_path, &open_stat, STATX_BASIC_STATS, AT_STATX_SYNC_AS_STAT);
-#else
-    int getattr_err = vfs_getattr(&file->f_path, &open_stat);
-#endif
-    if (getattr_err || !S_ISREG(open_stat.mode)) {
-      filp_close(file, NULL);
-      ret = -EIO;
-      goto out_free;
-    }
-    saved_ino = open_stat.ino;
-    saved_dev = open_stat.dev;
+  written = snprintf(buffer, sizeof(buffer), "FW_STATE 1\n");
+  if (write_state_chunk(file, &pos, &crc, buffer, written)) {
+    filp_close(file, NULL);
+    fw_unlink_path(tmp_path);
+    ret = -EIO;
+    goto out_free;
   }
 
-  /* 写入 IPv4 封禁 */
+  /* 写入 IPv4 封禁：reason 为行尾剩余字段，可含空格 */
   for (int i = 0; i < ban_count_v4; i++) {
     char ip_str[INET_ADDRSTRLEN];
-    /* 保存原始 reason，不使用 jail_name 替代——防止恢复时数据损坏 */
+    char jail[32];
     const char *reason = ban_entries_v4[i].reason[0] ? ban_entries_v4[i].reason : "(none)";
+    strscpy(jail, ban_entries_v4[i].jail_name, sizeof(jail));
+    sanitize_field_token(jail, sizeof(jail));
     ip_to_str(FW_AF_INET, &ban_entries_v4[i].ipv4, ip_str, sizeof(ip_str));
     written = snprintf(buffer, sizeof(buffer), "BAN_V4 %s %lu %s %s\n", ip_str,
-                       ban_entries_v4[i].remaining_time,
-                       ban_entries_v4[i].jail_name, reason);
-    if (kernel_write(file, buffer, written, &pos) != written) {
+                       ban_entries_v4[i].remaining_time, jail, reason);
+    if (write_state_chunk(file, &pos, &crc, buffer, written)) {
       filp_close(file, NULL);
+      fw_unlink_path(tmp_path);
       ret = -EIO;
       goto out_free;
     }
@@ -252,14 +312,16 @@ int save_state_to_file(const char *filename) {
   /* 写入 IPv6 封禁 */
   for (int i = 0; i < ban_count_v6; i++) {
     char ip_str[INET6_STR_LEN];
-    /* 保存原始 reason，不使用 jail_name 替代——防止恢复时数据损坏 */
+    char jail[32];
     const char *reason = ban_entries_v6[i].reason[0] ? ban_entries_v6[i].reason : "(none)";
+    strscpy(jail, ban_entries_v6[i].jail_name, sizeof(jail));
+    sanitize_field_token(jail, sizeof(jail));
     ip_to_str(FW_AF_INET6, &ban_entries_v6[i].ipv6, ip_str, sizeof(ip_str));
     written = snprintf(buffer, sizeof(buffer), "BAN_V6 %s %lu %s %s\n", ip_str,
-                       ban_entries_v6[i].remaining_time,
-                       ban_entries_v6[i].jail_name, reason);
-    if (kernel_write(file, buffer, written, &pos) != written) {
+                       ban_entries_v6[i].remaining_time, jail, reason);
+    if (write_state_chunk(file, &pos, &crc, buffer, written)) {
       filp_close(file, NULL);
+      fw_unlink_path(tmp_path);
       ret = -EIO;
       goto out_free;
     }
@@ -272,8 +334,9 @@ int save_state_to_file(const char *filename) {
     ip_to_str(FW_AF_INET, &net_addr, ip_str, sizeof(ip_str));
     written = snprintf(buffer, sizeof(buffer), "WL_V4 %s %d %s\n", ip_str,
                        inet_mask_len(wl_entries_v4[i].mask), wl_entries_v4[i].device_name);
-    if (kernel_write(file, buffer, written, &pos) != written) {
+    if (write_state_chunk(file, &pos, &crc, buffer, written)) {
       filp_close(file, NULL);
+      fw_unlink_path(tmp_path);
       ret = -EIO;
       goto out_free;
     }
@@ -284,35 +347,45 @@ int save_state_to_file(const char *filename) {
     written = snprintf(buffer, sizeof(buffer), "WL_V6 %pI6 %d %s\n",
                        &wl_entries_v6[i].ipv6, wl_entries_v6[i].prefix_len,
                        wl_entries_v6[i].device_name);
-    if (kernel_write(file, buffer, written, &pos) != written) {
+    if (write_state_chunk(file, &pos, &crc, buffer, written)) {
       filp_close(file, NULL);
+      fw_unlink_path(tmp_path);
       ret = -EIO;
       goto out_free;
     }
   }
 
-  /* TOCTOU 验证 */
-  {
-    struct kstat close_stat;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
-    int getattr_err = vfs_getattr(
-      &file->f_path, &close_stat, STATX_BASIC_STATS, AT_STATX_SYNC_AS_STAT);
-#else
-    int getattr_err = vfs_getattr(&file->f_path, &close_stat);
-#endif
-    if (getattr_err || close_stat.ino != saved_ino || close_stat.dev != saved_dev) {
-      filp_close(file, NULL);
-      ret = -EIO;
-      goto out_free;
-    }
+  written = snprintf(buffer, sizeof(buffer), "CRC32 %08x\n", ~crc);
+  if (kernel_write(file, buffer, written, &pos) != written) {
+    filp_close(file, NULL);
+    fw_unlink_path(tmp_path);
+    ret = -EIO;
+    goto out_free;
+  }
+
+  if (vfs_fsync(file, 0) != 0) {
+    filp_close(file, NULL);
+    fw_unlink_path(tmp_path);
+    ret = -EIO;
+    goto out_free;
   }
 
   filp_close(file, NULL);
+
+  ret = fw_atomic_replace_file(tmp_path, filename);
+  if (ret)
+    fw_unlink_path(tmp_path);
+
+  if (!ret && truncated)
+    pr_warn("状态保存已截断：上限 ban=%d wl=%d（已写 v4_ban=%d v6_ban=%d v4_wl=%d v6_wl=%d）\n",
+            MAX_SAVE_BAN, MAX_SAVE_WL, ban_count_v4, ban_count_v6, wl_count_v4, wl_count_v6);
+
 out_free:
   kfree(ban_entries_v4);
   kfree(ban_entries_v6);
   kfree(wl_entries_v4);
   kfree(wl_entries_v6);
+  kfree(tmp_path);
   return ret;
 }
 EXPORT_SYMBOL_GPL(save_state_to_file);
@@ -385,6 +458,34 @@ int restore_state_from_file(const char *filename) {
   if (bytes_read > 0) {
     buffer[bytes_read] = '\0';
 
+    /* 若存在 CRC32 行则校验（旧文件无该行则跳过，保持兼容） */
+    {
+      char *crc_line = NULL;
+      char *p = buffer;
+      char *last = NULL;
+      while ((p = strstr(p, "\nCRC32 ")) != NULL) {
+        last = p + 1;
+        p = last;
+      }
+      if (!last && strncmp(buffer, "CRC32 ", 6) == 0)
+        last = buffer;
+      if (last && strncmp(last, "CRC32 ", 6) == 0) {
+        u32 expect = 0, got;
+        size_t body_len = (size_t)(last - buffer);
+        if (sscanf(last + 6, "%x", &expect) == 1) {
+          got = ~crc32_le(~0U, buffer, body_len);
+          if (got != expect) {
+            pr_err("状态文件校验和失败：expect=%08x got=%08x，拒绝恢复\n", expect, got);
+            filp_close(file, NULL);
+            kfree(buffer);
+            return -EINVAL;
+          }
+        }
+        crc_line = last;
+        *crc_line = '\0'; /* 避免后续当数据行解析 */
+      }
+    }
+
     line = buffer;
     while ((token = strsep(&line, "\n")) != NULL) {
       if (*token == '\0')
@@ -394,12 +495,16 @@ int restore_state_from_file(const char *filename) {
       if (!cmd || !*cmd)
         continue;
 
+      if (strcmp(cmd, "FW_STATE") == 0 || strcmp(cmd, "CRC32") == 0)
+        continue;
+
       /* 恢复 IPv4 封禁 */
       if (strcmp(cmd, "BAN_V4") == 0 && token) {
         char *ip_str = strsep(&token, " ");
         char *time_str = strsep(&token, " ");
         char *jail_str = strsep(&token, " ");
-        char *reason_str = strsep(&token, " ");
+        /* reason 取行尾剩余（可含空格），兼容旧版单 token */
+        char *reason_str = token;
 
         /* 修复 W2-6：增强格式校验，确保只有预期的字段 */
         if (ip_str && time_str) {
@@ -502,7 +607,7 @@ int restore_state_from_file(const char *filename) {
         char *ip_str = strsep(&token, " ");
         char *time_str = strsep(&token, " ");
         char *jail_str = strsep(&token, " ");
-        char *reason_str = strsep(&token, " ");
+        char *reason_str = token;
 
         if (ip_str && time_str) {
           struct in6_addr ip6;

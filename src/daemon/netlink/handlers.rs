@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use std::net::IpAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::protocol::{
     config_flags, FwNlBanStateChange, FwNlCmdResult, FwNlConfigUpdate, FwNlDdosEvent,
@@ -13,9 +13,22 @@ use super::protocol::{
 };
 use super::responses::{
     FwNlAnalysisResponse, FwNlConfigAck, FwNlListBansResponse, FwNlListRatesResponse,
-    FwNlListWhitelistResponse, FwNlStatsResponse,
+    FwNlListWhitelistResponse, FwNlStatsResponse, LIST_BANS_PAGE_MAX,
 };
 use super::DdosDecisionEngine;
+
+const MAX_BAN_ENTRIES_ACCUM: usize = 65536;
+
+struct PendingListBans {
+    total: u32,
+    next_offset: u32,
+    infos: Vec<crate::types::BanInfo>,
+}
+
+fn pending_list_bans() -> &'static Mutex<Option<PendingListBans>> {
+    static PENDING: OnceLock<Mutex<Option<PendingListBans>>> = OnceLock::new();
+    PENDING.get_or_init(|| Mutex::new(None))
+}
 
 impl super::NetlinkContext {
     /// 处理 DDoS 事件
@@ -200,29 +213,29 @@ impl super::NetlinkContext {
             anyhow::bail!("封禁列表响应数据太短");
         }
 
-        let (_resp, entries) = FwNlListBansResponse::from_bytes(hdr_data)?;
+        let (resp, entries) = FwNlListBansResponse::from_bytes(hdr_data)?;
+        let page_count = entries.len() as u32;
+        let total = u32::from_be(resp.total);
+        let offset = u32::from_be(resp.offset);
+        let seq = u32::from_be(resp.hdr.seq);
+
         crate::logger::debug!(
             crate::logger::get(),
             "收到封禁列表响应";
-            "count" => entries.len()
+            "count" => page_count,
+            "total" => total,
+            "offset" => offset
         );
 
-        // 更新 ACTIVE_BAN_CACHE（全量对账：删陈旧 + 补缺失）
-        let cache = crate::types::ACTIVE_BAN_CACHE.get_or_init(crate::types::ActiveBanCache::new);
-        let mut kernel_ips = std::collections::HashSet::with_capacity(entries.len());
-        let mut to_insert = Vec::with_capacity(entries.len());
-
+        let mut page_infos = Vec::with_capacity(entries.len());
         for entry in &entries {
             let ip_str = FwNlListBansResponse::ip_str(entry);
             let duration = u32::from_be(entry.duration_secs);
             let is_permanent = entry.is_permanent != 0;
-            // 使用内核提供的实际封禁时间（unix 时间戳）
             let banned_at = u64::from_be(entry.banned_at) as i64;
             let raw_jail = FwNlListBansResponse::jail_name_str(entry);
             let reason = FwNlListBansResponse::reason_str(entry);
 
-            // 内核 jail_name="kernel" 表示来源不明确，需从 reason 推断
-            // 非 "kernel" 的值（如 "sshd"/"nginx"）来自 state-persist，直接使用
             let jail_name = if raw_jail.is_empty() || raw_jail == "kernel" {
                 let r = if reason.is_empty() {
                     &raw_jail
@@ -237,7 +250,6 @@ impl super::NetlinkContext {
             } else {
                 raw_jail.clone()
             };
-            // reason 为空时用 jail_name，不再 fallback 到 "restored"
             let final_reason = if reason.is_empty() {
                 if raw_jail.is_empty() || raw_jail == "kernel" {
                     "api".to_string()
@@ -250,8 +262,8 @@ impl super::NetlinkContext {
 
             let ban_history = crate::types::BAN_HISTORY.get_or_init(crate::types::BanHistory::new);
             let ban_count = ban_history.get_ban_count(&ip_str);
-            let ban_info = crate::types::BanInfo {
-                ip: ip_str.clone(),
+            page_infos.push(crate::types::BanInfo {
+                ip: ip_str,
                 ip_num: 0,
                 jail_name,
                 reason: final_reason,
@@ -264,20 +276,81 @@ impl super::NetlinkContext {
                 is_permanent,
                 fail_count: 0,
                 ban_count,
-            };
-            kernel_ips.insert(ip_str);
-            to_insert.push(ban_info);
+            });
         }
 
-        let removed = cache.reconcile_with_kernel(&kernel_ips, to_insert);
+        let mut done_infos: Option<Vec<crate::types::BanInfo>> = None;
+        {
+            let mut guard = pending_list_bans()
+                .lock()
+                .map_err(|_| anyhow::anyhow!("pending list bans lock poisoned"))?;
+            if offset == 0 {
+                *guard = Some(PendingListBans {
+                    total,
+                    next_offset: page_count,
+                    infos: page_infos,
+                });
+            } else {
+                match guard.as_mut() {
+                    Some(pending) if pending.next_offset == offset => {
+                        pending.total = total;
+                        pending.infos.extend(page_infos);
+                        pending.next_offset = offset.saturating_add(page_count);
+                    }
+                    _ => {
+                        crate::logger::warn!(
+                            crate::logger::get(),
+                            "封禁列表分页失序，丢弃本页并重置";
+                            "offset" => offset
+                        );
+                        *guard = None;
+                        return Ok(());
+                    }
+                }
+            }
 
-        crate::logger::info!(
-            crate::logger::get(),
-            "已对账封禁状态";
-            "kernel_count" => entries.len(),
-            "stale_removed" => removed,
-            "cache_len" => cache.len()
-        );
+            if let Some(pending) = guard.as_ref() {
+                if pending.next_offset >= pending.total || page_count == 0 {
+                    done_infos = guard.take().map(|p| p.infos);
+                }
+            }
+        }
+
+        if let Some(infos) = done_infos {
+            if infos.len() > MAX_BAN_ENTRIES_ACCUM {
+                anyhow::bail!("累计封禁条目过多: {}", infos.len());
+            }
+            let cache =
+                crate::types::ACTIVE_BAN_CACHE.get_or_init(crate::types::ActiveBanCache::new);
+            let mut kernel_ips = std::collections::HashSet::with_capacity(infos.len());
+            for info in &infos {
+                kernel_ips.insert(info.ip.clone());
+            }
+            let removed = cache.reconcile_with_kernel(&kernel_ips, infos);
+            crate::logger::info!(
+                crate::logger::get(),
+                "已对账封禁状态";
+                "kernel_count" => kernel_ips.len(),
+                "stale_removed" => removed,
+                "cache_len" => cache.len()
+            );
+            return Ok(());
+        }
+
+        let next_offset = offset.saturating_add(page_count);
+        if let Some(ctx) = super::get_global_netlink_ctx() {
+            if let Err(e) =
+                ctx.send_list_bans_query_page(seq.wrapping_add(1), next_offset, LIST_BANS_PAGE_MAX)
+            {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "继续拉取封禁列表失败";
+                    "offset" => next_offset,
+                    "error" => %e
+                );
+                let _ = pending_list_bans().lock().map(|mut g| *g = None);
+            }
+        }
 
         Ok(())
     }

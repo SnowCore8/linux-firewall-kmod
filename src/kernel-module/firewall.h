@@ -504,7 +504,7 @@ int fw_netlink_send_ban_state_change(u8 af, const void *ip, u8 action, u32 durat
                                      const char *reason, const char *jail_name);
 int fw_netlink_send_whitelist_state_change(u8 af, const void *ip, u8 prefix_len,
                                            u8 action, const char *dev_name);
-int fw_netlink_send_list_bans_response(u32 seq, u32 portid);
+int fw_netlink_send_list_bans_response(u32 seq, u32 portid, u32 offset, u32 limit);
 int fw_netlink_send_stats_response(u32 seq, u32 portid);
 int fw_netlink_send_analysis_response(u32 seq, u32 portid);
 int fw_netlink_send_config_ack(u32 seq, u32 applied_flags, u32 rejected_flags, u32 portid);
