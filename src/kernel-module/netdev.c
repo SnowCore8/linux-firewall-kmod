@@ -66,7 +66,8 @@ void sync_work_handler(struct work_struct *work) {
             break;
           current_ips[current_count].af = FW_AF_INET;
           current_ips[current_count].addr.ipv4 = ifa->ifa_local;
-          current_ips[current_count].mask.ipv4_mask = ifa->ifa_mask;
+          /* 本机保护仅信任精确主机地址，不信任接口掩码对应的整段子网 */
+          current_ips[current_count].mask.ipv4_mask = htonl(0xFFFFFFFF);
           strscpy(current_ips[current_count].name, dev->name, 16);
           current_count++;
         }
@@ -85,7 +86,7 @@ void sync_work_handler(struct work_struct *work) {
             break;
           current_ips[current_count].af = FW_AF_INET6;
           current_ips[current_count].addr.ipv6 = ifp->addr;
-          current_ips[current_count].mask.prefix_len = ifp->prefix_len;
+          current_ips[current_count].mask.prefix_len = 128;
           strscpy(current_ips[current_count].name, dev->name, 16);
           current_count++;
         }
@@ -169,10 +170,10 @@ void sync_work_handler(struct work_struct *work) {
     lookup_table[i].af = current_ips[i].af;
     if (current_ips[i].af == FW_AF_INET6) {
       lookup_table[i].addr.ipv6 = current_ips[i].addr.ipv6;
-      lookup_table[i].mask.prefix_len = current_ips[i].mask.prefix_len;
+      lookup_table[i].mask.prefix_len = 128;
     } else {
-      lookup_table[i].addr.ipv4 = current_ips[i].addr.ipv4 & current_ips[i].mask.ipv4_mask;
-      lookup_table[i].mask.ipv4_mask = current_ips[i].mask.ipv4_mask;
+      lookup_table[i].addr.ipv4 = current_ips[i].addr.ipv4;
+      lookup_table[i].mask.ipv4_mask = htonl(0xFFFFFFFF);
     }
     lookup_table[i].found = false;
   }
@@ -267,11 +268,10 @@ void sync_work_handler(struct work_struct *work) {
         new_cache->entries[i].af = current_ips[i].af;
         if (current_ips[i].af == FW_AF_INET6) {
           new_cache->entries[i].addr.ipv6 = current_ips[i].addr.ipv6;
-          new_cache->entries[i].mask.prefix_len = current_ips[i].mask.prefix_len;
+          new_cache->entries[i].mask.prefix_len = 128;
         } else {
-          new_cache->entries[i].addr.ipv4 = current_ips[i].addr.ipv4 &
-                                            current_ips[i].mask.ipv4_mask;
-          new_cache->entries[i].mask.ipv4_mask = current_ips[i].mask.ipv4_mask;
+          new_cache->entries[i].addr.ipv4 = current_ips[i].addr.ipv4;
+          new_cache->entries[i].mask.ipv4_mask = htonl(0xFFFFFFFF);
         }
       }
       old_cache = rcu_dereference_protected(fw->local_ip_cache, 1);
@@ -365,7 +365,9 @@ void unregister_netdev_notifier(struct firewall_info *fw) {
 EXPORT_SYMBOL_GPL(unregister_netdev_notifier);
 
 /*
- * auto_discover_system_ips - 自动发现系统 IP 并添加到白名单
+ * auto_discover_system_ips - 自动发现本机接口地址并加入白名单（精确 /32 / /128）
+ *
+ * 子网级信任须由用户显式配置（device_name=manual），不再用接口掩码整段放行。
  */
 void auto_discover_system_ips(struct firewall_info *fw) {
   struct temp_ip_entry *temp_ips;
@@ -398,7 +400,7 @@ void auto_discover_system_ips(struct firewall_info *fw) {
             break;
           temp_ips[temp_count].af = FW_AF_INET;
           temp_ips[temp_count].addr.ipv4 = ifa->ifa_local;
-          temp_ips[temp_count].mask.ipv4_mask = ifa->ifa_mask;
+          temp_ips[temp_count].mask.ipv4_mask = htonl(0xFFFFFFFF);
           strscpy(temp_ips[temp_count].name, dev->name, 16);
           temp_count++;
         }
@@ -417,7 +419,7 @@ void auto_discover_system_ips(struct firewall_info *fw) {
             break;
           temp_ips[temp_count].af = FW_AF_INET6;
           temp_ips[temp_count].addr.ipv6 = ifp->addr;
-          temp_ips[temp_count].mask.prefix_len = ifp->prefix_len;
+          temp_ips[temp_count].mask.prefix_len = 128;
           strscpy(temp_ips[temp_count].name, dev->name, 16);
           temp_count++;
         }

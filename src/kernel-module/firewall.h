@@ -762,17 +762,13 @@ static inline int validate_ip_address(u8 af, const void *ip, const char *ip_str,
 }
 
 /**
- * is_local_ip - 检查是否为本地 IP（热路径优化：优先查缓存）
+ * is_local_ip - 检查是否为本机接口精确地址（热路径缓存）
  * @fw: 防火墙信息
  * @af: 地址族
  * @ip: IP 地址
- * 返回：true 如果是本地 IP
+ * 返回：true 如果是本机接口地址（/32 或 /128）
  *
- * 本地 IP 缓存由 netdev_notifier 事件触发刷新，覆盖：
- * - USB 网卡插拔 (NETDEV_UP/DOWN)
- * - 手动修改 IP (NETDEV_CHANGE)
- * - DHCP 续租 (NETDEV_CHANGE)
- * - VPN/Docker 网桥 (NETDEV_UP/DOWN)
+ * 缓存由 netdev_notifier 刷新；仅存精确主机地址，同网段其他主机不豁免。
  */
 static inline bool is_local_ip(struct firewall_info *fw, u8 af, const void *ip) {
   struct local_ip_cache *cache;
