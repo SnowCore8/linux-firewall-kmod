@@ -130,15 +130,13 @@ void sync_work_handler(struct work_struct *work) {
           list_del_rcu(&entry->subnet_node);
         atomic_dec(&fw->whitelist_count);
         call_rcu(&entry->rcu_head, free_whitelist_entry_rcu);
-        fw_netlink_send_whitelist_state_change(
-          FW_AF_INET6, &del_ip6, del_prefix, 2, del_dev);
+        fw_netlink_send_whitelist_state_change(FW_AF_INET6, &del_ip6, del_prefix, 2, del_dev);
       }
     }
     spin_unlock(&fw->whitelist_lock);
 
     {
-      struct local_ip_cache *old_cache =
-        rcu_dereference_protected(fw->local_ip_cache, 1);
+      struct local_ip_cache *old_cache = rcu_dereference_protected(fw->local_ip_cache, 1);
       RCU_INIT_POINTER(fw->local_ip_cache, NULL);
       if (old_cache) {
         synchronize_rcu();
@@ -272,7 +270,7 @@ void sync_work_handler(struct work_struct *work) {
           new_cache->entries[i].mask.prefix_len = current_ips[i].mask.prefix_len;
         } else {
           new_cache->entries[i].addr.ipv4 = current_ips[i].addr.ipv4 &
-                                           current_ips[i].mask.ipv4_mask;
+                                            current_ips[i].mask.ipv4_mask;
           new_cache->entries[i].mask.ipv4_mask = current_ips[i].mask.ipv4_mask;
         }
       }
