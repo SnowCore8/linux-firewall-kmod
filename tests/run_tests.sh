@@ -191,48 +191,55 @@ fi
 fw_log_info "测试模式：仅加载/卸载模块，不安装到系统"
 
 # 加载内核模块
+# SKIP_MODULE=1：CI 在 build/test runner 内核版本不一致时设置，跳过硬加载，
+# 仅跑不依赖可加载 .ko 的套件（如 --category daemon）。
 fw_section "加载内核模块"
 fw_log_debug "KERNEL_MODULE_PATH=$KERNEL_MODULE_PATH"
 fw_log_debug "PROC_DIR=$PROC_DIR"
 fw_log_debug "PROC_BANS=$PROC_BANS"
 
-fw_ensure_module_loaded "$KERNEL_MODULE_PATH" || {
-    fw_log_error "内核模块加载失败，终止测试"
-    exit 1
-}
+if [[ "${SKIP_MODULE:-0}" == "1" ]]; then
+    fw_log_warn "跳过内核模块加载（SKIP_MODULE=1，环境不兼容或显式跳过）"
+    fw_log_warn "依赖模块的套件将失败或自行跳过；请使用 --category 限定范围"
+else
+    fw_ensure_module_loaded "$KERNEL_MODULE_PATH" || {
+        fw_log_error "内核模块加载失败，终止测试"
+        exit 1
+    }
 
-# 验证模块完全就绪（lsmod + procfs 双重检查）
-fw_log_info "验证模块就绪..."
-sleep 1  # 等待模块完全初始化
+    # 验证模块完全就绪（lsmod + procfs 双重检查）
+    fw_log_info "验证模块就绪..."
+    sleep 1  # 等待模块完全初始化
 
-_module_ready=false
-for i in 1 2 3; do
-    _lsmod_ok=false
-    _procfs_ok=false
-    _bans_ok=false
-    
-    _lsmod_raw=$(lsmod 2>/dev/null)
-    if echo "$_lsmod_raw" | grep -q "^firewall"; then
-        _lsmod_ok=true
+    _module_ready=false
+    for i in 1 2 3; do
+        _lsmod_ok=false
+        _procfs_ok=false
+        _bans_ok=false
+
+        _lsmod_raw=$(lsmod 2>/dev/null)
+        if echo "$_lsmod_raw" | grep -q "^firewall"; then
+            _lsmod_ok=true
+        fi
+        [[ -d "$PROC_DIR" ]] && _procfs_ok=true
+        [[ -w "$PROC_BANS" ]] && _bans_ok=true
+
+        fw_log_debug "检查 [$i]: lsmod=$_lsmod_ok procfs=$_procfs_ok bans=$_bans_ok"
+
+        if [[ "$_lsmod_ok" == true ]] && [[ "$_procfs_ok" == true ]] && [[ "$_bans_ok" == true ]]; then
+            _module_ready=true
+            break
+        fi
+        sleep 1
+    done
+
+    if [[ "$_module_ready" != true ]]; then
+        fw_log_error "模块未完全就绪"
+        exit 1
     fi
-    [[ -d "$PROC_DIR" ]] && _procfs_ok=true
-    [[ -w "$PROC_BANS" ]] && _bans_ok=true
-    
-    fw_log_debug "检查 [$i]: lsmod=$_lsmod_ok procfs=$_procfs_ok bans=$_bans_ok"
-    
-    if [[ "$_lsmod_ok" == true ]] && [[ "$_procfs_ok" == true ]] && [[ "$_bans_ok" == true ]]; then
-        _module_ready=true
-        break
-    fi
-    sleep 1
-done
 
-if [[ "$_module_ready" != true ]]; then
-    fw_log_error "模块未完全就绪"
-    exit 1
+    fw_log_info "模块就绪：lsmod ✓ | procfs ✓ | bans 接口 ✓"
 fi
-
-fw_log_info "模块就绪：lsmod ✓ | procfs ✓ | bans 接口 ✓"
 
 # ============================================================================
 # 测试套件映射
