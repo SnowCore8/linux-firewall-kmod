@@ -13,6 +13,17 @@ use super::auth::{auth_middleware, AuthCredentials};
 use super::metrics::generate_metrics;
 use crate::web_ui;
 
+/// 将同步 SQLite / 重查询移出 tokio worker，避免堵住 2-worker runtime。
+async fn db_blocking<T, F>(f: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .unwrap_or_else(|e| panic!("history db blocking task join failed: {e}"))
+}
+
 // ============================================================================
 // 路由构建
 // ============================================================================
@@ -470,35 +481,35 @@ async fn handle_api_rates_windows(
 /// `GET /api/v1/stats/heatmap` — 24 小时攻击热力图（按小时聚合）
 async fn handle_api_heatmap(
 ) -> Json<web_ui::api::ApiResponse<crate::history_snapshot::HourlyHeatmap>> {
-    let heatmap = web_ui::api::get_heatmap();
+    let heatmap = db_blocking(web_ui::api::get_heatmap).await;
     Json(web_ui::api::ApiResponse::ok(heatmap))
 }
 
 /// `GET /api/v1/stats/recidivism` — 封禁效果追踪（复发率 + TOP 10）
 async fn handle_api_recidivism() -> Json<web_ui::api::ApiResponse<web_ui::api::RecidivismResponse>>
 {
-    let recidivism = web_ui::api::get_ban_recidivism();
+    let recidivism = db_blocking(web_ui::api::get_ban_recidivism).await;
     Json(web_ui::api::ApiResponse::ok(recidivism))
 }
 
 /// `GET /api/v1/stats/ban-effectiveness` — 封禁效果分析（按级别统计复发率）
 async fn handle_api_ban_effectiveness(
 ) -> Json<web_ui::api::ApiResponse<web_ui::api::BanEffectivenessResponse>> {
-    let effectiveness = web_ui::api::get_ban_effectiveness();
+    let effectiveness = db_blocking(web_ui::api::get_ban_effectiveness).await;
     Json(web_ui::api::ApiResponse::ok(effectiveness))
 }
 
 /// `GET /api/v1/stats/periodic-attackers` — 周期性攻击者检测
 async fn handle_api_periodic_attackers(
 ) -> Json<web_ui::api::ApiResponse<Vec<crate::history_snapshot::PeriodicAttacker>>> {
-    let attackers = web_ui::api::get_periodic_attackers();
+    let attackers = db_blocking(web_ui::api::get_periodic_attackers).await;
     Json(web_ui::api::ApiResponse::ok(attackers))
 }
 
 /// `GET /api/v1/stats/collaborative-attacks` — 协同攻击检测
 async fn handle_api_collaborative_attacks(
 ) -> Json<web_ui::api::ApiResponse<Vec<crate::history_snapshot::CollaborativeAttack>>> {
-    let attacks = web_ui::api::get_collaborative_attacks();
+    let attacks = db_blocking(web_ui::api::get_collaborative_attacks).await;
     Json(web_ui::api::ApiResponse::ok(attacks))
 }
 
@@ -571,7 +582,7 @@ async fn handle_api_service_probes(
 /// `GET /api/v1/stats/ban-duration-recommendations` — 封禁时长推荐
 async fn handle_api_ban_duration_recommendations(
 ) -> Json<web_ui::api::ApiResponse<web_ui::api::BanDurationRecommendationResponse>> {
-    let recs = web_ui::api::get_ban_duration_recommendations();
+    let recs = db_blocking(web_ui::api::get_ban_duration_recommendations).await;
     Json(web_ui::api::ApiResponse::ok(recs))
 }
 
@@ -603,22 +614,25 @@ async fn handle_api_reputation(
 /// `GET /api/v1/stats/threshold-recommendations` — 阈值调优建议
 async fn handle_api_threshold_recommendations(
 ) -> Json<web_ui::api::ApiResponse<web_ui::api::ThresholdRecommendationResponse>> {
-    let jails = crate::http_exporter::get_global_jails();
-    let recs = crate::history_snapshot::analyze_thresholds(&jails);
+    let recs = db_blocking(|| {
+        let jails = crate::http_exporter::get_global_jails();
+        crate::history_snapshot::analyze_thresholds(&jails)
+    })
+    .await;
     Json(web_ui::api::ApiResponse::ok(recs))
 }
 
 /// `GET /api/v1/stats/network-distribution` — 攻击源网络分布
 async fn handle_api_network_distribution(
 ) -> Json<web_ui::api::ApiResponse<Vec<crate::history_snapshot::NetworkBlock>>> {
-    let blocks = crate::history_snapshot::get_network_distribution();
+    let blocks = db_blocking(crate::history_snapshot::get_network_distribution).await;
     Json(web_ui::api::ApiResponse::ok(blocks))
 }
 
 /// `GET /api/v1/stats/attack-predictions` — 攻击时间预测 + Jail 攻击趋势
 async fn handle_api_attack_predictions(
 ) -> Json<web_ui::api::ApiResponse<crate::history_snapshot::AttackPredictionSummary>> {
-    let summary = web_ui::api::get_attack_predictions();
+    let summary = db_blocking(web_ui::api::get_attack_predictions).await;
     Json(web_ui::api::ApiResponse::ok(summary))
 }
 

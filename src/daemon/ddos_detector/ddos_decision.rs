@@ -226,6 +226,12 @@ impl ConnRateTracker {
     /// # Returns
     /// 检测到的 DDoS 事件列表
     pub fn detect(&self, config: &DdosConfig) -> Vec<DdosEvent> {
+        // 网络层检测已下沉到 kmod；非测试构建禁用用户态 detect，防止误启双封禁
+        if !cfg!(test) {
+            let _ = (self, config);
+            return Vec::new();
+        }
+
         if !config.enabled {
             return Vec::new();
         }

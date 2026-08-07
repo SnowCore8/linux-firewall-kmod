@@ -34,10 +34,12 @@ pub use threshold_analysis::{
     analyze_thresholds, ThresholdRecommendation, ThresholdRecommendationResponse,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
+use std::sync::mpsc::{self, SyncSender};
 use std::sync::Mutex;
+use std::thread;
 
 /// 历史数据数据库路径
 const HISTORY_DB_PATH: &str = "/var/lib/firewall/history.db";
@@ -45,8 +47,37 @@ const HISTORY_DB_PATH: &str = "/var/lib/firewall/history.db";
 /// 保留时长（秒）：24 小时
 const RETENTION_SECS: i64 = 24 * 60 * 60;
 
+/// 异步写库任务（封禁热路径只入队，不阻塞）
+enum DbWriteOp {
+    PersistBan {
+        ip: String,
+        ban_count: u32,
+        last_banned_at: i64,
+        last_unbanned_at: i64,
+        was_permanent: bool,
+    },
+    BanEvent {
+        ip: String,
+        jail_name: String,
+        ban_count: u32,
+        banned_at: i64,
+    },
+    PersistReputation {
+        ip: String,
+        score: u32,
+        last_failure_at: i64,
+        total_failures: u32,
+        total_bans: u32,
+    },
+    Shutdown,
+}
+
 /// 全局数据库连接（通过 `history_db()` 访问）
 static HISTORY_DB: once_cell::sync::Lazy<Mutex<Option<Connection>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(None));
+
+/// 写队列（有界，满则丢弃并打 warn，避免拖死封禁路径）
+static DB_WRITE_TX: once_cell::sync::Lazy<Mutex<Option<SyncSender<DbWriteOp>>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(None));
 
 /// 获取历史数据库锁（统一错误信息）
@@ -57,6 +88,90 @@ pub(super) fn history_db() -> std::sync::MutexGuard<'static, Option<Connection>>
     HISTORY_DB
         .lock()
         .expect("HISTORY_DB 互斥锁中毒，请检查 SQLite 操作是否发生 panic")
+}
+
+fn enqueue_db_write(op: DbWriteOp) {
+    let guard = DB_WRITE_TX.lock().expect("DB_WRITE_TX 互斥锁中毒");
+    let Some(tx) = guard.as_ref() else {
+        return;
+    };
+    if let Err(e) = tx.try_send(op) {
+        crate::logger::warn!(
+            crate::logger::get(),
+            "历史库写队列繁忙，丢弃一次持久化";
+            "error" => %e
+        );
+    }
+}
+
+fn apply_db_write(conn: &Connection, op: DbWriteOp) {
+    match op {
+        DbWriteOp::PersistBan {
+            ip,
+            ban_count,
+            last_banned_at,
+            last_unbanned_at,
+            was_permanent,
+        } => {
+            if let Err(e) = conn.execute(
+                "INSERT OR REPLACE INTO ban_history
+                 (ip, ban_count, last_banned_at, last_unbanned_at, was_permanent)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    ip,
+                    ban_count,
+                    last_banned_at,
+                    last_unbanned_at,
+                    was_permanent as i64
+                ],
+            ) {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "持久化封禁历史失败";
+                    "error" => %e
+                );
+            }
+        }
+        DbWriteOp::BanEvent {
+            ip,
+            jail_name,
+            ban_count,
+            banned_at,
+        } => {
+            if let Err(e) = conn.execute(
+                "INSERT INTO ban_events (ip, jail_name, banned_at, ban_count)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![ip, jail_name, banned_at, ban_count],
+            ) {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "记录封禁事件失败";
+                    "error" => %e
+                );
+            }
+        }
+        DbWriteOp::PersistReputation {
+            ip,
+            score,
+            last_failure_at,
+            total_failures,
+            total_bans,
+        } => {
+            if let Err(e) = conn.execute(
+                "INSERT OR REPLACE INTO ip_reputation
+                 (ip, score, last_failure_at, total_failures, total_bans)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![ip, score, last_failure_at, total_failures, total_bans],
+            ) {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "持久化 IP 信誉分失败";
+                    "error" => %e
+                );
+            }
+        }
+        DbWriteOp::Shutdown => {}
+    }
 }
 
 /// 初始化历史数据库
@@ -143,6 +258,24 @@ pub fn init_history_db() -> Result<()> {
     // 从 SQLite 加载信誉分到内存（在连接存入后调用，使用 get_db）
     drop(db);
     load_ip_reputation();
+
+    // 后台写线程：封禁热路径只入队，避免同步 fsync 拖住主循环 / netlink 处理
+    let (tx, rx) = mpsc::sync_channel::<DbWriteOp>(1024);
+    *DB_WRITE_TX.lock().expect("DB_WRITE_TX 互斥锁中毒") = Some(tx);
+    thread::Builder::new()
+        .name("history-db-writer".into())
+        .spawn(move || {
+            while let Ok(op) = rx.recv() {
+                if matches!(op, DbWriteOp::Shutdown) {
+                    break;
+                }
+                let db = history_db();
+                if let Some(conn) = db.as_ref() {
+                    apply_db_write(conn, op);
+                }
+            }
+        })
+        .context("启动 history-db-writer 失败")?;
 
     Ok(())
 }
@@ -372,7 +505,7 @@ fn cleanup_expired_ban_history(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// 持久化单个 IP 的封禁历史到 SQLite
+/// 持久化单个 IP 的封禁历史到 SQLite（异步入队，不阻塞调用方）
 ///
 /// 在 record_ban/record_unban 后调用，使用 INSERT OR REPLACE 保证幂等
 pub fn persist_ban_entry(
@@ -382,52 +515,26 @@ pub fn persist_ban_entry(
     last_unbanned_at: i64,
     was_permanent: bool,
 ) {
-    let db = history_db();
-    if let Some(conn) = db.as_ref() {
-        if let Err(e) = conn.execute(
-            "INSERT OR REPLACE INTO ban_history
-             (ip, ban_count, last_banned_at, last_unbanned_at, was_permanent)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                ip,
-                ban_count,
-                last_banned_at,
-                last_unbanned_at,
-                was_permanent as i64
-            ],
-        ) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "持久化封禁历史失败";
-                "ip" => ip,
-                "error" => %e
-            );
-        }
-    }
+    enqueue_db_write(DbWriteOp::PersistBan {
+        ip: ip.to_string(),
+        ban_count,
+        last_banned_at,
+        last_unbanned_at,
+        was_permanent,
+    });
 }
 
 /// 记录单次封禁事件（每次封禁追加一行，用于周期性攻击检测）
 pub fn record_ban_event(ip: &str, jail_name: &str, ban_count: u32) {
-    let now = crate::types::now_secs();
-    let db = history_db();
-    if let Some(conn) = db.as_ref() {
-        if let Err(e) = conn.execute(
-            "INSERT INTO ban_events (ip, jail_name, banned_at, ban_count)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![ip, jail_name, now, ban_count],
-        ) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "记录封禁事件失败";
-                "ip" => ip,
-                "jail" => jail_name,
-                "error" => %e
-            );
-        }
-    }
+    enqueue_db_write(DbWriteOp::BanEvent {
+        ip: ip.to_string(),
+        jail_name: jail_name.to_string(),
+        ban_count,
+        banned_at: crate::types::now_secs(),
+    });
 }
 
-/// 持久化 IP 信誉分到 SQLite
+/// 持久化 IP 信誉分到 SQLite（异步入队）
 pub fn persist_ip_reputation(
     ip: &str,
     score: u32,
@@ -435,22 +542,13 @@ pub fn persist_ip_reputation(
     total_failures: u32,
     total_bans: u32,
 ) {
-    let db = history_db();
-    if let Some(conn) = db.as_ref() {
-        if let Err(e) = conn.execute(
-            "INSERT OR REPLACE INTO ip_reputation
-             (ip, score, last_failure_at, total_failures, total_bans)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![ip, score, last_failure_at, total_failures, total_bans],
-        ) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "持久化 IP 信誉分失败";
-                "ip" => ip,
-                "error" => %e
-            );
-        }
-    }
+    enqueue_db_write(DbWriteOp::PersistReputation {
+        ip: ip.to_string(),
+        score,
+        last_failure_at,
+        total_failures,
+        total_bans,
+    });
 }
 
 /// 从 SQLite 加载 IP 信誉分到内存
@@ -492,6 +590,9 @@ fn load_ip_reputation() {
 
 /// 关闭数据库连接
 pub fn close_history_db() {
+    if let Some(tx) = DB_WRITE_TX.lock().expect("DB_WRITE_TX 互斥锁中毒").take() {
+        let _ = tx.send(DbWriteOp::Shutdown);
+    }
     let mut db = history_db();
     *db = None;
 }

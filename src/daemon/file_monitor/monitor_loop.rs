@@ -236,8 +236,10 @@ fn handle_inotify_events(cfg: &mut Config) {
         // 配置文件变化：触发热重载
         if is_config {
             if mask.contains(inotify::EventMask::MODIFY)
-                || mask.contains(inotify::EventMask::MOVED_TO)
                 || mask.contains(inotify::EventMask::CLOSE_WRITE)
+                || mask.contains(inotify::EventMask::ATTRIB)
+                || mask.contains(inotify::EventMask::MOVE_SELF)
+                || mask.contains(inotify::EventMask::DELETE_SELF)
             {
                 crate::logger::info!(
                     crate::logger::get(),
@@ -257,8 +259,10 @@ fn handle_inotify_events(cfg: &mut Config) {
             continue;
         }
 
-        // 日志文件事件
-        if mask.contains(inotify::EventMask::MODIFY) || mask.contains(inotify::EventMask::MOVED_TO)
+        // 日志文件：内容变更
+        if mask.contains(inotify::EventMask::MODIFY)
+            || mask.contains(inotify::EventMask::CLOSE_WRITE)
+            || mask.contains(inotify::EventMask::ATTRIB)
         {
             if let Err(e) = process_new_lines(idx, cfg) {
                 crate::logger::debug!(
@@ -268,8 +272,9 @@ fn handle_inotify_events(cfg: &mut Config) {
                 );
             }
         }
-        if mask.contains(inotify::EventMask::DELETE)
-            || mask.contains(inotify::EventMask::MOVED_FROM)
+        // 文件自身被 rename/unlink：重新挂到路径上的新 inode
+        if mask.contains(inotify::EventMask::MOVE_SELF)
+            || mask.contains(inotify::EventMask::DELETE_SELF)
         {
             handle_log_rotation(idx, cfg);
         }

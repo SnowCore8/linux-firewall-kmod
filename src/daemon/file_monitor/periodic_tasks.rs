@@ -160,25 +160,9 @@ pub fn perform_data_cleanup(cfg: &Config) {
 // DDoS 检测
 // ============================================================================
 
-/// 执行 DDoS 检测并处理检测到的事件。
+/// 用户态网络层 DDoS 检测已下沉到 kmod；此入口保留为空操作，避免误启双封禁。
 ///
-/// 按 `ddos.check_interval` 间隔调用。
-///
-/// # 架构说明
-///
-/// - **网络层 DDoS 检测**（SYN/UDP/ICMP Flood）已下沉到 kmod（内核态 netfilter hook）
-/// - **应用层检测**（SSH 暴力破解、HTTP Flood）仍由 daemon 负责（通过日志监控）
-/// - 本函数主要用于清理过期的速率条目，应用层检测逻辑保留
-///
-/// # Arguments
-/// - `cfg`: 全局配置
+/// 应用层检测（SSH 暴力破解等）仍由日志 jail / failed_tracker 负责。
 pub fn check_and_handle_ddos(_cfg: &Config) {
-    let tracker = crate::ddos_detector::get_conn_rate_tracker();
-
-    // 网络层检测已下沉到 kmod，daemon 只保留应用层检测
-    // 暂时禁用 detect 调用，避免重复封禁
-    // let events = tracker.detect(&cfg.ddos);
-
-    // 清理过期的速率条目
-    tracker.cleanup_stale_entries();
+    // intentionally empty
 }

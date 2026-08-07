@@ -44,9 +44,9 @@
 11. ✅ **封禁缓存无周期性对账** — `reconcile_with_kernel` + LIST 响应全量对账；stats 线程每 60s 拉 LIST。
 12. ✅ **配置热重载非事务** — 提交前失败保持旧配置；inotify/组件同步失败回退；回滚改为弹出最近快照；metrics 绑定/凭据变更告警需重启。
 13. ✅ **SSE `/api/v1/events` 无认证** — 纳入与 API 相同的 Basic Auth 中间件；支持 `?access_token=`（Base64 user:pass）供 EventSource；连接上限仍为 10。
-14. **日志 inotify 事件类型不当** — 监视文件却注册目录子事件，轮转后可能盯死旧 inode。
-15. **SQLite 进热路径** — 失败日志同步写库；查询阻塞 2-worker Tokio。
-16. **用户态 DDoS 检测器休眠但代码仍在** — 与内核检测概念重复，误启风险高。
+14. ✅ **日志 inotify 事件类型不当** — 文件 watch 改用 `MODIFY|ATTRIB|CLOSE_WRITE|MOVE_SELF|DELETE_SELF`；轮转后按路径重挂新 inode。
+15. ✅ **SQLite 进热路径** — 封禁写库异步入队；分析类 HTTP 查询经 `spawn_blocking` 离开 2-worker Tokio。
+16. ✅ **用户态 DDoS 检测器休眠但代码仍在** — 非测试构建 `detect` 恒空；`check_and_handle_ddos` 空操作，防误启双封禁。
 
 ### Medium
 
@@ -66,7 +66,7 @@
 4. ~~配置单一 RCU/版本化快照；HTTP/SSE 认证与绑定策略统一~~ ✅（运行态读 `fw_info.*`；SSE 与 API 同鉴权；热重载已事务化，metrics 绑定/凭据仍需重启）
 5. ~~持久化与列表分页 API 重做~~ ✅
 
-剩余 High：#14 inotify 轮转、#15 SQLite 热路径、#16 休眠用户态 DDoS 检测器；#9 完整延迟 `record_ban` ACK 仍可深化。
+剩余 High：建议顺序已清完。可选深化：#9 完整延迟 `record_ban` ACK。Medium #17–21 仍待。
 
 ---
 

@@ -24,12 +24,14 @@ pub mod monitor_loop;
 pub mod periodic_tasks;
 pub mod processor;
 pub mod state;
+pub mod watch_mask;
 
 pub use inotify_setup::setup_inotify;
 pub use monitor_loop::monitor_loop;
 pub use periodic_tasks::{check_and_handle_ddos, perform_data_cleanup, write_stats_snapshot};
 pub use processor::process_new_lines;
 pub use state::{FileState, InotifyState, FILE_STATES, INOTIFY_STATE};
+pub use watch_mask::log_file_watch_mask;
 
 /// 关闭 inotify 文件描述符。
 ///

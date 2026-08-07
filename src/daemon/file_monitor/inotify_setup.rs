@@ -9,11 +9,12 @@ use std::path::Path;
 use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result};
-use inotify::{Inotify, WatchMask};
+use inotify::Inotify;
 
 use crate::types::Config;
 
 use super::state::{FileState, FILE_STATES, INOTIFY_STATE};
+use super::watch_mask::log_file_watch_mask;
 
 // ============================================================================
 // inotify 设置
@@ -55,7 +56,7 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
             state.inode = metadata.ino();
         }
 
-        let mask = WatchMask::MODIFY | WatchMask::MOVED_TO | WatchMask::CLOSE_WRITE;
+        let mask = log_file_watch_mask();
 
         match inotify.watches().add(config_path, mask) {
             Ok(wd) => {
@@ -105,11 +106,7 @@ pub fn setup_inotify(cfg: &Config) -> Result<()> {
                 state.offset = metadata.len();
             }
 
-            let mask = WatchMask::MODIFY
-                | WatchMask::MOVED_FROM
-                | WatchMask::MOVED_TO
-                | WatchMask::DELETE
-                | WatchMask::CREATE;
+            let mask = log_file_watch_mask();
 
             match inotify.watches().add(log_file, mask) {
                 Ok(wd) => {

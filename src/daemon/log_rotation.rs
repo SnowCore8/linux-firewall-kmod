@@ -15,9 +15,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 
-use inotify::WatchMask;
-
-use crate::file_monitor::{setup_inotify, FILE_STATES, INOTIFY_STATE};
+use crate::file_monitor::{log_file_watch_mask, setup_inotify, FILE_STATES, INOTIFY_STATE};
 use crate::line_processor::flush_partial_line;
 use crate::types::{Config, DAEMON_STATS};
 
@@ -25,8 +23,8 @@ use crate::types::{Config, DAEMON_STATS};
 // 日志轮转处理
 // ============================================================================
 
-/// 处理日志轮转：inotify DELETE / `MOVED_FROM` 事件触发，先 flush partial 行，
-/// 再更新 inode + offset，最后重新注册 inotify watch。
+/// 处理日志轮转：`MOVE_SELF` / `DELETE_SELF` 触发，先 flush partial 行，
+/// 再更新 inode + offset，最后按路径重新注册 inotify watch（指向新 inode）。
 ///
 /// # Arguments
 /// - `idx`: `FILE_STATES` 索引
@@ -57,60 +55,59 @@ pub fn handle_log_rotation(idx: usize, cfg: &Config) {
 
     let path_obj = Path::new(&path);
     if !path_obj.exists() {
-        // 文件已删除,重置 offset
+        // 文件已删除/尚未重建：丢掉旧 wd，等 check_for_new_log_files 重建
         crate::logger::debug!(
             crate::logger::get(),
             "日志轮转后文件不存在";
             "path" => &path
         );
+        if let Some(inotify) = INOTIFY_STATE.fd.write().as_mut() {
+            if let Some(old_wd) = wd {
+                let _ = inotify.watches().remove(old_wd);
+            }
+        }
         let mut file_states = FILE_STATES.write();
         if let Some(state) = file_states.get_mut(idx) {
             state.offset = 0;
+            state.inode = 0;
+            state.wd = None;
         }
         return;
     }
 
-    // 更新 inode 并重新注册 watch
+    // 路径上已有新文件：摘掉旧 inode 的 watch，挂到当前路径
     if let Ok(metadata) = path_obj.metadata() {
         let current_inode = metadata.ino();
         let mut file_states = FILE_STATES.write();
         if let Some(state) = file_states.get_mut(idx) {
-            if current_inode != state.inode {
-                // inode 变化,认为是轮转
-                // inode 变化，更新状态
-                state.inode = current_inode;
-                state.offset = 0;
+            state.inode = current_inode;
+            state.offset = 0;
 
-                if let Some(inotify) = INOTIFY_STATE.fd.write().as_mut() {
-                    if let Some(old_wd) = wd {
-                        if let Err(e) = inotify.watches().remove(old_wd) {
-                            crate::logger::debug!(
-                                crate::logger::get(),
-                                "移除 inotify watch 失败";
-                                "error" => %e
-                            );
-                        }
+            if let Some(inotify) = INOTIFY_STATE.fd.write().as_mut() {
+                if let Some(old_wd) = wd {
+                    if let Err(e) = inotify.watches().remove(old_wd) {
+                        crate::logger::debug!(
+                            crate::logger::get(),
+                            "移除 inotify watch 失败";
+                            "error" => %e
+                        );
                     }
+                }
 
-                    let mask = WatchMask::MODIFY
-                        | WatchMask::MOVED_FROM
-                        | WatchMask::MOVED_TO
-                        | WatchMask::DELETE
-                        | WatchMask::CREATE;
+                let mask = log_file_watch_mask();
 
-                    match inotify.watches().add(&path, mask) {
-                        Ok(new_wd) => {
-                            state.wd = Some(new_wd);
-                        }
-                        Err(e) => {
-                            crate::logger::warn!(
-                                crate::logger::get(),
-                                "重新注册 inotify watch 失败";
-                                "path" => &path,
-                                "error" => %e
-                            );
-                            state.wd = None;
-                        }
+                match inotify.watches().add(&path, mask) {
+                    Ok(new_wd) => {
+                        state.wd = Some(new_wd);
+                    }
+                    Err(e) => {
+                        crate::logger::warn!(
+                            crate::logger::get(),
+                            "重新注册 inotify watch 失败";
+                            "path" => &path,
+                            "error" => %e
+                        );
+                        state.wd = None;
                     }
                 }
             }
