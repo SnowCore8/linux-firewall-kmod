@@ -32,7 +32,7 @@
 2. ✅ **定时器生命周期** — 过期回调在摘链前校验 `unban_time`（续期则重武装）；持桶锁内仍用非 sync `timer_delete`。
 3. ✅ **模块退出 RCU** — `cleanup_all_entries` 末尾 `synchronize_rcu` + `rcu_barrier`；init 失败路径改为阶梯清理（procfs 失败会 `fw_netlink_exit`）。
 4. ✅ **本机“保护”实为信任整段子网** — 自动发现/缓存改为精确 /32、/128；子网信任仅 manual 白名单。
-5. **配置双脑** — netlink 写 `fw_info.*`，部分路径仍读模块参数全局量（如 `fw_ban_time` / `fw_dynamic_threshold`）。
+5. ✅ **配置双脑** — `ban_ip` 读 `fw_info.ban_time`；速率检测读 `fw_info.static/dynamic_threshold_enabled`（netlink 热更新生效）。模块参数仅作启动默认。
 6. **白名单与封禁非原子互斥** — 插入封禁与白名单更新无共享协议，可出现“已白名单仍被封”。
 7. **持久化格式脆弱** — 空格分隔 reason、原地截断写、静默截断 4096、无校验和/原子 rename。
 8. **Netlink 列表 API 不可扩展** — 单 skb `GFP_ATOMIC` + `u16` 长度，中等表规模即失败；缺分页。
@@ -43,7 +43,7 @@
 10. ✅ **守护进程接收未校验发送方** — `recvmsg` + 拒绝 `nl_pid != 0`。
 11. ✅ **封禁缓存无周期性对账** — `reconcile_with_kernel` + LIST 响应全量对账；stats 线程每 60s 拉 LIST。
 12. **配置热重载非事务** — 部分失败仍提交；回滚 off-by-one；HTTP 凭据/绑定无法真正热更新。
-13. **SSE `/api/v1/events` 无认证** — 泄露封禁/白名单/速率；连接槽可被占满。
+13. ✅ **SSE `/api/v1/events` 无认证** — 纳入与 API 相同的 Basic Auth 中间件；支持 `?access_token=`（Base64 user:pass）供 EventSource；连接上限仍为 10。
 14. **日志 inotify 事件类型不当** — 监视文件却注册目录子事件，轮转后可能盯死旧 inode。
 15. **SQLite 进热路径** — 失败日志同步写库；查询阻塞 2-worker Tokio。
 16. **用户态 DDoS 检测器休眠但代码仍在** — 与内核检测概念重复，误启风险高。
@@ -63,7 +63,7 @@
 1. ~~`active_bans_list` 锁纪律 + 定时器/RCU 生命周期（防内核损坏）~~ ✅
 2. ~~Netlink 请求-ACK + 守护进程发送方校验 + 周期对账（消除双脑）~~ ✅（ACK 为 CmdResult 回滚缓存的最小闭环；完整延迟写历史仍待）
 3. ~~本机保护改为精确地址；子网信任改为显式策略~~ ✅
-4. 配置单一 RCU/版本化快照；HTTP/SSE 认证与绑定策略统一
+4. ~~配置单一 RCU/版本化快照；HTTP/SSE 认证与绑定策略统一~~ ✅（运行态读 `fw_info.*`；SSE 与 API 同鉴权；完整配置事务热重载仍待）
 5. 持久化与列表分页 API 重做
 
 ---

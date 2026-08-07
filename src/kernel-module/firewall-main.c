@@ -268,6 +268,7 @@ static int __init firewall_init(void) {
 
   /* 设置动态阈值默认配置（可通过模块参数 fw_dynamic_threshold=1 启用） */
   fw_info.dynamic_threshold_enabled = fw_dynamic_threshold ? true : false;
+  fw_info.static_threshold_enabled = fw_static_threshold ? true : false;
   fw_info.dynamic_threshold_ratio_x100 = DEFAULT_DYNAMIC_THRESHOLD_RATIO_X100;
   atomic64_set(&fw_info.global_baseline_pps, 0);
   atomic64_set(&fw_info.global_baseline_bps, 0);

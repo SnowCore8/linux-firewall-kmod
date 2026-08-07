@@ -16,7 +16,6 @@
 #include <linux/printk.h>
 #include <linux/timer.h>
 
-extern unsigned int fw_ban_time;
 extern unsigned int fw_max_bans_per_second;
 extern struct firewall_info fw_info;
 extern u32 fw_hash_seed;
@@ -595,7 +594,7 @@ int is_banned(struct firewall_info *fw, u8 af, const void *ip) {
 EXPORT_SYMBOL_GPL(is_banned);
 
 int ban_ip(struct firewall_info *fw, u8 af, const void *ip, const char *reason) {
-  unsigned long ban_secs = READ_ONCE(fw_ban_time);
+  unsigned long ban_secs = READ_ONCE(fw->ban_time);
   unsigned long ban_duration;
   bool is_new_ban = false;
   if (check_mul_overflow(ban_secs, (unsigned long)HZ, &ban_duration)) {

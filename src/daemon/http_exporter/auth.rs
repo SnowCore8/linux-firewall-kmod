@@ -138,6 +138,7 @@ pub struct AuthCredentials {
 /// axum Basic Auth middleware。
 ///
 /// 从请求头提取 `Authorization`，调用 `check_basic_auth` 验证。
+/// 若无 header，则尝试 query `access_token`（Base64(`user:pass`)），供 EventSource 使用。
 /// 通过则放行，失败则返回 401 + `WWW-Authenticate` 头。
 pub async fn auth_middleware(
     request: axum::http::Request<axum::body::Body>,
@@ -153,12 +154,27 @@ pub async fn auth_middleware(
             password: String::new(),
         });
 
-    let auth_header = request
+    let mut auth_header = request
         .headers()
         .get("authorization")
-        .and_then(|v| v.to_str().ok());
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
 
-    let result = check_basic_auth(auth_header, &creds.username, &creds.password);
+    // EventSource 无法自定义 Authorization：允许 ?access_token=<base64(user:pass)>
+    if auth_header.is_none() {
+        if let Some(query) = request.uri().query() {
+            for pair in query.split('&') {
+                if let Some(token) = pair.strip_prefix("access_token=") {
+                    if !token.is_empty() {
+                        auth_header = Some(format!("Basic {token}"));
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    let result = check_basic_auth(auth_header.as_deref(), &creds.username, &creds.password);
 
     match result {
         1 | -1 => next.run(request).await,

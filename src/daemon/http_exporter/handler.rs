@@ -34,16 +34,18 @@ pub fn build_router(metrics_user: String, metrics_pass: String) -> Router {
         .route("/jails", get(handle_spa_jails))
         .route("/ddos", get(handle_spa_ddos))
         .route("/logs", get(handle_spa_logs))
-        .route("/settings", get(handle_spa_settings))
-        // SSE 路由（无认证）- EventSource 无法传递 Authorization header
-        .route("/api/v1/events", get(handle_sse));
+        .route("/settings", get(handle_spa_settings));
 
     // 需认证路由组（RESTful v1 API）
+    // 未配置 metrics_username/password 时 middleware 跳过（与现有 API 一致）；
+    // 已配置时 SSE 与其它 API 同样要求 Basic Auth（修复无认证泄露）。
     let protected_routes = Router::new()
         .route("/metrics", get(handle_metrics))
         .route("/", get(handle_redirect))
         .route("/dashboard", get(handle_dashboard))
         .route("/static/*path", get(handle_static))
+        // SSE：与管理 API 同一鉴权策略（连接数上限仍由 handle_sse 强制）
+        .route("/api/v1/events", get(handle_sse))
         // v1 RESTful API
         .route("/api/v1/stats", get(handle_api_stats))
         .route("/api/v1/bans", get(handle_api_bans))

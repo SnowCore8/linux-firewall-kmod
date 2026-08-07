@@ -338,7 +338,8 @@ struct firewall_info {
   /* 动态阈值（方案 C 混合模式）
    * 当 dynamic_threshold_enabled 时，实际阈值 = max(静态阈值, 基线 × 倍数)
    * 基线使用全局 EWMA（α=0.01，极慢衰减），跟踪长期流量趋势 */
-  bool dynamic_threshold_enabled;   /* 是否启用动态阈值 */
+  bool dynamic_threshold_enabled; /* 是否启用动态阈值 */
+  bool static_threshold_enabled; /* 是否启用静态阈值（与模块参数同步到运行态） */
   u32 dynamic_threshold_ratio_x100; /* 倍数 × 100（如 300 = 3.0 倍） */
   atomic64_t global_baseline_pps;   /* 全局 PPS 基线（EWMA α=0.01） */
   atomic64_t global_baseline_bps;   /* 全局 BPS 基线（EWMA α=0.01） */

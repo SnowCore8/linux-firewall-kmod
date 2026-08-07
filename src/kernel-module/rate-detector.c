@@ -443,8 +443,8 @@ bool check_rate_violation(struct firewall_info *fw, u8 af, const void *ip) {
   bps = atomic64_read(&entry->smoothed_bps);
 
   u64 pps_threshold = 0, bps_threshold = 0;
-  bool use_static = READ_ONCE(fw_static_threshold);
-  bool use_dynamic = READ_ONCE(fw_dynamic_threshold);
+  bool use_static = READ_ONCE(fw->static_threshold_enabled);
+  bool use_dynamic = READ_ONCE(fw->dynamic_threshold_enabled);
 
   if (!use_static && !use_dynamic) {
     return false;
