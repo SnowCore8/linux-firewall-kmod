@@ -143,23 +143,36 @@ impl NetlinkContext {
                 }
 
                 if pollfd.revents & nix::libc::POLLIN != 0 {
-                    // 读取数据（MSG_TRUNC 标志使 recv 返回实际消息长度，即使被截断）
-                    // SAFETY: fd 是有效的 socket 文件描述符，buf.as_mut_ptr() 指向
-                    // 256KB 的有效缓冲区，buf.len() 是合法的缓冲区大小。
-                    // recv 返回值 n 用于切片 buf[..n]，负值表示错误。
-                    let n = unsafe {
-                        nix::libc::recv(
-                            fd,
-                            buf.as_mut_ptr() as *mut _,
-                            buf.len(),
-                            nix::libc::MSG_TRUNC,
-                        )
+                    // recvmsg：读取对端 sockaddr_nl，拒绝非内核（nl_pid≠0）伪造事件
+                    // SAFETY: fd 有效；iov/msg 指向栈上有效缓冲；MSG_TRUNC 返回真实长度。
+                    let mut addr: nix::libc::sockaddr_nl = unsafe { std::mem::zeroed() };
+                    let mut iov = nix::libc::iovec {
+                        iov_base: buf.as_mut_ptr() as *mut _,
+                        iov_len: buf.len(),
                     };
+                    let mut msg: nix::libc::msghdr = unsafe { std::mem::zeroed() };
+                    msg.msg_name = &mut addr as *mut _ as *mut _;
+                    msg.msg_namelen = std::mem::size_of::<nix::libc::sockaddr_nl>() as u32;
+                    msg.msg_iov = &mut iov;
+                    msg.msg_iovlen = 1;
+
+                    let n = unsafe { nix::libc::recvmsg(fd, &mut msg, nix::libc::MSG_TRUNC) };
 
                     if n > 0 {
                         let n = n as usize;
-                        // 检测截断：MSG_TRUNC 使 recv 返回实际消息长度
-                        // netlink 消息已被消费，无法重新读取，只能丢弃
+                        // 仅接受内核发出的消息（nl_pid == 0）
+                        if addr.nl_pid != 0 {
+                            crate::logger::warn!(
+                                crate::logger::get(),
+                                "丢弃非内核 netlink 消息";
+                                "nl_pid" => addr.nl_pid
+                            );
+                            crate::types::DAEMON_STATS
+                                .netlink_recv_errors
+                                .fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+                        // 检测截断：MSG_TRUNC 使 recvmsg 返回实际消息长度
                         if n > buf.len() {
                             crate::logger::error!(
                                 crate::logger::get(),

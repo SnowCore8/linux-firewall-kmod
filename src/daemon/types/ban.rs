@@ -324,6 +324,42 @@ impl ActiveBanCache {
 
         expired
     }
+
+    /// 与内核 LIST bans 全量对账：删除「缓存有、内核无」的陈旧项，补齐缺失项。
+    ///
+    /// `kernel_ips` 为内核当前活跃封禁 IP 集合。已在集合内的缓存项保留
+    /// （不覆盖 BanStateChange 写入的 reason/jail）；缺失则插入 `to_insert`。
+    pub fn reconcile_with_kernel(
+        &self,
+        kernel_ips: &std::collections::HashSet<String>,
+        to_insert: Vec<BanInfo>,
+    ) -> usize {
+        let mut removed = 0usize;
+        {
+            let mut bans = self.bans.write();
+            let mut by_jail = self.by_jail.write();
+            let stale: Vec<String> = bans
+                .keys()
+                .filter(|ip| !kernel_ips.contains(*ip))
+                .cloned()
+                .collect();
+            for ip in stale {
+                if let Some(info) = bans.remove(&ip) {
+                    if let Some(ips) = by_jail.get_mut(&info.jail_name) {
+                        ips.remove(&ip);
+                        if ips.is_empty() {
+                            by_jail.remove(&info.jail_name);
+                        }
+                    }
+                    removed += 1;
+                }
+            }
+        }
+        for info in to_insert {
+            let _ = self.try_insert(info);
+        }
+        removed
+    }
 }
 
 // ============================================================================

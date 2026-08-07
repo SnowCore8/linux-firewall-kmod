@@ -298,8 +298,10 @@ fn main() -> Result<()> {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs() as u32;
+                let mut ticks: u64 = 0;
                 while GLOBAL_RUNNING.load(Ordering::Relaxed) {
                     std::thread::sleep(std::time::Duration::from_secs(1));
+                    ticks = ticks.wrapping_add(1);
                     seq_counter = seq_counter.wrapping_add(1);
                     if let Some(ctx) = netlink::get_global_netlink_ctx() {
                         if let Err(e) = ctx.send_stats_query(seq_counter) {
@@ -316,6 +318,17 @@ fn main() -> Result<()> {
                                 "netlink analysis 查询失败";
                                 "error" => %e
                             );
+                        }
+                        // 每 60s 全量 LIST bans 对账，清除事件丢失导致的陈旧缓存
+                        if ticks.is_multiple_of(60) {
+                            seq_counter = seq_counter.wrapping_add(1);
+                            if let Err(e) = ctx.send_list_bans_query(seq_counter) {
+                                crate::logger::debug!(
+                                    crate::logger::get(),
+                                    "netlink list_bans 对账查询失败";
+                                    "error" => %e
+                                );
+                            }
                         }
                     }
                 }

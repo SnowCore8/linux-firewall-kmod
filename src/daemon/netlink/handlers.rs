@@ -207,8 +207,10 @@ impl super::NetlinkContext {
             "count" => entries.len()
         );
 
-        // 更新 ACTIVE_BAN_CACHE
+        // 更新 ACTIVE_BAN_CACHE（全量对账：删陈旧 + 补缺失）
         let cache = crate::types::ACTIVE_BAN_CACHE.get_or_init(crate::types::ActiveBanCache::new);
+        let mut kernel_ips = std::collections::HashSet::with_capacity(entries.len());
+        let mut to_insert = Vec::with_capacity(entries.len());
 
         for entry in &entries {
             let ip_str = FwNlListBansResponse::ip_str(entry);
@@ -263,14 +265,17 @@ impl super::NetlinkContext {
                 fail_count: 0,
                 ban_count,
             };
-            // try_insert: 已有条目不覆盖，保留 BanStateChange 事件推送的真实 reason/jail
-            cache.try_insert(ban_info);
+            kernel_ips.insert(ip_str);
+            to_insert.push(ban_info);
         }
+
+        let removed = cache.reconcile_with_kernel(&kernel_ips, to_insert);
 
         crate::logger::info!(
             crate::logger::get(),
-            "已恢复封禁状态";
-            "restored_count" => entries.len(),
+            "已对账封禁状态";
+            "kernel_count" => entries.len(),
+            "stale_removed" => removed,
             "cache_len" => cache.len()
         );
 
@@ -529,13 +534,38 @@ impl super::NetlinkContext {
             anyhow::bail!("CmdResult 数据太短");
         }
         let event = FwNlCmdResult::from_bytes(hdr_data)?;
+        let ip_str = event.ip_str();
+        let cmd = event.original_cmd();
         crate::logger::warn!(
             crate::logger::get(),
             "内核命令执行失败";
             "cmd" => event.cmd_name(),
             "error_code" => event.error_code(),
-            "ip" => event.ip_str()
+            "ip" => &ip_str
         );
+
+        // sendto 成功 ≠ 内核成功：回滚乐观写入的缓存，避免脏状态残留
+        let cache = crate::types::ACTIVE_BAN_CACHE.get_or_init(crate::types::ActiveBanCache::new);
+        match cmd {
+            // BanIp 失败：撤掉提前 insert 的缓存项
+            2 if cache.remove(&ip_str).is_some() => {
+                crate::logger::info!(
+                    crate::logger::get(),
+                    "BanIp 失败，已回滚封禁缓存";
+                    "ip" => &ip_str
+                );
+            }
+            3 => {
+                // UnbanIp 失败：缓存可能已被乐观 remove；无法无损恢复元数据，
+                // 依赖后续 LIST bans 对账补回。此处仅记录。
+                crate::logger::debug!(
+                    crate::logger::get(),
+                    "UnbanIp 失败，等待 LIST 对账恢复缓存";
+                    "ip" => &ip_str
+                );
+            }
+            _ => {}
+        }
         Ok(())
     }
 
