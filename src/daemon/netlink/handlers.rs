@@ -92,18 +92,38 @@ impl super::NetlinkContext {
                 crate::types::ACTIVE_BAN_CACHE.get_or_init(crate::types::ActiveBanCache::new);
 
             // 检查缓存是否已有此 IP（daemon 在发 netlink 前已 try_insert/insert）
-            // 有 → daemon 发起的封禁，daemon 已正确设置 jail_name/reason，跳过覆盖和重复记录
-            // 无 → procfs 发起的封禁，需要在此处记录 ban_history 并插入缓存
+            // 有 → daemon 发起：缓存已有正确 jail/reason；若仍待 ACK 则此时写 ban_history
+            // 无 → procfs/内核路径：在此处记录 ban_history 并插入缓存
             let daemon_initiated = cache.contains(&ip_str);
 
             if daemon_initiated {
-                crate::logger::debug!(
-                    crate::logger::get(),
-                    "BanStateChange: daemon 发起的封禁，跳过重复记录";
-                    "ip" => &ip_str
-                );
+                if crate::types::take_pending_ban_ack(&ip_str) {
+                    let is_permanent = event.duration_secs() == 0;
+                    let ban_history =
+                        crate::types::BAN_HISTORY.get_or_init(crate::types::BanHistory::new);
+                    let ban_count = ban_history.record_ban(&ip_str, is_permanent);
+                    let jail_name = cache
+                        .get(&ip_str)
+                        .map(|b| b.jail_name.clone())
+                        .unwrap_or_else(|| "api".to_string());
+                    crate::history_snapshot::record_ban_event(&ip_str, &jail_name, ban_count);
+                    if jail_name != "api" && jail_name != "ddos" && jail_name != "system" {
+                        crate::ip_reputation::get_store().record_ban(&ip_str);
+                    }
+                    crate::logger::debug!(
+                        crate::logger::get(),
+                        "BanStateChange: 内核确认，已写入 ban_history";
+                        "ip" => &ip_str,
+                        "ban_count" => ban_count
+                    );
+                } else {
+                    crate::logger::debug!(
+                        crate::logger::get(),
+                        "BanStateChange: daemon 发起且历史已确认，跳过";
+                        "ip" => &ip_str
+                    );
+                }
             } else {
-                // procfs 发起的封禁：daemon 未预先记录，由 handler 完成
                 let (actual_reason, jail_name) = if let Some(jn) = event.jail_name_str() {
                     if reason_str.is_empty() {
                         (jn.clone(), jn)
@@ -620,13 +640,17 @@ impl super::NetlinkContext {
         // sendto 成功 ≠ 内核成功：回滚乐观写入的缓存，避免脏状态残留
         let cache = crate::types::ACTIVE_BAN_CACHE.get_or_init(crate::types::ActiveBanCache::new);
         match cmd {
-            // BanIp 失败：撤掉提前 insert 的缓存项
+            // BanIp 失败：撤掉提前 insert 的缓存项与待确认历史
             2 if cache.remove(&ip_str).is_some() => {
+                crate::types::clear_pending_ban_ack(&ip_str);
                 crate::logger::info!(
                     crate::logger::get(),
                     "BanIp 失败，已回滚封禁缓存";
                     "ip" => &ip_str
                 );
+            }
+            2 => {
+                crate::types::clear_pending_ban_ack(&ip_str);
             }
             3 => {
                 // UnbanIp 失败：缓存可能已被乐观 remove；无法无损恢复元数据，

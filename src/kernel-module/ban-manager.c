@@ -37,7 +37,7 @@ void ban_entry_expire_callback(struct timer_list *t) {
 
   if (af == FW_AF_INET) {
     __be32 expired_ip = entry->addr.ipv4;
-    u32 bkt = hash_min(expired_ip, BAN_HASH_BITS);
+    u32 bkt = hash_ipv4(expired_ip, BAN_HASH_BITS);
     spin_lock_bh(&fw->ban_locks_ipv4[bkt]);
     /* 已被手动解封 / 摘链 */
     if (hlist_unhashed(&entry->hash)) {
@@ -250,7 +250,7 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw, const struct in6_addr *ip6
   atomic_set(&entry->retry_count, 0);
   /* 修复：直接用桶索引 hlist_add_head_rcu，避免 hash_add_rcu 以 bkt6 为 key
    * 重新 hash_min 落到错误桶(会导致重复检查失效、产生重复条目)。
-   * IPv4 路径不受影响(其 key=ipv4,hash_min(ipv4,...) 与 bkt4 巧合一致)。*/
+   * IPv4 路径不受影响(其 key=ipv4,hash_ipv4(ipv4,...) 与 bkt4 巧合一致)。*/
   hlist_add_head_rcu(&entry->hash, &fw->ban_table_ipv6[bkt6]);
   active_bans_add(fw, entry);
 
@@ -283,7 +283,7 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw, const struct in6_addr *ip6
 /* __do_ban_ip_ipv4 - 将 IPv4 地址插入封禁表
  *
  * 逻辑与 __do_ban_ip_ipv6 相同，仅地址族和哈希计算不同。
- * 使用 hash_min 替代 jhash，因为 IPv4 地址本身就是 32 位哈希值。
+ * 使用 hash_ipv4（jhash + fw_hash_seed），与 IPv6 桶选择对称、防预测碰撞。
  *
  * 返回值约定：
  *   0      - 成功执行了实际变更（新插入）
@@ -296,7 +296,7 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw, const struct in6_addr *ip6
 static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4,
                             struct ban_entry *entry, unsigned long unban_time,
                             bool is_permanent, const char *reason, bool *is_new_ban) {
-  u32 bkt4 = hash_min(ipv4, BAN_HASH_BITS);
+  u32 bkt4 = hash_ipv4(ipv4, BAN_HASH_BITS);
   struct ban_entry *existing;
 
   spin_lock_bh(&fw->ban_locks_ipv4[bkt4]);
@@ -552,7 +552,7 @@ static struct ban_entry *__find_ban_entry_rcu(struct firewall_info *fw, u8 af,
     }
   } else {
     __be32 ipv4 = *(__be32 *)ip;
-    u32 bkt = hash_min(ipv4, BAN_HASH_BITS);
+    u32 bkt = hash_ipv4(ipv4, BAN_HASH_BITS);
     hlist_for_each_entry_rcu(entry, &fw->ban_table_ipv4[bkt], hash) {
       if (entry->af == af && entry->addr.ipv4 == ipv4)
         return entry;
@@ -593,7 +593,7 @@ static int __do_unban_ip(struct firewall_info *fw, u8 af, const void *ip, bool p
     spin_unlock_bh(&fw->ban_locks_ipv6[bkt]);
   } else {
     __be32 ipv4 = *(__be32 *)ip;
-    u32 bkt = hash_min(ipv4, BAN_HASH_BITS);
+    u32 bkt = hash_ipv4(ipv4, BAN_HASH_BITS);
 
     spin_lock_bh(&fw->ban_locks_ipv4[bkt]);
     hlist_for_each_entry(entry, &fw->ban_table_ipv4[bkt], hash) {

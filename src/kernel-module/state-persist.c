@@ -561,7 +561,7 @@ int restore_state_from_file(const char *filename) {
 
               /* 修复：使用每桶锁替代全局锁，提高并发性能 */
               {
-                u32 bkt4 = hash_min(ip, BAN_HASH_BITS);
+                u32 bkt4 = hash_ipv4(ip, BAN_HASH_BITS);
                 struct ban_entry *existing;
                 bool duplicate = false;
 

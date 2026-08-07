@@ -268,6 +268,7 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
             // 已被其他线程先行封禁，跳过本次操作
             return;
         }
+        crate::types::mark_pending_ban_ack(ip);
 
         let ban_duration = if is_permanent {
             0u64
@@ -278,6 +279,7 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
             // 封禁失败，回滚缓存标记（允许下次重试）
             // record_ban / record_ban_event / record_ban(ip_reputation) 尚未调用，无需回滚
             cache.remove(ip);
+            crate::types::clear_pending_ban_ack(ip);
             crate::logger::warn!(
                 crate::logger::get(),
                 "内核封禁失败，已回滚缓存标记";
@@ -288,11 +290,7 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
             return;
         }
 
-        // netlink 成功后才记录副作用（避免封禁失败时 ban_count/信誉分/事件表被污染）
-        // handle_ban_state_change 检测到 cache.contains → 跳过重复 record_ban
-        ban_history.record_ban(ip, is_permanent);
-        crate::history_snapshot::record_ban_event(ip, &jail.name, ban_count + 1);
-        crate::ip_reputation::get_store().record_ban(ip);
+        // sendto 成功；record_ban / 信誉分在 BanStateChange 确认后写入
 
         // per-Jail 统计：封禁触发
         crate::types::with_jail_stats(&jail.name, |s| {

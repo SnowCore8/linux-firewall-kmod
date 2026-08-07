@@ -373,6 +373,31 @@ impl ActiveBanCache {
 /// 使用 `OnceLock` 延迟初始化,避免 const 构造限制。
 pub static ACTIVE_BAN_CACHE: std::sync::OnceLock<ActiveBanCache> = std::sync::OnceLock::new();
 
+/// 等待内核 BanStateChange 确认后再写 ban_history 的 IP 集合
+///
+/// sendto 成功 ≠ 内核成功：乐观写缓存后登记于此，ACK 到达才 `record_ban`；
+/// CmdResult 失败则摘除，避免污染渐进式封禁计数。
+static PENDING_BAN_ACK: std::sync::OnceLock<RwLock<HashSet<String>>> = std::sync::OnceLock::new();
+
+fn pending_ban_ack() -> &'static RwLock<HashSet<String>> {
+    PENDING_BAN_ACK.get_or_init(|| RwLock::new(HashSet::new()))
+}
+
+/// 登记待确认封禁（乐观缓存写入后调用）
+pub fn mark_pending_ban_ack(ip: &str) {
+    pending_ban_ack().write().insert(ip.to_string());
+}
+
+/// 取出并清除待确认标记；返回是否曾登记
+pub fn take_pending_ban_ack(ip: &str) -> bool {
+    pending_ban_ack().write().remove(ip)
+}
+
+/// 丢弃待确认标记（CmdResult 失败路径）
+pub fn clear_pending_ban_ack(ip: &str) {
+    let _ = take_pending_ban_ack(ip);
+}
+
 // ============================================================================
 // 封禁历史（渐进式封禁）
 // ============================================================================

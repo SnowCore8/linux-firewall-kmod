@@ -24,6 +24,7 @@
 #include "firewall.h"
 #include <linux/jiffies.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 
 /**
  * free_rate_entry_rcu - RCU 回调函数，释放速率条目
@@ -34,6 +35,46 @@
 void free_rate_entry_rcu(struct rcu_head *head) {
   struct ip_rate_entry *entry = container_of(head, struct ip_rate_entry, rcu_head);
   kfree(entry);
+}
+
+/** 窗口重置或新建时清零端口扫描状态（调用方持桶锁） */
+static void reset_port_scan_state(struct ip_rate_entry *entry)
+{
+  memset(entry->seen_ports, 0, sizeof(entry->seen_ports));
+  entry->seen_port_n = 0;
+  atomic_set(&entry->unique_ports, 0);
+  entry->port_scan_counted = 0;
+}
+
+/**
+ * note_unique_dst_port - 窗口内登记去重目标端口；首次达阈值时递增全局计数
+ * 调用方必须持有对应 rate 桶锁。
+ */
+static void note_unique_dst_port(struct firewall_info *fw,
+                                 struct ip_rate_entry *entry, u16 dst_port)
+{
+  u8 i, n;
+
+  if (dst_port == 0)
+    return;
+
+  n = entry->seen_port_n;
+  for (i = 0; i < n; i++) {
+    if (entry->seen_ports[i] == dst_port)
+      return;
+  }
+
+  if (n < PORT_SCAN_SEEN_MAX) {
+    entry->seen_ports[n] = dst_port;
+    entry->seen_port_n = n + 1;
+    atomic_set(&entry->unique_ports, n + 1);
+  }
+
+  if (!entry->port_scan_counted &&
+      entry->seen_port_n >= PORT_SCAN_THRESHOLD) {
+    entry->port_scan_counted = 1;
+    atomic_inc(&fw->port_scan_detected);
+  }
 }
 
 /**
@@ -245,9 +286,9 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
         atomic64_set(&entry->ack_count, 0);
         atomic64_set(&entry->rst_count, 0);
         atomic64_set(&entry->fin_count, 0);
-        atomic_set(&entry->unique_ports, 0);
-        entry->last_dst_port = 0;
+        reset_port_scan_state(entry);
         entry->window_start = now;
+        note_unique_dst_port(fw, entry, dst_port);
 
         /* 根据协议类型更新计数器 */
         if (protocol == IPPROTO_TCP) {
@@ -285,11 +326,7 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
           atomic64_inc(&entry->icmp_count);
         }
 
-        /* 端口扫描检测：跟踪目标端口变化 */
-        if (dst_port > 0 && dst_port != READ_ONCE(entry->last_dst_port)) {
-          atomic_inc(&entry->unique_ports);
-          WRITE_ONCE(entry->last_dst_port, dst_port);
-        }
+        note_unique_dst_port(fw, entry, dst_port);
       }
 
       entry->last_activity = now;
@@ -317,10 +354,13 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
       atomic64_inc(&entry->icmp_count);
     }
 
-    /* 端口扫描检测：跟踪目标端口变化（轻量级近似） */
-    if (dst_port > 0 && dst_port != READ_ONCE(entry->last_dst_port)) {
-      atomic_inc(&entry->unique_ports);
-      WRITE_ONCE(entry->last_dst_port, dst_port);
+    /* 端口扫描去重集合需桶锁（避免无锁写 seen_ports） */
+    if (dst_port > 0) {
+      hash = hash_ip_for_rate(af, ip, RATE_HASH_BITS);
+      lock = get_rate_lock(fw, af, hash);
+      spin_lock_bh(lock);
+      note_unique_dst_port(fw, entry, dst_port);
+      spin_unlock_bh(lock);
     }
 
     WRITE_ONCE(entry->last_activity, now);
@@ -362,6 +402,7 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
       atomic64_inc(&entry->icmp_count);
     }
 
+    note_unique_dst_port(fw, entry, dst_port);
     entry->last_activity = now;
     spin_unlock_bh(lock);
     return 0;
@@ -383,8 +424,8 @@ int update_rate_stats(struct firewall_info *fw, u8 af, const void *ip,
   atomic64_set(&entry->ack_count, 0);
   atomic64_set(&entry->rst_count, 0);
   atomic64_set(&entry->fin_count, 0);
-  atomic_set(&entry->unique_ports, 0);
-  entry->last_dst_port = dst_port;
+  reset_port_scan_state(entry);
+  note_unique_dst_port(fw, entry, dst_port);
 
   /* 根据协议类型设置初始值 */
   if (protocol == IPPROTO_TCP) {

@@ -81,6 +81,7 @@ pub mod log_parser;
 pub mod log_rotation;
 pub mod logger;
 pub mod netlink;
+pub mod runtime_status;
 pub mod signals;
 pub mod types;
 pub mod web_ui;

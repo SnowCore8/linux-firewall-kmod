@@ -151,7 +151,7 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *
     }
   } else {
     __be32 ipv4 = *(__be32 *)src_ip;
-    u32 wl_bkt = hash_min(ipv4, WHITELIST_HASH_BITS);
+    u32 wl_bkt = hash_ipv4(ipv4, WHITELIST_HASH_BITS);
 
     hlist_for_each_entry_rcu(wl_entry, &fw_info.whitelist_table_ipv4[wl_bkt], hash) {
       if (wl_entry->mask.ipv4_mask == 0xFFFFFFFF && wl_entry->addr.ipv4 == ipv4) {
@@ -174,7 +174,7 @@ static unsigned int handle_ban_check(u8 af, const void *src_ip, struct sk_buff *
     }
 
     if (!is_whitelisted) {
-      u32 ban_bkt = hash_min(ipv4, BAN_HASH_BITS);
+      u32 ban_bkt = hash_ipv4(ipv4, BAN_HASH_BITS);
       hlist_for_each_entry_rcu(entry, &fw_info.ban_table_ipv4[ban_bkt], hash) {
         if (entry->af == af && entry->addr.ipv4 == ipv4) {
           if (READ_ONCE(entry->is_permanent) || time_before(now, READ_ONCE(entry->unban_time)))

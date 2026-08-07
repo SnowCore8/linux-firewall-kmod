@@ -192,13 +192,24 @@ async fn security_headers_middleware(
 // ============================================================================
 
 /// `GET /health` 和 `GET /healthz` — 健康检查（跳过认证）
-async fn handle_health() -> (StatusCode, HeaderMap, &'static str) {
+///
+/// 关联 Netlink 上下文与 `/proc/firewall`：两者就绪返回 200/`ok`，否则 503/`degraded`。
+async fn handle_health() -> (StatusCode, HeaderMap, String) {
+    let snap = crate::runtime_status::runtime_snapshot();
+    let body = serde_json::to_string(&snap).unwrap_or_else(|_| {
+        "{\"status\":\"degraded\",\"error\":\"serialize\"}".to_string()
+    });
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
     );
-    (StatusCode::OK, headers, "{\"status\":\"ok\"}\n")
+    let code = if snap.status == "ok" {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (code, headers, format!("{body}\n"))
 }
 
 /// `GET /metrics` — Prometheus 指标

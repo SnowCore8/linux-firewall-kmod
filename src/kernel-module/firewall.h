@@ -59,6 +59,10 @@ void fw_flush_all_cpu_stats(void);
 #define RATE_HASH_BITS 16
 /* 速率表哈希桶数（65536 桶）；条目数受 fw_max_rate_entries 硬限制 */
 
+/* 端口扫描：窗口内去重端口上限；达到阈值时递增 port_scan_detected */
+#define PORT_SCAN_SEEN_MAX 32
+#define PORT_SCAN_THRESHOLD 5
+
 /* UDP 端口分布统计 */
 #define UDP_PORT_HASH_BITS 8
 #define UDP_PORT_HASH_SIZE (1 << UDP_PORT_HASH_BITS) /* 256 桶 */
@@ -250,11 +254,11 @@ struct ip_rate_entry {
   /* LRU 保护标志：白名单 IP 的条目不被踢出 */
   u8 pinned;
 
-  /* 端口扫描检测：跟踪目标端口变化
-   * 轻量级近似：每次 dst_port 与 last_dst_port 不同时递增 unique_ports
-   * 对于顺序扫描（端口 1,2,3,...N）精确计数；对于重复访问会高估，但不影响检测 */
-  atomic_t unique_ports; /* 不同目标端口数（近似） */
-  u16 last_dst_port;     /* 上一次看到的目标端口 */
+  /* 端口扫描检测：窗口内去重端口集合（非端口跳变计数） */
+  u16 seen_ports[PORT_SCAN_SEEN_MAX]; /* 本窗口见过的端口 */
+  u8 seen_port_n;                     /* seen_ports 有效个数 */
+  atomic_t unique_ports;              /* = seen_port_n，供 procfs/netlink 读取 */
+  u8 port_scan_counted;               /* 是否已计入 fw->port_scan_detected */
 
   /* 哈希表和 RCU */
   struct hlist_node hash;
@@ -584,6 +588,13 @@ static inline bool compare_ips(u8 af, const void *ip1, const void *ip2) {
 }
 
 /**
+ * hash_ipv4 - IPv4 桶索引（与 IPv6 一样使用随机种子 jhash，防预测碰撞）
+ */
+static inline u32 hash_ipv4(__be32 ip, int bits) {
+  return jhash_1word((__force u32)ip, fw_hash_seed) & ((1 << bits) - 1);
+}
+
+/**
  * hash_ip - 计算 IP 地址的哈希值
  * @af: 地址族
  * @ip: IP 地址
@@ -595,7 +606,7 @@ static inline u32 hash_ip(u8 af, const void *ip, int bits) {
     const struct in6_addr *addr = ip;
     return jhash(addr, sizeof(struct in6_addr), fw_hash_seed) & ((1 << bits) - 1);
   }
-  return hash_min(*(__be32 *)ip, bits);
+  return hash_ipv4(*(__be32 *)ip, bits);
 }
 
 /**

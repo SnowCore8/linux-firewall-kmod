@@ -32,7 +32,7 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
 
   new_entry->af = af;
   if (af == FW_AF_INET6) {
-    new_entry->addr.ipv6 = *(const struct in6_addr *)ip;
+    struct in6_addr raw = *(const struct in6_addr *)ip;
     /* 验证 IPv6 前缀长度合法性（0-128） */
     if (prefix_len < 0 || prefix_len > 128) {
       kfree(new_entry);
@@ -40,6 +40,8 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
       return -EINVAL;
     }
     new_entry->mask.prefix_len = (u8)prefix_len;
+    /* 清 host bits，与 procfs 规范化语义一致，避免同一前缀多条目 */
+    ipv6_addr_prefix(&new_entry->addr.ipv6, &raw, prefix_len);
   } else {
     __be32 ipv4 = *(__be32 *)ip;
     __be32 msk = *(__be32 *)mask;
@@ -76,7 +78,7 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
       }
     }
   } else {
-    bkt = hash_min(new_entry->addr.ipv4, WHITELIST_HASH_BITS);
+    bkt = hash_ipv4(new_entry->addr.ipv4, WHITELIST_HASH_BITS);
     hlist_for_each_entry_rcu(tmp_entry, &fw->whitelist_table_ipv4[bkt], hash,
                              lockdep_is_held(&fw->whitelist_lock)) {
       if (tmp_entry->af == af && tmp_entry->addr.ipv4 == new_entry->addr.ipv4 &&
@@ -125,7 +127,7 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
       __be32 wl_mask = *(__be32 *)mask;
       if (wl_mask == 0xFFFFFFFF) {
         /* 精确匹配：直接定位桶，O(1) */
-        u32 bkt = hash_min(wl_ip, BAN_HASH_BITS);
+        u32 bkt = hash_ipv4(wl_ip, BAN_HASH_BITS);
         spin_lock_bh(&fw->ban_locks_ipv4[bkt]);
         hlist_for_each_entry_safe(ban, tmp, &fw->ban_table_ipv4[bkt], hash) {
           if (ban->addr.ipv4 == wl_ip) {
@@ -160,7 +162,7 @@ int add_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip,
           }
           rcu_read_unlock();
           for (i = 0; i < n; i++) {
-            u32 bkt = hash_min(batch[i], BAN_HASH_BITS);
+            u32 bkt = hash_ipv4(batch[i], BAN_HASH_BITS);
             struct hlist_node *tmp2;
             spin_lock_bh(&fw->ban_locks_ipv4[bkt]);
             hlist_for_each_entry_safe(ban, tmp2, &fw->ban_table_ipv4[bkt], hash) {
@@ -268,10 +270,16 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip, int 
 
   spin_lock(&fw->whitelist_lock);
   if (af == FW_AF_INET6) {
-    bkt = hash_wl_ipv6((const struct in6_addr *)ip);
+    struct in6_addr norm;
+    if (prefix_len < 0 || prefix_len > 128) {
+      spin_unlock(&fw->whitelist_lock);
+      return -EINVAL;
+    }
+    ipv6_addr_prefix(&norm, (const struct in6_addr *)ip, prefix_len);
+    bkt = hash_wl_ipv6(&norm);
     hlist_for_each_entry(entry, &fw->whitelist_table_ipv6[bkt], hash) {
       if (entry->af == af &&
-          ipv6_addr_equal(&entry->addr.ipv6, (const struct in6_addr *)ip) &&
+          ipv6_addr_equal(&entry->addr.ipv6, &norm) &&
           entry->mask.prefix_len == (u8)prefix_len) {
         /* 保存设备名（call_rcu 后另一 CPU 可能立即释放） */
         memcpy(removed_dev, entry->device_name, sizeof(removed_dev));
@@ -291,7 +299,7 @@ int remove_whitelist_entry(struct firewall_info *fw, u8 af, const void *ip, int 
      * 使用 htonl(~0U << (32 - prefix_len)) 避免 1ULL << 32 的未定义行为 */
     __be32 mask4 = prefix_len == 0 ? 0 : htonl(~0U << (32 - prefix_len));
     __be32 net_ipv4 = ipv4 & mask4;
-    bkt = hash_min(net_ipv4, WHITELIST_HASH_BITS);
+    bkt = hash_ipv4(net_ipv4, WHITELIST_HASH_BITS);
     hlist_for_each_entry(entry, &fw->whitelist_table_ipv4[bkt], hash) {
       if (entry->af == af && entry->addr.ipv4 == net_ipv4 && entry->mask.ipv4_mask == mask4) {
         /* 保存设备名（call_rcu 后另一 CPU 可能立即释放） */
@@ -344,7 +352,7 @@ bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip) {
     }
   } else {
     __be32 ipv4 = *(__be32 *)ip;
-    bkt = hash_min(ipv4, WHITELIST_HASH_BITS);
+    bkt = hash_ipv4(ipv4, WHITELIST_HASH_BITS);
     hlist_for_each_entry_rcu(entry, &fw->whitelist_table_ipv4[bkt], hash) {
       if (entry->af == af && entry->mask.ipv4_mask == 0xFFFFFFFF && entry->addr.ipv4 == ipv4) {
         rcu_read_unlock();

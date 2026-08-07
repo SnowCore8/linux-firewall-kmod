@@ -215,6 +215,7 @@ pub fn create_ban(req: CreateBanRequest) -> Result<BanOperationResponse, String>
     };
     let cache = ACTIVE_BAN_CACHE.get_or_init(crate::types::ActiveBanCache::new);
     cache.insert(ban_info);
+    crate::types::mark_pending_ban_ack(ip);
 
     // 发 netlink 到内核
     let result = if permanent {
@@ -225,9 +226,7 @@ pub fn create_ban(req: CreateBanRequest) -> Result<BanOperationResponse, String>
 
     match result {
         Ok(()) => {
-            // netlink 成功后才记录副作用（handle_ban_state_change 检测到 cache.contains → 跳过重复记录）
-            let new_ban_count = ban_history.record_ban(ip, permanent);
-            crate::history_snapshot::record_ban_event(ip, "api", new_ban_count);
+            // 历史副作用延后到 BanStateChange（内核真实成功）
             Ok(BanOperationResponse {
                 ip: ip.to_string(),
                 action: "banned".to_string(),
@@ -236,8 +235,8 @@ pub fn create_ban(req: CreateBanRequest) -> Result<BanOperationResponse, String>
             })
         }
         Err(e) => {
-            // 封禁失败，回滚缓存（record_ban 未调用，无需回滚）
             cache.remove(ip);
+            crate::types::clear_pending_ban_ack(ip);
             Err(format!("封禁失败: {}", e))
         }
     }

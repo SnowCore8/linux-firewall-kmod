@@ -1157,7 +1157,6 @@ static const struct proc_ops ip_frags_fops = {
 };
 
 /* 端口扫描检测：遍历速率表，找出 unique_ports >= 阈值的 IP */
-#define PORT_SCAN_THRESHOLD 5 /* 访问 >= 5 个不同端口视为扫描 */
 #define PORT_SCAN_MAX_RESULTS 20
 
 static int port_scanners_show(struct seq_file *m, void *v) {

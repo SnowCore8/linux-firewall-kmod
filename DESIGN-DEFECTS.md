@@ -39,7 +39,7 @@
 
 ### High（守护进程 / 前端）
 
-9. ✅ **Netlink 发送成功 ≠ 内核成功** — `CmdResult` 对 BanIp 失败回滚 `ACTIVE_BAN_CACHE`；完整请求-ACK 状态机（延迟 `record_ban`）仍待深化。
+9. ✅ **Netlink 发送成功 ≠ 内核成功** — `CmdResult` 失败回滚缓存并 `clear_pending_ban_ack`；乐观缓存后延迟至 `BanStateChange` 再 `record_ban`/信誉分。
 10. ✅ **守护进程接收未校验发送方** — `recvmsg` + 拒绝 `nl_pid != 0`。
 11. ✅ **封禁缓存无周期性对账** — `reconcile_with_kernel` + LIST 响应全量对账；stats 线程每 60s 拉 LIST。
 12. ✅ **配置热重载非事务** — 提交前失败保持旧配置；inotify/组件同步失败回退；回滚改为弹出最近快照；metrics 绑定/凭据变更告警需重启。
@@ -50,27 +50,27 @@
 
 ### Medium
 
-17. 端口扫描“唯一端口”实为端口跳变计数；`port_scan_detected` 从不递增。
-18. IPv4 哈希用可预测 `hash_min`，与 IPv6 随机 `jhash` 不对称。
-19. 白名单 IPv6 前缀未在核心 API 规范化（procfs/netlink 语义不一致）。
-20. 全局服务定位器状态阻碍原子快照与可测性。
-21. 健康检查恒返回 ok，与 Netlink/子系统就绪无关。
+17. ✅ 端口扫描改为窗口内去重端口集合；首次达阈值递增 `port_scan_detected`。
+18. ✅ IPv4 桶索引改为 `jhash_1word(..., fw_hash_seed)`（`hash_ipv4`），与 IPv6 对称。
+19. ✅ `add/remove_whitelist_entry` 对 IPv6 用 `ipv6_addr_prefix` 规范化，与 procfs 一致。
+20. ✅ `runtime_status::runtime_snapshot()` 聚合 OnceLock/proc 就绪态（不做 AppState 大重构）。
+21. ✅ `/health`/`/healthz` 关联 netlink + `/proc/firewall`；未就绪返回 503/`degraded`。
 
 ---
 
 ## 三、建议修复顺序
 
 1. ~~`active_bans_list` 锁纪律 + 定时器/RCU 生命周期（防内核损坏）~~ ✅
-2. ~~Netlink 请求-ACK + 守护进程发送方校验 + 周期对账（消除双脑）~~ ✅（ACK 为 CmdResult 回滚缓存的最小闭环；完整延迟写历史仍待）
+2. ~~Netlink 请求-ACK + 守护进程发送方校验 + 周期对账（消除双脑）~~ ✅（含延迟 `record_ban`）
 3. ~~本机保护改为精确地址；子网信任改为显式策略~~ ✅
 4. ~~配置单一 RCU/版本化快照；HTTP/SSE 认证与绑定策略统一~~ ✅（运行态读 `fw_info.*`；SSE 与 API 同鉴权；热重载已事务化，metrics 绑定/凭据仍需重启）
 5. ~~持久化与列表分页 API 重做~~ ✅
 
-剩余 High：建议顺序已清完。可选深化：#9 完整延迟 `record_ban` ACK。Medium #17–21 仍待。
+Critical / High / Medium 本报告条目均已勾选完成。
 
 ---
 
 ## 四、说明
 
 - 部分历史文档（如 `CODEBASE-ANALYSIS.md` 中“仅 pre_routing 有效、其余 hook 空转”）已过时：当前仅注册 IPv4/IPv6 `NF_INET_PRE_ROUTING`。
-- `hash_ipv6()` 已在 `firewall.h` 声明，但仍与 `hash_ip()` 并行，属于 Medium 可维护性债务，未在本 PR 强制合并以免扩大 diff。
+- `hash_ipv6()` 若仍与 `hash_ip()` 并行，属可维护性清理项，不影响随机种子一致性。
