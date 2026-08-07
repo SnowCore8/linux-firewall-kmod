@@ -57,7 +57,7 @@ void fw_flush_all_cpu_stats(void);
 
 /* 速率检测哈希表结构 */
 #define RATE_HASH_BITS 16
-/* 速率表哈希桶数（65536 桶），条目数量无上限（按需扩展） */
+/* 速率表哈希桶数（65536 桶）；条目数受 fw_max_rate_entries 硬限制 */
 
 /* UDP 端口分布统计 */
 #define UDP_PORT_HASH_BITS 8
@@ -155,6 +155,12 @@ struct local_ip_cache_entry {
     __be32 ipv4_mask;
     u8 prefix_len;
   } mask;
+};
+
+/* 本地 IP 缓存整体（count 与 entries 同对象发布，避免指针/计数拆分 TOCTOU） */
+struct local_ip_cache {
+  unsigned int count;
+  struct local_ip_cache_entry entries[];
 };
 
 /* 白名单条目结构 - 支持 IPv4/IPv6 */
@@ -304,8 +310,7 @@ struct firewall_info {
    * 由 netdev_notifier 事件触发刷新（USB 插拔/手动改 IP/DHCP 等）
    * 结构：简单数组 + 计数，RCU 保护读，写时重建整个数组
    * 容量：与白名单一致（64 条），通常只有几个到十几个本地 IP */
-  struct local_ip_cache_entry *local_ip_cache;
-  atomic_t local_ip_cache_count;
+  struct local_ip_cache __rcu *local_ip_cache;
 
   /* 速率检测（DDoS 防护） */
   DECLARE_HASHTABLE(rate_table_ipv4, RATE_HASH_BITS); /* IPv4 速率统计表 */
@@ -749,28 +754,24 @@ static inline int validate_ip_address(u8 af, const void *ip, const char *ip_str,
  * - VPN/Docker 网桥 (NETDEV_UP/DOWN)
  */
 static inline bool is_local_ip(struct firewall_info *fw, u8 af, const void *ip) {
-  struct local_ip_cache_entry *cache;
-  int count, i;
+  struct local_ip_cache *cache;
+  unsigned int count, i;
 
-  /* RCU 读侧临界区：先读指针再读 count，配合写侧 smp_wmb 保证一致性 */
+  /* RCU 读侧：一次解引用同时获得 count 与 entries，杜绝拆分发布 TOCTOU */
   rcu_read_lock();
   cache = rcu_dereference(fw->local_ip_cache);
-  if (!cache) {
+  if (!cache || cache->count == 0) {
     rcu_read_unlock();
     return false;
   }
-  count = atomic_read(&fw->local_ip_cache_count);
-  if (count == 0) {
-    rcu_read_unlock();
-    return false;
-  }
+  count = cache->count;
 
   if (af == FW_AF_INET6) {
     const struct in6_addr *ip6 = ip;
     for (i = 0; i < count; i++) {
-      if (cache[i].af == FW_AF_INET6) {
-        u8 prefix = READ_ONCE(cache[i].mask.prefix_len);
-        if (ipv6_prefix_equal(ip6, &cache[i].addr.ipv6, prefix)) {
+      if (cache->entries[i].af == FW_AF_INET6) {
+        u8 prefix = READ_ONCE(cache->entries[i].mask.prefix_len);
+        if (ipv6_prefix_equal(ip6, &cache->entries[i].addr.ipv6, prefix)) {
           rcu_read_unlock();
           return true;
         }
@@ -779,9 +780,9 @@ static inline bool is_local_ip(struct firewall_info *fw, u8 af, const void *ip) 
   } else {
     __be32 ipv4 = *(__be32 *)ip;
     for (i = 0; i < count; i++) {
-      if (cache[i].af == FW_AF_INET) {
-        __be32 mask = READ_ONCE(cache[i].mask.ipv4_mask);
-        __be32 cached_ip = READ_ONCE(cache[i].addr.ipv4);
+      if (cache->entries[i].af == FW_AF_INET) {
+        __be32 mask = READ_ONCE(cache->entries[i].mask.ipv4_mask);
+        __be32 cached_ip = READ_ONCE(cache->entries[i].addr.ipv4);
         if ((ipv4 & mask) == (cached_ip & mask)) {
           rcu_read_unlock();
           return true;

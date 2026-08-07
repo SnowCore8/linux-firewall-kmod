@@ -260,8 +260,9 @@ pub fn connect_sse(state: SseState) {
 /// 重连 3 次后检查 SSE 连接限制状态
 fn schedule_reconnect(state: SseState) {
     let attempt = state.reconnect_attempt.get_untracked();
-    let delay_secs = (1_u64 << attempt).min(30);
-    state.reconnect_attempt.set(attempt + 1);
+    // 先限制指数，避免 attempt>=64 时移位溢出 panic
+    let delay_secs = (1_u64 << attempt.min(5)).min(30);
+    state.reconnect_attempt.set(attempt.saturating_add(1));
 
     spawn_local(async move {
         let promise = js_sys::Promise::new(&mut |resolve, _| {

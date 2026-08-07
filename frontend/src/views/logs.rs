@@ -418,8 +418,9 @@ fn schedule_logs_reconnect(
     reconnect_guard: Rc<Cell<bool>>,
 ) {
     let attempt = reconnect_attempt.get();
-    let delay_secs = (1_u64 << attempt).min(30);
-    reconnect_attempt.set(attempt + 1);
+    // 先限制指数，避免 attempt>=64 时移位溢出 panic
+    let delay_secs = (1_u64 << attempt.min(5)).min(30);
+    reconnect_attempt.set(attempt.saturating_add(1));
     spawn_local(async move {
         let promise = js_sys::Promise::new(&mut |resolve, _| {
             web_sys::window()

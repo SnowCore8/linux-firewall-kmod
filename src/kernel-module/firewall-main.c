@@ -14,7 +14,7 @@
 unsigned int fw_ban_time = DEFAULT_BAN_TIME;
 char *state_file = "/var/lib/firewall/state";
 unsigned int fw_max_bans_per_second = 200;
-unsigned int fw_max_rate_entries = 65536; /* 速率表哈希桶数（65536 桶），条目数量无上限 */
+unsigned int fw_max_rate_entries = 65536; /* 速率表最大条目数（防内存耗尽） */
 unsigned int fw_static_threshold = 1;  /* 默认开启静态阈值检测 */
 unsigned int fw_dynamic_threshold = 0; /* 默认关闭动态阈值 */
 unsigned int fw_ddos_detection = 1;    /* DDoS 检测总开关 */
@@ -115,9 +115,8 @@ static void cleanup_all_entries(void) {
 
   /* 清理本地 IP 缓存（热路径优化结构） */
   {
-    struct local_ip_cache_entry *old_cache;
+    struct local_ip_cache *old_cache;
 
-    atomic_set(&fw_info.local_ip_cache_count, 0);
     old_cache = rcu_dereference_protected(fw_info.local_ip_cache, 1);
     RCU_INIT_POINTER(fw_info.local_ip_cache, NULL);
     if (old_cache) {

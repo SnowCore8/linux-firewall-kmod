@@ -7,6 +7,7 @@
 #include "firewall.h"
 #include <linux/namei.h>
 #include <linux/printk.h>
+#include <linux/slab.h>
 #include <linux/timer.h>
 
 /* 声明 ban_entry_expire_callback 函数（定义在 ban-manager.c 中） */
@@ -428,7 +429,7 @@ int restore_state_from_file(const char *filename) {
                 unban_time = jiffies + ban_duration;
               }
 
-              entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+              entry = kzalloc(sizeof(*entry), GFP_KERNEL);
               if (!entry) {
                 continue;
               }
@@ -444,7 +445,8 @@ int restore_state_from_file(const char *filename) {
               /* 恢复 reason：
                * - "(none)" 表示原始 reason 为空，保留空字符串
                * - "restored" 是旧版 fallback 标记，用 jail_name 替代
-               * - 其他值直接使用 */
+               * - 其他值直接使用
+               * kzalloc 已将 reason 置零；仅在有有效字符串时覆盖 */
               if (reason_str && strcmp(reason_str, "(none)") != 0 &&
                   strcmp(reason_str, "restored") != 0) {
                 strscpy(entry->reason, reason_str, sizeof(entry->reason));
@@ -453,6 +455,8 @@ int restore_state_from_file(const char *filename) {
                 strscpy(entry->reason, jail_str, sizeof(entry->reason));
               }
               atomic_set(&entry->retry_count, 0);
+              /* 始终初始化定时器（永久封禁不启动），避免 cleanup/unban 操作未初始化 timer */
+              timer_setup(&entry->expire_timer, ban_entry_expire_callback, 0);
 
               /* 修复：使用每桶锁替代全局锁，提高并发性能 */
               {
@@ -477,10 +481,8 @@ int restore_state_from_file(const char *filename) {
                   list_add_tail_rcu(&entry->ban_node, &fw_info.active_bans_list);
 
                   /* 启动 per-entry 过期定时器（非永久封禁时） */
-                  if (!is_permanent) {
-                    timer_setup(&entry->expire_timer, ban_entry_expire_callback, 0);
+                  if (!is_permanent)
                     mod_timer(&entry->expire_timer, unban_time);
-                  }
 
                   atomic_inc(&fw_info.ban_count);
                   atomic_inc(&fw_info.total_ban_count);
@@ -529,7 +531,7 @@ int restore_state_from_file(const char *filename) {
                 unban_time = jiffies + ban_duration;
               }
 
-              entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+              entry = kzalloc(sizeof(*entry), GFP_KERNEL);
               if (!entry)
                 continue;
 
@@ -544,7 +546,8 @@ int restore_state_from_file(const char *filename) {
               /* 恢复 reason：
                * - "(none)" 表示原始 reason 为空，保留空字符串
                * - "restored" 是旧版 fallback 标记，用 jail_name 替代
-               * - 其他值直接使用 */
+               * - 其他值直接使用
+               * kzalloc 已将 reason 置零；仅在有有效字符串时覆盖 */
               if (reason_str && strcmp(reason_str, "(none)") != 0 &&
                   strcmp(reason_str, "restored") != 0) {
                 strscpy(entry->reason, reason_str, sizeof(entry->reason));
@@ -553,6 +556,8 @@ int restore_state_from_file(const char *filename) {
                 strscpy(entry->reason, jail_str, sizeof(entry->reason));
               }
               atomic_set(&entry->retry_count, 0);
+              /* 始终初始化定时器（永久封禁不启动），避免 cleanup/unban 操作未初始化 timer */
+              timer_setup(&entry->expire_timer, ban_entry_expire_callback, 0);
 
               /* 修复：使用每桶锁替代全局锁，提高并发性能 */
               {
@@ -579,10 +584,8 @@ int restore_state_from_file(const char *filename) {
                   list_add_tail_rcu(&entry->ban_node, &fw_info.active_bans_list);
 
                   /* 启动 per-entry 过期定时器（非永久封禁时） */
-                  if (!is_permanent) {
-                    timer_setup(&entry->expire_timer, ban_entry_expire_callback, 0);
+                  if (!is_permanent)
                     mod_timer(&entry->expire_timer, unban_time);
-                  }
                   atomic_inc(&fw_info.ban_count);
                   atomic_inc(&fw_info.total_ban_count);
                   spin_unlock_bh(&fw_info.ban_locks_ipv6[bkt6]);

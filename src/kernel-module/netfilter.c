@@ -513,9 +513,12 @@ static unsigned int nf_hook_func_ipv6(void *priv, struct sk_buff *skb,
       if (icmp6h) {
         /* ICMPv6 类型分布统计：记录所有 ICMPv6 类型/代码组合 */
         record_icmp_type(&fw_info, icmp6h->icmp6_type, icmp6h->icmp6_code, skb->len);
-        /* 仅对 Echo Request 做 ICMP flood 检测 */
+        /* 仅对 Echo Request 做 ICMP flood 检测；统一映射为 IPPROTO_ICMP
+         * 以便速率检测器与协议阈值检查覆盖 IPv6（避免 ICMPv6 盲区） */
         if (icmp6h->icmp6_type != ICMPV6_ECHO_REQUEST)
           nexthdr = 0;
+        else
+          nexthdr = IPPROTO_ICMP;
       } else {
         nexthdr = 0;
       }
