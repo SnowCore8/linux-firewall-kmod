@@ -33,7 +33,7 @@
 3. ✅ **模块退出 RCU** — `cleanup_all_entries` 末尾 `synchronize_rcu` + `rcu_barrier`；init 失败路径改为阶梯清理（procfs 失败会 `fw_netlink_exit`）。
 4. ✅ **本机“保护”实为信任整段子网** — 自动发现/缓存改为精确 /32、/128；子网信任仅 manual 白名单。
 5. ✅ **配置双脑** — `ban_ip` 读 `fw_info.ban_time`；速率检测读 `fw_info.static/dynamic_threshold_enabled`（netlink 热更新生效）。模块参数仅作启动默认。
-6. **白名单与封禁非原子互斥** — 插入封禁与白名单更新无共享协议，可出现“已白名单仍被封”。
+6. ✅ **白名单与封禁非原子互斥** — 桶锁内插入前/后白名单 RCU 检查；后检失败同锁回滚；续期路径遇白名单则摘链。
 7. **持久化格式脆弱** — 空格分隔 reason、原地截断写、静默截断 4096、无校验和/原子 rename。
 8. **Netlink 列表 API 不可扩展** — 单 skb `GFP_ATOMIC` + `u16` 长度，中等表规模即失败；缺分页。
 

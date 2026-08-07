@@ -89,6 +89,9 @@ void ban_entry_expire_callback(struct timer_list *t) {
  * 为什么需要二次检查：
  * 全局锁下的白名单检查与封禁表插入之间存在时间窗口，
  * 在此期间 IP 可能被加入白名单。二次检查确保不会封禁白名单 IP。
+ *
+ * 插入后仍须再检一次（同锁内）：关闭「recheck 通过 → 白名单发布并扫解封
+ * （此时尚无封禁）→ 再插入」的 TOCTTOU，与 add_whitelist_entry 解封扫尾形成闭环。
  */
 static inline int __recheck_whitelist_ipv6(struct firewall_info *fw,
                                            const struct in6_addr *ip6);
@@ -119,6 +122,14 @@ static inline int __recheck_whitelist_ipv4(struct firewall_info *fw, __be32 ipv4
       return -EPERM;
   }
   return 0;
+}
+
+/* 调用方已持对应 ban 桶锁；撤销刚挂上的封禁（尚未动 ban_count） */
+static void __undo_new_ban_under_lock(struct firewall_info *fw, struct ban_entry *entry) {
+  timer_delete(&entry->expire_timer);
+  active_bans_del(fw, entry);
+  hlist_del_rcu(&entry->hash);
+  call_rcu(&entry->rcu_head, free_ban_entry_rcu);
 }
 
 /* __do_ban_ip - 封禁 IP 的核心实现
@@ -200,6 +211,22 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw, const struct in6_addr *ip6
         kfree(entry);
         return -EEXIST;
       }
+      /* 续期前再检白名单：窗口内若已入白名单则摘链而非续期 */
+      rcu_read_lock();
+      ret = __recheck_whitelist_ipv6(fw, ip6);
+      rcu_read_unlock();
+      if (ret == -EPERM) {
+        timer_delete(&existing->expire_timer);
+        active_bans_del(fw, existing);
+        hlist_del_rcu(&existing->hash);
+        atomic_dec(&fw->ban_count);
+        spin_unlock_bh(&fw->ban_locks_ipv6[bkt6]);
+        call_rcu(&existing->rcu_head, free_ban_entry_rcu);
+        kfree(entry);
+        atomic_inc(&fw->whitelist_reject_count);
+        pr_debug("IPv6 续期被白名单拒绝并摘链\n");
+        return ret;
+      }
       WRITE_ONCE(existing->ban_time, jiffies);
       WRITE_ONCE(existing->unban_time, unban_time);
       /* 重设 per-entry 过期定时器，防止旧定时器提前删除刚刷新的条目 */
@@ -232,6 +259,18 @@ static int __do_ban_ip_ipv6(struct firewall_info *fw, const struct in6_addr *ip6
   timer_setup(&entry->expire_timer, ban_entry_expire_callback, 0);
   if (!is_permanent)
     mod_timer(&entry->expire_timer, unban_time);
+
+  /* 插入后同锁再检：堵住与白名单发布/解封扫尾之间的竞态 */
+  rcu_read_lock();
+  ret = __recheck_whitelist_ipv6(fw, ip6);
+  rcu_read_unlock();
+  if (ret == -EPERM) {
+    __undo_new_ban_under_lock(fw, entry);
+    spin_unlock_bh(&fw->ban_locks_ipv6[bkt6]);
+    atomic_inc(&fw->whitelist_reject_count);
+    pr_debug("IPv6 封禁插入后被白名单回滚\n");
+    return ret;
+  }
 
   spin_unlock_bh(&fw->ban_locks_ipv6[bkt6]);
   /* 新插入：同时增加表内计数与累计操作次数 */
@@ -282,6 +321,22 @@ static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4,
         kfree(entry);
         return -EEXIST;
       }
+      /* 续期前再检白名单：窗口内若已入白名单则摘链而非续期 */
+      rcu_read_lock();
+      ret = __recheck_whitelist_ipv4(fw, ipv4);
+      rcu_read_unlock();
+      if (ret == -EPERM) {
+        timer_delete(&existing->expire_timer);
+        active_bans_del(fw, existing);
+        hlist_del_rcu(&existing->hash);
+        atomic_dec(&fw->ban_count);
+        spin_unlock_bh(&fw->ban_locks_ipv4[bkt4]);
+        call_rcu(&existing->rcu_head, free_ban_entry_rcu);
+        kfree(entry);
+        atomic_inc(&fw->whitelist_reject_count);
+        pr_debug("IPv4 续期被白名单拒绝并摘链\n");
+        return ret;
+      }
       WRITE_ONCE(existing->ban_time, jiffies);
       WRITE_ONCE(existing->unban_time, unban_time);
       /* 重设 per-entry 过期定时器，防止旧定时器提前删除刚刷新的条目 */
@@ -313,6 +368,18 @@ static int __do_ban_ip_ipv4(struct firewall_info *fw, __be32 ipv4,
   timer_setup(&entry->expire_timer, ban_entry_expire_callback, 0);
   if (!is_permanent)
     mod_timer(&entry->expire_timer, unban_time);
+
+  /* 插入后同锁再检：堵住与白名单发布/解封扫尾之间的竞态 */
+  rcu_read_lock();
+  ret = __recheck_whitelist_ipv4(fw, ipv4);
+  rcu_read_unlock();
+  if (ret == -EPERM) {
+    __undo_new_ban_under_lock(fw, entry);
+    spin_unlock_bh(&fw->ban_locks_ipv4[bkt4]);
+    atomic_inc(&fw->whitelist_reject_count);
+    pr_debug("IPv4 封禁插入后被白名单回滚\n");
+    return ret;
+  }
 
   spin_unlock_bh(&fw->ban_locks_ipv4[bkt4]);
   /* 新插入：同时增加表内计数与累计操作次数 */

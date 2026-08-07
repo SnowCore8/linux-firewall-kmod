@@ -417,6 +417,11 @@ struct firewall_info {
  *   ban_locks_ipv4/ipv6[bkt]  →  active_bans_lock
  * 禁止：先持 active_bans_lock 再取桶锁。
  * CIDR 遍历应 RCU 只读收集 IP，再走桶锁解封路径。
+ *
+ * 白名单与封禁互斥协议：
+ * - 封禁：桶锁内插入前/后各做一次白名单 RCU 检查；后检失败则同锁回滚。
+ * - 白名单：先 RCU 发布条目，再按桶解封匹配 IP（与上形成闭环）。
+ * - 不交叉持有 whitelist_lock 与 ban 桶锁（避免与 softirq 封禁路径死锁）。
  */
 static inline void active_bans_add(struct firewall_info *fw, struct ban_entry *entry) {
   spin_lock(&fw->active_bans_lock);
