@@ -116,8 +116,8 @@ recent_additions 0
 | `alloc_failures` | counter | kmalloc failures when allocating a ban entry |
 | `packets_dropped` | counter | Packets dropped by the netfilter hook due to ban match. Fragmented packets and packets with invalid source IPs are not counted here. |
 | `packets_accepted` | counter | Packets accepted by the netfilter hook after passing the ban/whitelist check. Same scope caveat as `packets_dropped`. |
-| `cleanup_cycles` | counter | Number of times the cleanup timer fired |
-| `cleanup_expired_total` | counter | Total ban entries removed by the cleanup timer |
+| `cleanup_cycles` | counter | Legacy counter (old global cleanup cycles; unused now, usually 0) |
+| `cleanup_expired_total` | counter | Entries removed by per-entry `expire_timer` callbacks |
 | `current_bans` | gauge | Currently banned IP count (sum of permanent + temporary) |
 | `current_whitelist` | gauge | Currently whitelisted entries |
 | `recent_additions` | gauge | Ban operations within the current 1-second flood-protection window |

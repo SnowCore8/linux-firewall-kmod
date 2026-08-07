@@ -115,8 +115,8 @@ recent_additions 0
 | `alloc_failures` | counter | 申请 `ban_entry` 内存失败的次数 |
 | `packets_dropped` | counter | netfilter 钩子因命中封禁而丢弃的数据包。分片包与非法源 IP 包**不计入**。 |
 | `packets_accepted` | counter | netfilter 钩子经白名单/封禁检查后放行的数据包。范围同 `packets_dropped`。 |
-| `cleanup_cycles` | counter | 清理定时器已触发的周期数 |
-| `cleanup_expired_total` | counter | 清理定时器累计移除的过期条目数 |
+| `cleanup_cycles` | counter | 遗留计数（旧全局清理周期；现已无全局清理线程，通常为 0） |
+| `cleanup_expired_total` | counter | per-entry `expire_timer` 回调累计移除的过期条目数 |
 | `current_bans` | gauge | 当前封禁条目数（永久 + 临时） |
 | `current_whitelist` | gauge | 当前白名单条目数 |
 | `recent_additions` | gauge | 当前 1 秒洪水保护窗口内的封禁操作数 |

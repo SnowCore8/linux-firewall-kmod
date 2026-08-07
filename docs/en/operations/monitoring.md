@@ -41,8 +41,8 @@ key names and the conservation law.
 | `firewall_kernel_alloc_failures_total` | counter | `kmalloc` failures for ban entries |
 | `firewall_kernel_packets_dropped_total` | counter | Packets dropped due to ban match |
 | `firewall_kernel_packets_accepted_total` | counter | Packets accepted by netfilter hook |
-| `firewall_kernel_cleanup_cycles_total` | counter | Cleanup timer cycles |
-| `firewall_kernel_cleanup_expired_total` | counter | Entries removed by cleanup timer |
+| `firewall_kernel_cleanup_cycles_total` | counter | Legacy counter (old global cleanup cycles; unused now, usually 0) |
+| `firewall_kernel_cleanup_expired_total` | counter | Entries removed by per-entry expire_timer callbacks |
 | `firewall_kernel_recent_additions` | gauge | Bans within the 1-second flood window |
 
 **Invariant**: `total_bans == current_bans + total_unbans + cleanup_expired_total`

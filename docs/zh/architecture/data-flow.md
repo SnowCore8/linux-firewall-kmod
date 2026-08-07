@@ -57,20 +57,22 @@ sequenceDiagram
 
 ```mermaid
 graph TB
-    A["内核清理线程 30s"] --> B["遍历哈希表"]
-    B --> C{"expire_time < current?"}
-    C -->|否| D["保留"]
-    C -->|是| E["从哈希表移除"]
-        F --> G["更新指标"]
+    A["ban_entry.expire_timer 到期"] --> B["ban_entry_expire_callback"]
+    B --> C{"已摘链 / 已续期?"}
+    C -->|已摘链| D["返回"]
+    C -->|已续期| E["重武装 mod_timer"]
+    C -->|应过期| F["从哈希表 / active_bans_list 移除"]
+    F --> G["netlink BanStateChange expired"]
+    G --> H["守护进程更新缓存与指标"]
 ```
 
 ### 手动解封
 
 ```mermaid
 graph TB
-    A["echo unban ip | sudo tee /proc/firewall/bans"] --> B["写入 ProcFS"]
-    B --> C["内核从哈希表移除条目"]
-        D --> E["更新指标"]
+    A["echo unban ip | sudo tee /proc/firewall/bans<br/>或 daemon netlink UnbanIp"] --> B["桶锁内 timer_delete + 摘链"]
+    B --> C["call_rcu 释放"]
+    C --> D["netlink / 指标更新"]
 ```
 
 ## 组件间通信

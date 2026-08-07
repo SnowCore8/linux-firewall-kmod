@@ -110,7 +110,7 @@ graph TB
         
         subgraph EventHandler["事件处理"]
             LogParser["日志读取 & 正则匹配"]
-            ScheduledTasks["定时任务: 过期清理 / 持久化同步"]
+            ScheduledTasks["定时任务: 用户态缓存/SQLite 过期清理 / 持久化同步"]
         end
         
         subgraph JailManager["Jail 管理器"]

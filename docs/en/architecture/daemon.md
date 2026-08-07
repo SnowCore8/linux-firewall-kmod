@@ -110,7 +110,7 @@ graph TB
 
         subgraph EventHandler["Event Handler"]
             LogRead["Log Read & Regex Match"]
-            ScheduledTasks["Scheduled Tasks<br/>- Expired cleanup<br/>- Persistence sync"]
+            ScheduledTasks["Scheduled Tasks<br/>- Userspace cache/SQLite expiry<br/>- Persistence sync"]
         end
 
         subgraph JailManager["Jail Manager"]

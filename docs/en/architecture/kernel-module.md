@@ -167,38 +167,54 @@ bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip)
 
 ## Auto-Expiry Cleanup
 
-### Cleanup Thread
+### Per-entry timers
 
-The kernel module uses a timer to periodically clean up expired ban
-entries (see `src/kernel-module/cleanup.c`):
+Temporary bans do **not** rely on a global cleanup thread scanning the
+hash table. Each non-permanent `ban_entry` owns an `expire_timer`
+(`timer_list`). On expiry the softirq callback unlinks the entry and
+notifies the daemon (see `src/kernel-module/ban-manager.c`;
+`cleanup.c` only provides RCU `kfree` callbacks):
 
 ```c
-/* Real implementation in src/kernel-module/cleanup.c */
-void cleanup_timer_callback(struct timer_list *t)
+/* Real implementation in src/kernel-module/ban-manager.c */
+void ban_entry_expire_callback(struct timer_list *t)
 {
-    struct firewall_info *fw = container_of(t, struct firewall_info, cleanup_timer);
-    cleanup_expired_bans(fw);  /* remove expired bans */
-    /* Reschedule next cleanup */
-    mod_timer(&fw->cleanup_timer, jiffies + CLEANUP_INTERVAL);
+    struct ban_entry *entry = container_of(t, struct ban_entry, expire_timer);
+    /* Under bucket lock: return if already unlinked; re-arm if renewed */
+    /* Otherwise unlink from hash / active_bans_list, call_rcu, then */
+    /* fw_netlink_send_ban_state_change(..., "expired", ...) */
 }
 ```
 
-### Cleanup Strategy
+On successful ban:
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| Cleanup interval | 30 seconds | Frequency to check expired entries |
-| Batch processing | 100 entries | Maximum entries processed per cycle |
+```c
+timer_setup(&entry->expire_timer, ban_entry_expire_callback, 0);
+if (!is_permanent)
+    mod_timer(&entry->expire_timer, unban_time);  /* absolute jiffies */
+```
 
-### Cleanup Flow
+### Strategy
+
+| Item | Behavior |
+|------|----------|
+| Trigger | Per-entry `mod_timer`; callback fires at expiry (nftables-style set timeout) |
+| Permanent bans | Still `timer_setup`, but never `mod_timer` |
+| Renew | Update `unban_time` then `mod_timer`; in-flight callback re-arms if not due |
+| Manual unban | `timer_delete` (non-`_sync`) under bucket lock + unlink + `call_rcu` |
+| Userspace | Daemon follows netlink `BanStateChange`; local cache `expires_at` purge does **not** unban in-kernel |
+
+### Expiry flow
 
 ```mermaid
 graph TB
-    A[Cleanup Thread Wakes] --> B[Iterate Hash Table]
-    B --> C{Check expire_time < now}
-    C -->|Yes| D[Remove Entry]
-    D --> E[Notify Userspace]
-    C -->|No| F[Continue]
+    A["mod_timer(expire_timer)"] --> B["Timer fires"]
+    B --> C["ban_entry_expire_callback"]
+    C --> D{"Unlinked / renewed?"}
+    D -->|Unlinked| E["Return"]
+    D -->|Renewed| F["Re-arm mod_timer"]
+    D -->|Expire| G["Unlink + call_rcu"]
+    G --> H["netlink BanStateChange expired"]
 ```
 
 ## ProcFS Interface
@@ -235,18 +251,18 @@ graph TB
     A --> C[Initialize hash table]
     A --> D[Initialize whitelist]
     A --> E[Create ProcFS interface]
-    A --> F[Start cleanup thread]
+    A --> F[Init netlink]
 ```
 
 ### Exit
 
 ```mermaid
 graph TB
-    A[module_exit] --> B[Stop cleanup thread]
+    A[module_exit] --> B[Cancel delayed work / unregister notifier]
     A --> C[Remove ProcFS interface]
     A --> D[Unregister Netfilter Hook]
-    A --> E[Free hash table memory]
-    A --> F[Free whitelist memory]
+    A --> E["timer_delete_sync per entry + cleanup_all_entries"]
+    A --> F[fw_netlink_exit]
 ```
 
 ## Kernel Logging

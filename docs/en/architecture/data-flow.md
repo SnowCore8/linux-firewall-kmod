@@ -57,20 +57,22 @@ graph TB
 
 ```mermaid
 graph TB
-    A[Kernel Cleanup Thread (30s)] --> B[Iterate Hash Table]
-    B --> C{expire_time < current?}
-    C -->|No| D[Retain]
-    C -->|Yes| E[Remove from hash table]
-        F --> G[Update Metrics]
+    A["ban_entry.expire_timer fires"] --> B["ban_entry_expire_callback"]
+    B --> C{"Unlinked / renewed?"}
+    C -->|Unlinked| D["Return"]
+    C -->|Renewed| E["Re-arm mod_timer"]
+    C -->|Expire| F["Remove from hash / active_bans_list"]
+    F --> G["netlink BanStateChange expired"]
+    G --> H["Daemon updates cache and metrics"]
 ```
 
 ### Manual Unban
 
 ```mermaid
 graph TB
-    A["echo 'unban <ip>' | sudo tee /proc/firewall/bans"] --> B[Write to ProcFS echo "unban"]
-    B --> C[Kernel removes from hash table]
-        D --> E[Update Metrics]
+    A["echo unban ip via ProcFS<br/>or daemon netlink UnbanIp"] --> B["timer_delete + unlink under bucket lock"]
+    B --> C["call_rcu free"]
+    C --> D["netlink / metrics update"]
 ```
 
 ## Inter-Component Communication

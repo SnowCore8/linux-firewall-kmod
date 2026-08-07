@@ -166,38 +166,53 @@ bool is_in_whitelist(struct firewall_info *fw, u8 af, const void *ip)
 
 ## 自动过期清理
 
-### 清理线程
+### Per-entry 定时器
 
-内核模块通过 timer 定期清理过期的封禁条目（实现见
-`src/kernel-module/cleanup.c`）：
+临时封禁**不靠全局清理线程扫表**。每个非永久 `ban_entry` 自带
+`expire_timer`（`timer_list`），到期由内核软中断回调摘链并通知守护进程
+（实现见 `src/kernel-module/ban-manager.c`；`cleanup.c` 仅提供 RCU
+`kfree` 回调）：
 
 ```c
-/* 真实实现见 src/kernel-module/cleanup.c */
-void cleanup_timer_callback(struct timer_list *t)
+/* 真实实现见 src/kernel-module/ban-manager.c */
+void ban_entry_expire_callback(struct timer_list *t)
 {
-    struct firewall_info *fw = container_of(t, struct firewall_info, cleanup_timer);
-    cleanup_expired_bans(fw);  /* 清理 expired 封禁 */
-    /* 重新调度下一次清理 */
-    mod_timer(&fw->cleanup_timer, jiffies + CLEANUP_INTERVAL);
+    struct ban_entry *entry = container_of(t, struct ban_entry, expire_timer);
+    /* 持桶锁：若已手动解封则退出；若已续期则重武装定时器 */
+    /* 否则从哈希表 / active_bans_list 摘链，call_rcu 释放 */
+    /* 再 fw_netlink_send_ban_state_change(..., "expired", ...) */
 }
 ```
 
-### 清理策略
+封禁成功时：
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| 清理间隔 | 30 秒 | 检查过期条目的频率 |
-| 批量处理 | 100 条 | 单次清理最多处理的条目数 |
+```c
+timer_setup(&entry->expire_timer, ban_entry_expire_callback, 0);
+if (!is_permanent)
+    mod_timer(&entry->expire_timer, unban_time);  /* jiffies 绝对到期点 */
+```
 
-### 清理流程
+### 策略要点
+
+| 项 | 行为 |
+|----|------|
+| 触发方式 | 每条目独立 `mod_timer`，到期即回调（类似 nftables set timeout） |
+| 永久封禁 | 仍 `timer_setup`，但不 `mod_timer`，不会自动解封 |
+| 续期 | 更新 `unban_time` 后 `mod_timer`；若旧回调已在跑，见 `unban_time` 未到则重武装 |
+| 手动解封 | 桶锁内 `timer_delete`（非 `_sync`）+ 摘链 + `call_rcu` |
+| 用户态 | 守护进程靠 netlink `BanStateChange`；缓存另有本地 `expires_at` 清理，**不负责**内核解封 |
+
+### 过期流程
 
 ```mermaid
 graph TB
-    A["清理线程唤醒"] --> B["遍历哈希表"]
-    B --> C{"expire_time < now?"}
-    C -->|是| D["移除条目"]
-    D --> E["通知用户态"]
-    C -->|否| F["继续"]
+    A["mod_timer(expire_timer)"] --> B["定时器到期"]
+    B --> C["ban_entry_expire_callback"]
+    C --> D{"已摘链 / 已续期?"}
+    D -->|已摘链| E["直接返回"]
+    D -->|已续期| F["重武装 mod_timer"]
+    D -->|应过期| G["摘链 + call_rcu"]
+    G --> H["netlink BanStateChange expired"]
 ```
 
 ## ProcFS 接口
@@ -245,18 +260,18 @@ graph TB
     A --> C["初始化哈希表"]
     A --> D["初始化白名单"]
     A --> E["创建 ProcFS 接口"]
-    A --> F["启动清理线程"]
+    A --> F["初始化 netlink"]
 ```
 
 ### 退出
 
 ```mermaid
 graph TB
-    A["module_exit()"] --> B["停止清理线程"]
+    A["module_exit()"] --> B["取消 delayed work / 注销 notifier"]
     A --> C["移除 ProcFS 接口"]
     A --> D["注销 Netfilter Hook"]
-    A --> E["释放哈希表内存"]
-    A --> F["释放白名单内存"]
+    A --> E["各条目 timer_delete_sync + cleanup_all_entries"]
+    A --> F["fw_netlink_exit"]
 ```
 
 ## 内核日志

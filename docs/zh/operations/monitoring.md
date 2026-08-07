@@ -38,8 +38,8 @@ scrape_configs:
 | `firewall_kernel_alloc_failures_total` | counter | `kmalloc` 失败次数 |
 | `firewall_kernel_packets_dropped_total` | counter | 因命中封禁而丢弃的数据包数 |
 | `firewall_kernel_packets_accepted_total` | counter | 经 netfilter 钩子放行的数据包数 |
-| `firewall_kernel_cleanup_cycles_total` | counter | 清理定时器周期数 |
-| `firewall_kernel_cleanup_expired_total` | counter | 清理定时器累计移除的条目数 |
+| `firewall_kernel_cleanup_cycles_total` | counter | 遗留计数（旧全局清理周期；现已无全局清理线程，通常为 0） |
+| `firewall_kernel_cleanup_expired_total` | counter | per-entry 定时器过期回调累计移除的条目数 |
 | `firewall_kernel_recent_additions` | gauge | 当前 1 秒窗口内的封禁操作数 |
 
 **不变量**：`total_bans == current_bans + total_unbans + cleanup_expired_total`
