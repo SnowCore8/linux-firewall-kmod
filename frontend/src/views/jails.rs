@@ -97,7 +97,7 @@ pub fn Jails() -> impl IntoView {
                         let total: u64 = stats.jail_distribution.values.iter().sum();
                         if total == 0 {
                             view! {
-                                <div style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--text-faint);font-size:13px;letter-spacing:0.05em">"暂无封禁数据"</div>
+                                <div class="muted-center">"暂无封禁数据"</div>
                             }.into_view()
                         } else {
                             view! {

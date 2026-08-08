@@ -435,7 +435,7 @@ pub fn Bans() -> impl IntoView {
             <div class="dashboard-grid">
                 <div class="card chart-card">
                     <div class="chart-header"><h3>"封禁原因分布"</h3></div>
-                    <div class="chart-body" style="height:180px">
+                    <div class="chart-body chart-body-md">
                         <PieChart
                             labels=Signal::derive(move || {
                                 let s = stats_signal.get().unwrap_or_else(&stats_default);
@@ -459,7 +459,7 @@ pub fn Bans() -> impl IntoView {
                 </div>
                 <div class="card chart-card">
                     <div class="chart-header"><h3>"封禁趋势 (24h)"</h3></div>
-                    <div class="chart-body" style="height:180px">
+                    <div class="chart-body chart-body-md">
                         <LineChart
                             labels=Signal::derive(move || stats_signal.get().unwrap_or_else(&stats_default).ban_trend.labels)
                             data=Signal::derive(move || stats_signal.get().unwrap_or_else(&stats_default).ban_trend.values)
@@ -477,7 +477,7 @@ pub fn Bans() -> impl IntoView {
             </PageHeader>
 
             <div class="toolbar-row">
-                <select class="input" style="width:140px"
+                <select class="input input-w-sort"
                     prop:value=move || sort_by.get()
                     on:change=move |e| sort_by.set(event_target_value(&e))>
                     <option value="banned_at_desc">"封禁时间 ↓"</option>
@@ -503,12 +503,10 @@ pub fn Bans() -> impl IntoView {
                         {move || format!("已选择 {} 项", selected_count())}
                     </span>
                     <button class="btn btn-sm btn-danger" type="button" on:click=do_batch_unban
-                        disabled=move || batch_loading.get()
-                        style="font-size:12px">
+                        disabled=move || batch_loading.get()>
                         {move || if batch_loading.get() { "解封中..." } else { "批量解封" }}
                     </button>
-                    <button class="btn btn-sm" on:click=clear_selection
-                        style="font-size:12px;border-color:var(--border-strong)">
+                    <button class="btn btn-sm" type="button" on:click=clear_selection>
                         "取消选择"
                     </button>
                 </div>
@@ -518,13 +516,13 @@ pub fn Bans() -> impl IntoView {
                 <div class="form-row">
                     <div class="form-field">
                         <label class="form-label">"IP 地址"</label>
-                        <input class="input mono" placeholder="1.2.3.4" style="width:100%"
+                        <input class="input mono input-fill" placeholder="1.2.3.4"
                             prop:value=move || ban_ip.get()
                             on:input=move |e| ban_ip.set(event_target_value(&e))/>
                     </div>
                     <div class="form-field">
                         <label class="form-label">"时长 (秒, 留空=永久)"</label>
-                        <input class="input mono" placeholder="0" style="width:100%"
+                        <input class="input mono input-fill" placeholder="0"
                             prop:value=move || ban_duration.get()
                             on:input=move |e| ban_duration.set(event_target_value(&e))/>
                     </div>
@@ -571,23 +569,22 @@ pub fn Bans() -> impl IntoView {
             <Show when=move || !filtered_bans().is_empty()>
             <div class="card">
                 <div class="table-container">
-                    <table>
+                    <table class="bans-table">
                         <thead>
                             <tr>
-                                <th style="width:32px">
-                                    <input type="checkbox"
+                                <th class="col-check">
+                                    <input type="checkbox" class="table-check"
                                         checked=is_all_page_selected
                                         on:change=toggle_select_all_page
-                                        style="width:15px;height:15px;accent-color:var(--accent-primary);cursor:pointer"
                                         title="选择当前页全部"/>
                                 </th>
-                                <th style="width:15%">"IP 地址"</th>
-                                <th style="width:10%">"Jail"</th>
-                                <th style="width:14%">"原因"</th>
-                                <th style="width:5%">"次数"</th>
-                                <th style="width:11%">"封禁时间"</th>
-                                <th style="width:11%">"剩余时间"</th>
-                                <th style="width:16%">"操作"</th>
+                                <th class="col-ip">"IP 地址"</th>
+                                <th class="col-jail">"Jail"</th>
+                                <th class="col-reason">"原因"</th>
+                                <th class="col-count">"次数"</th>
+                                <th class="col-time">"封禁时间"</th>
+                                <th class="col-remain">"剩余时间"</th>
+                                <th class="col-actions">"操作"</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -603,14 +600,11 @@ pub fn Bans() -> impl IntoView {
                                     let ban_count = ban.ban_count;
                                     let is_permanent = ban.is_permanent;
                                     let banned_at_ts = ban.banned_at;
-                                    // 实时倒计时：依赖 countdown_tick 每秒重新计算
                                     let remaining_display = move || {
                                         if is_permanent {
                                             return "永久".to_string();
                                         }
-                                        // 触发响应式依赖——每秒刷新
                                         let _ = countdown_tick.get();
-                                        // 从 SSE 数据推算到期时间戳
                                         let bans = bans_signal.get().unwrap_or_default();
                                         let remaining_at_push = bans
                                             .iter()
@@ -625,29 +619,31 @@ pub fn Bans() -> impl IntoView {
                                         let remaining = (expires_at - now).max(0);
                                         format_duration(remaining)
                                     };
-                                    // 复发次数颜色：1=正常, 2=橙色, 3+=红色
-                                    let count_color = if ban_count >= 3 { "var(--color-red)" }
-                                        else if ban_count >= 2 { "var(--color-orange)" }
-                                        else { "var(--text-muted)" };
-                                    // 威胁等级指示器：永久=红, ×3+=橙, ×2=黄, 其他=灰
+                                    let count_class = if ban_count >= 3 { "mono count-cell count-danger" }
+                                        else if ban_count >= 2 { "mono count-cell count-warn" }
+                                        else { "mono count-cell count-muted" };
                                     let threat_dot = if is_permanent { "var(--color-red)" }
                                         else if ban_count >= 3 { "var(--color-orange)" }
-                                        else if ban_count >= 2 { "var(--color-yellow, #eab308)" }
+                                        else if ban_count >= 2 { "var(--color-yellow)" }
                                         else { "transparent" };
+                                    let remain_class = if is_permanent {
+                                        "mono col-remain remain-permanent"
+                                    } else {
+                                        "mono col-remain"
+                                    };
                                     view! {
-                                        <tr style=move || if selected_ips.get().contains(&ip4) { "background:color-mix(in srgb, var(--accent-primary) 8%, transparent)".to_string() } else { String::new() }>
-                                            <td style="width:32px;text-align:center">
-                                                <input type="checkbox"
+                                        <tr class=move || if selected_ips.get().contains(&ip4) { "row-selected" } else { "" }>
+                                            <td class="col-check">
+                                                <input type="checkbox" class="table-check"
                                                     checked=move || selected_ips.get().contains(&ip5)
                                                     on:click=move |e| {
                                                         let shift = e.shift_key();
                                                         toggle_select(ip6.clone(), shift);
-                                                    }
-                                                    style="width:15px;height:15px;accent-color:var(--accent-primary);cursor:pointer"/>
+                                                    }/>
                                             </td>
-                                            <td class="mono" style="font-weight:600;color:var(--text-primary)">
-                                                <span style=move || format!("display:inline-block;width:8px;height:8px;border-radius:50%;background:{};margin-right:6px;vertical-align:middle", threat_dot)></span>
-                                                <span style="cursor:pointer;border-bottom:1px dashed transparent;transition:border-color 0.15s"
+                                            <td class="mono ip-cell">
+                                                <span class="threat-dot-inline" style=format!("background:{threat_dot}")></span>
+                                                <span class="ip-copy"
                                                     title="点击复制 IP"
                                                     on:click={
                                                         let ip_copy = ban.ip.clone();
@@ -660,7 +656,7 @@ pub fn Bans() -> impl IntoView {
                                                     {move || highlight_text(&ban.ip, &search.get())}
                                                 </span>
                                             </td>
-                                            <td>{move || {
+                                            <td class="col-jail">{move || {
                                                 let kw = search.get();
                                                 if kw.is_empty() {
                                                     view! { <span class="badge badge-info">{&ban.jail}</span> }.into_view()
@@ -668,22 +664,21 @@ pub fn Bans() -> impl IntoView {
                                                     view! { <span class="badge badge-info">{highlight_text(&ban.jail, &kw)}</span> }.into_view()
                                                 }
                                             }}</td>
-                                            <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{move || highlight_text(&ban.reason, &search.get())}</td>
-                                            <td class="mono" style=move || format!("font-weight:700;color:{}", count_color)>
+                                            <td class="col-reason">{move || highlight_text(&ban.reason, &search.get())}</td>
+                                            <td class=count_class>
                                                 {move || format!("×{}", ban_count)}
                                             </td>
-                                            <td class="mono" style="font-size:11px;color:var(--text-muted)">{format_datetime(ban.banned_at)}</td>
-                                            <td class="mono" style=move || format!("font-size:11px;{}", if is_permanent { "color:var(--color-red);font-weight:700" } else { "" })>
+                                            <td class="mono col-time">{format_datetime(ban.banned_at)}</td>
+                                            <td class=remain_class>
                                                 {remaining_display}
                                             </td>
-                                            <td>
-                                                <div style="display:flex;gap:4px">
-                                                    <button class="btn btn-sm"
-                                                        style="border-color:var(--border-strong)"
+                                            <td class="col-actions">
+                                                <div class="row-actions">
+                                                    <button class="btn btn-sm" type="button"
                                                         on:click=move |_| show_detail(ip3.clone())>
                                                         "详情"
                                                     </button>
-                                                    <button class="btn btn-sm btn-danger"
+                                                    <button class="btn btn-sm btn-danger" type="button"
                                                         on:click=move |_| do_unban(ip2.clone())>
                                                         "解封"
                                                     </button>
@@ -695,7 +690,7 @@ pub fn Bans() -> impl IntoView {
                         </tbody>
                     </table>
                 </div>
-                <Suspense fallback=|| view! { <div style="padding:20px;text-align:center;color:var(--text-muted)">"加载中..."</div> }>
+                <Suspense fallback=|| view! { <div class="muted-center-lg">"加载中..."</div> }>
                     {move || {
                         let tp = total_pages();
                         let current = page.get();
@@ -703,14 +698,12 @@ pub fn Bans() -> impl IntoView {
                         let start_item = if total_items > 0 { (current - 1) * PAGE_SIZE + 1 } else { 0 };
                         let end_item = ((current - 1) * PAGE_SIZE + total_items as u32).min(total_items as u32);
                         if tp <= 1 && total_items <= PAGE_SIZE as usize {
-                            // 只有一页且不超过一页大小，不显示分页，但仍显示计数
                             return view! {
-                                <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;font-size:12px;color:var(--text-muted)">
+                                <div class="pager">
                                     <span>{format!("共 {} 条记录", total_items)}</span>
                                 </div>
                             }.into_view();
                         }
-                        // 生成页码按钮窗口（最多显示 7 个）
                         let page_window: Vec<u32> = if tp <= 7 {
                             (1..=tp).collect()
                         } else {
@@ -719,17 +712,17 @@ pub fn Bans() -> impl IntoView {
                             (start..=end.min(tp)).collect()
                         };
                         view! {
-                            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;flex-wrap:wrap;gap:8px">
-                                <span style="font-size:12px;color:var(--text-muted)">
+                            <div class="pager">
+                                <span>
                                     {format!("显示 {}-{} / 共 {} 条", start_item, end_item, total_items)}
                                 </span>
-                                <div style="display:flex;gap:4px;align-items:center">
-                                    <button class="btn btn-sm" style="padding:3px 8px;font-size:11px"
+                                <div class="pager-btns">
+                                    <button class="btn btn-sm btn-page" type="button"
                                         disabled=move || page.get() <= 1
                                         on:click=move |_| page.set(1)>
                                         "«"
                                     </button>
-                                    <button class="btn btn-sm" style="padding:3px 8px;font-size:11px"
+                                    <button class="btn btn-sm btn-page" type="button"
                                         disabled=move || page.get() <= 1
                                         on:click=move |_| page.update(|p| *p = (*p).saturating_sub(1))>
                                         "‹"
@@ -737,25 +730,19 @@ pub fn Bans() -> impl IntoView {
                                     {page_window.into_iter().map(|p| {
                                         let is_current = p == current;
                                         view! {
-                                            <button class="btn btn-sm"
-                                                style=move || {
-                                                    if is_current {
-                                                        "padding:3px 8px;font-size:11px;background:var(--accent-primary);color:#fff;border-color:var(--accent-primary);font-weight:700"
-                                                    } else {
-                                                        "padding:3px 8px;font-size:11px"
-                                                    }
-                                                }
+                                            <button class=if is_current { "btn btn-sm btn-page is-current" } else { "btn btn-sm btn-page" }
+                                                type="button"
                                                 on:click=move |_| page.set(p)>
                                                 {p}
                                             </button>
                                         }
                                     }).collect_view()}
-                                    <button class="btn btn-sm" style="padding:3px 8px;font-size:11px"
+                                    <button class="btn btn-sm btn-page" type="button"
                                         disabled=move || page.get() >= tp
                                         on:click=move |_| page.update(|p| *p += 1)>
                                         "›"
                                     </button>
-                                    <button class="btn btn-sm" style="padding:3px 8px;font-size:11px"
+                                    <button class="btn btn-sm btn-page" type="button"
                                         disabled=move || page.get() >= tp
                                         on:click=move |_| page.set(tp)>
                                         "»"
@@ -770,10 +757,10 @@ pub fn Bans() -> impl IntoView {
             </Show>
 
             // 封禁效果分析面板
-            <Suspense fallback=|| view! { <div style="padding:12px;text-align:center;color:var(--text-muted)">"加载封禁效果分析..."</div> }>
+            <Suspense fallback=|| view! { <div class="muted-center">"加载封禁效果分析..."</div> }>
                 {move || effectiveness_res.get().map(|eff| {
                     if eff.levels.is_empty() {
-                        return view! { <div class="card" style="padding:16px;text-align:center;color:var(--text-muted)">"暂无封禁效果分析数据" </div> }.into_view();
+                        return view! { <div class="card muted-center">"暂无封禁效果分析数据"</div> }.into_view();
                     }
                     let summary_color = if eff.overall_recidivism_rate > 50.0 {
                         "var(--color-red)"
@@ -786,7 +773,7 @@ pub fn Bans() -> impl IntoView {
                         <div class="card effectiveness-card">
                             <div class="chart-header">
                                 <h3>"封禁效果分析"</h3>
-                                <span class="badge" style=move || format!("background:{};color:#fff", summary_color)>
+                                <span class="badge badge-on-solid" style=move || format!("background:{}", summary_color)>
                                     {move || format!("总复发率 {:.1}%", eff.overall_recidivism_rate)}
                                 </span>
                             </div>
@@ -839,7 +826,7 @@ pub fn Bans() -> impl IntoView {
             </Suspense>
 
             // 封禁时长推荐面板
-            <Suspense fallback=|| view! { <div style="padding:12px;text-align:center;color:var(--text-muted)">"加载封禁时长推荐..."</div> }>
+            <Suspense fallback=|| view! { <div class="muted-center">"加载封禁时长推荐..."</div> }>
                 {move || duration_recs_res.get().map(|recs| {
                     if recs.recommendations.is_empty() {
                         return view! { <div/> }.into_view();
@@ -850,7 +837,7 @@ pub fn Bans() -> impl IntoView {
                         <div class="card">
                             <div class="chart-header">
                                 <h3>"封禁时长推荐"</h3>
-                                <span class="badge" style=move || format!("background:{};color:#fff", summary_color)>
+                                <span class="badge badge-on-solid" style=move || format!("background:{}", summary_color)>
                                     {if needs_adj > 0 {
                                         format!("{} 个 Jail 建议调整", needs_adj)
                                     } else {
@@ -858,7 +845,7 @@ pub fn Bans() -> impl IntoView {
                                     }}
                                 </span>
                             </div>
-                            <div style="display:grid;gap:8px;padding:12px 16px;">
+                            <div class="analysis-grid">
                                 {recs.recommendations.iter().map(|rec| {
                                     let status_color = if rec.needs_adjustment { "var(--color-orange)" } else { "var(--color-green)" };
                                     let current_str = if rec.current_ban_time == -1 {
@@ -885,7 +872,7 @@ pub fn Bans() -> impl IntoView {
                                         format!("{}分钟", rec.median_return_secs / 60)
                                     };
                                     view! {
-                                        <div style="display:grid;grid-template-columns:100px 1fr 120px 80px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border-color);">
+                                        <div class="analysis-row">
                                             <span class="mono" style="font-weight:600">{rec.jail_name.clone()}</span>
                                             <span style="font-size:12px;color:var(--text-secondary)">{rec.reason.clone()}</span>
                                             <span class="mono" style="font-size:12px;">
@@ -901,14 +888,14 @@ pub fn Bans() -> impl IntoView {
                                     }
                                 }).collect_view()}
                             </div>
-                            <div style="padding:8px 16px;font-size:12px;color:var(--text-secondary)">{recs.summary.clone()}</div>
+                            <div class="pad-block fs-12 text-secondary">{recs.summary.clone()}</div>
                         </div>
                     }.into_view()
                 })}
             </Suspense>
 
             // IP 信誉分面板
-            <Suspense fallback=|| view! { <div style="padding:12px;text-align:center;color:var(--text-muted)">"加载信誉分..."</div> }>
+            <Suspense fallback=|| view! { <div class="muted-center">"加载信誉分..."</div> }>
                 {move || reputation_res.get().map(|entries| {
                     if entries.is_empty() {
                         return view! { <div/> }.into_view();
@@ -919,17 +906,17 @@ pub fn Bans() -> impl IntoView {
                         <div class="card">
                             <div class="chart-header">
                                 <h3>"IP 信誉分"</h3>
-                                <span class="badge" style=move || format!("background:{};color:#fff", if critical_count > 0 { "var(--color-red)" } else if low_count > 0 { "var(--color-orange)" } else { "var(--color-green)" })>
+                                <span class="badge badge-on-solid" style=move || format!("background:{}", if critical_count > 0 { "var(--color-red)" } else if low_count > 0 { "var(--color-orange)" } else { "var(--color-green)" })>
                                     {format!("{} 个低信誉", low_count)}
                                 </span>
                             </div>
-                            <div style="display:grid;gap:4px;padding:12px 16px;font-size:12px;">
-                                <div style="display:grid;grid-template-columns:1fr 60px 70px 70px 60px;gap:8px;padding:4px 0;border-bottom:1px solid var(--border-color);font-weight:600;color:var(--text-secondary);font-size:11px;">
+                            <div class="reputation-grid">
+                                <div class="reputation-head">
                                     <span>"IP"</span>
-                                    <span style="text-align:center">"分数"</span>
-                                    <span style="text-align:center">"失败"</span>
-                                    <span style="text-align:center">"封禁"</span>
-                                    <span style="text-align:center">"乘数"</span>
+                                    <span>"分数"</span>
+                                    <span>"失败"</span>
+                                    <span>"封禁"</span>
+                                    <span>"乘数"</span>
                                 </div>
                                 {entries.iter().take(20).map(|entry| {
                                     let score_color = if entry.score >= 80 {
@@ -941,24 +928,24 @@ pub fn Bans() -> impl IntoView {
                                     };
                                     let bar_width = entry.score;
                                     view! {
-                                        <div style="display:grid;grid-template-columns:1fr 60px 70px 70px 60px;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border-color);">
-                                            <span class="mono" style="font-size:12px">{entry.ip.clone()}</span>
-                                            <div style="position:relative;height:18px;background:var(--bg-secondary);border-radius:3px;overflow:hidden;">
-                                                <div style=move || format!("position:absolute;left:0;top:0;bottom:0;width:{}%;background:{};opacity:0.3;", bar_width, score_color)></div>
-                                                <span class="mono" style=move || format!("position:relative;z-index:1;display:flex;align-items:center;justify-content:center;height:100%;font-size:11px;font-weight:600;color:{}", score_color)>
+                                        <div class="reputation-row">
+                                            <span class="mono fs-12">{entry.ip.clone()}</span>
+                                            <div class="score-bar score-bar-tall">
+                                                <div class="score-bar-fill" style=format!("width:{bar_width}%;background:{score_color}")></div>
+                                                <span class="mono score-bar-label" style=format!("color:{score_color}")>
                                                     {entry.score}
                                                 </span>
                                             </div>
-                                            <span class="mono" style="text-align:center;color:var(--text-secondary)">{entry.total_failures}</span>
-                                            <span class="mono" style="text-align:center;color:var(--text-secondary)">{entry.total_bans}</span>
-                                            <span class="mono" style=move || format!("text-align:center;color:{};font-weight:600", score_color)>
+                                            <span class="mono num text-secondary">{entry.total_failures}</span>
+                                            <span class="mono num text-secondary">{entry.total_bans}</span>
+                                            <span class="mono num fw-600" style=format!("color:{score_color}")>
                                                 {format!("×{:.1}", entry.threshold_multiplier)}
                                             </span>
                                         </div>
                                     }
                                 }).collect_view()}
                             </div>
-                            <div style="padding:8px 16px;font-size:11px;color:var(--text-muted)">
+                            <div class="pad-block fs-11 text-muted">
                                 "初始 100 分，每次失败 -10，每次封禁 -10。≥80 正常，50-79 略严（×0.8），<50 严格（×0.5）。每小时无失败 +1 恢复。"
                             </div>
                         </div>

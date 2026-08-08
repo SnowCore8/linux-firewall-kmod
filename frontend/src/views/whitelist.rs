@@ -89,7 +89,7 @@ pub fn Whitelist() -> impl IntoView {
                 <div class="form-row">
                     <div class="form-field">
                         <label class="form-label">"CIDR 地址"</label>
-                        <input class="input mono" placeholder="10.0.0.0/8 或 192.168.1.1" style="width:100%"
+                        <input class="input mono input-fill" placeholder="10.0.0.0/8 或 192.168.1.1"
                             prop:value=move || new_cidr.get()
                             on:input=move |e| new_cidr.set(event_target_value(&e))/>
                     </div>

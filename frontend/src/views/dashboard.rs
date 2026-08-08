@@ -347,7 +347,7 @@ pub fn Dashboard() -> impl IntoView {
             </div>
 
             // 最近封禁事件流
-            <div class="card" style="padding:14px">
+            <div class="card section-card">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
                     <h3 style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-secondary);margin:0">
                         "最近封禁"
@@ -408,7 +408,7 @@ pub fn Dashboard() -> impl IntoView {
                     <div class="chart-header">
                         <h3>"实时流量趋势"</h3>
                     </div>
-                    <div class="chart-body" style="height:200px">
+                    <div class="chart-body chart-body-lg">
                         <LineChart
                             labels=Signal::derive(move || rate_history.get().labels_vec())
                             data=Signal::derive(move || rate_history.get().pps_vec())
@@ -461,7 +461,7 @@ pub fn Dashboard() -> impl IntoView {
                     <div class="chart-header">
                         <h3>"协议分布"</h3>
                     </div>
-                    <div class="chart-body" style="height:180px">
+                    <div class="chart-body chart-body-md">
                         {move || {
                             let (labels, data) = protocol_distribution();
                             let total: u64 = data.iter().sum();
@@ -483,7 +483,7 @@ pub fn Dashboard() -> impl IntoView {
                     <div class="chart-header">
                         <h3>"协议雷达"</h3>
                     </div>
-                    <div class="chart-body" style="height:180px">
+                    <div class="chart-body chart-body-md">
                         {move || {
                             let (labels, data) = protocol_radar();
                             let total: u64 = data.iter().sum();
@@ -507,7 +507,7 @@ pub fn Dashboard() -> impl IntoView {
                     <div class="chart-header">
                         <h3>"封禁趋势 (24h)"</h3>
                     </div>
-                    <div class="chart-body" style="height:180px">
+                    <div class="chart-body chart-body-md">
                         <LineChart
                             labels=Signal::derive(move || {
                                 stats_signal.get().unwrap_or_else(&stats_default).ban_trend.labels

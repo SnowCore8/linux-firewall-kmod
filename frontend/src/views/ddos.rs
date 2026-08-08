@@ -180,7 +180,7 @@ pub fn DdosMonitor() -> impl IntoView {
 
             <div class="card chart-card">
                 <div class="chart-header"><h3>"流量趋势 (最近 5 分钟)"</h3></div>
-                <div class="chart-body" style="height:200px">
+                <div class="chart-body chart-body-lg">
                     <LineChart
                         labels=Signal::derive(move || rate_history.get().labels_vec())
                         data=Signal::derive(move || rate_history.get().pps_vec())
@@ -409,7 +409,7 @@ pub fn DdosMonitor() -> impl IntoView {
                                             view! {
                                                 <div class="udp-port-row" style="grid-template-columns: 80px 1fr 80px 60px;">
                                                     <span class="udp-port-num mono" style=move || format!("color:{}", color)>{label}</span>
-                                                    <div class="protocol-bar-bg" style="height:16px;">
+                                                    <div class="protocol-bar-bg protocol-bar-sm">
                                                         <div class="protocol-bar-fill" style=move || format!("width:{}%; background:{}", bar_pct, color)/>
                                                     </div>
                                                     <span class="udp-port-packets mono">{format_rate(*count, "")}</span>
@@ -459,7 +459,7 @@ pub fn DdosMonitor() -> impl IntoView {
                                             view! {
                                                 <div class="udp-port-row" style="grid-template-columns: 80px 1fr 80px 60px;">
                                                     <span class="udp-port-num mono" style=move || format!("color:{}", color)>{label}</span>
-                                                    <div class="protocol-bar-bg" style="height:16px;">
+                                                    <div class="protocol-bar-bg protocol-bar-sm">
                                                         <div class="protocol-bar-fill" style=move || format!("width:{}%; background:{}", bar_pct, color)/>
                                                     </div>
                                                     <span class="udp-port-packets mono">{format_rate(*count, "")}</span>
@@ -516,7 +516,7 @@ pub fn DdosMonitor() -> impl IntoView {
                                         </div>
                                         <div class="udp-port-row" style="grid-template-columns: 120px 1fr 80px;">
                                             <span class="udp-port-num mono">"分片包数"</span>
-                                            <div class="protocol-bar-bg" style="height:16px;">
+                                            <div class="protocol-bar-bg protocol-bar-sm">
                                                 {let bar_pct = if frags.total_packets > 0 {
                                                     (frags.fragment_packets as f64 / frags.total_packets as f64 * 100.0).min(100.0) as u32
                                                 } else { 0 };

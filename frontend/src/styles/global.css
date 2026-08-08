@@ -128,6 +128,9 @@
   --transition-fast: 80ms var(--ease-out);
   --transition-normal: 150ms var(--ease-out);
   --transition-slow: 250ms var(--ease-out);
+
+  /* 兼容旧引用：统一映射到信息青 */
+  --accent-primary: var(--color-cyan);
 }
 
 /* ── Reset ── */
@@ -2916,3 +2919,178 @@ tr:last-child td { border-bottom: none; }
   border-radius: 2px;
   font-style: normal;
 }
+
+.chart-body-md { height: 180px; }
+.chart-body-lg { height: 200px; }
+.input-w-sort { width: 140px; }
+.input-fill { width: 100%; }
+.muted-center {
+  padding: 12px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.muted-center-lg {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* ── 封禁表 ── */
+.bans-table { width: 100%; border-collapse: collapse; }
+.bans-table th,
+.bans-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: middle;
+}
+.bans-table th {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.bans-table .col-check { width: 32px; text-align: center; }
+.bans-table .col-ip { width: 15%; }
+.bans-table .col-jail { width: 10%; }
+.bans-table .col-reason { width: 14%; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bans-table .col-count { width: 5%; }
+.bans-table .col-time { width: 11%; font-size: 11px; color: var(--text-muted); }
+.bans-table .col-remain { width: 11%; font-size: 11px; }
+.bans-table .col-actions { width: 16%; }
+.bans-table tr.row-selected {
+  background: color-mix(in srgb, var(--color-cyan) 8%, transparent);
+}
+.bans-table .ip-cell { font-weight: 600; color: var(--text-primary); }
+.bans-table .threat-dot-inline {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.bans-table .ip-copy {
+  cursor: pointer;
+  border-bottom: 1px dashed transparent;
+  transition: border-color 0.15s;
+}
+.bans-table .ip-copy:hover { border-bottom-color: var(--color-cyan); }
+.bans-table .count-cell { font-weight: 700; }
+.bans-table .count-warn { color: var(--color-orange); }
+.bans-table .count-danger { color: var(--color-red); }
+.bans-table .count-muted { color: var(--text-muted); }
+.bans-table .remain-permanent {
+  color: var(--color-red);
+  font-weight: 700;
+}
+.bans-table .row-actions {
+  display: flex;
+  gap: 4px;
+}
+.table-check {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--color-cyan);
+  cursor: pointer;
+}
+
+.pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.pager-btns {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.btn-page {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.btn-page.is-current {
+  background: var(--color-cyan);
+  color: #0a0a0a;
+  border-color: var(--color-cyan);
+  font-weight: 700;
+}
+
+.analysis-grid {
+  display: grid;
+  gap: 8px;
+  padding: 12px 16px;
+}
+.analysis-row {
+  display: grid;
+  grid-template-columns: 100px 1fr 120px 80px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-default);
+}
+.reputation-grid {
+  display: grid;
+  gap: 4px;
+  padding: 12px 16px;
+  font-size: 12px;
+}
+.reputation-head,
+.reputation-row {
+  display: grid;
+  grid-template-columns: 1fr 60px 70px 70px 60px;
+  gap: 8px;
+  padding: 4px 0;
+  align-items: center;
+}
+.reputation-head {
+  border-bottom: 1px solid var(--border-default);
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.reputation-head span,
+.reputation-row .num {
+  text-align: center;
+}
+.score-bar {
+  position: relative;
+  height: 8px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.score-bar-tall {
+  height: 18px;
+}
+.score-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  opacity: 0.35;
+}
+.score-bar-label {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge-on-solid { color: #fff; }
+.level-header { border-left-width: 3px; border-left-style: solid; }
+.text-center { text-align: center; }
+.fw-600 { font-weight: 600; }
+.fs-12 { font-size: 12px; }
+.fs-11 { font-size: 11px; }
+.pad-block { padding: 8px 16px; }
+.protocol-bar-sm { height: 16px; }

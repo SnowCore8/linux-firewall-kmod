@@ -237,7 +237,7 @@ pub fn Settings() -> impl IntoView {
                 </div>
                 <div class="card settings-card">
                     <h3>"内核模块"</h3>
-                    <Suspense fallback=|| view! { <div style="padding:12px;color:var(--text-muted)">"加载中..."</div> }>
+                    <Suspense fallback=|| view! { <div class="muted-center">"加载中..."</div> }>
                         {move || {
                             let cfg = config.get().flatten().unwrap_or_else(&default_config);
                             view! {
@@ -254,7 +254,7 @@ pub fn Settings() -> impl IntoView {
                 </div>
                 <div class="card settings-card">
                     <h3>"Web UI 配置"</h3>
-                    <Suspense fallback=|| view! { <div style="padding:12px;color:var(--text-muted)">"加载中..."</div> }>
+                    <Suspense fallback=|| view! { <div class="muted-center">"加载中..."</div> }>
                         {move || {
                             let _cfg = config.get().flatten().unwrap_or_else(&default_config);
                             view! {
@@ -271,7 +271,7 @@ pub fn Settings() -> impl IntoView {
                 </div>
                 <div class="card settings-card">
                     <h3>"协议专项阈值 (每秒)"</h3>
-                    <Suspense fallback=|| view! { <div style="padding:12px;color:var(--text-muted)">"加载中..."</div> }>
+                    <Suspense fallback=|| view! { <div class="muted-center">"加载中..."</div> }>
                         {move || {
                             let _cfg = config.get().flatten().unwrap_or_else(&default_config);
                             view! {
@@ -289,7 +289,7 @@ pub fn Settings() -> impl IntoView {
                 </div>
                 <div class="card settings-card">
                     <h3>"DDoS 检测算法"</h3>
-                    <Suspense fallback=|| view! { <div style="padding:12px;color:var(--text-muted)">"加载中..."</div> }>
+                    <Suspense fallback=|| view! { <div class="muted-center">"加载中..."</div> }>
                         {move || {
                             let _cfg = config.get().flatten().unwrap_or_else(&default_config);
                             view! {
@@ -304,7 +304,7 @@ pub fn Settings() -> impl IntoView {
                 </div>
                 <div class="card settings-card">
                     <h3>"容量配置"</h3>
-                    <Suspense fallback=|| view! { <div style="padding:12px;color:var(--text-muted)">"加载中..."</div> }>
+                    <Suspense fallback=|| view! { <div class="muted-center">"加载中..."</div> }>
                         {move || {
                             let _cfg = config.get().flatten().unwrap_or_else(&default_config);
                             view! {
