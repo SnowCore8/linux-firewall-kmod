@@ -242,8 +242,7 @@ pub fn DefaultLayout(sse_state: SseState, children: Children) -> impl IntoView {
                             ConnectionStatus::ConnectionLimit => "LIMIT",
                         }}</span>
                     </div>
-                    <a href="/metrics" target="_blank"
-                        style="font-size:8px;color:var(--color-cyan);text-decoration:none;font-weight:700;letter-spacing:0.1em;text-transform:uppercase">
+                    <a href="/metrics" target="_blank" rel="noopener noreferrer" class="sidebar-metrics-link">
                         "METRICS"
                     </a>
                 </div>
@@ -254,16 +253,16 @@ pub fn DefaultLayout(sse_state: SseState, children: Children) -> impl IntoView {
                     when=move || matches!(status.get(), ConnectionStatus::Disconnected | ConnectionStatus::ConnectionLimit)
                     fallback=|| ()
                 >
-                    <div class="offline-banner">
+                    <div class="offline-banner" role="alert">
                         <span>{move || {
                             if status.get() == ConnectionStatus::ConnectionLimit {
-                                "⚠ SSE 连接数已达上限，请关闭其他标签页后刷新".to_string()
+                                "SSE 连接数已达上限，请关闭其他标签页后刷新".to_string()
                             } else {
                                 let n = reconnect_attempt.get();
                                 if n > 0 {
-                                    format!("⚠ 连接已断开，第 {} 次重连中...", n)
+                                    format!("连接已断开，第 {} 次重连中...", n)
                                 } else {
-                                    "⚠ 连接已断开".to_string()
+                                    "连接已断开".to_string()
                                 }
                             }
                         }}</span>
@@ -272,23 +271,24 @@ pub fn DefaultLayout(sse_state: SseState, children: Children) -> impl IntoView {
 
                 <header class="topbar">
                     <div class="topbar-left">
-                        <button class="menu-toggle" on:click=move |_| {
+                        <button class="menu-toggle" type="button" aria-label="打开或关闭导航"
+                            on:click=move |_| {
                             sidebar_open.update(|v| *v = !*v);
                         }>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                                 <path d="M3 12h18M3 6h18M3 18h18"/>
                             </svg>
                         </button>
                         <h1 class="topbar-title">{page_title}</h1>
                     </div>
                     <div class="topbar-right">
-                        <div class="topbar-status">
+                        <div class="topbar-status" aria-live="polite">
                             <span class=move || {
                                 match status.get() {
                                     ConnectionStatus::Connected => "sse-dot",
                                     _ => "sse-dot disconnected",
                                 }
-                            }/>
+                            } aria-hidden="true"/>
                             <span>{move || match status.get() {
                                 ConnectionStatus::Connected => "CONNECTED",
                                 ConnectionStatus::Connecting => "CONNECTING",
@@ -296,14 +296,15 @@ pub fn DefaultLayout(sse_state: SseState, children: Children) -> impl IntoView {
                                 ConnectionStatus::ConnectionLimit => "LIMIT REACHED",
                             }}</span>
                         </div>
-                        <button class="btn btn-icon" on:click=move |_| theme::toggle_theme()>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
+                        <button class="btn btn-icon" type="button" aria-label="切换浅色或深色主题"
+                            on:click=move |_| theme::toggle_theme()>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13" aria-hidden="true">
                                 <circle cx="12" cy="12" r="5"/>
                                 <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 4.22l1.42 1.42M18.36 5.64l1.42 1.42"/>
                             </svg>
                         </button>
-                        <button class="btn btn-icon" title="键盘快捷键 (?)"
-                            style="font-size:12px;font-weight:800;width:28px;height:28px;padding:0"
+                        <button class="btn btn-icon btn-shortcut-help" type="button" title="键盘快捷键 (?)"
+                            aria-label="显示键盘快捷键"
                             on:click=move |_| show_shortcuts.update(|v| *v = !*v)>
                             "?"
                         </button>

@@ -6,6 +6,7 @@ use wasm_bindgen::JsCast;
 use crate::api::{self, BanDetailResponse, BanEffectivenessResponse, BanResponse, StatsResponse};
 use crate::charts::{LineChart, PieChart};
 use crate::components::toast::ToastState;
+use crate::components::{EmptyState, PageHeader};
 use crate::format::{copy_to_clipboard, format_datetime, format_duration};
 use crate::sse::SseState;
 use crate::validation;
@@ -26,7 +27,7 @@ fn highlight_text(text: &str, keyword: &str) -> impl IntoView {
         let matched = text[start..start + lower_kw.len()].to_string();
         result.push(
             view! {
-                <mark style="background:var(--color-yellow,#eab308);color:#000;padding:0 1px;border-radius:2px;font-style:normal">
+                <mark class="highlight-mark">
                     {matched}
                 </mark>
             }
@@ -469,42 +470,39 @@ pub fn Bans() -> impl IntoView {
                 </div>
             </div>
 
-            <div class="page-toolbar">
-                <div class="toolbar-left">
-                    <h2 class="section-title">"封禁列表"</h2>
-                    <span class="badge badge-danger badge-dot">
-                        {move || format!("{}", bans_signal.get().map(|b| b.len()).unwrap_or(0))}
-                    </span>
-                </div>
-                <div class="toolbar-right">
-                    <select class="input" style="width:140px;margin-right:8px"
-                        prop:value=move || sort_by.get()
-                        on:change=move |e| sort_by.set(event_target_value(&e))>
-                        <option value="banned_at_desc">"封禁时间 ↓"</option>
-                        <option value="banned_at_asc">"封禁时间 ↑"</option>
-                        <option value="ip_asc">"IP 地址 A-Z"</option>
-                        <option value="ip_desc">"IP 地址 Z-A"</option>
-                        <option value="remaining_asc">"剩余时间 ↑"</option>
-                        <option value="remaining_desc">"剩余时间 ↓"</option>
-                    </select>
-                    <div style="position:relative">
-                        <input class="input mono" placeholder="搜索 IP / Jail / 原因..."
-                            node_ref=search_ref
-                            style="width:260px;padding-right:28px"
-                            prop:value=move || search.get()
-                            on:input=move |e| search.set(event_target_value(&e))/>
-                        <span style="position:absolute;right:8px;top:50%;transform:translateY(-50%);font-size:10px;color:var(--text-muted);background:var(--bg-tertiary);padding:2px 6px;border-radius:3px;border:1px solid var(--border-color);font-family:monospace;pointer-events:none;opacity:0.6">"/"</span>
-                    </div>
+            <PageHeader title="封禁管理" subtitle="活跃封禁列表与手动封禁">
+                <span class="badge badge-danger badge-dot">
+                    {move || format!("{}", bans_signal.get().map(|b| b.len()).unwrap_or(0))}
+                </span>
+            </PageHeader>
+
+            <div class="toolbar-row">
+                <select class="input" style="width:140px"
+                    prop:value=move || sort_by.get()
+                    on:change=move |e| sort_by.set(event_target_value(&e))>
+                    <option value="banned_at_desc">"封禁时间 ↓"</option>
+                    <option value="banned_at_asc">"封禁时间 ↑"</option>
+                    <option value="ip_asc">"IP 地址 A-Z"</option>
+                    <option value="ip_desc">"IP 地址 Z-A"</option>
+                    <option value="remaining_asc">"剩余时间 ↑"</option>
+                    <option value="remaining_desc">"剩余时间 ↓"</option>
+                </select>
+                <div class="search-with-hint">
+                    <input class="input mono search-input" placeholder="搜索 IP / Jail / 原因..."
+                        node_ref=search_ref
+                        prop:value=move || search.get()
+                        on:input=move |e| search.set(event_target_value(&e))/>
+                    <span class="search-kbd" aria-hidden="true">"/"</span>
                 </div>
             </div>
 
             // 批量操作栏（选中时显示）
             <Show when=move || !selected_ips.get().is_empty()>
-                <div class="card" style="padding:10px 14px;display:flex;align-items:center;gap:12px;background:var(--bg-tertiary);border:1px solid var(--accent-primary);animation:slide-down 0.2s ease-out">
-                    <span style="font-size:13px;font-weight:600;color:var(--accent-primary)">
+                <div class="card batch-bar">
+                    <span class="batch-bar-count">
                         {move || format!("已选择 {} 项", selected_count())}
                     </span>
-                    <button class="btn btn-sm btn-danger" on:click=do_batch_unban
+                    <button class="btn btn-sm btn-danger" type="button" on:click=do_batch_unban
                         disabled=move || batch_loading.get()
                         style="font-size:12px">
                         {move || if batch_loading.get() { "解封中..." } else { "批量解封" }}
@@ -516,26 +514,25 @@ pub fn Bans() -> impl IntoView {
                 </div>
             </Show>
 
-            <div class="card" style="padding:14px">
-                <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;max-width:600px">
-                    <div style="flex:1;min-width:120px">
-                        <label style="font-size:9px;color:var(--text-muted);display:block;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em">"IP 地址"</label>
+            <div class="card section-card">
+                <div class="form-row">
+                    <div class="form-field">
+                        <label class="form-label">"IP 地址"</label>
                         <input class="input mono" placeholder="1.2.3.4" style="width:100%"
                             prop:value=move || ban_ip.get()
                             on:input=move |e| ban_ip.set(event_target_value(&e))/>
                     </div>
-                    <div style="flex:1;min-width:100px">
-                        <label style="font-size:9px;color:var(--text-muted);display:block;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em">"时长 (秒, 留空=永久)"</label>
+                    <div class="form-field">
+                        <label class="form-label">"时长 (秒, 留空=永久)"</label>
                         <input class="input mono" placeholder="0" style="width:100%"
                             prop:value=move || ban_duration.get()
                             on:input=move |e| ban_duration.set(event_target_value(&e))/>
                     </div>
-                    <button class="btn btn-primary" on:click=do_ban
-                        disabled=move || ban_loading.get()
-                        style="flex-shrink:0;height:36px">
+                    <button class="btn btn-primary" type="button" on:click=do_ban
+                        disabled=move || ban_loading.get()>
                         {move || if ban_loading.get() { "封禁中..." } else { "封禁" }}
                     </button>
-                    <span style="color:var(--color-red);font-size:11px;flex-shrink:0">{move || ban_error.get()}</span>
+                    <span class="form-error">{move || ban_error.get()}</span>
                 </div>
             </div>
 
@@ -544,12 +541,11 @@ pub fn Bans() -> impl IntoView {
                 let bans = bans_signal.get().unwrap_or_default();
                 bans.is_empty() && search.get().is_empty()
             }>
-                <div class="card" style="padding:48px 24px;text-align:center">
-                    <div style="font-size:48px;margin-bottom:16px;opacity:0.3">"🛡️"</div>
-                    <h3 style="color:var(--text-secondary);font-weight:600;margin-bottom:8px">"当前无活跃封禁"</h3>
-                    <p style="color:var(--text-muted);font-size:13px;max-width:360px;margin:0 auto">
-                        "系统正在持续监控日志和流量。当检测到异常行为时，封禁记录将在此显示。"
-                    </p>
+                <div class="card">
+                    <EmptyState
+                        title="当前无活跃封禁"
+                        hint="系统正在持续监控日志和流量。检测到异常时，封禁记录将在此显示。"
+                    />
                 </div>
             </Show>
 
@@ -563,11 +559,13 @@ pub fn Bans() -> impl IntoView {
                 let filtered = filtered_bans();
                 total > 0 && filtered.is_empty() && !search.get().is_empty()
             }>
-                <div class="card" style="padding:32px 16px;text-align:center">
-                    <div style="font-size:32px;margin-bottom:8px;opacity:0.3">"🔍"</div>
-                    <p style="color:var(--text-muted);font-size:13px">
-                        {move || format!("未找到匹配 \"{}\" 的封禁记录", search.get())}
-                    </p>
+                <div class="card">
+                    {move || {
+                        let q = search.get();
+                        view! {
+                            <EmptyState title=format!("未找到匹配 \"{q}\" 的封禁记录")/>
+                        }
+                    }}
                 </div>
             </Show>
             <Show when=move || !filtered_bans().is_empty()>

@@ -5,6 +5,7 @@ use leptos::*;
 use crate::api::{self, JailResponse, StatsResponse};
 use crate::charts::PieChart;
 use crate::components::toast::ToastState;
+use crate::components::{EmptyState, PageHeader};
 use crate::sse::SseState;
 
 #[component]
@@ -125,24 +126,21 @@ pub fn Jails() -> impl IntoView {
                 </div>
             </div>
 
-            <div class="page-toolbar">
-                <div class="toolbar-left"><h2 class="section-title">"Jail 配置"</h2></div>
-            </div>
+            <PageHeader title="Jail 配置" subtitle="日志监控规则与启用状态"/>
 
             <div class="jails-grid">
-                <Suspense fallback=|| view! { <div class="empty-state"><span>"加载中..."</span></div> }>
+                <Suspense fallback=|| view! { <EmptyState title="加载中..."/> }>
                     {move || {
                         let jails = jails_signal.get()
                             .or_else(|| jails_api.get().flatten())
                             .unwrap_or_default();
                         if jails.is_empty() {
                             return view! {
-                                <div class="card" style="padding:48px 24px;text-align:center">
-                                    <div style="font-size:48px;margin-bottom:16px;opacity:0.3">"📋"</div>
-                                    <h3 style="color:var(--text-secondary);font-weight:600;margin-bottom:8px">"暂无 Jail 配置"</h3>
-                                    <p style="color:var(--text-muted);font-size:13px;max-width:400px;margin:0 auto">
-                                        "Jail 定义了对各服务的日志监控规则。在 config/ 目录添加 YAML 配置文件并重启守护进程即可加载。"
-                                    </p>
+                                <div class="card">
+                                    <EmptyState
+                                        title="暂无 Jail 配置"
+                                        hint="Jail 定义对各服务的日志监控规则。在 config/ 添加 YAML 并重启守护进程即可加载。"
+                                    />
                                 </div>
                             }.into_view();
                         }

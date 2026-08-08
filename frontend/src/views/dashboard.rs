@@ -6,6 +6,7 @@ use leptos_router::*;
 use crate::api::{self, StatsResponse};
 use crate::charts::{LineChart, PieChart, RadarChart};
 use crate::components::toast::ToastState;
+use crate::components::{EmptyState, PageHeader};
 use crate::sse::SseState;
 use crate::types;
 
@@ -154,32 +155,29 @@ pub fn Dashboard() -> impl IntoView {
 
     view! {
         <div class="dashboard">
-            // 手动刷新按钮
-            <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-                <button class="btn btn-sm"
-                    style="border-color:var(--border-strong);font-size:11px;padding:4px 10px"
+            <PageHeader title="安全运营中心" subtitle="威胁态势 · 实时流量 · 攻击源">
+                <button class="btn btn-sm" type="button"
                     disabled=move || refreshing.get()
                     on:click=move |_| {
                         refreshing.set(true);
                         refresh_trigger.update(|v| *v += 1);
-                        // 2 秒后恢复按钮（resource 异步完成）
                         set_timeout(
                             move || refreshing.set(false),
                             std::time::Duration::from_secs(2),
                         );
                     }>
-                    {move || if refreshing.get() { "刷新中..." } else { "🔄 刷新分析数据" }}
+                    {move || if refreshing.get() { "刷新中..." } else { "刷新分析数据" }}
                 </button>
-            </div>
+            </PageHeader>
             <Show
                 when=move || !is_loading()
                 fallback=|| view! {
                     <div class="loading-skeleton">
-                        <div class="skeleton-threat-bar" style="display:flex;align-items:center;gap:8px;padding:12px 16px">
-                            <span style="width:8px;height:8px;border-radius:50%;background:var(--color-green);opacity:0.3"/>
-                            <span style="font-size:11px;font-weight:600;letter-spacing:0.05em;color:var(--color-green);opacity:0.5">"NORMAL"</span>
+                        <div class="skeleton-threat-bar">
+                            <span class="threat-dot" style="background:var(--color-green);opacity:0.35"/>
+                            <span class="threat-label" style="color:var(--color-green);opacity:0.5">"NORMAL"</span>
                             <span style="flex:1"/>
-                            <span style="font-size:11px;color:var(--text-muted);opacity:0.3">"加载中..."</span>
+                            <span class="text-muted">"加载中..."</span>
                         </div>
                         <div class="skeleton-grid">
                             <div class="skeleton-card"/>
@@ -194,7 +192,13 @@ pub fn Dashboard() -> impl IntoView {
             >
 
             // 顶部威胁状态栏
-            <div class="threat-bar">
+            <div class=move || {
+                match threat_level() {
+                    types::ThreatLevel::Critical => "threat-bar threat-critical",
+                    types::ThreatLevel::Warning => "threat-bar threat-warning",
+                    types::ThreatLevel::Normal => "threat-bar threat-normal",
+                }
+            }>
                 <div class="threat-level">
                     <span class="threat-dot" style=move || format!("background: {}", threat_level().color())/>
                     <span class="threat-label" style=move || format!("color: {}", threat_level().color())>
@@ -362,9 +366,7 @@ pub fn Dashboard() -> impl IntoView {
                         let mut bans = sse.bans.get().unwrap_or_default();
                         if bans.is_empty() {
                             return view! {
-                                <div class="empty-state" style="padding:12px 0">
-                                    <span style="color:var(--text-muted);font-size:12px">"当前无活跃封禁"</span>
-                                </div>
+                                <EmptyState title="当前无活跃封禁" hint="新的封禁事件将出现在此时间线"/>
                             }.into_view();
                         }
                         // 按封禁时间降序，取最近 8 条
@@ -408,8 +410,8 @@ pub fn Dashboard() -> impl IntoView {
                     </div>
                     <div class="chart-body" style="height:200px">
                         <LineChart
-                            labels=Signal::derive(move || rate_history.get().labels.clone())
-                            data=Signal::derive(move || rate_history.get().pps.clone())
+                            labels=Signal::derive(move || rate_history.get().labels_vec())
+                            data=Signal::derive(move || rate_history.get().pps_vec())
                             color="var(--color-cyan)"
                             height=200
                         />
@@ -424,7 +426,9 @@ pub fn Dashboard() -> impl IntoView {
                         {move || {
                             let attackers = top_attackers();
                             if attackers.is_empty() {
-                                return view! { <div class="empty-state"><span>"无活跃攻击"</span></div> }.into_view();
+                                return view! {
+                                    <EmptyState title="无活跃攻击" hint="速率表为空或当前流量正常"/>
+                                }.into_view();
                             }
                             attackers.into_iter().enumerate().map(|(i, rate)| {
                                 let level = types::attacker_threat_level(&rate);
@@ -462,7 +466,7 @@ pub fn Dashboard() -> impl IntoView {
                             let (labels, data) = protocol_distribution();
                             let total: u64 = data.iter().sum();
                             if total == 0 {
-                                return view! { <div class="empty-state"><span>"无流量数据"</span></div> }.into_view();
+                                return view! { <EmptyState title="无流量数据"/> }.into_view();
                             }
                             view! {
                                 <PieChart
@@ -485,10 +489,7 @@ pub fn Dashboard() -> impl IntoView {
                             let total: u64 = data.iter().sum();
                             if total == 0 {
                                 return view! {
-                                    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:12px">
-                                        <span style="font-size:24px;opacity:0.3;margin-bottom:8px">"📡"</span>
-                                        <span>"暂无流量数据"</span>
-                                    </div>
+                                    <EmptyState title="暂无流量数据"/>
                                 }.into_view();
                             }
                             view! {
@@ -526,9 +527,9 @@ pub fn Dashboard() -> impl IntoView {
                 <div class="chart-header">
                     <h3>"24 小时攻击热力图"</h3>
                     <span class="heatmap-legend">
-                        <span class="legend-item"><span class="legend-dot" style="background:#ef4444"/>"封禁"</span>
-                        <span class="legend-item"><span class="legend-dot" style="background:#f59e0b"/>"失败"</span>
-                        <span class="legend-item"><span class="legend-dot" style="background:#8b5cf6"/>"DDoS"</span>
+                        <span class="legend-item"><span class="legend-dot" style="background:var(--color-red)"/>"封禁"</span>
+                        <span class="legend-item"><span class="legend-dot" style="background:var(--color-orange)"/>"失败"</span>
+                        <span class="legend-item"><span class="legend-dot" style="background:var(--color-cyan)"/>"DDoS"</span>
                     </span>
                 </div>
                 <Suspense fallback=|| view! { <div class="heatmap-placeholder">"加载中..."</div> }>
@@ -597,7 +598,8 @@ fn push_spark(sig: RwSignal<Vec<f64>>, val: f64) {
     sig.update(|v| {
         v.push(val);
         if v.len() > 20 {
-            v.remove(0);
+            let excess = v.len() - 20;
+            v.drain(..excess);
         }
     });
 }

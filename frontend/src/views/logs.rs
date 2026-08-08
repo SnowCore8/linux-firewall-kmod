@@ -7,6 +7,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::api;
+use crate::components::{EmptyState, PageHeader};
 
 const MAX_LOGS: usize = 1000;
 
@@ -120,6 +121,7 @@ pub fn Logs() -> impl IntoView {
 
     view! {
         <div class="logs-page">
+            <PageHeader title="系统日志" subtitle="级别过滤与实时流"/>
             // 日志级别统计
             <div class="kernel-stats-bar">
                 {move || {
@@ -127,24 +129,24 @@ pub fn Logs() -> impl IntoView {
                     view! {
                         <>
                             <div class="kernel-stat">
-                                <span class="kernel-stat-label" style="color:var(--color-red)">"ERROR"</span>
-                                <span class="kernel-stat-value mono" style="color:var(--color-red)">{error}</span>
+                                <span class="kernel-stat-label text-danger">"ERROR"</span>
+                                <span class="kernel-stat-value mono text-danger">{error}</span>
                             </div>
                             <div class="kernel-stat">
-                                <span class="kernel-stat-label" style="color:var(--color-orange)">"WARN"</span>
-                                <span class="kernel-stat-value mono" style="color:var(--color-orange)">{warn}</span>
+                                <span class="kernel-stat-label text-warning">"WARN"</span>
+                                <span class="kernel-stat-value mono text-warning">{warn}</span>
                             </div>
                             <div class="kernel-stat">
-                                <span class="kernel-stat-label" style="color:var(--color-cyan)">"INFO"</span>
-                                <span class="kernel-stat-value mono" style="color:var(--color-cyan)">{info}</span>
+                                <span class="kernel-stat-label text-cyan">"INFO"</span>
+                                <span class="kernel-stat-value mono text-cyan">{info}</span>
                             </div>
                             <div class="kernel-stat">
-                                <span class="kernel-stat-label" style="color:var(--text-muted)">"DEBUG"</span>
+                                <span class="kernel-stat-label text-muted">"DEBUG"</span>
                                 <span class="kernel-stat-value mono">{debug}</span>
                             </div>
                             <div class="kernel-stat">
                                 <span class="kernel-stat-label">"TOTAL"</span>
-                                <span class="kernel-stat-value mono">{error + warn + info + debug}</span>
+                                <span class="kernel-stat-value mono tabular">{error + warn + info + debug}</span>
                             </div>
                         </>
                     }
@@ -236,21 +238,20 @@ pub fn Logs() -> impl IntoView {
             <div class="card log-container">
                 {move || {
                     if loading.get() {
-                        return view! { <div class="empty-state"><span>"加载日志中..."</span></div> }.into_view();
+                        return view! { <EmptyState title="加载日志中..."/> }.into_view();
                     }
                     let entries = filtered();
                     if entries.is_empty() {
                         return view! {
-                            <div class="empty-state">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-                                    <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/>
-                                </svg>
-                                <span>{move || {
-                                    let err = error.get();
-                                    if err.is_empty() { "暂无日志".to_string() } else { err }
-                                }}</span>
-                            </div>
+                            {move || {
+                                let err = error.get();
+                                let title = if err.is_empty() {
+                                    "暂无日志".to_string()
+                                } else {
+                                    err
+                                };
+                                view! { <EmptyState title=title/> }
+                            }}
                         }.into_view();
                     }
                     view! {

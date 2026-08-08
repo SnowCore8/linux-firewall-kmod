@@ -4,6 +4,7 @@ use leptos::*;
 
 use crate::api::{self, WebuiConfig};
 use crate::components::toast::ToastState;
+use crate::components::PageHeader;
 use crate::format::{format_number, format_uptime};
 use crate::sse::SseState;
 
@@ -221,10 +222,10 @@ pub fn Settings() -> impl IntoView {
 
     view! {
         <div class="settings-page">
-            <h2 class="section-title">"系统设置"</h2>
+            <PageHeader title="系统设置" subtitle="守护进程、阈值与容量"/>
             <div class="settings-grid">
                 <div class="card settings-card">
-                    <h3>"守护进程"</h3>
+                    <h3 class="section-card-title">"守护进程"</h3>
                     <div class="settings-list">
                         <SettingItem label="守护进程版本" value=move || stats_signal.get().map(|s| format!("v{}", s.daemon_version)).unwrap_or_else(|| "N/A".to_string())/>
                         <SettingItem label="内核模块版本" value=move || stats_signal.get().map(|s| format!("v{}", s.kernel_version)).unwrap_or_else(|| "N/A".to_string())/>

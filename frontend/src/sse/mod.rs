@@ -2,6 +2,7 @@
 
 use leptos::*;
 use std::cell::Cell;
+use std::collections::VecDeque;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -19,13 +20,15 @@ pub enum ConnectionStatus {
     ConnectionLimit,
 }
 
-/// 速率历史趋势数据（SSE rates 事件直接追加）
+const RATE_HISTORY_MAX: usize = 300;
+
+/// 速率历史趋势数据（SSE rates 事件直接追加，环形缓冲）
 #[derive(Clone, Debug, Default)]
 pub struct RateHistory {
-    pub labels: Vec<String>,
-    pub pps: Vec<u64>,
-    pub bps: Vec<u64>,
-    pub tracked_ips: Vec<u32>,
+    pub labels: VecDeque<String>,
+    pub pps: VecDeque<u64>,
+    pub bps: VecDeque<u64>,
+    pub tracked_ips: VecDeque<u32>,
 }
 
 impl RateHistory {
@@ -37,17 +40,24 @@ impl RateHistory {
         let total_bps: u64 = rates.iter().map(|r| r.bytes_per_sec).sum();
         let now = js_sys::Date::new_0();
         let label = format!("{:02}:{:02}", now.get_minutes(), now.get_seconds());
-        const MAX: usize = 300;
-        self.labels.push(label);
-        self.pps.push(total_pps);
-        self.bps.push(total_bps);
-        self.tracked_ips.push(rates.len() as u32);
-        if self.labels.len() > MAX {
-            self.labels.remove(0);
-            self.pps.remove(0);
-            self.bps.remove(0);
-            self.tracked_ips.remove(0);
+        self.labels.push_back(label);
+        self.pps.push_back(total_pps);
+        self.bps.push_back(total_bps);
+        self.tracked_ips.push_back(rates.len() as u32);
+        while self.labels.len() > RATE_HISTORY_MAX {
+            self.labels.pop_front();
+            self.pps.pop_front();
+            self.bps.pop_front();
+            self.tracked_ips.pop_front();
         }
+    }
+
+    pub fn labels_vec(&self) -> Vec<String> {
+        self.labels.iter().cloned().collect()
+    }
+
+    pub fn pps_vec(&self) -> Vec<u64> {
+        self.pps.iter().copied().collect()
     }
 }
 

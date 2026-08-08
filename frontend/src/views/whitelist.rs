@@ -4,6 +4,7 @@ use leptos::*;
 
 use crate::api::{self, WhitelistEntry, WhitelistRecommendation};
 use crate::components::toast::ToastState;
+use crate::components::{EmptyState, PageHeader};
 use crate::sse::SseState;
 use crate::validation;
 
@@ -78,29 +79,25 @@ pub fn Whitelist() -> impl IntoView {
 
     view! {
         <div class="whitelist-page">
-            <div class="page-toolbar">
-                <div class="toolbar-left">
-                    <h2 class="section-title">"白名单管理"</h2>
-                    <span class="badge badge-success badge-dot">
-                        {move || format!("{}", whitelist_signal.get().map(|w| w.len()).unwrap_or(0))}
-                    </span>
-                </div>
-            </div>
+            <PageHeader title="白名单管理" subtitle="信任地址与子网">
+                <span class="badge badge-success badge-dot">
+                    {move || format!("{}", whitelist_signal.get().map(|w| w.len()).unwrap_or(0))}
+                </span>
+            </PageHeader>
 
-            <div class="card" style="padding:14px">
-                <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;max-width:600px">
-                    <div style="flex:1;min-width:200px">
-                        <label style="font-size:9px;color:var(--text-muted);display:block;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em">"CIDR 地址"</label>
+            <div class="card section-card">
+                <div class="form-row">
+                    <div class="form-field">
+                        <label class="form-label">"CIDR 地址"</label>
                         <input class="input mono" placeholder="10.0.0.0/8 或 192.168.1.1" style="width:100%"
                             prop:value=move || new_cidr.get()
                             on:input=move |e| new_cidr.set(event_target_value(&e))/>
                     </div>
-                    <button class="btn btn-primary" on:click=do_add
-                        disabled=move || loading.get()
-                        style="flex-shrink:0;height:36px">
+                    <button class="btn btn-primary" type="button" on:click=do_add
+                        disabled=move || loading.get()>
                         {move || if loading.get() { "添加中..." } else { "添加" }}
                     </button>
-                    <span style="color:var(--color-red);font-size:11px">{move || error.get()}</span>
+                    <span class="form-error">{move || error.get()}</span>
                 </div>
             </div>
 
@@ -114,9 +111,9 @@ pub fn Whitelist() -> impl IntoView {
                     let rec_count = recs.len();
                     let recs_for = recs.clone();
                     view! {
-                        <div class="card" style="padding:14px">
-                            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
-                                <h3 style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-secondary);margin:0">
+                        <div class="card section-card">
+                            <div class="toolbar-row">
+                                <h3 class="section-card-title" style="margin:0">
                                     "智能推荐"
                                 </h3>
                                 <span class="badge badge-warning" style="font-size:9px">
@@ -182,13 +179,10 @@ pub fn Whitelist() -> impl IntoView {
                     let list = whitelist_signal.get().unwrap_or_default();
                     if list.is_empty() {
                         return view! {
-                            <div style="padding:48px 24px;text-align:center">
-                                <div style="font-size:48px;margin-bottom:16px;opacity:0.3">"🔓"</div>
-                                <h3 style="color:var(--text-secondary);font-weight:600;margin-bottom:8px">"白名单为空"</h3>
-                                <p style="color:var(--text-muted);font-size:13px;max-width:360px;margin:0 auto">
-                                    "白名单中的 IP/CIDR 永远不会被封禁。添加本机地址、办公网络等可信 IP 以防误封。"
-                                </p>
-                            </div>
+                            <EmptyState
+                                title="白名单为空"
+                                hint="白名单中的 IP/CIDR 不会被封禁。可添加本机或办公网等可信地址。"
+                            />
                         }.into_view();
                     }
                     view! {

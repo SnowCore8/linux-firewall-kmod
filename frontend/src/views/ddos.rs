@@ -5,6 +5,7 @@ use leptos::*;
 use crate::api;
 use crate::charts::LineChart;
 use crate::components::toast::ToastState;
+use crate::components::{EmptyState, PageHeader};
 use crate::format::{copy_to_clipboard, format_rate};
 use crate::sse::SseState;
 
@@ -90,7 +91,17 @@ pub fn DdosMonitor() -> impl IntoView {
 
     view! {
         <div class="ddos-page">
-            <div class="threat-bar">
+            <PageHeader title="DDoS 监控" subtitle="协议分布 · 阈值 · 攻击源"/>
+            <div class=move || {
+                let label = threat_level().0;
+                if label == "CRITICAL" {
+                    "threat-bar threat-critical"
+                } else if label == "WARNING" {
+                    "threat-bar threat-warning"
+                } else {
+                    "threat-bar threat-normal"
+                }
+            }>
                 <div class="threat-level">
                     <span class="threat-dot" style=move || format!("background: {}", threat_level().1)/>
                     <span class="threat-label" style=move || format!("color: {}", threat_level().1)>
@@ -125,7 +136,7 @@ pub fn DdosMonitor() -> impl IntoView {
                         {move || {
                             let (syn, udp, icmp, ack, rst, fin, total) = protocol_stats();
                             if total == 0 {
-                                return view! { <div class="empty-state"><span>"无流量数据"</span></div> }.into_view();
+                                return view! { <EmptyState title="无流量数据"/> }.into_view();
                             }
                             view! {
                                 <>
@@ -171,8 +182,8 @@ pub fn DdosMonitor() -> impl IntoView {
                 <div class="chart-header"><h3>"流量趋势 (最近 5 分钟)"</h3></div>
                 <div class="chart-body" style="height:200px">
                     <LineChart
-                        labels=Signal::derive(move || rate_history.get().labels.clone())
-                        data=Signal::derive(move || rate_history.get().pps.clone())
+                        labels=Signal::derive(move || rate_history.get().labels_vec())
+                        data=Signal::derive(move || rate_history.get().pps_vec())
                         color="var(--color-cyan)"
                         height=200
                     />
@@ -228,8 +239,7 @@ pub fn DdosMonitor() -> impl IntoView {
                         if attackers.is_empty() {
                             return view! {
                                 <div style="padding:32px 16px;text-align:center">
-                                    <div style="font-size:32px;margin-bottom:8px;opacity:0.3">"✅"</div>
-                                    <p style="color:var(--text-muted);font-size:13px">"当前无活跃攻击源"</p>
+                                    <EmptyState title="当前无活跃攻击源" hint="速率表为空或流量正常"/>
                                 </div>
                             }.into_view();
                         }
@@ -275,7 +285,7 @@ pub fn DdosMonitor() -> impl IntoView {
                         let udp = udp_ports.get().flatten();
                         if let Some(udp) = udp {
                             if udp.ports.is_empty() {
-                                return view! { <div class="empty-state"><span>"无 UDP 流量数据"</span></div> }.into_view();
+                                return view! { <EmptyState title="无 UDP 流量数据"/> }.into_view();
                             }
                             view! {
                                 <div class="udp-ports-panel">
@@ -319,7 +329,7 @@ pub fn DdosMonitor() -> impl IntoView {
                         let icmp = icmp_types.get().flatten();
                         if let Some(icmp) = icmp {
                             if icmp.types.is_empty() {
-                                return view! { <div class="empty-state"><span>"无 ICMP 流量数据"</span></div> }.into_view();
+                                return view! { <EmptyState title="无 ICMP 流量数据"/> }.into_view();
                             }
                             view! {
                                 <div class="udp-ports-panel">
@@ -374,7 +384,7 @@ pub fn DdosMonitor() -> impl IntoView {
                         let sizes = packet_sizes.get().flatten();
                         if let Some(sizes) = sizes {
                             if sizes.total == 0 {
-                                return view! { <div class="empty-state"><span>"无流量数据"</span></div> }.into_view();
+                                return view! { <EmptyState title="无流量数据"/> }.into_view();
                             }
                             let max_count = sizes.counts.iter().copied().max().unwrap_or(1);
                             // 颜色：小包(红-可疑) → 中包(黄) → 正常包(绿) → 大包(蓝)
@@ -424,7 +434,7 @@ pub fn DdosMonitor() -> impl IntoView {
                         let ttl = ttl_dist.get().flatten();
                         if let Some(ttl) = ttl {
                             if ttl.total == 0 {
-                                return view! { <div class="empty-state"><span>"无流量数据"</span></div> }.into_view();
+                                return view! { <EmptyState title="无流量数据"/> }.into_view();
                             }
                             let max_count = ttl.counts.iter().copied().max().unwrap_or(1);
                             // 颜色：扫描(红-可疑) → 短TTL(橙) → 正常(绿) → 长TTL(蓝) → 最大(紫-可能伪造)
@@ -474,7 +484,7 @@ pub fn DdosMonitor() -> impl IntoView {
                         let frags = ip_frags.get().flatten();
                         if let Some(frags) = frags {
                             if frags.total_packets == 0 {
-                                return view! { <div class="empty-state"><span>"无流量数据"</span></div> }.into_view();
+                                return view! { <EmptyState title="无流量数据"/> }.into_view();
                             }
                             // 分片比例颜色：< 1% 绿色（正常），1-5% 黄色（注意），> 5% 红色（异常）
                             let ratio_color = if frags.fragment_ratio > 5.0 {
@@ -537,7 +547,7 @@ pub fn DdosMonitor() -> impl IntoView {
                         let scans = port_scans.get().flatten();
                         if let Some(scans) = scans {
                             if scans.scanners.is_empty() {
-                                return view! { <div class="empty-state"><span>"未检测到端口扫描"</span></div> }.into_view();
+                                return view! { <EmptyState title="未检测到端口扫描"/> }.into_view();
                             }
                             view! {
                                 <div class="udp-ports-panel">
@@ -592,7 +602,7 @@ pub fn DdosMonitor() -> impl IntoView {
                         let probes = service_probes.get().flatten();
                         if let Some(probes) = probes {
                             if probes.probes.is_empty() {
-                                return view! { <div class="empty-state"><span>"未检测到服务探测"</span></div> }.into_view();
+                                return view! { <EmptyState title="未检测到服务探测"/> }.into_view();
                             }
                             view! {
                                 <div class="udp-ports-panel">
