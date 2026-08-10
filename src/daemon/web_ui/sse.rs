@@ -1,17 +1,20 @@
 //! SSE（Server-Sent Events）长连接推送实现
 //!
 //! 使用 axum 原生 SSE 支持，保持连接不间断推送。
-//! 按 `sse_push_interval` 配置间隔循环发送数据。
+//! 默认按 `sse_push_interval` 周期推送；封禁/白名单等状态变更会立即唤醒，
+//! 避免 UI 最多等待一整轮间隔才看到数据。
 //!
 //! 客户端 EventSource 建立一次连接后持续接收，
 //! 仅在客户端主动断开、网络中断或服务端停止时关闭。
 
 use std::convert::Infallible;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
+use tokio::sync::Notify;
 use tokio_stream::Stream;
 
 use super::api;
@@ -19,6 +22,20 @@ use crate::http_exporter::get_global_jails;
 
 /// SSE 连接数限制（防止资源耗尽攻击）
 const MAX_SSE_CONNECTIONS: usize = 10;
+
+/// 状态变更世代号 + 唤醒器：变更时 bump + notify，SSE 循环可提前结束 sleep
+static SSE_EVENT_GEN: AtomicU64 = AtomicU64::new(0);
+static SSE_WAKE: OnceLock<Notify> = OnceLock::new();
+
+fn sse_wake() -> &'static Notify {
+    SSE_WAKE.get_or_init(Notify::new)
+}
+
+/// 内核/守护进程状态变更后调用，使所有 SSE 连接尽快推送一轮最新数据
+pub fn wake_sse_clients() {
+    SSE_EVENT_GEN.fetch_add(1, Ordering::Relaxed);
+    sse_wake().notify_waiters();
+}
 
 /// 获取当前 SSE 连接数和上限（供前端诊断使用）
 pub fn get_sse_connection_info() -> (usize, usize) {
@@ -43,7 +60,7 @@ impl Drop for ConnectionGuard {
 /// 处理 SSE 连接请求，返回长连接流。
 ///
 /// 连接建立后按配置间隔循环推送完整数据（stats/bans/jails/rates），
-/// 永不主动关闭连接。
+/// 状态变更时立即唤醒；永不主动关闭连接。
 ///
 /// # 安全限制
 ///
@@ -75,11 +92,14 @@ pub async fn handle_sse() -> Result<Sse<impl Stream<Item = Result<Event, Infalli
     let stream = async_stream::stream! {
         // guard 在 stream 内部创建，stream 结束（连接断开）时自动 drop
         let _guard = ConnectionGuard;
+        let wake = sse_wake();
 
         // 发送连接确认事件
         yield Ok(Event::default().event("connected").data("SSE 连接已建立"));
 
         loop {
+            let gen_before = SSE_EVENT_GEN.load(Ordering::Relaxed);
+
             // 统计数据
             let stats = api::get_stats();
             if let Ok(stats_json) = serde_json::to_string(&stats) {
@@ -113,14 +133,29 @@ pub async fn handle_sse() -> Result<Sse<impl Stream<Item = Result<Event, Infalli
                 yield Ok(Event::default().event("rates").data(rates_json));
             }
 
-            // 按配置间隔等待后推送下一轮
-            // 每轮重新读取推送间隔，确保配置变更实时生效
+            // 按配置间隔等待；状态变更则立即进入下一轮推送
             let interval_secs = crate::http_exporter::get_global_webui_config()
                 .map(|c| c.sse_push_interval)
                 .unwrap_or(1)
                 .max(1) as u64;
+            let deadline = Instant::now() + Duration::from_secs(interval_secs);
 
-            tokio::time::sleep(Duration::from_secs(interval_secs)).await;
+            loop {
+                if SSE_EVENT_GEN.load(Ordering::Relaxed) != gen_before {
+                    break;
+                }
+                let now = Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                let remaining = deadline - now;
+                let notified = wake.notified();
+                tokio::pin!(notified);
+                tokio::select! {
+                    () = tokio::time::sleep(remaining) => break,
+                    () = &mut notified => continue,
+                }
+            }
         }
     };
 

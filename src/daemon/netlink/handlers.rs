@@ -226,6 +226,9 @@ impl super::NetlinkContext {
             std::sync::atomic::Ordering::Relaxed,
         );
 
+        // 封禁/解封后立即唤醒 SSE，避免 UI 等待整轮 push interval
+        crate::web_ui::sse::wake_sse_clients();
+
         Ok(())
     }
 
@@ -620,6 +623,8 @@ impl super::NetlinkContext {
             std::sync::atomic::Ordering::Relaxed,
         );
 
+        crate::web_ui::sse::wake_sse_clients();
+
         Ok(())
     }
 
@@ -646,6 +651,7 @@ impl super::NetlinkContext {
             2 if cache.remove(&ip_str).is_some() => {
                 crate::types::clear_pending_ban_ack(&ip_str);
                 crate::types::notify_ban_ack_err(&ip_str, event.error_code());
+                crate::web_ui::sse::wake_sse_clients();
                 crate::logger::info!(
                     crate::logger::get(),
                     "BanIp 失败，已回滚封禁缓存";
@@ -655,6 +661,7 @@ impl super::NetlinkContext {
             2 => {
                 crate::types::clear_pending_ban_ack(&ip_str);
                 crate::types::notify_ban_ack_err(&ip_str, event.error_code());
+                crate::web_ui::sse::wake_sse_clients();
             }
             3 => {
                 // UnbanIp 失败：缓存可能已被乐观 remove；无法无损恢复元数据，
