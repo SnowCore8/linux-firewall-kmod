@@ -444,7 +444,11 @@ pub fn cancel_ban_ack_waiter(ip: &str) {
 ///
 /// # Errors
 /// 内核拒绝或超时且未确认时返回说明字符串
-pub fn wait_ban_ack(ip: &str, rx: std::sync::mpsc::Receiver<Result<(), i32>>, timeout: std::time::Duration) -> Result<(), String> {
+pub fn wait_ban_ack(
+    ip: &str,
+    rx: std::sync::mpsc::Receiver<Result<(), i32>>,
+    timeout: std::time::Duration,
+) -> Result<(), String> {
     match rx.recv_timeout(timeout) {
         Ok(Ok(())) => Ok(()),
         Ok(Err(code)) => Err(format!("内核拒绝封禁 (error_code={code})")),
@@ -454,9 +458,8 @@ pub fn wait_ban_ack(ip: &str, rx: std::sync::mpsc::Receiver<Result<(), i32>>, ti
         }
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
             cancel_ban_ack_waiter(ip);
-            resolve_ban_ack_after_disconnect(ip).or_else(|_| {
-                Err("等待内核封禁确认超时".to_string())
-            })
+            resolve_ban_ack_after_disconnect(ip)
+                .or_else(|_| Err("等待内核封禁确认超时".to_string()))
         }
     }
 }
