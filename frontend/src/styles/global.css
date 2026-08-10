@@ -2365,6 +2365,8 @@ tr:last-child td { border-bottom: none; }
   .sidebar.open { transform: translateX(0); }
   .main-content { margin-left: 0; }
   .menu-toggle { display: block; }
+  /* Keep hamburger above open drawer (sidebar z-index:40) so toggle can close. */
+  .topbar { z-index: 45; }
   .page-content { padding: 10px; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .settings-grid { grid-template-columns: 1fr; }
