@@ -379,8 +379,18 @@ pub static ACTIVE_BAN_CACHE: std::sync::OnceLock<ActiveBanCache> = std::sync::On
 /// CmdResult 失败则摘除，避免污染渐进式封禁计数。
 static PENDING_BAN_ACK: std::sync::OnceLock<RwLock<HashSet<String>>> = std::sync::OnceLock::new();
 
+/// HTTP/API 等待内核 BanIp 最终结果的 oneshot 发送端
+static BAN_ACK_WAITERS: std::sync::OnceLock<
+    parking_lot::Mutex<HashMap<String, std::sync::mpsc::SyncSender<Result<(), i32>>>>,
+> = std::sync::OnceLock::new();
+
 fn pending_ban_ack() -> &'static RwLock<HashSet<String>> {
     PENDING_BAN_ACK.get_or_init(|| RwLock::new(HashSet::new()))
+}
+
+fn ban_ack_waiters(
+) -> &'static parking_lot::Mutex<HashMap<String, std::sync::mpsc::SyncSender<Result<(), i32>>>> {
+    BAN_ACK_WAITERS.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
 }
 
 /// 登记待确认封禁（乐观缓存写入后调用）
@@ -396,6 +406,73 @@ pub fn take_pending_ban_ack(ip: &str) -> bool {
 /// 丢弃待确认标记（CmdResult 失败路径）
 pub fn clear_pending_ban_ack(ip: &str) {
     let _ = take_pending_ban_ack(ip);
+}
+
+/// 是否仍在等待内核 ACK
+#[must_use]
+pub fn is_pending_ban_ack(ip: &str) -> bool {
+    pending_ban_ack().read().contains(ip)
+}
+
+/// 注册 BanIp 结果等待（须在 `send_ban` 之前调用，通道容量 1）
+pub fn register_ban_ack_waiter(ip: &str) -> std::sync::mpsc::Receiver<Result<(), i32>> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    ban_ack_waiters().lock().insert(ip.to_string(), tx);
+    rx
+}
+
+/// 内核确认封禁成功时唤醒等待方
+pub fn notify_ban_ack_ok(ip: &str) {
+    if let Some(tx) = ban_ack_waiters().lock().remove(ip) {
+        let _ = tx.send(Ok(()));
+    }
+}
+
+/// 内核 CmdResult 失败时唤醒等待方
+pub fn notify_ban_ack_err(ip: &str, error_code: i32) {
+    if let Some(tx) = ban_ack_waiters().lock().remove(ip) {
+        let _ = tx.send(Err(error_code));
+    }
+}
+
+/// 取消等待（发送失败等），避免泄漏 Sender
+pub fn cancel_ban_ack_waiter(ip: &str) {
+    let _ = ban_ack_waiters().lock().remove(ip);
+}
+
+/// 等待内核 BanIp 确认；超时后根据缓存/pending 推断
+///
+/// # Errors
+/// 内核拒绝或超时且未确认时返回说明字符串
+pub fn wait_ban_ack(ip: &str, rx: std::sync::mpsc::Receiver<Result<(), i32>>, timeout: std::time::Duration) -> Result<(), String> {
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(code)) => Err(format!("内核拒绝封禁 (error_code={code})")),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            // 发送端已 drop：若缓存仍在且不再 pending，视为已确认
+            resolve_ban_ack_after_disconnect(ip)
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            cancel_ban_ack_waiter(ip);
+            resolve_ban_ack_after_disconnect(ip).or_else(|_| {
+                Err("等待内核封禁确认超时".to_string())
+            })
+        }
+    }
+}
+
+fn resolve_ban_ack_after_disconnect(ip: &str) -> Result<(), String> {
+    let in_cache = ACTIVE_BAN_CACHE
+        .get()
+        .map(|c| c.contains(ip))
+        .unwrap_or(false);
+    if in_cache && !is_pending_ban_ack(ip) {
+        return Ok(());
+    }
+    if !in_cache {
+        return Err("内核未确认封禁（缓存已回滚）".to_string());
+    }
+    Err("等待内核封禁确认超时".to_string())
 }
 
 // ============================================================================

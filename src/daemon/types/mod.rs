@@ -27,8 +27,10 @@ mod stats;
 
 // Re-export 所有公共类型，保持向后兼容
 pub use ban::{
-    clear_pending_ban_ack, mark_pending_ban_ack, take_pending_ban_ack, ActiveBanCache, BanHistory,
-    BanHistoryEntry, BanInfo, BanReason, BanStatus, ACTIVE_BAN_CACHE, BAN_HISTORY,
+    cancel_ban_ack_waiter, clear_pending_ban_ack, is_pending_ban_ack, mark_pending_ban_ack,
+    notify_ban_ack_err, notify_ban_ack_ok, register_ban_ack_waiter, take_pending_ban_ack,
+    wait_ban_ack, ActiveBanCache, BanHistory, BanHistoryEntry, BanInfo, BanReason, BanStatus,
+    ACTIVE_BAN_CACHE, BAN_HISTORY,
 };
 pub use config::{
     CapacityConfig, Config, RetentionConfig, StorageConfig, WebuiConfig, WriterConfig,

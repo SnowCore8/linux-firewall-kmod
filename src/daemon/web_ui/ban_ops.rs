@@ -216,6 +216,8 @@ pub fn create_ban(req: CreateBanRequest) -> Result<BanOperationResponse, String>
     let cache = ACTIVE_BAN_CACHE.get_or_init(crate::types::ActiveBanCache::new);
     cache.insert(ban_info);
     crate::types::mark_pending_ban_ack(ip);
+    // 必须在 send_ban 之前注册，避免 BanStateChange 抢先到达丢通知
+    let ack_rx = crate::types::register_ban_ack_waiter(ip);
 
     // 发 netlink 到内核
     let result = if permanent {
@@ -226,6 +228,8 @@ pub fn create_ban(req: CreateBanRequest) -> Result<BanOperationResponse, String>
 
     match result {
         Ok(()) => {
+            // HTTP 成功必须对应内核真实成功（CmdResult / BanStateChange）
+            crate::types::wait_ban_ack(ip, ack_rx, std::time::Duration::from_secs(3))?;
             // 历史副作用延后到 BanStateChange（内核真实成功）
             Ok(BanOperationResponse {
                 ip: ip.to_string(),
@@ -235,6 +239,7 @@ pub fn create_ban(req: CreateBanRequest) -> Result<BanOperationResponse, String>
             })
         }
         Err(e) => {
+            crate::types::cancel_ban_ack_waiter(ip);
             cache.remove(ip);
             crate::types::clear_pending_ban_ack(ip);
             Err(format!("封禁失败: {}", e))

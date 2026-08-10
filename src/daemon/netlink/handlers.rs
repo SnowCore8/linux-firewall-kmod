@@ -110,6 +110,7 @@ impl super::NetlinkContext {
                     if jail_name != "api" && jail_name != "ddos" && jail_name != "system" {
                         crate::ip_reputation::get_store().record_ban(&ip_str);
                     }
+                    crate::types::notify_ban_ack_ok(&ip_str);
                     crate::logger::debug!(
                         crate::logger::get(),
                         "BanStateChange: 内核确认，已写入 ban_history";
@@ -117,6 +118,7 @@ impl super::NetlinkContext {
                         "ban_count" => ban_count
                     );
                 } else {
+                    crate::types::notify_ban_ack_ok(&ip_str);
                     crate::logger::debug!(
                         crate::logger::get(),
                         "BanStateChange: daemon 发起且历史已确认，跳过";
@@ -643,6 +645,7 @@ impl super::NetlinkContext {
             // BanIp 失败：撤掉提前 insert 的缓存项与待确认历史
             2 if cache.remove(&ip_str).is_some() => {
                 crate::types::clear_pending_ban_ack(&ip_str);
+                crate::types::notify_ban_ack_err(&ip_str, event.error_code());
                 crate::logger::info!(
                     crate::logger::get(),
                     "BanIp 失败，已回滚封禁缓存";
@@ -651,6 +654,7 @@ impl super::NetlinkContext {
             }
             2 => {
                 crate::types::clear_pending_ban_ack(&ip_str);
+                crate::types::notify_ban_ack_err(&ip_str, event.error_code());
             }
             3 => {
                 // UnbanIp 失败：缓存可能已被乐观 remove；无法无损恢复元数据，
