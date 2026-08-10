@@ -380,16 +380,16 @@ pub static ACTIVE_BAN_CACHE: std::sync::OnceLock<ActiveBanCache> = std::sync::On
 static PENDING_BAN_ACK: std::sync::OnceLock<RwLock<HashSet<String>>> = std::sync::OnceLock::new();
 
 /// HTTP/API 等待内核 BanIp 最终结果的 oneshot 发送端
-static BAN_ACK_WAITERS: std::sync::OnceLock<
-    parking_lot::Mutex<HashMap<String, std::sync::mpsc::SyncSender<Result<(), i32>>>>,
-> = std::sync::OnceLock::new();
+type BanAckSender = std::sync::mpsc::SyncSender<Result<(), i32>>;
+type BanAckWaiterMap = parking_lot::Mutex<HashMap<String, BanAckSender>>;
+
+static BAN_ACK_WAITERS: std::sync::OnceLock<BanAckWaiterMap> = std::sync::OnceLock::new();
 
 fn pending_ban_ack() -> &'static RwLock<HashSet<String>> {
     PENDING_BAN_ACK.get_or_init(|| RwLock::new(HashSet::new()))
 }
 
-fn ban_ack_waiters(
-) -> &'static parking_lot::Mutex<HashMap<String, std::sync::mpsc::SyncSender<Result<(), i32>>>> {
+fn ban_ack_waiters() -> &'static BanAckWaiterMap {
     BAN_ACK_WAITERS.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
 }
 
@@ -458,8 +458,7 @@ pub fn wait_ban_ack(
         }
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
             cancel_ban_ack_waiter(ip);
-            resolve_ban_ack_after_disconnect(ip)
-                .or_else(|_| Err("等待内核封禁确认超时".to_string()))
+            resolve_ban_ack_after_disconnect(ip).map_err(|_| "等待内核封禁确认超时".to_string())
         }
     }
 }
