@@ -224,7 +224,7 @@ struct YamlCapacity {
 /// - `cfg`: 目标 Config (成功时原地修改, 失败时保持原值)
 pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
     let yaml_config: YamlConfig =
-        serde_yaml::from_str(content).context("Failed to parse YAML config")?;
+        serde_yml::from_str(content).context("Failed to parse YAML config")?;
 
     // 1. 应用 defaults 部分到 cfg
     if let Some(defaults) = &yaml_config.defaults {
