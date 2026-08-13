@@ -320,7 +320,7 @@ fn main() -> Result<()> {
                             );
                         }
                         // 每 60s 全量 LIST bans 对账，清除事件丢失导致的陈旧缓存
-                        if ticks.is_multiple_of(60) {
+                        if ticks % 60 == 0 {
                             seq_counter = seq_counter.wrapping_add(1);
                             if let Err(e) = ctx.send_list_bans_query(seq_counter) {
                                 crate::logger::debug!(
