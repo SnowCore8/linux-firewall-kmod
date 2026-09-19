@@ -89,9 +89,9 @@ make daemon
 
 ```bash
 # 编译产物
-make                    # 编译内核模块 + Rust 守护进程
+make                    # 编译内核模块 + Rust 守护进程 + React 前端
                         # 内核模块: build/kernel-module/firewall.ko
-                        # 守护进程: build/daemon/firewall-daemon (6.2MB stripped)
+                        # 守护进程: build/daemon/firewall-daemon (stripped，内嵌前端产物)
 
 # 构建 .deb
 make deb                # 输出: build/deb/linux-firewall-kmod-2.2.0.deb (1.5MB)

@@ -32,7 +32,7 @@ graph LR
     ROOT["linux-firewall-kmod/"]
     KERNEL["src/kernel-module/<br/>C 内核模块"]
     DAEMON["src/daemon/<br/>Rust 守护进程"]
-    FRONTEND["frontend/<br/>Leptos WASM 前端"]
+    FRONTEND["frontend/<br/>React 19 + Vite 前端"]
     STATIC["src/daemon/web_ui/static/<br/>编译后静态资源"]
     SUPPORT["config/ · tests/ · docs/<br/>scripts/ · debian/ · grafana/"]
 
@@ -40,7 +40,7 @@ graph LR
     ROOT --> DAEMON
     ROOT --> FRONTEND
     ROOT --> SUPPORT
-    FRONTEND -->|"trunk build"| STATIC
+    FRONTEND -->|"vite build"| STATIC
     STATIC -->|"rust-embed"| DAEMON
     DAEMON <-->|"netlink"| KERNEL
 ```
@@ -51,12 +51,12 @@ graph LR
 |------|------|------|
 | 内核模块 | `src/kernel-module/firewall-main.c` | 注册 netfilter hook，维护封禁/白名单并在数据包路径执行判定 |
 | 守护进程 | `src/daemon/main.rs`、`src/daemon/lib.rs` | 解析配置与日志、执行封禁策略、持久化状态，并提供 HTTP 服务 |
-| Web 前端 | `frontend/src/main.rs` | Leptos 管理界面；构建后嵌入守护进程二进制，不单独部署 |
+| Web 前端 | `frontend/src/main.tsx` | React 19 移动端管理界面（antd-mobile，hash 路由，支持 PWA）；构建后嵌入守护进程二进制，不单独部署 |
 
 ### 构建链路
 
-`make daemon` 会先执行 `make frontend`。Trunk 根据
-`frontend/Trunk.toml` 将前端输出到 `src/daemon/web_ui/static/`，
+`make daemon` 会先执行 `make frontend`。Vite 根据
+`frontend/vite.config.ts` 将前端输出到 `src/daemon/web_ui/static/`，
 随后 `rust-embed` 把这些资源编译进 `firewall-daemon`。
 
 其他目录分别保存 YAML 配置（`config/`）、集成测试（`tests/`）、

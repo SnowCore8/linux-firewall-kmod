@@ -56,7 +56,7 @@ make test
 cargo test --release
 
 # 仅运行集成测试
-./tests/run_tests.sh
+sudo python3 -m pytest tests/ -v
 
 # 现场 crash 调试 (32MB 带 DWARF + 符号表)
 cargo build --release --profile dev-with-debug
@@ -145,7 +145,7 @@ int whitelist_check(__be32 ip);
 | 测试类型 | 命令 | 规模 / 说明 |
 |----------|------|------------|
 | Rust 单元测试 | `cargo test` | 88 项 `#[test]` 单元 + 6 项 doctest。doctest 全部真跑,不写 `no_run` / `ignore` |
-| 集成测试 | `make test` | 19 套件用例,19 个套件 (`tests/suites/01_*.sh` 到 `21_*.sh`,5/6 合并) |
+| 集成测试 | `make test` | 19 套件 111 项 (`tests/test_01_*.py` 到 `test_21_*.py`) |
 | 行为审计 | `c-to-rust-behavioral-audit` skill | C 守护进程已退役,审计按需触发,确保 Rust 版零回归 |
 
 **修改下列内容时必跑 `make test` 集成测试**:
@@ -154,7 +154,7 @@ int whitelist_check(__be32 ip);
 - procfs 命令接口(增减 `/proc/firewall/*` 节点)
 - 守护进程与内核模块的交互协议(`/proc/firewall/ban` 写入格式等)
 
-跑测试时 `tests/run_tests.sh` 会自动 `source ~/.cargo/env` 把 `cargo` 加进 PATH,但 Rust 单元测试推荐直接在仓库根目录跑 `cargo test`。
+跑测试时 `make test` 会用 `sudo python3 -m pytest tests/ -v` 运行集成测试，Rust 单元测试推荐直接在仓库根目录跑 `cargo test`。
 
 ### 内存安全 (Rust unsafe 块)
 

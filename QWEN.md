@@ -9,10 +9,10 @@
 ### 技术栈
 
 - **内核模块**：C 语言，Linux Kernel Module + netfilter hooks
-- **守护进程**：Rust（v2.2.0 起从 C 翻译），6.2MB stripped 二进制（含 Leptos WASM 前端）
-- **前端**：Leptos 0.6 + trunk（纯 Rust WASM，无 Node.js 依赖），7 个页面 + SVG 图表
-- **构建系统**：Makefile + Cargo + trunk
-- **测试框架**：Bash 集成测试（19 个套件）+ Rust 单元测试（93 项）
+- **守护进程**：Rust（v2.2.0 起从 C 翻译），单文件 stripped 二进制（含前端构建产物）
+- **前端**：React 19 + TypeScript + Vite + antd-mobile 5（移动优先，hash 路由），底部 TabBar + 卡片式布局，手写 SVG 图表，支持 PWA
+- **构建系统**：Makefile + Cargo + npm/vite
+- **测试框架**：Python pytest（19 个套件，111 项）+ Rust 单元测试（93 项）
 - **配置格式**：YAML（Jail 配置）
 - **监控导出**：Prometheus 指标（端口 9119，24 个指标）
 
@@ -69,10 +69,12 @@ linux-firewall-kmod/
 │   ├── default.yaml            # 默认配置
 │   ├── nginx.yaml              # Nginx Jail
 │   └── ...                     # 其他服务 Jail
-├── tests/                      # 集成测试
-│   ├── run_tests.sh            # 测试入口脚本
-│   ├── test_framework.sh       # 测试框架
-│   └── suites/                 # 测试套件（01-15）
+├── tests/                      # 集成测试（Python pytest）
+│   ├── conftest.py             # pytest fixtures + 辅助函数
+│   ├── config.py               # 测试配置（路径、IP、参数）
+│   ├── test_01_module_basic.py # 模块基础测试
+│   ├── ...                     # 19 个测试套件（01-21）
+│   └── e2e/                    # Playwright E2E 测试
 ├── docs/                       # 文档
 ├── build/                      # 构建产物（git-ignored）
 │   ├── kernel-module/firewall.ko
@@ -88,9 +90,11 @@ linux-firewall-kmod/
 
 ```bash
 # 完整构建（含格式检查）
-make                            # 编译内核模块 + Rust 守护进程
+make                            # 编译内核模块 + Rust 守护进程（前端经 npm/vite 构建后嵌入）
 make kernel-module              # 仅内核模块
-make daemon                     # 仅 Rust 守护进程
+make daemon                     # 仅 Rust 守护进程（含前端构建）
+make frontend                   # 仅前端（npm ci + vite build）
+make frontend-typecheck         # 仅前端类型检查（tsc --noEmit）
 
 # 快速构建（跳过格式检查，用于调试）
 make build-quick
@@ -102,6 +106,25 @@ make clean
 make format                     # C 代码格式化（clang-format）
 cargo fmt                       # Rust 代码格式化
 ```
+
+### 构建依赖
+
+- Rust 工具链（`cargo`）
+- **Node.js ≥ 20 + npm**（前端为 React 19 + TypeScript + Vite + antd-mobile，`make daemon` / `make all` 会先跑 `npm ci` 再 `vite build`）
+- 前端依赖锁在 `frontend/package-lock.json`（已入库），CI 使用 `npm ci` 保证可复现
+
+### Web UI / PWA
+
+移动端优先的 React 应用，构建产物经 `rust-embed` 嵌入守护进程，访问 `http://<host>:9119/dashboard`。
+
+- 前端入口：`frontend/index.html` + `frontend/src/main.tsx`；路由用 hash 模式（守护进程只对 7 个页面路径返回同一份 HTML，无 catch-all）
+- **认证**：配置了 `metrics_username` / `metrics_password` 时，页面会显示应用内登录表单（不使用浏览器原生 Basic 对话框 —— SPA 外壳是公开路由，顶层文档不返回 401，原生对话框根本不会出现）。
+  - 登录成功后令牌存入 `sessionStorage`（键 `firewall.access_token`），所有 `fetch` 显式带 `Authorization: Basic <令牌>`
+  - SSE 走 `?access_token=<令牌>`（`EventSource` 无法设置自定义请求头），服务端中间件同时兼容该参数
+  - 免登录直达：`http://<host>:9119/?access_token=<base64(user:pass)>`（令牌会被写入 `sessionStorage` 后从地址栏清除）
+  - 说明：`/api/v1/**` 的 401 **不**带 `WWW-Authenticate` 头，避免浏览器弹原生对话框并让请求挂起
+- PWA：`frontend/public/manifest.webmanifest` + 手写 Service Worker `frontend/public/sw.js`（由守护进程的 `GET /sw.js` 提供，带 `Service-Worker-Allowed: /`）；`/api/*` 不做缓存，保证实时数据新鲜
+- **限制：Service Worker 只在安全上下文（HTTPS 或 localhost）注册。** 通过局域网 `http://<ip>:9119` 访问时 Chrome 会静默拒绝注册 SW，界面可用但无法"添加到主屏幕"；需要 PWA 安装能力时请用 HTTPS 或本机 localhost 访问
 
 ### 安装与卸载
 
@@ -127,14 +150,14 @@ make test
 cargo test --release
 
 # 仅集成测试（需要 root 权限）
-sudo ./tests/run_tests.sh
-
-# 跳过重复编译运行测试（使用已有构建产物）
-SKIP_COMPILE=1 sudo -E ./tests/run_tests.sh
+sudo python3 -m pytest tests/ -v
 
 # 运行单个测试套件
-sudo ./tests/run_tests.sh --suite 03    # 封禁/解封测试
-sudo ./tests/run_tests.sh --suite 09    # 守护进程配置测试
+sudo python3 -m pytest tests/test_03_ban_unban.py -v    # 封禁/解封测试
+sudo python3 -m pytest tests/test_09_daemon_config.py -v # 守护进程配置测试
+
+# 按关键字筛选
+sudo python3 -m pytest tests/ -k "ban" -v
 ```
 
 ### 启动守护进程
@@ -221,7 +244,7 @@ perf(kmod): 优化速率检测使用平均速率
 
 **测试分层**：
 - **单元测试**：`cargo test`（93 项）
-- **集成测试**：`make test`（19 个套件）
+- **集成测试**：`make test`（19 个套件，111 项）
 - **行为审计**：C 到 Rust 移植时按需触发
 
 ### 内存安全（Rust unsafe）
@@ -356,10 +379,10 @@ make KDIR=/lib/modules/$(uname -r)/build
 
 ```bash
 # 使用 sudo
-sudo -E ./tests/run_tests.sh
+sudo python3 -m pytest tests/ -v
 
-# 或设置 SKIP_COMPILE 避免重复编译
-SKIP_COMPILE=1 sudo -E ./tests/run_tests.sh
+# 仅运行守护进程相关测试（不需要加载内核模块）
+sudo python3 -m pytest tests/ -v -k "daemon or config or logparse"
 ```
 
 ### 模块加载失败
@@ -383,8 +406,8 @@ sudo insmod build/kernel-module/firewall.ko
 | 封禁查找 | O(1) 哈希表 |
 | 哈希表容量 | 4096 条目 |
 | 白名单容量 | 64 条目 |
-| 守护进程体积 | 6.2 MB stripped |
-| 测试覆盖 | 19 集成套件 + 93 单元 |
+| 守护进程体积 | 单文件 stripped 二进制（含前端产物，具体数值需 `stat -c %s build/daemon/firewall-daemon` 实测） |
+| 测试覆盖 | 19 集成套件（111 项）+ 93 单元 |
 | 响应延迟 | 毫秒级 |
 
 ## 相关文档

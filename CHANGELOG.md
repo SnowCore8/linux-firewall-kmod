@@ -2,6 +2,25 @@
 
 所有重要的项目变更记录都在此文件中。
 
+## [Unreleased] - 前端重建：React 19 + TypeScript + Vite + antd-mobile（移动优先 + PWA）
+
+### 新增
+- **前端重建为 React 19 移动端应用** - 前端技术栈定为 **React 19 + TypeScript + Vite + antd-mobile 5**（移动优先）。布局为底部 TabBar（仪表盘 / 封禁 / 白名单 / DDoS / 更多）+ 卡片式列表，「更多」页收纳 Jails / 系统日志 / 设置三个二级页。此前的 Leptos WASM 实现与中间一轮 Vue 3 实现均已删除，本次按新契约从零重写，**不复用任何旧前端代码**；图表继续手写 SVG（未引入图表库）
+- **PWA 支持** - 新增 `frontend/public/manifest.webmanifest`（`display: standalone`、`start_url: /dashboard#/dashboard`、192/512 图标）与手写零依赖 Service Worker `frontend/public/sw.js`。SW 安装即 `skipWaiting`，激活时清理旧版本缓存并 `clients.claim`；fetch 策略：页面导航网络优先、失败回退缓存外壳，`/static/*` 缓存优先 + 后台刷新，**`/api/*` 一律不拦截**（实时封禁与统计数据不得读缓存）
+- **`GET /sw.js` 路由** - 守护进程新增公开（无认证）路由返回嵌入的 `sw.js`，响应带 `Service-Worker-Allowed: /` 与 `Cache-Control: no-cache`。走根路径而非 `/static/sw.js` 是因为 Service Worker 的作用域上限由脚本路径决定，`/static/sw.js` 只能接管 `/static/`，无法处理页面导航
+- **`.webmanifest` MIME** - `get_static_asset` 补 `.webmanifest` → `application/manifest+json`（原先落到 `application/octet-stream`）
+
+### 变更
+- **构建链路改为 npm/vite** - `make frontend` 为 `npm ci` + `vite build`，产物输出到 `src/daemon/web_ui/static/` 供 `rust-embed` 嵌入；`make daemon` / `make all` 会先构建前端。`make frontend-typecheck` 走 `tsc --noEmit`（不再有 trunk / WASM 工具链）
+- **CI 前端 job** - Node 22 + `npm ci` + `tsc --noEmit` + `vite build`，并断言产物存在（`index.html` / `app.js` / `style.css` / `sw.js` / `manifest.webmanifest` / 192 与 512 图标）、校验 manifest 必需字段与 `sw.js` 语法
+- **安全头中间件** - 已自行声明 `Cache-Control` 的响应不再被统一覆盖成 `no-store`，否则 `/sw.js` 的 `no-cache` 会被吃掉、SW 更新检查失去回源保证；`/sw.js` 纳入 Web UI 的宽松 CSP 范围，避免 `default-src 'none'` 被当作 Service Worker 自身策略而禁掉其内部 fetch
+- **`.gitignore`** - 前端产物规则收敛为 `src/daemon/web_ui/static/*`（含 `sw.js` / `manifest.webmanifest` / `icons/`），`node_modules/` 为 Node 依赖；`frontend/package-lock.json` 保持入库以配合 `npm ci`
+
+### 移除
+- **旧前端源码与构建配置** - 删除 `frontend/{Cargo.toml,Cargo.lock,Trunk.toml}` 与 `frontend/src/**/*.rs`（Leptos 版本），以及中间一轮 Vue 3 实现留下的全部源码与样式文件（含曾被复用的 `frontend/src/styles/global.css`）
+
+> 二进制体积：前端产物变化后尚未统一核算，本文不再沿用旧的 `5.6MB` 数字。需要写具体数值时以 `stat -c %s build/daemon/firewall-daemon` 实测为准。
+
 ## [Unreleased] - C→Rust 翻译 + 二进制优化 + CI 升级（v2.2.1）
 
 ### 新增

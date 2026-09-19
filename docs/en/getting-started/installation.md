@@ -89,9 +89,9 @@ The recommended way to build a distributable .deb package (for Debian/Ubuntu-fam
 
 ```bash
 # Build artifacts
-make                    # Compile kernel module + Rust daemon
+make                    # Compile kernel module + Rust daemon + React frontend
                         # Kernel module: build/kernel-module/firewall.ko
-                        # Daemon:        build/daemon/firewall-daemon (6.2MB stripped)
+                        # Daemon:        build/daemon/firewall-daemon (stripped, with embedded frontend)
 
 # Build .deb
 make deb                # Output: build/deb/linux-firewall-kmod-2.2.0.deb (1.5MB)

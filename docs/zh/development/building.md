@@ -10,13 +10,34 @@
 
 | 目标 | 说明 |
 |------|------|
-| `make` / `make all` / `make build` | 编译全部（内核模块 + 守护进程，默认含 clang-format 检查） |
+| `make` / `make all` / `make build` | 编译全部（前端 + 内核模块 + 守护进程，默认含 clang-format 检查） |
 | `make build-quick` | 同上但跳过格式检查（CI 增量构建友好） |
 | `make kernel-module` | 仅编译内核模块 |
-| `make daemon` | 仅编译守护进程 |
+| `make daemon` | 仅编译守护进程（会先执行 `make frontend`） |
+| `make frontend` | 仅构建前端（`npm ci` + `vite build`），产物写入 `src/daemon/web_ui/static/` |
+| `make frontend-typecheck` | 仅做前端类型检查（`tsc --noEmit`），不产出构建物 |
 | `make install` | 安装到系统 |
 | `make uninstall` | 从系统卸载 |
 | `make help` | 显示完整帮助 |
+
+> 前端为 React 19 + TypeScript + Vite + antd-mobile 5（移动优先，hash 路由，
+> 支持 PWA），构建需要 **Node.js ≥ 20 + npm**。
+> `make frontend` 用 `npm ci` 安装依赖，锁文件 `frontend/package-lock.json`
+> 已入库以保证可复现；守护进程通过 `rust-embed` 把 `index.html` / `app.js` /
+> `style.css` / `sw.js` / `manifest.webmanifest` / `icons/` 编进二进制，
+> 运行期不需要 Node.js。
+
+### 前端与 PWA
+
+- **产物命名固定**：vite 输出 `app.js` / `style.css`（文件名不含内容哈希），
+  Service Worker 缓存需按"缓存优先 + 后台刷新"实现，避免守护进程升级后旧 JS
+  配新 HTML 导致白屏
+- **`/api/*` 不缓存**：Service Worker 完全不拦截 `/api/*`，保证封禁列表与统计
+  数据始终来自网络
+- **PWA 安装受安全上下文限制**：Service Worker 仅在安全上下文（HTTPS 或
+  `localhost`）注册。通过局域网 `http://<ip>:9119` 访问时，Chrome 会**静默
+  拒绝**注册 SW，界面可用但无法"添加到主屏幕"；需要 PWA 安装能力时请用 HTTPS
+  或本机 `localhost` 访问
 
 ### 调试 / Sanitizer 目标
 
@@ -40,11 +61,11 @@
 
 | 目标 | 说明 |
 |------|------|
-| `make test` | 运行所有测试（`sudo ./tests/run_tests.sh`） |
+| `make test` | 运行所有测试（`sudo python3 -m pytest tests/ -v`） |
 | `make ci` | CI 完整构建：format-check + build + test |
 
 > Makefile 仅暴露 `make test`；按套件或类别过滤请直接调用
-> `./tests/run_tests.sh --suite NN` / `--category X` / `--report`，
+> `python3 -m pytest tests/test_NN_*.py -v` / `-k "关键词"`，
 > 详见 [测试](testing.md)。
 
 ### 跳过格式检查
@@ -109,7 +130,7 @@ cp target/release/firewall-daemon build/daemon/firewall-daemon
 
 | Profile | 体积 | 用途 | 编译命令 |
 |---------|------|------|----------|
-| `release`（默认） | **6.2MB stripped** | 生产部署 | `cargo build --release` |
+| `release`（默认） | `strip` 的紧凑二进制 | 生产部署 | `cargo build --release` |
 | `dev-with-debug` | 32MB（含 DWARF + 符号） | 现场 crash 分析，配合 `addr2line` 反推栈 | `cargo build --release --profile dev-with-debug` |
 | `asan` | （含 ASAN 运行时） | 内存安全检测，需 nightly | `cargo +nightly build --profile asan` |
 
@@ -125,7 +146,9 @@ strip = true
 panic = "abort"       # 减小体积、避免 unwinding 表
 ```
 
-产出 6.2MB stripped 二进制，适合 `make deb` / `make install` 分发。
+产出 `strip` 后的紧凑二进制（内嵌前端产物，具体数值随前端产物大小变化，
+可用 `stat -c %s build/daemon/firewall-daemon` 实测），适合 `make deb` /
+`make install` 分发。
 
 #### dev-with-debug
 
@@ -185,7 +208,7 @@ ls -lh build/deb/
 
 | 路径 | 内容 |
 |------|------|
-| `/usr/sbin/firewall-daemon` | 守护进程二进制（已 `strip`，约 6.2MB） |
+| `/usr/sbin/firewall-daemon` | 守护进程二进制（已 `strip`，内嵌前端产物） |
 | `/usr/src/linux-firewall-kmod-<VERSION>/` | DKMS 源码（首次安装时由 dkms 编译） |
 | `/etc/firewall/*.yaml` | YAML 配置 |
 | `/etc/systemd/system/firewall-daemon.service` | systemd 单元 |
@@ -243,7 +266,7 @@ make kernel-module KDIR=/path/to/kernel/source
 `[profile.*]` 控制。详见 [构建守护进程 → Rust release profile](#rust-release-profile-cargotoml)。
 
 - `release`：`lto=true` + `strip=true` + `debug=false` + `panic="abort"`
-  → 6.2MB stripped
+  → `strip` 后的紧凑二进制
 - `dev-with-debug`：继承 release，保留 DWARF + 符号 → 32MB
 - `asan`：nightly opt-in，含 ASAN 运行时
 
@@ -262,7 +285,7 @@ make kernel-module KDIR=/path/to/kernel/source
 
 | 文件 | 说明 |
 |------|------|
-| `build/daemon/firewall-daemon` | 守护进程二进制（**6.2MB stripped**，默认 `release` profile） |
+| `build/daemon/firewall-daemon` | 守护进程二进制（已 `strip`，内嵌前端产物，默认 `release` profile；体积用 `stat -c %s build/daemon/firewall-daemon` 实测） |
 | `target/release/firewall-daemon` | `cargo` 原始输出位置（`make daemon` 复制到 `build/daemon/`） |
 | `build/daemon/firewall-daemon-asan` | ASAN 版本（`make asan` 产物，体积较大含 ASAN 运行时） |
 
@@ -296,8 +319,8 @@ sudo apt install --reinstall linux-headers-$(uname -r)
 ### `cargo: not found` under sudo
 
 `sudo` 默认 `secure_path` 不含 `~/.cargo/bin`，常见于 rustup 用户级
-安装。`make test` 内部已 `sudo ./tests/run_tests.sh`，脚本入口会
-`source ~/.cargo/env` 并 `export PATH=$HOME/.cargo/bin:$PATH`，
+安装。`make test` 内部已 `sudo python3 -m pytest tests/ -v`，
+pytest 运行环境会继承当前 PATH（包含 `~/.cargo/bin`），
 问题自动规避。但如果手动 `sudo make daemon` 直接调用会失败：
 
 ```

@@ -282,7 +282,7 @@ make: *** 没有规则可制作目标 'deb'。 停止。
 
 ### `cargo: not found` 在 sudo 下
 
-**症状**：`sudo ./tests/run_tests.sh` 报：
+**症状**：`sudo python3 -m pytest tests/ -v` 报：
 
 ```
 make: cargo: 没有那个文件或目录
@@ -296,14 +296,14 @@ make: *** [Makefile:100: daemon] 错误 127
 - 先 `source ~/.cargo/env` 再 sudo:
   ```bash
   source ~/.cargo/env
-  sudo -E ./tests/run_tests.sh
+  sudo -E python3 -m pytest tests/ -v
   ```
 - 或 `sudo -E` 保留当前 PATH(同样需要先 source):
   ```bash
   source ~/.cargo/env
   sudo -E make test
   ```
-- v2.2.1 起 `tests/run_tests.sh` 已自动 source `~/.cargo/env`(见 `tests/run_tests.sh:134-139`),所以重跑应该 OK。
+- pytest 运行环境会继承当前 PATH，确保 `source ~/.cargo/env` 在 sudo 前执行即可。
 
 ## 内核调试
 

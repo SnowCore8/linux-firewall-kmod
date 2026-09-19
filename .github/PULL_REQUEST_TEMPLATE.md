@@ -119,7 +119,7 @@ make -C /lib/modules/$(uname -r)/build M=$(pwd) modules
 make
 
 # 运行单元测试
-sudo ./tests/run_tests.sh
+sudo python3 -m pytest tests/ -v
 
 # 运行压力测试（可选）
 sudo ./tests/run_stress.sh

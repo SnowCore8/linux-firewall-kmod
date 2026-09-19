@@ -33,7 +33,7 @@ graph LR
     ROOT["linux-firewall-kmod/"]
     KERNEL["src/kernel-module/<br/>C kernel module"]
     DAEMON["src/daemon/<br/>Rust daemon"]
-    FRONTEND["frontend/<br/>Leptos WASM frontend"]
+    FRONTEND["frontend/<br/>React 19 + Vite frontend"]
     STATIC["src/daemon/web_ui/static/<br/>compiled static assets"]
     SUPPORT["config/ · tests/ · docs/<br/>scripts/ · debian/ · grafana/"]
 
@@ -41,7 +41,7 @@ graph LR
     ROOT --> DAEMON
     ROOT --> FRONTEND
     ROOT --> SUPPORT
-    FRONTEND -->|"trunk build"| STATIC
+    FRONTEND -->|"vite build"| STATIC
     STATIC -->|"rust-embed"| DAEMON
     DAEMON <-->|"netlink"| KERNEL
 ```
@@ -52,12 +52,12 @@ graph LR
 |-----------|-------------|----------------|
 | Kernel module | `src/kernel-module/firewall-main.c` | Registers netfilter hooks, maintains bans and whitelists, and makes packet-path decisions |
 | Daemon | `src/daemon/main.rs`, `src/daemon/lib.rs` | Parses configuration and logs, applies ban policy, persists state, and serves HTTP |
-| Web frontend | `frontend/src/main.rs` | Leptos management UI; embedded in the daemon binary rather than deployed separately |
+| Web frontend | `frontend/src/main.tsx` | React 19 mobile management UI (antd-mobile, hash routing, PWA support); embedded in the daemon binary rather than deployed separately |
 
 ### Build Pipeline
 
-`make daemon` first runs `make frontend`. Trunk follows
-`frontend/Trunk.toml` and writes the frontend bundle to
+`make daemon` first runs `make frontend`. Vite follows
+`frontend/vite.config.ts` and writes the frontend bundle to
 `src/daemon/web_ui/static/`; `rust-embed` then compiles those assets into
 `firewall-daemon`.
 

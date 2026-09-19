@@ -12,7 +12,7 @@
 
 ## Overview
 
-Firewall is a Linux kernel module version of fail2ban, moving the ban logic from userspace to kernelspace using the netfilter framework for real-time IP banning at the packet level with lower latency and higher performance. The userspace daemon is now written in Rust (translated from C in v2.2.0), producing a 6.2MB stripped binary (including Leptos WASM frontend); 19 integration test suites pass.
+Firewall is a Linux kernel module version of fail2ban, moving the ban logic from userspace to kernelspace using the netfilter framework for real-time IP banning at the packet level with lower latency and higher performance. The userspace daemon is now written in Rust (translated from C in v2.2.0), compiled into a single stripped binary with the mobile-first React control panel embedded; 19 integration test suites pass.
 
 ## Why This Project
 
@@ -20,7 +20,7 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 |---------|---------------------|----------------------|
 | Ban Location | iptables/nftables userspace | netfilter kernel hooks |
 | Response Time | Seconds | Milliseconds |
-| Resource Usage | Python interpreter + full dep chain | Single-file 6.2MB Rust binary (with WASM frontend) |
+| Resource Usage | Python interpreter + full dep chain | Single-file Rust binary (with embedded frontend) |
 | Lookup Performance | Linear rule scan | Hash table O(1) lookup |
 | Permanent Ban | Config file | In-memory, lost on restart |
 
@@ -32,8 +32,8 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 - ✅ **Auto-expire cleanup** — periodic cleanup of expired bans
 - ✅ **IP whitelist protection** — auto-discovery + manual entries (64 capacity)
 - ✅ **procfs interface** — ban/unban/whitelist/config operations
-- ✅ **Rust daemon (v2.2.0+)** — 68 source files, 6.2MB stripped binary (including Leptos WASM frontend), behaviorally equivalent to the C version
-- ✅ **Leptos WASM frontend (v2.2.1+)** — Pure Rust frontend framework, no Node.js dependency, trunk build, 7 pages + SVG charts
+- ✅ **Rust daemon (v2.2.0+)** — 68 source files, compiled into a single stripped binary (with embedded frontend), behaviorally equivalent to the C version
+- ✅ **React mobile frontend** — React 19 + TypeScript + Vite + antd-mobile 5, mobile-first, hash routing, 7 pages + hand-written SVG charts, PWA support
 - ✅ **Regex parsing** — named capture groups for IP extraction
 - ✅ **RCU concurrency safety** — spinlock protected, high-concurrency safe
 - ✅ **Strict config validation** — unknown params rejected by default
@@ -48,10 +48,10 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 ### Build
 
 ```bash
-make                    # Build kernel module + Rust daemon + Leptos frontend
+make                    # Build kernel module + Rust daemon + React frontend
 make kernel-module      # Kernel module only
-make daemon             # Rust daemon only (cargo build --release)
-make frontend           # Leptos frontend only (trunk build --release)
+make daemon             # Rust daemon only (cargo build --release, builds frontend first)
+make frontend           # Frontend only (npm ci + vite build)
 make clean              # Clean
 make build-quick        # Quick build (skip format check)
 ```

@@ -11,13 +11,36 @@ This document describes the build system and compilation options for the Linux F
 
 | Target | Description |
 |--------|-------------|
-| `make` / `make all` / `make build` | Build everything (kernel module + daemon; runs clang-format check by default) |
+| `make` / `make all` / `make build` | Build everything (frontend + kernel module + daemon; runs clang-format check by default) |
 | `make build-quick` | Same as above, skipping format check (faster for iterative CI) |
 | `make kernel-module` | Build only the kernel module |
-| `make daemon` | Build only the daemon |
+| `make daemon` | Build only the daemon (runs `make frontend` first) |
+| `make frontend` | Build only the frontend (`npm ci` + `vite build`), output to `src/daemon/web_ui/static/` |
+| `make frontend-typecheck` | Type-check the frontend only (`tsc --noEmit`), no build artifacts |
 | `make install` | Install to system |
 | `make uninstall` | Uninstall from system |
 | `make help` | Show full help |
+
+> The frontend is React 19 + TypeScript + Vite + antd-mobile 5
+> (mobile-first, hash routing, PWA support) and requires **Node.js ≥ 20 + npm**
+> to build. `make frontend` installs dependencies with `npm ci`; the lockfile
+> `frontend/package-lock.json` is committed for reproducibility. The daemon
+> embeds `index.html` / `app.js` / `style.css` / `sw.js` / `manifest.webmanifest`
+> / `icons/` into the binary via `rust-embed`, so Node.js is not needed at runtime.
+
+### Frontend and PWA
+
+- **Fixed artifact names**: vite emits `app.js` / `style.css` (no content hash
+  in the filename), so the Service Worker must use a "cache-first + background
+  refresh" strategy; otherwise a daemon upgrade would serve old JS alongside new
+  HTML and blank the page
+- **`/api/*` is never cached**: the Service Worker does not intercept `/api/*`
+  at all, so ban lists and statistics always come from the network
+- **PWA install is limited to secure contexts**: a Service Worker only registers
+  in a secure context (HTTPS or `localhost`). When accessed over a LAN via
+  `http://<ip>:9119`, Chrome **silently refuses** to register the SW — the UI
+  still works, but "Add to Home Screen" is unavailable; use HTTPS or a local
+  `localhost` visit when PWA installability is required
 
 ### Debug / Sanitizer Targets
 
@@ -41,12 +64,12 @@ This document describes the build system and compilation options for the Linux F
 
 | Target | Description |
 |--------|-------------|
-| `make test` | Run all tests (`sudo ./tests/run_tests.sh`) |
+| `make test` | Run all tests (`sudo python3 -m pytest tests/ -v`) |
 | `make ci` | Full CI build: format-check + build + test |
 
 > The Makefile exposes only `make test`. To filter by suite or
-> category, call `./tests/run_tests.sh --suite NN` /
-> `--category X` / `--report` directly. See [Testing](testing.md).
+> category, call `python3 -m pytest tests/test_NN_*.py -v` /
+> `-k "keyword"` directly. See [Testing](testing.md).
 
 ### Skipping the Format Check
 
@@ -112,7 +135,7 @@ use case:
 
 | Profile | Size | Purpose | Build command |
 |---------|------|---------|---------------|
-| `release` (default) | **6.2MB stripped** | Production deployment | `cargo build --release` |
+| `release` (default) | Compact `strip`-ed binary | Production deployment | `cargo build --release` |
 | `dev-with-debug` | 32MB (with DWARF + symbols) | Field crash analysis; use `addr2line` to unwind stacks | `cargo build --release --profile dev-with-debug` |
 | `asan` | (with ASAN runtime) | Memory-safety checks, requires nightly | `cargo +nightly build --profile asan` |
 
@@ -128,7 +151,9 @@ strip = true
 panic = "abort"       # smaller binary, no unwinding tables
 ```
 
-Produces a 6.2MB stripped binary — the default for `make deb` /
+Produces a compact `strip`-ed binary (with the frontend artifacts embedded; the
+exact size varies with the frontend bundle — measure it with
+`stat -c %s build/daemon/firewall-daemon`) — the default for `make deb` /
 `make install`.
 
 #### dev-with-debug
@@ -191,7 +216,7 @@ Package layout (the `build-deb.sh` staging directory, DKMS mode):
 
 | Path | Contents |
 |------|----------|
-| `/usr/sbin/firewall-daemon` | Daemon binary (already `strip`-ed, ~6.2MB) |
+| `/usr/sbin/firewall-daemon` | Daemon binary (already `strip`-ed, with embedded frontend artifacts) |
 | `/usr/src/linux-firewall-kmod-<VERSION>/` | DKMS source tree (compiled by dkms on first install) |
 | `/etc/firewall/*.yaml` | YAML config files |
 | `/etc/systemd/system/firewall-daemon.service` | systemd unit |
@@ -253,7 +278,7 @@ controlled by the `[profile.*]` sections in `Cargo.toml`. See
 for the full profile matrix.
 
 - `release`: `lto=true` + `strip=true` + `debug=false` + `panic="abort"`
-  → 6.2MB stripped
+  → compact `strip`-ed binary
 - `dev-with-debug`: inherits release, keeps DWARF + symbols → 32MB
 - `asan`: nightly opt-in, bundles the ASAN runtime
 
@@ -297,7 +322,7 @@ cargo --version
 
 | File | Description |
 |------|-------------|
-| `build/daemon/firewall-daemon` | Daemon binary (**6.2MB stripped**, default `release` profile) |
+| `build/daemon/firewall-daemon` | Daemon binary (`strip`-ed, with embedded frontend artifacts, default `release` profile; measure size with `stat -c %s build/daemon/firewall-daemon`) |
 | `target/release/firewall-daemon` | `cargo`'s original output location (`make daemon` copies it to `build/daemon/`) |
 | `build/daemon/firewall-daemon-asan` | ASAN build (`make asan` output; larger, includes ASAN runtime) |
 
@@ -333,9 +358,9 @@ sudo apt install --reinstall linux-headers-$(uname -r)
 
 `sudo`'s default `secure_path` does not include `~/.cargo/bin`, which
 is the standard location when Rust is installed via rustup. `make test`
-already calls `sudo ./tests/run_tests.sh` and the test runner's entry
-point does `source ~/.cargo/env` plus
-`export PATH=$HOME/.cargo/bin:$PATH`, so this is handled automatically.
+already calls `sudo python3 -m pytest tests/ -v` and the pytest
+environment inherits the current PATH (including `~/.cargo/bin`),
+so this is handled automatically.
 But calling `sudo make daemon` directly will fail:
 
 ```

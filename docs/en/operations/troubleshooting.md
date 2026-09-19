@@ -284,7 +284,7 @@ make: *** No rule to make target 'deb'.  Stop.
 
 ### `cargo: not found` under sudo
 
-**Symptoms**: `sudo ./tests/run_tests.sh` reports:
+**Symptoms**: `sudo python3 -m pytest tests/ -v` reports:
 
 ```
 make: cargo: No such file or directory
@@ -298,14 +298,14 @@ make: *** [Makefile:100: daemon] Error 127
 - `source ~/.cargo/env` before invoking sudo:
   ```bash
   source ~/.cargo/env
-  sudo -E ./tests/run_tests.sh
+  sudo -E python3 -m pytest tests/ -v
   ```
 - Or use `sudo -E` to preserve the current PATH (still requires `source` first):
   ```bash
   source ~/.cargo/env
   sudo -E make test
   ```
-- v2.2.1 onwards `tests/run_tests.sh` auto-sources `~/.cargo/env` (see `tests/run_tests.sh:134-139`), so re-running should just work.
+- The pytest environment inherits the current PATH; just ensure `source ~/.cargo/env` is run before sudo.
 
 ## Kernel Debugging
 

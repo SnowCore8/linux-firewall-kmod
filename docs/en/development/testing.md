@@ -8,37 +8,32 @@ Firewall project.
 ```mermaid
 graph TD
     ROOT["tests/"]
-    RUN["run_tests.sh unified entry point"]
-    FW["test_framework.sh assertion functions, color output, reports"]
-    CFG["test_config.sh path/parameter variables (KERNEL_MODULE_PATH, ...)"]
+    CONF["conftest.py pytest fixtures, helper functions, test isolation"]
+    CFG["config.py path/parameter variables (KERNEL_MODULE_PATH, ...)"]
 
-    subgraph SUITES["suites/ numbered suites (executed in 01-21 order, 05/06 skipped, 19 suites)"]
-        S01["01_module_basic.sh"]
-        S02["02_procfs_interface.sh"]
-        S03["03_ban_unban.sh"]
-        S04["04_whitelist.sh"]
-        S07["07_concurrency.sh"]
-        S08["08_stress_perf.sh"]
-        S09["09_daemon_config.sh"]
-        S10["10_daemon_logparse.sh"]
-        S11["11_resource_mgmt.sh"]
-        S12["12_permanent_ban.sh"]
-        S13["13_frp_jail.sh"]
-        S14["14_ban_netfilter.sh"]
-        S15["15_ddos_detection.sh"]
-        S16["16_webui_api.sh"]
-        S17["17_config_reload.sh"]
-        S18["18_log_rotation.sh"]
-        S19["19_netlink_comm.sh"]
-        S20["20_daemon_lifecycle.sh"]
-        S21["21_multi_jail.sh"]
+    subgraph SUITES["test_*.py numbered suites (executed in 01-21 order, 05/06 skipped, 19 suites 111 tests)"]
+        S01["test_01_module_basic.py"]
+        S02["test_02_procfs_interface.py"]
+        S03["test_03_ban_unban.py"]
+        S04["test_04_whitelist.py"]
+        S07["test_07_concurrency.py"]
+        S08["test_08_stress_perf.py"]
+        S09["test_09_daemon_config.py"]
+        S10["test_10_daemon_logparse.py"]
+        S11["test_11_resource_mgmt.py"]
+        S12["test_12_permanent_ban.py"]
+        S13["test_13_frp_jail.py"]
+        S14["test_14_ban_netfilter.py"]
+        S15["test_15_ddos_detection.py"]
+        S16["test_16_webui_api.py"]
+        S17["test_17_config_reload.py"]
+        S18["test_18_log_rotation.py"]
+        S19["test_19_netlink_comm.py"]
+        S20["test_20_daemon_lifecycle.py"]
+        S21["test_21_multi_jail.py"]
     end
 
-    subgraph REPORTS["reports/ generated reports (after running)"]
-    end
-
-    ROOT --> RUN
-    ROOT --> FW
+    ROOT --> CONF
     ROOT --> CFG
     ROOT --> SUITES
     SUITES --> S01
@@ -51,12 +46,12 @@ graph TD
     SUITES --> S10
     SUITES --> S11
     SUITES --> S12
-    ROOT --> REPORTS
 ```
 
 > Earlier versions split tests into `tests/{unit,integration,stress}/`.
 > Since v1.5 they have been reorganized into numbered suites sharing a
-> single framework to remove duplication.
+> single Bash framework; since v2.x they have been migrated to Python
+> pytest for better assertions, reporting, and filtering.
 
 ## Unit Tests (Rust)
 
@@ -78,10 +73,10 @@ Current count: **88 unit tests + 6 doctests** (doctests actually
 execute — they are not `no_run`).
 
 `cargo test` exercises the `#[cfg(test)]` modules inside the daemon
-crate; the 16-suite shell-driven integration test in
-`tests/run_tests.sh` complements it — unit tests verify logic at the
-source level, integration tests verify end-to-end behavior at the
-shell level.
+crate; the 19-suite / 111-test pytest integration suite in
+`tests/` complements it — unit tests verify logic at the
+source level, integration tests verify end-to-end behavior in
+Python.
 
 ## Integration Tests
 
@@ -90,37 +85,32 @@ shell level.
 ```bash
 # After building, run all suites
 make test
-# Underlying command: sudo ./tests/run_tests.sh
+# Underlying command: sudo python3 -m pytest tests/ -v
 ```
 
 ```bash
-# Call run_tests.sh directly
-./tests/run_tests.sh                    # run all suites
-./tests/run_tests.sh --suite 03         # only 03_ban_unban
-./tests/run_tests.sh --category security   # filter by category
-./tests/run_tests.sh --report           # write report to tests/reports/
-./tests/run_tests.sh --help             # help
+# Call pytest directly
+sudo python3 -m pytest tests/ -v                    # run all suites
+sudo python3 -m pytest tests/test_03_ban_unban.py -v  # only test_03_ban_unban
+sudo python3 -m pytest tests/ -k "daemon" -v        # filter by keyword (matches function/class names)
+sudo python3 -m pytest tests/ --tb=short            # short traceback output
+sudo python3 -m pytest tests/ --html=report.html    # generate HTML report (requires pytest-html plugin)
+sudo python3 -m pytest tests/ --collect-only        # list all tests without executing
 ```
 
-The entry point is `tests/run_tests.sh`, which dispatches the numbered
-suites in `suites/`. Current count: 19 suites / **115** assertions.
+The test framework is Python pytest, with entry points at `tests/conftest.py`
+(fixtures and helper functions) and `tests/config.py` (paths and parameter
+configuration). Current count: 19 suites / **111** tests.
 
 ### Running under sudo
 
-`make test` internally runs `sudo ./tests/run_tests.sh`. The test
-runner fixes up `cargo`'s PATH at entry, before invoking `make daemon`:
+`make test` internally runs `sudo python3 -m pytest tests/ -v`. Tests
+require root privileges for kernel module operations (insmod/rmmod)
+and procfs writes.
 
-```bash
-# tests/run_tests.sh internal (~line 134-139)
-if [[ -f "$HOME/.cargo/env" ]]; then
-    source "$HOME/.cargo/env"
-fi
-export PATH="$HOME/.cargo/bin:$PATH"
-```
-
-This is necessary because `sudo`'s default `secure_path` does NOT
-include `~/.cargo/bin` (the standard location when Rust is installed
-via rustup), so a bare `sudo make daemon` will fail:
+`sudo`'s default `secure_path` does NOT include `~/.cargo/bin`
+(the standard location when Rust is installed via rustup), so a bare
+`sudo make daemon` will fail:
 
 ```
 sudo make daemon
@@ -129,74 +119,88 @@ make: *** [Makefile:101: daemon] Error 127
 ```
 
 Going through `make test` is fine, but if you run
-`sudo ./tests/run_tests.sh` manually and `cargo` is missing for the
-same reason, the symptom is `make: cargo: Command not found` — fix by
-`source ~/.cargo/env` before sudo.
+`sudo python3 -m pytest tests/ -v` manually and `cargo` is missing for
+the same reason, the symptom is `make: cargo: Command not found` — fix
+by `source ~/.cargo/env` before sudo.
 
 ### Filters and Output
 
 | Flag | Purpose |
 |------|---------|
-| `--suite NN` | Run only suite `NN` (`01`..`15`) |
-| `--category X` | Filter by category (`security` / `performance` / `daemon` / `module`) |
-| `--report` | Generate a Markdown report under `tests/reports/` |
-| `--parallel` | Run suites in parallel (default: serial, to avoid shared-state races) |
-| `--help` | Full help |
+| `tests/test_03_ban_unban.py` | Run only the specified test file |
+| `-k "keyword"` | Filter by keyword (matches function/class names), e.g. `-k "daemon"` |
+| `-m "mark"` | Filter by pytest marker (e.g. custom markers) |
+| `--tb=short` | Short traceback output |
+| `--html=report.html` | Generate HTML report (requires `pip install pytest-html`) |
+| `--collect-only` | List all tests without executing |
+| `-x` | Stop on first failure |
+| `-v` | Verbose output (show each test name) |
 
-Each case prints a `pass` / `fail` / `warn` marker; at the end of each
-suite the runner prints a summary:
+Example pytest output:
 
 ```
-Suite 03_ban_unban: passed 12, failed 0, warned 0, skipped 0
-Suite 09_daemon_config: passed 8, failed 0, warned 0, skipped 0
+tests/test_03_ban_unban.py::TestBanUnban::test_basic_ban PASSED
+tests/test_03_ban_unban.py::TestBanUnban::test_unban PASSED
+tests/test_09_daemon_config.py::TestDaemonConfig::test_yaml_load PASSED
 ...
 
-Total: passed 113, failed 0, warned 2, skipped 0
+========================= 111 passed in 45.32s =========================
 ```
 
-With `--report`, results are written to
-`tests/reports/<timestamp>.md` (one entry per assertion, with output
-and elapsed time) and uploaded as a CI artifact.
+With `--html=report.html`, an HTML report is generated with pass/fail
+status, output, and elapsed time for each test, uploaded as a CI artifact.
 
 ## Test Suites
 
 | # | File | Coverage |
 |---|------|----------|
-| 01 | `01_module_basic.sh` | Module load/unload, parameter load, sysfs readable |
-| 02 | `02_procfs_interface.sh` | `/proc/firewall/{bans,whitelist,config,stats}` R/W |
-| 03 | `03_ban_unban.sh` | Ban, unban, temporary/permanent, expiry cleanup |
-| 04 | `04_whitelist.sh` | Exact match, CIDR subnet match, capacity limit |
-| 07 | `07_concurrency.sh` | Multi-process R/W, RCU correctness |
-| 08 | `08_stress_perf.sh` | Full 4096-entry table operations, latency |
-| 09 | `09_daemon_config.sh` | YAML loading, strict-mode validation, jail parsing |
-| 10 | `10_daemon_logparse.sh` | inotify monitoring, regex matching, jail trigger |
-| 11 | `11_resource_mgmt.sh` | Memory, fds, procfs resource lifecycle |
-| 12 | `12_permanent_ban.sh` | Permanent ban (in-memory) |
-| 13 | `13_frp_jail.sh` | FRP (Fail2ban-Recover-Pattern) jail config loading and trigger |
-| 14 | `14_ban_netfilter.sh` | Blacklist netfilter chain entry format and function (real routable IP) |
-| 15 | `15_ddos_detection.sh` | DDoS detection configuration, rate thresholds, statistics |
-| 16 | `16_webui_api.sh` | Web UI API endpoints, SSE, HTTP response validation |
-| 17 | `17_config_reload.sh` | SIGHUP hot-reload, configuration modification, error tolerance |
-| 18 | `18_log_rotation.sh` | Log rotation detection, inotify monitoring, copytruncate support |
+| 01 | `test_01_module_basic.py` | Module load/unload, parameter load, sysfs readable |
+| 02 | `test_02_procfs_interface.py` | `/proc/firewall/{bans,whitelist,config,stats}` R/W |
+| 03 | `test_03_ban_unban.py` | Ban, unban, temporary/permanent, expiry cleanup |
+| 04 | `test_04_whitelist.py` | Exact match, CIDR subnet match, capacity limit |
+| 07 | `test_07_concurrency.py` | Multi-process R/W, RCU correctness |
+| 08 | `test_08_stress_perf.py` | Full 4096-entry table operations, latency |
+| 09 | `test_09_daemon_config.py` | YAML loading, strict-mode validation, jail parsing |
+| 10 | `test_10_daemon_logparse.py` | inotify monitoring, regex matching, jail trigger |
+| 11 | `test_11_resource_mgmt.py` | Memory, fds, procfs resource lifecycle |
+| 12 | `test_12_permanent_ban.py` | Permanent ban (in-memory) |
+| 13 | `test_13_frp_jail.py` | FRP (Fail2ban-Recover-Pattern) jail config loading and trigger |
+| 14 | `test_14_ban_netfilter.py` | Blacklist netfilter chain entry format and function (real routable IP) |
+| 15 | `test_15_ddos_detection.py` | DDoS detection configuration, rate thresholds, statistics |
+| 16 | `test_16_webui_api.py` | Web UI API endpoints, SSE, HTTP response validation |
+| 17 | `test_17_config_reload.py` | SIGHUP hot-reload, configuration modification, error tolerance |
+| 18 | `test_18_log_rotation.py` | Log rotation detection, inotify monitoring, copytruncate support |
+| 19 | `test_19_netlink_comm.py` | Netlink kernel↔daemon communication |
+| 20 | `test_20_daemon_lifecycle.py` | Daemon start/stop/restart lifecycle |
+| 21 | `test_21_multi_jail.py` | Multi-jail concurrency, independent logs, isolation |
 
 > Numbering skips 05/06: those slots were used by old suites that have
 > since been merged into the ones above. Current count: 19 suites
-> totaling **115** integration-test assertions.
+> totaling **111** tests.
 
-## Framework Assertions
+## Framework Helper Functions
 
-Suites use helpers from `tests/test_framework.sh`:
+Tests use fixtures and helpers from `tests/conftest.py`:
 
-| Function | Purpose |
+| Function / Fixture | Purpose |
 |----------|---------|
-| `fw_test_header` | Print suite title |
-| `fw_subsection` | Print subsection title |
-| `fw_pass` / `fw_fail` | Mark a single case as passed/failed |
-| `assert_success <cmd> <msg>` | Assert command exits 0 |
-| `assert_true <expr> <msg>` | Assert expression is true |
-| `assert_file_exists <path>` | Assert file exists |
-| `assert_dir_exists <path>` | Assert directory exists |
-| `warn_test <msg>` | Soft warning (not counted as failure) |
+| `ban_ip(ip)` | Ban an IP address |
+| `ban_ip_with_time(ip, seconds)` | Ban an IP with duration |
+| `ban_ip_permanent(ip)` | Permanently ban an IP |
+| `unban_ip(ip)` | Unban an IP address |
+| `ip_is_banned(ip)` | Check if IP is in the ban list |
+| `whitelist_add(subnet)` | Add a whitelist entry |
+| `whitelist_remove(subnet)` | Remove a whitelist entry |
+| `get_stat(name)` | Get a procfs statistic value |
+| `count_bans()` | Get the ban list line count |
+| `count_whitelist()` | Get the whitelist line count |
+| `reset_all_data()` | Reset all test data |
+| `load_module()` / `unload_module()` | Load/unload kernel module |
+| `session_setup` (fixture) | Session-level setup: ensure module is loaded |
+| `test_isolation` (fixture) | Data isolation before/after each test |
+| `clean_bans` (fixture) | Ensure ban list is empty |
+| `daemon_binary` (fixture) | Ensure daemon binary exists |
+| `tmp_config` (fixture) | Create a temporary config directory |
 
 ## Module-Loading Constraints
 
@@ -270,26 +274,30 @@ next to a `// SAFETY:` comment explaining the invariants. **Any new
 the tightened `cargo clippy` rules (configured in the repo's
 `clippy.toml`) will block the merge.
 
-## Writing a New Suite
+## Writing a New Test
 
-Place new tests in `tests/suites/` with the file name `NN_description.sh`
-(NN being the next available number). Each suite `source`s the framework
-and config, then uses the assertions above:
+Place new tests in the `tests/` directory with the file name
+`test_NN_description.py` (NN being the next available number). Use the
+fixtures and helper functions from conftest.py:
 
-```bash
-#!/bin/bash
-# 13_my_feature.sh - new feature tests
+```python
+# test_22_my_feature.py - new feature tests
 
-source ../test_framework.sh
-source ../test_config.sh
+from .conftest import ban_ip, unban_ip, ip_is_banned, get_stat
 
-fw_test_header "New feature tests"
 
-fw_subsection "Basic behavior"
-assert_true "[[ 1 -eq 1 ]]" "trivial equality holds"
+class TestMyFeature:
+    """New feature tests"""
 
-fw_subsection "Boundary"
-assert_true "[[ -n \"$KERNEL_MODULE_PATH\" ]]" "KERNEL_MODULE_PATH is set"
+    def test_basic_behavior(self, clean_bans):
+        """Basic behavior"""
+        ban_ip("203.0.113.1")
+        assert ip_is_banned("203.0.113.1")
+
+    def test_boundary_condition(self, clean_bans):
+        """Boundary condition"""
+        from .config import MAX_BAN_CAPACITY
+        assert MAX_BAN_CAPACITY == 4096
 ```
 
 ## CI Integration
@@ -301,13 +309,13 @@ before a merge:
 |-----|--------|-----------------|
 | `lint` | rustfmt + clippy (`--all-targets --all-features`) + yamllint + kernel-module clang-format | blocks merge |
 | `build` | Kernel module (`make kernel-module`) + daemon (`make daemon`) | blocks merge |
-| `test` | `sudo ./tests/run_tests.sh --report`, currently **115** assertions | any fail blocks merge |
+| `test` | `sudo python3 -m pytest tests/ -v`, currently **19 suites / 111 tests** | any fail blocks merge |
 
 `test` job orchestration details:
 
 1. Reuses artifacts from the `build` job (`build/kernel-module/firewall.ko` + `build/daemon/firewall-daemon`)
-2. Runs `sudo ./tests/run_tests.sh --report` on the runner
-3. Auto-skips module-dependent suites if the kernel module cannot load (Azure VM environment limitation)
+2. Runs `sudo python3 -m pytest tests/ -v` on the runner
+3. conftest.py's `session_setup` fixture auto-skips module-dependent tests if the kernel module cannot load (Azure VM environment limitation)
 4. Uploads the report as a CI artifact (kept for 14 days)
 
 > `lint` failures usually mean a missing `// SAFETY:` comment, a

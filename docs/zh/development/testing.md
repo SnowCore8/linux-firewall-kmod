@@ -7,37 +7,32 @@
 ```mermaid
 graph TD
     ROOT["tests/"]
-    RUN["run_tests.sh 统一测试入口"]
-    FW["test_framework.sh 断言函数、彩色输出、报告生成"]
-    CFG["test_config.sh 路径与参数变量（KERNEL_MODULE_PATH 等）"]
+    CONF["conftest.py pytest fixtures、辅助函数、测试隔离"]
+    CFG["config.py 路径与参数变量（KERNEL_MODULE_PATH 等）"]
 
-    subgraph SUITES["suites/ 编号测试套件（按 01-21 顺序执行，05/06 跳过，19 套件）"]
-        S01["01_module_basic.sh"]
-        S02["02_procfs_interface.sh"]
-        S03["03_ban_unban.sh"]
-        S04["04_whitelist.sh"]
-        S07["07_concurrency.sh"]
-        S08["08_stress_perf.sh"]
-        S09["09_daemon_config.sh"]
-        S10["10_daemon_logparse.sh"]
-        S11["11_resource_mgmt.sh"]
-        S12["12_permanent_ban.sh"]
-        S13["13_frp_jail.sh"]
-        S14["14_ban_netfilter.sh"]
-        S15["15_ddos_detection.sh"]
-        S16["16_webui_api.sh"]
-        S17["17_config_reload.sh"]
-        S18["18_log_rotation.sh"]
-        S19["19_netlink_comm.sh"]
-        S20["20_daemon_lifecycle.sh"]
-        S21["21_multi_jail.sh"]
+    subgraph SUITES["test_*.py 编号测试套件（按 01-21 顺序执行，05/06 跳过，19 套件 111 测试）"]
+        S01["test_01_module_basic.py"]
+        S02["test_02_procfs_interface.py"]
+        S03["test_03_ban_unban.py"]
+        S04["test_04_whitelist.py"]
+        S07["test_07_concurrency.py"]
+        S08["test_08_stress_perf.py"]
+        S09["test_09_daemon_config.py"]
+        S10["test_10_daemon_logparse.py"]
+        S11["test_11_resource_mgmt.py"]
+        S12["test_12_permanent_ban.py"]
+        S13["test_13_frp_jail.py"]
+        S14["test_14_ban_netfilter.py"]
+        S15["test_15_ddos_detection.py"]
+        S16["test_16_webui_api.py"]
+        S17["test_17_config_reload.py"]
+        S18["test_18_log_rotation.py"]
+        S19["test_19_netlink_comm.py"]
+        S20["test_20_daemon_lifecycle.py"]
+        S21["test_21_multi_jail.py"]
     end
 
-    subgraph REPORTS["reports/ 测试报告输出（运行后生成）"]
-    end
-
-    ROOT --> RUN
-    ROOT --> FW
+    ROOT --> CONF
     ROOT --> CFG
     ROOT --> SUITES
     SUITES --> S01
@@ -50,11 +45,11 @@ graph TD
     SUITES --> S10
     SUITES --> S11
     SUITES --> S12
-    ROOT --> REPORTS
 ```
 
 > 早期版本按 `tests/{unit,integration,stress}/` 拆分；v1.5 起重构为
-> 编号套件 + 共享框架，消除大量重复代码。
+> 编号套件 + 共享 Bash 框架；v2.x 起迁移至 Python pytest，
+> 消除大量重复代码并获得更好的断言、报告和过滤能力。
 
 ## 单元测试（Rust）
 
@@ -74,9 +69,9 @@ cargo test config::
 当前统计：**88 个单元测试 + 6 个 doctest**（doctest 真实执行，
 不是 `no_run`）。
 
-`cargo test` 跑守护进程内 `#[cfg(test)]` 模块；与 `tests/run_tests.sh`
-的 19 套件集成测试是互补关系——单元测试在源码层验证逻辑，
-集成测试在 shell 端验证端到端行为。
+`cargo test` 跑守护进程内 `#[cfg(test)]` 模块；与 `tests/` 下
+19 套件 111 个 pytest 集成测试是互补关系——单元测试在源码层验证逻辑，
+集成测试在 Python 端验证端到端行为。
 
 ## 集成测试
 
@@ -85,37 +80,29 @@ cargo test config::
 ```bash
 # 编译后运行全部套件
 make test
-# 实际命令：sudo ./tests/run_tests.sh
+# 实际命令：sudo python3 -m pytest tests/ -v
 ```
 
 ```bash
-# 直接调用 run_tests.sh
-./tests/run_tests.sh                    # 运行所有套件
-./tests/run_tests.sh --suite 03         # 仅运行 03_ban_unban
-./tests/run_tests.sh --category security   # 按类别过滤
-./tests/run_tests.sh --report           # 生成报告到 tests/reports/
-./tests/run_tests.sh --help             # 查看帮助
+# 直接调用 pytest
+sudo python3 -m pytest tests/ -v                    # 运行所有套件
+sudo python3 -m pytest tests/test_03_ban_unban.py -v  # 仅运行 test_03_ban_unban
+sudo python3 -m pytest tests/ -k "daemon" -v        # 按关键字过滤（匹配函数名/类名）
+sudo python3 -m pytest tests/ --tb=short            # 简短回溯输出
+sudo python3 -m pytest tests/ --html=report.html    # 生成 HTML 报告（需 pytest-html 插件）
+sudo python3 -m pytest tests/ --collect-only        # 仅列出所有测试，不执行
 ```
 
-测试入口是 `tests/run_tests.sh`，统一调度 `suites/` 下编号套件。
-当前 19 套件共 **19 套件**断言。
+测试框架是 Python pytest，入口为 `tests/conftest.py`（fixtures 与辅助函数）
+和 `tests/config.py`（路径与参数配置）。当前 19 套件共 **111 个测试**。
 
 ### 在 sudo 下运行
 
-`make test` 内部走 `sudo ./tests/run_tests.sh`，但 `make daemon` 在
-`run_tests.sh` 入口**自动**做了 cargo 路径修复：
+`make test` 内部走 `sudo python3 -m pytest tests/ -v`。测试需要 root
+权限操作内核模块（insmod/rmmod）和 procfs 写入。
 
-```bash
-# tests/run_tests.sh 内部（行 ~134-139）
-if [[ -f "$HOME/.cargo/env" ]]; then
-    source "$HOME/.cargo/env"
-fi
-export PATH="$HOME/.cargo/bin:$PATH"
-```
-
-这是因为 `sudo` 默认 `secure_path` 不含 `~/.cargo/bin`
-（rustup 用户级安装的默认位置），直接 `sudo make daemon` 会
-失败：
+`sudo` 默认 `secure_path` 不含 `~/.cargo/bin`（rustup 用户级安装的
+默认位置），直接 `sudo make daemon` 会失败：
 
 ```
 sudo make daemon
@@ -123,7 +110,7 @@ make: cargo: 没有那个文件或目录
 make: *** [Makefile:101: daemon] 错误 127
 ```
 
-走 `make test` 不会遇到；但若手动 `sudo ./tests/run_tests.sh` 时
+走 `make test` 不会遇到；但若手动 `sudo python3 -m pytest tests/ -v` 时
 同样缺 cargo，提示 `make: cargo: 没有那个文件或目录`，先
 `source ~/.cargo/env` 再 sudo 即可。
 
@@ -131,63 +118,79 @@ make: *** [Makefile:101: daemon] 错误 127
 
 | 参数 | 用途 |
 |------|------|
-| `--suite NN` | 只跑编号 NN 的套件（`01`..`15`） |
-| `--category X` | 按类别过滤（`security` / `performance` / `daemon` / `module`） |
-| `--report` | 生成 Markdown 报告到 `tests/reports/` |
-| `--parallel` | 并行执行（默认串行，避免共享状态竞争） |
-| `--help` | 显示完整帮助 |
+| `tests/test_03_ban_unban.py` | 只运行指定测试文件 |
+| `-k "关键字"` | 按关键字过滤（匹配函数名、类名），如 `-k "daemon"` |
+| `-m "标记"` | 按 pytest 标记过滤（如自定义标记） |
+| `--tb=short` | 简短回溯输出 |
+| `--html=report.html` | 生成 HTML 报告（需 `pip install pytest-html`） |
+| `--collect-only` | 仅列出所有测试，不执行 |
+| `-x` | 遇到第一个失败即停止 |
+| `-v` | 详细输出（显示每个测试名称） |
 
-每条用例都会打印 pass / fail / warn 标记，套件结束后汇总：
+pytest 输出示例：
 
 ```
-Suite 03_ban_unban: passed 12, failed 0, warned 0, skipped 0
-Suite 09_daemon_config: passed 8, failed 0, warned 0, skipped 0
+tests/test_03_ban_unban.py::TestBanUnban::test_basic_ban PASSED
+tests/test_03_ban_unban.py::TestBanUnban::test_unban PASSED
+tests/test_09_daemon_config.py::TestDaemonConfig::test_yaml_load PASSED
 ...
 
-Total: passed 113, failed 0, warned 2, skipped 0
+========================= 111 passed in 45.32s =========================
 ```
 
-加 `--report` 会写入 `tests/reports/<时间戳>.md`，包含每条断言
-的通过/失败/输出/耗时，CI 上传为 artifact。
+加 `--html=report.html` 会生成包含每条测试通过/失败/输出/耗时的
+HTML 报告，CI 上传为 artifact。
 
 ## 测试套件
 
 | 编号 | 文件 | 覆盖范围 |
 |------|------|----------|
-| 01 | `01_module_basic.sh` | 模块加载/卸载、带参数加载、sysfs 参数可读 |
-| 02 | `02_procfs_interface.sh` | `/proc/firewall/{bans,whitelist,config,stats}` 读写 |
-| 03 | `03_ban_unban.sh` | 封禁、解封、临时/永久封禁、过期清理 |
-| 04 | `04_whitelist.sh` | 白名单精确匹配、CIDR 子网匹配、容量上限 |
-| 07 | `07_concurrency.sh` | 多进程并发读写、RCU 正确性 |
-| 08 | `08_stress_perf.sh` | 4096 容量满表操作、延迟统计 |
-| 09 | `09_daemon_config.sh` | YAML 配置加载、严格模式校验、jail 解析 |
-| 10 | `10_daemon_logparse.sh` | 日志监听（inotify）、正则匹配、jail 触发 |
-| 11 | `11_resource_mgmt.sh` | 内存、句柄、procfs 资源生命周期 |
-| 12 | `12_permanent_ban.sh` | 永久封禁（内存中） |
-| 13 | `13_frp_jail.sh` | FRP（Fail2ban-Recover-Pattern）jail 配置加载与触发 |
-| 14 | `14_ban_netfilter.sh` | 黑名单 netfilter 链表条目格式与功能（真实可路由 IP） |
-| 15 | `15_ddos_detection.sh` | DDoS 检测（PPS/BPS/SYN/UDP/ICMP 速率违规） |
-| 16 | `16_webui_api.sh` | Web UI API 端点测试 |
-| 17 | `17_config_reload.sh` | 配置热重载（SIGHUP） |
-| 18 | `18_log_rotation.sh` | 日志轮转检测（inotify + inode 重连） |
+| 01 | `test_01_module_basic.py` | 模块加载/卸载、带参数加载、sysfs 参数可读 |
+| 02 | `test_02_procfs_interface.py` | `/proc/firewall/{bans,whitelist,config,stats}` 读写 |
+| 03 | `test_03_ban_unban.py` | 封禁、解封、临时/永久封禁、过期清理 |
+| 04 | `test_04_whitelist.py` | 白名单精确匹配、CIDR 子网匹配、容量上限 |
+| 07 | `test_07_concurrency.py` | 多进程并发读写、RCU 正确性 |
+| 08 | `test_08_stress_perf.py` | 4096 容量满表操作、延迟统计 |
+| 09 | `test_09_daemon_config.py` | YAML 配置加载、严格模式校验、jail 解析 |
+| 10 | `test_10_daemon_logparse.py` | 日志监听（inotify）、正则匹配、jail 触发 |
+| 11 | `test_11_resource_mgmt.py` | 内存、句柄、procfs 资源生命周期 |
+| 12 | `test_12_permanent_ban.py` | 永久封禁（内存中） |
+| 13 | `test_13_frp_jail.py` | FRP（Fail2ban-Recover-Pattern）jail 配置加载与触发 |
+| 14 | `test_14_ban_netfilter.py` | 黑名单 netfilter 链表条目格式与功能（真实可路由 IP） |
+| 15 | `test_15_ddos_detection.py` | DDoS 检测（PPS/BPS/SYN/UDP/ICMP 速率违规） |
+| 16 | `test_16_webui_api.py` | Web UI API 端点测试 |
+| 17 | `test_17_config_reload.py` | 配置热重载（SIGHUP） |
+| 18 | `test_18_log_rotation.py` | 日志轮转检测（inotify + inode 重连） |
+| 19 | `test_19_netlink_comm.py` | Netlink 内核↔守护进程通信 |
+| 20 | `test_20_daemon_lifecycle.py` | 守护进程启动/停止/重启生命周期 |
+| 21 | `test_21_multi_jail.py` | 多 jail 并发、独立日志、隔离性 |
 
 > 编号不连续（05、06 缺失）：原对应旧测试套件，重构时已合并到
-> 现有套件中。当前 19 套件共 **19 套件**集成测试。
+> 现有套件中。当前 19 套件共 **111 个测试**。
 
-## 框架断言
+## 框架辅助函数
 
-测试用 `tests/test_framework.sh` 提供的函数：
+测试用 `tests/conftest.py` 提供的 fixtures 和辅助函数：
 
-| 函数 | 用途 |
+| 函数 / Fixture | 用途 |
 |------|------|
-| `fw_test_header` | 打印套件标题 |
-| `fw_subsection` | 打印子节标题 |
-| `fw_pass` / `fw_fail` | 单条用例通过/失败 |
-| `assert_success <cmd> <msg>` | 断言命令退出码 0 |
-| `assert_true <expr> <msg>` | 断言表达式为真 |
-| `assert_file_exists <path>` | 断言文件存在 |
-| `assert_dir_exists <path>` | 断言目录存在 |
-| `warn_test <msg>` | 软警告（不计入失败） |
+| `ban_ip(ip)` | 封禁 IP |
+| `ban_ip_with_time(ip, seconds)` | 封禁 IP 带时长 |
+| `ban_ip_permanent(ip)` | 永久封禁 IP |
+| `unban_ip(ip)` | 解封 IP |
+| `ip_is_banned(ip)` | 检查 IP 是否在封禁列表中 |
+| `whitelist_add(subnet)` | 添加白名单 |
+| `whitelist_remove(subnet)` | 移除白名单 |
+| `get_stat(name)` | 获取 procfs 统计值 |
+| `count_bans()` | 获取封禁列表行数 |
+| `count_whitelist()` | 获取白名单行数 |
+| `reset_all_data()` | 重置所有测试数据 |
+| `load_module()` / `unload_module()` | 加载/卸载内核模块 |
+| `session_setup` (fixture) | 会话级设置：确保模块加载 |
+| `test_isolation` (fixture) | 每个测试前后的数据隔离 |
+| `clean_bans` (fixture) | 确保封禁列表为空 |
+| `daemon_binary` (fixture) | 确保守护进程二进制存在 |
+| `tmp_config` (fixture) | 创建临时配置目录 |
 
 ## 内核模块测试约束
 
@@ -250,25 +253,29 @@ nightly toolchain）。
 `// SAFETY:` 注释，否则 `cargo clippy` lint（仓库已配
 `clippy.toml` 收紧规则）会拒绝合入。
 
-## 编写新套件
+## 编写新测试
 
-新测试应放在 `tests/suites/`，文件名格式 `NN_description.sh`（NN 为
-下一个可用编号）。每个套件 `source` 框架与配置后即可使用断言函数：
+新测试应放在 `tests/` 目录，文件名格式 `test_NN_description.py`（NN 为
+下一个可用编号）。使用 conftest.py 提供的 fixtures 和辅助函数：
 
-```bash
-#!/bin/bash
-# 13_my_feature.sh - 新功能测试
+```python
+# test_22_my_feature.py - 新功能测试
 
-source ../test_framework.sh
-source ../test_config.sh
+from .conftest import ban_ip, unban_ip, ip_is_banned, get_stat
 
-fw_test_header "新功能测试"
 
-fw_subsection "基本行为"
-assert_true "[[ 1 -eq 1 ]]" "基本等式成立"
+class TestMyFeature:
+    """新功能测试"""
 
-fw_subsection "边界条件"
-assert_true "[[ -n \"$KERNEL_MODULE_PATH\" ]]" "KERNEL_MODULE_PATH 已设置"
+    def test_basic_behavior(self, clean_bans):
+        """基本行为"""
+        ban_ip("203.0.113.1")
+        assert ip_is_banned("203.0.113.1")
+
+    def test_boundary_condition(self, clean_bans):
+        """边界条件"""
+        from .config import MAX_BAN_CAPACITY
+        assert MAX_BAN_CAPACITY == 4096
 ```
 
 ## CI 集成
@@ -279,13 +286,13 @@ assert_true "[[ -n \"$KERNEL_MODULE_PATH\" ]]" "KERNEL_MODULE_PATH 已设置"
 |-----|--------|----------|
 | `lint` | rustfmt + clippy（`--all-targets --all-features`）+ yamllint + 内核模块 clang-format | 不通过则阻断 merge |
 | `build` | 内核模块（`make kernel-module`）+ 守护进程（`make daemon`） | 编译失败阻断 merge |
-| `test` | `sudo ./tests/run_tests.sh --report`，当前 **19 套件**断言 | 任何 fail 阻断 merge |
+| `test` | `sudo python3 -m pytest tests/ -v`，当前 **19 套件 111 个测试** | 任何 fail 阻断 merge |
 
 测试编排细节（`test` job）：
 
 1. 复用 `build` job 编译产物（`build/kernel-module/firewall.ko` + `build/daemon/firewall-daemon`）
-2. 在 runner 上 `sudo ./tests/run_tests.sh --report`
-3. 若内核模块不可加载（Azure VM 环境限制），自动跳过需要模块的套件
+2. 在 runner 上 `sudo python3 -m pytest tests/ -v`
+3. 若内核模块不可加载（Azure VM 环境限制），conftest.py 的 `session_setup` fixture 自动跳过需要模块的测试
 4. 报告上传为 artifact，保留 14 天
 
 > `lint` 失败通常意味着 `// SAFETY:` 注释缺失 / 格式漂移
