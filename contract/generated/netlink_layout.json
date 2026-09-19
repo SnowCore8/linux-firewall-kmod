@@ -1,0 +1,1400 @@
+{
+  "source": "netlink.fwidl",
+  "namespace": "Fw",
+  "endianness": "big",
+  "packed": true,
+  "msg_len_max": 65535,
+  "notes": [
+    "enum AddrFamily: 2 个成员，宽度 u8",
+    "enum BanAction: 2 个成员，宽度 u8",
+    "enum WhitelistAction: 2 个成员，宽度 u8",
+    "enum MsgType: 23 个成员，宽度 u16",
+    "bits ConfigFlags: 13 个标志，宽度 u32",
+    "bits DynThresholdFlags: 1 个标志，宽度 u32",
+    "公共头 MsgHdr: 12 字节",
+    "message DdosEvent: 定长 65 字节",
+    "message BanStateChange: 定长 122 字节",
+    "message WhitelistStateChange: 定长 51 字节",
+    "message CmdResult: 定长 37 字节",
+    "message ConfigAck: 定长 20 字节",
+    "message ConfigChange: 定长 116 字节",
+    "message ListBansResponse: 定长 24 字节 + 尾部 BanEntry(94 字节) × N；u16 上限内最多 696 条",
+    "message StatsResponse: 定长 60 字节",
+    "message ListWhitelistResponse: 定长 16 字节 + 尾部 WhitelistEntry(34 字节) × N；u16 上限内最多 1927 条",
+    "message ListRatesResponse: 定长 36 字节 + 尾部 RateEntry(84 字节) × N；u16 上限内最多 779 条",
+    "message AnalysisResponse: 定长 4756 字节",
+    "message DaemonRegisterAck: 定长 13 字节",
+    "message BanIp: 定长 65 字节",
+    "message UnbanIp: 定长 65 字节",
+    "message SetConfig: 定长 116 字节",
+    "message ListBansQuery: 定长 20 字节",
+    "message AddWhitelist: 定长 46 字节",
+    "message RemoveWhitelist: 定长 46 字节",
+    "message StatsQuery: 定长 12 字节",
+    "message ListWhitelistQuery: 定长 12 字节",
+    "message ListRatesQuery: 定长 12 字节",
+    "message AnalysisQuery: 定长 12 字节",
+    "message DaemonRegister: 定长 12 字节"
+  ],
+  "magic": {
+    "name": "FW_NL_MAGIC",
+    "value": 1180126286
+  },
+  "aliases": {
+    "addr16": {
+      "bytes": 16
+    }
+  },
+  "enums": {
+    "AddrFamily": {
+      "width": "u8",
+      "members": {
+        "INET": 2,
+        "INET6": 10
+      }
+    },
+    "BanAction": {
+      "width": "u8",
+      "members": {
+        "BAN": 1,
+        "UNBAN": 2
+      }
+    },
+    "WhitelistAction": {
+      "width": "u8",
+      "members": {
+        "ADD": 1,
+        "REMOVE": 2
+      }
+    },
+    "MsgType": {
+      "width": "u16",
+      "members": {
+        "DDOS_EVENT": 1,
+        "BAN_IP": 2,
+        "UNBAN_IP": 3,
+        "SET_CONFIG": 4,
+        "BAN_STATE_CHANGE": 5,
+        "LIST_BANS_QUERY": 6,
+        "LIST_BANS_RESPONSE": 7,
+        "STATS_QUERY": 8,
+        "STATS_RESPONSE": 9,
+        "LIST_WHITELIST_QUERY": 10,
+        "LIST_WHITELIST_RESPONSE": 11,
+        "ADD_WHITELIST": 12,
+        "REMOVE_WHITELIST": 13,
+        "CONFIG_ACK": 14,
+        "LIST_RATES_QUERY": 15,
+        "LIST_RATES_RESPONSE": 16,
+        "WHITELIST_STATE_CHANGE": 17,
+        "CMD_RESULT": 18,
+        "CONFIG_CHANGE": 19,
+        "ANALYSIS_QUERY": 20,
+        "ANALYSIS_RESPONSE": 21,
+        "DAEMON_REGISTER": 22,
+        "DAEMON_REGISTER_ACK": 23
+      }
+    }
+  },
+  "bits": {
+    "ConfigFlags": {
+      "width": "u32",
+      "members": {
+        "BAN_TIME": 0,
+        "RATE_WINDOW": 1,
+        "MAX_PPS": 2,
+        "MAX_BPS": 3,
+        "MAX_SYN": 4,
+        "MAX_UDP": 5,
+        "MAX_ICMP": 6,
+        "MAX_ACK": 7,
+        "MAX_RST": 8,
+        "MAX_FIN": 9,
+        "DYNAMIC_THRESHOLD": 10,
+        "BASELINE_UPDATE": 11,
+        "DDOS_BAN_DURATION": 12
+      }
+    },
+    "DynThresholdFlags": {
+      "width": "u32",
+      "members": {
+        "ENABLED": 0
+      }
+    }
+  },
+  "layouts": {
+    "MsgHdr": {
+      "kind": "struct",
+      "size": 12,
+      "fields": [
+        {
+          "name": "magic",
+          "offset": 0,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "msg_type",
+          "offset": 4,
+          "size": 2,
+          "type": "u16",
+          "tail": false
+        },
+        {
+          "name": "msg_len",
+          "offset": 6,
+          "size": 2,
+          "type": "u16",
+          "tail": false
+        },
+        {
+          "name": "seq",
+          "offset": 8,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        }
+      ]
+    },
+    "DdosEvent": {
+      "kind": "message",
+      "size": 65,
+      "fields": [
+        {
+          "name": "af",
+          "offset": 12,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "reason",
+          "offset": 13,
+          "size": 32,
+          "type": "str[32]",
+          "tail": false
+        },
+        {
+          "name": "rate_pps",
+          "offset": 45,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "addr",
+          "offset": 49,
+          "size": 16,
+          "type": "addr16",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::DDOS_EVENT"
+    },
+    "BanStateChange": {
+      "kind": "message",
+      "size": 122,
+      "fields": [
+        {
+          "name": "action",
+          "offset": 12,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "af",
+          "offset": 13,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "duration_secs",
+          "offset": 14,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "addr",
+          "offset": 18,
+          "size": 16,
+          "type": "addr16",
+          "tail": false
+        },
+        {
+          "name": "reason",
+          "offset": 34,
+          "size": 32,
+          "type": "str[32]",
+          "tail": false
+        },
+        {
+          "name": "jail_name",
+          "offset": 66,
+          "size": 32,
+          "type": "str[32]",
+          "tail": false
+        },
+        {
+          "name": "packets_dropped",
+          "offset": 98,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "packets_accepted",
+          "offset": 106,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "current_bans",
+          "offset": 114,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "whitelist_count",
+          "offset": 118,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::BAN_STATE_CHANGE"
+    },
+    "WhitelistStateChange": {
+      "kind": "message",
+      "size": 51,
+      "fields": [
+        {
+          "name": "action",
+          "offset": 12,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "af",
+          "offset": 13,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "prefix_len",
+          "offset": 14,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "addr",
+          "offset": 15,
+          "size": 16,
+          "type": "addr16",
+          "tail": false
+        },
+        {
+          "name": "device",
+          "offset": 31,
+          "size": 16,
+          "type": "str[16]",
+          "tail": false
+        },
+        {
+          "name": "whitelist_count",
+          "offset": 47,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::WHITELIST_STATE_CHANGE"
+    },
+    "CmdResult": {
+      "kind": "message",
+      "size": 37,
+      "fields": [
+        {
+          "name": "original_cmd",
+          "offset": 12,
+          "size": 2,
+          "type": "u16",
+          "tail": false
+        },
+        {
+          "name": "pad",
+          "offset": 14,
+          "size": 2,
+          "type": "i16",
+          "tail": false
+        },
+        {
+          "name": "error_code",
+          "offset": 16,
+          "size": 4,
+          "type": "i32",
+          "tail": false
+        },
+        {
+          "name": "af",
+          "offset": 20,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "addr",
+          "offset": 21,
+          "size": 16,
+          "type": "addr16",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::CMD_RESULT"
+    },
+    "ConfigAck": {
+      "kind": "message",
+      "size": 20,
+      "fields": [
+        {
+          "name": "applied_flags",
+          "offset": 12,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "rejected_flags",
+          "offset": 16,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::CONFIG_ACK"
+    },
+    "ConfigChange": {
+      "kind": "message",
+      "size": 116,
+      "fields": [
+        {
+          "name": "flags",
+          "offset": 12,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "ban_time",
+          "offset": 16,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "rate_window_seconds",
+          "offset": 20,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "max_packets_per_second",
+          "offset": 24,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "max_bytes_per_second",
+          "offset": 32,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "max_syn_per_second",
+          "offset": 40,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "max_udp_per_second",
+          "offset": 48,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "max_icmp_per_second",
+          "offset": 56,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "max_ack_per_second",
+          "offset": 64,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "max_rst_per_second",
+          "offset": 72,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "max_fin_per_second",
+          "offset": 80,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "dynamic_threshold_flags",
+          "offset": 88,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "dynamic_threshold_ratio_x100",
+          "offset": 92,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "baseline_pps",
+          "offset": 96,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "baseline_bps",
+          "offset": 104,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "ddos_ban_duration",
+          "offset": 112,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::CONFIG_CHANGE"
+    },
+    "BanEntry": {
+      "kind": "struct",
+      "size": 94,
+      "fields": [
+        {
+          "name": "af",
+          "offset": 0,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "is_permanent",
+          "offset": 1,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "duration_secs",
+          "offset": 2,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "banned_at",
+          "offset": 6,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "addr",
+          "offset": 14,
+          "size": 16,
+          "type": "addr16",
+          "tail": false
+        },
+        {
+          "name": "jail_name",
+          "offset": 30,
+          "size": 32,
+          "type": "str[32]",
+          "tail": false
+        },
+        {
+          "name": "reason",
+          "offset": 62,
+          "size": 32,
+          "type": "str[32]",
+          "tail": false
+        }
+      ]
+    },
+    "ListBansResponse": {
+      "kind": "message",
+      "size": 24,
+      "fields": [
+        {
+          "name": "count",
+          "offset": 12,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "total",
+          "offset": 16,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "offset",
+          "offset": 20,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "tail",
+          "offset": 24,
+          "size": 94,
+          "type": "BanEntry",
+          "tail": true
+        }
+      ],
+      "msg_type": "MsgType::LIST_BANS_RESPONSE",
+      "tail": {
+        "elem": "BanEntry",
+        "elem_size": 94,
+        "fixed_size": 24,
+        "max_entries": 696
+      }
+    },
+    "StatsResponse": {
+      "kind": "message",
+      "size": 60,
+      "fields": [
+        {
+          "name": "current_bans",
+          "offset": 12,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "total_bans",
+          "offset": 20,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "total_unbans",
+          "offset": 28,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "whitelist_count",
+          "offset": 36,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "packets_dropped",
+          "offset": 44,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "packets_accepted",
+          "offset": 52,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::STATS_RESPONSE"
+    },
+    "WhitelistEntry": {
+      "kind": "struct",
+      "size": 34,
+      "fields": [
+        {
+          "name": "af",
+          "offset": 0,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "prefix_len",
+          "offset": 1,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "addr",
+          "offset": 2,
+          "size": 16,
+          "type": "addr16",
+          "tail": false
+        },
+        {
+          "name": "device",
+          "offset": 18,
+          "size": 16,
+          "type": "str[16]",
+          "tail": false
+        }
+      ]
+    },
+    "ListWhitelistResponse": {
+      "kind": "message",
+      "size": 16,
+      "fields": [
+        {
+          "name": "count",
+          "offset": 12,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "tail",
+          "offset": 16,
+          "size": 34,
+          "type": "WhitelistEntry",
+          "tail": true
+        }
+      ],
+      "msg_type": "MsgType::LIST_WHITELIST_RESPONSE",
+      "tail": {
+        "elem": "WhitelistEntry",
+        "elem_size": 34,
+        "fixed_size": 16,
+        "max_entries": 1927
+      }
+    },
+    "RateEntry": {
+      "kind": "struct",
+      "size": 84,
+      "fields": [
+        {
+          "name": "af",
+          "offset": 0,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "pad",
+          "offset": 1,
+          "size": 3,
+          "type": "u8[3]",
+          "tail": false
+        },
+        {
+          "name": "packets",
+          "offset": 4,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "bytes",
+          "offset": 12,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "syn_packets",
+          "offset": 20,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "udp_packets",
+          "offset": 28,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "icmp_packets",
+          "offset": 36,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "ack_packets",
+          "offset": 44,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "rst_packets",
+          "offset": 52,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "fin_packets",
+          "offset": 60,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "addr",
+          "offset": 68,
+          "size": 16,
+          "type": "addr16",
+          "tail": false
+        }
+      ]
+    },
+    "ListRatesResponse": {
+      "kind": "message",
+      "size": 36,
+      "fields": [
+        {
+          "name": "count",
+          "offset": 12,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "total",
+          "offset": 16,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "global_pps",
+          "offset": 20,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "global_bps",
+          "offset": 28,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "tail",
+          "offset": 36,
+          "size": 84,
+          "type": "RateEntry",
+          "tail": true
+        }
+      ],
+      "msg_type": "MsgType::LIST_RATES_RESPONSE",
+      "tail": {
+        "elem": "RateEntry",
+        "elem_size": 84,
+        "fixed_size": 36,
+        "max_entries": 779
+      }
+    },
+    "UdpPortItem": {
+      "kind": "struct",
+      "size": 26,
+      "fields": [
+        {
+          "name": "port",
+          "offset": 0,
+          "size": 2,
+          "type": "u16",
+          "tail": false
+        },
+        {
+          "name": "packets",
+          "offset": 2,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "bytes",
+          "offset": 10,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "last_seen_secs",
+          "offset": 18,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        }
+      ]
+    },
+    "IcmpTypeItem": {
+      "kind": "struct",
+      "size": 26,
+      "fields": [
+        {
+          "name": "type",
+          "offset": 0,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "code",
+          "offset": 1,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "packets",
+          "offset": 2,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "bytes",
+          "offset": 10,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "last_seen_secs",
+          "offset": 18,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        }
+      ]
+    },
+    "ScannerItem": {
+      "kind": "struct",
+      "size": 32,
+      "fields": [
+        {
+          "name": "af",
+          "offset": 0,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "pad",
+          "offset": 1,
+          "size": 3,
+          "type": "u8[3]",
+          "tail": false
+        },
+        {
+          "name": "addr",
+          "offset": 4,
+          "size": 16,
+          "type": "addr16",
+          "tail": false
+        },
+        {
+          "name": "metric",
+          "offset": 20,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "packets",
+          "offset": 24,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        }
+      ]
+    },
+    "AnalysisResponse": {
+      "kind": "message",
+      "size": 4756,
+      "fields": [
+        {
+          "name": "pkt_sizes",
+          "offset": 12,
+          "size": 40,
+          "type": "u64[5]",
+          "tail": false
+        },
+        {
+          "name": "ttl_dist",
+          "offset": 52,
+          "size": 48,
+          "type": "u64[6]",
+          "tail": false
+        },
+        {
+          "name": "ip_frag_total",
+          "offset": 100,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "ip_frag_count",
+          "offset": 108,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "udp_port_count",
+          "offset": 116,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "udp_port_capacity",
+          "offset": 120,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "udp_ports",
+          "offset": 124,
+          "size": 1664,
+          "type": "UdpPortItem[64]",
+          "tail": false
+        },
+        {
+          "name": "icmp_type_count",
+          "offset": 1788,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "icmp_type_capacity",
+          "offset": 1792,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "icmp_types",
+          "offset": 1796,
+          "size": 1664,
+          "type": "IcmpTypeItem[64]",
+          "tail": false
+        },
+        {
+          "name": "port_scan_count",
+          "offset": 3460,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "port_scan_threshold",
+          "offset": 3464,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "port_scanners",
+          "offset": 3468,
+          "size": 640,
+          "type": "ScannerItem[20]",
+          "tail": false
+        },
+        {
+          "name": "service_probe_count",
+          "offset": 4108,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "service_probe_threshold",
+          "offset": 4112,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "service_probes",
+          "offset": 4116,
+          "size": 640,
+          "type": "ScannerItem[20]",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::ANALYSIS_RESPONSE"
+    },
+    "DaemonRegisterAck": {
+      "kind": "message",
+      "size": 13,
+      "fields": [
+        {
+          "name": "accepted",
+          "offset": 12,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::DAEMON_REGISTER_ACK"
+    },
+    "BanIp": {
+      "kind": "message",
+      "size": 65,
+      "fields": [
+        {
+          "name": "af",
+          "offset": 12,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "duration_secs",
+          "offset": 13,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "addr",
+          "offset": 17,
+          "size": 16,
+          "type": "addr16",
+          "tail": false
+        },
+        {
+          "name": "reason",
+          "offset": 33,
+          "size": 32,
+          "type": "str[32]",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::BAN_IP"
+    },
+    "UnbanIp": {
+      "kind": "message",
+      "size": 65,
+      "fields": [
+        {
+          "name": "af",
+          "offset": 12,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "duration_secs",
+          "offset": 13,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "addr",
+          "offset": 17,
+          "size": 16,
+          "type": "addr16",
+          "tail": false
+        },
+        {
+          "name": "reason",
+          "offset": 33,
+          "size": 32,
+          "type": "str[32]",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::UNBAN_IP"
+    },
+    "SetConfig": {
+      "kind": "message",
+      "size": 116,
+      "fields": [
+        {
+          "name": "flags",
+          "offset": 12,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "ban_time",
+          "offset": 16,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "rate_window_seconds",
+          "offset": 20,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "max_packets_per_second",
+          "offset": 24,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "max_bytes_per_second",
+          "offset": 32,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "max_syn_per_second",
+          "offset": 40,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "max_udp_per_second",
+          "offset": 48,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "max_icmp_per_second",
+          "offset": 56,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "max_ack_per_second",
+          "offset": 64,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "max_rst_per_second",
+          "offset": 72,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "max_fin_per_second",
+          "offset": 80,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "dynamic_threshold_flags",
+          "offset": 88,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "dynamic_threshold_ratio_x100",
+          "offset": 92,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "baseline_pps",
+          "offset": 96,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "baseline_bps",
+          "offset": 104,
+          "size": 8,
+          "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "ddos_ban_duration",
+          "offset": 112,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::SET_CONFIG"
+    },
+    "ListBansQuery": {
+      "kind": "message",
+      "size": 20,
+      "fields": [
+        {
+          "name": "offset",
+          "offset": 12,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "limit",
+          "offset": 16,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::LIST_BANS_QUERY"
+    },
+    "AddWhitelist": {
+      "kind": "message",
+      "size": 46,
+      "fields": [
+        {
+          "name": "af",
+          "offset": 12,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "prefix_len",
+          "offset": 13,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "addr",
+          "offset": 14,
+          "size": 16,
+          "type": "addr16",
+          "tail": false
+        },
+        {
+          "name": "device",
+          "offset": 30,
+          "size": 16,
+          "type": "str[16]",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::ADD_WHITELIST"
+    },
+    "RemoveWhitelist": {
+      "kind": "message",
+      "size": 46,
+      "fields": [
+        {
+          "name": "af",
+          "offset": 12,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "prefix_len",
+          "offset": 13,
+          "size": 1,
+          "type": "u8",
+          "tail": false
+        },
+        {
+          "name": "addr",
+          "offset": 14,
+          "size": 16,
+          "type": "addr16",
+          "tail": false
+        },
+        {
+          "name": "device",
+          "offset": 30,
+          "size": 16,
+          "type": "str[16]",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::REMOVE_WHITELIST"
+    },
+    "StatsQuery": {
+      "kind": "message",
+      "size": 12,
+      "fields": [],
+      "msg_type": "MsgType::STATS_QUERY"
+    },
+    "ListWhitelistQuery": {
+      "kind": "message",
+      "size": 12,
+      "fields": [],
+      "msg_type": "MsgType::LIST_WHITELIST_QUERY"
+    },
+    "ListRatesQuery": {
+      "kind": "message",
+      "size": 12,
+      "fields": [],
+      "msg_type": "MsgType::LIST_RATES_QUERY"
+    },
+    "AnalysisQuery": {
+      "kind": "message",
+      "size": 12,
+      "fields": [],
+      "msg_type": "MsgType::ANALYSIS_QUERY"
+    },
+    "DaemonRegister": {
+      "kind": "message",
+      "size": 12,
+      "fields": [],
+      "msg_type": "MsgType::DAEMON_REGISTER"
+    }
+  }
+}
