@@ -1,6 +1,6 @@
 # 内核模块逻辑穷举审计报告
 
-> 审计范围：`/root/linux-firewall-kmod/src/kernel-module/` 全部 11 个文件
+> 审计范围：`/opt/projects/linux-firewall-kmod/src/kernel-module/` 全部 11 个文件
 > 审计日期：2026-06-26
 
 ---

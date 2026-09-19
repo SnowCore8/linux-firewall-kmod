@@ -45,6 +45,8 @@ enum {
   FW_NL_CONFIG_CHANGE = 19,  /* 内核 → 守护进程：procfs 配置变更 */
   FW_NL_ANALYSIS_QUERY = 20, /* 守护进程 → 内核：查询分析数据 */
   FW_NL_ANALYSIS_RESPONSE = 21, /* 内核 → 守护进程：分析数据响应 */
+  FW_NL_DAEMON_REGISTER = 22,   /* 守护进程 → 内核：注册为唯一守护进程 */
+  FW_NL_DAEMON_REGISTER_ACK = 23, /* 内核 → 守护进程：注册确认/拒绝 */
 };
 
 /* 消息头结构（20 字节） */
@@ -314,6 +316,12 @@ static struct sock *fw_nl_sock = NULL;
 
 /* 序列号计数器 */
 static atomic_t fw_nl_seq = ATOMIC_INIT(0);
+
+/* 唯一守护进程注册：portid=0 表示无守护进程注册 */
+static u32 registered_daemon_portid = 0;
+static unsigned long last_daemon_activity = 0;
+/* 守护进程超时（jiffies）：30 秒无消息视为死亡 */
+#define DAEMON_TIMEOUT (30 * HZ)
 
 /**
  * fw_netlink_send_event - 向守护进程发送 DDoS 事件
@@ -1381,10 +1389,50 @@ int fw_netlink_send_list_rates_response(u32 seq, u32 portid) {
 }
 
 /**
+ * fw_netlink_send_register_ack - 发送注册确认/拒绝响应
+ * @portid: 目标 portid
+ * @seq: 序列号
+ * @accepted: 1=接受, 0=拒绝
+ */
+static void fw_netlink_send_register_ack(u32 portid, u32 seq, u8 accepted) {
+  struct sk_buff *skb;
+  struct nlmsghdr *nlh;
+  struct fw_nlmsg_hdr *resp;
+  int ret;
+
+  if (!fw_nl_sock)
+    return;
+
+  skb = nlmsg_new(sizeof(*resp), GFP_ATOMIC);
+  if (!skb)
+    return;
+
+  nlh = nlmsg_put(skb, 0, seq, NLMSG_DONE, sizeof(*resp), 0);
+  if (!nlh) {
+    kfree_skb(skb);
+    return;
+  }
+
+  resp = nlmsg_data(nlh);
+  resp->magic = cpu_to_be32(FW_NL_MAGIC);
+  resp->msg_type = cpu_to_be16(FW_NL_DAEMON_REGISTER_ACK);
+  resp->msg_len = cpu_to_be16(sizeof(*resp));
+  resp->seq = cpu_to_be32(seq);
+  /* accepted 字段紧跟在 hdr 后面（复用 pad 字节） */
+  ((u8 *)resp)[sizeof(*resp) - 1] = accepted;
+
+  ret = netlink_unicast(fw_nl_sock, skb, portid, MSG_DONTWAIT);
+  if (ret < 0) {
+    pr_warn("netlink: failed to send register ack to portid %u\n", portid);
+  }
+}
+
+/**
  * fw_netlink_recv_msg - 处理守护进程发来的消息
  * @skb: 接收到的 netlink 消息
- * 
+ *
  * 解析守护进程发来的封禁/解封指令并执行。
+ * 强制单守护进程 exclusivity：只接受已注册 portid 的消息。
  */
 static void fw_netlink_recv_msg(struct sk_buff *skb) {
   struct nlmsghdr *nlh;
@@ -1428,9 +1476,60 @@ static void fw_netlink_recv_msg(struct sk_buff *skb) {
 
     /* 获取发送方 portid（用于单播回复） */
     u32 sender_portid = NETLINK_CB(skb).portid;
+    u16 msg_type = be16_to_cpu(hdr->msg_type);
+
+    /* ====================================================================
+     * 单守护进程 exclusivity 检查
+     * 内核模块仅允许一个守护进程注册并通信。
+     * 超时机制：30 秒无消息视为死亡，允许新守护进程接管。
+     * ==================================================================== */
+    if (msg_type == FW_NL_DAEMON_REGISTER) {
+      /* 注册请求：检查是否已有活跃守护进程 */
+      if (registered_daemon_portid != 0 &&
+          sender_portid != registered_daemon_portid &&
+          time_before(jiffies, last_daemon_activity + DAEMON_TIMEOUT)) {
+        /* 已有活跃守护进程，拒绝新注册 */
+        pr_warn("netlink: rejecting daemon register from portid %u "
+                "(already registered: %u)\n",
+                sender_portid, registered_daemon_portid);
+        fw_netlink_send_register_ack(sender_portid, be32_to_cpu(hdr->seq), 0);
+        goto next;
+      }
+      /* 注册成功：更新 portid 和活动时间为当前 jiffies */
+      registered_daemon_portid = sender_portid;
+      last_daemon_activity = jiffies;
+      pr_info("netlink: daemon registered portid=%u\n", sender_portid);
+      fw_netlink_send_register_ack(sender_portid, be32_to_cpu(hdr->seq), 1);
+      goto next;
+    }
+
+    /* 非注册消息：检查发送方是否为已注册守护进程 */
+    if (registered_daemon_portid == 0) {
+      pr_warn_ratelimited("netlink: no daemon registered, dropping msg type=%u from portid=%u\n",
+                          msg_type, sender_portid);
+      goto next;
+    }
+
+    if (sender_portid != registered_daemon_portid) {
+      /* 检查已注册守护进程是否超时 */
+      if (time_before(jiffies, last_daemon_activity + DAEMON_TIMEOUT)) {
+        pr_warn_ratelimited("netlink: rejecting msg from unregistered portid %u "
+                            "(registered: %u)\n",
+                            sender_portid, registered_daemon_portid);
+        goto next;
+      }
+      /* 已注册守护进程超时，允许新 portid 接管 */
+      pr_info("netlink: registered daemon portid=%u timed out, "
+              "allowing portid=%u to take over\n",
+              registered_daemon_portid, sender_portid);
+      registered_daemon_portid = sender_portid;
+    }
+
+    /* 更新活动时间 */
+    last_daemon_activity = jiffies;
 
     /* 根据消息类型处理 */
-    switch (be16_to_cpu(hdr->msg_type)) {
+    switch (msg_type) {
     case FW_NL_BAN_IP:
       if (payload_len < (int)sizeof(struct fw_nl_ban_cmd)) {
         pr_warn("netlink: BAN_IP payload too short: %d\n", payload_len);
@@ -1766,6 +1865,7 @@ void fw_netlink_exit(void) {
   if (fw_nl_sock) {
     netlink_kernel_release(fw_nl_sock);
     fw_nl_sock = NULL;
+    registered_daemon_portid = 0;
     pr_info("netlink socket released\n");
   }
 }
