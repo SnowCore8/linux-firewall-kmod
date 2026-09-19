@@ -147,9 +147,32 @@ class Contract:
 
 
 def _strip_comment(line: str) -> str:
-    """去掉 ``#`` 起的行尾注释（本格式无字符串字面量，故可简单切分）。"""
-    idx = line.find("#")
-    return line if idx < 0 else line[:idx]
+    """去掉 ``#`` 起的行尾注释。
+
+    必须**跳过双引号内的内容**：文本协议契约（``textproto``）里有锚点字符串，
+    例如 ``where = "docs/.../procfs.md:Remaining(s)"`` 甚至 ``"...:### 封禁 IP 列表"``，
+    其中可能含 ``#``。早期实现直接 ``find("#")`` 会把字符串从 ``#`` 处截断，
+    产出「锚点被切掉一半」的畸形值，而且不报错——是静默的数据损坏。
+    """
+    out: list[str] = []
+    in_str = False
+    escaped = False
+    for ch in line:
+        if in_str:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == "#":
+            break
+        if ch == '"':
+            in_str = True
+        out.append(ch)
+    return "".join(out)
 
 
 _ARRAY_SUFFIX_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\]$")
@@ -957,13 +980,627 @@ def emit_json(contract: Contract, notes: List[str]) -> str:
 
 
 # ============================================================================
+# 文本协议契约（procfs）
+#
+# 与二进制 IDL 共用同一份生成器、同一套「生成物 vs 手写源码」的第三方校验
+# 纪律，但形状完全不同：二进制侧关心字节布局，文本侧关心「命令文法 + 行文本
+# 格式 + 条目权限 + 容量事实 + 已核实缺陷」。
+# ============================================================================
+
+
+class ProcFile:
+    """procfs 的一个条目：路径、权限、读侧格式强度。"""
+
+    __slots__ = ("name", "line", "mode", "access", "read_format", "summary")
+
+    def __init__(self, name: str, line: int):
+        self.name = name
+        self.line = line
+        self.mode = 0
+        self.access = ""
+        self.read_format = "unstable"
+        self.summary = ""
+
+
+class WriteGrammar:
+    __slots__ = ("target", "line", "forms")
+
+    def __init__(self, target: str, line: int):
+        self.target = target
+        self.line = line
+        self.forms: List[Tuple[str, str]] = []  # (命令形式, "Enum::MEMBER")
+
+
+class KeyBlock:
+    __slots__ = ("target", "line", "keys")
+
+    def __init__(self, target: str, line: int):
+        self.target = target
+        self.line = line
+        self.keys: List[Tuple[str, str]] = []  # (key, 数值类型)
+
+
+class LimitBlock:
+    __slots__ = ("target", "line", "entries", "note", "where")
+
+    def __init__(self, target: str, line: int):
+        self.target = target
+        self.line = line
+        self.entries: Optional[int] = None
+        self.note = ""
+        self.where = ""
+
+
+class Defect:
+    """一条已核实的实现缺陷；`where` 是「文件:锚点」，校验器据此核对它仍在。"""
+
+    __slots__ = ("name", "line", "severity", "where", "text")
+
+    def __init__(self, name: str, line: int):
+        self.name = name
+        self.line = line
+        self.severity = ""
+        self.where = ""
+        self.text = ""
+
+
+class TextProtoContract:
+    def __init__(self, path: str):
+        self.path = path
+        self.name = ""
+        self.namespace = ""
+        self.root = ""
+        self.enums: Dict[str, EnumDecl] = {}
+        self.enum_order: List[str] = []
+        self.files: Dict[str, ProcFile] = {}
+        self.file_order: List[str] = []
+        self.writes: Dict[str, WriteGrammar] = {}
+        self.keys: Dict[str, KeyBlock] = {}
+        self.limits: Dict[str, LimitBlock] = {}
+        self.limit_order: List[str] = []
+        self.defects: List[Defect] = []
+
+
+_KV_RE = re.compile(r"^(\w+)\s*=\s*(.*)$")
+_FORM_RE = re.compile(r'^"([^"]*)"\s*=\s*(\w+)\s*::\s*(\w+)$')
+
+READ_FORMATS = ("machine", "unstable", "none")
+ACCESS_VALUES = ("r", "rw")
+SEVERITIES = ("low", "medium", "high")
+NUM_TYPES = ("u8", "u16", "u32", "u64", "i32", "i64")
+
+
+def _unquote(v: str) -> str:
+    if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
+        return v[1:-1]
+    return v
+
+
+def _kv(path: str, lineno: int, text: str) -> Tuple[str, str]:
+    m = _KV_RE.fullmatch(text)
+    if not m:
+        raise ContractError(f"{path}:{lineno}: 期望 '<字段> = <值>': {text!r}")
+    return m.group(1), _unquote(m.group(2).strip())
+
+
+def detect_format(path: str) -> str:
+    """按首个有效行判断契约类型：``textproto ...`` 走文本协议，其余走二进制。"""
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            s = _strip_comment(line).strip()
+            if s:
+                return "textproto" if s.startswith("textproto ") else "binary"
+    raise ContractError(f"{path}: 空文件")
+
+
+def parse_textproto(path: str) -> TextProtoContract:
+    contract = TextProtoContract(path)
+    with open(path, "r", encoding="utf-8") as fh:
+        raw_lines = fh.readlines()
+    lines = [(i + 1, _strip_comment(l).strip()) for i, l in enumerate(raw_lines)]
+
+    idx = 0
+    block_header: Optional[str] = None
+    block_open_line = 0
+    pending: List[Tuple[int, str]] = []
+
+    while idx < len(lines):
+        lineno, text = lines[idx]
+        if not text:
+            idx += 1
+            continue
+        if block_header is None:
+            if text.endswith("{"):
+                block_header = text[:-1].strip()
+                block_open_line = lineno
+                pending = []
+            else:
+                if text == "}":
+                    raise ContractError(f"{path}:{lineno}: 出现孤立的 '}}'")
+                _textproto_toplevel(contract, text, lineno)
+            idx += 1
+            continue
+        if text == "}":
+            _textproto_block(contract, block_header, block_open_line, pending)
+            block_header = None
+            pending = []
+        elif text.endswith("{"):
+            raise ContractError(f"{path}:{lineno}: 不支持嵌套块")
+        else:
+            pending.append((lineno, text))
+        idx += 1
+
+    if block_header is not None:
+        raise ContractError(f"{path}:{block_open_line}: 块未闭合（缺少 '}}'）")
+    return contract
+
+
+def _textproto_toplevel(contract: TextProtoContract, text: str, lineno: int) -> None:
+    m = re.fullmatch(r"textproto\s+(\w+)", text)
+    if m:
+        contract.name = m.group(1)
+        return
+    m = re.fullmatch(r"namespace\s+(\w+)", text)
+    if m:
+        contract.namespace = m.group(1)
+        return
+    m = re.fullmatch(r'root\s+"([^"]*)"', text)
+    if m:
+        contract.root = m.group(1)
+        return
+    raise ContractError(f"{contract.path}:{lineno}: 无法解析的顶层声明: {text!r}")
+
+
+def _textproto_block(
+    contract: TextProtoContract,
+    header: str,
+    open_line: int,
+    body: List[Tuple[int, str]],
+) -> None:
+    path = contract.path
+
+    m = re.fullmatch(r"enum\s+(\w+)\s*:\s*(\w+)", header)
+    if m:
+        width = m.group(2)
+        if width not in SCALARS or width.startswith("i"):
+            raise ContractError(f"{path}:{open_line}: enum 宽度必须是无符号整数类型: {width}")
+        if m.group(1) in contract.enums:
+            raise ContractError(f"{path}:{open_line}: enum {m.group(1)} 重复定义")
+        decl = EnumDecl(m.group(1), open_line, width)
+        for lineno, text in body:
+            mm = re.fullmatch(r"(\w+)\s*=\s*(-?\d+)", text)
+            if not mm:
+                raise ContractError(f"{path}:{lineno}: 无法解析枚举成员: {text!r}")
+            decl.members.append((mm.group(1), int(mm.group(2))))
+        contract.enums[decl.name] = decl
+        contract.enum_order.append(decl.name)
+        return
+
+    m = re.fullmatch(r"file\s+(\w+)", header)
+    if m:
+        name = m.group(1)
+        if name in contract.files:
+            raise ContractError(f"{path}:{open_line}: file {name} 重复定义")
+        decl = ProcFile(name, open_line)
+        for lineno, text in body:
+            k, v = _kv(path, lineno, text)
+            if k == "mode":
+                try:
+                    decl.mode = int(v, 8)
+                except ValueError:
+                    raise ContractError(f"{path}:{lineno}: mode 必须为八进制字面量: {v!r}")
+            elif k == "access":
+                decl.access = v
+            elif k == "read_format":
+                decl.read_format = v
+            elif k == "summary":
+                decl.summary = v
+            else:
+                raise ContractError(f"{path}:{lineno}: file 不认识的字段 {k!r}")
+        contract.files[name] = decl
+        contract.file_order.append(name)
+        return
+
+    m = re.fullmatch(r"write\s+(\w+)", header)
+    if m:
+        target = m.group(1)
+        if target in contract.writes:
+            raise ContractError(f"{path}:{open_line}: write {target} 重复定义")
+        decl = WriteGrammar(target, open_line)
+        for lineno, text in body:
+            fm = _FORM_RE.fullmatch(text)
+            if not fm:
+                raise ContractError(
+                    f'{path}:{lineno}: 写文法应为 \'"<形式>" = Enum::MEMBER\': {text!r}'
+                )
+            decl.forms.append((fm.group(1), f"{fm.group(2)}::{fm.group(3)}"))
+        contract.writes[target] = decl
+        return
+
+    m = re.fullmatch(r"key\s+(\w+)", header)
+    if m:
+        target = m.group(1)
+        if target in contract.keys:
+            raise ContractError(f"{path}:{open_line}: key {target} 重复定义")
+        decl = KeyBlock(target, open_line)
+        for lineno, text in body:
+            km = re.fullmatch(r'"([^"]*)"\s*=\s*(\w+)', text)
+            if not km:
+                raise ContractError(f'{path}:{lineno}: key 行应为 \'"<key>" = <数值类型>\': {text!r}')
+            decl.keys.append((km.group(1), km.group(2)))
+        contract.keys[target] = decl
+        return
+
+    m = re.fullmatch(r"limit\s+(\w+)", header)
+    if m:
+        target = m.group(1)
+        if target in contract.limits:
+            raise ContractError(f"{path}:{open_line}: limit {target} 重复定义")
+        decl = LimitBlock(target, open_line)
+        for lineno, text in body:
+            k, v = _kv(path, lineno, text)
+            if k == "entries":
+                if v == "none":
+                    decl.entries = None
+                else:
+                    try:
+                        decl.entries = int(v)
+                    except ValueError:
+                        raise ContractError(f"{path}:{lineno}: entries 应为正整数或 none: {v!r}")
+            elif k == "note":
+                decl.note = v
+            elif k == "where":
+                decl.where = v
+            else:
+                raise ContractError(f"{path}:{lineno}: limit 不认识的字段 {k!r}")
+        contract.limits[target] = decl
+        contract.limit_order.append(target)
+        return
+
+    m = re.fullmatch(r"defect\s+(\w+)", header)
+    if m:
+        decl = Defect(m.group(1), open_line)
+        for lineno, text in body:
+            k, v = _kv(path, lineno, text)
+            if k == "severity":
+                decl.severity = v
+            elif k == "where":
+                decl.where = v
+            elif k == "text":
+                decl.text = v
+            else:
+                raise ContractError(f"{path}:{lineno}: defect 不认识的字段 {k!r}")
+        contract.defects.append(decl)
+        return
+
+    raise ContractError(f"{path}:{open_line}: 无法解析的块头: {header!r}")
+
+
+def validate_textproto(contract: TextProtoContract) -> List[str]:
+    notes: List[str] = []
+    path = contract.path
+
+    if not contract.name:
+        raise ContractError("缺少 'textproto <名字>' 声明")
+    if not contract.namespace:
+        raise ContractError("缺少 'namespace <名字>' 声明")
+    if not contract.root.startswith("/"):
+        raise ContractError(f"root 必须是绝对路径，实际 {contract.root!r}")
+
+    for name in contract.enum_order:
+        decl = contract.enums[name]
+        bits = SCALARS[decl.width] * 8
+        seen: Dict[int, str] = {}
+        for member, value in decl.members:
+            if not (0 <= value < (1 << bits)):
+                raise ContractError(f"enum {name}: {member} = {value} 超出 {decl.width} 取值范围")
+            if value in seen:
+                raise ContractError(f"enum {name}: {member} 与 {seen[value]} 取值重复（{value}）")
+            seen[value] = member
+        notes.append(f"enum {name}: {len(decl.members)} 个成员，宽度 {decl.width}")
+
+    if not contract.files:
+        raise ContractError("契约未声明任何 file 条目")
+
+    for name in contract.file_order:
+        f = contract.files[name]
+        if f.mode == 0:
+            raise ContractError(f"file {name}: 缺少 mode")
+        if f.access not in ACCESS_VALUES:
+            raise ContractError(f"file {name}: access 必须是 {'/'.join(ACCESS_VALUES)}，实际 {f.access!r}")
+        if f.read_format not in READ_FORMATS:
+            raise ContractError(
+                f"file {name}: read_format 必须是 {'/'.join(READ_FORMATS)}，实际 {f.read_format!r}"
+            )
+        if f.access == "r" and f.read_format == "none":
+            raise ContractError(f"file {name}: 只读文件不能声明 read_format = none")
+        notes.append(
+            f"file {name}: mode {f.mode:04o} {f.access} read_format={f.read_format}"
+        )
+
+    # 写文法必须指向已声明且可写的条目；可写条目必须有写文法
+    for target, decl in contract.writes.items():
+        f = contract.files.get(target)
+        if f is None:
+            raise ContractError(f"write {target}: 对应的 file 未声明")
+        if "w" not in f.access:
+            raise ContractError(f"write {target}: 该条目 access={f.access}，不可写")
+        if not decl.forms:
+            raise ContractError(f"write {target}: 未声明任何命令形式")
+        forms = [form for form, _ in decl.forms]
+        if len(set(forms)) != len(forms):
+            raise ContractError(f"write {target}: 命令形式重复")
+        for form, ref in decl.forms:
+            enum_name, member = ref.split("::")
+            if enum_name not in contract.enums:
+                raise ContractError(f"write {target}: 引用了未定义的 enum {enum_name}")
+            if member not in dict(contract.enums[enum_name].members):
+                raise ContractError(f"write {target}: {ref} 未在 enum 中定义")
+        notes.append(f"write {target}: {len(decl.forms)} 种形式")
+    for name in contract.file_order:
+        if "w" in contract.files[name].access and name not in contract.writes:
+            raise ContractError(f"file {name}: 可写但缺少 write 块")
+
+    # key 块只能挂 machine 文件上；machine 文件必须有 key 块
+    seen_key: Dict[str, str] = {}
+    for target, decl in contract.keys.items():
+        f = contract.files.get(target)
+        if f is None:
+            raise ContractError(f"key {target}: 对应的 file 未声明")
+        if f.read_format != "machine":
+            raise ContractError(
+                f"key {target}: 只有 read_format = machine 的条目才有机器可读 key，"
+                f"实际为 {f.read_format}"
+            )
+        keys = [k for k, _ in decl.keys]
+        if len(set(keys)) != len(keys):
+            raise ContractError(f"key {target}: key 名重复")
+        for k, t in decl.keys:
+            if t not in NUM_TYPES:
+                raise ContractError(f"key {target}: {k} 的数值类型 {t!r} 不在 {NUM_TYPES}")
+            # Rust 产物把全部 key 聚在同一个模块里，重名会直接编译失败
+            if k in seen_key and seen_key[k] != target:
+                raise ContractError(
+                    f"key {target}: {k} 与 key {seen_key[k]} 重名（Rust 侧聚合在同一模块内）"
+                )
+            seen_key[k] = target
+        notes.append(f"key {target}: {len(decl.keys)} 个机器可读字段")
+    for name in contract.file_order:
+        if contract.files[name].read_format == "machine" and name not in contract.keys:
+            raise ContractError(f"file {name}: 声明为 machine 但缺少 key 块")
+
+    for target in contract.limit_order:
+        decl = contract.limits[target]
+        if decl.entries is not None and decl.entries <= 0:
+            raise ContractError(f"limit {target}: entries 必须为正整数或 none")
+        if not decl.where or ":" not in decl.where:
+            raise ContractError(f"limit {target}: 必须给出 'where = <文件>:<锚点>' 供校验器核对")
+        desc = "无上限" if decl.entries is None else f"{decl.entries} 条"
+        notes.append(f"limit {target}: {desc}（锚点 {decl.where}）")
+
+    for decl in contract.defects:
+        if decl.severity not in SEVERITIES:
+            raise ContractError(
+                f"defect {decl.name}: severity 必须是 {'/'.join(SEVERITIES)}，实际 {decl.severity!r}"
+            )
+        if not decl.where or ":" not in decl.where:
+            raise ContractError(f"defect {decl.name}: 必须给出 'where = <文件>:<锚点>'")
+        if not decl.text:
+            raise ContractError(f"defect {decl.name}: 缺少 text")
+    if contract.defects:
+        notes.append(f"缺陷记录: {len(contract.defects)} 条（由 verify_*.py 到源码核对锚点）")
+
+    return notes
+
+
+def _tp_macro(prefix: str, name: str) -> str:
+    return prefix + upper_snake(name)
+
+
+def _rust_str(s: str) -> str:
+    """把任意文本转成合法的 Rust 字符串字面量。
+
+    不能用 ``repr()``：那是 Python 语法，输出的是单引号字面量，Rust 会把它
+    当成字符字面量而编译失败。命令形式里含 ``<`` ``>`` 与空格，必须正确转义。
+    """
+    out = ['"']
+    for ch in s:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ord(ch) < 0x20:
+            out.append(f"\\u{{{ord(ch):x}}}")
+        else:
+            out.append(ch)
+    out.append('"')
+    return "".join(out)
+
+
+def emit_c_textproto(contract: TextProtoContract, guard: str) -> str:
+    L: List[str] = []
+    L.append("/* 本文件由 contract/gen.py 从 .fwidl 生成，请勿手改。 */")
+    L.append("/* 单一真相源: %s（文本协议契约，非二进制线格式） */" % os.path.basename(contract.path))
+    L.append("")
+    L.append(f"#ifndef {guard}")
+    L.append(f"#define {guard}")
+    L.append("")
+    L.append("/* procfs 根目录 */")
+    L.append(f'#define FW_PROCFS_ROOT "{contract.root}"')
+    L.append("")
+
+    L.append("/* 条目路径与权限位（权限位即 proc_create 的 mode 实参） */")
+    for name in contract.file_order:
+        f = contract.files[name]
+        mac = _tp_macro("FW_PROCFS_", name)
+        L.append(f'#define {mac}_PATH "{contract.root}/{f.name}"')
+        L.append(f"#define {mac}_MODE 0{f.mode:03o}")
+    L.append("")
+
+    for ename in contract.enum_order:
+        decl = contract.enums[ename]
+        for member, value in decl.members:
+            L.append(f"#define FW_PROCFS_{upper_snake(ename)}_{member} {value}")
+        L.append("")
+
+    for target, decl in contract.writes.items():
+        mac = _tp_macro("FW_PROCFS_", target)
+        for form, ref in decl.forms:
+            member = ref.split("::")[1]
+            L.append(f'#define {mac}_FORM_{member} "{form}"')
+        L.append("")
+
+    for target, decl in contract.keys.items():
+        for k, t in decl.keys:
+            L.append(f'#define FW_PROCFS_KEY_{upper_snake(k)} "{k}"')
+        L.append("")
+
+    L.append("/* 容量上限；未列出的表表示实现中无条目上限 */")
+    for target in contract.limit_order:
+        decl = contract.limits[target]
+        mac = _tp_macro("FW_PROCFS_LIMIT_", target)
+        if decl.entries is None:
+            L.append(f"/* {target}: 无上限（{decl.note}） */")
+        else:
+            L.append(f"#define {mac} {decl.entries}")
+    L.append("")
+    L.append(f"#endif /* {guard} */")
+    L.append("")
+    return "\n".join(L)
+
+
+def emit_rust_textproto(contract: TextProtoContract) -> str:
+    L: List[str] = []
+    L.append("// 本文件由 contract/gen.py 从 .fwidl 生成，请勿手改。")
+    L.append("// 单一真相源: %s（文本协议契约，非二进制线格式）" % os.path.basename(contract.path))
+    L.append("")
+    L.append("#![allow(dead_code)]")
+    L.append("")
+    L.append("/// procfs 根目录。")
+    L.append(f'pub const FW_PROCFS_ROOT: &str = "{contract.root}";')
+    L.append("")
+    L.append("/// 各条目路径。")
+    L.append("pub mod path {")
+    for name in contract.file_order:
+        L.append(f'    pub const {upper_snake(name)}: &str = "{contract.root}/{name}";')
+    L.append("}")
+    L.append("")
+    L.append("/// 各条目权限位（八进制，与 proc_create 的 mode 一致）。")
+    L.append("pub mod mode {")
+    for name in contract.file_order:
+        L.append(f"    pub const {upper_snake(name)}: u32 = 0o{contract.files[name].mode:03o};")
+    L.append("}")
+    L.append("")
+
+    for ename in contract.enum_order:
+        decl = contract.enums[ename]
+        L.append("#[derive(Debug, Clone, Copy, PartialEq, Eq)]")
+        L.append(f"pub enum {ename} {{")
+        for member, value in decl.members:
+            L.append(f"    {pascal_from_upper_snake(member)} = {value},")
+        L.append("}")
+        L.append("")
+
+    for target, decl in contract.writes.items():
+        forms = ", ".join(
+            f"({ref.split('::')[0]}::{pascal_from_upper_snake(ref.split('::')[1])}, {_rust_str(form)})"
+            for form, ref in decl.forms
+        )
+        L.append(f'/// `{target}` 接受的命令形式（占位符仅供人读，非正则）。')
+        L.append(
+            f"pub const {upper_snake(target)}_FORMS: &["
+            f"({decl.forms[0][1].split('::')[0]}, &str)] = &[{forms}];"
+        )
+        L.append("")
+
+    for target, decl in contract.keys.items():
+        L.append(f'/// `{target}` 的机器可读字段名。')
+        L.append("pub mod key {")
+        for k, t in decl.keys:
+            L.append(f'    pub const {upper_snake(k)}: &str = "{k}"; // {t}')
+        L.append("}")
+        L.append("")
+
+    L.append("/// 容量上限；未列出的表表示实现中无条目上限。")
+    L.append("pub mod limit {")
+    for target in contract.limit_order:
+        decl = contract.limits[target]
+        if decl.entries is not None:
+            L.append(f"    pub const {upper_snake(target)}: usize = {decl.entries};")
+    L.append("}")
+    L.append("")
+    return "\n".join(L)
+
+
+def emit_json_textproto(contract: TextProtoContract, notes: List[str]) -> str:
+    doc: Dict[str, object] = {
+        "source": os.path.basename(contract.path),
+        "kind": "textproto",
+        "name": contract.name,
+        "namespace": contract.namespace,
+        "root": contract.root,
+        "notes": notes,
+        "files": {
+            name: {
+                "path": f"{contract.root}/{name}",
+                "mode": f"0{contract.files[name].mode:03o}",
+                "access": contract.files[name].access,
+                "read_format": contract.files[name].read_format,
+                "summary": contract.files[name].summary,
+            }
+            for name in contract.file_order
+        },
+        "enums": {
+            n: {"width": contract.enums[n].width, "members": {m: v for m, v in contract.enums[n].members}}
+            for n in contract.enum_order
+        },
+        "writes": {
+            target: {
+                "forms": [
+                    {"pattern": form, "op": ref} for form, ref in decl.forms
+                ]
+            }
+            for target, decl in contract.writes.items()
+        },
+        "keys": {
+            target: {k: t for k, t in decl.keys}
+            for target, decl in contract.keys.items()
+        },
+        "limits": {
+            target: {
+                "entries": contract.limits[target].entries,
+                "note": contract.limits[target].note,
+                "where": contract.limits[target].where,
+            }
+            for target in contract.limit_order
+        },
+        "defects": [
+            {
+                "name": d.name,
+                "severity": d.severity,
+                "where": d.where,
+                "text": d.text,
+            }
+            for d in contract.defects
+        ],
+    }
+    return json.dumps(doc, indent=2, ensure_ascii=False, sort_keys=False) + "\n"
+
+
+# ============================================================================
 # 入口
 # ============================================================================
 
-# 各契约的默认产物与 C 头保护宏
+# 各契约的默认产物与 C 头保护宏（不写 --targets 时用这里的默认值）
 CONTRACTS: Dict[str, Dict[str, object]] = {
     "netlink.fwidl": {
-        "targets": ["c", "rust", "json"],
+        "targets": ["c", "rust", "ts", "json"],
         "out": {
             "c": "netlink_uapi.h",
             "rust": "netlink_contract.rs",
@@ -971,6 +1608,16 @@ CONTRACTS: Dict[str, Dict[str, object]] = {
             "json": "netlink_layout.json",
         },
         "c_guard": "FW_CONTRACT_NETLINK_UAPI_H",
+    },
+    "procfs.fwidl": {
+        # 前端不接触 procfs，故不产出 TS 产物（无消费者不生成，避免死产物）
+        "targets": ["c", "rust", "json"],
+        "out": {
+            "c": "procfs_uapi.h",
+            "rust": "procfs_contract.rs",
+            "json": "procfs_layout.json",
+        },
+        "c_guard": "FW_CONTRACT_PROCFS_UAPI_H",
     },
 }
 
@@ -998,13 +1645,18 @@ def main(argv: List[str]) -> int:
     c_guard = str(cfg.get("c_guard", "FW_CONTRACT_GENERATED_H"))
 
     try:
-        contract = parse(args.source)
-        notes = validate(contract)
+        kind = detect_format(args.source)
+        if kind == "textproto":
+            tp = parse_textproto(args.source)
+            notes = validate_textproto(tp)
+        else:
+            binary = parse(args.source)
+            notes = validate(binary)
     except ContractError as exc:
         print(f"契约校验失败: {exc}", file=sys.stderr)
         return 1
 
-    print(f"契约 {base}: 校验通过")
+    print(f"契约 {base}: 校验通过（{kind}）")
     for n in notes:
         print(f"  - {n}")
 
@@ -1014,14 +1666,25 @@ def main(argv: List[str]) -> int:
     os.makedirs(args.out_dir, exist_ok=True)
     emitted: List[str] = []
     for t in targets:
-        if t == "c":
-            content, fname = emit_c(contract, c_guard), out_names.get("c", "generated.h")
+        if kind == "textproto":
+            # 文本协议没有字节布局，故没有 TS 产物（前端不接触 procfs）
+            if t == "c":
+                content, fname = emit_c_textproto(tp, c_guard), out_names.get("c", "generated.h")
+            elif t == "rust":
+                content, fname = emit_rust_textproto(tp), out_names.get("rust", "generated.rs")
+            elif t == "json":
+                content, fname = emit_json_textproto(tp, notes), out_names.get("json", "layout.json")
+            else:
+                print(f"错误: 文本协议契约不支持产物类型 {t}", file=sys.stderr)
+                return 2
+        elif t == "c":
+            content, fname = emit_c(binary, c_guard), out_names.get("c", "generated.h")
         elif t == "rust":
-            content, fname = emit_rust(contract), out_names.get("rust", "generated.rs")
+            content, fname = emit_rust(binary), out_names.get("rust", "generated.rs")
         elif t == "ts":
-            content, fname = emit_ts(contract), out_names.get("ts", "generated.d.ts")
+            content, fname = emit_ts(binary), out_names.get("ts", "generated.d.ts")
         elif t == "json":
-            content, fname = emit_json(contract, notes), out_names.get("json", "layout.json")
+            content, fname = emit_json(binary, notes), out_names.get("json", "layout.json")
         else:
             print(f"错误: 未知产物类型 {t}", file=sys.stderr)
             return 2

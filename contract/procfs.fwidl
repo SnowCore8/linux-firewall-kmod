@@ -1,0 +1,299 @@
+# procfs 文本接口契约 —— /proc/firewall/ 的单一真相源
+#
+# 与 netlink.fwidl 的区别：netlink 是**二进制线格式**（由本文件之外的那份
+# IDL 描述），procfs 是**文本协议**（写侧是命令文法，读侧是行文本）。
+# 两者共用同一套生成器与同一套「生成物 vs 手写代码」的第三方校验纪律。
+#
+# 为什么需要这份契约
+# ------------------
+# 1. procfs 的写文法目前只存在于 procfs.c 的解析代码与散落各处的文档中，
+#    文档与实现已经互相矛盾（见文末 defect 段）。测试（tests/conftest.py）
+#    也在按自己的理解拼命令串，三方各说各话。
+# 2. 读侧并非「纯人读」：`stats` 是 `key value` 行格式，测试与运维脚本
+#    按行解析；`bans` 的 IP 子串被测试用来判断封禁是否生效。这部分承载
+#    契约，不能随意重排。
+# 3. 其余 9 个只读文件是给人看的表格，**无机器可读承诺**——契约把它们
+#    显式标注为 unstable，避免下游（或未来的我）把它们当成稳定接口。
+#
+# 线格式/文本格式约定
+# -------------------
+# 1. 写侧：一次 `write(2)` 一条命令，末尾可选换行；成功返回写入字节数，
+#    失败返回**负 errno**（无文本错误通道，错误信息只进内核日志）。
+# 2. 写侧空白：分隔符为空格或制表符（实现用 ' ' | '\t'），不允许多余 token。
+# 3. 写侧控制字符：拒绝除 '\t' 外的所有 < 0x20 字节。
+# 4. 读侧：`stats` 每行 `<key> <十进制整数>\n`，key 与值以单个空格分隔。
+# 5. 读侧列表顺序为**哈希遍历顺序**，无排序保证；`bans`/`whitelist`/`rates`
+#    等列表文件不得依赖条目顺序。
+
+textproto procfs
+
+namespace Procfs
+
+# procfs 挂载根目录
+root "/proc/firewall"
+
+# ============================================================================
+# 写侧语义枚举
+# ============================================================================
+
+# bans 写入的四种可达语义 + 一种不可达（历史遗留）形式
+enum BanOp : u8 {
+  BAN_DEFAULT = 0           # "<ip>"：使用内核默认时长 fw_ban_time
+  BAN_TIMED = 1             # "<ip> <seconds>"：指定时长，1..31536000
+  BAN_PERMANENT = 2         # "<ip> 0"：永久
+  UNBAN = 3                 # "unban <ip>"
+  UNBAN_VIA_NEGATIVE = 4    # "<ip> -1"：文档宣称的等价解封形式，实现中不可达
+}
+
+enum WhitelistOp : u8 {
+  ADD = 0                   # "add <subnet>"
+  ADD_IMPLICIT = 1          # "<subnet>"：省略动词即添加（实现支持，未见于任何文档）
+  REMOVE = 2                # "remove <subnet>"
+}
+
+enum ConfigParam : u8 {
+  BAN_TIME = 0              # "ban_time <seconds>"：1..31536000
+}
+
+# ============================================================================
+# proc 条目表：路径、权限、读侧契约强度
+# ============================================================================
+
+# 读侧契约强度取值：
+#   machine    —— 行格式承载机器可读契约，重写必须保持 key 与数值类型
+#   unstable   —— 人类可读表格，无稳定性承诺，允许重写时改变排版
+#   none       —— 只写不读
+
+file bans {
+  mode = 0600
+  access = rw
+  read_format = unstable
+  summary = "封禁列表；每行 '<ip> (permanent)' 或 '<ip> (expires in <N> seconds)'"
+}
+
+file whitelist {
+  mode = 0600
+  access = rw
+  read_format = unstable
+  summary = "白名单；每行 '<ip>/<prefix>  on <dev>'（分隔为两个空格）"
+}
+
+file config {
+  mode = 0600
+  access = rw
+  read_format = unstable
+  summary = "运行时配置；'ban_time: <N> seconds' 与条目计数"
+}
+
+file stats {
+  mode = 0400
+  access = r
+  read_format = machine
+  summary = "13 个计数器，每行 '<key> <value>'"
+}
+
+file rates {
+  mode = 0400
+  access = r
+  read_format = unstable
+  summary = "速率表；含配置头与 '%-40s %12llu %12llu %6lus' 明细行"
+}
+
+file udp_ports {
+  mode = 0400
+  access = r
+  read_format = unstable
+  summary = "UDP 端口分布；含 'Total entries: <n> / 512' 与明细行"
+}
+
+file icmp_types {
+  mode = 0400
+  access = r
+  read_format = unstable
+  summary = "ICMP 类型分布；含 'Total entries: <n> / 128' 与明细行"
+}
+
+file pkt_sizes {
+  mode = 0400
+  access = r
+  read_format = unstable
+  summary = "包大小分布；5 个固定区间 + 百分比"
+}
+
+file ttl_dist {
+  mode = 0400
+  access = r
+  read_format = unstable
+  summary = "TTL 分布；6 个固定区间 + 百分比"
+}
+
+file ip_frags {
+  mode = 0400
+  access = r
+  read_format = unstable
+  summary = "IP 分片统计；总包数/分片数/比例"
+}
+
+file port_scanners {
+  mode = 0400
+  access = r
+  read_format = unstable
+  summary = "端口扫描检测；阈值 5 个唯一端口，最多列 20 条"
+}
+
+file service_probes {
+  mode = 0400
+  access = r
+  read_format = unstable
+  summary = "服务探测检测；阈值 3 种协议，最多列 20 条"
+}
+
+# ============================================================================
+# 写文法：每个可写文件一组「命令形式 -> 语义」
+# ============================================================================
+
+write bans {
+  "<ip>" = BanOp::BAN_DEFAULT
+  "<ip> <seconds>" = BanOp::BAN_TIMED
+  "<ip> 0" = BanOp::BAN_PERMANENT
+  "unban <ip>" = BanOp::UNBAN
+  "<ip> -1" = BanOp::UNBAN_VIA_NEGATIVE
+}
+
+write whitelist {
+  "add <subnet>" = WhitelistOp::ADD
+  "<subnet>" = WhitelistOp::ADD_IMPLICIT
+  "remove <subnet>" = WhitelistOp::REMOVE
+}
+
+write config {
+  "ban_time <seconds>" = ConfigParam::BAN_TIME
+}
+
+# ============================================================================
+# 读侧机器可读字段（仅 read_format = machine 的文件）
+# ============================================================================
+
+# 数值类型按实现使用的 printf 转换符与底层计数器宽度确定，不得更改：
+#   u32  <- "%u"  读自 atomic_t
+#   u64  <- "%llu" 读自 atomic64_t
+#   i32  <- "%d"  读自 atomic_t（计数类字段，业务上非负）
+# 测试（tests/test_02_procfs_interface.py）逐行断言值是十进制整数，
+# 运维脚本按 key 取值，故 key 名与数值可解析性均为契约。
+key stats {
+  "total_bans" = u32
+  "total_unbans" = u32
+  "whitelist_rejects" = u32
+  "ban_table_full_rejects" = u32
+  "alloc_failures" = u32
+  "packets_dropped" = u64
+  "packets_accepted" = u64
+  "tcp_anomaly_dropped" = u64
+  "cleanup_cycles" = u32
+  "cleanup_expired_total" = u32
+  "current_bans" = i32
+  "current_whitelist" = i32
+  "recent_additions" = u32
+}
+
+# ============================================================================
+# 容量与上限
+# ============================================================================
+
+# 每个 limit 块的 entries 为条目上限；none 表示实现中无上限。
+# 带 `_buckets` 前缀的事实（如哈希桶数）不是容量，不得混写为上限。
+# `where` 指向该上限的**代码锚点**，由 verify_procfs.py 到源码里核对：
+# 契约说的上限必须真的在代码里被实施，否则门禁失败。
+
+limit bans {
+  entries = none
+  where = "src/kernel-module/firewall.h:BAN_HASH_BITS"
+  note = "封禁表按需扩展，无条目上限；4096 是哈希桶数（BAN_HASH_BITS=12），不是容量"
+}
+
+limit whitelist {
+  entries = none
+  where = "src/kernel-module/whitelist.c:跳过容量检查"
+  note = "内核侧无上限；daemon 侧 netlink/responses.rs 以 MAX_WHITELIST_ENTRIES=64 校验回包，测试 MAX_WHITELIST_CAPACITY=64"
+}
+
+limit rates {
+  entries = 65536
+  where = "src/kernel-module/rate-detector.c:fw_max_rate_entries"
+  note = "受 fw_max_rate_entries 限制，模块参数范围 1024..262144"
+}
+
+limit udp_ports {
+  entries = 512
+  where = "src/kernel-module/firewall.h:MAX_UDP_PORT_ENTRIES"
+  note = "显示时全量遍历，无二次截断"
+}
+
+limit icmp_types {
+  entries = 128
+  where = "src/kernel-module/firewall.h:MAX_ICMP_TYPE_ENTRIES"
+  note = "显示时全量遍历，无二次截断"
+}
+
+limit port_scanners {
+  entries = 20
+  where = "src/kernel-module/procfs.c:PORT_SCAN_MAX_RESULTS"
+  note = "触发阈值为 5 个唯一端口（PORT_SCAN_THRESHOLD）"
+}
+
+limit service_probes {
+  entries = 20
+  where = "src/kernel-module/procfs.c:SERVICE_PROBE_MAX_RESULTS"
+  note = "触发阈值为 3 种协议（SERVICE_PROBE_THRESHOLD）"
+}
+
+# ============================================================================
+# 已核实缺陷：重写必须修复，或在本文件中显式改写为「有意保留」
+# ============================================================================
+#
+# 这些条目是**契约的一部分**，不是注释：verify_procfs.py 会到源码里核对
+# `where` 指向的代码是否仍在。若重写修好了缺陷，本段的对应条目必须同步
+# 修改或删除，否则门禁失败——以此防止「缺陷悄悄消失，契约仍在撒谎」，
+# 也防止「契约说修好了，代码其实没动」。
+
+defect PROC_DEAD_UNBAN_FORM {
+  severity = high
+  where = "src/kernel-module/procfs.c:seconds != -1"
+  text = "<ip> -1 解封形式不可达：validate_duration_string 要求时长首字符为数字，'-' 直接 -EINVAL，故 seconds == -1 分支为死代码；README 与多处文档仍宣传该形式，测试也未覆盖"
+}
+
+defect PROC_BAN_TABLE_FULL_NEVER_INC {
+  severity = high
+  where = "src/kernel-module/procfs.c:ban_table_full_rejects"
+  text = "ban_table_full_rejects 计数器只在初始化时清零、在 stats 中打印，全仓库无任何递增点，恒为 0；封禁表实际上无容量检查。文档『封禁表满（4096 条）』的说法与实现不符"
+}
+
+defect PROC_WHITELIST_CAPACITY_UNENFORCED {
+  severity = medium
+  where = "src/kernel-module/whitelist.c:跳过容量检查"
+  text = "白名单容量检查被显式跳过（源码注释『跳过容量检查（按需扩展）』），文档宣称的 64 条上限在内核侧不存在；daemon 侧 64 是回包长度校验，不是写入上限"
+}
+
+defect PROC_DOC_FORMAT_FICTIONAL {
+  severity = medium
+  where = "docs/zh/configuration/procfs.md:### 封禁 IP 列表"
+  text = "文档给出的 bans/whitelist 输出为 Jail/Remaining/Protocol/Port 表格，源码中不存在该格式；真实输出为 '<ip> (permanent)' / '<ip> (expires in N seconds)' 与 '<ip>/<prefix>  on <dev>'"
+}
+
+defect PROC_CONFIG_DOC_SAYS_READONLY {
+  severity = low
+  where = "docs/zh/configuration/procfs.md:只读文件"
+  text = "文档称 config 为只读（写入返回 -EINVAL），实际 config_write 支持 'ban_time <seconds>' 写入，权限同为 0600"
+}
+
+defect PROC_CLEANUP_CYCLES_DEAD {
+  severity = low
+  where = "src/kernel-module/procfs.c:cleanup_cycles"
+  text = "cleanup_cycles 已无全局清理线程，仅初始化时清零，恒为 0；保留字段只为不破坏外部解析"
+}
+
+defect PROC_WRITE_NO_TEXT_ERROR {
+  severity = low
+  where = "src/kernel-module/procfs.c:return -EFAULT"
+  text = "写失败一律返回负 errno，无文本错误通道；调用方只能从 errno 区分 -EINVAL/-EBUSY/-ENOMEM/-EPERM，无法得知具体拒绝原因"
+}
