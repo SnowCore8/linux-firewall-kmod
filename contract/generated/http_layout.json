@@ -1,0 +1,2709 @@
+{
+  "source": "http.fwidl",
+  "kind": "http",
+  "name": "firewall_daemon_http",
+  "namespace": "Http",
+  "base": "/api/v1",
+  "notes": [
+    "信封 ApiResponse: code / data / message",
+    "认证: 失败 10 次锁 60s，未授权状态码 401",
+    "安全头 4 条",
+    "业务码 50002 已声明但没有任何路由引用（可能是没落地的码）",
+    "路由 53 条（无认证 12 / 需认证 41）",
+    "SSE GET /api/v1/events: 上限 10 连接，6 个事件",
+    "SSE GET /api/v1/logs/stream: 上限 5 连接，3 个事件",
+    "错误形状 3 种",
+    "响应 ApiResponse: 3 个字段（泛型参数 T）",
+    "响应 PaginatedResponse: 5 个字段（泛型参数 T）",
+    "响应 RuntimeSnapshot: 6 个字段",
+    "响应 StatsResponse: 17 个字段",
+    "响应 ChartData: 2 个字段",
+    "响应 ThreatLevel: 9 个字段",
+    "响应 BanResponse: 7 个字段",
+    "响应 BanDetailResponse: 15 个字段",
+    "响应 BanOperationResponse: 4 个字段",
+    "响应 BatchOperationResponse: 4 个字段",
+    "请求 CreateBanRequest: 3 个字段",
+    "响应 JailResponse: 15 个字段",
+    "请求 UpdateJailRequest: 1 个字段",
+    "响应 WebuiConfigResponse: 19 个字段",
+    "请求 UpdateConfigRequest: 19 个字段",
+    "响应 WhitelistEntryResponse: 2 个字段",
+    "响应 WhitelistOperationResponse: 2 个字段",
+    "响应 WhitelistRecommendation: 6 个字段",
+    "请求 CreateWhitelistRequest: 1 个字段",
+    "响应 RateResponse: 9 个字段",
+    "响应 RateHistoryResponse: 4 个字段",
+    "响应 RateWindowSnapshot: 6 个字段",
+    "响应 RecidivismResponse: 5 个字段",
+    "响应 RecidivistEntry: 4 个字段",
+    "响应 BanEffectivenessResponse: 4 个字段",
+    "响应 BanLevelEffectiveness: 7 个字段",
+    "响应 PeriodicAttacker: 7 个字段",
+    "响应 CollaborativeAttack: 7 个字段",
+    "响应 AttackPrediction: 9 个字段",
+    "响应 AttackPredictionSummary: 4 个字段",
+    "响应 JailAttackTrend: 5 个字段",
+    "响应 ThresholdRecommendation: 11 个字段",
+    "响应 ThresholdRecommendationResponse: 2 个字段",
+    "响应 BanDurationRecommendation: 7 个字段",
+    "响应 BanDurationRecommendationResponse: 2 个字段",
+    "响应 ReputationEntryResponse: 6 个字段",
+    "响应 UdpPortDistributionResponse: 3 个字段",
+    "响应 UdpPortEntry: 4 个字段",
+    "响应 IcmpTypeDistributionResponse: 3 个字段",
+    "响应 IcmpTypeEntry: 5 个字段",
+    "响应 PacketSizeDistributionResponse: 4 个字段",
+    "响应 TtlDistributionResponse: 4 个字段",
+    "响应 BanDurationHistogramResponse: 3 个字段",
+    "响应 IpFragmentStatsResponse: 3 个字段",
+    "响应 PortScanResponse: 3 个字段",
+    "响应 PortScannerEntry: 3 个字段",
+    "响应 ServiceProbeResponse: 2 个字段",
+    "响应 ServiceProbeEntry: 3 个字段",
+    "响应 NetworkBlock: 5 个字段",
+    "响应 HourlyHeatmap: 1 个字段",
+    "响应 HourlyBucket: 4 个字段",
+    "响应 LogPageResponse: 5 个字段",
+    "响应 LogEntry: 2 个字段",
+    "请求 LogQueryParams: 5 个字段",
+    "请求 PaginationParams: 3 个字段",
+    "响应 SseStatusResponse: 3 个字段",
+    "缺陷记录: 9 条"
+  ],
+  "envelope": {
+    "name": "ApiResponse",
+    "params": [
+      "T"
+    ],
+    "fields": [
+      {
+        "key": "code",
+        "rust": "i32"
+      },
+      {
+        "key": "data",
+        "rust": "T"
+      },
+      {
+        "key": "message",
+        "rust": "String"
+      }
+    ]
+  },
+  "auth": {
+    "scheme": "Basic",
+    "token_query": "access_token",
+    "failure_threshold": "10",
+    "lockout_seconds": "60",
+    "unauthorized_status": "401"
+  },
+  "headers": {
+    "X-Content-Type-Options": {
+      "scope": "all",
+      "value": "nosniff",
+      "value_webui": ""
+    },
+    "X-Frame-Options": {
+      "scope": "all",
+      "value": "DENY",
+      "value_webui": ""
+    },
+    "Content-Security-Policy": {
+      "scope": "all",
+      "value": "default-src 'none'",
+      "value_webui": "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; connect-src 'self'; font-src 'self' data: https://fonts.gstatic.com"
+    },
+    "Cache-Control": {
+      "scope": "all",
+      "value": "no-store",
+      "value_webui": ""
+    }
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/health",
+      "auth": "none",
+      "handler": "handle_health",
+      "returns": "type",
+      "status": 200,
+      "alt_status": 503,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "唯一『HTTP 状态码即语义』的端点：200 = status==\"ok\"，503 = 未就绪。载荷直接是 RuntimeSnapshot，不经信封（见 defect HTTP_HEALTH_NOT_ENVELOPED）。"
+    },
+    {
+      "method": "GET",
+      "path": "/healthz",
+      "auth": "none",
+      "handler": "handle_health",
+      "returns": "type",
+      "status": 200,
+      "alt_status": 503,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "与 /health 同函数，供 k8s/负载均衡探针使用"
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "auth": "none",
+      "handler": "handle_redirect",
+      "returns": "text",
+      "status": 302,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "重定向到 /dashboard；**必须原样保留 query string**，否则 /?access_token=<token> 直达会丢凭据"
+    },
+    {
+      "method": "GET",
+      "path": "/dashboard",
+      "auth": "none",
+      "handler": "handle_dashboard",
+      "returns": "text",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": ""
+    },
+    {
+      "method": "GET",
+      "path": "/bans",
+      "auth": "none",
+      "handler": "handle_spa_bans",
+      "returns": "text",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": ""
+    },
+    {
+      "method": "GET",
+      "path": "/whitelist",
+      "auth": "none",
+      "handler": "handle_spa_whitelist",
+      "returns": "text",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": ""
+    },
+    {
+      "method": "GET",
+      "path": "/jails",
+      "auth": "none",
+      "handler": "handle_spa_jails",
+      "returns": "text",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": ""
+    },
+    {
+      "method": "GET",
+      "path": "/ddos",
+      "auth": "none",
+      "handler": "handle_spa_ddos",
+      "returns": "text",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": ""
+    },
+    {
+      "method": "GET",
+      "path": "/logs",
+      "auth": "none",
+      "handler": "handle_spa_logs",
+      "returns": "text",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": ""
+    },
+    {
+      "method": "GET",
+      "path": "/settings",
+      "auth": "none",
+      "handler": "handle_spa_settings",
+      "returns": "text",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": ""
+    },
+    {
+      "method": "GET",
+      "path": "/static/*path",
+      "auth": "none",
+      "handler": "handle_static",
+      "returns": "bytes",
+      "status": 200,
+      "alt_status": 404,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "未命中时返回纯文本 \"404 Not Found\\n\"（errmodel STATIC_NOT_FOUND）"
+    },
+    {
+      "method": "GET",
+      "path": "/sw.js",
+      "auth": "none",
+      "handler": "handle_sw",
+      "returns": "bytes",
+      "status": 200,
+      "alt_status": 404,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "带 Service-Worker-Allowed: / 与 Cache-Control: no-cache；浏览器注册 SW 时不带交互式凭据，放进认证组会 401 导致注册失败"
+    },
+    {
+      "method": "GET",
+      "path": "/metrics",
+      "auth": "required",
+      "handler": "handle_metrics",
+      "returns": "text",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "Prometheus 文本格式 text/plain; version=0.0.4; charset=utf-8"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/events",
+      "auth": "required",
+      "handler": "handle_sse",
+      "returns": "stream",
+      "status": 200,
+      "alt_status": 503,
+      "codes": [],
+      "max_connections": 10,
+      "events": [
+        "connected",
+        "stats",
+        "bans",
+        "jails",
+        "whitelist",
+        "rates"
+      ],
+      "keepalive_secs": 15,
+      "note": "超过 10 连接返回 503。keep-alive 事件文本为 \"keep-alive\"。"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/logs/stream",
+      "auth": "required",
+      "handler": "handle_log_stream",
+      "returns": "stream",
+      "status": 200,
+      "alt_status": 503,
+      "codes": [],
+      "max_connections": 5,
+      "events": [
+        "connected",
+        "log",
+        "error"
+      ],
+      "keepalive_secs": 15,
+      "note": "上限 5 与 /api/v1/events 的 10 **各自独立**；keep-alive 文本同为 \"keep-alive\"。"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats",
+      "auth": "required",
+      "handler": "handle_api_stats",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 StatsResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/bans",
+      "auth": "required",
+      "handler": "handle_api_bans",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        0
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "**双形态**：不带 page/page_size 时 data 是 BanResponse 的裸数组，带了才是 PaginatedResponse<BanResponse>（见 defect HTTP_BANS_DUAL_SHAPE）"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/bans",
+      "auth": "required",
+      "handler": "handle_create_ban",
+      "returns": "type",
+      "status": 201,
+      "alt_status": 200,
+      "codes": [
+        40001
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "请求体 CreateBanRequest；成功 201 Created，载荷 BanOperationResponse"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/bans/:ip",
+      "auth": "required",
+      "handler": "handle_delete_ban",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        40002
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": ""
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/bans/:ip/detail",
+      "auth": "required",
+      "handler": "handle_ban_detail",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        40006
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 BanDetailResponse"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/bans/unban-temporary",
+      "auth": "required",
+      "handler": "handle_unban_temporary",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        40003
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": ""
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/bans/batch",
+      "auth": "required",
+      "handler": "handle_batch_ban",
+      "returns": "type",
+      "status": 201,
+      "alt_status": 200,
+      "codes": [
+        40005
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "空列表或超过 100 条 → 40005；载荷 BatchOperationResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/jails",
+      "auth": "required",
+      "handler": "handle_api_jails",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 JailResponse 数组"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/jails/:name",
+      "auth": "required",
+      "handler": "handle_update_jail",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        404
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "请求体 UpdateJailRequest；Jail 不存在 → 404（信封内 code=404，非 HTTP 404）"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/config",
+      "auth": "required",
+      "handler": "handle_api_config",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 WebuiConfigResponse"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/config",
+      "auth": "required",
+      "handler": "handle_update_config",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        40004
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "请求体 UpdateConfigRequest"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/whitelist",
+      "auth": "required",
+      "handler": "handle_api_whitelist",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 WhitelistEntryResponse 数组（前端 interface 名为 WhitelistEntry）"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/whitelist",
+      "auth": "required",
+      "handler": "handle_create_whitelist",
+      "returns": "type",
+      "status": 201,
+      "alt_status": 200,
+      "codes": [
+        40003
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "请求体 CreateWhitelistRequest"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/whitelist/:cidr",
+      "auth": "required",
+      "handler": "handle_delete_whitelist",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        40004
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 WhitelistOperationResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/whitelist/recommendations",
+      "auth": "required",
+      "handler": "handle_whitelist_recommendations",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 WhitelistRecommendation 数组"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/rates/current",
+      "auth": "required",
+      "handler": "handle_api_rates_current",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 RateResponse 数组"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/rates/history",
+      "auth": "required",
+      "handler": "handle_api_rates_history",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 RateHistoryResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/rates/windows",
+      "auth": "required",
+      "handler": "handle_api_rates_windows",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 RateWindowSnapshot"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/heatmap",
+      "auth": "required",
+      "handler": "handle_api_heatmap",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 HourlyHeatmap（24 个 HourlyBucket 的定长数组）"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/recidivism",
+      "auth": "required",
+      "handler": "handle_api_recidivism",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 RecidivismResponse；其 recidivism_rate 是**百分数 0-100**（见 defect HTTP_RECIDIVISM_RATE_UNIT）"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/ban-effectiveness",
+      "auth": "required",
+      "handler": "handle_api_ban_effectiveness",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 BanEffectivenessResponse；其中 recidivism_rate 是**比例 0-1**"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/periodic-attackers",
+      "auth": "required",
+      "handler": "handle_api_periodic_attackers",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 PeriodicAttacker 数组"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/collaborative-attacks",
+      "auth": "required",
+      "handler": "handle_api_collaborative_attacks",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 CollaborativeAttack 数组"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/udp-ports",
+      "auth": "required",
+      "handler": "handle_api_udp_ports",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 UdpPortDistributionResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/icmp-types",
+      "auth": "required",
+      "handler": "handle_api_icmp_types",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 IcmpTypeDistributionResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/sse-status",
+      "auth": "required",
+      "handler": "handle_api_sse_status",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "内联载荷（无具名结构体）：current_connections / max_connections / limit_reached；**只反映 /api/v1/events 的 10 上限**（见 defect HTTP_SSE_STATUS_INCOMPLETE）"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/ban-duration-histogram",
+      "auth": "required",
+      "handler": "handle_api_ban_duration_histogram",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 BanDurationHistogramResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/packet-sizes",
+      "auth": "required",
+      "handler": "handle_api_packet_sizes",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 PacketSizeDistributionResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/ttl-distribution",
+      "auth": "required",
+      "handler": "handle_api_ttl_distribution",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 TtlDistributionResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/ip-fragments",
+      "auth": "required",
+      "handler": "handle_api_ip_fragments",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 IpFragmentStatsResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/port-scanners",
+      "auth": "required",
+      "handler": "handle_api_port_scanners",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 PortScanResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/service-probes",
+      "auth": "required",
+      "handler": "handle_api_service_probes",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 ServiceProbeResponse（缺 total_detected，见 defect HTTP_SERVICE_PROBE_NO_TOTAL）"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/ban-duration-recommendations",
+      "auth": "required",
+      "handler": "handle_api_ban_duration_recommendations",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 BanDurationRecommendationResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/reputation",
+      "auth": "required",
+      "handler": "handle_api_reputation",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 ReputationEntryResponse 数组；threshold_multiplier 由内联分段函数生成（1.0 / 0.8 / 0.5）"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/threshold-recommendations",
+      "auth": "required",
+      "handler": "handle_api_threshold_recommendations",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 ThresholdRecommendationResponse（recommended_threshold 的 0 语义见 defect HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS）"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/network-distribution",
+      "auth": "required",
+      "handler": "handle_api_network_distribution",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 NetworkBlock 数组"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/attack-predictions",
+      "auth": "required",
+      "handler": "handle_api_attack_predictions",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 AttackPredictionSummary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/logs",
+      "auth": "required",
+      "handler": "handle_api_logs",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        40005
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "查询参数 LogQueryParams；分页参数非法 → 40005；载荷 LogPageResponse"
+    }
+  ],
+  "types": {
+    "ApiResponse": {
+      "kind": "type",
+      "params": [
+        "T"
+      ],
+      "ts_name": "ApiResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "code",
+          "rust": "i32"
+        },
+        {
+          "key": "data",
+          "rust": "T"
+        },
+        {
+          "key": "message",
+          "rust": "String"
+        }
+      ]
+    },
+    "PaginatedResponse": {
+      "kind": "type",
+      "params": [
+        "T"
+      ],
+      "ts_name": "PaginatedResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "items",
+          "rust": "Vec<T>"
+        },
+        {
+          "key": "total",
+          "rust": "u64"
+        },
+        {
+          "key": "page",
+          "rust": "u32"
+        },
+        {
+          "key": "page_size",
+          "rust": "u32"
+        },
+        {
+          "key": "total_pages",
+          "rust": "u32"
+        }
+      ]
+    },
+    "RuntimeSnapshot": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "RuntimeSnapshot",
+      "inline": false,
+      "fields": [
+        {
+          "key": "status",
+          "rust": "&'static str"
+        },
+        {
+          "key": "netlink_ready",
+          "rust": "bool"
+        },
+        {
+          "key": "kmod_proc_present",
+          "rust": "bool"
+        },
+        {
+          "key": "ban_cache_initialized",
+          "rust": "bool"
+        },
+        {
+          "key": "ban_history_initialized",
+          "rust": "bool"
+        },
+        {
+          "key": "active_bans",
+          "rust": "usize"
+        }
+      ]
+    },
+    "StatsResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "StatsResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "daemon_version",
+          "rust": "String"
+        },
+        {
+          "key": "kernel_version",
+          "rust": "String"
+        },
+        {
+          "key": "today_bans",
+          "rust": "u64"
+        },
+        {
+          "key": "failed_attempts",
+          "rust": "u64"
+        },
+        {
+          "key": "ddos_events",
+          "rust": "u64"
+        },
+        {
+          "key": "uptime_seconds",
+          "rust": "u64"
+        },
+        {
+          "key": "ban_trend",
+          "rust": "ChartData"
+        },
+        {
+          "key": "jail_distribution",
+          "rust": "ChartData"
+        },
+        {
+          "key": "failure_reasons",
+          "rust": "ChartData"
+        },
+        {
+          "key": "failed_attempts_trend",
+          "rust": "ChartData"
+        },
+        {
+          "key": "current_bans",
+          "rust": "u64"
+        },
+        {
+          "key": "total_bans",
+          "rust": "u64"
+        },
+        {
+          "key": "total_unbans",
+          "rust": "u64"
+        },
+        {
+          "key": "whitelist_count",
+          "rust": "u64"
+        },
+        {
+          "key": "packets_dropped",
+          "rust": "u64"
+        },
+        {
+          "key": "packets_accepted",
+          "rust": "u64"
+        },
+        {
+          "key": "threat_level",
+          "rust": "ThreatLevel"
+        }
+      ]
+    },
+    "ChartData": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "ChartData",
+      "inline": false,
+      "fields": [
+        {
+          "key": "labels",
+          "rust": "Vec<String>"
+        },
+        {
+          "key": "values",
+          "rust": "Vec<u64>"
+        }
+      ]
+    },
+    "ThreatLevel": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "ThreatLevel",
+      "inline": false,
+      "fields": [
+        {
+          "key": "level",
+          "rust": "String"
+        },
+        {
+          "key": "score",
+          "rust": "u8"
+        },
+        {
+          "key": "factors",
+          "rust": "Vec<String>"
+        },
+        {
+          "key": "current_pps",
+          "rust": "u64"
+        },
+        {
+          "key": "pps_ratio",
+          "rust": "f64"
+        },
+        {
+          "key": "ban_table_usage",
+          "rust": "f64"
+        },
+        {
+          "key": "recent_bans",
+          "rust": "u64"
+        },
+        {
+          "key": "baseline_frozen",
+          "rust": "bool"
+        },
+        {
+          "key": "peak_hours",
+          "rust": "bool"
+        }
+      ]
+    },
+    "BanResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "BanResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ip",
+          "rust": "String"
+        },
+        {
+          "key": "jail",
+          "rust": "String"
+        },
+        {
+          "key": "banned_at",
+          "rust": "i64"
+        },
+        {
+          "key": "remaining_seconds",
+          "rust": "i64"
+        },
+        {
+          "key": "reason",
+          "rust": "String"
+        },
+        {
+          "key": "ban_count",
+          "rust": "u32"
+        },
+        {
+          "key": "is_permanent",
+          "rust": "bool"
+        }
+      ]
+    },
+    "BanDetailResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "BanDetailResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ip",
+          "rust": "String"
+        },
+        {
+          "key": "is_banned",
+          "rust": "bool"
+        },
+        {
+          "key": "jail_name",
+          "rust": "String"
+        },
+        {
+          "key": "reason",
+          "rust": "String"
+        },
+        {
+          "key": "banned_at",
+          "rust": "i64"
+        },
+        {
+          "key": "expires_at",
+          "rust": "i64"
+        },
+        {
+          "key": "is_permanent",
+          "rust": "bool"
+        },
+        {
+          "key": "fail_count",
+          "rust": "u32"
+        },
+        {
+          "key": "ban_count",
+          "rust": "u32"
+        },
+        {
+          "key": "last_unbanned_at",
+          "rust": "i64"
+        },
+        {
+          "key": "was_permanent",
+          "rust": "bool"
+        },
+        {
+          "key": "progressive_level",
+          "rust": "String"
+        },
+        {
+          "key": "next_ban_duration",
+          "rust": "String"
+        },
+        {
+          "key": "reputation_score",
+          "rust": "u32"
+        },
+        {
+          "key": "reputation_multiplier",
+          "rust": "f64"
+        }
+      ]
+    },
+    "BanOperationResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "BanOperationResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ip",
+          "rust": "String"
+        },
+        {
+          "key": "action",
+          "rust": "String"
+        },
+        {
+          "key": "permanent",
+          "rust": "bool"
+        },
+        {
+          "key": "duration_seconds",
+          "rust": "Option<u64>"
+        }
+      ]
+    },
+    "BatchOperationResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "BatchOperationResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "total",
+          "rust": "u64"
+        },
+        {
+          "key": "succeeded",
+          "rust": "u64"
+        },
+        {
+          "key": "failed_count",
+          "rust": "u64"
+        },
+        {
+          "key": "details",
+          "rust": "Vec<String>"
+        }
+      ]
+    },
+    "CreateBanRequest": {
+      "kind": "request",
+      "params": [],
+      "ts_name": "CreateBanRequest",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ip",
+          "rust": "String"
+        },
+        {
+          "key": "duration",
+          "rust": "Option<u64>"
+        },
+        {
+          "key": "reason",
+          "rust": "Option<String>"
+        }
+      ]
+    },
+    "JailResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "JailResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "name",
+          "rust": "String"
+        },
+        {
+          "key": "enabled",
+          "rust": "bool"
+        },
+        {
+          "key": "ban_count",
+          "rust": "usize"
+        },
+        {
+          "key": "max_retries",
+          "rust": "u32"
+        },
+        {
+          "key": "effective_max_retries",
+          "rust": "u32"
+        },
+        {
+          "key": "findtime",
+          "rust": "u32"
+        },
+        {
+          "key": "ban_time",
+          "rust": "i32"
+        },
+        {
+          "key": "is_peak_hours",
+          "rust": "bool"
+        },
+        {
+          "key": "peak_hours_multiplier",
+          "rust": "f64"
+        },
+        {
+          "key": "internal_ip_multiplier",
+          "rust": "f64"
+        },
+        {
+          "key": "lines_parsed",
+          "rust": "u64"
+        },
+        {
+          "key": "regex_matches",
+          "rust": "u64"
+        },
+        {
+          "key": "ips_extracted",
+          "rust": "u64"
+        },
+        {
+          "key": "failed_attempts",
+          "rust": "u64"
+        },
+        {
+          "key": "bans_triggered",
+          "rust": "u64"
+        }
+      ]
+    },
+    "UpdateJailRequest": {
+      "kind": "request",
+      "params": [],
+      "ts_name": "UpdateJailRequest",
+      "inline": false,
+      "fields": [
+        {
+          "key": "enabled",
+          "rust": "bool"
+        }
+      ]
+    },
+    "WebuiConfigResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "WebuiConfigResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "sse_push_interval",
+          "rust": "u32"
+        },
+        {
+          "key": "rate_warning_pps",
+          "rust": "u64"
+        },
+        {
+          "key": "rate_critical_pps",
+          "rust": "u64"
+        },
+        {
+          "key": "rate_warning_syn",
+          "rust": "u64"
+        },
+        {
+          "key": "rate_critical_syn",
+          "rust": "u64"
+        },
+        {
+          "key": "max_syn_per_second",
+          "rust": "u32"
+        },
+        {
+          "key": "max_udp_per_second",
+          "rust": "u32"
+        },
+        {
+          "key": "max_icmp_per_second",
+          "rust": "u32"
+        },
+        {
+          "key": "max_ack_per_second",
+          "rust": "u32"
+        },
+        {
+          "key": "max_rst_per_second",
+          "rust": "u32"
+        },
+        {
+          "key": "max_fin_per_second",
+          "rust": "u32"
+        },
+        {
+          "key": "static_threshold",
+          "rust": "bool"
+        },
+        {
+          "key": "dynamic_threshold",
+          "rust": "bool"
+        },
+        {
+          "key": "ddos_detection",
+          "rust": "bool"
+        },
+        {
+          "key": "max_ban_entries",
+          "rust": "u32"
+        },
+        {
+          "key": "max_whitelist_entries",
+          "rust": "u32"
+        },
+        {
+          "key": "max_rate_entries",
+          "rust": "u32"
+        },
+        {
+          "key": "max_local_ip_cache",
+          "rust": "u32"
+        },
+        {
+          "key": "clear_logs_at",
+          "rust": "Option<String>"
+        }
+      ]
+    },
+    "UpdateConfigRequest": {
+      "kind": "request",
+      "params": [],
+      "ts_name": "UpdateConfigRequest",
+      "inline": false,
+      "fields": [
+        {
+          "key": "sse_push_interval",
+          "rust": "Option<u32>"
+        },
+        {
+          "key": "rate_warning_pps",
+          "rust": "Option<u64>"
+        },
+        {
+          "key": "rate_critical_pps",
+          "rust": "Option<u64>"
+        },
+        {
+          "key": "rate_warning_syn",
+          "rust": "Option<u64>"
+        },
+        {
+          "key": "rate_critical_syn",
+          "rust": "Option<u64>"
+        },
+        {
+          "key": "max_syn_per_second",
+          "rust": "Option<u32>"
+        },
+        {
+          "key": "max_udp_per_second",
+          "rust": "Option<u32>"
+        },
+        {
+          "key": "max_icmp_per_second",
+          "rust": "Option<u32>"
+        },
+        {
+          "key": "max_ack_per_second",
+          "rust": "Option<u32>"
+        },
+        {
+          "key": "max_rst_per_second",
+          "rust": "Option<u32>"
+        },
+        {
+          "key": "max_fin_per_second",
+          "rust": "Option<u32>"
+        },
+        {
+          "key": "static_threshold",
+          "rust": "Option<bool>"
+        },
+        {
+          "key": "dynamic_threshold",
+          "rust": "Option<bool>"
+        },
+        {
+          "key": "ddos_detection",
+          "rust": "Option<bool>"
+        },
+        {
+          "key": "max_ban_entries",
+          "rust": "Option<u32>"
+        },
+        {
+          "key": "max_whitelist_entries",
+          "rust": "Option<u32>"
+        },
+        {
+          "key": "max_rate_entries",
+          "rust": "Option<u32>"
+        },
+        {
+          "key": "max_local_ip_cache",
+          "rust": "Option<u32>"
+        },
+        {
+          "key": "clear_logs_at",
+          "rust": "Option<String>"
+        }
+      ]
+    },
+    "WhitelistEntryResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "WhitelistEntry",
+      "inline": false,
+      "fields": [
+        {
+          "key": "cidr",
+          "rust": "String"
+        },
+        {
+          "key": "device",
+          "rust": "String"
+        }
+      ]
+    },
+    "WhitelistOperationResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "WhitelistOperationResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "cidr",
+          "rust": "String"
+        },
+        {
+          "key": "action",
+          "rust": "String"
+        }
+      ]
+    },
+    "WhitelistRecommendation": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "WhitelistRecommendation",
+      "inline": false,
+      "fields": [
+        {
+          "key": "rec_type",
+          "rust": "String"
+        },
+        {
+          "key": "cidr",
+          "rust": "String"
+        },
+        {
+          "key": "reason",
+          "rust": "String"
+        },
+        {
+          "key": "affected_ips",
+          "rust": "u32"
+        },
+        {
+          "key": "total_bans",
+          "rust": "u32"
+        },
+        {
+          "key": "confidence",
+          "rust": "u8"
+        }
+      ]
+    },
+    "CreateWhitelistRequest": {
+      "kind": "request",
+      "params": [],
+      "ts_name": "CreateWhitelistRequest",
+      "inline": false,
+      "fields": [
+        {
+          "key": "cidr",
+          "rust": "String"
+        }
+      ]
+    },
+    "RateResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "RateResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ip",
+          "rust": "String"
+        },
+        {
+          "key": "packets_per_sec",
+          "rust": "u64"
+        },
+        {
+          "key": "bytes_per_sec",
+          "rust": "u64"
+        },
+        {
+          "key": "syn_packets_per_sec",
+          "rust": "u64"
+        },
+        {
+          "key": "udp_packets_per_sec",
+          "rust": "u64"
+        },
+        {
+          "key": "icmp_packets_per_sec",
+          "rust": "u64"
+        },
+        {
+          "key": "ack_packets_per_sec",
+          "rust": "u64"
+        },
+        {
+          "key": "rst_packets_per_sec",
+          "rust": "u64"
+        },
+        {
+          "key": "fin_packets_per_sec",
+          "rust": "u64"
+        }
+      ]
+    },
+    "RateHistoryResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "RateHistoryResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "timestamp",
+          "rust": "u64"
+        },
+        {
+          "key": "total_pps",
+          "rust": "u64"
+        },
+        {
+          "key": "total_bps",
+          "rust": "u64"
+        },
+        {
+          "key": "tracked_ips",
+          "rust": "u32"
+        }
+      ]
+    },
+    "RateWindowSnapshot": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "RateWindowSnapshot",
+      "inline": false,
+      "fields": [
+        {
+          "key": "pps_short",
+          "rust": "u64"
+        },
+        {
+          "key": "pps_mid",
+          "rust": "u64"
+        },
+        {
+          "key": "pps_long",
+          "rust": "u64"
+        },
+        {
+          "key": "bps_short",
+          "rust": "u64"
+        },
+        {
+          "key": "bps_mid",
+          "rust": "u64"
+        },
+        {
+          "key": "bps_long",
+          "rust": "u64"
+        }
+      ]
+    },
+    "RecidivismResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "RecidivismResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "total_ips",
+          "rust": "u64"
+        },
+        {
+          "key": "recidivist_ips",
+          "rust": "u64"
+        },
+        {
+          "key": "recidivism_rate",
+          "rust": "f64"
+        },
+        {
+          "key": "permanent_bans",
+          "rust": "u64"
+        },
+        {
+          "key": "top_recidivists",
+          "rust": "Vec<RecidivistEntry>"
+        }
+      ]
+    },
+    "RecidivistEntry": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "RecidivistEntry",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ip",
+          "rust": "String"
+        },
+        {
+          "key": "ban_count",
+          "rust": "u32"
+        },
+        {
+          "key": "last_banned_at",
+          "rust": "i64"
+        },
+        {
+          "key": "was_permanent",
+          "rust": "bool"
+        }
+      ]
+    },
+    "BanEffectivenessResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "BanEffectivenessResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "levels",
+          "rust": "Vec<BanLevelEffectiveness>"
+        },
+        {
+          "key": "total_unique_ips",
+          "rust": "u32"
+        },
+        {
+          "key": "overall_recidivism_rate",
+          "rust": "f64"
+        },
+        {
+          "key": "summary",
+          "rust": "String"
+        }
+      ]
+    },
+    "BanLevelEffectiveness": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "BanLevelEffectiveness",
+      "inline": false,
+      "fields": [
+        {
+          "key": "level",
+          "rust": "u8"
+        },
+        {
+          "key": "label",
+          "rust": "String"
+        },
+        {
+          "key": "total_ips",
+          "rust": "u32"
+        },
+        {
+          "key": "recidivist_ips",
+          "rust": "u32"
+        },
+        {
+          "key": "recidivism_rate",
+          "rust": "f64"
+        },
+        {
+          "key": "permanent_bans",
+          "rust": "u32"
+        },
+        {
+          "key": "verdict",
+          "rust": "String"
+        }
+      ]
+    },
+    "PeriodicAttacker": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "PeriodicAttacker",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ip",
+          "rust": "String"
+        },
+        {
+          "key": "ban_count",
+          "rust": "u32"
+        },
+        {
+          "key": "avg_interval_secs",
+          "rust": "f64"
+        },
+        {
+          "key": "interval_stddev",
+          "rust": "f64"
+        },
+        {
+          "key": "periodicity_score",
+          "rust": "u8"
+        },
+        {
+          "key": "jail_name",
+          "rust": "String"
+        },
+        {
+          "key": "timestamps",
+          "rust": "Vec<i64>"
+        }
+      ]
+    },
+    "CollaborativeAttack": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "CollaborativeAttack",
+      "inline": false,
+      "fields": [
+        {
+          "key": "jail_name",
+          "rust": "String"
+        },
+        {
+          "key": "window_start",
+          "rust": "i64"
+        },
+        {
+          "key": "window_end",
+          "rust": "i64"
+        },
+        {
+          "key": "ip_count",
+          "rust": "u32"
+        },
+        {
+          "key": "ips",
+          "rust": "Vec<String>"
+        },
+        {
+          "key": "total_bans",
+          "rust": "u32"
+        },
+        {
+          "key": "correlation_score",
+          "rust": "u8"
+        }
+      ]
+    },
+    "AttackPrediction": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "AttackPrediction",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ip",
+          "rust": "String"
+        },
+        {
+          "key": "ban_count",
+          "rust": "u32"
+        },
+        {
+          "key": "jail_name",
+          "rust": "String"
+        },
+        {
+          "key": "last_ban_at",
+          "rust": "i64"
+        },
+        {
+          "key": "median_interval_secs",
+          "rust": "f64"
+        },
+        {
+          "key": "predicted_next_attack",
+          "rust": "i64"
+        },
+        {
+          "key": "remaining_secs",
+          "rust": "i64"
+        },
+        {
+          "key": "confidence",
+          "rust": "u8"
+        },
+        {
+          "key": "urgency",
+          "rust": "String"
+        }
+      ]
+    },
+    "AttackPredictionSummary": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "AttackPredictionSummary",
+      "inline": false,
+      "fields": [
+        {
+          "key": "predictions",
+          "rust": "Vec<AttackPrediction>"
+        },
+        {
+          "key": "jail_trends",
+          "rust": "Vec<JailAttackTrend>"
+        },
+        {
+          "key": "imminent_count",
+          "rust": "u32"
+        },
+        {
+          "key": "within_24h_count",
+          "rust": "u32"
+        }
+      ]
+    },
+    "JailAttackTrend": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "JailAttackTrend",
+      "inline": false,
+      "fields": [
+        {
+          "key": "jail_name",
+          "rust": "String"
+        },
+        {
+          "key": "bans_24h",
+          "rust": "u32"
+        },
+        {
+          "key": "bans_7d",
+          "rust": "u32"
+        },
+        {
+          "key": "trend",
+          "rust": "String"
+        },
+        {
+          "key": "predicted_attackers_24h",
+          "rust": "u32"
+        }
+      ]
+    },
+    "ThresholdRecommendation": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "ThresholdRecommendation",
+      "inline": false,
+      "fields": [
+        {
+          "key": "jail_name",
+          "rust": "String"
+        },
+        {
+          "key": "current_threshold",
+          "rust": "u32"
+        },
+        {
+          "key": "recommended_threshold",
+          "rust": "u32"
+        },
+        {
+          "key": "direction",
+          "rust": "String"
+        },
+        {
+          "key": "total_bans",
+          "rust": "u32"
+        },
+        {
+          "key": "unique_ips",
+          "rust": "u32"
+        },
+        {
+          "key": "recidivist_ips",
+          "rust": "u32"
+        },
+        {
+          "key": "recidivism_rate",
+          "rust": "f64"
+        },
+        {
+          "key": "avg_bans_per_ip",
+          "rust": "f64"
+        },
+        {
+          "key": "reason",
+          "rust": "String"
+        },
+        {
+          "key": "confidence",
+          "rust": "u8"
+        }
+      ]
+    },
+    "ThresholdRecommendationResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "ThresholdRecommendationResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "recommendations",
+          "rust": "Vec<ThresholdRecommendation>"
+        },
+        {
+          "key": "summary",
+          "rust": "String"
+        }
+      ]
+    },
+    "BanDurationRecommendation": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "BanDurationRecommendation",
+      "inline": false,
+      "fields": [
+        {
+          "key": "jail_name",
+          "rust": "String"
+        },
+        {
+          "key": "current_ban_time",
+          "rust": "i32"
+        },
+        {
+          "key": "recidivist_count",
+          "rust": "u32"
+        },
+        {
+          "key": "median_return_secs",
+          "rust": "u64"
+        },
+        {
+          "key": "recommended_ban_time",
+          "rust": "u64"
+        },
+        {
+          "key": "reason",
+          "rust": "String"
+        },
+        {
+          "key": "needs_adjustment",
+          "rust": "bool"
+        }
+      ]
+    },
+    "BanDurationRecommendationResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "BanDurationRecommendationResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "recommendations",
+          "rust": "Vec<BanDurationRecommendation>"
+        },
+        {
+          "key": "summary",
+          "rust": "String"
+        }
+      ]
+    },
+    "ReputationEntryResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "ReputationEntryResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ip",
+          "rust": "String"
+        },
+        {
+          "key": "score",
+          "rust": "u32"
+        },
+        {
+          "key": "last_failure_at",
+          "rust": "i64"
+        },
+        {
+          "key": "total_failures",
+          "rust": "u32"
+        },
+        {
+          "key": "total_bans",
+          "rust": "u32"
+        },
+        {
+          "key": "threshold_multiplier",
+          "rust": "f64"
+        }
+      ]
+    },
+    "UdpPortDistributionResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "UdpPortDistributionResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ports",
+          "rust": "Vec<UdpPortEntry>"
+        },
+        {
+          "key": "total_entries",
+          "rust": "usize"
+        },
+        {
+          "key": "max_entries",
+          "rust": "usize"
+        }
+      ]
+    },
+    "UdpPortEntry": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "UdpPortEntry",
+      "inline": false,
+      "fields": [
+        {
+          "key": "port",
+          "rust": "u16"
+        },
+        {
+          "key": "packets",
+          "rust": "u64"
+        },
+        {
+          "key": "bytes",
+          "rust": "u64"
+        },
+        {
+          "key": "last_seen_secs",
+          "rust": "u64"
+        }
+      ]
+    },
+    "IcmpTypeDistributionResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "IcmpTypeDistributionResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "types",
+          "rust": "Vec<IcmpTypeEntry>"
+        },
+        {
+          "key": "total_entries",
+          "rust": "usize"
+        },
+        {
+          "key": "max_entries",
+          "rust": "usize"
+        }
+      ]
+    },
+    "IcmpTypeEntry": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "IcmpTypeEntry",
+      "inline": false,
+      "fields": [
+        {
+          "key": "type",
+          "rust": "u8"
+        },
+        {
+          "key": "code",
+          "rust": "u8"
+        },
+        {
+          "key": "packets",
+          "rust": "u64"
+        },
+        {
+          "key": "bytes",
+          "rust": "u64"
+        },
+        {
+          "key": "last_seen_secs",
+          "rust": "u64"
+        }
+      ]
+    },
+    "PacketSizeDistributionResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "PacketSizeDistributionResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "labels",
+          "rust": "Vec<String>"
+        },
+        {
+          "key": "counts",
+          "rust": "Vec<u64>"
+        },
+        {
+          "key": "total",
+          "rust": "u64"
+        },
+        {
+          "key": "percentages",
+          "rust": "Vec<f64>"
+        }
+      ]
+    },
+    "TtlDistributionResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "TtlDistributionResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "labels",
+          "rust": "Vec<String>"
+        },
+        {
+          "key": "counts",
+          "rust": "Vec<u64>"
+        },
+        {
+          "key": "total",
+          "rust": "u64"
+        },
+        {
+          "key": "percentages",
+          "rust": "Vec<f64>"
+        }
+      ]
+    },
+    "BanDurationHistogramResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "BanDurationHistogramResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "labels",
+          "rust": "Vec<String>"
+        },
+        {
+          "key": "counts",
+          "rust": "Vec<u64>"
+        },
+        {
+          "key": "total",
+          "rust": "u64"
+        }
+      ]
+    },
+    "IpFragmentStatsResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "IpFragmentStatsResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "total_packets",
+          "rust": "u64"
+        },
+        {
+          "key": "fragment_packets",
+          "rust": "u64"
+        },
+        {
+          "key": "fragment_ratio",
+          "rust": "f64"
+        }
+      ]
+    },
+    "PortScanResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "PortScanResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "threshold",
+          "rust": "u32"
+        },
+        {
+          "key": "total_detected",
+          "rust": "u32"
+        },
+        {
+          "key": "scanners",
+          "rust": "Vec<PortScannerEntry>"
+        }
+      ]
+    },
+    "PortScannerEntry": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "PortScannerEntry",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ip",
+          "rust": "String"
+        },
+        {
+          "key": "unique_ports",
+          "rust": "u32"
+        },
+        {
+          "key": "packets",
+          "rust": "u64"
+        }
+      ]
+    },
+    "ServiceProbeResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "ServiceProbeResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "threshold",
+          "rust": "u32"
+        },
+        {
+          "key": "probes",
+          "rust": "Vec<ServiceProbeEntry>"
+        }
+      ]
+    },
+    "ServiceProbeEntry": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "ServiceProbeEntry",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ip",
+          "rust": "String"
+        },
+        {
+          "key": "protocol_count",
+          "rust": "u32"
+        },
+        {
+          "key": "packets",
+          "rust": "u64"
+        }
+      ]
+    },
+    "NetworkBlock": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "NetworkBlock",
+      "inline": false,
+      "fields": [
+        {
+          "key": "subnet",
+          "rust": "String"
+        },
+        {
+          "key": "unique_ips",
+          "rust": "u32"
+        },
+        {
+          "key": "total_bans",
+          "rust": "u32"
+        },
+        {
+          "key": "last_banned_at",
+          "rust": "i64"
+        },
+        {
+          "key": "top_ip",
+          "rust": "String"
+        }
+      ]
+    },
+    "HourlyHeatmap": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "HourlyHeatmap",
+      "inline": false,
+      "fields": [
+        {
+          "key": "hours",
+          "rust": "[HourlyBucket; 24]"
+        }
+      ]
+    },
+    "HourlyBucket": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "HourlyBucket",
+      "inline": false,
+      "fields": [
+        {
+          "key": "hour",
+          "rust": "u32"
+        },
+        {
+          "key": "bans",
+          "rust": "u64"
+        },
+        {
+          "key": "failed_attempts",
+          "rust": "u64"
+        },
+        {
+          "key": "ddos_events",
+          "rust": "u64"
+        }
+      ]
+    },
+    "LogPageResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "LogPageResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "items",
+          "rust": "Vec<LogEntry>"
+        },
+        {
+          "key": "total_lines",
+          "rust": "u64"
+        },
+        {
+          "key": "page",
+          "rust": "u32"
+        },
+        {
+          "key": "page_size",
+          "rust": "u32"
+        },
+        {
+          "key": "total_pages",
+          "rust": "u32"
+        }
+      ]
+    },
+    "LogEntry": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "LogEntry",
+      "inline": false,
+      "fields": [
+        {
+          "key": "line_number",
+          "rust": "u64"
+        },
+        {
+          "key": "content",
+          "rust": "String"
+        }
+      ]
+    },
+    "LogQueryParams": {
+      "kind": "request",
+      "params": [],
+      "ts_name": "LogQueryParams",
+      "inline": false,
+      "fields": [
+        {
+          "key": "page",
+          "rust": "Option<u32>"
+        },
+        {
+          "key": "page_size",
+          "rust": "Option<u32>"
+        },
+        {
+          "key": "level",
+          "rust": "Option<String>"
+        },
+        {
+          "key": "keyword",
+          "rust": "Option<String>"
+        },
+        {
+          "key": "since",
+          "rust": "Option<String>"
+        }
+      ]
+    },
+    "PaginationParams": {
+      "kind": "request",
+      "params": [],
+      "ts_name": "PaginationParams",
+      "inline": false,
+      "fields": [
+        {
+          "key": "page",
+          "rust": "Option<u32>"
+        },
+        {
+          "key": "page_size",
+          "rust": "Option<u32>"
+        },
+        {
+          "key": "sort_by",
+          "rust": "Option<String>"
+        }
+      ]
+    },
+    "SseStatusResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "SseStatusResponse",
+      "inline": true,
+      "fields": [
+        {
+          "key": "current_connections",
+          "rust": "usize"
+        },
+        {
+          "key": "max_connections",
+          "rust": "usize"
+        },
+        {
+          "key": "limit_reached",
+          "rust": "bool"
+        }
+      ]
+    }
+  },
+  "codes": {
+    "0": {
+      "status": 200,
+      "text": "成功；message 为空串"
+    },
+    "40001": {
+      "status": 400,
+      "text": "封禁失败（内核未确认、IP 非法、或内核返回错误）"
+    },
+    "40002": {
+      "status": 400,
+      "text": "解封失败（IP 非法或内核拒绝）"
+    },
+    "40003": {
+      "status": 400,
+      "text": "批量解封临时封禁失败 / 添加白名单失败"
+    },
+    "40004": {
+      "status": 400,
+      "text": "更新配置失败 / 移除白名单失败"
+    },
+    "40005": {
+      "status": 400,
+      "text": "批量封禁参数非法（列表为空或超过 100 条）/ 日志查询参数非法"
+    },
+    "40006": {
+      "status": 400,
+      "text": "封禁详情查询失败（IP 非法）"
+    },
+    "404": {
+      "status": 404,
+      "text": "Jail 不存在"
+    },
+    "50002": {
+      "status": 500,
+      "text": "服务端内部错误（历史库查询任务 join 失败等），message 含具体原因"
+    }
+  },
+  "errmodels": {
+    "AUTH_UNAUTHORIZED": {
+      "shape": "text",
+      "where": "src/daemon/http_exporter/auth.rs:401 Unauthorized",
+      "statuses": [
+        401
+      ],
+      "body": "401 Unauthorized\n",
+      "note": "有意不发 WWW-Authenticate：该头会让浏览器弹原生凭据对话框，且对话框期间 fetch 一直挂起拿不到响应，表现为『输错密码按钮永久转圈』。本项目用应用内登录表单，凭据由前端显式携带。严格 HTTP 语义下 401 应带该头，此处为可用性刻意偏离。"
+    },
+    "STATIC_NOT_FOUND": {
+      "shape": "text",
+      "where": "src/daemon/http_exporter/handler.rs:404 Not Found",
+      "statuses": [
+        404
+      ],
+      "body": "404 Not Found\n",
+      "note": "静态资源与 sw.js 未命中时的纯文本 404（无认证路由组，不经信封）"
+    },
+    "AXUM_EXTRACTOR_DEFAULT": {
+      "shape": "axum_default",
+      "where": "src/daemon/http_exporter/handler.rs:Json(req): Json<",
+      "statuses": [
+        422,
+        400,
+        415,
+        404,
+        405
+      ],
+      "body": "",
+      "note": "axum 提取器默认错误：Json 反序列化失败 422、Query 解析失败 400、Content-Type 不符 415、方法不匹配 405、路径不匹配 404。响应体是 axum 的纯文本，不是信封 —— 前端不能假设所有错误都能 JSON.parse。"
+    }
+  },
+  "defects": [
+    {
+      "name": "HTTP_BANS_DUAL_SHAPE",
+      "severity": "high",
+      "where": "src/daemon/http_exporter/handler.rs:if params.page.is_some()",
+      "text": "GET /api/v1/bans 有两种互不兼容的响应形状：不带 page/page_size 时返回裸数组，带了才返回分页信封。前端为此维护两个重载签名与运行期分支。它让『data 一定是对象』这一前提失效，任何通吃的错误处理都会踩空"
+    },
+    {
+      "name": "HTTP_SSE_STATUS_INCOMPLETE",
+      "severity": "medium",
+      "where": "src/daemon/http_exporter/handler.rs:current >= max",
+      "text": "/api/v1/stats/sse-status 只反映 /api/v1/events 的 10 连接上限，看不到 /api/v1/logs/stream 的独立 5 连接上限。前端用它判断『是否达到上限』会在日志流被拒时误判为未达上限，从而把 503 当成网络故障无限重连"
+    },
+    {
+      "name": "HTTP_RECIDIVISM_RATE_UNIT",
+      "severity": "medium",
+      "where": "src/daemon/web_ui/analysis.rs:recidivism_rate",
+      "text": "recidivism_rate 同名不同单位：/api/v1/stats/recidivism 返回百分数（0–100），/api/v1/stats/ban-effectiveness 的各 level 返回比例（0–1）。前端若用同一个格式化函数渲染，会有一个高出 100 倍"
+    },
+    {
+      "name": "HTTP_TODAY_BANS_EQUALS_TOTAL",
+      "severity": "low",
+      "where": "src/daemon/web_ui/stats.rs:today_bans",
+      "text": "today_bans 与 total_bans 取的是同一个值，『今日』这一时间窗并未实现。仪表盘上两个数字永远相同"
+    },
+    {
+      "name": "HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS",
+      "severity": "low",
+      "where": "src/daemon/history_snapshot/threshold_analysis.rs:推荐阈值（0 = 无需调整）",
+      "text": "ThresholdRecommendation.recommended_threshold 的注释称『0=无需调整』，但所有生成分支都不产生 0（最小也是原阈值）。前端按注释判断『无需调整』会永远不成立"
+    },
+    {
+      "name": "HTTP_SERVICE_PROBE_NO_TOTAL",
+      "severity": "low",
+      "where": "src/daemon/web_ui/packet_analysis.rs:ServiceProbeResponse",
+      "text": "ServiceProbeResponse 缺 total_detected，而同类的 PortScanResponse 有。前端在两个页面上无法用同一套『检出 N 个』文案"
+    },
+    {
+      "name": "HTTP_HEALTH_NOT_ENVELOPED",
+      "severity": "low",
+      "where": "src/daemon/http_exporter/handler.rs:fn handle_health",
+      "text": "/health 与 /healthz 不走信封，直接返回 RuntimeSnapshot；且未就绪时是 503 而非 5xx 信封。它是全项目唯一一个『HTTP 状态码即语义』的端点，前端必须特判（endpoints.ts 用 getRawJson）"
+    },
+    {
+      "name": "HTTP_LOG_SSE_LIMIT_DOC_DRIFT",
+      "severity": "low",
+      "where": "src/daemon/web_ui/log_viewer.rs:SSE 连接与 Web UI SSE 共享",
+      "text": "日志流的上限注释说『与 Web UI SSE 共享 MAX_SSE_CONNECTIONS 限制』，但实现是两条互相独立的计数器：/api/v1/events 用 sse.rs 的 MAX_SSE_CONNECTIONS=10，日志流用本文件的 MAX_LOG_SSE_CONNECTIONS=5。两处注释（模块头第 8 行与常量上的文档注释）都与实现不符，容易误导排查——『events 才连了 3 个，日志流却被拒』不是 bug"
+    },
+    {
+      "name": "HTTP_BAN_SORT_DOC_INCOMPLETE",
+      "severity": "low",
+      "where": "src/daemon/web_ui/ban_ops.rs:排序字段（可选）",
+      "text": "PaginationParams.sort_by 的文档注释只列了 4 个取值（banned_at_desc/banned_at_asc/ip_asc/jail_asc），实现另有 3 个（ip_desc/remaining_asc/remaining_desc），前端 BanSortKey 联合类型 7 个取值——与实现一致、唯独与注释不符。契约以实现与前端为准"
+    }
+  ]
+}

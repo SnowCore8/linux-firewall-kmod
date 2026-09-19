@@ -380,32 +380,34 @@ def main() -> int:
     return 0
 
 
-def check_artifacts() -> list[str]:
-    """确认生成物本身可用：Rust 契约能编译、TS 契约能过类型检查。
+def _toolchain_check(problems: list[str], rs_src: str, ts_src: str) -> None:
+    """用各自工具链编译一对生成物（Rust + TS）。
 
     布局比对只覆盖手写代码，这里补上「产物能否被各自工具链接受」——
     生成器语法错误（如漏转义 Rust 关键字）不会在三方比对里暴露。
     """
-    problems: list[str] = []
-    print("=== 生成物自检（各自工具链）===")
+    m = re.search(r"([\w.-]+\.rs)$", rs_src)
+    rs_name = m.group(1) if m else os.path.basename(rs_src)
+    if os.path.isfile(rs_src):
+        with tempfile.TemporaryDirectory() as td:
+            rlib = os.path.join(td, "c.rlib")
+            proc = subprocess.run(
+                ["rustc", "--edition", "2021", "--crate-type", "lib",
+                 "-o", rlib, rs_src],
+                capture_output=True, text=True,
+            )
+            if proc.returncode != 0:
+                problems.append(f"{rs_name} 编译失败:\n" + proc.stderr[-3000:])
+                print(f"  失败  {rs_name} 编译")
+            else:
+                print(f"  OK    {rs_name} 编译")
 
-    rs_src = os.path.join(GEN_DIR, "netlink_contract.rs")
-    with tempfile.TemporaryDirectory() as td:
-        rlib = os.path.join(td, "nl.rlib")
-        proc = subprocess.run(
-            ["rustc", "--edition", "2021", "--crate-type", "lib",
-             "-o", rlib, rs_src],
-            capture_output=True, text=True,
-        )
-        if proc.returncode != 0:
-            problems.append("netlink_contract.rs 编译失败:\n" + proc.stderr[-3000:])
-            print("  失败  netlink_contract.rs 编译")
-        else:
-            print("  OK    netlink_contract.rs 编译")
-
-    ts_src = os.path.join(GEN_DIR, "netlink.d.ts")
+    m = re.search(r"([\w.-]+\.(?:ts|d\.ts))$", ts_src)
+    ts_name = m.group(1) if m else os.path.basename(ts_src)
     # 前端依赖装在 frontend/ 下，tsc 也从那里找
     tsc = os.environ.get("TSC") or os.path.join(ROOT, "frontend", "node_modules", ".bin", "tsc")
+    if not os.path.isfile(ts_src):
+        return
     if os.path.isfile(tsc):
         proc = subprocess.run(
             [tsc, "--noEmit", "--strict", "--skipLibCheck", "--target", "es2020",
@@ -413,14 +415,24 @@ def check_artifacts() -> list[str]:
             capture_output=True, text=True, cwd=ROOT,
         )
         if proc.returncode != 0:
-            problems.append("netlink.d.ts 类型检查失败:\n" + proc.stdout[-3000:])
-            print("  失败  netlink.d.ts tsc --noEmit")
+            problems.append(f"{ts_name} 类型检查失败:\n" + proc.stdout[-3000:])
+            print(f"  失败  {ts_name} tsc --noEmit")
         else:
-            print("  OK    netlink.d.ts tsc --noEmit")
+            print(f"  OK    {ts_name} tsc --noEmit")
     else:
         # 前端依赖未安装时不算失败，但必须显式说明「未校验」
-        print(f"  跳过  netlink.d.ts tsc（未找到 {tsc}）")
+        print(f"  跳过  {ts_name} tsc（未找到 {tsc}）")
 
+
+def check_artifacts() -> list[str]:
+    """确认生成物本身可用：Rust 契约能编译、TS 契约能过类型检查。"""
+    problems: list[str] = []
+    print("=== 生成物自检（各自工具链）===")
+    _toolchain_check(
+        problems,
+        os.path.join(GEN_DIR, "netlink_contract.rs"),
+        os.path.join(GEN_DIR, "netlink.d.ts"),
+    )
     print()
     return problems
 

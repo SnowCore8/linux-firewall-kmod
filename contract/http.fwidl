@@ -1,0 +1,1246 @@
+# 守护进程 HTTP 接口契约 —— daemon ↔ 前端 的单一真相源
+#
+# 三份契约的分工：netlink.fwidl 管**字节布局**（内核↔daemon），procfs.fwidl 管
+# **命令文法**（内核↔运维），本文件管**路由表 + JSON 形状 + 错误模型**
+# （daemon↔前端）。
+#
+# 为什么需要这份契约
+# ------------------
+# 1. 同一个字段被写了两遍：daemon 的 Rust struct 与前端 types.ts。两边靠人工
+#    同步，此前已出现 recidivism_rate 同名不同单位（百分数 0–100 vs 比例 0–1）
+#    这类只在运行期才暴露的偏差。
+# 2. 错误不是单一形状：信封 / 纯文本 / axum 提取器默认三套并存，且 HTTP 状态
+#    码与信封内 code 是两套编号。前端若只按一套处理，就会出现「登录错密码时
+#    按钮永久转圈」这类问题（见 auth 段对 WWW-Authenticate 的说明）。
+# 3. 两条 SSE 流各自有独立的连接上限（10 / 5），而诊断端点只反映其中一条，
+#    前端据此判断「是否达到上限」会误判。
+#
+# 本文件的写法
+# ------------
+# - `route` 的 `auth` 必须与 handler.rs 里该路由落在哪个 Router 组一致：
+#   `none` = public_routes（无认证），`required` = protected_routes（经中间件）。
+# - `status` 是成功路径的 HTTP 状态码，必须能在 handler 里读到。
+# - `codes` 是**信封内的业务码**，不是 HTTP 状态码；每个码都要在 handler.rs
+#   里有 `::error(<码>` 调用点。
+# - 字段名一律写**线上 JSON 的 key**（不是 Rust 字段名）。因此对 `r#type`
+#   这类 raw identifier，这里写 `type`。
+#
+# 与实现核对
+# ----------
+# verify_http.py 会到 handler.rs / auth.rs / sse.rs / web_ui/*.rs 与前端
+# types.ts / endpoints.ts 逐项核对：路由、认证、SSE 上限与事件、信封、
+# 业务码、错误形状、安全头、以及**跨层字段**（同一个字段必须同时存在于
+# Rust 结构体与 TS interface）。任何一处对不上都是门禁失败。
+
+httpproto firewall_daemon_http
+
+namespace Http
+
+# API 前缀（所有 RESTful 端点都在其下）
+base "/api/v1"
+
+# ============================================================================
+# 统一信封
+# ============================================================================
+#
+# 成功：code = 0，message = ""（空串，不是 "ok"）。
+# 失败：code = 业务码，data 为 null（Rust 侧是 ()，序列化成 null）。
+#
+# 注意：**没有**任何 `skip_serializing_if`。成功响应里 data 一定存在，
+# 失败响应里 data 一定存在且为 null，message 一定存在。前端不需要判 undefined。
+
+envelope {
+  code: i32
+  data: T
+  message: String
+}
+
+# ============================================================================
+# 认证
+# ============================================================================
+#
+# Basic Auth，凭据来自配置的 metrics_username / metrics_password。
+# 两项**都为空**才视为「未配置认证」并放行；半配置（只给一项）一律判失败，
+# 以免一个配置笔误让整个 API 开放。
+#
+# 连续失败达到阈值后锁定一段时间，期间一律拒绝（含正确凭据）——这是刻意的
+# 暴力破解防护，代价是运维在锁定期内无法登录。
+#
+# 前端登录页对应行为：凭据填错超过阈值后，正确的凭据也会被拒，直到锁定窗口
+# 过去。UI 必须把这一点说清楚，否则用户会以为密码不对而反复重试、不断续锁。
+
+auth {
+  scheme = "Basic"
+  token_query = "access_token"
+  failure_threshold = 10
+  lockout_seconds = 60
+  # 401 的 HTTP 状态码（信封里没有对应业务码——认证失败走的是纯文本形状）
+  unauthorized_status = 401
+}
+
+# ============================================================================
+# 错误形状
+# ============================================================================
+#
+# 三种形状并存是**实现现状**，不是设计选择。重写时应收敛为一种；在此之前
+# 前端必须三种都能处理。
+
+errmodel AUTH_UNAUTHORIZED {
+  shape = text
+  where = "src/daemon/http_exporter/auth.rs:401 Unauthorized"
+  statuses = 401
+  body = "401 Unauthorized\n"
+  note = "有意不发 WWW-Authenticate：该头会让浏览器弹原生凭据对话框，且对话框期间 fetch 一直挂起拿不到响应，表现为『输错密码按钮永久转圈』。本项目用应用内登录表单，凭据由前端显式携带。严格 HTTP 语义下 401 应带该头，此处为可用性刻意偏离。"
+}
+
+errmodel STATIC_NOT_FOUND {
+  shape = text
+  where = "src/daemon/http_exporter/handler.rs:404 Not Found"
+  statuses = 404
+  body = "404 Not Found\n"
+  note = "静态资源与 sw.js 未命中时的纯文本 404（无认证路由组，不经信封）"
+}
+
+errmodel AXUM_EXTRACTOR_DEFAULT {
+  shape = axum_default
+  where = "src/daemon/http_exporter/handler.rs:Json(req): Json<"
+  statuses = 422, 400, 415, 404, 405
+  note = "axum 提取器默认错误：Json 反序列化失败 422、Query 解析失败 400、Content-Type 不符 415、方法不匹配 405、路径不匹配 404。响应体是 axum 的纯文本，不是信封 —— 前端不能假设所有错误都能 JSON.parse。"
+}
+
+# ============================================================================
+# 安全头（中间件对**所有**路由统一施加）
+# ============================================================================
+
+header "X-Content-Type-Options" {
+  scope = all
+  value = "nosniff"
+}
+
+header "X-Frame-Options" {
+  scope = all
+  value = "DENY"
+}
+
+header "Content-Security-Policy" {
+  scope = all
+  value = "default-src 'none'"
+  value_webui = "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; connect-src 'self'; font-src 'self' data: https://fonts.gstatic.com"
+}
+
+header "Cache-Control" {
+  scope = all
+  value = "no-store"
+}
+
+# ============================================================================
+# 业务码（信封内的 code 字段）
+# ============================================================================
+#
+# 与 HTTP 状态码是两套编号：HTTP 状态码表达「请求是否被处理」，业务码表达
+# 「为什么失败」。同一个业务码在不同路由上可能配不同的 HTTP 状态码
+# （如 40004 在 PUT /config 与 DELETE /whitelist/:cidr 上都是 400，
+# 而在别处是别的语义）。
+
+code 0 {
+  status = 200
+  text = "成功；message 为空串"
+}
+
+code 40001 {
+  status = 400
+  text = "封禁失败（内核未确认、IP 非法、或内核返回错误）"
+}
+
+code 40002 {
+  status = 400
+  text = "解封失败（IP 非法或内核拒绝）"
+}
+
+code 40003 {
+  status = 400
+  text = "批量解封临时封禁失败 / 添加白名单失败"
+}
+
+code 40004 {
+  status = 400
+  text = "更新配置失败 / 移除白名单失败"
+}
+
+code 40005 {
+  status = 400
+  text = "批量封禁参数非法（列表为空或超过 100 条）/ 日志查询参数非法"
+}
+
+code 40006 {
+  status = 400
+  text = "封禁详情查询失败（IP 非法）"
+}
+
+code 404 {
+  status = 404
+  text = "Jail 不存在"
+}
+
+code 50002 {
+  status = 500
+  text = "服务端内部错误（历史库查询任务 join 失败等），message 含具体原因"
+}
+
+# ============================================================================
+# 已核实缺陷：重写必须修复，或在本文件中显式改写为「有意保留」
+# ============================================================================
+
+defect HTTP_BANS_DUAL_SHAPE {
+  severity = high
+  where = "src/daemon/http_exporter/handler.rs:if params.page.is_some()"
+  text = "GET /api/v1/bans 有两种互不兼容的响应形状：不带 page/page_size 时返回裸数组，带了才返回分页信封。前端为此维护两个重载签名与运行期分支。它让『data 一定是对象』这一前提失效，任何通吃的错误处理都会踩空"
+}
+
+defect HTTP_SSE_STATUS_INCOMPLETE {
+  severity = medium
+  where = "src/daemon/http_exporter/handler.rs:current >= max"
+  text = "/api/v1/stats/sse-status 只反映 /api/v1/events 的 10 连接上限，看不到 /api/v1/logs/stream 的独立 5 连接上限。前端用它判断『是否达到上限』会在日志流被拒时误判为未达上限，从而把 503 当成网络故障无限重连"
+}
+
+defect HTTP_RECIDIVISM_RATE_UNIT {
+  severity = medium
+  where = "src/daemon/web_ui/analysis.rs:recidivism_rate"
+  text = "recidivism_rate 同名不同单位：/api/v1/stats/recidivism 返回百分数（0–100），/api/v1/stats/ban-effectiveness 的各 level 返回比例（0–1）。前端若用同一个格式化函数渲染，会有一个高出 100 倍"
+}
+
+defect HTTP_TODAY_BANS_EQUALS_TOTAL {
+  severity = low
+  where = "src/daemon/web_ui/stats.rs:today_bans"
+  text = "today_bans 与 total_bans 取的是同一个值，『今日』这一时间窗并未实现。仪表盘上两个数字永远相同"
+}
+
+defect HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS {
+  severity = low
+  where = "src/daemon/history_snapshot/threshold_analysis.rs:推荐阈值（0 = 无需调整）"
+  text = "ThresholdRecommendation.recommended_threshold 的注释称『0=无需调整』，但所有生成分支都不产生 0（最小也是原阈值）。前端按注释判断『无需调整』会永远不成立"
+}
+
+defect HTTP_SERVICE_PROBE_NO_TOTAL {
+  severity = low
+  where = "src/daemon/web_ui/packet_analysis.rs:ServiceProbeResponse"
+  text = "ServiceProbeResponse 缺 total_detected，而同类的 PortScanResponse 有。前端在两个页面上无法用同一套『检出 N 个』文案"
+}
+
+defect HTTP_HEALTH_NOT_ENVELOPED {
+  severity = low
+  where = "src/daemon/http_exporter/handler.rs:fn handle_health"
+  text = "/health 与 /healthz 不走信封，直接返回 RuntimeSnapshot；且未就绪时是 503 而非 5xx 信封。它是全项目唯一一个『HTTP 状态码即语义』的端点，前端必须特判（endpoints.ts 用 getRawJson）"
+}
+
+defect HTTP_LOG_SSE_LIMIT_DOC_DRIFT {
+  severity = low
+  where = "src/daemon/web_ui/log_viewer.rs:SSE 连接与 Web UI SSE 共享"
+  text = "日志流的上限注释说『与 Web UI SSE 共享 MAX_SSE_CONNECTIONS 限制』，但实现是两条互相独立的计数器：/api/v1/events 用 sse.rs 的 MAX_SSE_CONNECTIONS=10，日志流用本文件的 MAX_LOG_SSE_CONNECTIONS=5。两处注释（模块头第 8 行与常量上的文档注释）都与实现不符，容易误导排查——『events 才连了 3 个，日志流却被拒』不是 bug"
+}
+
+defect HTTP_BAN_SORT_DOC_INCOMPLETE {
+  severity = low
+  where = "src/daemon/web_ui/ban_ops.rs:排序字段（可选）"
+  text = "PaginationParams.sort_by 的文档注释只列了 4 个取值（banned_at_desc/banned_at_asc/ip_asc/jail_asc），实现另有 3 个（ip_desc/remaining_asc/remaining_desc），前端 BanSortKey 联合类型 7 个取值——与实现一致、唯独与注释不符。契约以实现与前端为准"
+}
+
+# ============================================================================
+# 路由表
+# ============================================================================
+#
+# `returns` 取 type | text | bytes | stream：
+#   type   经信封返回 JSON 载荷（data 的类型见同名 type/request 块）
+#   text   不经信封，直接返回纯文本（静态资源未命中等）
+#   bytes  二进制（sw.js 等静态文件）
+#   stream 长连接 SSE（必须声明 max_connections 与 events）
+#
+# `status` 是**成功**路径的 HTTP 状态码；`alt_status` 是同一路由上另一个
+# 「成功但语义不同」的状态码（如 201 Created 与 200 OK 并存）。失败状态码
+# 由 codes 对应的业务码隐含（见 code 块）。
+
+# ---- 无认证：健康检查 -------------------------------------------------------
+
+route GET "/health" {
+  auth = none
+  handler = handle_health
+  returns = type
+  status = 200
+  alt_status = 503
+  note = "唯一『HTTP 状态码即语义』的端点：200 = status==\"ok\"，503 = 未就绪。载荷直接是 RuntimeSnapshot，不经信封（见 defect HTTP_HEALTH_NOT_ENVELOPED）。"
+}
+
+route GET "/healthz" {
+  auth = none
+  handler = handle_health
+  returns = type
+  status = 200
+  alt_status = 503
+  note = "与 /health 同函数，供 k8s/负载均衡探针使用"
+}
+
+# ---- 无认证：SPA 外壳与静态资源 ---------------------------------------------
+#
+# 这些路由返回的都是**不含运行时数据**的静态壳；所有数据一律经受保护的
+# /api/v1/* 取用。因此公开不泄露状态，且浏览器直接打开页面、加载子资源都不
+# 需要凭据（若放进认证组，配了凭据后页面反而打不开）。
+
+route GET "/" {
+  auth = none
+  handler = handle_redirect
+  returns = text
+  status = 302
+  note = "重定向到 /dashboard；**必须原样保留 query string**，否则 /?access_token=<token> 直达会丢凭据"
+}
+
+route GET "/dashboard" {
+  auth = none
+  handler = handle_dashboard
+  returns = text
+  status = 200
+}
+
+route GET "/bans" {
+  auth = none
+  handler = handle_spa_bans
+  returns = text
+  status = 200
+}
+
+route GET "/whitelist" {
+  auth = none
+  handler = handle_spa_whitelist
+  returns = text
+  status = 200
+}
+
+route GET "/jails" {
+  auth = none
+  handler = handle_spa_jails
+  returns = text
+  status = 200
+}
+
+route GET "/ddos" {
+  auth = none
+  handler = handle_spa_ddos
+  returns = text
+  status = 200
+}
+
+route GET "/logs" {
+  auth = none
+  handler = handle_spa_logs
+  returns = text
+  status = 200
+}
+
+route GET "/settings" {
+  auth = none
+  handler = handle_spa_settings
+  returns = text
+  status = 200
+}
+
+route GET "/static/*path" {
+  auth = none
+  handler = handle_static
+  returns = bytes
+  status = 200
+  alt_status = 404
+  note = "未命中时返回纯文本 \"404 Not Found\\n\"（errmodel STATIC_NOT_FOUND）"
+}
+
+route GET "/sw.js" {
+  auth = none
+  handler = handle_sw
+  returns = bytes
+  status = 200
+  alt_status = 404
+  note = "带 Service-Worker-Allowed: / 与 Cache-Control: no-cache；浏览器注册 SW 时不带交互式凭据，放进认证组会 401 导致注册失败"
+}
+
+# ---- 需认证：指标与 SSE -----------------------------------------------------
+
+route GET "/metrics" {
+  auth = required
+  handler = handle_metrics
+  returns = text
+  status = 200
+  note = "Prometheus 文本格式 text/plain; version=0.0.4; charset=utf-8"
+}
+
+route GET "/api/v1/events" {
+  auth = required
+  handler = handle_sse
+  returns = stream
+  status = 200
+  alt_status = 503
+  max_connections = 10
+  events = connected, stats, bans, jails, whitelist, rates
+  keepalive_secs = 15
+  note = "超过 10 连接返回 503。keep-alive 事件文本为 \"keep-alive\"。"
+}
+
+route GET "/api/v1/logs/stream" {
+  auth = required
+  handler = handle_log_stream
+  returns = stream
+  status = 200
+  alt_status = 503
+  max_connections = 5
+  events = connected, log, error
+  keepalive_secs = 15
+  note = "上限 5 与 /api/v1/events 的 10 **各自独立**；keep-alive 文本同为 \"keep-alive\"。"
+}
+
+# ---- 需认证：统计总览 -------------------------------------------------------
+
+route GET "/api/v1/stats" {
+  auth = required
+  handler = handle_api_stats
+  returns = type
+  status = 200
+  note = "载荷 StatsResponse"
+}
+
+# ---- 需认证：封禁管理 -------------------------------------------------------
+
+route GET "/api/v1/bans" {
+  auth = required
+  handler = handle_api_bans
+  returns = type
+  status = 200
+  codes = 0
+  note = "**双形态**：不带 page/page_size 时 data 是 BanResponse 的裸数组，带了才是 PaginatedResponse<BanResponse>（见 defect HTTP_BANS_DUAL_SHAPE）"
+}
+
+route POST "/api/v1/bans" {
+  auth = required
+  handler = handle_create_ban
+  returns = type
+  status = 201
+  alt_status = 200
+  codes = 40001
+  note = "请求体 CreateBanRequest；成功 201 Created，载荷 BanOperationResponse"
+}
+
+route DELETE "/api/v1/bans/:ip" {
+  auth = required
+  handler = handle_delete_ban
+  returns = type
+  status = 200
+  codes = 40002
+}
+
+route GET "/api/v1/bans/:ip/detail" {
+  auth = required
+  handler = handle_ban_detail
+  returns = type
+  status = 200
+  codes = 40006
+  note = "载荷 BanDetailResponse"
+}
+
+route POST "/api/v1/bans/unban-temporary" {
+  auth = required
+  handler = handle_unban_temporary
+  returns = type
+  status = 200
+  codes = 40003
+}
+
+route POST "/api/v1/bans/batch" {
+  auth = required
+  handler = handle_batch_ban
+  returns = type
+  status = 201
+  alt_status = 200
+  codes = 40005
+  note = "空列表或超过 100 条 → 40005；载荷 BatchOperationResponse"
+}
+
+# ---- 需认证：Jail -----------------------------------------------------------
+
+route GET "/api/v1/jails" {
+  auth = required
+  handler = handle_api_jails
+  returns = type
+  status = 200
+  note = "载荷 JailResponse 数组"
+}
+
+route PUT "/api/v1/jails/:name" {
+  auth = required
+  handler = handle_update_jail
+  returns = type
+  status = 200
+  codes = 404
+  note = "请求体 UpdateJailRequest；Jail 不存在 → 404（信封内 code=404，非 HTTP 404）"
+}
+
+# ---- 需认证：配置 -----------------------------------------------------------
+
+route GET "/api/v1/config" {
+  auth = required
+  handler = handle_api_config
+  returns = type
+  status = 200
+  note = "载荷 WebuiConfigResponse"
+}
+
+route PUT "/api/v1/config" {
+  auth = required
+  handler = handle_update_config
+  returns = type
+  status = 200
+  codes = 40004
+  note = "请求体 UpdateConfigRequest"
+}
+
+# ---- 需认证：白名单 ---------------------------------------------------------
+
+route GET "/api/v1/whitelist" {
+  auth = required
+  handler = handle_api_whitelist
+  returns = type
+  status = 200
+  note = "载荷 WhitelistEntryResponse 数组（前端 interface 名为 WhitelistEntry）"
+}
+
+route POST "/api/v1/whitelist" {
+  auth = required
+  handler = handle_create_whitelist
+  returns = type
+  status = 201
+  alt_status = 200
+  codes = 40003
+  note = "请求体 CreateWhitelistRequest"
+}
+
+route DELETE "/api/v1/whitelist/:cidr" {
+  auth = required
+  handler = handle_delete_whitelist
+  returns = type
+  status = 200
+  codes = 40004
+  note = "载荷 WhitelistOperationResponse"
+}
+
+route GET "/api/v1/whitelist/recommendations" {
+  auth = required
+  handler = handle_whitelist_recommendations
+  returns = type
+  status = 200
+  note = "载荷 WhitelistRecommendation 数组"
+}
+
+# ---- 需认证：速率 -----------------------------------------------------------
+
+route GET "/api/v1/rates/current" {
+  auth = required
+  handler = handle_api_rates_current
+  returns = type
+  status = 200
+  note = "载荷 RateResponse 数组"
+}
+
+route GET "/api/v1/rates/history" {
+  auth = required
+  handler = handle_api_rates_history
+  returns = type
+  status = 200
+  note = "载荷 RateHistoryResponse"
+}
+
+route GET "/api/v1/rates/windows" {
+  auth = required
+  handler = handle_api_rates_windows
+  returns = type
+  status = 200
+  note = "载荷 RateWindowSnapshot"
+}
+
+# ---- 需认证：统计子路由（全部经 db_blocking，失败 50002）--------------------
+
+route GET "/api/v1/stats/heatmap" {
+  auth = required
+  handler = handle_api_heatmap
+  returns = type
+  status = 200
+  note = "载荷 HourlyHeatmap（24 个 HourlyBucket 的定长数组）"
+}
+
+route GET "/api/v1/stats/recidivism" {
+  auth = required
+  handler = handle_api_recidivism
+  returns = type
+  status = 200
+  note = "载荷 RecidivismResponse；其 recidivism_rate 是**百分数 0-100**（见 defect HTTP_RECIDIVISM_RATE_UNIT）"
+}
+
+route GET "/api/v1/stats/ban-effectiveness" {
+  auth = required
+  handler = handle_api_ban_effectiveness
+  returns = type
+  status = 200
+  note = "载荷 BanEffectivenessResponse；其中 recidivism_rate 是**比例 0-1**"
+}
+
+route GET "/api/v1/stats/periodic-attackers" {
+  auth = required
+  handler = handle_api_periodic_attackers
+  returns = type
+  status = 200
+  note = "载荷 PeriodicAttacker 数组"
+}
+
+route GET "/api/v1/stats/collaborative-attacks" {
+  auth = required
+  handler = handle_api_collaborative_attacks
+  returns = type
+  status = 200
+  note = "载荷 CollaborativeAttack 数组"
+}
+
+route GET "/api/v1/stats/udp-ports" {
+  auth = required
+  handler = handle_api_udp_ports
+  returns = type
+  status = 200
+  note = "载荷 UdpPortDistributionResponse"
+}
+
+route GET "/api/v1/stats/icmp-types" {
+  auth = required
+  handler = handle_api_icmp_types
+  returns = type
+  status = 200
+  note = "载荷 IcmpTypeDistributionResponse"
+}
+
+route GET "/api/v1/stats/sse-status" {
+  auth = required
+  handler = handle_api_sse_status
+  returns = type
+  status = 200
+  note = "内联载荷（无具名结构体）：current_connections / max_connections / limit_reached；**只反映 /api/v1/events 的 10 上限**（见 defect HTTP_SSE_STATUS_INCOMPLETE）"
+}
+
+route GET "/api/v1/stats/ban-duration-histogram" {
+  auth = required
+  handler = handle_api_ban_duration_histogram
+  returns = type
+  status = 200
+  note = "载荷 BanDurationHistogramResponse"
+}
+
+route GET "/api/v1/stats/packet-sizes" {
+  auth = required
+  handler = handle_api_packet_sizes
+  returns = type
+  status = 200
+  note = "载荷 PacketSizeDistributionResponse"
+}
+
+route GET "/api/v1/stats/ttl-distribution" {
+  auth = required
+  handler = handle_api_ttl_distribution
+  returns = type
+  status = 200
+  note = "载荷 TtlDistributionResponse"
+}
+
+route GET "/api/v1/stats/ip-fragments" {
+  auth = required
+  handler = handle_api_ip_fragments
+  returns = type
+  status = 200
+  note = "载荷 IpFragmentStatsResponse"
+}
+
+route GET "/api/v1/stats/port-scanners" {
+  auth = required
+  handler = handle_api_port_scanners
+  returns = type
+  status = 200
+  note = "载荷 PortScanResponse"
+}
+
+route GET "/api/v1/stats/service-probes" {
+  auth = required
+  handler = handle_api_service_probes
+  returns = type
+  status = 200
+  note = "载荷 ServiceProbeResponse（缺 total_detected，见 defect HTTP_SERVICE_PROBE_NO_TOTAL）"
+}
+
+route GET "/api/v1/stats/ban-duration-recommendations" {
+  auth = required
+  handler = handle_api_ban_duration_recommendations
+  returns = type
+  status = 200
+  note = "载荷 BanDurationRecommendationResponse"
+}
+
+route GET "/api/v1/stats/reputation" {
+  auth = required
+  handler = handle_api_reputation
+  returns = type
+  status = 200
+  note = "载荷 ReputationEntryResponse 数组；threshold_multiplier 由内联分段函数生成（1.0 / 0.8 / 0.5）"
+}
+
+route GET "/api/v1/stats/threshold-recommendations" {
+  auth = required
+  handler = handle_api_threshold_recommendations
+  returns = type
+  status = 200
+  note = "载荷 ThresholdRecommendationResponse（recommended_threshold 的 0 语义见 defect HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS）"
+}
+
+route GET "/api/v1/stats/network-distribution" {
+  auth = required
+  handler = handle_api_network_distribution
+  returns = type
+  status = 200
+  note = "载荷 NetworkBlock 数组"
+}
+
+route GET "/api/v1/stats/attack-predictions" {
+  auth = required
+  handler = handle_api_attack_predictions
+  returns = type
+  status = 200
+  note = "载荷 AttackPredictionSummary"
+}
+
+# ---- 需认证：日志 -----------------------------------------------------------
+
+route GET "/api/v1/logs" {
+  auth = required
+  handler = handle_api_logs
+  returns = type
+  status = 200
+  codes = 40005
+  note = "查询参数 LogQueryParams；分页参数非法 → 40005；载荷 LogPageResponse"
+}
+
+# ============================================================================
+# 载荷类型
+# ============================================================================
+#
+# 字段名一律是**线上 JSON 的 key**（不是 Rust 字段名）。Rust 侧 `r#type`
+# 这类 raw identifier 在这里写作 `type`。
+#
+# 只声明**同时存在于** daemon Rust 结构体与前端 types.ts 的字段——契约的
+# 价值在跨层对齐，daemon 内部专有结构（AnalysisData、BanHistory 等）不入契约。
+#
+# `request` 块表示请求体（daemon 侧 #[derive(Deserialize)]，前端由调用点的
+# 泛型参数体现，不单独在 types.ts 声明）。
+
+# ---- 信封与分页 -------------------------------------------------------------
+
+type ApiResponse<T> {
+  code: i32
+  data: T
+  message: String
+}
+
+type PaginatedResponse<T> {
+  items: Vec<T>
+  total: u64
+  page: u32
+  page_size: u32
+  total_pages: u32
+}
+
+# ---- 运行时状态 -------------------------------------------------------------
+
+type RuntimeSnapshot {
+  status: &'static str
+  netlink_ready: bool
+  kmod_proc_present: bool
+  ban_cache_initialized: bool
+  ban_history_initialized: bool
+  active_bans: usize
+}
+
+# ---- 统计总览 ---------------------------------------------------------------
+
+type StatsResponse {
+  daemon_version: String
+  kernel_version: String
+  today_bans: u64
+  failed_attempts: u64
+  ddos_events: u64
+  uptime_seconds: u64
+  ban_trend: ChartData
+  jail_distribution: ChartData
+  failure_reasons: ChartData
+  failed_attempts_trend: ChartData
+  current_bans: u64
+  total_bans: u64
+  total_unbans: u64
+  whitelist_count: u64
+  packets_dropped: u64
+  packets_accepted: u64
+  threat_level: ThreatLevel
+}
+
+type ChartData {
+  labels: Vec<String>
+  values: Vec<u64>
+}
+
+type ThreatLevel {
+  level: String
+  score: u8
+  factors: Vec<String>
+  current_pps: u64
+  pps_ratio: f64
+  ban_table_usage: f64
+  recent_bans: u64
+  baseline_frozen: bool
+  peak_hours: bool
+}
+
+# ---- 封禁 -------------------------------------------------------------------
+
+type BanResponse {
+  ip: String
+  jail: String
+  banned_at: i64
+  remaining_seconds: i64
+  reason: String
+  ban_count: u32
+  is_permanent: bool
+}
+
+type BanDetailResponse {
+  ip: String
+  is_banned: bool
+  jail_name: String
+  reason: String
+  banned_at: i64
+  expires_at: i64
+  is_permanent: bool
+  fail_count: u32
+  ban_count: u32
+  last_unbanned_at: i64
+  was_permanent: bool
+  progressive_level: String
+  next_ban_duration: String
+  reputation_score: u32
+  reputation_multiplier: f64
+}
+
+type BanOperationResponse {
+  ip: String
+  action: String
+  permanent: bool
+  duration_seconds: Option<u64>
+}
+
+type BatchOperationResponse {
+  total: u64
+  succeeded: u64
+  failed_count: u64
+  details: Vec<String>
+}
+
+request CreateBanRequest {
+  ip: String
+  duration: Option<u64>
+  reason: Option<String>
+}
+
+# ---- Jail -------------------------------------------------------------------
+
+type JailResponse {
+  name: String
+  enabled: bool
+  ban_count: usize
+  max_retries: u32
+  effective_max_retries: u32
+  findtime: u32
+  ban_time: i32
+  is_peak_hours: bool
+  peak_hours_multiplier: f64
+  internal_ip_multiplier: f64
+  lines_parsed: u64
+  regex_matches: u64
+  ips_extracted: u64
+  failed_attempts: u64
+  bans_triggered: u64
+}
+
+request UpdateJailRequest {
+  enabled: bool
+}
+
+# ---- 配置 -------------------------------------------------------------------
+
+type WebuiConfigResponse {
+  sse_push_interval: u32
+  rate_warning_pps: u64
+  rate_critical_pps: u64
+  rate_warning_syn: u64
+  rate_critical_syn: u64
+  max_syn_per_second: u32
+  max_udp_per_second: u32
+  max_icmp_per_second: u32
+  max_ack_per_second: u32
+  max_rst_per_second: u32
+  max_fin_per_second: u32
+  static_threshold: bool
+  dynamic_threshold: bool
+  ddos_detection: bool
+  max_ban_entries: u32
+  max_whitelist_entries: u32
+  max_rate_entries: u32
+  max_local_ip_cache: u32
+  clear_logs_at: Option<String>
+}
+
+request UpdateConfigRequest {
+  sse_push_interval: Option<u32>
+  rate_warning_pps: Option<u64>
+  rate_critical_pps: Option<u64>
+  rate_warning_syn: Option<u64>
+  rate_critical_syn: Option<u64>
+  max_syn_per_second: Option<u32>
+  max_udp_per_second: Option<u32>
+  max_icmp_per_second: Option<u32>
+  max_ack_per_second: Option<u32>
+  max_rst_per_second: Option<u32>
+  max_fin_per_second: Option<u32>
+  static_threshold: Option<bool>
+  dynamic_threshold: Option<bool>
+  ddos_detection: Option<bool>
+  max_ban_entries: Option<u32>
+  max_whitelist_entries: Option<u32>
+  max_rate_entries: Option<u32>
+  max_local_ip_cache: Option<u32>
+  clear_logs_at: Option<String>
+}
+
+# ---- 白名单 -----------------------------------------------------------------
+
+# Rust 结构体叫 WhitelistEntryResponse，前端 interface 叫 WhitelistEntry —— 同一
+# 条数据在不同层用了两个名字。契约在这里显式记录，避免下次核对时又把它们当成
+# 两个不同的类型。
+type WhitelistEntryResponse {
+  ts_name = "WhitelistEntry"
+  cidr: String
+  device: String
+}
+
+type WhitelistOperationResponse {
+  cidr: String
+  action: String
+}
+
+type WhitelistRecommendation {
+  rec_type: String
+  cidr: String
+  reason: String
+  affected_ips: u32
+  total_bans: u32
+  confidence: u8
+}
+
+request CreateWhitelistRequest {
+  cidr: String
+}
+
+# ---- 速率 -------------------------------------------------------------------
+
+type RateResponse {
+  ip: String
+  packets_per_sec: u64
+  bytes_per_sec: u64
+  syn_packets_per_sec: u64
+  udp_packets_per_sec: u64
+  icmp_packets_per_sec: u64
+  ack_packets_per_sec: u64
+  rst_packets_per_sec: u64
+  fin_packets_per_sec: u64
+}
+
+type RateHistoryResponse {
+  timestamp: u64
+  total_pps: u64
+  total_bps: u64
+  tracked_ips: u32
+}
+
+type RateWindowSnapshot {
+  pps_short: u64
+  pps_mid: u64
+  pps_long: u64
+  bps_short: u64
+  bps_mid: u64
+  bps_long: u64
+}
+
+# ---- 分析：复发与攻击者 -----------------------------------------------------
+
+type RecidivismResponse {
+  total_ips: u64
+  recidivist_ips: u64
+  recidivism_rate: f64
+  permanent_bans: u64
+  top_recidivists: Vec<RecidivistEntry>
+}
+
+type RecidivistEntry {
+  ip: String
+  ban_count: u32
+  last_banned_at: i64
+  was_permanent: bool
+}
+
+type BanEffectivenessResponse {
+  levels: Vec<BanLevelEffectiveness>
+  total_unique_ips: u32
+  overall_recidivism_rate: f64
+  summary: String
+}
+
+type BanLevelEffectiveness {
+  level: u8
+  label: String
+  total_ips: u32
+  recidivist_ips: u32
+  recidivism_rate: f64
+  permanent_bans: u32
+  verdict: String
+}
+
+type PeriodicAttacker {
+  ip: String
+  ban_count: u32
+  avg_interval_secs: f64
+  interval_stddev: f64
+  periodicity_score: u8
+  jail_name: String
+  timestamps: Vec<i64>
+}
+
+type CollaborativeAttack {
+  jail_name: String
+  window_start: i64
+  window_end: i64
+  ip_count: u32
+  ips: Vec<String>
+  total_bans: u32
+  correlation_score: u8
+}
+
+type AttackPrediction {
+  ip: String
+  ban_count: u32
+  jail_name: String
+  last_ban_at: i64
+  median_interval_secs: f64
+  predicted_next_attack: i64
+  remaining_secs: i64
+  confidence: u8
+  urgency: String
+}
+
+type AttackPredictionSummary {
+  predictions: Vec<AttackPrediction>
+  jail_trends: Vec<JailAttackTrend>
+  imminent_count: u32
+  within_24h_count: u32
+}
+
+type JailAttackTrend {
+  jail_name: String
+  bans_24h: u32
+  bans_7d: u32
+  trend: String
+  predicted_attackers_24h: u32
+}
+
+type ThresholdRecommendation {
+  jail_name: String
+  current_threshold: u32
+  recommended_threshold: u32
+  direction: String
+  total_bans: u32
+  unique_ips: u32
+  recidivist_ips: u32
+  recidivism_rate: f64
+  avg_bans_per_ip: f64
+  reason: String
+  confidence: u8
+}
+
+type ThresholdRecommendationResponse {
+  recommendations: Vec<ThresholdRecommendation>
+  summary: String
+}
+
+type BanDurationRecommendation {
+  jail_name: String
+  current_ban_time: i32
+  recidivist_count: u32
+  median_return_secs: u64
+  recommended_ban_time: u64
+  reason: String
+  needs_adjustment: bool
+}
+
+type BanDurationRecommendationResponse {
+  recommendations: Vec<BanDurationRecommendation>
+  summary: String
+}
+
+type ReputationEntryResponse {
+  ip: String
+  score: u32
+  last_failure_at: i64
+  total_failures: u32
+  total_bans: u32
+  threshold_multiplier: f64
+}
+
+# ---- 分析：内核统计分布 -----------------------------------------------------
+
+type UdpPortDistributionResponse {
+  ports: Vec<UdpPortEntry>
+  total_entries: usize
+  max_entries: usize
+}
+
+type UdpPortEntry {
+  port: u16
+  packets: u64
+  bytes: u64
+  last_seen_secs: u64
+}
+
+type IcmpTypeDistributionResponse {
+  types: Vec<IcmpTypeEntry>
+  total_entries: usize
+  max_entries: usize
+}
+
+type IcmpTypeEntry {
+  type: u8
+  code: u8
+  packets: u64
+  bytes: u64
+  last_seen_secs: u64
+}
+
+type PacketSizeDistributionResponse {
+  labels: Vec<String>
+  counts: Vec<u64>
+  total: u64
+  percentages: Vec<f64>
+}
+
+type TtlDistributionResponse {
+  labels: Vec<String>
+  counts: Vec<u64>
+  total: u64
+  percentages: Vec<f64>
+}
+
+type BanDurationHistogramResponse {
+  labels: Vec<String>
+  counts: Vec<u64>
+  total: u64
+}
+
+type IpFragmentStatsResponse {
+  total_packets: u64
+  fragment_packets: u64
+  fragment_ratio: f64
+}
+
+type PortScanResponse {
+  threshold: u32
+  total_detected: u32
+  scanners: Vec<PortScannerEntry>
+}
+
+type PortScannerEntry {
+  ip: String
+  unique_ports: u32
+  packets: u64
+}
+
+type ServiceProbeResponse {
+  threshold: u32
+  probes: Vec<ServiceProbeEntry>
+}
+
+type ServiceProbeEntry {
+  ip: String
+  protocol_count: u32
+  packets: u64
+}
+
+type NetworkBlock {
+  subnet: String
+  unique_ips: u32
+  total_bans: u32
+  last_banned_at: i64
+  top_ip: String
+}
+
+# ---- 热力图与日志 -----------------------------------------------------------
+
+type HourlyHeatmap {
+  hours: [HourlyBucket; 24]
+}
+
+type HourlyBucket {
+  hour: u32
+  bans: u64
+  failed_attempts: u64
+  ddos_events: u64
+}
+
+type LogPageResponse {
+  items: Vec<LogEntry>
+  total_lines: u64
+  page: u32
+  page_size: u32
+  total_pages: u32
+}
+
+type LogEntry {
+  line_number: u64
+  content: String
+}
+
+request LogQueryParams {
+  page: Option<u32>
+  page_size: Option<u32>
+  level: Option<String>
+  keyword: Option<String>
+  since: Option<String>
+}
+
+# ---- 分页参数（请求）--------------------------------------------------------
+
+request PaginationParams {
+  page: Option<u32>
+  page_size: Option<u32>
+  sort_by: Option<String>
+}
+
+# ---- 内联载荷（无具名 Rust 结构体）------------------------------------------
+
+type SseStatusResponse {
+  inline = true
+  current_connections: usize
+  max_connections: usize
+  limit_reached: bool
+}

@@ -32,7 +32,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
+import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GEN_DIR = os.path.join(ROOT, "contract", "generated")
@@ -319,6 +321,30 @@ def check_defect_claims(contract: dict) -> list[str]:
     return problems
 
 
+def check_artifacts() -> list[str]:
+    """确认 procfs 生成物本身可用：Rust 契约能编译。
+
+    与 verify_layout.py 同一纪律——锚点/数值比对不覆盖生成器语法错误。
+    """
+    problems: list[str] = []
+    print("=== 生成物自检 ===")
+    rs_src = os.path.join(GEN_DIR, "procfs_contract.rs")
+    with tempfile.TemporaryDirectory() as td:
+        rlib = os.path.join(td, "p.rlib")
+        proc = subprocess.run(
+            ["rustc", "--edition", "2021", "--crate-type", "lib", "-o", rlib, rs_src],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            problems.append("procfs_contract.rs 编译失败:\n" + proc.stderr[-3000:])
+            print("  失败  procfs_contract.rs 编译")
+        else:
+            print("  OK    procfs_contract.rs 编译")
+    print()
+    return problems
+
+
 def main() -> int:
     if not os.path.isfile(LAYOUT_JSON):
         print("错误: 未找到生成物，请先运行 gen.py", file=sys.stderr)
@@ -339,6 +365,8 @@ def main() -> int:
     failures += check_anchors(contract)
     print()
     failures += check_defect_claims(contract)
+    print()
+    failures += check_artifacts()
 
     print()
     if failures:
