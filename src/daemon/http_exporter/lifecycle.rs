@@ -33,10 +33,26 @@ pub fn start_http_exporter(port: u16, cfg: &Config) -> thread::JoinHandle<()> {
     };
 
     thread::spawn(move || {
-        // 非回环绑定且未配置认证 → 拒绝启动（避免管理 API 对全网开放）
         let is_loopback = matches!(bind_address.as_str(), "127.0.0.1" | "::1" | "localhost");
-        let auth_configured = !metrics_user.is_empty() && !metrics_pass.is_empty();
-        if !is_loopback && !auth_configured {
+        let user_empty = metrics_user.is_empty();
+        let pass_empty = metrics_pass.is_empty();
+
+        // 半配置（只给了用户名或只给了密码）→ 拒绝启动。
+        // 运行期 check_basic_auth 对半配置按失败处理，这里提前到启动期硬失败，更早暴露配置错误
+        if user_empty != pass_empty {
+            eprintln!(
+                "[ERROR] metrics_username / metrics_password 必须同时配置（当前只配置了其中一项）"
+            );
+            crate::logger::error!(
+                crate::logger::get(),
+                "拒绝启动：HTTP 凭据半配置";
+                "address" => &bind_address,
+            );
+            return;
+        }
+
+        // 非回环绑定且完全未配置认证 → 拒绝启动（避免管理 API 对全网开放）
+        if !is_loopback && user_empty {
             eprintln!(
                 "[ERROR] 非回环地址 ({bind_address}) 绑定 HTTP 服务必须配置 metrics_username/metrics_password"
             );
@@ -67,8 +83,9 @@ pub fn start_http_exporter(port: u16, cfg: &Config) -> thread::JoinHandle<()> {
             }
         };
 
-        // 构建路由
-        let app = build_router(metrics_user, metrics_pass);
+        // 构建路由（凭据由运行期存储提供，见 set_http_auth_credentials）
+        super::set_http_auth_credentials(&metrics_user, &metrics_pass);
+        let app = build_router();
 
         // 绑定并启动服务
         let addr = format!("{bind_address}:{port}");

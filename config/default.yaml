@@ -52,8 +52,6 @@ webui:
 # ============================================================
 ddos:
   enabled: true
-  per_ip_conn_rate: 500       # 单 IP 每秒最大连接数
-  per_ip_fail_rate: 200       # 单 IP 每分钟最大失败次数
   global_conn_rate: 100000    # 全局每秒最大连接数
   auto_ban_duration: 3600     # 自动封禁时长（秒）
   auto_ban_threshold: 3       # 超阈值几次后封禁

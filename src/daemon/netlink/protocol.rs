@@ -54,6 +54,10 @@ pub enum FwNlMsgType {
     AnalysisQuery = 20,
     /// 内核 → 守护进程：分析数据响应
     AnalysisResponse = 21,
+    /// 守护进程 → 内核：注册为唯一守护进程
+    DaemonRegister = 22,
+    /// 内核 → 守护进程：注册确认/拒绝
+    DaemonRegisterAck = 23,
 }
 
 impl FwNlMsgType {
@@ -80,6 +84,8 @@ impl FwNlMsgType {
             19 => Some(Self::ConfigChange),
             20 => Some(Self::AnalysisQuery),
             21 => Some(Self::AnalysisResponse),
+            22 => Some(Self::DaemonRegister),
+            23 => Some(Self::DaemonRegisterAck),
             _ => None,
         }
     }
@@ -586,6 +592,24 @@ impl FwNlConfigUpdate {
     /// 设置最大 ICMP/s
     pub fn with_max_icmp(mut self, icmp: u64) -> Self {
         self.max_icmp_per_second = icmp.to_be();
+        self
+    }
+
+    /// 设置最大 ACK/s
+    pub fn with_max_ack(mut self, ack: u64) -> Self {
+        self.max_ack_per_second = ack.to_be();
+        self
+    }
+
+    /// 设置最大 RST/s
+    pub fn with_max_rst(mut self, rst: u64) -> Self {
+        self.max_rst_per_second = rst.to_be();
+        self
+    }
+
+    /// 设置最大 FIN/s
+    pub fn with_max_fin(mut self, fin: u64) -> Self {
+        self.max_fin_per_second = fin.to_be();
         self
     }
 

@@ -68,7 +68,6 @@ pub mod ban;
 pub mod config;
 pub mod config_reloader;
 pub mod daemonizer;
-pub mod ddos_detector;
 pub mod failed_tracker;
 pub mod file_monitor;
 pub mod history_snapshot;

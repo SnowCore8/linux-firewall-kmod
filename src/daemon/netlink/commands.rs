@@ -6,8 +6,7 @@
 use anyhow::Result;
 use std::net::IpAddr;
 
-use super::protocol::FwNlBanCmd;
-use super::protocol::FwNlConfigUpdate;
+use super::protocol::{FwNlBanCmd, FwNlConfigUpdate, FwNlMsgHdr, FwNlMsgType, FW_NL_MAGIC};
 use super::responses::{
     FwNlAnalysisQuery, FwNlListBansQuery, FwNlListRatesQuery, FwNlListWhitelistQuery,
     FwNlStatsQuery, FwNlWhitelistCmd,
@@ -75,5 +74,24 @@ impl super::NetlinkContext {
     pub fn send_analysis_query(&self, seq: u32) -> Result<()> {
         let query = FwNlAnalysisQuery::new(seq);
         self.send_command(&query.to_bytes())
+    }
+
+    /// 向内核注册为唯一守护进程
+    pub fn send_register(&self) -> Result<()> {
+        let hdr = FwNlMsgHdr {
+            magic: FW_NL_MAGIC.to_be(),
+            msg_type: (FwNlMsgType::DaemonRegister as u16).to_be(),
+            msg_len: (std::mem::size_of::<FwNlMsgHdr>() as u16).to_be(),
+            seq: 0u32.to_be(),
+        };
+        // SAFETY: FwNlMsgHdr 是 #[repr(C, packed)] 结构体，
+        // 将其内存布局直接作为字节切片发送是安全的。
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                &hdr as *const FwNlMsgHdr as *const u8,
+                std::mem::size_of::<FwNlMsgHdr>(),
+            )
+        };
+        self.send_command(bytes)
     }
 }

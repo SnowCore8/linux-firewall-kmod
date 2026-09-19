@@ -9,7 +9,7 @@
 //! - [`config`]: `Config` / `StorageConfig` / `RetentionConfig` / `WriterConfig`
 //! - [`ban`]: `BanInfo` / `BanReason` / `BanStatus` / `ActiveBanCache`
 //! - [`stats`]: `DaemonStats` / `JailStatsCounters` / per-jail 统计
-//! - [`ddos`]: `DdosConfig` / `ConnRateEntry` / `DdosEvent` / `DdosStats`
+//! - [`ddos`]: `DdosConfig` / `DdosEvent` / `DdosStats`
 //!
 //! # 并发模型
 //!
@@ -35,7 +35,7 @@ pub use ban::{
 pub use config::{
     CapacityConfig, Config, RetentionConfig, StorageConfig, WebuiConfig, WriterConfig,
 };
-pub use ddos::{ConnRateEntry, DdosConfig, DdosEvent, DdosStats, DDOS_STATS};
+pub use ddos::{DdosConfig, DdosEvent, DdosStats, DDOS_STATS};
 pub use jail::{
     FailedEntry, Jail, RegexInfo, MAX_FAILED_TIMESTAMPS, MAX_JAILS, MAX_LOG_FILES,
     MAX_REGEX_NAME_LEN, MAX_REGEX_PATTERNS,

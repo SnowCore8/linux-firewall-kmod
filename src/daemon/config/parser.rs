@@ -154,8 +154,6 @@ struct YamlRegexEntry {
 #[serde(deny_unknown_fields)]
 struct YamlDdos {
     enabled: Option<bool>,
-    per_ip_conn_rate: Option<u32>,
-    per_ip_fail_rate: Option<u32>,
     global_conn_rate: Option<u32>,
     auto_ban_duration: Option<u32>,
     auto_ban_threshold: Option<u32>,
@@ -321,12 +319,6 @@ pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
     if let Some(ddos) = &yaml_config.ddos {
         if let Some(enabled) = ddos.enabled {
             cfg.ddos.enabled = enabled;
-        }
-        if let Some(rate) = ddos.per_ip_conn_rate {
-            cfg.ddos.per_ip_conn_rate = rate;
-        }
-        if let Some(rate) = ddos.per_ip_fail_rate {
-            cfg.ddos.per_ip_fail_rate = rate;
         }
         if let Some(rate) = ddos.global_conn_rate {
             cfg.ddos.global_conn_rate = rate;

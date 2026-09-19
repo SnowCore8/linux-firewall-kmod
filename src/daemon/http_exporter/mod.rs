@@ -14,6 +14,13 @@ mod metrics;
 
 pub use lifecycle::{start_http_exporter, stop_http_exporter};
 
+/// 更新运行期 HTTP Basic Auth 凭据（SIGHUP 热重载时调用）。
+///
+/// 空/半配置语义见 `auth::set_auth_credentials`。
+pub fn set_http_auth_credentials(user: &str, pass: &str) {
+    auth::set_auth_credentials(user, pass);
+}
+
 /// 检查 HTTP 导出器是否正在运行
 pub fn is_exporter_running() -> bool {
     EXPORTER_RUNNING.load(std::sync::atomic::Ordering::Relaxed)
@@ -181,6 +188,24 @@ mod tests {
     fn check_basic_auth_no_config() {
         let result = check_basic_auth(Some("Basic dXNlcjpwYXNz"), "", "");
         assert_eq!(result, -1);
+    }
+
+    #[test]
+    fn check_basic_auth_half_config_is_rejected() {
+        // 只配置了其中一项时不得跳过认证（历史缺陷：任一为空即返回 -1 放行）
+        // 该分支不触碰 AUTH_STATE，故与其它测试无相互影响
+        assert_eq!(
+            check_basic_auth(None, "admin", ""),
+            0,
+            "密码为空时必须拒绝，不得跳过认证"
+        );
+        assert_eq!(
+            check_basic_auth(None, "", "secret"),
+            0,
+            "用户名为空时必须拒绝，不得跳过认证"
+        );
+        // 即便请求头看似合法，半配置也不放行
+        assert_eq!(check_basic_auth(Some("Basic YWRtaW46"), "admin", ""), 0);
     }
 
     #[test]

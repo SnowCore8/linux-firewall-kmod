@@ -9,19 +9,32 @@ use axum::{
     Router,
 };
 
-use super::auth::{auth_middleware, AuthCredentials};
+use super::auth::auth_middleware;
 use super::metrics::generate_metrics;
 use crate::web_ui;
 
 /// 将同步 SQLite / 重查询移出 tokio worker，避免堵住 2-worker runtime。
-async fn db_blocking<T, F>(f: F) -> T
+///
+/// 返回 `Err` 而不是 panic：release 配置为 `panic = "abort"`（Cargo.toml），
+/// 一次查询任务的 join 失败会终止整个守护进程，连带中断封禁能力。
+async fn db_blocking<T, F>(f: F) -> Result<T, String>
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
     tokio::task::spawn_blocking(f)
         .await
-        .unwrap_or_else(|e| panic!("history db blocking task join failed: {e}"))
+        .map_err(|e| format!("历史库查询任务 join 失败: {e}"))
+}
+
+/// 历史库查询失败时的 500 响应：记日志后返回错误信封，不 panic。
+fn db_error_response(msg: String) -> Response {
+    crate::logger::error!(crate::logger::get(), "历史库查询失败"; "error" => %msg);
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(web_ui::api::ApiResponse::<()>::error(50002, msg)),
+    )
+        .into_response()
 }
 
 // ============================================================================
@@ -31,30 +44,41 @@ where
 /// 构建 axum Router。
 ///
 /// 路由分层：
-/// - 无认证路由组：`/health`、`/healthz`（K8s livenessProbe 跳过认证）
-/// - 需认证路由组：其余所有路由（通过 auth middleware 保护）
+/// - 无认证路由组：`/health`、`/healthz`、SPA 外壳与静态资源、`/sw.js`
+/// - 需认证路由组：`/metrics`、`/api/v1/**`（通过 auth middleware 保护）
 /// - 安全头：所有路由共享
-pub fn build_router(metrics_user: String, metrics_pass: String) -> Router {
+///
+/// 认证凭据不在本函数传入，而是由中间件每请求读取运行期凭据
+/// （见 [`crate::http_exporter::set_auth_credentials`]），以支持 SIGHUP 热重载。
+pub fn build_router() -> Router {
     // 无认证路由组
     let public_routes = Router::new()
         .route("/health", get(handle_health))
         .route("/healthz", get(handle_health))
+        // SPA 外壳（无认证）：返回的都是不含数据的静态壳，数据一律经受保护的 /api/v1/*
+        // 取用，故外壳公开不泄露状态；同时保证浏览器直接打开页面能加载、E2E 无需凭据。
+        // 与 /metrics、/api/v1/** 的受保护策略区分开。
+        .route("/", get(handle_redirect))
+        .route("/dashboard", get(handle_dashboard))
         // SPA 路由（无认证）- 每个路由使用独立的处理函数
         .route("/bans", get(handle_spa_bans))
         .route("/whitelist", get(handle_spa_whitelist))
         .route("/jails", get(handle_spa_jails))
         .route("/ddos", get(handle_spa_ddos))
         .route("/logs", get(handle_spa_logs))
-        .route("/settings", get(handle_spa_settings));
+        .route("/settings", get(handle_spa_settings))
+        // 前端静态资源（无认证）：同样是构建产物、不含任何运行时数据。
+        // 若放进认证组，浏览器加载子资源时会因 401 失败，导致配了凭据后页面反而打不开。
+        .route("/static/*path", get(handle_static))
+        // PWA Service Worker（无认证）：浏览器注册 SW 时不会带交互式凭据提示，
+        // 若放在认证组内会因 401 导致注册失败
+        .route("/sw.js", get(handle_sw));
 
-    // 需认证路由组（RESTful v1 API）
+    // 需认证路由组（RESTful v1 API + 指标）
     // 未配置 metrics_username/password 时 middleware 跳过（与现有 API 一致）；
     // 已配置时 SSE 与其它 API 同样要求 Basic Auth（修复无认证泄露）。
     let protected_routes = Router::new()
         .route("/metrics", get(handle_metrics))
-        .route("/", get(handle_redirect))
-        .route("/dashboard", get(handle_dashboard))
-        .route("/static/*path", get(handle_static))
         // SSE：与管理 API 同一鉴权策略（连接数上限仍由 handle_sse 强制）
         .route("/api/v1/events", get(handle_sse))
         // v1 RESTful API
@@ -130,13 +154,11 @@ pub fn build_router(metrics_user: String, metrics_pass: String) -> Router {
         )
         .route("/api/v1/logs/stream", get(handle_log_stream))
         .route("/api/v1/logs", get(handle_api_logs))
-        .layer(middleware::from_fn(auth_middleware))
-        .layer(axum::Extension(AuthCredentials {
-            username: metrics_user,
-            password: metrics_pass,
-        }));
+        .layer(middleware::from_fn(auth_middleware));
 
     // 合并 + 安全头中间件（所有路由共享）
+    // 注意：凭据不再在构造期按值捕获，改由中间件每请求读取运行期凭据
+    // （见 http_exporter::set_auth_credentials），以支持 SIGHUP 热重载
     public_routes
         .merge(protected_routes)
         .layer(middleware::from_fn(security_headers_middleware))
@@ -148,8 +170,11 @@ pub fn build_router(metrics_user: String, metrics_pass: String) -> Router {
 
 /// 安全头中间件：为所有响应添加 CSP / X-Frame-Options / X-Content-Type-Options。
 ///
-/// Web UI 路径（`/dashboard`、`/static/*`）使用宽松 CSP 允许同源资源加载。
+/// Web UI 路径（`/dashboard`、`/static/*`、`/sw.js`）使用宽松 CSP 允许同源资源加载。
 /// 其他路径使用 `default-src 'none'` 严格限制。
+///
+/// `/sw.js` 必须列入 Web UI：`default-src 'none'` 若被当作 Service Worker 自身的
+/// 策略，会禁掉 SW 内部的所有 fetch，导致离线缓存与外壳回退全部失效。
 async fn security_headers_middleware(
     request: axum::http::Request<axum::body::Body>,
     next: middleware::Next,
@@ -157,6 +182,7 @@ async fn security_headers_middleware(
     let path = request.uri().path().to_string();
     let is_webui = path == "/dashboard"
         || path.starts_with("/static/")
+        || path == "/sw.js"
         || path == "/bans"
         || path == "/whitelist"
         || path == "/jails"
@@ -182,7 +208,11 @@ async fn security_headers_middleware(
         "Content-Security-Policy",
         HeaderValue::from_str(csp_value).expect("CSP 值为合法 ASCII"),
     );
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    // 默认禁止缓存；已自行声明 Cache-Control 的响应（如 /sw.js 的 no-cache）
+    // 尊重其声明 —— Service Worker 的更新检查依赖该头，不能被覆盖成 no-store
+    if !headers.contains_key(header::CACHE_CONTROL) {
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
 
     response
 }
@@ -223,8 +253,15 @@ async fn handle_metrics() -> (StatusCode, HeaderMap, String) {
 }
 
 /// `GET /` — 重定向到 /dashboard
-async fn handle_redirect() -> Redirect {
-    Redirect::to("/dashboard")
+///
+/// **必须原样保留 query string**：前端支持用 `/?access_token=<base64(user:pass)>`
+/// 直达（令牌会被写入 sessionStorage 后从地址栏清除）。若这里丢弃 query，
+/// 令牌在进入应用前就丢了，用户会看到一个「明明是带令牌打开的却要求登录」的页面。
+async fn handle_redirect(uri: axum::http::Uri) -> Redirect {
+    match uri.query() {
+        Some(query) if !query.is_empty() => Redirect::to(&format!("/dashboard?{query}")),
+        _ => Redirect::to("/dashboard"),
+    }
 }
 
 /// `GET /dashboard` — Web UI 主页
@@ -255,6 +292,31 @@ async fn handle_spa_logs() -> Html<String> {
 
 async fn handle_spa_settings() -> Html<String> {
     Html(web_ui::render_dashboard())
+}
+
+/// `GET /sw.js` — PWA Service Worker
+///
+/// 走根路径而非 `/static/sw.js`：Service Worker 的作用域上限由其脚本路径决定，
+/// `/static/sw.js` 只能接管 `/static/` 下的请求，无法处理页面导航。
+///
+/// 必须携带的两个响应头：
+/// - `Service-Worker-Allowed: /` — 显式声明根作用域（脚本不在根目录时的唯一方式）
+/// - `Cache-Control: no-cache` — 浏览器每次注册/更新检查都必须回源，
+///   避免旧 SW 被长期缓存导致无法升级
+async fn handle_sw() -> impl IntoResponse {
+    match web_ui::get_static_asset("sw.js") {
+        Some((data, mime_type)) => {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_str(mime_type).expect("MIME 类型为合法 ASCII"),
+            );
+            headers.insert("Service-Worker-Allowed", HeaderValue::from_static("/"));
+            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+            (StatusCode::OK, headers, data).into_response()
+        }
+        None => (StatusCode::NOT_FOUND, "404 Not Found\n").into_response(),
+    }
 }
 
 /// `GET /static/{*path}` — 静态资源服务
@@ -296,15 +358,25 @@ async fn handle_api_bans(Query(params): Query<web_ui::api::PaginationParams>) ->
 
 /// `POST /api/v1/bans` — 封禁 IP
 async fn handle_create_ban(Json(req): Json<web_ui::api::CreateBanRequest>) -> impl IntoResponse {
-    match web_ui::api::create_ban(req) {
-        Ok(resp) => (
+    // create_ban 内部 wait_ban_ack 最长同步阻塞 3s（std mpsc recv_timeout），
+    // 放进 spawn_blocking，避免占住 2-worker tokio runtime 的 worker 导致其它 API/SSE 排队。
+    match tokio::task::spawn_blocking(move || web_ui::api::create_ban(req)).await {
+        Ok(Ok(resp)) => (
             StatusCode::CREATED,
             Json(web_ui::api::ApiResponse::ok(resp)),
         )
             .into_response(),
-        Err(msg) => (
+        Ok(Err(msg)) => (
             StatusCode::BAD_REQUEST,
             Json(web_ui::api::ApiResponse::<()>::error(40001, msg)),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(web_ui::api::ApiResponse::<()>::error(
+                50002,
+                format!("封禁任务 join 失败: {e}"),
+            )),
         )
             .into_response(),
     }
@@ -368,15 +440,25 @@ async fn handle_batch_ban(Json(ips): Json<Vec<String>>) -> impl IntoResponse {
         )
             .into_response();
     }
-    match web_ui::api::batch_ban(ips) {
-        Ok(resp) => (
+    // batch_ban 内部逐条 wait_ban_ack（每条最长 3s，最多 100 条）；
+    // 放进 spawn_blocking，避免占住 tokio worker。
+    match tokio::task::spawn_blocking(move || web_ui::api::batch_ban(ips)).await {
+        Ok(Ok(resp)) => (
             StatusCode::CREATED,
             Json(web_ui::api::ApiResponse::ok(resp)),
         )
             .into_response(),
-        Err(msg) => (
+        Ok(Err(msg)) => (
             StatusCode::BAD_REQUEST,
             Json(web_ui::api::ApiResponse::<()>::error(40005, msg)),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(web_ui::api::ApiResponse::<()>::error(
+                50002,
+                format!("批量封禁任务 join 失败: {e}"),
+            )),
         )
             .into_response(),
     }
@@ -489,38 +571,43 @@ async fn handle_api_rates_windows(
 }
 
 /// `GET /api/v1/stats/heatmap` — 24 小时攻击热力图（按小时聚合）
-async fn handle_api_heatmap(
-) -> Json<web_ui::api::ApiResponse<crate::history_snapshot::HourlyHeatmap>> {
-    let heatmap = db_blocking(web_ui::api::get_heatmap).await;
-    Json(web_ui::api::ApiResponse::ok(heatmap))
+async fn handle_api_heatmap() -> Response {
+    match db_blocking(web_ui::api::get_heatmap).await {
+        Ok(heatmap) => Json(web_ui::api::ApiResponse::ok(heatmap)).into_response(),
+        Err(msg) => db_error_response(msg),
+    }
 }
 
 /// `GET /api/v1/stats/recidivism` — 封禁效果追踪（复发率 + TOP 10）
-async fn handle_api_recidivism() -> Json<web_ui::api::ApiResponse<web_ui::api::RecidivismResponse>>
-{
-    let recidivism = db_blocking(web_ui::api::get_ban_recidivism).await;
-    Json(web_ui::api::ApiResponse::ok(recidivism))
+async fn handle_api_recidivism() -> Response {
+    match db_blocking(web_ui::api::get_ban_recidivism).await {
+        Ok(recidivism) => Json(web_ui::api::ApiResponse::ok(recidivism)).into_response(),
+        Err(msg) => db_error_response(msg),
+    }
 }
 
 /// `GET /api/v1/stats/ban-effectiveness` — 封禁效果分析（按级别统计复发率）
-async fn handle_api_ban_effectiveness(
-) -> Json<web_ui::api::ApiResponse<web_ui::api::BanEffectivenessResponse>> {
-    let effectiveness = db_blocking(web_ui::api::get_ban_effectiveness).await;
-    Json(web_ui::api::ApiResponse::ok(effectiveness))
+async fn handle_api_ban_effectiveness() -> Response {
+    match db_blocking(web_ui::api::get_ban_effectiveness).await {
+        Ok(effectiveness) => Json(web_ui::api::ApiResponse::ok(effectiveness)).into_response(),
+        Err(msg) => db_error_response(msg),
+    }
 }
 
 /// `GET /api/v1/stats/periodic-attackers` — 周期性攻击者检测
-async fn handle_api_periodic_attackers(
-) -> Json<web_ui::api::ApiResponse<Vec<crate::history_snapshot::PeriodicAttacker>>> {
-    let attackers = db_blocking(web_ui::api::get_periodic_attackers).await;
-    Json(web_ui::api::ApiResponse::ok(attackers))
+async fn handle_api_periodic_attackers() -> Response {
+    match db_blocking(web_ui::api::get_periodic_attackers).await {
+        Ok(attackers) => Json(web_ui::api::ApiResponse::ok(attackers)).into_response(),
+        Err(msg) => db_error_response(msg),
+    }
 }
 
 /// `GET /api/v1/stats/collaborative-attacks` — 协同攻击检测
-async fn handle_api_collaborative_attacks(
-) -> Json<web_ui::api::ApiResponse<Vec<crate::history_snapshot::CollaborativeAttack>>> {
-    let attacks = db_blocking(web_ui::api::get_collaborative_attacks).await;
-    Json(web_ui::api::ApiResponse::ok(attacks))
+async fn handle_api_collaborative_attacks() -> Response {
+    match db_blocking(web_ui::api::get_collaborative_attacks).await {
+        Ok(attacks) => Json(web_ui::api::ApiResponse::ok(attacks)).into_response(),
+        Err(msg) => db_error_response(msg),
+    }
 }
 
 /// `GET /api/v1/stats/udp-ports` — UDP 端口分布统计
@@ -590,10 +677,11 @@ async fn handle_api_service_probes(
 }
 
 /// `GET /api/v1/stats/ban-duration-recommendations` — 封禁时长推荐
-async fn handle_api_ban_duration_recommendations(
-) -> Json<web_ui::api::ApiResponse<web_ui::api::BanDurationRecommendationResponse>> {
-    let recs = db_blocking(web_ui::api::get_ban_duration_recommendations).await;
-    Json(web_ui::api::ApiResponse::ok(recs))
+async fn handle_api_ban_duration_recommendations() -> Response {
+    match db_blocking(web_ui::api::get_ban_duration_recommendations).await {
+        Ok(recs) => Json(web_ui::api::ApiResponse::ok(recs)).into_response(),
+        Err(msg) => db_error_response(msg),
+    }
 }
 
 /// `GET /api/v1/stats/reputation` — IP 信誉分列表
@@ -622,28 +710,32 @@ async fn handle_api_reputation(
 }
 
 /// `GET /api/v1/stats/threshold-recommendations` — 阈值调优建议
-async fn handle_api_threshold_recommendations(
-) -> Json<web_ui::api::ApiResponse<web_ui::api::ThresholdRecommendationResponse>> {
+async fn handle_api_threshold_recommendations() -> Response {
     let recs = db_blocking(|| {
         let jails = crate::http_exporter::get_global_jails();
         crate::history_snapshot::analyze_thresholds(&jails)
     })
     .await;
-    Json(web_ui::api::ApiResponse::ok(recs))
+    match recs {
+        Ok(recs) => Json(web_ui::api::ApiResponse::ok(recs)).into_response(),
+        Err(msg) => db_error_response(msg),
+    }
 }
 
 /// `GET /api/v1/stats/network-distribution` — 攻击源网络分布
-async fn handle_api_network_distribution(
-) -> Json<web_ui::api::ApiResponse<Vec<crate::history_snapshot::NetworkBlock>>> {
-    let blocks = db_blocking(crate::history_snapshot::get_network_distribution).await;
-    Json(web_ui::api::ApiResponse::ok(blocks))
+async fn handle_api_network_distribution() -> Response {
+    match db_blocking(crate::history_snapshot::get_network_distribution).await {
+        Ok(blocks) => Json(web_ui::api::ApiResponse::ok(blocks)).into_response(),
+        Err(msg) => db_error_response(msg),
+    }
 }
 
 /// `GET /api/v1/stats/attack-predictions` — 攻击时间预测 + Jail 攻击趋势
-async fn handle_api_attack_predictions(
-) -> Json<web_ui::api::ApiResponse<crate::history_snapshot::AttackPredictionSummary>> {
-    let summary = db_blocking(web_ui::api::get_attack_predictions).await;
-    Json(web_ui::api::ApiResponse::ok(summary))
+async fn handle_api_attack_predictions() -> Response {
+    match db_blocking(web_ui::api::get_attack_predictions).await {
+        Ok(summary) => Json(web_ui::api::ApiResponse::ok(summary)).into_response(),
+        Err(msg) => db_error_response(msg),
+    }
 }
 
 /// `GET /api/v1/events` — SSE 实时事件推送（长连接）

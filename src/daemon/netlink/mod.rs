@@ -5,6 +5,7 @@
 //! - 向内核发送封禁/解封指令
 
 mod commands;
+mod config_sync;
 mod decision;
 mod handlers;
 mod protocol;
@@ -17,6 +18,10 @@ use std::thread;
 
 use protocol::{FwNlMsgType, FW_NL_MAGIC};
 
+pub use config_sync::{
+    sync_protocol_thresholds, write_detection_switches, DetectionSwitches, GlobalLimits,
+    ProtocolThresholds, SyncOutcome,
+};
 pub use decision::DdosDecisionEngine;
 pub use protocol::{config_flags, FwNlConfigUpdate as ConfigUpdate};
 
@@ -350,7 +355,11 @@ impl NetlinkContext {
         Ok(())
     }
 
-    /// 停止接收线程
+    /// 停止接收线程。
+    ///
+    /// 仅置位 `running` 标志；接收线程在下次 `poll` 返回后（最多 100ms）观察到该标志并退出。
+    /// 调用方应持有 [`start_receiver`](Self::start_receiver) 返回的 `JoinHandle` 并 `join`，
+    /// 以确认线程已真正退出——本结构体的 `Drop` 不保证执行（见其注释）。
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
     }

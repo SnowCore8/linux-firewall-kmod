@@ -425,7 +425,7 @@ pub fn update_webui_config(req: UpdateConfigRequest) -> Result<WebuiConfigRespon
     }
 
     // 同步 DDoS 检测开关到内核
-    sync_ddos_detection_to_kernel(&config);
+    crate::netlink::write_detection_switches((&config).into());
 
     // 同步 WebUI 中的 DDoS 相关字段到 DdosConfig，确保 SIGHUP 重载不覆盖 API 变更
     sync_webui_to_ddos_config(&config);
@@ -462,53 +462,24 @@ pub fn update_webui_config(req: UpdateConfigRequest) -> Result<WebuiConfigRespon
     })
 }
 
-/// 同步 DDoS 检测开关到内核模块参数
-fn sync_ddos_detection_to_kernel(config: &crate::types::WebuiConfig) {
-    crate::ban::write_sysfs_bool_param("fw_static_threshold", config.static_threshold);
-    crate::ban::write_sysfs_bool_param("fw_dynamic_threshold", config.dynamic_threshold);
-    crate::ban::write_sysfs_bool_param("fw_ddos_detection", config.ddos_detection);
-}
-
 /// 同步协议专项阈值到内核模块
+///
+/// 实际下发由 [`crate::netlink::sync_protocol_thresholds`] 完成（单入口）。
+/// 本函数只负责把 web_ui 侧的失败语义转换成本模块的 `Result<(), String>`。
 ///
 /// # 返回
 /// - `Ok(())` — 同步成功或 netlink 未初始化（静默跳过）
 /// - `Err(String)` — netlink 存在但发送失败
 fn sync_protocol_thresholds_to_kernel(config: &crate::types::WebuiConfig) -> Result<(), String> {
-    use crate::netlink::{config_flags, ConfigUpdate};
-
-    match crate::netlink::get_global_netlink_ctx() {
-        Some(netlink) => {
-            let config_update = ConfigUpdate::new(
-                config_flags::MAX_SYN
-                    | config_flags::MAX_UDP
-                    | config_flags::MAX_ICMP
-                    | config_flags::MAX_ACK
-                    | config_flags::MAX_RST
-                    | config_flags::MAX_FIN,
-            )
-            .with_max_syn(config.max_syn_per_second as u64)
-            .with_max_udp(config.max_udp_per_second as u64)
-            .with_max_icmp(config.max_icmp_per_second as u64);
-
-            // ACK/RST/FIN 需要手动设置字段
-            let config_update = {
-                let mut cu = config_update;
-                cu.max_ack_per_second = (config.max_ack_per_second as u64).to_be();
-                cu.max_rst_per_second = (config.max_rst_per_second as u64).to_be();
-                cu.max_fin_per_second = (config.max_fin_per_second as u64).to_be();
-                cu
-            };
-
-            netlink.send_config_update(&config_update).map_err(|e| {
-                crate::logger::error!(
-                    crate::logger::get(),
-                    "同步协议阈值到内核失败";
-                    "error" => %e
-                );
-                format!("内核同步失败: {e}")
-            })?;
-
+    match crate::netlink::sync_protocol_thresholds(
+        crate::netlink::ProtocolThresholds::from(config),
+        None,
+    ) {
+        Ok(crate::netlink::SyncOutcome::Skipped) => {
+            // netlink 未初始化时静默跳过（守护进程启动初期常见）
+            Ok(())
+        }
+        Ok(crate::netlink::SyncOutcome::Sent) => {
             crate::logger::info!(
                 crate::logger::get(),
                 "协议阈值已同步到内核";
@@ -519,13 +490,9 @@ fn sync_protocol_thresholds_to_kernel(config: &crate::types::WebuiConfig) -> Res
                 "RST" => config.max_rst_per_second,
                 "FIN" => config.max_fin_per_second
             );
-
             Ok(())
         }
-        None => {
-            // netlink 未初始化时静默跳过（守护进程启动初期常见）
-            Ok(())
-        }
+        Err(e) => Err(format!("内核同步失败: {e}")),
     }
 }
 

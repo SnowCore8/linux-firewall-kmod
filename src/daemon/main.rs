@@ -12,12 +12,12 @@
 //! 8. **inotify 启动** ([`file_monitor::setup_inotify`])
 //! 9. **Metrics 导出器启动** ([`http_exporter::start_http_exporter`])
 //! 10. **主循环** ([`file_monitor::monitor_loop`]):阻塞直到 `running=false`
-//! 11. **清理** ([`cleanup`]):关 metrics → 释放 fd → 关 syslog → 删 PID 文件
+//! 11. **清理** ([`cleanup`]):停 HTTP → 停 netlink 接收线程 → 关 inotify → 关 db → 删 PID 文件
 //!
 //! # 关键不变量
 //!
 //! - **守护进程化前清 `reload` 标志**:避免该窗口期收到的 SIGHUP 在主循环首次检查时误触
-//! - **清理顺序**:清全局引用 → 关 db,防止收尾期间 ban 模块再访问
+//! - **清理顺序**:先停 netlink 接收线程,再关 db——否则停机窗口内的事件会写进已关闭的写队列而被静默丢弃
 //! - **PID 文件 `O_NOFOLLOW`**:防止符号链接攻击覆盖其他进程
 //! - **SIGPIPE 忽略**:HTTP 导出器在客户端断开时不应被信号杀死
 
@@ -49,16 +49,42 @@ const PROCFS_DIR: &str = "/proc/firewall";
 /// 内核模块封禁命令接口。启动期存在性检查
 const BANS_PATH: &str = "/proc/firewall/bans";
 
-/// 优雅清理：关 metrics → 释放 fd → 关 syslog → 删 PID 文件。
+/// 优雅清理：停 HTTP → 停 netlink 接收线程 → 关 inotify → 关 db → 删 PID 文件。
+///
+/// 顺序要求：netlink 接收线程必须在 `close_history_db` **之前**停止。否则停机窗口内
+/// 收到的事件会写进已关闭的写队列（`enqueue_db_write` 静默 return），造成内存状态与
+/// 磁盘持久化不一致。
 ///
 /// # Arguments
 /// - `_cfg`：保留参数，占位
-fn cleanup(_cfg: &Config) {
+/// - `netlink_receiver`：netlink 接收线程句柄；显式停止并等待其退出（最多 2s）
+fn cleanup(_cfg: &Config, netlink_receiver: Option<std::thread::JoinHandle<()>>) {
     http_exporter::stop_http_exporter();
     GLOBAL_RUNNING.store(false, Ordering::SeqCst);
+    // 停止接收线程。Arc 存在 OnceLock 全局单例里永不 drop，
+    // 故必须显式 stop，不能依赖 Drop::close(fd) 连带终止接收循环
+    if let Some(ctx) = netlink::get_global_netlink_ctx() {
+        ctx.stop();
+    }
+    if let Some(handle) = netlink_receiver {
+        // 接收线程每 100ms 轮询一次 running 标志，正常应毫秒级退出；最多等 2s
+        let start = std::time::Instant::now();
+        loop {
+            if handle.is_finished() {
+                if let Err(e) = handle.join() {
+                    warn!(logger::get(), "Netlink 接收线程 join 失败"; "error" => ?e);
+                }
+                break;
+            }
+            if start.elapsed() > std::time::Duration::from_secs(2) {
+                warn!(logger::get(), "Netlink 接收线程超时未退出，继续清理");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
     file_monitor::close_inotify();
     history_snapshot::close_history_db();
-    // netlink_ctx 通过 Arc 管理，最后一个 Arc drop 时自动关闭 socket
     if let Err(e) = fs::remove_file("/run/firewall-daemon.pid") {
         crate::logger::debug!(
             crate::logger::get(),
@@ -194,6 +220,10 @@ fn main() -> Result<()> {
         }
     };
 
+    // 接收线程句柄由 cleanup 显式 stop + join：Arc 存在 OnceLock 全局单例里，
+    // 永不会被 drop，故不能依赖 Drop 关闭 fd / 停止线程
+    let mut netlink_receiver: Option<std::thread::JoinHandle<()>> = None;
+
     // 如果有 netlink 上下文，创建并设置决策引擎
     if let Some(ctx) = netlink_ctx {
         let ctx_arc = Arc::new(ctx);
@@ -201,6 +231,13 @@ fn main() -> Result<()> {
         // 设置全局 netlink 上下文（程序内部共享）
         if let Err(e) = netlink::set_global_netlink_ctx(ctx_arc.clone()) {
             warn!(logger::get(), "设置全局 NetlinkContext 失败"; "error" => %e);
+        }
+
+        // 向内核注册为唯一守护进程（内核模块强制单实例 exclusivity）
+        if let Err(e) = ctx_arc.send_register() {
+            warn!(logger::get(), "向内核注册守护进程失败"; "error" => %e);
+        } else {
+            info!(logger::get(), "已向内核注册为唯一守护进程");
         }
 
         // 创建决策引擎
@@ -211,7 +248,8 @@ fn main() -> Result<()> {
         http_exporter::set_global_decision_engine(decision_engine);
 
         match ctx_arc.start_receiver() {
-            Ok(_handle) => {
+            Ok(handle) => {
+                netlink_receiver = Some(handle);
                 info!(logger::get(), "Netlink 接收线程已启动");
             }
             Err(e) => {
@@ -363,7 +401,7 @@ fn main() -> Result<()> {
         GLOBAL_RUNNING.load(Ordering::SeqCst)
     );
     info!(logger::get(), "开始清理流程");
-    cleanup(&cfg);
+    cleanup(&cfg, netlink_receiver);
 
     if let Some(handle) = exporter_handle {
         // 给 HTTP 导出器线程最多 2 秒优雅退出

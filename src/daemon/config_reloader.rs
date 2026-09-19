@@ -265,8 +265,6 @@ fn persist_config(cfg: &Config, jails_enabled: &[(String, bool)]) -> Result<()> 
     // 构建需要替换的 key-value 映射（section → key → value）
     let ddos_kvs = vec![
         ("enabled", fmt_bool(cfg.ddos.enabled)),
-        ("per_ip_conn_rate", fmt_u32(cfg.ddos.per_ip_conn_rate)),
-        ("per_ip_fail_rate", fmt_u32(cfg.ddos.per_ip_fail_rate)),
         ("global_conn_rate", fmt_u32(cfg.ddos.global_conn_rate)),
         ("auto_ban_duration", fmt_u32(cfg.ddos.auto_ban_duration)),
         ("auto_ban_threshold", fmt_u32(cfg.ddos.auto_ban_threshold)),
@@ -666,58 +664,53 @@ fn sync_config_to_components(cfg: &Config) -> Result<()> {
         );
     }
 
-    // 2. 同步到内核模块（通过 netlink）
-    if let Some(netlink) = crate::http_exporter::get_global_netlink_ctx() {
-        use crate::netlink::{config_flags, ConfigUpdate};
+    // 2. 同步到内核模块（netlink 下发协议阈值 + 全局限制，sysfs 写检测开关）
+    //    字段集合、字节序转换、sysfs 参数名统一由 netlink::config_sync 承担
+    {
+        use crate::netlink::{GlobalLimits, ProtocolThresholds};
 
-        // 构建配置更新消息
-        let config_update = ConfigUpdate::new(
-            config_flags::BAN_TIME
-                | config_flags::RATE_WINDOW
-                | config_flags::MAX_PPS
-                | config_flags::DDOS_BAN_DURATION
-                | config_flags::MAX_SYN
-                | config_flags::MAX_UDP
-                | config_flags::MAX_ICMP
-                | config_flags::MAX_ACK
-                | config_flags::MAX_RST
-                | config_flags::MAX_FIN,
-        )
-        .with_ban_time(cfg.ddos.auto_ban_duration)
-        .with_rate_window(cfg.ddos.check_interval)
-        .with_max_pps(cfg.ddos.global_conn_rate as u64)
-        .with_ddos_ban_duration(cfg.ddos.auto_ban_duration)
-        .with_max_syn(cfg.ddos.max_syn_per_second as u64)
-        .with_max_udp(cfg.ddos.max_udp_per_second as u64)
-        .with_max_icmp(cfg.ddos.max_icmp_per_second as u64);
-
-        // ACK/RST/FIN 需要手动设置字段（没有 with_max_* 方法）
-        let config_update = {
-            let mut cu = config_update;
-            cu.max_ack_per_second = (cfg.ddos.max_ack_per_second as u64).to_be();
-            cu.max_rst_per_second = (cfg.ddos.max_rst_per_second as u64).to_be();
-            cu.max_fin_per_second = (cfg.ddos.max_fin_per_second as u64).to_be();
-            cu
+        let limits = GlobalLimits {
+            ban_time: cfg.ddos.auto_ban_duration,
+            rate_window: cfg.ddos.check_interval,
+            max_pps: cfg.ddos.global_conn_rate as u64,
+            ddos_ban_duration: cfg.ddos.auto_ban_duration,
         };
 
-        if let Err(e) = netlink.send_config_update(&config_update) {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "同步配置到内核模块失败";
-                "error" => %e
-            );
-        } else {
-            crate::logger::info!(
-                crate::logger::get(),
-                "配置已同步到内核模块";
-                "ban_time" => cfg.ddos.auto_ban_duration,
-                "max_pps" => cfg.ddos.global_conn_rate,
-                "ddos_ban_duration" => cfg.ddos.auto_ban_duration
-            );
+        match crate::netlink::sync_protocol_thresholds(
+            ProtocolThresholds::from(&cfg.ddos),
+            Some(limits),
+        ) {
+            Ok(crate::netlink::SyncOutcome::Skipped) => {
+                // netlink 未初始化（守护进程启动初期）：内核尚未接收任何配置，属正常状态
+            }
+            Ok(crate::netlink::SyncOutcome::Sent) => {
+                crate::logger::info!(
+                    crate::logger::get(),
+                    "配置已同步到内核模块";
+                    "ban_time" => cfg.ddos.auto_ban_duration,
+                    "max_pps" => cfg.ddos.global_conn_rate,
+                    "ddos_ban_duration" => cfg.ddos.auto_ban_duration
+                );
+            }
+            Err(e) => {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "同步配置到内核模块失败";
+                    "error" => %e
+                );
+            }
         }
 
-        // 同步 DDoS 检测开关到内核模块参数
-        sync_ddos_detection_to_kernel(cfg);
+        // 同步 DDoS 检测开关到内核模块参数（sysfs 与 netlink 是两个独立通道，
+        // netlink 不可用时该写入仍会尝试，失败由 write_sysfs_bool_param 记警告）
+        crate::netlink::write_detection_switches((&cfg.ddos).into());
+        crate::logger::info!(
+            crate::logger::get(),
+            "DDoS 检测开关已同步到内核";
+            "static" => cfg.ddos.static_threshold,
+            "dynamic" => cfg.ddos.dynamic_threshold,
+            "enabled" => cfg.ddos.ddos_detection
+        );
     }
 
     // 3. 更新全局 Web UI 配置
@@ -826,8 +819,10 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
     }
 
     let http_listener_changed = old_cfg.metrics_port != new_cfg.metrics_port
-        || old_cfg.metrics_bind_address != new_cfg.metrics_bind_address
-        || old_cfg.metrics_username != new_cfg.metrics_username
+        || old_cfg.metrics_bind_address != new_cfg.metrics_bind_address;
+
+    // 凭据变更可立即生效（中间件每请求读取运行期凭据），无需重启监听器
+    let http_credentials_changed = old_cfg.metrics_username != new_cfg.metrics_username
         || old_cfg.metrics_password != new_cfg.metrics_password;
 
     // 提交前先入历史，供 --rollback / 失败回退使用
@@ -870,10 +865,21 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
         return Err(e);
     }
 
+    if http_credentials_changed {
+        crate::http_exporter::set_http_auth_credentials(
+            cfg.metrics_username.as_deref().unwrap_or_default(),
+            cfg.metrics_password.as_deref().unwrap_or_default(),
+        );
+        crate::logger::info!(
+            crate::logger::get(),
+            "HTTP Basic Auth 凭据已热更新（无需重启）"
+        );
+    }
+
     if http_listener_changed {
         crate::logger::warn!(
             crate::logger::get(),
-            "metrics 绑定地址或 Basic Auth 凭据已变更，需重启守护进程后监听器才会切换";
+            "metrics 绑定地址或端口已变更，需重启守护进程后监听器才会切换";
             "bind" => &cfg.metrics_bind_address,
             "port" => cfg.metrics_port
         );
@@ -978,19 +984,4 @@ fn update_trusted_ips(old_ips: &[String], new_ips: &[String]) {
             );
         }
     }
-}
-
-/// 同步 DDoS 检测开关到内核模块参数
-fn sync_ddos_detection_to_kernel(cfg: &crate::types::Config) {
-    crate::ban::write_sysfs_bool_param("fw_static_threshold", cfg.ddos.static_threshold);
-    crate::ban::write_sysfs_bool_param("fw_dynamic_threshold", cfg.ddos.dynamic_threshold);
-    crate::ban::write_sysfs_bool_param("fw_ddos_detection", cfg.ddos.ddos_detection);
-
-    crate::logger::info!(
-        crate::logger::get(),
-        "DDoS 检测开关已同步到内核";
-        "static" => cfg.ddos.static_threshold,
-        "dynamic" => cfg.ddos.dynamic_threshold,
-        "enabled" => cfg.ddos.ddos_detection
-    );
 }
