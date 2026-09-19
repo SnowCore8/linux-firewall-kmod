@@ -93,3 +93,8 @@ blob-report/
 # Playwright MCP 的默认输出目录（快照/截图/console 日志落在进程 cwd）
 .playwright-mcp/
 config/debug-*.yaml
+
+# ---- 性能基线工具构建物 ----
+# scripts/bench/ 的源码与脚本入库；编译产物不入库（make -C scripts/bench 生成）
+scripts/bench/blast2
+scripts/bench/sink

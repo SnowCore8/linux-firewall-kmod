@@ -318,6 +318,41 @@ def check_defect_claims(contract: dict) -> list[str]:
                 )
             else:
                 print("  defect PROC_CLEANUP_CYCLES_DEAD: 递增点仍不存在（成立）")
+        elif d["name"] == "PROC_STATS_STALE_NO_FLUSH":
+            # 断言两点同时成立：(a) stats_show 内不 flush；(b) flush 的调用点只在 netlink.c。
+            m = re.search(r"stats_show\s*\([^)]*\)\s*\{(.*?)\n\}", all_src["procfs.c"], re.S)
+            show_body = m.group(1) if m else ""
+            show_flushes = "fw_flush" in show_body
+            flush_sites = sorted(
+                f"{fname}:{i}"
+                for fname, src in all_src.items()
+                for i, line in enumerate(src.splitlines(), 1)
+                if "fw_flush_all_cpu_stats()" in line and "void fw_flush_all_cpu_stats" not in line
+            )
+            off_netlink = [s for s in flush_sites if not s.startswith("netlink.c:")]
+            if not show_flushes and not off_netlink:
+                print(f"  defect PROC_STATS_STALE_NO_FLUSH: stats_show 无 flush，"
+                      f"调用点仅 {flush_sites}（成立）")
+            else:
+                problems.append(
+                    "defect PROC_STATS_STALE_NO_FLUSH 已失效："
+                    f"stats_show flush={show_flushes}，netlink 之外的调用点={off_netlink}，契约需同步"
+                )
+        elif d["name"] == "PROC_WHITELIST_REMOVE_SUBNET_OVERREACH":
+            # 断言 remove 分支用子网比较、而自动白名单用精确主机地址。
+            m = re.search(
+                r"static int execute_whitelist_action.*?\n\}", all_src["procfs.c"], re.S)
+            body = m.group(0) if m else ""
+            uses_subnet = "& ifa->ifa_mask" in body and "NETMASK" not in body
+            exact_host = "htonl(0xFFFFFFFF)" in all_src["netdev.c"]
+            if uses_subnet and exact_host:
+                print("  defect PROC_WHITELIST_REMOVE_SUBNET_OVERREACH: "
+                      "remove 用子网比较 / 自动白名单用精确主机地址（成立）")
+            else:
+                problems.append(
+                    "defect PROC_WHITELIST_REMOVE_SUBNET_OVERREACH 已失效："
+                    f"子网比较={uses_subnet}，精确主机地址={exact_host}，契约需同步"
+                )
     return problems
 
 

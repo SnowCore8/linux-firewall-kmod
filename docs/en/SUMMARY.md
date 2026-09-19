@@ -24,5 +24,6 @@
 * [Development](development/README.md)
   * [Building](development/building.md)
   * [Testing](development/testing.md)
+  * [Performance Baseline](development/perf-baseline.md)
 
 * [Migrating from fail2ban](migration/from-fail2ban.md)

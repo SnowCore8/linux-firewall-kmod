@@ -31,7 +31,7 @@
     "limit icmp_types: 128 条（锚点 src/kernel-module/firewall.h:MAX_ICMP_TYPE_ENTRIES）",
     "limit port_scanners: 20 条（锚点 src/kernel-module/procfs.c:PORT_SCAN_MAX_RESULTS）",
     "limit service_probes: 20 条（锚点 src/kernel-module/procfs.c:SERVICE_PROBE_MAX_RESULTS）",
-    "缺陷记录: 7 条（由 verify_*.py 到源码核对锚点）"
+    "缺陷记录: 9 条（由 verify_*.py 到源码核对锚点）"
   ],
   "files": {
     "bans": {
@@ -291,6 +291,18 @@
       "severity": "low",
       "where": "src/kernel-module/procfs.c:return -EFAULT",
       "text": "写失败一律返回负 errno，无文本错误通道；调用方只能从 errno 区分 -EINVAL/-EBUSY/-ENOMEM/-EPERM，无法得知具体拒绝原因"
+    },
+    {
+      "name": "PROC_STATS_STALE_NO_FLUSH",
+      "severity": "medium",
+      "where": "src/kernel-module/procfs.c:stats_show",
+      "text": "stats_show 直接读 fw_info 的全局计数器，不调用 fw_flush_all_cpu_stats()；而该函数只在 netlink.c 的 STATS_QUERY(818) 与另一处(1346)被调用。热路径把 packets_accepted/packets_dropped 累加在 per-CPU 的 fw_cpu_stats 中，达到 FW_PER_CPU_BATCH_SIZE(1024) 才 flush 一次。因此只读 procfs 的监控者在低速率下会看到陈旧值，最坏每 CPU 低报 1023 个包（8 核最多约 8184）——实测：空闲主机读数停在某值不动，打流后需再做一次 netlink rates 查询才跃升数万"
+    },
+    {
+      "name": "PROC_WHITELIST_REMOVE_SUBNET_OVERREACH",
+      "severity": "low",
+      "where": "src/kernel-module/procfs.c:execute_whitelist_action",
+      "text": "白名单 remove 判定「本机接口 IP」时用 (ip & ifa_mask) == (ifa_local & ifa_mask) 的**子网**比较，而加入自动白名单（netdev.c 地址发现）用的是精确主机地址 */32。后果：只要接口配了 /24，该子网内任意白名单条目都被判为「本机接口 IP」且拒绝删除（-EPERM），用户无法撤销自己显式添加的同网段条目。实测：接口 10.99.0.1/24 时 `add 10.99.0.11` 后再 `remove 10.99.0.11` 报 EPERM，dmesg 记『拒绝删除本机接口 IP 白名单: 10.99.0.11/32』；把接口改成 /32 后同一序列立即成功"
     }
   ]
 }
