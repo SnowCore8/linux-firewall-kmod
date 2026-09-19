@@ -151,11 +151,21 @@ sudo scripts/bench/fwctl.sh 8 3
 1. **每包多次重复查表**：`update_rate_stats` 内先 `find_rate_entry_rcu`，
    随后 `check_rate_violation`、`check_protocol_violation`、`check_tcp_flood_violation`
    各自再查一次（合计 2.81 次/包），同一个源 IP 的条目被反复查找。
-2. **每包约 11 次共享 cache line 的原子操作**：
-   `record_packet_size`（5 桶）、`record_ttl`（6 桶）、`record_ip_frag`（1–2）
+2. **直方图与分布统计共享约 11 个全局 cache line 站点**：
+   `record_packet_size`（5 个桶）、`record_ttl`（6 个桶）、`record_ip_frag`（1–2 个）
    以及 `record_udp_port` / `record_icmp_type`，全是全局 `atomic64_inc`。
-3. **窗口滚动路径持自旋锁**：`update_rate_stats` 在窗口过期时走 `spin_lock_bh`，
-   同锁内最多 18 次原子读 + 8 次 EWMA 原子写；热路径因此出现 `_raw_spin_lock_bh` 0.71 次/包。
+
+   > 口径更正：**11 是站位数，不是每包次数**。每包只落一个 size 桶、一个 TTL 桶，
+   > 故按代码逐包计数为 —— UDP 流量在「DDoS 关」时 6 次
+   > （size 1 + ttl 1 + ip_total 1 + UDP 的 packet/byte/last_seen 3）；
+   > 「DDoS 开」时 10 次（再加速率条目的 packet/byte/udp/last_activity 4）；
+   > 已封禁丢弃路径 0 次。
+3. **热路径每包取一次速率桶自旋锁**：`update_rate_stats` 的「窗口未过期」快速路径里，
+   **凡 `dst_port > 0` 的包**都取 `rate_locks` 桶锁去更新 `seen_ports`
+   （`rate-detector.c` 中 `/* 端口扫描去重集合需桶锁 */` 那段，最多 32 项线性扫描）——
+   这才是 `_raw_spin_lock_bh` 0.71 次/包的直接来源。
+   窗口过期时的重置路径（同锁内最多 18 次原子读 + 8 次 EWMA 原子写）虽然也用这把锁，
+   但每窗口才发生一次，量级上推不出 0.71/包，不是主因。
 4. **`is_local_ip` 每包一次 O(N) 线性扫描**：每 CPU 一条目、掩码 `0xFFFFFFFF` 精确匹配；
    `cache->count == 0` 时**失败开放**返回 false（不拒绝）。
 5. **`stats` 从不刷新 per-CPU 计数器**：见 `contract/procfs.fwidl` 的
@@ -172,8 +182,8 @@ sudo scripts/bench/fwctl.sh 8 3
 | 每包 softirq（单通路，两表未命中） | 2.46 µs | **≤ 1.8 µs** | `fwsweep.sh` A 组 |
 | 每包 softirq（单通路，已封禁丢弃） | 1.27 µs | **≤ 1.0 µs** | `fwsweep.sh` D 组 |
 | `find_rate_entry_rcu` 次数/包 | 2.81 | **≤ 1.0**（合并为一次查表） | `function_graph` |
-| 窗口滚动路径是否持锁 | 是（0.71 次/包） | **否**（全原子或 per-CPU） | `function_graph` 无 `_raw_spin_lock_bh` |
-| 共享原子操作次数/包 | ≈11 | **≤ 2**（改 per-CPU 聚合） | 源码 + `function_graph` |
+| 速率桶自旋锁次数/包 | 1.0（`dst_port > 0` 时） | **0** | `function_graph` 无 `_raw_spin_lock_bh` |
+| 共享 cache line 写次数/包 | 6（DDoS 关）/ 10（DDoS 开） | **0**（改 per-CPU 聚合） | 源码 + `function_graph` |
 
 判定纪律：
 

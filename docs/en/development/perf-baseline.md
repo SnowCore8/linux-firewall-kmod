@@ -169,12 +169,24 @@ Module-owned functions (p50 under `function_graph`):
    `check_rate_violation`, `check_protocol_violation` and `check_tcp_flood_violation` each
    look the entry up again (2.81 per packet in total) — the same source-IP entry is
    looked up over and over.
-2. **~11 shared-cache-line atomics per packet**: `record_packet_size` (5 buckets),
+2. **~11 shared-cache-line histogram sites**: `record_packet_size` (5 buckets),
    `record_ttl` (6 buckets), `record_ip_frag` (1–2), plus `record_udp_port` /
    `record_icmp_type`, all global `atomic64_inc`.
-3. **Window rollover takes a spinlock**: `update_rate_stats` takes `spin_lock_bh` when the
-   window expires, and within the lock performs up to 18 atomic reads + 8 EWMA atomic
-   writes — hence `_raw_spin_lock_bh` at 0.71 per packet on the hot path.
+
+   > Correction of the earlier wording: **11 counts sites, not per-packet operations.**
+   > A packet lands in exactly one size bucket and one TTL bucket, so counting per
+   > packet from the code gives — UDP traffic with DDoS off: 6
+   > (size 1 + ttl 1 + ip_total 1 + UDP packet/byte/last_seen 3); with DDoS on: 10
+   > (plus the rate entry's packet/byte/udp/last_activity 4); the banned-and-dropped
+   > path: 0.
+3. **One rate-bucket spinlock per packet on the hot path**: in `update_rate_stats`'s
+   "window not expired" fast path, **any packet with `dst_port > 0`** takes a
+   `rate_locks` bucket lock to update `seen_ports` (the
+   `/* 端口扫描去重集合需桶锁 */` block in `rate-detector.c`, a linear scan of up to
+   32 items) — that is the direct source of `_raw_spin_lock_bh` at 0.71 per packet.
+   The window-expiry reset path (up to 18 atomic reads + 8 EWMA atomic writes under
+   the same lock) does take the same lock, but only once per window, which cannot
+   account for 0.71 per packet and is therefore not the main cause.
 4. **`is_local_ip` is an O(N) linear scan per packet**: one entry per CPU, mask
    `0xFFFFFFFF` exact match; with `cache->count == 0` it **fails open** and returns false.
 5. **`stats` never flushes per-CPU counters**: see `PROC_STATS_STALE_NO_FLUSH` in
@@ -192,8 +204,8 @@ are masked by the sender); `function_graph` structural metrics are secondary.
 | Per-packet softirq (single flow, both tables miss) | 2.46 µs | **≤ 1.8 µs** | `fwsweep.sh` group A |
 | Per-packet softirq (single flow, banned drop) | 1.27 µs | **≤ 1.0 µs** | `fwsweep.sh` group D |
 | `find_rate_entry_rcu` per packet | 2.81 | **≤ 1.0** (merge into one lookup) | `function_graph` |
-| Window rollover holds a lock | Yes (0.71/pkt) | **No** (atomic or per-CPU) | no `_raw_spin_lock_bh` in `function_graph` |
-| Shared atomics per packet | ≈11 | **≤ 2** (per-CPU aggregation) | source + `function_graph` |
+| Rate-bucket spinlocks per packet | 1.0 (`dst_port > 0`) | **0** | no `_raw_spin_lock_bh` in `function_graph` |
+| Shared cache-line writes per packet | 6 (DDoS off) / 10 (DDoS on) | **0** (per-CPU aggregation) | source + `function_graph` |
 
 Judging discipline:
 
