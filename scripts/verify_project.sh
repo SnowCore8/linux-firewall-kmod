@@ -18,7 +18,7 @@ ESSENTIAL_FILES=(
     "Cargo.toml"
     "docs/zh/README.md"
     "docs/en/README.md"
-    "tests/run_tests.sh"
+    "tests/conftest.py"
 )
 
 echo "Checking essential files..."
@@ -74,4 +74,4 @@ fi
 echo "Project verification completed successfully!"
 echo ""
 echo "To run the full test suite, execute:"
-echo "sudo ./tests/run_tests.sh"
+echo "sudo python3 -m pytest tests/ -v"

@@ -47,6 +47,69 @@ jobs:
       - name: 检查 YAML 配置（yamllint）
         run: yamllint -c .yamllint config/*.yaml
 
+  # 前端任务：类型检查 + 构建 + 产物校验（独立执行，与 lint 并行）
+  frontend:
+    name: 前端构建
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装前端依赖
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: 类型检查（tsc --noEmit）
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: 构建前端（vite）
+        working-directory: frontend
+        run: npm run build:only
+
+      - name: 校验构建产物
+        run: |
+          echo "=== 前端构建产物 ==="
+          ls -la src/daemon/web_ui/static/
+          for f in index.html app.js style.css sw.js manifest.webmanifest \
+                   icons/icon-192.png icons/icon-512.png; do
+            if [[ ! -f "src/daemon/web_ui/static/$f" ]]; then
+              echo "::error::缺少构建产物: src/daemon/web_ui/static/$f"
+              exit 1
+            fi
+          done
+          echo "✓ index.html / app.js / style.css 与 PWA 资源（sw.js、manifest、icons）均已生成"
+
+      - name: 校验 PWA 清单（JSON 合法性 + 必需字段）
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = "src/daemon/web_ui/static/manifest.webmanifest";
+            const m = JSON.parse(fs.readFileSync(p, "utf8"));
+            for (const k of ["name", "short_name", "start_url", "display", "background_color", "theme_color", "icons"]) {
+              if (!(k in m)) { console.error("::error::manifest 缺少字段 " + k); process.exit(1); }
+            }
+            if (m.display !== "standalone") { console.error("::error::display 必须为 standalone"); process.exit(1); }
+            const sizes = m.icons.map((i) => i.sizes);
+            for (const s of ["192x192", "512x512"]) {
+              if (!sizes.includes(s)) { console.error("::error::manifest 缺少 " + s + " 图标"); process.exit(1); }
+            }
+            console.log("✓ manifest.webmanifest 字段与图标尺寸齐备");
+          '
+
+      - name: 校验 Service Worker 语法
+        run: |
+          node --check src/daemon/web_ui/static/sw.js
+          echo "✓ sw.js 语法合法"
+
   # 编译任务：独立执行，与 lint 并行运行
   build:
     name: 编译
@@ -104,19 +167,19 @@ jobs:
             fi
           fi
 
-      - name: 安装 trunk（前端 WASM 构建工具）
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-          rustup target add wasm32-unknown-unknown
-          cargo install trunk --locked
+      - name: 安装 Node.js（前端构建）
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: 编译守护进程
         run: |
           set -e
-          echo "=== 编译守护进程（包含格式检查）==="
+          echo "=== 编译守护进程（含前端构建与格式检查）==="
           make clean || true
-          # 使用 make all 会自动执行 format-check
+          # make all 会先构建前端（npm ci + vite build）再编译 Rust
           make all -j$(nproc)
           echo "✓ 守护进程编译完成"
 
@@ -241,11 +304,10 @@ jobs:
           echo "=== 执行测试 ==="
           if [[ "${{ steps.check-module.outputs.compatible }}" == "true" ]]; then
             echo "运行环境：完整测试（模块可加载）"
-            sudo -E ./tests/run_tests.sh --report
+            sudo python3 -m pytest tests/ -v --tb=short
           else
             echo "运行环境：守护进程功能测试（模块不兼容）"
-            echo "注：内核模块测试套件（01/02/03/04/07/08/14）需要模块可加载"
-            echo "仅运行 daemon 类别测试（09/10/13/15/16/17/18）"
-            # build/test job 可能落在不同 Azure 内核版本上；跳过硬加载以免误杀
-            sudo -E env SKIP_MODULE=1 ./tests/run_tests.sh --category daemon --report
+            echo "注：内核模块测试套件（01-04/07/08/11/12/14）需要模块可加载"
+            echo "仅运行守护进程相关测试（09/10/13/15-21）"
+            sudo python3 -m pytest tests/ -v --tb=short -k "daemon or logparse or frp or ddos or webui or config_reload or log_rotation or netlink or lifecycle or multi_jail"
           fi

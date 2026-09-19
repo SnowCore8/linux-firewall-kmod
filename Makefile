@@ -29,6 +29,9 @@ PWD := $(CURDIR)
 # 源码目录
 KERNEL_SRC_DIR := src/kernel-module
 
+# 前端构建产物目录（rust-embed 嵌入源，由 vite 输出）
+WEBUI_STATIC_DIR := src/daemon/web_ui/static
+
 # 构建输出目录
 BUILD_DIR        := build
 KERNEL_BUILD_DIR := $(BUILD_DIR)/kernel-module
@@ -104,12 +107,21 @@ daemon: frontend
 	@cp target/release/firewall-daemon $(DAEMON_BIN)
 	@echo "  ✓ Rust daemon built: $(DAEMON_BIN)"
 
-# 前端 (Leptos WASM + trunk)
-.PHONY: frontend
-frontend:
-	@echo "  TRUNK   building Leptos WASM frontend"
-	@cd frontend && trunk build --release
+# 前端 (React 19 + TypeScript + Vite + antd-mobile，移动优先)
+# 依赖锁定：frontend/package-lock.json 已入库，CI 用 npm ci 保证可复现
+.PHONY: frontend frontend-install frontend-typecheck
+frontend: frontend-install
+	@echo "  VITE    building React frontend"
+	@cd frontend && npm run build
 	@echo "  ✓ Frontend built to src/daemon/web_ui/static/"
+
+frontend-install:
+	@echo "  NPM     installing frontend dependencies"
+	@cd frontend && npm ci --no-audit --no-fund
+
+# 仅做类型检查（tsc --noEmit），不产出构建物
+frontend-typecheck: frontend-install
+	@cd frontend && npm run typecheck
 
 # ============================================================================
 # 4. 代码质量目标 (format-check, format, ci)
@@ -465,7 +477,11 @@ clean:
 	@rm -rf $(BUILD_DIR)
 	@rm -rf target
 	@cargo clean 2>/dev/null || true
+	@if [ -d "$(WEBUI_STATIC_DIR)" ]; then \
+		find $(WEBUI_STATIC_DIR) -mindepth 1 -delete; \
+	fi
 	@echo "  ✓ Build directory removed (build/, target/)"
+	@echo "  ✓ Frontend bundle removed ($(WEBUI_STATIC_DIR)/)"
 	@echo "  ✓ Cargo cache cleaned"
 	@echo "Build artifacts cleaned."
 
@@ -485,10 +501,12 @@ distclean: clean
 .PHONY: help
 help:
 	@echo "可用目标:"
-	@echo "  all/build      - 编译内核模块和守护进程（默认，含格式检查）"
+	@echo "  all/build      - 编译前端、内核模块和守护进程（默认，含格式检查）"
 	@echo "  build-quick    - 跳过格式检查的快速编译"
 	@echo "  kernel-module  - 仅编译内核模块"
-	@echo "  daemon         - 仅编译守护进程 (Rust)"
+	@echo "  daemon         - 仅编译守护进程 (Rust，会先构建前端)"
+	@echo "  frontend       - 仅构建前端 (npm ci + vite build)"
+	@echo "  frontend-typecheck - 仅做前端类型检查 (tsc --noEmit)"
 	@echo "  deb            - 构建 Debian 软件包 (使用 ./build-deb.sh)"
 	@echo "  install        - 安装到系统"
 	@echo "  uninstall      - 从系统卸载"
@@ -515,7 +533,7 @@ help:
 # 运行综合测试套件
 .PHONY: test
 test: $(KERNEL_MODULE) $(DAEMON_BIN)
-	sudo ./tests/run_tests.sh
+	sudo python3 -m pytest tests/ -v
 
 # ============================================================================
 # 9. Debian 软件包构建

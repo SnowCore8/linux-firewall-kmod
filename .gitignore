@@ -9,12 +9,11 @@ site/
 docs/_book/
 docs/node_modules/
 
-# 前端构建产物（trunk 输出到 rust-embed 目录）
-frontend/target/
-src/daemon/web_ui/static/index.html
-src/daemon/web_ui/static/*.wasm
-src/daemon/web_ui/static/*.js
-src/daemon/web_ui/static/*.css
+# 前端构建产物（vite 输出到 rust-embed 嵌入目录）
+# 整个目录内容都是生成物（index.html / app.js / style.css / sw.js /
+# manifest.webmanifest / icons/），统一忽略；目录本身由构建过程创建
+# （vite 的 emptyOutDir 或 CI 里的 mkdir -p），因此不放入库占位文件。
+src/daemon/web_ui/static/*
 
 # 内核模块编译产物（in-tree 构建时产生，Makefile 会在构建后清理但需防御性忽略）
 *.ko
@@ -86,8 +85,11 @@ opencode.json
 
 # ---- Node.js / Playwright E2E ----
 node_modules/
-package-lock.json
+# 仅忽略根目录锁文件；frontend/package-lock.json 必须入库（CI 用 npm ci 保证可复现）
+/package-lock.json
 test-results/
 playwright-report/
 blob-report/
+# Playwright MCP 的默认输出目录（快照/截图/console 日志落在进程 cwd）
+.playwright-mcp/
 config/debug-*.yaml
