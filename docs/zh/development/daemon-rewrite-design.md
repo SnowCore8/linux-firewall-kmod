@@ -494,7 +494,7 @@ sequenceDiagram
 | 2.E-4b-2 退役旧读路径 + 挂载新路由 + 按 `where` 存亡翻转四条缺陷 | 已完成（E 时留 `open`，见下） |
 | 2.E-4c 接入 `runtime/`：调度器接管周期清理与计数器镜像 + `main.rs` 装配；E 转 `fixed` | 已完成 |
 | 2.F-1 队列背压（`history_snapshot/mod.rs`，只修队列行为） | 已完成 |
-| 2.F-2 测试债务替换（`tests/` 恒真断言） | 进行中 |
+| 2.F-2 测试债务替换（`tests/` 恒真断言） | 已完成 |
 | 2.G 文档重写 | 未开始 |
 
 ### 2.A 落地明细
@@ -820,7 +820,9 @@ E 的判据是「**读路径改状态**」。旧实现把限流 `purge_expired` 
 
 2.F-1 门禁证据：`cargo test --release --lib`（**404 passed / 0 failed**，较 2.E-4c 的 400 增加 4 条）、`cargo clippy --all-targets -- -D warnings`（exit 0）、`cargo fmt --all --check`（干净）、`make build`（`.ko` + daemon）、`make format-check`（通过；同一条既有 yamllint 警告）、`make frontend-typecheck`（exit 0）、`bash scripts/check_contract.sh`（契约门禁通过）、`bash scripts/verify_project.sh`（成功）全绿。
 
-2.F-2（`tests/` 恒真断言替换为可失败断言）进行中，单独推进。
+2.F-2（`tests/` 恒真断言替换为可失败断言）已完成，落在提交 `6d0bcb4`：8 个测试文件，替换后的每条断言都必须能失败（精确计数 / YAML 解析 / 真实 Prometheus 样本行 / 非零退出码 / 指标增量）。验证为串行 `python3 -m pytest tests/ -q -rA`（**67 passed / 25 skipped**），与改动前基线逐条一致——25 条 skip 按文件分布与原因完全相同，没有把断言降级成 skip。
+
+至此 2.F 两片（2.F-1 队列背压 + 2.F-2 测试债务）均已落地。
 
 ## 判定纪律
 

@@ -544,7 +544,7 @@ SQLite `bans` table schema; the metric count is written as "24"; the main loop i
 | 2.E-4b-2 Retire the old read paths + mount the new router + flip four defects per `where` survival | Done (E stays `open` at that step; closed by 2.E-4c) |
 | 2.E-4c Wire `runtime/`: the scheduler takes over periodic purge and the counter mirror + `main.rs` assembly; E flips to `fixed` | Done |
 | 2.F-1 Queue backpressure (`history_snapshot/mod.rs`, queue behavior only) | Done |
-| 2.F-2 Test-debt replacement (`tests/` tautological assertions) | In progress |
+| 2.F-2 Test-debt replacement (`tests/` tautological assertions) | Done |
 | 2.G Documentation rewrite | Not started |
 
 ### What 2.A Landed
@@ -1084,8 +1084,14 @@ writer catches up.
 `config/default.yaml:80` warning), `make frontend-typecheck` (exit 0), `bash scripts/check_contract.sh`
 (passed), `bash scripts/verify_project.sh` (passed) — all green.
 
-**2.F-2** (replacing the tautological assertions in `tests/` with ones that can fail) is in progress
-and tracked separately.
+**2.F-2** (replacing the tautological assertions in `tests/` with ones that can fail) is also done,
+landed in commit `6d0bcb4`: eight test files, and every replacement now requires real evidence (an
+exact count, a parsed YAML section, an actual Prometheus sample line, a non-zero exit code, a metric
+increment). Verified serially with `python3 -m pytest tests/ -q -rA` (**67 passed / 25 skipped**),
+identical to the pre-change baseline — the same 25 skip entries by file and reason, so no assertion
+was quietly downgraded to a skip.
+
+Both 2.F slices (2.F-1 queue backpressure + 2.F-2 test debt) have landed.
 
 ## Judging Discipline
 
