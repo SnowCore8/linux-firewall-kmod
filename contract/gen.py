@@ -2327,6 +2327,10 @@ def emit_rust_http(contract: HttpContract) -> str:
     L.append(f"pub const BASE: &str = {_rust_str(contract.base)};")
     L.append("")
     L.append("/// 路由路径常量（与 axum 注册的字面量逐字一致）")
+    # 同 netlink 侧的理由：模块被 `#[path]` 挂进 daemon 后 `cargo fmt --check`
+    # 会沿 mod 树进入本文件。`path` / `sse` 两块的换行只由行长决定，交出去就会
+    # 随 rustfmt 版本漂移并让生成物不再字节稳定，故显式 skip。
+    L.append("#[rustfmt::skip]")
     L.append("pub mod path {")
     for r in contract.routes:
         ident = "ROUTE_" + re.sub(r"[^A-Za-z0-9]+", "_", f"{r.method}_{r.path}").strip("_").upper()
@@ -2365,6 +2369,7 @@ def emit_rust_http(contract: HttpContract) -> str:
     L.append("}")
     L.append("")
     L.append("/// SSE 连接上限（两条流各自独立）")
+    L.append("#[rustfmt::skip]")
     L.append("pub mod sse {")
     for r in contract.routes:
         if r.returns != "stream":

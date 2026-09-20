@@ -7,12 +7,19 @@
 //! - `handler`: HTTP 路由构建 + handler 函数 + 安全头中间件
 //! - `lifecycle`: HTTP 服务启动/停止 + tokio runtime 管理
 
-mod auth;
+pub(crate) mod auth;
 mod handler;
 mod lifecycle;
 mod metrics;
 
 pub use lifecycle::{start_http_exporter, stop_http_exporter};
+
+/// 渲染 Prometheus 指标文本。
+///
+/// 供 `api::adapters` 的临时运行时端口使用；`metrics` 重写后此转发删除。
+pub fn render_prometheus_metrics() -> String {
+    metrics::generate_metrics()
+}
 
 /// 更新运行期 HTTP Basic Auth 凭据（SIGHUP 热重载时调用）。
 ///
@@ -118,9 +125,9 @@ pub fn get_global_netlink_ctx() -> Option<Arc<NetlinkContext>> {
 // ============================================================================
 
 /// Basic Auth 连续失败次数阈值,达到后触发 [`AUTH_LOCKOUT_DURATION`] 锁定
-const AUTH_FAILURE_THRESHOLD: u64 = 10;
+pub(crate) const AUTH_FAILURE_THRESHOLD: u64 = 10;
 /// 锁定持续时间 (秒)。窗口期内所有认证请求一律 401
-const AUTH_LOCKOUT_DURATION: i64 = 60;
+pub(crate) const AUTH_LOCKOUT_DURATION: i64 = 60;
 
 // ============================================================================
 // 运行状态

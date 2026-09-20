@@ -486,7 +486,7 @@ sequenceDiagram
 | 2.D `kernel` 层重写 | 已完成 |
 | 2.E-1 `state/cidr.rs` + `state/hub.rs` | 已完成 |
 | 2.E-2 `state/{bans,whitelist,rates,stats,mod}.rs` | 已完成 |
-| 2.E-3 `api` 薄适配层 + SSE | 未开始 |
+| 2.E-3 `api` 薄适配层 + SSE | 已完成 |
 | 2.E-4 退役旧读路径 + 棘轮同步 | 未开始 |
 | 2.F–2.G | 未开始 |
 
@@ -584,14 +584,14 @@ netlink 线格式三端（契约 / 内核 / daemon）同一步落地，布局经
 2.E 分四步，**退役与棘轮同一步**：前三步只新增 `state` / `api` 模块，旧 `web_ui/` 与
 `http_exporter/handler.rs` 暂不动（按「保留编译、分批迁入」）；最后一步才删旧读路径，
 并与重写 `verify_http.py` 的棘轮断言、新增 E/F/M 三条缺陷条目**在同一提交**内落地——
-否则 `check_defect_claims()` 会因「缺陷被修掉了」而门禁变红。故 2.E-1 / 2.E-2 已提交，
-2.E-3 / 2.E-4 未开始。
+否则 `check_defect_claims()` 会因「缺陷被修掉了」而门禁变红。故 2.E-1 ~ 2.E-3 已提交，
+2.E-4 未开始。
 
 | 提交 | 文件 | 内容 | 消除的问题 |
 |------|------|------|-----------|
 | 2.E-1 | `state/{cidr,hub}.rs` | CIDR 唯一规范化实现；版本化快照发布点 | M（键规则）/ F（地基） |
 | 2.E-2 | `state/{bans,whitelist,rates,stats,mod}.rs` | 四个数据所有者 + `State` 聚合，读路径零副作用 | E（读改状态）/ F（数据面） |
-| 2.E-3 | `api/{routes/*,sse,auth}.rs` | 薄适配层：SSE 只订变更域、慢消费者不阻塞全局 | F |
+| 2.E-3 | `api/{envelope,payloads,ports,views,render,routes/*,sse,router,auth,adapters}.rs` | 薄适配层：统一信封与业务码、端口承接未迁入数据、SSE 只订变更域、慢消费者不阻塞全局 | F（读路径）/ E（读侧判据） |
 | 2.E-4 | 删 `web_ui/` 读路径 + `handler.rs` 相关代码；改 `verify_http.py` 棘轮；加 E/F/M 缺陷条目 | 退役与棘轮同一步 | E / F / M（收口） |
 
 关键取舍：
@@ -641,7 +641,51 @@ netlink 线格式三端（契约 / 内核 / daemon）同一步落地，布局经
   新 `State` 由组合根构造一次（`State::new() -> Arc<Self>`），跨模块只传**消息**或
   `Arc<不可变快照>`，锁顺序协议不再需要。`State: Send + Sync` 有测试钉死。
 
-门禁证据：`cargo test --release --lib`（336 passed，其中 `state::` 79 条）、`cargo clippy --release --lib --tests -- -D warnings`、`cargo fmt --check`、`make build` / `make format-check`、`bash scripts/check_contract.sh`、`bash scripts/verify_project.sh` 全绿。
+2.E-3 的取舍：
+
+- **SSE 与 REST 共用同一份视图，不是各写一份**。域载荷全部由 `api::views` 的纯函数派生，
+  `StateRenderer`（SSE）与 `routes/*`（REST）调的是同一批函数。旧实现里 `sse.rs` 与
+  `handler.rs` 各写一套构造代码，两者迟早不一致；这里从结构上排除了这种可能——想改一个
+  字段的显示方式，只有一处可改。
+- **「只序列化变化的域」由版本差集决定，不靠缓存猜测**。连接持有上一次发出的
+  `Versions`，每轮与当前版本求差集；新连接才发全部五域。`CountingRenderer` 直接数
+  「每个域被渲染了几次」，故这条保证是**可失败断言**而不是阅读结论：连推三次 `Rates`
+  只应渲染一次（`several_publishes_coalesce_into_one_render_of_the_latest_state`）。
+- **慢消费者被断开，而不是让写侧等待**。写侧（`state::hub`）只做「推进版本 +
+  `watch` 覆盖式通知」，从不等待订阅者；序列化与发送在**每条连接自己的任务**里，中间隔
+  一个深度 32 的有界缓冲，溢出即判定过慢并结束该连接（`Disconnect::SlowConsumer`，
+  带 `warn` 日志）。这是结构性的而非尽力而为：`watch` 只保留最新值、`send_replace` 不阻塞，
+  所以「有多少条连接、其中几条卡住」对写侧完全不可见。
+- **连接结束原因是显式类型**。`ConsumerGone` / `SlowConsumer` / `HubClosed` 三者分开：
+  慢消费者断开是需要被看见的运行事件，混杂进「流结束」就再也分不出来。
+- **连接位以原子 CAS 占用，随流归还**。`SseStatus` 为两条流各持一份计数（上限 10 / 5），
+  `ConnectionGuard` 析构即 `fetch_sub`。用 `compare_exchange_weak` 循环而非「先读后写」，
+  消除检查与递增之间的窗口。两条流上限**独立**——缺陷 `HTTP_SSE_STATUS_INCOMPLETE` 的
+  成因正是「用一条流的上限推断另一条」，故 `/api/v1/stats/sse-status` 分别上报。
+- **数据缺口用端口承接，而不是占位实现**。`api` 的载荷里有几类字段不由 `state` 决定
+  （历史趋势与信誉、Jail 配置面、Web UI 配置、运行时就绪态、Prometheus 文本），其 owner
+  尚未重写。若直接伸手够旧全局，2.E-4 之后 `api` 仍绑死在旧模块上，退役只能重写路由。
+  故收成 `ConfigPort` / `RuntimePort` / `HistoryPort` / `ControlPort` 四个窄 trait，生产实现
+  由组合根注入（现由 `api::adapters` 的 `Legacy*Port` 桥到旧 owner，逐个方法缩小直至删除），
+  各 owner 重写时**换实现即可，路由代码不动**。刻意不写「先返回空」的占位：假数据无法与
+  真数据区分，那种分支会留成永久行为；端口相反，缺口在**类型上**显式存在。
+- **读路径的零副作用由测试钉死，不靠约定**。`reading_paths_do_not_mutate_any_state` 把全部
+  「读」端点各调五遍，断言 hub 版本、统计快照、封禁表长度、白名单长度全不变——旧
+  `get_active_bans()` 正是「读列表顺手限流 purge 并累加 `total_unbans`」，SSE 每秒读一次
+  就每秒改写统计。`reading_does_not_purge_expired_bans` 另外钉住「过期条目在读路径上原样保留」。
+- **分页形状唯一**。`GET /api/v1/bans` 恒为分页信封，没有裸数组分支——缺陷
+  `HTTP_BANS_DUAL_SHAPE` 的处置结论是「统一为单一形状」，故 `data` 在任何参数组合下都是对象。
+- **写指令不占 tokio worker**。封禁/解封/白名单增删要等内核确认（可能数百毫秒），一律走
+  `spawn_blocking`，避免占住 worker 让其它 API 与 SSE 排队。端口返回「内核已确认」而不是
+  「已投递」，与 `kernel::client` 的类型口径一致。
+- **契约生成物被 `#[path]` 挂入后，`cargo fmt --check` 会沿 mod 树进入它**。netlink 侧早已
+  用 `#[rustfmt::skip]` 保护 `impl` 块；本次挂载 `http_contract.rs` 暴露 `path` / `sse` 两个
+  常量模块同样受行长启发式影响（六处换行由 rustfmt 版本决定）。修在**生成器**而非生成物：
+  `gen.py` 给这两块加 skip，否则每次 `check_contract.sh` 重新生成都会把 `fmt` 弄红。
+
+门禁证据：`cargo test --release --lib`（391 passed，其中 `api::` 55 条）、`cargo clippy --release --lib --tests -- -D warnings`、`cargo fmt --check`、`make build` / `make format-check`、`bash scripts/check_contract.sh`、`bash scripts/verify_project.sh` 全绿。
+
+2.E-1 / 2.E-2 当时门禁证据：`cargo test --release --lib`（336 passed，其中 `state::` 79 条）、`cargo clippy --release --lib --tests -- -D warnings`、`cargo fmt --check`、`make build` / `make format-check`、`bash scripts/check_contract.sh`、`bash scripts/verify_project.sh` 全绿。
 
 ## 判定纪律
 

@@ -536,7 +536,7 @@ SQLite `bans` table schema; the metric count is written as "24"; the main loop i
 | 2.D `kernel` layer rewrite | Done |
 | 2.E-1 `state/cidr.rs` + `state/hub.rs` | Done |
 | 2.E-2 `state/{bans,whitelist,rates,stats,mod}.rs` | Done |
-| 2.E-3 Thin `api` layer + SSE | Not started |
+| 2.E-3 Thin `api` layer + SSE | Done |
 | 2.E-4 Retire old read paths + ratchet sync | Not started |
 | 2.F–2.G | Not started |
 
@@ -741,13 +741,13 @@ steps only add `state` / `api` modules; the old `web_ui/` and `http_exporter/han
 (per "keep it compiling, migrate in batches"). Only the last step deletes the old read paths, and it
 must land the rewritten `verify_http.py` ratchet assertions and the new E/F/M defect entries **in the
 same commit as the code** — otherwise `check_defect_claims()` turns the gate red because the defects
-it asserts are gone. So 2.E-1 and 2.E-2 are committed; 2.E-3 and 2.E-4 are not started.
+it asserts are gone. So 2.E-1 through 2.E-3 are committed; 2.E-4 is not started.
 
 | Step | Files | Content | Defects removed |
 |------|-------|---------|-----------------|
 | 2.E-1 | `state/{cidr,hub}.rs` | The single CIDR normalizer; the versioned snapshot publish point | M (key rules) / F (foundation) |
 | 2.E-2 | `state/{bans,whitelist,rates,stats,mod}.rs` | Four data owners + the `State` aggregate, read paths free of side effects | E (read mutating state) / F (data plane) |
-| 2.E-3 | `api/{routes/*,sse,auth}.rs` | Thin adapters: SSE subscribes to changed domains only; a slow consumer cannot block the rest | F |
+| 2.E-3 | `api/{envelope,payloads,ports,views,render,routes/*,sse,router,auth,adapters}.rs` | Thin adapters: one envelope and business-code table, ports for data whose owners have not migrated, SSE serializing only changed domains, a slow consumer that cannot block the rest | F (read path) / E (read-side criterion) |
 | 2.E-4 | Delete the `web_ui/` read paths + the affected `handler.rs` code; rewrite the `verify_http.py` ratchet; add E/F/M defect entries | Retirement and ratchet in one step | E / F / M (closing) |
 
 Key decisions:
@@ -813,8 +813,74 @@ Key decisions:
   `Arc<immutable snapshot>`, so the lock-order protocol is no longer needed. `State: Send + Sync`
   is pinned by a test.
 
-Gate evidence: `cargo test --release --lib` (336 passed, 79 of them in `state::`),
+Decisions specific to 2.E-3:
+
+- **SSE and REST share one set of views rather than each writing its own**. Every domain payload is
+  derived by pure functions in `api::views`, and `StateRenderer` (SSE) calls exactly the same
+  functions as `routes/*` (REST). The old code built payloads separately in `sse.rs` and
+  `handler.rs`, which inevitably diverges; here the divergence is structurally impossible — there
+  is only one place to change how a field is rendered.
+- **"Serialize only changed domains" comes from a version diff, not from cache guesswork**. A
+  connection holds the `Versions` it last sent and diffs against the current ones each round; only a
+  brand-new connection sends all five domains. `CountingRenderer` counts how many times each domain
+  was rendered, so this guarantee is a **failable assertion** rather than a reading conclusion:
+  three consecutive `Rates` publishes must render once
+  (`several_publishes_coalesce_into_one_render_of_the_latest_state`).
+- **A slow consumer is disconnected, not waited on**. The write side (`state::hub`) only advances
+  versions and sends a `watch` overwrite notification; it never waits for a subscriber.
+  Serialization and sending happen in **each connection's own task**, behind a bounded buffer of
+  depth 32; an overflow marks the consumer as too slow and ends that connection
+  (`Disconnect::SlowConsumer`, with a `warn` log). This is structural, not best-effort: `watch`
+  keeps only the latest value and `send_replace` never blocks, so "how many connections exist and
+  which are stuck" is entirely invisible to the write side.
+- **The disconnect reason is an explicit type**. `ConsumerGone` / `SlowConsumer` / `HubClosed` stay
+  distinct: a slow-consumer disconnect is a runtime event that must be seen, and folding it into
+  "the stream ended" makes it unobservable.
+- **Connection slots are taken by atomic CAS and returned with the stream**. `SseStatus` keeps one
+  counter per stream (limits 10 / 5) and `ConnectionGuard` does `fetch_sub` on drop. It loops on
+  `compare_exchange_weak` rather than read-then-write, closing the window between the check and the
+  increment. The two limits are **independent** — defect `HTTP_SSE_STATUS_INCOMPLETE` existed
+  precisely because one stream's limit was inferred from the other's, so
+  `/api/v1/stats/sse-status` reports both.
+- **Data gaps are carried by ports rather than placeholder implementations**. Several payload fields
+  are not determined by `state` (history trends and reputation, the jail config surface, Web UI
+  config, runtime readiness, Prometheus text) and their owners have not been rewritten. Reaching
+  directly for the old globals would leave `api` bound to the old modules after 2.E-4, so retirement
+  would mean rewriting the routes. Instead they are narrowed into four traits — `ConfigPort` /
+  `RuntimePort` / `HistoryPort` / `ControlPort` — and the composition root injects the production
+  implementations (today `api::adapters`'s `Legacy*Port` bridges to the old owners, shrinking method
+  by method until it is deleted), so as each owner is rewritten **only the implementation changes
+  and the route code does not move**. Deliberately no "return empty for now" placeholder: fake data
+  cannot be told apart from real data, and that branch would become permanent behavior; a port
+  instead makes the gap **explicit in the type system**.
+- **Side-effect-free reads are pinned by tests, not by convention**.
+  `reading_paths_do_not_mutate_any_state` calls every read endpoint five times and asserts the hub
+  versions, the stats snapshot, the ban table length and the whitelist length are all unchanged — the
+  old `get_active_bans()` was exactly "listing bans also throttles a purge and increments
+  `total_unbans`", so with SSE reading every second, statistics were rewritten every second.
+  `reading_does_not_purge_expired_bans` additionally pins that expired entries survive a read
+  untouched.
+- **One pagination shape**. `GET /api/v1/bans` always returns the paginated envelope with no bare
+  array branch — the resolution for defect `HTTP_BANS_DUAL_SHAPE` is "unify to a single shape", so
+  `data` is an object under every parameter combination.
+- **Write commands do not occupy tokio workers**. Ban / unban / whitelist add-and-remove wait for
+  kernel confirmation (possibly hundreds of milliseconds), so they all go through `spawn_blocking`,
+  keeping workers free for other APIs and SSE. The ports return "confirmed by the kernel" rather
+  than "delivered", matching `kernel::client`'s type discipline.
+- **Once a generated artifact is mounted via `#[path]`, `cargo fmt --check` descends into it**. The
+  netlink side already guards its `impl` blocks with `#[rustfmt::skip]`; mounting
+  `http_contract.rs` exposed that the `path` / `sse` const modules are equally subject to the
+  line-length heuristic (six wraps decided by the rustfmt version). The fix belongs in the
+  **generator**, not the artifact: `gen.py` now skips those two blocks, otherwise every
+  `check_contract.sh` regeneration would turn `fmt` red again.
+
+Gate evidence: `cargo test --release --lib` (391 passed, 55 of them in `api::`),
 `cargo clippy --release --lib --tests -- -D warnings`, `cargo fmt --check`,
+`make build` / `make format-check`, `bash scripts/check_contract.sh`,
+`bash scripts/verify_project.sh` all green.
+
+Gate evidence recorded at the time for 2.E-1 / 2.E-2: `cargo test --release --lib` (336 passed, 79
+of them in `state::`), `cargo clippy --release --lib --tests -- -D warnings`, `cargo fmt --check`,
 `make build` / `make format-check`, `bash scripts/check_contract.sh`,
 `bash scripts/verify_project.sh` all green.
 

@@ -13,3 +13,11 @@
 mod generated;
 
 pub use generated::*;
+
+/// HTTP 契约生成物：路由路径常量、业务码、认证与 SSE 上限。
+///
+/// 与 netlink 生成物同样以 `#[path]` 挂入，使**路由字面量**只有一份定义。
+/// 它单独成模块（而不是 `pub use` 展开）是因为其中的 `path` / `code` / `auth` /
+/// `sse` 子模块名与 netlink 侧同名的概念并列时更易读：`contract::http_contract::path::…`。
+#[path = "../../contract/generated/http_contract.rs"]
+pub mod http_contract;

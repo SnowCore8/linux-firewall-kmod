@@ -11,6 +11,7 @@ pub const NAME: &str = "firewall_daemon_http";
 pub const BASE: &str = "/api/v1";
 
 /// 路由路径常量（与 axum 注册的字面量逐字一致）
+#[rustfmt::skip]
 pub mod path {
     /// `GET /health` → `handle_health`
     pub const ROUTE_GET_HEALTH: &str = "/health";
@@ -151,6 +152,7 @@ pub mod auth {
 }
 
 /// SSE 连接上限（两条流各自独立）
+#[rustfmt::skip]
 pub mod sse {
     /// `/api/v1/events`
     pub const MAX_CONNECTIONS_API_V1_EVENTS: usize = 10;

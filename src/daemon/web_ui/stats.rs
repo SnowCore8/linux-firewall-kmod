@@ -328,6 +328,13 @@ fn calculate_threat_level(current_bans: u64, ddos_events: u64, recent_bans: u64)
 }
 
 /// 生成封禁趋势 + 失败尝试趋势（共享缓存，30 秒刷新一次）
+///
+/// 供 `api::adapters` 的临时历史端口使用；2.F 历史库重写后连同 `generate_trends_cached`
+/// 一并删除。
+pub fn trends_snapshot() -> (ChartData, ChartData) {
+    generate_trends_cached()
+}
+
 fn generate_trends_cached() -> (ChartData, ChartData) {
     let now = crate::types::now_secs();
     let mut cache = get_trend_cache().lock();

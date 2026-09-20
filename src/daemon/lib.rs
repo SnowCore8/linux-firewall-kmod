@@ -64,6 +64,7 @@
 //! - Atomic 操作（Relaxed 序）不视为"持锁"
 //! - `parking_lot` 锁无写线程饥饿，但仍须遵守顺序避免 ABBA 死锁
 
+pub mod api;
 pub mod ban;
 pub mod config;
 pub mod config_reloader;
