@@ -50,7 +50,7 @@ graph LR
 
 | Component | Entry point | Responsibility |
 |-----------|-------------|----------------|
-| Kernel module | `src/kernel-module/firewall-main.c` | Registers netfilter hooks, maintains bans and whitelists, and makes packet-path decisions |
+| Kernel module | `src/kernel-module/fw_main.c` | Registers netfilter hooks, maintains bans and whitelists, and makes packet-path decisions |
 | Daemon | `src/daemon/main.rs`, `src/daemon/lib.rs` | Parses configuration and logs, applies ban policy, persists state, and serves HTTP |
 | Web frontend | `frontend/src/main.tsx` | React 19 mobile management UI (antd-mobile, hash routing, PWA support); embedded in the daemon binary rather than deployed separately |
 

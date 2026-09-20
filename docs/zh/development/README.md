@@ -49,7 +49,7 @@ graph LR
 
 | 组件 | 入口 | 职责 |
 |------|------|------|
-| 内核模块 | `src/kernel-module/firewall-main.c` | 注册 netfilter hook，维护封禁/白名单并在数据包路径执行判定 |
+| 内核模块 | `src/kernel-module/fw_main.c` | 注册 netfilter hook，维护封禁/白名单并在数据包路径执行判定 |
 | 守护进程 | `src/daemon/main.rs`、`src/daemon/lib.rs` | 解析配置与日志、执行封禁策略、持久化状态，并提供 HTTP 服务 |
 | Web 前端 | `frontend/src/main.tsx` | React 19 移动端管理界面（antd-mobile，hash 路由，支持 PWA）；构建后嵌入守护进程二进制，不单独部署 |
 

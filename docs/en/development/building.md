@@ -97,7 +97,7 @@ Output:
 ```
 make -C /lib/modules/$(uname -r)/build M=$(PWD)/src/kernel-module modules
 make[1]: Entering directory '/usr/src/linux-headers-...'
-  CC [M]  src/kernel-module/firewall-main.o
+  CC [M]  src/kernel-module/fw_main.o
   LD [M]  src/kernel-module/firewall.ko
   MODPOST modules
 make[1]: Leaving directory '/usr/src/linux-headers-...'
