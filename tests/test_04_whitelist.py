@@ -106,6 +106,7 @@ class TestWhitelist:
 
     def test_whitelist_capacity(self):
         """4.6 白名单容量测试 (上限 64)"""
+        before = get_stat("current_whitelist")
         added = []
         for i in range(1, 51):
             subnet = f"10.{i // 255}.{i % 255}.0/24"
@@ -117,6 +118,11 @@ class TestWhitelist:
 
         wait_procfs()
         wl_count = get_stat("current_whitelist")
+        # 计数应恰好等于基线加上本次成功添加的条目数；仅校验固定的 64 上限无法失败
+        assert wl_count == before + len(added), (
+            f"白名单计数与添加数量不符: before={before}, "
+            f"added={len(added)}, count={wl_count}"
+        )
         assert wl_count <= 64, f"白名单数量超过限制 (64)，实际 {wl_count}"
 
         for subnet in added:

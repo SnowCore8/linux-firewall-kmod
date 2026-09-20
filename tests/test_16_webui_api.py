@@ -80,7 +80,13 @@ class TestWebuiApi:
                 capture_output=True, text=True, timeout=5,
             )
             if "event:" in result.stdout:
-                assert True
+                # 子串命中不足以证明是合法 SSE 字段，要求字段名位于行首
+                fields = [
+                    line.split(":", 1)[0]
+                    for line in result.stdout.splitlines()
+                    if ":" in line
+                ]
+                assert "event" in fields, "SSE 响应缺少行首 event: 字段"
             else:
                 pytest.skip("SSE /events 端点未响应")
         except subprocess.TimeoutExpired:

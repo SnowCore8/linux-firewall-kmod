@@ -39,7 +39,11 @@ class TestNetlinkComm:
 
         for metric in expected:
             if f"{metric} " in metrics:
-                assert True
+                # HELP/TYPE 注释行也含 "<metric> " 子串，要求存在真实样本行
+                assert any(
+                    line.startswith(f"{metric} ")
+                    for line in metrics.splitlines()
+                ), f"{metric} 缺少标准 Prometheus 样本行"
             else:
                 pytest.skip(f"{metric} 指标不存在")
 
@@ -92,5 +96,12 @@ class TestNetlinkComm:
         send_err = parse_metric(metrics, "firewall_netlink_send_errors_total")
         recv_err = parse_metric(metrics, "firewall_netlink_recv_errors_total")
 
-        assert send_err >= 0, f"netlink 发送错误计数异常: {send_err}"
-        assert recv_err >= 0, f"netlink 接收错误计数异常: {recv_err}"
+        # parse_metric 未命中时返回 0.0，用样本行存在性区分"指标缺失"与"计数为 0"
+        for name, value in (
+            ("firewall_netlink_send_errors_total", send_err),
+            ("firewall_netlink_recv_errors_total", recv_err),
+        ):
+            assert any(
+                line.startswith(f"{name} ")
+                for line in metrics.splitlines()
+            ), f"{name} 指标缺失 (parse_metric 返回默认值 {value})"

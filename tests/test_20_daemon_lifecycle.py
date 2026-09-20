@@ -103,7 +103,10 @@ class TestDaemonLifecycle:
         time.sleep(2)
 
         if second.poll() is not None:
-            assert True, "第二个实例被拒绝"
+            # 被拒绝的实例必须以非零码退出（daemonizer 的 flock 失败经 bail! 退出）
+            assert second.returncode != 0, (
+                f"第二个实例以退出码 {second.returncode} 退出，未被拒绝"
+            )
         else:
             second.send_signal(signal.SIGTERM)
             second.wait(timeout=3)

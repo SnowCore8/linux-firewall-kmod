@@ -7,6 +7,7 @@ import pytest
 from .config import KERNEL_MODULE_PATH, MAX_BAN_CAPACITY, PROC_BANS, PROC_DIR
 from .conftest import (
     count_bans,
+    get_stat,
     load_module,
     unload_module,
     wait_procfs,
@@ -51,6 +52,16 @@ class TestResourceMgmt:
 
         time.sleep(0.5)
         final_count = count_bans()
+        stat_bans = get_stat("current_bans")
+        # 内核有泛洪闸门（fw_max_bans_per_second，默认 200/秒），实际条目可能少于
+        # 注入的 200；故断言内核计数为正、未超过注入量，且列表行数不少于该计数
+        # （列表另含头/尾固定文本行），而非仅校验 4096 容量上限
+        assert 0 < stat_bans <= 200, (
+            f"写入 200 个 IP 后内核 current_bans 异常: {stat_bans}"
+        )
+        assert final_count >= stat_bans, (
+            f"封禁列表行数({final_count})少于内核计数({stat_bans})"
+        )
         assert final_count <= MAX_BAN_CAPACITY, (
             f"封禁数量超出 {MAX_BAN_CAPACITY} 上限，实际 {final_count}"
         )

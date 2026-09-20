@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from .config import DAEMON_PATH
+from .conftest import get_prometheus_metrics, parse_metric
 
 
 class TestMultiJail:
@@ -101,7 +102,15 @@ class TestMultiJail:
                 f.write(f"blocked 10.0.{i}.3\n")
 
         time.sleep(3)
-        assert True, "三个 Jail 日志文件并发写入完成"
+
+        # 本次共写入 30 行（3 个 Jail × 10 行），守护进程解析计数应至少增加 30
+        metrics = get_prometheus_metrics(multi_jail_setup["metrics_port"])
+        if not metrics:
+            pytest.skip("Prometheus 端点不可达")
+        parsed = parse_metric(metrics, "firewall_daemon_lines_parsed_total")
+        assert parsed >= 30, (
+            f"并发写入 30 行后守护进程解析计数不足 (parsed={parsed})"
+        )
 
     def test_jail_independence(self, multi_jail_setup):
         """21.3 Jail 独立性验证"""
@@ -120,7 +129,11 @@ class TestMultiJail:
                 capture_output=True, text=True, timeout=5,
             )
             if result.stdout:
-                assert "firewall_daemon_lines_parsed_total" in result.stdout or True
+                # "or True" 使断言恒真；改为要求指标以真实样本行出现
+                assert any(
+                    line.startswith("firewall_daemon_lines_parsed_total ")
+                    for line in result.stdout.splitlines()
+                ), "指标端点未暴露 firewall_daemon_lines_parsed_total 样本行"
             else:
                 pytest.skip(f"Prometheus 端点不可达 (端口 {metrics_port})")
         except (subprocess.TimeoutExpired, FileNotFoundError):

@@ -17,8 +17,13 @@ class TestBanNetfilter:
         """14.1 初始包统计记录"""
         dropped = get_stat("packets_dropped")
         accepted = get_stat("packets_accepted")
-        assert dropped >= 0, f"packets_dropped 初始值异常: {dropped}"
-        assert accepted >= 0, f"packets_accepted 初始值异常: {accepted}"
+        # get_stat 对缺失字段返回 0，故用 procfs 字段存在性区分"缺失"与"计数为 0"
+        stats_text = PROC_STATS.read_text()
+        assert "packets_dropped" in stats_text, "procfs stats 缺少 packets_dropped 字段"
+        assert "packets_accepted" in stats_text, "procfs stats 缺少 packets_accepted 字段"
+        assert dropped >= 0 and accepted >= 0, (
+            f"初始包统计为负: dropped={dropped}, accepted={accepted}"
+        )
 
     def test_ban_entry_format(self, clean_bans):
         """14.2 netfilter 封禁条目格式"""
