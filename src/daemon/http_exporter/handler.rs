@@ -5,12 +5,11 @@ use axum::{
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware,
     response::{Html, IntoResponse, Json, Redirect, Response},
-    routing::{delete, get, post, put},
+    routing::get,
     Router,
 };
 
 use super::auth::auth_middleware;
-use super::metrics::generate_metrics;
 use crate::web_ui;
 
 /// 将同步 SQLite / 重查询移出 tokio worker，避免堵住 2-worker runtime。
@@ -44,17 +43,25 @@ fn db_error_response(msg: String) -> Response {
 /// 构建 axum Router。
 ///
 /// 路由分层：
-/// - 无认证路由组：`/health`、`/healthz`、SPA 外壳与静态资源、`/sw.js`
-/// - 需认证路由组：`/metrics`、`/api/v1/**`（通过 auth middleware 保护）
+/// - 无认证路由组：SPA 外壳与静态资源、`/sw.js`（`/health`、`/healthz` 已迁到
+///   [`crate::api::router::health_routes`]，由它提供）
+/// - 需认证路由组：由 [`crate::api::router::protected_routes`]（已迁入的 18 条）
+///   与 [`legacy_protected_routes`]（尚未迁入的 35 条）合并而成；本函数把认证
+///   中间件统一挂在合并结果上
 /// - 安全头：所有路由共享
 ///
 /// 认证凭据不在本函数传入，而是由中间件每请求读取运行期凭据
 /// （见 [`crate::http_exporter::set_auth_credentials`]），以支持 SIGHUP 热重载。
-pub fn build_router() -> Router {
-    // 无认证路由组
+///
+/// # 关于 `api_state`
+///
+/// 已迁入的 18 条路由其 handler 的 state 是 [`crate::api::routes::ApiState`]，
+/// 未迁入的 handler 不取 state；两者类型不同，只能各自 `.with_state(...)` 之后再
+/// `merge`。`api_state` 为 `None`（仅可能发生在极早期启动路径）时只挂未迁入组，
+/// 已迁入路由暂缺——但组合根在 `main.rs` 启动期就已注入状态，正常启动不会走到。
+pub fn build_router(api_state: Option<std::sync::Arc<crate::api::routes::ApiState>>) -> Router {
+    // 无认证路由组（SPA 外壳 + 静态资源 + Service Worker）
     let public_routes = Router::new()
-        .route("/health", get(handle_health))
-        .route("/healthz", get(handle_health))
         // SPA 外壳（无认证）：返回的都是不含数据的静态壳，数据一律经受保护的 /api/v1/*
         // 取用，故外壳公开不泄露状态；同时保证浏览器直接打开页面能加载、E2E 无需凭据。
         // 与 /metrics、/api/v1/** 的受保护策略区分开。
@@ -74,33 +81,40 @@ pub fn build_router() -> Router {
         // 若放在认证组内会因 401 导致注册失败
         .route("/sw.js", get(handle_sw));
 
-    // 需认证路由组（RESTful v1 API + 指标）
+    // 需认证：未迁入组 + 已迁入组。两组的 state 不同，故分别 with_state 后 merge。
+    let mut protected_routes = legacy_protected_routes();
+    let mut health_routes = Router::new();
+    if let Some(api_state) = api_state {
+        protected_routes = protected_routes.merge(crate::api::router::protected_routes(
+            std::sync::Arc::clone(&api_state),
+        ));
+        health_routes = crate::api::router::health_routes(api_state);
+        // 认证中间件只作用于「未迁入 + 已迁入」的 API 组；探针组保持无认证。
+        protected_routes = protected_routes.layer(middleware::from_fn(auth_middleware));
+    }
+
+    // 合并 + 安全头中间件（所有路由共享）
+    // 注意：凭据不再在构造期按值捕获，改由中间件每请求读取运行期凭据
+    // （见 http_exporter::set_auth_credentials），以支持 SIGHUP 热重载
+    public_routes
+        .merge(health_routes)
+        .merge(protected_routes)
+        .layer(middleware::from_fn(security_headers_middleware))
+}
+
+/// 尚未迁入 `api` 层的需认证路由（35 条）。
+///
+/// 这些 handler 仍在本文件；每次迁入一批，就把对应的 `.route(...)` 从这里删掉、
+/// 加到 [`crate::api::router::protected_routes`]。两条清单加起来必须恰好是契约里
+/// 需认证的路由全集，`verify_http.py` 的 `check_routes` 会同时读两个文件核对。
+fn legacy_protected_routes() -> Router {
     // 未配置 metrics_username/password 时 middleware 跳过（与现有 API 一致）；
     // 已配置时 SSE 与其它 API 同样要求 Basic Auth（修复无认证泄露）。
-    let protected_routes = Router::new()
-        .route("/metrics", get(handle_metrics))
-        // SSE：与管理 API 同一鉴权策略（连接数上限仍由 handle_sse 强制）
-        .route("/api/v1/events", get(handle_sse))
-        // v1 RESTful API
-        .route("/api/v1/stats", get(handle_api_stats))
-        .route("/api/v1/bans", get(handle_api_bans))
-        .route("/api/v1/bans", post(handle_create_ban))
-        .route("/api/v1/bans/:ip", delete(handle_delete_ban))
-        .route("/api/v1/bans/:ip/detail", get(handle_ban_detail))
-        .route("/api/v1/bans/unban-temporary", post(handle_unban_temporary))
-        .route("/api/v1/bans/batch", post(handle_batch_ban))
-        .route("/api/v1/jails", get(handle_api_jails))
-        .route("/api/v1/jails/:name", put(handle_update_jail))
-        .route("/api/v1/config", get(handle_api_config))
-        .route("/api/v1/config", put(handle_update_config))
-        .route("/api/v1/whitelist", get(handle_api_whitelist))
-        .route("/api/v1/whitelist", post(handle_create_whitelist))
-        .route("/api/v1/whitelist/:cidr", delete(handle_delete_whitelist))
+    Router::new()
         .route(
             "/api/v1/whitelist/recommendations",
             get(handle_whitelist_recommendations),
         )
-        .route("/api/v1/rates/current", get(handle_api_rates_current))
         .route("/api/v1/rates/history", get(handle_api_rates_history))
         .route("/api/v1/rates/windows", get(handle_api_rates_windows))
         .route("/api/v1/stats/heatmap", get(handle_api_heatmap))
@@ -119,7 +133,6 @@ pub fn build_router() -> Router {
         )
         .route("/api/v1/stats/udp-ports", get(handle_api_udp_ports))
         .route("/api/v1/stats/icmp-types", get(handle_api_icmp_types))
-        .route("/api/v1/stats/sse-status", get(handle_api_sse_status))
         .route(
             "/api/v1/stats/ban-duration-histogram",
             get(handle_api_ban_duration_histogram),
@@ -154,14 +167,6 @@ pub fn build_router() -> Router {
         )
         .route("/api/v1/logs/stream", get(handle_log_stream))
         .route("/api/v1/logs", get(handle_api_logs))
-        .layer(middleware::from_fn(auth_middleware));
-
-    // 合并 + 安全头中间件（所有路由共享）
-    // 注意：凭据不再在构造期按值捕获，改由中间件每请求读取运行期凭据
-    // （见 http_exporter::set_auth_credentials），以支持 SIGHUP 热重载
-    public_routes
-        .merge(protected_routes)
-        .layer(middleware::from_fn(security_headers_middleware))
 }
 
 // ============================================================================
@@ -220,37 +225,6 @@ async fn security_headers_middleware(
 // ============================================================================
 // Handler 函数
 // ============================================================================
-
-/// `GET /health` 和 `GET /healthz` — 健康检查（跳过认证）
-///
-/// 关联 Netlink 上下文与 `/proc/firewall`：两者就绪返回 200/`ok`，否则 503/`degraded`。
-async fn handle_health() -> (StatusCode, HeaderMap, String) {
-    let snap = crate::runtime_status::runtime_snapshot();
-    let body = serde_json::to_string(&snap)
-        .unwrap_or_else(|_| "{\"status\":\"degraded\",\"error\":\"serialize\"}".to_string());
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    let code = if snap.status == "ok" {
-        StatusCode::OK
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
-    };
-    (code, headers, format!("{body}\n"))
-}
-
-/// `GET /metrics` — Prometheus 指标
-async fn handle_metrics() -> (StatusCode, HeaderMap, String) {
-    let metrics = generate_metrics();
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
-    );
-    (StatusCode::OK, headers, metrics)
-}
 
 /// `GET /` — 重定向到 /dashboard
 ///
@@ -334,226 +308,11 @@ async fn handle_static(Path(path): Path<String>) -> impl IntoResponse {
     }
 }
 
-/// `GET /api/v1/stats` — 统计数据 JSON
-async fn handle_api_stats() -> Json<web_ui::api::ApiResponse<web_ui::api::StatsResponse>> {
-    let stats = web_ui::api::get_stats();
-    Json(web_ui::api::ApiResponse::ok(stats))
-}
-
-/// `GET /api/v1/bans` — 活跃封禁列表 JSON（支持分页）
-async fn handle_api_bans(Query(params): Query<web_ui::api::PaginationParams>) -> impl IntoResponse {
-    let page = params.page.unwrap_or(1);
-    let page_size = params.page_size.unwrap_or(20);
-    let sort_by = params.sort_by;
-
-    // 如果有分页参数，返回分页格式；否则返回全量（向后兼容）
-    if params.page.is_some() || params.page_size.is_some() {
-        let paginated = web_ui::api::get_active_bans_paginated(page, page_size, sort_by);
-        Json(web_ui::api::ApiResponse::ok(paginated)).into_response()
-    } else {
-        let bans = web_ui::api::get_active_bans();
-        Json(web_ui::api::ApiResponse::ok(bans)).into_response()
-    }
-}
-
-/// `POST /api/v1/bans` — 封禁 IP
-async fn handle_create_ban(Json(req): Json<web_ui::api::CreateBanRequest>) -> impl IntoResponse {
-    // create_ban 内部 wait_ban_ack 最长同步阻塞 3s（std mpsc recv_timeout），
-    // 放进 spawn_blocking，避免占住 2-worker tokio runtime 的 worker 导致其它 API/SSE 排队。
-    match tokio::task::spawn_blocking(move || web_ui::api::create_ban(req)).await {
-        Ok(Ok(resp)) => (
-            StatusCode::CREATED,
-            Json(web_ui::api::ApiResponse::ok(resp)),
-        )
-            .into_response(),
-        Ok(Err(msg)) => (
-            StatusCode::BAD_REQUEST,
-            Json(web_ui::api::ApiResponse::<()>::error(40001, msg)),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(web_ui::api::ApiResponse::<()>::error(
-                50002,
-                format!("封禁任务 join 失败: {e}"),
-            )),
-        )
-            .into_response(),
-    }
-}
-
-/// `DELETE /api/v1/bans/:ip` — 解封 IP
-async fn handle_delete_ban(Path(ip): Path<String>) -> impl IntoResponse {
-    match web_ui::api::delete_ban(&ip) {
-        Ok(resp) => (StatusCode::OK, Json(web_ui::api::ApiResponse::ok(resp))).into_response(),
-        Err(msg) => (
-            StatusCode::BAD_REQUEST,
-            Json(web_ui::api::ApiResponse::<()>::error(40002, msg)),
-        )
-            .into_response(),
-    }
-}
-
-/// `GET /api/v1/bans/:ip/detail` — 封禁详情（决策链 + 历史）
-async fn handle_ban_detail(Path(ip): Path<String>) -> impl IntoResponse {
-    match web_ui::api::get_ban_detail(&ip) {
-        Ok(resp) => (StatusCode::OK, Json(web_ui::api::ApiResponse::ok(resp))).into_response(),
-        Err(msg) => (
-            StatusCode::BAD_REQUEST,
-            Json(web_ui::api::ApiResponse::<()>::error(40006, msg)),
-        )
-            .into_response(),
-    }
-}
-
-/// `POST /api/v1/bans/unban-temporary` — 批量解封所有临时封禁
-async fn handle_unban_temporary() -> impl IntoResponse {
-    match web_ui::api::unban_all_temporary() {
-        Ok(resp) => (StatusCode::OK, Json(web_ui::api::ApiResponse::ok(resp))).into_response(),
-        Err(msg) => (
-            StatusCode::BAD_REQUEST,
-            Json(web_ui::api::ApiResponse::<()>::error(40003, msg)),
-        )
-            .into_response(),
-    }
-}
-
-/// `POST /api/v1/bans/batch` — 批量封禁多个 IP
-async fn handle_batch_ban(Json(ips): Json<Vec<String>>) -> impl IntoResponse {
-    if ips.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(web_ui::api::ApiResponse::<()>::error(
-                40004,
-                "IP 列表不能为空".to_string(),
-            )),
-        )
-            .into_response();
-    }
-    if ips.len() > 100 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(web_ui::api::ApiResponse::<()>::error(
-                40005,
-                format!("单次最多封禁 100 个 IP，当前 {} 个", ips.len()),
-            )),
-        )
-            .into_response();
-    }
-    // batch_ban 内部逐条 wait_ban_ack（每条最长 3s，最多 100 条）；
-    // 放进 spawn_blocking，避免占住 tokio worker。
-    match tokio::task::spawn_blocking(move || web_ui::api::batch_ban(ips)).await {
-        Ok(Ok(resp)) => (
-            StatusCode::CREATED,
-            Json(web_ui::api::ApiResponse::ok(resp)),
-        )
-            .into_response(),
-        Ok(Err(msg)) => (
-            StatusCode::BAD_REQUEST,
-            Json(web_ui::api::ApiResponse::<()>::error(40005, msg)),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(web_ui::api::ApiResponse::<()>::error(
-                50002,
-                format!("批量封禁任务 join 失败: {e}"),
-            )),
-        )
-            .into_response(),
-    }
-}
-
-/// `GET /api/v1/jails` — Jail 列表 JSON
-async fn handle_api_jails() -> Json<web_ui::api::ApiResponse<Vec<web_ui::api::JailResponse>>> {
-    let jail_infos = super::get_global_jails();
-    let jails = web_ui::api::get_jails(&jail_infos);
-    Json(web_ui::api::ApiResponse::ok(jails))
-}
-
-/// `PUT /api/v1/jails/:name` — 更新 Jail 启用/禁用状态
-async fn handle_update_jail(
-    Path(name): Path<String>,
-    Json(req): Json<web_ui::api::UpdateJailRequest>,
-) -> impl IntoResponse {
-    match web_ui::api::update_jail_enabled(&name, req.enabled) {
-        Ok(jail) => (StatusCode::OK, Json(web_ui::api::ApiResponse::ok(jail))).into_response(),
-        Err(msg) => {
-            let resp = web_ui::api::ApiResponse::<()>::error(404, msg);
-            (StatusCode::NOT_FOUND, Json(resp)).into_response()
-        }
-    }
-}
-
-/// `GET /api/v1/config` — Web UI 配置 JSON
-async fn handle_api_config() -> Json<web_ui::api::ApiResponse<web_ui::api::WebuiConfigResponse>> {
-    let config = web_ui::api::get_webui_config();
-    Json(web_ui::api::ApiResponse::ok(config))
-}
-
-/// `PUT /api/v1/config` — 更新 Web UI 配置
-async fn handle_update_config(
-    Json(req): Json<web_ui::api::UpdateConfigRequest>,
-) -> impl IntoResponse {
-    match web_ui::api::update_webui_config(req) {
-        Ok(config) => (StatusCode::OK, Json(web_ui::api::ApiResponse::ok(config))).into_response(),
-        Err(msg) => (
-            StatusCode::BAD_REQUEST,
-            Json(web_ui::api::ApiResponse::<()>::error(40004, msg)),
-        )
-            .into_response(),
-    }
-}
-
-/// `GET /api/v1/whitelist` — 白名单列表 JSON
-async fn handle_api_whitelist(
-) -> Json<web_ui::api::ApiResponse<Vec<web_ui::api::WhitelistEntryResponse>>> {
-    let whitelist = web_ui::api::get_whitelist();
-    Json(web_ui::api::ApiResponse::ok(whitelist))
-}
-
-/// `POST /api/v1/whitelist` — 添加白名单
-async fn handle_create_whitelist(
-    Json(req): Json<web_ui::api::CreateWhitelistRequest>,
-) -> impl IntoResponse {
-    match web_ui::api::create_whitelist(req) {
-        Ok(resp) => (
-            StatusCode::CREATED,
-            Json(web_ui::api::ApiResponse::ok(resp)),
-        )
-            .into_response(),
-        Err(msg) => (
-            StatusCode::BAD_REQUEST,
-            Json(web_ui::api::ApiResponse::<()>::error(40003, msg)),
-        )
-            .into_response(),
-    }
-}
-
-/// `DELETE /api/v1/whitelist/:cidr` — 移除白名单
-async fn handle_delete_whitelist(Path(cidr): Path<String>) -> impl IntoResponse {
-    match web_ui::api::delete_whitelist(&cidr) {
-        Ok(resp) => (StatusCode::OK, Json(web_ui::api::ApiResponse::ok(resp))).into_response(),
-        Err(msg) => (
-            StatusCode::BAD_REQUEST,
-            Json(web_ui::api::ApiResponse::<()>::error(40004, msg)),
-        )
-            .into_response(),
-    }
-}
-
 /// `GET /api/v1/whitelist/recommendations` — 智能白名单推荐
 async fn handle_whitelist_recommendations(
 ) -> Json<web_ui::api::ApiResponse<Vec<web_ui::api::WhitelistRecommendation>>> {
     let recs = web_ui::api::get_whitelist_recommendations();
     Json(web_ui::api::ApiResponse::ok(recs))
-}
-
-/// `GET /api/v1/rates/current` — 当前 DDoS 速率 JSON
-async fn handle_api_rates_current() -> Json<web_ui::api::ApiResponse<Vec<web_ui::api::RateResponse>>>
-{
-    let rates = web_ui::api::get_ddos_rates();
-    Json(web_ui::api::ApiResponse::ok(rates))
 }
 
 /// `GET /api/v1/rates/history` — 速率历史趋势 JSON（最近 1 小时，每 2 秒一条）
@@ -622,16 +381,6 @@ async fn handle_api_icmp_types(
 ) -> Json<web_ui::api::ApiResponse<web_ui::api::IcmpTypeDistributionResponse>> {
     let distribution = web_ui::api::get_icmp_type_distribution();
     Json(web_ui::api::ApiResponse::ok(distribution))
-}
-
-/// `GET /api/v1/stats/sse-status` — SSE 连接状态诊断
-async fn handle_api_sse_status() -> Json<web_ui::api::ApiResponse<serde_json::Value>> {
-    let (current, max) = web_ui::sse::get_sse_connection_info();
-    Json(web_ui::api::ApiResponse::ok(serde_json::json!({
-        "current_connections": current,
-        "max_connections": max,
-        "limit_reached": current >= max
-    })))
 }
 
 /// `GET /api/v1/stats/ban-duration-histogram` — 封禁时长分布直方图
@@ -738,14 +487,12 @@ async fn handle_api_attack_predictions() -> Response {
     }
 }
 
-/// `GET /api/v1/events` — SSE 实时事件推送（长连接）
-async fn handle_sse() -> impl IntoResponse {
-    web_ui::sse::handle_sse().await
-}
-
 /// `GET /api/v1/logs/stream` — SSE 实时日志流（tail -f 语义）
-async fn handle_log_stream() -> impl IntoResponse {
-    web_ui::log_viewer::handle_log_stream().await
+///
+/// 连接位取自进程级共享的 [`crate::api::shared_sse_status`]：与 `/api/v1/events`
+/// 同一实例，但日志流有自己的上限（5）。
+async fn handle_log_stream() -> axum::response::Response {
+    web_ui::log_viewer::handle_log_stream(crate::api::shared_sse_status()).await
 }
 
 /// `GET /api/v1/logs` — 历史日志分页查询

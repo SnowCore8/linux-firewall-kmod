@@ -52,19 +52,26 @@ LAYOUT_JSON = os.path.join(GEN_DIR, "http_layout.json")
 HANDLER_RS = os.path.join(ROOT, "src", "daemon", "http_exporter", "handler.rs")
 HTTP_MOD_RS = os.path.join(ROOT, "src", "daemon", "http_exporter", "mod.rs")
 AUTH_RS = os.path.join(ROOT, "src", "daemon", "http_exporter", "auth.rs")
-SSE_RS = os.path.join(ROOT, "src", "daemon", "web_ui", "sse.rs")
+# 已迁入 `api` 层的 SSE 引擎（两条流的上限、事件名、keep-alive 都在这里）
+SSE_RS = os.path.join(ROOT, "src", "daemon", "api", "sse.rs")
 LOG_VIEWER_RS = os.path.join(ROOT, "src", "daemon", "web_ui", "log_viewer.rs")
-API_RS = os.path.join(ROOT, "src", "daemon", "web_ui", "api.rs")
+# 统一信封（ApiResponse / PaginatedResponse / ApiError / BusinessCode）
+ENVELOPE_RS = os.path.join(ROOT, "src", "daemon", "api", "envelope.rs")
+# 已迁入的路由装配（18 条）与其余 handler
+API_ROUTER_RS = os.path.join(ROOT, "src", "daemon", "api", "router.rs")
 
 TS_TYPES = os.path.join(ROOT, "frontend", "src", "api", "types.ts")
 TS_ENDPOINTS = os.path.join(ROOT, "frontend", "src", "api", "endpoints.ts")
 
-# Rust 源码根目录：逐个文件读入，用于「字段是否存在于结构体」的核对
+# Rust 源码根目录：逐个文件读入，用于「字段是否存在于结构体」的核对。
+# `api` 排在最前——同一批载荷类型在 `web_ui` 里还有一份旧副本（尚未退役），
+# 若把 `web_ui` 放前面，核对会落在旧结构体上、把已迁入的字段漂移漏掉。
 RUST_SRC_DIRS = [
-    os.path.join(ROOT, "src", "daemon", "web_ui"),
+    os.path.join(ROOT, "src", "daemon", "api"),
     os.path.join(ROOT, "src", "daemon", "types"),
     os.path.join(ROOT, "src", "daemon", "history_snapshot"),
     os.path.join(ROOT, "src", "daemon"),
+    os.path.join(ROOT, "src", "daemon", "web_ui"),
 ]
 
 # 认证常量名 -> 契约里的键
@@ -74,6 +81,9 @@ AUTH_CONSTS = {
 }
 
 # SSE 路径 -> 源码里的连接上限常量名
+#
+# 两个常量现在都住在 `src/daemon/api/sse.rs`（`SseStatus` 同时持有两条流的计数器），
+# 靠**常量名**而不是「路径里含不含 events」来选取，避免再出现「按路径猜文件」的脆弱对应。
 SSE_LIMIT_CONST = {
     "/api/v1/events": "MAX_SSE_CONNECTIONS",
     "/api/v1/logs/stream": "MAX_LOG_SSE_CONNECTIONS",
@@ -139,28 +149,57 @@ _ROUTE_RE = re.compile(
 )
 
 
-def split_router_groups(src: str) -> tuple[str, str]:
-    """把 build_router 里两个 Router 组各自的源码片段切出来。
+def split_router_groups(src: str, api_router_src: str) -> tuple[str, str, str, str]:
+    """把退役期的四个路由组分别切出来：public / 未迁入 / 已迁入 / 探针。
 
-    需要一个轻量切分：从 ``let public_routes = Router::new()`` 起到下一个
-    ``let protected_routes`` 之前是 public，之后到 ``.merge(`` 之前是 protected。
-    切不出来就返回两个空串，由调用方报错（不静默放过）。
+    退役期（`api` 逐步接手旧 `http_exporter`）的路由分散在**两个文件**，必须分别切：
+
+      * public 组（无认证，SPA 外壳与静态资源）—— `handler.rs::build_router`
+      * 未迁入的需认证组 —— `handler.rs::legacy_protected_routes`（路径字面量）
+      * 已迁入的需认证组（18 条）—— `api/router.rs::protected_routes`
+        （登记的是 `path::ROUTE_*` 常量，不是字面量）
+      * 探针组（`/health`、`/healthz`）—— `api/router.rs::health_routes`
+
+    两组合并后才等于契约的需认证路由全集；只读一处会漏掉另一半。任一锚点缺失
+    即返回空串，由调用方报错（不静默放过）。
     """
     m_pub = re.search(r"let\s+public_routes\s*=\s*Router::new\(\)", src)
-    m_pro = re.search(r"let\s+protected_routes\s*=\s*Router::new\(\)", src)
+    m_pro = re.search(r"let\s+mut\s+protected_routes\s*=\s*legacy_protected_routes\(\)", src)
     if not m_pub or not m_pro:
-        return "", ""
-    m_end = re.search(r"\.merge\(\s*protected_routes\s*\)", src[m_pro.start():])
-    end = m_pro.start() + (m_end.start() if m_end else len(src) - m_pro.start())
-    return src[m_pub.start(): m_pro.start()], src[m_pro.start(): end]
+        return "", "", "", ""
+    return (
+        src[m_pub.start(): m_pro.start()],
+        _fn_body(src, "legacy_protected_routes") or "",
+        _fn_body(api_router_src, "protected_routes") or "",
+        _fn_body(api_router_src, "health_routes") or "",
+    )
+
+
+def _resolve_path_consts(src: str, prefix: str = "path::") -> dict:
+    """把源码片段里用到的 ``path::ROUTE_*`` 常量按生成物解成路径字面量。
+
+    已迁入组登记的是**标识符**而不是字面量（`path::ROUTE_GET_API_V1_BANS`），
+    直接扫字符串会看到零条路由。这里到 ``contract/generated/http_contract.rs``
+    的 ``path`` 模块查表——那张表本身就由 `http.fwidl` 生成，等价于回到契约。
+    """
+    gen = read(os.path.join(GEN_DIR, "http_contract.rs"))
+    table = dict(re.findall(r'pub\s+const\s+(ROUTE_\w+)\s*:\s*&str\s*=\s*"([^"]*)"', gen))
+    out = {}
+    for name in re.findall(rf"{re.escape(prefix)}(\w+)", src):
+        if name in table:
+            out[name] = table[name]
+    return out
 
 
 def check_routes(contract: dict) -> list[str]:
     problems: list[str] = []
     src = read(HANDLER_RS)
-    pub_src, pro_src = split_router_groups(src)
-    if not pub_src or not pro_src:
-        return ["未能在 handler.rs 的 build_router 里切出 public/protected 两个路由组"]
+    api_router = read(API_ROUTER_RS)
+    pub_src, legacy_src, api_src, health_src = split_router_groups(src, api_router)
+    if not pub_src or not legacy_src:
+        return ["未能在 handler.rs 的 build_router 里切出 public/未迁入两个路由组"]
+    if not api_src:
+        return ["未能在 api/router.rs 里切出 protected_routes 路由组"]
 
     def parse(segment: str, group: str) -> dict:
         found = {}
@@ -171,7 +210,27 @@ def check_routes(contract: dict) -> list[str]:
 
     actual = {}
     actual.update(parse(pub_src, "none"))
-    actual.update(parse(pro_src, "required"))
+    actual.update(parse(legacy_src, "required"))
+    # 探针组与已迁入组一样登记 `path::ROUTE_*` 常量，同样按生成物解回字面量。
+    for segment in (health_src, api_src):
+        consts = _resolve_path_consts(segment)
+        for m in re.finditer(
+            r"\.route\(\s*(path::\w+)\s*,\s*(get|post|put|delete)\s*\(\s*(\w+)\s*\)",
+            segment,
+        ):
+            const_name, method, handler = (
+                m.group(1).rsplit("::", 1)[-1],
+                m.group(2).upper(),
+                m.group(3),
+            )
+            if const_name not in consts:
+                problems.append(
+                    f"已迁入路由组引用了生成物里没有的常量 path::{const_name}"
+                    "（契约需重新生成？）"
+                )
+                continue
+            group = "none" if segment is health_src else "required"
+            actual[(method, consts[const_name])] = (handler, group)
 
     declared = {}
     for r in contract["routes"]:
@@ -180,7 +239,8 @@ def check_routes(contract: dict) -> list[str]:
     for key, r in sorted(declared.items()):
         if key not in actual:
             problems.append(
-                f"路由 {key[0]} {key[1]} 在 handler.rs 中不存在（契约声明 handler {r['handler']}）"
+                f"路由 {key[0]} {key[1]} 在 handler.rs / api/router.rs 中不存在"
+                f"（契约声明 handler {r['handler']}）"
             )
             continue
         handler, group = actual[key]
@@ -194,12 +254,14 @@ def check_routes(contract: dict) -> list[str]:
             )
     for key in sorted(actual):
         if key not in declared:
-            problems.append(f"handler.rs 中存在契约未声明的路由 {key[0]} {key[1]}")
+            problems.append(
+                f"handler.rs / api/router.rs 中存在契约未声明的路由 {key[0]} {key[1]}"
+            )
 
     n_none = sum(1 for r in contract["routes"] if r["auth"] == "none")
     print(
-        f"  契约 {len(declared)} 条路由 / handler.rs {len(actual)} 条"
-        f"（无认证 {n_none}）"
+        f"  契约 {len(declared)} 条路由 / 源码 {len(actual)} 条"
+        f"（无认证 {n_none}；已迁入组按 path::ROUTE_* 常量解析）"
     )
     return problems
 
@@ -268,7 +330,9 @@ def check_auth_constants(contract: dict) -> list[str]:
 
 def check_sse_limits(contract: dict) -> list[str]:
     problems: list[str] = []
-    srcs = {"sse.rs": read(SSE_RS), "log_viewer.rs": read(LOG_VIEWER_RS)}
+    # 两条流的上限常量都在 `api/sse.rs`：`SseStatus` 同时持有 events / logs 两组
+    # 计数器，上限常量自然与它同处。日志流引擎（log_viewer.rs）只持有自己的那条流。
+    src = read(SSE_RS)
     for r in contract["routes"]:
         if r["returns"] != "stream":
             continue
@@ -276,10 +340,9 @@ def check_sse_limits(contract: dict) -> list[str]:
         if const is None:
             problems.append(f"SSE {r['path']}: 校验器不知道其上限常量名")
             continue
-        holder = "sse.rs" if "events" in r["path"] else "log_viewer.rs"
-        actual = _const_value(srcs[holder], const)
+        actual = _const_value(src, const)
         if actual is None:
-            problems.append(f"SSE {r['path']}: 在 {holder} 中找不到常量 {const}")
+            problems.append(f"SSE {r['path']}: 在 api/sse.rs 中找不到常量 {const}")
         elif actual != r["max_connections"]:
             problems.append(
                 f"SSE {r['path']}: 契约上限 {r['max_connections']} != 源码 {const}={actual}"
@@ -296,10 +359,10 @@ def check_sse_limits(contract: dict) -> list[str]:
 
 def check_envelope(contract: dict) -> list[str]:
     problems: list[str] = []
-    src = read(API_RS)
+    src = read(ENVELOPE_RS)
     m = re.search(r"struct\s+ApiResponse\s*<[^>]*>\s*\{", src)
     if not m:
-        return ["未能在 src/daemon/web_ui/api.rs 中定位 struct ApiResponse"]
+        return ["未能在 src/daemon/api/envelope.rs 中定位 struct ApiResponse"]
     i = m.end()
     depth = 1
     while i < len(src) and depth:
@@ -319,6 +382,9 @@ def check_envelope(contract: dict) -> list[str]:
     # 成功路径的 message 必须是空串
     if not re.search(r"message\s*:\s*String::new\(\)", src):
         problems.append("信封 ok() 未把 message 置为空串（契约声明成功时 message 为空）")
+    # 失败信封的 data 必须是 `()`（序列化成 null），不能是别的占位。
+    if not re.search(r"data\s*:\s*\(\s*\)", src):
+        problems.append("失败信封的 data 不是 ()（契约声明失败时 data 为 null）")
     return problems
 
 
@@ -328,17 +394,53 @@ def check_envelope(contract: dict) -> list[str]:
 
 
 def check_codes(contract: dict) -> list[str]:
+    """每个非零业务码必须有一个真实的构造点。
+
+    退役期里构造点分两处，都要覆盖：
+
+      * `api/envelope.rs` 的 `BusinessCode` 枚举（码值在这里唯一定义）
+      * `api/routes/*.rs`（已迁入的 7 个码）与 `http_exporter/handler.rs`（未迁入的
+        50002 / 40005，以及历史库任务失败路径）
+
+    旧实现靠 `::error(<码` 的字面调用点判定；新实现把码升级成枚举，字面量因此从
+    调用点消失，改为核对「枚举变体存在 + 有构造该变体的位置」。
+    """
     problems: list[str] = []
+    envelope = read(ENVELOPE_RS)
+    api_routes = "".join(
+        read(os.path.join(ROOT, "src", "daemon", "api", "routes", f))
+        for f in sorted(os.listdir(os.path.join(ROOT, "src", "daemon", "api", "routes")))
+        if f.endswith(".rs")
+    )
     handler = read(HANDLER_RS)
+    # 枚举定义里必须逐字出现该码值（`Self::X => 40001,`）
     for value, meta in sorted(contract["codes"].items(), key=lambda kv: int(kv[0])):
         code = int(value)
         if code == 0:
             continue
-        if f"::error({code}" not in handler and f"::error({code}," not in handler:
+        if not re.search(rf"=>\s*{code}\s*,", envelope):
             problems.append(
-                f"业务码 {code}（HTTP {meta['status']}）：handler.rs 中找不到 ::error({code} 调用点"
+                f"业务码 {code}（HTTP {meta['status']}）：未在 api/envelope.rs 的"
+                f" BusinessCode 中定义"
             )
-    print(f"  业务码 {len(contract['codes'])} 个已核对")
+            continue
+        # 构造点：`BusinessCode::<变体>` 出现在路由或旧 handler 里
+        variant = re.search(rf"(\w+)\s*=>\s*{code}\s*,", envelope)
+        name = variant.group(1) if variant else None
+        hit = False
+        if name:
+            hit = bool(
+                re.search(rf"BusinessCode::{name}\b", api_routes)
+                or re.search(rf"BusinessCode::{name}\b", handler)
+            )
+        # 旧 handler 没有枚举，仍用字面 `::error(<码`
+        literal = f"::error({code}" in handler or f"::error({code}," in handler
+        if not hit and not literal:
+            problems.append(
+                f"业务码 {code}（HTTP {meta['status']}）：api/routes 与 handler.rs 中"
+                f" 都没有构造点（既无 BusinessCode::{name or '?'} 也无 ::error({code}）"
+            )
+    print(f"  业务码 {len(contract['codes'])} 个已核对（枚举定义 + 构造点）")
     return problems
 
 
@@ -351,6 +453,14 @@ def check_errmodels(contract: dict) -> list[str]:
     problems: list[str] = []
     handler = read(HANDLER_RS)
     auth = read(AUTH_RS)
+    # axum 提取器的真实使用点已随路由迁到 `api/routes/*.rs`；handler.rs 只剩
+    # 静态资源与日志两处。两个目录都要扫，否则 `Path(<` 这类断言会假失败。
+    api_routes = "".join(
+        read(os.path.join(ROOT, "src", "daemon", "api", "routes", f))
+        for f in sorted(os.listdir(os.path.join(ROOT, "src", "daemon", "api", "routes")))
+        if f.endswith(".rs")
+    )
+    extractor_src = handler + api_routes
     for name, d in contract["errmodels"].items():
         if d["shape"] == "text":
             body = d["body"].strip()
@@ -362,11 +472,11 @@ def check_errmodels(contract: dict) -> list[str]:
             # 默认错误由提取器产生：源码里必须真的用了对应的提取器
             for extractor in ("Json", "Query", "Path"):
                 if extractor in d["note"] and not re.search(
-                    rf"\b{extractor}\s*[(<]", handler
+                    rf"\b{extractor}\s*[(<]", extractor_src
                 ):
                     problems.append(
                         f"errmodel {name}: 契约声明由 {extractor} 提取器产生默认错误，"
-                        f"但 handler.rs 未使用 {extractor}"
+                        f"但 handler.rs / api/routes 都未使用 {extractor}"
                     )
     print(f"  错误形状 {len(contract['errmodels'])} 种已核对")
     return problems
@@ -398,25 +508,56 @@ def check_headers(contract: dict) -> list[str]:
 
 
 def check_sse_events(contract: dict) -> list[str]:
+    """推送侧与订阅侧的事件名核对，**按引擎而非按路径**分派。
+
+    两条流的事件名来源不同，不能共用一套文字扫描：
+
+      * ``/api/v1/events``（`api/sse.rs`）—— 域事件名不是字面量，由
+        `state/hub.rs` 的 `Domain::name()` 产生（`stats`/`bans`/`jails`/
+        `whitelist`/`rates`），推送点写作 `StreamMessage::new(domain.name(), …)`；
+        只有 `connected` 是字面量。故这里改成核对「`Domain::name()` 的返回值集合
+        覆盖契约的域事件」+「connected 有字面量推送点」。
+      * ``/api/v1/logs/stream``（`log_viewer.rs`）—— 三个事件都是字面量
+        `.event("…")`，沿用原来的直接扫描。
+    """
     problems: list[str] = []
-    push = {"sse.rs": read(SSE_RS), "log_viewer.rs": read(LOG_VIEWER_RS)}
+    events_src = read(SSE_RS)
+    hub_src = read(os.path.join(ROOT, "src", "daemon", "state", "hub.rs"))
+    logs_src = read(LOG_VIEWER_RS)
     subscribe = read(os.path.join(ROOT, "frontend", "src", "hooks", "useSse.ts"))
     logs_page = read(os.path.join(ROOT, "frontend", "src", "views", "Logs.tsx"))
+    # `Domain::name()` 实际返回的字符串集合，例如 {"stats", "bans", ...}
+    domain_names = set(re.findall(r'Self::\w+\s*=>\s*"(\w+)"', hub_src))
     for r in contract["routes"]:
         if r["returns"] != "stream":
             continue
-        holder = "sse.rs" if "events" in r["path"] else "log_viewer.rs"
-        src = push[holder]
-        for ev in r["events"]:
-            if f'.event("{ev}")' not in src:
-                problems.append(f"SSE {r['path']}: 事件 {ev!r} 在 {holder} 中无推送点")
-            # 订阅侧：useSse 订阅管理事件，Logs 页面订阅日志流事件
-            consumer = subscribe if holder == "sse.rs" else logs_page
-            if f"'{ev}'" not in consumer and f'"{ev}"' not in consumer:
-                problems.append(
-                    f"SSE {r['path']}: 事件 {ev!r} 在前端订阅侧找不到"
-                    f"（{'useSse.ts' if holder == 'sse.rs' else 'Logs.tsx'}）"
-                )
+        if r["path"] == "/api/v1/events":
+            src, consumer, consumer_name = events_src, subscribe, "useSse.ts"
+            for ev in r["events"]:
+                if ev == "connected":
+                    # 连接建立事件是字面量推送点。
+                    if "StreamMessage::new(\"connected\"" not in src:
+                        problems.append(
+                            "SSE /api/v1/events: 事件 'connected' 无字面量推送点"
+                        )
+                elif f'"{ev}"' not in src and ev not in domain_names:
+                    problems.append(
+                        f"SSE /api/v1/events: 事件 {ev!r} 既非 Domain::name() 的返回值"
+                        f"（实际 {sorted(domain_names)}），也无字面量推送点"
+                    )
+                if f"'{ev}'" not in consumer and f'"{ev}"' not in consumer:
+                    problems.append(
+                        f"SSE /api/v1/events: 事件 {ev!r} 在前端订阅侧找不到（{consumer_name}）"
+                    )
+        else:
+            src, consumer, consumer_name = logs_src, logs_page, "Logs.tsx"
+            for ev in r["events"]:
+                if f'.event("{ev}")' not in src:
+                    problems.append(f"SSE {r['path']}: 事件 {ev!r} 在 log_viewer.rs 中无推送点")
+                if f"'{ev}'" not in consumer and f'"{ev}"' not in consumer:
+                    problems.append(
+                        f"SSE {r['path']}: 事件 {ev!r} 在前端订阅侧找不到（{consumer_name}）"
+                    )
         print(f"  SSE {r['path']}: {len(r['events'])} 个事件已核对（推送 + 订阅）")
     return problems
 
@@ -461,8 +602,9 @@ def check_types_rust(contract: dict) -> list[str]:
     srcs = rust_sources()
     for name, decl in contract["types"].items():
         if decl.get("inline"):
-            # 内联形状（如 sse-status 的 serde_json::json!）没有具名 struct，
-            # 改为核对 handler.rs 里确实出现了这些 JSON key。
+            # 内联形状（没有具名 struct，如早期的 sse-status serde_json::json!）改为
+            # 核对 JSON key 出现在对应的 handler 里。当前契约已把 sse-status 升级为
+            # 具名结构体（`api/payloads.rs`），这条分支保留给将来真正的内联形状。
             handler = read(HANDLER_RS)
             for f in decl["fields"]:
                 if f'"{f["key"]}"' not in handler:
@@ -717,12 +859,15 @@ def check_anchors(contract: dict) -> list[str]:
 def check_defect_claims(contract: dict) -> list[str]:
     """对能机械判定的 defect 做断言；缺陷被修好则门禁失败，强制契约同步。
 
-    每条断言都只在**源码里真实存在该缺陷**时通过。任何一条被修好（双形态
-    判定消失、两条流上限都出现、单位统一、今日窗口落地……）都会在这里失败，
-    提醒契约同步——契约不能说一件代码里已经不成立的事。
+    每条断言都只在**源码里真实存在该缺陷**时通过。任何一条被修好（单位统一、
+    今日窗口落地、total_detected 补齐……）都会在这里失败，提醒契约同步——契约
+    不能说一件代码里已经不成立的事。
+
+    已改判为 ``fixed`` / ``retained`` 的缺陷不再在此断言：``fixed`` 的旧现场
+    已消失，机械断言本就不可能成立；``retained`` 的有意保留由源码注释承载，
+    断言见下方 ``HTTP_HEALTH_NOT_ENVELOPED`` 分支。
     """
     problems: list[str] = []
-    handler = read(HANDLER_RS)
     declared = {d["name"] for d in contract["defects"]}
     asserted: set[str] = set()
 
@@ -736,22 +881,7 @@ def check_defect_claims(contract: dict) -> list[str]:
 
     for d in contract["defects"]:
         name = d["name"]
-        if name == "HTTP_BANS_DUAL_SHAPE":
-            # 未传分页参数时返回裸数组（不是信封）。修复后此处会失败。
-            if "get_active_bans()" in handler and re.search(
-                r"if\s+params\.page\.is_some\(\)\s*\|\|\s*params\.page_size\.is_some\(\)",
-                handler,
-            ):
-                ok(name, "handler.rs 仍有 page/page_size 双形态判定")
-            else:
-                fail(name, "handler.rs 里找不到 page/page_size 双形态判定")
-        elif name == "HTTP_SSE_STATUS_INCOMPLETE":
-            # sse-status 只反映一条流的上限。修复后（出现两条流）此处会失败。
-            if "get_sse_connection_info()" in handler and "MAX_LOG_SSE_CONNECTIONS" not in handler:
-                ok(name, "sse-status 仍只反映 /api/v1/events 的上限")
-            else:
-                fail(name, "handler.rs 已反映两条流的上限")
-        elif name == "HTTP_RECIDIVISM_RATE_UNIT":
+        if name == "HTTP_RECIDIVISM_RATE_UNIT":
             # 同名不同单位必须**同时**成立：一处乘 100、一处不乘。
             ratio = read(os.path.join(ROOT, "src", "daemon", "web_ui", "stats.rs"))
             level = read(os.path.join(ROOT, "src", "daemon", "web_ui", "analysis.rs"))
@@ -812,25 +942,39 @@ def check_defect_claims(contract: dict) -> list[str]:
             else:
                 fail(name, "packet_analysis.rs 里找不到两个 Response 结构体")
         elif name == "HTTP_HEALTH_NOT_ENVELOPED":
-            # /health 直接序列化 runtime_snapshot()，不经 ApiResponse。
-            body = _fn_body(handler, "handle_health")
+            # status=retained：裸状态码是**有意保留**的探针语义。断言它仍然裸着，
+            # 且源码里写明了这是有意例外——一旦有人套上信封，这里会失败。
+            runtime_src = read(os.path.join(ROOT, "src", "daemon", "api", "routes", "runtime.rs"))
+            body = _fn_body(runtime_src, "handle_health")
             if body is None:
-                fail(name, "handler.rs 里找不到 fn handle_health")
-            elif "runtime_snapshot()" in body and "ApiResponse" not in body:
-                ok(name, "handle_health 直接序列化 runtime_snapshot()，未经信封")
+                fail(name, "api/routes/runtime.rs 里找不到 fn handle_health")
+            elif "ApiResponse" in body or "ApiError" in body:
+                fail(name, "handle_health 已改为经过信封（有意保留的裸状态码被改掉）")
+            elif "non-enveloped" not in runtime_src and "有意例外" not in runtime_src:
+                fail(name, "runtime.rs 未写明 /health 的裸状态码是有意保留")
             else:
-                fail(name, "handle_health 已改为经过信封")
+                ok(name, "handle_health 仍直接返回裸 JSON，且源码写明是有意例外")
         elif name == "HTTP_LOG_SSE_LIMIT_DOC_DRIFT":
-            # 两条流各自独立的计数器与上限（10 / 5），而注释仍称「共享」。
-            sse = read(os.path.join(ROOT, "src", "daemon", "web_ui", "sse.rs"))
-            logs = read(os.path.join(ROOT, "src", "daemon", "web_ui", "log_viewer.rs"))
+            # status=fixed：误导性注释已修正。断言旧注释**已消失**、新注释**在**，
+            # 且两条流的上限常量各自独立且不等（10 / 5）——修复的是注释不是实现。
+            logs = read(LOG_VIEWER_RS)
+            sse = read(SSE_RS)
             m10 = re.search(r"const\s+MAX_SSE_CONNECTIONS\s*:\s*usize\s*=\s*(\d+)", sse)
-            m5 = re.search(r"const\s+MAX_LOG_SSE_CONNECTIONS\s*:\s*usize\s*=\s*(\d+)", logs)
-            share = "SSE 连接与 Web UI SSE 共享" in logs
-            if m10 and m5 and share and m10.group(1) != m5.group(1):
-                ok(name, f"两值独立且不等（{m10.group(1)} / {m5.group(1)}），注释仍称共享")
+            m5 = re.search(r"const\s+MAX_LOG_SSE_CONNECTIONS\s*:\s*usize\s*=\s*(\d+)", sse)
+            old_doc = "SSE 连接与 Web UI SSE 共享" in logs
+            new_doc = "各自独立计数与上限" in logs
+            if m10 and m5 and not old_doc and new_doc and m10.group(1) != m5.group(1):
+                ok(
+                    name,
+                    f"误导性『共享』注释已消失、新注释在位，两值独立且不等"
+                    f"（{m10.group(1)} / {m5.group(1)}）",
+                )
             else:
-                fail(name, "两条流的上限或注释已改变（共享注释已被修正？）")
+                fail(
+                    name,
+                    "旧注释仍在或新注释缺失"
+                    f"（old={old_doc} new={new_doc} 10={bool(m10)} 5={bool(m5)}）",
+                )
         elif name == "HTTP_BAN_SORT_DOC_INCOMPLETE":
             # doc 只列 4 值、实现 7 值，且前端 union 与实现一致。
             # 实现里 6 个是 Some("...") 臂，第 7 个 banned_at_desc 落在 `_` 默认臂

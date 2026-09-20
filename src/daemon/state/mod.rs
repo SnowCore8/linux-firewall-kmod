@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 pub use bans::{BanEntry, BanSnapshot, Bans};
 pub use cidr::{CidrError, CidrKey};
-pub use compose::{global_state, set_global_state};
+pub use compose::{global_state, publish_bans_changed, publish_stats_changed, set_global_state};
 pub use hub::{Domain, Hub, SharedHub, Versions};
 pub use rates::{RateCounters, RateSample, RateSnapshot, Rates};
 pub use stats::{Counter, Stats, StatsSnapshot};

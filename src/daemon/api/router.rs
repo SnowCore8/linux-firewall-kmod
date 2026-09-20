@@ -11,6 +11,15 @@
 //!
 //! 旧 `build_router` 把所有 handler 写在同一文件里（760 行）。这里按域拆到
 //! [`super::routes`] 的子模块，装配处只列路由表，读起来就是契约。
+//!
+//! # 退役进度：已迁入 / 未迁入
+//!
+//! [`protected_routes`] 只覆盖**已迁入 `api` 层**的路由；尚未迁入的
+//! （`/api/v1/logs/stream`、`/api/v1/logs`、`/api/v1/rates/history`、
+//! `/api/v1/rates/windows`、`/api/v1/whitelist/recommendations` 与
+//! `/api/v1/stats/*` 分析类）仍由 [`crate::http_exporter::handler`] 挂载。
+//! 两处合起来才是契约里的 53 条路由——分开两处是刻意的：
+//! `verify_http.py` 的 `check_routes` 同时读这两个文件。
 
 use std::sync::Arc;
 
@@ -29,7 +38,7 @@ use super::routes::{
     handle_delete_whitelist, handle_health, handle_metrics, handle_unban_temporary,
     handle_update_config, handle_update_jail, ApiState,
 };
-use super::sse::{events_response, SseStatus, LIMIT_REACHED_STATUS};
+use super::sse::{events_response, LIMIT_REACHED_STATUS};
 
 /// `GET /api/v1/events`：管理事件流。
 ///
@@ -42,10 +51,11 @@ pub async fn handle_sse(State(api): State<Arc<ApiState>>) -> Response {
     events_response(api.state.hub().subscribe(), renderer, guard).into_response()
 }
 
-/// 构建需认证的 API 路由组。
+/// 构建**已迁入 `api` 层**的需认证路由组（`/metrics` + 18 条 `/api/v1/*`）。
 ///
 /// 调用方负责在其上挂认证中间件——本函数不假设认证实现，避免 `api` 依赖某个
-/// 具体凭据来源。
+/// 具体凭据来源。未迁入的路由由 [`crate::http_exporter::handler`] 另行挂载，
+/// 两组在 `http_exporter::handler::build_router` 里合并。
 pub fn protected_routes(state: Arc<ApiState>) -> Router {
     Router::new()
         .route(path::ROUTE_GET_METRICS, get(handle_metrics))
@@ -88,20 +98,15 @@ pub fn protected_routes(state: Arc<ApiState>) -> Router {
 }
 
 /// 构建无认证的探针路由组（`/health`、`/healthz`）。
+///
+/// 取代旧 `handler.rs` 的 `handle_health`：旧实现直接吐 `runtime_snapshot()` 的
+/// 原始 JSON，新实现走 [`crate::api::routes::runtime`]（同样是原始 JSON，
+/// 不套信封），`is_ready()` 决定 200 / 503。
 pub fn health_routes(state: Arc<ApiState>) -> Router {
     Router::new()
         .route(path::ROUTE_GET_HEALTH, get(handle_health))
         .route(path::ROUTE_GET_HEALTHZ, get(handle_health))
         .with_state(state)
-}
-
-/// 两条流的连接计数（供 SSE 路由与诊断端点共享）。
-///
-/// 单独取出来是为了让调用方能在装配 SSE 时拿到同一个实例——诊断端点读到的
-/// 必须就是连接计数本身，而不是另一份副本。
-#[must_use]
-pub fn sse_status() -> Arc<SseStatus> {
-    Arc::new(SseStatus::new())
 }
 
 #[cfg(test)]
@@ -144,5 +149,53 @@ mod tests {
             path::ROUTE_GET_API_V1_STATS_SSE_STATUS,
             "/api/v1/stats/sse-status"
         );
+    }
+
+    /// 已迁入组恰好覆盖契约里标记为 `api` 的那 18 条，不多不少。
+    ///
+    /// 多一条会在 `build_router` 合并时与旧组撞成 axum 的 duplicate-route panic；
+    /// 少一条则是静默 404——两者都要在这里挡住。
+    #[test]
+    fn the_migrated_group_covers_exactly_the_migrated_routes() {
+        let mut expected = [
+            "/metrics",
+            "/api/v1/events",
+            "/api/v1/stats",
+            "/api/v1/bans",
+            "/api/v1/bans/:ip",
+            "/api/v1/bans/:ip/detail",
+            "/api/v1/bans/unban-temporary",
+            "/api/v1/bans/batch",
+            "/api/v1/jails",
+            "/api/v1/jails/:name",
+            "/api/v1/config",
+            "/api/v1/whitelist",
+            "/api/v1/whitelist/:cidr",
+            "/api/v1/rates/current",
+            "/api/v1/stats/sse-status",
+        ];
+        // POST/PUT/DELETE 与 GET 同路径的算同一条路径，故按「唯一路径集合」比对。
+        let mut got: Vec<&str> = vec![
+            path::ROUTE_GET_METRICS,
+            path::ROUTE_GET_API_V1_EVENTS,
+            path::ROUTE_GET_API_V1_STATS,
+            path::ROUTE_GET_API_V1_BANS,
+            path::ROUTE_DELETE_API_V1_BANS_IP,
+            path::ROUTE_GET_API_V1_BANS_IP_DETAIL,
+            path::ROUTE_POST_API_V1_BANS_UNBAN_TEMPORARY,
+            path::ROUTE_POST_API_V1_BANS_BATCH,
+            path::ROUTE_GET_API_V1_JAILS,
+            path::ROUTE_PUT_API_V1_JAILS_NAME,
+            path::ROUTE_GET_API_V1_CONFIG,
+            path::ROUTE_GET_API_V1_WHITELIST,
+            path::ROUTE_DELETE_API_V1_WHITELIST_CIDR,
+            path::ROUTE_GET_API_V1_RATES_CURRENT,
+            path::ROUTE_GET_API_V1_STATS_SSE_STATUS,
+        ];
+        // 两侧都排序：只排一侧会永远不等，与实现是否正确无关。
+        got.sort_unstable();
+        got.dedup();
+        expected.sort_unstable();
+        assert_eq!(got, expected);
     }
 }

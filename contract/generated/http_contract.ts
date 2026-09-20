@@ -647,3 +647,16 @@ export interface PaginationParams {
   page_size: number | null
   sort_by: string | null
 }
+
+/** Rust `SseStreamStatus` */
+export interface SseStreamStatus {
+  current_connections: number
+  max_connections: number
+  limit_reached: boolean
+}
+
+/** Rust `SseStatusResponse` */
+export interface SseStatusResponse {
+  events: SseStreamStatus
+  logs: SseStreamStatus
+}

@@ -229,8 +229,11 @@ impl super::NetlinkContext {
             std::sync::atomic::Ordering::Relaxed,
         );
 
-        // 封禁/解封后立即唤醒 SSE，避免 UI 等待整轮 push interval
-        crate::web_ui::sse::wake_sse_clients();
+        // 封禁/解封后立即发布版本，避免 UI 等待整轮 push interval。
+        // 计数器的值刚在上面逐项更新，故 `stats` 一并推进：新 SSE 只订「变化的域」，
+        // 不发布就不会发这一帧。
+        crate::state::compose::publish_bans_changed();
+        crate::state::compose::publish_stats_changed();
 
         Ok(())
     }
@@ -639,7 +642,9 @@ impl super::NetlinkContext {
             std::sync::atomic::Ordering::Relaxed,
         );
 
-        crate::web_ui::sse::wake_sse_clients();
+        // 白名单的增删在事件分支里已各自 `insert` / `remove` 到新状态（各自发布
+        // `Whitelist` 版本）；此处只补推 `stats`——白名单计数刚变，前端要立刻看到。
+        crate::state::compose::publish_stats_changed();
 
         Ok(())
     }
@@ -669,7 +674,7 @@ impl super::NetlinkContext {
                 crate::state::compose::mirror_ban_remove(&ip_str);
                 crate::types::clear_pending_ban_ack(&ip_str);
                 crate::types::notify_ban_ack_err(&ip_str, event.error_code());
-                crate::web_ui::sse::wake_sse_clients();
+                crate::state::compose::publish_bans_changed();
                 crate::logger::info!(
                     crate::logger::get(),
                     "BanIp 失败，已回滚封禁缓存";
@@ -679,7 +684,7 @@ impl super::NetlinkContext {
             2 => {
                 crate::types::clear_pending_ban_ack(&ip_str);
                 crate::types::notify_ban_ack_err(&ip_str, event.error_code());
-                crate::web_ui::sse::wake_sse_clients();
+                crate::state::compose::publish_bans_changed();
             }
             3 => {
                 // UnbanIp 失败：缓存可能已被乐观 remove；无法无损恢复元数据，

@@ -144,11 +144,14 @@ function sseReducer(state: SseState, action: SseAction): SseState {
  * 探测服务端 SSE 连接上限。
  * 探测本身失败（守护进程刚重启、瞬时网络抖动）不视为「已满」——
  * 否则一次抖动就会被误判成永久停止重连。
+ *
+ * 只看 `events` 一条流：本模块订阅的是 `/api/v1/events`，日志流有自己的上限
+ * （5）与自己的订阅者，它满了与这里无关。
  */
 async function probeConnectionLimit(): Promise<boolean> {
   try {
     const info = await getSseStatus()
-    return info.limit_reached
+    return info.events.limit_reached
   } catch (err) {
     // 记到 debug 级别：保留排查线索，又不污染面向用户的 console
     console.debug('[useSse] SSE 状态探测失败，按未达上限处理并继续退避重连', err)

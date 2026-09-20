@@ -671,12 +671,24 @@ export interface LogQueryParams {
 // SSE 诊断与运行时健康（api.rs / runtime_status.rs）
 // ============================================================================
 
-/** `GET /api/v1/stats/sse-status` 响应（handler.rs 内联构造的 JSON） */
-export interface SseStatusResponse {
+/** 单条 SSE 流的连接状态（Rust `SseStreamStatus`） */
+export interface SseStreamStatus {
   current_connections: number
   max_connections: number
-  /** 已达连接上限：客户端此时应停止重连，等用户手动重试 */
+  /** 已达**本流**上限：客户端此时应停止重连，等用户手动重试 */
   limit_reached: boolean
+}
+
+/**
+ * `GET /api/v1/stats/sse-status` 响应（Rust `SseStatusResponse`）。
+ * 两条流各自独立的上限（events 10 / logs 5）；`limit_reached` 必须按所属流判断，
+ * 不能用一条流的上限推断另一条（这正是修复前的缺陷）。
+ */
+export interface SseStatusResponse {
+  /** `/api/v1/events` 管理事件流 */
+  events: SseStreamStatus
+  /** `/api/v1/logs/stream` 日志流 */
+  logs: SseStreamStatus
 }
 
 /**

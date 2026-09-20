@@ -2552,6 +2552,8 @@ def emit_json_http(contract: HttpContract, notes: List[str]) -> str:
                 "severity": d.severity,
                 "status": d.status,
                 "where": d.where,
+                "fix": d.fix,
+                "reason": d.reason,
                 "resolution": d.resolution,
                 "text": d.text,
             }

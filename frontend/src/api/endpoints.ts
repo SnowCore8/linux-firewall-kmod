@@ -298,8 +298,8 @@ export function getIcmpTypes(): Promise<IcmpTypeDistributionResponse> {
 }
 
 /**
- * `GET /api/v1/stats/sse-status` — SSE 连接数诊断。
- * useSse 在重连第 2 次起先调用它，判断是否已达服务端连接上限。
+ * `GET /api/v1/stats/sse-status` — SSE 连接数诊断（两条流各自一份状态）。
+ * useSse 在重连第 2 次起先调用它，判断**管理事件流**是否已达服务端连接上限。
  */
 export function getSseStatus(): Promise<SseStatusResponse> {
   return getJson<SseStatusResponse>('/api/v1/stats/sse-status')

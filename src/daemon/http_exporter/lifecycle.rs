@@ -85,7 +85,21 @@ pub fn start_http_exporter(port: u16, cfg: &Config) -> thread::JoinHandle<()> {
 
         // 构建路由（凭据由运行期存储提供，见 set_http_auth_credentials）
         super::set_http_auth_credentials(&metrics_user, &metrics_pass);
-        let app = build_router();
+        // 组合根：装配 ApiState 并注入已迁入的路由组。状态由 main.rs 启动期
+        // 通过 state::compose::set_global_state 注入；此处缺失说明启动顺序异常，
+        // 记录警告并只挂未迁入组（已迁入路由暂缺），而不是 panic——HTTP 面板
+        // 缺一等，但封禁主链路必须继续工作。
+        let api_state = match crate::state::compose::global_state() {
+            Some(state) => Some(std::sync::Arc::new(crate::api::assemble(state, "2.2"))),
+            None => {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "状态层未装配，已迁入的 API 路由本次不挂载";
+                );
+                None
+            }
+        };
+        let app = build_router(api_state);
 
         // 绑定并启动服务
         let addr = format!("{bind_address}:{port}");

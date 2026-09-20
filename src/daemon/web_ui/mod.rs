@@ -3,8 +3,14 @@
 //! # 功能
 //! - 静态资源服务（HTML/CSS/JS 嵌入二进制）
 //! - JSON API 端点（统计数据、封禁列表、Jail 配置）
-//! - SSE 实时推送（Server-Sent Events）
+//! - SSE 日志流（Server-Sent Events，见 [`log_viewer`]）
 //! - 与现有 HTTP 导出器集成
+//!
+//! # 与 `api` 层的分工
+//!
+//! 管理事件流 `/api/v1/events` 与核心 REST 读路径已迁到 [`crate::api`]；本模块
+//! 保留尚未迁入的部分：SPA 静态资源、分析类统计端点、日志流与日志分页，以及
+//! 它们的旧 `api` 载荷类型（被 [`log_viewer`] 与 `http_exporter::handler` 引用）。
 
 use rust_embed::RustEmbed;
 
@@ -15,7 +21,6 @@ pub mod ddos_stats;
 pub mod log_viewer;
 pub mod packet_analysis;
 pub mod recommendations;
-pub mod sse;
 pub mod stats;
 
 /// 嵌入的静态资源

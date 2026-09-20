@@ -103,7 +103,7 @@ errmodel STATIC_NOT_FOUND {
 
 errmodel AXUM_EXTRACTOR_DEFAULT {
   shape = axum_default
-  where = "src/daemon/http_exporter/handler.rs:Json(req): Json<"
+  where = "src/daemon/api/routes/bans.rs:Json(req): Json<"
   statuses = 422, 400, 415, 404, 405
   note = "axum 提取器默认错误：Json 反序列化失败 422、Query 解析失败 400、Content-Type 不符 415、方法不匹配 405、路径不匹配 404。响应体是 axum 的纯文本，不是信封 —— 前端不能假设所有错误都能 JSON.parse。"
 }
@@ -193,6 +193,8 @@ code 50002 {
 
 defect HTTP_BANS_DUAL_SHAPE {
   severity = high
+  status = fixed
+  fix = "src/daemon/api/routes/bans.rs:pub async fn handle_api_bans"
   where = "src/daemon/http_exporter/handler.rs:if params.page.is_some()"
   resolution = "统一为单一形状：GET /api/v1/bans 一律返回分页信封 PaginatedResponse<BanResponse>，不再有裸数组分支；前端随之删除重载签名与运行期分支。"
   text = "GET /api/v1/bans 有两种互不兼容的响应形状：不带 page/page_size 时返回裸数组，带了才返回分页信封。前端为此维护两个重载签名与运行期分支。它让『data 一定是对象』这一前提失效，任何通吃的错误处理都会踩空"
@@ -200,6 +202,8 @@ defect HTTP_BANS_DUAL_SHAPE {
 
 defect HTTP_SSE_STATUS_INCOMPLETE {
   severity = medium
+  status = fixed
+  fix = "src/daemon/api/payloads.rs:current_connections >= max_connections"
   where = "src/daemon/http_exporter/handler.rs:current >= max"
   resolution = "sse-status 载荷扩展为同时报告两条流：events 与 logs 各自的 current / max，前端按所属流的上限判断 limit_reached，不再用单一上限推断另一条流。"
   text = "/api/v1/stats/sse-status 只反映 /api/v1/events 的 10 连接上限，看不到 /api/v1/logs/stream 的独立 5 连接上限。前端用它判断『是否达到上限』会在日志流被拒时误判为未达上限，从而把 503 当成网络故障无限重连"
@@ -235,13 +239,17 @@ defect HTTP_SERVICE_PROBE_NO_TOTAL {
 
 defect HTTP_HEALTH_NOT_ENVELOPED {
   severity = low
-  where = "src/daemon/http_exporter/handler.rs:fn handle_health"
+  status = retained
+  reason = "探针语义：/health 与 /healthz 以 HTTP 状态码承载就绪与否（200 = 就绪，503 = 未就绪），载荷是 RuntimeSnapshot 裸 JSON。这是全项目唯一一个『状态码即语义』的端点，套信封会把语义压回 200 + code 字段，反而让 k8s/负载均衡探针无法按状态码判定。契约中显式记为有意例外而非缺陷。"
+  where = "src/daemon/api/routes/runtime.rs:pub async fn handle_health"
   resolution = "有意保留裸状态码（探针语义）：/health 与 /healthz 以 HTTP 状态码承载语义，在此契约中显式记为有意例外而非缺陷；前端保留 getRawJson 特判。"
   text = "/health 与 /healthz 不走信封，直接返回 RuntimeSnapshot；且未就绪时是 503 而非 5xx 信封。它是全项目唯一一个『HTTP 状态码即语义』的端点，前端必须特判（endpoints.ts 用 getRawJson）"
 }
 
 defect HTTP_LOG_SSE_LIMIT_DOC_DRIFT {
   severity = low
+  status = fixed
+  fix = "src/daemon/web_ui/log_viewer.rs:各自独立计数与上限"
   where = "src/daemon/web_ui/log_viewer.rs:SSE 连接与 Web UI SSE 共享"
   resolution = "修正注释与实现一致：两条流各自独立的上限（events 10 / logs 5），实现不变，只改误导性注释。"
   text = "日志流的上限注释说『与 Web UI SSE 共享 MAX_SSE_CONNECTIONS 限制』，但实现是两条互相独立的计数器：/api/v1/events 用 sse.rs 的 MAX_SSE_CONNECTIONS=10，日志流用本文件的 MAX_LOG_SSE_CONNECTIONS=5。两处注释（模块头第 8 行与常量上的文档注释）都与实现不符，容易误导排查——『events 才连了 3 个，日志流却被拒』不是 bug"
@@ -256,13 +264,16 @@ defect HTTP_BAN_SORT_DOC_INCOMPLETE {
 
 defect HTTP_READ_PATH_WRITES_STATE {
   severity = high
+  status = open
   where = "src/daemon/web_ui/ban_ops.rs:purge_expired(now)"
-  resolution = "读路径只读：purge 移到 scheduler 的独立任务，由它独占调用并转交被清理的条目；读侧改从 state 取不可变快照。修复回执记在 state/bans.rs 与 api/routes/ 的读路径零副作用测试上（本缺陷在旧读路径退役时随 where 一并消失）。"
-  text = "get_active_bans() 在**读**路径上按 5 秒节流执行 purge_expired，顺带自增 DAEMON_STATS.total_unbans 并写入封禁时长统计。旧 SSE 每个 tick（默认 1 秒）都会读一次，于是「每秒被读一次的统计」被读路径自己改写——读数与写入者互相污染，仪表盘上的解除封禁计数不可复现"
+  resolution = "读路径只读：purge 移到 scheduler 的独立任务，由它独占调用并转交被清理的条目；读侧改从 state 取不可变快照。新侧已就位（state/bans.rs 的 Bans::purge_expired 是显式方法、api 读路径零副作用），只差把 runtime::spawn_scheduler 接到 main.rs：调度器尚未装配，故本缺陷仍在旧侧存活。"
+  text = "get_active_bans() 在**读**路径上按 5 秒节流执行 purge_expired，顺带自增 DAEMON_STATS.total_unbans 并写入封禁时长统计。旧 SSE 每个 tick（默认 1 秒）都会读一次，于是「每秒被读一次的统计」被读路径自己改写——读数与写入者互相污染，仪表盘上的解除封禁计数不可复现。注：旧 SSE 引擎已退役（本缺陷的放大器已拆），但 throttled purge 仍在旧 get_active_bans 里；内核侧的到期回调（fw_ban.c 推 UNBAN 事件）已在实践中自愈，purge 现仅用于让影子缓存保持一致"
 }
 
 defect HTTP_SSE_RESERIALIZES_EVERY_DOMAIN {
   severity = medium
+  status = fixed
+  fix = "src/daemon/api/sse.rs:pub async fn drive_events_stream"
   where = "src/daemon/web_ui/sse.rs:let Ok(stats_json) = serde_json::to_string(&stats)"
   resolution = "按域序列化：连接持有上次发送的版本，只对真正变化的域调用渲染器。修复回执记在 api/sse.rs 的 DomainRenderer 与「只序列化变化域」的计数测试上（本缺陷在旧 SSE 引擎退役时随 where 一并消失）。"
   text = "旧 SSE 每个 tick 把 5 份载荷（stats/bans/jails/whitelist/rates）全量 serde_json::to_string 一遍，无论有没有变化，且这段序列化在**每条连接**的循环里各做一次。成本是「连接数 × 域数 × 每秒一次」：安静时段也在重复序列化同样的内容，payload 越大越明显"
@@ -270,9 +281,10 @@ defect HTTP_SSE_RESERIALIZES_EVERY_DOMAIN {
 
 defect HTTP_WHITELIST_KEY_DIVERGENCE {
   severity = medium
+  status = open
   where = "src/daemon/ban/mod.rs:fn build_cidr_key"
   resolution = "键的规范化只有一处（state/cidr.rs 的 CidrKey）：网络地址（主机位清零）+ 恒带 /prefix（裸地址即 /32、/128）。修复回执记在 state/whitelist.rs 的 CidrKey 键类型与 cidr.rs 的规范化测试上（本缺陷在旧键规则退役时随 where 一并消失）。"
-  text = "白名单的键有三套互不相同的规则：LIST 响应恒带 /prefix；事件路径对 /32·/128·/0 存裸地址；build_cidr_key 又把 IPv6 /0 归一成 /128。同一子网因此会拿到两个键，LIST 的整表覆盖打不中事件插入的那一条，表现为「白名单里看到两条同一个网段」或「删了还在」"
+  text = "白名单的键有三套互不相同的规则：LIST 响应恒带 /prefix；事件路径对 /32·/128·/0 存裸地址；build_cidr_key 又把 IPv6 /0 归一成 /128。同一子网因此会拿到两个键，LIST 的整表覆盖打不中事件插入的那一条，表现为「白名单里看到两条同一个网段」或「删了还在」。三套规则分别位于 ban/mod.rs 的 build_cidr_key、netlink/handlers.rs 的 LIST 拼键与事件路径拼键；三处都是旧实现，随该模块退役一并消失"
 }
 
 # ============================================================================
@@ -442,7 +454,7 @@ route GET "/api/v1/bans" {
   returns = type
   status = 200
   codes = 0
-  note = "**双形态**：不带 page/page_size 时 data 是 BanResponse 的裸数组，带了才是 PaginatedResponse<BanResponse>（见 defect HTTP_BANS_DUAL_SHAPE）"
+  note = "**单一形状**：一律返回 PaginatedResponse<BanResponse>，不再有裸数组分支——缺陷 HTTP_BANS_DUAL_SHAPE 已修（前端随之删除重载签名与运行期分支）。"
 }
 
 route POST "/api/v1/bans" {
@@ -654,7 +666,7 @@ route GET "/api/v1/stats/sse-status" {
   handler = handle_api_sse_status
   returns = type
   status = 200
-  note = "内联载荷（无具名结构体）：current_connections / max_connections / limit_reached；**只反映 /api/v1/events 的 10 上限**（见 defect HTTP_SSE_STATUS_INCOMPLETE）"
+  note = "载荷 SseStatusResponse（events / logs 各一份 SseStreamStatus）：两条流各自的上限与当前连接数都可见，前端按所属流判断 limit_reached——缺陷 HTTP_SSE_STATUS_INCOMPLETE 已修。"
 }
 
 route GET "/api/v1/stats/ban-duration-histogram" {
@@ -1266,11 +1278,18 @@ request PaginationParams {
   sort_by: Option<String>
 }
 
-# ---- 内联载荷（无具名 Rust 结构体）------------------------------------------
+# ---- SSE 连接诊断（两条流各自一份）------------------------------------------
 
-type SseStatusResponse {
-  inline = true
+type SseStreamStatus {
   current_connections: usize
   max_connections: usize
   limit_reached: bool
+}
+
+# 两条流各自一份状态：上限独立（events 10 / logs 5），`limit_reached` 由**所属流**
+# 的上限判定。此前是一条扁平载荷、用 events 的上限推断日志流（缺陷
+# HTTP_SSE_STATUS_INCOMPLETE）。
+type SseStatusResponse {
+  events: SseStreamStatus
+  logs: SseStreamStatus
 }

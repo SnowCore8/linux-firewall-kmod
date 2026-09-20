@@ -461,29 +461,31 @@ changed this round; they are handled when their own batches migrate.
 Defects in the contracts are **part of the contract** and must be updated alongside. This round covers
 existing defects in `netlink.fwidl` and `http.fwidl`, plus daemon-side stability problems found now.
 
-### Fixed
+### Fixes and landing status
 
-| Defect | Fix |
-|--------|-----|
-| `HTTP_BANS_DUAL_SHAPE` (high) | Unify the shape per the contract revision; sync all three tiers |
-| `HTTP_SSE_STATUS_INCOMPLETE` (medium) | `sse-status` reports both streams (see [SSE redesign](#sse-redesign)) |
-| `HTTP_RECIDIVISM_RATE_UNIT` (medium) | Unify the unit and sync frontend formatting |
-| Whitelist parse limit 64 conflicts with kernel page 256 | Remove the hard-coded limit, use the contract's page limit; complete pagination (fixes J) |
-| Rate response silently truncated | Add pagination + read `total` + make truncation visible (fixes J) |
-| History-DB queue drops silently when full | Switch to backpressure blocking (fixes G) |
-| Registration loss invisible | Introduce `Lease` + parse `RegisterAck` (fixes K) |
-| Two baseline/config dispatch paths | Converge on `client.set_config()` (fixes L) |
-| Whitelist CIDR key inconsistency | Single normalization function (fixes M) |
-| Read-path side effects (purge + stats) | Move purge to a dedicated `scheduler` task; the read path only reads (fixes E) |
-| Two idle periodic tasks | Delete `write_stats_snapshot`; decide `check_and_handle_ddos`'s fate with DDoS ownership (the kernel self-decides today, so the daemon has no duty) |
-| `protocol.rs` comment "20 bytes" | Disappears when codec switches to the generated artifact |
+| Defect | Fix | Landing status |
+|--------|-----|----------------|
+| `HTTP_BANS_DUAL_SHAPE` (high) | Unify the shape per the contract revision; sync all three tiers | Done: `api/routes/bans.rs::handle_api_bans` always returns the paginated envelope |
+| `HTTP_SSE_STATUS_INCOMPLETE` (medium) | `sse-status` reports both streams (see [SSE redesign](#sse-redesign)) | Done: `api/payloads.rs::SseStreamStatus` reports each of the two streams separately |
+| `HTTP_LOG_SSE_LIMIT_DOC_DRIFT` (low) | Fix the comment to match the implementation | Done: the `log_viewer.rs` module doc now says "independent counters and limits" (10 / 5) |
+| `HTTP_SSE_RESERIALIZES_EVERY_DOMAIN` (medium) | SSE serializes only the domains whose version changed | Done: `api/sse.rs::drive_events_stream` pushes on the `Versions` diff |
+| `HTTP_RECIDIVISM_RATE_UNIT` (medium) | Unify the unit and sync frontend formatting | Not fixed (`status` stays `open`) |
+| Whitelist parse limit 64 conflicts with kernel page 256 | Remove the hard-coded limit, use the contract's page limit; complete pagination (fixes J) | Done |
+| Rate response silently truncated | Add pagination + read `total` + make truncation visible (fixes J) | Done |
+| History-DB queue drops silently when full | Switch to backpressure blocking (fixes G) | Not fixed (belongs to 2.F `persist`) |
+| Registration loss invisible | Introduce `Lease` + parse `RegisterAck` (fixes K) | New side in place (`kernel/{client,lease}.rs`), but `main.rs` and the write points still use the old `crate::netlink` — not wired into production |
+| Two baseline/config dispatch paths | Converge on `client.set_config()` (fixes L) | Same: `kernel/client.rs::set_config` exists, production still runs the old `crate::netlink::sync_protocol_thresholds` |
+| Whitelist CIDR key inconsistency | Single normalization function (fixes M) | Partial: `state/cidr.rs::CidrKey` is in place and the old write paths are retired, but the old `ban/mod.rs::build_cidr_key` still exists and `status` stays `open` |
+| Read-path side effects (purge + stats) | Make purge an explicit method called by a dedicated scheduler task; the read path only reads (fixes E) | **Not done**: `Bans::purge_expired` is in place but the scheduler is never wired, so production still runs the old throttled purge in `web_ui/ban_ops.rs`; `status` stays `open` |
+| Two idle periodic tasks | Both `write_stats_snapshot` and `check_and_handle_ddos` are now no-ops (a debug log only) | Done |
+| `protocol.rs` comment "20 bytes" | Disappears when codec switches to the generated artifact | Not done: the new `kernel/codec` no longer hand-writes structs, but the "20 bytes" comment at `netlink/protocol.rs:94` is still there (the old module is not deleted) |
 
 ### Intentionally kept
 
 | Item | Rationale |
 |------|-----------|
 | Signals exposed via atomic bools | Keep the "minimal handler, decision in the main loop" pattern, but switch to `signalfd` folded into `poll` so it no longer relies on `EINTR` |
-| `HTTP_HEALTH_NOT_ENVELOPED` | If the bare status code is kept (probe semantics), the contract must explicitly mark it an intentional exception rather than a defect |
+| `HTTP_HEALTH_NOT_ENVELOPED` | Probe semantics: `handle_health` deliberately returns bare JSON (200 / 503 decided by `is_ready()`), and the contract now marks it `retained` rather than a defect. The frontend's `useHealth` reads it with `getRawJson` — an intentional exception |
 
 ## Test Debt
 
@@ -513,8 +515,8 @@ Prerequisite dependency is 0 (it can run in parallel with the Phase 1 kernel rew
 | **2.A** | Contract revisions (netlink pagination params + `seq` semantics + `RegisterAck`; http sse-status and defect entries) | `bash scripts/check_contract.sh` fully green; gates green |
 | **2.B** | Runtime skeleton: `runtime/supervisor` + `signal` (`signalfd`) + `scheduler` (monotonic clock) + bounded-channel contract + shutdown order | Gates green; shutdown order has a test (stop netlink before flushing the DB); timers do not drift with event throughput (with a test) |
 | **2.C** | Main-chain rewrite: `ingest` + `parse` + `decision` | Problems A/B/C eliminated (with tests); `decision` semantics match the old implementation case-by-case (comparison test) |
-| **2.D** | `kernel` layer rewrite: `codec` (using the generated artifact) + `transport` + `reactor` (type+seq routing) + `client` + `lease`; all pagination | Problems I/J/K/L eliminated; a >1-page test case; registration loss visible |
-| **2.E** | `state` layer: single owner + snapshot hub; `api` thin adapter + zero read-path side effects | Problems E/F/M eliminated; SSE serializes per domain; a slow consumer does not slow the whole |
+| **2.D** | `kernel` layer rewrite: `codec` (using the generated artifact) + `transport` + `reactor` (type+seq routing) + `client` + `lease`; all pagination | Problems I/J/K/L eliminated; a >1-page test case; registration loss visible. **As of 2.E-4b-2: J is eliminated; I's new reactor exists but production still runs the old routing; K/L likewise** (`kernel/` is not yet wired into `main.rs` -- see "Fixes and landing status") |
+| **2.E** | `state` layer: single owner + snapshot hub; `api` thin adapter + zero read-path side effects | Problems E/F/M eliminated; SSE serializes per domain; a slow consumer does not slow the whole. **As of 2.E-4b-2: F is eliminated; M's new side is in place but the old function is not deleted; E is not eliminated** (`runtime/` is not wired into production -- see "What 2.E Landed") |
 | **2.F** | `persist` backpressure rework + test-debt replacement | Problem G eliminated (backpressure tested); every tautological assertion replaced with one that can fail |
 | **2.G** | Documentation rewrite: `docs/{zh,en}/architecture/daemon.md` fully rewritten to the new implementation; `docs/{zh,en}/architecture/data-flow.md` stale numbers corrected | Documentation matches the code item by item |
 
@@ -539,7 +541,7 @@ SQLite `bans` table schema; the metric count is written as "24"; the main loop i
 | 2.E-3 Thin `api` layer + SSE | Done |
 | 2.E-4a Composition root wiring (`state::compose` mirroring + `main.rs` injection) | Done |
 | 2.E-4b-1 Ratchet groundwork (E/F/M recorded in the contract + status-aware anchors in `verify_http.py`) | Done |
-| 2.E-4b-2 Retire the old read paths + mount the new router + flip E/F/M to `fixed` | Not started |
+| 2.E-4b-2 Retire the old read paths + mount the new router + flip four defects per `where` survival | Done (E stays `open`; see below) |
 | 2.F–2.G | Not started |
 
 ### What 2.A Landed
@@ -738,19 +740,22 @@ Gate evidence: `cargo test --release --lib` (257 passed, 73 of them in `kernel::
 
 ### What 2.E Landed
 
-2.E lands in five steps, and **retirement ships in the same step as the ratchet**. 2.E-1 through
-2.E-3 plus 2.E-4a only add `state` / `api` modules and connect the new state to the production write
-points; the old `web_ui/` and `http_exporter/handler.rs` stay put (per "keep it compiling, migrate in
-batches"). Only the last step (2.E-4b) deletes the old read paths, and it must land the rewritten
-`verify_http.py` ratchet assertions and the new E/F/M defect entries **in the same commit as the
-code** — otherwise `check_defect_claims()` turns the gate red because the defects it asserts are gone.
+2.E lands in six steps, and **retirement ships in the same step as the ratchet** (per "keep it
+compiling, migrate in batches"): 2.E-1 through 2.E-3 plus 2.E-4a only add `state` / `api` modules and
+connect the new state to the production write points; the old `web_ui/` and `http_exporter/handler.rs`
+stay put. Only the last step (2.E-4b) deletes the old read paths, and it must land the rewritten
+`verify_http.py` ratchet assertions **in the same commit as the code**. 2.E-4b itself is cut again —
+**groundwork first, then retirement**: first write E/F/M and their `where` anchors into the contract
+and make `verify_http.py` dispatch on `status` (`open` requires the anchor to still exist), then
+delete code and flip `status`. Packing both into one commit makes `check_defect_claims()` turn the gate
+red the instant an anchor disappears.
 
 Before starting that last step it turned out a cut was required first: retiring the old read paths
 requires **mounting the new router in the same commit** (`build_router()` has exactly one call site,
 and axum panics on a duplicate method+path), yet the new router's 18 endpoints read
 `Arc<state::State>` — and **nothing in production constructs or feeds it**. Retiring first would have
-served empty bans/whitelist/rates/stats and an SSE stream that never fires. So 2.E-4 splits into two
-independent commits:
+served empty bans/whitelist/rates/stats and an SSE stream that never fires. So 2.E-4 splits into these
+commits:
 
 | Step | Files | Content | Defects removed |
 |------|-------|---------|-----------------|
@@ -758,7 +763,29 @@ independent commits:
 | 2.E-2 | `state/{bans,whitelist,rates,stats,mod}.rs` | Four data owners + the `State` aggregate, read paths free of side effects | E (read mutating state) / F (data plane) |
 | 2.E-3 | `api/{envelope,payloads,ports,views,render,routes/*,sse,router,auth,adapters}.rs` | Thin adapters: one envelope and business-code table, ports for data whose owners have not migrated, SSE serializing only changed domains, a slow consumer that cannot block the rest | F (read path) / E (read-side criterion) |
 | 2.E-4a | `state/compose.rs` (new) + `state/{mod,stats,bans,hub}.rs` + `main.rs` + each write point | Composition root: `main.rs` constructs `State` and injects it; existing write points **mirror** into it, the old globals stay for readers that have not migrated | Effectiveness (so the product still has real data after 2.E-4b retires) |
-| 2.E-4b | Delete the `web_ui/` read paths + the affected `handler.rs` code; rewrite the `verify_http.py` ratchet; add E/F/M defect entries | Retirement and ratchet in one step | E / F / M (closing) |
+| 2.E-4b-1 | `contract/http.fwidl` + `contract/gen.py` + `contract/verify_http.py` | Ratchet groundwork: E/F/M recorded in the contract with `where` anchors; the verifier dispatches on `status` (a `fixed` entry requires the old anchor to be gone and the new `fix` to exist) | Makes "retirement" mechanically decidable |
+| 2.E-4b-2 | Delete `web_ui/sse.rs` + `handler.rs`'s old read paths and the old SSE engine; mount the new router in `api/router.rs`; flip four defects per `where` survival | Retirement and ratchet close together | BANS_DUAL_SHAPE / SSE_STATUS_INCOMPLETE / LOG_SSE_LIMIT_DOC_DRIFT / SSE_RESERIALIZES_EVERY_DOMAIN (to `fixed`); F (router closure); **M partially** (old write paths deleted, old function still present); E — see below |
+
+2.E-4b-2's flip criterion is "did the `where` anchor actually disappear from the source", not "how do
+we intend to fix it". All four entries that moved to `fixed` are cases where the **old implementation
+was deleted wholesale** (the old `web_ui/sse.rs` re-serializing every domain, the dual-shape branch in
+`handler.rs`, the misleading comment in `log_viewer.rs`), so asserting a positive anchor in the new
+implementation is the right `fix`. E's and M's original anchors **are both still alive**
+(`web_ui/ban_ops.rs::get_active_bans()`'s throttled purge, `ban/mod.rs::build_cidr_key`), so their
+`status` stays `open` and the contract's `resolution` says plainly that the new side is in place and
+only wiring / deleting the old function remains. `HTTP_HEALTH_NOT_ENVELOPED` is an **intentional
+exception**, not a pending defect, so it becomes `retained` with a `reason`.
+
+**Why E did not close with this step (a known deviation).** `runtime/timers.rs::spawn_scheduler` is
+written and exported, but `main.rs` still never wires up `runtime/` (the old `file_monitor` loop
+still runs), so `Bans::purge_expired` is **never called** in production: the active ban list still
+comes from the old `ACTIVE_BAN_CACHE`, whose throttled purge lives on in
+`web_ui/ban_ops.rs::get_active_bans()`. A mitigating fact: kernel-side expiry is **self-healing** —
+`fw_ban.c::fw_ban_expire_cb` actively emits `FW_BAN_ACTION_UNBAN`, and the new
+`handle_ban_state_change`'s unban branch calls `mirror_ban_remove`, so expired bans still leave the
+new `State`; they are simply no longer purged by the daemon. Closing E for real needs the timer table,
+the supervisor and the `main.rs` wiring in one change (i.e. a separate commit that brings `runtime/`
+into production).
 
 #### What 2.E-4a Landed: the Mirror Bridge's Directions and Timing
 
@@ -822,12 +849,17 @@ Key decisions:
 - **"A read may be cached" is separated from "a read mutates"**. Defect E's criterion is that a read
   *changed state*, not that a read cannot cache. So `snapshot()` memoizes a derived
   `Arc<BanSnapshot>` and invalidates only on real change, while purge becomes the explicit
-  `Bans::purge_expired(now)`, **called only by the scheduler's own task**, which **returns** the
-  removed entries so the caller decides about statistics. The old
-  `web_ui/ban_ops.rs::get_active_bans()` purged (throttled) inside the read path and incremented
-  `DAEMON_STATS.total_unbans` along the way — SSE read it every second, so statistics were rewritten
-  by a read path every second. `reading_a_snapshot_does_not_purge_or_otherwise_mutate` and
+  `Bans::purge_expired(now)`, which **returns** the removed entries so the caller decides about
+  statistics. The old `web_ui/ban_ops.rs::get_active_bans()` purged (throttled) inside the read path
+  and incremented `DAEMON_STATS.total_unbans` along the way — SSE read it every second, so statistics
+  were rewritten by a read path every second.
+  `reading_a_snapshot_does_not_purge_or_otherwise_mutate` and
   `reading_every_snapshot_leaves_the_versions_untouched` pin this down.
+  The new method's **caller** is designed to be the scheduler's own task (the timer table in
+  `runtime/timers.rs`), but that scheduler is not wired into `main.rs` — see "Why E did not close
+  with this step" above. So this step only pins that the **new state's own read path has no side
+  effects**; it does **not** remove the old read path's side effect. E stays `open` until `runtime/`
+  is brought into production.
 - **Publishing takes the data lock first and publishes second**. The read side goes "read the
   version, then take the snapshot"; if the write side reached for the hub lock while holding the
   data lock, that would invert the lock order against the read side. `invalidate_and_publish()`
@@ -944,6 +976,17 @@ Gate evidence recorded at the time for 2.E-4b-1: `bash scripts/check_contract.sh
 `verify_http.py` reports 12 defects and 15 where/fix anchors passing under the status dispatch, and
 it says on its own that the three new entries (E/F/M) currently have anchor-only coverage with no
 mechanical assertion -- that gap closes when 2.E-4b-2 flips them.
+
+Gate evidence for 2.E-4b-2: `python3 contract/gen.py contract/http.fwidl` reports "12 defect records
+(4 fixed / 1 retained / 7 open)"; `python3 contract/verify_http.py` passes (19 where/fix anchors, 57
+payload types, 51 frontend interfaces, 37 frontend paths against 50 contract paths, with
+`http_contract.rs` compiling and `http_contract.ts` passing `tsc`); `cargo test --release --lib`
+(**400 passed / 0 failed**), `cargo clippy --all-targets -- -D warnings` (exit 0),
+`cargo fmt --all --check` (clean), `make build` (`.ko` + daemon), `make format-check` (pass; one
+pre-existing yamllint comment-indentation warning at `config/default.yaml:80`),
+`make frontend-typecheck` (exit 0), `bash scripts/check_contract.sh` ("contract gate passed", 41
+anchors), `bash scripts/verify_project.sh` (success), `python3 -m pytest tests/ -q` (67 passed / 25
+skipped) -- all green.
 
 ## Judging Discipline
 
