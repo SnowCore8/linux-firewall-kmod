@@ -138,12 +138,14 @@ format-check:
 	else \
 		echo "Checking kernel module code formatting..."; \
 		clang-format --dry-run --Werror \
-			$(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h || \
-			(echo "ERROR: Code formatting check failed. Run 'make format' to auto-fix." && exit 1); \
+			$(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h || { \
+			echo "ERROR: Code formatting check failed. Run 'make format' to auto-fix."; \
+			exit 1; \
+		}; \
 		echo "✓ Kernel module formatting check passed"; \
 		if command -v yamllint >/dev/null 2>&1; then \
 			echo "Checking YAML configuration..."; \
-			yamllint config/; \
+			yamllint config/ || exit 1; \
 		else \
 			echo "yamllint not found, skipping YAML check"; \
 		fi; \
