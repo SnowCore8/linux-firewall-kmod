@@ -484,7 +484,11 @@ sequenceDiagram
 | 2.B 运行时骨架 | 已完成 |
 | 2.C 主链路重写 | 已完成 |
 | 2.D `kernel` 层重写 | 已完成 |
-| 2.E–2.G | 未开始 |
+| 2.E-1 `state/cidr.rs` + `state/hub.rs` | 已完成 |
+| 2.E-2 `state/{bans,whitelist,rates,stats,mod}.rs` | 已完成 |
+| 2.E-3 `api` 薄适配层 + SSE | 未开始 |
+| 2.E-4 退役旧读路径 + 棘轮同步 | 未开始 |
+| 2.F–2.G | 未开始 |
 
 ### 2.A 落地明细
 
@@ -574,6 +578,70 @@ netlink 线格式三端（契约 / 内核 / daemon）同一步落地，布局经
 - **校验器重指向后比的是什么**。两侧手写副本都消失后，「契约 ↔ 实现」已由编译器对齐；`verify_layout.py` 转为证明**同一份生成物在 C 与 Rust 下解析出同一套尺寸/偏移**（`IcmpTypeItem.type` 这类字段的打包行为必须一致），并断言映射覆盖生成物的全部 30 个结构——新报文若未纳入比对会直接失败。探针按原样编译 `kernel/codec/mod.rs` 并只补 `crate::contract`，顺带证明「codec 仅依赖契约」这一分层成立。过程中暴露一处真实坑：`type` 是 Rust 关键字但**不是** Python 关键字，探针必须按生成器的 `RUST_KEYWORDS` 清单补 `r#` 前缀，否则 `offset_of!` 直接编译失败。
 
 门禁证据：`cargo test --release --lib`（257 passed，其中 `kernel::` 73 条）、`cargo clippy --release --lib --tests -- -D warnings`、`cargo fmt --check`、`make build` / `make format-check` / `make frontend-typecheck`、`bash scripts/check_contract.sh`、`python3 contract/verify_layout.py`、`bash scripts/verify_project.sh` 全绿；`make test`（67 passed / 25 skipped）。
+
+### 2.E 落地明细
+
+2.E 分四步，**退役与棘轮同一步**：前三步只新增 `state` / `api` 模块，旧 `web_ui/` 与
+`http_exporter/handler.rs` 暂不动（按「保留编译、分批迁入」）；最后一步才删旧读路径，
+并与重写 `verify_http.py` 的棘轮断言、新增 E/F/M 三条缺陷条目**在同一提交**内落地——
+否则 `check_defect_claims()` 会因「缺陷被修掉了」而门禁变红。故 2.E-1 / 2.E-2 已提交，
+2.E-3 / 2.E-4 未开始。
+
+| 提交 | 文件 | 内容 | 消除的问题 |
+|------|------|------|-----------|
+| 2.E-1 | `state/{cidr,hub}.rs` | CIDR 唯一规范化实现；版本化快照发布点 | M（键规则）/ F（地基） |
+| 2.E-2 | `state/{bans,whitelist,rates,stats,mod}.rs` | 四个数据所有者 + `State` 聚合，读路径零副作用 | E（读改状态）/ F（数据面） |
+| 2.E-3 | `api/{routes/*,sse,auth}.rs` | 薄适配层：SSE 只订变更域、慢消费者不阻塞全局 | F |
+| 2.E-4 | 删 `web_ui/` 读路径 + `handler.rs` 相关代码；改 `verify_http.py` 棘轮；加 E/F/M 缺陷条目 | 退役与棘轮同一步 | E / F / M（收口） |
+
+关键取舍：
+
+- **CIDR 规则取自内核，不是自拟**。`fw_addr_normalize`（`fw_types.h`）把白名单存成
+  **网络地址**（主机位清零），`fw_wl_is_full_prefix` 定义主机条目的判据是 IPv4 `/32` /
+  IPv6 `/128`。故键的形态定为「主机位清零 + 恒带 `/prefix`」——`10.0.0.5/24` 存为
+  `10.0.0.0/24`，裸地址 `10.0.0.1` 存为 `10.0.0.1/32`。代价是界面上从 `10.0.0.1` 变为
+  `10.0.0.1/32`（用户已确认，前端在 Phase 3 一并处理）。调查还发现 M 比原记录更重：
+  旧实现有**三**套互不相同的规则（LIST 响应恒带 `/prefix`；事件路径对 `/32`・`/128`・`/0`
+  存裸地址；`ban/mod.rs::build_cidr_key` 又把 IPv6 `/0` 归一成 `/128`）。且旧实现从不规范化
+  主机位，于是 HTTP 写入的 `10.0.0.5/24` 永远匹配不上内核存的 `10.0.0.0/24`——这是文档
+  未记录的第二个潜在缺陷。
+- **M 的修法是让「未规范化的键」不可表达**。键的类型是 `CidrKey` 而非 `String`，两个构造
+  入口（`new` 走结构路径、`parse` 走文本路径）都经同一套规范化，外部无法塞入裸键。这才是
+  M 的根因；`the_two_old_write_paths_now_cancel_each_other` 直接断言「LIST 写入」与「事件
+  移除」两条旧路径落到同一个键。`new` 对超限前缀**截断**、`parse` 对超限前缀**拒绝**——
+  前者是内核给的内部值（退化行为可预期胜过不可匹配的键），后者是外部输入（必须校验）。
+- **「读有缓存」与「读改状态」分开**。缺陷 E 的判据是「读改变了状态」，不是「读不能有缓存」。
+  故 `snapshot()` 记忆化派生值（`Arc<BanSnapshot>`），只在**真实变更**时失效；而 purge 变成
+  显式方法 `Bans::purge_expired(now)`，**只由 scheduler 的独立任务调用**，且**返回**被清掉的
+  条目让调用方自己决定统计——不再像旧 `web_ui/ban_ops.rs::get_active_bans()` 那样在读路径里
+  限流 purge 并顺手改 `DAEMON_STATS.total_unbans`（SSE 每秒读一次，统计就每秒被读路径改写）。
+  `reading_a_snapshot_does_not_purge_or_otherwise_mutate` 与
+  `reading_every_snapshot_leaves_the_versions_untouched` 钉死这一条。
+- **发布顺序是「先放数据锁、再发版本」**。读侧是「先读版本、再取快照」，若写侧在持数据锁时
+  去拿 hub 的锁，就与读侧构成锁序反转。`invalidate_and_publish()` 先释放数据锁再 `publish`，
+  `hub.rs` 亦先更新版本再 `send_replace` 唤醒（订阅者醒来读到的版本必定 ≥ 通知里的版本）。
+- **无变化的写入不推进版本**。内核会重复广播同一条 `BanStateChange`、每 60 s 全量对账一次
+  白名单、每 1 s 推一次速率——数值没变时惊动 SSE 只是浪费。四个所有者都做「比对后再决定是否
+  改动」：`Bans::insert`、`Whitelist::insert`/`replace_all`、`Rates::apply` 相同输入返回 `false`
+  且不动版本。为此 `Bans::insert` 改为**先比对再插入**（旧写法先 `insert` 再回读，既多一次读，
+  也在移动 `entry` 后越界借用）。
+- **白名单数不再有第二份来源**。旧实现另有一枚 `whitelist_count`（程序内部维护的近似值），与
+  白名单表迟早漂移。新 `Counter` 因此只有 **16** 项（去掉 `whitelist_count`），且白名单数只从
+  `Whitelist` 所有者读；`start_time` 也从计数器数组里挪出成独立原子量。
+- **速率是覆盖式、非排队式**。「内核速率响应 → 状态」允许中间样本丢失、最新样本必须到，
+  与 `watch` 语义一致；排队只会让读侧看到过期速率。EWMA 基线的收敛分段（预热大 α / 长期小 α）
+  与旧实现一致，但**首个样本直接作为起点**而非从 0 缓慢爬升；冻结后不再更新。
+- **`watch` 而非广播通道做唤醒**。`watch` 只保留最新值，与「快照」语义吻合；`send_replace`
+  在没有订阅者时也不失败，故版本推进与「有没有人看」无关
+  （`publishing_without_any_subscriber_still_advances_the_versions`）。
+- **顺序稳定**。`Versions::changed` 遍历 `Domain::ALL` 而非按推进顺序，快照里的条目按 IP /
+  CIDR 升序——SSE 与测试都能依赖可复现的顺序。
+- **没有服务定位器**。旧实现把状态放在 `OnceLock` / `LazyLock` 全局（`ACTIVE_BAN_CACHE`、
+  `WHITELIST_CACHE`、`RATE_CACHE`、`DAEMON_STATS`…）并为此维护「6 步锁获取顺序」的文档约定。
+  新 `State` 由组合根构造一次（`State::new() -> Arc<Self>`），跨模块只传**消息**或
+  `Arc<不可变快照>`，锁顺序协议不再需要。`State: Send + Sync` 有测试钉死。
+
+门禁证据：`cargo test --release --lib`（336 passed，其中 `state::` 79 条）、`cargo clippy --release --lib --tests -- -D warnings`、`cargo fmt --check`、`make build` / `make format-check`、`bash scripts/check_contract.sh`、`bash scripts/verify_project.sh` 全绿。
 
 ## 判定纪律
 

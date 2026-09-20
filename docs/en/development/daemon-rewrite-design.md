@@ -534,7 +534,11 @@ SQLite `bans` table schema; the metric count is written as "24"; the main loop i
 | 2.B Runtime skeleton | Done |
 | 2.C Main-chain rewrite | Done |
 | 2.D `kernel` layer rewrite | Done |
-| 2.E–2.G | Not started |
+| 2.E-1 `state/cidr.rs` + `state/hub.rs` | Done |
+| 2.E-2 `state/{bans,whitelist,rates,stats,mod}.rs` | Done |
+| 2.E-3 Thin `api` layer + SSE | Not started |
+| 2.E-4 Retire old read paths + ratchet sync | Not started |
+| 2.F–2.G | Not started |
 
 ### What 2.A Landed
 
@@ -729,6 +733,90 @@ Gate evidence: `cargo test --release --lib` (257 passed, 73 of them in `kernel::
 `make build` / `make format-check` / `make frontend-typecheck`, `bash scripts/check_contract.sh`,
 `python3 contract/verify_layout.py`, `bash scripts/verify_project.sh` all green; `make test`
 (67 passed / 25 skipped).
+
+### What 2.E Landed
+
+2.E runs in four steps, and **retirement ships in the same step as the ratchet**. The first three
+steps only add `state` / `api` modules; the old `web_ui/` and `http_exporter/handler.rs` stay put
+(per "keep it compiling, migrate in batches"). Only the last step deletes the old read paths, and it
+must land the rewritten `verify_http.py` ratchet assertions and the new E/F/M defect entries **in the
+same commit as the code** — otherwise `check_defect_claims()` turns the gate red because the defects
+it asserts are gone. So 2.E-1 and 2.E-2 are committed; 2.E-3 and 2.E-4 are not started.
+
+| Step | Files | Content | Defects removed |
+|------|-------|---------|-----------------|
+| 2.E-1 | `state/{cidr,hub}.rs` | The single CIDR normalizer; the versioned snapshot publish point | M (key rules) / F (foundation) |
+| 2.E-2 | `state/{bans,whitelist,rates,stats,mod}.rs` | Four data owners + the `State` aggregate, read paths free of side effects | E (read mutating state) / F (data plane) |
+| 2.E-3 | `api/{routes/*,sse,auth}.rs` | Thin adapters: SSE subscribes to changed domains only; a slow consumer cannot block the rest | F |
+| 2.E-4 | Delete the `web_ui/` read paths + the affected `handler.rs` code; rewrite the `verify_http.py` ratchet; add E/F/M defect entries | Retirement and ratchet in one step | E / F / M (closing) |
+
+Key decisions:
+
+- **The CIDR rule is taken from the kernel, not invented**. `fw_addr_normalize` (`fw_types.h`)
+  stores whitelist entries as **network addresses** (host bits zeroed), and `fw_wl_is_full_prefix`
+  defines a host entry as IPv4 `/32` / IPv6 `/128`. The canonical form is therefore "host bits
+  zeroed, `/prefix` always present" — `10.0.0.5/24` is stored as `10.0.0.0/24`, a bare address
+  `10.0.0.1` as `10.0.0.1/32`. The cost is that the UI shows `10.0.0.1/32` where it showed
+  `10.0.0.1` (the user accepted this; the frontend handles it in Phase 3). The investigation also
+  found M was worse than recorded: the old code held **three** divergent rules (the LIST response
+  path always appended `/prefix`; the event path dropped it for `/32`, `/128` and `/0`; and
+  `ban/mod.rs::build_cidr_key` turned IPv6 `/0` into `/128`). The old code also never normalized
+  host bits, so an HTTP-added `10.0.0.5/24` could never match the kernel's stored `10.0.0.0/24` —
+  a second latent defect the document had not recorded.
+- **The fix for M makes an unnormalized key unrepresentable**. The key's type is `CidrKey`, not
+  `String`, and both constructors (`new` on the struct path, `parse` on the text path) run the same
+  normalization, so no outside caller can store a bare key. That is M's actual root cause;
+  `the_two_old_write_paths_now_cancel_each_other` asserts the old LIST-write and event-remove paths
+  land on one key. `new` **clamps** an out-of-range prefix and `parse` **refuses** one — the former
+  receives internal kernel values (predictable degenerate behavior beats an unmatchable key), the
+  latter is external input that must be validated.
+- **"A read may be cached" is separated from "a read mutates"**. Defect E's criterion is that a read
+  *changed state*, not that a read cannot cache. So `snapshot()` memoizes a derived
+  `Arc<BanSnapshot>` and invalidates only on real change, while purge becomes the explicit
+  `Bans::purge_expired(now)`, **called only by the scheduler's own task**, which **returns** the
+  removed entries so the caller decides about statistics. The old
+  `web_ui/ban_ops.rs::get_active_bans()` purged (throttled) inside the read path and incremented
+  `DAEMON_STATS.total_unbans` along the way — SSE read it every second, so statistics were rewritten
+  by a read path every second. `reading_a_snapshot_does_not_purge_or_otherwise_mutate` and
+  `reading_every_snapshot_leaves_the_versions_untouched` pin this down.
+- **Publishing takes the data lock first and publishes second**. The read side goes "read the
+  version, then take the snapshot"; if the write side reached for the hub lock while holding the
+  data lock, that would invert the lock order against the read side. `invalidate_and_publish()`
+  drops the data lock before `publish`, and `hub.rs` updates the version before `send_replace`
+  wakes subscribers (so a woken subscriber always reads a version >= the one in the notification).
+- **A write that changes nothing does not advance the version**. The kernel re-broadcasts the same
+  `BanStateChange`, reconciles the whole whitelist every 60 s, and pushes rates every 1 s — waking
+  SSE when nothing changed is pure waste. All four owners compare before deciding to mutate:
+  `Bans::insert`, `Whitelist::insert`/`replace_all` and `Rates::apply` return `false` and leave the
+  version alone for identical input. That is why `Bans::insert` now **compares before inserting**
+  (the old form inserted then read back, which cost an extra read and also borrowed `entry` after it
+  had been moved).
+- **The whitelist count no longer has a second source**. The old code kept its own approximate
+  `whitelist_count`, which inevitably drifts from the table. The new `Counter` therefore holds **16**
+  entries (no `whitelist_count`), the whitelist size is read from the `Whitelist` owner alone, and
+  `start_time` moved out of the counter array into its own atomic.
+- **Rates are overwrite, not queued**. "Kernel rate response -> state" may drop intermediate samples;
+  the latest must arrive, which matches `watch` semantics — queueing would only show the reader a
+  stale rate. The EWMA baseline keeps the old two-stage convergence (large alpha during warmup,
+  small alpha afterwards) but **seeds directly from the first sample** instead of ramping from zero,
+  and stops updating once frozen.
+- **`watch` rather than a broadcast channel for wakeups**. `watch` keeps only the latest value, which
+  matches snapshot semantics, and `send_replace` does not fail with no subscribers attached, so
+  version advance is independent of who is watching
+  (`publishing_without_any_subscriber_still_advances_the_versions`).
+- **Ordering is stable**. `Versions::changed` iterates `Domain::ALL` rather than bump order, and
+  snapshots order entries by IP / CIDR, so SSE and tests can rely on a reproducible order.
+- **No service locator**. The old code held state in `OnceLock` / `LazyLock` globals
+  (`ACTIVE_BAN_CACHE`, `WHITELIST_CACHE`, `RATE_CACHE`, `DAEMON_STATS`, ...) and maintained a
+  documented "6-step lock acquisition order" to cope. The new `State` is constructed once by the
+  composition root (`State::new() -> Arc<Self>`), and modules exchange **messages** or
+  `Arc<immutable snapshot>`, so the lock-order protocol is no longer needed. `State: Send + Sync`
+  is pinned by a test.
+
+Gate evidence: `cargo test --release --lib` (336 passed, 79 of them in `state::`),
+`cargo clippy --release --lib --tests -- -D warnings`, `cargo fmt --check`,
+`make build` / `make format-check`, `bash scripts/check_contract.sh`,
+`bash scripts/verify_project.sh` all green.
 
 ## Judging Discipline
 
