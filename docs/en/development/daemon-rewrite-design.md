@@ -1154,18 +1154,19 @@ this document's own paraphrase. Result (the command is the evidence):
 | Default log path | code `/var/log/firewall-daemon.log`; shipped YAML `/var/log/firewall.log` | `src/daemon/logger.rs` / `config/default.yaml:16` |
 | Not-wired modules | `ingest/` `parse/` `decision/` `pipeline/` `kernel/` `signal/` have zero production references | `grep -rn` under `src/daemon` (no call site beyond the `lib.rs` declaration) |
 
-Three numeric problems were found and corrected during the rewrite; they are recorded here so they are
+Four numeric problems were found and corrected during the rewrite; they are recorded here so they are
 not reverted:
 
 | Problem | Truth | Disposition |
 |---------|-------|-------------|
-| This design's first version claimed the old doc was wrong to say "24 metrics" | 24 is the truth (`# TYPE` count = distinct metric-name count = 24; the in-file comment "25 in total" in `metrics.rs` is the wrong one) | Retracted; the doc says 24 |
+| This design's first version claimed the old doc was wrong to say "24 metrics" | 24 is the truth (`# TYPE` count = distinct metric-name count = 24) | Retracted; the doc says 24 |
 | This design's first version claimed the old doc was wrong to say "the port is 9119" | 9119 is the truth (`config/default.yaml:12`, `src/daemon/types/config.rs`) | Retracted; the doc says 9119 and adds the distinction that the code default binds loopback only while the shipped YAML binds all interfaces |
 | The source comment "35 not yet migrated" | Truth is 23 (count of `.route()` inside `legacy_protected_routes`; 41 = 53 - 12) | Doc and source comments corrected in the same step |
+| The `metrics.rs` comment "25 in total" | Truth is 24 (4 kernel + 12 user-side (9 general + 3 DDoS) + 4 netlink + 1 uptime + 3 reputation) | Corrected in the same step |
 
-That third row is this phase's only **code-side change** (comments only): three places in
-`handler.rs` and one in `api/router.rs`. Fixing only the document would leave the source comment to
-lead the next reader back to 35.
+The last two rows are this phase's **code-side changes, all comment-only**: three places in
+`handler.rs` and one in `api/router.rs` (route count), plus one in `metrics.rs` (metric count).
+Fixing only the documents would leave those comments to lead the next reader back to 35 and 25.
 
 The stale numbers in `docs/*/architecture/data-flow.md` had already been corrected in commit
 `615fe16` (buckets are not capacity, `fw_hook_ipv4` / `fw_hook_ipv6`, "the whitelist is not a linear

@@ -876,16 +876,17 @@ count, first_seen, last_seen }` + `ban/procfs.rs` + `<HOST>` 替换 + SQLite `ba
 | 日志默认路径 | 代码 `/var/log/firewall-daemon.log`；随包 YAML `/var/log/firewall.log` | `src/daemon/logger.rs` / `config/default.yaml:16` |
 | 未接入模块 | `ingest/` `parse/` `decision/` `pipeline/` `kernel/` `signal/` 零生产引用 | `grep -rn` 于 `src/daemon`（`lib.rs` 声明之外无调用点） |
 
-重写过程中发现并纠正了三处**数字层**问题，留档以免再被改回去：
+重写过程中发现并纠正了四处**数字层**问题，留档以免再被改回去：
 
 | 问题 | 真相 | 处置 |
 |------|------|------|
-| 本设计初版称旧文档「指标数写 24 个」是错的 | 24 就是真值（`# TYPE` 计数 = 去重指标名计数 = 24；`metrics.rs` 文件内注释「共 25 个」才是错的） | 收回误判，文档写 24 |
+| 本设计初版称旧文档「指标数写 24 个」是错的 | 24 就是真值（`# TYPE` 计数 = 去重指标名计数 = 24） | 收回误判，文档写 24 |
 | 本设计初版称旧文档「端口写的是 9119」是错的 | 9119 就是真值（`config/default.yaml:12`、`src/daemon/types/config.rs`） | 收回误判；文档写 9119，并补「代码默认只绑回环、随包 YAML 绑全网」这一区分 |
 | 源码注释「尚未迁入的 35 条」 | 真值 23（`legacy_protected_routes` 内 `.route()` 计数；41 = 53 − 12） | 文档与源码注释同一步改齐 |
+| `metrics.rs` 注释「共 25 个」 | 真值 24（4 内核 + 12 用户态（9 通用 + 3 DDoS）+ 4 netlink + 1 uptime + 3 信誉） | 同一步改齐 |
 
-第三行是本阶段唯一一处**代码侧改动**（纯注释）：`handler.rs` 三处、`api/router.rs` 一处。若只改
-文档，源码注释会把下一个读者再引回 35。
+后两行是本阶段的**代码侧改动，只有纯注释**：`handler.rs` 三处、`api/router.rs` 一处（路由计数），
+`metrics.rs` 一处（指标计数）。若只改文档，这两条注释会把下一个读者再引回 35 与 25。
 
 `docs/*/architecture/data-flow.md` 的陈旧数字已在提交 `615fe16` 修正（桶数 ≠ 容量、`fw_hook_ipv4` /
 `fw_hook_ipv6`、「白名单不是线性扫描」、显式写明 `pipeline` 未接入），概览 `docs/*/architecture/
