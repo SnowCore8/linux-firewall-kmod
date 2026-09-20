@@ -26,7 +26,7 @@
 //! 这个划分有测试守着，且测试的输入直接取自内核的发送函数清单。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -66,6 +66,8 @@ pub struct RouterStats {
     unmatched_replies: AtomicU64,
     reply_undelivered: AtomicU64,
     pending_full: AtomicU64,
+    seq_collisions: AtomicU64,
+    link_down: AtomicU64,
 }
 
 impl RouterStats {
@@ -108,11 +110,97 @@ impl RouterStats {
     pub fn pending_full(&self) -> u64 {
         self.pending_full.load(Ordering::Relaxed)
     }
+
+    /// `(类型, seq)` 已被占用导致登记被拒的次数。
+    ///
+    /// 出现非零说明序号被复用；若不拒绝，后登记者会**顶掉**先登记者，
+    /// 使先到的那条回复投给错误的等待方。
+    pub fn seq_collisions(&self) -> u64 {
+        self.seq_collisions.load(Ordering::Relaxed)
+    }
+
+    /// 因接收侧已退出导致登记被拒的次数。
+    ///
+    /// 出现非零说明有人在内核链路已断的情况下继续下指令；这些指令**没有**
+    /// 发出去，必须与「发出去但内核没回」区分开。
+    pub fn link_down(&self) -> u64 {
+        self.link_down.load(Ordering::Relaxed)
+    }
 }
 
 // ============================================================================
 // 配对
 // ============================================================================
+
+/// 接收侧的存活标志。
+///
+/// 与事件通道的断开是**两件事**：事件通道断开说明上层已停止消费，通常也是
+/// reactor 退出的**原因**；而本标志直接标注 reactor 本身是否还在运行。
+///
+/// 为什么必须有它：在途请求的回复通道由 [`ReplyHandle`] 与 [`PendingTable`]
+/// 共同持有，所以 reactor 消失**不会**让这个通道断开——等待方只会一直等到
+/// 超时，无法区分「内核没回」与「已经没人收报文了」。没有这个标志，
+/// [`crate::kernel::client::RequestError::LinkDown`] 就是不可达状态。
+///
+/// 由 [`LivenessGuard`] 显式翻转，**不是**在析构里按克隆计数翻转：
+/// [`Router`] 会被 `Client` 长期共享，若按最后一根引用的销毁来判「链路断开」，
+/// 就永远不会触发。
+#[derive(Debug, Clone)]
+pub struct ReactorLiveness(Arc<AtomicBool>);
+
+impl ReactorLiveness {
+    /// 接收侧是否仍在运行。
+    #[must_use]
+    pub fn is_alive(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// 接收侧的存活凭据，由 [`Reactor`] 持有；销毁即宣告接收侧已退出。
+///
+/// 只在 `Reactor` 被析构时翻转（正常关停、线程 panic 导致的 unwind、或从未
+/// 启动），因此它描述的是「这条接收回路还在不在」，与谁持有了 [`Router`] 无关。
+///
+/// 销毁时做两件事，缺一不可，否则「链路失联」就漏一半：
+///
+/// 1. 置死标志——此后**新**的登记被拒（见 [`PendingTable::insert`]）；
+/// 2. 清空在途登记——丢弃各请求的回复发送端，使**已在等待**的调用方立即
+///    拿到「已断开」，而不是空等到自己的超时。
+///
+/// 注意「是否存活」不能靠 `Arc` 的析构计数来判：接收侧的凭据只有这一份，而
+/// [`Router`] 会被 `Client` 长期共享，按引用计数判断就永远不会触发。
+#[derive(Debug)]
+pub struct LivenessGuard {
+    alive: Arc<AtomicBool>,
+    pending: Arc<PendingTable>,
+}
+
+impl LivenessGuard {
+    fn new() -> Self {
+        let alive = Arc::new(AtomicBool::new(true));
+        let pending = Arc::new(PendingTable::new(Arc::clone(&alive)));
+        Self { alive, pending }
+    }
+
+    /// 与 [`Router`] 共享的在途请求表。
+    fn pending(&self) -> Arc<PendingTable> {
+        Arc::clone(&self.pending)
+    }
+
+    /// 出一个只读存活句柄，交给 [`Router`] 分发给各 [`ReplyHandle`]。
+    fn handle(&self) -> ReactorLiveness {
+        ReactorLiveness(Arc::clone(&self.alive))
+    }
+}
+
+impl Drop for LivenessGuard {
+    fn drop(&mut self) {
+        // 顺序要紧：先置死，再清表。否则「置死与清表之间」到达的登记会插进
+        // 空表并一直等下去。
+        self.alive.store(false, Ordering::Release);
+        self.pending.clear();
+    }
+}
 
 /// 在途请求的配对键：`(msg_type 原始取值, seq)`。
 ///
@@ -136,13 +224,36 @@ pub fn is_seq_echoed_reply(msg_type: MsgType) -> bool {
     )
 }
 
+/// 登记在途请求失败的原因。
+///
+/// 三种原因对上层是三种处置：链路失联要告警、表满要退避重试、序号复用要查
+/// 逻辑 bug。所以这里给出具名原因，而不是笼统的「失败了」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegisterError {
+    /// 接收侧已退出：回复永远不会到达。
+    LinkDown,
+    /// 表已满（[`MAX_IN_FLIGHT`]）。
+    Full,
+    /// 该 `(类型, seq)` 已被占用：复用序号会让两条回复互相串台。
+    Duplicate,
+}
+
 /// 在途请求表。由 [`Router`] 与 [`ReplyHandle`] 共享。
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct PendingTable {
     map: Mutex<HashMap<ReplyKey, Sender<Incoming>>>,
+    /// 接收侧存活标志；置死后拒绝新登记，回复永远不会到达。
+    alive: Arc<AtomicBool>,
 }
 
 impl PendingTable {
+    fn new(alive: Arc<AtomicBool>) -> Self {
+        Self {
+            map: Mutex::new(HashMap::new()),
+            alive,
+        }
+    }
+
     fn claim(&self, key: ReplyKey) -> Option<Sender<Incoming>> {
         // 中毒只可能来自持锁者 panic；表本身是普通 HashMap，取回数据继续用是安全的。
         self.map
@@ -151,13 +262,29 @@ impl PendingTable {
             .remove(&key)
     }
 
-    fn insert(&self, key: ReplyKey, tx: Sender<Incoming>) -> bool {
+    /// 登记一条在途请求。
+    ///
+    /// 两条拒绝规则，都是「宁可报错也不静默出错」：
+    ///
+    /// - 已存在的键**拒绝**而不是覆盖：覆盖会让先前那条请求的回复投给后来的
+    ///   等待方，属于静默串台。
+    /// - 接收侧已退出时**拒绝**：没有谁能再收到回复，登记只会让调用方白等。
+    ///
+    /// 存活判断与插入在同一把锁内完成，故与 [`LivenessGuard`] 的置死+清表之间
+    /// 不存在「插进空表然后干等」的竞态窗口。
+    fn insert(&self, key: ReplyKey, tx: Sender<Incoming>) -> Result<(), RegisterError> {
         let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        if !self.alive.load(Ordering::Acquire) {
+            return Err(RegisterError::LinkDown);
+        }
         if map.len() >= MAX_IN_FLIGHT {
-            return false;
+            return Err(RegisterError::Full);
+        }
+        if map.contains_key(&key) {
+            return Err(RegisterError::Duplicate);
         }
         map.insert(key, tx);
-        true
+        Ok(())
     }
 
     fn remove(&self, key: ReplyKey) {
@@ -170,6 +297,13 @@ impl PendingTable {
     fn len(&self) -> usize {
         self.map.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
+
+    /// 丢弃全部在途登记，使各等待方立即收到「已断开」。
+    ///
+    /// 接收侧退出时调用：此后不会再有回复，让等待方干等到超时毫无意义。
+    fn clear(&self) {
+        self.map.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
 }
 
 /// 等一次请求回复的凭据。
@@ -181,6 +315,7 @@ pub struct ReplyHandle {
     key: ReplyKey,
     pending: Arc<PendingTable>,
     rx: Receiver<Incoming>,
+    liveness: ReactorLiveness,
 }
 
 impl ReplyHandle {
@@ -192,15 +327,29 @@ impl ReplyHandle {
 
     /// 最多等待 `timeout` 接收回复。
     ///
-    /// 返回值区分「超时」与「回复通道断开」：后者说明 reactor 已退出，
-    /// 上层应据此判定链路失联，而不是当成一次普通超时重试。
+    /// 返回值区分三种情形：收到回复；**接收侧已不存在**（[`RecvTimeoutError::
+    /// Disconnected`]，上层应据此判定链路失联而非普通超时）；等待超时
+    /// （[`RecvTimeoutError::Timeout`]）。
     ///
     /// # Errors
     ///
-    /// 超时返回 [`RecvTimeoutError::Timeout`]；reactor 已退出返回
-    /// [`RecvTimeoutError::Disconnected`]。
+    /// 见上。
     pub fn recv_timeout(&self, timeout: Duration) -> Result<Incoming, RecvTimeoutError> {
-        self.rx.recv_timeout(timeout)
+        match self.rx.recv_timeout(timeout) {
+            // 收到消息。
+            Ok(msg) => Ok(msg),
+            // 回复通道被关闭：接收侧退出，且不会再有任何回复。
+            Err(RecvTimeoutError::Disconnected) => Err(RecvTimeoutError::Disconnected),
+            // 等不到消息时，先看接收侧是否还在跑：不在跑就是链路失联，
+            // 而不是「内核没回」。
+            Err(RecvTimeoutError::Timeout) => {
+                if self.liveness.is_alive() {
+                    Err(RecvTimeoutError::Timeout)
+                } else {
+                    Err(RecvTimeoutError::Disconnected)
+                }
+            }
+        }
     }
 }
 
@@ -220,17 +369,24 @@ pub struct Router {
     events: Sender<Incoming>,
     pending: Arc<PendingTable>,
     stats: Arc<RouterStats>,
+    liveness: ReactorLiveness,
 }
 
 impl Router {
     /// 新建路由器；无序事件（内核推送、命令失败通知、广播配置变更）投进 `events`。
+    ///
+    /// 返回的 [`LivenessGuard`] 必须交给 [`Reactor`] 持有：接收侧退出（凭据销毁）
+    /// 之后，等待中的请求会立刻看到「链路失联」信号，而不是空等到超时。
     #[must_use]
-    pub fn new(events: Sender<Incoming>) -> Self {
-        Self {
+    pub fn new(events: Sender<Incoming>) -> (Self, LivenessGuard) {
+        let guard = LivenessGuard::new();
+        let router = Self {
             events,
-            pending: Arc::new(PendingTable::default()),
+            pending: guard.pending(),
             stats: Arc::new(RouterStats::default()),
-        }
+            liveness: guard.handle(),
+        };
+        (router, guard)
     }
 
     /// 接收侧计数。
@@ -247,22 +403,45 @@ impl Router {
 
     /// 为一次请求登记配对。
     ///
-    /// 返回 `None` 表示在途表已满（[`MAX_IN_FLIGHT`]），调用方应视为「请求未发出」
-    /// 并计入 [`RouterStats::pending_full`]，而不是发出去却无法收回复。
-    #[must_use]
-    pub fn register(&self, msg_type: MsgType, seq: u32) -> Option<ReplyHandle> {
+    /// 被拒时返回具名原因（见 [`RegisterError`]），调用方应视为「请求未发出」，
+    /// 而不是发出去却无法收回复。各原因同时计入
+    /// [`RouterStats::link_down`] / [`RouterStats::pending_full`] /
+    /// [`RouterStats::seq_collisions`]，便于监控把「该重试」与「该告警」分开。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`RegisterError`]。
+    pub fn register(&self, msg_type: MsgType, seq: u32) -> Result<ReplyHandle, RegisterError> {
         let key = (msg_type.to_raw(), seq);
-        // 回复只可能有一条，容量 1 足够；满时拒绝（不会发生，见下）。
+        // 回复只可能有一条，容量 1 足够。
         let (tx, rx, _stats) =
             crate::runtime::channel::bounded::<Incoming>(1, Backpressure::Reject);
-        if !self.pending.insert(key, tx) {
-            self.stats.pending_full.fetch_add(1, Ordering::Relaxed);
-            return None;
+        match self.pending.insert(key, tx) {
+            Ok(()) => {}
+            Err(RegisterError::LinkDown) => {
+                self.stats.link_down.fetch_add(1, Ordering::Relaxed);
+                return Err(RegisterError::LinkDown);
+            }
+            Err(RegisterError::Full) => {
+                self.stats.pending_full.fetch_add(1, Ordering::Relaxed);
+                return Err(RegisterError::Full);
+            }
+            Err(RegisterError::Duplicate) => {
+                self.stats.seq_collisions.fetch_add(1, Ordering::Relaxed);
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "netlink 请求序号被复用，登记被拒";
+                    "msg_type" => key.0,
+                    "seq" => key.1
+                );
+                return Err(RegisterError::Duplicate);
+            }
         }
-        Some(ReplyHandle {
+        Ok(ReplyHandle {
             key,
             pending: Arc::clone(&self.pending),
             rx,
+            liveness: self.liveness.clone(),
         })
     }
 
@@ -370,16 +549,24 @@ pub struct Reactor {
     transport: Arc<Transport>,
     shutdown: Shutdown,
     router: Router,
+    /// 本接收侧的存活凭据；`Reactor` 销毁即宣告接收侧退出。
+    _liveness: LivenessGuard,
 }
 
 impl Reactor {
     /// 组装接收执行体。
     #[must_use]
-    pub fn new(transport: Arc<Transport>, shutdown: Shutdown, router: Router) -> Self {
+    pub fn new(
+        transport: Arc<Transport>,
+        shutdown: Shutdown,
+        router: Router,
+        liveness: LivenessGuard,
+    ) -> Self {
         Self {
             transport,
             shutdown,
             router,
+            _liveness: liveness,
         }
     }
 
@@ -443,13 +630,19 @@ impl Reactor {
     }
 }
 
-/// 便于测试：构造一对「事件接收端 + 路由器」。
+/// 便于测试：构造一对「事件接收端 + 路由器」，并同时返回存活凭据。
 #[must_use]
 pub fn event_channel(
     capacity: usize,
-) -> (Router, Receiver<Incoming>, Arc<crate::runtime::QueueStats>) {
+) -> (
+    Router,
+    Receiver<Incoming>,
+    Arc<crate::runtime::QueueStats>,
+    LivenessGuard,
+) {
     let (tx, rx, stats) = crate::runtime::channel::bounded(capacity, Backpressure::Reject);
-    (Router::new(tx), rx, stats)
+    let (router, liveness) = Router::new(tx);
+    (router, rx, stats, liveness)
 }
 
 /// 内核推送队列的默认容量（供组合根使用）。
@@ -505,7 +698,7 @@ mod tests {
 
     #[test]
     fn foreign_portid_is_rejected_and_counted() {
-        let (router, rx, _) = event_channel(4);
+        let (router, rx, _, _live) = event_channel(4);
         router.route(1234, &header_only(MsgType::StatsQuery, 0));
         assert_eq!(router.stats().foreign_portid(), 1);
         assert_eq!(router.stats().received(), 0);
@@ -514,7 +707,7 @@ mod tests {
 
     #[test]
     fn unknown_type_is_counted_not_silently_dropped() {
-        let (router, rx, _) = event_channel(4);
+        let (router, rx, _, _live) = event_channel(4);
         let mut bytes = header_only(MsgType::StatsQuery, 0);
         bytes[4..6].copy_from_slice(&999u16.to_be_bytes());
         router.route(0, &bytes);
@@ -525,7 +718,7 @@ mod tests {
 
     #[test]
     fn malformed_header_is_counted() {
-        let (router, _rx, _) = event_channel(4);
+        let (router, _rx, _, _live) = event_channel(4);
         // 长度声明与实长不符。
         let mut bytes = header_only(MsgType::StatsQuery, 0);
         bytes[6..8].copy_from_slice(&64u16.to_be_bytes());
@@ -536,7 +729,7 @@ mod tests {
 
     #[test]
     fn broadcast_event_reaches_the_event_queue() {
-        let (router, rx, _) = event_channel(4);
+        let (router, rx, _, _live) = event_channel(4);
         // DdosEvent 是广播事件，用内核自增序号：即使 seq 与某次在途请求相同，
         // 也必须走事件队列而不是被认领走。
         let handle = router
@@ -559,7 +752,7 @@ mod tests {
 
     #[test]
     fn matched_reply_goes_to_the_waiter_not_the_event_queue() {
-        let (router, rx, _) = event_channel(4);
+        let (router, rx, _, _live) = event_channel(4);
         let handle = router
             .register(MsgType::StatsResponse, 42)
             .expect("登记在途请求");
@@ -581,7 +774,7 @@ mod tests {
 
     #[test]
     fn reply_with_the_wrong_seq_is_unmatched() {
-        let (router, rx, _) = event_channel(4);
+        let (router, rx, _, _live) = event_channel(4);
         let _handle = router
             .register(MsgType::StatsResponse, 42)
             .expect("登记在途请求");
@@ -597,7 +790,7 @@ mod tests {
 
     #[test]
     fn dropping_the_handle_makes_a_late_reply_unmatched() {
-        let (router, _rx, _) = event_channel(4);
+        let (router, _rx, _, _live) = event_channel(4);
         let handle = router
             .register(MsgType::ListRatesResponse, 9)
             .expect("登记在途请求");
@@ -610,17 +803,18 @@ mod tests {
 
     #[test]
     fn in_flight_table_refuses_beyond_capacity_instead_of_overwriting() {
-        let (router, _rx, _) = event_channel(4);
+        let (router, _rx, _, _live) = event_channel(4);
         let mut held = Vec::new();
         for i in 0..MAX_IN_FLIGHT {
             held.push(
                 router
                     .register(MsgType::StatsResponse, i as u32 + 1)
-                    .unwrap_or_else(|| panic!("第 {i} 个在途请求应能登记")),
+                    .unwrap_or_else(|e| panic!("第 {i} 个在途请求应能登记，实得 {e:?}")),
             );
         }
-        assert!(
-            router.register(MsgType::StatsResponse, 9999).is_none(),
+        assert_eq!(
+            router.register(MsgType::StatsResponse, 9999).unwrap_err(),
+            RegisterError::Full,
             "超出容量必须拒绝而不是覆盖已有请求"
         );
         assert_eq!(router.stats().pending_full(), 1);
@@ -628,9 +822,57 @@ mod tests {
     }
 
     #[test]
+    fn a_duplicate_key_is_refused_and_counted_as_a_collision() {
+        // 覆盖会让先前那条请求的回复投给后来的等待方，故必须是「拒绝」。
+        let (router, _rx, _, _live) = event_channel(4);
+        let _held = router
+            .register(MsgType::StatsResponse, 77)
+            .expect("首次登记应成功");
+        assert_eq!(
+            router.register(MsgType::StatsResponse, 77).unwrap_err(),
+            RegisterError::Duplicate
+        );
+        assert_eq!(router.stats().seq_collisions(), 1);
+        assert_eq!(router.in_flight(), 1, "被拒不得影响已有登记");
+    }
+
+    #[test]
+    fn dropping_the_liveness_guard_refuses_new_registrations_immediately() {
+        // 接收侧退出后新登记必须**立即**被拒（而不是登记成功、白等到超时）。
+        let (router, _rx, _stats, live) = event_channel(4);
+        drop(live);
+        assert_eq!(
+            router.register(MsgType::StatsResponse, 1).unwrap_err(),
+            RegisterError::LinkDown
+        );
+        assert_eq!(router.stats().link_down(), 1);
+    }
+
+    #[test]
+    fn dropping_the_liveness_guard_wakes_waiters_instead_of_letting_them_time_out() {
+        // 已在等待的请求必须被立刻唤醒并看到「已断开」，而不是空等满超时。
+        let (router, _rx, _stats, live) = event_channel(4);
+        let handle = router
+            .register(MsgType::StatsResponse, 3)
+            .expect("登记在途请求");
+        drop(live);
+        let start = std::time::Instant::now();
+        assert!(matches!(
+            handle.recv_timeout(Duration::from_secs(30)),
+            Err(RecvTimeoutError::Disconnected)
+        ));
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "失联唤醒必须是即时的，实耗 {:?}",
+            start.elapsed()
+        );
+        assert_eq!(router.in_flight(), 0, "失联时必须清空在途表");
+    }
+
+    #[test]
     fn pending_claims_are_independent_per_seq() {
         // 并发 LIST 请求不再共用全局单槽：两个不同 seq 各自收到自己的回复。
-        let (router, _rx, _) = event_channel(4);
+        let (router, _rx, _, _live) = event_channel(4);
         let a = router.register(MsgType::StatsResponse, 1).expect("登记 A");
         let b = router.register(MsgType::StatsResponse, 2).expect("登记 B");
 
@@ -660,7 +902,7 @@ mod tests {
     #[test]
     fn cmd_result_is_delivered_as_an_event_never_claimed_as_a_reply() {
         // 关键回归：CmdResult 用内核自增序号，即使 seq 撞上在途请求也必须进事件流。
-        let (router, rx, _) = event_channel(4);
+        let (router, rx, _, _live) = event_channel(4);
         let _handle = router
             .register(MsgType::StatsResponse, 5)
             .expect("登记在途请求");

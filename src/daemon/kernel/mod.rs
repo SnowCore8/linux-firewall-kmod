@@ -12,6 +12,8 @@
 //! 本层取代旧的 `crate::netlink`（含 `mod.rs` / `protocol.rs` / `responses.rs` /
 //! `commands.rs` / `handlers.rs` / `decision.rs` / `config_sync.rs`）。
 
+pub mod client;
 pub mod codec;
+pub mod lease;
 pub mod reactor;
 pub mod transport;
