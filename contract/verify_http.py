@@ -615,28 +615,97 @@ def check_routes_frontend(contract: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _shape_ok(kind: str, where: str, problems: list[str], field: str = "where") -> bool:
+    """校验 ``<相对路径>:<非空锚点>`` 的形状，不合法时记问题并返回 False。"""
+    if not where or "\n" in where or "\r" in where:
+        problems.append(f"{kind}: {field} 为空或含换行，契约被破坏: {where!r}")
+        return False
+    rel, sep, anchor = where.partition(":")
+    if not sep or not rel or not anchor:
+        problems.append(f"{kind}: {field} 形状非法（应为 '<路径>:<锚点>'）: {where!r}")
+        return False
+    if os.path.isabs(rel) or rel.startswith(".."):
+        problems.append(f"{kind}: {field} 必须用仓库相对路径: {rel!r}")
+        return False
+    return True
+
+
+def _anchor_exists(where: str) -> bool:
+    """``where/fix`` 的锚点是否仍在仓库里。文件不存在视为「已消失」。"""
+    rel, sep, anchor = where.partition(":")
+    if not sep:
+        return False
+    path = os.path.join(ROOT, rel)
+    if not os.path.isfile(path):
+        return False
+    return anchor in read(path)
+
+
+def _anchor_ok(kind: str, where: str, problems: list[str]) -> bool:
+    """形状合法**且**锚点仍在——用于 errmodel 这种「必须仍在」的锚点。"""
+    if not _shape_ok(kind, where, problems):
+        return False
+    if _anchor_exists(where):
+        return True
+    rel, _, anchor = where.partition(":")
+    if os.path.isfile(os.path.join(ROOT, rel)):
+        problems.append(f"{kind}: 锚点 {anchor!r} 在 {rel} 中已不存在（实现已变，契约需同步）")
+    else:
+        problems.append(f"{kind}: 锚点文件不存在 {rel}")
+    return False
+
+
 def check_anchors(contract: dict) -> list[str]:
+    """核对 errmodel 与 defect 的 where / fix 锚点（defect 按 status 分派）。
+
+    errmodel 的 where 必须**仍在**（错误形状还在实现里）。
+
+    defect 按 status 分派，与 ``verify_procfs.py`` 同一套语义：
+
+      open     —— 缺陷未修，``where`` 必须仍存在
+      retained —— 有意保留，``where`` 必须指向源码里说明「有意保留」的注释
+      fixed    —— 已修，``where`` 反过来必须**已消失**，``fix`` 指向修复证据且必须存在
+
+    形状校验：锚点必须是 ``<相对路径>:<非空锚点>``，且路径在仓库内。不这样校验，
+    一条被截断/含换行的 where 会被当成「文件名含换行」报出难以理解的错误。
+    """
     problems: list[str] = []
-    entries = [(name, d["where"]) for name, d in contract["errmodels"].items()]
-    entries += [("defect " + d["name"], d["where"]) for d in contract["defects"]]
-    for kind, where in entries:
-        if "\n" in where or "\r" in where:
-            problems.append(f"{kind}: where 含换行，契约被破坏: {where!r}")
+    n_ok = 0
+
+    for name, d in contract["errmodels"].items():
+        if _anchor_ok(f"errmodel {name}", d["where"], problems):
+            n_ok += 1
+
+    for d in contract["defects"]:
+        kind, status, where = f"defect {d['name']}", d["status"], d["where"]
+        if not _shape_ok(kind, where, problems):
             continue
-        rel, sep, anchor = where.partition(":")
-        if not sep or not rel or not anchor:
-            problems.append(f"{kind}: where 形状非法（应为 '<路径>:<锚点>'）: {where!r}")
-            continue
-        if os.path.isabs(rel) or rel.startswith(".."):
-            problems.append(f"{kind}: where 必须用仓库相对路径: {rel!r}")
-            continue
-        path = os.path.join(ROOT, rel)
-        if not os.path.isfile(path):
-            problems.append(f"{kind}: 锚点文件不存在 {rel}")
-            continue
-        if anchor not in read(path):
-            problems.append(f"{kind}: 锚点 {anchor!r} 在 {rel} 中已不存在（实现已变，契约需同步）")
-    print(f"  {len(entries)} 个 errmodel/defect 锚点已核对（含形状校验）")
+        w_exists = _anchor_exists(where)
+        if status in ("open", "retained"):
+            if w_exists:
+                n_ok += 1
+            else:
+                problems.append(f"{kind}: status={status} 但 where 锚点 '{where}' 不存在")
+        elif status == "fixed":
+            if w_exists:
+                rel = where.partition(":")[0]
+                problems.append(
+                    f"{kind}: status=fixed 但旧现场 '{where}' 仍在 "
+                    f"（{rel} 若属旧实现应删除；若实现已修则契约需改判）"
+                )
+            else:
+                n_ok += 1
+            fix = d.get("fix") or ""
+            if not _shape_ok(kind, fix, problems, field="fix"):
+                continue
+            if _anchor_exists(fix):
+                n_ok += 1
+            else:
+                problems.append(f"{kind}: status=fixed 但修复证据锚点 '{fix}' 不存在")
+        else:
+            problems.append(f"{kind}: 未知 status {status!r}")
+
+    print(f"  {n_ok} 个 where/fix 锚点核对通过（含形状与 status 分派）")
     return problems
 
 

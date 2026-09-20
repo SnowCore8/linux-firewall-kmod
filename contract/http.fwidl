@@ -254,6 +254,27 @@ defect HTTP_BAN_SORT_DOC_INCOMPLETE {
   text = "PaginationParams.sort_by 的文档注释只列了 4 个取值（banned_at_desc/banned_at_asc/ip_asc/jail_asc），实现另有 3 个（ip_desc/remaining_asc/remaining_desc），前端 BanSortKey 联合类型 7 个取值——与实现一致、唯独与注释不符。契约以实现与前端为准"
 }
 
+defect HTTP_READ_PATH_WRITES_STATE {
+  severity = high
+  where = "src/daemon/web_ui/ban_ops.rs:purge_expired(now)"
+  resolution = "读路径只读：purge 移到 scheduler 的独立任务，由它独占调用并转交被清理的条目；读侧改从 state 取不可变快照。修复回执记在 state/bans.rs 与 api/routes/ 的读路径零副作用测试上（本缺陷在旧读路径退役时随 where 一并消失）。"
+  text = "get_active_bans() 在**读**路径上按 5 秒节流执行 purge_expired，顺带自增 DAEMON_STATS.total_unbans 并写入封禁时长统计。旧 SSE 每个 tick（默认 1 秒）都会读一次，于是「每秒被读一次的统计」被读路径自己改写——读数与写入者互相污染，仪表盘上的解除封禁计数不可复现"
+}
+
+defect HTTP_SSE_RESERIALIZES_EVERY_DOMAIN {
+  severity = medium
+  where = "src/daemon/web_ui/sse.rs:let Ok(stats_json) = serde_json::to_string(&stats)"
+  resolution = "按域序列化：连接持有上次发送的版本，只对真正变化的域调用渲染器。修复回执记在 api/sse.rs 的 DomainRenderer 与「只序列化变化域」的计数测试上（本缺陷在旧 SSE 引擎退役时随 where 一并消失）。"
+  text = "旧 SSE 每个 tick 把 5 份载荷（stats/bans/jails/whitelist/rates）全量 serde_json::to_string 一遍，无论有没有变化，且这段序列化在**每条连接**的循环里各做一次。成本是「连接数 × 域数 × 每秒一次」：安静时段也在重复序列化同样的内容，payload 越大越明显"
+}
+
+defect HTTP_WHITELIST_KEY_DIVERGENCE {
+  severity = medium
+  where = "src/daemon/ban/mod.rs:fn build_cidr_key"
+  resolution = "键的规范化只有一处（state/cidr.rs 的 CidrKey）：网络地址（主机位清零）+ 恒带 /prefix（裸地址即 /32、/128）。修复回执记在 state/whitelist.rs 的 CidrKey 键类型与 cidr.rs 的规范化测试上（本缺陷在旧键规则退役时随 where 一并消失）。"
+  text = "白名单的键有三套互不相同的规则：LIST 响应恒带 /prefix；事件路径对 /32·/128·/0 存裸地址；build_cidr_key 又把 IPv6 /0 归一成 /128。同一子网因此会拿到两个键，LIST 的整表覆盖打不中事件插入的那一条，表现为「白名单里看到两条同一个网段」或「删了还在」"
+}
+
 # ============================================================================
 # 路由表
 # ============================================================================
