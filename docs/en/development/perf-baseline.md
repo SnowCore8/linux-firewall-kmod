@@ -116,6 +116,12 @@ Hook net cost on a single flow (path softirq − control baseline):
 > **4.6 µs**, showing significant cross-core contention (cache-line ping-pong on shared
 > counters). Single-flow and multi-flow numbers must never be compared directly; always
 > state the flow count when quoting them.
+>
+> **The "net of hook" column above uses a flawed baseline**: `fwctl.sh`'s control puts
+> both veth ends inside a new netns, which is not the same network stack as the
+> main measurement's init_net (init_net additionally carries conntrack and the `mihomo`
+> nat). The correct convention is **same path, module ON minus OFF**; see the "Floor"
+> section under "Post-rewrite re-measurement" below.
 
 ### pps ceiling (sender-limited on this host)
 
@@ -214,3 +220,85 @@ Judging discipline:
 - Until the sender-side ceiling is raised, pps ceilings are not hard targets (this host's
   sender is the bottleneck, see table above);
 - Single-flow and multi-flow figures **must not be mixed**.
+
+## Post-rewrite re-measurement (Phase 1.3)
+
+Conditions: same machine, same `scripts/bench/`, same module parameters. The old module
+was rebuilt from git history:
+
+```bash
+git worktree add /tmp/fw-old 3a313ad --detach
+make -C /lib/modules/$(uname -r)/build M=/tmp/fw-old/src/kernel-module modules
+```
+
+The rebuilt artifact's srcversion `229754D1C290E8A436A112B` matches the value recorded
+above byte for byte, i.e. the numbers above were measured on this exact binary.
+
+### Floor: same-path ON/OFF decomposition
+
+The section above uses `fwctl.sh` as the "hook-free control", but that control puts
+**both veth ends inside one new netns**, whereas the init_net side still carries
+`nf_conntrack` and `table inet mihomo` (nat prerouting, `priority dstnat + 1`), both of
+which still cost on that flow. So "main measurement − fwctl" mixed two **different**
+floors and overstated the hook's net cost.
+
+The clean convention is **same flow, module ON minus `rmmod` OFF**:
+
+| Setup | Floor OFF (same path, rmmod) | Old module ON | Old hook net | New module ON | New hook net |
+|------|------|------|------|------|------|
+| Single flow, both tables miss | 1.932 / 1.955 µs | 2.109 µs | +0.18 | 2.080 µs | +0.13 |
+| 4 concurrent flows, both tables miss | 4.140 / 4.162 µs | 4.468 µs | +0.33 | 4.340 µs | **+0.18** |
+
+The two floor figures are one OFF measurement each (old module, new module); they agree
+within 1.2%.
+
+The drop path has a lower floor: an `nft` rule at `priority -2` (before the module hook
+at `-1`) drops in place, so packets never reach the hook — equivalent to the drop floor
+with no module.
+
+| Setup | Floor (nft drop at `priority -2`) | New module group D | Diff |
+|------|------|------|------|
+| Single flow, banned drop | **1.172 µs** | 1.147 µs | ≈ 0 (no measurable module cost on the drop path) |
+
+### Item-by-item verdict on the six targets
+
+| # | Metric | Baseline | Target | Host floor | Measured (new module) | Verdict |
+|---|------|------|------|------|------|------|
+| 1 | Per-packet softirq, 4 flows | 4.6 µs | ≤ 3.0 µs | 4.14 µs | 4.340 µs | ✗ floor above target |
+| 2 | Single flow, both tables miss | 2.46 µs | ≤ 1.8 µs | 1.93 µs | 2.080 µs | ✗ floor above target |
+| 3 | Single flow, banned drop | 1.27 µs | ≤ 1.0 µs | 1.17 µs | 1.147 µs | ✗ floor above target |
+| 4 | Lookups per packet | 2.81 | ≤ 1.0 | — | **1.0000** | ✓ |
+| 5 | Hot-path spinlocks per packet | 1.0 | 0 | — | **≤ 0.0006** | ✓ |
+| 6 | Shared cache-line writes per packet | 6 / 10 | 0 | — | **0** | ✓ |
+
+Targets 1/2/3 are all **below the host floor**: conntrack plus the `mihomo` nat on the
+init_net side make merely "delivering the packet to prerouting" cost 1.93 µs (single
+flow) / 4.14 µs (4 flows). That cost is unrelated to the firewall module — it survives
+`rmmod`, and it is present when `nft` at `priority -2` drops in place. Without changing
+the host network stack, total softirq cannot be pushed below the floor, so these three
+are unreachable on this host.
+
+Item 4: ftrace `function_profile` summed across `trace_stat/function*` gives
+`fw_rate_find_locked / fw_rate_observe = 651787 / 651784 = 1.0000` (one lookup).
+Item 5: `_raw_spin_lock_bh` fired 2 437 times over 4 208 192 packets (`ddos=1`: 2 643 over
+6 300 352), i.e. ≤ 0.0006/pkt, from entry creation and window rollover on the cold path,
+not from the per-packet decision path.
+Item 6: source inspection — every hot-path write lands in `this_cpu_ptr(stats_pcpu)` or a
+per-CPU rate slot; the only shared write is one `atomic_cmpxchg(&n->rolling)` per window.
+
+### Old vs new, path by path
+
+| Path | Old module | New module | Change |
+|------|------|------|------|
+| E) `ddos` off + whitelist | 2.086 µs | 2.054 µs | −1.5% |
+| A) `ddos` off + non-whitelist | 2.109 µs | 2.080 µs | −1.4% |
+| B) `ddos` on + non-whitelist | 1.238 µs | 1.171 µs | −5.4% |
+| C) `ddos` on + whitelist | 2.116 µs | 2.046 µs | −3.3% |
+| D) banned drop | 1.233 µs | 1.147 µs | −7.0% |
+| 4 flows, **hook net cost** | 0.328 µs | 0.178 µs | **−45.7%** |
+
+On a single flow the hook's net cost is already near measurement noise (0.13–0.18 µs),
+so old and new are hard to separate; under **4 concurrent flows the hook's net cost drops
+by about 46%**, matching the rewrite goal (eliminating cross-core shared writes) — the
+gain is concentrated in cross-core contention. Total softirq dilutes it: the hook is only
+4% (4 flows) to 8% (single flow) of the floor.
