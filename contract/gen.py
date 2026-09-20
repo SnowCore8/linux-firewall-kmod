@@ -1032,9 +1032,22 @@ class LimitBlock:
 
 
 class Defect:
-    """一条已核实的实现缺陷；`where` 是「文件:锚点」，校验器据此核对它仍在。"""
+    """一条已核实的实现缺陷。
 
-    __slots__ = ("name", "line", "severity", "where", "text")
+    ``where`` 指向**缺陷现场**（实现里那处代码/文档），校验器核对它仍在。
+    ``status`` 记录处置结论，决定校验器核对哪一侧：
+
+      open     —— 未修，``where`` 必须仍存在（默认值，兼容早期契约）
+      fixed    —— 已修，``where`` 反过来必须**已消失**，``fix`` 指向修复证据
+                  的锚点且必须存在。防止「契约说修好了、代码其实没动」。
+      retained —— 有意保留，``where`` 指向源码里说明「有意保留」的注释，
+                  必须存在。理由写在 ``text`` 与 ``reason`` 里。
+
+    ``fix`` 与 ``reason`` 仅分别在 fixed / retained 时使用。
+    """
+
+    __slots__ = ("name", "line", "severity", "where", "text", "status", "fix",
+                 "reason")
 
     def __init__(self, name: str, line: int):
         self.name = name
@@ -1042,6 +1055,9 @@ class Defect:
         self.severity = ""
         self.where = ""
         self.text = ""
+        self.status = "open"
+        self.fix = ""
+        self.reason = ""
 
 
 class TextProtoContract:
@@ -1067,6 +1083,8 @@ _FORM_RE = re.compile(r'^"([^"]*)"\s*=\s*(\w+)\s*::\s*(\w+)$')
 READ_FORMATS = ("machine", "unstable", "none")
 ACCESS_VALUES = ("r", "rw")
 SEVERITIES = ("low", "medium", "high")
+# 缺陷处置结论：未修 / 已修 / 有意保留（见 Defect 的文档字符串）
+DEFECT_STATUSES = ("open", "fixed", "retained")
 NUM_TYPES = ("u8", "u16", "u32", "u64", "i32", "i64")
 
 
@@ -1270,8 +1288,14 @@ def _textproto_block(
             k, v = _kv(path, lineno, text)
             if k == "severity":
                 decl.severity = v
+            elif k == "status":
+                decl.status = v
             elif k == "where":
                 decl.where = v
+            elif k == "fix":
+                decl.fix = v
+            elif k == "reason":
+                decl.reason = v
             elif k == "text":
                 decl.text = v
             else:
@@ -1389,12 +1413,37 @@ def validate_textproto(contract: TextProtoContract) -> List[str]:
             raise ContractError(
                 f"defect {decl.name}: severity 必须是 {'/'.join(SEVERITIES)}，实际 {decl.severity!r}"
             )
+        if decl.status not in DEFECT_STATUSES:
+            raise ContractError(
+                f"defect {decl.name}: status 必须是 {'/'.join(DEFECT_STATUSES)}，实际 {decl.status!r}"
+            )
         if not decl.where or ":" not in decl.where:
             raise ContractError(f"defect {decl.name}: 必须给出 'where = <文件>:<锚点>'")
+        if decl.status == "fixed" and (not decl.fix or ":" not in decl.fix):
+            raise ContractError(
+                f"defect {decl.name}: status=fixed 必须给出 'fix = <文件>:<锚点>' 作为修复证据"
+            )
+        if decl.status != "fixed" and decl.fix:
+            raise ContractError(
+                f"defect {decl.name}: 仅 status=fixed 可给 fix（当前 status={decl.status}）"
+            )
+        if decl.status == "retained" and not decl.reason:
+            raise ContractError(
+                f"defect {decl.name}: status=retained 必须给出 reason 说明为何有意保留"
+            )
+        if decl.status != "retained" and decl.reason:
+            raise ContractError(
+                f"defect {decl.name}: 仅 status=retained 可给 reason（当前 status={decl.status}）"
+            )
         if not decl.text:
             raise ContractError(f"defect {decl.name}: 缺少 text")
     if contract.defects:
-        notes.append(f"缺陷记录: {len(contract.defects)} 条（由 verify_*.py 到源码核对锚点）")
+        fixed = sum(1 for d in contract.defects if d.status == "fixed")
+        retained = sum(1 for d in contract.defects if d.status == "retained")
+        notes.append(
+            f"缺陷记录: {len(contract.defects)} 条（已修 {fixed} / 有意保留 {retained} / "
+            f"未修 {len(contract.defects) - fixed - retained}；由 verify_*.py 到源码核对锚点）"
+        )
 
     return notes
 
@@ -1590,7 +1639,10 @@ def emit_json_textproto(contract: TextProtoContract, notes: List[str]) -> str:
             {
                 "name": d.name,
                 "severity": d.severity,
+                "status": d.status,
                 "where": d.where,
+                "fix": d.fix,
+                "reason": d.reason,
                 "text": d.text,
             }
             for d in contract.defects

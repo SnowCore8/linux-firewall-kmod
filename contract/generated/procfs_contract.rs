@@ -44,7 +44,6 @@ pub enum BanOp {
     BanTimed = 1,
     BanPermanent = 2,
     Unban = 3,
-    UnbanViaNegative = 4,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +59,7 @@ pub enum ConfigParam {
 }
 
 /// `bans` 接受的命令形式（占位符仅供人读，非正则）。
-pub const BANS_FORMS: &[(BanOp, &str)] = &[(BanOp::BanDefault, "<ip>"), (BanOp::BanTimed, "<ip> <seconds>"), (BanOp::BanPermanent, "<ip> 0"), (BanOp::Unban, "unban <ip>"), (BanOp::UnbanViaNegative, "<ip> -1")];
+pub const BANS_FORMS: &[(BanOp, &str)] = &[(BanOp::BanDefault, "<ip>"), (BanOp::BanTimed, "<ip> <seconds>"), (BanOp::BanPermanent, "<ip> 0"), (BanOp::Unban, "unban <ip>")];
 
 /// `whitelist` 接受的命令形式（占位符仅供人读，非正则）。
 pub const WHITELIST_FORMS: &[(WhitelistOp, &str)] = &[(WhitelistOp::Add, "add <subnet>"), (WhitelistOp::AddImplicit, "<subnet>"), (WhitelistOp::Remove, "remove <subnet>")];
@@ -87,6 +86,8 @@ pub mod key {
 
 /// 容量上限；未列出的表表示实现中无条目上限。
 pub mod limit {
+    pub const BANS: usize = 65535;
+    pub const WHITELIST: usize = 65535;
     pub const RATES: usize = 65536;
     pub const UDP_PORTS: usize = 512;
     pub const ICMP_TYPES: usize = 128;

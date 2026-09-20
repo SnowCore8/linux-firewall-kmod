@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""procfs 契约一致性校验：契约 vs 内核 procfs.c / whitelist.c / 文档。
+"""procfs 契约一致性校验：契约 vs 新内核实现（src/kernel-module/fw_*.c）。
 
 为什么需要这一步
 ----------------
@@ -8,19 +8,28 @@ machine 文件都有 key 声明……），完全没有核对契约是不是在�
 文本协议不像字节布局那样有 ``sizeof`` 可以机械比对，所以更需要在源码里
 逐一核对**锚点字符串**，否则契约很快就会变成一份善意但撒谎的文档。
 
-做法（全部为机械核对，不做语义推断）
-------------------------------------
-1. ``proc_create`` 的条目名与 mode 必须与契约逐项相同（多/少/权限不符都报错）。
-2. ``stats_show`` 的 ``seq_printf(m, "<key> ...")`` 行必须与契约 key 块
-   **逐项、按顺序**相同（含数值类型推导出的格式符）。
-3. 三个可写文件的解析代码里必须能找到契约声明的每种命令形式的**字面 token**
-   （``unban`` / ``add`` / ``remove`` / ``ban_time`` / ``0`` 等）。
-4. ``limit`` 块的 ``where`` 锚点必须仍存在于源码中，且声明的上限值必须与
-   源码里的数值一致（如 udp_ports 512、icmp_types 128）。
-5. 每条 ``defect`` 的 ``where`` 锚点必须仍存在——缺陷被修掉后契约必须同步
-   修改，否则门禁失败，避免「契约说有问题、代码其实已修」或反之。
-6. ``defect`` 里声明为「计数器恒为 0」的，校验其递增点确实缺失；声明为
-   「无上限」的，校验容量检查确实不存在。
+重写后的口径变化
+----------------
+Phase 1 把实现从 ``procfs.c`` / ``whitelist.c`` / ``rate-detector.c`` 等旧文件
+重组进 ``fw_procfs.c`` / ``fw_wl.c`` / ``fw_rate.c`` / ``fw_ban.c`` / ``fw_main.c``。
+因此本校验器：
+
+1. 只读新实现文件；权限、条目名、stats 字段、容量、写文法都按新文件名与
+   新 API 核对。
+2. **不再把每条 defect 的 where 都当作「必须存在」**。契约现在用 ``status``
+   表达处置结论，校验器据此决定核对哪一侧：
+
+   - ``open``     ：``where`` 指向缺陷现场，必须**仍存在**。
+   - ``fixed``    ：``where`` 指向旧缺陷现场，必须**已消失**；``fix`` 指向
+                    修复证据锚点，必须**存在**。旧文件在 Phase 1 末被删除，
+                    删除即「消失」；仍存在的旧文件里若锚点还在，则报错。
+   - ``retained`` ：``where`` 指向源码里「有意保留」的注释，必须存在。
+
+   没有这一改动，契约一旦记录「已修」就永远是红的（旧文件迟早删掉），
+   反过来又无法发现「契约说修了、代码其实没动」。
+
+3. 对几条高价值 defect 追加**语义核对**（不只看锚点在不在）：计数器方向、
+   flush 收进快照函数、泛洪闸门收敛到封禁模块。
 
 用法::
 
@@ -39,12 +48,15 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GEN_DIR = os.path.join(ROOT, "contract", "generated")
 LAYOUT_JSON = os.path.join(GEN_DIR, "procfs_layout.json")
-PROCFS_C = os.path.join(ROOT, "src", "kernel-module", "procfs.c")
-WHITELIST_C = os.path.join(ROOT, "src", "kernel-module", "whitelist.c")
-FIREWALL_H = os.path.join(ROOT, "src", "kernel-module", "firewall.h")
-RATE_DETECTOR_C = os.path.join(ROOT, "src", "kernel-module", "rate-detector.c")
-FIREWALL_MAIN_C = os.path.join(ROOT, "src", "kernel-module", "firewall-main.c")
-DOC_PROCFS = os.path.join(ROOT, "docs", "zh", "configuration", "procfs.md")
+UAPI_H = os.path.join(GEN_DIR, "procfs_uapi.h")
+KERNEL_DIR = os.path.join(ROOT, "src", "kernel-module")
+PROCFS_C = os.path.join(KERNEL_DIR, "fw_procfs.c")
+TYPES_H = os.path.join(KERNEL_DIR, "fw_types.h")
+MAIN_C = os.path.join(KERNEL_DIR, "fw_main.c")
+BAN_C = os.path.join(KERNEL_DIR, "fw_ban.c")
+WL_C = os.path.join(KERNEL_DIR, "fw_wl.c")
+STATS_C = os.path.join(KERNEL_DIR, "fw_stats.c")
+NETLINK_C = os.path.join(KERNEL_DIR, "fw_netlink.c")
 
 # key 数值类型 -> 实现应使用的 printf 转换符（含长度修饰）
 KEY_FORMAT = {
@@ -63,19 +75,15 @@ WRITE_SOURCE = {
     "config": PROCFS_C,
 }
 
-# 用于核对 limit 数值的常量名（契约里的 entries 必须等于源码里的这个值）
+# limit -> (常量名, 所在文件)；值必须与契约 entries 逐项相同
 LIMIT_CONST = {
-    "rates": ("fw_max_rate_entries", FIREWALL_MAIN_C, False),
-    "udp_ports": ("MAX_UDP_PORT_ENTRIES", FIREWALL_H, True),
-    "icmp_types": ("MAX_ICMP_TYPE_ENTRIES", FIREWALL_H, True),
-    "port_scanners": ("PORT_SCAN_MAX_RESULTS", PROCFS_C, True),
-    "service_probes": ("SERVICE_PROBE_MAX_RESULTS", PROCFS_C, True),
-}
-
-# 用于核对「无上限」声明的注释锚点（存在即说明容量检查确实被跳过）
-NO_LIMIT_MARKER = {
-    "bans": ("按需扩展", FIREWALL_H),
-    "whitelist": ("跳过容量检查", WHITELIST_C),
+    "bans": ("fw_max_ban_entries", MAIN_C),
+    "whitelist": ("fw_max_whitelist_entries", MAIN_C),
+    "rates": ("fw_max_rate_entries", MAIN_C),
+    "udp_ports": ("MAX_UDP_PORT_ENTRIES", TYPES_H),
+    "icmp_types": ("MAX_ICMP_TYPE_ENTRIES", TYPES_H),
+    "port_scanners": ("PORT_SCAN_MAX_RESULTS", TYPES_H),
+    "service_probes": ("SERVICE_PROBE_MAX_RESULTS", TYPES_H),
 }
 
 
@@ -84,19 +92,35 @@ def read(path: str) -> str:
         return fh.read()
 
 
-def snake(name: str) -> str:
-    out = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name)
-    out = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", out)
-    return out.lower()
+def anchor_exists(where: str) -> bool:
+    """where/fix 的锚点是否仍在仓库里。文件不存在视为「已消失」。"""
+    rel, sep, anchor = where.partition(":")
+    if not sep:
+        return False
+    path = os.path.join(ROOT, rel)
+    if not os.path.isfile(path):
+        return False
+    return anchor in read(path)
 
 
 def check_proc_create(contract: dict) -> list[str]:
-    """proc_create 的条目名与权限必须与契约一致。"""
+    """proc_create 的条目名与权限必须与契约一致。
+
+    权限位在实现里是生成头宏（``FW_PROCFS_<NAME>_MODE``），故两侧都核：
+    生成头里该宏的取值必须等于契约，实现必须真的用这个宏（而不是自己写死
+    一个八进制字面量）。只用宏名而不管取值、或只看实现字面量，都会漏掉
+    「生成头与实现各自漂移」的情况。
+    """
     problems: list[str] = []
     src = read(PROCFS_C)
+
+    macro_mode: dict[str, str] = {}
+    for m in re.finditer(r"#define\s+(FW_PROCFS_\w+_MODE)\s+(0[0-7]+)\b", read(UAPI_H)):
+        macro_mode[m.group(1)] = m.group(2)
+
     found: dict[str, str] = {}
     for m in re.finditer(
-        r'proc_create\(\s*"(\w+)"\s*,\s*(0[0-7]+)\s*,\s*[^,]+,\s*&(\w+)\s*\)', src
+        r'proc_create\(\s*"(\w+)"\s*,\s*(0[0-7]+|[A-Z][A-Z0-9_]*)\s*,', src
     ):
         found[m.group(1)] = m.group(2)
 
@@ -105,16 +129,33 @@ def check_proc_create(contract: dict) -> list[str]:
     }
 
     for name, mode in sorted(declared.items()):
+        want_macro = f"FW_PROCFS_{name.upper()}_MODE"
         if name not in found:
             problems.append(f"proc_create 中缺少条目 {name}（契约声明 mode {mode}）")
             continue
-        if found[name] != mode:
+        token = found[name]
+        if token.startswith("0"):
+            if token != mode:
+                problems.append(f"{name}: proc_create 字面量 {token} != 契约 {mode}")
+            else:
+                print(f"  {name:16} 字面量 {token} == 契约")
+            continue
+        if token != want_macro:
             problems.append(
-                f"{name}: proc_create mode {found[name]} != 契约 {mode}"
+                f"{name}: proc_create 用的是 {token}，应为契约宏 {want_macro}"
             )
+            continue
+        got = macro_mode.get(want_macro)
+        if got is None:
+            problems.append(f"{name}: 生成头 {os.path.basename(UAPI_H)} 缺少 {want_macro}")
+        elif got != mode:
+            problems.append(f"{name}: 生成头 {want_macro}={got} != 契约 {mode}")
+        else:
+            print(f"  {name:16} {want_macro}={got} == 契约")
+
     for name in sorted(found):
         if name not in declared:
-            problems.append(f"proc_create 中存在契约未声明的条目 {name}（mode {found[name]}）")
+            problems.append(f"proc_create 中存在契约未声明的条目 {name}（{found[name]}）")
     print(f"  契约 {len(declared)} 个条目 / proc_create {len(found)} 个条目")
     return problems
 
@@ -129,7 +170,7 @@ def check_stats_keys(contract: dict) -> list[str]:
     src = read(PROCFS_C)
     m = re.search(r"static int stats_show\(.*?\n\}", src, re.S)
     if not m:
-        return ["未能在 procfs.c 中定位 stats_show"]
+        return ["未能在 fw_procfs.c 中定位 stats_show"]
     body = m.group(0)
 
     emitted: list[tuple[str, str]] = []
@@ -174,13 +215,13 @@ def check_write_forms(contract: dict) -> list[str]:
             continue
         src = read(src_path)
         for form in decl["forms"]:
-            # 提取占位符之外的固定 token
             fixed = re.sub(r"<[^>]*>", "\0", form["pattern"])
             tokens = [t for t in re.split(r"[\s\0]+", fixed) if t]
             if not tokens:
-                # 形如 "<ip>" / "<subnet>" 的纯占位形式没有固定 token，
-                # 其可达性由 defect/语义核对负责，此处显式记录而非静默跳过
-                print(f"  {target}: '{form['pattern']}' 无固定 token（纯占位形式），跳过字面核对")
+                print(
+                    f"  {target}: '{form['pattern']}' 无固定 token（纯占位形式），"
+                    f"跳过字面核对"
+                )
                 continue
             for tok in tokens:
                 if tok not in src:
@@ -193,29 +234,14 @@ def check_write_forms(contract: dict) -> list[str]:
 
 
 def check_limits(contract: dict) -> list[str]:
-    """limit 的数值必须与源码常量一致；无上限声明必须有对应注释锚点。"""
+    """limit 的数值必须与源码常量/参数一致。"""
     problems: list[str] = []
     for target, meta in contract["limits"].items():
-        if meta["entries"] is None:
-            marker = NO_LIMIT_MARKER.get(target)
-            if marker is None:
-                problems.append(f"limit {target}: 校验器不知道其无上限的注释锚点")
-                continue
-            text, path = marker
-            if text not in read(path):
-                problems.append(
-                    f"limit {target}: 契约声明无上限，但 {os.path.relpath(path, ROOT)} "
-                    f"中找不到说明 '{text}'（可能已加上容量检查，契约需同步）"
-                )
-            else:
-                print(f"  limit {target}: 无上限，注释锚点 '{text}' 存在")
-            continue
-
         spec = LIMIT_CONST.get(target)
         if spec is None:
             problems.append(f"limit {target}: 校验器不知道其对应的源码常量")
             continue
-        const, path, _ = spec
+        const, path = spec
         src = read(path)
         # 支持 #define NAME 512 与 NAME = 65536 两种写法
         m = re.search(rf"\b{const}\b[^\n]*?(\d{{2,}})", src)
@@ -235,124 +261,147 @@ def check_limits(contract: dict) -> list[str]:
 
 
 def check_anchors(contract: dict) -> list[str]:
-    """limit 与 defect 的 where 锚点必须仍存在于源码中。
+    """按 status 核对 limit 与 defect 的 where / fix 锚点。
 
-    这里额外做**形状校验**：锚点必须是 ``<相对路径>:<非空锚点>``，且路径
-    在仓库内。否则一条被截断/含换行的畸形 where 会被当成「文件名含换行」
-    而报出难以理解的错误（曾出现：``#`` 截断把 where 切成半截字符串）。
+    形状校验：锚点必须是 ``<相对路径>:<非空锚点>``，且路径在仓库内。否则一条
+    被截断/含换行的畸形 where 会被当成「文件名含换行」而报出难以理解的错误。
     """
     problems: list[str] = []
-    entries: list[tuple[str, str, str]] = []
-    for target, meta in contract["limits"].items():
-        entries.append(("limit", target, meta["where"]))
-    for d in contract["defects"]:
-        entries.append(("defect", d["name"], d["where"]))
+    n_ok = 0
 
-    for kind, name, where in entries:
+    for target, meta in contract["limits"].items():
+        if anchor_exists(meta["where"]):
+            n_ok += 1
+        else:
+            problems.append(
+                f"limit {target}: 锚点 '{meta['where']}' 已不存在（实现已变，契约需同步）"
+            )
+
+    for d in contract["defects"]:
+        name, status = d["name"], d["status"]
+        where = d["where"]
         if "\n" in where or "\r" in where:
-            problems.append(f"{kind} {name}: where 含换行，契约被破坏: {where!r}")
+            problems.append(f"defect {name}: where 含换行，契约被破坏: {where!r}")
             continue
-        rel, sep, anchor = where.partition(":")
-        if not sep or not rel or not anchor:
-            problems.append(
-                f"{kind} {name}: where 形状非法（应为 '<路径>:<锚点>'）: {where!r}"
-            )
+        if not where.partition(":")[1]:
+            problems.append(f"defect {name}: where 形状非法（应为 '<路径>:<锚点>'）: {where!r}")
             continue
-        # 路径必须以下划线之外的合法仓库相对路径给出（禁绝对路径，随机器变化）
-        if os.path.isabs(rel) or rel.startswith(".."):
-            problems.append(f"{kind} {name}: where 必须用仓库相对路径: {rel!r}")
-            continue
-        path = os.path.join(ROOT, rel)
-        if not os.path.isfile(path):
-            problems.append(f"{kind} {name}: 锚点文件不存在 {rel}")
-            continue
-        if anchor not in read(path):
-            problems.append(
-                f"{kind} {name}: 锚点 '{anchor}' 在 {rel} 中已不存在"
-                f"（实现已变，契约需同步）"
-            )
-    print(f"  {len(entries)} 个 limit/defect 锚点已核对（含形状校验）")
+        w_exists = anchor_exists(where)
+
+        if status == "open":
+            if w_exists:
+                n_ok += 1
+            else:
+                problems.append(f"defect {name}: status=open 但 where 锚点已消失，契约需同步")
+        elif status == "retained":
+            if w_exists:
+                n_ok += 1
+            else:
+                problems.append(
+                    f"defect {name}: status=retained 但 where 注释锚点 '{where}' 不存在"
+                )
+        elif status == "fixed":
+            if w_exists:
+                rel = where.partition(":")[0]
+                problems.append(
+                    f"defect {name}: status=fixed 但旧现场 '{where}' 仍在 "
+                    f"（{rel} 若属旧实现应删除；若实现已修则契约需改判）"
+                )
+            else:
+                n_ok += 1
+            fix = d.get("fix") or ""
+            if not fix.partition(":")[1]:
+                problems.append(f"defect {name}: status=fixed 但 fix 形状非法: {fix!r}")
+            elif not anchor_exists(fix):
+                problems.append(
+                    f"defect {name}: status=fixed 但修复证据锚点 '{fix}' 不存在"
+                )
+            else:
+                n_ok += 1
+
+    print(f"  {n_ok} 个 where/fix 锚点核对通过")
     return problems
 
 
-def check_defect_claims(contract: dict) -> list[str]:
-    """核对 defect 里的「恒为 0」类断言：计数器确实没有递增点。
+def check_semantics(contract: dict) -> list[str]:
+    """对高价值 defect 追加语义核对（不只看锚点在不在）。
 
-    只核对能机械判定的那一部分（递增点存在性），不做语义推断。若某条缺陷
-    被修好（出现了递增点 / 容量检查），这里会报错，强制契约同步更新。
+    只做能机械判定的部分，不做语义推断；其余 defect 由锚点存在性覆盖。
     """
     problems: list[str] = []
-    kernel_dir = os.path.join(ROOT, "src", "kernel-module")
-    all_src = {f: read(os.path.join(kernel_dir, f))
-               for f in os.listdir(kernel_dir) if f.endswith((".c", ".h"))}
+    by_name = {d["name"]: d for d in contract["defects"]}
+
+    kernel_src = {
+        f: read(os.path.join(KERNEL_DIR, f))
+        for f in sorted(os.listdir(KERNEL_DIR))
+        if f.endswith((".c", ".h"))
+    }
+    joined = "\n".join(kernel_src.values())
 
     def inc_sites(field: str) -> list[str]:
-        """返回对该字段做递增的 (文件, 行号)。排除初始化清零与读取。"""
         hits = []
-        for fname, src in all_src.items():
+        for fname, src in kernel_src.items():
             for i, line in enumerate(src.splitlines(), 1):
                 if field not in line:
                     continue
-                if re.search(rf"atomic(64)?_inc\(\s*&?\w*\.?{field}\b", line):
-                    hits.append(f"{fname}:{i}")
-                elif re.search(rf"atomic(64)?_add\(\s*[^,]+{field}", line):
+                if re.search(rf"atomic(64)?_(inc|add)\(\s*&?\w*\.?{field}\b", line):
                     hits.append(f"{fname}:{i}")
         return hits
 
-    for d in contract["defects"]:
-        if d["name"] == "PROC_BAN_TABLE_FULL_NEVER_INC":
-            sites = inc_sites("ban_table_full_count")
-            if sites:
-                problems.append(
-                    "defect PROC_BAN_TABLE_FULL_NEVER_INC 已失效："
-                    f"ban_table_full_count 出现了递增点 {sites}，契约需同步"
-                )
-            else:
-                print("  defect PROC_BAN_TABLE_FULL_NEVER_INC: 递增点仍不存在（成立）")
-        elif d["name"] == "PROC_CLEANUP_CYCLES_DEAD":
-            sites = inc_sites("cleanup_cycles")
-            if sites:
-                problems.append(
-                    "defect PROC_CLEANUP_CYCLES_DEAD 已失效："
-                    f"cleanup_cycles 出现了递增点 {sites}，契约需同步"
-                )
-            else:
-                print("  defect PROC_CLEANUP_CYCLES_DEAD: 递增点仍不存在（成立）")
-        elif d["name"] == "PROC_STATS_STALE_NO_FLUSH":
-            # 断言两点同时成立：(a) stats_show 内不 flush；(b) flush 的调用点只在 netlink.c。
-            m = re.search(r"stats_show\s*\([^)]*\)\s*\{(.*?)\n\}", all_src["procfs.c"], re.S)
-            show_body = m.group(1) if m else ""
-            show_flushes = "fw_flush" in show_body
-            flush_sites = sorted(
-                f"{fname}:{i}"
-                for fname, src in all_src.items()
-                for i, line in enumerate(src.splitlines(), 1)
-                if "fw_flush_all_cpu_stats()" in line and "void fw_flush_all_cpu_stats" not in line
+    if "PROC_BAN_TABLE_FULL_NEVER_INC" in by_name:
+        sites = inc_sites("ban_table_full_rejects")
+        if sites:
+            print(f"  PROC_BAN_TABLE_FULL_NEVER_INC(fixed): 递增点 {sites} 已存在（成立）")
+        else:
+            problems.append(
+                "PROC_BAN_TABLE_FULL_NEVER_INC 声明已修，但 ban_table_full_rejects "
+                "仍无递增点"
             )
-            off_netlink = [s for s in flush_sites if not s.startswith("netlink.c:")]
-            if not show_flushes and not off_netlink:
-                print(f"  defect PROC_STATS_STALE_NO_FLUSH: stats_show 无 flush，"
-                      f"调用点仅 {flush_sites}（成立）")
-            else:
-                problems.append(
-                    "defect PROC_STATS_STALE_NO_FLUSH 已失效："
-                    f"stats_show flush={show_flushes}，netlink 之外的调用点={off_netlink}，契约需同步"
-                )
-        elif d["name"] == "PROC_WHITELIST_REMOVE_SUBNET_OVERREACH":
-            # 断言 remove 分支用子网比较、而自动白名单用精确主机地址。
-            m = re.search(
-                r"static int execute_whitelist_action.*?\n\}", all_src["procfs.c"], re.S)
-            body = m.group(0) if m else ""
-            uses_subnet = "& ifa->ifa_mask" in body and "NETMASK" not in body
-            exact_host = "htonl(0xFFFFFFFF)" in all_src["netdev.c"]
-            if uses_subnet and exact_host:
-                print("  defect PROC_WHITELIST_REMOVE_SUBNET_OVERREACH: "
-                      "remove 用子网比较 / 自动白名单用精确主机地址（成立）")
-            else:
-                problems.append(
-                    "defect PROC_WHITELIST_REMOVE_SUBNET_OVERREACH 已失效："
-                    f"子网比较={uses_subnet}，精确主机地址={exact_host}，契约需同步"
-                )
+
+    if "PROC_CLEANUP_CYCLES_DEAD" in by_name:
+        sites = inc_sites("cleanup_cycles")
+        if sites:
+            problems.append(
+                f"PROC_CLEANUP_CYCLES_DEAD 声明有意保留（恒为 0），但出现递增点 {sites}"
+            )
+        else:
+            print("  PROC_CLEANUP_CYCLES_DEAD(retained): 递增点仍不存在（成立）")
+
+    if "PROC_STATS_STALE_NO_FLUSH" in by_name:
+        m = re.search(r"static int stats_show\(.*?\n\}", kernel_src["fw_procfs.c"], re.S)
+        show = m.group(0) if m else ""
+        snap = re.search(r"void fw_stats_snapshot\(.*?\n\}", kernel_src["fw_stats.c"], re.S)
+        flush_in_snap = "fw_stats_flush_all()" in (snap.group(0) if snap else "")
+        if "fw_stats_snapshot(" in show and flush_in_snap:
+            print("  PROC_STATS_STALE_NO_FLUSH(fixed): stats_show→snapshot→flush_all（成立）")
+        else:
+            problems.append(
+                "PROC_STATS_STALE_NO_FLUSH 声明已修，但 stats_show 未走 snapshot "
+                f"或 snapshot 内不 flush（show={bool(show)}, flush={flush_in_snap}）"
+            )
+
+    if "STAB_FLOOD_GATE_PROCFS_ONLY" in by_name:
+        gate = "fw_ban_flood_allow" in kernel_src.get("fw_ban.c", "")
+        leaked = "check_flood_protection" in joined
+        if gate and not leaked:
+            print("  STAB_FLOOD_GATE_PROCFS_ONLY(fixed): 闸门在 fw_ban.c，旧函数已消失（成立）")
+        else:
+            problems.append(
+                "STAB_FLOOD_GATE_PROCFS_ONLY 声明已修，但 "
+                f"fw_ban_flood_allow={gate} / 旧 check_flood_protection 残留={leaked}"
+            )
+
+    if "KERNEL_NETLINK_STRUCTS_HANDWRITTEN" in by_name:
+        inc = "#include" in kernel_src.get("fw_netlink.c", "") and (
+            "generated/netlink_uapi.h" in kernel_src.get("fw_netlink.c", "")
+        )
+        if inc:
+            print("  KERNEL_NETLINK_STRUCTS_HANDWRITTEN(fixed): fw_netlink.c 引用生成头（成立）")
+        else:
+            problems.append(
+                "KERNEL_NETLINK_STRUCTS_HANDWRITTEN 声明已修，但 fw_netlink.c 未引用生成头"
+            )
+
     return problems
 
 
@@ -399,7 +448,7 @@ def main() -> int:
     print()
     failures += check_anchors(contract)
     print()
-    failures += check_defect_claims(contract)
+    failures += check_semantics(contract)
     print()
     failures += check_artifacts()
 
@@ -409,7 +458,7 @@ def main() -> int:
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("procfs 契约校验通过：条目、权限、stats 字段、写文法、容量与缺陷锚点均与实现一致")
+    print("procfs 契约校验通过：条目、权限、stats 字段、写文法、容量与缺陷处置均与实现一致")
     return 0
 
 

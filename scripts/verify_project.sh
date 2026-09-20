@@ -11,8 +11,8 @@ echo "Verifying firewall project integrity..."
 
 # Check that essential files exist (with correct paths)
 ESSENTIAL_FILES=(
-    "src/kernel-module/firewall.c"
-    "src/kernel-module/firewall.h"
+    "src/kernel-module/Makefile"
+    "src/kernel-module/fw_main.c"
     "src/daemon/main.rs"
     "Makefile"
     "Cargo.toml"

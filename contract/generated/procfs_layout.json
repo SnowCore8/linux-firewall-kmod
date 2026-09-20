@@ -5,7 +5,7 @@
   "namespace": "Procfs",
   "root": "/proc/firewall",
   "notes": [
-    "enum BanOp: 5 个成员，宽度 u8",
+    "enum BanOp: 4 个成员，宽度 u8",
     "enum WhitelistOp: 3 个成员，宽度 u8",
     "enum ConfigParam: 1 个成员，宽度 u8",
     "file bans: mode 0600 rw read_format=unstable",
@@ -20,18 +20,18 @@
     "file ip_frags: mode 0400 r read_format=unstable",
     "file port_scanners: mode 0400 r read_format=unstable",
     "file service_probes: mode 0400 r read_format=unstable",
-    "write bans: 5 种形式",
+    "write bans: 4 种形式",
     "write whitelist: 3 种形式",
     "write config: 1 种形式",
     "key stats: 13 个机器可读字段",
-    "limit bans: 无上限（锚点 src/kernel-module/firewall.h:BAN_HASH_BITS）",
-    "limit whitelist: 无上限（锚点 src/kernel-module/whitelist.c:跳过容量检查）",
-    "limit rates: 65536 条（锚点 src/kernel-module/rate-detector.c:fw_max_rate_entries）",
-    "limit udp_ports: 512 条（锚点 src/kernel-module/firewall.h:MAX_UDP_PORT_ENTRIES）",
-    "limit icmp_types: 128 条（锚点 src/kernel-module/firewall.h:MAX_ICMP_TYPE_ENTRIES）",
-    "limit port_scanners: 20 条（锚点 src/kernel-module/procfs.c:PORT_SCAN_MAX_RESULTS）",
-    "limit service_probes: 20 条（锚点 src/kernel-module/procfs.c:SERVICE_PROBE_MAX_RESULTS）",
-    "缺陷记录: 9 条（由 verify_*.py 到源码核对锚点）"
+    "limit bans: 65535 条（锚点 src/kernel-module/fw_ban.c:fw_info.max_ban_entries）",
+    "limit whitelist: 65535 条（锚点 src/kernel-module/fw_wl.c:fw_info.max_wl_entries）",
+    "limit rates: 65536 条（锚点 src/kernel-module/fw_main.c:fw_max_rate_entries）",
+    "limit udp_ports: 512 条（锚点 src/kernel-module/fw_types.h:MAX_UDP_PORT_ENTRIES）",
+    "limit icmp_types: 128 条（锚点 src/kernel-module/fw_types.h:MAX_ICMP_TYPE_ENTRIES）",
+    "limit port_scanners: 20 条（锚点 src/kernel-module/fw_types.h:PORT_SCAN_MAX_RESULTS）",
+    "limit service_probes: 20 条（锚点 src/kernel-module/fw_types.h:SERVICE_PROBE_MAX_RESULTS）",
+    "缺陷记录: 18 条（已修 16 / 有意保留 2 / 未修 0；由 verify_*.py 到源码核对锚点）"
   ],
   "files": {
     "bans": {
@@ -126,8 +126,7 @@
         "BAN_DEFAULT": 0,
         "BAN_TIMED": 1,
         "BAN_PERMANENT": 2,
-        "UNBAN": 3,
-        "UNBAN_VIA_NEGATIVE": 4
+        "UNBAN": 3
       }
     },
     "WhitelistOp": {
@@ -163,10 +162,6 @@
         {
           "pattern": "unban <ip>",
           "op": "BanOp::UNBAN"
-        },
-        {
-          "pattern": "<ip> -1",
-          "op": "BanOp::UNBAN_VIA_NEGATIVE"
         }
       ]
     },
@@ -214,95 +209,203 @@
   },
   "limits": {
     "bans": {
-      "entries": null,
-      "note": "封禁表按需扩展，无条目上限；4096 是哈希桶数（BAN_HASH_BITS=12），不是容量",
-      "where": "src/kernel-module/firewall.h:BAN_HASH_BITS"
+      "entries": 65535,
+      "note": "条目上限由模块参数 fw_max_ban_entries 控制（默认 65535），桶锁内原子检查，到限返回 -ENOSPC 并递增 ban_table_full_rejects；4096 是哈希桶数（FW_BAN_HASH_BITS），不是容量",
+      "where": "src/kernel-module/fw_ban.c:fw_info.max_ban_entries"
     },
     "whitelist": {
-      "entries": null,
-      "note": "内核侧无上限；daemon 侧 netlink/responses.rs 以 MAX_WHITELIST_ENTRIES=64 校验回包，测试 MAX_WHITELIST_CAPACITY=64",
-      "where": "src/kernel-module/whitelist.c:跳过容量检查"
+      "entries": 65535,
+      "note": "条目上限由模块参数 fw_max_whitelist_entries 控制（默认 65535），插入前在桶锁内检查；旧实现「跳过容量检查（按需扩展）」已废除。daemon 侧 netlink/responses.rs 的 MAX_WHITELIST_ENTRIES=64 是回包长度校验，与本上限无关",
+      "where": "src/kernel-module/fw_wl.c:fw_info.max_wl_entries"
     },
     "rates": {
       "entries": 65536,
-      "note": "受 fw_max_rate_entries 限制，模块参数范围 1024..262144",
-      "where": "src/kernel-module/rate-detector.c:fw_max_rate_entries"
+      "note": "受模块参数 fw_max_rate_entries 限制（默认 65536，文档化范围 1024..262144）；表满后新源地址有意放行，见 defect PROC_RATE_TABLE_FULL_FAILS_OPEN",
+      "where": "src/kernel-module/fw_main.c:fw_max_rate_entries"
     },
     "udp_ports": {
       "entries": 512,
-      "note": "显示时全量遍历，无二次截断",
-      "where": "src/kernel-module/firewall.h:MAX_UDP_PORT_ENTRIES"
+      "note": "显示时全量遍历，无二次截断；单次快照的展示行数另受 FW_ANALYSIS_UDP_PACK_MAX(64) 限制（与 netlink AnalysisResponse 共用同一快照）",
+      "where": "src/kernel-module/fw_types.h:MAX_UDP_PORT_ENTRIES"
     },
     "icmp_types": {
       "entries": 128,
-      "note": "显示时全量遍历，无二次截断",
-      "where": "src/kernel-module/firewall.h:MAX_ICMP_TYPE_ENTRIES"
+      "note": "显示时全量遍历，无二次截断；单次快照的展示行数另受 FW_ANALYSIS_ICMP_PACK_MAX(64) 限制",
+      "where": "src/kernel-module/fw_types.h:MAX_ICMP_TYPE_ENTRIES"
     },
     "port_scanners": {
       "entries": 20,
-      "note": "触发阈值为 5 个唯一端口（PORT_SCAN_THRESHOLD）",
-      "where": "src/kernel-module/procfs.c:PORT_SCAN_MAX_RESULTS"
+      "note": "触发阈值为 5 个唯一端口（fw_types.h:PORT_SCAN_THRESHOLD）",
+      "where": "src/kernel-module/fw_types.h:PORT_SCAN_MAX_RESULTS"
     },
     "service_probes": {
       "entries": 20,
-      "note": "触发阈值为 3 种协议（SERVICE_PROBE_THRESHOLD）",
-      "where": "src/kernel-module/procfs.c:SERVICE_PROBE_MAX_RESULTS"
+      "note": "触发阈值为 3 种协议（fw_types.h:SERVICE_PROBE_THRESHOLD）",
+      "where": "src/kernel-module/fw_types.h:SERVICE_PROBE_MAX_RESULTS"
     }
   },
   "defects": [
     {
       "name": "PROC_DEAD_UNBAN_FORM",
       "severity": "high",
+      "status": "fixed",
       "where": "src/kernel-module/procfs.c:seconds != -1",
-      "text": "<ip> -1 解封形式不可达：validate_duration_string 要求时长首字符为数字，'-' 直接 -EINVAL，故 seconds == -1 分支为死代码；README 与多处文档仍宣传该形式，测试也未覆盖"
+      "fix": "src/kernel-module/fw_procfs.c:PROC_DEAD_UNBAN_FORM",
+      "reason": "",
+      "text": "<ip> -1 解封形式不可达：validate_duration_string 要求时长首字符为数字，'-' 直接 -EINVAL，故 seconds == -1 分支为死代码。处置：删除该分支与 BanOp::UNBAN_VIA_NEGATIVE 枚举值；README 与 docs/{zh,en}/configuration/procfs.md 已同步删除该形式的宣传"
     },
     {
       "name": "PROC_BAN_TABLE_FULL_NEVER_INC",
       "severity": "high",
+      "status": "fixed",
       "where": "src/kernel-module/procfs.c:ban_table_full_rejects",
-      "text": "ban_table_full_rejects 计数器只在初始化时清零、在 stats 中打印，全仓库无任何递增点，恒为 0；封禁表实际上无容量检查。文档『封禁表满（4096 条）』的说法与实现不符"
+      "fix": "src/kernel-module/fw_ban.c:fw_stat_bump_ban_full",
+      "reason": "",
+      "text": "ban_table_full_rejects 计数器无任何递增点、恒为 0，封禁表实际无容量检查。处置：新增模块参数 fw_max_ban_entries（默认 65535），在桶锁内原子检查，到限返回 -ENOSPC 并递增该计数器——这是它唯一的递增点"
     },
     {
       "name": "PROC_WHITELIST_CAPACITY_UNENFORCED",
       "severity": "medium",
+      "status": "fixed",
       "where": "src/kernel-module/whitelist.c:跳过容量检查",
-      "text": "白名单容量检查被显式跳过（源码注释『跳过容量检查（按需扩展）』），文档宣称的 64 条上限在内核侧不存在；daemon 侧 64 是回包长度校验，不是写入上限"
+      "fix": "src/kernel-module/fw_wl.c:wl_reject_count",
+      "reason": "",
+      "text": "白名单容量检查被显式跳过，doc 宣称的 64 条上限在内核侧不存在。处置：新增模块参数 fw_max_whitelist_entries（默认 65535），插入前在桶锁内检查"
     },
     {
       "name": "PROC_DOC_FORMAT_FICTIONAL",
       "severity": "medium",
+      "status": "fixed",
       "where": "docs/zh/configuration/procfs.md:### 封禁 IP 列表",
-      "text": "文档给出的 bans/whitelist 输出为 Jail/Remaining/Protocol/Port 表格，源码中不存在该格式；真实输出为 '<ip> (permanent)' / '<ip> (expires in N seconds)' 与 '<ip>/<prefix>  on <dev>'"
+      "fix": "src/kernel-module/fw_procfs.c:expires in %lu seconds",
+      "reason": "",
+      "text": "文档给出的 bans/whitelist 输出为 Jail/Remaining/Protocol/Port 表格，源码中不存在该格式；真实输出为 '<ip> (permanent)' / '<ip> (expires in N seconds)' 与 '<ip>/<prefix>  on <dev>'。处置：docs/{zh,en}/configuration/procfs.md 按生成物与实现重写"
     },
     {
       "name": "PROC_CONFIG_DOC_SAYS_READONLY",
       "severity": "low",
+      "status": "fixed",
       "where": "docs/zh/configuration/procfs.md:只读文件",
-      "text": "文档称 config 为只读（写入返回 -EINVAL），实际 config_write 支持 'ban_time <seconds>' 写入，权限同为 0600"
+      "fix": "src/kernel-module/fw_procfs.c:ban_time: %u seconds",
+      "reason": "",
+      "text": "文档称 config 为只读（写入返回 -EINVAL），实际 config_write 支持 'ban_time <seconds>' 写入，权限 0600。处置：文档改述为可写并给出真实命令文法"
     },
     {
       "name": "PROC_CLEANUP_CYCLES_DEAD",
       "severity": "low",
-      "where": "src/kernel-module/procfs.c:cleanup_cycles",
+      "status": "retained",
+      "where": "src/kernel-module/fw_types.h:有意保留",
+      "fix": "",
+      "reason": "该键自监控诞生起就在 stats 里，外部解析脚本与测试按行取值；删键会让下游静默错位。新实现已无全局清理线程（改为 per-entry 定时器），故恒为 0，但保留键位并在 fw_types.h 的字段注释里写明「恒为 0」，避免被误读成故障",
       "text": "cleanup_cycles 已无全局清理线程，仅初始化时清零，恒为 0；保留字段只为不破坏外部解析"
     },
     {
       "name": "PROC_WRITE_NO_TEXT_ERROR",
       "severity": "low",
-      "where": "src/kernel-module/procfs.c:return -EFAULT",
+      "status": "retained",
+      "where": "src/kernel-module/fw_procfs.c:负 errno",
+      "fix": "",
+      "reason": "内核侧不给写失败提供文本通道是有意设计：单次 write(2) 返回负 errno 是最小的、与所有 procfs 用户共用的约定；返回文本会诱使调用方解析日志而非错误码。错误原因只进内核日志",
       "text": "写失败一律返回负 errno，无文本错误通道；调用方只能从 errno 区分 -EINVAL/-EBUSY/-ENOMEM/-EPERM，无法得知具体拒绝原因"
     },
     {
       "name": "PROC_STATS_STALE_NO_FLUSH",
       "severity": "medium",
+      "status": "fixed",
       "where": "src/kernel-module/procfs.c:stats_show",
-      "text": "stats_show 直接读 fw_info 的全局计数器，不调用 fw_flush_all_cpu_stats()；而该函数只在 netlink.c 的 STATS_QUERY(818) 与另一处(1346)被调用。热路径把 packets_accepted/packets_dropped 累加在 per-CPU 的 fw_cpu_stats 中，达到 FW_PER_CPU_BATCH_SIZE(1024) 才 flush 一次。因此只读 procfs 的监控者在低速率下会看到陈旧值，最坏每 CPU 低报 1023 个包（8 核最多约 8184）——实测：空闲主机读数停在某值不动，打流后需再做一次 netlink rates 查询才跃升数万"
+      "fix": "src/kernel-module/fw_procfs.c:fw_stats_snapshot",
+      "reason": "",
+      "text": "stats_show 直接读 fw_info 的全局计数器，不调用跨 CPU flush；热路径把计数累加在 per-CPU 槽、达 FW_PER_CPU_BATCH_SIZE(1024) 才 flush 一次，因此只读 procfs 的监控者在低速率下会看到陈旧值（最坏每 CPU 低报 1023 个包）。处置：stats_show 改经 fw_stats_snapshot()，其内部先 fw_stats_flush_all()，与 netlink STATS_QUERY 口径一致"
     },
     {
       "name": "PROC_WHITELIST_REMOVE_SUBNET_OVERREACH",
       "severity": "low",
+      "status": "fixed",
       "where": "src/kernel-module/procfs.c:execute_whitelist_action",
-      "text": "白名单 remove 判定「本机接口 IP」时用 (ip & ifa_mask) == (ifa_local & ifa_mask) 的**子网**比较，而加入自动白名单（netdev.c 地址发现）用的是精确主机地址 */32。后果：只要接口配了 /24，该子网内任意白名单条目都被判为「本机接口 IP」且拒绝删除（-EPERM），用户无法撤销自己显式添加的同网段条目。实测：接口 10.99.0.1/24 时 `add 10.99.0.11` 后再 `remove 10.99.0.11` 报 EPERM，dmesg 记『拒绝删除本机接口 IP 白名单: 10.99.0.11/32』；把接口改成 /32 后同一序列立即成功"
+      "fix": "src/kernel-module/fw_procfs.c:白名单 remove 不再自查本机 IP",
+      "reason": "",
+      "text": "白名单 remove 判定「本机接口 IP」时用 (ip & ifa_mask) == (ifa_local & ifa_mask) 的子网比较，而自动白名单用精确主机地址 /32；接口配 /24 时该子网内任意白名单条目都判为「本机接口 IP」且拒绝删除（-EPERM）。处置：新实现不在 procfs 侧自查本机 IP，交由 fw_wl_remove() 按精确主机地址判定"
+    },
+    {
+      "name": "PROC_RATE_TABLE_FULL_FAILS_OPEN",
+      "severity": "medium",
+      "status": "fixed",
+      "where": "src/kernel-module/rate-detector.c:无容量上限已被撤销",
+      "fix": "src/kernel-module/fw_rate.c:rate_slot_spill",
+      "reason": "",
+      "text": "速率表满时旧实现静默返回 -ENOSPC、不计数也不上报，『表满』这一状态在 procfs/netlink 两侧都不可见，且『满则放行』的失败开放方向只在代码里有、契约里没有。处置：该方向保留（表满时丢包会误伤正常流量）但显式写入契约与 fw_rate.h：满则放行，并递增 fw_info.rate_slot_spill 供观测"
+    },
+    {
+      "name": "KERNEL_NETLINK_STRUCTS_HANDWRITTEN",
+      "severity": "high",
+      "status": "fixed",
+      "where": "src/kernel-module/netlink.c:struct fw_nl_ddos_event",
+      "fix": "src/kernel-module/fw_netlink.c:contract/generated/netlink_uapi.h",
+      "reason": "",
+      "text": "旧实现在 netlink.c 里手抄了 16 个与契约同形的 __packed 结构体，与生成头各改各的——这是契约漂移的主要来源（DaemonRegisterAck 载荷错位即由此产生）。处置：内核侧不再声明任何报文结构，一律 #include 生成头，编译期由生成头的 _Static_assert 保证布局"
+    },
+    {
+      "name": "KERNEL_NO_DAEMON_REGISTER_ACK_PAYLOAD",
+      "severity": "high",
+      "status": "fixed",
+      "where": "src/kernel-module/netlink.c:sizeof(*resp) - 1",
+      "fix": "src/kernel-module/fw_netlink.c:fw_nl_send_register_ack",
+      "reason": "",
+      "text": "旧实现把 accepted 写进 12 字节头的最后一个字节（offset 11），而契约要求它是紧随头之后的独立字节（offset 12）。daemon 侧因此完全不解析该 ack。处置：按契约写独立 accepted 字节，总长 13（生成头有 _Static_assert）"
+    },
+    {
+      "name": "KERNEL_LIST_RESPONSES_UNPAGED",
+      "severity": "high",
+      "status": "fixed",
+      "where": "src/kernel-module/netlink.c:自适应：无上限限制，返回所有条目",
+      "fix": "src/kernel-module/fw_netlink.c:FW_NL_BANS_PAGE_MAX",
+      "reason": "",
+      "text": "LIST_RATES / LIST_WHITELIST 旧实现无分页无上限，一次返回全部条目（LIST_BANS 在上一提交已分页，故不在本条范围）：单条 84 字节 × 65535 条 ≈ 5.25 MB，msg_len(u16) 在 780 条以上回绕，且以 GFP_ATOMIC 做数 MB 分配。处置：三类列表响应统一按 offset/limit 分页（LIST_BANS 一并迁移到同一闸门），单页上限由 u16 上限反推"
+    },
+    {
+      "name": "KERNEL_RATES_PPS_HARDCODED_DIVISOR",
+      "severity": "medium",
+      "status": "fixed",
+      "where": "src/kernel-module/netlink.c:pkts / 2",
+      "fix": "src/kernel-module/fw_netlink.c:fw_nl_rates_last_jiffies",
+      "reason": "",
+      "text": "global_pps/global_bps 旧实现硬编码除以 2，与 daemon 的 2 秒轮询周期隐式耦合——daemon 改周期即静默错值。处置：记录两次查询之间的实际 jiffies 间隔并据此折算，不再依赖任何跨模块常数"
+    },
+    {
+      "name": "KERNEL_STATS_FLUSH_CALLSITE_SILENT",
+      "severity": "low",
+      "status": "fixed",
+      "where": "src/kernel-module/netlink.c:fw_flush_all_cpu_stats",
+      "fix": "src/kernel-module/fw_stats.c:void fw_stats_snapshot",
+      "reason": "",
+      "text": "跨 CPU flush 在旧实现里由 netlink.c 两处显式调用，任意新增读侧入口（如 procfs stats）都可能忘记调用而读到陈旧值——PROC_STATS_STALE_NO_FLUSH 正是这样产生的。处置：flush 收进快照函数内部（fw_stats_snapshot / fw_stats_read_analysis / fw_stats_take_traffic），调用方无法忘记"
+    },
+    {
+      "name": "STAB_FLOOD_GATE_PROCFS_ONLY",
+      "severity": "medium",
+      "status": "fixed",
+      "where": "src/kernel-module/procfs.c:check_flood_protection",
+      "fix": "src/kernel-module/fw_ban.c:fw_ban_flood_allow",
+      "reason": "",
+      "text": "泛洪保护只在 procfs 路径生效：check_flood_protection() 全仓库唯一调用点是 procfs.c。netlink 指令路径与 DDoS 自决封禁路径都不检查 fw_max_bans_per_second，每条封禁都伴随 kmalloc + 定时器 + 链表插入 + netlink 事件。处置：泛洪闸门收进 fw_ban_try_add()，procfs / netlink / DDoS 三条路径统一经过同一道闸门"
+    },
+    {
+      "name": "STAB_LOCAL_EMPTY_TABLE_FAILS_OPEN",
+      "severity": "medium",
+      "status": "fixed",
+      "where": "src/kernel-module/netdev.c:local_ip_cache",
+      "fix": "src/kernel-module/fw_main.c:fw_netdev_rebuild_local",
+      "reason": "",
+      "text": "本机地址集合为空时旧实现回落到「count == 0 即判定非本机」，于是本机地址会被当成外来地址参与封禁——一个失败开放的窗口。处置：fw_netdev_rebuild_local() 在注册钩子之前同步建表并发布；分配失败返回负值，调用者放弃注册钩子直接放弃加载（宁可不工作，也不带病运行）"
+    },
+    {
+      "name": "STAB_EXPORTED_FUNCS_UNUSED",
+      "severity": "low",
+      "status": "fixed",
+      "where": "src/kernel-module/firewall-main.c:EXPORT_SYMBOL",
+      "fix": "src/kernel-module/fw_main.c:模块内自足",
+      "reason": "",
+      "text": "get_fw_info() / is_banned() / is_permanently_banned() 三个函数只有 EXPORT_SYMBOL、模块内无调用点，外部使用者也无从证实。处置：确认无外部使用者后删除导出，新实现不导出任何符号（模块内自足）"
     }
   ]
 }

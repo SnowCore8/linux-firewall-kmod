@@ -1,19 +1,29 @@
 #!/usr/bin/env python3
-"""三端布局一致性校验：生成物 vs 内核手写 vs daemon 手写。
+"""netlink 线格式一致性校验：生成物 vs 布局清单 vs daemon 手写。
 
 为什么需要这一步
 ----------------
 生成器自己产出的 ``_Static_assert`` 只能证明「生成物自洽」，不能证明
-「生成物与原实现线格式相同」。若两者不等长，换用生成物就等于**静默改变
-线协议**——内核与 daemon 会互相丢弃报文，且不会报错。因此必须分别拿
-两侧的真实源码定义做第三方比对。
+「生成物与 daemon 的 Rust 结构体线格式相同」。若两者不等长/错位，换用生成物
+就等于**静默改变线协议**——内核与 daemon 会互相丢弃报文，且不会报错。因此
+必须拿两侧的真实定义做第三方比对。
 
-做法
-----
-1. 从 ``src/kernel-module/netlink.c`` **机械提取**结构体定义（不人工转录，
-   避免引入抄写错误），与生成的头文件各自编译，逐字段比对 ``sizeof`` 与
-   ``offsetof``。
-2. 从 daemon 侧 Rust 结构体取 ``size_of`` 与 ``offset_of!``，同样逐字段比对。
+重写后的口径变化（Phase 1）
+---------------------------
+旧实现把与契约同形的 ``__packed`` 结构体**手抄**在 ``netlink.c`` 里，所以旧
+校验器从 ``netlink.c`` 机械提取结构体、与生成头逐字段比 ``sizeof``/``offsetof``。
+重写后内核侧**不再声明任何报文结构**，一律 ``#include`` 生成头（经
+``fw_types.h``）。于是：
+
+1. 内核侧不再有可比对的手写结构体。校验器改为**结构断言**
+   （``check_kernel_structure``）：新实现目录里不得出现 ``struct fw_nl*``
+   定义，且必须经 ``fw_types.h`` 引入生成头。
+2. 真正的第三方比对落在 **daemon（Rust）** 上——它仍是手写的。比对方式不变：
+   编译取 ``size_of`` / ``offset_of!``，逐字段比。
+3. 为防「布局清单 JSON 与生成头 C 侧漂移」，新增一轮：编译生成头取
+   ``sizeof``/``offsetof``，与 ``netlink_layout.json`` 逐字段比。JSON 是
+   daemon 比对的基准，生成头是内核实际编译的输入——两者必须一致，否则
+   内核与 daemon 各自「与 JSON 一致」却彼此不一致。
 
 比对**字段偏移**而非仅总长：字段顺序颠倒但总长相同的结构体，只看 sizeof
 会漏掉，而线格式已经错了。
@@ -34,33 +44,12 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GEN_DIR = os.path.join(ROOT, "contract", "generated")
-KERNEL_NETLINK_C = os.path.join(ROOT, "src", "kernel-module", "netlink.c")
+KERNEL_DIR = os.path.join(ROOT, "src", "kernel-module")
 LAYOUT_JSON = os.path.join(GEN_DIR, "netlink_layout.json")
 
-# 生成物结构名 = fw_ + snake(IDL 名)；两侧手写代码用各自的命名
-KERNEL_TO_GEN = {
-    "fw_nlmsg_hdr": "MsgHdr",
-    "fw_nl_ddos_event": "DdosEvent",
-    "fw_nl_ban_state_change": "BanStateChange",
-    "fw_nl_whitelist_state_change": "WhitelistStateChange",
-    "fw_nl_cmd_result": "CmdResult",
-    "fw_nl_ban_cmd": "BanIp",
-    "fw_nl_config_update": "SetConfig",
-    "fw_nl_stats_response": "StatsResponse",
-    "fw_nl_udp_port_item": "UdpPortItem",
-    "fw_nl_icmp_type_item": "IcmpTypeItem",
-    "fw_nl_scanner_item": "ScannerItem",
-    "fw_nl_analysis_response": "AnalysisResponse",
-    "fw_nl_ban_entry": "BanEntry",
-    "fw_nl_list_bans_response": "ListBansResponse",
-    "fw_nl_list_bans_query": "ListBansQuery",
-    "fw_nl_whitelist_entry": "WhitelistEntry",
-    "fw_nl_list_whitelist_response": "ListWhitelistResponse",
-    "fw_nl_whitelist_cmd": "AddWhitelist",
-    "fw_nl_rate_entry": "RateEntry",
-    "fw_nl_list_rates_response": "ListRatesResponse",
-    "fw_nl_config_ack": "ConfigAck",
-}
+# 生成物结构名 = fw_ + snake(IDL 名)。
+# 内核侧重写后**不再手写任何报文结构体**（一律 #include 生成头），故这里没有
+# 「内核结构体名 -> IDL 名」映射——内核侧改为结构断言，见 check_kernel_structure()。
 
 # daemon 侧与生成物同形的结构体（其余 daemon 结构体与内核无共用布局）
 RUST_TO_GEN = {
@@ -86,35 +75,45 @@ def gen_c_name(gen_name: str) -> str:
     return f"fw_{snake(gen_name)}"
 
 
-def extract_kernel_structs(src: str) -> str:
-    """机械提取 netlink.c 中结构体定义块与其依赖的数值宏。
+def check_kernel_structure() -> list[str]:
+    """内核侧结构断言：不手抄报文结构，只消费生成头。
 
-    数值宏（如 ``FW_NL_ANALYSIS_MAX_UDP_PORTS``）用于数组长度，必须一并提取，
-    否则探针无法编译。
+    对应 defect ``KERNEL_NETLINK_STRUCTS_HANDWRITTEN``（status=fixed）：旧实现
+    在 ``netlink.c`` 里手抄了 16 个与契约同形的 ``__packed`` 结构体，与生成头
+    各改各的。新实现必须满足两点，否则「线格式只有一处」的纪律就被打破：
+
+    (a) 重写后的 ``fw_*.c/h`` 中不存在 ``struct fw_nl*`` **定义**；
+    (b) 生成头经 ``fw_types.h`` 引入（内核实际编译的线格式定义来自这里）。
+
+    旧实现文件（``netlink.c`` 等）在 Phase 1 末删除，故不参与本断言——本断言
+    只约束新实现，且**不**因为旧文件还在而漏过新文件里的手抄。
     """
-    blocks = []
-    cur: list[str] = []
-    in_block = False
-    for line in src.splitlines():
-        # 纯数值宏（不含表达式、不含类型）直接保留
-        m = re.match(r"^#define\s+(\w+)\s+(\d+)\s*$", line)
-        if m and not in_block:
-            blocks.append(line)
-            continue
-        if not in_block:
-            if re.match(r"^struct fw_nl\w*\s*\{", line):
-                in_block = True
-                cur = [line]
-            continue
-        cur.append(line)
-        if re.match(r"^\}\s*__packed;", line):
-            blocks.append("\n".join(cur))
-            in_block = False
-    if in_block:
-        raise SystemExit("提取失败: netlink.c 中有未闭合的结构体定义")
-    if not any(b.startswith("struct ") for b in blocks):
-        raise SystemExit("提取失败: netlink.c 中未找到任何 struct fw_nl* 定义")
-    return "\n".join(blocks)
+    problems: list[str] = []
+    new_files = [
+        f for f in sorted(os.listdir(KERNEL_DIR))
+        if f.startswith("fw_") and f.endswith((".c", ".h"))
+    ]
+    if not new_files:
+        return ["错误: src/kernel-module 下未找到任何 fw_*.c/h 新实现文件"]
+
+    for f in new_files:
+        with open(os.path.join(KERNEL_DIR, f), encoding="utf-8") as fh:
+            src = fh.read()
+        for m in re.finditer(r"^struct (fw_nl\w*)\s*\{", src, re.M):
+            problems.append(
+                f"{f}: 手写了报文结构体 {m.group(1)}——内核侧不得声明任何报文结构，"
+                f"应改由生成头提供"
+            )
+    if not problems:
+        print(f"  {len(new_files)} 个新实现文件均未手写 struct fw_nl* 定义")
+
+    with open(os.path.join(KERNEL_DIR, "fw_types.h"), encoding="utf-8") as fh:
+        types_h = fh.read()
+    if "#include" in types_h and "generated/netlink_uapi.h" in types_h:
+        print("  fw_types.h 经 #include 引入生成头（线格式单处来源）")
+    else:
+        problems.append("fw_types.h 未引入 contract/generated/netlink_uapi.h")
+    return problems
 
 
 def c_probe_source(defs: str, structs: list[str], fields: dict[str, list[str]]) -> str:
@@ -279,31 +278,15 @@ def main() -> int:
     with open(LAYOUT_JSON, encoding="utf-8") as fh:
         layout = json.load(fh)
     layouts = layout["layouts"]
-    gen_sizes = {n: v["size"] for n, v in layouts.items()}
 
     def gen_fields(idl: str) -> list[str]:
         """生成物里该结构体的定长字段名（不含变长尾部）。"""
         return [f["name"] for f in layouts[idl]["fields"] if not f.get("tail")]
 
-    with open(KERNEL_NETLINK_C, encoding="utf-8") as fh:
-        kernel_defs = extract_kernel_structs(fh.read())
     with open(os.path.join(GEN_DIR, "netlink_uapi.h"), encoding="utf-8") as fh:
         gen_header = fh.read().replace("#include <linux/types.h>", "")
 
-    kernel_names = sorted(re.findall(r"^struct (fw_nl\w*)\s*\{", kernel_defs, re.M))
     gen_names = sorted(gen_c_name(n) for n in layouts)
-
-    # 内核探针字段：由「内核结构体名 -> IDL 名 -> 生成物字段名」推出。
-    # 内核结构体首字段可能是公共头 hdr，探针里保留原名即可（内核真实成员名）。
-    kernel_fields: dict[str, list[str]] = {}
-    kernel_field_map: dict[str, list[str]] = {}
-    for kn in kernel_names:
-        idl = KERNEL_TO_GEN.get(kn)
-        if idl is None:
-            continue
-        fns = gen_fields(idl)
-        kernel_fields[kn] = (["hdr"] if layouts[idl].get("kind") == "message" else []) + fns
-        kernel_field_map[kn] = fns
 
     gen_fields_by_c: dict[str, list[str]] = {}
     for gname in gen_names:
@@ -315,33 +298,35 @@ def main() -> int:
     }
 
     failures: list[str] = []
+    failures += check_kernel_structure()
+    print()
+
     with tempfile.TemporaryDirectory() as td:
-        k_res = compile_and_run(
-            c_probe_source(kernel_defs, kernel_names, kernel_fields), td, "kernel"
-        )
         g_res = compile_and_run(
             c_probe_source(gen_header, gen_names, gen_fields_by_c), td, "generated"
         )
 
-    print("=== 内核手写 vs 生成物（C 侧，编译取 sizeof/offsetof）===")
-    for kn in kernel_names:
-        idl = KERNEL_TO_GEN.get(kn)
-        if idl is None:
-            print(f"  {kn:36} {k_res[kn]['size']:5}  （生成物无对应，跳过）")
-            continue
-        gn = gen_c_name(idl)
-        ks, gs = int(k_res[kn]["size"]), int(g_res[gn]["size"])
-        if ks != gs:
-            failures.append(f"{kn}/{gn}: sizeof 内核 {ks} != 生成 {gs}")
-        for fn_ in kernel_field_map[kn]:
-            ko = k_res[kn]["offsets"].get(fn_)  # type: ignore[union-attr]
-            go = g_res[gn]["offsets"].get(fn_)  # type: ignore[union-attr]
-            if ko != go:
+    # 生成头是内核真正编译的输入，布局清单 JSON 是 daemon 比对的基准。
+    # 两侧分别与对方比对：任一漂移都会让内核与 daemon 各自的检查都「通过」
+    # 而实际线格式已错——所以这一轮必须比。
+    print("=== 生成头 vs 布局清单（C 侧，编译取 sizeof/offsetof）===")
+    for gname in gen_names:
+        idl = next(n for n in layouts if gen_c_name(n) == gname)
+        js = int(layouts[idl]["size"])
+        cs = int(g_res[gname]["size"])
+        if js != cs:
+            failures.append(f"{gname}: sizeof 生成头 {cs} != 布局清单 {js}")
+        for fn_ in gen_fields_by_c[gname]:
+            co = g_res[gname]["offsets"].get(fn_)  # type: ignore[union-attr]
+            jo = next(
+                f["offset"] for f in layouts[idl]["fields"] if f["name"] == fn_
+            )
+            if co != jo:
                 failures.append(
-                    f"{kn}/{gn}.{fn_}: offset 内核 {ko} != 生成 {go}"
+                    f"{gname}.{fn_}: offset 生成头 {co} != 布局清单 {jo}"
                 )
-        mark = "OK " if ks == gs else "差异"
-        print(f"  {mark} {kn:34} 内核={ks:5} 生成={gs:5}  字段 {len(kernel_field_map[kn])} 个")
+        mark = "OK " if js == cs else "差异"
+        print(f"  {mark} {gname:34} 生成头={cs:5} 清单={js:5}  字段 {len(gen_fields_by_c[gname])} 个")
 
     print()
     print("=== daemon 手写 vs 生成物（Rust 侧，编译取 size_of/offset_of）===")
@@ -376,7 +361,7 @@ def main() -> int:
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("一致性校验通过：三端布局完全一致")
+    print("一致性校验通过：生成头与布局清单一致，daemon 手写结构体与生成物逐字段一致")
     return 0
 
 

@@ -37,7 +37,6 @@
 #define FW_PROCFS_BAN_OP_BAN_TIMED 1
 #define FW_PROCFS_BAN_OP_BAN_PERMANENT 2
 #define FW_PROCFS_BAN_OP_UNBAN 3
-#define FW_PROCFS_BAN_OP_UNBAN_VIA_NEGATIVE 4
 
 #define FW_PROCFS_WHITELIST_OP_ADD 0
 #define FW_PROCFS_WHITELIST_OP_ADD_IMPLICIT 1
@@ -49,7 +48,6 @@
 #define FW_PROCFS_BANS_FORM_BAN_TIMED "<ip> <seconds>"
 #define FW_PROCFS_BANS_FORM_BAN_PERMANENT "<ip> 0"
 #define FW_PROCFS_BANS_FORM_UNBAN "unban <ip>"
-#define FW_PROCFS_BANS_FORM_UNBAN_VIA_NEGATIVE "<ip> -1"
 
 #define FW_PROCFS_WHITELIST_FORM_ADD "add <subnet>"
 #define FW_PROCFS_WHITELIST_FORM_ADD_IMPLICIT "<subnet>"
@@ -72,8 +70,8 @@
 #define FW_PROCFS_KEY_RECENT_ADDITIONS "recent_additions"
 
 /* 容量上限；未列出的表表示实现中无条目上限 */
-/* bans: 无上限（封禁表按需扩展，无条目上限；4096 是哈希桶数（BAN_HASH_BITS=12），不是容量） */
-/* whitelist: 无上限（内核侧无上限；daemon 侧 netlink/responses.rs 以 MAX_WHITELIST_ENTRIES=64 校验回包，测试 MAX_WHITELIST_CAPACITY=64） */
+#define FW_PROCFS_LIMIT_BANS 65535
+#define FW_PROCFS_LIMIT_WHITELIST 65535
 #define FW_PROCFS_LIMIT_RATES 65536
 #define FW_PROCFS_LIMIT_UDP_PORTS 512
 #define FW_PROCFS_LIMIT_ICMP_TYPES 128

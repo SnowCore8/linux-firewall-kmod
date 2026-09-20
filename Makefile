@@ -61,7 +61,8 @@ build-quick: kernel-module daemon
 .PHONY: kernel-module
 kernel-module: $(KERNEL_MODULE)
 
-$(KERNEL_MODULE): $(wildcard $(KERNEL_SRC_DIR)/*.c) $(KERNEL_SRC_DIR)/firewall.h
+$(KERNEL_MODULE): $(wildcard $(KERNEL_SRC_DIR)/*.c) $(wildcard $(KERNEL_SRC_DIR)/*.h) \
+	$(KERNEL_SRC_DIR)/Makefile
 	@if [ ! -d "$(KDIR)" ]; then \
 		echo ""; \
 		echo "======================================================="; \

@@ -55,6 +55,10 @@ tests/*.log
 tests/reports/
 /tmp/fw_*
 
+# Python 字节码缓存（跑 pytest 时产生）
+__pycache__/
+*.py[cod]
+
 # ---- OS 特定文件 ----
 .DS_Store
 Thumbs.db
