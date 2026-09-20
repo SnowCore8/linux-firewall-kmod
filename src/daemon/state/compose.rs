@@ -300,6 +300,48 @@ pub fn publish_stats_changed() {
 }
 
 // ============================================================================
+// 过期封禁清理（固定周期）
+// ============================================================================
+
+/// 清掉两侧已过期的封禁，并按旧口径补齐解封记账。
+///
+/// **只应由组合根的 scheduler 周期调用**——这是结构问题 E 的修法：旧实现把限流
+/// `purge_expired` 挂在 `web_ui/ban_ops.rs::get_active_bans()` 的**读**路径上，SSE
+/// 每秒读一次就顺手写一次状态（清表 + 改计数器）。迁移后读路径零副作用，清理改由
+/// 调度器按固定周期驱动。
+///
+/// 两侧都要清：
+///
+/// - 旧 `ACTIVE_BAN_CACHE` 仍被 Prometheus 的 `active_bans` gauge、`/health` 的计数
+///   与 `web_ui/stats.rs` 读。读了旧全局的清理入口后若不再清它，过期条目会永久滞留在
+///   那张表里，活跃封禁数只增不减。
+/// - 新 [`super::bans::Bans`] 是 SSE 与 REST 的数据源；内核侧封禁过期**本就会**发
+///   `FW_BAN_ACTION_UNBAN` 自愈，但事件可能丢，故这里仍按显式周期清理。
+///
+/// 记账（`total_unbans` / 封禁时长直方图）与旧实现**逐字一致**，属搬家而非新增。
+/// 与解封事件路径的记账重叠是既有现象（该路径的 `total_unbans` 累加是无条件的），
+/// 不由本次改动引入：谁先把条目从表里删掉，另一条路就删不到、也就不再记一次时长。
+pub fn purge_expired_bans(now: i64) {
+    if let Some(cache) = crate::types::ACTIVE_BAN_CACHE.get() {
+        for ban in cache.purge_expired(now) {
+            crate::types::DAEMON_STATS
+                .total_unbans
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let duration = if ban.expires_at > 0 {
+                ban.expires_at - ban.banned_at
+            } else {
+                now - ban.banned_at
+            };
+            crate::types::record_ban_duration(duration);
+        }
+    }
+
+    if let Some(state) = GLOBAL_STATE.get() {
+        state.bans().purge_expired(now);
+    }
+}
+
+// ============================================================================
 // 计数器镜像（固定周期）
 // ============================================================================
 

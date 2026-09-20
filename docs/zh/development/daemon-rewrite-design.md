@@ -430,7 +430,7 @@ sequenceDiagram
 | 注册失联不可见 | 引入 `Lease` + 解析 `RegisterAck`（修 K） | 新侧已就位（`kernel/{client,lease}.rs`），但 `main.rs` 与各写入点仍走旧 `crate::netlink`，未接入生产 |
 | 两条基线/配置下发路径 | 收敛到 `client.set_config()`（修 L） | 同上：`kernel/client.rs::set_config` 已就位，生产仍走旧 `crate::netlink::sync_protocol_thresholds` |
 | 白名单 CIDR 键不一致 | 单一规范化函数（修 M） | 部分：`state/cidr.rs::CidrKey` 已就位、旧写路径已退役；旧函数 `ban/mod.rs::build_cidr_key` 仍在库中、`status` 仍 `open` |
-| 读路径副作用（purge + 统计） | purge 改为显式方法，调度器独立任务调用；读路径只读（修 E） | **未完成**：`Bans::purge_expired` 已就位但调度器未装配，生产仍走旧 `web_ui/ban_ops.rs` 的限流 purge；`status` 仍 `open` |
+| 读路径副作用（purge + 统计） | purge 改为显式方法，调度器独立任务调用；读路径只读（修 E） | 已完成：`state/compose.rs::purge_expired_bans` + `runtime/scheduler.rs` 周期调用 + `main.rs` 装配 `runtime::spawn_periodic`；`get_active_bans()` 的限流 purge 与其节流静态量已删，`status` 转 `fixed` |
 | 两个空转周期任务 | `write_stats_snapshot` 与 `check_and_handle_ddos` 均改为空操作（只留调试日志） | 已完成 |
 | `protocol.rs` 注释「20 字节」 | 随 codec 改用生成物而消失 | 未完成：新 `kernel/codec` 已不手写结构，但旧 `netlink/protocol.rs:94` 的「20 字节」注释仍在（旧模块未删） |
 
@@ -466,8 +466,8 @@ sequenceDiagram
 | **2.A** | 契约修订（netlink 分页参数 + `seq` 语义 + `RegisterAck`；http 的 sse-status 与缺陷条目） | `bash scripts/check_contract.sh` 全绿；门禁绿 |
 | **2.B** | 运行时骨架：`runtime/supervisor` + `signal`（`signalfd`）+ `scheduler`（单调时钟）+ 有界 channel 契约 + 关停顺序 | 门禁绿；关停顺序有测试（先停 netlink 再 flush 库）；定时器不随事件吞吐漂移（含测试） |
 | **2.C** | 主链路重写：`ingest` + `parse` + `decision` | 结构问题 A/B/C 消除（有测试）；`decision` 判定语义与旧实现逐案一致（对照测试） |
-| **2.D** | `kernel` 层重写：`codec`（用生成物）+ `transport` + `reactor`（type+seq 路由）+ `client` + `lease`；全部分页 | 结构问题 I/J/K/L 消除；分页有 >1 页的用例；注册失联可见。**截至 2.E-4b-2：J 已消除；I 的新 reactor 已就位但生产仍走旧路由；K/L 同此**（`kernel/` 尚未接入 `main.rs`，见「修复项与落地状态」） |
-| **2.E** | `state` 层：单所有者 + 快照 hub；`api` 薄适配层 + 读路径零副作用 | 结构问题 E/F/M 消除；SSE 按域序列化；慢消费者不拖慢全局。**截至 2.E-4b-2：F 已消除；M 的新侧已就位、旧函数未删；E 未消除**（`runtime/` 未接入生产，见 2.E 落地明细） |
+| **2.D** | `kernel` 层重写：`codec`（用生成物）+ `transport` + `reactor`（type+seq 路由）+ `client` + `lease`；全部分页 | 结构问题 I/J/K/L 消除；分页有 >1 页的用例；注册失联可见。**截至 2.E-4c：J 已消除；I 的新 reactor 已就位但生产仍走旧路由；K/L 同此**（`kernel/` 尚未接入 `main.rs`，见「修复项与落地状态」） |
+| **2.E** | `state` 层：单所有者 + 快照 hub；`api` 薄适配层 + 读路径零副作用 | 结构问题 E/F/M 消除；SSE 按域序列化；慢消费者不拖慢全局。**截至 2.E-4c：E/F 已消除；M 的新侧已就位、旧函数未删**（`kernel/` 未接入生产故 M 的旧键规则仍在，见「修复项与落地状态」） |
 | **2.F** | `persist` 背压改造 + 测试债务替换 | 结构问题 G 消除（背压有测试）；恒真断言全部替换为可失败断言 |
 | **2.G** | 文档重写：`docs/{zh,en}/architecture/daemon.md` 按新实现全量重写；`docs/{zh,en}/architecture/data-flow.md` 修正陈旧数字 | 文档与代码逐项对齐 |
 
@@ -491,7 +491,8 @@ sequenceDiagram
 | 2.E-3 `api` 薄适配层 + SSE | 已完成 |
 | 2.E-4a 组合根装配（`state::compose` 镜像 + `main.rs` 注入） | 已完成 |
 | 2.E-4b-1 棘轮铺垫（E/F/M 记入契约 + `verify_http.py` 锚点 status-aware） | 已完成 |
-| 2.E-4b-2 退役旧读路径 + 挂载新路由 + 按 `where` 存亡翻转四条缺陷 | 已完成（E 留 `open`，见下） |
+| 2.E-4b-2 退役旧读路径 + 挂载新路由 + 按 `where` 存亡翻转四条缺陷 | 已完成（E 时留 `open`，见下） |
+| 2.E-4c 接入 `runtime/`：调度器接管周期清理与计数器镜像 + `main.rs` 装配；E 转 `fixed` | 已完成 |
 | 2.F–2.G | 未开始 |
 
 ### 2.A 落地明细
@@ -585,7 +586,7 @@ netlink 线格式三端（契约 / 内核 / daemon）同一步落地，布局经
 
 ### 2.E 落地明细
 
-2.E 分六步落地，**退役与棘轮同一步**：2.E-1 ~ 2.E-3 与 2.E-4a 只新增 `state` / `api` 模块并
+2.E 分七步落地，**退役与棘轮同一步**：2.E-1 ~ 2.E-3 与 2.E-4a 只新增 `state` / `api` 模块并
 把新状态接上生产写入点，旧 `web_ui/` 与 `http_exporter/handler.rs` 暂不动（按「保留编译、
 分批迁入」）；最后一步（2.E-4b）才删旧读路径，并与重写 `verify_http.py` 的棘轮断言**在同一
 提交**内落地。2.E-4b 自身再切两刀：**先铺棘轮，再退役**——先把 E/F/M 三条缺陷与其 `where`
@@ -606,23 +607,51 @@ netlink 线格式三端（契约 / 内核 / daemon）同一步落地，布局经
 | 2.E-4a | `state/compose.rs`（新）+ `state/{mod,stats,bans,hub}.rs` + `main.rs` + 各写入点 | 组合根装配：`main.rs` 构造 `State` 并注入；在既有写入点**镜像**进新状态，旧全局保留给未迁入读者 | 效果面（让 2.E-4b 退役后产品仍有真数据） |
 | 2.E-4b-1 | `contract/http.fwidl` + `contract/gen.py` + `contract/verify_http.py` | 棘轮铺垫：E/F/M 记入契约并带 `where` 锚点；验证器按 `status` 分派核对（`fixed` 要求原锚点消失、新 `fix` 存在） | 让「退役」可被机械判定 |
 | 2.E-4b-2 | 删 `web_ui/sse.rs` + `handler.rs` 的旧读路径与旧 SSE 引擎；`api/router.rs` 挂载新路由；按 `where` 存亡翻转四条缺陷 | 退役与棘轮同一步收口 | BANS_DUAL_SHAPE / SSE_STATUS_INCOMPLETE / LOG_SSE_LIMIT_DOC_DRIFT / SSE_RESERIALIZES_EVERY_DOMAIN（转 `fixed`）；F（路由收口）；**M 部分**（旧写路径已删，旧函数仍在）；E 见下 |
+| 2.E-4c | `runtime/scheduler.rs`（新）+ `runtime/mod.rs` + `state/compose.rs` + `main.rs` + `file_monitor/monitor_loop.rs` + `web_ui/ban_ops.rs` + 契约 | 接入 `runtime/`：调度器接管周期清理与计数器镜像，`main.rs` 装配 supervisor + 关停；E 转 `fixed` | E（读路径副作用）；A（周期任务不再随事件吞吐漂移） |
 
 2.E-4b-2 的翻转判据是「`where` 锚点是否真的从源码里消失」，不是「打算怎么修」——四条
 转 `fixed` 的缺陷都是**旧实现整体被删除**（旧 `web_ui/sse.rs` 的逐域重序列化、`handler.rs`
 里的双形状分支、`log_viewer.rs` 的误导性注释），故用新实现的正面锚点做 `fix` 即可。
-E 与 M 的原锚点**都还活着**（`web_ui/ban_ops.rs::get_active_bans()` 的限流 purge、
-`ban/mod.rs::build_cidr_key`），故 `status` 保持 `open`，契约里的 `resolution` 如实写明
-「新侧已就位、只差装配/删除旧函数」。`HTTP_HEALTH_NOT_ENVELOPED` 是**有意例外**而非待修
-缺陷，转 `retained` 并附 `reason`。
+2.E-4b-2 时 E 与 M 的原锚点**都还活着**，故 `status` 保持 `open`。2.E-4c 只解决 E：
+`web_ui/ban_ops.rs::get_active_bans()` 的限流 purge 已删、周期清理改由调度器驱动，E 转
+`fixed`。M 仍 `open`——`ban/mod.rs::build_cidr_key` 还在，因为 `kernel/` 未接入生产。
+`HTTP_HEALTH_NOT_ENVELOPED` 是**有意例外**而非待修缺陷，转 `retained` 并附 `reason`。
 
-**E 为何没随本步闭合（已知偏差）**：`runtime/timers.rs::spawn_scheduler` 已写好并导出，但
-`main.rs` 至今未装配 `runtime/`（旧 `file_monitor` 循环仍在跑），所以 `Bans::purge_expired`
-在生产中**从未被调用**，活跃封禁列表仍由旧 `ACTIVE_BAN_CACHE` 提供、其限流 purge 仍在
-`web_ui/ban_ops.rs::get_active_bans()`。缓解事实：内核侧封禁过期是**自愈**的——
-`fw_ban.c::fw_ban_expire_cb` 会主动发 `FW_BAN_ACTION_UNBAN`，新 `handle_ban_state_change`
-的 unban 分支调 `mirror_ban_remove`，故过期封禁仍会从新 `State` 里消失，只是不再由 daemon
-主动清理。要真正闭合 E，需要把定时器表 + supervisor + `main.rs` 接线一并落地（属于把
-`runtime/` 接入生产的一次独立改动）。
+#### 2.E-4c 落地明细：E 的三段式修法
+
+E 的判据是「**读路径改状态**」。旧实现把限流 `purge_expired` 挂在
+`web_ui/ban_ops.rs::get_active_bans()` 上，而 2.E-4b-2 删掉 `/api/v1/bans` 处理器后，这个
+函数**已经没有挂载的调用方**——即 2.E-4b-2 顺手把旧缓存唯一的清理入口给孤立了。这不是
+「E 还在」，而是「E 换了个形状」：过期条目只能靠内核 `FW_BAN_ACTION_UNBAN` 自愈，一旦事件
+丢失就永久滞留，且 `total_unbans` / 封禁时长直方图在无事件路径上**不再记账**。
+
+修法因此必须三段齐全，缺一段就退回旧偏差形状：
+
+| 段 | 位置 | 作用 |
+|----|------|------|
+| 清理本体的**双清** | `state/compose.rs::purge_expired_bans(now)` | 同时清旧 `ACTIVE_BAN_CACHE` 与新 `Bans`：旧缓存仍被 Prometheus `active_bans` gauge、`/health`、`web_ui/stats.rs` 读，只清新侧则旧表只增不减 |
+| **调度** | `runtime/scheduler.rs::spawn_periodic` | 1 s 基础节拍 + 子周期门控：按 `PURGE_INTERVAL`（5 s，与旧 `PURGE_INTERVAL_SECS` 同值）调清理；按 `webui.sse_push_interval` 调 `mirror_stats_tick` |
+| **装配** | `main.rs` | `Supervisor::new()` + `runtime::spawn_periodic`，并把 `supervisor.shutdown()` 排在 `cleanup` 之前 |
+
+棘轮的对应加强：`HTTP_READ_PATH_WRITES_STATE` 转 `fixed` 时，验证器**不只**要求旧锚点消失，
+还额外要求「`main.rs` 装配了 `spawn_periodic`」且「调度器回调里真的调了 `purge_expired_bans`」。
+只判锚点消失是不够的——那正是本条缺陷此前挂着的形状。三个条件齐了才算数，否则
+「读路径不再清、也没人清」会把缺陷换个马甲接着存在。
+
+为何是「一个基础节拍 + 各自门控」而非两条独立定时器：`TimerId` 的周期在登记时钉死、登记后
+不可改，而 `stats` 镜像的周期取自**运行期可改**的 `webui.sse_push_interval`（1~60 s）。用两条
+独立定时器意味着改配置要重启才生效；基础节拍 + 门控让改写下一轮即生效，与旧 `monitor_loop`
+的语义一致。也正因 SSE 是纯版本驱动（`watch::Receiver::changed`），`stats` 镜像**必须**按
+配置间隔门控——每轮都推进版本就等于把配置的推送间隔架空了。
+
+行为保真：记账（`total_unbans` / 时长直方图）是**逐字搬家**，不是新发明；与解封事件路径的
+记账重叠是**既有现象**（该路径的 `total_unbans` 累加是无条件的），谁先把条目删掉谁就赢了
+时长直方图那一笔，本次改动不引入也不消除它。净效果严格优于旧行为：过去只有人读才清理，现在
+每 5 s 无条件清理；而读者（Prometheus gauge、仪表盘、`/health`）看到的数据反而更新鲜。
+
+**死代码取舍（用户裁定）**：只删 `get_active_bans()` 里的 purge 块与其节流静态量
+（`LAST_PURGE_TIME` / `PURGE_INTERVAL_SECS`），**保留函数本身**。该函数现已无挂载调用方
+（仅在 `web_ui/api.rs` 重导出），整函数删除留作后续独立改动。
 
 #### 2.E-4a 落地明细：镜像桥的方向与时机
 
@@ -678,9 +707,9 @@ E 与 M 的原锚点**都还活着**（`web_ui/ban_ops.rs::get_active_bans()` �
   `DAEMON_STATS.total_unbans`（SSE 每秒读一次，统计就每秒被读路径改写）。
   `reading_a_snapshot_does_not_purge_or_otherwise_mutate` 与
   `reading_every_snapshot_leaves_the_versions_untouched` 钉死这一条。
-  新方法的**调用方**设计为 scheduler 的独立任务（`runtime/timers.rs` 的定时器表），但该调度器
-  尚未接入 `main.rs`——见上文「E 为何没随本步闭合」。故这一步只钉住「新状态自身的读路径零
-  副作用」，**没有**消除旧读路径的副作用；E 仍 `open`，闭合要等 `runtime/` 接入生产。
+  新方法的**调用方**是 scheduler 的周期任务（`runtime/scheduler.rs::spawn_periodic`），已由
+  `main.rs` 装配接入生产（2.E-4c）；旧的 `web_ui/ban_ops.rs::get_active_bans()` 读路径副作用
+  随之删除，E 转 `fixed`。详见上文「2.E-4c 落地明细」。
 - **发布顺序是「先放数据锁、再发版本」**。读侧是「先读版本、再取快照」，若写侧在持数据锁时
   去拿 hub 的锁，就与读侧构成锁序反转。`invalidate_and_publish()` 先释放数据锁再 `publish`，
   `hub.rs` 亦先更新版本再 `send_replace` 唤醒（订阅者醒来读到的版本必定 ≥ 通知里的版本）。
@@ -758,6 +787,10 @@ E 与 M 的原锚点**都还活着**（`web_ui/ban_ops.rs::get_active_bans()` �
 2.E-4b-1 当时门禁证据：`bash scripts/check_contract.sh` 全绿；`verify_http.py` 报 12 条缺陷、15 个 `where/fix` 锚点按 status 分派核对通过，并自行提示新加的三条（E/F/M）当前仅有锚点核对、无机械断言——该缺口在 2.E-4b-2 翻转时闭合。
 
 2.E-4b-2 门禁证据：`python3 contract/gen.py contract/http.fwidl` 报「缺陷记录 12 条（已修 4 / 有意保留 1 / 未修 7）」；`python3 contract/verify_http.py` 通过（19 个 `where/fix` 锚点、57 个载荷类型、51 个前端 interface、37 条前端路径对 50 条契约路径，`http_contract.rs` 编译 + `http_contract.ts` tsc 均 OK）；`cargo test --release --lib`（**400 passed / 0 failed**）、`cargo clippy --all-targets -- -D warnings`（exit 0）、`cargo fmt --all --check`（干净）、`make build`（`.ko` + daemon）、`make format-check`（通过；`config/default.yaml:80` 一条既有 yamllint comment-indentation 警告）、`make frontend-typecheck`（exit 0）、`bash scripts/check_contract.sh`（「契约门禁通过。」41 个锚点）、`bash scripts/verify_project.sh`（成功）、`python3 -m pytest tests/ -q`（67 passed / 25 skipped）全绿。
+
+2.E-4c 门禁证据：`python3 contract/gen.py contract/http.fwidl` 报「缺陷记录 12 条（已修 5 / 有意保留 1 / 未修 6）」；`python3 contract/verify_http.py` 通过（**20** 个 `where/fix` 锚点、57 个载荷类型、51 个前端 interface、37 条前端路径对 50 条契约路径，`http_contract.rs` 编译 + `http_contract.ts` tsc 均 OK），并确认 E 的加强断言成立——「`get_active_bans` 读路径已无 purge，周期清理由 `main.rs` 装配的调度器驱动」；`cargo test --release --lib`（**400 passed / 0 failed**）、`cargo clippy --all-targets -- -D warnings`（exit 0）、`cargo fmt --all`、`make build`（`.ko` + daemon）、`make format-check`（通过；同一条既有 yamllint 警告）、`make frontend-typecheck`（exit 0）、`bash scripts/check_contract.sh`（契约门禁通过）、`bash scripts/verify_project.sh`（成功）全绿。
+
+2.E-4c 的一次返工：首版 `runtime/scheduler.rs` 用了 `Option::is_none_or` 做门控，`cargo clippy --all-targets -- -D warnings` 因 `incompatible_msrv`（本仓库 MSRV 1.75.0，该 API 需 1.82.0）报两处错误。改用显式 `match` 并注明 MSRV 原因后重跑 clippy exit 0。记在这里是因为这类「更新更好的 API 越界 MSRV」在后续批次里还会反复出现。
 
 ## 判定纪律
 

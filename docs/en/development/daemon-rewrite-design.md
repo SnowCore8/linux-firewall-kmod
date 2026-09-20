@@ -476,7 +476,7 @@ existing defects in `netlink.fwidl` and `http.fwidl`, plus daemon-side stability
 | Registration loss invisible | Introduce `Lease` + parse `RegisterAck` (fixes K) | New side in place (`kernel/{client,lease}.rs`), but `main.rs` and the write points still use the old `crate::netlink` — not wired into production |
 | Two baseline/config dispatch paths | Converge on `client.set_config()` (fixes L) | Same: `kernel/client.rs::set_config` exists, production still runs the old `crate::netlink::sync_protocol_thresholds` |
 | Whitelist CIDR key inconsistency | Single normalization function (fixes M) | Partial: `state/cidr.rs::CidrKey` is in place and the old write paths are retired, but the old `ban/mod.rs::build_cidr_key` still exists and `status` stays `open` |
-| Read-path side effects (purge + stats) | Make purge an explicit method called by a dedicated scheduler task; the read path only reads (fixes E) | **Not done**: `Bans::purge_expired` is in place but the scheduler is never wired, so production still runs the old throttled purge in `web_ui/ban_ops.rs`; `status` stays `open` |
+| Read-path side effects (purge + stats) | Make purge an explicit method called by a dedicated scheduler task; the read path only reads (fixes E) | Done: `state/compose.rs::purge_expired_bans` + the periodic call in `runtime/scheduler.rs` + `main.rs` wiring `runtime::spawn_periodic`; `get_active_bans()`'s throttled purge and its throttle statics are gone, `status` flipped to `fixed` |
 | Two idle periodic tasks | Both `write_stats_snapshot` and `check_and_handle_ddos` are now no-ops (a debug log only) | Done |
 | `protocol.rs` comment "20 bytes" | Disappears when codec switches to the generated artifact | Not done: the new `kernel/codec` no longer hand-writes structs, but the "20 bytes" comment at `netlink/protocol.rs:94` is still there (the old module is not deleted) |
 
@@ -515,8 +515,8 @@ Prerequisite dependency is 0 (it can run in parallel with the Phase 1 kernel rew
 | **2.A** | Contract revisions (netlink pagination params + `seq` semantics + `RegisterAck`; http sse-status and defect entries) | `bash scripts/check_contract.sh` fully green; gates green |
 | **2.B** | Runtime skeleton: `runtime/supervisor` + `signal` (`signalfd`) + `scheduler` (monotonic clock) + bounded-channel contract + shutdown order | Gates green; shutdown order has a test (stop netlink before flushing the DB); timers do not drift with event throughput (with a test) |
 | **2.C** | Main-chain rewrite: `ingest` + `parse` + `decision` | Problems A/B/C eliminated (with tests); `decision` semantics match the old implementation case-by-case (comparison test) |
-| **2.D** | `kernel` layer rewrite: `codec` (using the generated artifact) + `transport` + `reactor` (type+seq routing) + `client` + `lease`; all pagination | Problems I/J/K/L eliminated; a >1-page test case; registration loss visible. **As of 2.E-4b-2: J is eliminated; I's new reactor exists but production still runs the old routing; K/L likewise** (`kernel/` is not yet wired into `main.rs` -- see "Fixes and landing status") |
-| **2.E** | `state` layer: single owner + snapshot hub; `api` thin adapter + zero read-path side effects | Problems E/F/M eliminated; SSE serializes per domain; a slow consumer does not slow the whole. **As of 2.E-4b-2: F is eliminated; M's new side is in place but the old function is not deleted; E is not eliminated** (`runtime/` is not wired into production -- see "What 2.E Landed") |
+| **2.D** | `kernel` layer rewrite: `codec` (using the generated artifact) + `transport` + `reactor` (type+seq routing) + `client` + `lease`; all pagination | Problems I/J/K/L eliminated; a >1-page test case; registration loss visible. **As of 2.E-4c: J is eliminated; I's new reactor exists but production still runs the old routing; K/L likewise** (`kernel/` is not yet wired into `main.rs` -- see "Fixes and landing status") |
+| **2.E** | `state` layer: single owner + snapshot hub; `api` thin adapter + zero read-path side effects | Problems E/F/M eliminated; SSE serializes per domain; a slow consumer does not slow the whole. **As of 2.E-4c: E and F are eliminated; M's new side is in place but the old function is not deleted** (`kernel/` is not wired into production, so M's old key rule still stands -- see "Fixes and landing status") |
 | **2.F** | `persist` backpressure rework + test-debt replacement | Problem G eliminated (backpressure tested); every tautological assertion replaced with one that can fail |
 | **2.G** | Documentation rewrite: `docs/{zh,en}/architecture/daemon.md` fully rewritten to the new implementation; `docs/{zh,en}/architecture/data-flow.md` stale numbers corrected | Documentation matches the code item by item |
 
@@ -541,7 +541,8 @@ SQLite `bans` table schema; the metric count is written as "24"; the main loop i
 | 2.E-3 Thin `api` layer + SSE | Done |
 | 2.E-4a Composition root wiring (`state::compose` mirroring + `main.rs` injection) | Done |
 | 2.E-4b-1 Ratchet groundwork (E/F/M recorded in the contract + status-aware anchors in `verify_http.py`) | Done |
-| 2.E-4b-2 Retire the old read paths + mount the new router + flip four defects per `where` survival | Done (E stays `open`; see below) |
+| 2.E-4b-2 Retire the old read paths + mount the new router + flip four defects per `where` survival | Done (E stays `open` at that step; closed by 2.E-4c) |
+| 2.E-4c Wire `runtime/`: the scheduler takes over periodic purge and the counter mirror + `main.rs` assembly; E flips to `fixed` | Done |
 | 2.F–2.G | Not started |
 
 ### What 2.A Landed
@@ -740,7 +741,7 @@ Gate evidence: `cargo test --release --lib` (257 passed, 73 of them in `kernel::
 
 ### What 2.E Landed
 
-2.E lands in six steps, and **retirement ships in the same step as the ratchet** (per "keep it
+2.E lands in seven steps, and **retirement ships in the same step as the ratchet** (per "keep it
 compiling, migrate in batches"): 2.E-1 through 2.E-3 plus 2.E-4a only add `state` / `api` modules and
 connect the new state to the production write points; the old `web_ui/` and `http_exporter/handler.rs`
 stay put. Only the last step (2.E-4b) deletes the old read paths, and it must land the rewritten
@@ -765,27 +766,63 @@ commits:
 | 2.E-4a | `state/compose.rs` (new) + `state/{mod,stats,bans,hub}.rs` + `main.rs` + each write point | Composition root: `main.rs` constructs `State` and injects it; existing write points **mirror** into it, the old globals stay for readers that have not migrated | Effectiveness (so the product still has real data after 2.E-4b retires) |
 | 2.E-4b-1 | `contract/http.fwidl` + `contract/gen.py` + `contract/verify_http.py` | Ratchet groundwork: E/F/M recorded in the contract with `where` anchors; the verifier dispatches on `status` (a `fixed` entry requires the old anchor to be gone and the new `fix` to exist) | Makes "retirement" mechanically decidable |
 | 2.E-4b-2 | Delete `web_ui/sse.rs` + `handler.rs`'s old read paths and the old SSE engine; mount the new router in `api/router.rs`; flip four defects per `where` survival | Retirement and ratchet close together | BANS_DUAL_SHAPE / SSE_STATUS_INCOMPLETE / LOG_SSE_LIMIT_DOC_DRIFT / SSE_RESERIALIZES_EVERY_DOMAIN (to `fixed`); F (router closure); **M partially** (old write paths deleted, old function still present); E — see below |
+| 2.E-4c | `runtime/scheduler.rs` (new) + `runtime/mod.rs` + `state/compose.rs` + `main.rs` + `file_monitor/monitor_loop.rs` + `web_ui/ban_ops.rs` + the contract | Wire `runtime/`: the scheduler takes over periodic purge and the counter mirror, `main.rs` assembles the supervisor and shuts it down in order; E flips to `fixed` | E (read-path side effect); A (periodic tasks no longer drift with event throughput) |
 
 2.E-4b-2's flip criterion is "did the `where` anchor actually disappear from the source", not "how do
 we intend to fix it". All four entries that moved to `fixed` are cases where the **old implementation
 was deleted wholesale** (the old `web_ui/sse.rs` re-serializing every domain, the dual-shape branch in
 `handler.rs`, the misleading comment in `log_viewer.rs`), so asserting a positive anchor in the new
-implementation is the right `fix`. E's and M's original anchors **are both still alive**
-(`web_ui/ban_ops.rs::get_active_bans()`'s throttled purge, `ban/mod.rs::build_cidr_key`), so their
-`status` stays `open` and the contract's `resolution` says plainly that the new side is in place and
-only wiring / deleting the old function remains. `HTTP_HEALTH_NOT_ENVELOPED` is an **intentional
-exception**, not a pending defect, so it becomes `retained` with a `reason`.
+implementation is the right `fix`. At 2.E-4b-2, E's and M's original anchors **were both still alive**, so their `status` stayed `open`.
+2.E-4c resolves E only: `web_ui/ban_ops.rs::get_active_bans()`'s throttled purge is gone and the
+periodic cleanup is driven by the scheduler, so E flips to `fixed`. M stays `open` — the old
+`ban/mod.rs::build_cidr_key` is still there because `kernel/` is not wired into production.
+`HTTP_HEALTH_NOT_ENVELOPED` is an **intentional exception**, not a pending defect, so it becomes
+`retained` with a `reason`.
 
-**Why E did not close with this step (a known deviation).** `runtime/timers.rs::spawn_scheduler` is
-written and exported, but `main.rs` still never wires up `runtime/` (the old `file_monitor` loop
-still runs), so `Bans::purge_expired` is **never called** in production: the active ban list still
-comes from the old `ACTIVE_BAN_CACHE`, whose throttled purge lives on in
-`web_ui/ban_ops.rs::get_active_bans()`. A mitigating fact: kernel-side expiry is **self-healing** —
-`fw_ban.c::fw_ban_expire_cb` actively emits `FW_BAN_ACTION_UNBAN`, and the new
-`handle_ban_state_change`'s unban branch calls `mirror_ban_remove`, so expired bans still leave the
-new `State`; they are simply no longer purged by the daemon. Closing E for real needs the timer table,
-the supervisor and the `main.rs` wiring in one change (i.e. a separate commit that brings `runtime/`
-into production).
+#### What 2.E-4c Landed: E's Three-Part Fix
+
+E's criterion is "the **read path mutates state**". The old code hung a throttled `purge_expired` off
+`web_ui/ban_ops.rs::get_active_bans()`, and once 2.E-4b-2 deleted the `/api/v1/bans` handler that
+function **had no mounted caller left** — i.e. 2.E-4b-2 had orphaned the legacy cache's only cleanup
+entry point. That is not "E is still there" but "E changed shape": expired entries could only
+self-heal via the kernel's `FW_BAN_ACTION_UNBAN`, so a single lost event left them in place forever,
+and `total_unbans` / the ban-duration histogram **stopped being accounted** on the no-event path.
+
+The fix therefore has to land all three parts; drop any one and you are back at the old deviation's
+shape:
+
+| Part | Location | Role |
+|------|----------|------|
+| Purge body's **dual purge** | `state/compose.rs::purge_expired_bans(now)` | Clears the old `ACTIVE_BAN_CACHE` *and* the new `Bans`: the legacy cache is still read by the Prometheus `active_bans` gauge, `/health` and `web_ui/stats.rs`, so purging only the new side would let the old table grow forever |
+| **Schedule** | `runtime/scheduler.rs::spawn_periodic` | One 1 s base tick with sub-period gating: purge on `PURGE_INTERVAL` (5 s, same value as the old `PURGE_INTERVAL_SECS`), `mirror_stats_tick` on `webui.sse_push_interval` |
+| **Assembly** | `main.rs` | `Supervisor::new()` + `runtime::spawn_periodic`, with `supervisor.shutdown()` ordered before `cleanup` |
+
+The matching ratchet strengthening: when `HTTP_READ_PATH_WRITES_STATE` flips to `fixed`, the verifier
+requires **more than** the old anchor disappearing — it also requires that `main.rs` assembles
+`spawn_periodic` *and* that the scheduler callback actually calls `purge_expired_bans`. Anchor absence
+alone is not enough; that was exactly the shape this defect was previously hung in. All three
+conditions must hold, otherwise "the read path no longer purges and nobody else does either" keeps the
+defect alive under a new coat.
+
+Why "one base tick + per-task gating" rather than two independent timers: `TimerId`'s period is fixed
+at registration and cannot be changed afterwards, while the `stats` mirror's period comes from the
+**runtime-mutable** `webui.sse_push_interval` (1–60 s). Two independent timers would mean a config
+change needs a restart to take effect; base tick + gating makes a change effective on the next round,
+matching the old `monitor_loop` semantics. And precisely because SSE is purely version-driven
+(`watch::Receiver::changed`), the `stats` mirror **must** be gated by the configured interval —
+advancing the version every round would nullify the configured push interval.
+
+Behavior fidelity: the accounting (`total_unbans` / duration histogram) is ported **verbatim**, not
+invented; the overlap with the unban-event path's accounting is **pre-existing** (that path's
+`total_unbans` increment is unconditional), and whoever removes the entry first wins the histogram
+sample — this change neither introduces nor removes that. The net effect is strictly better than the
+old behavior: cleanup used to run only when someone read; now it runs unconditionally every 5 s, while
+readers (the Prometheus gauge, the dashboard, `/health`) actually see *fresher* data.
+
+**Dead-code call (user's decision):** delete only the purge block inside `get_active_bans()` plus its
+throttle statics (`LAST_PURGE_TIME` / `PURGE_INTERVAL_SECS`), and **keep the function itself**. It now
+has no mounted caller (only a re-export in `web_ui/api.rs`); removing the whole function is left as a
+separate follow-up.
 
 #### What 2.E-4a Landed: the Mirror Bridge's Directions and Timing
 
@@ -855,11 +892,10 @@ Key decisions:
   were rewritten by a read path every second.
   `reading_a_snapshot_does_not_purge_or_otherwise_mutate` and
   `reading_every_snapshot_leaves_the_versions_untouched` pin this down.
-  The new method's **caller** is designed to be the scheduler's own task (the timer table in
-  `runtime/timers.rs`), but that scheduler is not wired into `main.rs` — see "Why E did not close
-  with this step" above. So this step only pins that the **new state's own read path has no side
-  effects**; it does **not** remove the old read path's side effect. E stays `open` until `runtime/`
-  is brought into production.
+  The new method's **caller** is the scheduler's periodic task
+  (`runtime/scheduler.rs::spawn_periodic`), now wired into production by `main.rs` (2.E-4c); the old
+  `web_ui/ban_ops.rs::get_active_bans()` read-path side effect is removed along with it, and E flips
+  to `fixed`. See "What 2.E-4c Landed" above.
 - **Publishing takes the data lock first and publishes second**. The read side goes "read the
   version, then take the snapshot"; if the write side reached for the hub lock while holding the
   data lock, that would invert the lock order against the read side. `invalidate_and_publish()`
@@ -987,6 +1023,23 @@ pre-existing yamllint comment-indentation warning at `config/default.yaml:80`),
 `make frontend-typecheck` (exit 0), `bash scripts/check_contract.sh` ("contract gate passed", 41
 anchors), `bash scripts/verify_project.sh` (success), `python3 -m pytest tests/ -q` (67 passed / 25
 skipped) -- all green.
+
+Gate evidence for 2.E-4c: `python3 contract/gen.py contract/http.fwidl` reports "12 defect records
+(5 fixed / 1 retained / 6 open)"; `python3 contract/verify_http.py` passes (**20** where/fix anchors,
+57 payload types, 51 frontend interfaces, 37 frontend paths against 50 contract paths, with
+`http_contract.rs` compiling and `http_contract.ts` passing `tsc`) and confirms E's strengthened
+assertion -- "`get_active_bans` read path has no purge, periodic cleanup is driven by the scheduler
+assembled in `main.rs`"; `cargo test --release --lib` (**400 passed / 0 failed**),
+`cargo clippy --all-targets -- -D warnings` (exit 0), `cargo fmt --all`, `make build` (`.ko` +
+daemon), `make format-check` (pass; same pre-existing yamllint warning),
+`make frontend-typecheck` (exit 0), `bash scripts/check_contract.sh` (contract gate passed),
+`bash scripts/verify_project.sh` (success) -- all green.
+
+One rework in 2.E-4c: the first version of `runtime/scheduler.rs` used `Option::is_none_or` for
+gating, and `cargo clippy --all-targets -- -D warnings` failed twice with `incompatible_msrv` (this
+repo's MSRV is 1.75.0; that API needs 1.82.0). Switching to an explicit `match` with a comment noting
+the MSRV reason made clippy exit 0. It is recorded here because this class of "a newer, nicer API
+oversteps the MSRV" will recur in later batches.
 
 ## Judging Discipline
 

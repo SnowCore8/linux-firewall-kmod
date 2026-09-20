@@ -40,6 +40,7 @@ use firewall_daemon::http_exporter;
 use firewall_daemon::jail;
 use firewall_daemon::logger;
 use firewall_daemon::netlink::{self, DdosDecisionEngine, NetlinkContext};
+use firewall_daemon::runtime::{self, Shutdown, Supervisor};
 use firewall_daemon::signals::{setup_signals, GLOBAL_RELOAD, GLOBAL_RUNNING};
 use firewall_daemon::types::{Config, DAEMON_STATS};
 use firewall_daemon::web_ui;
@@ -243,6 +244,20 @@ fn main() -> Result<()> {
         Err(e) => warn!(logger::get(), "状态层装配失败"; "error" => %e),
     }
 
+    // ---- 组合根：装配 runtime 骨架（supervisor + 单调时钟调度器）----
+    //
+    // 周期维护任务（计数器镜像、过期封禁清理）从 `file_monitor::monitor_loop` 的 poll
+    // 超时分支迁到这里的单调时钟节拍上：准时性不再受事件到达影响（结构问题 A），
+    // 且 `Bans::purge_expired` 终于有了生产调用者（结构问题 E）。
+    //
+    // 装配失败只降级警告、不 panic：调度器缺席时 SSE 的 `stats` 域不再自动刷新、
+    // 过期封禁只能靠内核 UNBAN 事件自愈，但主链路（netlink / Web UI）照常工作。
+    let mut supervisor = Supervisor::new();
+    match runtime::spawn_periodic(&mut supervisor, Shutdown::new()) {
+        Ok(()) => info!(logger::get(), "runtime 调度器已装配"; "executors" => supervisor.len()),
+        Err(e) => warn!(logger::get(), "runtime 调度器装配失败"; "error" => %e),
+    }
+
     // 如果有 netlink 上下文，创建并设置决策引擎
     if let Some(ctx) = netlink_ctx {
         let ctx_arc = Arc::new(ctx);
@@ -420,6 +435,13 @@ fn main() -> Result<()> {
         GLOBAL_RUNNING.load(Ordering::SeqCst)
     );
     info!(logger::get(), "开始清理流程");
+
+    // 先按依赖逆序停 runtime 执行体（当前只有调度器），再走既有清理流程。
+    // 顺序要求：调度器只碰内存镜像与原子计数、不碰持久化，故它排在 `cleanup` 的
+    // 关库之前停即可；这样停机窗口内不再有维护任务并发改状态。
+    for (name, outcome) in supervisor.shutdown(std::time::Duration::from_secs(5)) {
+        info!(logger::get(), "runtime 执行体已停止"; "name" => name, "outcome" => ?outcome);
+    }
     cleanup(&cfg, netlink_receiver);
 
     if let Some(handle) = exporter_handle {

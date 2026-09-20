@@ -59,6 +59,10 @@ LOG_VIEWER_RS = os.path.join(ROOT, "src", "daemon", "web_ui", "log_viewer.rs")
 ENVELOPE_RS = os.path.join(ROOT, "src", "daemon", "api", "envelope.rs")
 # 已迁入的路由装配（18 条）与其余 handler
 API_ROUTER_RS = os.path.join(ROOT, "src", "daemon", "api", "router.rs")
+# E 的修复面：旧读路径（`get_active_bans` 的写副作用）与新的周期清理装配点
+BAN_OPS_RS = os.path.join(ROOT, "src", "daemon", "web_ui", "ban_ops.rs")
+SCHEDULER_RS = os.path.join(ROOT, "src", "daemon", "runtime", "scheduler.rs")
+MAIN_RS = os.path.join(ROOT, "src", "daemon", "main.rs")
 
 TS_TYPES = os.path.join(ROOT, "frontend", "src", "api", "types.ts")
 TS_ENDPOINTS = os.path.join(ROOT, "frontend", "src", "api", "endpoints.ts")
@@ -954,6 +958,29 @@ def check_defect_claims(contract: dict) -> list[str]:
                 fail(name, "runtime.rs 未写明 /health 的裸状态码是有意保留")
             else:
                 ok(name, "handle_health 仍直接返回裸 JSON，且源码写明是有意例外")
+        elif name == "HTTP_READ_PATH_WRITES_STATE":
+            # status=fixed：读路径的写副作用已删，且清理任务**真的接进了生产**。
+            #
+            # 只判「旧锚点消失」不够——本条缺陷此前正是以「新侧已就位、只差装配」的
+            # 形态挂着（Bans::purge_expired 已写好但无人调用）。故这里额外要求
+            # main.rs 装配 runtime::spawn_periodic、调度器回调里真的调用
+            # purge_expired_bans：否则「读路径不再清、也没有别人清」只是把缺陷换了个
+            # 马甲（过期条目会永久滞留）。
+            ban_ops = read(BAN_OPS_RS)
+            body = _fn_body(ban_ops, "get_active_bans")
+            reads = body is not None and "purge_expired" not in body
+            scheduler = read(SCHEDULER_RS)
+            purge_called = "purge_expired_bans" in scheduler
+            main_src = read(MAIN_RS)
+            wired = "spawn_periodic" in main_src
+            if reads and purge_called and wired:
+                ok(name, "get_active_bans 读路径已无 purge，周期清理由 main.rs 装配的调度器驱动")
+            else:
+                fail(
+                    name,
+                    "读路径或装配状态不符"
+                    f"（读路径无purge={reads} 调度器调用={purge_called} main装配={wired}）",
+                )
         elif name == "HTTP_LOG_SSE_LIMIT_DOC_DRIFT":
             # status=fixed：误导性注释已修正。断言旧注释**已消失**、新注释**在**，
             # 且两条流的上限常量各自独立且不等（10 / 5）——修复的是注释不是实现。

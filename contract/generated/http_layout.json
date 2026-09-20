@@ -70,7 +70,7 @@
     "请求 PaginationParams: 3 个字段",
     "响应 SseStreamStatus: 3 个字段",
     "响应 SseStatusResponse: 2 个字段",
-    "缺陷记录: 12 条（已修 4 / 有意保留 1 / 未修 7；由 verify_*.py 到源码核对锚点）"
+    "缺陷记录: 12 条（已修 5 / 有意保留 1 / 未修 6；由 verify_*.py 到源码核对锚点）"
   ],
   "envelope": {
     "name": "ApiResponse",
@@ -2742,7 +2742,7 @@
       "name": "HTTP_LOG_SSE_LIMIT_DOC_DRIFT",
       "severity": "low",
       "status": "fixed",
-      "where": "src/daemon/web_ui/log_viewer.rs:SSE 连接与 Web UI SSE 共享",
+      "where": "src/daemon/web_ui/log_viewer.rs:共享限制",
       "fix": "src/daemon/web_ui/log_viewer.rs:各自独立计数与上限",
       "reason": "",
       "resolution": "修正注释与实现一致：两条流各自独立的上限（events 10 / logs 5），实现不变，只改误导性注释。",
@@ -2761,12 +2761,12 @@
     {
       "name": "HTTP_READ_PATH_WRITES_STATE",
       "severity": "high",
-      "status": "open",
+      "status": "fixed",
       "where": "src/daemon/web_ui/ban_ops.rs:purge_expired(now)",
-      "fix": "",
+      "fix": "src/daemon/state/compose.rs:pub fn purge_expired_bans",
       "reason": "",
-      "resolution": "读路径只读：purge 移到 scheduler 的独立任务，由它独占调用并转交被清理的条目；读侧改从 state 取不可变快照。新侧已就位（state/bans.rs 的 Bans::purge_expired 是显式方法、api 读路径零副作用），只差把 runtime::spawn_scheduler 接到 main.rs：调度器尚未装配，故本缺陷仍在旧侧存活。",
-      "text": "get_active_bans() 在**读**路径上按 5 秒节流执行 purge_expired，顺带自增 DAEMON_STATS.total_unbans 并写入封禁时长统计。旧 SSE 每个 tick（默认 1 秒）都会读一次，于是「每秒被读一次的统计」被读路径自己改写——读数与写入者互相污染，仪表盘上的解除封禁计数不可复现。注：旧 SSE 引擎已退役（本缺陷的放大器已拆），但 throttled purge 仍在旧 get_active_bans 里；内核侧的到期回调（fw_ban.c 推 UNBAN 事件）已在实践中自愈，purge 现仅用于让影子缓存保持一致"
+      "resolution": "读路径只读：purge 移到 scheduler 的独立周期任务，由它独占调用；读侧改从 state 取不可变快照。落地方式：state/compose.rs 新增 purge_expired_bans（两侧都清，记账口径照搬），runtime/scheduler.rs 按 5 秒节拍调用，main.rs 装配 runtime::spawn_periodic；get_active_bans() 的限流 purge 与其节流静态量一并删除。",
+      "text": "get_active_bans() 在**读**路径上按 5 秒节流执行 purge_expired，顺带自增 DAEMON_STATS.total_unbans 并写入封禁时长统计。旧 SSE 每个 tick（默认 1 秒）都会读一次，于是「每秒被读一次的统计」被读路径自己改写——读数与写入者互相污染，仪表盘上的解除封禁计数不可复现。注：旧 SSE 引擎已退役（本缺陷的放大器已拆），throttled purge 也已从 get_active_bans 删除；清理改由组合根 scheduler 的周期任务驱动"
     },
     {
       "name": "HTTP_SSE_RESERIALIZES_EVERY_DOMAIN",

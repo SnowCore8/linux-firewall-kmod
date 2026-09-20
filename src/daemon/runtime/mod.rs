@@ -8,9 +8,12 @@
 //!   「netlink 停止后才允许 flush 持久化」由**顺序**保证，而不是靠注释提醒。
 //! - [`timers`]：单调时钟（`Instant`）定时器表。到期判据是经过时间，与事件吞吐无关，
 //!   消除「事件洪泛时维护任务被饿死」这一结构问题。
+//! - [`scheduler`]：组合根的周期任务集合（计数器镜像、过期封禁清理），按上面的定时器
+//!   表节拍驱动。
 //! - [`channel`]：有界队列 + 显式背压策略（阻塞 / 拒绝并计数），禁止静默丢弃。
 
 pub mod channel;
+pub mod scheduler;
 pub mod shutdown;
 pub mod supervisor;
 pub mod timers;
@@ -18,6 +21,7 @@ pub mod timers;
 pub use channel::{
     bounded, Backpressure, QueueStats, Receiver, RecvError, RecvTimeoutError, Sender, TryRecvError,
 };
+pub use scheduler::spawn_periodic;
 pub use shutdown::Shutdown;
 pub use supervisor::{StopOutcome, Supervisor};
 pub use timers::{spawn_scheduler, Fired, TimerId, TimerTable};
