@@ -4,6 +4,14 @@
 #![allow(dead_code)]
 #![allow(non_camel_case_types)]
 
+// 本产物同时以两种方式被消费，二者必须都成立：
+//   1. 独立 crate 根（`verify_layout.py` 的 rustc 自检、手工比对）；
+//   2. daemon crate 的模块（`#[path]` 引入，使「契约 ↔ 实现」由编译器对齐）。
+// 后者让 `cargo fmt --check` 沿 mod 树进入本文件。各 `impl` 内的
+// `FIELD_OFFSETS` 是逐字段布局表，一行一条便于与 C 的 offsetof 对照；
+// 若交给 rustfmt 按行长启发式重排，换行位置会随 rustfmt 版本漂移，
+// 生成物即不再字节稳定。故对 impl 块显式 skip（生成器自己掌握其格式）。
+
 /// 契约承诺的字节序：全部多字节整数为大端。
 pub const FW_CONTRACT_ENDIAN: &str = "big";
 
@@ -89,6 +97,7 @@ pub struct MsgHdr {
     pub seq: u32,
 }
 
+#[rustfmt::skip]
 impl MsgHdr {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 12;
@@ -111,6 +120,7 @@ pub struct DdosEvent {
     pub addr: addr16,
 }
 
+#[rustfmt::skip]
 impl DdosEvent {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 65;
@@ -141,6 +151,7 @@ pub struct BanStateChange {
     pub whitelist_count: u32,
 }
 
+#[rustfmt::skip]
 impl BanStateChange {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 122;
@@ -173,6 +184,7 @@ pub struct WhitelistStateChange {
     pub whitelist_count: u32,
 }
 
+#[rustfmt::skip]
 impl WhitelistStateChange {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 51;
@@ -200,6 +212,7 @@ pub struct CmdResult {
     pub addr: addr16,
 }
 
+#[rustfmt::skip]
 impl CmdResult {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 37;
@@ -223,6 +236,7 @@ pub struct ConfigAck {
     pub rejected_flags: u32,
 }
 
+#[rustfmt::skip]
 impl ConfigAck {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 20;
@@ -257,6 +271,7 @@ pub struct ConfigChange {
     pub ddos_ban_duration: u32,
 }
 
+#[rustfmt::skip]
 impl ConfigChange {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 116;
@@ -295,6 +310,7 @@ pub struct BanEntry {
     pub reason: [u8; 32],
 }
 
+#[rustfmt::skip]
 impl BanEntry {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 94;
@@ -319,6 +335,7 @@ pub struct ListBansResponse {
     pub offset: u32,
 }
 
+#[rustfmt::skip]
 impl ListBansResponse {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 24;
@@ -350,6 +367,7 @@ pub struct StatsResponse {
     pub packets_accepted: u64,
 }
 
+#[rustfmt::skip]
 impl StatsResponse {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 60;
@@ -375,6 +393,7 @@ pub struct WhitelistEntry {
     pub device: [u8; 16],
 }
 
+#[rustfmt::skip]
 impl WhitelistEntry {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 34;
@@ -396,6 +415,7 @@ pub struct ListWhitelistResponse {
     pub offset: u32,
 }
 
+#[rustfmt::skip]
 impl ListWhitelistResponse {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 24;
@@ -431,6 +451,7 @@ pub struct RateEntry {
     pub addr: addr16,
 }
 
+#[rustfmt::skip]
 impl RateEntry {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 84;
@@ -461,6 +482,7 @@ pub struct ListRatesResponse {
     pub global_bps: u64,
 }
 
+#[rustfmt::skip]
 impl ListRatesResponse {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 40;
@@ -491,6 +513,7 @@ pub struct UdpPortItem {
     pub last_seen_secs: u64,
 }
 
+#[rustfmt::skip]
 impl UdpPortItem {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 26;
@@ -513,6 +536,7 @@ pub struct IcmpTypeItem {
     pub last_seen_secs: u64,
 }
 
+#[rustfmt::skip]
 impl IcmpTypeItem {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 26;
@@ -536,6 +560,7 @@ pub struct ScannerItem {
     pub packets: u64,
 }
 
+#[rustfmt::skip]
 impl ScannerItem {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 32;
@@ -571,6 +596,7 @@ pub struct AnalysisResponse {
     pub service_probes: [ScannerItem; 20],
 }
 
+#[rustfmt::skip]
 impl AnalysisResponse {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 4756;
@@ -604,6 +630,7 @@ pub struct DaemonRegisterAck {
     pub accepted: u8,
 }
 
+#[rustfmt::skip]
 impl DaemonRegisterAck {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 13;
@@ -625,6 +652,7 @@ pub struct BanIp {
     pub reason: [u8; 32],
 }
 
+#[rustfmt::skip]
 impl BanIp {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 65;
@@ -649,6 +677,7 @@ pub struct UnbanIp {
     pub reason: [u8; 32],
 }
 
+#[rustfmt::skip]
 impl UnbanIp {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 65;
@@ -685,6 +714,7 @@ pub struct SetConfig {
     pub ddos_ban_duration: u32,
 }
 
+#[rustfmt::skip]
 impl SetConfig {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 116;
@@ -719,6 +749,7 @@ pub struct ListBansQuery {
     pub limit: u32,
 }
 
+#[rustfmt::skip]
 impl ListBansQuery {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 20;
@@ -739,6 +770,7 @@ pub struct ListWhitelistQuery {
     pub limit: u32,
 }
 
+#[rustfmt::skip]
 impl ListWhitelistQuery {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 20;
@@ -759,6 +791,7 @@ pub struct ListRatesQuery {
     pub limit: u32,
 }
 
+#[rustfmt::skip]
 impl ListRatesQuery {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 20;
@@ -781,6 +814,7 @@ pub struct AddWhitelist {
     pub device: [u8; 16],
 }
 
+#[rustfmt::skip]
 impl AddWhitelist {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 46;
@@ -805,6 +839,7 @@ pub struct RemoveWhitelist {
     pub device: [u8; 16],
 }
 
+#[rustfmt::skip]
 impl RemoveWhitelist {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 46;
@@ -825,6 +860,7 @@ pub struct StatsQuery {
     pub hdr: MsgHdr,
 }
 
+#[rustfmt::skip]
 impl StatsQuery {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 12;
@@ -841,6 +877,7 @@ pub struct AnalysisQuery {
     pub hdr: MsgHdr,
 }
 
+#[rustfmt::skip]
 impl AnalysisQuery {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 12;
@@ -857,6 +894,7 @@ pub struct DaemonRegister {
     pub hdr: MsgHdr,
 }
 
+#[rustfmt::skip]
 impl DaemonRegister {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
     pub const WIRE_SIZE: usize = 12;
