@@ -15,7 +15,9 @@ pub mod shutdown;
 pub mod supervisor;
 pub mod timers;
 
-pub use channel::{bounded, Backpressure, QueueStats, Receiver, Sender};
+pub use channel::{
+    bounded, Backpressure, QueueStats, Receiver, RecvError, RecvTimeoutError, Sender, TryRecvError,
+};
 pub use shutdown::Shutdown;
 pub use supervisor::{StopOutcome, Supervisor};
 pub use timers::{spawn_scheduler, Fired, TimerId, TimerTable};

@@ -211,10 +211,27 @@ const fn header(msg_type: contract::MsgType, seq: u32, msg_len: u16) -> contract
 
 /// 组装一条「只有头、无载荷」的报文（`StatsQuery` / `AnalysisQuery` /
 /// `DaemonRegister`）。
-fn encode_header_only(msg_type: contract::MsgType, seq: u32) -> Vec<u8> {
+pub(crate) fn encode_header_only(msg_type: contract::MsgType, seq: u32) -> Vec<u8> {
     let wire = contract::MsgHdr::WIRE_SIZE;
     let raw = header(msg_type, seq, u16::try_from(wire).unwrap_or(u16::MAX));
     packed_bytes(&raw, wire)
+}
+
+/// 组装一条「头 + 载荷体」的报文，`msg_len` 与实际字节数一致。
+///
+/// 仅供 crate 内其他模块的测试构造接收侧输入；生产路径的报文一律由
+/// [`messages`] 里各类型的 `encode` 产出。
+#[cfg(test)]
+pub(crate) fn frame_for_test(msg_type: contract::MsgType, seq: u32, body: &[u8]) -> Vec<u8> {
+    let wire = HDR_LEN + body.len();
+    let raw = header(
+        msg_type,
+        seq,
+        u16::try_from(wire).expect("测试报文应短于 u16 长度域"),
+    );
+    let mut bytes = packed_bytes(&raw, HDR_LEN);
+    bytes.extend_from_slice(body);
+    bytes
 }
 
 // ============================================================================

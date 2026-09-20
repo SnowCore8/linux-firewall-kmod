@@ -13,3 +13,5 @@
 //! `commands.rs` / `handlers.rs` / `decision.rs` / `config_sync.rs`）。
 
 pub mod codec;
+pub mod reactor;
+pub mod transport;
