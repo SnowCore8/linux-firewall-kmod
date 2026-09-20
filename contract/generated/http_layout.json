@@ -69,7 +69,7 @@
     "请求 LogQueryParams: 5 个字段",
     "请求 PaginationParams: 3 个字段",
     "响应 SseStatusResponse: 3 个字段",
-    "缺陷记录: 9 条"
+    "缺陷记录: 9 条（已修 0 / 有意保留 0 / 未修 9；由 verify_*.py 到源码核对锚点）"
   ],
   "envelope": {
     "name": "ApiResponse",

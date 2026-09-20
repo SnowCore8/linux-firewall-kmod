@@ -2143,6 +2143,8 @@ def _http_block(
         return
 
     # ---- 缺陷 -------------------------------------------------------------
+    # 字段集与 textproto 侧逐字一致：status/fix/reason 缺一不可，否则退役旧读
+    # 路径后无法把 E/F/M 记成「已修」（status=fixed 要求 where 消失、fix 存在）。
     m = re.fullmatch(r"defect\s+(\w+)", header)
     if m:
         decl = Defect(m.group(1), open_line)
@@ -2150,8 +2152,14 @@ def _http_block(
             k, v = _http_kv(path, lineno, text)
             if k == "severity":
                 decl.severity = v
+            elif k == "status":
+                decl.status = v
             elif k == "where":
                 decl.where = v
+            elif k == "fix":
+                decl.fix = v
+            elif k == "reason":
+                decl.reason = v
             elif k == "resolution":
                 decl.resolution = v
             elif k == "text":
@@ -2308,7 +2316,44 @@ def validate_http(contract: HttpContract) -> List[str]:
         scope = f"（泛型参数 {'、'.join(d.params)}）" if d.params else ""
         notes.append(f"{'请求' if d.kind == 'request' else '响应'} {name}: {len(d.fields)} 个字段{scope}")
 
-    notes.append(f"缺陷记录: {len(contract.defects)} 条")
+    # 与 validate_textproto 同一套规则：契约自己在**生成期**就把「说修好了、
+    # 代码其实没动」这类谎话挡住，而不是等到 verify_*.py 才发现。
+    for decl in contract.defects:
+        if decl.severity not in SEVERITIES:
+            raise ContractError(
+                f"defect {decl.name}: severity 必须是 {'/'.join(SEVERITIES)}，实际 {decl.severity!r}"
+            )
+        if decl.status not in DEFECT_STATUSES:
+            raise ContractError(
+                f"defect {decl.name}: status 必须是 {'/'.join(DEFECT_STATUSES)}，实际 {decl.status!r}"
+            )
+        if not decl.where or ":" not in decl.where:
+            raise ContractError(f"defect {decl.name}: 必须给出 'where = <文件>:<锚点>'")
+        if decl.status == "fixed" and (not decl.fix or ":" not in decl.fix):
+            raise ContractError(
+                f"defect {decl.name}: status=fixed 必须给出 'fix = <文件>:<锚点>' 作为修复证据"
+            )
+        if decl.status != "fixed" and decl.fix:
+            raise ContractError(
+                f"defect {decl.name}: 仅 status=fixed 可给 fix（当前 status={decl.status}）"
+            )
+        if decl.status == "retained" and not decl.reason:
+            raise ContractError(
+                f"defect {decl.name}: status=retained 必须给出 reason 说明为何有意保留"
+            )
+        if decl.status != "retained" and decl.reason:
+            raise ContractError(
+                f"defect {decl.name}: 仅 status=retained 可给 reason（当前 status={decl.status}）"
+            )
+        if not decl.text:
+            raise ContractError(f"defect {decl.name}: 缺少 text")
+    if contract.defects:
+        fixed = sum(1 for d in contract.defects if d.status == "fixed")
+        retained = sum(1 for d in contract.defects if d.status == "retained")
+        notes.append(
+            f"缺陷记录: {len(contract.defects)} 条（已修 {fixed} / 有意保留 {retained} / "
+            f"未修 {len(contract.defects) - fixed - retained}；由 verify_*.py 到源码核对锚点）"
+        )
     return notes
 
 
