@@ -505,6 +505,12 @@ Replacement principle: assertions must be able to fail. Capacity assertions beco
 limit and verify entry N+1 is refused"; path assertions read from config; netlink assertions assert
 actual event fields.
 
+**2.F-2 landing status** (commit `6d0bcb4`): the "tautological assertion" class above is fully
+replaced — eight files (`test_04` / `test_11` / `test_14` / `test_15` / `test_16` / `test_19` /
+`test_20` / `test_21`), and every replacement can now fail. **Still open** (other test debt, outside
+2.F's "tautological assertion" scope): the stale capacity constants in `tests/config.py`, the
+hard-coded paths in `test_18_log_rotation.py`, and the skip-heavy `test_10_daemon_logparse.py`.
+
 ## Phased Implementation and Acceptance
 
 Each phase is independently testable, independently committable, and independently revertible.
