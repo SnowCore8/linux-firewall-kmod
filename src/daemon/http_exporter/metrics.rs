@@ -28,7 +28,8 @@ fn read_kernel_stats() -> (u64, u64, u64, u64) {
 
 /// 生成 Prometheus 文本格式 (`text/plain; version=0.0.4`) 的全部指标。
 ///
-/// 包含 4 个内核态 + 13 个用户态 + 4 个 netlink 健康 + 1 个 uptime + 3 个信誉分（共 25 个）。
+/// 包含 4 个内核态 + 12 个用户态（9 个通用 + 3 个 DDoS）+ 4 个 netlink 健康 + 1 个 uptime +
+/// 3 个信誉分，共 24 个（按 `# TYPE` 行计数；旧注释把用户态记成 13 个，故总数写成 25）。
 ///
 /// # Returns
 /// Prometheus exposition 格式字符串
