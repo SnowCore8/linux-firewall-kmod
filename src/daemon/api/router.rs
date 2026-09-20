@@ -51,7 +51,7 @@ pub async fn handle_sse(State(api): State<Arc<ApiState>>) -> Response {
     events_response(api.state.hub().subscribe(), renderer, guard).into_response()
 }
 
-/// 构建**已迁入 `api` 层**的需认证路由组（`/metrics` + 18 条 `/api/v1/*`）。
+/// 构建**已迁入 `api` 层**的需认证路由组（`/metrics` + 17 条 `/api/v1/*`，共 18 条）。
 ///
 /// 调用方负责在其上挂认证中间件——本函数不假设认证实现，避免 `api` 依赖某个
 /// 具体凭据来源。未迁入的路由由 [`crate::http_exporter::handler`] 另行挂载，

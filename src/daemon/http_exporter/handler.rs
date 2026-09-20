@@ -46,8 +46,8 @@ fn db_error_response(msg: String) -> Response {
 /// - 无认证路由组：SPA 外壳与静态资源、`/sw.js`（`/health`、`/healthz` 已迁到
 ///   [`crate::api::router::health_routes`]，由它提供）
 /// - 需认证路由组：由 [`crate::api::router::protected_routes`]（已迁入的 18 条）
-///   与 [`legacy_protected_routes`]（尚未迁入的 35 条）合并而成；本函数把认证
-///   中间件统一挂在合并结果上
+///   与 [`legacy_protected_routes`]（尚未迁入的 23 条）合并而成，合计 41 条；本函数把
+///   认证中间件统一挂在合并结果上
 /// - 安全头：所有路由共享
 ///
 /// 认证凭据不在本函数传入，而是由中间件每请求读取运行期凭据
@@ -102,11 +102,12 @@ pub fn build_router(api_state: Option<std::sync::Arc<crate::api::routes::ApiStat
         .layer(middleware::from_fn(security_headers_middleware))
 }
 
-/// 尚未迁入 `api` 层的需认证路由（35 条）。
+/// 尚未迁入 `api` 层的需认证路由（23 条）。
 ///
 /// 这些 handler 仍在本文件；每次迁入一批，就把对应的 `.route(...)` 从这里删掉、
 /// 加到 [`crate::api::router::protected_routes`]。两条清单加起来必须恰好是契约里
-/// 需认证的路由全集，`verify_http.py` 的 `check_routes` 会同时读两个文件核对。
+/// 需认证的路由全集（当前 18 + 23 = 41，契约合计 53 条、其中 12 条无认证），
+/// `verify_http.py` 的 `check_routes` 会同时读两个文件核对。
 fn legacy_protected_routes() -> Router {
     // 未配置 metrics_username/password 时 middleware 跳过（与现有 API 一致）；
     // 已配置时 SSE 与其它 API 同样要求 Basic Auth（修复无认证泄露）。
