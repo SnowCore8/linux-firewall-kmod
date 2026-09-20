@@ -538,7 +538,8 @@ SQLite `bans` table schema; the metric count is written as "24"; the main loop i
 | 2.E-2 `state/{bans,whitelist,rates,stats,mod}.rs` | Done |
 | 2.E-3 Thin `api` layer + SSE | Done |
 | 2.E-4a Composition root wiring (`state::compose` mirroring + `main.rs` injection) | Done |
-| 2.E-4b Retire old read paths + ratchet sync | Not started |
+| 2.E-4b-1 Ratchet groundwork (E/F/M recorded in the contract + status-aware anchors in `verify_http.py`) | Done |
+| 2.E-4b-2 Retire the old read paths + mount the new router + flip E/F/M to `fixed` | Not started |
 | 2.F–2.G | Not started |
 
 ### What 2.A Landed
@@ -938,6 +939,11 @@ exactly the adapter-layer tests this step added).
 Gate evidence recorded at the time for 2.E-4a: `cargo test --release --lib` (399 passed, 87 of them
 in `state::`), `cargo clippy --release --lib --tests -- -D warnings`, `cargo fmt --all --check`,
 `cargo check --bins --lib` (no warnings), `bash scripts/check_contract.sh` all green.
+
+Gate evidence recorded at the time for 2.E-4b-1: `bash scripts/check_contract.sh` green;
+`verify_http.py` reports 12 defects and 15 where/fix anchors passing under the status dispatch, and
+it says on its own that the three new entries (E/F/M) currently have anchor-only coverage with no
+mechanical assertion -- that gap closes when 2.E-4b-2 flips them.
 
 ## Judging Discipline
 

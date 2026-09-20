@@ -488,7 +488,8 @@ sequenceDiagram
 | 2.E-2 `state/{bans,whitelist,rates,stats,mod}.rs` | 已完成 |
 | 2.E-3 `api` 薄适配层 + SSE | 已完成 |
 | 2.E-4a 组合根装配（`state::compose` 镜像 + `main.rs` 注入） | 已完成 |
-| 2.E-4b 退役旧读路径 + 棘轮同步 | 未开始 |
+| 2.E-4b-1 棘轮铺垫（E/F/M 记入契约 + `verify_http.py` 锚点 status-aware） | 已完成 |
+| 2.E-4b-2 退役旧读路径 + 挂载新路由 + 翻转 E/F/M 为 `fixed` | 未开始 |
 | 2.F–2.G | 未开始 |
 
 ### 2.A 落地明细
@@ -728,6 +729,8 @@ E/F/M 三条缺陷条目**在同一提交**内落地——否则 `check_defect_c
 2.E-3 当时门禁证据见上一条（`api::` 55 条即本步新增的适配层用例）。
 
 2.E-4a 当时门禁证据：`cargo test --release --lib`（399 passed，其中 `state::` 87 条）、`cargo clippy --release --lib --tests -- -D warnings`、`cargo fmt --all --check`、`cargo check --bins --lib`（无警告）、`bash scripts/check_contract.sh` 全绿。
+
+2.E-4b-1 当时门禁证据：`bash scripts/check_contract.sh` 全绿；`verify_http.py` 报 12 条缺陷、15 个 `where/fix` 锚点按 status 分派核对通过，并自行提示新加的三条（E/F/M）当前仅有锚点核对、无机械断言——该缺口在 2.E-4b-2 翻转时闭合。
 
 ## 判定纪律
 
