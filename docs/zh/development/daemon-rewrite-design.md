@@ -281,6 +281,7 @@ inotify ──LogChunk{jail, source, bytes}──▶ parse ──Failure{jail, i
 | `parse/extract.rs` | 无 | `extract_ip(&str) -> Option<IpAddr>`（纯函数） |
 | `decision/window.rs` | 每 (jail, ip) 的失败时间戳窗口 | `observe(ip, ts) -> Verdict`；单所有者，无跨模块锁 |
 | `decision/policy.rs` | 无（纯函数） | `effective_threshold(...)`、`progressive_duration(...)` |
+| `pipeline/mod.rs` | 每 jail 规则/参数/失败窗口 + 每源行分割器（单一所有者） | `on_chunk(...)` → `Vec<BanIntent>`；`cleanup(now)` 由定时器驱动（修 A） |
 | `kernel/codec.rs` | 无 | 直接消费 `contract/generated/netlink_contract.rs`（修「手抄结构体」） |
 | `kernel/transport.rs` | netlink socket（唯一所有者） | `send(Frame)`；单写者，无需发送锁 |
 | `kernel/reactor.rs` | 在途请求表（`seq → pending`） | `dispatch(msg)`；按 **type + seq** 路由（修 I/K） |
@@ -481,7 +482,8 @@ sequenceDiagram
 |------|------|
 | 2.A 契约修订 | 已完成 |
 | 2.B 运行时骨架 | 已完成 |
-| 2.C–2.G | 未开始 |
+| 2.C 主链路重写 | 已完成 |
+| 2.D–2.G | 未开始 |
 
 ### 2.A 落地明细
 
@@ -520,6 +522,29 @@ netlink 线格式三端（契约 / 内核 / daemon）同一步落地，布局经
 - **`Makefile` 的 `format-check` 掩蔽失败已修**：`exit 1` 原在子 shell 中，配方末条 `echo` 使其以 0 退出；改为花括号组，并让 `yamllint` 的退出码同样透传。
 
 门禁证据：`cargo test --release --lib`（106 passed）、`cargo clippy --release --lib --tests -- -D warnings`、`make build` / `make format-check` / `make frontend-typecheck`、`bash scripts/check_contract.sh`、`bash scripts/verify_project.sh` 全绿。
+
+### 2.C 落地明细
+
+本阶段重写主链路三层并装配成一个执行体，尚未接入 `main.rs`（旧链路暂不动，按「保留编译、分批迁入」）。四步各自独立提交：
+
+| 提交 | 文件 | 内容 | 消除的问题 |
+|------|------|------|-----------|
+| 2.C-1 | `ingest/{watcher,registry,reader}.rs` | 监视 = fd + 读缓冲；登记表 = `SourceId ↔ (path, wd, inode)`；读取器 = 每源长驻 fd + 复用缓冲 | A（部分）/ B / C |
+| 2.C-2 | `parse/{splitter,extract,rules}.rs` | 每源 partial 行缓冲；`extract_ip` 保留段判据单一实现；每 jail 编译正则（不可变，`Arc`） | M（保留段判据） |
+| 2.C-3 | `decision/{policy,window}.rs` | 判定算式拆成纯函数；失败窗口归执行体独占、无锁 | 热路径锁争用（`Jail.failed_hash`） |
+| 2.C-4 | `pipeline/mod.rs` | 三层装配：新增字节 → 行 → IP → 失败计数 → 封禁意图 | A（维护入口） |
+
+关键取舍：
+
+- **身份是显式类型而非索引**。`SourceId` 登记时一次性分配、此后再不变化，与 inotify `wd` 解耦：轮转换 `wd`、换 inode，重载增删源，同一路径的 `SourceId` 稳定。旧实现以 `FILE_STATES` 的 `Vec` 下标当身份，而 `setup_inotify` 在每次重载时把整个 `Vec` 重建——下标随之漂移，读取偏移与 partial 缓冲全部错位。
+- **每事件只做一次 `symlink_metadata`**。旧实现每个事件都重复 open / `metadata` / `seek` / `vec![0u8; 256*1024]`；`SourceReader` 改为长驻 fd + 单个复用缓冲，轮转由一次廉价 stat 判定（inode 变化或 `size < offset`）。
+- **partial 行缓冲从 jail 挪到源**。旧 `jail.partial_line_buffer` 被同一 jail 的多个日志文件共用，A 文件的半行会被追加上 B 文件的半行，且随重载被 `cleanup_partial_line_buffer` 整体清空。改为每源一个 `LineSplitter` 后，语义变成「每个文件的半行只与自己的后续字节拼接」，重载也不再丢弃。
+- **超长行尾部确定性丢弃**。旧实现在「读块边界恰好落在何处」上存在不确定行为；新实现改为确定性丢弃并计入 `oversized`（行为修正）。
+- **`register_jail` 保留失败窗口**。重载只替换规则集与参数，窗口是运行期观测、不属于配置——否则攻击者可用一次 SIGHUP 清零已积累的失败计数。
+- **维护入口从 `poll()==0` 改为 `scheduler` 驱动**。`Pipeline::cleanup(now)` 由单调时钟定时器周期调用，不再挂在「本轮无事件」这一条件上（结构问题 A 的修法）。
+- **对照测试可失败且随旧模块退役**。`extract_ip`、`RuleSet::parse`、`FailureWindow::observe`（对旧 `count_recent`）、以及封禁算式（对旧 `BanHistory::calculate_progressive_duration` 与内联的永久/过期算式）都与旧实现在同一批语料上逐案断言相等。其中一条真实分歧由对照测试发现：旧 `process_failed_timestamps` **仅在缓冲满员时**才淘汰过期前缀，而新实现初版每轮都以本次事件的时钟过滤——时钟回拨的乱序事件下会提前丢弃仍在窗口内的时间戳；已改为逐条对齐旧分支。
+
+门禁证据：`cargo test --release --lib`（174 passed，其中 2.C 三层与装配共 68 条）、`cargo clippy --release --lib --tests -- -D warnings`、`cargo fmt --check`、`make build` / `make format-check` / `make frontend-typecheck`、`bash scripts/check_contract.sh`、`python3 contract/verify_layout.py`、`bash scripts/verify_project.sh` 全绿；`make test`（67 passed / 25 skipped）。
 
 ## 判定纪律
 

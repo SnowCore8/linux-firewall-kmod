@@ -314,6 +314,7 @@ or immutable snapshots.
 | `parse/extract.rs` | None | `extract_ip(&str) -> Option<IpAddr>` (pure function) |
 | `decision/window.rs` | Per (jail, ip) failure-timestamp window | `observe(ip, ts) -> Verdict`; single owner, no cross-module locks |
 | `decision/policy.rs` | None (pure functions) | `effective_threshold(...)`, `progressive_duration(...)` |
+| `pipeline/mod.rs` | Per-jail rules/policy/failure window + per-source line splitter (sole owner) | `on_chunk(...)` → `Vec<BanIntent>`; `cleanup(now)` driven by the timer (fixes A) |
 | `kernel/codec.rs` | None | Consumes `contract/generated/netlink_contract.rs` directly (fixes "hand-copied structs") |
 | `kernel/transport.rs` | netlink socket (sole owner) | `send(Frame)`; single writer, no send lock needed |
 | `kernel/reactor.rs` | In-flight request table (`seq → pending`) | `dispatch(msg)`; routes by **type + seq** (fixes I/K) |
@@ -531,7 +532,8 @@ SQLite `bans` table schema; the metric count is written as "24"; the main loop i
 |-------|--------|
 | 2.A Contract revisions | Done |
 | 2.B Runtime skeleton | Done |
-| 2.C–2.G | Not started |
+| 2.C Main-chain rewrite | Done |
+| 2.D–2.G | Not started |
 
 ### What 2.A Landed
 
@@ -590,6 +592,58 @@ Gate evidence: `cargo test --release --lib` (106 passed),
 `cargo clippy --release --lib --tests -- -D warnings`, `make build` / `make format-check` /
 `make frontend-typecheck`, `bash scripts/check_contract.sh`, `bash scripts/verify_project.sh` all
 green.
+
+### What 2.C Landed
+
+This phase rewrites the three main-chain layers and composes them into one executor. It is not yet
+wired into `main.rs` (the old chain still compiles, matching "keep it building, migrate in
+batches"). Four independently committed steps:
+
+| Commit | Files | Content | Problem removed |
+|--------|-------|---------|-----------------|
+| 2.C-1 | `ingest/{watcher,registry,reader}.rs` | Watcher = fd + read buffer; registry = `SourceId ↔ (path, wd, inode)`; reader = long-lived per-source fd + reused buffer | A (partial) / B / C |
+| 2.C-2 | `parse/{splitter,extract,rules}.rs` | Per-source partial line buffer; one shared predicate for reserved ranges in `extract_ip`; per-jail compiled regexes (immutable, `Arc`) | M (reserved-range predicate) |
+| 2.C-3 | `decision/{policy,window}.rs` | Judgement arithmetic split into pure functions; the failure window is owned by the executor, lock-free | Hot-path lock contention (`Jail.failed_hash`) |
+| 2.C-4 | `pipeline/mod.rs` | Composition of the three layers: new bytes → lines → IPs → failure counts → ban intents | A (maintenance entry point) |
+
+Key trade-offs:
+
+- **Identity is an explicit type, not an index.** `SourceId` is allocated once at registration and
+  never changes again, decoupled from the inotify `wd`: rotation replaces the `wd` and the inode, and
+  a reload adds and drops sources, yet the `SourceId` for a given path stays stable. The old code
+  used a `Vec` index into `FILE_STATES` as identity, while `setup_inotify` rebuilt that whole `Vec`
+  on every reload — so indices drifted and every read offset and partial buffer was left misaligned.
+- **One `symlink_metadata` per event.** The old code repeated open / `metadata` / `seek` /
+  `vec![0u8; 256*1024]` on every event; `SourceReader` keeps a long-lived fd and a single reused
+  buffer, and detects rotation with one cheap stat (inode change, or `size < offset`).
+- **The partial line buffer moved from the jail to the source.** The old `jail.partial_line_buffer`
+  was shared by every log file of a jail, so one file's half line got appended to another's, and a
+  reload wiped it entirely via `cleanup_partial_line_buffer`. With one `LineSplitter` per source the
+  semantics become "each file's half line only ever joins its own later bytes", and reloads no longer
+  discard them.
+- **An oversized tail is dropped deterministically.** The old code's behaviour depended on exactly
+  where the read chunk happened to end; the new implementation drops it deterministically and counts
+  it as `oversized` (a behaviour fix).
+- **`register_jail` preserves the failure window.** A reload replaces only the rule set and the
+  policy; the window is runtime observation, not configuration — otherwise an attacker could clear
+  its accumulated failure count with a single SIGHUP.
+- **The maintenance entry point moved off `poll() == 0` to the scheduler.** `Pipeline::cleanup(now)`
+  is driven by the monotonic-clock timer on a fixed period instead of being hung off "no events this
+  round" (the fix for structural problem A).
+- **Comparison tests can fail and retire with the old modules.** `extract_ip`, `RuleSet::parse`,
+  `FailureWindow::observe` (against the legacy `count_recent`) and the ban arithmetic (against the
+  legacy `BanHistory::calculate_progressive_duration` plus the inlined permanence / expiry formulas)
+  all assert case-by-case equality with the old implementation over a shared corpus. One real
+  divergence was found by such a test: the legacy `process_failed_timestamps` pruned expired
+  timestamps **only when the buffer was full**, whereas the first version of the new code filtered
+  every round using that event's own clock — under out-of-order events from a clock rollback it
+  dropped timestamps still inside the window. It now mirrors the legacy branch exactly.
+
+Gate evidence: `cargo test --release --lib` (174 passed, 68 of them in the 2.C layers and the
+composition), `cargo clippy --release --lib --tests -- -D warnings`, `cargo fmt --check`,
+`make build` / `make format-check` / `make frontend-typecheck`, `bash scripts/check_contract.sh`,
+`python3 contract/verify_layout.py`, `bash scripts/verify_project.sh` all green; `make test`
+(67 passed / 25 skipped).
 
 ## Judging Discipline
 
