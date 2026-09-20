@@ -26,5 +26,6 @@
   * [Testing](development/testing.md)
   * [Performance Baseline](development/perf-baseline.md)
   * [Kernel Rewrite Design](development/kernel-rewrite-design.md)
+  * [Daemon Rewrite Design](development/daemon-rewrite-design.md)
 
 * [Migrating from fail2ban](migration/from-fail2ban.md)
