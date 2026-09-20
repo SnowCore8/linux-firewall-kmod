@@ -136,7 +136,12 @@ open(`O_NOFOLLOW`) + `metadata()` + `seek()` + `vec![0u8; 256*1024]`
 |------|------|------|
 | `ListBansResponse` | 有分页（`offset`/`total`/续页） | 正常 |
 | `ListWhitelistResponse` | 契约无 `offset`/`total`；daemon 解析上限写死 64 | 内核单页默认 256，超 64 条时**整条响应被丢弃**，`WHITELIST_CACHE` 不更新 |
-| `ListRatesResponse` | 契约有 `total` 但 daemon 从不读；请求无 `offset`/`limit` | 速率表容量 4096，单页 256；>256 条时**静默截断且无感知** |
+| `ListRatesResponse` | 契约有 `total` 但 daemon 从不读；请求无 `offset`/`limit` | 速率表单页上限 779（`FW_NL_RATES_PAGE_MAX`）；>779 条时**静默截断且无感知** |
+
+> 勘误：`4096` / `64` 是 `BAN_HASH_BITS` / `WHITELIST_HASH_BITS` 的**哈希桶数**，不是条目容量
+> 也不是单页上限——初版曾把速率表那格写成「容量 4096」，属桶数与容量混淆。本表记的是 2.A 修订**前**
+> 的存量状态；2.A 之后白名单、封禁、速率的单页上限分别是 `FW_NL_WL_PAGE_MAX`（1926）、
+> `FW_NL_BANS_PAGE_MAX`（696）、`FW_NL_RATES_PAGE_MAX`（779）。
 
 **K. 注册状态对 daemon 不可见。** `DAEMON_REGISTER` 只在启动时发一次；`DAEMON_REGISTER_ACK`
 在 daemon 侧**无结构体、无解析分支**（落到「未知消息类型」分支）。内核拒绝指令时不回错误
@@ -462,6 +467,20 @@ sequenceDiagram
 能失败。**仍未处理**（属「其它测试债务」，不在 2.F 的「恒真断言」口径内）：`tests/config.py` 的陈旧
 容量常数、`test_18_log_rotation.py` 的硬编码路径、`test_10_daemon_logparse.py` 的 skip 主导。
 
+上表三处残留债务已在提交 `bdb508f` 收尾，深度按「对齐真实上限 + 去恒真」，且**未新增内核级
+容量用例**：
+
+| 位置 | 处置 |
+|------|------|
+| `tests/config.py` | 删除 `MAX_BAN_CAPACITY = 4096` / `MAX_WHITELIST_CAPACITY = 64` 两个陈旧常数，改写为注释：真实上限是内核模块参数 `fw_max_ban_entries` / `fw_max_whitelist_entries`（默认 65535，见 `config/default.yaml` 的 `capacity:`）；`4096` 是封禁表哈希桶数、`64` 是白名单桶数，均非容量 |
+| `test_04_whitelist.py` | 删除 `assert wl_count <= 64`（恒真），保留 `assert wl_count == before + len(added)`；skip 文案与 docstring 相应更正 |
+| `test_11_resource_mgmt.py` | 不再导入 `MAX_BAN_CAPACITY`；保留 `assert 0 < stat_bans <= 200`——上界是每秒封禁闸门（`fw_max_bans_per_second`，默认 200/秒），非表容量 |
+| `test_18_log_rotation.py` | 硬编码 `/etc/firewall/default.yaml` 改为仓库内 `CONFIG_DIR / "default.yaml"`；测试日志目录改用 `tmp_path`，清理不再 `rmtree` 固定目录 |
+| `test_10_daemon_logparse.py` | `test_log_parse_function` 的静默分支改为显式 `assert PROC_BANS.exists()` + `assert ban_count >= 1`；`test_nonexistent_log` 的超时分支由 skip 改为 `pytest.fail` |
+
+验证：串行 `python3 -m pytest tests/ -q -rA`（**68 passed / 24 skipped**）；skip 集合相对
+`6d0bcb4` 基线只少了 `test_10::test_nonexistent_log` 一条（skip → pass），无断言降级为 skip。
+
 ## 分阶段实施与验收
 
 每阶段独立可测、独立提交、独立回退。前置依赖为 0（与 Phase 1 的内核重写可并行）。
@@ -476,12 +495,21 @@ sequenceDiagram
 | **2.F** | 持久化队列背压改造（就地修 `history_snapshot/mod.rs`，不新建 `persist/`）+ 测试债务替换 | 结构问题 G 消除（背压有测试）；恒真断言全部替换为可失败断言 |
 | **2.G** | 文档重写：`docs/{zh,en}/architecture/daemon.md` 按新实现全量重写；`docs/{zh,en}/architecture/data-flow.md` 修正陈旧数字 | 文档与代码逐项对齐 |
 
-`docs/zh/architecture/daemon.md` 目前与实现严重不符，2.G 必须处理：
-端口写的是 `9119`；模块表含已不存在的 `ban/procfs.rs`；失败计数器写成
-`FailureCounter { ip, count, first_seen, last_seen }`；轮转事件写成 `IN_MOVED_TO`；
-含已不存在的 `<HOST>` 替换说明与旧 SQLite `bans` 表 schema；指标数写「24 个」；
-主循环写成 `epoll`。`docs/*/architecture/data-flow.md` 同样陈旧（「满表（4096）」
-「白名单（64）」「线性扫描」「~50ns/~100ns」以及旧函数名 `nf_hook_func_ipv4`）。
+`docs/zh/architecture/daemon.md` 与实现严重不符，2.G 必须处理：模块表含已不存在的
+`ban/procfs.rs`；失败计数器写成 `FailureCounter { ip, count, first_seen, last_seen }`；
+轮转事件写成 `IN_MOVED_TO`；含已不存在的 `<HOST>` 替换说明与旧 SQLite `bans` 表 schema；
+主循环写成 `epoll`。
+
+**本清单初版列入了两条经复核为误判的项**，一并留档，避免后续再朝错误方向改：
+
+- 「端口写的是 `9119`」——`9119` 恰是真实默认值（`config/default.yaml:12`、
+  `src/daemon/types/config.rs:180`），旧文档此处正确；
+- 「指标数写「24 个」」——`src/daemon/http_exporter/metrics.rs` 恰好暴露 24 个互不相同的
+  `firewall_*` 指标名（`# HELP` 行去重计数），旧文档此处正确。
+
+`docs/*/architecture/data-flow.md` 同样陈旧（「满表（4096）」「白名单（64）」「线性扫描」
+「~50ns/~100ns」以及旧函数名 `nf_hook_func_ipv4`）。该文件已在提交 `615fe16` 修正；概览
+`docs/*/architecture/README.md` 的容量与并发断言在提交 `929b52f` 一并修正。
 
 ## 实施进展
 
@@ -500,7 +528,7 @@ sequenceDiagram
 | 2.E-4c 接入 `runtime/`：调度器接管周期清理与计数器镜像 + `main.rs` 装配；E 转 `fixed` | 已完成 |
 | 2.F-1 队列背压（`history_snapshot/mod.rs`，只修队列行为） | 已完成 |
 | 2.F-2 测试债务替换（`tests/` 恒真断言） | 已完成 |
-| 2.G 文档重写 | 未开始 |
+| 2.G 文档重写 | 已完成 |
 
 ### 2.A 落地明细
 
@@ -828,6 +856,47 @@ E 的判据是「**读路径改状态**」。旧实现把限流 `purge_expired` 
 2.F-2（`tests/` 恒真断言替换为可失败断言）已完成，落在提交 `6d0bcb4`：8 个测试文件，替换后的每条断言都必须能失败（精确计数 / YAML 解析 / 真实 Prometheus 样本行 / 非零退出码 / 指标增量）。验证为串行 `python3 -m pytest tests/ -q -rA`（**67 passed / 25 skipped**），与改动前基线逐条一致——25 条 skip 按文件分布与原因完全相同，没有把断言降级成 skip。
 
 至此 2.F 两片（2.F-1 队列背压 + 2.F-2 测试债务）均已落地。
+
+### 2.G 落地明细：文档与代码逐项对齐
+
+`docs/{zh,en}/architecture/daemon.md` 按**新实现**全量重写（两文件 25 个标题一一对应、代码块数与
+表行数相同，便于逐节对照）。重写不是润色：旧文描述的是「epoll 主循环 + `FailureCounter { ip,
+count, first_seen, last_seen }` + `ban/procfs.rs` + `<HOST>` 替换 + SQLite `bans` 表」那一代实现，
+与本仓库现状已无对应关系。
+
+取数纪律是**每条数字回源码核**，不引用旧文档、也不引用本文档的转述。核对结果（命令即证据）：
+
+| 事实 | 值 | 核对方式 |
+|------|----|---------|
+| `unsafe { }` 块 | 73 处，13 个文件 | `grep -rn 'unsafe {' src/daemon --include=*.rs` |
+| Prometheus 指标 | 24 个（`# TYPE` 行数 = 去重指标名数） | `grep -c '# TYPE firewall_' src/daemon/http_exporter/metrics.rs` |
+| 路由 | 需认证 18（已迁入）+ 23（未迁入）= 41；无认证 12（10 公开 + 2 探针）；合计 53 | `contract/verify_http.py`（契约 53 条 / 源码 53 条） |
+| SSE 上限 | events 10 / logs 5；keepalive 15 s；每连接缓冲 32；超限 503 | `src/daemon/api/sse.rs` 常量 |
+| 监听默认值 | 代码 `127.0.0.1:9119`；随包 YAML `0.0.0.0:9119` | `src/daemon/types/config.rs` / `config/default.yaml:12-13` |
+| 日志默认路径 | 代码 `/var/log/firewall-daemon.log`；随包 YAML `/var/log/firewall.log` | `src/daemon/logger.rs` / `config/default.yaml:16` |
+| 未接入模块 | `ingest/` `parse/` `decision/` `pipeline/` `kernel/` `signal/` 零生产引用 | `grep -rn` 于 `src/daemon`（`lib.rs` 声明之外无调用点） |
+
+重写过程中发现并纠正了三处**数字层**问题，留档以免再被改回去：
+
+| 问题 | 真相 | 处置 |
+|------|------|------|
+| 本设计初版称旧文档「指标数写 24 个」是错的 | 24 就是真值（`# TYPE` 计数 = 去重指标名计数 = 24；`metrics.rs` 文件内注释「共 25 个」才是错的） | 收回误判，文档写 24 |
+| 本设计初版称旧文档「端口写的是 9119」是错的 | 9119 就是真值（`config/default.yaml:12`、`src/daemon/types/config.rs`） | 收回误判；文档写 9119，并补「代码默认只绑回环、随包 YAML 绑全网」这一区分 |
+| 源码注释「尚未迁入的 35 条」 | 真值 23（`legacy_protected_routes` 内 `.route()` 计数；41 = 53 − 12） | 文档与源码注释同一步改齐 |
+
+第三行是本阶段唯一一处**代码侧改动**（纯注释）：`handler.rs` 三处、`api/router.rs` 一处。若只改
+文档，源码注释会把下一个读者再引回 35。
+
+`docs/*/architecture/data-flow.md` 的陈旧数字已在提交 `615fe16` 修正（桶数 ≠ 容量、`fw_hook_ipv4` /
+`fw_hook_ipv6`、「白名单不是线性扫描」、显式写明 `pipeline` 未接入），概览 `docs/*/architecture/
+README.md` 的容量与并发断言在提交 `929b52f` 修正。本阶段复核两文件与实现一致，故这部分以「复核
+确认、无需再改」收尾。
+
+门禁证据（本次实跑）：`make daemon`（✓ 构建成功）、`python3 contract/verify_http.py`（契约 53 条 /
+源码 53 条，全项通过）、`bash scripts/check_contract.sh`（契约门禁通过）、`bash
+scripts/verify_project.sh`（✓ 内核模块与 daemon 均编译成功）、`cargo test --release --lib`（**404
+passed / 0 failed**）、`cargo fmt --all --check`（干净）、`cargo clippy --all-targets -- -D
+warnings`（exit 0）。
 
 ## 判定纪律
 

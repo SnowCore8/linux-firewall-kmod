@@ -157,7 +157,13 @@ each other.
 |----------|---------------|-------------|
 | `ListBansResponse` | Paginated (`offset`/`total`/continuation) | Fine |
 | `ListWhitelistResponse` | Contract has no `offset`/`total`; daemon parse limit hard-coded to 64 | Kernel default page is 256; above 64 entries the **whole response is discarded** and `WHITELIST_CACHE` is not updated |
-| `ListRatesResponse` | Contract has `total` but daemon never reads it; request has no `offset`/`limit` | Rate table capacity 4096, single page 256; above 256 entries **silently truncated with no awareness** |
+| `ListRatesResponse` | Contract has `total` but daemon never reads it; request has no `offset`/`limit` | Rate table page max 779 (`FW_NL_RATES_PAGE_MAX`); above 779 entries **silently truncated with no awareness** |
+
+> Erratum: `4096` / `64` are the **hash-bucket counts** of `BAN_HASH_BITS` / `WHITELIST_HASH_BITS`,
+> not entry capacities and not page sizes — the first version wrote "capacity 4096" for the rate
+> table, conflating bucket count with capacity. This table records the pre-2.A state; after 2.A the
+> whitelist, ban, and rate page maxima are `FW_NL_WL_PAGE_MAX` (1926), `FW_NL_BANS_PAGE_MAX` (696),
+> and `FW_NL_RATES_PAGE_MAX` (779).
 
 **K. Registration state is invisible to the daemon.** `DAEMON_REGISTER` is sent once at startup;
 `DAEMON_REGISTER_ACK` has **no struct and no parse branch** in the daemon (it lands in the
@@ -511,6 +517,21 @@ replaced — eight files (`test_04` / `test_11` / `test_14` / `test_15` / `test_
 2.F's "tautological assertion" scope): the stale capacity constants in `tests/config.py`, the
 hard-coded paths in `test_18_log_rotation.py`, and the skip-heavy `test_10_daemon_logparse.py`.
 
+Those three residual debts were closed in commit `bdb508f`, at the depth "align with the real limits
++ drop tautologies", and **without adding any kernel-level capacity test**:
+
+| Location | Disposition |
+|----------|-------------|
+| `tests/config.py` | Deleted the stale `MAX_BAN_CAPACITY = 4096` / `MAX_WHITELIST_CAPACITY = 64` constants and replaced them with a comment: the real caps are the kernel module parameters `fw_max_ban_entries` / `fw_max_whitelist_entries` (default 65535, see `capacity:` in `config/default.yaml`); 4096 is the ban table's hash-bucket count and 64 the whitelist's — neither is a capacity |
+| `test_04_whitelist.py` | Dropped `assert wl_count <= 64` (a tautology), kept `assert wl_count == before + len(added)`; skip text and docstring corrected accordingly |
+| `test_11_resource_mgmt.py` | No longer imports `MAX_BAN_CAPACITY`; kept `assert 0 < stat_bans <= 200` — the upper bound is the per-second ban gate (`fw_max_bans_per_second`, default 200/s), not a table capacity |
+| `test_18_log_rotation.py` | The hard-coded `/etc/firewall/default.yaml` became the in-repo `CONFIG_DIR / "default.yaml"`; the test log directory now uses `tmp_path`, and cleanup no longer `rmtree`s a fixed directory |
+| `test_10_daemon_logparse.py` | `test_log_parse_function`'s silent branch became an explicit `assert PROC_BANS.exists()` + `assert ban_count >= 1`; `test_nonexistent_log`'s timeout branch went from skip to `pytest.fail` |
+
+Verification: serial `python3 -m pytest tests/ -q -rA` (**68 passed / 24 skipped**); versus the
+`6d0bcb4` baseline the skip set loses exactly one entry (`test_10::test_nonexistent_log`, skip ->
+pass), with no assertion downgraded to a skip.
+
 ## Phased Implementation and Acceptance
 
 Each phase is independently testable, independently committable, and independently revertible.
@@ -526,13 +547,25 @@ Prerequisite dependency is 0 (it can run in parallel with the Phase 1 kernel rew
 | **2.F** | Persistence-queue backpressure rework (in place in `history_snapshot/mod.rs`, not a new `persist/`) + test-debt replacement | Problem G eliminated (backpressure tested); every tautological assertion replaced with one that can fail |
 | **2.G** | Documentation rewrite: `docs/{zh,en}/architecture/daemon.md` fully rewritten to the new implementation; `docs/{zh,en}/architecture/data-flow.md` stale numbers corrected | Documentation matches the code item by item |
 
-`docs/zh/architecture/daemon.md` currently diverges badly from the implementation; 2.G must handle:
-the port is written as `9119`; the module table lists the no-longer-existing `ban/procfs.rs`; the
-failure counter is written as `FailureCounter { ip, count, first_seen, last_seen }`; rotation is
-written as `IN_MOVED_TO`; it contains a non-existent `<HOST>` substitution description and an old
-SQLite `bans` table schema; the metric count is written as "24"; the main loop is written as `epoll`.
+`docs/zh/architecture/daemon.md` diverges badly from the implementation; 2.G must handle: the module
+table lists the no-longer-existing `ban/procfs.rs`; the failure counter is written as
+`FailureCounter { ip, count, first_seen, last_seen }`; rotation is written as `IN_MOVED_TO`; it
+contains a non-existent `<HOST>` substitution description and an old SQLite `bans` table schema; the
+main loop is written as `epoll`.
+
+**The first version of this list carried two items that turned out to be misjudgements**, recorded
+here so no later pass "fixes" them in the wrong direction:
+
+- "the port is written as `9119`" — `9119` is in fact the real default (`config/default.yaml:12`,
+  `src/daemon/types/config.rs:180`), so the old doc was correct here;
+- "the metric count is written as 24" — `src/daemon/http_exporter/metrics.rs` exposes exactly 24
+  distinct `firewall_*` metric names (deduplicated `# HELP` lines), so the old doc was correct here
+  too.
+
 `docs/*/architecture/data-flow.md` is stale too ("full table (4096)", "whitelist (64)",
-"linear scan", "~50ns/~100ns", and the old function name `nf_hook_func_ipv4`).
+"linear scan", "~50ns/~100ns", and the old function name `nf_hook_func_ipv4`); that file was
+corrected in commit `615fe16`, and the overview `docs/*/architecture/README.md` capacity and
+concurrency claims were corrected in commit `929b52f`.
 
 ## Implementation Progress
 
@@ -551,7 +584,7 @@ SQLite `bans` table schema; the metric count is written as "24"; the main loop i
 | 2.E-4c Wire `runtime/`: the scheduler takes over periodic purge and the counter mirror + `main.rs` assembly; E flips to `fixed` | Done |
 | 2.F-1 Queue backpressure (`history_snapshot/mod.rs`, queue behavior only) | Done |
 | 2.F-2 Test-debt replacement (`tests/` tautological assertions) | Done |
-| 2.G Documentation rewrite | Not started |
+| 2.G Documentation rewrite | Done |
 
 ### What 2.A Landed
 
@@ -1098,6 +1131,54 @@ identical to the pre-change baseline — the same 25 skip entries by file and re
 was quietly downgraded to a skip.
 
 Both 2.F slices (2.F-1 queue backpressure + 2.F-2 test debt) have landed.
+
+### 2.G Landing Detail: Documentation Aligned with the Code
+
+`docs/{zh,en}/architecture/daemon.md` were fully rewritten against the **new implementation** (the two
+files have 25 one-to-one headings and identical code-block and table-row counts, so they can be
+compared section by section). This is not a polish pass: the old text described the generation of
+"epoll main loop + `FailureCounter { ip, count, first_seen, last_seen }` + `ban/procfs.rs` +
+`<HOST>` substitution + SQLite `bans` table", which no longer corresponds to anything in this
+repository.
+
+The discipline was **check every number back against the source**, never quoting the old document or
+this document's own paraphrase. Result (the command is the evidence):
+
+| Fact | Value | How it was checked |
+|------|-------|--------------------|
+| `unsafe { }` blocks | 73, across 13 files | `grep -rn 'unsafe {' src/daemon --include=*.rs` |
+| Prometheus metrics | 24 (`# TYPE` lines = distinct metric names) | `grep -c '# TYPE firewall_' src/daemon/http_exporter/metrics.rs` |
+| Routes | authenticated 18 (migrated) + 23 (not) = 41; unauthenticated 12 (10 public + 2 probes); 53 total | `contract/verify_http.py` (contract 53 / source 53) |
+| SSE limits | events 10 / logs 5; keepalive 15 s; per-connection buffer 32; over-limit 503 | constants in `src/daemon/api/sse.rs` |
+| Listen defaults | code `127.0.0.1:9119`; shipped YAML `0.0.0.0:9119` | `src/daemon/types/config.rs` / `config/default.yaml:12-13` |
+| Default log path | code `/var/log/firewall-daemon.log`; shipped YAML `/var/log/firewall.log` | `src/daemon/logger.rs` / `config/default.yaml:16` |
+| Not-wired modules | `ingest/` `parse/` `decision/` `pipeline/` `kernel/` `signal/` have zero production references | `grep -rn` under `src/daemon` (no call site beyond the `lib.rs` declaration) |
+
+Three numeric problems were found and corrected during the rewrite; they are recorded here so they are
+not reverted:
+
+| Problem | Truth | Disposition |
+|---------|-------|-------------|
+| This design's first version claimed the old doc was wrong to say "24 metrics" | 24 is the truth (`# TYPE` count = distinct metric-name count = 24; the in-file comment "25 in total" in `metrics.rs` is the wrong one) | Retracted; the doc says 24 |
+| This design's first version claimed the old doc was wrong to say "the port is 9119" | 9119 is the truth (`config/default.yaml:12`, `src/daemon/types/config.rs`) | Retracted; the doc says 9119 and adds the distinction that the code default binds loopback only while the shipped YAML binds all interfaces |
+| The source comment "35 not yet migrated" | Truth is 23 (count of `.route()` inside `legacy_protected_routes`; 41 = 53 - 12) | Doc and source comments corrected in the same step |
+
+That third row is this phase's only **code-side change** (comments only): three places in
+`handler.rs` and one in `api/router.rs`. Fixing only the document would leave the source comment to
+lead the next reader back to 35.
+
+The stale numbers in `docs/*/architecture/data-flow.md` had already been corrected in commit
+`615fe16` (buckets are not capacity, `fw_hook_ipv4` / `fw_hook_ipv6`, "the whitelist is not a linear
+scan", and an explicit statement that `pipeline` is not wired), and the capacity and concurrency
+claims in the overview `docs/*/architecture/README.md` in commit `929b52f`. This phase re-checked
+both files against the implementation and found them consistent, so that part closed as "re-verified,
+no change needed".
+
+Gate evidence (actually run in this pass): `make daemon` (built), `python3 contract/verify_http.py`
+(contract 53 routes / source 53, all checks pass), `bash scripts/check_contract.sh` (contract gate
+passed), `bash scripts/verify_project.sh` (kernel module and daemon both compiled), `cargo test
+--release --lib` (**404 passed / 0 failed**), `cargo fmt --all --check` (clean), `cargo clippy
+--all-targets -- -D warnings` (exit 0).
 
 ## Judging Discipline
 
