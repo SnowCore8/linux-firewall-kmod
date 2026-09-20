@@ -83,6 +83,7 @@ pub mod log_rotation;
 pub mod logger;
 pub mod netlink;
 pub mod parse;
+pub mod pipeline;
 pub mod runtime;
 pub mod runtime_status;
 pub mod signal;

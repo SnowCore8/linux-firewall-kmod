@@ -24,6 +24,13 @@ impl SourceId {
     pub const fn get(self) -> u32 {
         self.0
     }
+
+    /// 仅测试用：直接构造一个身份编号，供不依赖 inotify 的纯逻辑测试使用。
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn from_raw(id: u32) -> Self {
+        Self(id)
+    }
 }
 
 impl std::fmt::Display for SourceId {
