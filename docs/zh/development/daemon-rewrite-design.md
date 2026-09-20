@@ -483,7 +483,8 @@ sequenceDiagram
 | 2.A 契约修订 | 已完成 |
 | 2.B 运行时骨架 | 已完成 |
 | 2.C 主链路重写 | 已完成 |
-| 2.D–2.G | 未开始 |
+| 2.D `kernel` 层重写 | 已完成 |
+| 2.E–2.G | 未开始 |
 
 ### 2.A 落地明细
 
@@ -545,6 +546,34 @@ netlink 线格式三端（契约 / 内核 / daemon）同一步落地，布局经
 - **对照测试可失败且随旧模块退役**。`extract_ip`、`RuleSet::parse`、`FailureWindow::observe`（对旧 `count_recent`）、以及封禁算式（对旧 `BanHistory::calculate_progressive_duration` 与内联的永久/过期算式）都与旧实现在同一批语料上逐案断言相等。其中一条真实分歧由对照测试发现：旧 `process_failed_timestamps` **仅在缓冲满员时**才淘汰过期前缀，而新实现初版每轮都以本次事件的时钟过滤——时钟回拨的乱序事件下会提前丢弃仍在窗口内的时间戳；已改为逐条对齐旧分支。
 
 门禁证据：`cargo test --release --lib`（174 passed，其中 2.C 三层与装配共 68 条）、`cargo clippy --release --lib --tests -- -D warnings`、`cargo fmt --check`、`make build` / `make format-check` / `make frontend-typecheck`、`bash scripts/check_contract.sh`、`python3 contract/verify_layout.py`、`bash scripts/verify_project.sh` 全绿；`make test`（67 passed / 25 skipped）。
+
+### 2.D 落地明细
+
+本阶段重写内核 netlink 五层，旧 `crate::netlink` 暂留（仍被 `ban/`、`web_ui/`、
+`config_reloader` 引用），按「保留编译、分批迁入」在 2.E 一并退役。五步各自独立提交：
+
+| 提交 | 文件 | 内容 | 消除的问题 |
+|------|------|------|-----------|
+| 2.D-0 | `contract/netlink.fwidl` + `netlink_contract.rs` | 契约修订落地（分页参数、`seq` 配对语义、`DaemonRegisterAck`） | 2.A 的契约面 |
+| 2.D-1 | `kernel/codec/{mod,messages}.rs` | 唯一转义层：字节 ↔ 语义类型，直接消费生成物 | 「手抄结构体」 |
+| 2.D-2 | `kernel/codec/messages.rs`（分页尾部） | 三个 `List*Response` 的尾部解析与 `total`/`offset` 透传 | J（静默截断） |
+| 2.D-3 | `kernel/{transport,reactor}.rs` | socket 单所有者 + `(type, seq)` 路由 | I / K（部分） |
+| 2.D-4 | `kernel/{client,lease}.rs` | 类型化 API + 注册租约与失联状态 | I / J / K / L |
+| 2.D-5 | `contract/verify_layout.py` | 重指向：内核与 daemon 两侧都已无手写结构体，比对改为「同一份生成物的 C 解析 vs Rust 解析」 | 校验器与实现同步 |
+
+关键取舍：
+
+- **「已投递」与「已执行」用类型分开**。`ban` / `unban` / 白名单增删在**成功**时没有任何回复，只有失败才单播 `CmdResult`，故 `deliver` 的返回值是 `Delivered` 而不是「成功」；有明确回复的请求才返回解好的结构体。旧实现把 `sendto` 成功直接当成执行成功，本条把它写成类型约束。
+- **配对白名单必须窄，且理由在内核源码里**。内核有**两套**序号来源：`DaemonRegisterAck` / `ConfigAck` / `StatsResponse` / `AnalysisResponse` / 三个 `List*Response` 回显请求 `seq`；而 `DdosEvent` / `BanStateChange` / `WhitelistStateChange` / `ConfigChange` 用 `atomic_inc_return(&fw_nl_seq)`、`CmdResult` 亦用自增序号。两组取值必然碰撞，故只允许前一组参与 `(type, seq)` 配对——否则一条「封禁失败」通知会被吞成某次 LIST 请求的回复。`is_seq_echoed_reply()` 是这份白名单，测试的输入直接取自内核的发送函数清单。
+- **重复登记是「拒绝」而不是「覆盖」**。同一个 `(type, seq)` 再登记时若覆盖，先到的那条回复就会投给后登记者，属于静默串台。拒绝同时计数（`seq_collisions`），并把三种登记失败映射成三种可辨错误：`Full` → 退避重试、`LinkDown` → 告警、`Duplicate` → 查逻辑 bug。
+- **接收侧的死必须可观测，否则 `LinkDown` 是死状态**。`ReplyHandle` 与 `PendingTable` 共同持有回复通道，故 reactor 消失**不会**让通道断开，等待方只能空等到自己的超时。修法是 `LivenessGuard`（只由 `Reactor` 持有）+ `ReactorLiveness`（只读句柄）：置死标志同时清空在途表，使新登记立刻被拒、在途等待者立刻收到「已断开」。存活标志放在 `PendingTable` **内部**，使「判活」与「插入」在同一把锁内完成，消除「插进空表然后干等」的竞态。不能靠 `Arc` 引用计数判活：`Router` 被 `Client` 长期共享，计数永远到不了零。
+- **分页的收尾信号是空页，不是 `total`**。契约里 `limit == 0` 表示「内核默认页大小（256）」而不是「不限量」；内核在 `offset >= total` 时直接回空页，且 `total` 是内核读表时另行取的值，与已收条数不保证一致。故 `drain()` 以空页为唯一可靠收尾，另加两条防御：本页起点未推进则停（防死循环）、已收齐 `total` 则停。请求一律用契约给出的单页上限，而不是 `limit = 0`。
+- **速率快照取最后一页的全局值**。`global_pps` / `global_bps` 是「自上次查询以来的平均速率」，逐页累加会失真——每页都是同一个窗口的量。`RateSnapshot` 因此把「全局值 + 条目」放在一起返回，取值取最后一页。
+- **注册必须等确认，租约必须续**。内核用 `DaemonRegisterAck.accepted` 明确回答接受/拒绝，旧实现既无该结构也无解析分支，被拒后每条指令都被内核静默丢弃而界面正常。租约上限即内核 `FW_NL_DAEMON_TIMEOUT = 30 * HZ`（`KERNEL_LEASE_TTL`），续约就是重发注册报文——内核把「收到该 portid 的报文」当作活跃信号。状态机为四态 `Idle`/`Held`/`Refused`/`Lost`，确认失败**一律转 `Lost`**，绝不继续假装持有；`Refused` 与 `Lost` 分开：前者是对方在正常拒绝，后者是链路不可判定。
+- **租约状态机可脱离 socket 测试**。本机未加载内核模块（向 portid 0 发送即 `ECONNREFUSED`），故「发送与确认」抽成 `Registrar` trait：生产用 `Client`，测试用脚本化替身。同理，`client` 的配对测试一律走 `await_reply`（登记 + 等待，**不发送**），只对真实发送路径的错误映射单独断言。
+- **校验器重指向后比的是什么**。两侧手写副本都消失后，「契约 ↔ 实现」已由编译器对齐；`verify_layout.py` 转为证明**同一份生成物在 C 与 Rust 下解析出同一套尺寸/偏移**（`IcmpTypeItem.type` 这类字段的打包行为必须一致），并断言映射覆盖生成物的全部 30 个结构——新报文若未纳入比对会直接失败。探针按原样编译 `kernel/codec/mod.rs` 并只补 `crate::contract`，顺带证明「codec 仅依赖契约」这一分层成立。过程中暴露一处真实坑：`type` 是 Rust 关键字但**不是** Python 关键字，探针必须按生成器的 `RUST_KEYWORDS` 清单补 `r#` 前缀，否则 `offset_of!` 直接编译失败。
+
+门禁证据：`cargo test --release --lib`（257 passed，其中 `kernel::` 73 条）、`cargo clippy --release --lib --tests -- -D warnings`、`cargo fmt --check`、`make build` / `make format-check` / `make frontend-typecheck`、`bash scripts/check_contract.sh`、`python3 contract/verify_layout.py`、`bash scripts/verify_project.sh` 全绿；`make test`（67 passed / 25 skipped）。
 
 ## 判定纪律
 

@@ -1,29 +1,30 @@
 #!/usr/bin/env python3
-"""netlink 线格式一致性校验：生成物 vs 布局清单 vs daemon 手写。
+"""netlink 线格式一致性校验：生成物 vs 布局清单 vs daemon 消费方式。
 
 为什么需要这一步
 ----------------
 生成器自己产出的 ``_Static_assert`` 只能证明「生成物自洽」，不能证明
-「生成物与 daemon 的 Rust 结构体线格式相同」。若两者不等长/错位，换用生成物
-就等于**静默改变线协议**——内核与 daemon 会互相丢弃报文，且不会报错。因此
-必须拿两侧的真实定义做第三方比对。
+「生成物在 daemon 侧被解析成同一套布局」。若两侧不同（不同编译器、ABI、
+packed 规则），换用生成物就等于**静默改变线协议**——内核与 daemon 会互相丢弃
+报文，且不会报错。因此必须拿两侧的真实定义做第三方比对。
 
-重写后的口径变化（Phase 1）
----------------------------
-旧实现把与契约同形的 ``__packed`` 结构体**手抄**在 ``netlink.c`` 里，所以旧
-校验器从 ``netlink.c`` 机械提取结构体、与生成头逐字段比 ``sizeof``/``offsetof``。
-重写后内核侧**不再声明任何报文结构**，一律 ``#include`` 生成头（经
-``fw_types.h``）。于是：
+重写后的口径变化（Phase 1 / Phase 2.D）
+--------------------------------------
+旧实现把与契约同形的 ``__packed`` 结构体**手抄**在 ``netlink.c`` 里，旧校验器
+从 ``netlink.c`` 机械提取结构体、与生成头逐字段比 ``sizeof``/``offsetof``。
+两轮重写后两侧手写副本都消失了：
 
-1. 内核侧不再有可比对的手写结构体。校验器改为**结构断言**
-   （``check_kernel_structure``）：新实现目录里不得出现 ``struct fw_nl*``
-   定义，且必须经 ``fw_types.h`` 引入生成头。
-2. 真正的第三方比对落在 **daemon（Rust）** 上——它仍是手写的。比对方式不变：
-   编译取 ``size_of`` / ``offset_of!``，逐字段比。
+1. **内核侧**不再声明任何报文结构，一律 ``#include`` 生成头（经 ``fw_types.h``）。
+   校验器改为**结构断言**（``check_kernel_structure``）：新实现目录里不得出现
+   ``struct fw_nl*`` 定义，且必须经 ``fw_types.h`` 引入生成头。
+2. **daemon 侧**最后由 ``src/daemon/kernel/codec`` 单点消费生成物（``crate::contract``），
+   不再有手写副本可比。于是比对对象改为：**同一份生成物在 C 侧与 Rust 侧解析出的
+   尺寸/偏移是否相同**——这是两边唯一的共同事实，也是「同一份定义、两种语言」的
+   真正风险点（``IcmpTypeItem.type`` 等字段在两侧的打包行为必须一致）。
 3. 为防「布局清单 JSON 与生成头 C 侧漂移」，新增一轮：编译生成头取
-   ``sizeof``/``offsetof``，与 ``netlink_layout.json`` 逐字段比。JSON 是
-   daemon 比对的基准，生成头是内核实际编译的输入——两者必须一致，否则
-   内核与 daemon 各自「与 JSON 一致」却彼此不一致。
+   ``sizeof``/``offsetof``，与 ``netlink_layout.json`` 逐字段比。JSON 是历史基准，
+   生成头是内核实际编译的输入——两者必须一致，否则内核与 daemon 各自「与 JSON
+   一致」却彼此不一致。
 
 比对**字段偏移**而非仅总长：字段顺序颠倒但总长相同的结构体，只看 sizeof
 会漏掉，而线格式已经错了。
@@ -51,16 +52,62 @@ LAYOUT_JSON = os.path.join(GEN_DIR, "netlink_layout.json")
 # 内核侧重写后**不再手写任何报文结构体**（一律 #include 生成头），故这里没有
 # 「内核结构体名 -> IDL 名」映射——内核侧改为结构断言，见 check_kernel_structure()。
 
-# daemon 侧与生成物同形的结构体（其余 daemon 结构体与内核无共用布局）
+# 与 `gen.py::RUST_KEYWORDS` 保持一致：生成器对撞上 Rust 关键字的字段加 `r#`
+# 前缀，探针引用同一字段时必须用同样写法。两处清单若漂移，探针会编译失败
+# （显式报错），而不是给出错误的通过结论。
+RUST_KEYWORDS = frozenset({
+    "as", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+    "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod",
+    "move", "mut", "pub", "ref", "return", "self", "static", "struct", "super",
+    "trait", "true", "type", "unsafe", "use", "where", "while", "async", "await",
+    "abstract", "become", "box", "do", "final", "macro", "override", "priv",
+    "typeof", "unsized", "virtual", "yield", "try",
+})
+
+# daemon 侧不再手写任何线格式结构体：`src/daemon/kernel/codec` 是唯一的转义层，
+# 它直接消费生成物，故「契约 ↔ 实现」由**编译器**对齐，本校验器不再比对手写副本。
+#
+# 那么这一轮比的是什么？生成物既是内核实际编译的输入（经 `fw_types.h`），也是
+# daemon 的模块。C 侧与 Rust 侧解析同一份定义时是否得出**同一套**尺寸与偏移，
+# 是两边唯一的共同事实；一旦不同（不同编译器/ABI/打包规则），内核与 daemon 会
+# 各自「与自己的结构体一致」却彼此不一致，且不会报错。
+#
+# 映射覆盖生成物的**全部** 30 个结构（23 条报文 + 7 个公共/尾部结构），
+# 由 `RUST_TO_GEN` 显式列出，`main()` 会断言它一个不缺。
 RUST_TO_GEN = {
-    "FwNlMsgHdr": "MsgHdr",
-    "FwNlDdosEvent": "DdosEvent",
-    "FwNlBanStateChange": "BanStateChange",
-    "FwNlWhitelistStateChange": "WhitelistStateChange",
-    "FwNlCmdResult": "CmdResult",
-    "FwNlBanCmd": "BanIp",
-    "FwNlConfigUpdate": "SetConfig",
-    "FwNlConfigAck": "ConfigAck",
+    # 公共头与尾部结构（无公共头/无自身偏移语义）
+    "MsgHdr": "MsgHdr",
+    "BanEntry": "BanEntry",
+    "WhitelistEntry": "WhitelistEntry",
+    "RateEntry": "RateEntry",
+    "UdpPortItem": "UdpPortItem",
+    "IcmpTypeItem": "IcmpTypeItem",
+    "ScannerItem": "ScannerItem",
+    # 接收方向报文
+    "DdosEvent": "DdosEvent",
+    "BanStateChange": "BanStateChange",
+    "WhitelistStateChange": "WhitelistStateChange",
+    "CmdResult": "CmdResult",
+    "ConfigAck": "ConfigAck",
+    "ConfigChange": "ConfigChange",
+    "ListBansResponse": "ListBansResponse",
+    "StatsResponse": "StatsResponse",
+    "ListWhitelistResponse": "ListWhitelistResponse",
+    "ListRatesResponse": "ListRatesResponse",
+    "AnalysisResponse": "AnalysisResponse",
+    "DaemonRegisterAck": "DaemonRegisterAck",
+    # 发送方向报文
+    "BanIp": "BanIp",
+    "UnbanIp": "UnbanIp",
+    "SetConfig": "SetConfig",
+    "ListBansQuery": "ListBansQuery",
+    "ListWhitelistQuery": "ListWhitelistQuery",
+    "ListRatesQuery": "ListRatesQuery",
+    "AddWhitelist": "AddWhitelist",
+    "RemoveWhitelist": "RemoveWhitelist",
+    "StatsQuery": "StatsQuery",
+    "AnalysisQuery": "AnalysisQuery",
+    "DaemonRegister": "DaemonRegister",
 }
 
 
@@ -178,69 +225,63 @@ def compile_and_run(src: str, workdir: str, tag: str) -> dict[str, dict[str, obj
     return parse_probe(run.stdout)
 
 
-def rust_probe(structs: dict[str, list[str]]) -> dict[str, dict[str, object]]:
-    """编译一段 Rust，打印 daemon 侧真实结构体的 size_of 与 offset_of!。
+def rust_field_expr(name: str) -> str:
+    """字段名 → Rust 标识符表达式。
 
-    这是**独立于 crate** 的探针：只用 rustc 直接编译那两个源文件。它们
-    ``use anyhow::Result``，所以先离线编一个同名 rlib 作为 ``anyhow`` 替身，
-    再通过 ``--extern anyhow=...`` 接入——这样文件里的路径解析方式与真实
-    构建完全一致，替身不需要任何语义模拟。替身只提供 ``Result`` /
-    ``bail!`` / ``anyhow!`` 这三个被引用到的名字。
-
-    任何失败都抛 ``RuntimeError``（不「跳过」）：探针编不出来就等于 daemon
-    侧未被校验，必须记成失败，否则会给出假的通过结论。
+    生成器对撞上 Rust 关键字的字段写成 ``r#type``（如 ``IcmpTypeItem.type``），
+    探针必须用同样的写法引用，否则 ``offset_of!`` 直接编译失败。判据必须与生成器
+    ``gen.py::RUST_KEYWORDS`` **完全一致**——注意 ``type`` 是 Rust 关键字但不是
+    Python 关键字（Python 的 ``keyword`` 模块判不出来），故这里自带一份同名清单。
+    布局清单里的名字是原始名，故按需补 ``r#`` 前缀。
     """
-    proto = os.path.join(ROOT, "src", "daemon", "netlink", "protocol.rs")
-    responses = os.path.join(ROOT, "src", "daemon", "netlink", "responses.rs")
-    anyhow_stub = """\
-// verify_layout.py 的探针专用替身：只补结构体尺寸/偏移测量所需的三个名字。
-#[derive(Debug)]
-pub struct ProbeError;
+    return f"r#{name}" if name in RUST_KEYWORDS else name
 
-impl core::fmt::Display for ProbeError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "probe error")
-    }
-}
 
-impl core::error::Error for ProbeError {}
+def rust_probe(structs: dict[str, list[str]]) -> dict[str, dict[str, object]]:
+    """编译生成物并打印其真实结构体的 size_of 与 offset_of!。
 
-pub type Result<T> = core::result::Result<T, ProbeError>;
+    探针**不依赖 daemon crate**，也**不需要手写结构体**——daemon 侧已无手写副本。
+    做法是把生成物当成 daemon 里它本来的角色来编译：
 
-#[macro_export]
-macro_rules! bail {
-    ($($arg:tt)*) => {
-        return ::core::result::Result::Err($crate::ProbeError)
-    };
-}
+    - ``contract`` 模块 = ``contract/generated/netlink_contract.rs``（daemon 里是
+      ``crate::contract``）；
+    - ``kernel::codec`` 模块 = ``src/daemon/kernel/codec/mod.rs``，按原样引入，
+      只补 ``crate::contract`` 这一件事，证明「codec 仅依赖契约」这一分层成真。
 
-#[macro_export]
-macro_rules! anyhow {
-    ($($arg:tt)*) => {
-        $crate::ProbeError
-    };
-}
-"""
+    先编成 rlib 骨架，再编一个二进制探针通过 ``--extern`` 取用。任何失败都抛
+    ``RuntimeError``（不「跳过」）：探针编不出来就等于生成物未被校验，必须记成
+    失败，否则会给出假的通过结论。
+    """
+    gen_rs = os.path.join(GEN_DIR, "netlink_contract.rs")
+    codec_mod = os.path.join(ROOT, "src", "daemon", "kernel", "codec", "mod.rs")
     with tempfile.TemporaryDirectory() as td:
-        stub_src = os.path.join(td, "anyhow_stub.rs")
-        with open(stub_src, "w", encoding="utf-8") as fh:
-            fh.write(anyhow_stub)
-        rlib = os.path.join(td, "libanyhow.rlib")
-        stub = subprocess.run(
-            ["rustc", "--edition", "2021", "--crate-name", "anyhow",
-             "--crate-type", "rlib", "--out-dir", td, "-o", rlib, stub_src],
+        # crate 骨架：契约真相源 + codec（codec 内有 `pub mod messages;`，
+        # 相对 codec/ 目录解析；`#[cfg(test)]` 的测试块不参与编译）。
+        lib_src = os.path.join(td, "probe_lib.rs")
+        with open(lib_src, "w", encoding="utf-8") as fh:
+            fh.write("#![allow(dead_code, unused_imports, non_camel_case_types)]\n")
+            fh.write(f'#[path = r"{gen_rs}"]\npub mod contract;\n')
+            fh.write("#[allow(dead_code)]\npub mod kernel {\n")
+            fh.write(f'    #[path = r"{codec_mod}"]\n    pub mod codec;\n')
+            fh.write("}\n")
+        rlib = os.path.join(td, "libprobe.rlib")
+        skeleton = subprocess.run(
+            ["rustc", "--edition", "2021", "--crate-name", "fwprobe",
+             "--crate-type", "rlib", "-o", rlib, lib_src],
             capture_output=True,
             text=True,
         )
-        if stub.returncode != 0:
-            raise RuntimeError("anyhow 替身编译失败:\n" + stub.stderr[-4000:])
+        if skeleton.returncode != 0:
+            raise RuntimeError(
+                "探针骨架编译失败（生成物不再是可用的 crate::contract 模块，"
+                "或 codec 依赖了契约之外的东西）:\n" + skeleton.stderr[-6000:]
+            )
 
-        src = os.path.join(td, "probe.rs")
+        # 二进制探针：文件名为 measure.rs，避免与 extern crate 名冲突。
+        src = os.path.join(td, "measure.rs")
         with open(src, "w", encoding="utf-8") as fh:
             fh.write("#![allow(dead_code, unused_imports)]\n")
-            fh.write(f'#[path = r"{proto}"]\nmod protocol;\n')
-            fh.write(f'#[path = r"{responses}"]\nmod responses;\n')
-            fh.write("use protocol::*;\nuse responses::*;\n")
+            fh.write("use fwprobe::contract::*;\n")
             fh.write("fn main() {\n")
             for sn, fns in structs.items():
                 fh.write(
@@ -250,20 +291,20 @@ macro_rules! anyhow {
                     fh.write(
                         f'    println!("{sn} {fn_} {{}} {{}}", '
                         f"std::mem::size_of::<{sn}>(), "
-                        f"std::mem::offset_of!({sn}, {fn_}));\n"
+                        f"std::mem::offset_of!({sn}, {rust_field_expr(fn_)}));\n"
                     )
             fh.write("}\n")
-        exe = os.path.join(td, "probe")
+        exe = os.path.join(td, "measure")
         proc = subprocess.run(
-            ["rustc", "--edition", "2021", "-O", "--extern", f"anyhow={rlib}",
+            ["rustc", "--edition", "2021", "-O", "--extern", f"fwprobe={rlib}",
              "-o", exe, src],
             capture_output=True,
             text=True,
         )
         if proc.returncode != 0:
             raise RuntimeError(
-                "Rust 探针编译失败（daemon 结构体依赖了 protocol.rs / "
-                "responses.rs 之外的东西？）:\n" + proc.stderr[-6000:]
+                "Rust 探针编译失败（生成物结构体无法用 size_of/offset_of 测量）:\n"
+                + proc.stderr[-6000:]
             )
         run = subprocess.run([exe], capture_output=True, text=True)
         if run.returncode != 0:
@@ -301,6 +342,22 @@ def main() -> int:
     failures += check_kernel_structure()
     print()
 
+    # 映射必须覆盖生成物的**全部**结构，否则新加的报文会在无人比对的情况下上线。
+    covered = set(RUST_TO_GEN.values())
+    missing = sorted(n for n in layouts if n not in covered)
+    if missing:
+        failures.append(
+            "生成物里有结构未被 C↔Rust 布局比对覆盖：" + ", ".join(missing)
+        )
+    extra = sorted(n for n in covered if n not in layouts)
+    if extra:
+        failures.append(
+            "布局比对引用了生成物中不存在的结构：" + ", ".join(extra)
+        )
+    if not missing and not extra:
+        print(f"  C↔Rust 布局比对覆盖生成物全部 {len(layouts)} 个结构")
+    print()
+
     with tempfile.TemporaryDirectory() as td:
         g_res = compile_and_run(
             c_probe_source(gen_header, gen_names, gen_fields_by_c), td, "generated"
@@ -329,7 +386,7 @@ def main() -> int:
         print(f"  {mark} {gname:34} 生成头={cs:5} 清单={js:5}  字段 {len(gen_fields_by_c[gname])} 个")
 
     print()
-    print("=== daemon 手写 vs 生成物（Rust 侧，编译取 size_of/offset_of）===")
+    print("=== 生成物：C 侧 vs Rust 侧（编译取 sizeof/offsetof）===")
     try:
         r_res = rust_probe({rn: r_fields[rn] for rn in RUST_TO_GEN})
     except RuntimeError as exc:
@@ -345,14 +402,14 @@ def main() -> int:
         rs = int(r_res[rn]["size"])
         gs = int(g_res[gn]["size"])
         if rs != gs:
-            failures.append(f"{rn}/{gn}: size_of {rs} != 生成 {gs}")
+            failures.append(f"{rn}/{gn}: Rust size_of {rs} != C sizeof {gs}")
         for fn_ in r_fields[rn]:
             ro = r_res[rn]["offsets"].get(fn_)  # type: ignore[union-attr]
             go = g_res[gn]["offsets"].get(fn_)  # type: ignore[union-attr]
             if ro != go:
-                failures.append(f"{rn}/{gn}.{fn_}: offset daemon {ro} != 生成 {go}")
+                failures.append(f"{rn}/{gn}.{fn_}: offset Rust {ro} != C {go}")
         mark = "OK " if rs == gs else "差异"
-        print(f"  {mark} {rn:30} daemon={rs:5} 生成={gs:5}  字段 {len(r_fields[rn])} 个")
+        print(f"  {mark} {rn:30} Rust={rs:5} C={gs:5}  字段 {len(r_fields[rn])} 个")
 
     print()
     failures.extend(check_artifacts())
@@ -361,7 +418,7 @@ def main() -> int:
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("一致性校验通过：生成头与布局清单一致，daemon 手写结构体与生成物逐字段一致")
+    print("一致性校验通过：生成头与布局清单一致，生成物在 C 侧与 Rust 侧的布局一致")
     return 0
 
 

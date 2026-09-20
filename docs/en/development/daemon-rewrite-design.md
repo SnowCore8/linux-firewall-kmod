@@ -533,7 +533,8 @@ SQLite `bans` table schema; the metric count is written as "24"; the main loop i
 | 2.A Contract revisions | Done |
 | 2.B Runtime skeleton | Done |
 | 2.C Main-chain rewrite | Done |
-| 2.D–2.G | Not started |
+| 2.D `kernel` layer rewrite | Done |
+| 2.E–2.G | Not started |
 
 ### What 2.A Landed
 
@@ -641,6 +642,90 @@ Key trade-offs:
 
 Gate evidence: `cargo test --release --lib` (174 passed, 68 of them in the 2.C layers and the
 composition), `cargo clippy --release --lib --tests -- -D warnings`, `cargo fmt --check`,
+`make build` / `make format-check` / `make frontend-typecheck`, `bash scripts/check_contract.sh`,
+`python3 contract/verify_layout.py`, `bash scripts/verify_project.sh` all green; `make test`
+(67 passed / 25 skipped).
+
+### What 2.D Landed
+
+This phase rewrites the five kernel netlink layers. The old `crate::netlink` stays for now (still
+referenced by `ban/`, `web_ui/` and `config_reloader`) and retires in 2.E, matching "keep it
+building, migrate in batches". Five independently committed steps:
+
+| Commit | Files | Content | Problem removed |
+|--------|-------|---------|-----------------|
+| 2.D-0 | `contract/netlink.fwidl` + `netlink_contract.rs` | Contract revision landed (pagination params, `seq` correlation semantics, `DaemonRegisterAck`) | The contract surface from 2.A |
+| 2.D-1 | `kernel/codec/{mod,messages}.rs` | The only escape layer: bytes ↔ semantic types, consuming the generated artifact directly | "Hand-copied structs" |
+| 2.D-2 | `kernel/codec/messages.rs` (paged tails) | Tail parsing and `total`/`offset` pass-through for the three `List*Response` | J (silent truncation) |
+| 2.D-3 | `kernel/{transport,reactor}.rs` | Sole socket owner + `(type, seq)` routing | I / K (partial) |
+| 2.D-4 | `kernel/{client,lease}.rs` | Typed API + registration lease and a visible loss state | I / J / K / L |
+| 2.D-5 | `contract/verify_layout.py` | Re-pointed: both the kernel and the daemon now have no hand-written structs, so the comparison becomes "the same artifact parsed by C vs by Rust" | Verifier stays in step with the implementation |
+
+Key trade-offs:
+
+- **"Delivered" and "executed" are separated by the type system.** `ban` / `unban` / whitelist
+  add-remove have **no** reply on success; only failure unicasts a `CmdResult`. Their return value is
+  therefore `Delivered`, not "success", while requests with a real reply return the decoded struct.
+  The old code treated a successful `sendto` as successful execution; this makes that impossible to
+  repeat by accident.
+- **The correlation allow-list must be narrow, and the reason is in the kernel source.** The kernel
+  has **two** sequence sources: `DaemonRegisterAck` / `ConfigAck` / `StatsResponse` /
+  `AnalysisResponse` / the three `List*Response` echo the request's `seq`, whereas `DdosEvent` /
+  `BanStateChange` / `WhitelistStateChange` / `ConfigChange` are sent with
+  `atomic_inc_return(&fw_nl_seq)` and `CmdResult` likewise uses a self-incrementing seq. The two
+  ranges must collide, so only the first group may take part in `(type, seq)` correlation —
+  otherwise a "ban failed" notice gets swallowed as some LIST request's reply. `is_seq_echoed_reply()`
+  is that allow-list, and the test's input is taken directly from the kernel's sender functions.
+- **A duplicate registration is refused, not overwritten.** Overwriting the same `(type, seq)` would
+  deliver the earlier reply to the later registrant — silent cross-talk. Refusal is counted
+  (`seq_collisions`), and the three registration failures map to three distinguishable errors:
+  `Full` → back off and retry, `LinkDown` → alert, `Duplicate` → hunt a logic bug.
+- **Reactor death must be observable, or `LinkDown` is a dead state.** A `ReplyHandle` and the
+  `PendingTable` jointly own the reply channel, so the reactor disappearing does **not** disconnect
+  it and a waiter can only wait out its own timeout. The fix is `LivenessGuard` (owned solely by the
+  `Reactor`) plus `ReactorLiveness` (a read-only handle): flipping the dead flag also clears the
+  in-flight table, so new registrations are refused at once and existing waiters see "disconnected"
+  immediately. The alive flag lives **inside** `PendingTable` so "check alive" and "insert" happen
+  under one lock, closing the "insert into an emptied table and wait forever" race. It cannot be an
+  `Arc` refcount check: the `Router` is shared long-term by the `Client`, so the count never reaches
+  zero.
+- **Pagination's terminator is the empty page, not `total`.** In the contract `limit == 0` means
+  "kernel default page size (256)", not "unlimited"; the kernel returns an empty page once
+  `offset >= total`, and `total` is read separately by the kernel so it need not agree with the
+  entries collected so far. `drain()` therefore relies on the empty page as its only reliable
+  terminator, with two defences: stop if the page origin did not advance (no infinite loop) and stop
+  once `total` entries have been collected. Requests always use the contract's page cap rather than
+  `limit = 0`.
+- **The rate snapshot takes the last page's globals.** `global_pps` / `global_bps` are averages
+  "since the previous query", so summing across pages distorts them — every page covers the same
+  window. `RateSnapshot` therefore returns globals and entries together, taking the last page's
+  values.
+- **Registration must await confirmation, and the lease must be renewed.** The kernel answers
+  accept/refuse explicitly via `DaemonRegisterAck.accepted`; the old code had neither the struct nor
+  a parse arm, so after a refusal every command was silently dropped by the kernel while the UI
+  looked fine. The lease bound is the kernel's `FW_NL_DAEMON_TIMEOUT = 30 * HZ`
+  (`KERNEL_LEASE_TTL`), and renewal re-sends the registration because the kernel treats any packet
+  from the owner portid as activity. The state machine is four-state `Idle`/`Held`/`Refused`/`Lost`,
+  and a failed confirmation **always** becomes `Lost` rather than pretending the lease is held;
+  `Refused` and `Lost` stay distinct — the former is the other side refusing normally, the latter is
+  a link that cannot be judged.
+- **The lease state machine is testable without a socket.** The kernel module is not loaded on this
+  host (sending to portid 0 gives `ECONNREFUSED`), so "send and confirm" is abstracted behind the
+  `Registrar` trait: `Client` in production, a scripted stand-in in tests. Likewise the `client`
+  correlation tests all go through `await_reply` (register + wait, **no send**), with the real send
+  path's error mapping asserted separately.
+- **What the re-pointed verifier actually compares.** With both hand-written copies gone,
+  "contract ↔ implementation" is already aligned by the compiler, so `verify_layout.py` now proves
+  that **the same artifact parses to the same sizes and offsets under C and under Rust** (the packing
+  of fields like `IcmpTypeItem.type` must agree), and asserts the mapping covers all 30 generated
+  structs — a new message left out of the comparison fails outright. The probe compiles
+  `kernel/codec/mod.rs` as-is, supplying only `crate::contract`, which also proves the layering claim
+  that the codec depends on nothing but the contract. It surfaced one real trap: `type` is a Rust
+  keyword but **not** a Python keyword, so the probe must add the `r#` prefix per the generator's own
+  `RUST_KEYWORDS` list, or `offset_of!` fails to compile.
+
+Gate evidence: `cargo test --release --lib` (257 passed, 73 of them in `kernel::`),
+`cargo clippy --release --lib --tests -- -D warnings`, `cargo fmt --check`,
 `make build` / `make format-check` / `make frontend-typecheck`, `bash scripts/check_contract.sh`,
 `python3 contract/verify_layout.py`, `bash scripts/verify_project.sh` all green; `make test`
 (67 passed / 25 skipped).
