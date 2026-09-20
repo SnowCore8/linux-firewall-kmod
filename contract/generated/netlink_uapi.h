@@ -194,9 +194,11 @@ _Static_assert(sizeof(struct fw_whitelist_entry) == 34, "whitelist_entry 布局�
 struct fw_list_whitelist_response {
     struct fw_msg_hdr hdr;
     __u32 count;
+    __u32 total;
+    __u32 offset;
 } __packed;
-_Static_assert(sizeof(struct fw_list_whitelist_response) == 16, "list_whitelist_response 布局必须为 16 字节");
-/* 其后紧跟 count 个 struct fw_whitelist_entry；u16 长度上限内最多 1927 条 */
+_Static_assert(sizeof(struct fw_list_whitelist_response) == 24, "list_whitelist_response 布局必须为 24 字节");
+/* 其后紧跟 count 个 struct fw_whitelist_entry；u16 长度上限内最多 1926 条 */
 
 struct fw_rate_entry {
     __u8 af;
@@ -217,10 +219,11 @@ struct fw_list_rates_response {
     struct fw_msg_hdr hdr;
     __u32 count;
     __u32 total;
+    __u32 offset;
     __u64 global_pps;
     __u64 global_bps;
 } __packed;
-_Static_assert(sizeof(struct fw_list_rates_response) == 36, "list_rates_response 布局必须为 36 字节");
+_Static_assert(sizeof(struct fw_list_rates_response) == 40, "list_rates_response 布局必须为 40 字节");
 /* 其后紧跟 count 个 struct fw_rate_entry；u16 长度上限内最多 779 条 */
 
 struct fw_udp_port_item {
@@ -322,6 +325,20 @@ struct fw_list_bans_query {
 } __packed;
 _Static_assert(sizeof(struct fw_list_bans_query) == 20, "list_bans_query 布局必须为 20 字节");
 
+struct fw_list_whitelist_query {
+    struct fw_msg_hdr hdr;
+    __u32 offset;
+    __u32 limit;
+} __packed;
+_Static_assert(sizeof(struct fw_list_whitelist_query) == 20, "list_whitelist_query 布局必须为 20 字节");
+
+struct fw_list_rates_query {
+    struct fw_msg_hdr hdr;
+    __u32 offset;
+    __u32 limit;
+} __packed;
+_Static_assert(sizeof(struct fw_list_rates_query) == 20, "list_rates_query 布局必须为 20 字节");
+
 struct fw_add_whitelist {
     struct fw_msg_hdr hdr;
     __u8 af;
@@ -344,16 +361,6 @@ struct fw_stats_query {
     struct fw_msg_hdr hdr;
 } __packed;
 _Static_assert(sizeof(struct fw_stats_query) == 12, "stats_query 布局必须为 12 字节");
-
-struct fw_list_whitelist_query {
-    struct fw_msg_hdr hdr;
-} __packed;
-_Static_assert(sizeof(struct fw_list_whitelist_query) == 12, "list_whitelist_query 布局必须为 12 字节");
-
-struct fw_list_rates_query {
-    struct fw_msg_hdr hdr;
-} __packed;
-_Static_assert(sizeof(struct fw_list_rates_query) == 12, "list_rates_query 布局必须为 12 字节");
 
 struct fw_analysis_query {
     struct fw_msg_hdr hdr;

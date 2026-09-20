@@ -392,22 +392,26 @@ impl WhitelistEntry {
 pub struct ListWhitelistResponse {
     pub hdr: MsgHdr,
     pub count: u32,
+    pub total: u32,
+    pub offset: u32,
 }
 
 impl ListWhitelistResponse {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
-    pub const WIRE_SIZE: usize = 16;
+    pub const WIRE_SIZE: usize = 24;
     /// 对应的 MsgType 取值
     pub const MSG_TYPE: MsgType = MsgType::ListWhitelistResponse;
     /// 定长部分字节数
-    pub const FIXED_SIZE: usize = 16;
+    pub const FIXED_SIZE: usize = 24;
     /// 尾部元素类型与其字节数
     pub const TAIL_ELEM_SIZE: usize = 34;
     /// u16 长度上限内可承载的最大尾部条目数
-    pub const MAX_TAIL_ENTRIES: usize = 1927;
+    pub const MAX_TAIL_ENTRIES: usize = 1926;
     /// 逐字段偏移（不含变长尾部；供一致性测试对照 offsetof）
     pub const FIELD_OFFSETS: &[(&str, usize)] = &[
         ("count", 12),
+        ("total", 16),
+        ("offset", 20),
     ];
 }
 
@@ -452,17 +456,18 @@ pub struct ListRatesResponse {
     pub hdr: MsgHdr,
     pub count: u32,
     pub total: u32,
+    pub offset: u32,
     pub global_pps: u64,
     pub global_bps: u64,
 }
 
 impl ListRatesResponse {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
-    pub const WIRE_SIZE: usize = 36;
+    pub const WIRE_SIZE: usize = 40;
     /// 对应的 MsgType 取值
     pub const MSG_TYPE: MsgType = MsgType::ListRatesResponse;
     /// 定长部分字节数
-    pub const FIXED_SIZE: usize = 36;
+    pub const FIXED_SIZE: usize = 40;
     /// 尾部元素类型与其字节数
     pub const TAIL_ELEM_SIZE: usize = 84;
     /// u16 长度上限内可承载的最大尾部条目数
@@ -471,8 +476,9 @@ impl ListRatesResponse {
     pub const FIELD_OFFSETS: &[(&str, usize)] = &[
         ("count", 12),
         ("total", 16),
-        ("global_pps", 20),
-        ("global_bps", 28),
+        ("offset", 20),
+        ("global_pps", 24),
+        ("global_bps", 32),
     ];
 }
 
@@ -727,6 +733,46 @@ impl ListBansQuery {
 
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
+pub struct ListWhitelistQuery {
+    pub hdr: MsgHdr,
+    pub offset: u32,
+    pub limit: u32,
+}
+
+impl ListWhitelistQuery {
+    /// 线格式字节数（packed，无填充；变长消息为定长部分）
+    pub const WIRE_SIZE: usize = 20;
+    /// 对应的 MsgType 取值
+    pub const MSG_TYPE: MsgType = MsgType::ListWhitelistQuery;
+    /// 逐字段偏移（不含变长尾部；供一致性测试对照 offsetof）
+    pub const FIELD_OFFSETS: &[(&str, usize)] = &[
+        ("offset", 12),
+        ("limit", 16),
+    ];
+}
+
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct ListRatesQuery {
+    pub hdr: MsgHdr,
+    pub offset: u32,
+    pub limit: u32,
+}
+
+impl ListRatesQuery {
+    /// 线格式字节数（packed，无填充；变长消息为定长部分）
+    pub const WIRE_SIZE: usize = 20;
+    /// 对应的 MsgType 取值
+    pub const MSG_TYPE: MsgType = MsgType::ListRatesQuery;
+    /// 逐字段偏移（不含变长尾部；供一致性测试对照 offsetof）
+    pub const FIELD_OFFSETS: &[(&str, usize)] = &[
+        ("offset", 12),
+        ("limit", 16),
+    ];
+}
+
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
 pub struct AddWhitelist {
     pub hdr: MsgHdr,
     pub af: u8,
@@ -784,38 +830,6 @@ impl StatsQuery {
     pub const WIRE_SIZE: usize = 12;
     /// 对应的 MsgType 取值
     pub const MSG_TYPE: MsgType = MsgType::StatsQuery;
-    /// 逐字段偏移（不含变长尾部；供一致性测试对照 offsetof）
-    pub const FIELD_OFFSETS: &[(&str, usize)] = &[
-    ];
-}
-
-#[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
-pub struct ListWhitelistQuery {
-    pub hdr: MsgHdr,
-}
-
-impl ListWhitelistQuery {
-    /// 线格式字节数（packed，无填充；变长消息为定长部分）
-    pub const WIRE_SIZE: usize = 12;
-    /// 对应的 MsgType 取值
-    pub const MSG_TYPE: MsgType = MsgType::ListWhitelistQuery;
-    /// 逐字段偏移（不含变长尾部；供一致性测试对照 offsetof）
-    pub const FIELD_OFFSETS: &[(&str, usize)] = &[
-    ];
-}
-
-#[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
-pub struct ListRatesQuery {
-    pub hdr: MsgHdr,
-}
-
-impl ListRatesQuery {
-    /// 线格式字节数（packed，无填充；变长消息为定长部分）
-    pub const WIRE_SIZE: usize = 12;
-    /// 对应的 MsgType 取值
-    pub const MSG_TYPE: MsgType = MsgType::ListRatesQuery;
     /// 逐字段偏移（不含变长尾部；供一致性测试对照 offsetof）
     pub const FIELD_OFFSETS: &[(&str, usize)] = &[
     ];

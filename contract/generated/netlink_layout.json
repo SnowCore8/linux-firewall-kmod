@@ -20,19 +20,19 @@
     "message ConfigChange: 定长 116 字节",
     "message ListBansResponse: 定长 24 字节 + 尾部 BanEntry(94 字节) × N；u16 上限内最多 696 条",
     "message StatsResponse: 定长 60 字节",
-    "message ListWhitelistResponse: 定长 16 字节 + 尾部 WhitelistEntry(34 字节) × N；u16 上限内最多 1927 条",
-    "message ListRatesResponse: 定长 36 字节 + 尾部 RateEntry(84 字节) × N；u16 上限内最多 779 条",
+    "message ListWhitelistResponse: 定长 24 字节 + 尾部 WhitelistEntry(34 字节) × N；u16 上限内最多 1926 条",
+    "message ListRatesResponse: 定长 40 字节 + 尾部 RateEntry(84 字节) × N；u16 上限内最多 779 条",
     "message AnalysisResponse: 定长 4756 字节",
     "message DaemonRegisterAck: 定长 13 字节",
     "message BanIp: 定长 65 字节",
     "message UnbanIp: 定长 65 字节",
     "message SetConfig: 定长 116 字节",
     "message ListBansQuery: 定长 20 字节",
+    "message ListWhitelistQuery: 定长 20 字节",
+    "message ListRatesQuery: 定长 20 字节",
     "message AddWhitelist: 定长 46 字节",
     "message RemoveWhitelist: 定长 46 字节",
     "message StatsQuery: 定长 12 字节",
-    "message ListWhitelistQuery: 定长 12 字节",
-    "message ListRatesQuery: 定长 12 字节",
     "message AnalysisQuery: 定长 12 字节",
     "message DaemonRegister: 定长 12 字节"
   ],
@@ -681,7 +681,7 @@
     },
     "ListWhitelistResponse": {
       "kind": "message",
-      "size": 16,
+      "size": 24,
       "fields": [
         {
           "name": "count",
@@ -691,8 +691,22 @@
           "tail": false
         },
         {
-          "name": "tail",
+          "name": "total",
           "offset": 16,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "offset",
+          "offset": 20,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "tail",
+          "offset": 24,
           "size": 34,
           "type": "WhitelistEntry",
           "tail": true
@@ -702,8 +716,8 @@
       "tail": {
         "elem": "WhitelistEntry",
         "elem_size": 34,
-        "fixed_size": 16,
-        "max_entries": 1927
+        "fixed_size": 24,
+        "max_entries": 1926
       }
     },
     "RateEntry": {
@@ -791,7 +805,7 @@
     },
     "ListRatesResponse": {
       "kind": "message",
-      "size": 36,
+      "size": 40,
       "fields": [
         {
           "name": "count",
@@ -808,22 +822,29 @@
           "tail": false
         },
         {
-          "name": "global_pps",
+          "name": "offset",
           "offset": 20,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "global_pps",
+          "offset": 24,
           "size": 8,
           "type": "u64",
           "tail": false
         },
         {
           "name": "global_bps",
-          "offset": 28,
+          "offset": 32,
           "size": 8,
           "type": "u64",
           "tail": false
         },
         {
           "name": "tail",
-          "offset": 36,
+          "offset": 40,
           "size": 84,
           "type": "RateEntry",
           "tail": true
@@ -833,7 +854,7 @@
       "tail": {
         "elem": "RateEntry",
         "elem_size": 84,
-        "fixed_size": 36,
+        "fixed_size": 40,
         "max_entries": 779
       }
     },
@@ -1296,6 +1317,48 @@
       ],
       "msg_type": "MsgType::LIST_BANS_QUERY"
     },
+    "ListWhitelistQuery": {
+      "kind": "message",
+      "size": 20,
+      "fields": [
+        {
+          "name": "offset",
+          "offset": 12,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "limit",
+          "offset": 16,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::LIST_WHITELIST_QUERY"
+    },
+    "ListRatesQuery": {
+      "kind": "message",
+      "size": 20,
+      "fields": [
+        {
+          "name": "offset",
+          "offset": 12,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "limit",
+          "offset": 16,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::LIST_RATES_QUERY"
+    },
     "AddWhitelist": {
       "kind": "message",
       "size": 46,
@@ -1371,18 +1434,6 @@
       "size": 12,
       "fields": [],
       "msg_type": "MsgType::STATS_QUERY"
-    },
-    "ListWhitelistQuery": {
-      "kind": "message",
-      "size": 12,
-      "fields": [],
-      "msg_type": "MsgType::LIST_WHITELIST_QUERY"
-    },
-    "ListRatesQuery": {
-      "kind": "message",
-      "size": 12,
-      "fields": [],
-      "msg_type": "MsgType::LIST_RATES_QUERY"
     },
     "AnalysisQuery": {
       "kind": "message",

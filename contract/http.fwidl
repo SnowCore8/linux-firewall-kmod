@@ -194,54 +194,63 @@ code 50002 {
 defect HTTP_BANS_DUAL_SHAPE {
   severity = high
   where = "src/daemon/http_exporter/handler.rs:if params.page.is_some()"
+  resolution = "统一为单一形状：GET /api/v1/bans 一律返回分页信封 PaginatedResponse<BanResponse>，不再有裸数组分支；前端随之删除重载签名与运行期分支。"
   text = "GET /api/v1/bans 有两种互不兼容的响应形状：不带 page/page_size 时返回裸数组，带了才返回分页信封。前端为此维护两个重载签名与运行期分支。它让『data 一定是对象』这一前提失效，任何通吃的错误处理都会踩空"
 }
 
 defect HTTP_SSE_STATUS_INCOMPLETE {
   severity = medium
   where = "src/daemon/http_exporter/handler.rs:current >= max"
+  resolution = "sse-status 载荷扩展为同时报告两条流：events 与 logs 各自的 current / max，前端按所属流的上限判断 limit_reached，不再用单一上限推断另一条流。"
   text = "/api/v1/stats/sse-status 只反映 /api/v1/events 的 10 连接上限，看不到 /api/v1/logs/stream 的独立 5 连接上限。前端用它判断『是否达到上限』会在日志流被拒时误判为未达上限，从而把 503 当成网络故障无限重连"
 }
 
 defect HTTP_RECIDIVISM_RATE_UNIT {
   severity = medium
   where = "src/daemon/web_ui/analysis.rs:recidivism_rate"
+  resolution = "统一为百分数 0–100：ban-effectiveness 的各 level 一并改为百分数，前端对两处使用同一个格式化函数。"
   text = "recidivism_rate 同名不同单位：/api/v1/stats/recidivism 返回百分数（0–100），/api/v1/stats/ban-effectiveness 的各 level 返回比例（0–1）。前端若用同一个格式化函数渲染，会有一个高出 100 倍"
 }
 
 defect HTTP_TODAY_BANS_EQUALS_TOTAL {
   severity = low
   where = "src/daemon/web_ui/stats.rs:today_bans"
+  resolution = "today_bans 改为真实「今日」窗口（本地时区自然日 00:00 起，按各封禁的 banned_at 计数），并在此契约中写明窗口定义与所用的时区。"
   text = "today_bans 与 total_bans 取的是同一个值，『今日』这一时间窗并未实现。仪表盘上两个数字永远相同"
 }
 
 defect HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS {
   severity = low
   where = "src/daemon/history_snapshot/threshold_analysis.rs:推荐阈值（0 = 无需调整）"
+  resolution = "0 表示「无需调整」：维护分支改为返回 0（而非原阈值），前端据此显示「无需调整」；非 0 时始终是具体推荐阈值。"
   text = "ThresholdRecommendation.recommended_threshold 的注释称『0=无需调整』，但所有生成分支都不产生 0（最小也是原阈值）。前端按注释判断『无需调整』会永远不成立"
 }
 
 defect HTTP_SERVICE_PROBE_NO_TOTAL {
   severity = low
   where = "src/daemon/web_ui/packet_analysis.rs:ServiceProbeResponse"
+  resolution = "ServiceProbeResponse 补 total_detected（与 PortScanResponse 形状对齐），前端两处共用同一套「检出 N 个」文案。"
   text = "ServiceProbeResponse 缺 total_detected，而同类的 PortScanResponse 有。前端在两个页面上无法用同一套『检出 N 个』文案"
 }
 
 defect HTTP_HEALTH_NOT_ENVELOPED {
   severity = low
   where = "src/daemon/http_exporter/handler.rs:fn handle_health"
+  resolution = "有意保留裸状态码（探针语义）：/health 与 /healthz 以 HTTP 状态码承载语义，在此契约中显式记为有意例外而非缺陷；前端保留 getRawJson 特判。"
   text = "/health 与 /healthz 不走信封，直接返回 RuntimeSnapshot；且未就绪时是 503 而非 5xx 信封。它是全项目唯一一个『HTTP 状态码即语义』的端点，前端必须特判（endpoints.ts 用 getRawJson）"
 }
 
 defect HTTP_LOG_SSE_LIMIT_DOC_DRIFT {
   severity = low
   where = "src/daemon/web_ui/log_viewer.rs:SSE 连接与 Web UI SSE 共享"
+  resolution = "修正注释与实现一致：两条流各自独立的上限（events 10 / logs 5），实现不变，只改误导性注释。"
   text = "日志流的上限注释说『与 Web UI SSE 共享 MAX_SSE_CONNECTIONS 限制』，但实现是两条互相独立的计数器：/api/v1/events 用 sse.rs 的 MAX_SSE_CONNECTIONS=10，日志流用本文件的 MAX_LOG_SSE_CONNECTIONS=5。两处注释（模块头第 8 行与常量上的文档注释）都与实现不符，容易误导排查——『events 才连了 3 个，日志流却被拒』不是 bug"
 }
 
 defect HTTP_BAN_SORT_DOC_INCOMPLETE {
   severity = low
   where = "src/daemon/web_ui/ban_ops.rs:排序字段（可选）"
+  resolution = "文档补全为 7 个取值（banned_at_desc / banned_at_asc / ip_asc / ip_desc / remaining_asc / remaining_desc / jail_asc），与实现及前端联合类型一致。"
   text = "PaginationParams.sort_by 的文档注释只列了 4 个取值（banned_at_desc/banned_at_asc/ip_asc/jail_asc），实现另有 3 个（ip_desc/remaining_asc/remaining_desc），前端 BanSortKey 联合类型 7 个取值——与实现一致、唯独与注释不符。契约以实现与前端为准"
 }
 

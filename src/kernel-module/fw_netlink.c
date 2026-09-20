@@ -60,12 +60,12 @@
  * 分页默认页大小与硬上限。
  * 硬上限由 u16 msg_len 上限 65535 与各响应的定长部分反推：
  *   bans        24 + n*94 <= 65535 → n <= 696
- *   whitelist   16 + n*34 <= 65535 → n <= 1927
- *   rates       36 + n*84 <= 65535 → n <= 779
+ *   whitelist   24 + n*34 <= 65535 → n <= 1926
+ *   rates       40 + n*84 <= 65535 → n <= 779
  */
 #define FW_NL_DEFAULT_PAGE 256
 #define FW_NL_BANS_PAGE_MAX 696
-#define FW_NL_WL_PAGE_MAX 1927
+#define FW_NL_WL_PAGE_MAX 1926
 #define FW_NL_RATES_PAGE_MAX 779
 
 static struct sock *fw_nl_sock;
@@ -430,6 +430,8 @@ static void fw_nl_send_whitelist_page(u32 portid, u32 seq, u32 offset, u32 limit
 
   r = nlmsg_data(nlh);
   r->count = cpu_to_be32(got);
+  r->total = cpu_to_be32(total);
+  r->offset = cpu_to_be32(offset);
 
   out = (struct fw_whitelist_entry *)(r + 1);
   for (i = 0; i < got; i++) {
@@ -504,6 +506,7 @@ static void fw_nl_send_rates_page(u32 portid, u32 seq, u32 offset, u32 limit, u3
   r = nlmsg_data(nlh);
   r->count = cpu_to_be32(got);
   r->total = cpu_to_be32(total);
+  r->offset = cpu_to_be32(offset);
   r->global_pps = cpu_to_be64(pkts / elapsed);
   r->global_bps = cpu_to_be64(bytes / elapsed);
 
@@ -851,13 +854,31 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
       fw_nl_send_stats_response(portid, be32_to_cpu(h->seq));
       break;
 
-    case FW_MSG_TYPE_LIST_WHITELIST_QUERY:
-      fw_nl_send_whitelist_page(portid, be32_to_cpu(h->seq), 0, 0, fw_wl_count());
-      break;
+    case FW_MSG_TYPE_LIST_WHITELIST_QUERY: {
+      const struct fw_list_whitelist_query *q;
+      u32 offset = 0, limit = 0;
 
-    case FW_MSG_TYPE_LIST_RATES_QUERY:
-      fw_nl_send_rates_page(portid, be32_to_cpu(h->seq), 0, 0, fw_rate_count());
+      if (payload >= sizeof(*q)) {
+        q = (const struct fw_list_whitelist_query *)h;
+        offset = be32_to_cpu(q->offset);
+        limit = be32_to_cpu(q->limit);
+      }
+      fw_nl_send_whitelist_page(portid, be32_to_cpu(h->seq), offset, limit, fw_wl_count());
       break;
+    }
+
+    case FW_MSG_TYPE_LIST_RATES_QUERY: {
+      const struct fw_list_rates_query *q;
+      u32 offset = 0, limit = 0;
+
+      if (payload >= sizeof(*q)) {
+        q = (const struct fw_list_rates_query *)h;
+        offset = be32_to_cpu(q->offset);
+        limit = be32_to_cpu(q->limit);
+      }
+      fw_nl_send_rates_page(portid, be32_to_cpu(h->seq), offset, limit, fw_rate_count());
+      break;
+    }
 
     case FW_MSG_TYPE_ANALYSIS_QUERY:
       fw_nl_send_analysis_response(portid, be32_to_cpu(h->seq));

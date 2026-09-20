@@ -107,14 +107,24 @@ alias addr16 = u8[16]
 # ---------------------------------------------------------------------------
 # 公共消息头（12 字节）
 #
-# 源码注释写作「20 字节」有误；packed 布局实际为 12 字节。gen.py 会给出
-# static_assert，以生成值为准。
+# packed 布局为 12 字节。gen.py 会给出 static_assert，以生成值为准。
+#
+# seq 是**请求/响应配对序列号**，语义如下（daemon 侧必须按此实现）：
+#   - 请求：daemon 发起的每个请求（包括 DAEMON_REGISTER）用非 0 且当前在途
+#     请求内唯一的 seq，内核在响应中原样回填。daemon 按 (msg_type, seq) 关联
+#     到发起方。
+#   - 推送：内核主动推送的事件（DdosEvent / BanStateChange /
+#     WhitelistStateChange / CmdResult / ConfigAck 等）与 SET_CONFIG、
+#     BAN_IP 等无需配对的指令，seq = 0，表示「不参与配对」。
+#   - daemon 收到 seq = 0 的响应是协议违例；收到无法匹配在途请求的响应时
+#     必须记入可观测计数并告警，不得静默丢弃——否则「响应丢失 / 内核未实现
+#     某查询」会表现为无提示的功能失效。
 # ---------------------------------------------------------------------------
 struct MsgHdr {
     u32 magic      # 恒为 FW_NL_MAGIC
     u16 msg_type   # MsgType 取值
     u16 msg_len    # 含本头的总长度
-    u32 seq        # 请求/响应配对序列号
+    u32 seq        # 请求/响应配对序列号；0 = 不参与配对（推送/单向指令）
 }
 
 # ===========================================================================
@@ -238,10 +248,17 @@ struct WhitelistEntry {
     str[16] device
 }
 
-# 白名单列表响应；必须分页
+# 白名单列表响应；必须分页。
+#
+# count / total / offset 三个字段的含义与 ListBansResponse 完全一致：只有
+# count 时 daemon 无法判断「本页是否就是全部」（截断）也无法翻页——历史上
+# 内核固定回第一页 + daemon 侧硬编码 64 条上限，导致白名单超过一页时整份
+# 响应被丢弃。
 message ListWhitelistResponse {
     type = MsgType::LIST_WHITELIST_RESPONSE
-    u32             count
+    u32             count    # 本页条目数
+    u32             total    # 内核当前总条目数（供 daemon 感知截断）
+    u32             offset   # 本页起始下标（IPv4 表序 + IPv6 表序）
     WhitelistEntry  tail
 }
 
@@ -271,6 +288,7 @@ message ListRatesResponse {
     type = MsgType::LIST_RATES_RESPONSE
     u32        count       # 本页条目数
     u32        total       # 内核当前总条目数（供 daemon 感知截断）
+    u32        offset      # 本页起始下标（速率表序）
     u64        global_pps  # 全局平均包速率
     u64        global_bps  # 全局平均字节速率
     RateEntry  tail
@@ -326,10 +344,11 @@ message AnalysisResponse {
 
 # 单守护进程注册确认。
 #
-# 注意：当前内核实现把 accepted 写进了 seq 的低字节（见 netlink.c 中
-# `((u8 *)resp)[sizeof(*resp) - 1] = accepted`，而 resp 仅为 12 字节头部），
-# 与注释「紧跟 hdr 之后」不符，且 daemon 侧完全没有解析该 ack。本契约按
-# 正确意图定义独立 accepted 字节，Phase 1 修正内核实现。
+# 注册是**必须可观测**的：内核拒绝注册（已有活跃守护进程）时仍会回本消息并
+# 置 accepted = 0，daemon 必须解析它并据此暴露「未取得内核唯一租约」的状态，
+# 而不是把 sendto 成功当成注册成功——否则 daemon 会照常运行，而内核静默丢弃
+# 它的全部指令（只留一条 pr_warn），表现为「控制全部无响应且无任何提示」。
+# accepted = 0 时 daemon 必须重试或明确报错，不得继续以「已注册」自居。
 message DaemonRegisterAck {
     type = MsgType::DAEMON_REGISTER_ACK
     u8 accepted   # 1 = 接受并完成注册；0 = 拒绝（已有活跃守护进程）
@@ -385,6 +404,23 @@ message ListBansQuery {
     u32 limit    # 本页上限；0 = 内核取默认页大小
 }
 
+# 白名单列表分页查询；分页参数语义与 ListBansQuery 完全一致。
+# 历史上本消息无载荷（仅头），内核固定回第一页且 daemon 无法继续翻页。
+message ListWhitelistQuery {
+    type = MsgType::LIST_WHITELIST_QUERY
+    u32 offset   # 起始下标
+    u32 limit    # 本页上限；0 = 内核取默认页大小
+}
+
+# 速率统计分页查询；分页参数语义与 ListBansQuery 完全一致。
+# 历史上本消息无载荷（仅头），内核固定回第一页；速率表容量远大于单页，
+# 无 offset 意味着第二页起永远取不到（静默截断到单页）。
+message ListRatesQuery {
+    type = MsgType::LIST_RATES_QUERY
+    u32 offset   # 起始下标
+    u32 limit    # 本页上限；0 = 内核取默认页大小
+}
+
 # 添加白名单
 message AddWhitelist {
     type = MsgType::ADD_WHITELIST
@@ -407,7 +443,5 @@ message RemoveWhitelist {
 # 仅消息头（无载荷）
 # ---------------------------------------------------------------------------
 message StatsQuery           = MsgType::STATS_QUERY
-message ListWhitelistQuery   = MsgType::LIST_WHITELIST_QUERY
-message ListRatesQuery       = MsgType::LIST_RATES_QUERY
 message AnalysisQuery        = MsgType::ANALYSIS_QUERY
 message DaemonRegister       = MsgType::DAEMON_REGISTER

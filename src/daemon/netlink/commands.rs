@@ -46,9 +46,20 @@ impl super::NetlinkContext {
         self.send_command(&query.to_bytes())
     }
 
-    /// 发送白名单列表查询（启动时恢复状态）
+    /// 发送白名单列表查询（启动时恢复状态；取内核默认页）
     pub fn send_list_whitelist_query(&self, seq: u32) -> Result<()> {
         let query = FwNlListWhitelistQuery::new(seq);
+        self.send_command(&query.to_bytes())
+    }
+
+    /// 发送白名单列表分页查询（offset/limit；limit=0 表示内核默认页大小）
+    pub fn send_list_whitelist_query_page(
+        &self,
+        seq: u32,
+        offset: u32,
+        limit: u32,
+    ) -> Result<()> {
+        let query = FwNlListWhitelistQuery::new_page(seq, offset, limit);
         self.send_command(&query.to_bytes())
     }
 
@@ -64,9 +75,15 @@ impl super::NetlinkContext {
         self.send_command(&cmd.to_bytes())
     }
 
-    /// 发送速率统计查询
+    /// 发送速率统计查询（取内核默认页）
     pub fn send_list_rates_query(&self, seq: u32) -> Result<()> {
         let query = FwNlListRatesQuery::new(seq);
+        self.send_command(&query.to_bytes())
+    }
+
+    /// 发送速率统计分页查询（offset/limit；limit=0 表示内核默认页大小）
+    pub fn send_list_rates_query_page(&self, seq: u32, offset: u32, limit: u32) -> Result<()> {
+        let query = FwNlListRatesQuery::new_page(seq, offset, limit);
         self.send_command(&query.to_bytes())
     }
 

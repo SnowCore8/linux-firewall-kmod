@@ -70,8 +70,11 @@ pub struct FwNlListBansResponse {
 
 /// 封禁列表单页上限（与内核 FW_NL_LIST_BANS_PAGE_MAX 一致）
 pub const LIST_BANS_PAGE_MAX: u32 = 256;
-/// 白名单表最大条目数（与内核 WHITELIST_MAX_ENTRIES 一致）
-const MAX_WHITELIST_ENTRIES: usize = 64;
+/// 白名单单页上限（由 u16 msg_len 上限与白名单响应定长部分反推：
+/// 24 + n*34 <= 65535 → n <= 1926；与内核 FW_NL_WL_PAGE_MAX 一致）。
+/// 这不是白名单表容量——容量是 65535。历史上此处误写为 64（白名单表容量），
+/// 会把内核返回的正常分页整份拒绝。
+const MAX_WHITELIST_PAGE_ENTRIES: usize = 1926;
 /// 速率表最大条目数（与内核 RATE_HASH_SIZE 一致）
 const MAX_RATE_ENTRIES: usize = 4096;
 
@@ -230,10 +233,18 @@ impl FwNlStatsResponse {
 #[derive(Debug, Clone, Copy)]
 pub struct FwNlListWhitelistQuery {
     pub hdr: FwNlMsgHdr,
+    pub offset: u32,
+    pub limit: u32,
 }
 
 impl FwNlListWhitelistQuery {
+    /// 取内核默认页（offset=0、limit=0），语义与 `new_page(seq, 0, 0)` 相同。
     pub fn new(seq: u32) -> Self {
+        Self::new_page(seq, 0, 0)
+    }
+
+    /// 按 offset/limit 取指定页；limit=0 表示内核取默认页大小。
+    pub fn new_page(seq: u32, offset: u32, limit: u32) -> Self {
         Self {
             hdr: FwNlMsgHdr {
                 magic: FW_NL_MAGIC.to_be(),
@@ -241,6 +252,8 @@ impl FwNlListWhitelistQuery {
                 msg_len: (std::mem::size_of::<Self>() as u16).to_be(),
                 seq: seq.to_be(),
             },
+            offset: offset.to_be(),
+            limit: limit.to_be(),
         }
     }
 
@@ -268,7 +281,9 @@ pub struct FwNlWhitelistEntry {
 pub struct FwNlListWhitelistResponse {
     pub hdr: FwNlMsgHdr,
     pub count: u32,
-    // 后面紧跟 count 个 FwNlWhitelistEntry
+    pub total: u32,  /* 内核当前总条目数（用于感知截断） */
+    pub offset: u32, /* 本页起始下标 */
+                     // 后面紧跟 count 个 FwNlWhitelistEntry
 }
 
 impl FwNlListWhitelistResponse {
@@ -283,8 +298,12 @@ impl FwNlListWhitelistResponse {
             std::ptr::read(data.as_ptr() as *const Self)
         };
         let count = u32::from_be(resp.count) as usize;
-        if count > MAX_WHITELIST_ENTRIES {
-            anyhow::bail!("白名单条目数 {} 超出上限 {}", count, MAX_WHITELIST_ENTRIES);
+        if count > MAX_WHITELIST_PAGE_ENTRIES {
+            anyhow::bail!(
+                "白名单页条目数 {} 超出上限 {}",
+                count,
+                MAX_WHITELIST_PAGE_ENTRIES
+            );
         }
         let entries_data = &data[std::mem::size_of::<Self>()..];
 
@@ -429,10 +448,18 @@ impl FwNlConfigAck {
 #[derive(Debug, Clone, Copy)]
 pub struct FwNlListRatesQuery {
     pub hdr: FwNlMsgHdr,
+    pub offset: u32,
+    pub limit: u32,
 }
 
 impl FwNlListRatesQuery {
+    /// 取内核默认页（offset=0、limit=0），语义与 `new_page(seq, 0, 0)` 相同。
     pub fn new(seq: u32) -> Self {
+        Self::new_page(seq, 0, 0)
+    }
+
+    /// 按 offset/limit 取指定页；limit=0 表示内核取默认页大小。
+    pub fn new_page(seq: u32, offset: u32, limit: u32) -> Self {
         Self {
             hdr: FwNlMsgHdr {
                 magic: FW_NL_MAGIC.to_be(),
@@ -440,6 +467,8 @@ impl FwNlListRatesQuery {
                 msg_len: (std::mem::size_of::<Self>() as u16).to_be(),
                 seq: seq.to_be(),
             },
+            offset: offset.to_be(),
+            limit: limit.to_be(),
         }
     }
 
@@ -475,6 +504,7 @@ pub struct FwNlListRatesResponse {
     pub hdr: FwNlMsgHdr,
     pub count: u32,
     pub total: u32,      /* 内核中实际条目总数（用于感知截断） */
+    pub offset: u32,     /* 本页起始下标 */
     pub global_pps: u64, /* 全局 PPS（自上次查询以来的平均包速率） */
     pub global_bps: u64, /* 全局 BPS（自上次查询以来的平均字节速率） */
                          // 后面紧跟 count 个 FwNlRateEntry

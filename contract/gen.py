@@ -1044,10 +1044,16 @@ class Defect:
                   必须存在。理由写在 ``text`` 与 ``reason`` 里。
 
     ``fix`` 与 ``reason`` 仅分别在 fixed / retained 时使用。
+
+    ``resolution`` 是**本轮重写已经锁定、但代码修复尚未落地**的处置结论
+    （例如「统一为百分数」「两条流各自独立上限」）。它与 ``status`` 的区别：
+    status 描述**代码当前**的状态，resolution 描述**已决定的去向**。当修复
+    真正落地时，resolution 应上升为 fix / reason 并同步 status。没有它，
+    决策只存在于设计文档里，实现阶段可能再次漂移。
     """
 
     __slots__ = ("name", "line", "severity", "where", "text", "status", "fix",
-                 "reason")
+                 "reason", "resolution")
 
     def __init__(self, name: str, line: int):
         self.name = name
@@ -1058,6 +1064,7 @@ class Defect:
         self.status = "open"
         self.fix = ""
         self.reason = ""
+        self.resolution = ""
 
 
 class TextProtoContract:
@@ -1296,6 +1303,8 @@ def _textproto_block(
                 decl.fix = v
             elif k == "reason":
                 decl.reason = v
+            elif k == "resolution":
+                decl.resolution = v
             elif k == "text":
                 decl.text = v
             else:
@@ -1643,6 +1652,7 @@ def emit_json_textproto(contract: TextProtoContract, notes: List[str]) -> str:
                 "where": d.where,
                 "fix": d.fix,
                 "reason": d.reason,
+                "resolution": d.resolution,
                 "text": d.text,
             }
             for d in contract.defects
@@ -2110,6 +2120,8 @@ def _http_block(
                 decl.severity = v
             elif k == "where":
                 decl.where = v
+            elif k == "resolution":
+                decl.resolution = v
             elif k == "text":
                 decl.text = v
             else:
@@ -2453,7 +2465,13 @@ def emit_json_http(contract: HttpContract, notes: List[str]) -> str:
             for name in contract.err_order
         },
         "defects": [
-            {"name": d.name, "severity": d.severity, "where": d.where, "text": d.text}
+            {
+                "name": d.name,
+                "severity": d.severity,
+                "where": d.where,
+                "resolution": d.resolution,
+                "text": d.text,
+            }
             for d in contract.defects
         ],
     }

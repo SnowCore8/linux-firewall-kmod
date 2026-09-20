@@ -176,6 +176,8 @@ export interface WhitelistEntry {
 export interface ListWhitelistResponse {
   hdr: MsgHdr;
   count: number;
+  total: number;
+  offset: number;
 }
 
 export interface RateEntry {
@@ -196,6 +198,7 @@ export interface ListRatesResponse {
   hdr: MsgHdr;
   count: number;
   total: number;
+  offset: number;
   global_pps: number;
   global_bps: number;
 }
@@ -290,6 +293,18 @@ export interface ListBansQuery {
   limit: number;
 }
 
+export interface ListWhitelistQuery {
+  hdr: MsgHdr;
+  offset: number;
+  limit: number;
+}
+
+export interface ListRatesQuery {
+  hdr: MsgHdr;
+  offset: number;
+  limit: number;
+}
+
 export interface AddWhitelist {
   hdr: MsgHdr;
   af: number;
@@ -307,14 +322,6 @@ export interface RemoveWhitelist {
 }
 
 export interface StatsQuery {
-  hdr: MsgHdr;
-}
-
-export interface ListWhitelistQuery {
-  hdr: MsgHdr;
-}
-
-export interface ListRatesQuery {
   hdr: MsgHdr;
 }
 
@@ -342,9 +349,9 @@ export const WIRE_SIZES: Record<string, number> = {
   ListBansResponse: 24,
   StatsResponse: 60,
   WhitelistEntry: 34,
-  ListWhitelistResponse: 16,
+  ListWhitelistResponse: 24,
   RateEntry: 84,
-  ListRatesResponse: 36,
+  ListRatesResponse: 40,
   UdpPortItem: 26,
   IcmpTypeItem: 26,
   ScannerItem: 32,
@@ -354,11 +361,11 @@ export const WIRE_SIZES: Record<string, number> = {
   UnbanIp: 65,
   SetConfig: 116,
   ListBansQuery: 20,
+  ListWhitelistQuery: 20,
+  ListRatesQuery: 20,
   AddWhitelist: 46,
   RemoveWhitelist: 46,
   StatsQuery: 12,
-  ListWhitelistQuery: 12,
-  ListRatesQuery: 12,
   AnalysisQuery: 12,
   DaemonRegister: 12,
 };
@@ -366,6 +373,6 @@ export const WIRE_SIZES: Record<string, number> = {
 /** 变长消息的分页上限：count 最大取值、定长部分字节数、单条字节数。 */
 export const TAIL_LIMITS: Record<string, { maxEntries: number; fixedSize: number; elemSize: number }> = {
   ListBansResponse: { maxEntries: 696, fixedSize: 24, elemSize: 94 },
-  ListWhitelistResponse: { maxEntries: 1927, fixedSize: 16, elemSize: 34 },
-  ListRatesResponse: { maxEntries: 779, fixedSize: 36, elemSize: 84 },
+  ListWhitelistResponse: { maxEntries: 1926, fixedSize: 24, elemSize: 34 },
+  ListRatesResponse: { maxEntries: 779, fixedSize: 40, elemSize: 84 },
 };
