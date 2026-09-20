@@ -46,12 +46,12 @@ class TestDaemonLogparse:
         run_daemon_captured([str(DAEMON_PATH), "-c", str(yaml_config)], timeout=5)
         time.sleep(1)
 
-        if PROC_BANS.exists():
-            ban_count = count_bans()
-            if ban_count > 0:
-                assert ban_count >= 1, "日志解析成功，有 IP 被封禁"
-            else:
-                pytest.skip("日志解析后无 IP 被封禁（可能是正则未匹配）")
+        assert PROC_BANS.exists(), "守护进程运行后 procfs 不可访问"
+        ban_count = count_bans()
+        assert ban_count >= 1, (
+            "日志解析后无 IP 被封禁（5 行含有效 IP 的失败日志应触发封禁，"
+            "可能是正则未匹配）"
+        )
 
     def test_special_char_log(self, tmp_path):
         """10.2 特殊字符日志处理"""
@@ -83,7 +83,12 @@ class TestDaemonLogparse:
         assert PROC_BANS.exists(), "空日志文件处理后 procfs 不可访问"
 
     def test_nonexistent_log(self, tmp_path):
-        """10.4 不存在日志文件处理"""
+        """10.4 不存在日志文件处理
+
+        契约事实：jail/config_ops.rs::config_validate 只校验 log_files 非空，
+        不校验文件是否存在（fail2ban 语义下缺失日志被容忍）。故断言守护进程不会
+        立即退出——它继续运行，直到 subprocess 超时将其终止。
+        """
         nonexist_yaml = tmp_path / "nonexist.yaml"
         generate_test_yaml(
             str(nonexist_yaml), "/nonexistent/log.log", max_retries=1, findtime=1, ban_time=5
@@ -95,6 +100,10 @@ class TestDaemonLogparse:
                 capture_output=True,
                 timeout=3,
             )
-            assert result.returncode != 0, f"不存在的日志文件未被拒绝 (退出码={result.returncode})"
         except subprocess.TimeoutExpired:
-            pytest.skip("守护进程启动超时（可能日志文件检查被阻塞）")
+            return  # 预期路径：缺失日志未被拒绝，守护进程持续运行
+        pytest.fail(
+            "缺失日志文件的守护进程意外退出 "
+            f"(退出码={result.returncode}, "
+            f"stderr={result.stderr.decode(errors='replace')[:200]})"
+        )

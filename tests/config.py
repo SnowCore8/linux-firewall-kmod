@@ -60,9 +60,9 @@ BAN_PERF_THRESHOLD_MS = 5000
 UNBAN_PERF_THRESHOLD_MS = 5000
 STRESS_THRESHOLD_MS = 10000
 
-# 容量限制
-MAX_BAN_CAPACITY = 4096
-MAX_WHITELIST_CAPACITY = 64
+# 容量上限不在此硬编码：真实上限由内核模块参数 fw_max_ban_entries /
+# fw_max_whitelist_entries 决定（默认 65535，见 config/default.yaml 的 capacity 段；
+# procfs 契约亦注明 4096 只是哈希桶数、旧 64 只是 daemon 回包长度校验，都不是容量）。
 
 # 测试 IP 池
 TEST_IP_POOL_PREFIX = "192.168.100"

@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from .config import KERNEL_MODULE_PATH, MAX_BAN_CAPACITY, PROC_BANS, PROC_DIR
+from .config import KERNEL_MODULE_PATH, PROC_BANS, PROC_DIR
 from .conftest import (
     count_bans,
     get_stat,
@@ -43,7 +43,7 @@ class TestResourceMgmt:
                 pass
 
     def test_ban_capacity_boundary(self, clean_bans):
-        """11.3 封禁容量边界测试 (4096 上限)"""
+        """11.3 封禁容量边界测试"""
         for i in range(1, 201):
             try:
                 PROC_BANS.write_text(f"10.0.{i // 256}.{i % 256}")
@@ -61,9 +61,6 @@ class TestResourceMgmt:
         )
         assert final_count >= stat_bans, (
             f"封禁列表行数({final_count})少于内核计数({stat_bans})"
-        )
-        assert final_count <= MAX_BAN_CAPACITY, (
-            f"封禁数量超出 {MAX_BAN_CAPACITY} 上限，实际 {final_count}"
         )
 
         for i in range(1, 201):

@@ -46,7 +46,7 @@ class TestWhitelist:
             content = PROC_WHITELIST.read_text()
             assert TEST_SUBNET not in content, "白名单移除失败"
         else:
-            pytest.skip("白名单已满 (64/64)，跳过子网添加")
+            pytest.skip("白名单计数未增加（添加未生效或已满），跳过子网添加")
 
     def test_whitelist_protection(self):
         """4.3 白名单保护"""
@@ -105,7 +105,7 @@ class TestWhitelist:
                 PROC_WHITELIST.write_text(input_str)
 
     def test_whitelist_capacity(self):
-        """4.6 白名单容量测试 (上限 64)"""
+        """4.6 白名单容量测试（计数与成功添加数一致）"""
         before = get_stat("current_whitelist")
         added = []
         for i in range(1, 51):
@@ -118,12 +118,12 @@ class TestWhitelist:
 
         wait_procfs()
         wl_count = get_stat("current_whitelist")
-        # 计数应恰好等于基线加上本次成功添加的条目数；仅校验固定的 64 上限无法失败
+        # 计数应恰好等于基线加上本次成功添加的条目数；固定的 64/4096 上限已不再是
+        # 真实容量（真实上限见 config.py 说明），故不在此断言陈旧常数
         assert wl_count == before + len(added), (
             f"白名单计数与添加数量不符: before={before}, "
             f"added={len(added)}, count={wl_count}"
         )
-        assert wl_count <= 64, f"白名单数量超过限制 (64)，实际 {wl_count}"
 
         for subnet in added:
             try:
