@@ -53,8 +53,9 @@ const BANS_PATH: &str = "/proc/firewall/bans";
 /// 优雅清理：停 HTTP → 停 netlink 接收线程 → 关 inotify → 关 db → 删 PID 文件。
 ///
 /// 顺序要求：netlink 接收线程必须在 `close_history_db` **之前**停止。否则停机窗口内
-/// 收到的事件会写进已关闭的写队列（`enqueue_db_write` 静默 return），造成内存状态与
-/// 磁盘持久化不一致。
+/// 收到的事件会写进已关闭的写队列（`enqueue_db_write` 报一次 warn 后丢弃），造成内存
+/// 状态与磁盘持久化不一致。`close_history_db` 自身会 join 写线程、把已入队的持久化
+/// 全部落盘后才关连接，故这里只需保证**没有新的生产者**即可。
 ///
 /// # Arguments
 /// - `_cfg`：保留参数，占位

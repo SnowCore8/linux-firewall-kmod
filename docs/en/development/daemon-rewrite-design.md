@@ -328,7 +328,7 @@ or immutable snapshots.
 | `api/routes/*.rs` | None (thin adapter layer) | Reads from `snapshot()` and applies the envelope; **zero side effects on the read path** (fixes E) |
 | `api/sse.rs` | Per-connection subscription | Subscribes to the hub, serializes only when the version changes |
 | `api/auth.rs` | Credentials (injected at startup) | `check(headers) -> Result<Principal>` |
-| `persist/mod.rs` | SQLite connection (sole owner) | Bounded queue + backpressure; stop netlink before flushing on shutdown (fixes G) |
+| `persist/mod.rs` | SQLite connection (sole owner) | Bounded queue + backpressure; stop netlink before flushing on shutdown (fixes G). **Not created this round**: after 2.F was narrowed, G is fixed in place inside the existing `history_snapshot/mod.rs`; `persist/` is left to a later batch |
 | `config/mod.rs` | Config + validation | `load()` / `validate()`; hot reload produces a new immutable snapshot |
 | `config/reload.rs` | Reload and rollback transaction | `apply(new_snapshot)`; keep the old snapshot on failure |
 | `signal/mod.rs` | `signalfd` | `Signal::next()`; no more atomic bools + `EINTR` |
@@ -472,7 +472,7 @@ existing defects in `netlink.fwidl` and `http.fwidl`, plus daemon-side stability
 | `HTTP_RECIDIVISM_RATE_UNIT` (medium) | Unify the unit and sync frontend formatting | Not fixed (`status` stays `open`) |
 | Whitelist parse limit 64 conflicts with kernel page 256 | Remove the hard-coded limit, use the contract's page limit; complete pagination (fixes J) | Done |
 | Rate response silently truncated | Add pagination + read `total` + make truncation visible (fixes J) | Done |
-| History-DB queue drops silently when full | Switch to backpressure blocking (fixes G) | Not fixed (belongs to 2.F `persist`) |
+| History-DB queue drops silently when full | Block the producer when full, never drop; drain before closing on shutdown; alarm when queue depth crosses the high-water mark (fixes G) | Done: the queue in `history_snapshot/mod.rs` now uses `runtime::channel`'s `Backpressure::Block`; all four discard paths (full / not assembled / writer thread gone / items queued at shutdown) are visible; `close_history_db` joins the writer to drain before closing the connection; 4 non-tautological unit tests lock the behavior (see the 2.F-1 evidence at the end) |
 | Registration loss invisible | Introduce `Lease` + parse `RegisterAck` (fixes K) | New side in place (`kernel/{client,lease}.rs`), but `main.rs` and the write points still use the old `crate::netlink` — not wired into production |
 | Two baseline/config dispatch paths | Converge on `client.set_config()` (fixes L) | Same: `kernel/client.rs::set_config` exists, production still runs the old `crate::netlink::sync_protocol_thresholds` |
 | Whitelist CIDR key inconsistency | Single normalization function (fixes M) | Partial: `state/cidr.rs::CidrKey` is in place and the old write paths are retired, but the old `ban/mod.rs::build_cidr_key` still exists and `status` stays `open` |
@@ -517,7 +517,7 @@ Prerequisite dependency is 0 (it can run in parallel with the Phase 1 kernel rew
 | **2.C** | Main-chain rewrite: `ingest` + `parse` + `decision` | Problems A/B/C eliminated (with tests); `decision` semantics match the old implementation case-by-case (comparison test) |
 | **2.D** | `kernel` layer rewrite: `codec` (using the generated artifact) + `transport` + `reactor` (type+seq routing) + `client` + `lease`; all pagination | Problems I/J/K/L eliminated; a >1-page test case; registration loss visible. **As of 2.E-4c: J is eliminated; I's new reactor exists but production still runs the old routing; K/L likewise** (`kernel/` is not yet wired into `main.rs` -- see "Fixes and landing status") |
 | **2.E** | `state` layer: single owner + snapshot hub; `api` thin adapter + zero read-path side effects | Problems E/F/M eliminated; SSE serializes per domain; a slow consumer does not slow the whole. **As of 2.E-4c: E and F are eliminated; M's new side is in place but the old function is not deleted** (`kernel/` is not wired into production, so M's old key rule still stands -- see "Fixes and landing status") |
-| **2.F** | `persist` backpressure rework + test-debt replacement | Problem G eliminated (backpressure tested); every tautological assertion replaced with one that can fail |
+| **2.F** | Persistence-queue backpressure rework (in place in `history_snapshot/mod.rs`, not a new `persist/`) + test-debt replacement | Problem G eliminated (backpressure tested); every tautological assertion replaced with one that can fail |
 | **2.G** | Documentation rewrite: `docs/{zh,en}/architecture/daemon.md` fully rewritten to the new implementation; `docs/{zh,en}/architecture/data-flow.md` stale numbers corrected | Documentation matches the code item by item |
 
 `docs/zh/architecture/daemon.md` currently diverges badly from the implementation; 2.G must handle:
@@ -543,7 +543,9 @@ SQLite `bans` table schema; the metric count is written as "24"; the main loop i
 | 2.E-4b-1 Ratchet groundwork (E/F/M recorded in the contract + status-aware anchors in `verify_http.py`) | Done |
 | 2.E-4b-2 Retire the old read paths + mount the new router + flip four defects per `where` survival | Done (E stays `open` at that step; closed by 2.E-4c) |
 | 2.E-4c Wire `runtime/`: the scheduler takes over periodic purge and the counter mirror + `main.rs` assembly; E flips to `fixed` | Done |
-| 2.F–2.G | Not started |
+| 2.F-1 Queue backpressure (`history_snapshot/mod.rs`, queue behavior only) | Done |
+| 2.F-2 Test-debt replacement (`tests/` tautological assertions) | In progress |
+| 2.G Documentation rewrite | Not started |
 
 ### What 2.A Landed
 
@@ -1040,6 +1042,50 @@ gating, and `cargo clippy --all-targets -- -D warnings` failed twice with `incom
 repo's MSRV is 1.75.0; that API needs 1.82.0). Switching to an explicit `match` with a comment noting
 the MSRV reason made clippy exit 0. It is recorded here because this class of "a newer, nicer API
 oversteps the MSRV" will recur in later batches.
+
+### What 2.F Landed
+
+Per the decision record, 2.F was narrowed to **fixing the queue behavior only**: do not create the
+`persist/` module the design names, and do not touch modules outside the persistence path. Defect
+**G** therefore lands in place, inside the existing `history_snapshot/mod.rs`.
+
+The old code had four paths that discarded a write, three of them completely silent:
+
+| Path | Old behavior | Now |
+|------|--------------|-----|
+| Queue full | `try_send` logged one warn then **dropped the write** | `Backpressure::Block`: the producer blocks, nothing is dropped |
+| Not assembled / already shut down | silent `return`, no log at all | warns once per rising edge (`DB_WRITE_ABSENT_LOGGED`) |
+| Writer thread gone | send error ignored | warns on every occurrence |
+| Shutdown with items still queued | `close_history_db` sent a sentinel then **immediately** set the connection to `None`; the writer saw `Some(None)` and skipped the items with no log | drop the sender → join the writer (draining the queue) → **then** close the connection |
+
+The fourth row is the one the design never recorded: the promised "stop netlink, then flush" ordering
+had never actually held — the connection was pulled out from under the queue while it still had
+contents.
+
+**Backpressure choice**: persistence is audit data, so the producers (the netlink receive thread and
+the main inotify/parse loop) now block rather than lose a write. So that blocking cannot become a
+silent stall, queue depth is observable: `note_queue_depth` warns once when the depth crosses the
+high-water mark (`DB_WRITE_HIGH_WATER`, three quarters of the 1024 capacity) and re-arms after the
+writer catches up.
+
+**G's ratchet is Rust tests** (it has no contract anchor and no mechanical assertion in
+`verify_*.py`), all in `history_snapshot::tests`:
+
+| Test | Behavior locked |
+|------|-----------------|
+| `saturated_queue_blocks_the_producer_and_loses_nothing` | 200 ops through a capacity-4 queue: asserts `stats.sent() >= 200`, `stats.rejected() == 0`, and that all 200 rows reach `ban_history` |
+| `close_drains_ops_queued_before_the_writer_started` | 50 ops queued first, then the writer starts and is closed **immediately**: asserts all 50 land. Deterministic — reproduces the old silent drop with no timing dependence |
+| `enqueue_without_assembly_is_a_no_op_and_reports_once` | Enqueue before assembly is a no-op, and `DB_WRITE_ABSENT_LOGGED` is set exactly once |
+| `depth_alarm_fires_on_the_rising_edge_only` | The high-water alarm fires once per rising edge and re-arms after a drop |
+
+**2.F-1 gate evidence**: `cargo test --release --lib` (**404 passed / 0 failed**, up from 400 at
+2.E-4c), `cargo clippy --all-targets -- -D warnings` (exit 0), `cargo fmt --all --check` (clean),
+`make build` (`.ko` + daemon), `make format-check` (passed; the same pre-existing yamllint
+`config/default.yaml:80` warning), `make frontend-typecheck` (exit 0), `bash scripts/check_contract.sh`
+(passed), `bash scripts/verify_project.sh` (passed) — all green.
+
+**2.F-2** (replacing the tautological assertions in `tests/` with ones that can fail) is in progress
+and tracked separately.
 
 ## Judging Discipline
 

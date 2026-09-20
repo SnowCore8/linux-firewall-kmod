@@ -295,7 +295,7 @@ inotify ──LogChunk{jail, source, bytes}──▶ parse ──Failure{jail, i
 | `api/routes/*.rs` | 无（薄适配层） | 从 `snapshot()` 取数并套信封；**读路径零副作用**（修 E） |
 | `api/sse.rs` | 每条连接的订阅 | 订阅 hub，仅在版本变化时序列化 |
 | `api/auth.rs` | 凭据（启动期注入） | `check(headers) -> Result<Principal>` |
-| `persist/mod.rs` | SQLite 连接（唯一所有者） | 有界队列 + 背压；关停时先停 netlink 再 flush（修 G） |
+| `persist/mod.rs` | SQLite 连接（唯一所有者） | 有界队列 + 背压；关停时先停 netlink 再 flush（修 G）。**本轮未新建该模块**：2.F 收窄后 G 就地修复于既有 `history_snapshot/mod.rs`，`persist/` 留待后续批次 |
 | `config/mod.rs` | 配置 + 校验 | `load()` / `validate()`；热重载产出新不可变快照 |
 | `config/reload.rs` | 重载与回滚事务 | `apply(new_snapshot)`；失败回滚保留旧快照 |
 | `signal/mod.rs` | `signalfd` | `Signal::next()`；不再用原子布尔 + `EINTR` |
@@ -426,7 +426,7 @@ sequenceDiagram
 | `HTTP_RECIDIVISM_RATE_UNIT`（medium） | 统一单位并同步前端格式化 | 未修（`status` 仍 `open`） |
 | 白名单解析上限 64 与内核单页 256 冲突 | 删除硬编码上限，改为按契约页上限；分页补齐（修 J） | 已完成 |
 | 速率响应静默截断 | 补分页 + 读 `total` + 截断可见（修 J） | 已完成 |
-| 历史库写队列满静默丢弃 | 改为背压阻塞（修 G） | 未修（属 2.F `persist`） |
+| 历史库写队列满静默丢弃 | 队列满时阻塞生产者、不丢弃；关停先排空再关连接；队列深度越线告警（修 G） | 已完成：`history_snapshot/mod.rs` 队列改用 `runtime::channel` 的 `Backpressure::Block`，四条丢弃路径（满 / 未装配 / 写线程已退出 / 关停有在途项）全部可见，`close_history_db` 先 join 写线程排空再关连接；4 条反恒真单测锁定行为（见文末 2.F-1 证据） |
 | 注册失联不可见 | 引入 `Lease` + 解析 `RegisterAck`（修 K） | 新侧已就位（`kernel/{client,lease}.rs`），但 `main.rs` 与各写入点仍走旧 `crate::netlink`，未接入生产 |
 | 两条基线/配置下发路径 | 收敛到 `client.set_config()`（修 L） | 同上：`kernel/client.rs::set_config` 已就位，生产仍走旧 `crate::netlink::sync_protocol_thresholds` |
 | 白名单 CIDR 键不一致 | 单一规范化函数（修 M） | 部分：`state/cidr.rs::CidrKey` 已就位、旧写路径已退役；旧函数 `ban/mod.rs::build_cidr_key` 仍在库中、`status` 仍 `open` |
@@ -468,7 +468,7 @@ sequenceDiagram
 | **2.C** | 主链路重写：`ingest` + `parse` + `decision` | 结构问题 A/B/C 消除（有测试）；`decision` 判定语义与旧实现逐案一致（对照测试） |
 | **2.D** | `kernel` 层重写：`codec`（用生成物）+ `transport` + `reactor`（type+seq 路由）+ `client` + `lease`；全部分页 | 结构问题 I/J/K/L 消除；分页有 >1 页的用例；注册失联可见。**截至 2.E-4c：J 已消除；I 的新 reactor 已就位但生产仍走旧路由；K/L 同此**（`kernel/` 尚未接入 `main.rs`，见「修复项与落地状态」） |
 | **2.E** | `state` 层：单所有者 + 快照 hub；`api` 薄适配层 + 读路径零副作用 | 结构问题 E/F/M 消除；SSE 按域序列化；慢消费者不拖慢全局。**截至 2.E-4c：E/F 已消除；M 的新侧已就位、旧函数未删**（`kernel/` 未接入生产故 M 的旧键规则仍在，见「修复项与落地状态」） |
-| **2.F** | `persist` 背压改造 + 测试债务替换 | 结构问题 G 消除（背压有测试）；恒真断言全部替换为可失败断言 |
+| **2.F** | 持久化队列背压改造（就地修 `history_snapshot/mod.rs`，不新建 `persist/`）+ 测试债务替换 | 结构问题 G 消除（背压有测试）；恒真断言全部替换为可失败断言 |
 | **2.G** | 文档重写：`docs/{zh,en}/architecture/daemon.md` 按新实现全量重写；`docs/{zh,en}/architecture/data-flow.md` 修正陈旧数字 | 文档与代码逐项对齐 |
 
 `docs/zh/architecture/daemon.md` 目前与实现严重不符，2.G 必须处理：
@@ -493,7 +493,9 @@ sequenceDiagram
 | 2.E-4b-1 棘轮铺垫（E/F/M 记入契约 + `verify_http.py` 锚点 status-aware） | 已完成 |
 | 2.E-4b-2 退役旧读路径 + 挂载新路由 + 按 `where` 存亡翻转四条缺陷 | 已完成（E 时留 `open`，见下） |
 | 2.E-4c 接入 `runtime/`：调度器接管周期清理与计数器镜像 + `main.rs` 装配；E 转 `fixed` | 已完成 |
-| 2.F–2.G | 未开始 |
+| 2.F-1 队列背压（`history_snapshot/mod.rs`，只修队列行为） | 已完成 |
+| 2.F-2 测试债务替换（`tests/` 恒真断言） | 进行中 |
+| 2.G 文档重写 | 未开始 |
 
 ### 2.A 落地明细
 
@@ -791,6 +793,34 @@ E 的判据是「**读路径改状态**」。旧实现把限流 `purge_expired` 
 2.E-4c 门禁证据：`python3 contract/gen.py contract/http.fwidl` 报「缺陷记录 12 条（已修 5 / 有意保留 1 / 未修 6）」；`python3 contract/verify_http.py` 通过（**20** 个 `where/fix` 锚点、57 个载荷类型、51 个前端 interface、37 条前端路径对 50 条契约路径，`http_contract.rs` 编译 + `http_contract.ts` tsc 均 OK），并确认 E 的加强断言成立——「`get_active_bans` 读路径已无 purge，周期清理由 `main.rs` 装配的调度器驱动」；`cargo test --release --lib`（**400 passed / 0 failed**）、`cargo clippy --all-targets -- -D warnings`（exit 0）、`cargo fmt --all`、`make build`（`.ko` + daemon）、`make format-check`（通过；同一条既有 yamllint 警告）、`make frontend-typecheck`（exit 0）、`bash scripts/check_contract.sh`（契约门禁通过）、`bash scripts/verify_project.sh`（成功）全绿。
 
 2.E-4c 的一次返工：首版 `runtime/scheduler.rs` 用了 `Option::is_none_or` 做门控，`cargo clippy --all-targets -- -D warnings` 因 `incompatible_msrv`（本仓库 MSRV 1.75.0，该 API 需 1.82.0）报两处错误。改用显式 `match` 并注明 MSRV 原因后重跑 clippy exit 0。记在这里是因为这类「更新更好的 API 越界 MSRV」在后续批次里还会反复出现。
+
+### 2.F-1 落地明细：只修队列行为
+
+2.F 按决策记录收窄为**只修队列行为**——不新建设计里点名的 `persist/`，也不动持久化路径以外的模块，故缺陷 **G** 就地落在既有的 `history_snapshot/mod.rs`。旧实现有四条丢弃路径，其中三条完全无声：
+
+| 路径 | 旧行为 | 现行为 |
+|------|-------|-------|
+| 队列满 | `try_send` 记一条 warn 后**丢弃该次写入** | `Backpressure::Block`：生产者阻塞，一条不丢 |
+| 未装配 / 已关停 | 静默 `return`，无任何日志 | 升沿打一次 warn（`DB_WRITE_ABSENT_LOGGED`） |
+| 写线程已退出 | 发送错误被忽略 | 每次打一条 warn |
+| 关停时队列仍有在途项 | `close_history_db` 发哨兵后**立刻**把连接置 `None`，写线程取到 `Some(None)` 便无日志跳过 | 丢弃发送端 → join 写线程排空 → **再**关连接 |
+
+第四行是设计里从未记录的：承诺的「先停 netlink 再 flush」顺序此前并不成立，连接是在队列还有内容时被抽走的。
+
+**背压选择**：持久化是审计数据，故生产者（netlink 接收线程与主 inotify/parse 循环）改为阻塞而非丢写；为避免阻塞变成无声停摆，队列深度可见——`note_queue_depth` 在深度越过高水位（`DB_WRITE_HIGH_WATER`，容量 1024 的 3/4）时打一条 warn，写库追上后重新武装。
+
+**G 的棘轮是 Rust 单测**（它无契约锚点、无 `verify_*.py` 机械断言），全部落在 `history_snapshot::tests`：
+
+| 单测 | 锁定行为 |
+|------|---------|
+| `saturated_queue_blocks_the_producer_and_loses_nothing` | 容量 4 压 200 条：断言 `stats.sent() >= 200`、`stats.rejected() == 0`，且 `ban_history` 中对应 IP 段行数 `== 200` |
+| `close_drains_ops_queued_before_the_writer_started` | 先入队 50 条、后起写线程并**立即**关停：断言 50 条全落盘。确定性复现旧实现的静默丢弃，不依赖时序 |
+| `enqueue_without_assembly_is_a_no_op_and_reports_once` | 未装配时入队为 no-op，且 `DB_WRITE_ABSENT_LOGGED` 只置位一次 |
+| `depth_alarm_fires_on_the_rising_edge_only` | 水位告警只在升沿触发一次，回落重新武装 |
+
+2.F-1 门禁证据：`cargo test --release --lib`（**404 passed / 0 failed**，较 2.E-4c 的 400 增加 4 条）、`cargo clippy --all-targets -- -D warnings`（exit 0）、`cargo fmt --all --check`（干净）、`make build`（`.ko` + daemon）、`make format-check`（通过；同一条既有 yamllint 警告）、`make frontend-typecheck`（exit 0）、`bash scripts/check_contract.sh`（契约门禁通过）、`bash scripts/verify_project.sh`（成功）全绿。
+
+2.F-2（`tests/` 恒真断言替换为可失败断言）进行中，单独推进。
 
 ## 判定纪律
 

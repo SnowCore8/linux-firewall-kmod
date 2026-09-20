@@ -37,9 +37,12 @@ pub use threshold_analysis::{
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
-use std::sync::mpsc::{self, SyncSender};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread;
+use std::thread::JoinHandle;
+
+use crate::runtime::channel::{self, Backpressure};
 
 /// 历史数据数据库路径
 const HISTORY_DB_PATH: &str = "/var/lib/firewall/history.db";
@@ -47,7 +50,8 @@ const HISTORY_DB_PATH: &str = "/var/lib/firewall/history.db";
 /// 保留时长（秒）：24 小时
 const RETENTION_SECS: i64 = 24 * 60 * 60;
 
-/// 异步写库任务（封禁热路径只入队，不阻塞）
+/// 异步写库任务（封禁热路径只入队；队列满时阻塞生产者，不丢弃审计数据）
+#[derive(Debug)]
 enum DbWriteOp {
     PersistBan {
         ip: String,
@@ -69,16 +73,37 @@ enum DbWriteOp {
         total_failures: u32,
         total_bans: u32,
     },
-    Shutdown,
 }
 
 /// 全局数据库连接（通过 `history_db()` 访问）
 static HISTORY_DB: once_cell::sync::Lazy<Mutex<Option<Connection>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(None));
 
-/// 写队列（有界，满则丢弃并打 warn，避免拖死封禁路径）
-static DB_WRITE_TX: once_cell::sync::Lazy<Mutex<Option<SyncSender<DbWriteOp>>>> =
+/// 写队列容量。与旧 `sync_channel(1024)` 同值：本次改的是**满时行为**
+/// （丢弃 → 阻塞），不调队列长度，故滞留上界不变。
+const DB_WRITE_QUEUE_CAPACITY: usize = 1024;
+
+/// 队列深度告警水位。达到此深度打一条 warn（升沿触发，不刷屏），让「写库变慢」
+/// 在监控面上先可见，而不是等它变成阻塞。
+const DB_WRITE_HIGH_WATER: usize = DB_WRITE_QUEUE_CAPACITY * 3 / 4;
+
+/// 写队列发送端（有界，[`Backpressure::Block`]：满时阻塞生产者）。
+///
+/// 投递方**先克隆发送端再 `send`**：`send` 可能在满队列上阻塞，不能握着这把锁阻塞
+/// ——否则关停线程取不到锁，无法摘掉发送端、队列也就永远不会断开。
+static DB_WRITE_TX: once_cell::sync::Lazy<Mutex<Option<channel::Sender<DbWriteOp>>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(None));
+
+/// 写线程句柄。关停时必须 `join`：写线程会把已入队的 op 全部落盘后才退出。
+static DB_WRITE_JOIN: once_cell::sync::Lazy<Mutex<Option<JoinHandle<()>>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(None));
+
+/// 「队列不可用」是否已经报过。仅在**升沿**打 warn：库初始化失败时
+/// `persist_ip_reputation` 处于每条失败日志的路径上，逐条 warn 会淹掉日志。
+static DB_WRITE_ABSENT_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// 队列深度是否已越过 [`DB_WRITE_HIGH_WATER`]（用于升沿触发）。
+static DB_WRITE_ALARMED: AtomicBool = AtomicBool::new(false);
 
 /// 获取历史数据库锁（统一错误信息）
 ///
@@ -91,16 +116,45 @@ pub(super) fn history_db() -> std::sync::MutexGuard<'static, Option<Connection>>
 }
 
 fn enqueue_db_write(op: DbWriteOp) {
-    let guard = DB_WRITE_TX.lock().expect("DB_WRITE_TX 互斥锁中毒");
-    let Some(tx) = guard.as_ref() else {
+    // 先克隆发送端、释放全局锁，再投递：`Block` 策略下 `send` 可能在满队列上阻塞，
+    // 不能握着锁阻塞（见 `DB_WRITE_TX` 的说明）。
+    let tx = DB_WRITE_TX.lock().expect("DB_WRITE_TX 互斥锁中毒").clone();
+    let Some(tx) = tx else {
+        // 库未装配或已关停。旧实现这里是静默 `return`——除「队列满」之外的第二条
+        // 静默丢弃路径；按缺陷 G 的口径，凡未入队都必须可见。仅报一次（升沿）。
+        if !DB_WRITE_ABSENT_LOGGED.swap(true, Ordering::Relaxed) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "历史库写队列不可用，持久化未入队（后续同类情况不再重复告警）";
+                "reason" => "未装配或已关停"
+            );
+        }
         return;
     };
-    if let Err(e) = tx.try_send(op) {
-        crate::logger::warn!(
-            crate::logger::get(),
-            "历史库写队列繁忙，丢弃一次持久化";
-            "error" => %e
-        );
+
+    // 投递失败只可能是通道断开（写线程已退出）——同样不能静默。
+    if tx.send(op).is_err() {
+        crate::logger::warn!(crate::logger::get(), "历史库写线程已退出，一次持久化未入队");
+        return;
+    }
+
+    note_queue_depth(tx.len());
+}
+
+/// 队列深度可见性：首次越过 [`DB_WRITE_HIGH_WATER`] 时打一条 warn（升沿触发），
+/// 回落到水位以下后重新武装。
+fn note_queue_depth(depth: usize) {
+    if depth >= DB_WRITE_HIGH_WATER {
+        if !DB_WRITE_ALARMED.swap(true, Ordering::Relaxed) {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "历史库写队列积压，写库已跟不上";
+                "depth" => depth,
+                "capacity" => DB_WRITE_QUEUE_CAPACITY
+            );
+        }
+    } else if DB_WRITE_ALARMED.load(Ordering::Relaxed) {
+        DB_WRITE_ALARMED.store(false, Ordering::Relaxed);
     }
 }
 
@@ -170,22 +224,14 @@ fn apply_db_write(conn: &Connection, op: DbWriteOp) {
                 );
             }
         }
-        DbWriteOp::Shutdown => {}
     }
 }
 
-/// 初始化历史数据库
-pub fn init_history_db() -> Result<()> {
-    let db_path = PathBuf::from(HISTORY_DB_PATH);
-
-    // 确保目录存在
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let conn = Connection::open(&db_path)?;
-
-    // 创建表
+/// 建表与索引。
+///
+/// schema 的**唯一来源**：初始化路径与单测共用，避免两边各写一份 DDL 后漂移
+/// （测试用的是内存库 / 临时库，走的是同一个 `init_schema`）。
+fn init_schema(conn: &Connection) -> Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS historical_stats (
             timestamp INTEGER NOT NULL,
@@ -242,6 +288,21 @@ pub fn init_history_db() -> Result<()> {
         [],
     )?;
 
+    Ok(())
+}
+
+/// 初始化历史数据库
+pub fn init_history_db() -> Result<()> {
+    let db_path = PathBuf::from(HISTORY_DB_PATH);
+
+    // 确保目录存在
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let conn = Connection::open(&db_path)?;
+    init_schema(&conn)?;
+
     // 清理过期数据
     cleanup_expired_data(&conn)?;
 
@@ -259,25 +320,41 @@ pub fn init_history_db() -> Result<()> {
     drop(db);
     load_ip_reputation();
 
-    // 后台写线程：封禁热路径只入队，避免同步 fsync 拖住主循环 / netlink 处理
-    let (tx, rx) = mpsc::sync_channel::<DbWriteOp>(1024);
+    // 后台写线程：封禁热路径只入队，避免同步 fsync 拖住主循环 / netlink 处理。
+    // 队列满时**阻塞生产者**（`Backpressure::Block`）——历史是审计数据，不允许丢。
+    let (tx, rx, _stats) =
+        channel::bounded::<DbWriteOp>(DB_WRITE_QUEUE_CAPACITY, Backpressure::Block);
     *DB_WRITE_TX.lock().expect("DB_WRITE_TX 互斥锁中毒") = Some(tx);
+    *DB_WRITE_JOIN.lock().expect("DB_WRITE_JOIN 互斥锁中毒") = Some(spawn_db_writer(rx)?);
+    // 队列重新可用：解除「不可用」告警闩锁，让下一次不可用能再报一次。
+    DB_WRITE_ABSENT_LOGGED.store(false, Ordering::Relaxed);
+
+    Ok(())
+}
+
+/// 启动写线程：把已入队的 op 全部落盘，直到所有发送端退出。
+///
+/// 退出条件是**发送端全部丢弃**（`recv` 返回 `Err`），而不是收到某个「关闭哨兵」：
+/// 哨兵排在队列尾部，排在它后面的 op 会被跳过；丢弃发送端则让本循环先把队列排空、
+/// 再退出——这正是 [`close_history_db`] 依赖的顺序保证。
+fn spawn_db_writer(rx: channel::Receiver<DbWriteOp>) -> Result<JoinHandle<()>> {
     thread::Builder::new()
         .name("history-db-writer".into())
         .spawn(move || {
             while let Ok(op) = rx.recv() {
-                if matches!(op, DbWriteOp::Shutdown) {
-                    break;
-                }
                 let db = history_db();
-                if let Some(conn) = db.as_ref() {
-                    apply_db_write(conn, op);
+                match db.as_ref() {
+                    Some(conn) => apply_db_write(conn, op),
+                    // 连接已关而队列里还有 op：正确顺序下不可达（`close_history_db`
+                    // 先 join 本线程再关连接）。这里仍打 warning 而不是静默跳过，
+                    // 免得将来把顺序改错时又退回「无声丢弃」。
+                    None => {
+                        crate::logger::warn!(crate::logger::get(), "历史库已关闭，一次持久化未落盘")
+                    }
                 }
             }
         })
-        .context("启动 history-db-writer 失败")?;
-
-    Ok(())
+        .context("启动 history-db-writer 失败")
 }
 
 /// 记录统计数据快照
@@ -589,10 +666,215 @@ fn load_ip_reputation() {
 }
 
 /// 关闭数据库连接
+///
+/// 顺序：**断开写队列 → join 写线程（它会把已入队的 op 全部落盘）→ 关连接**。
+///
+/// 旧实现是「发一个 `Shutdown` 哨兵后立刻把连接置 `None`」：哨兵排在队列尾部，而连接
+/// 已变 `None`，写线程拿到 `None` 就静默跳过——队列里尚未落盘的历史数据被无声丢掉，
+/// 且没有任何日志。也就是说，「关停时先停 netlink 再 flush」这条承诺此前并不成立。
 pub fn close_history_db() {
-    if let Some(tx) = DB_WRITE_TX.lock().expect("DB_WRITE_TX 互斥锁中毒").take() {
-        let _ = tx.send(DbWriteOp::Shutdown);
+    // 摘下发送端并丢弃：所有克隆（含正在投递的临时克隆）释放后，写线程的 `recv`
+    // 会先把队列里剩余的 op 全部返回、再返回 `Err`，于是它排空后才退出。
+    let tx = DB_WRITE_TX.lock().expect("DB_WRITE_TX 互斥锁中毒").take();
+    drop(tx);
+
+    if let Some(handle) = DB_WRITE_JOIN
+        .lock()
+        .expect("DB_WRITE_JOIN 互斥锁中毒")
+        .take()
+    {
+        if handle.join().is_err() {
+            crate::logger::warn!(
+                crate::logger::get(),
+                "历史库写线程异常退出，可能有未落盘的持久化"
+            );
+        }
     }
+
+    // 到这里队列已排空、写线程已退出，关连接不会再有并发写。
     let mut db = history_db();
     *db = None;
+
+    // 关停窗口内若还有生产者（正常顺序下不该有），让「不可用」再报一次。
+    DB_WRITE_ABSENT_LOGGED.store(false, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::channel::QueueStats;
+    use std::sync::Arc;
+
+    /// 每个用例都会改全局（`HISTORY_DB` / `DB_WRITE_TX` / `DB_WRITE_JOIN`），
+    /// 而 `cargo test` 默认多线程跑同一进程，故彼此串行。
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    /// 临时库路径。用完即删（`assemble` 开头也先删一次，避免上次残留）。
+    fn tmp_db(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("fw-history-test-{}-{tag}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        p
+    }
+
+    /// 装配「库 + 有界队列 + 写线程」，并把发送端登记到全局。
+    ///
+    /// 与 [`init_history_db`] 的区别只在库的来源（临时文件 vs 固定路径）：
+    /// schema 走同一个 [`init_schema`]，队列与写线程走同一条装配路径。
+    /// 调用方负责结束时调 [`close_history_db`] 拆掉全局。
+    fn assemble(capacity: usize, path: &std::path::Path) -> Arc<QueueStats> {
+        let conn = Connection::open(path).expect("打开测试库");
+        init_schema(&conn).expect("建表");
+        *history_db() = Some(conn);
+
+        let (tx, rx, stats) = channel::bounded::<DbWriteOp>(capacity, Backpressure::Block);
+        *DB_WRITE_TX.lock().expect("DB_WRITE_TX 互斥锁中毒") = Some(tx);
+        *DB_WRITE_JOIN.lock().expect("DB_WRITE_JOIN 互斥锁中毒") =
+            Some(spawn_db_writer(rx).expect("启动写线程"));
+        DB_WRITE_ABSENT_LOGGED.store(false, Ordering::Relaxed);
+        stats
+    }
+
+    fn count_rows(path: &std::path::Path, sql: &str) -> i64 {
+        let conn = Connection::open(path).expect("重开测试库");
+        conn.query_row(sql, [], |r| r.get(0)).expect("计数")
+    }
+
+    /// 队列容量远小于投递量：`Block` 策略下生产者必须被阻塞而不是被丢弃——
+    /// 全部 op 一条不少地落盘，且拒绝计数为 0。
+    ///
+    /// 这是缺陷 G 的核心断言：旧实现（`try_send`）在容量 4 的队列上投 200 条，
+    /// 绝大多数会被丢弃，本用例会直接失败。
+    #[test]
+    fn saturated_queue_blocks_the_producer_and_loses_nothing() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        const CAPACITY: usize = 4;
+        const OPS: usize = 200;
+
+        let path = tmp_db("saturated");
+        let stats = assemble(CAPACITY, &path);
+
+        for i in 0..OPS {
+            enqueue_db_write(DbWriteOp::PersistBan {
+                ip: format!("10.0.0.{i}"),
+                ban_count: 1,
+                last_banned_at: 1_700_000_000 + i as i64,
+                last_unbanned_at: 0,
+                was_permanent: false,
+            });
+        }
+
+        // `close_history_db` 保证「排空后才关连接」，因此关停点即同步点，无需 sleep。
+        close_history_db();
+
+        assert!(
+            stats.sent() as usize >= OPS,
+            "入队条数少于投递条数: {} < {OPS}",
+            stats.sent()
+        );
+        assert_eq!(stats.rejected(), 0, "Block 策略下不应出现拒绝计数");
+        // 只数本用例自己的 IP 段：同进程内其它单测的写入（如决策层测封禁记录的用例）
+        // 也会经全局发送端落库，按 IP 段过滤才不会把它们算进来。
+        assert_eq!(
+            count_rows(
+                &path,
+                "SELECT COUNT(*) FROM ban_history WHERE ip LIKE '10.0.0.%'"
+            ),
+            OPS as i64,
+            "有持久化未落盘（被静默丢弃）"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 关停时队列里还压着未落盘的 op：必须先全部落盘再关连接。
+    ///
+    /// 构造方式：先只登记发送端（无消费者），把 op 全部压进队列，**之后**才起写线程
+    /// 并立即关停。旧实现（哨兵 + 立刻置 `None`）会把这批 op 整批跳过；本用例在旧
+    /// 实现下必然失败，在新实现下必然通过（不依赖时序）。
+    #[test]
+    fn close_drains_ops_queued_before_the_writer_started() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        const OPS: usize = 50;
+
+        let path = tmp_db("drain");
+        let conn = Connection::open(&path).expect("打开测试库");
+        init_schema(&conn).expect("建表");
+        *history_db() = Some(conn);
+
+        let (tx, rx, _stats) = channel::bounded::<DbWriteOp>(64, Backpressure::Block);
+        for i in 0..OPS {
+            tx.send(DbWriteOp::BanEvent {
+                ip: format!("10.1.0.{i}"),
+                jail_name: "sshd".into(),
+                ban_count: 1,
+                banned_at: 1_700_000_000 + i as i64,
+            })
+            .expect("队列容量 64，压 50 条不应失败");
+        }
+        assert_eq!(tx.len(), OPS, "前提：这批 op 尚未被消费");
+
+        // 现在才起写线程，并立刻关停——关停必须把它全部排空。
+        *DB_WRITE_TX.lock().expect("DB_WRITE_TX 互斥锁中毒") = Some(tx);
+        *DB_WRITE_JOIN.lock().expect("DB_WRITE_JOIN 互斥锁中毒") =
+            Some(spawn_db_writer(rx).expect("启动写线程"));
+        close_history_db();
+
+        assert_eq!(
+            count_rows(
+                &path,
+                "SELECT COUNT(*) FROM ban_events WHERE ip LIKE '10.1.0.%'"
+            ),
+            OPS as i64,
+            "关停时队列里未落盘的 op 被丢弃"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 未装配时投递：不得 panic，也不得静默——此刻队列为空、无写线程。
+    #[test]
+    fn enqueue_without_assembly_is_a_no_op_and_reports_once() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        *DB_WRITE_TX.lock().expect("DB_WRITE_TX 互斥锁中毒") = None;
+        DB_WRITE_ABSENT_LOGGED.store(false, Ordering::Relaxed);
+
+        enqueue_db_write(DbWriteOp::BanEvent {
+            ip: "10.2.0.1".into(),
+            jail_name: "sshd".into(),
+            ban_count: 1,
+            banned_at: 1,
+        });
+        enqueue_db_write(DbWriteOp::BanEvent {
+            ip: "10.2.0.2".into(),
+            jail_name: "sshd".into(),
+            ban_count: 1,
+            banned_at: 1,
+        });
+
+        assert!(
+            DB_WRITE_ABSENT_LOGGED.load(Ordering::Relaxed),
+            "未装配时的丢弃必须被标记为「已告警」，不能静默"
+        );
+    }
+
+    /// 队列深度告警水位：越过水位报警（升沿只报一次），回落后重新武装。
+    #[test]
+    fn depth_alarm_fires_on_the_rising_edge_only() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        DB_WRITE_ALARMED.store(false, Ordering::Relaxed);
+
+        note_queue_depth(DB_WRITE_HIGH_WATER - 1);
+        assert!(
+            !DB_WRITE_ALARMED.load(Ordering::Relaxed),
+            "未到水位不应报警"
+        );
+
+        note_queue_depth(DB_WRITE_HIGH_WATER);
+        assert!(DB_WRITE_ALARMED.load(Ordering::Relaxed), "到达水位应报警");
+
+        note_queue_depth(0);
+        assert!(
+            !DB_WRITE_ALARMED.load(Ordering::Relaxed),
+            "回落后应重新武装"
+        );
+    }
 }

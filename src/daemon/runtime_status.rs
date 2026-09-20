@@ -43,13 +43,19 @@ mod tests {
     #[test]
     fn snapshot_reports_degraded_without_kmod_or_netlink() {
         let snap = runtime_snapshot();
-        // 单测环境通常无 netlink 全局上下文；至少字段可序列化且 status 一致
-        assert!(snap.status == "ok" || snap.status == "degraded");
-        if !snap.netlink_ready || !snap.kmod_proc_present {
-            assert_eq!(snap.status, "degraded");
+        // status 的唯一输入是两个就绪位：这里独立重算一遍，改变判定口径就会失败
+        // （例如只按 netlink_ready 判定时，netlink 就绪但 procfs 缺失即被抓出）
+        let expected = if snap.netlink_ready && snap.kmod_proc_present {
+            "ok"
         } else {
-            assert_eq!(snap.status, "ok");
-        }
-        let _ = serde_json::to_string(&snap).expect("RuntimeSnapshot serializes");
+            "degraded"
+        };
+        assert_eq!(snap.status, expected, "status 与两个就绪位不一致");
+        // 序列化字段名与取值都要落地：字段被改名/跳过会在这里失败
+        let json = serde_json::to_string(&snap).expect("RuntimeSnapshot serializes");
+        assert!(
+            json.contains(&format!("\"status\":\"{}\"", snap.status)),
+            "序列化结果与快照不一致: {json}"
+        );
     }
 }
