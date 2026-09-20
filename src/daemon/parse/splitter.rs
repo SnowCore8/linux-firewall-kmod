@@ -267,7 +267,9 @@ mod tests {
         let mut ps = SplitStats::default();
         let mut piecewise_lines = Vec::new();
         for byte in data {
-            piecewise.feed(&[*byte], &mut ps, |line| piecewise_lines.push(line.to_vec()));
+            piecewise.feed(&[*byte], &mut ps, |line| {
+                piecewise_lines.push(line.to_vec())
+            });
         }
 
         assert_eq!(whole_lines, piecewise_lines, "切分不得依赖读块边界");

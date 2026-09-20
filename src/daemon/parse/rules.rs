@@ -194,7 +194,8 @@ mod tests {
 
     #[test]
     fn regex_hit_reports_regex_via() {
-        let line = "Jun 11 15:30:00 host sshd[1]: Failed password for root from 192.168.1.100 port 22";
+        let line =
+            "Jun 11 15:30:00 host sshd[1]: Failed password for root from 192.168.1.100 port 22";
         let parsed = rules_one().parse(line).expect("应命中");
         assert_eq!(parsed.ip.to_string(), "192.168.1.100");
         assert_eq!(parsed.via, MatchVia::Regex);

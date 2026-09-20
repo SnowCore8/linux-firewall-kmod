@@ -68,8 +68,16 @@ pub fn effective_threshold(
     internal: bool,
     reputation_score: u32,
 ) -> u32 {
-    let peak = if peak_hours { PEAK_HOURS_MULTIPLIER } else { 1.0 };
-    let source = if internal { INTERNAL_SOURCE_MULTIPLIER } else { 1.0 };
+    let peak = if peak_hours {
+        PEAK_HOURS_MULTIPLIER
+    } else {
+        1.0
+    };
+    let source = if internal {
+        INTERNAL_SOURCE_MULTIPLIER
+    } else {
+        1.0
+    };
     let reputation = reputation_multiplier(reputation_score);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     // `max_retries` 最大 u32::MAX，乘 3 后远小于 2^53（f64 精确整数范围），
@@ -187,10 +195,22 @@ mod tests {
 
     #[test]
     fn internal_detection_matches_legacy_ranges() {
-        for private in ["10.0.0.1", "172.16.0.1", "172.31.255.255", "192.168.1.1", "fd00::1"] {
+        for private in [
+            "10.0.0.1",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.168.1.1",
+            "fd00::1",
+        ] {
             assert!(is_internal(ip(private)), "{private} 应判为内网");
         }
-        for public in ["11.0.0.1", "172.15.0.1", "172.32.0.1", "192.169.1.1", "2001:db8::1"] {
+        for public in [
+            "11.0.0.1",
+            "172.15.0.1",
+            "172.32.0.1",
+            "192.169.1.1",
+            "2001:db8::1",
+        ] {
             assert!(!is_internal(ip(public)), "{public} 不应判为内网");
         }
     }
@@ -315,9 +335,18 @@ mod tests {
                 };
 
                 let plan = plan_ban(ban_time, prior, now, 7);
-                assert_eq!(plan.is_permanent, legacy_permanent, "永久判据: bt={ban_time} prior={prior}");
-                assert_eq!(plan.expires_at, legacy_expires, "过期时刻: bt={ban_time} prior={prior}");
-                assert_eq!(plan.duration, legacy_duration, "时长: bt={ban_time} prior={prior}");
+                assert_eq!(
+                    plan.is_permanent, legacy_permanent,
+                    "永久判据: bt={ban_time} prior={prior}"
+                );
+                assert_eq!(
+                    plan.expires_at, legacy_expires,
+                    "过期时刻: bt={ban_time} prior={prior}"
+                );
+                assert_eq!(
+                    plan.duration, legacy_duration,
+                    "时长: bt={ban_time} prior={prior}"
+                );
                 assert_eq!(plan.ban_count, prior + 1);
             }
         }

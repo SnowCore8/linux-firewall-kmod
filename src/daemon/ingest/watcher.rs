@@ -157,7 +157,9 @@ mod tests {
     fn wait_readable_times_out_without_events() {
         let w = Watcher::new().expect("inotify 初始化失败");
         let start = std::time::Instant::now();
-        let ready = w.wait_readable(Duration::from_millis(30)).expect("poll 失败");
+        let ready = w
+            .wait_readable(Duration::from_millis(30))
+            .expect("poll 失败");
         assert!(!ready, "无事件时不应报告可读");
         // 必须真的等过一轮超时，而不是立即返回（否则会变成忙轮询）。
         assert!(
@@ -193,7 +195,12 @@ mod tests {
         let mut masks = Vec::new();
         while std::time::Instant::now() < deadline {
             if w.wait_readable(Duration::from_millis(50)).unwrap_or(false) {
-                masks.extend(w.read_events().expect("读事件失败").into_iter().map(|e| e.mask));
+                masks.extend(
+                    w.read_events()
+                        .expect("读事件失败")
+                        .into_iter()
+                        .map(|e| e.mask),
+                );
                 if masks.iter().any(|m| m.intersects(EventMask::MODIFY)) {
                     break;
                 }

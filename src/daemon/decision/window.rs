@@ -149,9 +149,7 @@ impl FailureWindow {
                 return false;
             }
             // 时间戳单调追加，故队尾即最新；最新都过期则整条过期。
-            timestamps
-                .back()
-                .is_some_and(|&last| now - last <= window)
+            timestamps.back().is_some_and(|&last| now - last <= window)
         });
         before - self.entries.len()
     }

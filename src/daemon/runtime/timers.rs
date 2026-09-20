@@ -82,11 +82,7 @@ impl TimerTable {
     /// 最近的下次到期时刻；无活动定时器时返回 `None`。
     /// 调度线程据此决定睡到何时。
     pub fn next_deadline(&self) -> Option<Instant> {
-        self.slots
-            .iter()
-            .flatten()
-            .map(|s| s.deadline)
-            .min()
+        self.slots.iter().flatten().map(|s| s.deadline).min()
     }
 
     /// 取出所有 `deadline <= now` 的定时器并推进其状态。纯函数，不读时钟。
@@ -98,7 +94,9 @@ impl TimerTable {
         let mut fired = Vec::new();
         for idx in 0..self.slots.len() {
             // `Slot` 是 `Copy`，按值取出即可，不持有对表的借用。
-            let Some(slot) = self.slots[idx] else { continue };
+            let Some(slot) = self.slots[idx] else {
+                continue;
+            };
             if slot.deadline > now {
                 continue;
             }
@@ -319,6 +317,10 @@ mod tests {
             "定时器明显滞后于事件吞吐: {:?}",
             elapsed
         );
-        assert_eq!(results[0].1, crate::runtime::StopOutcome::Joined, "调度线程应正常退出");
+        assert_eq!(
+            results[0].1,
+            crate::runtime::StopOutcome::Joined,
+            "调度线程应正常退出"
+        );
     }
 }

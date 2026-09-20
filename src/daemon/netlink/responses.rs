@@ -281,9 +281,9 @@ pub struct FwNlWhitelistEntry {
 pub struct FwNlListWhitelistResponse {
     pub hdr: FwNlMsgHdr,
     pub count: u32,
-    pub total: u32,  /* 内核当前总条目数（用于感知截断） */
+    pub total: u32, /* 内核当前总条目数（用于感知截断） */
     pub offset: u32, /* 本页起始下标 */
-                     // 后面紧跟 count 个 FwNlWhitelistEntry
+                    // 后面紧跟 count 个 FwNlWhitelistEntry
 }
 
 impl FwNlListWhitelistResponse {

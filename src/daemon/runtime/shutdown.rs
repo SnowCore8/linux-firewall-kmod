@@ -118,7 +118,11 @@ mod tests {
         assert!(!handle.is_finished(), "wait() 不应在请求前返回");
         t.request();
         let elapsed = handle.join().expect("等待线程不应 panic");
-        assert!(elapsed < Duration::from_secs(5), "关停后应立即唤醒，实际 {:?}", elapsed);
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "关停后应立即唤醒，实际 {:?}",
+            elapsed
+        );
     }
 
     #[test]

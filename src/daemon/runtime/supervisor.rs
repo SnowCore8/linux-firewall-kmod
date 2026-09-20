@@ -84,9 +84,7 @@ impl Supervisor {
     where
         F: FnOnce() + Send + 'static,
     {
-        let handle = thread::Builder::new()
-            .name(name.to_string())
-            .spawn(body)?;
+        let handle = thread::Builder::new().name(name.to_string()).spawn(body)?;
         self.executors.push(Executor {
             name: name.to_string(),
             token,

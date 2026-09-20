@@ -43,7 +43,8 @@ fn find_ip_candidate(line: &str, start_from: usize) -> Option<(usize, usize)> {
         }
     }
 
-    while i < bytes.len() && (bytes[i].is_ascii_hexdigit() || bytes[i] == b'.' || bytes[i] == b':') {
+    while i < bytes.len() && (bytes[i].is_ascii_hexdigit() || bytes[i] == b'.' || bytes[i] == b':')
+    {
         i += 1;
     }
 
@@ -102,7 +103,7 @@ fn is_reserved_v4(v4: Ipv4Addr) -> bool {
     octets[0] == 0                                   // 0.0.0.0/8「本网络」
         || (octets[0] == 255 && octets[1] == 255 && octets[2] == 255 && octets[3] == 255)
         || octets[0] == 127                          // 环回
-        || (224..=239).contains(&octets[0])          // 组播
+        || (224..=239).contains(&octets[0]) // 组播
 }
 
 /// 从 `line` 中提取第一个合法 IP（v4 或 v6）。
@@ -132,7 +133,8 @@ mod tests {
 
     #[test]
     fn extracts_ipv4_from_ssh_log() {
-        let line = "Jun 11 15:30:00 host sshd[1]: Failed password for root from 192.168.1.100 port 22";
+        let line =
+            "Jun 11 15:30:00 host sshd[1]: Failed password for root from 192.168.1.100 port 22";
         assert_eq!(extract_ip(line), Some(ip("192.168.1.100")));
     }
 

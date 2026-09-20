@@ -334,7 +334,11 @@ mod tests {
 
         assert_eq!(same, id);
         assert_eq!(
-            reg.get(id).expect("身份应存在").owner.jail().map(|j| j.as_ref()),
+            reg.get(id)
+                .expect("身份应存在")
+                .owner
+                .jail()
+                .map(|j| j.as_ref()),
             Some("nginx"),
             "重载后同一路径改挂到别的 jail 应更新归属"
         );

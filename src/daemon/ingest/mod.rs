@@ -77,13 +77,19 @@ mod tests {
         reader.open_at_end(&path);
         assert_eq!(reader.offset(), 12, "启动偏移应为文件末尾");
 
-        append(&path, b"Failed password for root from 1.2.3.4 port 22 ssh2\n");
+        append(
+            &path,
+            b"Failed password for root from 1.2.3.4 port 22 ssh2\n",
+        );
 
         // 事件驱动：轮询真实可读状态，等事件到达后按 wd 路由。
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut routed = None;
         while Instant::now() < deadline {
-            if !watcher.wait_readable(Duration::from_millis(50)).unwrap_or(false) {
+            if !watcher
+                .wait_readable(Duration::from_millis(50))
+                .unwrap_or(false)
+            {
                 continue;
             }
             for ev in watcher.read_events().expect("读事件失败") {
@@ -101,8 +107,7 @@ mod tests {
         // 路由到身份后，从对应读取器取出新增字节（不再重开 fd、不再重分配缓冲）。
         let chunk = reader.read_new(&path).expect("读失败");
         assert_eq!(
-            chunk.bytes,
-            b"Failed password for root from 1.2.3.4 port 22 ssh2\n",
+            chunk.bytes, b"Failed password for root from 1.2.3.4 port 22 ssh2\n",
             "应正好读出追加的那一行"
         );
         assert!(!chunk.rotated);
@@ -111,9 +116,7 @@ mod tests {
         let rotated = dir.join("sshd.log.1");
         std::fs::rename(&path, &rotated).expect("改名失败");
         std::fs::write(&path, b"new-file\n").expect("建新文件失败");
-        let new_wd = watcher
-            .add(&path, log_file_watch_mask())
-            .expect("重挂失败");
+        let new_wd = watcher.add(&path, log_file_watch_mask()).expect("重挂失败");
         let again = reg.register(
             SourceOwner::Log {
                 jail: Arc::from("sshd"),
