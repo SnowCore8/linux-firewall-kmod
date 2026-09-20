@@ -475,6 +475,31 @@ sequenceDiagram
 主循环写成 `epoll`。`docs/*/architecture/data-flow.md` 同样陈旧（「满表（4096）」
 「白名单（64）」「线性扫描」「~50ns/~100ns」以及旧函数名 `nf_hook_func_ipv4`）。
 
+## 实施进展
+
+| 阶段 | 状态 |
+|------|------|
+| 2.A 契约修订 | 已完成 |
+| 2.B–2.G | 未开始 |
+
+### 2.A 落地明细
+
+netlink 线格式三端（契约 / 内核 / daemon）同一步落地，布局经 `verify_layout.py` 比对：
+
+| 结构 | 变更 | 布局 |
+|------|------|------|
+| `ListWhitelistQuery` | 增 `offset` / `limit` | 12 → 20 |
+| `ListRatesQuery` | 增 `offset` / `limit` | 12 → 20 |
+| `ListWhitelistResponse` | 增 `total` / `offset` | 定长 16 → 24（单页上限 1927 → 1926） |
+| `ListRatesResponse` | 增 `offset` | 定长 36 → 40 |
+| `MsgHdr.seq` / `DaemonRegisterAck` | 「配对语义」与「拒绝必须可观测」写成契约义务 | 无（仅注释） |
+
+- 内核：分页响应回填 `total` / `offset`；`LIST_WHITELIST_QUERY` / `LIST_RATES_QUERY` 分支解析 `offset` / `limit`（此前硬编码 `0, 0`）。
+- daemon：同步四个结构体，新增 `new_page` / `send_*_query_page`；白名单解析上限由「表容量 64」改为「单页上限 1926」。
+- http：9 条缺陷写入 `resolution`（处置去向已锁定），`status` 仍为 `open`——`verify_http.py` 的机械断言是棘轮，修复必须与代码同一步落地，故 sse-status 载荷等 2.E。
+- 门禁证据：`make build`、`make format-check`、`cargo clippy --release --lib -- -D warnings`、`cargo test --release --lib`（81 passed）、`make frontend-typecheck`、`bash scripts/check_contract.sh`、`bash scripts/verify_project.sh` 全绿。
+- 遗留：`make format-check` 在 clang-format 失败时仍以 0 退出（`Makefile` 中 `exit 1` 落在子 shell，配方末条命令是 `echo`），随 2.B 修。
+
 ## 判定纪律
 
 - 实时性结论必须给出**端到端延迟分布**（p50/p95/p99）与测量方法，不接受单点数字。

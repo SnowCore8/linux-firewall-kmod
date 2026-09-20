@@ -525,6 +525,39 @@ SQLite `bans` table schema; the metric count is written as "24"; the main loop i
 `docs/*/architecture/data-flow.md` is stale too ("full table (4096)", "whitelist (64)",
 "linear scan", "~50ns/~100ns", and the old function name `nf_hook_func_ipv4`).
 
+## Implementation Progress
+
+| Phase | Status |
+|-------|--------|
+| 2.A Contract revisions | Done |
+| 2.B–2.G | Not started |
+
+### What 2.A Landed
+
+The netlink wire format landed on all three sides (contract / kernel / daemon) in one step, with the
+layout cross-checked by `verify_layout.py`:
+
+| Struct | Change | Layout |
+|--------|--------|--------|
+| `ListWhitelistQuery` | `+ offset` `+ limit` | 12 → 20 |
+| `ListRatesQuery` | `+ offset` `+ limit` | 12 → 20 |
+| `ListWhitelistResponse` | `+ total` `+ offset` | fixed 16 → 24 (single-page cap 1927 → 1926) |
+| `ListRatesResponse` | `+ offset` | fixed 36 → 40 |
+| `MsgHdr.seq` / `DaemonRegisterAck` | pairing semantics and "a refusal must be observable" written as contract obligations | none (comments only) |
+
+- Kernel: page responses now fill in `total` / `offset`; the `LIST_WHITELIST_QUERY` /
+  `LIST_RATES_QUERY` cases parse `offset` / `limit` (previously hard-coded to `0, 0`).
+- Daemon: the four structs are synced; `new_page` / `send_*_query_page` entry points added; the
+  whitelist parse cap moved from "table capacity 64" to "single-page cap 1926".
+- HTTP: all 9 defects carry a `resolution` (disposition locked), while `status` stays `open` —
+  `verify_http.py`'s mechanical assertions are ratchets, so a fix must land in the same step as the
+  code; the sse-status payload is therefore deferred to 2.E.
+- Gate evidence: `make build`, `make format-check`, `cargo clippy --release --lib -- -D warnings`,
+  `cargo test --release --lib` (81 passed), `make frontend-typecheck`, `bash scripts/check_contract.sh`,
+  `bash scripts/verify_project.sh` all green.
+- Outstanding: `make format-check` still exits 0 when clang-format fails (`exit 1` sits in a subshell
+  and the recipe's last command is an `echo`); to be fixed in 2.B.
+
 ## Judging Discipline
 
 - Latency conclusions must give an **end-to-end latency distribution** (p50/p95/p99) and the
