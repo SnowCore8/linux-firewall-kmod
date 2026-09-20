@@ -494,6 +494,7 @@ sequenceDiagram
 | **2.E** | `state` 层：单所有者 + 快照 hub；`api` 薄适配层 + 读路径零副作用 | 结构问题 E/F/M 消除；SSE 按域序列化；慢消费者不拖慢全局。**截至 2.E-4c：E/F 已消除；M 的新侧已就位、旧函数未删**（`kernel/` 未接入生产故 M 的旧键规则仍在，见「修复项与落地状态」） |
 | **2.F** | 持久化队列背压改造（就地修 `history_snapshot/mod.rs`，不新建 `persist/`）+ 测试债务替换 | 结构问题 G 消除（背压有测试）；恒真断言全部替换为可失败断言 |
 | **2.G** | 文档重写：`docs/{zh,en}/architecture/daemon.md` 按新实现全量重写；`docs/{zh,en}/architecture/data-flow.md` 修正陈旧数字 | 文档与代码逐项对齐 |
+| **2.H** | `kernel/` 接入生产：`Transport`/`Reactor`/`Client`/`Lease` 接管 netlink，退役旧 `crate::netlink`；结构问题 I/K/L 消除、M 随 `build_cidr_key` 退役翻转 | 门禁绿；契约 I/K/L/M 按 `where` 锚点存亡翻转；单实例注册在 `Supervisor` 下可见 |
 
 `docs/zh/architecture/daemon.md` 与实现严重不符，2.G 必须处理：模块表含已不存在的
 `ban/procfs.rs`；失败计数器写成 `FailureCounter { ip, count, first_seen, last_seen }`；
@@ -529,6 +530,11 @@ sequenceDiagram
 | 2.F-1 队列背压（`history_snapshot/mod.rs`，只修队列行为） | 已完成 |
 | 2.F-2 测试债务替换（`tests/` 恒真断言） | 已完成 |
 | 2.G 文档重写 | 已完成 |
+| 2.H-1 入站消费层（`Incoming` → 缓存/状态镜像） | 待开工 |
+| 2.H-2 全局定位器 `OnceLock<Client>` + `DdosDecisionEngine` 接线 | 待开工 |
+| 2.H-3 生产切换（`main.rs` 原子装配 + 调用点重指） | 待开工 |
+| 2.H-4 退役旧 `netlink/` + M 棘轮翻转 | 待开工 |
+| 2.H-5 文档（`daemon.md` 状态/差距表） | 待开工 |
 
 ### 2.A 落地明细
 
@@ -898,6 +904,45 @@ README.md` 的容量与并发断言在提交 `929b52f` 修正。本阶段复核�
 scripts/verify_project.sh`（✓ 内核模块与 daemon 均编译成功）、`cargo test --release --lib`（**404
 passed / 0 failed**）、`cargo fmt --all --check`（干净）、`cargo clippy --all-targets -- -D
 warnings`（exit 0）。
+
+### 2.H 设计：`kernel/` 接入生产
+
+`kernel/` 五个模块（`codec` / `transport` / `reactor` / `client` / `lease`）已经写完并通过单测，
+但**零生产调用**：`Reactor::new` 在全仓库没有任何调用点，`main.rs` 仍走旧 `crate::netlink`。2.H
+把它们接进生产，旧模块在同一步退役。
+
+**先决约束（两条，决定切割方式）**
+
+1. **内核侧单实例互斥**：`src/kernel-module/fw_netlink.c:763-777` 规定同一时刻只接受一个 daemon
+   portid 注册——`fw_nl_daemon_portid` 在 `FW_NL_DAEMON_TIMEOUT` 内仍有效时，来自**不同** portid
+   的 `FW_MSG_TYPE_DAEMON_REGISTER` 一律 `accepted=0`。**新旧 netlink 套接字不能并行运行**，因此
+   切换必须整批原子完成，不能先接后退。
+2. **新层是阻塞 `std` 线程**：`Transport`/`Reactor` 用阻塞 fd 与系统线程，不是 async 任务，因而
+   必须经 `runtime/supervisor.rs::spawn(name, Shutdown, body)` 纳入统一关停（与 `main.rs:443`
+   已接入的调度器同一路径），不能挂进 tokio runtime。
+
+**接入的五处缺口**
+
+| 缺口 | 现状 | 2.H 处置 |
+|------|------|---------|
+| 无全局定位器 | 旧层用 `netlink::get_global_netlink_ctx()`；新层 `Client` 只存在于构造方 | 新增 `kernel::global` 的 `OnceLock<Client>`，提供 `init/get` |
+| 无入站消费者 | `netlink/handlers.rs` 是唯一入站消费点（13 个 `handle_*`，写 `ACTIVE_BAN_CACHE` / `WHITELIST_CACHE` / `ANALYSIS_CACHE` / `state::compose::mirror_*`） | 新写 `kernel` 侧消费层，把 `Router` 的 `Incoming` 映射到同一批缓存与状态镜像 |
+| 生命周期形状不同 | `main.rs:63` 用 `Option<JoinHandle<()>>` 收 `start_receiver()` 的旧线程 | 改为 `Supervisor` 持任务 + `Shutdown`；`main.rs` 的 `cleanup` 相应改形 |
+| 调用形状不同 | 旧命令 `Arc<NetlinkContext> + &self -> anyhow::Result<()>` | 全部走 `Client`（`Clone`），带 `Duration` 超时、`IpAddr` 参数，返回「已投递」语义 |
+| 缺能力 | 缺并发 ban-ack 等待者；`DdosDecisionEngine` 属业务、不应进 `kernel/`；sysfs 检测开关与 baseline 下发各自独立 | ban-ack 计数器并入消费层；`DdosDecisionEngine` 留在 `kernel/` 之外；`config_sync.rs::write_detection_switches`（sysfs）原地不动；baseline 下发补全为完整 `SetConfig` |
+
+**分批（可在中途停下反复查）**
+
+| 片 | 内容 | 可独立回退 |
+|----|------|-----------|
+| 2.H-1 | 入站消费层：`Incoming` → 缓存/状态镜像，带单测；**纯新增，无生产影响** | 是（仅新增文件，删掉即可） |
+| 2.H-2 | 全局定位器 `OnceLock<Client>` + `DdosDecisionEngine` 接线 | 是（新模块可独立 revert） |
+| 2.H-3 | 生产切换：`main.rs` 装配 `Transport`/`Reactor`/`Client`/`Lease`，`Reactor` 进 `Supervisor`，删旧接收线程 / 1 s 轮询线程 / 启动恢复查询，约 15 处调用点重指 `Client` | 否（与 2.H-4 同批，需整批回滚） |
+| 2.H-4 | 退役旧 `netlink/` + M 棘轮同一步翻转：删 `ban/mod.rs::build_cidr_key`、白名单写路径走 `CidrKey`、`contract/http.fwidl` 的 M 条目 `status = open → fixed`（`where` 锚点随之消失） | 否（锚点与代码必须同批） |
+| 2.H-5 | 文档：`daemon.md` 的「当前实现状态 / 与实现的差距」表 + 本文档进展表 | 是 |
+
+**回退面**：2.H-1 / 2.H-2 / 2.H-5 可各自独立 revert；2.H-3 与 2.H-4 因内核单实例互斥与棘轮同步，
+必须整批回滚——这一约束写在此处，避免以后有人按「一次退一片」的直觉去退 2.H-4。
 
 ## 判定纪律
 

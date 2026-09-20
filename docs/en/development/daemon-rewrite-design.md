@@ -546,6 +546,7 @@ Prerequisite dependency is 0 (it can run in parallel with the Phase 1 kernel rew
 | **2.E** | `state` layer: single owner + snapshot hub; `api` thin adapter + zero read-path side effects | Problems E/F/M eliminated; SSE serializes per domain; a slow consumer does not slow the whole. **As of 2.E-4c: E and F are eliminated; M's new side is in place but the old function is not deleted** (`kernel/` is not wired into production, so M's old key rule still stands -- see "Fixes and landing status") |
 | **2.F** | Persistence-queue backpressure rework (in place in `history_snapshot/mod.rs`, not a new `persist/`) + test-debt replacement | Problem G eliminated (backpressure tested); every tautological assertion replaced with one that can fail |
 | **2.G** | Documentation rewrite: `docs/{zh,en}/architecture/daemon.md` fully rewritten to the new implementation; `docs/{zh,en}/architecture/data-flow.md` stale numbers corrected | Documentation matches the code item by item |
+| **2.H** | `kernel/` wired into production: `Transport`/`Reactor`/`Client`/`Lease` take over netlink, legacy `crate::netlink` retired; problems I/K/L eliminated, M flips when `build_cidr_key` is retired | Gates green; contract I/K/L/M flipped by `where` anchor existence; single-instance registration visible under `Supervisor` |
 
 `docs/zh/architecture/daemon.md` diverges badly from the implementation; 2.G must handle: the module
 table lists the no-longer-existing `ban/procfs.rs`; the failure counter is written as
@@ -585,6 +586,11 @@ concurrency claims were corrected in commit `929b52f`.
 | 2.F-1 Queue backpressure (`history_snapshot/mod.rs`, queue behavior only) | Done |
 | 2.F-2 Test-debt replacement (`tests/` tautological assertions) | Done |
 | 2.G Documentation rewrite | Done |
+| 2.H-1 Inbound consumer layer (`Incoming` -> caches/state mirror) | Not started |
+| 2.H-2 Global locator `OnceLock<Client>` + `DdosDecisionEngine` wiring | Not started |
+| 2.H-3 Production cutover (`main.rs` atomic assembly + call sites re-pointed) | Not started |
+| 2.H-4 Retire legacy `netlink/` + flip the M ratchet | Not started |
+| 2.H-5 Documentation (`daemon.md` status/gap tables) | Not started |
 
 ### What 2.A Landed
 
@@ -1180,6 +1186,49 @@ Gate evidence (actually run in this pass): `make daemon` (built), `python3 contr
 passed), `bash scripts/verify_project.sh` (kernel module and daemon both compiled), `cargo test
 --release --lib` (**404 passed / 0 failed**), `cargo fmt --all --check` (clean), `cargo clippy
 --all-targets -- -D warnings` (exit 0).
+
+### 2.H Design: Wiring `kernel/` into Production
+
+The five `kernel/` modules (`codec` / `transport` / `reactor` / `client` / `lease`) are written and
+unit-tested, but have **zero production callers**: `Reactor::new` has no call site anywhere in the
+repository and `main.rs` still runs the legacy `crate::netlink`. 2.H wires them into production and
+retires the legacy module in the same step.
+
+**Prerequisite constraints (two, and they decide the cut shape)**
+
+1. **Kernel-side single-instance exclusivity**: `src/kernel-module/fw_netlink.c:763-777` accepts only
+   one daemon portid at a time -- while `fw_nl_daemon_portid` is still valid within
+   `FW_NL_DAEMON_TIMEOUT`, a `FW_MSG_TYPE_DAEMON_REGISTER` from a **different** portid gets
+   `accepted=0`. **The old and new netlink sockets cannot run in parallel**, so the cutover must be one
+   atomic batch, not connect-then-retire.
+2. **The new layer is blocking `std` threads**: `Transport`/`Reactor` use blocking fds and OS threads,
+   not async tasks, so they must enter unified shutdown through
+   `runtime/supervisor.rs::spawn(name, Shutdown, body)` (the same path as the scheduler already wired
+   at `main.rs:443`), not be attached to the tokio runtime.
+
+**The five gaps to bridge**
+
+| Gap | Today | 2.H handling |
+|-----|-------|--------------|
+| No global locator | The legacy layer uses `netlink::get_global_netlink_ctx()`; a new `Client` only exists at its constructor | Add `kernel::global` with a `OnceLock<Client>`, exposing `init/get` |
+| No inbound consumer | `netlink/handlers.rs` is the only inbound consumer (13 `handle_*` writing `ACTIVE_BAN_CACHE` / `WHITELIST_CACHE` / `ANALYSIS_CACHE` / `state::compose::mirror_*`) | Write a `kernel`-side consumer mapping `Router`'s `Incoming` to the same caches and state mirror |
+| Different lifecycle shape | `main.rs:63` takes the old thread from `start_receiver()` as `Option<JoinHandle<()>>` | Move to a `Supervisor`-held task + `Shutdown`; `main.rs`'s `cleanup` changes shape accordingly |
+| Different call shape | Legacy commands `Arc<NetlinkContext> + &self -> anyhow::Result<()>` | All go through `Client` (`Clone`), taking a `Duration` timeout and `IpAddr`, returning a "delivered" semantic |
+| Missing capabilities | No concurrent ban-ack waiter; `DdosDecisionEngine` is business logic that should not enter `kernel/`; the sysfs detection switches and the baseline push are independent | Fold the ban-ack counter into the consumer; keep `DdosDecisionEngine` outside `kernel/`; leave `config_sync.rs::write_detection_switches` (sysfs) where it is; complete the baseline push into a full `SetConfig` |
+
+**Slices (each can be a stopping point for review)**
+
+| Slice | Content | Independently revertible |
+|-------|---------|--------------------------|
+| 2.H-1 | Inbound consumer: `Incoming` -> caches/state mirror, unit-tested; **purely additive, no production impact** | Yes (new files only; delete them) |
+| 2.H-2 | Global locator `OnceLock<Client>` + `DdosDecisionEngine` wiring | Yes (new module reverts on its own) |
+| 2.H-3 | Production cutover: `main.rs` assembles `Transport`/`Reactor`/`Client`/`Lease`, `Reactor` enters the `Supervisor`, the old receiver thread / 1 s poll thread / startup recovery queries are removed, ~15 call sites re-pointed to `Client` | No (same batch as 2.H-4; batch rollback required) |
+| 2.H-4 | Retire legacy `netlink/` + flip the M ratchet in one step: delete `ban/mod.rs::build_cidr_key`, route the whitelist write path through `CidrKey`, set the M entry in `contract/http.fwidl` from `status = open` to `fixed` (its `where` anchor vanishes with it) | No (anchor and code must land together) |
+| 2.H-5 | Documentation: the "current implementation status / gap" tables in `daemon.md` + this document's progress table | Yes |
+
+**Rollback surface**: 2.H-1 / 2.H-2 / 2.H-5 revert independently; 2.H-3 and 2.H-4 must roll back as a
+batch because of the kernel single-instance exclusivity and the ratchet sync. This is recorded here so
+that nobody later follows the "revert one slice at a time" instinct on 2.H-4.
 
 ## Judging Discipline
 
