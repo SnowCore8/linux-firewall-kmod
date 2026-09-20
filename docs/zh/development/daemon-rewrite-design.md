@@ -480,7 +480,8 @@ sequenceDiagram
 | 阶段 | 状态 |
 |------|------|
 | 2.A 契约修订 | 已完成 |
-| 2.B–2.G | 未开始 |
+| 2.B 运行时骨架 | 已完成 |
+| 2.C–2.G | 未开始 |
 
 ### 2.A 落地明细
 
@@ -498,7 +499,27 @@ netlink 线格式三端（契约 / 内核 / daemon）同一步落地，布局经
 - daemon：同步四个结构体，新增 `new_page` / `send_*_query_page`；白名单解析上限由「表容量 64」改为「单页上限 1926」。
 - http：9 条缺陷写入 `resolution`（处置去向已锁定），`status` 仍为 `open`——`verify_http.py` 的机械断言是棘轮，修复必须与代码同一步落地，故 sse-status 载荷等 2.E。
 - 门禁证据：`make build`、`make format-check`、`cargo clippy --release --lib -- -D warnings`、`cargo test --release --lib`（81 passed）、`make frontend-typecheck`、`bash scripts/check_contract.sh`、`bash scripts/verify_project.sh` 全绿。
-- 遗留：`make format-check` 在 clang-format 失败时仍以 0 退出（`Makefile` 中 `exit 1` 落在子 shell，配方末条命令是 `echo`），随 2.B 修。
+- 遗留：`make format-check` 在 clang-format 失败时仍以 0 退出（`Makefile` 中 `exit 1` 落在子 shell，配方末条命令是 `echo`），已修（见 2.B）。
+
+### 2.B 落地明细
+
+本阶段只新增共享底座，尚未接入 `main.rs`（旧链路暂不动，按「保留编译、分批迁入」）。
+
+| 文件 | 内容 | 消除的问题 |
+|------|------|-----------|
+| `runtime/shutdown.rs` | 协作式关停令牌（原子标志 + 条件变量）；`request()` 立即唤醒全部等待者；支持 `wait_until(deadline)` | 取代「全局原子布尔 + `EINTR` 隐式协议」，关停不再依赖轮询间隔 |
+| `runtime/supervisor.rs` | 执行体登记 + **逐段串行**关停；每个执行体持**自己的**令牌 | 「netlink 停止后才 flush 库」由**顺序**保证 |
+| `runtime/timers.rs` | 单调时钟（`Instant`）定时器表；`fire_due(now)` 是纯函数 | 结构问题 A：定时器不再随事件吞吐漂移 |
+| `runtime/channel.rs` | 有界队列 + 背压策略入类型；`Block` / `Reject`（拒绝计数可见） | 「不允许静默丢弃」成为类型约束 |
+| `signal/mod.rs` | `signalfd`；信号变成与 inotify 同池 `poll` 的普通 fd | 取代 `sigaction` + 异步处理器 + `EINTR` |
+
+关键取舍：
+
+- **逐段串行关停**。若一次性给所有执行体发停止信号再逐个 `join`，下游会与上游同时开始收尾，「上游已完全停止」不成立。故 `shutdown()` 按登记逆序**一段一段**停：对当前段 `request()` → `join` 到结束 → 才停下一段。登记顺序即依赖顺序（下游先登记）。这同时消除一类死锁：上游（先停）向队列投递时下游（后停）仍在消费。
+- **定时器不补发欠账**。落后超过一个周期时跳到 `now + period`，避免长时间阻塞后突发一串回调。
+- **`Makefile` 的 `format-check` 掩蔽失败已修**：`exit 1` 原在子 shell 中，配方末条 `echo` 使其以 0 退出；改为花括号组，并让 `yamllint` 的退出码同样透传。
+
+门禁证据：`cargo test --release --lib`（106 passed）、`cargo clippy --release --lib --tests -- -D warnings`、`make build` / `make format-check` / `make frontend-typecheck`、`bash scripts/check_contract.sh`、`bash scripts/verify_project.sh` 全绿。
 
 ## 判定纪律
 

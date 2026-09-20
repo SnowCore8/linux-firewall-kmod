@@ -530,7 +530,8 @@ SQLite `bans` table schema; the metric count is written as "24"; the main loop i
 | Phase | Status |
 |-------|--------|
 | 2.A Contract revisions | Done |
-| 2.B–2.G | Not started |
+| 2.B Runtime skeleton | Done |
+| 2.C–2.G | Not started |
 
 ### What 2.A Landed
 
@@ -556,7 +557,39 @@ layout cross-checked by `verify_layout.py`:
   `cargo test --release --lib` (81 passed), `make frontend-typecheck`, `bash scripts/check_contract.sh`,
   `bash scripts/verify_project.sh` all green.
 - Outstanding: `make format-check` still exits 0 when clang-format fails (`exit 1` sits in a subshell
-  and the recipe's last command is an `echo`); to be fixed in 2.B.
+  and the recipe's last command is an `echo`); fixed in 2.B.
+
+### What 2.B Landed
+
+This phase adds only the shared skeleton; nothing is wired into `main.rs` yet (the old chain still
+compiles, matching "keep it building, migrate in batches").
+
+| File | Content | Problem removed |
+|------|---------|-----------------|
+| `runtime/shutdown.rs` | Cooperative stop token (atomic flag + condvar); `request()` wakes every waiter at once; `wait_until(deadline)` | Replaces the global AtomicBool plus the implicit `EINTR` protocol; shutdown no longer depends on a poll interval |
+| `runtime/supervisor.rs` | Executor registry + **one-at-a-time serial** shutdown; each executor owns its token | "Netlink stopped before the DB flushes" becomes an ordering guarantee |
+| `runtime/timers.rs` | Monotonic (`Instant`) timer table; `fire_due(now)` is pure | Structural problem A: timers no longer drift with event throughput |
+| `runtime/channel.rs` | Bounded queue with the backpressure policy in the type; `Block` / `Reject` (rejects are counted) | "No silent drops" becomes a type constraint |
+| `signal/mod.rs` | `signalfd`; signals become an ordinary fd polled alongside inotify | Replaces `sigaction` + async handler + `EINTR` |
+
+Key trade-offs:
+
+- **One-at-a-time serial shutdown.** Requesting stop for every executor at once and then joining
+  them lets downstream and upstream wind down together, so "upstream is fully stopped" does not
+  hold. `shutdown()` therefore walks the reverse order one segment at a time: `request()` the
+  current segment, join it to completion, then stop the next. Registration order is dependency
+  order (downstream registered first). This also removes a class of deadlock: while the upstream
+  (stopped first) still delivers into a queue, the downstream (stopped last) is still consuming.
+- **Timer catch-up is skipped.** A wakeup more than one period behind jumps to `now + period`
+  rather than bursting a backlog of callbacks.
+- **The `Makefile` `format-check` masked failure is fixed**: `exit 1` used to sit inside a subshell,
+  so the recipe's trailing `echo` made it exit 0; it now uses a brace group, and `yamllint`'s exit
+  status propagates too.
+
+Gate evidence: `cargo test --release --lib` (106 passed),
+`cargo clippy --release --lib --tests -- -D warnings`, `make build` / `make format-check` /
+`make frontend-typecheck`, `bash scripts/check_contract.sh`, `bash scripts/verify_project.sh` all
+green.
 
 ## Judging Discipline
 
