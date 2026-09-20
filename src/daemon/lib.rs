@@ -72,6 +72,7 @@ pub mod failed_tracker;
 pub mod file_monitor;
 pub mod history_snapshot;
 pub mod http_exporter;
+pub mod ingest;
 pub mod ip_reputation;
 pub mod ip_utils;
 pub mod jail;
