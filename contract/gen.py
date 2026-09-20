@@ -752,6 +752,29 @@ def emit_rust(contract: Contract) -> str:
             L.append(f"    {pascal_from_upper_snake(member)} = {value},")
         L.append("}")
         L.append("")
+        # 线上整数 -> 枚举的双向转换。codec 逐字段解码大端整数后必须走这里，
+        # 否则未定义的线上取值会被当成合法枚举（Rust 里凭空 transmute 一个
+        # 越界值更是 UB）。`from_raw` 返回 None 让调用方把「认不出的值」记成
+        # 可观测错误，而不是静默落进某个分支。
+        L.append("#[rustfmt::skip]")
+        L.append(f"impl {name} {{")
+        L.append("    /// 线上整数转枚举；取值未定义时返回 `None`。")
+        L.append(f"    pub const fn from_raw(value: {decl.width}) -> Option<Self> {{")
+        L.append("        match value {")
+        for member, value in decl.members:
+            L.append(
+                f"            {value} => Some(Self::{pascal_from_upper_snake(member)}),"
+            )
+        L.append("            _ => None,")
+        L.append("        }")
+        L.append("    }")
+        L.append("")
+        L.append("    /// 枚举转线上整数。")
+        L.append(f"    pub const fn to_raw(self) -> {decl.width} {{")
+        L.append(f"        self as {decl.width}")
+        L.append("    }")
+        L.append("}")
+        L.append("")
 
     for name, decl in contract.bits_decls.items():
         L.append(f"pub mod {snake(name)} {{")
