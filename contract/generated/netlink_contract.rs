@@ -26,6 +26,23 @@ pub enum AddrFamily {
     Inet6 = 10,
 }
 
+#[rustfmt::skip]
+impl AddrFamily {
+    /// 线上整数转枚举；取值未定义时返回 `None`。
+    pub const fn from_raw(value: u8) -> Option<Self> {
+        match value {
+            2 => Some(Self::Inet),
+            10 => Some(Self::Inet6),
+            _ => None,
+        }
+    }
+
+    /// 枚举转线上整数。
+    pub const fn to_raw(self) -> u8 {
+        self as u8
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BanAction {
@@ -33,11 +50,45 @@ pub enum BanAction {
     Unban = 2,
 }
 
+#[rustfmt::skip]
+impl BanAction {
+    /// 线上整数转枚举；取值未定义时返回 `None`。
+    pub const fn from_raw(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(Self::Ban),
+            2 => Some(Self::Unban),
+            _ => None,
+        }
+    }
+
+    /// 枚举转线上整数。
+    pub const fn to_raw(self) -> u8 {
+        self as u8
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WhitelistAction {
     Add = 1,
     Remove = 2,
+}
+
+#[rustfmt::skip]
+impl WhitelistAction {
+    /// 线上整数转枚举；取值未定义时返回 `None`。
+    pub const fn from_raw(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(Self::Add),
+            2 => Some(Self::Remove),
+            _ => None,
+        }
+    }
+
+    /// 枚举转线上整数。
+    pub const fn to_raw(self) -> u8 {
+        self as u8
+    }
 }
 
 #[repr(u16)]
@@ -66,6 +117,44 @@ pub enum MsgType {
     AnalysisResponse = 21,
     DaemonRegister = 22,
     DaemonRegisterAck = 23,
+}
+
+#[rustfmt::skip]
+impl MsgType {
+    /// 线上整数转枚举；取值未定义时返回 `None`。
+    pub const fn from_raw(value: u16) -> Option<Self> {
+        match value {
+            1 => Some(Self::DdosEvent),
+            2 => Some(Self::BanIp),
+            3 => Some(Self::UnbanIp),
+            4 => Some(Self::SetConfig),
+            5 => Some(Self::BanStateChange),
+            6 => Some(Self::ListBansQuery),
+            7 => Some(Self::ListBansResponse),
+            8 => Some(Self::StatsQuery),
+            9 => Some(Self::StatsResponse),
+            10 => Some(Self::ListWhitelistQuery),
+            11 => Some(Self::ListWhitelistResponse),
+            12 => Some(Self::AddWhitelist),
+            13 => Some(Self::RemoveWhitelist),
+            14 => Some(Self::ConfigAck),
+            15 => Some(Self::ListRatesQuery),
+            16 => Some(Self::ListRatesResponse),
+            17 => Some(Self::WhitelistStateChange),
+            18 => Some(Self::CmdResult),
+            19 => Some(Self::ConfigChange),
+            20 => Some(Self::AnalysisQuery),
+            21 => Some(Self::AnalysisResponse),
+            22 => Some(Self::DaemonRegister),
+            23 => Some(Self::DaemonRegisterAck),
+            _ => None,
+        }
+    }
+
+    /// 枚举转线上整数。
+    pub const fn to_raw(self) -> u16 {
+        self as u16
+    }
 }
 
 pub mod config_flags {

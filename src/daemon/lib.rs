@@ -67,6 +67,7 @@
 pub mod ban;
 pub mod config;
 pub mod config_reloader;
+pub mod contract;
 pub mod daemonizer;
 pub mod decision;
 pub mod failed_tracker;
@@ -77,6 +78,7 @@ pub mod ingest;
 pub mod ip_reputation;
 pub mod ip_utils;
 pub mod jail;
+pub mod kernel;
 pub mod line_processor;
 pub mod log_parser;
 pub mod log_rotation;
