@@ -850,6 +850,8 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
     set_global_trusted_ips(&cfg.trusted_ips);
     set_global_capacity(&cfg.capacity);
     crate::types::set_baseline_warmup_samples(cfg.ddos.baseline_warmup_samples);
+    // SSE 的 `stats` 推送周期跟随配置；调度器每轮读取该值，改完即生效
+    crate::state::compose::set_push_interval(cfg.webui.sse_push_interval);
 
     if let Err(e) = sync_config_to_components(cfg) {
         crate::logger::error!(

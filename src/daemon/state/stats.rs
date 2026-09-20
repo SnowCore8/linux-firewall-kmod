@@ -21,6 +21,13 @@
 //! 两份来源迟早会漂移。
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use super::hub::{Domain, Hub, SharedHub};
+
+/// 计数器推送间隔的默认值（秒）。与 `webui.sse_push_interval` 的默认一致；
+/// 组合根启动期会用配置里的值覆盖它。
+const DEFAULT_STATS_PUSH_SECS: u64 = 1;
 
 /// 只增计数器。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -157,6 +164,12 @@ impl StatsSnapshot {
 pub struct Stats {
     values: [AtomicU64; 16],
     start_time: AtomicU64,
+    /// 计数器推送间隔（秒）。SSE 的 `stats` 事件按此周期重发——见
+    /// [`Stats::publish_tick`]。
+    push_interval_secs: AtomicU64,
+    /// 版本化发布点：计数器不经 `state::*` 所有者发布，`stats` 事件由定时 tick
+    /// 驱动，故这里持有 hub 的引用。
+    hub: SharedHub,
 }
 
 impl Default for Stats {
@@ -166,12 +179,23 @@ impl Default for Stats {
 }
 
 impl Stats {
-    /// 构造全零计数器。
+    /// 构造全零计数器，并新建一个独立的发布点。
+    ///
+    /// 仅供 `State` 之外的直接构造使用（测试）；[`Stats::with_hub`] 才是组合根与
+    /// `State` 用的入口，它让四个所有者共用同一个 hub。
     #[must_use]
     pub fn new() -> Self {
+        Self::with_hub(Arc::new(Hub::new()))
+    }
+
+    /// 构造全零计数器，发布到给定的 hub。
+    #[must_use]
+    pub fn with_hub(hub: SharedHub) -> Self {
         Self {
             values: std::array::from_fn(|_| AtomicU64::new(0)),
             start_time: AtomicU64::new(0),
+            push_interval_secs: AtomicU64::new(DEFAULT_STATS_PUSH_SECS),
+            hub,
         }
     }
 
@@ -183,6 +207,15 @@ impl Stats {
     /// 自增 `delta`（饱和，不回绕）。
     pub fn add(&self, counter: Counter, delta: u64) {
         self.values[counter.index()].fetch_add(delta, Ordering::Relaxed);
+    }
+
+    /// 把某计数器**直接设为** `value`。
+    ///
+    /// 业务路径上一律是只增语义（`inc` / `add`）；本方法只服务一种场景：把
+    /// **外部权威读数原样搬进来**。组合根按固定周期镜像旧全局 `DAEMON_STATS`
+    /// 时要求逐项等值，用 `add` 会把同一段增量再计一次。
+    pub fn set_gauge(&self, counter: Counter, value: u64) {
+        self.values[counter.index()].store(value, Ordering::Relaxed);
     }
 
     /// 记录启动时间（Unix 秒）。
@@ -207,6 +240,28 @@ impl Stats {
             values,
             start_time: self.start_time.load(Ordering::Relaxed),
         }
+    }
+
+    /// 设置计数器推送间隔（秒），由配置同步（`webui.sse_push_interval`）。
+    pub fn set_push_interval(&self, secs: u64) {
+        self.push_interval_secs.store(secs, Ordering::Relaxed);
+    }
+
+    /// 计数器推送间隔（秒）。组合根的定时器据此决定多久发一次 `stats` 事件。
+    #[must_use]
+    pub fn push_interval_secs(&self) -> u64 {
+        self.push_interval_secs.load(Ordering::Relaxed)
+    }
+
+    /// 发布一次 [`Domain::Stats`]：推进版本号并唤醒 SSE 订阅者。
+    ///
+    /// 由组合根的定时器按 [`Self::push_interval_secs`] 调用。计数器本身不经
+    /// 所有者发布——`stats` 是**周期事件**而非变更事件（前端要的是「最新的累计
+    /// 读数」，没有变化也要重发，否则屏幕上的数字会在安静时段冻住）。这里发布
+    /// 空白版本推进，正是为了让「周期性」与「按变化」两种语义在同一条 SSE
+    /// 链路上共存：版本推进即代表「这一轮该重发 stats」。
+    pub fn publish_tick(&self) -> super::hub::Versions {
+        self.hub.publish(Domain::Stats)
     }
 }
 
@@ -242,6 +297,22 @@ mod tests {
         stats.add(Counter::FailedAttempts, 7);
         stats.add(Counter::FailedAttempts, 5);
         assert_eq!(stats.get(Counter::FailedAttempts), 12);
+    }
+
+    #[test]
+    fn set_gauge_stores_the_authoritative_value_verbatim() {
+        // 镜像路径要求等值搬运：搬进来的是「外部读数」，不是再累加一次。
+        let stats = Stats::new();
+        stats.add(Counter::IpsBanned, 5);
+        stats.set_gauge(Counter::IpsBanned, 42);
+        assert_eq!(stats.get(Counter::IpsBanned), 42);
+        stats.set_gauge(Counter::IpsBanned, 7);
+        assert_eq!(stats.get(Counter::IpsBanned), 7, "镜像应覆盖而不是累加");
+        assert_eq!(
+            stats.get(Counter::LinesParsed),
+            0,
+            "设置一个计数器不得影响其它计数器"
+        );
     }
 
     #[test]

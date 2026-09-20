@@ -136,6 +136,7 @@ impl Versions {
 }
 
 /// 版本化发布点。写侧 `publish`，读侧 `subscribe` + 向所有者取快照。
+#[derive(Debug)]
 pub struct Hub {
     versions: RwLock<Versions>,
     tx: watch::Sender<Versions>,

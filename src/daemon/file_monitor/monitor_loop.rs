@@ -39,6 +39,8 @@ struct TimeoutState {
     last_rates_query: SystemTime,
     /// 数据清理（封禁历史/信誉分/failed_hash，每 5 分钟）
     last_data_cleanup: SystemTime,
+    /// 计数器镜像 + `stats` 事件发布（周期取自 `webui.sse_push_interval`）
+    last_stats_tick: SystemTime,
 }
 
 impl Default for TimeoutState {
@@ -59,6 +61,7 @@ impl TimeoutState {
             last_history_snapshot: now,
             last_rates_query: now,
             last_data_cleanup: now,
+            last_stats_tick: now,
         }
     }
 }
@@ -384,6 +387,26 @@ fn handle_timeout(cfg: &mut Config, reload_config: &AtomicBool, state: &mut Time
         // 下发基线更新到内核（动态阈值）
         // 在速率查询后立即发送，确保内核使用最新基线进行违规检测
         send_baseline_update();
+    }
+
+    // 计数器镜像 + `stats` 事件发布
+    //
+    // 新状态的四类所有者里，封禁/白名单/速率都在各自的写入点发布版本；只有计数器
+    // 没有「变更点」——它是纯累计量，而契约把 `stats` 定为 SSE 的六事件之一，前端
+    // 要的是「最新读数」而非「有变化才发」。故这里按 `webui.sse_push_interval` 周期
+    // 把旧全局读数等值搬进新状态并推进 `stats` 版本。
+    //
+    // 周期取自 state 而非 cfg：配置重载时 `config_reloader` 会同步新值，这里每次
+    // 读取即可生效，不必重启。
+    let stats_interval = crate::state::compose::stats_push_interval_secs();
+    if now
+        .duration_since(state.last_stats_tick)
+        .unwrap_or_default()
+        .as_secs()
+        >= stats_interval
+    {
+        state.last_stats_tick = now;
+        crate::state::compose::mirror_stats_tick();
     }
 }
 

@@ -214,7 +214,8 @@ pub fn create_ban(req: CreateBanRequest) -> Result<BanOperationResponse, String>
         ban_count: ban_count + 1,
     };
     let cache = ACTIVE_BAN_CACHE.get_or_init(crate::types::ActiveBanCache::new);
-    cache.insert(ban_info);
+    cache.insert(ban_info.clone());
+    crate::state::compose::mirror_ban_insert(&ban_info);
     crate::types::mark_pending_ban_ack(ip);
     // 必须在 send_ban 之前注册，避免 BanStateChange 抢先到达丢通知
     let ack_rx = crate::types::register_ban_ack_waiter(ip);
@@ -241,6 +242,7 @@ pub fn create_ban(req: CreateBanRequest) -> Result<BanOperationResponse, String>
         Err(e) => {
             crate::types::cancel_ban_ack_waiter(ip);
             cache.remove(ip);
+            crate::state::compose::mirror_ban_remove(ip);
             crate::types::clear_pending_ban_ack(ip);
             Err(format!("封禁失败: {}", e))
         }
@@ -288,6 +290,8 @@ pub fn delete_ban(ip: &str) -> Result<BanOperationResponse, String> {
             }
         }
     }
+    // 镜像：新状态同步移除（幂等，缓存里没有该 IP 时为空操作）
+    crate::state::compose::mirror_ban_remove(ip);
 
     Ok(BanOperationResponse {
         ip: ip.to_string(),
@@ -407,6 +411,7 @@ pub fn unban_all_temporary() -> Result<BatchOperationResponse, String> {
                     crate::types::record_ban_duration(duration);
                 }
                 cache.remove(&ban.ip);
+                crate::state::compose::mirror_ban_remove(&ban.ip);
                 unbanned.push(ban.ip.clone());
             }
             Err(e) => {

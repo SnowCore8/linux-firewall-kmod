@@ -537,7 +537,8 @@ SQLite `bans` table schema; the metric count is written as "24"; the main loop i
 | 2.E-1 `state/cidr.rs` + `state/hub.rs` | Done |
 | 2.E-2 `state/{bans,whitelist,rates,stats,mod}.rs` | Done |
 | 2.E-3 Thin `api` layer + SSE | Done |
-| 2.E-4 Retire old read paths + ratchet sync | Not started |
+| 2.E-4a Composition root wiring (`state::compose` mirroring + `main.rs` injection) | Done |
+| 2.E-4b Retire old read paths + ratchet sync | Not started |
 | 2.F–2.G | Not started |
 
 ### What 2.A Landed
@@ -736,19 +737,66 @@ Gate evidence: `cargo test --release --lib` (257 passed, 73 of them in `kernel::
 
 ### What 2.E Landed
 
-2.E runs in four steps, and **retirement ships in the same step as the ratchet**. The first three
-steps only add `state` / `api` modules; the old `web_ui/` and `http_exporter/handler.rs` stay put
-(per "keep it compiling, migrate in batches"). Only the last step deletes the old read paths, and it
-must land the rewritten `verify_http.py` ratchet assertions and the new E/F/M defect entries **in the
-same commit as the code** — otherwise `check_defect_claims()` turns the gate red because the defects
-it asserts are gone. So 2.E-1 through 2.E-3 are committed; 2.E-4 is not started.
+2.E lands in five steps, and **retirement ships in the same step as the ratchet**. 2.E-1 through
+2.E-3 plus 2.E-4a only add `state` / `api` modules and connect the new state to the production write
+points; the old `web_ui/` and `http_exporter/handler.rs` stay put (per "keep it compiling, migrate in
+batches"). Only the last step (2.E-4b) deletes the old read paths, and it must land the rewritten
+`verify_http.py` ratchet assertions and the new E/F/M defect entries **in the same commit as the
+code** — otherwise `check_defect_claims()` turns the gate red because the defects it asserts are gone.
+
+Before starting that last step it turned out a cut was required first: retiring the old read paths
+requires **mounting the new router in the same commit** (`build_router()` has exactly one call site,
+and axum panics on a duplicate method+path), yet the new router's 18 endpoints read
+`Arc<state::State>` — and **nothing in production constructs or feeds it**. Retiring first would have
+served empty bans/whitelist/rates/stats and an SSE stream that never fires. So 2.E-4 splits into two
+independent commits:
 
 | Step | Files | Content | Defects removed |
 |------|-------|---------|-----------------|
 | 2.E-1 | `state/{cidr,hub}.rs` | The single CIDR normalizer; the versioned snapshot publish point | M (key rules) / F (foundation) |
 | 2.E-2 | `state/{bans,whitelist,rates,stats,mod}.rs` | Four data owners + the `State` aggregate, read paths free of side effects | E (read mutating state) / F (data plane) |
 | 2.E-3 | `api/{envelope,payloads,ports,views,render,routes/*,sse,router,auth,adapters}.rs` | Thin adapters: one envelope and business-code table, ports for data whose owners have not migrated, SSE serializing only changed domains, a slow consumer that cannot block the rest | F (read path) / E (read-side criterion) |
-| 2.E-4 | Delete the `web_ui/` read paths + the affected `handler.rs` code; rewrite the `verify_http.py` ratchet; add E/F/M defect entries | Retirement and ratchet in one step | E / F / M (closing) |
+| 2.E-4a | `state/compose.rs` (new) + `state/{mod,stats,bans,hub}.rs` + `main.rs` + each write point | Composition root: `main.rs` constructs `State` and injects it; existing write points **mirror** into it, the old globals stay for readers that have not migrated | Effectiveness (so the product still has real data after 2.E-4b retires) |
+| 2.E-4b | Delete the `web_ui/` read paths + the affected `handler.rs` code; rewrite the `verify_http.py` ratchet; add E/F/M defect entries | Retirement and ratchet in one step | E / F / M (closing) |
+
+#### What 2.E-4a Landed: the Mirror Bridge's Directions and Timing
+
+`state/compose.rs` is a **transitional bridge**, not part of the new architecture. Both sides coexist
+during migration, and the bridge has only three directions — deliberately asymmetric:
+
+| Direction | Covers | Timing | Why it must exist |
+|-----------|--------|--------|-------------------|
+| Old -> new (mirror) | bans / whitelist / rates / counters | Adjacent to each write point; counters on a fixed period | netlink is already the main chain's write authority; its readings go straight into the new state, so the new SSE and REST have real data at once |
+| New -> old (write-back) | **only** ban reconciliation | when `handle_list_bans_response` completes | The old `reconcile_with_kernel` only deletes "cache has, kernel hasn't" and never refills; the new state is the authoritative result of that reconciliation, and without the write-back the old SPA list stays permanently diverged from the kernel |
+| External -> new (config) | `sse_push_interval` | startup + every config reload | The `stats` push period belongs to the config owner; the scheduler reads it every round, so a change takes effect immediately |
+
+- **Why counters run on a fixed period rather than per write point.** The 9 counters' old write points
+  are spread across the line-processing hot path, the regex-match hot path and the netlink receive
+  thread. Rewriting them one by one would couple the hot paths to a transitional mirror and add one
+  extra atomic write per log line and per packet. Mirroring on a period leaves every one of those write
+  points untouched: the cost is a fixed "9 atomic `load`s + 9 atomic `store`s per period", independent
+  of traffic; and because the period tracks `sse_push_interval`, the worst staleness the frontend can
+  see is the push interval itself — mirroring more often would not update the screen any sooner.
+- **`set_gauge`, not `add`.** The mirror must port each value **verbatim** (`mirror_stats_matches_legacy`
+  pins this), and `add` would count the same delta twice. Hence `Stats::set_gauge`, plus a test that
+  pins the positional correspondence between `legacy_counter_value` and `DAEMON_STATS`: adding or
+  removing a counter on either side turns it red.
+- **`Domain::Stats` was never published before.** The new `api/sse.rs` is driven purely by `watch` with
+  no timed emission at all, yet the contract fixes `stats` as one of the six SSE events. So `Stats`
+  gains `publish_tick` (advancing a blank version), called by the scheduler's periodic tick at
+  `push_interval_secs` — `stats` is a **periodic event**, not a change event: the frontend wants "the
+  latest cumulative reading", which must be re-sent even when nothing changed, or the numbers on
+  screen freeze during quiet periods.
+- **`GLOBAL_STATE` is a `OnceLock<Arc<State>>`, following the `set_global_netlink_ctx` convention**
+  (a second call errors, so ordering mistakes about who assembles first surface at startup). Every
+  mirror function tolerates not having been injected (returns `None`, i.e. a no-op), so unit tests
+  that do not go through `main` need no special casing.
+- **Unparseable IPs are skipped**, never falling back to `0.0.0.0`: the new state's key is `IpAddr`,
+  and stuffing a fake key in would pollute the ban list and contradict the "addresses must parse"
+  invariant.
+- **The `main.rs` injection point must precede the netlink receive thread**: the startup burst of
+  bans/whitelist/stats query responses lands in the new state from that thread, and injecting one step
+  later would drop that batch.
 
 Key decisions:
 
@@ -883,6 +931,13 @@ Gate evidence recorded at the time for 2.E-1 / 2.E-2: `cargo test --release --li
 of them in `state::`), `cargo clippy --release --lib --tests -- -D warnings`, `cargo fmt --check`,
 `make build` / `make format-check`, `bash scripts/check_contract.sh`,
 `bash scripts/verify_project.sh` all green.
+
+The gate evidence recorded at the time for 2.E-3 is the entry just above (the 55 `api::` cases are
+exactly the adapter-layer tests this step added).
+
+Gate evidence recorded at the time for 2.E-4a: `cargo test --release --lib` (399 passed, 87 of them
+in `state::`), `cargo clippy --release --lib --tests -- -D warnings`, `cargo fmt --all --check`,
+`cargo check --bins --lib` (no warnings), `bash scripts/check_contract.sh` all green.
 
 ## Judging Discipline
 

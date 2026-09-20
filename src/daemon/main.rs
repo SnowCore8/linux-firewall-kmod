@@ -224,6 +224,25 @@ fn main() -> Result<()> {
     // 永不会被 drop，故不能依赖 Drop 关闭 fd / 停止线程
     let mut netlink_receiver: Option<std::thread::JoinHandle<()>> = None;
 
+    // ---- 组合根：装配新状态层 ----
+    //
+    // 新状态（`state::State` + hub）在**这里**构造并注入，早于 netlink 接收线程与
+    // 任何镜像写入点：下面的封禁/白名单/统计查询响应会在接收线程里落进新状态，
+    // 若注入晚一步，启动期那批数据就会丢。
+    //
+    // 注入后 `state::compose` 的镜像函数才不再是空操作。旧全局（`ACTIVE_BAN_CACHE`
+    // 等）继续保留给尚未迁入的读者（SPA 分析端点、Prometheus 导出器）——这是
+    // 「保留编译，分批迁入」的过渡态，两个方向都在 `state::compose` 里有明确边界。
+    match firewall_daemon::state::set_global_state(firewall_daemon::state::State::new()) {
+        Ok(()) => {
+            firewall_daemon::state::compose::set_start_time(now);
+            firewall_daemon::state::compose::set_push_interval(cfg.webui.sse_push_interval);
+            info!(logger::get(), "状态层已装配";
+                "sse_push_interval" => cfg.webui.sse_push_interval);
+        }
+        Err(e) => warn!(logger::get(), "状态层装配失败"; "error" => %e),
+    }
+
     // 如果有 netlink 上下文，创建并设置决策引擎
     if let Some(ctx) = netlink_ctx {
         let ctx_arc = Arc::new(ctx);

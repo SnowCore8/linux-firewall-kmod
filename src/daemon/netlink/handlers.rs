@@ -174,7 +174,8 @@ impl super::NetlinkContext {
                     fail_count: 0,
                     ban_count,
                 };
-                cache.insert(ban_info);
+                cache.insert(ban_info.clone());
+                crate::state::compose::mirror_ban_insert(&ban_info);
                 crate::history_snapshot::record_ban_event(&ip_str, &jail_name_for_event, ban_count);
                 crate::logger::info!(
                     crate::logger::get(),
@@ -203,6 +204,8 @@ impl super::NetlinkContext {
                     crate::types::record_ban_duration(duration);
                 }
             }
+            // 镜像：新状态同步移除（幂等，缓存里没有该 IP 时为空操作）
+            crate::state::compose::mirror_ban_remove(&ip_str);
             // 记录解封到 BAN_HISTORY（修复 record_unban 从未被调用的设计缺陷）
             let ban_history = crate::types::BAN_HISTORY.get_or_init(crate::types::BanHistory::new);
             ban_history.record_unban(&ip_str);
@@ -352,6 +355,8 @@ impl super::NetlinkContext {
                 kernel_ips.insert(info.ip.clone());
             }
             let removed = cache.reconcile_with_kernel(&kernel_ips, infos);
+            // 镜像：把这次对账结果搬进新状态，并把新状态的权威快照回写旧缓存
+            crate::state::compose::mirror_bans_reconcile();
             crate::logger::info!(
                 crate::logger::get(),
                 "已对账封禁状态";
@@ -452,7 +457,12 @@ impl super::NetlinkContext {
                 })
                 .collect();
 
-        *crate::types::WHITELIST_CACHE.write() = whitelist_entries;
+        *crate::types::WHITELIST_CACHE.write() = whitelist_entries.clone();
+
+        // 镜像：内核 LIST 是白名单权威全表，覆盖式搬进新状态
+        crate::state::compose::mirror_whitelist_replace_all(
+            crate::state::compose::whitelist_pairs(&whitelist_entries),
+        );
 
         // 更新 DAEMON_STATS.whitelist_count
         crate::types::DAEMON_STATS
@@ -505,7 +515,10 @@ impl super::NetlinkContext {
             })
             .collect();
 
-        *crate::types::RATE_CACHE.write() = rate_entries;
+        *crate::types::RATE_CACHE.write() = rate_entries.clone();
+
+        // 镜像：速率样本覆盖式搬进新状态（新状态的 EWMA 基线与旧模块独立演化）
+        crate::state::compose::mirror_rates_from_cache(&rate_entries, global_pps, global_bps);
 
         // 记录速率历史快照（每 2 秒一次，保留 1 小时）
         crate::types::record_rate_history(total_pps, total_bps, entries.len() as u32);
@@ -592,19 +605,21 @@ impl super::NetlinkContext {
             let mut cache = crate::types::WHITELIST_CACHE.write();
             match cache.get_mut(&cidr) {
                 Some(entry) if entry.device.is_empty() && !device_str.is_empty() => {
-                    entry.device = device_str;
+                    entry.device = device_str.clone();
                 }
                 None => {
                     cache.insert(
                         cidr.clone(),
                         crate::types::WhitelistEntry {
-                            cidr,
-                            device: device_str,
+                            cidr: cidr.clone(),
+                            device: device_str.clone(),
                         },
                     );
                 }
                 _ => {}
             }
+            drop(cache);
+            crate::state::compose::mirror_whitelist_insert_text(&cidr, &device_str);
         } else if event.is_remove() {
             crate::logger::debug!(
                 crate::logger::get(),
@@ -615,6 +630,7 @@ impl super::NetlinkContext {
 
             // 从 WHITELIST_CACHE 移除
             crate::types::WHITELIST_CACHE.write().remove(&cidr);
+            crate::state::compose::mirror_whitelist_remove_text(&cidr);
         }
 
         // 实时更新白名单计数
@@ -649,6 +665,8 @@ impl super::NetlinkContext {
         match cmd {
             // BanIp 失败：撤掉提前 insert 的缓存项与待确认历史
             2 if cache.remove(&ip_str).is_some() => {
+                // 镜像：回滚同样要落到新状态，否则新 SSE 会长期显示一条内核并未接受的封禁
+                crate::state::compose::mirror_ban_remove(&ip_str);
                 crate::types::clear_pending_ban_ack(&ip_str);
                 crate::types::notify_ban_ack_err(&ip_str, event.error_code());
                 crate::web_ui::sse::wake_sse_clients();

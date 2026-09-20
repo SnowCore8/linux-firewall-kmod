@@ -92,10 +92,11 @@ fn append_whitelist_cache(ip: &str, prefix_len: u8) {
     crate::types::WHITELIST_CACHE.write().insert(
         cidr.clone(),
         crate::types::WhitelistEntry {
-            cidr,
+            cidr: cidr.clone(),
             device: String::new(),
         },
     );
+    crate::state::compose::mirror_whitelist_insert_text(&cidr, "");
 }
 
 /// 构建 CIDR 缓存键（与 WHITELIST_CACHE 的 key 格式一致）
@@ -178,6 +179,7 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
 fn remove_whitelist_cache(ip: &str, prefix_len: u8) {
     let cidr = build_cidr_key(ip, prefix_len);
     crate::types::WHITELIST_CACHE.write().remove(&cidr);
+    crate::state::compose::mirror_whitelist_remove_text(&cidr);
 }
 
 /// 解析 CIDR 格式，返回 (IP地址, 前缀长度)。

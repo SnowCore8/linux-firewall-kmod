@@ -255,6 +255,32 @@ impl Bans {
         removed
     }
 
+    /// 用一整套条目**替换**当前内容（对应内核 LIST bans 的全量对账）。
+    ///
+    /// 与 [`Self::remove`] / [`Self::purge_expired`] 的逐条删除不同，这里一次给定
+    /// 权威全表：内核「有而缓存没有」的项要补上，「缓存有而内核没有」的项要删掉。
+    /// 语义与 [`super::whitelist::Whitelist::replace_all`] 一致——内核 LIST 是权威，
+    /// 缓存只是它的投影。
+    ///
+    /// 返回 `true` 表示内容确有变化（同 IP 条目的任何字段不同都算变化）；内容完全
+    /// 相同时不失效缓存、不推进版本号（内核每 60 s 对账一次，数值没变不该惊动 SSE）。
+    pub fn replace_all(&self, incoming: Vec<BanEntry>) -> bool {
+        let next: BTreeMap<IpAddr, BanEntry> = incoming.into_iter().map(|e| (e.ip, e)).collect();
+        let changed = {
+            let mut table = self.entries.write();
+            if *table == next {
+                false
+            } else {
+                *table = next;
+                true
+            }
+        };
+        if changed {
+            self.invalidate_and_publish();
+        }
+        changed
+    }
+
     /// 当前条目数。
     #[must_use]
     pub fn len(&self) -> usize {
@@ -465,6 +491,65 @@ mod tests {
         bans.insert(entry("10.0.0.2", "sshd", 100, 500));
         let ips: Vec<IpAddr> = bans.snapshot().entries().iter().map(|e| e.ip).collect();
         assert_eq!(ips, vec![ip("10.0.0.1"), ip("10.0.0.2"), ip("10.0.0.3")]);
+    }
+
+    #[test]
+    fn replace_all_takes_the_incoming_set_as_authoritative() {
+        // 内核 LIST bans 是权威：缺口补上，陈旧项删掉。这与逐条 remove 不同。
+        let bans = Bans::new(hub());
+        bans.insert(entry("10.0.0.1", "sshd", 100, 500));
+        bans.insert(entry("10.0.0.2", "sshd", 100, 500));
+
+        let changed = bans.replace_all(vec![
+            entry("10.0.0.2", "sshd", 100, 500),
+            entry("10.0.0.9", "nginx", 100, 500),
+        ]);
+        assert!(changed);
+        let snap = bans.snapshot();
+        assert_eq!(snap.len(), 2);
+        assert!(snap.get(&ip("10.0.0.1")).is_none(), "内核没有的项应被删掉");
+        assert!(snap.get(&ip("10.0.0.9")).is_some(), "内核有的项应被补上");
+    }
+
+    #[test]
+    fn replace_all_with_identical_contents_reports_no_change() {
+        // 内核每 60 s 全量对账一次；内容没变时不该惊动 SSE。
+        let bans = Bans::new(hub());
+        bans.insert(entry("10.0.0.1", "sshd", 100, 500));
+        let before = bans.replace_all(vec![entry("10.0.0.1", "sshd", 100, 500)]);
+        assert!(!before, "首次写入内容相同也算无变化");
+        let v = {
+            bans.insert(entry("10.0.0.2", "sshd", 100, 500));
+            bans.snapshot().len()
+        };
+        assert_eq!(v, 2);
+        let changed = bans.replace_all(vec![
+            entry("10.0.0.1", "sshd", 100, 500),
+            entry("10.0.0.2", "sshd", 100, 500),
+        ]);
+        assert!(!changed);
+    }
+
+    #[test]
+    fn replace_all_with_an_empty_set_clears_everything() {
+        let bans = Bans::new(hub());
+        bans.insert(entry("10.0.0.1", "sshd", 100, 500));
+        assert!(bans.replace_all(Vec::new()));
+        assert!(bans.is_empty());
+    }
+
+    #[test]
+    fn a_field_change_on_the_same_ip_counts_as_a_change() {
+        let bans = Bans::new(hub());
+        bans.insert(entry("10.0.0.1", "sshd", 100, 500));
+        assert!(
+            bans.replace_all(vec![entry("10.0.0.1", "sshd", 100, 900)]),
+            "同 IP 但字段不同应算变化"
+        );
+        assert_eq!(
+            bans.snapshot().get(&ip("10.0.0.1")).unwrap().expires_at,
+            900
+        );
     }
 
     #[test]

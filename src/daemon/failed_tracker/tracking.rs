@@ -264,10 +264,13 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
         // 原子性检查并插入缓存：消除 check-then-act 竞态条件
         // 多线程同时触发同一 IP 封禁时，只有一个线程的 try_insert 返回 true
         let cache = crate::types::ACTIVE_BAN_CACHE.get_or_init(crate::types::ActiveBanCache::new);
-        if !cache.try_insert(ban_info) {
+        if !cache.try_insert(ban_info.clone()) {
             // 已被其他线程先行封禁，跳过本次操作
             return;
         }
+        // 镜像：新状态同步插入。放在 try_insert 之后——只有真正抢到这次的线程才写入，
+        // 否则重复插入会把同一条封禁在事件路径上算两遍。
+        crate::state::compose::mirror_ban_insert(&ban_info);
         crate::types::mark_pending_ban_ack(ip);
 
         let ban_duration = if is_permanent {
@@ -279,6 +282,7 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
             // 封禁失败，回滚缓存标记（允许下次重试）
             // record_ban / record_ban_event / record_ban(ip_reputation) 尚未调用，无需回滚
             cache.remove(ip);
+            crate::state::compose::mirror_ban_remove(ip);
             crate::types::clear_pending_ban_ack(ip);
             crate::logger::warn!(
                 crate::logger::get(),

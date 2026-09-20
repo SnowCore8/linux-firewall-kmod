@@ -487,7 +487,8 @@ sequenceDiagram
 | 2.E-1 `state/cidr.rs` + `state/hub.rs` | 已完成 |
 | 2.E-2 `state/{bans,whitelist,rates,stats,mod}.rs` | 已完成 |
 | 2.E-3 `api` 薄适配层 + SSE | 已完成 |
-| 2.E-4 退役旧读路径 + 棘轮同步 | 未开始 |
+| 2.E-4a 组合根装配（`state::compose` 镜像 + `main.rs` 注入） | 已完成 |
+| 2.E-4b 退役旧读路径 + 棘轮同步 | 未开始 |
 | 2.F–2.G | 未开始 |
 
 ### 2.A 落地明细
@@ -581,18 +582,55 @@ netlink 线格式三端（契约 / 内核 / daemon）同一步落地，布局经
 
 ### 2.E 落地明细
 
-2.E 分四步，**退役与棘轮同一步**：前三步只新增 `state` / `api` 模块，旧 `web_ui/` 与
-`http_exporter/handler.rs` 暂不动（按「保留编译、分批迁入」）；最后一步才删旧读路径，
-并与重写 `verify_http.py` 的棘轮断言、新增 E/F/M 三条缺陷条目**在同一提交**内落地——
-否则 `check_defect_claims()` 会因「缺陷被修掉了」而门禁变红。故 2.E-1 ~ 2.E-3 已提交，
-2.E-4 未开始。
+2.E 分五步落地，**退役与棘轮同一步**：2.E-1 ~ 2.E-3 与 2.E-4a 只新增 `state` / `api` 模块并
+把新状态接上生产写入点，旧 `web_ui/` 与 `http_exporter/handler.rs` 暂不动（按「保留编译、
+分批迁入」）；最后一步（2.E-4b）才删旧读路径，并与重写 `verify_http.py` 的棘轮断言、新增
+E/F/M 三条缺陷条目**在同一提交**内落地——否则 `check_defect_claims()` 会因「缺陷被修掉了」
+而门禁变红。
+
+最后一步在动工前发现必须先切一刀：退役旧读路径要求**同步挂载新路由**（`build_router()`
+只有一个调用点，且 axum 对重复 method+path 会 panic），而新路由的 18 条端点读的是
+`Arc<state::State>`——**生产环境里没有任何东西构造或喂入它**。若直接退役，新路由会对外
+提供空的封禁/白名单/速率/统计，SSE 也永不触发。故 2.E-4 拆成两个独立提交：
 
 | 提交 | 文件 | 内容 | 消除的问题 |
 |------|------|------|-----------|
 | 2.E-1 | `state/{cidr,hub}.rs` | CIDR 唯一规范化实现；版本化快照发布点 | M（键规则）/ F（地基） |
 | 2.E-2 | `state/{bans,whitelist,rates,stats,mod}.rs` | 四个数据所有者 + `State` 聚合，读路径零副作用 | E（读改状态）/ F（数据面） |
 | 2.E-3 | `api/{envelope,payloads,ports,views,render,routes/*,sse,router,auth,adapters}.rs` | 薄适配层：统一信封与业务码、端口承接未迁入数据、SSE 只订变更域、慢消费者不阻塞全局 | F（读路径）/ E（读侧判据） |
-| 2.E-4 | 删 `web_ui/` 读路径 + `handler.rs` 相关代码；改 `verify_http.py` 棘轮；加 E/F/M 缺陷条目 | 退役与棘轮同一步 | E / F / M（收口） |
+| 2.E-4a | `state/compose.rs`（新）+ `state/{mod,stats,bans,hub}.rs` + `main.rs` + 各写入点 | 组合根装配：`main.rs` 构造 `State` 并注入；在既有写入点**镜像**进新状态，旧全局保留给未迁入读者 | 效果面（让 2.E-4b 退役后产品仍有真数据） |
+| 2.E-4b | 删 `web_ui/` 读路径 + `handler.rs` 相关代码；改 `verify_http.py` 棘轮；加 E/F/M 缺陷条目 | 退役与棘轮同一步 | E / F / M（收口） |
+
+#### 2.E-4a 落地明细：镜像桥的方向与时机
+
+`state/compose.rs` 是一座**过渡桥**，不是新架构的一部分。迁入期两侧并存，桥只有三个方向，
+且方向不对称：
+
+| 方向 | 覆盖 | 时机 | 为什么必须存在 |
+|------|------|------|----------------|
+| 旧 → 新（镜像） | 封禁 / 白名单 / 速率 / 计数器 | 各写入点相邻；计数器走固定周期 | netlink 已是主链路写入权威，读数顺手搬进新状态，新 SSE 与 REST 立刻有真数据 |
+| 新 → 旧（回写） | **只有**封禁对账 | `handle_list_bans_response` 完成时 | 旧 `reconcile_with_kernel` 只删「缓存有、内核无」，不回填；新状态才是这次对账的权威结果，不回写则旧 SPA 列表与内核长期不一致 |
+| 外部 → 新（配置） | `sse_push_interval` | 启动期 + 每次配置重载 | `stats` 的推送周期属配置 owner，调度器每轮读它，改完即生效 |
+
+- **计数器为什么走固定周期而不是逐写入点**。9 枚计数器的旧写入点分散在行处理热路径、正则
+  匹配热路径与 netlink 接收线程上；逐个改会把热路径与「过渡期镜像」耦合，且每行日志、每个
+  数据包都要多付一次原子写。周期镜像把这些写入点全部保持原样：代价固定为「每周期 9 次原子
+  `load` + 9 次原子 `store`」，与流量无关；周期对齐 `sse_push_interval`，故前端看到的最坏陈旧
+  度就是推送间隔本身——再多几次镜像也不会让屏幕更早更新。
+- **必须用 `set_gauge` 而不是 `add`**。镜像要求逐项**等值**搬运（`mirror_stats_matches_legacy`
+  钉死这条），`add` 会把同一段增量再计一次。为此 `Stats` 新增 `set_gauge`，并把
+  `legacy_counter_value` ⇔ `DAEMON_STATS` 的位置对应关系写进测试：任一侧增删计数器都会变红。
+- **`Domain::Stats` 之前从不发布**。新 `api/sse.rs` 完全由 `watch` 驱动、没有任何定时发射，
+  而契约把 `stats` 定为 SSE 六事件之一。故 `Stats` 增加 `publish_tick`（推进一个空白版本），
+  由 scheduler 的定时 tick 按 `push_interval_secs` 调用——`stats` 是**周期事件**而非变更事件：
+  前端要的是「最新累计读数」，没有变化也要重发，否则安静时段屏幕上的数字会冻住。
+- **`GLOBAL_STATE` 是 `OnceLock<Arc<State>>`，与 `set_global_netlink_ctx` 同一约定**（重复调用
+  报错，让「谁先装配」的顺序错误在启动期暴露）。所有镜像函数都容忍未注入（返回 `None` 即空
+  操作），故不经 `main` 的单元测试无需特判。
+- **不可解析的 IP 一律跳过**，不回退到 `0.0.0.0`：新状态的键是 `IpAddr`，塞一个假键进去会污染
+  封禁列表，且与「地址必须可解析」这一不变量相悖。
+- **`main.rs` 的注入点必须在 netlink 接收线程启动之前**：启动期的封禁/白名单/统计查询响应会在
+  接收线程里落进新状态，注入晚一步那批数据就丢。
 
 关键取舍：
 
@@ -686,6 +724,10 @@ netlink 线格式三端（契约 / 内核 / daemon）同一步落地，布局经
 门禁证据：`cargo test --release --lib`（391 passed，其中 `api::` 55 条）、`cargo clippy --release --lib --tests -- -D warnings`、`cargo fmt --check`、`make build` / `make format-check`、`bash scripts/check_contract.sh`、`bash scripts/verify_project.sh` 全绿。
 
 2.E-1 / 2.E-2 当时门禁证据：`cargo test --release --lib`（336 passed，其中 `state::` 79 条）、`cargo clippy --release --lib --tests -- -D warnings`、`cargo fmt --check`、`make build` / `make format-check`、`bash scripts/check_contract.sh`、`bash scripts/verify_project.sh` 全绿。
+
+2.E-3 当时门禁证据见上一条（`api::` 55 条即本步新增的适配层用例）。
+
+2.E-4a 当时门禁证据：`cargo test --release --lib`（399 passed，其中 `state::` 87 条）、`cargo clippy --release --lib --tests -- -D warnings`、`cargo fmt --all --check`、`cargo check --bins --lib`（无警告）、`bash scripts/check_contract.sh` 全绿。
 
 ## 判定纪律
 

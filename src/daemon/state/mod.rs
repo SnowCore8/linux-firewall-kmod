@@ -27,6 +27,7 @@
 
 pub mod bans;
 pub mod cidr;
+pub mod compose;
 pub mod hub;
 pub mod rates;
 pub mod stats;
@@ -36,6 +37,7 @@ use std::sync::Arc;
 
 pub use bans::{BanEntry, BanSnapshot, Bans};
 pub use cidr::{CidrError, CidrKey};
+pub use compose::{global_state, set_global_state};
 pub use hub::{Domain, Hub, SharedHub, Versions};
 pub use rates::{RateCounters, RateSample, RateSnapshot, Rates};
 pub use stats::{Counter, Stats, StatsSnapshot};
@@ -73,7 +75,9 @@ impl State {
             bans: Bans::new(Arc::clone(&hub)),
             whitelist: Whitelist::new(Arc::clone(&hub)),
             rates: Rates::new(Arc::clone(&hub)),
-            stats: Stats::new(),
+            // 计数器也发布到同一个 hub：`stats` 是周期事件，由 [`Stats::publish_tick`]
+            // 驱动，但仍必须与其余域共用版本源，否则 SSE 拿不到这一路。
+            stats: Stats::with_hub(Arc::clone(&hub)),
             hub,
         })
     }
@@ -84,7 +88,7 @@ impl State {
             bans: Bans::new(Arc::clone(&hub)),
             whitelist: Whitelist::new(Arc::clone(&hub)),
             rates: Rates::new(Arc::clone(&hub)),
-            stats: Stats::new(),
+            stats: Stats::with_hub(Arc::clone(&hub)),
             hub,
         }
     }
