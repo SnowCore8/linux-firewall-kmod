@@ -396,6 +396,7 @@ dependencies = [
  "nix",
  "once_cell",
  "parking_lot",
+ "percent-encoding",
  "rand",
  "regex",
  "rusqlite",

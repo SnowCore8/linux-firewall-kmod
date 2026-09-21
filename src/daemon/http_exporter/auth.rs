@@ -8,6 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
+use percent_encoding::percent_decode_str;
 
 use super::{AUTH_FAILURE_THRESHOLD, AUTH_LOCKOUT_DURATION, AUTH_STATE};
 use crate::types::now_secs;
@@ -197,16 +198,19 @@ pub async fn auth_middleware(
         .map(|s| s.to_string());
 
     // EventSource 无法自定义 Authorization：允许 ?access_token=<base64(user:pass)>
+    //
+    // 必须**百分号解码**：令牌是 base64，含 `+` `/` `=`（`=` 尤甚，基本每个
+    // `user:pass` 都会补一个），按 URL 规则要转义。前端 `withAccessToken` 用
+    // `encodeURIComponent` 编码后发给服务端；这里若不做解码，拿到的会是
+    // `ZTJlOmUyZS1wYXNzd29yZA%3D%3D` 这种带 `%3D` 的串，base64 解出乱码 →
+    // 认证恒失败 → SSE 永远 401，且每次重连都会喂大暴力破解计数，最终把正确
+    // 凭据一起锁死（管理流因此永久断开）。
+    //
+    // 用 `percent_decode_str` 而**不是**表单解析：表单规则会把 `+` 当空格，
+    // 而 base64 字母表里 `+` 是合法字符，误替换会解出另一个令牌。
     if auth_header.is_none() {
-        if let Some(query) = request.uri().query() {
-            for pair in query.split('&') {
-                if let Some(token) = pair.strip_prefix("access_token=") {
-                    if !token.is_empty() {
-                        auth_header = Some(format!("Basic {token}"));
-                    }
-                    break;
-                }
-            }
+        if let Some(token) = access_token_from_query(request.uri().query()) {
+            auth_header = Some(format!("Basic {token}"));
         }
     }
 
@@ -215,5 +219,23 @@ pub async fn auth_middleware(
     match result {
         1 => next.run(request).await,
         _ => (StatusCode::UNAUTHORIZED, "401 Unauthorized\n").into_response(),
+    }
+}
+
+/// 从 query string 里取出 `access_token` 的**解码后**取值，供 EventSource 认证。
+///
+/// 抽出成独立函数是为了能直接对解码行为写单元测试（测试在父模块 `mod.rs` 的
+/// `tests` 里，故可见性为 `pub(super)`）：这是「前端编码 / 后端解码」的接缝，
+/// 错一字节就表现为 SSE 永久 401，靠端到端跑很难定位到具体环节。
+pub(super) fn access_token_from_query(query: Option<&str>) -> Option<String> {
+    let query = query?;
+    let raw = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("access_token="))?;
+    let decoded = percent_decode_str(raw).decode_utf8().ok()?;
+    if decoded.is_empty() {
+        None
+    } else {
+        Some(decoded.into_owned())
     }
 }

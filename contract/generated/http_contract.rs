@@ -33,6 +33,8 @@ pub mod path {
     pub const ROUTE_GET_LOGS: &str = "/logs";
     /// `GET /settings` → `handle_spa_settings`
     pub const ROUTE_GET_SETTINGS: &str = "/settings";
+    /// `GET /more` → `handle_spa_more`
+    pub const ROUTE_GET_MORE: &str = "/more";
     /// `GET /static/*path` → `handle_static`
     pub const ROUTE_GET_STATIC_PATH: &str = "/static/*path";
     /// `GET /sw.js` → `handle_sw`

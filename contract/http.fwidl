@@ -333,8 +333,8 @@ route GET "/" {
   auth = none
   handler = handle_redirect
   returns = text
-  status = 302
-  note = "重定向到 /dashboard；**必须原样保留 query string**，否则 /?access_token=<token> 直达会丢凭据"
+  status = 303
+  note = "重定向到 /dashboard；**必须原样保留 query string**，否则 /?access_token=<token> 直达会丢凭据。状态码是 303 而非 302：实现用 axum 的 Redirect::to（其语义即 See Other；axum 未公开自定义状态码的构造器），303 在浏览器里与 302 行为一致，对纯 GET 重定向无副作用。"
 }
 
 route GET "/dashboard" {
@@ -382,6 +382,13 @@ route GET "/logs" {
 route GET "/settings" {
   auth = none
   handler = handle_spa_settings
+  returns = text
+  status = 200
+}
+
+route GET "/more" {
+  auth = none
+  handler = handle_spa_more
   returns = text
   status = 200
 }

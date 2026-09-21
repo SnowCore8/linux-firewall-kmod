@@ -878,7 +878,7 @@ count, first_seen, last_seen }` + `ban/procfs.rs` + `<HOST>` 替换 + SQLite `ba
 |------|----|---------|
 | `unsafe { }` 块 | 73 处，13 个文件 | `grep -rn 'unsafe {' src/daemon --include=*.rs` |
 | Prometheus 指标 | 24 个（`# TYPE` 行数 = 去重指标名数） | `grep -c '# TYPE firewall_' src/daemon/http_exporter/metrics.rs` |
-| 路由 | 需认证 18（已迁入）+ 23（未迁入）= 41；无认证 12（10 公开 + 2 探针）；合计 53 | `contract/verify_http.py`（契约 53 条 / 源码 53 条） |
+| 路由 | 需认证（已迁入 + 未迁入两组合并）、无认证（公开 + 探针）各若干条 | `contract/verify_http.py`（契约与源码双向核对，条数以脚本输出为准） |
 | SSE 上限 | events 10 / logs 5；keepalive 15 s；每连接缓冲 32；超限 503 | `src/daemon/api/sse.rs` 常量 |
 | 监听默认值 | 代码 `127.0.0.1:9119`；随包 YAML `0.0.0.0:9119` | `src/daemon/types/config.rs` / `config/default.yaml:12-13` |
 | 日志默认路径 | 代码 `/var/log/firewall-daemon.log`；随包 YAML `/var/log/firewall.log` | `src/daemon/logger.rs` / `config/default.yaml:16` |

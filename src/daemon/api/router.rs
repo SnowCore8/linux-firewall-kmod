@@ -18,8 +18,9 @@
 //! （`/api/v1/logs/stream`、`/api/v1/logs`、`/api/v1/rates/history`、
 //! `/api/v1/rates/windows`、`/api/v1/whitelist/recommendations` 与
 //! `/api/v1/stats/*` 分析类）仍由 [`crate::http_exporter::handler`] 挂载。
-//! 两处合起来才是契约里的 53 条路由——分开两处是刻意的：
-//! `verify_http.py` 的 `check_routes` 同时读这两个文件。
+//! 两处合起来才等于契约里的路由全集——分开两处是刻意的：
+//! `verify_http.py` 的 `check_routes` 同时读这两个文件，逐条比对；
+//! 具体条数以 `contract/http.fwidl` 与那里的校验输出为准，此处不复述。
 
 use std::sync::Arc;
 
@@ -51,7 +52,7 @@ pub async fn handle_sse(State(api): State<Arc<ApiState>>) -> Response {
     events_response(api.state.hub().subscribe(), renderer, guard).into_response()
 }
 
-/// 构建**已迁入 `api` 层**的需认证路由组（`/metrics` + 17 条 `/api/v1/*`，共 18 条）。
+/// 构建**已迁入 `api` 层**的需认证路由组（`/metrics` 加若干 `/api/v1/*`）。
 ///
 /// 调用方负责在其上挂认证中间件——本函数不假设认证实现，避免 `api` 依赖某个
 /// 具体凭据来源。未迁入的路由由 [`crate::http_exporter::handler`] 另行挂载，
@@ -151,7 +152,7 @@ mod tests {
         );
     }
 
-    /// 已迁入组恰好覆盖契约里标记为 `api` 的那 18 条，不多不少。
+    /// 已迁入组恰好覆盖契约里标记为 `api` 的那些路由，不多不少。
     ///
     /// 多一条会在 `build_router` 合并时与旧组撞成 axum 的 duplicate-route panic；
     /// 少一条则是静默 404——两者都要在这里挡住。

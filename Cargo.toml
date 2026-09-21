@@ -29,6 +29,8 @@ path = "src/daemon/lib.rs"
 # chrono: 替换 localtime_r/strftime, 时间格式化
 # anyhow: 统一错误处理
 # base64: HTTP Basic Auth 解码
+# percent-encoding: 解 query 里 `?access_token=` 的百分号转义
+#   （EventSource 无法设请求头，令牌只能走 query，前端用 encodeURIComponent 编码）
 # slog: 结构化日志门面 + JSON Lines 输出 (替换自研 log.rs)
 # rust-embed: Web UI 静态资源嵌入（HTML/CSS/JS 编译进二进制）
 # ============================================================================
@@ -49,6 +51,7 @@ parking_lot = "0.12"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 anyhow = "1"
 base64 = "0.22"
+percent-encoding = "2"
 slog = "2.7"
 slog-term = "2.9"
 slog-async = "2.8"

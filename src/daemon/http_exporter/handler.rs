@@ -45,8 +45,8 @@ fn db_error_response(msg: String) -> Response {
 /// 路由分层：
 /// - 无认证路由组：SPA 外壳与静态资源、`/sw.js`（`/health`、`/healthz` 已迁到
 ///   [`crate::api::router::health_routes`]，由它提供）
-/// - 需认证路由组：由 [`crate::api::router::protected_routes`]（已迁入的 18 条）
-///   与 [`legacy_protected_routes`]（尚未迁入的 23 条）合并而成，合计 41 条；本函数把
+/// - 需认证路由组：由 [`crate::api::router::protected_routes`]（已迁入的）
+///   与 [`legacy_protected_routes`]（尚未迁入的）合并而成；本函数把
 ///   认证中间件统一挂在合并结果上
 /// - 安全头：所有路由共享
 ///
@@ -55,7 +55,7 @@ fn db_error_response(msg: String) -> Response {
 ///
 /// # 关于 `api_state`
 ///
-/// 已迁入的 18 条路由其 handler 的 state 是 [`crate::api::routes::ApiState`]，
+/// 已迁入路由的 handler state 是 [`crate::api::routes::ApiState`]，
 /// 未迁入的 handler 不取 state；两者类型不同，只能各自 `.with_state(...)` 之后再
 /// `merge`。`api_state` 为 `None`（仅可能发生在极早期启动路径）时只挂未迁入组，
 /// 已迁入路由暂缺——但组合根在 `main.rs` 启动期就已注入状态，正常启动不会走到。
@@ -74,6 +74,9 @@ pub fn build_router(api_state: Option<std::sync::Arc<crate::api::routes::ApiStat
         .route("/ddos", get(handle_spa_ddos))
         .route("/logs", get(handle_spa_logs))
         .route("/settings", get(handle_spa_settings))
+        // `/more` 是底部 TabBar 的一级页（AppShell 的「更多」），
+        // 漏掉它会让该路径落到认证组之后的 404：用户在 /more 上刷新即白屏。
+        .route("/more", get(handle_spa_more))
         // 前端静态资源（无认证）：同样是构建产物、不含任何运行时数据。
         // 若放进认证组，浏览器加载子资源时会因 401 失败，导致配了凭据后页面反而打不开。
         .route("/static/*path", get(handle_static))
@@ -102,12 +105,12 @@ pub fn build_router(api_state: Option<std::sync::Arc<crate::api::routes::ApiStat
         .layer(middleware::from_fn(security_headers_middleware))
 }
 
-/// 尚未迁入 `api` 层的需认证路由（23 条）。
+/// 尚未迁入 `api` 层的需认证路由。
 ///
 /// 这些 handler 仍在本文件；每次迁入一批，就把对应的 `.route(...)` 从这里删掉、
 /// 加到 [`crate::api::router::protected_routes`]。两条清单加起来必须恰好是契约里
-/// 需认证的路由全集（当前 18 + 23 = 41，契约合计 53 条、其中 12 条无认证），
-/// `verify_http.py` 的 `check_routes` 会同时读两个文件核对。
+/// 需认证的路由全集，`verify_http.py` 的 `check_routes` 会同时读两个文件核对；
+/// 具体条数以 `contract/http.fwidl` 与那里的校验输出为准，此处不复述。
 fn legacy_protected_routes() -> Router {
     // 未配置 metrics_username/password 时 middleware 跳过（与现有 API 一致）；
     // 已配置时 SSE 与其它 API 同样要求 Basic Auth（修复无认证泄露）。
@@ -194,7 +197,8 @@ async fn security_headers_middleware(
         || path == "/jails"
         || path == "/ddos"
         || path == "/logs"
-        || path == "/settings";
+        || path == "/settings"
+        || path == "/more";
 
     let mut response = next.run(request).await;
 
@@ -266,6 +270,10 @@ async fn handle_spa_logs() -> Html<String> {
 }
 
 async fn handle_spa_settings() -> Html<String> {
+    Html(web_ui::render_dashboard())
+}
+
+async fn handle_spa_more() -> Html<String> {
     Html(web_ui::render_dashboard())
 }
 

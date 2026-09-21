@@ -29,6 +29,8 @@ export const ROUTES = {
   GET_LOGS: "/logs",
   /** `GET /settings` */
   GET_SETTINGS: "/settings",
+  /** `GET /more` */
+  GET_MORE: "/more",
   /** `GET /static/*path` */
   GET_STATIC_PATH: "/static/*path",
   /** `GET /sw.js` */

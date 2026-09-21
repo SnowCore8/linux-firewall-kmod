@@ -163,6 +163,7 @@ static AUTH_STATE: AuthFailureState = AuthFailureState::new();
 // ============================================================================
 #[cfg(test)]
 mod tests {
+    use super::auth::access_token_from_query;
     use super::auth::check_basic_auth;
     use super::auth::constant_time_compare;
     use super::metrics::generate_metrics;
@@ -218,6 +219,42 @@ mod tests {
         // wrong:password → d3Jvbmc6cGFzc3dvcmQ
         let result = check_basic_auth(Some("Basic d3Jvbmc6cGFzc3dvcmQ"), "admin", "secret");
         assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn access_token_is_percent_decoded() {
+        // 前端用 encodeURIComponent 编码 base64 令牌：`=` 变 `%3D`，`+` 变 `%2B`。
+        // 不还原就会把 `%3D%3D` 当令牌内容，base64 解出乱码 → SSE 永久 401。
+        assert_eq!(
+            access_token_from_query(Some("access_token=ZTJlOmUyZS1wYXNzd29yZA%3D%3D")).as_deref(),
+            Some("ZTJlOmUyZS1wYXNzd29yZA==")
+        );
+    }
+
+    #[test]
+    fn access_token_keeps_plus_as_a_base64_character() {
+        // `+` 是 base64 字母表成员：这里必须是百分号解码（`%2B`→`+`），
+        // 不能按表单规则把裸 `+` 当空格，否则同一串会解出另一个令牌。
+        assert_eq!(
+            access_token_from_query(Some("access_token=a%2Bb")).as_deref(),
+            Some("a+b")
+        );
+        assert_eq!(
+            access_token_from_query(Some("access_token=a+b")).as_deref(),
+            Some("a+b")
+        );
+    }
+
+    #[test]
+    fn access_token_ignores_other_query_keys() {
+        assert_eq!(
+            access_token_from_query(Some("page=1&access_token=abc&sort=ip")).as_deref(),
+            Some("abc")
+        );
+        // 无令牌 / 空值 / 无 query 一律返回 None（调用方据此不发 Authorization 头）
+        assert_eq!(access_token_from_query(Some("page=1")), None);
+        assert_eq!(access_token_from_query(Some("access_token=")), None);
+        assert_eq!(access_token_from_query(None), None);
     }
 
     #[test]
