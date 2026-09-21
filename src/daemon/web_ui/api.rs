@@ -425,7 +425,7 @@ pub fn update_webui_config(req: UpdateConfigRequest) -> Result<WebuiConfigRespon
     }
 
     // 同步 DDoS 检测开关到内核
-    crate::netlink::write_detection_switches((&config).into());
+    crate::config_sync::write_detection_switches((&config).into());
 
     // 同步 WebUI 中的 DDoS 相关字段到 DdosConfig，确保 SIGHUP 重载不覆盖 API 变更
     sync_webui_to_ddos_config(&config);
@@ -464,22 +464,22 @@ pub fn update_webui_config(req: UpdateConfigRequest) -> Result<WebuiConfigRespon
 
 /// 同步协议专项阈值到内核模块
 ///
-/// 实际下发由 [`crate::netlink::sync_protocol_thresholds`] 完成（单入口）。
+/// 实际下发由 [`crate::config_sync::sync_protocol_thresholds`] 完成（单入口）。
 /// 本函数只负责把 web_ui 侧的失败语义转换成本模块的 `Result<(), String>`。
 ///
 /// # 返回
-/// - `Ok(())` — 同步成功或 netlink 未初始化（静默跳过）
-/// - `Err(String)` — netlink 存在但发送失败
+/// - `Ok(())` — 同步成功或内核链路未就绪（静默跳过）
+/// - `Err(String)` — 链路存在但发送失败
 fn sync_protocol_thresholds_to_kernel(config: &crate::types::WebuiConfig) -> Result<(), String> {
-    match crate::netlink::sync_protocol_thresholds(
-        crate::netlink::ProtocolThresholds::from(config),
+    match crate::config_sync::sync_protocol_thresholds(
+        crate::config_sync::ProtocolThresholds::from(config),
         None,
     ) {
-        Ok(crate::netlink::SyncOutcome::Skipped) => {
-            // netlink 未初始化时静默跳过（守护进程启动初期常见）
+        Ok(crate::config_sync::SyncOutcome::Skipped) => {
+            // 内核链路未就绪时静默跳过（守护进程启动初期常见）
             Ok(())
         }
-        Ok(crate::netlink::SyncOutcome::Sent) => {
+        Ok(crate::config_sync::SyncOutcome::Sent) => {
             crate::logger::info!(
                 crate::logger::get(),
                 "协议阈值已同步到内核";
@@ -527,7 +527,7 @@ fn sync_webui_to_ddos_config(webui: &crate::types::WebuiConfig) {
 
 /// 获取 DDoS 速率数据
 ///
-/// 从全局 `RATE_CACHE` 读取，该缓存由 netlink 接收线程定期更新。
+/// 从全局 `RATE_CACHE` 读取，该缓存由内核接收执行体更新。
 /// 程序内部走内存（`/proc/firewall/*` 是用户操作接口）。
 pub fn get_ddos_rates() -> Vec<RateResponse> {
     crate::types::RATE_CACHE

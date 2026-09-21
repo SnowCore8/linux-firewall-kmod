@@ -14,15 +14,25 @@
 //!
 //! 另注：`nlmsghdr` 的 `nlmsg_len`/`nlmsg_type`/`nlmsg_seq`/`nlmsg_pid` 都是
 //! **宿主字节序**（netlink 惯例），与自定义载荷里的大端字段不同。
+//!
+//! # 四枚 netlink 计数由本层维护
+//!
+//! `DAEMON_STATS` 的 `netlink_messages_sent` / `netlink_messages_received` /
+//! `netlink_send_errors` / `netlink_recv_errors` 是 Prometheus 与
+//! `/api/v1/stats` 的对外读数。旧 `netlink/` 层退役后，真正收发报文的只有本模块，
+//! 故这四枚计数移到这里：在**收发系统调用旁**计数，才能如实反映「内核链路是否
+//! 在通」，而不是反映某个中间层被调用了多少次。
 
 use std::fmt;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use nix::libc;
 
 use crate::runtime::Shutdown;
+use crate::types::DAEMON_STATS;
 
 /// Netlink 协议号：契约固定为 `NETLINK_USERSOCK`。
 const NETLINK_USERSOCK: i32 = 2;
@@ -274,14 +284,26 @@ impl Transport {
             )
         };
         if n < 0 {
+            // 发送失败计入 netlink_send_errors（Prometheus 与 /api/v1/stats 读它）。
+            DAEMON_STATS
+                .netlink_send_errors
+                .fetch_add(1, Ordering::Relaxed);
             return Err(io::Error::last_os_error());
         }
         if n as usize != buf.len() {
+            // 半条数据报同样属发送错误：内核收到的是残包，不会产生回复。
+            DAEMON_STATS
+                .netlink_send_errors
+                .fetch_add(1, Ordering::Relaxed);
             return Err(io::Error::other(format!(
                 "netlink 报文只写出 {n}/{} 字节",
                 buf.len()
             )));
         }
+        // 整条数据报已交给内核，计一次发送。
+        DAEMON_STATS
+            .netlink_messages_sent
+            .fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
@@ -367,17 +389,31 @@ impl Transport {
             let err = io::Error::last_os_error();
             return match err.kind() {
                 io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted => Ok(None),
-                _ => Err(RecvError::Failed(err)),
+                _ => {
+                    // 真实接收错误（非「暂时无数据」）才计数，否则空闲轮询会把
+                    // 计数器刷成噪声。
+                    DAEMON_STATS
+                        .netlink_recv_errors
+                        .fetch_add(1, Ordering::Relaxed);
+                    Err(RecvError::Failed(err))
+                }
             };
         }
         let received = n as usize;
         if received > buf.len() {
+            // 数据报被截断：内容不完整，不能交给上层解码。
+            DAEMON_STATS
+                .netlink_recv_errors
+                .fetch_add(1, Ordering::Relaxed);
             return Err(RecvError::Truncated {
                 actual: received,
                 buffer: buf.len(),
             });
         }
         if received < NLMSGHDR_LEN {
+            DAEMON_STATS
+                .netlink_recv_errors
+                .fetch_add(1, Ordering::Relaxed);
             return Err(RecvError::Malformed {
                 nlmsg_len: 0,
                 received,
@@ -387,12 +423,20 @@ impl Transport {
         // 长度取自 nlmsghdr 自身（宿主字节序），与内核 fw_nl_recv_msg 的取值方式一致。
         let nlmsg_len = u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
         if nlmsg_len < NLMSGHDR_LEN || nlmsg_len > received {
+            DAEMON_STATS
+                .netlink_recv_errors
+                .fetch_add(1, Ordering::Relaxed);
             return Err(RecvError::Malformed {
                 nlmsg_len,
                 received,
             });
         }
 
+        // 一条结构完整的报文已从 socket 取出，计一次接收。注意此处的检查只到
+        // nlmsghdr 一层：载荷的自定义头校验由上层（`kernel::codec`）负责。
+        DAEMON_STATS
+            .netlink_messages_received
+            .fetch_add(1, Ordering::Relaxed);
         Ok(Some(Datagram {
             portid: addr.nl_pid,
             payload: buf[NLMSGHDR_LEN..nlmsg_len].to_vec(),

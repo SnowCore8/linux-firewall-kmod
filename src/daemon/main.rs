@@ -12,7 +12,7 @@
 //! 8. **inotify 启动** ([`file_monitor::setup_inotify`])
 //! 9. **Metrics 导出器启动** ([`http_exporter::start_http_exporter`])
 //! 10. **主循环** ([`file_monitor::monitor_loop`]):阻塞直到 `running=false`
-//! 11. **清理** ([`cleanup`]):停 HTTP → 停 netlink 接收线程 → 关 inotify → 关 db → 删 PID 文件
+//! 11. **清理** ([`cleanup`]):停 HTTP → 停 runtime 执行体（含内核接收执行体）→ 关 inotify → 关 db → 删 PID 文件
 //!
 //! # 关键不变量
 //!
@@ -46,6 +46,7 @@ use firewall_daemon::ban;
 use firewall_daemon::config;
 use firewall_daemon::config_reloader;
 use firewall_daemon::daemonizer::daemonize_process;
+use firewall_daemon::decision::DdosDecisionEngine;
 use firewall_daemon::file_monitor;
 use firewall_daemon::history_snapshot;
 use firewall_daemon::http_exporter;
@@ -54,7 +55,6 @@ use firewall_daemon::jail;
 use firewall_daemon::kernel;
 use firewall_daemon::kernel_poll;
 use firewall_daemon::logger;
-use firewall_daemon::netlink::DdosDecisionEngine;
 use firewall_daemon::runtime::{self, Shutdown, Supervisor};
 use firewall_daemon::runtime_status;
 use firewall_daemon::signals::{setup_signals, GLOBAL_RELOAD, GLOBAL_RUNNING};

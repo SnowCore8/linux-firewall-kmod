@@ -18,12 +18,17 @@
 //! 本模块不决定「谁的值更权威」——那由调用方语境决定（热重载读 YAML，API 读运行期
 //! 配置）；这里只负责把调用方给的值正确地写进内核。
 //!
+//! 本模块原在 `netlink/config_sync.rs`，随旧 netlink 层退役迁到顶层：它依赖的只有
+//! 新链路（[`crate::kernel::client::Client::set_config`]）与 sysfs，没有任何旧 netlink
+//! 类型，故不随旧层一起删除。
+//!
 //! # 下发通道（结构问题 L）
 //!
 //! 旧实现有两条并行的 `SetConfig` 构造路径：本模块一条，`file_monitor/monitor_loop.rs`
 //! 的基线下发另一条（自建 `ConfigUpdate`，绕开这里）。现在两条都收敛到
 //! [`crate::kernel::client::Client::set_config`]——字段集合、字节序、采纳/拒绝位图的
-//! 处理只有一处实现。本模块是周期任务之外**唯一**的内核配置写入入口。
+//! 处理只有一处实现。周期任务（[`crate::kernel_poll`]）与本模块共同构成内核配置的
+//! 全部写入入口。
 
 use crate::contract::config_flags;
 use crate::kernel::codec::SetConfig;

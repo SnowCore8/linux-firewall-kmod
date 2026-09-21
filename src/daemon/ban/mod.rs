@@ -4,6 +4,13 @@
 //!
 //! - `ip_validation`: IP 合法性校验
 //! - `operations`: 封禁/解封操作（通过 netlink 与内核通信）
+//!
+//! # 可信 IP 的 CIDR 归一
+//!
+//! 本模块的入口收的是用户写的文本（YAML 的 `trusted_ips`、HTTP 的 `cidr` 字段），
+//! 而内核白名单表存的是**网络地址**且只做整体比较（`fw_wl.c` 的 `fw_wl_find_locked`）。
+//! 归一因此只能有一处：[`CidrKey`]。它同时是本地缓存的键类型与 HTTP 响应的 `cidr`
+//! 取值，所以「下发内核的地址」与「界面上看到的键」必然一致。
 
 // 模块声明
 mod ip_validation;
@@ -12,6 +19,8 @@ mod operations;
 // Re-export 所有公共类型和函数
 pub use ip_validation::{is_internal_ip, validate_ip, validate_ipv4, ValidatedIp};
 pub use operations::{ban_ip, ban_ip_permanent, execute_ban_action, unban_ip, unban_permanent_ip};
+
+use crate::state::CidrKey;
 
 // ============================================================================
 // 可信 IP 白名单初始化
@@ -38,7 +47,7 @@ pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
         }
     };
     for ip in trusted_ips {
-        let (ip_addr, prefix_len) = match parse_cidr(ip) {
+        let key = match CidrKey::parse(ip) {
             Ok(v) => v,
             Err(e) => {
                 crate::logger::warn!(
@@ -52,12 +61,14 @@ pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
             }
         };
         // 检查本地缓存：已存在则跳过，避免重复添加导致计数器膨胀
-        let cidr_key = build_cidr_key(&ip_addr, prefix_len);
-        if crate::types::WHITELIST_CACHE.read().contains_key(&cidr_key) {
+        if crate::types::WHITELIST_CACHE
+            .read()
+            .contains_key(key.as_str())
+        {
             continue;
         }
         // 内核侧白名单键不含设备维度（旧 `send_add_whitelist` 亦传空串），故这里传 `""`。
-        if let Err(e) = add_whitelist_to_kernel(&client, &ip_addr, prefix_len) {
+        if let Err(e) = add_whitelist_to_kernel(&client, &key) {
             crate::logger::warn!(
                 crate::logger::get(),
                 "内核添加白名单失败";
@@ -69,10 +80,11 @@ pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
             crate::logger::info!(
                 crate::logger::get(),
                 "已添加可信 IP 到白名单";
-                "ip" => %ip
+                "ip" => %ip,
+                "cidr" => key.as_str()
             );
             success_count += 1;
-            append_whitelist_cache(&ip_addr, prefix_len);
+            append_whitelist_cache(&key);
         }
     }
     if success_count > 0 {
@@ -83,31 +95,37 @@ pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
     failed
 }
 
-/// 把「字符串地址 + 前缀」投递给内核白名单。
+/// 把一条已归一的键投递给内核白名单。
 ///
-/// 单一落点：`init_trusted_ips` 与 `remove_trusted_ips` 的地址解析错误必须处理成同一形状，
-/// 否则一侧报错另一侧静默会把「移除失败」伪装成成功。
+/// 下发的是 [`CidrKey`] 里的**网络地址 + 前缀**：内核不做主机位归一就直接入表，
+/// 若下发子网内任意地址，同一条子网会被写成两条表项（且按归一地址 remove 查不到）。
 fn add_whitelist_to_kernel(
     client: &crate::kernel::client::Client,
-    ip: &str,
-    prefix_len: u8,
+    key: &CidrKey,
 ) -> Result<(), String> {
-    let addr: std::net::IpAddr = ip.parse().map_err(|e| format!("无法解析地址 {ip}: {e}"))?;
     client
-        .add_whitelist(addr, prefix_len, "", crate::kernel::REQUEST_TIMEOUT)
+        .add_whitelist(
+            key.addr(),
+            key.prefix_len(),
+            "",
+            crate::kernel::REQUEST_TIMEOUT,
+        )
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
 
-/// 从内核白名单移除「字符串地址 + 前缀」。
+/// 从内核白名单移除一条已归一的键。
 fn remove_whitelist_from_kernel(
     client: &crate::kernel::client::Client,
-    ip: &str,
-    prefix_len: u8,
+    key: &CidrKey,
 ) -> Result<(), String> {
-    let addr: std::net::IpAddr = ip.parse().map_err(|e| format!("无法解析地址 {ip}: {e}"))?;
     client
-        .remove_whitelist(addr, prefix_len, "", crate::kernel::REQUEST_TIMEOUT)
+        .remove_whitelist(
+            key.addr(),
+            key.prefix_len(),
+            "",
+            crate::kernel::REQUEST_TIMEOUT,
+        )
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
@@ -116,28 +134,16 @@ fn remove_whitelist_from_kernel(
 ///
 /// 由于 ListWhitelistResponse 是请求-响应模式，启动后可能因 race condition 错过，
 /// 导致缓存为空。本函数保证 init_trusted_ips / remove_trusted_ips 后缓存立即一致。
-fn append_whitelist_cache(ip: &str, prefix_len: u8) {
-    let cidr = build_cidr_key(ip, prefix_len);
+fn append_whitelist_cache(key: &CidrKey) {
     // HashMap insert 天然幂等，重复写入即覆盖
     crate::types::WHITELIST_CACHE.write().insert(
-        cidr.clone(),
+        key.as_str().to_string(),
         crate::types::WhitelistEntry {
-            cidr: cidr.clone(),
+            cidr: key.as_str().to_string(),
             device: String::new(),
         },
     );
-    crate::state::compose::mirror_whitelist_insert_text(&cidr, "");
-}
-
-/// 构建 CIDR 缓存键（与 WHITELIST_CACHE 的 key 格式一致）
-fn build_cidr_key(ip: &str, prefix_len: u8) -> String {
-    if ip.contains(':') {
-        format!("{}/{}", ip, if prefix_len == 0 { 128 } else { prefix_len })
-    } else if prefix_len == 32 || prefix_len == 0 {
-        ip.to_string()
-    } else {
-        format!("{}/{}", ip, prefix_len)
-    }
+    crate::state::compose::mirror_whitelist_insert(key.clone(), "");
 }
 
 /// 从内核白名单移除可信 IP。
@@ -161,7 +167,7 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
         }
     };
     for ip in trusted_ips {
-        let (ip_addr, prefix_len) = match parse_cidr(ip) {
+        let key = match CidrKey::parse(ip) {
             Ok(v) => v,
             Err(e) => {
                 crate::logger::warn!(
@@ -175,11 +181,13 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
             }
         };
         // 检查本地缓存：不存在则跳过，避免移除不存在的条目导致计数器下溢
-        let cidr_key = build_cidr_key(&ip_addr, prefix_len);
-        if !crate::types::WHITELIST_CACHE.read().contains_key(&cidr_key) {
+        if !crate::types::WHITELIST_CACHE
+            .read()
+            .contains_key(key.as_str())
+        {
             continue;
         }
-        if let Err(e) = remove_whitelist_from_kernel(&client, &ip_addr, prefix_len) {
+        if let Err(e) = remove_whitelist_from_kernel(&client, &key) {
             crate::logger::warn!(
                 crate::logger::get(),
                 "内核移除白名单失败";
@@ -191,10 +199,11 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
             crate::logger::info!(
                 crate::logger::get(),
                 "已从白名单移除可信 IP";
-                "ip" => %ip
+                "ip" => %ip,
+                "cidr" => key.as_str()
             );
             success_count += 1;
-            remove_whitelist_cache(&ip_addr, prefix_len);
+            remove_whitelist_cache(&key);
         }
     }
     if success_count > 0 {
@@ -206,36 +215,9 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
 }
 
 /// 从 WHITELIST_CACHE 移除条目
-fn remove_whitelist_cache(ip: &str, prefix_len: u8) {
-    let cidr = build_cidr_key(ip, prefix_len);
-    crate::types::WHITELIST_CACHE.write().remove(&cidr);
-    crate::state::compose::mirror_whitelist_remove_text(&cidr);
-}
-
-/// 解析 CIDR 格式，返回 (IP地址, 前缀长度)。
-///
-/// 无效前缀（如 `/abc`、`/256`）返回错误而非静默使用默认值。
-fn parse_cidr(ip: &str) -> anyhow::Result<(String, u8)> {
-    if let Some(pos) = ip.find('/') {
-        let ip_addr = &ip[..pos];
-        let max_prefix = if ip.contains(':') { 128u8 } else { 32u8 };
-        let prefix_len: u8 = ip[pos + 1..]
-            .parse()
-            .map_err(|e| anyhow::anyhow!("无效 CIDR 前缀 '{}': {}", &ip[pos + 1..], e))?;
-        if prefix_len > max_prefix {
-            anyhow::bail!(
-                "CIDR 前缀 {} 超出 {} 地址范围上限 /{}",
-                prefix_len,
-                if max_prefix == 128 { "IPv6" } else { "IPv4" },
-                max_prefix
-            );
-        }
-        Ok((ip_addr.to_string(), prefix_len))
-    } else if ip.contains(':') {
-        Ok((ip.to_string(), 128))
-    } else {
-        Ok((ip.to_string(), 32))
-    }
+fn remove_whitelist_cache(key: &CidrKey) {
+    crate::types::WHITELIST_CACHE.write().remove(key.as_str());
+    crate::state::compose::mirror_whitelist_remove(key);
 }
 
 // ============================================================================

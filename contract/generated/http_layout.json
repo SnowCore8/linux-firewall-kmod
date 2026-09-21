@@ -70,7 +70,7 @@
     "请求 PaginationParams: 3 个字段",
     "响应 SseStreamStatus: 3 个字段",
     "响应 SseStatusResponse: 2 个字段",
-    "缺陷记录: 12 条（已修 5 / 有意保留 1 / 未修 6；由 verify_*.py 到源码核对锚点）"
+    "缺陷记录: 12 条（已修 6 / 有意保留 1 / 未修 5；由 verify_*.py 到源码核对锚点）"
   ],
   "envelope": {
     "name": "ApiResponse",
@@ -2789,12 +2789,12 @@
     {
       "name": "HTTP_WHITELIST_KEY_DIVERGENCE",
       "severity": "medium",
-      "status": "open",
+      "status": "fixed",
       "where": "src/daemon/ban/mod.rs:fn build_cidr_key",
-      "fix": "",
+      "fix": "src/daemon/state/whitelist.rs:pub struct Whitelist",
       "reason": "",
       "resolution": "键的规范化只有一处（state/cidr.rs 的 CidrKey）：网络地址（主机位清零）+ 恒带 /prefix（裸地址即 /32、/128）。修复回执记在 state/whitelist.rs 的 CidrKey 键类型与 cidr.rs 的规范化测试上（本缺陷在旧键规则退役时随 where 一并消失）。",
-      "text": "白名单的键有三套互不相同的规则：LIST 响应恒带 /prefix；事件路径对 /32·/128·/0 存裸地址；build_cidr_key 又把 IPv6 /0 归一成 /128。同一子网因此会拿到两个键，LIST 的整表覆盖打不中事件插入的那一条，表现为「白名单里看到两条同一个网段」或「删了还在」。三套规则分别位于 ban/mod.rs 的 build_cidr_key、netlink/handlers.rs 的 LIST 拼键与事件路径拼键；三处都是旧实现，随该模块退役一并消失"
+      "text": "白名单的键曾有三套互不相同的规则：LIST 响应恒带 /prefix；事件路径对 /32·/128·/0 存裸地址；build_cidr_key 又把 IPv6 /0 归一成 /128。同一子网因此会拿到两个键，LIST 的整表覆盖打不中事件插入的那一条，表现为「白名单里看到两条同一个网段」或「删了还在」。三套规则分别位于 ban/mod.rs 的 build_cidr_key、netlink/handlers.rs 的 LIST 拼键与事件路径拼键；三处已在同一批退役中全部删除，写入路径（`ban/mod.rs` 的可信 IP 初始化、`web_ui/ban_ops.rs` 的 HTTP 增删）统一经 CidrKey 构造"
     }
   ]
 }

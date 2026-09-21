@@ -94,7 +94,7 @@ pub fn get_global_webui_config() -> Option<crate::types::WebuiConfig> {
 // 全局 DDoS 决策引擎引用（供配置热重载使用）
 // ============================================================================
 
-use crate::netlink::DdosDecisionEngine;
+use crate::decision::DdosDecisionEngine;
 use std::sync::Arc;
 
 /// 全局决策引擎引用（供配置热重载时同步到内核）

@@ -195,24 +195,6 @@ pub fn mirror_whitelist_remove(cidr: &super::cidr::CidrKey) {
     }
 }
 
-/// 镜像一次白名单「单条新增」，键为旧路径构造的 CIDR 文本。
-///
-/// 给 netlink 事件路径与 `ban` 模块用：它们手里的键是 `String`（三处规则不一的
-/// 产物），这里统一交给 [`super::cidr::CidrKey::parse`] 归一化。解析失败的键
-/// **跳过**——见 [`whitelist_pairs`] 的说明。
-pub fn mirror_whitelist_insert_text(cidr: &str, device: &str) {
-    if let Ok(key) = super::cidr::CidrKey::parse(cidr) {
-        mirror_whitelist_insert(key, device);
-    }
-}
-
-/// 镜像一次白名单「单条移除」，键为旧路径构造的 CIDR 文本。
-pub fn mirror_whitelist_remove_text(cidr: &str) {
-    if let Ok(key) = super::cidr::CidrKey::parse(cidr) {
-        mirror_whitelist_remove(&key);
-    }
-}
-
 /// 镜像一轮速率样本（内核 `ListRatesResponse`，覆盖式）。
 pub fn mirror_rates(sample: super::RateSample) {
     if let Some(state) = GLOBAL_STATE.get() {
@@ -352,7 +334,7 @@ pub fn purge_expired_bans(now: i64) {
 /// 这 9 枚计数器（`LinesParsed`/`IpsExtracted`/`RegexMatches`/`FailedAttempts`/
 /// `IpsBanned`/`TotalUnbans`/`PacketsDropped`/`PacketsAccepted`/
 /// `NetlinkMessagesReceived`）的旧写入点分散在行处理热路径、正则匹配热路径与
-/// netlink 接收线程上。逐个改写入点会把热路径与「过渡期镜像」耦合起来，且每行
+/// 内核接收执行体上。逐个改写入点会把热路径与「过渡期镜像」耦合起来，且每行
 /// 日志、每个数据包都要多付一次原子写。周期镜像把这些写入点全部保持原样：
 ///
 /// - 代价固定为「每周期 9 次原子 load + 9 次原子 store」，与流量无关；

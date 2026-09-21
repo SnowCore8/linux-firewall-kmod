@@ -14,7 +14,6 @@
 use std::sync::Arc;
 
 use crate::state::hub::Domain;
-use crate::state::Counter;
 
 use super::routes::ApiState;
 use super::sse::DomainRenderer;
@@ -40,7 +39,11 @@ impl StateRenderer {
         let trends = self.api.history.trends();
         let inputs = self.api.history.threat_inputs();
         let threshold = self.api.config.webui().rate_warning_pps;
-        let ddos_events = stats.get(Counter::NetlinkMessagesReceived);
+        // DDoS 事件累计数与 `/api/v1/stats` 取同一权威来源（内核计数器），
+        // 保证 SSE 与 REST 两条读路径不会给出不同的数。
+        let ddos_events = crate::types::DDOS_STATS
+            .events_detected
+            .load(std::sync::atomic::Ordering::Relaxed);
         let threat = views::threat_level(
             bans.len() as u64,
             ddos_events,

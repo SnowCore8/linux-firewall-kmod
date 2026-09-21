@@ -2,9 +2,10 @@
 //!
 //! # 为什么单独成模块
 //!
-//! 旧实现有三处各自构造 CIDR 缓存键，规则互不相同：
+//! 旧实现有三处各自构造 CIDR 缓存键，规则互不相同（三处均已随旧 `netlink/` 层与
+//! `ban/mod.rs::build_cidr_key` 退役删除，下表留作缺陷 M 的来龙去脉）：
 //!
-//! | 位置 | 规则 |
+//! | 位置（已删） | 规则 |
 //! |------|------|
 //! | `netlink/handlers.rs` LIST 响应 | 恒拼 `"{ip}/{prefix}"` |
 //! | `netlink/handlers.rs` 状态变更事件 | `/32`、`/128`、`/0` 时**不拼**前缀 |
@@ -161,6 +162,33 @@ impl CidrKey {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// 解析出「网络地址」部分。
+    ///
+    /// 组合以 `/` 分隔，两侧必然存在且已归一化，故不会失败；解析不出时回退到
+    /// `0.0.0.0`，让调用方拿到一个总能投递的地址而不是 panic。
+    #[must_use]
+    pub fn addr(&self) -> IpAddr {
+        let (addr, _) = self.0.split_once('/').unwrap_or((self.0.as_str(), ""));
+        addr.parse().unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+    }
+
+    /// 解析出前缀长度。
+    ///
+    /// 取值只经 [`Self::new`] 写入，必为 0..=32（IPv4）或 0..=128（IPv6），
+    /// 故解析失败只可能是内部不变量被破坏；回退到该地址族的全长前缀。
+    #[must_use]
+    pub fn prefix_len(&self) -> u8 {
+        let fallback = if matches!(self.addr(), IpAddr::V6(_)) {
+            IPV6_MAX_PREFIX
+        } else {
+            IPV4_MAX_PREFIX
+        };
+        self.0
+            .split_once('/')
+            .and_then(|(_, prefix)| prefix.parse::<u8>().ok())
+            .unwrap_or(fallback)
     }
 }
 
@@ -358,5 +386,28 @@ mod tests {
         let key = CidrKey::parse("192.168.1.7").expect("可解析");
         assert!(key.as_str().contains('/'));
         assert_eq!(key.to_string(), key.as_str());
+    }
+
+    #[test]
+    fn addr_and_prefix_len_round_trip_through_the_key() {
+        // 内核白名单写入要的是「网络地址 + 前缀」而不是子网内任意地址：
+        // 内核把这些值直接入表且只做整体比较（fw_wl.c 的 fw_wl_find_locked）。
+        let key = CidrKey::parse("10.0.0.5/24").expect("可解析");
+        assert_eq!(key.addr(), ip("10.0.0.0"));
+        assert_eq!(key.prefix_len(), 24);
+
+        let key = CidrKey::parse("2001:db8::1/64").expect("可解析");
+        assert_eq!(key.addr(), ip("2001:db8::"));
+        assert_eq!(key.prefix_len(), 64);
+
+        // 裸地址按全长前缀处理，取出的地址即原地址。
+        let key = CidrKey::parse("192.168.1.7").expect("可解析");
+        assert_eq!(key.addr(), ip("192.168.1.7"));
+        assert_eq!(key.prefix_len(), 32);
+
+        // 默认路由的前缀长度为 0，地址为族内全零。
+        let key = CidrKey::parse("::/0").expect("可解析");
+        assert_eq!(key.addr(), ip("::"));
+        assert_eq!(key.prefix_len(), 0);
     }
 }

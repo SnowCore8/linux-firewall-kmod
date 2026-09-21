@@ -44,8 +44,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::contract;
+use crate::decision::DdosDecisionEngine;
 use crate::kernel::codec::{self, Incoming};
-use crate::netlink::DdosDecisionEngine;
 use crate::runtime::{Receiver, RecvTimeoutError, Shutdown};
 use crate::state::compose;
 use crate::state::CidrKey;

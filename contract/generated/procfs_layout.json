@@ -215,7 +215,7 @@
     },
     "whitelist": {
       "entries": 65535,
-      "note": "条目上限由模块参数 fw_max_whitelist_entries 控制（默认 65535），插入前在桶锁内检查；旧实现「跳过容量检查（按需扩展）」已废除。daemon 侧 netlink/responses.rs 的 MAX_WHITELIST_ENTRIES=64 是回包长度校验，与本上限无关",
+      "note": "条目上限由模块参数 fw_max_whitelist_entries 控制（默认 65535），插入前在桶锁内检查；旧实现「跳过容量检查（按需扩展）」已废除。daemon 侧旧 netlink/responses.rs 曾有一个 MAX_WHITELIST_ENTRIES=64 的回包长度校验常量，与本上限无关——该常量已随旧 netlink 层退役删除，白名单回包现按契约分页",
       "where": "src/kernel-module/fw_wl.c:fw_info.max_wl_entries"
     },
     "rates": {

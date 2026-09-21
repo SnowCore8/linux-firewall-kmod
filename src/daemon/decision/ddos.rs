@@ -2,6 +2,10 @@
 //!
 //! 接收内核推送的 DDoS 事件，记录日志和统计。
 //! 内核已封禁 IP，守护进程不重复封禁。
+//!
+//! 本模块不发任何报文：事件由内核主动推送、封禁也由内核完成，这里只把「发生了
+//! 什么」记进 [`DDOS_STATS`] 与日志。它原在 `netlink/decision.rs`，随旧 netlink
+//! 层退役迁到判定层（见 [`crate::decision`] 的模块说明）。
 
 use std::collections::HashMap;
 use std::net::IpAddr;

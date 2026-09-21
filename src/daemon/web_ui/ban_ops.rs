@@ -435,82 +435,48 @@ pub fn batch_ban(ips: Vec<String>) -> Result<BatchOperationResponse, String> {
 }
 
 /// 添加白名单（POST /api/v1/whitelist）
+///
+/// 校验与归一化只有一处：[`crate::state::CidrKey::parse`]（见 `state/cidr.rs` 的说明）。
+/// 响应里的 `cidr` 是**归一化后**的键，调用方据此回传
+/// `DELETE /api/v1/whitelist/:cidr` 即可命中同一张表项——旧实现返回输入原样，
+/// `10.0.0.5/24` 与 `10.0.0.0/24` 会生成两个键，删一个另一个还在。
 pub fn create_whitelist(req: CreateWhitelistRequest) -> Result<WhitelistOperationResponse, String> {
-    let cidr = req.cidr.trim();
-    if cidr.is_empty() {
-        return Err("CIDR 不能为空".to_string());
-    }
+    // 错误文本统一来自 CidrError（空输入 / 地址非法 / 前缀非法 / 前缀超上限）。
+    let key = crate::state::CidrKey::parse(req.cidr.trim()).map_err(|e| e.to_string())?;
 
-    // 验证 CIDR 格式：支持 "ip/prefix" 或纯 "ip"
-    if let Some((ip_part, prefix_str)) = cidr.split_once('/') {
-        if ip_part.parse::<std::net::IpAddr>().is_err() {
-            return Err(format!("无效的 IP 地址: {}", ip_part));
-        }
-        let prefix: u8 = prefix_str
-            .parse()
-            .map_err(|_| format!("无效的前缀长度: {}", prefix_str))?;
-        let max_prefix = if ip_part.parse::<std::net::Ipv4Addr>().is_ok() {
-            32
-        } else {
-            128
-        };
-        if prefix > max_prefix {
-            return Err(format!(
-                "前缀长度 {} 超出范围（最大 {}）",
-                prefix, max_prefix
-            ));
-        }
-    } else if cidr.parse::<std::net::IpAddr>().is_err() {
-        return Err(format!("无效的 IP/CIDR 格式: {}", cidr));
-    }
-
-    let failed = crate::ban::init_trusted_ips(&[cidr.to_string()]);
+    let failed = crate::ban::init_trusted_ips(&[key.to_string()]);
     if !failed.is_empty() {
         return Err(format!("添加白名单失败: {}", failed.join(", ")));
     }
 
     Ok(WhitelistOperationResponse {
-        cidr: cidr.to_string(),
+        cidr: key.to_string(),
         action: "added".to_string(),
     })
 }
 
 /// 移除白名单（DELETE /api/v1/whitelist/:cidr）
+///
+/// 与 [`create_whitelist`] 对称：入参经 `CidrKey::parse` 归一化后再查本地缓存与
+/// 内核表，故「加的时候用 `/24` 写、删的时候用裸地址」这类写法差异不再导致删不掉。
 pub fn delete_whitelist(cidr: &str) -> Result<WhitelistOperationResponse, String> {
-    let cidr = cidr.trim();
-    if cidr.is_empty() {
-        return Err("CIDR 不能为空".to_string());
-    }
-    // 校验 CIDR 格式：IP 或 IP/prefix
-    if let Some((ip_part, prefix_str)) = cidr.split_once('/') {
-        if ip_part.parse::<std::net::IpAddr>().is_err() {
-            return Err(format!("无效的 IP 地址: {ip_part}"));
-        }
-        let prefix: u32 = prefix_str
-            .parse()
-            .map_err(|_| format!("无效的前缀长度: {prefix_str}"))?;
-        let max_prefix = if ip_part.contains(':') { 128 } else { 32 };
-        if prefix > max_prefix {
-            return Err(format!("前缀 /{prefix} 超出范围 (最大 /{max_prefix})"));
-        }
-    } else if cidr.parse::<std::net::IpAddr>().is_err() {
-        return Err(format!("无效的 IP/CIDR 格式: {cidr}"));
-    }
+    let key = crate::state::CidrKey::parse(cidr.trim()).map_err(|e| e.to_string())?;
 
-    let failed = crate::ban::remove_trusted_ips(&[cidr.to_string()]);
+    let failed = crate::ban::remove_trusted_ips(&[key.to_string()]);
     if !failed.is_empty() {
         return Err(format!("移除白名单失败: {}", failed.join(", ")));
     }
 
     Ok(WhitelistOperationResponse {
-        cidr: cidr.to_string(),
+        cidr: key.to_string(),
         action: "removed".to_string(),
     })
 }
 
 /// 获取白名单列表（GET /api/v1/whitelist）
 ///
-/// 从 WHITELIST_CACHE 读取，该缓存由 netlink 接收线程在收到 ListWhitelistResponse 时更新。
+/// 从 WHITELIST_CACHE 读取，该缓存由内核链路的白名单同步路径写入
+/// （`crate::inbound` 收到 `ListWhitelistResponse` / 状态变更事件时）。
 pub fn get_whitelist() -> Vec<WhitelistEntryResponse> {
     crate::types::WHITELIST_CACHE
         .read()

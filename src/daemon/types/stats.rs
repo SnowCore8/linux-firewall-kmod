@@ -272,7 +272,7 @@ pub struct RateEntry {
 
 /// 全局速率统计缓存
 ///
-/// 由 netlink 接收线程定期更新，HTTP API 读取。
+/// 由内核接收执行体（`crate::inbound`）在收到速率响应时更新，HTTP API 读取。
 /// 使用 `RwLock<Vec<RateEntry>>` 保护，读多写少场景。
 pub static RATE_CACHE: once_cell::sync::Lazy<parking_lot::RwLock<Vec<RateEntry>>> =
     once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(Vec::new()));
@@ -292,7 +292,8 @@ pub struct WhitelistEntry {
 
 /// 全局白名单缓存（HashMap 天然去重，写入即幂等）
 ///
-/// 由 netlink 接收线程在收到 ListWhitelistResponse 时更新，HTTP API 读取。
+/// 由内核接收执行体（`crate::inbound`）在收到白名单响应 / 状态变更事件时更新，
+/// 以及 `crate::ban` 在守护进程自己增删可信 IP 时同步写入；HTTP API 读取。
 pub static WHITELIST_CACHE: once_cell::sync::Lazy<
     parking_lot::RwLock<std::collections::HashMap<String, WhitelistEntry>>,
 > = once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(std::collections::HashMap::new()));
@@ -370,7 +371,7 @@ static BASELINE_WARMUP_SAMPLES: std::sync::atomic::AtomicU64 =
 
 /// 全局流量基线（PPS）— EWMA 平滑值
 ///
-/// 由 netlink 接收线程在每次速率查询响应时更新。
+/// 由内核接收执行体在每次速率响应时更新。
 /// 守护进程定期将此值下发到内核，用于动态阈值计算。
 static BASELINE_PPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -639,7 +640,7 @@ pub struct AnalysisScannerEntry {
     pub packets: u64,
 }
 
-/// 内核分析数据快照（由 netlink AnalysisResponse 更新，Web UI API 读取）
+/// 内核分析数据快照（由内核分析响应更新，Web UI API 读取）
 #[derive(Debug, Clone, Default)]
 pub struct AnalysisData {
     /// 包大小分布（5 桶：<64B, 64-256B, 256B-1KB, 1-1.5KB, >1.5KB）
@@ -670,7 +671,7 @@ pub struct AnalysisData {
 
 /// 全局分析数据缓存
 ///
-/// 由 netlink 接收线程在收到 AnalysisResponse 时更新，Web UI API 读取。
+/// 由内核接收执行体在收到分析响应时更新，Web UI API 读取。
 /// 替代原来直接读取 /proc/firewall/ 的 7 个接口。
 pub static ANALYSIS_CACHE: once_cell::sync::Lazy<parking_lot::RwLock<AnalysisData>> =
     once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(AnalysisData::default()));

@@ -7,8 +7,6 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::Json;
 
-use crate::state::Counter;
-
 use super::super::envelope::ApiResponse;
 use super::super::payloads::{RateResponse, SseStatusResponse, StatsResponse};
 use super::super::views;
@@ -26,8 +24,11 @@ pub async fn handle_api_stats(
     let inputs = api.history.threat_inputs();
     let threshold = api.config.webui().rate_warning_pps;
 
-    // DDoS 事件累计数暂由 netlink 接收计数代理（内核侧 DDoS 归属属后续批次）。
-    let ddos_events = stats.get(Counter::NetlinkMessagesReceived);
+    // DDoS 事件累计数取内核计数器的权威来源（`DDOS_STATS.events_detected`），
+    // 与 Prometheus 的 `firewall_ddos_events_detected_total` 同源。
+    let ddos_events = crate::types::DDOS_STATS
+        .events_detected
+        .load(std::sync::atomic::Ordering::Relaxed);
     let threat = views::threat_level(
         bans.len() as u64,
         ddos_events,

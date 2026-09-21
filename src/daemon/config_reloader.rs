@@ -665,9 +665,9 @@ fn sync_config_to_components(cfg: &Config) -> Result<()> {
     }
 
     // 2. 同步到内核模块（netlink 下发协议阈值 + 全局限制，sysfs 写检测开关）
-    //    字段集合、字节序转换、sysfs 参数名统一由 netlink::config_sync 承担
+    //    字段集合、字节序转换、sysfs 参数名统一由 config_sync 承担
     {
-        use crate::netlink::{GlobalLimits, ProtocolThresholds};
+        use crate::config_sync::{GlobalLimits, ProtocolThresholds};
 
         let limits = GlobalLimits {
             ban_time: cfg.ddos.auto_ban_duration,
@@ -676,14 +676,14 @@ fn sync_config_to_components(cfg: &Config) -> Result<()> {
             ddos_ban_duration: cfg.ddos.auto_ban_duration,
         };
 
-        match crate::netlink::sync_protocol_thresholds(
+        match crate::config_sync::sync_protocol_thresholds(
             ProtocolThresholds::from(&cfg.ddos),
             Some(limits),
         ) {
-            Ok(crate::netlink::SyncOutcome::Skipped) => {
-                // netlink 未初始化（守护进程启动初期）：内核尚未接收任何配置，属正常状态
+            Ok(crate::config_sync::SyncOutcome::Skipped) => {
+                // 内核链路未就绪（守护进程启动初期）：内核尚未接收任何配置，属正常状态
             }
-            Ok(crate::netlink::SyncOutcome::Sent) => {
+            Ok(crate::config_sync::SyncOutcome::Sent) => {
                 crate::logger::info!(
                     crate::logger::get(),
                     "配置已同步到内核模块";
@@ -703,7 +703,7 @@ fn sync_config_to_components(cfg: &Config) -> Result<()> {
 
         // 同步 DDoS 检测开关到内核模块参数（sysfs 与 netlink 是两个独立通道，
         // netlink 不可用时该写入仍会尝试，失败由 write_sysfs_bool_param 记警告）
-        crate::netlink::write_detection_switches((&cfg.ddos).into());
+        crate::config_sync::write_detection_switches((&cfg.ddos).into());
         crate::logger::info!(
             crate::logger::get(),
             "DDoS 检测开关已同步到内核";
