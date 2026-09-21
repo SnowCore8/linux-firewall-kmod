@@ -310,6 +310,12 @@ The cases and their assertion anchors live in `tests/e2e/` (`support.ts` holds t
 fixtures and auth; the rest are the specs). New cases inherit the console-hygiene gate from
 the fixture, so they do not each re-assert it.
 
+`pwa-context.spec.ts` adds a contrasting pair: under a secure context (localhost) the Service
+Worker registers, while under a non-secure one (a LAN IP) that API does not exist yet the UI
+keeps working. The latter side is enabled by `E2E_LAN_ORIGIN=http://<lan-ip>:<port>` and skipped
+explicitly when unset (as in CI); the observed results are recorded in the Chinese-only
+`docs/zh/architecture/frontend.md` (section "验收记录：安全上下文边界").
+
 The prerequisite is a **daemon with the kernel module loaded**: `main.rs` refuses to start
 without `/proc/firewall`, and the kernel implements the single daemon as a portid lease with
 a 30-second activity timeout and no deregistration message. The whole fixture (insmod →

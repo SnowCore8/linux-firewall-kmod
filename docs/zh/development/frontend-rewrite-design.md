@@ -197,31 +197,40 @@ SSE 未连上或该域没推过数据时才回落到 REST。二者共用同一�
   经 `http://<局域网IP>:<port>` 访问时浏览器不暴露该 API、静默拒绝注册，「添加到主屏幕」不可用，
   但界面功能不受影响。这是浏览器硬约束，代码只降级不报错，文档如实记录。
 
-## 待办批次
+## 迁移纪律：遗留路由迁入期间的「前端零改动」
 
-批次的划分依据是「当前尚未落地、且有可观察验收结果」。已落地的批次从本节移除，编号保持稳定
-不重排（因此编号不连续），其做法与验收以源码和对应文档为准——例如端到端验收的用例、夹具与
-CI 接线见 `testing.md` 与 `scripts/e2e-daemon.sh`。
+这不是一个可完成的批次，而是 Phase 2 迁移全程必须守的**standing 规则**，故单列。
 
-### 3.B 遗留路由迁入时的前端零改动回归
+Phase 2 仍有一批分析类与日志类端点留在旧 handler 里（未迁入集合 = `handler.rs` 的
+`legacy_protected_routes()`；前端已经调用其中多项——封禁详情与建议、速率历史与窗口、
+各类分布统计、日志分页与日志流、信誉与阈值建议）。把它逐条列出来会随每次迁移失效，
+需要时按下面的方式取当前集合：
 
-现状：Phase 2 仍有一批分析类与日志类端点在旧 handler 里（清单是
-`handler.rs::legacy_protected_routes()` 与 `contract/http.fwidl` 的差集），前端已经调用其中多项
-（封禁详情与建议、速率历史与窗口、各类分布统计、日志分页与日志流、信誉与阈值建议等）。
+```bash
+# 未迁入集合：直接从源码取，不复制到文档（避免「文档说 23 条、代码已 18 条」这类漂移）
+python3 - <<'PY'
+import sys; sys.path.insert(0, 'contract')
+import verify_http as v
+pub, legacy, api_src, health = v.split_router_groups(v.read(v.HANDLER_RS), v.read(v.API_ROUTER_RS))
+for m in sorted({m.group(1) for m in v._ROUTE_RE.finditer(legacy)}):
+    print(m)
+PY
+```
 
-要做：这些端点迁入 `api/` 时**只换 handler 归属**，路径、载荷、错误形状一律不动；
-每次迁移后跑一遍前端回归（类型检查 + 契约门禁 + 受影响页面的 e2e）。
+**规则**：这些端点迁入 `api/` 时**只换 handler 归属**——路径、载荷字段、错误形状一律不动。
+迁移提交不得包含 `frontend/` 的改动；每迁一批跑一遍前端回归（类型检查 + 契约门禁 +
+受影响页面的 e2e）。
 
-验收：迁移提交不包含 `frontend/` 的改动，且 `bash scripts/check_contract.sh` 与 e2e 仍全绿。
+**这条规则已经有机械保障，不靠自觉**——改坏任一项都会让 `scripts/check_contract.sh` 变红：
 
-### 3.C 非安全上下文下的 PWA 行为固化
+| 被保护的面 | 由谁核对 |
+|------------|----------|
+| 路径、认证归属、handler 名 | `verify_http.py::check_routes`（契约 ↔ 两个路由组逐条比对） |
+| 载荷字段 | `check_types_rust`（每个载荷类型的每个字段都要在对应 Rust 结构体里找到） |
+| 前端 interface 与路径 | `check_types_frontend`、`check_routes_frontend`（与契约**双向**核对） |
+| 错误形状 | `check_errmodels` |
 
-现状：限制已在文档与代码注释中说明，但缺可复现的验收步骤。
-
-要做：给出一条可复现的验收记录——在 `http://<局域网IP>:<port>` 下确认 Service Worker 未注册、
-控制台无未处理异常、各页面功能正常；并与 HTTPS/localhost 下的可安装性形成对照。
-
-验收：记录中同时包含两种上下文的观察结果，且不把限制当作缺陷「修掉」。
+因此「迁移顺带改了形状」这类事故在门禁上就会暴露，不需要人工比对 diff。
 
 ## 验收门槛
 

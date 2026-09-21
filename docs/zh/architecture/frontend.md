@@ -147,6 +147,33 @@ SPA 外壳是公开路由、返回不含数据的静态壳，顶层文档**不�
   约束，本应用无法绕过；`main.tsx` 检测不到就静默跳过，不影响界面功能。
   **这是已知限制，不是缺陷**，不要当作 bug「修掉」。
 
+### 验收记录：安全上下文边界（2026-09-21）
+
+两侧对照的机械证据在 `tests/e2e/pwa-context.spec.ts`，复现方式：
+
+```bash
+# 夹具默认绑 0.0.0.0，因此局域网地址可直接访问，无需额外配置
+sudo bash scripts/e2e-daemon.sh start
+eval "$(bash scripts/e2e-daemon.sh env)"
+# 不设置 E2E_LAN_ORIGIN 时只跑安全上下文一侧，局域网一侧显式跳过（CI 即如此）
+E2E_LAN_ORIGIN=http://<局域网IP>:<port> npm run test:e2e
+sudo bash scripts/e2e-daemon.sh stop
+```
+
+观察结果（本机 2026-09-21，Chromium）：
+
+| 上下文 | `'serviceWorker' in navigator` | 注册 / 安装 | 页面功能 | 控制台 |
+|--------|-------------------------------|-------------|----------|--------|
+| `http://127.0.0.1:9119`（安全） | `true` | `/sw.js` 注册成功，manifest 可取 | 正常 | 洁净 |
+| `http://192.168.8.5:9119`（非安全） | `false`（`navigator.serviceWorker` 为 `undefined`） | 不可能，PWA 安装被拒 | 正常（仪表盘 / 封禁页均可渲染） | 洁净 |
+
+结论：该限制只剥夺 PWA 能力，不影响应用本体——数据面、路由与写操作全部照常，非安全上下文下
+控制台同样洁净（`main.tsx` 静默跳过而不打警告）。**不把限制当缺陷修**，故本记录以「期望行为」
+落成用例固化，防止后人塞 polyfill 或改注册路径。
+
+> 控制台洁净度门槛的判定基准是**当前 baseURL 的源**而非固定常量：同一套用例会在多个源上跑
+> （如上表的局域网地址），写死一个源会让另一侧的判定整体失效（`tests/e2e/support.ts`）。
+
 ## 二次开发：改动面清单
 
 hash 路由只解决客户端；服务端还认一份固定路径清单，漏一处就会 404，或以 `default-src 'none'`

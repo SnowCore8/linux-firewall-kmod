@@ -287,6 +287,11 @@ class TestMyFeature:
 用例与断言锚点全部在 `tests/e2e/`（`support.ts` 是共享夹具与鉴权，其余是用例）；
 新增用例默认继承夹具里的控制台洁净度门槛，不需要各自重复断言。
 
+`pwa-context.spec.ts` 另做一对**对照**：安全上下文（localhost）下 Service Worker 可注册，
+非安全上下文（局域网 IP）下该 API 不存在但界面照常工作。后者由
+`E2E_LAN_ORIGIN=http://<局域网IP>:<port>` 开启，不设置则显式跳过（CI 即如此）；
+观察结果见 [Web 前端](../architecture/frontend.md) 的「验收记录：安全上下文边界」。
+
 前置条件是**加载了内核模块的守护进程**：`main.rs` 启动即要求 `/proc/firewall` 存在，
 且内核把单守护进程实现为 portid 独占 + 30 秒活动超时、无注销消息，因此整条夹具
 （insmod → 生成临时配置 → 起守护进程 → 等 `/health` 就绪 → 收尾 rmmod）独立为
