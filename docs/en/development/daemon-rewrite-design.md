@@ -574,8 +574,8 @@ concurrency claims were corrected in commit `929b52f`.
 | Phase | Status |
 |-------|--------|
 | 2.A Contract revisions | Done |
-| 2.B Runtime skeleton | Done |
-| 2.C Main-chain rewrite | Done |
+| 2.B Runtime skeleton | Done (`signal/mod.rs`'s signalfd layer is **in place but not wired into production**; see "2.I") |
+| 2.C Main-chain rewrite | Done (`ingest/` `parse/` `decision/` `pipeline/` are **in place but not wired into production**; see "2.I") |
 | 2.D `kernel` layer rewrite | Done |
 | 2.E-1 `state/cidr.rs` + `state/hub.rs` | Done |
 | 2.E-2 `state/{bans,whitelist,rates,stats,mod}.rs` | Done |
@@ -592,6 +592,33 @@ concurrency claims were corrected in commit `929b52f`.
 | 2.H-3 Production cutover (`main.rs` atomic assembly + call sites re-pointed) | Done (`e6626c7`) |
 | 2.H-4 Retire legacy `netlink/` + flip the M ratchet | Done (`600b097`) |
 | 2.H-5 Documentation (`daemon.md` status/gap tables) | Done (`7814d36` / `1aba8ef` / `44c4a6e`) |
+| 2.I Inbound main-chain cutover (`ingest`->`parse`->`decision`->`pipeline` wired into `main.rs`, retiring the legacy `file_monitor` loop) | **Not started** |
+
+### 2.I Not Started: the Inbound Main Chain Is Still the Old One
+
+The outbound side is fully switched over (2.H-3 `e6626c7` moved netlink onto `kernel/`, and legacy
+`crate::netlink` was retired in 2.H-4), but **the inbound side still runs the old implementation**:
+
+| | Built | What production actually runs |
+|---|---|---|
+| Log entry | `ingest/` (inotify + per-source incremental reads) | `file_monitor/` (`setup_inotify` at `main.rs:193`, `monitor_loop` at `main.rs:429`) |
+| Line splitting and rule matching | `parse/` | inlined in `file_monitor` |
+| Thresholds and ban intents | `decision/` | inlined in `file_monitor` |
+| Three-layer assembly | `pipeline/mod.rs` | none (not wired) |
+| Signal layer | `signal/mod.rs` (signalfd) | `signals.rs` (sigaction + global atomics, no `SA_RESTART`) |
+
+The new three layers carry 68 case-by-case equivalence assertions against the old implementation
+(the 2.C evidence), yet have **no production call site**: `pipeline` is referenced nowhere beyond its
+`lib.rs` declaration, and `signal/mod.rs` has no importer either. In other words the 2.B / 2.C
+artifacts are compiled, tested, and not part of the running process.
+
+**Why this is called out on its own**: it was the one gap the original plan never numbered -- 2.H
+covered only the outbound (netlink) side and the inbound side was never scheduled, so "2.A through
+2.H-5 all Done" does not mean the chain has been replaced. The acceptance criterion, once the new
+chain takes over inbound: the legacy `file_monitor` and `signals.rs` are retired, `signal/mod.rs`
+and `pipeline` enter production, and the "currently running production path" section of
+`data-flow.md` is rewritten accordingly (it currently states outright that the new three layers are
+"in place but not wired in").
 
 ### What 2.A Landed
 

@@ -518,8 +518,8 @@ sequenceDiagram
 | 阶段 | 状态 |
 |------|------|
 | 2.A 契约修订 | 已完成 |
-| 2.B 运行时骨架 | 已完成 |
-| 2.C 主链路重写 | 已完成 |
+| 2.B 运行时骨架 | 已完成（`signal/mod.rs` 的 signalfd 层**已就位但未接入生产**，见下「2.I」） |
+| 2.C 主链路重写 | 已完成（`ingest/` `parse/` `decision/` `pipeline/` **已就位但未接入生产**，见下「2.I」） |
 | 2.D `kernel` 层重写 | 已完成 |
 | 2.E-1 `state/cidr.rs` + `state/hub.rs` | 已完成 |
 | 2.E-2 `state/{bans,whitelist,rates,stats,mod}.rs` | 已完成 |
@@ -536,6 +536,29 @@ sequenceDiagram
 | 2.H-3 生产切换（`main.rs` 原子装配 + 调用点重指） | 已完成（`e6626c7`） |
 | 2.H-4 退役旧 `netlink/` + M 棘轮翻转 | 已完成（`600b097`） |
 | 2.H-5 文档（`daemon.md` 状态/差距表） | 已完成（`7814d36` / `1aba8ef` / `44c4a6e`） |
+| 2.I 入站主链路切换（`ingest`→`parse`→`decision`→`pipeline` 接入 `main.rs`，退役 `file_monitor` 旧循环） | **未开始** |
+
+### 2.I 未开始：入站主链路仍未切换
+
+出站侧已切完（2.H-3 `e6626c7` 把 netlink 换到 `kernel/`，旧 `crate::netlink` 随 2.H-4 退役），
+但**入站侧仍是旧实现**：
+
+| | 已建成 | 生产实际跑的 |
+|---|---|---|
+| 日志入口 | `ingest/`（inotify + 每源增量读） | `file_monitor/`（`setup_inotify` `main.rs:193`、`monitor_loop` `main.rs:429`） |
+| 行切分与规则匹配 | `parse/` | `file_monitor` 内联 |
+| 阈值与封禁意图 | `decision/` | `file_monitor` 内联 |
+| 三层装配 | `pipeline/mod.rs` | 无（未接入） |
+| 信号层 | `signal/mod.rs`（signalfd） | `signals.rs`（sigaction + 全局原子布尔 + 未用 `SA_RESTART`） |
+
+新三层有 68 条与旧实现的逐案对照断言（2.C 证据），但**没有一个生产调用点**；`pipeline` 在
+`lib.rs` 声明之外无人引用，`signal/mod.rs` 同样零导入。也就是说 2.B / 2.C 的产物处于
+「编译通过、测试通过、不参与运行」的状态。
+
+**为什么单列成一项**：这是原计划里唯一没有编号跟踪的缺口——2.H 只覆盖出站（netlink）侧，
+入站侧从未排期，所以进度表 2.A–2.H-5 全「已完成」并不等于链路已换新。验收口径按新链路
+接管入站后：旧 `file_monitor` 与 `signals.rs` 退役、`signal/mod.rs` 与 `pipeline` 进入生产，
+且 `data-flow.md` 的「当前生产路径」一节随之改写（该节现在明确写着新三层「已就位但未接入」）。
 
 ### 2.A 落地明细
 
