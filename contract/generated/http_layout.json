@@ -7,6 +7,7 @@
   "notes": [
     "信封 ApiResponse: code / data / message",
     "认证: 失败 10 次锁 60s，未授权状态码 401",
+    "迁移棘轮基线: 23 条未迁路由",
     "安全头 4 条",
     "业务码 50002 已声明但没有任何路由引用（可能是没落地的码）",
     "路由 54 条（无认证 13 / 需认证 41）",
@@ -910,6 +911,100 @@
       "events": [],
       "keepalive_secs": null,
       "note": "查询参数 LogQueryParams；分页参数非法 → 40005；载荷 LogPageResponse"
+    }
+  ],
+  "route_baseline": [
+    {
+      "method": "GET",
+      "path": "/api/v1/logs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/logs/stream"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/rates/history"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/rates/windows"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/attack-predictions"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/ban-duration-histogram"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/ban-duration-recommendations"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/ban-effectiveness"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/collaborative-attacks"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/heatmap"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/icmp-types"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/ip-fragments"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/network-distribution"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/packet-sizes"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/periodic-attackers"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/port-scanners"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/recidivism"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/reputation"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/service-probes"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/threshold-recommendations"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/ttl-distribution"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/udp-ports"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/whitelist/recommendations"
     }
   ],
   "types": {

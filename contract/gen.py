@@ -1848,6 +1848,9 @@ class HttpContract:
         self.err_models: Dict[str, ErrorModel] = {}
         self.err_order: List[str] = []
         self.defects: List[Defect] = []
+        # 迁移棘轮冻结基线：仍留在 legacy_protected_routes() 里的路由全集。
+        # 见 verify_http.py::check_migration_ratchet。
+        self.route_baseline: List[Tuple[str, str]] = []
 
     def route_keys(self) -> List[Tuple[str, str]]:
         return [(r.method, r.path) for r in self.routes]
@@ -2060,6 +2063,25 @@ def _http_block(
         contract.routes.append(decl)
         return
 
+    # ---- 迁移棘轮冻结基线 -----------------------------------------------
+    m = re.fullmatch(r"route_baseline\s+legacy", header)
+    if m:
+        if contract.route_baseline:
+            raise ContractError(f"{path}:{open_line}: route_baseline 重复定义")
+        for lineno, text in body:
+            bm = re.fullmatch(r'(\w+)\s+"([^"]+)"', text)
+            if not bm:
+                raise ContractError(
+                    f"{path}:{lineno}: route_baseline 行应为 '<方法> \"<路径>\"': {text!r}"
+                )
+            entry = (bm.group(1).upper(), bm.group(2))
+            if entry in contract.route_baseline:
+                raise ContractError(
+                    f"{path}:{lineno}: route_baseline 重复条目 {entry[0]} {entry[1]}"
+                )
+            contract.route_baseline.append(entry)
+        return
+
     # ---- 错误形状 ---------------------------------------------------------
     m = re.fullmatch(r"errmodel\s+(\w+)", header)
     if m:
@@ -2235,6 +2257,20 @@ def validate_http(contract: HttpContract) -> List[str]:
         f"{contract.auth['failure_threshold']} 次锁 {contract.auth['lockout_seconds']}s，"
         f"未授权状态码 {contract.auth['unauthorized_status']}"
     )
+
+    # 迁移棘轮冻结基线必须非空（三端重写期间 legacy 组不可能为空），且每条都得是
+    # 已声明的路由——写错方法名或路径会让棘轮静默失效。
+    if not contract.route_baseline:
+        raise ContractError(
+            "缺少 'route_baseline legacy { ... }' 块：迁移棘轮需要冻结的未迁路由基线"
+        )
+    declared_keys = set(contract.route_keys())
+    for entry in contract.route_baseline:
+        if entry not in declared_keys:
+            raise ContractError(
+                f"route_baseline 条目 {entry[0]} {entry[1]} 不是任何已声明的路由"
+            )
+    notes.append(f"迁移棘轮基线: {len(contract.route_baseline)} 条未迁路由")
 
     for name, decl in contract.headers.items():
         if decl.scope not in HEADER_SCOPES:
@@ -2519,6 +2555,10 @@ def emit_json_http(contract: HttpContract, notes: List[str]) -> str:
                 "note": r.note,
             }
             for r in contract.routes
+        ],
+        "route_baseline": [
+            {"method": method, "path": path}
+            for method, path in contract.route_baseline
         ],
         "types": {
             name: {

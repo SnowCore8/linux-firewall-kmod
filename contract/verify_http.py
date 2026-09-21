@@ -1097,6 +1097,71 @@ def check_artifacts() -> list[str]:
     return problems
 
 
+def check_migration_ratchet(contract: dict) -> list[str]:
+    """迁移棘轮：未迁入 api/ 的路由是对照冻结基线**只减不增**的集合。
+
+    背景：三端重写要把 ``handler.rs::legacy_protected_routes``（路径字面量）里的
+    路由陆续搬进 ``api/router.rs::protected_routes``（``path::ROUTE_*`` 常量）。
+    仅靠「契约里声明过该路由」就能通过门禁，于是新端点可以悄悄加进 legacy 组而
+    无人察觉 —— 本检查堵住这一点。
+
+    ``route_baseline legacy`` 冻结迁移开始时的未迁全集。规则是只能变小：
+
+      1. 基线里的路由必须真的还在 ``legacy_protected_routes()`` 里。少了一条就是
+         可疑删除（要迁就走迁移流程，不要从基线里删一行了事）。
+      2. 源码里出现基线之外、又不在 api/ 组的路由 —— 新端点，必须迁入 api/。
+
+    迁移一条后**必须**同步删除对应基线行，否则该路由同时命中上面两条（这正是
+    刻意的摩擦：迁移动作要显式落在契约里）。
+
+    只按 ``auth`` 分组的 ``check_routes`` 无法覆盖这一维度（legacy 与 api 两组的
+    auth 都是 ``required``，互换也通过）。
+    """
+    problems: list[str] = []
+    src = read(HANDLER_RS)
+    api_router = read(API_ROUTER_RS)
+    _, legacy_src, api_src, health_src = split_router_groups(src, api_router)
+    if not legacy_src or not api_src:
+        return ["未能在 handler.rs / api/router.rs 里切出路由组，迁移棘轮无法核对"]
+
+    api_group = set()
+    for segment in (api_src, health_src):
+        consts = _resolve_path_consts(segment)
+        for m in re.finditer(
+            r"\.route\(\s*(path::\w+)\s*,\s*(get|post|put|delete)\s*\(\s*(\w+)\s*\)",
+            segment,
+        ):
+            const_name = m.group(1).rsplit("::", 1)[-1]
+            if const_name in consts:
+                api_group.add((m.group(2).upper(), consts[const_name]))
+
+    legacy_group = {
+        (m.group(2).upper(), m.group(1)) for m in _ROUTE_RE.finditer(legacy_src)
+    }
+    baseline = {
+        (e["method"].upper(), e["path"]) for e in contract.get("route_baseline", [])
+    }
+    if not baseline:
+        return ["契约缺少 'route_baseline legacy' 块，迁移棘轮无基线可比"]
+
+    for key in sorted(baseline - legacy_group):
+        problems.append(
+            f"迁移棘轮: 基线里的 {key[0]} {key[1]} 已不在 legacy 组 —— 若是迁移请"
+            "同步删除该基线行；若是误删则改回"
+        )
+    for key in sorted(legacy_group - baseline - api_group):
+        problems.append(
+            f"迁移棘轮: {key[0]} {key[1]} 既不在冻结基线、也不在 api/ 组 —— "
+            "新端点必须迁入 api/（契约 route 声明 + api/router.rs 登记）"
+        )
+
+    print(
+        f"  迁移棘轮: 基线 {len(baseline)} 条 / legacy 组 {len(legacy_group)} 条 / "
+        f"api 组 {len(api_group)} 条"
+    )
+    return problems
+
+
 def main() -> int:
     if not os.path.isfile(LAYOUT_JSON):
         print("错误: 未找到生成物，请先运行 gen.py", file=sys.stderr)
@@ -1107,6 +1172,8 @@ def main() -> int:
     print("=== HTTP 契约 vs daemon + 前端 ===")
     failures: list[str] = []
     failures += check_routes(contract)
+    print()
+    failures += check_migration_ratchet(contract)
     print()
     failures += check_auth_constants(contract)
     print()

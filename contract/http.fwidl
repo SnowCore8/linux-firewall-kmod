@@ -1309,3 +1309,45 @@ type SseStatusResponse {
   events: SseStreamStatus
   logs: SseStreamStatus
 }
+
+# ============================================================================
+# 迁移棘轮：仍未迁入 api/ 的路由冻结基线
+# ============================================================================
+#
+# 三端重写要把 handler.rs 的 legacy 路由陆续搬进 api/router.rs；没有棘轮时
+# 只靠“契约里声明过”就能通过门禁，新端点可以悄悄加进 legacy 组而无人察觉。
+# 这里冻结迁移开始时的未迁全集，规则是**只能变小**：
+#
+#   * 基线里的路由必须真的还在 legacy_protected_routes() 里，否则报“可能被
+#     顺手删除”（要迁就按迁移流程走，不要从基线里删一行了事）；
+#   * 源码里出现基线之外、又不在 api/ 组的路由，报“新端点必须迁入 api/”。
+#
+# 迁移一条后**必须**同步删除对应基线行，否则该路由会同时命中上面两条例外。
+# 由 verify_http.py::check_migration_ratchet 机械核对。
+#
+# 方法名与路径同 route 声明；路径必须逐字一致（等价路由会算成不同 key）。
+route_baseline legacy {
+  GET "/api/v1/logs"
+  GET "/api/v1/logs/stream"
+  GET "/api/v1/rates/history"
+  GET "/api/v1/rates/windows"
+  GET "/api/v1/stats/attack-predictions"
+  GET "/api/v1/stats/ban-duration-histogram"
+  GET "/api/v1/stats/ban-duration-recommendations"
+  GET "/api/v1/stats/ban-effectiveness"
+  GET "/api/v1/stats/collaborative-attacks"
+  GET "/api/v1/stats/heatmap"
+  GET "/api/v1/stats/icmp-types"
+  GET "/api/v1/stats/ip-fragments"
+  GET "/api/v1/stats/network-distribution"
+  GET "/api/v1/stats/packet-sizes"
+  GET "/api/v1/stats/periodic-attackers"
+  GET "/api/v1/stats/port-scanners"
+  GET "/api/v1/stats/recidivism"
+  GET "/api/v1/stats/reputation"
+  GET "/api/v1/stats/service-probes"
+  GET "/api/v1/stats/threshold-recommendations"
+  GET "/api/v1/stats/ttl-distribution"
+  GET "/api/v1/stats/udp-ports"
+  GET "/api/v1/whitelist/recommendations"
+}

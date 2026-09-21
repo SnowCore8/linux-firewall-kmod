@@ -226,11 +226,23 @@ PY
 | 被保护的面 | 由谁核对 |
 |------------|----------|
 | 路径、认证归属、handler 名 | `verify_http.py::check_routes`（契约 ↔ 两个路由组逐条比对） |
+| 未迁集合只减不增 | `verify_http.py::check_migration_ratchet`（对照契约 `route_baseline legacy` 冻结基线） |
 | 载荷字段 | `check_types_rust`（每个载荷类型的每个字段都要在对应 Rust 结构体里找到） |
 | 前端 interface 与路径 | `check_types_frontend`、`check_routes_frontend`（与契约**双向**核对） |
 | 错误形状 | `check_errmodels` |
 
 因此「迁移顺带改了形状」这类事故在门禁上就会暴露，不需要人工比对 diff。
+
+**棘轮**（`check_migration_ratchet`）补上的是另一件事：`check_routes` 只按 `auth` 分组，
+而 legacy 与 api 两组的 `auth` 都是 `required`，所以「新端点直接写进旧 handler」它能通过。
+棘轮把「未迁集合」冻结在契约里，规则是**只能变小**：
+
+- 基线里的路由必须真的还在 `legacy_protected_routes()` 里 —— 少一条即报错（防顺手删除）；
+- 源码里出现基线之外、又不在 `api/` 组的路由 —— 报「新端点必须迁入 `api/`」。
+
+迁移一条后**必须**同步删除 `contract/http.fwidl` 里 `route_baseline legacy` 的对应行，
+否则该路由会同时命中上面两条（刻意摩擦：迁移动作要显式落进契约）。
+只改基线行、不真迁移源码同样会红。
 
 ## 验收门槛
 
