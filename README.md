@@ -12,7 +12,7 @@
 
 ## 概述
 
-Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用户空间移至内核空间，使用 netfilter 框架在数据包级别进行实时 IP 封禁，具有更低的延迟和更高的性能。守护进程用 Rust 实现（v2.2.0 起从 C 翻译），编译为单文件 stripped 二进制（移动端优先的 React 控制面板一并嵌入），19 个集成测试套件全部通过。
+Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用户空间移至内核空间，使用 netfilter 框架在数据包级别进行实时 IP 封禁，具有更低的延迟和更高的性能。守护进程用 Rust 实现（v2.2.0 起从 C 翻译），编译为单文件 stripped 二进制（移动端优先的 React 控制面板一并嵌入），集成测试套件全部通过。
 
 ## 为什么选择本项目
 
@@ -28,20 +28,20 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 
 - ✅ **内核态 IP 封禁** — netfilter hooks，比 iptables 用户态更高效
 - ✅ **Jail 系统** — 类似 fail2ban 的多服务隔离配置
-- ✅ **哈希表存储** — 4096 容量，O(1) 查找性能
+- ✅ **哈希表存储** — O(1) 查找性能
 - ✅ **自动过期清理** — 定时清理过期封禁记录
-- ✅ **IP 白名单保护** — 自动发现系统 IP + 手动添加（64 容量）
+- ✅ **IP 白名单保护** — 自动发现系统 IP + 手动添加
 - ✅ **procfs 用户接口** — 封禁/解封/白名单/配置操作
-- ✅ **Rust 守护进程（v2.2.0+）** — 68 个源文件，编译为单文件 stripped 二进制（前端产物一并嵌入），行为与 C 版严格等价
-- ✅ **React 移动端前端** — React 19 + TypeScript + Vite + antd-mobile 5 构建，移动优先，hash 路由，7 个页面 + 手写 SVG 图表，支持 PWA
+- ✅ **Rust 守护进程（v2.2.0+）** — 编译为单文件 stripped 二进制（前端产物一并嵌入）
+- ✅ **React 移动端前端** — React 19 + TypeScript + Vite + antd-mobile 5 构建，移动优先，hash 路由，手写 SVG 图表，支持 PWA
 - ✅ **正则解析** — 支持命名捕获组提取 IP
 - ✅ **RCU 并发安全** — spinlock 保护，高并发安全
 - ✅ **严格配置校验** — 未知参数或无效值直接报错拒绝加载
-- ✅ **Prometheus 指标** — 端口 9119 导出 24 个监控指标（4 内核 + 12 用户态 + 4 netlink + 1 uptime + 3 信誉分）
+- ✅ **Prometheus 指标** — 端口 9119 导出监控指标
 - ✅ **独立日志文件** — `cfg.log_file` 默认 `/var/log/firewall.log`，失败回退 syslog-only
-- ✅ **安全加固** — 整数溢出防护、Use-After-Free 修复、RCU 一致性增强、35 个 unsafe 块全部带 `// SAFETY:` 注释
-- ✅ **性能优化** — 哈希表容量 4096、白名单两阶段匹配、LTO 编译优化
-- ✅ **代码质量** — 434 单元测试 + 19 集成测试套件 100% 通过，CI 三 job 全绿
+- ✅ **安全加固** — 整数溢出防护、Use-After-Free 修复、RCU 一致性增强、所有 unsafe 块均带 `// SAFETY:` 注释
+- ✅ **性能优化** — 哈希表与白名单两阶段匹配、LTO 编译优化
+- ✅ **代码质量** — 单元测试与集成测试套件全部通过，CI 全绿
 
 ## 快速开始
 
@@ -105,7 +105,7 @@ sudo ./build/daemon/firewall-daemon --help                  # 帮助
 
 ```bash
 make deb                 # 调用 ./build-deb.sh
-                         # 产物: build/deb/linux-firewall-kmod-2.2.0.deb (1.5MB)
+                         # 产物: build/deb/linux-firewall-kmod-2.2.0.deb
 sudo dpkg -i build/deb/linux-firewall-kmod-2.2.0.deb  # 安装（DKMS 自动编译 + systemd 启动）
 ```
 

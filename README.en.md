@@ -12,7 +12,7 @@
 
 ## Overview
 
-Firewall is a Linux kernel module version of fail2ban, moving the ban logic from userspace to kernelspace using the netfilter framework for real-time IP banning at the packet level with lower latency and higher performance. The userspace daemon is now written in Rust (translated from C in v2.2.0), compiled into a single stripped binary with the mobile-first React control panel embedded; 19 integration test suites pass.
+Firewall is a Linux kernel module version of fail2ban, moving the ban logic from userspace to kernelspace using the netfilter framework for real-time IP banning at the packet level with lower latency and higher performance. The userspace daemon is now written in Rust (translated from C in v2.2.0), compiled into a single stripped binary with the mobile-first React control panel embedded; the integration test suites pass.
 
 ## Why This Project
 
@@ -28,20 +28,20 @@ Firewall is a Linux kernel module version of fail2ban, moving the ban logic from
 
 - ✅ **Kernel-space IP banning** — netfilter hooks for higher efficiency
 - ✅ **Jail system** — multi-service isolation like fail2ban
-- ✅ **Hash table storage** — 4096 capacity, O(1) lookup performance
+- ✅ **Hash table storage** — O(1) lookup performance
 - ✅ **Auto-expire cleanup** — periodic cleanup of expired bans
-- ✅ **IP whitelist protection** — auto-discovery + manual entries (64 capacity)
+- ✅ **IP whitelist protection** — auto-discovery + manual entries
 - ✅ **procfs interface** — ban/unban/whitelist/config operations
-- ✅ **Rust daemon (v2.2.0+)** — 68 source files, compiled into a single stripped binary (with embedded frontend), behaviorally equivalent to the C version
-- ✅ **React mobile frontend** — React 19 + TypeScript + Vite + antd-mobile 5, mobile-first, hash routing, 7 pages + hand-written SVG charts, PWA support
+- ✅ **Rust daemon (v2.2.0+)** — compiled into a single stripped binary (with embedded frontend)
+- ✅ **React mobile frontend** — React 19 + TypeScript + Vite + antd-mobile 5, mobile-first, hash routing, hand-written SVG charts, PWA support
 - ✅ **Regex parsing** — named capture groups for IP extraction
 - ✅ **RCU concurrency safety** — spinlock protected, high-concurrency safe
 - ✅ **Strict config validation** — unknown params rejected by default
-- ✅ **Prometheus metrics** — 24 metrics on port 9119 (4 kernel + 12 user-space + 4 netlink + 1 uptime + 3 reputation)
+- ✅ **Prometheus metrics** — exported on port 9119
 - ✅ **Independent log file** — `cfg.log_file` default `/var/log/firewall.log`, falls back to syslog-only on open failure
-- ✅ **Security hardening** — Integer overflow protection, UAF fix, RCU consistency, 46 `unsafe` blocks all with `// SAFETY:` comments
-- ✅ **Performance optimization** — Hash table 4096, whitelist two-stage match, LTO compilation
-- ✅ **Code quality** — 93 unit tests + 19 integration test suites 100% pass, CI three jobs all green
+- ✅ **Security hardening** — integer overflow protection, UAF fix, RCU consistency, every `unsafe` block carries a `// SAFETY:` comment
+- ✅ **Performance optimization** — hash table + two-stage whitelist match, LTO compilation
+- ✅ **Code quality** — unit and integration test suites pass, CI green
 
 ## Quick Start
 
@@ -106,7 +106,7 @@ sudo ./build/daemon/firewall-daemon --help                  # Help
 
 ```bash
 make deb                 # Calls ./build-deb.sh
-                         # Output: build/deb/linux-firewall-kmod-2.2.0.deb (1.5MB)
+                         # Output: build/deb/linux-firewall-kmod-2.2.0.deb
 sudo dpkg -i build/deb/linux-firewall-kmod-2.2.0.deb  # Install (DKMS auto-builds + systemd start)
 ```
 

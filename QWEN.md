@@ -12,9 +12,9 @@
 - **守护进程**：Rust（v2.2.0 起从 C 翻译），单文件 stripped 二进制（含前端构建产物）
 - **前端**：React 19 + TypeScript + Vite + antd-mobile 5（移动优先，hash 路由），底部 TabBar + 卡片式布局，手写 SVG 图表，支持 PWA
 - **构建系统**：Makefile + Cargo + npm/vite
-- **测试框架**：Python pytest（19 个套件，94 项）+ Rust 单元测试（434 项）
+- **测试框架**：Python pytest（集成测试）+ Rust 单元测试；用例数随开发变动，跑 `make test` / `cargo test --release` 取实时值
 - **配置格式**：YAML（Jail 配置）
-- **监控导出**：Prometheus 指标（端口 9119，24 个指标）
+- **监控导出**：Prometheus 指标（端口 9119；指标清单以 `src/daemon/http_exporter/metrics.rs` 为准）
 
 ### 核心架构
 
@@ -55,12 +55,12 @@ linux-firewall-kmod/
 │   ├── kernel-module/          # 内核模块 C 源码（统一 fw_* 前缀）
 │   │   ├── fw_main.c           # 模块入口（init/exit）+ 模块参数
 │   │   ├── fw_hook.c           # netfilter 钩子函数
-│   │   ├── fw_ban.c            # 封禁表（4096 桶 hlist + RCU + per-entry 定时器）
+│   │   ├── fw_ban.c            # 封禁表（hlist + RCU + per-entry 定时器）
 │   │   ├── fw_wl.c             # 白名单（精确桶 + 子网链）
 │   │   ├── fw_rate.c           # 速率 / 端口扫描 / 服务探测检测
 │   │   ├── fw_local.c          # 本机地址集合
 │   │   ├── fw_netlink.c        # netlink 通道（与守护进程双向通信）
-│   │   ├── fw_procfs.c         # /proc/firewall 的 12 个条目
+│   │   ├── fw_procfs.c         # /proc/firewall 条目
 │   │   ├── fw_state.c          # 状态快照与持久化还原
 │   │   ├── fw_stats.c          # 每 CPU 统计聚合
 │   │   ├── fw_netdev.c         # 网卡事件（本机地址维护）
@@ -89,7 +89,7 @@ linux-firewall-kmod/
 │   ├── conftest.py             # pytest fixtures + 辅助函数
 │   ├── config.py               # 测试配置（路径、IP、参数）
 │   ├── test_01_module_lifecycle.py # 模块加载/卸载生命周期测试
-│   ├── ...                     # 19 个测试套件（01-21）
+│   ├── ...                     # 其余测试套件
 │   └── e2e/                    # Playwright E2E 测试
 ├── docs/                       # 文档
 ├── build/                      # 构建产物（git-ignored）
@@ -133,7 +133,7 @@ cargo fmt                       # Rust 代码格式化
 
 移动端优先的 React 应用，构建产物经 `rust-embed` 嵌入守护进程，访问 `http://<host>:9119/dashboard`。
 
-- 前端入口：`frontend/index.html` + `frontend/src/main.tsx`；路由用 hash 模式（守护进程只对 7 个页面路径返回同一份 HTML，无 catch-all）
+- 前端入口：`frontend/index.html` + `frontend/src/main.tsx`；路由用 hash 模式（守护进程只对若干页面路径返回同一份 HTML，无 catch-all）
 - **认证**：配置了 `metrics_username` / `metrics_password` 时，页面会显示应用内登录表单（不使用浏览器原生 Basic 对话框 —— SPA 外壳是公开路由，顶层文档不返回 401，原生对话框根本不会出现）。
   - 登录成功后令牌存入 `sessionStorage`（键 `firewall.access_token`），所有 `fetch` 显式带 `Authorization: Basic <令牌>`
   - SSE 走 `?access_token=<令牌>`（`EventSource` 无法设置自定义请求头），服务端中间件同时兼容该参数
@@ -159,10 +159,10 @@ sudo rmmod firewall
 ### 运行测试
 
 ```bash
-# 集成测试套件（19 套件 94 项，需要 root；`make test` 只跑 pytest，不含 cargo test）
+# 集成测试套件（需要 root；`make test` 只跑 pytest，不含 cargo test），用例数见实时输出
 make test
 
-# 仅 Rust 单元测试（434 项 + 7 项 doctest）
+# 仅 Rust 单元测试（含 doctest）
 cargo test --release
 
 # 直接调用集成测试（需要 root 权限）
@@ -259,22 +259,24 @@ perf(kmod): 优化速率检测使用平均速率
 - 守护进程与内核模块的交互协议
 
 **测试分层**：
-- **单元测试**：`cargo test`（434 项）
-- **集成测试**：`make test`（19 个套件，94 项）
+- **单元测试**：`cargo test`
+- **集成测试**：`make test`
 - **行为审计**：C 到 Rust 移植时按需触发
 
 ### 内存安全（Rust unsafe）
 
-当前代码库有 **35 个 unsafe 块**，分布在 9 个文件：
-- `kernel/transport.rs`（12）— netlink socket 的 open/bind/send/recv/close
-- `signal/mod.rs`（9）— signalfd 读取 siginfo（信号转 fd）
-- `daemonizer.rs`（7）— fork 守护进程化 / flock / fd 接管
-- `kernel/codec/mod.rs`（2）— 线格式布局的指针访问
-- `signals.rs`（1）— sigaction 信号处理器注册
-- `logger.rs`（1）— syslog(3) 接入
-- `ip_utils.rs`（1）— IP 地址原始操作
-- `ingest/watcher.rs`（1）— inotify fd 读取
-- `file_monitor/monitor_loop.rs`（1）— poll 系统调用封装
+unsafe 块集中在 netlink 传输、signalfd/sigaction 信号、守护进程化（fork/flock/fd）、
+线格式指针访问、syslog、IP 地址操作、inotify/poll 封装等处。具体清单与块数以
+`grep -rn 'unsafe {' src/daemon` 为准：
+- `kernel/transport.rs` — netlink socket 的 open/bind/send/recv/close
+- `signal/mod.rs` — signalfd 读取 siginfo（信号转 fd）
+- `daemonizer.rs` — fork 守护进程化 / flock / fd 接管
+- `kernel/codec/mod.rs` — 线格式布局的指针访问
+- `signals.rs` — sigaction 信号处理器注册
+- `logger.rs` — syslog(3) 接入
+- `ip_utils.rs` — IP 地址原始操作
+- `ingest/watcher.rs` — inotify fd 读取
+- `file_monitor/monitor_loop.rs` — poll 系统调用封装
 
 **硬性要求**：
 - 每个 unsafe 块必须紧跟 `// SAFETY:` 注释
@@ -285,10 +287,9 @@ perf(kmod): 优化速率检测使用平均速率
 
 ### procfs 接口
 
-内核模块通过 `/proc/firewall/` 暴露操作接口（共 12 个条目：`bans`、`config`、
-`whitelist`、`stats`、`rates`、`udp_ports`、`icmp_types`、`pkt_sizes`、`ttl_dist`、
-`ip_frags`、`port_scanners`、`service_probes`；前 3 个为 0600，其余 9 个为 0400
-只读统计/分析视图）：
+内核模块通过 `/proc/firewall/` 暴露操作接口：`bans`、`config`、`whitelist` 为
+0600 可写，其余为 0400 只读统计/分析视图（完整条目与权限由 `contract/procfs.fwidl`
+生成到 `contract/generated/procfs_uapi.h`）：
 
 ```bash
 # 封禁 IP（默认时长 / 自定义 / 永久）
@@ -327,7 +328,7 @@ cat /proc/firewall/config
 
 ### Prometheus 指标
 
-端口 9119 导出 24 个监控指标（4 内核 + 12 用户态 + 4 netlink + 1 uptime + 3 信誉分）：
+端口 9119 导出监控指标（清单以 `src/daemon/http_exporter/metrics.rs` 为准）：
 
 **内核侧指标**：
 - `firewall_kernel_banned_ips_current` - 当前封禁 IP 数
@@ -378,8 +379,8 @@ cat /proc/firewall/config
 
 3. **测试套件**
    ```bash
-   make test           # 集成测试（19 套件 94 项，仅 pytest）
-   cargo test --release # Rust 单元测试（434 项 + 7 项 doctest）
+   make test           # 集成测试（仅 pytest）
+   cargo test --release # Rust 单元测试（含 doctest）
    ```
 
 **任一环节失败不得提交**。
@@ -425,11 +426,11 @@ sudo insmod build/kernel-module/firewall.ko
 | 指标 | 数值 |
 |------|------|
 | 封禁查找 | O(1) 哈希表 |
-| 封禁表 | 4096 桶 hlist（RCU + per-entry 定时器）；条目录上限默认 65535（`fw_max_ban_entries`） |
-| 白名单 | 64 精确桶 + 子网链；条目录上限默认 65535（`fw_max_whitelist_entries`） |
-| 速率表 | 65536 桶；条目上限默认 65536（`fw_max_rate_entries`） |
-| 守护进程体积 | 单文件 stripped 二进制（含前端产物，具体数值需 `stat -c %s build/daemon/firewall-daemon` 实测） |
-| 测试覆盖 | 19 集成套件（94 项）+ 434 单元 |
+| 封禁表 | hlist + RCU + per-entry 定时器；桶数与条目录上限见 `fw_types.h` 与 `fw_main.c` 模块参数 |
+| 白名单 | 精确桶 + 子网链两阶段匹配；桶数与条目录上限同上 |
+| 速率表 | 哈希表；桶数与条目上限同上 |
+| 守护进程体积 | 单文件 stripped 二进制（含前端产物），`stat -c %s build/daemon/firewall-daemon` 实测 |
+| 测试覆盖 | 集成测试 + Rust 单元测试；以 `make test` / `cargo test` 实时输出为准 |
 | 响应延迟 | 毫秒级 |
 
 ## 相关文档

@@ -11,8 +11,8 @@ graph TD
     CONF["conftest.py pytest fixtures, helper functions, test isolation"]
     CFG["config.py path/parameter variables (KERNEL_MODULE_PATH, ...)"]
 
-    subgraph SUITES["test_*.py numbered suites (executed in 01-21 order, 05/06 skipped, 19 suites 94 tests)"]
-        S01["test_01_module_basic.py"]
+    subgraph SUITES["test_*.py numbered suites (executed in numbering order, some numbers skipped)"]
+        S01["test_01_module_lifecycle.py"]
         S02["test_02_procfs_interface.py"]
         S03["test_03_ban_unban.py"]
         S04["test_04_whitelist.py"]
@@ -69,14 +69,13 @@ cargo test --doc
 cargo test config::
 ```
 
-Current count: **434 unit tests + 7 doctests** (doctests actually
-execute — they are not `no_run`).
+Unit tests and doctests both actually execute (doctests are not
+`no_run`); for the current count, read the `cargo test` output.
 
 `cargo test` exercises the `#[cfg(test)]` modules inside the daemon
-crate; the 19-suite / 94-test pytest integration suite in
-`tests/` complements it — unit tests verify logic at the
-source level, integration tests verify end-to-end behavior in
-Python.
+crate; the pytest integration suite in `tests/` complements it —
+unit tests verify logic at the source level, integration tests verify
+end-to-end behavior in Python.
 
 ## Integration Tests
 
@@ -100,7 +99,7 @@ sudo python3 -m pytest tests/ --collect-only        # list all tests without exe
 
 The test framework is Python pytest, with entry points at `tests/conftest.py`
 (fixtures and helper functions) and `tests/config.py` (paths and parameter
-configuration). Current count: 19 suites / **94** tests.
+configuration).
 
 ### Running under sudo
 
@@ -144,7 +143,7 @@ tests/test_03_ban_unban.py::TestBanUnban::test_unban PASSED
 tests/test_09_daemon_config.py::TestDaemonConfig::test_yaml_load PASSED
 ...
 
-========================= 94 passed in 45.32s =========================
+========================= all passed in 45.32s =========================
 ```
 
 With `--html=report.html`, an HTML report is generated with pass/fail
@@ -154,12 +153,12 @@ status, output, and elapsed time for each test, uploaded as a CI artifact.
 
 | # | File | Coverage |
 |---|------|----------|
-| 01 | `test_01_module_basic.py` | Module load/unload, parameter load, sysfs readable |
+| 01 | `test_01_module_lifecycle.py` | Module load/unload, parameter load, sysfs readable |
 | 02 | `test_02_procfs_interface.py` | `/proc/firewall/{bans,whitelist,config,stats}` R/W |
 | 03 | `test_03_ban_unban.py` | Ban, unban, temporary/permanent, expiry cleanup |
 | 04 | `test_04_whitelist.py` | Exact match, CIDR subnet match, capacity limit |
 | 07 | `test_07_concurrency.py` | Multi-process R/W, RCU correctness |
-| 08 | `test_08_stress_perf.py` | Full 4096-entry table operations, latency |
+| 08 | `test_08_stress_perf.py` | Full-table operations, latency |
 | 09 | `test_09_daemon_config.py` | YAML loading, strict-mode validation, jail parsing |
 | 10 | `test_10_daemon_logparse.py` | inotify monitoring, regex matching, jail trigger |
 | 11 | `test_11_resource_mgmt.py` | Memory, fds, procfs resource lifecycle |
@@ -175,8 +174,7 @@ status, output, and elapsed time for each test, uploaded as a CI artifact.
 | 21 | `test_21_multi_jail.py` | Multi-jail concurrency, independent logs, isolation |
 
 > Numbering skips 05/06: those slots were used by old suites that have
-> since been merged into the ones above. Current count: 19 suites
-> totaling **94** tests.
+> since been merged into the ones above.
 
 ## Framework Helper Functions
 
@@ -212,13 +210,12 @@ happens (see [ci.yml](../../../../.github/workflows/ci.yml)).
 
 ## Memory-Safety Detection (ASAN / Miri)
 
-The daemon (Rust) contains 35 `unsafe { }` blocks across 9 files
-(`kernel/transport.rs`, `signal/mod.rs`, `daemonizer.rs`,
-`kernel/codec/mod.rs`, `signals.rs`, `logger.rs`, `ip_utils.rs`,
-`ingest/watcher.rs`, `file_monitor/monitor_loop.rs`), and every one of
-them carries a `// SAFETY:` comment documenting the invariants and
-reasoning. The checks below are run manually (CI does not wire them in
-at present):
+The daemon (Rust) keeps its `unsafe { }` blocks in a handful of areas —
+kernel transport, signal handling, daemonization, wire-format pointers,
+syslog, IP helpers, and inotify/poll — and every one carries a
+`// SAFETY:` comment documenting the invariants and reasoning (list
+them with `grep -rn 'unsafe {' src/daemon/`). The checks below are run
+manually (CI does not wire them in at present):
 
 ### AddressSanitizer
 
@@ -268,7 +265,7 @@ toolchain.
 
 ### Unsafe-block inventory
 
-`grep -rn "unsafe {" src/daemon/` lists all 35 blocks; each sits
+`grep -rn "unsafe {" src/daemon/` lists every `unsafe` block; each sits
 next to a `// SAFETY:` comment explaining the invariants. **Any new
 `unsafe` block MUST come with a `// SAFETY:` comment**, otherwise
 the tightened `cargo clippy` rules (configured in the repo's
@@ -283,7 +280,7 @@ fixtures and helper functions from conftest.py:
 ```python
 # test_22_my_feature.py - new feature tests
 
-from .conftest import ban_ip, unban_ip, ip_is_banned, get_stat
+from .conftest import ban_ip, ban_ip_with_time, unban_ip, ip_is_banned, get_stat
 
 
 class TestMyFeature:
@@ -296,21 +293,20 @@ class TestMyFeature:
 
     def test_boundary_condition(self, clean_bans):
         """Boundary condition"""
-        from .config import MAX_BAN_CAPACITY
-        assert MAX_BAN_CAPACITY == 4096
+        ban_ip_with_time("203.0.113.2", 1)
+        assert ip_is_banned("203.0.113.2")
 ```
 
 ## CI Integration
 
-`.github/workflows/ci.yml` defines **4 jobs**, all of which must pass
-before a merge:
+`.github/workflows/ci.yml` jobs must all pass before a merge:
 
 | Job | Checks | Failure → merge |
 |-----|--------|-----------------|
 | `lint` | rustfmt + clippy (`--all-targets --all-features`) + yamllint + kernel-module clang-format | blocks merge |
 | `frontend` | Frontend type check (`tsc --noEmit`) + vite build + build-artifact / PWA manifest / Service Worker validation | blocks merge |
 | `build` | Kernel module (`make kernel-module`) + daemon (`make daemon`) | blocks merge |
-| `test` | `sudo python3 -m pytest tests/ -v`, currently **19 suites / 94 tests** | any fail blocks merge |
+| `test` | `sudo python3 -m pytest tests/ -v` | any fail blocks merge |
 
 `test` job orchestration details:
 
