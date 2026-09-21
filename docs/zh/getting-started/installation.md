@@ -94,12 +94,12 @@ make                    # 编译内核模块 + Rust 守护进程 + React 前端
                         # 守护进程: build/daemon/firewall-daemon (stripped，内嵌前端产物)
 
 # 构建 .deb
-make deb                # 输出: build/deb/linux-firewall-kmod-2.2.0.deb (1.5MB)
+make deb                # 输出: build/deb/linux-firewall-kmod-<版本>.deb
 
 # 安装
-sudo dpkg -i build/deb/linux-firewall-kmod-2.2.0.deb
+sudo dpkg -i build/deb/linux-firewall-kmod-<版本>.deb
 # 等同于:
-#   1. dkms add + build + install firewall/2.2.0
+#   1. dkms add + build + install firewall/<版本>
 #   2. modprobe firewall
 #   3. systemctl enable --now firewall-daemon
 #   4. cp /etc/firewall/*.yaml (从 /usr/share/firewall/ 复制)

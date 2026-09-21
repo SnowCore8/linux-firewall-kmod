@@ -94,12 +94,12 @@ make                    # Compile kernel module + Rust daemon + React frontend
                         # Daemon:        build/daemon/firewall-daemon (stripped, with embedded frontend)
 
 # Build .deb
-make deb                # Output: build/deb/linux-firewall-kmod-2.2.0.deb (1.5MB)
+make deb                # Output: build/deb/linux-firewall-kmod-<version>.deb
 
 # Install
-sudo dpkg -i build/deb/linux-firewall-kmod-2.2.0.deb
+sudo dpkg -i build/deb/linux-firewall-kmod-<version>.deb
 # Equivalent to:
-#   1. dkms add + build + install firewall/2.2.0
+#   1. dkms add + build + install firewall/<version>
 #   2. modprobe firewall
 #   3. systemctl enable --now firewall-daemon
 #   4. cp /etc/firewall/*.yaml (from /usr/share/firewall/)
