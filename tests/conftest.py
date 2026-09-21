@@ -3,6 +3,7 @@
 import os
 import re
 import shutil
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -390,6 +391,38 @@ def parse_metric(metrics: str, name: str) -> float:
         if line.startswith(f"{name} "):
             return float(line.split()[1])
     return 0.0
+
+
+def free_tcp_port() -> int:
+    """取一个当前空闲的本机 TCP 端口，供自起 daemon 独占使用。
+
+    绑定端口 0 让内核分配后立即释放。相比写死 9119，可避免与真实 daemon 或其它
+    用例抢端口。
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def wait_for_metric(
+    port: int,
+    name: str,
+    predicate,
+    timeout: float = 8.0,
+    interval: float = 0.2,
+) -> float:
+    """轮询 Prometheus 指标直到 `predicate(value)` 成立或超时，返回最后一次读到的值。
+
+    事件驱动等待：daemon 的重载/轮转/周期任务在主循环 poll 超时分支执行，落地时刻
+    不确定，固定 `sleep` 既可能过短（偶发失败）也可能过长（拖慢套件）。超时返回最后
+    值，由调用方断言并给出可读的失败信息。
+    """
+    deadline = time.monotonic() + timeout
+    value = parse_metric(get_prometheus_metrics(port), name)
+    while not predicate(value) and time.monotonic() < deadline:
+        time.sleep(interval)
+        value = parse_metric(get_prometheus_metrics(port), name)
+    return value
 
 
 def run_daemon_captured(cmd: list[str], timeout: int = 5):
