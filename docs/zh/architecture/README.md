@@ -85,6 +85,7 @@ RCU 不按 CPU 分配读写角色：任意 CPU 都可读、都可在锁内写。
 |------|------|------|
 | 内核模块 | 内核 | 报文判定、封禁/白名单表、速率与 DDoS 检测、procfs 与 netlink 接口 |
 | 守护进程 | 用户 | 日志监控、正则匹配、失败计数与封禁决策、配置下发、Web UI / API / SSE / 指标 |
+| Web 前端 | 浏览器 | 独立 SPA：视图与实时推送消费；由守护进程内嵌静态资源托管（见 [`frontend.md`](frontend.md)） |
 | ProcFS | 内核/用户 | 用户操作接口与状态查询（12 条，权限见 `contract/procfs.fwidl`） |
 | netlink | 内核/用户 | daemon ↔ 内核的**唯一**内部通道：命令、分页查询响应与事件推送 |
 | 历史库 | 用户 | daemon 侧时序历史与封禁历史持久化（`src/daemon/history_snapshot/`） |

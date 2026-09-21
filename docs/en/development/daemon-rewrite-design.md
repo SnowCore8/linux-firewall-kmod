@@ -1199,7 +1199,7 @@ not reverted:
 |---------|-------|-------------|
 | This design's first version claimed the old doc was wrong to say "24 metrics" | 24 is the truth (`# TYPE` count = distinct metric-name count = 24) | Retracted; the doc says 24 |
 | This design's first version claimed the old doc was wrong to say "the port is 9119" | 9119 is the truth (`config/default.yaml:12`, `src/daemon/types/config.rs`) | Retracted; the doc says 9119 and adds the distinction that the code default binds loopback only while the shipped YAML binds all interfaces |
-| The source comment "35 not yet migrated" | Truth is 23 (count of `.route()` inside `legacy_protected_routes`; 41 = 53 - 12) | Doc and source comments corrected in the same step |
+| The source comment "35 not yet migrated" | The comment's count was wrong. The truth is whatever `.route()` calls `legacy_protected_routes` actually holds -- it changes with every migration, so neither the doc nor the comment hardcodes it | Doc and source comments corrected in the same step |
 | The `metrics.rs` comment "25 in total" | Truth is 24 (4 kernel + 12 user-side (9 general + 3 DDoS) + 4 netlink + 1 uptime + 3 reputation) | Corrected in the same step |
 
 The last two rows are this phase's **code-side changes, all comment-only**: three places in

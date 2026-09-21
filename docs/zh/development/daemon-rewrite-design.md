@@ -915,7 +915,7 @@ count, first_seen, last_seen }` + `ban/procfs.rs` + `<HOST>` 替换 + SQLite `ba
 |------|------|------|
 | 本设计初版称旧文档「指标数写 24 个」是错的 | 24 就是真值（`# TYPE` 计数 = 去重指标名计数 = 24） | 收回误判，文档写 24 |
 | 本设计初版称旧文档「端口写的是 9119」是错的 | 9119 就是真值（`config/default.yaml:12`、`src/daemon/types/config.rs`） | 收回误判；文档写 9119，并补「代码默认只绑回环、随包 YAML 绑全网」这一区分 |
-| 源码注释「尚未迁入的 35 条」 | 真值 23（`legacy_protected_routes` 内 `.route()` 计数；41 = 53 − 12） | 文档与源码注释同一步改齐 |
+| 源码注释「尚未迁入的 35 条」 | 该注释的计数是错的。真值按 `legacy_protected_routes` 内 `.route()` 现场重数——迁移期间持续变化，故文档与注释都不写死数字 | 文档与源码注释同一步改齐 |
 | `metrics.rs` 注释「共 25 个」 | 真值 24（4 内核 + 12 用户态（9 通用 + 3 DDoS）+ 4 netlink + 1 uptime + 3 信誉） | 同一步改齐 |
 
 后两行是本阶段的**代码侧改动，只有纯注释**：`handler.rs` 三处、`api/router.rs` 一处（路由计数），

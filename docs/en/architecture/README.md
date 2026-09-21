@@ -90,6 +90,7 @@ RCU does not assign read/write roles per CPU: any CPU may read, and any CPU may 
 |-----------|-------|----------------|
 | Kernel Module | Kernel | Packet verdicts, ban/whitelist tables, rate and DDoS detection, procfs and netlink interfaces |
 | Daemon | Userspace | Log monitoring, regex matching, failure counting and ban decisions, config dispatch, Web UI / API / SSE / metrics |
+| Web frontend | Browser | Standalone SPA: views plus live-push consumption; served as static assets embedded in the daemon (see [`frontend.md`](frontend.md)) |
 | ProcFS | Kernel/Userspace | Operator interface and status queries (12 entries, permissions in `contract/procfs.fwidl`) |
 | netlink | Kernel/Userspace | The **only** daemon <-> kernel channel: commands, paged query responses, event pushes |
 | History store | Userspace | Daemon-side time-series history and ban-history persistence (`src/daemon/history_snapshot/`) |

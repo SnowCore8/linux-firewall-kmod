@@ -320,6 +320,16 @@ jobs:
           # 指定的端口，与夹具启动守护进程时用的是同一份常量，不会漂移。
           eval "$(bash scripts/e2e-daemon.sh env)"
           export BASE_URL E2E_METRICS_USER E2E_METRICS_PASSWORD E2E_KERNEL_MODULE
+          # 夹具把守护进程绑在 0.0.0.0，故本机任意非回环地址都是可达的非安全上下文。
+          # 取它当 E2E_LAN_ORIGIN，让「SW 在非安全上下文不可用」这条验收在 CI 里也真跑，
+          # 而不是因缺变量恒 skip。取不到就保持未设置（用例自行 skip）。
+          RUNNER_IP="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)"
+          if [ -n "${RUNNER_IP}" ]; then
+            export E2E_LAN_ORIGIN="http://${RUNNER_IP}:9119"
+            echo "E2E_LAN_ORIGIN=${E2E_LAN_ORIGIN}"
+          else
+            echo "::warning::未取到非回环地址，E2E_LAN_ORIGIN 未设置，非安全上下文用例将跳过"
+          fi
           npm run test:e2e
 
       - name: 上传 Playwright 报告
