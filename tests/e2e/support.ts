@@ -91,10 +91,12 @@ const BROWSER_NOISE: RegExp[] = [
 ]
 
 /** 是否为可忽略的浏览器噪音 */
-function isIgnorable(issue: ConsoleIssue): boolean {
+function isIgnorable(issue: ConsoleIssue, origin: string): boolean {
   if (issue.kind === 'pageerror') return false // 未捕获异常一律视为缺陷
-  // 跨源资源（如 Google Fonts）不可达只影响字体外观，不是应用缺陷
-  if (issue.url !== '' && !issue.url.startsWith(BASE_URL)) return true
+  // 跨源资源（如 Google Fonts）不可达只影响字体外观，不是应用缺陷。
+  // 判据用**当前 baseURL 的源**而不是固定常量：同一套用例会在不同源上跑
+  // （如非安全上下文的验收用局域网 IP），写死一个源会让另一侧的判定整体失效。
+  if (issue.url !== '' && !issue.url.startsWith(origin)) return true
   if (issue.url === '' && BROWSER_NOISE.some((re) => re.test(issue.text))) return true
   return false
 }
@@ -168,11 +170,11 @@ export const test = base.extend<{ issues: ConsoleIssue[]; app: Page }>({
     await use(issues)
   },
 
-  app: async ({ page, issues }, use) => {
+  app: async ({ page, issues, baseURL }, use) => {
     await seedToken(page, ACCESS_TOKEN)
     await use(page)
 
-    const offending = issues.filter((issue) => !isIgnorable(issue))
+    const offending = issues.filter((issue) => !isIgnorable(issue, baseURL ?? BASE_URL))
     expect(
       offending.map((i) => `[${i.kind}/${i.type}] ${i.text}${i.url ? ` @ ${i.url}` : ''}`),
       '用例期间出现了控制台错误/警告或未捕获异常',
