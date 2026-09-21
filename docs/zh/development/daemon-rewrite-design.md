@@ -433,12 +433,12 @@ sequenceDiagram
 | 白名单解析上限 64 与内核单页 256 冲突 | 删除硬编码上限，改为按契约页上限；分页补齐（修 J） | 已完成 |
 | 速率响应静默截断 | 补分页 + 读 `total` + 截断可见（修 J） | 已完成 |
 | 历史库写队列满静默丢弃 | 队列满时阻塞生产者、不丢弃；关停先排空再关连接；队列深度越线告警（修 G） | 已完成：`history_snapshot/mod.rs` 队列改用 `runtime::channel` 的 `Backpressure::Block`，四条丢弃路径（满 / 未装配 / 写线程已退出 / 关停有在途项）全部可见，`close_history_db` 先 join 写线程排空再关连接；4 条反恒真单测锁定行为（见文末 2.F-1 证据） |
-| 注册失联不可见 | 引入 `Lease` + 解析 `RegisterAck`（修 K） | 新侧已就位（`kernel/{client,lease}.rs`），但 `main.rs` 与各写入点仍走旧 `crate::netlink`，未接入生产 |
-| 两条基线/配置下发路径 | 收敛到 `client.set_config()`（修 L） | 同上：`kernel/client.rs::set_config` 已就位，生产仍走旧 `crate::netlink::sync_protocol_thresholds` |
-| 白名单 CIDR 键不一致 | 单一规范化函数（修 M） | 部分：`state/cidr.rs::CidrKey` 已就位、旧写路径已退役；旧函数 `ban/mod.rs::build_cidr_key` 仍在库中、`status` 仍 `open` |
+| 注册失联不可见 | 引入 `Lease` + 解析 `RegisterAck`（修 K） | 已完成：`kernel/{client,lease}.rs` 已进生产——`main.rs` 装配 `kernel_poll::LeaseCell` 并经 `kernel::global::init(client)` 注入，旧 `crate::netlink` 已随 2.H-4 退役删除 |
+| 两条基线/配置下发路径 | 收敛到 `client.set_config()`（修 L） | 已完成：旧 `crate::netlink` 路径已随 2.H-4 退役删除；阈值/开关下发单入口为 `config_sync::sync_protocol_thresholds`（见 `config_reloader.rs`、`web_ui/api.rs`） |
+| 白名单 CIDR 键不一致 | 单一规范化函数（修 M） | 已完成：写入路径统一经 `state/cidr.rs::CidrKey`；旧函数 `ban/mod.rs::build_cidr_key` 已随旧 `netlink/` 同批删除，契约 `status` 转 `fixed`（`600b097`） |
 | 读路径副作用（purge + 统计） | purge 改为显式方法，调度器独立任务调用；读路径只读（修 E） | 已完成：`state/compose.rs::purge_expired_bans` + `runtime/scheduler.rs` 周期调用 + `main.rs` 装配 `runtime::spawn_periodic`；`get_active_bans()` 的限流 purge 与其节流静态量已删，`status` 转 `fixed` |
 | 两个空转周期任务 | `write_stats_snapshot` 与 `check_and_handle_ddos` 均改为空操作（只留调试日志） | 已完成 |
-| `protocol.rs` 注释「20 字节」 | 随 codec 改用生成物而消失 | 未完成：新 `kernel/codec` 已不手写结构，但旧 `netlink/protocol.rs:94` 的「20 字节」注释仍在（旧模块未删） |
+| `protocol.rs` 注释「20 字节」 | 随 codec 改用生成物而消失 | 已完成：旧 `netlink/protocol.rs` 已随 2.H-4 退役删除，新 `kernel/codec` 不手写结构，定长声明改由生成物 `netlink_uapi.h` 的 `_Static_assert` 承担 |
 
 ### 有意保留
 
@@ -531,11 +531,11 @@ sequenceDiagram
 | 2.F-1 队列背压（`history_snapshot/mod.rs`，只修队列行为） | 已完成 |
 | 2.F-2 测试债务替换（`tests/` 恒真断言） | 已完成 |
 | 2.G 文档重写 | 已完成 |
-| 2.H-1 入站消费层（`Incoming` → 缓存/状态镜像） | 待开工 |
-| 2.H-2 全局定位器 `OnceLock<Client>` + `DdosDecisionEngine` 接线 | 待开工 |
-| 2.H-3 生产切换（`main.rs` 原子装配 + 调用点重指） | 待开工 |
-| 2.H-4 退役旧 `netlink/` + M 棘轮翻转 | 待开工 |
-| 2.H-5 文档（`daemon.md` 状态/差距表） | 待开工 |
+| 2.H-1 入站消费层（`Incoming` → 缓存/状态镜像） | 已完成 |
+| 2.H-2 全局定位器 `OnceLock<Client>` + `DdosDecisionEngine` 接线 | 已完成 |
+| 2.H-3 生产切换（`main.rs` 原子装配 + 调用点重指） | 已完成（`e6626c7`） |
+| 2.H-4 退役旧 `netlink/` + M 棘轮翻转 | 已完成（`600b097`） |
+| 2.H-5 文档（`daemon.md` 状态/差距表） | 进行中 |
 
 ### 2.A 落地明细
 
