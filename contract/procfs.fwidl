@@ -163,6 +163,11 @@ write bans {
   "unban <ip>" = BanOp::UNBAN
 }
 
+# 写侧不变式：写入前必须归一到「主机位清零 + 恒带 prefix」。fw_wl_add /
+# fw_wl_remove 的入参按**已归一化**地址约定（去重键含归一化地址、按归一化地址
+# 查删，见 fw_wl.c 注释与 fw_addr_normalize 的说明），故三个调用点
+# （procfs / netlink / netdev）都要先过 fw_addr_normalize。netlink 路径曾漏掉，
+# 即缺陷 PROC_WHITELIST_NETLINK_NO_NORMALIZE。
 write whitelist {
   "add <subnet>" = WhitelistOp::ADD
   "<subnet>" = WhitelistOp::ADD_IMPLICIT
@@ -418,5 +423,17 @@ defect STAB_EXPORTED_FUNCS_UNUSED {
   where = "src/kernel-module/firewall-main.c:EXPORT_SYMBOL"
   fix = "src/kernel-module/fw_main.c:模块内自足"
   text = "get_fw_info() / is_banned() / is_permanently_banned() 三个函数只有 EXPORT_SYMBOL、模块内无调用点，外部使用者也无从证实。处置：确认无外部使用者后删除导出，新实现不导出任何符号（模块内自足）"
+}
+
+# ============================================================================
+# 本次重写期间查到的实现级缺陷（重写前不存在对应契约条目，此处补齐）
+# ============================================================================
+
+defect PROC_WHITELIST_NETLINK_NO_NORMALIZE {
+  severity = medium
+  status = fixed
+  where = "src/kernel-module/fw_netlink.c:adding ? fw_wl_add"
+  fix = "src/kernel-module/fw_netlink.c:fw_addr_normalize(af, (void *)addr, prefix_len)"
+  text = "白名单在 fw_wl_add / fw_wl_remove 的入参处约定为**已归一化**地址（去重键含归一化地址、按归一化地址查删，见 fw_wl.c 的注释与 fw_addr_normalize 的说明），而 netlink 路径 fw_nl_handle_whitelist() 直接把载荷里的 addr 分发下去，不调 fw_addr_normalize。旧实现是在 add_whitelist_entry 内部顺手清掩码位，换成 fw_wl_add 的严格入参约定后，三条路径里只有 netlink 这条漏了（procfs / netdev 都规了）。后果：经 netlink 加 <网络地址>/<prefix> 时入表键是主机位非零的地址，与 procfs 加的同一子网各占一条（去重任不得）；此后按网络地址 remove 查不到，而按传入的同一主机地址 remove 却会走通——同一条目『加进去删不掉』。触发条件为 daemon 侧传入主机位非零的地址（前端 CIDR 键归一化后不会，故暂未在生产暴露）。处置：在 fw_nl_handle_whitelist 里与 procfs 同序调用 fw_addr_normalize，再进 fw_wl_add / fw_wl_remove；where 指向的那处「不过滤直接分发」写法已消失，fix 指向归一化调用，两侧均由 verify_procfs.py 核对，且另有顺序断言防止把归一化挪到分发之后"
 }
 

@@ -730,8 +730,19 @@ static void fw_nl_handle_whitelist(u32 portid, u16 type, u8 af, const void *addr
   bool adding = type == FW_MSG_TYPE_ADD_WHITELIST;
   int ret;
 
-  ret = adding ? fw_wl_add(af, addr, prefix_len, device[0] ? device : NULL) :
-                 fw_wl_remove(af, addr, prefix_len);
+  /*
+   * 入参约定是**已归一化**地址：fw_wl_add / fw_wl_remove 按 (af, 归一化地址,
+   * prefix_len) 去重、并按归一化地址查删。procfs 路径自归一化，netdev 路径由
+   * fw_netdev.c 保证；这条若漏了，加 <网络地址>/<prefix> 会入表成主机位非零的
+   * 键——与 procfs 加的同一子网各占一条，且按网络地址 remove 查不到。故这里与
+   * procfs 同序归一化，且是原地改：后续的移表与事件推送都用归一化值。
+   */
+  fw_addr_normalize(af, (void *)addr, prefix_len);
+
+  if (adding)
+    ret = fw_wl_add(af, addr, prefix_len, device[0] ? device : NULL);
+  else
+    ret = fw_wl_remove(af, addr, prefix_len);
 
   if (ret) {
     fw_nl_send_cmd_result(portid, type, ret, af, addr);

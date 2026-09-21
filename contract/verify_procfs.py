@@ -402,6 +402,45 @@ def check_semantics(contract: dict) -> list[str]:
                 "KERNEL_NETLINK_STRUCTS_HANDWRITTEN 声明已修，但 fw_netlink.c 未引用生成头"
             )
 
+    if "PROC_WHITELIST_NETLINK_NO_NORMALIZE" in by_name:
+        # 锚点存在性只能证明「调了 fw_addr_normalize」，证明不了「调在分发之前」。
+        # 归一化若被挪到 fw_wl_add/fw_wl_remove 之后，锚点仍在、契约却撒谎，
+        # 故按函数体内的实际位置再断言一次：归一化必须早于两个分发点。
+        m = re.search(
+            r"static void fw_nl_handle_whitelist\(.*?\n\}", kernel_src["fw_netlink.c"], re.S
+        )
+        body = m.group(0) if m else ""
+        norm = body.find("fw_addr_normalize(")
+        dispatch = [body.find(s) for s in ("fw_wl_add(", "fw_wl_remove(")]
+        stale = body.find("adding ? fw_wl_add")
+        if not body:
+            problems.append("PROC_WHITELIST_NETLINK_NO_NORMALIZE: 契约引用的函数已消失")
+        elif norm < 0:
+            problems.append(
+                "PROC_WHITELIST_NETLINK_NO_NORMALIZE 声明已修，但 fw_nl_handle_whitelist "
+                "内未调用 fw_addr_normalize"
+            )
+        elif -1 in dispatch:
+            problems.append(
+                "PROC_WHITELIST_NETLINK_NO_NORMALIZE: fw_nl_handle_whitelist 内找不到 "
+                "fw_wl_add / fw_wl_remove 分发点，断言前提失效"
+            )
+        elif stale >= 0:
+            problems.append(
+                "PROC_WHITELIST_NETLINK_NO_NORMALIZE 声明已修，但旧的直接分发写法又回来了"
+            )
+        elif norm > min(dispatch):
+            problems.append(
+                "PROC_WHITELIST_NETLINK_NO_NORMALIZE 声明已修，但 fw_addr_normalize "
+                f"被挪到分发之后（归一化@{norm} vs 分发@{min(dispatch)}）："
+                "入表键仍会是主机位非零的地址"
+            )
+        else:
+            print(
+                "  PROC_WHITELIST_NETLINK_NO_NORMALIZE(fixed): "
+                f"fw_nl_handle_whitelist 内先归一化@{norm}再分发@{min(dispatch)}（成立）"
+            )
+
     return problems
 
 
