@@ -251,6 +251,90 @@ jobs:
           retention-days: 1
           if-no-files-found: warn
 
+  # 浏览器端到端测试：依赖 build 产物，在真实守护进程上跑 Playwright
+  #
+  # 为什么必须起真守护进程而不能只起前端 dev server：本套件断言的界面行为
+  # （hash 路由、写操作回环、SSE 状态灯、无 console 错误）只有在守护进程
+  # 真正提供 SPA 外壳 + 受保护 API + SSE 时才成立，dev server 无法覆盖这条链路。
+  #
+  # 环境门禁：守护进程启动期检查 /proc/firewall（见 src/daemon/main.rs），
+  # 即「有守护进程」蕴含「内核模块已加载」。GitHub 托管 runner 为自定义内核，
+  # 编译出的模块可能加载不了——这是环境限制而非代码缺陷，与 test 作业采取同一策略：
+  # 加载不了就显式跳过（带注解说明），而不是让 CI 长期变红。
+  e2e:
+    name: 浏览器端到端测试
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载编译产物
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: build/
+
+      - name: 设置执行权限
+        run: chmod +x build/daemon/firewall-daemon
+
+      - name: 安装运行时依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libyaml-0-2 libsqlite3-0 libmicrohttpd12 libpcre2-8-0
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: 安装 Playwright 依赖
+        run: |
+          npm ci --no-audit --no-fund
+          # 只装 chromium：套件只跑 Desktop Chrome 一个 project。
+          # --with-deps 会连同系统库一起装齐。
+          npx playwright install --with-deps chromium
+
+      - name: 探测内核模块可加载性
+        id: check-module
+        run: |
+          if sudo bash scripts/e2e-daemon.sh probe; then
+            echo "compatible=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "compatible=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::本机内核无法加载 kernel module，浏览器用例将跳过（环境限制，非代码问题）"
+          fi
+
+      - name: 启动守护进程
+        if: steps.check-module.outputs.compatible == 'true'
+        run: sudo -E bash scripts/e2e-daemon.sh start
+
+      - name: 运行 Playwright 用例
+        if: steps.check-module.outputs.compatible == 'true'
+        run: |
+          # 从夹具重新解析连接参数（纯打印，不需要 root）：用例只连 127.0.0.1:
+          # 指定的端口，与夹具启动守护进程时用的是同一份常量，不会漂移。
+          eval "$(bash scripts/e2e-daemon.sh env)"
+          export BASE_URL E2E_METRICS_USER E2E_METRICS_PASSWORD E2E_KERNEL_MODULE
+          npm run test:e2e
+
+      - name: 上传 Playwright 报告
+        if: always() && steps.check-module.outputs.compatible == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: 停止守护进程并清理
+        if: always() && steps.check-module.outputs.compatible == 'true'
+        run: sudo -E bash scripts/e2e-daemon.sh stop
+
   # 测试任务：依赖编译任务，使用 build 的编译产物
   test:
     name: 运行测试
