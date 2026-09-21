@@ -54,7 +54,8 @@
   全部多字节整数 **大端**；地址为裸字节（IPv4 占前 4 字节）。
 - **23 个消息类型**（1–21 历史 + 22 `DAEMON_REGISTER` / 23 `DAEMON_REGISTER_ACK`）。
 - 单守护进程互斥注册：`DAEMON_REGISTER` 成功后独占；已有活跃守护进程时 `accepted = 0`；
-  活动超时 30 s。**未注册实例下发的指令必须被拒绝。**
+  注册时先探活旧 portid（已死则立即放行接管），30 s 活动超时作「活着但卡死」的兜底。
+  **未注册实例下发的指令必须被拒绝。**
 - 各消息定长：`DdosEvent` 65、`BanStateChange` 122、`WhitelistStateChange` 51、`CmdResult` 37、
   `ConfigAck` 20、`ConfigChange`/`SetConfig` 116、`StatsResponse` 60、`BanIp`/`UnbanIp` 65、
   `AddWhitelist`/`RemoveWhitelist` 46、`StatsResponse` 系列裸头 12。

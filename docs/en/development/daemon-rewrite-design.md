@@ -218,8 +218,9 @@ The following is carried by the contracts and by `tests/`. It is an **external p
 - **23 message types**; the fixed-length constraints of each response/event and the per-page limits
   of variable-length responses (`ListBans` 696, `ListWhitelist` 1927, `ListRates` 779 entries/page)
   are unchangeable.
-- Single-daemon mutual-exclusion registration; 30 s activity timeout; **commands sent by an
-  unregistered instance must be rejected.**
+- Single-daemon mutual-exclusion registration; a liveness probe of the old portid runs first, so a
+  dead daemon is replaced immediately and the 30 s activity timeout only covers a live-but-wedged
+  daemon; **commands sent by an unregistered instance must be rejected.**
 - `ConfigFlags` 13 bits and `DynThresholdFlags` 1 bit keep their bit order.
 
 What may be revised this round is listed in [Contract Revision List](#contract-revision-list)

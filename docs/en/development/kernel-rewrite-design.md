@@ -66,7 +66,9 @@ It is not "legacy code"; it is an external promise.
   every multi-byte integer **big-endian**; addresses are raw bytes (IPv4 in the first 4 bytes).
 - **23 message types** (1–21 historical, plus 22 `DAEMON_REGISTER` / 23 `DAEMON_REGISTER_ACK`).
 - Single-daemon exclusive registration: a successful `DAEMON_REGISTER` owns the channel; when an
-  active daemon already exists the reply carries `accepted = 0`; the activity timeout is 30 s.
+  active daemon already exists the reply carries `accepted = 0`, unless a liveness probe of its
+  portid finds it dead (then takeover happens immediately); the 30 s activity timeout remains as
+  the fallback for a live-but-wedged daemon.
   **Commands from an unregistered instance must be rejected.**
 - Fixed sizes: `DdosEvent` 65, `BanStateChange` 122, `WhitelistStateChange` 51, `CmdResult` 37,
   `ConfigAck` 20, `ConfigChange`/`SetConfig` 116, `StatsResponse` 60, `BanIp`/`UnbanIp` 65,

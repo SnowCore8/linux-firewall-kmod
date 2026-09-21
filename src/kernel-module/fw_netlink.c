@@ -22,7 +22,11 @@
  *      实际 jiffies 间隔并据此折算，不再依赖任何跨模块常数。
  *   5. **控制面权限用 netlink_capable(skb, CAP_NET_ADMIN)**，与旧实现一致但
  *      用 6.17 存在的声明（linux/netlink.h）。
- *   6. **单守护进程互斥保留**：portid + 30 秒活动超时，接管语义与旧实现一致。
+ *   6. **单守护进程互斥**：portid 独占；注册时**先探活**旧 portid，已死则立即放行
+ *      接管，30 秒活动超时退居「活着但卡死」的兜底。旧实现只有超时这一条判据，
+ *      于是 daemon 崩溃（SIGKILL / OOM / panic 都不发注销报文）后最长 30 秒内谁的
+ *      注册都会被拒——服务管理器在这段窗口里反复重启也起不来。探活见
+ *      `fw_nl_daemon_alive()`。
  *
  * 上下文：netlink input 回调在发送方（daemon 进程）上下文中执行，可睡眠，
  * 因此 SET_CONFIG 触发的 fw_rate_clear_all()（on_each_cpu 同步等待）是安全的。
@@ -53,8 +57,16 @@
 /* 事件多播组；daemon 订阅组 1（与旧实现一致，属冻结面） */
 #define FW_NL_GROUP 1
 
-/* 单守护进程互斥：30 秒无消息视为死亡，允许新守护进程接管 */
+/* 单守护进程互斥兜底：30 秒无消息视为死亡，允许新守护进程接管；注册另先探活（见 fw_nl_daemon_alive） */
 #define FW_NL_DAEMON_TIMEOUT (30 * HZ)
+
+/*
+ * 探活报文的载荷长度。取 16 字节仅为走真实投递路径；内容全零，使 daemon 侧的
+ * 自定义头魔数校验必然失败——这样即便旧 daemon 还活着，探针也只被记成一次
+ * malformed 告警，不会执行任何指令或改任何状态（daemon 侧不认「非内核来源」以外的
+ * 分流，而探针的 netlink 源 portid 为 0，与内核广播同源）。
+ */
+#define FW_NL_PROBE_PAYLOAD 16
 
 /*
  * 分页默认页大小与硬上限。
@@ -730,6 +742,41 @@ static void fw_nl_handle_whitelist(u32 portid, u16 type, u8 af, const void *addr
                                     af, addr, prefix_len, device);
 }
 
+/*
+ * 探测内核记着的旧守护进程 portid 是否仍有一个存活的 socket。
+ *
+ * 判据：向该 portid 单播一条报文，取返回码。返回负值说明该 portid 已无 socket
+ * （本机实测：`netlink_unicast(已死 portid) = -ECONNREFUSED`；对存活 socket 返回
+ * 接收方缓冲区剩余字节数，为正）。这里把**任何**负值都当作「已死」——宁可早一步
+ * 放行接管，也不要让崩溃后的注册盲窗继续存在。
+ *
+ * 为什么必须有它：daemon 崩溃（SIGKILL / OOM / panic）不会发出任何注销报文，
+ * 内核与用户态都没有这种报文，于是「旧 daemon 是否还在」只能靠探活或等超时。
+ *
+ * 副作用与失败处置：旧 daemon 若真还活着，会收到这条全零报文，其自定义头魔数
+ * 校验必失败，只记一次 malformed 告警，不执行指令、不改状态。skb 分配不出来时
+ * 按「仍活着」处理（返回 true），保持原互斥语义，不因内存紧张而误放行。
+ */
+static bool fw_nl_daemon_alive(void) {
+  struct sk_buff *skb;
+  struct nlmsghdr *nlh;
+  int rc;
+
+  skb = nlmsg_new(FW_NL_PROBE_PAYLOAD, GFP_KERNEL);
+  if (!skb)
+    return true;
+
+  nlh = nlmsg_put(skb, 0, 0, 0, FW_NL_PROBE_PAYLOAD, 0);
+  if (!nlh) {
+    kfree_skb(skb); /* 尚未交给 netlink，失败时须自行释放 */
+    return true;
+  }
+  memset(nlmsg_data(nlh), 0, FW_NL_PROBE_PAYLOAD);
+
+  rc = netlink_unicast(fw_nl_sock, skb, fw_nl_daemon_portid, MSG_DONTWAIT);
+  return rc >= 0;
+}
+
 static void fw_nl_recv_msg(struct sk_buff *skb) {
   while (skb->len >= nlmsg_total_size(0)) {
     struct nlmsghdr *nlh = nlmsg_hdr(skb);
@@ -761,13 +808,20 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
 
     type = be16_to_cpu(h->msg_type);
 
-    /* ---- 单守护进程互斥（与旧实现同语义） ---- */
+    /* ---- 单守护进程互斥：不同 portid 抢注册时，先探活旧 portid ---- */
     if (type == FW_MSG_TYPE_DAEMON_REGISTER) {
-      if (fw_nl_daemon_portid && portid != fw_nl_daemon_portid &&
-          time_before(jiffies, fw_nl_daemon_activity + FW_NL_DAEMON_TIMEOUT)) {
-        pr_warn("netlink: 拒绝注册 portid=%u（已注册 %u 仍活跃）\n", portid, fw_nl_daemon_portid);
-        fw_nl_send_register_ack(portid, be32_to_cpu(h->seq), 0);
-        goto next;
+      if (fw_nl_daemon_portid && portid != fw_nl_daemon_portid) {
+        bool within_timeout = time_before(jiffies, fw_nl_daemon_activity + FW_NL_DAEMON_TIMEOUT);
+
+        if (within_timeout && fw_nl_daemon_alive()) {
+          pr_warn("netlink: 拒绝注册 portid=%u（已注册 %u 仍活跃）\n", portid,
+                  fw_nl_daemon_portid);
+          fw_nl_send_register_ack(portid, be32_to_cpu(h->seq), 0);
+          goto next;
+        }
+        if (within_timeout)
+          pr_info("netlink: 原守护进程 portid=%u 已死，portid=%u 立即接管\n",
+                  fw_nl_daemon_portid, portid);
       }
       fw_nl_daemon_portid = portid;
       fw_nl_daemon_activity = jiffies;
