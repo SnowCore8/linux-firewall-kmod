@@ -9,6 +9,7 @@
 //     SSE 连接，否则无令牌的 EventSource 会持续 401 并喂大服务端暴力破解计数
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { unstableSetRender } from 'antd-mobile'
 
 // antd-mobile 全局样式（reset + --adm-* 变量）。从 'antd-mobile' 桶导入时也会带上，
 // 这里显式声明依赖：即使将来组件改为按路径导入，全局样式也不会丢。
@@ -21,6 +22,26 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { AuthProvider } from './hooks/useAuth'
 import { ThemeProvider } from './hooks/useTheme'
 import { ToastProvider } from './hooks/useToast'
+
+// ---- React 19 兼容：给 antd-mobile 的命令式渲染器换上 createRoot ----
+//
+// antd-mobile v5 的 peer 只声明到 React 18；命令式 API（Dialog.confirm、Toast.show、
+// Popup/Modal 的 imperative 调用）内部走 rc-util 的 render.js，而该模块**优先**取用
+// 已被 React 19 删除的 `ReactDOM.render` / `unmountComponentAtNode`（它们的 `render`
+// 现在从 `react-dom/client` 暴露）。结果是：点击一次 Toast/Dialog 就会抛
+// `TypeError: <minified> is not a function`，提示与二次确认框全部不出现。
+//
+// antd-mobile 为此专门留了官方兼容开关 `unstableSetRender`，用它把命令式渲染换成
+// `react-dom/client` 的 `createRoot`。必须在**任何** Toast/Dialog 调用之前执行，
+// 故放在模块顶层、Provider 挂载之前。
+unstableSetRender((node, container) => {
+  const root = createRoot(container)
+  root.render(node)
+  // 返回卸载函数（契约要求 Promise<void>）；容器的移除由调用方 renderToBody 负责
+  return async () => {
+    root.unmount()
+  }
+})
 
 // 认证令牌必须在任何请求发生前解析完成：把 URL 里的 `?access_token=`
 // （或 sessionStorage 中上次登录留下的令牌）装载进 api/auth.ts 的缓存。
