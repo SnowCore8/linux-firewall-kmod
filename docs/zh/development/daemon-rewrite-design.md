@@ -948,6 +948,11 @@ warnings`（exit 0）。
 | 2.H-4 | 退役旧 `netlink/` + M 棘轮同一步翻转：删 `ban/mod.rs::build_cidr_key`、白名单写路径走 `CidrKey`、`contract/http.fwidl` 的 M 条目 `status = open → fixed`（`where` 锚点随之消失） | 否（锚点与代码必须同批） |
 | 2.H-5 | 文档：`daemon.md` 的「当前实现状态 / 与实现的差距」表 + 本文档进展表 | 是 |
 
+> **已知边界（2.H-5 留档）**：`kernel/reactor.rs` 的 `RouterStats` 10 项计数器写入路径覆盖齐全，
+> 但**无生产读取者**——只读访问器目前只被单测断言；接收侧异常与命令侧失败另有逐事件日志
+> （`warn!` / `debug!`），`/metrics` 只导出 `transport.rs` 的 4 项传输级 netlink 计数。
+> 是否把路由级聚合接入 `/metrics` 属独立切片（`/metrics` 路由受契约约束、指标集不受），需单独发起。
+
 **回退面**：2.H-1 / 2.H-2 / 2.H-5 可各自独立 revert；2.H-3 与 2.H-4 因内核单实例互斥与棘轮同步，
 必须整批回滚——这一约束写在此处，避免以后有人按「一次退一片」的直觉去退 2.H-4。
 

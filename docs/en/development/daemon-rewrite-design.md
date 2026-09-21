@@ -1236,6 +1236,13 @@ production and retired the legacy module in the same step (as of now `Reactor::n
 | 2.H-4 | Retire legacy `netlink/` + flip the M ratchet in one step: delete `ban/mod.rs::build_cidr_key`, route the whitelist write path through `CidrKey`, set the M entry in `contract/http.fwidl` from `status = open` to `fixed` (its `where` anchor vanishes with it) | No (anchor and code must land together) |
 | 2.H-5 | Documentation: the "current implementation status / gap" tables in `daemon.md` + this document's progress table | Yes |
 
+> **Known boundary (recorded with 2.H-5)**: the 10 `RouterStats` counters in `kernel/reactor.rs` are
+> written on every live path but have **no production reader** — their accessors are asserted by unit
+> tests only; receive-side anomalies and command-side failures are logged per event (`warn!` /
+> `debug!`), and `/metrics` exports only the 4 transport-level netlink counters from `transport.rs`.
+> Wiring the routing-level aggregates into `/metrics` is a separate slice (the route is contractual,
+> the metric set is not) and must be requested on its own.
+
 **Rollback surface**: 2.H-1 / 2.H-2 / 2.H-5 revert independently; 2.H-3 and 2.H-4 must roll back as a
 batch because of the kernel single-instance exclusivity and the ratchet sync. This is recorded here so
 that nobody later follows the "revert one slice at a time" instinct on 2.H-4.
