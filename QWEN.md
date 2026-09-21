@@ -12,7 +12,7 @@
 - **守护进程**：Rust（v2.2.0 起从 C 翻译），单文件 stripped 二进制（含前端构建产物）
 - **前端**：React 19 + TypeScript + Vite + antd-mobile 5（移动优先，hash 路由），底部 TabBar + 卡片式布局，手写 SVG 图表，支持 PWA
 - **构建系统**：Makefile + Cargo + npm/vite
-- **测试框架**：Python pytest（19 个套件，111 项）+ Rust 单元测试（93 项）
+- **测试框架**：Python pytest（19 个套件，94 项）+ Rust 单元测试（434 项）
 - **配置格式**：YAML（Jail 配置）
 - **监控导出**：Prometheus 指标（端口 9119，24 个指标）
 
@@ -143,7 +143,7 @@ sudo rmmod firewall
 ### 运行测试
 
 ```bash
-# 完整测试套件（集成测试 + 93 项单元测试）
+# 完整测试套件（集成测试 + 434 项单元测试）
 make test
 
 # 仅 Rust 单元测试
@@ -243,8 +243,8 @@ perf(kmod): 优化速率检测使用平均速率
 - 守护进程与内核模块的交互协议
 
 **测试分层**：
-- **单元测试**：`cargo test`（93 项）
-- **集成测试**：`make test`（19 个套件，111 项）
+- **单元测试**：`cargo test`（434 项）
+- **集成测试**：`make test`（19 个套件，94 项）
 - **行为审计**：C 到 Rust 移植时按需触发
 
 ### 内存安全（Rust unsafe）
@@ -407,7 +407,7 @@ sudo insmod build/kernel-module/firewall.ko
 | 哈希表容量 | 4096 条目 |
 | 白名单容量 | 64 条目 |
 | 守护进程体积 | 单文件 stripped 二进制（含前端产物，具体数值需 `stat -c %s build/daemon/firewall-daemon` 实测） |
-| 测试覆盖 | 19 集成套件（111 项）+ 93 单元 |
+| 测试覆盖 | 19 集成套件（94 项）+ 434 单元 |
 | 响应延迟 | 毫秒级 |
 
 ## 相关文档

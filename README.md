@@ -41,7 +41,7 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 - ✅ **独立日志文件** — `cfg.log_file` 默认 `/var/log/firewall.log`，失败回退 syslog-only
 - ✅ **安全加固** — 整数溢出防护、Use-After-Free 修复、RCU 一致性增强、46 个 unsafe 块全部带 `// SAFETY:` 注释
 - ✅ **性能优化** — 哈希表容量 4096、白名单两阶段匹配、LTO 编译优化
-- ✅ **代码质量** — 93 单元测试 + 19 集成测试套件 100% 通过，CI 三 job 全绿
+- ✅ **代码质量** — 434 单元测试 + 19 集成测试套件 100% 通过，CI 三 job 全绿
 
 ## 快速开始
 

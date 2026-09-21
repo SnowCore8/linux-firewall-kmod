@@ -11,7 +11,7 @@ graph TD
     CONF["conftest.py pytest fixtures, helper functions, test isolation"]
     CFG["config.py path/parameter variables (KERNEL_MODULE_PATH, ...)"]
 
-    subgraph SUITES["test_*.py numbered suites (executed in 01-21 order, 05/06 skipped, 19 suites 93 tests)"]
+    subgraph SUITES["test_*.py numbered suites (executed in 01-21 order, 05/06 skipped, 19 suites 94 tests)"]
         S01["test_01_module_basic.py"]
         S02["test_02_procfs_interface.py"]
         S03["test_03_ban_unban.py"]
@@ -69,11 +69,11 @@ cargo test --doc
 cargo test config::
 ```
 
-Current count: **434 unit tests + 6 doctests** (doctests actually
+Current count: **434 unit tests + 7 doctests** (doctests actually
 execute — they are not `no_run`).
 
 `cargo test` exercises the `#[cfg(test)]` modules inside the daemon
-crate; the 19-suite / 93-test pytest integration suite in
+crate; the 19-suite / 94-test pytest integration suite in
 `tests/` complements it — unit tests verify logic at the
 source level, integration tests verify end-to-end behavior in
 Python.
@@ -100,7 +100,7 @@ sudo python3 -m pytest tests/ --collect-only        # list all tests without exe
 
 The test framework is Python pytest, with entry points at `tests/conftest.py`
 (fixtures and helper functions) and `tests/config.py` (paths and parameter
-configuration). Current count: 19 suites / **93** tests.
+configuration). Current count: 19 suites / **94** tests.
 
 ### Running under sudo
 
@@ -144,7 +144,7 @@ tests/test_03_ban_unban.py::TestBanUnban::test_unban PASSED
 tests/test_09_daemon_config.py::TestDaemonConfig::test_yaml_load PASSED
 ...
 
-========================= 93 passed in 45.32s =========================
+========================= 94 passed in 45.32s =========================
 ```
 
 With `--html=report.html`, an HTML report is generated with pass/fail
@@ -176,7 +176,7 @@ status, output, and elapsed time for each test, uploaded as a CI artifact.
 
 > Numbering skips 05/06: those slots were used by old suites that have
 > since been merged into the ones above. Current count: 19 suites
-> totaling **93** tests.
+> totaling **94** tests.
 
 ## Framework Helper Functions
 
@@ -310,7 +310,7 @@ before a merge:
 | `lint` | rustfmt + clippy (`--all-targets --all-features`) + yamllint + kernel-module clang-format | blocks merge |
 | `frontend` | Frontend type check (`tsc --noEmit`) + vite build + build-artifact / PWA manifest / Service Worker validation | blocks merge |
 | `build` | Kernel module (`make kernel-module`) + daemon (`make daemon`) | blocks merge |
-| `test` | `sudo python3 -m pytest tests/ -v`, currently **19 suites / 93 tests** | any fail blocks merge |
+| `test` | `sudo python3 -m pytest tests/ -v`, currently **19 suites / 94 tests** | any fail blocks merge |
 
 `test` job orchestration details:
 

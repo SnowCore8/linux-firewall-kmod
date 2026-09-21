@@ -52,7 +52,7 @@ make daemon
 # 运行全部测试（19 套件集成测试）
 make test
 
-# 仅运行 Rust 单元测试 (88 项)
+# 仅运行 Rust 单元测试 (434 项)
 cargo test --release
 
 # 仅运行集成测试
@@ -144,8 +144,8 @@ int whitelist_check(__be32 ip);
 
 | 测试类型 | 命令 | 规模 / 说明 |
 |----------|------|------------|
-| Rust 单元测试 | `cargo test` | 88 项 `#[test]` 单元 + 6 项 doctest。doctest 全部真跑,不写 `no_run` / `ignore` |
-| 集成测试 | `make test` | 19 套件 111 项 (`tests/test_01_*.py` 到 `test_21_*.py`) |
+| Rust 单元测试 | `cargo test` | 434 项 `#[test]` 单元 + 7 项 doctest。doctest 全部真跑,不写 `no_run` / `ignore` |
+| 集成测试 | `make test` | 19 套件 94 项 (`tests/test_01_*.py` 到 `test_21_*.py`) |
 | 行为审计 | `c-to-rust-behavioral-audit` skill | C 守护进程已退役,审计按需触发,确保 Rust 版零回归 |
 
 **修改下列内容时必跑 `make test` 集成测试**:

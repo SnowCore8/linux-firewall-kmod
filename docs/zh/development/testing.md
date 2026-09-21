@@ -10,7 +10,7 @@ graph TD
     CONF["conftest.py pytest fixtures、辅助函数、测试隔离"]
     CFG["config.py 路径与参数变量（KERNEL_MODULE_PATH 等）"]
 
-    subgraph SUITES["test_*.py 编号测试套件（按 01-21 顺序执行，05/06 跳过，19 套件 93 测试）"]
+    subgraph SUITES["test_*.py 编号测试套件（按 01-21 顺序执行，05/06 跳过，19 套件 94 测试）"]
         S01["test_01_module_basic.py"]
         S02["test_02_procfs_interface.py"]
         S03["test_03_ban_unban.py"]
@@ -66,11 +66,11 @@ cargo test --doc
 cargo test config::
 ```
 
-当前统计：**434 个单元测试 + 6 个 doctest**（doctest 真实执行，
+当前统计：**434 个单元测试 + 7 个 doctest**（doctest 真实执行，
 不是 `no_run`）。
 
 `cargo test` 跑守护进程内 `#[cfg(test)]` 模块；与 `tests/` 下
-19 套件 93 个 pytest 集成测试是互补关系——单元测试在源码层验证逻辑，
+19 套件 94 个 pytest 集成测试是互补关系——单元测试在源码层验证逻辑，
 集成测试在 Python 端验证端到端行为。
 
 ## 集成测试
@@ -94,7 +94,7 @@ sudo python3 -m pytest tests/ --collect-only        # 仅列出所有测试，�
 ```
 
 测试框架是 Python pytest，入口为 `tests/conftest.py`（fixtures 与辅助函数）
-和 `tests/config.py`（路径与参数配置）。当前 19 套件共 **93 个测试**。
+和 `tests/config.py`（路径与参数配置）。当前 19 套件共 **94 个测试**。
 
 ### 在 sudo 下运行
 
@@ -135,7 +135,7 @@ tests/test_03_ban_unban.py::TestBanUnban::test_unban PASSED
 tests/test_09_daemon_config.py::TestDaemonConfig::test_yaml_load PASSED
 ...
 
-========================= 93 passed in 45.32s =========================
+========================= 94 passed in 45.32s =========================
 ```
 
 加 `--html=report.html` 会生成包含每条测试通过/失败/输出/耗时的
@@ -166,7 +166,7 @@ HTML 报告，CI 上传为 artifact。
 | 21 | `test_21_multi_jail.py` | 多 jail 并发、独立日志、隔离性 |
 
 > 编号不连续（05、06 缺失）：原对应旧测试套件，重构时已合并到
-> 现有套件中。当前 19 套件共 **93 个测试**。
+> 现有套件中。当前 19 套件共 **94 个测试**。
 
 ## 框架辅助函数
 
@@ -286,7 +286,7 @@ class TestMyFeature:
 | `lint` | rustfmt + clippy（`--all-targets --all-features`）+ yamllint + 内核模块 clang-format | 不通过则阻断 merge |
 | `frontend` | 前端类型检查（`tsc --noEmit`）+ vite 构建 + 构建产物 / PWA 清单 / Service Worker 校验 | 不通过则阻断 merge |
 | `build` | 内核模块（`make kernel-module`）+ 守护进程（`make daemon`） | 编译失败阻断 merge |
-| `test` | `sudo python3 -m pytest tests/ -v`，当前 **19 套件 93 个测试** | 任何 fail 阻断 merge |
+| `test` | `sudo python3 -m pytest tests/ -v`，当前 **19 套件 94 个测试** | 任何 fail 阻断 merge |
 
 测试编排细节（`test` job）：
 
