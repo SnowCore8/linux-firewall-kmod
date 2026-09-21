@@ -14,6 +14,7 @@
 * [架构设计](architecture/README.md)
   * [内核模块](architecture/kernel-module.md)
   * [用户态守护进程](architecture/daemon.md)
+  * [Web 前端](architecture/frontend.md)
   * [数据流](architecture/data-flow.md)
 
 * [运维管理](operations/README.md)

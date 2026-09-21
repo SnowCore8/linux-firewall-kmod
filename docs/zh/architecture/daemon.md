@@ -281,9 +281,12 @@ graph TB
 
 | 组 | 认证 | 内容 |
 |----|------|------|
-| SPA 外壳与静态资源 | 无 | `/`、`/dashboard`、`/bans`、`/whitelist`、`/jails`、`/ddos`、`/logs`、`/settings`、`/static/*path`、`/sw.js` |
+| SPA 外壳与静态资源 | 无 | 一组**固定的**页面路径 + `/static/*path` + `/sw.js`；服务端没有 catch-all。逐条清单见 `src/daemon/http_exporter/handler.rs`，页面语义（哪个页面做什么、数据从哪来）见 [Web 前端](frontend.md) |
 | 探针 | 无 | `/health`、`/healthz`（有意不套信封，由 `is_ready()` 决定 200/503） |
 | 需认证 | Basic Auth | `/metrics` 与 `/api/v1/*`（完整路由清单以 `contract/` 为准；`verify_http.py` 会对照契约核对） |
+
+> 新增页面路径必须同时加进 `security_headers_middleware` 的 `is_webui` 判定，否则外壳会以
+> `default-src 'none'` 下发——页面能打开但样式与脚本全被拦掉。
 
 ### 信封与认证
 
