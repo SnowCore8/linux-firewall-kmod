@@ -10,7 +10,7 @@ graph TD
     CONF["conftest.py pytest fixtures、辅助函数、测试隔离"]
     CFG["config.py 路径与参数变量（KERNEL_MODULE_PATH 等）"]
 
-    subgraph SUITES["test_*.py 编号测试套件（按 01-21 顺序执行，05/06 跳过，19 套件 111 测试）"]
+    subgraph SUITES["test_*.py 编号测试套件（按 01-21 顺序执行，05/06 跳过，19 套件 93 测试）"]
         S01["test_01_module_basic.py"]
         S02["test_02_procfs_interface.py"]
         S03["test_03_ban_unban.py"]
@@ -66,11 +66,11 @@ cargo test --doc
 cargo test config::
 ```
 
-当前统计：**88 个单元测试 + 6 个 doctest**（doctest 真实执行，
+当前统计：**434 个单元测试 + 6 个 doctest**（doctest 真实执行，
 不是 `no_run`）。
 
 `cargo test` 跑守护进程内 `#[cfg(test)]` 模块；与 `tests/` 下
-19 套件 111 个 pytest 集成测试是互补关系——单元测试在源码层验证逻辑，
+19 套件 93 个 pytest 集成测试是互补关系——单元测试在源码层验证逻辑，
 集成测试在 Python 端验证端到端行为。
 
 ## 集成测试
@@ -94,7 +94,7 @@ sudo python3 -m pytest tests/ --collect-only        # 仅列出所有测试，�
 ```
 
 测试框架是 Python pytest，入口为 `tests/conftest.py`（fixtures 与辅助函数）
-和 `tests/config.py`（路径与参数配置）。当前 19 套件共 **111 个测试**。
+和 `tests/config.py`（路径与参数配置）。当前 19 套件共 **93 个测试**。
 
 ### 在 sudo 下运行
 
@@ -135,7 +135,7 @@ tests/test_03_ban_unban.py::TestBanUnban::test_unban PASSED
 tests/test_09_daemon_config.py::TestDaemonConfig::test_yaml_load PASSED
 ...
 
-========================= 111 passed in 45.32s =========================
+========================= 93 passed in 45.32s =========================
 ```
 
 加 `--html=report.html` 会生成包含每条测试通过/失败/输出/耗时的
@@ -166,7 +166,7 @@ HTML 报告，CI 上传为 artifact。
 | 21 | `test_21_multi_jail.py` | 多 jail 并发、独立日志、隔离性 |
 
 > 编号不连续（05、06 缺失）：原对应旧测试套件，重构时已合并到
-> 现有套件中。当前 19 套件共 **111 个测试**。
+> 现有套件中。当前 19 套件共 **93 个测试**。
 
 ## 框架辅助函数
 
@@ -200,10 +200,10 @@ host headers 常不匹配，模块加载会失败但不影响功能测试——r
 
 ## 内存安全检测（ASAN / Miri）
 
-守护进程（Rust）含 49 处 `unsafe { }` 块，分布在 8 个文件
-（`netlink/protocol.rs`、`netlink/mod.rs`、`ban/procfs.rs`、
-`daemonizer.rs`、`file_monitor/monitor_loop.rs`、`ip_utils.rs`、
-`logger.rs`、`signals.rs`），每处都有 `// SAFETY:`
+守护进程（Rust）含 35 处 `unsafe { }` 块，分布在 9 个文件
+（`kernel/transport.rs`、`signal/mod.rs`、`daemonizer.rs`、
+`kernel/codec/mod.rs`、`signals.rs`、`logger.rs`、`ip_utils.rs`、
+`ingest/watcher.rs`、`file_monitor/monitor_loop.rs`），每处都有 `// SAFETY:`
 注释说明不变量与理由。以下检测工具可手动运行（CI 当前未集成）：
 
 ### AddressSanitizer
@@ -243,12 +243,11 @@ Rust 解释器，可检测未定义行为（指针别名、对齐违规等）：
 cargo +nightly miri test
 ```
 
-Miri 解释执行，无需重建 std。CI 上以 nightly opt-in 跑（与 ASAN 共用
-nightly toolchain）。
+Miri 解释执行，无需重建 std。
 
 ### Unsafe 块清单
 
-`grep -rn "unsafe {" src/daemon/` 可列出全部 49 处，每处紧邻
+`grep -rn "unsafe {" src/daemon/` 可列出全部 35 处，每处紧邻
 `// SAFETY:` 注释说明不变量。新增 unsafe 必须**同时**补全
 `// SAFETY:` 注释，否则 `cargo clippy` lint（仓库已配
 `clippy.toml` 收紧规则）会拒绝合入。
@@ -280,13 +279,14 @@ class TestMyFeature:
 
 ## CI 集成
 
-`.github/workflows/ci.yml` 共 **3 个 job**，全部通过才允许合入：
+`.github/workflows/ci.yml` 共 **4 个 job**，全部通过才允许合入：
 
 | Job | 检查项 | 失败处理 |
 |-----|--------|----------|
 | `lint` | rustfmt + clippy（`--all-targets --all-features`）+ yamllint + 内核模块 clang-format | 不通过则阻断 merge |
+| `frontend` | 前端类型检查（`tsc --noEmit`）+ vite 构建 + 构建产物 / PWA 清单 / Service Worker 校验 | 不通过则阻断 merge |
 | `build` | 内核模块（`make kernel-module`）+ 守护进程（`make daemon`） | 编译失败阻断 merge |
-| `test` | `sudo python3 -m pytest tests/ -v`，当前 **19 套件 111 个测试** | 任何 fail 阻断 merge |
+| `test` | `sudo python3 -m pytest tests/ -v`，当前 **19 套件 93 个测试** | 任何 fail 阻断 merge |
 
 测试编排细节（`test` job）：
 

@@ -42,7 +42,7 @@ Phase 2 重写按「保留编译，分批迁入」推进，因此仓库里同时
 | `api/` | **部分接入** | 18 条路由已挂载；23 条分析/日志类路由仍在 `http_exporter/handler.rs` |
 | `history_snapshot/` 写入队列 | **已改造** | 满时阻塞生产者，不再静默丢弃 |
 | `ingest/`、`parse/`、`decision/`、`pipeline/` | 已就位、**未接入** | 无生产调用点，主链路仍走 `file_monitor` + `line_processor` + `failed_tracker` |
-| `kernel/`（codec / transport / reactor / client / lease） | 已就位、**未接入** | 生产仍走旧 `crate::netlink` |
+| `kernel/`（codec / transport / reactor / client / lease） | **已接入生产** | `main.rs` 装配 `Transport`/`Reactor`/`Client`/`Lease`（`Reactor` 进 `Supervisor`）；旧 `netlink/` 已退役删除 |
 | `signal/`（`signalfd`） | 已就位、**未接入** | 生产仍走 `signals.rs` 的 `sigaction` + 原子布尔 |
 
 判定算式（有效阈值、渐进式时长）已在 `decision/policy.rs` 以**纯函数**实现，并与旧实现做过
@@ -165,7 +165,6 @@ inotify ──LogChunk──▶ parse ──Failure──▶ decide ──BanInt
 | `log_parser/` | 正则匹配 + 字符串回退 + IP 提取校验 | 拆入 `parse/` |
 | `failed_tracker/` | `Jail.failed_hash` 滑动窗口计数与阈值触发 | 拆入 `decision/` |
 | `ban/` | 封禁/解封入口、IP 校验（含 procfs 兼容路径） | 移出读路径；下发归 `kernel/client` |
-| `netlink/` | 收发线程、协议编解码、分页响应处理、DDoS 决策引擎 | 拆入 `kernel/` |
 | `jail/` | 服务名智能匹配、默认参数推断、ReDoS 防护、正则编译 | 配置面 owner |
 | `config/` | YAML 解析（严格模式 key 白名单 + 路径安全 3 重检查 + 失败回滚）+ CLI | 保留，产出不可变快照 |
 | `config_reloader.rs` | SIGHUP 热重载、差异合并、失败回滚、运行期配置回写 | 保留 |
@@ -233,7 +232,7 @@ graph TB
 `contract/generated/netlink_contract.rs` 挂成本 crate 模块，实现侧读的是契约里的字段名与偏移，
 「手抄结构体」这一漂移来源被编译器消除。
 
-新 `kernel/` 五层（已就位、未接入生产）：
+新 `kernel/` 五层（**已接入生产**）：
 
 | 层 | 职责 | 关键取舍 |
 |----|------|---------|
@@ -254,10 +253,10 @@ graph TB
   「不限量」；内核在 `offset >= total` 时直接回空页，且 `total` 是另一时刻取的值，与已收条数
   不保证一致。故续页以空页为唯一可靠收尾，另加「本页起点未推进即停」的防死循环判据。
 
-当前生产仍走旧 `crate::netlink`：独立接收线程（100 ms `poll`）+ 主循环侧 `sendto` 直调，附加
-一个 1 s 的 stats/analysis 轮询线程与每 60 tick 一次的全量 `LIST_BANS` 对账。旧实现把
-`sendto` 成功当作执行成功、`seq` 解析后丢弃、白名单与速率查询只取第一页——这些正是新层要
-消除的问题（设计文档结构问题 I / J / K / L）。
+生产已切到新层：`main.rs` 构造 `Transport`/`Reactor`/`Client`/`Lease`，`Reactor` 经
+`runtime/supervisor.rs` 纳入统一关停，接收由 `Reactor` 的 `(type, seq)` 路由承担，不再有独立接收
+线程与轮询线程。旧实现曾把 `sendto` 成功当作执行成功、`seq` 解析后丢弃、白名单与速率查询只取
+第一页——这些正是新层要消除的问题（设计文档结构问题 I / J / K / L），旧 `netlink/` 已随之退役。
 
 ## 状态层与 SSE
 
@@ -441,19 +440,15 @@ graph TB
 ## 内存安全
 
 守护进程全部 `unsafe` 块都显式标注 `// SAFETY:`，说明前置条件与「该块执行后哪些不变量仍成立」。
-当前共 **73 处** `unsafe { }`（按块计数），分布：
+当前共 **35 处** `unsafe { }`（按块计数），分布：
 
 | 文件 | 块数 | 用途 |
 |------|------|------|
-| `netlink/responses.rs` | 15 | 分页响应按字节搬运 `packed` 结构 |
-| `netlink/mod.rs` | 15 | netlink socket 操作与报文切分 |
 | `kernel/transport.rs` | 12 | socket 创建/绑定/收发 |
 | `signal/mod.rs` | 9 | `signalfd` 与信号掩码 |
-| `netlink/protocol.rs` | 7 | 线格式编解码 |
 | `daemonizer.rs` | 7 | `fork` / `setsid` / PID 文件 / 重定向 fd |
 | `kernel/codec/mod.rs` | 2 | `packed` 结构偏移搬运 |
 | `signals.rs` | 1 | `sigaction` 注册 |
-| `netlink/commands.rs` | 1 | 命令编码 |
 | `logger.rs` | 1 | `dup(2)` 回退 stderr |
 | `ip_utils.rs` | 1 | 地址原始操作 |
 | `ingest/watcher.rs` | 1 | `inotify` fd 所有权 |
@@ -466,16 +461,16 @@ crash 可用 `addr2line` 反推）、`asan`（AddressSanitizer，需 nightly 与
 ## 与实现的差距
 
 以下是「已就位、未接入」的准确边界，目的是让读者不会把设计当成现状（逐项证据见设计文档
-「修复项与落地状态」）：
+「修复项与落地状态」）；已接入的层在下方逐条注明。
 
 | 项 | 现状 |
 |----|------|
 | 主链路（`ingest` → `parse` → `decision` → `pipeline`） | `pipeline` 止于 `BanIntent`，无生产调用点；生产仍由 `file_monitor` + `line_processor` + `failed_tracker` 驱动 |
-| `kernel/` 层 | 无生产引用；生产走旧 `crate::netlink`。故 `Lease` 的注册可见性、`client.set_config` 的唯一入口、CIDR 单一规范化都尚未在生产生效 |
+| `kernel/` 层 | **已接入生产**：`main.rs` 装配 `Transport`/`Reactor`/`Client`/`Lease`，接收由 `Reactor` 路由，旧 `netlink/` 已退役删除。故 `Lease` 的注册可见性、`client.set_config` 的唯一入口、CIDR 单一规范化均已在生产生效 |
 | `signal/`（`signalfd`） | 无生产引用；生产走 `signals.rs` |
 | 周期维护 | 已由 `runtime/scheduler.rs` 接管（过期封禁清理 + 计数器镜像），节拍 1 s，子任务各自门控 |
 | `api` 路由 | 18 / 41 需认证路由已迁入（契约合计 53 条，其中 12 条无认证）；23 条分析类与日志类仍在 `http_exporter/handler.rs` |
-| 旧模块删除 | `web_ui/`、`netlink/`、`failed_tracker/`、`file_monitor/`、`line_processor.rs`、`log_rotation.rs` 仍按原样编译保留，待后续批次迁入后退役 |
+| 旧模块删除 | `netlink/` 已随 2.H-4 删除；`web_ui/`、`failed_tracker/`、`file_monitor/`、`line_processor.rs`、`log_rotation.rs` 仍按原样编译保留，待后续批次迁入后退役 |
 
 后续批次迁入前，主链路已冻结的接口形状不得改动；接口需要变更时**先改契约再改代码**，并跑
 `bash scripts/check_contract.sh`。

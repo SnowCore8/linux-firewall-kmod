@@ -48,7 +48,7 @@ implementation coexist in the repository. This document distinguishes them hones
 | `api/` | **Partially in production** | 18 routes mounted; 23 analytics/log routes still live in `http_exporter/handler.rs` |
 | `history_snapshot/` write queue | **Reworked** | Blocks the producer when full instead of silently dropping |
 | `ingest/`, `parse/`, `decision/`, `pipeline/` | Present, **not wired** | No production call site; the main chain still runs `file_monitor` + `line_processor` + `failed_tracker` |
-| `kernel/` (codec / transport / reactor / client / lease) | Present, **not wired** | Production still uses the old `crate::netlink` |
+| `kernel/` (codec / transport / reactor / client / lease) | **In production** | `main.rs` assembles `Transport`/`Reactor`/`Client`/`Lease` (`Reactor` enters the `Supervisor`); the old `netlink/` is retired and deleted |
 | `signal/` (`signalfd`) | Present, **not wired** | Production still uses `signals.rs` (`sigaction` plus atomic booleans) |
 
 The decision formulas (effective threshold, progressive duration) are already implemented as **pure
@@ -180,7 +180,6 @@ else is injected at construction time.
 | `log_parser/` | Regex matching plus string fallback plus IP extraction and validation | Split into `parse/` |
 | `failed_tracker/` | `Jail.failed_hash` sliding-window counting and threshold triggering | Split into `decision/` |
 | `ban/` | Ban/unban entry points and IP validation (including the procfs-compatible path) | Moved out of the read path; dispatch belongs to `kernel/client` |
-| `netlink/` | Send/receive thread, protocol codec, paged response handling, DDoS decision engine | Split into `kernel/` |
 | `jail/` | Service-name matching, default inference, ReDoS protection, regex compilation | Config-face owner |
 | `config/` | YAML parsing (strict key allowlist, three-layer path safety, rollback) plus CLI | Kept; produces immutable snapshots |
 | `config_reloader.rs` | SIGHUP hot reload, diff merging, rollback, runtime config write-back | Kept |
@@ -256,7 +255,7 @@ magic `0x46574C4E`, a 12-byte custom common header, all multi-byte integers big-
 `#[path]`, so the implementation reads the field names and offsets from the contract and the
 "hand-copied struct" source of drift is eliminated by the compiler.
 
-The new `kernel/` layer has five levels (present, not wired into production):
+The new `kernel/` layer has five levels (**in production**):
 
 | Level | Responsibility | Key trade-off |
 |-------|----------------|---------------|
@@ -281,12 +280,13 @@ them:
   number of rows received. Continuation therefore stops only on an empty page, with an additional
   guard that stops when the page start did not advance.
 
-Production still uses the old `crate::netlink`: a dedicated receive thread (100 ms `poll`) plus
-direct `sendto` calls from the main loop, plus a 1 s stats/analysis polling thread and a full
-`LIST_BANS` reconciliation every 60 ticks. The old implementation treats a successful `sendto` as
-successful execution, parses and then discards `seq`, and reads only the first page of whitelist and
-rate queries - precisely what the new layer removes (structural problems I / J / K / L in the design
-document).
+Production has cut over to the new layer: `main.rs` builds `Transport`/`Reactor`/`Client`/`Lease`,
+the `Reactor` enters unified shutdown through `runtime/supervisor.rs`, and receives are handled by
+the `Reactor`'s `(type, seq)` routing, so the dedicated receive thread and the polling threads are
+gone. The old implementation treated a successful `sendto` as successful execution, parsed and then
+discarded `seq`, and read only the first page of whitelist and rate queries - precisely what the new
+layer removes (structural problems I / J / K / L in the design document); the old `netlink/` was
+retired with it.
 
 ## State Layer and SSE
 
@@ -501,20 +501,16 @@ The four `firewall_kernel_*` metrics come from the in-process cache rather than 
 ## Memory Safety
 
 Every `unsafe` block in the daemon carries an explicit `// SAFETY:` comment stating the
-preconditions and which invariants still hold afterwards. There are currently **73** `unsafe { }`
+preconditions and which invariants still hold afterwards. There are currently **35** `unsafe { }`
 blocks (counted per block), distributed as follows:
 
 | File | Blocks | Purpose |
 |------|--------|---------|
-| `netlink/responses.rs` | 15 | Moving bytes into `packed` structs for paged responses |
-| `netlink/mod.rs` | 15 | netlink socket operations and datagram splitting |
 | `kernel/transport.rs` | 12 | socket creation, binding, sending and receiving |
 | `signal/mod.rs` | 9 | `signalfd` and signal masking |
-| `netlink/protocol.rs` | 7 | Wire-format codec |
 | `daemonizer.rs` | 7 | `fork` / `setsid` / PID file / fd redirection |
 | `kernel/codec/mod.rs` | 2 | Moving `packed` struct offsets |
 | `signals.rs` | 1 | `sigaction` registration |
-| `netlink/commands.rs` | 1 | Command encoding |
 | `logger.rs` | 1 | `dup(2)` stderr fallback |
 | `ip_utils.rs` | 1 | Raw address operations |
 | `ingest/watcher.rs` | 1 | `inotify` fd ownership |
@@ -529,16 +525,16 @@ aliasing violations - the class ASAN cannot see).
 
 The following are the precise "present but not wired" boundaries, so a reader does not mistake the
 design for the current state (per-item evidence is in the design document's "Fix items and their
-landing status"):
+landing status"); layers that did land say so on their row.
 
 | Item | State |
 |------|-------|
 | Main chain (`ingest` -> `parse` -> `decision` -> `pipeline`) | `pipeline` stops at `BanIntent` and has no production call site; production still runs `file_monitor` + `line_processor` + `failed_tracker` |
-| `kernel/` layer | No production reference; production uses the old `crate::netlink`. The `Lease` visibility of registration, the single `client.set_config` entry point and single CIDR normalisation are therefore not yet live |
+| `kernel/` layer | **In production**: `main.rs` assembles `Transport`/`Reactor`/`Client`/`Lease`, receives go through the `Reactor`'s routing, and the old `netlink/` is retired and deleted. The `Lease` visibility of registration, the single `client.set_config` entry point and single CIDR normalisation are therefore live |
 | `signal/` (`signalfd`) | No production reference; production uses `signals.rs` |
 | Periodic maintenance | Already taken over by `runtime/scheduler.rs` (expired-ban purge plus counter mirroring), base tick 1 s with per-task gating |
 | `api` routes | 18 of 41 authenticated routes migrated (the contract has 53 in total, 12 unauthenticated); 23 analytics and log routes remain in `http_exporter/handler.rs` |
-| Old module removal | `web_ui/`, `netlink/`, `failed_tracker/`, `file_monitor/`, `line_processor.rs` and `log_rotation.rs` still compile as-is, to be retired once later batches migrate them |
+| Old module removal | `netlink/` was deleted with 2.H-4; `web_ui/`, `failed_tracker/`, `file_monitor/`, `line_processor.rs` and `log_rotation.rs` still compile as-is, to be retired once later batches migrate them |
 
 Until later batches migrate, the frozen interface shapes of the main chain must not change; when an
 interface must change, **change the contract first and the code afterwards**, then run

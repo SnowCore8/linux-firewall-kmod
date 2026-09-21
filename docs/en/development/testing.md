@@ -11,7 +11,7 @@ graph TD
     CONF["conftest.py pytest fixtures, helper functions, test isolation"]
     CFG["config.py path/parameter variables (KERNEL_MODULE_PATH, ...)"]
 
-    subgraph SUITES["test_*.py numbered suites (executed in 01-21 order, 05/06 skipped, 19 suites 111 tests)"]
+    subgraph SUITES["test_*.py numbered suites (executed in 01-21 order, 05/06 skipped, 19 suites 93 tests)"]
         S01["test_01_module_basic.py"]
         S02["test_02_procfs_interface.py"]
         S03["test_03_ban_unban.py"]
@@ -69,11 +69,11 @@ cargo test --doc
 cargo test config::
 ```
 
-Current count: **88 unit tests + 6 doctests** (doctests actually
+Current count: **434 unit tests + 6 doctests** (doctests actually
 execute — they are not `no_run`).
 
 `cargo test` exercises the `#[cfg(test)]` modules inside the daemon
-crate; the 19-suite / 111-test pytest integration suite in
+crate; the 19-suite / 93-test pytest integration suite in
 `tests/` complements it — unit tests verify logic at the
 source level, integration tests verify end-to-end behavior in
 Python.
@@ -100,7 +100,7 @@ sudo python3 -m pytest tests/ --collect-only        # list all tests without exe
 
 The test framework is Python pytest, with entry points at `tests/conftest.py`
 (fixtures and helper functions) and `tests/config.py` (paths and parameter
-configuration). Current count: 19 suites / **111** tests.
+configuration). Current count: 19 suites / **93** tests.
 
 ### Running under sudo
 
@@ -144,7 +144,7 @@ tests/test_03_ban_unban.py::TestBanUnban::test_unban PASSED
 tests/test_09_daemon_config.py::TestDaemonConfig::test_yaml_load PASSED
 ...
 
-========================= 111 passed in 45.32s =========================
+========================= 93 passed in 45.32s =========================
 ```
 
 With `--html=report.html`, an HTML report is generated with pass/fail
@@ -176,7 +176,7 @@ status, output, and elapsed time for each test, uploaded as a CI artifact.
 
 > Numbering skips 05/06: those slots were used by old suites that have
 > since been merged into the ones above. Current count: 19 suites
-> totaling **111** tests.
+> totaling **93** tests.
 
 ## Framework Helper Functions
 
@@ -212,12 +212,13 @@ happens (see [ci.yml](../../../../.github/workflows/ci.yml)).
 
 ## Memory-Safety Detection (ASAN / Miri)
 
-The daemon (Rust) contains 49 `unsafe { }` blocks across 8 files
-(`netlink/protocol.rs`, `netlink/mod.rs`, `ban/procfs.rs`,
-`daemonizer.rs`, `file_monitor/monitor_loop.rs`, `ip_utils.rs`,
-`logger.rs`, `signals.rs`), and every one of them carries a
-`// SAFETY:` comment documenting the invariants and reasoning.
-The CI runs three layers of checks in a matrix:
+The daemon (Rust) contains 35 `unsafe { }` blocks across 9 files
+(`kernel/transport.rs`, `signal/mod.rs`, `daemonizer.rs`,
+`kernel/codec/mod.rs`, `signals.rs`, `logger.rs`, `ip_utils.rs`,
+`ingest/watcher.rs`, `file_monitor/monitor_loop.rs`), and every one of
+them carries a `// SAFETY:` comment documenting the invariants and
+reasoning. The checks below are run manually (CI does not wire them in
+at present):
 
 ### AddressSanitizer
 
@@ -263,12 +264,11 @@ cargo +nightly miri test
 ```
 
 Miri interprets the code, so it does not require a rebuilt std
-toolchain. CI runs it as a nightly opt-in (sharing the same nightly
-toolchain as ASAN).
+toolchain.
 
 ### Unsafe-block inventory
 
-`grep -rn "unsafe {" src/daemon/` lists all 49 blocks; each sits
+`grep -rn "unsafe {" src/daemon/` lists all 35 blocks; each sits
 next to a `// SAFETY:` comment explaining the invariants. **Any new
 `unsafe` block MUST come with a `// SAFETY:` comment**, otherwise
 the tightened `cargo clippy` rules (configured in the repo's
@@ -302,14 +302,15 @@ class TestMyFeature:
 
 ## CI Integration
 
-`.github/workflows/ci.yml` defines **3 jobs**, all of which must pass
+`.github/workflows/ci.yml` defines **4 jobs**, all of which must pass
 before a merge:
 
 | Job | Checks | Failure → merge |
 |-----|--------|-----------------|
 | `lint` | rustfmt + clippy (`--all-targets --all-features`) + yamllint + kernel-module clang-format | blocks merge |
+| `frontend` | Frontend type check (`tsc --noEmit`) + vite build + build-artifact / PWA manifest / Service Worker validation | blocks merge |
 | `build` | Kernel module (`make kernel-module`) + daemon (`make daemon`) | blocks merge |
-| `test` | `sudo python3 -m pytest tests/ -v`, currently **19 suites / 111 tests** | any fail blocks merge |
+| `test` | `sudo python3 -m pytest tests/ -v`, currently **19 suites / 93 tests** | any fail blocks merge |
 
 `test` job orchestration details:
 
