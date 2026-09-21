@@ -126,13 +126,13 @@ cp target/release/firewall-daemon build/daemon/firewall-daemon
 
 ### Rust release profile（`Cargo.toml`）
 
-`Cargo.toml` 预定义 3 个 profile，对应不同用途：
+`Cargo.toml` 预定义 `release` / `dev` / `dev-with-debug` / `asan` 等 profile，对应不同用途：
 
-| Profile | 体积 | 用途 | 编译命令 |
-|---------|------|------|----------|
+| Profile | 构建产物 | 用途 | 编译命令 |
+|---------|----------|------|----------|
 | `release`（默认） | `strip` 的紧凑二进制 | 生产部署 | `cargo build --release` |
-| `dev-with-debug` | 32MB（含 DWARF + 符号） | 现场 crash 分析，配合 `addr2line` 反推栈 | `cargo build --release --profile dev-with-debug` |
-| `asan` | （含 ASAN 运行时） | 内存安全检测，需 nightly | `cargo +nightly build --profile asan` |
+| `dev-with-debug` | 未 strip，含 DWARF + 符号 | 现场 crash 分析，配合 `addr2line` 反推栈 | `cargo build --release --profile dev-with-debug` |
+| `asan` | 含 ASAN 运行时 | 内存安全检测，需 nightly | `cargo +nightly build --profile asan` |
 
 #### release（默认）
 
@@ -267,7 +267,7 @@ make kernel-module KDIR=/path/to/kernel/source
 
 - `release`：`lto=true` + `strip=true` + `debug=false` + `panic="abort"`
   → `strip` 后的紧凑二进制
-- `dev-with-debug`：继承 release，保留 DWARF + 符号 → 32MB
+- `dev-with-debug`：继承 release，保留 DWARF + 符号
 - `asan`：nightly opt-in，含 ASAN 运行时
 
 ## 构建产物

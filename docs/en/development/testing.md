@@ -242,7 +242,7 @@ Useful for "same binary, swap the analyzer" workflows (e.g.
 comparing against a baseline):
 
 ```bash
-cargo build --profile dev-with-debug   # 32MB with DWARF
+cargo build --profile dev-with-debug   # with DWARF
 sudo valgrind --leak-check=full --show-leak-kinds=all \
     ./target/dev-with-debug/firewall-daemon -c config/default.yaml
 ```

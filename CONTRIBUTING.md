@@ -49,16 +49,16 @@ make daemon
 ### 运行测试
 
 ```bash
-# 运行全部测试（19 套件集成测试）
+# 运行全部测试（集成测试套件）
 make test
 
-# 仅运行 Rust 单元测试 (434 项)
+# 仅运行 Rust 单元测试
 cargo test --release
 
 # 仅运行集成测试
 sudo python3 -m pytest tests/ -v
 
-# 现场 crash 调试 (32MB 带 DWARF + 符号表)
+# 现场 crash 调试（带 DWARF + 符号表）
 cargo build --release --profile dev-with-debug
 ```
 
@@ -107,8 +107,8 @@ cargo build --release --profile dev-with-debug
 | 规则 | 说明 |
 |------|------|
 | 命名 | 函数/变量使用 `snake_case`，宏使用 `UPPER_CASE` |
-| 缩进 | 4 个空格，禁止使用 Tab |
-| 行宽 | 最大 100 字符 |
+| 缩进 | 2 个空格，禁止使用 Tab（以 `.clang-format` 的 `IndentWidth` 为准） |
+| 行宽 | 最大 80 字符（以 `.clang-format` 的 `ColumnLimit` 为准） |
 | 括号 | K&R 风格，左括号不换行 |
 | 函数长度 | 单个函数不超过 50 行，复杂逻辑拆分为子函数 |
 
@@ -144,32 +144,29 @@ int whitelist_check(__be32 ip);
 
 | 测试类型 | 命令 | 规模 / 说明 |
 |----------|------|------------|
-| Rust 单元测试 | `cargo test` | 434 项 `#[test]` 单元 + 7 项 doctest。doctest 全部真跑,不写 `no_run` / `ignore` |
-| 集成测试 | `make test` | 19 套件 94 项 (`tests/test_01_*.py` 到 `test_21_*.py`) |
+| Rust 单元测试 | `cargo test` | `#[test]` 单元测试与 doctest；用例数随开发变动，以命令实时输出为准。doctest 全部真跑，不写 `no_run` / `ignore` |
+| 集成测试 | `make test` | 集成测试套件（`tests/test_*_*.py`）；套件数与用例数随开发变动，以命令实时输出为准 |
 | 行为审计 | `c-to-rust-behavioral-audit` skill | C 守护进程已退役,审计按需触发,确保 Rust 版零回归 |
 
 **修改下列内容时必跑 `make test` 集成测试**:
 
 - YAML 配置 schema / 字段含义(例如新增 `defaults:` 块下的字段)
 - procfs 命令接口(增减 `/proc/firewall/*` 节点)
-- 守护进程与内核模块的交互协议(`/proc/firewall/ban` 写入格式等)
+- 守护进程与内核模块的交互协议（netlink 消息与契约，见 `contract/`）
 
 跑测试时 `make test` 会用 `sudo python3 -m pytest tests/ -v` 运行集成测试，Rust 单元测试推荐直接在仓库根目录跑 `cargo test`。
 
 ### 内存安全 (Rust unsafe 块)
 
-当前代码库共有 **46 个 `unsafe` 块**,分布在:
+当前代码库的 `unsafe` 块集中在内核交互与系统调用封装层。数量与分布以
+`grep -rn 'unsafe {' src/daemon` 的实时输出为准，常见区域与动机：
 
-| 文件 | 数量 | 用途 |
-|------|------|------|
-| `src/daemon/netlink/responses.rs` | 15 | `ptr::read` / `from_raw_parts` 反序列化 `#[repr(C, packed)]` 结构体 |
-| `src/daemon/netlink/mod.rs` | 13 | `socket` / `bind` / `poll` / `recv` / `sendto` / `close` 等 netlink socket 操作 |
-| `src/daemon/netlink/protocol.rs` | 7 | netlink 协议类型定义与序列化 |
-| `src/daemon/daemonizer.rs` | 7 | `libc::fork` 守护进程化 / `libc::flock` / `from_raw_fd` 接管 fd |
-| `src/daemon/file_monitor/monitor_loop.rs` | 1 | `libc::poll` 包装 inotify fd 等待事件 |
-| `src/daemon/ip_utils.rs` | 1 | 原始 IP 地址操作 |
-| `src/daemon/logger.rs` | 1 | `libc::openlog` / `libc::syslog` / `libc::closelog` 接入 syslog(3) |
-| `src/daemon/signals.rs` | 1 | `libc::sigaction` 信号处理器注册 |
+- netlink socket 生命周期（创建 / 绑定 / 非阻塞 / 收发）
+- 内核回包反序列化（`#[repr(C)]` 结构体的 `ptr::read` / `from_raw_parts`）
+- 信号处理（signalfd / `sigaction`）
+- 守护进程化（`fork` / `flock` / `from_raw_fd` 接管 fd）
+- inotify fd 的事件等待（`poll`）
+- 原始 IP 地址校验（SSE2）与 syslog(3) 接入
 
 **每个 `unsafe` 块都必须紧跟 `// SAFETY:` 注释**,说明:
 
@@ -190,24 +187,24 @@ let new_fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_NOFOLLO
 
 ### Cargo release profile
 
-`Cargo.toml` 定义了 3 套 release profile,按用途选用:
+`Cargo.toml` 定义了 `release` / `dev` / `dev-with-debug` / `asan` 四套 profile,按用途选用:
 
-| Profile | 命令 | 体积 | 用途 |
-|---------|------|------|------|
-| `release` (默认) | `cargo build --release` | **6.2 MB** stripped | 生产 / 发行版,启用 `lto = "fat"` + `strip = "symbols"` + `codegen-units = 1` |
-| `dev-with-debug` | `cargo build --release --profile dev-with-debug` | **~32 MB** 带 DWARF + 完整符号表 | 现场 crash 复盘,用 `coredumpctl` / `gdb` 拿回精确行号 |
-| `asan` | `cargo +nightly build --profile asan` | 较大,需 nightly | 内存检测,需 `cargo +nightly` + opt-in `.cargo/config.toml` 重编 std |
+| Profile | 命令 | 构建产物 | 用途 |
+|---------|------|----------|------|
+| `release` (默认) | `cargo build --release` | stripped，启用 `lto = "fat"` + `strip = "symbols"` + `codegen-units = 1` | 生产 / 发行版 |
+| `dev-with-debug` | `cargo build --release --profile dev-with-debug` | 未 strip，带 DWARF + 完整符号表 | 现场 crash 复盘,用 `coredumpctl` / `gdb` 拿回精确行号 |
+| `asan` | `cargo +nightly build --profile asan` | 需 nightly | 内存检测,需 `cargo +nightly` + opt-in `.cargo/config.toml` 重编 std |
 
 **选型建议**:
 
 - 日常开发:`cargo build`(默认 dev profile,带调试信息但未优化)
-- 性能基准 / 发版前:`cargo build --release`(6.2 MB,LTO 后的最终优化)
+- 性能基准 / 发版前:`cargo build --release`(LTO 后的最终优化)
 - 现场 crash:`cargo build --release --profile dev-with-debug`,把 binary 拷到现场跑,crash 后用 gdb attach core 还原栈
 - ASAN 内存体检:仅在 nightly 工具链上跑,平时不开
 
 **不要做的事**:
 
-- 不要在 release profile 上加 debug 符号(会让 binary 涨到 30MB+)
+- 不要在 release profile 上加 debug 符号(会显著增大 binary)
 - 不要在 dev profile 上做性能基准(LTO 缺失,数据偏差 20%+)
 - 不要把 `dev-with-debug` 的 binary 发到生产环境
 

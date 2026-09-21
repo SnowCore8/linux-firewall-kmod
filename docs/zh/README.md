@@ -12,9 +12,9 @@ Linux Firewall 内核模块是一个高性能的 IP 封禁解决方案，作为�
 |------|------|
 | Netfilter Hook | 在内核网络栈层面直接拦截数据包 |
 | Jail 系统 | 支持多个独立的封禁规则 |
-| 哈希表 | 4096 容量的内核哈希表，高效查找 |
+| 哈希表 | 内核哈希表，O(1) 查找；桶数与条目上限见模块参数 |
 | 自动过期清理 | 后台定时任务自动清理过期封禁 |
-| IP 白名单 | 64 容量的白名单，防止误封关键 IP |
+| IP 白名单 | 内核白名单，防止误封关键 IP |
 | ProcFS 接口 | 通过 `/proc` 文件系统进行管理和监控 |
 | 正则匹配 | 用户态守护进程支持正则表达式匹配日志 |
 | RCU 并发 | 使用 Read-Copy-Update 实现高并发安全 |
@@ -27,8 +27,8 @@ graph TB
     PKT[网络数据包] --> NF[Netfilter Hook PREROUTING]
 
     subgraph KERNEL[Linux 内核空间]
-        NF --> WL{IP 白名单 64 条目}
-        NF --> HT[哈希表 4096 封禁 IP 列表]
+        NF --> WL{IP 白名单}
+        NF --> HT[哈希表 封禁 IP 列表]
 
         WL -->|匹配| ALLOW[允许通过]
         HT -->|命中| DROP[DROP 数据包]
@@ -36,12 +36,12 @@ graph TB
         NF --> PROC[ProcFS 接口 /proc/firewall]
     end
 
-    PROC --> DAEMON[守护进程 Rust 语言]
+    KERNEL -->|netlink 控制通道| DAEMON[守护进程 Rust 语言]
+    PROC -.->|手动操作 / 调试| DAEMON
 
     subgraph USERSPACE[用户空间]
         DAEMON --> INOTIFY[inotify 日志监控]
         DAEMON --> REGEX[正则匹配]
-        DAEMON -->
         DAEMON --> PROM[Prometheus Metrics :9119]
     end
 ```

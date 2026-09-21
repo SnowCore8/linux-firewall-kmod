@@ -199,23 +199,20 @@ lsmod | grep firewall
 cat /proc/firewall/config
 ```
 
-Expected output:
+Expected output (fields and order follow the module's actual output):
 
 ```
-Firewall Module Status
-======================
-Module: loaded
-Version: 1.0.0
-Banned IPs: 0
-Whitelisted IPs: 0
-Hash table capacity: 4096
-Whitelist capacity: 64
+Current Firewall Configuration:
+--------------------------------
+ban_time: 600 seconds
+Ban entries: 0
+Whitelist entries: 0
 ```
 
 ### Check Daemon
 
 ```bash
-cat /proc/firewall/config
+sudo systemctl status firewall-daemon
 ```
 
 ### Check Prometheus Metrics

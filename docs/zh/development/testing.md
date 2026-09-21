@@ -226,7 +226,7 @@ ASan 输出任何 `ERROR:` 行即视为内存缺陷。`build/daemon/firewall-dae
 适用于二进制不变、只换分析器的场景（如对比 baseline）：
 
 ```bash
-cargo build --profile dev-with-debug   # 32MB 含 DWARF
+cargo build --profile dev-with-debug   # 含 DWARF
 sudo valgrind --leak-check=full --show-leak-kinds=all \
     ./target/dev-with-debug/firewall-daemon -c config/default.yaml
 ```

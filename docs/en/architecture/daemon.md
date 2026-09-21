@@ -455,7 +455,7 @@ restoring the mask on drop; that module is present but **not wired into producti
 
 ### Prometheus Metrics
 
-`/metrics` exposes **24** metrics (`src/daemon/http_exporter/metrics.rs`, counted by `# TYPE` lines):
+`/metrics` exposes the metrics defined in `src/daemon/http_exporter/metrics.rs` (counted by `# TYPE` lines):
 
 | Metric | Type | Description |
 |--------|------|-------------|

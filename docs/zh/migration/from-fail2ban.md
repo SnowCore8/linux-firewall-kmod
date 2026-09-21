@@ -279,7 +279,7 @@ sudo systemctl restart fail2ban
 | 场景 | fail2ban | Linux Firewall |
 |------|----------|----------------|
 | 1000 封禁 IP | 明显变慢 | 无影响 |
-| 10000 封禁 IP | 不可用 | 不支持（上限 4096） |
+| 10000 封禁 IP | 不可用 | 受 `fw_max_ban_entries` 配置的条目上限约束 |
 
 ## 常见问题
 

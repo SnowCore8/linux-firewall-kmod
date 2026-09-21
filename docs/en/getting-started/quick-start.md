@@ -63,7 +63,9 @@ whitelist:
   - 10.0.0.1
 ```
 
-> **Note**: The whitelist supports up to 64 entries.
+> **Note**: The whitelist entry limit comes from `capacity.max_whitelist_entries`
+> (kernel side: `fw_max_whitelist_entries`; default: `config/default.yaml`).
+> Once the limit is reached the kernel rejects new entries.
 
 ## Step 3: Start the Service
 

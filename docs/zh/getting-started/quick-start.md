@@ -63,7 +63,8 @@ whitelist:
   - 10.0.0.1
 ```
 
-> **注意**：白名单最多支持 64 个条目。
+> **注意**：白名单条目上限由 `capacity.max_whitelist_entries`（内核侧
+> `fw_max_whitelist_entries`）控制，默认值见 `config/default.yaml`；到限后内核拒绝新增条目。
 
 ## 第三步：启动服务
 

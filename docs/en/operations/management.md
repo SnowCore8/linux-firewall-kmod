@@ -30,7 +30,7 @@ project does not provide a separate CLI wrapper.
 | Action | Command |
 |--------|---------|
 | Load module | `sudo modprobe firewall` |
-| Load with parameters | `sudo modprobe firewall fw_ban_time=600 fw_max_bans=4096` |
+| Load with parameters | `sudo modprobe firewall fw_ban_time=600` (parameter names and defaults: the `module_param` declarations in `src/kernel-module/fw_main.c`) |
 | Check if loaded | `lsmod \| grep firewall` |
 | Unload module | `sudo rmmod firewall` |
 | Module metadata | `modinfo firewall` |
@@ -87,8 +87,10 @@ echo "10.0.0.0/8" | sudo tee /proc/firewall/whitelist
 echo "remove 10.0.0.0/8" | sudo tee /proc/firewall/whitelist
 ```
 
-> Whitelist is capped at 64 entries. Entries declared in
-> `/etc/firewall/*.yaml` are pushed by the daemon on
+> The whitelist entry limit is enforced jointly by the kernel module
+> parameter `fw_max_whitelist_entries` and the daemon's
+> `capacity.max_whitelist_entries` (defaults: `config/default.yaml`).
+> Entries declared in `/etc/firewall/*.yaml` are pushed by the daemon on
 > `systemctl restart firewall-daemon`.
 
 ## Status and Statistics

@@ -396,7 +396,7 @@ graph TB
 
 ### Prometheus 指标
 
-`/metrics` 暴露 **24 个**指标（`src/daemon/http_exporter/metrics.rs`，按 `# TYPE` 计数）：
+`/metrics` 暴露的指标以 `src/daemon/http_exporter/metrics.rs` 为准（按 `# TYPE` 计数）：
 
 | 指标 | 类型 | 说明 |
 |------|------|------|

@@ -277,7 +277,7 @@ sudo systemctl restart fail2ban
 | Scenario | fail2ban | Linux Firewall |
 |----------|----------|----------------|
 | 1000 banned IPs | Noticeably slower | No impact |
-| 10000 banned IPs | Unusable | Not supported (max 4096) |
+| 10000 banned IPs | Unusable | Bounded by the configured `fw_max_ban_entries` limit |
 
 ## Frequently Asked Questions
 

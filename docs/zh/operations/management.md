@@ -29,7 +29,7 @@ systemd 完成——项目未提供额外的 CLI 封装。
 | 操作 | 命令 |
 |------|------|
 | 加载模块 | `sudo modprobe firewall` |
-| 带参数加载 | `sudo modprobe firewall fw_ban_time=600 fw_max_bans=4096` |
+| 带参数加载 | `sudo modprobe firewall fw_ban_time=600`（参数名与默认值以 `src/kernel-module/fw_main.c` 的 `module_param` 为准） |
 | 查看已加载 | `lsmod \| grep firewall` |
 | 卸载模块 | `sudo rmmod firewall` |
 | 查看模块信息 | `modinfo firewall` |
@@ -85,7 +85,9 @@ echo "10.0.0.0/8" | sudo tee /proc/firewall/whitelist
 echo "remove 10.0.0.0/8" | sudo tee /proc/firewall/whitelist
 ```
 
-> 白名单上限 64 条目。`/etc/firewall/*.yaml` 中预先定义的条目
+> 白名单条目上限由内核模块参数 `fw_max_whitelist_entries` 与 daemon 侧
+> `capacity.max_whitelist_entries` 共同控制（默认值见 `config/default.yaml`）。
+> `/etc/firewall/*.yaml` 中预先定义的条目
 > 在 `systemctl restart firewall-daemon` 时由守护进程自动下发。
 
 ## 状态与统计

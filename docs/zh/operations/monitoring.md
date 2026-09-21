@@ -18,14 +18,15 @@ scrape_configs:
 
 ### 可用指标
 
-> 以下 24 个指标由 `src/daemon/http_exporter/metrics.rs` 实际暴露。
+> 以下指标由 `src/daemon/http_exporter/metrics.rs` 实际暴露，数量以该文件的
+> `# TYPE` 行为准。
 > 早期文档中 `firewall_ban_events_total` / `firewall_packets_dropped_total` /
 > `firewall_hash_table_*` / `firewall_jail_*` 等条目均不存在，已删除。
 
 #### 内核侧（来自 `/proc/firewall/stats`）
 
-`/proc/firewall/stats` 完整暴露 12 个字段，映射到以下内核级计数器。
-字段名与不变量见 `docs/configuration/procfs.md`。
+`/proc/firewall/stats` 暴露的内核级计数器映射到以下指标，字段定义以
+`contract/procfs.fwidl` 为准。
 
 | 指标 | 类型 | 说明 |
 |------|------|------|
@@ -136,8 +137,8 @@ Queries:
 Title: Whitelist Capacity
 Panel: Gauge
 Query: firewall_kernel_whitelist_count
-Thresholds: 50 (warning), 60 (critical)
-Max: 64
+Max: 按 capacity.max_whitelist_entries 配置（默认见 config/default.yaml）
+Thresholds: 该上限的 80% (warning) / 95% (critical)
 ```
 
 ## 日志监控
@@ -215,13 +216,15 @@ groups:
           description: "Ban rate is {{ $value }} per second"
 
       - alert: WhitelistNearlyFull
-        expr: firewall_kernel_whitelist_count > 50
+        # 上限由 capacity.max_whitelist_entries 配置（默认见 config/default.yaml）；
+        # 阈值按该上限的 80% 取，此处以占位符表示
+        expr: firewall_kernel_whitelist_count > <0.8 * 上限>
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "Whitelist nearing 64-entry cap"
-          description: "{{ $value }} entries used (max 64)"
+          summary: "Whitelist nearly full"
+          description: "{{ $value }} whitelist entries in use"
 
       - alert: DaemonDown
         # 守护进程崩溃或未运行时，uptime 计数器停止递增

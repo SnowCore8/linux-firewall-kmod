@@ -12,9 +12,9 @@ Linux Firewall Kernel Module is a high-performance IP banning solution designed 
 |---------|-------------|
 | Netfilter Hook | Direct packet interception at the kernel network stack level |
 | Jail System | Multiple independent banning rules |
-| Hash Table | 4096-capacity kernel hash table for efficient lookup |
+| Hash Table | Kernel hash table for O(1) lookup; bucket and entry limits are module parameters |
 | Auto-Expiry Cleanup | Background timer thread automatically cleans expired bans |
-| IP Whitelist | 64-capacity whitelist to prevent banning critical IPs |
+| IP Whitelist | Kernel whitelist to prevent banning critical IPs |
 | ProcFS Interface | Management and monitoring via `/proc` filesystem |
 | Regex Matching | Userspace daemon supports configurable regex for log matching |
 | RCU Concurrency | Read-Copy-Update for high-concurrency safety |
@@ -29,8 +29,8 @@ graph TB
 
     subgraph KernelSpace["Linux Kernel Space"]
         NetfilterHook["Netfilter Hook (PREROUTING)"]
-        Whitelist["Whitelist (64 ents)"]
-        HashTable["Hash Table (4096) Banned IP List"]
+        Whitelist["Whitelist"]
+        HashTable["Hash Table Banned IP List"]
         Allow["ALLOW"]
         Drop["DROP Packets"]
         ProcFS["ProcFS /proc/firewall"]
@@ -52,8 +52,8 @@ graph TB
         Daemon --> Prometheus
     end
 
-    KernelSpace --> ProcFS
-    ProcFS --> Daemon
+    KernelSpace -->|netlink control channel| Daemon
+    ProcFS -.->|manual ops / debug| Daemon
 ```
 
 ## System Requirements

@@ -130,14 +130,14 @@ cp target/release/firewall-daemon build/daemon/firewall-daemon
 
 ### Rust release profile (`Cargo.toml`)
 
-`Cargo.toml` pre-defines three profiles, each tuned for a different
-use case:
+`Cargo.toml` pre-defines `release` / `dev` / `dev-with-debug` / `asan` and
+other profiles, each tuned for a different use case:
 
-| Profile | Size | Purpose | Build command |
-|---------|------|---------|---------------|
+| Profile | Build artifact | Purpose | Build command |
+|---------|----------------|---------|---------------|
 | `release` (default) | Compact `strip`-ed binary | Production deployment | `cargo build --release` |
-| `dev-with-debug` | 32MB (with DWARF + symbols) | Field crash analysis; use `addr2line` to unwind stacks | `cargo build --release --profile dev-with-debug` |
-| `asan` | (with ASAN runtime) | Memory-safety checks, requires nightly | `cargo +nightly build --profile asan` |
+| `dev-with-debug` | Unstripped, with DWARF + symbols | Field crash analysis; use `addr2line` to unwind stacks | `cargo build --release --profile dev-with-debug` |
+| `asan` | With ASAN runtime | Memory-safety checks, requires nightly | `cargo +nightly build --profile asan` |
 
 #### release (default)
 
@@ -279,7 +279,7 @@ for the full profile matrix.
 
 - `release`: `lto=true` + `strip=true` + `debug=false` + `panic="abort"`
   → compact `strip`-ed binary
-- `dev-with-debug`: inherits release, keeps DWARF + symbols → 32MB
+- `dev-with-debug`: inherits release, keeps DWARF + symbols
 - `asan`: nightly opt-in, bundles the ASAN runtime
 
 ## Dependency Checking

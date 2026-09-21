@@ -99,7 +99,7 @@ defaults:
 
 1. 系统启动时读取 `/etc/firewall/default.yaml`
 2. 解析全局配置
-3. 加载白名单到内核（最多 64 条）
+3. 加载白名单到内核（上限由 `capacity.max_whitelist_entries` 控制）
 4. 初始化每个启用的 jail
 5. 注册 inotify 监听日志文件
 

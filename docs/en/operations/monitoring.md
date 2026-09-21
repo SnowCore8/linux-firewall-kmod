@@ -18,17 +18,18 @@ scrape_configs:
 
 ### Available Metrics
 
-> The 24 metrics below are actually exposed by
-> `src/daemon/http_exporter/metrics.rs`. Earlier drafts listed
+> The metrics below are actually exposed by
+> `src/daemon/http_exporter/metrics.rs`; the count is whatever its
+> `# TYPE` lines define. Earlier drafts listed
 > `firewall_ban_events_total` / `firewall_packets_dropped_total` /
 > `firewall_hash_table_*` / `firewall_jail_*` — none of which exist in
 > the source — and have been removed.
 
 #### Kernel-side (from `/proc/firewall/stats`)
 
-The full 12-field stats interface maps to the following kernel-level
-counters. Refer to `docs/configuration/procfs.md` for the exact
-key names and the conservation law.
+The kernel-level counters in `/proc/firewall/stats` map to the following
+metrics; the field definitions are authoritative in
+`contract/procfs.fwidl`.
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -139,8 +140,8 @@ Queries:
 Title: Whitelist Capacity
 Panel: Gauge
 Query: firewall_kernel_whitelist_count
-Thresholds: 50 (warning), 60 (critical)
-Max: 64
+Max: whatever capacity.max_whitelist_entries is set to (default: config/default.yaml)
+Thresholds: 80% (warning) / 95% (critical) of that limit
 ```
 
 ## Log Monitoring
@@ -218,13 +219,16 @@ groups:
           description: "Ban rate is {{ $value }} per second"
 
       - alert: WhitelistNearlyFull
-        expr: firewall_kernel_whitelist_count > 50
+        # The limit comes from capacity.max_whitelist_entries
+        # (default: config/default.yaml); set the threshold to 80% of it,
+        # shown here as a placeholder.
+        expr: firewall_kernel_whitelist_count > <0.8 * limit>
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "Whitelist nearing 64-entry cap"
-          description: "{{ $value }} entries used (max 64)"
+          summary: "Whitelist nearly full"
+          description: "{{ $value }} whitelist entries in use"
 
       - alert: DaemonDown
         # When the daemon crashes or is not running, the uptime

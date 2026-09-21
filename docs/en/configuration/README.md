@@ -99,7 +99,7 @@ defaults:
 
 1. Reads `/etc/firewall/default.yaml` on system startup
 2. Parses global configuration
-3. Loads whitelist into kernel (up to 64 entries)
+3. Loads whitelist into kernel (limit from `capacity.max_whitelist_entries`)
 4. Initializes each enabled jail
 5. Registers inotify watches for log files
 

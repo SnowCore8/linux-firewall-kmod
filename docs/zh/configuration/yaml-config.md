@@ -138,7 +138,9 @@ whitelist:
 | 单个 IP | `192.168.1.100` | 封禁时跳过该 IP |
 | CIDR 网段 | `192.168.1.0/24` | 封禁时跳过该网段所有 IP |
 
-> **限制**：白名单最多支持 64 个条目。超出部分将被忽略并记录警告。
+> **限制**：白名单条目上限由 `capacity.max_whitelist_entries`（内核侧
+> `fw_max_whitelist_entries`）控制，默认值见 `config/default.yaml`；到限后内核拒绝新增条目
+> 并计入 `whitelist_rejects`。
 
 ### 内置白名单
 

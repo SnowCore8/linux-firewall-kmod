@@ -138,7 +138,10 @@ whitelist:
 | Single IP | `192.168.1.100` | Skip this IP when banning |
 | CIDR range | `192.168.1.0/24` | Skip all IPs in this subnet |
 
-> **Limit**: Maximum 64 whitelist entries. Excess entries are ignored with a warning.
+> **Limit**: The whitelist entry limit comes from `capacity.max_whitelist_entries`
+> (kernel side: `fw_max_whitelist_entries`; default: `config/default.yaml`).
+> Once the limit is reached the kernel rejects new entries and counts them
+> in `whitelist_rejects`.
 
 ### Built-in Whitelist
 
