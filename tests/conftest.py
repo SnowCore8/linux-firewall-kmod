@@ -338,20 +338,38 @@ def daemon_starts_ok(cmd: list[str]) -> tuple[bool, int]:
 
 
 def is_daemon_running() -> bool:
-    """检查守护进程是否运行"""
-    result = subprocess.run(["pgrep", "-f", "firewall-daemon"], capture_output=True)
+    """检查守护进程是否运行。
+
+    用 `pgrep -x`（精确进程名）而非 `-f`：`-f` 匹配任意命令行里含
+    "firewall-daemon" 的进程（例如跑 pytest 的包装 shell），会把「没起 daemon」
+    误判为在跑，使本应 skip 的用例变成失败。
+    """
+    result = subprocess.run(["pgrep", "-x", "firewall-daemon"], capture_output=True)
     return result.returncode == 0
 
 
 def get_daemon_pid() -> str:
-    """获取守护进程 PID"""
+    """获取守护进程 PID（`-x` 精确匹配，理由同 is_daemon_running）。"""
     result = subprocess.run(
-        ["pgrep", "-f", "firewall-daemon"],
+        ["pgrep", "-x", "firewall-daemon"],
         capture_output=True, text=True,
     )
     if result.returncode == 0:
         return result.stdout.strip().splitlines()[0]
     return ""
+
+
+def daemon_http_port() -> int:
+    """从仓库默认配置读取 daemon 的 HTTP 监听端口。
+
+    Web UI / JSON API / SSE / Prometheus metrics 共用同一监听地址
+    （见 docs/*/architecture/README.md），端口取 `defaults.metrics_port`。
+    """
+    try:
+        data = yaml.safe_load((CONFIG_DIR / "default.yaml").read_text())
+        return int(data["defaults"]["metrics_port"])
+    except (OSError, KeyError, TypeError, ValueError):
+        return 9119
 
 
 def get_prometheus_metrics(port: int = 9119) -> str:

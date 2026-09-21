@@ -5,7 +5,7 @@ import os
 import pytest
 import yaml
 
-from .config import PROC_CONFIG, PROC_STATS
+from .config import CONFIG_DIR, PROC_CONFIG, PROC_STATS
 from .conftest import get_prometheus_metrics, is_daemon_running, get_daemon_pid
 
 
@@ -19,7 +19,8 @@ class TestDdosDetection:
 
     def test_ddos_config(self):
         """15.1 DDoS 检测配置验证"""
-        config_paths = ["/etc/firewall/default.yaml"]
+        # 配置取仓库内 config/（而非硬编码 /etc/firewall/default.yaml）
+        config_paths = [str(CONFIG_DIR / "default.yaml")]
         for path in config_paths:
             if os.path.exists(path):
                 content = open(path).read()
