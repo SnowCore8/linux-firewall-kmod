@@ -407,24 +407,12 @@ impl Consumer {
     ///
     /// `current_bans` / `total_bans` / `total_unbans` / `whitelist_count` 被丢弃，
     /// 与旧 `handle_stats_response` 逐字一致——这是既有行为，不是本次改动引入的缺口。
+    ///
+    /// 生产路径上这条回复被 [`crate::kernel::client::Client::query_stats`] 按 `seq`
+    /// 认领并投给调用方，故周期任务直接调 [`apply_stats`]；本分支只在「回复带 `seq`
+    /// 却无人等待」这种异常情形下才会走到。
     fn on_stats_response(e: &codec::StatsResponse) {
-        crate::logger::debug!(
-            crate::logger::get(),
-            "收到统计数据响应";
-            "current_bans" => e.current_bans,
-            "total_bans" => e.total_bans,
-            "total_unbans" => e.total_unbans,
-            "whitelist_count" => e.whitelist_count,
-            "packets_dropped" => e.packets_dropped,
-            "packets_accepted" => e.packets_accepted
-        );
-
-        DAEMON_STATS
-            .packets_dropped
-            .store(e.packets_dropped, Ordering::Relaxed);
-        DAEMON_STATS
-            .packets_accepted
-            .store(e.packets_accepted, Ordering::Relaxed);
+        apply_stats(e);
     }
 
     /// 处理白名单状态变更事件（单条增删，非全量）。
@@ -498,21 +486,12 @@ impl Consumer {
     }
 
     /// 处理配置更新确认：部分被拒时告警，全数采纳时只记 debug。
+    ///
+    /// 同 [`Consumer::on_stats_response`]：生产路径上这条回复由
+    /// [`crate::kernel::client::Client::set_config`] 认领，故配置下发方直接调
+    /// [`apply_config_ack`]。
     fn on_config_ack(e: &codec::ConfigAck) {
-        if e.rejected_flags != 0 {
-            crate::logger::warn!(
-                crate::logger::get(),
-                "配置更新部分被拒绝";
-                "applied_flags" => format!("0x{:x}", e.applied_flags),
-                "rejected_flags" => format!("0x{:x}", e.rejected_flags)
-            );
-        } else {
-            crate::logger::debug!(
-                crate::logger::get(),
-                "配置更新已确认";
-                "applied_flags" => format!("0x{:x}", e.applied_flags)
-            );
-        }
+        apply_config_ack(e);
     }
 
     /// 处理 procfs 配置变更广播：只对 `ban_time` 变动记一行 debug。
@@ -527,50 +506,111 @@ impl Consumer {
     }
 
     /// 处理分析数据响应：整体快照覆盖 `ANALYSIS_CACHE`。
+    ///
+    /// 同 [`Consumer::on_stats_response`]：生产路径上这条回复由
+    /// [`crate::kernel::client::Client::query_analysis`] 认领，故周期任务直接调
+    /// [`apply_analysis`]。
     fn on_analysis_response(e: &codec::AnalysisResponse) {
-        // 条目数由内核声明，数组长度是编译期容量；取有效交集而不是相信声明值。
-        let udp_ports = e.udp_ports[..e.udp_ports_in_use()]
-            .iter()
-            .map(|p| AnalysisUdpPortEntry {
-                port: p.port,
-                packets: p.packets,
-                bytes: p.bytes,
-                last_seen_secs: p.last_seen_secs,
-            })
-            .collect();
-        let icmp_types = e.icmp_types[..e.icmp_types_in_use()]
-            .iter()
-            .map(|t| AnalysisIcmpTypeEntry {
-                r#type: t.icmp_type,
-                code: t.code,
-                packets: t.packets,
-                bytes: t.bytes,
-                last_seen_secs: t.last_seen_secs,
-            })
-            .collect();
-        let port_scanners = e.port_scanners[..e.port_scanners_in_use()]
-            .iter()
-            .filter_map(|s| scanner_entry(s.addr, s.metric, s.packets))
-            .collect();
-        let service_probes = e.service_probes[..e.service_probes_in_use()]
-            .iter()
-            .filter_map(|s| scanner_entry(s.addr, s.metric, s.packets))
-            .collect();
+        apply_analysis(e);
+    }
+}
 
-        *ANALYSIS_CACHE.write() = AnalysisData {
-            pkt_sizes: e.pkt_sizes,
-            ttl_dist: e.ttl_dist,
-            ip_total_count: e.ip_frag_total,
-            ip_frag_count: e.ip_frag_count,
-            udp_ports,
-            udp_port_capacity: e.udp_port_capacity,
-            icmp_types,
-            icmp_type_capacity: e.icmp_type_capacity,
-            port_scanners,
-            port_scan_threshold: e.port_scan_threshold,
-            service_probes,
-            service_probe_threshold: e.service_probe_threshold,
-        };
+// ============================================================================
+// 请求/响应路径的落地入口
+//
+// 下面三个响应类型都被 `Client` 按 `seq` 认领并**直接投给调用方**，不进入事件队列，
+// 因此周期任务/配置下发方必须在拿到返回值后自己调这里落地。它们是 `Consumer` 同名
+// 私有分支的公开版本——两边共用同一份实现，避免「事件路径」与「请求路径」各写一遍
+// 而慢慢漂移。
+// ============================================================================
+
+/// 把统计响应搬进全局计数器。
+///
+/// 只采纳 `packets_dropped` / `packets_accepted` 两项，其余字段丢弃——与旧
+/// `handle_stats_response` 逐字一致（封禁数、白名单数由事件自带的实时字段维护，
+/// 不靠这条周期回复）。
+pub fn apply_stats(e: &codec::StatsResponse) {
+    crate::logger::debug!(
+        crate::logger::get(),
+        "收到统计数据响应";
+        "current_bans" => e.current_bans,
+        "total_bans" => e.total_bans,
+        "total_unbans" => e.total_unbans,
+        "whitelist_count" => e.whitelist_count,
+        "packets_dropped" => e.packets_dropped,
+        "packets_accepted" => e.packets_accepted
+    );
+
+    DAEMON_STATS
+        .packets_dropped
+        .store(e.packets_dropped, Ordering::Relaxed);
+    DAEMON_STATS
+        .packets_accepted
+        .store(e.packets_accepted, Ordering::Relaxed);
+}
+
+/// 把分析响应整体覆盖进 `ANALYSIS_CACHE`。
+pub fn apply_analysis(e: &codec::AnalysisResponse) {
+    // 条目数由内核声明，数组长度是编译期容量；取有效交集而不是相信声明值。
+    let udp_ports = e.udp_ports[..e.udp_ports_in_use()]
+        .iter()
+        .map(|p| AnalysisUdpPortEntry {
+            port: p.port,
+            packets: p.packets,
+            bytes: p.bytes,
+            last_seen_secs: p.last_seen_secs,
+        })
+        .collect();
+    let icmp_types = e.icmp_types[..e.icmp_types_in_use()]
+        .iter()
+        .map(|t| AnalysisIcmpTypeEntry {
+            r#type: t.icmp_type,
+            code: t.code,
+            packets: t.packets,
+            bytes: t.bytes,
+            last_seen_secs: t.last_seen_secs,
+        })
+        .collect();
+    let port_scanners = e.port_scanners[..e.port_scanners_in_use()]
+        .iter()
+        .filter_map(|s| scanner_entry(s.addr, s.metric, s.packets))
+        .collect();
+    let service_probes = e.service_probes[..e.service_probes_in_use()]
+        .iter()
+        .filter_map(|s| scanner_entry(s.addr, s.metric, s.packets))
+        .collect();
+
+    *ANALYSIS_CACHE.write() = AnalysisData {
+        pkt_sizes: e.pkt_sizes,
+        ttl_dist: e.ttl_dist,
+        ip_total_count: e.ip_frag_total,
+        ip_frag_count: e.ip_frag_count,
+        udp_ports,
+        udp_port_capacity: e.udp_port_capacity,
+        icmp_types,
+        icmp_type_capacity: e.icmp_type_capacity,
+        port_scanners,
+        port_scan_threshold: e.port_scan_threshold,
+        service_probes,
+        service_probe_threshold: e.service_probe_threshold,
+    };
+}
+
+/// 记录配置更新的采纳/拒绝位图：有被拒项时告警，全数采纳时只记 debug。
+pub fn apply_config_ack(e: &codec::ConfigAck) {
+    if e.rejected_flags != 0 {
+        crate::logger::warn!(
+            crate::logger::get(),
+            "配置更新部分被拒绝";
+            "applied_flags" => format!("0x{:x}", e.applied_flags),
+            "rejected_flags" => format!("0x{:x}", e.rejected_flags)
+        );
+    } else {
+        crate::logger::debug!(
+            crate::logger::get(),
+            "配置更新已确认";
+            "applied_flags" => format!("0x{:x}", e.applied_flags)
+        );
     }
 }
 

@@ -17,9 +17,21 @@
 //! # 关键不变量
 //!
 //! - **守护进程化前清 `reload` 标志**:避免该窗口期收到的 SIGHUP 在主循环首次检查时误触
-//! - **清理顺序**:先停 netlink 接收线程,再关 db——否则停机窗口内的事件会写进已关闭的写队列而被静默丢弃
+//! - **清理顺序**:先停 runtime 执行体（含内核接收执行体）,再关 db——否则停机窗口内的事件
+//!   会写进已关闭的写队列而被静默丢弃
 //! - **PID 文件 `O_NOFOLLOW`**:防止符号链接攻击覆盖其他进程
 //! - **SIGPIPE 忽略**:HTTP 导出器在客户端断开时不应被信号杀死
+//!
+//! # 内核链路（2.H-3）
+//!
+//! 内核通信由 `crate::kernel`（传输层）+ `crate::inbound`（消费层）+
+//! `crate::kernel_poll`（周期任务与租约）组成，组合根负责装配。三条不变量：
+//!
+//! 1. **同一 socket 只有一条读线程**：`Reactor` 独占接收侧，跑在 `Supervisor` 里；
+//! 2. **`Client` 与 `Reactor` 共享同一张在途配对表**（`Arc<Router>`）——否则请求登记
+//!    不进去、回复永远落空；
+//! 3. **启动快照同步拉取，且在可信 IP 写入之前**：`init_trusted_ips` 会往本地白名单
+//!    缓存追加条目，快照若后到会用内核旧表整体覆盖它。
 
 use std::env;
 use std::fs;
@@ -37,10 +49,14 @@ use firewall_daemon::daemonizer::daemonize_process;
 use firewall_daemon::file_monitor;
 use firewall_daemon::history_snapshot;
 use firewall_daemon::http_exporter;
+use firewall_daemon::inbound;
 use firewall_daemon::jail;
+use firewall_daemon::kernel;
+use firewall_daemon::kernel_poll;
 use firewall_daemon::logger;
-use firewall_daemon::netlink::{self, DdosDecisionEngine, NetlinkContext};
+use firewall_daemon::netlink::DdosDecisionEngine;
 use firewall_daemon::runtime::{self, Shutdown, Supervisor};
+use firewall_daemon::runtime_status;
 use firewall_daemon::signals::{setup_signals, GLOBAL_RELOAD, GLOBAL_RUNNING};
 use firewall_daemon::types::{Config, DAEMON_STATS};
 use firewall_daemon::web_ui;
@@ -50,41 +66,19 @@ const PROCFS_DIR: &str = "/proc/firewall";
 /// 内核模块封禁命令接口。启动期存在性检查
 const BANS_PATH: &str = "/proc/firewall/bans";
 
-/// 优雅清理：停 HTTP → 停 netlink 接收线程 → 关 inotify → 关 db → 删 PID 文件。
+/// 优雅清理：停 HTTP → 关 inotify → 关 db → 删 PID 文件。
 ///
-/// 顺序要求：netlink 接收线程必须在 `close_history_db` **之前**停止。否则停机窗口内
-/// 收到的事件会写进已关闭的写队列（`enqueue_db_write` 报一次 warn 后丢弃），造成内存
-/// 状态与磁盘持久化不一致。`close_history_db` 自身会 join 写线程、把已入队的持久化
-/// 全部落盘后才关连接，故这里只需保证**没有新的生产者**即可。
+/// 顺序要求：内核链路的执行体必须在 `close_history_db` **之前**停止（由调用方在
+/// `supervisor.shutdown` 里完成，其登记顺序即依赖顺序）。否则停机窗口内收到的事件会
+/// 写进已关闭的写队列（`enqueue_db_write` 报一次 warn 后丢弃），造成内存状态与磁盘
+/// 持久化不一致。`close_history_db` 自身会 join 写线程、把已入队的持久化全部落盘后才
+/// 关连接，故这里只需保证**没有新的生产者**即可。
 ///
 /// # Arguments
 /// - `_cfg`：保留参数，占位
-/// - `netlink_receiver`：netlink 接收线程句柄；显式停止并等待其退出（最多 2s）
-fn cleanup(_cfg: &Config, netlink_receiver: Option<std::thread::JoinHandle<()>>) {
+fn cleanup(_cfg: &Config) {
     http_exporter::stop_http_exporter();
     GLOBAL_RUNNING.store(false, Ordering::SeqCst);
-    // 停止接收线程。Arc 存在 OnceLock 全局单例里永不 drop，
-    // 故必须显式 stop，不能依赖 Drop::close(fd) 连带终止接收循环
-    if let Some(ctx) = netlink::get_global_netlink_ctx() {
-        ctx.stop();
-    }
-    if let Some(handle) = netlink_receiver {
-        // 接收线程每 100ms 轮询一次 running 标志，正常应毫秒级退出；最多等 2s
-        let start = std::time::Instant::now();
-        loop {
-            if handle.is_finished() {
-                if let Err(e) = handle.join() {
-                    warn!(logger::get(), "Netlink 接收线程 join 失败"; "error" => ?e);
-                }
-                break;
-            }
-            if start.elapsed() > std::time::Duration::from_secs(2) {
-                warn!(logger::get(), "Netlink 接收线程超时未退出，继续清理");
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-    }
     file_monitor::close_inotify();
     history_snapshot::close_history_db();
     if let Err(e) = fs::remove_file("/run/firewall-daemon.pid") {
@@ -210,27 +204,27 @@ fn main() -> Result<()> {
         info!(logger::get(), "历史数据库初始化成功");
     }
 
-    // 初始化 netlink 通信（接收内核 DDoS 事件）
-    let netlink_ctx = match NetlinkContext::new() {
-        Ok(ctx) => {
-            info!(logger::get(), "Netlink 通信层初始化成功");
-            Some(ctx)
+    // 初始化内核通信链路（取代旧 `NetlinkContext`）：一条 socket + 一条接收执行体。
+    //
+    // 三条装配不变量见文件头「内核链路」一节。这里先开 socket：失败只降级警告，
+    // 不让整个 daemon 起不来——Web UI / procfs / 日志监控仍可工作，
+    // `/health` 会如实报 `lease_state = "none"`。
+    let transport = match kernel::transport::Transport::open() {
+        Ok(t) => {
+            info!(logger::get(), "内核 netlink socket 已建立");
+            Some(Arc::new(t))
         }
         Err(e) => {
-            warn!(logger::get(), "Netlink 通信层初始化失败"; "error" => %e);
+            warn!(logger::get(), "内核 netlink socket 建立失败"; "error" => %e);
             None
         }
     };
 
-    // 接收线程句柄由 cleanup 显式 stop + join：Arc 存在 OnceLock 全局单例里，
-    // 永不会被 drop，故不能依赖 Drop 关闭 fd / 停止线程
-    let mut netlink_receiver: Option<std::thread::JoinHandle<()>> = None;
-
     // ---- 组合根：装配新状态层 ----
     //
-    // 新状态（`state::State` + hub）在**这里**构造并注入，早于 netlink 接收线程与
-    // 任何镜像写入点：下面的封禁/白名单/统计查询响应会在接收线程里落进新状态，
-    // 若注入晚一步，启动期那批数据就会丢。
+    // 新状态（`state::State` + hub）在**这里**构造并注入，早于任何镜像写入点：下面的
+    // 封禁/白名单/统计查询响应会在消费执行体里落进新状态，若注入晚一步，启动期那批
+    // 数据就会丢。
     //
     // 注入后 `state::compose` 的镜像函数才不再是空操作。旧全局（`ACTIVE_BAN_CACHE`
     // 等）继续保留给尚未迁入的读者（SPA 分析端点、Prometheus 导出器）——这是
@@ -245,6 +239,17 @@ fn main() -> Result<()> {
         Err(e) => warn!(logger::get(), "状态层装配失败"; "error" => %e),
     }
 
+    // ---- 组合根：租约状态单元 ----
+    //
+    // `/health` 的 `netlink_ready` / `lease_state` / `lease_losses` 从这里读。即使内核
+    // socket 都没建起来也要注入：那样 `/health` 报 `lease_state = "none"`，而不是因
+    // 未注入而无法区分「没有执行体」与「执行体尚未注册」。
+    let lease_cell = Arc::new(kernel_poll::LeaseCell::new());
+    match runtime_status::set_lease_cell(Arc::clone(&lease_cell)) {
+        Ok(()) => {}
+        Err(e) => warn!(logger::get(), "租约状态单元注入失败"; "error" => %e),
+    }
+
     // ---- 组合根：装配 runtime 骨架（supervisor + 单调时钟调度器）----
     //
     // 周期维护任务（计数器镜像、过期封禁清理）从 `file_monitor::monitor_loop` 的 poll
@@ -252,78 +257,76 @@ fn main() -> Result<()> {
     // 且 `Bans::purge_expired` 终于有了生产调用者（结构问题 E）。
     //
     // 装配失败只降级警告、不 panic：调度器缺席时 SSE 的 `stats` 域不再自动刷新、
-    // 过期封禁只能靠内核 UNBAN 事件自愈，但主链路（netlink / Web UI）照常工作。
+    // 过期封禁只能靠内核 UNBAN 事件自愈，但主链路（内核链路 / Web UI）照常工作。
     let mut supervisor = Supervisor::new();
     match runtime::spawn_periodic(&mut supervisor, Shutdown::new()) {
         Ok(()) => info!(logger::get(), "runtime 调度器已装配"; "executors" => supervisor.len()),
         Err(e) => warn!(logger::get(), "runtime 调度器装配失败"; "error" => %e),
     }
 
-    // 如果有 netlink 上下文，创建并设置决策引擎
-    if let Some(ctx) = netlink_ctx {
-        let ctx_arc = Arc::new(ctx);
+    // ---- 组合根：装配内核链路（Reactor / 消费体 / Client / 轮询执行体）----
+    //
+    // 登记顺序 = 依赖顺序（`Supervisor` 逆序关停）：接收执行体最先登记、最后停止，
+    // 因为它是「事件生产者」；消费体与轮询体都从它取数据。
+    if let Some(transport) = transport {
+        // `event_channel` 同时产出：共享路由器（`Arc`）、事件接收端、队列统计、存活凭据。
+        let (router, events, _queue_stats, liveness) =
+            kernel::reactor::event_channel(kernel::reactor::default_event_queue());
 
-        // 设置全局 netlink 上下文（程序内部共享）
-        if let Err(e) = netlink::set_global_netlink_ctx(ctx_arc.clone()) {
-            warn!(logger::get(), "设置全局 NetlinkContext 失败"; "error" => %e);
+        // 接收执行体：一次可读事件可能对应多条数据报，`Reactor::run` 内部排空。
+        let reactor_token = Shutdown::new();
+        let reactor = kernel::reactor::Reactor::new(
+            Arc::clone(&transport),
+            reactor_token.clone(),
+            Arc::clone(&router),
+            liveness,
+        );
+        match supervisor.spawn("kernel-reactor", reactor_token, move || reactor.run()) {
+            Ok(()) => info!(logger::get(), "内核接收执行体已启动"),
+            Err(e) => warn!(logger::get(), "内核接收执行体启动失败"; "error" => %e),
         }
 
-        // 向内核注册为唯一守护进程（内核模块强制单实例 exclusivity）
-        if let Err(e) = ctx_arc.send_register() {
-            warn!(logger::get(), "向内核注册守护进程失败"; "error" => %e);
-        } else {
-            info!(logger::get(), "已向内核注册为唯一守护进程");
-        }
-
-        // 创建决策引擎
+        // 消费执行体：把 `Incoming` 搬进缓存与状态镜像。决策引擎在移交前接线，
+        // 否则最早那批 DDoS 事件会被静默丢掉。
+        let consumer = inbound::Consumer::new();
         let decision_engine = Arc::new(DdosDecisionEngine::new(cfg.ddos.clone()));
-        ctx_arc.set_decision_engine(decision_engine.clone());
-
-        // 设置全局决策引擎引用（供配置热重载使用）
+        consumer.set_decision_engine(Arc::clone(&decision_engine));
         http_exporter::set_global_decision_engine(decision_engine);
-
-        match ctx_arc.start_receiver() {
-            Ok(handle) => {
-                netlink_receiver = Some(handle);
-                info!(logger::get(), "Netlink 接收线程已启动");
-            }
-            Err(e) => {
-                warn!(logger::get(), "启动 Netlink 接收线程失败"; "error" => %e);
-            }
+        let consumer_token = Shutdown::new();
+        let consumer_watch = consumer_token.clone();
+        match supervisor.spawn("inbound-consumer", consumer_token, move || {
+            consumer.run(events, consumer_watch)
+        }) {
+            Ok(()) => info!(logger::get(), "内核事件消费执行体已启动"),
+            Err(e) => warn!(logger::get(), "内核事件消费执行体启动失败"; "error" => %e),
         }
 
-        // 启动时通过 netlink 请求-响应恢复状态
-        info!(logger::get(), "开始通过 netlink 恢复状态");
-        let seq = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as u32;
-
-        // 查询封禁列表
-        if let Err(e) = ctx_arc.send_list_bans_query(seq) {
-            warn!(logger::get(), "发送封禁列表查询失败"; "error" => %e);
-        } else {
-            info!(logger::get(), "已发送封禁列表查询"; "seq" => seq);
+        // 全局客户端定位器（过渡物，2.H-4 随旧层一起删除）。
+        //
+        // `Client` 是 `Clone` 的，克隆之间共享同一 socket 与在途表；这里存一份副本供
+        // 封禁操作 / 配置同步等分散调用点取用，避免把 `Client` 一路穿透到那些模块。
+        let client = kernel::client::Client::new(Arc::clone(&transport), Arc::clone(&router));
+        if let Err(e) = kernel::global::init(client.clone()) {
+            warn!(logger::get(), "全局内核客户端注入失败"; "error" => %e);
         }
 
-        // 查询统计数据
-        if let Err(e) = ctx_arc.send_stats_query(seq + 1) {
-            warn!(logger::get(), "发送统计数据查询失败"; "error" => %e);
-        } else {
-            info!(logger::get(), "已发送统计数据查询"; "seq" => seq + 1);
+        // 轮询执行体：启动期同步完成「注册 + 全量快照」，之后交给执行体做周期续约与拉取。
+        //
+        // 注册被**明确拒绝**（已有活跃守护进程持租）时按用户裁定「立即退出（非零码）」：
+        // 让服务管理器的重启策略重试，而不是留一个「界面看着正常、指令全被内核丢掉」的
+        // 进程。确认未到达属可自愈，`startup` 内部只告警。
+        let mut poller = kernel_poll::Poller::new(client, Arc::clone(&lease_cell));
+        if let Err(e) = poller.startup() {
+            error!(logger::get(), "内核注册被拒，退出以便服务管理器重试"; "error" => %e);
+            return Err(e);
+        }
+        match kernel_poll::spawn(&mut supervisor, Shutdown::new(), poller) {
+            Ok(()) => info!(logger::get(), "内核轮询执行体已启动"),
+            Err(e) => warn!(logger::get(), "内核轮询执行体启动失败"; "error" => %e),
         }
 
-        // 查询白名单列表
-        if let Err(e) = ctx_arc.send_list_whitelist_query(seq + 2) {
-            warn!(logger::get(), "发送白名单列表查询失败"; "error" => %e);
-        } else {
-            info!(logger::get(), "已发送白名单列表查询"; "seq" => seq + 2);
-        }
-
-        // 等待响应（给内核一些时间处理）
-        std::thread::sleep(std::time::Duration::from_millis(500));
-
-        // 初始化可信 IP 白名单（在 netlink 初始化之后，以便走 netlink 通道）
+        // 初始化可信 IP 白名单。**必须在启动快照之后**：本函数会往本地白名单缓存
+        // 追加条目，故不能与「用内核表覆盖本地缓存」的快照拉取并发。
         if !cfg.trusted_ips.is_empty() {
             let failed = ban::init_trusted_ips(&cfg.trusted_ips);
             if !failed.is_empty() {
@@ -358,60 +361,6 @@ fn main() -> Result<()> {
         config_reloader::set_global_jails_enabled(&jails_enabled);
     }
 
-    // 启动后台定时 stats 查询线程（每 1 秒通过 netlink 向内核拉取真实计数）
-    // procfs 是用户接口，守护进程内部通信必须走 netlink。
-    // send_stats_query 仅在启动时调用一次，必须周期触发才能持续同步 packets_dropped/accepted。
-    // 注意：BanStateChange 事件已携带实时统计字段，此轮询作为兜底同步机制。
-    {
-        if let Err(e) = std::thread::Builder::new()
-            .name("netlink-stats-poll".into())
-            .spawn(|| {
-                info!(logger::get(), "netlink stats 轮询线程启动");
-                let mut seq_counter: u32 = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as u32;
-                let mut ticks: u64 = 0;
-                while GLOBAL_RUNNING.load(Ordering::Relaxed) {
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                    ticks = ticks.wrapping_add(1);
-                    seq_counter = seq_counter.wrapping_add(1);
-                    if let Some(ctx) = netlink::get_global_netlink_ctx() {
-                        if let Err(e) = ctx.send_stats_query(seq_counter) {
-                            crate::logger::debug!(
-                                crate::logger::get(),
-                                "netlink stats 查询失败";
-                                "error" => %e
-                            );
-                        }
-                        // 同时拉取分析数据（包大小/TTL/分片/UDP/ICMP/端口扫描/服务探测）
-                        if let Err(e) = ctx.send_analysis_query(seq_counter.wrapping_add(1)) {
-                            crate::logger::debug!(
-                                crate::logger::get(),
-                                "netlink analysis 查询失败";
-                                "error" => %e
-                            );
-                        }
-                        // 每 60s 全量 LIST bans 对账，清除事件丢失导致的陈旧缓存
-                        if ticks % 60 == 0 {
-                            seq_counter = seq_counter.wrapping_add(1);
-                            if let Err(e) = ctx.send_list_bans_query(seq_counter) {
-                                crate::logger::debug!(
-                                    crate::logger::get(),
-                                    "netlink list_bans 对账查询失败";
-                                    "error" => %e
-                                );
-                            }
-                        }
-                    }
-                }
-                info!(logger::get(), "netlink stats 轮询线程退出");
-            })
-        {
-            warn!(logger::get(), "netlink stats 轮询线程启动失败"; "error" => %e);
-        }
-    }
-
     let mut exporter_handle = None;
     if cfg.metrics_port > 0 {
         exporter_handle = Some(http_exporter::start_http_exporter(cfg.metrics_port, &cfg));
@@ -437,13 +386,15 @@ fn main() -> Result<()> {
     );
     info!(logger::get(), "开始清理流程");
 
-    // 先按依赖逆序停 runtime 执行体（当前只有调度器），再走既有清理流程。
-    // 顺序要求：调度器只碰内存镜像与原子计数、不碰持久化，故它排在 `cleanup` 的
-    // 关库之前停即可；这样停机窗口内不再有维护任务并发改状态。
+    // 先按依赖逆序停 runtime 执行体，再走既有清理流程。
+    //
+    // 顺序要求：内核接收执行体最先登记、最后停止（它是事件生产者）；消费体与轮询体
+    // 在它之前停，故停机窗口内不再有新的生产者往会关闭的写队列里投递。调度器只碰
+    // 内存镜像与原子计数、不碰持久化，排在 `cleanup` 的关库之前停即可。
     for (name, outcome) in supervisor.shutdown(std::time::Duration::from_secs(5)) {
         info!(logger::get(), "runtime 执行体已停止"; "name" => name, "outcome" => ?outcome);
     }
-    cleanup(&cfg, netlink_receiver);
+    cleanup(&cfg);
 
     if let Some(handle) = exporter_handle {
         // 给 HTTP 导出器线程最多 2 秒优雅退出

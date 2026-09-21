@@ -95,6 +95,8 @@ impl RuntimePort for FakeRuntimePort {
             ban_cache_initialized: true,
             ban_history_initialized: true,
             active_bans: 0,
+            lease_state: if self.ready { "held" } else { "idle" },
+            lease_losses: 0,
         }
     }
 

@@ -15,7 +15,7 @@
     "错误形状 3 种",
     "响应 ApiResponse: 3 个字段（泛型参数 T）",
     "响应 PaginatedResponse: 5 个字段（泛型参数 T）",
-    "响应 RuntimeSnapshot: 6 个字段",
+    "响应 RuntimeSnapshot: 8 个字段",
     "响应 StatsResponse: 17 个字段",
     "响应 ChartData: 2 个字段",
     "响应 ThreatLevel: 9 个字段",
@@ -980,6 +980,14 @@
         {
           "key": "active_bans",
           "rust": "usize"
+        },
+        {
+          "key": "lease_state",
+          "rust": "&'static str"
+        },
+        {
+          "key": "lease_losses",
+          "rust": "u64"
         }
       ]
     },

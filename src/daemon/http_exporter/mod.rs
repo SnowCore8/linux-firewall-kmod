@@ -94,7 +94,7 @@ pub fn get_global_webui_config() -> Option<crate::types::WebuiConfig> {
 // 全局 DDoS 决策引擎引用（供配置热重载使用）
 // ============================================================================
 
-use crate::netlink::{DdosDecisionEngine, NetlinkContext};
+use crate::netlink::DdosDecisionEngine;
 use std::sync::Arc;
 
 /// 全局决策引擎引用（供配置热重载时同步到内核）
@@ -109,15 +109,6 @@ pub fn set_global_decision_engine(engine: Arc<DdosDecisionEngine>) {
 /// 获取全局决策引擎引用
 pub fn get_global_decision_engine() -> Option<&'static Arc<DdosDecisionEngine>> {
     GLOBAL_DECISION_ENGINE.get()
-}
-
-// ============================================================================
-// 全局 Netlink 上下文引用（供配置热重载时同步到内核）
-// ============================================================================
-
-/// 获取全局 netlink 上下文引用（委托给 netlink 模块）
-pub fn get_global_netlink_ctx() -> Option<Arc<NetlinkContext>> {
-    crate::netlink::get_global_netlink_ctx()
 }
 
 // ============================================================================

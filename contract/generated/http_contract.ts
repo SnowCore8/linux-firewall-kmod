@@ -148,6 +148,8 @@ export interface RuntimeSnapshot {
   ban_cache_initialized: boolean
   ban_history_initialized: boolean
   active_bans: number
+  lease_state: string
+  lease_losses: number
 }
 
 /** Rust `StatsResponse` */

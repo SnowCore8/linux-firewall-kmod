@@ -35,8 +35,6 @@ struct TimeoutState {
     last_ddos_check: SystemTime,
     /// 历史数据快照（每 5 分钟）
     last_history_snapshot: SystemTime,
-    /// 速率统计查询（每 2 秒）
-    last_rates_query: SystemTime,
     /// 数据清理（封禁历史/信誉分/failed_hash，每 5 分钟）
     last_data_cleanup: SystemTime,
 }
@@ -57,7 +55,6 @@ impl TimeoutState {
             last_stats_snapshot: now,
             last_ddos_check: now,
             last_history_snapshot: now,
-            last_rates_query: now,
             last_data_cleanup: now,
         }
     }
@@ -369,114 +366,25 @@ fn handle_timeout(cfg: &mut Config, reload_config: &AtomicBool, state: &mut Time
         super::perform_data_cleanup(cfg);
     }
 
-    // 速率统计查询（每 2 秒）- 通过 netlink 从内核获取
-    // 改进：从 5 秒缩短到 2 秒，提升 Web UI 数据实时性
-    // 开销：~1.3ms / 2s = 0.65ms/s（可忽略）
-    if now
-        .duration_since(state.last_rates_query)
-        .unwrap_or_default()
-        .as_secs()
-        >= 2
-    {
-        state.last_rates_query = now;
-        query_rates_from_kernel();
-
-        // 下发基线更新到内核（动态阈值）
-        // 在速率查询后立即发送，确保内核使用最新基线进行违规检测
-        send_baseline_update();
-    }
-
     // 注：计数器镜像（`mirror_stats_tick`）与过期封禁清理已迁到组合根 scheduler
     // （`runtime::spawn_periodic`）。它们此前挂在本函数的 poll 超时分支上，准时性
     // 受事件到达影响；迁走后由单调时钟节拍驱动。本函数保留的周期任务都持有
     // `&mut Config`（如 `Jail::failed_hash`），无法移出本线程。
+    //
+    // 速率查询与基线下发也已迁走（`crate::kernel_poll`）：它们同样挂在 poll 超时上，
+    // 事件洪泛时会被饿死（结构问题 A）。基线下发同时借这次迁移并入了唯一配置通道
+    // （结构问题 L）——旧实现自建 `ConfigUpdate` 绕过了 `netlink::config_sync`。
 }
 
-/// 通过 netlink 查询内核的速率统计数据
-fn query_rates_from_kernel() {
-    use crate::netlink::get_global_netlink_ctx;
-
-    if let Some(ctx) = get_global_netlink_ctx() {
-        // 使用递增的序列号
-        static RATES_SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1000);
-        let seq = RATES_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-        if let Err(e) = ctx.send_list_rates_query(seq) {
-            crate::logger::debug!(
-                crate::logger::get(),
-                "发送速率查询失败";
-                "error" => %e
-            );
-        }
-    }
-}
-
-/// 下发基线更新到内核（动态阈值）
+/// 获取基线保护状态（Web UI 显示用）。
 ///
-/// 从全局 EWMA 基线缓存读取当前值，通过 netlink BASELINE_UPDATE 发送到内核。
-/// 内核在 check_rate_violation 中使用 max(静态阈值, 基线×倍数) 作为实际阈值。
-///
-/// 基线保护：业务高峰期（9-18 点 UTC）基线自动上调 50%，
-/// 避免正常业务流量增长被误判为攻击。
-fn send_baseline_update() {
-    use crate::netlink::get_global_netlink_ctx;
-    use crate::netlink::{config_flags, ConfigUpdate};
-
-    let baseline_pps = crate::types::get_baseline_pps();
-    let baseline_bps = crate::types::get_baseline_bps();
-
-    // 基线为零时不下发（尚未收敛）
-    if baseline_pps == 0 && baseline_bps == 0 {
-        return;
-    }
-
-    // 基线保护：业务高峰期上调 50%
-    let now_hour = chrono::Utc::now()
-        .format("%H")
-        .to_string()
-        .parse::<u32>()
-        .unwrap_or(0);
-    let is_peak_hours = (9..18).contains(&now_hour);
-    let (effective_pps, effective_bps) = if is_peak_hours {
-        (baseline_pps * 3 / 2, baseline_bps * 3 / 2)
-    } else {
-        (baseline_pps, baseline_bps)
-    };
-
-    // 只在有效基线变化时发送，避免每 2 秒重复发送相同值
-    static LAST_SENT_PPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    static LAST_SENT_BPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-    let last_pps = LAST_SENT_PPS.load(std::sync::atomic::Ordering::Relaxed);
-    let last_bps = LAST_SENT_BPS.load(std::sync::atomic::Ordering::Relaxed);
-
-    if effective_pps == last_pps && effective_bps == last_bps {
-        return; // 有效基线未变化，跳过发送
-    }
-
-    LAST_SENT_PPS.store(effective_pps, std::sync::atomic::Ordering::Relaxed);
-    LAST_SENT_BPS.store(effective_bps, std::sync::atomic::Ordering::Relaxed);
-
-    if let Some(ctx) = get_global_netlink_ctx() {
-        let config = ConfigUpdate::new(config_flags::BASELINE_UPDATE)
-            .with_baseline(effective_pps, effective_bps);
-
-        if let Err(e) = ctx.send_config_update(&config) {
-            crate::logger::debug!(
-                crate::logger::get(),
-                "发送基线更新失败";
-                "error" => %e
-            );
-        }
-    }
-}
-
-/// 获取基线保护状态（Web UI 显示用）
+/// 判定规则委托给 [`crate::decision::policy::is_peak_hours`]：高峰期上调基线与
+/// 「决策层是否处于高峰期」必须是同一条规则，否则两处会各自漂移。
 pub fn is_baseline_peak_hours() -> bool {
     let now_hour = chrono::Utc::now()
         .format("%H")
         .to_string()
         .parse::<u32>()
         .unwrap_or(0);
-    (9..18).contains(&now_hour)
+    crate::decision::policy::is_peak_hours(now_hour)
 }

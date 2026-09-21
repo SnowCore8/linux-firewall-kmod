@@ -548,7 +548,14 @@ impl Router {
 pub struct Reactor {
     transport: Arc<Transport>,
     shutdown: Shutdown,
-    router: Router,
+    /// 与 [`crate::kernel::client::Client`] **共享**的路由器。
+    ///
+    /// 必须是 `Arc` 而不是按值持有：请求方（`Client`）登记在途配对、接收方
+    /// （本执行体）投递回复，两者操作的是**同一张**在途表。按值持有会让
+    /// 「谁拿到路由器」变成二选一——要么客户端登记不进去、回复永远落空，
+    /// 要么接收侧路由不到任何等待者。生产装配由组合根先建 `Arc<Router>`，
+    /// 再分别交给二者。
+    router: Arc<Router>,
     /// 本接收侧的存活凭据；`Reactor` 销毁即宣告接收侧退出。
     _liveness: LivenessGuard,
 }
@@ -559,7 +566,7 @@ impl Reactor {
     pub fn new(
         transport: Arc<Transport>,
         shutdown: Shutdown,
-        router: Router,
+        router: Arc<Router>,
         liveness: LivenessGuard,
     ) -> Self {
         Self {
@@ -630,19 +637,23 @@ impl Reactor {
     }
 }
 
-/// 便于测试：构造一对「事件接收端 + 路由器」，并同时返回存活凭据。
+/// 构造一对「事件接收端 + 路由器」，并同时返回存活凭据。
+///
+/// 返回 `Arc<Router>` 而不是 `Router`：接收侧（[`Reactor`]）与请求侧
+/// （[`crate::kernel::client::Client`]）必须共享同一张在途配对表，二者只能各持一个
+/// `Arc`。组合根据此把同一个路由器分发给两边。
 #[must_use]
 pub fn event_channel(
     capacity: usize,
 ) -> (
-    Router,
+    Arc<Router>,
     Receiver<Incoming>,
     Arc<crate::runtime::QueueStats>,
     LivenessGuard,
 ) {
     let (tx, rx, stats) = crate::runtime::channel::bounded(capacity, Backpressure::Reject);
     let (router, liveness) = Router::new(tx);
-    (router, rx, stats, liveness)
+    (Arc::new(router), rx, stats, liveness)
 }
 
 /// 内核推送队列的默认容量（供组合根使用）。

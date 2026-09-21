@@ -696,11 +696,16 @@ export interface SseStatusResponse {
  * 注意：该端点不套 ApiResponse 信封；未就绪时 HTTP 状态为 503 但响应体仍是本结构。
  */
 export interface RuntimeSnapshot {
-  /** "ok"（netlink 与 /proc/firewall 均就绪）或 "degraded" */
+  /** "ok"（内核租约已持有且 /proc/firewall 存在）或 "degraded" */
   status: 'ok' | 'degraded'
+  /** 内核是否会接受本进程的指令：等价于 lease_state === 'held' */
   netlink_ready: boolean
   kmod_proc_present: boolean
   ban_cache_initialized: boolean
   ban_history_initialized: boolean
   active_bans: number
+  /** 内核单实例注册租约的状态：非 held 时本进程指令会被内核静默丢弃 */
+  lease_state: 'none' | 'idle' | 'held' | 'refused' | 'lost'
+  /** 进入 lost 的累计次数（某一刻的快照看不出反复失联） */
+  lease_losses: number
 }

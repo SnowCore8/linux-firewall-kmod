@@ -190,7 +190,7 @@ pub struct WebuiConfigPatch {
 pub struct RuntimeView {
     /// `"ok"` 或 `"degraded"`。
     pub status: &'static str,
-    /// netlink 链路是否就绪。
+    /// 内核是否会接受本进程的指令（租约已持有）。
     pub netlink_ready: bool,
     /// `/proc/firewall` 是否存在。
     pub kmod_proc_present: bool,
@@ -200,6 +200,10 @@ pub struct RuntimeView {
     pub ban_history_initialized: bool,
     /// 当前活跃封禁数。
     pub active_bans: usize,
+    /// 内核单实例注册租约的状态（`none`/`idle`/`held`/`refused`/`lost`）。
+    pub lease_state: &'static str,
+    /// 进入 `lost` 的累计次数。
+    pub lease_losses: u64,
 }
 
 impl RuntimeView {
@@ -389,6 +393,8 @@ mod tests {
             ban_cache_initialized: true,
             ban_history_initialized: true,
             active_bans: 0,
+            lease_state: "held",
+            lease_losses: 0,
         };
         assert!(view.is_ready());
         view.netlink_ready = false;

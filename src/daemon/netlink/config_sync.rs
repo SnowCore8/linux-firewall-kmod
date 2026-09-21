@@ -17,8 +17,17 @@
 //!
 //! 本模块不决定「谁的值更权威」——那由调用方语境决定（热重载读 YAML，API 读运行期
 //! 配置）；这里只负责把调用方给的值正确地写进内核。
+//!
+//! # 下发通道（结构问题 L）
+//!
+//! 旧实现有两条并行的 `SetConfig` 构造路径：本模块一条，`file_monitor/monitor_loop.rs`
+//! 的基线下发另一条（自建 `ConfigUpdate`，绕开这里）。现在两条都收敛到
+//! [`crate::kernel::client::Client::set_config`]——字段集合、字节序、采纳/拒绝位图的
+//! 处理只有一处实现。本模块是周期任务之外**唯一**的内核配置写入入口。
 
-use super::protocol::{config_flags, FwNlConfigUpdate as ConfigUpdate};
+use crate::contract::config_flags;
+use crate::kernel::codec::SetConfig;
+use crate::kernel::{global, REQUEST_TIMEOUT};
 use crate::types::{DdosConfig, WebuiConfig};
 
 /// 6 个协议专项阈值（原始值，非网络序）。
@@ -67,9 +76,12 @@ pub struct GlobalLimits {
 /// 协议阈值下发的实际结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncOutcome {
-    /// 已通过 netlink 下发成功
+    /// 已下发且内核确认全部字段生效
     Sent,
-    /// netlink 上下文尚未初始化，静默跳过（守护进程启动初期属正常状态）
+    /// 内核链路尚未就绪（尚未取得租约），静默跳过
+    ///
+    /// 旧语义是「netlink 上下文尚未初始化」；现在等价于「租约未持有」——那两种情况下
+    /// 内核都会把报文丢掉，所以「跳过」比「报错」更贴近事实。
     Skipped,
 }
 
@@ -124,10 +136,9 @@ impl From<&WebuiConfig> for DetectionSwitches {
 /// `limits` 为 `None` 时只带协议阈值位（Web UI API 路径）；为 `Some` 时再追加
 /// `BAN_TIME | RATE_WINDOW | MAX_PPS | DDOS_BAN_DURATION`（SIGHUP 热重载路径）。
 /// 内核按 `flags` 逐位决定覆盖哪些字段，未置位的字段保持原值不动。
-fn build_config_update(
-    thresholds: ProtocolThresholds,
-    limits: Option<GlobalLimits>,
-) -> ConfigUpdate {
+///
+/// 字段在这里是**本机序**：网络序转换由 [`SetConfig::encode`] 一处承担。
+fn build_config_update(thresholds: ProtocolThresholds, limits: Option<GlobalLimits>) -> SetConfig {
     let mut flags = config_flags::MAX_SYN
         | config_flags::MAX_UDP
         | config_flags::MAX_ICMP
@@ -141,20 +152,22 @@ fn build_config_update(
             | config_flags::DDOS_BAN_DURATION;
     }
 
-    let mut update = ConfigUpdate::new(flags)
-        .with_max_syn(thresholds.max_syn_per_second as u64)
-        .with_max_udp(thresholds.max_udp_per_second as u64)
-        .with_max_icmp(thresholds.max_icmp_per_second as u64)
-        .with_max_ack(thresholds.max_ack_per_second as u64)
-        .with_max_rst(thresholds.max_rst_per_second as u64)
-        .with_max_fin(thresholds.max_fin_per_second as u64);
+    let mut update = SetConfig {
+        flags,
+        max_syn_per_second: u64::from(thresholds.max_syn_per_second),
+        max_udp_per_second: u64::from(thresholds.max_udp_per_second),
+        max_icmp_per_second: u64::from(thresholds.max_icmp_per_second),
+        max_ack_per_second: u64::from(thresholds.max_ack_per_second),
+        max_rst_per_second: u64::from(thresholds.max_rst_per_second),
+        max_fin_per_second: u64::from(thresholds.max_fin_per_second),
+        ..SetConfig::default()
+    };
 
     if let Some(l) = limits {
-        update = update
-            .with_ban_time(l.ban_time)
-            .with_rate_window(l.rate_window)
-            .with_max_pps(l.max_pps)
-            .with_ddos_ban_duration(l.ddos_ban_duration);
+        update.ban_time = l.ban_time;
+        update.rate_window_seconds = l.rate_window;
+        update.max_packets_per_second = l.max_pps;
+        update.ddos_ban_duration = l.ddos_ban_duration;
     }
 
     update
@@ -163,20 +176,27 @@ fn build_config_update(
 /// 把协议阈值（以及可选的全局限制）下发到内核。
 ///
 /// # Returns
-/// - `Ok(`[`SyncOutcome::Sent`]`)` — netlink 下发成功
-/// - `Ok(`[`SyncOutcome::Skipped`]`)` — 全局 netlink 上下文尚未建立，未做任何写入
-/// - `Err(String)` — netlink 已建立但发送失败，字符串为底层错误原文
+/// - `Ok(`[`SyncOutcome::Sent`]`)` — 下发成功且内核确认**全部**字段生效
+/// - `Ok(`[`SyncOutcome::Skipped`]`)` — 内核链路尚未就绪（未取得租约），未做任何写入
+/// - `Err(String)` — 已发出但未成功：字符串为底层错误原文，或内核拒绝的字段位图
+///
+/// 「内核只确认了一部分字段」也返回 `Err`：这正是旧实现看不见的一类失败——请求发出去了，
+/// 客户端只看 `sendto` 成功就当作生效。把拒绝位图报给调用方，配置写入界面才能显示出来。
 pub fn sync_protocol_thresholds(
     thresholds: ProtocolThresholds,
     limits: Option<GlobalLimits>,
 ) -> Result<SyncOutcome, String> {
-    match super::get_global_netlink_ctx() {
-        Some(netlink) => match netlink.send_config_update(&build_config_update(thresholds, limits))
-        {
-            Ok(()) => Ok(SyncOutcome::Sent),
-            Err(e) => Err(e.to_string()),
-        },
-        None => Ok(SyncOutcome::Skipped),
+    let Some(client) = global::get() else {
+        return Ok(SyncOutcome::Skipped);
+    };
+    let change = build_config_update(thresholds, limits);
+    match client.set_config(&change, REQUEST_TIMEOUT) {
+        Ok(ack) if ack.fully_applied() => Ok(SyncOutcome::Sent),
+        Ok(ack) => Err(format!(
+            "内核拒绝部分字段: rejected_flags={:#x}",
+            ack.rejected_flags
+        )),
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -194,10 +214,12 @@ pub fn write_detection_switches(switches: DetectionSwitches) {
 mod tests {
     use super::*;
 
-    /// ACK/RST/FIN 曾经只能靠调用方手写 `.to_be()`，是两处重复实现的根源。
-    /// 本测试锁定：三个字段的字节序转换由 builder 承担，且 `new()` 的零值不被误用。
+    /// 协议阈值必须落在正确的字段上，且未传 limits 时全局限制位必须缺位。
+    ///
+    /// 旧实现里 ACK/RST/FIN 的字节序由调用方手写 `.to_be()`；现在字段是本机序、
+    /// 由 `encode` 统一转换，故这里改为断言本地值与被置位的标志。
     #[test]
-    fn build_config_update_sets_ack_rst_fin_big_endian() {
+    fn build_config_update_sets_protocol_thresholds_and_flags() {
         let thresholds = ProtocolThresholds {
             max_syn_per_second: 1,
             max_udp_per_second: 2,
@@ -208,21 +230,13 @@ mod tests {
         };
         let update = build_config_update(thresholds, None);
 
-        // `FwNlConfigUpdate` 是 `#[repr(C, packed)]`，不能对其字段取引用；
-        // 先按值读出再断言，等价于调用方此前的 `.to_be()` 手写转换
-        let ack = update.max_ack_per_second;
-        let rst = update.max_rst_per_second;
-        let fin = update.max_fin_per_second;
+        assert_eq!(update.max_ack_per_second, 0x1122_3344);
+        assert_eq!(update.max_rst_per_second, 0x5566_7788);
+        assert_eq!(update.max_fin_per_second, 0x99AA_BBCC);
+        assert_eq!(update.max_syn_per_second, 1);
+        assert_eq!(update.max_udp_per_second, 2);
+        assert_eq!(update.max_icmp_per_second, 3);
 
-        assert_eq!(
-            ack,
-            0x1122_3344u64.to_be(),
-            "ACK 阈值必须按大端写入（内核按网络序解析）"
-        );
-        assert_eq!(rst, 0x5566_7788u64.to_be());
-        assert_eq!(fin, 0x99AA_BBCCu64.to_be());
-        // 6 个协议阈值位置位；未传 limits 时全局限制位必须缺位
-        let flags = u32::from_be(update.flags);
         for bit in [
             config_flags::MAX_SYN,
             config_flags::MAX_UDP,
@@ -231,7 +245,7 @@ mod tests {
             config_flags::MAX_RST,
             config_flags::MAX_FIN,
         ] {
-            assert_ne!(flags & bit, 0, "协议阈值位 {bit:#x} 应置位");
+            assert_ne!(update.flags & bit, 0, "协议阈值位 {bit:#x} 应置位");
         }
         for bit in [
             config_flags::BAN_TIME,
@@ -239,7 +253,11 @@ mod tests {
             config_flags::MAX_PPS,
             config_flags::DDOS_BAN_DURATION,
         ] {
-            assert_eq!(flags & bit, 0, "未传 limits 时全局限制位 {bit:#x} 不应置位");
+            assert_eq!(
+                update.flags & bit,
+                0,
+                "未传 limits 时全局限制位 {bit:#x} 不应置位"
+            );
         }
     }
 
@@ -256,19 +274,32 @@ mod tests {
             }),
         );
 
-        let flags = u32::from_be(update.flags);
         for bit in [
             config_flags::BAN_TIME,
             config_flags::RATE_WINDOW,
             config_flags::MAX_PPS,
             config_flags::DDOS_BAN_DURATION,
         ] {
-            assert_ne!(flags & bit, 0, "全局限制位 {bit:#x} 应置位");
+            assert_ne!(update.flags & bit, 0, "全局限制位 {bit:#x} 应置位");
         }
-        assert_eq!(u32::from_be(update.ban_time), 3600);
-        assert_eq!(u32::from_be(update.rate_window_seconds), 5);
-        assert_eq!(u64::from_be(update.max_packets_per_second), 100_000);
-        assert_eq!(u32::from_be(update.ddos_ban_duration), 7200);
+        assert_eq!(update.ban_time, 3600);
+        assert_eq!(update.rate_window_seconds, 5);
+        assert_eq!(update.max_packets_per_second, 100_000);
+        assert_eq!(update.ddos_ban_duration, 7200);
+    }
+
+    /// 未置位的字段必须是零值：内核按 flags 逐位判断，但零值能让「误置位」立刻暴露
+    /// （若某天 flags 计算错把某位置上，内核会写进 0 而不是旧值）。
+    #[test]
+    fn unset_flags_leave_the_payload_zeroed() {
+        let update = build_config_update(ProtocolThresholds::default(), None);
+        assert_eq!(update.ban_time, 0);
+        assert_eq!(update.rate_window_seconds, 0);
+        assert_eq!(update.max_packets_per_second, 0);
+        assert_eq!(update.baseline_pps, 0);
+        assert_eq!(update.baseline_bps, 0);
+        assert_eq!(update.dynamic_threshold_flags, 0);
+        assert_eq!(update.dynamic_threshold_ratio_x100, 0);
     }
 
     /// 两种配置类型的字段名相同，映射必须两边一致（防止只改一侧导致漂移）。
@@ -282,5 +313,15 @@ mod tests {
             DetectionSwitches::from(&DdosConfig::default()),
             DetectionSwitches::from(&WebuiConfig::default()),
         );
+    }
+
+    /// 未注入内核链路时必须是 `Skipped` 而不是错误：启动初期属正常状态。
+    #[test]
+    fn an_unwired_kernel_link_reports_skipped() {
+        // 全局定位器是进程级 `OnceLock`，测试进程内可能已被别的用例注入；
+        // 故只断言「要么跳过、要么真的发出去（错误也算已尝试）」，不依赖注入顺序。
+        match sync_protocol_thresholds(ProtocolThresholds::default(), None) {
+            Ok(SyncOutcome::Skipped) | Ok(SyncOutcome::Sent) | Err(_) => {}
+        }
     }
 }

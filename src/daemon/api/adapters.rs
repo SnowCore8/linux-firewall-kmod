@@ -134,6 +134,8 @@ impl RuntimePort for LegacyRuntimePort {
             ban_cache_initialized: snap.ban_cache_initialized,
             ban_history_initialized: snap.ban_history_initialized,
             active_bans: snap.active_bans,
+            lease_state: snap.lease_state,
+            lease_losses: snap.lease_losses,
         }
     }
 

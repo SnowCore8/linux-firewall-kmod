@@ -802,11 +802,18 @@ type PaginatedResponse<T> {
 
 type RuntimeSnapshot {
   status: &'static str
+  # 内核是否会接受本进程的指令：等价于「租约已持有（lease_state == "held"）」。
+  # 旧口径是「netlink 上下文存在即可」，那会把「socket 建好但内核不认」报成就绪。
   netlink_ready: bool
   kmod_proc_present: bool
   ban_cache_initialized: bool
   ban_history_initialized: bool
   active_bans: usize
+  # 内核单实例注册租约的状态：none / idle / held / refused / lost。
+  # 内核同一时刻只承认一个 daemon portid，非 held 时本进程的指令会被静默丢弃。
+  lease_state: &'static str
+  # 进入 lost 的累计次数。*某一刻* 的状态快照看不出一段时间内的反复失联。
+  lease_losses: u64
 }
 
 # ---- 统计总览 ---------------------------------------------------------------

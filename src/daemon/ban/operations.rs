@@ -3,8 +3,15 @@
 //! # 核心职责
 //!
 //! - 统一的封禁/解封操作入口 (支持 IPv4/IPv6)
-//! - 流程:校验 IP → netlink 发送 → 更新内存缓存 → 记日志
+//! - 流程:校验 IP → 内核指令 → 更新内存缓存 → 记日志
 //! - 向后兼容的包装函数:ban_ip / ban_ip_permanent / unban_ip / unban_permanent_ip
+//!
+//! # 完成语义
+//!
+//! 三个动作都走「**已投递**」语义（[`crate::kernel::client::Delivered`]）：内核不回
+//! 确认报文，封禁是否真正落表由内核随后推送的 `BanStateChange` 事件驱动本地状态。
+//! 这与旧 `netlink` 的 `sendto` 成功即返回完全一致——不要在这里加等待，那会把
+//! 事件驱动改成同步往返，且内核侧并无对应回复。
 
 use anyhow::{bail, Context, Result};
 use std::net::IpAddr;
@@ -18,8 +25,8 @@ use super::BanAction;
 
 /// 统一的封禁/解封操作入口 (支持 IPv4/IPv6)。
 ///
-/// 流程: 校验 IP → 通过 netlink 发送指令。
-/// 统计由内核 `BanStateChange` 事件驱动（`handle_ban_state_change`），
+/// 流程: 校验 IP → 向内核投递指令。
+/// 统计由内核 `BanStateChange` 事件驱动，
 /// 缓存操作由调用方负责。
 ///
 /// # Arguments
@@ -28,8 +35,8 @@ use super::BanAction;
 ///
 /// # Errors
 /// - IP 校验失败
-/// - netlink 不可用
-/// - netlink 发送失败
+/// - 内核链路未就绪（未取得租约）
+/// - 投递失败
 pub fn execute_ban_action(action: BanAction, ip: &str, reason: &str) -> Result<()> {
     if ip.is_empty() {
         bail!("NULL IP address");
@@ -37,25 +44,32 @@ pub fn execute_ban_action(action: BanAction, ip: &str, reason: &str) -> Result<(
 
     let _validated = validate_ip(ip).with_context(|| format!("Invalid IP address: {ip}"))?;
 
-    // 通过 netlink 发送指令到内核
-    let netlink_ctx = crate::netlink::get_global_netlink_ctx()
-        .context("Netlink 通信层未初始化，无法执行封禁操作")?;
+    // 向内核投递指令
+    let client = crate::kernel::global::get().context("内核链路未就绪，无法执行封禁操作")?;
     let ip_addr: IpAddr = ip.parse().context("Invalid IP address")?;
+    let timeout = crate::kernel::REQUEST_TIMEOUT;
     match action {
         BanAction::Temp(duration) => {
             let dur = u32::try_from(duration)
                 .with_context(|| format!("ban duration {duration} exceeds u32 max"))?;
-            netlink_ctx.send_ban(ip_addr, dur, reason)?;
+            client
+                .ban(ip_addr, dur, reason, timeout)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
         BanAction::Permanent => {
-            netlink_ctx.send_ban(ip_addr, 0, reason)?; // 0 = 永久
+            // 0 = 永久（契约约定时长 0 表示不设到期）
+            client
+                .ban(ip_addr, 0, reason, timeout)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
         BanAction::Unban | BanAction::UnbanPerm => {
-            netlink_ctx.send_unban(ip_addr)?;
+            client
+                .unban(ip_addr, timeout)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
     }
 
-    // 统计由内核 BanStateChange 事件驱动（handle_ban_state_change），
+    // 统计由内核 BanStateChange 事件驱动，
     // 此处不递增 ips_banned / total_unbans，避免与事件回推双计。
     // 缓存操作同样由调用方负责。
 

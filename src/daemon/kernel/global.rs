@@ -93,7 +93,7 @@ mod tests {
         let transport = Arc::new(crate::kernel::transport::Transport::open().expect("建 socket"));
         let (router, _rx, _stats, _liveness) =
             crate::kernel::reactor::event_channel(crate::kernel::reactor::default_event_queue());
-        let client = Client::new(Arc::clone(&transport), Arc::new(router));
+        let client = Client::new(Arc::clone(&transport), router);
 
         // 尚未注入：get 为空。
         assert!(get().is_none());
@@ -110,7 +110,7 @@ mod tests {
         let transport2 = Arc::new(crate::kernel::transport::Transport::open().expect("建 socket"));
         let (router2, _rx2, _stats2, _liveness2) =
             crate::kernel::reactor::event_channel(crate::kernel::reactor::default_event_queue());
-        let client2 = Client::new(transport2, Arc::new(router2));
+        let client2 = Client::new(transport2, router2);
         assert_eq!(init(client2), Err(GlobalError::AlreadySet));
 
         assert!(get().is_some(), "失败的注入不应清空既有句柄");

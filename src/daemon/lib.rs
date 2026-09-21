@@ -81,6 +81,7 @@ pub mod ip_reputation;
 pub mod ip_utils;
 pub mod jail;
 pub mod kernel;
+pub mod kernel_poll;
 pub mod line_processor;
 pub mod log_parser;
 pub mod log_rotation;

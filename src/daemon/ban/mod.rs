@@ -27,12 +27,12 @@ pub use operations::{ban_ip, ban_ip_permanent, execute_ban_action, unban_ip, unb
 pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
     let mut failed = Vec::new();
     let mut success_count = 0u64;
-    let netlink_ctx = match crate::netlink::get_global_netlink_ctx() {
-        Some(ctx) => ctx,
+    let client = match crate::kernel::global::get() {
+        Some(client) => client,
         None => {
             crate::logger::error!(
                 crate::logger::get(),
-                "Netlink 未初始化，无法添加可信 IP 白名单"
+                "内核链路未就绪，无法添加可信 IP 白名单"
             );
             return trusted_ips.to_vec();
         }
@@ -56,10 +56,11 @@ pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
         if crate::types::WHITELIST_CACHE.read().contains_key(&cidr_key) {
             continue;
         }
-        if let Err(e) = netlink_ctx.send_add_whitelist(&ip_addr, prefix_len, "") {
+        // 内核侧白名单键不含设备维度（旧 `send_add_whitelist` 亦传空串），故这里传 `""`。
+        if let Err(e) = add_whitelist_to_kernel(&client, &ip_addr, prefix_len) {
             crate::logger::warn!(
                 crate::logger::get(),
-                "netlink 添加白名单失败";
+                "内核添加白名单失败";
                 "ip" => %ip,
                 "error" => %e
             );
@@ -80,6 +81,35 @@ pub fn init_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
             .fetch_add(success_count, std::sync::atomic::Ordering::Relaxed);
     }
     failed
+}
+
+/// 把「字符串地址 + 前缀」投递给内核白名单。
+///
+/// 单一落点：`init_trusted_ips` 与 `remove_trusted_ips` 的地址解析错误必须处理成同一形状，
+/// 否则一侧报错另一侧静默会把「移除失败」伪装成成功。
+fn add_whitelist_to_kernel(
+    client: &crate::kernel::client::Client,
+    ip: &str,
+    prefix_len: u8,
+) -> Result<(), String> {
+    let addr: std::net::IpAddr = ip.parse().map_err(|e| format!("无法解析地址 {ip}: {e}"))?;
+    client
+        .add_whitelist(addr, prefix_len, "", crate::kernel::REQUEST_TIMEOUT)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// 从内核白名单移除「字符串地址 + 前缀」。
+fn remove_whitelist_from_kernel(
+    client: &crate::kernel::client::Client,
+    ip: &str,
+    prefix_len: u8,
+) -> Result<(), String> {
+    let addr: std::net::IpAddr = ip.parse().map_err(|e| format!("无法解析地址 {ip}: {e}"))?;
+    client
+        .remove_whitelist(addr, prefix_len, "", crate::kernel::REQUEST_TIMEOUT)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// 向 WHITELIST_CACHE 追加条目（用于守护进程自己添加白名单时的本地缓存同步）。
@@ -120,12 +150,12 @@ fn build_cidr_key(ip: &str, prefix_len: u8) -> String {
 pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
     let mut failed = Vec::new();
     let mut success_count = 0u64;
-    let netlink_ctx = match crate::netlink::get_global_netlink_ctx() {
-        Some(ctx) => ctx,
+    let client = match crate::kernel::global::get() {
+        Some(client) => client,
         None => {
             crate::logger::error!(
                 crate::logger::get(),
-                "Netlink 未初始化，无法移除可信 IP 白名单"
+                "内核链路未就绪，无法移除可信 IP 白名单"
             );
             return trusted_ips.to_vec();
         }
@@ -149,10 +179,10 @@ pub fn remove_trusted_ips(trusted_ips: &[String]) -> Vec<String> {
         if !crate::types::WHITELIST_CACHE.read().contains_key(&cidr_key) {
             continue;
         }
-        if let Err(e) = netlink_ctx.send_remove_whitelist(&ip_addr, prefix_len) {
+        if let Err(e) = remove_whitelist_from_kernel(&client, &ip_addr, prefix_len) {
             crate::logger::warn!(
                 crate::logger::get(),
-                "netlink 移除白名单失败";
+                "内核移除白名单失败";
                 "ip" => %ip,
                 "error" => %e
             );

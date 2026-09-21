@@ -14,9 +14,25 @@
 //! 本层取代旧的 `crate::netlink`（含 `mod.rs` / `protocol.rs` / `responses.rs` /
 //! `commands.rs` / `handlers.rs` / `decision.rs` / `config_sync.rs`）。
 
+use std::time::Duration;
+
 pub mod client;
 pub mod codec;
 pub mod global;
 pub mod lease;
 pub mod reactor;
 pub mod transport;
+
+/// 「已确认」请求的默认等待上限。
+///
+/// 内核在同一台机器上、软中断上下文里回一条报文，正常耗时是微秒级；这里给三个数量
+/// 级余量。取值不能太长——周期任务的每个节拍都串行等待，超时上限直接决定「内核不回
+/// 应时」轮询节奏能退化成多慢。
+pub const REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// 分页拉取整表时**每页**的等待上限。
+///
+/// 比 [`REQUEST_TIMEOUT`] 宽：`List*` 要遍历内核侧的整张表（封禁/白名单/速率表容量
+/// 上限是 65535），大表一次页遍历比「读几个计数器」慢得多。续页次数由
+/// [`client::Client::drain`] 按契约页上限决定，故这里只是单页上限。
+pub const PAGE_TIMEOUT: Duration = Duration::from_secs(2);
