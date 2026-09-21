@@ -199,18 +199,9 @@ SSE 未连上或该域没推过数据时才回落到 REST。二者共用同一�
 
 ## 待办批次
 
-批次的划分依据是「当前尚未落地、且有可观察验收结果」。已落地的结构不在此列——它们的现状以源码为准。
-
-### 3.A 端到端验收自动化并接入 CI
-
-现状：`tests/e2e/` 目前只有健康检查规格（外壳可达、探针返回 200），清单以该目录为准；
-CI 的 `frontend` 作业只做类型检查、构建、产物与 PWA 校验，**不跑浏览器测试**。
-
-要做：把 e2e 扩到「逐一访问全部 hash 路由 + 走通一条写操作（如封禁后解封）」，并断言无
-`console.error` / `console.warn`；随后在 CI 里加一个跑 Playwright 的作业（守护进程需先构建、
-启动、并等待监听端口可用）。
-
-验收：本地 `npm run test:e2e` 全绿；CI 上可见该作业且失败即阻塞合并。
+批次的划分依据是「当前尚未落地、且有可观察验收结果」。已落地的批次从本节移除，编号保持稳定
+不重排（因此编号不连续），其做法与验收以源码和对应文档为准——例如端到端验收的用例、夹具与
+CI 接线见 `testing.md` 与 `scripts/e2e-daemon.sh`。
 
 ### 3.B 遗留路由迁入时的前端零改动回归
 
@@ -258,8 +249,10 @@ make daemon
 # 4) 契约门禁：含前端 types.ts / endpoints.ts 与契约的逐项核对
 bash scripts/check_contract.sh
 
-# 5) 浏览器端到端（需守护进程已在监听）：根目录执行
-npm run test:e2e
+# 5) 浏览器端到端：夹具（insmod + 起守护进程 + 等 /health）走 scripts/e2e-daemon.sh
+sudo bash scripts/e2e-daemon.sh start
+eval "$(bash scripts/e2e-daemon.sh env)" && npm run test:e2e
+sudo bash scripts/e2e-daemon.sh stop
 ```
 
 > 只改文档时不跑上述任何门禁；只改前端样式/文案时按「只跑受影响组」的原则跑 1、2 与受影响的 e2e。

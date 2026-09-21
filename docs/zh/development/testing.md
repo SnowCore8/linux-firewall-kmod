@@ -276,6 +276,37 @@ class TestMyFeature:
         assert ip_is_banned("203.0.113.2")
 ```
 
+## 浏览器端到端测试（E2E）
+
+浏览器测试跑在真实守护进程的 Web UI 上（Playwright + Chromium），只做三类硬断言：
+
+- **全量 hash 路由**：逐一访问每个页面路径，断言区块标题与顶栏标题；
+- **写操作回环**：走通「封禁 → 解封」，界面 / 接口 / 内核三层状态同步翻转；
+- **控制台洁净度**：整个用例期间无 `console.error` / `console.warn` / 未捕获异常。
+
+用例与断言锚点全部在 `tests/e2e/`（`support.ts` 是共享夹具与鉴权，其余是用例）；
+新增用例默认继承夹具里的控制台洁净度门槛，不需要各自重复断言。
+
+前置条件是**加载了内核模块的守护进程**：`main.rs` 启动即要求 `/proc/firewall` 存在，
+且内核把单守护进程实现为 portid 独占 + 30 秒活动超时、无注销消息，因此整条夹具
+（insmod → 生成临时配置 → 起守护进程 → 等 `/health` 就绪 → 收尾 rmmod）独立为
+`scripts/e2e-daemon.sh`，本地与 CI 共用同一份逻辑：
+
+```bash
+# 1) 起夹具（需要 root）：insmod + 起守护进程 + 等 /health 就绪；同时打印连接参数
+sudo bash scripts/e2e-daemon.sh start
+
+# 2) 用夹具给出的参数跑用例（env 子命令纯打印，不需要 root）
+eval "$(bash scripts/e2e-daemon.sh env)"
+npm run test:e2e
+
+# 3) 收尾：停守护进程并卸载模块，释放内核的 portid 租约（否则下次启动会被拒）
+sudo bash scripts/e2e-daemon.sh stop
+```
+
+`scripts/e2e-daemon.sh probe` 只探测内核模块能否加载、不启动任何进程，供 CI 判定
+本机是否具备运行条件。
+
 ## CI 集成
 
 `.github/workflows/ci.yml` 的 job 全部通过才允许合入：
@@ -285,6 +316,7 @@ class TestMyFeature:
 | `lint` | rustfmt + clippy（`--all-targets --all-features`）+ yamllint + 内核模块 clang-format | 不通过则阻断 merge |
 | `frontend` | 前端类型检查（`tsc --noEmit`）+ vite 构建 + 构建产物 / PWA 清单 / Service Worker 校验 | 不通过则阻断 merge |
 | `build` | 内核模块（`make kernel-module`）+ 守护进程（`make daemon`） | 编译失败阻断 merge |
+| `e2e` | 浏览器端到端（Playwright）：`scripts/e2e-daemon.sh` 起守护进程后 `npm run test:e2e` | 用例 fail 阻断 merge；本机内核不可加载时整段带注解跳过（同 `test` job 的约定） |
 | `test` | `sudo python3 -m pytest tests/ -v` | 任何 fail 阻断 merge |
 
 测试编排细节（`test` job）：
@@ -293,6 +325,11 @@ class TestMyFeature:
 2. 在 runner 上 `sudo python3 -m pytest tests/ -v`
 3. 若内核模块不可加载（Azure VM 环境限制），conftest.py 的 `session_setup` fixture 自动跳过需要模块的测试
 4. 报告上传为 artifact，保留 14 天
+
+`e2e` job 与 `test` job 同源：复用 `build` 的编译产物，先用 `scripts/e2e-daemon.sh probe`
+判定本机能否加载内核模块，能则起守护进程并跑 Playwright（失败即阻断 merge），
+不能则带 `::warning::` 注解跳过浏览器用例（环境限制，非代码问题）。
+夹具与判定逻辑见上一节，不在 CI 里另写一份。
 
 > `lint` 失败通常意味着 `// SAFETY:` 注释缺失 / 格式漂移
 > / `unsafe` 块未论证。修复后重跑即可。

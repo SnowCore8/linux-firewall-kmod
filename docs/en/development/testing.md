@@ -297,6 +297,40 @@ class TestMyFeature:
         assert ip_is_banned("203.0.113.2")
 ```
 
+## Browser End-to-End Tests (E2E)
+
+Browser tests run against the real daemon's Web UI (Playwright + Chromium) and make
+only three kinds of hard assertions:
+
+- **Every hash route**: visit each page path and assert both its section heading and topbar title;
+- **Write-path round trip**: drive "ban → unban" and assert the UI, the API and the kernel flip together;
+- **Console hygiene**: no `console.error` / `console.warn` / uncaught exception for the whole case.
+
+The cases and their assertion anchors live in `tests/e2e/` (`support.ts` holds the shared
+fixtures and auth; the rest are the specs). New cases inherit the console-hygiene gate from
+the fixture, so they do not each re-assert it.
+
+The prerequisite is a **daemon with the kernel module loaded**: `main.rs` refuses to start
+without `/proc/firewall`, and the kernel implements the single daemon as a portid lease with
+a 30-second activity timeout and no deregistration message. The whole fixture (insmod →
+generate a temp config → start the daemon → wait for `/health` → rmmod on teardown) is
+therefore its own script, `scripts/e2e-daemon.sh`, shared by local runs and CI:
+
+```bash
+# 1) Start the fixture (needs root): insmod + start daemon + wait for /health; also prints connection params
+sudo bash scripts/e2e-daemon.sh start
+
+# 2) Run the cases with the params it printed (the env subcommand only prints; no root needed)
+eval "$(bash scripts/e2e-daemon.sh env)"
+npm run test:e2e
+
+# 3) Tear down: stop the daemon and rmmod to release the kernel portid lease (otherwise the next start is refused)
+sudo bash scripts/e2e-daemon.sh stop
+```
+
+`scripts/e2e-daemon.sh probe` only checks whether the kernel module can load, without
+starting anything; CI uses it to decide whether the runner can execute the browser cases.
+
 ## CI Integration
 
 `.github/workflows/ci.yml` jobs must all pass before a merge:
@@ -306,6 +340,7 @@ class TestMyFeature:
 | `lint` | rustfmt + clippy (`--all-targets --all-features`) + yamllint + kernel-module clang-format | blocks merge |
 | `frontend` | Frontend type check (`tsc --noEmit`) + vite build + build-artifact / PWA manifest / Service Worker validation | blocks merge |
 | `build` | Kernel module (`make kernel-module`) + daemon (`make daemon`) | blocks merge |
+| `e2e` | Browser end-to-end (Playwright): `scripts/e2e-daemon.sh` starts the daemon, then `npm run test:e2e` | any failing case blocks merge; the whole job is skipped with an annotation when the runner's kernel cannot load the module (same convention as the `test` job) |
 | `test` | `sudo python3 -m pytest tests/ -v` | any fail blocks merge |
 
 `test` job orchestration details:
@@ -314,6 +349,13 @@ class TestMyFeature:
 2. Runs `sudo python3 -m pytest tests/ -v` on the runner
 3. conftest.py's `session_setup` fixture auto-skips module-dependent tests if the kernel module cannot load (Azure VM environment limitation)
 4. Uploads the report as a CI artifact (kept for 14 days)
+
+The `e2e` job mirrors the `test` job: it reuses the `build` artifacts, uses
+`scripts/e2e-daemon.sh probe` to decide whether this runner can load the kernel module,
+and if so starts the daemon and runs Playwright (a failing case blocks merge). If it
+cannot, the browser cases are skipped with a `::warning::` annotation (an environment
+limitation, not a code problem). The fixture and probe logic live in the script, not in
+a second copy inside CI.
 
 > `lint` failures usually mean a missing `// SAFETY:` comment, a
 > formatting drift, or an unjustified `unsafe` block. Fix and re-run.
