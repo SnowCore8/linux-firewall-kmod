@@ -591,7 +591,7 @@ concurrency claims were corrected in commit `929b52f`.
 | 2.H-2 Global locator `OnceLock<Client>` + `DdosDecisionEngine` wiring | Done |
 | 2.H-3 Production cutover (`main.rs` atomic assembly + call sites re-pointed) | Done (`e6626c7`) |
 | 2.H-4 Retire legacy `netlink/` + flip the M ratchet | Done (`600b097`) |
-| 2.H-5 Documentation (`daemon.md` status/gap tables) | In progress |
+| 2.H-5 Documentation (`daemon.md` status/gap tables) | Done (`7814d36` / `1aba8ef` / `44c4a6e`) |
 
 ### What 2.A Landed
 
@@ -1191,7 +1191,8 @@ passed), `bash scripts/verify_project.sh` (kernel module and daemon both compile
 
 ### 2.H Design: Wiring `kernel/` into Production
 
-> **Status: landed (2.H-1..2.H-4, `e6626c7` / `600b097`).** This section preserves the design
+> **Status: landed (2.H-1..2.H-5; code `e6626c7` / `600b097`, docs `7814d36` / `1aba8ef` /
+> `44c4a6e`).** This section preserves the design
 > reasoning of the time, for understanding the cut shape and the prerequisite constraints; each
 > batch's result is in the progress table above and its commit.
 
