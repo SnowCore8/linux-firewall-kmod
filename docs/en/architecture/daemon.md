@@ -36,25 +36,13 @@ Related documents:
 | slog + slog-json | Structured logging (JSON Lines) |
 | rust-embed | Frontend build artifacts embedded into the binary (`src/daemon/web_ui/static/`) |
 
-## Current Implementation Status
+## Scope of This Document
 
-The Phase 2 rewrite proceeds as "keep it compiling, migrate in batches", so two generations of
-implementation coexist in the repository. This document distinguishes them honestly:
-
-| Layer | Status | Notes |
-|-------|--------|-------|
-| `runtime/` (supervisor, monotonic-clock scheduler, bounded channels) | **In production** | Assembled at startup by `main.rs`; periodic maintenance no longer hangs off `poll` timeouts |
-| `state/` (`bans` / `whitelist` / `rates` / `stats` plus the versioned `hub`) | **In production** | Constructed and injected by the composition root; the new `api` routes read from it |
-| `api/` | **Partially in production** | 18 routes mounted; 23 analytics/log routes still live in `http_exporter/handler.rs` |
-| `history_snapshot/` write queue | **Reworked** | Blocks the producer when full instead of silently dropping |
-| `ingest/`, `parse/`, `decision/`, `pipeline/` | Present, **not wired** | No production call site; the main chain still runs `file_monitor` + `line_processor` + `failed_tracker` |
-| `kernel/` (codec / transport / reactor / client / lease) | **In production** | `main.rs` assembles `Transport`/`Reactor`/`Client`/`Lease` (`Reactor` enters the `Supervisor`); the old `netlink/` is retired and deleted |
-| `signal/` (`signalfd`) | Present, **not wired** | Production still uses `signals.rs` (`sigaction` plus atomic booleans) |
-
-The decision formulas (effective threshold, progressive duration) are already implemented as **pure
-functions** in `decision/policy.rs`, cross-checked case by case against the old implementation; the
-production path is still carried by the old `failed_tracker/tracking.rs`. The not-wired list and
-"Gaps Against the Implementation" are at the end of this document.
+This document describes the **target structure** after the Phase 2 rewrite. The rewrite proceeds as
+"keep it compiling, migrate in batches", so some modules may not be wired into production yet; the
+per-item landing status lives in "Fix items and their landing status" in
+`development/daemon-rewrite-design.md` and in `ITERATION-PLAN.md` at the repository root. This
+document does not restate progress that changes from batch to batch.
 
 ## Component Relationships
 
@@ -73,13 +61,13 @@ chain has the shape "blocking IO plus CPU regex work", and putting it inside an 
 let parsing block the network; HTTP/SSE is naturally async, and carrying thousands of idle long-lived
 connections on threads is wasteful.
 
-| Executor | Carries | Blocking nature | Status |
-|----------|---------|-----------------|--------|
-| `ingest` thread | inotify fd ownership, `poll`, reading new bytes, rotation detection | Blocking IO | Module present, not wired |
-| `pipeline` thread | Line splitting, regex matching, IP validation, failure counting, threshold decisions | CPU plus small allocations | Module present, not wired |
-| `kernel reactor` thread | Sole owner of the netlink socket: sending commands, receiving events, request-response correlation | Blocking IO | Module present, not wired |
-| `scheduler` thread | Monotonic-clock timers (periodic maintenance, reconciliation, rate queries) | Timed waiting | **Wired** |
-| tokio runtime | HTTP routing, SSE long-lived connections, auth, static assets | async | **Wired** (2 workers) |
+| Executor | Carries | Blocking nature |
+|----------|---------|-----------------|
+| `ingest` thread | inotify fd ownership, `poll`, reading new bytes, rotation detection | Blocking IO |
+| `pipeline` thread | Line splitting, regex matching, IP validation, failure counting, threshold decisions | CPU plus small allocations |
+| `kernel reactor` thread | Sole owner of the netlink socket: sending commands, receiving events, request-response correlation | Blocking IO |
+| `scheduler` thread | Monotonic-clock timers (periodic maintenance, reconciliation, rate queries) | Timed waiting |
+| tokio runtime | HTTP routing, SSE long-lived connections, auth, static assets | async (2 workers) |
 
 Stages are connected by **bounded channels**, and every stage must state its backpressure policy
 explicitly (`runtime/channel.rs`):
@@ -170,26 +158,6 @@ else is injected at construction time.
 | `api/sse.rs` | Per-connection subscription and counters | Per-domain serialization, slow-consumer isolation |
 | `contract.rs` | None | Mount the three contract artifacts as crate modules via `#[path]` |
 | `runtime_status.rs` | None | One-shot read-only aggregation for `/health` and unit-test assertions |
-
-### Still Carried by the Old Implementation (not migrated this round)
-
-| Module | Responsibility today | Destination |
-|--------|----------------------|-------------|
-| `file_monitor/` | inotify watches, the `poll` main loop, reading new bytes by offset, re-arming after rotation | Split into `ingest/` + `parse/` |
-| `line_processor.rs` | Split on `\n`, partial buffers, per-line length validation and counters | Split into `parse/` |
-| `log_parser/` | Regex matching plus string fallback plus IP extraction and validation | Split into `parse/` |
-| `failed_tracker/` | `Jail.failed_hash` sliding-window counting and threshold triggering | Split into `decision/` |
-| `ban/` | Ban/unban entry points and IP validation (including the procfs-compatible path) | Moved out of the read path; dispatch belongs to `kernel/client` |
-| `jail/` | Service-name matching, default inference, ReDoS protection, regex compilation | Config-face owner |
-| `config/` | YAML parsing (strict key allowlist, three-layer path safety, rollback) plus CLI | Kept; produces immutable snapshots |
-| `config_reloader.rs` | SIGHUP hot reload, diff merging, rollback, runtime config write-back | Kept |
-| `history_snapshot/` | SQLite writes (now with backpressure) plus analytics-derived data | Later batch |
-| `ip_reputation.rs` | Reputation store (scores, threshold multipliers) | Later batch |
-| `log_rotation.rs` | The old rotation-detection implementation (paired with `file_monitor`) | Split into `ingest/reader` |
-| `web_ui/` | Static asset embedding, log viewing and paging, analytics endpoints, legacy payload types | Split into `api/`; the frontend talks to `api` directly |
-| `http_exporter/` | The 23 unmigrated routes, `/metrics`, Basic Auth and lockout, security-header middleware | Migrated into `api/` batch by batch |
-| `types/` | Cross-module data structures and global atomic stats (`Jail` / `Config` / `DAEMON_STATS`) | Retired gradually as data faces migrate |
-| `signals.rs` | `sigaction` plus global atomic booleans plus an `EINTR`-based main-loop exit protocol | Replaced by `signal/` (`signalfd`) |
 
 ## Startup Flow
 
@@ -355,13 +323,7 @@ access needs that kind of bind, and then credentials are mandatory - see below).
 |-------|------|----------|
 | SPA shell and static assets | None | `/`, `/dashboard`, `/bans`, `/whitelist`, `/jails`, `/ddos`, `/logs`, `/settings`, `/static/*path`, `/sw.js` |
 | Probes | None | `/health`, `/healthz` (deliberately not enveloped; `is_ready()` decides 200/503) |
-| Migrated into `api` | Basic Auth | 18 routes: `/metrics`, `/api/v1/events`, `/api/v1/stats`, `/api/v1/bans` (GET/POST), `/api/v1/bans/:ip`, `/api/v1/bans/:ip/detail`, `/api/v1/bans/unban-temporary`, `/api/v1/bans/batch`, `/api/v1/jails`, `/api/v1/jails/:name`, `/api/v1/config` (GET/PUT), `/api/v1/whitelist` (GET/POST), `/api/v1/whitelist/:cidr`, `/api/v1/rates/current`, `/api/v1/stats/sse-status` |
-| Not migrated (`http_exporter/handler.rs`) | Basic Auth | 23 routes: the analytics `/api/v1/stats/*`, `/api/v1/rates/history`, `/api/v1/rates/windows`, `/api/v1/whitelist/recommendations`, `/api/v1/logs`, `/api/v1/logs/stream`, and so on |
-
-18 + 23 = 41 authenticated routes; on top of that, 10 public routes (SPA shell and static assets)
-plus 2 probes = 12 unauthenticated, for 53 in total, matching the contract; `verify_http.py` reads
-both files and checks the two lists together (the "35 routes" comment in the source was a stale
-count and was corrected alongside this document).
+| Authenticated | Basic Auth | `/metrics` and `/api/v1/*` (the full route list follows `contract/`; `verify_http.py` checks it against the contract) |
 
 ### Envelope and Authentication
 
@@ -413,10 +375,9 @@ parameters `fw_max_*` (see `kernel-module.md`).
 `history_snapshot/` keeps four kinds of data in SQLite: time-series stats (`historical_stats`), ban
 history (`ban_history`), ban events (`ban_events`) and IP reputation (`ip_reputation`), and derives
 analytics data (attack prediction, coordinated detection, ban-duration recommendations) for the
-unmigrated analytics endpoints.
+analytics endpoints.
 
-The write queue behaviour was reworked this round, and all four drop paths are now visible
-(`history_snapshot/mod.rs`):
+All four drop paths of the write queue are visible (`history_snapshot/mod.rs`):
 
 | Path | Behaviour now |
 |------|---------------|
@@ -501,41 +462,19 @@ The four `firewall_kernel_*` metrics come from the in-process cache rather than 
 ## Memory Safety
 
 Every `unsafe` block in the daemon carries an explicit `// SAFETY:` comment stating the
-preconditions and which invariants still hold afterwards. There are currently **35** `unsafe { }`
-blocks (counted per block), distributed as follows:
+preconditions and which invariants still hold afterwards. The count and the distribution follow the
+live output of `grep -rn 'unsafe {' src/daemon`, concentrated in: netlink socket lifetime,
+`signalfd` and signal registration, `fork` / `setsid` / fd redirection, `packed` struct offset
+moves, `poll` wrappers and `inotify` fd ownership, raw address operations, and the `dup(2)` stderr
+fallback.
 
-| File | Blocks | Purpose |
-|------|--------|---------|
-| `kernel/transport.rs` | 12 | socket creation, binding, sending and receiving |
-| `signal/mod.rs` | 9 | `signalfd` and signal masking |
-| `daemonizer.rs` | 7 | `fork` / `setsid` / PID file / fd redirection |
-| `kernel/codec/mod.rs` | 2 | Moving `packed` struct offsets |
-| `signals.rs` | 1 | `sigaction` registration |
-| `logger.rs` | 1 | `dup(2)` stderr fallback |
-| `ip_utils.rs` | 1 | Raw address operations |
-| `ingest/watcher.rs` | 1 | `inotify` fd ownership |
-| `file_monitor/monitor_loop.rs` | 1 | `poll` syscall wrapper |
-
-`Cargo.toml` provides three detection profiles: `dev-with-debug` (release-grade optimisation with
+`Cargo.toml` provides detection profiles such as `dev-with-debug` (release-grade optimisation with
 DWARF kept, so a field crash can be traced with `addr2line`), `asan` (AddressSanitizer, needs
 nightly and `build-std`), and Miri (interprets `unsafe` code to catch pointer-arithmetic UB and
 aliasing violations - the class ASAN cannot see).
 
-## Gaps Against the Implementation
+## Interface Change Discipline
 
-The following are the precise "present but not wired" boundaries, so a reader does not mistake the
-design for the current state (per-item evidence is in the design document's "Fix items and their
-landing status"); layers that did land say so on their row.
-
-| Item | State |
-|------|-------|
-| Main chain (`ingest` -> `parse` -> `decision` -> `pipeline`) | `pipeline` stops at `BanIntent` and has no production call site; production still runs `file_monitor` + `line_processor` + `failed_tracker` |
-| `kernel/` layer | **In production**: `main.rs` assembles `Transport`/`Reactor`/`Client`/`Lease`, receives go through the `Reactor`'s routing, and the old `netlink/` is retired and deleted. The `Lease` visibility of registration, the single `client.set_config` entry point and single CIDR normalisation are therefore live |
-| `signal/` (`signalfd`) | No production reference; production uses `signals.rs` |
-| Periodic maintenance | Already taken over by `runtime/scheduler.rs` (expired-ban purge plus counter mirroring), base tick 1 s with per-task gating |
-| `api` routes | 18 of 41 authenticated routes migrated (the contract has 53 in total, 12 unauthenticated); 23 analytics and log routes remain in `http_exporter/handler.rs` |
-| Old module removal | `netlink/` was deleted with 2.H-4; `web_ui/`, `failed_tracker/`, `file_monitor/`, `line_processor.rs` and `log_rotation.rs` still compile as-is, to be retired once later batches migrate them |
-
-Until later batches migrate, the frozen interface shapes of the main chain must not change; when an
-interface must change, **change the contract first and the code afterwards**, then run
+The frozen interface shapes of the main chain must not change arbitrarily; when an interface must
+change, **change the contract first and the code afterwards**, then run
 `bash scripts/check_contract.sh`.

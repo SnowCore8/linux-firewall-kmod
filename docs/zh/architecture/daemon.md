@@ -31,23 +31,11 @@ daemon 负责应用层检测（如 SSH 暴力破解）与对外接口。
 | slog + slog-json | 结构化日志（JSON Lines） |
 | rust-embed | 前端构建产物嵌入二进制（`src/daemon/web_ui/static/`） |
 
-## 当前实现状态
+## 本文档的口径
 
-Phase 2 重写按「保留编译，分批迁入」推进，因此仓库里同时存在两代实现。本文档如实区分：
-
-| 层 | 状态 | 说明 |
-|----|------|------|
-| `runtime/`（supervisor、单调时钟调度器、有界 channel） | **已接入生产** | `main.rs` 启动期装配，周期维护不再挂在 `poll` 超时上 |
-| `state/`（`bans` / `whitelist` / `rates` / `stats` + 版本化 `hub`） | **已接入生产** | 由组合根构造并注入，新 `api` 路由从它取数 |
-| `api/` | **部分接入** | 18 条路由已挂载；23 条分析/日志类路由仍在 `http_exporter/handler.rs` |
-| `history_snapshot/` 写入队列 | **已改造** | 满时阻塞生产者，不再静默丢弃 |
-| `ingest/`、`parse/`、`decision/`、`pipeline/` | 已就位、**未接入** | 无生产调用点，主链路仍走 `file_monitor` + `line_processor` + `failed_tracker` |
-| `kernel/`（codec / transport / reactor / client / lease） | **已接入生产** | `main.rs` 装配 `Transport`/`Reactor`/`Client`/`Lease`（`Reactor` 进 `Supervisor`）；旧 `netlink/` 已退役删除 |
-| `signal/`（`signalfd`） | 已就位、**未接入** | 生产仍走 `signals.rs` 的 `sigaction` + 原子布尔 |
-
-判定算式（有效阈值、渐进式时长）已在 `decision/policy.rs` 以**纯函数**实现，并与旧实现做过
-逐案对照测试；但生产路径仍由旧 `failed_tracker/tracking.rs` 承载。未接入清单与「与实现的差距」
-见文末。
+本文档描述 Phase 2 重写后的**目标结构**。重写按「保留编译，分批迁入」推进，因此部分模块可能
+尚未接入生产；逐项落地状态见 `development/daemon-rewrite-design.md` 的「修复项与落地状态」与
+仓库根 `ITERATION-PLAN.md`，本文档不复述这些会随批次变动的进度。
 
 ## 组件关系
 
@@ -65,13 +53,13 @@ Phase 2 重写按「保留编译，分批迁入」推进，因此仓库里同时
 正则」的形态，放进 async reactor 会让解析阻塞网络；HTTP/SSE 天然是 async 的，用线程承载
 几千条空闲长连接是浪费。
 
-| 执行体 | 承载 | 阻塞性质 | 落地状态 |
-|--------|------|---------|---------|
-| `ingest` 线程 | inotify fd 所有权、`poll`、读新增字节、轮转检测 | 阻塞 IO | 模块已就位，未接入 |
-| `pipeline` 线程 | 行分割、正则匹配、IP 校验、失败计数、阈值判定 | CPU + 少量分配 | 模块已就位，未接入 |
-| `kernel reactor` 线程 | netlink socket 唯一所有者：发命令、收事件、请求-响应关联 | 阻塞 IO | 模块已就位，未接入 |
-| `scheduler` 线程 | 单调时钟定时器（周期维护、对账、速率查询） | 定时等待 | **已接入** |
-| tokio runtime | HTTP 路由、SSE 长连接、认证、静态资源 | async | **已接入**（2 个 worker） |
+| 执行体 | 承载 | 阻塞性质 |
+|--------|------|---------|
+| `ingest` 线程 | inotify fd 所有权、`poll`、读新增字节、轮转检测 | 阻塞 IO |
+| `pipeline` 线程 | 行分割、正则匹配、IP 校验、失败计数、阈值判定 | CPU + 少量分配 |
+| `kernel reactor` 线程 | netlink socket 唯一所有者：发命令、收事件、请求-响应关联 | 阻塞 IO |
+| `scheduler` 线程 | 单调时钟定时器（周期维护、对账、速率查询） | 定时等待 |
+| tokio runtime | HTTP 路由、SSE 长连接、认证、静态资源 | async（2 个 worker） |
 
 串联方式为**有界 channel**，每段必须显式声明背压策略（`runtime/channel.rs`）：
 
@@ -156,26 +144,6 @@ inotify ──LogChunk──▶ parse ──Failure──▶ decide ──BanInt
 | `contract.rs` | 无 | 用 `#[path]` 把三份契约生成物挂成本 crate 模块 |
 | `runtime_status.rs` | 无 | 一次性只读聚合，供 `/health` 与单测断言 |
 
-### 仍由旧实现承载（本轮未迁入）
-
-| 模块 | 现状职责 | 去向 |
-|------|---------|------|
-| `file_monitor/` | inotify watch、`poll` 主循环、按 offset 读新增字节、轮转重挂 | 拆入 `ingest/` + `parse/` |
-| `line_processor.rs` | 按 `\n` 切行、partial 缓冲、单行长度校验与统计 | 拆入 `parse/` |
-| `log_parser/` | 正则匹配 + 字符串回退 + IP 提取校验 | 拆入 `parse/` |
-| `failed_tracker/` | `Jail.failed_hash` 滑动窗口计数与阈值触发 | 拆入 `decision/` |
-| `ban/` | 封禁/解封入口、IP 校验（含 procfs 兼容路径） | 移出读路径；下发归 `kernel/client` |
-| `jail/` | 服务名智能匹配、默认参数推断、ReDoS 防护、正则编译 | 配置面 owner |
-| `config/` | YAML 解析（严格模式 key 白名单 + 路径安全 3 重检查 + 失败回滚）+ CLI | 保留，产出不可变快照 |
-| `config_reloader.rs` | SIGHUP 热重载、差异合并、失败回滚、运行期配置回写 | 保留 |
-| `history_snapshot/` | SQLite 写入（已改背压）+ 分析类派生数据 | 后续批次 |
-| `ip_reputation.rs` | 信誉分 store（分数、阈值乘数） | 后续批次 |
-| `log_rotation.rs` | 轮转检测的旧实现（与 `file_monitor` 配套） | 拆入 `ingest/reader` |
-| `web_ui/` | 静态资源嵌入、日志查看与分页、分析类端点、旧载荷类型 | 拆入 `api/` + 前端直连 `api` |
-| `http_exporter/` | 未迁入的 23 条路由、`/metrics`、Basic Auth 与锁定、安全头中间件 | 逐批迁入 `api/` |
-| `types/` | 跨模块数据结构与全局原子统计（`Jail` / `Config` / `DAEMON_STATS`） | 数据面迁入后逐步退役 |
-| `signals.rs` | `sigaction` + 全局原子布尔 + 依赖 `EINTR` 的主循环退出协议 | 由 `signal/`（`signalfd`）取代 |
-
 ## 启动流程
 
 `main()` 的顺序（`src/daemon/main.rs`）：
@@ -232,7 +200,7 @@ graph TB
 `contract/generated/netlink_contract.rs` 挂成本 crate 模块，实现侧读的是契约里的字段名与偏移，
 「手抄结构体」这一漂移来源被编译器消除。
 
-新 `kernel/` 五层（**已接入生产**）：
+新 `kernel/` 五层：
 
 | 层 | 职责 | 关键取舍 |
 |----|------|---------|
@@ -315,12 +283,7 @@ graph TB
 |----|------|------|
 | SPA 外壳与静态资源 | 无 | `/`、`/dashboard`、`/bans`、`/whitelist`、`/jails`、`/ddos`、`/logs`、`/settings`、`/static/*path`、`/sw.js` |
 | 探针 | 无 | `/health`、`/healthz`（有意不套信封，由 `is_ready()` 决定 200/503） |
-| 已迁入 `api` 层 | Basic Auth | 18 条：`/metrics`、`/api/v1/events`、`/api/v1/stats`、`/api/v1/bans`（GET/POST）、`/api/v1/bans/:ip`、`/api/v1/bans/:ip/detail`、`/api/v1/bans/unban-temporary`、`/api/v1/bans/batch`、`/api/v1/jails`、`/api/v1/jails/:name`、`/api/v1/config`（GET/PUT）、`/api/v1/whitelist`（GET/POST）、`/api/v1/whitelist/:cidr`、`/api/v1/rates/current`、`/api/v1/stats/sse-status` |
-| 未迁入（`http_exporter/handler.rs`） | Basic Auth | 23 条：分析类 `/api/v1/stats/*`、`/api/v1/rates/history`、`/api/v1/rates/windows`、`/api/v1/whitelist/recommendations`、`/api/v1/logs`、`/api/v1/logs/stream` 等 |
-
-18 + 23 = 41 条需认证路由；另有 10 条公开（SPA 外壳与静态资源）+ 2 条探针 = 12 条无认证，合计
-53 条，与契约一致；两个清单由 `verify_http.py` 同时读两个文件核对（源码里的「35 条」注释曾是陈旧
-计数，已随本文一并更正）。
+| 需认证 | Basic Auth | `/metrics` 与 `/api/v1/*`（完整路由清单以 `contract/` 为准；`verify_http.py` 会对照契约核对） |
 
 ### 信封与认证
 
@@ -358,9 +321,9 @@ graph TB
 
 `history_snapshot/` 用 SQLite 保存四类数据：时序统计（`historical_stats`）、封禁历史
 （`ban_history`）、封禁事件（`ban_events`）、IP 信誉分（`ip_reputation`），并派生攻击预测、
-协同检测、封禁时长推荐等分析数据（供未迁入的分析类端点使用）。
+协同检测、封禁时长推荐等分析数据（供分析类端点使用）。
 
-写入队列的行为在本轮被改造过，四条丢弃路径全部可见（`history_snapshot/mod.rs`）：
+写入队列的四条丢弃路径全部可见（`history_snapshot/mod.rs`）：
 
 | 路径 | 现行为 |
 |------|-------|
@@ -440,37 +403,15 @@ graph TB
 ## 内存安全
 
 守护进程全部 `unsafe` 块都显式标注 `// SAFETY:`，说明前置条件与「该块执行后哪些不变量仍成立」。
-当前共 **35 处** `unsafe { }`（按块计数），分布：
+数量与分布以 `grep -rn 'unsafe {' src/daemon` 的实时输出为准，集中在：netlink socket 生命周期、
+`signalfd` 与信号注册、`fork` / `setsid` / fd 重定向、`packed` 结构偏移搬运、`poll` 封装与
+`inotify` fd 所有权、地址原始操作、`dup(2)` 回退 stderr。
 
-| 文件 | 块数 | 用途 |
-|------|------|------|
-| `kernel/transport.rs` | 12 | socket 创建/绑定/收发 |
-| `signal/mod.rs` | 9 | `signalfd` 与信号掩码 |
-| `daemonizer.rs` | 7 | `fork` / `setsid` / PID 文件 / 重定向 fd |
-| `kernel/codec/mod.rs` | 2 | `packed` 结构偏移搬运 |
-| `signals.rs` | 1 | `sigaction` 注册 |
-| `logger.rs` | 1 | `dup(2)` 回退 stderr |
-| `ip_utils.rs` | 1 | 地址原始操作 |
-| `ingest/watcher.rs` | 1 | `inotify` fd 所有权 |
-| `file_monitor/monitor_loop.rs` | 1 | `poll` 系统调用封装 |
+`Cargo.toml` 提供 `dev-with-debug`（与 release 同等优化但保留 DWARF，现场 crash 可用
+`addr2line` 反推）、`asan`（AddressSanitizer，需 nightly 与 `build-std`）、Miri（解释执行
+`unsafe`，抓指针算术 UB 与别名违规——ASAN 抓不到的那类）等检测 profile。
 
-`Cargo.toml` 提供三个检测 profile：`dev-with-debug`（与 release 同等优化但保留 DWARF，现场
-crash 可用 `addr2line` 反推）、`asan`（AddressSanitizer，需 nightly 与 `build-std`）、Miri
-（解释执行 `unsafe`，抓指针算术 UB 与别名违规——ASAN 抓不到的那类）。
+## 接口变更纪律
 
-## 与实现的差距
-
-以下是「已就位、未接入」的准确边界，目的是让读者不会把设计当成现状（逐项证据见设计文档
-「修复项与落地状态」）；已接入的层在下方逐条注明。
-
-| 项 | 现状 |
-|----|------|
-| 主链路（`ingest` → `parse` → `decision` → `pipeline`） | `pipeline` 止于 `BanIntent`，无生产调用点；生产仍由 `file_monitor` + `line_processor` + `failed_tracker` 驱动 |
-| `kernel/` 层 | **已接入生产**：`main.rs` 装配 `Transport`/`Reactor`/`Client`/`Lease`，接收由 `Reactor` 路由，旧 `netlink/` 已退役删除。故 `Lease` 的注册可见性、`client.set_config` 的唯一入口、CIDR 单一规范化均已在生产生效 |
-| `signal/`（`signalfd`） | 无生产引用；生产走 `signals.rs` |
-| 周期维护 | 已由 `runtime/scheduler.rs` 接管（过期封禁清理 + 计数器镜像），节拍 1 s，子任务各自门控 |
-| `api` 路由 | 18 / 41 需认证路由已迁入（契约合计 53 条，其中 12 条无认证）；23 条分析类与日志类仍在 `http_exporter/handler.rs` |
-| 旧模块删除 | `netlink/` 已随 2.H-4 删除；`web_ui/`、`failed_tracker/`、`file_monitor/`、`line_processor.rs`、`log_rotation.rs` 仍按原样编译保留，待后续批次迁入后退役 |
-
-后续批次迁入前，主链路已冻结的接口形状不得改动；接口需要变更时**先改契约再改代码**，并跑
+主链路已冻结的接口形状不得随意改动；接口需要变更时**先改契约再改代码**，并跑
 `bash scripts/check_contract.sh`。
