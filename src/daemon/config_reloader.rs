@@ -351,6 +351,21 @@ fn persist_config(cfg: &Config, jails_enabled: &[(String, bool)]) -> Result<()> 
         r
     };
 
+    // 幂等回写：内容与磁盘当前字节一致时不落盘。
+    //
+    // 本函数由 `reload_configuration` 在每次重载末尾无条件调用，而重载又由该配置文件
+    // 上的 inotify 监视触发（`monitor_loop.rs` 的「配置文件变化 → 自动重载」分支）。
+    // 无条件写入会立刻产生新的 MODIFY/CLOSE_WRITE 事件 → 再重载 → 再写入，形成自持
+    // 重载风暴（实测约 300 次/秒、进程 CPU 44%）。跳过无差异写入即可打断该环。
+    if result == original {
+        crate::logger::debug!(
+            crate::logger::get(),
+            "配置无变化，跳过回写";
+            "path" => %write_path.display()
+        );
+        return Ok(());
+    }
+
     // 写回文件
     let mut file = std::fs::File::create(&write_path)?;
     use std::io::Write;
