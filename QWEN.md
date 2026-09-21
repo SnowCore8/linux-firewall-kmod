@@ -19,51 +19,67 @@
 ### 核心架构
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    用户空间（Rust 守护进程）              │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────┐ │
-│  │日志解析  │  │DDoS检测  │  │Jail管理  │  │Web UI   │ │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬────┘ │
-│       └──────────────┴──────────────┴─────────────┘      │
-│                         │ procfs 写入                    │
-└─────────────────────────┼───────────────────────────────┘
-                          │
-┌─────────────────────────┼───────────────────────────────┐
-│                    内核空间（内核模块）                    │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────┐ │
-│  │procfs    │  │ban-manager│ │whitelist │  │netfilter│ │
-│  │接口      │→ │封禁管理  │  │白名单    │→ │钩子     │ │
-│  └──────────┘  └──────────┘  └──────────┘  └─────────┘ │
-│                                                         │
-│  ┌──────────┐  ┌──────────┐                             │
-│  │rate-     │  │cleanup   │                             │
-│  │detector  │  │清理      │                             │
-│  └──────────┘  └──────────┘                             │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                                                          │
+│                用户空间（Rust 守护进程）                 │
+│                                                          │
+│   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │
+│   │ 日志解析 │  │DDoS 检测 │  │Jail 管理 │  │  Web UI  │ │
+│   └──────────┘  └──────────┘  └──────────┘  └──────────┘ │
+│        └─────────────┴──────┬──────┴─────────────┘       │
+│                             │ netlink 通信               │
+└──────────────────────────────────────────────────────────┘
+                             │
+┌──────────────────────────────────────────────────────────┐
+│                                                          │
+│                   内核空间（内核模块）                   │
+│                                                          │
+│   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │
+│   │  procfs  │  │ netlink  │  │  封禁表  │  │  白名单  │ │
+│   └──────────┘  └──────────┘  └──────────┘  └──────────┘ │
+│          ┌──────────┐  ┌──────────┐  ┌──────────┐        │
+│          │netfilter │  │ 速率检测 │  │状态/清理 │        │
+│          └──────────┘  └──────────┘  └──────────┘        │
+└──────────────────────────────────────────────────────────┘
 ```
+
+> 守护进程与内核模块之间走 **netlink** 双向通道（`src/daemon/kernel/` ↔ `fw_netlink.c`）：
+> 下发封禁/白名单指令、回推内核事件与统计。`/proc/firewall` 的 procfs 条目仍保留，
+> 供手动操作与调试读取（见下文「procfs 接口」）。
 
 ## 目录结构
 
 ```
 linux-firewall-kmod/
 ├── src/
-│   ├── kernel-module/          # 内核模块 C 源码
-│   │   ├── firewall-main.c     # 模块入口（init/exit）
-│   │   ├── netfilter.c         # netfilter 钩子函数
-│   │   ├── ban-manager.c       # 封禁/解封逻辑
-│   │   ├── whitelist.c         # 白名单管理
-│   │   ├── rate-detector.c     # DDoS 速率检测
-│   │   ├── procfs.c            # procfs 接口
-│   │   └── firewall.h          # 公共头文件
+│   ├── kernel-module/          # 内核模块 C 源码（统一 fw_* 前缀）
+│   │   ├── fw_main.c           # 模块入口（init/exit）+ 模块参数
+│   │   ├── fw_hook.c           # netfilter 钩子函数
+│   │   ├── fw_ban.c            # 封禁表（4096 桶 hlist + RCU + per-entry 定时器）
+│   │   ├── fw_wl.c             # 白名单（精确桶 + 子网链）
+│   │   ├── fw_rate.c           # 速率 / 端口扫描 / 服务探测检测
+│   │   ├── fw_local.c          # 本机地址集合
+│   │   ├── fw_netlink.c        # netlink 通道（与守护进程双向通信）
+│   │   ├── fw_procfs.c         # /proc/firewall 的 12 个条目
+│   │   ├── fw_state.c          # 状态快照与持久化还原
+│   │   ├── fw_stats.c          # 每 CPU 统计聚合
+│   │   ├── fw_netdev.c         # 网卡事件（本机地址维护）
+│   │   └── fw_types.h          # 契约公共类型与表规模常量
 │   └── daemon/                 # Rust 守护进程源码
-│       ├── main.rs             # 守护进程入口
-│       ├── ban/                # 封禁操作（procfs 写入）
+│       ├── main.rs, lib.rs     # 入口与库根（模块装配）
+│       ├── kernel/             # netlink 传输层（transport/codec/reactor/client/lease）
+│       ├── api/                # HTTP/JSON API（routes/、SSE 推送、envelope 封装）
+│       ├── state/              # 内存状态（封禁/白名单/CIDR/速率/统计）
+│       ├── runtime/            # 运行时（通道/调度/关闭/定时器/监督）
+│       ├── file_monitor/       # inotify 日志监听与轮转检测
+│       ├── ingest/, pipeline/  # 日志读取与处理管线
+│       ├── parse/, log_parser/ # 日志解析（正则/规则/切分/提取）
+│       ├── decision/           # DDoS 决策（ddos/policy/window）
+│       ├── ban/                # 封禁动作（校验 + netlink 投递）
+│       ├── jail/               # Jail 配置与匹配
 │       ├── config/             # 配置加载和校验
-│       ├── jail/               # Jail 系统实现
-│       ├── log_parser/         # 日志解析器
-│       ├── ddos_detector.rs    # DDoS 检测
+│       ├── web_ui/             # Web UI 后端（统计/日志/分析）
 │       ├── http_exporter/      # Prometheus 指标导出
-│       ├── web_ui/             # Web UI API
 │       └── types/              # 公共类型定义
 ├── config/                     # Jail 配置文件（YAML）
 │   ├── default.yaml            # 默认配置
@@ -72,7 +88,7 @@ linux-firewall-kmod/
 ├── tests/                      # 集成测试（Python pytest）
 │   ├── conftest.py             # pytest fixtures + 辅助函数
 │   ├── config.py               # 测试配置（路径、IP、参数）
-│   ├── test_01_module_basic.py # 模块基础测试
+│   ├── test_01_module_lifecycle.py # 模块加载/卸载生命周期测试
 │   ├── ...                     # 19 个测试套件（01-21）
 │   └── e2e/                    # Playwright E2E 测试
 ├── docs/                       # 文档
@@ -143,13 +159,13 @@ sudo rmmod firewall
 ### 运行测试
 
 ```bash
-# 完整测试套件（集成测试 + 434 项单元测试）
+# 集成测试套件（19 套件 94 项，需要 root；`make test` 只跑 pytest，不含 cargo test）
 make test
 
-# 仅 Rust 单元测试
+# 仅 Rust 单元测试（434 项 + 7 项 doctest）
 cargo test --release
 
-# 仅集成测试（需要 root 权限）
+# 直接调用集成测试（需要 root 权限）
 sudo python3 -m pytest tests/ -v
 
 # 运行单个测试套件
@@ -249,15 +265,16 @@ perf(kmod): 优化速率检测使用平均速率
 
 ### 内存安全（Rust unsafe）
 
-当前代码库有 **46 个 unsafe 块**，分布在：
-- `netlink/responses.rs`（15）— netlink 消息序列化/反序列化
-- `netlink/mod.rs`（13）— netlink socket 操作
-- `netlink/protocol.rs`（7）— netlink 协议类型定义
-- `daemonizer.rs`（7）— fork 守护进程化/PID 文件管理
-- `file_monitor/monitor_loop.rs`（1）— poll 系统调用封装
+当前代码库有 **35 个 unsafe 块**，分布在 9 个文件：
+- `kernel/transport.rs`（12）— netlink socket 的 open/bind/send/recv/close
+- `signal/mod.rs`（9）— signalfd 读取 siginfo（信号转 fd）
+- `daemonizer.rs`（7）— fork 守护进程化 / flock / fd 接管
+- `kernel/codec/mod.rs`（2）— 线格式布局的指针访问
+- `signals.rs`（1）— sigaction 信号处理器注册
+- `logger.rs`（1）— syslog(3) 接入
 - `ip_utils.rs`（1）— IP 地址原始操作
-- `logger.rs`（1）— syslog 接入
-- `signals.rs`（1）— 信号掩码操作
+- `ingest/watcher.rs`（1）— inotify fd 读取
+- `file_monitor/monitor_loop.rs`（1）— poll 系统调用封装
 
 **硬性要求**：
 - 每个 unsafe 块必须紧跟 `// SAFETY:` 注释
@@ -268,7 +285,10 @@ perf(kmod): 优化速率检测使用平均速率
 
 ### procfs 接口
 
-内核模块通过 `/proc/firewall/` 暴露操作接口：
+内核模块通过 `/proc/firewall/` 暴露操作接口（共 12 个条目：`bans`、`config`、
+`whitelist`、`stats`、`rates`、`udp_ports`、`icmp_types`、`pkt_sizes`、`ttl_dist`、
+`ip_frags`、`port_scanners`、`service_probes`；前 3 个为 0600，其余 9 个为 0400
+只读统计/分析视图）：
 
 ```bash
 # 封禁 IP（默认时长 / 自定义 / 永久）
@@ -353,12 +373,13 @@ cat /proc/firewall/config
 
 2. **Lint 检查**
    ```bash
-   cargo clippy -- -D warnings   # Rust（零警告）
+   cargo clippy --all-targets -- -D warnings   # Rust（零警告）
    ```
 
 3. **测试套件**
    ```bash
-   make test           # 完整测试（集成 + 单元）
+   make test           # 集成测试（19 套件 94 项，仅 pytest）
+   cargo test --release # Rust 单元测试（434 项 + 7 项 doctest）
    ```
 
 **任一环节失败不得提交**。
@@ -404,8 +425,9 @@ sudo insmod build/kernel-module/firewall.ko
 | 指标 | 数值 |
 |------|------|
 | 封禁查找 | O(1) 哈希表 |
-| 哈希表容量 | 4096 条目 |
-| 白名单容量 | 64 条目 |
+| 封禁表 | 4096 桶 hlist（RCU + per-entry 定时器）；条目录上限默认 65535（`fw_max_ban_entries`） |
+| 白名单 | 64 精确桶 + 子网链；条目录上限默认 65535（`fw_max_whitelist_entries`） |
+| 速率表 | 65536 桶；条目上限默认 65536（`fw_max_rate_entries`） |
 | 守护进程体积 | 单文件 stripped 二进制（含前端产物，具体数值需 `stat -c %s build/daemon/firewall-daemon` 实测） |
 | 测试覆盖 | 19 集成套件（94 项）+ 434 单元 |
 | 响应延迟 | 毫秒级 |
