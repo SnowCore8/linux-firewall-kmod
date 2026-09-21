@@ -27,6 +27,7 @@
   * [性能基线](development/perf-baseline.md)
   * [内核重写设计](development/kernel-rewrite-design.md)
   * [守护进程重写设计](development/daemon-rewrite-design.md)
+  * [前端重写设计](development/frontend-rewrite-design.md)
   * [Rust Kmod 翻译方案（已作废）](development/rust-kmod-design.md)
 
 * [从 fail2ban 迁移](migration/from-fail2ban.md)
