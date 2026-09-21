@@ -480,12 +480,12 @@ existing defects in `netlink.fwidl` and `http.fwidl`, plus daemon-side stability
 | Whitelist parse limit 64 conflicts with kernel page 256 | Remove the hard-coded limit, use the contract's page limit; complete pagination (fixes J) | Done |
 | Rate response silently truncated | Add pagination + read `total` + make truncation visible (fixes J) | Done |
 | History-DB queue drops silently when full | Block the producer when full, never drop; drain before closing on shutdown; alarm when queue depth crosses the high-water mark (fixes G) | Done: the queue in `history_snapshot/mod.rs` now uses `runtime::channel`'s `Backpressure::Block`; all four discard paths (full / not assembled / writer thread gone / items queued at shutdown) are visible; `close_history_db` joins the writer to drain before closing the connection; 4 non-tautological unit tests lock the behavior (see the 2.F-1 evidence at the end) |
-| Registration loss invisible | Introduce `Lease` + parse `RegisterAck` (fixes K) | New side in place (`kernel/{client,lease}.rs`), but `main.rs` and the write points still use the old `crate::netlink` — not wired into production |
-| Two baseline/config dispatch paths | Converge on `client.set_config()` (fixes L) | Same: `kernel/client.rs::set_config` exists, production still runs the old `crate::netlink::sync_protocol_thresholds` |
-| Whitelist CIDR key inconsistency | Single normalization function (fixes M) | Partial: `state/cidr.rs::CidrKey` is in place and the old write paths are retired, but the old `ban/mod.rs::build_cidr_key` still exists and `status` stays `open` |
+| Registration loss invisible | Introduce `Lease` + parse `RegisterAck` (fixes K) | Done: `kernel/{client,lease}.rs` is wired into production — `main.rs` assembles `kernel_poll::LeaseCell` and injects it via `kernel::global::init(client)`; the legacy `crate::netlink` was retired with 2.H-4 |
+| Two baseline/config dispatch paths | Converge on `client.set_config()` (fixes L) | Done: the legacy `crate::netlink` path was retired with 2.H-4; the single entry point for thresholds/switches is `config_sync::sync_protocol_thresholds` (see `config_reloader.rs`, `web_ui/api.rs`) |
+| Whitelist CIDR key inconsistency | Single normalization function (fixes M) | Done: the write path goes through `state/cidr.rs::CidrKey` only; the old `ban/mod.rs::build_cidr_key` was deleted in the same batch that retired the legacy `netlink/`, and its `status` flipped to `fixed` (`600b097`) |
 | Read-path side effects (purge + stats) | Make purge an explicit method called by a dedicated scheduler task; the read path only reads (fixes E) | Done: `state/compose.rs::purge_expired_bans` + the periodic call in `runtime/scheduler.rs` + `main.rs` wiring `runtime::spawn_periodic`; `get_active_bans()`'s throttled purge and its throttle statics are gone, `status` flipped to `fixed` |
 | Two idle periodic tasks | Both `write_stats_snapshot` and `check_and_handle_ddos` are now no-ops (a debug log only) | Done |
-| `protocol.rs` comment "20 bytes" | Disappears when codec switches to the generated artifact | Not done: the new `kernel/codec` no longer hand-writes structs, but the "20 bytes" comment at `netlink/protocol.rs:94` is still there (the old module is not deleted) |
+| `protocol.rs` comment "20 bytes" | Disappears when codec switches to the generated artifact | Done: the legacy `netlink/protocol.rs` was retired with 2.H-4, the new `kernel/codec` no longer hand-writes structs, and the fixed-size declarations now live in the generated `netlink_uapi.h` as `_Static_assert` |
 
 ### Intentionally kept
 
@@ -587,11 +587,11 @@ concurrency claims were corrected in commit `929b52f`.
 | 2.F-1 Queue backpressure (`history_snapshot/mod.rs`, queue behavior only) | Done |
 | 2.F-2 Test-debt replacement (`tests/` tautological assertions) | Done |
 | 2.G Documentation rewrite | Done |
-| 2.H-1 Inbound consumer layer (`Incoming` -> caches/state mirror) | Not started |
-| 2.H-2 Global locator `OnceLock<Client>` + `DdosDecisionEngine` wiring | Not started |
-| 2.H-3 Production cutover (`main.rs` atomic assembly + call sites re-pointed) | Not started |
-| 2.H-4 Retire legacy `netlink/` + flip the M ratchet | Not started |
-| 2.H-5 Documentation (`daemon.md` status/gap tables) | Not started |
+| 2.H-1 Inbound consumer layer (`Incoming` -> caches/state mirror) | Done |
+| 2.H-2 Global locator `OnceLock<Client>` + `DdosDecisionEngine` wiring | Done |
+| 2.H-3 Production cutover (`main.rs` atomic assembly + call sites re-pointed) | Done (`e6626c7`) |
+| 2.H-4 Retire legacy `netlink/` + flip the M ratchet | Done (`600b097`) |
+| 2.H-5 Documentation (`daemon.md` status/gap tables) | In progress |
 
 ### What 2.A Landed
 
@@ -822,8 +822,9 @@ was deleted wholesale** (the old `web_ui/sse.rs` re-serializing every domain, th
 `handler.rs`, the misleading comment in `log_viewer.rs`), so asserting a positive anchor in the new
 implementation is the right `fix`. At 2.E-4b-2, E's and M's original anchors **were both still alive**, so their `status` stayed `open`.
 2.E-4c resolves E only: `web_ui/ban_ops.rs::get_active_bans()`'s throttled purge is gone and the
-periodic cleanup is driven by the scheduler, so E flips to `fixed`. M stays `open` — the old
-`ban/mod.rs::build_cidr_key` is still there because `kernel/` is not wired into production.
+periodic cleanup is driven by the scheduler, so E flips to `fixed`. At that point M stayed `open` —
+the old `ban/mod.rs::build_cidr_key` was still there because `kernel/` was not yet wired into
+production (2.H-4 later deleted it along with the legacy `netlink/` and flipped M to `fixed`).
 `HTTP_HEALTH_NOT_ENVELOPED` is an **intentional exception**, not a pending defect, so it becomes
 `retained` with a `reason`.
 
@@ -1190,18 +1191,25 @@ passed), `bash scripts/verify_project.sh` (kernel module and daemon both compile
 
 ### 2.H Design: Wiring `kernel/` into Production
 
-The five `kernel/` modules (`codec` / `transport` / `reactor` / `client` / `lease`) are written and
-unit-tested, but have **zero production callers**: `Reactor::new` has no call site anywhere in the
-repository and `main.rs` still runs the legacy `crate::netlink`. 2.H wires them into production and
-retires the legacy module in the same step.
+> **Status: landed (2.H-1..2.H-4, `e6626c7` / `600b097`).** This section preserves the design
+> reasoning of the time, for understanding the cut shape and the prerequisite constraints; each
+> batch's result is in the progress table above and its commit.
+
+The five `kernel/` modules (`codec` / `transport` / `reactor` / `client` / `lease`) were written and
+unit-tested, but had **zero production callers** at that point: `Reactor::new` had no call site
+anywhere in the repository and `main.rs` still ran the legacy `crate::netlink`. 2.H wired them into
+production and retired the legacy module in the same step (as of now `Reactor::new` is assembled at
+`main.rs:278` and the legacy `netlink/` is deleted).
 
 **Prerequisite constraints (two, and they decide the cut shape)**
 
-1. **Kernel-side single-instance exclusivity**: `src/kernel-module/fw_netlink.c:763-777` accepts only
+1. **Kernel-side single-instance exclusivity**: `src/kernel-module/fw_netlink.c:812-826` accepts only
    one daemon portid at a time -- while `fw_nl_daemon_portid` is still valid within
    `FW_NL_DAEMON_TIMEOUT`, a `FW_MSG_TYPE_DAEMON_REGISTER` from a **different** portid gets
-   `accepted=0`. **The old and new netlink sockets cannot run in parallel**, so the cutover must be one
-   atomic batch, not connect-then-retire.
+   `accepted=0`. A liveness probe was later added: registration first probes the old portid and a
+   dead one is replaced immediately, leaving the 30 s timeout as the fallback for a live-but-wedged
+   daemon (`fw_nl_daemon_alive()`, `cbf58ae`). **The old and new netlink sockets cannot run in
+   parallel**, so the cutover must be one atomic batch, not connect-then-retire.
 2. **The new layer is blocking `std` threads**: `Transport`/`Reactor` use blocking fds and OS threads,
    not async tasks, so they must enter unified shutdown through
    `runtime/supervisor.rs::spawn(name, Shutdown, body)` (the same path as the scheduler already wired

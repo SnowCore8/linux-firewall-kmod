@@ -656,7 +656,8 @@ netlink 线格式三端（契约 / 内核 / daemon）同一步落地，布局经
 里的双形状分支、`log_viewer.rs` 的误导性注释），故用新实现的正面锚点做 `fix` 即可。
 2.E-4b-2 时 E 与 M 的原锚点**都还活着**，故 `status` 保持 `open`。2.E-4c 只解决 E：
 `web_ui/ban_ops.rs::get_active_bans()` 的限流 purge 已删、周期清理改由调度器驱动，E 转
-`fixed`。M 仍 `open`——`ban/mod.rs::build_cidr_key` 还在，因为 `kernel/` 未接入生产。
+`fixed`。M 当时仍 `open`——`ban/mod.rs::build_cidr_key` 还在，因为 `kernel/` 当时未接入生产
+（后在 2.H-4 随旧 `netlink/` 同批删除，M 翻为 `fixed`）。
 `HTTP_HEALTH_NOT_ENVELOPED` 是**有意例外**而非待修缺陷，转 `retained` 并附 `reason`。
 
 #### 2.E-4c 落地明细：E 的三段式修法
@@ -908,16 +909,21 @@ warnings`（exit 0）。
 
 ### 2.H 设计：`kernel/` 接入生产
 
+> **状态：已落地（2.H-1…2.H-4，`e6626c7` / `600b097`）。** 本节保留当时的设计推理，供理解
+> 切割方式与先决约束；各批结果见上表进展行与其提交。
+
 `kernel/` 五个模块（`codec` / `transport` / `reactor` / `client` / `lease`）已经写完并通过单测，
-但**零生产调用**：`Reactor::new` 在全仓库没有任何调用点，`main.rs` 仍走旧 `crate::netlink`。2.H
-把它们接进生产，旧模块在同一步退役。
+但**当时零生产调用**：`Reactor::new` 在全仓库没有任何调用点，`main.rs` 仍走旧 `crate::netlink`。2.H
+把它们接进生产，旧模块在同一步退役（现状：`Reactor::new` 已在 `main.rs:278` 装配，旧 `netlink/`
+已删除）。
 
 **先决约束（两条，决定切割方式）**
 
-1. **内核侧单实例互斥**：`src/kernel-module/fw_netlink.c:763-777` 规定同一时刻只接受一个 daemon
+1. **内核侧单实例互斥**：`src/kernel-module/fw_netlink.c:812-826` 规定同一时刻只接受一个 daemon
    portid 注册——`fw_nl_daemon_portid` 在 `FW_NL_DAEMON_TIMEOUT` 内仍有效时，来自**不同** portid
-   的 `FW_MSG_TYPE_DAEMON_REGISTER` 一律 `accepted=0`。**新旧 netlink 套接字不能并行运行**，因此
-   切换必须整批原子完成，不能先接后退。
+   的 `FW_MSG_TYPE_DAEMON_REGISTER` 一律 `accepted=0`。后续又加了探活：注册前先探旧 portid，
+   已死则立即放行接管，30 秒超时退居「活着但卡死」的兜底（`fw_nl_daemon_alive()`，`cbf58ae`）。
+   **新旧 netlink 套接字不能并行运行**，因此切换必须整批原子完成，不能先接后退。
 2. **新层是阻塞 `std` 线程**：`Transport`/`Reactor` 用阻塞 fd 与系统线程，不是 async 任务，因而
    必须经 `runtime/supervisor.rs::spawn(name, Shutdown, body)` 纳入统一关停（与 `main.rs:443`
    已接入的调度器同一路径），不能挂进 tokio runtime。
