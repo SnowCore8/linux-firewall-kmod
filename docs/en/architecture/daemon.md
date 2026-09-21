@@ -97,6 +97,15 @@ the 60 s / 300 s / 2 s task classes are postponed indefinitely (structural probl
 throughput and immune to clock jumps (`runtime/timers.rs`: `fire_due(now)` is a pure function, so
 tests can verify the absence of drift with synthetic instants).
 
+**What actually landed**: the four segments `ingest -> parse -> decision -> pipeline` are driven
+sequentially by **one** executor (`pipeline/executor.rs`), which exclusively owns the per-source
+offsets, partial-line buffers and per-jail failure windows on a single thread; no queue exists
+between segments, so there is no "full queue drops bytes" window to begin with. The `inotify` fd and
+the `signalfd` share one `poll`, and periodic maintenance runs off that executor's own `TimerTable`.
+The thread split and bounded channels in the table above are the **target** shape and have not
+landed (the open question of who would own the splitter is recorded in the module documentation of
+`pipeline/executor.rs`).
+
 ### Shutdown Order
 
 The shutdown invariant is "**in-flight events may be written to the database only after netlink has
@@ -114,9 +123,12 @@ stop HTTP ingress -> stop scheduler -> stop kernel reactor (flush in-flight requ
   -> stop pipeline (drain queues) -> stop ingest -> flush persist -> clean up the PID file
 ```
 
-The order in production today (not all executors are wired yet): stop the `runtime` executors (only
-the scheduler so far) -> `cleanup()`: stop HTTP -> stop the netlink receive thread -> close inotify
--> close the history database -> remove the PID file (`src/daemon/main.rs`).
+The order in production after 2.I: `main` blocks on the terminate token -> stop the `runtime`
+executors (the inbound executor stops first, then the kernel poller, consumer and reactor, and the
+scheduler last) -> `cleanup()`: stop HTTP -> close the history database -> remove the PID file
+(`src/daemon/main.rs`). `close_history_db` itself joins the writer thread and flushes everything
+already queued, so "in-flight events are written only after netlink stopped" follows from that
+order.
 
 ## Module Layout (by data ownership)
 
@@ -141,6 +153,8 @@ else is injected at construction time.
 | `decision/window.rs` | Per-jail failure timestamp window | `observe(ip, ts) -> Verdict`, owned by one executor, lock-free |
 | `decision/policy.rs` | None (pure functions) | Effective threshold, progressive duration, ban plan |
 | `pipeline/mod.rs` | Per-jail rules/windows plus per-source splitters | `on_chunk(...)` -> `Vec<BanIntent>`; stops at the intent, does not send |
+| `pipeline/executor.rs` | Inbound-chain runtime: config, source table, readers, timers | `cfg()` for composition-root assembly parameters; `run(stop, terminate)` drives the four segments on one thread |
+| `signal/mod.rs` | `signalfd` (blocks the four signals) | `SignalFd::new` / `poll_read`; restores the mask on drop |
 | `kernel/codec/` | None | Bytes <-> semantic types, consuming the contract generated code |
 | `kernel/transport.rs` | netlink socket (single writer) | Send one payload, receive one datagram |
 | `kernel/reactor.rs` | In-flight request table plus routing state machine | Route by **type + seq**; unknown, failed and unclaimed replies are all counted |
@@ -165,31 +179,39 @@ The order in `main()` (`src/daemon/main.rs`):
 
 ```mermaid
 graph TB
-    A["CLI parsing (--help returns immediately / --rollback takes the rollback branch)"] --> B["Load config (file or directory) plus strict-mode validation"]
-    B --> C["Smart defaults plus config_validate plus caching trusted_ips / capacity"]
-    C --> D{"daemon mode?"}
-    D -->|Yes| E["Double fork + setsid + chdir / + PID + fd redirection"]
-    D -->|No| F["Initialise logging (after daemonization)"]
-    E --> F
-    F --> G["procfs pre-checks: /proc/firewall and /proc/firewall/bans must exist"]
-    G --> H["setup_signals"]
-    H --> I["setup_inotify (watch every log file of every enabled jail)"]
-    I --> J["jail::init_log_patterns plus history_snapshot::init_history_db"]
-    J --> K["NetlinkContext::new"]
-    K --> L["Inject state::State plus assemble the Supervisor and the runtime scheduler"]
-    L --> M["Start the netlink stats polling thread (1 s; a full LIST bans reconciliation every 60 ticks)"]
-    M --> N["Start the HTTP service (when metrics_port > 0)"]
-    N --> O["Enter file_monitor::monitor_loop"]
+    A["CLI parsing (--help returns immediately / --rollback takes the rollback branch)"] --> B["Block the four signals and create the SignalFd plus ignore_sigpipe (must precede any thread)"]
+    B --> C["Load config (file or directory) plus strict-mode validation"]
+    C --> D["Smart defaults plus config_validate plus caching trusted_ips / capacity"]
+    D --> E{"daemon mode?"}
+    E -->|Yes| F["Double fork + setsid + chdir / + PID + fd redirection"]
+    E -->|No| G["Initialise logging (after daemonization)"]
+    F --> G
+    G --> H["procfs pre-checks: /proc/firewall and /proc/firewall/bans must exist"]
+    H --> I["jail::init_log_patterns plus history_snapshot::init_history_db"]
+    I --> J["Assemble the InboundExecutor (compile rule sets + install inotify watches; failing to watch any source fails startup)"]
+    J --> K["Open the kernel netlink socket plus inject state::State"]
+    K --> L["Assemble the Supervisor and the runtime scheduler; register the kernel receive/consumer/poller executors"]
+    L --> M["Start the HTTP service (when metrics_port > 0)"]
+    M --> N["Register the inbound executor plus block the main thread on the terminate token"]
 ```
 
 Ordering constraints that have explicit reasons, not habits:
 
+- **Signals are blocked before any thread exists**: blocking is a thread property and a new thread
+  inherits the creator's mask. The `SignalFd` is created before the config is loaded, so the logger,
+  HTTP and every executor thread started afterwards inherit "already blocked" and signals always
+  land in the fd; the daemonization `fork` does not `exec`, so fd and mask both survive it.
 - **Logging is initialised after daemonization**: `fork` loses the async logging thread, so the
   `cfg.daemon` branch runs `daemonize_process()` first and `logger::init_logger(cfg.log_file)`
   afterwards.
+- **Config ownership sits in the inbound executor**: it is the only thread that mutates the config
+  (automatic reload / rollback / enabled-state sync) and the composition root reads assembly
+  parameters through `InboundExecutor::cfg()`, so reload cannot fork a second copy.
 - **The state layer is injected before the netlink receive thread starts**: bans, whitelist and
   stats query responses arriving at startup land in the new state from inside that thread, and
   injecting one step later loses that batch (comment in the `main.rs` composition root).
+- **Finding no watchable log source fails startup**: a wrong config, insufficient permissions or an
+  unloaded kernel module must not leave behind a process that "looks fine but never decides".
 - **A failed scheduler assembly only warns, it never panics**: without it the SSE `stats` domain
   stops refreshing on its own and expired bans can only self-heal through kernel `UNBAN` events,
   while the ban main chain keeps working.
@@ -398,19 +420,21 @@ cannot be opened it falls back to stderr (using `dup` to copy fd 2, leaving the 
 untouched). The `log_destination` / `log_format` fields still exist in the configuration structs,
 but the current logger only implements "JSON Lines to a file" and does not read them.
 
-**Signals** (the implementation in production today, `signals.rs`):
+**Signals** (the implementation in production today, `signal/mod.rs`):
 
 | Signal | Behaviour |
 |--------|-----------|
-| `SIGTERM` / `SIGINT` | Set the exit flag; the main loop shuts down gracefully and cleans up |
-| `SIGHUP` | Set the reload flag; the main loop triggers a config hot reload |
-| `SIGUSR1` | Dump the current status to the log |
+| `SIGTERM` / `SIGINT` | The inbound executor reads it from the signalfd and sets the terminate token; the main thread wakes up and runs cleanup |
+| `SIGHUP` | Triggers a config hot reload (the executor reads the new config and then rescans its watches) |
+| `SIGUSR1` | Triggers a config rollback |
 | `SIGPIPE` | Ignored (an HTTP client disconnecting must not kill the process) |
 
-The old implementation deliberately avoids `SA_RESTART` and relies on `EINTR` interrupting `poll` to
-hand control back to the main loop - an implicit protocol. The new `signal/` (`signalfd`) turns
-signals into ordinary fds polled together with inotify, with `SignalFd` blocking the four signals and
-restoring the mask on drop; that module is present but **not wired into production**.
+`SignalFd` blocks the four signals first and then creates the fd, turning signals into ordinary fds
+polled together with inotify, and restores the previous mask on drop. It no longer relies on the
+implicit `EINTR`-interrupts-`poll` protocol and has no global atomic flags written by a signal
+handler. **Blocking is a thread property**, so `main.rs` creates the `SignalFd` before any thread
+exists (the logger thread, HTTP and every executor start after it); the `fork` in daemonization
+loses neither the fd nor the mask.
 
 ## Observability
 

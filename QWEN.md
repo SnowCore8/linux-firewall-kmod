@@ -71,8 +71,8 @@ linux-firewall-kmod/
 │       ├── api/                # HTTP/JSON API（routes/、SSE 推送、envelope 封装）
 │       ├── state/              # 内存状态（封禁/白名单/CIDR/速率/统计）
 │       ├── runtime/            # 运行时（通道/调度/关闭/定时器/监督）
-│       ├── file_monitor/       # inotify 日志监听与轮转检测
-│       ├── ingest/, pipeline/  # 日志读取与处理管线
+│       ├── ingest/, pipeline/  # 入站主链路（inotify 读取 + 装配执行体）
+│       ├── signal/             # signalfd 信号层（阻塞四个信号，与 inotify 同池 poll）
 │       ├── parse/, log_parser/ # 日志解析（正则/规则/切分/提取）
 │       ├── decision/           # DDoS 决策（ddos/policy/window）
 │       ├── ban/                # 封禁动作（校验 + netlink 投递）
@@ -265,18 +265,17 @@ perf(kmod): 优化速率检测使用平均速率
 
 ### 内存安全（Rust unsafe）
 
-unsafe 块集中在 netlink 传输、signalfd/sigaction 信号、守护进程化（fork/flock/fd）、
+unsafe 块集中在 netlink 传输、signalfd 信号、守护进程化（fork/flock/fd）、
 线格式指针访问、syslog、IP 地址操作、inotify/poll 封装等处。具体清单与块数以
 `grep -rn 'unsafe {' src/daemon` 为准：
 - `kernel/transport.rs` — netlink socket 的 open/bind/send/recv/close
 - `signal/mod.rs` — signalfd 读取 siginfo（信号转 fd）
 - `daemonizer.rs` — fork 守护进程化 / flock / fd 接管
 - `kernel/codec/mod.rs` — 线格式布局的指针访问
-- `signals.rs` — sigaction 信号处理器注册
 - `logger.rs` — syslog(3) 接入
 - `ip_utils.rs` — IP 地址原始操作
 - `ingest/watcher.rs` — inotify fd 读取
-- `file_monitor/monitor_loop.rs` — poll 系统调用封装
+- `pipeline/executor.rs` — poll 系统调用封装（inotify fd + signalfd 同池等待）
 
 **硬性要求**：
 - 每个 unsafe 块必须紧跟 `// SAFETY:` 注释

@@ -6,17 +6,22 @@
 //!
 //! # 架构概览
 //!
-//! - `main` (`main.rs`): 入口,负责 CLI 解析、信号注册、守护进程化与主循环调度
+//! - `main` (`main.rs`): 入口,负责 CLI 解析、信号层装配、守护进程化与组合根装配/关停
 //! - `types`: 跨模块共享的数据结构 (`Jail` / `Config` / `FailedEntry` / `DaemonStats`)
 //!   以及系统级常量
 //! - `logger`: 基于 slog 的结构化日志系统 (异步终端输出)
 //! - `ban`: 通过 netlink 与内核模块通信,支持 IPv4/IPv6 封禁、解封、
 //!   永久黑名单同步
-//! - `log_parser`: 从日志行提取 IP (正则 + 字符串回退)
-//! - `failed_tracker`: 滑动窗口失败计数与封禁触发 (O(1) 平均复杂度)
+//! - `log_parser` / `failed_tracker`: **不在生产路径**（生产走 `parse` / `decision`）。
+//!   自 2.I 起仅作为新旧等价对照的参照实现保留，只被 `parse::*` / `decision::window`
+//!   的 `#[cfg(test)]` 断言引用；生产调用者（旧 `file_monitor/processor.rs`）已退役
 //! - `jail`: 服务名智能匹配 + 智能默认参数推断 + `ReDoS` 防护正则编译 + 配置克隆
 //! - `config`: YAML 解析 (严格模式 key 白名单 + 路径安全 3 重检查 + 失败回滚)
-//! - `file_monitor`: inotify 文件监控 + 轮转检测 + 主事件循环 (poll + SIGHUP 重载)
+//! - `ingest` / `parse` / `decision` / `pipeline`: 入站主链路四段(按源增量读 →
+//!   行切分与规则匹配 → 阈值与封禁计划 → 装配体);生产入口是
+//!   `pipeline::executor::InboundExecutor`,由 `main.rs` 装配为一个执行体
+//! - `runtime` / `signal`: 执行体骨架 (`Supervisor` / `TimerTable` / `Shutdown`) 与
+//!   `signalfd` 信号层
 //! - `http_exporter`: Prometheus `/metrics` 端点 + Basic Auth + 暴力破解防护
 //! - `web_ui`: Web 监控大盘 + JSON API（静态资源嵌入）
 //!
@@ -39,24 +44,23 @@
 //!
 //! | 类别 | static | 说明 |
 //! |------|--------|------|
-//! | 信号控制 | `GLOBAL_RUNNING` / `GLOBAL_RELOAD` | 信号处理函数写，主循环读 |
-//! | 文件监控 | `FILE_STATES` / `INOTIFY_STATE` | 主循环独占读写 |
 //! | 封禁缓存 | `ACTIVE_BAN_CACHE` (OnceLock) | 启动时初始化，运行时 ban/unban 操作 |
 //! | 统计计数 | `DAEMON_STATS` / `JAIL_STATS` / `DDOS_STATS` / `BAN_DURATION_BUCKETS` | 全 Atomic，Relaxed 序 |
+//! | 历史快照 | `LAST_SNAPSHOT_STATS` (Mutex) | 入站执行体独占读写 |
 //! | HTTP 导出 | `EXPORTER_RUNNING` / `EXPORTER_PORT` / `AUTH_STATE` | 导出器线程 + auth 逻辑 |
 //! | 基础设施 | `GLOBAL_LOGGER` / `SYNC_DIRTY` | 日志 / 同步标志 |
+//!
+//! 信号不再是全局 static：`signal::SignalFd`（`signalfd`）把信号变成普通 fd，
+//! 由入站执行体与 inotify fd 并入同一个 `poll` 等待，不再有信号处理函数写的原子标志。
 //!
 //! ## 锁获取顺序（防死锁）
 //!
 //! 当需要同时获取多把锁时，必须按以下顺序获取：
 //!
 //! ```text
-//! 1. GLOBAL_RUNNING / GLOBAL_RELOAD       (AtomicBool, 无锁竞争)
-//! 2. FILE_STATES.read() / .write()        (RwLock)
-//! 3. INOTIFY_STATE.fd.write()             (RwLock)
-//! 4. ACTIVE_BAN_CACHE.bans.write()        (RwLock, 内部)
-//! 5. ACTIVE_BAN_CACHE.by_jail.write()     (RwLock, 内部)
-//! 6. JAIL_STATS.write()                   (RwLock, OnceLock 内部)
+//! 1. ACTIVE_BAN_CACHE.bans.write()        (RwLock, 内部)
+//! 2. ACTIVE_BAN_CACHE.by_jail.write()     (RwLock, 内部)
+//! 3. JAIL_STATS.write()                   (RwLock, OnceLock 内部)
 //! ```
 //!
 //! **规则**：
@@ -73,7 +77,6 @@ pub mod contract;
 pub mod daemonizer;
 pub mod decision;
 pub mod failed_tracker;
-pub mod file_monitor;
 pub mod history_snapshot;
 pub mod http_exporter;
 pub mod inbound;
@@ -83,16 +86,13 @@ pub mod ip_utils;
 pub mod jail;
 pub mod kernel;
 pub mod kernel_poll;
-pub mod line_processor;
 pub mod log_parser;
-pub mod log_rotation;
 pub mod logger;
 pub mod parse;
 pub mod pipeline;
 pub mod runtime;
 pub mod runtime_status;
 pub mod signal;
-pub mod signals;
 pub mod state;
 pub mod types;
 pub mod web_ui;

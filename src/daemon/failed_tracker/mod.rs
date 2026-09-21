@@ -9,11 +9,14 @@
 //!
 //! # 数据流
 //!
-//! 1. [`crate::file_monitor::process_single_line`] 解析日志行得到 IP
+//! 1. 日志行解析出 IP（旧路径 `file_monitor::process_single_line`，随 2.I 退役）
 //! 2. 调 [`handle_failed_attempt_for_jail`] 累计 `FailedEntry.timestamps`
 //! 3. [`count_recent`] 统计窗口内失败次数
 #![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 //! 4. 达到 `max_retries` 时调 [`crate::ban::ban_ip`] 封禁,成功后清理条目
+//!
+//! **本模块已不在生产路径上**：2.I 之后失败窗口归 [`crate::pipeline::Pipeline`]
+//! （内部用 [`crate::decision::window`]），本模块保留给新旧行为对照测试。
 //!
 //! # 关键优化 (R9-7)
 //!

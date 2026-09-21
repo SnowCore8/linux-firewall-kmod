@@ -28,6 +28,21 @@ pub fn is_peak_hours(hour_utc: u32) -> bool {
     (9..18).contains(&hour_utc)
 }
 
+/// 当前是否处于业务高峰期（读真实 UTC 时钟）。
+///
+/// 判定规则委托给 [`is_peak_hours`]：**基线上调**与**判定层是否处于高峰期**必须是
+/// 同一条规则，否则两处会各自漂移。旧实现放在已退役的
+/// `file_monitor/monitor_loop.rs`，改配置阈值前先看这里。
+#[must_use]
+pub fn is_baseline_peak_hours() -> bool {
+    let now_hour = chrono::Utc::now()
+        .format("%H")
+        .to_string()
+        .parse::<u32>()
+        .unwrap_or(0);
+    is_peak_hours(now_hour)
+}
+
 /// 信誉分 → 阈值系数：分越高越宽松。
 #[must_use]
 pub fn reputation_multiplier(score: u32) -> f64 {

@@ -45,7 +45,8 @@ pub const MAX_JAILS: usize = 32;
 /// - `recent_head` 标记已确认过期的前缀起点,`count_recent` 从该点开始扫描
 ///   实现滑动窗口的 O(1) 平均复杂度 (R9-7 优化)
 ///
-/// 典型使用流程见 [`crate::failed_tracker::handle_failed_attempt_for_jail`].
+/// 典型使用流程见 [`crate::failed_tracker::handle_failed_attempt_for_jail`]（该模块随 2.I
+/// 退出生产路径，只留给新旧行为对照测试；生产路径的失败窗口见 [`crate::pipeline::Pipeline`]）。
 use std::collections::VecDeque;
 
 /// 失败尝试条目: 记录单个 IP 的失败历史

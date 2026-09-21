@@ -169,7 +169,7 @@ pub fn handle_failed_attempt_for_jail(jail: &Jail, ip: &str, max_retries: u32, f
     let now = now_secs();
 
     // 按时间段放宽阈值：业务高峰期（9-18 点 UTC）× 1.5
-    let is_peak_hours = crate::file_monitor::monitor_loop::is_baseline_peak_hours();
+    let is_peak_hours = crate::decision::is_baseline_peak_hours();
     let peak_hours_multiplier = if is_peak_hours { 1.5 } else { 1.0 };
 
     // 按来源放宽阈值：内网 IP × 2.0，外网 IP × 1.0

@@ -22,7 +22,7 @@ pub mod window;
 
 pub use ddos::DdosDecisionEngine;
 pub use policy::{
-    effective_threshold, is_internal, is_peak_hours, plan_ban, progressive_duration,
-    reputation_multiplier, BanPlan,
+    effective_threshold, is_baseline_peak_hours, is_internal, is_peak_hours, plan_ban,
+    progressive_duration, reputation_multiplier, BanPlan,
 };
 pub use window::{FailureWindow, Verdict, MAX_TIMESTAMPS_PER_IP};

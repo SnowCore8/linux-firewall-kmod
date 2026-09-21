@@ -128,25 +128,25 @@ bool fw_wl_lookup(u8 af, const void *ip) {
 
 ## Ban Event Flow
 
-The diagram below is the **currently running production path**: the daemon is driven by the `file_monitor` main loop (`setup_inotify` is started at `src/daemon/main.rs:193`; the `monitor_loop` main loop is called at `src/daemon/main.rs:429` and defined in `src/daemon/file_monitor/monitor_loop.rs:77`). The `ingest/` (inotify watching and per-source incremental reads), `parse/` (line splitting and rule matching), `decision/` (thresholds and ban intents) and `pipeline/` (which wires the three layers together and stops at `BanIntent`) layers exist but are **not wired in**: `pipeline` is declared in `lib.rs` with no production caller, and the composition root has not yet assembled `pipeline -> kernel` (`src/daemon/pipeline/mod.rs:7-8`).
+The diagram below is the **currently running production path**: `main.rs` first creates the `SignalFd` (`src/daemon/main.rs:127`; the signals must be blocked before any thread is created), then assembles the inbound executor `pipeline::executor::InboundExecutor` (`src/daemon/main.rs:230`) and hands it to the `Supervisor` (`src/daemon/main.rs:420`). That executor is the single assembly point for the four segments `ingest` (inotify + per-source incremental reads) -> `parse` (line splitting and rule matching) -> `decision` (thresholds and ban plans) -> `pipeline` (the assembly); one **single** thread drives them sequentially and the signal fd is polled together with the inotify fd (`src/daemon/pipeline/executor.rs:263`). The legacy `file_monitor/`, `signals.rs`, `log_rotation.rs` and `line_processor.rs` were retired in this batch.
 
 ```mermaid
 sequenceDiagram
     participant Log as Log file
-    participant FM as file_monitor main loop
-    participant LP as line_processor
-    participant FT as failed_tracker
+    participant EX as pipeline::executor::InboundExecutor
+    participant Pipe as pipeline (assembly)
+    participant Win as decision (window + policy)
     participant Ban as ban layer
     participant Kernel as Kernel module
 
-    Log->>FM: inotify MODIFY / CLOSE_WRITE / ATTRIB
-    FM->>FM: read new bytes by offset (256KB batches)
-    FM->>LP: process_lines_in_buffer splits on newlines
-    LP->>LP: log_parser regex match + IP validation
-    LP->>FT: handle_failed_attempt_for_jail
-    FT->>FT: sliding window accumulates failures + effective threshold (time-of-day/source/reputation factors)
-    FT->>Ban: threshold reached -> ban::ban_ip
-    Ban->>Kernel: netlink BAN_IP (duration, reason)
+    Log->>EX: inotify MODIFY / CLOSE_WRITE / ATTRIB
+    EX->>EX: read new bytes by offset (long-lived fd + reused buffer per source)
+    EX->>Pipe: on_chunk splits on newlines (partial line stays buffered)
+    Pipe->>Pipe: rule matching + IP extraction and reserved-range validation
+    Pipe->>Win: observe accumulates failures + effective_threshold (time-of-day/source/reputation factors)
+    Pipe-->>EX: threshold reached -> BanIntent
+    EX->>Ban: ban::ban_ip (duration, reason = jail name)
+    Ban->>Kernel: netlink BAN_IP
     Kernel->>Kernel: fw_ban_try_add: whitelist pre-check + flood gate + capacity check + insert
     Kernel-->>Ban: netlink BAN_STATE_CHANGE (BAN acknowledgement + live statistics)
     Ban->>Ban: recorded in the ban cache and Prometheus /metrics
@@ -154,9 +154,11 @@ sequenceDiagram
 
 Key facts:
 
-- The watch mask is `MODIFY | ATTRIB | CLOSE_WRITE | MOVE_SELF | DELETE_SELF` (`src/daemon/file_monitor/watch_mask.rs:10-16`). Log content changes are read on the first three (`src/daemon/file_monitor/monitor_loop.rs:263-267`), while `MOVE_SELF` / `DELETE_SELF` trigger re-attaching to the new inode after rotation (`src/daemon/file_monitor/monitor_loop.rs:276-281`).
-- The effective threshold is not the raw configured `max_retries`, but the result of applying the time-of-day (peak x1.5), source (private network x2.0) and reputation-score factors (`src/daemon/failed_tracker/tracking.rs:183-196`).
-- The daemon keeps only application-layer detection (e.g. SSH brute force); network-layer DDoS detection has moved down into the kernel hook (`src/daemon/line_processor.rs:71-72`), and a kernel self-ban is pushed out as `DDOS_EVENT`.
+- The watch mask is `MODIFY | ATTRIB | CLOSE_WRITE | MOVE_SELF | DELETE_SELF` (`src/daemon/ingest/watcher.rs:27`). Log content changes trigger reads (`drain_source` at `src/daemon/pipeline/executor.rs:399` via `read_new` at `src/daemon/ingest/reader.rs:111`), while `MOVE_SELF` / `DELETE_SELF` trigger rotation handling that re-attaches to the new inode (`src/daemon/pipeline/executor.rs:500`).
+- A source's identity is the stable `SourceId`, no longer a `Vec<FileState>` index (`src/daemon/ingest/registry.rs`); each source holds a long-lived fd plus a reused read buffer and feeds whole batches to the decision layer.
+- The effective threshold is not the raw configured `max_retries`, but the result of applying the time-of-day (peak x1.5), source (private network x2.0) and reputation-score factors (`src/daemon/decision/policy.rs:80`); the failure is recorded before the reputation score is read, and that order is part of the semantics (`src/daemon/pipeline/mod.rs:352`).
+- The daemon keeps only application-layer detection (e.g. SSH brute force); network-layer DDoS detection has moved down into the kernel hook, and a kernel self-ban is pushed to the consumer as `DDOS_EVENT` (`src/daemon/inbound.rs:185`).
+- Periodic maintenance lives in two places with a single owner each: on the inbound side (failure-window cleanup, watch rescan, history snapshot, data cleanup) the inbound executor's own monotonic-clock timer table drives them (`src/daemon/pipeline/executor.rs:844`), while the kernel side (counter mirroring, expired-ban purge) is driven by `runtime::spawn_periodic`.
 - The kernel-side ban entry point is unified: procfs, netlink and DDoS self-ban all go through `fw_ban_try_add()` (whitelist pre-check -> flood gate -> capacity check) (`src/kernel-module/fw_ban.c:335-357`).
 
 ## Unban Event Flow

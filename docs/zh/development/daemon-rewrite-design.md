@@ -518,8 +518,8 @@ sequenceDiagram
 | 阶段 | 状态 |
 |------|------|
 | 2.A 契约修订 | 已完成 |
-| 2.B 运行时骨架 | 已完成（`signal/mod.rs` 的 signalfd 层**已就位但未接入生产**，见下「2.I」） |
-| 2.C 主链路重写 | 已完成（`ingest/` `parse/` `decision/` `pipeline/` **已就位但未接入生产**，见下「2.I」） |
+| 2.B 运行时骨架 | 已完成（`signal/mod.rs` 的 signalfd 层已由 2.I 接入生产） |
+| 2.C 主链路重写 | 已完成（`ingest/` `parse/` `decision/` `pipeline/` 已由 2.I 接入生产） |
 | 2.D `kernel` 层重写 | 已完成 |
 | 2.E-1 `state/cidr.rs` + `state/hub.rs` | 已完成 |
 | 2.E-2 `state/{bans,whitelist,rates,stats,mod}.rs` | 已完成 |
@@ -536,29 +536,31 @@ sequenceDiagram
 | 2.H-3 生产切换（`main.rs` 原子装配 + 调用点重指） | 已完成（`e6626c7`） |
 | 2.H-4 退役旧 `netlink/` + M 棘轮翻转 | 已完成（`600b097`） |
 | 2.H-5 文档（`daemon.md` 状态/差距表） | 已完成（`7814d36` / `1aba8ef` / `44c4a6e`） |
-| 2.I 入站主链路切换（`ingest`→`parse`→`decision`→`pipeline` 接入 `main.rs`，退役 `file_monitor` 旧循环） | **未开始** |
+| 2.I 入站主链路切换（`ingest`→`parse`→`decision`→`pipeline` 接入 `main.rs`，退役 `file_monitor` 旧循环） | **已完成** |
 
-### 2.I 未开始：入站主链路仍未切换
+### 2.I 已完成：入站主链路已切换
 
-出站侧已切完（2.H-3 `e6626c7` 把 netlink 换到 `kernel/`，旧 `crate::netlink` 随 2.H-4 退役），
-但**入站侧仍是旧实现**：
+入站侧与出站侧（2.H-3 `e6626c7` 把 netlink 换到 `kernel/`）现在都是新实现：
 
-| | 已建成 | 生产实际跑的 |
+| | 旧实现（已退役） | 生产实际跑的 |
 |---|---|---|
-| 日志入口 | `ingest/`（inotify + 每源增量读） | `file_monitor/`（`setup_inotify` `main.rs:193`、`monitor_loop` `main.rs:429`） |
-| 行切分与规则匹配 | `parse/` | `file_monitor` 内联 |
-| 阈值与封禁意图 | `decision/` | `file_monitor` 内联 |
-| 三层装配 | `pipeline/mod.rs` | 无（未接入） |
-| 信号层 | `signal/mod.rs`（signalfd） | `signals.rs`（sigaction + 全局原子布尔 + 未用 `SA_RESTART`） |
+| 日志入口 | `file_monitor/`（`setup_inotify` / `monitor_loop`） | `pipeline::executor::InboundExecutor`（inotify `Watcher` + 每源 `SourceReader` 增量读） |
+| 行切分与规则匹配 | `line_processor.rs` + `log_parser/` 内联 | `parse/`（`LineSplitter` + `RuleSet`） |
+| 阈值与封禁意图 | `failed_tracker/` + `file_monitor` 内联 | `decision/`（`FailureWindow` + `policy`） |
+| 三层装配 | 无 | `pipeline/mod.rs`（`on_chunk` → `Vec<BanIntent>`） |
+| 轮转处理 | `log_rotation.rs` | `pipeline::executor` 的 `handle_rotation` / `reconcile_watches` |
+| 信号层 | `signals.rs`（sigaction + 全局原子布尔 + 未用 `SA_RESTART`） | `signal/mod.rs`（`signalfd`，与 inotify 同池 `poll`） |
 
-新三层有 68 条与旧实现的逐案对照断言（2.C 证据），但**没有一个生产调用点**；`pipeline` 在
-`lib.rs` 声明之外无人引用，`signal/mod.rs` 同样零导入。也就是说 2.B / 2.C 的产物处于
-「编译通过、测试通过、不参与运行」的状态。
+组合根（`src/daemon/main.rs`）的实际形态：建 `SignalFd`（在任何线程创建之前）→ 装配
+`InboundExecutor`（编译规则集 + 挂 inotify watch，一个源都挂不上即启动失败）→ 登记进
+`Supervisor` → 主线程阻塞在终止令牌上。四段由**一个**执行体顺序驱动；设计文档「运行时模型」
+里的 ingest/parse 线程拆分**不在本批次**，拆分的归属问题（谁来拥有分片器）记录在
+`pipeline/executor.rs` 的模块文档里。
 
 **为什么单列成一项**：这是原计划里唯一没有编号跟踪的缺口——2.H 只覆盖出站（netlink）侧，
-入站侧从未排期，所以进度表 2.A–2.H-5 全「已完成」并不等于链路已换新。验收口径按新链路
-接管入站后：旧 `file_monitor` 与 `signals.rs` 退役、`signal/mod.rs` 与 `pipeline` 进入生产，
-且 `data-flow.md` 的「当前生产路径」一节随之改写（该节现在明确写着新三层「已就位但未接入」）。
+入站侧从未排期。验收口径按新链路接管入站后：旧 `file_monitor/`、`signals.rs`、
+`log_rotation.rs`、`line_processor.rs` 退役，`signal/mod.rs` 与 `pipeline` 进入生产，
+`data-flow.md` 的「当前生产路径」一节随之改写为指向新装配点。
 
 ### 2.A 落地明细
 

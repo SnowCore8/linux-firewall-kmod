@@ -24,8 +24,8 @@
 //!
 //! # 下发通道（结构问题 L）
 //!
-//! 旧实现有两条并行的 `SetConfig` 构造路径：本模块一条，`file_monitor/monitor_loop.rs`
-//! 的基线下发另一条（自建 `ConfigUpdate`，绕开这里）。现在两条都收敛到
+//! 旧实现有两条并行的 `SetConfig` 构造路径：`file_monitor/monitor_loop.rs`（已删除）
+//! 的基线下发一条（自建 `ConfigUpdate`，绕开本模块），本模块一条。现在两条都收敛到
 //! [`crate::kernel::client::Client::set_config`]——字段集合、字节序、采纳/拒绝位图的
 //! 处理只有一处实现。周期任务（[`crate::kernel_poll`]）与本模块共同构成内核配置的
 //! 全部写入入口。

@@ -38,7 +38,8 @@ pub fn parse_log_line(jail: &Jail, line: &str) -> Option<String> {
 
 /// 顶层入口:解析 + 校验 + 累加统计。
 ///
-/// 供 [`crate::file_monitor::process_single_line`] 调用,完成"行 → IP"全过程。
+/// 完成"行 → IP"全过程;新主链路走 [`crate::parse::rules::RuleSet::parse`]，
+/// 本函数留给行为对照测试（与 [`crate::parse`] 的逐案比对）。
 ///
 /// # Arguments
 /// - `jail`: 用于匹配的正则集

@@ -323,7 +323,7 @@ fn calculate_threat_level(current_bans: u64, ddos_events: u64, recent_bans: u64)
         ban_table_usage,
         recent_bans,
         baseline_frozen: crate::types::is_baseline_frozen(),
-        peak_hours: crate::file_monitor::monitor_loop::is_baseline_peak_hours(),
+        peak_hours: crate::decision::is_baseline_peak_hours(),
     }
 }
 

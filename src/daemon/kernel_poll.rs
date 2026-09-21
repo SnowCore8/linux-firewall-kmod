@@ -354,7 +354,7 @@ impl Poller {
             return;
         }
 
-        let (pps, bps) = if crate::file_monitor::is_baseline_peak_hours() {
+        let (pps, bps) = if crate::decision::is_baseline_peak_hours() {
             (pps * 3 / 2, bps * 3 / 2)
         } else {
             (pps, bps)

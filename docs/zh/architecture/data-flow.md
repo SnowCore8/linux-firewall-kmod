@@ -125,25 +125,25 @@ bool fw_wl_lookup(u8 af, const void *ip) {
 
 ## 封禁事件流
 
-下图是**当前生产路径**：守护进程由 `file_monitor` 主循环驱动（`setup_inotify` 在 `src/daemon/main.rs:193` 启动，主循环 `monitor_loop` 在 `src/daemon/main.rs:429` 调用、定义于 `src/daemon/file_monitor/monitor_loop.rs:77`）。`ingest/`（inotify 监视与按源增量读取）、`parse/`（行切分与规则匹配）、`decision/`（阈值与封禁意图）、`pipeline/`（把三层接起来，止于 `BanIntent`）已就位但**未接入**：`pipeline` 在 `lib.rs` 中声明后没有生产调用点，组合根尚未装配 `pipeline → kernel`（`src/daemon/pipeline/mod.rs:7-8`）。
+下图是**当前生产路径**：`main.rs` 先建 `SignalFd`（`src/daemon/main.rs:127`，必须在任何线程创建之前阻塞信号），再装配入站执行体 `pipeline::executor::InboundExecutor`（`src/daemon/main.rs:230`）并交给 `Supervisor` 托管（`src/daemon/main.rs:420`）。该执行体是 `ingest`（inotify + 按源增量读）→ `parse`（行切分与规则匹配）→ `decision`（阈值与封禁计划）→ `pipeline`（装配体）四段的唯一装配点，四段由**一个**线程顺序驱动，信号 fd 与 inotify fd 在同一个 `poll` 上等待（`src/daemon/pipeline/executor.rs:263`）。旧 `file_monitor/`、`signals.rs`、`log_rotation.rs`、`line_processor.rs` 已随本批次退役。
 
 ```mermaid
 sequenceDiagram
     participant Log as 日志文件
-    participant FM as file_monitor 主循环
-    participant LP as line_processor
-    participant FT as failed_tracker
+    participant EX as pipeline::executor::InboundExecutor
+    participant Pipe as pipeline（装配体）
+    participant Win as decision（窗口+策略）
     participant Ban as ban 层
     participant Kernel as 内核模块
 
-    Log->>FM: inotify MODIFY / CLOSE_WRITE / ATTRIB
-    FM->>FM: 按 offset 读取新增字节（256KB 批量）
-    FM->>LP: process_lines_in_buffer 按换行切行
-    LP->>LP: log_parser 正则匹配 + IP 校验
-    LP->>FT: handle_failed_attempt_for_jail
-    FT->>FT: 滑动窗口累计失败 + 有效阈值（时段/来源/信誉系数）
-    FT->>Ban: 达阈值 → ban::ban_ip
-    Ban->>Kernel: netlink BAN_IP（时长、原因）
+    Log->>EX: inotify MODIFY / CLOSE_WRITE / ATTRIB
+    EX->>EX: 按 offset 读取新增字节（每源长驻 fd + 复用缓冲）
+    EX->>Pipe: on_chunk 按换行切行（半行留缓冲）
+    Pipe->>Pipe: 规则匹配 + IP 提取与保留段校验
+    Pipe->>Win: observe 累计失败 + effective_threshold（时段/来源/信誉系数）
+    Pipe-->>EX: 达阈值 → BanIntent
+    EX->>Ban: ban::ban_ip（时长、原因=jail 名）
+    Ban->>Kernel: netlink BAN_IP
     Kernel->>Kernel: fw_ban_try_add：白名单前检 + 泛洪闸门 + 容量检查 + 插入
     Kernel-->>Ban: netlink BAN_STATE_CHANGE（BAN 回执 + 实时统计）
     Ban->>Ban: 计入封禁缓存与 Prometheus /metrics
@@ -151,9 +151,11 @@ sequenceDiagram
 
 关键事实：
 
-- 监听掩码是 `MODIFY | ATTRIB | CLOSE_WRITE | MOVE_SELF | DELETE_SELF`（`src/daemon/file_monitor/watch_mask.rs:10-16`）。日志内容变更由前三者触发读取（`src/daemon/file_monitor/monitor_loop.rs:263-267`），`MOVE_SELF` / `DELETE_SELF` 触发轮转后重挂新 inode（`src/daemon/file_monitor/monitor_loop.rs:276-281`）。
-- 有效阈值不是配置里的 `max_retries` 原值，而是叠加时段（高峰 ×1.5）、来源（内网 ×2.0）与信誉分系数后的结果（`src/daemon/failed_tracker/tracking.rs:183-196`）。
-- 守护进程只保留应用层检测（如 SSH 暴力破解）；网络层 DDoS 检测已下沉到内核钩子（`src/daemon/line_processor.rs:71-72`），内核自决封禁后经 `DDOS_EVENT` 推送。
+- 监听掩码是 `MODIFY | ATTRIB | CLOSE_WRITE | MOVE_SELF | DELETE_SELF`（`src/daemon/ingest/watcher.rs:27`）。日志内容变更触发读取（`src/daemon/pipeline/executor.rs:399` 的 `drain_source` 经 `src/daemon/ingest/reader.rs:111` 的 `read_new`），`MOVE_SELF` / `DELETE_SELF` 触发轮转处理并重挂新 inode（`src/daemon/pipeline/executor.rs:500`）。
+- 源的身份是稳定的 `SourceId`，不再用 `Vec<FileState>` 下标（`src/daemon/ingest/registry.rs`）；每个源持有长驻 fd 与复用读缓冲，读满一批即送判定。
+- 有效阈值不是配置里的 `max_retries` 原值，而是叠加时段（高峰 ×1.5）、来源（内网 ×2.0）与信誉分系数后的结果（`src/daemon/decision/policy.rs:80`）；判定前先记一次失败再取信誉分，顺序即语义（`src/daemon/pipeline/mod.rs:352`）。
+- 守护进程只保留应用层检测（如 SSH 暴力破解）；网络层 DDoS 检测已下沉到内核钩子，内核自决封禁经 `DDOS_EVENT` 推给消费体（`src/daemon/inbound.rs:185`）。
+- 周期维护分两处、各自独占：入站侧（失败窗口清理、watch 重扫、历史快照、数据清理）由入站执行体自己的单调时钟定时器表驱动（`src/daemon/pipeline/executor.rs:844`），内核侧（计数器镜像、过期封禁清理）由 `runtime::spawn_periodic` 驱动。
 - 内核侧封禁入口统一：procfs、netlink、DDoS 自决三条路径都走 `fw_ban_try_add()`（白名单前检 → 泛洪闸门 → 容量检查）（`src/kernel-module/fw_ban.c:335-357`）。
 
 ## 解封事件流

@@ -89,7 +89,7 @@ impl ConfigPort for LegacyConfigPort {
     }
 
     fn jails(&self) -> Vec<JailView> {
-        let peak = crate::file_monitor::monitor_loop::is_baseline_peak_hours();
+        let peak = crate::decision::is_baseline_peak_hours();
         let peak_multiplier = if peak { 1.5 } else { 1.0 };
         crate::http_exporter::get_global_jails()
             .into_iter()
@@ -188,7 +188,7 @@ impl HistoryPort for LegacyHistoryPort {
         ThreatInputs {
             current_pps: crate::types::get_rate_windows().pps_short,
             baseline_frozen: crate::types::is_baseline_frozen(),
-            peak_hours: crate::file_monitor::monitor_loop::is_baseline_peak_hours(),
+            peak_hours: crate::decision::is_baseline_peak_hours(),
         }
     }
 }

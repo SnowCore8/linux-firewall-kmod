@@ -1,26 +1,36 @@
-//! `firewall-daemon` 二进制入口:CLI 解析 → 配置加载 → 信号注册 → 守护进程化 → 主监控循环
+//! `firewall-daemon` 二进制入口:CLI 解析 → 配置加载 → 信号层 → 守护进程化 → 入站主链路
 //!
 //! # 启动流程
 //!
 //! 1. **CLI 解析** ([`config::parse_config_args`]):`--help` 时直接 `Ok(())` 退出
-//! 2. **配置加载** ([`config::parse_config_file`] / [`load_config_directory`]):支持文件 / 目录两种源
-//! 3. **智能默认 + 校验** ([`jail::apply_smart_defaults_to_all`] / [`jail::config_validate`])
-//! 4. **信号注册** ([`signals::setup_signals`]):SIGTERM/SIGINT 触发优雅退出、SIGHUP 触发热重载、SIGPIPE 忽略
+//! 2. **信号层** ([`signal::SignalFd::new`]):阻塞 SIGTERM/SIGINT/SIGHUP/SIGUSR1 并建 signalfd
+//! 3. **配置加载** ([`config::parse_config_file`] / [`load_config_directory`]):支持文件 / 目录两种源
+//! 4. **智能默认 + 校验** ([`jail::apply_smart_defaults_to_all`] / [`jail::config_validate`])
 //! 5. **procfs 前置检查**:`/proc/firewall` 存在性 + `/proc/firewall/bans` 存在性
-//!
-//! 7. **守护进程化** ([`daemonizer::daemonize_process`]):双 fork + setsid + chdir / + 写 PID + 重定向 fd
-//! 8. **inotify 启动** ([`file_monitor::setup_inotify`])
-//! 9. **Metrics 导出器启动** ([`http_exporter::start_http_exporter`])
-//! 10. **主循环** ([`file_monitor::monitor_loop`]):阻塞直到 `running=false`
-//! 11. **清理** ([`cleanup`]):停 HTTP → 停 runtime 执行体（含内核接收执行体）→ 关 inotify → 关 db → 删 PID 文件
+//! 6. **守护进程化** ([`daemonizer::daemonize_process`]):双 fork + setsid + chdir / + 写 PID + 重定向 fd
+//! 7. **入站主链路装配** ([`pipeline::executor::InboundExecutor::new`]):编译规则集 + 挂 inotify watch
+//! 8. **Metrics 导出器启动** ([`http_exporter::start_http_exporter`])
+//! 9. **入站执行体登记** + 主线程阻塞在终止令牌上（收到 SIGTERM/SIGINT 时由执行体置位）
+//! 10. **清理** ([`cleanup`]):停 HTTP → 停 runtime 执行体（含入站与内核链路）→ 关 db → 删 PID 文件
 //!
 //! # 关键不变量
 //!
-//! - **守护进程化前清 `reload` 标志**:避免该窗口期收到的 SIGHUP 在主循环首次检查时误触
-//! - **清理顺序**:先停 runtime 执行体（含内核接收执行体）,再关 db——否则停机窗口内的事件
-//!   会写进已关闭的写队列而被静默丢弃
+//! - **信号必须在建线程之前阻塞**:阻塞是线程属性，新线程继承创建者的掩码。`SignalFd`
+//!   在配置加载前创建，logger / HTTP / 执行体线程都在其后启动，故信号一律进 signalfd，
+//!   不会被未阻塞它的线程按默认动作处理（旧实现靠 `sigaction` + 全局原子标志）。
+//! - **配置所有权在入站执行体**:它是唯一改配置的线程（自动重载 / 回滚 / 启用状态同步），
+//!   组合根通过 [`pipeline::executor::InboundExecutor::cfg`] 读它装配其余组件。
+//! - **清理顺序**:先停 runtime 执行体（含入站与内核接收执行体）,再关 db——否则停机窗口内
+//!   的事件会写进已关闭的写队列而被静默丢弃
 //! - **PID 文件 `O_NOFOLLOW`**:防止符号链接攻击覆盖其他进程
 //! - **SIGPIPE 忽略**:HTTP 导出器在客户端断开时不应被信号杀死
+//!
+//! # 入站主链路（2.I）
+//!
+//! `ingest`（inotify + 按源增量读）→ `parse`（行切分 / 规则匹配）→ `decision`（阈值与
+//! 封禁计划）→ `pipeline`（装配体）→ `ban`（netlink 下发）。四段由**一个**执行体
+//! （[`pipeline::executor::InboundExecutor`]）顺序驱动，信号与 inotify 在同一个 `poll`
+//! 上等待；周期维护走单调时钟定时器，不再挂在 `poll` 超时上。
 //!
 //! # 内核链路（2.H-3）
 //!
@@ -47,7 +57,6 @@ use firewall_daemon::config;
 use firewall_daemon::config_reloader;
 use firewall_daemon::daemonizer::daemonize_process;
 use firewall_daemon::decision::DdosDecisionEngine;
-use firewall_daemon::file_monitor;
 use firewall_daemon::history_snapshot;
 use firewall_daemon::http_exporter;
 use firewall_daemon::inbound;
@@ -55,9 +64,10 @@ use firewall_daemon::jail;
 use firewall_daemon::kernel;
 use firewall_daemon::kernel_poll;
 use firewall_daemon::logger;
+use firewall_daemon::pipeline::executor::InboundExecutor;
 use firewall_daemon::runtime::{self, Shutdown, Supervisor};
 use firewall_daemon::runtime_status;
-use firewall_daemon::signals::{setup_signals, GLOBAL_RELOAD, GLOBAL_RUNNING};
+use firewall_daemon::signal::{ignore_sigpipe, SignalFd};
 use firewall_daemon::types::{Config, DAEMON_STATS};
 use firewall_daemon::web_ui;
 
@@ -66,20 +76,15 @@ const PROCFS_DIR: &str = "/proc/firewall";
 /// 内核模块封禁命令接口。启动期存在性检查
 const BANS_PATH: &str = "/proc/firewall/bans";
 
-/// 优雅清理：停 HTTP → 关 inotify → 关 db → 删 PID 文件。
+/// 优雅清理：停 HTTP → 关 db → 删 PID 文件。
 ///
-/// 顺序要求：内核链路的执行体必须在 `close_history_db` **之前**停止（由调用方在
+/// 顺序要求：内核链路与入站链路的执行体必须在 `close_history_db` **之前**停止（由调用方在
 /// `supervisor.shutdown` 里完成，其登记顺序即依赖顺序）。否则停机窗口内收到的事件会
 /// 写进已关闭的写队列（`enqueue_db_write` 报一次 warn 后丢弃），造成内存状态与磁盘
 /// 持久化不一致。`close_history_db` 自身会 join 写线程、把已入队的持久化全部落盘后才
 /// 关连接，故这里只需保证**没有新的生产者**即可。
-///
-/// # Arguments
-/// - `_cfg`：保留参数，占位
-fn cleanup(_cfg: &Config) {
+fn cleanup() {
     http_exporter::stop_http_exporter();
-    GLOBAL_RUNNING.store(false, Ordering::SeqCst);
-    file_monitor::close_inotify();
     history_snapshot::close_history_db();
     if let Err(e) = fs::remove_file("/run/firewall-daemon.pid") {
         crate::logger::debug!(
@@ -108,6 +113,22 @@ fn main() -> Result<()> {
     if rollback {
         return handle_rollback();
     }
+
+    // ---- 信号层：阻塞信号并建 signalfd（**必须在任何线程创建之前**）----
+    //
+    // 阻塞是**线程属性**：新线程继承创建者的掩码。此处 logger / HTTP / 各执行体线程
+    // 都还没起，掩码一装上，随后的所有线程都继承「这四个信号已被阻塞」，信号便一律
+    // 投进 signalfd，而不会被某个未阻塞它的线程按默认动作处理。
+    //
+    // 放在守护进程化之前是安全的：`daemonize_process` 只 fork + setsid（不 exec），
+    // fd 与信号掩码都随 fork 继承。这样守护进程化窗口内到达的 SIGHUP/SIGTERM 也不会
+    // 丢失——它们排在 fd 里，等主循环第一次 `poll` 时取走（旧实现靠守护进程化后
+    // 「清 reload 标志」来掩盖这个窗口）。
+    let signals = SignalFd::new()?;
+    // SIGPIPE 不交给 signalfd（写端断开用 EPIPE 报错更合适），单独置为 SIG_IGN：
+    // HTTP/SSE 客户端断开时不应把守护进程杀死。
+    ignore_sigpipe()?;
+
     let mut cfg = Config {
         strict_mode,
         ..Config::default()
@@ -142,10 +163,6 @@ fn main() -> Result<()> {
     // 应用动态阈值基线配置
     firewall_daemon::types::set_baseline_warmup_samples(cfg.ddos.baseline_warmup_samples);
 
-    // 重置全局标志（可能因为之前的运行而改变了）
-    GLOBAL_RUNNING.store(true, Ordering::Relaxed);
-    GLOBAL_RELOAD.store(false, Ordering::SeqCst);
-
     if !Path::new(PROCFS_DIR).exists() {
         bail!("Procfs directory not found");
     }
@@ -158,11 +175,9 @@ fn main() -> Result<()> {
     DAEMON_STATS.start_time.store(now, Ordering::Relaxed);
 
     if cfg.daemon {
-        // 守护进程化前不记录日志到文件，因为 fork 会导致异步日志线程丢失
+        // 守护进程化。fork 会导致异步日志线程丢失，故日志在 fork 之后才初始化；
+        // 信号层（signalfd）必须在其之前建好，见上方「信号层」一节。
         daemonize_process()?;
-        // 守护进程化后清 reload 标志, 防止该窗口期收到的 SIGHUP 在主循环首次检查时误触
-        // 对齐 C 版: 守护进程化期间用 sigaction(SIGHUP, SIG_IGN) 临时忽略
-        GLOBAL_RELOAD.store(false, Ordering::SeqCst);
     }
 
     // 在守护进程化之后初始化日志系统，确保异步日志线程正确运行
@@ -180,13 +195,6 @@ fn main() -> Result<()> {
     }
     info!(logger::get(), "firewall-daemon 启动"; "mode" => if cfg.daemon { "daemon" } else { "foreground" });
 
-    // 在守护进程化之后设置信号处理器，确保 fork 后信号处理正常工作
-    setup_signals()?;
-    info!(logger::get(), "信号处理器已注册");
-
-    file_monitor::setup_inotify(&cfg)?;
-    info!(logger::get(), "inotify 监控启动");
-
     for jail in cfg.jails.iter() {
         if jail.enabled {
             // jail 已启用
@@ -203,6 +211,24 @@ fn main() -> Result<()> {
     } else {
         info!(logger::get(), "历史数据库初始化成功");
     }
+
+    // ---- 组合根：装配入站主链路（2.I）----
+    //
+    // 旧实现把 inotify 装配放在 `file_monitor::setup_inotify`，把周期维护任务挂在
+    // `monitor_loop` 的 `poll` 超时分支上。现在整条入站链路由 `InboundExecutor` 独占：
+    // ingest（inotify + 按源增量读）→ parse（行切分 / 规则匹配）→ decision（阈值与
+    // 封禁计划）→ pipeline（装配体）四段由**一个**线程顺序驱动，信号与 inotify 合并在
+    // 同一个 `poll` 上等待，周期维护改走单调时钟定时器。
+    //
+    // 装配失败即启动失败：与旧 `setup_inotify` 的 `watched_count == 0` 同义——一个日志
+    // 源都挂不上（配置错 / 权限不足 / 内核模块未加载）时不该留一个「界面正常但永不算」
+    // 的进程。
+    //
+    // **配置所有权随之移入执行体**（它是唯一改配置的线程：自动重载 / 回滚 / 启用状态
+    // 同步）。组合根后续一律经 `executor.cfg()` 读装配参数，避免重载后两份配置分叉。
+    // 这也要求 `cfg` 的最后一次可变借用（`init_log_patterns`）在此行之前完成。
+    let executor = InboundExecutor::new(cfg, signals)?;
+    let cfg = executor.cfg();
 
     // 初始化内核通信链路（取代旧 `NetlinkContext`）：一条 socket + 一条接收执行体。
     //
@@ -252,9 +278,11 @@ fn main() -> Result<()> {
 
     // ---- 组合根：装配 runtime 骨架（supervisor + 单调时钟调度器）----
     //
-    // 周期维护任务（计数器镜像、过期封禁清理）从 `file_monitor::monitor_loop` 的 poll
-    // 超时分支迁到这里的单调时钟节拍上：准时性不再受事件到达影响（结构问题 A），
-    // 且 `Bans::purge_expired` 终于有了生产调用者（结构问题 E）。
+    // 周期维护任务（计数器镜像、过期封禁清理）从旧 `file_monitor::monitor_loop` 的
+    // poll 超时分支迁到这里的单调时钟节拍上：准时性不再受事件到达影响（结构问题 A），
+    // 且 `Bans::purge_expired` 终于有了生产调用者（结构问题 E）。入站侧的周期任务
+    // （失败窗口清理、watch 重扫、历史快照、数据清理）由入站执行体自己的 `TimerTable`
+    // 驱动——两处各自独占，无重复执行。
     //
     // 装配失败只降级警告、不 panic：调度器缺席时 SSE 的 `stats` 域不再自动刷新、
     // 过期封禁只能靠内核 UNBAN 事件自愈，但主链路（内核链路 / Web UI）照常工作。
@@ -267,7 +295,8 @@ fn main() -> Result<()> {
     // ---- 组合根：装配内核链路（Reactor / 消费体 / Client / 轮询执行体）----
     //
     // 登记顺序 = 依赖顺序（`Supervisor` 逆序关停）：接收执行体最先登记、最后停止，
-    // 因为它是「事件生产者」；消费体与轮询体都从它取数据。
+    // 因为它是「事件生产者」；消费体与轮询体都从它取数据。入站执行体在稍后登记，
+    // 故它比整条内核链路先停——两者之间没有队列依赖（入站只单向发指令）。
     if let Some(transport) = transport {
         // `event_channel` 同时产出：共享路由器（`Arc`）、事件接收端、队列统计、存活凭据。
         let (router, events, _queue_stats, liveness) =
@@ -363,7 +392,7 @@ fn main() -> Result<()> {
 
     let mut exporter_handle = None;
     if cfg.metrics_port > 0 {
-        exporter_handle = Some(http_exporter::start_http_exporter(cfg.metrics_port, &cfg));
+        exporter_handle = Some(http_exporter::start_http_exporter(cfg.metrics_port, cfg));
         // 等待 HTTP 服务启动（最多 500ms），检测启动失败
         std::thread::sleep(std::time::Duration::from_millis(200));
         if !http_exporter::is_exporter_running() {
@@ -375,26 +404,42 @@ fn main() -> Result<()> {
         }
     }
 
-    if let Err(e) = file_monitor::monitor_loop(&mut cfg, &GLOBAL_RUNNING, &GLOBAL_RELOAD) {
-        error!(logger::get(), "主循环异常退出"; "error" => %e);
+    // ---- 组合根：登记入站执行体 ----
+    //
+    // 登记顺序 = 依赖顺序（`Supervisor` 逆序关停）：入站执行体是**上游生产者**（唯一
+    // 的日志/封禁事件源），故登记在最后 ⇒ 关停时最先停。它的下游是持久化写线程——那个
+    // 线程不属于 supervisor，由 `close_history_db` 在**所有**执行体停完之后 join，所以
+    // 「上游先停、下游排空」这一不变量仍然成立。
+    //
+    // 它同时是让主线程醒来的一方：收到 SIGTERM/SIGINT（或链路异常）时置位终止令牌，
+    // 主线程便从 `terminate.wait()` 返回并进入清理。
+    let inbound_token = Shutdown::new();
+    let terminate = Shutdown::new();
+    let inbound_stop = inbound_token.clone();
+    let inbound_terminate = terminate.clone();
+    if let Err(e) = supervisor.spawn("inbound", inbound_token, move || {
+        executor.run(inbound_stop, inbound_terminate)
+    }) {
+        // 起不了入站线程就没有任何信号消费者，静默等下去会变成「不可 Ctrl-C 的僵尸」，
+        // 故按启动失败处理。
+        bail!("入站执行体启动失败: {e}");
     }
+    info!(logger::get(), "入站执行体已启动");
 
-    info!(
-        logger::get(),
-        "主循环退出，running={}",
-        GLOBAL_RUNNING.load(Ordering::SeqCst)
-    );
+    // 主线程在此阻塞：没有别的唤醒源，终止令牌只由入站执行体置位。
+    terminate.wait();
     info!(logger::get(), "开始清理流程");
 
     // 先按依赖逆序停 runtime 执行体，再走既有清理流程。
     //
-    // 顺序要求：内核接收执行体最先登记、最后停止（它是事件生产者）；消费体与轮询体
-    // 在它之前停，故停机窗口内不再有新的生产者往会关闭的写队列里投递。调度器只碰
-    // 内存镜像与原子计数、不碰持久化，排在 `cleanup` 的关库之前停即可。
+    // 顺序要求：入站执行体（上游生产者，最后登记）最先停，随后内核轮询体与消费体停，
+    // 内核接收执行体（内核链路里的生产者）最后停——故停机窗口内不再有生产者往会关闭
+    // 的写队列里投递。调度器只碰内存镜像与原子计数、不碰持久化，排在 `cleanup` 的
+    // 关库之前停即可。
     for (name, outcome) in supervisor.shutdown(std::time::Duration::from_secs(5)) {
         info!(logger::get(), "runtime 执行体已停止"; "name" => name, "outcome" => ?outcome);
     }
-    cleanup(&cfg);
+    cleanup();
 
     if let Some(handle) = exporter_handle {
         // 给 HTTP 导出器线程最多 2 秒优雅退出
@@ -452,7 +497,7 @@ fn handle_rollback() -> Result<()> {
                 return Err(anyhow::anyhow!("Invalid daemon PID"));
             }
 
-            // 发送 SIGUSR1 信号触发回滚（signals.rs 已注册处理器）
+            // 发送 SIGUSR1 信号触发回滚（守护进程侧由 signalfd 接住并分派为 Signal::Rollback）
             println!("向守护进程 (PID: {}) 发送回滚信号...", pid_num);
             let status = std::process::Command::new("kill")
                 .arg("-USR1")

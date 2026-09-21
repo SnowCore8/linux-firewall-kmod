@@ -2,7 +2,7 @@
 //!
 //! 旧实现把 partial 行缓冲挂在 `Jail` 上（`jail.partial_line_buffer`），于是**同一 jail
 //! 的多个日志源共用一个缓冲**——A 文件的半行会被追加上 B 文件的半行，且随 jail 重载
-//! 被整体清空（`config_reloader::cleanup_partial_line_buffer`）。这里把缓冲挂在
+//! 被整体清空（旧 `config_reloader` 那个每 60 秒跑的 partial 缓冲清理）。这里把缓冲挂在
 //! **源**上（调用方按 `SourceId` 持有一个 [`LineSplitter`]），语义变成「每个文件各自的
 //! 半行只与自己的后续字节拼接」，这是行为修正而非等价迁移。
 //!

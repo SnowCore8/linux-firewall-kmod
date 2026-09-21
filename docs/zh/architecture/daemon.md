@@ -86,6 +86,12 @@ inotify ──LogChunk──▶ parse ──Failure──▶ decide ──BanInt
 `scheduler` 改用**单调时钟**（`Instant`）驱动，与事件吞吐完全解耦，且不受时钟回拨影响
 （`runtime/timers.rs`：`fire_due(now)` 是纯函数，测试可用合成时刻精确验证不漂移）。
 
+**当前落地形态**：`ingest → parse → decision → pipeline` 四段由**一个**执行体
+（`pipeline/executor.rs`）顺序驱动——单线程独占每源偏移、半行缓冲与每 jail 失败窗口，故段与段
+之间不存在队列，「满时丢弃」的窗口无从产生；`inotify` fd 与 `signalfd` 并进同一个 `poll`，
+周期维护走该执行体自己的 `TimerTable`。上表的线程拆分与有界 channel 是**目标**形态，尚未落地
+（拆分后谁拥有分片器等归属问题记录在 `pipeline/executor.rs` 的模块文档里）。
+
 ### 关停顺序
 
 关停不变量是「**netlink 停止后才能在途事件写库**」。要让它真正成立，就不能一次性把停止信号
@@ -100,9 +106,10 @@ inotify ──LogChunk──▶ parse ──Failure──▶ decide ──BanInt
   → 停 pipeline（排空队列）→ 停 ingest → flush persist → 写 PID 文件清理
 ```
 
-当前生产的实际顺序（执行体尚未全部接入）：停 `runtime` 执行体（现只有调度器）
-→ `cleanup()`：停 HTTP → 停 netlink 接收线程 → 关 inotify → 关历史库 → 删 PID
-（`src/daemon/main.rs`）。
+当前生产的实际顺序（2.I 之后）：`main` 阻塞在终止令牌上 → 停 `runtime` 执行体（入站执行体
+最先停，随后内核轮询体、消费体、接收执行体，最后是调度器）→ `cleanup()`：停 HTTP → 关历史库
+→ 删 PID 文件（`src/daemon/main.rs`）。`close_history_db` 自身会 join 写线程并把已入队的持久化
+落盘，故「netlink 停止后在途事件写库」由这个顺序保证。
 
 ## 模块划分（按数据所有权）
 
@@ -126,6 +133,8 @@ inotify ──LogChunk──▶ parse ──Failure──▶ decide ──BanInt
 | `decision/window.rs` | 每 jail 的失败时间戳窗口 | `observe(ip, ts) -> Verdict`，执行体独占、无锁 |
 | `decision/policy.rs` | 无（纯函数） | 有效阈值、渐进式时长、封禁计划 |
 | `pipeline/mod.rs` | 每 jail 规则/窗口 + 每源分割器 | `on_chunk(...)` → `Vec<BanIntent>`；止于意图，不下发 |
+| `pipeline/executor.rs` | 入站链路运行态：配置、源表、读取器、定时器 | `cfg()` 供组合根读装配参数；`run(stop, terminate)` 单线程驱动四段 |
+| `signal/mod.rs` | `signalfd`（阻塞四个信号） | `SignalFd::new` / `poll_read`；析构恢复掩码 |
 | `kernel/codec/` | 无 | 字节 ↔ 语义类型；直接消费契约生成物 |
 | `kernel/transport.rs` | netlink socket（单写者） | 发一段载荷、收一条报文 |
 | `kernel/reactor.rs` | 在途请求表 + 路由状态机 | 按 **type + seq** 路由；未知/失败/无主一律计数 |
@@ -150,29 +159,35 @@ inotify ──LogChunk──▶ parse ──Failure──▶ decide ──BanInt
 
 ```mermaid
 graph TB
-    A["CLI 解析（--help 直接返回 / --rollback 走回滚分支）"] --> B["加载配置（文件或目录）+ 严格模式校验"]
-    B --> C["智能默认 + config_validate + 缓存 trusted_ips / capacity"]
-    C --> D{"daemon 模式?"}
-    D -->|是| E["双 fork + setsid + chdir / + PID + 重定向 fd"]
-    D -->|否| F["初始化日志（守护进程化之后）"]
-    E --> F
-    F --> G["procfs 前置检查：/proc/firewall 与 /proc/firewall/bans 必须存在"]
-    G --> H["setup_signals"]
-    H --> I["setup_inotify（为每个 enabled jail 的日志文件加 watch）"]
-    I --> J["jail::init_log_patterns + history_snapshot::init_history_db"]
-    J --> K["NetlinkContext::new"]
-    K --> L["注入 state::State + 装配 Supervisor 与 runtime 调度器"]
-    L --> M["启动 netlink stats 轮询线程（1 s；每 60 tick 全量 LIST bans 对账）"]
-    M --> N["启动 HTTP 服务（metrics_port > 0 时）"]
-    N --> O["进入 file_monitor::monitor_loop"]
+    A["CLI 解析（--help 直接返回 / --rollback 走回滚分支）"] --> B["阻塞四个信号并建 SignalFd + ignore_sigpipe（必须先于任何线程）"]
+    B --> C["加载配置（文件或目录）+ 严格模式校验"]
+    C --> D["智能默认 + config_validate + 缓存 trusted_ips / capacity"]
+    D --> E{"daemon 模式?"}
+    E -->|是| F["双 fork + setsid + chdir / + PID + 重定向 fd"]
+    E -->|否| G["初始化日志（守护进程化之后）"]
+    F --> G
+    G --> H["procfs 前置检查：/proc/firewall 与 /proc/firewall/bans 必须存在"]
+    H --> I["jail::init_log_patterns + history_snapshot::init_history_db"]
+    I --> J["装配 InboundExecutor（编译规则集 + 挂 inotify watch；一个源都挂不上即启动失败）"]
+    J --> K["打开内核 netlink socket + 注入 state::State"]
+    K --> L["装配 Supervisor 与 runtime 调度器,登记内核接收/消费/轮询执行体"]
+    L --> M["启动 HTTP 服务（metrics_port > 0 时）"]
+    M --> N["登记入站执行体 + 主线程阻塞在终止令牌上"]
 ```
 
 关键顺序约束（都有明确理由，不是习惯）：
 
+- **信号在任何线程创建之前阻塞**：阻塞是线程属性，新线程继承创建者的掩码。`SignalFd` 在
+  配置加载前建好，其后启动的日志 / HTTP / 各执行体线程都继承「已阻塞」，信号一律投进 fd；
+  守护进程化的 fork 不 exec，fd 与掩码都随 fork 继承。
 - **日志在守护进程化之后初始化**：`fork` 会丢掉异步日志线程，故 `cfg.daemon` 分支先
   `daemonize_process()`，再 `logger::init_logger(cfg.log_file)`。
+- **配置所有权在入站执行体**：它是唯一改配置的线程（自动重载 / 回滚 / 启用状态同步），
+  组合根经 `InboundExecutor::cfg()` 读装配参数，避免重载后两份配置分叉。
 - **状态层注入早于 netlink 接收线程**：启动期的封禁/白名单/统计查询响应会在接收线程里落进
   新状态，注入晚一步那批数据就丢（`main.rs` 组合根注释）。
+- **找不到可监视的日志源即启动失败**：配置错 / 权限不足 / 内核模块未加载时不该留一个
+  「界面正常但永不算」的进程。
 - **调度器装配失败只降级告警、不 panic**：缺席时 SSE 的 `stats` 域不再自动刷新、过期封禁只能
   靠内核 `UNBAN` 事件自愈，但封禁主链路照常工作。
 - **`/proc/firewall` 与 `/proc/firewall/bans` 缺失直接启动失败**：内核模块未加载时 daemon
@@ -345,18 +360,19 @@ graph TB
 不接管原始 stderr）。`log_destination` / `log_format` 字段仍存在于配置结构中，但当前 logger 只
 实现「JSON Lines → 文件」，不读这两个字段。
 
-**信号**（当前生产实现，`signals.rs`）：
+**信号**（当前生产实现，`signal/mod.rs`）：
 
 | 信号 | 行为 |
 |------|------|
-| `SIGTERM` / `SIGINT` | 置退出标志，主循环优雅退出并清理 |
-| `SIGHUP` | 置重载标志，主循环触发配置热重载 |
-| `SIGUSR1` | 输出当前状态到日志 |
+| `SIGTERM` / `SIGINT` | 入站执行体从 signalfd 收到后置位终止令牌，主线程醒来走清理流程 |
+| `SIGHUP` | 触发配置热重载（执行体读入新配置后重扫 watch） |
+| `SIGUSR1` | 触发配置回滚 |
 | `SIGPIPE` | 忽略（HTTP 客户端断开不应杀死进程） |
 
-旧实现故意不使用 `SA_RESTART`，依赖 `EINTR` 打断 `poll` 把控制权交回主循环——这是隐式协议。
-新 `signal/`（`signalfd`）把信号变成与 inotify 同池 `poll` 的普通 fd，`SignalFd` 阻塞四个信号并
-在析构时恢复掩码；该模块**已就位但未接入生产**。
+`SignalFd` 先阻塞四个信号再建 fd，把信号变成与 inotify 同池 `poll` 的普通 fd，析构时恢复
+原掩码；不依赖 `EINTR` 打断 `poll` 的隐式协议，也没有信号处理函数写的全局原子标志。
+**阻塞是线程属性**，故 `main.rs` 在任何线程创建之前就建好 `SignalFd`（日志线程、HTTP、各
+执行体都在其后启动），守护进程化的 fork 不会丢失该 fd 与掩码。
 
 ## 可观测性
 

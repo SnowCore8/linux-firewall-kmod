@@ -219,7 +219,7 @@ pub fn update_jail_enabled(name: &str, enabled: bool) -> Result<JailResponse, St
     let max_retries = jail.max_retries;
     let findtime = jail.findtime;
     let ban_time = jail.ban_time;
-    let is_peak_hours = crate::file_monitor::monitor_loop::is_baseline_peak_hours();
+    let is_peak_hours = crate::decision::is_baseline_peak_hours();
     let peak_hours_multiplier = if is_peak_hours { 1.5 } else { 1.0 };
     let internal_ip_multiplier = 2.0; // 内网 IP 阈值放宽倍数
     let effective_max_retries = (max_retries as f64 * peak_hours_multiplier).ceil() as u32;
@@ -589,7 +589,7 @@ pub fn get_heatmap() -> crate::history_snapshot::HourlyHeatmap {
 
 /// 获取 Jail 列表
 pub fn get_jails(jail_infos: &[crate::http_exporter::JailInfo]) -> Vec<JailResponse> {
-    let is_peak_hours = crate::file_monitor::monitor_loop::is_baseline_peak_hours();
+    let is_peak_hours = crate::decision::is_baseline_peak_hours();
     let peak_hours_multiplier = if is_peak_hours { 1.5 } else { 1.0 };
     let internal_ip_multiplier = 2.0; // 内网 IP 阈值放宽倍数
 

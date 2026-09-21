@@ -20,6 +20,8 @@ use crate::decision::{effective_threshold, is_internal, plan_ban, BanPlan, Failu
 use crate::ingest::SourceId;
 use crate::parse::{LineSplitter, MatchVia, RuleSet, SplitStats};
 
+pub mod executor;
+
 /// 解析一行并把结果收集进 `parsed_lines`（供 `feed` / `flush` 的回调共用）。
 ///
 /// 空行（只有 `\n`）直接跳过，与旧实现一致；`from_utf8_lossy` 容忍日志里的非法
@@ -75,9 +77,26 @@ impl JailPolicy {
 ///
 /// 把这两项挡在 trait 后面，是为了让判定算式（[`crate::decision::policy`]）保持
 /// 纯粹：策略函数本身不查任何 store，本层也不查，查什么由调用方决定。
+///
+/// **调用契约**：判定层对每一行识别出的来源 IP 调用
+/// [`DecisionFacts::record_failure`] **恰好一次**，**紧接着**才调用
+/// [`DecisionFacts::reputation_score`] 取分数。顺序是语义的一部分——旧
+/// `handle_failed_attempt_for_jail` 就是「先 `record_failure`（信誉分 -10）再取阈值
+/// 乘数」，即**本次失败已经计入**之后才决定阈值。反过来（先取分再记账）会让临界
+/// IP（如刚好从 80 跌到 70 的那一次）用错乘数。
 pub trait DecisionFacts {
+    /// 记录一次失败尝试（生产实现：信誉分 -10）。
+    ///
+    /// 判定层每判定一行含合法 IP 的日志即调用一次。实现若不需要记账（测试、启动
+    /// 初期的 [`NoHistory`]）留空即可。
+    fn record_failure(&self, ip: IpAddr);
+
     /// 该 IP 当前的信誉分（0–100）。
+    ///
+    /// 必须在同一行的 [`DecisionFacts::record_failure`] **之后**调用，返回值即
+    /// 「已计入本次失败」的分数。
     fn reputation_score(&self, ip: IpAddr) -> u32;
+
     /// 该 IP 此前已封禁次数（用于渐进式时长）。
     fn prior_ban_count(&self, ip: IpAddr) -> u32;
 }
@@ -87,6 +106,8 @@ pub trait DecisionFacts {
 pub struct NoHistory;
 
 impl DecisionFacts for NoHistory {
+    fn record_failure(&self, _ip: IpAddr) {}
+
     fn reputation_score(&self, _ip: IpAddr) -> u32 {
         100
     }
@@ -184,6 +205,23 @@ impl Pipeline {
     #[must_use]
     pub fn has_jail(&self, jail: &str) -> bool {
         self.jails.contains_key(jail)
+    }
+
+    /// 已注册的 jail 数（诊断用）。
+    #[must_use]
+    pub fn jail_count(&self) -> usize {
+        self.jails.len()
+    }
+
+    /// 只保留 `keep` 中列出的 jail，返回被摘除的数量。
+    ///
+    /// 重载后配置里已消失的 jail 连同其失败窗口一并回收。旧实现靠**整体替换**
+    /// `cfg.jails` 达到同样效果；本层的状态与配置分离（配置在组合根、窗口在执行体），
+    /// 所以必须显式回收——否则长期运行中改过名的 jail 会一直留在表里。
+    pub fn retain_jails(&mut self, keep: &[Arc<str>]) -> usize {
+        let before = self.jails.len();
+        self.jails.retain(|jail, _| keep.iter().any(|k| k == jail));
+        before - self.jails.len()
     }
 
     /// 累计计数快照。
@@ -310,6 +348,8 @@ impl Pipeline {
         self.counters.ips_extracted += 1;
 
         let state = self.jails.get_mut(ctx.jail).expect("已确认存在");
+        // 顺序是语义的一部分：先记这次失败，再取分数算阈值（见 [`DecisionFacts`]）。
+        ctx.facts.record_failure(ip);
         let threshold = effective_threshold(
             state.policy.max_retries,
             ctx.tick.peak_hours,
@@ -405,6 +445,7 @@ mod tests {
     }
 
     impl DecisionFacts for Facts {
+        fn record_failure(&self, _ip: IpAddr) {}
         fn reputation_score(&self, _ip: IpAddr) -> u32 {
             self.score
         }
@@ -736,5 +777,69 @@ mod tests {
         assert_eq!(out[0].ip, ip("203.0.113.12"));
         assert_eq!(p.counters().regex_matches, 0, "回退命中不计入正则命中");
         assert_eq!(p.counters().ips_extracted, 1);
+    }
+
+    /// 记账顺序必须是「先 `record_failure`，后 `reputation_score`」。
+    ///
+    /// 算术（阈值基数 12、非高峰、外网、同批 6 行失败；信誉分自 100 起每记一次 -10）。
+    /// 注意 `FailureWindow::observe` 的 `recent` 按阈值（`cap`）截断，故 `fail_count`
+    /// 至多等于阈值——用「阈值 6 恰好等于行数」让两种顺序的产出可分辨：
+    ///
+    /// | 第 n 行 | 先记账→取分 | 系数 | 有效阈值 | 先取分→记账 | 系数 | 有效阈值 |
+    /// |---|---|---|---|---|---|---|
+    /// | 5 | 50 | 0.8 | 10 | 60 | 0.8 | 10 |
+    /// | 6 | **40** | **0.5** | **6 → 6 次达标** | 50 | 0.8 | 10 → 6 次不达标 |
+    ///
+    /// 故「第 6 行产出封禁意图、`fail_count == 6`」唯一地分辨两种顺序。
+    #[test]
+    fn failure_is_recorded_before_the_score_is_read() {
+        /// 每记一次失败扣 10 分，与生产信誉分同规则。
+        struct DecayingFacts {
+            score: std::sync::atomic::AtomicU32,
+        }
+
+        impl DecisionFacts for DecayingFacts {
+            fn record_failure(&self, _ip: IpAddr) {
+                self.score
+                    .fetch_sub(10, std::sync::atomic::Ordering::SeqCst);
+            }
+            fn reputation_score(&self, _ip: IpAddr) -> u32 {
+                self.score.load(std::sync::atomic::Ordering::SeqCst)
+            }
+            fn prior_ban_count(&self, _ip: IpAddr) -> u32 {
+                0
+            }
+        }
+
+        let mut p = Pipeline::new();
+        p.register_jail(sshd_rules(), JailPolicy::new(12, 600, 600));
+        let jail: Arc<str> = Arc::from("sshd");
+        let src = SourceId::from_raw(11);
+        let facts = DecayingFacts {
+            score: std::sync::atomic::AtomicU32::new(100),
+        };
+        let mut out = Vec::new();
+
+        let batch = failed_rec("203.0.113.13").repeat(6);
+        p.on_chunk(
+            &jail,
+            src,
+            batch.as_bytes(),
+            Tick::new(1_000, false),
+            &facts,
+            &mut out,
+        );
+
+        assert_eq!(
+            facts.score.load(std::sync::atomic::Ordering::SeqCst),
+            40,
+            "六行失败应各记一次账"
+        );
+        assert_eq!(
+            out.len(),
+            1,
+            "第 6 次失败应达到「记过账之后」的阈值 6；无产出即说明取分早于记账"
+        );
+        assert_eq!(out[0].plan.fail_count, 6);
     }
 }

@@ -4,8 +4,6 @@
 //!
 //! - SIGHUP 触发的双缓冲热重载
 //! - 配置解析 + 验证 + 默认值应用
-//! - `failed_hash` 迁移（保留历史失败计数）
-//! - partial 行缓冲周期清理
 //! - 同步配置到 DDoS 决策引擎、内核模块、WebUI
 //! - 配置持久化（保存到文件，重启后恢复）
 //! - 配置版本历史（支持回滚）
@@ -14,12 +12,13 @@
 //!
 //! - 任何步骤失败旧配置不受影响（双缓冲）
 //! - `config_file` / `config_dir` 保留供后续 reload 复用
+//! - **只改配置，不碰 inotify watch**：入站执行体在重载返回后自行 `reconcile_watches`
+//!   （旧实现由本模块调 `file_monitor::setup_inotify` 重建整张表）
 
 use std::sync::atomic::Ordering;
 
 use anyhow::Result;
 
-use crate::file_monitor::setup_inotify;
 use crate::jail;
 use crate::types::{Config, DAEMON_STATS};
 
@@ -354,7 +353,7 @@ fn persist_config(cfg: &Config, jails_enabled: &[(String, bool)]) -> Result<()> 
     // 幂等回写：内容与磁盘当前字节一致时不落盘。
     //
     // 本函数由 `reload_configuration` 在每次重载末尾无条件调用，而重载又由该配置文件
-    // 上的 inotify 监视触发（`monitor_loop.rs` 的「配置文件变化 → 自动重载」分支）。
+    // 上的 inotify 监视触发（入站执行体的「配置文件变化 → 自动重载」分支）。
     // 无条件写入会立刻产生新的 MODIFY/CLOSE_WRITE 事件 → 再重载 → 再写入，形成自持
     // 重载风暴（实测约 300 次/秒、进程 CPU 44%）。跳过无差异写入即可打断该环。
     if result == original {
@@ -765,8 +764,13 @@ fn sync_config_to_components(cfg: &Config) -> Result<()> {
 
 /// SIGHUP 热重载（事务）：提交前失败不影响运行态；提交后关键步骤失败则回退内存配置。
 ///
-/// 步骤：clone 旧 → 解析到新 → 应用默认 → 验证 → 迁移 `failed_hash` →
-/// 编译正则 → 保存快照 → 原子替换 → 重建 inotify → 可信 IP / 组件同步 → 持久化。
+/// 步骤：clone 旧 → 解析到新 → 应用默认 → 验证 → 编译正则 → 保存快照 → 原子替换 →
+/// 可信 IP / 组件同步 → 持久化。
+///
+/// 失败窗口（`Jail.failed_hash`）与 partial 行缓冲都**不在**这里迁移或清理：二者的
+/// 持有点已移到 `pipeline::Pipeline`（按 jail 名的失败窗口 + 按源的半行缓冲），
+/// 重载只换规则与参数，窗口由 `Pipeline::register_jail` 原样保留。
+/// inotify watch 也不在这里重建，由入站执行体在重载返回后统一 `reconcile_watches`。
 ///
 /// HTTP 绑定地址与 metrics 凭据无法在不重启监听器的情况下热更新；若文件中变更则告警。
 pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
@@ -801,20 +805,6 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
     jail::apply_smart_defaults_to_all(&mut new_cfg);
     jail::config_validate(&new_cfg).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    // 迁移 failed_hash（保留历史失败计数）
-    for old_jail in &old_cfg.jails {
-        for new_jail in &mut new_cfg.jails {
-            if old_jail.name == new_jail.name {
-                let mut old_hash = old_jail.failed_hash.write();
-                let mut new_hash = new_jail.failed_hash.write();
-                for (ip, entry) in old_hash.drain() {
-                    new_hash.insert(ip, entry);
-                }
-                break;
-            }
-        }
-    }
-
     // 正则编译失败则中止，不改运行态
     jail::init_log_patterns(&mut new_cfg)
         .map_err(|e| anyhow::anyhow!("重载时初始化日志模式失败，已保持旧配置: {e}"))?;
@@ -845,19 +835,6 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
 
     *cfg = new_cfg;
 
-    if let Err(e) = setup_inotify(cfg) {
-        crate::logger::error!(
-            crate::logger::get(),
-            "重载后重建 inotify 失败，回退到旧配置";
-            "error" => %e
-        );
-        *cfg = old_cfg;
-        let _ = setup_inotify(cfg);
-        // 弹出刚才写入的快照（已回到该版本运行）
-        let _ = config_history_lock().write().pop();
-        return Err(e);
-    }
-
     update_trusted_ips(&old_cfg.trusted_ips, &cfg.trusted_ips);
 
     DAEMON_STATS.config_reloads.fetch_add(1, Ordering::Relaxed);
@@ -876,7 +853,6 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
         );
         update_trusted_ips(&cfg.trusted_ips, &old_cfg.trusted_ips);
         *cfg = old_cfg;
-        let _ = setup_inotify(cfg);
         let _ = sync_config_to_components(cfg);
         let _ = config_history_lock().write().pop();
         return Err(e);
@@ -911,31 +887,6 @@ pub fn reload_configuration(cfg: &mut Config) -> Result<()> {
     }
 
     Ok(())
-}
-
-// ============================================================================
-// 周期维护
-// ============================================================================
-
-/// 周期维护：flush 所有 jail 的 partial 行缓冲。`monitor_loop` 超时 60s 触发。
-///
-/// 防止 partial 缓冲无限增长（异常日志最后一行无 `\n`）。
-///
-/// # Arguments
-/// - `cfg`：全局配置
-pub fn cleanup_partial_line_buffer(cfg: &Config) {
-    for jail in &cfg.jails {
-        let mut buf = jail.partial_line_buffer.write();
-        if !buf.is_empty() {
-            crate::logger::debug!(
-                crate::logger::get(),
-                "清理 partial 行缓冲";
-                "jail" => &jail.name,
-                "size" => buf.len()
-            );
-            buf.clear();
-        }
-    }
 }
 
 // ============================================================================
