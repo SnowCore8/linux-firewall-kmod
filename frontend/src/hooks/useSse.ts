@@ -1,11 +1,12 @@
 /**
  * SSE 实时数据单例 Context
  *
- * 设计要点（对应契约第 4 节）：
+ * 设计要点（事件名与连接上限的声明见 contract/http.fwidl）：
  * - **单例连接**：Provider 挂在应用根部，只创建一条 `EventSource`；
  *   路由切换（hash 路由）不会重建连接，避免每次切页都重新握手、错过增量推送。
- * - **浏览器原生认证**：直连 `GET /api/v1/events`，靠浏览器 Basic Auth 自动附加凭据。
- *   若改成 fetch + 自定义头，会丢掉 EventSource 的语义，故不改。
+ * - **令牌走 query**：`EventSource` 无法设置 `Authorization` 头，故经 `withAccessToken()`
+ *   把令牌拼成 `?access_token=`（服务端对应做百分号解码，两侧必须成对改，见 api/auth.ts）。
+ *   不改用 fetch + 自定义头：那会丢掉 EventSource 的重连与命名事件语义。
  * - **指数退避重连**：EventSource 自带的重连节奏不受控，因此收到 error 时主动 close，
  *   由本模块按 `delay = min(2^min(attempt,5), 30)` 秒调度下一次连接。
  * - **防重入**：每个连接周期一个 error 标志，onerror 只处理一次；

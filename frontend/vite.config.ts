@@ -4,7 +4,8 @@
 //   1. base = "/static/"：守护进程通过 `GET /static/*path` 提供资源，
 //      因此 index.html 中的资源引用必须带 /static/ 前缀。
 //   2. assetsDir = ""：资源平铺输出，文件名固定，便于 rust-embed 相对查找。
-//   3. 守护进程只对 7 个页面路径返回 HTML、无 catch-all，故前端用 hash 路由。
+//   3. 守护进程只对一组固定的页面路径返回 HTML、无 catch-all（清单见
+//      src/daemon/http_exporter/handler.rs），故前端用 hash 路由。
 //
 // PWA 例外：service worker 需要根作用域才能接管页面导航，而 /static/ 下的
 // 资源天然只有 /static/ 作用域，故 sw.js 由守护进程单独用 /sw.js 路由提供
