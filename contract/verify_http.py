@@ -57,7 +57,7 @@ SSE_RS = os.path.join(ROOT, "src", "daemon", "api", "sse.rs")
 LOG_VIEWER_RS = os.path.join(ROOT, "src", "daemon", "web_ui", "log_viewer.rs")
 # 统一信封（ApiResponse / PaginatedResponse / ApiError / BusinessCode）
 ENVELOPE_RS = os.path.join(ROOT, "src", "daemon", "api", "envelope.rs")
-# 已迁入的路由装配（18 条）与其余 handler
+# 已迁入 `api` 层的路由装配与其余 handler（两组由 check_routes 合并核对）
 API_ROUTER_RS = os.path.join(ROOT, "src", "daemon", "api", "router.rs")
 # E 的修复面：旧读路径（`get_active_bans` 的写副作用）与新的周期清理装配点
 BAN_OPS_RS = os.path.join(ROOT, "src", "daemon", "web_ui", "ban_ops.rs")
@@ -160,7 +160,7 @@ def split_router_groups(src: str, api_router_src: str) -> tuple[str, str, str, s
 
       * public 组（无认证，SPA 外壳与静态资源）—— `handler.rs::build_router`
       * 未迁入的需认证组 —— `handler.rs::legacy_protected_routes`（路径字面量）
-      * 已迁入的需认证组（18 条）—— `api/router.rs::protected_routes`
+      * 已迁入的需认证组 —— `api/router.rs::protected_routes`
         （登记的是 `path::ROUTE_*` 常量，不是字面量）
       * 探针组（`/health`、`/healthz`）—— `api/router.rs::health_routes`
 
@@ -1001,6 +1001,22 @@ def check_defect_claims(contract: dict) -> list[str]:
                     name,
                     "旧注释仍在或新注释缺失"
                     f"（old={old_doc} new={new_doc} 10={bool(m10)} 5={bool(m5)}）",
+                )
+        elif name == "HTTP_BANS_DUAL_SHAPE":
+            # status=fixed：服务端只留单一形状（分页信封），前端也必须只剩一层返回类型。
+            # 这条缺陷此前是「服务端修了、契约写了 fixed，前端却仍按裸数组取用」——
+            # 断言前端**已删除**重载与运行期分支，否则契约在说一件代码里不成立的事。
+            src = strip_ts_comments(read(TS_ENDPOINTS))
+            overloads = len(re.findall(r"export\s+function\s+getBans\s*\(", src))
+            bare = "Promise<BanResponse[]>" in src
+            paged = "Promise<PaginatedResponse<BanResponse>>" in src
+            if overloads == 1 and paged and not bare:
+                ok(name, "getBans 只有单一分页形状（无重载、无裸数组返回类型）")
+            else:
+                fail(
+                    name,
+                    "前端仍保留裸数组形状"
+                    f"（getBans 定义 {overloads} 处，裸数组={bare}，分页={paged}）",
                 )
         elif name == "HTTP_BAN_SORT_DOC_INCOMPLETE":
             # doc 只列 4 值、实现 7 值，且前端 union 与实现一致。

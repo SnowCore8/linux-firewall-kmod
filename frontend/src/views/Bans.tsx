@@ -6,7 +6,7 @@
 //          搜索、排序、渐进展示只在浏览器内进行，不产生额外请求。
 //
 // 数据来源：优先全局 SSE 的 bans 事件（后端推的就是全量活跃封禁列表）；
-//          SSE 未就绪时回退 GET /api/v1/bans（不带分页参数时后端同样返回全量）。
+//          SSE 未就绪时回退 GET /api/v1/bans（分页信封，取第一页 items）。
 // 排序语义与后端 api.rs::get_active_bans_paginated 的 sort_by 取值逐一对应，
 // 其中 remaining_asc/remaining_desc 把永久封禁（后端用 -1 表示）分别排到末位/首位。
 
@@ -161,8 +161,13 @@ export default function Bans() {
   const toast = useToast()
   const { bans: sseBans } = useSse()
 
-  // SSE 未就绪时的回退：不带分页参数 → 后端返回全量活跃封禁
-  const restBans = useAsync(() => getJson<BanResponse[]>(BANS_URL), [])
+  // SSE 未就绪时的回退：GET /api/v1/bans 恒为分页信封，取第一页 items 即可
+  // （SSE 的 bans 事件推的才是全量；此回退只在连接建立前短暂生效）。
+  const restBans = useAsync(
+    () =>
+      getJson<{ items: BanResponse[] }>(BANS_URL).then((page) => page.items),
+    [],
+  )
   const list = sseBans ?? restBans.data ?? EMPTY_BANS
 
   const [keyword, setKeyword] = useState('')

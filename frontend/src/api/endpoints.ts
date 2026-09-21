@@ -121,33 +121,22 @@ export function getStats(): Promise<StatsResponse> {
 
 /**
  * `GET /api/v1/bans` — 活跃封禁列表。
- * 不带分页参数时后端返回全量数组（`BanResponse[]`）。
+ *
+ * **单一形状**：后端一律返回分页信封 `PaginatedResponse<BanResponse>`，
+ * 不再有「不带分页参数就返回裸数组」的分支（缺陷 HTTP_BANS_DUAL_SHAPE 已修）。
+ * 不传参数时按契约默认分页（page=1 / page_size=20）取第一页；
+ * 注意 `page_size` 服务端上限为 100（`views::MAX_PAGE_SIZE`）。
  */
-export function getBans(): Promise<BanResponse[]>
-
-/**
- * `GET /api/v1/bans?page=&page_size=&sort_by=` — 分页封禁列表。
- * 只要传了 `page` 或 `page_size`，后端就切换为分页信封结构。
- */
-export function getBans(params: {
-  page?: number
-  page_size?: number
-  sort_by?: BanSortKey
-}): Promise<PaginatedResponse<BanResponse>>
-
 export function getBans(params?: {
   page?: number
   page_size?: number
   sort_by?: BanSortKey
-}): Promise<BanResponse[] | PaginatedResponse<BanResponse>> {
-  if (!params) {
-    return getJson<BanResponse[]>('/api/v1/bans')
-  }
+}): Promise<PaginatedResponse<BanResponse>> {
   return getJson<PaginatedResponse<BanResponse>>(
     withQuery('/api/v1/bans', {
-      page: params.page,
-      page_size: params.page_size,
-      sort_by: params.sort_by,
+      page: params?.page,
+      page_size: params?.page_size,
+      sort_by: params?.sort_by,
     }),
   )
 }
