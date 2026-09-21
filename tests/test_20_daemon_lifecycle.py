@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from .config import DAEMON_PATH
+from .conftest import mark_daemon_launched
 
 
 class TestDaemonLifecycle:
@@ -58,6 +59,8 @@ class TestDaemonLifecycle:
             except FileNotFoundError:
                 pass
 
+        # 起过 daemon 必须让 teardown 重载模块清租约，否则后续用例的新 daemon 会被内核拒绝。
+        mark_daemon_launched()
         proc = subprocess.Popen(
             [str(DAEMON_PATH), "-c", test_config],
             stdout=subprocess.DEVNULL,

@@ -1,6 +1,5 @@
 """10 - 日志解析测试"""
 
-import subprocess
 import time
 from pathlib import Path
 
@@ -16,7 +15,13 @@ from .config import (
     LOG_LINE_VSFTPD,
     PROC_BANS,
 )
-from .conftest import count_bans, generate_test_yaml, run_daemon_captured, wait_procfs
+from .conftest import (
+    count_bans,
+    daemon_run_probe,
+    generate_test_yaml,
+    run_daemon_captured,
+    wait_procfs,
+)
 
 
 class TestDaemonLogparse:
@@ -87,23 +92,20 @@ class TestDaemonLogparse:
 
         契约事实：jail/config_ops.rs::config_validate 只校验 log_files 非空，
         不校验文件是否存在（fail2ban 语义下缺失日志被容忍）。故断言守护进程不会
-        立即退出——它继续运行，直到 subprocess 超时将其终止。
+        立即退出——它继续运行，直到观察窗口到期后被优雅停掉。
         """
         nonexist_yaml = tmp_path / "nonexist.yaml"
         generate_test_yaml(
             str(nonexist_yaml), "/nonexistent/log.log", max_retries=1, findtime=1, ban_time=5
         )
 
-        try:
-            result = subprocess.run(
-                [str(DAEMON_PATH), "-c", str(nonexist_yaml)],
-                capture_output=True,
-                timeout=3,
-            )
-        except subprocess.TimeoutExpired:
+        rc, err = daemon_run_probe(
+            [str(DAEMON_PATH), "-c", str(nonexist_yaml)], timeout=3
+        )
+        if rc is None:
             return  # 预期路径：缺失日志未被拒绝，守护进程持续运行
         pytest.fail(
             "缺失日志文件的守护进程意外退出 "
-            f"(退出码={result.returncode}, "
-            f"stderr={result.stderr.decode(errors='replace')[:200]})"
+            f"(退出码={rc}, "
+            f"stderr={err.decode(errors='replace')[:200]})"
         )

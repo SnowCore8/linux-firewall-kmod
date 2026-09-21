@@ -14,6 +14,7 @@ from .conftest import (
     ban_ip_permanent,
     count_bans,
     ip_is_banned,
+    mark_daemon_launched,
     unban_ip,
     wait_procfs,
 )
@@ -158,6 +159,8 @@ CREATE INDEX idx_is_active ON permanent_banlist(is_active);
         config_file = tmp_path / "sqlite_test.yaml"
         config_file.write_text(yaml.dump(config))
 
+        # 起过 daemon 必须让 teardown 重载模块清租约，否则后续用例的新 daemon 会被内核拒绝。
+        mark_daemon_launched()
         proc = subprocess.Popen(
             [str(DAEMON_PATH), "-c", str(config_file)],
             stdout=subprocess.DEVNULL,

@@ -80,6 +80,63 @@ def check_module_ready() -> bool:
 
 
 # ============================================================================
+# 内核租约卫生
+# ============================================================================
+
+# 本轮用例是否起过 daemon。内核把「单守护进程」实现为 `portid + 30 秒活动超时`
+# （src/kernel-module/fw_netlink.c 的 FW_NL_DAEMON_TIMEOUT），daemon 侧与内核侧都
+# 没有注销消息，因此 daemon 退出（含被 SIGKILL）后租约仍被占住最多 30 秒：这期间
+# 任何新 daemon 都会收到 `Refused`，并按既有裁定以非零码退出。唯一可靠的立即释放
+# 手段是重载模块，故只在确实起过 daemon 的轮次付这次代价。
+_daemon_launched = False
+
+
+def mark_daemon_launched() -> None:
+    """标记本轮已起过 daemon。
+
+    任何新增的 daemon 启动点都必须调用它，否则该轮次结束后租约会残留，污染下一个
+    用例（表现为新 daemon 以非零码退出、用例断言失败）。
+    """
+    global _daemon_launched
+    _daemon_launched = True
+
+
+def release_kernel_lease() -> None:
+    """重载模块以清空内核侧的守护进程租约；本轮未起过 daemon 时是空操作。
+
+    必须在用例**之后**调用：重载会一并清掉封禁/白名单/速率等模块内状态。卸载或
+    加载失败时不抛错，后续用例的 `check_module_ready` 会照常跳过。
+    """
+    global _daemon_launched
+    if not _daemon_launched:
+        return
+    _daemon_launched = False
+    load_module()
+    time.sleep(0.3)
+
+
+def terminate_process(proc: subprocess.Popen, timeout: float = 3.0) -> None:
+    """先 SIGTERM 再兜底 SIGKILL，并等到进程真正退出。
+
+    SIGTERM 让 daemon 走完自己的清理路径（状态回写、关库、删 PID 文件）；直接
+    SIGKILL 会留下半写状态。等待退出还保证后续步骤看到的进程表是稳定的。
+    """
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    proc.kill()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+# ============================================================================
 # Procfs 辅助函数
 # ============================================================================
 
@@ -239,16 +296,23 @@ def reset_all_data():
 
 
 def cleanup_state():
-    """清理模块状态文件"""
+    """清理模块状态文件与残留的 daemon 进程"""
     try:
         os.remove("/var/lib/firewall/state")
     except FileNotFoundError:
         pass
-    # 清理残留的 daemon 进程
-    subprocess.run(
-        ["pkill", "-9", "-f", "firewall-daemon -c /var/log/firewall_test_"],
-        capture_output=True,
-    )
+    # 只按「测试专用配置路径」定位进程，避免误伤真实 daemon；先 SIGTERM 让其优雅
+    # 退出，短暂等待后再对仍存活的补 SIGKILL。
+    pattern = "firewall-daemon -c /var/log/firewall_test_"
+    pids = subprocess.run(
+        ["pgrep", "-f", pattern], capture_output=True, text=True
+    ).stdout.split()
+    for pid in pids:
+        subprocess.run(["kill", "-TERM", pid], capture_output=True)
+    if pids:
+        time.sleep(0.5)
+        for pid in pids:
+            subprocess.run(["kill", "-KILL", pid], capture_output=True)
 
 
 # ============================================================================
@@ -257,17 +321,19 @@ def cleanup_state():
 
 
 def daemon_starts_ok(cmd: list[str]) -> tuple[bool, int]:
-    """运行守护进程，接受 0/124/137/超时 为正常退出码"""
+    """运行守护进程，接受 0/124/137/超时 为正常退出码。
+
+    用 Popen + communicate 而不是 `subprocess.run(timeout=...)`：后者超时会直接
+    SIGKILL 掉守护进程，留下最多 30 秒不释放的内核租约（见 release_kernel_lease）。
+    """
+    mark_daemon_launched()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        rc = result.returncode
+        proc.communicate(timeout=2)
+        rc = proc.returncode
         return rc in (0, 124, 137, -9), rc
     except subprocess.TimeoutExpired:
+        terminate_process(proc)
         return True, 124
 
 
@@ -309,11 +375,33 @@ def parse_metric(metrics: str, name: str) -> float:
 
 
 def run_daemon_captured(cmd: list[str], timeout: int = 5):
-    """运行守护进程，超时视为正常（长运行服务）"""
+    """运行守护进程，超时视为正常（长运行服务）。
+
+    超时后用 SIGTERM 停掉并等其退出，不用 `subprocess.run(timeout=...)` 的 SIGKILL：
+    后者会留下未释放的内核租约，见 release_kernel_lease。
+    """
+    mark_daemon_launched()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
-        subprocess.run(cmd, capture_output=True, timeout=timeout)
+        proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        pass
+        terminate_process(proc)
+
+
+def daemon_run_probe(cmd: list[str], timeout: int = 3) -> tuple[int | None, bytes]:
+    """起 daemon 观察 `timeout` 秒：仍在运行返回 `(None, b"")`，提前退出返回 `(退出码, stderr)`。
+
+    供「守护进程不应因某个配置而退出」这类用例使用。与 `subprocess.run(timeout=...)`
+    的区别同 run_daemon_captured：超时走 SIGTERM 并等待退出，不残留内核租约。
+    """
+    mark_daemon_launched()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        _out, err = proc.communicate(timeout=timeout)
+        return proc.returncode, err
+    except subprocess.TimeoutExpired:
+        terminate_process(proc)
+        return None, b""
 
 
 def generate_test_yaml(
@@ -390,6 +478,8 @@ def test_isolation():
     yield
 
     cleanup_state()
+    # 起过 daemon 的轮次必须重载模块：内核租约没有注销消息，30 秒内新 daemon 会被拒。
+    release_kernel_lease()
 
     if not check_module_ready():
         load_module()

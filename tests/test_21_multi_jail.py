@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 from .config import DAEMON_PATH
-from .conftest import get_prometheus_metrics, parse_metric
+from .conftest import get_prometheus_metrics, mark_daemon_launched, parse_metric
 
 
 class TestMultiJail:
@@ -59,6 +59,8 @@ class TestMultiJail:
         config_file = tmp_path / "multi_jail.yaml"
         config_file.write_text(yaml.dump(config))
 
+        # 起过 daemon 必须让 teardown 重载模块清租约，否则后续用例的新 daemon 会被内核拒绝。
+        mark_daemon_launched()
         proc = subprocess.Popen(
             [str(DAEMON_PATH), "-c", str(config_file)],
             stdout=subprocess.DEVNULL,
