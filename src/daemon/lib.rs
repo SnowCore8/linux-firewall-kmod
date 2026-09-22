@@ -90,6 +90,7 @@ pub mod log_parser;
 pub mod logger;
 pub mod parse;
 pub mod pipeline;
+pub mod protected_ports;
 pub mod runtime;
 pub mod runtime_status;
 pub mod signal;

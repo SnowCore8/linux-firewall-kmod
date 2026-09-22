@@ -968,6 +968,43 @@ impl SetConfig {
     }
 }
 
+/// 受保护端口位图（`MsgType::SetProtectedPorts`）。
+///
+/// daemon 扫描本机对外监听端口后下发；语义是「纳入防护」：置位端口的入站流量
+/// 参与 DDoS 速率判定。位图固定 8192 字节（65536 位，位 i = 端口 i 受保护），
+/// `count` 只是观测字段——内核会自行重算置位数，不采信这里的值。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetProtectedPorts {
+    /// 置位端口数（观测用；内核重算）。
+    pub count: u32,
+    /// 65536 位位图，位 i = 端口 i 受保护。
+    pub bitmap: [u8; PROTECTED_PORTS_BITMAP_BYTES],
+}
+
+/// 位图字节数（65536 位）。与契约 `SetProtectedPorts.bitmap` 的 `u8[8192]` 一致，
+/// 下面的断言保证两者不会各自漂移。
+pub const PROTECTED_PORTS_BITMAP_BYTES: usize = 8192;
+
+const _: () = assert!(
+    PROTECTED_PORTS_BITMAP_BYTES
+        == contract::SetProtectedPorts::WIRE_SIZE - contract::MsgHdr::WIRE_SIZE - 4
+);
+
+impl SetProtectedPorts {
+    /// 编码整条报文（含公共头）。
+    #[must_use]
+    pub fn encode(&self, seq: u32) -> Vec<u8> {
+        let wire = contract::SetProtectedPorts::WIRE_SIZE;
+        let mut raw = contract::SetProtectedPorts {
+            hdr: header(contract::SetProtectedPorts::MSG_TYPE, seq, wire_u16(wire)),
+            count: self.count.to_be(),
+            bitmap: [0u8; PROTECTED_PORTS_BITMAP_BYTES],
+        };
+        raw.bitmap.copy_from_slice(&self.bitmap);
+        packed_bytes(&raw, wire)
+    }
+}
+
 /// 分页查询参数。三个 LIST 查询共用。
 ///
 /// `limit == 0` 的含义是「内核取默认页大小」，**不是**「不限量」——这是契约里

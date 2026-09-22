@@ -173,6 +173,8 @@ struct YamlDdos {
     // 内核模块参数
     max_bans_per_second: Option<u32>,
     max_rate_entries: Option<u32>,
+    // 对外监听端口自动纳入 DDoS 速率判定（默认 true）
+    protect_open_ports: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -370,6 +372,9 @@ pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
         }
         if let Some(v) = ddos.max_rate_entries {
             cfg.ddos.max_rate_entries = v;
+        }
+        if let Some(v) = ddos.protect_open_ports {
+            cfg.ddos.protect_open_ports = v;
         }
     }
 

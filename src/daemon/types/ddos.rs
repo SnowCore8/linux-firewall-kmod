@@ -38,6 +38,12 @@ pub struct DdosConfig {
     // 内核模块参数
     pub max_bans_per_second: u32, // 每秒最大封禁数（默认 200）
     pub max_rate_entries: u32,    // 速率表容量（默认 65536）
+    /// 对外监听端口保护：把本机对外监听端口自动纳入 DDoS 速率判定（默认 true）。
+    ///
+    /// 关闭后 daemon 会下发一张**全零**位图——注意这与「从未下发」不同：
+    /// 全零意味着没有任何端口参与速率判定（检测面为空），而从未下发时内核
+    /// 保持全端口参与（失败安全）。该开关用于排查与对照测试，正常应保持开启。
+    pub protect_open_ports: bool,
 }
 
 impl Default for DdosConfig {
@@ -63,6 +69,8 @@ impl Default for DdosConfig {
             // 内核模块参数
             max_bans_per_second: 200,
             max_rate_entries: 65536,
+            // 对外端口自动保护默认开启（「自动纳入」是本特性的语义）
+            protect_open_ports: true,
         }
     }
 }

@@ -215,6 +215,28 @@ pub fn write_detection_switches(switches: DetectionSwitches) {
     crate::ban::write_sysfs_bool_param("fw_ddos_detection", switches.ddos_detection);
 }
 
+/// 把受保护端口位图下发到内核。
+///
+/// 载荷很大（8KB），故与 [`sync_protocol_thresholds`] 分开：这条通道只在扫描结果
+/// **变化**时走（见 [`crate::runtime::scheduler`]），阈值走的是 ACK 配对的
+/// `SetConfig`，两者频率与失败语义都不同。
+///
+/// # Returns
+/// - `Ok(`[`SyncOutcome::Sent`]`)` — 已投递
+/// - `Ok(`[`SyncOutcome::Skipped`]`)` — 内核链路尚未就绪（未取得租约），未做任何写入
+/// - `Err(String)` — 发送失败，字符串为底层错误原文
+pub fn sync_protected_ports(
+    bitmap: [u8; crate::protected_ports::BITMAP_BYTES],
+) -> Result<SyncOutcome, String> {
+    let Some(client) = global::get() else {
+        return Ok(SyncOutcome::Skipped);
+    };
+    match client.set_protected_ports(bitmap) {
+        Ok(_) => Ok(SyncOutcome::Sent),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

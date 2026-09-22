@@ -323,6 +323,34 @@ impl Client {
         Ok(Delivered)
     }
 
+    /// 下发受保护端口位图。返回值表示**已投递**，不表示已生效。
+    ///
+    /// 语义是「纳入防护」：置位端口的入站流量参与 DDoS 速率判定。内核收到后
+    /// 会自行重算置位数，故 `count` 只是观测字段。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`RequestError`]。
+    pub fn set_protected_ports(
+        &self,
+        bitmap: [u8; codec::PROTECTED_PORTS_BITMAP_BYTES],
+    ) -> Result<Delivered, RequestError> {
+        // 置位数由发送方按位图实际统计——内核会重算，这里算只是为了让消息里的
+        // count 与位图一致（避免留下「字段与载荷不符」的可疑报文）。
+        let count = u32::try_from(
+            bitmap
+                .iter()
+                .map(|b| b.count_ones() as usize)
+                .sum::<usize>(),
+        )
+        .unwrap_or(u32::MAX);
+        let cmd = codec::SetProtectedPorts { count, bitmap };
+        self.transport
+            .send(&cmd.encode(self.alloc_seq()))
+            .map_err(RequestError::Send)?;
+        Ok(Delivered)
+    }
+
     /// 添加白名单。返回值表示**已投递**。
     ///
     /// # Errors
