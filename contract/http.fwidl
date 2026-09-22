@@ -280,6 +280,15 @@ defect HTTP_SSE_RESERIALIZES_EVERY_DOMAIN {
   text = "旧 SSE 每个 tick 把 5 份载荷（stats/bans/jails/whitelist/rates）全量 serde_json::to_string 一遍，无论有没有变化，且这段序列化在**每条连接**的循环里各做一次。成本是「连接数 × 域数 × 每秒一次」：安静时段也在重复序列化同样的内容，payload 越大越明显"
 }
 
+defect HTTP_SSE_JAILS_NO_PUBLISHER {
+  severity = medium
+  status = fixed
+  where = "src/daemon/web_ui/sse.rs:let Ok(jails_json) = serde_json::to_string(&jails)"
+  fix = "src/daemon/state/compose.rs:pub fn publish_jails_changed"
+  resolution = "按域序列化后，jails 是无所有者的**派生域**（渲染时现读 http_exporter::GLOBAL_JAILS 与封禁表 ban_count），没有内容比对可用，必须由知道派生输入变了的写入点显式推进版本。补三个来源：封禁集合变更（state/bans.rs 的 invalidate_and_publish）、jail 启用/禁用（web_ui/api.rs 的 update_jail_enabled）、峰值时段翻转（runtime/scheduler.rs 按标志翻转）。"
+  text = "jails 域在生产代码里没有任何发布者——全仓唯一的 publish(Domain::Jails) 落在 api/sse.rs 的 #[cfg(test)] 里。前端却在订阅它，且注释声明「变更后立即推送」。两个后果叠加：① 收到首帧后再无重发；② 前端取值写作 sseJails ?? restJails.data，SSE 一旦有过首帧，REST 那份永远取不到，于是写后的 reload() 与页内刷新按钮全是死代码——改 Jail 开关后界面弹「已启用」，开关却弹回原位，只有整页刷新（重连 SSE、重收首帧）才看得到新值。根因：旧实现（src/daemon/web_ui/sse.rs，已随 2.I 退役）每个 tick 无条件重发全部 5 个域，掩盖了「jails 没有真实变更触发」。按域序列化把掩盖拿掉后，缺失的生产者就暴露成用户可见的不更新"
+}
+
 defect HTTP_WHITELIST_KEY_DIVERGENCE {
   severity = medium
   status = fixed
@@ -287,6 +296,15 @@ defect HTTP_WHITELIST_KEY_DIVERGENCE {
   fix = "src/daemon/state/whitelist.rs:pub struct Whitelist"
   resolution = "键的规范化只有一处（state/cidr.rs 的 CidrKey）：网络地址（主机位清零）+ 恒带 /prefix（裸地址即 /32、/128）。修复回执记在 state/whitelist.rs 的 CidrKey 键类型与 cidr.rs 的规范化测试上（本缺陷在旧键规则退役时随 where 一并消失）。"
   text = "白名单的键曾有三套互不相同的规则：LIST 响应恒带 /prefix；事件路径对 /32·/128·/0 存裸地址；build_cidr_key 又把 IPv6 /0 归一成 /128。同一子网因此会拿到两个键，LIST 的整表覆盖打不中事件插入的那一条，表现为「白名单里看到两条同一个网段」或「删了还在」。三套规则分别位于 ban/mod.rs 的 build_cidr_key、netlink/handlers.rs 的 LIST 拼键与事件路径拼键；三处已在同一批退役中全部删除，写入路径（`ban/mod.rs` 的可信 IP 初始化、`web_ui/ban_ops.rs` 的 HTTP 增删）统一经 CidrKey 构造"
+}
+
+defect HTTP_BATCH_BAN_BECOMES_PERMANENT {
+  severity = high
+  status = fixed
+  where = "src/daemon/api/routes/bans.rs:duration: None,"
+  fix = "src/daemon/api/routes/bans.rs:const BATCH_BAN_DURATION_SECS"
+  resolution = "批量封禁改为显式下发 3600 秒（routes/bans.rs 的 BATCH_BAN_DURATION_SECS）。同时校正误导来源：BanCommand::duration 的原注释写作「None 表示用 jail 默认」，而唯一实现（api/adapters.rs 的 LegacyControlPort → web_ui/ban_ops.rs 的 create_ban）把 None 与 Some(0) 一并判为永久封禁，注释已按实际语义改写并写明「想封一段时间必须给具体秒数」。测试替身同因修正：api/testing.rs 的 FakeControlPort 原先只把 Some(0) 当永久，与真实实现不一致，`duration: None` 因此在单测里表现为普通封禁而蒙混过关；现已逐字对齐，并新增回归测试 a_batch_ban_is_time_limited_not_permanent 钉住 3600。"
+  text = "2.E-3 把批量封禁迁到端口时写成了 duration: None，而 None 的真实语义是永久封禁（create_ban 判定 req.duration.is_none() || req.duration == Some(0)），于是「多选若干 IP → 批量封禁」在确认弹窗承诺「统一使用 3600 秒」的情况下，实际把这批 IP 全部永久封禁。两个次生后果：① /api/v1/bans/unban-temporary 只解封临时封禁，这些条目它看不见（total=0），用户没有任何批量退路；② 前端 endpoints.ts 的注释同样写着 3600 秒，契约与实现三处口径互相矛盾。旧实现（web_ui/ban_ops.rs 的 batch_ban）下发的是 Some(3600)，属迁移中的语义漂移而非有意变更"
 }
 
 # ============================================================================

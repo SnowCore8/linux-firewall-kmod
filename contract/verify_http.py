@@ -511,6 +511,103 @@ def check_headers(contract: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _rust_tree_sources() -> str:
+    """递归读 `src/daemon/**/*.rs`，拼成一份用于全仓子串/正则扫描的文本。
+
+    与 [`rust_sources`] 的区别：后者只读各目录**顶层**文件（供类型字段核对，按
+    目录顺序决定同名类型谁先命中）；本函数要的是「整个 daemon 树」，因为发布点
+    分散在子模块里（`state/`、`runtime/`、`web_ui/`、`pipeline/`），漏掉子目录
+    会让「某域有没有生产者」的断言假报缺失。
+    """
+    chunks = []
+    for dirpath, _dirnames, filenames in os.walk(os.path.join(ROOT, "src", "daemon")):
+        for f in sorted(filenames):
+            if f.endswith(".rs"):
+                chunks.append(read(os.path.join(dirpath, f)))
+    return "\n".join(chunks)
+
+
+def _strip_cfg_test_blocks(src: str) -> str:
+    """去掉 ``#[cfg(test)]`` 标记的块，返回只在非测试编译单元里可见的源码。
+
+    用于「**生产**代码里有没有这个」类断言。本仓库把测试内联在各模块的
+    ``#[cfg(test)] mod tests`` 里，而契约里多条断言关心的是生产行为——例如
+    「某个 SSE 域有生产者」，若不过滤测试，一条只存在于测试里的
+    ``publish(Domain::X)`` 会让断言假通过（缺陷 HTTP_SSE_JAILS_NO_PUBLISHER
+    就是这么被掩盖的）。
+
+    扫描按 ``{}`` 深度配对：``#[cfg(test)]`` 在 Rust 里总是挂在某个带花括号的项
+    （``mod`` / ``fn``）前面，块尾即该项的右花括号。缩进无关，字符串字面量里的
+    花括号不参与判定——本文件下游只做子串/正则查找，不需要字节级精确切分。
+
+    注意别把「丢弃」写反：目标是**丢掉块体**（含块头 ``mod tests`` 与整个花括号
+    内部），只保留块外源码。曾写成「只丢掉块尾那个右花括号」，结果测试体被原样
+    保留、剥离器成了空操作——断言反而比预期更弱。
+    """
+    out: list[str] = []
+    pending = False  # 已见到 #[cfg(test)]，正等它那个项的 `{`
+    skip_depth = 0  # >0 表示正在丢弃的块内部，值为花括号深度
+    at_line_start = True
+    i = 0
+    while i < len(src):
+        if at_line_start and not pending and skip_depth == 0:
+            line_end = src.find("\n", i)
+            if line_end == -1:
+                line_end = len(src)
+            if src[i:line_end].strip().startswith("#[cfg(test)]"):
+                pending = True
+                # 属性行本身也丢掉（其中的方括号不是花括号，无需配对）
+                i = line_end
+                at_line_start = True
+                continue
+        ch = src[i]
+        if pending:
+            # 块头（如 `mod tests`）到 `{` 之间的文字一并丢弃；`{` 之后进入块体。
+            # `#[cfg(test)]` 也常挂在**无花括号**的项上（`mod tests;`、
+            # `pub(crate) mod testing;`、`const X = ...;`），这类项到 `;` 就结束，
+            # 不能等到下一个 `{`——否则会把其后的生产代码一起吞掉。
+            if ch == "{":
+                skip_depth = 1
+                pending = False
+            elif ch == ";":
+                pending = False
+        elif skip_depth > 0:
+            if ch == "{":
+                skip_depth += 1
+            elif ch == "}":
+                skip_depth -= 1
+            # 块体连同它的收尾 `}` 全部丢弃，不写进 out
+        else:
+            out.append(ch)
+        if ch == "\n":
+            at_line_start = True
+        elif ch not in " \t\r":
+            at_line_start = False
+        i += 1
+    return "".join(out)
+
+
+def _domain_publishers(prod_src: str, domain: str, variant: str) -> int:
+    """统计生产代码里显式推进该域版本的**调用点**数。
+
+    事件名与枚举变体拼写不同——`Domain::name()` 返回小写（``"whitelist"``），
+    枚举变体是首字母大写（``Domain::Whitelist``）——故两者都要匹配：
+
+      * ``publish(Domain::<Variant>)``（所有者模块里的直接发布）
+      * ``publish_<domain>_changed()``（compose.rs 里为派生域封装的具名入口，
+        调用方不必知道枚举路径；按小写事件名命名）
+
+    **必须用 ``?`` 排除定义行**：具名入口自己的定义写作 ``pub fn
+    publish_<domain>_changed()``，若把它算作调用点，那么「把全部调用点删掉」的
+    变异测不出红——定义行会让计数永远 ≥ 1（曾实测：删掉两个调用点后仍报 2）。
+    """
+    pat = re.compile(
+        rf"publish(?!_)\s*\(\s*(?:[A-Za-z_][\w:]*::)*Domain::{variant}\s*\)"
+        rf"|publish_{domain}_changed\s*\(\s*\)\s*;"
+    )
+    return len(pat.findall(prod_src))
+
+
 def check_sse_events(contract: dict) -> list[str]:
     """推送侧与订阅侧的事件名核对，**按引擎而非按路径**分派。
 
@@ -530,8 +627,16 @@ def check_sse_events(contract: dict) -> list[str]:
     logs_src = read(LOG_VIEWER_RS)
     subscribe = read(os.path.join(ROOT, "frontend", "src", "hooks", "useSse.ts"))
     logs_page = read(os.path.join(ROOT, "frontend", "src", "views", "Logs.tsx"))
-    # `Domain::name()` 实际返回的字符串集合，例如 {"stats", "bans", ...}
-    domain_names = set(re.findall(r'Self::\w+\s*=>\s*"(\w+)"', hub_src))
+    # `Domain::name()` 的「事件名 → 枚举变体」映射（小写事件名 ↔ 首字母大写变体），
+    # 例如 {"stats": "Stats", "whitelist": "Whitelist", ...}
+    name_to_variant = dict(
+        (name, variant)
+        for variant, name in re.findall(r'Self::(\w+)\s*=>\s*"(\w+)"', hub_src)
+    )
+    domain_names = set(name_to_variant)
+    # 生产源码（已剔除 #[cfg(test)] 块）：域事件必须**在生产路径**有发布者，
+    # 只出现在测试里的 publish(Domain::X) 不算（见 _strip_cfg_test_blocks）。
+    prod_src = _strip_cfg_test_blocks(_rust_tree_sources())
     for r in contract["routes"]:
         if r["returns"] != "stream":
             continue
@@ -544,11 +649,24 @@ def check_sse_events(contract: dict) -> list[str]:
                         problems.append(
                             "SSE /api/v1/events: 事件 'connected' 无字面量推送点"
                         )
-                elif f'"{ev}"' not in src and ev not in domain_names:
-                    problems.append(
-                        f"SSE /api/v1/events: 事件 {ev!r} 既非 Domain::name() 的返回值"
-                        f"（实际 {sorted(domain_names)}），也无字面量推送点"
-                    )
+                else:
+                    if f'"{ev}"' not in src and ev not in domain_names:
+                        problems.append(
+                            f"SSE /api/v1/events: 事件 {ev!r} 既非 Domain::name() 的返回值"
+                            f"（实际 {sorted(domain_names)}），也无字面量推送点"
+                        )
+                    # 声明了域事件就必须有生产发布者：否则推送循环（只发版本变化过的域）
+                    # 永远不发这一域，前端收完首帧后再无更新。见缺陷
+                    # HTTP_SSE_JAILS_NO_PUBLISHER。
+                    if ev in domain_names and _domain_publishers(
+                        prod_src, ev, name_to_variant[ev]
+                    ) == 0:
+                        problems.append(
+                            f"SSE /api/v1/events: 事件 {ev!r} 在生产代码里没有发布者"
+                            f"（publish(Domain::{name_to_variant[ev]}) / "
+                            f"publish_{ev}_changed 均未找到，测试内的发布点不算）"
+                            f"——按域序列化后该域永远不会重发"
+                        )
                 if f"'{ev}'" not in consumer and f'"{ev}"' not in consumer:
                     problems.append(
                         f"SSE /api/v1/events: 事件 {ev!r} 在前端订阅侧找不到（{consumer_name}）"
