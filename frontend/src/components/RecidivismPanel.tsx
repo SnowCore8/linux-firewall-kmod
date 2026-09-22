@@ -6,21 +6,34 @@
 //
 // 与「当前封禁列表」不同，这里是**历史**维度：只有被解封后再次被封的 IP 才算复发
 // （ban_count >= 2），因此必须走 REST 而不是 SSE 实时推送，但会按与 SSE 同源的间隔
-// 自动刷新（`usePollInterval`），后台标签页自动暂停。
+// 自动刷新（`usePollInterval`），后台标签页自动暂停。面板内**不设刷新按钮**：
+// 全站刷新入口只有顶栏「刷新」与下拉手势（见 console.tsx 的工具条说明）。
 //
 // 排版：本组件**不渲染 h2**。它是仪表盘内的一个内容块，页面的 h2 由 `PageHeader`
 // 独占——否则同一屏会出现两层同级标题，读屏器与 e2e 的 exact 断言都会被干扰。
 // 分组改用 `Panel`（自带 11px 细条标题），层级仍然清楚。
 //
 // 无 props 也能用（数据自取），调用方直接 <RecidivismPanel /> 即可。
-import { Button, SpinLoading } from 'antd-mobile'
 import { ExclamationTriangleOutline } from 'antd-mobile-icons'
 
 import { getJson } from '../api/client'
 import type { RecidivismResponse } from '../api/types'
 import { useAsync } from '../hooks/useAsync'
 import { usePollInterval } from '../hooks/usePollInterval'
-import { Badge, Meter, Panel, Row, Rows, Tile, Tiles, Verdict, toneColor, type Tone } from './console'
+import {
+  Badge,
+  InlineError,
+  Meter,
+  Panel,
+  PanelLoading,
+  Row,
+  Rows,
+  Tile,
+  Tiles,
+  Verdict,
+  toneColor,
+  type Tone,
+} from './console'
 import { EmptyState } from './EmptyState'
 
 /** 端点：复发率统计（见 handler.rs 的 `/api/v1/stats/recidivism`） */
@@ -75,43 +88,26 @@ export function RecidivismPanel({ limit = 10 }: RecidivismPanelProps) {
     { pollMs },
   )
 
-  /** 面板右上角的刷新按钮：纯取数，仍给足 44px 触摸高度 */
-  const refreshButton = (
-    <Button size="mini" fill="outline" color="primary" loading={loading} onClick={reload} style={{ minHeight: 44 }}>
-      刷新
-    </Button>
-  )
-
   // 首次加载（尚无任何数据）时才占位，避免自动刷新时内容闪烁
   if (loading && !data) {
     return (
-      <Panel title="封禁复发分析" extra={refreshButton}>
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '14px 0' }}>
-          <SpinLoading />
-        </div>
+      <Panel title="封禁复发分析">
+        <PanelLoading lines={4} />
       </Panel>
     )
   }
 
   if (error) {
     return (
-      <Panel title="封禁复发分析" extra={refreshButton}>
-        <EmptyState
-          title="复发统计加载失败"
-          description={error}
-          action={
-            <Button color="primary" fill="outline" onClick={reload} style={{ minHeight: 44 }}>
-              重试
-            </Button>
-          }
-        />
+      <Panel title="封禁复发分析">
+        <InlineError message={`复发统计加载失败：${error}`} onRetry={reload} />
       </Panel>
     )
   }
 
   if (!data || data.total_ips === 0) {
     return (
-      <Panel title="封禁复发分析" extra={refreshButton}>
+      <Panel title="封禁复发分析">
         <EmptyState
           title="暂无封禁历史"
           description="还没有累积到封禁历史记录，无法计算复发率。发生封禁后回来查看即可。"
@@ -128,7 +124,7 @@ export function RecidivismPanel({ limit = 10 }: RecidivismPanelProps) {
 
   return (
     <>
-      <Panel title="封禁复发分析" extra={refreshButton}>
+      <Panel title="封禁复发分析">
         {/* 结论条：一眼看出「策略有没有效」；右侧是大号比例 + 同比例细条 */}
         <Verdict
           text={verdict}

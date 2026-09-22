@@ -566,7 +566,8 @@ export default function Logs() {
             }
             padded={false}
           >
-            {/* 过滤区：搜索 + 级别分段 + 时间下限说明 + 三个 44px 操作钮 */}
+            {/* 过滤区：搜索 + 级别分段 + 时间下限说明 + 两个 44px 操作钮
+                （刷新不在这里：顶栏「刷新」与下拉手势已覆盖，见 console.tsx 工具条说明） */}
             <div style={{ padding: '5px 6px 0' }}>
               <SearchBar
                 placeholder="关键词（后端按整行小写包含匹配）"
@@ -604,14 +605,6 @@ export default function Logs() {
                   onClick={() => void cancelPersistedCutoff()}
                 >
                   取消配置起点
-                </button>
-                <button
-                  type="button"
-                  className="fw-cmd"
-                  aria-label="刷新历史日志"
-                  onClick={() => void history.reload()}
-                >
-                  刷新
                 </button>
               </div>
             </div>

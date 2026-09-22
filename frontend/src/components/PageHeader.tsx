@@ -16,7 +16,7 @@ export interface PageHeaderProps {
   title: ReactNode
   /** 副标题：放统计口径、时间范围等限定信息 */
   subtitle?: ReactNode
-  /** 右侧操作区（刷新按钮、切换器等窄元素） */
+  /** 右侧操作区（切换器、状态标等窄元素；不放刷新按钮——刷新只走顶栏与下拉手势） */
   extra?: ReactNode
   /** 标题下方的补充内容（说明文字、图例） */
   children?: ReactNode
