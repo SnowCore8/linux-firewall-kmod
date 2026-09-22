@@ -39,6 +39,7 @@
 
 #include <linux/icmp.h>
 #include <linux/icmpv6.h>
+#include <linux/netdevice.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <net/checksum.h>
@@ -161,6 +162,11 @@ static unsigned int fw_hook_ipv4(void *priv, struct sk_buff *skb,
   if (unlikely(!skb))
     return NF_ACCEPT;
 
+  /* lo 接口默认豁免：环回接口上的流量不是外来流量（本机内部通信），
+   * 在入口直接放行——不进任何表查询，也不计任何统计。 */
+  if (unlikely(skb->dev && (skb->dev->flags & IFF_LOOPBACK)))
+    return NF_ACCEPT;
+
   /* 报文合法性：长度 / 版本 / 头长 / 校验和，非法一律放行（不由防火墙处理） */
   if (unlikely(!pskb_may_pull(skb, sizeof(struct iphdr))))
     return NF_ACCEPT;
@@ -279,6 +285,11 @@ static unsigned int fw_hook_ipv6(void *priv, struct sk_buff *skb,
     return NF_ACCEPT;
 
   if (unlikely(!skb))
+    return NF_ACCEPT;
+
+  /* lo 接口默认豁免：环回接口上的流量不是外来流量（本机内部通信），
+   * 在入口直接放行——不进任何表查询，也不计任何统计。 */
+  if (unlikely(skb->dev && (skb->dev->flags & IFF_LOOPBACK)))
     return NF_ACCEPT;
 
   if (unlikely(!pskb_may_pull(skb, sizeof(struct ipv6hdr))))
