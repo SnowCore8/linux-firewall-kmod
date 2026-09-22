@@ -189,6 +189,11 @@ html {
   /* 禁止安卓 Chrome 横竖屏切换时自动放大字号 */
   -webkit-text-size-adjust: 100%;
   height: 100%;
+  /* 关掉浏览器原生的下拉刷新（会把 PWA 整页重载，绕过应用内的软刷新）。
+   * 必须写在 html 上：视口的 overscroll 行为由**根元素**决定，写在 body 上无效
+   * （本页滚动的是文档本身，.fw-main 不是滚动容器）。
+   * 用 contain 而不是 none：只切断向浏览器 UI 的传递，不改变本元素自身的滚动。 */
+  overscroll-behavior-y: contain;
 }
 
 /* 为什么用 :root 而不是 html：antd-mobile 的 global.css 里有一条
@@ -214,8 +219,6 @@ html body {
   /* 控制台行距：比阅读型排版更紧，一屏多放几行 */
   line-height: 1.35;
   -webkit-font-smoothing: antialiased;
-  /* 阻止安卓 Chrome 的下拉刷新把 PWA 整页重载（TabBar 之下已是应用内滚动区） */
-  overscroll-behavior-y: contain;
 }
 
 /* 挂载点撑满：AppShell 才有 100vh 可用的最小高度 */
