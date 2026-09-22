@@ -151,7 +151,10 @@ pub struct FakeControlPort {
 
 impl ControlPort for FakeControlPort {
     fn ban(&self, cmd: BanCommand) -> Result<BanOutcome, String> {
-        let permanent = cmd.duration == Some(0);
+        // 与真实实现（LegacyControlPort → create_ban）逐字对齐：`None` 与 `Some(0)`
+        // 都是永久封禁。替身若只认 `Some(0)`，`duration: None` 的错误就会在测试里
+        // 表现为「普通封禁」而蒙混过关——批量封禁曾被这样漏过。
+        let permanent = cmd.duration.is_none() || cmd.duration == Some(0);
         self.bans.lock().expect("锁未中毒").push(cmd);
         if let Some(err) = self.ban_error.lock().expect("锁未中毒").clone() {
             return Err(err);

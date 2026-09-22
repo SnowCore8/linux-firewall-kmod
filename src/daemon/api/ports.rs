@@ -277,7 +277,12 @@ pub struct ThreatInputs {
 pub struct BanCommand {
     /// 目标 IP。
     pub ip: IpAddr,
-    /// 指定时长（秒）；`None` 表示用 jail 默认，`Some(0)` 表示永久。
+    /// 指定时长（秒）。
+    ///
+    /// **`None` 与 `Some(0)` 都表示永久封禁**（与内核 `ban_time=-1` 语义一致）：
+    /// 控制端口把它原样交给 `create_ban`，后者按此判定 `permanent`。想封一段时间
+    /// 就必须给出具体秒数，**不要**把「不指定」当成「用配置里的默认时长」——那会
+    /// 静默变成永久封禁。
     pub duration: Option<u64>,
     /// 原因；`None` 表示手工封禁。
     pub reason: Option<String>,

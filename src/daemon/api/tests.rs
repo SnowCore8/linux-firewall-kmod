@@ -326,6 +326,32 @@ async fn a_batch_outside_the_allowed_size_lands_on_code_40005() {
     assert_eq!(json["code"], BusinessCode::InvalidBatchOrLogQuery.raw());
 }
 
+/// 批量封禁必须是**限时**封禁。
+///
+/// 回归：端口重写时把 `duration` 写成了 `None`，而 `None` 在真实控制面里等于
+/// 永久封禁（`create_ban` 的判定），于是「选中一批 IP 批量封禁」会在用户以为
+/// 只封 1 小时的情况下把对方永久封掉。前端两处文案承诺 3600 秒。
+#[tokio::test]
+async fn a_batch_ban_is_time_limited_not_permanent() {
+    let h = Harness::new();
+    let ips: Vec<String> = (1..=3).map(|i| format!("10.0.2.{i}")).collect();
+    let response = handle_batch_ban(State(Arc::clone(&h.api)), Json(ips)).await;
+    let (status, json) = response_parts(response).await;
+    assert_eq!(status, 201);
+    assert_eq!(json["data"]["succeeded"], 3);
+
+    let sent = h.control.bans.lock().expect("锁未中毒").clone();
+    assert_eq!(sent.len(), 3, "三条 IP 都要真的下发");
+    for cmd in &sent {
+        assert_eq!(
+            cmd.duration,
+            Some(3600),
+            "批量封禁必须带 3600 秒时长；None 会被判成永久封禁"
+        );
+        assert_eq!(cmd.reason.as_deref(), Some("批量封禁"));
+    }
+}
+
 #[tokio::test]
 async fn a_config_error_lands_on_code_40004() {
     let h = Harness::new();

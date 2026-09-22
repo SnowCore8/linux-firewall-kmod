@@ -24,6 +24,14 @@ use super::ApiState;
 const MANUAL_BAN_REASON: &str = "手工封禁";
 /// 批量封禁的默认原因。
 const BATCH_BAN_REASON: &str = "批量封禁";
+/// 批量封禁的固定时长（秒）。
+///
+/// **不能省成 `None`**：`BanCommand::duration` 的 `None` 语义是「用 jail 默认」，
+/// 而控制端口把它原样交给 `create_ban`，后者把 `None` 当**永久封禁**
+/// （与内核 `ban_time=-1` 对齐）。批量封禁若传 `None`，就会在用户选中一批 IP
+/// 时静默地把它们全部永久封禁——前端两处文案（确认弹窗与 endpoints.ts 注释）
+/// 都承诺 3600 秒，且旧实现也确实是 3600。
+const BATCH_BAN_DURATION_SECS: u64 = 3600;
 
 /// `GET /api/v1/bans`：分页返回活跃封禁。
 pub async fn handle_api_bans(
@@ -208,7 +216,7 @@ pub async fn handle_batch_ban(
                 Ok(ip) => {
                     let cmd = BanCommand {
                         ip,
-                        duration: None,
+                        duration: Some(BATCH_BAN_DURATION_SECS),
                         reason: Some(BATCH_BAN_REASON.to_string()),
                     };
                     match control.ban(cmd) {
