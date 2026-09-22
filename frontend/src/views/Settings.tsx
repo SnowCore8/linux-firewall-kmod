@@ -410,7 +410,11 @@ function PairBadge(props: { ok: boolean; valid: boolean }) {
   )
 }
 
-/** 保存 / 撤销操作条：顶部与底部各放一份，长页面无需滚到底才能保存 */
+/**
+ * 保存 / 撤销操作条：全页仅此一份，置于内容末尾——读完最后一屏即就地保存。
+ * 顶部不再重复一份操作条：待保存与否已由工具条的常驻状态标表达，同一组按钮
+ * 在一页里出现两次只会让人怀疑哪一份才是生效的那个。
+ */
 function ActionBar(props: {
   dirty: boolean
   count: number
@@ -640,14 +644,6 @@ export default function Settings() {
 
           {ready && numbers !== null && flags !== null && (
             <>
-              <ActionBar
-                dirty={dirty}
-                count={diff.changedCount}
-                saving={saving}
-                onSave={() => void save()}
-                onReset={resetDraft}
-              />
-
               {dirty && (
                 <div
                   style={{
