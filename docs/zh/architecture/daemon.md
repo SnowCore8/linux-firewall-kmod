@@ -28,7 +28,7 @@ daemon 负责应用层检测（如 SSH 暴力破解）与对外接口。
 | inotify | 日志文件变更监控（`inotify` crate 绑定） |
 | netlink | 与内核双向通信：命令下发、分页查询、事件推送 |
 | rusqlite | 时序历史、封禁历史、IP 信誉分持久化 |
-| slog + slog-json | 结构化日志（JSON Lines） |
+| slog + slog-scope | 结构化日志（JSON Lines，自定义 drain 保证整行单次写入） |
 | rust-embed | 前端构建产物嵌入二进制（`src/daemon/web_ui/static/`） |
 
 ## 本文档的口径
@@ -367,9 +367,11 @@ jail 启用/禁用（`web_ui/api.rs::update_jail_enabled`）、峰值时段翻�
 
 **日志**：基于 slog 的结构化日志，JSON Lines 格式（每行一条 JSON 对象，字段顺序
 `ts → level → msg → version → 其他`），写入配置文件 `defaults.log_file` 指定的路径；未指定或
-为空时用默认路径 `/var/log/firewall-daemon.log`。文件打开失败回退 stderr（用 `dup` 复制 fd 2，
-不接管原始 stderr）。`log_destination` / `log_format` 字段仍存在于配置结构中，但当前 logger 只
-实现「JSON Lines → 文件」，不读这两个字段。
+为空时用默认路径 `/var/log/firewall-daemon.log`。日志由自定义 drain 同步写出，**整行（含换行）
+合并为单次 `write()`**——这保证多个写者（例如重启期间新旧进程短暂并存）追加同一文件时每行
+仍是独立合法 JSON。文件打开失败回退 stderr（用 `dup` 复制 fd 2，不接管原始 stderr）。
+`log_destination` / `log_format` 字段仍存在于配置结构中，但当前 logger 只实现
+「JSON Lines → 文件」，不读这两个字段。
 
 **信号**（当前生产实现，`signal/mod.rs`）：
 
