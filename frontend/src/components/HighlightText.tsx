@@ -7,6 +7,9 @@
 //      IPv6 里的 `:`、以及用户随手输入的 `(` 都会让裸拼的正则抛异常或误匹配。
 //   2. 命中判断用「小写集合比对」而不是 RegExp.test —— 带 g 标志的正则实例
 //      在 test() 之间会保留 lastIndex，连续调用会出现「隔一个漏一个」的经典坑。
+//
+// 控制台形态：命中使用主题的 primary-soft 底 + primary-strong 字（弱底色衬托，
+// 不用荧光高亮抢夺视线），圆角 1px 与全局的 2px 圆角语言保持一致。
 import { useMemo } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 
@@ -63,7 +66,7 @@ export function HighlightText({ text, query, className, style }: HighlightTextPr
             key={`${index}-${segment.text}`}
             style={{
               padding: '0 1px',
-              borderRadius: 2,
+              borderRadius: 1,
               background: 'var(--fw-primary-soft)',
               color: 'var(--fw-primary-strong)',
               fontWeight: 600,

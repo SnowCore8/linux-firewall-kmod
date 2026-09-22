@@ -23,6 +23,7 @@ import type { JSX, ReactNode } from 'react'
 
 import { withAccessToken } from '../api/auth'
 import { SSE_EVENTS_URL, getSseStatus } from '../api/endpoints'
+import { nextFreshnessStamp } from './freshness'
 import type {
   BanResponse,
   JailResponse,
@@ -54,10 +55,26 @@ export interface SseState {
   jails: JailResponse[] | null
   rates: RateResponse[] | null
   whitelist: WhitelistEntry[] | null
+  /**
+   * 各域载荷的新鲜度戳：收到该域某帧时取一个全局单调戳（见
+   * [`nextFreshnessStamp`](./freshness.ts)），未收到过为 0。供
+   * [`useLiveData`](./useLiveData.ts) 与 `useAsync().dataSeq` 比较「谁的数据更新」，
+   * **不参与渲染**。
+   */
+  payloadSeq: PayloadSeq
   /** 速率趋势环形缓冲，最多保留最近 300 点 */
   rateHistory: RateHistoryPoint[]
   /** 已连续失败次数（成功握手后归零），用于界面提示「第 N 次重连」 */
   reconnectAttempt: number
+}
+
+/** 各域载荷的新鲜度戳（域名 → 戳），见 [`SseState.payloadSeq`] */
+export interface PayloadSeq {
+  stats: number
+  bans: number
+  jails: number
+  rates: number
+  whitelist: number
 }
 
 /** 速率趋势保留点数上限：约 300 × 1 秒推送间隔 = 5 分钟窗口 */
@@ -74,6 +91,11 @@ type SseAction =
   | { type: 'rates'; payload: RateResponse[] }
   | { type: 'whitelist'; payload: WhitelistEntry[] }
 
+/** 首帧前的 payloadSeq：所有域都还没收到过 */
+function emptyPayloadSeq(): PayloadSeq {
+  return { stats: 0, bans: 0, jails: 0, rates: 0, whitelist: 0 }
+}
+
 function createInitialState(): SseState {
   return {
     status: 'connecting',
@@ -82,6 +104,7 @@ function createInitialState(): SseState {
     jails: null,
     rates: null,
     whitelist: null,
+    payloadSeq: emptyPayloadSeq(),
     rateHistory: [],
     reconnectAttempt: 0,
   }
@@ -109,6 +132,11 @@ function toRatePoint(payload: RateResponse[]): RateHistoryPoint {
   }
 }
 
+/** 把某域的新鲜度戳更新为当前全局戳（返回新对象，保持 reducer 不可变语义） */
+function bump(seq: PayloadSeq, domain: keyof PayloadSeq): PayloadSeq {
+  return { ...seq, [domain]: nextFreshnessStamp() }
+}
+
 function sseReducer(state: SseState, action: SseAction): SseState {
   switch (action.type) {
     case 'connecting':
@@ -121,21 +149,30 @@ function sseReducer(state: SseState, action: SseAction): SseState {
     case 'connection_limit':
       return { ...state, status: 'connection_limit' }
     case 'stats':
-      return { ...state, stats: action.payload }
+      return { ...state, stats: action.payload, payloadSeq: bump(state.payloadSeq, 'stats') }
     case 'bans':
-      return { ...state, bans: action.payload }
+      return { ...state, bans: action.payload, payloadSeq: bump(state.payloadSeq, 'bans') }
     case 'jails':
-      return { ...state, jails: action.payload }
+      return { ...state, jails: action.payload, payloadSeq: bump(state.payloadSeq, 'jails') }
     case 'rates': {
       const next = [...state.rateHistory, toRatePoint(action.payload)]
       // 环形缓冲：超出上限时丢弃最旧的采样点
       if (next.length > RATE_HISTORY_LIMIT) {
         next.splice(0, next.length - RATE_HISTORY_LIMIT)
       }
-      return { ...state, rates: action.payload, rateHistory: next }
+      return {
+        ...state,
+        rates: action.payload,
+        rateHistory: next,
+        payloadSeq: bump(state.payloadSeq, 'rates'),
+      }
     }
     case 'whitelist':
-      return { ...state, whitelist: action.payload }
+      return {
+        ...state,
+        whitelist: action.payload,
+        payloadSeq: bump(state.payloadSeq, 'whitelist'),
+      }
     default:
       return state
   }

@@ -1,11 +1,14 @@
 // 渲染异常边界：捕获子树在「渲染 / 生命周期 / 构造函数」中抛出的异常
 //
 // 为什么需要：React 18+ 若某棵子树渲染抛错且无人接管，整棵树会被卸载成白屏，
-// 控制台报错在手机上根本看不到。这里把异常降级为一个可见的卡片 + 堆栈，
+// 控制台报错在手机上根本看不到。这里把异常降级为一个可见的面板 + 堆栈，
 // 并提供「重试」，让用户/运维能立刻知道是哪个组件坏了。
 //
 // 注意：ErrorBoundary 不能捕获事件回调、setTimeout、Promise 里的异常
 // （那些走 useToast / 视图自己的 error 分支处理）。
+//
+// 样式说明：本组件可能挂在 `.fw-shell` **之外**（main.tsx 把它放在最外层），
+// 因此只用全局的 `fw-*` 类，不用依赖 `.fw-shell` 前缀的组件覆盖规则。
 import { Button } from 'antd-mobile'
 import { Component } from 'react'
 import type { ErrorInfo, ReactNode } from 'react'
@@ -15,10 +18,10 @@ export interface ErrorBoundaryProps {
   /**
    * 该值变化时自动清除错误状态。
    * 典型用法：传当前路由 pathname —— 用户在错误页点了底部导航后，
-   * 边界会复位，不会一直卡在上一页的错误卡片上。
+   * 边界会复位，不会一直卡在上一页的错误面板上。
    */
   resetKey?: string | number
-  /** 自定义错误 UI；不传则使用内置卡片 */
+  /** 自定义错误 UI；不传则使用内置面板 */
   fallback?: (error: Error, reset: () => void) => ReactNode
 }
 
@@ -54,53 +57,60 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     if (this.props.fallback) return this.props.fallback(error, this.reset)
 
     return (
-      <div
-        role="alert"
-        style={{
-          margin: 7,
-          padding: 10,
-          border: '1px solid var(--fw-danger)',
-          borderRadius: 'var(--fw-radius)',
-          background: 'var(--fw-surface)',
-          color: 'var(--fw-text)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 5 }}>
-          <span style={{ color: 'var(--fw-danger)', fontSize: 16, lineHeight: 1 }}>⚠</span>
-          <strong style={{ fontSize: 14 }}>界面渲染出错</strong>
+      <div role="alert" className="fw-panel" style={{ margin: 6, borderColor: 'var(--fw-danger)' }}>
+        <header className="fw-panel-head" style={{ background: 'rgba(255, 85, 97, 0.12)' }}>
+          {/* 用面板头承载标题：与全站其他分组同一套排版语言 */}
+          <span className="fw-panel-title" style={{ color: 'var(--fw-danger)' }}>
+            界面渲染出错
+          </span>
+          <span className="fw-panel-meta">RENDER ERROR</span>
+        </header>
+
+        <div className="fw-panel-body">
+          {/* 错误消息可能很长（含 URL / 组件名），等宽 + 允许换行 */}
+          <div
+            className="fw-mono"
+            style={{ fontSize: 11, color: 'var(--fw-text-2)', wordBreak: 'break-word' }}
+          >
+            {error.message || '未知错误'}
+          </div>
+
+          {/* 堆栈默认折叠：默认不刷屏，排查时展开即可 */}
+          {error.stack ? (
+            <details style={{ marginTop: 4 }}>
+              <summary style={{ fontSize: 11, color: 'var(--fw-text-3)', cursor: 'pointer' }}>
+                查看堆栈信息
+              </summary>
+              <pre
+                className="fw-mono"
+                style={{
+                  margin: '4px 0 0',
+                  padding: 5,
+                  maxHeight: 200,
+                  overflow: 'auto',
+                  fontSize: 10,
+                  lineHeight: 1.5,
+                  color: 'var(--fw-text-2)',
+                  background: 'var(--fw-bg-alt)',
+                  border: '1px solid var(--fw-border)',
+                  borderRadius: 'var(--fw-radius-sm)',
+                }}
+              >
+                {error.stack}
+              </pre>
+            </details>
+          ) : null}
+
+          <Button
+            size="small"
+            color="danger"
+            fill="outline"
+            onClick={this.reset}
+            style={{ marginTop: 5, minHeight: 44 }}
+          >
+            重试
+          </Button>
         </div>
-        <p style={{ margin: '0 0 7px', fontSize: 12, color: 'var(--fw-text-2)', wordBreak: 'break-word' }}>
-          {error.message || '未知错误'}
-        </p>
-
-        {/* 堆栈默认折叠：默认不刷屏，排查时展开即可 */}
-        {error.stack ? (
-          <details style={{ marginBottom: 7 }}>
-            <summary style={{ fontSize: 12, color: 'var(--fw-text-3)', cursor: 'pointer' }}>
-              查看堆栈信息
-            </summary>
-            <pre
-              className="fw-mono"
-              style={{
-                margin: '5px 0 0',
-                padding: 5,
-                maxHeight: 200,
-                overflow: 'auto',
-                fontSize: 11,
-                lineHeight: 1.5,
-                color: 'var(--fw-text-2)',
-                background: 'var(--fw-bg-alt)',
-                borderRadius: 'var(--fw-radius-sm)',
-              }}
-            >
-              {error.stack}
-            </pre>
-          </details>
-        ) : null}
-
-        <Button size="small" color="primary" fill="outline" onClick={this.reset}>
-          重试
-        </Button>
       </div>
     )
   }

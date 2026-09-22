@@ -1,14 +1,24 @@
 /* ============================================================================
- * 全局样式：设计令牌（深浅双主题）+ 移动端基线 + 应用外壳布局
+ * 全局样式：控制台设计系统（高密度 / 等宽 / 发丝边框）+ 移动端基线 + 外壳布局
  *
- * 目标平台：安卓 Chrome（移动优先）。视口已在 index.html 中开启
- * `viewport-fit=cover`，因此所有贴边元素都要自行适配安全区（env(safe-area-inset-*)）。
+ * 设计取向：**控制台式高密度**。这不是「卡片流」而是「运维终端」——
+ *   · 画布近黑，面板只比画布亮一档；靠 1px 发丝边框而非阴影划分层次
+ *   · 圆角 2px（终端感），不用阴影、不用渐变、不用大留白
+ *   · 一切数字与标识符（IP / CIDR / 速率 / 计数）走等宽字体 + tabular-nums，
+ *     保证纵向对齐、实时跳动时不左右抖动
+ *   · 「标签 dim + 数值亮」的两列结构是本系统的核心排版单位（.fw-row）
+ *   · 面板标题是 22px 的细条（左边一个强调色方块），不是大标题
+ *   · 密度与触摸目标分离：数据行可以只有 26px（不可点），
+ *     任何**可点**元素仍必须 ≥44px（--fw-tap），两者互不妥协
  *
- * 主题切换依据：<html data-theme="dark" | "light">（index.html 默认 dark）。
+ * 目标平台：安卓 Chrome（移动优先）。视口已开启 `viewport-fit=cover`，
+ * 贴边元素自行适配安全区（env(safe-area-inset-*)）。
+ *
+ * 主题切换依据：<html data-theme="dark" | light">（index.html 默认 dark）。
  * 为什么还要重绑 --adm-*：antd-mobile 自带的深色变量只在
  * `html[data-prefers-color-scheme='dark']` 下生效，与本项目的 data-theme 开关无关。
  * 这里把 antd-mobile 的 --adm-* 变量重绑到自有令牌上，保证「自有样式」与
- * 「antd-mobile 组件」在同一时刻只有一套主题，不会出现深色页面里冒出浅色卡片。
+ * 「antd-mobile 组件」在同一时刻只有一套主题，不会出现深色页面里冒出浅色面板。
  *
  * 优先级说明：`:root[data-theme='…']` 的权重(0,2,0)高于 antd-mobile 的
  * `html[data-prefers-color-scheme='dark']`(0,1,1)与 `:root`(0,1,0)，
@@ -16,40 +26,43 @@
  * ========================================================================= */
 
 /* ---------------------------------------------------------------------------
- * 1. 深色令牌（默认值）：与 index.html 的 theme-color(#0a0e14) 保持一致
+ * 1. 深色令牌（默认值）：与 index.html 的 theme-color 保持一致
  * ------------------------------------------------------------------------ */
 :root,
 :root[data-theme='dark'] {
-  /* 语义色 */
-  --fw-bg: #0a0e14; /* 页面底色 */
-  --fw-bg-alt: #0d131c; /* 次级底色（斑马纹 / 分组背景） */
-  --fw-surface: #131a24; /* 卡片 / 面板底色 */
-  --fw-surface-hi: #1a2330; /* 卡片激活 / 悬停底色 */
-  --fw-border: #1f2a37; /* 常规分隔线 */
-  --fw-border-strong: #2c3a4b; /* 强调边框（可点击卡片） */
-  --fw-text: #e6edf3; /* 主文字 */
-  --fw-text-2: #9fb0c0; /* 次要文字 */
-  --fw-text-3: #6b7d8f; /* 弱化文字（占位 / 说明） */
-  --fw-primary: #3d8b9a; /* 主色（与站点图标同色系的青蓝） */
-  --fw-primary-strong: #4fb3c4; /* 主色高亮态 */
-  --fw-primary-soft: rgba(61, 139, 154, 0.16); /* 主色淡背景 */
-  --fw-success: #34b368;
-  --fw-warning: #ffa930;
-  --fw-danger: #ff4a58;
-  --fw-info: #3086ff;
-  --fw-shadow: 0 2px 10px rgba(0, 0, 0, 0.45); /* 卡片阴影 */
+  /* 色板：画布 → 面板 → 悬停，三档相邻色差刻意做小（终端观感） */
+  --fw-bg: #05080d; /* 页面底色（近黑，带一点蓝） */
+  --fw-bg-alt: #080d14; /* 次级底色（斑马纹 / 分组背景） */
+  --fw-surface: #0b1119; /* 面板底色：只比画布亮一档 */
+  --fw-surface-hi: #121b25; /* 面板激活 / 悬停 */
+  --fw-border: #17212e; /* 发丝分隔线（1px，系统的骨架） */
+  --fw-border-strong: #26333f; /* 强调边框（选中 / 可点） */
 
-  /* 尺寸 / 字体令牌（含外壳骨架尺寸，AppShell 与 views 共用）
-   *
-   * 比例基准：间距与留白一律 ×0.6（「整体比例下调 40%」）。字号只做 1px 级微降 ——
-   * 手机正文可读下限约 12px，等比缩会把 15px 压到 9px、13px 压到 7.8px，不可读。
-   * 因此凡「间距类」字面量都应写 ×0.6 后的值，而字号按 fw 档位微调。 */
-  --fw-radius: 7px; /* 12 → 7 */
-  --fw-radius-sm: 5px; /* 8 → 5 */
-  --fw-gap: 7px; /* 12 → 7：页面与卡片间距的总基准 */
-  --fw-topbar-h: 44px; /* 52 → 44：再小就容纳不下 44px 触摸目标 */
+  /* 前景三层：主文字 / 次要 / 弱化。对比度依次拉开，保证 11px 小字仍可读 */
+  --fw-text: #dde8f0;
+  --fw-text-2: #93a7b6;
+  --fw-text-3: #62768a;
+
+  /* 语义色：控制台配色，饱和度偏高以便在近黑底上「发光」 */
+  --fw-primary: #3d8b9a; /* 主色（与站点图标同色系） */
+  --fw-primary-strong: #55ccdc; /* 主色高亮：面板标题块、链接、图表主线 */
+  --fw-primary-soft: rgba(61, 139, 154, 0.14);
+  --fw-success: #3ad98d; /* 标称 / 正常 */
+  --fw-warning: #f5a524; /* 警告 */
+  --fw-danger: #ff5561; /* 危险 / 交战 */
+  --fw-info: #4a9eff;
+  --fw-shadow: none; /* 控制台不用阴影（保留令牌以免引用处失效） */
+
+  /* 尺寸：控制台密度。数据行 26px、面板头 22px、间距 6px、圆角 2px */
+  --fw-radius: 2px;
+  --fw-radius-sm: 2px;
+  --fw-gap: 6px;
+  --fw-row-h: 26px; /* 数据行高（不可点行） */
+  --fw-row-h-tap: 44px; /* 可点行高（下限，不参与密度压缩） */
+  --fw-topbar-h: 40px; /* 顶栏比原 44px 更薄：标题不需要那么大 */
   --fw-tabbar-h: 48px; /* antd-mobile TabBar 的 min-height 即 48px，已是下限 */
-  --fw-tap: 44px; /* 保持不动：安卓可点区域下限，不随比例下调 */
+  --fw-tap: 44px; /* 可点区域下限，任何密度调整都不得低于它 */
+
   --fw-font-sans:
     'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', Roboto, sans-serif;
@@ -63,7 +76,7 @@
   /* 浏览器原生控件（滚动条 / 表单 / 日期选择）跟随深色 */
   color-scheme: dark;
 
-  /* antd-mobile 变量重绑：让组件库吃同一套令牌 */
+  /* antd-mobile 变量重绑：让组件库吃同一套令牌与字号 */
   --adm-color-primary: var(--fw-primary-strong);
   --adm-color-success: var(--fw-success);
   --adm-color-warning: var(--fw-warning);
@@ -78,33 +91,32 @@
   --adm-color-box: var(--fw-surface-hi);
   --adm-color-fill-content: var(--fw-surface-hi);
   --adm-font-family: var(--fw-font-sans);
-  --adm-font-size-main: 14px; /* 15 → 14：让组件库正文与自有字号同档 */
+  --adm-font-size-main: 13px; /* 控制台正文档：比 14px 更紧，中文仍可读 */
 }
 
 /* ---------------------------------------------------------------------------
  * 2. 浅色令牌（系统偏好）：仅在页面未显式设置 data-theme 时生效
  *    `:not([data-theme])` 保证「显式深色」不会被系统浅色偏好翻掉。
- *    下面第 3 节的取值必须与本块保持一致（CSS 无变量别名机制，只能重复声明）。
+ *    第 3 节的取值必须与本块保持一致（CSS 无变量别名机制，只能重复声明）。
  * ------------------------------------------------------------------------ */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --fw-bg: #f4f6f9;
-    --fw-bg-alt: #eaeef3;
+    --fw-bg: #eef1f4;
+    --fw-bg-alt: #e4e9ee;
     --fw-surface: #ffffff;
-    --fw-surface-hi: #eef3f7;
-    --fw-border: #dfe5ec;
-    --fw-border-strong: #c6d0da;
-    --fw-text: #16202b;
-    --fw-text-2: #4c5a68;
-    --fw-text-3: #77848f;
+    --fw-surface-hi: #eef2f6;
+    --fw-border: #d3dbe2;
+    --fw-border-strong: #b4c0ca;
+    --fw-text: #0e1720;
+    --fw-text-2: #4a5866;
+    --fw-text-3: #74838f;
     --fw-primary: #2b7a89;
-    --fw-primary-strong: #22626f;
-    --fw-primary-soft: rgba(43, 122, 137, 0.12);
-    --fw-success: #12945c;
-    --fw-warning: #b46b00;
-    --fw-danger: #cf2b3a;
+    --fw-primary-strong: #1d6d7d;
+    --fw-primary-soft: rgba(43, 122, 137, 0.1);
+    --fw-success: #0f8a52;
+    --fw-warning: #a35f00;
+    --fw-danger: #c92836;
     --fw-info: #1f6feb;
-    --fw-shadow: 0 1px 6px rgba(16, 32, 48, 0.12);
 
     color-scheme: light;
 
@@ -128,23 +140,22 @@
  * 3. 浅色令牌（显式 data-theme="light"）：权重高于第 1 节的默认深色
  * ------------------------------------------------------------------------ */
 :root[data-theme='light'] {
-  --fw-bg: #f4f6f9;
-  --fw-bg-alt: #eaeef3;
+  --fw-bg: #eef1f4;
+  --fw-bg-alt: #e4e9ee;
   --fw-surface: #ffffff;
-  --fw-surface-hi: #eef3f7;
-  --fw-border: #dfe5ec;
-  --fw-border-strong: #c6d0da;
-  --fw-text: #16202b;
-  --fw-text-2: #4c5a68;
-  --fw-text-3: #77848f;
+  --fw-surface-hi: #eef2f6;
+  --fw-border: #d3dbe2;
+  --fw-border-strong: #b4c0ca;
+  --fw-text: #0e1720;
+  --fw-text-2: #4a5866;
+  --fw-text-3: #74838f;
   --fw-primary: #2b7a89;
-  --fw-primary-strong: #22626f;
-  --fw-primary-soft: rgba(43, 122, 137, 0.12);
-  --fw-success: #12945c;
-  --fw-warning: #b46b00;
-  --fw-danger: #cf2b3a;
+  --fw-primary-strong: #1d6d7d;
+  --fw-primary-soft: rgba(43, 122, 137, 0.1);
+  --fw-success: #0f8a52;
+  --fw-warning: #a35f00;
+  --fw-danger: #c92836;
   --fw-info: #1f6feb;
-  --fw-shadow: 0 1px 6px rgba(16, 32, 48, 0.12);
 
   color-scheme: light;
 
@@ -199,8 +210,10 @@ html body {
   background: var(--fw-bg);
   color: var(--fw-text);
   font-family: var(--fw-font-sans);
-  font-size: 14px; /* 15 → 14：与 --adm-font-size-main 同档，避免自有文本与组件文本大小打架 */
-  line-height: 1.5;
+  font-size: 13px;
+  /* 控制台行距：比阅读型排版更紧，一屏多放几行 */
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
   /* 阻止安卓 Chrome 的下拉刷新把 PWA 整页重载（TabBar 之下已是应用内滚动区） */
   overscroll-behavior-y: contain;
 }
@@ -215,7 +228,10 @@ a {
   color: var(--fw-primary-strong);
 }
 
-/* 通用工具类（fw- 前缀，跨代理共用） */
+/* ---------------------------------------------------------------------------
+ * 5. 通用工具类（fw- 前缀，跨视图共用）
+ * ------------------------------------------------------------------------ */
+
 .fw-num {
   /* 数值等宽：实时跳动的统计数字不会左右抖动 */
   font-variant-numeric: tabular-nums;
@@ -224,6 +240,7 @@ a {
 .fw-mono {
   font-family: var(--fw-font-mono);
   font-variant-numeric: tabular-nums;
+  font-feature-settings: 'zero' 1; /* 斜杠零：区分 0 与 O（IP 场景常见） */
 }
 
 .fw-sr-only {
@@ -239,7 +256,7 @@ a {
   border: 0;
 }
 
-/* 触摸目标：任何可点元素套上后都不低于 44px，符合移动端可点区域下限 */
+/* 触摸目标：任何可点元素套上后都不低于 44px（密度调整不得突破这条） */
 .fw-tap {
   min-height: var(--fw-tap);
   min-width: var(--fw-tap);
@@ -249,7 +266,357 @@ a {
 }
 
 /* ---------------------------------------------------------------------------
- * 5. 应用外壳骨架（AppShell 使用）
+ * 6. 控制台原语
+ *
+ * 这些类是本设计系统的「排版单位」。视图层尽量只用它们拼装，
+ * 避免每个页面各写一套内联样式（那正是旧版「各页观感不一致」的来源）。
+ * ------------------------------------------------------------------------ */
+
+/* --- 6.1 面板：发丝边框的容器，头部是 22px 细条 --- */
+.fw-panel {
+  border: 1px solid var(--fw-border);
+  border-radius: var(--fw-radius);
+  background: var(--fw-surface);
+  /* 面板之间只留 6px：高密度下靠边框分组，不靠空白 */
+  margin-bottom: var(--fw-gap);
+}
+
+.fw-panel:last-child {
+  margin-bottom: 0;
+}
+
+/* 面板头：左侧 2px 强调色方块 + 标题 + 右侧元信息 */
+.fw-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--fw-border);
+  background: var(--fw-bg-alt);
+}
+
+.fw-panel-head::before {
+  /* 强调色方块：面板的视觉锚点，取代图标 */
+  content: '';
+  width: 2px;
+  height: 10px;
+  flex-shrink: 0;
+  background: var(--fw-primary-strong);
+}
+
+.fw-panel-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--fw-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fw-panel-meta {
+  flex-shrink: 0;
+  font-family: var(--fw-font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fw-text-3);
+  white-space: nowrap;
+}
+
+.fw-panel-body {
+  padding: 5px 6px;
+}
+
+/* --- 6.2 数据行：本系统最核心的排版单位（标签 dim + 数值亮，两列对齐） --- */
+.fw-rows {
+  border-radius: var(--fw-radius);
+  overflow: hidden;
+}
+
+.fw-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-height: var(--fw-row-h);
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--fw-border);
+}
+
+/* 行内最后一个元素不画分隔线，避免与面板边框叠成双线 */
+.fw-row:last-child {
+  border-bottom: 0;
+}
+
+.fw-row-label {
+  flex-shrink: 0;
+  width: 96px; /* 固定标签列：多行之间数值列自动对齐 */
+  font-size: 11px;
+  color: var(--fw-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fw-row-label-wide {
+  width: 132px;
+}
+
+.fw-row-value {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--fw-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--fw-text);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fw-row-unit {
+  flex-shrink: 0;
+  font-family: var(--fw-font-mono);
+  font-size: 10px;
+  color: var(--fw-text-3);
+}
+
+/* 行内嵌的迷你图：靠右贴在数值后面 */
+.fw-row-spark {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* --- 6.3 徽标：[ TEXT ] 的终端风格状态标 --- */
+.fw-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 4px;
+  border: 1px solid currentColor;
+  border-radius: 1px;
+  font-family: var(--fw-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+.fw-badge-dim {
+  opacity: 0.75;
+}
+
+/* --- 6.4 细条用量计（比进度条更薄，控制台里不抢视线） --- */
+.fw-meter {
+  position: relative;
+  height: 3px;
+  border-radius: 0;
+  background: var(--fw-surface-hi);
+  overflow: hidden;
+}
+
+.fw-meter-fill {
+  height: 100%;
+  background: var(--fw-primary-strong);
+  /* 数值变化时平滑过渡，但不做弹跳（控制台不适合弹性动画） */
+  transition: width 0.25s linear;
+}
+
+/* --- 6.5 指标块网格（2 列 / 3 列的高密度瓦片） --- */
+.fw-tiles {
+  display: grid;
+  gap: 1px; /* 瓦片之间用 1px 缝露出底色当分隔线 */
+  background: var(--fw-border);
+}
+
+.fw-tiles-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.fw-tiles-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.fw-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 6px;
+  background: var(--fw-surface);
+}
+
+.fw-tile-label {
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--fw-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fw-tile-value {
+  font-family: var(--fw-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--fw-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fw-tile-unit {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--fw-text-3);
+}
+
+/* --- 6.6 判决条：整页的「一眼结论」（唯一允许放大字号的地方） --- */
+.fw-verdict {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px;
+}
+
+.fw-verdict-text {
+  font-family: var(--fw-font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.fw-verdict-sub {
+  font-size: 11px;
+  color: var(--fw-text-2);
+  line-height: 1.35;
+}
+
+/* --- 6.7 状态灯（连接 / 健康） --- */
+.fw-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: currentColor;
+}
+
+/* 实时灯呼吸：只在 connected 时加（断开时静止，避免误导为「在跳」） */
+.fw-dot-live {
+  animation: fw-pulse 2s ease-in-out infinite;
+}
+
+@keyframes fw-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* --- 6.8 控制台按钮：方角、发丝边、等宽字 --- */
+.fw-cmd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 44px; /* 可点元素一律 ≥44px */
+  padding: 0 8px;
+  border: 1px solid var(--fw-border-strong);
+  border-radius: var(--fw-radius-sm);
+  background: transparent;
+  color: var(--fw-text-2);
+  font-family: var(--fw-font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.fw-cmd:active {
+  background: var(--fw-surface-hi);
+  color: var(--fw-text);
+}
+
+.fw-cmd:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* 顶部工具栏里的紧凑按钮（仍保留 44px 点击区，只是视觉更小） */
+.fw-iconbtn {
+  min-width: var(--fw-tap);
+  min-height: var(--fw-tap);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--fw-radius-sm);
+  background: transparent;
+  color: var(--fw-text-2);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.fw-iconbtn:active {
+  background: var(--fw-surface-hi);
+}
+
+/* --- 6.8.1 导航控件：禁止长按选中 / 呼出上下文菜单 ---
+ * 手机上按住底栏或顶栏按钮时，Chrome 会把「按一下」判成长按选文本：弹出选择手柄与
+ * 复制菜单，导航动作被吃掉（表现为「点底栏老是选中」）。
+ * 命中面按「控件形态」定，而不是按类名逐个列：
+ *   · button —— 按钮不含需要复制的内容，整类关掉（含底栏项、顶栏按钮、
+ *     二级页工具条、弹层按钮，以及「更多」页那种 <button class="fw-row"> 导航行）；
+ *   · .fw-tabbar / .fw-topbar-actions 的后代 —— 组件库有时用 div 承载可点区域。
+ * 刻意**不含** .fw-row：列表行里的 IP / CIDR 必须保留可选中——白名单页还依赖
+ * 「若剪贴板未更新，请长按手动复制」这条回退路径，它们都是 div 行，不受本规则影响。 */
+.fw-tabbar,
+.fw-tabbar *,
+.fw-topbar-actions,
+.fw-topbar-actions *,
+button {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* --- 6.9 分节小标题（面板内部的次级分组，比面板头更轻） --- */
+.fw-subhead {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 6px 2px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--fw-text-3);
+}
+
+/* --- 6.10 键值对（横向排列，用于页头的元信息条） --- */
+.fw-kv-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 9px;
+  font-family: var(--fw-font-mono);
+  font-size: 10px;
+  color: var(--fw-text-3);
+}
+
+.fw-kv-inline b {
+  font-weight: 600;
+  color: var(--fw-text-2);
+}
+
+/* ---------------------------------------------------------------------------
+ * 7. 应用外壳骨架（AppShell 使用）
  *
  * 结构：.fw-shell > .fw-head(sticky: 顶栏 + 离线横幅) + .fw-main + .fw-tabbar(fixed)
  * 注意：.fw-shell 上不能加 transform / filter，否则会创建新的包含块，
@@ -272,7 +639,7 @@ a {
 
 .fw-topbar {
   /* 状态栏（PWA 独立窗口）会盖住顶栏，用安全区补偿 */
-  padding: var(--fw-safe-top) 7px 0;
+  padding: var(--fw-safe-top) 6px 0;
   min-height: calc(var(--fw-topbar-h) + var(--fw-safe-top));
   display: flex;
   align-items: center;
@@ -285,9 +652,9 @@ a {
   flex: 1;
   min-width: 0; /* 允许长标题省略号截断，不把右侧按钮挤出屏幕 */
   margin: 0;
-  font-size: 15px; /* 16 → 15 */
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.04em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -296,43 +663,34 @@ a {
 .fw-topbar-actions {
   display: flex;
   align-items: center;
-  gap: 2px; /* 4 → 2 */
+  gap: 0;
   flex-shrink: 0;
 }
 
-/* 顶栏右侧的图标按钮：透明底 + 44px 触摸区 */
-.fw-iconbtn {
-  min-width: var(--fw-tap);
-  min-height: var(--fw-tap);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px; /* 4 → 3 */
-  padding: 0 4px; /* 横向 6 → 4 */
-  border: 0;
-  border-radius: var(--fw-radius-sm);
-  background: transparent;
-  color: var(--fw-text-2);
-  font-size: 18px; /* 20 → 18 */
-  cursor: pointer;
-}
-
-.fw-iconbtn:active {
-  background: var(--fw-surface-hi);
+/* 顶栏品牌方块：▌FW 的终端标记，替代大标题 */
+.fw-mark {
+  flex-shrink: 0;
+  font-family: var(--fw-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--fw-primary-strong);
 }
 
 /* SSE / 离线状态灯：小圆点 + 文字 */
 .fw-status {
   display: flex;
   align-items: center;
-  gap: 3px; /* 4 → 3 */
-  font-size: 12px;
+  gap: 3px;
+  font-family: var(--fw-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
   color: var(--fw-text-2);
   white-space: nowrap;
 }
 
 .fw-status-dot {
-  width: 5px; /* 8 → 5 */
+  width: 5px;
   height: 5px;
   border-radius: 50%;
   background: currentColor;
@@ -342,20 +700,20 @@ a {
 .fw-banner {
   display: flex;
   align-items: flex-start;
-  gap: 5px; /* 8 → 5 */
-  padding: 5px 7px; /* 8px 12px → 5px 7px */
-  font-size: 12px; /* 13 → 12 */
-  line-height: 1.4;
+  gap: 5px;
+  padding: 4px 6px;
+  font-size: 11px;
+  line-height: 1.35;
   border-bottom: 1px solid var(--fw-border);
 }
 
 .fw-banner-danger {
-  background: rgba(255, 74, 88, 0.14);
+  background: rgba(255, 85, 97, 0.14);
   color: var(--fw-danger);
 }
 
 .fw-banner-warning {
-  background: rgba(255, 169, 48, 0.14);
+  background: rgba(245, 165, 36, 0.14);
   color: var(--fw-warning);
 }
 
@@ -365,15 +723,22 @@ a {
 }
 
 .fw-banner-icon {
-  font-size: 14px; /* 16 → 14 */
-  line-height: 17px; /* 20 → 17：与图标字号同步，避免横幅首行被撑高 */
+  font-size: 12px;
+  line-height: 15px;
   flex-shrink: 0;
 }
 
 .fw-main {
   /* 给固定 TabBar 让位：内容尾部不被遮挡，含安全区高度 */
   padding: var(--fw-gap);
-  padding-bottom: calc(var(--fw-tabbar-h) + var(--fw-safe-bottom) + 10px); /* 尾部留白 16 → 10 */
+  padding-bottom: calc(var(--fw-tabbar-h) + var(--fw-safe-bottom) + 10px);
+}
+
+/* 页面滚动体：每个视图的 PullToRefresh 内层统一用它。
+   PullToRefresh 自身是 .fw-main 的直接子元素、不带内边距，若各页自行写
+   paddingBottom 就会出现「一页 7px、一页 --fw-gap」这类肉眼可辨的差异。 */
+.fw-page {
+  padding-bottom: var(--fw-gap);
 }
 
 /* 底部 TabBar：视口居中固定（配合 .fw-shell 的 640px 上限） */
@@ -391,96 +756,265 @@ a {
 }
 
 /* ---------------------------------------------------------------------------
- * 6. antd-mobile 组件内边距同步（比例 ×0.6）
+ * 8. antd-mobile 组件密度与形状同步
  *
- * 为什么需要单独一节：组件把内边距写死在**自己的根类变量**上
+ * 为什么需要单独一节：组件把内边距 / 圆角写死在**自己的根类变量**上
  * （如 `.adm-list { --padding-left: 12px }`），既不是 :root 令牌、也没有
  * fallback，因此第 1 节的重绑够不着它。这里用「.fw-shell 前缀 + 重复类名」
  * 提高权重，使规则不依赖 CSS 打包顺序（与第 1 节令牌的提权思路一致）。
- * 字号不在这里处理 —— 组件字号统一走第 1 节重绑的 --adm-font-size-* 阶梯。
+ *
+ * 取向：把所有组件拉进控制台语言——方角、发丝边、紧凑内边距。
  * ------------------------------------------------------------------------ */
 
-/* List：左右内边距与分组头 */
+/* --- Card：退化成「面板」（去掉圆角与内边距） --- */
+.fw-shell .adm-card.adm-card {
+  border: 1px solid var(--fw-border);
+  border-radius: var(--fw-radius);
+  background: var(--fw-surface);
+  margin-bottom: var(--fw-gap);
+  /* Card 自身的内边距由内部 .adm-card-body 决定，这里只收敛外层 */
+  --adm-card-padding: 0;
+}
+
+.fw-shell .adm-card-header.adm-card-header {
+  min-height: 22px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--fw-border);
+  background: var(--fw-bg-alt);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--fw-text-2);
+}
+
+.fw-shell .adm-card-body.adm-card-body {
+  padding: 5px 6px;
+}
+
+/* --- List：行高与分隔线收敛到控制台密度 --- */
 .fw-shell .adm-list.adm-list {
-  --padding-left: 7px; /* 12 → 7 */
-  --padding-right: 7px; /* 12 → 7 */
-  --prefix-padding-right: 7px; /* 12 → 7 */
+  --padding-left: 6px;
+  --padding-right: 6px;
+  --prefix-padding-right: 6px;
+  --border-inner: solid 1px var(--fw-border);
+  --border-top: none;
+  --border-bottom: none;
 }
 
-.fw-shell .adm-list-header {
-  padding: 5px var(--padding-right) 5px var(--padding-left); /* 8px → 5px */
+.fw-shell .adm-list-body.adm-list-body {
+  border-top: 0;
+  border-bottom: 0;
+  background: transparent;
 }
 
-/* 表单内的 List 在组件内部被提到 `.adm-form .adm-list.adm-list`(0,3,0)，
- * 这里再套一层 .fw-shell 并重复类名压过它 */
+.fw-shell .adm-list-item.adm-list-item {
+  padding-left: 6px;
+  background: transparent;
+}
+
+.fw-shell .adm-list-item-content.adm-list-item-content {
+  min-height: var(--fw-row-h);
+  padding-right: 6px;
+}
+
+.fw-shell .adm-list-item-content-main.adm-list-item-content-main {
+  padding: 4px 0;
+  font-size: 11px;
+  color: var(--fw-text-3);
+}
+
+/* List 右侧的 extra 一律等宽：数值列对齐 */
+.fw-shell .adm-list-item-content-extra.adm-list-item-content-extra {
+  font-family: var(--fw-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--fw-text);
+}
+
+.fw-shell .adm-list-header.adm-list-header {
+  padding: 4px 6px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--fw-text-3);
+  background: transparent;
+}
+
+/* --- 表单 --- */
 .fw-shell .adm-form .adm-list.adm-list {
-  --padding-left: 10px; /* 16 → 10 */
-  --padding-right: 7px; /* 12 → 7 */
+  --padding-left: 6px;
+  --padding-right: 6px;
 }
 
-.fw-shell .adm-form .adm-form-footer {
-  padding: 12px 7px; /* 20px 12px → 12px 7px */
+.fw-shell .adm-form-item-label.adm-form-item-label {
+  font-size: 11px;
+  color: var(--fw-text-3);
 }
 
-/* Button：高度由 padding 撑起，主按钮与 mini 变体都要各降一档 */
-.fw-shell .adm-button {
-  padding: 4px 7px; /* 7px 12px → 4px 7px */
+.fw-shell .adm-form-footer.adm-form-footer {
+  padding: 6px;
+}
+
+/* --- Button：方角 + 紧凑，但保留 ≥44px 的点击高度 --- */
+.fw-shell .adm-button.adm-button {
+  border-radius: var(--fw-radius-sm);
+  font-size: 12px;
+  padding: 5px 8px;
 }
 
 .fw-shell .adm-button.adm-button-mini {
   /* 权重压过上一条简写，避免简写把 mini 的长写 padding 抹掉 */
-  padding: 2px 5px; /* 3px 9px → 2px 5px */
+  padding: 3px 6px;
 }
 
-/* Selector：选项内边距与选项间距 */
-.fw-shell .adm-selector {
-  --padding: 5px 10px; /* 8px 16px → 5px 10px */
-  --gap: 5px; /* 8 → 5 */
+/* --- Selector：方角 + 紧凑 --- */
+.fw-shell .adm-selector.adm-selector {
+  --padding: 4px 8px;
+  --gap: 4px;
+  --border-radius: var(--fw-radius-sm);
+  --font-size: 11px;
+  --checked-color: var(--fw-primary-soft);
+  --text-color: var(--fw-text-2);
 }
 
 .fw-shell .adm-selector .adm-space.adm-space {
-  --gap: 7px; /* 12 → 7：组件内部这条被提到 (0,3,0) */
+  --gap: 4px;
 }
 
-/* SearchBar：高度即触摸目标（各页面内联也指定 44），与按钮一样不参与比例下调，
- * 这里统一成同一值以免「有的页 44、有的页 26」；只缩左右内边距与圆角 */
-.fw-shell .adm-search-bar {
-  --height: 44px; /* 触摸目标尺寸，不缩放 */
-  --padding-left: 5px; /* 8 → 5 */
-  --border-radius: 4px; /* 6 → 4 */
+/* --- SearchBar：仍是 44px 触摸目标，只收敛圆角与内边距 --- */
+.fw-shell .adm-search-bar.adm-search-bar {
+  --height: 44px;
+  --padding-left: 6px;
+  --border-radius: var(--fw-radius-sm);
+  --background: var(--fw-surface);
 }
 
-/* NoticeBar：高度按 ×0.7 取整，×0.6 得 24px 会夹住 16px 图标 */
-.fw-shell .adm-notice-bar {
-  --height: 28px; /* 40 → 28 */
+.fw-shell .adm-search-bar-input-box.adm-search-bar-input-box {
+  border: 1px solid var(--fw-border);
+  font-size: 12px;
 }
 
-/* Empty（空状态）：上下留白 */
-.fw-shell .adm-empty {
-  padding: 14px 0; /* 24px 0 → 14px 0 */
+/* --- NoticeBar：单行紧凑（多行时 wrap 属性仍会撑高） --- */
+.fw-shell .adm-notice-bar.adm-notice-bar {
+  --height: 26px;
+  --font-size: 11px;
+  --border-radius: var(--fw-radius-sm);
 }
 
-/* Space：默认间距 */
-.fw-shell .adm-space {
-  --gap: 5px; /* 8 → 5 */
+/* --- Empty / Skeleton：控制台不留大片空白 --- */
+.fw-shell .adm-empty.adm-empty {
+  padding: 10px 0;
 }
 
-/* Divider：文字两侧留白 */
-.fw-shell .adm-divider-horizontal {
-  padding: 0 10px; /* 0 16px → 0 10px */
-}
-
-/* Skeleton：骨架条高度 */
 .fw-shell .adm-skeleton.adm-skeleton-title {
-  --height: 19px; /* 32 → 19 */
+  --height: 17px;
+  border-radius: 1px;
 }
 
 .fw-shell .adm-skeleton.adm-skeleton-paragraph-line {
-  --height: 11px; /* 18 → 11 */
+  --height: 10px;
+  border-radius: 1px;
+  margin-top: 8px;
+}
+
+/* --- Space / Divider --- */
+.fw-shell .adm-space.adm-space {
+  --gap: 4px;
+}
+
+.fw-shell .adm-divider-horizontal.adm-divider-horizontal {
+  padding: 0 8px;
+  border-color: var(--fw-border);
+}
+
+/* --- 弹层：Popup / Dialog / Toast 一律方角，与控制台语言一致 --- */
+.fw-shell .adm-popup-body.adm-popup-body,
+.adm-popup-body {
+  border-radius: 0;
+  background: var(--fw-surface);
+}
+
+.adm-dialog-body.adm-dialog-body {
+  border-radius: var(--fw-radius);
+  background: var(--fw-surface);
+}
+
+.adm-dialog-header.adm-dialog-header {
+  font-size: 13px;
+}
+
+.adm-dialog-content.adm-dialog-content {
+  font-size: 12px;
+  color: var(--fw-text-2);
+}
+
+.adm-dialog-footer.adm-dialog-footer {
+  font-size: 12px;
+}
+
+.adm-toast-mask .adm-toast-main {
+  border-radius: var(--fw-radius);
+  font-size: 12px;
+}
+
+/* --- ProgressBar：压成 3px 细条，与控制台用量计同观感 --- */
+.fw-shell .adm-progress-bar.adm-progress-bar {
+  --track-width: 3px;
+  --track-color: var(--fw-surface-hi);
+  border-radius: 0;
+}
+
+.fw-shell .adm-progress-bar-trail.adm-progress-bar-trail {
+  border-radius: 0;
+}
+
+/* --- Tag：方角小标 --- */
+.fw-shell .adm-tag.adm-tag {
+  border-radius: 1px;
+  font-size: 10px;
+  padding: 0 3px;
+  --border-color: currentColor;
+}
+
+/* --- TabBar：控制台底部导航（图标缩一档，标题 10px） --- */
+.fw-shell .adm-tab-bar-wrap.adm-tab-bar-wrap {
+  background: var(--fw-surface);
+}
+
+.fw-shell .adm-tab-bar-item.adm-tab-bar-item {
+  font-size: 10px;
+  color: var(--fw-text-3);
+}
+
+.fw-shell .adm-tab-bar-item-active.adm-tab-bar-item-active {
+  color: var(--fw-primary-strong);
+}
+
+.fw-shell .adm-tab-bar-item-icon.adm-tab-bar-item-icon {
+  font-size: 18px;
+  height: 20px;
+  line-height: 20px;
+}
+
+/* --- SwipeAction：滑出按钮方角、等宽字 --- */
+.adm-swipe-action-action-button.adm-swipe-action-action-button {
+  border-radius: 0;
+  font-family: var(--fw-font-mono);
+  font-size: 11px;
+}
+
+/* --- InfiniteScroll 的加载提示与结束语：控制台里压低存在感 --- */
+.fw-shell .adm-infinite-scroll.adm-infinite-scroll {
+  font-size: 10px;
+  color: var(--fw-text-3);
+}
+
+/* --- ImageViewer 之外的 Picker / DatePicker 等弹层标题 --- */
+.adm-picker-header-title.adm-picker-header-title {
+  font-size: 12px;
 }
 
 /* ---------------------------------------------------------------------------
- * 7. 无障碍：跟随系统「减少动态效果」设置
+ * 9. 无障碍：跟随系统「减少动态效果」设置
  * ------------------------------------------------------------------------ */
 @media (prefers-reduced-motion: reduce) {
   *,

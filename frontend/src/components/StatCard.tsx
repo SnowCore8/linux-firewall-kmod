@@ -1,6 +1,10 @@
 // 统计卡片：大数值 + 标签 + 可选迷你趋势线（自绘 SVG）
 //
-// 设计取舍：不引入图表库（契约要求），趋势线用一段 100x28 的 viewBox 折线绘制，
+// 控制台形态：与 components/console.tsx 的 Tile 同一套排版语言（标签 10px 弱化色、
+// 数值等宽），但保留「可点击 + 趋势线 + 补充说明」三项卡片能力，
+// 供需要独立成块（而非塞进 Tiles 网格）的指标使用。
+//
+// 设计取舍：不引入图表库（契约要求），趋势线用一段 100×20 的 viewBox 折线绘制，
 // `preserveAspectRatio="none"` 让它拉伸铺满卡片宽度，`vectorEffect="non-scaling-stroke"`
 // 保证拉伸后线宽仍是 1.5px 不虚胖。
 //
@@ -32,7 +36,7 @@ export interface StatCardProps {
 
 /** 迷你趋势线的画布尺寸（逻辑坐标，渲染时按宽度拉伸） */
 const SPARK_W = 100
-const SPARK_H = 28
+const SPARK_H = 20
 
 /** tone → 颜色令牌 */
 const TONE_COLOR: Record<StatTone, string> = {
@@ -105,9 +109,10 @@ export function StatCard({
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: 4,
-        minHeight: 'var(--fw-tap)',
-        padding: 7,
+        gap: 2,
+        // 可点卡片不得低于全局触摸目标下限（不可点时高度由内容决定）
+        minHeight: onClick ? 'var(--fw-tap)' : undefined,
+        padding: '5px 6px',
         border: '1px solid var(--fw-border)',
         borderRadius: 'var(--fw-radius)',
         background: 'var(--fw-surface)',
@@ -116,15 +121,24 @@ export function StatCard({
         ...style,
       }}
     >
-      <div style={{ fontSize: 12, color: 'var(--fw-text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: '0.03em',
+          color: 'var(--fw-text-3)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
         {label}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 2, minWidth: 0 }}>
         <span
-          className="fw-num"
+          className="fw-mono"
           style={{
-            fontSize: 22,
+            fontSize: 18,
             fontWeight: 600,
             lineHeight: 1.15,
             color,
@@ -136,14 +150,14 @@ export function StatCard({
           {value}
         </span>
         {unit ? (
-          <span style={{ fontSize: 12, color: 'var(--fw-text-3)', flexShrink: 0 }}>{unit}</span>
+          <span style={{ fontSize: 10, color: 'var(--fw-text-3)', flexShrink: 0 }}>{unit}</span>
         ) : null}
       </div>
 
       {spark ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
           {trendLabel ? (
-            <span style={{ fontSize: 11, color: 'var(--fw-text-3)' }}>{trendLabel}</span>
+            <span style={{ fontSize: 10, color: 'var(--fw-text-3)' }}>{trendLabel}</span>
           ) : null}
           {/* aria-hidden：装饰性图形，语义由 trendLabel 文本 + 卡片标签表达 */}
           <svg
@@ -170,7 +184,7 @@ export function StatCard({
       ) : null}
 
       {hint ? (
-        <div style={{ fontSize: 12, lineHeight: 1.4, color: 'var(--fw-text-3)' }}>{hint}</div>
+        <div style={{ fontSize: 10, lineHeight: 1.4, color: 'var(--fw-text-3)' }}>{hint}</div>
       ) : null}
     </div>
   )

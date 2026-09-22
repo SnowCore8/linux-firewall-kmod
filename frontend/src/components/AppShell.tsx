@@ -1,12 +1,26 @@
-// 应用外壳：顶栏（页面标题 + SSE 状态 + 主题切换 + 搜索）+ 离线横幅 + 底部 TabBar
+// 应用外壳：顶栏（品牌标记 + 页面标题 + 连接状态 + 主题 / 刷新 / 退出）+ 离线横幅 + 底部 TabBar
 //
-// 移动端优先的关键约束（本文件是这些约束的唯一实现处）：
-//   1. 底部 TabBar 是主入口：5 个一级页；「更多」页再收纳 jails / logs / settings
-//   2. 触摸目标 ≥ 44px：TabBar 单项高度由 antd-mobile 保证（≥48px），
-//      顶栏按钮统一用 .fw-iconbtn（min 44x44）
-//   3. 安全区适配：顶栏补 env(safe-area-inset-top)（PWA 独立窗口的状态栏），
-//      底部由 TabBar 的 safeArea 属性补 insets，内容区 padding 里预留 TabBar 高度
-//   4. 页面内容用 <Outlet /> 渲染；整体套 ErrorBoundary，并以当前路径为复位键
+// 控制台取向（与 styles/global.css 的设计系统一致）：
+//   · 顶栏按 --fw-topbar-h 压到 40px，品牌用 `▌FW` 终端标记而不是大标题；
+//     右侧一律是等宽小字的文字按钮（10px），避免图标语义歧义，
+//     同时保持 ≥44px 的可点区域（见 TOPBAR_BTN 的负外边距说明）。
+//   · 离线 / 断连横幅挂在顶栏之下（同属 sticky 头），用 fw-banner-* 上色，
+//     是「实时数据不可信」的唯一全局提示位——页面内不再重复提示。
+//   · 底部 TabBar 是主入口（5 个一级页）；jails / logs / settings 收纳在「更多」下，
+//     命中这些二级路径时「更多」保持高亮，用户不会丢失位置感。
+//
+// 移动端关键约束（本文件是这些约束的唯一实现处）：
+//   1. 触摸目标 ≥ 44px：顶栏按钮走 .fw-iconbtn（min 44×44）；TabBar 由 antd-mobile
+//      保证（min-height 48px），二者都不低于 --fw-tap。
+//   2. 安全区适配：顶栏补 env(safe-area-inset-top)（PWA 独立窗口的状态栏会盖住顶栏），
+//      底部由 TabBar 的 safeArea 属性补 insets，内容区 padding 里预留 TabBar 高度。
+//   3. 页面内容用 <Outlet /> 渲染；整体套 ErrorBoundary，复位键 = 当前路径 + 刷新计数。
+//   4. .fw-shell 上不得加 transform / filter：那会创建新的包含块，使 .fw-tabbar 的
+//      fixed 定位失效（TabBar 会跟着内容滚动）。
+//
+// 刷新语义：点「刷新」自增计数 → 路由子树整体重建 → 各视图的 useAsync 重新取数。
+// 不做整页 reload：那会重建 SSE 连接（横幅闪一次、首帧重收），而页内重取已足够——
+// SSE 与 REST 两份数据本来就由新鲜度戳裁决谁更新（见 hooks/useLiveData.ts）。
 //
 // 连接状态语义（来自 useSse）：
 //   connected 正常 / connecting 连接中 / disconnected 已断开(自动重连) / connection_limit 连接数超限(停止重连)
@@ -14,22 +28,20 @@ import { TabBar } from 'antd-mobile'
 import {
   AppOutline,
   CheckShieldOutline,
-  CloseOutline,
   ExclamationCircleOutline,
   ExclamationTriangleOutline,
   HistogramOutline,
   LockOutline,
   LoopOutline,
   MoreOutline,
-  SearchOutline,
 } from 'antd-mobile-icons'
 import { useEffect, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 
+import { useAuth } from '../hooks/useAuth'
 import { useSse } from '../hooks/useSse'
 import type { ConnectionStatus } from '../hooks/useSse'
-import { useAuth } from '../hooks/useAuth'
 import { useTheme } from '../hooks/useTheme'
 import { CommandPalette } from './CommandPalette'
 import { ErrorBoundary } from './ErrorBoundary'
@@ -58,12 +70,27 @@ const PAGE_TITLES: Record<string, string> = {
   '/settings': '设置',
 }
 
-/** SSE 状态 → 顶栏状态灯文案与颜色 */
+/** SSE 状态 → 顶栏状态灯文案与颜色（颜色 + 文案双通道，色盲用户也能分辨） */
 const STATUS_DISPLAY: Record<ConnectionStatus, { label: string; color: string }> = {
   connected: { label: '实时', color: 'var(--fw-success)' },
   connecting: { label: '连接中', color: 'var(--fw-warning)' },
-  disconnected: { label: '已断开', color: 'var(--fw-danger)' },
-  connection_limit: { label: '连接超限', color: 'var(--fw-danger)' },
+  disconnected: { label: '断开', color: 'var(--fw-danger)' },
+  connection_limit: { label: '超限', color: 'var(--fw-danger)' },
+}
+
+/**
+ * 顶栏文字按钮样式。
+ *
+ * 负外边距的用途：.fw-iconbtn 的可点区域是 44px，而顶栏只有 40px——
+ * 负外边距把它对行的「布局占位」压回 40px（flex 行高按外边距盒计算），
+ * 按钮盒本身仍是 44px 高（只是上下各溢出 2px，透明背景看不出来），
+ * 于是「顶栏实际 40px」与「点击区 ≥44px」两个约束同时成立。
+ */
+const TOPBAR_BTN: CSSProperties = {
+  fontSize: 10,
+  letterSpacing: '0.04em',
+  marginTop: -2,
+  marginBottom: -2,
 }
 
 /** 横幅内容；null 表示无需展示 */
@@ -81,7 +108,8 @@ export function AppShell() {
   const { logout } = useAuth()
 
   const [online, setOnline] = useState(() => navigator.onLine)
-  const [paletteOpen, setPaletteOpen] = useState(false)
+  // 页内刷新计数：自增即重建路由子树（见文件头「刷新语义」）
+  const [refreshNonce, setRefreshNonce] = useState(0)
 
   // 网络在线状态：仅监听浏览器事件，不做轮询（省电，且 offline 事件足够可靠）
   useEffect(() => {
@@ -133,44 +161,58 @@ export function AppShell() {
     <div className="fw-shell">
       <div className="fw-head">
         <header className="fw-topbar">
+          {/* 品牌标记：终端提示符形态，替代大标题（顶栏高度靠它不需要更大字号） */}
+          <span className="fw-mark" aria-hidden="true">
+            ▌FW
+          </span>
           <h1 className="fw-topbar-title">{pageTitle}</h1>
 
           <div className="fw-topbar-actions">
-            {/* SSE 连接状态灯：颜色 + 文案双通道，色盲用户也能分辨 */}
+            {/* SSE 连接状态灯：仅正常时呼吸（断开/重连中静止，避免误导为「还在跳」） */}
             <span
               className="fw-status"
               style={{ color: statusDisplay.color }}
               role="status"
               aria-label={`实时连接状态：${statusDisplay.label}`}
             >
-              <span className="fw-status-dot" />
+              <span
+                className={`fw-status-dot${status === 'connected' ? ' fw-dot-live' : ''}`}
+              />
               {statusDisplay.label}
             </span>
 
-            {/* 主题切换：antd-mobile-icons 没有太阳/月亮图标，用文字标出当前主题，
+            {/* 主题切换：antd-mobile-icons 没有日/月图标，用文字标出当前主题，
                 比塞一个语义不符的图标更易读；aria-label 说明点击后的动作 */}
             <button
               type="button"
               className="fw-iconbtn"
-              style={{ fontSize: 12 }}
+              style={TOPBAR_BTN}
               aria-label={`切换主题（当前${theme === 'dark' ? '深色' : '浅色'}主题）`}
               onClick={toggle}
             >
               {theme === 'dark' ? '深色' : '浅色'}
             </button>
 
+            {/* 页内刷新：重建当前页面子树，让各视图重新取一遍 REST 数据 */}
             <button
               type="button"
               className="fw-iconbtn"
-              aria-label="打开命令面板（搜索页面）"
-              onClick={() => setPaletteOpen(true)}
+              style={TOPBAR_BTN}
+              aria-label="刷新当前页面数据"
+              onClick={() => setRefreshNonce((n) => n + 1)}
             >
-              <SearchOutline />
+              刷新
             </button>
 
             {/* 登出：清除令牌并回到登录页（AuthGate 依据令牌状态切换渲染） */}
-            <button type="button" className="fw-iconbtn" aria-label="退出登录" onClick={logout}>
-              <CloseOutline />
+            <button
+              type="button"
+              className="fw-iconbtn"
+              style={TOPBAR_BTN}
+              aria-label="退出登录"
+              onClick={logout}
+            >
+              退出
             </button>
           </div>
         </header>
@@ -184,9 +226,9 @@ export function AppShell() {
       </div>
 
       <main className="fw-main">
-        {/* resetKey=当前路径：在错误页点了底部导航后边界自动复位，不会卡在旧错误上 */}
-        <ErrorBoundary resetKey={path}>
-          <Outlet />
+        {/* resetKey=路径 + 刷新计数：切换路由或点刷新都会让边界复位，不会卡在旧错误上 */}
+        <ErrorBoundary resetKey={`${path}:${refreshNonce}`}>
+          <Outlet key={refreshNonce} />
         </ErrorBoundary>
       </main>
 
@@ -204,7 +246,8 @@ export function AppShell() {
         ))}
       </TabBar>
 
-      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      {/* 命令面板保留 Ctrl/Cmd+K 热键入口（顶栏不再为它占位；移动端导航由 TabBar 承担） */}
+      <CommandPalette />
     </div>
   )
 }

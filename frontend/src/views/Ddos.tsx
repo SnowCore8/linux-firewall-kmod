@@ -1,23 +1,32 @@
-// DDoS 监控页（移动优先）
+// DDoS 监控页（移动优先，控制台式高密度）
 //
 // 做什么：把守护进程暴露的实时速率与内核流量特征集中到一页，按 5 个分区懒加载：
-//   概览   —— 全网 PPS/BPS 实时汇总、速率趋势曲线、EWMA 多窗口速率、TOP 来源 IP（含协议拆分）
-//   热力图 —— 24 小时攻击热力网格（封禁 / 失败尝试 / DDoS 事件三种口径可切换）
-//   协议   —— 协议占比雷达图 + UDP 端口分布 + ICMP 类型分布
+//   概览     —— 态势判决（速率阈值口径）、全网速率瓦片、速率趋势、多窗口 EWMA、协议速率、TOP 来源 IP
+//   热力图   —— 24 小时攻击热力网格（封禁 / 失败尝试 / DDoS 事件三种口径可切换）
+//   协议     —— 协议速率占比（雷达 + 逐协议占比行）、UDP 端口分布、ICMP 类型分布
 //   流量特征 —— 包大小分布、TTL 分布、IP 分片占比
 //   扫描探测 —— 端口扫描者、服务探测者（均为内核侧阈值判定结果）
 // 影响什么：本页全部为只读展示，不触发任何写操作，不改变内核或守护进程状态。
+//
+// 设计约定（styles/global.css 的 fw-* 令牌 + components/console.tsx 的原语）：
+//   · 结构一律用 Panel 承载，不铺卡片流；数值走等宽 + tabular-nums，跳变时不左右抖动；
+//   · 数据行按 26px 密度排，但所有可点元素（分区切换、展开、刷新、重试）保持
+//     ≥44px（--fw-tap）触摸目标——密度与触摸互不妥协；
+//   · 分区切换用自绘分段条而非 antd-mobile Selector：全局样式把 Selector 压到 ~24px 高，
+//     低于触摸目标下限，见 SegTabs 的注释。
 //
 // 数据来源（真实端点，无占位假数据）：
 //   - 实时速率：优先全局 SSE 的 rates 事件（useSse().rates / rateHistory），未就绪时回退
 //     GET /api/v1/rates/current 与 GET /api/v1/rates/history；
 //   - 其余分区均为 REST 端点（/api/v1/rates/windows、/api/v1/stats/*），只在对应分区激活时请求，
-//     避免一次性打出一堆慢查询。
+//     避免一次性打出一堆慢查询；
+//   - 判决条用的速率阈值取自 GET /api/v1/config 的 rate_warning_pps / rate_critical_pps，
+//     与守护进程计算威胁等级时用的是同一组配置（见 web_ui/stats.rs）。
 
-import { useMemo, useState } from 'react'
-import { Button, Card, List, NoticeBar, Selector, Skeleton, Tag } from 'antd-mobile'
-import type { SelectorOption } from 'antd-mobile'
-import { LoopOutline } from 'antd-mobile-icons'
+import { useCallback, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
+import { PullToRefresh } from 'antd-mobile'
+
 import type {
   HourlyHeatmap,
   IcmpTypeDistributionResponse,
@@ -30,38 +39,40 @@ import type {
   ServiceProbeResponse,
   TtlDistributionResponse,
   UdpPortDistributionResponse,
+  WebuiConfigResponse,
 } from '../api/types'
-import { getJson } from '../api/client'
+import {
+  getConfig,
+  getHeatmap,
+  getIcmpTypes,
+  getIpFragments,
+  getPacketSizes,
+  getPortScanners,
+  getRatesCurrent,
+  getRatesHistory,
+  getRatesWindows,
+  getServiceProbes,
+  getTtlDistribution,
+  getUdpPorts,
+} from '../api/endpoints'
 import { useAsync } from '../hooks/useAsync'
+import { pickLiveData } from '../hooks/useLiveData'
+import { usePollInterval } from '../hooks/usePollInterval'
 import { useSse } from '../hooks/useSse'
-import { useToast } from '../hooks/useToast'
-import { PageHeader } from '../components/PageHeader'
+import { Badge, InlineError, Meter, Note, Panel, PanelLoading, Row, Rows, SegTabs, Tile, Tiles, Verdict, toneColor } from '../components/console'
+import type { Tone } from '../components/console'
 import { EmptyState } from '../components/EmptyState'
-import { StatCard } from '../components/StatCard'
-import { LineChart } from '../charts/LineChart'
-import { RadarChart } from '../charts/RadarChart'
+import { PageHeader } from '../components/PageHeader'
 import { HeatmapChart } from '../charts/HeatmapChart'
+import { LineChart } from '../charts/LineChart'
 import { PieChart } from '../charts/PieChart'
+import { RadarChart } from '../charts/RadarChart'
 import { formatDatetime, formatDuration, formatNumber, formatRate } from '../lib/format'
 
-/** 端点常量：与 handler.rs 的 build_router() 路由一一对应 */
-const RATES_CURRENT_URL = '/api/v1/rates/current'
-const RATES_HISTORY_URL = '/api/v1/rates/history'
-const RATES_WINDOWS_URL = '/api/v1/rates/windows'
-const HEATMAP_URL = '/api/v1/stats/heatmap'
-const UDP_PORTS_URL = '/api/v1/stats/udp-ports'
-const ICMP_TYPES_URL = '/api/v1/stats/icmp-types'
-const PACKET_SIZES_URL = '/api/v1/stats/packet-sizes'
-const TTL_DISTRIBUTION_URL = '/api/v1/stats/ttl-distribution'
-const IP_FRAGMENTS_URL = '/api/v1/stats/ip-fragments'
-const PORT_SCANNERS_URL = '/api/v1/stats/port-scanners'
-const SERVICE_PROBES_URL = '/api/v1/stats/service-probes'
-
-/** 分区开关：值即 tab key，直接做 Selector 的取值 */
+/** 分区开关：值即 tab key，直接做 SegTabs 的取值 */
 type SectionKey = 'overview' | 'heatmap' | 'protocol' | 'traffic' | 'scan'
 
-/** 顶部分区选择器（移动端用一排可横滑的按钮代替 Tab 组件，触摸目标由 Selector 保证） */
-const SECTIONS: SelectorOption<SectionKey>[] = [
+const SECTIONS: ReadonlyArray<{ label: string; value: SectionKey }> = [
   { label: '概览', value: 'overview' },
   { label: '热力图', value: 'heatmap' },
   { label: '协议', value: 'protocol' },
@@ -72,7 +83,7 @@ const SECTIONS: SelectorOption<SectionKey>[] = [
 /** 热力图口径：直接对应后端 HourlyBucket 的三个数值字段 */
 type HeatMetric = 'bans' | 'failed_attempts' | 'ddos_events'
 
-const HEAT_METRICS: SelectorOption<HeatMetric>[] = [
+const HEAT_METRICS: ReadonlyArray<{ label: string; value: HeatMetric }> = [
   { label: '封禁数', value: 'bans' },
   { label: '失败尝试', value: 'failed_attempts' },
   { label: 'DDoS 事件', value: 'ddos_events' },
@@ -85,12 +96,124 @@ const HEAT_LABEL: Record<HeatMetric, string> = {
   ddos_events: 'DDoS 事件',
 }
 
-/** 次要说明文字样式 */
-const MUTED = { color: 'var(--adm-color-text-secondary)', fontSize: 12 } as const
-/** 行内两端对齐：左标签 + 右数值 */
-const ROW = { display: 'flex', justifyContent: 'space-between', gap: 7 } as const
-/** 等宽字体：IP 用等宽便于逐字符核对 */
-const MONO = { fontFamily: 'var(--fw-font-mono)', wordBreak: 'break-all' } as const
+/** 协议速率汇总的展示顺序（与雷达图轴顺序一致） */
+const PROTOCOLS: ReadonlyArray<{
+  key: 'syn' | 'udp' | 'icmp' | 'ack' | 'rst' | 'fin'
+  label: string
+}> = [
+  { key: 'syn', label: 'SYN' },
+  { key: 'udp', label: 'UDP' },
+  { key: 'icmp', label: 'ICMP' },
+  { key: 'ack', label: 'ACK' },
+  { key: 'rst', label: 'RST' },
+  { key: 'fin', label: 'FIN' },
+]
+
+/** 趋势图最多绘制的采样点数：SSE 环形缓冲有 300 点，全画会在窄屏上糊成一片 */
+const TREND_POINTS = 120
+/** TOP 来源默认渲染条数（其余靠「展开全部」按需渲染，避免长列表挤占一屏） */
+const TOP_VISIBLE = 8
+/** 端口/ICMP 明细默认渲染条数（与旧版一致，不缩水） */
+const UDP_VISIBLE = 8
+const ICMP_VISIBLE = 20
+/** 扫描/探测明细渲染条数（与旧版一致） */
+const SCAN_VISIBLE = 20
+
+/** 未激活分区的取数哨兵：见 useAsync 的 skipWhen（不得用它覆盖已有数据） */
+const IDLE = null
+
+/** 无数据时的占位符（比空格更明确，避免误读为 0） */
+const DASH = '—'
+
+/**
+ * 实体行（IP / 协议）：等宽标识 + 可选迷你条 + 右对齐数值 + 次要明细。
+ *
+ * 与 Row 的分工：Row 是「标签固定列宽」的键值行（多行数值列自动对齐）；
+ * 本行是「标识长度可变」的实体行——IPv6 可到 39 字符，固定列宽会被截断，
+ * 因此标识占满剩余宽度并允许折行，数值与迷你条始终右对齐。
+ */
+function MetricRow({
+  primary,
+  value,
+  unit,
+  ratio,
+  tone = 'default',
+  detail,
+  last,
+}: {
+  /** 左侧标识（IP / 协议名），等宽显示 */
+  primary: string
+  /** 右侧数值（已格式化） */
+  value: string
+  unit?: string
+  /** 迷你条占比（0~1）；不传则不画条 */
+  ratio?: number
+  tone?: Tone
+  /** 次要明细（协议拆分 / 包数 / 数据量），一行 dim 小字 */
+  detail?: ReactNode
+  /** 是否为列表末行：末行不画分隔线，避免与面板边框叠成双线 */
+  last?: boolean
+}) {
+  return (
+    <div
+      style={{
+        padding: '3px 6px',
+        borderBottom: last ? 0 : '1px solid var(--fw-border)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span
+          className="fw-mono"
+          style={{ flex: 1, minWidth: 0, fontSize: 12, wordBreak: 'break-all' }}
+        >
+          {primary}
+        </span>
+        {ratio === undefined ? null : (
+          <span style={{ width: 44, flexShrink: 0 }}>
+            <Meter ratio={ratio} tone={tone} />
+          </span>
+        )}
+        <span
+          className="fw-mono fw-num"
+          style={{ flexShrink: 0, fontSize: 12, color: toneColor(tone) }}
+        >
+          {value}
+        </span>
+        {unit ? <span className="fw-row-unit">{unit}</span> : null}
+      </div>
+      {detail ? (
+        <div
+          className="fw-mono fw-num"
+          style={{ fontSize: 10, color: 'var(--fw-text-3)', marginTop: 1 }}
+        >
+          {detail}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/** 列表尾部「展开 / 收起」：默认只渲染前若干条，长列表不挤占一屏（44px 触摸目标） */
+function MoreToggle({
+  expanded,
+  total,
+  onToggle,
+}: {
+  expanded: boolean
+  total: number
+  onToggle: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className="fw-cmd"
+      style={{ width: '100%', border: 0, borderRadius: 0 }}
+      onClick={onToggle}
+    >
+      {expanded ? '收起' : `展开全部 ${formatNumber(total, false)} 条`}
+    </button>
+  )
+}
 
 /** 协议速率汇总（跨所有被追踪 IP 求和），雷达图与概览共用 */
 interface ProtocolTotals {
@@ -126,102 +249,137 @@ function clockLabel(unixSeconds: number): string {
   return text === 'N/A' ? '' : text.slice(11, 19)
 }
 
-/** 通用空态文案：区分「后端无数据」与「加载失败」，避免用空态掩盖错误 */
-function LoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <NoticeBar
-      color="error"
-      wrap
-      content={message}
-      extra={
-        <a onClick={onRetry} style={{ color: 'inherit', textDecoration: 'underline' }}>
-          重试
-        </a>
-      }
-    />
-  )
+/**
+ * 单个 IP 的包速率 → 语义色调。
+ *
+ * 阈值取自 webui 配置（守护进程算威胁等级时用同一组值），因此颜色不是拍的：
+ * 达到 rate_critical_pps 标红、达到 rate_warning_pps 标黄，其余保持正文色。
+ */
+function rateTone(pps: number, config: WebuiConfigResponse | null): Tone {
+  if (!config) return 'default'
+  if (config.rate_critical_pps > 0 && pps >= config.rate_critical_pps) return 'danger'
+  if (config.rate_warning_pps > 0 && pps >= config.rate_warning_pps) return 'warning'
+  return 'default'
 }
 
 export default function Ddos() {
-  const toast = useToast()
-  const { rates: sseRates, rateHistory, status } = useSse()
+  const { rates: sseRates, payloadSeq, rateHistory, status } = useSse()
 
   const [section, setSection] = useState<SectionKey>('overview')
   const [heatMetric, setHeatMetric] = useState<HeatMetric>('bans')
-  /** 手动刷新标记：自增后所有分区依赖它的 useAsync 都会重新取数 */
-  const [nonce, setNonce] = useState(0)
+  /** TOP 列表是否展开到全部（默认只渲染前 TOP_VISIBLE 条） */
+  const [showAllTop, setShowAllTop] = useState(false)
+
+  // 自动刷新间隔与 SSE 推送间隔同源（见 usePollInterval）。只用于**内核侧累计统计**
+  // 这类没有实时推送的分区；速率数据走 SSE，不轮询（否则 REST 快照会盖掉更新的推流）。
+  const pollMs = usePollInterval()
+  const pushSecs = Math.max(1, Math.round(pollMs / 1000))
+
+  // 速率阈值配置（rate_warning_pps / rate_critical_pps）：只服务判决条与 TOP 列表配色。
+  // 不设 pollMs——阈值改动只需下次进页面生效，没必要在监控页反复请求。
+  const config = useAsync<WebuiConfigResponse>(() => getConfig(), [])
 
   // 速率数据：概览与协议分区都要用，其它分区不必请求
   const needsRates = section === 'overview' || section === 'protocol'
   const restRates = useAsync<RateResponse[] | null>(
-    () => (needsRates ? getJson<RateResponse[]>(RATES_CURRENT_URL) : Promise.resolve(null)),
-    [needsRates, nonce],
+    () => (needsRates ? getRatesCurrent() : Promise.resolve(IDLE)),
+    [needsRates],
+    { skipWhen: IDLE },
   )
-  const rates = sseRates ?? restRates.data ?? []
+  // 取较新的一份而非「SSE 优先」：页内刷新（reload 触发 REST 重取）必须真正生效
+  const liveRates = pickLiveData(sseRates, payloadSeq.rates, restRates)
+  const rates = liveRates ?? []
 
   // 速率趋势：SSE 已累积到足够点数时直接用，否则回退 REST 历史（最近 1 小时、每 2 秒一条）
   const restHistory = useAsync<RateHistoryResponse[] | null>(
-    () => (section === 'overview' ? getJson<RateHistoryResponse[]>(RATES_HISTORY_URL) : Promise.resolve(null)),
-    [section, nonce],
+    () => (section === 'overview' ? getRatesHistory() : Promise.resolve(IDLE)),
+    [section],
+    { skipWhen: IDLE },
   )
 
   const windows = useAsync<RateWindowSnapshot | null>(
-    () => (section === 'overview' ? getJson<RateWindowSnapshot>(RATES_WINDOWS_URL) : Promise.resolve(null)),
-    [section, nonce],
+    () => (section === 'overview' ? getRatesWindows() : Promise.resolve(IDLE)),
+    [section],
+    { skipWhen: IDLE, pollMs },
   )
 
   const heatmap = useAsync<HourlyHeatmap | null>(
-    () => (section === 'heatmap' ? getJson<HourlyHeatmap>(HEATMAP_URL) : Promise.resolve(null)),
-    [section, nonce],
+    () => (section === 'heatmap' ? getHeatmap() : Promise.resolve(IDLE)),
+    [section],
+    { skipWhen: IDLE, pollMs },
   )
 
   const udpPorts = useAsync<UdpPortDistributionResponse | null>(
-    () => (section === 'protocol' ? getJson<UdpPortDistributionResponse>(UDP_PORTS_URL) : Promise.resolve(null)),
-    [section, nonce],
+    () => (section === 'protocol' ? getUdpPorts() : Promise.resolve(IDLE)),
+    [section],
+    { skipWhen: IDLE, pollMs },
   )
   const icmpTypes = useAsync<IcmpTypeDistributionResponse | null>(
-    () => (section === 'protocol' ? getJson<IcmpTypeDistributionResponse>(ICMP_TYPES_URL) : Promise.resolve(null)),
-    [section, nonce],
+    () => (section === 'protocol' ? getIcmpTypes() : Promise.resolve(IDLE)),
+    [section],
+    { skipWhen: IDLE, pollMs },
   )
 
   const packetSizes = useAsync<PacketSizeDistributionResponse | null>(
-    () => (section === 'traffic' ? getJson<PacketSizeDistributionResponse>(PACKET_SIZES_URL) : Promise.resolve(null)),
-    [section, nonce],
+    () => (section === 'traffic' ? getPacketSizes() : Promise.resolve(IDLE)),
+    [section],
+    { skipWhen: IDLE, pollMs },
   )
   const ttlDistribution = useAsync<TtlDistributionResponse | null>(
-    () => (section === 'traffic' ? getJson<TtlDistributionResponse>(TTL_DISTRIBUTION_URL) : Promise.resolve(null)),
-    [section, nonce],
+    () => (section === 'traffic' ? getTtlDistribution() : Promise.resolve(IDLE)),
+    [section],
+    { skipWhen: IDLE, pollMs },
   )
   const ipFragments = useAsync<IpFragmentStatsResponse | null>(
-    () => (section === 'traffic' ? getJson<IpFragmentStatsResponse>(IP_FRAGMENTS_URL) : Promise.resolve(null)),
-    [section, nonce],
+    () => (section === 'traffic' ? getIpFragments() : Promise.resolve(IDLE)),
+    [section],
+    { skipWhen: IDLE, pollMs },
   )
 
   const portScanners = useAsync<PortScanResponse | null>(
-    () => (section === 'scan' ? getJson<PortScanResponse>(PORT_SCANNERS_URL) : Promise.resolve(null)),
-    [section, nonce],
+    () => (section === 'scan' ? getPortScanners() : Promise.resolve(IDLE)),
+    [section],
+    { skipWhen: IDLE, pollMs },
   )
   const serviceProbes = useAsync<ServiceProbeResponse | null>(
-    () => (section === 'scan' ? getJson<ServiceProbeResponse>(SERVICE_PROBES_URL) : Promise.resolve(null)),
-    [section, nonce],
+    () => (section === 'scan' ? getServiceProbes() : Promise.resolve(IDLE)),
+    [section],
+    { skipWhen: IDLE, pollMs },
   )
 
   const totals = useMemo(() => sumRates(rates), [rates])
 
-  /** TOP 来源：按包速率降序，只渲染前 20 条，避免长列表拖慢移动端 */
+  /**
+   * TOP 来源：按包速率降序取前 20 条**有流量的** IP。
+   *
+   * 必须过滤零速率：速率表里的条目会保留到过期为止，安静下来后每条都是 `0 pps`；
+   * 不过滤时这 20 个名额会被历史条目占满，真正有流量的 IP 反而被挤下去，
+   * 用户要滑很久才看到「现在是谁在打」。全为零时才退回显示空列表（由空态说明）。
+   */
   const topRates = useMemo(
-    () => [...rates].sort((a, b) => b.packets_per_sec - a.packets_per_sec).slice(0, 20),
+    () =>
+      rates
+        .filter((r) => r.packets_per_sec > 0 || r.bytes_per_sec > 0)
+        .sort((a, b) => b.packets_per_sec - a.packets_per_sec)
+        .slice(0, 20),
     [rates],
   )
+
+  /** 迷你条的基准：当前峰值（TOP 首条），保证第一行是满条 */
+  const topPeak = topRates.length > 0 ? topRates[0].packets_per_sec : 0
+  /** 实际渲染的 TOP 行：默认前 TOP_VISIBLE 条 */
+  const hasTopOverflow = topRates.length > TOP_VISIBLE
+  const visibleTop = showAllTop || !hasTopOverflow ? topRates : topRates.slice(0, TOP_VISIBLE)
 
   /** 趋势数据：SSE 环形缓冲（≥2 点）优先，否则用 REST 历史的返回值 */
   const trend = useMemo(() => {
     if (rateHistory.length >= 2) {
+      const points = rateHistory.slice(-TREND_POINTS)
       return {
         source: 'SSE 实时累积' as const,
-        labels: rateHistory.map((point) => point.label),
-        pps: rateHistory.map((point) => point.pps),
-        bps: rateHistory.map((point) => point.bps),
+        labels: points.map((point) => point.label),
+        pps: points.map((point) => point.pps),
+        bps: points.map((point) => point.bps),
       }
     }
     const history = restHistory.data ?? []
@@ -233,411 +391,791 @@ export default function Ddos() {
     }
   }, [rateHistory, restHistory.data])
 
-  /** 手动刷新：重置分区依赖的 nonce，并提示用户已发起（数据到达由各卡片自行更新） */
-  const refresh = () => {
-    setNonce((n) => n + 1)
-    toast.info('已请求刷新当前分区数据')
-  }
+  /** 趋势窗口峰值：比瞬时值更能说明「这段时间最高打到多少」 */
+  const trendPeak = useMemo(
+    () => (trend.pps.length > 0 ? Math.max(...trend.pps) : 0),
+    [trend.pps],
+  )
+
+  /**
+   * 态势判决：把「现在有没有事」压成一行结论（整页只此一处放大字号）。
+   *
+   * 判级口径与守护进程一致：拿**合计**包速率与配置阈值比较
+   * （web_ui/stats.rs 的威胁等级同用 rate_warning_pps / rate_critical_pps），
+   * 不另立标准；配置未取到时退化为不判级，只说「在追踪」。
+   */
+  const verdict = useMemo((): { text: string; tone: Tone; sub: string; right: string } => {
+    const totalPps = totals.pps
+    const peak = topRates.length > 0 ? topRates[0] : null
+    const warn = config.data?.rate_warning_pps ?? 0
+    const critical = config.data?.rate_critical_pps ?? 0
+
+    if (!peak) {
+      return {
+        text: 'IDLE',
+        tone: 'success',
+        sub: '当前没有被追踪的 IP：速率表为空表示近期没有触发速率统计的流量',
+        right: DASH,
+      }
+    }
+    if (critical > 0 && totalPps >= critical) {
+      return {
+        text: 'ALERT',
+        tone: 'danger',
+        sub: `合计包速率已达严重阈值 ${formatRate(critical, 'pps')}（配置 rate_critical_pps），峰值来源 ${peak.ip}`,
+        right: formatRate(totalPps, 'pps'),
+      }
+    }
+    if (warn > 0 && totalPps >= warn) {
+      return {
+        text: 'WARN',
+        tone: 'warning',
+        sub: `合计包速率已达告警阈值 ${formatRate(warn, 'pps')}（配置 rate_warning_pps）`,
+        right: formatRate(totalPps, 'pps'),
+      }
+    }
+    return {
+      text: 'ACTIVE',
+      tone: 'primary',
+      sub: `${formatNumber(rates.length, false)} 个 IP 在被追踪；峰值 ${peak.ip} ${formatRate(peak.packets_per_sec, 'pps')}${
+        config.data === null ? '（阈值配置未取到，暂不判级）' : ''
+      }`,
+      right: formatRate(totalPps, 'pps'),
+    }
+  }, [totals.pps, topRates, rates.length, config.data])
+
+  /** 热力图汇总：与图表同口径（同一小时重复出现时后者覆盖前者） */
+  const heatSummary = useMemo(() => {
+    const values = new Array<number>(24).fill(0)
+    for (const bucket of heatmap.data?.hours ?? []) {
+      const hour = Math.trunc(bucket.hour)
+      if (!Number.isFinite(hour) || hour < 0 || hour > 23) continue
+      values[hour] = Math.max(0, bucket[heatMetric])
+    }
+    let peak = 0
+    let peakHour = -1
+    let total = 0
+    values.forEach((value, hour) => {
+      total += value
+      if (value > peak) {
+        peak = value
+        peakHour = hour
+      }
+    })
+    return { peak, peakHour, total }
+  }, [heatmap.data, heatMetric])
+
+  /** 协议速率中的最大值：协议行的迷你条以它为基准 */
+  const maxProtoPps = useMemo(
+    () => PROTOCOLS.reduce((max, item) => Math.max(max, totals[item.key]), 0),
+    [totals],
+  )
+
+  /**
+   * 刷新**当前分区**用到的取数。
+   *
+   * 只重取当前分区而不是全部：未激活分区的取数会返回哨兵、白跑一趟。各分区共享 `section`
+   * 通过依赖变化触发的，让所有分区共享它就会把「切 tab 触发全部重取」的老问题带回来。
+   * 因此这里逐个调用真正与当前分区相关的那几个 `reload()`——它们的 Promise 在取数
+   * **落定**后 resolve（见 useAsync），所以下拉刷新的转圈会一直转到数据真的到齐。
+   */
+  const doRefresh = useCallback(async (): Promise<void> => {
+    const jobs: Promise<void>[] = []
+    if (section === 'overview') {
+      jobs.push(restRates.reload(), restHistory.reload(), windows.reload(), config.reload())
+    } else if (section === 'heatmap') {
+      jobs.push(heatmap.reload())
+    } else if (section === 'protocol') {
+      jobs.push(restRates.reload(), udpPorts.reload(), icmpTypes.reload())
+    } else if (section === 'traffic') {
+      jobs.push(packetSizes.reload(), ttlDistribution.reload(), ipFragments.reload())
+    } else if (section === 'scan') {
+      jobs.push(portScanners.reload(), serviceProbes.reload())
+    }
+    await Promise.all(jobs)
+  }, [
+    section,
+    restRates,
+    restHistory,
+    windows,
+    config,
+    heatmap,
+    udpPorts,
+    icmpTypes,
+    packetSizes,
+    ttlDistribution,
+    ipFragments,
+    portScanners,
+    serviceProbes,
+  ])
+
+  const liveSource = status === 'connected'
 
   return (
     <>
-      <PageHeader
-        title="DDoS 监控"
-        subtitle="实时速率来自 SSE 推送；流量特征与扫描探测为内核侧累计统计"
-        extra={
-          <Button size="small" fill="none" style={{ minHeight: 44 }} aria-label="刷新当前分区" onClick={refresh}>
-            <LoopOutline fontSize={18} />
-          </Button>
-        }
-      />
-
-      <div style={{ paddingBottom: 7 }}>
-        {status !== 'connected' && (
-          <NoticeBar
-            color="info"
-            wrap
-            content="实时通道未连接：速率数据回退为一次性 REST 拉取，恢复后会自动切回实时推送。"
-          />
-        )}
-
-        <Selector options={SECTIONS} value={[section]} onChange={(v) => setSection(v[0] ?? 'overview')} />
-
-        {/* ------------------------------- 概览 ------------------------------- */}
-        {section === 'overview' && (
-          <>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5, marginTop: 7 }}>
-              <StatCard
-                label="全网包速率"
-                value={formatRate(totals.pps, 'pps')}
-                tone="primary"
-                hint={`被追踪 IP ${formatNumber(rates.length, false)} 个`}
-              />
-              <StatCard
-                label="全网流量"
-                value={formatRate(totals.bps, 'bps')}
-                tone="success"
-                hint="所有被追踪 IP 的字节速率之和"
-              />
-            </div>
-
-            <Card title="速率趋势" style={{ marginTop: 7 }}>
-              <div style={{ ...MUTED, marginBottom: 2 }}>数据来源：{trend.source}</div>
-              <LineChart
-                labels={trend.labels}
-                series={[{ name: '总包速率', values: trend.pps }]}
-                height={180}
-                area
-                yUnit="pps"
-                emptyHint="暂无速率趋势数据"
-              />
-              <LineChart
-                labels={trend.labels}
-                series={[{ name: '总字节速率', values: trend.bps }]}
-                height={160}
-                yUnit="B/s"
-                emptyHint="暂无流量趋势数据"
-              />
-            </Card>
-
-            <Card title="多窗口 EWMA 速率" style={{ marginTop: 7 }}>
-              {windows.error !== null ? (
-                <LoadError message={`多窗口速率加载失败：${windows.error}`} onRetry={windows.reload} />
-              ) : windows.data === null ? (
-                <Skeleton.Paragraph lineCount={3} animated />
-              ) : (
-                <List>
-                  <List.Item extra={formatRate(windows.data.pps_short, 'pps')}>包速率（短期 ~5s）</List.Item>
-                  <List.Item extra={formatRate(windows.data.pps_mid, 'pps')}>包速率（中期 ~60s）</List.Item>
-                  <List.Item extra={formatRate(windows.data.pps_long, 'pps')}>包速率（长期 ~300s）</List.Item>
-                  <List.Item extra={formatRate(windows.data.bps_short, 'bps')}>字节速率（短期）</List.Item>
-                  <List.Item extra={formatRate(windows.data.bps_mid, 'bps')}>字节速率（中期）</List.Item>
-                  <List.Item extra={formatRate(windows.data.bps_long, 'bps')}>字节速率（长期）</List.Item>
-                </List>
-              )}
-            </Card>
-
-            <Card title="协议速率汇总" style={{ marginTop: 7 }}>
-              <List>
-                <List.Item extra={formatRate(totals.syn, 'pps')}>SYN</List.Item>
-                <List.Item extra={formatRate(totals.udp, 'pps')}>UDP</List.Item>
-                <List.Item extra={formatRate(totals.icmp, 'pps')}>ICMP</List.Item>
-                <List.Item extra={formatRate(totals.ack, 'pps')}>ACK</List.Item>
-                <List.Item extra={formatRate(totals.rst, 'pps')}>RST</List.Item>
-                <List.Item extra={formatRate(totals.fin, 'pps')}>FIN</List.Item>
-              </List>
-            </Card>
-
-            <Card title="TOP 来源 IP" style={{ marginTop: 7 }}>
-              {restRates.error !== null && sseRates === null ? (
-                <LoadError message={`速率数据加载失败：${restRates.error}`} onRetry={restRates.reload} />
-              ) : sseRates === null && restRates.loading ? (
-                <Skeleton.Paragraph lineCount={5} animated />
-              ) : topRates.length === 0 ? (
-                <EmptyState
-                  compact
-                  title="当前没有被追踪的 IP"
-                  description="速率表为空表示近期没有触发速率统计的流量；有异常流量时会立即出现在这里"
-                />
-              ) : (
-                topRates.map((rate) => (
-                  <div key={rate.ip} style={{ padding: '5px 0', borderBottom: '1px solid var(--fw-border)' }}>
-                    <div style={ROW}>
-                      <span style={{ ...MONO, fontSize: 13 }}>{rate.ip}</span>
-                      <span>{formatRate(rate.packets_per_sec, 'pps')}</span>
-                    </div>
-                    <div style={{ ...MUTED, marginTop: 1 }}>
-                      {formatRate(rate.bytes_per_sec, 'bps')} · SYN {formatNumber(Math.round(rate.syn_packets_per_sec), false)} ·
-                      UDP {formatNumber(Math.round(rate.udp_packets_per_sec), false)} · ICMP{' '}
-                      {formatNumber(Math.round(rate.icmp_packets_per_sec), false)}
-                    </div>
-                  </div>
-                ))
-              )}
-            </Card>
-          </>
-        )}
-
-        {/* ------------------------------ 热力图 ------------------------------ */}
-        {section === 'heatmap' && (
-          <Card title="24 小时攻击热力图" style={{ marginTop: 7 }}>
-            <Selector
-              options={HEAT_METRICS}
-              value={[heatMetric]}
-              onChange={(v) => setHeatMetric(v[0] ?? 'bans')}
+      <PullToRefresh onRefresh={doRefresh}>
+        <div className="fw-page">
+          {/* 页内区块标题：标题与顶栏同名，故只保留语义（srOnly），避免屏幕上
+              出现两行「DDoS 监控」；h2 仍在 DOM 里供读屏器与 e2e 定位 */}
+          <PageHeader title="DDoS 监控" srOnly />
+          {/* ------------------------------ 态势与分区 ------------------------------ */}
+          <Panel
+            title="实时态势"
+            meta={
+              config.data === null
+                ? `${formatNumber(rates.length, false)} IP · 阈值配置读取中`
+                : `${formatNumber(rates.length, false)} IP · 告警 ${formatRate(
+                    config.data.rate_warning_pps,
+                    'pps',
+                  )} / 严重 ${formatRate(config.data.rate_critical_pps, 'pps')}`
+            }
+            padded={false}
+          >
+            <Verdict
+              text={verdict.text}
+              tone={verdict.tone}
+              sub={
+                <>
+                  <Badge tone={liveSource ? 'success' : 'warning'}>
+                    {liveSource ? 'SSE LIVE' : 'REST 回退'}
+                  </Badge>{' '}
+                  {verdict.sub}
+                  {liveSource
+                    ? ''
+                    : `；实时通道未连接，速率回退一次性拉取（推送间隔 ${pushSecs}s）`}
+                </>
+              }
+              right={
+                // 只放数值：与仪表盘判决条同一形态。刷新走顶栏「刷新」或下拉手势，
+                // 判决条里再塞一个刷新按钮会让同一页出现两套刷新入口
+                <span className="fw-mono fw-num" style={{ fontSize: 15, fontWeight: 600 }}>
+                  {verdict.right}
+                </span>
+              }
             />
-            <div style={{ marginTop: 5 }}>
+          </Panel>
+
+          <div style={{ marginBottom: 6 }}>
+            <SegTabs label="DDoS 监控分区" items={SECTIONS} value={section} onChange={setSection} />
+          </div>
+
+          {/* ------------------------------- 概览 ------------------------------- */}
+          {section === 'overview' && (
+            <>
+              <Panel title="全网速率" meta={`内核统计轮询 ${pushSecs}s`} padded={false}>
+                <Tiles columns={2}>
+                  <Tile
+                    label="包速率"
+                    value={formatNumber(totals.pps, true)}
+                    unit="pps"
+                    tone="primary"
+                  />
+                  <Tile
+                    label="字节速率"
+                    value={formatNumber(totals.bps, true)}
+                    unit="B/s"
+                    tone="success"
+                  />
+                  <Tile label="SYN 速率" value={formatNumber(totals.syn, true)} unit="pps" />
+                  <Tile
+                    label="趋势窗口峰值"
+                    value={trend.pps.length > 0 ? formatNumber(trendPeak, true) : DASH}
+                    unit={trend.pps.length > 0 ? 'pps' : undefined}
+                  />
+                </Tiles>
+              </Panel>
+
+              <Panel
+                title="速率趋势"
+                meta={`${trend.source} · ${formatNumber(trend.labels.length, false)} 点`}
+              >
+                <LineChart
+                  labels={trend.labels}
+                  series={[{ name: '总包速率', values: trend.pps }]}
+                  height={150}
+                  area
+                  yUnit="pps"
+                  emptyHint="暂无速率趋势数据"
+                />
+                <LineChart
+                  labels={trend.labels}
+                  series={[{ name: '总字节速率', values: trend.bps }]}
+                  height={120}
+                  yUnit="B/s"
+                  emptyHint="暂无流量趋势数据"
+                />
+                <Note>
+                  SSE 每 {pushSecs}s 一个采样点、最多保留 300 点（REST 回退为最近 1 小时、每 2
+                  秒一条）；曲线只画最近 {TREND_POINTS} 点。
+                </Note>
+              </Panel>
+
+              <Panel title="多窗口 EWMA 速率" meta="短期 ~5s / 中期 ~60s / 长期 ~300s" padded={false}>
+                {windows.error !== null ? (
+                  <InlineError
+                    message={`多窗口速率加载失败：${windows.error}`}
+                    onRetry={windows.reload}
+                  />
+                ) : windows.data === null ? (
+                  <PanelLoading lines={4} />
+                ) : (
+                  <Rows>
+                    <Row wide label="包速率 短期" value={formatRate(windows.data.pps_short, 'pps')} />
+                    <Row wide label="包速率 中期" value={formatRate(windows.data.pps_mid, 'pps')} />
+                    <Row wide label="包速率 长期" value={formatRate(windows.data.pps_long, 'pps')} />
+                    <Row wide label="字节速率 短期" value={formatRate(windows.data.bps_short, 'bps')} />
+                    <Row wide label="字节速率 中期" value={formatRate(windows.data.bps_mid, 'bps')} />
+                    <Row wide label="字节速率 长期" value={formatRate(windows.data.bps_long, 'bps')} />
+                  </Rows>
+                )}
+              </Panel>
+
+              <Panel
+                title="协议速率汇总"
+                meta={`合计 ${formatRate(totals.pps, 'pps')}`}
+                padded={false}
+              >
+                {PROTOCOLS.map((item, index) => (
+                  <MetricRow
+                    key={item.key}
+                    primary={item.label}
+                    value={formatRate(totals[item.key], 'pps')}
+                    ratio={maxProtoPps > 0 ? totals[item.key] / maxProtoPps : 0}
+                    last={index === PROTOCOLS.length - 1}
+                  />
+                ))}
+              </Panel>
+
+              <Panel
+                title="TOP 来源 IP"
+                meta={`显示 ${formatNumber(visibleTop.length, false)} / 有流量 ${formatNumber(
+                  topRates.length,
+                  false,
+                )} / 被追踪 ${formatNumber(rates.length, false)}`}
+                padded={false}
+              >
+                {restRates.error !== null && liveRates === null ? (
+                  <InlineError
+                    message={`速率数据加载失败：${restRates.error}`}
+                    onRetry={restRates.reload}
+                  />
+                ) : liveRates === null && restRates.loading ? (
+                  <PanelLoading lines={4} />
+                ) : topRates.length === 0 ? (
+                  <EmptyState
+                    compact
+                    title="当前没有被追踪的 IP"
+                    description="速率表为空表示近期没有触发速率统计的流量；有异常流量时会立即出现在这里"
+                  />
+                ) : (
+                  <>
+                    {visibleTop.map((rate, index) => (
+                      <MetricRow
+                        key={rate.ip}
+                        primary={rate.ip}
+                        value={formatRate(rate.packets_per_sec, 'pps')}
+                        ratio={topPeak > 0 ? rate.packets_per_sec / topPeak : 0}
+                        tone={rateTone(rate.packets_per_sec, config.data)}
+                        detail={`${formatRate(rate.bytes_per_sec, 'bps')} · SYN ${formatNumber(
+                          Math.round(rate.syn_packets_per_sec),
+                          false,
+                        )} · UDP ${formatNumber(Math.round(rate.udp_packets_per_sec), false)} · ICMP ${formatNumber(
+                          Math.round(rate.icmp_packets_per_sec),
+                          false,
+                        )} pps`}
+                        last={!hasTopOverflow && index === visibleTop.length - 1}
+                      />
+                    ))}
+                    {hasTopOverflow ? (
+                      <MoreToggle
+                        expanded={showAllTop}
+                        total={topRates.length}
+                        onToggle={() => setShowAllTop((value) => !value)}
+                      />
+                    ) : null}
+                  </>
+                )}
+              </Panel>
+            </>
+          )}
+
+          {/* ------------------------------ 热力图 ------------------------------ */}
+          {section === 'heatmap' && (
+            <Panel
+              title="24 小时攻击热力图"
+              meta={`口径：${HEAT_LABEL[heatMetric]}`}
+              padded={false}
+            >
+              <div style={{ padding: '5px 6px' }}>
+                <SegTabs
+                  label="热力图口径"
+                  items={HEAT_METRICS}
+                  value={heatMetric}
+                  onChange={setHeatMetric}
+                />
+              </div>
               {heatmap.error !== null ? (
-                <LoadError message={`热力图加载失败：${heatmap.error}`} onRetry={heatmap.reload} />
+                <InlineError message={`热力图加载失败：${heatmap.error}`} onRetry={heatmap.reload} />
               ) : heatmap.data === null ? (
-                <Skeleton.Paragraph lineCount={4} animated />
+                <PanelLoading lines={4} />
               ) : (
                 <>
-                  <HeatmapChart
-                    cells={heatmap.data.hours.map((bucket) => ({
-                      hour: bucket.hour,
-                      value: bucket[heatMetric],
-                    }))}
-                    height={170}
-                    valueLabel={HEAT_LABEL[heatMetric]}
-                    emptyHint="暂无小时级统计数据"
-                  />
-                  <div style={{ ...MUTED, marginTop: 4 }}>
-                    色阶按 √(值/峰值) 分档：攻击量长尾分布下，开平方能让低值时段更容易分辨。
-                  </div>
-                </>
-              )}
-            </div>
-          </Card>
-        )}
-
-        {/* ------------------------------- 协议 ------------------------------- */}
-        {section === 'protocol' && (
-          <>
-            <Card title="协议占比（跨所有被追踪 IP 求和）" style={{ marginTop: 7 }}>
-              <RadarChart
-                axes={['SYN', 'UDP', 'ICMP', 'ACK', 'RST', 'FIN']}
-                series={[
-                  {
-                    name: '协议包速率',
-                    values: [totals.syn, totals.udp, totals.icmp, totals.ack, totals.rst, totals.fin],
-                  },
-                ]}
-                height={230}
-                emptyHint="暂无协议速率数据"
-              />
-            </Card>
-
-            <Card title="UDP 端口分布" style={{ marginTop: 7 }}>
-              {udpPorts.error !== null ? (
-                <LoadError message={`UDP 端口分布加载失败：${udpPorts.error}`} onRetry={udpPorts.reload} />
-              ) : udpPorts.data === null ? (
-                <Skeleton.Paragraph lineCount={4} animated />
-              ) : udpPorts.data.ports.length === 0 ? (
-                <EmptyState compact title="暂无 UDP 端口记录" description="内核侧尚未统计到 UDP 流量" />
-              ) : (
-                <>
-                  <div style={{ ...MUTED, marginBottom: 4 }}>
-                    共 {formatNumber(udpPorts.data.total_entries, false)} 个端口（上限{' '}
-                    {formatNumber(udpPorts.data.max_entries, false)}），已按包数降序
-                  </div>
-                  <PieChart
-                    slices={udpPorts.data.ports
-                      .slice(0, 8)
-                      .map((entry) => ({ name: `端口 ${entry.port}`, value: entry.packets }))}
-                    height={180}
-                    donut
-                    emptyHint="暂无 UDP 端口数据"
-                  />
-                  <List header="明细（前 8 个）">
-                    {udpPorts.data.ports.slice(0, 8).map((entry) => (
-                      <List.Item
-                        key={entry.port}
-                        extra={`${formatNumber(entry.packets, true)} 包 / ${formatNumber(entry.bytes, true)} B`}
-                        description={`最近出现 ${formatDuration(entry.last_seen_secs)} 前`}
-                      >
-                        端口 {entry.port}
-                      </List.Item>
-                    ))}
-                  </List>
-                </>
-              )}
-            </Card>
-
-            <Card title="ICMP 类型分布" style={{ marginTop: 7 }}>
-              {icmpTypes.error !== null ? (
-                <LoadError message={`ICMP 类型分布加载失败：${icmpTypes.error}`} onRetry={icmpTypes.reload} />
-              ) : icmpTypes.data === null ? (
-                <Skeleton.Paragraph lineCount={4} animated />
-              ) : icmpTypes.data.types.length === 0 ? (
-                <EmptyState compact title="暂无 ICMP 记录" description="内核侧尚未统计到 ICMP 报文" />
-              ) : (
-                <List
-                  header={`共 ${formatNumber(icmpTypes.data.total_entries, false)} 个类型/代码组合（上限 ${formatNumber(icmpTypes.data.max_entries, false)}）`}
-                >
-                  {icmpTypes.data.types.slice(0, 20).map((entry) => (
-                    <List.Item
-                      key={`${entry.type}-${entry.code}`}
-                      extra={`${formatNumber(entry.packets, true)} 包 / ${formatNumber(entry.bytes, true)} B`}
-                      description={`最近出现 ${formatDuration(entry.last_seen_secs)} 前`}
-                    >
-                      type {entry.type} / code {entry.code}
-                    </List.Item>
-                  ))}
-                </List>
-              )}
-            </Card>
-          </>
-        )}
-
-        {/* ----------------------------- 流量特征 ----------------------------- */}
-        {section === 'traffic' && (
-          <>
-            <Card title="包大小分布" style={{ marginTop: 7 }}>
-              {packetSizes.error !== null ? (
-                <LoadError message={`包大小分布加载失败：${packetSizes.error}`} onRetry={packetSizes.reload} />
-              ) : packetSizes.data === null ? (
-                <Skeleton.Paragraph lineCount={4} animated />
-              ) : packetSizes.data.total === 0 ? (
-                <EmptyState compact title="暂无包大小统计" description="内核侧尚未累计到数据包" />
-              ) : (
-                <>
-                  <PieChart
-                    slices={packetSizes.data.labels.map((label, index) => ({
-                      name: label,
-                      value: packetSizes.data?.counts[index] ?? 0,
-                    }))}
-                    height={190}
-                    donut
-                    emptyHint="暂无包大小数据"
-                  />
-                  <List header={`总包数 ${formatNumber(packetSizes.data.total, true)}`}>
-                    {packetSizes.data.labels.map((label, index) => (
-                      <List.Item
-                        key={label}
-                        extra={`${formatNumber(packetSizes.data?.counts[index] ?? 0, true)} 包 · ${(packetSizes.data?.percentages[index] ?? 0).toFixed(1)}%`}
-                      >
-                        {label}
-                      </List.Item>
-                    ))}
-                  </List>
-                </>
-              )}
-            </Card>
-
-            <Card title="TTL 分布" style={{ marginTop: 7 }}>
-              {ttlDistribution.error !== null ? (
-                <LoadError message={`TTL 分布加载失败：${ttlDistribution.error}`} onRetry={ttlDistribution.reload} />
-              ) : ttlDistribution.data === null ? (
-                <Skeleton.Paragraph lineCount={4} animated />
-              ) : ttlDistribution.data.total === 0 ? (
-                <EmptyState compact title="暂无 TTL 统计" description="内核侧尚未累计到数据包" />
-              ) : (
-                <>
-                  <PieChart
-                    slices={ttlDistribution.data.labels.map((label, index) => ({
-                      name: label,
-                      value: ttlDistribution.data?.counts[index] ?? 0,
-                    }))}
-                    height={190}
-                    donut
-                    emptyHint="暂无 TTL 数据"
-                  />
-                  <List header={`总包数 ${formatNumber(ttlDistribution.data.total, true)}`}>
-                    {ttlDistribution.data.labels.map((label, index) => (
-                      <List.Item
-                        key={label}
-                        extra={`${formatNumber(ttlDistribution.data?.counts[index] ?? 0, true)} 包 · ${(ttlDistribution.data?.percentages[index] ?? 0).toFixed(1)}%`}
-                      >
-                        TTL {label}
-                      </List.Item>
-                    ))}
-                  </List>
-                </>
-              )}
-            </Card>
-
-            <Card title="IP 分片统计" style={{ marginTop: 7 }}>
-              {ipFragments.error !== null ? (
-                <LoadError message={`IP 分片统计加载失败：${ipFragments.error}`} onRetry={ipFragments.reload} />
-              ) : ipFragments.data === null ? (
-                <Skeleton.Paragraph lineCount={3} animated />
-              ) : (
-                <>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5 }}>
-                    <StatCard
-                      label="分片包数"
-                      value={formatNumber(ipFragments.data.fragment_packets, true)}
-                      tone={ipFragments.data.fragment_ratio >= 5 ? 'danger' : 'default'}
-                      hint={`占全部包的 ${ipFragments.data.fragment_ratio.toFixed(2)}%`}
+                  <Tiles columns={3}>
+                    <Tile
+                      label="峰值"
+                      value={formatNumber(heatSummary.peak, false)}
+                      unit="次"
+                      tone={heatSummary.peak > 0 ? 'warning' : 'default'}
                     />
-                    <StatCard
-                      label="总包数"
-                      value={formatNumber(ipFragments.data.total_packets, true)}
-                      tone="primary"
+                    <Tile
+                      label="峰值时段"
+                      value={heatSummary.peakHour < 0 ? DASH : `${heatSummary.peakHour} 时`}
                     />
-                  </div>
-                  <div style={{ ...MUTED, marginTop: 5 }}>
-                    大量分片常被用于规避检测：分片占比持续偏高时建议结合端口扫描结果一起排查。
+                    <Tile label="24h 合计" value={formatNumber(heatSummary.total, true)} unit="次" />
+                  </Tiles>
+                  <div style={{ padding: '5px 6px' }}>
+                    <HeatmapChart
+                      cells={heatmap.data.hours.map((bucket) => ({
+                        hour: bucket.hour,
+                        value: bucket[heatMetric],
+                      }))}
+                      height={160}
+                      valueLabel={HEAT_LABEL[heatMetric]}
+                      emptyHint="暂无小时级统计数据"
+                    />
+                    <Note>
+                      色阶按 √(值/峰值) 分档：攻击量长尾分布下，开平方能让低值时段更容易分辨。
+                    </Note>
                   </div>
                 </>
               )}
-            </Card>
-          </>
-        )}
+            </Panel>
+          )}
 
-        {/* ----------------------------- 扫描探测 ----------------------------- */}
-        {section === 'scan' && (
-          <>
-            <Card title="端口扫描检测" style={{ marginTop: 7 }}>
-              {portScanners.error !== null ? (
-                <LoadError message={`端口扫描结果加载失败：${portScanners.error}`} onRetry={portScanners.reload} />
-              ) : portScanners.data === null ? (
-                <Skeleton.Paragraph lineCount={4} animated />
-              ) : (
-                <>
-                  <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 5 }}>
-                    <Tag color="primary" fill="outline">
-                      判定阈值：不同端口数 ≥ {formatNumber(portScanners.data.threshold, false)}
-                    </Tag>
-                    <Tag color={portScanners.data.total_detected > 0 ? 'danger' : 'success'} fill="outline">
-                      检出 {formatNumber(portScanners.data.total_detected, false)} 个
-                    </Tag>
-                  </div>
-                  {portScanners.data.scanners.length === 0 ? (
-                    <EmptyState compact title="未检出端口扫描" description="没有来源超过不同端口数阈值" />
-                  ) : (
-                    <List>
-                      {portScanners.data.scanners.slice(0, 20).map((scanner) => (
-                        <List.Item
-                          key={scanner.ip}
-                          extra={`${formatNumber(scanner.unique_ports, false)} 个端口 / ${formatNumber(scanner.packets, true)} 包`}
-                        >
-                          <span style={MONO}>{scanner.ip}</span>
-                        </List.Item>
+          {/* ------------------------------- 协议 ------------------------------- */}
+          {section === 'protocol' && (
+            <>
+              <Panel
+                title="协议速率占比"
+                meta={`合计 ${formatRate(totals.pps, 'pps')}`}
+                padded={false}
+              >
+                <div style={{ padding: '5px 6px 0' }}>
+                  <RadarChart
+                    axes={PROTOCOLS.map((item) => item.label)}
+                    series={[
+                      {
+                        name: '协议包速率',
+                        values: PROTOCOLS.map((item) => totals[item.key]),
+                      },
+                    ]}
+                    height={210}
+                    emptyHint="暂无协议速率数据"
+                  />
+                </div>
+                {PROTOCOLS.map((item, index) => {
+                  const pps = totals[item.key]
+                  const share = totals.pps > 0 ? (pps / totals.pps) * 100 : 0
+                  return (
+                    <MetricRow
+                      key={item.key}
+                      primary={item.label}
+                      value={`${share.toFixed(1)}%`}
+                      ratio={totals.pps > 0 ? pps / totals.pps : 0}
+                      detail={formatRate(pps, 'pps')}
+                      last={index === PROTOCOLS.length - 1}
+                    />
+                  )
+                })}
+              </Panel>
+
+              <Panel
+                title="UDP 端口分布"
+                meta={
+                  udpPorts.data === null
+                    ? '内核侧累计'
+                    : `共 ${formatNumber(udpPorts.data.total_entries, false)} / 上限 ${formatNumber(
+                        udpPorts.data.max_entries,
+                        false,
+                      )}`
+                }
+                padded={false}
+              >
+                {udpPorts.error !== null ? (
+                  <InlineError
+                    message={`UDP 端口分布加载失败：${udpPorts.error}`}
+                    onRetry={udpPorts.reload}
+                  />
+                ) : udpPorts.data === null ? (
+                  <PanelLoading lines={4} />
+                ) : udpPorts.data.ports.length === 0 ? (
+                  <EmptyState compact title="暂无 UDP 端口记录" description="内核侧尚未统计到 UDP 流量" />
+                ) : (
+                  <>
+                    <div style={{ padding: '5px 6px 0' }}>
+                      <PieChart
+                        slices={udpPorts.data.ports
+                          .slice(0, UDP_VISIBLE)
+                          .map((entry) => ({ name: `端口 ${entry.port}`, value: entry.packets }))}
+                        height={170}
+                        donut
+                        emptyHint="暂无 UDP 端口数据"
+                      />
+                    </div>
+                    <Rows>
+                      {udpPorts.data.ports.slice(0, UDP_VISIBLE).map((entry) => (
+                        <Row
+                          key={entry.port}
+                          label={`端口 ${entry.port}`}
+                          value={formatNumber(entry.packets, true)}
+                          unit="包"
+                          tail={
+                            <span style={{ fontSize: 10, color: 'var(--fw-text-3)' }}>
+                              {formatDuration(entry.last_seen_secs)} 前
+                            </span>
+                          }
+                        />
                       ))}
-                    </List>
-                  )}
-                </>
-              )}
-            </Card>
+                    </Rows>
+                    {udpPorts.data.ports.length > UDP_VISIBLE ? (
+                      <Note>
+                        明细按包数降序，只列前 {UDP_VISIBLE} 个端口（共{' '}
+                        {formatNumber(udpPorts.data.ports.length, false)} 个）
+                      </Note>
+                    ) : null}
+                  </>
+                )}
+              </Panel>
 
-            <Card title="服务探测检测" style={{ marginTop: 7 }}>
-              {serviceProbes.error !== null ? (
-                <LoadError message={`服务探测结果加载失败：${serviceProbes.error}`} onRetry={serviceProbes.reload} />
-              ) : serviceProbes.data === null ? (
-                <Skeleton.Paragraph lineCount={4} animated />
-              ) : (
-                <>
-                  <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 5 }}>
-                    <Tag color="primary" fill="outline">
-                      判定阈值：协议数 ≥ {formatNumber(serviceProbes.data.threshold, false)}
-                    </Tag>
-                    {serviceProbes.data.probes.length === 0 && (
-                      <Tag color="success" fill="outline">
-                        未检出
-                      </Tag>
+              <Panel
+                title="ICMP 类型分布"
+                meta={
+                  icmpTypes.data === null
+                    ? '内核侧累计'
+                    : `共 ${formatNumber(icmpTypes.data.total_entries, false)} / 上限 ${formatNumber(
+                        icmpTypes.data.max_entries,
+                        false,
+                      )}`
+                }
+                padded={false}
+              >
+                {icmpTypes.error !== null ? (
+                  <InlineError
+                    message={`ICMP 类型分布加载失败：${icmpTypes.error}`}
+                    onRetry={icmpTypes.reload}
+                  />
+                ) : icmpTypes.data === null ? (
+                  <PanelLoading lines={4} />
+                ) : icmpTypes.data.types.length === 0 ? (
+                  <EmptyState compact title="暂无 ICMP 记录" description="内核侧尚未统计到 ICMP 报文" />
+                ) : (
+                  <>
+                    <Rows>
+                      {icmpTypes.data.types.slice(0, ICMP_VISIBLE).map((entry) => (
+                        <Row
+                          key={`${entry.type}-${entry.code}`}
+                          label={`type ${entry.type} · code ${entry.code}`}
+                          value={formatNumber(entry.packets, true)}
+                          unit="包"
+                          tail={
+                            <span style={{ fontSize: 10, color: 'var(--fw-text-3)' }}>
+                              {formatNumber(entry.bytes, true)} B ·{' '}
+                              {formatDuration(entry.last_seen_secs)} 前
+                            </span>
+                          }
+                        />
+                      ))}
+                    </Rows>
+                    {icmpTypes.data.types.length > ICMP_VISIBLE ? (
+                      <Note>
+                        明细按包数降序，只列前 {ICMP_VISIBLE} 个类型/代码组合（共{' '}
+                        {formatNumber(icmpTypes.data.types.length, false)} 个）
+                      </Note>
+                    ) : null}
+                  </>
+                )}
+              </Panel>
+            </>
+          )}
+
+          {/* ----------------------------- 流量特征 ----------------------------- */}
+          {section === 'traffic' && (
+            <>
+              <Panel
+                title="包大小分布"
+                meta={
+                  packetSizes.data === null
+                    ? '内核侧累计'
+                    : `总包数 ${formatNumber(packetSizes.data.total, true)}`
+                }
+                padded={false}
+              >
+                {packetSizes.error !== null ? (
+                  <InlineError
+                    message={`包大小分布加载失败：${packetSizes.error}`}
+                    onRetry={packetSizes.reload}
+                  />
+                ) : packetSizes.data === null ? (
+                  <PanelLoading lines={4} />
+                ) : packetSizes.data.total === 0 ? (
+                  <EmptyState compact title="暂无包大小统计" description="内核侧尚未累计到数据包" />
+                ) : (
+                  <>
+                    <div style={{ padding: '5px 6px 0' }}>
+                      <PieChart
+                        slices={packetSizes.data.labels.map((label, index) => ({
+                          name: label,
+                          value: packetSizes.data?.counts[index] ?? 0,
+                        }))}
+                        height={180}
+                        donut
+                        emptyHint="暂无包大小数据"
+                      />
+                    </div>
+                    <Rows>
+                      {packetSizes.data.labels.map((label, index) => (
+                        <Row
+                          key={label}
+                          label={label}
+                          value={formatNumber(packetSizes.data?.counts[index] ?? 0, true)}
+                          unit="包"
+                          tail={
+                            <span
+                              className="fw-mono"
+                              style={{ fontSize: 10, color: 'var(--fw-text-3)' }}
+                            >
+                              {(packetSizes.data?.percentages[index] ?? 0).toFixed(1)}%
+                            </span>
+                          }
+                        />
+                      ))}
+                    </Rows>
+                  </>
+                )}
+              </Panel>
+
+              <Panel
+                title="TTL 分布"
+                meta={
+                  ttlDistribution.data === null
+                    ? '内核侧累计'
+                    : `总包数 ${formatNumber(ttlDistribution.data.total, true)}`
+                }
+                padded={false}
+              >
+                {ttlDistribution.error !== null ? (
+                  <InlineError
+                    message={`TTL 分布加载失败：${ttlDistribution.error}`}
+                    onRetry={ttlDistribution.reload}
+                  />
+                ) : ttlDistribution.data === null ? (
+                  <PanelLoading lines={4} />
+                ) : ttlDistribution.data.total === 0 ? (
+                  <EmptyState compact title="暂无 TTL 统计" description="内核侧尚未累计到数据包" />
+                ) : (
+                  <>
+                    <div style={{ padding: '5px 6px 0' }}>
+                      <PieChart
+                        slices={ttlDistribution.data.labels.map((label, index) => ({
+                          name: `TTL ${label}`,
+                          value: ttlDistribution.data?.counts[index] ?? 0,
+                        }))}
+                        height={180}
+                        donut
+                        emptyHint="暂无 TTL 数据"
+                      />
+                    </div>
+                    <Rows>
+                      {ttlDistribution.data.labels.map((label, index) => (
+                        <Row
+                          key={label}
+                          label={`TTL ${label}`}
+                          value={formatNumber(ttlDistribution.data?.counts[index] ?? 0, true)}
+                          unit="包"
+                          tail={
+                            <span
+                              className="fw-mono"
+                              style={{ fontSize: 10, color: 'var(--fw-text-3)' }}
+                            >
+                              {(ttlDistribution.data?.percentages[index] ?? 0).toFixed(1)}%
+                            </span>
+                          }
+                        />
+                      ))}
+                    </Rows>
+                  </>
+                )}
+              </Panel>
+
+              <Panel title="IP 分片统计" meta="占比阈值 5%" padded={false}>
+                {ipFragments.error !== null ? (
+                  <InlineError
+                    message={`IP 分片统计加载失败：${ipFragments.error}`}
+                    onRetry={ipFragments.reload}
+                  />
+                ) : ipFragments.data === null ? (
+                  <PanelLoading lines={4} />
+                ) : (
+                  <>
+                    <Tiles columns={3}>
+                      <Tile
+                        label="分片包数"
+                        value={formatNumber(ipFragments.data.fragment_packets, true)}
+                        unit="包"
+                        tone={ipFragments.data.fragment_ratio >= 5 ? 'danger' : 'default'}
+                      />
+                      <Tile
+                        label="总包数"
+                        value={formatNumber(ipFragments.data.total_packets, true)}
+                        unit="包"
+                        tone="primary"
+                      />
+                      <Tile
+                        label="分片占比"
+                        value={`${ipFragments.data.fragment_ratio.toFixed(2)}%`}
+                        tone={ipFragments.data.fragment_ratio >= 5 ? 'danger' : 'default'}
+                      />
+                    </Tiles>
+                    <Note tone={ipFragments.data.fragment_ratio >= 5 ? 'danger' : 'default'}>
+                      大量分片常被用于规避检测：分片占比持续偏高时建议结合端口扫描结果一起排查。
+                    </Note>
+                  </>
+                )}
+              </Panel>
+            </>
+          )}
+
+          {/* ----------------------------- 扫描探测 ----------------------------- */}
+          {section === 'scan' && (
+            <>
+              <Panel
+                title="端口扫描检测"
+                meta={
+                  portScanners.data === null
+                    ? '内核侧阈值判定'
+                    : `阈值：不同端口数 ≥ ${formatNumber(portScanners.data.threshold, false)}`
+                }
+                padded={false}
+              >
+                {portScanners.error !== null ? (
+                  <InlineError
+                    message={`端口扫描结果加载失败：${portScanners.error}`}
+                    onRetry={portScanners.reload}
+                  />
+                ) : portScanners.data === null ? (
+                  <PanelLoading lines={4} />
+                ) : (
+                  <>
+                    <Tiles columns={2}>
+                      <Tile
+                        label="判定阈值"
+                        value={formatNumber(portScanners.data.threshold, false)}
+                        unit="个端口"
+                      />
+                      <Tile
+                        label="检出"
+                        value={formatNumber(portScanners.data.total_detected, false)}
+                        unit="个来源"
+                        tone={portScanners.data.total_detected > 0 ? 'danger' : 'success'}
+                      />
+                    </Tiles>
+                    {portScanners.data.scanners.length === 0 ? (
+                      <EmptyState
+                        compact
+                        title="未检出端口扫描"
+                        description="没有来源的不同端口数超过阈值"
+                      />
+                    ) : (
+                      <>
+                        {portScanners.data.scanners.slice(0, SCAN_VISIBLE).map((scanner, index) => (
+                          <MetricRow
+                            key={scanner.ip}
+                            primary={scanner.ip}
+                            value={formatNumber(scanner.unique_ports, false)}
+                            unit="端口"
+                            detail={`${formatNumber(scanner.packets, true)} 包`}
+                            // 后面还有「只列前 N 个」说明时保留末行分隔线，否则去掉避免与面板边框叠双线
+                            last={
+                              portScanners.data!.scanners.length <= SCAN_VISIBLE &&
+                              index === portScanners.data!.scanners.length - 1
+                            }
+                          />
+                        ))}
+                        {portScanners.data.scanners.length > SCAN_VISIBLE ? (
+                          <Note>
+                            明细按不同端口数降序，只列前 {SCAN_VISIBLE} 个来源（共{' '}
+                            {formatNumber(portScanners.data.scanners.length, false)} 个）
+                          </Note>
+                        ) : null}
+                      </>
                     )}
-                  </div>
-                  {serviceProbes.data.probes.length === 0 ? (
-                    <EmptyState compact title="未检出服务探测" description="没有来源超过协议数阈值" />
-                  ) : (
-                    <List>
-                      {serviceProbes.data.probes.slice(0, 20).map((probe) => (
-                        <List.Item
-                          key={probe.ip}
-                          extra={`${formatNumber(probe.protocol_count, false)} 个协议 / ${formatNumber(probe.packets, true)} 包`}
-                        >
-                          <span style={MONO}>{probe.ip}</span>
-                        </List.Item>
-                      ))}
-                    </List>
-                  )}
-                </>
-              )}
-            </Card>
-          </>
-        )}
-      </div>
+                  </>
+                )}
+              </Panel>
+
+              <Panel
+                title="服务探测检测"
+                meta={
+                  serviceProbes.data === null
+                    ? '内核侧阈值判定'
+                    : `阈值：协议数 ≥ ${formatNumber(serviceProbes.data.threshold, false)}`
+                }
+                padded={false}
+              >
+                {serviceProbes.error !== null ? (
+                  <InlineError
+                    message={`服务探测结果加载失败：${serviceProbes.error}`}
+                    onRetry={serviceProbes.reload}
+                  />
+                ) : serviceProbes.data === null ? (
+                  <PanelLoading lines={4} />
+                ) : (
+                  <>
+                    <Tiles columns={2}>
+                      <Tile
+                        label="判定阈值"
+                        value={formatNumber(serviceProbes.data.threshold, false)}
+                        unit="个协议"
+                      />
+                      <Tile
+                        label="检出"
+                        value={formatNumber(serviceProbes.data.probes.length, false)}
+                        unit="个来源"
+                        tone={serviceProbes.data.probes.length > 0 ? 'danger' : 'success'}
+                      />
+                    </Tiles>
+                    {serviceProbes.data.probes.length === 0 ? (
+                      <EmptyState compact title="未检出服务探测" description="没有来源的协议数超过阈值" />
+                    ) : (
+                      <>
+                        {serviceProbes.data.probes.slice(0, SCAN_VISIBLE).map((probe, index) => (
+                          <MetricRow
+                            key={probe.ip}
+                            primary={probe.ip}
+                            value={formatNumber(probe.protocol_count, false)}
+                            unit="协议"
+                            detail={`${formatNumber(probe.packets, true)} 包`}
+                            last={
+                              serviceProbes.data!.probes.length <= SCAN_VISIBLE &&
+                              index === serviceProbes.data!.probes.length - 1
+                            }
+                          />
+                        ))}
+                        {serviceProbes.data.probes.length > SCAN_VISIBLE ? (
+                          <Note>
+                            明细按协议数降序，只列前 {SCAN_VISIBLE} 个来源（共{' '}
+                            {formatNumber(serviceProbes.data.probes.length, false)} 个）
+                          </Note>
+                        ) : null}
+                      </>
+                    )}
+                  </>
+                )}
+              </Panel>
+            </>
+          )}
+        </div>
+      </PullToRefresh>
     </>
   )
 }
