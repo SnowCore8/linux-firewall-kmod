@@ -8,8 +8,6 @@
 [![Language](https://img.shields.io/badge/Language-Rust%20%2B%20C-blue.svg)]()
 [![Platform](https://img.shields.io/badge/Platform-Linux%205.x%20%7C%206.x-orange.svg)]()
 
-> 🌍 [English README](README.en.md)
-
 ## 概述
 
 Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用户空间移至内核空间，使用 netfilter 框架在数据包级别进行实时 IP 封禁，具有更低的延迟和更高的性能。守护进程用 Rust 实现（v2.2.0 起从 C 翻译），编译为单文件 stripped 二进制（移动端优先的 React 控制面板一并嵌入），集成测试套件全部通过。
@@ -109,7 +107,7 @@ make deb                 # 调用 ./build-deb.sh
 sudo dpkg -i build/deb/linux-firewall-kmod-2.2.0.deb  # 安装（DKMS 自动编译 + systemd 启动）
 ```
 
-> 📖 文档: [中文](docs/zh/) | [English](docs/en/) | [在线浏览](https://snowcore8.github.io/linux-firewall-kmod/)
+> 📖 文档: [中文](docs/zh/) | [在线浏览](https://snowcore8.github.io/linux-firewall-kmod/)
 
 ## 📚 文档导航
 

@@ -17,7 +17,6 @@ ESSENTIAL_FILES=(
     "Makefile"
     "Cargo.toml"
     "docs/zh/README.md"
-    "docs/en/README.md"
     "tests/conftest.py"
 )
 
