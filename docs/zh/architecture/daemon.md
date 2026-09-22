@@ -373,6 +373,13 @@ jail 启用/禁用（`web_ui/api.rs::update_jail_enabled`）、峰值时段翻�
 `log_destination` / `log_format` 字段仍存在于配置结构中，但当前 logger 只实现
 「JSON Lines → 文件」，不读这两个字段。
 
+**按大小轮转**：独立日志文件支持按 `log_max_size_mb`（默认 10MB）切片，超过上限时
+当前文件改名为 `.1`、旧切片（`.1` → `.2` …）依次顺移，保留片数由 `log_max_files`
+（默认 10，含当前片）控制，超出则删最旧的一片。`log_max_size_mb=0` 关闭轮转；
+`log_max_files=1` 表示只保留当前片（轮转时直接截断）。轮转与写入共享同一把 `Sink`
+锁——改名、开新文件、重置字节计数都在锁内完成，避免并发写者看到中途的 inode
+或把一条记录切到两片里。`log_max_*` 不随 SIGHUP 热切换，需要重启 daemon 才生效。
+
 **信号**（当前生产实现，`signal/mod.rs`）：
 
 | 信号 | 行为 |
