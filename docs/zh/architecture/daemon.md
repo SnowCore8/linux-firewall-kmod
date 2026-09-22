@@ -253,12 +253,19 @@ graph TB
 |----|-------|------|
 | `Stats` | `stats` | 计数器快照；**周期事件**（无变化也要按 `sse_push_interval` 重发，否则安静时段数字冻住） |
 | `Bans` | `bans` | 活跃封禁 |
-| `Jails` | `jails` | Jail 列表与状态（配置面） |
+| `Jails` | `jails` | Jail 列表与状态（**派生域**，无 `state/jails.rs` 所有者；见下） |
 | `Whitelist` | `whitelist` | 白名单（键是规范化 `CidrKey`） |
 | `Rates` | `rates` | 速率与 EWMA 基线 |
 
 「无变化的写入不推进版本」是刻意的：内核会重复广播同一条 `BanStateChange`、每 60 s 全量对账
 一次白名单、每 1 s 推一次速率，数值没变时惊动 SSE 只是浪费。
+
+**每个域都必须有生产者**——推送只发「版本变化过」的域，没有生产者的域收完首帧就永远不再
+更新。除 `Jails` 外都是所有者模块在内容变更时自行 `publish`；`Jails` 是**派生域**（载荷在
+渲染时现读 `http_exporter::GLOBAL_JAILS` 与封禁表的 `ban_count`，没有内容比对可用），故由
+知道派生输入变了的三个写入点显式推进：封禁集合变更（`state/bans.rs::invalidate_and_publish`）、
+jail 启用/禁用（`web_ui/api.rs::update_jail_enabled`）、峰值时段翻转（`runtime/scheduler.rs`）。
+`verify_http.py` 的 `check_sse_events` 会断言契约声明的每个域事件在生产代码里都有发布者。
 
 ### SSE 约束（契约）
 
