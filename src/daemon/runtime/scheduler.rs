@@ -41,14 +41,17 @@ const PROTECTED_PORTS_INTERVAL: Duration = Duration::from_secs(30);
 
 /// 在 `sup` 下登记周期任务执行体（`scheduler` 名下，由 [`super::timers::spawn_scheduler`] 托管）。
 ///
-/// 承载三个子任务：
+/// 承载四个子任务：
 ///
 /// 1. **计数器镜像**：按 `webui.sse_push_interval` 把旧全局计数器等值搬进新状态并推进
 ///    `stats` 版本。必须按配置间隔门控——新 SSE 是纯版本驱动（`watch::Receiver::changed`），
 ///    推进一次版本就发一帧，若每轮都推进就等于把配置的推送间隔架空了。
 /// 2. **过期封禁清理**：按 [`PURGE_INTERVAL`] 调 [`crate::state::compose::purge_expired_bans`]，
 ///    即结构问题 E 的新家（旧实现在 `get_active_bans()` 的读路径上顺手做）。
-/// 3. **对外端口重扫**：按 [`PROTECTED_PORTS_INTERVAL`] 扫本机对外监听端口并下发位图，
+/// 3. **峰值时段翻转**：`jails` 域的 `is_peak_hours` / `effective_max_retries` 只随
+///    [`crate::decision::is_baseline_peak_hours`] 的翻转而变，故在此按翻转发布，
+///    与另两个 `jails` 来源（封禁集合变更、jail 开关）共同保证该域有生产者。
+/// 4. **对外端口重扫**：按 [`PROTECTED_PORTS_INTERVAL`] 扫本机对外监听端口并下发位图，
 ///    见 [`refresh_protected_ports`]。首轮即扫（`None` 视为到期），故启动后约一个节拍
 ///    内就完成首次下发，不等满一个周期。
 ///
@@ -67,9 +70,21 @@ pub fn spawn_periodic(sup: &mut Supervisor, token: Shutdown) -> std::io::Result<
     let mut last_ports_tick: Option<Instant> = None;
     // 上一次**已成功下发**的内容。`None` = 本次进程还没下发过。
     let mut last_published_ports: Option<Published> = None;
+    // 上一次观察到的峰值时段标志。jails 载荷含 `is_peak_hours` 与由它算出的
+    // `effective_max_retries`，二者只随这个标志变化，故按「标志翻转」发布而不是
+    // 每轮发布——否则安静时段每秒一帧恒定载荷。
+    let mut last_peak_hours = crate::decision::is_baseline_peak_hours();
 
     super::timers::spawn_scheduler(sup, token, table, move |_fired| {
         let now = Instant::now();
+
+        // 峰值时段翻转：只在跨越边界时推进 jails。跨日收敛由 `is_peak_hours` 自身完成
+        // （它按当前小时判定），本处只负责「变了才发」。
+        let peak_hours = crate::decision::is_baseline_peak_hours();
+        if peak_hours != last_peak_hours {
+            last_peak_hours = peak_hours;
+            crate::state::publish_jails_changed();
+        }
 
         // 每轮都读配置：`config_reloader` 在重载时同步新值，改完下一轮即生效。
         // `max(1)` 与 `set_push_interval` 一致，避免间隔为 0 变成忙轮询。

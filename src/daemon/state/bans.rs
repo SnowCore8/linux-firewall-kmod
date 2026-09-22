@@ -313,9 +313,15 @@ impl Bans {
     ///
     /// 顺序有意为之：**先释放数据锁再发布**。读侧是「先读版本、再取快照」，
     /// 若这里在持数据锁时去拿 hub 的锁，就与读侧形成锁序反转。
+    ///
+    /// 同时推进 `jails`：该域的载荷含 `ban_count`（按 jail 统计的当前封禁数），
+    /// 由本表派生，故封禁集合一变它也必须重发。这是 `jails` 唯一的「按封禁派生」
+    /// 来源；另两个来源是 jail 启用/禁用（`web_ui::api::update_jail_enabled`）与
+    /// 峰值时段翻转（`runtime::scheduler`）。
     fn invalidate_and_publish(&self) {
         *self.cache.write() = None;
         self.hub.publish(Domain::Bans);
+        self.hub.publish(Domain::Jails);
     }
 }
 

@@ -271,6 +271,11 @@ pub fn update_jail_enabled(name: &str, enabled: bool) -> Result<JailResponse, St
     // 同步到全局缓存并持久化
     sync_jail_enabled_to_persist(name, enabled)?;
 
+    // 推进 jails 版本：本函数是唯一改 GLOBAL_JAILS 里 enabled 的生产写入点，
+    // jails 域的载荷含 enabled / effective_max_retries，故改完必须重发——
+    // 否则前端只在本视图内手动刷新时才看得到新值（见契约缺陷 HTTP_SSE_JAILS_NO_PUBLISHER）。
+    crate::state::publish_jails_changed();
+
     Ok(response)
 }
 

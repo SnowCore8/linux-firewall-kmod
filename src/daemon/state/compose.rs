@@ -281,6 +281,24 @@ pub fn publish_stats_changed() {
     }
 }
 
+/// 显式推进 `jails` 版本（不搬数据）。
+///
+/// `jails` 是**派生域**：没有 `state/jails.rs` 所有者，载荷在渲染时现读
+/// `http_exporter::GLOBAL_JAILS` 与封禁表的 `ban_count`。因此它没有「内容比对」
+/// 可用——必须由知道「派生输入变了」的写入点显式推进。三个来源：
+///
+/// 1. 封禁集合变更 —— [`super::bans::Bans::invalidate_and_publish`]（`ban_count` 变）；
+/// 2. jail 启用/禁用 —— `web_ui::api::update_jail_enabled`（`enabled` 变）；
+/// 3. 峰值时段翻转 —— `runtime::scheduler`（`is_peak_hours` / `effective_max_retries` 变）。
+///
+/// 本函数是 2、3 的公共入口（1 与 `bans` 版本同点发布，故写在那里，避免一次封禁
+/// 变更拆成两次跨模块调用）。
+pub fn publish_jails_changed() {
+    if let Some(state) = GLOBAL_STATE.get() {
+        state.hub().publish(super::hub::Domain::Jails);
+    }
+}
+
 // ============================================================================
 // 过期封禁清理（固定周期）
 // ============================================================================
