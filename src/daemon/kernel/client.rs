@@ -880,8 +880,8 @@ mod tests {
     #[test]
     fn page_caps_match_the_contract() {
         // 请求页上限必须来自契约，而不是写死的旧值（旧实现白名单是 64/256，
-        // 与契约的 1926 冲突）。
-        assert_eq!(page_cap(ListBansResponse::MAX_TAIL_ENTRIES), 696);
+        // 与契约的 1926 冲突）。封禁条目加 prefix_len 后每页装得下的条数下降。
+        assert_eq!(page_cap(ListBansResponse::MAX_TAIL_ENTRIES), 689);
         assert_eq!(page_cap(ListWhitelistResponse::MAX_TAIL_ENTRIES), 1926);
         assert_eq!(page_cap(ListRatesResponse::MAX_TAIL_ENTRIES), 779);
     }

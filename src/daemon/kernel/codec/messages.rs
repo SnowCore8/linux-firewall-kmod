@@ -1240,7 +1240,8 @@ mod tests {
 
     #[test]
     fn page_caps_come_from_the_contract() {
-        assert_eq!(contract::ListBansResponse::MAX_TAIL_ENTRIES, 696);
+        // BanEntry 加了 prefix_len（+1 字节）后每页能装下的条数随之下降。
+        assert_eq!(contract::ListBansResponse::MAX_TAIL_ENTRIES, 689);
         assert_eq!(contract::ListWhitelistResponse::MAX_TAIL_ENTRIES, 1926);
         assert_eq!(contract::ListRatesResponse::MAX_TAIL_ENTRIES, 779);
     }
@@ -1839,6 +1840,7 @@ mod tests {
     fn ban_ip_encodes_the_kernel_expected_layout() {
         let message = BanIp {
             addr: "203.0.113.8".parse().expect("测试地址"),
+            prefix_len: 32,
             duration_secs: 3600,
             reason: "ssh brute force".to_string(),
         };
@@ -1876,9 +1878,14 @@ mod tests {
     #[test]
     fn unban_ip_shares_the_ban_payload_layout() {
         let addr = "198.51.100.4".parse().expect("测试地址");
-        let unban = UnbanIp { addr }.encode(1);
+        let unban = UnbanIp {
+            addr,
+            prefix_len: 32,
+        }
+        .encode(1);
         let ban = BanIp {
             addr,
+            prefix_len: 32,
             duration_secs: 0,
             reason: String::new(),
         }
