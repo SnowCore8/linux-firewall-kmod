@@ -256,9 +256,9 @@ per-entry: af(1) + is_permanent(1) + duration(4) + banned_at(8) + addr(16) + jai
 ```yaml
 defaults: { max_retries, findtime, ban_time, interval, metrics_*, log_* }
 jails: [{ enabled, log_files, max_retries, findtime, ban_time, regex/regexes }]
-ddos: { enabled, per_ip_conn_rate/fail_rate, global_conn_rate, auto_ban_*, 
-        check_interval, baseline_warmup_samples, 6个协议阈值, 3个算法开关, 
-        max_bans_per_second, max_rate_entries }
+ddos: { enabled, global_conn_rate, auto_ban_*,
+        check_interval, baseline_warmup_samples, 6个协议阈值, 3个算法开关,
+        max_bans_per_second, max_rate_entries, protect_open_ports }
 webui: { sse_push_interval, rate_warning/critical_pps/syn }
 trusted_ips: [String]
 capacity: { max_ban_entries, max_whitelist_entries, max_rate_entries, max_local_ip_cache }

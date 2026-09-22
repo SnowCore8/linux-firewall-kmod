@@ -258,6 +258,7 @@ graph TB
 | 方式 | 接口 | 用途 |
 |------|------|------|
 | netlink | `BAN_IP` / `UNBAN_IP` / `ADD_WHITELIST` / `REMOVE_WHITELIST` / `SET_CONFIG` | 守护进程下发封禁、解封、白名单变更与配置更新 |
+| netlink（下行，无 ACK） | `SET_PROTECTED_PORTS` | 守护进程下发受保护端口位图（65536 位，8KB）；仅集合变化时发 |
 | ProcFS 写入 | `/proc/firewall/bans`（0600） | 手动封禁 / 解封：`<ip>` / `<ip> <seconds>` / `<ip> 0`（永久）/ `unban <ip>` |
 | ProcFS 写入 | `/proc/firewall/whitelist`（0600） | `add <subnet>` / `<subnet>` / `remove <subnet>` |
 | ProcFS 写入 | `/proc/firewall/config`（0600） | `ban_time <seconds>`；写成功推 `CONFIG_CHANGE` 事件 |
@@ -273,10 +274,12 @@ graph TB
 | netlink 多播（组 1） | `DDOS_EVENT` / `BAN_STATE_CHANGE` / `WHITELIST_STATE_CHANGE` / `CONFIG_CHANGE` / `CMD_RESULT` / `DAEMON_REGISTER_ACK` | 违规事件、状态变更、命令失败回执、注册确认 |
 | netlink 单播 | `LIST_BANS_RESPONSE` / `LIST_WHITELIST_RESPONSE` / `LIST_RATES_RESPONSE` / `STATS_RESPONSE` / `ANALYSIS_RESPONSE` | 查询响应（列表按 offset/limit 分页） |
 | ProcFS 读取 | `/proc/firewall/stats`（0400） | 13 个 `key value` 计数（`read_format = machine`） |
-| ProcFS 读取 | `/proc/firewall/{rates,udp_ports,icmp_types,pkt_sizes,ttl_dist,ip_frags,port_scanners,service_probes}`（均 0400） | 分析类表格（`read_format = unstable`，无排序保证） |
+| ProcFS 读取 | `/proc/firewall/{rates,udp_ports,icmp_types,pkt_sizes,ttl_dist,ip_frags,port_scanners,service_probes,protected_ports}`（均 0400） | 分析类表格（`read_format = unstable`，无排序保证） |
+| netlink 单播（下行） | `SET_PROTECTED_PORTS` | daemon 扫描本机对外监听端口后下发受保护端口位图（8KB，仅变化时发） |
 
 - `stats` 读前先经 `fw_stats_snapshot()` 跨 CPU flush（`src/kernel-module/fw_procfs.c:549-552`），与 netlink `STATS_QUERY` 同口径；旧实现不刷新导致的陈旧读数属契约缺陷 `PROC_STATS_STALE_NO_FLUSH`（已修）。
-- 总共 12 个 procfs 条目（3 个可写 + 9 个只读），清单与权限见 `contract/procfs.fwidl` 与 `docs/zh/configuration/procfs.md`。
+- 总共 13 个 procfs 条目（3 个可写 + 10 个只读），清单与权限见 `contract/procfs.fwidl` 与 `docs/zh/configuration/procfs.md`。
+- `protected_ports` 是只读观测面：集合由 daemon 经 `SET_PROTECTED_PORTS` 写入，procfs 无写入口。
 - 模块不提供「清空全部封禁」原生命令：只能逐条 `unban` 或重新加载模块。
 
 ### 内部通信

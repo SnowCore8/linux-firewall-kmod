@@ -23,13 +23,14 @@ graph TB
     root --> frag["ip_frags — IP 分片统计（0400 r）"]
     root --> scan["port_scanners — 端口扫描检测（0400 r）"]
     root --> probe["service_probes — 服务探测检测（0400 r）"]
+    root --> prot["protected_ports — 受保护端口（0400 r）"]
 ```
 
 上表即全部真实条目。早期文档中曾出现 `status` / `clear` / `version` 等条目，
 源码中并不存在。
 
 **读侧契约强度**：只有 `stats` 是机器可读格式（`key value` 行，测试与运维脚本
-按行取值，重排会破坏下游）；其余 9 个只读条目是给人看的表格，契约显式标注为
+按行取值，重排会破坏下游）；其余 10 个只读条目是给人看的表格，契约显式标注为
 `unstable`，排版允许重写改变，但不得依赖条目顺序——列表按哈希遍历顺序输出，
 无排序保证。
 
@@ -292,6 +293,47 @@ IP                      Protocols      Packets
 `SERVICE_PROBE_MAX_RESULTS`），无命中时打印
 `No port scanners detected` / `No service probes detected`。
 
+### 受保护端口
+
+```bash
+cat /proc/firewall/protected_ports
+```
+
+daemon 定期（30 秒）扫描本机对外监听端口后经 netlink 下发的集合。**只读观测面**：
+没有写入口，运维侧无法手改「谁受保护」。
+
+```
+Protected Ports (rate detection scope):
+State: published
+Protected port count: 2
+-------------------------
+Port     Proto
+-------------------------
+22       tcp/udp
+9119     tcp/udp
+```
+
+`State` 有两个取值，含义**相反**，不要误读：
+
+| State | 含义 |
+|-------|------|
+| `not published - ALL ports participate in rate detection` | daemon 尚未下发（如未运行）⇒ **全端口**参与速率判定，行为与本特性引入前一致 |
+| `published` | 已按 daemon 下发的集合收窄判定作用面 |
+
+置位端口 = 该端口入站流量参与 DDoS 速率判定。公网唯一能打到本机的地方就是这些对外
+监听端口，判定因此聚焦于此；未置位端口不参与速率判定，避免内部流量误封。**封禁表不受
+影响**：jail 判定与手工下发的封禁对所有端口一律生效。
+
+`State: not published` 时打印「全端口受保护」提示而不是空清单——空清单会被读成
+「没有任何端口受保护」，与实际的失败开放语义正好相反。展示行数上限 256
+（`FW_PROCFS_PROTECTED_PORTS_MAX_LINES`）；超限截断并打印
+`... (N protected, output truncated)`，受保护总数始终可读。
+
+带 daemon 的部署中本集合由 `ddos.protect_open_ports` 控制（默认 `true`）。置为
+`false` 时 daemon 下发**全零**位图，此时会显示 `State: published` 且
+`Protected port count: 0`——那是显式关闭（检测面为空），与上面的
+`not published` 是两回事。该开关仅供排查与对照测试，正常应保持开启。
+
 ### 模块版本
 
 模块不提供单独的 `version` 条目；版本号从模块本身读取：
@@ -394,7 +436,7 @@ sudo rmmod firewall && sudo insmod $(modinfo -n firewall) fw_ban_time=600
 ## 权限
 
 权限位由契约声明并固化在生成物里：可写条目为 `0600`（`bans` / `whitelist` /
-`config`），只读条目为 `0400`（其余 9 个）。两者都只对 root 开放，模块本身不
+`config`），只读条目为 `0400`。两者都只对 root 开放，模块本身不
 提供组权限方案；如需让非 root 用户读取，需自行添加 udev 规则改写权限。
 
 ```bash

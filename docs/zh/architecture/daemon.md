@@ -120,7 +120,7 @@ inotify ──LogChunk──▶ parse ──Failure──▶ decide ──BanInt
 |------|-----------|---------|
 | `main.rs` | 无（组合根） | CLI 解析 → 装配 → 启动主循环；不再承载业务逻辑 |
 | `runtime/supervisor.rs` | 执行体生命周期、关停令牌 | `spawn()` / `shutdown(timeout)`，按依赖逆序逐段停并 join |
-| `runtime/scheduler.rs` | 周期任务集合 | 基础节拍 + 子周期门控（`stats` 镜像、过期封禁清理） |
+| `runtime/scheduler.rs` | 周期任务集合 | 基础节拍 + 子周期门控（`stats` 镜像、过期封禁清理、对外端口重扫） |
 | `runtime/timers.rs` | 单调时钟定时器表 | `fire_due(now)`（纯函数）、周期按原定时刻重排 |
 | `runtime/channel.rs` | 有界队列契约 | `send` 按 `Backpressure::{Block,Reject}` 行事；`Reject` 计数可见 |
 | `runtime/shutdown.rs` | 协作式关停令牌 | `request()` / `is_shutdown()` / `wait_until(deadline)` |
@@ -138,7 +138,7 @@ inotify ──LogChunk──▶ parse ──Failure──▶ decide ──BanInt
 | `kernel/codec/` | 无 | 字节 ↔ 语义类型；直接消费契约生成物 |
 | `kernel/transport.rs` | netlink socket（单写者） | 发一段载荷、收一条报文 |
 | `kernel/reactor.rs` | 在途请求表 + 路由状态机 | 按 **type + seq** 路由；未知/失败/无主一律计数 |
-| `kernel/client.rs` | 无（`Arc<Transport>` 上的类型化 API） | `ban` / `unban` / `list_*_all` / `set_config` |
+| `kernel/client.rs` | 无（`Arc<Transport>` 上的类型化 API） | `ban` / `unban` / `list_*_all` / `set_config` / `set_protected_ports` |
 | `kernel/lease.rs` | 注册租约状态 | 注册等确认、周期续约、失联可见（四态） |
 | `state/bans.rs` | 活跃封禁（唯一所有者） | `apply` / `snapshot` / `purge_expired(now)` |
 | `state/whitelist.rs` | 白名单（唯一所有者） | `apply` / `snapshot`；键是 `CidrKey` |
@@ -151,6 +151,8 @@ inotify ──LogChunk──▶ parse ──Failure──▶ decide ──BanInt
 | `api/ports.rs` | 数据缺口端口（窄 trait） | 历史/信誉/配置/运行时/控制面四类窄接口 |
 | `api/sse.rs` | 每条连接的订阅与计数 | 按域序列化、慢消费者隔离 |
 | `contract.rs` | 无 | 用 `#[path]` 把三份契约生成物挂成本 crate 模块 |
+| `protected_ports.rs` | 对外监听端口发现 | `scan_external_ports()`（扫 `/proc/net/{tcp,tcp6,udp,udp6}`）、`ProtectedPorts::to_bitmap()` |
+| `config_sync.rs` | 无（配置 → 内核的单入口） | `sync_protocol_thresholds` / `sync_protected_ports` / `write_detection_switches` |
 | `runtime_status.rs` | 无 | 一次性只读聚合，供 `/health` 与单测断言 |
 
 ## 启动流程

@@ -34,7 +34,7 @@ graph TB
         Whitelist --> ProcFS
     end
 
-    NL -->|"BAN_IP / UNBAN_IP / 白名单 / SET_CONFIG"| Hook
+    NL -->|"BAN_IP / UNBAN_IP / 白名单 / SET_CONFIG / SET_PROTECTED_PORTS"| Hook
     NL -->|"LIST_* / STATS / ANALYSIS 分页查询"| ProcFS
 ```
 

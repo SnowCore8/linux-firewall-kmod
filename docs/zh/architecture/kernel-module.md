@@ -6,7 +6,7 @@
 
 相关文档：
 
-- 接口细节（12 个 procfs 条目的读写文法、模块参数、错误码）：`docs/zh/configuration/procfs.md`
+- 接口细节（procfs 条目的读写文法、模块参数、错误码）：`docs/zh/configuration/procfs.md`
 - 重写目标与设计决策：`docs/zh/development/kernel-rewrite-design.md`
 
 ## 模块概览
@@ -35,9 +35,10 @@
 | `fw_wl.c` | 白名单精确桶 + 子网链 | `fw_wl_lookup()`（热路径 RCU 读）、`fw_wl_add` / `fw_wl_remove` |
 | `fw_ban.c` | 封禁表 | `fw_ban_lookup()`（热路径 RCU 读）、`fw_ban_try_add()`、per-entry 定时器 |
 | `fw_rate.c` | 速率表、窗口滚动、EWMA、违规判定 | `fw_rate_observe()`（热路径，一次查表返回判定） |
+| `fw_ports.c` | 受保护端口位图（65536 位，RCU 整体换指针） | `fw_ports_observe()`（热路径 `static inline` 门控）、`fw_ports_replace()` |
 | `fw_hook.c` | netfilter 钩子注册与报文解析 | 无（只暴露 `nf_ops_ipv4` / `nf_ops_ipv6` 注册表） |
 | `fw_netlink.c` | netlink socket 与收发 | `fw_netlink_init` / `fw_netlink_exit`、`fw_nl_send_*()` |
-| `fw_procfs.c` | 12 个 procfs 条目 | `fw_procfs_init` / `fw_procfs_exit` |
+| `fw_procfs.c` | 13 个 procfs 条目 | `fw_procfs_init` / `fw_procfs_exit` |
 | `fw_state.c` | 状态文件读写 | `fw_state_save()`、`fw_state_restore()` |
 | `fw_netdev.c` | netdev notifier、本机地址重建 | `fw_netdev_init` / `fw_netdev_exit`、`fw_netdev_rebuild_local()` |
 
@@ -74,7 +75,9 @@ struct nf_hook_ops nf_ops_ipv6 = {
 graph TB
     A["报文到达 fw_hook_ipv4 / fw_hook_ipv6"] --> B{"shutting_down?"}
     B -->|是| ACC1["NF_ACCEPT（直接放行）"]
-    B -->|否| C{"报文合法性：长度 / 版本 / 头长 / 校验和"}
+    B -->|否| B2{"lo 接口进入（IFF_LOOPBACK）？"}
+    B2 -->|是| ACC0["NF_ACCEPT（本机内部流量：不进任何表、不计任何统计）"]
+    B2 -->|否| C{"报文合法性：长度 / 版本 / 头长 / 校验和"}
     C -->|非法| ACC2["NF_ACCEPT"]
     C -->|合法| D{"源地址合法性"}
     D -->|非法| ACC3["NF_ACCEPT（不进任何表、不计丢弃）"]
@@ -88,10 +91,12 @@ graph TB
     I -->|否| J{"本机地址命中？"}
     J -->|是| ACC5["NF_ACCEPT（跳过速率判定）"]
     J -->|否| K{"封禁表命中？"}
-    K -->|是| DR2["NF_DROP"]
+    K -->|是| DR2["NF_DROP（封禁表对所有端口生效）"]
     K -->|否| L{"DDoS 总开关开启？"}
     L -->|否| ACC6["NF_ACCEPT"]
-    L -->|是| M["fw_rate_observe：一次查表 + 窗口滚动 + 违规判定"]
+    L -->|是| L2{"目的端口受保护？（无端口报文一律受保护）"}
+    L2 -->|否| ACC6B["NF_ACCEPT（未对外监听的端口不参与速率判定）"]
+    L2 -->|是| M["fw_rate_observe：一次查表 + 窗口滚动 + 违规判定"]
     M --> N{"违规？"}
     N -->|否| ACC7["NF_ACCEPT"]
     N -->|是| O["临界区外：fw_ban_try_add 自决封禁 + DdosEvent + NF_DROP"]
@@ -114,7 +119,7 @@ if (unlikely(fw_is_shutting_down())) {
 if (!fw_wl_lookup(af, src) && !fw_local_lookup(af, src)) {
   if (fw_ban_lookup(af, src)) {
     banned = true;
-  } else if (likely(READ_ONCE(fw_ddos_detection))) {
+  } else if (likely(READ_ONCE(fw_ddos_detection)) && fw_ports_observe(dst_port)) {
     reason = fw_rate_observe(af, src, packet_len, protocol, tcp_flags, dst_port, &pps);
   }
 }
@@ -123,6 +128,8 @@ rcu_read_unlock();
 ```
 
 本机地址判定**必须**先于封禁表判定：本机豁免由 `fw_local.c` 承担（新设计不再把接口地址写进白名单），顺序颠倒会让本机地址被自己的封禁条目丢弃。
+
+`fw_ports_observe(dst_port)` 是端口门控（见 `fw_ports.c`）：只让 daemon 下发的对外监听端口参与速率判定。它加在**速率判定这一支**上，封禁表对所有端口一律生效。无端口报文（ICMP、非首片、传输层解析失败，即 `dst_port == 0`）一律返回 `true`——按端口收窄作用面不能顺带关掉没有端口的协议判定。位图未下发时也返回 `true`（全端口参与），这是刻意的失败安全默认值；细节见 [内核重写设计](../development/kernel-rewrite-design.md) 的「受保护端口位图」一节。
 
 ### 返回值
 
@@ -386,7 +393,7 @@ graph TB
 
 ### 注册
 
-根目录为 `/proc/firewall`，其下 12 个条目由 `fw_procfs.c` 按契约权限位创建：
+根目录为 `/proc/firewall`，其下条目由 `fw_procfs.c` 按契约权限位创建：
 
 ```c
 /* src/kernel-module/fw_procfs.c：条目名与权限位取自契约生成头 FW_PROCFS_*_MODE */
@@ -395,10 +402,10 @@ fw_info.proc_bans      = proc_create("bans",      FW_PROCFS_BANS_MODE,      dir,
 fw_info.proc_config    = proc_create("config",    FW_PROCFS_CONFIG_MODE,    dir, &config_fops);    /* 0600 */
 fw_info.proc_whitelist = proc_create("whitelist", FW_PROCFS_WHITELIST_MODE, dir, &whitelist_fops); /* 0600 */
 fw_info.proc_stats     = proc_create("stats",     FW_PROCFS_STATS_MODE,     dir, &stats_fops);     /* 0400 */
-/* rates / udp_ports / icmp_types / pkt_sizes / ttl_dist / ip_frags / port_scanners / service_probes 均为 0400 */
+/* rates / udp_ports / icmp_types / pkt_sizes / ttl_dist / ip_frags / port_scanners / service_probes / protected_ports 均为 0400 */
 ```
 
-`fw_procfs_exit()` 逆序移除 12 个条目，最后移除根目录。
+`fw_procfs_exit()` 逆序移除 13 个条目，最后移除根目录。
 
 ### 文件权限与操作
 
@@ -409,8 +416,9 @@ fw_info.proc_stats     = proc_create("stats",     FW_PROCFS_STATS_MODE,     dir,
 | `config` | 0600 | 读写：`ban_time <seconds>`（**可写**，不是只读） |
 | `stats` | 0400 | 只读：13 个 `key value` 行，**唯一机器可读条目** |
 | `rates`、`udp_ports`、`icmp_types`、`pkt_sizes`、`ttl_dist`、`ip_frags`、`port_scanners`、`service_probes` | 0400 | 只读：人类可读表格，契约标注 `unstable`，无排版稳定性承诺 |
+| `protected_ports` | 0400 | 只读：受保护端口清单（**无写入口**，集合由 daemon 经 netlink 下发；未下发时显示全端口受保护） |
 
-12 个条目的完整读写文法、输出示例、错误码与模块参数表见 `docs/zh/configuration/procfs.md`；该文件由 `contract/procfs.fwidl` 冻结，本文档不重复其表格。
+13 个条目的完整读写文法、输出示例、错误码与模块参数表见 `docs/zh/configuration/procfs.md`；该文件由 `contract/procfs.fwidl` 冻结，本文档不重复其表格。
 
 ### 读侧纪律
 

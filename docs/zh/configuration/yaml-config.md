@@ -176,9 +176,7 @@ trusted_ips:
 ```yaml
 ddos:
   enabled: true
-  per_ip_conn_rate: 50        # 单 IP 每秒最大连接数
-  per_ip_fail_rate: 30        # 单 IP 每分钟最大失败次数
-  global_conn_rate: 10000     # 全局每秒最大连接数
+  global_conn_rate: 100000    # 全局每秒最大连接数
   auto_ban_duration: 3600     # 自动封禁时长（秒）
   auto_ban_threshold: 3       # 超阈值几次后封禁
   check_interval: 5           # 检测间隔（秒）
@@ -187,24 +185,44 @@ ddos:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `enabled` | bool | `true` | 是否启用 DDoS 检测 |
-| `per_ip_conn_rate` | int | `50` | 单 IP 每秒最大新建连接数 |
-| `per_ip_fail_rate` | int | `30` | 单 IP 每分钟最大失败连接数 |
-| `global_conn_rate` | int | `10000` | 全局每秒最大新建连接数 |
+| `global_conn_rate` | int | `100000` | 全局每秒最大连接数 |
 | `auto_ban_duration` | int | `3600` | 触发自动封禁后的封禁时长（秒） |
 | `auto_ban_threshold` | int | `3` | 超过阈值几次后触发封禁 |
 | `check_interval` | int | `5` | 检测间隔（秒） |
+| `protect_open_ports` | bool | `true` | 把本机对外监听端口自动纳入 DDoS 速率判定（详见下文） |
+
+其余可配键（协议专项阈值、检测算法开关、内核模块容量参数）见
+`config/default.yaml` 的 `ddos:` 段——那里是与会落入内核的字段一一对应的清单。
+本结构体带 `deny_unknown_fields`，**多写一个不存在的键会让 daemon 拒绝启动**，
+故请以 `config/default.yaml` 为准，不要凭记忆添加键名。
 
 **检测逻辑**：
 
-1. 内核模块实时统计每个 IP 的连接速率
-2. 超过 `per_ip_conn_rate` 或 `per_ip_fail_rate` 阈值时，内核通过 netlink 推送事件给守护进程
-3. 守护进程决策引擎累计违规次数，达到 `auto_ban_threshold` 时，通过 netlink 下发封禁指令
-4. 封禁时长为 `auto_ban_duration` 秒，封禁信息同步到 Web UI
-5. 全局连接速率超过 `global_conn_rate` 时，触发全局告警
+1. 内核模块实时统计每个 IP 的速率（总包速率与协议专项速率）
+2. 超过阈值时内核直接丢包并通过 netlink 推送事件给守护进程
+3. 封禁时长为 `auto_ban_duration` 秒，封禁信息同步到 Web UI
+4. 全局速率超过 `global_conn_rate` 时触发全局告警
 
-> **架构说明**：DDoS 检测分为两层——内核模块负责实时速率检测和事件推送（毫秒级响应），守护进程负责决策和封禁指令下发。两者通过 netlink socket 双向通信。
-
+> **架构说明**：DDoS 检测分为两层——内核模块负责实时速率检测与丢包（毫秒级响应），守护进程负责决策与配置下发。两者通过 netlink 双向通信。
+>
 > **建议**：将关键服务器 IP 添加到 `trusted_ips`，防止 DDoS 检测误封。
+
+### 对外监听端口自动纳入保护 (`protect_open_ports`)
+
+默认开启。开启时 daemon 定期（30 秒）扫描本机对外监听端口，把这份集合经 netlink
+下发给内核，内核只对这些端口的入站流量做 DDoS 速率判定：
+
+- 公网唯一能打到本机的地方就是这些对外监听端口，判定因此聚焦于此；
+- 未对外监听的端口不参与速率判定，避免内部流量误封；
+- **封禁表不受影响**——jail 判定与手工下发的封禁对所有端口一律生效。
+
+关掉它（`protect_open_ports: false`）后 daemon 下发一张**全零**位图，没有任何端口参与
+速率判定。这与「daemon 没运行、位图从未下发」是两回事：后者内核按**全端口受保护**
+处理（失败安全），不会因为 daemon 不在就静默关掉检测。因此该开关只用于排查与对照
+测试，正常应保持开启。
+
+集合与状态可在 `/proc/firewall/protected_ports` 查看（见
+[ProcFS 接口](procfs.md#受保护端口)）。
 
 ## Web UI 配置 (webui)
 

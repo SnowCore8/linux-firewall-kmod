@@ -200,7 +200,7 @@ open(`O_NOFOLLOW`) + `metadata()` + `seek()` + `vec![0u8; 256*1024]`
 
 ### procfs（`contract/procfs.fwidl`）
 
-daemon 只读，不定义 procfs 格式；保持与内核侧的 12 个条目一致。daemon 对
+daemon 只读，不定义 procfs 格式；保持与内核侧的条目清单一致。daemon 对
 `/proc/firewall`、`/proc/firewall/bans` 的存在性检查在启动期执行，这一行为保留。
 
 ### HTTP / SSE（`contract/http.fwidl`）
