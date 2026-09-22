@@ -223,6 +223,17 @@ struct YamlCapacity {
 /// - `content`: YAML 字符串
 /// - `cfg`: 目标 Config (成功时原地修改, 失败时保持原值)
 pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
+    parse_config_from(content, cfg, false)
+}
+
+/// 同 [`parse_config`]，但可声明内容来自 daemon 自动管理的**运行期覆盖文件**
+/// （`_` 前缀，见 [`super::file_loader::RUNTIME_OVERRIDE_PREFIX`]）。
+///
+/// 这类文件只携带运行期状态（当前是 jail 的 `enabled`），因此 jail 处理多两条规则：
+/// - 未定义的 jail 名忽略并告警：自动写回的文件不能凭空造出一个缺 `log_files` 的
+///   jail，否则它的下一次启动会直接拒绝加载；
+/// - 其余同名合并语义与普通文件一致（显式字段后到优先）。
+pub fn parse_config_from(content: &str, cfg: &mut Config, runtime_override: bool) -> Result<()> {
     let yaml_config: YamlConfig =
         serde_yml::from_str(content).context("Failed to parse YAML config")?;
 
@@ -275,45 +286,24 @@ pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
     }
 
     // 2. 解析 jails 部分
+    //
+    // 同名 jail 跨文件按**后到优先**合并（契约见 `docs/zh/configuration/yaml-config.md`
+    // 「多配置文件加载」）。不合并的话同一 jail 会在 `cfg.jails` 里留下两份条目，
+    // 而校验与日志派发都逐条目处理——运行期覆盖文件只带 `enabled` 时，那一份就会
+    // 因为缺 `log_files` 让整个配置加载失败。
     if let Some(jails_map) = &yaml_config.jails {
         for (name, yaml_jail) in jails_map {
-            let mut jail = Jail::new(name.clone());
-
-            if let Some(enabled) = yaml_jail.enabled {
-                jail.enabled = enabled;
+            match cfg.jails.iter_mut().find(|j| j.name == *name) {
+                Some(existing) => apply_jail_definition(existing, yaml_jail),
+                None if runtime_override => {
+                    crate::logger::warn!(
+                        crate::logger::get(),
+                        "运行期覆盖引用了未定义的 jail，已忽略";
+                        "jail" => %name,
+                    );
+                }
+                None => cfg.jails.push(build_jail(name, yaml_jail)),
             }
-            if let Some(ref log_files) = yaml_jail.log_files {
-                jail.log_files = log_files.clone();
-            }
-            if let Some(max_retries) = yaml_jail.max_retries {
-                jail.max_retries = max_retries;
-                jail.max_retries_set = true;
-            }
-            if let Some(findtime) = yaml_jail.findtime {
-                jail.findtime = findtime;
-                jail.findtime_set = true;
-            }
-            if let Some(ban_time) = yaml_jail.ban_time {
-                jail.ban_time = ban_time;
-                jail.ban_time_set = true;
-            }
-
-            // 支持单条 regex
-            if let Some(ref regex) = yaml_jail.regex {
-                let regex_name = yaml_jail
-                    .regex_name
-                    .clone()
-                    .unwrap_or_else(|| "default".to_string());
-                jail.regexes.push(RegexInfo::new(regex_name, regex.clone()));
-            }
-
-            // 支持多条 regexes
-            for (name, entry) in &yaml_jail.regexes {
-                jail.regexes
-                    .push(RegexInfo::new(name.clone(), entry.pattern.clone()));
-            }
-
-            cfg.jails.push(jail);
         }
     }
 
@@ -458,4 +448,62 @@ pub fn parse_config(content: &str, cfg: &mut Config) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// 由 YAML 定义构造一个新 jail。
+///
+/// 未显式给出的字段保持 [`Jail::new`] 的初值（`0` / 空列表 + `*_set = false`），
+/// 随后由 `defaults` 段统一补齐——与原实现一致。
+fn build_jail(name: &str, yaml_jail: &YamlJail) -> Jail {
+    let mut jail = Jail::new(name.to_string());
+    apply_jail_definition(&mut jail, yaml_jail);
+    jail
+}
+
+/// 把一份 YAML jail 定义合并进已有 jail：**只覆盖显式给出的字段**。
+///
+/// 这是「同名 jail 后到优先」的落地方式。未出现的字段保持原值，因为后加载的文件
+/// 通常只声明差异——运行期覆盖文件就只声明 `enabled`。若整条替换，此前文件里的
+/// `log_files` / `regexes` 会被一起抹掉。
+fn apply_jail_definition(jail: &mut Jail, yaml_jail: &YamlJail) {
+    if let Some(enabled) = yaml_jail.enabled {
+        jail.enabled = enabled;
+    }
+    if let Some(ref log_files) = yaml_jail.log_files {
+        jail.log_files = log_files.clone();
+    }
+    if let Some(max_retries) = yaml_jail.max_retries {
+        jail.max_retries = max_retries;
+        jail.max_retries_set = true;
+    }
+    if let Some(findtime) = yaml_jail.findtime {
+        jail.findtime = findtime;
+        jail.findtime_set = true;
+    }
+    if let Some(ban_time) = yaml_jail.ban_time {
+        jail.ban_time = ban_time;
+        jail.ban_time_set = true;
+    }
+
+    // 正则：后加载的定义只要给出了正则就整体替换（而非叠加），否则同一个 jail
+    // 会同时带上两份规则集，命中行为取决于遍历顺序。
+    if yaml_jail.regex.is_some() || !yaml_jail.regexes.is_empty() {
+        jail.regexes.clear();
+        append_jail_regexes(jail, yaml_jail);
+    }
+}
+
+/// 追加单条 `regex` 与嵌套 `regexes` 映射中的全部规则。
+fn append_jail_regexes(jail: &mut Jail, yaml_jail: &YamlJail) {
+    if let Some(ref regex) = yaml_jail.regex {
+        let regex_name = yaml_jail
+            .regex_name
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        jail.regexes.push(RegexInfo::new(regex_name, regex.clone()));
+    }
+    for (name, entry) in &yaml_jail.regexes {
+        jail.regexes
+            .push(RegexInfo::new(name.clone(), entry.pattern.clone()));
+    }
 }

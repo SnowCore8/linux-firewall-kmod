@@ -335,7 +335,9 @@ jail 启用/禁用（`web_ui/api.rs::update_jail_enabled`）、峰值时段翻�
 - **路径安全 3 重检查**：`..` 遍历、`%2e` / `%2f` / `%5c` 编码绕过、shell 元字符注入。
 - **失败回滚**：解析中途失败时整体恢复，不留下半份配置。
 - **运行期回写**：Web UI 改动的封禁/白名单/阈值经 `persist_runtime_config()` 回写到原始 YAML
-  路径（`set_config_target_path`），`trusted_ips` 与 `capacity` 在启动期缓存供回写使用。
+  路径（`set_config_target_path`）；目标为**目录**时写同目录下的 `_overrides.yaml`，该文件在
+  目录加载时**最后合并**，因此它只承载运行期状态（开关、阈值），不复制别处已声明的 jail 定义。
+  `trusted_ips` 与 `capacity` 在启动期缓存供回写使用。
 - **SIGHUP 热重载**：重读配置 → 比较差异 → 新增/移除源的 watch、重编译正则、更新内核白名单；
   失败保留旧快照。**重载只替换规则集与参数，不重置失败窗口**——否则一次 SIGHUP 就能帮攻击者
   清零已积累的失败计数。

@@ -97,6 +97,8 @@ blob-report/
 # Playwright MCP 的默认输出目录（快照/截图/console 日志落在进程 cwd）
 .playwright-mcp/
 config/debug-*.yaml
+# daemon 的运行期覆盖文件（目录模式下每次回写都重新生成，内容随运行状态变化）
+config/_overrides.yaml
 
 # ---- 性能基线工具构建物 ----
 # scripts/bench/ 的源码与脚本入库；编译产物不入库（make -C scripts/bench 生成）
