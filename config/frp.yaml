@@ -3,7 +3,11 @@
 
 jails:
   frp:
-    enabled: true
+    # 已停用：原正则匹配的是 frps 的 "get a user connection"（成功建立连接）
+    # 日志，与"失败/未授权"无关——每次正常访问都被计为一次失败并封禁正常访客。
+    # frps 日志里不存在可用的失败判据（没有带来源 IP 的拒绝/错误行），
+    # 无法通过改正则修正，故停用该 jail。
+    enabled: false
     # 智能推断参数：max_retries=10, findtime=300, ban_time=1800
     # 匹配 FRP 用户连接日志，提取发起连接的客户端 IP
     regexes:
