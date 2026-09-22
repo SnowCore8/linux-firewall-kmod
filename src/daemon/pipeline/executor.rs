@@ -53,7 +53,9 @@ use crate::ingest::{
     log_file_watch_mask, SourceId, SourceOwner, SourceReader, SourceRegistry, WatchEvent, Watcher,
 };
 use crate::parse::{Rule, RuleSet};
-use crate::pipeline::{BanIntent, Counters, DecisionFacts, JailPolicy, Pipeline, Tick};
+use crate::pipeline::{
+    BanIntent, ClusterConfig, ClusterHit, Counters, DecisionFacts, JailPolicy, Pipeline, Tick,
+};
 use crate::runtime::{Fired, Shutdown, TimerId, TimerTable};
 use crate::signal::{Signal, SignalFd};
 use crate::types::{
@@ -63,6 +65,13 @@ use crate::types::{
 
 /// 失败窗口清理周期（与旧 `monitor_loop` 的 60 秒一致）。
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
+
+/// 集群扫描检测周期。
+///
+/// 必须显著小于 `cluster.window`（默认 60 秒）：检测间隔与窗口同量级时，一批失败
+/// 会在下一次检测前滑出窗口，扫描永远凑不够 `min_ips`（详见 `Pipeline::scan_clusters`）。
+const CLUSTER_SCAN_INTERVAL: Duration = Duration::from_secs(10);
+
 /// 监视集合重扫周期（对应旧 `check_for_new_log_files` 的 60 秒）。
 ///
 /// 覆盖「启动时不存在、之后才创建的日志文件」；轮转待重挂的源不受这个周期约束，
@@ -103,6 +112,7 @@ impl DecisionFacts for LiveFacts {
 struct Timers {
     table: TimerTable,
     cleanup: TimerId,
+    cluster: TimerId,
     rescan: TimerId,
     history: TimerId,
     data_cleanup: TimerId,
@@ -110,13 +120,18 @@ struct Timers {
 
 impl Timers {
     fn new() -> Self {
-        let mut table = TimerTable::new(4);
+        let mut table = TimerTable::new(5);
         let first = Instant::now();
-        let fail = "容量 4 的定时器表登记四个周期任务不应失败";
+        let fail = "容量 5 的定时器表登记五个周期任务不应失败";
         // 首个到期点都是「当前 + 一个周期」：与旧实现「启动时把 last_* 置为 now」同义，
         // 即启动后不在第 0 秒抢跑一轮维护。
         let cleanup = table
             .every(CLEANUP_INTERVAL, first + CLEANUP_INTERVAL)
+            .expect(fail);
+        // 集群检测单独一个短周期：它必须远快于 `cluster.window` 重复，否则一批失败
+        // 会在下一次检测前滑出窗口（理由见 `Pipeline::scan_clusters`）。
+        let cluster = table
+            .every(CLUSTER_SCAN_INTERVAL, first + CLUSTER_SCAN_INTERVAL)
             .expect(fail);
         let rescan = table
             .every(RESCAN_INTERVAL, first + RESCAN_INTERVAL)
@@ -130,6 +145,7 @@ impl Timers {
         Self {
             table,
             cleanup,
+            cluster,
             rescan,
             history,
             data_cleanup,
@@ -840,12 +856,13 @@ impl InboundExecutor {
 
     /// 跑到期维护任务。
     ///
-    /// 四个任务的周期都按旧实现的节拍保留，但驱动源从「`poll` 超时」换成单调时钟
+    /// 维护任务的周期都按旧实现的节拍保留，但驱动源从「`poll` 超时」换成单调时钟
     /// 定时器（结构问题 A）：事件洪泛不再推迟维护。
     fn run_due_maintenance(&mut self) {
         let fired = self.timers.table.fire_due(Instant::now());
-        let (cleanup, rescan, history, data_cleanup) = (
+        let (cleanup, cluster, rescan, history, data_cleanup) = (
             self.timers.cleanup,
+            self.timers.cluster,
             self.timers.rescan,
             self.timers.history,
             self.timers.data_cleanup,
@@ -867,6 +884,11 @@ impl InboundExecutor {
                         "removed" => removed
                     );
                 }
+            } else if id == cluster {
+                // 集群扫描检测：比清理周期快得多地重复，保证窗口内任意相位开始的
+                // 扫描都能被某次检测看到（理由见 `Pipeline::scan_clusters`）。
+                self.pipeline
+                    .scan_clusters(now_secs(), dispatch_cluster_hit);
             } else if id == rescan {
                 self.reconcile_watches();
             } else if id == history {
@@ -881,6 +903,45 @@ impl InboundExecutor {
 // ============================================================================
 // 封禁下发与计数镜像
 // ============================================================================
+
+/// 处置一次集群扫描命中：审计模式只记日志，否则把该网段的下发交给内核。
+///
+/// `audit_only` 是上线初期的观察开关——判定在真实流量上跑，但不动封禁表，
+/// 以便在开启处置前确认没有误伤（CGNAT、共享出口等）。
+fn dispatch_cluster_hit(jail: &str, hit: &ClusterHit, cfg: &ClusterConfig) {
+    crate::logger::warn!(
+        crate::logger::get(),
+        "检测到集群扫描";
+        "jail" => jail,
+        "cidr" => %hit.cidr,
+        "src_ips" => hit.ips.len(),
+        "peak" => hit.peak,
+        "audit_only" => cfg.audit_only
+    );
+    if cfg.audit_only {
+        return;
+    }
+    // 下发的形状与白名单路径一致：**裸网络地址 + 前缀长度**，对应内核的
+    // `(af, addr, prefix_len)` 三元组。`CidrKey::addr()` 已归一（主机位为零），
+    // 故这里不能用 `as_str()` 的 `a.b.c.0/24` 文本——那是给人看/当键用的。
+    let cidr = hit.cidr.as_str();
+    let duration = u64::from(cfg.ban_time);
+    match ban::execute_ban_action_with_prefix(
+        ban::BanAction::Temp(duration),
+        &hit.cidr.addr().to_string(),
+        hit.cidr.prefix_len(),
+        &format!("{jail}: {}", hit.summary()),
+    ) {
+        Ok(()) => {}
+        Err(e) => crate::logger::warn!(
+            crate::logger::get(),
+            "集群网段封禁下发失败";
+            "jail" => jail,
+            "cidr" => cidr,
+            "error" => %e
+        ),
+    }
+}
 
 /// 把一个封禁意图下发内核，并镜像到本地缓存与新状态。
 ///

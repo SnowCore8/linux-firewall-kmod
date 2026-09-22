@@ -17,7 +17,8 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use crate::decision::{
-    effective_threshold, is_internal, plan_ban, BanPlan, ClusterConfig, FailureWindow,
+    detect_clusters, effective_threshold, is_internal, plan_ban, BanPlan, ClusterConfig,
+    ClusterHit, FailureWindow,
 };
 use crate::ingest::SourceId;
 use crate::parse::{LineSplitter, MatchVia, RuleSet, SplitStats};
@@ -421,6 +422,31 @@ impl Pipeline {
         }
         removed
     }
+
+    /// 周期维护：检出集群扫描，逐个命中回调 `(jail, hit, cluster 配置)`。
+    ///
+    /// 由执行体决定下发网段封禁还是只记审计日志。
+    ///
+    /// # 为什么单独一个周期，而不是跟着 [`Pipeline::cleanup`]
+    ///
+    /// 集群检测的输入是**跨 IP** 的：单行判定只看得到一个源，凑不出「同一网段内
+    /// 有多少个不同源」这个结论，故只能周期判定。而它必须比 `cluster.window`
+    /// **明显更快地**重复：`peek` 按 `now - ts <= window` 计数，若检测恰好每
+    /// `window` 秒跑一次，一批刚写入的失败会在下一次检测前滑出窗口——扫描永远
+    /// 凑不够 `min_ips`（实测：60s 窗口 + 60s 清理周期下，测试写入的 4 个源
+    /// 一个也没被检出）。检测间隔应远小于窗口，让窗口内任意相位开始的扫描都能
+    /// 被至少一次完整的检测看到。
+    pub fn scan_clusters(
+        &self,
+        now: i64,
+        mut on_hit: impl FnMut(&str, &ClusterHit, &ClusterConfig),
+    ) {
+        for (jail, state) in &self.jails {
+            for hit in detect_clusters(&state.window, now, &state.policy.cluster) {
+                on_hit(jail, &hit, &state.policy.cluster);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -761,6 +787,62 @@ mod tests {
         // t=2000：距上次 1000 秒 > 窗口 100 秒 → 整条过期。
         assert_eq!(p.cleanup(2_000), 1);
         assert_eq!(p.cleanup(2_000), 0, "再次清理应无条目可清");
+    }
+
+    /// 周期检测是集群判定的唯一入口：单行判定只看得到一个源，凑不出「同一网段
+    /// 内有多少个不同源」，故命中只能在 `scan_clusters` 里产生并通过回调上报。
+    #[test]
+    fn cluster_scan_reports_hits() {
+        let mut p = Pipeline::new();
+        // 单 IP 阈值抬高到不可能达到，命中只可能来自集群判定。
+        let cluster = ClusterConfig {
+            enabled: true,
+            audit_only: false,
+            prefix_v4: 24,
+            prefix_v6: 48,
+            window: 600,
+            min_ips: 3,
+            max_per_ip: 1,
+            ban_time: 300,
+        };
+        p.register_jail(sshd_rules(), JailPolicy::new(100, 600, 600, cluster));
+        let jail: Arc<str> = Arc::from("sshd");
+        let src = SourceId::from_raw(11);
+        let mut out = Vec::new();
+
+        // 同一 /24 内三个不同源各失败一次。
+        for host in [21, 22, 23] {
+            p.on_chunk(
+                &jail,
+                src,
+                failed_rec(&format!("203.0.113.{host}")).as_bytes(),
+                Tick::new(1_000, false),
+                &NoHistory,
+                &mut out,
+            );
+        }
+        assert!(out.is_empty(), "单 IP 未达阈值，不应产出单点封禁意图");
+
+        let mut hits: Vec<(String, String, usize, u32, bool)> = Vec::new();
+        p.scan_clusters(1_000, |jail, hit, cfg| {
+            hits.push((
+                jail.to_string(),
+                hit.cidr.as_str().to_string(),
+                hit.ips.len(),
+                hit.peak,
+                cfg.audit_only,
+            ));
+        });
+        assert_eq!(hits.len(), 1, "三个不同源应触发一次集群命中");
+        let (hit_jail, cidr, ips, peak, audit_only) = &hits[0];
+        assert_eq!(hit_jail, "sshd");
+        assert_eq!(cidr, "203.0.113.0/24", "命中应给出归一后的网段键");
+        assert_eq!(*ips, 3);
+        assert_eq!(*peak, 1, "每个源只失败一次");
+        assert!(!*audit_only, "回调应把该 jail 的 cluster 配置一并传出");
+
+        // 检测是纯读：重复检测结果一致，且不改动窗口（故清理仍能拿到条目）。
+        assert_eq!(p.cleanup(1_000), 0, "检测不应清掉未过期的条目");
     }
 
     #[test]

@@ -18,7 +18,10 @@ mod operations;
 
 // Re-export 所有公共类型和函数
 pub use ip_validation::{is_internal_ip, validate_ip, validate_ipv4, ValidatedIp};
-pub use operations::{ban_ip, ban_ip_permanent, execute_ban_action, unban_ip, unban_permanent_ip};
+pub use operations::{
+    ban_ip, ban_ip_permanent, execute_ban_action, execute_ban_action_with_prefix, unban_ip,
+    unban_permanent_ip,
+};
 
 use crate::state::CidrKey;
 

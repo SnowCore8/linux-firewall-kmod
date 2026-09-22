@@ -68,11 +68,22 @@ pub fn execute_ban_action_with_prefix(
         bail!("NULL IP address");
     }
 
+    // 入参形状与白名单路径一致：**裸网络地址 + 前缀长度**，对应 netlink 的
+    // `(af, addr, prefix_len)`。调用方须传已归一化（主机位为零）的地址，归一由
+    // [`crate::state::CidrKey`] 单点负责——本层不做 CIDR 文本解析，否则会出现
+    // 第二套归一实现。前缀长度单独校验：越界会让内核按错误网段匹配。
+    let ip_addr: IpAddr = ip.parse().context("Invalid IP address")?;
+    let max_prefix = match ip_addr {
+        IpAddr::V4(_) => 32,
+        IpAddr::V6(_) => 128,
+    };
+    if prefix_len > max_prefix {
+        bail!("前缀长度越界: {ip}/{prefix_len}（最大 {max_prefix}）");
+    }
     let _validated = validate_ip(ip).with_context(|| format!("Invalid IP address: {ip}"))?;
 
     // 向内核投递指令
     let client = crate::kernel::global::get().context("内核链路未就绪，无法执行封禁操作")?;
-    let ip_addr: IpAddr = ip.parse().context("Invalid IP address")?;
     let timeout = crate::kernel::REQUEST_TIMEOUT;
     match action {
         BanAction::Temp(duration) => {
