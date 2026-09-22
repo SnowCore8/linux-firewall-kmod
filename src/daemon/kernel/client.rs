@@ -295,12 +295,14 @@ impl Client {
     pub fn ban(
         &self,
         addr: IpAddr,
+        prefix_len: u8,
         duration_secs: u32,
         reason: &str,
         _timeout: Duration,
     ) -> Result<Delivered, RequestError> {
         let cmd = codec::BanIp {
             addr,
+            prefix_len,
             duration_secs,
             reason: reason.to_string(),
         };
@@ -312,11 +314,18 @@ impl Client {
 
     /// 下发解封。返回值表示**已投递**。
     ///
+    /// `prefix_len` 必须与封禁时一致（内核按三元组定位条目）。
+    ///
     /// # Errors
     ///
     /// 见 [`RequestError`]。
-    pub fn unban(&self, addr: IpAddr, _timeout: Duration) -> Result<Delivered, RequestError> {
-        let cmd = codec::UnbanIp { addr };
+    pub fn unban(
+        &self,
+        addr: IpAddr,
+        prefix_len: u8,
+        _timeout: Duration,
+    ) -> Result<Delivered, RequestError> {
+        let cmd = codec::UnbanIp { addr, prefix_len };
         self.transport
             .send(&cmd.encode(self.alloc_seq()))
             .map_err(RequestError::Send)?;

@@ -93,6 +93,7 @@ struct fw_ban_state_change {
     struct fw_msg_hdr hdr;
     __u8 action;
     __u8 af;
+    __u8 prefix_len;
     __u32 duration_secs;
     addr16 addr;
     __u8 reason[32];
@@ -102,7 +103,7 @@ struct fw_ban_state_change {
     __u32 current_bans;
     __u32 whitelist_count;
 } __packed;
-_Static_assert(sizeof(struct fw_ban_state_change) == 122, "ban_state_change 布局必须为 122 字节");
+_Static_assert(sizeof(struct fw_ban_state_change) == 123, "ban_state_change 布局必须为 123 字节");
 
 struct fw_whitelist_state_change {
     struct fw_msg_hdr hdr;
@@ -156,13 +157,14 @@ _Static_assert(sizeof(struct fw_config_change) == 116, "config_change 布局必�
 struct fw_ban_entry {
     __u8 af;
     __u8 is_permanent;
+    __u8 prefix_len;
     __u32 duration_secs;
     __u64 banned_at;
     addr16 addr;
     __u8 jail_name[32];
     __u8 reason[32];
 } __packed;
-_Static_assert(sizeof(struct fw_ban_entry) == 94, "ban_entry 布局必须为 94 字节");
+_Static_assert(sizeof(struct fw_ban_entry) == 95, "ban_entry 布局必须为 95 字节");
 
 struct fw_list_bans_response {
     struct fw_msg_hdr hdr;
@@ -171,7 +173,7 @@ struct fw_list_bans_response {
     __u32 offset;
 } __packed;
 _Static_assert(sizeof(struct fw_list_bans_response) == 24, "list_bans_response 布局必须为 24 字节");
-/* 其后紧跟 count 个 struct fw_ban_entry；u16 长度上限内最多 696 条 */
+/* 其后紧跟 count 个 struct fw_ban_entry；u16 长度上限内最多 689 条 */
 
 struct fw_stats_response {
     struct fw_msg_hdr hdr;
@@ -283,20 +285,22 @@ _Static_assert(sizeof(struct fw_daemon_register_ack) == 13, "daemon_register_ack
 struct fw_ban_ip {
     struct fw_msg_hdr hdr;
     __u8 af;
+    __u8 prefix_len;
     __u32 duration_secs;
     addr16 addr;
     __u8 reason[32];
 } __packed;
-_Static_assert(sizeof(struct fw_ban_ip) == 65, "ban_ip 布局必须为 65 字节");
+_Static_assert(sizeof(struct fw_ban_ip) == 66, "ban_ip 布局必须为 66 字节");
 
 struct fw_unban_ip {
     struct fw_msg_hdr hdr;
     __u8 af;
+    __u8 prefix_len;
     __u32 duration_secs;
     addr16 addr;
     __u8 reason[32];
 } __packed;
-_Static_assert(sizeof(struct fw_unban_ip) == 65, "unban_ip 布局必须为 65 字节");
+_Static_assert(sizeof(struct fw_unban_ip) == 66, "unban_ip 布局必须为 66 字节");
 
 struct fw_set_config {
     struct fw_msg_hdr hdr;

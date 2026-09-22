@@ -232,6 +232,7 @@ pub struct BanStateChange {
     pub hdr: MsgHdr,
     pub action: u8,
     pub af: u8,
+    pub prefix_len: u8,
     pub duration_secs: u32,
     pub addr: addr16,
     pub reason: [u8; 32],
@@ -245,21 +246,22 @@ pub struct BanStateChange {
 #[rustfmt::skip]
 impl BanStateChange {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
-    pub const WIRE_SIZE: usize = 122;
+    pub const WIRE_SIZE: usize = 123;
     /// 对应的 MsgType 取值
     pub const MSG_TYPE: MsgType = MsgType::BanStateChange;
     /// 逐字段偏移（不含变长尾部；供一致性测试对照 offsetof）
     pub const FIELD_OFFSETS: &[(&str, usize)] = &[
         ("action", 12),
         ("af", 13),
-        ("duration_secs", 14),
-        ("addr", 18),
-        ("reason", 34),
-        ("jail_name", 66),
-        ("packets_dropped", 98),
-        ("packets_accepted", 106),
-        ("current_bans", 114),
-        ("whitelist_count", 118),
+        ("prefix_len", 14),
+        ("duration_secs", 15),
+        ("addr", 19),
+        ("reason", 35),
+        ("jail_name", 67),
+        ("packets_dropped", 99),
+        ("packets_accepted", 107),
+        ("current_bans", 115),
+        ("whitelist_count", 119),
     ];
 }
 
@@ -394,6 +396,7 @@ impl ConfigChange {
 pub struct BanEntry {
     pub af: u8,
     pub is_permanent: u8,
+    pub prefix_len: u8,
     pub duration_secs: u32,
     pub banned_at: u64,
     pub addr: addr16,
@@ -404,16 +407,17 @@ pub struct BanEntry {
 #[rustfmt::skip]
 impl BanEntry {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
-    pub const WIRE_SIZE: usize = 94;
+    pub const WIRE_SIZE: usize = 95;
     /// 逐字段偏移（不含变长尾部；供一致性测试对照 offsetof）
     pub const FIELD_OFFSETS: &[(&str, usize)] = &[
         ("af", 0),
         ("is_permanent", 1),
-        ("duration_secs", 2),
-        ("banned_at", 6),
-        ("addr", 14),
-        ("jail_name", 30),
-        ("reason", 62),
+        ("prefix_len", 2),
+        ("duration_secs", 3),
+        ("banned_at", 7),
+        ("addr", 15),
+        ("jail_name", 31),
+        ("reason", 63),
     ];
 }
 
@@ -435,9 +439,9 @@ impl ListBansResponse {
     /// 定长部分字节数
     pub const FIXED_SIZE: usize = 24;
     /// 尾部元素类型与其字节数
-    pub const TAIL_ELEM_SIZE: usize = 94;
+    pub const TAIL_ELEM_SIZE: usize = 95;
     /// u16 长度上限内可承载的最大尾部条目数
-    pub const MAX_TAIL_ENTRIES: usize = 696;
+    pub const MAX_TAIL_ENTRIES: usize = 689;
     /// 逐字段偏移（不含变长尾部；供一致性测试对照 offsetof）
     pub const FIELD_OFFSETS: &[(&str, usize)] = &[
         ("count", 12),
@@ -738,6 +742,7 @@ impl DaemonRegisterAck {
 pub struct BanIp {
     pub hdr: MsgHdr,
     pub af: u8,
+    pub prefix_len: u8,
     pub duration_secs: u32,
     pub addr: addr16,
     pub reason: [u8; 32],
@@ -746,15 +751,16 @@ pub struct BanIp {
 #[rustfmt::skip]
 impl BanIp {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
-    pub const WIRE_SIZE: usize = 65;
+    pub const WIRE_SIZE: usize = 66;
     /// 对应的 MsgType 取值
     pub const MSG_TYPE: MsgType = MsgType::BanIp;
     /// 逐字段偏移（不含变长尾部；供一致性测试对照 offsetof）
     pub const FIELD_OFFSETS: &[(&str, usize)] = &[
         ("af", 12),
-        ("duration_secs", 13),
-        ("addr", 17),
-        ("reason", 33),
+        ("prefix_len", 13),
+        ("duration_secs", 14),
+        ("addr", 18),
+        ("reason", 34),
     ];
 }
 
@@ -763,6 +769,7 @@ impl BanIp {
 pub struct UnbanIp {
     pub hdr: MsgHdr,
     pub af: u8,
+    pub prefix_len: u8,
     pub duration_secs: u32,
     pub addr: addr16,
     pub reason: [u8; 32],
@@ -771,15 +778,16 @@ pub struct UnbanIp {
 #[rustfmt::skip]
 impl UnbanIp {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
-    pub const WIRE_SIZE: usize = 65;
+    pub const WIRE_SIZE: usize = 66;
     /// 对应的 MsgType 取值
     pub const MSG_TYPE: MsgType = MsgType::UnbanIp;
     /// 逐字段偏移（不含变长尾部；供一致性测试对照 offsetof）
     pub const FIELD_OFFSETS: &[(&str, usize)] = &[
         ("af", 12),
-        ("duration_secs", 13),
-        ("addr", 17),
-        ("reason", 33),
+        ("prefix_len", 13),
+        ("duration_secs", 14),
+        ("addr", 18),
+        ("reason", 34),
     ];
 }
 

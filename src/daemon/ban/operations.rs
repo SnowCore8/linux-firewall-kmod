@@ -38,6 +38,32 @@ use super::BanAction;
 /// - 内核链路未就绪（未取得租约）
 /// - 投递失败
 pub fn execute_ban_action(action: BanAction, ip: &str, reason: &str) -> Result<()> {
+    execute_ban_action_with_prefix(action, ip, full_prefix_len(ip)?, reason)
+}
+
+/// 全长前缀（IPv4 `/32`、IPv6 `/128`）：精确单机，与网段封禁无关。
+fn full_prefix_len(ip: &str) -> Result<u8> {
+    let addr: IpAddr = ip.parse().context("Invalid IP address")?;
+    Ok(match addr {
+        IpAddr::V4(_) => 32,
+        IpAddr::V6(_) => 128,
+    })
+}
+
+/// 与 [`execute_ban_action`] 相同，但可指定前缀长度（网段封禁用）。
+///
+/// `prefix_len` 为全长时与 [`execute_ban_action`] 完全等效。调用方需保证 `ip` 是
+/// 归一化后的网络地址（主机位为零），否则内核按前缀比较时命中的网段与预期不同。
+///
+/// # Errors
+///
+/// 同 [`execute_ban_action`]。
+pub fn execute_ban_action_with_prefix(
+    action: BanAction,
+    ip: &str,
+    prefix_len: u8,
+    reason: &str,
+) -> Result<()> {
     if ip.is_empty() {
         bail!("NULL IP address");
     }
@@ -53,18 +79,18 @@ pub fn execute_ban_action(action: BanAction, ip: &str, reason: &str) -> Result<(
             let dur = u32::try_from(duration)
                 .with_context(|| format!("ban duration {duration} exceeds u32 max"))?;
             client
-                .ban(ip_addr, dur, reason, timeout)
+                .ban(ip_addr, prefix_len, dur, reason, timeout)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
         BanAction::Permanent => {
             // 0 = 永久（契约约定时长 0 表示不设到期）
             client
-                .ban(ip_addr, 0, reason, timeout)
+                .ban(ip_addr, prefix_len, 0, reason, timeout)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
         BanAction::Unban | BanAction::UnbanPerm => {
             client
-                .unban(ip_addr, timeout)
+                .unban(ip_addr, prefix_len, timeout)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
     }

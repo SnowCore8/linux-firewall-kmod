@@ -147,6 +147,7 @@ message BanStateChange {
     type = MsgType::BAN_STATE_CHANGE
     u8      action           # BanAction
     u8      af               # AddrFamily
+    u8      prefix_len       # 前缀长度；32/128 = 精确单机
     u32     duration_secs    # 0 = 永久
     addr16  addr
     str[32] reason
@@ -214,6 +215,7 @@ message ConfigChange {
 struct BanEntry {
     u8      af
     u8      is_permanent   # 1 = 永久，0 = 到期自动解封
+    u8      prefix_len     # 前缀长度；32/128 = 精确单机
     u32     duration_secs
     u64     banned_at      # Unix 秒
     addr16  addr
@@ -360,18 +362,25 @@ message DaemonRegisterAck {
 # ===========================================================================
 
 # 封禁 IP。与 UnbanIp 共用同一载荷布局（内核按 sizeof(fw_nl_ban_cmd) 校验）
+#
+# prefix_len：网段封禁能力（集群扫描检测用）。语义与白名单的 prefix_len 一致却
+# 不同形：封禁条目**不归一化主机位**（32/128 = 精确单机，即未加该字段前的行为），
+# 匹配时按前缀比较。daemon 对网段封禁负责下发归一化后的网络地址。
 message BanIp {
     type = MsgType::BAN_IP
     u8      af             # AddrFamily
+    u8      prefix_len     # 前缀长度；32/128 = 精确单机
     u32     duration_secs  # 0 = 永久
     addr16  addr
     str[32] reason
 }
 
 # 解封 IP；duration_secs 与 reason 由发送方置 0
+# prefix_len 需与封禁时一致，内核按 (af, addr, prefix_len) 定位条目。
 message UnbanIp {
     type = MsgType::UNBAN_IP
     u8      af
+    u8      prefix_len
     u32     duration_secs
     addr16  addr
     str[32] reason

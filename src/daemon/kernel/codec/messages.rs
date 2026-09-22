@@ -79,6 +79,8 @@ pub struct BanStateChange {
     pub action: Option<contract::BanAction>,
     /// 地址族；取值未定义时为 `None`。
     pub af: Option<contract::AddrFamily>,
+    /// 前缀长度；IPv4 `/32`、IPv6 `/128` 表示精确单机。
+    pub prefix_len: u8,
     /// 封禁时长（秒）。**0 表示永久**——这是事件路径的历史语义。
     pub duration_secs: u32,
     /// 涉及 IP；地址族未定义时为 `None`。
@@ -114,6 +116,7 @@ impl BanStateChange {
         Ok(Self {
             action: contract::BanAction::from_raw(raw.action),
             af: contract::AddrFamily::from_raw(raw.af),
+            prefix_len: raw.prefix_len,
             duration_secs: u32::from_be(raw.duration_secs),
             addr: addr_ip(raw.af, &addr_field),
             reason: fixed_str(&reason_field),
@@ -369,6 +372,8 @@ pub struct BanEntry {
     addr_raw: contract::addr16,
     /// 是否永久封禁。
     pub is_permanent: bool,
+    /// 前缀长度；IPv4 `/32`、IPv6 `/128` 表示精确单机。
+    pub prefix_len: u8,
     /// 封禁时长（秒）。
     pub duration_secs: u32,
     /// 封禁时刻（Unix 秒）。
@@ -389,6 +394,7 @@ impl BanEntry {
             af_raw: raw.af,
             addr_raw: addr_field,
             is_permanent: raw.is_permanent != 0,
+            prefix_len: raw.prefix_len,
             duration_secs: u32::from_be(raw.duration_secs),
             banned_at: u64::from_be(raw.banned_at),
             jail_name: fixed_str(&jail_field),
@@ -830,8 +836,10 @@ fn scanner_item(raw: &contract::ScannerItem) -> ScannerItem {
 /// 封禁 IP（`MsgType::BanIp`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BanIp {
-    /// 目标 IP。
+    /// 目标 IP（`prefix_len` 非全长时表示该网段的网络地址）。
     pub addr: IpAddr,
+    /// 前缀长度；IPv4 `/32`、IPv6 `/128` 表示精确单机。
+    pub prefix_len: u8,
     /// 封禁时长（秒）；0 表示永久。
     pub duration_secs: u32,
     /// 封禁原因。
@@ -846,6 +854,7 @@ impl BanIp {
         let raw = contract::BanIp {
             hdr: header(contract::BanIp::MSG_TYPE, seq, wire_u16(wire)),
             af: family_raw(self.addr),
+            prefix_len: self.prefix_len,
             duration_secs: self.duration_secs.to_be(),
             addr: addr_bytes(self.addr),
             reason: fixed_bytes(&self.reason),
@@ -857,10 +866,13 @@ impl BanIp {
 /// 解封 IP（`MsgType::UnbanIp`）。
 ///
 /// 契约规定它与 [`BanIp`] 共用同一载荷布局，未使用的字段由发送方置 0。
+/// `prefix_len` 必须与封禁时一致——内核按 `(af, addr, prefix_len)` 三元组定位条目。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnbanIp {
-    /// 目标 IP。
+    /// 目标 IP（`prefix_len` 非全长时表示该网段的网络地址）。
     pub addr: IpAddr,
+    /// 前缀长度；需与封禁时一致。
+    pub prefix_len: u8,
 }
 
 impl UnbanIp {
@@ -871,6 +883,7 @@ impl UnbanIp {
         let raw = contract::UnbanIp {
             hdr: header(contract::UnbanIp::MSG_TYPE, seq, wire_u16(wire)),
             af: family_raw(self.addr),
+            prefix_len: self.prefix_len,
             duration_secs: 0,
             addr: addr_bytes(self.addr),
             reason: [0u8; 32],

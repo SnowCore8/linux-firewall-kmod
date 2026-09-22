@@ -85,6 +85,7 @@ export interface BanStateChange {
   hdr: MsgHdr;
   action: number;
   af: number;
+  prefix_len: number;
   duration_secs: number;
   addr: Uint8Array;
   reason: string;
@@ -143,6 +144,7 @@ export interface ConfigChange {
 export interface BanEntry {
   af: number;
   is_permanent: number;
+  prefix_len: number;
   duration_secs: number;
   banned_at: number;
   addr: Uint8Array;
@@ -255,6 +257,7 @@ export interface DaemonRegisterAck {
 export interface BanIp {
   hdr: MsgHdr;
   af: number;
+  prefix_len: number;
   duration_secs: number;
   addr: Uint8Array;
   reason: string;
@@ -263,6 +266,7 @@ export interface BanIp {
 export interface UnbanIp {
   hdr: MsgHdr;
   af: number;
+  prefix_len: number;
   duration_secs: number;
   addr: Uint8Array;
   reason: string;
@@ -347,12 +351,12 @@ export interface DaemonRegister {
 export const WIRE_SIZES: Record<string, number> = {
   MsgHdr: 12,
   DdosEvent: 65,
-  BanStateChange: 122,
+  BanStateChange: 123,
   WhitelistStateChange: 51,
   CmdResult: 37,
   ConfigAck: 20,
   ConfigChange: 116,
-  BanEntry: 94,
+  BanEntry: 95,
   ListBansResponse: 24,
   StatsResponse: 60,
   WhitelistEntry: 34,
@@ -364,8 +368,8 @@ export const WIRE_SIZES: Record<string, number> = {
   ScannerItem: 32,
   AnalysisResponse: 4756,
   DaemonRegisterAck: 13,
-  BanIp: 65,
-  UnbanIp: 65,
+  BanIp: 66,
+  UnbanIp: 66,
   SetConfig: 116,
   SetProtectedPorts: 8208,
   ListBansQuery: 20,
@@ -380,7 +384,7 @@ export const WIRE_SIZES: Record<string, number> = {
 
 /** 变长消息的分页上限：count 最大取值、定长部分字节数、单条字节数。 */
 export const TAIL_LIMITS: Record<string, { maxEntries: number; fixedSize: number; elemSize: number }> = {
-  ListBansResponse: { maxEntries: 696, fixedSize: 24, elemSize: 94 },
+  ListBansResponse: { maxEntries: 689, fixedSize: 24, elemSize: 95 },
   ListWhitelistResponse: { maxEntries: 1926, fixedSize: 24, elemSize: 34 },
   ListRatesResponse: { maxEntries: 779, fixedSize: 40, elemSize: 84 },
 };
