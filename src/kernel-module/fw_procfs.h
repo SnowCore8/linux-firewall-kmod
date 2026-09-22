@@ -18,10 +18,10 @@
 
 #include "fw_types.h"
 
-/* 创建 /proc/firewall 及 12 个条目；失败时自行回滚已创建的部分 */
+/* 创建 /proc/firewall 及其全部条目；失败时自行回滚已创建的部分 */
 int fw_procfs_init(void);
 
-/* 逆序移除 12 个条目与根目录 */
+/* 逆序移除全部条目与根目录 */
 void fw_procfs_exit(void);
 
 #endif /* FW_PROCFS_H */

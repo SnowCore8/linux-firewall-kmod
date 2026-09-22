@@ -455,6 +455,38 @@ struct fw_local_set {
   struct fw_local_slot slots[];
 };
 
+/*
+ * 受保护端口位图：固定 65536 位（8KB），位 i 置位表示端口 i 受保护
+ * ——即该端口的入站流量参与 DDoS 速率判定。
+ *
+ * 由 daemon 扫描本机对外监听端口后经 netlink 下发（见 contract/netlink.fwidl
+ * 的 SetProtectedPorts）。整体 rcu_assign_pointer 换指针、旧表 kfree_rcu 释放，
+ * 因此热路径只需一次位测试、无锁无分配。
+ *
+ * bitmap 用 unsigned long 而非 u8：内核的 test_bit / bitmap_weight 要求
+ * `unsigned long *`，按字节数组声明会在 -Werror 下报指针类型不兼容。线格式
+ * 仍是 8192 字节（netlink 侧按字节拷贝，两者大小一致）。
+ *
+ * 空指针语义：**未下发位图时视为全端口受保护**——daemon 不在位不等于关掉
+ * 检测；详见 fw_ports_is_protected()。
+ */
+#define FW_PROTECTED_PORTS_BYTES 8192
+#define FW_PROTECTED_PORTS_MAX 65536
+
+/*
+ * /proc/firewall/protected_ports 的展示行数上限：位图容量是 65536 位，
+ * 逐位全列会给 seq_file 造出数万行文本（且人读无意义）。超出即截断并打印
+ * 已截断提示与受保护总数，保证「有多少端口受保护」始终可读。
+ */
+#define FW_PROCFS_PROTECTED_PORTS_MAX_LINES 256
+
+struct fw_protected_ports {
+  u32 count; /* 置位端口数（观测用） */
+  u32 pad;
+  struct rcu_head rcu; /* 换表时旧表由 kfree_rcu 释放 */
+  unsigned long bitmap[DIV_ROUND_UP(FW_PROTECTED_PORTS_MAX, BITS_PER_LONG)];
+};
+
 /* 统计快照（读侧一次性取齐，避免多次遍历） */
 struct fw_stats_snapshot {
   u64 total_bans;
@@ -499,6 +531,9 @@ struct fw_info {
   /* ---- 本机地址集合（fw_local.c） ---- */
   struct fw_local_set __rcu *local_set;
   unsigned int max_local_ips;
+
+  /* ---- 受保护端口位图（fw_ports.c） ---- */
+  struct fw_protected_ports __rcu *protected_ports;
 
   /* ---- 速率表（fw_rate.c） ---- */
   DECLARE_HASHTABLE(rate_ipv4, RATE_HASH_BITS);
@@ -573,6 +608,7 @@ struct fw_info {
   struct proc_dir_entry *proc_ip_frags;
   struct proc_dir_entry *proc_port_scanners;
   struct proc_dir_entry *proc_service_probes;
+  struct proc_dir_entry *proc_protected_ports;
 
   /* ---- netdev（fw_netdev.c） ---- */
   struct notifier_block netdev_notifier;

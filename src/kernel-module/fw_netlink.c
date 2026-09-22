@@ -47,6 +47,7 @@
 
 #include "fw_netlink.h"
 #include "fw_ban.h"
+#include "fw_ports.h"
 #include "fw_wl.h"
 #include "fw_stats.h"
 #include "fw_rate.h"
@@ -942,6 +943,21 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
         limit = be32_to_cpu(q->limit);
       }
       fw_nl_send_rates_page(portid, be32_to_cpu(h->seq), offset, limit, fw_rate_count());
+      break;
+    }
+
+    case FW_MSG_TYPE_SET_PROTECTED_PORTS: {
+      const struct fw_set_protected_ports *c;
+      int rc;
+
+      if (payload < sizeof(*c)) {
+        pr_warn_ratelimited("netlink: SET_PROTECTED_PORTS 载荷过短 %zu\n", payload);
+        break;
+      }
+      c = (const struct fw_set_protected_ports *)h;
+      rc = fw_ports_replace(c->bitmap);
+      if (rc)
+        fw_nl_send_cmd_result(portid, type, rc, FW_AF_INET, NULL);
       break;
     }
 

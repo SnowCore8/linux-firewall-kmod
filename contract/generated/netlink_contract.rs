@@ -117,6 +117,7 @@ pub enum MsgType {
     AnalysisResponse = 21,
     DaemonRegister = 22,
     DaemonRegisterAck = 23,
+    SetProtectedPorts = 24,
 }
 
 #[rustfmt::skip]
@@ -147,6 +148,7 @@ impl MsgType {
             21 => Some(Self::AnalysisResponse),
             22 => Some(Self::DaemonRegister),
             23 => Some(Self::DaemonRegisterAck),
+            24 => Some(Self::SetProtectedPorts),
             _ => None,
         }
     }
@@ -827,6 +829,27 @@ impl SetConfig {
         ("baseline_pps", 96),
         ("baseline_bps", 104),
         ("ddos_ban_duration", 112),
+    ];
+}
+
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct SetProtectedPorts {
+    pub hdr: MsgHdr,
+    pub count: u32,
+    pub bitmap: [u8; 8192],
+}
+
+#[rustfmt::skip]
+impl SetProtectedPorts {
+    /// 线格式字节数（packed，无填充；变长消息为定长部分）
+    pub const WIRE_SIZE: usize = 8208;
+    /// 对应的 MsgType 取值
+    pub const MSG_TYPE: MsgType = MsgType::SetProtectedPorts;
+    /// 逐字段偏移（不含变长尾部；供一致性测试对照 offsetof）
+    pub const FIELD_OFFSETS: &[(&str, usize)] = &[
+        ("count", 12),
+        ("bitmap", 16),
     ];
 }
 

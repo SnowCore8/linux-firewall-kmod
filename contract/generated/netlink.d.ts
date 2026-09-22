@@ -43,6 +43,7 @@ export enum MsgType {
   AnalysisResponse = 21,
   DaemonRegister = 22,
   DaemonRegisterAck = 23,
+  SetProtectedPorts = 24,
 }
 
 export const ConfigFlags = {
@@ -287,6 +288,12 @@ export interface SetConfig {
   ddos_ban_duration: number;
 }
 
+export interface SetProtectedPorts {
+  hdr: MsgHdr;
+  count: number;
+  bitmap: Uint8Array;
+}
+
 export interface ListBansQuery {
   hdr: MsgHdr;
   offset: number;
@@ -360,6 +367,7 @@ export const WIRE_SIZES: Record<string, number> = {
   BanIp: 65,
   UnbanIp: 65,
   SetConfig: 116,
+  SetProtectedPorts: 8208,
   ListBansQuery: 20,
   ListWhitelistQuery: 20,
   ListRatesQuery: 20,

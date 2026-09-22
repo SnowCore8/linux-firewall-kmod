@@ -52,6 +52,7 @@ enum fw_msg_type {
     FW_MSG_TYPE_ANALYSIS_RESPONSE = 21,
     FW_MSG_TYPE_DAEMON_REGISTER = 22,
     FW_MSG_TYPE_DAEMON_REGISTER_ACK = 23,
+    FW_MSG_TYPE_SET_PROTECTED_PORTS = 24,
 };
 /* 枚举底层宽度 u16 -> __u16 */
 
@@ -317,6 +318,13 @@ struct fw_set_config {
     __u32 ddos_ban_duration;
 } __packed;
 _Static_assert(sizeof(struct fw_set_config) == 116, "set_config 布局必须为 116 字节");
+
+struct fw_set_protected_ports {
+    struct fw_msg_hdr hdr;
+    __u32 count;
+    __u8 bitmap[8192];
+} __packed;
+_Static_assert(sizeof(struct fw_set_protected_ports) == 8208, "set_protected_ports 布局必须为 8208 字节");
 
 struct fw_list_bans_query {
     struct fw_msg_hdr hdr;

@@ -72,7 +72,7 @@ RUST_KEYWORDS = frozenset({
 # 是两边唯一的共同事实；一旦不同（不同编译器/ABI/打包规则），内核与 daemon 会
 # 各自「与自己的结构体一致」却彼此不一致，且不会报错。
 #
-# 映射覆盖生成物的**全部** 30 个结构（23 条报文 + 7 个公共/尾部结构），
+# 映射覆盖生成物的**全部** 31 个结构（24 条报文 + 7 个公共/尾部结构），
 # 由 `RUST_TO_GEN` 显式列出，`main()` 会断言它一个不缺。
 RUST_TO_GEN = {
     # 公共头与尾部结构（无公共头/无自身偏移语义）
@@ -100,6 +100,7 @@ RUST_TO_GEN = {
     "BanIp": "BanIp",
     "UnbanIp": "UnbanIp",
     "SetConfig": "SetConfig",
+    "SetProtectedPorts": "SetProtectedPorts",
     "ListBansQuery": "ListBansQuery",
     "ListWhitelistQuery": "ListWhitelistQuery",
     "ListRatesQuery": "ListRatesQuery",

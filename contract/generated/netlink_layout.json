@@ -8,7 +8,7 @@
     "enum AddrFamily: 2 个成员，宽度 u8",
     "enum BanAction: 2 个成员，宽度 u8",
     "enum WhitelistAction: 2 个成员，宽度 u8",
-    "enum MsgType: 23 个成员，宽度 u16",
+    "enum MsgType: 24 个成员，宽度 u16",
     "bits ConfigFlags: 13 个标志，宽度 u32",
     "bits DynThresholdFlags: 1 个标志，宽度 u32",
     "公共头 MsgHdr: 12 字节",
@@ -27,6 +27,7 @@
     "message BanIp: 定长 65 字节",
     "message UnbanIp: 定长 65 字节",
     "message SetConfig: 定长 116 字节",
+    "message SetProtectedPorts: 定长 8208 字节",
     "message ListBansQuery: 定长 20 字节",
     "message ListWhitelistQuery: 定长 20 字节",
     "message ListRatesQuery: 定长 20 字节",
@@ -92,7 +93,8 @@
         "ANALYSIS_QUERY": 20,
         "ANALYSIS_RESPONSE": 21,
         "DAEMON_REGISTER": 22,
-        "DAEMON_REGISTER_ACK": 23
+        "DAEMON_REGISTER_ACK": 23,
+        "SET_PROTECTED_PORTS": 24
       }
     }
   },
@@ -1295,6 +1297,27 @@
         }
       ],
       "msg_type": "MsgType::SET_CONFIG"
+    },
+    "SetProtectedPorts": {
+      "kind": "message",
+      "size": 8208,
+      "fields": [
+        {
+          "name": "count",
+          "offset": 12,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "bitmap",
+          "offset": 16,
+          "size": 8192,
+          "type": "u8[8192]",
+          "tail": false
+        }
+      ],
+      "msg_type": "MsgType::SET_PROTECTED_PORTS"
     },
     "ListBansQuery": {
       "kind": "message",

@@ -77,6 +77,7 @@ enum MsgType : u16 {
     ANALYSIS_RESPONSE       = 21   # 内核 → daemon：分析数据响应
     DAEMON_REGISTER         = 22   # daemon → 内核：注册为唯一守护进程
     DAEMON_REGISTER_ACK     = 23   # 内核 → daemon：注册确认 / 拒绝
+    SET_PROTECTED_PORTS     = 24   # daemon → 内核：受保护端口位图
 }
 
 # 配置项标志位；声明位序号，生成器左移
@@ -395,6 +396,21 @@ message SetConfig {
     u64  baseline_pps
     u64  baseline_bps
     u32  ddos_ban_duration            # 秒
+}
+
+# 受保护端口位图：daemon 定期扫描本机对外监听端口后下发。
+#
+# 语义是「纳入防护」而非「豁免」：置位端口 = 该端口的入站流量参与 DDoS 速率
+# 判定。公网唯一能打到本机的地方就是这些对外监听端口，防护聚焦于此；未置位
+# 端口不参与速率判定，避免内部流量产生误封。封禁表（由 jail 日志判定或手工
+# 下发）不受本位图影响，仍对所有端口生效。
+#
+# 布局固定 8KB（65536 位，一端口一位），便于内核侧 RCU 整体换指针：
+# 位 i 置位表示端口 i 受保护。
+message SetProtectedPorts {
+    type = MsgType::SET_PROTECTED_PORTS
+    u32      count    # 置位端口数（观测用；内核不据此推导布局）
+    u8[8192] bitmap   # 65536 位，位 i = 端口 i 受保护
 }
 
 # 封禁列表分页查询

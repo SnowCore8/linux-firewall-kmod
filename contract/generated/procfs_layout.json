@@ -20,6 +20,7 @@
     "file ip_frags: mode 0400 r read_format=unstable",
     "file port_scanners: mode 0400 r read_format=unstable",
     "file service_probes: mode 0400 r read_format=unstable",
+    "file protected_ports: mode 0400 r read_format=unstable",
     "write bans: 4 种形式",
     "write whitelist: 3 种形式",
     "write config: 1 种形式",
@@ -31,6 +32,7 @@
     "limit icmp_types: 128 条（锚点 src/kernel-module/fw_types.h:MAX_ICMP_TYPE_ENTRIES）",
     "limit port_scanners: 20 条（锚点 src/kernel-module/fw_types.h:PORT_SCAN_MAX_RESULTS）",
     "limit service_probes: 20 条（锚点 src/kernel-module/fw_types.h:SERVICE_PROBE_MAX_RESULTS）",
+    "limit protected_ports: 256 条（锚点 src/kernel-module/fw_types.h:FW_PROCFS_PROTECTED_PORTS_MAX_LINES）",
     "缺陷记录: 19 条（已修 17 / 有意保留 2 / 未修 0；由 verify_*.py 到源码核对锚点）"
   ],
   "files": {
@@ -117,6 +119,13 @@
       "access": "r",
       "read_format": "unstable",
       "summary": "服务探测检测；阈值 3 种协议，最多列 20 条"
+    },
+    "protected_ports": {
+      "path": "/proc/firewall/protected_ports",
+      "mode": "0400",
+      "access": "r",
+      "read_format": "unstable",
+      "summary": "受保护端口；含状态行（未下发 = 全端口受保护）与端口清单"
     }
   },
   "enums": {
@@ -242,6 +251,11 @@
       "entries": 20,
       "note": "触发阈值为 3 种协议（fw_types.h:SERVICE_PROBE_THRESHOLD）",
       "where": "src/kernel-module/fw_types.h:SERVICE_PROBE_MAX_RESULTS"
+    },
+    "protected_ports": {
+      "entries": 256,
+      "note": "只读文件的展示行数上限；位图本身容量为 65536 位（FW_PROTECTED_PORTS_MAX，8KB），逐位遍历在展示上限处截断并打印 '... (N protected, output truncated)'",
+      "where": "src/kernel-module/fw_types.h:FW_PROCFS_PROTECTED_PORTS_MAX_LINES"
     }
   },
   "defects": [

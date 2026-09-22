@@ -45,6 +45,7 @@
 #include "fw_local.h"
 #include "fw_netdev.h"
 #include "fw_netlink.h"
+#include "fw_ports.h"
 #include "fw_procfs.h"
 #include "fw_rate.h"
 #include "fw_state.h"
@@ -202,6 +203,7 @@ static int __init fw_init(void) {
   }
 
   fw_local_init();
+  fw_ports_init();
   ret = fw_wl_init();
   if (ret) {
     pr_err("白名单初始化失败: %d\n", ret);
@@ -276,6 +278,7 @@ err_ban:
   fw_ban_exit();
 err_wl:
   fw_wl_exit();
+  fw_ports_exit();
   fw_local_exit();
   fw_stats_exit();
   return ret;
@@ -315,6 +318,7 @@ static void __exit fw_exit(void) {
   fw_rate_exit();
   fw_stats_exit();
   fw_local_exit();
+  fw_ports_exit();
 
   /* 7) netlink 最后销毁：以上各步都可能推送事件 */
   fw_netlink_exit();

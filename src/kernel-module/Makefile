@@ -9,6 +9,7 @@ firewall-y := \
 	fw_main.o \
 	fw_stats.o \
 	fw_local.o \
+	fw_ports.o \
 	fw_wl.o \
 	fw_ban.o \
 	fw_rate.o \

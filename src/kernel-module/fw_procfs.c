@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Dual MIT/GPL
 /*
- * fw_procfs.c - /proc/firewall 的 12 个条目
+ * fw_procfs.c - /proc/firewall 的全部条目
  *
  * 对外协议由 contract/procfs.fwidl 冻结，生成物 contract/generated/procfs_uapi.h。
  * 本模块是**表现层**：只做「取数 → 格式化」与「解析 → 调模块 API」，不含表结构。
@@ -54,6 +54,7 @@
 
 #include "fw_procfs.h"
 #include "fw_ban.h"
+#include "fw_ports.h"
 #include "fw_wl.h"
 #include "fw_rate.h"
 #include "fw_stats.h"
@@ -931,6 +932,77 @@ static const struct proc_ops service_probes_fops = {
   .proc_release = single_release,
 };
 
+/*
+ * 受保护端口清单。只读观测面：集合由 daemon 扫描本机对外监听端口后经
+ * netlink 下发，本文件不提供写入口。
+ *
+ * 未下发位图时打印「全端口受保护」而非空白清单——空清单会被误读成
+ * 「没有任何端口受保护」，与实际的失败开放语义正好相反（见 fw_ports.c）。
+ */
+static int protected_ports_show(struct seq_file *m, void *v) {
+  u8 *bitmap;
+  u32 count, i;
+  bool published;
+  unsigned int shown = 0;
+  bool truncated = false;
+
+  /* 位图快照需 8KB，走 kzalloc 而非栈：seq_show 在内核栈上跑 */
+  bitmap = kzalloc(FW_PROTECTED_PORTS_BYTES, GFP_KERNEL);
+  if (!bitmap)
+    return -ENOMEM;
+
+  published = fw_ports_snapshot(bitmap);
+  count = fw_ports_count();
+
+  seq_printf(m, "Protected Ports (rate detection scope):\n");
+  if (!published) {
+    seq_printf(m, "State: not published - ALL ports participate in rate detection\n");
+    seq_printf(m, "Hint: daemon has not sent a port set yet\n");
+    kfree(bitmap);
+    return 0;
+  }
+
+  seq_printf(m, "State: published\n");
+  seq_printf(m, "Protected port count: %u\n", count);
+  seq_printf(m, "-------------------------\n");
+  seq_printf(m, "%-8s %-6s\n", "Port", "Proto");
+
+  /*
+   * 逐位列出。端口数与协议无关（位图只按目的端口编号），协议列给出该端口
+   * 在扫描结果中的类型；这里不存储协议信息，故统一按「tcp/udp」并列展示，
+   * 避免让读者以为某个端口只在单一协议上受保护。
+   */
+  for (i = 0; i < FW_PROTECTED_PORTS_MAX; i++) {
+    if (!test_bit(i, (const unsigned long *)bitmap))
+      continue;
+    if (shown >= FW_PROCFS_PROTECTED_PORTS_MAX_LINES) {
+      truncated = true;
+      break;
+    }
+    seq_printf(m, "%-8u %-6s\n", i, "tcp/udp");
+    shown++;
+  }
+
+  if (!shown)
+    seq_printf(m, "No protected ports\n");
+  if (truncated)
+    seq_printf(m, "... (%u protected, output truncated)\n", count);
+
+  kfree(bitmap);
+  return 0;
+}
+
+static int protected_ports_open(struct inode *inode, struct file *file) {
+  return single_open(file, protected_ports_show, NULL);
+}
+
+static const struct proc_ops protected_ports_fops = {
+  .proc_open = protected_ports_open,
+  .proc_read = seq_read,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
+};
+
 /* ============================================================================
  * 生命周期
  * ==========================================================================*/
@@ -963,12 +1035,15 @@ int fw_procfs_init(void) {
     "port_scanners", FW_PROCFS_PORT_SCANNERS_MODE, dir, &port_scanners_fops);
   fw_info.proc_service_probes = proc_create(
     "service_probes", FW_PROCFS_SERVICE_PROBES_MODE, dir, &service_probes_fops);
+  fw_info.proc_protected_ports = proc_create(
+    "protected_ports", FW_PROCFS_PROTECTED_PORTS_MODE, dir, &protected_ports_fops);
 
   if (!fw_info.proc_bans || !fw_info.proc_config || !fw_info.proc_whitelist ||
       !fw_info.proc_stats || !fw_info.proc_rates || !fw_info.proc_udp_ports ||
       !fw_info.proc_icmp_types || !fw_info.proc_pkt_sizes ||
       !fw_info.proc_ttl_dist || !fw_info.proc_ip_frags ||
-      !fw_info.proc_port_scanners || !fw_info.proc_service_probes) {
+      !fw_info.proc_port_scanners || !fw_info.proc_service_probes ||
+      !fw_info.proc_protected_ports) {
     pr_err("创建 procfs 条目失败\n");
     fw_procfs_exit();
     return -ENOMEM;
@@ -979,6 +1054,7 @@ int fw_procfs_init(void) {
 
 void fw_procfs_exit(void) {
   /* 逆序移除：先条目后根目录，避免根目录被摘走时留下悬空 dentry 引用 */
+  proc_remove(fw_info.proc_protected_ports);
   proc_remove(fw_info.proc_service_probes);
   proc_remove(fw_info.proc_port_scanners);
   proc_remove(fw_info.proc_ip_frags);
@@ -993,6 +1069,7 @@ void fw_procfs_exit(void) {
   proc_remove(fw_info.proc_bans);
   proc_remove(fw_info.proc_dir);
 
+  fw_info.proc_protected_ports = NULL;
   fw_info.proc_service_probes = NULL;
   fw_info.proc_port_scanners = NULL;
   fw_info.proc_ip_frags = NULL;

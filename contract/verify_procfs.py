@@ -84,6 +84,7 @@ LIMIT_CONST = {
     "icmp_types": ("MAX_ICMP_TYPE_ENTRIES", TYPES_H),
     "port_scanners": ("PORT_SCAN_MAX_RESULTS", TYPES_H),
     "service_probes": ("SERVICE_PROBE_MAX_RESULTS", TYPES_H),
+    "protected_ports": ("FW_PROCFS_PROTECTED_PORTS_MAX_LINES", TYPES_H),
 }
 
 

@@ -12,7 +12,7 @@
 # 2. 读侧并非「纯人读」：`stats` 是 `key value` 行格式，测试与运维脚本
 #    按行解析；`bans` 的 IP 子串被测试用来判断封禁是否生效。这部分承载
 #    契约，不能随意重排。
-# 3. 其余 9 个只读文件是给人看的表格，**无机器可读承诺**——契约把它们
+# 3. 其余只读文件是给人看的表格，**无机器可读承诺**——契约把它们
 #    显式标注为 unstable，避免下游（或未来的我）把它们当成稳定接口。
 #
 # 线格式/文本格式约定
@@ -152,6 +152,17 @@ file service_probes {
   summary = "服务探测检测；阈值 3 种协议，最多列 20 条"
 }
 
+# 受保护端口：daemon 扫描本机对外监听端口后经 netlink 下发的集合。
+# 语义是「纳入防护」——置位端口的入站流量参与 DDoS 速率判定（见 netlink.fwidl
+# 的 SetProtectedPorts）。本文件是只读观测面：集合由 daemon 写入，procfs 不提供
+# 写入口，因此运维侧无法手改「谁受保护」。
+file protected_ports {
+  mode = 0400
+  access = r
+  read_format = unstable
+  summary = "受保护端口；含状态行（未下发 = 全端口受保护）与端口清单"
+}
+
 # ============================================================================
 # 写文法：每个可写文件一组「命令形式 -> 语义」
 # ============================================================================
@@ -253,6 +264,12 @@ limit service_probes {
   entries = 20
   where = "src/kernel-module/fw_types.h:SERVICE_PROBE_MAX_RESULTS"
   note = "触发阈值为 3 种协议（fw_types.h:SERVICE_PROBE_THRESHOLD）"
+}
+
+limit protected_ports {
+  entries = 256
+  where = "src/kernel-module/fw_types.h:FW_PROCFS_PROTECTED_PORTS_MAX_LINES"
+  note = "只读文件的展示行数上限；位图本身容量为 65536 位（FW_PROTECTED_PORTS_MAX，8KB），逐位遍历在展示上限处截断并打印 '... (N protected, output truncated)'"
 }
 
 # ============================================================================

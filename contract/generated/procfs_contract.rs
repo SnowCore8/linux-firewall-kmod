@@ -20,6 +20,7 @@ pub mod path {
     pub const IP_FRAGS: &str = "/proc/firewall/ip_frags";
     pub const PORT_SCANNERS: &str = "/proc/firewall/port_scanners";
     pub const SERVICE_PROBES: &str = "/proc/firewall/service_probes";
+    pub const PROTECTED_PORTS: &str = "/proc/firewall/protected_ports";
 }
 
 /// 各条目权限位（八进制，与 proc_create 的 mode 一致）。
@@ -36,6 +37,7 @@ pub mod mode {
     pub const IP_FRAGS: u32 = 0o400;
     pub const PORT_SCANNERS: u32 = 0o400;
     pub const SERVICE_PROBES: u32 = 0o400;
+    pub const PROTECTED_PORTS: u32 = 0o400;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,4 +95,5 @@ pub mod limit {
     pub const ICMP_TYPES: usize = 128;
     pub const PORT_SCANNERS: usize = 20;
     pub const SERVICE_PROBES: usize = 20;
+    pub const PROTECTED_PORTS: usize = 256;
 }
