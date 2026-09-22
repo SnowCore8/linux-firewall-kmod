@@ -68,6 +68,17 @@
 
 封禁 lookup 在包处理热路径上（`fw_ban_lookup` 每个包调用）。分层查表改变了常数项，**必须重测**：用 `scripts/bench/` 的对照法跑新旧模块的 pps/延迟，确认无回归（内核侧验收口径是实时性/稳定性/规范性）。
 
+实测（2026-09-22，同一台机、同一 `scripts/bench/fwsweep.sh`、`insmod` 新旧模块交替，A 路径 = 白名单未命中 + 封禁表未命中，即分层查表的成本落点，单通路 3 线程、`secs=8`、重复 3 次取中位）：
+
+| 版本 | E 白名单短路 | A 两表未命中 | D 已封禁丢弃 |
+|------|------|------|------|
+| 旧（精确哈希） | 2.176 / 2.147 µs | 2.237 / 2.220 µs | 1.266 / 1.167 µs |
+| 新（分层前缀表） | 2.232 / 2.124 µs | 2.295 / 2.202 µs | 1.263 / 1.219 µs |
+
+A 路径两轮均值差 **+0.9%**，小于同一次运行内本应同路径的 E 与 C 之间的自身离散
+（0.02–0.29 µs，即 2–13%）——**无可测回归**。原因与设计一致：未封禁时位图全零，
+lookup 一次哈希即返回，与旧哈希表同阶。
+
 ## 5. daemon 侧改动
 
 ### 5.1 新纯函数
@@ -80,8 +91,14 @@
 
 ### 5.2 接入点
 
-- 判定：`src/daemon/pipeline/mod.rs` 的单 IP 判定之后，追加产出「网段意图」
-- 处置：`src/daemon/pipeline/executor.rs` 的 `dispatch_intent`，携带前缀下发内核
+- 判定：`src/daemon/pipeline/mod.rs` 的 `Pipeline::scan_clusters`——集群检测的输入是**跨 IP** 的（同一网段内有多少个不同源），单行判定只看得到一个源，凑不出这个结论，故只能周期判定
+- 处置：`src/daemon/pipeline/executor.rs` 的 `dispatch_cluster_hit`，把命中网段按 `(网络地址, prefix_len)` 下发内核
+
+**检测周期必须显著小于 `cluster.window`**（实现取 10 秒 vs 默认窗口 60 秒）。理由：`FailureWindow::peek` 按 `now - ts <= window` 计数，若检测恰好每 `window` 秒跑一次，一批刚写入的失败会在下一次检测前滑出窗口，扫描永远凑不够 `min_ips`。实测：在 `window=600` 的夹具上前者与清理周期（60 秒）同拍时，写入的 4 个源**一个也没被检出**。故检测单独一个短周期，不跟着清理周期走。
+
+检测是纯读（`detect` 不改窗口），故可远快于清理周期重复而不影响窗口状态。
+
+**下发形状**：与白名单路径一致，取 `CidrKey::addr()`（已归一，主机位为零）+ `prefix_len`，对应内核的 `(af, addr, prefix_len)` 三元组；**不要**用 `CidrKey::as_str()` 的 `a.b.c.0/24` 文本——那是给人看与当键用的。
 
 ### 5.3 配置项
 
@@ -97,8 +114,8 @@
 
 ### 5.4 误伤控制与上线顺序
 
-- 网段命中前先查白名单（`trusted_ips` 已支持 CIDR），命中白名单则放行并记日志
-- **首版以 audit 模式落地**（只记录 `集群扫描: x.x.x.0/24 命中 N 个源 IP` 到日志与指标，不封禁），观察一段确无误判再接处置
+- 网段命中前先查白名单：内核热路径的 `fw_wl_lookup` 在 `fw_ban_lookup` **之前**（`fw_hook.c`），故白名单内的主机即使落在被封网段也照样放行；另外 `fw_ban_try_add` 对「网段地址本身落在白名单覆盖范围内」的下发直接返回 `-EPERM`。两条合起来，白名单 IP 不会被网段封禁波及，无需在 daemon 侧另加白名单前检
+- **首版以 audit 模式落地**（`cluster.audit_only: true`，只记录 `检测到集群扫描` 到日志与指标，不封禁），观察一段确无误判再接处置
 
 ## 6. 验证计划
 
@@ -115,3 +132,18 @@
 1. **P1**：`decision/cluster.rs` + 单测 + audit 日志/指标（零行为变更，可独立合入）
 2. **P2**：内核 prefix 封禁（4.x）→ daemon 处置接入（5.2）+ 配置项（5.3）+ pytest
 3. 上线顺序：先 audit 观察，确认无误判后再开处置
+
+## 8. 当前实现状态
+
+P1 与 P2 均已落地（2026-09-22）：
+
+| 项 | 落点 |
+|---|---|
+| 判定算式 | `src/daemon/decision/cluster.rs`（含 9 条内嵌单测） |
+| 内核前缀封禁 | `fw_types.h` 分层桶表 + `fw_ban.c` 按 `(af, addr, prefix_len)` 匹配 |
+| 线格式 | `contract/netlink.fwidl` 的四个 ban 消息增 `prefix_len` |
+| 配置 | `YamlJail.cluster`（全字段 `Option`，逐字段覆盖默认值） |
+| 周期检测 | `Pipeline::scan_clusters`，10 秒独立周期，经 `dispatch_cluster_hit` 下发 |
+| 端到端 | `tests/test_22_cluster_scan.py`（配置接受 / 单高频 IP 不触发 / 同 /24 多源触发） |
+
+默认 `enabled: false`、`audit_only: true`——**默认关闭，且开启后首版只审计**，与 §5.4 的上线顺序一致。
