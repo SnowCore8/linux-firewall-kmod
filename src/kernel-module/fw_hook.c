@@ -16,10 +16,19 @@
  *      为了更新 seen_ports 去取速率桶锁。
  *   3. 热路径零共享 cache line 写：统计、直方图、UDP/ICMP 分布全部落本 CPU。
  *   4. 判定顺序固定为
+ *        lo 接口进入      ⇒ 放行（环回流量不是外来流量，入口即豁免、不计统计）
  *        白名单命中       ⇒ 放行（永不封禁，跳过速率判定）
  *        本机地址命中     ⇒ 放行（跳过速率判定）
  *        封禁表命中       ⇒ 丢包
- *        皆不命中且 DDoS 开启 ⇒ 速率判定，违规即自决封禁并丢包
+ *        皆不命中且 DDoS 开启且目的端口受保护 ⇒ 速率判定，违规即自决封禁并丢包
+ *      「目的端口受保护」= 该端口在本机对外监听集合中（由 daemon 扫描 procfs 的
+ *      net 表后经 netlink 下发，见 fw_ports.c）。这是**收窄速率判定的作用面**：公网能
+ *      打到的只有对外监听端口，防护聚焦于此；内部端口不参与速率判定以免误封。
+ *      门控只作用于速率判定分支——封禁表判定对其余端口照常生效，无端口报文
+ *      （ICMP / 非首片）一律视为受保护，见 fw_ports_observe()。
+ *      lo 接口豁免与旧实现一致（旧实现在入口跳过 IFF_LOOPBACK）；两者互补：
+ *      接口侧管「从 lo 进入的流量」，地址侧（源地址合法性）管「从外部接口
+ *      伪造回环源」，重写初期只保留了地址侧，这里补回接口侧。
  *      本机地址判定**必须**先于封禁表判定：新设计不再把接口地址写进白名单
  *      （本机豁免由 fw_local.c 承担），顺序颠倒会让本机地址被自己的封禁条目
  *      丢弃，违背契约「本机接口精确地址 ⇒ 直接放行」。
@@ -49,6 +58,7 @@
 #include "fw_ban.h"
 #include "fw_local.h"
 #include "fw_netlink.h"
+#include "fw_ports.h"
 #include "fw_rate.h"
 #include "fw_stats.h"
 #include "fw_wl.h"
@@ -106,11 +116,13 @@ static unsigned int fw_ban_check(u8 af, const void *src, u32 packet_len,
     return NF_ACCEPT;
   }
 
-  /* 白名单与本机地址同为「放行且不做速率判定」的短路条件 */
+  /* 白名单与本机地址同为「放行且不做速率判定」的短路条件。
+   * 端口门控只加在速率判定分支上：封禁表（jail 判定 / 手工下发）对所有端口
+   * 一律生效，受保护端口位图收窄的只是「谁参与速率判定」。 */
   if (!fw_wl_lookup(af, src) && !fw_local_lookup(af, src)) {
     if (fw_ban_lookup(af, src)) {
       banned = true;
-    } else if (likely(READ_ONCE(fw_ddos_detection))) {
+    } else if (likely(READ_ONCE(fw_ddos_detection)) && fw_ports_observe(dst_port)) {
       reason = fw_rate_observe(af, src, packet_len, protocol, tcp_flags, dst_port, &pps);
     }
   }
