@@ -59,6 +59,8 @@ pub fn parse_config_file(path: &str, cfg: &mut Config, strict: bool) -> Result<(
     let saved_log_level = cfg.log_level;
     let saved_log_destination = cfg.log_destination;
     let saved_log_format = cfg.log_format;
+    let saved_log_max_size_mb = cfg.log_max_size_mb;
+    let saved_log_max_files = cfg.log_max_files;
 
     cfg.strict_mode = strict;
 
@@ -93,6 +95,8 @@ pub fn parse_config_file(path: &str, cfg: &mut Config, strict: bool) -> Result<(
             cfg.log_level = saved_log_level;
             cfg.log_destination = saved_log_destination;
             cfg.log_format = saved_log_format;
+            cfg.log_max_size_mb = saved_log_max_size_mb;
+            cfg.log_max_files = saved_log_max_files;
             Err(e)
         }
     }

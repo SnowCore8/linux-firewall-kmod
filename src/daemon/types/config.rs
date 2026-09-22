@@ -125,6 +125,10 @@ pub struct Config {
     pub log_destination: u8,
     /// 日志格式 (0..=1, 见 `log::LogFormat`)
     pub log_format: u8,
+    /// 单片日志大小上限 (MB)。`0` = 不轮转。超过时把当前文件改名为 `.1` 并开新文件
+    pub log_max_size_mb: u32,
+    /// 日志保留片数上限，**含正在写的那个**。`1` = 只保留当前文件。超出时删最旧的一片
+    pub log_max_files: u32,
     /// YAML 严格模式开关。开启时未知 key 直接报错退出
     pub strict_mode: bool,
     /// 已加载的 Jail 列表
@@ -187,6 +191,8 @@ impl Default for Config {
             log_level: 3,       // INFO
             log_destination: 2, // BOTH
             log_format: 0,      // PLAIN
+            log_max_size_mb: 10,
+            log_max_files: 10,
             strict_mode: true,
             jails: Vec::with_capacity(MAX_JAILS),
             storage: StorageConfig::default(),

@@ -124,6 +124,8 @@ struct YamlDefaults {
     log_level: Option<u8>,
     log_destination: Option<String>,
     log_format: Option<String>,
+    log_max_size_mb: Option<u32>,
+    log_max_files: Option<u32>,
 }
 
 /// 单个 jail 的 YAML 表示。支持 `regex` 单条 + `regexes` 嵌套映射两种写法
@@ -309,6 +311,12 @@ pub fn parse_config_from(content: &str, cfg: &mut Config, runtime_override: bool
                 "json" => 1,
                 _ => bail!("Invalid log_format value: {v}"),
             };
+        }
+        if let Some(v) = defaults.log_max_size_mb {
+            cfg.log_max_size_mb = v;
+        }
+        if let Some(v) = defaults.log_max_files {
+            cfg.log_max_files = v;
         }
     }
 

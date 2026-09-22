@@ -181,7 +181,11 @@ fn main() -> Result<()> {
     }
 
     // 在守护进程化之后初始化日志系统，确保异步日志线程正确运行
-    let _log = logger::init_logger(cfg.log_file.as_deref());
+    let _log = logger::init_logger(
+        cfg.log_file.as_deref(),
+        cfg.log_max_size_mb,
+        cfg.log_max_files,
+    );
     // 设置日志文件路径（供 Web UI 日志查看器使用）
     if let Some(ref log_path) = cfg.log_file {
         if let Err(e) = web_ui::log_viewer::set_log_file(log_path.clone()) {

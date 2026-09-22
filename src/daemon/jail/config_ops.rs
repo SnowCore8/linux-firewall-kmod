@@ -34,6 +34,8 @@ pub fn config_clone(src: &Config) -> Config {
         log_level: src.log_level,
         log_destination: src.log_destination,
         log_format: src.log_format,
+        log_max_size_mb: src.log_max_size_mb,
+        log_max_files: src.log_max_files,
         strict_mode: src.strict_mode,
         jails: Vec::with_capacity(src.jails.len()),
         storage: src.storage.clone(),
@@ -77,6 +79,10 @@ pub fn config_validate(cfg: &Config) -> Result<(), String> {
     }
     if cfg.interval == 0 || cfg.interval > 60 {
         return Err(format!("invalid interval={} (must be 1..60)", cfg.interval));
+    }
+    // log_max_files 含当前文件，0 意味着「一片都不留」；log_max_size_mb=0 表示关闭轮转
+    if cfg.log_max_files == 0 {
+        return Err("log_max_files is 0 (must be >= 1)".to_string());
     }
     // metrics_port 是 u16, 范围检查在类型系统天然保证; 0 = 禁用, 1..=65535 = 监听
     if cfg.default_max_retries == 0 {
