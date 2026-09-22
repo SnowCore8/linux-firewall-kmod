@@ -173,8 +173,8 @@ void fw_nl_send_ddos_event(u8 af, const void *addr, const char *reason, u32 rate
     pr_warn_ratelimited("DdosEvent 广播失败: %d\n", ret);
 }
 
-void fw_nl_send_ban_state_change(u8 action, u8 af, const void *addr, u32 duration_secs,
-                                 const char *reason, const char *jail) {
+void fw_nl_send_ban_state_change(u8 action, u8 af, u8 prefix_len, const void *addr,
+                                 u32 duration_secs, const char *reason, const char *jail) {
   struct sk_buff *skb;
   struct nlmsghdr *nlh;
   struct fw_ban_state_change *e;
@@ -188,6 +188,7 @@ void fw_nl_send_ban_state_change(u8 action, u8 af, const void *addr, u32 duratio
   e = nlmsg_data(nlh);
   e->action = action;
   e->af = af;
+  e->prefix_len = prefix_len;
   e->duration_secs = cpu_to_be32(duration_secs);
   fw_nl_copy_addr(e->addr, af, addr);
   fw_nl_copy_str(e->reason, sizeof(e->reason), reason);
@@ -373,6 +374,7 @@ static void fw_nl_send_bans_page(u32 portid, u32 seq, u32 offset, u32 limit, u32
   for (i = 0; i < got; i++) {
     out[i].af = rows[i].af;
     out[i].is_permanent = rows[i].is_permanent;
+    out[i].prefix_len = rows[i].prefix_len;
     out[i].duration_secs = cpu_to_be32(rows[i].duration_secs);
     out[i].banned_at = cpu_to_be64(rows[i].banned_at);
     fw_nl_copy_addr(out[i].addr, rows[i].af, &rows[i].addr);
@@ -704,19 +706,25 @@ static u32 fw_nl_apply_config(const struct fw_set_config *c) {
   return rejected;
 }
 
-static void fw_nl_handle_ban(u32 portid, u16 type, u8 af, const void *addr,
-                             u32 duration, const char *reason) {
+/*
+ * 封禁/解封指令。prefix_len 由 daemon 下发（32/128 = 精确单机，与加该字段之前
+ * 的语义等价）；越界前缀长度由封禁表按 -EINVAL 拒绝。条目身份是三元组
+ * (af, addr, prefix_len)，故解封必须带同一个前缀长度才能命中。
+ */
+static void fw_nl_handle_ban(u32 portid, u16 type, u8 af, u8 prefix_len,
+                             const void *addr, u32 duration, const char *reason) {
   int ret;
 
   if (type == FW_MSG_TYPE_UNBAN_IP) {
-    ret = fw_ban_del(af, addr, true);
+    ret = fw_ban_del(af, addr, prefix_len, true);
     if (ret)
       fw_nl_send_cmd_result(portid, type, ret, af, addr);
     return;
   }
 
   /* 封禁理由缺省为 "manual"，便于在 bans 列表里辨识来源 */
-  ret = fw_ban_try_add(af, addr, duration, reason[0] ? reason : "manual", NULL, true);
+  ret = fw_ban_try_add(
+    af, addr, prefix_len, duration, reason[0] ? reason : "manual", NULL, true);
   if (ret)
     fw_nl_send_cmd_result(portid, type, ret, af, addr);
 }
@@ -867,7 +875,7 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
         break;
       }
       c = (const struct fw_ban_ip *)h;
-      fw_nl_handle_ban(portid, type, c->af, c->addr,
+      fw_nl_handle_ban(portid, type, c->af, c->prefix_len, c->addr,
                        be32_to_cpu(c->duration_secs), (const char *)c->reason);
       break;
     }

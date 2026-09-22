@@ -227,10 +227,16 @@ static ssize_t bans_write(struct file *file, const char __user *buf,
   if (ret)
     return ret;
 
+  /*
+   * procfs 文本协议只接受纯地址（contract/procfs.fwidl 的 write bans 是 "<ip>"），
+   * 故这里一律按**精确单机**（全长前缀）封禁/解封——与加 prefix_len 之前的行为
+   * 完全一致。网段（/24 这类）条目只能由 netlink 下发，本文件不认 CIDR 写法。
+   */
   if (is_unban)
-    ret = fw_ban_del(af, &addr, true);
+    ret = fw_ban_del(af, &addr, fw_max_prefix_len(af), true);
   else
-    ret = fw_ban_try_add(af, &addr, has_duration ? duration : (u32)READ_ONCE(fw_ban_time),
+    ret = fw_ban_try_add(af, &addr, fw_max_prefix_len(af),
+                         has_duration ? duration : (u32)READ_ONCE(fw_ban_time),
                          "procfs", NULL, true);
   if (ret)
     return ret;
@@ -258,10 +264,21 @@ static int bans_show(struct seq_file *m, void *v) {
 
     for (i = 0; i < got; i++) {
       struct fw_ban_row *r = &rows[i];
+      char entry[FW_INET6_STR_LEN + 5]; /* "<ip>" 或 "<ip>/<prefix_len>" */
 
       fw_addr_to_str(r->af, &r->addr, ip_str, sizeof(ip_str));
+      /*
+       * 精确单机条目按旧样只打地址（既有解析与文档都按这个形状写）；网段条目必须
+       * 带 "/前缀"，否则 /24 与其内某台主机的单机条目在列表里看不出区别（daemon
+       * 的集群封禁就落在这一层）。bans 的 read_format 是 unstable，允许重排版。
+       */
+      if (r->prefix_len == fw_max_prefix_len(r->af))
+        snprintf(entry, sizeof(entry), "%s", ip_str);
+      else
+        snprintf(entry, sizeof(entry), "%s/%u", ip_str, r->prefix_len);
+
       if (r->is_permanent) {
-        seq_printf(m, "%-40s (permanent)\n", ip_str);
+        seq_printf(m, "%-40s (permanent)\n", entry);
         permanent++;
         count++;
       } else {
@@ -270,7 +287,7 @@ static int bans_show(struct seq_file *m, void *v) {
         /* 已过期待摘链的条目不再显示（与旧实现一致） */
         if (now_unix >= expiry)
           continue;
-        seq_printf(m, "%-40s (expires in %lu seconds)\n", ip_str,
+        seq_printf(m, "%-40s (expires in %lu seconds)\n", entry,
                    (unsigned long)(expiry - now_unix));
         temporary++;
         count++;

@@ -144,7 +144,8 @@ static unsigned int fw_ban_check(u8 af, const void *src, u32 packet_len,
     if (!duration)
       duration = READ_ONCE(fw_ban_time);
 
-    fw_ban_try_add(af, src, duration, reason, FW_HOOK_DDOS_JAIL, true);
+    /* 自决封禁针对单个源 IP：全长前缀（精确单机），网段封禁只由 daemon 下发 */
+    fw_ban_try_add(af, src, fw_max_prefix_len(af), duration, reason, FW_HOOK_DDOS_JAIL, true);
     fw_nl_send_ddos_event(af, src, reason, pps > 0xFFFFFFFFULL ? 0xFFFFFFFFU : (u32)pps);
     return NF_DROP;
   }

@@ -28,9 +28,10 @@ void fw_netlink_exit(void);
 /* DdosEvent：内核自决封禁时推送，rate_pps 为触发时的速率 */
 void fw_nl_send_ddos_event(u8 af, const void *addr, const char *reason, u32 rate_pps);
 
-/* BanStateChange：封禁/解封（含自动到期）时推送 */
-void fw_nl_send_ban_state_change(u8 action, u8 af, const void *addr, u32 duration_secs,
-                                 const char *reason, const char *jail);
+/* BanStateChange：封禁/解封（含自动到期）时推送。prefix_len 随事件下发（32/128
+ * 表示精确单机），daemon 据此在封禁列表里区分单机与网段条目 */
+void fw_nl_send_ban_state_change(u8 action, u8 af, u8 prefix_len, const void *addr,
+                                 u32 duration_secs, const char *reason, const char *jail);
 
 /* WhitelistStateChange：白名单增删时推送 */
 void fw_nl_send_whitelist_state_change(u8 action, u8 af, const void *addr,

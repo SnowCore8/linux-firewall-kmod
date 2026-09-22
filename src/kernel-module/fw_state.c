@@ -423,7 +423,13 @@ static int fw_state_restore_ban(const char *rest, u8 af) {
    * 外部时点求得的正确起点（供 UI 显示封禁时刻用）。
    */
   now = ktime_get_real_seconds();
-  ret = fw_ban_restore(af, &addr, (u32)remaining, remaining ? now : 0,
+  /*
+   * 状态文件的行格式（BAN_V4/V6 <ip> <remaining> <jail> <reason>）是运维契约，
+   * 不带前缀长度字段，故恢复一律按**精确单机**（全长前缀）解释；网段条目在重启
+   * 后降级为「其网段地址那一个主机」——要保住网段需扩展该契约格式（未做）。
+   */
+  ret = fw_ban_restore(af, &addr, fw_max_prefix_len(af), (u32)remaining,
+                       remaining ? now : 0,
                        reason_str && reason_str[0] ? reason_str : "restored",
                        jail_str && jail_str[0] ? jail_str : "api");
 

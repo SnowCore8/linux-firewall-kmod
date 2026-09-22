@@ -11,7 +11,9 @@
  *
  * 锁顺序协议（必须遵守，违反即死锁）
  * ----------------------------------
- *   ban_locks[bkt]  (spin_lock_bh)
+ *   ban 层桶锁      (spin_lock_bh，每层每桶一把，见 struct fw_ban_layer)
+ *   ban_layer_lock  (spin_lock_bh，封禁表「已用前缀长度」位图与层计数)
+ *     └─ 与桶锁**不嵌套**：层内增删在桶锁内完成，位图维护在桶锁释放之后
  *   wl_lock         (spin_lock_bh)
  *   rate_locks[bkt] (spin_lock_bh)
  *     └─ rate_slot_lock 唯一允许的嵌套：建速率条目时「探测空槽 + 发布」必须原子
@@ -29,6 +31,7 @@
 #define FW_TYPES_H
 
 #include <linux/atomic.h>
+#include <linux/bitmap.h>
 #include <linux/errno.h>
 #include <linux/hash.h>
 #include <linux/if_addr.h>
@@ -68,9 +71,17 @@
  * 表规模常量
  * ==========================================================================*/
 
-/* 封禁表：4096 桶；条目数量上限由 fw_max_ban_entries 控制（不再无上限） */
+/* 封禁表：按 prefix_len 分层，每层一组桶头；条目上限由 fw_max_ban_entries 控制。
+ *
+ * 全长层（IPv4 /32、IPv6 /128）承载「精确单机」封禁——既有全部调用点都是它，
+ * 桶数与旧实现一致（BAN_HASH_SIZE），热路径常数项不变。更短的前缀层（/24 这类
+ * 网段封禁）条目稀少，每层用小桶数组即可，避免 129 组大桶数组把段撑大。 */
 #define BAN_HASH_BITS 12
 #define BAN_HASH_SIZE (1 << BAN_HASH_BITS)
+/* 层下标即 prefix_len：IPv6 最长 128，故 129 层（IPv4 只用前 33 层） */
+#define BAN_MAX_LAYERS 129
+#define BAN_SHORT_LAYER_BITS 6 /* 短前缀层每层 64 桶 */
+#define BAN_SHORT_LAYER_SIZE (1 << BAN_SHORT_LAYER_BITS)
 
 /* 白名单：64 精确桶 + 子网链；条目上限由 fw_max_whitelist_entries 控制 */
 #define WHITELIST_HASH_BITS 6
@@ -203,6 +214,7 @@ struct fw_wl_entry {
 /* 封禁条目：per-entry 定时器负责到期摘链，无全局清理线程 */
 struct fw_ban_node {
   u8 af;
+  u8 prefix_len; /* 32/128 = 精确单机；更短 = 网段封禁（条目身份的一部分） */
   u8 is_permanent;
   u32 duration_secs; /* 本次封禁时长（秒），永久为 0；续期时更新 */
   unsigned long banned_at;     /* jiffies */
@@ -213,6 +225,47 @@ struct fw_ban_node {
   struct hlist_node hash;
   struct rcu_head rcu;
   struct timer_list expire_timer;
+};
+
+/*
+ * 封禁表的一层（一个前缀长度）：
+ *
+ *   - buckets/locks 指向该层的桶头与同宽锁数组。全长层复用表内的 full_buckets /
+ *     full_locks（与旧实现同规模），短前缀层用本层内嵌的小数组——两者访问方式
+ *     统一，因此增删查代码不必为全长层写特例。
+ *   - bucket_bits 是该层的桶索引位宽（桶数 = 1 << bucket_bits）。
+ *   - count 记录层内条目数：它是「该层是否还非空」的判据，位图清位必须有它，
+ *     否则无法在 O(1) 内判断层已空（逐桶扫描是 O(层桶数)）。
+ */
+struct fw_ban_layer {
+  struct hlist_head *buckets;
+  spinlock_t *locks;
+  u8 bucket_bits;
+  u8 pad[3];
+  atomic_t count;
+  struct hlist_head short_buckets[BAN_SHORT_LAYER_SIZE];
+  spinlock_t short_locks[BAN_SHORT_LAYER_SIZE];
+};
+
+/*
+ * 封禁表（按前缀长度分层，见 docs/zh/development/cluster-detection-design.md §4.2）
+ *
+ * 前缀封禁无法用「按完整地址哈希」直接命中：同一 /24 内不同源 IP 会散落到不同桶；
+ * 而逐层探测（每个候选前缀长度各算一次哈希）在 IPv4 要 32 次、IPv6 要 129 次，
+ * 热路径不可接受。分层后查询只遍历 used 位图中置位的层（常态 1–3 层），每层一次
+ * 哈希；层内桶索引按**该层前缀归一化后的地址**计算，所以同一网段内任意源 IP 必然
+ * 落到同一桶。
+ *
+ * used 位图（bit i = 层 i 非空）由 fw_ban_layer_mark/unmark 在增删时维护，
+ * 清位判据见那两个函数的注释。
+ */
+struct fw_ban_table {
+  u8 max_prefix; /* IPv4 32 / IPv6 128：最长前缀即「精确单机」层 */
+  u8 pad[3];
+  struct hlist_head full_buckets[BAN_HASH_SIZE]; /* 全长层的桶头 */
+  spinlock_t full_locks[BAN_HASH_SIZE];          /* 全长层的桶锁 */
+  struct fw_ban_layer layers[BAN_MAX_LAYERS];    /* 下标即 prefix_len */
+  DECLARE_BITMAP(used, BAN_MAX_LAYERS); /* 已用前缀长度位图（热路径只读） */
 };
 
 /*
@@ -374,6 +427,7 @@ struct fw_scanner_row {
 struct fw_ban_row {
   u8 af;
   u8 is_permanent;
+  u8 prefix_len;
   u32 duration_secs;
   u64 banned_at; /* Unix 秒 */
   union fw_addr addr;
@@ -512,9 +566,9 @@ struct fw_stats_snapshot {
  */
 struct fw_info {
   /* ---- 封禁表（fw_ban.c） ---- */
-  DECLARE_HASHTABLE(ban_ipv4, BAN_HASH_BITS);
-  DECLARE_HASHTABLE(ban_ipv6, BAN_HASH_BITS);
-  spinlock_t ban_locks[BAN_HASH_SIZE];
+  struct fw_ban_table ban_v4;
+  struct fw_ban_table ban_v6;
+  spinlock_t ban_layer_lock; /* 保护两张表的 used 位图与层计数（见 fw_ban.c mark/unmark） */
   atomic_t ban_count;
   unsigned int max_ban_entries;
 
@@ -655,9 +709,17 @@ static inline u32 fw_hash_addr(u8 af, const void *ip, int bits) {
 }
 
 /*
+ * 地址族的最长前缀：即「精确单机」的前缀长度（IPv4 /32、IPv6 /128）。
+ * 封禁表按它区分全长层与短前缀层；调用点用它补齐旧接口缺省的前缀长度。
+ */
+static inline u8 fw_max_prefix_len(u8 af) {
+  return af == FW_AF_INET6 ? 128 : 32;
+}
+
+/*
  * 前缀匹配：地址是否落在 network/prefix_len 内。
- * 白名单子网链与「白名单变更 → 解封联动」共用本原语，避免两处各写一套。
- * 前缀长度合法性由调用方保证。
+ * 白名单子网链、封禁表热路径与「白名单变更 → 解封联动」共用本原语，
+ * 避免多处各写一套前缀比较（两套必然漂移）。前缀长度合法性由调用方保证。
  */
 static inline bool fw_prefix_match(u8 af, const void *ip, const void *network, u8 prefix_len) {
   if (af == FW_AF_INET) {
