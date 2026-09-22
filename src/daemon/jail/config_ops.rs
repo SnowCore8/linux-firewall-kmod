@@ -5,6 +5,16 @@ use crate::types::{Config, Jail, MAX_JAILS};
 
 use super::operations::clone_jail;
 
+/// 集群检测允许的最短 IPv4 聚合前缀。
+///
+/// 命中后封的是整个聚合网段，前缀过短会一次封掉远超预期的地址范围
+/// （`/1` 即半个 IPv4 空间）。`/16` 是"至少一个机构级网段"的保守下限，
+/// 实际用途（`/24`、`/16`）都在其上。
+const MIN_PREFIX_V4: u8 = 16;
+
+/// 集群检测允许的最短 IPv6 聚合前缀（与 IPv4 同理，`/32` 对应一个站点级网段）。
+const MIN_PREFIX_V6: u8 = 32;
+
 pub fn config_clone(src: &Config) -> Config {
     // 显式列出所有 Config 字段（不使用 `..Config::default()`），
     // 确保未来新增字段时编译器强制报错，防止热重载静默丢失字段值
@@ -122,6 +132,24 @@ pub fn config_validate(cfg: &Config) -> Result<(), String> {
                     jail.name, jail.cluster.prefix_v6
                 ));
             }
+            // 下界必须挡住：命中后封的是**整个聚合网段**，前缀过短等于封掉半个
+            // 互联网——`prefix_v4=1` 会把 `203.0.113.7` 归一到 `128.0.0.0/1`。
+            // 取 16/32 是"至少一个机构级网段"的保守下限；合法用途（/24、/16）
+            // 都在其上。
+            if jail.cluster.prefix_v4 < MIN_PREFIX_V4 {
+                return Err(format!(
+                    "Jail '{}' has cluster.prefix_v4={} (must be >={MIN_PREFIX_V4}): \
+                     封禁按整个聚合网段下发，前缀过短会波及远超预期的地址范围",
+                    jail.name, jail.cluster.prefix_v4
+                ));
+            }
+            if jail.cluster.prefix_v6 < MIN_PREFIX_V6 {
+                return Err(format!(
+                    "Jail '{}' has cluster.prefix_v6={} (must be >={MIN_PREFIX_V6}): \
+                     封禁按整个聚合网段下发，前缀过短会波及远超预期的地址范围",
+                    jail.name, jail.cluster.prefix_v6
+                ));
+            }
             // `max_per_ip` 超过 `min_ips` 时不拒绝（仍是合法配置），但第二条判据
             // 「每 IP 失败数 ≤ max_per_ip」会失去区分度：每 IP 允许的失败数一旦
             // 赶上命中门槛，高频出口（CGNAT、单出口多用户）也会被算作低频而误封。
@@ -185,4 +213,62 @@ pub fn free_config_partial(cfg: &mut Config) {
     cfg.metrics_bind_address.clear();
     cfg.metrics_username = None;
     cfg.metrics_password = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::decision::ClusterConfig;
+
+    /// 启用集群检测、前缀取 `prefix` 的单个 jail 配置。
+    ///
+    /// 需带日志文件与一条正则，否则校验会先在前置检查（`no log files`）处返回，
+    /// 走不到 cluster 段。
+    fn cfg_with_prefix_v4(prefix: u8) -> Config {
+        let mut jail = Jail::new("sshd".to_string());
+        jail.log_files = vec!["/var/log/auth.log".to_string()];
+        jail.regexes = vec![crate::types::RegexInfo::new(
+            "default".to_string(),
+            r"Failed password from (\d+\.\d+\.\d+\.\d+)".to_string(),
+        )];
+        // 阈值三项也必须合法，否则校验会先在那里返回、走不到 cluster 段。
+        jail.max_retries = 5;
+        jail.findtime = 600;
+        jail.ban_time = 600;
+        jail.cluster = ClusterConfig {
+            enabled: true,
+            prefix_v4: prefix,
+            ..ClusterConfig::default()
+        };
+        Config {
+            jails: vec![jail],
+            ..Config::default()
+        }
+    }
+
+    /// 下界是**安全**约束而非风格约束：命中后封的是整个聚合网段，前缀过短会
+    /// 一次封掉远超预期的地址范围（`/1` 即半个 IPv4 空间），故必须拒绝。
+    #[test]
+    fn cluster_prefix_below_the_floor_is_rejected() {
+        let err = config_validate(&cfg_with_prefix_v4(MIN_PREFIX_V4 - 1))
+            .expect_err("低于下限的 prefix_v4 应拒绝");
+        assert!(err.contains("prefix_v4"), "错误信息应点出违规字段: {err}");
+
+        assert!(
+            config_validate(&cfg_with_prefix_v4(MIN_PREFIX_V4)).is_ok(),
+            "恰好等于下限应通过"
+        );
+        assert!(
+            config_validate(&cfg_with_prefix_v4(24)).is_ok(),
+            "默认量级（/24）应通过"
+        );
+    }
+
+    /// 上界（IPv4 /32、IPv6 /128）仍被拒绝——与下界是两条独立断言。
+    #[test]
+    fn cluster_prefix_above_the_width_is_rejected() {
+        let err =
+            config_validate(&cfg_with_prefix_v4(33)).expect_err("超过 32 的 prefix_v4 应拒绝");
+        assert!(err.contains("prefix_v4"), "错误信息应点出违规字段: {err}");
+    }
 }
