@@ -95,6 +95,46 @@ pub fn config_validate(cfg: &Config) -> Result<(), String> {
                 jail.name, jail.ban_time
             ));
         }
+        // 集群扫描检测：仅在启用时校验。`window` / `min_ips` 为 0 会让 `detect` 直接
+        // 返回空（退化分支），用户以为开着而实际永不触发，故按硬错误拒绝。
+        if jail.cluster.enabled {
+            if jail.cluster.window == 0 {
+                return Err(format!(
+                    "Jail '{}' has cluster.window=0 (must be >0 when cluster.enabled)",
+                    jail.name
+                ));
+            }
+            if jail.cluster.min_ips == 0 {
+                return Err(format!(
+                    "Jail '{}' has cluster.min_ips=0 (must be >0 when cluster.enabled)",
+                    jail.name
+                ));
+            }
+            if jail.cluster.prefix_v4 > 32 {
+                return Err(format!(
+                    "Jail '{}' has cluster.prefix_v4={} (must be <=32)",
+                    jail.name, jail.cluster.prefix_v4
+                ));
+            }
+            if jail.cluster.prefix_v6 > 128 {
+                return Err(format!(
+                    "Jail '{}' has cluster.prefix_v6={} (must be <=128)",
+                    jail.name, jail.cluster.prefix_v6
+                ));
+            }
+            // `max_per_ip` 超过 `min_ips` 时不拒绝（仍是合法配置），但第二条判据
+            // 「每 IP 失败数 ≤ max_per_ip」会失去区分度：每 IP 允许的失败数一旦
+            // 赶上命中门槛，高频出口（CGNAT、单出口多用户）也会被算作低频而误封。
+            if jail.cluster.max_per_ip > jail.cluster.min_ips {
+                crate::logger::warn!(
+                    crate::logger::get(),
+                    "cluster.max_per_ip 大于 min_ips，判定会误纳高频出口（建议 max_per_ip <= min_ips）";
+                    "jail" => &jail.name,
+                    "min_ips" => jail.cluster.min_ips,
+                    "max_per_ip" => jail.cluster.max_per_ip
+                );
+            }
+        }
     }
 
     Ok(())

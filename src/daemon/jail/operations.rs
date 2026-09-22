@@ -82,6 +82,8 @@ pub fn clone_jail(dst: &mut Jail, src: &Jail) -> Result<(), String> {
     dst.max_retries = src.max_retries;
     dst.findtime = src.findtime;
     dst.ban_time = src.ban_time;
+    // `cluster` 是 Copy 的纯配置结构（无运行时态），整份复制
+    dst.cluster = src.cluster;
     dst.max_retries_set = src.max_retries_set;
     dst.findtime_set = src.findtime_set;
     dst.ban_time_set = src.ban_time_set;

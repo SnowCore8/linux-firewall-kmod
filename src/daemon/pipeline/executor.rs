@@ -817,7 +817,8 @@ impl InboundExecutor {
         for jail in &self.cfg.jails {
             let name: Arc<str> = Arc::from(jail.name.as_str());
             let rules = rule_set_for(jail);
-            let policy = JailPolicy::new(jail.max_retries, jail.findtime, jail.ban_time);
+            let policy =
+                JailPolicy::new(jail.max_retries, jail.findtime, jail.ban_time, jail.cluster);
             self.pipeline.register_jail(rules, policy);
             keep.push(name);
         }

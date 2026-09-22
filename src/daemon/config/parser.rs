@@ -140,6 +140,33 @@ struct YamlJail {
     /// 嵌套 regexes 映射: `{ name: { pattern: "..." }, ... }`
     #[serde(default)]
     regexes: HashMap<String, YamlRegexEntry>,
+    /// 集群扫描检测段 (`cluster:`)。整段缺省 = 保持默认（关闭检测）
+    cluster: Option<YamlCluster>,
+}
+
+/// 单个 jail 的集群扫描检测配置 (`cluster:` 段)。
+///
+/// 全字段 `Option`：**只有显式给出的字段才覆盖默认值**，未给出的字段保留
+/// [`crate::decision::ClusterConfig::default()`] 中的对应值（见 `apply_jail_definition`）。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct YamlCluster {
+    /// 是否启用集群检测（默认关闭）
+    enabled: Option<bool>,
+    /// 只记录不封禁（默认 `true`，上线初期观察用）
+    audit_only: Option<bool>,
+    /// IPv4 聚合前缀长度
+    prefix_v4: Option<u8>,
+    /// IPv6 聚合前缀长度
+    prefix_v6: Option<u8>,
+    /// 观测窗口（秒）
+    window: Option<u32>,
+    /// 命中所需的最小不同源 IP 数
+    min_ips: Option<u32>,
+    /// 单个源 IP 允许的失败数上限（超过则视为高频而排除）
+    max_per_ip: Option<u32>,
+    /// 命中后该网段的封禁时长（秒）
+    ban_time: Option<u32>,
 }
 
 /// 嵌套 `regexes` 映射的 value 结构
@@ -483,6 +510,35 @@ fn apply_jail_definition(jail: &mut Jail, yaml_jail: &YamlJail) {
     if let Some(ban_time) = yaml_jail.ban_time {
         jail.ban_time = ban_time;
         jail.ban_time_set = true;
+    }
+
+    // 集群扫描检测：`cluster:` 整段缺省时保持 `ClusterConfig::default()`（默认关闭）；
+    // 段内同样只覆盖显式给出的字段，未给出的保留默认值——与其他字段的合并语义一致。
+    if let Some(ref cluster) = yaml_jail.cluster {
+        if let Some(enabled) = cluster.enabled {
+            jail.cluster.enabled = enabled;
+        }
+        if let Some(audit_only) = cluster.audit_only {
+            jail.cluster.audit_only = audit_only;
+        }
+        if let Some(prefix_v4) = cluster.prefix_v4 {
+            jail.cluster.prefix_v4 = prefix_v4;
+        }
+        if let Some(prefix_v6) = cluster.prefix_v6 {
+            jail.cluster.prefix_v6 = prefix_v6;
+        }
+        if let Some(window) = cluster.window {
+            jail.cluster.window = window;
+        }
+        if let Some(min_ips) = cluster.min_ips {
+            jail.cluster.min_ips = min_ips;
+        }
+        if let Some(max_per_ip) = cluster.max_per_ip {
+            jail.cluster.max_per_ip = max_per_ip;
+        }
+        if let Some(ban_time) = cluster.ban_time {
+            jail.cluster.ban_time = ban_time;
+        }
     }
 
     // 正则：后加载的定义只要给出了正则就整体替换（而非叠加），否则同一个 jail

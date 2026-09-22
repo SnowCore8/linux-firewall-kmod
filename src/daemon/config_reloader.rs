@@ -19,6 +19,7 @@ use std::sync::atomic::Ordering;
 
 use anyhow::Result;
 
+use crate::decision::ClusterConfig;
 use crate::jail;
 use crate::types::{Config, DAEMON_STATS};
 
@@ -86,6 +87,8 @@ struct JailSnapshot {
     max_retries: u32,
     findtime: u32,
     ban_time: i32,
+    /// 集群扫描检测参数（Copy 结构，无运行时态）
+    cluster: ClusterConfig,
 }
 
 /// 配置快照（用于版本历史和回滚）
@@ -106,7 +109,7 @@ struct ConfigSnapshot {
     metrics_bind_address: String,
     metrics_username: Option<String>,
     metrics_password: Option<String>,
-    /// Jail 可回滚字段（max_retries/findtime/ban_time/enabled）
+    /// Jail 可回滚字段（max_retries/findtime/ban_time/enabled/cluster）
     jails: Vec<JailSnapshot>,
 }
 
@@ -121,6 +124,7 @@ fn save_config_snapshot(cfg: &Config) {
             max_retries: j.max_retries,
             findtime: j.findtime,
             ban_time: j.ban_time,
+            cluster: j.cluster,
         })
         .collect();
 
@@ -170,6 +174,7 @@ pub fn rollback_config(cfg: &mut Config) -> Result<()> {
             jail.max_retries = jail_snap.max_retries;
             jail.findtime = jail_snap.findtime;
             jail.ban_time = jail_snap.ban_time;
+            jail.cluster = jail_snap.cluster;
         }
     }
 

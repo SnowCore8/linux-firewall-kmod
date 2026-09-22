@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
 
 use parking_lot::RwLock;
+
+use crate::decision::ClusterConfig;
 // ============================================================================
 // 常量
 // ============================================================================
@@ -146,6 +148,10 @@ pub struct Jail {
     pub findtime: u32,
     /// 封禁时长 (秒)。`-1` 表示永久封禁
     pub ban_time: i32,
+    /// 集群扫描检测参数 (来自 jail 配置的 `cluster` 段)。
+    ///
+    /// 整段缺省时保持 [`ClusterConfig::default()`] (默认关闭检测)。
+    pub cluster: ClusterConfig,
     /// `*_set` 标志区分"用户显式配置"与"智能默认推断",避免被默认值覆盖
     pub max_retries_set: bool,
     pub findtime_set: bool,
@@ -171,6 +177,7 @@ impl Jail {
             max_retries: 0,
             findtime: 0,
             ban_time: 0,
+            cluster: ClusterConfig::default(),
             max_retries_set: false,
             findtime_set: false,
             ban_time_set: false,

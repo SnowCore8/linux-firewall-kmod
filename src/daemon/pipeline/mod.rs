@@ -16,7 +16,9 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use crate::decision::{effective_threshold, is_internal, plan_ban, BanPlan, FailureWindow};
+use crate::decision::{
+    effective_threshold, is_internal, plan_ban, BanPlan, ClusterConfig, FailureWindow,
+};
 use crate::ingest::SourceId;
 use crate::parse::{LineSplitter, MatchVia, RuleSet, SplitStats};
 
@@ -59,16 +61,24 @@ pub struct JailPolicy {
     pub findtime: u32,
     /// 封禁时长（秒）；负值表示配置级永久封禁。
     pub ban_time: i32,
+    /// 集群扫描检测参数（来自同一 jail 的 `cluster` 段）。
+    pub cluster: ClusterConfig,
 }
 
 impl JailPolicy {
     /// 构造判定参数。
     #[must_use]
-    pub const fn new(max_retries: u32, findtime: u32, ban_time: i32) -> Self {
+    pub const fn new(
+        max_retries: u32,
+        findtime: u32,
+        ban_time: i32,
+        cluster: ClusterConfig,
+    ) -> Self {
         Self {
             max_retries,
             findtime,
             ban_time,
+            cluster,
         }
     }
 }
@@ -481,7 +491,10 @@ mod tests {
     fn threshold_reached_produces_intent_with_base_duration() {
         let mut p = Pipeline::new();
         // 阈值 3、窗口 600、封禁 600 秒。
-        p.register_jail(sshd_rules(), JailPolicy::new(3, 600, 600));
+        p.register_jail(
+            sshd_rules(),
+            JailPolicy::new(3, 600, 600, ClusterConfig::default()),
+        );
         let jail: Arc<str> = Arc::from("sshd");
         let src = SourceId::from_raw(1);
         let facts = Facts {
@@ -526,7 +539,10 @@ mod tests {
     fn internal_and_peak_multipliers_raise_the_threshold() {
         // 内网(×2.0) + 高峰(×1.5) + 信誉满分(×1.0)：阈值 3 → ceil(9.0) = 9。
         let mut p = Pipeline::new();
-        p.register_jail(sshd_rules(), JailPolicy::new(3, 600, 600));
+        p.register_jail(
+            sshd_rules(),
+            JailPolicy::new(3, 600, 600, ClusterConfig::default()),
+        );
         let jail: Arc<str> = Arc::from("sshd");
         let src = SourceId::from_raw(2);
         let facts = Facts {
@@ -564,7 +580,10 @@ mod tests {
     #[test]
     fn lines_split_across_chunks_join_before_parsing() {
         let mut p = Pipeline::new();
-        p.register_jail(sshd_rules(), JailPolicy::new(1, 600, 600));
+        p.register_jail(
+            sshd_rules(),
+            JailPolicy::new(1, 600, 600, ClusterConfig::default()),
+        );
         let jail: Arc<str> = Arc::from("sshd");
         let src = SourceId::from_raw(3);
         let facts = Facts {
@@ -591,7 +610,10 @@ mod tests {
     #[test]
     fn flush_source_handles_the_final_unterminated_line() {
         let mut p = Pipeline::new();
-        p.register_jail(sshd_rules(), JailPolicy::new(1, 600, 600));
+        p.register_jail(
+            sshd_rules(),
+            JailPolicy::new(1, 600, 600, ClusterConfig::default()),
+        );
         let jail: Arc<str> = Arc::from("sshd");
         let src = SourceId::from_raw(4);
         let facts = Facts {
@@ -622,7 +644,10 @@ mod tests {
     #[test]
     fn rotated_source_drops_the_pending_half_line() {
         let mut p = Pipeline::new();
-        p.register_jail(sshd_rules(), JailPolicy::new(1, 600, 600));
+        p.register_jail(
+            sshd_rules(),
+            JailPolicy::new(1, 600, 600, ClusterConfig::default()),
+        );
         let jail: Arc<str> = Arc::from("sshd");
         let src = SourceId::from_raw(5);
         let facts = NoHistory;
@@ -653,7 +678,10 @@ mod tests {
     #[test]
     fn forget_source_releases_the_splitter() {
         let mut p = Pipeline::new();
-        p.register_jail(sshd_rules(), JailPolicy::new(5, 600, 600));
+        p.register_jail(
+            sshd_rules(),
+            JailPolicy::new(5, 600, 600, ClusterConfig::default()),
+        );
         let jail: Arc<str> = Arc::from("sshd");
         let src = SourceId::from_raw(6);
         let mut out = Vec::new();
@@ -673,7 +701,10 @@ mod tests {
     #[test]
     fn register_jail_preserves_the_failure_window_across_reload() {
         let mut p = Pipeline::new();
-        p.register_jail(sshd_rules(), JailPolicy::new(3, 600, 600));
+        p.register_jail(
+            sshd_rules(),
+            JailPolicy::new(3, 600, 600, ClusterConfig::default()),
+        );
         let jail: Arc<str> = Arc::from("sshd");
         let src = SourceId::from_raw(7);
         let facts = Facts {
@@ -689,7 +720,10 @@ mod tests {
         assert!(out.is_empty());
 
         // 重载配置：窗口必须保留，否则攻击者可用 SIGHUP 清零计数。
-        p.register_jail(sshd_rules(), JailPolicy::new(3, 600, 600));
+        p.register_jail(
+            sshd_rules(),
+            JailPolicy::new(3, 600, 600, ClusterConfig::default()),
+        );
         assert!(p.has_jail("sshd"));
 
         p.on_chunk(
@@ -707,7 +741,10 @@ mod tests {
     #[test]
     fn cleanup_expires_stale_entries() {
         let mut p = Pipeline::new();
-        p.register_jail(sshd_rules(), JailPolicy::new(5, 100, 600));
+        p.register_jail(
+            sshd_rules(),
+            JailPolicy::new(5, 100, 600, ClusterConfig::default()),
+        );
         let jail: Arc<str> = Arc::from("sshd");
         let src = SourceId::from_raw(8);
         let mut out = Vec::new();
@@ -729,7 +766,10 @@ mod tests {
     #[test]
     fn progressive_escalation_across_bans() {
         let mut p = Pipeline::new();
-        p.register_jail(sshd_rules(), JailPolicy::new(1, 600, 600));
+        p.register_jail(
+            sshd_rules(),
+            JailPolicy::new(1, 600, 600, ClusterConfig::default()),
+        );
         let jail: Arc<str> = Arc::from("sshd");
         let src = SourceId::from_raw(9);
         let tick = Tick::new(50, false);
@@ -761,7 +801,10 @@ mod tests {
     fn fallback_keyword_line_still_yields_an_ip() {
         // 含 `authentication failure` 关键字但**不**匹配 sshd 正则：应走回退路径。
         let mut p = Pipeline::new();
-        p.register_jail(sshd_rules(), JailPolicy::new(1, 600, 600));
+        p.register_jail(
+            sshd_rules(),
+            JailPolicy::new(1, 600, 600, ClusterConfig::default()),
+        );
         let jail: Arc<str> = Arc::from("sshd");
         let src = SourceId::from_raw(10);
         let mut out = Vec::new();
@@ -812,7 +855,10 @@ mod tests {
         }
 
         let mut p = Pipeline::new();
-        p.register_jail(sshd_rules(), JailPolicy::new(12, 600, 600));
+        p.register_jail(
+            sshd_rules(),
+            JailPolicy::new(12, 600, 600, ClusterConfig::default()),
+        );
         let jail: Arc<str> = Arc::from("sshd");
         let src = SourceId::from_raw(11);
         let facts = DecayingFacts {

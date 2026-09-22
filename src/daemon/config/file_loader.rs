@@ -306,4 +306,100 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    /// `cluster:` 段内**只有显式给出的字段**覆盖默认值，其余保留 `ClusterConfig::default()`。
+    #[test]
+    fn cluster_segment_overrides_defaults_field_by_field() {
+        let dir = tempdir("cluster");
+        write(
+            &dir,
+            "sshd.yaml",
+            "jails:\n  sshd:\n    log_files:\n      - /var/log/auth.log\n    \
+             cluster:\n      enabled: true\n      audit_only: false\n      \
+             prefix_v4: 20\n      window: 120\n      min_ips: 7\n",
+        );
+
+        let mut cfg = Config::default();
+        load_config_directory(dir.to_str().unwrap(), &mut cfg, false).expect("目录加载失败");
+
+        let c = cfg.jails[0].cluster;
+        assert!(c.enabled, "显式 enabled: true 应生效");
+        assert!(!c.audit_only, "显式 audit_only: false 应生效");
+        assert_eq!(c.prefix_v4, 20);
+        assert_eq!(c.window, 120);
+        assert_eq!(c.min_ips, 7);
+
+        let d = crate::decision::ClusterConfig::default();
+        assert_eq!(c.prefix_v6, d.prefix_v6, "未声明的 prefix_v6 应保留默认");
+        assert_eq!(c.max_per_ip, d.max_per_ip, "未声明的 max_per_ip 应保留默认");
+        assert_eq!(c.ban_time, d.ban_time, "未声明的 ban_time 应保留默认");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 整段缺省 = 保持默认（关闭）；跨文件的 `cluster` 段同样按**字段**合并，
+    /// 后加载的文件只声明差异时不抹掉前置文件的 cluster 配置。
+    #[test]
+    fn cluster_defaults_when_absent_and_merges_across_files() {
+        let dir = tempdir("cluster-merge");
+        write(
+            &dir,
+            "a-sshd.yaml",
+            "jails:\n  sshd:\n    log_files:\n      - /var/log/a.log\n    \
+             cluster:\n      enabled: true\n      min_ips: 9\n",
+        );
+        write(
+            &dir,
+            "b-sshd.yaml",
+            "jails:\n  sshd:\n    cluster:\n      window: 30\n",
+        );
+
+        let mut cfg = Config::default();
+        load_config_directory(dir.to_str().unwrap(), &mut cfg, false).expect("目录加载失败");
+        let c = cfg.jails[0].cluster;
+        assert!(c.enabled, "前置文件的 enabled 应保留");
+        assert_eq!(c.min_ips, 9, "前置文件的 min_ips 应保留");
+        assert_eq!(c.window, 30, "后置文件只覆盖 window");
+
+        // 整段缺省：默认关闭检测
+        let dir2 = tempdir("cluster-absent");
+        write(
+            &dir2,
+            "sshd.yaml",
+            "jails:\n  sshd:\n    log_files:\n      - /var/log/auth.log\n",
+        );
+        let mut cfg2 = Config::default();
+        load_config_directory(dir2.to_str().unwrap(), &mut cfg2, false).expect("目录加载失败");
+        assert_eq!(
+            cfg2.jails[0].cluster,
+            crate::decision::ClusterConfig::default(),
+            "无 cluster 段时应保持默认（关闭）"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dir2).ok();
+    }
+
+    /// 未知的 `cluster` 子字段被 `deny_unknown_fields` 拒绝（与其他段的严格模式一致）。
+    #[test]
+    fn unknown_cluster_field_is_rejected() {
+        let dir = tempdir("cluster-typo");
+        write(
+            &dir,
+            "sshd.yaml",
+            "jails:\n  sshd:\n    log_files:\n      - /var/log/auth.log\n    \
+             cluster:\n      enabled: true\n      min_ip: 5\n",
+        );
+
+        let mut cfg = Config::default();
+        let err = load_config_directory(dir.to_str().unwrap(), &mut cfg, false)
+            .expect_err("未知 cluster 子字段应拒绝加载");
+        // `{:#}` 打印「上下文: 起因」链，起因才是 serde 指出的未知字段名
+        assert!(
+            format!("{err:#}").contains("min_ip"),
+            "错误信息应点出未知字段名: {err:#}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
