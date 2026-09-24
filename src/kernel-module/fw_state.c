@@ -110,9 +110,11 @@ static int fw_state_write_chunk(struct file *file, loff_t *pos, u32 *crc,
                                 const char *buf, int len) {
   if (len <= 0)
     return -EINVAL;
+  /* kernel_write 会按写入长度推进 *pos，此处不得再推一次：重复推进会在
+   * 每个 chunk 后留下等长空洞，CRC 于是对不上实际文件字节，恢复侧直接
+   * 在 CRC 校验处失败（且空洞开头的行会被当空行跳过）。 */
   if (kernel_write(file, buf, len, pos) != len)
     return -EIO;
-  *pos += len;
   *crc = crc32_le(*crc, buf, len);
   return 0;
 }
