@@ -456,13 +456,20 @@ pub fn get() -> Logger {
 
     CACHED_LOGGER.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache.is_none() {
-            *cache = GLOBAL_LOGGER
-                .lock()
-                .clone()
-                .or_else(|| Some(Logger::root(slog::Discard, slog::o!())));
+        if let Some(logger) = cache.as_ref() {
+            return logger.clone();
         }
-        cache.as_ref().unwrap().clone()
+        // 只在全局 logger 已装配时写入缓存。装配前调用（主线程在 `init_logger`
+        // 之前就会记配置加载日志）若把 Discard 兜底缓存下来，该线程此后即使
+        // `init_logger` 已执行也永远读缓存里的静默实例——主线程的全部启动日志
+        // （含「已向 <url> 探测出口 IP」这类必须可见的声明）都会被静默丢弃。
+        match GLOBAL_LOGGER.lock().clone() {
+            Some(logger) => {
+                *cache = Some(logger.clone());
+                logger
+            }
+            None => Logger::root(slog::Discard, slog::o!()),
+        }
     })
 }
 
@@ -880,6 +887,61 @@ mod tests {
             }
         }
         assert_eq!(bad, 0, "存在 {bad} 行非法 JSON（多写者撕裂）");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── 装配前的 get() 不得毒化该线程的日志 ──
+
+    const EARLY_GET_PATH_ENV: &str = "FIREWALL_LOGGER_TEST_EARLY_GET_PATH";
+
+    /// 子进程：**先**调 `get()`（装配前），**再** `init_logger`，然后记一行。
+    ///
+    /// 复现主线程的真实时序：`main` 在 `init_logger` 之前就会为「配置文件加载成功」
+    /// 这类事件取 logger，若那一刻的 Discard 兜底被 thread-local 缓存下来，此后该
+    /// 线程的全部日志（含启动声明）都进不了日志文件。
+    #[test]
+    #[ignore = "由 early_get_does_not_poison_the_thread 拉起，不单独运行"]
+    fn child_early_get_then_init() {
+        let Ok(path) = std::env::var(EARLY_GET_PATH_ENV) else {
+            return;
+        };
+
+        // 装配前取一次 logger（主线程在解析配置时就是这么做的）。
+        let before = get();
+        slog::info!(before, "装配前的日志（预期丢弃）");
+
+        let _log = init_logger(Some(&path), 0, 10);
+
+        // 装配后同一线程再取：必须拿到真实 logger 而不是缓存里的 Discard。
+        let after = get();
+        slog::info!(after, "装配后的日志（预期落盘）");
+    }
+
+    /// 装配前调用过 `get()` 的线程，在 `init_logger` 之后必须能正常落盘。
+    #[test]
+    fn early_get_does_not_poison_the_thread() {
+        let dir = temp_dir("early-get");
+        let log_path = dir.join("firewall-early-get.log");
+
+        let exe = std::env::current_exe().expect("取当前测试二进制路径失败");
+        let status = std::process::Command::new(&exe)
+            .args([
+                "--exact",
+                "logger::tests::child_early_get_then_init",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(EARLY_GET_PATH_ENV, &log_path)
+            .status()
+            .expect("拉起子进程失败");
+        assert!(status.success(), "子进程退出码非 0: {status}");
+
+        let content = std::fs::read_to_string(&log_path).expect("读回日志失败");
+        assert!(
+            content.contains("装配后的日志（预期落盘）"),
+            "装配后同一线程的日志被丢弃（thread-local 缓存了 Discard）；实际内容: {content:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
