@@ -268,7 +268,9 @@ jail 启用/禁用（`web_ui/api.rs::update_jail_enabled`）、峰值时段翻�
 
 | 组 | 认证 | 内容 |
 |----|------|------|
-| SPA 外壳与静态资源 | 无 | 一组**固定的**页面路径 + `/static/*path` + `/sw.js`；服务端没有 catch-all。逐条清单见 `src/daemon/http_exporter/handler.rs`，页面语义（哪个页面做什么、数据从哪来）见 [Web 前端](frontend.md) |
+| SPA 外壳与静态资源 | 无 | 一组**固定的**页面路径 + `/static/*path` + `/sw.js`；Go module 当前不实现 HTTP 服务，SPA
+路由清单以 `web_ui/static/assets.go` 的 `//go:embed .` 声明的目录内容为准。页面语义（哪个页面做什么、
+数据从哪来）见 [Web 前端](frontend.md) |
 | 探针 | 无 | `/health`、`/healthz`（有意不套信封，由 `is_ready()` 决定 200/503） |
 | 需认证 | Basic Auth | `/metrics` 与 `/api/v1/*`（完整路由清单以 `contract/` 为准；`verify_http.py` 会对照契约核对） |
 
@@ -361,7 +363,8 @@ jail 启用/禁用（`web_ui/api.rs::update_jail_enabled`）、峰值时段翻�
 
 ### Prometheus 指标
 
-`/metrics` 暴露的指标以 `src/daemon/http_exporter/metrics.rs` 为准（按 `# TYPE` 计数）：
+`/metrics` **尚未移植**，Go module 当前不实现 HTTP 服务；下列指标清单是设计冻结面，取自
+`src/daemon/http_exporter/metrics.rs`（历史 Rust 实现），逐项落地状态见 [范围说明](#范围说明)。
 
 | 指标 | 类型 | 说明 |
 |------|------|------|

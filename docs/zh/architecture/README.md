@@ -6,7 +6,8 @@
 
 系统由两个主要组件构成：内核模块负责报文判定与表管理，守护进程负责日志监控、决策与对外接口。
 两者之间**必须走 netlink**；procfs 是给用户/运维的接口，不是 daemon 的内部通道
-（`src/daemon/main.rs:362`）。（procfs 是给用户/运维的接口，不是 daemon 的内部通道）
+（procfs 是给用户/运维的接口，不是 daemon 的内部通道）。Go module `src/daemon` 当前不实现 HTTP：
+HTTP 路由与凭据鉴权尚未移植（见 [用户态守护进程](daemon.md)），只有 netlink / procfs 两条通道。
 
 ```mermaid
 graph TB
