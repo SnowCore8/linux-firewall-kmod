@@ -63,21 +63,19 @@ const (
 
 // BanSink 是封禁下发的副作用汇聚点。
 //
-// 执行体按「占位 → 镜像 → 待确认 → 下发 → 失败回滚」的顺序调用，对应旧实现
+// 执行体按「占位 → 待确认 → 下发 → 失败回滚」的顺序调用，对应旧实现
 // handle_failed_attempt_for_jail 的尾部。把这几步收在一个接口后，测试可注入只记录调用序列
 // 的假实现，验证顺序与回滚；生产实现挂在组合根，把内核指令与 Web UI 镜像接起来。
 type BanSink interface {
-	// TryInsert 尝试在活跃封禁缓存里为 info 占位，返回「本调用是否为赢家」。
+	// TryInsert 原子地在活跃封禁缓存里为 info 占位并更新反向索引，返回「本调用是否为赢家」。
 	//
 	// 同一 IP 已存在则返回 false（并发去重，防止重复封禁与统计双计），调用方据此提前返回。
 	TryInsert(info bans.BanInfo) bool
-	// MirrorInsert 把 info 镜像到对外可见的封禁视图。
-	MirrorInsert(info bans.BanInfo)
 	// MarkPendingAck 标记该 IP 的封禁等待内核确认。
 	MarkPendingAck(ip string)
 	// Send 向内核下发一次封禁；durationSecs 为 0 表示永久，prefixLen 为前缀长度。
 	Send(addr netip.Addr, prefixLen uint8, durationSecs uint32, reason string) error
-	// RollbackInsert 回滚一次下发失败：撤销占位、镜像与待确认标记，允许下次重试。
+	// RollbackInsert 回滚一次下发失败：撤销占位与待确认标记，允许下次重试。
 	RollbackInsert(ip string)
 }
 
@@ -914,7 +912,6 @@ func (e *InboundExecutor) dispatchIntent(intent *BanIntent) {
 	if !e.sink.TryInsert(info) {
 		return
 	}
-	e.sink.MirrorInsert(info)
 	e.sink.MarkPendingAck(ip)
 
 	// 永久封禁 duration 为 0；临时封禁把秒数钳进 uint32。

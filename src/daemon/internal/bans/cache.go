@@ -21,10 +21,10 @@ func NewActiveBanCache() *ActiveBanCache {
 	}
 }
 
-// TryInsert 在主表里插入一条封禁，返回「本调用是否为赢家」。
+// TryInsert 原子地插入主表与反向索引，返回「本调用是否为赢家」。
 //
 // 与旧实现 `try_insert` 语义一致：同一 IP 已存在则返回 false（并发去重、防止重复
-// 封禁与统计双计）。赢家需自行调用 MirrorInsert 更新反向索引。
+// 封禁与统计双计）。主表与反向索引在同一次加锁内更新，读方不会看到中间态。
 func (c *ActiveBanCache) TryInsert(info BanInfo) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -32,19 +32,13 @@ func (c *ActiveBanCache) TryInsert(info BanInfo) bool {
 		return false
 	}
 	c.bans[info.IP] = info
-	return true
-}
-
-// MirrorInsert 更新反向索引，把 IP 挂到其 jail 名下。
-func (c *ActiveBanCache) MirrorInsert(info BanInfo) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	set := c.byJail[info.JailName]
 	if set == nil {
 		set = make(map[string]struct{})
 		c.byJail[info.JailName] = set
 	}
 	set[info.IP] = struct{}{}
+	return true
 }
 
 // Remove 从两张表里同时摘除一个 IP，返回是否确实存在。

@@ -115,7 +115,8 @@ func (db *DB) migrate() error {
 	return nil
 }
 
-func (db *DB) cleanupExpired(retentionDays int) error {
+// CleanupExpired 清理超过保留期的封禁事件、信誉分与历史记录，防止数据库无限增长。
+func (db *DB) CleanupExpired(retentionDays int) error {
 	if retentionDays <= 0 {
 		retentionDays = 7
 	}
@@ -127,6 +128,22 @@ func (db *DB) cleanupExpired(retentionDays int) error {
 	}
 	if rows, _ := result.RowsAffected(); rows > 0 {
 		db.logger.Info("cleaned up expired ban_events", "count", rows, "retention_days", retentionDays)
+	}
+
+	result, err = db.conn.Exec("DELETE FROM ip_reputation WHERE last_updated < ?", cutoff)
+	if err != nil {
+		return fmt.Errorf("cleanup ip_reputation: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows > 0 {
+		db.logger.Info("cleaned up expired ip_reputation", "count", rows, "retention_days", retentionDays)
+	}
+
+	result, err = db.conn.Exec("DELETE FROM ban_history WHERE last_banned_at < ?", cutoff)
+	if err != nil {
+		return fmt.Errorf("cleanup ban_history: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows > 0 {
+		db.logger.Info("cleaned up expired ban_history", "count", rows, "retention_days", retentionDays)
 	}
 
 	return nil
@@ -144,7 +161,7 @@ func (db *DB) StartCleanupScheduler(interval time.Duration, retentionDays int, s
 			case <-stopCh:
 				return
 			case <-ticker.C:
-				if err := db.cleanupExpired(retentionDays); err != nil {
+				if err := db.CleanupExpired(retentionDays); err != nil {
 					db.logger.Error("cleanup failed", "error", err)
 				}
 			}

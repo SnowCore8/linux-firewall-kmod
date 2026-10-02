@@ -33,7 +33,7 @@ type Config struct {
 
 func NewServer(cfg Config) (*Server, error) {
 	if cfg.Address == "" {
-		cfg.Address = ":9119"
+		cfg.Address = "127.0.0.1:9119"
 	}
 	if cfg.MaxConnections <= 0 {
 		cfg.MaxConnections = 32

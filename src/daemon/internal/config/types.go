@@ -353,7 +353,7 @@ func Default() Config {
 		Ddos:                 DefaultDdosConfig(),
 		Webui:                DefaultWebuiConfig(),
 		Capacity:             DefaultCapacityConfig(),
-		HTTPAddress:          ":9119",
+		HTTPAddress:          "127.0.0.1:9119",
 		MaxSSEConnections:    32,
 		HistoryDBPath:        "",
 		HistoryRetentionDays: 7,

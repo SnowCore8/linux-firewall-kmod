@@ -36,18 +36,20 @@ func (s *Server) RegisterRoutes(api *APIHandlers) {
 }
 
 type APIHandlers struct {
-	server  *Server
-	db      *persist.DB
-	sse     *SSEBroker
-	metrics *Metrics
+	server    *Server
+	db        *persist.DB
+	sse       *SSEBroker
+	metrics   *Metrics
+	kernelBan KernelBan
 }
 
-func NewAPIHandlers(server *Server, db *persist.DB, sse *SSEBroker, metrics *Metrics) *APIHandlers {
+func NewAPIHandlers(server *Server, db *persist.DB, sse *SSEBroker, metrics *Metrics, kernelBan KernelBan) *APIHandlers {
 	return &APIHandlers{
-		server:  server,
-		db:      db,
-		sse:     sse,
-		metrics: metrics,
+		server:    server,
+		db:        db,
+		sse:       sse,
+		metrics:   metrics,
+		kernelBan: kernelBan,
 	}
 }
 

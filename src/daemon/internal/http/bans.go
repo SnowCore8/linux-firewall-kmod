@@ -9,6 +9,14 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/bans"
 )
 
+// KernelBan 是内核封禁下发的最小接口。
+//
+// 由组合根注入 banSink 实现；接口定义在 http 包以避免循环依赖。
+// 为 nil 时封禁仅写入缓存与数据库，不下发 netfilter。
+type KernelBan interface {
+	Send(addr netip.Addr, prefixLen uint8, durationSecs uint32, reason string) error
+}
+
 type BanRequest struct {
 	IP       string `json:"ip"`
 	Duration int64  `json:"duration,omitempty"`
@@ -40,7 +48,7 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := netip.ParseAddr(req.IP)
+	addr, err := netip.ParseAddr(req.IP)
 	if err != nil {
 		WriteBadRequest(w, "invalid IP: "+req.IP)
 		return
@@ -52,17 +60,35 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 		duration = 3600
 	}
 
+	now := time.Now().Unix()
 	info := bans.BanInfo{
 		IP:          req.IP,
 		Reason:      req.Reason,
-		BannedAt:    time.Now().Unix(),
-		ExpiresAt:   time.Now().Add(time.Duration(duration) * time.Second).Unix(),
+		BannedAt:    now,
 		IsPermanent: isPermanent,
+	}
+	if !isPermanent {
+		info.ExpiresAt = now + duration
 	}
 
 	if !bans.GlobalCache().TryInsert(info) {
 		WriteError(w, http.StatusConflict, "already_banned", "IP already banned")
 		return
+	}
+
+	// 下发内核 netfilter
+	if h.kernelBan != nil {
+		durationSecs := uint32(0)
+		if !isPermanent {
+			durationSecs = uint32(duration)
+		}
+		prefixLen := bans.FullPrefixLen(addr)
+		if sendErr := h.kernelBan.Send(addr, prefixLen, durationSecs, req.Reason); sendErr != nil {
+			h.server.logger.Error("内核封禁下发失败", "ip", req.IP, "error", sendErr)
+			bans.GlobalCache().Remove(req.IP)
+			WriteInternalError(w, "kernel ban failed: "+sendErr.Error())
+			return
+		}
 	}
 
 	if h.db != nil {
@@ -170,9 +196,10 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 		duration = 3600
 	}
 
+	now := time.Now().Unix()
 	var successCount, failCount int
 	for _, ip := range req.IPs {
-		_, err := netip.ParseAddr(ip)
+		addr, err := netip.ParseAddr(ip)
 		if err != nil {
 			failCount++
 			continue
@@ -181,20 +208,38 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 		info := bans.BanInfo{
 			IP:          ip,
 			Reason:      req.Reason,
-			BannedAt:    time.Now().Unix(),
-			ExpiresAt:   time.Now().Add(time.Duration(duration) * time.Second).Unix(),
+			BannedAt:    now,
 			IsPermanent: isPermanent,
 		}
+		if !isPermanent {
+			info.ExpiresAt = now + duration
+		}
 
-		if bans.GlobalCache().TryInsert(info) {
-			successCount++
-			if h.db != nil {
-				if err := h.db.RecordBanHistory(ip, duration == 0); err != nil {
-					h.server.logger.Error("record ban history", "error", err)
-				}
-			}
-		} else {
+		if !bans.GlobalCache().TryInsert(info) {
 			failCount++
+			continue
+		}
+
+		// 下发内核 netfilter
+		if h.kernelBan != nil {
+			durationSecs := uint32(0)
+			if !isPermanent {
+				durationSecs = uint32(duration)
+			}
+			prefixLen := bans.FullPrefixLen(addr)
+			if sendErr := h.kernelBan.Send(addr, prefixLen, durationSecs, req.Reason); sendErr != nil {
+				h.server.logger.Error("batch ban kernel send failed", "ip", ip, "error", sendErr)
+				bans.GlobalCache().Remove(ip)
+				failCount++
+				continue
+			}
+		}
+
+		successCount++
+		if h.db != nil {
+			if err := h.db.RecordBanHistory(ip, isPermanent); err != nil {
+				h.server.logger.Error("record ban history", "error", err)
+			}
 		}
 	}
 

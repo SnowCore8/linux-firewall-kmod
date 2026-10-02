@@ -10,14 +10,23 @@ import (
 )
 
 type SSEBroker struct {
-	mu         sync.RWMutex
+	mu         sync.Mutex
 	clients    map[chan []byte]bool
-	register   chan chan []byte
+	register   chan sseRegRequest
 	unregister chan chan []byte
 	broadcast  chan []byte
 	stopCh     chan struct{}
 	logger     *slog.Logger
 	maxClients int
+}
+
+// sseRegRequest 是 SSE 客户端注册请求。
+//
+// 把「客户端数量上限检查」与「注册」合并到 run() goroutine 内，由写锁一次性保护，
+// 消除 ServeHTTP 中 RLock 检查 → 异步注册之间的竞态窗口。
+type sseRegRequest struct {
+	ch chan []byte
+	ok chan bool
 }
 
 func NewSSEBroker(maxClients int, logger *slog.Logger) *SSEBroker {
@@ -30,7 +39,7 @@ func NewSSEBroker(maxClients int, logger *slog.Logger) *SSEBroker {
 
 	broker := &SSEBroker{
 		clients:    make(map[chan []byte]bool),
-		register:   make(chan chan []byte),
+		register:   make(chan sseRegRequest),
 		unregister: make(chan chan []byte),
 		broadcast:  make(chan []byte, 256),
 		stopCh:     make(chan struct{}),
@@ -57,10 +66,16 @@ func (b *SSEBroker) run() {
 		select {
 		case <-b.stopCh:
 			return
-		case client := <-b.register:
+		case req := <-b.register:
 			b.mu.Lock()
-			b.clients[client] = true
+			if len(b.clients) >= b.maxClients {
+				b.mu.Unlock()
+				req.ok <- false
+				continue
+			}
+			b.clients[req.ch] = true
 			b.mu.Unlock()
+			req.ok <- true
 			b.logger.Debug("SSE client connected", "active", len(b.clients))
 
 		case client := <-b.unregister:
@@ -73,20 +88,16 @@ func (b *SSEBroker) run() {
 			b.logger.Debug("SSE client disconnected", "active", len(b.clients))
 
 		case message := <-b.broadcast:
-			b.mu.RLock()
+			b.mu.Lock()
 			for client := range b.clients {
 				select {
 				case client <- message:
 				default:
-					b.mu.RUnlock()
-					b.mu.Lock()
 					delete(b.clients, client)
 					close(client)
-					b.mu.Unlock()
-					b.mu.RLock()
 				}
 			}
-			b.mu.RUnlock()
+			b.mu.Unlock()
 		}
 	}
 }
@@ -116,21 +127,19 @@ func (b *SSEBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.mu.RLock()
-	if len(b.clients) >= b.maxClients {
-		b.mu.RUnlock()
-		WriteServiceUnavailable(w, "SSE connection limit reached")
-		return
-	}
-	b.mu.RUnlock()
-
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	messageChan := make(chan []byte, 16)
-	b.register <- messageChan
+	regReq := sseRegRequest{ch: messageChan, ok: make(chan bool, 1)}
+	b.register <- regReq
+
+	if !<-regReq.ok {
+		WriteServiceUnavailable(w, "SSE connection limit reached")
+		return
+	}
 
 	defer func() {
 		b.unregister <- messageChan
@@ -163,8 +172,8 @@ func (b *SSEBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *SSEBroker) ActiveClients() int {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return len(b.clients)
 }
 
@@ -173,7 +182,7 @@ func (b *SSEBroker) MaxClients() int {
 }
 
 func (b *SSEBroker) AtLimit() bool {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return len(b.clients) >= b.maxClients
 }
