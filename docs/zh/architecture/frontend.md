@@ -164,7 +164,8 @@ E2E_LAN_ORIGIN=http://<局域网IP>:<port> npm run test:e2e
 sudo bash scripts/e2e-daemon.sh stop
 ```
 
-观察结果（本机 2026-09-21，Chromium）：
+观察结果（本机 2026-09-21，Chromium）。该表记录的是**尚未移植的 HTTP 服务在 9119 上的行为**
+（Go module `src/daemon` 当前不监听任何地址）：
 
 | 上下文 | `'serviceWorker' in navigator` | 注册 / 安装 | 页面功能 | 控制台 |
 |--------|-------------------------------|-------------|----------|--------|
