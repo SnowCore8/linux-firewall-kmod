@@ -6,7 +6,7 @@
 
 系统由两个主要组件构成：内核模块负责报文判定与表管理，守护进程负责日志监控、决策与对外接口。
 两者之间**必须走 netlink**；procfs 是给用户/运维的接口，不是 daemon 的内部通道
-（`src/daemon/main.rs:362`）。
+（`src/daemon/main.rs:362`）。（procfs 是给用户/运维的接口，不是 daemon 的内部通道）
 
 ```mermaid
 graph TB

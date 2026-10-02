@@ -1,6 +1,12 @@
 # 数据流
 
-本文档描述 Linux Firewall 内核模块的**报文判定路径**、**封禁/解封事件链**，以及内核与守护进程之间的通信通道。内核侧实现见 `src/kernel-module/`（当前为 `fw_*` 文件），接口以 `contract/*.fwidl` 为准。
+本文档描述 Linux Firewall 内核模块的**报文判定路径**、**封禁/解封事件链**，以及内核与守护进程之间的通信通道。内核侧实现见 `src/kernel-module/`（当前为 `fw_*` 文件），接口以 `contract/*.fwidl` 为准。本文档描述 Linux Firewall 内核模块的**报文判定路径**、**封禁/解封事件链**，以及内核与守护进程之间的通信通道。内核侧实现见 `src/kernel-module/`（当前为 `fw_*` 文件，其内部结构见 [kernel-module.md](kernel-module.md)），接口以 `contract/*.fwidl` 为准。
+
+## 范围说明
+
+**内核侧章节是当前的、可核对的**：路径在 `src/kernel-module/`（C），守护进程侧与它分列记录。内核与 procfs/netlink 通道的语义、模块参数规模、哈希表设计为当前实现；
+
+**封禁事件流 / 解封事件流两节是 v2.2.0 Rust 实现的冻结语义记录**：路径为历史 `src/daemon/*.rs`，被原样搬进 Go module `src/daemon` 后不再改动。当前形态见 [用户态守护进程](daemon.md)（组合根 `cmd/firewall-daemon/main.go` 装配并托管一个顺序驱动四段的 goroutine），逐项落地状态以该文档的「范围说明」为准。
 
 相关文档：
 
@@ -125,7 +131,7 @@ bool fw_wl_lookup(u8 af, const void *ip) {
 
 ## 封禁事件流
 
-下图是**当前生产路径**：`main.rs` 先建 `SignalFd`（`src/daemon/main.rs:127`，必须在任何线程创建之前阻塞信号），再装配入站执行体 `pipeline::executor::InboundExecutor`（`src/daemon/main.rs:230`）并交给 `Supervisor` 托管（`src/daemon/main.rs:420`）。该执行体是 `ingest`（inotify + 按源增量读）→ `parse`（行切分与规则匹配）→ `decision`（阈值与封禁计划）→ `pipeline`（装配体）四段的唯一装配点，四段由**一个**线程顺序驱动，信号 fd 与 inotify fd 在同一个 `poll` 上等待（`src/daemon/pipeline/executor.rs:263`）。旧 `file_monitor/`、`signals.rs`、`log_rotation.rs`、`line_processor.rs` 已随本批次退役。
+该执行体把「日志 → 行分割 → 规则判定 → 封禁」四段**顺序驱动为单一装配点**：这是设计冻结面，改写不得改变（[用户态守护进程](daemon.md) 的「运行时模型」描述当前形态）。旧 `file_monitor/`、`signals.rs`、`log_rotation.rs`、`line_processor.rs` 已随本批次退役。
 
 ```mermaid
 sequenceDiagram
@@ -287,7 +293,7 @@ graph TB
 | 组件 | 通信方式 | 数据 |
 |------|----------|------|
 | 守护进程 → HTTP 客户端 | HTTP (axum) | `/metrics`（Prometheus 抓取）、`/api/v1/*`（JSON API 与 `/api/v1/events` SSE）、`/health` 与 `/healthz` |
-| 守护进程 → 内核 | netlink | 每秒 `STATS_QUERY` + `ANALYSIS_QUERY`，每 60 次追加一次 `LIST_BANS_QUERY` 对账（`src/daemon/main.rs:380-399`） |
+| 守护进程 → 内核 | netlink | 每秒 `STATS_QUERY` + `ANALYSIS_QUERY`，每 60 次追加一次 `LIST_BANS_QUERY` 对账（`internal/kernel/client.go`） |
 | 守护进程 → 日志 | 文件 I/O | 运行日志 |
 
 ## 报文判定时序
