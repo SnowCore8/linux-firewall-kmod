@@ -170,7 +170,7 @@ func run(args []string) error {
 	deps := runtime.Deps{
 		Logger:   logger,
 		Facts:    runtime.NoHistory{},
-		Sink:     newBanSink(kernelClient, logger),
+		Sink:     newBanSink(kernelClient, logger, historyDB),
 		Stats:    newStatsSink(logger),
 		Hooks:    nil, // 历史快照与数据清理尚未移植。
 		Reloader: nil, // 配置文件热重载尚未移植。
@@ -302,14 +302,15 @@ type banSink struct {
 	client  *kernel.Client
 	cache   *bans.ActiveBanCache
 	logger  *slog.Logger
+	db      *persist.DB
 	pending sync.Map // ip -> struct{}，标记「已下发、等待内核确认」
 }
 
-func newBanSink(client *kernel.Client, logger *slog.Logger) *banSink {
+func newBanSink(client *kernel.Client, logger *slog.Logger, db *persist.DB) *banSink {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &banSink{client: client, cache: bans.NewActiveBanCache(), logger: logger}
+	return &banSink{client: client, cache: bans.GlobalCache(), logger: logger, db: db}
 }
 
 // TryInsert 见 runtime.BanSink。
@@ -318,6 +319,17 @@ func (s *banSink) TryInsert(info bans.BanInfo) bool {
 		return false
 	}
 	s.cache.MirrorInsert(info)
+	if s.db != nil {
+		if err := s.db.RecordBanEvent(info.IP, info.JailName, int(info.BanCount), info.IsPermanent); err != nil {
+			s.logger.Error("record ban event", "error", err)
+		}
+		if err := s.db.RecordBanHistory(info.IP, info.IsPermanent); err != nil {
+			s.logger.Error("record ban history", "error", err)
+		}
+		if err := s.db.RecordBan(info.IP, 10); err != nil {
+			s.logger.Error("record ban reputation", "error", err)
+		}
+	}
 	return true
 }
 
