@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,6 +19,10 @@ type SSEBroker struct {
 	stopCh     chan struct{}
 	logger     *slog.Logger
 	maxClients int
+
+	// VerifyToken 校验 SSE 认证 token。非 nil 时 ServeHTTP 在建立连接前校验。
+	// 依次检查 URL query ?access_token= 与 Authorization: Bearer 头。
+	VerifyToken func(token string) bool
 }
 
 // sseRegRequest 是 SSE 客户端注册请求。
@@ -121,6 +126,21 @@ func (b *SSEBroker) Publish(eventType string, data any) {
 }
 
 func (b *SSEBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Token 认证：优先 query 参数，其次 Authorization header
+	if b.VerifyToken != nil {
+		token := r.URL.Query().Get("access_token")
+		if token == "" {
+			auth := r.Header.Get("Authorization")
+			if strings.HasPrefix(auth, "Bearer ") {
+				token = strings.TrimPrefix(auth, "Bearer ")
+			}
+		}
+		if token == "" || !b.VerifyToken(token) {
+			WriteError(w, http.StatusUnauthorized, "unauthorized", "SSE 认证失败")
+			return
+		}
+	}
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)

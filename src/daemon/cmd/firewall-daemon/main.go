@@ -106,6 +106,7 @@ func run(args []string) error {
 			dbStopCh := make(chan struct{})
 			defer close(dbStopCh)
 			db.StartCleanupScheduler(0, cfg.HistoryRetentionDays, dbStopCh)
+			db.StartReputationRecoveryScheduler(0, 1, 100, dbStopCh)
 			historyDB = db
 			logger.Info("持久化数据库已就绪", "path", cfg.HistoryDBPath)
 		}
@@ -134,6 +135,9 @@ func run(args []string) error {
 		}
 	}
 
+	// Jail 启用状态源：HTTP API 与入站主链路共享。
+	jailEnabled := runtime.NewJailEnabledSource()
+
 	// HTTP 服务器：API、SSE、Prometheus 指标。
 	var httpServer *http.Server
 	var sseBroker *http.SSEBroker
@@ -153,7 +157,34 @@ func run(args []string) error {
 			defer sseBroker.Stop()
 			metrics = http.NewMetrics()
 			apiBanSink := newBanSink(kernelClient, logger, historyDB)
-			api := http.NewAPIHandlers(httpServer, historyDB, sseBroker, metrics, apiBanSink)
+
+			// SSE token 认证：使用 MetricsUsername:MetricsPassword 作为简单 token
+			if cfg.MetricsUsername != "" || cfg.MetricsPassword != "" {
+				expectedToken := cfg.MetricsUsername + ":" + cfg.MetricsPassword
+				sseBroker.VerifyToken = func(token string) bool {
+					return token == expectedToken
+				}
+			}
+
+			// 配置路径：优先单文件，其次目录
+			configPath := cfg.ConfigFile
+			if configPath == "" {
+				configPath = cfg.ConfigDir
+			}
+
+			api := http.NewAPIHandlers(http.APIConfig{
+				Server:           httpServer,
+				DB:               historyDB,
+				SSE:              sseBroker,
+				Metrics:          metrics,
+				KernelBan:        apiBanSink,
+				Username:         cfg.MetricsUsername,
+				Password:         cfg.MetricsPassword,
+				GetCurrentConfig: func() *config.Config { return &cfg },
+				GetConfigPath:    func() string { return configPath },
+				JailController:   jailEnabled,
+				LogFilePath:      func() string { return cfg.LogFile },
+			})
 			httpServer.RegisterRoutes(api)
 			httpServer.Handle("/api/v1/events", sseBroker)
 			httpServer.Handle("/metrics", metrics)
@@ -170,7 +201,6 @@ func run(args []string) error {
 	}
 
 	// 入站主链路：配置所有权移入执行体，此后由它持有。
-	jailEnabled := runtime.NewJailEnabledSource()
 	deps := runtime.Deps{
 		Logger:   logger,
 		Facts:    runtime.NoHistory{},
@@ -345,6 +375,16 @@ func (s *banSink) Send(addr netip.Addr, prefixLen uint8, durationSecs uint32, re
 		return nil
 	}
 	_, err := s.client.Ban(addr, prefixLen, durationSecs, reason)
+	return err
+}
+
+// Remove 向内核下发解封。client 为 nil 时按「不动作」处理。
+func (s *banSink) Remove(addr netip.Addr, prefixLen uint8) error {
+	if s.client == nil {
+		s.logger.Debug("内核客户端未装配，跳过解封下发", "ip", addr.String())
+		return nil
+	}
+	_, err := s.client.Unban(addr, prefixLen)
 	return err
 }
 

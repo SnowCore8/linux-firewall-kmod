@@ -122,6 +122,8 @@ type ConfigReloader interface {
 // 周期把它桥接进本地配置。本接口把这份「权威状态」抽象出来，返回 jail 名 → 是否启用。
 type JailEnabledSource interface {
 	EnabledStates() map[string]bool
+	// SetEnabled 设置指定 jail 的启用状态（API 层写入，执行体下一个 poll 周期同步）。
+	SetEnabled(jail string, enabled bool)
 }
 
 // Deps 是执行体的外部依赖集合。nil 的可选依赖按「不动作」处理，便于测试按需注入。
@@ -962,14 +964,16 @@ func (e *InboundExecutor) mirrorCounters(jail string, before, after Counters) {
 	skipped := satSub(after.LinesSkipped, before.LinesSkipped)
 	regexes := satSub(after.RegexMatches, before.RegexMatches)
 	ips := satSub(after.IPsExtracted, before.IPsExtracted)
+	bans := satSub(after.BansIntent, before.BansIntent)
 	if parsed+skipped+regexes+ips == 0 {
 		return
 	}
-	if e.stats == nil {
-		return
+	if e.stats != nil {
+		e.stats.AddGlobal(parsed, skipped, regexes, ips)
+		e.stats.AddJail(jail, parsed, regexes, ips)
 	}
-	e.stats.AddGlobal(parsed, skipped, regexes, ips)
-	e.stats.AddJail(jail, parsed, regexes, ips)
+	// 镜像到全局 jail 运行时统计（Web UI 可读）。
+	config.UpdateJailStats(jail, parsed, regexes, ips, ips, bans)
 }
 
 // ruleSetFor 把配置里的 jail 规则编译结果转成判定层要的 RuleSet。
