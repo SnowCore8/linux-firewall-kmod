@@ -15,6 +15,7 @@ type SSEBroker struct {
 	register   chan chan []byte
 	unregister chan chan []byte
 	broadcast  chan []byte
+	stopCh     chan struct{}
 	logger     *slog.Logger
 	maxClients int
 }
@@ -32,6 +33,7 @@ func NewSSEBroker(maxClients int, logger *slog.Logger) *SSEBroker {
 		register:   make(chan chan []byte),
 		unregister: make(chan chan []byte),
 		broadcast:  make(chan []byte, 256),
+		stopCh:     make(chan struct{}),
 		logger:     logger,
 		maxClients: maxClients,
 	}
@@ -40,9 +42,21 @@ func NewSSEBroker(maxClients int, logger *slog.Logger) *SSEBroker {
 	return broker
 }
 
+func (b *SSEBroker) Stop() {
+	close(b.stopCh)
+	b.mu.Lock()
+	for client := range b.clients {
+		close(client)
+	}
+	b.clients = make(map[chan []byte]bool)
+	b.mu.Unlock()
+}
+
 func (b *SSEBroker) run() {
 	for {
 		select {
+		case <-b.stopCh:
+			return
 		case client := <-b.register:
 			b.mu.Lock()
 			b.clients[client] = true

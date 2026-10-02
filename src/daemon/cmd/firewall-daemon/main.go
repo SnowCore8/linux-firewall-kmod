@@ -126,6 +126,7 @@ func run(args []string) error {
 			logger.Warn("初始化 HTTP 服务器失败", "error", err)
 		} else {
 			sseBroker = http.NewSSEBroker(cfg.MaxSSEConnections, logger)
+			defer sseBroker.Stop()
 			metrics = http.NewMetrics()
 			api := http.NewAPIHandlers(httpServer, historyDB, sseBroker, metrics)
 			httpServer.RegisterRoutes(api)
