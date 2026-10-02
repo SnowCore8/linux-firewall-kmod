@@ -16,15 +16,18 @@ type PeriodicAttacker struct {
 	EventCount  int     `json:"event_count"`
 }
 
-func DetectPeriodicAttackers(db *persist.DB, minEvents int, limit int) ([]PeriodicAttacker, error) {
+func DetectPeriodicAttackers(db *persist.DB, minEvents int, limit int, eventLimit int) ([]PeriodicAttacker, error) {
 	if minEvents < 3 {
 		minEvents = 3
 	}
 	if limit <= 0 {
 		limit = 20
 	}
+	if eventLimit <= 0 {
+		eventLimit = 10000
+	}
 
-	events, err := db.GetBanEvents(10000)
+	events, err := db.GetBanEvents(eventLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +109,7 @@ type CollaborativeAttack struct {
 	Score       float64  `json:"collaboration_score"`
 }
 
-func DetectCollaborativeAttacks(db *persist.DB, windowSeconds int, minIPs int, limit int) ([]CollaborativeAttack, error) {
+func DetectCollaborativeAttacks(db *persist.DB, windowSeconds int, minIPs int, limit int, eventLimit int) ([]CollaborativeAttack, error) {
 	if windowSeconds <= 0 {
 		windowSeconds = 300
 	}
@@ -116,8 +119,11 @@ func DetectCollaborativeAttacks(db *persist.DB, windowSeconds int, minIPs int, l
 	if limit <= 0 {
 		limit = 20
 	}
+	if eventLimit <= 0 {
+		eventLimit = 10000
+	}
 
-	events, err := db.GetBanEvents(10000)
+	events, err := db.GetBanEvents(eventLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -171,11 +177,4 @@ func DetectCollaborativeAttacks(db *persist.DB, windowSeconds int, minIPs int, l
 	}
 
 	return attacks, nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

@@ -49,7 +49,7 @@ func GetJailStats(name string) (*JailRuntimeStats, bool) {
 	defer jailStatsMu.RUnlock()
 	stats, ok := jailStats[name]
 	if !ok {
-		return &JailRuntimeStats{}, true
+		return nil, false
 	}
 	return stats, true
 }

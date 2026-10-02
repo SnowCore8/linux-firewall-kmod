@@ -136,10 +136,7 @@ func PredictAttacks(db *persist.DB, limit int) (*PredictionSummary, error) {
 		predictions = predictions[:limit]
 	}
 
-	jailTrends, err := analyzeJailTrends(db)
-	if err != nil {
-		return nil, err
-	}
+	jailTrends := analyzeJailTrends(events)
 
 	var imminentCount, within24hCount int
 	for _, p := range predictions {
@@ -159,12 +156,7 @@ func PredictAttacks(db *persist.DB, limit int) (*PredictionSummary, error) {
 	}, nil
 }
 
-func analyzeJailTrends(db *persist.DB) ([]JailTrend, error) {
-	events, err := db.GetBanEvents(10000)
-	if err != nil {
-		return nil, err
-	}
-
+func analyzeJailTrends(events []persist.BanEvent) []JailTrend {
 	now := time.Now().Unix()
 	dayAgo := now - 86400
 	weekAgo := now - 7*86400
@@ -220,5 +212,5 @@ func analyzeJailTrends(db *persist.DB) ([]JailTrend, error) {
 		return trends[i].Bans24h > trends[j].Bans24h
 	})
 
-	return trends, nil
+	return trends
 }

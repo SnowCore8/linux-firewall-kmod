@@ -132,16 +132,21 @@ func (db *DB) cleanupExpired(retentionDays int) error {
 	return nil
 }
 
-func (db *DB) StartCleanupScheduler(interval time.Duration, retentionDays int) {
+func (db *DB) StartCleanupScheduler(interval time.Duration, retentionDays int, stopCh <-chan struct{}) {
 	if interval <= 0 {
 		interval = 1 * time.Hour
 	}
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		for range ticker.C {
-			if err := db.cleanupExpired(retentionDays); err != nil {
-				db.logger.Error("cleanup failed", "error", err)
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-ticker.C:
+				if err := db.cleanupExpired(retentionDays); err != nil {
+					db.logger.Error("cleanup failed", "error", err)
+				}
 			}
 		}
 	}()

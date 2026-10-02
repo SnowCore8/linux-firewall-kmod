@@ -11,19 +11,18 @@ var (
 	globalOnce      sync.Once
 )
 
+func initGlobals() {
+	globalCache = NewActiveBanCache()
+	globalWhitelist = NewWhitelist()
+}
+
 func GlobalCache() *ActiveBanCache {
-	globalOnce.Do(func() {
-		globalCache = NewActiveBanCache()
-		globalWhitelist = NewWhitelist()
-	})
+	globalOnce.Do(initGlobals)
 	return globalCache
 }
 
 func GlobalWhitelist() *Whitelist {
-	globalOnce.Do(func() {
-		globalCache = NewActiveBanCache()
-		globalWhitelist = NewWhitelist()
-	})
+	globalOnce.Do(initGlobals)
 	return globalWhitelist
 }
 

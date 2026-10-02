@@ -71,6 +71,7 @@ func (m *Metrics) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	for _, name := range counterNames {
 		value := m.counters[name].Load()
+		fmt.Fprintf(w, "# HELP %s Total count of %s\n", name, name)
 		fmt.Fprintf(w, "# TYPE %s counter\n", name)
 		fmt.Fprintf(w, "%s %d\n", name, value)
 	}
@@ -83,6 +84,7 @@ func (m *Metrics) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	for _, name := range gaugeNames {
 		value := m.gauges[name].Load()
+		fmt.Fprintf(w, "# HELP %s Current value of %s\n", name, name)
 		fmt.Fprintf(w, "# TYPE %s gauge\n", name)
 		fmt.Fprintf(w, "%s %d\n", name, value)
 	}

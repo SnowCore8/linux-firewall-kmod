@@ -94,7 +94,7 @@ func (h *APIHandlers) PeriodicAttackers(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	limit := parseLimit(r, 20, 1000)
-	attackers, err := analysis.DetectPeriodicAttackers(h.db, 3, limit)
+	attackers, err := analysis.DetectPeriodicAttackers(h.db, 3, limit, 10000)
 	if err != nil {
 		h.server.logger.Error("detect periodic attackers", "error", err)
 		WriteInternalError(w, "internal error")
@@ -113,7 +113,7 @@ func (h *APIHandlers) CollaborativeAttacks(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	limit := parseLimit(r, 20, 1000)
-	attacks, err := analysis.DetectCollaborativeAttacks(h.db, 300, 3, limit)
+	attacks, err := analysis.DetectCollaborativeAttacks(h.db, 300, 3, limit, 10000)
 	if err != nil {
 		h.server.logger.Error("detect collaborative attacks", "error", err)
 		WriteInternalError(w, "internal error")

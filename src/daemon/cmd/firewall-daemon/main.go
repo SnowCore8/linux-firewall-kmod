@@ -104,7 +104,9 @@ func run(args []string) error {
 			logger.Warn("初始化持久化数据库失败，历史分析功能不可用", "error", err)
 		} else {
 			defer db.Close()
-			db.StartCleanupScheduler(0, cfg.HistoryRetentionDays)
+			dbStopCh := make(chan struct{})
+			defer close(dbStopCh)
+			db.StartCleanupScheduler(0, cfg.HistoryRetentionDays, dbStopCh)
 			historyDB = db
 			logger.Info("持久化数据库已就绪", "path", cfg.HistoryDBPath)
 		}
