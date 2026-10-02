@@ -2,8 +2,7 @@
 // 关停顺序接到一起。
 //
 // 组合根只负责「装配与生命周期」，不含业务判定：解析命令行、加载配置、按依赖顺序
-// 启动各执行体，最后按登记逆序优雅关停。凡是本文件里以「未装配」标注的子系统，
-// 表示对应能力尚未移植到 Go 侧，运行时会显式记录一条 warn，绝不伪装成已完成。
+// 启动各执行体，最后按登记逆序优雅关停。
 package main
 
 import (
@@ -171,7 +170,7 @@ func run(args []string) error {
 		Logger:   logger,
 		Facts:    runtime.NoHistory{},
 		Sink:     newBanSink(kernelClient, logger, historyDB),
-		Stats:    newStatsSink(logger),
+		Stats:    newStatsSink(logger, metrics),
 		Hooks:    nil,
 		Reloader: runtime.NewFileReloader(cfg.ConfigFile, logger),
 		Enabled:  nil,
@@ -357,10 +356,10 @@ func (s *banSink) RollbackInsert(ip string) {
 
 // statsSink 是 StatsSink 的生产实现。
 //
-// 真正的计数汇聚（Web UI 镜像、Prometheus 指标、历史快照差分）尚未移植，这里只保留
-// 全局原子计数，保证计数链路不丢数，供后续消费者接管。
+// 计数汇聚到 Prometheus 指标（当 metrics 非 nil 时）和全局原子计数。
 type statsSink struct {
-	logger *slog.Logger
+	logger  *slog.Logger
+	metrics *http.Metrics
 
 	linesParsed   atomic.Uint64
 	linesSkipped  atomic.Uint64
@@ -370,11 +369,11 @@ type statsSink struct {
 	bansTriggered atomic.Uint64
 }
 
-func newStatsSink(logger *slog.Logger) *statsSink {
+func newStatsSink(logger *slog.Logger, metrics *http.Metrics) *statsSink {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &statsSink{logger: logger}
+	return &statsSink{logger: logger, metrics: metrics}
 }
 
 // AddGlobal 见 runtime.StatsSink。
@@ -382,19 +381,43 @@ func (s *statsSink) AddGlobal(parsed, skipped, regexes, ips uint64) {
 	s.linesParsed.Add(parsed)
 	s.linesSkipped.Add(skipped)
 	s.regexMatches.Add(regexes)
+	if s.metrics != nil {
+		s.metrics.Counter("firewall_lines_parsed_total").Add(int64(parsed))
+		s.metrics.Counter("firewall_lines_skipped_total").Add(int64(skipped))
+		s.metrics.Counter("firewall_regex_matches_total").Add(int64(regexes))
+	}
 }
 
 // AddJail 见 runtime.StatsSink。
 func (s *statsSink) AddJail(jail string, parsed, regexes, ips uint64) {
 	s.linesParsed.Add(parsed)
 	s.regexMatches.Add(regexes)
+	if s.metrics != nil {
+		s.metrics.Counter("firewall_lines_parsed_total").Add(int64(parsed))
+		s.metrics.Counter("firewall_regex_matches_total").Add(int64(regexes))
+	}
 }
 
 // IncInotifyEvents 见 runtime.StatsSink。
-func (s *statsSink) IncInotifyEvents() { s.inotifyEvents.Add(1) }
+func (s *statsSink) IncInotifyEvents() {
+	s.inotifyEvents.Add(1)
+	if s.metrics != nil {
+		s.metrics.Counter("firewall_inotify_events_total").Add(1)
+	}
+}
 
 // IncLogRotations 见 runtime.StatsSink。
-func (s *statsSink) IncLogRotations() { s.logRotations.Add(1) }
+func (s *statsSink) IncLogRotations() {
+	s.logRotations.Add(1)
+	if s.metrics != nil {
+		s.metrics.Counter("firewall_log_rotations_total").Add(1)
+	}
+}
 
 // IncBansTriggered 见 runtime.StatsSink。
-func (s *statsSink) IncBansTriggered(jail string) { s.bansTriggered.Add(1) }
+func (s *statsSink) IncBansTriggered(jail string) {
+	s.bansTriggered.Add(1)
+	if s.metrics != nil {
+		s.metrics.Counter("firewall_bans_triggered_total").Add(1)
+	}
+}
