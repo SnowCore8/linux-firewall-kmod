@@ -166,14 +166,15 @@ func run(args []string) error {
 	}
 
 	// 入站主链路：配置所有权移入执行体，此后由它持有。
+	jailEnabled := runtime.NewJailEnabledSource()
 	deps := runtime.Deps{
 		Logger:   logger,
 		Facts:    runtime.NoHistory{},
 		Sink:     newBanSink(kernelClient, logger, historyDB),
 		Stats:    newStatsSink(logger, metrics),
-		Hooks:    nil,
+		Hooks:    runtime.NewMaintenanceHooks(historyDB, logger),
 		Reloader: runtime.NewFileReloader(cfg.ConfigFile, logger),
-		Enabled:  nil,
+		Enabled:  jailEnabled,
 	}
 	executor, err := runtime.NewInboundExecutor(&cfg, signals, deps)
 	if err != nil {
