@@ -136,12 +136,13 @@ open(`O_NOFOLLOW`) + `metadata()` + `seek()` + `vec![0u8; 256*1024]`
 |------|------|------|
 | `ListBansResponse` | 有分页（`offset`/`total`/续页） | 正常 |
 | `ListWhitelistResponse` | 契约无 `offset`/`total`；daemon 解析上限写死 64 | 内核单页默认 256，超 64 条时**整条响应被丢弃**，`WHITELIST_CACHE` 不更新 |
-| `ListRatesResponse` | 契约有 `total` 但 daemon 从不读；请求无 `offset`/`limit` | 速率表单页上限 779（`FW_NL_RATES_PAGE_MAX`）；>779 条时**静默截断且无感知** |
+| `ListRatesResponse` | 契约有 `total` 但 daemon 从不读；请求无 `offset`/`limit` | 速率表按单页上限（`FW_NL_RATES_PAGE_MAX`）截断，超过一页的条目**静默丢弃且无感知** |
 
 > 勘误：`4096` / `64` 是 `BAN_HASH_BITS` / `WHITELIST_HASH_BITS` 的**哈希桶数**，不是条目容量
 > 也不是单页上限——初版曾把速率表那格写成「容量 4096」，属桶数与容量混淆。本表记的是 2.A 修订**前**
-> 的存量状态；2.A 之后白名单、封禁、速率的单页上限分别是 `FW_NL_WL_PAGE_MAX`（1926）、
-> `FW_NL_BANS_PAGE_MAX`（696）、`FW_NL_RATES_PAGE_MAX`（779）。
+> 的存量状态；2.A 之后白名单、封禁、速率的单页上限由 `FW_NL_WL_PAGE_MAX` /
+> `FW_NL_BANS_PAGE_MAX` / `FW_NL_RATES_PAGE_MAX` 三个常量给出——取值随条目尺寸变化，
+> 以 `python3 contract/gen.py contract/netlink.fwidl` 打印的容量为准，本文不再复述数字。
 
 **K. 注册状态对 daemon 不可见。** `DAEMON_REGISTER` 只在启动时发一次；`DAEMON_REGISTER_ACK`
 在 daemon 侧**无结构体、无解析分支**（落到「未知消息类型」分支）。内核拒绝指令时不回错误
@@ -189,8 +190,9 @@ open(`O_NOFOLLOW`) + `metadata()` + `seek()` + `vec![0u8; 256*1024]`
 
 - 协议号 `NETLINK_USERSOCK`；魔数 `0x46574C4E`；消息头 **12 字节**；全部结构 `packed`；
   全部多字节整数**大端**；地址为裸字节。
-- **23 个消息类型**；各响应/事件定长约束与变长响应的分页上限（`ListBans` 696、
-  `ListWhitelist` 1927、`ListRates` 779 条/页）不可改。
+- **23 个消息类型**；各响应/事件的定长约束与变长响应的分页上限**不可改**——具体数值
+  以 `python3 contract/gen.py contract/netlink.fwidl` 打印的容量为准（条目尺寸一变，
+  每页条数随之变，故不在本文写死）。
 - 单守护进程互斥注册；注册时先探活旧 portid（已死立即放行接管），活动超时 30 s 作兜底；
   **未注册实例下发的指令必须被拒绝**。
 - `ConfigFlags` 13 位、`DynThresholdFlags` 1 位的位序不可改。

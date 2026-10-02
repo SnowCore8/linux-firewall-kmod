@@ -24,6 +24,9 @@ src/daemon/web_ui/static/*
 Module.symvers
 modules.order
 
+# Go 模块清单会被上面的内核构建规则 *.mod 误伤，此处显式放行
+!go.mod
+
 # 内核构建系统产生的隐藏文件（以 . 开头的中间文件）
 .*.cmd
 .*.o
