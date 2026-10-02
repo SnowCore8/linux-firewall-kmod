@@ -72,6 +72,11 @@ func (f *fakeEnabled) set(name string, enabled bool) {
 	f.mu.Unlock()
 }
 
+// SetEnabled 实现 JailEnabledSource 接口（导出给接口满足用）。
+func (f *fakeEnabled) SetEnabled(name string, enabled bool) {
+	f.set(name, enabled)
+}
+
 func (f *fakeEnabled) EnabledStates() map[string]bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()

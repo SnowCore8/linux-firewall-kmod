@@ -92,9 +92,15 @@ func (c *ActiveBanCache) List() []BanInfo {
 
 // UnbanTemporary 解封所有非永久封禁，返回解封数量。
 func (c *ActiveBanCache) UnbanTemporary() int {
+	ips := c.UnbanTemporaryWithIPs()
+	return len(ips)
+}
+
+// UnbanTemporaryWithIPs 解封所有非永久封禁，返回被解封的 IP 列表。
+func (c *ActiveBanCache) UnbanTemporaryWithIPs() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	count := 0
+	var ips []string
 	for ip, info := range c.bans {
 		if !info.IsPermanent {
 			delete(c.bans, ip)
@@ -104,10 +110,10 @@ func (c *ActiveBanCache) UnbanTemporary() int {
 					delete(c.byJail, info.JailName)
 				}
 			}
-			count++
+			ips = append(ips, ip)
 		}
 	}
-	return count
+	return ips
 }
 
 // Stats 返回缓存统计信息。

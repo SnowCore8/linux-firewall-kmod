@@ -9,12 +9,13 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/bans"
 )
 
-// KernelBan 是内核封禁下发的最小接口。
+// KernelBan 是内核封禁下发与解封的最小接口。
 //
 // 由组合根注入 banSink 实现；接口定义在 http 包以避免循环依赖。
 // 为 nil 时封禁仅写入缓存与数据库，不下发 netfilter。
 type KernelBan interface {
 	Send(addr netip.Addr, prefixLen uint8, durationSecs uint32, reason string) error
+	Remove(addr netip.Addr, prefixLen uint8) error
 }
 
 type BanRequest struct {
@@ -127,7 +128,7 @@ func (h *APIHandlers) DeleteBan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := netip.ParseAddr(ip)
+	addr, err := netip.ParseAddr(ip)
 	if err != nil {
 		WriteBadRequest(w, "invalid IP: "+ip)
 		return
@@ -136,6 +137,14 @@ func (h *APIHandlers) DeleteBan(w http.ResponseWriter, r *http.Request) {
 	if !bans.GlobalCache().Remove(ip) {
 		WriteNotFound(w, "IP not banned: "+ip)
 		return
+	}
+
+	// 下发内核解封
+	if h.kernelBan != nil {
+		prefixLen := bans.FullPrefixLen(addr)
+		if err := h.kernelBan.Remove(addr, prefixLen); err != nil {
+			h.server.logger.Error("内核解封下发失败", "ip", ip, "error", err)
+		}
 	}
 
 	if h.sse != nil {
@@ -156,16 +165,30 @@ func (h *APIHandlers) UnbanAllTemporary(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	count := bans.GlobalCache().UnbanTemporary()
+	ips := bans.GlobalCache().UnbanTemporaryWithIPs()
+
+	// 逐个下发内核解封
+	if h.kernelBan != nil {
+		for _, ip := range ips {
+			addr, err := netip.ParseAddr(ip)
+			if err != nil {
+				continue
+			}
+			prefixLen := bans.FullPrefixLen(addr)
+			if err := h.kernelBan.Remove(addr, prefixLen); err != nil {
+				h.server.logger.Error("批量内核解封失败", "ip", ip, "error", err)
+			}
+		}
+	}
 
 	if h.sse != nil {
 		h.sse.Publish("unban_all_temporary", map[string]any{
-			"count": count,
+			"count": len(ips),
 		})
 	}
 
 	WriteSuccess(w, map[string]any{
-		"unbanned_count": count,
+		"unbanned_count": len(ips),
 	})
 }
 
