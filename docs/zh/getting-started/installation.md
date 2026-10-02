@@ -217,10 +217,10 @@ Whitelist entries: 0
 sudo systemctl status firewall-daemon
 ```
 
-### 检查 Prometheus 指标
+### 检查状态（procfs）：Go module `src/daemon` **尚未移植 HTTP**，守护进程只暴露 `/proc/firewall/*`
 
 ```bash
-curl http://localhost:9119/metrics
+sudo cat /proc/firewall/bans /proc/firewall/stats /proc/firewall/config
 ```
 
 ## 安装后行为
@@ -239,8 +239,8 @@ curl http://localhost:9119/metrics
 3. **守护进程启动流程**
    - 读取 `/etc/firewall/*.yaml` 下的所有配置文件(按字典序加载,后加载的覆盖前加载的)
    - 编译各 jail 的正则表达式(`regex::Regex::new`)
-   - 启动 Prometheus HTTP exporter 监听 `:9119/metrics`
-   - 启动 inotify 监听 `log_path` 配置的日志文件
+   - 当前 Go 实现只初始化 procfs、规则集与 inotify（HTTP **尚未移植**）
+   - 进入主监控循环：正则匹配 → 失败计数 → 阈值判定 → 封禁
    - 进入主监控循环:正则匹配 → 失败计数 → 阈值判定 → 调用 procfs 触发封禁
 
 4. **首次启动观察**
@@ -249,8 +249,8 @@ curl http://localhost:9119/metrics
    # 正常输出:
    #   Loaded config: /etc/firewall/default.yaml
    #   Compiled regex for jail 'sshd' (12 patterns)
-   #   Prometheus exporter listening on 0.0.0.0:9119
    #   inotify watching /var/log/auth.log
+   #   ProcFS interfaces mounted: /proc/firewall/{bans,stats,config}
    #   Daemon ready
    ```
 

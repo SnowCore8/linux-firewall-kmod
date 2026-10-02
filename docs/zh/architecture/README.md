@@ -64,7 +64,8 @@ graph TB
 | 速率表哈希桶 | 65536（`RATE_HASH_BITS` = 16） | 桶数，不是容量 |
 | 速率表条目上限 | `fw_max_rate_entries`（默认 65536） | 文档化范围 1024–262144 |
 | 本机地址集合 | 下界 `fw_max_local_ips`（默认 256），硬上界 2^16 | 按实际地址数扩容 |
-| Prometheus 端口 | `metrics_port`（默认 9119） | 与 Web UI / JSON API / SSE 共用同一监听地址 |
+| Prometheus 端口 | **尚未移植**：Go module 当前不实现 HTTP；历史值见 [用户态守护进程](daemon.md)
+的「可观测性」一节
 
 以上 `fw_max_*` 都是**内核模块参数**，只在加载模块或写 sysfs 时生效。daemon 配置里的
 `capacity:` 段目前只做持久化与展示，不经 netlink 下发——`SetConfig` 消息没有容量字段

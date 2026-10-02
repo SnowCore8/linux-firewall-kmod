@@ -48,7 +48,9 @@ defaults:
 | `findtime` | int | `600` | 1-3600 | 时间窗口（秒），在此时间内累积计数 |
 | `ban_time` | int | `900` | 0 或 1-86400 | 封禁时长（秒），0 表示永久 |
 | `interval` | int | `1` | 1-60 | 日志文件检查间隔（秒） |
-| `metrics_port` | int | `9119` | 1024-65535 | Prometheus 指标暴露端口 |
+| `metrics_port` | int | `9119` | 1024-65535 | **尚未移植**：Go module `src/daemon`
+当前不实现 HTTP，该字段仅保留（将来接入时生效）；运行时看 `/proc/firewall/stats` |
+
 
 ### 时间参数关系
 

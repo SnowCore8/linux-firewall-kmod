@@ -99,9 +99,16 @@ cat /proc/firewall/config
 # 计数器（total_bans、total_unbans、packets_dropped 等）
 cat /proc/firewall/stats
 
-# Prometheus 指标（默认 :9119）
-curl http://localhost:9119/metrics
+# Prometheus 指标：Go module `src/daemon` **尚未移植 HTTP**，当前不暴露 `/metrics`
+（[用户态守护进程](../architecture/daemon.md)「可观测性」）。运行时可用 procfs +
+日志替代：
+
+```bash
+cat /proc/firewall/stats        # 内核侧计数器（current_bans / total_bans 等）
+sudo tail -f /var/log/firewall.log   # 守护进程结构化日志（JSON Lines）
 ```
+
+Jail 维度的统计需要从守护进程日志与 procfs 读数中获取；procfs 不直接暴露 jail 表格。
 
 Jail 维度的统计需要从 Prometheus 指标 `firewall_kernel_*` 与守护进程
 日志中获取，procfs 不直接暴露 jail 表格。
@@ -154,4 +161,3 @@ sudo dmesg --level=err,warn | grep -i firewall
 | 查看计数器 | `cat /proc/firewall/stats` |
 | 守护进程日志 | `tail -f /var/log/firewall.log` |
 | 内核日志 | `sudo dmesg \| grep -i firewall` |
-| Prometheus 指标 | `curl http://localhost:9119/metrics` |

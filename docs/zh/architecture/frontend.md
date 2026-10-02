@@ -11,7 +11,8 @@
 
 - **服务端契约**以 `contract/http.fwidl` 为准，核对以 `contract/verify_http.py` 的输出为准；
 - **前端路由表**读 `frontend/src/App.tsx` 的 `createHashRouter`；
-- **返回 HTML 的服务端路径清单**读 `src/daemon/http_exporter/handler.rs`；
+- Go module `src/daemon` **尚未装配 HTTP 服务**，服务端固定路径清单以
+  `web_ui/static/assets.go` 的 `//go:embed .` 声明内容为准（[用户态守护进程](daemon.md)）；
 - 数据面与凭据行为以 `frontend/src/api/` 与 `frontend/src/hooks/` 的源码为准。
 
 ## 技术栈与构建落点

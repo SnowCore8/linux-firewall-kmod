@@ -18,10 +18,11 @@ scrape_configs:
 
 ### 可用指标
 
-> 以下指标由 `src/daemon/http_exporter/metrics.rs` 实际暴露，数量以该文件的
-> `# TYPE` 行为准。
+> **历史清单**：以下指标是 v2.2.0 Rust 实现的冻结记录，取自
+> `src/daemon/http_exporter/metrics.rs`（磁盘上不存在）；Go module `src/daemon`
+> 当前不实现 HTTP，下列条目在运行时不可抓取。
 > 早期文档中 `firewall_ban_events_total` / `firewall_packets_dropped_total` /
-> `firewall_hash_table_*` / `firewall_jail_*` 等条目均不存在，已删除。
+> `firewall_hash_table_*` / `firewall_jail_*` 等条目均不存在。
 
 #### 内核侧（来自 `/proc/firewall/stats`）
 
@@ -273,9 +274,14 @@ if [ ! -f /proc/firewall/config ]; then
 fi
 
 # 检查 Prometheus 端口
-if ! curl -s http://localhost:9119/metrics > /dev/null 2>&1; then
-    echo "WARNING: Prometheus metrics not available"
-    exit 1
+只检查 ProcFS（HTTP 尚未移植）：
+
+```bash
+# 只检查 ProcFS
+echo "当前模块接口可用性检查（HTTP 指标待移植后接入）"
+if [ ! -f /proc/firewall/config ]; then
+    echo "CRITICAL: ProcFS interface not available"
+    exit 2
 fi
 
 echo "OK: All checks passed"

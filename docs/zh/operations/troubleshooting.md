@@ -44,9 +44,12 @@ echo "6. Daemon Log (last 20 lines)"
 tail -20 /var/log/firewall.log
 echo ""
 
-# 7. Prometheus
-echo "7. Prometheus Metrics"
-curl -s http://localhost:9119/metrics | head -20
+# 7. 状态（procfs / 日志）：Go module `src/daemon` 尚未移植 HTTP，
+`/metrics` 当前不可用。运行时看 procfs + 日志即可：
+
+```bash
+cat /proc/firewall/stats        # 内核侧计数器（current_bans / total_bans 等）
+sudo tail -f /var/log/firewall.log   # 守护进程结构化日志（JSON Lines）
 ```
 
 ## 常见问题
@@ -87,9 +90,9 @@ sudo firewall-daemon -c /etc/firewall/default.yaml
 # 或用 yamllint
 yamllint /etc/firewall/
 
-# 检查端口占用
-ss -tlnp | grep 9119
-
+# 检查端口占用：Go module `src/daemon` 尚未移植 HTTP，不监听任何地址。
+若出现「守护进程无法启动」且日志里没有 ProcFS / inotify 行，通常是 `/etc/firewall/`
+目录不可读（系统单元用 `ProtectSystem=strict`），见下。
 # 检查依赖库
 ldd /usr/local/sbin/firewall-daemon
 ```
@@ -179,11 +182,9 @@ echo "Failed password for root from 192.168.1.100" | \
 # 1. 检查封禁数量
 cat /proc/firewall/stats
 
-# 2. 检查哈希表使用率
-curl -s http://localhost:9119/metrics | grep hash_table
-
-# 3. 检查数据包丢弃率
-curl -s http://localhost:9119/metrics | grep dropped
+# 2. 查看 Prometheus 指标：Go module `src/daemon` 尚未移植 HTTP，当前不暴露
+`/metrics`（[用户态守护进程](../architecture/daemon.md)「可观测性」）。运行时用
+procfs + 日志替代。
 
 # 4. 检查内核态 CPU 使用
 top -b -n 1 | head -20

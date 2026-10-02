@@ -18,7 +18,9 @@ Linux Firewall 内核模块是一个高性能的 IP 封禁解决方案，作为�
 | ProcFS 接口 | 通过 `/proc` 文件系统进行管理和监控 |
 | 正则匹配 | 用户态守护进程支持正则表达式匹配日志 |
 | RCU 并发 | 使用 Read-Copy-Update 实现高并发安全 |
-| Prometheus 指标 | 内置 HTTP 服务器，端口 9119 暴露指标 |
+| Prometheus 指标 | **尚未移植**：Go module `src/daemon` 当前不实现 HTTP；
+指标口径见 [用户态守护进程](architecture/daemon.md)「可观测性」，运行时用 procfs
+`/proc/firewall/{stats,config}` + 日志查看
 
 ## 系统架构
 
@@ -36,13 +38,13 @@ graph TB
         NF --> PROC[ProcFS 接口 /proc/firewall]
     end
 
-    KERNEL -->|netlink 控制通道| DAEMON[守护进程 Rust 语言]
+    KERNEL -->|netlink 控制通道| DAEMON[守护进程 Go module `src/daemon`]
     PROC -.->|手动操作 / 调试| DAEMON
 
     subgraph USERSPACE[用户空间]
         DAEMON --> INOTIFY[inotify 日志监控]
         DAEMON --> REGEX[正则匹配]
-        DAEMON --> PROM[Prometheus Metrics :9119]
+        DAEMON -.->|尚未移植：procfs 为唯一接口| STATS[ProcFS /proc/firewall/{bans,stats,config}]
     end
 ```
 

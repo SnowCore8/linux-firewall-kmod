@@ -107,25 +107,14 @@ cat /proc/firewall/bans
 echo "unban 192.168.1.100" | sudo tee /proc/firewall/bans
 ```
 
-## 第五步：监控
+## 第五步：状态（procfs / 日志）
 
-### 查看 Prometheus 指标
+Go module `src/daemon` **尚未移植 HTTP 服务**，守护进程只暴露 `/proc/firewall/*`；
+先看 procfs 与日志：
 
 ```bash
-curl http://localhost:9119/metrics
-```
-
-关键指标：
-
-```
-# TYPE firewall_kernel_banned_ips_current gauge
-firewall_kernel_banned_ips_current 5
-
-# TYPE firewall_kernel_bans_total counter
-firewall_kernel_bans_total 12
-
-# TYPE firewall_kernel_unbans_total counter
-firewall_kernel_unbans_total 7
+# 当前封禁 / 白名单 / 统计 / 配置
+sudo cat /proc/firewall/bans /proc/firewall/stats /proc/firewall/config
 ```
 
 ### 查看日志
