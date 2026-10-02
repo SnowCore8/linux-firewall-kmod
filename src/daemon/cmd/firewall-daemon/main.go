@@ -172,9 +172,9 @@ func run(args []string) error {
 		Facts:    runtime.NoHistory{},
 		Sink:     newBanSink(kernelClient, logger, historyDB),
 		Stats:    newStatsSink(logger),
-		Hooks:    nil, // 历史快照与数据清理尚未移植。
-		Reloader: nil, // 配置文件热重载尚未移植。
-		Enabled:  nil, // Web UI 权威启用状态尚未移植。
+		Hooks:    nil,
+		Reloader: runtime.NewFileReloader(cfg.ConfigFile, logger),
+		Enabled:  nil,
 	}
 	executor, err := runtime.NewInboundExecutor(&cfg, signals, deps)
 	if err != nil {
