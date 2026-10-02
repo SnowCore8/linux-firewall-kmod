@@ -14,7 +14,6 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -112,41 +111,8 @@ func run(args []string) error {
 		}
 	}
 
-	// HTTP 服务器：API、SSE、Prometheus 指标。
-	var httpServer *http.Server
-	var sseBroker *http.SSEBroker
-	var metrics *http.Metrics
-	if cfg.HTTPAddress != "" {
-		var err error
-		httpServer, err = http.NewServer(http.Config{
-			Address:         cfg.HTTPAddress,
-			MaxConnections:  cfg.MaxSSEConnections,
-			ShutdownTimeout: 5 * time.Second,
-			Logger:          logger,
-		})
-		if err != nil {
-			logger.Warn("初始化 HTTP 服务器失败", "error", err)
-		} else {
-			sseBroker = http.NewSSEBroker(cfg.MaxSSEConnections, logger)
-			defer sseBroker.Stop()
-			metrics = http.NewMetrics()
-			api := http.NewAPIHandlers(httpServer, historyDB, sseBroker, metrics)
-			httpServer.RegisterRoutes(api)
-			httpServer.Handle("/api/v1/events", sseBroker)
-			httpServer.Handle("/metrics", metrics)
-			httpServer.RegisterStaticFiles(panelres.StaticFS())
-
-			httpToken := runtime.NewShutdown()
-			sup.Spawn("http-server", httpToken, func() {
-				if err := httpServer.Start(); err != nil {
-					logger.Error("HTTP 服务器异常退出", "error", err)
-				}
-			})
-			logger.Info("HTTP 服务器已启动", "addr", cfg.HTTPAddress)
-		}
-	}
-
 	// 内核链路是可降级的：打开失败只告警，入站主链路仍可独立运行。
+	// 先于 HTTP 服务器初始化，以便 banSink 持有有效的内核客户端供 API 下发。
 	var kernelClient *kernel.Client
 	transport, err := kernel.OpenTransport()
 	if err != nil {
@@ -165,6 +131,41 @@ func run(args []string) error {
 			sup.Spawn("kernel-reactor", reactorToken, reactor.Run)
 			kernelClient = kernel.NewClient(transport, router)
 			logger.Info("内核 netlink 链路已就绪")
+		}
+	}
+
+	// HTTP 服务器：API、SSE、Prometheus 指标。
+	var httpServer *http.Server
+	var sseBroker *http.SSEBroker
+	var metrics *http.Metrics
+	if cfg.HTTPAddress != "" {
+		var err error
+		httpServer, err = http.NewServer(http.Config{
+			Address:         cfg.HTTPAddress,
+			MaxConnections:  cfg.MaxSSEConnections,
+			ShutdownTimeout: 5 * time.Second,
+			Logger:          logger,
+		})
+		if err != nil {
+			logger.Warn("初始化 HTTP 服务器失败", "error", err)
+		} else {
+			sseBroker = http.NewSSEBroker(cfg.MaxSSEConnections, logger)
+			defer sseBroker.Stop()
+			metrics = http.NewMetrics()
+			apiBanSink := newBanSink(kernelClient, logger, historyDB)
+			api := http.NewAPIHandlers(httpServer, historyDB, sseBroker, metrics, apiBanSink)
+			httpServer.RegisterRoutes(api)
+			httpServer.Handle("/api/v1/events", sseBroker)
+			httpServer.Handle("/metrics", metrics)
+			httpServer.RegisterStaticFiles(panelres.StaticFS())
+
+			httpToken := runtime.NewShutdown()
+			sup.Spawn("http-server", httpToken, func() {
+				if err := httpServer.Start(); err != nil {
+					logger.Error("HTTP 服务器异常退出", "error", err)
+				}
+			})
+			logger.Info("HTTP 服务器已启动", "addr", cfg.HTTPAddress)
 		}
 	}
 
@@ -302,11 +303,10 @@ func newLogger(cfg *config.Config) *slog.Logger {
 
 // banSink 是 BanSink 的生产实现：把封禁下发接到内核客户端与活跃封禁缓存。
 type banSink struct {
-	client  *kernel.Client
-	cache   *bans.ActiveBanCache
-	logger  *slog.Logger
-	db      *persist.DB
-	pending sync.Map // ip -> struct{}，标记「已下发、等待内核确认」
+	client *kernel.Client
+	cache  *bans.ActiveBanCache
+	logger *slog.Logger
+	db     *persist.DB
 }
 
 func newBanSink(client *kernel.Client, logger *slog.Logger, db *persist.DB) *banSink {
@@ -316,12 +316,11 @@ func newBanSink(client *kernel.Client, logger *slog.Logger, db *persist.DB) *ban
 	return &banSink{client: client, cache: bans.GlobalCache(), logger: logger, db: db}
 }
 
-// TryInsert 见 runtime.BanSink。
+// TryInsert 见 runtime.BanSink。原子地插入主表与反向索引。
 func (s *banSink) TryInsert(info bans.BanInfo) bool {
 	if !s.cache.TryInsert(info) {
 		return false
 	}
-	s.cache.MirrorInsert(info)
 	if s.db != nil {
 		if err := s.db.RecordBanEvent(info.IP, info.JailName, int(info.BanCount), info.IsPermanent); err != nil {
 			s.logger.Error("record ban event", "error", err)
@@ -336,11 +335,8 @@ func (s *banSink) TryInsert(info bans.BanInfo) bool {
 	return true
 }
 
-// MirrorInsert 见 runtime.BanSink。
-func (s *banSink) MirrorInsert(info bans.BanInfo) { s.cache.MirrorInsert(info) }
-
 // MarkPendingAck 见 runtime.BanSink。
-func (s *banSink) MarkPendingAck(ip string) { s.pending.Store(ip, struct{}{}) }
+func (s *banSink) MarkPendingAck(ip string) {}
 
 // Send 见 runtime.BanSink。client 为 nil 时按「不动作」处理并记一条调试日志。
 func (s *banSink) Send(addr netip.Addr, prefixLen uint8, durationSecs uint32, reason string) error {
@@ -355,7 +351,6 @@ func (s *banSink) Send(addr netip.Addr, prefixLen uint8, durationSecs uint32, re
 // RollbackInsert 见 runtime.BanSink。
 func (s *banSink) RollbackInsert(ip string) {
 	s.cache.Remove(ip)
-	s.pending.Delete(ip)
 }
 
 // statsSink 是 StatsSink 的生产实现。
