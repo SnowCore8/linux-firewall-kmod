@@ -99,8 +99,8 @@ cat /proc/firewall/config
 # 计数器（total_bans、total_unbans、packets_dropped 等）
 cat /proc/firewall/stats
 
-# Prometheus 指标：Go module `src/daemon` **尚未移植 HTTP**，当前不暴露 `/metrics`
-（[用户态守护进程](../architecture/daemon.md)「可观测性」）。运行时可用 procfs +
+# Prometheus 指标：Go module `src/daemon` 已移植 HTTP，通过 `/metrics` 暴露
+（[用户态守护进程](../architecture/daemon.md)「可观测性」）。运行时也可用 procfs +
 日志替代：
 
 ```bash

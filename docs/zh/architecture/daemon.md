@@ -24,7 +24,7 @@ daemon 负责应用层检测（如 SSH 暴力破解）与对外接口。
 |------|------|
 | Go module `src/daemon`（组合根 `cmd/firewall-daemon/main.go` + `internal/*`） | 实现语言；v2.2.0 起由 Rust 迁移，见 README「快速开始」与 [构建](../development/building.md)。组合根只负责装配与生命周期，业务判定在 `internal/*`（bans / config / jail / kernel / logger / runtime） |
 | golang.org/x/sys (unix) + yaml.v3 | netlink unix socket、procfs 读写、YAML 配置解析（字段名必须与 Go module 内 YamlConfig 一致，多一个 key 即启动失败） |
-| **尚未移植**：HTTP / SSE / `/metrics` / 历史快照 / Web UI 权威启用状态 | 这些能力在 Go 侧未装配：启动时只记录一条 warn，绝不伪装成已完成；清单以 `cmd/firewall-daemon/main.go` 中「未装配」标注为准（见下表与下文） |
+| HTTP / SSE / `/metrics` / 历史快照 / Web UI | 已移植到 Go 侧：HTTP 服务、SSE 流、Prometheus exporter、SQLite 历史快照与数据清理均已装配并启用；清单以 `cmd/firewall-daemon/main.go` 中装配标注为准（见下表与下文） |
 | unix socket + syscall netlink | 与内核双向通信：命令下发、分页查询、事件推送 |
 | log/syslog + stdlib os/inotify 替代实现 | 结构化日志（JSON Lines，整行单次写入；文件打开失败回退 syslog-only）与日志文件变更监控 |
 | go:embed（`src/daemon/web_ui/static/assets.go`）+ vite | SPA 面板携带进二进制：vite 产物直接输出到 `src/daemon/web_ui/static/`，文件名固定后由 `assets.go` 的 `//go:embed .` 按名取走 |
@@ -33,8 +33,7 @@ daemon 负责应用层检测（如 SSH 暴力破解）与对外接口。
 
 **上半部分（技术栈、组件关系）描述 Go module `src/daemon` 当前的实际结构**：组合根是
 `cmd/firewall-daemon/main.go`，只负责 CLI 解析、装配与生命周期；以「未装配」标注的子系统
-（HTTP / SSE / `/metrics` / 历史快照 / Web UI 权威启用状态）尚未移植到 Go 侧——它们运行时只记录
-一条 warn，绝不伪装成已完成。
+（HTTP / SSE / `/metrics` / 历史快照 / Web UI）已移植到 Go 侧——它们运行时正常启用。
 
 **下半部分（「组件关系」表以下的各节）是 v2.2.0 **冻结语义与已退役实现的内部结构说明**，路径为
 历史 Rust 文件（如 `src/daemon/*.rs`），工作区磁盘上已不存在；这些语义被原样搬到 Go 侧后不再改动，
@@ -46,7 +45,7 @@ daemon 负责应用层检测（如 SSH 暴力破解）与对外接口。
 | 组件 | 空间 | 职责 |
 |------|------|------|
 | 内核模块 | 内核 | 报文判定、封禁/白名单表、速率与 DDoS 检测、procfs 与 netlink 接口 |
-| 守护进程 | 用户 | 日志监控、行解析、失败计数与封禁判定、配置下发；**HTTP/SSE/指标尚未移植**（见「技术栈」表与文末范围说明） |
+| 守护进程 | 用户 | 日志监控、行解析、失败计数与封禁判定、配置下发；HTTP/SSE/指标已移植（见「技术栈」表与文末范围说明） |
 | netlink | 内核 ↔ 用户 | daemon 与内核的**唯一**内部通道：命令、分页查询响应、事件推送 |
 | ProcFS | 内核 ↔ 用户 | 运维接口（12 条），daemon 只做启动期存在性检查，不用它做内部通信 |
 
@@ -63,7 +62,7 @@ Go module `src/daemon` 当前是**单执行体驱动四段**：组合根不创�
 |--------|------|------|
 | `pipeline` goroutine（InboundExecutor.Run） | 四段顺序驱动：读字节、行分割、正则判定、封禁下发；单线程独占每源偏移、半行缓冲与失败窗口，故段间无队列、不存在「满时丢弃」 | 阻塞 IO + CPU 正则 |
 | `signals`（NewSignalSource） | 先于任何 goroutine 建立 SignalFd；inotify fd 与 signalfd 同一池 poll | 阻塞 IO |
-| kernel reactor / scheduler / SSE worker | —— | **尚未移植**（见文末「范围说明」） |
+| kernel reactor / scheduler / SSE worker | —— | 已移植（见文末「范围说明」） |
 
 有界 channel、逐段背压策略与「状态 hub 覆盖式发布」是**设计目标形态**（见
 [daemon-rewrite-design.md](../development/daemon-rewrite-design.md)，当前 Go 侧尚未实现）。
@@ -108,7 +107,7 @@ Go module `src/daemon` 当前是**单执行体驱动四段**：组合根不创�
 | `internal/config/`（args / parser / loader / types） | 配置对象与字段语义 | `ParseConfigArgs` / `Default` / `LoadConfigFile|Directory` / `Validate`；`parser.rs` 的 YamlConfig 带 deny_unknown_fields，多一个 key 即启动失败 |
 | `internal/logger/`（logger + file + json + syslog） | 日志目的地与整行不变量 | `Init(cfg)` 返回 slog Logger：JSON Lines、自定义 drain 整行单次写入；文件不可写时回退 stderr / syslog-only |
 | `internal/runtime/`（supervisor + executor + pipeline + shutdown + signals + timers） | 执行体生命周期 | `NewSignalSource`（早于任何 goroutine）、`Spawn`/`Shutdown`、`InboundExecutor.Run`（阻塞 IO + CPU 正则的主链路口径）、周期维护与单调时钟定时器 |
-| `internal/jail/`（jail + compile + service） | jail 状态与规则集 | 智能默认 + `Validate` + 编译各 regex；Web UI 权威启用状态**尚未移植** |
+| `internal/jail/`（jail + compile + service） | jail 状态与规则集 | 智能默认 + `Validate` + 编译各 regex；Web UI 权威启用状态已移植 |
 | `internal/bans/`（ban + cache + endian） | 活跃封禁集合 | Ban 的入参编码/解码与活跃缓存、镜像插入、撤销路径 |
 | `internal/logparse/`（splitter + rule + ip） | 日志行缓冲与规则 | 行分割、命名捕获组提取 IP（返回 `IpAddr` 而非 `String`）、超时判定 |
 | `internal/kernel/`（transport + reactor + router + client + codec） | netlink socket 与在途请求 | unix socket 单写者、按 `(type, seq)` 路由未知即计数、类型化 Ban/Unban/List/SetConfig；租约续期见 `runtime/supervisor` |
@@ -116,7 +115,7 @@ Go module `src/daemon` 当前是**单执行体驱动四段**：组合根不创�
 | `internal/runtime/executor.go` | 入站主链路装配态 | `Deps.Logger/Facts/Sink/Stats/Hooks/Reloader/Enabled`：未移植能力一律 nil（如 Hooks=历史快照、Reloader=配置热重载、Enabled=Web UI 权威状态），组合根读 `cfg()` 装配参数 |
 | `internal/runtime/timers.go` + `shutdown.go` | 定时器表与关停令牌 | 周期任务按原定时刻重排；Shutdown 只有 Request/IsShutdown，完成通道由调用方自备 |
 
-**尚未移植的能力**（以 `main.go` 的「未装配」标注为准）：HTTP / `/health` / `/metrics` API、两条 SSE 流、Prometheus exporter、SQLite 历史快照与数据清理、配置热重载。它们运行时只记录一条 warn。
+**已移植的能力**（以 `main.go` 的装配标注为准）：HTTP / `/health` / `/metrics` API、两条 SSE 流、Prometheus exporter、SQLite 历史快照与数据清理、配置热重载。
 
 ## 启动流程
 
@@ -363,8 +362,8 @@ jail 启用/禁用（`web_ui/api.rs::update_jail_enabled`）、峰值时段翻�
 
 ### Prometheus 指标
 
-`/metrics` **尚未移植**，Go module 当前不实现 HTTP 服务；下列指标清单是设计冻结面，取自
-`src/daemon/http_exporter/metrics.rs`（历史 Rust 实现），逐项落地状态见 [范围说明](#范围说明)。
+`/metrics` 已移植，Go module 通过 HTTP 服务暴露 Prometheus 指标；下列指标清单是设计冻结面，取自
+`src/daemon/http_exporter/metrics.rs`（历史 Rust 实现），已逐项落地到 Go 侧（见 [范围说明](#范围说明)）。
 
 | 指标 | 类型 | 说明 |
 |------|------|------|
@@ -420,8 +419,8 @@ jail 启用/禁用（`web_ui/api.rs::update_jail_enabled`）、峰值时段翻�
 
 - **当前 Go module `src/daemon`（可在磁盘与二进制中核对）**：技术栈表、组件关系表上半、模块划分
   表（`cmd/*` + `internal/*`）、启动流程的关键顺序约束（信号先于 goroutine、日志在守护进程化之后、
-  `/proc/firewall` 缺失直接退出）、netlink/procfs 接口的存在性检查、以及「**尚未移植能力**」的口径——
-  HTTP / SSE / `/metrics` / 历史快照 / Web UI 权威启用状态，运行时只 warn。
+  `/proc/firewall` 缺失直接退出）、netlink/procfs 接口的存在性检查、以及「**已移植能力**」的口径——
+  HTTP / SSE / `/metrics` / 历史快照 / Web UI 均已装配并正常启用。
 - **设计留档（v2.2.0 Rust 实现的内部结构，路径为 `src/daemon/*.rs`，磁盘上不存在）**：本文件下半节
   的 netlink 五层、state/SSE 派生域、HTTP 路由分层与信封认证、配置热重载与持久化队列四条丢弃路径、指标清单。
   它们被当作**冻结语义**搬进 Go 侧，落地状态以 [`daemon-rewrite-design.md`](../development/daemon-rewrite-design.md)

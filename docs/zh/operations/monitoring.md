@@ -274,7 +274,7 @@ if [ ! -f /proc/firewall/config ]; then
 fi
 
 # 检查 Prometheus 端口
-只检查 ProcFS（HTTP 尚未移植）：
+HTTP 已移植，同时检查 ProcFS：
 
 ```bash
 # 只检查 ProcFS

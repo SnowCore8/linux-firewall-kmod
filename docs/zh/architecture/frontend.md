@@ -124,8 +124,8 @@ Theme 在最外层，主题令牌才能覆盖 Toast / Popup 这类 portal 内容
 **立即用 `history.replaceState` 从地址栏移除**，避免它出现在截图、历史记录或分享出去的地址里。
 
 `withAccessToken()` 拼接时做 `encodeURIComponent`，服务端对应做百分号解码——这一对必须
-**成对修改，只改一边的表现是 **SSE 永久 401**；服务端对应实现尚未移植到 Go module
-`src/daemon`（见 [用户态守护进程](daemon.md)「尚未移植的能力」），此处只约定这一对的写法。
+**成对修改，只改一边的表现是 **SSE 永久 401**；服务端对应实现已移植到 Go module
+`src/daemon`（见 [用户态守护进程](daemon.md)），此处只约定这一对的写法。
 
 ### 为什么不依赖浏览器原生认证弹窗
 
@@ -164,8 +164,8 @@ E2E_LAN_ORIGIN=http://<局域网IP>:<port> npm run test:e2e
 sudo bash scripts/e2e-daemon.sh stop
 ```
 
-观察结果（本机 2026-09-21，Chromium）。该表记录的是**尚未移植的 HTTP 服务在 9119 上的行为**
-（Go module `src/daemon` 当前不监听任何地址）：
+观察结果（本机 2026-09-21，Chromium）。该表记录的是**已移植的 HTTP 服务在 9119 上的行为**
+（Go module `src/daemon` 监听该地址）：
 
 | 上下文 | `'serviceWorker' in navigator` | 注册 / 安装 | 页面功能 | 控制台 |
 |--------|-------------------------------|-------------|----------|--------|
@@ -188,7 +188,7 @@ hash 路由只解决客户端；服务端还认一份固定路径清单，漏一
 2. `frontend/src/components/AppShell.tsx` —— `PAGE_TITLES` 加标题；一级页还要加进 `TABS`
    或 `MORE_CHILD_PATHS`；
 3. 服务端侧：vite 产物落盘后由 `web_ui/static/assets.go` 的 `//go:embed .` 声明路径，
-   Go 守护进程目前**不注册 SPA 路由**（「尚未移植」），只在前端校验文档中记录这套约束；
+   Go 守护进程已注册 SPA 路由（已移植），前端校验文档中记录这套约束；
 4. `contract/http.fwidl` —— 改契约，再 `python3 contract/gen.py contract/http.fwidl` 重新生成
    工件，最后 `python3 contract/verify_http.py` 核对。
 

@@ -6,8 +6,8 @@
 
 系统由两个主要组件构成：内核模块负责报文判定与表管理，守护进程负责日志监控、决策与对外接口。
 两者之间**必须走 netlink**；procfs 是给用户/运维的接口，不是 daemon 的内部通道
-（procfs 是给用户/运维的接口，不是 daemon 的内部通道）。Go module `src/daemon` 当前不实现 HTTP：
-HTTP 路由与凭据鉴权尚未移植（见 [用户态守护进程](daemon.md)），只有 netlink / procfs 两条通道。
+（procfs 是给用户/运维的接口，不是 daemon 的内部通道）。Go module `src/daemon` 已实现 HTTP 服务、SSE、Prometheus 指标与 Web UI（见 [用户态守护进程](daemon.md)），
+经 netlink / procfs / HTTP 三条通道对外提供服务。
 
 ```mermaid
 graph TB
@@ -64,8 +64,8 @@ graph TB
 | 速率表哈希桶 | 65536（`RATE_HASH_BITS` = 16） | 桶数，不是容量 |
 | 速率表条目上限 | `fw_max_rate_entries`（默认 65536） | 文档化范围 1024–262144 |
 | 本机地址集合 | 下界 `fw_max_local_ips`（默认 256），硬上界 2^16 | 按实际地址数扩容 |
-| Prometheus 端口 | **尚未移植**：Go module 当前不实现 HTTP；历史值见 [用户态守护进程](daemon.md)
-的「可观测性」一节
+| Prometheus 端口 | `9119`（Go module `src/daemon` 已移植，见 [用户态守护进程](daemon.md)
+的「可观测性」一节）
 
 以上 `fw_max_*` 都是**内核模块参数**，只在加载模块或写 sysfs 时生效。daemon 配置里的
 `capacity:` 段目前只做持久化与展示，不经 netlink 下发——`SetConfig` 消息没有容量字段

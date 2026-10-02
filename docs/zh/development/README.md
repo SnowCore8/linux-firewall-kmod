@@ -50,7 +50,7 @@ graph LR
 | 组件 | 入口 | 职责 |
 |------|------|------|
 | 内核模块 | `src/kernel-module/fw_main.c` | 注册 netfilter hook，维护封禁/白名单并在数据包路径执行判定 |
-| 守护进程 | `cmd/firewall-daemon/main.go`、`internal/*` | 组合根只负责装配与生命周期；业务判定在 `internal/`（bans / config / jail / kernel / logger / logparse / runtime），HTTP / SSE / 指标尚未移植，只 warn |
+| 守护进程 | `cmd/firewall-daemon/main.go`、`internal/*` | 组合根只负责装配与生命周期；业务判定在 `internal/`（bans / config / jail / kernel / logger / logparse / runtime），HTTP / SSE / 指标已移植 |
 | Web 前端 | `frontend/src/main.tsx` | React 19 移动端管理界面（antd-mobile，hash 路由，支持 PWA）；构建后嵌入守护进程二进制，不单独部署 |
 
 ### 构建链路

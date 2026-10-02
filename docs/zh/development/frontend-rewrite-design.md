@@ -5,7 +5,7 @@
 
 本文是 v2.2.0 **前端重写设计的历史记录**，随 master 切到 Go module `src/daemon`（React 面板由
 `src/daemon/web_ui/static/assets.go` 的 `//go:embed .` 携带进守护进程二进制）而冻结：其中的页面清单、
-接口语义与验收门槛属于**已退役实现**。当前组合根与「尚未移植能力」的口径见
+接口语义与验收门槛属于**已退役实现**。当前组合根与已移植能力的口径见
 [architecture/daemon.md](../architecture/daemon.md)；React 面板本身仍以 `frontend/`
 （React 19 + TypeScript + Vite，hash 路由）为准。
 > 事实以仓库源码为准——`frontend/`（React 应用）、`src/daemon/web_ui/`（静态资源与嵌入）、

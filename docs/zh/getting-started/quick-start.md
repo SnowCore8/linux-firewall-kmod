@@ -109,7 +109,7 @@ echo "unban 192.168.1.100" | sudo tee /proc/firewall/bans
 
 ## 第五步：状态（procfs / 日志）
 
-Go module `src/daemon` **尚未移植 HTTP 服务**，守护进程只暴露 `/proc/firewall/*`；
+Go module `src/daemon` 已移植 HTTP 服务，守护进程同时暴露 `/proc/firewall/*` 与 HTTP 接口；
 先看 procfs 与日志：
 
 ```bash

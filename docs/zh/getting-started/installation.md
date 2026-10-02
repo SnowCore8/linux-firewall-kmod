@@ -217,7 +217,7 @@ Whitelist entries: 0
 sudo systemctl status firewall-daemon
 ```
 
-### 检查状态（procfs）：Go module `src/daemon` **尚未移植 HTTP**，守护进程只暴露 `/proc/firewall/*`
+### 检查状态：Go module `src/daemon` 已移植 HTTP，守护进程同时暴露 `/proc/firewall/*` 与 HTTP 接口
 
 ```bash
 sudo cat /proc/firewall/bans /proc/firewall/stats /proc/firewall/config
@@ -239,7 +239,7 @@ sudo cat /proc/firewall/bans /proc/firewall/stats /proc/firewall/config
 3. **守护进程启动流程**
    - 读取 `/etc/firewall/*.yaml` 下的所有配置文件(按字典序加载,后加载的覆盖前加载的)
    - 编译各 jail 的正则表达式(`regex::Regex::new`)
-   - 当前 Go 实现只初始化 procfs、规则集与 inotify（HTTP **尚未移植**）
+   - 当前 Go 实现初始化 procfs、规则集、inotify 与 HTTP 服务（已移植）
    - 进入主监控循环：正则匹配 → 失败计数 → 阈值判定 → 封禁
    - 进入主监控循环:正则匹配 → 失败计数 → 阈值判定 → 调用 procfs 触发封禁
 
