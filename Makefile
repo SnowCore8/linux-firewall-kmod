@@ -1,8 +1,7 @@
 # Makefile for firewall project
 # Out-of-tree build: all artifacts go to build/ directory
 #
-# Daemon is built in Rust (cargo). C daemon source has been removed.
-
+# Daemon is built in Go (src/daemon-go). The kernel module stays C.
 # ============================================================================
 # 1. 版本与元信息
 # ============================================================================
@@ -29,11 +28,19 @@ PWD := $(CURDIR)
 # 源码目录
 KERNEL_SRC_DIR := src/kernel-module
 
-# 前端构建产物目录（rust-embed 嵌入源，由 vite 输出）
+# 前端构建产物目录（vite 输出；Go 守护进程通过 embed 随二进制携带）
 WEBUI_STATIC_DIR := src/daemon/web_ui/static
 
+# Go 守护进程源码根与 Node 应用输入根
+DAEMON_SRCS_DIR := src/daemon-go
+PFX_FRONTEND   := frontend
+
+# golangc 检查 Go 1.23+ 是否随 PATH
+GOC            ?= go
+GOVER          ?= 1.23
+
 # 构建输出目录
-BUILD_DIR        := build
+BUILD_DIR      := build
 KERNEL_BUILD_DIR := $(BUILD_DIR)/kernel-module
 DAEMON_BUILD_DIR := $(BUILD_DIR)/daemon
 
@@ -99,26 +106,35 @@ $(KERNEL_MODULE): $(wildcard $(KERNEL_SRC_DIR)/*.c) $(wildcard $(KERNEL_SRC_DIR)
 		$(KERNEL_SRC_DIR)/modules.order $(KERNEL_SRC_DIR)/Module.symvers \
 		$(KERNEL_SRC_DIR)/.module-common.o
 
-# 守护进程 (Rust)
+# 守护进程 (Go，源码在 $(DAEMON_SRCS_DIR)，编译产物保持为 $(DAEMON_BIN))。
+# install / deb / clean 三处最终都要取这个二进制；换成 Go 前需一并更新。
 .PHONY: daemon
-daemon: frontend
-	@echo "  CARGO   building Rust daemon"
-	@cargo build --release --quiet
+daemon: $(WEBUI_STATIC_DIR) | $(DAEMON_SRCS_DIR)/cmd/firewall-daemon/main.go
+	@echo "  GOC     building Go daemon"
 	@mkdir -p $(DAEMON_BUILD_DIR)
-	@cp target/release/firewall-daemon $(DAEMON_BIN)
-	@echo "  ✓ Rust daemon built: $(DAEMON_BIN)"
+	@cd $(DAEMON_SRCS_DIR) && go build -ldflags "-s -w=1" \
+		 -o $(DAEMON_BIN) ./cmd/firewall-daemon
+
+# 编译前置：golangc 保证有 Go 1.23+，没有则先安装（go 随 PATH 时直接调用）
+$(DAEMON_SRCS_DIR): $(GOC)
+	@echo "  GOC     checking Go $(GOVER)"
+	@$(GOC) version
 
 # 前端 (React 19 + TypeScript + Vite + antd-mobile，移动优先)
 # 依赖锁定：frontend/package-lock.json 已入库，CI 用 npm ci 保证可复现
 .PHONY: frontend frontend-install frontend-typecheck
-frontend: frontend-install
-	@echo "  VITE    building React frontend"
-	@cd frontend && npm run build
-	@echo "  ✓ Frontend built to src/daemon/web_ui/static/"
+frontend: $(DAEMON_SRCS_DIR)/web_ui/static
 
-frontend-install:
+$(DAEMON_SRCS_DIR)/web_ui/static: frontend
+	@mkdir -p $(WEBUI_STATIC_DIR)
+	@cd $(PFX_FRONTEND) && npm run build
+	@echo "  ✓ Frontend built to $(WEBUI_STATIC_DIR)/"
+
+# 仅安装依赖（不产出构建物），CI 用 npm ci 保证可复现
+.PHONY: frontend-install
+frontend-install: $(PFX_FRONTEND)/package-lock.json
 	@echo "  NPM     installing frontend dependencies"
-	@cd frontend && npm ci --no-audit --no-fund
+	@cd $(PFX_FRONTEND) && npm ci --no-audit --no-fund
 
 # 仅做类型检查（tsc --noEmit），不产出构建物
 frontend-typecheck: frontend-install
