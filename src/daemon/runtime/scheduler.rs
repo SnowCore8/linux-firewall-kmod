@@ -39,6 +39,12 @@ const PURGE_INTERVAL: Duration = Duration::from_secs(5);
 /// 而 30 秒也是「新服务刚暴露到公网」到「纳入速率判定」之间的最长窗口，够短。
 const PROTECTED_PORTS_INTERVAL: Duration = Duration::from_secs(30);
 
+/// 异常检测快照周期。
+///
+/// 与 `history_snapshot` 的 5 分钟周期对齐——两者都是「每轮从速率表取一次特征」
+/// 的轻量分析，没必要跑得更频繁。
+const ANOMALY_INTERVAL: Duration = Duration::from_secs(300);
+
 /// 在 `sup` 下登记周期任务执行体（`scheduler` 名下，由 [`super::timers::spawn_scheduler`] 托管）。
 ///
 /// 承载四个子任务：
@@ -68,6 +74,7 @@ pub fn spawn_periodic(sup: &mut Supervisor, token: Shutdown) -> std::io::Result<
     let mut last_stats_tick: Option<Instant> = None;
     let mut last_purge: Option<Instant> = None;
     let mut last_ports_tick: Option<Instant> = None;
+    let mut last_anomaly_tick: Option<Instant> = None;
     // 上一次**已成功下发**的内容。`None` = 本次进程还没下发过。
     let mut last_published_ports: Option<Published> = None;
     // 上一次观察到的峰值时段标志。jails 载荷含 `is_peak_hours` 与由它算出的
@@ -117,6 +124,15 @@ pub fn spawn_periodic(sup: &mut Supervisor, token: Shutdown) -> std::io::Result<
         if ports_due {
             last_ports_tick = Some(now);
             refresh_protected_ports(&mut last_published_ports);
+        }
+
+        let anomaly_due = match last_anomaly_tick {
+            None => true,
+            Some(t) => now.duration_since(t) >= ANOMALY_INTERVAL,
+        };
+        if anomaly_due {
+            last_anomaly_tick = Some(now);
+            crate::anomaly::update_anomaly_tick(crate::types::now_secs());
         }
     })
 }

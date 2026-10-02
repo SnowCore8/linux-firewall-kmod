@@ -56,11 +56,11 @@
 - 单守护进程互斥注册：`DAEMON_REGISTER` 成功后独占；已有活跃守护进程时 `accepted = 0`；
   注册时先探活旧 portid（已死则立即放行接管），30 s 活动超时作「活着但卡死」的兜底。
   **未注册实例下发的指令必须被拒绝。**
-- 各消息定长：`DdosEvent` 65、`BanStateChange` 122、`WhitelistStateChange` 51、`CmdResult` 37、
-  `ConfigAck` 20、`ConfigChange`/`SetConfig` 116、`StatsResponse` 60、`BanIp`/`UnbanIp` 65、
-  `AddWhitelist`/`RemoveWhitelist` 46、`StatsResponse` 系列裸头 12。
-- **变长响应必须分页**：`ListBansResponse` 24 + 94×N（N ≤ 696）、
-  `ListWhitelistResponse` 16 + 34×N（N ≤ 1927）、`ListRatesResponse` 36 + 84×N（N ≤ 779）。
+- 各消息的定长尺寸与变长响应的分页上限**不在本文写死**（改一次线格式就全失效）：
+  跑 `python3 contract/gen.py contract/netlink.fwidl`，它逐条打印定长字节数与
+  「u16 上限内最多可承载多少尾部条目」，以那份输出为准。
+- **变长响应必须分页**：`ListBansResponse`、`ListWhitelistResponse`、
+  `ListRatesResponse` 均带 `count` / `total` / `offset` 与尾部元素。
 - `AnalysisResponse` 全定长 **4756 字节**，无变长尾部。
 - `ConfigFlags` 13 位、`DynThresholdFlags` 1 位，位序不可改。
 
@@ -343,7 +343,7 @@ exit:  shutting_down=1 → cancel delayed work → 注销 hook(v4,v6) → synchr
 | `PROC_STATS_STALE_NO_FLUSH`（medium） | `stats_show` 读前调用跨 CPU flush，与 netlink `STATS_QUERY` 一致 |
 | `PROC_WHITELIST_REMOVE_SUBNET_OVERREACH`（low） | `remove` 的「本机接口 IP」判定改精确匹配（见「白名单」） |
 | `DaemonRegisterAck` 载荷错位 | `accepted` 写独立字节，`seq` 只作序列号 |
-| `ListRatesResponse` 无分页 | 按 `count`/`total` 分页，单页 ≤ 779 条 |
+| `ListRatesResponse` 无分页 | 按 `count`/`total` 分页，单页上限由 `gen.py` 打印（随条目尺寸变化） |
 
 ### 本次新查出的稳定性问题（需先写入契约再修）
 

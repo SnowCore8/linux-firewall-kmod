@@ -636,6 +636,91 @@ export interface AttackPredictionSummary {
   within_24h_count: number
 }
 
+/** 异常检测响应（Rust `AnomalyResponse`） */
+export interface AnomalyResponse {
+  /** 全局异常评分（0-100） */
+  global_score: number
+  /** 全局各维度偏差分 */
+  global_dimensions: DimensionScore[]
+  /** 全局当前特征值 */
+  global_features: FeatureValue[] | null
+  /** 全局 p50 基线 */
+  global_baseline_p50: FeatureValue[]
+  /** 全局 p95 基线 */
+  global_baseline_p95: FeatureValue[]
+  /** 滚动窗口样本数 */
+  global_sample_count: number
+  /** per-IP 异常 IP 列表 */
+  ip_anomalies: IpAnomalyEntry[]
+  /** 最近更新时间戳（Unix 秒） */
+  timestamp: number
+}
+
+/** 单维度偏差分 */
+export interface DimensionScore {
+  name: string
+  score: number
+}
+
+/** 单个特征维度值 */
+export interface FeatureValue {
+  name: string
+  value: number
+}
+
+/** per-IP 异常条目 */
+export interface IpAnomalyEntry {
+  ip: string
+  score: number
+  dimensions: DimensionScore[]
+}
+
+/**
+ * 本机坐标的来源。
+ * - `config`：来自配置项 server_latitude / server_longitude（权威值）
+ * - `detected`：由守护进程探测出口 IP + 本地 GeoIP 库解析得到（非权威，仅供展示）
+ * - `none`：未配置也未探测到 → 不绘制本机标记与弧线
+ */
+export type ServerLocationSource = 'config' | 'detected' | 'none'
+
+/** 攻击源地理分布（Rust `AttackGeoResponse`） */
+export interface AttackGeoResponse {
+  /** 地理解析是否可用（GeoIP 数据库是否已装配） */
+  geoip_enabled: boolean
+  /** 按总封禁数降序的地点列表 */
+  points: GeoPoint[]
+  /** 参与统计的 IP 总数（含无法定位的） */
+  total_ips: number
+  /** 成功定位的 IP 数 */
+  located_ips: number
+  /** 本机（服务器）纬度；未配置且未探测到时为 null（此时不绘制本机标记与弧线） */
+  server_latitude: number | null
+  /** 本机（服务器）经度；未配置且未探测到时为 null */
+  server_longitude: number | null
+  /** 本机坐标的来源；`none` 时前端不绘制本机标记与相关弧线 */
+  server_location_source: ServerLocationSource
+}
+
+/** 单个地理位置的攻击统计 */
+export interface GeoPoint {
+  latitude: number
+  longitude: number
+  /** 国家 ISO 代码（如 CN） */
+  country_code: string
+  country: string
+  city: string
+  /** 一级行政区名 */
+  subdivision: string
+  /** 该位置被封禁的唯一 IP 数 */
+  unique_ips: number
+  /** 该位置的总封禁次数 */
+  total_bans: number
+  /** 代表 IP（封禁次数最多者） */
+  top_ip: string
+  /** 最近一次封禁时间（Unix 秒） */
+  last_banned_at: number
+}
+
 // ============================================================================
 // 日志（log_viewer.rs）
 // ============================================================================

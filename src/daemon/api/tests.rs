@@ -502,6 +502,23 @@ async fn the_stats_counter_fields_come_from_the_state_owner() {
 }
 
 #[tokio::test]
+async fn the_stats_today_bans_comes_from_the_history_port() {
+    // 缺陷 HTTP_TODAY_BANS_EQUALS_TOTAL 的回归锁：今日数必须取自历史端口的
+    // 「今日窗口」值，而不是与 total_bans 同源的累计计数器。
+    let h = Harness::new().with_today_bans(42);
+    h.state.stats().add(crate::state::Counter::IpsBanned, 7);
+
+    let json = serde_json::to_value(handle_api_stats(State(Arc::clone(&h.api))).await.0)
+        .expect("可序列化");
+    assert_eq!(json["data"]["today_bans"], 42, "今日封禁数应来自历史端口");
+    assert_eq!(json["data"]["total_bans"], 7, "累计数仍来自计数器");
+    assert_ne!(
+        json["data"]["today_bans"], json["data"]["total_bans"],
+        "两个量不得再取同一个值"
+    );
+}
+
+#[tokio::test]
 async fn the_stats_whitelist_count_comes_from_the_whitelist_owner() {
     // 旧实现另有一枚近似计数值，与白名单表迟早漂移；新实现只认所有者。
     let h = Harness::new();

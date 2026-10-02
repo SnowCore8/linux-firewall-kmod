@@ -828,6 +828,7 @@ pub fn apply_rates(snapshot: &codec::RateSnapshot) {
             ack_packets_per_sec: e.ack_packets,
             rst_packets_per_sec: e.rst_packets,
             fin_packets_per_sec: e.fin_packets,
+            unique_ports: e.unique_ports,
         });
     }
 

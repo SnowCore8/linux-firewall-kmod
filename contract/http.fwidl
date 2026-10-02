@@ -218,8 +218,10 @@ defect HTTP_RECIDIVISM_RATE_UNIT {
 
 defect HTTP_TODAY_BANS_EQUALS_TOTAL {
   severity = low
+  status = fixed
+  fix = "src/daemon/history_snapshot/today_bans.rs:pub fn today_ban_count"
   where = "src/daemon/web_ui/stats.rs:today_bans"
-  resolution = "today_bans 改为真实「今日」窗口（本地时区自然日 00:00 起，按各封禁的 banned_at 计数），并在此契约中写明窗口定义与所用的时区。"
+  resolution = "today_bans 改为真实「今日」窗口（本地时区自然日 00:00 起，按各封禁的 banned_at 计数），窗口定义与时区已写进 StatsResponse.today_bans 的字段注释；取值经 HistoryPort::today_bans 由 REST 与 SSE 两条读路径共用。旧实现（web_ui/stats.rs 的 get_stats 及其威胁等级评估）无调用方，随本次一并删除——统计总览只剩 api/views.rs 一份。"
   text = "today_bans 与 total_bans 取的是同一个值，『今日』这一时间窗并未实现。仪表盘上两个数字永远相同"
 }
 
@@ -386,6 +388,13 @@ route GET "/jails" {
 route GET "/ddos" {
   auth = none
   handler = handle_spa_ddos
+  returns = text
+  status = 200
+}
+
+route GET "/globe" {
+  auth = none
+  handler = handle_spa_globe
   returns = text
   status = 200
 }
@@ -784,6 +793,106 @@ route GET "/api/v1/stats/attack-predictions" {
   note = "载荷 AttackPredictionSummary"
 }
 
+route GET "/api/v1/stats/anomalies" {
+  auth = required
+  handler = handle_api_anomalies
+  returns = type
+  status = 200
+  note = "异常检测：全局流量偏离 + per-IP 行为离群；载荷 AnomalyResponse"
+}
+
+# 异常检测载荷（Rust `web_ui::anomaly`）。只观测、不触发任何封禁。
+#
+# `global_features` 为 null 表示本轮样本不足（未达最小样本护栏），此时
+# `global_dimensions` 与两条基线为空数组、`global_score` 为 0。
+type AnomalyResponse {
+  # 全局异常评分（0-100）
+  global_score: f64
+  # 全局各维度偏差分（0-1 归一化）
+  global_dimensions: Vec<DimensionScore>
+  # 全局当前特征值；样本不足时为 null
+  global_features: Option<Vec<FeatureValue>>
+  # 全局 p50 基线
+  global_baseline_p50: Vec<FeatureValue>
+  # 全局 p95 基线
+  global_baseline_p95: Vec<FeatureValue>
+  # 滚动窗口样本数
+  global_sample_count: usize
+  # per-IP 异常列表（按评分降序，最多 20 条）
+  ip_anomalies: Vec<IpAnomalyEntry>
+  # 最近更新时间戳（Unix 秒）
+  timestamp: i64
+}
+
+# 单维度偏差分；`name` 取自该维度的维度名表（全局与 per-IP 各自一套）。
+type DimensionScore {
+  name: String
+  # 偏差分（0-1）
+  score: f64
+}
+
+type FeatureValue {
+  name: String
+  value: f64
+}
+
+type IpAnomalyEntry {
+  ip: String
+  # 异常评分（0-100）
+  score: f64
+  # 各维度偏差分
+  dimensions: Vec<DimensionScore>
+}
+
+route GET "/api/v1/stats/attack-geo" {
+  auth = required
+  handler = handle_api_attack_geo
+  returns = type
+  status = 200
+  note = "攻击源地理分布（依赖 GeoIP 库，未装配时 geoip_enabled=false）；载荷 AttackGeoResponse"
+}
+
+# 攻击源地理分布载荷（Rust `history_snapshot::attack_geo`）。
+#
+# `geoip_enabled=false`（数据库未装配）时 points 为空、total_ips/located_ips 为 0，
+# 本机坐标三件套仍照常返回（它们不依赖地理库）。
+type AttackGeoResponse {
+  # 地理解析是否可用（数据库是否已装配且可用）
+  geoip_enabled: bool
+  # 按总封禁数降序的地点（最多 200 个）
+  points: Vec<GeoPoint>
+  # 参与本次统计的 IP 总数（含无法定位的）
+  total_ips: u32
+  # 成功定位的 IP 数
+  located_ips: u32
+  # 本机纬度；未配置且未探测到时为 null（前端据此不画本机标记与弧线）
+  server_latitude: Option<f64>
+  # 本机经度；语义同 server_latitude
+  server_longitude: Option<f64>
+  # 本机坐标来源（config / detected / none）；detected 是非权威值，界面须能区分
+  server_location_source: String
+}
+
+type GeoPoint {
+  latitude: f64
+  longitude: f64
+  # 国家 ISO 代码（如 CN）
+  country_code: String
+  country: String
+  # 城市名（可为空）
+  city: String
+  # 一级行政区名（可为空）
+  subdivision: String
+  # 该位置被封禁的唯一 IP 数
+  unique_ips: u32
+  # 该位置的总封禁次数
+  total_bans: u32
+  # 该位置的代表性 IP（封禁次数最多者）
+  top_ip: String
+  # 该位置最近一次封禁时间（Unix 秒）
+  last_banned_at: i64
+}
+
 # ---- 需认证：日志 -----------------------------------------------------------
 
 route GET "/api/v1/logs" {
@@ -847,6 +956,11 @@ type RuntimeSnapshot {
 type StatsResponse {
   daemon_version: String
   kernel_version: String
+  # 窗口定义：本地时区自然日 00:00 起（时区取守护进程进程的本地时区，即 TZ /
+  # 系统时区，经 chrono::Local 解析；刻意不用 UTC——看板上的「今日」跟运维日历走）。
+  # 计数口径：历史库 ban_events 表中 banned_at 落在窗口内的行数。
+  # 与 total_bans（进程累计计数器）是两个不同的量：本字段带真实时间窗，且跨
+  # 守护进程重启保持连续。缓存 30 秒（与趋势数据同节奏），故午夜切换最多晚 30 秒。
   today_bans: u64
   failed_attempts: u64
   ddos_events: u64
@@ -1349,6 +1463,8 @@ route_baseline legacy {
   GET "/api/v1/logs/stream"
   GET "/api/v1/rates/history"
   GET "/api/v1/rates/windows"
+  GET "/api/v1/stats/anomalies"
+  GET "/api/v1/stats/attack-geo"
   GET "/api/v1/stats/attack-predictions"
   GET "/api/v1/stats/ban-duration-histogram"
   GET "/api/v1/stats/ban-duration-recommendations"

@@ -21,7 +21,7 @@
     "message ListBansResponse: 定长 24 字节 + 尾部 BanEntry(95 字节) × N；u16 上限内最多 689 条",
     "message StatsResponse: 定长 60 字节",
     "message ListWhitelistResponse: 定长 24 字节 + 尾部 WhitelistEntry(34 字节) × N；u16 上限内最多 1926 条",
-    "message ListRatesResponse: 定长 40 字节 + 尾部 RateEntry(84 字节) × N；u16 上限内最多 779 条",
+    "message ListRatesResponse: 定长 40 字节 + 尾部 RateEntry(88 字节) × N；u16 上限内最多 744 条",
     "message AnalysisResponse: 定长 4756 字节",
     "message DaemonRegisterAck: 定长 13 字节",
     "message BanIp: 定长 66 字节",
@@ -738,7 +738,7 @@
     },
     "RateEntry": {
       "kind": "struct",
-      "size": 84,
+      "size": 88,
       "fields": [
         {
           "name": "af",
@@ -811,8 +811,15 @@
           "tail": false
         },
         {
-          "name": "addr",
+          "name": "unique_ports",
           "offset": 68,
+          "size": 4,
+          "type": "u32",
+          "tail": false
+        },
+        {
+          "name": "addr",
+          "offset": 72,
           "size": 16,
           "type": "addr16",
           "tail": false
@@ -861,7 +868,7 @@
         {
           "name": "tail",
           "offset": 40,
-          "size": 84,
+          "size": 88,
           "type": "RateEntry",
           "tail": true
         }
@@ -869,9 +876,9 @@
       "msg_type": "MsgType::LIST_RATES_RESPONSE",
       "tail": {
         "elem": "RateEntry",
-        "elem_size": 84,
+        "elem_size": 88,
         "fixed_size": 40,
-        "max_entries": 779
+        "max_entries": 744
       }
     },
     "UdpPortItem": {

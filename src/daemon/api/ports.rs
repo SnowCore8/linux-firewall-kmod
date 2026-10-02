@@ -259,6 +259,12 @@ pub trait HistoryPort: Send + Sync + 'static {
 
     /// 当前速率窗口倍率（用于威胁等级的 `pps_ratio` 与基线冻结判定）。
     fn threat_inputs(&self) -> ThreatInputs;
+
+    /// 今日（本地时区自然日 00:00 起）的封禁事件数。
+    ///
+    /// 与 `StatsResponse.total_bans`（进程累计计数器）是两个不同的量：这个带真实
+    /// 时间窗，且跨守护进程重启保持连续（数据源是历史库的 `ban_events` 表）。
+    fn today_bans(&self) -> u64;
 }
 
 /// 威胁等级计算所需的外部输入。

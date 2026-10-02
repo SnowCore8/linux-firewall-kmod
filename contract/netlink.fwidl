@@ -277,13 +277,21 @@ struct RateEntry {
     u64     ack_packets
     u64     rst_packets
     u64     fin_packets
+    # 该 IP 在速率条目生命周期内访问过的去重目标端口数：各 CPU 槽的端口集合
+    # 在窗口滚动时并入节点侧并集，节点侧只增不减（内核侧上限
+    # PORT_SCAN_SEEN_MAX = 32，到顶后不再增长）—— 故是「至少这么多」的下界
+    # 近似，不是窗口内计数。
+    # 与 smoothed_* 不同：不做 EWMA 平滑。内核自身的端口扫描检测也以它为
+    # metric（阈值 PORT_SCAN_THRESHOLD）；本字段供 per-IP 行为异常检测用作
+    # 端口多样性维度。
+    u32     unique_ports
     addr16  addr
 }
 
 # 速率统计响应；必须分页。
 #
 # 历史实现无分页、无上限地一次返回全部条目（rate_count 上限默认 65535），
-# 单条 84 字节 → payload 约 5.25 MB，导致：
+# 单条 84 字节（当时的布局）→ payload 约 5.25 MB，导致：
 #   - msg_len（u16）在 780 条以上回绕
 #   - 以 GFP_ATOMIC 做数 MB 分配（可能失败，且原子上下文不允许）
 # 分页是本次重写的强制项，见 gen.py 打印的容量余量。

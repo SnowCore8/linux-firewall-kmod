@@ -29,6 +29,7 @@ import type { Tone } from '../components/console'
 import { EmptyState } from '../components/EmptyState'
 import { PageHeader } from '../components/PageHeader'
 import { RecidivismPanel } from '../components/RecidivismPanel'
+import { AnomalyPanel } from '../components/AnomalyPanel'
 import { useAsync } from '../hooks/useAsync'
 import { pickLiveData } from '../hooks/useLiveData'
 import { usePollInterval } from '../hooks/usePollInterval'
@@ -507,7 +508,10 @@ export default function Dashboard() {
           />
         </Panel>
 
-        {/* 9) 封禁效果：历史维度（复发率 + 复发 TOP），回答「这套封禁策略有没有效」。
+        {/* 9) 异常检测：全局流量偏离 + per-IP 行为离群 */}
+        <AnomalyPanel />
+
+        {/* 10) 封禁效果：历史维度（复发率 + 复发 TOP），回答「这套封禁策略有没有效」。
             组件自带面板、判决条与取数（GET /api/v1/stats/recidivism，按 SSE 同源间隔自动刷新）；
             TOP 列表只取 5 条，与最新封禁 / Jail 状态保持同一档密度。 */}
         <RecidivismPanel limit={5} />

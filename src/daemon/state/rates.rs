@@ -44,6 +44,11 @@ pub struct RateCounters {
     pub rst: u64,
     /// FIN 包/秒。
     pub fin: u64,
+    /// 该 IP 在速率条目生命周期内访问过的去重目标端口数（内核侧并集，
+    /// 只增不减，上限 32，故是下界近似）。
+    ///
+    /// 与上面的速率字段不同源：不做 EWMA 平滑。
+    pub unique_ports: u32,
 }
 
 /// 一轮速率查询的完整样本。
@@ -374,6 +379,7 @@ mod tests {
                 ack: 100,
                 rst: 2,
                 fin: 3,
+                unique_ports: 4,
             },
         );
         rates.apply(s);
@@ -383,6 +389,7 @@ mod tests {
         assert_eq!(c.packets, 120);
         assert_eq!(c.syn, 5);
         assert_eq!(c.fin, 3);
+        assert_eq!(c.unique_ports, 4);
     }
 
     #[test]

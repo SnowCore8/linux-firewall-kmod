@@ -114,6 +114,8 @@ pub struct FakeHistoryPort {
     pub history_calls: AtomicUsize,
     /// 威胁输入。
     pub inputs: ThreatInputs,
+    /// `today_bans()` 的返回值（默认 0，测试可覆盖以断言载荷确实取自端口）。
+    pub today_bans: u64,
 }
 
 impl HistoryPort for FakeHistoryPort {
@@ -129,6 +131,10 @@ impl HistoryPort for FakeHistoryPort {
 
     fn threat_inputs(&self) -> ThreatInputs {
         self.inputs
+    }
+
+    fn today_bans(&self) -> u64 {
+        self.today_bans
     }
 }
 
@@ -259,6 +265,28 @@ impl Harness {
             peak_hours_multiplier: 1.0,
             internal_ip_multiplier: 2.0,
         });
+        self
+    }
+
+    /// 指定历史端口给出的「今日封禁数」，用于断言载荷确实取自该端口。
+    ///
+    /// 端口以 `Arc<dyn HistoryPort>` 存入 [`ApiState`]，构造后无法回改；故这里
+    /// 重建一份带值的替身并换掉 `ApiState` 里的那一份。
+    #[must_use]
+    pub fn with_today_bans(mut self, today_bans: u64) -> Self {
+        let history: Arc<dyn HistoryPort> = Arc::new(FakeHistoryPort {
+            today_bans,
+            ..FakeHistoryPort::default()
+        });
+        self.api = Arc::new(ApiState::new(
+            Arc::clone(&self.state),
+            Arc::clone(&self.config) as Arc<dyn ConfigPort>,
+            Arc::new(FakeRuntimePort { ready: true }) as Arc<dyn RuntimePort>,
+            history,
+            Arc::clone(&self.control) as Arc<dyn ControlPort>,
+            Arc::clone(&self.sse),
+            "2.2",
+        ));
         self
     }
 }

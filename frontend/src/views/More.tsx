@@ -10,7 +10,7 @@
 //       行高仍是 44px（可点元素下限），只是每行的说明压成一行 10px dim 小字，
 //       一屏可以同时看到全部入口与其职责。
 
-import { FileOutline, HistogramOutline, SetOutline } from 'antd-mobile-icons'
+import { FileOutline, HistogramOutline, LocationOutline, SetOutline } from 'antd-mobile-icons'
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 
@@ -35,6 +35,12 @@ const ENTRIES: readonly MoreEntry[] = [
     title: 'Jail 管理',
     description: '阈值与运行时统计；启用或禁用单个 Jail；封禁时长推荐',
     icon: <HistogramOutline fontSize={16} />,
+  },
+  {
+    path: '/globe',
+    title: '攻击地图',
+    description: '3D 地球展示攻击源地理位置；依赖 GeoIP 城市级数据库',
+    icon: <LocationOutline fontSize={16} />,
   },
   {
     path: '/logs',

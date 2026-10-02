@@ -106,6 +106,62 @@ struct YamlConfig {
     trusted_ips: Option<Vec<String>>,
     #[serde(default)]
     capacity: Option<YamlCapacity>,
+    /// GeoIP 城市级数据库路径（`.mmdb`）。见 `Config::geoip_db_path`。
+    #[serde(default)]
+    geoip_db_path: Option<String>,
+    /// 本机（服务器）纬度。见 `Config::server_latitude`。
+    #[serde(default)]
+    server_latitude: Option<YamlCoord>,
+    /// 本机（服务器）经度。见 `Config::server_longitude`。
+    #[serde(default)]
+    server_longitude: Option<YamlCoord>,
+    /// 是否探测出口 IP 以确定本机坐标。见 `Config::geoip_detect_egress`。
+    #[serde(default)]
+    geoip_detect_egress: Option<bool>,
+    /// 出口 IP 探测地址。见 `Config::geoip_egress_probe_url`。
+    #[serde(default)]
+    geoip_egress_probe_url: Option<String>,
+}
+
+/// YAML 里经纬度可接受的两种写法：直接写数字，或写成字符串（含空白字符串＝未设置）。
+///
+/// 为什么不直接声明为 `Option<f64>`：`server_latitude: ""` 这类「显式留空」的写法
+/// 会被 serde 判为类型错误而让整份配置拒绝加载，与本仓库「空串/纯空白视为未设置」
+/// 的既有约定（见 `geoip_db_path`）不一致。故先按原样收下，再由 [`YamlCoord::resolve`]
+/// 归一：能解析成浮点即取值，纯空白即 `None`，其余一律报错。
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum YamlCoord {
+    /// YAML 数字（`server_latitude: 39.9042`，未加引号）
+    Number(f64),
+    /// YAML 字符串（`server_latitude: "39.9042"`，或留空的 `""`）
+    Text(String),
+}
+
+impl YamlCoord {
+    /// 归一为一个可选的浮点值。
+    ///
+    /// - 数字 → 原样取出
+    /// - 字符串 → 去首尾空白后为空则 `None`（未设置）；否则按浮点解析，失败即报错
+    ///
+    /// # Errors
+    ///
+    /// 字符串不是合法浮点数时返回 `Err`（携带字段名，便于定位）。
+    fn resolve(&self, field: &str) -> Result<Option<f64>> {
+        match self {
+            Self::Number(v) => Ok(Some(*v)),
+            Self::Text(raw) => {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    return Ok(None);
+                }
+                match trimmed.parse::<f64>() {
+                    Ok(v) => Ok(Some(v)),
+                    Err(_) => bail!("Invalid {field} value: {raw:?} (must be a decimal number)"),
+                }
+            }
+        }
+    }
 }
 
 /// 全局默认字段集合。所有 `Option` 都是"未设置 = 使用 `Config::default()`"
@@ -482,6 +538,92 @@ pub fn parse_config_from(content: &str, cfg: &mut Config, runtime_override: bool
         }
     }
 
+    // 7. 解析 geoip_db_path（空字符串按「未设置」处理，与模块的禁用语义一致）
+    if let Some(path) = &yaml_config.geoip_db_path {
+        if !path.trim().is_empty() {
+            cfg.geoip_db_path = Some(path.trim().to_string());
+        }
+    }
+
+    // 8. 解析本机经纬度（攻击地图的「本机」标记与弧线终点）
+    //
+    // 与 geoip_db_path 同为顶层字段；留空按「未设置」处理。严格校验：越界、非数字，
+    // 或只给出其中一个都直接拒绝加载——半份坐标会画到一个错误的位置上，比没有更糟。
+    if let Some(raw) = &yaml_config.server_latitude {
+        if let Some(latitude) = raw.resolve("server_latitude")? {
+            if !(-90.0..=90.0).contains(&latitude) {
+                bail!("Invalid server_latitude value: {latitude} (must be within -90..90)");
+            }
+            cfg.server_latitude = Some(latitude);
+        }
+    }
+    if let Some(raw) = &yaml_config.server_longitude {
+        if let Some(longitude) = raw.resolve("server_longitude")? {
+            if !(-180.0..=180.0).contains(&longitude) {
+                bail!("Invalid server_longitude value: {longitude} (must be within -180..180)");
+            }
+            cfg.server_longitude = Some(longitude);
+        }
+    }
+    // 成对约束按**合并后**的结果判定：多文件配置下两个值可能分别落在不同文件里，
+    // 逐文件判定会误报「只给了一个」。
+    if cfg.server_latitude.is_some() != cfg.server_longitude.is_some() {
+        bail!("server_latitude and server_longitude must be provided together (only one was set)");
+    }
+
+    // 9. 解析出口 IP 探测开关与探测地址
+    if let Some(enabled) = yaml_config.geoip_detect_egress {
+        cfg.geoip_detect_egress = enabled;
+    }
+    if let Some(url) = &yaml_config.geoip_egress_probe_url {
+        let trimmed = url.trim();
+        if trimmed.is_empty() {
+            // 空串 = 用内置默认地址（与 geoip_db_path 的「空＝未设置」语义一致）
+            cfg.geoip_egress_probe_url = None;
+        } else {
+            validate_probe_url(trimmed)?;
+            cfg.geoip_egress_probe_url = Some(trimmed.to_string());
+        }
+    }
+
+    Ok(())
+}
+
+/// 探测 URL 的长度上限。
+const MAX_PROBE_URL_LEN: usize = 2048;
+
+/// 校验出口 IP 探测地址。
+///
+/// 严格校验而非「非法就退回默认」：这是守护进程唯一会主动发出去的请求目标，
+/// 静默改地址等于把用户的意图换成了别的东西。
+///
+/// # Errors
+///
+/// 非 `http(s)` 协议、缺主机名、含空白或控制字符、超长时返回 `Err`。
+fn validate_probe_url(url: &str) -> Result<()> {
+    if url.len() > MAX_PROBE_URL_LEN {
+        bail!("Invalid geoip_egress_probe_url: too long (max {MAX_PROBE_URL_LEN})");
+    }
+    // 空白与控制字符会让请求行被拆成别的形状（请求走私那一类问题的起点），直接拒绝
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        bail!("Invalid geoip_egress_probe_url: {url:?} (must not contain whitespace or control characters)");
+    }
+    let lower = url.to_ascii_lowercase();
+    let scheme_len = if lower.starts_with("https://") {
+        "https://".len()
+    } else if lower.starts_with("http://") {
+        "http://".len()
+    } else {
+        bail!("Invalid geoip_egress_probe_url: {url:?} (must start with http:// or https://)");
+    };
+    // 主机名取 scheme 之后、第一个 `/` `?` `#` 之前的部分，必须非空
+    let host = url[scheme_len..]
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("");
+    if host.is_empty() {
+        bail!("Invalid geoip_egress_probe_url: {url:?} (missing host)");
+    }
     Ok(())
 }
 
@@ -569,5 +711,155 @@ fn append_jail_regexes(jail: &mut Jail, yaml_jail: &YamlJail) {
     for (name, entry) in &yaml_jail.regexes {
         jail.regexes
             .push(RegexInfo::new(name.clone(), entry.pattern.clone()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 用一份最小的 YAML 片段解析进全新 `Config`，返回结果与解析后的配置。
+    fn parse(yaml: &str) -> (Result<()>, Config) {
+        let mut cfg = Config::default();
+        let result = parse_config(yaml, &mut cfg);
+        (result, cfg)
+    }
+
+    /// 两个值都给、都在范围内 → 原样落到 `Config`（数字与字符串两种写法等价）。
+    #[test]
+    fn server_coordinates_are_parsed_when_both_valid() {
+        let (result, cfg) = parse("server_latitude: 39.9042\nserver_longitude: 116.4074\n");
+        assert!(result.is_ok(), "合法坐标不应报错: {result:?}");
+        assert_eq!(cfg.server_latitude, Some(39.9042));
+        assert_eq!(cfg.server_longitude, Some(116.4074));
+
+        let (result, cfg) = parse("server_latitude: \"39.9042\"\nserver_longitude: \"116.4074\"\n");
+        assert!(result.is_ok(), "字符串写法也应接受: {result:?}");
+        assert_eq!(cfg.server_latitude, Some(39.9042));
+        assert_eq!(cfg.server_longitude, Some(116.4074));
+    }
+
+    /// 空白字符串按「未设置」处理，且不成对也不需要报错（两个都没设）。
+    #[test]
+    fn blank_coordinates_mean_unset() {
+        let (result, cfg) = parse("server_latitude: \"\"\nserver_longitude: \"   \"\n");
+        assert!(result.is_ok(), "留空应视为未设置而非报错: {result:?}");
+        assert_eq!(cfg.server_latitude, None);
+        assert_eq!(cfg.server_longitude, None);
+    }
+
+    /// 只给一个坐标 → 拒绝加载（半份坐标会画到错误的位置上）。
+    #[test]
+    fn a_lone_coordinate_is_rejected() {
+        let (result, _) = parse("server_latitude: 39.9\n");
+        let err = result.expect_err("只给纬度应报错");
+        assert!(
+            err.to_string().contains("must be provided together"),
+            "错误信息应点出成对约束: {err}"
+        );
+
+        let (result, _) = parse("server_longitude: 116.4\n");
+        assert!(result.is_err(), "只给经度应报错");
+    }
+
+    /// 越界与非法字符串都拒绝加载（严格校验）。边界值本身应通过。
+    #[test]
+    fn out_of_range_or_invalid_coordinates_are_rejected() {
+        let (result, _) = parse("server_latitude: 90.1\nserver_longitude: 0\n");
+        assert!(
+            result
+                .expect_err("纬度超出 90 应报错")
+                .to_string()
+                .contains("server_latitude"),
+            "错误信息应点出违规字段"
+        );
+
+        let (result, _) = parse("server_latitude: 0\nserver_longitude: -180.1\n");
+        assert!(
+            result
+                .expect_err("经度超出 -180 应报错")
+                .to_string()
+                .contains("server_longitude"),
+            "错误信息应点出违规字段"
+        );
+
+        let (result, _) = parse("server_latitude: abc\nserver_longitude: 0\n");
+        assert!(result.is_err(), "非数字字符串应报错");
+
+        // 边界值（±90 / ±180）合法
+        assert!(parse("server_latitude: 90\nserver_longitude: -180\n")
+            .0
+            .is_ok());
+        assert!(parse("server_latitude: -90\nserver_longitude: 180\n")
+            .0
+            .is_ok());
+    }
+
+    /// 多文件配置：两个坐标分别落在不同片段里也应合并成功（成对约束按合并结果判定）。
+    #[test]
+    fn coordinates_split_across_files_merge() {
+        // 一个片段已给出纬度（等价于前一个文件给过），下一个片段补经度：成对约束
+        // 按合并后的结果判定，因此「先后补齐」的路径必须能走通，不能逐文件误报。
+        let mut cfg = Config {
+            server_latitude: Some(39.9),
+            ..Config::default()
+        };
+        assert!(parse_config("server_longitude: 116.4\n", &mut cfg).is_ok());
+        assert_eq!(cfg.server_latitude, Some(39.9));
+        assert_eq!(cfg.server_longitude, Some(116.4));
+    }
+
+    /// 探测开关默认关闭（现状即默认行为），显式写出才打开。
+    #[test]
+    fn egress_detection_is_off_by_default() {
+        let (result, cfg) = parse("");
+        assert!(result.is_ok());
+        assert!(!cfg.geoip_detect_egress, "默认必须关闭：不静默对外发请求");
+        assert_eq!(cfg.geoip_egress_probe_url, None, "默认用内置地址");
+
+        let (result, cfg) = parse("geoip_detect_egress: true\n");
+        assert!(result.is_ok());
+        assert!(cfg.geoip_detect_egress);
+    }
+
+    /// 探测地址：留空＝用内置默认；合法 http(s) 原样保存；非法一律拒绝加载。
+    #[test]
+    fn probe_url_is_strictly_validated() {
+        let (result, cfg) = parse("geoip_egress_probe_url: \"  \"\n");
+        assert!(result.is_ok(), "留空应视为未设置: {result:?}");
+        assert_eq!(cfg.geoip_egress_probe_url, None);
+
+        let (result, cfg) = parse("geoip_egress_probe_url: https://api.ip.sb/geoip\n");
+        assert!(result.is_ok());
+        assert_eq!(
+            cfg.geoip_egress_probe_url.as_deref(),
+            Some("https://api.ip.sb/geoip")
+        );
+
+        // 合法但不带路径、以及 http 明文（内网自建探测端点）都应通过
+        assert!(parse("geoip_egress_probe_url: http://10.0.0.5\n").0.is_ok());
+
+        for bad in [
+            "geoip_egress_probe_url: ftp://example.com/x\n", // 非 http(s)
+            "geoip_egress_probe_url: api.ip.sb/geoip\n",     // 缺协议
+            "geoip_egress_probe_url: \"https://\"\n",        // 缺主机名
+            "geoip_egress_probe_url: \"https://a b.com/\"\n", // 含空白
+            "geoip_egress_probe_url: \"file:///etc/passwd\"\n", // 本地文件协议
+        ] {
+            let err = parse(bad).0.expect_err("非法探测地址必须拒绝加载");
+            assert!(
+                err.to_string().contains("geoip_egress_probe_url"),
+                "错误信息应点出违规字段: {err}（输入 {bad:?}）"
+            );
+        }
+    }
+
+    /// 超长 URL 同样拒绝（上限 2048）。
+    #[test]
+    fn overlong_probe_url_is_rejected() {
+        let long = format!("https://example.com/{}", "a".repeat(2100));
+        let yaml = format!("geoip_egress_probe_url: {long}\n");
+        let err = parse(&yaml).0.expect_err("超长 URL 应拒绝");
+        assert!(err.to_string().contains("too long"), "应说明超长: {err}");
     }
 }

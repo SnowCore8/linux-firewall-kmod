@@ -543,13 +543,14 @@ pub struct RateEntry {
     pub ack_packets: u64,
     pub rst_packets: u64,
     pub fin_packets: u64,
+    pub unique_ports: u32,
     pub addr: addr16,
 }
 
 #[rustfmt::skip]
 impl RateEntry {
     /// 线格式字节数（packed，无填充；变长消息为定长部分）
-    pub const WIRE_SIZE: usize = 84;
+    pub const WIRE_SIZE: usize = 88;
     /// 逐字段偏移（不含变长尾部；供一致性测试对照 offsetof）
     pub const FIELD_OFFSETS: &[(&str, usize)] = &[
         ("af", 0),
@@ -562,7 +563,8 @@ impl RateEntry {
         ("ack_packets", 44),
         ("rst_packets", 52),
         ("fin_packets", 60),
-        ("addr", 68),
+        ("unique_ports", 68),
+        ("addr", 72),
     ];
 }
 
@@ -586,9 +588,9 @@ impl ListRatesResponse {
     /// 定长部分字节数
     pub const FIXED_SIZE: usize = 40;
     /// 尾部元素类型与其字节数
-    pub const TAIL_ELEM_SIZE: usize = 84;
+    pub const TAIL_ELEM_SIZE: usize = 88;
     /// u16 长度上限内可承载的最大尾部条目数
-    pub const MAX_TAIL_ENTRIES: usize = 779;
+    pub const MAX_TAIL_ENTRIES: usize = 744;
     /// 逐字段偏移（不含变长尾部；供一致性测试对照 offsetof）
     pub const FIELD_OFFSETS: &[(&str, usize)] = &[
         ("count", 12),

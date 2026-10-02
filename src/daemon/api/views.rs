@@ -316,8 +316,8 @@ pub fn threat_level(
 
 /// 统计总览。
 ///
-/// 输入全是已算好的量：计数器快照、封禁快照、白名单条目数、趋势与威胁等级。
-/// 本函数不读全局、不查库，故 SSE 与 REST 两条路能得到同一份结果。
+/// 输入全是已算好的量：计数器快照、封禁快照、白名单条目数、趋势、今日封禁数与
+/// 威胁等级。本函数不读全局、不查库，故 SSE 与 REST 两条路能得到同一份结果。
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn stats_view(
@@ -330,14 +330,15 @@ pub fn stats_view(
     ddos_events: u64,
     trends: &TrendsView,
     threat: ThreatLevel,
+    today_bans: u64,
 ) -> StatsResponse {
     StatsResponse {
         daemon_version: daemon_version.to_string(),
         kernel_version: kernel_version.to_string(),
-        // 「今日」窗口尚未实现：与 total_bans 同源（缺陷
-        // HTTP_TODAY_BANS_EQUALS_TOTAL 仍成立，属 2.F）。此处保持同一取值，
-        // 不引入「看起来像今日窗口」的假实现。
-        today_bans: stats.get(Counter::IpsBanned),
+        // 今日窗口（本地时区自然日 00:00 起）的封禁事件数，由 HistoryPort 从
+        // `ban_events` 表按 `banned_at` 计数（见 history_snapshot::today_bans）。
+        // 与 total_bans（进程累计计数器）不是同一个量：窗口真实存在，且跨重启连续。
+        today_bans,
         failed_attempts: stats.get(Counter::FailedAttempts),
         ddos_events,
         uptime_seconds: stats.uptime_secs(now),

@@ -7,6 +7,11 @@
     "moduleResolution": "bundler",
     "types": ["vite/client", "node"],
     "jsx": "react-jsx",
+    "jsxImportSource": "@fw/jsx",
+    "paths": {
+      "@fw/jsx/jsx-runtime": ["./src/jsx/jsx-runtime.ts"],
+      "@fw/jsx/jsx-dev-runtime": ["./src/jsx/jsx-dev-runtime.ts"]
+    },
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,

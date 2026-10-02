@@ -13,7 +13,7 @@
  */
 
 import { authHeaders, clearAccessToken } from './auth'
-import type { ApiResponse } from './types'
+import type { ApiResponse } from './contract'
 
 /**
  * 请求超时（毫秒）。

@@ -583,6 +583,10 @@ static void fw_rate_fill_row(struct fw_rate_row *row, struct fw_rate_node *n) {
   row->ack_packets = (u64)atomic64_read(&n->smoothed_ack);
   row->rst_packets = (u64)atomic64_read(&n->smoothed_rst);
   row->fin_packets = (u64)atomic64_read(&n->smoothed_fin);
+  /* 端口并集不是 EWMA：它是条目生命周期内的累计并集（只增不减，上限
+   * PORT_SCAN_SEEN_MAX），由滚动者在窗口边界把各 CPU 槽的集合并入。
+   * READ_ONCE 与滚动者的写入配对，避免读到撕裂值。 */
+  row->unique_ports = READ_ONCE(n->unique_ports);
 }
 
 u32 fw_rate_fill_entries(u32 offset, u32 limit, struct fw_rate_row *rows) {

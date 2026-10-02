@@ -686,3 +686,7 @@ pub use super::recommendations::{
     get_ban_duration_recommendations, BanDurationRecommendation, BanDurationRecommendationResponse,
     ReputationEntryResponse, ThresholdRecommendationResponse,
 };
+
+pub use super::anomaly::{get_anomaly_response, AnomalyResponse};
+
+pub use crate::history_snapshot::{get_attack_geo, AttackGeoResponse, GeoPoint};

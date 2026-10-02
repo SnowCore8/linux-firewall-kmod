@@ -883,6 +883,7 @@ mod tests {
         // 与契约的 1926 冲突）。封禁条目加 prefix_len 后每页装得下的条数下降。
         assert_eq!(page_cap(ListBansResponse::MAX_TAIL_ENTRIES), 689);
         assert_eq!(page_cap(ListWhitelistResponse::MAX_TAIL_ENTRIES), 1926);
-        assert_eq!(page_cap(ListRatesResponse::MAX_TAIL_ENTRIES), 779);
+        // 速率条目加 unique_ports（+4 字节）后由 779 降到 744。
+        assert_eq!(page_cap(ListRatesResponse::MAX_TAIL_ENTRIES), 744);
     }
 }

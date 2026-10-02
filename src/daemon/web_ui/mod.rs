@@ -15,6 +15,7 @@
 use rust_embed::RustEmbed;
 
 pub mod analysis;
+pub mod anomaly;
 pub mod api;
 pub mod ban_ops;
 pub mod ddos_stats;
@@ -42,6 +43,7 @@ pub fn get_static_asset(path: &str) -> Option<(Vec<u8>, &'static str)> {
             p if p.ends_with(".webmanifest") => "application/manifest+json",
             p if p.ends_with(".png") => "image/png",
             p if p.ends_with(".jpg") || p.ends_with(".jpeg") => "image/jpeg",
+            p if p.ends_with(".webp") => "image/webp",
             p if p.ends_with(".svg") => "image/svg+xml",
             p if p.ends_with(".ico") => "image/x-icon",
             _ => "application/octet-stream",

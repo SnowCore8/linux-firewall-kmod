@@ -63,6 +63,7 @@ impl StateRenderer {
             ddos_events,
             &trends,
             threat,
+            self.api.history.today_bans(),
         );
         serde_json::to_string(&payload).ok()
     }

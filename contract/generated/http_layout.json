@@ -7,13 +7,19 @@
   "notes": [
     "信封 ApiResponse: code / data / message",
     "认证: 失败 10 次锁 60s，未授权状态码 401",
-    "迁移棘轮基线: 23 条未迁路由",
+    "迁移棘轮基线: 25 条未迁路由",
     "安全头 4 条",
     "业务码 50002 已声明但没有任何路由引用（可能是没落地的码）",
-    "路由 54 条（无认证 13 / 需认证 41）",
+    "路由 57 条（无认证 14 / 需认证 43）",
     "SSE GET /api/v1/events: 上限 10 连接，6 个事件",
     "SSE GET /api/v1/logs/stream: 上限 5 连接，3 个事件",
     "错误形状 3 种",
+    "响应 AnomalyResponse: 8 个字段",
+    "响应 DimensionScore: 2 个字段",
+    "响应 FeatureValue: 2 个字段",
+    "响应 IpAnomalyEntry: 3 个字段",
+    "响应 AttackGeoResponse: 7 个字段",
+    "响应 GeoPoint: 10 个字段",
     "响应 ApiResponse: 3 个字段（泛型参数 T）",
     "响应 PaginatedResponse: 5 个字段（泛型参数 T）",
     "响应 RuntimeSnapshot: 8 个字段",
@@ -71,7 +77,7 @@
     "请求 PaginationParams: 3 个字段",
     "响应 SseStreamStatus: 3 个字段",
     "响应 SseStatusResponse: 2 个字段",
-    "缺陷记录: 14 条（已修 8 / 有意保留 1 / 未修 5；由 verify_*.py 到源码核对锚点）"
+    "缺陷记录: 14 条（已修 9 / 有意保留 1 / 未修 4；由 verify_*.py 到源码核对锚点）"
   ],
   "envelope": {
     "name": "ApiResponse",
@@ -226,6 +232,20 @@
       "path": "/ddos",
       "auth": "none",
       "handler": "handle_spa_ddos",
+      "returns": "text",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": ""
+    },
+    {
+      "method": "GET",
+      "path": "/globe",
+      "auth": "none",
+      "handler": "handle_spa_globe",
       "returns": "text",
       "status": 200,
       "alt_status": null,
@@ -898,6 +918,34 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/stats/anomalies",
+      "auth": "required",
+      "handler": "handle_api_anomalies",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "异常检测：全局流量偏离 + per-IP 行为离群；载荷 AnomalyResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/attack-geo",
+      "auth": "required",
+      "handler": "handle_api_attack_geo",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "攻击源地理分布（依赖 GeoIP 库，未装配时 geoip_enabled=false）；载荷 AttackGeoResponse"
+    },
+    {
+      "method": "GET",
       "path": "/api/v1/logs",
       "auth": "required",
       "handler": "handle_api_logs",
@@ -929,6 +977,14 @@
     {
       "method": "GET",
       "path": "/api/v1/rates/windows"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/anomalies"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/attack-geo"
     },
     {
       "method": "GET",
@@ -1008,6 +1064,182 @@
     }
   ],
   "types": {
+    "AnomalyResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "AnomalyResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "global_score",
+          "rust": "f64"
+        },
+        {
+          "key": "global_dimensions",
+          "rust": "Vec<DimensionScore>"
+        },
+        {
+          "key": "global_features",
+          "rust": "Option<Vec<FeatureValue>>"
+        },
+        {
+          "key": "global_baseline_p50",
+          "rust": "Vec<FeatureValue>"
+        },
+        {
+          "key": "global_baseline_p95",
+          "rust": "Vec<FeatureValue>"
+        },
+        {
+          "key": "global_sample_count",
+          "rust": "usize"
+        },
+        {
+          "key": "ip_anomalies",
+          "rust": "Vec<IpAnomalyEntry>"
+        },
+        {
+          "key": "timestamp",
+          "rust": "i64"
+        }
+      ]
+    },
+    "DimensionScore": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "DimensionScore",
+      "inline": false,
+      "fields": [
+        {
+          "key": "name",
+          "rust": "String"
+        },
+        {
+          "key": "score",
+          "rust": "f64"
+        }
+      ]
+    },
+    "FeatureValue": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "FeatureValue",
+      "inline": false,
+      "fields": [
+        {
+          "key": "name",
+          "rust": "String"
+        },
+        {
+          "key": "value",
+          "rust": "f64"
+        }
+      ]
+    },
+    "IpAnomalyEntry": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "IpAnomalyEntry",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ip",
+          "rust": "String"
+        },
+        {
+          "key": "score",
+          "rust": "f64"
+        },
+        {
+          "key": "dimensions",
+          "rust": "Vec<DimensionScore>"
+        }
+      ]
+    },
+    "AttackGeoResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "AttackGeoResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "geoip_enabled",
+          "rust": "bool"
+        },
+        {
+          "key": "points",
+          "rust": "Vec<GeoPoint>"
+        },
+        {
+          "key": "total_ips",
+          "rust": "u32"
+        },
+        {
+          "key": "located_ips",
+          "rust": "u32"
+        },
+        {
+          "key": "server_latitude",
+          "rust": "Option<f64>"
+        },
+        {
+          "key": "server_longitude",
+          "rust": "Option<f64>"
+        },
+        {
+          "key": "server_location_source",
+          "rust": "String"
+        }
+      ]
+    },
+    "GeoPoint": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "GeoPoint",
+      "inline": false,
+      "fields": [
+        {
+          "key": "latitude",
+          "rust": "f64"
+        },
+        {
+          "key": "longitude",
+          "rust": "f64"
+        },
+        {
+          "key": "country_code",
+          "rust": "String"
+        },
+        {
+          "key": "country",
+          "rust": "String"
+        },
+        {
+          "key": "city",
+          "rust": "String"
+        },
+        {
+          "key": "subdivision",
+          "rust": "String"
+        },
+        {
+          "key": "unique_ips",
+          "rust": "u32"
+        },
+        {
+          "key": "total_bans",
+          "rust": "u32"
+        },
+        {
+          "key": "top_ip",
+          "rust": "String"
+        },
+        {
+          "key": "last_banned_at",
+          "rust": "i64"
+        }
+      ]
+    },
     "ApiResponse": {
       "kind": "type",
       "params": [
@@ -2818,11 +3050,11 @@
     {
       "name": "HTTP_TODAY_BANS_EQUALS_TOTAL",
       "severity": "low",
-      "status": "open",
+      "status": "fixed",
       "where": "src/daemon/web_ui/stats.rs:today_bans",
-      "fix": "",
+      "fix": "src/daemon/history_snapshot/today_bans.rs:pub fn today_ban_count",
       "reason": "",
-      "resolution": "today_bans 改为真实「今日」窗口（本地时区自然日 00:00 起，按各封禁的 banned_at 计数），并在此契约中写明窗口定义与所用的时区。",
+      "resolution": "today_bans 改为真实「今日」窗口（本地时区自然日 00:00 起，按各封禁的 banned_at 计数），窗口定义与时区已写进 StatsResponse.today_bans 的字段注释；取值经 HistoryPort::today_bans 由 REST 与 SSE 两条读路径共用。旧实现（web_ui/stats.rs 的 get_stats 及其威胁等级评估）无调用方，随本次一并删除——统计总览只剩 api/views.rs 一份。",
       "text": "today_bans 与 total_bans 取的是同一个值，『今日』这一时间窗并未实现。仪表盘上两个数字永远相同"
     },
     {

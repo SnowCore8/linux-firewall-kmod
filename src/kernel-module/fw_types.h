@@ -96,7 +96,7 @@
 #define FW_UDP_CPU_SLOTS 64
 #define FW_ICMP_CPU_SLOTS 32
 
-/* 端口扫描：窗口内去重端口上限与触发阈值 */
+/* 端口扫描：去重端口并集上限与触发阈值 */
 #define PORT_SCAN_SEEN_MAX 32
 #define PORT_SCAN_THRESHOLD 5
 #define PORT_SCAN_MAX_RESULTS 20
@@ -298,7 +298,7 @@ struct fw_rate_node {
   unsigned long window_start; /* 当前窗口起点（jiffies），仅滚动者写 */
   unsigned long last_activity;
 
-  u16 seen_ports[PORT_SCAN_SEEN_MAX]; /* 窗口内去重端口并集 */
+  u16 seen_ports[PORT_SCAN_SEEN_MAX]; /* 生命周期内去重端口并集（只增不减） */
   u8 seen_port_n;
   u8 port_scan_counted;
   u32 unique_ports;
@@ -453,6 +453,9 @@ struct fw_rate_row {
   u64 ack_packets;
   u64 rst_packets;
   u64 fin_packets;
+  /* 生命周期内去重目标端口并集（只增不减；近似：内核侧 PORT_SCAN_SEEN_MAX
+   * 封顶），供 per-IP 行为异常检测的端口多样性维度使用。 */
+  u32 unique_ports;
 };
 
 struct fw_udp_port_row {

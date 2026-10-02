@@ -191,6 +191,10 @@ impl HistoryPort for LegacyHistoryPort {
             peak_hours: crate::decision::is_baseline_peak_hours(),
         }
     }
+
+    fn today_bans(&self) -> u64 {
+        crate::history_snapshot::today_ban_count()
+    }
 }
 
 // ============================================================================

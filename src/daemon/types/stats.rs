@@ -268,6 +268,11 @@ pub struct RateEntry {
     pub rst_packets_per_sec: u64,
     /// FIN 包数/秒
     pub fin_packets_per_sec: u64,
+    /// 该 IP 在速率条目生命周期内访问过的去重目标端口数（内核侧并集，
+    /// 只增不减，上限 32，故是下界近似）。
+    ///
+    /// 不是速率：不做 EWMA 平滑。供 per-IP 行为异常检测使用。
+    pub unique_ports: u32,
 }
 
 /// 全局速率统计缓存

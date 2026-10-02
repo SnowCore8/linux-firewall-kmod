@@ -74,12 +74,12 @@
  * 硬上限由 u16 msg_len 上限 65535 与各响应的定长部分反推：
  *   bans        24 + n*94 <= 65535 → n <= 696
  *   whitelist   24 + n*34 <= 65535 → n <= 1926
- *   rates       40 + n*84 <= 65535 → n <= 779
+ *   rates       40 + n*88 <= 65535 → n <= 744
  */
 #define FW_NL_DEFAULT_PAGE 256
 #define FW_NL_BANS_PAGE_MAX 696
 #define FW_NL_WL_PAGE_MAX 1926
-#define FW_NL_RATES_PAGE_MAX 779
+#define FW_NL_RATES_PAGE_MAX 744
 
 static struct sock *fw_nl_sock;
 static atomic_t fw_nl_seq = ATOMIC_INIT(0);
@@ -537,6 +537,7 @@ static void fw_nl_send_rates_page(u32 portid, u32 seq, u32 offset, u32 limit, u3
     out[i].ack_packets = cpu_to_be64(rows[i].ack_packets);
     out[i].rst_packets = cpu_to_be64(rows[i].rst_packets);
     out[i].fin_packets = cpu_to_be64(rows[i].fin_packets);
+    out[i].unique_ports = cpu_to_be32(rows[i].unique_ports);
     fw_nl_copy_addr(out[i].addr, rows[i].af, &rows[i].addr);
   }
 

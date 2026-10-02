@@ -16,15 +16,18 @@
 
 // 子模块
 mod attack_detection;
+mod attack_geo;
 mod attack_prediction;
 mod ban_recommendations;
 mod network_distribution;
 mod threshold_analysis;
+mod today_bans;
 
 // 重导出子模块的公共类型和函数，保持外部引用路径不变
 pub use attack_detection::{
     detect_collaborative_attacks, detect_periodic_attackers, CollaborativeAttack, PeriodicAttacker,
 };
+pub use attack_geo::{get_attack_geo, AttackGeoResponse, GeoPoint};
 pub use attack_prediction::{
     predict_attacks, AttackPrediction, AttackPredictionSummary, JailAttackTrend,
 };
@@ -33,6 +36,7 @@ pub use network_distribution::{get_network_distribution, NetworkBlock};
 pub use threshold_analysis::{
     analyze_thresholds, ThresholdRecommendation, ThresholdRecommendationResponse,
 };
+pub use today_bans::today_ban_count;
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};

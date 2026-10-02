@@ -194,6 +194,7 @@ export interface RateEntry {
   ack_packets: number;
   rst_packets: number;
   fin_packets: number;
+  unique_ports: number;
   addr: Uint8Array;
 }
 
@@ -361,7 +362,7 @@ export const WIRE_SIZES: Record<string, number> = {
   StatsResponse: 60,
   WhitelistEntry: 34,
   ListWhitelistResponse: 24,
-  RateEntry: 84,
+  RateEntry: 88,
   ListRatesResponse: 40,
   UdpPortItem: 26,
   IcmpTypeItem: 26,
@@ -386,5 +387,5 @@ export const WIRE_SIZES: Record<string, number> = {
 export const TAIL_LIMITS: Record<string, { maxEntries: number; fixedSize: number; elemSize: number }> = {
   ListBansResponse: { maxEntries: 689, fixedSize: 24, elemSize: 95 },
   ListWhitelistResponse: { maxEntries: 1926, fixedSize: 24, elemSize: 34 },
-  ListRatesResponse: { maxEntries: 779, fixedSize: 40, elemSize: 84 },
+  ListRatesResponse: { maxEntries: 744, fixedSize: 40, elemSize: 88 },
 };

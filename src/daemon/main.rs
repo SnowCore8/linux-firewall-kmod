@@ -216,6 +216,28 @@ fn main() -> Result<()> {
         info!(logger::get(), "历史数据库初始化成功");
     }
 
+    // 初始化 GeoIP 地理库（可选增强）：缺失/损坏只记日志，不影响启动。
+    // 未装配时地理解析整体禁用，攻击源地理分布与 3D 地球显示为空。
+    match firewall_daemon::geoip::init(cfg.geoip_db_path.as_deref()) {
+        Ok(true) => {
+            info!(logger::get(), "GeoIP 数据库已加载"; "path" => cfg.geoip_db_path.clone().unwrap_or_default())
+        }
+        Ok(false) => info!(logger::get(), "GeoIP 未配置，地理分布功能禁用"),
+        Err(e) => warn!(logger::get(), "GeoIP 数据库加载失败，地理分布功能禁用"; "error" => %e),
+    }
+
+    // 本机坐标（攻击地图的「本机」标记与弧线终点）：配置优先；未配置且开关打开时
+    // 探测一次出口 IP（仅此一次，结果缓存）。探测失败只记日志、按「未配置」处理。
+    // 解析层已保证两个坐标成对出现，这里的 match 只是兜底。
+    firewall_daemon::geoip::init_server_location(
+        match (cfg.server_latitude, cfg.server_longitude) {
+            (Some(latitude), Some(longitude)) => Some((latitude, longitude)),
+            _ => None,
+        },
+        cfg.geoip_detect_egress,
+        cfg.geoip_egress_probe_url.as_deref(),
+    );
+
     // ---- 组合根：装配入站主链路（2.I）----
     //
     // 旧实现把 inotify 装配放在 `file_monitor::setup_inotify`，把周期维护任务挂在

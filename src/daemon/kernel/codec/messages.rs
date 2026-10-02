@@ -476,6 +476,9 @@ pub struct RateEntry {
     pub rst_packets: u64,
     /// FIN 包数。
     pub fin_packets: u64,
+    /// 该 IP 在速率条目生命周期内访问过的去重目标端口数（内核侧并集，
+    /// 只增不减，上限 32，故是下界近似）。
+    pub unique_ports: u32,
 }
 
 impl RateEntry {
@@ -493,6 +496,7 @@ impl RateEntry {
             ack_packets: u64::from_be(raw.ack_packets),
             rst_packets: u64::from_be(raw.rst_packets),
             fin_packets: u64::from_be(raw.fin_packets),
+            unique_ports: u32::from_be(raw.unique_ports),
         })
     }
 
@@ -1243,7 +1247,8 @@ mod tests {
         // BanEntry 加了 prefix_len（+1 字节）后每页能装下的条数随之下降。
         assert_eq!(contract::ListBansResponse::MAX_TAIL_ENTRIES, 689);
         assert_eq!(contract::ListWhitelistResponse::MAX_TAIL_ENTRIES, 1926);
-        assert_eq!(contract::ListRatesResponse::MAX_TAIL_ENTRIES, 779);
+        // RateEntry 加了 unique_ports（+4 字节）后由 779 降到 744。
+        assert_eq!(contract::ListRatesResponse::MAX_TAIL_ENTRIES, 744);
     }
 
     #[test]
@@ -1680,6 +1685,11 @@ mod tests {
         );
         put(
             &mut entry,
+            elem_off(ent, "unique_ports"),
+            &7u32.to_be_bytes(),
+        );
+        put(
+            &mut entry,
             elem_off(ent, "addr"),
             &addr_bytes("198.51.100.50".parse().expect("测试地址")),
         );
@@ -1695,6 +1705,7 @@ mod tests {
         assert_eq!(page.global_bps, 5678);
         assert_eq!(page.entries[0].packets, 10);
         assert_eq!(page.entries[0].syn_packets, 3);
+        assert_eq!(page.entries[0].unique_ports, 7);
         assert_eq!(
             page.entries[0].addr(),
             Some("198.51.100.50".parse().expect("测试地址"))

@@ -63,6 +63,14 @@ dashmap = "5.5"
 # crossbeam: 无锁并发数据结构，SegQueue 替代 RwLock<Vec> 消除全局缓冲锁竞争
 crossbeam = "0.8"
 serde_yml = "0.0.12"
+maxminddb = "0.32.0"
+# ureq: 本守护进程唯一的对外请求——启动时（可选、默认关闭）探测一次出口 IP，
+#   交给本地 GeoIP 库解析成本机经纬度。选 ureq 而非 reqwest：阻塞式、不污染 tokio
+#   runtime 语义、依赖树与二进制体积都最小（reqwest 会拖进 hyper 全家桶）；
+#   TLS 走 rustls + webpki-roots（不自写 TLS）。
+#   版本刻意限定在 3.2.x：ureq 3.3+ 已要求 rustc 1.85，超出本项目 MSRV 1.75。
+#   不能用 `resolver = "3"`（MSRV 感知解析）替代——那会让 cargo 1.75 无法解析清单。
+ureq = "~3.2"
 
 [dev-dependencies]
 serde_json = "1"

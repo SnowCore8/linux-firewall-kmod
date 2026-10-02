@@ -43,6 +43,11 @@ pub fn config_clone(src: &Config) -> Config {
         webui: src.webui.clone(),
         trusted_ips: src.trusted_ips.clone(),
         capacity: src.capacity.clone(),
+        geoip_db_path: src.geoip_db_path.clone(),
+        server_latitude: src.server_latitude,
+        server_longitude: src.server_longitude,
+        geoip_detect_egress: src.geoip_detect_egress,
+        geoip_egress_probe_url: src.geoip_egress_probe_url.clone(),
     };
 
     for src_jail in &src.jails {

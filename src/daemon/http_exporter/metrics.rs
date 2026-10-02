@@ -85,6 +85,11 @@ pub(super) fn generate_metrics() -> String {
         }
     }
 
+    // 异常检测指标（单次 query 避免双重读锁）
+    let anomaly_snap = crate::anomaly::query();
+    let anomaly_global_score = anomaly_snap.global_score;
+    let anomaly_ip_count = anomaly_snap.ip_anomalies.len() as u64;
+
     format!(
         "# HELP firewall_kernel_banned_ips_current Current number of banned IPs in kernel\n\
          # TYPE firewall_kernel_banned_ips_current gauge\n\
@@ -181,6 +186,14 @@ pub(super) fn generate_metrics() -> String {
          # HELP firewall_reputation_critical_count IPs with reputation score below 50 (high risk, stricter thresholds)\n\
          # TYPE firewall_reputation_critical_count gauge\n\
          firewall_reputation_critical_count {reputation_critical}\n\
+         \n\
+         # HELP firewall_anomaly_global_score Global traffic anomaly score (0-100, rolling 24h baseline)\n\
+         # TYPE firewall_anomaly_global_score gauge\n\
+         firewall_anomaly_global_score {anomaly_global_score:.1}\n\
+         \n\
+         # HELP firewall_anomaly_anomalous_ips Current number of per-IP behavioral anomalies detected\n\
+         # TYPE firewall_anomaly_anomalous_ips gauge\n\
+         firewall_anomaly_anomalous_ips {anomaly_ip_count}\n\
          "
     )
 }

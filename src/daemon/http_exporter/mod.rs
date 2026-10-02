@@ -270,5 +270,7 @@ mod tests {
         assert!(metrics.contains("firewall_reputation_tracked_ips"));
         assert!(metrics.contains("firewall_reputation_low_count"));
         assert!(metrics.contains("firewall_reputation_critical_count"));
+        assert!(metrics.contains("firewall_anomaly_global_score"));
+        assert!(metrics.contains("firewall_anomaly_anomalous_ips"));
     }
 }

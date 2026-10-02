@@ -1,8 +1,8 @@
 /**
- * 全部 `/api/v1/*` 端点的类型化封装
+ * 全部 `/api/v1/*` 端点的类型化封装。
  *
- * 路由真源：`src/daemon/http_exporter/handler.rs` 的 `build_router()`。
- * 逐个对照该函数的 `.route(...)` 列表实现，避免漏端点或写错 HTTP 方法。
+ * 路径一律取自 `contract/generated/http_contract.ts` 的 `ROUTES`，不再手写字面量：
+ * 契约由 `contract/http.fwidl` 生成，改接口时先改 fwidl 再重新生成。
  *
  * 路径参数编码：CIDR 含 `/`、IPv6 含 `:`，必须经 `encodeURIComponent` 编码，
  * 否则 `/api/v1/whitelist/10.0.0.0/8` 会被服务端解释成两段路径直接 404。
@@ -10,15 +10,19 @@
  * 所有函数失败时抛 `ApiError`（见 client.ts）。
  */
 
-import { delJson, getJson, getRawJson, sendJson } from './client'
+import { ROUTES } from './contract'
 import type {
+  AnomalyResponse,
+  AttackGeoResponse,
+  AttackPredictionSummary,
   BanDetailResponse,
-  BanOperationResponse,
-  BanResponse,
-  BanSortKey,
+  BanDurationHistogramResponse,
   BanDurationRecommendationResponse,
   BanEffectivenessResponse,
+  BanOperationResponse,
+  BanResponse,
   BatchOperationResponse,
+  CollaborativeAttack,
   CreateBanRequest,
   CreateWhitelistRequest,
   HourlyHeatmap,
@@ -31,7 +35,6 @@ import type {
   PaginatedResponse,
   PacketSizeDistributionResponse,
   PeriodicAttacker,
-  CollaborativeAttack,
   PortScanResponse,
   RateHistoryResponse,
   RateResponse,
@@ -47,16 +50,16 @@ import type {
   UdpPortDistributionResponse,
   UpdateConfigRequest,
   UpdateJailRequest,
-  AttackPredictionSummary,
   WebuiConfigResponse,
   WhitelistEntry,
   WhitelistOperationResponse,
   WhitelistRecommendation,
-  BanDurationHistogramResponse,
-} from './types'
+} from './contract'
+import type { BanSortKey } from './params'
+import { delJson, getJson, getRawJson, sendJson } from './client'
 
 // ============================================================================
-// 长连接地址常量
+// 长连接地址
 // ============================================================================
 
 /**
@@ -64,23 +67,20 @@ import type {
  *
  * `EventSource` **无法设置自定义请求头**，所以 Basic 凭据只能走 query：
  * 使用 `withAccessToken(SSE_EVENTS_URL)`（见 api/auth.ts）拼上 `?access_token=`
- * （服务端 `auth.rs` 的中间件兼容该参数）。
- *
- * 注意：**不要**指望浏览器自动附带 Basic Auth —— SPA 外壳是公开路由，
- * 顶层文档不返回 401，浏览器不会弹出、也不会缓存凭据。
+ * （服务端中间件兼容该参数）。
  */
-export const SSE_EVENTS_URL = '/api/v1/events'
+export const SSE_EVENTS_URL = ROUTES.GET_API_V1_EVENTS
 
-/** SSE 实时日志流地址（`GET /api/v1/logs/stream`，tail -f 语义，命名事件 `log`）；用法同 SSE_EVENTS_URL */
-export const LOG_STREAM_URL = '/api/v1/logs/stream'
+/** SSE 实时日志流地址（`GET /api/v1/logs/stream`，tail -f 语义，命名事件 `log`） */
+export const LOG_STREAM_URL = ROUTES.GET_API_V1_LOGS_STREAM
 
 // ============================================================================
 // 内部工具
 // ============================================================================
 
-/** 把路径参数编码进 URL（处理 CIDR 的 `/` 与 IPv6 的 `:`） */
-function encodeSegment(value: string): string {
-  return encodeURIComponent(value)
+/** 把路径参数编码后填入路由模板的末尾占位段（`:ip` / `:cidr` / `:name`） */
+function fill(route: string, value: string): string {
+  return route.replace(/:[^/]+$/, encodeURIComponent(value))
 }
 
 /** 拼装查询串；跳过 undefined / null，避免 `?page=undefined` 这类脏参数 */
@@ -107,7 +107,7 @@ function withQuery(
  * 因此本函数按可用性探测使用：抛错 = 完全连不上守护进程。
  */
 export function checkHealth(): Promise<RuntimeSnapshot> {
-  return getRawJson<RuntimeSnapshot>('/health')
+  return getRawJson<RuntimeSnapshot>(ROUTES.GET_HEALTH)
 }
 
 // ============================================================================
@@ -116,16 +116,13 @@ export function checkHealth(): Promise<RuntimeSnapshot> {
 
 /** `GET /api/v1/stats` — 仪表盘统计数据（含威胁等级） */
 export function getStats(): Promise<StatsResponse> {
-  return getJson<StatsResponse>('/api/v1/stats')
+  return getJson<StatsResponse>(ROUTES.GET_API_V1_STATS)
 }
 
 /**
- * `GET /api/v1/bans` — 活跃封禁列表。
- *
- * **单一形状**：后端一律返回分页信封 `PaginatedResponse<BanResponse>`，
- * 不再有「不带分页参数就返回裸数组」的分支（缺陷 HTTP_BANS_DUAL_SHAPE 已修）。
- * 不传参数时按契约默认分页（page=1 / page_size=20）取第一页；
- * 注意 `page_size` 服务端上限为 100（`views::MAX_PAGE_SIZE`）。
+ * `GET /api/v1/bans` — 活跃封禁列表，一律返回分页信封。
+ * 不传参数时按契约默认分页（page=1 / page_size=20）；
+ * `page_size` 服务端上限为 100（`views::MAX_PAGE_SIZE`）。
  */
 export function getBans(params?: {
   page?: number
@@ -133,7 +130,7 @@ export function getBans(params?: {
   sort_by?: BanSortKey
 }): Promise<PaginatedResponse<BanResponse>> {
   return getJson<PaginatedResponse<BanResponse>>(
-    withQuery('/api/v1/bans', {
+    withQuery(ROUTES.GET_API_V1_BANS, {
       page: params?.page,
       page_size: params?.page_size,
       sort_by: params?.sort_by,
@@ -143,27 +140,31 @@ export function getBans(params?: {
 
 /** `GET /api/v1/bans/:ip/detail` — 封禁详情（决策链 + 历史 + 信誉分） */
 export function getBanDetail(ip: string): Promise<BanDetailResponse> {
-  return getJson<BanDetailResponse>(`/api/v1/bans/${encodeSegment(ip)}/detail`)
+  return getJson<BanDetailResponse>(fill(ROUTES.GET_API_V1_BANS_IP_DETAIL, ip))
 }
 
 /** `POST /api/v1/bans` — 封禁单个 IP（duration 省略或 0 表示永久） */
 export function createBan(req: CreateBanRequest): Promise<BanOperationResponse> {
-  return sendJson<CreateBanRequest, BanOperationResponse>('/api/v1/bans', 'POST', req)
+  return sendJson<CreateBanRequest, BanOperationResponse>(ROUTES.POST_API_V1_BANS, 'POST', req)
 }
 
 /** `DELETE /api/v1/bans/:ip` — 解封 IP（同时解除临时与永久封禁） */
 export function deleteBan(ip: string): Promise<BanOperationResponse> {
-  return delJson<BanOperationResponse>(`/api/v1/bans/${encodeSegment(ip)}`)
+  return delJson<BanOperationResponse>(fill(ROUTES.DELETE_API_V1_BANS_IP, ip))
 }
 
 /** `POST /api/v1/bans/batch` — 批量封禁（后端上限 100 个 IP，单次封禁 3600 秒） */
 export function batchBan(ips: string[]): Promise<BatchOperationResponse> {
-  return sendJson<string[], BatchOperationResponse>('/api/v1/bans/batch', 'POST', ips)
+  return sendJson<string[], BatchOperationResponse>(ROUTES.POST_API_V1_BANS_BATCH, 'POST', ips)
 }
 
 /** `POST /api/v1/bans/unban-temporary` — 批量解封所有临时封禁（永久封禁不受影响） */
 export function unbanAllTemporary(): Promise<BatchOperationResponse> {
-  return sendJson<null, BatchOperationResponse>('/api/v1/bans/unban-temporary', 'POST', null)
+  return sendJson<null, BatchOperationResponse>(
+    ROUTES.POST_API_V1_BANS_UNBAN_TEMPORARY,
+    'POST',
+    null,
+  )
 }
 
 // ============================================================================
@@ -172,14 +173,14 @@ export function unbanAllTemporary(): Promise<BatchOperationResponse> {
 
 /** `GET /api/v1/jails` — Jail 列表（含运行时统计与阈值放宽信息） */
 export function getJails(): Promise<JailResponse[]> {
-  return getJson<JailResponse[]>('/api/v1/jails')
+  return getJson<JailResponse[]>(ROUTES.GET_API_V1_JAILS)
 }
 
 /** `PUT /api/v1/jails/:name` — 启用/禁用 Jail，返回更新后的完整条目 */
 export function updateJail(name: string, enabled: boolean): Promise<JailResponse> {
   const body: UpdateJailRequest = { enabled }
   return sendJson<UpdateJailRequest, JailResponse>(
-    `/api/v1/jails/${encodeSegment(name)}`,
+    fill(ROUTES.PUT_API_V1_JAILS_NAME, name),
     'PUT',
     body,
   )
@@ -191,12 +192,12 @@ export function updateJail(name: string, enabled: boolean): Promise<JailResponse
 
 /** `GET /api/v1/config` — Web UI 配置（阈值、检测开关、容量） */
 export function getConfig(): Promise<WebuiConfigResponse> {
-  return getJson<WebuiConfigResponse>('/api/v1/config')
+  return getJson<WebuiConfigResponse>(ROUTES.GET_API_V1_CONFIG)
 }
 
 /** `PUT /api/v1/config` — 提交部分字段更新，返回更新后的完整配置 */
 export function updateConfig(req: UpdateConfigRequest): Promise<WebuiConfigResponse> {
-  return sendJson<UpdateConfigRequest, WebuiConfigResponse>('/api/v1/config', 'PUT', req)
+  return sendJson<UpdateConfigRequest, WebuiConfigResponse>(ROUTES.PUT_API_V1_CONFIG, 'PUT', req)
 }
 
 // ============================================================================
@@ -205,14 +206,14 @@ export function updateConfig(req: UpdateConfigRequest): Promise<WebuiConfigRespo
 
 /** `GET /api/v1/whitelist` — 白名单列表 */
 export function getWhitelist(): Promise<WhitelistEntry[]> {
-  return getJson<WhitelistEntry[]>('/api/v1/whitelist')
+  return getJson<WhitelistEntry[]>(ROUTES.GET_API_V1_WHITELIST)
 }
 
 /** `POST /api/v1/whitelist` — 添加白名单（CIDR 或单 IP） */
 export function createWhitelist(cidr: string): Promise<WhitelistOperationResponse> {
   const body: CreateWhitelistRequest = { cidr }
   return sendJson<CreateWhitelistRequest, WhitelistOperationResponse>(
-    '/api/v1/whitelist',
+    ROUTES.POST_API_V1_WHITELIST,
     'POST',
     body,
   )
@@ -220,12 +221,12 @@ export function createWhitelist(cidr: string): Promise<WhitelistOperationRespons
 
 /** `DELETE /api/v1/whitelist/:cidr` — 移除白名单（CIDR 中的 `/` 会被编码） */
 export function deleteWhitelist(cidr: string): Promise<WhitelistOperationResponse> {
-  return delJson<WhitelistOperationResponse>(`/api/v1/whitelist/${encodeSegment(cidr)}`)
+  return delJson<WhitelistOperationResponse>(fill(ROUTES.DELETE_API_V1_WHITELIST_CIDR, cidr))
 }
 
 /** `GET /api/v1/whitelist/recommendations` — 智能白名单推荐（最多 10 条，按置信度降序） */
 export function getWhitelistRecommendations(): Promise<WhitelistRecommendation[]> {
-  return getJson<WhitelistRecommendation[]>('/api/v1/whitelist/recommendations')
+  return getJson<WhitelistRecommendation[]>(ROUTES.GET_API_V1_WHITELIST_RECOMMENDATIONS)
 }
 
 // ============================================================================
@@ -234,119 +235,130 @@ export function getWhitelistRecommendations(): Promise<WhitelistRecommendation[]
 
 /** `GET /api/v1/rates/current` — 当前每 IP 速率（协议维度） */
 export function getRatesCurrent(): Promise<RateResponse[]> {
-  return getJson<RateResponse[]>('/api/v1/rates/current')
+  return getJson<RateResponse[]>(ROUTES.GET_API_V1_RATES_CURRENT)
 }
 
 /** `GET /api/v1/rates/history` — 速率历史趋势（最近 1 小时，每 2 秒一条） */
 export function getRatesHistory(): Promise<RateHistoryResponse[]> {
-  return getJson<RateHistoryResponse[]>('/api/v1/rates/history')
+  return getJson<RateHistoryResponse[]>(ROUTES.GET_API_V1_RATES_HISTORY)
 }
 
 /** `GET /api/v1/rates/windows` — 多窗口 EWMA 速率（短期 / 中期 / 长期） */
 export function getRatesWindows(): Promise<RateWindowSnapshot> {
-  return getJson<RateWindowSnapshot>('/api/v1/rates/windows')
+  return getJson<RateWindowSnapshot>(ROUTES.GET_API_V1_RATES_WINDOWS)
 }
 
 // ============================================================================
-// 统计 / 分析（stats 子路由）
+// 统计子路由（历史快照 / 包分析 / 趋势预测）
 // ============================================================================
 
-/** `GET /api/v1/stats/heatmap` — 24 小时攻击热力图（bans/failed/ddos 三维度） */
+/** `GET /api/v1/stats/heatmap` — 24 小时封禁 / 失败 / DDoS 热力图 */
 export function getHeatmap(): Promise<HourlyHeatmap> {
-  return getJson<HourlyHeatmap>('/api/v1/stats/heatmap')
+  return getJson<HourlyHeatmap>(ROUTES.GET_API_V1_STATS_HEATMAP)
 }
 
-/** `GET /api/v1/stats/recidivism` — 复发率统计 + TOP 10 复发 IP */
+/** `GET /api/v1/stats/recidivism` — 复发统计（被封禁过的 IP 再次攻击的比例） */
 export function getRecidivism(): Promise<RecidivismResponse> {
-  return getJson<RecidivismResponse>('/api/v1/stats/recidivism')
+  return getJson<RecidivismResponse>(ROUTES.GET_API_V1_STATS_RECIDIVISM)
 }
 
-/** `GET /api/v1/stats/ban-effectiveness` — 按封禁级别的效果分析 */
+/** `GET /api/v1/stats/ban-effectiveness` — 渐进式封禁各等级的成效对比 */
 export function getBanEffectiveness(): Promise<BanEffectivenessResponse> {
-  return getJson<BanEffectivenessResponse>('/api/v1/stats/ban-effectiveness')
+  return getJson<BanEffectivenessResponse>(ROUTES.GET_API_V1_STATS_BAN_EFFECTIVENESS)
 }
 
-/** `GET /api/v1/stats/periodic-attackers` — 周期性攻击者（机器人特征）检测 */
+/** `GET /api/v1/stats/periodic-attackers` — 周期性攻击者（等间隔复现的扫描源） */
 export function getPeriodicAttackers(): Promise<PeriodicAttacker[]> {
-  return getJson<PeriodicAttacker[]>('/api/v1/stats/periodic-attackers')
+  return getJson<PeriodicAttacker[]>(ROUTES.GET_API_V1_STATS_PERIODIC_ATTACKERS)
 }
 
-/** `GET /api/v1/stats/collaborative-attacks` — 协同攻击检测 */
+/** `GET /api/v1/stats/collaborative-attacks` — 协同攻击（同一时间窗内的多源联动） */
 export function getCollaborativeAttacks(): Promise<CollaborativeAttack[]> {
-  return getJson<CollaborativeAttack[]>('/api/v1/stats/collaborative-attacks')
+  return getJson<CollaborativeAttack[]>(ROUTES.GET_API_V1_STATS_COLLABORATIVE_ATTACKS)
 }
 
 /** `GET /api/v1/stats/udp-ports` — UDP 端口分布 */
 export function getUdpPorts(): Promise<UdpPortDistributionResponse> {
-  return getJson<UdpPortDistributionResponse>('/api/v1/stats/udp-ports')
+  return getJson<UdpPortDistributionResponse>(ROUTES.GET_API_V1_STATS_UDP_PORTS)
 }
 
-/** `GET /api/v1/stats/icmp-types` — ICMP 类型分布 */
+/** `GET /api/v1/stats/icmp-types` — ICMP 类型 / 代码分布 */
 export function getIcmpTypes(): Promise<IcmpTypeDistributionResponse> {
-  return getJson<IcmpTypeDistributionResponse>('/api/v1/stats/icmp-types')
+  return getJson<IcmpTypeDistributionResponse>(ROUTES.GET_API_V1_STATS_ICMP_TYPES)
 }
 
-/**
- * `GET /api/v1/stats/sse-status` — SSE 连接数诊断（两条流各自一份状态）。
- * useSse 在重连第 2 次起先调用它，判断**管理事件流**是否已达服务端连接上限。
- */
+/** `GET /api/v1/stats/sse-status` — 两条 SSE 流各自的当前连接数与上限 */
 export function getSseStatus(): Promise<SseStatusResponse> {
-  return getJson<SseStatusResponse>('/api/v1/stats/sse-status')
+  return getJson<SseStatusResponse>(ROUTES.GET_API_V1_STATS_SSE_STATUS)
 }
 
-/** `GET /api/v1/stats/ban-duration-histogram` — 封禁时长分布直方图 */
+/** `GET /api/v1/stats/ban-duration-histogram` — 已封禁时长的分布直方图 */
 export function getBanDurationHistogram(): Promise<BanDurationHistogramResponse> {
-  return getJson<BanDurationHistogramResponse>('/api/v1/stats/ban-duration-histogram')
+  return getJson<BanDurationHistogramResponse>(ROUTES.GET_API_V1_STATS_BAN_DURATION_HISTOGRAM)
 }
 
 /** `GET /api/v1/stats/packet-sizes` — 包大小分布 */
 export function getPacketSizes(): Promise<PacketSizeDistributionResponse> {
-  return getJson<PacketSizeDistributionResponse>('/api/v1/stats/packet-sizes')
+  return getJson<PacketSizeDistributionResponse>(ROUTES.GET_API_V1_STATS_PACKET_SIZES)
 }
 
-/** `GET /api/v1/stats/ttl-distribution` — TTL 分布 */
+/** `GET /api/v1/stats/ttl-distribution` — TTL 分布（可旁路推断攻击者操作系统） */
 export function getTtlDistribution(): Promise<TtlDistributionResponse> {
-  return getJson<TtlDistributionResponse>('/api/v1/stats/ttl-distribution')
+  return getJson<TtlDistributionResponse>(ROUTES.GET_API_V1_STATS_TTL_DISTRIBUTION)
 }
 
-/** `GET /api/v1/stats/ip-fragments` — IP 分片统计 */
+/** `GET /api/v1/stats/ip-fragments` — IP 分片流量占比 */
 export function getIpFragments(): Promise<IpFragmentStatsResponse> {
-  return getJson<IpFragmentStatsResponse>('/api/v1/stats/ip-fragments')
+  return getJson<IpFragmentStatsResponse>(ROUTES.GET_API_V1_STATS_IP_FRAGMENTS)
 }
 
 /** `GET /api/v1/stats/port-scanners` — 端口扫描检测结果 */
 export function getPortScanners(): Promise<PortScanResponse> {
-  return getJson<PortScanResponse>('/api/v1/stats/port-scanners')
+  return getJson<PortScanResponse>(ROUTES.GET_API_V1_STATS_PORT_SCANNERS)
 }
 
 /** `GET /api/v1/stats/service-probes` — 服务探测检测结果 */
 export function getServiceProbes(): Promise<ServiceProbeResponse> {
-  return getJson<ServiceProbeResponse>('/api/v1/stats/service-probes')
+  return getJson<ServiceProbeResponse>(ROUTES.GET_API_V1_STATS_SERVICE_PROBES)
 }
 
-/** `GET /api/v1/stats/ban-duration-recommendations` — 封禁时长推荐 */
+/** `GET /api/v1/stats/ban-duration-recommendations` — 按 jail 的封禁时长建议 */
 export function getBanDurationRecommendations(): Promise<BanDurationRecommendationResponse> {
-  return getJson<BanDurationRecommendationResponse>('/api/v1/stats/ban-duration-recommendations')
+  return getJson<BanDurationRecommendationResponse>(
+    ROUTES.GET_API_V1_STATS_BAN_DURATION_RECOMMENDATIONS,
+  )
 }
 
-/** `GET /api/v1/stats/reputation` — IP 信誉分列表 */
+/** `GET /api/v1/stats/reputation` — IP 信誉分列表（分数越低，阈值倍率越严） */
 export function getReputation(): Promise<ReputationEntryResponse[]> {
-  return getJson<ReputationEntryResponse[]>('/api/v1/stats/reputation')
+  return getJson<ReputationEntryResponse[]>(ROUTES.GET_API_V1_STATS_REPUTATION)
 }
 
-/** `GET /api/v1/stats/threshold-recommendations` — Jail 阈值调优建议 */
+/** `GET /api/v1/stats/threshold-recommendations` — jail 阈值调优建议 */
 export function getThresholdRecommendations(): Promise<ThresholdRecommendationResponse> {
-  return getJson<ThresholdRecommendationResponse>('/api/v1/stats/threshold-recommendations')
+  return getJson<ThresholdRecommendationResponse>(
+    ROUTES.GET_API_V1_STATS_THRESHOLD_RECOMMENDATIONS,
+  )
 }
 
-/** `GET /api/v1/stats/network-distribution` — 攻击源网络分布（/24 或 /48 聚合） */
+/** `GET /api/v1/stats/network-distribution` — 攻击源网段分布 */
 export function getNetworkDistribution(): Promise<NetworkBlock[]> {
-  return getJson<NetworkBlock[]>('/api/v1/stats/network-distribution')
+  return getJson<NetworkBlock[]>(ROUTES.GET_API_V1_STATS_NETWORK_DISTRIBUTION)
 }
 
-/** `GET /api/v1/stats/attack-predictions` — 攻击时间预测 + Jail 攻击趋势 */
+/** `GET /api/v1/stats/attack-predictions` — 下次攻击时间预测 + 各 jail 攻击趋势 */
 export function getAttackPredictions(): Promise<AttackPredictionSummary> {
-  return getJson<AttackPredictionSummary>('/api/v1/stats/attack-predictions')
+  return getJson<AttackPredictionSummary>(ROUTES.GET_API_V1_STATS_ATTACK_PREDICTIONS)
+}
+
+/** `GET /api/v1/stats/anomalies` — 全局流量偏离 + per-IP 行为离群（只观测，不触发封禁） */
+export function getAnomalies(): Promise<AnomalyResponse> {
+  return getJson<AnomalyResponse>(ROUTES.GET_API_V1_STATS_ANOMALIES)
+}
+
+/** `GET /api/v1/stats/attack-geo` — 攻击源地理分布；未启用 GeoIP 时 `geoip_enabled=false` */
+export function getAttackGeo(): Promise<AttackGeoResponse> {
+  return getJson<AttackGeoResponse>(ROUTES.GET_API_V1_STATS_ATTACK_GEO)
 }
 
 // ============================================================================
@@ -354,12 +366,15 @@ export function getAttackPredictions(): Promise<AttackPredictionSummary> {
 // ============================================================================
 
 /**
- * `GET /api/v1/logs` — 历史日志分页查询。
- * 后端缺省 page=1、page_size=100（上限 500），最多扫描 5 万行。
+ * `GET /api/v1/logs` — 分页日志查询。
+ *
+ * 契约里的 `LogQueryParams` 字段全部是**必填可空**（`page: number | null`），
+ * 不是可选字段，所以默认值用 `{} as LogQueryParams`，让调用方只传关心的项；
+ * `withQuery` 会跳过 `null` / `undefined`，未填项不会出现在查询串里。
  */
-export function getLogs(params: LogQueryParams = {}): Promise<LogPageResponse> {
+export function getLogs(params: LogQueryParams = {} as LogQueryParams): Promise<LogPageResponse> {
   return getJson<LogPageResponse>(
-    withQuery('/api/v1/logs', {
+    withQuery(ROUTES.GET_API_V1_LOGS, {
       page: params.page,
       page_size: params.page_size,
       level: params.level,

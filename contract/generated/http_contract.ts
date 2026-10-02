@@ -25,6 +25,8 @@ export const ROUTES = {
   GET_JAILS: "/jails",
   /** `GET /ddos` */
   GET_DDOS: "/ddos",
+  /** `GET /globe` */
+  GET_GLOBE: "/globe",
   /** `GET /logs` */
   GET_LOGS: "/logs",
   /** `GET /settings` */
@@ -115,6 +117,10 @@ export const ROUTES = {
   GET_API_V1_STATS_NETWORK_DISTRIBUTION: "/api/v1/stats/network-distribution",
   /** `GET /api/v1/stats/attack-predictions` */
   GET_API_V1_STATS_ATTACK_PREDICTIONS: "/api/v1/stats/attack-predictions",
+  /** `GET /api/v1/stats/anomalies` */
+  GET_API_V1_STATS_ANOMALIES: "/api/v1/stats/anomalies",
+  /** `GET /api/v1/stats/attack-geo` */
+  GET_API_V1_STATS_ATTACK_GEO: "/api/v1/stats/attack-geo",
   /** `GET /api/v1/logs` */
   GET_API_V1_LOGS: "/api/v1/logs",
 } as const
@@ -126,6 +132,62 @@ export type SseEventsApiV1Events = "connected" | "stats" | "bans" | "jails" | "w
 export type SseEventsApiV1LogsStream = "connected" | "log" | "error"
 
 /** 响应/请求载荷类型（字段与 daemon 序列化出的 JSON key 一一对应） */
+/** Rust `AnomalyResponse` */
+export interface AnomalyResponse {
+  global_score: number
+  global_dimensions: DimensionScore[]
+  global_features: FeatureValue[] | null
+  global_baseline_p50: FeatureValue[]
+  global_baseline_p95: FeatureValue[]
+  global_sample_count: number
+  ip_anomalies: IpAnomalyEntry[]
+  timestamp: number
+}
+
+/** Rust `DimensionScore` */
+export interface DimensionScore {
+  name: string
+  score: number
+}
+
+/** Rust `FeatureValue` */
+export interface FeatureValue {
+  name: string
+  value: number
+}
+
+/** Rust `IpAnomalyEntry` */
+export interface IpAnomalyEntry {
+  ip: string
+  score: number
+  dimensions: DimensionScore[]
+}
+
+/** Rust `AttackGeoResponse` */
+export interface AttackGeoResponse {
+  geoip_enabled: boolean
+  points: GeoPoint[]
+  total_ips: number
+  located_ips: number
+  server_latitude: number | null
+  server_longitude: number | null
+  server_location_source: string
+}
+
+/** Rust `GeoPoint` */
+export interface GeoPoint {
+  latitude: number
+  longitude: number
+  country_code: string
+  country: string
+  city: string
+  subdivision: string
+  unique_ips: number
+  total_bans: number
+  top_ip: string
+  last_banned_at: number
+}
+
 /** Rust `ApiResponse` */
 export interface ApiResponse<T> {
   code: number

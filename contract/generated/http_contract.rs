@@ -29,6 +29,8 @@ pub mod path {
     pub const ROUTE_GET_JAILS: &str = "/jails";
     /// `GET /ddos` → `handle_spa_ddos`
     pub const ROUTE_GET_DDOS: &str = "/ddos";
+    /// `GET /globe` → `handle_spa_globe`
+    pub const ROUTE_GET_GLOBE: &str = "/globe";
     /// `GET /logs` → `handle_spa_logs`
     pub const ROUTE_GET_LOGS: &str = "/logs";
     /// `GET /settings` → `handle_spa_settings`
@@ -119,6 +121,10 @@ pub mod path {
     pub const ROUTE_GET_API_V1_STATS_NETWORK_DISTRIBUTION: &str = "/api/v1/stats/network-distribution";
     /// `GET /api/v1/stats/attack-predictions` → `handle_api_attack_predictions`
     pub const ROUTE_GET_API_V1_STATS_ATTACK_PREDICTIONS: &str = "/api/v1/stats/attack-predictions";
+    /// `GET /api/v1/stats/anomalies` → `handle_api_anomalies`
+    pub const ROUTE_GET_API_V1_STATS_ANOMALIES: &str = "/api/v1/stats/anomalies";
+    /// `GET /api/v1/stats/attack-geo` → `handle_api_attack_geo`
+    pub const ROUTE_GET_API_V1_STATS_ATTACK_GEO: &str = "/api/v1/stats/attack-geo";
     /// `GET /api/v1/logs` → `handle_api_logs`
     pub const ROUTE_GET_API_V1_LOGS: &str = "/api/v1/logs";
 }

@@ -143,6 +143,29 @@ pub struct Config {
     pub trusted_ips: Vec<String>,
     /// 容量配置（用户自定义上限，默认 65535）
     pub capacity: CapacityConfig,
+    /// GeoIP 城市级数据库路径（DB-IP City Lite / MaxMind City 格式 `.mmdb`）。
+    ///
+    /// 为空或文件不存在时地理解析整体禁用（攻击源地理分布与 3D 地球显示为空），
+    /// 不影响其余功能。获取脚本见 `scripts/fetch-geoip.sh`。
+    pub geoip_db_path: Option<String>,
+    /// 本机（服务器）所在纬度（十进制度，`-90.0..=90.0`）。
+    ///
+    /// 攻击地图据此画「本机」标记与「攻击源 → 本机」的弧线。与 `server_longitude`
+    /// **必须成对出现**（解析层强制，见 `config::parser`）：只给一个会拒绝加载，
+    /// 两者都不给则前端不绘制该标记——宁可不画，也不画到一个错误的位置上。
+    pub server_latitude: Option<f64>,
+    /// 本机（服务器）所在经度（十进制度，`-180.0..=180.0`）。语义见 `server_latitude`。
+    pub server_longitude: Option<f64>,
+    /// 是否在启动时探测一次本机出口 IP，再用本地 GeoIP 库解析成本机坐标。
+    ///
+    /// **默认关闭**：本项目只做入站防守，不经用户显式开启不向外发请求。开启后会在
+    /// 启动日志里明确记下所请求的地址。仅在本机坐标未配置时生效——配置了坐标就以
+    /// 配置为准，不会发探测请求。
+    pub geoip_detect_egress: bool,
+    /// 出口 IP 探测地址；`None` 用 [`crate::geoip::DEFAULT_EGRESS_PROBE_URL`]。
+    ///
+    /// 解析层做严格校验：非 `http(s)`、缺主机名、含空白/控制字符或超长一律拒绝加载。
+    pub geoip_egress_probe_url: Option<String>,
 }
 
 /// 容量配置（用户自定义各项上限）
@@ -200,6 +223,11 @@ impl Default for Config {
             webui: WebuiConfig::default(),
             trusted_ips: Vec::new(),
             capacity: CapacityConfig::default(),
+            geoip_db_path: None,
+            server_latitude: None,
+            server_longitude: None,
+            geoip_detect_egress: false,
+            geoip_egress_probe_url: None,
         }
     }
 }

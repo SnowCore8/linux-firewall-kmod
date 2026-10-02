@@ -21,6 +21,7 @@ import { SseProvider } from './hooks/useSse'
 import Bans from './views/Bans'
 import Dashboard from './views/Dashboard'
 import Ddos from './views/Ddos'
+import Globe from './views/Globe'
 import Jails from './views/Jails'
 import Login from './views/Login'
 import Logs from './views/Logs'
@@ -58,8 +59,9 @@ const router = createHashRouter([
       { path: 'bans', element: <Bans /> },
       { path: 'whitelist', element: <Whitelist /> },
       { path: 'ddos', element: <Ddos /> },
-      // 「更多」页收纳的 3 个二级页
+      // 「更多」页收纳的二级页
       { path: 'jails', element: <Jails /> },
+      { path: 'globe', element: <Globe /> },
       { path: 'logs', element: <Logs /> },
       { path: 'settings', element: <Settings /> },
       { path: 'more', element: <More /> },

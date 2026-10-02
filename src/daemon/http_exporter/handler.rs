@@ -72,6 +72,7 @@ pub fn build_router(api_state: Option<std::sync::Arc<crate::api::routes::ApiStat
         .route("/whitelist", get(handle_spa_whitelist))
         .route("/jails", get(handle_spa_jails))
         .route("/ddos", get(handle_spa_ddos))
+        .route("/globe", get(handle_spa_globe))
         .route("/logs", get(handle_spa_logs))
         .route("/settings", get(handle_spa_settings))
         // `/more` 是底部 TabBar 的一级页（AppShell 的「更多」），
@@ -169,6 +170,8 @@ fn legacy_protected_routes() -> Router {
             "/api/v1/stats/attack-predictions",
             get(handle_api_attack_predictions),
         )
+        .route("/api/v1/stats/anomalies", get(handle_api_anomalies))
+        .route("/api/v1/stats/attack-geo", get(handle_api_attack_geo))
         .route("/api/v1/logs/stream", get(handle_log_stream))
         .route("/api/v1/logs", get(handle_api_logs))
 }
@@ -196,6 +199,7 @@ async fn security_headers_middleware(
         || path == "/whitelist"
         || path == "/jails"
         || path == "/ddos"
+        || path == "/globe"
         || path == "/logs"
         || path == "/settings"
         || path == "/more";
@@ -266,6 +270,10 @@ async fn handle_spa_ddos() -> Html<String> {
 }
 
 async fn handle_spa_logs() -> Html<String> {
+    Html(web_ui::render_dashboard())
+}
+
+async fn handle_spa_globe() -> Html<String> {
     Html(web_ui::render_dashboard())
 }
 
@@ -491,6 +499,20 @@ async fn handle_api_network_distribution() -> Response {
 /// `GET /api/v1/stats/attack-predictions` — 攻击时间预测 + Jail 攻击趋势
 async fn handle_api_attack_predictions() -> Response {
     match db_blocking(web_ui::api::get_attack_predictions).await {
+        Ok(summary) => Json(web_ui::api::ApiResponse::ok(summary)).into_response(),
+        Err(msg) => db_error_response(msg),
+    }
+}
+
+/// `GET /api/v1/stats/anomalies` — 异常检测（全局流量偏离 + per-IP 行为离群）
+async fn handle_api_anomalies() -> Json<web_ui::api::ApiResponse<web_ui::api::AnomalyResponse>> {
+    let response = web_ui::api::get_anomaly_response();
+    Json(web_ui::api::ApiResponse::ok(response))
+}
+
+/// `GET /api/v1/stats/attack-geo` — 攻击源地理分布（依赖 GeoIP 数据库）
+async fn handle_api_attack_geo() -> Response {
+    match db_blocking(web_ui::api::get_attack_geo).await {
         Ok(summary) => Json(web_ui::api::ApiResponse::ok(summary)).into_response(),
         Err(msg) => db_error_response(msg),
     }

@@ -56,7 +56,7 @@ const TABS: { key: string; path: string; title: string; icon: ReactNode }[] = [
 ]
 
 /** 收纳在「更多」下的二级页：命中时底部高亮「更多」，用户不会丢失位置感 */
-const MORE_CHILD_PATHS = ['/jails', '/logs', '/settings']
+const MORE_CHILD_PATHS = ['/jails', '/globe', '/logs', '/settings']
 
 /** 顶栏标题（与路由一一对应，未知路径回退到应用名） */
 const PAGE_TITLES: Record<string, string> = {
@@ -66,6 +66,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/ddos': 'DDoS 监控',
   '/more': '更多',
   '/jails': 'Jail 管理',
+  '/globe': '攻击地图',
   '/logs': '日志',
   '/settings': '设置',
 }

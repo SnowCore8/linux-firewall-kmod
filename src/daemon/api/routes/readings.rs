@@ -49,6 +49,7 @@ pub async fn handle_api_stats(
         ddos_events,
         &trends,
         threat,
+        api.history.today_bans(),
     )))
 }
 

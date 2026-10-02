@@ -214,9 +214,10 @@ struct fw_rate_entry {
     __u64 ack_packets;
     __u64 rst_packets;
     __u64 fin_packets;
+    __u32 unique_ports;
     addr16 addr;
 } __packed;
-_Static_assert(sizeof(struct fw_rate_entry) == 84, "rate_entry 布局必须为 84 字节");
+_Static_assert(sizeof(struct fw_rate_entry) == 88, "rate_entry 布局必须为 88 字节");
 
 struct fw_list_rates_response {
     struct fw_msg_hdr hdr;
@@ -227,7 +228,7 @@ struct fw_list_rates_response {
     __u64 global_bps;
 } __packed;
 _Static_assert(sizeof(struct fw_list_rates_response) == 40, "list_rates_response 布局必须为 40 字节");
-/* 其后紧跟 count 个 struct fw_rate_entry；u16 长度上限内最多 779 条 */
+/* 其后紧跟 count 个 struct fw_rate_entry；u16 长度上限内最多 744 条 */
 
 struct fw_udp_port_item {
     __u16 port;

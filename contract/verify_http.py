@@ -195,6 +195,33 @@ def _resolve_path_consts(src: str, prefix: str = "path::") -> dict:
     return out
 
 
+# 从路由 note 里抽取「声明的响应载荷类型名」用的两个正则：
+# 句式锚点（载荷／返回）与类型记号（含泛型实参）。
+_PAYLOAD_RE = re.compile(r"(?:载荷(?:直接是)?|返回)\s*([A-Za-z_]\w*(?:<[^>]*>)?)")
+_TYPE_TOKEN_RE = re.compile(r"[A-Za-z_]\w*")
+
+
+def _payload_names(note: str) -> list[str]:
+    """从路由 note 的散文里抽出它声明的响应载荷类型名。
+
+    契约里响应形状写成两种句式（没有专门的字段承载类型名，只能从 note 里读）：
+
+      * `载荷 AttackGeoResponse` / `载荷直接是 RuntimeSnapshot`（多数路由）
+      * `一律返回 PaginatedResponse<BanResponse>`（分页信封那几条）
+
+    泛型取外层与实参两侧的名字，故 `PaginatedResponse<BanResponse>` 会同时核对
+    这两个类型是否都有定义。
+
+    注意这是**尽力而为**的抽取：note 没写载荷名的路由（如 `DELETE /api/v1/bans/:ip`
+    的 note 为空、`PUT /api/v1/config` 只写了请求体）不产生任何断言，故调用方会
+    打印覆盖数，让「未被这条检查覆盖的路由有几条」始终可见。
+    """
+    names: list[str] = []
+    for raw in _PAYLOAD_RE.findall(note):
+        names.extend(_TYPE_TOKEN_RE.findall(raw))
+    return names
+
+
 def check_routes(contract: dict) -> list[str]:
     problems: list[str] = []
     src = read(HANDLER_RS)
@@ -262,10 +289,33 @@ def check_routes(contract: dict) -> list[str]:
                 f"handler.rs / api/router.rs 中存在契约未声明的路由 {key[0]} {key[1]}"
             )
 
+    # 路由声明的载荷类型必须真的有定义。
+    #
+    # 为什么单列一条：`returns = type` 的载荷名只写在 note 的散文里，而载荷字段
+    # 核对（check_types_rust）只遍历**已定义**的类型——于是「声明了一个不存在的
+    # 载荷」既不会被字段核对覆盖，也不会被路由核对覆盖，等于该端点的响应形状
+    # 完全没有机械约束（AttackGeoResponse / AnomalyResponse 曾长期如此）。
+    payload_checked = 0
+    for key, r in sorted(declared.items()):
+        if r.get("returns") != "type":
+            continue
+        names = _payload_names(r.get("note", ""))
+        payload_checked += len(names)
+        for name in names:
+            if name not in contract["types"]:
+                problems.append(
+                    f"路由 {key[0]} {key[1]}: note 声明的载荷类型 {name} 没有 type 定义"
+                    "（响应形状因此不受任何核对）"
+                )
+
     n_none = sum(1 for r in contract["routes"] if r["auth"] == "none")
     print(
         f"  契约 {len(declared)} 条路由 / 源码 {len(actual)} 条"
         f"（无认证 {n_none}；已迁入组按 path::ROUTE_* 常量解析）"
+    )
+    print(
+        f"  载荷声明核对：{payload_checked} 个类型名有定义"
+        f"（{len(declared)} 条路由中 note 未写载荷名的不在此列）"
     )
     return problems
 
@@ -1026,20 +1076,36 @@ def check_defect_claims(contract: dict) -> list[str]:
             else:
                 fail(name, f"单位已统一（stats 百分数={has_pct}，analysis 比例={plain}）")
         elif name == "HTTP_TODAY_BANS_EQUALS_TOTAL":
-            # today_bans 与 total_bans 取的是同一个原子量。修复后会不同。
-            src = read(os.path.join(ROOT, "src", "daemon", "web_ui", "stats.rs"))
-            t = re.search(r"let\s+today_bans\s*=\s*(.+?);", src, re.S)
-            tot = re.search(r"let\s+total_bans\s*=\s*(.+?);", src, re.S)
-            if t and tot:
-                def norm(s: str) -> str:
-                    return re.sub(r"\s+", "", s)
-
-                if norm(t.group(1)) == norm(tot.group(1)):
-                    ok(name, "today_bans 与 total_bans 读取的是同一个值")
-                else:
-                    fail(name, "today_bans 与 total_bans 已是不同取值")
+            # status=fixed：today_bans 已改为真实「今日」窗口（本地时区自然日
+            # 00:00 起，按 ban_events.banned_at 计数）。断言新实现真的接上了——
+            # 只判「旧锚点消失」会漏掉「删掉旧实现、新实现却没接进读路径」这种
+            # 换个马甲的空窗：
+            #   1. 旧现场（web_ui/stats.rs 里的 today_bans 取值）已消失；
+            #   2. api/views.rs 不再拿累计计数器冒充今日数，改为接收窗口值参数；
+            #   3. 端口声明了 today_bans，且 REST 与 SSE 两条读路径都经它取值；
+            #   4. 窗口实现落在 history_snapshot 且以 ban_events + 本地时区为准。
+            legacy = read(os.path.join(ROOT, "src", "daemon", "web_ui", "stats.rs"))
+            views = read(os.path.join(ROOT, "src", "daemon", "api", "views.rs"))
+            ports = read(os.path.join(ROOT, "src", "daemon", "api", "ports.rs"))
+            readings = read(os.path.join(ROOT, "src", "daemon", "api", "routes", "readings.rs"))
+            render = read(os.path.join(ROOT, "src", "daemon", "api", "render.rs"))
+            today = read(os.path.join(ROOT, "src", "daemon", "history_snapshot", "today_bans.rs"))
+            old_gone = "today_bans" not in legacy
+            takes_param = "today_bans: u64" in views and "today_bans: stats.get" not in views
+            port_declared = "fn today_bans(&self)" in ports
+            both_paths = (
+                "history.today_bans()" in readings and "history.today_bans()" in render
+            )
+            window_impl = "ban_events" in today and "Local" in today
+            if old_gone and takes_param and port_declared and both_paths and window_impl:
+                ok(name, "今日窗口已落地：旧现场消失，取值经 HistoryPort 由 REST/SSE 同源共用")
             else:
-                fail(name, "stats.rs 里找不到 today_bans / total_bans 的取值语句")
+                fail(
+                    name,
+                    "今日窗口未接全"
+                    f"（旧现场消失={old_gone} 视图收参={takes_param} 端口声明={port_declared}"
+                    f" 两条读路径={both_paths} 窗口实现={window_impl}）",
+                )
         elif name == "HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS":
             # maintain 分支取 current 而非 0，不存在「0=无需调整」的生成点。
             src = read(

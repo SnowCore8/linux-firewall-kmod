@@ -226,6 +226,7 @@ pub fn mirror_rates_from_cache(entries: &[RateEntry], global_pps: u64, global_bp
                 ack: e.ack_packets_per_sec,
                 rst: e.rst_packets_per_sec,
                 fin: e.fin_packets_per_sec,
+                unique_ports: e.unique_ports,
             },
         );
     }
@@ -518,6 +519,7 @@ mod tests {
             ack_packets_per_sec: 100,
             rst_packets_per_sec: 2,
             fin_packets_per_sec: 3,
+            unique_ports: 9,
         }];
         mirror_rates_from_cache(&rates, 200, 2_000);
         let rate_snapshot = state.rates().snapshot();
@@ -530,6 +532,7 @@ mod tests {
         assert_eq!(counters.packets, 120);
         assert_eq!(counters.syn, 5);
         assert_eq!(counters.fin, 3);
+        assert_eq!(counters.unique_ports, 9);
 
         // 发布版本：封禁/白名单/速率都动过。
         assert!(hub.versions().get(Domain::Bans) >= 2);
