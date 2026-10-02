@@ -313,3 +313,29 @@ sudo bash scripts/e2e-daemon.sh stop
 
 > `lint` 失败通常意味着 gofmt 漂移 / vet 告警；内核侧则是 clang-format
 > `--dry-run --Werror` 不通过。修复后重跑即可。
+
+## 集成测试的地位（本机不可执行）
+
+本仓库的 Python 集成套件（`tests/`，含 `scripts/e2e-daemon.sh`）**在当前开发机上无法执行**，
+有三条互相独立的阻塞，缺任何一条都不足以解开：
+
+1. **系统 python3 没有 pytest / PyYAML / sqlite3 CLI** —— 直接调用会报 `ModuleNotFoundError`。
+2. **内核模块 vermagic 与运行内核不匹配** —— `build/kernel-module/firewall.ko` 是旧内核交叉编译产物，
+   在 `insmod` 时必报 `Invalid module format`，依赖它的套件无法加载。
+3. **集成测试需要 root** —— 写 procfs、insmod/rmmod、sudo 启动守护进程；当前 shell 无 sudo 环境。
+
+因此不能把「没跑」说成「通过」。集成测试的正确用法是：
+
+- **行为规格**：`scripts/e2e-daemon.sh` 与 `tests/` 描述的是接口契约（起夹具 → 等 `/proc/firewall`
+  就绪 → 停守护进程并释放 portid 租约），在能跑的 CI runner 上执行；
+- **可执行的闸门**：Go 侧 `go test ./...` + `go vet ./cmd/... ./internal/...` +
+  `gofmt -l ./cmd ./internal`（CI lint 作业同款命令）；前端类型检查与 vite 构建同样在 CI 执行。
+
+e2e 夹具的三条断言仍是硬承诺，本机无法验证不代表它不成立：全量 hash 路由标题、封禁→解封三层状态同步翻转、
+控制台无 `console.error`/`warn`/未捕获异常——新增用例继承夹具里的控制台洁净度门槛，不各自重复断言。
+
+### 为什么 e2e 独立成文件
+
+整条夹具（insmod → 生成临时配置 → 起守护进程 → 等 procfs 接口就绪 → 收尾 rmmod）依赖 portid
+独占 + 30 秒活动超时、且模块无注销消息；必须和浏览器用例共用同一份逻辑，才能确保用例连的守护进程
+确实由同一套参数启动（参见 [Web 前端](../architecture/frontend.md)）。

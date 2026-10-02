@@ -10,7 +10,7 @@
 
 ## 概述
 
-Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用户空间移至内核空间，使用 netfilter 框架在数据包级别进行实时 IP 封禁，具有更低的延迟和更高的性能。守护进程用 Go 实现（v2.2.0 起 Rust 版本被 Go module `src/daemon` 取代），编译为单文件 stripped 二进制（移动端优先的 React 控制面板一并通过 go:embed 嵌入）；内核模块仍是 C，集成测试套件全部通过。
+Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用户空间移至内核空间，使用 netfilter 框架在数据包级别进行实时 IP 封禁，具有更低的延迟和更高的性能。守护进程用 Go 实现（v2.2.0 起 Rust 版本被 Go module `src/daemon` 取代），编译为单文件 stripped 二进制（移动端优先的 React 控制面板一并通过 go:embed 嵌入）；内核模块仍是 C，`src/daemon` 用 `go test ./...`、`go vet`、`gofmt` 自验证
 
 ## 为什么选择本项目
 
@@ -39,7 +39,8 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 - ✅ **独立日志文件** — `cfg.log_file` 默认 `/var/log/firewall.log`，失败回退 syslog-only
 - ✅ **安全加固** — 整数溢出防护、Use-After-Free 修复、RCU 一致性增强、所有 unsafe 块均带 `// SAFETY:` 注释
 - ✅ **性能优化** — 哈希表与白名单两阶段匹配、LTO 编译优化
-- ✅ **代码质量** — 单元测试与集成测试套件全部通过，CI 全绿
+- ✅ **代码质量** — Go 守护进程 `go test ./...` / `go vet ./cmd/... ./internal/...` / `gofmt -l ./cmd ./internal` 通过；
+集成测试套件是行为规格，由 CI（GitHub Actions）在 Python/Playwright 环境下执行
 
 ## 快速开始
 

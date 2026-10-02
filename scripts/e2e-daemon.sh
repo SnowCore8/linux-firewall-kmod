@@ -107,7 +107,7 @@ do_start() {
     : >"$JAIL_LOG"
 
     # ---- 临时配置 ----
-    # 字段名必须与 src/daemon/config/parser.rs 的 YamlConfig 完全一致
+    # 字段名必须与 Go module `src/daemon/internal/config` 的 `YamlConfig`（deny_unknown_fields）完全一致
     # （该结构体带 deny_unknown_fields，多一个键即启动失败）。
     # 凭据是必需的：绑定非回环地址时启动期守卫会拒绝无认证监听。
     cat >"$CONFIG_FILE" <<YAML
