@@ -19,6 +19,20 @@ func (s *Server) RegisterRoutes(api *APIHandlers) {
 	s.HandleFunc("/api/v1/stats/attack-predictions", api.AttackPredictions)
 	s.HandleFunc("/api/v1/stats/ban-duration-recommendations", api.BanDurationRecommendations)
 	s.HandleFunc("/api/v1/stats/threshold-recommendations", api.ThresholdRecommendations)
+	s.HandleFunc("/api/v1/bans", api.ListBans)
+	s.HandleFunc("/api/v1/ban", api.CreateBan)
+	s.HandleFunc("/api/v1/ban", api.DeleteBan)
+	s.HandleFunc("/api/v1/bans/unban-temporary", api.UnbanAllTemporary)
+	s.HandleFunc("/api/v1/bans/batch", api.BatchBan)
+	s.HandleFunc("/api/v1/bans/stats", api.BanStats)
+	s.HandleFunc("/api/v1/bans/detail", api.BanDetail)
+	s.HandleFunc("/api/v1/whitelist", api.ListWhitelist)
+	s.HandleFunc("/api/v1/whitelist", api.AddWhitelist)
+	s.HandleFunc("/api/v1/whitelist", api.RemoveWhitelist)
+	s.HandleFunc("/api/v1/whitelist/stats", api.WhitelistStats)
+	s.HandleFunc("/api/v1/jails", api.ListJails)
+	s.HandleFunc("/api/v1/jail", api.GetJail)
+	s.HandleFunc("/api/v1/jail/stats", api.JailStats)
 }
 
 type APIHandlers struct {

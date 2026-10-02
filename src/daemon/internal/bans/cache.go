@@ -90,3 +90,48 @@ func (c *ActiveBanCache) All() []BanInfo {
 	}
 	return out
 }
+
+// List 返回全部封禁信息的副本（All 的别名）。
+func (c *ActiveBanCache) List() []BanInfo {
+	return c.All()
+}
+
+// UnbanTemporary 解封所有非永久封禁，返回解封数量。
+func (c *ActiveBanCache) UnbanTemporary() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	count := 0
+	for ip, info := range c.bans {
+		if !info.IsPermanent {
+			delete(c.bans, ip)
+			if set := c.byJail[info.JailName]; set != nil {
+				delete(set, ip)
+				if len(set) == 0 {
+					delete(c.byJail, info.JailName)
+				}
+			}
+			count++
+		}
+	}
+	return count
+}
+
+// Stats 返回缓存统计信息。
+func (c *ActiveBanCache) Stats() map[string]any {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	permanent := 0
+	temporary := 0
+	for _, info := range c.bans {
+		if info.IsPermanent {
+			permanent++
+		} else {
+			temporary++
+		}
+	}
+	return map[string]any{
+		"total":     len(c.bans),
+		"permanent": permanent,
+		"temporary": temporary,
+	}
+}
