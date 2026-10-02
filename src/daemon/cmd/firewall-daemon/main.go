@@ -132,6 +132,7 @@ func run(args []string) error {
 			httpServer.RegisterRoutes(api)
 			httpServer.Handle("/api/v1/events", sseBroker)
 			httpServer.Handle("/metrics", metrics)
+			httpServer.RegisterStaticFiles(panelres.StaticFS())
 
 			httpToken := runtime.NewShutdown()
 			sup.Spawn("http-server", httpToken, func() {
