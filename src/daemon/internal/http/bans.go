@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/netip"
-	"strconv"
 	"time"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/bans"
@@ -47,16 +46,18 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	isPermanent := req.Duration == 0
 	duration := req.Duration
 	if duration <= 0 {
 		duration = 3600
 	}
 
 	info := bans.BanInfo{
-		IP:        req.IP,
-		Reason:    req.Reason,
-		BannedAt:  time.Now().Unix(),
-		ExpiresAt: time.Now().Add(time.Duration(duration) * time.Second).Unix(),
+		IP:          req.IP,
+		Reason:      req.Reason,
+		BannedAt:    time.Now().Unix(),
+		ExpiresAt:   time.Now().Add(time.Duration(duration) * time.Second).Unix(),
+		IsPermanent: isPermanent,
 	}
 
 	if !bans.GlobalCache().TryInsert(info) {
@@ -65,10 +66,10 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		if err := h.db.RecordBanHistory(req.IP, duration == 0); err != nil {
+		if err := h.db.RecordBanHistory(req.IP, isPermanent); err != nil {
 			h.server.logger.Error("record ban history", "error", err)
 		}
-		if err := h.db.RecordBanEvent(req.IP, "api", 1, duration == 0); err != nil {
+		if err := h.db.RecordBanEvent(req.IP, "api", 1, isPermanent); err != nil {
 			h.server.logger.Error("record ban event", "error", err)
 		}
 	}
@@ -158,6 +159,12 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(req.IPs) > 1000 {
+		WriteBadRequest(w, "max 1000 IPs per batch")
+		return
+	}
+
+	isPermanent := req.Duration == 0
 	duration := req.Duration
 	if duration <= 0 {
 		duration = 3600
@@ -172,10 +179,11 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 		}
 
 		info := bans.BanInfo{
-			IP:        ip,
-			Reason:    req.Reason,
-			BannedAt:  time.Now().Unix(),
-			ExpiresAt: time.Now().Add(time.Duration(duration) * time.Second).Unix(),
+			IP:          ip,
+			Reason:      req.Reason,
+			BannedAt:    time.Now().Unix(),
+			ExpiresAt:   time.Now().Add(time.Duration(duration) * time.Second).Unix(),
+			IsPermanent: isPermanent,
 		}
 
 		if bans.GlobalCache().TryInsert(info) {
@@ -256,14 +264,4 @@ func (h *APIHandlers) BanDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteSuccess(w, detail)
-}
-
-func parseLimit(r *http.Request, defaultLimit int) int {
-	limit := defaultLimit
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if n, err := strconv.Atoi(l); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	return limit
 }
