@@ -1,6 +1,13 @@
 # 前端重写设计（Phase 3）
 
 > 本文是 Phase 3 前端的**前瞻设计**：定义目标结构、必须遵守的冻结面，以及尚未落地的工作批次。
+## 范围说明
+
+本文是 v2.2.0 **前端重写设计的历史记录**，随 master 切到 Go module `src/daemon`（React 面板由
+`src/daemon/web_ui/static/assets.go` 的 `//go:embed .` 携带进守护进程二进制）而冻结：其中的页面清单、
+接口语义与验收门槛属于**已退役实现**。当前组合根与「尚未移植能力」的口径见
+[architecture/daemon.md](../architecture/daemon.md)；React 面板本身仍以 `frontend/`
+（React 19 + TypeScript + Vite，hash 路由）为准。
 > 事实以仓库源码为准——`frontend/`（React 应用）、`src/daemon/web_ui/`（静态资源与嵌入）、
 > `src/daemon/http_exporter/handler.rs`（路由与认证）、`contract/*.fwidl`（接口真相源）。
 > 本文不复述逐文件实现，也不复盘被替换掉的旧前端。

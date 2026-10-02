@@ -1,6 +1,9 @@
 # 守护进程重写设计（Phase 2）
 
 本文档是 `src/daemon/` 按新设计重写的唯一设计来源。三端重写的目标与分端口径见
+本文档是 v2.2.0 **Rust 重写设计的历史记录**，随 master 切到 Go module `src/daemon` 而冻结：其中的路径、批次与进度描述属于
+**已退役实现**，磁盘上无对应文件。当前 Go 守护进程的实际结构见 [architecture/daemon.md](../architecture/daemon.md)，
+落地状态（哪些能力已迁入 Go、哪些仍在 warn）以该文档的「范围说明」为准；本设计记录仅作分层取舍与决策留档。
 [内核重写设计 § 范围与验收](kernel-rewrite-design.md#范围与验收)；内核侧热路径的实测数字见
 [性能基线](perf-baseline.md)，本文档只引用不重复。
 
