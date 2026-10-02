@@ -2,9 +2,9 @@
 # e2e-daemon.sh - 浏览器端到端测试（Playwright）的守护进程夹具
 #
 # 为什么需要本脚本：`tests/e2e/` 的用例要连一个真实守护进程，而守护进程在
-# `/proc/firewall` 不存在时**直接退出**（src/daemon/main.rs 启动期前置检查），
-# 也就是说「有守护进程」蕴含「内核模块已加载」。因此起测试用 daemon 必须先把
-# 模块插进去，还要收尾时拔出来——这套顺序写在 CI YAML 里就无法本地复现，
+# `/proc/firewall` 不存在时**直接退出**（src/daemon/cmd/firewall-daemon/main.go 的
+# checkProcfs 前置检查），也就是说「有守护进程」蕴含「内核模块已加载」。因此起测试用
+# daemon 必须先把模块插进去，还要收尾时拔出来——这套顺序写在 CI YAML 里就无法本地复现，
 # 故独立成本脚本，CI 与本地共用同一份逻辑。
 #
 # 用法：
@@ -81,7 +81,13 @@ do_probe() {
 }
 
 # ============================================================================
-# start：载模块 + 起守护进程 + 等端口
+# start：载模块 + 起守护进程 + 等 procfs 就绪
+#
+# 当前 Go 构建只有 procfs 接口，没有 HTTP 服务：/health、/metrics、/api/v1、
+# /static/*path 都尚未移植到 Go 侧（见
+# src/daemon/cmd/firewall-daemon/main.go 的「未装配」标注与文档
+# docs/zh/architecture/daemon.md）。因此就绪条件按 procfs 接口判定，
+# 不再轮询 HTTP 端口。
 # ============================================================================
 do_start() {
     require_root
@@ -160,30 +166,24 @@ YAML
     echo $! >"$PID_FILE"
 
     # ---- 等就绪（事件驱动，不用固定 sleep）----
-    # /health 无认证，未就绪时返回 503 且 body 仍是 RuntimeSnapshot，
-    # 因此「200」就是 netlink_ready && kmod_proc_present 同时为真。
+    # Go 构建启动期前置检查 /proc/firewall（见 main.go 的 checkProcfs），
+    # 「/proc/firewall/bans 可见」即模块接口就绪、守护进程能起。
     local deadline=$((SECONDS + E2E_WAIT_SECS))
     while ((SECONDS < deadline)); do
-        if curl -fsS --max-time 2 "http://127.0.0.1:$E2E_PORT/health" >/dev/null 2>&1; then
-            log "守护进程就绪：http://127.0.0.1:$E2E_PORT/health -> 200"
-            do_env
-            return 0
-        fi
-        if ! kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-            log "守护进程已退出，日志末尾："
-            tail -n 30 "$DAEMON_LOG" >&2 || true
-            die "守护进程启动失败"
-        fi
-        sleep 0.2
+        [[ -e /proc/firewall/bans ]] && break
+        sleep 0.1
     done
-
-    log "等待 $E2E_WAIT_SECS 秒仍未就绪，日志末尾："
-    tail -n 30 "$DAEMON_LOG" >&2 || true
-    die "守护进程未在超时内监听 $E2E_PORT"
+    [[ -e /proc/firewall/bans ]] && {
+        log "模块接口就绪：/proc/firewall/bans 可见"
+        break
+    }
+    [[ -e /proc/firewall/bans ]] || {
+        log "守护进程启动后 /proc/firewall/bans 未出现，日志末尾："
+        tail -n 40 "$DAEMON_LOG" >&2 || true
+        die "模块接口未就绪（当前 Go 构建只有 procfs，HTTP 服务尚未移植）"
+    }
 }
 
-# ============================================================================
-# env：输出供 e2e 使用的环境变量
 # ============================================================================
 do_env() {
     # Playwright 侧据此覆盖 baseURL 与凭据；token 是 Basic 凭据的 base64

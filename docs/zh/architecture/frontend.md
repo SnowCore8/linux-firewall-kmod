@@ -20,14 +20,16 @@
 | 框架 | React 19 + TypeScript |
 | 组件库 | antd-mobile v5 |
 | 路由 | react-router 的 `createHashRouter`（**hash 路由**，理由见下） |
-| 构建 | vite，产物直接输出到 `src/daemon/web_ui/static/`，由 `rust-embed` 编进守护进程二进制 |
+| 构建 | vite，产物直接输出到 `src/daemon/web_ui/static/`，由 `src/daemon/web_ui/static/assets.go` 的
+`//go:embed .` 携带进 Go 守护进程二进制（该目录当前尚无落盘产物） |
 
 `frontend/vite.config.ts` 固定了三项与守护进程对齐的约束：`base = "/static/"`（资源经
-`GET /static/*path` 提供）、资源平铺且文件名固定（`app.js` / `style.css`，便于 rust-embed
+`GET /static/*path` 提供）、资源平铺且文件名固定（`app.js` / `style.css`，便于 go:embed
 按名查找）、单 CSS 文件。
 
-> **前端改动必须重新构建守护进程才可见**：`make daemon` 依赖前端构建，把 vite 产物写进
-> rust-embed 目录。只改前端而不重新编译，守护进程提供的仍是旧包。
+> **前端改动必须重新构建守护进程才可见**：vite 产物写进 `src/daemon/web_ui/static/` 后，
+> 再由 `make daemon` 编译、由 `assets.go` 的 `//go:embed .` 携带进二进制；只改前端而不重跑
+> `make daemon`，守护进程提供的仍是旧包。详见 [构建](../development/building.md)「构建守护进程」。
 
 ## 页面与路由映射
 
@@ -182,8 +184,8 @@ hash 路由只解决客户端；服务端还认一份固定路径清单，漏一
 1. `frontend/src/App.tsx` —— 路由表加一条；
 2. `frontend/src/components/AppShell.tsx` —— `PAGE_TITLES` 加标题；一级页还要加进 `TABS`
    或 `MORE_CHILD_PATHS`；
-3. `src/daemon/http_exporter/handler.rs` —— 注册返回外壳的路由，并把它加进
-   `security_headers_middleware` 的 `is_webui` 判定；
+3. 服务端侧：vite 产物落盘后由 `web_ui/static/assets.go` 的 `//go:embed .` 声明路径，
+   Go 守护进程目前**不注册 SPA 路由**（「尚未移植」），只在前端校验文档中记录这套约束；
 4. `contract/http.fwidl` —— 改契约，再 `python3 contract/gen.py contract/http.fwidl` 重新生成
    工件，最后 `python3 contract/verify_http.py` 核对。
 

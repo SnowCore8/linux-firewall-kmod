@@ -22,65 +22,51 @@ daemon 负责应用层检测（如 SSH 暴力破解）与对外接口。
 
 | 组件 | 用途 |
 |------|------|
-| Rust | 实现语言（单 crate binary，无 workspace 拆分） |
-| serde / serde_yaml / regex | YAML 配置解析、正则编译与匹配 |
-| axum / tokio | HTTP 服务：`/metrics`、`/api/v1/*`、两条 SSE 流、SPA 静态资源 |
-| inotify | 日志文件变更监控（`inotify` crate 绑定） |
-| netlink | 与内核双向通信：命令下发、分页查询、事件推送 |
-| rusqlite | 时序历史、封禁历史、IP 信誉分持久化 |
-| slog + slog-scope | 结构化日志（JSON Lines，自定义 drain 保证整行单次写入） |
-| rust-embed | 前端构建产物嵌入二进制（`src/daemon/web_ui/static/`） |
+| Go module `src/daemon`（组合根 `cmd/firewall-daemon/main.go` + `internal/*`） | 实现语言；v2.2.0 起由 Rust 迁移，见 README「快速开始」与 [构建](../development/building.md)。组合根只负责装配与生命周期，业务判定在 `internal/*`（bans / config / jail / kernel / logger / runtime） |
+| golang.org/x/sys (unix) + yaml.v3 | netlink unix socket、procfs 读写、YAML 配置解析（字段名必须与 Go module 内 YamlConfig 一致，多一个 key 即启动失败） |
+| **尚未移植**：HTTP / SSE / `/metrics` / 历史快照 / Web UI 权威启用状态 | 这些能力在 Go 侧未装配：启动时只记录一条 warn，绝不伪装成已完成；清单以 `cmd/firewall-daemon/main.go` 中「未装配」标注为准（见下表与下文） |
+| unix socket + syscall netlink | 与内核双向通信：命令下发、分页查询、事件推送 |
+| log/syslog + stdlib os/inotify 替代实现 | 结构化日志（JSON Lines，整行单次写入；文件打开失败回退 syslog-only）与日志文件变更监控 |
+| go:embed（`src/daemon/web_ui/static/assets.go`）+ vite | SPA 面板携带进二进制：vite 产物直接输出到 `src/daemon/web_ui/static/`，文件名固定后由 `assets.go` 的 `//go:embed .` 按名取走 |
 
 ## 本文档的口径
 
-本文档描述 Phase 2 重写后的**目标结构**。重写按「保留编译，分批迁入」推进，因此部分模块可能
-尚未接入生产；逐项落地状态见 `development/daemon-rewrite-design.md` 的「修复项与落地状态」与
-仓库根 `ITERATION-PLAN.md`，本文档不复述这些会随批次变动的进度。
+**上半部分（技术栈、组件关系）描述 Go module `src/daemon` 当前的实际结构**：组合根是
+`cmd/firewall-daemon/main.go`，只负责 CLI 解析、装配与生命周期；以「未装配」标注的子系统
+（HTTP / SSE / `/metrics` / 历史快照 / Web UI 权威启用状态）尚未移植到 Go 侧——它们运行时只记录
+一条 warn，绝不伪装成已完成。
+
+**下半部分（「组件关系」表以下的各节）是 v2.2.0 **冻结语义与已退役实现的内部结构说明**，路径为
+历史 Rust 文件（如 `src/daemon/*.rs`），工作区磁盘上已不存在；这些语义被原样搬到 Go 侧后不再改动，
+逐项落地状态见 [daemon-rewrite-design.md](../development/daemon-rewrite-design.md)（「修复项与落地状态」），
+本文档不复述会随批次变动的进度。
 
 ## 组件关系
 
 | 组件 | 空间 | 职责 |
 |------|------|------|
 | 内核模块 | 内核 | 报文判定、封禁/白名单表、速率与 DDoS 检测、procfs 与 netlink 接口 |
-| 守护进程 | 用户 | 日志监控、行解析、失败计数与封禁判定、配置下发、HTTP/SSE/指标 |
+| 守护进程 | 用户 | 日志监控、行解析、失败计数与封禁判定、配置下发；**HTTP/SSE/指标尚未移植**（见「技术栈」表与文末范围说明） |
 | netlink | 内核 ↔ 用户 | daemon 与内核的**唯一**内部通道：命令、分页查询响应、事件推送 |
 | ProcFS | 内核 ↔ 用户 | 运维接口（12 条），daemon 只做启动期存在性检查，不用它做内部通信 |
-| 历史库 | 用户 | SQLite：时序统计、封禁历史、封禁事件、IP 信誉分（`history_snapshot/`） |
 
 ## 运行时模型
 
-设计目标是**五类执行体按数据形态分工**，而不是「全部 tokio 异步」：主链路是「阻塞 IO + CPU
-正则」的形态，放进 async reactor 会让解析阻塞网络；HTTP/SSE 天然是 async 的，用线程承载
-几千条空闲长连接是浪费。
+Go module `src/daemon` 当前是**单执行体驱动四段**：组合根不创建任何业务 goroutine，只装配一个
+`InboundExecutor`；其主链路 `executor.Run()` 在一个 goroutine 内顺序走「读字节 → 行分割 → 正则判
+定 → 封禁下发」，段与段之间没有队列、也就不存在「满时丢弃」。信号层先于该 goroutine 建立
+（见下一节），`inotify fd` 与 `signalfd` 并入同一个 `poll`，周期任务走执行体自己的单调时钟
+定时器表；内核侧交互经 `kernel.Client`（syscall netlink + unix socket），发/收都在同一段阻塞 IO
+上等待确认。没有独立的 scheduler、netlink-receive、SSE-worker goroutine。
 
-| 执行体 | 承载 | 阻塞性质 |
-|--------|------|---------|
-| `ingest` 线程 | inotify fd 所有权、`poll`、读新增字节、轮转检测 | 阻塞 IO |
-| `pipeline` 线程 | 行分割、正则匹配、IP 校验、失败计数、阈值判定 | CPU + 少量分配 |
-| `kernel reactor` 线程 | netlink socket 唯一所有者：发命令、收事件、请求-响应关联 | 阻塞 IO |
-| `scheduler` 线程 | 单调时钟定时器（周期维护、对账、速率查询） | 定时等待 |
-| tokio runtime | HTTP 路由、SSE 长连接、认证、静态资源 | async（2 个 worker） |
+| 承担者 | 职责 | 形态 |
+|--------|------|------|
+| `pipeline` goroutine（InboundExecutor.Run） | 四段顺序驱动：读字节、行分割、正则判定、封禁下发；单线程独占每源偏移、半行缓冲与失败窗口，故段间无队列、不存在「满时丢弃」 | 阻塞 IO + CPU 正则 |
+| `signals`（NewSignalSource） | 先于任何 goroutine 建立 SignalFd；inotify fd 与 signalfd 同一池 poll | 阻塞 IO |
+| kernel reactor / scheduler / SSE worker | —— | **尚未移植**（见文末「范围说明」） |
 
-串联方式为**有界 channel**，每段必须显式声明背压策略（`runtime/channel.rs`）：
-
-```
-inotify ──LogChunk──▶ parse ──Failure──▶ decide ──BanIntent──▶ kernel reactor ──▶ 内核
-                                                                    ▲                │
-                                                                    └─ BanStateChange ┘
-                                                                            │
-                                                                    state hub（版本化快照）
-                                                                            │
-                                                                       SSE / REST
-```
-
-| 队列 | 满时行为 | 理由 |
-|------|---------|------|
-| ingest → parse | 阻塞 ingest（不丢字节） | 日志是**证据源**，丢行等于漏判 |
-| parse → decide | 阻塞 parse | 同上；decide 是纯内存 O(1)，不会成为瓶颈 |
-| BanIntent → kernel | 有界队列 + 计数；满时**拒绝并可见**（不静默） | 封禁不能丢，但也不能无界堆积；拒绝要驱动重试 |
-| 事件 → state hub | 覆盖式发布（最新快照语义） | SSE 只要最新状态，中间态可丢 |
-| state hub → 持久化 | 有界队列；满时**阻塞生产者**，不丢弃 | 历史是审计数据 |
-
+有界 channel、逐段背压策略与「状态 hub 覆盖式发布」是**设计目标形态**（见
+[daemon-rewrite-design.md](../development/daemon-rewrite-design.md)，当前 Go 侧尚未实现）。
 旧实现的全部周期任务都挂在 `file_monitor::monitor_loop` 的 `poll` 超时分支上，持续有 inotify
 事件时 `poll` 恒返回非 0，60 s / 300 s / 2 s 三类任务随之被无限期延后（结构问题 A）。
 `scheduler` 改用**单调时钟**（`Instant`）驱动，与事件吞吐完全解耦，且不受时钟回拨影响
@@ -116,44 +102,21 @@ inotify ──LogChunk──▶ parse ──Failure──▶ decide ──BanInt
 每个模块**独占**自己的状态，跨模块只传消息或 `Arc<不可变快照>`；`OnceLock` 只允许出现在
 日志全局与测试夹具两处，其余一律构造期注入。
 
-| 模块 | 数据所有权 | 对外接口 |
+| 模块（Go 路径） | 数据所有权 | 对外接口 |
 |------|-----------|---------|
-| `main.rs` | 无（组合根） | CLI 解析 → 装配 → 启动主循环；不再承载业务逻辑 |
-| `runtime/supervisor.rs` | 执行体生命周期、关停令牌 | `spawn()` / `shutdown(timeout)`，按依赖逆序逐段停并 join |
-| `runtime/scheduler.rs` | 周期任务集合 | 基础节拍 + 子周期门控（`stats` 镜像、过期封禁清理、对外端口重扫） |
-| `runtime/timers.rs` | 单调时钟定时器表 | `fire_due(now)`（纯函数）、周期按原定时刻重排 |
-| `runtime/channel.rs` | 有界队列契约 | `send` 按 `Backpressure::{Block,Reject}` 行事；`Reject` 计数可见 |
-| `runtime/shutdown.rs` | 协作式关停令牌 | `request()` / `is_shutdown()` / `wait_until(deadline)` |
-| `ingest/watcher.rs` | inotify fd 唯一所有者 | 事件迭代；fd 与读缓冲不借出 |
-| `ingest/registry.rs` | `SourceId ↔ (path, wd, inode)` | `resolve(wd)`；`SourceId` 是稳定身份 |
-| `ingest/reader.rs` | 每源 fd、offset、复用缓冲 | 读新增字节 + 廉价的轮转判定 |
-| `parse/splitter.rs` | 每源 partial 行缓冲 | 字节流 → 行（缓冲长驻，跨轮复用） |
-| `parse/rules.rs` | 每 jail 的编译正则（不可变，`Arc`） | 命中后从后往前扫捕获组取最右合法 IP |
-| `parse/extract.rs` | 无（纯函数） | 从任意文本认出合法 IP，返回 `IpAddr` 而非 `String` |
-| `decision/window.rs` | 每 jail 的失败时间戳窗口 | `observe(ip, ts) -> Verdict`，执行体独占、无锁 |
-| `decision/policy.rs` | 无（纯函数） | 有效阈值、渐进式时长、封禁计划 |
-| `pipeline/mod.rs` | 每 jail 规则/窗口 + 每源分割器 | `on_chunk(...)` → `Vec<BanIntent>`；止于意图，不下发 |
-| `pipeline/executor.rs` | 入站链路运行态：配置、源表、读取器、定时器 | `cfg()` 供组合根读装配参数；`run(stop, terminate)` 单线程驱动四段 |
-| `signal/mod.rs` | `signalfd`（阻塞四个信号） | `SignalFd::new` / `poll_read`；析构恢复掩码 |
-| `kernel/codec/` | 无 | 字节 ↔ 语义类型；直接消费契约生成物 |
-| `kernel/transport.rs` | netlink socket（单写者） | 发一段载荷、收一条报文 |
-| `kernel/reactor.rs` | 在途请求表 + 路由状态机 | 按 **type + seq** 路由；未知/失败/无主一律计数 |
-| `kernel/client.rs` | 无（`Arc<Transport>` 上的类型化 API） | `ban` / `unban` / `list_*_all` / `set_config` / `set_protected_ports` |
-| `kernel/lease.rs` | 注册租约状态 | 注册等确认、周期续约、失联可见（四态） |
-| `state/bans.rs` | 活跃封禁（唯一所有者） | `apply` / `snapshot` / `purge_expired(now)` |
-| `state/whitelist.rs` | 白名单（唯一所有者） | `apply` / `snapshot`；键是 `CidrKey` |
-| `state/rates.rs` | 最新速率样本 + EWMA 基线 | `apply` / `snapshot` / `baseline` |
-| `state/stats.rs` | 原子计数器（按类型枚举，`inc` / `add` / `set_gauge`） | 读快照不改值 |
-| `state/hub.rs` | 版本化发布点 | `publish(Domain)` / 订阅 `watch`；只管版本与通知，不持数据 |
-| `state/cidr.rs` | 无（规范化实现） | `CidrKey::new` / `CidrKey::parse`，是唯一构造入口 |
-| `state/compose.rs` | 镜像方向与时机 | **过渡桥**，旧全局 ↔ 新状态；旧读者迁完后整体删除 |
-| `api/*` | 无（薄适配层） | 从快照取数套信封；读路径零副作用 |
-| `api/ports.rs` | 数据缺口端口（窄 trait） | 历史/信誉/配置/运行时/控制面四类窄接口 |
-| `api/sse.rs` | 每条连接的订阅与计数 | 按域序列化、慢消费者隔离 |
-| `contract.rs` | 无 | 用 `#[path]` 把三份契约生成物挂成本 crate 模块 |
-| `protected_ports.rs` | 对外监听端口发现 | `scan_external_ports()`（扫 `/proc/net/{tcp,tcp6,udp,udp6}`）、`ProtectedPorts::to_bitmap()` |
-| `config_sync.rs` | 无（配置 → 内核的单入口） | `sync_protocol_thresholds` / `sync_protected_ports` / `write_detection_switches` |
-| `runtime_status.rs` | 无 | 一次性只读聚合，供 `/health` 与单测断言 |
+| `cmd/firewall-daemon/main.go` | 装配状态 | CLI 解析 → 严格校验配置 → checkProcfs → 按登记顺序 Spawn → 逆序关停；所有未移植能力在这里显式标注为「未装配」，只 warn 不假装完成 |
+| `internal/config/`（args / parser / loader / types） | 配置对象与字段语义 | `ParseConfigArgs` / `Default` / `LoadConfigFile|Directory` / `Validate`；`parser.rs` 的 YamlConfig 带 deny_unknown_fields，多一个 key 即启动失败 |
+| `internal/logger/`（logger + file + json + syslog） | 日志目的地与整行不变量 | `Init(cfg)` 返回 slog Logger：JSON Lines、自定义 drain 整行单次写入；文件不可写时回退 stderr / syslog-only |
+| `internal/runtime/`（supervisor + executor + pipeline + shutdown + signals + timers） | 执行体生命周期 | `NewSignalSource`（早于任何 goroutine）、`Spawn`/`Shutdown`、`InboundExecutor.Run`（阻塞 IO + CPU 正则的主链路口径）、周期维护与单调时钟定时器 |
+| `internal/jail/`（jail + compile + service） | jail 状态与规则集 | 智能默认 + `Validate` + 编译各 regex；Web UI 权威启用状态**尚未移植** |
+| `internal/bans/`（ban + cache + endian） | 活跃封禁集合 | Ban 的入参编码/解码与活跃缓存、镜像插入、撤销路径 |
+| `internal/logparse/`（splitter + rule + ip） | 日志行缓冲与规则 | 行分割、命名捕获组提取 IP（返回 `IpAddr` 而非 `String`）、超时判定 |
+| `internal/kernel/`（transport + reactor + router + client + codec） | netlink socket 与在途请求 | unix socket 单写者、按 `(type, seq)` 路由未知即计数、类型化 Ban/Unban/List/SetConfig；租约续期见 `runtime/supervisor` |
+| `internal/kernel/client.go` | 类型化客户端 API | `Ban(addr, prefixLen, durationSecs, reason)` / `Unban` / 分页 `List*All` / `SetConfig` / `SetProtectedPorts` |
+| `internal/runtime/executor.go` | 入站主链路装配态 | `Deps.Logger/Facts/Sink/Stats/Hooks/Reloader/Enabled`：未移植能力一律 nil（如 Hooks=历史快照、Reloader=配置热重载、Enabled=Web UI 权威状态），组合根读 `cfg()` 装配参数 |
+| `internal/runtime/timers.go` + `shutdown.go` | 定时器表与关停令牌 | 周期任务按原定时刻重排；Shutdown 只有 Request/IsShutdown，完成通道由调用方自备 |
+
+**尚未移植的能力**（以 `main.go` 的「未装配」标注为准）：HTTP / `/health` / `/metrics` API、两条 SSE 流、Prometheus exporter、SQLite 历史快照与数据清理、配置热重载。它们运行时只记录一条 warn。
 
 ## 启动流程
 
@@ -450,7 +413,13 @@ jail 启用/禁用（`web_ui/api.rs::update_jail_enabled`）、峰值时段翻�
 `addr2line` 反推）、`asan`（AddressSanitizer，需 nightly 与 `build-std`）、Miri（解释执行
 `unsafe`，抓指针算术 UB 与别名违规——ASAN 抓不到的那类）等检测 profile。
 
-## 接口变更纪律
+## 范围说明
 
-主链路已冻结的接口形状不得随意改动；接口需要变更时**先改契约再改代码**，并跑
-`bash scripts/check_contract.sh`。
+- **当前 Go module `src/daemon`（可在磁盘与二进制中核对）**：技术栈表、组件关系表上半、模块划分
+  表（`cmd/*` + `internal/*`）、启动流程的关键顺序约束（信号先于 goroutine、日志在守护进程化之后、
+  `/proc/firewall` 缺失直接退出）、netlink/procfs 接口的存在性检查、以及「**尚未移植能力**」的口径——
+  HTTP / SSE / `/metrics` / 历史快照 / Web UI 权威启用状态，运行时只 warn。
+- **设计留档（v2.2.0 Rust 实现的内部结构，路径为 `src/daemon/*.rs`，磁盘上不存在）**：本文件下半节
+  的 netlink 五层、state/SSE 派生域、HTTP 路由分层与信封认证、配置热重载与持久化队列四条丢弃路径、指标清单。
+  它们被当作**冻结语义**搬进 Go 侧，落地状态以 [`daemon-rewrite-design.md`](../development/daemon-rewrite-design.md)
+  「修复项与落地状态」为准，本文档不复述会随批次变动的进度。

@@ -280,30 +280,33 @@ make: *** 没有规则可制作目标 'deb'。 停止。
   ./build-deb.sh
   ```
 
-### `cargo: not found` 在 sudo 下
+### `go: not found` 在 sudo 下
 
-**症状**：`sudo python3 -m pytest tests/ -v` 报：
+守护进程由 Go module `src/daemon` 编译（仓库要求 **Go 1.23+**）；同样依赖 PATH 里有 Go：
 
 ```
-make: cargo: 没有那个文件或目录
-make: *** [Makefile:100: daemon] 错误 127
+sudo make daemon
+make: go: 没有那个文件或目录
+make: *** [Makefile] 错误 127
 ```
 
-**原因**：`sudo` 默认 `secure_path` 不含 `~/.cargo/bin`,而 rustup 装在 `~/.cargo/bin/cargo`。
+**原因**：`sudo` 默认 `secure_path` 不含 `~/.go/bin`（rustup/Go 常装在这里）。
 
-**修复**：
+**修复**：显式带 PATH 再 sudo，与仓库 CI 的写法一致。
 
-- 先 `source ~/.cargo/env` 再 sudo:
+- 当前 shell 已确认 go 在 PATH:
   ```bash
-  source ~/.cargo/env
-  sudo -E python3 -m pytest tests/ -v
+  go version
   ```
-- 或 `sudo -E` 保留当前 PATH(同样需要先 source):
+- 保留当前 PATH 再 sudo（推荐）：
   ```bash
-  source ~/.cargo/env
-  sudo -E make test
+  sudo --preserve-env=PATH make daemon
   ```
-- pytest 运行环境会继承当前 PATH，确保 `source ~/.cargo/env` 在 sudo 前执行即可。
+- 或先在 shell 里补目录：
+  ```bash
+  export PATH="$(printf '%s\n' "$PATH" ~/.go/bin)"
+  sudo make daemon
+  ```
 
 ## 内核调试
 

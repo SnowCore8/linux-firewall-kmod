@@ -1,6 +1,6 @@
 #!/bin/bash
 # build.sh - 防火墙项目构建脚本
-# 内核模块用 gcc 编译, 守护进程用 Rust (cargo) 构建
+# 内核模块用 gcc 编译, 守护进程用 Go (src/daemon 的 Go module) 构建
 
 set -euo pipefail
 
@@ -10,7 +10,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 # 检查所需命令
 command -v make >/dev/null 2>&1 || { echo "make not found in PATH"; exit 1; }
 command -v gcc >/dev/null 2>&1 || { echo "gcc not found in PATH"; exit 1; }
-command -v cargo >/dev/null 2>&1 || { echo "cargo not found in PATH"; exit 1; }
+command -v go >/dev/null 2>&1 || { echo "go not found in PATH"; exit 1; }
 
 # 颜色定义
 if [[ -t 1 ]]; then
@@ -39,7 +39,7 @@ build_kernel_module() {
 }
 
 build_daemon() {
-    info "Building daemon (Rust)..."
+    info "Building daemon (Go, src/daemon module)..."
     make -C "$PROJECT_ROOT" daemon
 }
 

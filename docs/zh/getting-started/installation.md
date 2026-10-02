@@ -89,7 +89,7 @@ make daemon
 
 ```bash
 # 编译产物
-make                    # 编译内核模块 + Rust 守护进程 + React 前端
+make                    # 编译内核模块 + Go 守护进程 + React 前端
                         # 内核模块: build/kernel-module/firewall.ko
                         # 守护进程: build/daemon/firewall-daemon (stripped，内嵌前端产物)
 
@@ -127,7 +127,9 @@ sudo env "PATH=$PATH" make install
 4. 加载内核模块
 5. 启动 systemd 服务
 
-> 💡 **提示**：使用 `sudo env "PATH=$PATH"` 确保 cargo 在 PATH 中。如果不加，sudo 环境下可能找不到 cargo。
+> 💡 **提示**：守护进程用 Go（要求 **Go 1.23+**），安装脚本会执行 `go build`，故需确认
+> Go 在 PATH 中。使用 `sudo env "PATH=$PATH"` 确保 Go 在 PATH 中（仓库的 Makefile 与 CI
+> 均按此写法）。
 
 #### 方式二：先构建后安装
 

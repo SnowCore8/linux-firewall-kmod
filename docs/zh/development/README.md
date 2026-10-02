@@ -31,9 +31,9 @@ sudo apt install -y \
 graph LR
     ROOT["linux-firewall-kmod/"]
     KERNEL["src/kernel-module/<br/>C 内核模块"]
-    DAEMON["src/daemon/<br/>Rust 守护进程"]
+    DAEMON["src/daemon/<br/>Go 守护进程（组合根：装配与生命周期，HTTP/SSE 未移植）"]
     FRONTEND["frontend/<br/>React 19 + Vite 前端"]
-    STATIC["src/daemon/web_ui/static/<br/>编译后静态资源"]
+    STATIC["src/daemon/web_ui/static/<br/>vite 产物；由 assets.go 的 //go:embed . 携带进守护进程"]
     SUPPORT["config/ · tests/ · docs/<br/>scripts/ · debian/ · grafana/"]
 
     ROOT --> KERNEL
@@ -41,7 +41,7 @@ graph LR
     ROOT --> FRONTEND
     ROOT --> SUPPORT
     FRONTEND -->|"vite build"| STATIC
-    STATIC -->|"rust-embed"| DAEMON
+    STATIC -->|"//go:embed .| src/daemon/web_ui/static/assets.go"| DAEMON
     DAEMON <-->|"netlink"| KERNEL
 ```
 
@@ -50,14 +50,14 @@ graph LR
 | 组件 | 入口 | 职责 |
 |------|------|------|
 | 内核模块 | `src/kernel-module/fw_main.c` | 注册 netfilter hook，维护封禁/白名单并在数据包路径执行判定 |
-| 守护进程 | `src/daemon/main.rs`、`src/daemon/lib.rs` | 解析配置与日志、执行封禁策略、持久化状态，并提供 HTTP 服务 |
+| 守护进程 | `cmd/firewall-daemon/main.go`、`internal/*` | 组合根只负责装配与生命周期；业务判定在 `internal/`（bans / config / jail / kernel / logger / logparse / runtime），HTTP / SSE / 指标尚未移植，只 warn |
 | Web 前端 | `frontend/src/main.tsx` | React 19 移动端管理界面（antd-mobile，hash 路由，支持 PWA）；构建后嵌入守护进程二进制，不单独部署 |
 
 ### 构建链路
 
 `make daemon` 会先执行 `make frontend`。Vite 根据
-`frontend/vite.config.ts` 将前端输出到 `src/daemon/web_ui/static/`，
-随后 `rust-embed` 把这些资源编译进 `firewall-daemon`。
+`frontend/vite.config.ts` 将前端输出到 `src/daemon/web_ui/static/`（文件名固定），
+随后由 `src/daemon/web_ui/static/assets.go` 的 `//go:embed .` 把目录内容携带进 `firewall-daemon`。
 
 其他目录分别保存 YAML 配置（`config/`）、集成测试（`tests/`）、
 正式文档（`docs/`）、辅助脚本（`scripts/`）、Debian 打包元数据

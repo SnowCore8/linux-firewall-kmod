@@ -23,9 +23,11 @@
 > 前端为 React 19 + TypeScript + Vite + antd-mobile 5（移动优先，hash 路由，
 > 支持 PWA），构建需要 **Node.js ≥ 20 + npm**。
 > `make frontend` 用 `npm ci` 安装依赖，锁文件 `frontend/package-lock.json`
-> 已入库以保证可复现；守护进程通过 `rust-embed` 把 `index.html` / `app.js` /
-> `style.css` / `sw.js` / `manifest.webmanifest` / `icons/` 编进二进制，
-> 运行期不需要 Node.js。
+> 已入库以保证可复现。产物落在 Go 守护进程的嵌入目录
+> `src/daemon/web_ui/static/`（vite 的 `outDir` 就指向它，文件名固定以便
+> [go:embed](https://go.dev/ref/mod#go-gcimport) 按名查找，见
+> `src/daemon/web_ui/static/assets.go`：面板文件在守护进程编译前已到位，
+> `assets.go` 由 vite 输出自然覆盖）。
 
 ### 前端与 PWA
 
@@ -39,13 +41,14 @@
   拒绝**注册 SW，界面可用但无法"添加到主屏幕"；需要 PWA 安装能力时请用 HTTPS
   或本机 `localhost` 访问
 
-### 调试 / Sanitizer 目标
+### 构建目标
 
 | 目标 | 说明 |
 |------|------|
-| `make debug` | 编译调试版本（`DL=1`） |
-| `make debug DL=2` | 编译调试版本（级别 2，更详细） |
-| `make asan` | 编译 AddressSanitizer 版本 |
+| `make` / `make all` / `make build` | 编译全部（前端 + 内核模块 + 守护进程，默认含 clang-format 检查） |
+| `make kernel-module` | 仅编译内核模块 |
+| `make daemon` | 仅编译守护进程（会先执行 `make frontend`） |
+| `make frontend` | 仅构建前端（`npm ci` + `vite build`），产物写入 `src/daemon/web_ui/static/` |
 | `make deb` | 构建 Debian 软件包（调用 `./build-deb.sh`，产物在 `build/deb/`） |
 
 ### 维护目标
@@ -116,69 +119,29 @@ make debug DL=2
 
 ## 构建守护进程
 
-守护进程（v2.2.0 起）已翻译为 Rust，由 `cargo` 构建。`make daemon`
-实际命令：
+守护进程由 Go module `src/daemon` 构建（v2.2.0 起 Rust 实现被 Go 取代，
+见 [架构设计 - 用户态守护进程](../architecture/daemon.md)）。`make daemon`
+的先后顺序是「先前端、后 Go」：
 
 ```bash
-cargo build --release
-cp target/release/firewall-daemon build/daemon/firewall-daemon
+# 先产出去面板文件（npm ci + vite build）
+cd frontend && npm run build:only
+
+# 再编译守护进程；go:embed 携带已落盘的静态面板进二进制
+cd src/daemon && go build -ldflags "-s -w=1" \
+    -o build/daemon/firewall-daemon ./cmd/firewall-daemon
+
+# go 版本（源码内即 `run`）可测试入口
+go test ./...
 ```
 
-### Rust release profile（`Cargo.toml`）
-
-`Cargo.toml` 预定义 `release` / `dev` / `dev-with-debug` / `asan` 等 profile，对应不同用途：
-
-| Profile | 构建产物 | 用途 | 编译命令 |
-|---------|----------|------|----------|
-| `release`（默认） | `strip` 的紧凑二进制 | 生产部署 | `cargo build --release` |
-| `dev-with-debug` | 未 strip，含 DWARF + 符号 | 现场 crash 分析，配合 `addr2line` 反推栈 | `cargo build --release --profile dev-with-debug` |
-| `asan` | 含 ASAN 运行时 | 内存安全检测，需 nightly | `cargo +nightly build --profile asan` |
-
-#### release（默认）
-
-```toml
-[profile.release]
-opt-level = 2
-lto = true            # 链接时优化
-codegen-units = 1     # 单代码生成单元，更好的内联
-debug = false
-strip = true
-panic = "abort"       # 减小体积、避免 unwinding 表
-```
-
-产出 `strip` 后的紧凑二进制（内嵌前端产物，具体数值随前端产物大小变化，
-可用 `stat -c %s build/daemon/firewall-daemon` 实测），适合 `make deb` /
-`make install` 分发。
-
-#### dev-with-debug
-
-```toml
-[profile.dev-with-debug]
-inherits = "release"
-debug = true
-strip = false
-```
-
-继承 release 全部优化（`opt-level=2` + `lto=true`），**保留 DWARF +
-符号表**。生产等效速度但可定位 crash：
-
-```bash
-cargo build --profile dev-with-debug
-addr2line -e build/daemon/firewall-daemon 0x401a23
-```
-
-#### asan（nightly opt-in）
-
-```toml
-[profile.asan]
-inherits = "dev"
-opt-level = 1
-debug = true
-lto = false
-```
-
-**需要 nightly toolchain**（`rustup install nightly`），用于
-AddressSanitizer 内存检测。`make asan` 目标会自动选择该 profile。
+- 前端构建产物**不是**编译输入，而是**嵌入内容**：vite 的 `outDir` 直接指向
+  `src/daemon/web_ui/static/`，文件固定为 `index.html` / `app.js` / `style.css` /
+  `sw.js` / `manifest.webmanifest` / `icons/`，由
+  `src/daemon/web_ui/static/assets.go`（`package webuiassets` + `//go:embed .`）
+  声明携带。改动静态文件后必须重新跑 `make daemon`，否则守护进程仍提供旧面板。
+- `go build -ldflags "-s -w=1"`：产出即最终 strip 二进制，`target/` 下没有原始输出；
+  体积用 `stat -c %s build/daemon/firewall-daemon` 实测即可（内嵌前端大小随版本变化）。
 
 ## 完整构建
 
@@ -260,15 +223,11 @@ make kernel-module KDIR=/path/to/kernel/source
 | `-O2` | 优化级别 2 |
 | `-DLINUX_VERSION_CODE` | 内核版本检测 |
 
-### 守护进程（Rust）profile
+### 守护进程（Go）构建参数
 
-守护进程已无 C 标志配置项，编译行为完全由 `Cargo.toml` 的
-`[profile.*]` 控制。详见 [构建守护进程 → Rust release profile](#rust-release-profile-cargotoml)。
-
-- `release`：`lto=true` + `strip=true` + `debug=false` + `panic="abort"`
-  → `strip` 后的紧凑二进制
-- `dev-with-debug`：继承 release，保留 DWARF + 符号
-- `asan`：nightly opt-in，含 ASAN 运行时
+编译行为由 `src/daemon/go.mod` 与 Makefile 的 `go build` 行决定：
+`-ldflags "-s -w=1"` 在链接期直接去掉符号表，产物即最终 strip 二进制；
+仓库里不再有 `[profile.release]` / `[profile.asan]` 这类 Cargo profile。
 
 ## 构建产物
 
@@ -276,7 +235,7 @@ make kernel-module KDIR=/path/to/kernel/source
 
 | 文件 | 说明 |
 |------|------|
-| `firewall.ko` | 内核模块 |
+| `firewall.ko` | 内核模块（`build/kernel-module/firewall.ko`） |
 | `firewall.mod.c` | 模块元数据 |
 | `Module.symvers` | 符号版本 |
 | `modules.order` | 模块顺序 |
@@ -285,14 +244,11 @@ make kernel-module KDIR=/path/to/kernel/source
 
 | 文件 | 说明 |
 |------|------|
-| `build/daemon/firewall-daemon` | 守护进程二进制（已 `strip`，内嵌前端产物，默认 `release` profile；体积用 `stat -c %s build/daemon/firewall-daemon` 实测） |
-| `target/release/firewall-daemon` | `cargo` 原始输出位置（`make daemon` 复制到 `build/daemon/`） |
-| `build/daemon/firewall-daemon-asan` | ASAN 版本（`make asan` 产物，体积较大含 ASAN 运行时） |
+| `build/daemon/firewall-daemon` | 守护进程二进制（带 `-ldflags "-s -w=1"`，即 strip 版；内嵌前端产物） |
+| `src/daemon/cmd/firewall-daemon/main.go` + `src/daemon/internal/*` | Go module 源码；组合根是 `cmd/firewall-daemon/main.go` |
+| `src/daemon/web_ui/static/assets.go` | `//go:embed .`，携带面板文件进二进制（`index.html` / `app.js` / `style.css` / `sw.js` / `manifest.webmanifest` / `icons/`） |
 
-> `dev-with-debug` profile 的产物不通过 `make daemon` 复制到
-> `build/daemon/`，需手动从 `target/dev-with-debug/` 取。
-
-### 安装位置
+## 安装位置
 
 | 文件 | 安装路径 |
 |------|----------|
@@ -316,44 +272,35 @@ ERROR: Kernel configuration is invalid.
 sudo apt install --reinstall linux-headers-$(uname -r)
 ```
 
-### `cargo: not found` under sudo
+### `go: not found` under sudo / Go 不在 PATH
 
-`sudo` 默认 `secure_path` 不含 `~/.cargo/bin`，常见于 rustup 用户级
-安装。`make test` 内部已 `sudo python3 -m pytest tests/ -v`，
-pytest 运行环境会继承当前 PATH（包含 `~/.cargo/bin`），
-问题自动规避。但如果手动 `sudo make daemon` 直接调用会失败：
+守护进程现在由 Go 构建，同样依赖 PATH 里有 Go（仓库要求 **Go 1.23+**）：
 
 ```
 sudo make daemon
-make: cargo: 没有那个文件或目录
-make: *** [Makefile:101: daemon] 错误 127
+make: go: 没有那个文件或目录
+make: *** [Makefile] 错误 127
 ```
 
-解决方案（任选其一）：
+`src/daemon/go.mod` 声明 MSRV 为 Go 1.23，旧工具链编译会失败（不是行为差异）：
 
 ```bash
-# 1) sudo 前先 source
-source ~/.cargo/env
-sudo make daemon
-
-# 2) 用 --preserve-env 显式带 PATH
+go version   # 确认 PATH；如没有则安装 https://go.dev/dl/
 sudo --preserve-env=PATH make daemon
-
-# 3) 装到系统路径（不推荐，与 rustup 用户隔离理念冲突）
-sudo cp ~/.cargo/bin/cargo /usr/local/bin/
+# 或先 export PATH=$(printf '%s\n' "$PATH" ~/.go/bin) 再 sudo
 ```
 
-### 库版本不兼容
+## 构建问题排查（续）
 
-```
-error[E0432]: unresolved import `regex`
-```
+### Go 编译产物不存在 / `go test ./...` 报错
 
-解决方案：
+`make daemon` 依赖前端产出；若面板目录没有落盘，go:embed "." 取不到任何文件而启动器
+以错误退出。先确认产物齐全：
 
 ```bash
-cargo build
-# cargo 会自动下载并编译依赖
+ls src/daemon/web_ui/static/          # index.html app.js style.css sw.js manifest.webmanifest icons/
+make frontend && make daemon          # 前端缺失时跑这条补齐
+go test ./...                        # Go module 自带单元测试，无需 sudo
 ```
 
 ### 权限不足

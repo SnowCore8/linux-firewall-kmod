@@ -13,9 +13,9 @@ echo "Verifying firewall project integrity..."
 ESSENTIAL_FILES=(
     "src/kernel-module/Makefile"
     "src/kernel-module/fw_main.c"
-    "src/daemon/main.rs"
+    "src/daemon/cmd/firewall-daemon/main.go"
+    "src/daemon/go.mod"
     "Makefile"
-    "Cargo.toml"
     "docs/zh/README.md"
     "tests/conftest.py"
 )
@@ -47,6 +47,10 @@ for file in "${DOC_FILES[@]}"; do
         echo "ℹ $file not found (may be intentionally removed)"
     fi
 done
+
+# The daemon is built from the Go module at src/daemon: verify_project.sh must not
+# require Cargo metadata, which no longer exists.
+[[ -f "Cargo.toml" ]] && { echo "✗ Root Cargo.toml still exists (Go rewrite should have dropped it)"; exit 1; }
 
 # Check if we can compile the project
 echo "Attempting to compile the project..."

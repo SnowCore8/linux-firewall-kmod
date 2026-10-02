@@ -1,7 +1,7 @@
 # Makefile for firewall project
 # Out-of-tree build: all artifacts go to build/ directory
 #
-# Daemon is built in Go (src/daemon-go). The kernel module stays C.
+# Daemon is built in Go (module at src/daemon); kernel module stays C.
 # ============================================================================
 # 1. 版本与元信息
 # ============================================================================
@@ -31,8 +31,8 @@ KERNEL_SRC_DIR := src/kernel-module
 # 前端构建产物目录（vite 输出；Go 守护进程通过 embed 随二进制携带）
 WEBUI_STATIC_DIR := src/daemon/web_ui/static
 
-# Go 守护进程源码根与 Node 应用输入根
-DAEMON_SRCS_DIR := src/daemon-go
+# Go 守护进程源码根（前端输出目录，vite 产物）
+DAEMON_SRCS_DIR := src/daemon
 PFX_FRONTEND   := frontend
 
 # golangc 检查 Go 1.23+ 是否随 PATH
@@ -110,7 +110,9 @@ $(KERNEL_MODULE): $(wildcard $(KERNEL_SRC_DIR)/*.c) $(wildcard $(KERNEL_SRC_DIR)
 # install / deb / clean 三处最终都要取这个二进制；换成 Go 前需一并更新。
 .PHONY: daemon
 daemon: $(WEBUI_STATIC_DIR) | $(DAEMON_SRCS_DIR)/cmd/firewall-daemon/main.go
-	@echo "  GOC     building Go daemon"
+	@# Web UI static panel（$(WEBUI_STATIC_DIR)）必须先产出，go:embed "." 才
+	@# 有东西可嵌；go build 本身不检查面板内容，缺面板时守护进程启动会报错。
+	@echo "  GOC     building Go daemon from $(DAEMON_SRCS_DIR)"
 	@mkdir -p $(DAEMON_BUILD_DIR)
 	@cd $(DAEMON_SRCS_DIR) && go build -ldflags "-s -w=1" \
 		 -o $(DAEMON_BIN) ./cmd/firewall-daemon
@@ -495,13 +497,13 @@ clean:
 	@echo "Cleaning build artifacts..."
 	@rm -rf $(BUILD_DIR)
 	@rm -rf target
-	@cargo clean 2>/dev/null || true
-	@if [ -d "$(WEBUI_STATIC_DIR)" ]; then \
-		find $(WEBUI_STATIC_DIR) -mindepth 1 -delete; \
-	fi
+	@cd $(DAEMON_SRCS_DIR) && go clean -cached
+	@mkdir -p $(WEBUI_STATIC_DIR)
+	@# 只删面板文件，保留 embed 所有者 assets.go（它位于构建产物目录内，
+	@# 由 make frontend 的 vite 输出路径自然生成，见 src/daemon/web_ui/static/assets.go）。
+	@find $(WEBUI_STATIC_DIR) -mindepth 1 ! -name assets.go -delete
 	@echo "  ✓ Build directory removed (build/, target/)"
-	@echo "  ✓ Frontend bundle removed ($(WEBUI_STATIC_DIR)/)"
-	@echo "  ✓ Cargo cache cleaned"
+	@echo "  ✓ Web UI panel files removed ($(WEBUI_STATIC_DIR) minus its go:embed owner file)"
 	@echo "Build artifacts cleaned."
 
 # distclean 额外清理内核源码目录中可能残留的隐藏文件
@@ -522,8 +524,8 @@ help:
 	@echo "可用目标:"
 	@echo "  all/build      - 编译前端、内核模块和守护进程（默认，含格式检查）"
 	@echo "  build-quick    - 跳过格式检查的快速编译"
-	@echo "  kernel-module  - 仅编译内核模块"
-	@echo "  daemon         - 仅编译守护进程 (Rust，会先构建前端)"
+	@echo "  kernel-module  - 仅编译内核模块 (clang)"
+	@echo "  daemon         - 仅编译守护进程 (Go module at src/daemon，会先构建前端)"
 	@echo "  frontend       - 仅构建前端 (npm ci + vite build)"
 	@echo "  frontend-typecheck - 仅做前端类型检查 (tsc --noEmit)"
 	@echo "  deb            - 构建 Debian 软件包 (使用 ./build-deb.sh)"

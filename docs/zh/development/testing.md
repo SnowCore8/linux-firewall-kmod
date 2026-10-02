@@ -51,27 +51,23 @@ graph TD
 > 编号套件 + 共享 Bash 框架；v2.x 起迁移至 Python pytest，
 > 消除大量重复代码并获得更好的断言、报告和过滤能力。
 
-## 单元测试（Rust）
+## 单元测试（Go module）
 
-守护进程（v2.2.0 起）翻译为 Rust，单元测试用 `cargo test` 跑：
+守护进程由 Go 实现于 `src/daemon`（module `github.com/snowcore8/linux-firewall-kmod/daemon`），
+单元测试用 `go test ./...` 跑，组合根的可测入口即 `run(args []string) error`：
 
 ```bash
-# 跑全部单元测试 + doctest
-cargo test
-
-# 仅 doctest
-cargo test --doc
-
-# 跑特定模块
-cargo test config::
+cd src/daemon && go test ./...          # 全部单测 + 集成断言（无需 sudo）
+cd src/daemon && go test ./cmd/... -v   # 只看守护进程主包，带详细输出
+cd src/daemon && go vet ./cmd/... ./internal/...  # lint：等价于 CI 的 go vet
+cd src/daemon && gofmt -l ./cmd ./internal  # 格式检查（CI 同款命令）
 ```
 
-单元测试与 doctest 均真实执行（doctest 不是 `no_run`）；用例数以
-`cargo test` 实时输出为准。
+`go test` 跑的是源码内 `Test*` 用例并同时执行 doctest；与 `tests/` 下的 pytest
+集成测试互补——单测在源码层验证逻辑，pytest 在 Python 端做端到端。
 
-`cargo test` 跑守护进程内 `#[cfg(test)]` 模块；与 `tests/` 下的 pytest
-集成测试是互补关系——单元测试在源码层验证逻辑，集成测试在 Python 端
-验证端到端行为。
+> 仓库根目录没有 Cargo.toml（Rust 实现已被 Go module 取代），`cargo test` 不再有效：
+> 需要 `cd src/daemon && go test ./...`。
 
 ## 集成测试
 
@@ -99,20 +95,25 @@ sudo python3 -m pytest tests/ --collect-only        # 仅列出所有测试，�
 ### 在 sudo 下运行
 
 `make test` 内部走 `sudo python3 -m pytest tests/ -v`。测试需要 root
-权限操作内核模块（insmod/rmmod）和 procfs 写入。
+权限操作内核模块（insmod/rmmod）和 procfs 写入；Python 侧的 pytest / sqlite3 /
+playwright 不受 `secure_path` 影响。
 
-`sudo` 默认 `secure_path` 不含 `~/.cargo/bin`（rustup 用户级安装的
-默认位置），直接 `sudo make daemon` 会失败：
+Go 守护进程现在由 Go 编译，同样依赖 PATH：`sudo` 默认 `secure_path` 不含
+`~/.go/bin` 或系统外的 Go 安装目录时直接 `sudo make daemon` 会失败：
 
 ```
 sudo make daemon
-make: cargo: 没有那个文件或目录
-make: *** [Makefile:101: daemon] 错误 127
+make: go: 没有那个文件或目录
+make: *** [Makefile] 错误 127
 ```
 
-走 `make test` 不会遇到；但若手动 `sudo python3 -m pytest tests/ -v` 时
-同样缺 cargo，提示 `make: cargo: 没有那个文件或目录`，先
-`source ~/.cargo/env` 再 sudo 即可。
+先确认 PATH 里确实有 go，必要时显式带环境再 sudo（与 CI 的
+`sudo env "PATH=$PATH"` 一致）：
+
+```bash
+go version
+sudo --preserve-env=PATH make daemon   # 或在 shell 中 export PATH=$(printf '%s\n' "$PATH" ~/.go/bin)
+```
 
 ### 过滤器与输出
 
@@ -198,58 +199,31 @@ HTML 报告，CI 上传为 artifact。
 host headers 常不匹配，模块加载会失败但不影响功能测试——runner
 会自动跳过（详见 [ci.yml](../../../../.github/workflows/ci.yml)）。
 
-## 内存安全检测（ASAN / Miri）
+## 安全与质量检测
 
-守护进程（Rust）的 `unsafe { }` 块集中在内核传输、信号、
-守护进程化、线格式指针、syslog、IP 工具、inotify/poll 等处，
-每处都有 `// SAFETY:` 注释说明不变量与理由（清单见
-`grep -rn 'unsafe {' src/daemon/`）。以下检测工具可手动运行（CI 当前未集成）：
+Go 守护进程同样有两处 `unsafe.Pointer`：字节↔内存的搬移
+（`internal/bans/endian.go`）与 inotify 事件结构的封装
+（`internal/ingest/watcher.go`），都用标准库原语 + runtime 语义保证。可执行的检查是
+`go vet ./...` + `gofmt -l`（CI 已集成）；下面列的是仍适用于守护进程的静态分析手段。
 
-### AddressSanitizer
-
-`make asan` 走 `[profile.asan]`（需 nightly toolchain）：
+### Valgrind（可选，用于二进制不变、只换分析器的场景）
 
 ```bash
-# 一次性安装 nightly（如未装）
-rustup install nightly
-
-# 编译 + 运行
-make asan
-sudo ./build/daemon/firewall-daemon-asan
+cd src/daemon && go build -o /tmp/firewall-daemon ./cmd/firewall-daemon
+sudo valgrind --leak-check=full \
+    /tmp/firewall-daemon -c config/default.yaml
 ```
-
-ASan 输出任何 `ERROR:` 行即视为内存缺陷。`build/daemon/firewall-daemon-asan`
-为 `make asan` 复制后的产物（保留 ASAN 运行时，体积比 release 大）。
-
-### Valgrind
-
-适用于二进制不变、只换分析器的场景（如对比 baseline）：
-
-```bash
-cargo build --profile dev-with-debug   # 含 DWARF
-sudo valgrind --leak-check=full --show-leak-kinds=all \
-    ./target/dev-with-debug/firewall-daemon -c config/default.yaml
-```
-
-> `dev-with-debug` profile 适合 Valgrind / `addr2line` / `perf`，
-> 保留全部符号但优化与 release 相同。
-
-### Miri（UB 检测）
-
-Rust 解释器，可检测未定义行为（指针别名、对齐违规等）：
-
-```bash
-cargo +nightly miri test
-```
-
-Miri 解释执行，无需重建 std。
 
 ### Unsafe 块清单
 
-`grep -rn "unsafe {" src/daemon/` 可列出全部 `unsafe` 块，每处紧邻
-`// SAFETY:` 注释说明不变量。新增 unsafe 必须**同时**补全
-`// SAFETY:` 注释，否则 `cargo clippy` lint（仓库已配
-`clippy.toml` 收紧规则）会拒绝合入。
+Go module 不再使用 Rust 风格的 `unsafe { ... } // SAFETY:` 论证。仓库要求
+的是 `gofmt -l ./cmd ./internal` 干净 + `go vet ./cmd/... ./internal/...`
+通过（CI lint 作业）；违反时先修代码，再重新跑这两条命令。
+
+### go test 与 pytest 的关系
+
+单测失败时先看 `cd src/daemon && go test ./... -v` 的堆栈定位到具体包，
+再做集成测试复现（`tests/conftest.py`）；两者是互补关系，不要只靠一侧判断回归。
 
 ## 编写新测试
 
@@ -292,13 +266,14 @@ class TestMyFeature:
 `E2E_LAN_ORIGIN=http://<局域网IP>:<port>` 开启，不设置则显式跳过（CI 即如此）；
 观察结果见 [Web 前端](../architecture/frontend.md) 的「验收记录：安全上下文边界」。
 
-前置条件是**加载了内核模块的守护进程**：`main.rs` 启动即要求 `/proc/firewall` 存在，
+前置条件是**加载了内核模块的守护进程**：`main.go` 启动期先做 `checkProcfs`——
+`/proc/firewall` 与 `/proc/firewall/bans` 必须已挂载，否则直接以启动错误退出。
 且内核把单守护进程实现为 portid 独占 + 30 秒活动超时、无注销消息，因此整条夹具
-（insmod → 生成临时配置 → 起守护进程 → 等 `/health` 就绪 → 收尾 rmmod）独立为
+（insmod → 生成临时配置 → 起守护进程 → 等 procfs 接口就绪 → 收尾 rmmod）独立为
 `scripts/e2e-daemon.sh`，本地与 CI 共用同一份逻辑：
 
 ```bash
-# 1) 起夹具（需要 root）：insmod + 起守护进程 + 等 /health 就绪；同时打印连接参数
+# 1) 起夹具（需要 root）：insmod + 起守护进程 + 等 /proc/firewall 接口就绪；同时打印连接参数
 sudo bash scripts/e2e-daemon.sh start
 
 # 2) 用夹具给出的参数跑用例（env 子命令纯打印，不需要 root）
@@ -318,7 +293,7 @@ sudo bash scripts/e2e-daemon.sh stop
 
 | Job | 检查项 | 失败处理 |
 |-----|--------|----------|
-| `lint` | rustfmt + clippy（`--all-targets --all-features`）+ yamllint + 内核模块 clang-format | 不通过则阻断 merge |
+| `lint` | **go**fmt -l + go vet（守护进程）+ clang-format（内核模块）+ yamllint | 不通过则阻断 merge |
 | `frontend` | 前端类型检查（`tsc --noEmit`）+ vite 构建 + 构建产物 / PWA 清单 / Service Worker 校验 | 不通过则阻断 merge |
 | `build` | 内核模块（`make kernel-module`）+ 守护进程（`make daemon`） | 编译失败阻断 merge |
 | `e2e` | 浏览器端到端（Playwright）：`scripts/e2e-daemon.sh` 起守护进程后 `npm run test:e2e` | 用例 fail 阻断 merge；本机内核不可加载时整段带注解跳过（同 `test` job 的约定） |
@@ -336,5 +311,5 @@ sudo bash scripts/e2e-daemon.sh stop
 不能则带 `::warning::` 注解跳过浏览器用例（环境限制，非代码问题）。
 夹具与判定逻辑见上一节，不在 CI 里另写一份。
 
-> `lint` 失败通常意味着 `// SAFETY:` 注释缺失 / 格式漂移
-> / `unsafe` 块未论证。修复后重跑即可。
+> `lint` 失败通常意味着 gofmt 漂移 / vet 告警；内核侧则是 clang-format
+> `--dry-run --Werror` 不通过。修复后重跑即可。

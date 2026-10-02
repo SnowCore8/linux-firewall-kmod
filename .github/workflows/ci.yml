@@ -21,27 +21,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang-format
           pip install yamllint
-          # Rust 守护进程的格式 / lint 工具 (rustup 默认装在 ~/.cargo/bin)
-          curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          # Go 守护进程（src/daemon，Go module）的格式 / vet 工具
+          go version
 
-      - name: 检查代码风格（clang-format 内核模块 / rustfmt 守护进程）
+      - name: 检查代码风格（clang-format 内核模块 / gofmt 守护进程）
         run: |
           echo "检查内核模块代码..."
           clang-format --dry-run --Werror src/kernel-module/*.c src/kernel-module/*.h
           echo "检查守护进程代码..."
-          cargo fmt --check
+          cd src/daemon && gofmt -l ./cmd ./internal
 
-      - name: 检查守护进程 lint（clippy）
+      - name: 检查守护进程 lint（go vet）
         run: |
-          # RustEmbed 需要 static 目录存在（前端构建产物由 build job 生成）
+          # go:embed "." 把静态面板目录整体嵌入，因此 static 必须先存在
           mkdir -p src/daemon/web_ui/static/
-          cargo clippy --release --lib -- -D warnings
+          cd src/daemon && go vet ./cmd/... ./internal/...
 
-      - name: 运行守护进程单元测试（cargo test）
+      - name: 运行守护进程单元测试（go test）
         run: |
-          echo "=== 运行 Rust 单元测试 ==="
-          cargo test --release --lib
+          echo "=== 运行 Go 单元测试 ==="
+          cd src/daemon && go test ./...
           echo "✓ 单元测试通过"
 
       - name: 检查 YAML 配置（yamllint）
@@ -179,7 +178,8 @@ jobs:
           set -e
           echo "=== 编译守护进程（含前端构建与格式检查）==="
           make clean || true
-          # make all 会先构建前端（npm ci + vite build）再编译 Rust
+          # make daemon：先 npm ci + vite build 产出静态面板，再 by go build；
+          # 面板文件由 src/daemon/web_ui/static/assets.go 的 go:embed "." 携带进二进制。
           make all -j$(nproc)
           echo "✓ 守护进程编译完成"
 
@@ -257,8 +257,10 @@ jobs:
   # （hash 路由、写操作回环、SSE 状态灯、无 console 错误）只有在守护进程
   # 真正提供 SPA 外壳 + 受保护 API + SSE 时才成立，dev server 无法覆盖这条链路。
   #
-  # 环境门禁：守护进程启动期检查 /proc/firewall（见 src/daemon/main.rs），
-  # 即「有守护进程」蕴含「内核模块已加载」。GitHub 托管 runner 为自定义内核，
+  # 环境门禁：守护进程启动期检查 /proc/firewall（见
+  # src/daemon/cmd/firewall-daemon/main.go 的 checkProcfs）。
+  # 即「有守护进程」蕴含「内核模块已加载」。当前 Go 构建不含 HTTP 服务
+  # （HTTP API/SSE 尚未移植到 Go 侧），故 e2e 只断言 procfs 就绪。GitHub 托管 runner 为自定义内核，
   # 编译出的模块可能加载不了——这是环境限制而非代码缺陷，与 test 作业采取同一策略：
   # 加载不了就显式跳过（带注解说明），而不是让 CI 长期变红。
   e2e:

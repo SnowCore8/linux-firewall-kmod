@@ -5,12 +5,12 @@
 [![CI](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml/badge.svg)](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Release](https://img.shields.io/badge/release-v2.2.0-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
-[![Language](https://img.shields.io/badge/Language-Rust%20%2B%20C-blue.svg)]()
+[![Language](https://img.shields.io/badge/Language-Go%20%7C%20C-blue.svg)]()
 [![Platform](https://img.shields.io/badge/Platform-Linux%205.x%20%7C%206.x-orange.svg)]()
 
 ## 概述
 
-Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用户空间移至内核空间，使用 netfilter 框架在数据包级别进行实时 IP 封禁，具有更低的延迟和更高的性能。守护进程用 Rust 实现（v2.2.0 起从 C 翻译），编译为单文件 stripped 二进制（移动端优先的 React 控制面板一并嵌入），集成测试套件全部通过。
+Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用户空间移至内核空间，使用 netfilter 框架在数据包级别进行实时 IP 封禁，具有更低的延迟和更高的性能。守护进程用 Go 实现（v2.2.0 起 Rust 版本被 Go module `src/daemon` 取代），编译为单文件 stripped 二进制（移动端优先的 React 控制面板一并通过 go:embed 嵌入）；内核模块仍是 C，集成测试套件全部通过。
 
 ## 为什么选择本项目
 
@@ -18,7 +18,7 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 |--------|-------------------|-------------------|
 | 封禁位置 | iptables/nftables 用户态 | netfilter 内核钩子 |
 | 响应延迟 | 秒级 | 毫秒级 |
-| 资源占用 | Python 解释器 + 完整依赖链 | 单文件 Rust 二进制（前端产物一并嵌入） |
+| 资源占用 | Python 解释器 + 完整依赖链 | 单文件 Go binary（前端产物一并嵌入，无运行时库体积） |
 | 查找性能 | 线性遍历规则 | 哈希表 O(1) 查找 |
 | 永久封禁 | 配置文件 | 内存缓存，重启后失效 |
 
@@ -30,7 +30,7 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 - ✅ **自动过期清理** — 定时清理过期封禁记录
 - ✅ **IP 白名单保护** — 自动发现系统 IP + 手动添加
 - ✅ **procfs 用户接口** — 封禁/解封/白名单/配置操作
-- ✅ **Rust 守护进程（v2.2.0+）** — 编译为单文件 stripped 二进制（前端产物一并嵌入）
+- ✅ **Go 守护进程（`src/daemon` Go module）** — `go build -ldflags "-s -w=1"`，输出即为带符号剥离的单文件二进制；前端由 `src/daemon/web_ui/static/assets.go` 的 `//go:embed .` 携带进包
 - ✅ **React 移动端前端** — React 19 + TypeScript + Vite + antd-mobile 5 构建，移动优先，hash 路由，手写 SVG 图表，支持 PWA
 - ✅ **正则解析** — 支持命名捕获组提取 IP
 - ✅ **RCU 并发安全** — spinlock 保护，高并发安全
@@ -46,10 +46,10 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 ### 编译
 
 ```bash
-make                    # 编译内核模块 + Rust 守护进程 + React 前端
+make                    # 编译内核模块 + Go 守护进程 + React 前端
 make kernel-module      # 仅内核模块
-make daemon             # 仅 Rust 守护进程 (cargo build --release，含前端构建)
-make frontend           # 仅前端 (npm ci + vite build)
+make daemon             # 仅 Go 守护进程：先 npm run build:only（产出去面板）再 go build
+make frontend           # 仅前端 (npm ci + vite build)，产物写入 src/daemon/web_ui/static/
 make build-quick        # 快速编译（跳过格式检查）
 make clean              # 清理
 ```
@@ -68,7 +68,8 @@ sudo env "PATH=$PATH" make install
 sudo make uninstall
 ```
 
-> 💡 **提示**：`make install` 会自动构建、安装、验证，并启动 systemd 服务。使用 `sudo env "PATH=$PATH"` 确保 cargo 在 PATH 中。
+> 💡 **提示**：`make install` 会自动构建、安装、验证，并启动 systemd 服务。使用
+> `sudo env "PATH=$PATH"` 确保 Go（Go 1.23+）与 GCC 都在 PATH 中。
 
 ### 加载模块（手动方式）
 

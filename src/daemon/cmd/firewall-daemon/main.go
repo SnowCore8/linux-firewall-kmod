@@ -26,7 +26,12 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/kernel"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/logger"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/runtime"
+	panelres "github.com/snowcore8/linux-firewall-kmod/daemon/web_ui/static"
 )
+
+// panelDir 是前端静态面板的 go:embed 目录（src/daemon/web_ui/static/assets.go 声明）。
+// 它是启动期必须存在的资源：缺失时直接以启动错误返回，而不是反复报接口失败。
+var panelDir = panelres.PanelDir
 
 func main() {
 	if err := run(os.Args); err != nil {
@@ -44,6 +49,11 @@ func run(args []string) error {
 	// --help / -h：已打印帮助，成功退出。
 	if parsed == nil {
 		return nil
+	}
+
+	// 面板是守护进程能力的一部分：静态资源缺失时不假装可运行。
+	if panelDir == "" {
+		return fmt.Errorf("前端静态面板缺失（go:embed web_ui/static 为空）")
 	}
 
 	// 回滚模式是独立短路径：不加载配置，只给运行中的守护进程发 SIGUSR1。
