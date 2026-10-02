@@ -324,6 +324,11 @@ type Config struct {
 	ServerCoordsSet     bool
 	GeoipDetectEgress   bool
 	GeoipEgressProbeURL string
+
+	HTTPAddress          string
+	MaxSSEConnections    int
+	HistoryDBPath        string
+	HistoryRetentionDays int
 }
 
 // Default 返回与 Rust 版 Config::default() 严格一致的默认值。
@@ -331,23 +336,27 @@ type Config struct {
 // 字段改动必须验证集成测试仍通过，以保证行为等价。
 func Default() Config {
 	return Config{
-		DefaultMaxRetries:  3,
-		DefaultFindTime:    600,
-		DefaultBanTime:     600,
-		Daemon:             false,
-		Interval:           1,
-		MetricsPort:        9119,
-		MetricsBindAddress: "127.0.0.1",
-		LogLevel:           LogLevelInfo,
-		LogDestination:     LogDestinationBoth,
-		LogFormat:          LogFormatPlain,
-		LogMaxSizeMB:       10,
-		LogMaxFiles:        10,
-		StrictMode:         true,
-		Storage:            DefaultStorageConfig(),
-		Ddos:               DefaultDdosConfig(),
-		Webui:              DefaultWebuiConfig(),
-		Capacity:           DefaultCapacityConfig(),
+		DefaultMaxRetries:    3,
+		DefaultFindTime:      600,
+		DefaultBanTime:       600,
+		Daemon:               false,
+		Interval:             1,
+		MetricsPort:          9119,
+		MetricsBindAddress:   "127.0.0.1",
+		LogLevel:             LogLevelInfo,
+		LogDestination:       LogDestinationBoth,
+		LogFormat:            LogFormatPlain,
+		LogMaxSizeMB:         10,
+		LogMaxFiles:          10,
+		StrictMode:           true,
+		Storage:              DefaultStorageConfig(),
+		Ddos:                 DefaultDdosConfig(),
+		Webui:                DefaultWebuiConfig(),
+		Capacity:             DefaultCapacityConfig(),
+		HTTPAddress:          ":9119",
+		MaxSSEConnections:    32,
+		HistoryDBPath:        "",
+		HistoryRetentionDays: 7,
 	}
 }
 

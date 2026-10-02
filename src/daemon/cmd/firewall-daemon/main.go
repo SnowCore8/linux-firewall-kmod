@@ -22,9 +22,11 @@ import (
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/bans"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/http"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/jail"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/kernel"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/logger"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/runtime"
 	panelres "github.com/snowcore8/linux-firewall-kmod/daemon/web_ui/static"
 )
@@ -91,6 +93,55 @@ func run(args []string) error {
 	}
 
 	sup := runtime.NewSupervisor()
+
+	// SQLite 持久化层：封禁历史、信誉分、封禁事件。
+	var historyDB *persist.DB
+	if cfg.HistoryDBPath != "" {
+		db, err := persist.NewDB(persist.Config{
+			Path:   cfg.HistoryDBPath,
+			Logger: logger,
+		})
+		if err != nil {
+			logger.Warn("初始化持久化数据库失败，历史分析功能不可用", "error", err)
+		} else {
+			defer db.Close()
+			db.StartCleanupScheduler(0, cfg.HistoryRetentionDays)
+			historyDB = db
+			logger.Info("持久化数据库已就绪", "path", cfg.HistoryDBPath)
+		}
+	}
+
+	// HTTP 服务器：API、SSE、Prometheus 指标。
+	var httpServer *http.Server
+	var sseBroker *http.SSEBroker
+	var metrics *http.Metrics
+	if cfg.HTTPAddress != "" {
+		var err error
+		httpServer, err = http.NewServer(http.Config{
+			Address:         cfg.HTTPAddress,
+			MaxConnections:  cfg.MaxSSEConnections,
+			ShutdownTimeout: 5 * time.Second,
+			Logger:          logger,
+		})
+		if err != nil {
+			logger.Warn("初始化 HTTP 服务器失败", "error", err)
+		} else {
+			sseBroker = http.NewSSEBroker(cfg.MaxSSEConnections, logger)
+			metrics = http.NewMetrics()
+			api := http.NewAPIHandlers(httpServer, historyDB, sseBroker, metrics)
+			httpServer.RegisterRoutes(api)
+			httpServer.Handle("/api/v1/events", sseBroker)
+			httpServer.Handle("/metrics", metrics)
+
+			httpToken := runtime.NewShutdown()
+			sup.Spawn("http-server", httpToken, func() {
+				if err := httpServer.Start(); err != nil {
+					logger.Error("HTTP 服务器异常退出", "error", err)
+				}
+			})
+			logger.Info("HTTP 服务器已启动", "addr", cfg.HTTPAddress)
+		}
+	}
 
 	// 内核链路是可降级的：打开失败只告警，入站主链路仍可独立运行。
 	var kernelClient *kernel.Client
