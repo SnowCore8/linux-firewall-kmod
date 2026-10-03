@@ -5,6 +5,8 @@
 # ---- 构建产物 ----
 build/
 target/
+# 在 src/daemon/ 目录内手动 go build 产生的二进制
+/src/daemon/firewall-daemon
 site/
 docs/_book/
 docs/node_modules/
