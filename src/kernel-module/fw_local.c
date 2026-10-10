@@ -68,24 +68,36 @@ void fw_local_exit(void) {
  * ==========================================================================*/
 
 bool fw_local_lookup(u8 af, const void *ip) {
-  struct fw_local_set *set = rcu_dereference(fw_info.local_set);
+  struct fw_local_set *set;
   u32 mask, start, i;
+  bool hit = false;
 
-  if (unlikely(!set || !set->capacity))
-    return false;
+  /*
+   * 集合以 RCU 发布（fw_netdev.c 重建后旧集合经 call_rcu 释放），且 rcu_dereference()
+   * 本身要求处于读侧临界区内；调用方含 procfs/netlink 等可抢占上下文，故在此加锁
+   * 而不是依赖外层。热路径（fw_hook.c）已持有临界区，嵌套合法。
+   */
+  rcu_read_lock();
 
-  mask = set->capacity - 1;
-  start = fw_local_slot_index(set, af, ip);
+  set = rcu_dereference(fw_info.local_set);
+  if (likely(set && set->capacity)) {
+    mask = set->capacity - 1;
+    start = fw_local_slot_index(set, af, ip);
 
-  for (i = 0; i < set->capacity; i++) {
-    const struct fw_local_slot *s = &set->slots[(start + i) & mask];
+    for (i = 0; i < set->capacity; i++) {
+      const struct fw_local_slot *s = &set->slots[(start + i) & mask];
 
-    if (!READ_ONCE(s->used))
-      return false; /* 探测到空槽 ⇒ 之后不存在 */
-    if (s->af == af && fw_addr_equal(af, &s->addr, ip))
-      return true;
+      if (!READ_ONCE(s->used))
+        break; /* 探测到空槽 ⇒ 之后不存在 */
+      if (s->af == af && fw_addr_equal(af, &s->addr, ip)) {
+        hit = true;
+        break;
+      }
+    }
   }
-  return false;
+
+  rcu_read_unlock();
+  return hit;
 }
 
 /* ============================================================================

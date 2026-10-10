@@ -697,7 +697,11 @@ extern unsigned int fw_ddos_detection;
  * 热路径 static inline 原语
  * ==========================================================================*/
 
-/* 地址比较：整体比较即可，白名单/封禁条目发布后不再修改 */
+/*
+ * 地址比较：整体比较即可。条目与节点的地址字段在挂链前写好、发布后不再改写，
+ * 因此 RCU 读侧比较地址无需额外屏障；封禁续期改的是 duration_secs/is_permanent/
+ * banned_at/unban_jiffies 这几个标量，写侧 WRITE_ONCE、读侧 READ_ONCE。
+ */
 static inline bool fw_addr_equal(u8 af, const void *a, const void *b) {
   if (af == FW_AF_INET6)
     return ipv6_addr_equal((const struct in6_addr *)a, (const struct in6_addr *)b);

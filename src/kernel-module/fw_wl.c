@@ -113,22 +113,37 @@ void fw_wl_exit(void) {
 
 bool fw_wl_lookup(u8 af, const void *ip) {
   struct fw_wl_entry *e;
+  bool hit = false;
+
+  /*
+   * 自带 RCU 读侧临界区：调用方既有软中断里的热路径（fw_hook.c），也有 procfs /
+   * netlink / 状态恢复这类可抢占的进程上下文，无锁遍历会与被 call_rcu 释放的条目
+   * 交错。rcu_read_lock() 可嵌套，外层已开临界区的路径不受影响。
+   */
+  rcu_read_lock();
 
   /* 1) 精确桶：地址与前缀全长的条目 */
   hlist_for_each_entry_rcu(e, fw_wl_bucket_head(af, ip), hash) {
     if (e->af != af || !fw_wl_is_full_prefix(af, e->prefix_len))
       continue;
-    if (fw_addr_equal(af, &e->addr, ip))
-      return true;
+    if (fw_addr_equal(af, &e->addr, ip)) {
+      hit = true;
+      break;
+    }
   }
 
   /* 2) 子网链：存在覆盖该地址的前缀条目 */
-  list_for_each_entry_rcu(e, fw_wl_subnet_list(af), subnet_node) {
-    if (fw_prefix_match(af, ip, &e->addr, e->prefix_len))
-      return true;
+  if (!hit) {
+    list_for_each_entry_rcu(e, fw_wl_subnet_list(af), subnet_node) {
+      if (fw_prefix_match(af, ip, &e->addr, e->prefix_len)) {
+        hit = true;
+        break;
+      }
+    }
   }
 
-  return false;
+  rcu_read_unlock();
+  return hit;
 }
 
 bool fw_wl_has_exact(u8 af, const void *ip) {

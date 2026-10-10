@@ -272,6 +272,12 @@ err_netdev:
   fw_netdev_exit();
 err_rebuild:
   fw_netdev_cancel_sync();
+  /*
+   * netlink 在速率表之后建立，故从 rebuild 往上任一步失败时它都已建成：必须拆。
+   * 留下的 sock 其 recv_msg 回调指向本模块代码段，卸载后仍挂在内核 netlink 表上。
+   * netlink 自身初始化失败走 err_rate，不经过此处。
+   */
+  fw_netlink_exit();
 err_rate:
   fw_rate_exit();
 err_ban:

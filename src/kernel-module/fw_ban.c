@@ -74,7 +74,7 @@ _Static_assert(BAN_SHORT_LAYER_BITS < 32 && BAN_HASH_BITS < 32,
  */
 static u64 fw_ban_start_unix(const struct fw_ban_node *n) {
   u64 now = ktime_get_real_seconds();
-  unsigned long elapsed = jiffies - n->banned_at;
+  unsigned long elapsed = jiffies - READ_ONCE(n->banned_at);
 
   return now - (u64)(elapsed / HZ);
 }
@@ -141,7 +141,8 @@ static void fw_ban_layer_release(struct fw_ban_table *t, u8 prefix_len, u32 n) {
 }
 
 static inline bool fw_ban_node_expired(const struct fw_ban_node *n) {
-  return !n->is_permanent && time_after_eq(jiffies, n->unban_jiffies);
+  return !READ_ONCE(n->is_permanent) &&
+         time_after_eq(jiffies, READ_ONCE(n->unban_jiffies));
 }
 
 /* 单层探测：层内桶里是否存在覆盖 ip 的条目（调用者持 RCU 读侧临界区） */
@@ -263,6 +264,7 @@ static void fw_ban_expire_cb(struct timer_list *t) {
   union fw_addr addr;
   u32 bkt;
   u8 af, prefix_len;
+  unsigned long unb;
 
   rcu_read_lock();
 
@@ -284,9 +286,10 @@ static void fw_ban_expire_cb(struct timer_list *t) {
     rcu_read_unlock();
     return;
   }
-  /* 续期竞态：到期前被延长，则重武装本次定时器 */
-  if (!READ_ONCE(n->is_permanent) && time_before(jiffies, READ_ONCE(n->unban_jiffies))) {
-    mod_timer(&n->expire_timer, n->unban_jiffies);
+  /* 续期竞态：到期前被延长，则重武装本次定时器（同一次 READ_ONCE 取值判、用） */
+  unb = READ_ONCE(n->unban_jiffies);
+  if (!READ_ONCE(n->is_permanent) && time_before(jiffies, unb)) {
+    mod_timer(&n->expire_timer, unb);
     spin_unlock_bh(&layer->locks[bkt]);
     rcu_read_unlock();
     return;
@@ -430,13 +433,21 @@ static int fw_ban_insert(u8 af, const void *addr, u8 prefix_len,
   }
 
   if (existing) {
-    /* 过期未摘链：按本次请求续期，重武装定时器 */
-    existing->duration_secs = duration_secs;
-    existing->is_permanent = duration_secs == 0;
-    existing->banned_at = n->banned_at;
-    existing->unban_jiffies = duration_secs ? jiffies + (unsigned long)duration_secs * HZ : 0;
+    /*
+     * 过期未摘链：按本次请求续期，重武装定时器。
+     * 该节点已在链表上发布，读侧（分页遍历、到期回调）可能同时在读，
+     * 故这几个标量一律 WRITE_ONCE，读侧对应 READ_ONCE。
+     */
+    unsigned long unb = 0;
+
     if (duration_secs)
-      mod_timer(&existing->expire_timer, existing->unban_jiffies);
+      unb = jiffies + (unsigned long)duration_secs * HZ;
+    WRITE_ONCE(existing->duration_secs, duration_secs);
+    WRITE_ONCE(existing->is_permanent, duration_secs == 0);
+    WRITE_ONCE(existing->banned_at, n->banned_at);
+    WRITE_ONCE(existing->unban_jiffies, unb);
+    if (duration_secs)
+      mod_timer(&existing->expire_timer, unb);
     else
       timer_delete(&existing->expire_timer);
     spin_unlock_bh(&layer->locks[bkt]);
@@ -635,9 +646,9 @@ u32 fw_ban_fill_entries(u32 offset, u32 limit, struct fw_ban_row *rows) {
           if (idx++ < offset)
             continue;
           rows[count].af = n->af;
-          rows[count].is_permanent = n->is_permanent;
+          rows[count].is_permanent = READ_ONCE(n->is_permanent);
           rows[count].prefix_len = n->prefix_len;
-          rows[count].duration_secs = n->duration_secs;
+          rows[count].duration_secs = READ_ONCE(n->duration_secs);
           rows[count].banned_at = fw_ban_start_unix(n);
           rows[count].addr = n->addr;
           memcpy(rows[count].jail_name, n->jail_name, sizeof(rows[count].jail_name));
