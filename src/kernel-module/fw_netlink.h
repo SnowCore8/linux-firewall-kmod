@@ -4,7 +4,7 @@
  *
  * 协议冻结面见 contract/netlink.fwidl 与 contract/generated/netlink_uapi.h：
  * NETLINK_USERSOCK、magic 0x46574C4E、12 字节头、全部 packed、多字节大端、
- * 原样地址字节（IPv4 取前 4 字节）、23 种消息类型。
+ * 原样地址字节（IPv4 取前 4 字节）、24 种消息类型。
  *
  * 本头只暴露「发送」方向；接收回调是 static，由 fw_netlink_init 注册。
  * 发送函数被 fw_ban.c / fw_wl.c / fw_procfs.c / fw_rate.c 调用，因此放在

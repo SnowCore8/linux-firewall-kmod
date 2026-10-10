@@ -25,8 +25,15 @@
  *     故热路径取到槽位后无需再查表。
  *   - 滚动用 atomic_cmpxchg(&n->rolling, 0, 1) 选出唯一的结算者，其余 CPU 直接
  *     返回；滚动者用 xchg 把各 CPU 计数取走并清零（计数是 atomic64）。
- *   - 删除条目时先在所有 CPU 上把引用它的槽置空，再 synchronize_rcu 释放，故
+ *   - 条目与槽位一一对应，只有两条删除路径：周期回收静默条目（本文件的回收
+ *     工作项）与 SET_CONFIG 的清表。两者都先在桶锁下摘链、再在桶锁外用
+ *     on_each_cpu 把各 CPU 上指向该条目的槽置空、最后 call_rcu 释放条目，故
  *     RCU 读者要么读到空槽，要么读到的条目必然存活。
+ *
+ * 容量：条目固定占槽 ⇒ 同时跟踪的源地址数上限是 FW_RATE_CPU_SLOTS（每 CPU 的
+ * per-CPU 内存支付），比 fw_max_rate_entries 更靠前；超出者按契约「满则放行」，
+ * 由 rate_slot_spill 观测。回收静默条目是让这一上限得以周转的唯一机制——没有
+ * 回收，表在跑满 512 个源地址后就永久停止检测。
  */
 
 #define pr_fmt(fmt) "firewall: " fmt
@@ -37,8 +44,12 @@
 #include "fw_rate.h"
 #include "fw_stats.h"
 
-/* 读侧保留最近活跃扫描者的时长（秒） */
+/* 读侧保留最近活跃扫描者的时长（秒）；同时是「静默条目可回收」的门限 */
 #define FW_RATE_PIN_SECONDS 60
+
+/* 回收扫描周期与单批条目数（批大小决定一次 on_each_cpu 能处理多少条目） */
+#define FW_RATE_RECLAIM_INTERVAL (10 * HZ)
+#define FW_RATE_RECLAIM_BATCH 64
 
 /* ============================================================================
  * 小工具
@@ -78,8 +89,8 @@ static inline u64 fw_pps(u64 count, unsigned long elapsed) {
 }
 
 /* 槽位下标：与本机 CPU 数无关，只取决于地址（各 CPU 上同地址同下标） */
-static inline u8 fw_rate_slot_idx(u8 af, const void *addr) {
-  return (u8)(fw_hash_addr(af, addr, 16) & (FW_RATE_CPU_SLOTS - 1));
+static inline u16 fw_rate_slot_idx(u8 af, const void *addr) {
+  return (u16)(fw_hash_addr(af, addr, 16) & (FW_RATE_CPU_SLOTS - 1));
 }
 
 /* ============================================================================
@@ -119,6 +130,141 @@ static void fw_rate_clear_slots_this_cpu(void *info) {
     s->seen_port_n = 0;
     s->port_scan_counted = 0;
   }
+}
+
+/* ============================================================================
+ * 静默条目回收（进程上下文工作项）
+ * ==========================================================================*/
+
+/* 一次 on_each_cpu 能处理的条目：栈上批次，避免再加一张 512 KB 的暂存表 */
+struct fw_rate_reclaim_batch {
+  u32 n;
+  struct fw_rate_node *v[FW_RATE_RECLAIM_BATCH];
+};
+
+/*
+ * 在本 CPU 上清掉本批条目各自占用的那一格。
+ *
+ * 槽的窗口残余计数直接作废：条目马上释放，其 EWMA 状态一并消失，折回条目没有
+ * 意义（与 fw_rate_clear_all 同语义）。因此回收**不**计 rate_slot_spill——那个
+ * 计数只表示契约里的「满则放行」。
+ */
+static void fw_rate_reclaim_slots_this_cpu(void *info) {
+  struct fw_rate_reclaim_batch *b = info;
+  struct fw_rate_pcpu *r = this_cpu_ptr(fw_info.rate_pcpu);
+  u32 i;
+
+  for (i = 0; i < b->n; i++) {
+    struct fw_rate_node *n = b->v[i];
+    struct fw_rate_cpu_slot *s;
+
+    if (n->slot_idx >= FW_RATE_CPU_SLOTS)
+      continue;
+    s = &r->slots[n->slot_idx];
+    if (rcu_access_pointer(s->entry) != n)
+      continue; /* 已被别的路径清掉，不动别人的槽 */
+
+    atomic64_set(&s->packets, 0);
+    atomic64_set(&s->bytes, 0);
+    atomic64_set(&s->syn, 0);
+    atomic64_set(&s->udp, 0);
+    atomic64_set(&s->icmp, 0);
+    atomic64_set(&s->ack, 0);
+    atomic64_set(&s->rst, 0);
+    atomic64_set(&s->fin, 0);
+    smp_store_release(&s->entry, NULL);
+    s->seen_port_n = 0;
+    s->port_scan_counted = 0;
+  }
+}
+
+/* 释放一批已摘链条目；返回本批条数。必须在桶锁之外调用（on_each_cpu 要等全部 CPU） */
+static u32 fw_rate_reclaim_flush(struct fw_rate_reclaim_batch *b) {
+  u32 n = b->n;
+  u32 i;
+
+  if (!n)
+    return 0;
+
+  /* b->n 必须留到结算之后再清：本 CPU 回调靠它遍历批次，提前清零等于什么都没清，
+   * 槽里会一直留着指向已释放条目的指针（该槽此后永不再被分配，槽位净泄漏） */
+  on_each_cpu(fw_rate_reclaim_slots_this_cpu, b, 1);
+
+  for (i = 0; i < n; i++) {
+    atomic_dec(&fw_info.rate_count);
+    call_rcu(&b->v[i]->rcu, fw_rate_free_rcu);
+  }
+  b->n = 0;
+  return n;
+}
+
+/*
+ * 回收静默超过 FW_RATE_PIN_SECONDS 的条目——这是槽位唯一的周转机制：条目固定占
+ * 槽，没有回收则表在跑满后永久停止检测（新源一律「满则放行」）。
+ *
+ * 门限与读侧的「只报最近活跃」过滤器同值，因此被回收的条目本来就不出现在扫描者
+ * /探测者结果里。代价：静默后重新活跃的来源 EWMA 从零起算，需约 3 个窗口才收敛
+ * 到真实速率——远比「表满后永远不再检测」便宜。
+ *
+ * 摘链在桶锁内完成（与热路径建条目、清表互斥），槽位清理与释放在锁外。清表
+ * 进行中跳过本轮：此时槽表正被逐条 on_each_cpu，插手的收益为零且会与 drain
+ * 争用桶锁。
+ */
+static void fw_rate_reclaim_work(struct work_struct *work) {
+  struct fw_rate_reclaim_batch batch;
+  struct fw_rate_node *n;
+  struct hlist_node *tmp;
+  struct delayed_work *d = to_delayed_work(work);
+  unsigned long cutoff = (unsigned long)FW_RATE_PIN_SECONDS * HZ;
+  unsigned long now = jiffies;
+  u32 bkt, freed = 0;
+
+  batch.n = 0;
+
+  if (!fw_info.rate_pcpu || READ_ONCE(fw_info.rate_clear_ctx.clearing))
+    goto requeue;
+
+  for (bkt = 0; bkt < RATE_HASH_SIZE; bkt++) {
+    if (hlist_empty(&fw_info.rate_ipv4[bkt]) &&
+        hlist_empty(&fw_info.rate_ipv6[bkt]))
+      continue;
+
+    spin_lock_bh(&fw_info.rate_locks[bkt]);
+    hlist_for_each_entry_safe(n, tmp, &fw_info.rate_ipv4[bkt], hash) {
+      if (time_before(now, READ_ONCE(n->last_activity) + cutoff))
+        continue;
+      if (batch.n == FW_RATE_RECLAIM_BATCH)
+        break;
+      hlist_del_rcu(&n->hash);
+      batch.v[batch.n++] = n;
+    }
+    hlist_for_each_entry_safe(n, tmp, &fw_info.rate_ipv6[bkt], hash) {
+      if (time_before(now, READ_ONCE(n->last_activity) + cutoff))
+        continue;
+      if (batch.n == FW_RATE_RECLAIM_BATCH)
+        break;
+      hlist_del_rcu(&n->hash);
+      batch.v[batch.n++] = n;
+    }
+    spin_unlock_bh(&fw_info.rate_locks[bkt]);
+
+    /* 批次满即结算，剩下的静默条目留到下一轮（10 秒后） */
+    if (batch.n == FW_RATE_RECLAIM_BATCH)
+      freed += fw_rate_reclaim_flush(&batch);
+  }
+  freed += fw_rate_reclaim_flush(&batch);
+
+  /*
+   * 只在真正回收了条目时计数：cleanup_cycles 是契约里显式保留的「恒为 0」遗留
+   * 键（PROC_CLEANUP_CYCLES_DEAD），不拿它承载新语义；空转轮数也不是运维信号，
+   * rate_reclaimed 非零就等于「回收工作项在跑并放了槽」。
+   */
+  if (freed)
+    atomic64_add(freed, &fw_info.rate_reclaimed);
+
+requeue:
+  /* 用 queue_delayed_work(system_wq)，不用已废弃的 schedule_delayed_work() */
+  queue_delayed_work(system_wq, d, FW_RATE_RECLAIM_INTERVAL);
 }
 
 /*
@@ -165,7 +311,9 @@ int fw_rate_init(void) {
     INIT_HLIST_HEAD(&fw_info.rate_clear_ctx.pre.buckets[i]);
   spin_lock_init(&fw_info.rate_slot_lock);
   atomic_set(&fw_info.rate_count, 0);
+  atomic64_set(&fw_info.rate_reclaimed, 0);
   fw_info.rate_clear_ctx.clearing = false;
+  INIT_DELAYED_WORK(&fw_info.rate_reclaim_work, fw_rate_reclaim_work);
 
   fw_info.rate_pcpu = alloc_percpu(struct fw_rate_pcpu);
   if (!fw_info.rate_pcpu)
@@ -173,12 +321,19 @@ int fw_rate_init(void) {
 
   /* 新分配的 per-CPU 块已清零；显式清一遍以防复用残留 */
   on_each_cpu(fw_rate_clear_slots_this_cpu, NULL, 1);
+
+  /* 回收工作项是槽位唯一的周转机制，必须与表同生命周期 */
+  queue_delayed_work(system_wq, &fw_info.rate_reclaim_work,
+                     FW_RATE_RECLAIM_INTERVAL);
   return 0;
 }
 
 void fw_rate_exit(void) {
   if (!fw_info.rate_pcpu)
     return;
+
+  /* 先停回收，再拆表：否则 drain 与回收会在桶锁上交错 */
+  cancel_delayed_work_sync(&fw_info.rate_reclaim_work);
 
   fw_info.rate_clear_ctx.clearing = true;
   smp_mb__after_atomic();
@@ -245,7 +400,7 @@ static void fw_rate_publish_slots(struct fw_rate_node *n) {
  */
 static struct fw_rate_node *fw_rate_create(u8 af, const void *addr, u32 bkt) {
   struct fw_rate_node *n;
-  u8 slot_idx;
+  u16 slot_idx;
   u32 probe;
 
   if (atomic_read(&fw_info.rate_count) >= (int)fw_max_rate_entries) {
@@ -270,7 +425,7 @@ static struct fw_rate_node *fw_rate_create(u8 af, const void *addr, u32 bkt) {
 
     if (!rcu_access_pointer(s->entry))
       break;
-    slot_idx = (u8)((slot_idx + 1) & (FW_RATE_CPU_SLOTS - 1));
+    slot_idx = (u16)((slot_idx + 1) & (FW_RATE_CPU_SLOTS - 1));
   }
   if (probe == FW_RATE_CPU_SLOTS) {
     spin_unlock_bh(&fw_info.rate_slot_lock);
@@ -470,7 +625,7 @@ const char *fw_rate_observe(u8 af, const void *addr, u32 packet_len, u8 protocol
   const char *reason;
   unsigned long now = jiffies;
   u32 bkt = fw_rate_bucket(af, addr);
-  u8 slot_idx;
+  u16 slot_idx;
 
   /* 清表/退出进行中：本包不参与速率判定（放行） */
   if (unlikely(fw_info.rate_clear_ctx.clearing))

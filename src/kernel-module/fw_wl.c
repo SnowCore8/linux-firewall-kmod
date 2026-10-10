@@ -146,17 +146,6 @@ bool fw_wl_lookup(u8 af, const void *ip) {
   return hit;
 }
 
-bool fw_wl_has_exact(u8 af, const void *ip) {
-  struct fw_wl_entry *e;
-
-  hlist_for_each_entry_rcu(e, fw_wl_bucket_head(af, ip), hash) {
-    if (e->af == af && fw_wl_is_full_prefix(af, e->prefix_len) &&
-        fw_addr_equal(af, &e->addr, ip))
-      return true;
-  }
-  return false;
-}
-
 u32 fw_wl_count(void) {
   return (u32)atomic_read(&fw_info.wl_count);
 }

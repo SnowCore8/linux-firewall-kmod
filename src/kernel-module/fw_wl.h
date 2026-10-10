@@ -37,7 +37,4 @@ u32 fw_wl_count(void);
 /* 读侧遍历：把 offset 起的至多 limit 条写入 rows，返回写入条数 */
 u32 fw_wl_fill_entries(u32 offset, u32 limit, struct fw_wl_row *rows);
 
-/* 是否存在与 (af, addr) 精确相等的条目（用于去重与状态恢复） */
-bool fw_wl_has_exact(u8 af, const void *ip);
-
 #endif /* FW_WL_H */

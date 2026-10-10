@@ -153,7 +153,7 @@ rcu_read_unlock();
 |----|------|------------|-------------|
 | 封禁表 | hlist + RCU + per-bucket 自旋锁 | 4096 桶（`BAN_HASH_BITS` = 12） | 模块参数 `fw_max_ban_entries`（默认 65535） |
 | 白名单 | 64 精确桶 + 子网链表 | 64 桶（`WHITELIST_HASH_BITS` = 6） | 模块参数 `fw_max_whitelist_entries`（默认 65535） |
-| 速率表 | hlist + RCU + per-bucket 自旋锁 + per-CPU 槽 | 65536 桶（`RATE_HASH_BITS` = 16） | 模块参数 `fw_max_rate_entries`（默认 65536） |
+| 速率表 | hlist + RCU + per-bucket 自旋锁 + per-CPU 固定槽 | 65536 桶（`RATE_HASH_BITS` = 16） | `min(` 模块参数 `fw_max_rate_entries`（默认 65536）`, FW_RATE_CPU_SLOTS`（每 CPU 512 槽，一条目占一槽）`)——通常 512 是先到的瓶颈；静默条目由回收工作项释放槽位 |
 | 本机地址集合 | 开放寻址哈希集（线性探测） | 2 的幂；下界 `fw_max_local_ips`（默认 256），硬上界 2^16 | 无条目上限：按实际地址数扩容 |
 | UDP 端口分析表 | hlist + RCU | 256 桶 | `MAX_UDP_PORT_ENTRIES`（512） |
 | ICMP 类型分析表 | hlist + RCU | 64 桶 | `MAX_ICMP_TYPE_ENTRIES`（128） |

@@ -71,4 +71,10 @@ void fw_stats_read_analysis(struct fw_analysis_snapshot *out);
 /* 取走并清零全局流量计数（返回包数，*bytes 返回字节数） */
 u64 fw_stats_take_traffic(u64 *bytes);
 
+/*
+ * 「满则放行 / 分布槽被顶替」的累计次数（读前先刷）。procfs rates 的表头用它
+ * 把速率表的失败开放状态显式化——stats 条目的 13 个 key 由契约冻结，不加行。
+ */
+u64 fw_stats_rate_slot_spill(void);
+
 #endif /* FW_STATS_H */

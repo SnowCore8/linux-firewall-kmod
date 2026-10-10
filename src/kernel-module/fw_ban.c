@@ -482,19 +482,6 @@ static int fw_ban_insert(u8 af, const void *addr, u8 prefix_len,
   return 0;
 }
 
-int fw_ban_add(u8 af, const void *addr, u8 prefix_len, u32 duration_secs,
-               const char *reason, const char *jail, bool notify) {
-  bool dummy = false;
-
-  if (!addr || (af != FW_AF_INET && af != FW_AF_INET6))
-    return -EINVAL;
-  if (!fw_ban_prefix_valid(af, prefix_len))
-    return -EINVAL;
-
-  return fw_ban_insert(
-    af, addr, prefix_len, duration_secs, reason, jail, notify, &dummy, 0);
-}
-
 int fw_ban_try_add(u8 af, const void *addr, u8 prefix_len, u32 duration_secs,
                    const char *reason, const char *jail, bool notify) {
   bool is_new = false;

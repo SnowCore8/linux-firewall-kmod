@@ -19,8 +19,13 @@
  *   3. **恢复白名单先于封禁**，且白名单恢复复用 fw_wl_add()（自带容量检查与
  *      去重），因此封禁恢复的白名单前检（fw_ban_try_add 的 -EPERM）能命中。
  *
- *   4. **状态文件格式不变**：BAN_V4/BAN_V6/WL_V4/WL_V6 + 尾部 CRC32，
- *      daemon 与运维脚本继续可读。
+ *   4. **封禁行带前缀长度**（格式表见 fw_state.h）：旧格式把 CIDR 封禁写成裸
+ *      地址，恢复时只能按 /32、/128 解释，重启一次就把网段封禁降级成单主机
+ *      封禁。新格式在地址后加「/前缀」；不带斜杠的地址字段按全长解释，因此
+ *      仍读得懂旧文件。
+ *
+ *   5. **CRC32 尾行由「可选」改为必需**：旧实现遇到没有 CRC 行的文件直接整份
+ *      接受，于是写盘中途被打断（只剩半份 body）的快照会被当作可信状态恢复。
  */
 
 #define pr_fmt(fmt) "firewall: " fmt
@@ -38,18 +43,36 @@
 #include "fw_ban.h"
 #include "fw_wl.h"
 
-/* 单次读入的状态文件上限（超出即截断解析，视为损坏） */
-#define FW_STATE_MAX_FILE (128 * 1024)
+/*
+ * 状态文件大小上限：按容量参数反推（每条一行 × 单行最长），而不是拍一个定值。
+ * 旧实现写死 128 KB，而保存上限是 4096 行——一份接近写满的快照读进来必然被截断，
+ * CRC 必然不符，于是「保存成功、恢复必失败」。
+ */
+#define FW_STATE_MAX_LINE 160
+#define FW_STATE_MAX_FILE_CAP (32 * 1024 * 1024)
 
-/* 保存时每张表的写出上限（与旧实现一致，防止状态文件无限增长） */
-#define FW_STATE_MAX_BAN 4096
-#define FW_STATE_MAX_WL 4096
+/*
+ * 保存时每张表的写出上限：取运行时容量参数，快照才可能覆盖表的全部内容
+ * （旧值是编译期的 4096，而封禁表/白名单默认容量都是 65535）。
+ */
+#define FW_STATE_MAX_BAN fw_max_ban_entries
+#define FW_STATE_MAX_WL fw_max_whitelist_entries
 
 /* 分页收集时每页行数 */
 #define FW_STATE_PAGE 64
 
 /* 恢复只做一次：模块生命周期内的守卫 */
 static bool fw_state_restored;
+
+/* 按容量参数推出状态文件的可读上限（超出即视为损坏，不尝试恢复） */
+static size_t fw_state_max_file_size(void) {
+  u64 lines = (u64)FW_STATE_MAX_BAN + FW_STATE_MAX_WL + 4;
+  u64 bytes = lines * FW_STATE_MAX_LINE;
+
+  if (bytes > FW_STATE_MAX_FILE_CAP)
+    return FW_STATE_MAX_FILE_CAP;
+  return (size_t)bytes;
+}
 
 /* ============================================================================
  * 路径校验
@@ -170,7 +193,8 @@ static int fw_state_write_bans(struct file *file, loff_t *pos, u32 *crc,
       int n;
 
       if (offset + i >= FW_STATE_MAX_BAN) {
-        pr_warn("封禁条目超过保存上限 %d，其余条目本次不写入状态文件\n", FW_STATE_MAX_BAN);
+        pr_warn("封禁条目超过保存上限 %u，其余条目本次不写入状态文件\n",
+                FW_STATE_MAX_BAN);
         goto out;
       }
 
@@ -184,15 +208,19 @@ static int fw_state_write_bans(struct file *file, loff_t *pos, u32 *crc,
         remaining = expiry - now;
       }
 
+      /*
+       * 地址带前缀：网段封禁必须原样落盘，否则重启后按全长解释，/24 封禁缩水成
+       * 其中一台主机（见 fw_state.h 的格式表）。
+       */
       fw_addr_to_str(r->af, &r->addr, ip_str, sizeof(ip_str));
       memcpy(jail, r->jail_name, sizeof(jail));
       jail[sizeof(jail) - 1] = '\0';
       fw_state_sanitize_field(jail, sizeof(jail));
 
-      n = snprintf(buf, buf_size, "%s %s %llu %s %s\n",
+      n = snprintf(buf, buf_size, "%s %s/%u %llu %s %s\n",
                    r->af == FW_AF_INET6 ? "BAN_V6" : "BAN_V4", ip_str,
-                   (unsigned long long)remaining, jail[0] ? jail : "api",
-                   r->reason[0] ? r->reason : "(none)");
+                   (unsigned int)r->prefix_len, (unsigned long long)remaining,
+                   jail[0] ? jail : "api", r->reason[0] ? r->reason : "(none)");
       ret = fw_state_write_chunk(file, pos, crc, buf, n);
       if (ret)
         goto out;
@@ -228,7 +256,8 @@ static int fw_state_write_whitelist(struct file *file, loff_t *pos, u32 *crc,
       int n;
 
       if (offset + i >= FW_STATE_MAX_WL) {
-        pr_warn("白名单条目超过保存上限 %d，其余条目本次不写入状态文件\n", FW_STATE_MAX_WL);
+        pr_warn("白名单条目超过保存上限 %u，其余本次不写入\n",
+                FW_STATE_MAX_WL);
         goto out;
       }
 
@@ -283,7 +312,7 @@ int fw_state_save(void) {
     goto out_free_buf;
   }
 
-  n = snprintf(buf, 512, "FW_STATE 1\n");
+  n = snprintf(buf, 512, "FW_STATE 2\n");
   ret = fw_state_write_chunk(file, &pos, &crc, buf, n);
   if (ret)
     goto out_abort;
@@ -330,7 +359,12 @@ out_free_buf:
  * 恢复
  * ==========================================================================*/
 
-/* 校验尾行 CRC32；命中返回 body 结束位置（置 '\0'），无 CRC 行返回原长度 */
+/*
+ * 校验尾行 CRC32；命中返回 body 结束位置（置 '\0'）。
+ *
+ * CRC 行缺失或读不出十六进制都按「拒绝恢复」处理：写盘中途被打断的快照正是只有
+ * body、没有 CRC 行的形状，旧实现返回原长度等于把半截状态当可信数据。
+ */
 static ssize_t fw_state_verify_crc(char *buf, ssize_t len) {
   char *last = NULL, *p = buf, *nl;
 
@@ -341,15 +375,19 @@ static ssize_t fw_state_verify_crc(char *buf, ssize_t len) {
   }
   if (!last && strncmp(buf, "CRC32 ", 6) == 0)
     last = buf;
-  if (!last)
-    return len;
+  if (!last) {
+    pr_err("状态文件缺少 CRC32 尾行（半截快照？），拒绝恢复\n");
+    return -EINVAL;
+  }
 
   {
     u32 expect, got;
     size_t body = (size_t)(last - buf);
 
-    if (sscanf(last + 6, "%x", &expect) != 1)
-      return len;
+    if (sscanf(last + 6, "%x", &expect) != 1) {
+      pr_err("状态文件 CRC32 行无法解析，拒绝恢复\n");
+      return -EINVAL;
+    }
     got = ~crc32_le(~0U, buf, body);
     if (got != expect) {
       pr_err("状态文件校验和失败: expect=%08x got=%08x，拒绝恢复\n", expect, got);
@@ -365,35 +403,56 @@ static ssize_t fw_state_verify_crc(char *buf, ssize_t len) {
 }
 
 /*
- * 恢复一行封禁：<af> 已解析，token 指向剩余字段（remaining jail reason...）。
+ * 恢复一行封禁：<af> 已解析，token 指向剩余字段（[<ip>[/<plen>]] remaining jail reason...）。
  * 白名单前检交给调用侧（fw_ban_restore 不做白名单判断，因为白名单先恢复）。
+ *
+ * strsep 会把 work 推进到缓冲区内部，故 base 另存一份用于 kfree：直接
+ * kfree(work) 是释放非块首地址，slab 会当场报错。
  */
 static int fw_state_restore_ban(const char *rest, u8 af) {
-  char *work, *tok;
+  char *base, *work, *tok;
   char *time_str, *jail_str, *reason_str;
   union fw_addr addr;
   unsigned long remaining;
+  u32 parsed_prefix;
+  u8 prefix_len = fw_max_prefix_len(af);
   u64 now;
   int ret;
 
-  work = kstrdup(rest, GFP_KERNEL);
-  if (!work)
+  base = kstrdup(rest, GFP_KERNEL);
+  if (!base)
     return -ENOMEM;
+  work = base;
 
   tok = strsep(&work, " ");
   if (!tok) {
-    kfree(work);
+    kfree(base);
     return -EINVAL;
+  }
+
+  /* 地址字段可带「/前缀长度」；不带斜杠时按全长解释，即版本 1 文件的形状 */
+  {
+    char *slash = strchr(tok, '/');
+
+    if (slash) {
+      *slash = '\0';
+      if (kstrtouint(slash + 1, 10, &parsed_prefix) != 0 ||
+          parsed_prefix > (u32)fw_max_prefix_len(af)) {
+        kfree(base);
+        return -EINVAL;
+      }
+      prefix_len = (u8)parsed_prefix;
+    }
   }
 
   if (af == FW_AF_INET) {
     if (!in4_pton(tok, -1, (u8 *)&addr.ipv4, -1, NULL)) {
-      kfree(work);
+      kfree(base);
       return -EINVAL;
     }
   } else {
     if (!in6_pton(tok, -1, (u8 *)&addr.ipv6, -1, NULL)) {
-      kfree(work);
+      kfree(base);
       return -EINVAL;
     }
   }
@@ -403,18 +462,18 @@ static int fw_state_restore_ban(const char *rest, u8 af) {
   reason_str = work; /* reason 为行尾剩余字段，可含空格 */
 
   if (!time_str || kstrtoul(time_str, 10, &remaining) != 0) {
-    kfree(work);
+    kfree(base);
     return -EINVAL;
   }
 
   /* 超过一年视为损坏行 */
   if (remaining > 365UL * 24 * 60 * 60) {
-    kfree(work);
+    kfree(base);
     return -EINVAL;
   }
 
   if (fw_wl_lookup(af, &addr)) {
-    kfree(work);
+    kfree(base);
     return 0; /* 已在白名单：不再恢复该封禁 */
   }
 
@@ -425,44 +484,43 @@ static int fw_state_restore_ban(const char *rest, u8 af) {
    * 外部时点求得的正确起点（供 UI 显示封禁时刻用）。
    */
   now = ktime_get_real_seconds();
-  /*
-   * 状态文件的行格式（BAN_V4/V6 <ip> <remaining> <jail> <reason>）是运维契约，
-   * 不带前缀长度字段，故恢复一律按**精确单机**（全长前缀）解释；网段条目在重启
-   * 后降级为「其网段地址那一个主机」——要保住网段需扩展该契约格式（未做）。
-   */
-  ret = fw_ban_restore(af, &addr, fw_max_prefix_len(af), (u32)remaining,
+  /* 与 fw_wl 恢复一样先归一化：短前缀条目必须存网络地址，否则同一网段的不同主机位
+   * 会在同一桶里各建一条（fw_ban_find_locked 按地址全等比较） */
+  fw_addr_normalize(af, &addr, prefix_len);
+  ret = fw_ban_restore(af, &addr, prefix_len, (u32)remaining,
                        remaining ? now : 0,
                        reason_str && reason_str[0] ? reason_str : "restored",
                        jail_str && jail_str[0] ? jail_str : "api");
 
-  kfree(work);
+  kfree(base);
   return ret;
 }
 
 static int fw_state_restore_wl(const char *rest, u8 af) {
-  char *work, *tok;
+  char *base, *work, *tok;
   char *prefix_str, *dev_str;
   union fw_addr addr;
   int plen, ret;
 
-  work = kstrdup(rest, GFP_KERNEL);
-  if (!work)
+  base = kstrdup(rest, GFP_KERNEL);
+  if (!base)
     return -ENOMEM;
+  work = base;
 
   tok = strsep(&work, " ");
   if (!tok) {
-    kfree(work);
+    kfree(base);
     return -EINVAL;
   }
 
   if (af == FW_AF_INET) {
     if (!in4_pton(tok, -1, (u8 *)&addr.ipv4, -1, NULL)) {
-      kfree(work);
+      kfree(base);
       return -EINVAL;
     }
   } else {
     if (!in6_pton(tok, -1, (u8 *)&addr.ipv6, -1, NULL)) {
-      kfree(work);
+      kfree(base);
       return -EINVAL;
     }
   }
@@ -472,7 +530,7 @@ static int fw_state_restore_wl(const char *rest, u8 af) {
 
   if (!prefix_str || kstrtoint(prefix_str, 10, &plen) != 0 || plen < 0 ||
       (af == FW_AF_INET ? plen > 32 : plen > 128)) {
-    kfree(work);
+    kfree(base);
     return -EINVAL;
   }
 
@@ -480,14 +538,16 @@ static int fw_state_restore_wl(const char *rest, u8 af) {
   fw_addr_normalize(af, &addr, (u8)plen);
   ret = fw_wl_add(af, &addr, (u8)plen, dev_str && dev_str[0] ? dev_str : "restored");
 
-  kfree(work);
+  kfree(base);
   return ret;
 }
 
 int fw_state_restore(void) {
   const char *path = fw_state_file;
   struct file *file;
-  char *buf, *work, *line;
+  char *buf = NULL, *work, *line;
+  size_t cap = fw_state_max_file_size();
+  loff_t isize;
   ssize_t len = 0;
   int ret = 0;
 
@@ -498,28 +558,47 @@ int fw_state_restore(void) {
   if (fw_state_validate_path(path))
     return -EINVAL;
 
-  buf = kmalloc(FW_STATE_MAX_FILE, GFP_KERNEL);
-  if (!buf)
-    return -ENOMEM;
-
   file = filp_open(path, O_RDONLY | O_NOFOLLOW, 0);
   if (IS_ERR(file)) {
     /* 首次启动没有状态文件属正常情况 */
-    kfree(buf);
     return 0;
   }
 
-  while (len < FW_STATE_MAX_FILE - 1) {
+  /*
+   * 读多少配多少：上限按容量参数反推（见 fw_state_max_file_size）。旧的固定
+   * 128 KB 与「保存上限 4096 行」从来不自洽——接近写满的快照必然被截断，CRC
+   * 必然不符，于是「保存成功、恢复必失败」。
+   */
+  isize = i_size_read(file_inode(file));
+  if (isize <= 0)
+    goto out_close;
+  if ((u64)isize > (u64)cap) {
+    pr_err("状态文件 %lld 字节超过上限 %zu（按容量参数反推），拒绝恢复\n",
+           (long long)isize, cap);
+    ret = -EFBIG;
+    goto out_close;
+  }
+
+  /* 快照可达数 MB：用 vmalloc，不依赖高阶连续页 */
+  buf = vmalloc((size_t)isize + 1);
+  if (!buf) {
+    ret = -ENOMEM;
+    goto out_close;
+  }
+
+  while (len < isize) {
     loff_t pos = len;
-    ssize_t got = kernel_read(file, buf + len, FW_STATE_MAX_FILE - 1 - len, &pos);
+    ssize_t got = kernel_read(file, buf + len, (size_t)(isize - len), &pos);
 
     if (got <= 0)
       break;
     len += got;
   }
+
+out_close:
   filp_close(file, NULL);
 
-  if (len <= 0)
+  if (!buf || len <= 0)
     goto out;
 
   buf[len] = '\0';
@@ -533,7 +612,7 @@ int fw_state_restore(void) {
    * 两遍解析：先白名单后封禁，这样封禁恢复时的白名单前检一定命中，与文件里
    * WL / BAN 两段的先后无关。解析用 strsep 原地改写，故每遍先复制一份。
    */
-  work = kmalloc((size_t)len + 1, GFP_KERNEL);
+  work = vmalloc((size_t)len + 1);
   if (!work) {
     ret = -ENOMEM;
     goto out;
@@ -569,9 +648,9 @@ int fw_state_restore(void) {
     }
   }
 
-  kfree(work);
+  kvfree(work);
 
 out:
-  kfree(buf);
+  kvfree(buf);
   return ret;
 }

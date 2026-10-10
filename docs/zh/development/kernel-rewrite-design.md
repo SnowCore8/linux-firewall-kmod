@@ -104,11 +104,11 @@ DDoS 检测只在「非白名单且总开关开启」时运行；临时封禁到
 | `fw_stats.c` | per-CPU 统计与直方图 | `fw_stat_account()`（热路径）、`fw_stats_flush_local/_all()` |
 | `fw_local.c` | 本机地址集合 | `fw_is_local()`（热路径 RCU 读） |
 | `fw_wl.c` | 白名单精确桶 + 子网链 | `fw_wl_lookup()`（热路径 RCU 读）、`fw_wl_add/remove()` |
-| `fw_ban.c` | 封禁表 | `fw_ban_lookup()`（热路径 RCU 读）、`fw_ban_add/remove()`、per-entry 定时器 |
+| `fw_ban.c` | 封禁表 | `fw_ban_lookup()`（热路径 RCU 读）、`fw_ban_try_add/del()`、per-entry 定时器 |
 | `fw_rate.c` | 速率表、窗口、EWMA、违规判定 | `fw_rate_observe()`（热路径，一次查表返回判定） |
 | `fw_hook.c` | netfilter 钩子注册与报文解析 | 无（仅注册时暴露 hook 注册表） |
 | `fw_netlink.c` | netlink socket 与收发 | `fw_nl_init/exit()`、`fw_nl_send_*()` |
-| `fw_procfs.c` | 12 个 procfs 条目 | `fw_procfs_init/exit()` |
+| `fw_procfs.c` | 13 个 procfs 条目 | `fw_procfs_init/exit()` |
 | `fw_state.c` | 状态文件读写 | `fw_state_save()`、`fw_state_restore()` |
 | `fw_netdev.c` | netdev notifier、本机地址重建 | `fw_netdev_init/exit()` |
 
@@ -165,11 +165,22 @@ DDoS 检测只在「非白名单且总开关开启」时运行；临时封禁到
   是**共享 `atomic64_t`**，每包在多核间争用同一条 cache line。
 - 这些原始计数**只在一个地方被读取**：窗口滚动时计算新 EWMA。
   判定路径读的是 `smoothed_*`（已平滑值），不读原始计数。
-- 因此把原始计数移到 **per-CPU 槽位**：每 CPU 一组直接映射槽
+- 因此把原始计数移到 **per-CPU 槽位**：每 CPU 一组槽
   `{af, addr, packets, bytes, syn, udp, icmp, ack, rst, fin, seen_ports[32], seen_port_n, last_activity}`。
-  热路径只写本 CPU 内存；窗口滚动时（持桶锁的那个 CPU）汇总各 CPU 槽位并清零。
-- 槽位被不同源地址顶替时，**先把旧槽位归属的计数冲入对应条目**再复用，不允许静默丢计数
-  （速率检测不能容忍丢计数；分析类计数可以，见下）。
+  热路径只写本 CPU 内存；窗口滚动时由 `atomic_cmpxchg(&n->rolling, 0, 1)` 选出的那个
+  CPU 跨 CPU 汇总各槽并清零，热路径不为此取锁。
+- 槽与条目**一一对应**（`slot_idx` 在建条目时于 `rate_slot_lock` 下从地址哈希位置线性
+  探测空槽，此后固定）。原设计「槽被别的源地址顶替时先把旧计数冲入所属条目再复用」
+  实测不可行：把计数折回条目要求跨 CPU 读写该槽，而顶替发生在持桶锁的建条目路径上，
+  `on_each_cpu(wait=1)` 不能在桶锁内跑；不折回又会留下「哈希里还在、槽已易主」的僵尸
+  条目。故改为不顶替：整表探测不到空槽即视为表满，走契约里的**满则放行**
+  （`PROC_RATE_TABLE_FULL_FAILS_OPEN`）并由 `rate_slot_spill` 观测。
+- 表满不能是稳态，所以加了静默回收工作项（`fw_rate_reclaim_work`，10 秒一轮、每轮至多
+  64 条）：条目静默超过 `FW_RATE_PIN_SECONDS` 即摘链、清各 CPU 槽、`call_rcu` 释放。
+  代价是重新活跃的源需要约 3 个窗口才把 EWMA 拉回真实速率，远比「表满后永久不再检测」
+  便宜。回收只释放空闲槽，`rate_slot_spill` 只记「满则放行」，两者口径不混。
+- 可跟踪的源地址数上限是 `min(fw_max_rate_entries, FW_RATE_CPU_SLOTS)`，后者通常是瓶颈
+  （每 CPU 一组 512 槽，槽结构 168 B ⇒ 每 CPU 约 84 KB）。
 
 ### 分析直方图
 

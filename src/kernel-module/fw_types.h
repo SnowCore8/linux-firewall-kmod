@@ -87,12 +87,23 @@
 #define WHITELIST_HASH_BITS 6
 #define WHITELIST_HASH_SIZE (1 << WHITELIST_HASH_BITS)
 
-/* 速率表：65536 桶；条目上限由 fw_max_rate_entries 控制（既有模块参数） */
+/*
+ * 速率表：65536 桶。条目上限取 fw_max_rate_entries（既有模块参数）与
+ * FW_RATE_CPU_SLOTS 的较小值——后者是真正的瓶颈，见其定义处注释。
+ */
 #define RATE_HASH_BITS 16
 #define RATE_HASH_SIZE (1 << RATE_HASH_BITS)
 
-/* 每 CPU 直接映射槽位（速率窗口计数、UDP 端口分布、ICMP 类型分布） */
-#define FW_RATE_CPU_SLOTS 128
+/*
+ * 每 CPU 直接映射槽位（速率窗口计数、UDP 端口分布、ICMP 类型分布）。
+ *
+ * 速率槽是「一条目占一槽」，所以 FW_RATE_CPU_SLOTS 就是**同时在跟踪的源地址数**
+ * 硬上限（比 fw_max_rate_entries 更靠前）：槽位由 per-CPU 内存支付，512 槽约
+ * 每 CPU 84 KB（槽结构 168 B），128 槽时为 21 KB。上限之上的新源按契约
+ * 「满则放行」，由 rate_slot_spill 观测；空闲槽由回收工作项（fw_rate.c）在
+ * 静默超过保留时长后释放。
+ */
+#define FW_RATE_CPU_SLOTS 512
 #define FW_UDP_CPU_SLOTS 64
 #define FW_ICMP_CPU_SLOTS 32
 
@@ -294,7 +305,7 @@ struct fw_rate_node {
   atomic64_t smoothed_fin;
 
   atomic_t rolling;           /* 窗口滚动选举：0 空闲，1 结算中 */
-  u8 slot_idx;                /* 本条目在每 CPU 槽表中的固定下标 */
+  u16 slot_idx;               /* 本条目在每 CPU 槽表中的固定下标 */
   unsigned long window_start; /* 当前窗口起点（jiffies），仅滚动者写 */
   unsigned long last_activity;
 
@@ -308,15 +319,17 @@ struct fw_rate_node {
 };
 
 /*
- * 每 CPU 速率槽：直接映射表的一项，按 fw_hash_addr() % FW_RATE_CPU_SLOTS 定位。
+ * 每 CPU 速率槽：条目固定占用的一格，下标由 fw_rate_create() 在 slot_lock 下
+ * 探测分配（从地址哈希位置起线性探测空槽），此后条目与槽一一对应。
  *
- * 只有本 CPU 的热路径写这里；窗口滚动时由本 CPU 的槽把这些计数折回所属条目
- * （atomic），因此计数是 atomic64_t。
+ * 只有本 CPU 的热路径写这里；窗口滚动时由抢到选举的那个 CPU 跨 CPU 将各槽计数
+ * 折回所属条目（atomic），因此计数是 atomic64_t。
  *
- * entry 指回该槽归属的条目，使槽位被顶替时**无需二次查表**即可把旧计数折回
- * 对应条目。指针安全性：删除条目时先在所有 CPU 上把引用它的槽清零（entry 置
- * NULL），再 synchronize_rcu() 释放，因此 RCU 读者要么读到空槽，要么读到的
- * 条目必然存活。
+ * entry 指回该槽归属的条目，使热路径取到槽位后**无需二次查表**即可确认槽位仍
+ * 属于本条目。指针安全性：回收条目时先在桶锁下摘链，再由 on_each_cpu 在每 CPU
+ * 本地把指向该条目的槽清空并作废其残余计数，最后 call_rcu 释放条目。因此 RCU
+ * 读者要么读到空槽，要么读到的条目必然存活；条目被摘链后仍可能被热路径命中一次，
+ * 此时槽的 entry 已不是它，热路径直接放行（本窗口残余计数随之作废）。
  */
 struct fw_rate_cpu_slot {
   u8 af;
@@ -390,6 +403,7 @@ struct fw_stats_pcpu {
   u64 ttl_dist[FW_TTL_BUCKETS];
   u64 ip_frag_total;
   u64 ip_frag_count;
+  u64 rate_slot_spill; /* 满则放行 / 槽顶替次数，flush 并入全局 */
   struct fw_udp_cpu_slot udp[FW_UDP_CPU_SLOTS];
   struct fw_icmp_cpu_slot icmp[FW_ICMP_CPU_SLOTS];
 } ____cacheline_aligned_in_smp;
@@ -600,6 +614,8 @@ struct fw_info {
   spinlock_t rate_slot_lock; /* 保护槽位「探测空槽 + 发布」这一对操作 */
   struct fw_rate_pcpu __percpu *rate_pcpu;
   struct fw_rate_clear_ctx rate_clear_ctx;
+  struct delayed_work rate_reclaim_work; /* 静默条目的周期回收（fw_rate.c） */
+  atomic64_t rate_reclaimed;             /* 累计回收条目数（rates 表头） */
 
   /* 速率配置（运行态，由 SET_CONFIG / procfs 修改） */
   unsigned int rate_window_seconds;
@@ -635,7 +651,7 @@ struct fw_info {
   atomic64_t tcp_anomaly_dropped;
   atomic64_t cleanup_cycles; /* 有意保留：恒为 0，仅为不破坏外部解析 */
   atomic64_t cleanup_expired_total;
-  atomic64_t rate_slot_spill; /* per-CPU 速率槽被顶替且找不到条目时的计数 */
+  atomic64_t rate_slot_spill; /* 各 CPU rate_slot_spill 的汇总，flush 时并入 */
   atomic64_t global_traffic_packets;
   atomic64_t global_traffic_bytes;
 

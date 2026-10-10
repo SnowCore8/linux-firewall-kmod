@@ -100,17 +100,17 @@ struct fw_stats_pcpu *fw_stats_this_cpu(void) {
 /*
  * UDP 端口 / ICMP 类型用「per-CPU 直接映射槽 + 命中即累加」：
  * 槽按 (端口 / (类型,代码)) 直接索引，冲突时顶替。分析类计数**允许丢**（与速率
- * 计数不同，见 fw_rate.c），槽位被顶替时旧分布不再保留，只记一次
- * rate_slot_spill 观测；因此热路径无锁、无全局去重表查找。
+ * 计数不同，见 fw_rate.c），槽位被顶替时旧分布不再保留，只在本 CPU 的
+ * rate_slot_spill 上记一笔观测（flush 时并入全局，见 fw_stats_flush_local）；
+ * 因此热路径无锁、无共享 cache line 写、无全局去重表查找。
  */
 static inline void fw_stat_udp_account(struct fw_stats_pcpu *s, u16 port, u32 bytes) {
   struct fw_udp_cpu_slot *slot = &s->udp[port % FW_UDP_CPU_SLOTS];
 
   if (READ_ONCE(slot->port) != port || slot->packets == 0) {
-    /* 槽位顶替：旧槽位的分布计数丢弃（分析计数允许丢），
-		 * 仅递增观测计数。 */
+    /* 槽位顶替：旧槽位的分布计数丢弃（分析计数允许丢），仅记观测计数 */
     if (slot->packets)
-      fw_stat_bump_rate_spill();
+      s->rate_slot_spill++;
     slot->port = port;
     slot->packets = 1;
     slot->bytes = bytes;
@@ -126,7 +126,7 @@ static inline void fw_stat_icmp_account(struct fw_stats_pcpu *s, u8 type, u8 cod
 
   if (slot->type != type || slot->code != code || slot->packets == 0) {
     if (slot->packets)
-      fw_stat_bump_rate_spill();
+      s->rate_slot_spill++;
     slot->type = type;
     slot->code = code;
     slot->packets = 1;
@@ -183,8 +183,15 @@ void fw_stat_bump_alloc_fail(void) {
 void fw_stat_add_expired(u32 n) {
   atomic64_add(n, &fw_info.cleanup_expired_total);
 }
+/*
+ * 「满则放行 / 分布槽被顶替」的观测计数。热路径（fw_rate.c 建条目失败、上面的
+ * udp/icmp 顶替分支）只写本 CPU，flush 时并入 fw_info.rate_slot_spill，使
+ * fw_hook.c 声称的「每包零共享 cache line 写」对这一计数同样成立。
+ */
 void fw_stat_bump_rate_spill(void) {
-  atomic64_inc(&fw_info.rate_slot_spill);
+  if (unlikely(!stats_pcpu)) /* fw_stats_exit 之后的迟到调用 */
+    return;
+  this_cpu_inc(stats_pcpu->rate_slot_spill);
 }
 
 /* ============================================================================
@@ -320,6 +327,12 @@ static void fw_stats_flush_local(void *info) {
       memset(&s->icmp[i], 0, sizeof(s->icmp[i]));
     }
   }
+
+  /* 放在最后：上面两个 merge 自身也会顶替计数，同一轮并入全局 */
+  if (s->rate_slot_spill) {
+    atomic64_add(s->rate_slot_spill, &fw_info.rate_slot_spill);
+    s->rate_slot_spill = 0;
+  }
 }
 
 void fw_stats_flush_all(void) {
@@ -376,6 +389,11 @@ void fw_stats_snapshot(struct fw_stats_snapshot *out) {
   out->cleanup_expired_total = atomic64_read(&fw_info.cleanup_expired_total);
   out->global_packets = atomic64_read(&fw_info.global_traffic_packets);
   out->global_bytes = atomic64_read(&fw_info.global_traffic_bytes);
+}
+
+u64 fw_stats_rate_slot_spill(void) {
+  fw_stats_flush_all();
+  return atomic64_read(&fw_info.rate_slot_spill);
 }
 
 u64 fw_stats_take_traffic(u64 *bytes) {

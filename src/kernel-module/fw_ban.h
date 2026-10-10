@@ -39,17 +39,18 @@ bool fw_ban_lookup(u8 af, const void *ip);
 bool fw_ban_flood_allow(void);
 
 /*
- * 封禁/解封。prefix_len 为前缀长度（IPv4 0..32，IPv6 0..128）；全长表示精确
- * 单机，是旧接口的等价语义。非法前缀长度按 -EINVAL 拒绝。
- * duration_secs == 0 表示永久；>0 表示临时（per-entry 定时器到期摘链）。
- * reason/jail 可为 NULL（按空串处理）。
- * notify=true 时推送 BAN_STATE_CHANGE 事件（含 prefix_len）。
+ * 解封。prefix_len 为前缀长度（IPv4 0..32，IPv6 0..128），必须与封禁时一致
+ * 才能命中同一条目；非法前缀长度按 -EINVAL 拒绝。notify=true 时推送
+ * BAN_STATE_CHANGE 事件（含 prefix_len）。
+ * 添加侧没有裸的 add 入口，一律走下面的 fw_ban_try_add()。
  */
-int fw_ban_add(u8 af, const void *addr, u8 prefix_len, u32 duration_secs,
-               const char *reason, const char *jail, bool notify);
 int fw_ban_del(u8 af, const void *addr, u8 prefix_len, bool notify);
 
-/* 尝试封禁的完整入口（含白名单前检、容量检查、泛洪闸门、事件推送） */
+/*
+ * 尝试封禁的完整入口（含白名单前检、容量检查、泛洪闸门、事件推送）。
+ * prefix_len 语义同上，全长表示精确单机。duration_secs == 0 表示永久，>0 表示
+ * 临时（per-entry 定时器到期摘链）；reason/jail 可为 NULL（按空串处理）。
+ */
 int fw_ban_try_add(u8 af, const void *addr, u8 prefix_len, u32 duration_secs,
                    const char *reason, const char *jail, bool notify);
 
@@ -67,9 +68,6 @@ unsigned int fw_ban_recent_additions_stat(void);
 
 /* 读侧分页遍历：offset 为「IPv4 表序 + IPv6 表序」的全局下标 */
 u32 fw_ban_fill_entries(u32 offset, u32 limit, struct fw_ban_row *rows);
-
-/* 退出清理：摘链 + 取消定时器 + synchronize_rcu + rcu_barrier */
-void fw_ban_exit(void);
 
 /* 供白名单变更联动：解封落在某子网/精确地址内的条目 */
 void fw_ban_del_matching(u8 af, const void *network, u8 prefix_len);

@@ -71,13 +71,18 @@
 
 /*
  * 分页默认页大小与硬上限。
- * 硬上限由 u16 msg_len 上限 65535 与各响应的定长部分反推：
- *   bans        24 + n*94 <= 65535 → n <= 696
+ *
+ * 硬上限 = 「公共头 + n 个条目」仍装得进 u16 msg_len（65535）的最大 n，条目
+ * 大小由契约生成物 netlink_uapi.h 的 _Static_assert 固定：
+ *   bans        24 + n*95 <= 65535 → n <= 689
  *   whitelist   24 + n*34 <= 65535 → n <= 1926
  *   rates       40 + n*88 <= 65535 → n <= 744
+ * fw_netlink_init() 用 BUILD_BUG_ON 与 sizeof 双向对账（既装得下、且再加一条
+ * 就放不下），改任一 wire 结构都会当场编译失败。bans 曾按 94 B 反推成 696，
+ * 多出的 7 条把 msg_len 挤回绕。
  */
 #define FW_NL_DEFAULT_PAGE 256
-#define FW_NL_BANS_PAGE_MAX 696
+#define FW_NL_BANS_PAGE_MAX 689
 #define FW_NL_WL_PAGE_MAX 1926
 #define FW_NL_RATES_PAGE_MAX 744
 
@@ -732,7 +737,7 @@ static void fw_nl_handle_ban(u32 portid, u16 type, u8 af, u8 prefix_len,
 
 /*
  * 白名单增删。成功后的 WHITELIST_STATE_CHANGE 由本函数推送：fw_wl_add /
- * fw_wl_remove 自身不推送事件（与 fw_ban_add / fw_ban_del 不同，后者在
+ * fw_wl_remove 自身不推送事件（与 fw_ban_try_add / fw_ban_del 不同，后者在
  * notify=true 时自行推送），因此这里若漏推，daemon 就看不到白名单变化。
  */
 static void fw_nl_handle_whitelist(u32 portid, u16 type, u8 af, const void *addr,
@@ -992,6 +997,30 @@ int fw_netlink_init(void) {
   struct netlink_kernel_cfg cfg = {
     .input = fw_nl_recv_msg,
   };
+
+  /*
+   * 分页上限与 wire 结构双向对账：既装得进 u16 msg_len，又是装得下的最大值。
+   * 任一侧（契约条目布局或这里的常数）漂移都会在编译期失败。下面的缩写只为把
+   * 断言写进 80 列，算式本身不变。
+   */
+#define BANS_HDR sizeof(struct fw_list_bans_response)
+#define BANS_ESZ sizeof(struct fw_ban_entry)
+#define WL_HDR sizeof(struct fw_list_whitelist_response)
+#define WL_ESZ sizeof(struct fw_whitelist_entry)
+#define RATES_HDR sizeof(struct fw_list_rates_response)
+#define RATES_ESZ sizeof(struct fw_rate_entry)
+  BUILD_BUG_ON(BANS_HDR + FW_NL_BANS_PAGE_MAX * BANS_ESZ > 65535);
+  BUILD_BUG_ON(BANS_HDR + (FW_NL_BANS_PAGE_MAX + 1) * BANS_ESZ <= 65535);
+  BUILD_BUG_ON(WL_HDR + FW_NL_WL_PAGE_MAX * WL_ESZ > 65535);
+  BUILD_BUG_ON(WL_HDR + (FW_NL_WL_PAGE_MAX + 1) * WL_ESZ <= 65535);
+  BUILD_BUG_ON(RATES_HDR + FW_NL_RATES_PAGE_MAX * RATES_ESZ > 65535);
+  BUILD_BUG_ON(RATES_HDR + (FW_NL_RATES_PAGE_MAX + 1) * RATES_ESZ <= 65535);
+#undef BANS_HDR
+#undef BANS_ESZ
+#undef WL_HDR
+#undef WL_ESZ
+#undef RATES_HDR
+#undef RATES_ESZ
 
   fw_nl_sock = netlink_kernel_create(&init_net, FW_NL_PROTO, &cfg);
   if (!fw_nl_sock) {

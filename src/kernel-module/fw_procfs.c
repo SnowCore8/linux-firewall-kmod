@@ -30,11 +30,11 @@
  *      fw_wl_remove()（精确主机地址哈希集），本模块只负责归一化地址。
  *
  *   6. **白名单增删由本模块推送事件**。fw_wl_add() / fw_wl_remove() 自身不推送
- *      （与 fw_ban_add / fw_ban_del 不同），调用方负责发
+ *      （与 fw_ban_try_add / fw_ban_del 不同），调用方负责发
  *      WHITELIST_STATE_CHANGE，本模块是手动条目的唯一来源。
  *
  * 已知取舍（写入契约修订说明）：
- *   - 11 个 unstable 条目的表格布局尽量保持旧样；唯 rates 的窗口列打印的是
+ *   - 12 个 unstable 条目的表格布局尽量保持旧样；唯 rates 的窗口列打印的是
  *     **配置的窗口宽度**（fw_info.rate_window_seconds），因为读侧行结构
  *     (struct fw_rate_row) 不带每条的窗口起点，而设计上不允许为读侧给热路径
  *     条目加共享字段。
@@ -615,6 +615,18 @@ static int rates_show(struct seq_file *m, void *v) {
   seq_printf(m, "  rate_window_seconds: %u\n", fw_info.rate_window_seconds);
   seq_printf(m, "  max_packets_per_second: %lu\n", (unsigned long)fw_info.max_packets_per_second);
   seq_printf(m, "  max_bytes_per_second: %lu\n", (unsigned long)fw_info.max_bytes_per_second);
+  /*
+   * 容量与失败开放状态：同时跟踪的源地址数上限是 min(max_rate_entries,
+   * rate_cpu_slots)，超出后新源一律放行不判定。这是契约
+   * PROC_RATE_TABLE_FULL_FAILS_OPEN 记录的方向。stats 条目的 13 个 key 由
+   * 契约冻结，故这些观测只出现在本 unstable 表头里。
+   */
+  seq_printf(m, "  max_rate_entries: %u\n", fw_max_rate_entries);
+  seq_printf(m, "  rate_cpu_slots: %u\n", (unsigned int)FW_RATE_CPU_SLOTS);
+  seq_printf(m, "  rate_slot_spill: %llu\n",
+             (unsigned long long)fw_stats_rate_slot_spill());
+  seq_printf(m, "  rate_reclaimed: %llu\n",
+             (unsigned long long)atomic64_read(&fw_info.rate_reclaimed));
   seq_printf(m, "------------------------------------\n");
   seq_printf(m, "%-40s %12s %12s %8s\n", "IP Address", "Packets", "Bytes", "Window(s)");
 
