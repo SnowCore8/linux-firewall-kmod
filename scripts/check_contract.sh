@@ -8,14 +8,16 @@
 #   2. 按契约类型调用对应的第三方校验器：
 #        binary    （首个有效行不是 textproto/httpproto）：verify_layout.py
 #                     —— 生成物与内核/daemon 手写结构体逐字段比对 sizeof/offset，
-#                        并各自工具链编译生成物（rustc / tsc）
+#                        并各自工具链编译生成物（cc / tsc）
 #        textproto （首个有效行以 textproto 开头）：verify_procfs.py
 #                     —— 到源码里核对 proc_create 条目与权限、stats 字段与格式符、
 #                        写文法 token、容量数值与缺陷锚点
 #        http      （首个有效行以 httpproto 开头）：verify_http.py
-#                     —— 到 handler.rs / auth.rs / sse.rs 与前端 types.ts /
-#                        endpoints.ts 核对路由、认证、SSE、信封、业务码、安全头、
-#                        错误形状与跨层字段一致性
+#                     —— 到 daemon 的 internal/http 注册表与 handler、internal/kernel
+#                        消费端，以及前端 types.ts / endpoints.ts 核对路由、认证、SSE、
+#                        信封、业务码、安全头、错误形状与跨层字段一致性；缺陷的
+#                        status 当作可执行断言核对现场，未接线的缺口与冻结基线
+#                        （contract/http_gap_baseline.txt）做只减不增的比对
 #
 # 为什么：契约是三端接口的真相源。产物一旦与任一侧手写代码不一致，换用生成物
 # 就等于静默改变线协议/文本协议——双方互相丢弃报文且不报错。故此处必须门禁。

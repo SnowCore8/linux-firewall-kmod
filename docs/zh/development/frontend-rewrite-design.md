@@ -204,52 +204,26 @@ SSE 未连上或该域没推过数据时才回落到 REST。二者共用同一�
   经 `http://<局域网IP>:<port>` 访问时浏览器不暴露该 API、静默拒绝注册，「添加到主屏幕」不可用，
   但界面功能不受影响。这是浏览器硬约束，代码只降级不报错，文档如实记录。
 
-## 迁移纪律：遗留路由迁入期间的「前端零改动」
+## 缺口纪律：契约要求与 daemon 现状之间的棘轮
 
-这不是一个可完成的批次，而是 Phase 2 迁移全程必须守的**standing 规则**，故单列。
+这一节原先记的是「Phase 2 把遗留路由从 `handler.rs` 迁入 `api/router.rs` 期间前端零改动」
+那条 standing 规则，配套机制是 `verify_http.py::check_migration_ratchet` 对照契约里的
+`route_baseline legacy` 冻结基线。daemon 重写为 Go 后，Rust 侧的两个路由组与该基线块一并
+退役，检查器也随之删除——但**它背后的纪律留了下来，换成了更普遍的形式**。
 
-Phase 2 仍有一批分析类与日志类端点留在旧 handler 里（未迁入集合 = `handler.rs` 的
-`legacy_protected_routes()`；前端已经调用其中多项——封禁详情与建议、速率历史与窗口、
-各类分布统计、日志分页与日志流、信誉与阈值建议）。把它逐条列出来会随每次迁移失效，
-需要时按下面的方式取当前集合：
+契约（`contract/http.fwidl`）是 HTTP 面的单一真相源，要求**不因实现落后而删减**。Go daemon
+目前仍有大批要求没接线（缺路由、两条 SSE 各自的连接上限、安全头、载荷字段、业务码……），
+若让校验器就此长期全红，真漂移会淹在噪音里。于是缺口被冻结在
+`contract/http_gap_baseline.txt`，规则仍是**只减不增**，由 `verify_http.py::apply_gap_ratchet`
+三向比对：
 
-```bash
-# 未迁入集合：直接从源码取，不复制到文档（避免「文档说 23 条、代码已 18 条」这类漂移）
-python3 - <<'PY'
-import sys; sys.path.insert(0, 'contract')
-import verify_http as v
-pub, legacy, api_src, health = v.split_router_groups(v.read(v.HANDLER_RS), v.read(v.API_ROUTER_RS))
-for m in sorted({m.group(1) for m in v._ROUTE_RE.finditer(legacy)}):
-    print(m)
-PY
-```
+- 门禁报出的缺口指纹不在基线里 → 红：新缺口，必须显式加行才允许存在；
+- 基线里的条目不再被报出 → 红：那一格已补上，必须删行（刻意摩擦，让补齐动作显式落进版本库）；
+- 两边都有 → 不红，但按类别打印计数与「逐条见基线文件」，不静默。
 
-**规则**：这些端点迁入 `api/` 时**只换 handler 归属**——路径、载荷字段、错误形状一律不动。
-迁移提交不得包含 `frontend/` 的改动；每迁一批跑一遍前端回归（类型检查 + 契约门禁 +
-受影响页面的 e2e）。
-
-**这条规则已经有机械保障，不靠自觉**——改坏任一项都会让 `scripts/check_contract.sh` 变红：
-
-| 被保护的面 | 由谁核对 |
-|------------|----------|
-| 路径、认证归属、handler 名 | `verify_http.py::check_routes`（契约 ↔ 两个路由组逐条比对） |
-| 未迁集合只减不增 | `verify_http.py::check_migration_ratchet`（对照契约 `route_baseline legacy` 冻结基线） |
-| 载荷字段 | `check_types_rust`（每个载荷类型的每个字段都要在对应 Rust 结构体里找到） |
-| 前端 interface 与路径 | `check_types_frontend`、`check_routes_frontend`（与契约**双向**核对） |
-| 错误形状 | `check_errmodels` |
-
-因此「迁移顺带改了形状」这类事故在门禁上就会暴露，不需要人工比对 diff。
-
-**棘轮**（`check_migration_ratchet`）补上的是另一件事：`check_routes` 只按 `auth` 分组，
-而 legacy 与 api 两组的 `auth` 都是 `required`，所以「新端点直接写进旧 handler」它能通过。
-棘轮把「未迁集合」冻结在契约里，规则是**只能变小**：
-
-- 基线里的路由必须真的还在 `legacy_protected_routes()` 里 —— 少一条即报错（防顺手删除）；
-- 源码里出现基线之外、又不在 `api/` 组的路由 —— 报「新端点必须迁入 `api/`」。
-
-迁移一条后**必须**同步删除 `contract/http.fwidl` 里 `route_baseline legacy` 的对应行，
-否则该路由会同时命中上面两条（刻意摩擦：迁移动作要显式落进契约）。
-只改基线行、不真迁移源码同样会红。
+重新冻结基线只在人为核对后手工运行：`python3 contract/verify_http.py --write-gap-baseline`。
+实现与契约**矛盾**的东西不该进基线——那是要修的实现，不是可冻结的缺口，棘轮认不出来时
+会以「无法归类的问题」直接算红。
 
 ## 验收门槛
 

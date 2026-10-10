@@ -65,10 +65,10 @@ jobs:
           python3 contract/verify_layout.py
           python3 contract/verify_procfs.py
 
-      # HTTP 面仍在按契约补齐（daemon 从 Rust 迁到 Go，路由与载荷尚未对齐），
-      # 故暂不阻塞；缺失项由校验器按「只许缩小」的棘轮上报。补齐后置回阻塞。
-      - name: 校验 HTTP 契约 vs daemon（暂不阻塞）
-        continue-on-error: true
+      # HTTP 面按契约补齐（daemon 从 Rust 迁到 Go）。尚未接线的条目冻结在
+      # contract/http_gap_baseline.txt 里，规则是只减不增：新缺口必须显式加行，
+      # 补上了必须删行，所以这一步阻塞。
+      - name: 校验 HTTP 契约 vs daemon
         run: python3 contract/verify_http.py
 
   # 前端任务：类型检查 + 构建 + 产物校验（独立执行，与 lint 并行）

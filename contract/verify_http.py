@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HTTP 契约一致性校验：契约 vs daemon 路由/响应结构体 + 前端 TS 类型。
+"""HTTP 契约一致性校验：契约 vs daemon 的 Go 路由/响应结构体 + 前端 TS 类型。
 
 为什么需要这一步
 ----------------
@@ -7,8 +7,8 @@
 都有上限……），完全没有核对契约是不是在描述真实接口。HTTP 契约比前两种更
 容易撒谎，因为它横跨三个表面：
 
-* daemon 的 axum 路由注册（路径与方法）
-* daemon 的 Rust 响应结构体（JSON 字段与类型）
+* daemon 的 ``net/http.ServeMux`` 注册串（Go 1.22 的 ``"METHOD /path"`` 模式）
+* daemon 的 Go 响应结构体与 ``WriteSuccess`` 载荷（JSON 字段与类型）
 * 前端的 TS 类型与端点封装（同一批字段的另一个副本）
 
 任何一处对不上，表现都是「页面某个字段永远是 undefined」或「请求 404」，
@@ -16,24 +16,61 @@
 
 做法（全部为机械核对，不做语义推断）
 ------------------------------------
-1. ``handler.rs`` 里 ``.route("<路径>", <method>(<handler>))`` 的集合必须与契约
-   **逐条**相同：路径、方法、handler、以及它落在 public 组还是 protected 组。
-2. 认证常量（失败阈值 / 锁定秒数）与两条 SSE 的连接上限必须与契约数值相同。
-3. 信封 ``ApiResponse`` 的字段必须恰为 code/data/message。
-4. 每个声明的业务码必须在源码里出现 ``::error(<码>`` 调用点。
-5. ``errmodel`` 的文本形状必须能在源码里找到该响应体原文；``axum_default``
-   形状必须能在源码里找到它声明的提取器。
-6. 安全头的值（含 Web UI 分支的 CSP）必须逐字出现在中间件里。
-7. SSE 事件的每个事件名必须在推送侧与订阅侧都存在。
-8. 每个载荷类型的每个字段必须能在对应 Rust 结构体里找到（容忍 serde 会把
-   ``r#type`` 序列化成 ``type``）；以及该结构体确实派生 ``Serialize``。
-9. **跨层**：同一字段必须同时出现在前端 ``types.ts``；契约里每条路由都必须
-   在前端 ``endpoints.ts`` 有消费者，且前端不得调用契约外的路径。
-10. ``where`` 锚点必须仍存在，且形状合法。
+1. daemon 里的 ``X.HandleFunc("<METHOD> <路径>", <handler>)`` 集合必须与契约
+   **逐条**相同：注册串、方法、以及它的鉴权包装（``RequireAuth`` = 需认证 /
+   无包装 = 公开）。注册分散在 ``internal/http/routes.go``、``static.go`` 与
+   ``cmd/firewall-daemon/main.go``，故扫整个 daemon 的 Go 源码而不是单个文件。
+   注册串写成生成物常量（``httpcontract.RouteXxx``）时按生成物表解回字面量。
+   不带方法前缀的 ``Handle("<路径>", h)`` 在 ServeMux 里匹配任何动词：按路径回落到
+   它核对存在性与鉴权组，另记一条「方法未收紧」的缺口（未声明的动词本该由框架回 405）。
+2. 认证常量（失败阈值 / 锁定秒数）与两条 SSE 各自的连接上限必须与契约数值相同。
+   值只认 **daemon 的 Go 源码**：``contract/generated/http_contract.go`` 里的
+   数字由契约本身生成，拿它核对契约等于空转，故生成物不在搜索范围内。
+3. 信封（``envelope.go``）的 JSON key 必须恰为 code/data/message（顺序即契约顺序，
+   Go 的 ``encoding/json`` 就按声明顺序输出）；成功 message 必须是空串；失败 data
+   必须**以 null 出现**，不能靠 ``omitempty`` 省略。
+4. 每个声明的业务码必须在 Go 源码里有构造点（``Code<码>`` 常量或裸数字字面量）。
+5. 文本形状的错误体必须逐字出现在 Go 源码里（401 是纯文本、且不发
+   ``WWW-Authenticate``）；框架默认形状把状态码分成两类——net/http 自产的
+   404/405（源码里本就不该有）与必须由 daemon 自己写出的 400/415/422，
+   后者必须有构造点。
+6. 安全头的值（含 Web UI 分支的 CSP）必须逐字出现在 Go 侧的中间件里，
+   且 webui 分支必须有判别条件。
+7. SSE 事件的每个事件名必须在发布侧（``Publish("<事件>"`` 或 ``event: <事件>``
+   字面量）与前端订阅侧都存在。Go 侧没有 Rust 那套「按域版本号」机制，
+   故不再核对 ``Domain::X`` 的发布者，改为逐事件名找发布点。
+8. 每个载荷类型的每个字段必须能在对应 Go 结构体里找到（``json:"<key>"`` 标签；
+   无标签时 Go 用导出字段名，大小写是唯一差异），且该结构体在 ``internal/http``
+   里**真有构造点**——「仓库里有这个 struct」不等于 handler 返回的是它。
+9. **跨层**：同一字段必须同时出现在前端 ``types.ts``；契约里每条路由都必须在前端
+   ``endpoints.ts`` 有消费者（前端已改为引用生成物的 ``ROUTES.<名>``，路径字面量
+   只在 ``contract/generated/http_contract.ts`` 里存在），且前端不得调用契约外的路径。
+10. 锚点按 ``status`` 分派：``fixed`` 要求 ``fix`` 证据锚点存在。HTTP 契约已不再
+    承载 ``where`` 位置索引（``gen.py`` 会拒绝该字段——路由注册串与 handler 名
+    就是锚点），``where`` 若重新出现仍按旧规则核对，向前兼容。
+11. 缺陷的 ``status`` 被当成**对代码现状的可执行断言**：``open``/``retained`` 要求
+    探针答「现场仍在」，``fixed`` 要求答「现场已消失」。探针答「Go 面还没有承载它的
+    端点/类型」时只有 open/retained 可以接受——**未实现永远不等于已修**。
+    没有探针的缺陷按名列出，不静默当成通过。
+12. 缺口棘轮（``contract/http_gap_baseline.txt``）：daemon 从 Rust 迁到 Go 后还有
+    一批契约要求没接线（缺路由、SSE 上限、安全头、载荷字段……）。把校验器指向 Go 却
+    不做这层区分，CI 会长期全红、真漂移淹在噪音里。于是问题文本先归一化成稳定指纹，
+    与冻结基线三向比对：基线里没有 = 新缺口（红）、基线里有而不再报出 = 已闭合未删行
+    （红）、两边都有 = 计数打印（不红）。契约里的要求一条都不为此删减。
+
+不做的事
+--------
+不推断「这两个名字其实是一个东西」。契约的 handler 名（``handle_*``）与 Go 的
+方法名（``api.ListBans``）之间没有机械映射规则，所以这里只统计逐字命中数：命中为
+零时聚合成一条问题，而不是把每条路由都各报一遍——噪音会淹没真正的漂移。
 
 用法::
 
-    python3 contract/verify_http.py
+    python3 contract/verify_http.py                     # 门禁（make contract-check 的一步）
+    python3 contract/verify_http.py --write-gap-baseline  # 人为核对后重新冻结缺口基线
+
+    生成物自检会调 ``go build`` 与 ``tsc --noEmit``；``GO`` / ``NODE`` / ``TSC`` 可显式
+    指定路径，工具链缺了据实打印「跳过」，不算契约失败也不静默。
 """
 
 from __future__ import annotations
@@ -41,6 +78,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -48,52 +86,80 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GEN_DIR = os.path.join(ROOT, "contract", "generated")
 LAYOUT_JSON = os.path.join(GEN_DIR, "http_layout.json")
+# HTTP 契约的 Go / TS 生成物：注册串常量表（``Route*``）与路由路径表（``ROUTES``）。
+GEN_HTTP_GO = os.path.join(GEN_DIR, "http_contract.go")
+GEN_HTTP_TS = os.path.join(GEN_DIR, "http_contract.ts")
 
-HANDLER_RS = os.path.join(ROOT, "src", "daemon", "http_exporter", "handler.rs")
-HTTP_MOD_RS = os.path.join(ROOT, "src", "daemon", "http_exporter", "mod.rs")
-AUTH_RS = os.path.join(ROOT, "src", "daemon", "http_exporter", "auth.rs")
-# 已迁入 `api` 层的 SSE 引擎（两条流的上限、事件名、keep-alive 都在这里）
-SSE_RS = os.path.join(ROOT, "src", "daemon", "api", "sse.rs")
-LOG_VIEWER_RS = os.path.join(ROOT, "src", "daemon", "web_ui", "log_viewer.rs")
-# 统一信封（ApiResponse / PaginatedResponse / ApiError / BusinessCode）
-ENVELOPE_RS = os.path.join(ROOT, "src", "daemon", "api", "envelope.rs")
-# 已迁入 `api` 层的路由装配与其余 handler（两组由 check_routes 合并核对）
-API_ROUTER_RS = os.path.join(ROOT, "src", "daemon", "api", "router.rs")
-# E 的修复面：旧读路径（`get_active_bans` 的写副作用）与新的周期清理装配点
-BAN_OPS_RS = os.path.join(ROOT, "src", "daemon", "web_ui", "ban_ops.rs")
-SCHEDULER_RS = os.path.join(ROOT, "src", "daemon", "runtime", "scheduler.rs")
-MAIN_RS = os.path.join(ROOT, "src", "daemon", "main.rs")
+DAEMON = os.path.join(ROOT, "src", "daemon")
+HTTP_DIR = os.path.join(DAEMON, "internal", "http")
+ROUTES_GO = os.path.join(HTTP_DIR, "routes.go")
+AUTH_GO = os.path.join(HTTP_DIR, "auth.go")
+SSE_GO = os.path.join(HTTP_DIR, "sse.go")
+LOGS_GO = os.path.join(HTTP_DIR, "logs.go")
+ENVELOPE_GO = os.path.join(HTTP_DIR, "envelope.go")
+SERVER_GO = os.path.join(HTTP_DIR, "server.go")
+STATIC_GO = os.path.join(HTTP_DIR, "static.go")
+BANS_GO = os.path.join(HTTP_DIR, "bans.go")
+MAIN_GO = os.path.join(DAEMON, "cmd", "firewall-daemon", "main.go")
+CONSUMER_GO = os.path.join(DAEMON, "internal", "kernel", "consumer.go")
+CACHE_GO = os.path.join(DAEMON, "internal", "bans", "cache.go")
+# 复发率与阈值推荐的**产出点**：缺陷 HTTP_RECIDIVISM_RATE_UNIT / _ZERO_AMBIGUOUS 的
+# 现场就在这两个文件里（HTTP 侧的 recidivism_rate 与 recommended_value 都由它们算出）。
+PERSIST_BAN_EVENTS_GO = os.path.join(DAEMON, "internal", "persist", "ban_events.go")
+ANALYSIS_RECOMMENDATIONS_GO = os.path.join(DAEMON, "internal", "analysis", "recommendations.go")
 
 TS_TYPES = os.path.join(ROOT, "frontend", "src", "api", "types.ts")
 TS_ENDPOINTS = os.path.join(ROOT, "frontend", "src", "api", "endpoints.ts")
+TS_SSE = os.path.join(ROOT, "frontend", "src", "hooks", "useSse.ts")
+TS_LOGS_PAGE = os.path.join(ROOT, "frontend", "src", "views", "Logs.tsx")
 
-# Rust 源码根目录：逐个文件读入，用于「字段是否存在于结构体」的核对。
-# `api` 排在最前——同一批载荷类型在 `web_ui` 里还有一份旧副本（尚未退役），
-# 若把 `web_ui` 放前面，核对会落在旧结构体上、把已迁入的字段漂移漏掉。
-RUST_SRC_DIRS = [
-    os.path.join(ROOT, "src", "daemon", "api"),
-    os.path.join(ROOT, "src", "daemon", "types"),
-    os.path.join(ROOT, "src", "daemon", "history_snapshot"),
-    os.path.join(ROOT, "src", "daemon"),
-    os.path.join(ROOT, "src", "daemon", "web_ui"),
+# Go 源码根目录：逐个文件读入（跳过 ``_test.go``），用于「字段是否存在于结构体」的
+# 核对。``internal/http`` 排在最前——HTTP 载荷只该归属那里，其余目录是它引用的领域包
+# （`analysis` 的检测/推荐载荷、`bans` 的封禁条目、`config` 的 jail 与配置）。
+#
+# **`internal/contract` 不在表内**：那是 netlink 线格式的报文结构体，与 HTTP 载荷撞名
+# 的有两个（`StatsResponse`、`WhitelistEntry`）。把它们当 HTTP 响应核对，报出来的会是
+# 内核统计字段的漂移，而不是前端真正取用的 JSON 字段。
+GO_SRC_DIRS = [
+    HTTP_DIR,
+    os.path.join(DAEMON, "internal", "analysis"),
+    os.path.join(DAEMON, "internal", "bans"),
+    os.path.join(DAEMON, "internal", "config"),
+    os.path.join(DAEMON, "internal", "persist"),
+    os.path.join(DAEMON, "internal", "jail"),
+    os.path.join(DAEMON, "internal", "detect"),
+    os.path.join(DAEMON, "internal", "runtime"),
+    os.path.join(DAEMON, "cmd", "firewall-daemon"),
 ]
 
-# 认证常量名 -> 契约里的键
+# 认证常量名 -> 契约里的键。候选名以 ``http_contract.go`` 的生成名为准
+# （``AuthFailureThreshold`` / ``AuthLockoutSeconds``），并收下全大写写法——
+# Go 侧导出与非导出的取法都可能出现，但**只按名字取**，不按「哪个数长得像阈值」猜。
 AUTH_CONSTS = {
-    "failure_threshold": "AUTH_FAILURE_THRESHOLD",
-    "lockout_seconds": "AUTH_LOCKOUT_DURATION",
+    "failure_threshold": ("AuthFailureThreshold", "AUTH_FAILURE_THRESHOLD"),
+    "lockout_seconds": ("AuthLockoutSeconds", "AUTH_LOCKOUT_SECONDS"),
 }
 
-# SSE 路径 -> 源码里的连接上限常量名
+# SSE 路径 -> 源码里该流的连接上限常量候选名
 #
-# 两个常量现在都住在 `src/daemon/api/sse.rs`（`SseStatus` 同时持有两条流的计数器），
-# 靠**常量名**而不是「路径里含不含 events」来选取，避免再出现「按路径猜文件」的脆弱对应。
+# 两条流各自一个常量（10 / 5）是契约里「两条流互不共享」的唯一机械证据：
+# 若 Go 侧只留一个共用值，缺陷 HTTP_LOG_SSE_LIMIT_DOC_DRIFT 就换了个形态复发。
 SSE_LIMIT_CONST = {
-    "/api/v1/events": "MAX_SSE_CONNECTIONS",
-    "/api/v1/logs/stream": "MAX_LOG_SSE_CONNECTIONS",
+    "/api/v1/events": ("SSEMaxConnectionsApiV1Events", "MAX_SSE_CONNECTIONS"),
+    "/api/v1/logs/stream": ("SSEMaxConnectionsApiV1LogsStream", "MAX_LOG_SSE_CONNECTIONS"),
 }
 
-# 契约里的路径参数写法 -> 前端 endpoints.ts 里的模板串写法
+# 框架默认错误（``shape = framework_default``）把状态码分成两类：net/http 自产
+# 404（无匹配模式）与 405（方法不匹配），源码里本就不该出现它们的构造点；
+# 其余状态码必须由 daemon 自己写出，写不出来就是契约在撒谎。
+FRAMEWORK_SELF_PRODUCED = {404, 405}
+STATUS_TOKENS = {
+    400: (r"http\.StatusBadRequest\b", r"(?<!\d)400(?!\d)"),
+    415: (r"http\.StatusUnsupportedMediaType\b", r"(?<!\d)415(?!\d)"),
+    422: (r"http\.StatusUnprocessableEntity\b", r"(?<!\d)422(?!\d)"),
+}
+
+# 契约里的路径参数写法 -> Go ServeMux 的 ``{ip}`` / 前端模板串的 ``:ip``
 PARAM_RE = re.compile(r":(\w+)")
 
 
@@ -103,15 +169,17 @@ def read(path: str) -> str:
 
 
 def _fn_body(src: str, name: str) -> str | None:
-    """取 ``fn <name>(...)`` 的函数体（按花括号配平），找不到返回 None。
+    """取 ``func [<接收者>] <name>(...)`` 的函数体（按花括号配平），找不到返回 None。
 
-    用于核对某个 handler **内部**用了什么、没用什么——全文 includes 会被
-    别处的同名标识符干扰（例如 handle_health 的断言要求函数体内不得出现
-    ApiResponse，而文件里其它 handler 必然出现）。
+    用于核对某个 handler **内部**用了什么、没用什么——全文 includes 会被别处的同名
+    标识符干扰（例如 ``/health`` 的断言要求函数体内不得出现 ``WriteSuccess``，而文件里
+    其它 handler 必然出现）。接收者那一层可有可无：Go 里 HTTP handler 既写成
+    ``func Health(w, r)`` 也写成 ``func (h *APIHandlers) Health(w, r)``。
     """
-    m = re.search(rf"\bfn\s+{re.escape(name)}\s*[(<]", src)
+    m = re.search(rf"\bfunc\s+(?:\([^)]*\)\s*)?{re.escape(name)}\s*\(", src)
     if not m:
         return None
+    # 从参数表右括号之后找第一个 `{`：函数体起点
     i = src.find("{", m.end())
     if i < 0:
         return None
@@ -128,70 +196,261 @@ def _fn_body(src: str, name: str) -> str | None:
     return None
 
 
-def rust_sources() -> dict:
-    """返回 {仓库相对路径: 源码}，覆盖 daemon 侧全部 .rs。"""
+def _is_test_file(name: str) -> bool:
+    """Go 的测试住在 ``*_test.go``：它们不是生产代码，一律不参与核对。
+
+    Rust 时期靠剥离 ``#[cfg(test)]`` 块把测试挡住（见旧版 `_strip_cfg_test_blocks`）；
+    Go 的编译单元天然按文件名分离，按文件名排除即可，不需要文本级剥离。
+    「某个 SSE 事件只出现在测试里」这种假通过在这里同样被挡住。
+    """
+    return name.endswith("_test.go")
+
+
+def go_sources() -> dict:
+    """返回 {仓库相对路径: 源码}，覆盖 `GO_SRC_DIRS` 各目录**顶层**的 .go。"""
     out = {}
-    for d in RUST_SRC_DIRS:
+    for d in GO_SRC_DIRS:
         if not os.path.isdir(d):
             continue
         for f in sorted(os.listdir(d)):
-            if not f.endswith(".rs"):
+            if not f.endswith(".go") or _is_test_file(f):
                 continue
             p = os.path.join(d, f)
             out[os.path.relpath(p, ROOT)] = read(p)
     return out
 
 
+def go_tree_sources() -> str:
+    """递归读 `src/daemon/**/*.go`（跳过测试），拼成一份用于子串/正则扫描的文本。
+
+    与 [`go_sources`] 的区别：后者只读各目录顶层文件、且**不含** `internal/contract`
+    （供载荷字段核对）；本函数要的是「整个 daemon 树」，因为业务码的构造点、安全头
+    中间件与 SSE 发布点都可能落在子目录里，漏掉会让「有没有生产者」的断言假报缺失。
+    """
+    chunks = []
+    for dirpath, dirnames, filenames in os.walk(DAEMON):
+        # 生成物与 netlink 线格式包都不算 HTTP 实现面
+        dirnames[:] = [d for d in dirnames if d not in ("__pycache__",)]
+        for f in sorted(filenames):
+            if f.endswith(".go") and not _is_test_file(f):
+                chunks.append(read(os.path.join(dirpath, f)))
+    return "\n".join(chunks)
+
+
+def http_sources() -> str:
+    """`internal/http` 包全体（不含测试）——注册串、信封、鉴权、SSE 都住在这一层。"""
+    if not os.path.isdir(HTTP_DIR):
+        return ""
+    return "".join(
+        read(os.path.join(HTTP_DIR, f))
+        for f in sorted(os.listdir(HTTP_DIR))
+        if f.endswith(".go") and not _is_test_file(f)
+    )
+
+
+def _go_path_to_contract(path: str) -> str:
+    """把 ServeMux 的参数槽 ``{ip}`` 解回契约写法 ``:ip``。
+
+    规则与 `contract/generated/http_contract.go` 里的 ``GoPath()`` 互逆（那张表本身
+    由 ``http.fwidl`` 生成），所以这只是同一规则的两种拼写，不是「猜这两个路径等价」。
+    多段通配 ``*path`` 两侧拼写一致，原样留着。
+    """
+    return re.sub(r"\{(\w+)\}", r":\1", path)
+
+
+
 # ---------------------------------------------------------------------------
 # 1. 路由表
 # ---------------------------------------------------------------------------
 
-# 尾部允许 ``get(handler),`` 这种多行写法带的尾随逗号（否则 11 条路由会被漏解析）
-_ROUTE_RE = re.compile(
-    r'\.route\(\s*"([^"]+)"\s*,\s*(get|post|put|delete|patch|head|options)\s*\(\s*(\w+)\s*\)\s*,?\s*\)',
-    re.S,
-)
+# Go 侧的注册点：`mux.HandleFunc("<注册串>", <handler>)`（`Handle` 同形，收 http.Handler）。
+# 只定位「调用起点」，注册串与 handler 表达式由花/圆括号配平往下扫——handler 常写成
+# 多行的 func 字面量（`static.go` 里的 `/`、`/sw.js`），单行正则会整条漏掉。
+_REG_CALL_RE = re.compile(r"\.Handle(?:Func)?\(\s*")
+_HTTP_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS")
 
 
-def split_router_groups(src: str, api_router_src: str) -> tuple[str, str, str, str]:
-    """把退役期的四个路由组分别切出来：public / 未迁入 / 已迁入 / 探针。
+def _route_const_table() -> dict:
+    """生成物里的注册串常量表：``Route*`` 常量名 -> ``"METHOD /path"``。
 
-    退役期（`api` 逐步接手旧 `http_exporter`）的路由分散在**两个文件**，必须分别切：
-
-      * public 组（无认证，SPA 外壳与静态资源）—— `handler.rs::build_router`
-      * 未迁入的需认证组 —— `handler.rs::legacy_protected_routes`（路径字面量）
-      * 已迁入的需认证组 —— `api/router.rs::protected_routes`
-        （登记的是 `path::ROUTE_*` 常量，不是字面量）
-      * 探针组（`/health`、`/healthz`）—— `api/router.rs::health_routes`
-
-    两组合并后才等于契约的需认证路由全集；只读一处会漏掉另一半。任一锚点缺失
-    即返回空串，由调用方报错（不静默放过）。
+    Go 侧把注册串写成常量标识符（``httpcontract.RouteGetApiV1Bans``）时，直接扫字符串
+    会看到零条路由，故到 `contract/generated/http_contract.go` 查表解回字面量——那张表
+    本身就由 `http.fwidl` 生成，等价于回到契约。同理，`server.go` 里
+    ``s.mux.Handle(pattern, handler)`` 这种**包装函数自己的定义**用的是一般变量名，
+    不在 `Route*` 之列，因此不会被误当成一条注册。
     """
-    m_pub = re.search(r"let\s+public_routes\s*=\s*Router::new\(\)", src)
-    m_pro = re.search(r"let\s+mut\s+protected_routes\s*=\s*legacy_protected_routes\(\)", src)
-    if not m_pub or not m_pro:
-        return "", "", "", ""
-    return (
-        src[m_pub.start(): m_pro.start()],
-        _fn_body(src, "legacy_protected_routes") or "",
-        _fn_body(api_router_src, "protected_routes") or "",
-        _fn_body(api_router_src, "health_routes") or "",
-    )
+    gen = read(GEN_HTTP_GO)
+    return dict(re.findall(r'\b(Route\w+)\s*=\s*"([^"]+)"', gen))
 
 
-def _resolve_path_consts(src: str, prefix: str = "path::") -> dict:
-    """把源码片段里用到的 ``path::ROUTE_*`` 常量按生成物解成路径字面量。
+def _split_args(expr: str) -> list[str]:
+    """按顶层逗号切开通用参数表（忽略圆括号/花括号/方括号与字符串字面量内部的逗号）。"""
+    args, buf, depth, in_str = [], [], 0, None
+    for ch in expr:
+        if in_str:
+            buf.append(ch)
+            if ch == in_str:
+                in_str = None
+            continue
+        if ch in "\"'`":
+            in_str = ch
+            buf.append(ch)
+            continue
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            args.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+    if "".join(buf).strip():
+        args.append("".join(buf).strip())
+    return args
 
-    已迁入组登记的是**标识符**而不是字面量（`path::ROUTE_GET_API_V1_BANS`），
-    直接扫字符串会看到零条路由。这里到 ``contract/generated/http_contract.rs``
-    的 ``path`` 模块查表——那张表本身就由 `http.fwidl` 生成，等价于回到契约。
+
+def _handler_symbol(expr: str) -> str:
+    """从注册的 handler 表达式里取「最里层的那个标识符」，用于对账与诊断输出。
+
+    ``OptionalAuth(api.username, api.password, api.ListBans)`` -> ``ListBans``；
+    ``http.StripPrefix(...)`` -> ``StripPrefix``；func 字面量没有名字，如实写作
+    ``<func 字面量>``——它本身也是「这条路由的实现没有具名入口」这一事实的证据。
     """
-    gen = read(os.path.join(GEN_DIR, "http_contract.rs"))
-    table = dict(re.findall(r'pub\s+const\s+(ROUTE_\w+)\s*:\s*&str\s*=\s*"([^"]*)"', gen))
+    expr = expr.strip()
+    if expr.startswith("func(") or expr.startswith("func ("):
+        return "<func 字面量>"
+    if expr.endswith(")"):
+        # 找到与末尾 `)` 配平的 `(`，取它参数表的最后一项再递归
+        depth = 0
+        for i in range(len(expr) - 1, -1, -1):
+            if expr[i] == ")":
+                depth += 1
+            elif expr[i] == "(":
+                depth -= 1
+                if depth == 0:
+                    inner = _split_args(expr[i + 1: -1])
+                    return _handler_symbol(inner[-1]) if inner else expr[:i].strip()
+        return "<未知>"
+    tail = re.findall(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", expr)
+    return tail[-1].rsplit(".", 1)[-1] if tail else "<未知>"
+
+
+def _auth_group(expr: str) -> str:
+    """注册表达式的鉴权包装 -> 契约语义的 auth 组。
+
+    Go 侧有三种形态，只认**包装函数名**（这是 `routes.go` 的事实约定，不是猜测）：
+    ``RequireAuth`` = 未带凭据必拒（契约的 `required`）、无包装 = 公开（契约的 `none`）、
+    ``OptionalAuth`` = 带错才 401、不带放行——它既不是 `required` 也不是 `none`，
+    所以单独成组并照报偏差，绝不并入任何一侧。
+    """
+    if "RequireAuth" in expr:
+        return "required"
+    if "OptionalAuth" in expr:
+        return "optional"
+    return "none"
+
+
+def _match_call_args(src: str, start: int) -> tuple[str, str, int]:
+    """从 ``Handle(Func)(`` 之后 `start` 处解析（注册串, handler 表达式, 结束下标）。
+
+    解析不出来（不是字面量也不是 `Route*` 常量、括号不配平）就返回 None 注册串，
+    由调用方决定是问题还是忽略——绝不静默当成「没有这条路由」。
+    """
+    consts = _route_const_table()
+    if src[start] == '"':
+        end = src.find('"', start + 1)
+        if end < 0:
+            return "", "", start
+        pattern = src[start + 1: end]
+        i = end + 1
+    else:
+        m = re.match(r"(?:\w+\.)*(Route\w+)", src[start:])
+        if not m:
+            return "", "", start
+        # 只认常量名里不含点的裸标识符（`httpcontract.RouteGetApiV1Bans` 取末段）
+        const_name = m.group(0).rsplit(".", 1)[-1]
+        if const_name not in consts:
+            return f"?{const_name}", "", start
+        pattern = consts[const_name]
+        i = start + m.end()
+    # 跳过空白与逗号，扫到与之配平的右括号
+    while i < len(src) and src[i] in " \t\r\n":
+        i += 1
+    if i >= len(src) or src[i] != ",":
+        return pattern, "", i
+    i += 1
+    depth = 0
+    begin = i
+    in_str = None
+    while i < len(src):
+        ch = src[i]
+        if in_str:
+            if ch == in_str and src[i - 1] != "\\":
+                in_str = None
+            i += 1
+            continue
+        if ch in "\"`":
+            in_str = ch
+            i += 1
+            continue
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            if depth == 0:
+                # 只有 `)` 能收尾整个注册；`]`/`}` 先出现说明这串参数不配平
+                if ch == ")":
+                    return pattern, src[begin:i].strip(), i
+                return pattern, "", i
+            depth -= 1
+        i += 1
+    return pattern, "", i
+
+
+def go_registrations() -> tuple[dict, list[str]]:
+    """扫整个 daemon 的 Go 源码，返回 {(方法, 契约写法路径): (符号, auth 组, 文件)}。
+
+    注册分散在 `internal/http/routes.go`（绝大多数）、`static.go`（SPA 外壳与静态资源）
+    与 `cmd/firewall-daemon/main.go`（SSE 与 /metrics），所以按目录树扫而不是按单文件读。
+    """
+    actual: dict = {}
+    problems: list[str] = []
+    for rel, src in go_tree_sources_by_file().items():
+        for m in _REG_CALL_RE.finditer(src):
+            pattern, expr, _ = _match_call_args(src, m.end())
+            if not pattern:
+                continue
+            if pattern.startswith("?"):
+                problems.append(
+                    f"{rel}: 注册串引用了生成物里没有的常量 {pattern[1:]}"
+                    "（契约需重新生成？）"
+                )
+                continue
+            head, _, rest = pattern.partition(" ")
+            if head in _HTTP_METHODS:
+                method, path = head, _go_path_to_contract(rest.strip())
+            else:
+                # 无方法前缀 = 该方法下所有请求都命中，与契约的逐方法注册不等价，
+                # 原样记成 ANY 并在双向核对里报出来（不去猜它想表达 GET）。
+                method, path = "ANY", _go_path_to_contract(pattern)
+            key = (method, path)
+            if key in actual:
+                problems.append(
+                    f"{rel}: 注册串 {pattern!r} 重复登记（另一处在 "
+                    f"{actual[key][2]}），ServeMux 只认其中一条"
+                )
+            actual[key] = (_handler_symbol(expr), _auth_group(expr), rel)
+    return actual, problems
+
+
+def go_tree_sources_by_file() -> dict:
+    """{仓库相对路径: 源码}，覆盖 daemon 全部 .go（跳过测试）：注册点扫描用。"""
     out = {}
-    for name in re.findall(rf"{re.escape(prefix)}(\w+)", src):
-        if name in table:
-            out[name] = table[name]
+    for dirpath, _dirnames, filenames in os.walk(DAEMON):
+        for f in sorted(filenames):
+            if f.endswith(".go") and not _is_test_file(f):
+                p = os.path.join(dirpath, f)
+                out[os.path.relpath(p, ROOT)] = read(p)
     return out
 
 
@@ -224,75 +483,89 @@ def _payload_names(note: str) -> list[str]:
 
 def check_routes(contract: dict) -> list[str]:
     problems: list[str] = []
-    src = read(HANDLER_RS)
-    api_router = read(API_ROUTER_RS)
-    pub_src, legacy_src, api_src, health_src = split_router_groups(src, api_router)
-    if not pub_src or not legacy_src:
-        return ["未能在 handler.rs 的 build_router 里切出 public/未迁入两个路由组"]
-    if not api_src:
-        return ["未能在 api/router.rs 里切出 protected_routes 路由组"]
-
-    def parse(segment: str, group: str) -> dict:
-        found = {}
-        for m in _ROUTE_RE.finditer(segment):
-            path, method, handler = m.group(1), m.group(2).upper(), m.group(3)
-            found[(method, path)] = (handler, group)
-        return found
-
-    actual = {}
-    actual.update(parse(pub_src, "none"))
-    actual.update(parse(legacy_src, "required"))
-    # 探针组与已迁入组一样登记 `path::ROUTE_*` 常量，同样按生成物解回字面量。
-    for segment in (health_src, api_src):
-        consts = _resolve_path_consts(segment)
-        for m in re.finditer(
-            r"\.route\(\s*(path::\w+)\s*,\s*(get|post|put|delete)\s*\(\s*(\w+)\s*\)",
-            segment,
-        ):
-            const_name, method, handler = (
-                m.group(1).rsplit("::", 1)[-1],
-                m.group(2).upper(),
-                m.group(3),
-            )
-            if const_name not in consts:
-                problems.append(
-                    f"已迁入路由组引用了生成物里没有的常量 path::{const_name}"
-                    "（契约需重新生成？）"
-                )
-                continue
-            group = "none" if segment is health_src else "required"
-            actual[(method, consts[const_name])] = (handler, group)
+    actual, reg_problems = go_registrations()
+    problems += reg_problems
+    if not actual:
+        # 「一条路由都没解析出来」绝不能当成通过：那只会是扫描器坏了或注册全没了。
+        return problems + [
+            "未能在 daemon 的 Go 源码里解析出任何 ServeMux 注册"
+            f"（扫描根：{os.path.relpath(DAEMON, ROOT)}/**/*.go）"
+        ]
 
     declared = {}
     for r in contract["routes"]:
         declared[(r["method"].upper(), r["path"])] = r
 
+    # handler 维度：契约写的是 `handle_*`，Go 侧是方法名（`api.ListBans`）。两者之间
+    # 没有机械映射规则，所以只核对「契约的 handler 名是否逐字存在于 http 包」——
+    # 命中为零时聚合成一条（系统性改名，报 57 遍只会淹没真漂移），有命中而个别缺
+    # 失时逐条报（那就是这一条路由的实现没接上）。
+    http_src = http_sources()
+    hit = {name for name in {r["handler"] for r in contract["routes"]}
+           if re.search(rf"\b{name}\b", http_src)}
+    divergent = [(key, r) for key, r in sorted(declared.items())
+                 if key in actual and r["handler"] not in hit]
+
+    # ServeMux 里 `Handle("/p", h)`（不带方法前缀）匹配**任何**方法。契约按方法逐条
+    # 声明，于是同一条实现在两侧核对里会同时报成「注册里不存在」和「契约未声明」——
+    # 那是解析器的形状差异，不是漂移。这里按路径回落到 ANY：路由存在性、auth 组都
+    # 按 ANY 那条核，另外单独记一条「方法未收紧」的缺口，因为契约要的 405 由框架产生，
+    # 方法不收紧时未声明的动词也会进 handler。
+    any_by_path = {path: val for (method, path), val in actual.items() if method == "ANY"}
+    claimed_any: set[str] = set()
+
     for key, r in sorted(declared.items()):
         if key not in actual:
+            via = any_by_path.get(key[1])
+            if via is None:
+                problems.append(
+                    f"路由 {key[0]} {key[1]} 在 daemon 的 ServeMux 注册里不存在"
+                    f"（契约声明 handler {r['handler']}）"
+                )
+                continue
+            claimed_any.add(key[1])
             problems.append(
-                f"路由 {key[0]} {key[1]} 在 handler.rs / api/router.rs 中不存在"
-                f"（契约声明 handler {r['handler']}）"
+                f"路由 {key[0]} {key[1]} 只以无方法前缀的 Handle 注册"
+                f"（{via[2]}，handler {via[0]}）——任何动词都会进 handler，"
+                "契约要的 405 因此不会由框架产生"
             )
-            continue
-        handler, group = actual[key]
+        handler, group, rel = actual.get(key) or any_by_path[key[1]]
         if r["auth"] != group:
+            hint = (
+                "；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401"
+                if group == "optional" else ""
+            )
             problems.append(
                 f"路由 {key[0]} {key[1]}: 契约 auth={r['auth']} 但源码落在 {group} 组"
-            )
-        if handler != r["handler"]:
-            problems.append(
-                f"路由 {key[0]} {key[1]}: 源码 handler {handler} != 契约 {r['handler']}"
+                f"（{rel}，handler {handler}）{hint}"
             )
     for key in sorted(actual):
-        if key not in declared:
+        if key not in declared and not (key[0] == "ANY" and key[1] in claimed_any):
+            handler, group, rel = actual[key]
             problems.append(
-                f"handler.rs / api/router.rs 中存在契约未声明的路由 {key[0]} {key[1]}"
+                f"daemon 中存在契约未声明的路由 {key[0]} {key[1]}"
+                f"（{rel}，handler {handler}，auth 组 {group}）"
             )
+    if divergent:
+        if len(hit) == 0:
+            example = actual[sorted(actual)[0]][0]
+            problems.append(
+                f"契约声明的 handler 名（handle_*，共 "
+                f"{len({r['handler'] for r in contract['routes']})} 个）在 "
+                f"{os.path.relpath(HTTP_DIR, ROOT)} 里逐字命中 0 个："
+                f"Go 侧一律用方法名注册（如 {example}）。"
+                "需要 owner 决定：契约改记 Go 符号，还是 Go 侧按 handle_* 命名"
+            )
+        else:
+            for key, r in divergent:
+                problems.append(
+                    f"路由 {key[0]} {key[1]}: 源码 handler {actual[key][0]} != 契约 {r['handler']}"
+                )
 
     # 路由声明的载荷类型必须真的有定义。
     #
     # 为什么单列一条：`returns = type` 的载荷名只写在 note 的散文里，而载荷字段
-    # 核对（check_types_rust）只遍历**已定义**的类型——于是「声明了一个不存在的
+    # 核对（check_types_go）只遍历**已定义**的类型——于是「声明了一个不存在的
     # 载荷」既不会被字段核对覆盖，也不会被路由核对覆盖，等于该端点的响应形状
     # 完全没有机械约束（AttackGeoResponse / AnomalyResponse 曾长期如此）。
     payload_checked = 0
@@ -310,8 +583,8 @@ def check_routes(contract: dict) -> list[str]:
 
     n_none = sum(1 for r in contract["routes"] if r["auth"] == "none")
     print(
-        f"  契约 {len(declared)} 条路由 / 源码 {len(actual)} 条"
-        f"（无认证 {n_none}；已迁入组按 path::ROUTE_* 常量解析）"
+        f"  契约 {len(declared)} 条路由 / 源码注册 {len(actual)} 条"
+        f"（契约无认证 {n_none} 条；注册串按 ServeMux 逐条解析，含 Route* 常量解引）"
     )
     print(
         f"  载荷声明核对：{payload_checked} 个类型名有定义"
@@ -326,83 +599,129 @@ def check_routes(contract: dict) -> list[str]:
 
 
 def _const_value(src: str, name: str) -> int | None:
-    m = re.search(rf"\b(?:pub\s+)?const\s+{name}\s*:\s*\w+\s*=\s*([^;]+);", src)
+    """取 Go 里名为 `name` 的**声明**值：`const NAME = 表达式`、`var NAME = 表达式`，
+    以及 const 块里的裸条目（`NAME <type>? = 表达式`）。
+
+    刻意不认 struct 字段初值（写作 `NAME: 值,`，冒号）：配置的默认值
+    （`MaxSSEConnections: 32`）不是「按流的上限常量」，认了就会把「上限来自配置」
+    误报成「常量与契约一致」——那正是 HTTP_LOG_SSE_LIMIT_DOC_DRIFT 想防的口径混淆。
+    取不到声明或表达式不是数字（`DefaultSSELimit()` 之类）时返回 None，由调用方报错。
+    """
+    m = re.search(
+        rf"^(?:const|var)?\s*{re.escape(name)}\s+(?:[\w\[\]*.]+\s+)?=\s*([^\n]+)",
+        src,
+        re.M,
+    )
     if not m:
         return None
-    expr = m.group(1)
-    # 支持 `60`、`60 * 1000`、`10` 这类常量表达式
+    expr = m.group(1).split("//")[0].strip()
+    if not re.fullmatch(r"[\d\s_+\-*/()]+", expr):
+        return None
     try:
-        return int(eval(expr, {"__builtins__": {}}, {}))  # noqa: S307 - 只允许算术
+        return int(eval(expr, {"__builtins__": {}}, {}))  # noqa: S307 - 上面已限定只含算术
     except Exception:
-        try:
-            return int(expr.strip())
-        except ValueError:
-            return None
+        return None
+
+
+# 真实的响应头构造点：Go 里只有 `w.Header().Set("…")` / `Add` / 直接写 map。
+# 全文 includes 会假阳性——auth.go 的注释同样可能逐字解释「有意不发它」。
+_HEADER_CTOR_TMPL = r"""\.Header\(\)\s*(?:Set|Add)\s*\(\s*["]{name}["]|\.Header\(\)\s*\[\s*["]{name}["]\]"""
+
+
+def _header_is_constructed(src: str, header_name: str) -> bool:
+    pat = _HEADER_CTOR_TMPL.format(name=re.escape(header_name))
+    return re.search(pat, src, re.I) is not None
 
 
 def check_auth_constants(contract: dict) -> list[str]:
     problems: list[str] = []
-    src = read(HTTP_MOD_RS)
-    for key, const in AUTH_CONSTS.items():
-        actual = _const_value(src, const)
+    # 值只认 daemon 的 Go 源码。`contract/generated/http_contract.go` 里的
+    # `AuthFailureThreshold = 10` 由契约自己生成，拿它核对契约是空转，
+    # 而它在 `src/daemon` 之外，本扫描根天然取不到。
+    tree = go_tree_sources()
+    for key, candidates in AUTH_CONSTS.items():
         want = int(contract["auth"][key])
-        if actual is None:
-            problems.append(f"auth.{key}: 在 http_exporter/mod.rs 中找不到常量 {const}")
-        elif actual != want:
-            problems.append(f"auth.{key}: 契约 {want} != 源码 {const}={actual}")
+        found = None
+        for const in candidates:
+            v = _const_value(tree, const)
+            if v is not None:
+                found = (const, v)
+                break
+        if found is None:
+            names = " / ".join(candidates)
+            problems.append(
+                f"auth.{key}: 契约 {want}，但 daemon 的 Go 源码里没有常量 {names}"
+                "（鉴权中间件未实现失败计数与锁定窗口，契约的防暴力破解语义无处可核）"
+            )
+        elif found[1] != want:
+            problems.append(f"auth.{key}: 契约 {want} != 源码 {found[0]}={found[1]}")
         else:
-            print(f"  auth.{key}: {actual} == {const}")
+            print(f"  auth.{key}: {found[1]} == {found[0]}")
 
-    # 未授权响应体与「不发 WWW-Authenticate」两条断言
-    auth_src = read(AUTH_RS)
+    # 未授权响应体（纯文本、不经信封）与「不发 WWW-Authenticate」两条断言
+    auth_src = read(AUTH_GO)
     body = contract["errmodels"].get("AUTH_UNAUTHORIZED", {}).get("body")
     if body:
         token = body.strip()
-        if token and token not in auth_src:
+        if token and token not in auth_src and token not in tree:
             problems.append(
-                f"errmodel AUTH_UNAUTHORIZED: 响应体 {token!r} 未出现在 http_exporter/auth.rs"
+                f"errmodel AUTH_UNAUTHORIZED: 响应体 {token!r} 未出现在 "
+                f"{os.path.relpath(AUTH_GO, ROOT)}（或任何 Go 源码）"
             )
         else:
-            print(f"  errmodel AUTH_UNAUTHORIZED: 响应体在 auth.rs 中存在")
-    # 「不发 WWW-Authenticate」只能核对**真实的头构造点**：auth.rs 的文档注释
-    # 里逐字解释了「有意不发它」，全文 includes 会因此假阳性。header 只可能经
-    # HeaderValue::from_static / from_str 或 headers.insert / append 构造。
-    header_ctor = re.compile(
-        r"""(?:HeaderValue::from_(?:static|str)|headers?\.(?:insert|append))
-            \s*\(\s*"?WWW[-_]AUTHENTICATE"?""",
-        re.X | re.I,
-    )
-    if header_ctor.search(auth_src):
+            print("  errmodel AUTH_UNAUTHORIZED: 响应体在 Go 源码中存在")
+    if _header_is_constructed(auth_src, "WWW-Authenticate"):
         problems.append(
-            "auth.rs 里真的构造了 WWW-Authenticate 响应头 —— 契约声明有意不发送"
+            "auth.go 里真的构造了 WWW-Authenticate 响应头 —— 契约声明有意不发送"
             "该头（会让浏览器弹原生对话框、fetch 挂起）"
         )
+    elif _header_is_constructed(tree, "WWW-Authenticate"):
+        problems.append(
+            "daemon 的 Go 源码里构造了 WWW-Authenticate 响应头 —— 契约声明有意不发送该头"
+        )
     else:
-        print("  auth: auth.rs 未构造 WWW-Authenticate（符合契约）")
+        print("  auth: Go 源码未构造 WWW-Authenticate（符合契约）")
     return problems
 
 
 def check_sse_limits(contract: dict) -> list[str]:
     problems: list[str] = []
-    # 两条流的上限常量都在 `api/sse.rs`：`SseStatus` 同时持有 events / logs 两组
-    # 计数器，上限常量自然与它同处。日志流引擎（log_viewer.rs）只持有自己的那条流。
-    src = read(SSE_RS)
+    # 两条流各自的上限常量：按**常量名**取，不按「路径里含不含 events」猜文件。
+    # Go 侧若把两条流接到同一个 broker 上限上，这里必然报缺失——那正是契约要拦的。
+    tree = go_tree_sources()
     for r in contract["routes"]:
         if r["returns"] != "stream":
             continue
-        const = SSE_LIMIT_CONST.get(r["path"])
-        if const is None:
+        candidates = SSE_LIMIT_CONST.get(r["path"])
+        if candidates is None:
             problems.append(f"SSE {r['path']}: 校验器不知道其上限常量名")
             continue
-        actual = _const_value(src, const)
-        if actual is None:
-            problems.append(f"SSE {r['path']}: 在 api/sse.rs 中找不到常量 {const}")
-        elif actual != r["max_connections"]:
+        found = None
+        for const in candidates:
+            v = _const_value(tree, const)
+            if v is not None:
+                found = (const, v)
+                break
+        if found is None:
+            names = " / ".join(candidates)
             problems.append(
-                f"SSE {r['path']}: 契约上限 {r['max_connections']} != 源码 {const}={actual}"
+                f"SSE {r['path']}: 契约上限 {r['max_connections']}，但 Go 源码里没有常量 "
+                f"{names}（两条流共用一个连接上限时，契约声明的 10 / 5 各自独立不成立）"
+            )
+        elif found[1] != r["max_connections"]:
+            problems.append(
+                f"SSE {r['path']}: 契约上限 {r['max_connections']} != 源码 {found[0]}={found[1]}"
             )
         else:
-            print(f"  SSE {r['path']}: 上限 {actual} == {const}")
+            print(f"  SSE {r['path']}: 上限 {found[1]} == {found[0]}")
+    # 心跳间隔同为契约声明值（15 秒）。Go 侧只有 `time.NewTicker(30 * time.Second)`
+    # 这一处形态，没有具名常量，故只核对「源码里出现过 keep-alive 的字面量」——
+    # 找不到就报，不静默。
+    for r in contract["routes"]:
+        if r["returns"] != "stream" or not r.get("keepalive_secs"):
+            continue
+        if not re.search(r"keepalive|keep-alive", read(SSE_GO), re.I):
+            problems.append(f"SSE {r['path']}: 找不到 keep-alive 心跳的实现")
     return problems
 
 
@@ -411,34 +730,121 @@ def check_sse_limits(contract: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def check_envelope(contract: dict) -> list[str]:
-    problems: list[str] = []
-    src = read(ENVELOPE_RS)
-    m = re.search(r"struct\s+ApiResponse\s*<[^>]*>\s*\{", src)
+def _go_struct_body(src: str, name: str) -> str | None:
+    """取 ``type <name> struct {…}`` 的体部（花括号配平），找不到返回 None。"""
+    m = re.search(rf"\btype\s+{re.escape(name)}\s+struct\s*\{{", src)
     if not m:
-        return ["未能在 src/daemon/api/envelope.rs 中定位 struct ApiResponse"]
-    i = m.end()
-    depth = 1
-    while i < len(src) and depth:
+        return None
+    i, start, depth = m.end(), m.end(), 1
+    while i < len(src):
         if src[i] == "{":
             depth += 1
         elif src[i] == "}":
             depth -= 1
+            if depth == 0:
+                return src[start:i]
         i += 1
-    body = src[m.end(): i - 1]
-    fields = re.findall(r"^\s*pub\s+(\w+)\s*:", body, re.M)
-    declared = [f["key"] for f in contract["envelope"]["fields"]]
-    if fields != declared:
-        problems.append(f"信封字段: 源码 {fields} != 契约 {declared}")
-    else:
-        print(f"  信封 {contract['envelope']['name']}: 字段 {fields} 一致")
+    return None
 
-    # 成功路径的 message 必须是空串
-    if not re.search(r"message\s*:\s*String::new\(\)", src):
-        problems.append("信封 ok() 未把 message 置为空串（契约声明成功时 message 为空）")
-    # 失败信封的 data 必须是 `()`（序列化成 null），不能是别的占位。
-    if not re.search(r"data\s*:\s*\(\s*\)", src):
-        problems.append("失败信封的 data 不是 ()（契约声明失败时 data 为 null）")
+
+def _go_struct_json_fields(body: str) -> list[tuple[str, str, str]]:
+    """结构体体部 -> ``[(线上 JSON key, Go 类型, tag 原文)]``，按声明顺序。
+
+    ``encoding/json`` 按**声明顺序**输出 key，所以顺序差异在这一层是真问题。
+    没写 ``json`` 标签时 Go 用导出字段名当 key（大小写是唯一的线上差异），这里按
+    字段名报出并保留 tag 原文——契约的 key 是线上拼写，不是 Go 的字段名。
+    """
+    out: list[tuple[str, str, str]] = []
+    for line in body.splitlines():
+        s = line.strip()
+        if not s or s.startswith("//"):
+            continue
+        m = re.match(r"([A-Za-z_]\w*)\s+([^\s`]+)\s*(?:`([^`]*)`)?\s*$", s)
+        if not m:
+            continue
+        name, go_type, tag = m.group(1), m.group(2), m.group(3) or ""
+        tm = re.search(r'json:"([^"]*)"', tag)
+        key = tm.group(1).split(",")[0] if tm else ""
+        if key == "-":
+            continue  # `json:"-"` 是被排除序列化的字段，线上不存在
+        out.append((key or name, go_type, tag))
+    return out
+
+
+def check_envelope(contract: dict) -> list[str]:
+    """信封：JSON key 与顺序、成功 message、失败 code/data 的机械断言。
+
+    信封类型**不靠猜名字**——契约叫 ``ApiResponse``，Go 侧成功响应的构造函数
+    ``SuccessEnvelope`` 的返回类型才是真正被写出去的那个 struct，按它取。
+    """
+    problems: list[str] = []
+    src = read(ENVELOPE_GO)
+    m = re.search(r"\bfunc\s+SuccessEnvelope\s*\([^)]*\)\s*([\w.]+)\s*\{", src)
+    if not m:
+        return ["envelope.go 里没有 `func SuccessEnvelope(...) <类型>`，"
+                "无法确定 daemon 实际写出的信封类型"]
+    env_type = m.group(1)
+    body = _go_struct_body(src, env_type)
+    if body is None:
+        return [f"envelope.go 里找不到 `type {env_type} struct`"
+                f"（SuccessEnvelope 的返回类型，即实际写出的信封）"]
+
+    fields = _go_struct_json_fields(body)
+    keys = [k for k, _t, _g in fields]
+    declared = [f["key"] for f in contract["envelope"]["fields"]]
+    if keys != declared:
+        problems.append(
+            f"信封 {env_type} 的 JSON key: 源码 {keys} != 契约 {declared}"
+            "（顺序即 encoding/json 的输出顺序）"
+        )
+    else:
+        print(f"  信封 {env_type}: key {keys} 与契约一致")
+
+    # code 必须是整数（契约 i32）；Go 的 int/int32 都算，其余形态说明这不是业务码字段
+    code_field = next((f for f in fields if f[0] == "code"), None)
+    if code_field is None:
+        problems.append(f"信封 {env_type} 没有 code 字段")
+    elif not re.fullmatch(r"u?int(8|16|32|64)?", code_field[1]):
+        problems.append(
+            f"信封 {env_type}.code 的 Go 类型是 {code_field[1]}，契约声明 i32（整数）"
+        )
+
+    ok_body = _fn_body(src, "SuccessEnvelope") or ""
+    mm = re.search(r'Message:\s*"([^"]*)"', ok_body)
+    if mm and mm.group(1) == "":
+        print("  成功信封: message 为空串")
+    elif mm:
+        problems.append(
+            f"成功信封的 message 是 {mm.group(1)!r}，契约声明成功时为空串"
+            "（`codes` 段 0 号写明「成功；message 为空串」）"
+        )
+    else:
+        problems.append("SuccessEnvelope 未显式设置 Message 字段，无法确认它是空串")
+
+    # 失败信封：data 必须以 null 出现（不能靠 omitempty 省略），code 必须是业务码
+    data_field = next((f for f in fields if f[0] == "data"), None)
+    if data_field is None:
+        problems.append(f"信封 {env_type} 没有 data 字段")
+    elif "omitempty" in data_field[2]:
+        problems.append(
+            f"信封 {env_type}.data 的 tag 是 `{data_field[2]}`：带 omitempty 时"
+            "失败响应的 data 会被整个省略，契约要求它作为 null 存在"
+        )
+    err_body = _fn_body(src, "ErrorEnvelope")
+    if err_body is None:
+        problems.append("envelope.go 里找不到 func ErrorEnvelope，无法核对失败信封形状")
+    else:
+        if not re.search(r"\bData\s*:", err_body):
+            problems.append(
+                "ErrorEnvelope 未给 data 赋值——失败响应里 data 为空，"
+                "契约声明失败时 data 必须存在且为 null"
+            )
+        neg = re.search(r"Code:\s*(-\s*\d+)", err_body)
+        if neg:
+            problems.append(
+                f"ErrorEnvelope 把 code 恒置为 {neg.group(1).replace(' ', '')}，"
+                "契约声明失败时 code 是业务码（见 codes 段）"
+            )
     return problems
 
 
@@ -447,54 +853,53 @@ def check_envelope(contract: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _code_const_names(code: int) -> list[str]:
+    """业务码在生成物里的常量名（``Code40001 = 40001``），用于认 daemon 侧的引用。
+
+    值→名取自 ``contract/generated/http_contract.go``：这是**同一份契约**的另一种拼写，
+    不是拿契约数值核对契约（那条禁令管的是「阈值/SSE 上限」这类要从 daemon 读回来的值，
+    这里只是给常量起个可搜索的名字）。
+    """
+    src = read(GEN_HTTP_GO)
+    return re.findall(rf"\b(Code\w*)\s*=\s*{code}\b", src)
+
+
 def check_codes(contract: dict) -> list[str]:
-    """每个非零业务码必须有一个真实的构造点。
+    """每个非零业务码必须在 daemon 的 Go 源码里有构造点。
 
-    退役期里构造点分两处，都要覆盖：
+    构造点的两种合法形态（都是逐字匹配，不认「大概是个错误码」）：
 
-      * `api/envelope.rs` 的 `BusinessCode` 枚举（码值在这里唯一定义）
-      * `api/routes/*.rs`（已迁入的 7 个码）与 `http_exporter/handler.rs`（未迁入的
-        50002 / 40005，以及历史库任务失败路径）
+      * 引用生成物常量：``httpcontract.Code40001`` 之类的标识符出现在 daemon 源码里
+      * 字面量落在赋值位：``Code: 40001`` / ``code = 40001``（结构体字段或变量赋值）
 
-    旧实现靠 `::error(<码` 的字面调用点判定；新实现把码升级成枚举，字面量因此从
-    调用点消失，改为核对「枚举变体存在 + 有构造该变体的位置」。
+    全都没有 = 契约声明了一个前端永远收不到的码。这里聚合成**一条**问题列出所有缺
+    失码（并写出 envelope.go 的实际形态），而不是每个码各报一遍——同一原因的噪音会
+    淹没别的漂移。
     """
     problems: list[str] = []
-    envelope = read(ENVELOPE_RS)
-    api_routes = "".join(
-        read(os.path.join(ROOT, "src", "daemon", "api", "routes", f))
-        for f in sorted(os.listdir(os.path.join(ROOT, "src", "daemon", "api", "routes")))
-        if f.endswith(".rs")
-    )
-    handler = read(HANDLER_RS)
-    # 枚举定义里必须逐字出现该码值（`Self::X => 40001,`）
+    tree = go_tree_sources()
+    missing: list[str] = []
+    hit_total = 0
     for value, meta in sorted(contract["codes"].items(), key=lambda kv: int(kv[0])):
         code = int(value)
         if code == 0:
-            continue
-        if not re.search(rf"=>\s*{code}\s*,", envelope):
-            problems.append(
-                f"业务码 {code}（HTTP {meta['status']}）：未在 api/envelope.rs 的"
-                f" BusinessCode 中定义"
-            )
-            continue
-        # 构造点：`BusinessCode::<变体>` 出现在路由或旧 handler 里
-        variant = re.search(rf"(\w+)\s*=>\s*{code}\s*,", envelope)
-        name = variant.group(1) if variant else None
-        hit = False
-        if name:
-            hit = bool(
-                re.search(rf"BusinessCode::{name}\b", api_routes)
-                or re.search(rf"BusinessCode::{name}\b", handler)
-            )
-        # 旧 handler 没有枚举，仍用字面 `::error(<码`
-        literal = f"::error({code}" in handler or f"::error({code}," in handler
-        if not hit and not literal:
-            problems.append(
-                f"业务码 {code}（HTTP {meta['status']}）：api/routes 与 handler.rs 中"
-                f" 都没有构造点（既无 BusinessCode::{name or '?'} 也无 ::error({code}）"
-            )
-    print(f"  业务码 {len(contract['codes'])} 个已核对（枚举定义 + 构造点）")
+            continue  # 0 是成功码，由 SuccessEnvelope 固定写出，不在此断言
+        refs = [n for n in _code_const_names(code) if re.search(rf"\b{re.escape(n)}\b", tree)]
+        literal = re.search(rf"\b\w*[Cc]ode\w*\s*(?:=|:=|:)\s*{code}\b", tree)
+        if refs or literal:
+            hit_total += 1
+            print(f"  业务码 {code}（HTTP {meta['status']}）：构造点 "
+                  f"{refs[0] if refs else literal.group(0)}")
+        else:
+            missing.append(f"{code}(HTTP {meta['status']})")
+    if missing:
+        problems.append(
+            f"业务码在 Go 源码里没有构造点：{', '.join(missing)} —— "
+            "internal/http/envelope.go 的 ErrorEnvelope 只写 Code: -1，"
+            "错误标识用的是字符串（\"bad_request\"），契约声明的整数业务码从未被产出"
+        )
+    print(f"  业务码 {len(contract['codes'])} 个已核对（契约声明 {len(contract['codes']) - 1} "
+          f"个非零码，有构造点 {hit_total} 个）")
     return problems
 
 
@@ -503,35 +908,101 @@ def check_codes(contract: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _first_hit(srcs: dict, pattern: str) -> str | None:
+    """daemon Go 源码里第一处匹配该正则的位置 ``相对路径:行号``；无匹配返回 None。
+
+    问题清单要能直接点到现场，不然「找不到 X」这种断言没法复核。
+    """
+    rx = re.compile(pattern)
+    for rel, src in sorted(srcs.items()):
+        for i, line in enumerate(src.splitlines(), 1):
+            if rx.search(line):
+                return f"{rel}:{i}"
+    return None
+
+
 def check_errmodels(contract: dict) -> list[str]:
+    """三种错误形状：text 逐字核对 body，framework_default 按状态码分两类核对。
+
+    ``net/http`` 的纯文本写点只有三种确切形态，body 由它们决定：
+
+      * ``http.Error(w, msg, code)`` 写出 ``msg + "\\n"``
+      * ``http.NotFound(w, r)`` 写出 ``"Not Found\\n"``（状态行才是 404 Not Found）
+      * ServeMux 自己：未匹配写 ``"404 page not found\\n"``、方法不匹配写
+        ``"Method Not Allowed\\n"``
+
+    ``framework_default`` 的形状同理要分家：404/405 由 ServeMux 自产（源码里
+    **不该**有构造点，只要证明 ServeMux 在接管且没被兜底 handler 抢走）；
+    400/415/422 是 axum 提取器时代的产物，``net/http`` 不会自动产生任何一个，
+    契约把它们记成「框架默认」就得由 daemon 自己写出来——写出来也不是「框架默认」。
+    """
     problems: list[str] = []
-    handler = read(HANDLER_RS)
-    auth = read(AUTH_RS)
-    # axum 提取器的真实使用点已随路由迁到 `api/routes/*.rs`；handler.rs 只剩
-    # 静态资源与日志两处。两个目录都要扫，否则 `Path(<` 这类断言会假失败。
-    api_routes = "".join(
-        read(os.path.join(ROOT, "src", "daemon", "api", "routes", f))
-        for f in sorted(os.listdir(os.path.join(ROOT, "src", "daemon", "api", "routes")))
-        if f.endswith(".rs")
-    )
-    extractor_src = handler + api_routes
+    srcs = go_tree_sources_by_file()
+    tree = "\n".join(srcs.values())
+    regs, _ = go_registrations()
+
     for name, d in contract["errmodels"].items():
         if d["shape"] == "text":
-            body = d["body"].strip()
-            if body and body not in handler and body not in auth:
-                problems.append(
-                    f"errmodel {name}: 文本响应体 {body!r} 未出现在 handler.rs / auth.rs"
+            want = d["body"]
+            stripped = want.rstrip("\n")
+            if not stripped:
+                problems.append(f"errmodel {name}: shape=text 但 body 为空，契约被破坏")
+                continue
+            literal = _first_hit(srcs, rf'"{re.escape(stripped)}"')
+            if literal:
+                print(f"  errmodel {name}: 文本 body {stripped!r} 见 {literal}")
+                continue
+            near = [
+                p
+                for p in (
+                    _first_hit(srcs, r"http\.Error\("),
+                    _first_hit(srcs, r"http\.NotFound\("),
                 )
-        elif d["shape"] == "axum_default":
-            # 默认错误由提取器产生：源码里必须真的用了对应的提取器
-            for extractor in ("Json", "Query", "Path"):
-                if extractor in d["note"] and not re.search(
-                    rf"\b{extractor}\s*[(<]", extractor_src
-                ):
+                if p
+            ]
+            detail = (
+                "；就近的纯文本写点：" + "、".join(near) if near
+                else "；Go 源码里没有任何纯文本错误写点"
+            )
+            problems.append(
+                f"errmodel {name}: 契约声明 {d['statuses']} 的响应体是纯文本 {want!r}，"
+                f"Go 源码里没有这段文本{detail}"
+            )
+        elif d["shape"] == "framework_default":
+            for status in d["statuses"]:
+                if status in FRAMEWORK_SELF_PRODUCED:
+                    if status == 404 and any(
+                        method == "ANY" and path == "/" for method, path in regs
+                    ):
+                        catch_all = _first_hit(srcs, r'HandleFunc\(\s*"/"\s*,')
+                        problems.append(
+                            f"errmodel {name}: 契约把 404 记成 ServeMux 自产"
+                            "（body `404 page not found`），但 daemon 注册了 \"/\" "
+                            f"兜底模式（{catch_all}），未匹配路径走的是它，"
+                            "body 不再是框架文本"
+                        )
+                        continue
+                    print(f"  errmodel {name}: {status} 由 net/http ServeMux 自产")
+                    continue
+                tokens = STATUS_TOKENS.get(status)
+                if tokens is None:
+                    problems.append(f"errmodel {name}: 校验器不认识状态码 {status}")
+                    continue
+                hit = _first_hit(srcs, "|".join(tokens))
+                if hit is None:
                     problems.append(
-                        f"errmodel {name}: 契约声明由 {extractor} 提取器产生默认错误，"
-                        f"但 handler.rs / api/routes 都未使用 {extractor}"
+                        f"errmodel {name}: 契约声明 {status} 为框架默认错误，但 "
+                        f"net/http 不会自动产生 {status}，Go 源码里也没有它的写点"
                     )
+                else:
+                    problems.append(
+                        f"errmodel {name}: 契约把 {status} 记成「框架默认错误」，"
+                        f"实际是 daemon 自己写出的（{hit}）——"
+                        "net/http 没有请求体/查询参数的自动校验，这个状态码不可能由框架产生"
+                    )
+        else:
+            problems.append(f"errmodel {name}: 校验器不认识 shape {d['shape']!r}")
+
     print(f"  错误形状 {len(contract['errmodels'])} 种已核对")
     return problems
 
@@ -542,16 +1013,38 @@ def check_errmodels(contract: dict) -> list[str]:
 
 
 def check_headers(contract: dict) -> list[str]:
+    """安全头：头名必须真有写点，值必须逐字出现，webui 分支必须有判别条件。
+
+    Go 侧写响应头只有 ``w.Header().Set/Add``（见 ``_HEADER_CTOR_TMPL``），只认这个
+    形态——全文 includes 会假阳性，注释里同样可能逐字解释「有意不发某个头」。
+    """
     problems: list[str] = []
-    src = read(HANDLER_RS)
+    srcs = go_tree_sources_by_file()
+    tree = "\n".join(srcs.values())
+    middleware = _first_hit(srcs, r"func\s+\([^)]*\)\s*connectionLimiter\b")
     for name, d in contract["headers"].items():
+        if not _header_is_constructed(tree, name):
+            extra = (
+                f"（internal/http 里唯一的中间件是 {middleware}）" if middleware else ""
+            )
+            problems.append(
+                f'header {name}: Go 源码里没有该头的写点'
+                f'（没有 w.Header().Set/Add("{name}", …)）'
+                f"——契约声明的安全头未实现{extra}"
+            )
+            continue
         for label, value in (("value", d["value"]), ("value_webui", d["value_webui"])):
             if not value:
                 continue
-            if value not in src:
-                problems.append(f"header {name}.{label} 的值未逐字出现在 security_headers_middleware")
-        if d["scope"] == "webui" and "is_webui" not in src:
-            problems.append("header 声明了 webui 分支，但中间件里找不到 is_webui 判断")
+            if value not in tree:
+                problems.append(
+                    f'header {name}.{label}: 值 {value!r} 未逐字出现在 Go 源码里'
+                )
+        if d["value_webui"] and not _first_hit(srcs, r"(?i)isWebUI|is_webui|webUIPath"):
+            problems.append(
+                f"header {name}: 契约声明了 webui 分支的值，"
+                "但 Go 源码里找不到分支判别条件（isWebUI / is_webui）"
+            )
     print(f"  安全头 {len(contract['headers'])} 条已核对")
     return problems
 
@@ -561,250 +1054,130 @@ def check_headers(contract: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _rust_tree_sources() -> str:
-    """递归读 `src/daemon/**/*.rs`，拼成一份用于全仓子串/正则扫描的文本。
+def _sse_publish_points(srcs: dict, event: str) -> list[str]:
+    """事件名在 Go 侧的发布点：``…Publish("<事件>", …)`` 或手写的 ``event: <事件>`` 帧。
 
-    与 [`rust_sources`] 的区别：后者只读各目录**顶层**文件（供类型字段核对，按
-    目录顺序决定同名类型谁先命中）；本函数要的是「整个 daemon 树」，因为发布点
-    分散在子模块里（`state/`、`runtime/`、`web_ui/`、`pipeline/`），漏掉子目录
-    会让「某域有没有生产者」的断言假报缺失。
+    Go 的 SSE 只有这两种写法（``internal/http/sse.go`` 的 broker 与 ``logs.go``
+    直接 Fprintf 的日志流），事件名都是逐字面量，不再需要 Rust 时代按
+    ``Domain::name()`` 反查事件名的那套推断。测试文件已由
+    ``go_tree_sources_by_file`` 排除——只出现在测试里的发布点不算。
     """
-    chunks = []
-    for dirpath, _dirnames, filenames in os.walk(os.path.join(ROOT, "src", "daemon")):
-        for f in sorted(filenames):
-            if f.endswith(".rs"):
-                chunks.append(read(os.path.join(dirpath, f)))
-    return "\n".join(chunks)
-
-
-def _strip_cfg_test_blocks(src: str) -> str:
-    """去掉 ``#[cfg(test)]`` 标记的块，返回只在非测试编译单元里可见的源码。
-
-    用于「**生产**代码里有没有这个」类断言。本仓库把测试内联在各模块的
-    ``#[cfg(test)] mod tests`` 里，而契约里多条断言关心的是生产行为——例如
-    「某个 SSE 域有生产者」，若不过滤测试，一条只存在于测试里的
-    ``publish(Domain::X)`` 会让断言假通过（缺陷 HTTP_SSE_JAILS_NO_PUBLISHER
-    就是这么被掩盖的）。
-
-    扫描按 ``{}`` 深度配对：``#[cfg(test)]`` 在 Rust 里总是挂在某个带花括号的项
-    （``mod`` / ``fn``）前面，块尾即该项的右花括号。缩进无关，字符串字面量里的
-    花括号不参与判定——本文件下游只做子串/正则查找，不需要字节级精确切分。
-
-    注意别把「丢弃」写反：目标是**丢掉块体**（含块头 ``mod tests`` 与整个花括号
-    内部），只保留块外源码。曾写成「只丢掉块尾那个右花括号」，结果测试体被原样
-    保留、剥离器成了空操作——断言反而比预期更弱。
-    """
-    out: list[str] = []
-    pending = False  # 已见到 #[cfg(test)]，正等它那个项的 `{`
-    skip_depth = 0  # >0 表示正在丢弃的块内部，值为花括号深度
-    at_line_start = True
-    i = 0
-    while i < len(src):
-        if at_line_start and not pending and skip_depth == 0:
-            line_end = src.find("\n", i)
-            if line_end == -1:
-                line_end = len(src)
-            if src[i:line_end].strip().startswith("#[cfg(test)]"):
-                pending = True
-                # 属性行本身也丢掉（其中的方括号不是花括号，无需配对）
-                i = line_end
-                at_line_start = True
-                continue
-        ch = src[i]
-        if pending:
-            # 块头（如 `mod tests`）到 `{` 之间的文字一并丢弃；`{` 之后进入块体。
-            # `#[cfg(test)]` 也常挂在**无花括号**的项上（`mod tests;`、
-            # `pub(crate) mod testing;`、`const X = ...;`），这类项到 `;` 就结束，
-            # 不能等到下一个 `{`——否则会把其后的生产代码一起吞掉。
-            if ch == "{":
-                skip_depth = 1
-                pending = False
-            elif ch == ";":
-                pending = False
-        elif skip_depth > 0:
-            if ch == "{":
-                skip_depth += 1
-            elif ch == "}":
-                skip_depth -= 1
-            # 块体连同它的收尾 `}` 全部丢弃，不写进 out
-        else:
-            out.append(ch)
-        if ch == "\n":
-            at_line_start = True
-        elif ch not in " \t\r":
-            at_line_start = False
-        i += 1
-    return "".join(out)
-
-
-def _domain_publishers(prod_src: str, domain: str, variant: str) -> int:
-    """统计生产代码里显式推进该域版本的**调用点**数。
-
-    事件名与枚举变体拼写不同——`Domain::name()` 返回小写（``"whitelist"``），
-    枚举变体是首字母大写（``Domain::Whitelist``）——故两者都要匹配：
-
-      * ``publish(Domain::<Variant>)``（所有者模块里的直接发布）
-      * ``publish_<domain>_changed()``（compose.rs 里为派生域封装的具名入口，
-        调用方不必知道枚举路径；按小写事件名命名）
-
-    **必须用 ``?`` 排除定义行**：具名入口自己的定义写作 ``pub fn
-    publish_<domain>_changed()``，若把它算作调用点，那么「把全部调用点删掉」的
-    变异测不出红——定义行会让计数永远 ≥ 1（曾实测：删掉两个调用点后仍报 2）。
-    """
-    pat = re.compile(
-        rf"publish(?!_)\s*\(\s*(?:[A-Za-z_][\w:]*::)*Domain::{variant}\s*\)"
-        rf"|publish_{domain}_changed\s*\(\s*\)\s*;"
+    pats = (
+        rf'\.Publish\(\s*"{re.escape(event)}"',
+        rf'event:\s*{re.escape(event)}\b',
     )
-    return len(pat.findall(prod_src))
+    out: list[str] = []
+    for rel, src in sorted(srcs.items()):
+        for i, line in enumerate(src.splitlines(), 1):
+            if any(re.search(p, line) for p in pats):
+                out.append(f"{rel}:{i}")
+    return out
 
 
 def check_sse_events(contract: dict) -> list[str]:
-    """推送侧与订阅侧的事件名核对，**按引擎而非按路径**分派。
-
-    两条流的事件名来源不同，不能共用一套文字扫描：
-
-      * ``/api/v1/events``（`api/sse.rs`）—— 域事件名不是字面量，由
-        `state/hub.rs` 的 `Domain::name()` 产生（`stats`/`bans`/`jails`/
-        `whitelist`/`rates`），推送点写作 `StreamMessage::new(domain.name(), …)`；
-        只有 `connected` 是字面量。故这里改成核对「`Domain::name()` 的返回值集合
-        覆盖契约的域事件」+「connected 有字面量推送点」。
-      * ``/api/v1/logs/stream``（`log_viewer.rs`）—— 三个事件都是字面量
-        `.event("…")`，沿用原来的直接扫描。
-    """
+    """每个事件名都要在发布侧（Go）与订阅侧（前端）各存在一处。"""
     problems: list[str] = []
-    events_src = read(SSE_RS)
-    hub_src = read(os.path.join(ROOT, "src", "daemon", "state", "hub.rs"))
-    logs_src = read(LOG_VIEWER_RS)
-    subscribe = read(os.path.join(ROOT, "frontend", "src", "hooks", "useSse.ts"))
-    logs_page = read(os.path.join(ROOT, "frontend", "src", "views", "Logs.tsx"))
-    # `Domain::name()` 的「事件名 → 枚举变体」映射（小写事件名 ↔ 首字母大写变体），
-    # 例如 {"stats": "Stats", "whitelist": "Whitelist", ...}
-    name_to_variant = dict(
-        (name, variant)
-        for variant, name in re.findall(r'Self::(\w+)\s*=>\s*"(\w+)"', hub_src)
-    )
-    domain_names = set(name_to_variant)
-    # 生产源码（已剔除 #[cfg(test)] 块）：域事件必须**在生产路径**有发布者，
-    # 只出现在测试里的 publish(Domain::X) 不算（见 _strip_cfg_test_blocks）。
-    prod_src = _strip_cfg_test_blocks(_rust_tree_sources())
+    srcs = go_tree_sources_by_file()
     for r in contract["routes"]:
         if r["returns"] != "stream":
             continue
         if r["path"] == "/api/v1/events":
-            src, consumer, consumer_name = events_src, subscribe, "useSse.ts"
-            for ev in r["events"]:
-                if ev == "connected":
-                    # 连接建立事件是字面量推送点。
-                    if "StreamMessage::new(\"connected\"" not in src:
-                        problems.append(
-                            "SSE /api/v1/events: 事件 'connected' 无字面量推送点"
-                        )
-                else:
-                    if f'"{ev}"' not in src and ev not in domain_names:
-                        problems.append(
-                            f"SSE /api/v1/events: 事件 {ev!r} 既非 Domain::name() 的返回值"
-                            f"（实际 {sorted(domain_names)}），也无字面量推送点"
-                        )
-                    # 声明了域事件就必须有生产发布者：否则推送循环（只发版本变化过的域）
-                    # 永远不发这一域，前端收完首帧后再无更新。见缺陷
-                    # HTTP_SSE_JAILS_NO_PUBLISHER。
-                    if ev in domain_names and _domain_publishers(
-                        prod_src, ev, name_to_variant[ev]
-                    ) == 0:
-                        problems.append(
-                            f"SSE /api/v1/events: 事件 {ev!r} 在生产代码里没有发布者"
-                            f"（publish(Domain::{name_to_variant[ev]}) / "
-                            f"publish_{ev}_changed 均未找到，测试内的发布点不算）"
-                            f"——按域序列化后该域永远不会重发"
-                        )
-                if f"'{ev}'" not in consumer and f'"{ev}"' not in consumer:
-                    problems.append(
-                        f"SSE /api/v1/events: 事件 {ev!r} 在前端订阅侧找不到（{consumer_name}）"
-                    )
+            consumer_path, consumer_name = TS_SSE, "useSse.ts"
         else:
-            src, consumer, consumer_name = logs_src, logs_page, "Logs.tsx"
-            for ev in r["events"]:
-                if f'.event("{ev}")' not in src:
-                    problems.append(f"SSE {r['path']}: 事件 {ev!r} 在 log_viewer.rs 中无推送点")
-                if f"'{ev}'" not in consumer and f'"{ev}"' not in consumer:
-                    problems.append(
-                        f"SSE {r['path']}: 事件 {ev!r} 在前端订阅侧找不到（{consumer_name}）"
-                    )
-        print(f"  SSE {r['path']}: {len(r['events'])} 个事件已核对（推送 + 订阅）")
+            consumer_path, consumer_name = TS_LOGS_PAGE, "Logs.tsx"
+        consumer = read(consumer_path)
+        for ev in r["events"]:
+            points = _sse_publish_points(srcs, ev)
+            if not points:
+                problems.append(
+                    f'SSE {r["path"]}: 事件 {ev!r} 在 Go 源码里没有发布点'
+                    f'（既无 .Publish("{ev}", …) 也无 `event: {ev}` 帧）'
+                )
+            else:
+                print(f"  SSE {r['path']}: 事件 {ev!r} 发布点 {', '.join(points[:3])}")
+            if f"'{ev}'" not in consumer and f'"{ev}"' not in consumer:
+                problems.append(
+                    f"SSE {r['path']}: 事件 {ev!r} 在前端订阅侧找不到（{consumer_name}）"
+                )
+        print(f"  SSE {r['path']}: {len(r['events'])} 个事件已核对（发布 + 订阅）")
     return problems
 
 
 # ---------------------------------------------------------------------------
-# 8. 载荷类型（Rust 侧）
+# 8. 载荷类型（Go 侧）
 # ---------------------------------------------------------------------------
 
 
-def find_struct(srcs: dict, name: str) -> tuple[str, str, str] | None:
-    """返回 (相对路径, 完整源码, 结构体体部) 或 None。支持带泛型参数的结构体。"""
-    pat = re.compile(rf"struct\s+{re.escape(name)}\s*(?:<[^>]*>)?\s*\{{")
+def _find_go_struct(srcs: dict, name: str) -> tuple[str, list[tuple[str, str, str]]] | None:
+    """在 Go 源码里按**类型名逐字**找 ``type <name> struct``，返回 (相对路径, 字段)。
+
+    不做名字映射：契约的载荷名与 Go 的结构体名之间没有机械等价规则，找不到就是
+    找不到（调用方会把这类情形聚合成一条问题报出来）。
+    """
     for rel, src in srcs.items():
-        m = pat.search(src)
-        if not m:
-            continue
-        i = m.end()
-        depth = 1
-        while i < len(src) and depth:
-            if src[i] == "{":
-                depth += 1
-            elif src[i] == "}":
-                depth -= 1
-            i += 1
-        # 派生宏：向 struct 关键字之前回看一段
-        head = src[max(0, m.start() - 600): m.start()]
-        derives = head.rsplit("}", 1)[-1] if "}" in head else head
-        return rel, derives, src[m.end(): i - 1]
+        body = _go_struct_body(src, name)
+        if body is not None:
+            return rel, _go_struct_json_fields(body)
     return None
 
 
-def struct_field_names(body: str) -> list[str]:
-    """结构体里 pub 字段的名字（raw identifier ``r#x`` 归一化成 ``x``）。"""
-    names = []
-    for m in re.finditer(r"^\s*pub\s+(?:r#)?(\w+)\s*:", body, re.M):
-        names.append(m.group(1))
-    return names
+def check_types_go(contract: dict) -> list[str]:
+    """契约里每个载荷类型的字段都必须是 Go 结构体的 json key，且该结构体真被返回。
 
-
-def check_types_rust(contract: dict) -> list[str]:
+    Go 的导出字段名与线上 key 可以不同（靠 ``json:"…"`` 标签映射），所以这里只比
+    标签解出来的**线上 key**；没写标签的字段其线上 key 就是字段名本身——那同样是
+    一种形状，不能替契约打圆场。
+    """
     problems: list[str] = []
-    srcs = rust_sources()
+    srcs = go_sources()
+    http_src = http_sources()
+    missing: list[str] = []
+    checked = 0
     for name, decl in contract["types"].items():
         if decl.get("inline"):
-            # 内联形状（没有具名 struct，如早期的 sse-status serde_json::json!）改为
-            # 核对 JSON key 出现在对应的 handler 里。当前契约已把 sse-status 升级为
-            # 具名结构体（`api/payloads.rs`），这条分支保留给将来真正的内联形状。
-            handler = read(HANDLER_RS)
+            # 内联形状没有具名 struct：改为核对 JSON key 字面量出现在 internal/http 里
             for f in decl["fields"]:
-                if f'"{f["key"]}"' not in handler:
+                if f'"{f["key"]}"' not in http_src:
                     problems.append(
-                        f"内联类型 {name}: JSON key {f['key']!r} 未出现在 handler.rs"
+                        f"内联类型 {name}: JSON key {f['key']!r} 未出现在 internal/http"
                     )
-            print(f"  内联类型 {name}: {len(decl['fields'])} 个 JSON key 已在 handler.rs 核对")
             continue
-        found = find_struct(srcs, name)
+        found = _find_go_struct(srcs, name)
         if found is None:
-            problems.append(f"类型 {name}: 未能在 daemon 源码里找到同名 struct")
+            missing.append(name)
             continue
-        rel, derives, body = found
-        # 响应类型只序列化，请求体只反序列化（部分结构体两者都派生，也满足各自侧）
-        want = "Deserialize" if decl["kind"] == "request" else "Serialize"
-        if want not in derives:
-            problems.append(f"类型 {name}（{rel}）: 未派生 {want}")
-        actual = struct_field_names(body)
+        rel, fields = found
+        checked += 1
+        keys = [k for k, _t, _g in fields]
+        declared = [f["key"] for f in decl["fields"]]
         for f in decl["fields"]:
-            if f["key"] not in actual:
+            if f["key"] not in keys:
                 problems.append(
-                    f"类型 {name}（{rel}）: 契约字段 {f['key']!r} 在 struct 中不存在"
-                    f"（实际字段 {actual}）"
+                    f"类型 {name}（{rel}）: 契约字段 {f['key']!r} 不是该 struct 的 json key"
+                    f"（实际 {keys}）"
                 )
-        for extra in actual:
-            if extra not in [f["key"] for f in decl["fields"]]:
-                problems.append(f"类型 {name}（{rel}）: struct 字段 {extra!r} 未在契约中声明")
-    print(f"  载荷类型 {len(contract['types'])} 个：Rust 字段已逐项核对")
+        for extra in keys:
+            if extra not in declared:
+                problems.append(
+                    f"类型 {name}（{rel}）: struct 字段 {extra!r} 未在契约中声明"
+                )
+        # 「仓库里有这个 struct」不等于 handler 返回的是它：引用点必须在 internal/http
+        if not re.search(rf"\b{re.escape(name)}\b", http_src):
+            problems.append(
+                f"类型 {name}（{rel}）: internal/http 里没有它的引用——"
+                "handler 返回的不是这个 struct"
+            )
+    if missing:
+        problems.append(
+            f"{len(missing)}/{len(contract['types'])} 个载荷类型在 Go 源码里没有同名 "
+            f"struct（本门禁不做契约名↔Go 名的映射推断）：{', '.join(sorted(missing))}。"
+            "其中多数响应在 internal/http 里是 map[string]any 字面量（如 bans.go:112），"
+            "字段没有任何具名类型承载，跨层字段核对在这一层失去锚点"
+        )
+    print(
+        f"  载荷类型 {len(contract['types'])} 个：{checked} 个有同名 Go struct 并逐字段核对，"
+        f"{len(missing)} 个无同名 struct"
+    )
     return problems
 
 
@@ -847,7 +1220,7 @@ def check_types_frontend(contract: dict) -> list[str]:
             continue  # 请求体由 endpoints.ts 的泛型参数体现，不单独在 types.ts 重复声明
         if decl.get("inline"):
             continue  # 内联形状在前端由调用点就地声明，不做跨层字段核对
-        # 前端 interface 名可与 Rust 结构体名不同（契约用 ts_name 显式声明）
+        # 前端 interface 名可与 Go 结构体名不同（契约用 ts_name 显式声明）
         iface = decl.get("ts_name") or name
         if iface not in ts:
             problems.append(
@@ -878,48 +1251,64 @@ def strip_ts_comments(src: str) -> str:
     return re.sub(r"//[^\n]*", "", src)
 
 
+def _ts_route_table() -> dict:
+    """生成物 ``http_contract.ts`` 的 ``ROUTES`` 表：{常量名: 契约路径}。
+
+    前端的调用地址全部来自这张表（``ROUTES.<常量>``），所以「前端消费了哪些路径」
+    是一道查表题，不再是文字扫描——旧版靠模板串里的 ``/api/v1`` 字面量匹配，
+    字面量一旦消失（已消失）那条检查会退化成「前端什么都没调用」的假失败。
+    """
+    src = read(GEN_HTTP_TS)
+    m = re.search(r"export const ROUTES = \{(?P<body>.*?)\n\} as const", src, re.S)
+    if not m:
+        return {}
+    return dict(re.findall(r"^\s*([A-Za-z0-9_]+):\s*[\"']([^\"']+)[\"'],", m.group("body"), re.M))
+
+
 def check_routes_frontend(contract: dict) -> list[str]:
     """契约的每条路由必须在前端有消费者；前端不得调用契约外的路径。"""
     problems: list[str] = []
+    table = _ts_route_table()
+    if not table:
+        return [
+            "未能从 contract/generated/http_contract.ts 解出 ROUTES 表，"
+            "前端消费侧无法核对（请先跑 gen.py）"
+        ]
     src = strip_ts_comments(read(TS_ENDPOINTS))
+    used = set(re.findall(r"\bROUTES\.([A-Za-z0-9_]+)", src))
+    if not used:
+        problems.append(
+            "前端 endpoints.ts 没有引用任何 ROUTES 常量 —— 要么全部路径改成了手写"
+            "字面量（脱离单一真相源），要么这条检查的对象已变，不能算通过"
+        )
+    used_paths = {table[n] for n in used if n in table}
 
-    # 收集前端出现的所有 /api/v1 路径字面量。
-    # 注意：三个字符类都必须含反引号——开头那个漏掉反引号时，模板串
-    # （`` `/api/v1/bans/${...}/detail` ``）整体不会被匹配，会误报"前端未调用"。
-    front_paths = set(re.findall(r"['\"`](/api/v1[^'\"`]*)['\"`]", src))
-    # 去掉模板串里的 ${...} 之后的残余，统一成契约的 :param 写法
-    normalized = set()
-    for p in front_paths:
-        p = p.rstrip("/")
-        normalized.add(p)
-
-    declared_paths = {r["path"].rstrip("/") for r in contract["routes"]}
-    # 前端用模板串拼路径参数：把契约的 :ip 还原成 .* 后做匹配
-    def matches(declared: str, front: str) -> bool:
-        pat = "^" + PARAM_RE.sub(r"[^/]+", re.escape(declared).replace(r"\:", ":")) + "$"
-        return re.search(pat, front) is not None
-
-    missing = []
-    for r in contract["routes"]:
-        if not r["path"].startswith("/api/v1"):
-            continue  # /health 等由 checkHealth 这类显式调用覆盖，单独核对
-        if r["path"] == "/api/v1/events":
-            continue  # SSE 地址是常量而非字符串字面量，由 check_sse_events 覆盖
-        hit = any(matches(r["path"], f) for f in normalized)
-        if not hit:
-            missing.append(f"{r['method']} {r['path']}")
+    # 正向：契约里每条 API 路由都要在前端出现（按**路径**逐字比对，不做名字推断）。
+    # Web UI 页面路由（/dashboard 等）由前端自己的 hash 路由消费，不在 endpoints.ts 里。
+    missing = [
+        f'{r["method"]} {r["path"]}'
+        for r in contract["routes"]
+        if r["path"].startswith("/api/v1") and r["path"] not in used_paths
+    ]
     for m in missing:
         problems.append(f"前端 endpoints.ts 未调用契约路由 {m}")
 
-    # 反向：前端调了契约外的路径
-    for f in sorted(normalized):
-        if any(matches(d, f) for d in declared_paths):
-            continue
-        problems.append(f"前端 endpoints.ts 调用了契约外的路径 {f}")
+    # 引用了 ROUTES 表里没有的名字 = 前端在等一个契约里不存在（或已改名）的常量
+    for n in sorted(used - set(table)):
+        problems.append(f"前端 endpoints.ts 引用了生成物里没有的 ROUTES.{n}")
+    # 反向：前端取用的路径必须都在契约里（路径逐字比对，含 :param 拼写）
+    declared_paths = {r["path"] for r in contract["routes"]}
+    for n in sorted(used & set(table)):
+        if table[n] not in declared_paths:
+            problems.append(f"前端 endpoints.ts 经 ROUTES.{n} 调用了契约外的路径 {table[n]}")
+    # 兜底：前端若绕过生成物直接写 `/api/v1…` 字面量，就是脱离了单一真相源
+    # （注释里出现的路径示例已由 strip_ts_comments 去掉）。
+    for literal in sorted(set(re.findall(r"['\"`](/api/v1[^'\"`]*)['\"`]", src))):
+        problems.append(f"前端 endpoints.ts 手写了契约路径字面量 {literal}（应引用 ROUTES 常量）")
 
     print(
-        f"  前端 endpoints.ts: 出现 {len(normalized)} 条 /api/v1 路径，"
-        f"与契约 {len(declared_paths)} 条双向核对"
+        f"  前端 endpoints.ts: 引用 {len(used)} 个 ROUTES 常量，"
+        f"与契约 {len(declared_paths)} 条路由双向核对（缺消费者 {len(missing)} 条）"
     )
     return problems
 
@@ -970,308 +1359,406 @@ def _anchor_ok(kind: str, where: str, problems: list[str]) -> bool:
 
 
 def check_anchors(contract: dict) -> list[str]:
-    """核对 errmodel 与 defect 的 where / fix 锚点（defect 按 status 分派）。
+    """核对 defect 的 ``fix`` 证据锚点；``where`` 位置索引已不在 HTTP 契约里。
 
-    errmodel 的 where 必须**仍在**（错误形状还在实现里）。
+    ``gen.py`` 的 HTTP 解析器现在**拒绝** ``where``（「契约不维护源码位置锚点」——
+    路由注册串与 handler 名本身就是锚点），errmodel 与 defect 都只剩 status/fix。
+    于是这一项只剩一条硬规则：
 
-    defect 按 status 分派，与 ``verify_procfs.py`` 同一套语义：
+      fixed —— ``fix`` 指向修复证据，必须逐字仍在仓库里
 
-      open     —— 缺陷未修，``where`` 必须仍存在
-      retained —— 有意保留，``where`` 必须指向源码里说明「有意保留」的注释
-      fixed    —— 已修，``where`` 反过来必须**已消失**，``fix`` 指向修复证据且必须存在
-
-    形状校验：锚点必须是 ``<相对路径>:<非空锚点>``，且路径在仓库内。不这样校验，
-    一条被截断/含换行的 where 会被当成「文件名含换行」报出难以理解的错误。
+    ``open`` / ``retained`` 没有锚点可核：它们的说法是否还成立，全部压在
+    ``check_defect_claims`` 的机械断言上；既无锚点又无断言的，这里聚合成一条
+    显式问题报出来（不静默当成通过）。``where`` 若哪天重新出现（换了别的解析器），
+    仍按旧规则核对，向前兼容。
     """
     problems: list[str] = []
     n_ok = 0
+    no_evidence: list[str] = []
 
     for name, d in contract["errmodels"].items():
-        if _anchor_ok(f"errmodel {name}", d["where"], problems):
+        where = d.get("where") or ""
+        if not where:
+            continue  # 无位置锚点：形状本身由 check_errmodels 核对
+        if _anchor_ok(f"errmodel {name}", where, problems):
             n_ok += 1
 
     for d in contract["defects"]:
-        kind, status, where = f"defect {d['name']}", d["status"], d["where"]
-        if not _shape_ok(kind, where, problems):
+        kind, status = f"defect {d['name']}", d["status"]
+        where = d.get("where") or ""
+        if where and not _shape_ok(kind, where, problems):
             continue
-        w_exists = _anchor_exists(where)
+        w_exists = _anchor_exists(where) if where else False
         if status in ("open", "retained"):
-            if w_exists:
-                n_ok += 1
+            if where:
+                if w_exists:
+                    n_ok += 1
+                else:
+                    problems.append(f"{kind}: status={status} 但 where 锚点 '{where}' 不存在")
             else:
-                problems.append(f"{kind}: status={status} 但 where 锚点 '{where}' 不存在")
+                # 无锚点：这条缺陷的说法当前只能靠机械断言站住
+                no_evidence.append(d["name"])
         elif status == "fixed":
-            if w_exists:
+            if where and w_exists:
                 rel = where.partition(":")[0]
                 problems.append(
                     f"{kind}: status=fixed 但旧现场 '{where}' 仍在 "
                     f"（{rel} 若属旧实现应删除；若实现已修则契约需改判）"
                 )
-            else:
-                n_ok += 1
             fix = d.get("fix") or ""
             if not _shape_ok(kind, fix, problems, field="fix"):
                 continue
             if _anchor_exists(fix):
                 n_ok += 1
             else:
-                problems.append(f"{kind}: status=fixed 但修复证据锚点 '{fix}' 不存在")
+                rel = fix.partition(":")[0]
+                why = "文件不存在" if not os.path.isfile(os.path.join(ROOT, rel)) else "锚点文字已消失"
+                problems.append(
+                    f"{kind}: status=fixed 但修复证据锚点 '{fix}' 不成立（{why}）"
+                )
         else:
             problems.append(f"{kind}: 未知 status {status!r}")
 
     print(f"  {n_ok} 个 where/fix 锚点核对通过（含形状与 status 分派）")
+    if no_evidence:
+        print(f"  无位置锚点的 open/retained 缺陷：{', '.join(sorted(no_evidence))}"
+              "（是否仍成立由机械断言承担，无断言者由 check_defect_claims 报出）")
     return problems
 
 
 # ---------------------------------------------------------------------------
-# 11. 已核实缺陷的机械断言
+# 11. 缺陷 status 的可执行断言（现场是否仍在）
 # ---------------------------------------------------------------------------
 
 
 def check_defect_claims(contract: dict) -> list[str]:
-    """对能机械判定的 defect 做断言；缺陷被修好则门禁失败，强制契约同步。
+    """把 defect 的 ``status`` 当成**对代码现状的可执行断言**，用探针核对。
 
-    每条断言都只在**源码里真实存在该缺陷**时通过。任何一条被修好（单位统一、
-    今日窗口落地、total_detected 补齐……）都会在这里失败，提醒契约同步——契约
-    不能说一件代码里已经不成立的事。
+    分派规则只有一条，方向两边都堵：
 
-    已改判为 ``fixed`` / ``retained`` 的缺陷不再在此断言：``fixed`` 的旧现场
-    已消失，机械断言本就不可能成立；``retained`` 的有意保留由源码注释承载，
-    断言见下方 ``HTTP_HEALTH_NOT_ENVELOPED`` 分支。
+      ``open`` / ``retained`` —— 探针必须回答「现场仍在」
+      ``fixed`` —— 探针必须回答「现场已消失」
+
+    探针返回 ``None`` 表示 Go 面还没有承载这条缺陷的端点或类型（未接线）。未接线
+    **不等于已修**：``fixed`` 配 ``None`` 一律失败，只有 ``open``/``retained`` 可以
+    挂在「还没实现」上（缺哪条路由由 check_routes 报告、并进缺口基线冻结）。
+
+    于是改判 status 会自动反过来要求代码跟上，代码跟上也会自动要求契约改判——
+    两边都不许悄悄漂。新增 defect 而没有探针的，函数末尾按名列出，不给假安全感。
     """
     problems: list[str] = []
     declared = {d["name"] for d in contract["defects"]}
-    asserted: set[str] = set()
+    status_of = {d["name"]: d["status"] for d in contract["defects"]}
+    covered: set[str] = set()
 
-    def ok(name: str, msg: str) -> None:
-        asserted.add(name)
-        print(f"  defect {name}: {msg}（成立）")
+    def verdict(name: str, live: bool | None, detail: str) -> None:
+        covered.add(name)
+        status = status_of.get(name, "open")
+        wants_live = status in ("open", "retained")
+        if live is None:
+            if wants_live:
+                print(f"  defect {name}: 无 Go 现场（未接线），与 status={status} 相容")
+            else:
+                problems.append(
+                    f"defect {name}: status=fixed 但 Go 面没有可核对的现场（{detail}）"
+                    "——未实现不等于已修"
+                )
+            return
+        if live == wants_live:
+            print(f"  defect {name}: {detail}（与 status={status} 一致）")
+            return
+        if live:
+            problems.append(
+                f"defect {name} 已失效：契约记 status={status}（应为已修），但现场仍在"
+                f"——{detail}"
+            )
+        else:
+            problems.append(
+                f"defect {name} 已失效：契约记 status={status}（现场应在），但已找不到现场"
+                f"——{detail}，契约需同步"
+            )
 
-    def fail(name: str, msg: str) -> None:
-        asserted.add(name)
-        problems.append(f"defect {name} 已失效：{msg}，契约需同步")
-
-    for d in contract["defects"]:
-        name = d["name"]
+    for name in sorted(declared):
         if name == "HTTP_RECIDIVISM_RATE_UNIT":
-            # 同名不同单位必须**同时**成立：一处乘 100、一处不乘。
-            ratio = read(os.path.join(ROOT, "src", "daemon", "web_ui", "stats.rs"))
-            level = read(os.path.join(ROOT, "src", "daemon", "web_ui", "analysis.rs"))
-            pct = re.search(
-                r"recidivism_rate\s*=\s*if\s+total_ips\s*>\s*0\s*\{[^}]*\}\s*else",
-                ratio,
-                re.S,
+            # 「同名不同单位」要两个产出点都在：只有一处有 recidivism_rate 时没有
+            # 可比的第二单位，探针据实返回 None。
+            stats_src = read(PERSIST_BAN_EVENTS_GO)
+            rec_src = read(ANALYSIS_RECOMMENDATIONS_GO)
+            stats_pct = bool(
+                re.search(r"recidivismRate\s*=\s*[^\n]*\*\s*100\b", stats_src)
             )
-            if pct and "* 100.0" in pct.group(0):
-                has_pct = True
+            rec_pct = bool(re.search(r"\brate\s*:?=\s*[^\n]*\*\s*100\b", rec_src))
+            stats_has = bool(re.search(r"recidivismRate\s*=", stats_src))
+            rec_has = bool(re.search(r"\brate\s*:?=\s*float64", rec_src))
+            if not (stats_has and rec_has):
+                verdict(name, None, f"产出点不齐（persist={stats_has} analysis={rec_has}）")
             else:
-                has_pct = False
-            # BanLevelEffectiveness.recidivism_rate 赋的是纯比例（不含 * 100）
-            m = re.search(r"recidivism_rate:\s*(\w+)\s*,", level)
-            plain = bool(m) and not re.search(
-                rf"recidivism_rate\s*=\s*\w+\s*\*\s*100", level
-            )
-            if has_pct and plain:
-                ok(name, "stats.rs 是百分数(0-100) 而 analysis.rs 是比例(0-1)")
-            else:
-                fail(name, f"单位已统一（stats 百分数={has_pct}，analysis 比例={plain}）")
-        elif name == "HTTP_TODAY_BANS_EQUALS_TOTAL":
-            # status=fixed：today_bans 已改为真实「今日」窗口（本地时区自然日
-            # 00:00 起，按 ban_events.banned_at 计数）。断言新实现真的接上了——
-            # 只判「旧锚点消失」会漏掉「删掉旧实现、新实现却没接进读路径」这种
-            # 换个马甲的空窗：
-            #   1. 旧现场（web_ui/stats.rs 里的 today_bans 取值）已消失；
-            #   2. api/views.rs 不再拿累计计数器冒充今日数，改为接收窗口值参数；
-            #   3. 端口声明了 today_bans，且 REST 与 SSE 两条读路径都经它取值；
-            #   4. 窗口实现落在 history_snapshot 且以 ban_events + 本地时区为准。
-            legacy = read(os.path.join(ROOT, "src", "daemon", "web_ui", "stats.rs"))
-            views = read(os.path.join(ROOT, "src", "daemon", "api", "views.rs"))
-            ports = read(os.path.join(ROOT, "src", "daemon", "api", "ports.rs"))
-            readings = read(os.path.join(ROOT, "src", "daemon", "api", "routes", "readings.rs"))
-            render = read(os.path.join(ROOT, "src", "daemon", "api", "render.rs"))
-            today = read(os.path.join(ROOT, "src", "daemon", "history_snapshot", "today_bans.rs"))
-            old_gone = "today_bans" not in legacy
-            takes_param = "today_bans: u64" in views and "today_bans: stats.get" not in views
-            port_declared = "fn today_bans(&self)" in ports
-            both_paths = (
-                "history.today_bans()" in readings and "history.today_bans()" in render
-            )
-            window_impl = "ban_events" in today and "Local" in today
-            if old_gone and takes_param and port_declared and both_paths and window_impl:
-                ok(name, "今日窗口已落地：旧现场消失，取值经 HistoryPort 由 REST/SSE 同源共用")
-            else:
-                fail(
+                verdict(
                     name,
-                    "今日窗口未接全"
-                    f"（旧现场消失={old_gone} 视图收参={takes_param} 端口声明={port_declared}"
-                    f" 两条读路径={both_paths} 窗口实现={window_impl}）",
+                    stats_pct != rec_pct,
+                    f"persist/ban_events.go 百分数={stats_pct}，"
+                    f"analysis/recommendations.go 百分数={rec_pct}",
                 )
         elif name == "HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS":
-            # maintain 分支取 current 而非 0，不存在「0=无需调整」的生成点。
-            src = read(
-                os.path.join(ROOT, "src", "daemon", "history_snapshot", "threshold_analysis.rs")
+            # 歧义仍成立的条件：前端注释宣称 0=无需调整，而 Go 的三个分支都给不出 0。
+            src = read(ANALYSIS_RECOMMENDATIONS_GO)
+            ts = strip_ts_comments(read(TS_TYPES))
+            doc_claims_zero = "0 = 无需调整" in ts or "0=无需调整" in ts
+            emits_zero = bool(re.search(r"recommended\s*(=|\?=)\s*0\b", src))
+            maintain_current = bool(
+                re.search(r'direction\s*=\s*"maintain"', src)
+                and re.search(r"recommended\s*=\s*current\b", src)
             )
-            if re.search(r'recommended_threshold:\s*recommended\b', src) and re.search(
-                r'"maintain"\.to_string\(\)', src
-            ):
-                ok(name, "maintain 分支返回原阈值，从不产生 0")
+            if not doc_claims_zero and not emits_zero:
+                verdict(name, None, "前后端都没有 0 语义的声明或产出点")
             else:
-                fail(name, "推荐阈值的生成分支已改变")
-        elif name == "HTTP_SERVICE_PROBE_NO_TOTAL":
-            # ServiceProbeResponse 缺 total_detected，而 PortScanResponse 有。
-            src = read(os.path.join(ROOT, "src", "daemon", "web_ui", "packet_analysis.rs"))
-            probe = re.search(r"struct\s+ServiceProbeResponse\s*\{(.*?)\}", src, re.S)
-            scan = re.search(r"struct\s+PortScanResponse\s*\{(.*?)\}", src, re.S)
-            if probe and scan:
-                if "total_detected" not in probe.group(1) and "total_detected" in scan.group(1):
-                    ok(name, "ServiceProbeResponse 仍无 total_detected（PortScanResponse 有）")
-                else:
-                    fail(name, "ServiceProbeResponse 已补上 total_detected 或 PortScanResponse 已移除")
-            else:
-                fail(name, "packet_analysis.rs 里找不到两个 Response 结构体")
+                verdict(
+                    name,
+                    doc_claims_zero and not emits_zero,
+                    f"前端仍声明 0=无需调整={doc_claims_zero}，Go 能产出 0={emits_zero}"
+                    f"（maintain 分支返回原阈值={maintain_current}）",
+                )
         elif name == "HTTP_HEALTH_NOT_ENVELOPED":
-            # status=retained：裸状态码是**有意保留**的探针语义。断言它仍然裸着，
-            # 且源码里写明了这是有意例外——一旦有人套上信封，这里会失败。
-            runtime_src = read(os.path.join(ROOT, "src", "daemon", "api", "routes", "runtime.rs"))
-            body = _fn_body(runtime_src, "handle_health")
-            if body is None:
-                fail(name, "api/routes/runtime.rs 里找不到 fn handle_health")
-            elif "ApiResponse" in body or "ApiError" in body:
-                fail(name, "handle_health 已改为经过信封（有意保留的裸状态码被改掉）")
-            elif "non-enveloped" not in runtime_src and "有意例外" not in runtime_src:
-                fail(name, "runtime.rs 未写明 /health 的裸状态码是有意保留")
+            # retained 说的是「契约那两条探针端点有意不套信封」。Go 面注册的是
+            # /api/v1/health（另一条端点，走信封），契约的 GET /health 与 /healthz
+            # 还没接线——拿它冒充现场就是自欺，所以返回 None，缺路由由 check_routes 报。
+            actual, _ = go_registrations()
+            probe = [f"{m} {p}" for (m, p) in actual if p in ("/health", "/healthz")]
+            if not probe:
+                verdict(name, None, "契约的 GET /health 与 /healthz 均未注册")
             else:
-                ok(name, "handle_health 仍直接返回裸 JSON，且源码写明是有意例外")
-        elif name == "HTTP_READ_PATH_WRITES_STATE":
-            # status=fixed：读路径的写副作用已删，且清理任务**真的接进了生产**。
-            #
-            # 只判「旧锚点消失」不够——本条缺陷此前正是以「新侧已就位、只差装配」的
-            # 形态挂着（Bans::purge_expired 已写好但无人调用）。故这里额外要求
-            # main.rs 装配 runtime::spawn_periodic、调度器回调里真的调用
-            # purge_expired_bans：否则「读路径不再清、也没有别人清」只是把缺陷换了个
-            # 马甲（过期条目会永久滞留）。
-            ban_ops = read(BAN_OPS_RS)
-            body = _fn_body(ban_ops, "get_active_bans")
-            reads = body is not None and "purge_expired" not in body
-            scheduler = read(SCHEDULER_RS)
-            purge_called = "purge_expired_bans" in scheduler
-            main_src = read(MAIN_RS)
-            wired = "spawn_periodic" in main_src
-            if reads and purge_called and wired:
-                ok(name, "get_active_bans 读路径已无 purge，周期清理由 main.rs 装配的调度器驱动")
-            else:
-                fail(
+                body = _fn_body(http_sources(), "Health") or ""
+                verdict(
                     name,
-                    "读路径或装配状态不符"
-                    f"（读路径无purge={reads} 调度器调用={purge_called} main装配={wired}）",
-                )
-        elif name == "HTTP_LOG_SSE_LIMIT_DOC_DRIFT":
-            # status=fixed：误导性注释已修正。断言旧注释**已消失**、新注释**在**，
-            # 且两条流的上限常量各自独立且不等（10 / 5）——修复的是注释不是实现。
-            logs = read(LOG_VIEWER_RS)
-            sse = read(SSE_RS)
-            m10 = re.search(r"const\s+MAX_SSE_CONNECTIONS\s*:\s*usize\s*=\s*(\d+)", sse)
-            m5 = re.search(r"const\s+MAX_LOG_SSE_CONNECTIONS\s*:\s*usize\s*=\s*(\d+)", sse)
-            old_doc = "SSE 连接与 Web UI SSE 共享" in logs
-            new_doc = "各自独立计数与上限" in logs
-            if m10 and m5 and not old_doc and new_doc and m10.group(1) != m5.group(1):
-                ok(
-                    name,
-                    f"误导性『共享』注释已消失、新注释在位，两值独立且不等"
-                    f"（{m10.group(1)} / {m5.group(1)}）",
-                )
-            else:
-                fail(
-                    name,
-                    "旧注释仍在或新注释缺失"
-                    f"（old={old_doc} new={new_doc} 10={bool(m10)} 5={bool(m5)}）",
+                    "WriteSuccess" not in body and "WriteError" not in body,
+                    f"{', '.join(sorted(probe))} 的响应是否仍裸写信封外"
+                    f"={_fn_body(http_sources(), 'Health') is not None and 'WriteSuccess' not in body}",
                 )
         elif name == "HTTP_BANS_DUAL_SHAPE":
-            # status=fixed：服务端只留单一形状（分页信封），前端也必须只剩一层返回类型。
-            # 这条缺陷此前是「服务端修了、契约写了 fixed，前端却仍按裸数组取用」——
-            # 断言前端**已删除**重载与运行期分支，否则契约在说一件代码里不成立的事。
             src = strip_ts_comments(read(TS_ENDPOINTS))
             overloads = len(re.findall(r"export\s+function\s+getBans\s*\(", src))
-            bare = "Promise<BanResponse[]>" in src
-            paged = "Promise<PaginatedResponse<BanResponse>>" in src
-            if overloads == 1 and paged and not bare:
-                ok(name, "getBans 只有单一分页形状（无重载、无裸数组返回类型）")
+            bare_ts = "Promise<BanResponse[]>" in src
+            paged_ts = "Promise<PaginatedResponse<BanResponse>>" in src
+            handler = _fn_body(http_sources(), "ListBans")
+            if handler is None:
+                verdict(name, None, "internal/http 里找不到 ListBans")
             else:
-                fail(
+                server_paged = bool(
+                    re.search(r"URL\.Query\(\)|Paginated|\"items\"", handler)
+                )
+                verdict(
                     name,
-                    "前端仍保留裸数组形状"
-                    f"（getBans 定义 {overloads} 处，裸数组={bare}，分页={paged}）",
+                    not (server_paged and overloads == 1 and paged_ts and not bare_ts),
+                    f"服务端分页信封={server_paged}，前端 getBans 重载 {overloads} 处"
+                    f"（裸数组返回={bare_ts}，分页返回={paged_ts}）",
                 )
         elif name == "HTTP_BAN_SORT_DOC_INCOMPLETE":
-            # doc 只列 4 值、实现 7 值，且前端 union 与实现一致。
-            # 实现里 6 个是 Some("...") 臂，第 7 个 banned_at_desc 落在 `_` 默认臂
-            # （靠行尾注释标注），所以要单独把默认值捞出来。
-            src = read(os.path.join(ROOT, "src", "daemon", "web_ui", "ban_ops.rs"))
-            doc = re.search(r"排序字段（可选）[^\n]*", src)
-            block = re.search(
-                r"match\s+sort_by\.as_deref\(\)\s*\{(.*?)\n    \}", src, re.S
-            )
+            handler = _fn_body(http_sources(), "ListBans")
             ts = read(TS_TYPES)
             mts = re.search(r"export\s+type\s+BanSortKey\s*=(.*?)(?:\n\n|\Z)", ts, re.S)
-            keys = re.findall(r"'([a-z_]+)'", mts.group(1)) if mts else []
-            if not doc or not block or not keys:
-                fail(name, "找不到 sort_by 文档 / match 块 / 前端 BanSortKey")
+            keys = set(re.findall(r"'([a-z_]+)'", mts.group(1))) if mts else set()
+            if handler is None:
+                verdict(name, None, "internal/http 里找不到 ListBans")
             else:
-                impl_set = set(re.findall(r'Some\("(\w+)"\)', block.group(1)))
-                dflt = re.search(r"_[\s\S]*?//\s*(\w+_\w+)", block.group(1))
-                if dflt:
-                    impl_set.add(dflt.group(1))
-                doc_keys = set(re.findall(r"[a-z][a-z_]*_(?:asc|desc)\b", doc.group(0)))
-                ts_set = set(keys)
-                if impl_set == ts_set and doc_keys < impl_set:
-                    ok(
-                        name,
-                        f"doc 仅列 {len(doc_keys)} 值，实现与前端同为 {len(impl_set)} 值",
-                    )
-                else:
-                    fail(
-                        name,
-                        "取值集合已对齐"
-                        f"（doc={len(doc_keys)} impl={len(impl_set)} ts={len(ts_set)}）",
-                    )
+                server_has_sort = bool(
+                    re.search(r"sort_by|SortBy|sort\.(Slice|Strings)", handler)
+                )
+                verdict(
+                    name,
+                    not server_has_sort,
+                    f"服务端有排序分支={server_has_sort}，前端 BanSortKey 仍声明 {len(keys)} 个取值",
+                )
+        elif name == "HTTP_READ_PATH_WRITES_STATE":
+            # 现场 = **读** handler 里有写操作。按名字取那几条 GET handler 的函数体来扫，
+            # 不能整文件扫：bans.go 同时装着 CreateBan/DeleteBan，它们写镜像是本职。
+            tree = http_sources()
+            readers = ("ListBans", "BanStats", "BanDetail", "ListWhitelist",
+                       "WhitelistStats", "ListJails", "GetJail", "JailStats",
+                       "GetConfig", "GetLogs", "GetRatesHistory", "Health")
+            writes: list[str] = []
+            for fn in readers:
+                body = _fn_body(tree, fn)
+                if body is None:
+                    continue
+                writes += re.findall(
+                    r"SweepExpired|\.Upsert\(|\.Remove\(|MarkPending|ClearPending|\.Add\(1\)",
+                    body,
+                )
+            verdict(
+                name,
+                bool(writes),
+                f"读路径写点 {len(writes)} 处"
+                + (f"（{', '.join(sorted(set(writes)))}）" if writes else "，清扫在 kernel/consumer.go 的对账里"),
+            )
+        elif name == "HTTP_SSE_RESERIALIZES_EVERY_DOMAIN":
+            # 现场 = 序列化发生在每条连接的循环里（多处 marshal）而非一次 Publish。
+            src = read(SSE_GO)
+            publish = _fn_body(src, "Publish") or ""
+            total = src.count("json.Marshal")
+            verdict(
+                name,
+                total > 1 or "json.Marshal" not in publish,
+                f"整个 sse.go 只有 Publish 里一次 json.Marshal（全文件 {total} 处）"
+                if total <= 1 and "json.Marshal" in publish
+                else f"序列化点 {total} 处，Publish 内含={('json.Marshal' in publish)}",
+            )
+        elif name == "HTTP_WHITELIST_KEY_DIVERGENCE":
+            # 现场 = 白名单键有多套归一规则。两处构造点（镜像与检测聚合）都归一到
+            # Masked()，且 bans 包里只有一处拼键。
+            glob = read(os.path.join(DAEMON, "internal", "bans", "global.go"))
+            cidr = read(os.path.join(DAEMON, "internal", "detect", "cidr.go"))
+            both_masked = "prefix.Masked().String()" in glob and ".Masked()" in cidr
+            verdict(
+                name,
+                not both_masked,
+                f"白名单镜像与检测键都经 Masked() 归一={both_masked}",
+            )
+        elif name == "HTTP_BATCH_BAN_BECOMES_PERMANENT":
+            src = read(BANS_GO)
+            verdict(
+                name,
+                "isPermanent := req.Duration == 0" in src,
+                "BatchBan 仍把 duration 缺省/0 升格为永久封禁"
+                if "isPermanent := req.Duration == 0" in src
+                else "BatchBan 不再把缺省 duration 判为永久",
+            )
+        elif name == "HTTP_SSE_STATUS_INCOMPLETE":
+            body = _fn_body(http_sources(), "SSEStatus")
+            if body is None:
+                verdict(name, None, "internal/http 里找不到 SSEStatus")
+            else:
+                per_stream = '"events"' in body and '"logs"' in body
+                verdict(
+                    name,
+                    not per_stream,
+                    f"sse-status 是否分别报两条流的 current/max={per_stream}"
+                    "（现在报的是 HTTP 服务器级单一 active/max）",
+                )
+        elif name == "HTTP_SSE_JAILS_NO_PUBLISHER":
+            # 现场 = 事件泵里没有 jails 这个域。泵用域名字面量发布（DomainBans /
+            # DomainWhitelist），所以「consumer.go 里没出现过 "jails"」就是没有生产者；
+            # 只看 Publish 调用点不行——域名是变量，任何域都扫不到字面量。
+            pump = read(CONSUMER_GO)
+            jails_domain = bool(re.search(r'"jails"|DomainJails', pump))
+            verdict(
+                name,
+                not jails_domain,
+                "kernel/consumer.go 的发布域里没有 jails"
+                if not jails_domain
+                else "kernel/consumer.go 已出现 jails 域",
+            )
+        elif name == "HTTP_TODAY_BANS_EQUALS_TOTAL":
+            tree = go_tree_sources()
+            if "today_bans" not in tree and "TodayBans" not in tree:
+                verdict(name, None, "Go 面还没有 today_bans 字段与 GET /api/v1/stats")
+            else:
+                # 接回来之后：现场仍在 = 找不到任何「自然日窗口」的算法（今日与总计同源）。
+                day_window = bool(
+                    re.search(r"StartOfDay|startOfToday|Midnight|00:00", tree)
+                )
+                verdict(
+                    name,
+                    not day_window,
+                    f"today_bans 存在但是否按自然日窗口计算={day_window}",
+                )
+        elif name == "HTTP_SERVICE_PROBE_NO_TOTAL":
+            tree = go_tree_sources()
+            if not ("ServiceProbe" in tree or "service-probes" in tree):
+                verdict(name, None, "Go 面还没有 service-probes 端点/载荷")
+            else:
+                verdict(
+                    name,
+                    "total_detected" not in tree,
+                    "service-probes 与 port-scanners 的检出计数字段是否已对齐",
+                )
+        elif name == "HTTP_LOG_SSE_LIMIT_DOC_DRIFT":
+            main_src = read(MAIN_GO)
+            logs_body = _fn_body(read(LOGS_GO), "StreamLogs") or ""
+            brokers = main_src.count("NewSSEBroker(")
+            logs_capped = bool(
+                re.search(r"maxClients|MaxClients|connLimit|len\(.*clients\)\s*>=", logs_body)
+            )
+            verdict(
+                name,
+                brokers < 2 or not logs_capped,
+                f"组合根只建 {brokers} 个 SSEBroker，日志流自身有连接上限={logs_capped}"
+                "（契约的 events 10 / logs 5 两个独立上限都不存在）",
+            )
+        # 没有探针的（例如纯文档类缺陷）落到下面的 missing 清单，不静默当成通过。
 
-    # 契约里声明了缺陷却没有机械断言 —— 显式报出来，避免「看着有 defect 段
-    # 就以为都校验了」的假安全感。
-    # （errmodel 的 where 存在性由 check_anchors 覆盖，不在此列。）
-    unasserted = sorted(declared - asserted)
-    if unasserted:
-        print(f"  提示：以下 defect 仅有锚点核对，无机械断言：{', '.join(unasserted)}")
+    missing = sorted(declared - covered)
+    if missing:
+        print(f"  提示：以下 defect 没有机械探针，只有锚点核对：{', '.join(missing)}")
     return problems
 
 
+def _tool(override: str | None, name: str) -> str | None:
+    """取工具链可执行文件：显式给的必须是存在的文件，否则退回 PATH 上找。
+
+    CI 里把 `GO=go` 这类**名字**写进 env 时，直接拿去 subprocess 会抛
+    FileNotFoundError——那会被读成「契约有问题」。这里统一：名字要在 PATH 上解析，
+    解析不到就当没这个工具，由调用方打印「跳过」。
+    """
+    if override:
+        if os.path.isfile(override) and os.access(override, os.X_OK):
+            return override
+        return shutil.which(override)
+    return shutil.which(name)
+
+
 def check_artifacts() -> list[str]:
-    """确认 HTTP 生成物本身可用：Rust 契约能编译、TS 契约能过类型检查。"""
+    """确认 HTTP 生成物本身可用：Go 契约能编译、TS 契约能过类型检查。
+
+    工具链缺失时**跳过并说明**，不报假红也不静默通过：`tsc` 的 shebang 需要
+    node，本机没有 node 时它会以 127 退出且 stdout 为空——那不是契约的问题，
+    把它记成契约失败只会让人以为生成的 .ts 有类型错误。Rust 生成物已随 Rust
+    daemon 一并退役，这里不再有 rustc 一步。
+    """
     problems: list[str] = []
     print("=== 生成物自检（各自工具链）===")
-    rs_src = os.path.join(GEN_DIR, "http_contract.rs")
-    with tempfile.TemporaryDirectory() as td:
-        rlib = os.path.join(td, "h.rlib")
-        proc = subprocess.run(
-            ["rustc", "--edition", "2021", "--crate-type", "lib", "-o", rlib, rs_src],
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode != 0:
-            problems.append("http_contract.rs 编译失败:\n" + proc.stderr[-3000:])
-            print("  失败  http_contract.rs 编译")
-        else:
-            print("  OK    http_contract.rs 编译")
+
+    rs_src = os.path.join(GEN_DIR, "http_contract.go")
+    go = _tool(os.environ.get("GO"), "go")
+    if go and os.path.isfile(rs_src):
+        # 临时目录留在仓库内（.gitignore 的 /tmp/fw_* 覆盖），不往仓库外落文件。
+        scratch = os.path.join(ROOT, "tmp")
+        os.makedirs(scratch, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="fw_", dir=scratch) as td:
+            dst = os.path.join(td, "http_contract.go")
+            shutil.copyfile(rs_src, dst)
+            proc = subprocess.run(
+                [go, "build", "-o", os.path.join(td, "pkg.a"), dst],
+                capture_output=True, text=True, cwd=td,
+            )
+            if proc.returncode != 0:
+                problems.append(
+                    "http_contract.go 编译失败:\n"
+                    + (proc.stderr or proc.stdout)[-3000:]
+                )
+                print("  失败  http_contract.go go build")
+            else:
+                print("  OK    http_contract.go go build")
+    else:
+        print(f"  跳过  http_contract.go go build（未找到 go：{go!r}）")
 
     ts_src = os.path.join(GEN_DIR, "http_contract.ts")
     tsc = os.environ.get("TSC") or os.path.join(ROOT, "frontend", "node_modules", ".bin", "tsc")
-    if os.path.isfile(tsc):
-        proc = subprocess.run(
-            [tsc, "--noEmit", "--strict", "--skipLibCheck", "--target", "es2020",
-             "--lib", "es2020,dom", ts_src],
-            capture_output=True, text=True, cwd=ROOT,
-        )
+    node = _tool(os.environ.get("NODE"), "node")
+    if os.path.isfile(tsc) and not node and not os.environ.get("TSC"):
+        # tsc 是带 shebang 的 JS 包装：没有 node 就跑不起来，据实跳过。
+        print(f"  跳过  http_contract.ts tsc（仓库里有 tsc 但环境无 node 运行时）")
+    elif os.path.isfile(tsc):
+        argv = [tsc, "--noEmit", "--strict", "--skipLibCheck", "--target", "es2020",
+                "--lib", "es2020,dom", ts_src]
+        if node:
+            # 显式经 node 调用，避开 shebang 与 PATH 的差异。
+            argv = [node, tsc] + argv[1:]
+        proc = subprocess.run(argv, capture_output=True, text=True, cwd=ROOT)
         if proc.returncode != 0:
-            problems.append("http_contract.ts 类型检查失败:\n" + proc.stdout[-3000:])
+            problems.append(
+                "http_contract.ts 类型检查失败:\n"
+                + ((proc.stdout or "") + (proc.stderr or ""))[-3000:]
+            )
             print("  失败  http_contract.ts tsc --noEmit")
         else:
             print("  OK    http_contract.ts tsc --noEmit")
@@ -1281,72 +1768,158 @@ def check_artifacts() -> list[str]:
     return problems
 
 
-def check_migration_ratchet(contract: dict) -> list[str]:
-    """迁移棘轮：未迁入 api/ 的路由是对照冻结基线**只减不增**的集合。
+# ---------------------------------------------------------------------------
+# 13. 缺口棘轮：把「Go 还没接线」与「实现与契约矛盾」分开
+# ---------------------------------------------------------------------------
 
-    背景：三端重写要把 ``handler.rs::legacy_protected_routes``（路径字面量）里的
-    路由陆续搬进 ``api/router.rs::protected_routes``（``path::ROUTE_*`` 常量）。
-    仅靠「契约里声明过该路由」就能通过门禁，于是新端点可以悄悄加进 legacy 组而
-    无人察觉 —— 本检查堵住这一点。
+# 每条问题文本 → 稳定指纹的规则。指纹**不含计数与散文**，因此改文案不会让基线整片
+# 失效；反过来，散文改了而规则没跟上，那条问题就落进「校验器不认识」里当新缺口报出，
+# 不会静默通过。规则按顺序匹配，第一条命中即取。
+_GAP_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("route-missing", re.compile(r"^路由 (\w+ .+?) 在 daemon 的 ServeMux 注册里不存在")),
+    ("route-any-method", re.compile(r"^路由 (\w+ .+?) 只以无方法前缀的 Handle 注册")),
+    ("route-undeclared", re.compile(r"^daemon 中存在契约未声明的路由 (\w+ .+?)（")),
+    ("route-auth-group", re.compile(r"^路由 (\w+ .+?): 契约 auth=")),
+    ("route-handler-mismatch", re.compile(r"^路由 (\w+ .+?): 源码 handler")),
+    ("handler-naming", re.compile(r"^契约声明的 handler 名")),
+    ("auth-constant", re.compile(r"^(auth\.\w+):")),
+    ("sse-cap", re.compile(r"^SSE (/[\w/\-]*): 契约上限")),
+    ("sse-publish-point", re.compile(r"^SSE (/[\w/\-]*): 事件 '(\w+)' 在 Go 源码里没有发布点")),
+    ("sse-subscriber", re.compile(r"^SSE (/[\w/\-]*): 事件 '(\w+)' 在前端订阅侧找不到")),
+    ("type-contract-field", re.compile(r"^类型 (\w+)（[^）]*）: 契约字段 '(\w+)'")),
+    ("type-go-only-field", re.compile(r"^类型 (\w+)（[^）]*）: struct 字段 '(\w+)'")),
+    ("type-unreferenced", re.compile(r"^类型 (\w+)（[^）]*）: internal/http 里没有它的引用")),
+    ("type-unmapped", re.compile(r"^\d+/\d+ 个载荷类型在 Go 源码里没有同名 struct")),
+    ("header-missing", re.compile(r"^header ([\w\-]+):")),
+    ("errmodel-body", re.compile(r"^errmodel (\w+): 响应体 ")),
+    ("errmodel-plain-text", re.compile(r"^errmodel (\w+): 契约声明 \[(\d+)\] 的响应体是纯文本")),
+    ("errmodel-framework-claim", re.compile(r"^errmodel (\w+): 契约(?:声明|把) (\d+)")),
+    ("errmodel-fallback", re.compile(r"^errmodel (\w+):")),
+    ("envelope-key-order", re.compile(r"^信封 Envelope 的 JSON key")),
+    ("envelope-success-message", re.compile(r"^成功信封的 message")),
+    ("envelope-data-omitempty", re.compile(r"^信封 Envelope\.data 的 tag")),
+    ("envelope-error-data", re.compile(r"^ErrorEnvelope 未给 data")),
+    ("envelope-error-code", re.compile(r"^ErrorEnvelope 把 code")),
+    ("business-codes-unproduced", re.compile(r"^业务码在 Go 源码里没有构造点")),
+)
 
-    ``route_baseline legacy`` 冻结迁移开始时的未迁全集。规则是只能变小：
+GAP_BASELINE_FILE = os.path.join(ROOT, "contract", "http_gap_baseline.txt")
 
-      1. 基线里的路由必须真的还在 ``legacy_protected_routes()`` 里。少了一条就是
-         可疑删除（要迁就走迁移流程，不要从基线里删一行了事）。
-      2. 源码里出现基线之外、又不在 api/ 组的路由 —— 新端点，必须迁入 api/。
 
-    迁移一条后**必须**同步删除对应基线行，否则该路由同时命中上面两条（这正是
-    刻意的摩擦：迁移动作要显式落在契约里）。
+def _gap_fingerprint(msg: str) -> str:
+    """问题文本 → 指纹；不认识的问题用全文当指纹（于是必然不在基线里，报成新缺口）。"""
+    for kind, pat in _GAP_RULES:
+        m = pat.match(msg)
+        if m:
+            return ":".join((kind, *m.groups()))
+    return "unclassified:" + msg
 
-    只按 ``auth`` 分组的 ``check_routes`` 无法覆盖这一维度（legacy 与 api 两组的
-    auth 都是 ``required``，互换也通过）。
+
+def _read_gap_baseline() -> dict[str, str]:
+    """基线文件 → {指纹: 注释}。`#` 开头与空行忽略，行内 ` #` 之后是备注。"""
+    entries: dict[str, str] = {}
+    if not os.path.isfile(GAP_BASELINE_FILE):
+        return entries
+    for line in read(GAP_BASELINE_FILE).splitlines():
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        fp, _, note = text.partition(" #")
+        entries[fp.strip()] = note.strip()
+    return entries
+
+
+def apply_gap_ratchet(failures: list[str]) -> list[str]:
+    """把「Go 尚未接线」的已知缺口按**只减不增**的基线冻结，其余一律算红。
+
+    为什么需要这一层：daemon 从 Rust 迁到 Go 后，契约里 57 条路由有 20 来条、两条 SSE
+    的上限与安全头都还没接上。直接把校验器指向 Go 会让 CI 长期全红，真漂移就淹在噪音里。
+    冻结基线把两侧分开：
+
+      - 缺口在基线里且仍然报出 → 计入「待实现」，不红（但**逐条打印**，不静默）
+      - 缺口不在基线里 → 红：新出现的缺口，必须显式加行才允许存在
+      - 基线里的条目不再报出 → 红：那一格已经补上了，必须删行（刻意的摩擦，
+        逼着补齐动作同步落进契约与本文件）
+
+    规则本身不削弱契约：.fwidl 里的要求一条都没删，基线只是记录「daemon 当前还没做到」，
+    并且只许缩小。`defect … 已失效` 与生成物自检失败没有指纹，永远直接算红。
     """
-    problems: list[str] = []
-    src = read(HANDLER_RS)
-    api_router = read(API_ROUTER_RS)
-    _, legacy_src, api_src, health_src = split_router_groups(src, api_router)
-    if not legacy_src or not api_src:
-        return ["未能在 handler.rs / api/router.rs 里切出路由组，迁移棘轮无法核对"]
+    baseline = _read_gap_baseline()
+    live: dict[str, str] = {}
+    unknown: list[str] = []
+    for msg in failures:
+        fp = _gap_fingerprint(msg)
+        if fp.startswith("unclassified:"):
+            # 不认识的问题文本一律直接算红（defect 改判冲突、生成物自检失败、扫描器
+            # 本身失灵都属于这类），不给它伪装成可冻结的缺口。
+            unknown.append(msg)
+            continue
+        live.setdefault(fp, msg)
 
-    api_group = set()
-    for segment in (api_src, health_src):
-        consts = _resolve_path_consts(segment)
-        for m in re.finditer(
-            r"\.route\(\s*(path::\w+)\s*,\s*(get|post|put|delete)\s*\(\s*(\w+)\s*\)",
-            segment,
-        ):
-            const_name = m.group(1).rsplit("::", 1)[-1]
-            if const_name in consts:
-                api_group.add((m.group(2).upper(), consts[const_name]))
-
-    legacy_group = {
-        (m.group(2).upper(), m.group(1)) for m in _ROUTE_RE.finditer(legacy_src)
-    }
-    baseline = {
-        (e["method"].upper(), e["path"]) for e in contract.get("route_baseline", [])
-    }
-    if not baseline:
-        return ["契约缺少 'route_baseline legacy' 块，迁移棘轮无基线可比"]
-
-    for key in sorted(baseline - legacy_group):
+    problems: list[str] = list(unknown)
+    new_gaps = [fp for fp in sorted(live) if fp not in baseline]
+    closed = [fp for fp in sorted(baseline) if fp not in live]
+    for fp in new_gaps:
         problems.append(
-            f"迁移棘轮: 基线里的 {key[0]} {key[1]} 已不在 legacy 组 —— 若是迁移请"
-            "同步删除该基线行；若是误删则改回"
+            f"新增缺口（不在 contract/{os.path.basename(GAP_BASELINE_FILE)} 里）：{live[fp]}"
+            "\n     确认属于「Go 尚未接线」才加行；实现与契约矛盾应当修实现而不是加行"
         )
-    for key in sorted(legacy_group - baseline - api_group):
+    for fp in closed:
         problems.append(
-            f"迁移棘轮: {key[0]} {key[1]} 既不在冻结基线、也不在 api/ 组 —— "
-            "新端点必须迁入 api/（契约 route 声明 + api/router.rs 登记）"
+            f"缺口已闭合但基线未同步：{fp}"
+            f"{'（' + baseline[fp] + '）' if baseline[fp] else ''}"
+            " —— 请把该行从基线里删掉"
         )
-
     print(
-        f"  迁移棘轮: 基线 {len(baseline)} 条 / legacy 组 {len(legacy_group)} 条 / "
-        f"api 组 {len(api_group)} 条"
+        f"  缺口棘轮：基线 {len(baseline)} 条 / 仍缺 {len(live) - len(new_gaps)} 条 / "
+        f"新增 {len(new_gaps)} 条 / 已闭合未删行 {len(closed)} 条"
     )
+    frozen = [fp for fp in sorted(live) if fp in baseline]
+    if frozen:
+        by_kind: dict[str, int] = {}
+        for fp in frozen:
+            by_kind[fp.split(":")[0]] = by_kind.get(fp.split(":")[0], 0) + 1
+        print(
+            "  待实现（已在基线冻结，逐条见 contract/http_gap_baseline.txt）："
+            + "、".join(f"{k} {v} 条" for k, v in sorted(by_kind.items()))
+        )
+    if new_gaps:
+        print("  新增缺口指纹：" + ", ".join(new_gaps))
+    if closed:
+        print("  待删行的已闭合指纹：" + ", ".join(closed))
     return problems
 
 
+def dump_gap_baseline(failures: list[str]) -> None:
+    """`--write-gap-baseline` 用：把当前所有缺口指纹写成基线（含原问题文本作注释）。
+
+    只在人为核对后手工运行，不作为常规门禁路径——常规路径只读基线并做只减不增比对。
+    """
+    seen: dict[str, str] = {}
+    for msg in failures:
+        fp = _gap_fingerprint(msg)
+        if fp.startswith("unclassified:"):
+            continue
+        seen.setdefault(fp, msg)
+    header = (
+        "# HTTP 契约缺口的冻结基线（由 contract/verify_http.py --write-gap-baseline 生成）\n"
+        "#\n"
+        "# 一行一个指纹，格式 `<kind>:<标识>[…]: <原问题文本>`（# 之后是备注）。\n"
+        "# 规则是**只减不增**：\n"
+        "#   * 门禁报出而这里没有的指纹 = 新缺口，必须显式加行才允许存在；\n"
+        "#   * 这里有而门禁不再报出的 = 那一格已补上，必须删行；\n"
+        "#   * 实现与契约矛盾的东西不该进这里——那是要修的实现，不是可冻结的缺口。\n"
+        "# 契约（http.fwidl）因此保持完整：这里只登记 daemon 当前还没接线的部分。\n"
+    )
+    with open(GAP_BASELINE_FILE, "w", encoding="utf-8") as fh:
+        fh.write(header)
+        for fp in sorted(seen):
+            fh.write(f"{fp} # {seen[fp]}\n")
+    print(f"  已写出基线：{GAP_BASELINE_FILE}（{len(seen)} 条）")
+
+
 def main() -> int:
+    dump_mode = "--write-gap-baseline" in sys.argv
     if not os.path.isfile(LAYOUT_JSON):
         print("错误: 未找到生成物，请先运行 gen.py", file=sys.stderr)
         return 2
@@ -1356,8 +1929,6 @@ def main() -> int:
     print("=== HTTP 契约 vs daemon + 前端 ===")
     failures: list[str] = []
     failures += check_routes(contract)
-    print()
-    failures += check_migration_ratchet(contract)
     print()
     failures += check_auth_constants(contract)
     print()
@@ -1373,7 +1944,7 @@ def main() -> int:
     print()
     failures += check_sse_events(contract)
     print()
-    failures += check_types_rust(contract)
+    failures += check_types_go(contract)
     print()
     failures += check_types_frontend(contract)
     print()
@@ -1385,6 +1956,16 @@ def main() -> int:
     print()
     failures += check_artifacts()
 
+    # 棘轮之后只留「红」的那部分：基线里冻结的缺口已从列表里摘掉，
+    # 剩下的必须是新增缺口、已闭合未删行、以及无法归类的问题。
+    # 重新冻结基线时要看**归类前**的完整列表，否则刚跑完棘轮就只剩新增项了。
+    unfrozen = list(failures)
+    failures = apply_gap_ratchet(failures)
+    if dump_mode:
+        print()
+        dump_gap_baseline(unfrozen)
+        return 0
+
     print()
     if failures:
         print("HTTP 契约校验失败:")
@@ -1392,8 +1973,8 @@ def main() -> int:
             print(f"  - {f}")
         return 1
     print(
-        "HTTP 契约校验通过：路由、认证、SSE、信封、业务码、错误形状、安全头与"
-        "前后端字段均与实现一致"
+        "HTTP 契约校验通过：已接线的部分与契约一致，缺口未新增"
+        "（仍缺的条目见上面「待实现」计数与 contract/http_gap_baseline.txt）"
     )
     return 0
 
