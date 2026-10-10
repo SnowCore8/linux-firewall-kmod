@@ -24,11 +24,6 @@ type WhitelistRecommendation struct {
 //   - min_bans: 最小封禁次数阈值（默认 5）
 //   - limit: 返回条数上限（默认 20，最大 100）
 func (h *APIHandlers) GetWhitelistRecommendations(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
-
 	if h.db == nil {
 		WriteServiceUnavailable(w, "history database not initialized")
 		return

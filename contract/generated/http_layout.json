@@ -8,11 +8,10 @@
     "信封 ApiResponse: code / data / message",
     "认证: 失败 10 次锁 60s，未授权状态码 401",
     "安全头 4 条",
-    "业务码 50002 已声明但没有任何路由引用（可能是没落地的码）",
     "路由 57 条（无认证 14 / 需认证 43）",
     "SSE GET /api/v1/events: 上限 10 连接，6 个事件",
     "SSE GET /api/v1/logs/stream: 上限 5 连接，3 个事件",
-    "错误形状 3 种",
+    "错误形状 4 种",
     "响应 AnomalyResponse: 8 个字段",
     "响应 DimensionScore: 2 个字段",
     "响应 FeatureValue: 2 个字段",
@@ -346,7 +345,9 @@
       "returns": "stream",
       "status": 200,
       "alt_status": 503,
-      "codes": [],
+      "codes": [
+        50003
+      ],
       "max_connections": 10,
       "events": [
         "connected",
@@ -367,7 +368,9 @@
       "returns": "stream",
       "status": 200,
       "alt_status": 503,
-      "codes": [],
+      "codes": [
+        50003
+      ],
       "max_connections": 5,
       "events": [
         "connected",
@@ -416,7 +419,9 @@
       "status": 201,
       "alt_status": 200,
       "codes": [
-        40001
+        40001,
+        40007,
+        40008
       ],
       "max_connections": null,
       "events": [],
@@ -480,7 +485,9 @@
       "status": 201,
       "alt_status": 200,
       "codes": [
-        40005
+        40005,
+        40007,
+        40008
       ],
       "max_connections": null,
       "events": [],
@@ -510,7 +517,10 @@
       "status": 200,
       "alt_status": null,
       "codes": [
-        404
+        404,
+        40007,
+        40008,
+        50003
       ],
       "max_connections": null,
       "events": [],
@@ -525,7 +535,9 @@
       "returns": "type",
       "status": 200,
       "alt_status": null,
-      "codes": [],
+      "codes": [
+        50003
+      ],
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
@@ -540,7 +552,10 @@
       "status": 200,
       "alt_status": null,
       "codes": [
-        40004
+        40004,
+        40007,
+        40008,
+        50003
       ],
       "max_connections": null,
       "events": [],
@@ -570,7 +585,9 @@
       "status": 201,
       "alt_status": 200,
       "codes": [
-        40003
+        40003,
+        40007,
+        40008
       ],
       "max_connections": null,
       "events": [],
@@ -601,7 +618,10 @@
       "returns": "type",
       "status": 200,
       "alt_status": null,
-      "codes": [],
+      "codes": [
+        50002,
+        50003
+      ],
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
@@ -671,7 +691,10 @@
       "returns": "type",
       "status": 200,
       "alt_status": null,
-      "codes": [],
+      "codes": [
+        50002,
+        50003
+      ],
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
@@ -699,7 +722,10 @@
       "returns": "type",
       "status": 200,
       "alt_status": null,
-      "codes": [],
+      "codes": [
+        50002,
+        50003
+      ],
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
@@ -713,7 +739,10 @@
       "returns": "type",
       "status": 200,
       "alt_status": null,
-      "codes": [],
+      "codes": [
+        50002,
+        50003
+      ],
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
@@ -853,7 +882,10 @@
       "returns": "type",
       "status": 200,
       "alt_status": null,
-      "codes": [],
+      "codes": [
+        50002,
+        50003
+      ],
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
@@ -867,7 +899,10 @@
       "returns": "type",
       "status": 200,
       "alt_status": null,
-      "codes": [],
+      "codes": [
+        50002,
+        50003
+      ],
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
@@ -881,7 +916,10 @@
       "returns": "type",
       "status": 200,
       "alt_status": null,
-      "codes": [],
+      "codes": [
+        50002,
+        50003
+      ],
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
@@ -895,7 +933,10 @@
       "returns": "type",
       "status": 200,
       "alt_status": null,
-      "codes": [],
+      "codes": [
+        50002,
+        50003
+      ],
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
@@ -909,7 +950,10 @@
       "returns": "type",
       "status": 200,
       "alt_status": null,
-      "codes": [],
+      "codes": [
+        50002,
+        50003
+      ],
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
@@ -952,7 +996,9 @@
       "status": 200,
       "alt_status": null,
       "codes": [
-        40005
+        40005,
+        50002,
+        50003
       ],
       "max_connections": null,
       "events": [],
@@ -2871,6 +2917,14 @@
       "status": 400,
       "text": "封禁详情查询失败（IP 非法）"
     },
+    "40007": {
+      "status": 422,
+      "text": "请求体不是合法 JSON 或字段类型不符（daemon 解析，框架不会自产此码）"
+    },
+    "40008": {
+      "status": 415,
+      "text": "Content-Type 不是 application/json（本 API 只说这一种媒体类型）"
+    },
     "404": {
       "status": 404,
       "text": "Jail 不存在"
@@ -2878,6 +2932,10 @@
     "50002": {
       "status": 500,
       "text": "服务端内部错误（历史库查询任务 join 失败等），message 含具体原因"
+    },
+    "50003": {
+      "status": 503,
+      "text": "依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满"
     }
   },
   "errmodels": {
@@ -2900,14 +2958,24 @@
     "FRAMEWORK_DEFAULT": {
       "shape": "framework_default",
       "statuses": [
-        422,
-        400,
-        415,
         404,
         405
       ],
       "body": "",
-      "note": "框架默认错误：请求体反序列化失败 422、Query 解析失败 400、Content-Type 不符 415、方法不匹配 405、路径不匹配 404。响应体是框架自带的纯文本（Go 侧为 net/http 的 `404 page not found`、`Method Not Allowed`），不是信封 —— 前端不能假设所有错误都能 JSON.parse，也不能假设所有 4xx 都有信封。"
+      "note": "框架自产错误：路径无匹配模式 404（body `404 page not found`）、模式带方法而动词不符 405（body `Method Not Allowed`）。Go 侧这两条由 net/http ServeMux 产生，daemon 源码里**不该**有它们的构造点；把路由注册成带方法的模式正是让它们生效的前提。响应体是框架自带的纯文本，不是信封 —— 前端不能假设所有错误都能 JSON.parse，也不能假设所有 4xx 都有信封。"
+    },
+    "ENVELOPE_ERROR": {
+      "shape": "envelope",
+      "statuses": [
+        400,
+        404,
+        415,
+        422,
+        500,
+        503
+      ],
+      "body": "",
+      "note": "daemon 自己写出的错误，走统一信封：code 是 `codes` 段声明的业务码，data 恒为 null，message 给人读。历史上这批状态码被记在 FRAMEWORK_DEFAULT 里（axum 的提取器会自产 422/415、query 解析失败自产 400），net/http 没有提取器，三个状态码一个都不会自己产生——把它们留在「框架默认」下等于契约在说自己不成立的事实。404 在这里与在框架默认里**并存**且不矛盾：路径不匹配时是框架的纯文本 404，资源存在性失败（Jail 不存在）是信封 404 + 业务码 404。"
     }
   },
   "defects": [

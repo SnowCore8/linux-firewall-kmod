@@ -28,6 +28,10 @@ type APIConfig struct {
 	Metrics   *Metrics
 	KernelBan KernelBan
 
+	// Lockout 是认证失败计数与锁定窗口（契约 auth 段）。为 nil 时不计数——只可能在
+	// 用例里出现，组合根永远建一份。
+	Lockout *AuthLockout
+
 	// 认证凭据（来自 config.MetricsUsername / MetricsPassword）
 	Username string
 	Password string
@@ -66,52 +70,52 @@ func (s *Server) RegisterRoutes(api *APIHandlers) {
 	//     errmodel FRAMEWORK_DEFAULT 声明的形状——handler 里不需要再自查 r.Method。
 	if api.metrics != nil {
 		s.HandleFunc(httpcontract.RouteGetMetrics,
-			RequireAuth(api.username, api.password, api.metrics.ServeHTTP))
+			RequireAuth(api.username, api.password, api.lockout, api.metrics.ServeHTTP))
 	}
 	if api.sse != nil {
 		s.HandleFunc(httpcontract.RouteGetApiV1Events,
-			RequireAuth(api.username, api.password, api.sse.ServeHTTP))
+			RequireAuth(api.username, api.password, api.lockout, api.sse.ServeHTTP))
 	}
 
 	// ---- 需认证：封禁管理 -----------------------------------------------------
 	s.HandleFunc(httpcontract.RouteGetApiV1Bans,
-		RequireAuth(api.username, api.password, api.ListBans))
+		RequireAuth(api.username, api.password, api.lockout, api.ListBans))
 	s.HandleFunc(httpcontract.RoutePostApiV1Bans,
-		RequireAuth(api.username, api.password, api.CreateBan))
+		RequireAuth(api.username, api.password, api.lockout, api.CreateBan))
 	s.HandleFunc(httpcontract.RouteDeleteApiV1BansIp,
-		RequireAuth(api.username, api.password, api.DeleteBan))
+		RequireAuth(api.username, api.password, api.lockout, api.DeleteBan))
 	s.HandleFunc(httpcontract.RouteGetApiV1BansIpDetail,
-		RequireAuth(api.username, api.password, api.BanDetail))
+		RequireAuth(api.username, api.password, api.lockout, api.BanDetail))
 	s.HandleFunc(httpcontract.RoutePostApiV1BansUnbanTemporary,
-		RequireAuth(api.username, api.password, api.UnbanAllTemporary))
+		RequireAuth(api.username, api.password, api.lockout, api.UnbanAllTemporary))
 	s.HandleFunc(httpcontract.RoutePostApiV1BansBatch,
-		RequireAuth(api.username, api.password, api.BatchBan))
+		RequireAuth(api.username, api.password, api.lockout, api.BatchBan))
 
 	// ---- 需认证：Jail ---------------------------------------------------------
 	s.HandleFunc(httpcontract.RouteGetApiV1Jails,
-		RequireAuth(api.username, api.password, api.ListJails))
+		RequireAuth(api.username, api.password, api.lockout, api.ListJails))
 	s.HandleFunc(httpcontract.RoutePutApiV1JailsName,
-		RequireAuth(api.username, api.password, api.UpdateJail))
+		RequireAuth(api.username, api.password, api.lockout, api.UpdateJail))
 
 	// ---- 需认证：配置 ---------------------------------------------------------
 	s.HandleFunc(httpcontract.RouteGetApiV1Config,
-		RequireAuth(api.username, api.password, api.GetConfig))
+		RequireAuth(api.username, api.password, api.lockout, api.GetConfig))
 	s.HandleFunc(httpcontract.RoutePutApiV1Config,
-		RequireAuth(api.username, api.password, api.UpdateConfig))
+		RequireAuth(api.username, api.password, api.lockout, api.UpdateConfig))
 
 	// ---- 需认证：白名单 -------------------------------------------------------
 	s.HandleFunc(httpcontract.RouteGetApiV1Whitelist,
-		RequireAuth(api.username, api.password, api.ListWhitelist))
+		RequireAuth(api.username, api.password, api.lockout, api.ListWhitelist))
 	s.HandleFunc(httpcontract.RoutePostApiV1Whitelist,
-		RequireAuth(api.username, api.password, api.AddWhitelist))
+		RequireAuth(api.username, api.password, api.lockout, api.AddWhitelist))
 	s.HandleFunc(httpcontract.RouteDeleteApiV1WhitelistCidr,
-		RequireAuth(api.username, api.password, api.RemoveWhitelist))
+		RequireAuth(api.username, api.password, api.lockout, api.RemoveWhitelist))
 	s.HandleFunc(httpcontract.RouteGetApiV1WhitelistRecommendations,
-		RequireAuth(api.username, api.password, api.GetWhitelistRecommendations))
+		RequireAuth(api.username, api.password, api.lockout, api.GetWhitelistRecommendations))
 
 	// ---- 需认证：速率 ---------------------------------------------------------
 	s.HandleFunc(httpcontract.RouteGetApiV1RatesHistory,
-		RequireAuth(api.username, api.password, api.GetRatesHistory))
+		RequireAuth(api.username, api.password, api.lockout, api.GetRatesHistory))
 
 	// ---- 需认证：统计子路由 ---------------------------------------------------
 	//
@@ -121,30 +125,30 @@ func (s *Server) RegisterRoutes(api *APIHandlers) {
 	// 它们要接真实数据才有意义，尚未注册，逐条记在 contract/http_gap_baseline.txt 里
 	// （见计划 P5）。空壳注册会让面板拿到一份看起来正常、实际恒零的载荷。
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsRecidivism,
-		RequireAuth(api.username, api.password, api.Recidivism))
+		RequireAuth(api.username, api.password, api.lockout, api.Recidivism))
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsReputation,
-		RequireAuth(api.username, api.password, api.Reputation))
+		RequireAuth(api.username, api.password, api.lockout, api.Reputation))
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsPeriodicAttackers,
-		RequireAuth(api.username, api.password, api.PeriodicAttackers))
+		RequireAuth(api.username, api.password, api.lockout, api.PeriodicAttackers))
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsCollaborativeAttacks,
-		RequireAuth(api.username, api.password, api.CollaborativeAttacks))
+		RequireAuth(api.username, api.password, api.lockout, api.CollaborativeAttacks))
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsNetworkDistribution,
-		RequireAuth(api.username, api.password, api.NetworkDistribution))
+		RequireAuth(api.username, api.password, api.lockout, api.NetworkDistribution))
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsAttackPredictions,
-		RequireAuth(api.username, api.password, api.AttackPredictions))
+		RequireAuth(api.username, api.password, api.lockout, api.AttackPredictions))
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsBanDurationRecommendations,
-		RequireAuth(api.username, api.password, api.BanDurationRecommendations))
+		RequireAuth(api.username, api.password, api.lockout, api.BanDurationRecommendations))
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsThresholdRecommendations,
-		RequireAuth(api.username, api.password, api.ThresholdRecommendations))
+		RequireAuth(api.username, api.password, api.lockout, api.ThresholdRecommendations))
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsSseStatus,
-		RequireAuth(api.username, api.password, api.SSEStatus))
+		RequireAuth(api.username, api.password, api.lockout, api.SSEStatus))
 
 	// ---- 需认证：日志 ---------------------------------------------------------
 	s.HandleFunc(httpcontract.RouteGetApiV1Logs,
-		RequireAuth(api.username, api.password, api.GetLogs))
+		RequireAuth(api.username, api.password, api.lockout, api.GetLogs))
 	if api.logStream != nil {
 		s.HandleFunc(httpcontract.RouteGetApiV1LogsStream,
-			RequireAuth(api.username, api.password, api.StreamLogs))
+			RequireAuth(api.username, api.password, api.lockout, api.StreamLogs))
 	}
 }
 
@@ -155,6 +159,7 @@ type APIHandlers struct {
 	logStream *SSEStream
 	metrics   *Metrics
 	kernelBan KernelBan
+	lockout   *AuthLockout
 
 	// 认证凭据
 	username string
@@ -183,6 +188,7 @@ func NewAPIHandlers(cfg APIConfig) *APIHandlers {
 		logStream:         cfg.LogStream,
 		metrics:           cfg.Metrics,
 		kernelBan:         cfg.KernelBan,
+		lockout:           cfg.Lockout,
 		username:          cfg.Username,
 		password:          cfg.Password,
 		getCurrentConfig:  cfg.GetCurrentConfig,

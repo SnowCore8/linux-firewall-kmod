@@ -156,9 +156,11 @@ SSE_LIMIT_CONST = {
     "/api/v1/logs/stream": ("SSEMaxConnectionsApiV1LogsStream", "MAX_LOG_SSE_CONNECTIONS"),
 }
 
-# 框架默认错误（``shape = framework_default``）把状态码分成两类：net/http 自产
-# 404（无匹配模式）与 405（方法不匹配），源码里本就不该出现它们的构造点；
-# 其余状态码必须由 daemon 自己写出，写不出来就是契约在撒谎。
+# 框架默认错误（``shape = framework_default``）只应列出 net/http **自己**会产出的状态码：
+# 404（无匹配模式）与 405（模式带方法而动词不符），源码里本就不该出现它们的构造点。
+# STATUS_TOKENS 是残留的防线：若有人把 400/415/422 重新塞回 framework_default，这里
+# 无论源码写不写得出该状态码都会报——net/http 没有请求体/query 的自动校验，「框架默认」
+# 这个说法对它们永远不成立，正确的归属是 shape = envelope。
 FRAMEWORK_SELF_PRODUCED = {404, 405}
 STATUS_TOKENS = {
     400: (r"http\.StatusBadRequest\b", r"(?<!\d)400(?!\d)"),
@@ -686,7 +688,13 @@ def _const_value(src: str, name: str) -> int | None:
 
 # 真实的响应头构造点：Go 里只有 `w.Header().Set("…")` / `Add` / 直接写 map。
 # 全文 includes 会假阳性——auth.go 的注释同样可能逐字解释「有意不发它」。
-_HEADER_CTOR_TMPL = r"""\.Header\(\)\s*(?:Set|Add)\s*\(\s*["]{name}["]|\.Header\(\)\s*\[\s*["]{name}["]\]"""
+#
+# `()` 与 `Set` 之间那个点是 Go 的方法调用本身：`w.Header().Set(...)`。模板里少写它
+# 就等于「没有任何 Go 代码构造过任何头」，正反两个方向的断言一起变成空转。
+_HEADER_CTOR_TMPL = (
+    r"""\.Header\(\)\s*\.\s*(?:Set|Add)\s*\(\s*["]{name}["]"""
+    r"""|\.Header\(\)\s*\[\s*["]{name}["]\]"""
+)
 
 
 def _const_in_daemon(tree: str, name: str) -> tuple[int, str] | None:
@@ -712,9 +720,32 @@ def _const_in_daemon(tree: str, name: str) -> tuple[int, str] | None:
     return None
 
 
+def _header_ident(header_name: str) -> str:
+    """头名 -> 生成物里的常量标识符（`X-Frame-Options` -> HeaderXFrameOptions）。
+
+    复制的是 gen.py 的 **命名规则**（按非字母数字切块、逐块首字母大写），不是值：规则
+    变了两边会同时红，因为值还得逐字对得上。
+    """
+    return "Header" + "".join(
+        t[:1].upper() + t[1:] for t in re.split(r"[^A-Za-z0-9]+", header_name) if t
+    )
+
+
 def _header_is_constructed(src: str, header_name: str) -> bool:
+    """「这个响应头真的被写出来了」：字面量形态与生成物常量形态都算。
+
+    只认 ``w.Header().Set/Add`` 与 ``w.Header()["…"]`` 三种写法。头名走
+    ``httpcontract.Header<Name>`` 引用时同样算写点——那张常量表由 http.fwidl 生成，
+    等价于回到契约，而且比在实现里再手打一遍头名更不容易分叉。
+    """
     pat = _HEADER_CTOR_TMPL.format(name=re.escape(header_name))
-    return re.search(pat, src, re.I) is not None
+    if re.search(pat, src, re.I):
+        return True
+    ident = _header_ident(header_name)
+    return (
+        re.search(rf"\.Header\(\)\s*\.\s*(?:Set|Add)\s*\(\s*httpcontract\.{ident}\b", src)
+        is not None
+    )
 
 
 def check_auth_constants(contract: dict) -> list[str]:
@@ -1006,7 +1037,7 @@ def _first_hit(srcs: dict, pattern: str) -> str | None:
 
 
 def check_errmodels(contract: dict) -> list[str]:
-    """三种错误形状：text 逐字核对 body，framework_default 按状态码分两类核对。
+    """三种错误形状：text 逐字核对 body，framework_default 只认框架自产，envelope 认闭合性。
 
     ``net/http`` 的纯文本写点只有三种确切形态，body 由它们决定：
 
@@ -1015,10 +1046,11 @@ def check_errmodels(contract: dict) -> list[str]:
       * ServeMux 自己：未匹配写 ``"404 page not found\\n"``、方法不匹配写
         ``"Method Not Allowed\\n"``
 
-    ``framework_default`` 的形状同理要分家：404/405 由 ServeMux 自产（源码里
-    **不该**有构造点，只要证明 ServeMux 在接管且没被兜底 handler 抢走）；
-    400/415/422 是 axum 提取器时代的产物，``net/http`` 不会自动产生任何一个，
-    契约把它们记成「框架默认」就得由 daemon 自己写出来——写出来也不是「框架默认」。
+    ``framework_default`` 只覆盖框架**真的会自产**的状态码：404（无匹配模式）与 405
+    （模式带方法而动词不符）。源码里出现它们的构造点反而是问题——那说明有人绕过了
+    ServeMux 的默认面。400/415/422 从没有离开过 daemon 的手：那是 axum 提取器的行为，
+    ``net/http`` 不做请求体与 query 的自动校验，所以它们改记 ``shape = envelope``，本函数
+    按「业务码是否映射到该状态码」核对信封面的闭合性。
     """
     problems: list[str] = []
     srcs = go_tree_sources_by_file()
@@ -1084,6 +1116,29 @@ def check_errmodels(contract: dict) -> list[str]:
                         f"实际是 daemon 自己写出的（{hit}）——"
                         "net/http 没有请求体/查询参数的自动校验，这个状态码不可能由框架产生"
                     )
+        elif d["shape"] == "envelope":
+            # 信封错误面：状态码能不能到达，由 `codes` 段的 status= 决定——那张映射就是
+            # 生成物里的 CodeHTTPStatus。所以这里核对的是契约自身的闭合性：声明了信封上
+            # 有 422，就必须有一个业务码映射到 422，否则前端只收到一个查不到语义的码。
+            mapped: dict[int, list[int]] = {}
+            for value, meta in contract["codes"].items():
+                mapped.setdefault(int(meta["status"]), []).append(int(value))
+            for status in d["statuses"]:
+                codes = mapped.get(status)
+                if not codes:
+                    problems.append(
+                        f"errmodel {name}: 声明了信封状态码 {status}，但 codes 段里"
+                        "没有任何业务码映射到它——该状态码在信封面上不可达"
+                    )
+                else:
+                    print(f"  errmodel {name}: {status} ← 业务码 "
+                          f"{'/'.join(str(c) for c in sorted(codes))}")
+            # 写出方必须是信封本体：ErrorEnvelope 得在 envelope.go 里有构造函数
+            if "func ErrorEnvelope(" not in read(ENVELOPE_GO):
+                problems.append(
+                    f"errmodel {name}: 声明为信封形状，但 "
+                    f"{os.path.relpath(ENVELOPE_GO, ROOT)} 里没有 func ErrorEnvelope"
+                )
         else:
             problems.append(f"errmodel {name}: 校验器不认识 shape {d['shape']!r}")
 
@@ -1097,10 +1152,12 @@ def check_errmodels(contract: dict) -> list[str]:
 
 
 def check_headers(contract: dict) -> list[str]:
-    """安全头：头名必须真有写点，值必须逐字出现，webui 分支必须有判别条件。
+    """安全头：头名必须真有写点，值必须逐字出现或经生成物常量引用，webui 分支必须有判别条件。
 
     Go 侧写响应头只有 ``w.Header().Set/Add``（见 ``_HEADER_CTOR_TMPL``），只认这个
-    形态——全文 includes 会假阳性，注释里同样可能逐字解释「有意不发某个头」。
+    形态——全文 includes 会假阳性，注释里同样可能逐字解释「有意不发某个头」。头名与值
+    都允许走 ``httpcontract.Header*`` 常量：那张表由契约生成，比在实现里再抄一遍字符串
+    更符合「字面量只有一份」。
     """
     problems: list[str] = []
     srcs = go_tree_sources_by_file()
@@ -1120,10 +1177,18 @@ def check_headers(contract: dict) -> list[str]:
         for label, value in (("value", d["value"]), ("value_webui", d["value_webui"])):
             if not value:
                 continue
-            if value not in tree:
-                problems.append(
-                    f'header {name}.{label}: 值 {value!r} 未逐字出现在 Go 源码里'
-                )
+            if value in tree:
+                continue
+            # 值也可能只经由生成物常量落地：`httpcontract.HeaderXxxValue[WebUI]` 的取值
+            # 来自 http.fwidl，逐字抄一份到实现里反而多一处会漂移的副本。
+            ident = _header_ident(name) + ("ValueWebUI" if label == "value_webui" else "Value")
+            if re.search(rf"\bhttpcontract\.{re.escape(ident)}\b", tree):
+                print(f"  header {name}.{label}: 经生成物常量 {ident} 引用")
+                continue
+            problems.append(
+                f'header {name}.{label}: 值 {value!r} 既未逐字出现在 Go 源码里，'
+                f"也没有经 httpcontract.{ident} 引用"
+            )
         if d["value_webui"] and not _first_hit(srcs, r"(?i)isWebUI|is_webui|webUIPath"):
             problems.append(
                 f"header {name}: 契约声明了 webui 分支的值，"

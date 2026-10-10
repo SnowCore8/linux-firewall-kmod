@@ -2381,6 +2381,22 @@ def emit_go_http(contract: HttpContract) -> str:
     a("")
 
     # ---- 安全头 ----
+    a("// 安全头的名与值：中间件逐条引用这里的常量写响应头，实现里不出现第二份字符串。")
+    a("// 标识符由头名派生（`X-Frame-Options` -> HeaderXFrameOptions），值由契约声明派生；")
+    a("// `…ValueWebUI` 仅在契约给了 webui 分支值时存在。")
+    a("const (")
+    for name, d in contract.headers.items():
+        ident = "Header" + go_camel(name)
+        a(f"\t// {ident} 是头名 `{name}`（scope={d.scope}）。")
+        a(f"\t{ident} = {json.dumps(name)}")
+        a(f"\t// {ident}Value 是契约声明的 {name} 取值。")
+        a(f"\t{ident}Value = {json.dumps(d.value)}")
+        if d.value_webui:
+            a(f"\t// {ident}ValueWebUI 是面板（HTML/JS 同源加载）响应用值。")
+            a(f"\t{ident}ValueWebUI = {json.dumps(d.value_webui)}")
+    a(")")
+    a("")
+
     a("// SecurityHeader 是中间件统一施加的安全头。")
     a("type SecurityHeader struct {")
     a("\tName string")
@@ -2492,6 +2508,26 @@ def emit_ts_http(contract: HttpContract) -> str:
     L.append(f"/** API 前缀：{contract.base} */")
     L.append(f"export const API_BASE = {json.dumps(contract.base)}")
     L.append("")
+
+    # 鉴权参数：登录页的提示文案（连续失败多少次、锁多久）与 401 判定都从这里取，
+    # 不写在视图里——那两个数字是契约的 auth 段说了算，抄一份进 TSX 就是第二个真相源。
+    auth = contract.auth
+    L.append("/** 鉴权参数：scheme、query 凭据键名、失败计数阈值与锁定时长 */")
+    L.append("export const AUTH = {")
+    L.append(f"  /** `Authorization: {auth['scheme']} …` 里的凭据方案 */")
+    L.append(f"  SCHEME: {json.dumps(auth['scheme'])},")
+    if "token_query" in auth:
+        L.append("  /** EventSource 不能设请求头，凭据走这个查询参数 */")
+        L.append(f"  TOKEN_QUERY: {json.dumps(auth['token_query'])},")
+    L.append("  /** 触发锁定前的连续失败次数 */")
+    L.append(f"  FAILURE_THRESHOLD: {int(auth['failure_threshold'])},")
+    L.append("  /** 一次锁定持续的秒数（锁定期内正确凭据同样被拒） */")
+    L.append(f"  LOCKOUT_SECONDS: {int(auth['lockout_seconds'])},")
+    L.append("  /** 凭据缺失/错误时的 HTTP 状态码（纯文本形状，不经信封） */")
+    L.append(f"  UNAUTHORIZED_STATUS: {int(auth['unauthorized_status'])},")
+    L.append("} as const")
+    L.append("")
+
     L.append("/** 全部路由路径（与守护进程注册的字面量逐字一致） */")
     L.append("export const ROUTES = {")
     for r in contract.routes:

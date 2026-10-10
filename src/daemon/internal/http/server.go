@@ -61,7 +61,9 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 
 	s.httpServer = &http.Server{
-		Handler:           s.connectionLimiter(mux),
+		// 安全头在连接配额**外面**：配额满时用 http.Error 直接回 503，那条响应不经过
+		// mux，中间件排在里面就等于限额告知没有 CSP/nosniff。
+		Handler:           s.securityHeaders(s.connectionLimiter(mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -142,11 +144,4 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		slog.Error("encode JSON response", "error", err)
 	}
-}
-
-func writeError(w http.ResponseWriter, status int, code string, message string) {
-	writeJSON(w, status, map[string]any{
-		"code":    code,
-		"message": message,
-	})
 }

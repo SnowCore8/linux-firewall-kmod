@@ -12,11 +12,6 @@ import (
 // 逐 jail 的计数器走 /metrics 与 SSE 的 jails 域，因此这里不再有 /api/v1/jails/{name}
 // 的 GET handler。
 func (h *APIHandlers) ListJails(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
-
 	jails := config.GetActiveJails()
 	WriteSuccess(w, jails)
 }

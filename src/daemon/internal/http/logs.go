@@ -30,11 +30,6 @@ const (
 //
 // 返回顺序：最新在前（倒序）。
 func (h *APIHandlers) GetLogs(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
-
 	logFile := ""
 	if h.logFilePath != nil {
 		logFile = h.logFilePath()
@@ -51,7 +46,9 @@ func (h *APIHandlers) GetLogs(w http.ResponseWriter, r *http.Request) {
 	lines, totalSize, err := readLogTail(logFile, offset, limit, levelFilter)
 	if err != nil {
 		if os.IsNotExist(err) {
-			WriteNotFound(w, "日志文件不存在")
+			// 与 StreamLogs 同一条判断：配置里写了路径而文件不在，是「依赖未就绪」而不是
+			// 「你要的日志行不存在」，所以 503 + 50003，不开契约里没有的 404。
+			WriteServiceUnavailable(w, "日志文件不可读: "+logFile)
 			return
 		}
 		h.server.logger.Error("读取日志文件失败", "error", err)
@@ -78,11 +75,6 @@ func (h *APIHandlers) GetLogs(w http.ResponseWriter, r *http.Request) {
 // 文件在占名额**之前**就打开并定位：流一旦写出响应头就无法再改状态码，而契约给这条流
 // 只声明了 200 与 503，所以预检失败一律 503，不开 404 这种契约上没有的口子。
 func (h *APIHandlers) StreamLogs(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
-
 	logFile := ""
 	if h.logFilePath != nil {
 		logFile = h.logFilePath()

@@ -7,12 +7,15 @@
  * - 失败一律抛出 `ApiError`，让调用方（视图 / useAsync）无需再判断返回码
  * - 认证由本客户端**显式携带** `Authorization: Basic <令牌>`（令牌来自 api/auth.ts）。
  *   不能依赖浏览器原生认证弹窗：SPA 外壳是公开路由，顶层文档不返回 401，
- *   弹窗永远不会出现，页面自身的 API 请求会全部 401 并触发服务端暴力破解锁定。
+ *   弹窗永远不会出现，页面自身的 API 请求会全部 401。
+ *   另外，未携带凭据的请求在服务端**不计入**暴力破解计数（只有带错才算一次尝试），
+ *   所以初始加载的匿名 401 不会把 API 锁死，但也不等于「多试几次没关系」。
  *
  * 影响范围：所有 REST 取数（useAsync / views）。SSE 长连接不走本文件（见 hooks/useSse.ts）。
  */
 
 import { authHeaders, clearAccessToken } from './auth'
+import { AUTH } from './contract'
 import type { ApiResponse } from './contract'
 
 /**
@@ -92,9 +95,9 @@ async function request<T>(url: string, init: RequestInit): Promise<T> {
   const text = await response.text()
 
   // 401 = 令牌缺失 / 失效：清除本地令牌，界面据此回到登录页。
-  // 注意服务端锁定（连续失败 10 次后半分钟）期间正确凭据也返回 401，
-  // 因此这里只清令牌不做自动重登，由用户重新输入触发一次新凭据。
-  if (response.status === 401) {
+  // 注意服务端锁定（连续失败 AUTH.FAILURE_THRESHOLD 次后锁 AUTH.LOCKOUT_SECONDS 秒）期间
+  // 正确凭据也返回 401，因此这里只清令牌不做自动重登，由用户重新输入触发一次新凭据。
+  if (response.status === AUTH.UNAUTHORIZED_STATUS) {
     clearAccessToken()
   }
 

@@ -16,6 +16,7 @@ import { useState } from 'react'
 
 import { Panel, Rows } from '../components/console'
 import { encodeCredentials, setAccessToken } from '../api/auth'
+import { AUTH, ROUTES } from '../api/contract'
 
 /** 错误 / 提示条的方框样式：fw-banner 只带下边框，这里补成完整一圈 */
 const BANNER_BOX = {
@@ -95,16 +96,24 @@ export function Login() {
     setSubmitting(true)
 
     try {
-      // 先用待验证的凭据探测一个受保护端点，避免把错误凭据写进会话存储
+      // 先用待验证的凭据探测一个受保护端点，避免把错误凭据写进会话存储。
+      //
+      // 探测目标必须是**已注册**且 auth=required 的路由：`GET /` 在 daemon 的 ServeMux
+      // 里是一棵兜住所有路径的子树，未注册的路径（例如尚未接线的 /api/v1/stats）会被它
+      // 接住并 303 到面板外壳——fetch 自动跟随重定向后拿到 200，于是任何凭据都算通过。
       const candidate = encodeCredentials(username, password)
-      const response = await fetch('/api/v1/stats', {
-        headers: { Authorization: `Basic ${candidate}` },
+      const response = await fetch(ROUTES.GET_API_V1_BANS, {
+        headers: { Authorization: `${AUTH.SCHEME} ${candidate}` },
         credentials: 'same-origin',
       })
 
-      if (response.status === 401) {
-        // 服务端连续失败 10 次后会锁定 60 秒，此时正确凭据同样返回 401，故一并提示
-        setError('用户名或密码错误；若连续失败次数过多，请等待约 1 分钟后重试。')
+      if (response.status === AUTH.UNAUTHORIZED_STATUS) {
+        // 服务端连续失败 AUTH.FAILURE_THRESHOLD 次后锁定 AUTH.LOCKOUT_SECONDS 秒，
+        // 期间正确凭据同样返回 401，故一并提示
+        setError(
+          `用户名或密码错误；连续失败 ${AUTH.FAILURE_THRESHOLD} 次会锁定 ` +
+            `${AUTH.LOCKOUT_SECONDS} 秒，若次数过多请等待后再重试。`,
+        )
         return
       }
       if (!response.ok) {
@@ -192,7 +201,8 @@ export function Login() {
           <div style={DIM_NOTE}>凭据对应守护进程配置中的 metrics_username / metrics_password。</div>
           <div style={DIM_NOTE}>令牌只保存在本次会话的 sessionStorage 中，关闭标签页即失效。</div>
           <div style={DIM_NOTE}>
-            连续失败会触发服务端锁定（约 1 分钟），锁定期间即使凭据正确也会被拒绝。
+            连续失败 {AUTH.FAILURE_THRESHOLD} 次会触发服务端锁定 {AUTH.LOCKOUT_SECONDS}{' '}
+            秒，锁定期间即使凭据正确也会被拒绝。
           </div>
         </Panel>
       </div>

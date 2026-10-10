@@ -24,11 +24,6 @@ type RateEntry struct {
 // 查询参数：
 //   - limit: 返回条数上限（默认 100，最大 1000）
 func (h *APIHandlers) GetRatesHistory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
-
 	limit := parseLimit(r, 100, 1000)
 
 	// 尝试从 procfs 读取速率历史

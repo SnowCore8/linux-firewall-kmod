@@ -6,24 +6,7 @@
 #   * 这里有而门禁不再报出的 = 那一格已补上，必须删行；
 #   * 实现与契约矛盾的东西不该进这里——那是要修的实现，不是可冻结的缺口。
 # 契约（http.fwidl）因此保持完整：这里只登记 daemon 当前还没接线的部分。
-auth-constant:auth.failure_threshold # auth.failure_threshold: 契约 10，但 daemon 的 Go 源码里没有常量 AuthFailureThreshold / AUTH_FAILURE_THRESHOLD（鉴权中间件未实现失败计数与锁定窗口，契约的防暴力破解语义无处可核）
-auth-constant:auth.lockout_seconds # auth.lockout_seconds: 契约 60，但 daemon 的 Go 源码里没有常量 AuthLockoutSeconds / AUTH_LOCKOUT_SECONDS（鉴权中间件未实现失败计数与锁定窗口，契约的防暴力破解语义无处可核）
-business-codes-unproduced # 业务码在 Go 源码里没有构造点：404(HTTP 404), 40001(HTTP 400), 40002(HTTP 400), 40003(HTTP 400), 40004(HTTP 400), 40005(HTTP 400), 40006(HTTP 400), 50002(HTTP 500) —— internal/http/envelope.go 的 ErrorEnvelope 只写 Code: -1，错误标识用的是字符串（"bad_request"），契约声明的整数业务码从未被产出
-envelope-data-omitempty # 信封 Envelope.data 的 tag 是 `json:"data,omitempty"`：带 omitempty 时失败响应的 data 会被整个省略，契约要求它作为 null 存在
-envelope-error-code # ErrorEnvelope 把 code 恒置为 -1，契约声明失败时 code 是业务码（见 codes 段）
-envelope-error-data # ErrorEnvelope 未给 data 赋值——失败响应里 data 为空，契约声明失败时 data 必须存在且为 null
-envelope-key-order # 信封 Envelope 的 JSON key: 源码 ['code', 'message', 'data'] != 契约 ['code', 'data', 'message']（顺序即 encoding/json 的输出顺序）
-envelope-success-message # 成功信封的 message 是 'ok'，契约声明成功时为空串（`codes` 段 0 号写明「成功；message 为空串」）
-errmodel-framework-claim:FRAMEWORK_DEFAULT:400 # errmodel FRAMEWORK_DEFAULT: 契约把 400 记成「框架默认错误」，实际是 daemon 自己写出的（src/daemon/internal/http/envelope.go:39）——net/http 没有请求体/查询参数的自动校验，这个状态码不可能由框架产生
-errmodel-framework-claim:FRAMEWORK_DEFAULT:415 # errmodel FRAMEWORK_DEFAULT: 契约声明 415 为框架默认错误，但 net/http 不会自动产生 415，Go 源码里也没有它的写点
-errmodel-framework-claim:FRAMEWORK_DEFAULT:422 # errmodel FRAMEWORK_DEFAULT: 契约声明 422 为框架默认错误，但 net/http 不会自动产生 422，Go 源码里也没有它的写点
-errmodel-plain-text:AUTH_UNAUTHORIZED:401 # errmodel AUTH_UNAUTHORIZED: 契约声明 [401] 的响应体是纯文本 '401 Unauthorized\n'，Go 源码里没有这段文本；就近的纯文本写点：src/daemon/internal/http/server.go:123
-errmodel-plain-text:STATIC_NOT_FOUND:404 # errmodel STATIC_NOT_FOUND: 契约声明 [404] 的响应体是纯文本 '404 Not Found\n'，Go 源码里没有这段文本；就近的纯文本写点：src/daemon/internal/http/server.go:123
 handler-naming # 契约声明的 handler 名（handle_*，共 56 个）在 src/daemon/internal/http 里逐字命中 0 个：Go 侧一律用方法名注册（如 DeleteBan）。需要 owner 决定：契约改记 Go 符号，还是 Go 侧按 handle_* 命名
-header-missing:Cache-Control # header Cache-Control: Go 源码里没有该头的写点（没有 w.Header().Set/Add("Cache-Control", …)）——契约声明的安全头未实现（internal/http 里唯一的中间件是 src/daemon/internal/http/server.go:117）
-header-missing:Content-Security-Policy # header Content-Security-Policy: Go 源码里没有该头的写点（没有 w.Header().Set/Add("Content-Security-Policy", …)）——契约声明的安全头未实现（internal/http 里唯一的中间件是 src/daemon/internal/http/server.go:117）
-header-missing:X-Content-Type-Options # header X-Content-Type-Options: Go 源码里没有该头的写点（没有 w.Header().Set/Add("X-Content-Type-Options", …)）——契约声明的安全头未实现（internal/http 里唯一的中间件是 src/daemon/internal/http/server.go:117）
-header-missing:X-Frame-Options # header X-Frame-Options: Go 源码里没有该头的写点（没有 w.Header().Set/Add("X-Frame-Options", …)）——契约声明的安全头未实现（internal/http 里唯一的中间件是 src/daemon/internal/http/server.go:117）
 route-missing:GET /api/v1/rates/current # 路由 GET /api/v1/rates/current 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_rates_current）
 route-missing:GET /api/v1/rates/windows # 路由 GET /api/v1/rates/windows 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_rates_windows）
 route-missing:GET /api/v1/stats # 路由 GET /api/v1/stats 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_stats）

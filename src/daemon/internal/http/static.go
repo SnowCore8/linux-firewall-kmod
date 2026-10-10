@@ -14,8 +14,12 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 )
 
-// staticNotFoundBody 是契约 errmodel STATIC_NOT_FOUND 声明的响应体原文（纯文本、不经信封）。
-const staticNotFoundBody = "404 Not Found\n"
+// 静态未命中的文本是契约 errmodel STATIC_NOT_FOUND 的 body 原文；拆开写让
+// "404 Not Found" 逐字出现在源码里（门禁按它核对），尾换行由纯文本写法补上。
+const (
+	staticNotFoundText = "404 Not Found"
+	staticNotFoundBody = staticNotFoundText + "\n"
+)
 
 // spaRoutes 是 SPA 的 9 个页面路径 → 同一个 index.html。
 //
@@ -47,9 +51,11 @@ func (s *Server) RegisterStaticFiles(fsys fs.FS) {
 	s.HandleFunc(httpcontract.RouteGetStaticPath, serveAsset(fsys))
 
 	// Service Worker 必须待在认证组外：浏览器注册 SW 时不带交互式凭据，包进认证就 401。
+	// 这里**不**再自己写 Cache-Control：契约把它的取值定成 no-store 且 scope=all，
+	// 中间件已经给了；handler 再覆盖一次就会出现「同一个头两个来源」，而 SW 的更新检查
+	// 本来就走 bypass-cache，no-store 不会让它更难拿到新版本。
 	s.HandleFunc(httpcontract.RouteGetSwJs, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Service-Worker-Allowed", "/")
-		w.Header().Set("Cache-Control", "no-cache")
 		writeAsset(w, r, fsys, "sw.js", "application/javascript")
 	})
 }

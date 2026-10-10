@@ -278,7 +278,8 @@ func TestQueryTokenAuthenticatesSSE(t *testing.T) {
 	// 半配置凭据按失败处理：只填用户名时任何人都进不来。
 	half := &Server{mux: http.NewServeMux(), logger: discardLogger()}
 	api := NewAPIHandlers(APIConfig{Server: half, Username: testUser, Password: ""})
-	half.HandleFunc(httpcontract.RouteGetApiV1Bans, RequireAuth(api.username, api.password, api.ListBans))
+	half.HandleFunc(httpcontract.RouteGetApiV1Bans,
+		RequireAuth(api.username, api.password, api.lockout, api.ListBans))
 	w2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/bans", nil)
 	req2.SetBasicAuth(testUser, "")

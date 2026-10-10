@@ -18,10 +18,6 @@ func parseLimit(r *http.Request, defaultLimit, maxLimit int) int {
 }
 
 func (h *APIHandlers) Recidivism(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
 	if h.db == nil {
 		WriteServiceUnavailable(w, "history database not initialized")
 		return
@@ -47,10 +43,6 @@ func (h *APIHandlers) Recidivism(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *APIHandlers) Reputation(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
 	if h.db == nil {
 		WriteServiceUnavailable(w, "history database not initialized")
 		return
@@ -66,10 +58,6 @@ func (h *APIHandlers) Reputation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *APIHandlers) PeriodicAttackers(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
 	if h.db == nil {
 		WriteServiceUnavailable(w, "history database not initialized")
 		return
@@ -85,10 +73,6 @@ func (h *APIHandlers) PeriodicAttackers(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *APIHandlers) CollaborativeAttacks(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
 	if h.db == nil {
 		WriteServiceUnavailable(w, "history database not initialized")
 		return
@@ -104,10 +88,6 @@ func (h *APIHandlers) CollaborativeAttacks(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *APIHandlers) NetworkDistribution(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
 	if h.db == nil {
 		WriteServiceUnavailable(w, "history database not initialized")
 		return
@@ -123,10 +103,6 @@ func (h *APIHandlers) NetworkDistribution(w http.ResponseWriter, r *http.Request
 }
 
 func (h *APIHandlers) AttackPredictions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
 	if h.db == nil {
 		WriteServiceUnavailable(w, "history database not initialized")
 		return
@@ -142,10 +118,6 @@ func (h *APIHandlers) AttackPredictions(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *APIHandlers) BanDurationRecommendations(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
 	if h.db == nil {
 		WriteServiceUnavailable(w, "history database not initialized")
 		return
@@ -160,10 +132,6 @@ func (h *APIHandlers) BanDurationRecommendations(w http.ResponseWriter, r *http.
 }
 
 func (h *APIHandlers) ThresholdRecommendations(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
 	if h.db == nil {
 		WriteServiceUnavailable(w, "history database not initialized")
 		return

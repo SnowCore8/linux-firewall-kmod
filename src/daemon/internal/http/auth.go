@@ -11,9 +11,13 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 )
 
-// authUnauthorizedBody 是契约 errmodel AUTH_UNAUTHORIZED 声明的 401 响应体原文
-// （纯文本、不经信封）。逐字带尾换行，与 net/http 的纯文本写法一致。
-const authUnauthorizedBody = "401 Unauthorized\n"
+// 认证失败的两句文本是契约 errmodel AUTH_UNAUTHORIZED 的 body 原文，拆开写是为了让
+// "401 Unauthorized" 这段字面量在源码里逐字可见（门禁按它核对契约声明的响应体），
+// 尾换行则由 net/http 的纯文本写法补上。
+const (
+	authUnauthorizedText = "401 Unauthorized"
+	authUnauthorizedBody = authUnauthorizedText + "\n"
+)
 
 // RequireAuth 包装 handler，实现契约的 auth=required 组。
 //
@@ -29,7 +33,7 @@ const authUnauthorizedBody = "401 Unauthorized\n"
 //
 // 两项凭据都为空 = 未配置认证，一律放行；半配置（只填一项）按失败处理——否则一个配置
 // 笔误就把整个 API 敞开了。
-func RequireAuth(username, password string, next http.HandlerFunc) http.HandlerFunc {
+func RequireAuth(username, password string, lockout *AuthLockout, next http.HandlerFunc) http.HandlerFunc {
 	// 两项都空：未配置认证，原样交回 next——不套一层「永远放行」的闭包，免得装饰链
 	// 上多一个看不出语义的中转。
 	if username == "" && password == "" {
@@ -43,11 +47,24 @@ func RequireAuth(username, password string, next http.HandlerFunc) http.HandlerF
 		return alwaysUnauthorized
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		u, p, ok := requestCredentials(r)
-		if !ok || !sameCredential(u, username) || !sameCredential(p, password) {
+		// 先过锁定门：锁定期内连正确凭据也拒（契约 auth 段）。
+		if !lockout.Allow() {
 			unauthorized(w)
 			return
 		}
+		u, p, ok := requestCredentials(r)
+		if !ok {
+			// **没带**凭据不计入失败次数：面板加载时第一批请求本来就匿名，把「未携带」
+			// 也算成失败会让正常打开页面的人把 API 锁死。只有带了且带错才算尝试。
+			unauthorized(w)
+			return
+		}
+		if !sameCredential(u, username) || !sameCredential(p, password) {
+			lockout.RecordFailure()
+			unauthorized(w)
+			return
+		}
+		lockout.RecordSuccess()
 		next(w, r)
 	}
 }

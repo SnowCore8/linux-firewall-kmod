@@ -76,10 +76,16 @@ const (
 	Code40005 = 40005
 	// Code40006：封禁详情查询失败（IP 非法）
 	Code40006 = 40006
+	// Code40007：请求体不是合法 JSON 或字段类型不符（daemon 解析，框架不会自产此码）
+	Code40007 = 40007
+	// Code40008：Content-Type 不是 application/json（本 API 只说这一种媒体类型）
+	Code40008 = 40008
 	// Code404：Jail 不存在
 	Code404 = 404
 	// Code50002：服务端内部错误（历史库查询任务 join 失败等），message 含具体原因
 	Code50002 = 50002
+	// Code50003：依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满
+	Code50003 = 50003
 )
 
 // CodeHTTPStatus 是业务码到成功/失败 HTTP 状态码的映射。
@@ -98,10 +104,16 @@ var CodeHTTPStatus = map[int]int{
 	Code40005: 400,
 	// 封禁详情查询失败（IP 非法）
 	Code40006: 400,
+	// 请求体不是合法 JSON 或字段类型不符（daemon 解析，框架不会自产此码）
+	Code40007: 422,
+	// Content-Type 不是 application/json（本 API 只说这一种媒体类型）
+	Code40008: 415,
 	// Jail 不存在
 	Code404: 404,
 	// 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因
 	Code50002: 500,
+	// 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满
+	Code50003: 503,
 }
 
 // 路由注册串（net/http.ServeMux 的 "METHOD /path" 模式）。注释里的路径是
@@ -287,31 +299,31 @@ var Routes = []Route{
 	{Pattern: RouteGetStaticPath, Path: "/static/{path...}", Method: "GET", Auth: AuthNone, Handler: "handle_static", Returns: ReturnsBytes, Status: 200, AltStatus: 404},
 	{Pattern: RouteGetSwJs, Path: "/sw.js", Method: "GET", Auth: AuthNone, Handler: "handle_sw", Returns: ReturnsBytes, Status: 200, AltStatus: 404},
 	{Pattern: RouteGetMetrics, Path: "/metrics", Method: "GET", Auth: AuthRequired, Handler: "handle_metrics", Returns: ReturnsText, Status: 200},
-	{Pattern: RouteGetApiV1Events, Path: "/api/v1/events", Method: "GET", Auth: AuthRequired, Handler: "handle_sse", Returns: ReturnsStream, Status: 200, AltStatus: 503, MaxConnections: SSEMaxConnectionsApiV1Events, Events: SSEEventNamesApiV1Events, KeepaliveSecs: SSEKeepaliveSecondsApiV1Events},
-	{Pattern: RouteGetApiV1LogsStream, Path: "/api/v1/logs/stream", Method: "GET", Auth: AuthRequired, Handler: "handle_log_stream", Returns: ReturnsStream, Status: 200, AltStatus: 503, MaxConnections: SSEMaxConnectionsApiV1LogsStream, Events: SSEEventNamesApiV1LogsStream, KeepaliveSecs: SSEKeepaliveSecondsApiV1LogsStream},
+	{Pattern: RouteGetApiV1Events, Path: "/api/v1/events", Method: "GET", Auth: AuthRequired, Handler: "handle_sse", Returns: ReturnsStream, Status: 200, AltStatus: 503, Codes: []int{Code50003}, MaxConnections: SSEMaxConnectionsApiV1Events, Events: SSEEventNamesApiV1Events, KeepaliveSecs: SSEKeepaliveSecondsApiV1Events},
+	{Pattern: RouteGetApiV1LogsStream, Path: "/api/v1/logs/stream", Method: "GET", Auth: AuthRequired, Handler: "handle_log_stream", Returns: ReturnsStream, Status: 200, AltStatus: 503, Codes: []int{Code50003}, MaxConnections: SSEMaxConnectionsApiV1LogsStream, Events: SSEEventNamesApiV1LogsStream, KeepaliveSecs: SSEKeepaliveSecondsApiV1LogsStream},
 	{Pattern: RouteGetApiV1Stats, Path: "/api/v1/stats", Method: "GET", Auth: AuthRequired, Handler: "handle_api_stats", Returns: ReturnsType, Status: 200},
 	{Pattern: RouteGetApiV1Bans, Path: "/api/v1/bans", Method: "GET", Auth: AuthRequired, Handler: "handle_api_bans", Returns: ReturnsType, Status: 200, Codes: []int{CodeOK}},
-	{Pattern: RoutePostApiV1Bans, Path: "/api/v1/bans", Method: "POST", Auth: AuthRequired, Handler: "handle_create_ban", Returns: ReturnsType, Status: 201, AltStatus: 200, Codes: []int{Code40001}},
+	{Pattern: RoutePostApiV1Bans, Path: "/api/v1/bans", Method: "POST", Auth: AuthRequired, Handler: "handle_create_ban", Returns: ReturnsType, Status: 201, AltStatus: 200, Codes: []int{Code40001, Code40007, Code40008}},
 	{Pattern: RouteDeleteApiV1BansIp, Path: "/api/v1/bans/{ip}", Method: "DELETE", Auth: AuthRequired, Handler: "handle_delete_ban", Returns: ReturnsType, Status: 200, Codes: []int{Code40002}},
 	{Pattern: RouteGetApiV1BansIpDetail, Path: "/api/v1/bans/{ip}/detail", Method: "GET", Auth: AuthRequired, Handler: "handle_ban_detail", Returns: ReturnsType, Status: 200, Codes: []int{Code40006}},
 	{Pattern: RoutePostApiV1BansUnbanTemporary, Path: "/api/v1/bans/unban-temporary", Method: "POST", Auth: AuthRequired, Handler: "handle_unban_temporary", Returns: ReturnsType, Status: 200, Codes: []int{Code40003}},
-	{Pattern: RoutePostApiV1BansBatch, Path: "/api/v1/bans/batch", Method: "POST", Auth: AuthRequired, Handler: "handle_batch_ban", Returns: ReturnsType, Status: 201, AltStatus: 200, Codes: []int{Code40005}},
+	{Pattern: RoutePostApiV1BansBatch, Path: "/api/v1/bans/batch", Method: "POST", Auth: AuthRequired, Handler: "handle_batch_ban", Returns: ReturnsType, Status: 201, AltStatus: 200, Codes: []int{Code40005, Code40007, Code40008}},
 	{Pattern: RouteGetApiV1Jails, Path: "/api/v1/jails", Method: "GET", Auth: AuthRequired, Handler: "handle_api_jails", Returns: ReturnsType, Status: 200},
-	{Pattern: RoutePutApiV1JailsName, Path: "/api/v1/jails/{name}", Method: "PUT", Auth: AuthRequired, Handler: "handle_update_jail", Returns: ReturnsType, Status: 200, Codes: []int{Code404}},
-	{Pattern: RouteGetApiV1Config, Path: "/api/v1/config", Method: "GET", Auth: AuthRequired, Handler: "handle_api_config", Returns: ReturnsType, Status: 200},
-	{Pattern: RoutePutApiV1Config, Path: "/api/v1/config", Method: "PUT", Auth: AuthRequired, Handler: "handle_update_config", Returns: ReturnsType, Status: 200, Codes: []int{Code40004}},
+	{Pattern: RoutePutApiV1JailsName, Path: "/api/v1/jails/{name}", Method: "PUT", Auth: AuthRequired, Handler: "handle_update_jail", Returns: ReturnsType, Status: 200, Codes: []int{Code404, Code40007, Code40008, Code50003}},
+	{Pattern: RouteGetApiV1Config, Path: "/api/v1/config", Method: "GET", Auth: AuthRequired, Handler: "handle_api_config", Returns: ReturnsType, Status: 200, Codes: []int{Code50003}},
+	{Pattern: RoutePutApiV1Config, Path: "/api/v1/config", Method: "PUT", Auth: AuthRequired, Handler: "handle_update_config", Returns: ReturnsType, Status: 200, Codes: []int{Code40004, Code40007, Code40008, Code50003}},
 	{Pattern: RouteGetApiV1Whitelist, Path: "/api/v1/whitelist", Method: "GET", Auth: AuthRequired, Handler: "handle_api_whitelist", Returns: ReturnsType, Status: 200},
-	{Pattern: RoutePostApiV1Whitelist, Path: "/api/v1/whitelist", Method: "POST", Auth: AuthRequired, Handler: "handle_create_whitelist", Returns: ReturnsType, Status: 201, AltStatus: 200, Codes: []int{Code40003}},
+	{Pattern: RoutePostApiV1Whitelist, Path: "/api/v1/whitelist", Method: "POST", Auth: AuthRequired, Handler: "handle_create_whitelist", Returns: ReturnsType, Status: 201, AltStatus: 200, Codes: []int{Code40003, Code40007, Code40008}},
 	{Pattern: RouteDeleteApiV1WhitelistCidr, Path: "/api/v1/whitelist/{cidr}", Method: "DELETE", Auth: AuthRequired, Handler: "handle_delete_whitelist", Returns: ReturnsType, Status: 200, Codes: []int{Code40004}},
-	{Pattern: RouteGetApiV1WhitelistRecommendations, Path: "/api/v1/whitelist/recommendations", Method: "GET", Auth: AuthRequired, Handler: "handle_whitelist_recommendations", Returns: ReturnsType, Status: 200},
+	{Pattern: RouteGetApiV1WhitelistRecommendations, Path: "/api/v1/whitelist/recommendations", Method: "GET", Auth: AuthRequired, Handler: "handle_whitelist_recommendations", Returns: ReturnsType, Status: 200, Codes: []int{Code50002, Code50003}},
 	{Pattern: RouteGetApiV1RatesCurrent, Path: "/api/v1/rates/current", Method: "GET", Auth: AuthRequired, Handler: "handle_api_rates_current", Returns: ReturnsType, Status: 200},
 	{Pattern: RouteGetApiV1RatesHistory, Path: "/api/v1/rates/history", Method: "GET", Auth: AuthRequired, Handler: "handle_api_rates_history", Returns: ReturnsType, Status: 200},
 	{Pattern: RouteGetApiV1RatesWindows, Path: "/api/v1/rates/windows", Method: "GET", Auth: AuthRequired, Handler: "handle_api_rates_windows", Returns: ReturnsType, Status: 200},
 	{Pattern: RouteGetApiV1StatsHeatmap, Path: "/api/v1/stats/heatmap", Method: "GET", Auth: AuthRequired, Handler: "handle_api_heatmap", Returns: ReturnsType, Status: 200},
-	{Pattern: RouteGetApiV1StatsRecidivism, Path: "/api/v1/stats/recidivism", Method: "GET", Auth: AuthRequired, Handler: "handle_api_recidivism", Returns: ReturnsType, Status: 200},
+	{Pattern: RouteGetApiV1StatsRecidivism, Path: "/api/v1/stats/recidivism", Method: "GET", Auth: AuthRequired, Handler: "handle_api_recidivism", Returns: ReturnsType, Status: 200, Codes: []int{Code50002, Code50003}},
 	{Pattern: RouteGetApiV1StatsBanEffectiveness, Path: "/api/v1/stats/ban-effectiveness", Method: "GET", Auth: AuthRequired, Handler: "handle_api_ban_effectiveness", Returns: ReturnsType, Status: 200},
-	{Pattern: RouteGetApiV1StatsPeriodicAttackers, Path: "/api/v1/stats/periodic-attackers", Method: "GET", Auth: AuthRequired, Handler: "handle_api_periodic_attackers", Returns: ReturnsType, Status: 200},
-	{Pattern: RouteGetApiV1StatsCollaborativeAttacks, Path: "/api/v1/stats/collaborative-attacks", Method: "GET", Auth: AuthRequired, Handler: "handle_api_collaborative_attacks", Returns: ReturnsType, Status: 200},
+	{Pattern: RouteGetApiV1StatsPeriodicAttackers, Path: "/api/v1/stats/periodic-attackers", Method: "GET", Auth: AuthRequired, Handler: "handle_api_periodic_attackers", Returns: ReturnsType, Status: 200, Codes: []int{Code50002, Code50003}},
+	{Pattern: RouteGetApiV1StatsCollaborativeAttacks, Path: "/api/v1/stats/collaborative-attacks", Method: "GET", Auth: AuthRequired, Handler: "handle_api_collaborative_attacks", Returns: ReturnsType, Status: 200, Codes: []int{Code50002, Code50003}},
 	{Pattern: RouteGetApiV1StatsUdpPorts, Path: "/api/v1/stats/udp-ports", Method: "GET", Auth: AuthRequired, Handler: "handle_api_udp_ports", Returns: ReturnsType, Status: 200},
 	{Pattern: RouteGetApiV1StatsIcmpTypes, Path: "/api/v1/stats/icmp-types", Method: "GET", Auth: AuthRequired, Handler: "handle_api_icmp_types", Returns: ReturnsType, Status: 200},
 	{Pattern: RouteGetApiV1StatsSseStatus, Path: "/api/v1/stats/sse-status", Method: "GET", Auth: AuthRequired, Handler: "handle_api_sse_status", Returns: ReturnsType, Status: 200},
@@ -321,15 +333,39 @@ var Routes = []Route{
 	{Pattern: RouteGetApiV1StatsIpFragments, Path: "/api/v1/stats/ip-fragments", Method: "GET", Auth: AuthRequired, Handler: "handle_api_ip_fragments", Returns: ReturnsType, Status: 200},
 	{Pattern: RouteGetApiV1StatsPortScanners, Path: "/api/v1/stats/port-scanners", Method: "GET", Auth: AuthRequired, Handler: "handle_api_port_scanners", Returns: ReturnsType, Status: 200},
 	{Pattern: RouteGetApiV1StatsServiceProbes, Path: "/api/v1/stats/service-probes", Method: "GET", Auth: AuthRequired, Handler: "handle_api_service_probes", Returns: ReturnsType, Status: 200},
-	{Pattern: RouteGetApiV1StatsBanDurationRecommendations, Path: "/api/v1/stats/ban-duration-recommendations", Method: "GET", Auth: AuthRequired, Handler: "handle_api_ban_duration_recommendations", Returns: ReturnsType, Status: 200},
-	{Pattern: RouteGetApiV1StatsReputation, Path: "/api/v1/stats/reputation", Method: "GET", Auth: AuthRequired, Handler: "handle_api_reputation", Returns: ReturnsType, Status: 200},
-	{Pattern: RouteGetApiV1StatsThresholdRecommendations, Path: "/api/v1/stats/threshold-recommendations", Method: "GET", Auth: AuthRequired, Handler: "handle_api_threshold_recommendations", Returns: ReturnsType, Status: 200},
-	{Pattern: RouteGetApiV1StatsNetworkDistribution, Path: "/api/v1/stats/network-distribution", Method: "GET", Auth: AuthRequired, Handler: "handle_api_network_distribution", Returns: ReturnsType, Status: 200},
-	{Pattern: RouteGetApiV1StatsAttackPredictions, Path: "/api/v1/stats/attack-predictions", Method: "GET", Auth: AuthRequired, Handler: "handle_api_attack_predictions", Returns: ReturnsType, Status: 200},
+	{Pattern: RouteGetApiV1StatsBanDurationRecommendations, Path: "/api/v1/stats/ban-duration-recommendations", Method: "GET", Auth: AuthRequired, Handler: "handle_api_ban_duration_recommendations", Returns: ReturnsType, Status: 200, Codes: []int{Code50002, Code50003}},
+	{Pattern: RouteGetApiV1StatsReputation, Path: "/api/v1/stats/reputation", Method: "GET", Auth: AuthRequired, Handler: "handle_api_reputation", Returns: ReturnsType, Status: 200, Codes: []int{Code50002, Code50003}},
+	{Pattern: RouteGetApiV1StatsThresholdRecommendations, Path: "/api/v1/stats/threshold-recommendations", Method: "GET", Auth: AuthRequired, Handler: "handle_api_threshold_recommendations", Returns: ReturnsType, Status: 200, Codes: []int{Code50002, Code50003}},
+	{Pattern: RouteGetApiV1StatsNetworkDistribution, Path: "/api/v1/stats/network-distribution", Method: "GET", Auth: AuthRequired, Handler: "handle_api_network_distribution", Returns: ReturnsType, Status: 200, Codes: []int{Code50002, Code50003}},
+	{Pattern: RouteGetApiV1StatsAttackPredictions, Path: "/api/v1/stats/attack-predictions", Method: "GET", Auth: AuthRequired, Handler: "handle_api_attack_predictions", Returns: ReturnsType, Status: 200, Codes: []int{Code50002, Code50003}},
 	{Pattern: RouteGetApiV1StatsAnomalies, Path: "/api/v1/stats/anomalies", Method: "GET", Auth: AuthRequired, Handler: "handle_api_anomalies", Returns: ReturnsType, Status: 200},
 	{Pattern: RouteGetApiV1StatsAttackGeo, Path: "/api/v1/stats/attack-geo", Method: "GET", Auth: AuthRequired, Handler: "handle_api_attack_geo", Returns: ReturnsType, Status: 200},
-	{Pattern: RouteGetApiV1Logs, Path: "/api/v1/logs", Method: "GET", Auth: AuthRequired, Handler: "handle_api_logs", Returns: ReturnsType, Status: 200, Codes: []int{Code40005}},
+	{Pattern: RouteGetApiV1Logs, Path: "/api/v1/logs", Method: "GET", Auth: AuthRequired, Handler: "handle_api_logs", Returns: ReturnsType, Status: 200, Codes: []int{Code40005, Code50002, Code50003}},
 }
+
+// 安全头的名与值：中间件逐条引用这里的常量写响应头，实现里不出现第二份字符串。
+// 标识符由头名派生（`X-Frame-Options` -> HeaderXFrameOptions），值由契约声明派生；
+// `…ValueWebUI` 仅在契约给了 webui 分支值时存在。
+const (
+	// HeaderXContentTypeOptions 是头名 `X-Content-Type-Options`（scope=all）。
+	HeaderXContentTypeOptions = "X-Content-Type-Options"
+	// HeaderXContentTypeOptionsValue 是契约声明的 X-Content-Type-Options 取值。
+	HeaderXContentTypeOptionsValue = "nosniff"
+	// HeaderXFrameOptions 是头名 `X-Frame-Options`（scope=all）。
+	HeaderXFrameOptions = "X-Frame-Options"
+	// HeaderXFrameOptionsValue 是契约声明的 X-Frame-Options 取值。
+	HeaderXFrameOptionsValue = "DENY"
+	// HeaderContentSecurityPolicy 是头名 `Content-Security-Policy`（scope=all）。
+	HeaderContentSecurityPolicy = "Content-Security-Policy"
+	// HeaderContentSecurityPolicyValue 是契约声明的 Content-Security-Policy 取值。
+	HeaderContentSecurityPolicyValue = "default-src 'none'"
+	// HeaderContentSecurityPolicyValueWebUI 是面板（HTML/JS 同源加载）响应用值。
+	HeaderContentSecurityPolicyValueWebUI = "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; connect-src 'self'; font-src 'self' data: https://fonts.gstatic.com"
+	// HeaderCacheControl 是头名 `Cache-Control`（scope=all）。
+	HeaderCacheControl = "Cache-Control"
+	// HeaderCacheControlValue 是契约声明的 Cache-Control 取值。
+	HeaderCacheControlValue = "no-store"
+)
 
 // SecurityHeader 是中间件统一施加的安全头。
 type SecurityHeader struct {

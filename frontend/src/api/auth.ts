@@ -1,7 +1,8 @@
 /**
  * 访问令牌：唯一凭据来源，供 REST `fetch` 与 `EventSource` 共用。
  *
- * 契约依据（`src/daemon/http_exporter/auth.rs`）：Basic Auth 中间件接受两种凭据来源——
+ * 契约依据（`src/daemon/internal/http/auth.go` 与 `contract/http.fwidl` 的 auth 段）：
+ * Basic Auth 中间件接受两种凭据来源——
  * `Authorization: Basic <base64(user:pass)>` 请求头，或 query `?access_token=<base64(user:pass)>`
  * （后者专为 `EventSource` 预留：浏览器不允许给 EventSource 设置自定义请求头）。
  *
@@ -10,9 +11,9 @@
  *    因此顶层文档不会返回 401，浏览器不会弹出、也就不会缓存凭据；
  * 2. 初始加载时 cookie jar 中没有凭据，页面自身发出的 `/api/v1/**` 与
  *    `/api/v1/events` 会全部 401；
- * 3. 更糟的是，每个无凭据请求都会累加服务端的暴力破解计数
- *    （`AUTH_FAILURE_THRESHOLD=10` 后半分钟内锁定，连正确凭据也会被拒），
- *    导致「越刷新越不可用」。
+ * 3. 服务端只对**带了且带错**的凭据计数：连续 `AUTH.FAILURE_THRESHOLD` 次错误凭据后进入
+ *    `AUTH.LOCKOUT_SECONDS` 秒的锁定窗口，期间连正确凭据也被拒。未携带凭据的匿名 401
+ *    不计入，所以正常打开面板不会把自己锁在门外——但反复提交错密码会。
  *
  * 令牌存放于 `sessionStorage`（同源隔离、关闭标签页即失效），与 HTTP Basic 的
  * 明文等价性一致：本项目的 Web UI 本就以 Basic 凭据作访问控制，此处只是把凭据

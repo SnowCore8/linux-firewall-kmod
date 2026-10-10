@@ -7,6 +7,20 @@
 /** API 前缀：/api/v1 */
 export const API_BASE = "/api/v1"
 
+/** 鉴权参数：scheme、query 凭据键名、失败计数阈值与锁定时长 */
+export const AUTH = {
+  /** `Authorization: Basic …` 里的凭据方案 */
+  SCHEME: "Basic",
+  /** EventSource 不能设请求头，凭据走这个查询参数 */
+  TOKEN_QUERY: "access_token",
+  /** 触发锁定前的连续失败次数 */
+  FAILURE_THRESHOLD: 10,
+  /** 一次锁定持续的秒数（锁定期内正确凭据同样被拒） */
+  LOCKOUT_SECONDS: 60,
+  /** 凭据缺失/错误时的 HTTP 状态码（纯文本形状，不经信封） */
+  UNAUTHORIZED_STATUS: 401,
+} as const
+
 /** 全部路由路径（与守护进程注册的字面量逐字一致） */
 export const ROUTES = {
   /** `GET /health` */

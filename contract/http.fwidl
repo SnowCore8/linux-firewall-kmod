@@ -90,6 +90,13 @@ auth {
 #
 # 三种形状并存是**实现现状**，不是设计选择。重写时应收敛为一种；在此之前
 # 前端必须三种都能处理。
+#
+# 分派的依据是「谁写出这个状态码」，不是「它长得像哪类错误」：
+#   - envelope          daemon 用统一信封写出（code 是业务码，data 是 null）
+#   - text              daemon 写出的裸纯文本，只有两处：401 与静态资源 404
+#   - framework_default net/http ServeMux 自产，源码里不该有构造点（404/405）
+# 把 400/415/422 留在 framework_default 下是 Rust/axum 时代的遗产：那时提取器确实会
+# 自产它们，而 Go 的 net/http 不会——状态码由谁产生决定了前端能不能指望它是 JSON。
 
 errmodel AUTH_UNAUTHORIZED {
   shape = text
@@ -107,8 +114,14 @@ errmodel STATIC_NOT_FOUND {
 
 errmodel FRAMEWORK_DEFAULT {
   shape = framework_default
-  statuses = 422, 400, 415, 404, 405
-  note = "框架默认错误：请求体反序列化失败 422、Query 解析失败 400、Content-Type 不符 415、方法不匹配 405、路径不匹配 404。响应体是框架自带的纯文本（Go 侧为 net/http 的 `404 page not found`、`Method Not Allowed`），不是信封 —— 前端不能假设所有错误都能 JSON.parse，也不能假设所有 4xx 都有信封。"
+  statuses = 404, 405
+  note = "框架自产错误：路径无匹配模式 404（body `404 page not found`）、模式带方法而动词不符 405（body `Method Not Allowed`）。Go 侧这两条由 net/http ServeMux 产生，daemon 源码里**不该**有它们的构造点；把路由注册成带方法的模式正是让它们生效的前提。响应体是框架自带的纯文本，不是信封 —— 前端不能假设所有错误都能 JSON.parse，也不能假设所有 4xx 都有信封。"
+}
+
+errmodel ENVELOPE_ERROR {
+  shape = envelope
+  statuses = 400, 404, 415, 422, 500, 503
+  note = "daemon 自己写出的错误，走统一信封：code 是 `codes` 段声明的业务码，data 恒为 null，message 给人读。历史上这批状态码被记在 FRAMEWORK_DEFAULT 里（axum 的提取器会自产 422/415、query 解析失败自产 400），net/http 没有提取器，三个状态码一个都不会自己产生——把它们留在「框架默认」下等于契约在说自己不成立的事实。404 在这里与在框架默认里**并存**且不矛盾：路径不匹配时是框架的纯文本 404，资源存在性失败（Jail 不存在）是信封 404 + 业务码 404。"
 }
 
 # ============================================================================
@@ -180,6 +193,16 @@ code 40006 {
   text = "封禁详情查询失败（IP 非法）"
 }
 
+code 40007 {
+  status = 422
+  text = "请求体不是合法 JSON 或字段类型不符（daemon 解析，框架不会自产此码）"
+}
+
+code 40008 {
+  status = 415
+  text = "Content-Type 不是 application/json（本 API 只说这一种媒体类型）"
+}
+
 code 404 {
   status = 404
   text = "Jail 不存在"
@@ -188,6 +211,11 @@ code 404 {
 code 50002 {
   status = 500
   text = "服务端内部错误（历史库查询任务 join 失败等），message 含具体原因"
+}
+
+code 50003 {
+  status = 503
+  text = "依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满"
 }
 
 # ============================================================================
@@ -444,6 +472,7 @@ route GET "/api/v1/events" {
   returns = stream
   status = 200
   alt_status = 503
+  codes = 50003
   max_connections = 10
   events = connected, stats, bans, jails, whitelist, rates
   keepalive_secs = 15
@@ -456,6 +485,7 @@ route GET "/api/v1/logs/stream" {
   returns = stream
   status = 200
   alt_status = 503
+  codes = 50003
   max_connections = 5
   events = connected, log, error
   keepalive_secs = 15
@@ -489,7 +519,7 @@ route POST "/api/v1/bans" {
   returns = type
   status = 201
   alt_status = 200
-  codes = 40001
+  codes = 40001, 40007, 40008
   note = "请求体 CreateBanRequest；成功 201 Created，载荷 BanOperationResponse"
 }
 
@@ -524,7 +554,7 @@ route POST "/api/v1/bans/batch" {
   returns = type
   status = 201
   alt_status = 200
-  codes = 40005
+  codes = 40005, 40007, 40008
   note = "空列表或超过 100 条 → 40005；载荷 BatchOperationResponse"
 }
 
@@ -543,7 +573,7 @@ route PUT "/api/v1/jails/:name" {
   handler = handle_update_jail
   returns = type
   status = 200
-  codes = 404
+  codes = 404, 40007, 40008, 50003
   note = "请求体 UpdateJailRequest；Jail 不存在 → 404（信封内 code=404，非 HTTP 404）"
 }
 
@@ -554,6 +584,7 @@ route GET "/api/v1/config" {
   handler = handle_api_config
   returns = type
   status = 200
+  codes = 50003
   note = "载荷 WebuiConfigResponse"
 }
 
@@ -562,7 +593,7 @@ route PUT "/api/v1/config" {
   handler = handle_update_config
   returns = type
   status = 200
-  codes = 40004
+  codes = 40004, 40007, 40008, 50003
   note = "请求体 UpdateConfigRequest"
 }
 
@@ -582,7 +613,7 @@ route POST "/api/v1/whitelist" {
   returns = type
   status = 201
   alt_status = 200
-  codes = 40003
+  codes = 40003, 40007, 40008
   note = "请求体 CreateWhitelistRequest"
 }
 
@@ -600,6 +631,7 @@ route GET "/api/v1/whitelist/recommendations" {
   handler = handle_whitelist_recommendations
   returns = type
   status = 200
+  codes = 50002, 50003
   note = "载荷 WhitelistRecommendation 数组"
 }
 
@@ -644,6 +676,7 @@ route GET "/api/v1/stats/recidivism" {
   handler = handle_api_recidivism
   returns = type
   status = 200
+  codes = 50002, 50003
   note = "载荷 RecidivismResponse；其 recidivism_rate 是**百分数 0-100**（见 defect HTTP_RECIDIVISM_RATE_UNIT）"
 }
 
@@ -660,6 +693,7 @@ route GET "/api/v1/stats/periodic-attackers" {
   handler = handle_api_periodic_attackers
   returns = type
   status = 200
+  codes = 50002, 50003
   note = "载荷 PeriodicAttacker 数组"
 }
 
@@ -668,6 +702,7 @@ route GET "/api/v1/stats/collaborative-attacks" {
   handler = handle_api_collaborative_attacks
   returns = type
   status = 200
+  codes = 50002, 50003
   note = "载荷 CollaborativeAttack 数组"
 }
 
@@ -748,6 +783,7 @@ route GET "/api/v1/stats/ban-duration-recommendations" {
   handler = handle_api_ban_duration_recommendations
   returns = type
   status = 200
+  codes = 50002, 50003
   note = "载荷 BanDurationRecommendationResponse"
 }
 
@@ -756,6 +792,7 @@ route GET "/api/v1/stats/reputation" {
   handler = handle_api_reputation
   returns = type
   status = 200
+  codes = 50002, 50003
   note = "载荷 ReputationEntryResponse 数组；threshold_multiplier 由内联分段函数生成（1.0 / 0.8 / 0.5）"
 }
 
@@ -764,6 +801,7 @@ route GET "/api/v1/stats/threshold-recommendations" {
   handler = handle_api_threshold_recommendations
   returns = type
   status = 200
+  codes = 50002, 50003
   note = "载荷 ThresholdRecommendationResponse（recommended_threshold 的 0 语义见 defect HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS）"
 }
 
@@ -772,6 +810,7 @@ route GET "/api/v1/stats/network-distribution" {
   handler = handle_api_network_distribution
   returns = type
   status = 200
+  codes = 50002, 50003
   note = "载荷 NetworkBlock 数组"
 }
 
@@ -780,6 +819,7 @@ route GET "/api/v1/stats/attack-predictions" {
   handler = handle_api_attack_predictions
   returns = type
   status = 200
+  codes = 50002, 50003
   note = "载荷 AttackPredictionSummary"
 }
 
@@ -890,7 +930,7 @@ route GET "/api/v1/logs" {
   handler = handle_api_logs
   returns = type
   status = 200
-  codes = 40005
+  codes = 40005, 50002, 50003
   note = "查询参数 LogQueryParams；分页参数非法 → 40005；载荷 LogPageResponse"
 }
 

@@ -194,14 +194,16 @@ func run(args []string) error {
 			}
 
 			api := http.NewAPIHandlers(http.APIConfig{
-				Server:           httpServer,
-				DB:               historyDB,
-				SSE:              sseBroker,
-				LogStream:        logStream,
-				Metrics:          metrics,
-				KernelBan:        banSinkForDaemon,
-				Username:         cfg.MetricsUsername,
-				Password:         cfg.MetricsPassword,
+				Server:    httpServer,
+				DB:        historyDB,
+				SSE:       sseBroker,
+				LogStream: logStream,
+				Metrics:   metrics,
+				KernelBan: banSinkForDaemon,
+				Username:  cfg.MetricsUsername,
+				Password:  cfg.MetricsPassword,
+				// 进程级唯一的认证失败账本：契约的锁定窗口不区分来源 IP，所以整进程一份。
+				Lockout:          http.NewAuthLockout(),
 				GetCurrentConfig: func() *config.Config { return &cfg },
 				GetConfigPath:    func() string { return configPath },
 				JailController:   jailEnabled,

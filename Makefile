@@ -205,11 +205,14 @@ contract-drift:
 
 # 三个校验器逐个跑完再汇总退出码：短路在第一个失败就停，会让后两侧的问题
 # 在同一次 CI 里看不见，修一轮才知道还有下一轮。
+#
+# GO 必须显式传进环境：校验器用它把生成物 `http_contract.go` 真编译一遍（自检），
+# 拿不到就打印「跳过」并当通过——生成物编不过这种事故绝不能靠「环境里有没有 go」决定。
 contract-check: contract-drift
 	@fail=0; \
 	for v in $(CONTRACT_CHECKS); do \
 		echo "--- contract/$$v.py ---"; \
-		$(PYTHON) contract/$$v.py || fail=1; \
+		GO=$(GOC) $(PYTHON) contract/$$v.py || fail=1; \
 	done; \
 	if [ $$fail -ne 0 ]; then echo "ERROR: 契约校验失败"; exit 1; fi; \
 	echo "✓ 契约校验全部通过"
