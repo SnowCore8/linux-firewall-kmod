@@ -21,6 +21,7 @@ import type {
   BanEffectivenessResponse,
   BanOperationResponse,
   BanResponse,
+  BatchBanRequest,
   BatchOperationResponse,
   CollaborativeAttack,
   CreateBanRequest,
@@ -153,9 +154,22 @@ export function deleteBan(ip: string): Promise<BanOperationResponse> {
   return delJson<BanOperationResponse>(fill(ROUTES.DELETE_API_V1_BANS_IP, ip))
 }
 
-/** `POST /api/v1/bans/batch` — 批量封禁（后端上限 100 个 IP，单次封禁 3600 秒） */
-export function batchBan(ips: string[]): Promise<BatchOperationResponse> {
-  return sendJson<string[], BatchOperationResponse>(ROUTES.POST_API_V1_BANS_BATCH, 'POST', ips)
+/**
+ * `POST /api/v1/bans/batch` — 批量封禁（契约上限单次 100 条，`duration` 缺省 3600 秒）。
+ *
+ * 请求体是契约的 `BatchBanRequest`（`{ips, duration, reason}`），**不是**裸 `string[]`：
+ * 服务端解的是这个对象，发数组会整批落到 422/40007。`duration` 在这里没有「缺省即永久」
+ * 的读法——批量入口产生的永远是有时长封禁，因此它们都能被 unbanTemporary 一次撤掉。
+ */
+export function batchBan(ips: string[], duration?: number): Promise<BatchOperationResponse> {
+  // 契约把 Option<u64> 映射成 `number | null`（必填、可为 null），所以这里写 null 而不是
+  // 省略字段：null 与缺席在 Go 侧同为「指针为 nil」，但省略会让 TS 类型不通过。
+  const body: BatchBanRequest = { ips, duration: duration ?? null, reason: null }
+  return sendJson<BatchBanRequest, BatchOperationResponse>(
+    ROUTES.POST_API_V1_BANS_BATCH,
+    'POST',
+    body,
+  )
 }
 
 /** `POST /api/v1/bans/unban-temporary` — 批量解封所有临时封禁（永久封禁不受影响） */

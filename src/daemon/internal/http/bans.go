@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"sort"
 	"time"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/bans"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/decision"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 )
 
@@ -25,22 +27,86 @@ type KernelBan interface {
 	Remove(addr netip.Addr, prefixLen uint8) error
 }
 
-type BanRequest struct {
-	IP       string `json:"ip"`
-	Duration int64  `json:"duration,omitempty"`
-	Reason   string `json:"reason,omitempty"`
-}
-
-type UnbanRequest struct {
-	IP string `json:"ip"`
-}
-
 // batchBanMaxIPs 是 POST /api/v1/bans/batch 的单批上限（契约 code 40005 的 text 写死 100）。
 const batchBanMaxIPs = 100
 
+// 封禁列表的分页缺省与上限（契约 HTTP_BANS_DUAL_SHAPE 的 resolution 写死这三个数）。
+//
+// 这里的分页是**宽容**的：读不懂的 page/page_size 当作没带（见 query.go 的
+// queryPagination），因为契约给 GET /api/v1/bans 只编了 code 0，没有「分页参数非法」
+// 这个失败码可用。日志那条路由编了 40005，所以它才做严格校验（parseLogQuery）——两边的
+// 宽容度是契约分别定的，不是实现随手挑的。
+const (
+	banDefaultPage      = 1
+	banDefaultPageSize  = 20
+	banMaxPageSize      = 100
+	banDefaultBatchSecs = 3600
+)
+
+// banSortKeys 是 GET /api/v1/bans 的 sort_by 合法取值（契约 HTTP_BAN_SORT_DOC_INCOMPLETE
+// 要求注释、代码分支与前端 BanSortKey 三者逐字一致，未识别的值回落 banned_at_desc）。
+var banSortKeys = map[string]func(a, b BanResponse) bool{
+	"banned_at_desc": func(a, b BanResponse) bool { return a.BannedAt > b.BannedAt },
+	"banned_at_asc":  func(a, b BanResponse) bool { return a.BannedAt < b.BannedAt },
+	"ip_asc":         func(a, b BanResponse) bool { return a.IP < b.IP },
+	"ip_desc":        func(a, b BanResponse) bool { return a.IP > b.IP },
+	"jail_asc":       func(a, b BanResponse) bool { return a.Jail < b.Jail },
+	"remaining_asc":  func(a, b BanResponse) bool { return a.RemainingSeconds < b.RemainingSeconds },
+	"remaining_desc": func(a, b BanResponse) bool { return a.RemainingSeconds > b.RemainingSeconds },
+}
+
+// ListBans 返回分页后的活跃封禁表（GET /api/v1/bans）。
+//
+// 单一形状：任何情况下都是 PaginatedResponse<BanResponse>，没有「不带 query 就写裸数组」
+// 的分支。前端 Bans 页过去按客户端分页取全量，现在改为把 page/page_size/sort_by 交给
+// 服务端——裸数组那一支留着只会让两侧同时存在两种返回类型（缺陷 HTTP_BANS_DUAL_SHAPE）。
 func (h *APIHandlers) ListBans(w http.ResponseWriter, r *http.Request) {
-	banList := bans.GlobalCache().List()
-	WriteSuccess(w, banList)
+	now := time.Now().Unix()
+	items := banResponses(bans.GlobalCache().All(), now)
+
+	params := queryPagination(r)
+	less, ok := banSortKeys[params.sortByOr()]
+	if !ok {
+		// 未识别的取值（含缺席）回落 banned_at_desc：最新封禁排在第一页，
+		// 运维打开页面看到的就是刚刚发生的事。
+		less = banSortKeys["banned_at_desc"]
+	}
+	sort.SliceStable(items, func(i, j int) bool { return less(items[i], items[j]) })
+
+	total := uint64(len(items))
+	page := params.pageOr(banDefaultPage)
+	pageSize := params.pageSizeOr(banDefaultPageSize, banMaxPageSize)
+	totalPages := uint32((total + uint64(pageSize) - 1) / uint64(pageSize))
+
+	// 页内区间在 uint64 上算：page 最大可以到 uint32 上限，用 uint32 乘 pageSize 会回绕
+	// 成一个落在范围内的假起点，把第 4 亿页显示成第 1 页。
+	start := uint64(page-1) * uint64(pageSize)
+	if start > total {
+		start = total
+	}
+	end := start + uint64(pageSize)
+	if end > total {
+		end = total
+	}
+
+	WriteSuccess(w, PaginatedResponse[BanResponse]{
+		Items:      items[start:end],
+		Total:      total,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
+	})
+}
+
+// durationSeconds 把 CreateBanRequest.duration 的三态压成一个数与一个永久标记。
+//
+// 缺席与显式 0 都是永久（契约的 Option<u64> 加前端 types.ts 那句「0 或省略 = 永久」）；
+// 这里用指针把它们与「显式给了时长」分开，负数在 uint64 下根本解不进来。
+func durationSeconds(p *uint64) (secs int64, permanent bool) {
+	if p == nil || *p == 0 {
+		return 0, true
+	}
+	return int64(*p), false
 }
 
 // CreateBan 落一条封禁：镜像 → 内核 → 历史 → 推送，任一步失败都回业务码 40001。
@@ -48,7 +114,7 @@ func (h *APIHandlers) ListBans(w http.ResponseWriter, r *http.Request) {
 // 契约给 POST /api/v1/bans 只编了一个失败码（40001，text 覆盖「内核未确认、IP 非法、
 // 内核返回错误」三种情形），区分它们靠 message，不靠临时新造数字。
 func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
-	var req BanRequest
+	var req CreateBanRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
@@ -59,16 +125,16 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isPermanent := req.Duration == 0
-	duration := req.Duration
-	if duration <= 0 {
-		duration = 3600
+	duration, isPermanent := durationSeconds(req.Duration)
+	reason := "manual"
+	if req.Reason != nil && *req.Reason != "" {
+		reason = *req.Reason
 	}
 
 	now := time.Now().Unix()
 	info := bans.BanInfo{
 		IP:          req.IP,
-		Reason:      req.Reason,
+		Reason:      reason,
 		BannedAt:    now,
 		IsPermanent: isPermanent,
 	}
@@ -89,7 +155,7 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 			durationSecs = uint32(duration)
 		}
 		prefixLen := bans.FullPrefixLen(addr)
-		if sendErr := h.kernelBan.Send(addr, prefixLen, durationSecs, req.Reason); sendErr != nil {
+		if sendErr := h.kernelBan.Send(addr, prefixLen, durationSecs, reason); sendErr != nil {
 			h.server.logger.Error("内核封禁下发失败", "ip", req.IP, "error", sendErr)
 			bans.GlobalCache().Remove(req.IP)
 			WriteCode(w, httpcontract.Code40001, "封禁失败：内核未确认（"+sendErr.Error()+"）")
@@ -108,11 +174,14 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 
 	h.publishBans()
 
-	WriteSuccess(w, map[string]any{
-		"ip":       req.IP,
-		"duration": duration,
-		"status":   "banned",
-	})
+	// action 只说做成了什么动作，永久与否由 permanent 表达——再造一个 "banned_permanent"
+	// 会让读侧同时比较两个维度，而这两个维度说的是同一件事。
+	resp := BanOperationResponse{IP: req.IP, Action: "banned", Permanent: isPermanent}
+	if !isPermanent {
+		secs := uint64(duration)
+		resp.DurationSecs = &secs
+	}
+	WriteCreated(w, resp)
 }
 
 // DeleteBan 撤一条封禁，失败回业务码 40002（契约给这条路由只编了这一个码）。
@@ -140,12 +209,18 @@ func (h *APIHandlers) DeleteBan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 记下解封时刻：GET /api/v1/bans/:ip/detail 的 last_unbanned_at 只有这一个来源
+	// （见 persist.RecordUnbanHistory）。写失败只记日志——封禁已经撤掉了，不能因为
+	// 一条审计时间戳把响应改成 40002。
+	if h.db != nil {
+		if err := h.db.RecordUnbanHistory(ip); err != nil {
+			h.server.logger.Error("record unban history", "ip", ip, "error", err)
+		}
+	}
+
 	h.publishBans()
 
-	WriteSuccess(w, map[string]any{
-		"ip":     ip,
-		"status": "unbanned",
-	})
+	WriteSuccess(w, BanOperationResponse{IP: ip, Action: "unbanned"})
 }
 
 // UnbanAllTemporary 撤掉所有临时封禁；有 IP 的内核解封下发失败就回业务码 40003。
@@ -172,6 +247,16 @@ func (h *APIHandlers) UnbanAllTemporary(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	// 与 DeleteBan 同一口径：镜像里已被撤掉的临时封禁逐条记解封时刻。
+	// failed 只说明 netfilter 那条规则没撤成（它到 TTL 会自己消失），不影响这里记账。
+	if h.db != nil {
+		for _, ip := range ips {
+			if err := h.db.RecordUnbanHistory(ip); err != nil {
+				h.server.logger.Error("record unban history", "ip", ip, "error", err)
+			}
+		}
+	}
+
 	h.publishBans()
 
 	if len(failed) > 0 {
@@ -180,18 +265,22 @@ func (h *APIHandlers) UnbanAllTemporary(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	WriteSuccess(w, map[string]any{
-		"unbanned_count": len(ips),
+	WriteSuccess(w, BatchOperationResponse{
+		Total:       uint64(len(ips)),
+		Succeeded:   uint64(len(ips)),
+		FailedCount: 0,
+		Details:     []string{},
 	})
 }
 
 // BatchBan 一次落多条封禁。参数非法（列表为空或超过 100 条）回业务码 40005。
+//
+// 批量**永远不产生永久封禁**：请求里的 duration 缺席或为 0 一律按 3600 秒下发（缺陷
+// HTTP_BATCH_BAN_BECOMES_PERMANENT 的现场就是「确认弹窗承诺 3600 秒、实际把整批永久
+// 封了」，而 /api/v1/bans/unban-temporary 只解临时封禁，永久条目没有批量退路）。
+// 单条 POST /api/v1/bans 仍按契约保留「缺席/0 = 永久」——那是运维逐条点下的决定。
 func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		IPs      []string `json:"ips"`
-		Duration int64    `json:"duration,omitempty"`
-		Reason   string   `json:"reason,omitempty"`
-	}
+	var req BatchBanRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
@@ -206,54 +295,55 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isPermanent := req.Duration == 0
-	duration := req.Duration
-	if duration <= 0 {
-		duration = 3600
+	duration := uint64(banDefaultBatchSecs)
+	if req.Duration != nil && *req.Duration > 0 {
+		duration = *req.Duration
+	}
+	reason := "manual"
+	if req.Reason != nil && *req.Reason != "" {
+		reason = *req.Reason
 	}
 
 	now := time.Now().Unix()
 	var successCount, failCount int
+	details := make([]string, 0, len(req.IPs))
 	for _, ip := range req.IPs {
 		addr, err := netip.ParseAddr(ip)
 		if err != nil {
 			failCount++
+			details = append(details, ip+": IP 非法")
 			continue
 		}
 
 		info := bans.BanInfo{
 			IP:          ip,
-			Reason:      req.Reason,
+			Reason:      reason,
 			BannedAt:    now,
-			IsPermanent: isPermanent,
-		}
-		if !isPermanent {
-			info.ExpiresAt = now + duration
+			IsPermanent: false,
+			ExpiresAt:   now + int64(duration),
 		}
 
 		if !bans.GlobalCache().TryInsert(info) {
 			failCount++
+			details = append(details, ip+": 该 IP 已在封禁表中")
 			continue
 		}
 
 		// 下发内核 netfilter；失败回滚这一条的镜像（同 CreateBan）。
 		if h.kernelBan != nil {
-			durationSecs := uint32(0)
-			if !isPermanent {
-				durationSecs = uint32(duration)
-			}
 			prefixLen := bans.FullPrefixLen(addr)
-			if sendErr := h.kernelBan.Send(addr, prefixLen, durationSecs, req.Reason); sendErr != nil {
+			if sendErr := h.kernelBan.Send(addr, prefixLen, uint32(duration), reason); sendErr != nil {
 				h.server.logger.Error("batch ban kernel send failed", "ip", ip, "error", sendErr)
 				bans.GlobalCache().Remove(ip)
 				failCount++
+				details = append(details, ip+": 内核未确认（"+sendErr.Error()+"）")
 				continue
 			}
 		}
 
 		successCount++
 		if h.db != nil {
-			if err := h.db.RecordBanHistory(ip, isPermanent); err != nil {
+			if err := h.db.RecordBanHistory(ip, false); err != nil {
 				h.server.logger.Error("record ban history", "error", err)
 			}
 		}
@@ -261,16 +351,24 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 
 	h.publishBans()
 
-	WriteSuccess(w, map[string]any{
-		"success_count": successCount,
-		"fail_count":    failCount,
+	WriteCreated(w, BatchOperationResponse{
+		Total:       uint64(len(req.IPs)),
+		Succeeded:   uint64(successCount),
+		FailedCount: uint64(failCount),
+		Details:     details,
 	})
 }
 
 // BanDetail 报单个 IP 的封禁详情与历史记录（GET /api/v1/bans/{ip}/detail）。
 //
-// 两个失败分支共用业务码 40006：契约给这条路由只编了这一个码，靠 message 区分
-// 「IP 写错了」与「这个 IP 目前没被封」。
+// **未被封禁不是错误**：契约给这条路由只编了 40006，而它的 text 写的是「封禁详情查询失败
+// （IP 非法）」——「这个 IP 目前没被封」是查询成功后的一个读数，不是查询失败。载荷里的
+// is_banned 正是为此存在的：运维刚点完解封、还想看这个 IP 的历史与信誉分时，面板要的正是
+// 这份 is_banned=false 的 200。把「不在封禁表中」写成 40006 会让整块详情变成一句错误提示，
+// 而调用方手上的信息其实是完整的。
+//
+// 历史库读失败**不改状态码**：这条路由没编 50002，缺项由 struct 零值表达（时间戳 0 =
+// 无记录，前端 types.ts 对每个零值都写了自己的显示口径），并在服务端留一条日志。
 func (h *APIHandlers) BanDetail(w http.ResponseWriter, r *http.Request) {
 	ip := r.PathValue("ip")
 
@@ -279,29 +377,112 @@ func (h *APIHandlers) BanDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, ok := bans.GlobalCache().Get(ip)
-	if !ok {
-		WriteCode(w, httpcontract.Code40006, "封禁详情查询失败：该 IP 不在封禁表中 "+ip)
-		return
-	}
-
-	detail := map[string]any{
-		"ip":           ip,
-		"reason":       info.Reason,
-		"banned_at":    info.BannedAt,
-		"expires_at":   info.ExpiresAt,
-		"is_permanent": info.ExpiresAt == 0,
-	}
+	detail := BanDetailResponse{IP: ip}
 
 	if h.db != nil {
-		if history, err := h.db.GetBanHistory(ip); err == nil && history != nil {
-			detail["ban_count"] = history.BanCount
-			detail["last_banned_at"] = history.LastBannedAt
+		if history, err := h.db.GetBanHistory(ip); err != nil {
+			h.server.logger.Warn("读取封禁历史失败", "ip", ip, "error", err)
+		} else if history != nil {
+			detail.BanCount = uint32(history.BanCount)
+			detail.WasPermanent = history.IsPermanent
+			detail.LastUnbannedAt = history.LastUnbannedAt
 		}
-		if rep, err := h.db.GetIPReputation(ip); err == nil && rep != nil {
-			detail["reputation_score"] = rep.Score
+		if rep, err := h.db.GetIPReputation(ip); err != nil {
+			h.server.logger.Warn("读取 IP 信誉分失败", "ip", ip, "error", err)
+		} else if rep != nil {
+			detail.ReputationScore = uint32(rep.Score)
 		}
 	}
 
+	// 当前封禁状态来自内存镜像（与内核 LIST 对账后的那份），它是 is_banned 的唯一依据。
+	if info, banned := bans.GlobalCache().Get(ip); banned {
+		detail.IsBanned = true
+		detail.Reason = info.Reason
+		detail.BannedAt = info.BannedAt
+		detail.ExpiresAt = info.ExpiresAt
+		detail.IsPermanent = info.IsPermanent
+		detail.FailCount = info.FailCount
+		detail.JailName = info.JailName
+		if info.BanCount > detail.BanCount {
+			detail.BanCount = info.BanCount
+		}
+	}
+
+	// jail 归属：未在封禁中（或封禁条目没带 jail）时退回最近一次封禁事件。
+	// 面板上的「Jail」与「下次封禁时长」都要靠它知道该查哪份配置。
+	if detail.JailName == "" && h.db != nil {
+		if events, err := h.db.GetBanEventsByIP(ip, 1); err == nil && len(events) > 0 {
+			detail.JailName = events[0].JailName
+		}
+	}
+
+	banTime, jailKnown := h.jailBaseDuration(detail.JailName)
+	detail.ProgressiveLevel = progressiveLevel(detail.BanCount)
+	detail.NextBanDuration = nextBanDuration(banTime, jailKnown, detail.BanCount)
+	detail.ReputationMultiplier = decision.ReputationMultiplier(detail.ReputationScore)
+
 	WriteSuccess(w, detail)
+}
+
+// jailBaseDuration 取某个 jail 配置的封禁时长（秒，-1 = 配置级永久）。
+//
+// 第二个返回值报告「这个 jail 到底在不在配置里」：缺席时不能把 BanTime 的零值当
+// 「封 0 秒」报出去——面板上出现「下次封禁 0 秒」是运维能看到的最误导人的读数。
+func (h *APIHandlers) jailBaseDuration(name string) (banTime int32, known bool) {
+	if name == "" || h.getCurrentConfig == nil {
+		return 0, false
+	}
+	cfg := h.getCurrentConfig()
+	if cfg == nil {
+		return 0, false
+	}
+	jail := cfg.FindJail(name)
+	if jail == nil {
+		return 0, false
+	}
+	return jail.BanTime, true
+}
+
+// progressiveLevel 把累计封禁次数说成一句等级文案。
+//
+// BanDetailResponse.progressive_level 在契约里是 String 而不是枚举：它给面板读，
+// 不参与判定。分档与 decision.ProgressiveDuration 的 0/1/2/≥3 四档同一，两处一旦
+// 分叉，等级就不再能解释旁边那个时长。
+func progressiveLevel(banCount uint32) string {
+	switch banCount {
+	case 0:
+		return "尚无封禁记录"
+	case 1:
+		return "初次封禁"
+	case 2:
+		return "二次封禁（累犯）"
+	case 3:
+		return "三次封禁（高频累犯）"
+	default:
+		return "四次及以上（永久封禁档）"
+	}
+}
+
+// nextBanDuration 说出「这个 IP 再被封一次会封多久」，算式与 decision.PlanBan 同一条：
+// jail 查不到 = 未知，ban_time 为负 = 配置级永久，第 4 次起渐进式升到永久。
+//
+// prior 用**已经发生过的次数**（detail.BanCount）：第 1 次被封之后 ban_count=1，下一次
+// 就是 ProgressiveDuration(base, 1) = 1800 秒，与真实判定链路的取值一致。
+func nextBanDuration(banTime int32, known bool, priorBanCount uint32) string {
+	if !known {
+		return "未知"
+	}
+	if banTime < 0 {
+		return "永久封禁"
+	}
+	next := decision.ProgressiveDuration(uint32(banTime), priorBanCount)
+	if next == 0 {
+		// 0 有两个来源：第 4 次起（永久），或 ban_time == 0 的退化配置——PlanBan 在
+		// 后者兜底为至少 1 秒，这里按同一判据分岔，不说出「0 秒」。
+		if priorBanCount >= 3 {
+			return "永久封禁"
+		}
+		return "1 秒"
+	}
+	return fmt.Sprintf("%d 秒", next)
 }

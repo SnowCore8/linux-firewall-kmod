@@ -13,7 +13,8 @@
 //          SSE 未就绪时回退 GET /api/v1/bans（分页信封，取第一页 items），
 //          两者按共享新鲜度戳取较新一份（见 hooks/useLiveData.ts）——写操作后的
 //          reload() 必须真正反映到界面，不能写回「SSE 优先」。
-// 排序语义与后端 api.rs::get_active_bans_paginated 的 sort_by 取值逐一对应，
+// 排序语义与 contract/http.fwidl 的 request PaginationParams.sort_by、服务端
+// src/daemon/internal/http/bans.go 的 banSortKeys 三者逐字一致（7 个取值），
 // 其中 remaining_asc/remaining_desc 把永久封禁（后端用 -1 表示）分别排到末位/首位。
 
 import { useEffect, useMemo, useState } from 'react'
@@ -36,13 +37,18 @@ import {
 import { DeleteOutline } from 'antd-mobile-icons'
 import type {
   BanDetailResponse,
-  BanOperationResponse,
   BanResponse,
-  BanSortKey,
-  BatchOperationResponse,
   CreateBanRequest,
-} from '../api/types'
-import { delJson, getJson, sendJson } from '../api/client'
+} from '../api/contract'
+import type { BanSortKey } from '../api/params'
+import {
+  batchBan as postBatchBan,
+  createBan,
+  deleteBan,
+  getBanDetail,
+  getBans,
+  unbanAllTemporary as postUnbanTemporary,
+} from '../api/endpoints'
 import { useAsync } from '../hooks/useAsync'
 import { pickLiveData } from '../hooks/useLiveData'
 import { useSse } from '../hooks/useSse'
@@ -55,10 +61,20 @@ import { PageHeader } from '../components/PageHeader'
 import { formatDatetime, formatDuration, formatNumber } from '../lib/format'
 import { isValidDuration, isValidIp } from '../lib/validation'
 
-/** 端点常量与 handler.rs 路由一一对应 */
-const BANS_URL = '/api/v1/bans'
-const BAN_BATCH_URL = '/api/v1/bans/batch'
-const BAN_UNBAN_TEMPORARY_URL = '/api/v1/bans/unban-temporary'
+/**
+ * REST 回退取第一页的条数：契约给 GET /api/v1/bans 的 page_size 上限就是 100。
+ *
+ * 这一份只用于「SSE 首帧还没到」的首屏（本表的全量来源是 bans 事件推送，见
+ * hooks/useLiveData.ts）。写 100 而不是默认的 20，是为了让回退窗口和 SSE 到达后的
+ * 视图不要太割裂；它不是「取全量」的手段——真要全量就得翻页，服务端按契约封顶。
+ */
+const FALLBACK_PAGE_SIZE = 100
+
+/**
+ * 批量封禁的单次上限：契约 `POST /api/v1/bans/batch` 定 100 条，越界整批回 40005。
+ * 界面提前拦一次，用户就不必为「选了 120 个」等一个必定失败的请求。
+ */
+const BATCH_BAN_MAX_IPS = 100
 
 /** 空列表常量：避免 `?? []` 每次渲染产生新数组导致 useMemo 失效 */
 const EMPTY_BANS: BanResponse[] = []
@@ -252,8 +268,7 @@ export default function Bans() {
   // SSE 未就绪时的回退：GET /api/v1/bans 恒为分页信封，取第一页 items 即可
   // （SSE 的 bans 事件推的才是全量；此回退只在连接建立前短暂生效）。
   const restBans = useAsync(
-    () =>
-      getJson<{ items: BanResponse[] }>(BANS_URL).then((page) => page.items),
+    () => getBans({ page: 1, page_size: FALLBACK_PAGE_SIZE }).then((page) => page.items),
     [],
   )
   // 取较新的一份而非「SSE 优先」：解封/封禁/批量操作后的 restBans.reload()
@@ -312,7 +327,7 @@ export default function Bans() {
     () =>
       detailIp === null
         ? Promise.resolve<BanDetailResponse | null>(null)
-        : getJson<BanDetailResponse>(`${BANS_URL}/${encodeURIComponent(detailIp)}/detail`),
+        : getBanDetail(detailIp),
     [detailIp],
   )
 
@@ -333,7 +348,7 @@ export default function Bans() {
     if (!confirmed) return false
     setBusyIp(ip)
     try {
-      const resp = await delJson<BanOperationResponse>(`${BANS_URL}/${encodeURIComponent(ip)}`)
+      const resp = await deleteBan(ip)
       toast.success(`已解封 ${resp.ip}`)
       restBans.reload()
       return true
@@ -352,11 +367,14 @@ export default function Bans() {
     const reason = String(values.reason ?? '').trim()
     setCreating(true)
     try {
-      const body: CreateBanRequest = { ip }
-      // 留空 → 不发送 duration，后端按永久封禁处理
-      if (durationRaw !== '') body.duration = Number(durationRaw)
-      if (reason !== '') body.reason = reason
-      const resp = await sendJson<CreateBanRequest, BanOperationResponse>(BANS_URL, 'POST', body)
+      // 契约的 Option<T> 在 TS 侧是「必填 + 可为 null」，所以留空写 null 而不是省略字段：
+      // 服务端把 null 与缺席同样按「永久封禁」处理（单条 POST /api/v1/bans 的语义）。
+      const body: CreateBanRequest = {
+        ip,
+        duration: durationRaw === '' ? null : Number(durationRaw),
+        reason: reason === '' ? null : reason,
+      }
+      const resp = await createBan(body)
       toast.success(resp.permanent ? `已永久封禁 ${resp.ip}` : `已封禁 ${resp.ip} ${resp.duration_seconds ?? 0} 秒`)
       setCreateOpen(false)
       restBans.reload()
@@ -367,11 +385,11 @@ export default function Bans() {
     }
   }
 
-  /** 批量封禁选中 IP：后端单次上限 100 个，这里预先拦截避免无谓请求 */
+  /** 批量封禁选中 IP：契约单次上限 100 个，这里预先拦截避免无谓请求 */
   const batchBan = async () => {
     if (selected.length === 0) return
-    if (selected.length > 100) {
-      toast.error(`单次最多封禁 100 个 IP，当前已选 ${selected.length} 个`)
+    if (selected.length > BATCH_BAN_MAX_IPS) {
+      toast.error(`单次最多封禁 ${BATCH_BAN_MAX_IPS} 个 IP，当前已选 ${selected.length} 个`)
       return
     }
     const confirmed = await Dialog.confirm({
@@ -381,7 +399,7 @@ export default function Bans() {
     if (!confirmed) return
     setBatching(true)
     try {
-      const resp = await sendJson<string[], BatchOperationResponse>(BAN_BATCH_URL, 'POST', selected)
+      const resp = await postBatchBan(selected)
       if (resp.failed_count > 0) {
         toast.error(`成功 ${resp.succeeded} 个，失败 ${resp.failed_count} 个：${resp.details.slice(0, 2).join('；')}`)
       } else {
@@ -405,11 +423,7 @@ export default function Bans() {
     if (!confirmed) return
     setBatching(true)
     try {
-      const resp = await sendJson<Record<string, never>, BatchOperationResponse>(
-        BAN_UNBAN_TEMPORARY_URL,
-        'POST',
-        {},
-      )
+      const resp = await postUnbanTemporary()
       if (resp.failed_count > 0) {
         toast.error(`成功 ${resp.succeeded} 个，失败 ${resp.failed_count} 个，详情见守护进程日志`)
       } else {

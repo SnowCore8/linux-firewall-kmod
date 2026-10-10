@@ -207,9 +207,9 @@ func NewAPIHandlers(cfg APIConfig) *APIHandlers {
 // 满」，于是把 503 当网络故障无限重连。两条流的读数各自来自它的 SSEStream 名额账本，
 // 不在这里复算上限。
 func (h *APIHandlers) SSEStatus(w http.ResponseWriter, r *http.Request) {
-	WriteSuccess(w, map[string]any{
-		"events": streamStatus(h.eventsStream()),
-		"logs":   streamStatus(h.logStream),
+	WriteSuccess(w, SseStatusResponse{
+		Events: streamStatus(h.eventsStream()),
+		Logs:   streamStatus(h.logStream),
 	})
 }
 
@@ -221,21 +221,17 @@ func (h *APIHandlers) eventsStream() *SSEStream {
 	return h.sse.SSEStream
 }
 
-// streamStatus 把一条流的可观测语义摊成契约载荷 SseStreamStatus 的三个 key。
+// streamStatus 把一条流的可观测语义摊成契约载荷 SseStreamStatus。
 //
 // 流为 nil 表示这条流没接线（未配置凭据或组合根没建）：报 current=0、max=0，
 // `limit_reached` 因此为 false，前端照常尝试连接并由 503/失败自己收敛。
-func streamStatus(s *SSEStream) map[string]any {
+func streamStatus(s *SSEStream) SseStreamStatus {
 	if s == nil {
-		return map[string]any{
-			"current_connections": 0,
-			"max_connections":     0,
-			"limit_reached":       false,
-		}
+		return SseStreamStatus{}
 	}
-	return map[string]any{
-		"current_connections": s.Active(),
-		"max_connections":     s.Max(),
-		"limit_reached":       s.AtLimit(),
+	return SseStreamStatus{
+		CurrentConnections: s.Active(),
+		MaxConnections:     s.Max(),
+		LimitReached:       s.AtLimit(),
 	}
 }

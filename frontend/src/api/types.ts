@@ -1,20 +1,21 @@
 /**
  * 后端数据模型（TypeScript 侧视图）
  *
- * 唯一真源：`src/daemon/web_ui/*.rs`（api.rs / ban_ops.rs / stats.rs / analysis.rs /
- * ddos_stats.rs / packet_analysis.rs / recommendations.rs / log_viewer.rs /
- * runtime_status.rs）与 `src/daemon/history_snapshot/*.rs`。
+ * 唯一真源：`contract/http.fwidl` 的 `type` / `request` 块。本文件是它的手工镜像，
+ * 由 `contract/verify_http.py` 逐字段核对（interface 名可经契约的 `ts_name` 与类型名
+ * 不同，字段集合必须相同），所以两侧漂移会直接把门禁跑红。
+ * `contract/generated/http_contract.ts` 是同一份契约的生成物，`src/api/contract.ts`
+ * 转出它；两份并存是本文件待收的重复（新代码应从 '../api/contract' 取类型）。
  *
- * 命名约定：字段名一律保持后端 serde 序列化后的 snake_case 原样，不做驼峰映射 ——
+ * 命名约定：字段名一律保持后端 JSON 序列化后的 snake_case 原样，不做驼峰映射 ——
  * 这样任何一个字段名/类型写错都会在联调时立刻暴露，不会被一层转换函数悄悄吞掉。
  *
- * 类型映射：
- * - Rust `u8`/`u16`/`u32`/`usize` → `number`
- * - Rust `u64`/`i64` → `number`（JSON number；仅在超过 2^53 时丢精度，本系统的
+ * 类型映射（契约为 Go 侧写的 `u*`/`i*`/`Option<T>`，落到 JSON 就是这些形态）：
+ * - `u8`/`u16`/`u32`/`usize`/`u64`/`i*` → `number`（超过 2^53 才丢精度，本系统的
  *   计数与时间戳量级远低于该上限）
- * - Rust `f64` → `number`
- * - Rust `Option<T>` 且未加 `skip_serializing_if` → `T | null`（字段本身仍会出现）
- * - Rust 请求体里的 `Option<T>` → `?:` 可选字段（反序列化时缺省即 None）
+ * - `f64` → `number`
+ * - `Option<T>` 且未加 `omitempty` → `T | null`（字段本身仍会出现）
+ * - 请求体里的 `Option<T>` → `?:` 可选字段（反序列化时缺省即零值/nil）
  */
 
 // ============================================================================
@@ -215,7 +216,11 @@ export interface BanDetailResponse {
   /** 触发封禁前的失败次数 */
   fail_count: number
   ban_count: number
-  /** 上次解封时间（Unix 秒，0 = 当前仍在封禁中） */
+  /**
+   * 上次**显式解封**的时间（Unix 秒）。
+   * 0 = 没有过显式解封记录（从未封禁、或封禁后到期自然消失都算在内）；它不是
+   * 「仍在封禁中」的同义词——那由 is_banned 表达。
+   */
   last_unbanned_at: number
   was_permanent: boolean
   /** 渐进式封禁等级说明（如「二次封禁（累犯）」） */
@@ -228,7 +233,11 @@ export interface BanDetailResponse {
   reputation_multiplier: number
 }
 
-/** 封禁列表排序字段：取值来自 `ban_ops.rs` 的分支匹配 */
+/**
+ * 封禁列表排序字段：取值与 contract/http.fwidl 的 request PaginationParams.sort_by、
+ * 服务端 src/daemon/internal/http/bans.go 的 banSortKeys 逐字一致（7 个），
+ * 也与 frontend/src/api/params.ts 的 BanSortKey 同源。未识别的值回落 banned_at_desc。
+ */
 export type BanSortKey =
   | 'banned_at_desc'
   | 'banned_at_asc'

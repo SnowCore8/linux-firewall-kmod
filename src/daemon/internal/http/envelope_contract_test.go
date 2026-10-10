@@ -150,11 +150,12 @@ func TestSuccessEnvelopeCarriesCode0AndEmptyMessage(t *testing.T) {
 // TestFailureEnvelopeCarriesBusinessCode 核对失败响应：HTTP 状态码由码查表得到、code 是
 // 契约声明的业务码、data 为 null、message 说明原因。
 //
-// 40006 是「封禁详情查不到」这条路由唯一的失败码，选它是因为这条路径不会改动任何全局状态。
+// 取样走封禁详情的**非法 IP**：契约给这条路由只编了 40006，而它对应的就是「IP 解析不了」。
+// 不在表里的合法 IP 不算失败——契约声明该载荷用 is_banned=false 表达，回 40006 反而违背它。
 func TestFailureEnvelopeCarriesBusinessCode(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 
-	w := authedGet(t, s, "/api/v1/bans/10.9.9.9/detail")
+	w := authedGet(t, s, "/api/v1/bans/not-an-ip/detail")
 	wantStatus := httpcontract.CodeHTTPStatus[httpcontract.Code40006]
 	if w.Code != wantStatus {
 		t.Fatalf("状态码 %d，契约给 40006 编的是 %d（body=%s）", w.Code, wantStatus, w.Body)
@@ -233,8 +234,10 @@ func TestNonJSONContentTypeIsEnveloped415(t *testing.T) {
 	if ok.Code == http.StatusUnsupportedMediaType {
 		t.Errorf("不带 Content-Type 的合法 JSON 被判 415，契约只拒「说了别的类型」")
 	}
-	if ok.Code != http.StatusOK {
-		t.Errorf("不带 Content-Type 的合法 JSON 状态码 %d，期望 200（body=%s）",
+	// 契约给这条路由编的是 `status = 201`（alt_status = 200 只是历史兼容声明，不是二选一
+	// 的自由）：创建成功就该出 201，用例跟着实现漂回 200 等于把这条声明读没了。
+	if ok.Code != http.StatusCreated {
+		t.Errorf("不带 Content-Type 的合法 JSON 状态码 %d，契约的成功状态码是 201（body=%s）",
 			ok.Code, ok.Body)
 	}
 }

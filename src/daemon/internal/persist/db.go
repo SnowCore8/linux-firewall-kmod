@@ -100,6 +100,7 @@ func (db *DB) migrate() error {
 			ban_count INTEGER NOT NULL DEFAULT 0,
 			last_banned_at INTEGER NOT NULL,
 			is_permanent INTEGER NOT NULL DEFAULT 0,
+			last_unbanned_at INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL
 		);
 
@@ -111,7 +112,51 @@ func (db *DB) migrate() error {
 		return fmt.Errorf("create schema: %w", err)
 	}
 
+	// 已在现场的库由 CREATE TABLE IF NOT EXISTS 跳过，新加的列只能靠 ALTER 补上。
+	// 这里的表名与列名都是常量，不接调用方输入。
+	if err := db.ensureColumn("ban_history", "last_unbanned_at", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate ban_history: %w", err)
+	}
+
 	db.logger.Info("database schema migrated", "path", db.path)
+	return nil
+}
+
+// ensureColumn 在列不存在时补上它（幂等：重复执行不报错）。
+//
+// 不能直接跑 `ALTER TABLE … ADD COLUMN`：SQLite 对已存在的列报 duplicate column name，
+// 而 migrate() 每次启动都会执行，第二次启动 daemon 就再也起不来了。
+//
+// 表名走**绑定参数**而不是拼进 SQL：pragma_table_info 是表值函数，它的入参可以按
+// 普通占位符传（与下面那条 ALTER 里只能拼接的标识符不同——标识符不是值，绑定不了，
+// 所以那里的三个实参必须是调用方写死的常量，不接受任何来自配置的字符串）。
+func (db *DB) ensureColumn(table, column, definition string) error {
+	rows, err := db.conn.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return fmt.Errorf("inspect table %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	existing := make(map[string]bool)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("scan column name: %w", err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate columns of %s: %w", table, err)
+	}
+	if existing[column] {
+		return nil
+	}
+
+	_, err = db.conn.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition))
+	if err != nil {
+		return fmt.Errorf("add column %s.%s: %w", table, column, err)
+	}
+	db.logger.Info("added column", "table", table, "column", column)
 	return nil
 }
 

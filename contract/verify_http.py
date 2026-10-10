@@ -217,6 +217,20 @@ def _strip_go_comments(src: str) -> str:
     i, n = 0, len(src)
     while i < n:
         c = src[i]
+        # 注释分支必须在字符串分支**之前**：注释里常有反引号（`time.Format` 这样的代码
+        # 片段是这里的书面语），若先按字符串处理，一个反引号就把后半段注释连同它的 `//`
+        # 一起当成字面量留下——于是散文里的 `00:00` 能被探针读成「自然日窗口已实现」。
+        # 位置上是 `/` 就不可能是引号，所以这个顺序不会把 `"https://x"` 误判为注释：
+        # 进入字符串分支后整段字面量一次吃完，中间的 `//` 走不到这里。
+        if c == "/" and src.startswith("//", i):
+            nl = src.find("\n", i)
+            i = n if nl < 0 else nl
+            continue
+        if c == "/" and src.startswith("/*", i):
+            end = src.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+            out.append(" ")
+            continue
         if c in ('"', "`"):
             j = i + 1
             if c == "`":
@@ -233,15 +247,6 @@ def _strip_go_comments(src: str) -> str:
                     j += 1
             out.append(src[i:j])
             i = j
-            continue
-        if c == "/" and src.startswith("//", i):
-            nl = src.find("\n", i)
-            i = n if nl < 0 else nl
-            continue
-        if c == "/" and src.startswith("/*", i):
-            end = src.find("*/", i + 2)
-            i = n if end < 0 else end + 2
-            out.append(" ")
             continue
         out.append(c)
         i += 1
@@ -289,6 +294,24 @@ def go_tree_sources() -> str:
         for f in sorted(filenames):
             if f.endswith(".go") and not _is_test_file(f):
                 chunks.append(read(os.path.join(dirpath, f)))
+    return "\n".join(chunks)
+
+
+def go_tree_code() -> str:
+    """整棵 daemon 树的**代码**：逐文件剥离注释后再拼接。
+
+    必须在**文件内**剥注释。先把整棵树拼起来再剥，会让扫描器的状态跨过文件边界：一个
+    未闭合的字面量（行尾反引号、`"\\"` 这类把配平打乱的写法）把它后面那些文件的注释
+    整段当成字符串留在结果里，于是散文中的 `00:00` 就能冒充「自然日窗口已实现」，把
+    defect 的 status 断言翻成假的「现场已消失」。注释与字符串都不跨文件，逐文件处理则
+    不可能有这种串扰。
+    """
+    chunks = []
+    for dirpath, dirnames, filenames in os.walk(DAEMON):
+        dirnames[:] = [d for d in dirnames if d not in ("__pycache__", GENERATED_HTTP_PKG)]
+        for f in sorted(filenames):
+            if f.endswith(".go") and not _is_test_file(f):
+                chunks.append(_strip_go_comments(read(os.path.join(dirpath, f))))
     return "\n".join(chunks)
 
 
@@ -846,8 +869,16 @@ def check_sse_limits(contract: dict) -> list[str]:
 
 
 def _go_struct_body(src: str, name: str) -> str | None:
-    """取 ``type <name> struct {…}`` 的体部（花括号配平），找不到返回 None。"""
-    m = re.search(rf"\btype\s+{re.escape(name)}\s+struct\s*\{{", src)
+    """取 ``type <name> struct {…}`` 的体部（花括号配平），找不到返回 None。
+
+    名字与 ``struct`` 之间允许一段类型参数列表：契约的 `PaginatedResponse<T>` 在 Go 里
+    写成 `type PaginatedResponse[T any] struct`（`params` 由生成物给出，这里的正则要与它
+    兼容）。只让**带参数**的形态通过会漏判，只让不带参数的通过会把泛型 struct 读成
+    「没有同名 struct」——那一类缺失正是本门禁要抓的假阳性来源。
+    """
+    m = re.search(
+        rf"\btype\s+{re.escape(name)}\s*(?:\[[^\]]*\]\s*)?struct\s*\{{", src
+    )
     if not m:
         return None
     i, start, depth = m.end(), m.end(), 1
@@ -1330,8 +1361,9 @@ def check_types_go(contract: dict) -> list[str]:
         problems.append(
             f"{len(missing)}/{len(contract['types'])} 个载荷类型在 Go 源码里没有同名 "
             f"struct（本门禁不做契约名↔Go 名的映射推断）：{', '.join(sorted(missing))}。"
-            "其中多数响应在 internal/http 里是 map[string]any 字面量（如 bans.go:112），"
-            "字段没有任何具名类型承载，跨层字段核对在这一层失去锚点"
+            "这些还多是**未接线**的分析/统计载荷：接线时请为它们补 internal/http 的具名 "
+            "struct（照 payload.go 的规矩，一个 struct 对一个契约 type 块），不要退回 "
+            "map[string]any 字面量——字段没有具名类型承载时，跨层字段核对在这一层失去锚点"
         )
     print(
         f"  载荷类型 {len(contract['types'])} 个：{checked} 个有同名 Go struct 并逐字段核对，"
@@ -1798,12 +1830,23 @@ def check_defect_claims(contract: dict) -> list[str]:
             if body is None:
                 verdict(name, None, "internal/http 里找不到 SSEStatus")
             else:
-                per_stream = '"events"' in body and '"logs"' in body
+                # 现场 = 还在从 HTTP 服务器级取那**一份** active/max。两条流各自的读数
+                # 必须由各自的流对象产生：载荷是不是 events/logs 两份不是判据（写两个
+                # 同名 key 的服务器级读数也能骗过形状核对），骗不过的是这里有没有
+                # streamStatus(<某条流>) 这种「按流入手」的调用。
+                server_level = bool(
+                    re.search(r"\bserver\.(ActiveConnections|MaxConnections)\b", body)
+                    or re.search(r"\bh\.server\.(Active|Max)Connections\b", body)
+                )
+                per_stream = (
+                    len(re.findall(r"streamStatus\(", body)) >= 2 and not server_level
+                )
                 verdict(
                     name,
                     not per_stream,
-                    f"sse-status 是否分别报两条流的 current/max={per_stream}"
-                    "（现在报的是 HTTP 服务器级单一 active/max）",
+                    "sse-status 按两条流各取一份 current/max/limit_reached"
+                    if per_stream
+                    else "sse-status 仍报 HTTP 服务器级单一 active/max（或两条流没有各自取数）",
                 )
         elif name == "HTTP_SSE_JAILS_NO_PUBLISHER":
             # 现场 = 事件泵里没有 jails 这个域。泵用域名字面量发布（DomainBans /
@@ -1819,7 +1862,9 @@ def check_defect_claims(contract: dict) -> list[str]:
                 else "kernel/consumer.go 已出现 jails 域",
             )
         elif name == "HTTP_TODAY_BANS_EQUALS_TOTAL":
-            tree = go_tree_sources()
+            # 扫**代码**而不是整棵树原文：这条判据问的是「有没有自然日窗口的算法」，
+            # 一段提到 `00:00` 或 `today_bans` 的注释不是算法（见 go_tree_code）。
+            tree = go_tree_code()
             if "today_bans" not in tree and "TodayBans" not in tree:
                 verdict(name, None, "Go 面还没有 today_bans 字段与 GET /api/v1/stats")
             else:

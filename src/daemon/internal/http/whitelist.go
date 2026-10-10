@@ -13,18 +13,26 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 )
 
-type WhitelistRequest struct {
-	CIDR string `json:"cidr"`
-}
-
+// ListWhitelist 返回白名单镜像（GET /api/v1/whitelist）。
+//
+// 载荷是 WhitelistEntryResponse 数组而不是裸 CIDR 列表：前端 types.ts 的 WhitelistEntry
+// 有两个字段，把 []string 直接写出去会让 `device` 在读侧根本不存在（面板上那一列恒为空，
+// 而它空的原因和「这个网段没绑设备」是两回事）。
+//
+// device 恒为空串：本守护进程的白名单是**纯地址**规则（内核 fw_addr_normalize 只看
+// 前缀），没有任何按网卡放行的概念，而契约把这一列的形状定成 String 而不是 Option——
+// 空串正是「未绑定」的读法，前端也按这个显示。
 func (h *APIHandlers) ListWhitelist(w http.ResponseWriter, r *http.Request) {
-	entries := bans.GlobalWhitelist().List()
+	entries := make([]WhitelistEntryResponse, 0)
+	for _, cidr := range bans.GlobalWhitelist().List() {
+		entries = append(entries, WhitelistEntryResponse{CIDR: cidr})
+	}
 	WriteSuccess(w, entries)
 }
 
-// AddWhitelist 收一个 CIDR 或裸 IP（裸 IP 按 /32 或 /128 落）。
+// AddWhitelist 收一个 CIDR 或裸 IP（裸 IP 按 /32 或 /128 落），成功回 201。
 func (h *APIHandlers) AddWhitelist(w http.ResponseWriter, r *http.Request) {
-	var req WhitelistRequest
+	var req CreateWhitelistRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
@@ -42,10 +50,9 @@ func (h *APIHandlers) AddWhitelist(w http.ResponseWriter, r *http.Request) {
 
 	h.publishWhitelist()
 
-	WriteSuccess(w, map[string]any{
-		"cidr":   prefix.String(),
-		"status": "added",
-	})
+	// cidr 回**归一后**的键（与 GET 列表同源）：把用户输入的 "10.0.0.1/8" 原样吐回去，
+	// 调用方按它再删一次就会打不中表里那条 "10.0.0.0/8"。
+	WriteCreated(w, WhitelistOperationResponse{CIDR: prefix.Masked().String(), Action: "added"})
 }
 
 // RemoveWhitelist 从白名单移除一个前缀（DELETE /api/v1/whitelist/{cidr}），失败回 40004。
@@ -65,10 +72,7 @@ func (h *APIHandlers) RemoveWhitelist(w http.ResponseWriter, r *http.Request) {
 
 	h.publishWhitelist()
 
-	WriteSuccess(w, map[string]any{
-		"cidr":   cidr,
-		"status": "removed",
-	})
+	WriteSuccess(w, WhitelistOperationResponse{CIDR: prefix.Masked().String(), Action: "removed"})
 }
 
 // parseWhitelistTarget 把「CIDR 或裸 IP」两种写法折成一个前缀。

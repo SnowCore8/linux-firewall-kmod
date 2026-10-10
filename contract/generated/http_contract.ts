@@ -323,6 +323,13 @@ export interface CreateBanRequest {
   reason: string | null
 }
 
+/** 契约类型 `BatchBanRequest` */
+export interface BatchBanRequest {
+  ips: string[]
+  duration: number | null
+  reason: string | null
+}
+
 /** 契约类型 `JailResponse` */
 export interface JailResponse {
   name: string

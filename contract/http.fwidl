@@ -225,9 +225,10 @@ code 50003 {
 
 defect HTTP_BANS_DUAL_SHAPE {
   severity = high
-  status = open
+  status = fixed
+  fix = "src/daemon/internal/http/bans.go:WriteSuccess(w, PaginatedResponse[BanResponse]{"
   resolution = "统一为单一形状：GET /api/v1/bans 一律返回分页信封 PaginatedResponse<BanResponse>（读 page / page_size / sort_by，缺省 page=1、page_size=20、上限 100），前端只保留一层返回类型。"
-  text = "『data 一定是对象』这一前提在当前代码里仍不成立，只是两侧各拿了一半：Go 面 src/daemon/internal/http/bans.go 的 ListBans 把内存镜像**全量写成裸数组**（既不读 page/page_size 也不读 sort_by），前端 types.ts 却只声明 PaginatedResponse<BanResponse> 一层——同一份契约在两侧是两个形状，按信封取 items 的调用一律落空。旧 Rust 实现的现场是另一种表现（不带 query 返回裸数组、带了才返回信封，前端为此维护两个重载签名与运行期分支），那条现场随旧实现一并退役，缺陷本身没有被任何代码解决"
+  text = "『data 一定是对象』这一前提曾不成立：Go 面 src/daemon/internal/http/bans.go 的 ListBans 把内存镜像**全量写成裸数组**（既不读 page/page_size 也不读 sort_by），而前端 types.ts 只声明 PaginatedResponse<BanResponse> 一层——同一份契约在两侧是两个形状，按信封取 items 的调用一律落空。旧 Rust 实现的现场是另一种表现（不带 query 返回裸数组、带了才返回信封，前端为此维护两个重载签名与运行期分支），那条现场随旧实现一并退役。Go 面现在只有一条返回路径：ListBans 经 queryPagination 读三个参数、排序后切出页内区间，写出 PaginatedResponse[BanResponse]，没有任何裸数组分支；前端 endpoints.ts 的 getBans 也只有一个签名，返回 Promise<PaginatedResponse<BanResponse>>"
 }
 
 defect HTTP_SSE_STATUS_INCOMPLETE {
@@ -284,9 +285,10 @@ defect HTTP_LOG_SSE_LIMIT_DOC_DRIFT {
 
 defect HTTP_BAN_SORT_DOC_INCOMPLETE {
   severity = low
-  status = open
+  status = fixed
+  fix = "src/daemon/internal/http/bans.go:sort.SliceStable(items"
   resolution = "服务端实现并文档化同一套 7 个取值（banned_at_desc / banned_at_asc / ip_asc / ip_desc / remaining_asc / remaining_desc / jail_asc），注释、代码分支与前端 BanSortKey 三者逐字一致；未识别的取值回落 banned_at_desc。"
-  text = "排序键在三层各有说法：前端 frontend/src/api/params.ts 与 types.ts 的 BanSortKey 各列 7 个取值（types.ts 的注释还指向已删除的 ban_ops.rs），契约要求 GET /api/v1/bans 支持这些取值，而 Go 面 src/daemon/internal/http/bans.go 的 ListBans **一个都不实现**——它不读 sort_by，连 page/page_size 也不读。旧现场（Rust 的 sort_by 文档只列 4 值、实现 7 值）随旧实现退役，缺陷按 Go 现状改判为「实现缺失」而非「注释漏项」，要求不缩"
+  text = "排序键曾三层各有说法：前端 frontend/src/api/params.ts 与 types.ts 的 BanSortKey 各列 7 个取值（types.ts 的注释还指向已删除的 ban_ops.rs），契约要求 GET /api/v1/bans 支持这些取值，而 Go 面 src/daemon/internal/http/bans.go 的 ListBans **一个都不实现**——它不读 sort_by，连 page/page_size 也不读。旧现场（Rust 的 sort_by 文档只列 4 值、实现 7 值）随旧实现退役。现在服务端有一份 banSortKeys 表承载全部 7 个分支（每项一个比较闭包），ListBans 取 params.sortByOr() 查表、未识别的值回落 banned_at_desc，取值集合与前端 params.ts / types.ts 的 BanSortKey 逐字相同"
 }
 
 defect HTTP_READ_PATH_WRITES_STATE {
@@ -322,9 +324,10 @@ defect HTTP_WHITELIST_KEY_DIVERGENCE {
 
 defect HTTP_BATCH_BAN_BECOMES_PERMANENT {
   severity = high
-  status = open
+  status = fixed
+  fix = "src/daemon/internal/http/bans.go:duration := uint64(banDefaultBatchSecs)"
   resolution = "批量封禁显式下发有时长（契约里 duration 缺省即 3600 秒），并且只有显式 `permanent = true` 才产生永久封禁；`duration` 缺省/0 一律不得升格为永久。请求体形状与上限按契约：`{ips, duration, reason}`，单次 1..100 条，越界返回业务码 40005。"
-  text = "『多选若干 IP → 批量封禁』在确认弹窗承诺『统一使用 3600 秒』的情况下，把这批 IP 全部永久封禁。Go 面的现场与旧实现同源：src/daemon/internal/http/bans.go 的 BatchBan 写作 `isPermanent := req.Duration == 0`，请求体不带 duration 就是永久。两个次生后果照旧成立：① /api/v1/bans/unban-temporary 只解封临时封禁，这些条目它看不见（total=0），用户没有批量退路；② 前端 endpoints.ts 的注释同样写着 3600 秒，且它 POST 的是裸 `string[]`，Go 侧解的是 `{ips, duration, reason}`——形状不同，批量封禁根本进不到循环；上限两侧也不一致（契约 100，Go 校验 1000）"
+  text = "『多选若干 IP → 批量封禁』曾在确认弹窗承诺『统一使用 3600 秒』的情况下把这批 IP 全部永久封禁。Go 面的现场与旧实现同源：src/daemon/internal/http/bans.go 的 BatchBan 写作 `isPermanent := req.Duration == 0`，请求体不带 duration 就是永久。两个次生后果一条是退路、一条是形状：① /api/v1/bans/unban-temporary 只解封临时封禁，这些条目它看不见（total=0）；② 前端 endpoints.ts 的 batchBan 曾 POST 裸 `string[]`，与服务端解的 `{ips, duration, reason}` 不同形。现在 BatchBan 解的是契约的 BatchBanRequest，`IsPermanent` 恒为 false、到期时间按 `duration` 缺省 3600 秒算出，越界（空列表 / >100 条）在任何一条封禁落下之前整批回 40005；前端 batchBan 也改为发送同形对象，注释与契约的 100 条上限一致"
 }
 
 # ============================================================================
@@ -510,7 +513,7 @@ route GET "/api/v1/bans" {
   returns = type
   status = 200
   codes = 0
-  note = "**单一形状**：一律返回分页信封 PaginatedResponse<BanResponse>（读 page / page_size / sort_by），不得有裸数组分支。Go 侧现状是不读 query、直接写裸数组，与前端声明的分页信封不符——见 defect HTTP_BANS_DUAL_SHAPE 与 HTTP_BAN_SORT_DOC_INCOMPLETE（两条均 open）。"
+  note = "**单一形状**：一律返回分页信封 PaginatedResponse<BanResponse>（读 page / page_size / sort_by，缺省见 request PaginationParams），不得有裸数组分支。排序键是契约的 7 个取值，未识别的值回落 banned_at_desc——见 defect HTTP_BANS_DUAL_SHAPE 与 HTTP_BAN_SORT_DOC_INCOMPLETE（两条均 fixed）。"
 }
 
 route POST "/api/v1/bans" {
@@ -555,7 +558,7 @@ route POST "/api/v1/bans/batch" {
   status = 201
   alt_status = 200
   codes = 40005, 40007, 40008
-  note = "空列表或超过 100 条 → 40005；载荷 BatchOperationResponse"
+  note = "请求体 BatchBanRequest（`{ips, duration, reason}`，单次 1..100 条）；空列表或超过 100 条 → 40005；成功 201 Created，载荷 BatchOperationResponse。duration 缺省按 3600 秒**有时长**封禁，不得升格为永久——见 defect HTTP_BATCH_BAN_BECOMES_PERMANENT（fixed）。"
 }
 
 # ---- 需认证：Jail -----------------------------------------------------------
@@ -1071,6 +1074,15 @@ type BatchOperationResponse {
 
 request CreateBanRequest {
   ip: String
+  duration: Option<u64>
+  reason: Option<String>
+}
+
+# 批量封禁的请求体。`duration` 缺省即契约的 3600 秒（见 defect
+# HTTP_BATCH_BAN_BECOMES_PERMANENT：这里**没有**「缺省 = 永久」的读法，永久封禁只能由
+# 单条 POST /api/v1/bans 的 duration 缺省/0 产生）。`ips` 是 1..100 条，越界 40005。
+request BatchBanRequest {
+  ips: Vec<String>
   duration: Option<u64>
   reason: Option<String>
 }

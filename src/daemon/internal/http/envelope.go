@@ -56,6 +56,15 @@ func WriteSuccess(w http.ResponseWriter, data any) {
 	writeJSON(w, http.StatusOK, SuccessEnvelope(data))
 }
 
+// WriteCreated 写出 201 与成功信封。
+//
+// 契约给 POST /api/v1/bans 与 POST /api/v1/bans/batch 写的都是 `status = 201`
+// （`alt_status = 200` 留给「幂等重试时资源早已存在」这类分支，不是实现可以随手挑的
+// 第二个偏好）：新建资源用 201，前端与 curl 都按这个区分「创建成功」与「查到一个列表」。
+func WriteCreated(w http.ResponseWriter, data any) {
+	writeJSON(w, http.StatusCreated, SuccessEnvelope(data))
+}
+
 // WriteCode 按业务码写出失败信封，HTTP 状态码由码查生成物表得到。
 //
 // 调用处不再手写状态码：契约里 `code 40001 { status = 400 }` 已经把两者的对应关系钉死，
