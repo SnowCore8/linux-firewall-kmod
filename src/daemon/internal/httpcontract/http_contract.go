@@ -5,9 +5,9 @@
 // 字面量。contract/verify_http.py 拿 routes.go 里出现的注册串与本表的
 // Pattern 逐项核对，任何一侧多出来都算门禁失败。
 //
-// 消费方式：本文件所在目录不在 Go module 内（module 根是 src/daemon），HTTP
-// 层把它放进模块（复制或软链）后按包名 httpcontract 引入。无论哪种落地方式，
-// 字面量都只有 contract/http.fwidl 这一处来源。
+// 消费方式：本文件由 gen.py 直接写进 daemon 的 module 内
+// （src/daemon/internal/httpcontract/）——Go 只认 module 根之下的目录为包，
+// 放在 contract/ 下就 import 不到。字面量的唯一来源仍是 contract/http.fwidl。
 package httpcontract
 
 // 契约标识。
@@ -133,7 +133,7 @@ const (
 	// GET /more → handle_spa_more（无认证）
 	RouteGetMore = "GET /more"
 	// GET /static/*path → handle_static（无认证）
-	RouteGetStaticPath = "GET /static/*path"
+	RouteGetStaticPath = "GET /static/{path...}"
 	// GET /sw.js → handle_sw（无认证）
 	RouteGetSwJs = "GET /sw.js"
 	// GET /metrics → handle_metrics（需认证）
@@ -284,7 +284,7 @@ var Routes = []Route{
 	{Pattern: RouteGetLogs, Path: "/logs", Method: "GET", Auth: AuthNone, Handler: "handle_spa_logs", Returns: ReturnsText, Status: 200},
 	{Pattern: RouteGetSettings, Path: "/settings", Method: "GET", Auth: AuthNone, Handler: "handle_spa_settings", Returns: ReturnsText, Status: 200},
 	{Pattern: RouteGetMore, Path: "/more", Method: "GET", Auth: AuthNone, Handler: "handle_spa_more", Returns: ReturnsText, Status: 200},
-	{Pattern: RouteGetStaticPath, Path: "/static/*path", Method: "GET", Auth: AuthNone, Handler: "handle_static", Returns: ReturnsBytes, Status: 200, AltStatus: 404},
+	{Pattern: RouteGetStaticPath, Path: "/static/{path...}", Method: "GET", Auth: AuthNone, Handler: "handle_static", Returns: ReturnsBytes, Status: 200, AltStatus: 404},
 	{Pattern: RouteGetSwJs, Path: "/sw.js", Method: "GET", Auth: AuthNone, Handler: "handle_sw", Returns: ReturnsBytes, Status: 200, AltStatus: 404},
 	{Pattern: RouteGetMetrics, Path: "/metrics", Method: "GET", Auth: AuthRequired, Handler: "handle_metrics", Returns: ReturnsText, Status: 200},
 	{Pattern: RouteGetApiV1Events, Path: "/api/v1/events", Method: "GET", Auth: AuthRequired, Handler: "handle_sse", Returns: ReturnsStream, Status: 200, AltStatus: 503, MaxConnections: SSEMaxConnectionsApiV1Events, Events: SSEEventNamesApiV1Events, KeepaliveSecs: SSEKeepaliveSecondsApiV1Events},
@@ -380,8 +380,9 @@ func Patterns() []string {
 	return out
 }
 
-// GoPath 把契约路径的参数槽 `:name` 转成 ServeMux 的 `{name}`，其余原样；
-// 多段通配 `*name` 两边拼写一致。
+// GoPath 把契约路径的参数槽 `:name` 转成 ServeMux 的 `{name}`，把多段通配
+// `*name` 转成 `{name...}`，其余原样。通配必须转：ServeMux 只在**没有**方法前缀
+// 时才认旧式 `*name`，而本契约的注册串条条带方法，留着 `*name` 就变成匹配字面量。
 func GoPath(path string) string {
 	out := []byte{}
 	for i := 0; i < len(path); i++ {
@@ -393,6 +394,17 @@ func GoPath(path string) string {
 				i++
 			}
 			out = append(out, '}')
+			i--
+			continue
+		}
+		if path[i] == '*' && i+1 < len(path) && isIdentStart(path[i+1]) {
+			out = append(out, '{')
+			i++
+			for i < len(path) && isIdentByte(path[i]) {
+				out = append(out, path[i])
+				i++
+			}
+			out = append(out, '.', '.', '.', '}')
 			i--
 			continue
 		}

@@ -2134,10 +2134,12 @@ def go_path(path: str) -> str:
     """契约路径 -> ``net/http.ServeMux`` 路径。
 
     契约的参数槽写作 ``:ip``（Express/axum 的历史写法），Go 1.22 起的模式写作
-    ``{ip}``；多段通配 ``*path`` 两边拼写一致，原样保留。除参数槽外不做任何改写，
-    因此注册串与契约路径始终一一对应。
+    ``{ip}``；契约的多段通配写作 ``*path``，Go 侧对应 ``{path...}``。**通配不能原样
+    保留**：ServeMux 只在没有方法前缀时才把 ``*name`` 当旧式通配，而本契约的注册串一律
+    带方法（``GET /static/*path``），那时它匹配的是字面量 ``*path`` 这一段，真资源全部
+    落到 ``GET /`` 上去。除这两种记号外不做任何改写，注册串与契约路径仍一一对应。
     """
-    return re.sub(r":([A-Za-z_]\w*)", r"{\1}", path)
+    return re.sub(r"\*([A-Za-z_]\w*)", r"{\1...}", re.sub(r":([A-Za-z_]\w*)", r"{\1}", path))
 
 
 def go_camel(text: str) -> str:
@@ -2192,9 +2194,9 @@ def emit_go_http(contract: HttpContract) -> str:
     a("// 字面量。contract/verify_http.py 拿 routes.go 里出现的注册串与本表的")
     a("// Pattern 逐项核对，任何一侧多出来都算门禁失败。")
     a("//")
-    a("// 消费方式：本文件所在目录不在 Go module 内（module 根是 src/daemon），HTTP")
-    a("// 层把它放进模块（复制或软链）后按包名 httpcontract 引入。无论哪种落地方式，")
-    a("// 字面量都只有 contract/http.fwidl 这一处来源。")
+    a("// 消费方式：本文件由 gen.py 直接写进 daemon 的 module 内")
+    a("// （src/daemon/internal/httpcontract/）——Go 只认 module 根之下的目录为包，")
+    a("// 放在 contract/ 下就 import 不到。字面量的唯一来源仍是 contract/http.fwidl。")
     a("package httpcontract")
     a("")
     a("// 契约标识。")
@@ -2435,8 +2437,9 @@ def emit_go_http(contract: HttpContract) -> str:
     a("\treturn out")
     a("}")
     a("")
-    a("// GoPath 把契约路径的参数槽 `:name` 转成 ServeMux 的 `{name}`，其余原样；")
-    a("// 多段通配 `*name` 两边拼写一致。")
+    a("// GoPath 把契约路径的参数槽 `:name` 转成 ServeMux 的 `{name}`，把多段通配")
+    a("// `*name` 转成 `{name...}`，其余原样。通配必须转：ServeMux 只在**没有**方法前缀")
+    a("// 时才认旧式 `*name`，而本契约的注册串条条带方法，留着 `*name` 就变成匹配字面量。")
     a("func GoPath(path string) string {")
     a("\tout := []byte{}")
     a("\tfor i := 0; i < len(path); i++ {")
@@ -2448,6 +2451,17 @@ def emit_go_http(contract: HttpContract) -> str:
     a("\t\t\t\ti++")
     a("\t\t\t}")
     a("\t\t\tout = append(out, '}')")
+    a("\t\t\ti--")
+    a("\t\t\tcontinue")
+    a("\t\t}")
+    a("\t\tif path[i] == '*' && i+1 < len(path) && isIdentStart(path[i+1]) {")
+    a("\t\t\tout = append(out, '{')")
+    a("\t\t\ti++")
+    a("\t\t\tfor i < len(path) && isIdentByte(path[i]) {")
+    a("\t\t\t\tout = append(out, path[i])")
+    a("\t\t\t\ti++")
+    a("\t\t\t}")
+    a("\t\t\tout = append(out, '.', '.', '.', '}')")
     a("\t\t\ti--")
     a("\t\t\tcontinue")
     a("\t\t}")
@@ -2632,6 +2646,12 @@ CONTRACTS: Dict[str, Dict[str, object]] = {
             "ts": "http_contract.ts",
             "json": "http_layout.json",
         },
+        # Go 产物不落 contract/generated，而是直接写进 daemon 的 module：Go 以 module
+        # 根（src/daemon）为界，界外目录不是包，跨界 import 编不过。写两份同内容文件
+        # 会制造「哪份是真相」的歧义，所以只写 module 里那一份——门禁读的也是它。
+        "in_module": {
+            "go": os.path.join("src", "daemon", "internal", "httpcontract", "http_contract.go"),
+        },
     },
 }
 
@@ -2646,6 +2666,9 @@ def generate(source: str, targets: Optional[List[str]], out_dir: str, check: boo
         else list(cfg.get("targets", ["c", "json"]))
     )
     out_names: Dict[str, str] = dict(cfg.get("out", {}))
+    # 少数产物必须落在消费方自己的目录树里（Go 契约进 module），路径按仓库根解析。
+    in_module: Dict[str, str] = dict(cfg.get("in_module", {}))
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     c_guard = str(cfg.get("c_guard", "FW_CONTRACT_GENERATED_H"))
 
     try:
@@ -2701,6 +2724,9 @@ def generate(source: str, targets: Optional[List[str]], out_dir: str, check: boo
             else:
                 raise ContractError(f"未知产物类型 {t!r}")
             dest = os.path.join(out_dir, fname)
+            if t in in_module:
+                dest = os.path.join(repo_root, in_module[t])
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
             with open(dest, "w", encoding="utf-8") as fh:
                 fh.write(content)
             emitted.append(dest)

@@ -17,25 +17,6 @@ func parseLimit(r *http.Request, defaultLimit, maxLimit int) int {
 	return limit
 }
 
-func (h *APIHandlers) BanEvents(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
-	if h.db == nil {
-		WriteServiceUnavailable(w, "history database not initialized")
-		return
-	}
-	limit := parseLimit(r, 100, 10000)
-	events, err := h.db.GetBanEvents(limit)
-	if err != nil {
-		h.server.logger.Error("query ban events", "error", err)
-		WriteInternalError(w, "internal error")
-		return
-	}
-	WriteSuccess(w, events)
-}
-
 func (h *APIHandlers) Recidivism(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")

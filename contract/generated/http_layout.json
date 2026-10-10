@@ -76,7 +76,7 @@
     "请求 PaginationParams: 3 个字段",
     "响应 SseStreamStatus: 3 个字段",
     "响应 SseStatusResponse: 2 个字段",
-    "缺陷记录: 14 条（已修 4 / 有意保留 1 / 未修 9；由 verify_http.py 核对语义）"
+    "缺陷记录: 14 条（已修 6 / 有意保留 1 / 未修 7；由 verify_http.py 核对语义）"
   ],
   "envelope": {
     "name": "ApiResponse",
@@ -759,7 +759,7 @@
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
-      "note": "载荷 SseStatusResponse（events / logs 各一份 SseStreamStatus）：两条流各自的上限与当前连接数都可见，前端按所属流判断 limit_reached。Go 侧现在只报 HTTP 服务器级的单一 active/max 计数，且日志流根本没有连接计数——见 defect HTTP_SSE_STATUS_INCOMPLETE（open）。"
+      "note": "载荷 SseStatusResponse（events / logs 各一份 SseStreamStatus）：两条流各自的上限与当前连接数都可见，前端按所属流判断 limit_reached，不得用一条流的上限推断另一条（缺陷 HTTP_SSE_STATUS_INCOMPLETE 已按此形状闭合）。"
     },
     {
       "method": "GET",
@@ -2923,11 +2923,11 @@
     {
       "name": "HTTP_SSE_STATUS_INCOMPLETE",
       "severity": "medium",
-      "status": "open",
-      "fix": "",
+      "status": "fixed",
+      "fix": "src/daemon/internal/http/routes.go:streamStatus(h.logStream)",
       "reason": "",
       "resolution": "sse-status 载荷扩展为同时报告两条流：events 与 logs 各自的 current / max，前端按所属流的上限判断 limit_reached，不再用单一上限推断另一条流。",
-      "text": "/api/v1/stats/sse-status 报的是**进程级单一计数**（Go 面 routes.go 的 SSEStatus 取 server.ActiveConnections / MaxConnections），而不是两条 SSE 流各自的连接数与上限：契约给 /api/v1/events 定 10、给 /api/v1/logs/stream 定 5，Go 里两者共用同一个 broker（config.MaxSSEConnections=32）。前端用它判断『是否达到上限』会在日志流被拒时误判为未达上限，从而把 503 当成网络故障无限重连"
+      "text": "/api/v1/stats/sse-status 报的是**进程级单一计数**（Go 面 routes.go 的 SSEStatus 取 server.ActiveConnections / MaxConnections），而不是两条 SSE 流各自的连接数与上限：契约给 /api/v1/events 定 10、给 /api/v1/logs/stream 定 5，Go 里两者共用同一个 broker（config.MaxSSEConnections=32）。前端用它判断『是否达到上限』会在日志流被拒时误判为未达上限，从而把 503 当成网络故障无限重连。Go 面现在按流报：SSEStatus 的载荷是 events / logs 两份读数，各自取自所在流的名额账本（Active/Max/AtLimit），上限来自生成物常量，没有第三处副本"
     },
     {
       "name": "HTTP_RECIDIVISM_RATE_UNIT",
@@ -2977,11 +2977,11 @@
     {
       "name": "HTTP_LOG_SSE_LIMIT_DOC_DRIFT",
       "severity": "low",
-      "status": "open",
-      "fix": "",
+      "status": "fixed",
+      "fix": "src/daemon/internal/http/sse.go:httpcontract.SSEMaxConnectionsApiV1LogsStream",
       "reason": "",
       "resolution": "两条流各自独立计数与上限（events 10 / logs 5），并且注释只描述自己那条流；文档、常量、实现三者一致。",
-      "text": "契约声明两条流各自独立上限（/api/v1/events 10、/api/v1/logs/stream 5）。Go 面两个数都不存在：/api/v1/events 由 src/daemon/internal/http/sse.go 的 SSEBroker 承接，上限只有一个 `maxClients`，取自 config.MaxSSEConnections（默认 32，见 src/daemon/internal/config/types.go）；/api/v1/logs/stream 更根本没走 broker——logs.go 的 StreamLogs 每连接起一个 goroutine 直接写响应，没有任何连接计数与上限。表现：events 连到 30 条才拒，而按契约它本该在 10 条就拒；日志流则无上限，慢客户端只会把 broadcast 队列挤满（Publish 队列满时直接丢消息）"
+      "text": "契约声明两条流各自独立上限（/api/v1/events 10、/api/v1/logs/stream 5）。Go 面两个数都不存在：/api/v1/events 由 src/daemon/internal/http/sse.go 的 SSEBroker 承接，上限只有一个 `maxClients`，取自 config.MaxSSEConnections（默认 32，见 src/daemon/internal/config/types.go）；/api/v1/logs/stream 更根本没走 broker——logs.go 的 StreamLogs 每连接起一个 goroutine 直接写响应，没有任何连接计数与上限。表现：events 连到 30 条才拒，而按契约它本该在 10 条就拒；日志流则无上限，慢客户端只会把 broadcast 队列挤满（Publish 队列满时直接丢消息）。Go 面现在是一条流一个名额账本（SSEStream）：组合根分别建 NewEventsBroker 与 NewLogsStream，两者的 max 与心跳各自引用生成物常量 SSEMaxConnectionsApiV1* / SSEKeepaliveSecondsApiV1*，日志流改走同一条 streamSSE 接入路径，满额同样回 503"
     },
     {
       "name": "HTTP_BAN_SORT_DOC_INCOMPLETE",
@@ -3005,10 +3005,10 @@
       "name": "HTTP_SSE_RESERIALIZES_EVERY_DOMAIN",
       "severity": "medium",
       "status": "fixed",
-      "fix": "src/daemon/internal/http/sse.go:case b.broadcast <- raw",
+      "fix": "src/daemon/internal/http/sse.go:case b.broadcast <- frame",
       "reason": "",
       "resolution": "序列化只发生在**内容变化时的一次 publish** 上：broker 把载荷 marshal 一次，再广播给各连接的 channel；没有按连接、按 tick 重复序列化的循环。",
-      "text": "旧 SSE 每个 tick 把 5 份载荷（stats/bans/jails/whitelist/rates）全量 serde_json::to_string 一遍，无论有没有变化，且这段序列化在**每条连接**的循环里各做一次。成本是「连接数 × 域数 × 每秒一次」：安静时段也在重复序列化同样的内容，payload 越大越明显。Go 面改成了事件驱动：kernel/consumer.go 只在采样后比较快照、变了才 Publish，sse.go 的 Publish 每次 marshal 一份 bytes 后投递给各连接 channel（队满丢弃），连接循环只搬运不再序列化"
+      "text": "旧 SSE 每个 tick 把 5 份载荷（stats/bans/jails/whitelist/rates）全量 serde_json::to_string 一遍，无论有没有变化，且这段序列化在**每条连接**的循环里各做一次。成本是「连接数 × 域数 × 每秒一次」：安静时段也在重复序列化同样的内容，payload 越大越明显。Go 面改成了事件驱动：kernel/consumer.go 只在采样后比较快照、变了才 Publish，sse.go 的 Publish 经 sseFrame 每个事件 marshal 一份 bytes 后投递给各连接 channel（队满丢弃），连接循环只搬运不再序列化"
     },
     {
       "name": "HTTP_SSE_JAILS_NO_PUBLISHER",

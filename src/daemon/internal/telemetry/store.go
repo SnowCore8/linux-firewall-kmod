@@ -49,6 +49,28 @@ type Windows struct {
 	SampledAt time.Time `json:"sampled_at"`
 }
 
+// LeaseState 是内核「单一守护进程注册租约」的状态，取值即线上 JSON 的字符串。
+//
+// 内核同一时刻只承认一个 portid：非 held 时本进程下发的每一条指令都会被静默丢弃。
+// 五个取值的含义：
+//
+//	none     本进程还没发起过注册（内核链路未装配，或泵尚未启动）
+//	idle     注册在尝试中，但从未持有过租约
+//	held     内核已承认本进程为唯一守护进程
+//	refused  内核明确拒绝（已有活跃守护进程）
+//	lost     曾经持有、之后注册失败（模块重载、被判死、链路断开）
+type LeaseState string
+
+// 租约状态的五个取值。字符串就是契约（contract/http.fwidl 的 RuntimeSnapshot.lease_state）
+// 与 /proc 侧文档共用的拼写，改任何一处都要同步另一处。
+const (
+	LeaseNone    LeaseState = "none"
+	LeaseIdle    LeaseState = "idle"
+	LeaseHeld    LeaseState = "held"
+	LeaseRefused LeaseState = "refused"
+	LeaseLost    LeaseState = "lost"
+)
+
 // Link 是内核链路自身的健康状态。
 //
 // 快照里的数字「新不新」只能由链路状态判断：链路断了以后 Stats 会一直停在最后一次成功
@@ -56,6 +78,13 @@ type Windows struct {
 type Link struct {
 	// Registered 表示内核已把本进程认作唯一守护进程（未注册时内核丢弃一切指令）。
 	Registered bool
+	// Lease 是守护进程注册租约的状态机当前值（见 LeaseState）。它与 Registered 不是重复：
+	// Registered 只说「最后一次注册成功了」，而运维要能区分「还没试」「被拒（已有别的
+	// 守护进程）」与「曾经持有、后来丢了」——这三者对指令的下发含义完全不同。
+	Lease LeaseState
+	// LeaseLosses 是进入 lost 的累计次数：状态快照本身看不出一段时间内的反复失联，
+	// 而这个数正是「内核模块被重载过 / 前一个守护进程被判死」的痕迹。
+	LeaseLosses uint64
 	// LinkDown 表示接收侧已退出，回复与事件都不会再来。
 	LinkDown bool
 	// LastRegisterAt / LastSampleAt / LastReconcileAt 是三类成功动作的最后时刻。
@@ -107,7 +136,10 @@ type Store struct {
 
 // NewStore 建立空快照并开始发布（读侧因此永远不会拿到 nil）。
 func NewStore() *Store {
-	s := &Store{windows: newWindows()}
+	s := &Store{
+		windows: newWindows(),
+		cur:     Snapshot{Link: Link{Lease: LeaseNone}},
+	}
 	s.publish()
 	return s
 }
@@ -145,13 +177,50 @@ func (s *Store) SetRates(r Rates, at time.Time) {
 	s.touch(at)
 }
 
-// SetLinkRegistered 记一次成功的守护进程注册。
+// SetLinkRegistered 记一次成功的守护进程注册：租约进入 held。
 func (s *Store) SetLinkRegistered(at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cur.Link.Registered = true
+	s.setLease(LeaseHeld)
 	s.cur.Link.LastRegisterAt = at
 	s.publish()
+}
+
+// SetLeaseRefused 记一次「内核明确拒绝注册」——已有别的守护进程持有租约。
+//
+// 这不是失联：指令被丢弃的原因是内核认的是另一个进程，运维动作是「找到并停掉那一个」。
+func (s *Store) SetLeaseRefused() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setLease(LeaseRefused)
+	s.publish()
+}
+
+// MarkLeaseAttemptFailed 记一次注册请求失败后的租约去向。
+//
+// 曾持有过就进入 lost 并累计一次失联（模块重载、被判死、链路断开）；从没持有过则停在
+// idle。两者对运维的含义完全不同：前者意味着本进程曾经下发过、如今已经没人认领的封禁。
+func (s *Store) MarkLeaseAttemptFailed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cur.Link.Lease == LeaseHeld {
+		s.setLease(LeaseLost)
+	} else {
+		s.setLease(LeaseIdle)
+	}
+	s.publish()
+}
+
+// setLease 推进租约状态。调用方必须持 mu，且不调 publish（由公开方法决定发布时机）。
+//
+// Registered 由这里跟着 Lease 一起走，而不是留给调用方各写一次：两个字段说的是同一件事，
+// 分开写迟早会有一句漏掉，读侧就会看到「已注册但租约是 refused」。
+func (s *Store) setLease(next LeaseState) {
+	if s.cur.Link.Lease == LeaseHeld && next == LeaseLost {
+		s.cur.Link.LeaseLosses++
+	}
+	s.cur.Link.Lease = next
+	s.cur.Link.Registered = next == LeaseHeld
 }
 
 // SetLinkSampled 记一次成功的周期采样。

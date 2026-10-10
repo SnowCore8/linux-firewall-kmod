@@ -52,11 +52,7 @@ func (h *APIHandlers) AddWhitelist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.sse != nil {
-		h.sse.Publish("whitelist_add", map[string]any{
-			"cidr": prefix.String(),
-		})
-	}
+	h.publishWhitelist()
 
 	WriteSuccess(w, map[string]any{
 		"cidr":   prefix.String(),
@@ -64,13 +60,14 @@ func (h *APIHandlers) AddWhitelist(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// RemoveWhitelist 从白名单移除一个前缀（DELETE /api/v1/whitelist/{cidr}）。
 func (h *APIHandlers) RemoveWhitelist(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "DELETE only")
 		return
 	}
 
-	cidr := r.URL.Query().Get("cidr")
+	cidr := r.PathValue("cidr")
 	if cidr == "" {
 		WriteBadRequest(w, "cidr parameter required")
 		return
@@ -87,24 +84,10 @@ func (h *APIHandlers) RemoveWhitelist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.sse != nil {
-		h.sse.Publish("whitelist_remove", map[string]any{
-			"cidr": cidr,
-		})
-	}
+	h.publishWhitelist()
 
 	WriteSuccess(w, map[string]any{
 		"cidr":   cidr,
 		"status": "removed",
 	})
-}
-
-func (h *APIHandlers) WhitelistStats(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
-
-	stats := bans.GlobalWhitelist().Stats()
-	WriteSuccess(w, stats)
 }

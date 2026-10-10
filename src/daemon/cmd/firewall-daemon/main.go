@@ -180,17 +180,12 @@ func run(args []string) error {
 		if err != nil {
 			logger.Warn("初始化 HTTP 服务器失败", "error", err)
 		} else {
-			sseBroker = http.NewSSEBroker(cfg.MaxSSEConnections, logger)
+			// 两条 SSE 流各自的上限与心跳都取自契约生成物：events 10/15s，logs 5/15s。
+			// 合用 cfg.MaxSSEConnections 会让日志页开满 5 条连接时把实时事件流一起饿死。
+			sseBroker = http.NewEventsBroker(logger)
 			defer sseBroker.Stop()
+			logStream := http.NewLogsStream(logger)
 			metrics = http.NewMetrics()
-
-			// SSE token 认证：使用 MetricsUsername:MetricsPassword 作为简单 token
-			if cfg.MetricsUsername != "" || cfg.MetricsPassword != "" {
-				expectedToken := cfg.MetricsUsername + ":" + cfg.MetricsPassword
-				sseBroker.VerifyToken = func(token string) bool {
-					return token == expectedToken
-				}
-			}
 
 			// 配置路径：优先单文件，其次目录
 			configPath := cfg.ConfigFile
@@ -202,6 +197,7 @@ func run(args []string) error {
 				Server:           httpServer,
 				DB:               historyDB,
 				SSE:              sseBroker,
+				LogStream:        logStream,
 				Metrics:          metrics,
 				KernelBan:        banSinkForDaemon,
 				Username:         cfg.MetricsUsername,
@@ -210,10 +206,14 @@ func run(args []string) error {
 				GetConfigPath:    func() string { return configPath },
 				JailController:   jailEnabled,
 				LogFilePath:      func() string { return cfg.LogFile },
+				// GET /health 的读数来源：链路状态只有事件泵这份快照知道，procfs 在场与否
+				// 由本进程自己 stat。
+				GetKernelSnapshot: kernelStore.Snapshot,
+				KmodPresent:       kernelProcPresent,
 			})
+			// 路由全部由 RegisterRoutes 按契约 pattern 注册，包括 /api/v1/events 与
+			// /metrics：它们都在契约的认证组里，在这里另注册一遍会绕过 RequireAuth。
 			httpServer.RegisterRoutes(api)
-			httpServer.Handle("/api/v1/events", sseBroker)
-			httpServer.Handle("/metrics", metrics)
 			httpServer.RegisterStaticFiles(panelres.StaticFS())
 
 			httpToken := runtime.NewShutdown()
@@ -402,8 +402,20 @@ func pgrepSelf(pattern string) ([]int, error) {
 	return pids, nil
 }
 
+// procfsRoot 是内核模块暴露的 procfs 目录，也是「模块已加载」在本进程里唯一的可见证据。
+const procfsRoot = "/proc/firewall"
+
 // procfsPaths 是内核模块必须已暴露的 procfs 接口。
-var procfsPaths = []string{"/proc/firewall", "/proc/firewall/bans"}
+var procfsPaths = []string{procfsRoot, procfsRoot + "/bans"}
+
+// kernelProcPresent 报 procfs 接口是否在场。
+//
+// GET /health 的 kmod_proc_present 读它。它与「租约是否持有」是两件事：模块在但租约没
+// 拿到，指令会被内核丢弃；租约在但 procfs 消失，说明模块刚被重载过。
+func kernelProcPresent() bool {
+	_, err := os.Stat(procfsRoot)
+	return err == nil
+}
 
 // newLogger 按配置初始化日志系统，返回可直接使用的结构化日志器。
 //

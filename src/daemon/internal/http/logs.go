@@ -2,12 +2,23 @@ package http
 
 import (
 	"bufio"
-	"fmt"
+	"context"
+	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+)
+
+// 日志流的两处参数：轮询间隔与单行上限。
+//
+// 1 秒轮询沿用旧实现的节奏——日志文件由 slog 追加，更密的轮询只是多几遍空 stat。
+// 512 KiB 的单行上限给 JSON 记录留余量（配置快照那类行会带上一整段结构）。
+const (
+	logTailPollInterval = 1 * time.Second
+	maxLogLineBytes     = 512 * 1024
 )
 
 // GetLogs 查询日志文件内容，支持分页与级别过滤。
@@ -59,10 +70,13 @@ func (h *APIHandlers) GetLogs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// StreamLogs SSE 推送实时日志。
+// StreamLogs 经 `/api/v1/logs/stream` 推送实时日志行。
 //
-// 打开日志文件 → 定位到末尾 → 轮询读取新增行 → 通过 SSE 推送。
-// 每个连接一个 goroutine 做 tail-f 轮询，客户端断开时自动退出。
+// 接入名额、握手帧、心跳与 503 全部由 streamSSE 统一处理（与 `/api/v1/events` 同一套
+// 语义、各自独立的上限），这里只负责「把文件末尾之后的新行写成 log 帧」。
+//
+// 文件在占名额**之前**就打开并定位：流一旦写出响应头就无法再改状态码，而契约给这条流
+// 只声明了 200 与 503，所以预检失败一律 503，不开 404 这种契约上没有的口子。
 func (h *APIHandlers) StreamLogs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
@@ -78,67 +92,81 @@ func (h *APIHandlers) StreamLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-
 	f, err := os.Open(logFile)
 	if err != nil {
-		if os.IsNotExist(err) {
-			WriteNotFound(w, "日志文件不存在")
-			return
+		h.server.logger.Warn("日志流打开文件失败", "path", logFile, "error", err)
+		WriteServiceUnavailable(w, "日志文件不可读")
+		return
+	}
+	// 定位到末尾：这条流推的是「从这里开始的未来」，历史行由 GET /api/v1/logs 负责。
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		_ = f.Close()
+		WriteServiceUnavailable(w, "日志文件定位失败")
+		return
+	}
+
+	level := strings.ToLower(r.URL.Query().Get("level"))
+	done := make(chan struct{})
+	logger := h.server.logger
+
+	streamSSE(w, r, h.logStream,
+		func(out chan []byte) bool {
+			go tailLogs(r.Context(), f, level, &sseConn{out: out}, done, logger)
+			return true
+		},
+		func(chan []byte) { close(done) },
+		func(conn sseConnWriter) error {
+			return conn.writeFrame("connected", map[string]any{
+				"stream":          h.logStream.Name(),
+				"max_connections": h.logStream.Max(),
+			})
+		})
+}
+
+// tailLogs 轮询日志文件，把新增行按 `log` 事件写给这一条连接。
+//
+// 每连接一个 goroutine 而不是共用一个读取器扇出：这条流的每一帧只属于发起请求的那个
+// 客户端，且各连接的 level 过滤不同，共享读取要么重复扫描要么互相串数据。
+//
+// 不处理日志轮转（文件被 rename/truncate）：偏移在末尾之后时读不到新行，流会静默停住。
+// 与旧实现同范围，接回 inode 跟踪属于后续包。
+func tailLogs(ctx context.Context, f *os.File, level string, conn *sseConn, done chan struct{}, logger *slog.Logger) {
+	defer func() {
+		if err := f.Close(); err != nil {
+			logger.Warn("日志流关闭文件失败", "error", err)
 		}
-		WriteInternalError(w, "无法打开日志文件")
-		return
-	}
-	defer f.Close()
+	}()
 
-	// 定位到文件末尾，只推送新内容
-	if _, err := f.Seek(0, 2); err != nil {
-		WriteInternalError(w, "日志文件定位失败")
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
-
-	levelFilter := strings.ToLower(r.URL.Query().Get("level"))
-	ctx := r.Context()
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(logTailPollInterval)
 	defer ticker.Stop()
 
-	keepalive := time.NewTicker(30 * time.Second)
-	defer keepalive.Stop()
-
+	// 单行上限与 readLogTail 一致：一条超长的 JSON 记录不该整条丢掉。
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineBytes)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-done:
+			return
 		case <-ticker.C:
-			// 读取新增行
 			for scanner.Scan() {
 				line := scanner.Text()
-				if levelFilter != "" && !matchesLogLevel(line, levelFilter) {
+				if level != "" && !matchesLogLevel(line, level) {
 					continue
 				}
-				event := fmt.Sprintf("event: log\ndata: %s\n\n", line)
-				if _, err := fmt.Fprint(w, event); err != nil {
+				// 原始行逐字进 data：前端 parseLine 收到的就是文件里的那条 JSON 记录。
+				if err := conn.writeFrame("log", sseRaw(line)); err != nil {
+					logger.Debug("日志流写出失败，停止推送", "error", err)
 					return
 				}
-				flusher.Flush()
 			}
-		case <-keepalive.C:
-			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+			if err := scanner.Err(); err != nil {
+				// 前端把 error 帧的 data 当人类可读文本直接显示，所以这里给纯文本而不是对象。
+				_ = conn.writeFrame("error", sseRaw("读取日志文件失败: "+err.Error()))
 				return
 			}
-			flusher.Flush()
 		}
 	}
 }
@@ -175,7 +203,7 @@ func readLogTail(path string, offset, limit int, levelFilter string) ([]string, 
 
 	var allLines []string
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineBytes)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if levelFilter != "" && !matchesLogLevel(line, levelFilter) {

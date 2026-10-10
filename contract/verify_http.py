@@ -24,8 +24,9 @@
    不带方法前缀的 ``Handle("<路径>", h)`` 在 ServeMux 里匹配任何动词：按路径回落到
    它核对存在性与鉴权组，另记一条「方法未收紧」的缺口（未声明的动词本该由框架回 405）。
 2. 认证常量（失败阈值 / 锁定秒数）与两条 SSE 各自的连接上限必须与契约数值相同。
-   值只认 **daemon 的 Go 源码**：``contract/generated/http_contract.go`` 里的
-   数字由契约本身生成，拿它核对契约等于空转，故生成物不在搜索范围内。
+   值只认 **手写的 daemon 源码**：``src/daemon/internal/httpcontract/http_contract.go``
+   是 gen.py 写进 module 的生成物，里面的数字由契约本身产生，拿它核对契约等于空转，
+   故它从搜索根里显式排除；手写代码 ``httpcontract.<名>`` 引用它才算落地证据。
 3. 信封（``envelope.go``）的 JSON key 必须恰为 code/data/message（顺序即契约顺序，
    Go 的 ``encoding/json`` 就按声明顺序输出）；成功 message 必须是空串；失败 data
    必须**以 null 出现**，不能靠 ``omitempty`` 省略。
@@ -86,11 +87,17 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GEN_DIR = os.path.join(ROOT, "contract", "generated")
 LAYOUT_JSON = os.path.join(GEN_DIR, "http_layout.json")
-# HTTP 契约的 Go / TS 生成物：注册串常量表（``Route*``）与路由路径表（``ROUTES``）。
-GEN_HTTP_GO = os.path.join(GEN_DIR, "http_contract.go")
-GEN_HTTP_TS = os.path.join(GEN_DIR, "http_contract.ts")
 
 DAEMON = os.path.join(ROOT, "src", "daemon")
+# HTTP 契约的 Go 生成物住在 daemon 的 module 内（Go 以 module 根为界，界外目录不是
+# 包，跨界 import 编不过），由 gen.py 的 `in_module` 落点写出来；TS 那份仍留在
+# contract/generated，因为前端用相对路径跨界 import 是可行的。
+GENERATED_HTTP_PKG = "httpcontract"
+GEN_HTTP_GO = os.path.join(
+    DAEMON, "internal", GENERATED_HTTP_PKG, "http_contract.go"
+)
+GEN_HTTP_TS = os.path.join(GEN_DIR, "http_contract.ts")
+
 HTTP_DIR = os.path.join(DAEMON, "internal", "http")
 ROUTES_GO = os.path.join(HTTP_DIR, "routes.go")
 AUTH_GO = os.path.join(HTTP_DIR, "auth.go")
@@ -196,6 +203,49 @@ def _fn_body(src: str, name: str) -> str | None:
     return None
 
 
+def _strip_go_comments(src: str) -> str:
+    """去掉 Go 源码里的注释，字符串字面量原样保留（``//`` 常出现在 URL 里）。
+
+    缺陷探针要核的是「代码里有没有这个调用」，而注释完全可以逐字解释它**没有**做的事：
+    health.go 的 handler 里就写着「裸写出，不经 WriteSuccess/WriteError」，把注释留在
+    待匹配文本里会让一条否定注释把「现场仍在」读成「现场已消失」。响应头那一侧已经有
+    ``_header_is_constructed`` 用调用语法躲过这个问题，这里从文本层面解决它。
+    """
+    out: list[str] = []
+    i, n = 0, len(src)
+    while i < n:
+        c = src[i]
+        if c in ('"', "`"):
+            j = i + 1
+            if c == "`":
+                end = src.find("`", j)
+                j = n if end < 0 else end + 1
+            else:
+                while j < n:
+                    if src[j] == "\\":
+                        j += 2
+                        continue
+                    if src[j] == '"':
+                        j += 1
+                        break
+                    j += 1
+            out.append(src[i:j])
+            i = j
+            continue
+        if c == "/" and src.startswith("//", i):
+            nl = src.find("\n", i)
+            i = n if nl < 0 else nl
+            continue
+        if c == "/" and src.startswith("/*", i):
+            end = src.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+            out.append(" ")
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _is_test_file(name: str) -> bool:
     """Go 的测试住在 ``*_test.go``：它们不是生产代码，一律不参与核对。
 
@@ -221,16 +271,19 @@ def go_sources() -> dict:
 
 
 def go_tree_sources() -> str:
-    """递归读 `src/daemon/**/*.go`（跳过测试），拼成一份用于子串/正则扫描的文本。
+    """递归读 `src/daemon/**/*.go`（跳过测试与生成物），拼成一份用于子串/正则扫描的文本。
 
     与 [`go_sources`] 的区别：后者只读各目录顶层文件、且**不含** `internal/contract`
     （供载荷字段核对）；本函数要的是「整个 daemon 树」，因为业务码的构造点、安全头
     中间件与 SSE 发布点都可能落在子目录里，漏掉会让「有没有生产者」的断言假报缺失。
+
+    `internal/httpcontract` 是 gen.py 写进 module 的 HTTP 契约生成物，必须排除：
+    「常量值只认手写 daemon 源码」这条规则靠扫描根取不到生成物才成立，生成物搬家
+    不能把它变成空转——要认它，只能由 `_used_contract_const` 显式按「引用」解引。
     """
     chunks = []
     for dirpath, dirnames, filenames in os.walk(DAEMON):
-        # 生成物与 netlink 线格式包都不算 HTTP 实现面
-        dirnames[:] = [d for d in dirnames if d not in ("__pycache__",)]
+        dirnames[:] = [d for d in dirnames if d not in ("__pycache__", GENERATED_HTTP_PKG)]
         for f in sorted(filenames):
             if f.endswith(".go") and not _is_test_file(f):
                 chunks.append(read(os.path.join(dirpath, f)))
@@ -251,10 +304,12 @@ def http_sources() -> str:
 def _go_path_to_contract(path: str) -> str:
     """把 ServeMux 的参数槽 ``{ip}`` 解回契约写法 ``:ip``。
 
-    规则与 `contract/generated/http_contract.go` 里的 ``GoPath()`` 互逆（那张表本身
+    规则与 `src/daemon/internal/httpcontract/http_contract.go` 里的 ``GoPath()`` 互逆（那张表本身
     由 ``http.fwidl`` 生成），所以这只是同一规则的两种拼写，不是「猜这两个路径等价」。
-    多段通配 ``*path`` 两侧拼写一致，原样留着。
+    多段通配同样互逆：契约的 ``*path`` 在 Go 侧必须是 ``{path...}``（带方法前缀时
+    ``*path`` 是字面量而不是通配），故解回契约写法时要把 `{…...}` 换回去。
     """
+    path = re.sub(r"\{(\w+)\.\.\.\}", r"*\1", path)
     return re.sub(r"\{(\w+)\}", r":\1", path)
 
 
@@ -274,7 +329,7 @@ def _route_const_table() -> dict:
     """生成物里的注册串常量表：``Route*`` 常量名 -> ``"METHOD /path"``。
 
     Go 侧把注册串写成常量标识符（``httpcontract.RouteGetApiV1Bans``）时，直接扫字符串
-    会看到零条路由，故到 `contract/generated/http_contract.go` 查表解回字面量——那张表
+    会看到零条路由，故到 `src/daemon/internal/httpcontract/http_contract.go` 查表解回字面量——那张表
     本身就由 `http.fwidl` 生成，等价于回到契约。同理，`server.go` 里
     ``s.mux.Handle(pattern, handler)`` 这种**包装函数自己的定义**用的是一般变量名，
     不在 `Route*` 之列，因此不会被误当成一条注册。
@@ -444,9 +499,15 @@ def go_registrations() -> tuple[dict, list[str]]:
 
 
 def go_tree_sources_by_file() -> dict:
-    """{仓库相对路径: 源码}，覆盖 daemon 全部 .go（跳过测试）：注册点扫描用。"""
+    """{仓库相对路径: 源码}，覆盖 daemon 全部 .go（跳过测试与 HTTP 契约生成物）。
+
+    排除 `internal/httpcontract` 的理由与 [`go_tree_sources`] 相同：它是 gen.py 的
+    产物而不是实现面，留着会让「注册点在哪个文件」「常量有没有值」这类断言把生成物
+    自己当成证据。
+    """
     out = {}
-    for dirpath, _dirnames, filenames in os.walk(DAEMON):
+    for dirpath, dirnames, filenames in os.walk(DAEMON):
+        dirnames[:] = [d for d in dirnames if d not in ("__pycache__", GENERATED_HTTP_PKG)]
         for f in sorted(filenames):
             if f.endswith(".go") and not _is_test_file(f):
                 p = os.path.join(dirpath, f)
@@ -628,6 +689,29 @@ def _const_value(src: str, name: str) -> int | None:
 _HEADER_CTOR_TMPL = r"""\.Header\(\)\s*(?:Set|Add)\s*\(\s*["]{name}["]|\.Header\(\)\s*\[\s*["]{name}["]\]"""
 
 
+def _const_in_daemon(tree: str, name: str) -> tuple[int, str] | None:
+    """取「实现侧用到的契约常量值」，返回 (值, 证据名)。
+
+    两种形态都算实现侧真的用到了这个数：
+
+      * daemon 自己声明 ``NAME = 数字``——值就地可核；
+      * daemon 引用生成物 ``httpcontract.NAME``——值取自生成物，而生成物由
+        ``http.fwidl`` 生成，等价于回到契约。
+
+    生成物目录已被排除出 `tree`，所以第二种形态不会因为「扫描根里本来就写着这个
+    名字」而空转：要它成立，必须有人在手写代码里点这个引用。取不到返回 None，
+    由调用方按「没有这个常量」报缺口。
+    """
+    v = _const_value(tree, name)
+    if v is not None:
+        return v, name
+    if re.search(rf"\bhttpcontract\.{re.escape(name)}\b", tree):
+        gv = _const_value(read(GEN_HTTP_GO), name)
+        if gv is not None:
+            return gv, f"httpcontract.{name}"
+    return None
+
+
 def _header_is_constructed(src: str, header_name: str) -> bool:
     pat = _HEADER_CTOR_TMPL.format(name=re.escape(header_name))
     return re.search(pat, src, re.I) is not None
@@ -635,17 +719,17 @@ def _header_is_constructed(src: str, header_name: str) -> bool:
 
 def check_auth_constants(contract: dict) -> list[str]:
     problems: list[str] = []
-    # 值只认 daemon 的 Go 源码。`contract/generated/http_contract.go` 里的
-    # `AuthFailureThreshold = 10` 由契约自己生成，拿它核对契约是空转，
-    # 而它在 `src/daemon` 之外，本扫描根天然取不到。
+    # 值只认手写的 daemon 源码：生成物里的 `AuthFailureThreshold = 10` 由契约自己
+    # 产生，拿它核对契约是空转。它现在物理上就在 src/daemon 树内（Go 只认 module 内
+    # 的包），故由扫描根显式排除，只允许 `_const_in_daemon` 按引用解引。
     tree = go_tree_sources()
     for key, candidates in AUTH_CONSTS.items():
         want = int(contract["auth"][key])
         found = None
         for const in candidates:
-            v = _const_value(tree, const)
-            if v is not None:
-                found = (const, v)
+            hit = _const_in_daemon(tree, const)
+            if hit is not None:
+                found = (hit[1], hit[0])
                 break
         if found is None:
             names = " / ".join(candidates)
@@ -698,9 +782,9 @@ def check_sse_limits(contract: dict) -> list[str]:
             continue
         found = None
         for const in candidates:
-            v = _const_value(tree, const)
-            if v is not None:
-                found = (const, v)
+            hit = _const_in_daemon(tree, const)
+            if hit is not None:
+                found = (hit[1], hit[0])
                 break
         if found is None:
             names = " / ".join(candidates)
@@ -856,7 +940,7 @@ def check_envelope(contract: dict) -> list[str]:
 def _code_const_names(code: int) -> list[str]:
     """业务码在生成物里的常量名（``Code40001 = 40001``），用于认 daemon 侧的引用。
 
-    值→名取自 ``contract/generated/http_contract.go``：这是**同一份契约**的另一种拼写，
+    值→名取自 ``src/daemon/internal/httpcontract/http_contract.go``：这是**同一份契约**的另一种拼写，
     不是拿契约数值核对契约（那条禁令管的是「阈值/SSE 上限」这类要从 daemon 读回来的值，
     这里只是给常量起个可搜索的名字）。
     """
@@ -1055,15 +1139,24 @@ def check_headers(contract: dict) -> list[str]:
 
 
 def _sse_publish_points(srcs: dict, event: str) -> list[str]:
-    """事件名在 Go 侧的发布点：``…Publish("<事件>", …)`` 或手写的 ``event: <事件>`` 帧。
+    """事件名在 Go 侧的发布点：凡是**逐字面量**写着这个事件名的发帧调用或手写帧都算。
 
-    Go 的 SSE 只有这两种写法（``internal/http/sse.go`` 的 broker 与 ``logs.go``
-    直接 Fprintf 的日志流），事件名都是逐字面量，不再需要 Rust 时代按
-    ``Domain::name()`` 反查事件名的那套推断。测试文件已由
-    ``go_tree_sources_by_file`` 排除——只出现在测试里的发布点不算。
+    Go 侧写一帧有三种形态，事件名都必须是字面量：
+
+      * ``…Publish("<事件>", …)``——broker 的域广播（``internal/http/sse.go``、
+        ``kernel/consumer.go``、``http/publish.go``）；
+      * ``…writeFrame("<事件>", …)``——单条连接自己的帧（握手帧与日志流的 log/error 帧
+        都走它，日志流没有 broker 可广播）；
+      * 手写的 ``event: <事件>`` 帧文本（直接 Fprintf 的写法）。
+
+    只认这三种，事件名写成变量（``writeFrame(name, …)``）就扫不到——这正是刻意的：契约
+    声明的每个事件名都要在 Go 侧有一个字面发布点，名字进变量等于宣布它没有生产者。
+    测试文件已由 ``go_tree_sources_by_file`` 排除——只出现在测试里的发布点不算。
     """
     pats = (
         rf'\.Publish\(\s*"{re.escape(event)}"',
+        rf'\.writeFrame\(\s*"{re.escape(event)}"',
+        rf'\bsseFrame\(\s*"{re.escape(event)}"',
         rf'event:\s*{re.escape(event)}\b',
     )
     out: list[str] = []
@@ -1091,7 +1184,8 @@ def check_sse_events(contract: dict) -> list[str]:
             if not points:
                 problems.append(
                     f'SSE {r["path"]}: 事件 {ev!r} 在 Go 源码里没有发布点'
-                    f'（既无 .Publish("{ev}", …) 也无 `event: {ev}` 帧）'
+                    f'（既无 .Publish("{ev}", …) / .writeFrame("{ev}", …)，'
+                    f'也无 `event: {ev}` 帧）'
                 )
             else:
                 print(f"  SSE {r['path']}: 事件 {ev!r} 发布点 {', '.join(points[:3])}")
@@ -1528,11 +1622,14 @@ def check_defect_claims(contract: dict) -> list[str]:
                 verdict(name, None, "契约的 GET /health 与 /healthz 均未注册")
             else:
                 body = _fn_body(http_sources(), "Health") or ""
+                # 只看真代码：health.go 的 handler 里有一句注释写着「不经 WriteSuccess/
+                # WriteError」，那是**否定**，按文字匹配会把裸写读成已套信封。
+                code = _strip_go_comments(body)
+                bare = "WriteSuccess" not in code and "WriteError" not in code
                 verdict(
                     name,
-                    "WriteSuccess" not in body and "WriteError" not in body,
-                    f"{', '.join(sorted(probe))} 的响应是否仍裸写信封外"
-                    f"={_fn_body(http_sources(), 'Health') is not None and 'WriteSuccess' not in body}",
+                    bare,
+                    f"{', '.join(sorted(probe))} 的响应是否仍裸写信封外={bare}",
                 )
         elif name == "HTTP_BANS_DUAL_SHAPE":
             src = strip_ts_comments(read(TS_ENDPOINTS))
@@ -1591,16 +1688,25 @@ def check_defect_claims(contract: dict) -> list[str]:
                 + (f"（{', '.join(sorted(set(writes)))}）" if writes else "，清扫在 kernel/consumer.go 的对账里"),
             )
         elif name == "HTTP_SSE_RESERIALIZES_EVERY_DOMAIN":
-            # 现场 = 序列化发生在每条连接的循环里（多处 marshal）而非一次 Publish。
-            src = read(SSE_GO)
+            # 现场 = 序列化按连接、按 tick 重复发生。判据两条，缺一即现场仍在：
+            #   1) 一次 Publish 只序列化一次——唯一的 marshal 在 sseFrame 里，Publish
+            #      经它拿帧（序列化点从「每条连接各一次」收回「每个事件一次」）；
+            #   2) 扇出循环（run）只搬运已经成形的字节，自己不做任何序列化。
+            src = _strip_go_comments(read(SSE_GO))
             publish = _fn_body(src, "Publish") or ""
-            total = src.count("json.Marshal")
+            fan_out = _fn_body(src, "run") or ""
+            once_per_event = (
+                "sseFrame(" in publish and publish.count("json.Marshal") <= 1
+            )
+            no_per_conn_marshal = "json.Marshal" not in fan_out
             verdict(
                 name,
-                total > 1 or "json.Marshal" not in publish,
-                f"整个 sse.go 只有 Publish 里一次 json.Marshal（全文件 {total} 处）"
-                if total <= 1 and "json.Marshal" in publish
-                else f"序列化点 {total} 处，Publish 内含={('json.Marshal' in publish)}",
+                not (once_per_event and no_per_conn_marshal),
+                f"Publish 每事件序列化一次={once_per_event}，"
+                f"扇出循环内无序列化={no_per_conn_marshal}"
+                if once_per_event and no_per_conn_marshal
+                else f"Publish 每事件序列化一次={once_per_event}，"
+                f"扇出循环内无序列化={no_per_conn_marshal}（序列化点数处仍待收回）",
             )
         elif name == "HTTP_WHITELIST_KEY_DIVERGENCE":
             # 现场 = 白名单键有多套归一规则。两处构造点（镜像与检测聚合）都归一到
@@ -1672,17 +1778,26 @@ def check_defect_claims(contract: dict) -> list[str]:
                     "service-probes 与 port-scanners 的检出计数字段是否已对齐",
                 )
         elif name == "HTTP_LOG_SSE_LIMIT_DOC_DRIFT":
+            # 现场仍在 = 两条流没有一个「各自独立」的上限。三个条件缺一即算现场还在：
+            #   1) 组合根两条流各建一个实例（一个共用 broker 就是旧形状）；
+            #   2) 两条流各自引用自己的契约上限常量（合成一个值就换了个形态复发）；
+            #   3) 日志流真的走名额账本——只建一个 SSEStream 而 handler 不经过它，
+            #      等于日志流仍然没有计数。
             main_src = read(MAIN_GO)
+            sse_src = read(SSE_GO)
             logs_body = _fn_body(read(LOGS_GO), "StreamLogs") or ""
-            brokers = main_src.count("NewSSEBroker(")
-            logs_capped = bool(
-                re.search(r"maxClients|MaxClients|connLimit|len\(.*clients\)\s*>=", logs_body)
+            two_streams = "NewEventsBroker(" in main_src and "NewLogsStream(" in main_src
+            per_stream_caps = (
+                "httpcontract.SSEMaxConnectionsApiV1Events" in sse_src
+                and "httpcontract.SSEMaxConnectionsApiV1LogsStream" in sse_src
             )
+            logs_capped = "streamSSE(" in logs_body and "h.logStream" in logs_body
             verdict(
                 name,
-                brokers < 2 or not logs_capped,
-                f"组合根只建 {brokers} 个 SSEBroker，日志流自身有连接上限={logs_capped}"
-                "（契约的 events 10 / logs 5 两个独立上限都不存在）",
+                not (two_streams and per_stream_caps and logs_capped),
+                f"组合根两条流各建实例={two_streams}，两条流各自引用契约上限常量"
+                f"={per_stream_caps}，日志流经名额账本={logs_capped}"
+                "（契约的 events 10 / logs 5 必须同时独立成立）",
             )
         # 没有探针的（例如纯文档类缺陷）落到下面的 missing 清单，不静默当成通过。
 
@@ -1717,15 +1832,15 @@ def check_artifacts() -> list[str]:
     problems: list[str] = []
     print("=== 生成物自检（各自工具链）===")
 
-    rs_src = os.path.join(GEN_DIR, "http_contract.go")
+    go_src = GEN_HTTP_GO
     go = _tool(os.environ.get("GO"), "go")
-    if go and os.path.isfile(rs_src):
+    if go and os.path.isfile(go_src):
         # 临时目录留在仓库内（.gitignore 的 /tmp/fw_* 覆盖），不往仓库外落文件。
         scratch = os.path.join(ROOT, "tmp")
         os.makedirs(scratch, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="fw_", dir=scratch) as td:
             dst = os.path.join(td, "http_contract.go")
-            shutil.copyfile(rs_src, dst)
+            shutil.copyfile(go_src, dst)
             proc = subprocess.run(
                 [go, "build", "-o", os.path.join(td, "pkg.a"), dst],
                 capture_output=True, text=True, cwd=td,

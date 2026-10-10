@@ -101,13 +101,7 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.sse != nil {
-		h.sse.Publish("ban", map[string]any{
-			"ip":       req.IP,
-			"duration": duration,
-			"reason":   req.Reason,
-		})
-	}
+	h.publishBans()
 
 	WriteSuccess(w, map[string]any{
 		"ip":       req.IP,
@@ -122,7 +116,7 @@ func (h *APIHandlers) DeleteBan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := r.URL.Query().Get("ip")
+	ip := r.PathValue("ip")
 	if ip == "" {
 		WriteBadRequest(w, "ip parameter required")
 		return
@@ -147,11 +141,7 @@ func (h *APIHandlers) DeleteBan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.sse != nil {
-		h.sse.Publish("unban", map[string]any{
-			"ip": ip,
-		})
-	}
+	h.publishBans()
 
 	WriteSuccess(w, map[string]any{
 		"ip":     ip,
@@ -181,11 +171,7 @@ func (h *APIHandlers) UnbanAllTemporary(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	if h.sse != nil {
-		h.sse.Publish("unban_all_temporary", map[string]any{
-			"count": len(ips),
-		})
-	}
+	h.publishBans()
 
 	WriteSuccess(w, map[string]any{
 		"unbanned_count": len(ips),
@@ -266,12 +252,7 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.sse != nil {
-		h.sse.Publish("batch_ban", map[string]any{
-			"success": successCount,
-			"failed":  failCount,
-		})
-	}
+	h.publishBans()
 
 	WriteSuccess(w, map[string]any{
 		"success_count": successCount,
@@ -279,23 +260,14 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *APIHandlers) BanStats(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
-
-	stats := bans.GlobalCache().Stats()
-	WriteSuccess(w, stats)
-}
-
+// BanDetail 报单个 IP 的封禁详情与历史记录（GET /api/v1/bans/{ip}/detail）。
 func (h *APIHandlers) BanDetail(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
 		return
 	}
 
-	ip := r.URL.Query().Get("ip")
+	ip := r.PathValue("ip")
 	if ip == "" {
 		WriteBadRequest(w, "ip parameter required")
 		return

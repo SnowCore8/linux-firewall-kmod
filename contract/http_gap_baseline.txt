@@ -14,53 +14,16 @@ envelope-error-code # ErrorEnvelope 把 code 恒置为 -1，契约声明失败�
 envelope-error-data # ErrorEnvelope 未给 data 赋值——失败响应里 data 为空，契约声明失败时 data 必须存在且为 null
 envelope-key-order # 信封 Envelope 的 JSON key: 源码 ['code', 'message', 'data'] != 契约 ['code', 'data', 'message']（顺序即 encoding/json 的输出顺序）
 envelope-success-message # 成功信封的 message 是 'ok'，契约声明成功时为空串（`codes` 段 0 号写明「成功；message 为空串」）
-errmodel-body:AUTH_UNAUTHORIZED # errmodel AUTH_UNAUTHORIZED: 响应体 '401 Unauthorized' 未出现在 src/daemon/internal/http/auth.go（或任何 Go 源码）
 errmodel-framework-claim:FRAMEWORK_DEFAULT:400 # errmodel FRAMEWORK_DEFAULT: 契约把 400 记成「框架默认错误」，实际是 daemon 自己写出的（src/daemon/internal/http/envelope.go:39）——net/http 没有请求体/查询参数的自动校验，这个状态码不可能由框架产生
-errmodel-framework-claim:FRAMEWORK_DEFAULT:404 # errmodel FRAMEWORK_DEFAULT: 契约把 404 记成 ServeMux 自产（body `404 page not found`），但 daemon 注册了 "/" 兜底模式（src/daemon/internal/http/static.go:11），未匹配路径走的是它，body 不再是框架文本
 errmodel-framework-claim:FRAMEWORK_DEFAULT:415 # errmodel FRAMEWORK_DEFAULT: 契约声明 415 为框架默认错误，但 net/http 不会自动产生 415，Go 源码里也没有它的写点
 errmodel-framework-claim:FRAMEWORK_DEFAULT:422 # errmodel FRAMEWORK_DEFAULT: 契约声明 422 为框架默认错误，但 net/http 不会自动产生 422，Go 源码里也没有它的写点
-errmodel-plain-text:AUTH_UNAUTHORIZED:401 # errmodel AUTH_UNAUTHORIZED: 契约声明 [401] 的响应体是纯文本 '401 Unauthorized\n'，Go 源码里没有这段文本；就近的纯文本写点：src/daemon/internal/http/logs.go:83、src/daemon/internal/http/static.go:13
-errmodel-plain-text:STATIC_NOT_FOUND:404 # errmodel STATIC_NOT_FOUND: 契约声明 [404] 的响应体是纯文本 '404 Not Found\n'，Go 源码里没有这段文本；就近的纯文本写点：src/daemon/internal/http/logs.go:83、src/daemon/internal/http/static.go:13
-handler-naming # 契约声明的 handler 名（handle_*，共 56 个）在 src/daemon/internal/http 里逐字命中 0 个：Go 侧一律用方法名注册（如 <func 字面量>）。需要 owner 决定：契约改记 Go 符号，还是 Go 侧按 handle_* 命名
+errmodel-plain-text:AUTH_UNAUTHORIZED:401 # errmodel AUTH_UNAUTHORIZED: 契约声明 [401] 的响应体是纯文本 '401 Unauthorized\n'，Go 源码里没有这段文本；就近的纯文本写点：src/daemon/internal/http/server.go:123
+errmodel-plain-text:STATIC_NOT_FOUND:404 # errmodel STATIC_NOT_FOUND: 契约声明 [404] 的响应体是纯文本 '404 Not Found\n'，Go 源码里没有这段文本；就近的纯文本写点：src/daemon/internal/http/server.go:123
+handler-naming # 契约声明的 handler 名（handle_*，共 56 个）在 src/daemon/internal/http 里逐字命中 0 个：Go 侧一律用方法名注册（如 DeleteBan）。需要 owner 决定：契约改记 Go 符号，还是 Go 侧按 handle_* 命名
 header-missing:Cache-Control # header Cache-Control: Go 源码里没有该头的写点（没有 w.Header().Set/Add("Cache-Control", …)）——契约声明的安全头未实现（internal/http 里唯一的中间件是 src/daemon/internal/http/server.go:117）
 header-missing:Content-Security-Policy # header Content-Security-Policy: Go 源码里没有该头的写点（没有 w.Header().Set/Add("Content-Security-Policy", …)）——契约声明的安全头未实现（internal/http 里唯一的中间件是 src/daemon/internal/http/server.go:117）
 header-missing:X-Content-Type-Options # header X-Content-Type-Options: Go 源码里没有该头的写点（没有 w.Header().Set/Add("X-Content-Type-Options", …)）——契约声明的安全头未实现（internal/http 里唯一的中间件是 src/daemon/internal/http/server.go:117）
 header-missing:X-Frame-Options # header X-Frame-Options: Go 源码里没有该头的写点（没有 w.Header().Set/Add("X-Frame-Options", …)）——契约声明的安全头未实现（internal/http 里唯一的中间件是 src/daemon/internal/http/server.go:117）
-route-any-method:GET / # 路由 GET / 只以无方法前缀的 Handle 注册（src/daemon/internal/http/static.go，handler <func 字面量>）——任何动词都会进 handler，契约要的 405 因此不会由框架产生
-route-any-method:GET /api/v1/events # 路由 GET /api/v1/events 只以无方法前缀的 Handle 注册（src/daemon/cmd/firewall-daemon/main.go，handler sseBroker）——任何动词都会进 handler，契约要的 405 因此不会由框架产生
-route-any-method:GET /api/v1/stats/attack-predictions # 路由 GET /api/v1/stats/attack-predictions 只以无方法前缀的 Handle 注册（src/daemon/internal/http/routes.go，handler AttackPredictions）——任何动词都会进 handler，契约要的 405 因此不会由框架产生
-route-any-method:GET /api/v1/stats/ban-duration-recommendations # 路由 GET /api/v1/stats/ban-duration-recommendations 只以无方法前缀的 Handle 注册（src/daemon/internal/http/routes.go，handler BanDurationRecommendations）——任何动词都会进 handler，契约要的 405 因此不会由框架产生
-route-any-method:GET /api/v1/stats/collaborative-attacks # 路由 GET /api/v1/stats/collaborative-attacks 只以无方法前缀的 Handle 注册（src/daemon/internal/http/routes.go，handler CollaborativeAttacks）——任何动词都会进 handler，契约要的 405 因此不会由框架产生
-route-any-method:GET /api/v1/stats/network-distribution # 路由 GET /api/v1/stats/network-distribution 只以无方法前缀的 Handle 注册（src/daemon/internal/http/routes.go，handler NetworkDistribution）——任何动词都会进 handler，契约要的 405 因此不会由框架产生
-route-any-method:GET /api/v1/stats/periodic-attackers # 路由 GET /api/v1/stats/periodic-attackers 只以无方法前缀的 Handle 注册（src/daemon/internal/http/routes.go，handler PeriodicAttackers）——任何动词都会进 handler，契约要的 405 因此不会由框架产生
-route-any-method:GET /api/v1/stats/recidivism # 路由 GET /api/v1/stats/recidivism 只以无方法前缀的 Handle 注册（src/daemon/internal/http/routes.go，handler Recidivism）——任何动词都会进 handler，契约要的 405 因此不会由框架产生
-route-any-method:GET /api/v1/stats/reputation # 路由 GET /api/v1/stats/reputation 只以无方法前缀的 Handle 注册（src/daemon/internal/http/routes.go，handler Reputation）——任何动词都会进 handler，契约要的 405 因此不会由框架产生
-route-any-method:GET /api/v1/stats/sse-status # 路由 GET /api/v1/stats/sse-status 只以无方法前缀的 Handle 注册（src/daemon/internal/http/routes.go，handler SSEStatus）——任何动词都会进 handler，契约要的 405 因此不会由框架产生
-route-any-method:GET /api/v1/stats/threshold-recommendations # 路由 GET /api/v1/stats/threshold-recommendations 只以无方法前缀的 Handle 注册（src/daemon/internal/http/routes.go，handler ThresholdRecommendations）——任何动词都会进 handler，契约要的 405 因此不会由框架产生
-route-any-method:GET /metrics # 路由 GET /metrics 只以无方法前缀的 Handle 注册（src/daemon/cmd/firewall-daemon/main.go，handler metrics）——任何动词都会进 handler，契约要的 405 因此不会由框架产生
-route-any-method:GET /sw.js # 路由 GET /sw.js 只以无方法前缀的 Handle 注册（src/daemon/internal/http/static.go，handler <func 字面量>）——任何动词都会进 handler，契约要的 405 因此不会由框架产生
-route-auth-group:GET /api/v1/bans # 路由 GET /api/v1/bans: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler ListBans）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /api/v1/config # 路由 GET /api/v1/config: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler GetConfig）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /api/v1/events # 路由 GET /api/v1/events: 契约 auth=required 但源码落在 none 组（src/daemon/cmd/firewall-daemon/main.go，handler sseBroker）
-route-auth-group:GET /api/v1/jails # 路由 GET /api/v1/jails: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler ListJails）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /api/v1/logs # 路由 GET /api/v1/logs: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler GetLogs）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /api/v1/logs/stream # 路由 GET /api/v1/logs/stream: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler StreamLogs）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /api/v1/rates/history # 路由 GET /api/v1/rates/history: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler GetRatesHistory）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /api/v1/stats/attack-predictions # 路由 GET /api/v1/stats/attack-predictions: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler AttackPredictions）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /api/v1/stats/ban-duration-recommendations # 路由 GET /api/v1/stats/ban-duration-recommendations: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler BanDurationRecommendations）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /api/v1/stats/collaborative-attacks # 路由 GET /api/v1/stats/collaborative-attacks: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler CollaborativeAttacks）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /api/v1/stats/network-distribution # 路由 GET /api/v1/stats/network-distribution: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler NetworkDistribution）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /api/v1/stats/periodic-attackers # 路由 GET /api/v1/stats/periodic-attackers: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler PeriodicAttackers）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /api/v1/stats/recidivism # 路由 GET /api/v1/stats/recidivism: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler Recidivism）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /api/v1/stats/reputation # 路由 GET /api/v1/stats/reputation: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler Reputation）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /api/v1/stats/sse-status # 路由 GET /api/v1/stats/sse-status: 契约 auth=required 但源码落在 none 组（src/daemon/internal/http/routes.go，handler SSEStatus）
-route-auth-group:GET /api/v1/stats/threshold-recommendations # 路由 GET /api/v1/stats/threshold-recommendations: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler ThresholdRecommendations）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /api/v1/whitelist # 路由 GET /api/v1/whitelist: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler ListWhitelist）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /api/v1/whitelist/recommendations # 路由 GET /api/v1/whitelist/recommendations: 契约 auth=required 但源码落在 optional 组（src/daemon/internal/http/routes.go，handler GetWhitelistRecommendations）；Go 侧用 OptionalAuth 包装：未带凭据也放行，不是契约要的 401
-route-auth-group:GET /metrics # 路由 GET /metrics: 契约 auth=required 但源码落在 none 组（src/daemon/cmd/firewall-daemon/main.go，handler metrics）
-route-missing:DELETE /api/v1/bans/:ip # 路由 DELETE /api/v1/bans/:ip 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_delete_ban）
-route-missing:DELETE /api/v1/whitelist/:cidr # 路由 DELETE /api/v1/whitelist/:cidr 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_delete_whitelist）
-route-missing:GET /api/v1/bans/:ip/detail # 路由 GET /api/v1/bans/:ip/detail 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_ban_detail）
 route-missing:GET /api/v1/rates/current # 路由 GET /api/v1/rates/current 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_rates_current）
 route-missing:GET /api/v1/rates/windows # 路由 GET /api/v1/rates/windows 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_rates_windows）
 route-missing:GET /api/v1/stats # 路由 GET /api/v1/stats 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_stats）
@@ -76,42 +39,6 @@ route-missing:GET /api/v1/stats/port-scanners # 路由 GET /api/v1/stats/port-sc
 route-missing:GET /api/v1/stats/service-probes # 路由 GET /api/v1/stats/service-probes 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_service_probes）
 route-missing:GET /api/v1/stats/ttl-distribution # 路由 GET /api/v1/stats/ttl-distribution 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_ttl_distribution）
 route-missing:GET /api/v1/stats/udp-ports # 路由 GET /api/v1/stats/udp-ports 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_udp_ports）
-route-missing:GET /bans # 路由 GET /bans 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_spa_bans）
-route-missing:GET /dashboard # 路由 GET /dashboard 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_dashboard）
-route-missing:GET /ddos # 路由 GET /ddos 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_spa_ddos）
-route-missing:GET /globe # 路由 GET /globe 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_spa_globe）
-route-missing:GET /health # 路由 GET /health 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_health）
-route-missing:GET /healthz # 路由 GET /healthz 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_health）
-route-missing:GET /jails # 路由 GET /jails 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_spa_jails）
-route-missing:GET /logs # 路由 GET /logs 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_spa_logs）
-route-missing:GET /more # 路由 GET /more 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_spa_more）
-route-missing:GET /settings # 路由 GET /settings 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_spa_settings）
-route-missing:GET /static/*path # 路由 GET /static/*path 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_static）
-route-missing:GET /whitelist # 路由 GET /whitelist 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_spa_whitelist）
-route-missing:PUT /api/v1/jails/:name # 路由 PUT /api/v1/jails/:name 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_update_jail）
-route-undeclared:ANY /api/v1/health # daemon 中存在契约未声明的路由 ANY /api/v1/health（src/daemon/internal/http/routes.go，handler Health，auth 组 none）
-route-undeclared:ANY /api/v1/stats/ban-events # daemon 中存在契约未声明的路由 ANY /api/v1/stats/ban-events（src/daemon/internal/http/routes.go，handler BanEvents，auth 组 optional）
-route-undeclared:ANY /api/v1/stats/summary # daemon 中存在契约未声明的路由 ANY /api/v1/stats/summary（src/daemon/internal/http/routes.go，handler StatsSummary，auth 组 none）
-route-undeclared:ANY /manifest.json # daemon 中存在契约未声明的路由 ANY /manifest.json（src/daemon/internal/http/static.go，handler <func 字面量>，auth 组 none）
-route-undeclared:ANY /static/ # daemon 中存在契约未声明的路由 ANY /static/（src/daemon/internal/http/static.go，handler fileServer，auth 组 none）
-route-undeclared:DELETE /api/v1/bans # daemon 中存在契约未声明的路由 DELETE /api/v1/bans（src/daemon/internal/http/routes.go，handler DeleteBan，auth 组 required）
-route-undeclared:DELETE /api/v1/whitelist # daemon 中存在契约未声明的路由 DELETE /api/v1/whitelist（src/daemon/internal/http/routes.go，handler RemoveWhitelist，auth 组 required）
-route-undeclared:GET /api/v1/bans/detail # daemon 中存在契约未声明的路由 GET /api/v1/bans/detail（src/daemon/internal/http/routes.go，handler BanDetail，auth 组 optional）
-route-undeclared:GET /api/v1/bans/stats # daemon 中存在契约未声明的路由 GET /api/v1/bans/stats（src/daemon/internal/http/routes.go，handler BanStats，auth 组 optional）
-route-undeclared:GET /api/v1/jail # daemon 中存在契约未声明的路由 GET /api/v1/jail（src/daemon/internal/http/routes.go，handler GetJail，auth 组 optional）
-route-undeclared:GET /api/v1/jail/stats # daemon 中存在契约未声明的路由 GET /api/v1/jail/stats（src/daemon/internal/http/routes.go，handler JailStats，auth 组 optional）
-route-undeclared:GET /api/v1/whitelist/stats # daemon 中存在契约未声明的路由 GET /api/v1/whitelist/stats（src/daemon/internal/http/routes.go，handler WhitelistStats，auth 组 optional）
-route-undeclared:PUT /api/v1/jails/ # daemon 中存在契约未声明的路由 PUT /api/v1/jails/（src/daemon/internal/http/routes.go，handler UpdateJail，auth 组 required）
-sse-cap:/api/v1/events # SSE /api/v1/events: 契约上限 10，但 Go 源码里没有常量 SSEMaxConnectionsApiV1Events / MAX_SSE_CONNECTIONS（两条流共用一个连接上限时，契约声明的 10 / 5 各自独立不成立）
-sse-cap:/api/v1/logs/stream # SSE /api/v1/logs/stream: 契约上限 5，但 Go 源码里没有常量 SSEMaxConnectionsApiV1LogsStream / MAX_LOG_SSE_CONNECTIONS（两条流共用一个连接上限时，契约声明的 10 / 5 各自独立不成立）
-sse-publish-point:/api/v1/events:bans # SSE /api/v1/events: 事件 'bans' 在 Go 源码里没有发布点（既无 .Publish("bans", …) 也无 `event: bans` 帧）
-sse-publish-point:/api/v1/events:connected # SSE /api/v1/events: 事件 'connected' 在 Go 源码里没有发布点（既无 .Publish("connected", …) 也无 `event: connected` 帧）
-sse-publish-point:/api/v1/events:jails # SSE /api/v1/events: 事件 'jails' 在 Go 源码里没有发布点（既无 .Publish("jails", …) 也无 `event: jails` 帧）
-sse-publish-point:/api/v1/events:rates # SSE /api/v1/events: 事件 'rates' 在 Go 源码里没有发布点（既无 .Publish("rates", …) 也无 `event: rates` 帧）
-sse-publish-point:/api/v1/events:stats # SSE /api/v1/events: 事件 'stats' 在 Go 源码里没有发布点（既无 .Publish("stats", …) 也无 `event: stats` 帧）
-sse-publish-point:/api/v1/events:whitelist # SSE /api/v1/events: 事件 'whitelist' 在 Go 源码里没有发布点（既无 .Publish("whitelist", …) 也无 `event: whitelist` 帧）
-sse-publish-point:/api/v1/logs/stream:connected # SSE /api/v1/logs/stream: 事件 'connected' 在 Go 源码里没有发布点（既无 .Publish("connected", …) 也无 `event: connected` 帧）
-sse-publish-point:/api/v1/logs/stream:error # SSE /api/v1/logs/stream: 事件 'error' 在 Go 源码里没有发布点（既无 .Publish("error", …) 也无 `event: error` 帧）
 type-contract-field:AttackPrediction:ban_count # 类型 AttackPrediction（src/daemon/internal/analysis/prediction.go）: 契约字段 'ban_count' 不是该 struct 的 json key（实际 ['ip', 'jail_name', 'next_attack_at', 'confidence_score', 'urgency', 'event_count', 'median_period_seconds']）
 type-contract-field:AttackPrediction:confidence # 类型 AttackPrediction（src/daemon/internal/analysis/prediction.go）: 契约字段 'confidence' 不是该 struct 的 json key（实际 ['ip', 'jail_name', 'next_attack_at', 'confidence_score', 'urgency', 'event_count', 'median_period_seconds']）
 type-contract-field:AttackPrediction:last_ban_at # 类型 AttackPrediction（src/daemon/internal/analysis/prediction.go）: 契约字段 'last_ban_at' 不是该 struct 的 json key（实际 ['ip', 'jail_name', 'next_attack_at', 'confidence_score', 'urgency', 'event_count', 'median_period_seconds']）
@@ -162,7 +89,7 @@ type-go-only-field:ThresholdRecommendation:explanation # 类型 ThresholdRecomme
 type-go-only-field:ThresholdRecommendation:recommended_value # 类型 ThresholdRecommendation（src/daemon/internal/analysis/recommendations.go）: struct 字段 'recommended_value' 未在契约中声明
 type-go-only-field:WhitelistRecommendation:ban_count # 类型 WhitelistRecommendation（src/daemon/internal/http/recommendations.go）: struct 字段 'ban_count' 未在契约中声明
 type-go-only-field:WhitelistRecommendation:unique_ips # 类型 WhitelistRecommendation（src/daemon/internal/http/recommendations.go）: struct 字段 'unique_ips' 未在契约中声明
-type-unmapped # 57/63 个载荷类型在 Go 源码里没有同名 struct（本门禁不做契约名↔Go 名的映射推断）：AnomalyResponse, ApiResponse, AttackGeoResponse, AttackPredictionSummary, BanDetailResponse, BanDurationHistogramResponse, BanDurationRecommendationResponse, BanEffectivenessResponse, BanLevelEffectiveness, BanOperationResponse, BanResponse, BatchOperationResponse, ChartData, CreateBanRequest, CreateWhitelistRequest, DimensionScore, FeatureValue, GeoPoint, HourlyBucket, HourlyHeatmap, IcmpTypeDistributionResponse, IcmpTypeEntry, IpAnomalyEntry, IpFragmentStatsResponse, JailAttackTrend, JailResponse, LogEntry, LogPageResponse, LogQueryParams, NetworkBlock, PacketSizeDistributionResponse, PaginatedResponse, PaginationParams, PortScanResponse, PortScannerEntry, RateHistoryResponse, RateResponse, RateWindowSnapshot, RecidivismResponse, RecidivistEntry, ReputationEntryResponse, RuntimeSnapshot, ServiceProbeEntry, ServiceProbeResponse, SseStatusResponse, SseStreamStatus, StatsResponse, ThreatLevel, ThresholdRecommendationResponse, TtlDistributionResponse, UdpPortDistributionResponse, UdpPortEntry, UpdateConfigRequest, UpdateJailRequest, WebuiConfigResponse, WhitelistEntryResponse, WhitelistOperationResponse。其中多数响应在 internal/http 里是 map[string]any 字面量（如 bans.go:112），字段没有任何具名类型承载，跨层字段核对在这一层失去锚点
+type-unmapped # 56/63 个载荷类型在 Go 源码里没有同名 struct（本门禁不做契约名↔Go 名的映射推断）：AnomalyResponse, ApiResponse, AttackGeoResponse, AttackPredictionSummary, BanDetailResponse, BanDurationHistogramResponse, BanDurationRecommendationResponse, BanEffectivenessResponse, BanLevelEffectiveness, BanOperationResponse, BanResponse, BatchOperationResponse, ChartData, CreateBanRequest, CreateWhitelistRequest, DimensionScore, FeatureValue, GeoPoint, HourlyBucket, HourlyHeatmap, IcmpTypeDistributionResponse, IcmpTypeEntry, IpAnomalyEntry, IpFragmentStatsResponse, JailAttackTrend, JailResponse, LogEntry, LogPageResponse, LogQueryParams, NetworkBlock, PacketSizeDistributionResponse, PaginatedResponse, PaginationParams, PortScanResponse, PortScannerEntry, RateHistoryResponse, RateResponse, RateWindowSnapshot, RecidivismResponse, RecidivistEntry, ReputationEntryResponse, ServiceProbeEntry, ServiceProbeResponse, SseStatusResponse, SseStreamStatus, StatsResponse, ThreatLevel, ThresholdRecommendationResponse, TtlDistributionResponse, UdpPortDistributionResponse, UdpPortEntry, UpdateConfigRequest, UpdateJailRequest, WebuiConfigResponse, WhitelistEntryResponse, WhitelistOperationResponse。其中多数响应在 internal/http 里是 map[string]any 字面量（如 bans.go:112），字段没有任何具名类型承载，跨层字段核对在这一层失去锚点
 type-unreferenced:AttackPrediction # 类型 AttackPrediction（src/daemon/internal/analysis/prediction.go）: internal/http 里没有它的引用——handler 返回的不是这个 struct
 type-unreferenced:BanDurationRecommendation # 类型 BanDurationRecommendation（src/daemon/internal/analysis/recommendations.go）: internal/http 里没有它的引用——handler 返回的不是这个 struct
 type-unreferenced:CollaborativeAttack # 类型 CollaborativeAttack（src/daemon/internal/analysis/detection.go）: internal/http 里没有它的引用——handler 返回的不是这个 struct

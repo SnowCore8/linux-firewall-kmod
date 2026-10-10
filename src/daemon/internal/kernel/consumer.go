@@ -50,11 +50,19 @@ const (
 )
 
 // SSE 域名取值，与契约 /api/v1/events 声明的事件名一致。
+//
+// 这里刻意没有 jails：契约把 jails 列为订阅域，但本泵没有任何写入点会改 jail 状态
+// （启用/禁用走 HTTP 的 JailController，配置变更走反向指令），凭空加一个域名只会造出
+// 一个永远不变的空域。缺陷 HTTP_SSE_JAILS_NO_PUBLISHER 因此保持 open。
 const (
 	// DomainBans 是封禁表变更通知。
 	DomainBans = "bans"
 	// DomainWhitelist 是白名单表变更通知。
 	DomainWhitelist = "whitelist"
+	// DomainStats 是内核统计快照。
+	DomainStats = "stats"
+	// DomainRates 是速率表快照。
+	DomainRates = "rates"
 )
 
 // Sampler 是泵需要的客户端能力。
@@ -252,12 +260,14 @@ func (p *EventPump) register(why string) {
 	now := time.Now()
 	if err != nil {
 		p.store.SetLinkError(fmt.Sprintf("注册失败（%s）：%v", why, err), now)
+		p.store.MarkLeaseAttemptFailed()
 		p.logger.Warn("内核守护进程注册失败", "reason", why, "error", err)
 		p.syncRouterCounters()
 		return
 	}
 	if !ack.Accepted {
 		p.store.SetLinkError("注册被内核拒绝：已有活跃守护进程", now)
+		p.store.SetLeaseRefused()
 		p.logger.Error("内核拒绝本进程注册为守护进程，指令将被丢弃", "reason", why)
 		p.syncRouterCounters()
 		return
@@ -482,7 +492,7 @@ func (p *EventPump) sample() {
 		p.logger.Debug("统计采样失败", "error", err)
 	} else if !p.haveStats || stats != p.lastStats {
 		p.store.SetStats(stats, now)
-		p.publishDomain("stats", "统计更新")
+		p.publishDomain(DomainStats, "统计更新")
 		p.lastStats, p.haveStats = stats, true
 	} else {
 		p.store.SetStats(stats, now)
@@ -503,7 +513,7 @@ func (p *EventPump) sample() {
 	} else {
 		p.store.SetRates(Rates(rates), now)
 		if !p.haveRates || rates.GlobalPPS != p.lastRatesPPS || rates.GlobalBPS != p.lastRatesBPS {
-			p.publishDomain("rates", "速率更新")
+			p.publishDomain(DomainRates, "速率更新")
 			p.lastRatesPPS, p.lastRatesBPS, p.haveRates = rates.GlobalPPS, rates.GlobalBPS, true
 		}
 	}
@@ -594,20 +604,31 @@ func (p *EventPump) reconcile() {
 
 // publishDomain 推送一条域通知。
 //
-// 载荷取自镜像本身，与同域的 REST 读数同源：两条路径形状一致，读侧不需要区分它拿到的
-// 是推送还是查询。（两者的字段名要到 HTTP 层按契约收敛，见修复计划 P4/P5。）
+// 每个域的载荷来自**它自己**的数据源：stats 读快照的统计、rates 读快照的速率表、bans 读
+// 封禁镜像、whitelist 读白名单镜像。此前 default 分支把 bans 的镜像发给所有未知的域，于是
+// `/api/v1/events` 的 stats 与 rates 两帧带的是封禁列表——前端按 StatsResponse 解析，
+// 得到的是形状完全不同的对象，仪表盘上的读数与 REST 悄悄分叉。
+//
+// 域名在发布点是**逐字面量**：契约声明的每个事件名都要在 Go 侧有一个字面发布点
+// （verify_http.py 按 `.Publish("<域名>", …)` 找），把名字塞进变量等于宣布它没有生产者。
+// 载荷与同域 REST 同源，形状收敛（内核字段名 → 契约 JSON key）归 HTTP 层，见计划 P5。
 func (p *EventPump) publishDomain(domain, why string) {
 	if p.publish == nil {
 		return
 	}
-	var data any
 	switch domain {
+	case DomainBans:
+		p.publish.Publish("bans", p.cache.All())
 	case DomainWhitelist:
-		data = p.whitelist.List()
+		p.publish.Publish("whitelist", p.whitelist.List())
+	case DomainStats:
+		p.publish.Publish("stats", p.store.Snapshot().Stats)
+	case DomainRates:
+		p.publish.Publish("rates", p.store.Snapshot().Rates.Entries)
 	default:
-		data = p.cache.All()
+		p.logger.Debug("未知域，不推送", "domain", domain, "reason", why)
+		return
 	}
-	p.publish.Publish(domain, data)
 	p.logger.Debug("推送域通知", "domain", domain, "reason", why)
 }
 

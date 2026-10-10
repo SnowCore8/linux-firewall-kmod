@@ -4,7 +4,9 @@ import (
 	"net/http"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/telemetry"
 )
 
 // JailController 是 jail 启用/禁用的写入端接口。
@@ -22,6 +24,7 @@ type APIConfig struct {
 	Server    *Server
 	DB        *persist.DB
 	SSE       *SSEBroker
+	LogStream *SSEStream
 	Metrics   *Metrics
 	KernelBan KernelBan
 
@@ -37,65 +40,119 @@ type APIConfig struct {
 	JailController JailController
 
 	// 日志
-	LogFilePath    func() string
-	LogBroadcaster *SSEBroker
+	LogFilePath func() string
+
+	// 探针读数来源（GET /health 与 /healthz）
+	GetKernelSnapshot func() telemetry.Snapshot
+	KmodPresent       func() bool
 }
 
 func (s *Server) RegisterRoutes(api *APIHandlers) {
-	// 只读端点：可选认证
-	s.HandleFunc("/api/v1/health", api.Health)
-	s.HandleFunc("/api/v1/stats/summary", api.StatsSummary)
-	s.HandleFunc("/api/v1/stats/sse-status", api.SSEStatus)
-	s.HandleFunc("GET /api/v1/bans", OptionalAuth(api.username, api.password, api.ListBans))
-	s.HandleFunc("GET /api/v1/bans/stats", OptionalAuth(api.username, api.password, api.BanStats))
-	s.HandleFunc("GET /api/v1/bans/detail", OptionalAuth(api.username, api.password, api.BanDetail))
-	s.HandleFunc("GET /api/v1/whitelist", OptionalAuth(api.username, api.password, api.ListWhitelist))
-	s.HandleFunc("GET /api/v1/whitelist/stats", OptionalAuth(api.username, api.password, api.WhitelistStats))
-	s.HandleFunc("GET /api/v1/jails", OptionalAuth(api.username, api.password, api.ListJails))
-	s.HandleFunc("GET /api/v1/jail", OptionalAuth(api.username, api.password, api.GetJail))
-	s.HandleFunc("GET /api/v1/jail/stats", OptionalAuth(api.username, api.password, api.JailStats))
+	// ---- 无认证：就绪探针 -----------------------------------------------------
+	//
+	// 两条路由同一个 handler：契约让 /healthz 成为 /health 的别名，供 k8s/负载均衡用。
+	s.HandleFunc(httpcontract.RouteGetHealth, api.Health)
+	s.HandleFunc(httpcontract.RouteGetHealthz, api.Health)
 
-	// 状态修改端点：强制认证
-	s.HandleFunc("POST /api/v1/bans", RequireAuth(api.username, api.password, api.CreateBan))
-	s.HandleFunc("DELETE /api/v1/bans", RequireAuth(api.username, api.password, api.DeleteBan))
-	s.HandleFunc("POST /api/v1/bans/unban-temporary", RequireAuth(api.username, api.password, api.UnbanAllTemporary))
-	s.HandleFunc("POST /api/v1/bans/batch", RequireAuth(api.username, api.password, api.BatchBan))
-	s.HandleFunc("POST /api/v1/whitelist", RequireAuth(api.username, api.password, api.AddWhitelist))
-	s.HandleFunc("DELETE /api/v1/whitelist", RequireAuth(api.username, api.password, api.RemoveWhitelist))
+	// ---- 需认证：指标与 SSE ---------------------------------------------------
+	//
+	// /metrics 也在认证组内（契约把它和 REST 放在同一组）：它输出的计数器名与 jail 名
+	// 本身就是拓扑信息，未配置的匿名抓取不该拿到。
+	//
+	// 注册一律写成 `httpcontract.Route*` 常量 + RequireAuth 包裹：
+	//   - 注册串本身是核对锚点，逐字面量/常量之外的写法（例如遍历 Routes 表用 r.Pattern）
+	//     在 verify_http.py 的扫描器眼里等于「一条路由都没注册」；
+	//   - 带着方法前缀的模式让未声明的动词由 ServeMux 直接回 405，这正是契约
+	//     errmodel FRAMEWORK_DEFAULT 声明的形状——handler 里不需要再自查 r.Method。
+	if api.metrics != nil {
+		s.HandleFunc(httpcontract.RouteGetMetrics,
+			RequireAuth(api.username, api.password, api.metrics.ServeHTTP))
+	}
+	if api.sse != nil {
+		s.HandleFunc(httpcontract.RouteGetApiV1Events,
+			RequireAuth(api.username, api.password, api.sse.ServeHTTP))
+	}
 
-	// 统计端点：可选认证
-	s.HandleFunc("/api/v1/stats/ban-events", OptionalAuth(api.username, api.password, api.BanEvents))
-	s.HandleFunc("/api/v1/stats/recidivism", OptionalAuth(api.username, api.password, api.Recidivism))
-	s.HandleFunc("/api/v1/stats/reputation", OptionalAuth(api.username, api.password, api.Reputation))
-	s.HandleFunc("/api/v1/stats/periodic-attackers", OptionalAuth(api.username, api.password, api.PeriodicAttackers))
-	s.HandleFunc("/api/v1/stats/collaborative-attacks", OptionalAuth(api.username, api.password, api.CollaborativeAttacks))
-	s.HandleFunc("/api/v1/stats/network-distribution", OptionalAuth(api.username, api.password, api.NetworkDistribution))
-	s.HandleFunc("/api/v1/stats/attack-predictions", OptionalAuth(api.username, api.password, api.AttackPredictions))
-	s.HandleFunc("/api/v1/stats/ban-duration-recommendations", OptionalAuth(api.username, api.password, api.BanDurationRecommendations))
-	s.HandleFunc("/api/v1/stats/threshold-recommendations", OptionalAuth(api.username, api.password, api.ThresholdRecommendations))
+	// ---- 需认证：封禁管理 -----------------------------------------------------
+	s.HandleFunc(httpcontract.RouteGetApiV1Bans,
+		RequireAuth(api.username, api.password, api.ListBans))
+	s.HandleFunc(httpcontract.RoutePostApiV1Bans,
+		RequireAuth(api.username, api.password, api.CreateBan))
+	s.HandleFunc(httpcontract.RouteDeleteApiV1BansIp,
+		RequireAuth(api.username, api.password, api.DeleteBan))
+	s.HandleFunc(httpcontract.RouteGetApiV1BansIpDetail,
+		RequireAuth(api.username, api.password, api.BanDetail))
+	s.HandleFunc(httpcontract.RoutePostApiV1BansUnbanTemporary,
+		RequireAuth(api.username, api.password, api.UnbanAllTemporary))
+	s.HandleFunc(httpcontract.RoutePostApiV1BansBatch,
+		RequireAuth(api.username, api.password, api.BatchBan))
 
-	// 配置 API
-	s.HandleFunc("GET /api/v1/config", OptionalAuth(api.username, api.password, api.GetConfig))
-	s.HandleFunc("PUT /api/v1/config", RequireAuth(api.username, api.password, api.UpdateConfig))
+	// ---- 需认证：Jail ---------------------------------------------------------
+	s.HandleFunc(httpcontract.RouteGetApiV1Jails,
+		RequireAuth(api.username, api.password, api.ListJails))
+	s.HandleFunc(httpcontract.RoutePutApiV1JailsName,
+		RequireAuth(api.username, api.password, api.UpdateJail))
 
-	// 日志 API
-	s.HandleFunc("GET /api/v1/logs", OptionalAuth(api.username, api.password, api.GetLogs))
-	s.HandleFunc("GET /api/v1/logs/stream", OptionalAuth(api.username, api.password, api.StreamLogs))
+	// ---- 需认证：配置 ---------------------------------------------------------
+	s.HandleFunc(httpcontract.RouteGetApiV1Config,
+		RequireAuth(api.username, api.password, api.GetConfig))
+	s.HandleFunc(httpcontract.RoutePutApiV1Config,
+		RequireAuth(api.username, api.password, api.UpdateConfig))
 
-	// Jail 启用/禁用
-	s.HandleFunc("PUT /api/v1/jails/", RequireAuth(api.username, api.password, api.UpdateJail))
+	// ---- 需认证：白名单 -------------------------------------------------------
+	s.HandleFunc(httpcontract.RouteGetApiV1Whitelist,
+		RequireAuth(api.username, api.password, api.ListWhitelist))
+	s.HandleFunc(httpcontract.RoutePostApiV1Whitelist,
+		RequireAuth(api.username, api.password, api.AddWhitelist))
+	s.HandleFunc(httpcontract.RouteDeleteApiV1WhitelistCidr,
+		RequireAuth(api.username, api.password, api.RemoveWhitelist))
+	s.HandleFunc(httpcontract.RouteGetApiV1WhitelistRecommendations,
+		RequireAuth(api.username, api.password, api.GetWhitelistRecommendations))
 
-	// 白名单推荐
-	s.HandleFunc("GET /api/v1/whitelist/recommendations", OptionalAuth(api.username, api.password, api.GetWhitelistRecommendations))
+	// ---- 需认证：速率 ---------------------------------------------------------
+	s.HandleFunc(httpcontract.RouteGetApiV1RatesHistory,
+		RequireAuth(api.username, api.password, api.GetRatesHistory))
 
-	// DDoS 速率历史
-	s.HandleFunc("GET /api/v1/rates/history", OptionalAuth(api.username, api.password, api.GetRatesHistory))
+	// ---- 需认证：统计子路由 ---------------------------------------------------
+	//
+	// 契约还声明了 /api/v1/stats 与 rates/current、rates/windows、stats/{heatmap,
+	// ban-effectiveness,udp-ports,icmp-types,ban-duration-histogram,packet-sizes,
+	// ttl-distribution,ip-fragments,port-scanners,service-probes,anomalies,attack-geo}；
+	// 它们要接真实数据才有意义，尚未注册，逐条记在 contract/http_gap_baseline.txt 里
+	// （见计划 P5）。空壳注册会让面板拿到一份看起来正常、实际恒零的载荷。
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsRecidivism,
+		RequireAuth(api.username, api.password, api.Recidivism))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsReputation,
+		RequireAuth(api.username, api.password, api.Reputation))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsPeriodicAttackers,
+		RequireAuth(api.username, api.password, api.PeriodicAttackers))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsCollaborativeAttacks,
+		RequireAuth(api.username, api.password, api.CollaborativeAttacks))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsNetworkDistribution,
+		RequireAuth(api.username, api.password, api.NetworkDistribution))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsAttackPredictions,
+		RequireAuth(api.username, api.password, api.AttackPredictions))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsBanDurationRecommendations,
+		RequireAuth(api.username, api.password, api.BanDurationRecommendations))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsThresholdRecommendations,
+		RequireAuth(api.username, api.password, api.ThresholdRecommendations))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsSseStatus,
+		RequireAuth(api.username, api.password, api.SSEStatus))
+
+	// ---- 需认证：日志 ---------------------------------------------------------
+	s.HandleFunc(httpcontract.RouteGetApiV1Logs,
+		RequireAuth(api.username, api.password, api.GetLogs))
+	if api.logStream != nil {
+		s.HandleFunc(httpcontract.RouteGetApiV1LogsStream,
+			RequireAuth(api.username, api.password, api.StreamLogs))
+	}
 }
 
 type APIHandlers struct {
 	server    *Server
 	db        *persist.DB
 	sse       *SSEBroker
+	logStream *SSEStream
 	metrics   *Metrics
 	kernelBan KernelBan
 
@@ -111,56 +168,68 @@ type APIHandlers struct {
 	jailController JailController
 
 	// 日志
-	logFilePath    func() string
-	logBroadcaster *SSEBroker
+	logFilePath func() string
+
+	// 探针读数来源
+	getKernelSnapshot func() telemetry.Snapshot
+	kmodPresent       func() bool
 }
 
 func NewAPIHandlers(cfg APIConfig) *APIHandlers {
 	return &APIHandlers{
-		server:           cfg.Server,
-		db:               cfg.DB,
-		sse:              cfg.SSE,
-		metrics:          cfg.Metrics,
-		kernelBan:        cfg.KernelBan,
-		username:         cfg.Username,
-		password:         cfg.Password,
-		getCurrentConfig: cfg.GetCurrentConfig,
-		getConfigPath:    cfg.GetConfigPath,
-		jailController:   cfg.JailController,
-		logFilePath:      cfg.LogFilePath,
-		logBroadcaster:   cfg.LogBroadcaster,
+		server:            cfg.Server,
+		db:                cfg.DB,
+		sse:               cfg.SSE,
+		logStream:         cfg.LogStream,
+		metrics:           cfg.Metrics,
+		kernelBan:         cfg.KernelBan,
+		username:          cfg.Username,
+		password:          cfg.Password,
+		getCurrentConfig:  cfg.GetCurrentConfig,
+		getConfigPath:     cfg.GetConfigPath,
+		jailController:    cfg.JailController,
+		logFilePath:       cfg.LogFilePath,
+		getKernelSnapshot: cfg.GetKernelSnapshot,
+		kmodPresent:       cfg.KmodPresent,
 	}
 }
 
-func (h *APIHandlers) Health(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
-	WriteSuccess(w, map[string]any{
-		"status": "healthy",
-	})
-}
-
-func (h *APIHandlers) StatsSummary(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
-	WriteSuccess(w, map[string]any{
-		"active_connections": h.server.ActiveConnections(),
-		"max_connections":    h.server.MaxConnections(),
-	})
-}
-
+// SSEStatus 报两条 SSE 流各自的连接诊断（GET /api/v1/stats/sse-status）。
+//
+// 必须**按流**报：契约给 events 定 10、给 logs 定 5，前端拿 `events.limit_reached` 决定
+// 要不要停止重连。用 HTTP 服务器级的单一 active/max 推断，日志流被拒时前端会判成「还没
+// 满」，于是把 503 当网络故障无限重连。两条流的读数各自来自它的 SSEStream 名额账本，
+// 不在这里复算上限。
 func (h *APIHandlers) SSEStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
-		return
-	}
 	WriteSuccess(w, map[string]any{
-		"active_connections": h.server.ActiveConnections(),
-		"max_connections":    h.server.MaxConnections(),
-		"at_limit":           h.server.ActiveConnections() >= h.server.MaxConnections(),
+		"events": streamStatus(h.eventsStream()),
+		"logs":   streamStatus(h.logStream),
 	})
+}
+
+// eventsStream 返回事件流的名额账本；broker 缺席时为 nil。
+func (h *APIHandlers) eventsStream() *SSEStream {
+	if h.sse == nil {
+		return nil
+	}
+	return h.sse.SSEStream
+}
+
+// streamStatus 把一条流的可观测语义摊成契约载荷 SseStreamStatus 的三个 key。
+//
+// 流为 nil 表示这条流没接线（未配置凭据或组合根没建）：报 current=0、max=0，
+// `limit_reached` 因此为 false，前端照常尝试连接并由 503/失败自己收敛。
+func streamStatus(s *SSEStream) map[string]any {
+	if s == nil {
+		return map[string]any{
+			"current_connections": 0,
+			"max_connections":     0,
+			"limit_reached":       false,
+		}
+	}
+	return map[string]any{
+		"current_connections": s.Active(),
+		"max_connections":     s.Max(),
+		"limit_reached":       s.AtLimit(),
+	}
 }

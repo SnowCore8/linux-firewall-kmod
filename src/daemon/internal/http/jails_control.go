@@ -3,7 +3,6 @@ package http
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 )
 
 // UpdateJail 启用或禁用指定 jail。
@@ -24,8 +23,8 @@ func (h *APIHandlers) UpdateJail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 从路径提取 jail 名称：/api/v1/jails/{name}
-	name := strings.TrimPrefix(r.URL.Path, "/api/v1/jails/")
+	// jail 名来自路径段：/api/v1/jails/{name}
+	name := r.PathValue("name")
 	if name == "" {
 		WriteBadRequest(w, "jail name required")
 		return
@@ -41,12 +40,7 @@ func (h *APIHandlers) UpdateJail(w http.ResponseWriter, r *http.Request) {
 
 	h.jailController.SetEnabled(name, req.Enabled)
 
-	if h.sse != nil {
-		h.sse.Publish("jail_updated", map[string]any{
-			"name":    name,
-			"enabled": req.Enabled,
-		})
-	}
+	h.publishJails()
 
 	h.server.logger.Info("Jail 启用状态已更新", "jail", name, "enabled", req.Enabled)
 	WriteSuccess(w, map[string]any{
