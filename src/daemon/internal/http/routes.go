@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
@@ -49,6 +50,17 @@ type APIConfig struct {
 	// 探针读数来源（GET /health 与 /healthz）
 	GetKernelSnapshot func() telemetry.Snapshot
 	KmodPresent       func() bool
+
+	// StartedAt 是进程开始装配的时刻（GET /stats 的 uptime_seconds 起点）。
+	StartedAt time.Time
+
+	// GetRateSamples 取回速率历史的最近 n 个采样点，供 /api/v1/rates/history 与异常
+	// 检测的分位基线共用。来源是事件泵每成功查询一次速率表落的一个点。
+	GetRateSamples func(n int) []telemetry.RateSample
+
+	// KernelVersion 读内核模块自报的版本号（/sys/module/firewall/version）。
+	// 模块未加载时返回空串——面板上就是「内核 」，不拿守护进程版本顶上去。
+	KernelVersion func() string
 }
 
 func (s *Server) RegisterRoutes(api *APIHandlers) {
@@ -114,16 +126,43 @@ func (s *Server) RegisterRoutes(api *APIHandlers) {
 		RequireAuth(api.username, api.password, api.lockout, api.GetWhitelistRecommendations))
 
 	// ---- 需认证：速率 ---------------------------------------------------------
+	s.HandleFunc(httpcontract.RouteGetApiV1RatesCurrent,
+		RequireAuth(api.username, api.password, api.lockout, api.RatesCurrent))
 	s.HandleFunc(httpcontract.RouteGetApiV1RatesHistory,
 		RequireAuth(api.username, api.password, api.lockout, api.GetRatesHistory))
+	s.HandleFunc(httpcontract.RouteGetApiV1RatesWindows,
+		RequireAuth(api.username, api.password, api.lockout, api.RatesWindows))
 
-	// ---- 需认证：统计子路由 ---------------------------------------------------
+	// ---- 需认证：统计总览与内核快照 -------------------------------------------
 	//
-	// 契约还声明了 /api/v1/stats 与 rates/current、rates/windows、stats/{heatmap,
-	// ban-effectiveness,udp-ports,icmp-types,ban-duration-histogram,packet-sizes,
-	// ttl-distribution,ip-fragments,port-scanners,service-probes,anomalies,attack-geo}；
-	// 它们要接真实数据才有意义，尚未注册，逐条记在 contract/http_gap_baseline.txt 里
-	// （见计划 P5）。空壳注册会让面板拿到一份看起来正常、实际恒零的载荷。
+	// 这一组全部读事件泵发布的**同一份快照**（telemetry.Snapshot）：面板上的速率、协议
+	// 分布与 Top-N 因此出自同一次采样，不会出现「包大小图说 3 秒前、扫描者图说 8 秒前」。
+	s.HandleFunc(httpcontract.RouteGetApiV1Stats,
+		RequireAuth(api.username, api.password, api.lockout, api.Stats))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsHeatmap,
+		RequireAuth(api.username, api.password, api.lockout, api.Heatmap))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsPacketSizes,
+		RequireAuth(api.username, api.password, api.lockout, api.PacketSizes))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsTtlDistribution,
+		RequireAuth(api.username, api.password, api.lockout, api.TtlDistribution))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsIpFragments,
+		RequireAuth(api.username, api.password, api.lockout, api.IpFragments))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsUdpPorts,
+		RequireAuth(api.username, api.password, api.lockout, api.UdpPorts))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsIcmpTypes,
+		RequireAuth(api.username, api.password, api.lockout, api.IcmpTypes))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsPortScanners,
+		RequireAuth(api.username, api.password, api.lockout, api.PortScanners))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsServiceProbes,
+		RequireAuth(api.username, api.password, api.lockout, api.ServiceProbes))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsAnomalies,
+		RequireAuth(api.username, api.password, api.lockout, api.Anomalies))
+
+	// ---- 需认证：统计子路由（历史库分析面）------------------------------------
+	//
+	// 契约还声明了 stats/{ban-effectiveness,ban-duration-histogram,attack-geo}；它们要接
+	// 真实数据才有意义，尚未注册，逐条记在 contract/http_gap_baseline.txt 里（见计划 P5-c）。
+	// 空壳注册会让面板拿到一份看起来正常、实际恒零的载荷。
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsRecidivism,
 		RequireAuth(api.username, api.password, api.lockout, api.Recidivism))
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsReputation,
@@ -178,6 +217,17 @@ type APIHandlers struct {
 	// 探针读数来源
 	getKernelSnapshot func() telemetry.Snapshot
 	kmodPresent       func() bool
+
+	// startedAt 是进程开始装配的时刻（uptime_seconds 的起点）。
+	startedAt time.Time
+	// getRateSamples 取回速率历史采样点，供 /rates/history 与异常检测共用。
+	getRateSamples func(n int) []telemetry.RateSample
+	// kernelVersion 读内核模块自报的版本号。
+	kernelVersion func() string
+
+	// statsWindow 缓存「今日 / 近 5 分钟」两个封禁窗口（GET /stats 首屏每刷新一次就打
+	// 三条 SQL，看板按秒轮询时这个开销没有读数价值）。
+	statsWindow windowCache
 }
 
 func NewAPIHandlers(cfg APIConfig) *APIHandlers {
@@ -197,7 +247,30 @@ func NewAPIHandlers(cfg APIConfig) *APIHandlers {
 		logFilePath:       cfg.LogFilePath,
 		getKernelSnapshot: cfg.GetKernelSnapshot,
 		kmodPresent:       cfg.KmodPresent,
+		startedAt:         cfg.StartedAt,
+		getRateSamples:    cfg.GetRateSamples,
+		kernelVersion:     cfg.KernelVersion,
 	}
+}
+
+// currentConfig 读当前配置；未注入来源或来源报 nil 时报 nil。
+//
+// 读侧（统计面）拿到 nil 时的动作是「那一项没有读数」而不是 panic：装配测试里 APIHandlers
+// 可以完全不接配置，而 /api/v1/stats 仍要能回答形状正确的载荷。写侧（PUT /config）自己
+// 检查来源是否存在并回错误码，不走这里。
+func (h *APIHandlers) currentConfig() *config.Config {
+	if h.getCurrentConfig == nil {
+		return nil
+	}
+	return h.getCurrentConfig()
+}
+
+// rateSamples 取回最近 n 个速率采样点；来源未接线时报 nil（异常检测据此给出「没有基线」）。
+func (h *APIHandlers) rateSamples(n int) []telemetry.RateSample {
+	if h.getRateSamples == nil {
+		return nil
+	}
+	return h.getRateSamples(n)
 }
 
 // SSEStatus 报两条 SSE 流各自的连接诊断（GET /api/v1/stats/sse-status）。

@@ -69,6 +69,10 @@ func run(args []string) error {
 	}
 	defer signals.Close()
 
+	// startedAt 是进程开始装配的时刻：GET /api/v1/stats 的 uptime_seconds 从这里起算，
+	// 而不是 HTTP 服务器构造时刻——读配置、开历史库这些时间也算「启动了多久」。
+	startedAt := time.Now()
+
 	cfg := config.Default()
 	if err := loadConfig(parsed, &cfg); err != nil {
 		return err
@@ -158,8 +162,8 @@ func run(args []string) error {
 	// 内核观测快照：事件泵是唯一写入者。
 	//
 	// 无条件建立，让读侧将来只有一个持有者：链路缺失时它保持零值快照，读侧就不需要区分
-	// 「没有内核」与「内核还没采到样」。此刻还没有读侧接上它——快照先有唯一写入者是本包的
-	// 内容，HTTP 面改读它是后续包的事。
+	// 「没有内核」与「内核还没采到样」。读侧接两处：/health 的链路字段，以及统计面
+	// （/api/v1/stats 与 rates/*、协议分布那组端点）——它们都只读这一份快照。
 	kernelStore := telemetry.NewStore()
 
 	// Jail 启用状态源：HTTP API 与入站主链路共享。
@@ -212,6 +216,11 @@ func run(args []string) error {
 				// 由本进程自己 stat。
 				GetKernelSnapshot: kernelStore.Snapshot,
 				KmodPresent:       kernelProcPresent,
+				// 统计面的三个读数来源：运行时长起点、速率历史环、内核模块自报版本。
+				// 速率历史与快照同源（事件泵的同一批采样），异常检测的分位基线用的也是它。
+				StartedAt:      startedAt,
+				GetRateSamples: kernelStore.RateSamples,
+				KernelVersion:  kernelModuleVersion,
 			})
 			// 路由全部由 RegisterRoutes 按契约 pattern 注册，包括 /api/v1/events 与
 			// /metrics：它们都在契约的认证组里，在这里另注册一遍会绕过 RequireAuth。
@@ -417,6 +426,24 @@ var procfsPaths = []string{procfsRoot, procfsRoot + "/bans"}
 func kernelProcPresent() bool {
 	_, err := os.Stat(procfsRoot)
 	return err == nil
+}
+
+// sysfsModuleVersion 是内核模块自报版本号的位置。
+//
+// fw_main.c 里的 MODULE_VERSION("2.2") 由 modinfo 段编进模块，sysfs 按
+// 「/sys/module/<模块名>/version」暴露；模块名与 Makefile 的 obj-m := firewall.o 一致。
+const sysfsModuleVersion = "/sys/module/firewall/version"
+
+// kernelModuleVersion 读内核模块的版本号，读不到时报空串。
+//
+// 空串是**要的形状**：模块未加载（或 sysfs 未挂载）时面板显示「内核 」，运维一眼看出
+// 版本没读到。拿守护进程版本或 "unknown" 顶上去会被读成「模块在跑，只是版本没显示」。
+func kernelModuleVersion() string {
+	data, err := os.ReadFile(sysfsModuleVersion)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // newLogger 按配置初始化日志系统，返回可直接使用的结构化日志器。

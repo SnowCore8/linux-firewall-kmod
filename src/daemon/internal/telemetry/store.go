@@ -130,6 +130,9 @@ type Store struct {
 	cur Snapshot
 	// windows 与 cur.Windows 同步：每次 SetRates 喂一个样本并刷新快照字段。
 	windows *windowsState
+	// rateHistory 与 windows 同节奏（每次 SetRates 一个点），但它不进快照：快照的契约是
+	// 「一次原子发布的自洽一刻」，而历史是一条随时间增长的时间序列。
+	rateHistory *RateHistory
 	// pub 是发布出去的那一份；读侧只碰它。
 	pub atomic.Pointer[Snapshot]
 }
@@ -137,8 +140,9 @@ type Store struct {
 // NewStore 建立空快照并开始发布（读侧因此永远不会拿到 nil）。
 func NewStore() *Store {
 	s := &Store{
-		windows: newWindows(),
-		cur:     Snapshot{Link: Link{Lease: LeaseNone}},
+		windows:     newWindows(),
+		rateHistory: NewRateHistory(DefaultRateHistorySize),
+		cur:         Snapshot{Link: Link{Lease: LeaseNone}},
 	}
 	s.publish()
 	return s
@@ -146,6 +150,13 @@ func NewStore() *Store {
 
 // Snapshot 返回当前快照。无锁，返回值是发布出去的那份不可变副本。
 func (s *Store) Snapshot() Snapshot { return *s.pub.Load() }
+
+// RateSamples 返回最近 n 个速率采样点（按时间升序）；n <= 0 时返回环内全部。
+//
+// 读侧是 /api/v1/rates/history（画折线）与异常检测（取分位基线），两者的判据都要求
+// 「这些点真的来自内核回答」，所以这里不做按墙上时钟补点：采样中断（链路断开）就是
+// 空洞，图上表现为线段变长，而不是凭空多出一个零速率样本。
+func (s *Store) RateSamples(n int) []RateSample { return s.rateHistory.Samples(n) }
 
 // SetStats 发布内核统计并刷新采样时刻。
 func (s *Store) SetStats(v contract.StatsResponse, at time.Time) {
@@ -174,6 +185,7 @@ func (s *Store) SetRates(r Rates, at time.Time) {
 	r.Entries = append([]contract.RateEntry(nil), r.Entries...)
 	s.cur.Rates = r
 	s.cur.Windows = s.windows.sample(r.GlobalPPS, r.GlobalBPS, at)
+	s.rateHistory.Push(rateSampleFrom(r, at))
 	s.touch(at)
 }
 

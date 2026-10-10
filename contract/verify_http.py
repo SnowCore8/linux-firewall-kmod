@@ -1763,27 +1763,58 @@ def check_defect_claims(contract: dict) -> list[str]:
                     f"服务端有排序分支={server_has_sort}，前端 BanSortKey 仍声明 {len(keys)} 个取值",
                 )
         elif name == "HTTP_READ_PATH_WRITES_STATE":
-            # 现场 = **读** handler 里有写操作。按名字取那几条 GET handler 的函数体来扫，
-            # 不能整文件扫：bans.go 同时装着 CreateBan/DeleteBan，它们写镜像是本职。
-            tree = http_sources()
-            readers = ("ListBans", "BanStats", "BanDetail", "ListWhitelist",
-                       "WhitelistStats", "ListJails", "GetJail", "JailStats",
-                       "GetConfig", "GetLogs", "GetRatesHistory", "Health")
+            # 现场 = **读** handler 里有写操作。按 handler 函数体来扫，不能整文件扫：
+            # bans.go 同时装着 CreateBan/DeleteBan，它们写镜像是本职。
+            #
+            # 名单不硬编：从注册表面前取所有 GET handler 的符号。硬编名单在 P4 里留了
+            # 四条 Rust 时代的死名字（BanStats/JailStats/WhitelistStats/GetJail），扫描
+            # 对取不到函数体的名字静默跳过，于是「名单已过期」被读成「现场已消失」；
+            # 接线统计面（P5-b）又会让一批新读 handler 落在名单外。静态外壳（static.go）
+            # 不在扫描范围：它不碰运行时状态，且它的 handler 是 fs 包装而不是 API handler。
+            reg, _reg_problems = go_registrations()
+            # 用**整棵树逐文件剥注释**的文本取函数体：注册在 routes.go，handler 定义却住在
+            # bans.go / stats.go / snapshot.go，按注册所在文件找必然找不到；剥注释是为了
+            # 让「清扫不在这里」这类散文里的词不被当成写点（必须在文件内剥，见 go_tree_code）。
+            tree = go_tree_code()
+            readers: list[str] = []
             writes: list[str] = []
-            for fn in readers:
-                body = _fn_body(tree, fn)
-                if body is None:
+            unparsable: list[str] = []
+            for (method, path), (symbol, _auth, rel) in sorted(reg.items()):
+                if method != "GET" or rel.endswith(os.path.join("http", "static.go")):
                     continue
+                if not symbol.isidentifier():
+                    continue  # 内联函数字面量：没有可命名核对的函数体
+                body = _fn_body(tree, symbol)
+                if body is None:
+                    unparsable.append(f"{symbol} ({path})")
+                    continue
+                readers.append(symbol)
                 writes += re.findall(
                     r"SweepExpired|\.Upsert\(|\.Remove\(|MarkPending|ClearPending|\.Add\(1\)",
                     body,
                 )
-            verdict(
-                name,
-                bool(writes),
-                f"读路径写点 {len(writes)} 处"
-                + (f"（{', '.join(sorted(set(writes)))}）" if writes else "，清扫在 kernel/consumer.go 的对账里"),
-            )
+            if unparsable:
+                # 注册了却取不到函数体 = 这条读路径根本没被扫到，不能算已核对。
+                verdict(
+                    name,
+                    True,
+                    f"{len(unparsable)} 条 GET handler 取不到函数体"
+                    f"（{', '.join(unparsable)}）",
+                )
+            elif len(readers) < 20:
+                verdict(
+                    name,
+                    True,
+                    f"只扫到 {len(readers)} 条读 handler，少于注册面的量级：扫描可能已失效",
+                )
+            else:
+                verdict(
+                    name,
+                    bool(writes),
+                    f"读路径写点 {len(writes)} 处（扫了 {len(readers)} 条 GET handler）"
+                    + (f"（{', '.join(sorted(set(writes)))}）" if writes
+                       else "，清扫在 kernel/consumer.go 的对账里"),
+                )
         elif name == "HTTP_SSE_RESERIALIZES_EVERY_DOMAIN":
             # 现场 = 序列化按连接、按 tick 重复发生。判据两条，缺一即现场仍在：
             #   1) 一次 Publish 只序列化一次——唯一的 marshal 在 sseFrame 里，Publish

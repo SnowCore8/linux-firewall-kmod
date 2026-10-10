@@ -672,6 +672,7 @@ export interface PortScannerEntry {
 /** 契约类型 `ServiceProbeResponse` */
 export interface ServiceProbeResponse {
   threshold: number
+  total_detected: number
   probes: ServiceProbeEntry[]
 }
 

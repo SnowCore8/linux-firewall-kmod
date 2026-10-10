@@ -549,6 +549,12 @@ export interface ServiceProbeEntry {
 /** 服务探测检测（Rust `ServiceProbeResponse`） */
 export interface ServiceProbeResponse {
   threshold: number
+  /**
+   * 本次快照打包带出的行数（≤ probes 的容量 20）。与 PortScanResponse.total_detected
+   * 同名不同量：那一侧是内核的累计检出事件计数，所以 port-scanners 页上的「检出 N 个」
+   * 会大于列表行数，不是列表被前端截断了
+   */
+  total_detected: number
   probes: ServiceProbeEntry[]
 }
 

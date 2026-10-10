@@ -7,21 +7,9 @@
 #   * 实现与契约矛盾的东西不该进这里——那是要修的实现，不是可冻结的缺口。
 # 契约（http.fwidl）因此保持完整：这里只登记 daemon 当前还没接线的部分。
 handler-naming # 契约声明的 handler 名（handle_*，共 56 个）在 src/daemon/internal/http 里逐字命中 0 个：Go 侧一律用方法名注册（如 DeleteBan）。需要 owner 决定：契约改记 Go 符号，还是 Go 侧按 handle_* 命名
-route-missing:GET /api/v1/rates/current # 路由 GET /api/v1/rates/current 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_rates_current）
-route-missing:GET /api/v1/rates/windows # 路由 GET /api/v1/rates/windows 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_rates_windows）
-route-missing:GET /api/v1/stats # 路由 GET /api/v1/stats 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_stats）
-route-missing:GET /api/v1/stats/anomalies # 路由 GET /api/v1/stats/anomalies 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_anomalies）
 route-missing:GET /api/v1/stats/attack-geo # 路由 GET /api/v1/stats/attack-geo 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_attack_geo）
 route-missing:GET /api/v1/stats/ban-duration-histogram # 路由 GET /api/v1/stats/ban-duration-histogram 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_ban_duration_histogram）
 route-missing:GET /api/v1/stats/ban-effectiveness # 路由 GET /api/v1/stats/ban-effectiveness 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_ban_effectiveness）
-route-missing:GET /api/v1/stats/heatmap # 路由 GET /api/v1/stats/heatmap 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_heatmap）
-route-missing:GET /api/v1/stats/icmp-types # 路由 GET /api/v1/stats/icmp-types 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_icmp_types）
-route-missing:GET /api/v1/stats/ip-fragments # 路由 GET /api/v1/stats/ip-fragments 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_ip_fragments）
-route-missing:GET /api/v1/stats/packet-sizes # 路由 GET /api/v1/stats/packet-sizes 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_packet_sizes）
-route-missing:GET /api/v1/stats/port-scanners # 路由 GET /api/v1/stats/port-scanners 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_port_scanners）
-route-missing:GET /api/v1/stats/service-probes # 路由 GET /api/v1/stats/service-probes 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_service_probes）
-route-missing:GET /api/v1/stats/ttl-distribution # 路由 GET /api/v1/stats/ttl-distribution 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_ttl_distribution）
-route-missing:GET /api/v1/stats/udp-ports # 路由 GET /api/v1/stats/udp-ports 在 daemon 的 ServeMux 注册里不存在（契约声明 handler handle_api_udp_ports）
 type-contract-field:AttackPrediction:ban_count # 类型 AttackPrediction（src/daemon/internal/analysis/prediction.go）: 契约字段 'ban_count' 不是该 struct 的 json key（实际 ['ip', 'jail_name', 'next_attack_at', 'confidence_score', 'urgency', 'event_count', 'median_period_seconds']）
 type-contract-field:AttackPrediction:confidence # 类型 AttackPrediction（src/daemon/internal/analysis/prediction.go）: 契约字段 'confidence' 不是该 struct 的 json key（实际 ['ip', 'jail_name', 'next_attack_at', 'confidence_score', 'urgency', 'event_count', 'median_period_seconds']）
 type-contract-field:AttackPrediction:last_ban_at # 类型 AttackPrediction（src/daemon/internal/analysis/prediction.go）: 契约字段 'last_ban_at' 不是该 struct 的 json key（实际 ['ip', 'jail_name', 'next_attack_at', 'confidence_score', 'urgency', 'event_count', 'median_period_seconds']）
@@ -72,7 +60,7 @@ type-go-only-field:ThresholdRecommendation:explanation # 类型 ThresholdRecomme
 type-go-only-field:ThresholdRecommendation:recommended_value # 类型 ThresholdRecommendation（src/daemon/internal/analysis/recommendations.go）: struct 字段 'recommended_value' 未在契约中声明
 type-go-only-field:WhitelistRecommendation:ban_count # 类型 WhitelistRecommendation（src/daemon/internal/http/recommendations.go）: struct 字段 'ban_count' 未在契约中声明
 type-go-only-field:WhitelistRecommendation:unique_ips # 类型 WhitelistRecommendation（src/daemon/internal/http/recommendations.go）: struct 字段 'unique_ips' 未在契约中声明
-type-unmapped # 41/64 个载荷类型在 Go 源码里没有同名 struct（本门禁不做契约名↔Go 名的映射推断）：AnomalyResponse, ApiResponse, AttackGeoResponse, AttackPredictionSummary, BanDurationHistogramResponse, BanDurationRecommendationResponse, BanEffectivenessResponse, BanLevelEffectiveness, ChartData, DimensionScore, FeatureValue, GeoPoint, HourlyBucket, HourlyHeatmap, IcmpTypeDistributionResponse, IcmpTypeEntry, IpAnomalyEntry, IpFragmentStatsResponse, JailAttackTrend, JailResponse, NetworkBlock, PacketSizeDistributionResponse, PortScanResponse, PortScannerEntry, RateHistoryResponse, RateResponse, RateWindowSnapshot, RecidivismResponse, RecidivistEntry, ReputationEntryResponse, ServiceProbeEntry, ServiceProbeResponse, StatsResponse, ThreatLevel, ThresholdRecommendationResponse, TtlDistributionResponse, UdpPortDistributionResponse, UdpPortEntry, UpdateConfigRequest, UpdateJailRequest, WebuiConfigResponse。这些还多是**未接线**的分析/统计载荷：接线时请为它们补 internal/http 的具名 struct（照 payload.go 的规矩，一个 struct 对一个契约 type 块），不要退回 map[string]any 字面量——字段没有具名类型承载时，跨层字段核对在这一层失去锚点
+type-unmapped # 18/64 个载荷类型在 Go 源码里没有同名 struct（本门禁不做契约名↔Go 名的映射推断）：ApiResponse, AttackGeoResponse, AttackPredictionSummary, BanDurationHistogramResponse, BanDurationRecommendationResponse, BanEffectivenessResponse, BanLevelEffectiveness, GeoPoint, JailAttackTrend, JailResponse, NetworkBlock, RecidivismResponse, RecidivistEntry, ReputationEntryResponse, ThresholdRecommendationResponse, UpdateConfigRequest, UpdateJailRequest, WebuiConfigResponse。这些还多是**未接线**的分析/统计载荷：接线时请为它们补 internal/http 的具名 struct（照 payload.go 的规矩，一个 struct 对一个契约 type 块），不要退回 map[string]any 字面量——字段没有具名类型承载时，跨层字段核对在这一层失去锚点
 type-unreferenced:AttackPrediction # 类型 AttackPrediction（src/daemon/internal/analysis/prediction.go）: internal/http 里没有它的引用——handler 返回的不是这个 struct
 type-unreferenced:BanDurationRecommendation # 类型 BanDurationRecommendation（src/daemon/internal/analysis/recommendations.go）: internal/http 里没有它的引用——handler 返回的不是这个 struct
 type-unreferenced:CollaborativeAttack # 类型 CollaborativeAttack（src/daemon/internal/analysis/detection.go）: internal/http 里没有它的引用——handler 返回的不是这个 struct

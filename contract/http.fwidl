@@ -249,9 +249,31 @@ defect HTTP_RECIDIVISM_RATE_UNIT {
 
 defect HTTP_TODAY_BANS_EQUALS_TOTAL {
   severity = low
-  status = open
+  status = fixed
+  fix = "src/daemon/internal/http/stats.go:func startOfToday(t time.Time) time.Time"
   resolution = "today_bans 必须是真实「今日」窗口：本地时区自然日 00:00 起，按各封禁的 banned_at 计数，窗口定义与时区写进 StatsResponse.today_bans 的字段注释；REST 与 SSE 两条读路径共用同一个取值。"
-  text = "today_bans 与 total_bans 取同一个值，『今日』这一时间窗从未实现，仪表盘上两个数字永远相同。Go 面现在连承载它的端点都还没接线——契约声明的 GET /api/v1/stats 未在 ServeMux 注册（daemon 只注册了 /api/v1/stats/summary），因此这条缺陷在 Go 里没有现场，但**不因未实现而算已修**：接回 today_bans 时必须带真实窗口"
+  text = "today_bans 与 total_bans 取同一个值，『今日』这一时间窗从未实现，仪表盘上两个数字永远相同。Go 面接线时（契约声明的 GET /api/v1/stats 尚未注册）这条缺陷没有现场，但**不因未实现而算已修**。现在端点已接线且带真实窗口：src/daemon/internal/http/stats.go 以本地时区自然日 00:00 为起点，经 persist.CountBanEventsBetween 的半开区间 [start, end) 统计历史库 ban_events.banned_at，与 total_bans（内核自加载起的累计计数器）分属两路；结果连同近 5 分钟窗口一起缓存 30 秒（午夜切换最多晚 30 秒），REST 与 SSE 共用同一个 buildStats(now)，同一个数字不取决于它从哪条路读出来。历史库缺席时 today_bans 报 0——那一格说的是「没有读数」，不是抄一个别的计数"
+}
+
+defect HTTP_FAILURE_HISTORY_NOT_PERSISTED {
+  severity = medium
+  status = open
+  resolution = "失败尝试与 DDoS 命中要能按时间窗回读，才谈得上热力图与趋势：持久化面需要一张按小时（或更细）归集的活动表，写入者是日志解析器与事件泵，读取者是 /api/v1/stats 的 failed_attempts_trend 与 /api/v1/stats/heatmap。在此之前这两个端点**只报已持久化的那一维**（封禁），其余槽位报 0 且不猜。"
+  text = "failed_attempts 只有**本进程**的累计计数（config.GetJailStats(name).FailedAttempts），重启归零、没有按天历史；ddos_events 同理是进程内计数器（kernel.CounterDdosEvents）。于是 StatsResponse.failed_attempts_trend 无法由真源产出（Go 面写的是空标签 + 全零序列），HourlyHeatmap 的 failed_attempts 与 ddos_events 两列也恒为 0——只有 bans 一列来自历史库 ban_events 的真实时间窗。把当前累计值平摊到 7 天会凭空造出一条斜线，读图的人会当趋势看，因此这里选择报空"
+}
+
+defect HTTP_SCANNER_TOTAL_COUNT_ASYMMETRY {
+  severity = medium
+  status = open
+  resolution = "两侧同名不同量是内核给的形状：port_scanners 的计数是内核累计检出事件数（fw_info.port_scan_detected），service_probes 的计数是本次打包带出的行数。要么内核把两个量都按同一口径给出（各配「当前在表里的地址数」与「累计检出次数」两个字段），要么契约把两个字段改成不同的名字。Go 面**原样透传**内核给的数，不在读侧把两个量伪造成相等。"
+  text = "PortScanResponse.total_detected 是内核的累计检出事件计数（每次判定 +1，模块重载归零），与 scanners 的行数（最多 20 行、只带最近活跃地址）不是同一个量；ServiceProbeResponse.total_detected 是本次快照打包的行数。前端若按同一套「检出 N 个」文案渲染两处，port-scanners 那一页显示的 N 会远大于列表行数，并被读成「列表被截断了 4096 次」。形状对齐（两处都有 total_detected）由缺陷 HTTP_SERVICE_PROBE_NO_TOTAL 的闭合完成，口径差异是本条记录的独立问题"
+}
+
+defect HTTP_UDP_PORT_TOTAL_IS_PACKED_COUNT {
+  severity = low
+  status = open
+  resolution = "内核分析快照里 udp_count / icmp_count 是**本次打包进定长载荷的行数**（遍历到 FW_ANALYSIS_*_PACK_MAX 即停），而表内真实跟踪条数在 fw_info.udp_port_count / icmp_type_count 里另有一个原子计数，没有随这条 netlink 响应带出。要把截断变成可判读的，需要内核在响应里补一个真实总数，或把打包上限提到与跟踪容量一致。Go 面原样透传，不替内核编一个它没给的总数。"
+  text = "UdpPortDistributionResponse.total_entries 与 IcmpTypeDistributionResponse.total_entries 读起来像「表内共多少条」，实际是「本次带出多少行」（≤ FW_ANALYSIS_UDP_PACK_MAX=64 / ICMP=64），而 max_entries 是跟踪容量 512 / 128。于是载荷无法回答「是否还有没带出来的端口」：ports 满 64 行时可能是恰好 64 条，也可能表里已有 500 条。内核在 fw_stats.c 里遍历哈希表、装满 64 行即 break（按哈希序，不是按 packets 排序后取前 64），面板因此读到的是一个任意子集而不是 Top-64"
 }
 
 defect HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS {
@@ -262,9 +284,10 @@ defect HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS {
 
 defect HTTP_SERVICE_PROBE_NO_TOTAL {
   severity = low
-  status = open
+  status = fixed
+  fix = "src/daemon/internal/http/snapshot.go:TotalDetected: a.ServiceProbeCount"
   resolution = "ServiceProbeResponse 补 total_detected（与 PortScanResponse 形状对齐），前端两处共用同一套「检出 N 个」文案。"
-  text = "ServiceProbeResponse 缺 total_detected，而同类的 PortScanResponse 有。前端在两个页面上无法用同一套『检出 N 个』文案。Go 面两个端点（/api/v1/stats/service-probes 与 /api/v1/stats/port-scanners）都还没接线，因此这条形状差异当前无从比对——**未实现不算已修**，接回时必须一次对齐两侧形状"
+  text = "ServiceProbeResponse 缺 total_detected，而同类的 PortScanResponse 有，前端在两个页面上无法用同一套『检出 N 个』文案。旧 Rust 面 service-probes 从未产出这个字段。Go 面两条端点已接线（/api/v1/stats/service-probes 与 /api/v1/stats/port-scanners），两侧现在都有 total_detected，形状差异消失。**注意闭合的只是形状**：两处同名不同量——port-scanners 带的是内核累计检出事件数，service-probes 带的是本次快照打包的行数，该口径差异由 defect HTTP_SCANNER_TOTAL_COUNT_ASYMMETRY 单独跟踪"
 }
 
 defect HTTP_HEALTH_NOT_ENVELOPED {
@@ -296,7 +319,7 @@ defect HTTP_READ_PATH_WRITES_STATE {
   status = fixed
   fix = "src/daemon/internal/kernel/consumer.go:p.cache.SweepExpired(secs)"
   resolution = "读路径只读：过期封禁的清扫由内核事件泵的对账周期独占驱动，HTTP handler 一律只从内存镜像/快照取数。"
-  text = "get_active_bans() 曾在**读**路径上按 5 秒节流执行 purge_expired，顺带自增 total_unbans 并写入封禁时长统计。旧 SSE 每个 tick（默认 1 秒）都会读一次，于是「每秒被读一次的统计」被读路径自己改写——读数与写入者互相污染，仪表盘上的解除封禁计数不可复现。Go 重写后这一形状不复存在：src/daemon/internal/http/bans.go 的各读 handler 只做 `bans.GlobalCache().List()` 与取数写出，清扫与计数都在 kernel/consumer.go 的 reconcile 里（`p.cache.SweepExpired(secs)`），读侧没有任何写点"
+  text = "get_active_bans() 曾在**读**路径上按 5 秒节流执行 purge_expired，顺带自增 total_unbans 并写入封禁时长统计。旧 SSE 每个 tick（默认 1 秒）都会读一次，于是「每秒被读一次的统计」被读路径自己改写——读数与写入者互相污染，仪表盘上的解除封禁计数不可复现。Go 重写后这一形状不复存在：src/daemon/internal/http/bans.go 与各统计 handler 只做取数写出，清扫与计数都在 kernel/consumer.go 的 reconcile 里（`p.cache.SweepExpired(secs)`），读侧没有任何写点。机械探针的覆盖面也跟着改：原先硬编的 12 个 handler 名单里留着 4 条 Rust 时代的死名字，取不到函数体时**静默跳过**，于是过期名单会被读成「现场已消失」；现在扫描名单由注册表推导（除静态外壳外的每一条 GET handler），取不到函数体即报现场仍在"
 }
 
 defect HTTP_SSE_RESERIALIZES_EVERY_DOMAIN {
@@ -502,7 +525,7 @@ route GET "/api/v1/stats" {
   handler = handle_api_stats
   returns = type
   status = 200
-  note = "载荷 StatsResponse"
+  note = "载荷 StatsResponse：首屏总览，一张混合三路真源的表——内核统计快照（current_bans / total_bans / total_unbans / whitelist_count / packets_dropped / packets_accepted）、历史库时间窗（today_bans 的本地自然日窗口、threat_level.recent_bans 的最近 5 分钟，两者共缓存 30 秒）、本进程状态（failed_attempts / ddos_events / uptime_seconds、各图）。各字段的来源与口径写在 StatsResponse 的字段注释里。这条路由只声明 code 0：历史库缺席或查询失败时那几项报 0 / 空序列，快照陈旧照原样报，不把首屏整体判成失败——一半数字拿不到时也要把另一半画出来"
 }
 
 # ---- 需认证：封禁管理 -------------------------------------------------------
@@ -645,7 +668,7 @@ route GET "/api/v1/rates/current" {
   handler = handle_api_rates_current
   returns = type
   status = 200
-  note = "载荷 RateResponse 数组"
+  note = "载荷 RateResponse 数组，不分页：内核速率表的容量（FW_RATE_CPU_SLOTS=512 个在跟踪的源地址）在一次响应带得下，事件泵也是整表取回。行来自事件泵快照，服务端按 packets_per_sec 降序、同值按 IP 升序（内核按哈希序回表，不排序会让同一个地址在两次刷新之间跳到图的另一端）。速率是内核给的**自上次查询以来的平均**，不是瞬时值；地址族无法识别的条目丢弃并记日志，不把空串当 IP 写出去"
 }
 
 route GET "/api/v1/rates/history" {
@@ -653,7 +676,7 @@ route GET "/api/v1/rates/history" {
   handler = handle_api_rates_history
   returns = type
   status = 200
-  note = "载荷 RateHistoryResponse"
+  note = "载荷 RateHistoryResponse **数组**，时间升序（最早在前，折线图直接按 x 轴递增画）。数据源是守护进程侧的速率历史环（internal/telemetry/rate_history.go）：事件泵每成功问一次内核速率表落一个点，节奏 = 采样周期（当前 5 秒），容量 720 点 ≈ 1 小时。查询参数 limit 取最近 n 个点，上限与默认都是环容量——要更多时环里也没有，回一批零等于伪造历史。采样中断留下的是**空洞**而不是补出来的零点；环是进程内的，重启后从空开始。曾经有一条从 /proc/firewall/rates 解析历史的路径，那个格式内核从未产出过，端点因此恒在走降级分支"
 }
 
 route GET "/api/v1/rates/windows" {
@@ -661,17 +684,22 @@ route GET "/api/v1/rates/windows" {
   handler = handle_api_rates_windows
   returns = type
   status = 200
-  note = "载荷 RateWindowSnapshot"
+  note = "载荷 RateWindowSnapshot：三档窗口（短期/中期/长期）各一对 pps、bps。窗口是**守护进程侧的派生量**（EWMA），内核没有窗口概念、只回答自上次查询以来的平均速率，所以这条路由的数据源是快照的 Windows 字段而不是内核。平滑值本身是浮点，载荷按契约的 u64 四舍五入——截断会把 0.6 pps 报成 0，读成「完全没有流量」"
 }
 
-# ---- 需认证：统计子路由（全部经 db_blocking，失败 50002）--------------------
+# ---- 需认证：统计子路由 ----------------------------------------------------
+#
+# 这一族按「读失败会怎样」分两类，两类都在 200 信封里给结论，区别只在有没有 5xx：
+# **不声明 codes** 的读数来自内核快照或历史库的时间窗聚合，读不到就在载荷里报零值/
+# 空数组（快照缺席不等于服务坏了）；带 `codes = 50002, 50003` 的是历史库分析族，
+# 整页数据都建在一次查询上，查询失败只能报错而不是给一张全零的图。
 
 route GET "/api/v1/stats/heatmap" {
   auth = required
   handler = handle_api_heatmap
   returns = type
   status = 200
-  note = "载荷 HourlyHeatmap（24 个 HourlyBucket 的定长数组）"
+  note = "载荷 HourlyHeatmap：24 个 HourlyBucket 的定长数组，hour 是**本地时区**的自然小时槽（0-23），bans 把最近 7 个自然日的封禁按小时归槽后叠在一起（热力图读的是「哪个钟点最容易被打」，不是某一天的小时分布）；缺数据的小时保留为全零行而不是跳过，数组长度恒为 24。failed_attempts 与 ddos_events 两列恒为 0（见 defect HTTP_FAILURE_HISTORY_NOT_PERSISTED）"
 }
 
 route GET "/api/v1/stats/recidivism" {
@@ -688,7 +716,7 @@ route GET "/api/v1/stats/ban-effectiveness" {
   handler = handle_api_ban_effectiveness
   returns = type
   status = 200
-  note = "载荷 BanEffectivenessResponse；其中 recidivism_rate 是**比例 0-1**"
+  note = "载荷 BanEffectivenessResponse；其中 recidivism_rate（含 overall_recidivism_rate 与各 level 的）统一为**百分数 0-100**，与 /api/v1/stats/recidivism 同一个口径，前端两处共用同一个格式化函数（见 defect HTTP_RECIDIVISM_RATE_UNIT 的 resolution）"
 }
 
 route GET "/api/v1/stats/periodic-attackers" {
@@ -714,7 +742,7 @@ route GET "/api/v1/stats/udp-ports" {
   handler = handle_api_udp_ports
   returns = type
   status = 200
-  note = "载荷 UdpPortDistributionResponse"
+  note = "载荷 UdpPortDistributionResponse：ports 最多 64 行（FW_ANALYSIS_UDP_PACK_MAX），行按端口升序以便两次刷新可比。total_entries 是**本次快照带出的行数**而不是表内总数，max_entries 是跟踪容量 512——载荷因此无法回答「是否还有没带出来的端口」，见 defect HTTP_UDP_PORT_TOTAL_IS_PACKED_COUNT"
 }
 
 route GET "/api/v1/stats/icmp-types" {
@@ -722,7 +750,7 @@ route GET "/api/v1/stats/icmp-types" {
   handler = handle_api_icmp_types
   returns = type
   status = 200
-  note = "载荷 IcmpTypeDistributionResponse"
+  note = "载荷 IcmpTypeDistributionResponse：截断口径与 udp-ports 相同（types 最多 64 行，total_entries 是带出的行数，max_entries 是跟踪容量 128），同见 defect HTTP_UDP_PORT_TOTAL_IS_PACKED_COUNT"
 }
 
 route GET "/api/v1/stats/sse-status" {
@@ -746,7 +774,7 @@ route GET "/api/v1/stats/packet-sizes" {
   handler = handle_api_packet_sizes
   returns = type
   status = 200
-  note = "载荷 PacketSizeDistributionResponse"
+  note = "载荷 PacketSizeDistributionResponse：5 个长度桶，labels/counts/percentages 等长同下标。计数是**自模块加载起的累计值**（内核那组数组只在 init/unload 归零，flush 只搬 accept/drop 那组），横轴不是时间窗口——面板读的是「本机见过什么样的包」而不是「最近 5 秒长什么样」。读数来自事件泵快照，链路断开时是上一次成功采样的陈旧值"
 }
 
 route GET "/api/v1/stats/ttl-distribution" {
@@ -754,7 +782,7 @@ route GET "/api/v1/stats/ttl-distribution" {
   handler = handle_api_ttl_distribution
   returns = type
   status = 200
-  note = "载荷 TtlDistributionResponse"
+  note = "载荷 TtlDistributionResponse：6 个 TTL 桶，累计口径与 packet-sizes 相同（自模块加载起，不是时间窗口），labels/counts/percentages 等长同下标"
 }
 
 route GET "/api/v1/stats/ip-fragments" {
@@ -762,7 +790,7 @@ route GET "/api/v1/stats/ip-fragments" {
   handler = handle_api_ip_fragments
   returns = type
   status = 200
-  note = "载荷 IpFragmentStatsResponse"
+  note = "载荷 IpFragmentStatsResponse：total_packets 是**所有**被记账的 IP 包（内核逐包累加），fragment_packets 只数分片，fragment_ratio 因此是百分数 0-100；累计口径同 packet-sizes。总数为 0 时比例取 0 而不是 NaN——encoding/json 遇到 NaN 会直接报错、整个响应发不出去"
 }
 
 route GET "/api/v1/stats/port-scanners" {
@@ -770,7 +798,7 @@ route GET "/api/v1/stats/port-scanners" {
   handler = handle_api_port_scanners
   returns = type
   status = 200
-  note = "载荷 PortScanResponse"
+  note = "载荷 PortScanResponse：scanners 最多 20 行（内核只带最近活跃的地址），threshold 是判定阈值。total_detected 是内核的**累计检出事件计数**（fw_info.port_scan_detected，每次判定 +1、模块重载归零），与行数不是同一个量，见 defect HTTP_SCANNER_TOTAL_COUNT_ASYMMETRY"
 }
 
 route GET "/api/v1/stats/service-probes" {
@@ -778,7 +806,7 @@ route GET "/api/v1/stats/service-probes" {
   handler = handle_api_service_probes
   returns = type
   status = 200
-  note = "载荷 ServiceProbeResponse（缺 total_detected，见 defect HTTP_SERVICE_PROBE_NO_TOTAL）"
+  note = "载荷 ServiceProbeResponse：probes 最多 20 行，threshold 是判定阈值。total_detected 与 port-scanners 同名，但这一侧带的是**本次快照打包的行数**而不是累计检出数——形状对齐（两处都有该字段）由 defect HTTP_SERVICE_PROBE_NO_TOTAL 闭合，口径差异见 HTTP_SCANNER_TOTAL_COUNT_ASYMMETRY，读侧不把两个量伪造成相等"
 }
 
 route GET "/api/v1/stats/ban-duration-recommendations" {
@@ -831,7 +859,7 @@ route GET "/api/v1/stats/anomalies" {
   handler = handle_api_anomalies
   returns = type
   status = 200
-  note = "异常检测：全局流量偏离 + per-IP 行为离群；载荷 AnomalyResponse"
+  note = "异常检测：全局流量偏离 + per-IP 行为离群；载荷 AnomalyResponse。两路各有真源且都不猜：全局用**速率历史环**（一个点 = 事件泵问内核一次，容量 720 点 ≈ 1 小时），当前值取最新一个点，行数未达最小样本护栏（10）时整段基线不给——global_features 写成 null（本轮没有当前值），global_dimensions 与两条基线是**空数组**而不是 null，因为前端对它们做 .map()，null 会让整页崩而空数组只是少几根柱子；per-IP 用**同一份快照**里的速率表做横向比较（当前这批被跟踪地址之间谁最不像同伴），地址数未达 5 时列表为空。global_score 是 0-100，维度分是 0-1 归一化。这条路由只观测，不触发任何封禁——封禁判据在 detect/decision 的阈值里，两者口径不同"
 }
 
 # 异常检测载荷。只观测、不触发任何封禁。
@@ -988,20 +1016,34 @@ type RuntimeSnapshot {
 
 type StatsResponse {
   daemon_version: String
+  # 内核模块版本，读自 /sys/module/firewall/version；模块未加载时为空串（「读不到」
+  # 与「版本是 0」要能分开，所以不用 0 表示缺席）
   kernel_version: String
-  # 窗口定义：本地时区自然日 00:00 起（时区取守护进程进程的本地时区，即 TZ /
-  # 系统时区，经 chrono::Local 解析；刻意不用 UTC——看板上的「今日」跟运维日历走）。
-  # 计数口径：历史库 ban_events 表中 banned_at 落在窗口内的行数。
-  # 与 total_bans（进程累计计数器）是两个不同的量：本字段带真实时间窗，且跨
-  # 守护进程重启保持连续。缓存 30 秒（与趋势数据同节奏），故午夜切换最多晚 30 秒。
+  # 窗口定义：本地时区自然日 00:00 起（时区取守护进程解析出的本地 Location，刻意不用
+  # UTC——看板上的「今日」跟运维日历走，按 UTC 日起算会把凌晨的封禁算进昨天）。
+  # 计数口径：历史库 ban_events 表中 banned_at 落在半开区间 [今日 00:00, 次日 00:00)
+  # 内的行数——闭区间会让午夜那条被「今日」与「昨日」各数一次。
+  # 与 total_bans（内核自模块加载起的累计计数器）是两个不同的量：本字段带真实时间窗，
+  # 且跨守护进程重启保持连续。结果缓存 30 秒，故午夜切换最多晚 30 秒；REST 与 SSE 的
+  # stats 域共用同一个装配函数，同一个数字不取决于它从哪条读路径被取出来。
   today_bans: u64
+  # 各 jail 的失败尝试之和，来自**本进程**的配置态统计：重启归零、没有按天的历史
+  # （见 defect HTTP_FAILURE_HISTORY_NOT_PERSISTED）
   failed_attempts: u64
+  # 本进程收到的内核 DDoS 命中次数：事件泵每收到一次 DdosEvent 加一，重启归零
   ddos_events: u64
+  # 守护进程自己的运行时长（组合根记下启动时刻），不是机器 uptime、也不是模块加载时长
   uptime_seconds: u64
+  # 最近 7 个**本地自然日**的封禁数（来自历史库 ban_events，标签为月-日）
   ban_trend: ChartData
+  # 活跃封禁按 jail 的分布（内存镜像，与 current_bans 同源）；计数为 0 的 jail 不进图
   jail_distribution: ChartData
   failure_reasons: ChartData
+  # 无按天历史，恒为空标签 + 全零序列（见 defect HTTP_FAILURE_HISTORY_NOT_PERSISTED）；
+  # 不把当前累计值平摊到 7 天——那是一条凭空造的斜线，读图的人会当趋势看
   failed_attempts_trend: ChartData
+  # 以下五项来自内核统计快照的最新一刻：链路断开时它们是**上一次成功采样的陈旧值**，
+  # 新鲜度的判据在 /health 的链路字段，这条路由不为「读数陈旧」另造错误码
   current_bans: u64
   total_bans: u64
   total_unbans: u64
@@ -1017,14 +1059,34 @@ type ChartData {
 }
 
 type ThreatLevel {
+  # score 的字符串形式，取值 safe / low / medium / high / critical（与前端 types.ts 逐字一致）
   level: String
+  # 三路信号（速率倍数、封禁表占用率、近 5 分钟封禁数）分档后的**最大值**，0-4。
+  # 取最大而不是求和：三者量纲不同，相加会把两路「值得关注」折成一路「危急」；
+  # 占用率一路最高只到 3
   score: u8
+  # 只列触发了等级判定的那几路（分档 > 0）；没有任何一路触发时是单条「一切正常」。
+  # 全塞进去会让面板在安全时也显示一串「速率 0.0 倍、占用 0%」这类没有读者的读数
   factors: Vec<String>
+  # 短期 EWMA 的当前全局 pps（四舍五入到整数），不是内核的瞬时读数
   current_pps: u64
+  # 短期 EWMA 相对**有效基线**的倍数。基线是与三档窗口分开维护的一条慢速 EWMA，有效基线
+  # 在峰值时段乘 PeakMultiplier=1.5；基线尚未建立（有效值 <=0）时本字段取 0，因此不加分
+  # ——「还没学会基线」不会被伪装成某个具体等级的结论
   pps_ratio: f64
+  # 0-1 的**比例**（不是百分数）：current_bans / 守护进程配置的条目上限
+  # （config.Capacity.MaxBanEntries，与下发给模块的 fw_max_ban_entries 同一个值）。
+  # 内核没有把实时上限带进 netlink 统计响应，分母只能取配置值；配置缺席或上限为 0 时
+  # 报 0。本字段已经是比例，前端不需要再自己除以某个写死的容量
   ban_table_usage: f64
+  # 最近 5 分钟内落进历史库 ban_events 的封禁数（与 today_bans 同一个缓存、同一个半开
+  # 区间口径）
   recent_bans: u64
+  # 基线更新是否被冻结（异常值污染防护：短期速率超过有效基线×3 时停止更新基线 5 分钟，
+  # 免得一次突发把基线抬上去、随后所有读数都显得正常）。与峰值时段无关
   baseline_frozen: bool
+  # 当前是否落在峰值时段（9-18 点 UTC）：它同时决定 EWMA 基线是否上调 1.5 倍，两处共用
+  # 同一个判据函数，不各留一份副本
   peak_hours: bool
 }
 
@@ -1373,6 +1435,7 @@ type PacketSizeDistributionResponse {
   labels: Vec<String>
   counts: Vec<u64>
   total: u64
+  # 每个桶占总数的**百分数 0-100**；total 为 0 时逐项 0（不是 NaN，NaN 会让整个响应编不出 JSON）
   percentages: Vec<f64>
 }
 
@@ -1380,6 +1443,7 @@ type TtlDistributionResponse {
   labels: Vec<String>
   counts: Vec<u64>
   total: u64
+  # 同 PacketSizeDistributionResponse.percentages：百分数 0-100，total 为 0 时逐项 0
   percentages: Vec<f64>
 }
 
@@ -1390,8 +1454,10 @@ type BanDurationHistogramResponse {
 }
 
 type IpFragmentStatsResponse {
+  # 所有被记账的 IP 包（内核逐包累加，不只是分片）
   total_packets: u64
   fragment_packets: u64
+  # 分片包占全部流量的**百分数 0-100**（不是 0-1 比例）；total_packets 为 0 时取 0
   fragment_ratio: f64
 }
 
@@ -1409,6 +1475,11 @@ type PortScannerEntry {
 
 type ServiceProbeResponse {
   threshold: u32
+  # 与 PortScanResponse.total_detected **同名不同量**（缺陷 HTTP_SERVICE_PROBE_NO_TOTAL
+  # 按此形状闭合，口径差异由 HTTP_SCANNER_TOTAL_COUNT_ASYMMETRY 跟踪）：这一侧是本次快照
+  # 打包带出的行数（最多 20），那一侧是内核的累计检出事件计数。前端两处共用「检出 N 个」
+  # 文案时要知道 port-scanners 的 N 会大于列表行数
+  total_detected: u32
   probes: Vec<ServiceProbeEntry>
 }
 

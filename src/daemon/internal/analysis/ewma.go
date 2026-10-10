@@ -106,7 +106,7 @@ func (s *EWMASmoother) Sample(rate float64) {
 
 	// 基线更新：仅在未冻结且样本未超过异常阈值时执行。
 	effectiveBaseline := s.baseline
-	if isPeakHours(now) {
+	if PeakHours(now) {
 		effectiveBaseline *= PeakMultiplier
 	}
 
@@ -127,7 +127,7 @@ func (s *EWMASmoother) Snapshot() EWMASnapshot {
 	defer s.mu.Unlock()
 
 	effectiveBaseline := s.baseline
-	if isPeakHours(time.Now()) {
+	if PeakHours(time.Now()) {
 		effectiveBaseline *= PeakMultiplier
 	}
 
@@ -158,7 +158,7 @@ func (s *EWMASmoother) IsAnomalous(multiplier float64) bool {
 	}
 
 	effectiveBaseline := s.baseline
-	if isPeakHours(time.Now()) {
+	if PeakHours(time.Now()) {
 		effectiveBaseline *= PeakMultiplier
 	}
 
@@ -175,7 +175,7 @@ func (s *EWMASmoother) AnomalyLevel() int {
 	}
 
 	effectiveBaseline := s.baseline
-	if isPeakHours(time.Now()) {
+	if PeakHours(time.Now()) {
 		effectiveBaseline *= PeakMultiplier
 	}
 	if effectiveBaseline <= 0 {
@@ -240,8 +240,11 @@ func (snap EWMASnapshot) ShortBurstRatio() float64 {
 	return snap.Short / snap.EffectiveBaseline
 }
 
-// isPeakHours 判断给定时间是否处于业务高峰期（9-18 UTC）。
-func isPeakHours(t time.Time) bool {
+// PeakHours 判断给定时间是否处于业务高峰期（9-18 UTC）。
+//
+// 这条判据同时决定 EWMA 基线是否上调 50% 和威胁评估载荷的 peak_hours 字段，所以只有
+// 一个函数：留一份未导出的副本，两处「高峰期」的口径就会各自漂移，而它直接改变告警数量。
+func PeakHours(t time.Time) bool {
 	hour := t.UTC().Hour()
 	return hour >= 9 && hour < 18
 }
