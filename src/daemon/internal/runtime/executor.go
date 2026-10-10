@@ -8,11 +8,12 @@
 // # 一轮迭代的顺序
 //
 //  1. 跑到期维护（单调时钟定时器，与事件流量解耦）；
-//  2. 把 Web UI 改的启用状态桥接进本地配置，有变化则重建监视集合；
-//  3. 补挂「轮转后路径暂时不可见」的源；
-//  4. poll 同时等 inotify fd 与信号 fd，超时上限取「interval 秒」与「下一个定时器到期点」
+//  2. 排空内核→执行体的反向指令（配置采纳、下发抑制），见 directives.go；
+//  3. 把 Web UI 改的启用状态桥接进本地配置，有变化则重建监视集合；
+//  4. 补挂「轮转后路径暂时不可见」的源；
+//  5. poll 同时等 inotify fd 与信号 fd，超时上限取「interval 秒」与「下一个定时器到期点」
 //     的较小者；
-//  5. 分派：信号（终止 / 重载 / 回滚）与 inotify 事件（读新增字节 → 判定 → 下发）。
+//  6. 分派：信号（终止 / 重载 / 回滚）与 inotify 事件（读新增字节 → 判定 → 下发）。
 //
 // # 副作用归属
 //
@@ -142,6 +143,11 @@ type Deps struct {
 	Reloader ConfigReloader
 	// Enabled 是 Web UI 权威的启用状态源；nil 时跳过启用状态同步。
 	Enabled JailEnabledSource
+	// KernelCmd 是内核→执行体的反向指令流（见 directives.go）；nil 时不接收。
+	//
+	// 通道由组合根创建，生产方（事件泵）非阻塞投递，执行体每轮迭代开头排空。关闭该通道
+	// 表示生产方不再产生指令，执行体此后停止接收。
+	KernelCmd <-chan Directive
 }
 
 // ready 是一次 poll 的唤醒来源。
@@ -210,6 +216,13 @@ type InboundExecutor struct {
 	reloader ConfigReloader
 	enabled  JailEnabledSource
 
+	// cmd 是反向指令流；生产方关闭后置为 nil（关闭的通道恒可读，留着会让每轮迭代空转）。
+	cmd <-chan Directive
+	// rejected 是「内核刚拒绝过它的封禁下发」的 IP → 抑制到期时刻。
+	rejected map[string]time.Time
+	// rejectionTTL 是抑制窗口长度，默认 dispatchRejectionCooldown；测试可缩短。
+	rejectionTTL time.Duration
+
 	// intents 是封禁意图复用缓冲，避免每批分配。
 	intents []BanIntent
 	// timers 是周期任务。
@@ -249,6 +262,9 @@ func NewInboundExecutor(cfg *config.Config, signals *SignalSource, deps Deps) (*
 		hooks:        deps.Hooks,
 		reloader:     deps.Reloader,
 		enabled:      deps.Enabled,
+		cmd:          deps.KernelCmd,
+		rejected:     make(map[string]time.Time),
+		rejectionTTL: dispatchRejectionCooldown,
 		timers:       newTimers(time.Now()),
 		pendingReadd: make(map[string]struct{}),
 	}
@@ -301,12 +317,13 @@ func (e *InboundExecutor) Step(timeout time.Duration, stop, terminate *Shutdown)
 	return e.step(timeout, stop, terminate)
 }
 
-// step 是一轮迭代：跑到期维护 → 桥接启用状态 → 补挂待重挂源 → 等待 → 分派。
+// step 是一轮迭代：跑到期维护 → 排空反向指令 → 桥接启用状态 → 补挂待重挂源 → 等待 → 分派。
 func (e *InboundExecutor) step(timeout time.Duration, stop, terminate *Shutdown) error {
 	e.runDueMaintenance()
 	if stop.IsShutdown() {
 		return nil
 	}
+	e.drainDirectives()
 	e.syncJailEnabled()
 	e.retryPendingReadd()
 	r, err := e.poll(timeout)
@@ -855,6 +872,7 @@ func (e *InboundExecutor) runDueMaintenance() {
 			if removed := e.pipeline.Cleanup(nowSecs()); removed > 0 {
 				e.debug("清理过期失败条目", "removed", removed)
 			}
+			e.purgeRejectedDispatches(time.Now())
 		case t.cluster:
 			e.pipeline.ScanClusters(nowSecs(), e.dispatchClusterHit)
 		case t.rescan:
@@ -899,6 +917,13 @@ func (e *InboundExecutor) dispatchIntent(intent *BanIntent) {
 		return
 	}
 	plan := intent.Plan
+	if e.dispatchSuppressed(ip, time.Now()) {
+		// 内核刚刚拒绝过这个 IP 的下发（多半是封禁表满）。条目已被事件泵从镜像里撤掉，
+		// 不抑制的话下一条失败日志就会重新占位、再发一次 netlink 往返。判定与计数不受影响，
+		// 只是不再重复下发；抑制到期后自然恢复。
+		e.debug("该 IP 处于下发抑制窗口内，跳过重复下发", "ip", ip, "jail", jail)
+		return
+	}
 	e.info("触发封禁",
 		"reason", intent.Reason,
 		"ip", ip,

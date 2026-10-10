@@ -150,6 +150,8 @@ type pumpFixture struct {
 	cache   *bans.ActiveBanCache
 	wl      *bans.Whitelist
 	events  chan Incoming
+	// directives 是反向指令队列：多数测试不读它，容量够大所以投递不会失败。
+	directives chan runtime.Directive
 }
 
 func newPumpFixture(t *testing.T) *pumpFixture {
@@ -162,6 +164,8 @@ func newPumpFixture(t *testing.T) *pumpFixture {
 		cache:   bans.NewActiveBanCache(),
 		wl:      bans.NewWhitelist(),
 		events:  make(chan Incoming, 16),
+
+		directives: make(chan runtime.Directive, 16),
 	}
 	f.sampler.ack = contract.DaemonRegisterAck{Accepted: true}
 	p, err := NewEventPump(PumpDeps{
@@ -173,6 +177,7 @@ func newPumpFixture(t *testing.T) *pumpFixture {
 		Whitelist:         f.wl,
 		Publish:           f.pub,
 		Metrics:           f.metrics,
+		Directives:        f.directives,
 		SampleEvery:       time.Hour,
 		ReconcileEvery:    time.Hour,
 		RegisterEvery:     time.Hour,
@@ -716,4 +721,105 @@ func TestRouterCountersReachSnapshot(t *testing.T) {
 	if !f.store.Snapshot().Link.LinkDown {
 		t.Fatal("Router.Close 后快照仍显示链路正常")
 	}
+}
+
+// CONFIG_CHANGE 必须转成反向指令：配置的执行体副本由入站执行体独占，泵既改不到也不该改，
+// 否则同一条 ban_time 会一边被采纳一边被重载路径覆盖。
+func TestConfigChangeBecomesDirective(t *testing.T) {
+	f := newPumpFixture(t)
+	f.pump.handle(Incoming{CfgChg: &contract.ConfigChange{ConfigPayload: contract.ConfigPayload{
+		Flags: contract.ConfigFlagBanTime, BanTime: 123,
+	}}})
+
+	select {
+	case d := <-f.directives:
+		if d.Kind != runtime.DirectiveKernelConfigChanged {
+			t.Fatalf("指令类型 = %d，期望 KernelConfigChanged", d.Kind)
+		}
+		if d.ConfigFlags != uint32(contract.ConfigFlagBanTime) || d.BanTimeSecs != 123 {
+			t.Fatalf("指令载荷不符: %+v", d)
+		}
+	default:
+		t.Fatal("CONFIG_CHANGE 没有转成反向指令")
+	}
+}
+
+// 封禁被内核拒绝时，除了回滚镜像还要给执行体一条抑制指令：条目一消失，该 IP 的下一条
+// 失败日志就能重新占位并再发一次指令，内核表满时会变成每行日志一个 netlink 往返。
+func TestRejectedBanAlsoEmitsDirective(t *testing.T) {
+	f := newPumpFixture(t)
+	af, addr := wireAddr(t, "203.0.113.60")
+
+	f.pump.handle(Incoming{Cmd: &contract.CmdResult{
+		OriginalCmd: contract.MsgBanIP, ErrorCode: -28, AF: af, Addr: addr,
+	}})
+
+	select {
+	case d := <-f.directives:
+		if d.Kind != runtime.DirectiveCommandRejected || d.IP != "203.0.113.60" {
+			t.Fatalf("抑制指令不符: %+v", d)
+		}
+		if d.Cmd != "BanIp" || d.Errno != -28 {
+			t.Fatalf("指令未带上被拒的指令名与错误码: %+v", d)
+		}
+	default:
+		t.Fatal("封禁被拒未产生反向指令")
+	}
+}
+
+// 解封与白名单的失败回执不产生指令：这两类下发都不是入站主链路发起的，投递给执行体只会
+// 把无处落地的东西塞进抑制表。
+func TestNonBanRejectionEmitsNoDirective(t *testing.T) {
+	f := newPumpFixture(t)
+	af, addr := wireAddr(t, "203.0.113.61")
+
+	for _, cmd := range []contract.MsgType{contract.MsgUnbanIP, contract.MsgAddWhitelist} {
+		f.pump.handle(Incoming{Cmd: &contract.CmdResult{OriginalCmd: cmd, ErrorCode: -22, AF: af, Addr: addr}})
+	}
+	if n := len(f.directives); n != 0 {
+		t.Fatalf("非封禁回执产生了 %d 条指令", n)
+	}
+}
+
+// 队列满时必须丢弃而不是阻塞：事件流一堵，封禁与白名单的状态变更就再也进不来了。
+func TestEmitDropsWhenDirectiveQueueFull(t *testing.T) {
+	f := newPumpFixture(t)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 3*cap(f.directives); i++ {
+			f.pump.handle(Incoming{CfgChg: &contract.ConfigChange{ConfigPayload: contract.ConfigPayload{
+				Flags: contract.ConfigFlagBanTime, BanTime: uint32(i + 1),
+			}}})
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("指令队列已满时泵被钉住（应丢弃而非等待）")
+	}
+	if n := len(f.directives); n != cap(f.directives) {
+		t.Fatalf("队列长度 = %d，期望恰好装满 %d", n, cap(f.directives))
+	}
+}
+
+// 未接指令队列（单元测试或内核链路缺失的降级装配）时，两类事件仍要照常处理，不能 panic。
+func TestHandleWithoutDirectiveChannelIsSafe(t *testing.T) {
+	af, addr := wireAddr(t, "203.0.113.62")
+	p, err := NewEventPump(PumpDeps{
+		Sampler:   newFakeSampler(),
+		Events:    make(chan Incoming, 1),
+		Store:     telemetry.NewStore(),
+		Cache:     bans.NewActiveBanCache(),
+		Whitelist: bans.NewWhitelist(),
+	})
+	if err != nil {
+		t.Fatalf("装配事件泵失败: %v", err)
+	}
+	p.handle(Incoming{CfgChg: &contract.ConfigChange{ConfigPayload: contract.ConfigPayload{
+		Flags: contract.ConfigFlagBanTime, BanTime: 60,
+	}}})
+	p.handle(Incoming{Cmd: &contract.CmdResult{
+		OriginalCmd: contract.MsgBanIP, ErrorCode: -28, AF: af, Addr: addr,
+	}})
 }

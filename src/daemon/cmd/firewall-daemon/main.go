@@ -95,6 +95,8 @@ func run(args []string) error {
 
 	// SQLite 持久化层：封禁历史、信誉分、封禁事件。
 	var historyDB *persist.DB
+	// facts 是判定层的信誉分/封禁次数缓存（nil 时执行体退回 NoHistory）。
+	var facts *persist.Facts
 	if cfg.HistoryDBPath != "" {
 		db, err := persist.NewDB(persist.Config{
 			Path:   cfg.HistoryDBPath,
@@ -108,6 +110,10 @@ func run(args []string) error {
 			defer close(dbStopCh)
 			db.StartCleanupScheduler(0, cfg.HistoryRetentionDays, dbStopCh)
 			db.StartReputationRecoveryScheduler(0, 1, 100, dbStopCh)
+			// 判定层每行日志都要扣一次信誉分并立刻取分，直接查库会把入站主链路钉在磁盘上；
+			// 这里按 IP 折叠，与库自带的两个调度器共用同一条 stop 通道（关停时最后刷一次盘）。
+			facts = persist.NewFacts(db, persist.FactsOptions{Logger: logger})
+			facts.StartFlusher(dbStopCh)
 			historyDB = db
 			logger.Info("持久化数据库已就绪", "path", cfg.HistoryDBPath)
 		}
@@ -139,6 +145,16 @@ func run(args []string) error {
 		}
 	}
 
+	// 封禁下发汇聚点：入站主链路与 HTTP API 共用同一个实例。
+	//
+	// 此前两处各建一个 banSink，写的是同一份进程级缓存所以结果没分叉，但「谁通知信誉缓存」
+	// 这类回调只能挂在其中一个上，共用实例就把这个坑填平：封禁落库后由它同步 Facts 里的
+	// 封禁次数与扣分，否则渐进式时长读到的是封禁前的旧次数。
+	banSinkForDaemon := newBanSink(kernelClient, logger, historyDB)
+	if facts != nil {
+		banSinkForDaemon.noteBan = facts.NoteBan
+	}
+
 	// 内核观测快照：事件泵是唯一写入者。
 	//
 	// 无条件建立，让读侧将来只有一个持有者：链路缺失时它保持零值快照，读侧就不需要区分
@@ -167,7 +183,6 @@ func run(args []string) error {
 			sseBroker = http.NewSSEBroker(cfg.MaxSSEConnections, logger)
 			defer sseBroker.Stop()
 			metrics = http.NewMetrics()
-			apiBanSink := newBanSink(kernelClient, logger, historyDB)
 
 			// SSE token 认证：使用 MetricsUsername:MetricsPassword 作为简单 token
 			if cfg.MetricsUsername != "" || cfg.MetricsPassword != "" {
@@ -188,7 +203,7 @@ func run(args []string) error {
 				DB:               historyDB,
 				SSE:              sseBroker,
 				Metrics:          metrics,
-				KernelBan:        apiBanSink,
+				KernelBan:        banSinkForDaemon,
 				Username:         cfg.MetricsUsername,
 				Password:         cfg.MetricsPassword,
 				GetCurrentConfig: func() *config.Config { return &cfg },
@@ -210,6 +225,10 @@ func run(args []string) error {
 			logger.Info("HTTP 服务器已启动", "addr", cfg.HTTPAddress)
 		}
 	}
+
+	// 反向指令通道：内核事件 → 入站执行体。容量 256 是「一个 poll 周期内可能到达的
+	// CONFIG_CHANGE + 封禁被拒」的宽裕上界；满了由泵记日志丢弃，不钉住事件流。
+	kernelCmd := make(chan runtime.Directive, 256)
 
 	// 内核事件泵：NewEventChannel 的事件流到这里才有消费者。
 	//
@@ -237,6 +256,8 @@ func run(args []string) error {
 			Timeout:   kernel.DefaultRequestTimeout,
 			Cache:     bans.GlobalCache(),
 			Whitelist: bans.GlobalWhitelist(),
+			// 内核侧配置变更与封禁下发被拒要交给入站执行体落地（配置所有权在它手上）。
+			Directives: kernelCmd,
 		})
 		if err != nil {
 			logger.Error("内核事件泵装配失败，内核事件将无人消费", "error", err)
@@ -254,14 +275,22 @@ func run(args []string) error {
 	}
 
 	// 入站主链路：配置所有权移入执行体，此后由它持有。
+	//
+	// 判定事实源用库支撑的信誉缓存；库缺失（未配置路径或打开失败）时退回 NoHistory——
+	// 阈值乘数按满分算，判定照常，只是不再有渐进式收紧。
+	var decisionFacts runtime.DecisionFacts = runtime.NoHistory{}
+	if facts != nil {
+		decisionFacts = facts
+	}
 	deps := runtime.Deps{
-		Logger:   logger,
-		Facts:    runtime.NoHistory{},
-		Sink:     newBanSink(kernelClient, logger, historyDB),
-		Stats:    newStatsSink(logger, metrics),
-		Hooks:    runtime.NewMaintenanceHooks(historyDB, logger),
-		Reloader: runtime.NewFileReloader(cfg.ConfigFile, logger),
-		Enabled:  jailEnabled,
+		Logger:    logger,
+		Facts:     decisionFacts,
+		Sink:      banSinkForDaemon,
+		Stats:     newStatsSink(logger, metrics),
+		Hooks:     runtime.NewMaintenanceHooks(historyDB, logger),
+		Reloader:  runtime.NewFileReloader(cfg.ConfigFile, logger),
+		Enabled:   jailEnabled,
+		KernelCmd: kernelCmd,
 	}
 	executor, err := runtime.NewInboundExecutor(&cfg, signals, deps)
 	if err != nil {
@@ -390,6 +419,8 @@ type banSink struct {
 	cache  *bans.ActiveBanCache
 	logger *slog.Logger
 	db     *persist.DB
+	// noteBan 在封禁落库后将「刚刚封了一次」同步进信誉缓存（可空）。
+	noteBan func(netip.Addr)
 }
 
 func newBanSink(client *kernel.Client, logger *slog.Logger, db *persist.DB) *banSink {
@@ -411,8 +442,15 @@ func (s *banSink) TryInsert(info bans.BanInfo) bool {
 		if err := s.db.RecordBanHistory(info.IP, info.IsPermanent); err != nil {
 			s.logger.Error("record ban history", "error", err)
 		}
-		if err := s.db.RecordBan(info.IP, 10); err != nil {
+		if err := s.db.RecordBan(info.IP, persist.DefaultBanPenalty); err != nil {
 			s.logger.Error("record ban reputation", "error", err)
+		}
+	}
+	// 库里的封禁次数与信誉分都被本方法改过了，判定层的缓存必须跟着走，否则它继续报告
+	// 封禁前的旧值（渐进式时长读的就是这个次数）。
+	if s.noteBan != nil {
+		if addr, err := netip.ParseAddr(info.IP); err == nil {
+			s.noteBan(addr)
 		}
 	}
 	return true

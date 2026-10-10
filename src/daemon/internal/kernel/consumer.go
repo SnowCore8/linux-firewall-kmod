@@ -113,6 +113,10 @@ type PumpDeps struct {
 	Metrics   Metrics
 	Logger    *slog.Logger
 
+	// Directives 是内核→入站执行体的反向指令队列（非阻塞投递，见 runtime.Directive）。
+	// nil 时 CONFIG_CHANGE 与封禁下发被拒只记日志，执行体不会收到。
+	Directives chan<- runtime.Directive
+
 	// 周期覆盖项：零值取上方常量，供测试缩短节拍。
 	Timeout           time.Duration
 	SampleEvery       time.Duration
@@ -123,16 +127,17 @@ type PumpDeps struct {
 
 // EventPump 消费内核事件流并按周期采样、对账。由单个 goroutine 独占。
 type EventPump struct {
-	sampler   Sampler
-	events    <-chan Incoming
-	store     *telemetry.Store
-	ring      *telemetry.Ring
-	router    *Router
-	cache     *bans.ActiveBanCache
-	whitelist *bans.Whitelist
-	publish   Publisher
-	metrics   Metrics
-	logger    *slog.Logger
+	sampler    Sampler
+	events     <-chan Incoming
+	store      *telemetry.Store
+	ring       *telemetry.Ring
+	router     *Router
+	cache      *bans.ActiveBanCache
+	whitelist  *bans.Whitelist
+	publish    Publisher
+	metrics    Metrics
+	logger     *slog.Logger
+	directives chan<- runtime.Directive
 
 	timeout        time.Duration
 	sampleEvery    time.Duration
@@ -186,6 +191,7 @@ func NewEventPump(deps PumpDeps) (*EventPump, error) {
 		publish:        deps.Publish,
 		metrics:        deps.Metrics,
 		logger:         logger,
+		directives:     deps.Directives,
 		timeout:        orDefault(deps.Timeout, DefaultRequestTimeout),
 		sampleEvery:    orDefault(deps.SampleEvery, SampleInterval),
 		reconcileEvery: orDefault(deps.ReconcileEvery, ReconcileInterval),
@@ -276,9 +282,14 @@ func (p *EventPump) handle(msg Incoming) {
 	case msg.Cmd != nil:
 		p.handleCmdResult(msg.Cmd)
 	case msg.CfgChg != nil:
-		// 内核侧配置变更（procfs 写入）——本层只记账与告警，把它变成主链路的动作
-		// 属于「反向指令」那条通道，不在事件泵里直接改配置：配置的独占所有权在执行体。
-		p.logger.Warn("内核侧配置已变更，守护进程内存配置未同步", "flags", uint32(msg.CfgChg.Flags))
+		// 内核侧配置变更（procfs 写入）。本层不碰 cfg——配置的执行体副本由入站执行体独占，
+		// 这里只把事实转成反向指令，采纳动作在 executor.adoptKernelConfig 里做。
+		p.emit(runtime.Directive{
+			Kind:                runtime.DirectiveKernelConfigChanged,
+			ConfigFlags:         uint32(msg.CfgChg.Flags),
+			BanTimeSecs:         msg.CfgChg.BanTime,
+			DdosBanDurationSecs: msg.CfgChg.DdosBanDuration,
+		})
 	case msg.CfgAck != nil:
 		// ConfigAck 是回显 seq 的回复类型，正常路径由路由器配对走，不会到这里。
 		p.logger.Debug("收到未被认领的 ConfigAck，已忽略")
@@ -420,6 +431,14 @@ func (p *EventPump) handleCmdResult(ev *contract.CmdResult) {
 				p.publishDomain(DomainBans, "封禁被内核拒绝")
 			}
 		}
+		// 同时通知执行体：它才是发起下发的一方。条目从镜像里消失后，该 IP 的下一条失败
+		// 日志会立刻重新占位并再发一次指令——不抑制的话内核表满时每行日志一个往返。
+		p.emit(runtime.Directive{
+			Kind:  runtime.DirectiveCommandRejected,
+			IP:    ip,
+			Cmd:   ev.OriginalCmd.String(),
+			Errno: ev.ErrorCode,
+		})
 	case contract.MsgUnbanIP:
 		// 解封指令被拒：内核仍在封禁。删除路径是「先删镜像再下发」，此刻镜像里已经没有
 		// 这条，也无从重建它的时长与 jail，所以不做掩盖动作——下一次对账按内核列表补回，
@@ -429,6 +448,23 @@ func (p *EventPump) handleCmdResult(ev *contract.CmdResult) {
 		// 白名单镜像与内核不一致的事实同样由事件流纠正。API 侧的白名单写入目前还没有
 		// 下发内核（那是后续包的内容），这里不猜测内核状态。
 		p.logger.Warn("白名单指令被内核拒绝", "cmd", ev.OriginalCmd, "cidr", ip)
+	}
+}
+
+// emit 非阻塞投递一条反向指令。
+//
+// 队列满时记一条日志并丢弃，绝不因为等执行体而钉住事件流：事件流一堵，封禁与白名单的
+// 状态变更就再也进不来了，比少一条指令严重得多。丢 CONFIG_CHANGE 的后果是配置继续按
+// 文件生效，丢「下发被拒」的后果是该 IP 少一轮抑制——两者都会被下一条同类事件纠正。
+func (p *EventPump) emit(d runtime.Directive) {
+	if p.directives == nil {
+		return
+	}
+	select {
+	case p.directives <- d:
+	default:
+		p.logger.Warn("反向指令队列已满，指令已丢弃",
+			"kind", uint8(d.Kind), "ip", d.IP, "flags", d.ConfigFlags)
 	}
 }
 
