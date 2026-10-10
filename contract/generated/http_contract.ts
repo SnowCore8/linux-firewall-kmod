@@ -132,7 +132,7 @@ export type SseEventsApiV1Events = "connected" | "stats" | "bans" | "jails" | "w
 export type SseEventsApiV1LogsStream = "connected" | "log" | "error"
 
 /** 响应/请求载荷类型（字段与 daemon 序列化出的 JSON key 一一对应） */
-/** Rust `AnomalyResponse` */
+/** 契约类型 `AnomalyResponse` */
 export interface AnomalyResponse {
   global_score: number
   global_dimensions: DimensionScore[]
@@ -144,26 +144,26 @@ export interface AnomalyResponse {
   timestamp: number
 }
 
-/** Rust `DimensionScore` */
+/** 契约类型 `DimensionScore` */
 export interface DimensionScore {
   name: string
   score: number
 }
 
-/** Rust `FeatureValue` */
+/** 契约类型 `FeatureValue` */
 export interface FeatureValue {
   name: string
   value: number
 }
 
-/** Rust `IpAnomalyEntry` */
+/** 契约类型 `IpAnomalyEntry` */
 export interface IpAnomalyEntry {
   ip: string
   score: number
   dimensions: DimensionScore[]
 }
 
-/** Rust `AttackGeoResponse` */
+/** 契约类型 `AttackGeoResponse` */
 export interface AttackGeoResponse {
   geoip_enabled: boolean
   points: GeoPoint[]
@@ -174,7 +174,7 @@ export interface AttackGeoResponse {
   server_location_source: string
 }
 
-/** Rust `GeoPoint` */
+/** 契约类型 `GeoPoint` */
 export interface GeoPoint {
   latitude: number
   longitude: number
@@ -188,14 +188,14 @@ export interface GeoPoint {
   last_banned_at: number
 }
 
-/** Rust `ApiResponse` */
+/** 契约类型 `ApiResponse` */
 export interface ApiResponse<T> {
   code: number
   data: T
   message: string
 }
 
-/** Rust `PaginatedResponse` */
+/** 契约类型 `PaginatedResponse` */
 export interface PaginatedResponse<T> {
   items: T[]
   total: number
@@ -204,7 +204,7 @@ export interface PaginatedResponse<T> {
   total_pages: number
 }
 
-/** Rust `RuntimeSnapshot` */
+/** 契约类型 `RuntimeSnapshot` */
 export interface RuntimeSnapshot {
   status: string
   netlink_ready: boolean
@@ -216,7 +216,7 @@ export interface RuntimeSnapshot {
   lease_losses: number
 }
 
-/** Rust `StatsResponse` */
+/** 契约类型 `StatsResponse` */
 export interface StatsResponse {
   daemon_version: string
   kernel_version: string
@@ -237,13 +237,13 @@ export interface StatsResponse {
   threat_level: ThreatLevel
 }
 
-/** Rust `ChartData` */
+/** 契约类型 `ChartData` */
 export interface ChartData {
   labels: string[]
   values: number[]
 }
 
-/** Rust `ThreatLevel` */
+/** 契约类型 `ThreatLevel` */
 export interface ThreatLevel {
   level: string
   score: number
@@ -256,7 +256,7 @@ export interface ThreatLevel {
   peak_hours: boolean
 }
 
-/** Rust `BanResponse` */
+/** 契约类型 `BanResponse` */
 export interface BanResponse {
   ip: string
   jail: string
@@ -267,7 +267,7 @@ export interface BanResponse {
   is_permanent: boolean
 }
 
-/** Rust `BanDetailResponse` */
+/** 契约类型 `BanDetailResponse` */
 export interface BanDetailResponse {
   ip: string
   is_banned: boolean
@@ -286,7 +286,7 @@ export interface BanDetailResponse {
   reputation_multiplier: number
 }
 
-/** Rust `BanOperationResponse` */
+/** 契约类型 `BanOperationResponse` */
 export interface BanOperationResponse {
   ip: string
   action: string
@@ -294,7 +294,7 @@ export interface BanOperationResponse {
   duration_seconds: number | null
 }
 
-/** Rust `BatchOperationResponse` */
+/** 契约类型 `BatchOperationResponse` */
 export interface BatchOperationResponse {
   total: number
   succeeded: number
@@ -302,14 +302,14 @@ export interface BatchOperationResponse {
   details: string[]
 }
 
-/** Rust `CreateBanRequest` */
+/** 契约类型 `CreateBanRequest` */
 export interface CreateBanRequest {
   ip: string
   duration: number | null
   reason: string | null
 }
 
-/** Rust `JailResponse` */
+/** 契约类型 `JailResponse` */
 export interface JailResponse {
   name: string
   enabled: boolean
@@ -328,12 +328,12 @@ export interface JailResponse {
   bans_triggered: number
 }
 
-/** Rust `UpdateJailRequest` */
+/** 契约类型 `UpdateJailRequest` */
 export interface UpdateJailRequest {
   enabled: boolean
 }
 
-/** Rust `WebuiConfigResponse` */
+/** 契约类型 `WebuiConfigResponse` */
 export interface WebuiConfigResponse {
   sse_push_interval: number
   rate_warning_pps: number
@@ -356,7 +356,7 @@ export interface WebuiConfigResponse {
   clear_logs_at: string | null
 }
 
-/** Rust `UpdateConfigRequest` */
+/** 契约类型 `UpdateConfigRequest` */
 export interface UpdateConfigRequest {
   sse_push_interval: number | null
   rate_warning_pps: number | null
@@ -379,19 +379,19 @@ export interface UpdateConfigRequest {
   clear_logs_at: string | null
 }
 
-/** Rust `WhitelistEntryResponse`（前端名） */
+/** 契约类型 `WhitelistEntryResponse`（前端名） */
 export interface WhitelistEntry {
   cidr: string
   device: string
 }
 
-/** Rust `WhitelistOperationResponse` */
+/** 契约类型 `WhitelistOperationResponse` */
 export interface WhitelistOperationResponse {
   cidr: string
   action: string
 }
 
-/** Rust `WhitelistRecommendation` */
+/** 契约类型 `WhitelistRecommendation` */
 export interface WhitelistRecommendation {
   rec_type: string
   cidr: string
@@ -401,12 +401,12 @@ export interface WhitelistRecommendation {
   confidence: number
 }
 
-/** Rust `CreateWhitelistRequest` */
+/** 契约类型 `CreateWhitelistRequest` */
 export interface CreateWhitelistRequest {
   cidr: string
 }
 
-/** Rust `RateResponse` */
+/** 契约类型 `RateResponse` */
 export interface RateResponse {
   ip: string
   packets_per_sec: number
@@ -419,7 +419,7 @@ export interface RateResponse {
   fin_packets_per_sec: number
 }
 
-/** Rust `RateHistoryResponse` */
+/** 契约类型 `RateHistoryResponse` */
 export interface RateHistoryResponse {
   timestamp: number
   total_pps: number
@@ -427,7 +427,7 @@ export interface RateHistoryResponse {
   tracked_ips: number
 }
 
-/** Rust `RateWindowSnapshot` */
+/** 契约类型 `RateWindowSnapshot` */
 export interface RateWindowSnapshot {
   pps_short: number
   pps_mid: number
@@ -437,7 +437,7 @@ export interface RateWindowSnapshot {
   bps_long: number
 }
 
-/** Rust `RecidivismResponse` */
+/** 契约类型 `RecidivismResponse` */
 export interface RecidivismResponse {
   total_ips: number
   recidivist_ips: number
@@ -446,7 +446,7 @@ export interface RecidivismResponse {
   top_recidivists: RecidivistEntry[]
 }
 
-/** Rust `RecidivistEntry` */
+/** 契约类型 `RecidivistEntry` */
 export interface RecidivistEntry {
   ip: string
   ban_count: number
@@ -454,7 +454,7 @@ export interface RecidivistEntry {
   was_permanent: boolean
 }
 
-/** Rust `BanEffectivenessResponse` */
+/** 契约类型 `BanEffectivenessResponse` */
 export interface BanEffectivenessResponse {
   levels: BanLevelEffectiveness[]
   total_unique_ips: number
@@ -462,7 +462,7 @@ export interface BanEffectivenessResponse {
   summary: string
 }
 
-/** Rust `BanLevelEffectiveness` */
+/** 契约类型 `BanLevelEffectiveness` */
 export interface BanLevelEffectiveness {
   level: number
   label: string
@@ -473,7 +473,7 @@ export interface BanLevelEffectiveness {
   verdict: string
 }
 
-/** Rust `PeriodicAttacker` */
+/** 契约类型 `PeriodicAttacker` */
 export interface PeriodicAttacker {
   ip: string
   ban_count: number
@@ -484,7 +484,7 @@ export interface PeriodicAttacker {
   timestamps: number[]
 }
 
-/** Rust `CollaborativeAttack` */
+/** 契约类型 `CollaborativeAttack` */
 export interface CollaborativeAttack {
   jail_name: string
   window_start: number
@@ -495,7 +495,7 @@ export interface CollaborativeAttack {
   correlation_score: number
 }
 
-/** Rust `AttackPrediction` */
+/** 契约类型 `AttackPrediction` */
 export interface AttackPrediction {
   ip: string
   ban_count: number
@@ -508,7 +508,7 @@ export interface AttackPrediction {
   urgency: string
 }
 
-/** Rust `AttackPredictionSummary` */
+/** 契约类型 `AttackPredictionSummary` */
 export interface AttackPredictionSummary {
   predictions: AttackPrediction[]
   jail_trends: JailAttackTrend[]
@@ -516,7 +516,7 @@ export interface AttackPredictionSummary {
   within_24h_count: number
 }
 
-/** Rust `JailAttackTrend` */
+/** 契约类型 `JailAttackTrend` */
 export interface JailAttackTrend {
   jail_name: string
   bans_24h: number
@@ -525,7 +525,7 @@ export interface JailAttackTrend {
   predicted_attackers_24h: number
 }
 
-/** Rust `ThresholdRecommendation` */
+/** 契约类型 `ThresholdRecommendation` */
 export interface ThresholdRecommendation {
   jail_name: string
   current_threshold: number
@@ -540,13 +540,13 @@ export interface ThresholdRecommendation {
   confidence: number
 }
 
-/** Rust `ThresholdRecommendationResponse` */
+/** 契约类型 `ThresholdRecommendationResponse` */
 export interface ThresholdRecommendationResponse {
   recommendations: ThresholdRecommendation[]
   summary: string
 }
 
-/** Rust `BanDurationRecommendation` */
+/** 契约类型 `BanDurationRecommendation` */
 export interface BanDurationRecommendation {
   jail_name: string
   current_ban_time: number
@@ -557,13 +557,13 @@ export interface BanDurationRecommendation {
   needs_adjustment: boolean
 }
 
-/** Rust `BanDurationRecommendationResponse` */
+/** 契约类型 `BanDurationRecommendationResponse` */
 export interface BanDurationRecommendationResponse {
   recommendations: BanDurationRecommendation[]
   summary: string
 }
 
-/** Rust `ReputationEntryResponse` */
+/** 契约类型 `ReputationEntryResponse` */
 export interface ReputationEntryResponse {
   ip: string
   score: number
@@ -573,14 +573,14 @@ export interface ReputationEntryResponse {
   threshold_multiplier: number
 }
 
-/** Rust `UdpPortDistributionResponse` */
+/** 契约类型 `UdpPortDistributionResponse` */
 export interface UdpPortDistributionResponse {
   ports: UdpPortEntry[]
   total_entries: number
   max_entries: number
 }
 
-/** Rust `UdpPortEntry` */
+/** 契约类型 `UdpPortEntry` */
 export interface UdpPortEntry {
   port: number
   packets: number
@@ -588,14 +588,14 @@ export interface UdpPortEntry {
   last_seen_secs: number
 }
 
-/** Rust `IcmpTypeDistributionResponse` */
+/** 契约类型 `IcmpTypeDistributionResponse` */
 export interface IcmpTypeDistributionResponse {
   types: IcmpTypeEntry[]
   total_entries: number
   max_entries: number
 }
 
-/** Rust `IcmpTypeEntry` */
+/** 契约类型 `IcmpTypeEntry` */
 export interface IcmpTypeEntry {
   type: number
   code: number
@@ -604,7 +604,7 @@ export interface IcmpTypeEntry {
   last_seen_secs: number
 }
 
-/** Rust `PacketSizeDistributionResponse` */
+/** 契约类型 `PacketSizeDistributionResponse` */
 export interface PacketSizeDistributionResponse {
   labels: string[]
   counts: number[]
@@ -612,7 +612,7 @@ export interface PacketSizeDistributionResponse {
   percentages: number[]
 }
 
-/** Rust `TtlDistributionResponse` */
+/** 契约类型 `TtlDistributionResponse` */
 export interface TtlDistributionResponse {
   labels: string[]
   counts: number[]
@@ -620,48 +620,48 @@ export interface TtlDistributionResponse {
   percentages: number[]
 }
 
-/** Rust `BanDurationHistogramResponse` */
+/** 契约类型 `BanDurationHistogramResponse` */
 export interface BanDurationHistogramResponse {
   labels: string[]
   counts: number[]
   total: number
 }
 
-/** Rust `IpFragmentStatsResponse` */
+/** 契约类型 `IpFragmentStatsResponse` */
 export interface IpFragmentStatsResponse {
   total_packets: number
   fragment_packets: number
   fragment_ratio: number
 }
 
-/** Rust `PortScanResponse` */
+/** 契约类型 `PortScanResponse` */
 export interface PortScanResponse {
   threshold: number
   total_detected: number
   scanners: PortScannerEntry[]
 }
 
-/** Rust `PortScannerEntry` */
+/** 契约类型 `PortScannerEntry` */
 export interface PortScannerEntry {
   ip: string
   unique_ports: number
   packets: number
 }
 
-/** Rust `ServiceProbeResponse` */
+/** 契约类型 `ServiceProbeResponse` */
 export interface ServiceProbeResponse {
   threshold: number
   probes: ServiceProbeEntry[]
 }
 
-/** Rust `ServiceProbeEntry` */
+/** 契约类型 `ServiceProbeEntry` */
 export interface ServiceProbeEntry {
   ip: string
   protocol_count: number
   packets: number
 }
 
-/** Rust `NetworkBlock` */
+/** 契约类型 `NetworkBlock` */
 export interface NetworkBlock {
   subnet: string
   unique_ips: number
@@ -670,12 +670,12 @@ export interface NetworkBlock {
   top_ip: string
 }
 
-/** Rust `HourlyHeatmap` */
+/** 契约类型 `HourlyHeatmap` */
 export interface HourlyHeatmap {
   hours: HourlyBucket[]
 }
 
-/** Rust `HourlyBucket` */
+/** 契约类型 `HourlyBucket` */
 export interface HourlyBucket {
   hour: number
   bans: number
@@ -683,7 +683,7 @@ export interface HourlyBucket {
   ddos_events: number
 }
 
-/** Rust `LogPageResponse` */
+/** 契约类型 `LogPageResponse` */
 export interface LogPageResponse {
   items: LogEntry[]
   total_lines: number
@@ -692,13 +692,13 @@ export interface LogPageResponse {
   total_pages: number
 }
 
-/** Rust `LogEntry` */
+/** 契约类型 `LogEntry` */
 export interface LogEntry {
   line_number: number
   content: string
 }
 
-/** Rust `LogQueryParams` */
+/** 契约类型 `LogQueryParams` */
 export interface LogQueryParams {
   page: number | null
   page_size: number | null
@@ -707,21 +707,21 @@ export interface LogQueryParams {
   since: string | null
 }
 
-/** Rust `PaginationParams` */
+/** 契约类型 `PaginationParams` */
 export interface PaginationParams {
   page: number | null
   page_size: number | null
   sort_by: string | null
 }
 
-/** Rust `SseStreamStatus` */
+/** 契约类型 `SseStreamStatus` */
 export interface SseStreamStatus {
   current_connections: number
   max_connections: number
   limit_reached: boolean
 }
 
-/** Rust `SseStatusResponse` */
+/** 契约类型 `SseStatusResponse` */
 export interface SseStatusResponse {
   events: SseStreamStatus
   logs: SseStreamStatus

@@ -46,6 +46,31 @@ jobs:
       - name: 检查 YAML 配置（yamllint）
         run: yamllint -c .yamllint config/*.yaml
 
+  # 契约门禁：contract/*.fwidl ↔ 生成物 ↔ 内核 / daemon / 前端 三方对账。
+  # 契约是单一真相源，实现漂移必须是构建失败——而不是页面上一个永远 undefined
+  # 的字段，或内核里一个越界的 netlink 分页。
+  contract:
+    name: 契约一致性
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 校验生成物与生成器一致
+        run: make contract-drift
+
+      - name: 校验 netlink 线格式与 procfs 文本协议
+        run: |
+          python3 contract/verify_layout.py
+          python3 contract/verify_procfs.py
+
+      # HTTP 面仍在按契约补齐（daemon 从 Rust 迁到 Go，路由与载荷尚未对齐），
+      # 故暂不阻塞；缺失项由校验器按「只许缩小」的棘轮上报。补齐后置回阻塞。
+      - name: 校验 HTTP 契约 vs daemon（暂不阻塞）
+        continue-on-error: true
+        run: python3 contract/verify_http.py
+
   # 前端任务：类型检查 + 构建 + 产物校验（独立执行，与 lint 并行）
   frontend:
     name: 前端构建

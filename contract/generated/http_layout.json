@@ -7,7 +7,6 @@
   "notes": [
     "信封 ApiResponse: code / data / message",
     "认证: 失败 10 次锁 60s，未授权状态码 401",
-    "迁移棘轮基线: 25 条未迁路由",
     "安全头 4 条",
     "业务码 50002 已声明但没有任何路由引用（可能是没落地的码）",
     "路由 57 条（无认证 14 / 需认证 43）",
@@ -77,7 +76,7 @@
     "请求 PaginationParams: 3 个字段",
     "响应 SseStreamStatus: 3 个字段",
     "响应 SseStatusResponse: 2 个字段",
-    "缺陷记录: 14 条（已修 9 / 有意保留 1 / 未修 4；由 verify_*.py 到源码核对锚点）"
+    "缺陷记录: 14 条（已修 9 / 有意保留 1 / 未修 4；由 verify_http.py 核对语义）"
   ],
   "envelope": {
     "name": "ApiResponse",
@@ -87,15 +86,15 @@
     "fields": [
       {
         "key": "code",
-        "rust": "i32"
+        "type": "i32"
       },
       {
         "key": "data",
-        "rust": "T"
+        "type": "T"
       },
       {
         "key": "message",
-        "rust": "String"
+        "type": "String"
       }
     ]
   },
@@ -169,7 +168,7 @@
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
-      "note": "重定向到 /dashboard；**必须原样保留 query string**，否则 /?access_token=<token> 直达会丢凭据。状态码是 303 而非 302：实现用 axum 的 Redirect::to（其语义即 See Other；axum 未公开自定义状态码的构造器），303 在浏览器里与 302 行为一致，对纯 GET 重定向无副作用。"
+      "note": "重定向到 /dashboard；**必须原样保留 query string**，否则 /?access_token=<token> 直达会丢凭据。状态码固定为 303 See Other（不是 302）：303 明确表达「响应是另一个资源、原请求无副作用」，浏览器对两者的 GET 重定向行为一致。"
     },
     {
       "method": "GET",
@@ -961,108 +960,6 @@
       "note": "查询参数 LogQueryParams；分页参数非法 → 40005；载荷 LogPageResponse"
     }
   ],
-  "route_baseline": [
-    {
-      "method": "GET",
-      "path": "/api/v1/logs"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/logs/stream"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/rates/history"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/rates/windows"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/anomalies"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/attack-geo"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/attack-predictions"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/ban-duration-histogram"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/ban-duration-recommendations"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/ban-effectiveness"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/collaborative-attacks"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/heatmap"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/icmp-types"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/ip-fragments"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/network-distribution"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/packet-sizes"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/periodic-attackers"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/port-scanners"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/recidivism"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/reputation"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/service-probes"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/threshold-recommendations"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/ttl-distribution"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/stats/udp-ports"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/whitelist/recommendations"
-    }
-  ],
   "types": {
     "AnomalyResponse": {
       "kind": "type",
@@ -1072,35 +969,35 @@
       "fields": [
         {
           "key": "global_score",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "global_dimensions",
-          "rust": "Vec<DimensionScore>"
+          "type": "Vec<DimensionScore>"
         },
         {
           "key": "global_features",
-          "rust": "Option<Vec<FeatureValue>>"
+          "type": "Option<Vec<FeatureValue>>"
         },
         {
           "key": "global_baseline_p50",
-          "rust": "Vec<FeatureValue>"
+          "type": "Vec<FeatureValue>"
         },
         {
           "key": "global_baseline_p95",
-          "rust": "Vec<FeatureValue>"
+          "type": "Vec<FeatureValue>"
         },
         {
           "key": "global_sample_count",
-          "rust": "usize"
+          "type": "usize"
         },
         {
           "key": "ip_anomalies",
-          "rust": "Vec<IpAnomalyEntry>"
+          "type": "Vec<IpAnomalyEntry>"
         },
         {
           "key": "timestamp",
-          "rust": "i64"
+          "type": "i64"
         }
       ]
     },
@@ -1112,11 +1009,11 @@
       "fields": [
         {
           "key": "name",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "score",
-          "rust": "f64"
+          "type": "f64"
         }
       ]
     },
@@ -1128,11 +1025,11 @@
       "fields": [
         {
           "key": "name",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "value",
-          "rust": "f64"
+          "type": "f64"
         }
       ]
     },
@@ -1144,15 +1041,15 @@
       "fields": [
         {
           "key": "ip",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "score",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "dimensions",
-          "rust": "Vec<DimensionScore>"
+          "type": "Vec<DimensionScore>"
         }
       ]
     },
@@ -1164,31 +1061,31 @@
       "fields": [
         {
           "key": "geoip_enabled",
-          "rust": "bool"
+          "type": "bool"
         },
         {
           "key": "points",
-          "rust": "Vec<GeoPoint>"
+          "type": "Vec<GeoPoint>"
         },
         {
           "key": "total_ips",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "located_ips",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "server_latitude",
-          "rust": "Option<f64>"
+          "type": "Option<f64>"
         },
         {
           "key": "server_longitude",
-          "rust": "Option<f64>"
+          "type": "Option<f64>"
         },
         {
           "key": "server_location_source",
-          "rust": "String"
+          "type": "String"
         }
       ]
     },
@@ -1200,43 +1097,43 @@
       "fields": [
         {
           "key": "latitude",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "longitude",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "country_code",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "country",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "city",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "subdivision",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "unique_ips",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "total_bans",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "top_ip",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "last_banned_at",
-          "rust": "i64"
+          "type": "i64"
         }
       ]
     },
@@ -1250,15 +1147,15 @@
       "fields": [
         {
           "key": "code",
-          "rust": "i32"
+          "type": "i32"
         },
         {
           "key": "data",
-          "rust": "T"
+          "type": "T"
         },
         {
           "key": "message",
-          "rust": "String"
+          "type": "String"
         }
       ]
     },
@@ -1272,23 +1169,23 @@
       "fields": [
         {
           "key": "items",
-          "rust": "Vec<T>"
+          "type": "Vec<T>"
         },
         {
           "key": "total",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "page",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "page_size",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "total_pages",
-          "rust": "u32"
+          "type": "u32"
         }
       ]
     },
@@ -1300,35 +1197,35 @@
       "fields": [
         {
           "key": "status",
-          "rust": "&'static str"
+          "type": "&'static str"
         },
         {
           "key": "netlink_ready",
-          "rust": "bool"
+          "type": "bool"
         },
         {
           "key": "kmod_proc_present",
-          "rust": "bool"
+          "type": "bool"
         },
         {
           "key": "ban_cache_initialized",
-          "rust": "bool"
+          "type": "bool"
         },
         {
           "key": "ban_history_initialized",
-          "rust": "bool"
+          "type": "bool"
         },
         {
           "key": "active_bans",
-          "rust": "usize"
+          "type": "usize"
         },
         {
           "key": "lease_state",
-          "rust": "&'static str"
+          "type": "&'static str"
         },
         {
           "key": "lease_losses",
-          "rust": "u64"
+          "type": "u64"
         }
       ]
     },
@@ -1340,71 +1237,71 @@
       "fields": [
         {
           "key": "daemon_version",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "kernel_version",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "today_bans",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "failed_attempts",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "ddos_events",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "uptime_seconds",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "ban_trend",
-          "rust": "ChartData"
+          "type": "ChartData"
         },
         {
           "key": "jail_distribution",
-          "rust": "ChartData"
+          "type": "ChartData"
         },
         {
           "key": "failure_reasons",
-          "rust": "ChartData"
+          "type": "ChartData"
         },
         {
           "key": "failed_attempts_trend",
-          "rust": "ChartData"
+          "type": "ChartData"
         },
         {
           "key": "current_bans",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "total_bans",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "total_unbans",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "whitelist_count",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "packets_dropped",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "packets_accepted",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "threat_level",
-          "rust": "ThreatLevel"
+          "type": "ThreatLevel"
         }
       ]
     },
@@ -1416,11 +1313,11 @@
       "fields": [
         {
           "key": "labels",
-          "rust": "Vec<String>"
+          "type": "Vec<String>"
         },
         {
           "key": "values",
-          "rust": "Vec<u64>"
+          "type": "Vec<u64>"
         }
       ]
     },
@@ -1432,39 +1329,39 @@
       "fields": [
         {
           "key": "level",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "score",
-          "rust": "u8"
+          "type": "u8"
         },
         {
           "key": "factors",
-          "rust": "Vec<String>"
+          "type": "Vec<String>"
         },
         {
           "key": "current_pps",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "pps_ratio",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "ban_table_usage",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "recent_bans",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "baseline_frozen",
-          "rust": "bool"
+          "type": "bool"
         },
         {
           "key": "peak_hours",
-          "rust": "bool"
+          "type": "bool"
         }
       ]
     },
@@ -1476,31 +1373,31 @@
       "fields": [
         {
           "key": "ip",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "jail",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "banned_at",
-          "rust": "i64"
+          "type": "i64"
         },
         {
           "key": "remaining_seconds",
-          "rust": "i64"
+          "type": "i64"
         },
         {
           "key": "reason",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "ban_count",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "is_permanent",
-          "rust": "bool"
+          "type": "bool"
         }
       ]
     },
@@ -1512,63 +1409,63 @@
       "fields": [
         {
           "key": "ip",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "is_banned",
-          "rust": "bool"
+          "type": "bool"
         },
         {
           "key": "jail_name",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "reason",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "banned_at",
-          "rust": "i64"
+          "type": "i64"
         },
         {
           "key": "expires_at",
-          "rust": "i64"
+          "type": "i64"
         },
         {
           "key": "is_permanent",
-          "rust": "bool"
+          "type": "bool"
         },
         {
           "key": "fail_count",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "ban_count",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "last_unbanned_at",
-          "rust": "i64"
+          "type": "i64"
         },
         {
           "key": "was_permanent",
-          "rust": "bool"
+          "type": "bool"
         },
         {
           "key": "progressive_level",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "next_ban_duration",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "reputation_score",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "reputation_multiplier",
-          "rust": "f64"
+          "type": "f64"
         }
       ]
     },
@@ -1580,19 +1477,19 @@
       "fields": [
         {
           "key": "ip",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "action",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "permanent",
-          "rust": "bool"
+          "type": "bool"
         },
         {
           "key": "duration_seconds",
-          "rust": "Option<u64>"
+          "type": "Option<u64>"
         }
       ]
     },
@@ -1604,19 +1501,19 @@
       "fields": [
         {
           "key": "total",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "succeeded",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "failed_count",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "details",
-          "rust": "Vec<String>"
+          "type": "Vec<String>"
         }
       ]
     },
@@ -1628,15 +1525,15 @@
       "fields": [
         {
           "key": "ip",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "duration",
-          "rust": "Option<u64>"
+          "type": "Option<u64>"
         },
         {
           "key": "reason",
-          "rust": "Option<String>"
+          "type": "Option<String>"
         }
       ]
     },
@@ -1648,63 +1545,63 @@
       "fields": [
         {
           "key": "name",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "enabled",
-          "rust": "bool"
+          "type": "bool"
         },
         {
           "key": "ban_count",
-          "rust": "usize"
+          "type": "usize"
         },
         {
           "key": "max_retries",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "effective_max_retries",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "findtime",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "ban_time",
-          "rust": "i32"
+          "type": "i32"
         },
         {
           "key": "is_peak_hours",
-          "rust": "bool"
+          "type": "bool"
         },
         {
           "key": "peak_hours_multiplier",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "internal_ip_multiplier",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "lines_parsed",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "regex_matches",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "ips_extracted",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "failed_attempts",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "bans_triggered",
-          "rust": "u64"
+          "type": "u64"
         }
       ]
     },
@@ -1716,7 +1613,7 @@
       "fields": [
         {
           "key": "enabled",
-          "rust": "bool"
+          "type": "bool"
         }
       ]
     },
@@ -1728,79 +1625,79 @@
       "fields": [
         {
           "key": "sse_push_interval",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "rate_warning_pps",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "rate_critical_pps",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "rate_warning_syn",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "rate_critical_syn",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "max_syn_per_second",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "max_udp_per_second",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "max_icmp_per_second",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "max_ack_per_second",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "max_rst_per_second",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "max_fin_per_second",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "static_threshold",
-          "rust": "bool"
+          "type": "bool"
         },
         {
           "key": "dynamic_threshold",
-          "rust": "bool"
+          "type": "bool"
         },
         {
           "key": "ddos_detection",
-          "rust": "bool"
+          "type": "bool"
         },
         {
           "key": "max_ban_entries",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "max_whitelist_entries",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "max_rate_entries",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "max_local_ip_cache",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "clear_logs_at",
-          "rust": "Option<String>"
+          "type": "Option<String>"
         }
       ]
     },
@@ -1812,79 +1709,79 @@
       "fields": [
         {
           "key": "sse_push_interval",
-          "rust": "Option<u32>"
+          "type": "Option<u32>"
         },
         {
           "key": "rate_warning_pps",
-          "rust": "Option<u64>"
+          "type": "Option<u64>"
         },
         {
           "key": "rate_critical_pps",
-          "rust": "Option<u64>"
+          "type": "Option<u64>"
         },
         {
           "key": "rate_warning_syn",
-          "rust": "Option<u64>"
+          "type": "Option<u64>"
         },
         {
           "key": "rate_critical_syn",
-          "rust": "Option<u64>"
+          "type": "Option<u64>"
         },
         {
           "key": "max_syn_per_second",
-          "rust": "Option<u32>"
+          "type": "Option<u32>"
         },
         {
           "key": "max_udp_per_second",
-          "rust": "Option<u32>"
+          "type": "Option<u32>"
         },
         {
           "key": "max_icmp_per_second",
-          "rust": "Option<u32>"
+          "type": "Option<u32>"
         },
         {
           "key": "max_ack_per_second",
-          "rust": "Option<u32>"
+          "type": "Option<u32>"
         },
         {
           "key": "max_rst_per_second",
-          "rust": "Option<u32>"
+          "type": "Option<u32>"
         },
         {
           "key": "max_fin_per_second",
-          "rust": "Option<u32>"
+          "type": "Option<u32>"
         },
         {
           "key": "static_threshold",
-          "rust": "Option<bool>"
+          "type": "Option<bool>"
         },
         {
           "key": "dynamic_threshold",
-          "rust": "Option<bool>"
+          "type": "Option<bool>"
         },
         {
           "key": "ddos_detection",
-          "rust": "Option<bool>"
+          "type": "Option<bool>"
         },
         {
           "key": "max_ban_entries",
-          "rust": "Option<u32>"
+          "type": "Option<u32>"
         },
         {
           "key": "max_whitelist_entries",
-          "rust": "Option<u32>"
+          "type": "Option<u32>"
         },
         {
           "key": "max_rate_entries",
-          "rust": "Option<u32>"
+          "type": "Option<u32>"
         },
         {
           "key": "max_local_ip_cache",
-          "rust": "Option<u32>"
+          "type": "Option<u32>"
         },
         {
           "key": "clear_logs_at",
-          "rust": "Option<String>"
+          "type": "Option<String>"
         }
       ]
     },
@@ -1896,11 +1793,11 @@
       "fields": [
         {
           "key": "cidr",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "device",
-          "rust": "String"
+          "type": "String"
         }
       ]
     },
@@ -1912,11 +1809,11 @@
       "fields": [
         {
           "key": "cidr",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "action",
-          "rust": "String"
+          "type": "String"
         }
       ]
     },
@@ -1928,27 +1825,27 @@
       "fields": [
         {
           "key": "rec_type",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "cidr",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "reason",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "affected_ips",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "total_bans",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "confidence",
-          "rust": "u8"
+          "type": "u8"
         }
       ]
     },
@@ -1960,7 +1857,7 @@
       "fields": [
         {
           "key": "cidr",
-          "rust": "String"
+          "type": "String"
         }
       ]
     },
@@ -1972,39 +1869,39 @@
       "fields": [
         {
           "key": "ip",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "packets_per_sec",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "bytes_per_sec",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "syn_packets_per_sec",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "udp_packets_per_sec",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "icmp_packets_per_sec",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "ack_packets_per_sec",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "rst_packets_per_sec",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "fin_packets_per_sec",
-          "rust": "u64"
+          "type": "u64"
         }
       ]
     },
@@ -2016,19 +1913,19 @@
       "fields": [
         {
           "key": "timestamp",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "total_pps",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "total_bps",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "tracked_ips",
-          "rust": "u32"
+          "type": "u32"
         }
       ]
     },
@@ -2040,27 +1937,27 @@
       "fields": [
         {
           "key": "pps_short",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "pps_mid",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "pps_long",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "bps_short",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "bps_mid",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "bps_long",
-          "rust": "u64"
+          "type": "u64"
         }
       ]
     },
@@ -2072,23 +1969,23 @@
       "fields": [
         {
           "key": "total_ips",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "recidivist_ips",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "recidivism_rate",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "permanent_bans",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "top_recidivists",
-          "rust": "Vec<RecidivistEntry>"
+          "type": "Vec<RecidivistEntry>"
         }
       ]
     },
@@ -2100,19 +1997,19 @@
       "fields": [
         {
           "key": "ip",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "ban_count",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "last_banned_at",
-          "rust": "i64"
+          "type": "i64"
         },
         {
           "key": "was_permanent",
-          "rust": "bool"
+          "type": "bool"
         }
       ]
     },
@@ -2124,19 +2021,19 @@
       "fields": [
         {
           "key": "levels",
-          "rust": "Vec<BanLevelEffectiveness>"
+          "type": "Vec<BanLevelEffectiveness>"
         },
         {
           "key": "total_unique_ips",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "overall_recidivism_rate",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "summary",
-          "rust": "String"
+          "type": "String"
         }
       ]
     },
@@ -2148,31 +2045,31 @@
       "fields": [
         {
           "key": "level",
-          "rust": "u8"
+          "type": "u8"
         },
         {
           "key": "label",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "total_ips",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "recidivist_ips",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "recidivism_rate",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "permanent_bans",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "verdict",
-          "rust": "String"
+          "type": "String"
         }
       ]
     },
@@ -2184,31 +2081,31 @@
       "fields": [
         {
           "key": "ip",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "ban_count",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "avg_interval_secs",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "interval_stddev",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "periodicity_score",
-          "rust": "u8"
+          "type": "u8"
         },
         {
           "key": "jail_name",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "timestamps",
-          "rust": "Vec<i64>"
+          "type": "Vec<i64>"
         }
       ]
     },
@@ -2220,31 +2117,31 @@
       "fields": [
         {
           "key": "jail_name",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "window_start",
-          "rust": "i64"
+          "type": "i64"
         },
         {
           "key": "window_end",
-          "rust": "i64"
+          "type": "i64"
         },
         {
           "key": "ip_count",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "ips",
-          "rust": "Vec<String>"
+          "type": "Vec<String>"
         },
         {
           "key": "total_bans",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "correlation_score",
-          "rust": "u8"
+          "type": "u8"
         }
       ]
     },
@@ -2256,39 +2153,39 @@
       "fields": [
         {
           "key": "ip",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "ban_count",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "jail_name",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "last_ban_at",
-          "rust": "i64"
+          "type": "i64"
         },
         {
           "key": "median_interval_secs",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "predicted_next_attack",
-          "rust": "i64"
+          "type": "i64"
         },
         {
           "key": "remaining_secs",
-          "rust": "i64"
+          "type": "i64"
         },
         {
           "key": "confidence",
-          "rust": "u8"
+          "type": "u8"
         },
         {
           "key": "urgency",
-          "rust": "String"
+          "type": "String"
         }
       ]
     },
@@ -2300,19 +2197,19 @@
       "fields": [
         {
           "key": "predictions",
-          "rust": "Vec<AttackPrediction>"
+          "type": "Vec<AttackPrediction>"
         },
         {
           "key": "jail_trends",
-          "rust": "Vec<JailAttackTrend>"
+          "type": "Vec<JailAttackTrend>"
         },
         {
           "key": "imminent_count",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "within_24h_count",
-          "rust": "u32"
+          "type": "u32"
         }
       ]
     },
@@ -2324,23 +2221,23 @@
       "fields": [
         {
           "key": "jail_name",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "bans_24h",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "bans_7d",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "trend",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "predicted_attackers_24h",
-          "rust": "u32"
+          "type": "u32"
         }
       ]
     },
@@ -2352,47 +2249,47 @@
       "fields": [
         {
           "key": "jail_name",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "current_threshold",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "recommended_threshold",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "direction",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "total_bans",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "unique_ips",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "recidivist_ips",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "recidivism_rate",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "avg_bans_per_ip",
-          "rust": "f64"
+          "type": "f64"
         },
         {
           "key": "reason",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "confidence",
-          "rust": "u8"
+          "type": "u8"
         }
       ]
     },
@@ -2404,11 +2301,11 @@
       "fields": [
         {
           "key": "recommendations",
-          "rust": "Vec<ThresholdRecommendation>"
+          "type": "Vec<ThresholdRecommendation>"
         },
         {
           "key": "summary",
-          "rust": "String"
+          "type": "String"
         }
       ]
     },
@@ -2420,31 +2317,31 @@
       "fields": [
         {
           "key": "jail_name",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "current_ban_time",
-          "rust": "i32"
+          "type": "i32"
         },
         {
           "key": "recidivist_count",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "median_return_secs",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "recommended_ban_time",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "reason",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "needs_adjustment",
-          "rust": "bool"
+          "type": "bool"
         }
       ]
     },
@@ -2456,11 +2353,11 @@
       "fields": [
         {
           "key": "recommendations",
-          "rust": "Vec<BanDurationRecommendation>"
+          "type": "Vec<BanDurationRecommendation>"
         },
         {
           "key": "summary",
-          "rust": "String"
+          "type": "String"
         }
       ]
     },
@@ -2472,27 +2369,27 @@
       "fields": [
         {
           "key": "ip",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "score",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "last_failure_at",
-          "rust": "i64"
+          "type": "i64"
         },
         {
           "key": "total_failures",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "total_bans",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "threshold_multiplier",
-          "rust": "f64"
+          "type": "f64"
         }
       ]
     },
@@ -2504,15 +2401,15 @@
       "fields": [
         {
           "key": "ports",
-          "rust": "Vec<UdpPortEntry>"
+          "type": "Vec<UdpPortEntry>"
         },
         {
           "key": "total_entries",
-          "rust": "usize"
+          "type": "usize"
         },
         {
           "key": "max_entries",
-          "rust": "usize"
+          "type": "usize"
         }
       ]
     },
@@ -2524,19 +2421,19 @@
       "fields": [
         {
           "key": "port",
-          "rust": "u16"
+          "type": "u16"
         },
         {
           "key": "packets",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "bytes",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "last_seen_secs",
-          "rust": "u64"
+          "type": "u64"
         }
       ]
     },
@@ -2548,15 +2445,15 @@
       "fields": [
         {
           "key": "types",
-          "rust": "Vec<IcmpTypeEntry>"
+          "type": "Vec<IcmpTypeEntry>"
         },
         {
           "key": "total_entries",
-          "rust": "usize"
+          "type": "usize"
         },
         {
           "key": "max_entries",
-          "rust": "usize"
+          "type": "usize"
         }
       ]
     },
@@ -2568,23 +2465,23 @@
       "fields": [
         {
           "key": "type",
-          "rust": "u8"
+          "type": "u8"
         },
         {
           "key": "code",
-          "rust": "u8"
+          "type": "u8"
         },
         {
           "key": "packets",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "bytes",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "last_seen_secs",
-          "rust": "u64"
+          "type": "u64"
         }
       ]
     },
@@ -2596,19 +2493,19 @@
       "fields": [
         {
           "key": "labels",
-          "rust": "Vec<String>"
+          "type": "Vec<String>"
         },
         {
           "key": "counts",
-          "rust": "Vec<u64>"
+          "type": "Vec<u64>"
         },
         {
           "key": "total",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "percentages",
-          "rust": "Vec<f64>"
+          "type": "Vec<f64>"
         }
       ]
     },
@@ -2620,19 +2517,19 @@
       "fields": [
         {
           "key": "labels",
-          "rust": "Vec<String>"
+          "type": "Vec<String>"
         },
         {
           "key": "counts",
-          "rust": "Vec<u64>"
+          "type": "Vec<u64>"
         },
         {
           "key": "total",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "percentages",
-          "rust": "Vec<f64>"
+          "type": "Vec<f64>"
         }
       ]
     },
@@ -2644,15 +2541,15 @@
       "fields": [
         {
           "key": "labels",
-          "rust": "Vec<String>"
+          "type": "Vec<String>"
         },
         {
           "key": "counts",
-          "rust": "Vec<u64>"
+          "type": "Vec<u64>"
         },
         {
           "key": "total",
-          "rust": "u64"
+          "type": "u64"
         }
       ]
     },
@@ -2664,15 +2561,15 @@
       "fields": [
         {
           "key": "total_packets",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "fragment_packets",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "fragment_ratio",
-          "rust": "f64"
+          "type": "f64"
         }
       ]
     },
@@ -2684,15 +2581,15 @@
       "fields": [
         {
           "key": "threshold",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "total_detected",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "scanners",
-          "rust": "Vec<PortScannerEntry>"
+          "type": "Vec<PortScannerEntry>"
         }
       ]
     },
@@ -2704,15 +2601,15 @@
       "fields": [
         {
           "key": "ip",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "unique_ports",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "packets",
-          "rust": "u64"
+          "type": "u64"
         }
       ]
     },
@@ -2724,11 +2621,11 @@
       "fields": [
         {
           "key": "threshold",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "probes",
-          "rust": "Vec<ServiceProbeEntry>"
+          "type": "Vec<ServiceProbeEntry>"
         }
       ]
     },
@@ -2740,15 +2637,15 @@
       "fields": [
         {
           "key": "ip",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "protocol_count",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "packets",
-          "rust": "u64"
+          "type": "u64"
         }
       ]
     },
@@ -2760,23 +2657,23 @@
       "fields": [
         {
           "key": "subnet",
-          "rust": "String"
+          "type": "String"
         },
         {
           "key": "unique_ips",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "total_bans",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "last_banned_at",
-          "rust": "i64"
+          "type": "i64"
         },
         {
           "key": "top_ip",
-          "rust": "String"
+          "type": "String"
         }
       ]
     },
@@ -2788,7 +2685,7 @@
       "fields": [
         {
           "key": "hours",
-          "rust": "[HourlyBucket; 24]"
+          "type": "[HourlyBucket; 24]"
         }
       ]
     },
@@ -2800,19 +2697,19 @@
       "fields": [
         {
           "key": "hour",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "bans",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "failed_attempts",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "ddos_events",
-          "rust": "u64"
+          "type": "u64"
         }
       ]
     },
@@ -2824,23 +2721,23 @@
       "fields": [
         {
           "key": "items",
-          "rust": "Vec<LogEntry>"
+          "type": "Vec<LogEntry>"
         },
         {
           "key": "total_lines",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "page",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "page_size",
-          "rust": "u32"
+          "type": "u32"
         },
         {
           "key": "total_pages",
-          "rust": "u32"
+          "type": "u32"
         }
       ]
     },
@@ -2852,11 +2749,11 @@
       "fields": [
         {
           "key": "line_number",
-          "rust": "u64"
+          "type": "u64"
         },
         {
           "key": "content",
-          "rust": "String"
+          "type": "String"
         }
       ]
     },
@@ -2868,23 +2765,23 @@
       "fields": [
         {
           "key": "page",
-          "rust": "Option<u32>"
+          "type": "Option<u32>"
         },
         {
           "key": "page_size",
-          "rust": "Option<u32>"
+          "type": "Option<u32>"
         },
         {
           "key": "level",
-          "rust": "Option<String>"
+          "type": "Option<String>"
         },
         {
           "key": "keyword",
-          "rust": "Option<String>"
+          "type": "Option<String>"
         },
         {
           "key": "since",
-          "rust": "Option<String>"
+          "type": "Option<String>"
         }
       ]
     },
@@ -2896,15 +2793,15 @@
       "fields": [
         {
           "key": "page",
-          "rust": "Option<u32>"
+          "type": "Option<u32>"
         },
         {
           "key": "page_size",
-          "rust": "Option<u32>"
+          "type": "Option<u32>"
         },
         {
           "key": "sort_by",
-          "rust": "Option<String>"
+          "type": "Option<String>"
         }
       ]
     },
@@ -2916,15 +2813,15 @@
       "fields": [
         {
           "key": "current_connections",
-          "rust": "usize"
+          "type": "usize"
         },
         {
           "key": "max_connections",
-          "rust": "usize"
+          "type": "usize"
         },
         {
           "key": "limit_reached",
-          "rust": "bool"
+          "type": "bool"
         }
       ]
     },
@@ -2936,11 +2833,11 @@
       "fields": [
         {
           "key": "events",
-          "rust": "SseStreamStatus"
+          "type": "SseStreamStatus"
         },
         {
           "key": "logs",
-          "rust": "SseStreamStatus"
+          "type": "SseStreamStatus"
         }
       ]
     }
@@ -2986,25 +2883,22 @@
   "errmodels": {
     "AUTH_UNAUTHORIZED": {
       "shape": "text",
-      "where": "src/daemon/http_exporter/auth.rs:401 Unauthorized",
       "statuses": [
         401
       ],
       "body": "401 Unauthorized\n",
-      "note": "有意不发 WWW-Authenticate：该头会让浏览器弹原生凭据对话框，且对话框期间 fetch 一直挂起拿不到响应，表现为『输错密码按钮永久转圈』。本项目用应用内登录表单，凭据由前端显式携带。严格 HTTP 语义下 401 应带该头，此处为可用性刻意偏离。"
+      "note": "401 纯文本响应体（无认证失败时由鉴权中间件直接写出，不经信封）。有意不发 WWW-Authenticate：该头会让浏览器弹原生凭据对话框，且对话框期间 fetch 一直挂起拿不到响应，表现为『输错密码按钮永久转圈』。本项目用应用内登录表单，凭据由前端显式携带。严格 HTTP 语义下 401 应带该头，此处为可用性刻意偏离。"
     },
     "STATIC_NOT_FOUND": {
       "shape": "text",
-      "where": "src/daemon/http_exporter/handler.rs:404 Not Found",
       "statuses": [
         404
       ],
       "body": "404 Not Found\n",
-      "note": "静态资源与 sw.js 未命中时的纯文本 404（无认证路由组，不经信封）"
+      "note": "静态资源与 sw.js 未命中时的纯文本 404（不经信封）"
     },
-    "AXUM_EXTRACTOR_DEFAULT": {
-      "shape": "axum_default",
-      "where": "src/daemon/api/routes/bans.rs:Json(req): Json<",
+    "FRAMEWORK_DEFAULT": {
+      "shape": "framework_default",
       "statuses": [
         422,
         400,
@@ -3013,7 +2907,7 @@
         405
       ],
       "body": "",
-      "note": "axum 提取器默认错误：Json 反序列化失败 422、Query 解析失败 400、Content-Type 不符 415、方法不匹配 405、路径不匹配 404。响应体是 axum 的纯文本，不是信封 —— 前端不能假设所有错误都能 JSON.parse。"
+      "note": "框架默认错误：请求体反序列化失败 422、Query 解析失败 400、Content-Type 不符 415、方法不匹配 405、路径不匹配 404。响应体是框架自带的纯文本（Go 侧为 net/http 的 `404 page not found`、`Method Not Allowed`），不是信封 —— 前端不能假设所有错误都能 JSON.parse，也不能假设所有 4xx 都有信封。"
     }
   },
   "defects": [
@@ -3021,7 +2915,6 @@
       "name": "HTTP_BANS_DUAL_SHAPE",
       "severity": "high",
       "status": "fixed",
-      "where": "src/daemon/http_exporter/handler.rs:if params.page.is_some()",
       "fix": "src/daemon/api/routes/bans.rs:pub async fn handle_api_bans",
       "reason": "",
       "resolution": "统一为单一形状：GET /api/v1/bans 一律返回分页信封 PaginatedResponse<BanResponse>，不再有裸数组分支；前端随之删除重载签名与运行期分支。",
@@ -3031,7 +2924,6 @@
       "name": "HTTP_SSE_STATUS_INCOMPLETE",
       "severity": "medium",
       "status": "fixed",
-      "where": "src/daemon/http_exporter/handler.rs:current >= max",
       "fix": "src/daemon/api/payloads.rs:current_connections >= max_connections",
       "reason": "",
       "resolution": "sse-status 载荷扩展为同时报告两条流：events 与 logs 各自的 current / max，前端按所属流的上限判断 limit_reached，不再用单一上限推断另一条流。",
@@ -3041,7 +2933,6 @@
       "name": "HTTP_RECIDIVISM_RATE_UNIT",
       "severity": "medium",
       "status": "open",
-      "where": "src/daemon/web_ui/analysis.rs:recidivism_rate",
       "fix": "",
       "reason": "",
       "resolution": "统一为百分数 0–100：ban-effectiveness 的各 level 一并改为百分数，前端对两处使用同一个格式化函数。",
@@ -3051,7 +2942,6 @@
       "name": "HTTP_TODAY_BANS_EQUALS_TOTAL",
       "severity": "low",
       "status": "fixed",
-      "where": "src/daemon/web_ui/stats.rs:today_bans",
       "fix": "src/daemon/history_snapshot/today_bans.rs:pub fn today_ban_count",
       "reason": "",
       "resolution": "today_bans 改为真实「今日」窗口（本地时区自然日 00:00 起，按各封禁的 banned_at 计数），窗口定义与时区已写进 StatsResponse.today_bans 的字段注释；取值经 HistoryPort::today_bans 由 REST 与 SSE 两条读路径共用。旧实现（web_ui/stats.rs 的 get_stats 及其威胁等级评估）无调用方，随本次一并删除——统计总览只剩 api/views.rs 一份。",
@@ -3061,7 +2951,6 @@
       "name": "HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS",
       "severity": "low",
       "status": "open",
-      "where": "src/daemon/history_snapshot/threshold_analysis.rs:推荐阈值（0 = 无需调整）",
       "fix": "",
       "reason": "",
       "resolution": "0 表示「无需调整」：维护分支改为返回 0（而非原阈值），前端据此显示「无需调整」；非 0 时始终是具体推荐阈值。",
@@ -3071,7 +2960,6 @@
       "name": "HTTP_SERVICE_PROBE_NO_TOTAL",
       "severity": "low",
       "status": "open",
-      "where": "src/daemon/web_ui/packet_analysis.rs:ServiceProbeResponse",
       "fix": "",
       "reason": "",
       "resolution": "ServiceProbeResponse 补 total_detected（与 PortScanResponse 形状对齐），前端两处共用同一套「检出 N 个」文案。",
@@ -3081,7 +2969,6 @@
       "name": "HTTP_HEALTH_NOT_ENVELOPED",
       "severity": "low",
       "status": "retained",
-      "where": "src/daemon/api/routes/runtime.rs:pub async fn handle_health",
       "fix": "",
       "reason": "探针语义：/health 与 /healthz 以 HTTP 状态码承载就绪与否（200 = 就绪，503 = 未就绪），载荷是 RuntimeSnapshot 裸 JSON。这是全项目唯一一个『状态码即语义』的端点，套信封会把语义压回 200 + code 字段，反而让 k8s/负载均衡探针无法按状态码判定。契约中显式记为有意例外而非缺陷。",
       "resolution": "有意保留裸状态码（探针语义）：/health 与 /healthz 以 HTTP 状态码承载语义，在此契约中显式记为有意例外而非缺陷；前端保留 getRawJson 特判。",
@@ -3091,7 +2978,6 @@
       "name": "HTTP_LOG_SSE_LIMIT_DOC_DRIFT",
       "severity": "low",
       "status": "fixed",
-      "where": "src/daemon/web_ui/log_viewer.rs:共享限制",
       "fix": "src/daemon/web_ui/log_viewer.rs:各自独立计数与上限",
       "reason": "",
       "resolution": "修正注释与实现一致：两条流各自独立的上限（events 10 / logs 5），实现不变，只改误导性注释。",
@@ -3101,7 +2987,6 @@
       "name": "HTTP_BAN_SORT_DOC_INCOMPLETE",
       "severity": "low",
       "status": "open",
-      "where": "src/daemon/web_ui/ban_ops.rs:排序字段（可选）",
       "fix": "",
       "reason": "",
       "resolution": "文档补全为 7 个取值（banned_at_desc / banned_at_asc / ip_asc / ip_desc / remaining_asc / remaining_desc / jail_asc），与实现及前端联合类型一致。",
@@ -3111,7 +2996,6 @@
       "name": "HTTP_READ_PATH_WRITES_STATE",
       "severity": "high",
       "status": "fixed",
-      "where": "src/daemon/web_ui/ban_ops.rs:purge_expired(now)",
       "fix": "src/daemon/state/compose.rs:pub fn purge_expired_bans",
       "reason": "",
       "resolution": "读路径只读：purge 移到 scheduler 的独立周期任务，由它独占调用；读侧改从 state 取不可变快照。落地方式：state/compose.rs 新增 purge_expired_bans（两侧都清，记账口径照搬），runtime/scheduler.rs 按 5 秒节拍调用，main.rs 装配 runtime::spawn_periodic；get_active_bans() 的限流 purge 与其节流静态量一并删除。",
@@ -3121,17 +3005,15 @@
       "name": "HTTP_SSE_RESERIALIZES_EVERY_DOMAIN",
       "severity": "medium",
       "status": "fixed",
-      "where": "src/daemon/web_ui/sse.rs:let Ok(stats_json) = serde_json::to_string(&stats)",
       "fix": "src/daemon/api/sse.rs:pub async fn drive_events_stream",
       "reason": "",
-      "resolution": "按域序列化：连接持有上次发送的版本，只对真正变化的域调用渲染器。修复回执记在 api/sse.rs 的 DomainRenderer 与「只序列化变化域」的计数测试上（本缺陷在旧 SSE 引擎退役时随 where 一并消失）。",
+      "resolution": "按域序列化：连接持有上次发送的版本，只对真正变化的域调用渲染器。修复回执记在 api/sse.rs 的 DomainRenderer 与「只序列化变化域」的计数测试上（缺陷现场随旧 SSE 引擎一并退役）。",
       "text": "旧 SSE 每个 tick 把 5 份载荷（stats/bans/jails/whitelist/rates）全量 serde_json::to_string 一遍，无论有没有变化，且这段序列化在**每条连接**的循环里各做一次。成本是「连接数 × 域数 × 每秒一次」：安静时段也在重复序列化同样的内容，payload 越大越明显"
     },
     {
       "name": "HTTP_SSE_JAILS_NO_PUBLISHER",
       "severity": "medium",
       "status": "fixed",
-      "where": "src/daemon/web_ui/sse.rs:let Ok(jails_json) = serde_json::to_string(&jails)",
       "fix": "src/daemon/state/compose.rs:pub fn publish_jails_changed",
       "reason": "",
       "resolution": "按域序列化后，jails 是无所有者的**派生域**（渲染时现读 http_exporter::GLOBAL_JAILS 与封禁表 ban_count），没有内容比对可用，必须由知道派生输入变了的写入点显式推进版本。补三个来源：封禁集合变更（state/bans.rs 的 invalidate_and_publish）、jail 启用/禁用（web_ui/api.rs 的 update_jail_enabled）、峰值时段翻转（runtime/scheduler.rs 按标志翻转）。",
@@ -3141,17 +3023,15 @@
       "name": "HTTP_WHITELIST_KEY_DIVERGENCE",
       "severity": "medium",
       "status": "fixed",
-      "where": "src/daemon/ban/mod.rs:fn build_cidr_key",
       "fix": "src/daemon/state/whitelist.rs:pub struct Whitelist",
       "reason": "",
-      "resolution": "键的规范化只有一处（state/cidr.rs 的 CidrKey）：网络地址（主机位清零）+ 恒带 /prefix（裸地址即 /32、/128）。修复回执记在 state/whitelist.rs 的 CidrKey 键类型与 cidr.rs 的规范化测试上（本缺陷在旧键规则退役时随 where 一并消失）。",
+      "resolution": "键的规范化只有一处（state/cidr.rs 的 CidrKey）：网络地址（主机位清零）+ 恒带 /prefix（裸地址即 /32、/128）。修复回执记在 state/whitelist.rs 的 CidrKey 键类型与 cidr.rs 的规范化测试上（本缺陷在旧键规则退役时一并消失）。",
       "text": "白名单的键曾有三套互不相同的规则：LIST 响应恒带 /prefix；事件路径对 /32·/128·/0 存裸地址；build_cidr_key 又把 IPv6 /0 归一成 /128。同一子网因此会拿到两个键，LIST 的整表覆盖打不中事件插入的那一条，表现为「白名单里看到两条同一个网段」或「删了还在」。三套规则分别位于 ban/mod.rs 的 build_cidr_key、netlink/handlers.rs 的 LIST 拼键与事件路径拼键；三处已在同一批退役中全部删除，写入路径（`ban/mod.rs` 的可信 IP 初始化、`web_ui/ban_ops.rs` 的 HTTP 增删）统一经 CidrKey 构造"
     },
     {
       "name": "HTTP_BATCH_BAN_BECOMES_PERMANENT",
       "severity": "high",
       "status": "fixed",
-      "where": "src/daemon/api/routes/bans.rs:duration: None,",
       "fix": "src/daemon/api/routes/bans.rs:const BATCH_BAN_DURATION_SECS",
       "reason": "",
       "resolution": "批量封禁改为显式下发 3600 秒（routes/bans.rs 的 BATCH_BAN_DURATION_SECS）。同时校正误导来源：BanCommand::duration 的原注释写作「None 表示用 jail 默认」，而唯一实现（api/adapters.rs 的 LegacyControlPort → web_ui/ban_ops.rs 的 create_ban）把 None 与 Some(0) 一并判为永久封禁，注释已按实际语义改写并写明「想封一段时间必须给具体秒数」。测试替身同因修正：api/testing.rs 的 FakeControlPort 原先只把 Some(0) 当永久，与真实实现不一致，`duration: None` 因此在单测里表现为普通封禁而蒙混过关；现已逐字对齐，并新增回归测试 a_batch_ban_is_time_limited_not_permanent 钉住 3600。",

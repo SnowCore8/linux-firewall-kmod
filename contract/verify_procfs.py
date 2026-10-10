@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -446,25 +447,70 @@ def check_semantics(contract: dict) -> list[str]:
 
 
 def check_artifacts() -> list[str]:
-    """确认 procfs 生成物本身可用：Rust 契约能编译。
+    """确认 procfs 生成物本身可用：与布局清单同源，且 C 头能被工具链接受。
 
-    与 verify_layout.py 同一纪律——锚点/数值比对不覆盖生成器语法错误。
+    与 verify_layout.py 同一纪律——锚点/数值比对不覆盖生成器语法错误。仓库里已
+    没有 Rust 消费者（`contract/generated/*_contract.rs` 与根 Cargo.* 一并删除），
+    故自检改为比对真正会被消费的两份产物：JSON 清单与内核消费的 C 头。工具链
+    不可用时显式说明「未校验」，不伪装成通过。
     """
     problems: list[str] = []
-    print("=== 生成物自检 ===")
-    rs_src = os.path.join(GEN_DIR, "procfs_contract.rs")
+    print("=== 生成物自检（清单 ↔ C 头 ↔ 工具链）===")
+
+    with open(LAYOUT_JSON, encoding="utf-8") as fh:
+        layout = json.load(fh)
+    header = read(UAPI_H)
+
+    # stats 键：清单里的键集合必须与 C 头的 FW_PROCFS_KEY_* 一一对应
+    want = set(layout["keys"]["stats"])
+    got = set(re.findall(r'#define\s+FW_PROCFS_KEY_\w+\s+"([^"]*)"', header))
+    if want == got:
+        print(f"  OK    stats 键生成一致（{len(want)} 个）")
+    else:
+        problems.append(
+            "stats 键生成不一致: 清单独有 "
+            f"{sorted(want - got)}，C 头独有 {sorted(got - want)}"
+        )
+        print("  失败  stats 键生成不一致")
+
+    # 条目：每个文件都要有 PATH 与 MODE 两个宏，且路径拼得对
+    missing = [
+        name
+        for name in layout["files"]
+        if f'FW_PROCFS_{name.upper()}_PATH "{layout["root"]}/{name}"' not in header
+        or f"#define FW_PROCFS_{name.upper()}_MODE" not in header
+    ]
+    if missing:
+        problems.append(f"条目 PATH/MODE 宏缺失或路径不符: {sorted(missing)}")
+        print("  失败  条目 PATH/MODE 宏")
+    else:
+        print(f"  OK    条目 PATH/MODE 宏齐全（{len(layout['files'])} 个）")
+
+    cc = os.environ.get("CC") or shutil.which("cc")
+    if not cc:
+        print("  跳过  C 头语法检查（未找到 cc）")
+        print()
+        return problems
+
+    # 两次 include 同一 TU：既验语法，也验 include guard 真的挡住了重复定义
     with tempfile.TemporaryDirectory() as td:
-        rlib = os.path.join(td, "p.rlib")
+        tu = os.path.join(td, "probe.c")
+        with open(tu, "w", encoding="utf-8") as fh:
+            fh.write(
+                '#include "procfs_uapi.h"\n#include "procfs_uapi.h"\n'
+                "const char *probe(void) { return FW_PROCFS_STATS_PATH; }\n"
+            )
         proc = subprocess.run(
-            ["rustc", "--edition", "2021", "--crate-type", "lib", "-o", rlib, rs_src],
+            [cc, "-std=c11", "-fsyntax-only", f"-I{GEN_DIR}", tu],
             capture_output=True,
             text=True,
         )
         if proc.returncode != 0:
-            problems.append("procfs_contract.rs 编译失败:\n" + proc.stderr[-3000:])
-            print("  失败  procfs_contract.rs 编译")
+            problems.append("procfs_uapi.h 语法/include guard 检查失败:\n"
+                            + (proc.stderr or proc.stdout)[-3000:])
+            print("  失败  procfs_uapi.h cc -fsyntax-only")
         else:
-            print("  OK    procfs_contract.rs 编译")
+            print("  OK    procfs_uapi.h cc -fsyntax-only（重复 include 通过）")
     print()
     return problems
 

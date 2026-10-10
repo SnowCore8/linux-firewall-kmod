@@ -1,33 +1,30 @@
 #!/usr/bin/env python3
-"""netlink 线格式一致性校验：生成物 vs 布局清单 vs daemon 消费方式。
+"""netlink 线格式一致性校验：生成头 vs 布局清单 vs 内核消费方式。
 
 为什么需要这一步
 ----------------
-生成器自己产出的 ``_Static_assert`` 只能证明「生成物自洽」，不能证明
-「生成物在 daemon 侧被解析成同一套布局」。若两侧不同（不同编译器、ABI、
-packed 规则），换用生成物就等于**静默改变线协议**——内核与 daemon 会互相丢弃
-报文，且不会报错。因此必须拿两侧的真实定义做第三方比对。
+生成器自己产出的 ``_Static_assert`` 只能证明「生成物自洽」，不能证明「生成物
+被两侧解析成同一套布局」。若两侧不同（不同编译器、ABI、packed 规则），换用生成物
+就等于**静默改变线协议**——内核与 daemon 会互相丢弃报文，且不会报错。因此必须拿
+两侧的真实定义做第三方比对。
 
-重写后的口径变化（Phase 1 / Phase 2.D）
---------------------------------------
-旧实现把与契约同形的 ``__packed`` 结构体**手抄**在 ``netlink.c`` 里，旧校验器
-从 ``netlink.c`` 机械提取结构体、与生成头逐字段比 ``sizeof``/``offsetof``。
-两轮重写后两侧手写副本都消失了：
+比的是三方，而不是一方
+----------------------
+1. **布局清单 JSON**（``netlink_layout.json``）：gen.py 从 IDL 算出的尺寸/偏移，
+   是 daemon 侧 ``internal/contract`` 对齐用的基准（那条对齐由 Go 单测负责）。
+2. **Python 独立重解析生成头**（``check_python_layout``）：按 packed 规则从
+   ``netlink_uapi.h`` 的字段声明重新算一遍 sizeof/offsetof，不依赖任何编译器，
+   也不复用 gen.py 的算术——生成器算错布局时这一轮会红。
+3. **C 编译探针**（``check_c_layout``）：把生成头交给真实编译器取
+   ``sizeof``/``offsetof``，覆盖「同一份头文件在不同 ABI 下是否还是同一套布局」
+   这类 Python 重算看不见的问题。
 
-1. **内核侧**不再声明任何报文结构，一律 ``#include`` 生成头（经 ``fw_types.h``）。
-   校验器改为**结构断言**（``check_kernel_structure``）：新实现目录里不得出现
-   ``struct fw_nl*`` 定义，且必须经 ``fw_types.h`` 引入生成头。
-2. **daemon 侧**最后由 ``src/daemon/kernel/codec`` 单点消费生成物（``crate::contract``），
-   不再有手写副本可比。于是比对对象改为：**同一份生成物在 C 侧与 Rust 侧解析出的
-   尺寸/偏移是否相同**——这是两边唯一的共同事实，也是「同一份定义、两种语言」的
-   真正风险点（``IcmpTypeItem.type`` 等字段在两侧的打包行为必须一致）。
-3. 为防「布局清单 JSON 与生成头 C 侧漂移」，新增一轮：编译生成头取
-   ``sizeof``/``offsetof``，与 ``netlink_layout.json`` 逐字段比。JSON 是历史基准，
-   生成头是内核实际编译的输入——两者必须一致，否则内核与 daemon 各自「与 JSON
-   一致」却彼此不一致。
+三方两两比对，任一处漂移都是门禁失败。比对**字段偏移**而非仅总长：字段顺序颠倒
+但总长相同的结构体，只看 sizeof 会漏掉，而线格式已经错了。
 
-比对**字段偏移**而非仅总长：字段顺序颠倒但总长相同的结构体，只看 sizeof
-会漏掉，而线格式已经错了。
+内核侧则做**结构断言**（``check_kernel_structure``）：重写后的 ``fw_*.c/h`` 不再
+手抄报文结构体，一律 ``#include`` 生成头（经 ``fw_types.h``）。若有人重新手抄一份
+与生成头各改各的，这里就会红。
 
 用法::
 
@@ -47,73 +44,48 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GEN_DIR = os.path.join(ROOT, "contract", "generated")
 KERNEL_DIR = os.path.join(ROOT, "src", "kernel-module")
 LAYOUT_JSON = os.path.join(GEN_DIR, "netlink_layout.json")
+UAPI_HEADER = os.path.join(GEN_DIR, "netlink_uapi.h")
 
 # 生成物结构名 = fw_ + snake(IDL 名)。
-# 内核侧重写后**不再手写任何报文结构体**（一律 #include 生成头），故这里没有
-# 「内核结构体名 -> IDL 名」映射——内核侧改为结构断言，见 check_kernel_structure()。
+# 内核侧不手写任何报文结构体（一律 #include 生成头），故这里没有
+# 「内核结构名 -> IDL 名」映射——内核侧是结构断言，见 check_kernel_structure()。
 
-# 与 `gen.py::RUST_KEYWORDS` 保持一致：生成器对撞上 Rust 关键字的字段加 `r#`
-# 前缀，探针引用同一字段时必须用同样写法。两处清单若漂移，探针会编译失败
-# （显式报错），而不是给出错误的通过结论。
-RUST_KEYWORDS = frozenset({
-    "as", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
-    "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod",
-    "move", "mut", "pub", "ref", "return", "self", "static", "struct", "super",
-    "trait", "true", "type", "unsafe", "use", "where", "while", "async", "await",
-    "abstract", "become", "box", "do", "final", "macro", "override", "priv",
-    "typeof", "unsized", "virtual", "yield", "try",
-})
-
-# daemon 侧不再手写任何线格式结构体：`src/daemon/kernel/codec` 是唯一的转义层，
-# 它直接消费生成物，故「契约 ↔ 实现」由**编译器**对齐，本校验器不再比对手写副本。
-#
-# 那么这一轮比的是什么？生成物既是内核实际编译的输入（经 `fw_types.h`），也是
-# daemon 的模块。C 侧与 Rust 侧解析同一份定义时是否得出**同一套**尺寸与偏移，
-# 是两边唯一的共同事实；一旦不同（不同编译器/ABI/打包规则），内核与 daemon 会
-# 各自「与自己的结构体一致」却彼此不一致，且不会报错。
-#
-# 映射覆盖生成物的**全部** 31 个结构（24 条报文 + 7 个公共/尾部结构），
-# 由 `RUST_TO_GEN` 显式列出，`main()` 会断言它一个不缺。
-RUST_TO_GEN = {
-    # 公共头与尾部结构（无公共头/无自身偏移语义）
-    "MsgHdr": "MsgHdr",
-    "BanEntry": "BanEntry",
-    "WhitelistEntry": "WhitelistEntry",
-    "RateEntry": "RateEntry",
-    "UdpPortItem": "UdpPortItem",
-    "IcmpTypeItem": "IcmpTypeItem",
-    "ScannerItem": "ScannerItem",
-    # 接收方向报文
-    "DdosEvent": "DdosEvent",
-    "BanStateChange": "BanStateChange",
-    "WhitelistStateChange": "WhitelistStateChange",
-    "CmdResult": "CmdResult",
-    "ConfigAck": "ConfigAck",
-    "ConfigChange": "ConfigChange",
-    "ListBansResponse": "ListBansResponse",
-    "StatsResponse": "StatsResponse",
-    "ListWhitelistResponse": "ListWhitelistResponse",
-    "ListRatesResponse": "ListRatesResponse",
-    "AnalysisResponse": "AnalysisResponse",
-    "DaemonRegisterAck": "DaemonRegisterAck",
-    # 发送方向报文
-    "BanIp": "BanIp",
-    "UnbanIp": "UnbanIp",
-    "SetConfig": "SetConfig",
-    "SetProtectedPorts": "SetProtectedPorts",
-    "ListBansQuery": "ListBansQuery",
-    "ListWhitelistQuery": "ListWhitelistQuery",
-    "ListRatesQuery": "ListRatesQuery",
-    "AddWhitelist": "AddWhitelist",
-    "RemoveWhitelist": "RemoveWhitelist",
-    "StatsQuery": "StatsQuery",
-    "AnalysisQuery": "AnalysisQuery",
-    "DaemonRegister": "DaemonRegister",
+# C 标量 -> 字节宽度。生成头里出现这张表之外的类型即视为无法核对（显式失败）。
+C_SCALARS: dict[str, int] = {
+    "__u8": 1,
+    "__s8": 1,
+    "__u16": 2,
+    "__s16": 2,
+    "__u32": 4,
+    "__s32": 4,
+    "__u64": 8,
+    "__s64": 8,
+    "__le16": 2,
+    "__le32": 4,
+    "__le64": 8,
+    "char": 1,
+    "__u8_pad": 1,
 }
+
+# 消息结构体（IDL 里 ``message``）由生成器在头部嵌入一个公共头字段，布局清单的
+# fields 不含它——比对时把它当作唯一允许的前导差异，见 check_python_layout()。
+MSG_HDR_FIELD = "hdr"
+
+STRUCT_RE = re.compile(r"^struct (\w+) \{\n(.*?)^\} __packed;", re.M | re.S)
+FIELD_RE = re.compile(
+    r"^ {4}(?P<type>struct \w+|[A-Za-z_]\w*)\s+(?P<name>\w+)\s*(?:\[(?P<count>\d+)\])?;$",
+    re.M,
+)
+TYPEDEF_RE = re.compile(
+    r"^typedef (?P<base>\w+)\s+(?P<name>\w+)\s*(?:\[(?P<count>\d+)\])?;$", re.M
+)
+STATIC_ASSERT_RE = re.compile(
+    r"_Static_assert\(sizeof\(struct (\w+)\) == (\d+),"
+)
 
 
 def snake(name: str) -> str:
-    """与 gen.py 保持完全一致的命名转换（否则探针找不到生成的结构体）。"""
+    """与 gen.py 保持完全一致的命名转换（否则按 IDL 名找不到生成头的结构体）。"""
     out = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name)
     out = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", out)
     return out.lower()
@@ -123,6 +95,19 @@ def gen_c_name(gen_name: str) -> str:
     return f"fw_{snake(gen_name)}"
 
 
+def read_file(path: str, what: str) -> str:
+    """读依赖文件；缺失即抛错（不「跳过」——跳过的门禁等于没门禁）。"""
+    if not os.path.isfile(path):
+        raise SystemExit(f"错误: 找不到{what}: {path}")
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+# ============================================================================
+# 内核侧结构断言
+# ============================================================================
+
+
 def check_kernel_structure() -> list[str]:
     """内核侧结构断言：不手抄报文结构，只消费生成头。
 
@@ -130,13 +115,12 @@ def check_kernel_structure() -> list[str]:
     在 ``netlink.c`` 里手抄了 16 个与契约同形的 ``__packed`` 结构体，与生成头
     各改各的。新实现必须满足两点，否则「线格式只有一处」的纪律就被打破：
 
-    (a) 重写后的 ``fw_*.c/h`` 中不存在 ``struct fw_nl*`` **定义**；
+    (a) ``fw_*.c/h`` 中不存在 ``struct fw_nl*`` **定义**；
     (b) 生成头经 ``fw_types.h`` 引入（内核实际编译的线格式定义来自这里）。
-
-    旧实现文件（``netlink.c`` 等）在 Phase 1 末删除，故不参与本断言——本断言
-    只约束新实现，且**不**因为旧文件还在而漏过新文件里的手抄。
     """
     problems: list[str] = []
+    if not os.path.isdir(KERNEL_DIR):
+        return [f"错误: 找不到内核实现目录 {KERNEL_DIR}"]
     new_files = [
         f for f in sorted(os.listdir(KERNEL_DIR))
         if f.startswith("fw_") and f.endswith((".c", ".h"))
@@ -145,23 +129,196 @@ def check_kernel_structure() -> list[str]:
         return ["错误: src/kernel-module 下未找到任何 fw_*.c/h 新实现文件"]
 
     for f in new_files:
-        with open(os.path.join(KERNEL_DIR, f), encoding="utf-8") as fh:
-            src = fh.read()
+        src = read_file(os.path.join(KERNEL_DIR, f), f"内核文件 {f}")
         for m in re.finditer(r"^struct (fw_nl\w*)\s*\{", src, re.M):
             problems.append(
                 f"{f}: 手写了报文结构体 {m.group(1)}——内核侧不得声明任何报文结构，"
                 f"应改由生成头提供"
             )
     if not problems:
-        print(f"  {len(new_files)} 个新实现文件均未手写 struct fw_nl* 定义")
+        print(f"  {len(new_files)} 个内核实现文件均未手写 struct fw_nl* 定义")
 
-    with open(os.path.join(KERNEL_DIR, "fw_types.h"), encoding="utf-8") as fh:
-        types_h = fh.read()
+    types_h = read_file(os.path.join(KERNEL_DIR, "fw_types.h"), "内核 fw_types.h")
     if "#include" in types_h and "generated/netlink_uapi.h" in types_h:
         print("  fw_types.h 经 #include 引入生成头（线格式单处来源）")
     else:
         problems.append("fw_types.h 未引入 contract/generated/netlink_uapi.h")
     return problems
+
+
+# ============================================================================
+# 生成头的 Python 重解析（不依赖编译器）
+# ============================================================================
+
+
+def parse_header_structs(header: str) -> dict[str, list[tuple[str, str, int]]]:
+    """把生成头解析成 ``{结构名: [(字段名, 类型串, 数组长度或 0)]}``。
+
+    只认生成物自己的写法（4 空格缩进、``} __packed;`` 收尾）；出现解析不出的
+    字段行不报错，但结构体缺失/字段缺失都会在后续比对里以差异形式暴露。
+    """
+    structs: dict[str, list[tuple[str, str, int]]] = {}
+    for name, body in STRUCT_RE.findall(header):
+        fields: list[tuple[str, str, int]] = []
+        for m in FIELD_RE.finditer(body):
+            count = int(m.group("count")) if m.group("count") else 0
+            fields.append((m.group("name"), m.group("type").strip(), count))
+        structs[name] = fields
+    return structs
+
+
+def parse_header_typedefs(header: str) -> dict[str, tuple[str, int]]:
+    """``typedef __u8 addr16[16];`` -> ``{addr16: ("__u8", 16)}``。"""
+    out: dict[str, tuple[str, int]] = {}
+    for m in TYPEDEF_RE.finditer(header):
+        out[m.group("name")] = (m.group("base"), int(m.group("count") or 1))
+    return out
+
+
+def parse_static_asserts(header: str) -> dict[str, int]:
+    """生成头自带的 ``_Static_assert(sizeof(struct X) == N)`` 清单。"""
+    return {n: int(v) for n, v in STATIC_ASSERT_RE.findall(header)}
+
+
+def compute_layouts(
+    structs: dict[str, list[tuple[str, str, int]]],
+    typedefs: dict[str, tuple[str, int]],
+) -> dict[str, tuple[int, dict[str, int]]]:
+    """按 packed 规则算出每个结构体的 ``（总长, {字段名: 偏移}）``。
+
+    packed 意味着**无隐式填充**：偏移就是前面字段宽度之和。空隙必须由 IDL 里显式的
+    ``u8[N]`` 表达，所以这里不需要任何对齐表。
+    """
+    sizes: dict[str, int] = {}
+    layouts: dict[str, tuple[int, dict[str, int]]] = {}
+
+    def width(type_token: str, count: int, stack: tuple[str, ...]) -> int:
+        base = type_token
+        if base.startswith("struct "):
+            ref = base[len("struct "):]
+            if ref in stack:
+                raise SystemExit(f"生成头里结构体递归定义: {' -> '.join(stack + (ref,))}")
+            if ref not in structs:
+                raise SystemExit(f"生成头里引用了未定义的结构体 {ref}")
+            one = layout_of(ref, stack + (ref,))
+        elif base in typedefs:
+            tbase, tcount = typedefs[base]
+            one = width(tbase, tcount, stack)
+        elif base in C_SCALARS:
+            one = C_SCALARS[base]
+        else:
+            raise SystemExit(f"生成头里出现无法定宽的类型 {base}")
+        return one * (count if count > 1 else 1)
+
+    def layout_of(name: str, stack: tuple[str, ...] = ()) -> int:
+        if name in sizes:
+            return sizes[name]
+        off = 0
+        offsets: dict[str, int] = {}
+        for fname, ftype, fcount in structs[name]:
+            offsets[fname] = off
+            off += width(ftype, fcount, stack + (name,))
+        sizes[name] = off
+        layouts[name] = (off, offsets)
+        return off
+
+    for name in structs:
+        layout_of(name)
+    return layouts
+
+
+def check_python_layout(
+    layouts: dict[str, dict],
+    computed: dict[str, tuple[int, dict[str, int]]],
+    structs: dict[str, list[tuple[str, str, int]]],
+) -> list[str]:
+    """布局清单 JSON vs 生成头的 Python 重算结果，逐结构逐字段比对。"""
+    problems: list[str] = []
+    hdr_cname = gen_c_name("MsgHdr")
+    if hdr_cname not in computed:
+        return [f"生成头里没有消息头结构体 {hdr_cname}，无法比对字段偏移"]
+    hdr_size = computed[hdr_cname][0]
+
+    for idl, spec in sorted(layouts.items()):
+        cname = gen_c_name(idl)
+        if cname not in computed:
+            problems.append(f"生成头里没有结构体 {cname}（布局清单里的 {idl}）")
+            continue
+        size, offsets = computed[cname]
+        want_size = int(spec["size"])
+        want_fields = [f for f in spec["fields"] if not f.get("tail")]
+        want_names = [f["name"] for f in want_fields]
+        got_fields = [f for f, _, _ in structs[cname]]
+
+        # 消息结构体由生成器在头部嵌入一个 `struct fw_msg_hdr hdr`，而清单的 fields
+        # 只列消息**自有**字段（offset 是含头后的绝对偏移）。因此这一个嵌入字段是
+        # 唯一允许的差异，其余字段必须同名同序——多一个、少一个、顺序颠倒都是红。
+        embedded = [f for f in got_fields if f not in set(want_names)]
+        if embedded == [MSG_HDR_FIELD]:
+            got_names = got_fields[1:]
+            if offsets.get(MSG_HDR_FIELD) != 0:
+                problems.append(
+                    f"{cname}.{MSG_HDR_FIELD}: 嵌入的消息头偏移 "
+                    f"{offsets.get(MSG_HDR_FIELD)} != 0"
+                )
+            elif want_names and int(want_fields[0]["offset"]) != hdr_size:
+                problems.append(
+                    f"{cname}: 清单首字段 offset {want_fields[0]['offset']} "
+                    f"!= 消息头尺寸 {hdr_size}"
+                )
+        elif embedded:
+            problems.append(
+                f"{cname}: 生成头里有布局清单之外的字段 {', '.join(embedded)}"
+            )
+        else:
+            got_names = got_fields
+            if spec["kind"] == "message":
+                problems.append(
+                    f"{cname}: 消息结构体缺少嵌入的 {hdr_cname} 头字段"
+                )
+
+        if size != want_size:
+            problems.append(
+                f"{cname}: 生成头重算 sizeof {size} != 布局清单 {want_size}"
+            )
+        if got_names != want_names:
+            problems.append(
+                f"{cname}: 生成头字段序 {got_names} != 布局清单 {want_names}"
+            )
+        for f in want_fields:
+            got = offsets.get(f["name"])
+            if got != int(f["offset"]):
+                problems.append(
+                    f"{cname}.{f['name']}: 生成头重算 offset {got} != 布局清单 {f['offset']}"
+                )
+    return problems
+
+
+def check_assertions(
+    computed: dict[str, tuple[int, dict[str, int]]], asserts: dict[str, int]
+) -> list[str]:
+    """生成头自述的 ``_Static_assert`` 必须与重算结果一致，且覆盖全部结构体。
+
+    这一轮挡的是「生成头被手改」或「生成器写出的断言与字段声明不符」——两种情况
+    下内核编译会失败（好在是响的），但门禁不该等到编译才知道。
+    """
+    problems: list[str] = []
+    for cname in sorted(computed):
+        if cname not in asserts:
+            problems.append(f"{cname}: 生成头缺少 _Static_assert(sizeof) 断言")
+    for cname, want in sorted(asserts.items()):
+        if cname not in computed:
+            problems.append(f"生成头断言了不存在的结构体 {cname}")
+            continue
+        got = computed[cname][0]
+        if got != want:
+            problems.append(f"{cname}: 生成头 _Static_assert {want} != 字段重算 {got}")
+    return problems
+
+
+# ============================================================================
+# C 编译探针（真实 ABI）
+# ============================================================================
 
 
 def c_probe_source(defs: str, structs: list[str], fields: dict[str, list[str]]) -> str:
@@ -226,91 +383,123 @@ def compile_and_run(src: str, workdir: str, tag: str) -> dict[str, dict[str, obj
     return parse_probe(run.stdout)
 
 
-def rust_field_expr(name: str) -> str:
-    """字段名 → Rust 标识符表达式。
+def check_c_layout(
+    layouts: dict[str, dict], header: str
+) -> tuple[list[str], dict[str, dict[str, object]]]:
+    """生成头 vs 布局清单，两侧都由真实编译器报数。"""
+    problems: list[str] = []
+    names = sorted(gen_c_name(n) for n in layouts)
+    fields_by_c: dict[str, list[str]] = {}
+    for cname in names:
+        idl = next(n for n in layouts if gen_c_name(n) == cname)
+        fields_by_c[cname] = [f["name"] for f in layouts[idl]["fields"] if not f.get("tail")]
 
-    生成器对撞上 Rust 关键字的字段写成 ``r#type``（如 ``IcmpTypeItem.type``），
-    探针必须用同样的写法引用，否则 ``offset_of!`` 直接编译失败。判据必须与生成器
-    ``gen.py::RUST_KEYWORDS`` **完全一致**——注意 ``type`` 是 Rust 关键字但不是
-    Python 关键字（Python 的 ``keyword`` 模块判不出来），故这里自带一份同名清单。
-    布局清单里的名字是原始名，故按需补 ``r#`` 前缀。
-    """
-    return f"r#{name}" if name in RUST_KEYWORDS else name
-
-
-def rust_probe(structs: dict[str, list[str]]) -> dict[str, dict[str, object]]:
-    """编译生成物并打印其真实结构体的 size_of 与 offset_of!。
-
-    探针**不依赖 daemon crate**，也**不需要手写结构体**——daemon 侧已无手写副本。
-    做法是把生成物当成 daemon 里它本来的角色来编译：
-
-    - ``contract`` 模块 = ``contract/generated/netlink_contract.rs``（daemon 里是
-      ``crate::contract``）；
-    - ``kernel::codec`` 模块 = ``src/daemon/kernel/codec/mod.rs``，按原样引入，
-      只补 ``crate::contract`` 这一件事，证明「codec 仅依赖契约」这一分层成真。
-
-    先编成 rlib 骨架，再编一个二进制探针通过 ``--extern`` 取用。任何失败都抛
-    ``RuntimeError``（不「跳过」）：探针编不出来就等于生成物未被校验，必须记成
-    失败，否则会给出假的通过结论。
-    """
-    gen_rs = os.path.join(GEN_DIR, "netlink_contract.rs")
-    codec_mod = os.path.join(ROOT, "src", "daemon", "kernel", "codec", "mod.rs")
     with tempfile.TemporaryDirectory() as td:
-        # crate 骨架：契约真相源 + codec（codec 内有 `pub mod messages;`，
-        # 相对 codec/ 目录解析；`#[cfg(test)]` 的测试块不参与编译）。
-        lib_src = os.path.join(td, "probe_lib.rs")
-        with open(lib_src, "w", encoding="utf-8") as fh:
-            fh.write("#![allow(dead_code, unused_imports, non_camel_case_types)]\n")
-            fh.write(f'#[path = r"{gen_rs}"]\npub mod contract;\n')
-            fh.write("#[allow(dead_code)]\npub mod kernel {\n")
-            fh.write(f'    #[path = r"{codec_mod}"]\n    pub mod codec;\n')
-            fh.write("}\n")
-        rlib = os.path.join(td, "libprobe.rlib")
-        skeleton = subprocess.run(
-            ["rustc", "--edition", "2021", "--crate-name", "fwprobe",
-             "--crate-type", "rlib", "-o", rlib, lib_src],
-            capture_output=True,
-            text=True,
+        res = compile_and_run(
+            c_probe_source(header.replace("#include <linux/types.h>", ""), names, fields_by_c),
+            td,
+            "generated",
         )
-        if skeleton.returncode != 0:
-            raise RuntimeError(
-                "探针骨架编译失败（生成物不再是可用的 crate::contract 模块，"
-                "或 codec 依赖了契约之外的东西）:\n" + skeleton.stderr[-6000:]
-            )
 
-        # 二进制探针：文件名为 measure.rs，避免与 extern crate 名冲突。
-        src = os.path.join(td, "measure.rs")
-        with open(src, "w", encoding="utf-8") as fh:
-            fh.write("#![allow(dead_code, unused_imports)]\n")
-            fh.write("use fwprobe::contract::*;\n")
-            fh.write("fn main() {\n")
-            for sn, fns in structs.items():
-                fh.write(
-                    f'    println!("{sn} - {{}} -1", std::mem::size_of::<{sn}>());\n'
-                )
-                for fn_ in fns:
-                    fh.write(
-                        f'    println!("{sn} {fn_} {{}} {{}}", '
-                        f"std::mem::size_of::<{sn}>(), "
-                        f"std::mem::offset_of!({sn}, {rust_field_expr(fn_)}));\n"
-                    )
-            fh.write("}\n")
-        exe = os.path.join(td, "measure")
-        proc = subprocess.run(
-            ["rustc", "--edition", "2021", "-O", "--extern", f"fwprobe={rlib}",
-             "-o", exe, src],
-            capture_output=True,
-            text=True,
+    print("=== 生成头 vs 布局清单（C 侧，编译取 sizeof/offsetof）===")
+    for cname in names:
+        idl = next(n for n in layouts if gen_c_name(n) == cname)
+        if cname not in res:
+            problems.append(f"C 探针缺少 {cname}")
+            continue
+        js = int(layouts[idl]["size"])
+        cs = int(res[cname]["size"])
+        if js != cs:
+            problems.append(f"{cname}: sizeof 生成头 {cs} != 布局清单 {js}")
+        for fn in fields_by_c[cname]:
+            co = res[cname]["offsets"].get(fn)  # type: ignore[union-attr]
+            jo = next(f["offset"] for f in layouts[idl]["fields"] if f["name"] == fn)
+            if co != jo:
+                problems.append(f"{cname}.{fn}: offset 生成头 {co} != 布局清单 {jo}")
+        mark = "OK " if js == cs else "差异"
+        print(
+            f"  {mark} {cname:34} C={cs:5} 清单={js:5}  字段 {len(fields_by_c[cname])} 个"
         )
-        if proc.returncode != 0:
-            raise RuntimeError(
-                "Rust 探针编译失败（生成物结构体无法用 size_of/offset_of 测量）:\n"
-                + proc.stderr[-6000:]
-            )
-        run = subprocess.run([exe], capture_output=True, text=True)
-        if run.returncode != 0:
-            raise RuntimeError("Rust 探针运行失败:\n" + run.stderr[-2000:])
-        return parse_probe(run.stdout)
+    return problems, res
+
+
+def check_header_coverage(layouts: dict[str, dict], structs: dict[str, list]) -> list[str]:
+    """生成头里的结构体集合必须与布局清单**完全**一致。
+
+    少一个结构体意味着新报文在上线前没人比对过它的布局；多一个意味着生成头被人
+    手改或 IDL 里有没被清单收录的结构。两种情况都不允许「默默通过」。
+    """
+    problems: list[str] = []
+    want = {gen_c_name(n) for n in layouts}
+    got = set(structs)
+    missing = sorted(want - got)
+    extra = sorted(got - want)
+    if missing:
+        problems.append("生成头缺少布局清单里的结构体：" + ", ".join(missing))
+    if extra:
+        problems.append("生成头里有布局清单之外的结构体：" + ", ".join(extra))
+    if not problems:
+        print(f"  生成头与布局清单结构体集合一致（{len(want)} 个），全部参与比对")
+    return problems
+
+
+# ============================================================================
+# 产物自检
+# ============================================================================
+
+
+def run_tsc(tsc: str, src: str) -> tuple[bool, str, str]:
+    """跑一次 ``tsc --noEmit``。
+
+    返回 ``(是否真正执行, 诊断文本, 无法执行的原因)``：tsc 是 node 脚本，node 缺失
+    或不可执行时它自己会返回 127 —— 那不是「类型检查通过」也不是「类型检查失败」，
+    而是**根本没检查**，必须由调用方显式说明，不能混进失败列表里给出假结论。
+    """
+    try:
+        ver = subprocess.run(
+            [tsc, "--version"], capture_output=True, text=True, cwd=ROOT
+        )
+    except OSError as exc:
+        return False, "", str(exc)
+    if ver.returncode != 0:
+        lines = (ver.stderr or ver.stdout).strip().splitlines()
+        return False, "", (lines[0] if lines else "tsc --version 无输出")
+    proc = subprocess.run(
+        [tsc, "--noEmit", "--strict", "--skipLibCheck", "--target", "es2020",
+         "--lib", "es2020,dom", src],
+        capture_output=True, text=True, cwd=ROOT,
+    )
+    return True, (proc.stdout + proc.stderr)[-3000:], ""
+
+
+def check_artifacts(ts_src: str) -> list[str]:
+    """确认 TS 产物能被工具链接受。
+
+    布局比对拿的是生成头的文本与编译结果，这里补上「前端消费的那份声明能否通过
+    类型检查」——生成器语法错误不会在布局比对里暴露。工具链不可用时**显式说明
+    未校验**（不伪装成通过），与 verify_http.py 同一口径。
+    """
+    problems: list[str] = []
+    print("=== 生成物自检（TS 侧）===")
+    ts_name = os.path.basename(ts_src)
+    if not os.path.isfile(ts_src):
+        raise SystemExit(f"错误: 找不到 TS 产物 {ts_src}，请先运行 gen.py")
+    tsc = os.environ.get("TSC") or os.path.join(
+        ROOT, "frontend", "node_modules", ".bin", "tsc"
+    )
+    if not os.path.isfile(tsc):
+        print(f"  跳过  {ts_name} tsc（未找到 {tsc}）")
+        return problems
+    ran, diagnostics, why = run_tsc(tsc, ts_src)
+    if not ran:
+        print(f"  跳过  {ts_name} tsc（工具链不可用: {why}）")
+        return problems
+    if diagnostics.strip():
+        problems.append(f"{ts_name} 类型检查失败:\n" + diagnostics)
+        print(f"  失败  {ts_name} tsc --noEmit")
+    else:
+        print(f"  OK    {ts_name} tsc --noEmit")
+    return problems
 
 
 def main() -> int:
@@ -321,163 +510,56 @@ def main() -> int:
         layout = json.load(fh)
     layouts = layout["layouts"]
 
-    def gen_fields(idl: str) -> list[str]:
-        """生成物里该结构体的定长字段名（不含变长尾部）。"""
-        return [f["name"] for f in layouts[idl]["fields"] if not f.get("tail")]
-
-    with open(os.path.join(GEN_DIR, "netlink_uapi.h"), encoding="utf-8") as fh:
-        gen_header = fh.read().replace("#include <linux/types.h>", "")
-
-    gen_names = sorted(gen_c_name(n) for n in layouts)
-
-    gen_fields_by_c: dict[str, list[str]] = {}
-    for gname in gen_names:
-        idl = next(n for n in layouts if gen_c_name(n) == gname)
-        gen_fields_by_c[gname] = gen_fields(idl)
-
-    r_fields = {
-        rn: gen_fields(gi) for rn, gi in RUST_TO_GEN.items()
-    }
+    header = read_file(UAPI_HEADER, "生成头 netlink_uapi.h")
+    structs = parse_header_structs(header)
+    computed = compute_layouts(structs, parse_header_typedefs(header))
 
     failures: list[str] = []
+
+    print("=== 内核侧结构断言 ===")
     failures += check_kernel_structure()
     print()
 
-    # 映射必须覆盖生成物的**全部**结构，否则新加的报文会在无人比对的情况下上线。
-    covered = set(RUST_TO_GEN.values())
-    missing = sorted(n for n in layouts if n not in covered)
-    if missing:
-        failures.append(
-            "生成物里有结构未被 C↔Rust 布局比对覆盖：" + ", ".join(missing)
-        )
-    extra = sorted(n for n in covered if n not in layouts)
-    if extra:
-        failures.append(
-            "布局比对引用了生成物中不存在的结构：" + ", ".join(extra)
-        )
-    if not missing and not extra:
-        print(f"  C↔Rust 布局比对覆盖生成物全部 {len(layouts)} 个结构")
+    print("=== 生成头 vs 布局清单（结构体集合）===")
+    failures += check_header_coverage(layouts, structs)
     print()
 
-    with tempfile.TemporaryDirectory() as td:
-        g_res = compile_and_run(
-            c_probe_source(gen_header, gen_names, gen_fields_by_c), td, "generated"
-        )
-
-    # 生成头是内核真正编译的输入，布局清单 JSON 是 daemon 比对的基准。
-    # 两侧分别与对方比对：任一漂移都会让内核与 daemon 各自的检查都「通过」
-    # 而实际线格式已错——所以这一轮必须比。
-    print("=== 生成头 vs 布局清单（C 侧，编译取 sizeof/offsetof）===")
-    for gname in gen_names:
-        idl = next(n for n in layouts if gen_c_name(n) == gname)
-        js = int(layouts[idl]["size"])
-        cs = int(g_res[gname]["size"])
-        if js != cs:
-            failures.append(f"{gname}: sizeof 生成头 {cs} != 布局清单 {js}")
-        for fn_ in gen_fields_by_c[gname]:
-            co = g_res[gname]["offsets"].get(fn_)  # type: ignore[union-attr]
-            jo = next(
-                f["offset"] for f in layouts[idl]["fields"] if f["name"] == fn_
-            )
-            if co != jo:
-                failures.append(
-                    f"{gname}.{fn_}: offset 生成头 {co} != 布局清单 {jo}"
-                )
-        mark = "OK " if js == cs else "差异"
-        print(f"  {mark} {gname:34} 生成头={cs:5} 清单={js:5}  字段 {len(gen_fields_by_c[gname])} 个")
-
+    print("=== 生成头 vs 布局清单（Python 重算 sizeof/offsetof）===")
+    py_problems = check_python_layout(layouts, computed, structs)
+    failures += py_problems
+    if not py_problems:
+        print(f"  OK  {len(structs)} 个结构体的尺寸与全部字段偏移重算一致")
+    else:
+        for p in py_problems:
+            print(f"  差异 {p}")
     print()
-    print("=== 生成物：C 侧 vs Rust 侧（编译取 sizeof/offsetof）===")
-    try:
-        r_res = rust_probe({rn: r_fields[rn] for rn in RUST_TO_GEN})
-    except RuntimeError as exc:
-        print(f"  （失败）{exc}")
-        failures.append(f"Rust 侧探针未产出结果: {exc}")
-        r_res = {}
-    for rn in sorted(RUST_TO_GEN):
-        idl = RUST_TO_GEN[rn]
-        gn = gen_c_name(idl)
-        if rn not in r_res:
-            failures.append(f"Rust 探针缺少 {rn}")
-            continue
-        rs = int(r_res[rn]["size"])
-        gs = int(g_res[gn]["size"])
-        if rs != gs:
-            failures.append(f"{rn}/{gn}: Rust size_of {rs} != C sizeof {gs}")
-        for fn_ in r_fields[rn]:
-            ro = r_res[rn]["offsets"].get(fn_)  # type: ignore[union-attr]
-            go = g_res[gn]["offsets"].get(fn_)  # type: ignore[union-attr]
-            if ro != go:
-                failures.append(f"{rn}/{gn}.{fn_}: offset Rust {ro} != C {go}")
-        mark = "OK " if rs == gs else "差异"
-        print(f"  {mark} {rn:30} Rust={rs:5} C={gs:5}  字段 {len(r_fields[rn])} 个")
 
+    print("=== 生成头自述断言 ===")
+    assert_problems = check_assertions(computed, parse_static_asserts(header))
+    failures += assert_problems
+    if not assert_problems:
+        print("  OK  每个结构体都有 _Static_assert，且与字段重算一致")
+    else:
+        for p in assert_problems:
+            print(f"  差异 {p}")
     print()
-    failures.extend(check_artifacts())
+
+    failures += check_c_layout(layouts, header)[0]
+    print()
+
+    failures += check_artifacts(os.path.join(GEN_DIR, "netlink.d.ts"))
+    print()
+
     if failures:
         print("一致性校验失败:")
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("一致性校验通过：生成头与布局清单一致，生成物在 C 侧与 Rust 侧的布局一致")
-    return 0
-
-
-def _toolchain_check(problems: list[str], rs_src: str, ts_src: str) -> None:
-    """用各自工具链编译一对生成物（Rust + TS）。
-
-    布局比对只覆盖手写代码，这里补上「产物能否被各自工具链接受」——
-    生成器语法错误（如漏转义 Rust 关键字）不会在三方比对里暴露。
-    """
-    m = re.search(r"([\w.-]+\.rs)$", rs_src)
-    rs_name = m.group(1) if m else os.path.basename(rs_src)
-    if os.path.isfile(rs_src):
-        with tempfile.TemporaryDirectory() as td:
-            rlib = os.path.join(td, "c.rlib")
-            proc = subprocess.run(
-                ["rustc", "--edition", "2021", "--crate-type", "lib",
-                 "-o", rlib, rs_src],
-                capture_output=True, text=True,
-            )
-            if proc.returncode != 0:
-                problems.append(f"{rs_name} 编译失败:\n" + proc.stderr[-3000:])
-                print(f"  失败  {rs_name} 编译")
-            else:
-                print(f"  OK    {rs_name} 编译")
-
-    m = re.search(r"([\w.-]+\.(?:ts|d\.ts))$", ts_src)
-    ts_name = m.group(1) if m else os.path.basename(ts_src)
-    # 前端依赖装在 frontend/ 下，tsc 也从那里找
-    tsc = os.environ.get("TSC") or os.path.join(ROOT, "frontend", "node_modules", ".bin", "tsc")
-    if not os.path.isfile(ts_src):
-        return
-    if os.path.isfile(tsc):
-        proc = subprocess.run(
-            [tsc, "--noEmit", "--strict", "--skipLibCheck", "--target", "es2020",
-             "--lib", "es2020,dom", ts_src],
-            capture_output=True, text=True, cwd=ROOT,
-        )
-        if proc.returncode != 0:
-            problems.append(f"{ts_name} 类型检查失败:\n" + proc.stdout[-3000:])
-            print(f"  失败  {ts_name} tsc --noEmit")
-        else:
-            print(f"  OK    {ts_name} tsc --noEmit")
-    else:
-        # 前端依赖未安装时不算失败，但必须显式说明「未校验」
-        print(f"  跳过  {ts_name} tsc（未找到 {tsc}）")
-
-
-def check_artifacts() -> list[str]:
-    """确认生成物本身可用：Rust 契约能编译、TS 契约能过类型检查。"""
-    problems: list[str] = []
-    print("=== 生成物自检（各自工具链）===")
-    _toolchain_check(
-        problems,
-        os.path.join(GEN_DIR, "netlink_contract.rs"),
-        os.path.join(GEN_DIR, "netlink.d.ts"),
+    print(
+        "一致性校验通过：布局清单、生成头（Python 重算 + C 编译 + 自述断言）三方一致，"
+        "内核侧未手抄报文结构"
     )
-    print()
-    return problems
+    return 0
 
 
 if __name__ == "__main__":

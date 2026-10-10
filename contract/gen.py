@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
-"""契约生成器：从 .fwidl 单一真相源产出三端绑定。
+"""契约生成器：从 .fwidl 单一真相源产出各端绑定。
 
 用法::
 
-    python3 contract/gen.py contract/netlink.fwidl --targets c,rust,json
+    python3 contract/gen.py                                  # 全部登记在册的契约
+    python3 contract/gen.py contract/netlink.fwidl --targets c,json
 
 产出目录：``contract/generated/``
+
+三种契约、各自的消费者：
+
+* ``netlink.fwidl``（字节布局）→ C 头（内核）+ TS（面板）+ JSON（daemon 的
+  ``internal/contract`` 对齐用）
+* ``procfs.fwidl``（命令文法）→ C 头（内核）+ JSON
+* ``http.fwidl``（路由表 + JSON 形状 + 错误模型）→ Go（daemon 注册用的路由表）
+  + TS（面板不得再手写字面量）+ JSON
 
 设计要点
 --------
@@ -39,17 +48,6 @@ SCALARS: Dict[str, int] = {
     "i16": 2,
     "i32": 4,
 }
-
-# Rust 关键字中会与常见协议字段名冲突的部分（如 ICMP 的 type）。
-# 生成 Rust 结构体字段时需加 r# 前缀转义。
-RUST_KEYWORDS = frozenset({
-    "as", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
-    "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod",
-    "move", "mut", "pub", "ref", "return", "self", "static", "struct", "super",
-    "trait", "true", "type", "unsafe", "use", "where", "while", "async", "await",
-    "abstract", "become", "box", "do", "final", "macro", "override", "priv",
-    "typeof", "unsized", "virtual", "yield", "try",
-})
 
 
 class ContractError(Exception):
@@ -706,150 +704,6 @@ def _emit_c_assert(L: List[str], contract: Contract, name: str) -> None:
 
 
 # ============================================================================
-# 产物：Rust
-# ============================================================================
-
-
-def _rust_ident(name: str) -> str:
-    """字段/类型名可能撞上 Rust 关键字（如 ICMP 的 ``type``），加 r# 转义。"""
-    return f"r#{name}" if name in RUST_KEYWORDS else name
-
-
-def emit_rust(contract: Contract) -> str:
-    L: List[str] = []
-    L.append("// 本文件由 contract/gen.py 从 .fwidl 生成，请勿手改。")
-    L.append("// 单一真相源: %s" % os.path.basename(contract.path))
-    L.append("")
-    L.append("#![allow(dead_code)]")
-    L.append("#![allow(non_camel_case_types)]")
-    L.append("")
-    L.append("// 本产物同时以两种方式被消费，二者必须都成立：")
-    L.append("//   1. 独立 crate 根（`verify_layout.py` 的 rustc 自检、手工比对）；")
-    L.append("//   2. daemon crate 的模块（`#[path]` 引入，使「契约 ↔ 实现」由编译器对齐）。")
-    L.append("// 后者让 `cargo fmt --check` 沿 mod 树进入本文件。各 `impl` 内的")
-    L.append("// `FIELD_OFFSETS` 是逐字段布局表，一行一条便于与 C 的 offsetof 对照；")
-    L.append("// 若交给 rustfmt 按行长启发式重排，换行位置会随 rustfmt 版本漂移，")
-    L.append("// 生成物即不再字节稳定。故对 impl 块显式 skip（生成器自己掌握其格式）。")
-    L.append("")
-    L.append("/// 契约承诺的字节序：全部多字节整数为大端。")
-    L.append("pub const FW_CONTRACT_ENDIAN: &str = \"big\";")
-    L.append("")
-    if contract.magic:
-        mname, mval = contract.magic
-        L.append(f"pub const {mname}: u32 = 0x{mval:08X};")
-        L.append("")
-
-    for name, t in contract.aliases.items():
-        L.append(f"pub type {snake(name)} = [u8; {t.count}];")
-    if contract.aliases:
-        L.append("")
-
-    for name, decl in contract.enums.items():
-        L.append(f"#[repr({decl.width})]")
-        L.append("#[derive(Debug, Clone, Copy, PartialEq, Eq)]")
-        L.append(f"pub enum {name} {{")
-        for member, value in decl.members:
-            L.append(f"    {pascal_from_upper_snake(member)} = {value},")
-        L.append("}")
-        L.append("")
-        # 线上整数 -> 枚举的双向转换。codec 逐字段解码大端整数后必须走这里，
-        # 否则未定义的线上取值会被当成合法枚举（Rust 里凭空 transmute 一个
-        # 越界值更是 UB）。`from_raw` 返回 None 让调用方把「认不出的值」记成
-        # 可观测错误，而不是静默落进某个分支。
-        L.append("#[rustfmt::skip]")
-        L.append(f"impl {name} {{")
-        L.append("    /// 线上整数转枚举；取值未定义时返回 `None`。")
-        L.append(f"    pub const fn from_raw(value: {decl.width}) -> Option<Self> {{")
-        L.append("        match value {")
-        for member, value in decl.members:
-            L.append(
-                f"            {value} => Some(Self::{pascal_from_upper_snake(member)}),"
-            )
-        L.append("            _ => None,")
-        L.append("        }")
-        L.append("    }")
-        L.append("")
-        L.append("    /// 枚举转线上整数。")
-        L.append(f"    pub const fn to_raw(self) -> {decl.width} {{")
-        L.append(f"        self as {decl.width}")
-        L.append("    }")
-        L.append("}")
-        L.append("")
-
-    for name, decl in contract.bits_decls.items():
-        L.append(f"pub mod {snake(name)} {{")
-        for member, bit in decl.members:
-            L.append(f"    pub const {member}: {decl.width} = 1 << {bit};")
-        L.append("}")
-        L.append("")
-
-    for kind, name in contract.order:
-        if kind not in ("struct", "message"):
-            continue
-        decl = contract.structs.get(name) or contract.messages.get(name)
-        L.append("#[repr(C, packed)]")
-        L.append("#[derive(Debug, Clone, Copy)]")
-        L.append(f"pub struct {name} {{")
-        if isinstance(decl, MessageDecl):
-            L.append("    pub hdr: MsgHdr,")
-        for f in decl.fields:
-            if f.is_tail:
-                continue
-            L.append(f"    pub {_rust_ident(f.name)}: {_rust_type(contract, f.type)},")
-        L.append("}")
-        size, entries = _layout(contract, name)
-        tail = [f for f in decl.fields if f.is_tail]
-        struct_bytes = gen_wire_size(contract, name)
-        L.append("")
-        L.append("#[rustfmt::skip]")
-        L.append(f"impl {name} {{")
-        L.append(f"    /// 线格式字节数（packed，无填充；变长消息为定长部分）")
-        L.append(f"    pub const WIRE_SIZE: usize = {struct_bytes};")
-        if isinstance(decl, MessageDecl):
-            _, member = decl.msg_type.split("::")
-            L.append(f"    /// 对应的 MsgType 取值")
-            L.append(f"    pub const MSG_TYPE: MsgType = MsgType::{pascal_from_upper_snake(member)};")
-        if tail:
-            t = tail[0]
-            elem = struct_size(contract, t.type.ref)
-            fixed = struct_bytes
-            max_elems = (MSG_LEN_MAX - fixed) // elem
-            L.append(f"    /// 定长部分字节数")
-            L.append(f"    pub const FIXED_SIZE: usize = {fixed};")
-            L.append(f"    /// 尾部元素类型与其字节数")
-            L.append(f"    pub const TAIL_ELEM_SIZE: usize = {elem};")
-            L.append(f"    /// u16 长度上限内可承载的最大尾部条目数")
-            L.append(f"    pub const MAX_TAIL_ENTRIES: usize = {max_elems};")
-        L.append("    /// 逐字段偏移（不含变长尾部；供一致性测试对照 offsetof）")
-        L.append("    pub const FIELD_OFFSETS: &[(&str, usize)] = &[")
-        for fname, off, _t, _s, istail in entries:
-            if istail:
-                continue
-            L.append(f'        ("{fname}", {off}),')
-        L.append("    ];")
-        L.append("}")
-        L.append("")
-    return "\n".join(L)
-
-
-def _rust_type(contract: Contract, t: FType) -> str:
-    if t.kind == "int":
-        rust = {"u8": "u8", "u16": "u16", "u32": "u32", "u64": "u64",
-                "i16": "i16", "i32": "i32"}[t.ref]
-        return f"[{rust}; {t.count}]" if t.count else rust
-    if t.kind == "str":
-        return f"[u8; {t.count}]"
-    if t.kind == "bytes":
-        return f"[u8; {t.count}]"
-    if t.kind == "alias":
-        base = contract.aliases[t.ref]
-        return f"[{snake(t.ref)}; {t.count}]" if t.count else f"{snake(t.ref)}"
-    if t.kind == "struct":
-        return f"[{t.ref}; {t.count}]" if t.count else t.ref
-    raise ContractError(f"无法生成 Rust 类型: {t}")
-
-
-# ============================================================================
 # 产物：TS
 # ============================================================================
 
@@ -1429,10 +1283,10 @@ def validate_textproto(contract: TextProtoContract) -> List[str]:
         for k, t in decl.keys:
             if t not in NUM_TYPES:
                 raise ContractError(f"key {target}: {k} 的数值类型 {t!r} 不在 {NUM_TYPES}")
-            # Rust 产物把全部 key 聚在同一个模块里，重名会直接编译失败
+            # C 头把全部 key 展开成同一命名空间的宏，重名会直接编译失败
             if k in seen_key and seen_key[k] != target:
                 raise ContractError(
-                    f"key {target}: {k} 与 key {seen_key[k]} 重名（Rust 侧聚合在同一模块内）"
+                    f"key {target}: {k} 与 key {seen_key[k]} 重名（同一张宏表内必须唯一）"
                 )
             seen_key[k] = target
         notes.append(f"key {target}: {len(decl.keys)} 个机器可读字段")
@@ -1493,32 +1347,6 @@ def _tp_macro(prefix: str, name: str) -> str:
     return prefix + upper_snake(name)
 
 
-def _rust_str(s: str) -> str:
-    """把任意文本转成合法的 Rust 字符串字面量。
-
-    不能用 ``repr()``：那是 Python 语法，输出的是单引号字面量，Rust 会把它
-    当成字符字面量而编译失败。命令形式里含 ``<`` ``>`` 与空格，必须正确转义。
-    """
-    out = ['"']
-    for ch in s:
-        if ch == "\\":
-            out.append("\\\\")
-        elif ch == '"':
-            out.append('\\"')
-        elif ch == "\n":
-            out.append("\\n")
-        elif ch == "\r":
-            out.append("\\r")
-        elif ch == "\t":
-            out.append("\\t")
-        elif ord(ch) < 0x20:
-            out.append(f"\\u{{{ord(ch):x}}}")
-        else:
-            out.append(ch)
-    out.append('"')
-    return "".join(out)
-
-
 def emit_c_textproto(contract: TextProtoContract, guard: str) -> str:
     L: List[str] = []
     L.append("/* 本文件由 contract/gen.py 从 .fwidl 生成，请勿手改。 */")
@@ -1567,69 +1395,6 @@ def emit_c_textproto(contract: TextProtoContract, guard: str) -> str:
             L.append(f"#define {mac} {decl.entries}")
     L.append("")
     L.append(f"#endif /* {guard} */")
-    L.append("")
-    return "\n".join(L)
-
-
-def emit_rust_textproto(contract: TextProtoContract) -> str:
-    L: List[str] = []
-    L.append("// 本文件由 contract/gen.py 从 .fwidl 生成，请勿手改。")
-    L.append("// 单一真相源: %s（文本协议契约，非二进制线格式）" % os.path.basename(contract.path))
-    L.append("")
-    L.append("#![allow(dead_code)]")
-    L.append("")
-    L.append("/// procfs 根目录。")
-    L.append(f'pub const FW_PROCFS_ROOT: &str = "{contract.root}";')
-    L.append("")
-    L.append("/// 各条目路径。")
-    L.append("pub mod path {")
-    for name in contract.file_order:
-        L.append(f'    pub const {upper_snake(name)}: &str = "{contract.root}/{name}";')
-    L.append("}")
-    L.append("")
-    L.append("/// 各条目权限位（八进制，与 proc_create 的 mode 一致）。")
-    L.append("pub mod mode {")
-    for name in contract.file_order:
-        L.append(f"    pub const {upper_snake(name)}: u32 = 0o{contract.files[name].mode:03o};")
-    L.append("}")
-    L.append("")
-
-    for ename in contract.enum_order:
-        decl = contract.enums[ename]
-        L.append("#[derive(Debug, Clone, Copy, PartialEq, Eq)]")
-        L.append(f"pub enum {ename} {{")
-        for member, value in decl.members:
-            L.append(f"    {pascal_from_upper_snake(member)} = {value},")
-        L.append("}")
-        L.append("")
-
-    for target, decl in contract.writes.items():
-        forms = ", ".join(
-            f"({ref.split('::')[0]}::{pascal_from_upper_snake(ref.split('::')[1])}, {_rust_str(form)})"
-            for form, ref in decl.forms
-        )
-        L.append(f'/// `{target}` 接受的命令形式（占位符仅供人读，非正则）。')
-        L.append(
-            f"pub const {upper_snake(target)}_FORMS: &["
-            f"({decl.forms[0][1].split('::')[0]}, &str)] = &[{forms}];"
-        )
-        L.append("")
-
-    for target, decl in contract.keys.items():
-        L.append(f'/// `{target}` 的机器可读字段名。')
-        L.append("pub mod key {")
-        for k, t in decl.keys:
-            L.append(f'    pub const {upper_snake(k)}: &str = "{k}"; // {t}')
-        L.append("}")
-        L.append("")
-
-    L.append("/// 容量上限；未列出的表表示实现中无条目上限。")
-    L.append("pub mod limit {")
-    for target in contract.limit_order:
-        decl = contract.limits[target]
-        if decl.entries is not None:
-            L.append(f"    pub const {upper_snake(target)}: usize = {decl.entries};")
-    L.append("}")
     L.append("")
     return "\n".join(L)
 
@@ -1706,11 +1471,11 @@ HTTP_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS")
 ROUTE_AUTH = ("none", "required")
 ROUTE_RETURNS = ("type", "text", "bytes", "stream")
 HEADER_SCOPES = ("all", "api", "webui")
-ERR_SHAPES = ("envelope", "text", "axum_default")
+ERR_SHAPES = ("envelope", "text", "framework_default")
 TYPE_KINDS = ("type", "request")
 
-# Rust 标量 -> TS 类型（用于把契约里的 Rust 类型推导成前端应有的 TS 类型）
-RUST_SCALAR_TS: Dict[str, str] = {
+# 契约标量类型 -> TS 类型（把契约里的字段类型推导成前端应有的 TS 类型）
+TYPE_SCALAR_TS: Dict[str, str] = {
     "i8": "number",
     "i16": "number",
     "i32": "number",
@@ -1730,13 +1495,13 @@ RUST_SCALAR_TS: Dict[str, str] = {
 
 
 class HttpField:
-    """一个 JSON 字段：契约里的 key 与它在 Rust 侧的类型。"""
+    """一个 JSON 字段：契约里的 key 与它的契约类型（见 contract_type_to_ts）。"""
 
-    __slots__ = ("key", "rust", "line")
+    __slots__ = ("key", "ftype", "line")
 
-    def __init__(self, key: str, rust: str, line: int):
+    def __init__(self, key: str, ftype: str, line: int):
         self.key = key
-        self.rust = rust
+        self.ftype = ftype
         self.line = line
 
 
@@ -1751,11 +1516,11 @@ class HttpType:
         self.kind = kind  # type | request
         self.params: List[str] = []
         self.fields: List[HttpField] = []
-        # 前端 interface 名（仅当与 Rust 结构体名不同时才写，例如 Rust
-        # `WhitelistEntryResponse` 对前端 `WhitelistEntry`）
+        # 前端 interface 名（仅当与 daemon 侧结构体名不同时才写，例如 daemon 的
+        # `WhitelistEntryResponse` 对前端的 `WhitelistEntry`）
         self.ts_name: Optional[str] = None
-        # 响应形状内联在 handler 里、没有具名 Rust 结构体（例如 sse-status
-        # 用的 serde_json::json!）。此时 Rust 侧改为核对 handler 里的 JSON key。
+        # 响应形状内联在 handler 里、没有具名结构体（例如 sse-status 这类
+        # 由 handler 现拼的载荷）。此时核对的是 handler 里写出的 JSON key。
         self.inline: bool = False
 
     def has_param(self, p: str) -> bool:
@@ -1796,15 +1561,15 @@ class HttpRoute:
 
 
 class ErrorModel:
-    """一种错误形状。`where` 到源码核对它是否仍是那个形状。"""
+    """一种错误形状。校验器按 `shape`/`statuses`/`body` 到实现侧核对语义——
+    路由注册串本身就是锚点，这里不再维护源码位置。"""
 
-    __slots__ = ("name", "line", "shape", "where", "statuses", "body", "note")
+    __slots__ = ("name", "line", "shape", "statuses", "body", "note")
 
     def __init__(self, name: str, line: int):
         self.name = name
         self.line = line
         self.shape = ""
-        self.where = ""
         self.statuses: List[int] = []
         self.body = ""
         self.note = ""
@@ -1848,9 +1613,6 @@ class HttpContract:
         self.err_models: Dict[str, ErrorModel] = {}
         self.err_order: List[str] = []
         self.defects: List[Defect] = []
-        # 迁移棘轮冻结基线：仍留在 legacy_protected_routes() 里的路由全集。
-        # 见 verify_http.py::check_migration_ratchet。
-        self.route_baseline: List[Tuple[str, str]] = []
 
     def route_keys(self) -> List[Tuple[str, str]]:
         return [(r.method, r.path) for r in self.routes]
@@ -1981,7 +1743,7 @@ def _http_block(
         for lineno, text in body:
             fm = _TYPE_FIELD_RE.fullmatch(text)
             if not fm:
-                raise ContractError(f"{path}:{lineno}: envelope 字段应为 '<key>: <RustType>': {text!r}")
+                raise ContractError(f"{path}:{lineno}: envelope 字段应为 '<key>: <契约类型>': {text!r}")
             env.fields.append(HttpField(fm.group(1), fm.group(2).strip(), lineno))
         contract.envelope = env
         return
@@ -2063,25 +1825,6 @@ def _http_block(
         contract.routes.append(decl)
         return
 
-    # ---- 迁移棘轮冻结基线 -----------------------------------------------
-    m = re.fullmatch(r"route_baseline\s+legacy", header)
-    if m:
-        if contract.route_baseline:
-            raise ContractError(f"{path}:{open_line}: route_baseline 重复定义")
-        for lineno, text in body:
-            bm = re.fullmatch(r'(\w+)\s+"([^"]+)"', text)
-            if not bm:
-                raise ContractError(
-                    f"{path}:{lineno}: route_baseline 行应为 '<方法> \"<路径>\"': {text!r}"
-                )
-            entry = (bm.group(1).upper(), bm.group(2))
-            if entry in contract.route_baseline:
-                raise ContractError(
-                    f"{path}:{lineno}: route_baseline 重复条目 {entry[0]} {entry[1]}"
-                )
-            contract.route_baseline.append(entry)
-        return
-
     # ---- 错误形状 ---------------------------------------------------------
     m = re.fullmatch(r"errmodel\s+(\w+)", header)
     if m:
@@ -2094,7 +1837,9 @@ def _http_block(
             if k == "shape":
                 decl.shape = v
             elif k == "where":
-                decl.where = v
+                raise ContractError(
+                    f"{path}:{lineno}: 契约不维护源码位置锚点，删除 where"
+                )
             elif k == "statuses":
                 decl.statuses = _int_csv(path, lineno, "statuses", v)
             elif k == "body":
@@ -2157,7 +1902,7 @@ def _http_block(
             fm = _TYPE_FIELD_RE.fullmatch(text)
             if not fm:
                 raise ContractError(
-                    f"{path}:{lineno}: {kind} 字段应为 '<JSON key>: <RustType>': {text!r}"
+                    f"{path}:{lineno}: {kind} 字段应为 '<JSON key>: <契约类型>': {text!r}"
                 )
             decl.fields.append(HttpField(fm.group(1), fm.group(2).strip(), lineno))
         contract.types[name] = decl
@@ -2165,8 +1910,8 @@ def _http_block(
         return
 
     # ---- 缺陷 -------------------------------------------------------------
-    # 字段集与 textproto 侧逐字一致：status/fix/reason 缺一不可，否则退役旧读
-    # 路径后无法把 E/F/M 记成「已修」（status=fixed 要求 where 消失、fix 存在）。
+    # 字段集与 textproto 侧一致：status/fix/reason 缺一不可，否则退役旧读路径
+    # 后无法把缺陷记成「已修」（status=fixed 要求给出 fix 作为修复证据）。
     m = re.fullmatch(r"defect\s+(\w+)", header)
     if m:
         decl = Defect(m.group(1), open_line)
@@ -2177,7 +1922,9 @@ def _http_block(
             elif k == "status":
                 decl.status = v
             elif k == "where":
-                decl.where = v
+                raise ContractError(
+                    f"{path}:{lineno}: 契约不维护源码位置锚点，删除 where"
+                )
             elif k == "fix":
                 decl.fix = v
             elif k == "reason":
@@ -2194,31 +1941,27 @@ def _http_block(
     raise ContractError(f"{path}:{open_line}: 无法解析的块头: {header!r}")
 
 
-# Rust 类型 -> TS 类型。只覆盖契约里实际会用到的形状：标量、String、bool、
+# 契约字段类型 -> TS 类型。只覆盖契约里实际会用到的形状：标量、String、bool、
 # Vec<T>、Option<T>、以及具名类型引用（含泛型实参）。
-def rust_type_to_ts(rust: str) -> str:
-    t = rust.strip()
+def contract_type_to_ts(decl: str) -> str:
+    t = decl.strip()
     m = re.fullmatch(r"Vec\s*<\s*(.+)\s*>", t)
     if m:
-        return f"{rust_type_to_ts(m.group(1))}[]"
+        return f"{contract_type_to_ts(m.group(1))}[]"
     # 定长数组 `[T; N]`：TS 无对应语法，退化为 T[]（长度在线上 JSON 里仍然体现）
     m = re.fullmatch(r"\[\s*(.+?)\s*;\s*\d+\s*\]", t)
     if m:
-        return f"{rust_type_to_ts(m.group(1))}[]"
+        return f"{contract_type_to_ts(m.group(1))}[]"
     # 引用（含 `&'static str` 这种带生命周期的）：剥掉引用与生命周期再推导
     m = re.fullmatch(r"&\s*(?:'\w+\s*)?(.+)", t)
     if m:
-        return rust_type_to_ts(m.group(1))
+        return contract_type_to_ts(m.group(1))
     m = re.fullmatch(r"Option\s*<\s*(.+)\s*>", t)
     if m:
-        return f"{rust_type_to_ts(m.group(1))} | null"
-    if t in RUST_SCALAR_TS:
-        return RUST_SCALAR_TS[t]
+        return f"{contract_type_to_ts(m.group(1))} | null"
+    if t in TYPE_SCALAR_TS:
+        return TYPE_SCALAR_TS[t]
     return t
-
-
-def rust_type_is_option(rust: str) -> bool:
-    return re.fullmatch(r"Option\s*<.*>", rust.strip()) is not None
 
 
 def validate_http(contract: HttpContract) -> List[str]:
@@ -2257,20 +2000,6 @@ def validate_http(contract: HttpContract) -> List[str]:
         f"{contract.auth['failure_threshold']} 次锁 {contract.auth['lockout_seconds']}s，"
         f"未授权状态码 {contract.auth['unauthorized_status']}"
     )
-
-    # 迁移棘轮冻结基线必须非空（三端重写期间 legacy 组不可能为空），且每条都得是
-    # 已声明的路由——写错方法名或路径会让棘轮静默失效。
-    if not contract.route_baseline:
-        raise ContractError(
-            "缺少 'route_baseline legacy { ... }' 块：迁移棘轮需要冻结的未迁路由基线"
-        )
-    declared_keys = set(contract.route_keys())
-    for entry in contract.route_baseline:
-        if entry not in declared_keys:
-            raise ContractError(
-                f"route_baseline 条目 {entry[0]} {entry[1]} 不是任何已声明的路由"
-            )
-    notes.append(f"迁移棘轮基线: {len(contract.route_baseline)} 条未迁路由")
 
     for name, decl in contract.headers.items():
         if decl.scope not in HEADER_SCOPES:
@@ -2332,8 +2061,6 @@ def validate_http(contract: HttpContract) -> List[str]:
         d = contract.err_models[name]
         if d.shape not in ERR_SHAPES:
             raise ContractError(f"errmodel {name}: shape 必须是 {ERR_SHAPES} 之一，实际 {d.shape!r}")
-        if not d.where:
-            raise ContractError(f"errmodel {name}: 缺少 where（须能到源码核对）")
         if not d.statuses:
             raise ContractError(f"errmodel {name}: 缺少 statuses")
         if d.shape == "text" and not d.body:
@@ -2347,8 +2074,8 @@ def validate_http(contract: HttpContract) -> List[str]:
             if f.key in keys:
                 raise ContractError(f"{name}: 字段 {f.key} 重复")
             keys[f.key] = f.line
-            if not f.rust:
-                raise ContractError(f"{name}.{f.key}: 缺少 Rust 类型")
+            if not f.ftype:
+                raise ContractError(f"{name}.{f.key}: 缺少字段类型")
         scope = f"（泛型参数 {'、'.join(d.params)}）" if d.params else ""
         notes.append(f"{'请求' if d.kind == 'request' else '响应'} {name}: {len(d.fields)} 个字段{scope}")
 
@@ -2363,8 +2090,6 @@ def validate_http(contract: HttpContract) -> List[str]:
             raise ContractError(
                 f"defect {decl.name}: status 必须是 {'/'.join(DEFECT_STATUSES)}，实际 {decl.status!r}"
             )
-        if not decl.where or ":" not in decl.where:
-            raise ContractError(f"defect {decl.name}: 必须给出 'where = <文件>:<锚点>'")
         if decl.status == "fixed" and (not decl.fix or ":" not in decl.fix):
             raise ContractError(
                 f"defect {decl.name}: status=fixed 必须给出 'fix = <文件>:<锚点>' 作为修复证据"
@@ -2388,80 +2113,357 @@ def validate_http(contract: HttpContract) -> List[str]:
         retained = sum(1 for d in contract.defects if d.status == "retained")
         notes.append(
             f"缺陷记录: {len(contract.defects)} 条（已修 {fixed} / 有意保留 {retained} / "
-            f"未修 {len(contract.defects) - fixed - retained}；由 verify_*.py 到源码核对锚点）"
+            f"未修 {len(contract.defects) - fixed - retained}；由 verify_http.py 核对语义）"
         )
     return notes
 
 
-def emit_rust_http(contract: HttpContract) -> str:
+# Go 侧的方法名惯例：契约里是大写 HTTP 方法，Go 标识符用首字母大写的驼峰。
+GO_METHOD_IDENT: Dict[str, str] = {
+    "GET": "Get",
+    "POST": "Post",
+    "PUT": "Put",
+    "DELETE": "Delete",
+    "PATCH": "Patch",
+    "HEAD": "Head",
+    "OPTIONS": "Options",
+}
+
+
+def go_path(path: str) -> str:
+    """契约路径 -> ``net/http.ServeMux`` 路径。
+
+    契约的参数槽写作 ``:ip``（Express/axum 的历史写法），Go 1.22 起的模式写作
+    ``{ip}``；多段通配 ``*path`` 两边拼写一致，原样保留。除参数槽外不做任何改写，
+    因此注册串与契约路径始终一一对应。
+    """
+    return re.sub(r":([A-Za-z_]\w*)", r"{\1}", path)
+
+
+def go_camel(text: str) -> str:
+    """按非字母数字切块后逐块首字母大写拼接（契约里的路径 token 均为小写）。"""
+    return "".join(t[0].upper() + t[1:] for t in re.split(r"[^A-Za-z0-9]+", text) if t)
+
+
+def go_route_ident(route: HttpRoute) -> str:
+    return "Route" + GO_METHOD_IDENT[route.method] + go_camel(route.path)
+
+
+def go_sse_ident(route: HttpRoute) -> str:
+    return go_camel(route.path)
+
+
+# 契约取值 -> Go 常量名。枚举本身在 validate_http 里已约束到这几个值。
+GO_AUTH_IDENT: Dict[str, str] = {"none": "AuthNone", "required": "AuthRequired"}
+GO_RETURNS_IDENT: Dict[str, str] = {
+    "type": "ReturnsType",
+    "text": "ReturnsText",
+    "bytes": "ReturnsBytes",
+    "stream": "ReturnsStream",
+}
+GO_HEADER_SCOPE_IDENT: Dict[str, str] = {
+    "all": "HeaderScopeAll",
+    "api": "HeaderScopeAPI",
+    "webui": "HeaderScopeWebUI",
+}
+
+
+def go_code_ident(value: int) -> str:
+    if value == 0:
+        return "CodeOK"
+    if value < 0:
+        return f"CodeNeg{abs(value)}"
+    return f"Code{value}"
+
+
+def emit_go_http(contract: HttpContract) -> str:
+    """产出 daemon 侧消费的 Go 绑定：路由常量 + 路由表 + 业务码 + SSE + 安全头。
+
+    只给常量与表，不给 handler 骨架——注册哪些 handler、载荷结构体长什么样是
+    ``internal/http`` 的实现细节，契约管的是字面量只有一份。
+    """
     L: List[str] = []
-    L.append("//! 由 contract/http.fwidl 生成 —— 请勿手工编辑。")
-    L.append("//!")
-    L.append("//! 守护进程 HTTP 接口的路径、方法与业务码单一真相源。")
-    L.append("")
-    L.append("#![allow(dead_code)]")
-    L.append("")
-    L.append(f"/// 契约名：{contract.name}")
-    L.append(f"pub const NAME: &str = {_rust_str(contract.name)};")
-    L.append("")
-    L.append(f"/// API 前缀：{contract.base}")
-    L.append(f"pub const BASE: &str = {_rust_str(contract.base)};")
-    L.append("")
-    L.append("/// 路由路径常量（与 axum 注册的字面量逐字一致）")
-    # 同 netlink 侧的理由：模块被 `#[path]` 挂进 daemon 后 `cargo fmt --check`
-    # 会沿 mod 树进入本文件。`path` / `sse` 两块的换行只由行长决定，交出去就会
-    # 随 rustfmt 版本漂移并让生成物不再字节稳定，故显式 skip。
-    L.append("#[rustfmt::skip]")
-    L.append("pub mod path {")
-    for r in contract.routes:
-        ident = "ROUTE_" + re.sub(r"[^A-Za-z0-9]+", "_", f"{r.method}_{r.path}").strip("_").upper()
-        L.append(f"    /// `{r.method} {r.path}` → `{r.handler}`")
-        L.append(f"    pub const {ident}: &str = {_rust_str(r.path)};")
-    L.append("}")
-    L.append("")
-    L.append("/// 业务码（信封里的 `code` 字段）")
-    L.append("pub mod code {")
+    a = L.append
+
+    a("// 由 contract/http.fwidl 生成 —— 请勿手工编辑。")
+    a("//")
+    a("// 守护进程 HTTP 接口的注册串、业务码、SSE 上限与安全头单一真相源：路由在")
+    a("// net/http.ServeMux 上注册时引用这里的常量与表，实现里不得再手打一遍路径")
+    a("// 字面量。contract/verify_http.py 拿 routes.go 里出现的注册串与本表的")
+    a("// Pattern 逐项核对，任何一侧多出来都算门禁失败。")
+    a("//")
+    a("// 消费方式：本文件所在目录不在 Go module 内（module 根是 src/daemon），HTTP")
+    a("// 层把它放进模块（复制或软链）后按包名 httpcontract 引入。无论哪种落地方式，")
+    a("// 字面量都只有 contract/http.fwidl 这一处来源。")
+    a("package httpcontract")
+    a("")
+    a("// 契约标识。")
+    a("const (")
+    a("\t// ContractName 是契约名（httpproto 块声明）。")
+    a(f"\tContractName = {json.dumps(contract.name)}")
+    a("\t// APIBase 是 RESTful 端点共用的前缀；SPA 页面、静态资源与健康检查在其外。")
+    a(f"\tAPIBase = {json.dumps(contract.base)}")
+    a(")")
+    a("")
+
+    # ---- 鉴权参数 ----
+    auth = contract.auth
+    a("// 鉴权参数。凭据来自配置的 metrics_username / metrics_password，两项都为空")
+    a("// 才视为「未配置认证」；连续失败达到阈值后锁定的窗口内一律拒绝（含正确凭据）。")
+    a("const (")
+    a("\t// AuthFailureThreshold 是触发锁定前的连续失败次数。")
+    a(f"\tAuthFailureThreshold = {int(auth['failure_threshold'])}")
+    a("\t// AuthLockoutSeconds 是一次锁定持续的秒数。")
+    a(f"\tAuthLockoutSeconds = {int(auth['lockout_seconds'])}")
+    a("\t// AuthUnauthorizedStatus 是凭据缺失/错误时的 HTTP 状态码（纯文本形状，不经信封）。")
+    a(f"\tAuthUnauthorizedStatus = {int(auth['unauthorized_status'])}")
+    if "token_query" in auth:
+        a("\t// AuthTokenQuery 是允许以查询参数携带凭据的键名（重定向必须原样保留 query）。")
+        a(f"\tAuthTokenQuery = {json.dumps(auth['token_query'])}")
+    if "scheme" in auth:
+        a("\t// AuthScheme 是 Authorization 头里的凭据方案。")
+        a(f"\tAuthScheme = {json.dumps(auth['scheme'])}")
+    a(")")
+    a("")
+
+    # ---- 路由表字段的取值域 ----
+    a("// 路由表字段的取值域，与契约里的枚举一一对应。")
+    a("const (")
+    a("\t// AuthNone 表示带与不带凭据都放行。")
+    a('\tAuthNone = "none"')
+    a("\t// AuthRequired 表示未带凭据（或凭据不符）必须返回未授权状态码。")
+    a('\tAuthRequired = "required"')
+    a("\t// ReturnsType 经信封返回 JSON 载荷。")
+    a('\tReturnsType = "type"')
+    a("\t// ReturnsText 不经信封，直接返回纯文本。")
+    a('\tReturnsText = "text"')
+    a("\t// ReturnsBytes 是二进制响应（静态文件）。")
+    a('\tReturnsBytes = "bytes"')
+    a("\t// ReturnsStream 是长连接 SSE，必须声明连接上限与事件名。")
+    a('\tReturnsStream = "stream"')
+    a("\t// HeaderScopeAll 表示安全头施加在所有响应上。")
+    a('\tHeaderScopeAll = "all"')
+    a("\t// HeaderScopeAPI 表示只施加在 API 响应上。")
+    a('\tHeaderScopeAPI = "api"')
+    a("\t// HeaderScopeWebUI 表示只施加在面板页面响应上。")
+    a('\tHeaderScopeWebUI = "webui"')
+    a(")")
+    a("")
+
+    # ---- 信封 ----
+    env_keys = ", ".join(json.dumps(f.key) for f in contract.envelope.fields)
+    a("// EnvelopeFields 是统一信封的 JSON key，顺序即契约顺序。三字段恒定存在：")
+    a("// 成功时 code=0、data 为载荷；失败时 code 为业务码、data 为 null。")
+    a(f"var EnvelopeFields = []string{{{env_keys}}}")
+    a("")
+
+    # ---- 业务码 ----
+    a("// 业务码（信封里的 code 字段）。它与 HTTP 状态码是两套编号：状态码表达")
+    a("// 「请求是否被处理」，业务码表达「为什么失败」，映射见 CodeHTTPStatus。")
+    a("const (")
     for value in contract.code_order:
         d = contract.codes[value]
-        ident = "CODE_" + str(abs(value)) + ("_NEG" if value < 0 else "")
-        if value == 0:
-            ident = "OK"
-        L.append(f"    /// HTTP {d.status}：{d.text}")
-        L.append(f"    pub const {ident}: i32 = {value};")
-    L.append("}")
-    L.append("")
-    L.append("/// 认证策略")
-    L.append("pub mod auth {")
-    L.append(
-        "    pub const FAILURE_THRESHOLD: u32 = "
-        + str(int(contract.auth["failure_threshold"]))
-        + ";"
-    )
-    L.append(
-        "    pub const LOCKOUT_SECONDS: u64 = " + str(int(contract.auth["lockout_seconds"])) + ";"
-    )
-    L.append(
-        "    pub const UNAUTHORIZED_STATUS: u16 = "
-        + str(int(contract.auth["unauthorized_status"]))
-        + ";"
-    )
-    if "token_query" in contract.auth:
-        L.append(f"    pub const TOKEN_QUERY: &str = {_rust_str(contract.auth['token_query'])};")
-    L.append("}")
-    L.append("")
-    L.append("/// SSE 连接上限（两条流各自独立）")
-    L.append("#[rustfmt::skip]")
-    L.append("pub mod sse {")
+        a(f"\t// {go_code_ident(value)}：{d.text}")
+        a(f"\t{go_code_ident(value)} = {value}")
+    a(")")
+    a("")
+    a("// CodeHTTPStatus 是业务码到成功/失败 HTTP 状态码的映射。")
+    a("var CodeHTTPStatus = map[int]int{")
+    for value in contract.code_order:
+        d = contract.codes[value]
+        a(f"\t// {d.text}")
+        a(f"\t{go_code_ident(value)}: {d.status},")
+    a("}")
+    a("")
+
+    # ---- 路由注册串 ----
+    a("// 路由注册串（net/http.ServeMux 的 \"METHOD /path\" 模式）。注释里的路径是")
+    a("// 契约原文，鉴权列的是契约语义：required = 未带凭据必须 401，none = 带与不带")
+    a("// 都放行。")
+    a("const (")
+    idents: Dict[Tuple[str, str], str] = {}
+    seen: Dict[str, Tuple[str, str]] = {}
     for r in contract.routes:
-        if r.returns != "stream":
-            continue
-        ident = re.sub(r"[^A-Za-z0-9]+", "_", r.path).strip("_").upper()
-        L.append(f"    /// `{r.path}`")
-        L.append(f"    pub const MAX_CONNECTIONS_{ident}: usize = {r.max_connections};")
-        ev = ", ".join(_rust_str(e) for e in r.events)
-        L.append(f"    pub const EVENTS_{ident}: &[&str] = &[{ev}];")
-    L.append("}")
-    L.append("")
+        ident = go_route_ident(r)
+        if ident in seen:
+            raise ContractError(
+                f"Go 标识符 {ident} 冲突：{seen[ident]} 与 {r.method} {r.path}"
+                "（契约路径需要在去掉标点后有唯一的名字）"
+            )
+        seen[ident] = (r.method, r.path)
+        idents[(r.method, r.path)] = ident
+        auth_note = "需认证" if r.auth == "required" else "无认证"
+        a(f"\t// {r.method} {r.path} → {r.handler}（{auth_note}）")
+        a(f"\t{ident} = {json.dumps(r.method + ' ' + go_path(r.path))}")
+    a(")")
+    a("")
+
+    # ---- SSE ----
+    streams = [r for r in contract.routes if r.returns == "stream"]
+    if streams:
+        a("// 两条 SSE 流各自独立计数：上限与心跳按流声明，互不共享。诊断端点必须")
+        a("// 同时报告两条流，否则前端按一条流的上限推断另一条会误判 503。")
+        a("const (")
+        for r in streams:
+            suffix = go_sse_ident(r)
+            a(f"\t// SSEMaxConnections{suffix} 是 {r.method} {r.path} 的并发连接上限。")
+            a(f"\tSSEMaxConnections{suffix} = {r.max_connections}")
+            if r.keepalive_secs:
+                a(f"\t// SSEKeepaliveSeconds{suffix} 是 {r.method} {r.path} 的心跳间隔。")
+                a(f"\tSSEKeepaliveSeconds{suffix} = {r.keepalive_secs}")
+        a(")")
+        a("")
+        a("// 各流的事件名。发布侧必须逐字发这些名字（event: 行），前端订阅侧同此。")
+        for r in streams:
+            suffix = go_sse_ident(r)
+            evs = ", ".join(json.dumps(e) for e in r.events)
+            a(f"var SSEEventNames{suffix} = []string{{{evs}}}")
+        a("")
+
+    # ---- 路由表 ----
+    a("// Route 是契约里的一条路由。Pattern 用于注册，Path 用于生成链接与重定向。")
+    a("type Route struct {")
+    a("\t// Pattern 是 ServeMux 注册串，逐字用于 mux.HandleFunc(Route.X, handler)。")
+    a("\tPattern string")
+    a("\t// Path 是去掉方法的路径，参数槽为 Go 写法（契约的 `:ip` 写作 `{ip}`）。")
+    a("\tPath string")
+    a("\t// Method 是 HTTP 方法，与 Pattern 的前缀一致。")
+    a("\tMethod string")
+    a("\t// Auth 取 AuthNone / AuthRequired。")
+    a("\tAuth string")
+    a("\t// Handler 是契约里的逻辑 handler 名（`handle_*`），用于对账与诊断输出；")
+    a("\t// 不要求 Go 侧存在同名符号——注册串才是锚点。")
+    a("\tHandler string")
+    a("\t// Returns 取 Returns* 之一。")
+    a("\tReturns string")
+    a("\t// Status 是成功路径的 HTTP 状态码。")
+    a("\tStatus int")
+    a("\t// AltStatus 是同一路由上「成功但语义不同」的另一个状态码，0 表示没有。")
+    a("\tAltStatus int")
+    a("\t// Codes 是该路由可能返回的信封业务码，空表示只有成功路径。")
+    a("\tCodes []int")
+    a("\t// MaxConnections 是 stream 路由的连接上限，0 表示非 stream。")
+    a("\tMaxConnections int")
+    a("\t// Events 是 stream 路由的事件名全集。")
+    a("\tEvents []string")
+    a("\t// KeepaliveSecs 是 stream 路由的心跳间隔，0 表示契约未声明。")
+    a("\tKeepaliveSecs int")
+    a("}")
+    a("")
+    a("// Routes 是完整路由表，顺序与 contract/http.fwidl 的声明顺序一致。")
+    a("var Routes = []Route{")
+    for r in contract.routes:
+        parts = [
+            f"Pattern: {idents[(r.method, r.path)]}",
+            f"Path: {json.dumps(go_path(r.path))}",
+            f"Method: {json.dumps(r.method)}",
+            f"Auth: {GO_AUTH_IDENT[r.auth]}",
+            f"Handler: {json.dumps(r.handler)}",
+            f"Returns: {GO_RETURNS_IDENT[r.returns]}",
+            f"Status: {r.status}",
+        ]
+        if r.alt_status:
+            parts.append(f"AltStatus: {r.alt_status}")
+        if r.codes:
+            parts.append(
+                "Codes: []int{" + ", ".join(go_code_ident(c) for c in r.codes) + "}"
+            )
+        if r.returns == "stream":
+            suffix = go_sse_ident(r)
+            parts.append(f"MaxConnections: SSEMaxConnections{suffix}")
+            parts.append(f"Events: SSEEventNames{suffix}")
+            if r.keepalive_secs:
+                parts.append(f"KeepaliveSecs: SSEKeepaliveSeconds{suffix}")
+        a("\t{" + ", ".join(parts) + "},")
+    a("}")
+    a("")
+
+    # ---- 安全头 ----
+    a("// SecurityHeader 是中间件统一施加的安全头。")
+    a("type SecurityHeader struct {")
+    a("\tName string")
+    a("\t// Scope 取 HeaderScope* 之一，指明头施加在哪一类响应上。")
+    a("\tScope string")
+    a("\tValue string")
+    a("\t// ValueWebUI 非空时，Web UI 页面响应用它替代 Value（SPA 需要更宽的 CSP）。")
+    a("\tValueWebUI string")
+    a("}")
+    a("")
+    a("// SecurityHeaders 是安全头全集，顺序与契约声明顺序一致。")
+    a("var SecurityHeaders = []SecurityHeader{")
+    for name, d in contract.headers.items():
+        parts = [
+            f"Name: {json.dumps(name)}",
+            f"Scope: {GO_HEADER_SCOPE_IDENT[d.scope]}",
+            f"Value: {json.dumps(d.value)}",
+        ]
+        if d.value_webui:
+            parts.append(f"ValueWebUI: {json.dumps(d.value_webui)}")
+        a("\t{" + ", ".join(parts) + "},")
+    a("}")
+    a("")
+
+    # ---- 查询辅助 ----
+    a("// RouteByPattern 按注册串查契约路由。")
+    a("func RouteByPattern(pattern string) (Route, bool) {")
+    a("\tfor _, r := range Routes {")
+    a("\t\tif r.Pattern == pattern {")
+    a("\t\t\treturn r, true")
+    a("\t\t}")
+    a("\t}")
+    a("\treturn Route{}, false")
+    a("}")
+    a("")
+    a("// RouteByMethodPath 按方法与路径查契约路由；路径可传契约写法（`:ip`）或")
+    a("// Go 写法（`{ip}`），两种拼写在 GoPath 里归一。")
+    a("func RouteByMethodPath(method, path string) (Route, bool) {")
+    a("\twant := method + \" \" + GoPath(path)")
+    a("\tfor _, r := range Routes {")
+    a("\t\tif r.Pattern == want {")
+    a("\t\t\treturn r, true")
+    a("\t\t}")
+    a("\t}")
+    a("\treturn Route{}, false")
+    a("}")
+    a("")
+    a("// Patterns 返回全部注册串，顺序同 Routes；契约测试用它逐条比对实现侧的注册。")
+    a("func Patterns() []string {")
+    a("\tout := make([]string, 0, len(Routes))")
+    a("\tfor _, r := range Routes {")
+    a("\t\tout = append(out, r.Pattern)")
+    a("\t}")
+    a("\treturn out")
+    a("}")
+    a("")
+    a("// GoPath 把契约路径的参数槽 `:name` 转成 ServeMux 的 `{name}`，其余原样；")
+    a("// 多段通配 `*name` 两边拼写一致。")
+    a("func GoPath(path string) string {")
+    a("\tout := []byte{}")
+    a("\tfor i := 0; i < len(path); i++ {")
+    a("\t\tif path[i] == ':' && i+1 < len(path) && isIdentStart(path[i+1]) {")
+    a("\t\t\tout = append(out, '{')")
+    a("\t\t\ti++")
+    a("\t\t\tfor i < len(path) && isIdentByte(path[i]) {")
+    a("\t\t\t\tout = append(out, path[i])")
+    a("\t\t\t\ti++")
+    a("\t\t\t}")
+    a("\t\t\tout = append(out, '}')")
+    a("\t\t\ti--")
+    a("\t\t\tcontinue")
+    a("\t\t}")
+    a("\t\tout = append(out, path[i])")
+    a("\t}")
+    a("\treturn string(out)")
+    a("}")
+    a("")
+    a("func isIdentStart(b byte) bool {")
+    a("\treturn b == '_' || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')")
+    a("}")
+    a("")
+    a("func isIdentByte(b byte) bool {")
+    a("\treturn isIdentStart(b) || (b >= '0' && b <= '9')")
+    a("}")
+    a("")
     return "\n".join(L)
 
 
@@ -2507,10 +2509,10 @@ def emit_ts_http(contract: HttpContract) -> str:
                 continue  # 内联形状无具名结构体，字段已在 handler 内核对
             ifname = d.ts_name or name
             generic = f"<{', '.join(d.params)}>" if d.params else ""
-            L.append(f"/** Rust `{name}`{'（前端名）' if d.ts_name else ''} */")
+            L.append(f"/** 契约类型 `{name}`{'（前端名）' if d.ts_name else ''} */")
             L.append(f"export interface {ifname}{generic} {{")
             for f in d.fields:
-                L.append(f"  {f.key}: {rust_type_to_ts(f.rust)}")
+                L.append(f"  {f.key}: {contract_type_to_ts(f.ftype)}")
             L.append("}")
             L.append("")
     return "\n".join(L)
@@ -2528,7 +2530,7 @@ def emit_json_http(contract: HttpContract, notes: List[str]) -> str:
         "envelope": {
             "name": env.name,
             "params": env.params,
-            "fields": [{"key": f.key, "rust": f.rust} for f in env.fields],
+            "fields": [{"key": f.key, "type": f.ftype} for f in env.fields],
         },
         "auth": contract.auth,
         "headers": {
@@ -2556,10 +2558,6 @@ def emit_json_http(contract: HttpContract, notes: List[str]) -> str:
             }
             for r in contract.routes
         ],
-        "route_baseline": [
-            {"method": method, "path": path}
-            for method, path in contract.route_baseline
-        ],
         "types": {
             name: {
                 "kind": contract.types[name].kind,
@@ -2567,7 +2565,7 @@ def emit_json_http(contract: HttpContract, notes: List[str]) -> str:
                 "ts_name": contract.types[name].ts_name or name,
                 "inline": contract.types[name].inline,
                 "fields": [
-                    {"key": f.key, "rust": f.rust} for f in contract.types[name].fields
+                    {"key": f.key, "type": f.ftype} for f in contract.types[name].fields
                 ],
             }
             for name in contract.type_order
@@ -2579,7 +2577,6 @@ def emit_json_http(contract: HttpContract, notes: List[str]) -> str:
         "errmodels": {
             name: {
                 "shape": contract.err_models[name].shape,
-                "where": contract.err_models[name].where,
                 "statuses": contract.err_models[name].statuses,
                 "body": contract.err_models[name].body,
                 "note": contract.err_models[name].note,
@@ -2591,7 +2588,6 @@ def emit_json_http(contract: HttpContract, notes: List[str]) -> str:
                 "name": d.name,
                 "severity": d.severity,
                 "status": d.status,
-                "where": d.where,
                 "fix": d.fix,
                 "reason": d.reason,
                 "resolution": d.resolution,
@@ -2610,10 +2606,9 @@ def emit_json_http(contract: HttpContract, notes: List[str]) -> str:
 # 各契约的默认产物与 C 头保护宏（不写 --targets 时用这里的默认值）
 CONTRACTS: Dict[str, Dict[str, object]] = {
     "netlink.fwidl": {
-        "targets": ["c", "rust", "ts", "json"],
+        "targets": ["c", "ts", "json"],
         "out": {
             "c": "netlink_uapi.h",
-            "rust": "netlink_contract.rs",
             "ts": "netlink.d.ts",
             "json": "netlink_layout.json",
         },
@@ -2621,20 +2616,19 @@ CONTRACTS: Dict[str, Dict[str, object]] = {
     },
     "procfs.fwidl": {
         # 前端不接触 procfs，故不产出 TS 产物（无消费者不生成，避免死产物）
-        "targets": ["c", "rust", "json"],
+        "targets": ["c", "json"],
         "out": {
             "c": "procfs_uapi.h",
-            "rust": "procfs_contract.rs",
             "json": "procfs_layout.json",
         },
         "c_guard": "FW_CONTRACT_PROCFS_UAPI_H",
     },
     "http.fwidl": {
-        # HTTP 契约是 daemon 与前端之间的接口，故产出 Rust 与 TS 两侧常量；
+        # HTTP 契约是 daemon 与前端之间的接口，故产出 Go 侧路由表与 TS 侧常量；
         # 无 C 产物（内核不经由 HTTP 暴露任何东西）。
-        "targets": ["rust", "ts", "json"],
+        "targets": ["go", "ts", "json"],
         "out": {
-            "rust": "http_contract.rs",
+            "go": "http_contract.go",
             "ts": "http_contract.ts",
             "json": "http_layout.json",
         },
@@ -2642,93 +2636,110 @@ CONTRACTS: Dict[str, Dict[str, object]] = {
 }
 
 
-def main(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(description="从 .fwidl 生成三端契约绑定")
-    ap.add_argument("source", help=".fwidl 文件路径")
-    ap.add_argument("--out-dir", default="contract/generated", help="产物输出目录")
-    ap.add_argument("--targets", default=None, help="逗号分隔的产物: c,rust,ts,json")
-    ap.add_argument("--check", action="store_true", help="只校验并打印布局，不写文件")
-    args = ap.parse_args(argv)
-
-    if not os.path.isfile(args.source):
-        print(f"错误: 找不到 {args.source}", file=sys.stderr)
-        return 2
-
-    base = os.path.basename(args.source)
+def generate(source: str, targets: Optional[List[str]], out_dir: str, check: bool) -> int:
+    """校验一份契约并按需产出绑定。返回 0 通过、1 校验失败、2 用法错误。"""
+    base = os.path.basename(source)
     cfg = CONTRACTS.get(base, {})
-    targets = (
-        [t.strip() for t in args.targets.split(",") if t.strip()]
-        if args.targets
-        else list(cfg.get("targets", ["c", "rust", "json"]))
+    chosen = (
+        [t.strip() for t in targets if t.strip()]
+        if targets
+        else list(cfg.get("targets", ["c", "json"]))
     )
     out_names: Dict[str, str] = dict(cfg.get("out", {}))
     c_guard = str(cfg.get("c_guard", "FW_CONTRACT_GENERATED_H"))
 
     try:
-        kind = detect_format(args.source)
+        kind = detect_format(source)
         if kind == "http":
-            http = parse_http(args.source)
+            http = parse_http(source)
             notes = validate_http(http)
         elif kind == "textproto":
-            tp = parse_textproto(args.source)
+            tp = parse_textproto(source)
             notes = validate_textproto(tp)
         else:
-            binary = parse(args.source)
+            binary = parse(source)
             notes = validate(binary)
     except ContractError as exc:
-        print(f"契约校验失败: {exc}", file=sys.stderr)
+        print(f"契约校验失败（{base}）: {exc}", file=sys.stderr)
         return 1
 
     print(f"契约 {base}: 校验通过（{kind}）")
     for n in notes:
         print(f"  - {n}")
 
-    if args.check:
+    if check:
         return 0
 
-    os.makedirs(args.out_dir, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
     emitted: List[str] = []
-    for t in targets:
-        if kind == "http":
-            # HTTP 契约描述的是 daemon↔前端的接口，没有字节布局也没有 C 消费者
-            if t == "rust":
-                content, fname = emit_rust_http(http), out_names.get("rust", "generated.rs")
+    try:
+        for t in chosen:
+            if kind == "http":
+                # HTTP 契约描述的是 daemon↔前端的接口，没有字节布局也没有 C 消费者
+                if t == "go":
+                    content, fname = emit_go_http(http), out_names.get("go", "generated.go")
+                elif t == "ts":
+                    content, fname = emit_ts_http(http), out_names.get("ts", "generated.ts")
+                elif t == "json":
+                    content, fname = emit_json_http(http, notes), out_names.get("json", "layout.json")
+                else:
+                    raise ContractError(f"HTTP 契约不支持产物类型 {t!r}")
+            elif kind == "textproto":
+                # 文本协议没有字节布局，故没有 TS 产物（前端不接触 procfs）
+                if t == "c":
+                    content, fname = emit_c_textproto(tp, c_guard), out_names.get("c", "generated.h")
+                elif t == "json":
+                    content, fname = emit_json_textproto(tp, notes), out_names.get("json", "layout.json")
+                else:
+                    raise ContractError(f"文本协议契约不支持产物类型 {t!r}")
+            elif t == "c":
+                content, fname = emit_c(binary, c_guard), out_names.get("c", "generated.h")
             elif t == "ts":
-                content, fname = emit_ts_http(http), out_names.get("ts", "generated.ts")
+                content, fname = emit_ts(binary), out_names.get("ts", "generated.d.ts")
             elif t == "json":
-                content, fname = emit_json_http(http, notes), out_names.get("json", "layout.json")
+                content, fname = emit_json(binary, notes), out_names.get("json", "layout.json")
             else:
-                print(f"错误: HTTP 契约不支持产物类型 {t}", file=sys.stderr)
-                return 2
-        elif kind == "textproto":
-            # 文本协议没有字节布局，故没有 TS 产物（前端不接触 procfs）
-            if t == "c":
-                content, fname = emit_c_textproto(tp, c_guard), out_names.get("c", "generated.h")
-            elif t == "rust":
-                content, fname = emit_rust_textproto(tp), out_names.get("rust", "generated.rs")
-            elif t == "json":
-                content, fname = emit_json_textproto(tp, notes), out_names.get("json", "layout.json")
-            else:
-                print(f"错误: 文本协议契约不支持产物类型 {t}", file=sys.stderr)
-                return 2
-        elif t == "c":
-            content, fname = emit_c(binary, c_guard), out_names.get("c", "generated.h")
-        elif t == "rust":
-            content, fname = emit_rust(binary), out_names.get("rust", "generated.rs")
-        elif t == "ts":
-            content, fname = emit_ts(binary), out_names.get("ts", "generated.d.ts")
-        elif t == "json":
-            content, fname = emit_json(binary, notes), out_names.get("json", "layout.json")
-        else:
-            print(f"错误: 未知产物类型 {t}", file=sys.stderr)
-            return 2
-        dest = os.path.join(args.out_dir, fname)
-        with open(dest, "w", encoding="utf-8") as fh:
-            fh.write(content)
-        emitted.append(dest)
+                raise ContractError(f"未知产物类型 {t!r}")
+            dest = os.path.join(out_dir, fname)
+            with open(dest, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            emitted.append(dest)
+    except ContractError as exc:
+        print(f"产物生成失败（{base}）: {exc}", file=sys.stderr)
+        return 1
 
     for p in emitted:
         print(f"  已写出 {p}")
+    return 0
+
+
+def main(argv: List[str]) -> int:
+    ap = argparse.ArgumentParser(description="从 .fwidl 生成各端契约绑定")
+    ap.add_argument(
+        "source",
+        nargs="?",
+        help=".fwidl 文件路径；省略时处理 contract/ 下登记的全部契约",
+    )
+    ap.add_argument("--out-dir", default="contract/generated", help="产物输出目录")
+    ap.add_argument("--targets", default=None, help="逗号分隔的产物: c,go,ts,json")
+    ap.add_argument("--check", action="store_true", help="只校验并打印布局，不写文件")
+    args = ap.parse_args(argv)
+
+    targets = args.targets.split(",") if args.targets else None
+
+    if args.source:
+        if not os.path.isfile(args.source):
+            print(f"错误: 找不到 {args.source}", file=sys.stderr)
+            return 2
+        sources = [args.source]
+    else:
+        here = os.path.dirname(os.path.abspath(__file__))
+        sources = [os.path.join(here, name) for name in sorted(CONTRACTS)]
+
+    for src in sources:
+        code = generate(src, targets, args.out_dir, args.check)
+        if code:
+            return code
     return 0
 
 
