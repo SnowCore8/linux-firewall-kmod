@@ -186,6 +186,19 @@ func (r *Router) Stats() RouterStats {
 // InFlight 返回当前在途请求数。
 func (r *Router) InFlight() int { return r.pending.len() }
 
+// linkDownClosed 报告接收侧是否已退出（Close 被调过），不阻塞、不消费。
+//
+// 事件泵要把这个事实并进链路快照：只读 counters.linkDown 不够，那条计数记的是
+// 「登记时被拒的次数」，链路断开但没人再登记时它一直是 0，读侧会把死链路当成健康。
+func (r *Router) linkDownClosed() bool {
+	select {
+	case <-r.linkDown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Register 登记一条在途请求。
 func (r *Router) Register(msgType contract.MsgType, seq uint32) (*replyHandle, error) {
 	key := replyKey{uint16(msgType), seq}

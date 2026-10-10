@@ -26,6 +26,7 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/logger"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/runtime"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/telemetry"
 	panelres "github.com/snowcore8/linux-firewall-kmod/daemon/web_ui/static"
 )
 
@@ -115,6 +116,8 @@ func run(args []string) error {
 	// 内核链路是可降级的：打开失败只告警，入站主链路仍可独立运行。
 	// 先于 HTTP 服务器初始化，以便 banSink 持有有效的内核客户端供 API 下发。
 	var kernelClient *kernel.Client
+	var kernelRouter *kernel.Router
+	var kernelEvents <-chan kernel.Incoming
 	transport, err := kernel.OpenTransport()
 	if err != nil {
 		logger.Warn("打开内核 netlink 链路失败，内核交互功能不可用", "error", err)
@@ -126,7 +129,8 @@ func run(args []string) error {
 			transport.Close()
 		} else {
 			defer transport.Close()
-			router, _ := kernel.NewEventChannel(kernel.EventQueue)
+			router, events := kernel.NewEventChannel(kernel.EventQueue)
+			kernelRouter, kernelEvents = router, events
 			reactorToken := runtime.NewShutdown()
 			reactor := kernel.NewReactor(transport, router, reactorToken, logger)
 			sup.Spawn("kernel-reactor", reactorToken, reactor.Run)
@@ -134,6 +138,13 @@ func run(args []string) error {
 			logger.Info("内核 netlink 链路已就绪")
 		}
 	}
+
+	// 内核观测快照：事件泵是唯一写入者。
+	//
+	// 无条件建立，让读侧将来只有一个持有者：链路缺失时它保持零值快照，读侧就不需要区分
+	// 「没有内核」与「内核还没采到样」。此刻还没有读侧接上它——快照先有唯一写入者是本包的
+	// 内容，HTTP 面改读它是后续包的事。
+	kernelStore := telemetry.NewStore()
 
 	// Jail 启用状态源：HTTP API 与入站主链路共享。
 	jailEnabled := runtime.NewJailEnabledSource()
@@ -198,6 +209,48 @@ func run(args []string) error {
 			})
 			logger.Info("HTTP 服务器已启动", "addr", cfg.HTTPAddress)
 		}
+	}
+
+	// 内核事件泵：NewEventChannel 的事件流到这里才有消费者。
+	//
+	// 在此之前内核推送的封禁/解封/白名单/DDoS 事件在 4096 深度的队列里堆满后被静默
+	// 丢弃，本进程也从没发过 DAEMON_REGISTER——内核在收到注册前丢弃一切指令，于是
+	// 「下发全部石沉大海」与「面板只看到自己下发过的那一小撮」同时成立。
+	if kernelClient != nil && kernelEvents != nil {
+		var pub kernel.Publisher
+		if sseBroker != nil {
+			pub = sseBroker
+		}
+		var met kernel.Metrics
+		if metrics != nil {
+			met = kernelMetrics{m: metrics}
+		}
+		pump, err := kernel.NewEventPump(kernel.PumpDeps{
+			Sampler:   kernelClient,
+			Events:    kernelEvents,
+			Store:     kernelStore,
+			Router:    kernelRouter,
+			Ring:      telemetry.NewRing(0),
+			Publish:   pub,
+			Metrics:   met,
+			Logger:    logger,
+			Timeout:   kernel.DefaultRequestTimeout,
+			Cache:     bans.GlobalCache(),
+			Whitelist: bans.GlobalWhitelist(),
+		})
+		if err != nil {
+			logger.Error("内核事件泵装配失败，内核事件将无人消费", "error", err)
+		} else {
+			pumpToken := runtime.NewShutdown()
+			sup.Spawn("kernel-event-pump", pumpToken, func() { pump.Run(pumpToken) })
+			logger.Info("内核事件泵已启动",
+				"sample", kernel.SampleInterval.String(),
+				"reconcile", kernel.ReconcileInterval.String(),
+				"register", kernel.RegisterInterval.String(),
+			)
+		}
+	} else {
+		logger.Warn("内核链路不可用，事件泵未启动：封禁表只反映本进程的下发记录")
 	}
 
 	// 入站主链路：配置所有权移入执行体，此后由它持有。
@@ -365,8 +418,11 @@ func (s *banSink) TryInsert(info bans.BanInfo) bool {
 	return true
 }
 
-// MarkPendingAck 见 runtime.BanSink。
-func (s *banSink) MarkPendingAck(ip string) {}
+// MarkPendingAck 见 runtime.BanSink：给刚下发的封禁挂一个「等待内核确认」的短标记。
+//
+// 对账周期以内核为准重建镜像，而内核的确认（BanStateChange）可能晚于下一个对账周期；
+// 没有这个标记，用户几十秒前点下的封禁会被对账当成幽灵抹掉。
+func (s *banSink) MarkPendingAck(ip string) { s.cache.MarkPending(ip, time.Now()) }
 
 // Send 见 runtime.BanSink。client 为 nil 时按「不动作」处理并记一条调试日志。
 func (s *banSink) Send(addr netip.Addr, prefixLen uint8, durationSecs uint32, reason string) error {
@@ -460,3 +516,21 @@ func (s *statsSink) IncBansTriggered(jail string) {
 		s.metrics.Counter("firewall_bans_triggered_total").Add(1)
 	}
 }
+
+// kernelMetrics 把 http.Metrics 适配成 kernel.Metrics。
+//
+// 为什么不直接把 *http.Metrics 交给内核层：内核层不得依赖表现层（internal/http 反过来
+// 要读内核快照，那会是循环依赖）。另一处摩擦是 *atomic.Int64 的 Add 带返回值，不满足
+// kernel.CounterHandle 的无返回值签名，故各套一层壳。
+type kernelMetrics struct{ m *http.Metrics }
+
+// Counter 见 kernel.Metrics。
+func (k kernelMetrics) Counter(name string) kernel.CounterHandle {
+	return kernelCounter{c: k.m.Counter(name)}
+}
+
+// kernelCounter 是单条计数器的无返回值视图。
+type kernelCounter struct{ c *atomic.Int64 }
+
+// Add 见 kernel.CounterHandle。
+func (h kernelCounter) Add(delta int64) { h.c.Add(delta) }

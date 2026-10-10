@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sync"
@@ -43,7 +44,7 @@ type EventType uint8
 const (
 	// EventTx 表示发送通道可写（上一次发送已完成）。
 	EventTx EventType = 1 << iota
-	// EventRx 表示有待发送的请求载荷。
+	// EventRx 表示 socket 上有可读报文（需调用方在 interesting 里显式索要）。
 	EventRx
 	// EventEvents 表示内核推送事件流有待取用的事件。
 	EventEvents
@@ -92,24 +93,68 @@ type Transport struct {
 	closed   bool
 	closeMu  sync.Mutex
 	linkDown chan struct{}
+
+	// epoll 就绪观察对：epFd 同时监听 socket 与 wakeFd（见 Poll）。
+	// 未建立时取 -1，Poll 退回纯定时语义。
+	epFd   int
+	wakeFd int
 }
 
 // OpenTransport 创建并绑定 netlink socket。
 //
 // `nl_pid = 0` 交由内核分配 portid，`nl_groups = 1` 订阅内核广播组。
-func OpenTransport() (*Transport, error) {
+func OpenTransport() (*Transport, error) { return openTransport(netlinkGroup) }
+
+// openTransport 按给定广播组建链。
+//
+// 广播组单独成参数，是为了让就绪观察（epoll/eventfd 那一对）能在无特权的机器与 CI 上
+// 被真正跑起来：订阅内核广播组需要 CAP_NET_ADMIN，groups=0 的普通 netlink socket 不要。
+func openTransport(groups uint32) (*Transport, error) {
 	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, netlinkProto)
 	if err != nil {
 		return nil, fmt.Errorf("创建 netlink socket 失败：%w", err)
 	}
 
-	sa := &unix.SockaddrNetlink{Family: unix.AF_NETLINK, Groups: netlinkGroup}
+	sa := &unix.SockaddrNetlink{Family: unix.AF_NETLINK, Groups: groups}
 	if err := unix.Bind(fd, sa); err != nil {
 		unix.Close(fd)
 		return nil, fmt.Errorf("绑定 netlink socket 失败：%w", err)
 	}
 
-	return &Transport{fd: fd, linkDown: make(chan struct{})}, nil
+	t := &Transport{fd: fd, linkDown: make(chan struct{}), epFd: -1, wakeFd: -1}
+	if err := t.setupReadiness(); err != nil {
+		unix.Close(fd)
+		return nil, err
+	}
+	return t, nil
+}
+
+// setupReadiness 建立「socket 可读」与「链路断开」共用的观察机制。
+//
+// 为什么是 epoll + eventfd，而不是「select 等 linkDown 通道 + 带短超时的 epoll_wait」：
+// 后者把内核报文的到达延迟摊到那个短超时上（要么 100ms 级空转唤醒，要么关停要等到
+// 下一次超时才被发现）。eventfd 把「通道已关闭」翻译成一个内核可读事件，与 socket fd
+// 进同一次 epoll_wait，于是关停响应与报文到达都是事件驱动、都只花一次系统调用。
+func (t *Transport) setupReadiness() error {
+	epFd, err := unix.EpollCreate1(unix.EPOLL_CLOEXEC)
+	if err != nil {
+		return fmt.Errorf("创建 epoll 实例失败：%w", err)
+	}
+	wakeFd, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
+	if err != nil {
+		unix.Close(epFd)
+		return fmt.Errorf("创建链路唤醒 fd 失败：%w", err)
+	}
+	for _, fd := range [2]int{wakeFd, t.fd} {
+		ev := unix.EpollEvent{Events: unix.EPOLLIN, Fd: int32(fd)}
+		if err := unix.EpollCtl(epFd, unix.EPOLL_CTL_ADD, fd, &ev); err != nil {
+			unix.Close(epFd)
+			unix.Close(wakeFd)
+			return fmt.Errorf("登记 netlink 可读性观察失败：%w", err)
+		}
+	}
+	t.epFd, t.wakeFd = epFd, wakeFd
+	return nil
 }
 
 // Fd 返回 socket 文件描述符。
@@ -214,37 +259,126 @@ func (t *Transport) TryRecv() (Datagram, bool, error) {
 
 // Poll 等待任意一个被关注的事件。
 //
-// 与 Rust 版语义一致：收到放弃请求时返回 `EventAbandon`（由 reader goroutine 在
-// 阻塞期间投递），截止时间到期返回 `EventDeadline`，超时无事件返回 `EventInterrupt`。
-// `EventTx` 仅在上一次发送完成后由外部显式使能（见 NotifyTxDone），因为 netlink
-// socket 没有真正的「可写」就绪可测。
+// # 各掩码位的实际含义
+//
+// 只有四类是 Poll 能报告的：`EventRx`（socket 上有可读报文，需调用方在 interesting 里
+// 显式索要）、`EventLinkDown`（接收侧已退出或 socket 出错）、`EventDeadline`（调用方的
+// 截止时间已到）、`EventInterrupt`（本次等待内什么都没发生）。`EventTx`/`EventAbandon`
+// 等位由别处产生（见 NotifyTxDone），Poll 不会凭空给出——旧实现连 socket 都不看，
+// 把 interesting 当摆设，于是「等到可读」在这条链路上根本不存在。
+//
+// 等待时长取 `timeout` 与 `SetDeadline` 剩余两者的小值；两者都未给出时按 0 处理，即
+// 做一次非阻塞探测。单次等待上限 `maxPollWait`（60 秒）：超过它的等待会被拆成多轮并以
+// `EventInterrupt` 返回，调用方本就必须按「可能被唤醒」的语义循环调用 Poll。
+//
+// 链路断开通知（SignalLinkDown / Close）能立即打断这里的 epoll_wait，不必等超时。
 func (t *Transport) Poll(timeout time.Duration, interesting EventType) (EventType, error) {
-	t.closeMu.Lock()
-	closed := t.closed
-	t.closeMu.Unlock()
-	if closed {
+	if t.isClosed() {
 		return EventLinkDown, nil
 	}
 
-	deadlineMu := t.deadlineSnapshot()
+	deadline := t.deadlineSnapshot()
 	wait := timeout
-	if !deadlineMu.IsZero() {
-		if remaining := time.Until(deadlineMu); remaining <= 0 {
+	if !deadline.IsZero() {
+		if remaining := time.Until(deadline); remaining <= 0 {
 			return EventDeadline, nil
 		} else if wait <= 0 || remaining < wait {
 			wait = remaining
 		}
 	}
 
-	select {
-	case <-t.linkDown:
-		return EventLinkDown, nil
-	case <-time.After(wait):
-		if !deadlineMu.IsZero() && !time.Now().Before(deadlineMu) {
-			return EventDeadline, nil
+	// 不索要可读性：保持纯定时语义，只被链路断开或超时结束。
+	// 走 linkDown 通道而不是 eventfd，是为了零值 Transport（测试里的占位）也不会崩。
+	// wait 非正时 NewTimer 立即触发，正是「非阻塞探测」想要的行为。
+	if interesting&EventRx == 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-t.linkDown:
+			return EventLinkDown, nil
+		case <-timer.C:
+			return t.idleResult(deadline), nil
 		}
-		return EventInterrupt, nil
 	}
+
+	if t.epFd < 0 {
+		// 就绪观察未建立（OpenTransport 之外构造的占位对象）：退回定时轮询，
+		// 由调用方的 TryRecv 自行判定有无数据。
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-t.linkDown:
+			return EventLinkDown, nil
+		case <-timer.C:
+			return EventRx, nil
+		}
+	}
+
+	var evs [4]unix.EpollEvent
+	n, err := unix.EpollWait(t.epFd, evs[:], waitMillis(wait))
+	if err != nil {
+		if errors.Is(err, unix.EINTR) {
+			return t.idleResult(deadline), nil
+		}
+		return 0, fmt.Errorf("等待 netlink 可读性失败：%w", err)
+	}
+
+	observed := EventType(0)
+	for i := 0; i < n; i++ {
+		switch evs[i].Fd {
+		case int32(t.wakeFd):
+			// 必须消费计数器：eventfd 是水平触发，留着它下次等待会立刻返回。
+			drainWakeFd(t.wakeFd)
+			return EventLinkDown, nil
+		case int32(t.fd):
+			// 错误/挂断：socket 已被内核侧终结，再 recvfrom 只会拿到同样的错误。
+			if evs[i].Events&(unix.EPOLLERR|unix.EPOLLHUP|unix.EPOLLRDHUP) != 0 {
+				return EventLinkDown, nil
+			}
+			if evs[i].Events&unix.EPOLLIN != 0 {
+				observed |= EventRx
+			}
+		}
+	}
+	if observed != 0 {
+		return observed, nil
+	}
+	return t.idleResult(deadline), nil
+}
+
+// isClosed 报告传输层是否已关闭。
+func (t *Transport) isClosed() bool {
+	t.closeMu.Lock()
+	defer t.closeMu.Unlock()
+	return t.closed
+}
+
+// idleResult 给出「本次等待没等到可读」的结论：优先截止时间，其次无事发生。
+func (t *Transport) idleResult(deadline time.Time) EventType {
+	if !deadline.IsZero() && !time.Now().Before(deadline) {
+		return EventDeadline
+	}
+	return EventInterrupt
+}
+
+// maxPollWait 是单次 epoll_wait 的等待上限，防止超长 timeout 溢出内核的 int msec。
+const maxPollWait = 60 * time.Second
+
+// waitMillis 把时长换成 epoll 的毫秒数（向上取整，非阻塞探测为 0）。
+func waitMillis(d time.Duration) int {
+	if d <= 0 {
+		return 0
+	}
+	if d > maxPollWait {
+		d = maxPollWait
+	}
+	return int((d + time.Millisecond - 1) / time.Millisecond)
+}
+
+// drainWakeFd 读空唤醒 fd 的计数器；无数据或失败都按「已清」处理。
+func drainWakeFd(fd int) {
+	var buf [8]byte
+	_, _ = unix.Read(fd, buf[:])
 }
 
 // NotifyTxDone 由发送方在完成一次发送后调用，使 `EventTx` 可被观察到。
@@ -277,6 +411,10 @@ func (t *Transport) Abandon(seq uint32) {
 func (t *Transport) LinkDown() <-chan struct{} { return t.linkDown }
 
 // SignalLinkDown 宣告接收侧已退出（幂等）。
+//
+// 两步都必要：关通道给本进程内的等待者（RecvTimeout 那一类 select），写 eventfd 给
+// 阻塞在 epoll_wait 里的接收回路。只关通道的话，正在等待的 Poll 要等到自己的超时
+// 才能发现链路已断。
 func (t *Transport) SignalLinkDown() {
 	t.closeMu.Lock()
 	defer t.closeMu.Unlock()
@@ -285,6 +423,18 @@ func (t *Transport) SignalLinkDown() {
 	default:
 		close(t.linkDown)
 	}
+	t.pokeWakeFd()
+}
+
+// pokeWakeFd 给唤醒 fd 加 1；调用方须持 closeMu。fd 未建立或写入失败都按「无需唤醒」
+// 处理——链路状态已经落在通道与 closed 标志上，Poll 的定时路径仍能收敛。
+func (t *Transport) pokeWakeFd() {
+	if t.wakeFd < 0 {
+		return
+	}
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], 1)
+	_, _ = unix.Write(t.wakeFd, buf[:])
 }
 
 // Close 关闭 socket 并宣告接收侧退出。
@@ -295,8 +445,16 @@ func (t *Transport) Close() {
 		return
 	}
 	t.closed = true
+	epFd, wakeFd := t.epFd, t.wakeFd
+	t.epFd, t.wakeFd = -1, -1
 	t.closeMu.Unlock()
 	unix.Close(t.fd)
+	if wakeFd >= 0 {
+		unix.Close(wakeFd)
+	}
+	if epFd >= 0 {
+		unix.Close(epFd)
+	}
 	t.SignalLinkDown()
 }
 
@@ -335,6 +493,10 @@ func (t *Transport) hasLinkDown() bool {
 	}
 }
 
+// resetLinkDown 重新武装接收侧：换一个新通道，并把上一次遗留的唤醒计数读空。
+//
+// 两步缺一：只换通道，旧的 eventfd 读数会让新接收方的第一次 Poll 立刻返回
+// EventLinkDown，看起来「一上线就断链」。
 func (t *Transport) resetLinkDown() {
 	t.closeMu.Lock()
 	defer t.closeMu.Unlock()
@@ -342,6 +504,9 @@ func (t *Transport) resetLinkDown() {
 	case <-t.linkDown:
 		t.linkDown = make(chan struct{})
 	default:
+	}
+	if t.wakeFd >= 0 {
+		drainWakeFd(t.wakeFd)
 	}
 }
 

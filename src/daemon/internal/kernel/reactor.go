@@ -14,9 +14,10 @@ import (
 
 // PollInterval 是接收回路单次等待可读的上限。
 //
-// 取 100ms 而非 recvTimeout：轮询超时决定的是关停响应延迟，越短越灵敏，但空转唤醒
-// 也越频繁。100ms 是「关停足够快」与「空闲几乎不振」的折中。
-const PollInterval = 100 * time.Millisecond
+// 取值决定的是「关停最坏要多久被发现」：Poll 现在是事件驱动的，报文一到即返回，不再
+// 有空转唤醒，所以这里可以放大到 500ms 与 SO_RCVTIMEO 对齐，让空闲时每秒只醒两次。
+// 旧实现里它同时也是轮询频率——那个版本不看 fd，每 100ms 硬排空一次。
+const PollInterval = 500 * time.Millisecond
 
 // Reactor 驱动内核接收回路。
 //
@@ -50,6 +51,12 @@ func NewReactor(
 	}
 }
 
+// errorBackoff 是 Poll 持续报错时的让出时长。
+//
+// 报错通常是 epoll 层失败（fd 被别处关掉），此时循环会立刻重试；不睡就是空转烧 CPU。
+// 与 PollInterval 分开：后者可以为了关停响应而放大，这个不该跟着变。
+const errorBackoff = 100 * time.Millisecond
+
 // Run 阻塞执行接收回路，直到关停被请求或链路断开。
 //
 // 退出时关闭 router：这等价于 Rust 版 LivenessGuard 的析构——把存活标志置死并清空在途
@@ -60,18 +67,21 @@ func (r *Reactor) Run() {
 	defer r.router.Close()
 
 	for !r.shutdown.IsShutdown() {
-		ready, err := r.transport.Poll(PollInterval, EventInterrupt|EventLinkDown)
+		ready, err := r.transport.Poll(PollInterval, EventRx|EventLinkDown)
 		if err != nil {
 			r.logger.Error("netlink 轮询失败", "error", err)
 			// 短暂让出，避免轮询持续报错时空转烧 CPU。
-			time.Sleep(PollInterval)
+			time.Sleep(errorBackoff)
 			continue
 		}
 		if ready.Has(EventLinkDown) {
 			r.logger.Warn("与内核的 netlink 接收链路已断开")
 			return
 		}
-		r.drain()
+		// 只有真正确认过可读才排空：EventInterrupt 时无数据，TryRecv 会白等一轮接收超时。
+		if ready.Has(EventRx) {
+			r.drain()
+		}
 	}
 }
 
