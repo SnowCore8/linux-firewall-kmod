@@ -9,7 +9,7 @@
  */
 
 import { clearAccessToken, getAccessToken, onAuthChange } from '../api/auth'
-import { effect, signal } from '../lib/signals'
+import { signal } from '../lib/signals'
 
 /** 当前访问令牌；`null` 表示未认证（应显示登录页） */
 export const accessToken = signal<string | null>(getAccessToken())
