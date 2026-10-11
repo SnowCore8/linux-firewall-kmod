@@ -21,6 +21,8 @@
    无包装 = 公开）。注册分散在 ``internal/http/routes.go``、``static.go`` 与
    ``cmd/firewall-daemon/main.go``，故扫整个 daemon 的 Go 源码而不是单个文件。
    注册串写成生成物常量（``httpcontract.RouteXxx``）时按生成物表解回字面量。
+   契约的 ``handler`` 记的就是这一侧解析出的注册符号（``_handler_symbol``），逐条
+   等值比较：契约与源码同一步改，差一字即报出。
    不带方法前缀的 ``Handle("<路径>", h)`` 在 ServeMux 里匹配任何动词：按路径回落到
    它核对存在性与鉴权组，另记一条「方法未收紧」的缺口（未声明的动词本该由框架回 405）。
 2. 认证常量（失败阈值 / 锁定秒数）与两条 SSE 各自的连接上限必须与契约数值相同。
@@ -61,9 +63,9 @@
 
 不做的事
 --------
-不推断「这两个名字其实是一个东西」。契约的 handler 名（``handle_*``）与 Go 的
-方法名（``api.ListBans``）之间没有机械映射规则，所以这里只统计逐字命中数：命中为
-零时聚合成一条问题，而不是把每条路由都各报一遍——噪音会淹没真正的漂移。
+不推断「这两个名字其实是一个东西」。载荷类型名的核对因此不做契约名↔Go 名的映射，
+只认同名（见第 8 条）；handler 一侧则反过来——契约直接记录 Go 的注册符号，由两侧
+等值比较，不再猜「``handle_*`` 与 ``ListBans`` 是不是一个东西」。
 
 用法::
 
@@ -392,18 +394,25 @@ def _split_args(expr: str) -> list[str]:
     return args
 
 
-def _handler_symbol(expr: str) -> str:
-    """从注册的 handler 表达式里取「最里层的那个标识符」，用于对账与诊断输出。
+# 鉴权包装：这些函数的**最后一项实参**才是被注册的 handler，符号取它、不取被调者。
+# 其余调用（`spaShell(fsys)`、`serviceWorker(fsys)` 这类工厂）注册的是调用的返回值，
+# 符号取被调者名——两类必须分开，否则工厂会退化成裸变量名（`fsys`）。
+_AUTH_WRAPPERS = {"RequireAuth", "OptionalAuth"}
 
-    ``OptionalAuth(api.username, api.password, api.ListBans)`` -> ``ListBans``；
-    ``http.StripPrefix(...)`` -> ``StripPrefix``；func 字面量没有名字，如实写作
-    ``<func 字面量>``——它本身也是「这条路由的实现没有具名入口」这一事实的证据。
+
+def _handler_symbol(expr: str) -> str:
+    """从注册的 handler 表达式里取「这条路由实际注册的那个符号」，用于对账与诊断输出。
+
+    ``OptionalAuth(api.username, api.password, api.ListBans)`` -> ``ListBans``（鉴权包装取
+    末项实参）；``spaShell(fsys)`` -> ``spaShell``（工厂取被调者名，不是被传进去的 ``fsys``）；
+    不可命名的 func 字面量如实写作 ``<func 字面量>``——它本身也是「这条路由的实现没有具名
+    入口」这一事实的证据。
     """
     expr = expr.strip()
     if expr.startswith("func(") or expr.startswith("func ("):
         return "<func 字面量>"
     if expr.endswith(")"):
-        # 找到与末尾 `)` 配平的 `(`，取它参数表的最后一项再递归
+        # 找到与末尾 `)` 配平的 `(`，按被调者是不是鉴权包装决定取谁
         depth = 0
         for i in range(len(expr) - 1, -1, -1):
             if expr[i] == ")":
@@ -411,8 +420,13 @@ def _handler_symbol(expr: str) -> str:
             elif expr[i] == "(":
                 depth -= 1
                 if depth == 0:
-                    inner = _split_args(expr[i + 1: -1])
-                    return _handler_symbol(inner[-1]) if inner else expr[:i].strip()
+                    callee = expr[:i].strip()
+                    names = re.findall(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", callee)
+                    callee_name = names[-1].rsplit(".", 1)[-1] if names else ""
+                    if callee_name in _AUTH_WRAPPERS:
+                        inner = _split_args(expr[i + 1: -1])
+                        return _handler_symbol(inner[-1]) if inner else callee_name
+                    return callee_name or "<未知>"
         return "<未知>"
     tail = re.findall(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", expr)
     return tail[-1].rsplit(".", 1)[-1] if tail else "<未知>"
@@ -584,15 +598,14 @@ def check_routes(contract: dict) -> list[str]:
     for r in contract["routes"]:
         declared[(r["method"].upper(), r["path"])] = r
 
-    # handler 维度：契约写的是 `handle_*`，Go 侧是方法名（`api.ListBans`）。两者之间
-    # 没有机械映射规则，所以只核对「契约的 handler 名是否逐字存在于 http 包」——
-    # 命中为零时聚合成一条（系统性改名，报 57 遍只会淹没真漂移），有命中而个别缺
-    # 失时逐条报（那就是这一条路由的实现没接上）。
-    http_src = http_sources()
-    hit = {name for name in {r["handler"] for r in contract["routes"]}
-           if re.search(rf"\b{name}\b", http_src)}
-    divergent = [(key, r) for key, r in sorted(declared.items())
-                 if key in actual and r["handler"] not in hit]
+    # handler 维度：契约记录的是 Go 侧**实际注册的那个符号**（`ListBans`、`spaShell`，
+    # 无具名入口的 func 字面量记 `<func 字面量>`，取值口径见 `_handler_symbol`），两侧
+    # 按等值比较。契约与源码因此必须同一步改：改了注册符号就得改契约，差一字逐条报出。
+    for key, r in sorted(declared.items()):
+        if key in actual and r["handler"] != actual[key][0]:
+            problems.append(
+                f"路由 {key[0]} {key[1]}: 源码 handler {actual[key][0]} != 契约 {r['handler']}"
+            )
 
     # ServeMux 里 `Handle("/p", h)`（不带方法前缀）匹配**任何**方法。契约按方法逐条
     # 声明，于是同一条实现在两侧核对里会同时报成「注册里不存在」和「契约未声明」——
@@ -634,22 +647,6 @@ def check_routes(contract: dict) -> list[str]:
                 f"daemon 中存在契约未声明的路由 {key[0]} {key[1]}"
                 f"（{rel}，handler {handler}，auth 组 {group}）"
             )
-    if divergent:
-        if len(hit) == 0:
-            example = actual[sorted(actual)[0]][0]
-            problems.append(
-                f"契约声明的 handler 名（handle_*，共 "
-                f"{len({r['handler'] for r in contract['routes']})} 个）在 "
-                f"{os.path.relpath(HTTP_DIR, ROOT)} 里逐字命中 0 个："
-                f"Go 侧一律用方法名注册（如 {example}）。"
-                "需要 owner 决定：契约改记 Go 符号，还是 Go 侧按 handle_* 命名"
-            )
-        else:
-            for key, r in divergent:
-                problems.append(
-                    f"路由 {key[0]} {key[1]}: 源码 handler {actual[key][0]} != 契约 {r['handler']}"
-                )
-
     # 路由声明的载荷类型必须真的有定义。
     #
     # 为什么单列一条：`returns = type` 的载荷名只写在 note 的散文里，而载荷字段
@@ -2053,7 +2050,6 @@ _GAP_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("route-undeclared", re.compile(r"^daemon 中存在契约未声明的路由 (\w+ .+?)（")),
     ("route-auth-group", re.compile(r"^路由 (\w+ .+?): 契约 auth=")),
     ("route-handler-mismatch", re.compile(r"^路由 (\w+ .+?): 源码 handler")),
-    ("handler-naming", re.compile(r"^契约声明的 handler 名")),
     ("auth-constant", re.compile(r"^(auth\.\w+):")),
     ("sse-cap", re.compile(r"^SSE (/[\w/\-]*): 契约上限")),
     ("sse-publish-point", re.compile(r"^SSE (/[\w/\-]*): 事件 '(\w+)' 在 Go 源码里没有发布点")),
@@ -2067,9 +2063,9 @@ _GAP_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("errmodel-plain-text", re.compile(r"^errmodel (\w+): 契约声明 \[(\d+)\] 的响应体是纯文本")),
     ("errmodel-framework-claim", re.compile(r"^errmodel (\w+): 契约(?:声明|把) (\d+)")),
     ("errmodel-fallback", re.compile(r"^errmodel (\w+):")),
-    ("envelope-key-order", re.compile(r"^信封 Envelope 的 JSON key")),
+    ("envelope-key-order", re.compile(r"^信封 \w+ 的 JSON key")),
     ("envelope-success-message", re.compile(r"^成功信封的 message")),
-    ("envelope-data-omitempty", re.compile(r"^信封 Envelope\.data 的 tag")),
+    ("envelope-data-omitempty", re.compile(r"^信封 \w+\.data 的 tag")),
     ("envelope-error-data", re.compile(r"^ErrorEnvelope 未给 data")),
     ("envelope-error-code", re.compile(r"^ErrorEnvelope 把 code")),
     ("business-codes-unproduced", re.compile(r"^业务码在 Go 源码里没有构造点")),

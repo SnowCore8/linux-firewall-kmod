@@ -6,5 +6,3 @@
 #   * 这里有而门禁不再报出的 = 那一格已补上，必须删行；
 #   * 实现与契约矛盾的东西不该进这里——那是要修的实现，不是可冻结的缺口。
 # 契约（http.fwidl）因此保持完整：这里只登记 daemon 当前还没接线的部分。
-handler-naming # 契约声明的 handler 名（handle_*，共 56 个）在 src/daemon/internal/http 里逐字命中 0 个：Go 侧一律用方法名注册（如 DeleteBan）。需要 owner 决定：契约改记 Go 符号，还是 Go 侧按 handle_* 命名
-type-unmapped # 4/64 个载荷类型在 Go 源码里没有同名 struct（本门禁不做契约名↔Go 名的映射推断）：ApiResponse, UpdateConfigRequest, UpdateJailRequest, WebuiConfigResponse。这些还多是**未接线**的分析/统计载荷：接线时请为它们补 internal/http 的具名 struct（照 payload.go 的规矩，一个 struct 对一个契约 type 块），不要退回 map[string]any 字面量——字段没有具名类型承载时，跨层字段核对在这一层失去锚点

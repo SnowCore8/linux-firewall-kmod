@@ -384,7 +384,7 @@ defect HTTP_BATCH_BAN_BECOMES_PERMANENT {
 
 route GET "/health" {
   auth = none
-  handler = handle_health
+  handler = Health
   returns = type
   status = 200
   alt_status = 503
@@ -393,7 +393,7 @@ route GET "/health" {
 
 route GET "/healthz" {
   auth = none
-  handler = handle_health
+  handler = Health
   returns = type
   status = 200
   alt_status = 503
@@ -408,7 +408,7 @@ route GET "/healthz" {
 
 route GET "/" {
   auth = none
-  handler = handle_redirect
+  handler = redirectRoot
   returns = text
   status = 303
   note = "重定向到 /dashboard；**必须原样保留 query string**，否则 /?access_token=<token> 直达会丢凭据。状态码固定为 303 See Other（不是 302）：303 明确表达「响应是另一个资源、原请求无副作用」，浏览器对两者的 GET 重定向行为一致。"
@@ -416,70 +416,70 @@ route GET "/" {
 
 route GET "/dashboard" {
   auth = none
-  handler = handle_dashboard
+  handler = spaShell
   returns = text
   status = 200
 }
 
 route GET "/bans" {
   auth = none
-  handler = handle_spa_bans
+  handler = spaShell
   returns = text
   status = 200
 }
 
 route GET "/whitelist" {
   auth = none
-  handler = handle_spa_whitelist
+  handler = spaShell
   returns = text
   status = 200
 }
 
 route GET "/jails" {
   auth = none
-  handler = handle_spa_jails
+  handler = spaShell
   returns = text
   status = 200
 }
 
 route GET "/ddos" {
   auth = none
-  handler = handle_spa_ddos
+  handler = spaShell
   returns = text
   status = 200
 }
 
 route GET "/globe" {
   auth = none
-  handler = handle_spa_globe
+  handler = spaShell
   returns = text
   status = 200
 }
 
 route GET "/logs" {
   auth = none
-  handler = handle_spa_logs
+  handler = spaShell
   returns = text
   status = 200
 }
 
 route GET "/settings" {
   auth = none
-  handler = handle_spa_settings
+  handler = spaShell
   returns = text
   status = 200
 }
 
 route GET "/more" {
   auth = none
-  handler = handle_spa_more
+  handler = spaShell
   returns = text
   status = 200
 }
 
 route GET "/static/*path" {
   auth = none
-  handler = handle_static
+  handler = serveAsset
   returns = bytes
   status = 200
   alt_status = 404
@@ -488,7 +488,7 @@ route GET "/static/*path" {
 
 route GET "/sw.js" {
   auth = none
-  handler = handle_sw
+  handler = serviceWorker
   returns = bytes
   status = 200
   alt_status = 404
@@ -499,7 +499,7 @@ route GET "/sw.js" {
 
 route GET "/metrics" {
   auth = required
-  handler = handle_metrics
+  handler = ServeHTTP
   returns = text
   status = 200
   note = "Prometheus 文本格式 text/plain; version=0.0.4; charset=utf-8"
@@ -507,7 +507,7 @@ route GET "/metrics" {
 
 route GET "/api/v1/events" {
   auth = required
-  handler = handle_sse
+  handler = ServeHTTP
   returns = stream
   status = 200
   alt_status = 503
@@ -520,7 +520,7 @@ route GET "/api/v1/events" {
 
 route GET "/api/v1/logs/stream" {
   auth = required
-  handler = handle_log_stream
+  handler = StreamLogs
   returns = stream
   status = 200
   alt_status = 503
@@ -535,7 +535,7 @@ route GET "/api/v1/logs/stream" {
 
 route GET "/api/v1/stats" {
   auth = required
-  handler = handle_api_stats
+  handler = Stats
   returns = type
   status = 200
   note = "载荷 StatsResponse：首屏总览，一张混合三路真源的表——内核统计快照（current_bans / total_bans / total_unbans / whitelist_count / packets_dropped / packets_accepted）、历史库时间窗（today_bans 的本地自然日窗口、threat_level.recent_bans 的最近 5 分钟，两者共缓存 30 秒）、本进程状态（failed_attempts / ddos_events / uptime_seconds、各图）。各字段的来源与口径写在 StatsResponse 的字段注释里。这条路由只声明 code 0：历史库缺席或查询失败时那几项报 0 / 空序列，快照陈旧照原样报，不把首屏整体判成失败——一半数字拿不到时也要把另一半画出来"
@@ -545,7 +545,7 @@ route GET "/api/v1/stats" {
 
 route GET "/api/v1/bans" {
   auth = required
-  handler = handle_api_bans
+  handler = ListBans
   returns = type
   status = 200
   codes = 0
@@ -554,7 +554,7 @@ route GET "/api/v1/bans" {
 
 route POST "/api/v1/bans" {
   auth = required
-  handler = handle_create_ban
+  handler = CreateBan
   returns = type
   status = 201
   alt_status = 200
@@ -564,7 +564,7 @@ route POST "/api/v1/bans" {
 
 route DELETE "/api/v1/bans/:ip" {
   auth = required
-  handler = handle_delete_ban
+  handler = DeleteBan
   returns = type
   status = 200
   codes = 40002
@@ -572,7 +572,7 @@ route DELETE "/api/v1/bans/:ip" {
 
 route GET "/api/v1/bans/:ip/detail" {
   auth = required
-  handler = handle_ban_detail
+  handler = BanDetail
   returns = type
   status = 200
   codes = 40006
@@ -581,7 +581,7 @@ route GET "/api/v1/bans/:ip/detail" {
 
 route POST "/api/v1/bans/unban-temporary" {
   auth = required
-  handler = handle_unban_temporary
+  handler = UnbanAllTemporary
   returns = type
   status = 200
   codes = 40003
@@ -589,7 +589,7 @@ route POST "/api/v1/bans/unban-temporary" {
 
 route POST "/api/v1/bans/batch" {
   auth = required
-  handler = handle_batch_ban
+  handler = BatchBan
   returns = type
   status = 201
   alt_status = 200
@@ -601,7 +601,7 @@ route POST "/api/v1/bans/batch" {
 
 route GET "/api/v1/jails" {
   auth = required
-  handler = handle_api_jails
+  handler = ListJails
   returns = type
   status = 200
   note = "载荷 JailResponse 数组（按配置顺序，不排序）。这条路由**不编业务码**：jail 配置出自内存，历史库缺席不影响它，读侧不会收到 50002/50003。配置与启用状态读的是运行时发布的 jail 配置快照——属主是执行体，在装配、热重载、回滚、内核指令与启用状态同步时发布，改名或删除的 jail 随下一次发布从表里消失，读侧不会看到配置与快照各一半的形状。运行时计数（lines_parsed…bans_triggered）是本进程累计值，重启归零；ban_count 是当前活跃封禁数而非历史累计（见 JailResponse 的字段注释）"
@@ -609,7 +609,7 @@ route GET "/api/v1/jails" {
 
 route PUT "/api/v1/jails/:name" {
   auth = required
-  handler = handle_update_jail
+  handler = UpdateJail
   returns = type
   status = 200
   codes = 404, 40007, 40008, 50003
@@ -620,7 +620,7 @@ route PUT "/api/v1/jails/:name" {
 
 route GET "/api/v1/config" {
   auth = required
-  handler = handle_api_config
+  handler = GetConfig
   returns = type
   status = 200
   codes = 50003
@@ -629,7 +629,7 @@ route GET "/api/v1/config" {
 
 route PUT "/api/v1/config" {
   auth = required
-  handler = handle_update_config
+  handler = UpdateConfig
   returns = type
   status = 200
   codes = 40004, 40007, 40008, 50003
@@ -640,7 +640,7 @@ route PUT "/api/v1/config" {
 
 route GET "/api/v1/whitelist" {
   auth = required
-  handler = handle_api_whitelist
+  handler = ListWhitelist
   returns = type
   status = 200
   note = "载荷 WhitelistEntryResponse 数组（前端 interface 名为 WhitelistEntry）"
@@ -648,7 +648,7 @@ route GET "/api/v1/whitelist" {
 
 route POST "/api/v1/whitelist" {
   auth = required
-  handler = handle_create_whitelist
+  handler = AddWhitelist
   returns = type
   status = 201
   alt_status = 200
@@ -658,7 +658,7 @@ route POST "/api/v1/whitelist" {
 
 route DELETE "/api/v1/whitelist/:cidr" {
   auth = required
-  handler = handle_delete_whitelist
+  handler = RemoveWhitelist
   returns = type
   status = 200
   codes = 40004
@@ -667,7 +667,7 @@ route DELETE "/api/v1/whitelist/:cidr" {
 
 route GET "/api/v1/whitelist/recommendations" {
   auth = required
-  handler = handle_whitelist_recommendations
+  handler = GetWhitelistRecommendations
   returns = type
   status = 200
   codes = 50002, 50003
@@ -678,7 +678,7 @@ route GET "/api/v1/whitelist/recommendations" {
 
 route GET "/api/v1/rates/current" {
   auth = required
-  handler = handle_api_rates_current
+  handler = RatesCurrent
   returns = type
   status = 200
   note = "载荷 RateResponse 数组，不分页：内核速率表的容量（FW_RATE_CPU_SLOTS=512 个在跟踪的源地址）在一次响应带得下，事件泵也是整表取回。行来自事件泵快照，服务端按 packets_per_sec 降序、同值按 IP 升序（内核按哈希序回表，不排序会让同一个地址在两次刷新之间跳到图的另一端）。速率是内核给的**自上次查询以来的平均**，不是瞬时值；地址族无法识别的条目丢弃并记日志，不把空串当 IP 写出去"
@@ -686,7 +686,7 @@ route GET "/api/v1/rates/current" {
 
 route GET "/api/v1/rates/history" {
   auth = required
-  handler = handle_api_rates_history
+  handler = GetRatesHistory
   returns = type
   status = 200
   note = "载荷 RateHistoryResponse **数组**，时间升序（最早在前，折线图直接按 x 轴递增画）。数据源是守护进程侧的速率历史环（internal/telemetry/rate_history.go）：事件泵每成功问一次内核速率表落一个点，节奏 = 采样周期（当前 5 秒），容量 720 点 ≈ 1 小时。查询参数 limit 取最近 n 个点，上限与默认都是环容量——要更多时环里也没有，回一批零等于伪造历史。采样中断留下的是**空洞**而不是补出来的零点；环是进程内的，重启后从空开始。曾经有一条从 /proc/firewall/rates 解析历史的路径，那个格式内核从未产出过，端点因此恒在走降级分支"
@@ -694,7 +694,7 @@ route GET "/api/v1/rates/history" {
 
 route GET "/api/v1/rates/windows" {
   auth = required
-  handler = handle_api_rates_windows
+  handler = RatesWindows
   returns = type
   status = 200
   note = "载荷 RateWindowSnapshot：三档窗口（短期/中期/长期）各一对 pps、bps。窗口是**守护进程侧的派生量**（EWMA），内核没有窗口概念、只回答自上次查询以来的平均速率，所以这条路由的数据源是快照的 Windows 字段而不是内核。平滑值本身是浮点，载荷按契约的 u64 四舍五入——截断会把 0.6 pps 报成 0，读成「完全没有流量」"
@@ -709,7 +709,7 @@ route GET "/api/v1/rates/windows" {
 
 route GET "/api/v1/stats/heatmap" {
   auth = required
-  handler = handle_api_heatmap
+  handler = Heatmap
   returns = type
   status = 200
   note = "载荷 HourlyHeatmap：24 个 HourlyBucket 的定长数组，hour 是**本地时区**的自然小时槽（0-23），bans 把最近 7 个自然日的封禁按小时归槽后叠在一起（热力图读的是「哪个钟点最容易被打」，不是某一天的小时分布）；缺数据的小时保留为全零行而不是跳过，数组长度恒为 24。failed_attempts 与 ddos_events 两列恒为 0（见 defect HTTP_FAILURE_HISTORY_NOT_PERSISTED）"
@@ -717,7 +717,7 @@ route GET "/api/v1/stats/heatmap" {
 
 route GET "/api/v1/stats/recidivism" {
   auth = required
-  handler = handle_api_recidivism
+  handler = Recidivism
   returns = type
   status = 200
   codes = 50002, 50003
@@ -726,7 +726,7 @@ route GET "/api/v1/stats/recidivism" {
 
 route GET "/api/v1/stats/ban-effectiveness" {
   auth = required
-  handler = handle_api_ban_effectiveness
+  handler = BanEffectiveness
   returns = type
   status = 200
   note = "载荷 BanEffectivenessResponse；其中 recidivism_rate（含 overall_recidivism_rate 与各 level 的）统一为**百分数 0-100**，与 /api/v1/stats/recidivism 同一个口径，前端两处共用同一个格式化函数（见 defect HTTP_RECIDIVISM_RATE_UNIT 的 resolution）。**不编业务码 = 历史库未初始化或查询失败也在 200 内降级**：levels 为 []、total_unique_ips/overall_recidivism_rate 为 0，summary 分别写「历史库未初始化：没有封禁底账…」与「封禁底账查询失败：本次没有分级成效读数」——面板上同一句「无样本」背后的两种原因必须能分开，否则运维不知道是该等数据还是该修库（服务端各留一条日志）"
@@ -734,7 +734,7 @@ route GET "/api/v1/stats/ban-effectiveness" {
 
 route GET "/api/v1/stats/periodic-attackers" {
   auth = required
-  handler = handle_api_periodic_attackers
+  handler = PeriodicAttackers
   returns = type
   status = 200
   codes = 50002, 50003
@@ -743,7 +743,7 @@ route GET "/api/v1/stats/periodic-attackers" {
 
 route GET "/api/v1/stats/collaborative-attacks" {
   auth = required
-  handler = handle_api_collaborative_attacks
+  handler = CollaborativeAttacks
   returns = type
   status = 200
   codes = 50002, 50003
@@ -752,7 +752,7 @@ route GET "/api/v1/stats/collaborative-attacks" {
 
 route GET "/api/v1/stats/udp-ports" {
   auth = required
-  handler = handle_api_udp_ports
+  handler = UdpPorts
   returns = type
   status = 200
   note = "载荷 UdpPortDistributionResponse：ports 最多 64 行（FW_ANALYSIS_UDP_PACK_MAX），行按端口升序以便两次刷新可比。total_entries 是**本次快照带出的行数**而不是表内总数，max_entries 是跟踪容量 512——载荷因此无法回答「是否还有没带出来的端口」，见 defect HTTP_UDP_PORT_TOTAL_IS_PACKED_COUNT"
@@ -760,7 +760,7 @@ route GET "/api/v1/stats/udp-ports" {
 
 route GET "/api/v1/stats/icmp-types" {
   auth = required
-  handler = handle_api_icmp_types
+  handler = IcmpTypes
   returns = type
   status = 200
   note = "载荷 IcmpTypeDistributionResponse：截断口径与 udp-ports 相同（types 最多 64 行，total_entries 是带出的行数，max_entries 是跟踪容量 128），同见 defect HTTP_UDP_PORT_TOTAL_IS_PACKED_COUNT"
@@ -768,7 +768,7 @@ route GET "/api/v1/stats/icmp-types" {
 
 route GET "/api/v1/stats/sse-status" {
   auth = required
-  handler = handle_api_sse_status
+  handler = SSEStatus
   returns = type
   status = 200
   note = "载荷 SseStatusResponse（events / logs 各一份 SseStreamStatus）：两条流各自的上限与当前连接数都可见，前端按所属流判断 limit_reached，不得用一条流的上限推断另一条（缺陷 HTTP_SSE_STATUS_INCOMPLETE 已按此形状闭合）。"
@@ -776,7 +776,7 @@ route GET "/api/v1/stats/sse-status" {
 
 route GET "/api/v1/stats/ban-duration-histogram" {
   auth = required
-  handler = handle_api_ban_duration_histogram
+  handler = BanDurationHistogram
   returns = type
   status = 200
   note = "载荷 BanDurationHistogramResponse。样本是一次取最近 10000 条 ban_events（分布需要样本厚度，上限同时也是读取成本的闸门；该列无索引，走的是全表尾部）。**不编业务码**：库缺席或查不动时同样在 200 内回「6 个标签 + 全 0 计数 + total=0」。**没有 limit 查询参数**——这一条报的是分布而不是列表，条数由桶数决定。桶边界与 total 的口径见该类型的注释（迁移前的旧行没有时长读数，不进桶也不进 total）"
@@ -784,7 +784,7 @@ route GET "/api/v1/stats/ban-duration-histogram" {
 
 route GET "/api/v1/stats/packet-sizes" {
   auth = required
-  handler = handle_api_packet_sizes
+  handler = PacketSizes
   returns = type
   status = 200
   note = "载荷 PacketSizeDistributionResponse：5 个长度桶，labels/counts/percentages 等长同下标。计数是**自模块加载起的累计值**（内核那组数组只在 init/unload 归零，flush 只搬 accept/drop 那组），横轴不是时间窗口——面板读的是「本机见过什么样的包」而不是「最近 5 秒长什么样」。读数来自事件泵快照，链路断开时是上一次成功采样的陈旧值"
@@ -792,7 +792,7 @@ route GET "/api/v1/stats/packet-sizes" {
 
 route GET "/api/v1/stats/ttl-distribution" {
   auth = required
-  handler = handle_api_ttl_distribution
+  handler = TtlDistribution
   returns = type
   status = 200
   note = "载荷 TtlDistributionResponse：6 个 TTL 桶，累计口径与 packet-sizes 相同（自模块加载起，不是时间窗口），labels/counts/percentages 等长同下标"
@@ -800,7 +800,7 @@ route GET "/api/v1/stats/ttl-distribution" {
 
 route GET "/api/v1/stats/ip-fragments" {
   auth = required
-  handler = handle_api_ip_fragments
+  handler = IpFragments
   returns = type
   status = 200
   note = "载荷 IpFragmentStatsResponse：total_packets 是**所有**被记账的 IP 包（内核逐包累加），fragment_packets 只数分片，fragment_ratio 因此是百分数 0-100；累计口径同 packet-sizes。总数为 0 时比例取 0 而不是 NaN——encoding/json 遇到 NaN 会直接报错、整个响应发不出去"
@@ -808,7 +808,7 @@ route GET "/api/v1/stats/ip-fragments" {
 
 route GET "/api/v1/stats/port-scanners" {
   auth = required
-  handler = handle_api_port_scanners
+  handler = PortScanners
   returns = type
   status = 200
   note = "载荷 PortScanResponse：scanners 最多 20 行（内核只带最近活跃的地址），threshold 是判定阈值。total_detected 是内核的**累计检出事件计数**（fw_info.port_scan_detected，每次判定 +1、模块重载归零），与行数不是同一个量，见 defect HTTP_SCANNER_TOTAL_COUNT_ASYMMETRY"
@@ -816,7 +816,7 @@ route GET "/api/v1/stats/port-scanners" {
 
 route GET "/api/v1/stats/service-probes" {
   auth = required
-  handler = handle_api_service_probes
+  handler = ServiceProbes
   returns = type
   status = 200
   note = "载荷 ServiceProbeResponse：probes 最多 20 行，threshold 是判定阈值。total_detected 与 port-scanners 同名，但这一侧带的是**本次快照打包的行数**而不是累计检出数——形状对齐（两处都有该字段）由 defect HTTP_SERVICE_PROBE_NO_TOTAL 闭合，口径差异见 HTTP_SCANNER_TOTAL_COUNT_ASYMMETRY，读侧不把两个量伪造成相等"
@@ -824,7 +824,7 @@ route GET "/api/v1/stats/service-probes" {
 
 route GET "/api/v1/stats/ban-duration-recommendations" {
   auth = required
-  handler = handle_api_ban_duration_recommendations
+  handler = BanDurationRecommendations
   returns = type
   status = 200
   codes = 50002, 50003
@@ -833,7 +833,7 @@ route GET "/api/v1/stats/ban-duration-recommendations" {
 
 route GET "/api/v1/stats/reputation" {
   auth = required
-  handler = handle_api_reputation
+  handler = Reputation
   returns = type
   status = 200
   codes = 50002, 50003
@@ -842,7 +842,7 @@ route GET "/api/v1/stats/reputation" {
 
 route GET "/api/v1/stats/threshold-recommendations" {
   auth = required
-  handler = handle_api_threshold_recommendations
+  handler = ThresholdRecommendations
   returns = type
   status = 200
   codes = 50002, 50003
@@ -851,7 +851,7 @@ route GET "/api/v1/stats/threshold-recommendations" {
 
 route GET "/api/v1/stats/network-distribution" {
   auth = required
-  handler = handle_api_network_distribution
+  handler = NetworkDistribution
   returns = type
   status = 200
   codes = 50002, 50003
@@ -860,7 +860,7 @@ route GET "/api/v1/stats/network-distribution" {
 
 route GET "/api/v1/stats/attack-predictions" {
   auth = required
-  handler = handle_api_attack_predictions
+  handler = AttackPredictions
   returns = type
   status = 200
   codes = 50002, 50003
@@ -869,7 +869,7 @@ route GET "/api/v1/stats/attack-predictions" {
 
 route GET "/api/v1/stats/anomalies" {
   auth = required
-  handler = handle_api_anomalies
+  handler = Anomalies
   returns = type
   status = 200
   note = "异常检测：全局流量偏离 + per-IP 行为离群；载荷 AnomalyResponse。两路各有真源且都不猜：全局用**速率历史环**（一个点 = 事件泵问内核一次，容量 720 点 ≈ 1 小时），当前值取最新一个点，行数未达最小样本护栏（10）时整段基线不给——global_features 写成 null（本轮没有当前值），global_dimensions 与两条基线是**空数组**而不是 null，因为前端对它们做 .map()，null 会让整页崩而空数组只是少几根柱子；per-IP 用**同一份快照**里的速率表做横向比较（当前这批被跟踪地址之间谁最不像同伴），地址数未达 5 时列表为空。global_score 是 0-100，维度分是 0-1 归一化。这条路由只观测，不触发任何封禁——封禁判据在 detect/decision 的阈值里，两者口径不同"
@@ -920,7 +920,7 @@ type IpAnomalyEntry {
 
 route GET "/api/v1/stats/attack-geo" {
   auth = required
-  handler = handle_api_attack_geo
+  handler = AttackGeo
   returns = type
   status = 200
   note = "攻击源地理分布；载荷 AttackGeoResponse。**不编业务码**：这条恒成功。当前实现**没有 GeoIP 读库**（见 defect HTTP_GEOIP_NOT_IMPLEMENTED），因此 geoip_enabled 恒为 false、points 恒为 []、total_ips/located_ips 恒为 0——这是「没有读数」而不是「没有攻击来自远方」。本机坐标三件套有真源（配置项 server_latitude/server_longitude，必须成对给出）：设了就回数值 + source=\"config\"，没设就两个 null + source=\"none\"。契约里的第三个取值 \"detected\"（由 egress 探测推断，配置项 geoip_detect_egress）本实现没有做，不拿猜出来的经纬度冒充探测结果"
@@ -972,7 +972,7 @@ type GeoPoint {
 
 route GET "/api/v1/logs" {
   auth = required
-  handler = handle_api_logs
+  handler = GetLogs
   returns = type
   status = 200
   codes = 40005, 50002, 50003
