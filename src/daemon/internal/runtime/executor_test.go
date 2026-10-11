@@ -17,11 +17,12 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/logparse"
 )
 
-// fakeStats 记录统计计数，替代 Rust 侧的进程级 DAEMON_STATS。
+// fakeStats 记录统计计数，替代进程级 DAEMON_STATS。
 type fakeStats struct {
 	mu         sync.Mutex
 	inotify    uint64
 	rotations  uint64
+	reloads    uint64
 	globalAdds int
 	jailAdds   int
 }
@@ -52,10 +53,22 @@ func (s *fakeStats) IncLogRotations() {
 
 func (s *fakeStats) IncBansTriggered(string) {}
 
+func (s *fakeStats) IncConfigReloads() {
+	s.mu.Lock()
+	s.reloads++
+	s.mu.Unlock()
+}
+
 func (s *fakeStats) rotationCount() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.rotations
+}
+
+func (s *fakeStats) reloadCount() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reloads
 }
 
 // fakeEnabled 是 Web UI 权威启用状态的可变替身。

@@ -1,8 +1,8 @@
 // Package logparse 提供「日志字节流 → 来源 IP」的解析原语：行分割、IP 提取、
 // 正则规则集。
 //
-// 语义与 Rust 守护进程的 parse 模块逐条对齐：词边界判定、长度窗口、保留段拒绝、
-// 正则捕获组从右往左扫描、关键字回退，均保持一致。本包不读全局状态，纯函数可重入。
+// 解析语义要点：词边界判定、长度窗口、保留段拒绝、
+// 正则捕获组从右往左扫描、关键字回退。本包不读全局状态，纯函数可重入。
 package logparse
 
 import "net/netip"
@@ -122,8 +122,7 @@ func isReservedV4(o [4]byte) bool {
 	return false
 }
 
-// isHexDigit 判定 ASCII 十六进制字符，与 Rust 的 `is_ascii_hexdigit` 一致
-// （不接受 Unicode 数字）。
+// isHexDigit 判定 ASCII 十六进制字符（不接受 Unicode 数字）。
 func isHexDigit(b byte) bool {
 	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F')
 }

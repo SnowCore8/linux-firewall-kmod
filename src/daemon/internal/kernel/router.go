@@ -1,6 +1,6 @@
 // Package kernel 承载与内核模块之间的 netlink 链：socket、报文配对、类型化请求 API。
 //
-// 分层与 Rust 版一致：transport 只负责字节收发，router 负责「回显 seq 的回复」与
+// 分层：transport 只负责字节收发，router 负责「回显 seq 的回复」与
 // 「单向事件」的分派，client 在上层提供类型化请求。三者共用同一个 socket。
 package kernel
 
@@ -112,7 +112,7 @@ type Incoming struct {
 
 // replyHandle 是一次在途请求的回复通道。
 //
-// 所有权规则与 Rust 版一致：Router 在配对成功后**先**从表中移除条目，再投递；
+// 所有权规则：Router 在配对成功后**先**从表中移除条目，再投递；
 // 因此「请求超时放弃」与「回复迟到」之间不会发生二次投递。Drop 语义显式化为
 // Abandon：超时或放弃时必须调用，否则该 `(类型, seq)` 会一直被占用。
 type replyHandle struct {
@@ -231,7 +231,7 @@ func (r *Router) Close() {
 
 // HandleDatagram 处理一条刚收到的报文。
 //
-// 处理顺序与 Rust 版一致，且顺序本身有语义：
+// 处理顺序本身即有语义：
 //  1. 发送方必须是内核（portid 0），否则丢弃并计数；
 //  2. 公共头必须合法（魔数、长度）；
 //  3. 类型必须在契约内；

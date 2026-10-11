@@ -197,3 +197,98 @@ func netlinkPortID(fd int) (uint32, error) {
 	}
 	return nl.Pid, nil
 }
+
+// TestSendCountsNetlinkHealthMetrics 验证发送侧计数：成功与失败互斥，各计各的。
+//
+// 这是集成测试 19 断言的 messages_sent / send_errors 两个指标名的行为来源。
+func TestSendCountsNetlinkHealthMetrics(t *testing.T) {
+	tr, err := openTransport(0)
+	if err != nil {
+		t.Skipf("无法建立 netlink 链路: %v", err)
+	}
+	// 不交给 Cleanup 关闭：下一步要在已关闭的 socket 上制造确定的发送错误。
+	m := newFakeMetrics()
+	tr.SetMetrics(m)
+
+	// 首次发送：本机未加载内核模块时 sendto 返回 ECONNREFUSED，加载了则成功。两种都合法，
+	// 断言的是「成功计 messages_sent、失败计 send_errors」这条互斥规则。
+	if err := tr.Send([]byte{1, 2, 3, 4}); err == nil {
+		if got := m.value(CounterMessagesSentTotal); got != 1 {
+			t.Fatalf("%s = %d，期望 1", CounterMessagesSentTotal, got)
+		}
+		if got := m.value(CounterSendErrorsTotal); got != 0 {
+			t.Fatalf("成功发送不应计入 %s：%d", CounterSendErrorsTotal, got)
+		}
+	} else {
+		if got := m.value(CounterSendErrorsTotal); got != 1 {
+			t.Fatalf("%s = %d，期望 1", CounterSendErrorsTotal, got)
+		}
+		if got := m.value(CounterMessagesSentTotal); got != 0 {
+			t.Fatalf("失败发送不应计入 %s：%d", CounterMessagesSentTotal, got)
+		}
+	}
+
+	// 关闭后的发送必然失败，错误计数 +1，发送计数不动。
+	tr.Close()
+	beforeErrors := m.value(CounterSendErrorsTotal)
+	beforeSent := m.value(CounterMessagesSentTotal)
+	if err := tr.Send([]byte{1, 2, 3, 4}); err == nil {
+		t.Fatal("已关闭的链路发送应当失败")
+	}
+	if got := m.value(CounterSendErrorsTotal); got != beforeErrors+1 {
+		t.Fatalf("%s = %d，期望 %d", CounterSendErrorsTotal, got, beforeErrors+1)
+	}
+	if got := m.value(CounterMessagesSentTotal); got != beforeSent {
+		t.Fatalf("失败发送不应计入 %s：%d → %d", CounterMessagesSentTotal, beforeSent, got)
+	}
+}
+
+// TestRecvCountsNetlinkHealthMetrics 验证接收侧计数：正常报文计 messages_received，
+// 畸形报文计 recv_errors。
+//
+// 用第二个 netlink socket 单播：Transport.Send 只面向内核（dst pid=0），无法用于自发自收的
+// 单测，这里直接用 unix.Sendto 指定对端 portid。
+func TestRecvCountsNetlinkHealthMetrics(t *testing.T) {
+	sender := newTestTransport(t)
+	target := newTestTransport(t)
+	pid, err := netlinkPortID(target.Fd())
+	if err != nil {
+		t.Fatalf("取 target portid 失败: %v", err)
+	}
+	if err := target.Subscribe(); err != nil {
+		t.Fatalf("订阅 target 失败: %v", err)
+	}
+	m := newFakeMetrics()
+	target.SetMetrics(m)
+
+	dst := &unix.SockaddrNetlink{Family: unix.AF_NETLINK, Pid: pid}
+	// 一条自洽的最小报文：nlmsg_len 恰为一个 nlmsghdr，无载荷。
+	good := make([]byte, nlmsgHdrLen)
+	putU32NE(good[0:4], uint32(nlmsgHdrLen))
+	if err := unix.Sendto(sender.Fd(), good, 0, dst); err != nil {
+		t.Fatalf("单播正常报文失败: %v", err)
+	}
+	if _, ok, err := target.TryRecv(); err != nil || !ok {
+		t.Fatalf("正常报文应被收下：ok=%v err=%v", ok, err)
+	}
+	if got := m.value(CounterMessagesReceivedTotal); got != 1 {
+		t.Fatalf("%s = %d，期望 1", CounterMessagesReceivedTotal, got)
+	}
+	if got := m.value(CounterRecvErrorsTotal); got != 0 {
+		t.Fatalf("正常报文不应计入 %s：%d", CounterRecvErrorsTotal, got)
+	}
+
+	// 不足一个 nlmsghdr 的畸形报文：计入 recv_errors，不计 messages_received。
+	if err := unix.Sendto(sender.Fd(), []byte{0, 0, 0, 0}, 0, dst); err != nil {
+		t.Fatalf("单播畸形报文失败: %v", err)
+	}
+	if _, _, err := target.TryRecv(); err == nil {
+		t.Fatal("畸形报文应当报错")
+	}
+	if got := m.value(CounterRecvErrorsTotal); got != 1 {
+		t.Fatalf("%s = %d，期望 1", CounterRecvErrorsTotal, got)
+	}
+	if got := m.value(CounterMessagesReceivedTotal); got != 1 {
+		t.Fatalf("畸形报文不应计入 %s：%d", CounterMessagesReceivedTotal, got)
+	}
+}

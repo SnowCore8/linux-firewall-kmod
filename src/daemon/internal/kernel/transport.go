@@ -16,6 +16,21 @@ const netlinkProto = unix.NETLINK_USERSOCK
 // netlinkGroup 是内核广播组号（契约固定为 1）。
 const netlinkGroup = 1
 
+// netlink 链路健康计数器的名字。
+//
+// 这四个名字是本进程 /metrics 的公开契约（集成测试 19 逐字断言其样本行存在），不随内部
+// 反射改名。四个计数器都在 SetMetrics 时注册，因此空闲链路也各有一条 0 值样本行。
+const (
+	// CounterMessagesSentTotal 是成功投递到内核的 netlink 报文数。
+	CounterMessagesSentTotal = "firewall_netlink_messages_sent_total"
+	// CounterMessagesReceivedTotal 是从内核成功收取的 netlink 报文数（不含截断/畸形报文）。
+	CounterMessagesReceivedTotal = "firewall_netlink_messages_received_total"
+	// CounterSendErrorsTotal 是 sendto 失败的次数。
+	CounterSendErrorsTotal = "firewall_netlink_send_errors_total"
+	// CounterRecvErrorsTotal 是收取报文失败的次数（含截断与畸形报文）。
+	CounterRecvErrorsTotal = "firewall_netlink_recv_errors_total"
+)
+
 // nlmsgHdrLen 是 `struct nlmsghdr` 的字节数。
 const nlmsgHdrLen = 16
 
@@ -98,6 +113,34 @@ type Transport struct {
 	// 未建立时取 -1，Poll 退回纯定时语义。
 	epFd   int
 	wakeFd int
+
+	// 健康计数句柄：SetMetrics 一次性填入，收发热路径只做一次非 nil 判定加一。
+	// 必须在任何收发开始前写入，此后不再改写，因此无需加锁。
+	sentCounter      CounterHandle
+	receivedCounter  CounterHandle
+	sendErrorCounter CounterHandle
+	recvErrorCounter CounterHandle
+}
+
+// SetMetrics 接线 netlink 链路健康计数器。
+//
+// 必须在建立接收回路、启动 HTTP 之前调用一次（句柄此后再不改写）。传 nil 表示不计数，
+// 单元测试里的零值 Transport 即按此处理。
+func (t *Transport) SetMetrics(m Metrics) {
+	if m == nil {
+		return
+	}
+	t.sentCounter = m.Counter(CounterMessagesSentTotal)
+	t.receivedCounter = m.Counter(CounterMessagesReceivedTotal)
+	t.sendErrorCounter = m.Counter(CounterSendErrorsTotal)
+	t.recvErrorCounter = m.Counter(CounterRecvErrorsTotal)
+}
+
+// bumpCounter 给一个可空的计数器句柄加一。
+func bumpCounter(c CounterHandle) {
+	if c != nil {
+		c.Add(1)
+	}
 }
 
 // OpenTransport 创建并绑定 netlink socket。
@@ -162,7 +205,7 @@ func (t *Transport) Fd() int { return t.fd }
 
 // Subscribe 建立接收侧：设置接收超时并清除非阻塞标志。
 //
-// 与 Rust 版一致：同一时刻只有一个接收方。重复调用是「换一个接收方」，因此先通知
+// 同一时刻只有一个接收方。重复调用是「换一个接收方」，因此先通知
 // 上一个接收方退出，再重设 socket 模式。
 func (t *Transport) Subscribe() error {
 	// 通知上一个接收方退出（若已有）。
@@ -211,8 +254,10 @@ func (t *Transport) Send(payload []byte) error {
 	t.txPend = err == nil
 	t.sendMu.Unlock()
 	if err != nil {
+		bumpCounter(t.sendErrorCounter)
 		return fmt.Errorf("发送 netlink 报文失败：%w", err)
 	}
+	bumpCounter(t.sentCounter)
 	return nil
 }
 
@@ -231,18 +276,22 @@ func (t *Transport) TryRecv() (Datagram, bool, error) {
 			errors.Is(err, unix.EWOULDBLOCK) {
 			return Datagram{}, false, nil
 		}
+		bumpCounter(t.recvErrorCounter)
 		return Datagram{}, false, fmt.Errorf("收取 netlink 报文失败：%w", err)
 	}
 	if n > len(buf) {
+		bumpCounter(t.recvErrorCounter)
 		return Datagram{}, false, fmt.Errorf("%w：实得 %d 字节，缓冲 %d 字节",
 			ErrTruncated, n, len(buf))
 	}
 	if n < nlmsgHdrLen {
+		bumpCounter(t.recvErrorCounter)
 		return Datagram{}, false, fmt.Errorf("%w：实得 %d 字节，不足一个 nlmsghdr",
 			ErrMalformedDatagram, n)
 	}
 	nlmsgLen := int(getU32NE(buf[0:4]))
 	if nlmsgLen < nlmsgHdrLen || nlmsgLen > n {
+		bumpCounter(t.recvErrorCounter)
 		return Datagram{}, false, fmt.Errorf("%w：nlmsg_len=%d，实得 %d 字节",
 			ErrMalformedDatagram, nlmsgLen, n)
 	}
@@ -251,6 +300,7 @@ func (t *Transport) TryRecv() (Datagram, bool, error) {
 	if nl, ok := from.(*unix.SockaddrNetlink); ok {
 		portID = nl.Pid
 	}
+	bumpCounter(t.receivedCounter)
 	return Datagram{
 		PortID:  portID,
 		Payload: append([]byte(nil), buf[nlmsgHdrLen:nlmsgLen]...),

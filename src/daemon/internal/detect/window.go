@@ -1,6 +1,6 @@
 // Package detect 提供封禁判定所需的纯计算部件：失败时间戳滑动窗口、CIDR 归一化。
 //
-// 这些部件与 Rust 守护进程的 decision / state::cidr 语义对齐，且不持有锁、不做 IO，
+// 这些部件只做纯计算（失败窗口、CIDR 归一化），不持有锁、不做 IO，
 // 便于单测与并发复用。
 package detect
 

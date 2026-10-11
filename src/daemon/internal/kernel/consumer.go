@@ -115,7 +115,7 @@ type CounterHandle interface {
 // Metrics 是计数写入端，由组合根用 http.Metrics 适配。
 //
 // 泵只写两条内核侧计数：命中速率阈值的 DDoS 事件、以及内核拒绝执行的指令。二者此前都
-// 只有读取方（/metrics 与降级快照），写入点随 Rust 侧一起消失了。
+// 只有读取方（/metrics 与降级快照），本泵即其写入端。
 type Metrics interface {
 	Counter(name string) CounterHandle
 }

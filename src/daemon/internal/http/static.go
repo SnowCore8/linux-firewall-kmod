@@ -29,14 +29,7 @@ func (s *Server) RegisterStaticFiles(fsys fs.FS) {
 	// GET / → 303 /dashboard。**必须原样保留 query string**：/?access_token=<token>
 	// 直达是登录页与外部跳转的唯一凭据入口，丢掉 query 就等于丢掉凭据。
 	// 状态码固定 303（不是 302）：它明确表达「响应是另一个资源、原请求无副作用」。
-	s.HandleFunc(httpcontract.RouteGet, func(w http.ResponseWriter, r *http.Request) {
-		target := "/dashboard"
-		if r.URL.RawQuery != "" {
-			target += "?" + r.URL.RawQuery
-		}
-		w.Header().Set("Location", target)
-		w.WriteHeader(http.StatusSeeOther)
-	})
+	s.HandleFunc(httpcontract.RouteGet, redirectRoot)
 
 	s.HandleFunc(httpcontract.RouteGetDashboard, spaShell(fsys))
 	s.HandleFunc(httpcontract.RouteGetBans, spaShell(fsys))
@@ -54,10 +47,32 @@ func (s *Server) RegisterStaticFiles(fsys fs.FS) {
 	// 这里**不**再自己写 Cache-Control：契约把它的取值定成 no-store 且 scope=all，
 	// 中间件已经给了；handler 再覆盖一次就会出现「同一个头两个来源」，而 SW 的更新检查
 	// 本来就走 bypass-cache，no-store 不会让它更难拿到新版本。
-	s.HandleFunc(httpcontract.RouteGetSwJs, func(w http.ResponseWriter, r *http.Request) {
+	s.HandleFunc(httpcontract.RouteGetSwJs, serviceWorker(fsys))
+}
+
+// redirectRoot 把 `GET /` 303 到 /dashboard，**原样保留 query string**：/?access_token=
+// <token> 直达是登录页与外部跳转的唯一凭据入口，丢掉 query 就等于丢掉凭据。
+//
+// 状态码固定 303（不是 302）：它明确表达「响应是另一个资源、原请求无副作用」。
+func redirectRoot(w http.ResponseWriter, r *http.Request) {
+	target := "/dashboard"
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	w.Header().Set("Location", target)
+	w.WriteHeader(http.StatusSeeOther)
+}
+
+// serviceWorker 交出 sw.js，并显式声明 Service-Worker-Allowed: / 把 SW 的作用域抬到根。
+//
+// 它必须待在认证组外：浏览器注册 SW 时不带交互式凭据，包进认证就 401。这里**不**再自己写
+// Cache-Control：契约把它的取值定成 no-store 且 scope=all，中间件已经给了；handler 再覆盖
+// 一次就会出现「同一个头两个来源」，而 SW 的更新检查本来就走 bypass-cache。
+func serviceWorker(fsys fs.FS) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Service-Worker-Allowed", "/")
 		writeAsset(w, r, fsys, "sw.js", "application/javascript")
-	})
+	}
 }
 
 // spaShell 返回「把 index.html 原样交出去」的 handler：9 个页面路径共用它。

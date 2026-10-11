@@ -1,7 +1,7 @@
 // Package config 承载守护进程的配置模型、YAML 解析与默认值。
 //
-// 语义与 Rust 版逐字段对齐：默认值、字段合并规则（同名 jail 后到优先、只覆盖显式
-// 给出的字段）、严格模式（未知 key 直接报错）均保持一致。
+// 覆盖默认值、字段合并规则（同名 jail 后到优先、只覆盖显式
+// 给出的字段）、严格模式（未知 key 直接报错）等语义。
 package config
 
 import (
@@ -20,7 +20,7 @@ func FamilyOf(addr netip.Addr) uint8 {
 	return 10
 }
 
-// Jail 相关上限，与内核契约和 Rust 版一致。
+// Jail 相关上限，与内核契约一致。
 const (
 	// MaxFailedTimestamps 是单个 IP 保留的失败时间戳上限（超出时 FIFO 移出最旧）。
 	MaxFailedTimestamps = 100
@@ -78,7 +78,7 @@ func (c ClusterConfig) PrefixFor(af uint8) uint8 {
 
 // RegexInfo 是一条命名正则：原始模式串 + 编译结果。
 //
-// Compiled 在编译阶段填充；为 nil 时匹配热路径跳过该条（与 Rust 版一致）。
+// Compiled 在编译阶段填充；为 nil 时匹配热路径跳过该条。
 type RegexInfo struct {
 	Name     string
 	Pattern  string
@@ -331,7 +331,7 @@ type Config struct {
 	HistoryRetentionDays int
 }
 
-// Default 返回与 Rust 版 Config::default() 严格一致的默认值。
+// Default 返回配置的默认值。
 //
 // 字段改动必须验证集成测试仍通过，以保证行为等价。
 func Default() Config {

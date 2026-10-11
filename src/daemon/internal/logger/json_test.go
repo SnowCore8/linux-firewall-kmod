@@ -175,7 +175,7 @@ func TestFormatTimestampPrecision(t *testing.T) {
 	}
 }
 
-// TestLevelName 断言输出级别名与 Rust 版短名一致（ERROR/WARN/INFO/DEBUG）。
+// TestLevelName 断言输出级别名取 ERROR/WARN/INFO/DEBUG。
 func TestLevelName(t *testing.T) {
 	cases := []struct {
 		level slog.Level

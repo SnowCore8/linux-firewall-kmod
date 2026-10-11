@@ -37,7 +37,7 @@ type executorEntry struct {
 	name string
 	// token 是该执行体专属的关停令牌。
 	token *Shutdown
-	// done 在执行体 body 返回后关闭，等价于 Rust 侧的 JoinHandle。
+	// done 在执行体 body 返回后关闭，供等待方感知其结束。
 	done chan struct{}
 }
 
@@ -53,7 +53,7 @@ func (s *Supervisor) IsEmpty() bool { return len(s.executors) == 0 }
 // Spawn 登记一个执行体并启动其 goroutine。
 //
 // token 是该执行体专属的关停令牌，body 应监视它并自行退出。登记顺序即依赖顺序：先登记的
-// 在关停时最后停。Go 的 goroutine 创建不会失败，故与 Rust 不同，这里不返回错误。
+// 在关停时最后停。Go 的 goroutine 创建不会失败，故这里不返回错误。
 func (s *Supervisor) Spawn(name string, token *Shutdown, body func()) {
 	if token == nil {
 		token = NewShutdown()

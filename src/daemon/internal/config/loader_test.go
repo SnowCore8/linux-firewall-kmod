@@ -146,7 +146,7 @@ func TestDirectoryLoadRollsBackAtomically(t *testing.T) {
 	}
 }
 
-// 未知字段恒被拒绝：Rust 的 `deny_unknown_fields` 是结构性恒开的，
+// 未知字段恒被拒绝：`deny_unknown_fields` 语义是结构性恒开的，
 // `strict_mode` 字段虽被传递但并不放宽解析，Go 侧对齐同一行为。
 func TestUnknownFieldAlwaysRejected(t *testing.T) {
 	dir := t.TempDir()

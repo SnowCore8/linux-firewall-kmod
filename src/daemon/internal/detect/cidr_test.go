@@ -85,8 +85,8 @@ func TestCidrKeyAccessors(t *testing.T) {
 	}
 }
 
-// 4-in-6 映射地址按 IPv6 处理（与 Rust 版一致，不做还原）：同一主机若以 v4 与 v4 映射
-// 两种写法出现，会得到两个不同的键——这是与 Rust 版对齐的行为，不是缺陷。
+// 4-in-6 映射地址按 IPv6 处理（不做还原）：同一主机若以 v4 与 v4 映射
+// 两种写法出现，会得到两个不同的键——这是既定行为，不是缺陷。
 func TestCidrKeyKeepsV4MappedAsIPv6(t *testing.T) {
 	if got := MustCidrKey("::ffff:10.0.0.5/104").Key(); got != "::ffff:10.0.0.0/104" {
 		t.Errorf("v4 映射地址应按 IPv6 归一: %q", got)

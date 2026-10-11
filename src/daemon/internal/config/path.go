@@ -17,7 +17,7 @@ const MaxPathLen = 4096
 //  4. 长度上限
 //  5. 对已存在的路径做规范化（解析符号链接），防止通过软链接逃逸
 //
-// 故意不做白名单检查，与 Rust 版行为等价。
+// 故意不做白名单检查。
 func ValidateAndNormalizePath(path string) error {
 	lower := strings.ToLower(path)
 

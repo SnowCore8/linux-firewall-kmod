@@ -11,7 +11,7 @@ func rotatedPath(base string, n uint32) string {
 	return fmt.Sprintf("%s.%d", base, n)
 }
 
-// stderrSink 写 stderr。与 Rust 版不同，Go 不需要 dup(2)：os.Stderr 由运行时持有，关闭本
+// stderrSink 写 stderr。Go 不需要 dup(2)：os.Stderr 由运行时持有，关闭本
 // sink 不会关掉进程的 stderr，因此 Close 是空操作。
 type stderrSink struct{}
 

@@ -20,6 +20,7 @@ import (
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/bans"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/contract"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/http"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/jail"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/kernel"
@@ -78,12 +79,11 @@ func run(args []string) error {
 		return err
 	}
 
-	jail.ApplySmartDefaults(&cfg)
-	if err := jail.Validate(&cfg); err != nil {
-		return fmt.Errorf("配置校验失败: %w", err)
-	}
-	if err := jail.CompileRegexes(&cfg); err != nil {
-		return fmt.Errorf("正则编译失败: %w", err)
+	// 后处理三步（智能默认 → 校验 → 编译）与重载器、PUT /config 的落盘前校验共用同一个
+	// 函数：启动能过的配置、热重载与 API 写入必须按同一口径判，否则「能启动但不能重载」
+	// 这类现象就没有解释。
+	if err := jail.Finalize(&cfg); err != nil {
+		return fmt.Errorf("配置后处理失败: %w", err)
 	}
 
 	cfg.Daemon = parsed.Daemon
@@ -96,6 +96,20 @@ func run(args []string) error {
 	}
 
 	sup := runtime.NewSupervisor()
+
+	// Prometheus 指标注册表在整条装配链的最前面建立：内核链路、入站执行体、HTTP 面都要
+	// 往里写计数，而它们的装配顺序不固定（内核链路早于 HTTP）。此前它只在 HTTP 段里建，
+	// 于是 netlink 与配置重载这两组计数没有可写之处。HTTPAddress 为空时它依旧存在，
+	// 只是无人抓取。
+	metrics := http.NewMetrics()
+	// 预注册这些计数器，使 /metrics 从启动起就有稳定的 0 值样本行，而不是等到第一次自增
+	// 才出现（Prometheus 抓取与集成测试都以此为存在性判据）。netlink 那四个即使链路建不
+	// 起来也各留一条 0 值样本。
+	metrics.Counter(kernel.CounterMessagesSentTotal)
+	metrics.Counter(kernel.CounterMessagesReceivedTotal)
+	metrics.Counter(kernel.CounterSendErrorsTotal)
+	metrics.Counter(kernel.CounterRecvErrorsTotal)
+	metrics.Counter(configReloadsMetric)
 
 	// SQLite 持久化层：封禁历史、信誉分、封禁事件。
 	var historyDB *persist.DB
@@ -139,6 +153,9 @@ func run(args []string) error {
 			transport.Close()
 		} else {
 			defer transport.Close()
+			// 健康计数必须在接收回路启动前接好：Send/TryRecv 在热路径上直接读这些句柄，
+			// 且此后再不改写。
+			transport.SetMetrics(kernelMetrics{m: metrics})
 			router, events := kernel.NewEventChannel(kernel.EventQueue)
 			kernelRouter, kernelEvents = router, events
 			reactorToken := runtime.NewShutdown()
@@ -158,6 +175,12 @@ func run(args []string) error {
 	if facts != nil {
 		banSinkForDaemon.noteBan = facts.NoteBan
 	}
+	// 白名单下发：与封禁同一个内核客户端，但没有缓存/库要联动——白名单表在内核侧，
+	// 镜像由事件泵按内核回显重建，HTTP 只负责把规则发下去（见 http.KernelWhitelist）。
+	whitelistSinkForDaemon := newWhitelistSink(kernelClient, logger)
+	// 配置下发出口：HTTP 的 PUT /config 与执行体的重载/回滚共用一个实例（同一个内核客户端），
+	// 两边投影出来的载荷逐字段相同，见 configSink。
+	configSinkForDaemon := newConfigSink(kernelClient, logger)
 
 	// 内核观测快照：事件泵是唯一写入者。
 	//
@@ -172,7 +195,6 @@ func run(args []string) error {
 	// HTTP 服务器：API、SSE、Prometheus 指标。
 	var httpServer *http.Server
 	var sseBroker *http.SSEBroker
-	var metrics *http.Metrics
 	// api 要活在 if 之外：事件泵的域载荷镜像与执行体的 jails 变更通知都挂在它身上，
 	// 而这两处都在 HTTP 段之后装配。HTTPAddress 为空时它是 nil，两处注入都按缺席处理。
 	var api *http.APIHandlers
@@ -192,7 +214,6 @@ func run(args []string) error {
 			sseBroker = http.NewEventsBroker(logger)
 			defer sseBroker.Stop()
 			logStream := http.NewLogsStream(logger)
-			metrics = http.NewMetrics()
 
 			// 配置路径：优先单文件，其次目录
 			configPath := cfg.ConfigFile
@@ -207,8 +228,12 @@ func run(args []string) error {
 				LogStream: logStream,
 				Metrics:   metrics,
 				KernelBan: banSinkForDaemon,
-				Username:  cfg.MetricsUsername,
-				Password:  cfg.MetricsPassword,
+				// 白名单下发出口：与封禁共用内核客户端，缺席时同样按「跳过下发」处理。
+				KernelWhitelist: whitelistSinkForDaemon,
+				// 配置下发出口：PUT /config 同步发一次，好把内核的采纳结论带回响应。
+				KernelConfig: configSinkForDaemon,
+				Username:     cfg.MetricsUsername,
+				Password:     cfg.MetricsPassword,
 				// 进程级唯一的认证失败账本：契约的锁定窗口不区分来源 IP，所以整进程一份。
 				Lockout:          http.NewAuthLockout(),
 				GetCurrentConfig: func() *config.Config { return &cfg },
@@ -305,14 +330,17 @@ func run(args []string) error {
 		decisionFacts = facts
 	}
 	deps := runtime.Deps{
-		Logger:    logger,
-		Facts:     decisionFacts,
-		Sink:      banSinkForDaemon,
-		Stats:     newStatsSink(logger, metrics),
-		Hooks:     runtime.NewMaintenanceHooks(historyDB, logger),
-		Reloader:  runtime.NewFileReloader(cfg.ConfigFile, logger),
-		Enabled:   jailEnabled,
-		KernelCmd: kernelCmd,
+		Logger:   logger,
+		Facts:    decisionFacts,
+		Sink:     banSinkForDaemon,
+		Stats:    newStatsSink(logger, metrics),
+		Hooks:    runtime.NewMaintenanceHooks(historyDB, logger),
+		Reloader: runtime.NewFileReloader(cfg.ConfigFile, logger),
+		// 配置一变就同步到内核：手工编辑文件、SIGHUP、SIGUSR1 都只经过执行体，
+		// 少这一条那些路径改的值永远上不了内核（与 PUT /config 共用同一个出口实例）。
+		KernelConfig: configSinkForDaemon,
+		Enabled:      jailEnabled,
+		KernelCmd:    kernelCmd,
 		// jail 配置快照换了形状 → SSE 的 jails 域跟着推一帧。变更时机只有属主知道，
 		// 所以这一声由执行体喊、由本组合根接到表现层（api 未装配时桥自己吞掉）。
 		JailSnapshot: jailSnapshotBridge{api: api},
@@ -546,6 +574,85 @@ func (s *banSink) RollbackInsert(ip string) {
 	s.cache.Remove(ip)
 }
 
+// whitelistSink 是 http.KernelWhitelist 的生产实现：白名单规则的内核下发出口。
+//
+// 与 banSink 的分别：封禁要联动活跃缓存、历史库与信誉缓存（那是自动路径与手工路径
+// 共用一个汇聚点的原因），白名单只需要把规则交给内核——镜像由事件泵按内核回显维护，
+// HTTP 写入侧那份只是面板读的那张表。
+type whitelistSink struct {
+	client *kernel.Client
+	logger *slog.Logger
+}
+
+func newWhitelistSink(client *kernel.Client, logger *slog.Logger) *whitelistSink {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &whitelistSink{client: client, logger: logger}
+}
+
+// Add 见 http.KernelWhitelist。client 为 nil 时按「未装配、跳过下发」处理并回 nil——
+// 契约给 POST /api/v1/whitelist 编的码里没有「依赖未就绪」，模块缺席不是一次失败。
+func (s *whitelistSink) Add(addr netip.Addr, prefixLen uint8, device string) error {
+	if s.client == nil {
+		s.logger.Debug("内核客户端未装配，跳过白名单下发", "cidr", addr.String(), "prefix_len", prefixLen)
+		return nil
+	}
+	_, err := s.client.AddWhitelist(addr, prefixLen, device)
+	return err
+}
+
+// Remove 见 http.KernelWhitelist。
+func (s *whitelistSink) Remove(addr netip.Addr, prefixLen uint8, device string) error {
+	if s.client == nil {
+		s.logger.Debug("内核客户端未装配，跳过白名单移除下发", "cidr", addr.String(), "prefix_len", prefixLen)
+		return nil
+	}
+	_, err := s.client.RemoveWhitelist(addr, prefixLen, device)
+	return err
+}
+
+// configSink 是配置的内核下发出口，同时满足 http.KernelConfig 与
+// runtime.KernelConfigPusher（两边是同一个方法签名，一处实现即可）。
+//
+// 为什么要两边都用：HTTP 的 PUT /config 必须同步发一次，才能把内核的采纳结论写进响应；
+// 执行体的重载/回滚/初始装配也要发，否则手工编辑文件、SIGHUP、SIGUSR1 改的那些值永远
+// 上不了内核。两条路投的是同一张投影表（config.KernelConfigChange），载荷逐字段相同，
+// 重复发送只是重写同样的全局阈值。
+type configSink struct {
+	client  *kernel.Client
+	logger  *slog.Logger
+	timeout time.Duration
+}
+
+func newConfigSink(client *kernel.Client, logger *slog.Logger) *configSink {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &configSink{client: client, logger: logger, timeout: kernel.DefaultRequestTimeout}
+}
+
+// ApplyConfig 见 http.KernelConfig 与 runtime.KernelConfigPusher。
+//
+// client 为 nil（模块未加载 / netlink 建不起来）时按「未装配、跳过下发」处理并回 nil：
+// 与封禁、白名单同口径。装配了却发不出去才回错误，由调用方决定是 50003 还是记一条 warn。
+func (s *configSink) ApplyConfig(change *contract.SetConfig) (contract.ConfigFlags, error) {
+	if s.client == nil {
+		s.logger.Debug("内核客户端未装配，跳过配置下发", "flags", uint32(change.Flags))
+		return 0, nil
+	}
+	ack, err := s.client.SetConfig(change, s.timeout)
+	if err != nil {
+		return 0, err
+	}
+	return ack.RejectedFlags, nil
+}
+
+// configReloadsMetric 是配置热重载成功次数的指标名。
+//
+// 它是本进程 /metrics 的公开契约（集成测试 17 以它为热重载的权威读数），不随内部反射改名。
+const configReloadsMetric = "firewall_daemon_config_reloads_total"
+
 // statsSink 是 StatsSink 的生产实现。
 //
 // 计数汇聚到 Prometheus 指标（当 metrics 非 nil 时）和全局原子计数。
@@ -559,6 +666,7 @@ type statsSink struct {
 	inotifyEvents atomic.Uint64
 	logRotations  atomic.Uint64
 	bansTriggered atomic.Uint64
+	configReloads atomic.Uint64
 }
 
 func newStatsSink(logger *slog.Logger, metrics *http.Metrics) *statsSink {
@@ -611,6 +719,14 @@ func (s *statsSink) IncBansTriggered(jail string) {
 	s.bansTriggered.Add(1)
 	if s.metrics != nil {
 		s.metrics.Counter("firewall_bans_triggered_total").Add(1)
+	}
+}
+
+// IncConfigReloads 见 runtime.StatsSink。
+func (s *statsSink) IncConfigReloads() {
+	s.configReloads.Add(1)
+	if s.metrics != nil {
+		s.metrics.Counter(configReloadsMetric).Add(1)
 	}
 }
 

@@ -37,6 +37,7 @@ import (
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/bans"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/contract"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/decision"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/ingest"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/logparse"
@@ -96,6 +97,8 @@ type StatsSink interface {
 	IncLogRotations()
 	// IncBansTriggered 记一次 per-jail 封禁触发（下发成功之后）。
 	IncBansTriggered(jail string)
+	// IncConfigReloads 记一次成功的配置热重载（SIGHUP 或配置文件自身变化触发）。
+	IncConfigReloads()
 }
 
 // MaintenanceHooks 承载周期维护的外部副作用。
@@ -117,9 +120,22 @@ type ConfigReloader interface {
 	Rollback(cfg *config.Config) error
 }
 
+// KernelConfigPusher 把当前配置投影下发到内核。
+//
+// 为什么挂在执行体上：配置的独占所有权在这里（重载 / 回滚 / 内核侧指令都只改这一份 cfg），
+// 而「内核应当按哪组阈值跑」必须由配置的属主说了算。HTTP 的 PUT /config 只是同步发一次好把
+// 内核的采纳结论带回响应；手工编辑文件、SIGHUP、SIGUSR1 都只经过这里。少这一条，那些路径
+// 改完配置后面板显示新值、内核仍按旧值判定。
+//
+// 与 BanSink 同为可空，nil 时不下发（重载本身照常成功——内核通道坏了不该让配置回滚）。
+type KernelConfigPusher interface {
+	// ApplyConfig 下发一份配置投影，返回内核未采纳的位图。
+	ApplyConfig(change *contract.SetConfig) (rejected contract.ConfigFlags, err error)
+}
+
 // JailEnabledSource 提供 Web UI 权威的 jail 启用状态。
 //
-// 旧实现的启用状态权威源是 http_exporter 的全局表，只改它再持久化到 YAML；执行体每个 poll
+// 启用状态的权威源由 API 层写入（见 internal/http 的 jail 控制端点），执行体每个 poll
 // 周期把它桥接进本地配置。本接口把这份「权威状态」抽象出来，返回 jail 名 → 是否启用。
 type JailEnabledSource interface {
 	EnabledStates() map[string]bool
@@ -153,6 +169,8 @@ type Deps struct {
 	Hooks MaintenanceHooks
 	// Reloader 是配置重载器；nil 时 SIGHUP / SIGUSR1 只记日志。
 	Reloader ConfigReloader
+	// KernelConfig 是配置变更后的内核下发出口；nil 时重载只改本进程配置。
+	KernelConfig KernelConfigPusher
 	// Enabled 是 Web UI 权威的启用状态源；nil 时跳过启用状态同步。
 	Enabled JailEnabledSource
 	// JailSnapshot 在 jail 配置快照发布后收到通知（组合根接到 SSE 的 jails 域推送）；
@@ -225,11 +243,13 @@ type InboundExecutor struct {
 	facts DecisionFacts
 
 	// sink / stats / hooks / reloader / enabled 是注入的副作用汇聚点；
-	// jailSnapshot 是 jail 配置快照变化后的通知出口（SSE 的 jails 域）。
+	// jailSnapshot 是 jail 配置快照变化后的通知出口（SSE 的 jails 域）；
+	// kernelConfig 把变了形状的配置下发内核。
 	sink         BanSink
 	stats        StatsSink
 	hooks        MaintenanceHooks
 	reloader     ConfigReloader
+	kernelConfig KernelConfigPusher
 	enabled      JailEnabledSource
 	jailSnapshot JailSnapshotListener
 
@@ -278,6 +298,7 @@ func NewInboundExecutor(cfg *config.Config, signals *SignalSource, deps Deps) (*
 		stats:        deps.Stats,
 		hooks:        deps.Hooks,
 		reloader:     deps.Reloader,
+		kernelConfig: deps.KernelConfig,
 		enabled:      deps.Enabled,
 		jailSnapshot: deps.JailSnapshot,
 		cmd:          deps.KernelCmd,
@@ -292,6 +313,9 @@ func NewInboundExecutor(cfg *config.Config, signals *SignalSource, deps Deps) (*
 		_ = watcher.Close()
 		return nil, errors.New("runtime: No log files could be watched（没有任何可监视的日志源）")
 	}
+	// 装配即下发一次：内核模块的参数是编译/加载期默认值，守护进程的配置要等到第一次
+	// 重载才落上去的话，「刚启动的这段时间内核按谁的阈值判」就没有答案。
+	e.pushKernelConfig("初始装配")
 	e.info("入站主链路已就绪", "sources", e.registry.Len(), "jails", e.pipeline.JailCount())
 	return e, nil
 }
@@ -812,15 +836,23 @@ func (e *InboundExecutor) reloadConfig() {
 		e.info("配置重载器未接线，忽略重载请求")
 		return
 	}
+	loaded := true
 	if err := e.reloader.Reload(e.cfg); err != nil {
+		loaded = false
 		e.warn("配置重载失败", "error", err)
 	} else {
 		e.info("配置重载成功")
+		if e.stats != nil {
+			e.stats.IncConfigReloads()
+		}
 	}
 	// 无论成功与否都按当前 cfg 重建：失败时 Reload 已把 cfg 回滚成旧配置，重建即回到
 	// 旧集合（重建幂等，重复调用无副作用）。
 	e.refreshJails()
 	e.reconcileWatches()
+	if loaded {
+		e.pushKernelConfig("热重载")
+	}
 }
 
 // rollbackConfig 处理 SIGUSR1 触发的配置回滚。
@@ -836,6 +868,34 @@ func (e *InboundExecutor) rollbackConfig() {
 	e.info("配置回滚成功")
 	// 回滚会改 max_retries / findtime / ban_time 与启用状态，判定参数必须跟着走。
 	e.refreshJails()
+	// 回滚掉的那份配置同样要回到内核上，否则「SIGUSR1 之后」= 面板与判定回到旧值、内核
+	// 仍停在被回滚掉的新值。
+	e.pushKernelConfig("配置回滚")
+}
+
+// pushKernelConfig 把当前配置投影下发内核（见 KernelConfigPusher）。
+//
+// 失败只记日志、不改变重载结论：配置已经落到本进程并生效于判定链，内核那一侧没收到只是
+// 阈值暂时滞后，下一次重载或 API 写入会再发一次。把一次 netlink 失败升级成执行体的错误，
+// 代价是整条主链路停摆——那比阈值滞后严重得多。
+//
+// 未被采纳的位按载荷字段名记 warn：这类位说的是「配置里写了一个内核不收的取值」（速率上限
+// 为 0、窗口超过 60 秒……），与通道故障是两种修法，前者要改配置文件。
+func (e *InboundExecutor) pushKernelConfig(reason string) {
+	if e.kernelConfig == nil {
+		return
+	}
+	change := e.cfg.KernelConfigChange()
+	rejected, err := e.kernelConfig.ApplyConfig(&change)
+	if err != nil {
+		e.warn("配置下发内核失败", "reason", reason, "error", err)
+		return
+	}
+	if names := rejected.Names(); len(names) > 0 {
+		e.warn("配置下发内核：部分位未被采纳", "reason", reason, "rejected", names)
+		return
+	}
+	e.debug("配置已下发内核", "reason", reason, "flags", uint32(change.Flags))
 }
 
 // syncJailEnabled 把 Web UI 权威的启用状态桥接进本地配置，有变化才重建监视集合。

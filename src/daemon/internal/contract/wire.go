@@ -1,6 +1,6 @@
 // Package contract 是 netlink 线格式契约（contract/netlink.fwidl）的 Go 绑定。
 //
-// 契约是单一真相源，由 contract/gen.py 生成 C/Rust/TS/JSON 四端产物。Go 侧手写
+// 契约是单一真相源，由 contract/gen.py 生成 C/TS/JSON 三端产物。Go 侧手写
 // 对齐，并由 contract_test.go 逐字段比对 contract/generated/netlink_layout.json：
 // 任一处偏移或长度不符即失败。
 //

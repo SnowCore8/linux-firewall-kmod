@@ -1,8 +1,7 @@
 // 请求体读取：契约信封面上 415 与 422 两个状态码的唯一产点。
 //
-// 这两个码过去记在 errmodel FRAMEWORK_DEFAULT 里，那是 axum 时代的遗留——它的 JSON 提取器
-// 会自产 415/422。net/http 没有提取器，请求体能不能解析只有 daemon 自己知道，所以契约把
-// 它们改记 shape=envelope，产点就是本文件。
+// 这两个码契约里记 shape=envelope，产点就是本文件：net/http 没有 JSON 提取器，
+// 请求体能不能解析只有 daemon 自己知道，所以由本文件显式产出 415/422。
 package http
 
 import (

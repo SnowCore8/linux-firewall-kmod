@@ -14,6 +14,7 @@ package http
 
 import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/bans"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
 )
 
 // PaginatedResponse 是列表类端点的统一分页信封（契约 PaginatedResponse<T>）。
@@ -120,6 +121,118 @@ type WhitelistOperationResponse struct {
 // CreateWhitelistRequest 是 POST /api/v1/whitelist 的请求体。
 type CreateWhitelistRequest struct {
 	CIDR string `json:"cidr"`
+}
+
+// UpdateJailRequest 是 PUT /api/v1/jails/{name} 的请求体。
+//
+// 只带 enabled 一个字段：这条路由改的是「期望状态」，其余 jail 参数走配置文件热重载，
+// 不从这个入口改。用值类型而不是指针——契约把它声明成 bool（非 Option），缺席的解码
+// 结果就是 false（= 禁用），与契约的字段形状一致。
+type UpdateJailRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// ============================================================================
+// 配置（GET /api/v1/config、PUT /api/v1/config）
+// ============================================================================
+
+// UpdateConfigRequest 是 PUT /api/v1/config 的请求体（契约 request UpdateConfigRequest）。
+//
+// 全字段可选（指针）：契约把这条路由定成**局部更新**——只提交要改的字段，未提交的字段保持
+// 后端现值。指针是「字段缺席」与「显式给零值」的唯一区分手段；用值类型会把「没写
+// max_ban_entries」读成「改成 0」，正好撞上校验里那条「不能为 0」。
+//
+// clear_logs_at 与其余 18 个字段一样**随 webui 段落盘**（config 的 yamlWebui 有此键），
+// 因此热重载与重启都会保留——前端 Settings/Logs 页「持久化该过滤起点」「重启后保留」的
+// 文案即以此为准。空串表示「取消过滤」。
+type UpdateConfigRequest struct {
+	SSEPushInterval     *uint32 `json:"sse_push_interval"`
+	RateWarningPPS      *uint64 `json:"rate_warning_pps"`
+	RateCriticalPPS     *uint64 `json:"rate_critical_pps"`
+	RateWarningSYN      *uint64 `json:"rate_warning_syn"`
+	RateCriticalSYN     *uint64 `json:"rate_critical_syn"`
+	MaxSynPerSecond     *uint32 `json:"max_syn_per_second"`
+	MaxUDPPerSecond     *uint32 `json:"max_udp_per_second"`
+	MaxICMPPerSecond    *uint32 `json:"max_icmp_per_second"`
+	MaxACKPerSecond     *uint32 `json:"max_ack_per_second"`
+	MaxRSTPerSecond     *uint32 `json:"max_rst_per_second"`
+	MaxFINPerSecond     *uint32 `json:"max_fin_per_second"`
+	StaticThreshold     *bool   `json:"static_threshold"`
+	DynamicThreshold    *bool   `json:"dynamic_threshold"`
+	DdosDetection       *bool   `json:"ddos_detection"`
+	MaxBanEntries       *uint32 `json:"max_ban_entries"`
+	MaxWhitelistEntries *uint32 `json:"max_whitelist_entries"`
+	MaxRateEntries      *uint32 `json:"max_rate_entries"`
+	MaxLocalIPCache     *uint32 `json:"max_local_ip_cache"`
+	ClearLogsAt         *string `json:"clear_logs_at"`
+}
+
+// WebuiConfigResponse 是 GET /api/v1/config 的响应载荷（契约 type WebuiConfigResponse），
+// 也是 PUT /api/v1/config 的响应载荷（前端 updateConfig 的返回类型就是它）。
+//
+// 它只覆盖 Web UI 关心的那一段（config.WebuiConfig 的 19 个字段），**不是**整份 config.Config：
+// 整份配置含 MetricsPassword 等凭据与信号量类内部字段，把整个结构读出去既泄露凭据又让线上面
+// 随内部结构漂移。字段逐一对应 config.WebuiConfig 的同值字段，故不存在映射歧义。
+//
+// clear_logs_at 用指针：契约是 Option<String>，空串表示「不做时间过滤」，序列化成 null 让
+// 前端 `clear_logs_at: string | null` 直接可用，不必约定一个哨兵空串。
+type WebuiConfigResponse struct {
+	SSEPushInterval uint32 `json:"sse_push_interval"`
+	RateWarningPPS  uint64 `json:"rate_warning_pps"`
+	RateCriticalPPS uint64 `json:"rate_critical_pps"`
+	RateWarningSYN  uint64 `json:"rate_warning_syn"`
+	RateCriticalSYN uint64 `json:"rate_critical_syn"`
+
+	MaxSynPerSecond  uint32 `json:"max_syn_per_second"`
+	MaxUDPPerSecond  uint32 `json:"max_udp_per_second"`
+	MaxICMPPerSecond uint32 `json:"max_icmp_per_second"`
+	MaxACKPerSecond  uint32 `json:"max_ack_per_second"`
+	MaxRSTPerSecond  uint32 `json:"max_rst_per_second"`
+	MaxFINPerSecond  uint32 `json:"max_fin_per_second"`
+
+	StaticThreshold  bool `json:"static_threshold"`
+	DynamicThreshold bool `json:"dynamic_threshold"`
+	DdosDetection    bool `json:"ddos_detection"`
+
+	MaxBanEntries       uint32 `json:"max_ban_entries"`
+	MaxWhitelistEntries uint32 `json:"max_whitelist_entries"`
+	MaxRateEntries      uint32 `json:"max_rate_entries"`
+	MaxLocalIPCache     uint32 `json:"max_local_ip_cache"`
+
+	ClearLogsAt *string `json:"clear_logs_at"`
+}
+
+// webuiConfigResponse 把配置里的 Web UI 段落映射成契约载荷。
+//
+// 只读 cfg.Webui 这一段，凭据（config.Config 根上的 MetricsPassword 等）根本不在取值范围内，
+// 因此不需要「先复制再清零」的旁路——不是靠记得清零，而是压根没有可泄露的字段。
+// ClearLogsAt 空串归一成 nil（见类型注释）。
+func webuiConfigResponse(w config.WebuiConfig) WebuiConfigResponse {
+	out := WebuiConfigResponse{
+		SSEPushInterval:     w.SSEPushInterval,
+		RateWarningPPS:      w.RateWarningPPS,
+		RateCriticalPPS:     w.RateCriticalPPS,
+		RateWarningSYN:      w.RateWarningSYN,
+		RateCriticalSYN:     w.RateCriticalSYN,
+		MaxSynPerSecond:     w.MaxSynPerSecond,
+		MaxUDPPerSecond:     w.MaxUDPPerSecond,
+		MaxICMPPerSecond:    w.MaxICMPPerSecond,
+		MaxACKPerSecond:     w.MaxACKPerSecond,
+		MaxRSTPerSecond:     w.MaxRSTPerSecond,
+		MaxFINPerSecond:     w.MaxFINPerSecond,
+		StaticThreshold:     w.StaticThreshold,
+		DynamicThreshold:    w.DynamicThreshold,
+		DdosDetection:       w.DdosDetection,
+		MaxBanEntries:       w.MaxBanEntries,
+		MaxWhitelistEntries: w.MaxWhitelistEntries,
+		MaxRateEntries:      w.MaxRateEntries,
+		MaxLocalIPCache:     w.MaxLocalIPCache,
+	}
+	if w.ClearLogsAt != "" {
+		clear := w.ClearLogsAt
+		out.ClearLogsAt = &clear
+	}
+	return out
 }
 
 // LogEntry 是一行日志：line_number 是它在文件里的物理行号（1 起）。

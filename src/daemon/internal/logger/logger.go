@@ -14,7 +14,7 @@ import (
 
 // 固定的系统路径：均为操作系统约定位置，不随部署变化。
 const (
-	// defaultLogPath 是未配置 log_file 时使用的独立日志文件路径（与 Rust 版常量一致）。
+	// defaultLogPath 是未配置 log_file 时使用的独立日志文件路径。
 	defaultLogPath = "/var/log/firewall-daemon.log"
 	// syslogSocket 是本地 syslog 的域套接字。
 	syslogSocket = "/dev/log"
@@ -84,7 +84,7 @@ func dialSyslog(network, address string) (*syslog.Writer, error) {
 	return syslog.Dial(network, address, syslog.LOG_DAEMON|syslog.LOG_INFO, syslogTag)
 }
 
-// warnStderr 在日志系统自身不可用时直接向 stderr 告警（对应 Rust 的 eprintln!）。
+// warnStderr 在日志系统自身不可用时直接向 stderr 告警。
 func warnStderr(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "警告: "+format+"\n", args...)
 }
@@ -92,8 +92,8 @@ func warnStderr(format string, args ...any) {
 // Init 按配置初始化日志系统并返回结构化日志器。
 //
 // 调用方此后经返回的 *slog.Logger 使用日志（logger.Info/Warn/Error/Debug），不存在全局
-// 实例。配置了 log_file 时，路径同时登记给日志查看器使用（对应 Rust 的
-// web_ui::log_viewer::set_log_file）；未配置时保持未登记，与 Rust 行为一致。
+// 实例。配置了 log_file 时，路径同时登记给日志查看器使用（见 SetLogFile）；
+// 未配置时保持未登记。
 func Init(cfg *config.Config) *slog.Logger {
 	if cfg.LogFile != "" {
 		if err := SetLogFile(cfg.LogFile); err != nil {
@@ -185,12 +185,12 @@ func dialJournaldSink(opts options) (sink, error) {
 	return opts.dial("unixgram", syslogSocket)
 }
 
-// logFilePath 保存已登记的日志文件路径（对应 Rust 的 web_ui::log_viewer 全局状态）。
+// logFilePath 保存已登记的日志文件路径，供日志查看器读取。
 var logFilePath atomic.Pointer[string]
 
 // SetLogFile 登记日志文件路径，供日志查看器读取。
 //
-// 重复登记返回错误：该路径只在启动时设置一次，与 Rust 版 OnceLock 的语义一致。
+// 重复登记返回错误：该路径只在启动时设置一次。
 func SetLogFile(path string) error {
 	if path == "" {
 		return errors.New("日志文件路径为空")

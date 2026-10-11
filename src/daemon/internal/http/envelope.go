@@ -12,13 +12,13 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 )
 
-// Envelope 是线上 JSON 的形状（前端 ApiResponse<T>）。
+// ApiResponse 是线上 JSON 的形状（契约 type ApiResponse<T>，前端同名 interface）。
 //
 // 三个字段都不带 omitempty：契约禁止「为空则省略」这类序列化开关。data 的 Go 类型是
 // json.RawMessage 而不是 any——成功路径要原样转发已经算好的载荷，失败路径要写出台面
 // 上的 null，两者都不该经过第二次编码；而 nil RawMessage 由 encoding/json 序列化成
 // `null`，正好是契约要的「存在且为 null」，不需要额外造一个指针。
-type Envelope struct {
+type ApiResponse struct {
 	Code    int             `json:"code"`
 	Data    json.RawMessage `json:"data"`
 	Message string          `json:"message"`
@@ -29,9 +29,9 @@ type Envelope struct {
 // 载荷序列化失败不在这里升级成错误：能进信封的载荷全是 struct/map，序列化失败意味着
 // 有人往载荷里塞了 channel 或 func——那是编译期之后、上线之前就该被用例抓住的装配错误，
 // 在写响应的最后一刻把它压成一条 500 反而藏住了现场。
-func SuccessEnvelope(data any) Envelope {
+func SuccessEnvelope(data any) ApiResponse {
 	raw, _ := json.Marshal(data)
-	return Envelope{
+	return ApiResponse{
 		Code:    httpcontract.CodeOK,
 		Data:    raw,
 		Message: "",
@@ -43,8 +43,8 @@ func SuccessEnvelope(data any) Envelope {
 // code 不再是 -1：契约的 codes 段给每个失败都编了号，前端按号区分「同一 HTTP 状态码的
 // 不同原因」（400 可能是 40001 封禁失败，也可能是 40005 批量参数非法），-1 把所有信息
 // 压成一句 message，等于宣布业务码不存在。
-func ErrorEnvelope(code int, message string) Envelope {
-	return Envelope{
+func ErrorEnvelope(code int, message string) ApiResponse {
+	return ApiResponse{
 		Code:    code,
 		Data:    nil,
 		Message: message,

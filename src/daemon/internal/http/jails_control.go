@@ -34,9 +34,7 @@ func (h *APIHandlers) UpdateJail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Enabled bool `json:"enabled"`
-	}
+	var req UpdateJailRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}

@@ -1,6 +1,6 @@
 // 接收回路：把 netlink socket 上到达的报文交给 Router 分派。
 //
-// 分层与 Rust 版一致：transport 只负责字节收发，Router 是纯状态机（决定「谁收」，
+// 分层：transport 只负责字节收发，Router 是纯状态机（决定「谁收」，
 // 不做 I/O），Reactor 只做 I/O（等可读、取报文、交给 Router）。三者共用同一 socket。
 package kernel
 
@@ -59,7 +59,7 @@ const errorBackoff = 100 * time.Millisecond
 
 // Run 阻塞执行接收回路，直到关停被请求或链路断开。
 //
-// 退出时关闭 router：这等价于 Rust 版 LivenessGuard 的析构——把存活标志置死并清空在途
+// 退出时关闭 router：把存活标志置死并清空在途
 // 登记，使所有阻塞在 RecvTimeout 上的等待方立即拿到 ErrLinkDown，而不是白等到各自超时。
 // 顺序要紧：Router.Close 内部先置死（此后新登记被拒）再清表（释放已等待的请求），
 // 否则「置死与清表之间」到达的登记会插进空表然后干等。
@@ -119,8 +119,8 @@ func (r *Reactor) logRecvError(err error) {
 // NewEventChannel 建立内核事件通道及其路由器。
 //
 // capacity <= 0 时取 EventQueue。返回的 router 由调用方持有（客户端与接收回路共享
-// 它），events 是内核推送的单向事件流。与 Rust 的 event_channel 工厂对应，只是 Go 的
-// 存活凭据即 router 自身的 Close，无需额外的 Guard 类型。
+// 它），events 是内核推送的单向事件流。存活凭据即 router 自身的 Close，
+// 无需额外的 Guard 类型。
 func NewEventChannel(capacity int) (*Router, <-chan Incoming) {
 	if capacity <= 0 {
 		capacity = EventQueue

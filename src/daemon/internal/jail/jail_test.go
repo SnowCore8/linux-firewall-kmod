@@ -358,7 +358,7 @@ func TestCompileInjectsBuiltinPatternOnlyWhenTheListIsEmpty(t *testing.T) {
 
 // TestEmptyPatternLosesTheBuiltinButKeepsFallbackMatching 是本包最重要的一条断言。
 //
-// 它把 Rust 版与集成测试之间的分歧钉死在代码里：
+// 它把这条关键行为钉死在代码里：
 //   - 配置写 `regexes: {default: {pattern: ""}}` 时，规则集是**零规则**的；
 //   - 内置 sshd 模式不会补上（列表非空）；
 //   - 该规则集仍能封禁 sshd 失败行，靠的是**关键字回退**，而不是任何正则；

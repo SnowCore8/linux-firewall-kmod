@@ -33,7 +33,7 @@ type CidrKey struct {
 // （不报错），因为调用方（集群聚合、netlink 回包）传的前缀越界时按「全主机」处理这一
 // 退化行为需要可预测，而不是生成一个永远匹配不上的键。
 //
-// 地址族按字面形式判定（与 Rust 版一致）：IPv4 映射地址（`::ffff:a.b.c.d`）仍按 IPv6
+// 地址族按字面形式判定：IPv4 映射地址（`::ffff:a.b.c.d`）仍按 IPv6
 // 处理，不做还原。
 func NewCidrKey(addr netip.Addr, prefix uint8) CidrKey {
 	maxBits := uint8(128)

@@ -22,8 +22,7 @@ const DefaultPatternName = "default"
 //     列表非空，内置模式不会被补上。
 //  2. 空模式被跳过；若因此一条都没编译成功，返回错误——但**不影响匹配**：
 //     解析层的关键字回退（见 logparse.RuleSet.Parse）仍会命中 sshd 的
-//     `Failed password for` 行。Rust 版如此，Go 版对齐，否则同一份配置在两侧
-//     行为不同。
+//     `Failed password for` 行。判定按此口径，否则同一份配置行为不同。
 func CompileRegexes(cfg *config.Config) error {
 	errs := make([]string, 0, len(cfg.Jails))
 	for i := range cfg.Jails {

@@ -29,6 +29,14 @@ type APIConfig struct {
 	Metrics   *Metrics
 	KernelBan KernelBan
 
+	// KernelWhitelist 是白名单的下发出口（见 whitelist.go 的 KernelWhitelist）。
+	// 与 KernelBan 同为可空：为空时白名单只改镜像，与「内核客户端未装配」同一个口径。
+	KernelWhitelist KernelWhitelist
+
+	// KernelConfig 是配置的下发出口（见 config_api.go 的 KernelConfig）。
+	// 可空口径同上：没装内核客户端时 PUT /config 只落盘，响应不说「已下发」。
+	KernelConfig KernelConfig
+
 	// Lockout 是认证失败计数与锁定窗口（契约 auth 段）。为 nil 时不计数——只可能在
 	// 用例里出现，组合根永远建一份。
 	Lockout *AuthLockout
@@ -198,13 +206,15 @@ func (s *Server) RegisterRoutes(api *APIHandlers) {
 }
 
 type APIHandlers struct {
-	server    *Server
-	db        *persist.DB
-	sse       *SSEBroker
-	logStream *SSEStream
-	metrics   *Metrics
-	kernelBan KernelBan
-	lockout   *AuthLockout
+	server          *Server
+	db              *persist.DB
+	sse             *SSEBroker
+	logStream       *SSEStream
+	metrics         *Metrics
+	kernelBan       KernelBan
+	kernelWhitelist KernelWhitelist
+	kernelConfig    KernelConfig
+	lockout         *AuthLockout
 
 	// 认证凭据
 	username string
@@ -244,6 +254,8 @@ func NewAPIHandlers(cfg APIConfig) *APIHandlers {
 		logStream:         cfg.LogStream,
 		metrics:           cfg.Metrics,
 		kernelBan:         cfg.KernelBan,
+		kernelWhitelist:   cfg.KernelWhitelist,
+		kernelConfig:      cfg.KernelConfig,
 		lockout:           cfg.Lockout,
 		username:          cfg.Username,
 		password:          cfg.Password,

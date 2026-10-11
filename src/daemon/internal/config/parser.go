@@ -12,7 +12,7 @@ import (
 
 // yamlConfig 是顶层 YAML 结构：defaults + jails + 各功能段。
 //
-// 严格模式：未知顶层字段直接报错（对应 Rust 的 deny_unknown_fields）。
+// 严格模式：未知顶层字段直接报错（deny_unknown_fields 语义）。
 type yamlConfig struct {
 	Defaults            *yamlDefaults       `yaml:"defaults"`
 	Jails               map[string]yamlJail `yaml:"jails"`
@@ -117,6 +117,9 @@ type yamlWebui struct {
 	MaxWhitelistEntries *uint32 `yaml:"max_whitelist_entries"`
 	MaxRateEntries      *uint32 `yaml:"max_rate_entries"`
 	MaxLocalIPCache     *uint32 `yaml:"max_local_ip_cache"`
+	// clear_logs_at 是日志页的过滤起点（ISO 时间戳字符串，空串 = 不过滤）。它随 webui 段
+	// 落盘，因此热重载与重启都会保留——前端 Logs/Settings 页的「持久化」文案即以此为准。
+	ClearLogsAt *string `yaml:"clear_logs_at"`
 }
 
 // yamlCapacity 是容量配置的 YAML 表示。
@@ -498,6 +501,7 @@ func applyWebui(yc *yamlConfig, cfg *Config) {
 	setU32(&cfg.Webui.MaxWhitelistEntries, w.MaxWhitelistEntries)
 	setU32(&cfg.Webui.MaxRateEntries, w.MaxRateEntries)
 	setU32(&cfg.Webui.MaxLocalIPCache, w.MaxLocalIPCache)
+	setString(&cfg.Webui.ClearLogsAt, w.ClearLogsAt)
 }
 
 func applyCapacity(yc *yamlConfig, cfg *Config) {
@@ -588,7 +592,7 @@ func parseCoord(n *yaml.Node) (float64, bool, error) {
 // MaxProbeURLLen 是出口 IP 探测地址的长度上限。
 const MaxProbeURLLen = 2048
 
-// normalizeProbeURL 校验出口 IP 探测地址，语义与 Rust validate_probe_url 一致。
+// normalizeProbeURL 校验出口 IP 探测地址。
 //
 // 严格校验而非「非法就退回默认」：这是守护进程唯一会主动发出去的请求目标，静默改
 // 地址等于把用户意图换成了别的。空串表示未设置（走内置默认地址）。路径允许存在，
@@ -639,6 +643,12 @@ func setU32(dst *uint32, v *uint32) {
 }
 
 func setU64(dst *uint64, v *uint64) {
+	if v != nil {
+		*dst = *v
+	}
+}
+
+func setString(dst *string, v *string) {
 	if v != nil {
 		*dst = *v
 	}

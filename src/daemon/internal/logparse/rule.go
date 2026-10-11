@@ -114,7 +114,7 @@ func (rs *RuleSet) RuleNames() []string {
 
 // Parse 解析一行日志，返回来源 IP 与命中方式。
 //
-// 顺序与 Rust 版一致：先正则、后关键字回退；正则全部未命中（或压根没有正则）时才走
+// 顺序：先正则、后关键字回退；正则全部未命中（或压根没有正则）时才走
 // 回退，因此回退不是「兜底猜 IP」，而是受关键字白名单约束的窄路径。
 func (rs *RuleSet) Parse(line string) (netip.Addr, MatchVia, bool) {
 	if len(line) > MaxParseLineBytes {
@@ -139,7 +139,7 @@ func fallbackMatch(line string) bool {
 		strings.Contains(line, fallbackKeywordSecondary)
 }
 
-// 正则安全校验的阈值。与 Rust 版一致。
+// 正则安全校验的阈值。
 const (
 	maxRegexPatternBytes = 1024
 	maxAlternations      = 50
@@ -154,7 +154,7 @@ const (
 //  4. `(?+` / `(?*` / `(?{` 这类非法量词
 //  5. 模式超过 1024 字节 / 分支数超过 50
 //
-// 与 Rust 版一致按**字符**（而非字节）遍历与报告偏移。
+// 按**字符**（而非字节）遍历与报告偏移。
 func ValidateRegexSafety(jailName, pattern string) error {
 	if len(pattern) > maxRegexPatternBytes {
 		return fmt.Errorf(

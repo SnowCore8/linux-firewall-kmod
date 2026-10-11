@@ -62,7 +62,7 @@ func (c *Client) Router() *Router { return c.router }
 
 // allocSeq 分配一个非零请求序号。
 //
-// 取「自增前的值」，与 Rust 版一致：序号必须连续可预测，两侧计数才对得齐。
+// 取「自增前的值」：序号必须连续可预测，两侧计数才对得齐。
 // 跳过 0：u32 回绕时自增会产出 0，而 0 在契约里意味着「本条不参与配对」。
 func (c *Client) allocSeq() uint32 {
 	for {

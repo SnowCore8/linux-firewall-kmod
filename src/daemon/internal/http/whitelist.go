@@ -3,6 +3,11 @@
 // 契约给这条资源编的两个码各自覆盖一段操作：40003 = 添加失败，40004 = 移除失败。
 // 两者都是 400，区分只能靠 code，所以这里不出现「顺手写个 409/404」——那两个数字在
 // codes 段里没有对应条目，前端查不到语义。
+//
+// 两条契约都没给这两条路由编 50003（那是 GET /config、POST /bans/batch 一类才有的
+// 「依赖未就绪」码），所以**内核缺席不是错误**：与封禁面同一口径——镜像照改、下发跳过、
+// 记一条调试日志，操作按成功回。把「没有内核」报成 400 会让无模块的测试与开发环境里
+// 这一面完全不可用，而契约并没有要求那样区分。
 package http
 
 import (
@@ -12,6 +17,17 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/bans"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 )
+
+// KernelWhitelist 是白名单的内核下发出口（由组合根注入内核客户端的实现）。
+//
+// 形状与 KernelBan 对齐：地址 + 前缀长度 + 一个错误，`Delivered` 那层包装在组合根里剥掉
+// （它带的信息只有「发出去了没有」）。device 恒为空串——本实现的白名单是纯地址规则，
+// 内核侧 fw_addr_normalize 也只看前缀，但线格式里有这一列，接口就把它留在签名上，
+// 免得将来接按网卡放行时又要改一遍所有调用点。
+type KernelWhitelist interface {
+	Add(addr netip.Addr, prefixLen uint8, device string) error
+	Remove(addr netip.Addr, prefixLen uint8, device string) error
+}
 
 // ListWhitelist 返回白名单镜像（GET /api/v1/whitelist）。
 //
@@ -38,6 +54,11 @@ func whitelistEntries(cidrs []string) []WhitelistEntryResponse {
 }
 
 // AddWhitelist 收一个 CIDR 或裸 IP（裸 IP 按 /32 或 /128 落），成功回 201。
+//
+// 顺序是「先占镜像、再下发内核、下发失败把镜像撤回来」，与 CreateBan 完全同一形状：
+// 面板上不得出现一条内核里没有的白名单——那意味着运维以为这个网段已经被放行，而它继续
+// 被拦。反过来（先下发再占位）也行得通，但那样就得在成功路径上做两次归一化判定，
+// 而 Add 的「已在表中」这个返回值本身就是判据。
 func (h *APIHandlers) AddWhitelist(w http.ResponseWriter, r *http.Request) {
 	var req CreateWhitelistRequest
 	if !decodeJSON(w, r, &req) {
@@ -49,17 +70,31 @@ func (h *APIHandlers) AddWhitelist(w http.ResponseWriter, r *http.Request) {
 		WriteCode(w, httpcontract.Code40003, "添加白名单失败：CIDR 或 IP 非法 "+req.CIDR)
 		return
 	}
+	// 掩到前缀边界之后再往下走：镜像的键、下发的三元组与响应里回显的 cidr 必须是同一个
+	// 形状。内核按 af+addr+prefix_len 定位规则并在回显时给出归一化后的地址
+	// （kernel/consumer.go 的 prefixFromAddr 直接用它），带主机位发出去的那一条与回显
+	// 算出来的那一条不是同一个键——正是缺陷 HTTP_WHITELIST_KEY_DIVERGENCE 那一类病。
+	prefix = prefix.Masked()
 
 	if !bans.GlobalWhitelist().Add(prefix) {
 		WriteCode(w, httpcontract.Code40003, "添加白名单失败：该网段已在表中 "+prefix.String())
 		return
 	}
 
+	if h.kernelWhitelist != nil {
+		if err := h.kernelWhitelist.Add(prefix.Addr(), uint8(prefix.Bits()), ""); err != nil {
+			h.server.logger.Error("内核白名单下发失败", "cidr", prefix.String(), "error", err)
+			bans.GlobalWhitelist().Remove(prefix)
+			WriteCode(w, httpcontract.Code40003, "添加白名单失败：内核未确认（"+err.Error()+"）")
+			return
+		}
+	}
+
 	h.publishWhitelist()
 
 	// cidr 回**归一后**的键（与 GET 列表同源）：把用户输入的 "10.0.0.1/8" 原样吐回去，
 	// 调用方按它再删一次就会打不中表里那条 "10.0.0.0/8"。
-	WriteCreated(w, WhitelistOperationResponse{CIDR: prefix.Masked().String(), Action: "added"})
+	WriteCreated(w, WhitelistOperationResponse{CIDR: prefix.String(), Action: "added"})
 }
 
 // RemoveWhitelist 从白名单移除一个前缀（DELETE /api/v1/whitelist/{cidr}），失败回 40004。
@@ -71,15 +106,25 @@ func (h *APIHandlers) RemoveWhitelist(w http.ResponseWriter, r *http.Request) {
 		WriteCode(w, httpcontract.Code40004, "移除白名单失败：CIDR 非法 "+cidr)
 		return
 	}
+	prefix = normalizeWhitelistPrefix(prefix).Masked()
 
 	if !bans.GlobalWhitelist().Remove(prefix) {
 		WriteCode(w, httpcontract.Code40004, "移除白名单失败：该网段不在表中 "+cidr)
 		return
 	}
 
+	// 与添加路径相反，这里下发失败**不回滚**镜像：内核里那条规则最多活到下一条事件把
+	// 镜像对齐，而把「镜像已撤、面板显示不再放行」报成一次失败，会让运维重复点删除按钮
+	// 去追一个已经消失的条目。与 DeleteBan 同一口径。
+	if h.kernelWhitelist != nil {
+		if err := h.kernelWhitelist.Remove(prefix.Addr(), uint8(prefix.Bits()), ""); err != nil {
+			h.server.logger.Error("内核白名单移除下发失败", "cidr", prefix.String(), "error", err)
+		}
+	}
+
 	h.publishWhitelist()
 
-	WriteSuccess(w, WhitelistOperationResponse{CIDR: prefix.Masked().String(), Action: "removed"})
+	WriteSuccess(w, WhitelistOperationResponse{CIDR: prefix.String(), Action: "removed"})
 }
 
 // parseWhitelistTarget 把「CIDR 或裸 IP」两种写法折成一个前缀。
@@ -88,14 +133,29 @@ func (h *APIHandlers) RemoveWhitelist(w http.ResponseWriter, r *http.Request) {
 // 而 Add 的调用方不该关心这次输入是 v4 还是 v6。
 func parseWhitelistTarget(text string) (netip.Prefix, error) {
 	if prefix, err := netip.ParsePrefix(text); err == nil {
-		return prefix, nil
+		return normalizeWhitelistPrefix(prefix), nil
 	}
 	addr, err := netip.ParseAddr(text)
 	if err != nil {
 		return netip.Prefix{}, err
 	}
-	if addr.Is4() {
-		return netip.PrefixFrom(addr, 32), nil
+	if addr.Is4() || addr.Is4In6() {
+		return netip.PrefixFrom(addr.Unmap(), 32), nil
 	}
 	return netip.PrefixFrom(addr, 128), nil
+}
+
+// normalizeWhitelistPrefix 把 IPv4 映射前缀（::ffff:10.0.0.0/104 这类）折成 IPv4 本体。
+//
+// 不归一会有两份键：镜像里存 "::ffff:10.0.0.0/104"，而内核按 AF_INET 回显同一条规则时
+// 事件泵算出的是 "10.0.0.0/32"（kernel/consumer.go 的 prefixFromAddr 从线格式的
+// af+addr+prefix_len 重建）——同一条白名单在表里出现两次，删除只能打中其中一条。这与
+// 缺陷 HTTP_WHITELIST_KEY_DIVERGENCE 记的是同一类病，只是发生在写入侧而不是旧实现的
+// 三条读侧。前缀长度不足 96 的映射写法（::ffff:0:0/8）不是「一个 IPv4 前缀」，保持原样。
+func normalizeWhitelistPrefix(prefix netip.Prefix) netip.Prefix {
+	addr := prefix.Addr()
+	if addr.Is4In6() && prefix.Bits() >= 96 {
+		return netip.PrefixFrom(addr.Unmap(), prefix.Bits()-96)
+	}
+	return prefix
 }

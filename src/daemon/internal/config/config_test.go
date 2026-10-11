@@ -38,7 +38,7 @@ func readFile(t *testing.T, rel string) string {
 	return string(raw)
 }
 
-func TestDefaultMatchesRustDefaults(t *testing.T) {
+func TestDefaultConfigValues(t *testing.T) {
 	c := Default()
 	checks := []struct {
 		name string

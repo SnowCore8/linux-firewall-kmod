@@ -13,8 +13,8 @@ import (
 
 // jsonHandler 把每条记录编码为一行 JSON（含结尾换行）后单次写出。
 //
-// 字段顺序固定为 `ts` → `level` → `msg` → 处理器自带属性（`version`）→ 记录自身属性，与
-// Rust 版承诺的顺序一致。整行先在内存编好再一次性 Write，理由见包文档。
+// 字段顺序固定为 `ts` → `level` → `msg` → 处理器自带属性（`version`）→ 记录自身属性。
+// 整行先在内存编好再一次性 Write，理由见包文档。
 type jsonHandler struct {
 	w     io.Writer
 	level slog.Level
@@ -140,7 +140,7 @@ func appendJSONValue(buf *[]byte, v slog.Value) {
 	}
 }
 
-// appendAnyValue 编码任意值：error 取其消息（对应 Rust 用 Display 输出错误），其余交给
+// appendAnyValue 编码任意值：error 取其消息，其余交给
 // encoding/json，编码失败时退化为字符串——一行 JSON 不允许变成非法。
 func appendAnyValue(buf []byte, value any) []byte {
 	if err, ok := value.(error); ok {
@@ -163,8 +163,8 @@ func appendJSONString(buf []byte, s string) []byte {
 	return append(buf, encoded...)
 }
 
-// formatTimestamp 输出 RFC3339 UTC 时间，小数位按需保留（毫秒 / 微秒 / 纳秒），与 Rust 版
-// 的 SecondsFormat::AutoSi 一致，始终以 `Z` 结尾。
+// formatTimestamp 输出 RFC3339 UTC 时间，小数位按需保留（毫秒 / 微秒 / 纳秒），
+// 始终以 `Z` 结尾。
 func formatTimestamp(t time.Time) string {
 	utc := t.UTC()
 	base := utc.Format("2006-01-02T15:04:05")
@@ -184,7 +184,7 @@ func formatTimestamp(t time.Time) string {
 	return base + "." + frac + "Z"
 }
 
-// levelName 返回大写级别名。Rust 版用 slog 的短名（ERROR/WARN/INFO/DEBUG），此处同名。
+// levelName 返回大写级别名（ERROR/WARN/INFO/DEBUG）。
 func levelName(level slog.Level) string {
 	switch {
 	case level >= slog.LevelError:

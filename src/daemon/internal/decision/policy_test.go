@@ -146,9 +146,8 @@ func TestPlanBanNegativeBanTimeIsConfigLevelPermanent(t *testing.T) {
 // ban_time == 0 且首次：progressive == base == 0，非永久，过期时刻用 base.max(1) 兜底，
 // 避免「0 秒即过期」。
 //
-// duration 在此退化情形下同样为 0（与 Rust 版逐字段一致，见 decision/policy.rs 的
-// `duration: if is_permanent { 0 } else { progressive }`）。这里显式钉住它，避免后来者
-// 把它当作笔误「顺手修正」而与 Rust 版判定产生分歧。
+// duration 在此退化情形下同样为 0（草案字段对照：非永久时 `duration = progressive`）。
+// 这里显式钉住它，避免后来者把它当作笔误「顺手修正」而改变判定。
 func TestPlanBanZeroBanTimeFallsBackToOneSecond(t *testing.T) {
 	plan := PlanBan(0, 0, 500, 5)
 	if plan.IsPermanent {
@@ -161,6 +160,6 @@ func TestPlanBanZeroBanTimeFallsBackToOneSecond(t *testing.T) {
 		t.Errorf("ProgressiveDuration=%d, want 0", plan.ProgressiveDuration)
 	}
 	if plan.Duration != 0 {
-		t.Errorf("Duration=%d, want 0（与 Rust 版一致）", plan.Duration)
+		t.Errorf("Duration=%d, want 0", plan.Duration)
 	}
 }
