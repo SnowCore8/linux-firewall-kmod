@@ -173,6 +173,9 @@ func run(args []string) error {
 	var httpServer *http.Server
 	var sseBroker *http.SSEBroker
 	var metrics *http.Metrics
+	// api 要活在 if 之外：事件泵的域载荷镜像与执行体的 jails 变更通知都挂在它身上，
+	// 而这两处都在 HTTP 段之后装配。HTTPAddress 为空时它是 nil，两处注入都按缺席处理。
+	var api *http.APIHandlers
 	if cfg.HTTPAddress != "" {
 		var err error
 		httpServer, err = http.NewServer(http.Config{
@@ -197,7 +200,7 @@ func run(args []string) error {
 				configPath = cfg.ConfigDir
 			}
 
-			api := http.NewAPIHandlers(http.APIConfig{
+			api = http.NewAPIHandlers(http.APIConfig{
 				Server:    httpServer,
 				DB:        historyDB,
 				SSE:       sseBroker,
@@ -251,6 +254,13 @@ func run(args []string) error {
 		if sseBroker != nil {
 			pub = sseBroker
 		}
+		// 域载荷的形状出自表现层：泵只报「哪个域变了、它那张表里现在有什么」。
+		// api 缺席（未配 HTTP 监听）时没有可信的载荷生产者，Mirror 留 nil，泵按
+		// 「不发一份与 REST 不同形的帧」处理。
+		var mirror kernel.DomainMirror
+		if api != nil {
+			mirror = api.SSEReplicas()
+		}
 		var met kernel.Metrics
 		if metrics != nil {
 			met = kernelMetrics{m: metrics}
@@ -262,6 +272,7 @@ func run(args []string) error {
 			Router:    kernelRouter,
 			Ring:      telemetry.NewRing(0),
 			Publish:   pub,
+			Mirror:    mirror,
 			Metrics:   met,
 			Logger:    logger,
 			Timeout:   kernel.DefaultRequestTimeout,
@@ -302,6 +313,9 @@ func run(args []string) error {
 		Reloader:  runtime.NewFileReloader(cfg.ConfigFile, logger),
 		Enabled:   jailEnabled,
 		KernelCmd: kernelCmd,
+		// jail 配置快照换了形状 → SSE 的 jails 域跟着推一帧。变更时机只有属主知道，
+		// 所以这一声由执行体喊、由本组合根接到表现层（api 未装配时桥自己吞掉）。
+		JailSnapshot: jailSnapshotBridge{api: api},
 	}
 	executor, err := runtime.NewInboundExecutor(&cfg, signals, deps)
 	if err != nil {
@@ -597,6 +611,21 @@ func (s *statsSink) IncBansTriggered(jail string) {
 	s.bansTriggered.Add(1)
 	if s.metrics != nil {
 		s.metrics.Counter("firewall_bans_triggered_total").Add(1)
+	}
+}
+
+// jailSnapshotBridge 把执行体的「jail 配置快照变了」接到 SSE 的 jails 域推送。
+//
+// 为什么要一层壳：runtime 不得依赖表现层（http 反过来要读内核快照，那是循环依赖），
+// 它只提供一个 JailSnapshotListener 接口；而 api 可能没装配（未配 HTTP 监听地址），
+// nil *http.APIHandlers 直接满足接口会让每次回调都在方法里解引用 nil 字段 panic，
+// 所以缺席的判断放在这里。
+type jailSnapshotBridge struct{ api *http.APIHandlers }
+
+// OnJailSnapshotChanged 见 runtime.JailSnapshotListener。
+func (b jailSnapshotBridge) OnJailSnapshotChanged() {
+	if b.api != nil {
+		b.api.PublishJails()
 	}
 }
 

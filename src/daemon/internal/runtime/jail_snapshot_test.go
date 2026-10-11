@@ -90,3 +90,66 @@ func TestReloadPublishesJailSnapshot(t *testing.T) {
 		t.Errorf("管线里还有 %d 个 jail，期望 1", ex.pipeline.JailCount())
 	}
 }
+
+// countingJailListener 数「快照换了形状」被喊了几次。
+type countingJailListener struct{ calls int }
+
+func (l *countingJailListener) OnJailSnapshotChanged() { l.calls++ }
+
+// TestJailSnapshotNotifiesListener 核对 jails 域的变更触发：每次发布快照都喊一声。
+//
+// 这一声是 SSE 的 jails 域唯一的生产者。订阅者只能靠它知道快照换了——少了这一声，
+// SIGHUP 或内核侧改完配置后前端继续显示旧形状（契约缺陷 HTTP_SSE_JAILS_NO_PUBLISHER）。
+// 三个时刻各自都要喊：初始装配（HTTP 侧的开关写入点**不**喊，那时快照还没换）。
+func TestJailSnapshotNotifiesListener(t *testing.T) {
+	dir := tempLogDir(t)
+	defer os.RemoveAll(dir)
+	log := filepath.Join(dir, "auth.log")
+	if err := os.WriteFile(log, nil, 0o644); err != nil {
+		t.Fatalf("写日志文件失败: %v", err)
+	}
+
+	signals, err := NewSignalSource()
+	if err != nil {
+		t.Fatalf("创建信号源失败: %v", err)
+	}
+	listener := &countingJailListener{}
+	const jailName = "notify-sshd"
+	ex, err := NewInboundExecutor(configWithLog(t, log, jailName), signals, Deps{
+		JailSnapshot: listener,
+		Enabled:      newFakeEnabled(),
+	})
+	if err != nil {
+		t.Fatalf("入站执行体应能装配: %v", err)
+	}
+	defer ex.Close()
+
+	// 装配即喊：NewInboundExecutor 里 refreshJails 已经把第一份快照发出去了。
+	if listener.calls != 1 {
+		t.Fatalf("装配后通知次数 = %d，期望 1", listener.calls)
+	}
+
+	ex.refreshJails()
+	if listener.calls != 2 {
+		t.Fatalf("重载后通知次数 = %d，期望 2", listener.calls)
+	}
+
+	// 启用状态没变时不该空喊：syncJailEnabled 只在真变了才重建监视集合并发布。
+	ex.syncJailEnabled()
+	if listener.calls != 2 {
+		t.Fatalf("无变化的同步也通知了（次数 %d），期望仍为 2", listener.calls)
+	}
+
+	enabled, ok := ex.enabled.(*fakeEnabled)
+	if !ok {
+		t.Fatalf("注入的启用状态源类型不符: %T", ex.enabled)
+	}
+	enabled.SetEnabled(jailName, false)
+	ex.syncJailEnabled()
+	if listener.calls != 3 {
+		t.Fatalf("启用状态同步后通知次数 = %d，期望 3", listener.calls)
+	}
+	if got := config.GetActiveJails(); len(got) != 1 || got[0].Enabled {
+		t.Fatalf("通知之后快照仍是旧形状: %+v", got)
+	}
+}

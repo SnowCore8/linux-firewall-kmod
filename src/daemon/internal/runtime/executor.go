@@ -127,6 +127,18 @@ type JailEnabledSource interface {
 	SetEnabled(jail string, enabled bool)
 }
 
+// JailSnapshotListener 在 jail 配置快照换了形状之后收到通知。
+//
+// 执行体是 jail 配置的唯一属主：初始装配、热重载、回滚、内核侧配置指令、启用状态同步
+// 都会让它把新形状发布给读侧（config.SetActiveJails）。发布之后喊这一声是给 SSE 的
+// jails 域用的——配置属主才知道什么时候真的变了，表现层只能猜。
+//
+// 本层不认识表现层：实现由组合根提供，它把这一声接到 http.APIHandlers 的域推送上。
+// 同步调用，实现方必须非阻塞（SSE broker 的 Publish 是投队列、队满丢弃，正合此用）。
+type JailSnapshotListener interface {
+	OnJailSnapshotChanged()
+}
+
 // Deps 是执行体的外部依赖集合。nil 的可选依赖按「不动作」处理，便于测试按需注入。
 type Deps struct {
 	// Logger 是结构化日志器；nil 时静默。
@@ -143,6 +155,9 @@ type Deps struct {
 	Reloader ConfigReloader
 	// Enabled 是 Web UI 权威的启用状态源；nil 时跳过启用状态同步。
 	Enabled JailEnabledSource
+	// JailSnapshot 在 jail 配置快照发布后收到通知（组合根接到 SSE 的 jails 域推送）；
+	// nil 时只发布快照、不通知订阅方。
+	JailSnapshot JailSnapshotListener
 	// KernelCmd 是内核→执行体的反向指令流（见 directives.go）；nil 时不接收。
 	//
 	// 通道由组合根创建，生产方（事件泵）非阻塞投递，执行体每轮迭代开头排空。关闭该通道
@@ -209,12 +224,14 @@ type InboundExecutor struct {
 	// facts 是判定事实源。
 	facts DecisionFacts
 
-	// sink / stats / hooks / reloader / enabled 是注入的副作用汇聚点。
-	sink     BanSink
-	stats    StatsSink
-	hooks    MaintenanceHooks
-	reloader ConfigReloader
-	enabled  JailEnabledSource
+	// sink / stats / hooks / reloader / enabled 是注入的副作用汇聚点；
+	// jailSnapshot 是 jail 配置快照变化后的通知出口（SSE 的 jails 域）。
+	sink         BanSink
+	stats        StatsSink
+	hooks        MaintenanceHooks
+	reloader     ConfigReloader
+	enabled      JailEnabledSource
+	jailSnapshot JailSnapshotListener
 
 	// cmd 是反向指令流；生产方关闭后置为 nil（关闭的通道恒可读，留着会让每轮迭代空转）。
 	cmd <-chan Directive
@@ -262,6 +279,7 @@ func NewInboundExecutor(cfg *config.Config, signals *SignalSource, deps Deps) (*
 		hooks:        deps.Hooks,
 		reloader:     deps.Reloader,
 		enabled:      deps.Enabled,
+		jailSnapshot: deps.JailSnapshot,
 		cmd:          deps.KernelCmd,
 		rejected:     make(map[string]time.Time),
 		rejectionTTL: dispatchRejectionCooldown,
@@ -863,7 +881,7 @@ func (e *InboundExecutor) refreshJails() {
 	e.publishJailSnapshot()
 }
 
-// publishJailSnapshot 把当前生效的 jail 配置发布给表现层。
+// publishJailSnapshot 把当前生效的 jail 配置发布给表现层，并通知订阅方。
 //
 // 配置所有权在本执行体（组合根只留一个指向同一份 cfg 的闭包），而 /api/v1/jails、SSE 的
 // jails 事件、以及两个调参建议端点都读 config.GetActiveJails() 那一份快照。不在这里发布，
@@ -872,8 +890,15 @@ func (e *InboundExecutor) refreshJails() {
 //
 // 每个让配置形状或启用状态变了的时刻都要调用：初始装配、热重载/回滚、内核侧配置变更，
 // 以及下面的启用状态同步。
+//
+// 发布之后的那一声是给 SSE 的 jails 域：订阅者只有靠这一声才知道快照换了，否则
+// SIGHUP 或内核侧改完配置，界面继续显示旧形状（契约缺陷 HTTP_SSE_JAILS_NO_PUBLISHER）。
+// 载荷取的是刚发布的那份快照，与 GET /api/v1/jails 同一个折表函数。
 func (e *InboundExecutor) publishJailSnapshot() {
 	config.SetActiveJails(e.cfg.Jails)
+	if e.jailSnapshot != nil {
+		e.jailSnapshot.OnJailSnapshotChanged()
+	}
 }
 
 // runDueMaintenance 跑到期维护任务（驱动源是单调时钟定时器，事件洪泛不推迟维护）。

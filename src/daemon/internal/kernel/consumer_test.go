@@ -76,22 +76,67 @@ func (f *fakeSampler) ListBansAll(time.Duration) ([]contract.BanEntry, error) {
 	return f.bans, f.bansErr
 }
 
-// fakePublisher 记录推送过的域名序列。
+// fakePublisher 记录推送过的域名与载荷序列。
 type fakePublisher struct {
 	mu     sync.Mutex
 	domain []string
+	data   []any
 }
 
-func (p *fakePublisher) Publish(event string, _ any) {
+func (p *fakePublisher) Publish(event string, data any) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.domain = append(p.domain, event)
+	p.data = append(p.data, data)
 }
 
 func (p *fakePublisher) domains() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]string(nil), p.domain...)
+}
+
+// payload 返回第 n 帧（0 起）的载荷，越界时报 nil。
+func (p *fakePublisher) payload(i int) any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if i < 0 || i >= len(p.data) {
+		return nil
+	}
+	return p.data[i]
+}
+
+// fakeMirror 是 DomainMirror 的替身：给每个域一个可辨认的哨兵值，
+// 并记下 Bans/Whitelist 收到的表内容（载荷形状归表现层，本包只测「内容取自哪张表」）。
+type fakeMirror struct {
+	bansEntries  [][]bans.BanInfo
+	wlCIDRs      [][]string
+	bansCalls    int
+	whitelistCnt int
+	statsCalls   int
+	ratesCalls   int
+}
+
+func (m *fakeMirror) Bans(entries []bans.BanInfo) any {
+	m.bansCalls++
+	m.bansEntries = append(m.bansEntries, entries)
+	return "mirror:bans"
+}
+
+func (m *fakeMirror) Whitelist(cidrs []string) any {
+	m.whitelistCnt++
+	m.wlCIDRs = append(m.wlCIDRs, cidrs)
+	return "mirror:whitelist"
+}
+
+func (m *fakeMirror) Stats() any {
+	m.statsCalls++
+	return "mirror:stats"
+}
+
+func (m *fakeMirror) Rates() any {
+	m.ratesCalls++
+	return "mirror:rates"
 }
 
 // fakeMetrics 是 kernel.Metrics 的替身。
@@ -145,6 +190,7 @@ type pumpFixture struct {
 	pump    *EventPump
 	sampler *fakeSampler
 	pub     *fakePublisher
+	mirror  *fakeMirror
 	metrics *fakeMetrics
 	store   *telemetry.Store
 	cache   *bans.ActiveBanCache
@@ -159,6 +205,7 @@ func newPumpFixture(t *testing.T) *pumpFixture {
 	f := &pumpFixture{
 		sampler: newFakeSampler(),
 		pub:     &fakePublisher{},
+		mirror:  &fakeMirror{},
 		metrics: newFakeMetrics(),
 		store:   telemetry.NewStore(),
 		cache:   bans.NewActiveBanCache(),
@@ -176,6 +223,7 @@ func newPumpFixture(t *testing.T) *pumpFixture {
 		Cache:             f.cache,
 		Whitelist:         f.wl,
 		Publish:           f.pub,
+		Mirror:            f.mirror,
 		Metrics:           f.metrics,
 		Directives:        f.directives,
 		SampleEvery:       time.Hour,
@@ -479,6 +527,84 @@ func TestSamplePublishesOnlyChangedDomains(t *testing.T) {
 	f.pump.sample()
 	if got := len(f.pub.domains()); got != 3 {
 		t.Fatalf("统计变化后应再推一次: %v", f.pub.domains())
+	}
+}
+
+// TestPublishDomainTakesPayloadFromMirror 验证帧载荷出自 DomainMirror，
+// 而 bans/whitelist 交给镜像的是**本泵自己那张表**的内容（fixture 用的是私有实例，
+// 生产装配传的是进程级单例——两条路都只可能读到泵持有的那份）。
+//
+// 载荷形状归表现层：本包不能出现 StatsResponse 那一类结构体，否则 kernel 反过来依赖
+// internal/http 就成环。这里用哨兵字符串把「泵发的就是镜像返回值」这件事钉死。
+func TestPublishDomainTakesPayloadFromMirror(t *testing.T) {
+	f := newPumpFixture(t)
+
+	af, addr := wireAddr(t, "203.0.113.11")
+	f.pump.handle(Incoming{Ban: &contract.BanStateChange{
+		Action: contract.BanActionBan, AF: af, PrefixLen: 32, DurationSecs: 600,
+		Addr: addr, JailName: "sshd",
+	}})
+	if got := f.pub.payload(0); got != "mirror:bans" {
+		t.Fatalf("bans 帧载荷 = %#v，期望镜像给的那份", got)
+	}
+	entries := f.mirror.bansEntries[0]
+	if len(entries) != 1 || entries[0].IP != "203.0.113.11" {
+		t.Fatalf("交给镜像的封禁表内容不符: %+v", entries)
+	}
+
+	faf, faddr := wireAddr(t, "198.51.100.30")
+	f.pump.handle(Incoming{WL: &contract.WhitelistStateChange{
+		Action: contract.WhitelistActionAdd, AF: faf, PrefixLen: 24, Addr: faddr,
+	}})
+	if got := f.pub.payload(1); got != "mirror:whitelist" {
+		t.Fatalf("whitelist 帧载荷 = %#v，期望镜像给的那份", got)
+	}
+	if keys := f.mirror.wlCIDRs[0]; len(keys) != 1 || keys[0] != "198.51.100.0/24" {
+		t.Fatalf("交给镜像的白名单键 = %v", keys)
+	}
+
+	f.sampler.stats = contract.StatsResponse{CurrentBans: 3, TotalBans: 12}
+	f.sampler.rates = RateSnapshot{GlobalPPS: 100, GlobalBPS: 2000}
+	f.pump.sample()
+	if got := f.pub.domains(); len(got) != 4 {
+		t.Fatalf("采样后推送序列 = %v，期望再加 stats 与 rates", got)
+	}
+	if f.pub.payload(2) != "mirror:stats" || f.pub.payload(3) != "mirror:rates" {
+		t.Fatalf("stats/rates 帧载荷不是镜像给的那份: %#v %#v", f.pub.payload(2), f.pub.payload(3))
+	}
+}
+
+// TestPublishSkippedWithoutMirror 验证「没有可信载荷就不发帧」：
+// 只接了 Publisher 而没接 Mirror 的泵一条都不推，而不是退回内部形状。
+//
+// 这条判据的意义在于分叉：一帧 stats 带的是内核统计结构时，前端按 StatsResponse 解析
+// 得到的是另一套字段，页面上的读数取决于它是从 SSE 还是从 REST 拿的。
+func TestPublishSkippedWithoutMirror(t *testing.T) {
+	pub := &fakePublisher{}
+	cache := bans.NewActiveBanCache()
+	p, err := NewEventPump(PumpDeps{
+		Sampler:   newFakeSampler(),
+		Events:    make(chan Incoming, 1),
+		Store:     telemetry.NewStore(),
+		Cache:     cache,
+		Whitelist: bans.NewWhitelist(),
+		Publish:   pub,
+	})
+	if err != nil {
+		t.Fatalf("装配泵失败: %v", err)
+	}
+
+	af, addr := wireAddr(t, "203.0.113.12")
+	p.handle(Incoming{Ban: &contract.BanStateChange{
+		Action: contract.BanActionBan, AF: af, PrefixLen: 32, DurationSecs: 600,
+		Addr: addr, JailName: "sshd",
+	}})
+	if got := pub.domains(); len(got) != 0 {
+		t.Fatalf("没有域载荷镜像却推送了 %v", got)
+	}
+	// 镜像本身仍要落表：不推帧不等于不消费内核事件。
+	if _, ok := cache.Get("203.0.113.12"); !ok {
+		t.Fatal("封禁事件未写入镜像")
 	}
 }
 

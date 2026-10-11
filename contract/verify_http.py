@@ -109,6 +109,8 @@ STATIC_GO = os.path.join(HTTP_DIR, "static.go")
 BANS_GO = os.path.join(HTTP_DIR, "bans.go")
 MAIN_GO = os.path.join(DAEMON, "cmd", "firewall-daemon", "main.go")
 CONSUMER_GO = os.path.join(DAEMON, "internal", "kernel", "consumer.go")
+# jail 配置快照的属主：jails 域的变更触发从这里出发（见 HTTP_SSE_JAILS_NO_PUBLISHER）。
+EXECUTOR_GO = os.path.join(DAEMON, "internal", "runtime", "executor.go")
 CACHE_GO = os.path.join(DAEMON, "internal", "bans", "cache.go")
 # 复发率与阈值推荐的**产出点**：缺陷 HTTP_RECIDIVISM_RATE_UNIT / _ZERO_AMBIGUOUS 的
 # 现场就在这两个文件里（HTTP 侧的 recidivism_rate 与 recommended_value 都由它们算出）。
@@ -1880,17 +1882,31 @@ def check_defect_claims(contract: dict) -> list[str]:
                     else "sse-status 仍报 HTTP 服务器级单一 active/max（或两条流没有各自取数）",
                 )
         elif name == "HTTP_SSE_JAILS_NO_PUBLISHER":
-            # 现场 = 事件泵里没有 jails 这个域。泵用域名字面量发布（DomainBans /
-            # DomainWhitelist），所以「consumer.go 里没出现过 "jails"」就是没有生产者；
-            # 只看 Publish 调用点不行——域名是变量，任何域都扫不到字面量。
-            pump = read(CONSUMER_GO)
-            jails_domain = bool(re.search(r'"jails"|DomainJails', pump))
+            # 现场 = jails 域没有**变更触发**的生产者。发布点刻意不在事件泵里：jails 不
+            # 随采样变化，把域名塞回泵的域常量等于每个 tick 无脑重发同一份载荷（那是
+            # HTTP_SSE_RESERIALIZES_EVERY_DOMAIN 记过的病）。真正的形状是「快照属主在
+            # 换形状的那一刻喊一声」，所以判据两端都要看：
+            #   * 帧侧——Go 树里任意实现文件有 `.Publish("jails", …)` 这类字面发布点
+            #     （与 check_sse_events 同一套形式判据，不绑文件名）；
+            #   * 触发侧——执行体发布 jail 快照的函数里通知了监听器。
+            # 只看前一半会漏掉「有个每 tick 重发的假生产者」，只看后一半会漏掉通知了
+            # 但没人发帧。
+            executor = read(EXECUTOR_GO)
+            points = _sse_publish_points(go_tree_sources_by_file(), "jails")
+            triggered = (
+                "publishJailSnapshot" in executor and "OnJailSnapshotChanged" in executor
+            )
+            live = not points or not triggered
             verdict(
                 name,
-                not jails_domain,
-                "kernel/consumer.go 的发布域里没有 jails"
-                if not jails_domain
-                else "kernel/consumer.go 已出现 jails 域",
+                live,
+                f"jails 帧发布点 {', '.join(points[:2])}，执行体快照发布点通知监听器"
+                if not live
+                else (
+                    "Go 面没有 jails 域的字面发布点"
+                    if not points
+                    else "执行体发布 jail 快照时没有通知 SSE 生产者"
+                ),
             )
         elif name == "HTTP_TODAY_BANS_EQUALS_TOTAL":
             # 扫**代码**而不是整棵树原文：这条判据问的是「有没有自然日窗口的算法」，

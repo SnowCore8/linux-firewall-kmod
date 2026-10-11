@@ -19,6 +19,14 @@ import (
 //   - ban_count 是**当前活跃**封禁（内存镜像，与 stats 的 current_bans 同源），不是历史累计；
 //   - lines_parsed … bans_triggered 是本进程解析日志以来的累计计数，进程重启即归零。
 func (h *APIHandlers) ListJails(w http.ResponseWriter, r *http.Request) {
+	WriteSuccess(w, h.jailResponses())
+}
+
+// jailResponses 把 jail 配置快照折成 JailResponse 数组（按配置顺序，不排序）。
+//
+// REST 与 SSE 的 jails 域共用这一个函数：两条路读的是同一份快照，若各自拼一遍载荷，
+// 「刷新后开关弹回原位」就会以另一种形式回来——SSE 帧里的 enabled 与 REST 里的不一样。
+func (h *APIHandlers) jailResponses() []JailResponse {
 	jails := config.GetActiveJails()
 	active := bans.GlobalCache().CountByJail()
 	peak := decision.IsPeakHours(uint32(time.Now().UTC().Hour()))
@@ -48,5 +56,5 @@ func (h *APIHandlers) ListJails(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, resp)
 	}
-	WriteSuccess(w, out)
+	return out
 }

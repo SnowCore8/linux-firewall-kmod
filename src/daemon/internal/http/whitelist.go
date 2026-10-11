@@ -23,11 +23,18 @@ import (
 // 前缀），没有任何按网卡放行的概念，而契约把这一列的形状定成 String 而不是 Option——
 // 空串正是「未绑定」的读法，前端也按这个显示。
 func (h *APIHandlers) ListWhitelist(w http.ResponseWriter, r *http.Request) {
-	entries := make([]WhitelistEntryResponse, 0)
-	for _, cidr := range bans.GlobalWhitelist().List() {
+	WriteSuccess(w, whitelistEntries(bans.GlobalWhitelist().List()))
+}
+
+// whitelistEntries 把镜像里的键折成载荷条目。
+//
+// REST 与 SSE 的 whitelist 域共用它：两条路都给前端同一个数组形状，差别只在触发时机。
+func whitelistEntries(cidrs []string) []WhitelistEntryResponse {
+	entries := make([]WhitelistEntryResponse, 0, len(cidrs))
+	for _, cidr := range cidrs {
 		entries = append(entries, WhitelistEntryResponse{CIDR: cidr})
 	}
-	WriteSuccess(w, entries)
+	return entries
 }
 
 // AddWhitelist 收一个 CIDR 或裸 IP（裸 IP 按 /32 或 /128 落），成功回 201。

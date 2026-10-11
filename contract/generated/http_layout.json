@@ -76,7 +76,7 @@
     "请求 PaginationParams: 3 个字段",
     "响应 SseStreamStatus: 3 个字段",
     "响应 SseStatusResponse: 2 个字段",
-    "缺陷记录: 18 条（已修 12 / 有意保留 1 / 未修 5；由 verify_http.py 核对语义）"
+    "缺陷记录: 18 条（已修 13 / 有意保留 1 / 未修 4；由 verify_http.py 核对语义）"
   ],
   "envelope": {
     "name": "ApiResponse",
@@ -359,7 +359,7 @@
         "rates"
       ],
       "keepalive_secs": 15,
-      "note": "超过 10 连接返回 503。keep-alive 事件文本为 \"keep-alive\"。"
+      "note": "超过 10 连接返回 503。keep-alive 事件文本为 \"keep-alive\"。五个域名帧（stats/bans/jails/whitelist/rates）的 data **必须与该域 REST 端点的载荷同源同形**：同一批 key、同一份权威源、同一套口径，前端把帧 data 直接按 REST 的类型解析，不写形状分支。同形不是「看起来差不多」——面板每个读数都写作 sseX ?? restX.data，帧与 REST 一旦不同形，同一个数字就取决于它是从哪条路读出来的（内核内部结构没有 json tag，原样转发出去是 Go 字段名，前端按契约 key 取值会整栏落空）。bans 帧是镜像全表、REST 是分页对象（前端按帧整表替换本地状态），两者比的是**条目形状**而不是外层信封。"
     },
     {
       "method": "GET",
@@ -526,7 +526,7 @@
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
-      "note": "请求体 UpdateJailRequest；Jail 不存在 → 404（信封内 code=404，非 HTTP 404）"
+      "note": "请求体 UpdateJailRequest；Jail 不存在 → 404（信封内 code=404，非 HTTP 404）。成功载荷 {name, enabled, status: \"updated\"} 报的是这次写入的**期望状态**：写入点只改启用状态来源，执行体在下一个 poll 周期把它并进配置、重建监视集合并发布新的 jail 快照，GET /api/v1/jails 与 jails 域帧在那一刻之后才读到新值。这条写路径因此**不推 SSE 帧**——快照还没换形状时推一帧，发出的正是改动**前**的 jail 列表，而界面按 sseJails ?? restJails.data 取值，刚拨的开关会立刻弹回原位（见 defect HTTP_SSE_JAILS_NO_PUBLISHER 的接法）。"
     },
     {
       "method": "GET",
@@ -3142,11 +3142,11 @@
     {
       "name": "HTTP_SSE_JAILS_NO_PUBLISHER",
       "severity": "medium",
-      "status": "open",
-      "fix": "",
+      "status": "fixed",
+      "fix": "src/daemon/internal/http/publish.go:func (h *APIHandlers) PublishJails",
       "reason": "",
-      "resolution": "jails 域必须有真实生产者：写入点（jail 启用/禁用、内核 jail 配置变化）显式 Publish 该域，前端订阅侧因此能在变更后收到新帧，而不是只在整页刷新时重收首帧。",
-      "text": "契约把 jails 列为 /api/v1/events 的订阅域，但 Go 面没有任何 jails 发布者：src/daemon/internal/kernel/consumer.go 的发布域常量只有 DomainBans、DomainWhitelist、DomainStats、DomainRates，采样周期变化的也只有 stats/rates 一类数值域。前端订阅 jails 后取值写作 sseJails ?? restJails.data，SSE 一旦有过首帧，REST 那份永远取不到，于是写后的 reload() 与页内刷新按钮全是死代码——改 Jail 开关后界面弹「已启用」，开关却弹回原位，只有整页刷新（重连 SSE、重收首帧）才看得到新值。旧实现靠每个 tick 无条件重发全部 5 个域掩盖了「jails 没有真实变更触发」，按域推送把掩盖拿掉后缺失的生产者就暴露成用户可见的不更新。REST 侧的数据源这一半已就位（执行体在装配、热重载、回滚、内核指令与启用状态同步时发布 jail 配置快照，见 GET /api/v1/jails 的注释），本缺陷未闭合的仍是**变更触发上的 SSE 生产者**：快照更新了，订阅者收不到"
+      "resolution": "jails 域的生产者接在**快照真正换形状的那一刻**：入站执行体发布 jail 配置快照后经 runtime.JailSnapshotListener 同步通知组合根，由 HTTP 侧 Publish 域名 jails，载荷与该域 REST 由同一个折表函数产出。各写入点（jail 启用/禁用、热重载、回滚、内核配置指令）不再各自推帧——只在快照属主那里推一次，订阅者收到的必然是生效后的形状。",
+      "text": "契约把 jails 列为 /api/v1/events 的订阅域，但 Go 面曾没有任何 jails 发布者：src/daemon/internal/kernel/consumer.go 的发布域常量只有 DomainBans、DomainWhitelist、DomainStats、DomainRates，采样周期变化的也只有 stats/rates 一类数值域。前端订阅 jails 后取值写作 sseJails ?? restJails.data，SSE 一旦有过首帧，REST 那份永远取不到，于是写后的 reload() 与页内刷新按钮全是死代码——改 Jail 开关后界面弹「已启用」，开关却弹回原位，只有整页刷新（重连 SSE、重收首帧）才看得到新值。旧实现靠每个 tick 无条件重发全部 5 个域掩盖了「jails 没有真实变更触发」，按域推送把掩盖拿掉后缺失的生产者就暴露成用户可见的不更新。REST 侧的数据源这一半先就位（执行体在装配、热重载、回滚、内核指令与启用状态同步时发布 jail 配置快照，见 GET /api/v1/jails 的注释），本缺陷闭合的是剩下那一半：**变更触发上的 SSE 生产者**。接法不是把 jails 塞回泵的域常量（jails 不随采样变化，塞回去等于每个 tick 无脑重发同一份载荷，正是 HTTP_SSE_RESERIALIZES_EVERY_DOMAIN 记过的病），而是让快照的属主在发布的那一刻喊一声：runtime.InboundExecutor.publishJailSnapshot → JailSnapshotListener.OnJailSnapshotChanged → 组合根的桥 → http.APIHandlers.PublishJails → SSEBroker 的逐字面量帧。监听器接口定义在 runtime 侧、由组合根接线，执行体不依赖 HTTP 包；帧载荷出自 http/sse_payload.go，与 GET /api/v1/jails 同形同值。机械探针的判据随之从「consumer.go 里有没有 jails 这个域」改成「jails 有没有字面发布点，且执行体的快照发布点会不会通知它」——前一句在按域推送的设计下永远是假的，后两句才是这个缺陷真正要的因果"
     },
     {
       "name": "HTTP_WHITELIST_KEY_DIVERGENCE",

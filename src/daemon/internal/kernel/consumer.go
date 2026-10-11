@@ -49,11 +49,12 @@ const (
 	DefaultRequestTimeout = 2 * time.Second
 )
 
-// SSE 域名取值，与契约 /api/v1/events 声明的事件名一致。
+// SSE 域名取值，与契约 /api/v1/events 的订阅域一致。
 //
-// 这里刻意没有 jails：契约把 jails 列为订阅域，但本泵没有任何写入点会改 jail 状态
-// （启用/禁用走 HTTP 的 JailController，配置变更走反向指令），凭空加一个域名只会造出
-// 一个永远不变的空域。缺陷 HTTP_SSE_JAILS_NO_PUBLISHER 因此保持 open。
+// 这里刻意没有 jails：jail 配置的所有权在入站执行体，本泵只是内核指令的搬运工
+// （CONFIG_CHANGE 经 directives 队列交给执行体落地），它既不知道新形状也不拥有那张表，
+// 凭空加一个域名只会造出一个由错误的一方触发的空域。jails 的变更触发点在
+// runtime.InboundExecutor 的快照发布（见 JailSnapshotListener），载荷与 REST 同形。
 const (
 	// DomainBans 是封禁表变更通知。
 	DomainBans = "bans"
@@ -82,6 +83,28 @@ type Sampler interface {
 // 接口留在这里而不是直接依赖 http 包：kernel 层不得反向依赖表现层。
 type Publisher interface {
 	Publish(event string, data any)
+}
+
+// DomainMirror 把一次域变更落成该域的帧载荷，由 internal/http 的 SSEReplicas 实现。
+//
+// 为什么泵自己不定形状：载荷的结构体都住在表现层（StatsResponse、RateResponse、
+// BanResponse、WhitelistEntryResponse），kernel 反过来依赖 http 就是循环依赖——http 要读
+// 本包的观测快照。此前泵直接把内部形状发出去（stats 帧带的是内核统计结构、rates 帧带的
+// 是快照条目），前端按 REST 的类型解析这些帧，同一页上 SSE 与 REST 的读数因此悄悄分叉。
+// 现在泵只交出**变更时机**与**它自己拥有的镜像内容**（bans/whitelist 那两份表可能来自
+// PumpDeps 注入的私有实例，所以按参数传），stats/rates 由镜像方从同一份 telemetry.Store
+// 快照里现取——泵在 SetStats/SetRates 之后才发布，取到的就是这一轮的值。
+//
+// 返回值是 any：那些类型本层不认识，也不该认识。
+type DomainMirror interface {
+	// Bans 把封禁镜像整表折成 bans 域载荷。
+	Bans(entries []bans.BanInfo) any
+	// Whitelist 把白名单镜像的键折成 whitelist 域载荷。
+	Whitelist(cidrs []string) any
+	// Stats 从内核快照装配 stats 域载荷。
+	Stats() any
+	// Rates 从内核快照装配 rates 域载荷。
+	Rates() any
 }
 
 // CounterHandle 是一个可累加的计数器句柄（*atomic.Int64 即满足）。
@@ -118,8 +141,11 @@ type PumpDeps struct {
 	Cache     *bans.ActiveBanCache
 	Whitelist *bans.Whitelist
 	Publish   Publisher
-	Metrics   Metrics
-	Logger    *slog.Logger
+	// Mirror 把域变更折成帧载荷；nil 时**不推送**（载荷形状没有生产者，宁可不发也不发
+	// 一份与 REST 不同形的帧）。组合根把它接到 http.SSEReplicas。
+	Mirror  DomainMirror
+	Metrics Metrics
+	Logger  *slog.Logger
 
 	// Directives 是内核→入站执行体的反向指令队列（非阻塞投递，见 runtime.Directive）。
 	// nil 时 CONFIG_CHANGE 与封禁下发被拒只记日志，执行体不会收到。
@@ -143,6 +169,7 @@ type EventPump struct {
 	cache      *bans.ActiveBanCache
 	whitelist  *bans.Whitelist
 	publish    Publisher
+	mirror     DomainMirror
 	metrics    Metrics
 	logger     *slog.Logger
 	directives chan<- runtime.Directive
@@ -197,6 +224,7 @@ func NewEventPump(deps PumpDeps) (*EventPump, error) {
 		cache:          cache,
 		whitelist:      wl,
 		publish:        deps.Publish,
+		mirror:         deps.Mirror,
 		metrics:        deps.Metrics,
 		logger:         logger,
 		directives:     deps.Directives,
@@ -604,27 +632,36 @@ func (p *EventPump) reconcile() {
 
 // publishDomain 推送一条域通知。
 //
-// 每个域的载荷来自**它自己**的数据源：stats 读快照的统计、rates 读快照的速率表、bans 读
-// 封禁镜像、whitelist 读白名单镜像。此前 default 分支把 bans 的镜像发给所有未知的域，于是
+// 每个域的载荷来自**它自己**的数据源：bans 读本泵的封禁镜像、whitelist 读本泵的白名单
+// 镜像、stats 与 rates 读同一份 telemetry 快照（本函数总在 SetStats/SetRates 之后调用，
+// 镜像方取到的就是这一轮的值）。此前 default 分支把 bans 的镜像发给所有未知的域，于是
 // `/api/v1/events` 的 stats 与 rates 两帧带的是封禁列表——前端按 StatsResponse 解析，
 // 得到的是形状完全不同的对象，仪表盘上的读数与 REST 悄悄分叉。
 //
+// 载荷的**形状**由 DomainMirror 定（表现层），本函数只定**内容来自哪张表**：把内核内部
+// 结构直接发出去等于让 SSE 成为一种独立的数据契约，REST 的字段改名不会同步到它。
+//
 // 域名在发布点是**逐字面量**：契约声明的每个事件名都要在 Go 侧有一个字面发布点
 // （verify_http.py 按 `.Publish("<域名>", …)` 找），把名字塞进变量等于宣布它没有生产者。
-// 载荷与同域 REST 同源，形状收敛（内核字段名 → 契约 JSON key）归 HTTP 层，见计划 P5。
 func (p *EventPump) publishDomain(domain, why string) {
 	if p.publish == nil {
 		return
 	}
+	if p.mirror == nil {
+		// 没有镜像就没有可信的载荷：宁可这一帧不发（前端退回 REST 读数），
+		// 也不发一份与同域 REST 不同形的帧。
+		p.logger.Debug("域载荷镜像未接线，跳过推送", "domain", domain, "reason", why)
+		return
+	}
 	switch domain {
 	case DomainBans:
-		p.publish.Publish("bans", p.cache.All())
+		p.publish.Publish("bans", p.mirror.Bans(p.cache.All()))
 	case DomainWhitelist:
-		p.publish.Publish("whitelist", p.whitelist.List())
+		p.publish.Publish("whitelist", p.mirror.Whitelist(p.whitelist.List()))
 	case DomainStats:
-		p.publish.Publish("stats", p.store.Snapshot().Stats)
+		p.publish.Publish("stats", p.mirror.Stats())
 	case DomainRates:
-		p.publish.Publish("rates", p.store.Snapshot().Rates.Entries)
+		p.publish.Publish("rates", p.mirror.Rates())
 	default:
 		p.logger.Debug("未知域，不推送", "domain", domain, "reason", why)
 		return
