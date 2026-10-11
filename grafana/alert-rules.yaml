@@ -1,47 +1,40 @@
 groups:
   - name: firewall-daemon-alerts
+    # 本文件里的指标名与本进程 /metrics 的实际产出逐字对齐（见 docs/zh/operations/monitoring.md）。
     rules:
       - alert: HighBanRate
-        expr: rate(firewall_daemon_ips_banned_total[5m]) > 10
+        expr: rate(firewall_bans_triggered_total[5m]) > 10
         for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "High ban rate detected"
-          description: "Firewall daemon is banning more than 10 IPs per second for 2 minutes"
+          summary: "封禁速率过高"
+          description: "守护进程持续以超过 10 次/秒的速率下发封禁"
 
-      - alert: HighFailedAttemptRate
-        expr: rate(firewall_daemon_failed_attempts_total[5m]) > 100
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High failed attempt rate detected"
-          description: "Firewall daemon is detecting more than 100 failed attempts per second for 2 minutes"
-
-      - alert: DaemonDown
-        expr: up{job="firewall-daemon"} == 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Firewall daemon is down"
-          description: "Firewall daemon has been down for more than 1 minute"
-
-      - alert: HighActiveBans
-        expr: firewall_active_ban_count > 10000
+      - alert: KernelRejectingCommands
+        expr: rate(firewall_kernel_commands_rejected_total[5m]) > 0
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "High number of active bans"
-          description: "More than 10,000 IPs are currently banned"
+          summary: "内核在拒绝指令"
+          description: "内核持续拒绝本进程下发的指令，下发链路或配置有问题"
 
-      - alert: JailSpecificHighBanRate
-        expr: rate(firewall_jail_bans_triggered_total[5m]) > 5
-        for: 2m
+      - alert: NetlinkSendErrors
+        expr: rate(firewall_netlink_send_errors_total[5m]) > 0
+        for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "High ban rate in jail {{ $labels.jail }}"
-          description: "Jail {{ $labels.jail }} is triggering more than 5 bans per second"
+          summary: "netlink 发送失败"
+          description: "与内核的 netlink 链路持续出现发送失败"
+
+      - alert: DaemonDown
+        # 进程不在时 /metrics 抓取失败，用 up 判定（job 名与 prometheus.yml 的 job_name 一致）。
+        expr: up{job="firewall"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "firewall-daemon 未运行"
+          description: "守护进程已停止超过 1 分钟"
