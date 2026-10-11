@@ -107,13 +107,6 @@ func (h *RateHistory) Samples(n int) []RateSample {
 	return out
 }
 
-// Len 返回环内当前可回溯的条数。
-func (h *RateHistory) Len() int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.count
-}
-
 // rateSampleFrom 由一次速率采样构造采样点。
 //
 // 单独成函数是为了让「协议维度求和」这件事只有一处：SetRates 之外没有第二个写入者，

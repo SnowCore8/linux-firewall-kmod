@@ -110,12 +110,3 @@ func (w *Whitelist) List() []string {
 	}
 	return result
 }
-
-// Stats 返回镜像统计信息。
-func (w *Whitelist) Stats() map[string]any {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	return map[string]any{
-		"count": len(w.entries),
-	}
-}

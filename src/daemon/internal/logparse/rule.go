@@ -35,7 +35,6 @@ const (
 // Rule 是一条命名正则规则，编译成功后不可变。
 type Rule struct {
 	name     string
-	pattern  string
 	compiled *regexp.Regexp
 }
 
@@ -45,14 +44,8 @@ func NewRule(name, pattern string) (*Rule, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Rule{name: name, pattern: pattern, compiled: re}, nil
+	return &Rule{name: name, compiled: re}, nil
 }
-
-// Name 返回规则名（诊断与配置回显用）。
-func (r *Rule) Name() string { return r.name }
-
-// Pattern 返回正则源码。
-func (r *Rule) Pattern() string { return r.pattern }
 
 // tryMatch 用本规则尝试解析一行；命中返回 IP。
 //

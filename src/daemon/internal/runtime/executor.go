@@ -320,12 +320,6 @@ func NewInboundExecutor(cfg *config.Config, signals *SignalSource, deps Deps) (*
 	return e, nil
 }
 
-// Config 返回当前生效的配置（组合根读 HTTP 端口、Web UI、jail 列表等装配参数）。
-//
-// 配置所有权在执行体，是因为只有本执行体改配置（自动重载 / 回滚 / 启用状态同步）；组合根
-// 若留一份副本，重载后就会与本执行体分叉。
-func (e *InboundExecutor) Config() *config.Config { return e.cfg }
-
 // Close 释放 inotify fd 与信号桥。
 func (e *InboundExecutor) Close() {
 	_ = e.watcher.Close()

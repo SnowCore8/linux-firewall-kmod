@@ -65,12 +65,6 @@ func (s *fakeStats) rotationCount() uint64 {
 	return s.rotations
 }
 
-func (s *fakeStats) reloadCount() uint64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.reloads
-}
-
 // fakeEnabled 是 Web UI 权威启用状态的可变替身。
 type fakeEnabled struct {
 	mu     sync.Mutex
