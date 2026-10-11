@@ -2,9 +2,9 @@
 
 本套件不再依赖外部已起的 daemon：自行用一份指向 tmp 目录 jail 的配置起进程，
 以 `-c` 顶掉硬编码的 /etc 路径，端口取空闲端口避免与真实 daemon 抢 9119。
-判定依据是 daemon 自身的 Prometheus 计数 `firewall_daemon_log_rotations_total`
-（`log_rotation.rs` 在识别到轮转时自增），而不是「文件确实被改名了」这类只验证
-测试脚手架的断言。
+判定依据是 daemon 自身的 Prometheus 计数 `firewall_log_rotations_total`
+（`internal/runtime/executor.go` 的 IncLogRotations 在识别到轮转时自增），而不是
+「文件确实被改名了」这类只验证测试脚手架的断言。
 
 形态要求：本套件自起 daemon，需在 **daemon-down** 形态下运行——内核单守护进程
 租约使得有外部 daemon 时自起会被拒（此时跳过）。
@@ -29,10 +29,10 @@ from .conftest import (
     wait_for_metric,
 )
 
-# 轮转计数由 `log_rotation.rs::handle_log_rotation` 自增；行解析数由
-# `line_processor.rs` 自增，用来确认「daemon 确实读到了新内容」。
-_LOG_ROTATIONS = "firewall_daemon_log_rotations_total"
-_LINES_PARSED = "firewall_daemon_lines_parsed_total"
+# 轮转计数由 `internal/runtime/executor.go` 的 IncLogRotations 自增；行解析数由
+# `internal/runtime/pipeline.go` 自增，用来确认「daemon 确实读到了新内容」。
+_LOG_ROTATIONS = "firewall_log_rotations_total"
+_LINES_PARSED = "firewall_lines_parsed_total"
 
 
 def _log_lines(count: int, marker: str) -> str:

@@ -24,7 +24,8 @@ from .conftest import (
 )
 
 _NETLINK_SENT = "firewall_netlink_messages_sent_total"
-# 期望存在的 netlink 健康指标（daemon 侧 DAEMON_STATS，见 kernel/transport.rs）。
+# 期望存在的 netlink 健康指标（由 daemon 的 `kernel.Transport` 在收发热路径上自增，
+# 见 `src/daemon/internal/kernel/transport.go` 的 SetMetrics/Send/TryRecv）。
 _NETLINK_METRICS = [
     "firewall_netlink_messages_sent_total",
     "firewall_netlink_messages_received_total",

@@ -106,7 +106,7 @@ class TestDaemonLifecycle:
         time.sleep(2)
 
         if second.poll() is not None:
-            # 被拒绝的实例必须以非零码退出（daemonizer 的 flock 失败经 bail! 退出）
+            # 被拒绝的实例必须以非零码退出（启动期被拒时 run() 返回非 nil，main 以码 1 退出）
             assert second.returncode != 0, (
                 f"第二个实例以退出码 {second.returncode} 退出，未被拒绝"
             )

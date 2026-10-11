@@ -90,7 +90,7 @@ class TestDaemonLogparse:
     def test_nonexistent_log(self, tmp_path):
         """10.4 不存在日志文件处理
 
-        契约事实：jail/config_ops.rs::config_validate 只校验 log_files 非空，
+        契约事实：internal/jail/jail.go 的 Validate 只校验 log_files 非空，
         不校验文件是否存在（fail2ban 语义下缺失日志被容忍）。故断言守护进程不会
         立即退出——它继续运行，直到观察窗口到期后被优雅停掉。
         """

@@ -8,8 +8,8 @@
  * 凭据一起拒绝），所以用例**绝不能**先裸访问再补凭据。
  *
  * 采用的注入方式：`?access_token=<base64(user:pass)>`。这是产品本身支持的能力
- * （见 `frontend/src/api/auth.ts::initAccessToken`，`http_exporter/handler.rs::handle_redirect`
- * 还会把 query 原样带到 `/dashboard`），装载后从地址栏清除并写入 sessionStorage，
+ * （见 `frontend/src/api/auth.ts::initAccessToken`，`internal/http/routes.go` 的
+ * 根路由重定向还会把 query 原样带到 `/dashboard`），装载后从地址栏清除并写入 sessionStorage，
  * 后续 fetch 与 EventSource 都自动携带。相当于顺便验证了「书签直达」这条路径，
  * 而不是绕过产品逻辑去塞 storage。
  */

@@ -16,8 +16,8 @@ from .conftest import (
 )
 
 # 配置重载次数以 daemon 的 Prometheus 指标 `firewall_daemon_config_reloads_total`
-# 为权威读数（`src/daemon/config_reloader.rs` 在每次成功重载时自增）。日志行数不是
-# 可靠信号：租约/轮询告警按秒混入，会掩盖真实的重载。
+# 为权威读数（`src/daemon/internal/runtime/executor.go` 的 `reloadConfig` 在每次成功重载时
+# 自增）。日志行数不是可靠信号：租约/轮询告警按秒混入，会掩盖真实的重载。
 _RELOAD_METRIC = "firewall_daemon_config_reloads_total"
 
 

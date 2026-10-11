@@ -6,7 +6,7 @@
  *
  * 与其它规格的分工：本文件只回答「服务是不是活着」，不访问页面、不依赖凭据；
  * 路由覆盖在 `routes.spec.ts`，写操作回环在 `write-flow.spec.ts`。
- * `/health` 是**无认证**端点（见 http_exporter/handler.rs 的分层），
+ * `/health` 是**无认证**端点（见 internal/http/routes.go 的分层），
  * 未就绪时返回 503，因此「200」就是 netlink 链路与内核 procfs 同时就绪的判据。
  */
 

@@ -109,7 +109,7 @@ class TestMultiJail:
         metrics = get_prometheus_metrics(multi_jail_setup["metrics_port"])
         if not metrics:
             pytest.skip("Prometheus 端点不可达")
-        parsed = parse_metric(metrics, "firewall_daemon_lines_parsed_total")
+        parsed = parse_metric(metrics, "firewall_lines_parsed_total")
         assert parsed >= 30, (
             f"并发写入 30 行后守护进程解析计数不足 (parsed={parsed})"
         )
@@ -133,9 +133,9 @@ class TestMultiJail:
             if result.stdout:
                 # "or True" 使断言恒真；改为要求指标以真实样本行出现
                 assert any(
-                    line.startswith("firewall_daemon_lines_parsed_total ")
+                    line.startswith("firewall_lines_parsed_total ")
                     for line in result.stdout.splitlines()
-                ), "指标端点未暴露 firewall_daemon_lines_parsed_total 样本行"
+                ), "指标端点未暴露 firewall_lines_parsed_total 样本行"
             else:
                 pytest.skip(f"Prometheus 端点不可达 (端口 {metrics_port})")
         except (subprocess.TimeoutExpired, FileNotFoundError):

@@ -77,8 +77,8 @@ test.describe('全量 hash 路由', () => {
 
 test.describe('服务端页面路由', () => {
   test('/ -> /dashboard 重定向保留 query', async ({ request }) => {
-    // 服务端用 axum 的 Redirect::to，其状态码固定为 303 See Other
-    // （axum 未公开自定义状态码的构造器；303 对纯 GET 重定向与 302 行为一致）。
+    // 服务端用 Go 的 http.StatusSeeOther 写响应，状态码固定 303 See Other
+    // （303 明确表达「响应是另一个资源、原请求无副作用」；对纯 GET 重定向与 302 行为一致）。
     // 不带 query：303 到干净的 /dashboard
     const plain = await request.get('/', { maxRedirects: 0 })
     expect(plain.status()).toBe(303)
@@ -91,7 +91,7 @@ test.describe('服务端页面路由', () => {
   })
 
   test('每个页面路径都返回 SPA 外壳', async ({ request }) => {
-    // 服务端只认固定的页面路径（handler.rs），全部返回同一份不含数据的静态壳；
+    // 服务端只认固定的页面路径（internal/http/routes.go），全部返回同一份不含数据的静态壳；
     // hash 路由因此刷新与直达都安全（history 路由会 404）。
     for (const route of ROUTE_CASES) {
       const response = await request.get(route.hash)
