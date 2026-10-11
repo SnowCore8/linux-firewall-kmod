@@ -245,15 +245,10 @@ func emptySeries(labels []string) ChartData {
 	return chart(labels, make([]uint64, len(labels)))
 }
 
-// jailBanChart 按 jail 归集**活跃**封禁数（与 current_bans 同源：内存镜像）。
+// jailBanChart 按 jail 归集**活跃**封禁数（与 current_bans、JailResponse.ban_count 同源：
+// 内存镜像的 byJail 索引）。
 func jailBanChart() ChartData {
-	counts := map[string]uint64{}
-	if cache := bans.GlobalCache(); cache != nil {
-		for _, info := range cache.List() {
-			counts[info.JailName]++
-		}
-	}
-	return namedCountChart(counts)
+	return namedCountChart(bans.GlobalCache().CountByJail())
 }
 
 // jailFailureChart 按 jail 归集失败尝试计数（守护进程侧的每 jail 运行时读数）。

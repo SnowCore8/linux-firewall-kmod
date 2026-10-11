@@ -83,8 +83,10 @@ func TestRecordUnbanHistoryDoesNotCreateRow(t *testing.T) {
 func TestRecordBanHistoryKeepsLastUnbannedAt(t *testing.T) {
 	db := newTestDB(t)
 
-	if err := db.RecordBanHistory("203.0.113.8", false); err != nil {
+	if n, err := db.RecordBanHistory("203.0.113.8", false); err != nil {
 		t.Fatalf("记录封禁失败: %v", err)
+	} else if n != 1 {
+		t.Fatalf("首次封禁返回的序号应为 1，实际 %d", n)
 	}
 	if err := db.RecordUnbanHistory("203.0.113.8"); err != nil {
 		t.Fatalf("记录解封失败: %v", err)
@@ -97,8 +99,10 @@ func TestRecordBanHistoryKeepsLastUnbannedAt(t *testing.T) {
 		t.Fatalf("解封时间没有落库: %+v", before)
 	}
 
-	if err := db.RecordBanHistory("203.0.113.8", true); err != nil {
+	if n, err := db.RecordBanHistory("203.0.113.8", true); err != nil {
 		t.Fatalf("再次记录封禁失败: %v", err)
+	} else if n != 2 {
+		t.Fatalf("第二次封禁返回的序号应为 2，实际 %d", n)
 	}
 	after, err := db.GetBanHistory("203.0.113.8")
 	if err != nil {

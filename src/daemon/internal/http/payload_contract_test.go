@@ -231,10 +231,11 @@ func TestBanDetailProgressiveFields(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	const ip = "10.31.0.1"
-	if err := db.RecordBanHistory(ip, false); err != nil {
+	if _, err := db.RecordBanHistory(ip, false); err != nil {
 		t.Fatalf("记录封禁历史失败: %v", err)
 	}
-	if err := db.RecordBanEvent(ip, "sshd", 1, false); err != nil {
+	duration := int64(600)
+	if err := db.RecordBanEvent(ip, "sshd", 1, false, &duration); err != nil {
 		t.Fatalf("记录封禁事件失败: %v", err)
 	}
 	if err := db.SetIPReputation(ip, 60); err != nil {

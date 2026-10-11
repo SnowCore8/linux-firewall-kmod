@@ -372,7 +372,7 @@ export interface BanLevelEffectiveness {
   label: string
   total_ips: number
   recidivist_ips: number
-  /** 复发率，0.0-1.0 的比例值（与前一个模型的单位不同，勿混用） */
+  /** 复发率，**百分数 0-100**（与 RecidivismResponse.recidivism_rate 同一口径，不是 0-1 比例） */
   recidivism_rate: number
   permanent_bans: number
   verdict: string
@@ -382,7 +382,7 @@ export interface BanLevelEffectiveness {
 export interface BanEffectivenessResponse {
   levels: BanLevelEffectiveness[]
   total_unique_ips: number
-  /** 总体复发率，0.0-1.0 的比例值 */
+  /** 总体复发率，**百分数 0-100**（同上，不是 0-1 比例） */
   overall_recidivism_rate: number
   summary: string
 }
@@ -433,14 +433,14 @@ export interface ReputationEntryResponse {
 export interface ThresholdRecommendation {
   jail_name: string
   current_threshold: number
-  /** 0 = 无需调整 */
+  /** direction=maintain 时等于 current_threshold；「要不要改」看 direction，0 不是「无需调整」的哨兵值 */
   recommended_threshold: number
   /** "increase" / "decrease" / "maintain" */
   direction: string
   total_bans: number
   unique_ips: number
   recidivist_ips: number
-  /** 复发率（比例值） */
+  /** 复发率，**百分数 0-100**（与 RecidivismResponse 同口径，不是 0-1 比例） */
   recidivism_rate: number
   avg_bans_per_ip: number
   reason: string

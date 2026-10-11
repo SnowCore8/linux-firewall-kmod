@@ -101,6 +101,22 @@ type BanInfo struct {
 	BanCount uint32
 }
 
+// PlannedDuration 返回这次封禁**计划**的时长（秒），永久封禁或读数不自洽时返回 nil。
+//
+// 它是 ban_events.duration_secs 的唯一来源（时长直方图读这一列）。用 nil 而不是 0：
+// 0 在直方图里是「封了 0 秒」的一个真实桶，而永久封禁没有「时长」这个读数——把未知
+// 和一个合法的极小值写成同一个数，面板就会把「不知道」画成一根柱子。
+//
+// ExpiresAt <= BannedAt 也归入 nil：那是「过期时刻不晚于封禁时刻」的不自洽数据
+// （调用方构造 BanInfo 时的时序错误），按「没有时长」处理比按 0 秒处理更不容易被读成事实。
+func (b BanInfo) PlannedDuration() *int64 {
+	if b.IsPermanent || b.ExpiresAt <= b.BannedAt {
+		return nil
+	}
+	d := b.ExpiresAt - b.BannedAt
+	return &d
+}
+
 // IsExpired 判断封禁是否已过期（永久封禁永不过期）。
 func (b BanInfo) IsExpired(now int64) bool {
 	return !b.IsPermanent && b.ExpiresAt > 0 && now >= b.ExpiresAt

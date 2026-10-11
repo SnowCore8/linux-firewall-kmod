@@ -30,18 +30,17 @@ const (
 	testPass = "s3cret"
 )
 
-// notYetRegistered 是契约里尚未接线的路由（P5 的清单）。
+// notYetRegistered 是契约里尚未接线的路由。
 //
 // 列在这里而不是「测试时跳过没注册的」：注册了却没从本表删除同样失败，这张表因此
 // 不会悄悄变成过期清单。逐条对应 contract/http_gap_baseline.txt 的 route-missing。
 //
-// P5-b 已把内核快照那一组（stats 总览、rates/current、rates/windows、heatmap、协议分布
-// 与 Top-N、anomalies）接线并从本表删除；剩下的三条都需要历史库里的分析结果，属 P5-c。
-var notYetRegistered = map[string]bool{
-	httpcontract.RouteGetApiV1StatsBanEffectiveness:     true,
-	httpcontract.RouteGetApiV1StatsBanDurationHistogram: true,
-	httpcontract.RouteGetApiV1StatsAttackGeo:            true,
-}
+// P5-b 接线了内核快照那一组（stats 总览、rates/current、rates/windows、heatmap、协议分布
+// 与 Top-N、anomalies），P5-c 接线了历史库分析面剩下的三条（ban-effectiveness、
+// ban-duration-histogram、attack-geo）——本表因此清空，契约里每条路由都有真实数据的实现。
+// 保留这张表而不是删掉它：下次契约新增路由时，它是「新增即失败」的落点（新增的未接线
+// 路由会同时打缺 route-missing 基线与本表）。
+var notYetRegistered = map[string]bool{}
 
 // paramSamples 给路径参数槽填入合法的样例值。
 //

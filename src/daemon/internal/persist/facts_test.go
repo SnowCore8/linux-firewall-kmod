@@ -143,7 +143,7 @@ func TestExistingRowIsTheBaseline(t *testing.T) {
 func TestPriorBanCountAndNoteBan(t *testing.T) {
 	db := newTestDB(t)
 	ip := "203.0.113.14"
-	if err := db.RecordBanHistory(ip, false); err != nil {
+	if _, err := db.RecordBanHistory(ip, false); err != nil {
 		t.Fatalf("预置封禁历史失败: %v", err)
 	}
 	f := NewFacts(db, FactsOptions{})

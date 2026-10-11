@@ -12,17 +12,44 @@ type IPReputation struct {
 	LastUpdated int64  `json:"last_updated"`
 	LastFailure *int64 `json:"last_failure,omitempty"`
 	LastBan     *int64 `json:"last_ban,omitempty"`
+	// TotalFailures / TotalBans 是**本列开始记录以来**的累计次数（列是后加的，
+	// 迁移只补列不补史，老地址从 0 起算）。它们回答「这个地址累计闹过多少次」，
+	// 与 score（当前信誉）和 last_*（最近一次）是三个不同的问题。
+	TotalFailures int `json:"total_failures"`
+	TotalBans     int `json:"total_bans"`
+}
+
+// reputationColumns 与 scanReputation 成对：三条读路径共用同一列序。
+const reputationColumns = "ip, score, last_updated, last_failure, last_ban, total_failures, total_bans"
+
+func scanReputation(rows interface{ Scan(dest ...any) error }) (IPReputation, error) {
+	var (
+		rep                  IPReputation
+		lastFailure, lastBan sql.NullInt64
+	)
+	if err := rows.Scan(&rep.IP, &rep.Score, &rep.LastUpdated, &lastFailure, &lastBan, &rep.TotalFailures, &rep.TotalBans); err != nil {
+		return IPReputation{}, err
+	}
+	if lastFailure.Valid {
+		rep.LastFailure = &lastFailure.Int64
+	}
+	if lastBan.Valid {
+		rep.LastBan = &lastBan.Int64
+	}
+	return rep, nil
 }
 
 func (db *DB) GetIPReputation(ip string) (*IPReputation, error) {
-	var rep IPReputation
-	var lastFailure, lastBan sql.NullInt64
+	var (
+		rep                  IPReputation
+		lastFailure, lastBan sql.NullInt64
+	)
 	err := db.conn.QueryRow(
-		`SELECT ip, score, last_updated, last_failure, last_ban
+		`SELECT `+reputationColumns+`
 		 FROM ip_reputation
 		 WHERE ip = ?`,
 		ip,
-	).Scan(&rep.IP, &rep.Score, &rep.LastUpdated, &lastFailure, &lastBan)
+	).Scan(&rep.IP, &rep.Score, &rep.LastUpdated, &lastFailure, &lastBan, &rep.TotalFailures, &rep.TotalBans)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -55,12 +82,13 @@ func (db *DB) SetIPReputation(ip string, score int) error {
 func (db *DB) RecordFailure(ip string, penalty int) error {
 	now := time.Now().Unix()
 	_, err := db.conn.Exec(
-		`INSERT INTO ip_reputation (ip, score, last_updated, last_failure)
-		 VALUES (?, MAX(0, 100 - ?), ?, ?)
+		`INSERT INTO ip_reputation (ip, score, last_updated, last_failure, total_failures)
+		 VALUES (?, MAX(0, 100 - ?), ?, ?, 1)
 		 ON CONFLICT(ip) DO UPDATE SET 
 			score = MAX(0, score - ?),
 			last_updated = excluded.last_updated,
-			last_failure = excluded.last_failure`,
+			last_failure = excluded.last_failure,
+			total_failures = total_failures + 1`,
 		ip, penalty, now, now, penalty,
 	)
 	if err != nil {
@@ -72,12 +100,13 @@ func (db *DB) RecordFailure(ip string, penalty int) error {
 func (db *DB) RecordBan(ip string, penalty int) error {
 	now := time.Now().Unix()
 	_, err := db.conn.Exec(
-		`INSERT INTO ip_reputation (ip, score, last_updated, last_ban)
-		 VALUES (?, MAX(0, 100 - ?), ?, ?)
+		`INSERT INTO ip_reputation (ip, score, last_updated, last_ban, total_bans)
+		 VALUES (?, MAX(0, 100 - ?), ?, ?, 1)
 		 ON CONFLICT(ip) DO UPDATE SET 
 			score = MAX(0, score - ?),
 			last_updated = excluded.last_updated,
-			last_ban = excluded.last_ban`,
+			last_ban = excluded.last_ban,
+			total_bans = total_bans + 1`,
 		ip, penalty, now, now, penalty,
 	)
 	if err != nil {
@@ -109,7 +138,7 @@ func (db *DB) RecoverReputation(recoveryRate int, maxScore int) (int, error) {
 
 func (db *DB) GetAllReputations() ([]IPReputation, error) {
 	rows, err := db.conn.Query(
-		`SELECT ip, score, last_updated, last_failure, last_ban
+		`SELECT ` + reputationColumns + `
 		 FROM ip_reputation
 		 ORDER BY score ASC`,
 	)
@@ -120,16 +149,9 @@ func (db *DB) GetAllReputations() ([]IPReputation, error) {
 
 	var reps []IPReputation
 	for rows.Next() {
-		var rep IPReputation
-		var lastFailure, lastBan sql.NullInt64
-		if err := rows.Scan(&rep.IP, &rep.Score, &rep.LastUpdated, &lastFailure, &lastBan); err != nil {
+		rep, err := scanReputation(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan reputation: %w", err)
-		}
-		if lastFailure.Valid {
-			rep.LastFailure = &lastFailure.Int64
-		}
-		if lastBan.Valid {
-			rep.LastBan = &lastBan.Int64
 		}
 		reps = append(reps, rep)
 	}
@@ -144,10 +166,10 @@ func (db *DB) GetLowReputationIPs(threshold int, limit int) ([]IPReputation, err
 		limit = 20
 	}
 	rows, err := db.conn.Query(
-		`SELECT ip, score, last_updated, last_failure, last_ban
+		`SELECT `+reputationColumns+`
 		 FROM ip_reputation
 		 WHERE score < ?
-		 ORDER BY score ASC
+		 ORDER BY score ASC, ip ASC
 		 LIMIT ?`,
 		threshold, limit,
 	)
@@ -158,16 +180,9 @@ func (db *DB) GetLowReputationIPs(threshold int, limit int) ([]IPReputation, err
 
 	var reps []IPReputation
 	for rows.Next() {
-		var rep IPReputation
-		var lastFailure, lastBan sql.NullInt64
-		if err := rows.Scan(&rep.IP, &rep.Score, &rep.LastUpdated, &lastFailure, &lastBan); err != nil {
+		rep, err := scanReputation(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan reputation: %w", err)
-		}
-		if lastFailure.Valid {
-			rep.LastFailure = &lastFailure.Int64
-		}
-		if lastBan.Valid {
-			rep.LastBan = &lastBan.Int64
 		}
 		reps = append(reps, rep)
 	}

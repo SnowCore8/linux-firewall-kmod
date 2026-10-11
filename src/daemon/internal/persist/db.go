@@ -77,6 +77,7 @@ func (db *DB) migrate() error {
 			banned_at INTEGER NOT NULL,
 			ban_count INTEGER NOT NULL DEFAULT 1,
 			is_permanent INTEGER NOT NULL DEFAULT 0,
+			duration_secs INTEGER,
 			created_at INTEGER NOT NULL
 		);
 
@@ -90,7 +91,9 @@ func (db *DB) migrate() error {
 			score INTEGER NOT NULL DEFAULT 100,
 			last_updated INTEGER NOT NULL,
 			last_failure INTEGER,
-			last_ban INTEGER
+			last_ban INTEGER,
+			total_failures INTEGER NOT NULL DEFAULT 0,
+			total_bans INTEGER NOT NULL DEFAULT 0
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_ip_reputation_score ON ip_reputation(score);
@@ -114,8 +117,21 @@ func (db *DB) migrate() error {
 
 	// 已在现场的库由 CREATE TABLE IF NOT EXISTS 跳过，新加的列只能靠 ALTER 补上。
 	// 这里的表名与列名都是常量，不接调用方输入。
-	if err := db.ensureColumn("ban_history", "last_unbanned_at", "INTEGER NOT NULL DEFAULT 0"); err != nil {
-		return fmt.Errorf("migrate ban_history: %w", err)
+	//
+	// 迁移只补列、**不补史**，两列的缺省形状各自说明为什么：
+	//   - ban_events.duration_secs 用 NULL 而不是 0：旧行的计划时长已经无从追究，填 0 会被
+	//     时长直方图读成「封了 0 秒」那一桶，等于凭空造出一批读数；
+	//   - ip_reputation 的两个计数从 0 起算，语义是「本列开始记录以来的累计」，契约的
+	//     字段注释按这个口径写。
+	for _, col := range []struct{ table, name, definition string }{
+		{"ban_history", "last_unbanned_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"ban_events", "duration_secs", "INTEGER"},
+		{"ip_reputation", "total_failures", "INTEGER NOT NULL DEFAULT 0"},
+		{"ip_reputation", "total_bans", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := db.ensureColumn(col.table, col.name, col.definition); err != nil {
+			return fmt.Errorf("migrate %s.%s: %w", col.table, col.name, err)
+		}
 	}
 
 	db.logger.Info("database schema migrated", "path", db.path)

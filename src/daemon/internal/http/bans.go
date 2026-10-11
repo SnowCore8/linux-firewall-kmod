@@ -164,10 +164,15 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		if err := h.db.RecordBanHistory(req.IP, isPermanent); err != nil {
+		// 先写历史、再拿它返回的累计序号写事件：手工封禁没有判定层告诉这里「这是第几封」，
+		// 序号只能出自 ban_history。写死 1 会让重复手工封禁的地址在分级成效里永远停在
+		// 第 1 级，复发统计也认不出它。历史写失败时退化成 1（底账不能因为上一步失败就整条不记）。
+		historyCount, err := h.db.RecordBanHistory(req.IP, isPermanent)
+		if err != nil {
 			h.server.logger.Error("record ban history", "error", err)
+			historyCount = 1
 		}
-		if err := h.db.RecordBanEvent(req.IP, "api", 1, isPermanent); err != nil {
+		if err := h.db.RecordBanEvent(req.IP, "api", historyCount, isPermanent, info.PlannedDuration()); err != nil {
 			h.server.logger.Error("record ban event", "error", err)
 		}
 	}
@@ -343,8 +348,17 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 
 		successCount++
 		if h.db != nil {
-			if err := h.db.RecordBanHistory(ip, false); err != nil {
-				h.server.logger.Error("record ban history", "error", err)
+			// 批量封禁同样要进 ban_events：这一张表是分析面（复发率、周期攻击、时长直方图、
+			// 分级成效）唯一的底账。只写 ban_history 的话，从面板批量封的那批地址在分析里
+			// 等于没发生过——两个表各写一半是旧实现留下的裂缝。序号取 ban_history 加完之后的
+			// 累计值（同 CreateBan），写死 1 会把重复批量封禁读成「每次都只封了一次」。
+			historyCount, err := h.db.RecordBanHistory(ip, false)
+			if err != nil {
+				h.server.logger.Error("record ban history", "ip", ip, "error", err)
+				historyCount = 1
+			}
+			if err := h.db.RecordBanEvent(ip, "api", historyCount, false, info.PlannedDuration()); err != nil {
+				h.server.logger.Error("record ban event", "ip", ip, "error", err)
 			}
 		}
 	}

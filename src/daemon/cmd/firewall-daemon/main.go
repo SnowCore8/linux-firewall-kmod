@@ -477,10 +477,14 @@ func (s *banSink) TryInsert(info bans.BanInfo) bool {
 		return false
 	}
 	if s.db != nil {
-		if err := s.db.RecordBanEvent(info.IP, info.JailName, int(info.BanCount), info.IsPermanent); err != nil {
+		// 自动路径的等级取判定层的 info.BanCount（= 此前次数 + 1，渐进式时长就是按它算的），
+		// 底账里记同一个数，「这一级封多久」才对得上「这是第几封」。它与
+		// RecordBanHistory 返回的累计值是同一个数，这里不依赖后者是为了让写事件这一步
+		// 不被历史表的写入顺序牵着走。
+		if err := s.db.RecordBanEvent(info.IP, info.JailName, int(info.BanCount), info.IsPermanent, info.PlannedDuration()); err != nil {
 			s.logger.Error("record ban event", "error", err)
 		}
-		if err := s.db.RecordBanHistory(info.IP, info.IsPermanent); err != nil {
+		if _, err := s.db.RecordBanHistory(info.IP, info.IsPermanent); err != nil {
 			s.logger.Error("record ban history", "error", err)
 		}
 		if err := s.db.RecordBan(info.IP, persist.DefaultBanPenalty); err != nil {

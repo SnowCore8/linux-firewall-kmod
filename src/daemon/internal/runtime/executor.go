@@ -839,6 +839,9 @@ func (e *InboundExecutor) syncJailEnabled() {
 	}
 	if changed {
 		e.reconcileWatches()
+		// 快照存的是副本，原地改 Enabled 不会自己浮到读侧——这里显式把新形状推上去，
+		// 否则 /api/v1/jails 上的 enabled 会停在同步之前。
+		e.publishJailSnapshot()
 	}
 }
 
@@ -856,6 +859,21 @@ func (e *InboundExecutor) refreshJails() {
 	if removed := e.pipeline.RetainJails(keep); removed > 0 {
 		e.debug("已摘除配置中不再存在的 jail", "removed", removed)
 	}
+	// 把这一份 jail 配置推给表现层（见 publishJailSnapshot）。
+	e.publishJailSnapshot()
+}
+
+// publishJailSnapshot 把当前生效的 jail 配置发布给表现层。
+//
+// 配置所有权在本执行体（组合根只留一个指向同一份 cfg 的闭包），而 /api/v1/jails、SSE 的
+// jails 事件、以及两个调参建议端点都读 config.GetActiveJails() 那一份快照。不在这里发布，
+// 那三处就永远读到空表——面板上的 jail 页是空的、调参建议永远「无样本」，而两者看起来
+// 都像「暂时还没有数据」。
+//
+// 每个让配置形状或启用状态变了的时刻都要调用：初始装配、热重载/回滚、内核侧配置变更，
+// 以及下面的启用状态同步。
+func (e *InboundExecutor) publishJailSnapshot() {
+	config.SetActiveJails(e.cfg.Jails)
 }
 
 // runDueMaintenance 跑到期维护任务（驱动源是单调时钟定时器，事件洪泛不推迟维护）。

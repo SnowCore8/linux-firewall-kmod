@@ -23,7 +23,10 @@
 #   契约里就是 `required`/`none` 二选一的偏差，照报。
 # - `status` 是成功路径的 HTTP 状态码。
 # - `codes` 是**信封内的业务码**，不是 HTTP 状态码；声明了码就得有产出该码的
-#   失败分支，否则前端永远收不到它。
+#   失败分支，否则前端永远收不到它。反过来，**没有 `codes` 的路由不得向调用方报
+#   业务错误**：读不到数据时成功路径自己得成立——在 200 信封里给「空读数 + 一句
+#   说明原因的 summary」，而不是 500/503。前端对这类路由因此不需要错误分支，但
+#   必须能靠 summary 区分「没有数据」与「查不动」。
 # - 字段名一律写**线上 JSON 的 key**（不是 Go 结构体字段名，也不是序列化 tag
 #   的驼峰写法）。`type`、`method` 这类与语言关键字相撞的 key 在这里照写线上
 #   拼写，实现侧用 tag 映射。
@@ -242,9 +245,9 @@ defect HTTP_SSE_STATUS_INCOMPLETE {
 defect HTTP_RECIDIVISM_RATE_UNIT {
   severity = medium
   status = fixed
-  fix = "src/daemon/internal/analysis/recommendations.go:float64(stats.recidive) / float64(stats.total) * 100"
+  fix = "src/daemon/internal/analysis/recommendations.go:float64(recidivistIPs) / float64(uniqueIPs) * 100"
   resolution = "统一为百分数 0–100：Go 面两处 recidivism_rate 产出点（persist/ban_events.go 的 REST 取数、analysis/recommendations.go 的阈值推荐）同为 `* 100`。契约保留的前置要求：/api/v1/stats/ban-effectiveness 接回时其各 level 必须沿用同一百分数口径，前端对两处使用同一个格式化函数。"
-  text = "recidivism_rate 同名不同单位：旧 Rust 实现里 /api/v1/stats/recidivism 返回百分数（0–100）而 /api/v1/stats/ban-effectiveness 的各 level 返回比例（0–1），前端用同一个格式化函数渲染会差 100 倍。Go 重写后只剩两处产出点且都是百分数（src/daemon/internal/persist/ban_events.go 与 src/daemon/internal/analysis/recommendations.go），ban-effectiveness 尚未接线，因此现网上没有第二单位可比——缺陷按 Go 现状记为已修，但口径要求随 resolution 一并留在契约里"
+  text = "recidivism_rate 同名不同单位：旧 Rust 实现里 /api/v1/stats/recidivism 返回百分数（0–100）而 /api/v1/stats/ban-effectiveness 的各 level 返回比例（0–1），前端用同一个格式化函数渲染会差 100 倍。Go 重写后只剩两处产出点且都是百分数（src/daemon/internal/persist/ban_events.go 与 src/daemon/internal/analysis/recommendations.go），ban-effectiveness 当时尚未接线，因此现网上没有第二单位可比——缺陷按 Go 现状记为已修，但口径要求随 resolution 一并留在契约里。**现在前置要求也落实了**：ban-effectiveness 已接线（src/daemon/internal/http/analysis_payload.go 的 mapBanEffectiveness），各 level 与 overall 都是 `* 100` 的百分数，前端 types.ts 里那两处曾写「0.0-1.0 的比例值」的注释同步改成百分数口径（那一栏没有任何渲染分支读过它，写错只会在接回时把人带偏）"
 }
 
 defect HTTP_TODAY_BANS_EQUALS_TOTAL {
@@ -278,8 +281,17 @@ defect HTTP_UDP_PORT_TOTAL_IS_PACKED_COUNT {
 
 defect HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS {
   severity = low
-  resolution = "0 表示「无需调整」：维护分支改为返回 0（而非原阈值），前端据此显示「无需调整」；非 0 时始终是具体推荐阈值。"
-  text = "ThresholdRecommendation.recommended_threshold 的注释称『0=无需调整』（前端 frontend/src/api/types.ts 仍这么写），但 Go 面 src/daemon/internal/analysis/recommendations.go 的三个分支都不产生 0：decrease 分支把结果夹到 >= 1，increase 分支乘 1.5，maintain 分支直接 `recommended = current`。前端按注释判断『无需调整』会永远不成立"
+  status = fixed
+  fix = "src/daemon/internal/analysis/recommendations.go:recommended = current"
+  resolution = "「要不要调整」由 direction 一栏单独表达（枚举 increase / decrease / maintain，载荷里同时就有它，不需要另一个字段来重复说），recommended_threshold 在 maintain 时**等于 current_threshold**（一个可直接应用的数）。契约与前端都不再用 0 当「无需调整」的哨兵：这一栏的类型是 u32，0 在那里读起来就是一个真实阈值，把它当成「不用改」等于让读侧猜编码。"
+  text = "ThresholdRecommendation.recommended_threshold 的注释称『0=无需调整』（前端 frontend/src/api/types.ts 曾这么写），但 Go 面 src/daemon/internal/analysis/recommendations.go 的三个分支都不产生 0：decrease 分支把结果夹到 >= 1，increase 分支乘 1.5，maintain 分支直接 `recommended = current`。按注释判断『无需调整』的调用永远不成立。接线时核过消费方：前端没有任何一处按 0 分支渲染（Jails.tsx 读的是另一条载荷的 needs_adjustment），所以这里闭合的是**注释与算式的说法不合**而不是一个在跑的错判。现在载荷里 maintain 的条目给出与原值相同的推荐数、direction 说明不必改，契约的字段注释与 types.ts 同步改成这个口径。同一条路数还顺手补了两处只在这里可见的空转：analyzeJailTrends 在七天窗口无样本时按 ratio=0 报 falling（把「没有样本」读成「在下降」，现记 stable），jail_trends.predicted_attackers_24h 过去从来没有赋值点（恒 0），现在按截断前的全集统计"
+}
+
+defect HTTP_GEOIP_NOT_IMPLEMENTED {
+  severity = medium
+  status = open
+  resolution = "接一个 MaxMind 读库（mmdb）：把 ban_events 里出现过的地址逐条查库，按 (国家, 城市) 聚合成 GeoPoint（同段内 unique_ips/total_bans 计数、top_ip 取封禁次数最多者、last_banned_at 取最近一次），最多 200 个并按 total_bans 降序；geoip_enabled 改为「路径存在且可读」的实测结果而不是配置项的字符串非空；server_location_source 若要给 \"detected\"，必须由 geoip_detect_egress + geoip_egress_probe_url 那条探测路径真实产出并在配置有值时让位给 \"config\"。前端 Globe.tsx 的 EmptyState 分支因此才有真正的退出条件。"
+  text = "GET /api/v1/stats/attack-geo 已接线，但它**只能**报「没有地理读数」。配置项 geoip_db_path 与 geoip_detect_egress / geoip_egress_probe_url 在 src/daemon/internal/config/parser.go 里被解析并保存（applyGeoip），却没有任何消费方——仓库里没有 mmdb 读取实现，也没有 egress 探测。于是这一条恒定产出 geoip_enabled=false、points=[]、total_ips=0、located_ips=0，前端 frontend/src/views/Globe.tsx 的 `!data.geoip_enabled` 分支永远为真，整个页面停在 EmptyState：运维看不出这是「这台机器上没有地理库」还是「攻击全部来自无法定位的地址」，而全球攻击视图是面板上唯一回答「攻击从哪儿来」的一页。本机坐标三件套有真源（server_latitude/server_longitude，成对给出才生效），所以地图上的本机标记与 server_location_source=\"config\" 是可用的一半；\"detected\" 这个取值本实现不产出，也不拿猜测的经纬度冒充探测结果。这是**功能缺失**而不是数据缺失：路由、载荷与降级形状都已按契约就位，缺的是地址→坐标那一步"
 }
 
 defect HTTP_SERVICE_PROBE_NO_TOTAL {
@@ -334,7 +346,7 @@ defect HTTP_SSE_JAILS_NO_PUBLISHER {
   severity = medium
   status = open
   resolution = "jails 域必须有真实生产者：写入点（jail 启用/禁用、内核 jail 配置变化）显式 Publish 该域，前端订阅侧因此能在变更后收到新帧，而不是只在整页刷新时重收首帧。"
-  text = "契约把 jails 列为 /api/v1/events 的订阅域，但 Go 面没有任何 jails 发布者：src/daemon/internal/kernel/consumer.go 的发布域常量只有 DomainBans 与 DomainWhitelist，采样周期变化的也只有 stats/rates 一类数值域。前端订阅 jails 后取值写作 sseJails ?? restJails.data，SSE 一旦有过首帧，REST 那份永远取不到，于是写后的 reload() 与页内刷新按钮全是死代码——改 Jail 开关后界面弹「已启用」，开关却弹回原位，只有整页刷新（重连 SSE、重收首帧）才看得到新值。旧实现靠每个 tick 无条件重发全部 5 个域掩盖了「jails 没有真实变更触发」，按域推送把掩盖拿掉后缺失的生产者就暴露成用户可见的不更新"
+  text = "契约把 jails 列为 /api/v1/events 的订阅域，但 Go 面没有任何 jails 发布者：src/daemon/internal/kernel/consumer.go 的发布域常量只有 DomainBans、DomainWhitelist、DomainStats、DomainRates，采样周期变化的也只有 stats/rates 一类数值域。前端订阅 jails 后取值写作 sseJails ?? restJails.data，SSE 一旦有过首帧，REST 那份永远取不到，于是写后的 reload() 与页内刷新按钮全是死代码——改 Jail 开关后界面弹「已启用」，开关却弹回原位，只有整页刷新（重连 SSE、重收首帧）才看得到新值。旧实现靠每个 tick 无条件重发全部 5 个域掩盖了「jails 没有真实变更触发」，按域推送把掩盖拿掉后缺失的生产者就暴露成用户可见的不更新。REST 侧的数据源这一半已就位（执行体在装配、热重载、回滚、内核指令与启用状态同步时发布 jail 配置快照，见 GET /api/v1/jails 的注释），本缺陷未闭合的仍是**变更触发上的 SSE 生产者**：快照更新了，订阅者收不到"
 }
 
 defect HTTP_WHITELIST_KEY_DIVERGENCE {
@@ -546,7 +558,7 @@ route POST "/api/v1/bans" {
   status = 201
   alt_status = 200
   codes = 40001, 40007, 40008
-  note = "请求体 CreateBanRequest；成功 201 Created，载荷 BanOperationResponse"
+  note = "请求体 CreateBanRequest；成功 201 Created，载荷 BanOperationResponse。`duration` 三态：缺席与显式 0 都是**永久**，显式正数是时长（与 JailResponse.ban_time 的「负值=永久」是两套编码，别串用）。成功路径同时写 ban_events 底账（jail_name 固定 \"api\"）与 ban_history，任一步失败回 40001 并在 message 里说明是内核未确认、IP 非法还是内核返回错误——契约给这条路由只编了这一个失败码，区分靠 message 不靠新造数字。"
 }
 
 route DELETE "/api/v1/bans/:ip" {
@@ -581,7 +593,7 @@ route POST "/api/v1/bans/batch" {
   status = 201
   alt_status = 200
   codes = 40005, 40007, 40008
-  note = "请求体 BatchBanRequest（`{ips, duration, reason}`，单次 1..100 条）；空列表或超过 100 条 → 40005；成功 201 Created，载荷 BatchOperationResponse。duration 缺省按 3600 秒**有时长**封禁，不得升格为永久——见 defect HTTP_BATCH_BAN_BECOMES_PERMANENT（fixed）。"
+  note = "请求体 BatchBanRequest（`{ips, duration, reason}`，单次 1..100 条）；空列表或超过 100 条 → 40005；成功 201 Created，载荷 BatchOperationResponse。duration 缺省按 3600 秒**有时长**封禁，不得升格为永久——见 defect HTTP_BATCH_BAN_BECOMES_PERMANENT（fixed）。每条成功的封禁都同时落 ban_events 底账（jail_name 固定 \"api\"、ban_count 记 1）与 ban_history，因此批量路径的封禁也会出现在复发统计、分级成效与时长直方图里——过去只有自动封禁进底账，面板上的「被封几次」会漏掉手工封禁。"
 }
 
 # ---- 需认证：Jail -----------------------------------------------------------
@@ -591,7 +603,7 @@ route GET "/api/v1/jails" {
   handler = handle_api_jails
   returns = type
   status = 200
-  note = "载荷 JailResponse 数组"
+  note = "载荷 JailResponse 数组（按配置顺序，不排序）。这条路由**不编业务码**：jail 配置出自内存，历史库缺席不影响它，读侧不会收到 50002/50003。配置与启用状态读的是运行时发布的 jail 配置快照——属主是执行体，在装配、热重载、回滚、内核指令与启用状态同步时发布，改名或删除的 jail 随下一次发布从表里消失，读侧不会看到配置与快照各一半的形状。运行时计数（lines_parsed…bans_triggered）是本进程累计值，重启归零；ban_count 是当前活跃封禁数而非历史累计（见 JailResponse 的字段注释）"
 }
 
 route PUT "/api/v1/jails/:name" {
@@ -658,7 +670,7 @@ route GET "/api/v1/whitelist/recommendations" {
   returns = type
   status = 200
   codes = 50002, 50003
-  note = "载荷 WhitelistRecommendation 数组"
+  note = "载荷 WhitelistRecommendation 数组（**数组本身**，不另包 {recommendations,total,min_bans} 信封：条数由 limit 决定、阈值由 min_bans 决定，读侧不需要服务端再报一遍）。查询参数 min_bans（最小封禁次数阈值，默认 5）、limit（条数上限，默认 20、最大 100）；无推荐时载荷是 []，不是 null"
 }
 
 # ---- 需认证：速率 -----------------------------------------------------------
@@ -716,7 +728,7 @@ route GET "/api/v1/stats/ban-effectiveness" {
   handler = handle_api_ban_effectiveness
   returns = type
   status = 200
-  note = "载荷 BanEffectivenessResponse；其中 recidivism_rate（含 overall_recidivism_rate 与各 level 的）统一为**百分数 0-100**，与 /api/v1/stats/recidivism 同一个口径，前端两处共用同一个格式化函数（见 defect HTTP_RECIDIVISM_RATE_UNIT 的 resolution）"
+  note = "载荷 BanEffectivenessResponse；其中 recidivism_rate（含 overall_recidivism_rate 与各 level 的）统一为**百分数 0-100**，与 /api/v1/stats/recidivism 同一个口径，前端两处共用同一个格式化函数（见 defect HTTP_RECIDIVISM_RATE_UNIT 的 resolution）。**不编业务码 = 历史库未初始化或查询失败也在 200 内降级**：levels 为 []、total_unique_ips/overall_recidivism_rate 为 0，summary 分别写「历史库未初始化：没有封禁底账…」与「封禁底账查询失败：本次没有分级成效读数」——面板上同一句「无样本」背后的两种原因必须能分开，否则运维不知道是该等数据还是该修库（服务端各留一条日志）"
 }
 
 route GET "/api/v1/stats/periodic-attackers" {
@@ -766,7 +778,7 @@ route GET "/api/v1/stats/ban-duration-histogram" {
   handler = handle_api_ban_duration_histogram
   returns = type
   status = 200
-  note = "载荷 BanDurationHistogramResponse"
+  note = "载荷 BanDurationHistogramResponse。样本是一次取最近 10000 条 ban_events（分布需要样本厚度，上限同时也是读取成本的闸门；该列无索引，走的是全表尾部）。**不编业务码**：库缺席或查不动时同样在 200 内回「6 个标签 + 全 0 计数 + total=0」。**没有 limit 查询参数**——这一条报的是分布而不是列表，条数由桶数决定。桶边界与 total 的口径见该类型的注释（迁移前的旧行没有时长读数，不进桶也不进 total）"
 }
 
 route GET "/api/v1/stats/packet-sizes" {
@@ -910,13 +922,14 @@ route GET "/api/v1/stats/attack-geo" {
   handler = handle_api_attack_geo
   returns = type
   status = 200
-  note = "攻击源地理分布（依赖 GeoIP 库，未装配时 geoip_enabled=false）；载荷 AttackGeoResponse"
+  note = "攻击源地理分布；载荷 AttackGeoResponse。**不编业务码**：这条恒成功。当前实现**没有 GeoIP 读库**（见 defect HTTP_GEOIP_NOT_IMPLEMENTED），因此 geoip_enabled 恒为 false、points 恒为 []、total_ips/located_ips 恒为 0——这是「没有读数」而不是「没有攻击来自远方」。本机坐标三件套有真源（配置项 server_latitude/server_longitude，必须成对给出）：设了就回数值 + source=\"config\"，没设就两个 null + source=\"none\"。契约里的第三个取值 \"detected\"（由 egress 探测推断，配置项 geoip_detect_egress）本实现没有做，不拿猜出来的经纬度冒充探测结果"
 }
 
 # 攻击源地理分布载荷。
 #
 # `geoip_enabled=false`（数据库未装配）时 points 为空、total_ips/located_ips 为 0，
-# 本机坐标三件套仍照常返回（它们不依赖地理库）。
+# 本机坐标三件套仍照常返回（它们不依赖地理库）。**当前实现就停在这个分支上**：
+# 配置项 geoip_db_path 没有任何消费方，见 defect HTTP_GEOIP_NOT_IMPLEMENTED。
 type AttackGeoResponse {
   # 地理解析是否可用（数据库是否已装配且可用）
   geoip_enabled: bool
@@ -1151,20 +1164,40 @@ request BatchBanRequest {
 
 # ---- Jail -------------------------------------------------------------------
 
+# 一个 jail 的配置 + 运行时读数。契约里 jail 只在 /api/v1/jails 这一层暴露（没有
+# /api/v1/jails/{name}），逐 jail 的计数因此都并进这里。
+#
+# 三组数的**原点不同**，面板不能把它们排成一列就当同类读：
+#   - max_retries / findtime / ban_time 是配置值，随热重载变；
+#   - ban_count 是当前活跃封禁数（内存镜像，与 /api/v1/stats 的 current_bans 同源），
+#     不是历史累计——历史累计在 ban_events 里，由 /stats/ban-effectiveness 回答；
+#   - lines_parsed … bans_triggered 是本进程解析日志以来的累计计数，**重启归零**。
 type JailResponse {
   name: String
   enabled: bool
+  # 该 jail 当前的活跃封禁数（内存镜像按 jail 的反向索引；不是历史累计）
   ban_count: usize
+  # 配置的失败阈值（原始值，未乘任何系数）
   max_retries: u32
+  # 此刻该 jail 对外部新地址实际生效的阈值 = ceil(max_retries × 高峰期系数)。
+  # 内网系数与信誉系数都**按来源地址**生效，不属于 jail，因此不乘在这里（乘了就变成
+  # 「该 jail 对所有地址的阈值」，而那个数不存在）；读侧要自己那档就乘下面两个系数。
   effective_max_retries: u32
   findtime: u32
+  # 基础封禁时长（秒）；**负值表示配置级永久封禁**，与 0 不同义
   ban_time: i32
+  # 本次读取时刻（UTC 小时）是否落在业务高峰 9–18 点
   is_peak_hours: bool
+  # 判定层的高峰期阈值系数（常量，非配置项）
   peak_hours_multiplier: f64
+  # 判定层的内网来源阈值系数（常量，非配置项；按来源地址生效）
   internal_ip_multiplier: f64
+  # 以下五项是本进程累计计数，重启归零；该 jail 尚无读数时逐项 0
   lines_parsed: u64
   regex_matches: u64
   ips_extracted: u64
+  # 失败尝试计数。Go 面按 jail 的正则命中计（提取到一个地址即一次失败），因此它与
+  # ips_extracted 同源同值；没有独立的「认证失败」事件流可读（见 defect HTTP_FAILURE_HISTORY_NOT_PERSISTED）
   failed_attempts: u64
   bans_triggered: u64
 }
@@ -1235,12 +1268,28 @@ type WhitelistOperationResponse {
   action: String
 }
 
+# 一条加白建议。样本来自 ban_history，按网段聚合：IPv4 取 /24、IPv6 取 /48，聚合前先把
+# 地址掩到前缀边界（与白名单键的归一化同一条规则，见 defect HTTP_WHITELIST_KEY_DIVERGENCE）。
+#
+# min_bans 被用了**两次**，两道筛子都过才出场：先按地址筛（ban_history.ban_count ≥ min_bans
+# 的行才进聚合，一次最多取 10000 行），再按网段合计筛（段内累计封禁次数 ≥ min_bans）。
+# 因此「段内只有一台机器被封 40 次」会出现（地址级 40≥5、段级 40≥5），而「20 台各被封
+# 4 次」整段不会出现（地址级全被筛掉，压根进不了聚合）。
 type WhitelistRecommendation {
+  # 推荐类型枚举。当前实现只聚合并只产出 "subnet"；单地址没有推荐路径，因此不会给 "ip"
+  # （前端要按枚举渲染标签时，未知取值要落回原文而不是崩）
   rec_type: String
+  # 已掩到前缀边界的网段（如 203.0.113.0/24）
   cidr: String
   reason: String
+  # 该网段里被封禁过的**唯一地址数**。与 total_bans 分开才有信息量：一个 /24 被封 40 次
+  # 可能是 1 台机器抽风，也可能是 20 台正常用户被误伤
   affected_ips: u32
+  # 该网段内这些地址的累计封禁次数
   total_bans: u32
+  # 证据强度 **百分数 0-100**，只按样本量分档：≥50→90、≥20→70、≥10→50、其余 30。
+  # 阶梯与 /stats/threshold-recommendations 的 confidence 同一套刻度（两处都在回答
+  # 「这条建议底下垫了多少件事」，各用一套刻度会让 70 在两处含义不同）
   confidence: u8
 }
 
@@ -1280,73 +1329,131 @@ type RateWindowSnapshot {
 
 # ---- 分析：复发与攻击者 -----------------------------------------------------
 
+# 复发统计。**前四项出自 ban_events（封禁底账），permanent_bans 出自 ban_history**——
+# 两个表回答的是两个问题：底账说「历史上被封过几次」，ban_history 说「现在还是不是永久」。
 type RecidivismResponse {
+  # 底账里出现过的不同地址数
   total_ips: u64
+  # 其中 ban_count > 1（被封过至少两次）的地址数
   recidivist_ips: u64
+  # recidivist_ips / total_ips 的**百分数 0-100**（不是 0-1 比例，见 defect HTTP_RECIDIVISM_RATE_UNIT）
   recidivism_rate: f64
+  # ban_history 里**当前**标记为永久的地址数（与上面三项不同源，不是「底账里有过永久封禁的地址数」）
   permanent_bans: u64
+  # 复发次数最高的前 10 个地址（服务端固定取 10，不接受 limit 参数；按 ban_count 降序、
+  # 同数按最近封禁时间降序）
   top_recidivists: Vec<RecidivistEntry>
 }
 
 type RecidivistEntry {
   ip: String
+  # 该地址的最大 ban_count（= 到过最高的那一级，不是事件条数）
   ban_count: u32
+  # 该地址最近一次封禁时刻
   last_banned_at: i64
+  # 该地址的事件里**有过**永久封禁（按底账 MAX(is_permanent) 读，不代表它此刻仍是永久——
+  # 永久封禁可被人工解封，「此刻」在 ban_history 与 /api/v1/bans 里）
   was_permanent: bool
 }
 
+# 渐进式封禁各级的成效（把 ban_events 的「地址 × 封禁等级」底账折叠成一条漏斗）。
+#
+# 判据是一条**漏斗**：以每个地址到过的最高级（ban_events.ban_count 的最大值）为轴，
+# 到达第 L 级 = max ≥ L，第 L 级的复发 = max ≥ L+1（又升了一级）。因此各层的 total_ips
+# 单调不增，第 1 层的 total_ips 等于 total_unique_ips。
 type BanEffectivenessResponse {
+  # 恒为 4 层（level 1..4），无样本的层也在场并给出 total_ips=0——面板需要能区分
+  # 「这一级没人到达」与「这一级很有效」
   levels: Vec<BanLevelEffectiveness>
+  # 封禁底账里出现过的不同地址数
   total_unique_ips: u32
+  # 到过第 2 级及以上的地址占总地址数的**百分数 0-100**（口径同 /stats/recidivism 的
+  # recidivism_rate，见 defect HTTP_RECIDIVISM_RATE_UNIT 的 resolution）
   overall_recidivism_rate: f64
+  # 一句话结论。历史库缺失或查不动时这里写清是「没有底账」还是「查询失败」，
+  # levels 同时为空数组——该路由不编业务码，降级在 200 信封内完成
   summary: String
 }
 
 type BanLevelEffectiveness {
+  # 等级序号 1..4，与 decision.ProgressiveDuration 的分档一一对应
   level: u8
+  # 服务端给出的档位文案（含时长），前端直接显示：改分档时两边一起改才有对齐点
   label: String
+  # 到达过这一级的不同地址数（分母）
   total_ips: u32
+  # 其中又升到下一级的地址数。第 4 级是开口桶，这里的含义是「到顶格（永久）之后还被封过
+  # 一次」的地址数（永久封禁可被人工解封，解封后再犯是这一级唯一的复发信号，不置 0）
   recidivist_ips: u32
+  # recidivist_ips / total_ips 的**百分数 0-100**；total_ips 为 0 时取 0
   recidivism_rate: f64
+  # 这一级里以永久封禁落账的事件对应的地址数（按**该级本身**是否永久计，不是「至今是否永久」）
   permanent_bans: u32
+  # 结论文本，与前端 RecidivismPanel 的 describeRate 同刻度（≥30 偏高、≥10 可接受、其余很低），
+  # total_ips=0 时为「无样本」，第 4 级单列顶格措辞
   verdict: String
 }
 
+# 等间隔复现的扫描源。样本来自 ban_events（最多读最近 10000 条），至少 3 次封禁才参与计算。
 type PeriodicAttacker {
   ip: String
+  # 参与计算的封禁次数（= timestamps 的长度，不是 ban_events.ban_count 的最大值）
   ban_count: u32
   avg_interval_secs: f64
+  # 间隔的标准差（秒），与 jitter_rate（= stddev/avg，变异系数）同源两读
   interval_stddev: f64
+  # 规则度 **百分数 0-100**：变异系数 <0.3 时取 (1-cv)×100，否则记 **0**——
+  # 「没有可外推的周期」不写成一个低分，低分会被读成「有点周期」
   periodicity_score: u8
+  # 该地址**最近一次**封禁所属的 jail（同一地址换 jail 时以最近那条为准）
   jail_name: String
+  # 参与计算的全部封禁时刻（升序，Unix 秒）：均值之外还要给证据本身，
+  # 面板要能画「第 n 次落在哪一天」
   timestamps: Vec<i64>
 }
 
+# 同一时间窗内多源联动。判据是**窗口内不同地址数**达到门槛（默认 ≥3 个），
+# 不是事件条数——三个地址各来一次与一个地址来三次，后者不构成联动。
+# 每个 jail 只报**第一个**达标的窗口（同一批攻击在滑窗里会命中几十个起点，全列出来
+# 等于把一次事件复制成一排，还会把别的 jail 挤出载荷）。
 type CollaborativeAttack {
   jail_name: String
   window_start: i64
   window_end: i64
+  # 窗口内的不同地址总数。**可以大于 ips 的长度**：那一栏只列前 10 个（防单窗口把载荷撑爆），
+  # 计数不带这个上限
   ip_count: u32
+  # 窗口内的参与地址（升序，最多 10 个）
   ips: Vec<String>
+  # 窗口内的封禁事件数（可大于 ip_count：同一地址在窗口内被封多次）
   total_bans: u32
+  # 联动强度 **百分数 0-100** = min(100, 窗口内事件数/10×100)（按事件数放大，不按地址数）
   correlation_score: u8
 }
 
+# 一次封禁后的再犯周期外推。中位周期来自 ban_events 的封禁间隔。
 type AttackPrediction {
   ip: String
+  # 参与计算的封禁次数（≥3 才给出估计）
   ban_count: u32
+  # 该地址**最近一次**封禁所属的 jail
   jail_name: String
   last_ban_at: i64
   median_interval_secs: f64
   predicted_next_attack: i64
+  # predicted_next_attack − 本次读取时刻（可为负：估计时刻已过，随时可能再来）
   remaining_secs: i64
+  # 置信度 **百分数 0-100** = 规则度×0.6 + 样本量×0.4（样本量按每 5 次封禁 100 分封顶）
   confidence: u8
+  # 紧迫度枚举：imminent（<1 小时）/ soon（<6）/ later（<24）/ distant（≥24）
   urgency: String
 }
 
 type AttackPredictionSummary {
+  # 按 predicted_next_attack 升序、同刻按 ip 升序，长度受 limit（默认 15，上限 100）截断
   predictions: Vec<AttackPrediction>
   jail_trends: Vec<JailAttackTrend>
+  # 以下两项计的是**本载荷里**那几条（截断之后计数），所以恒不超过 predictions 的长度
   imminent_count: u32
   within_24h_count: u32
 }
@@ -1355,36 +1462,72 @@ type JailAttackTrend {
   jail_name: String
   bans_24h: u32
   bans_7d: u32
+  # 趋势枚举：rising / falling / stable（按近 24h 与前一日的量比较；无样本记 stable）
   trend: String
+  # 该 jail 24 小时内预计再动手的**地址数**，按全集统计（不受 predictions 的 limit 截断）
   predicted_attackers_24h: u32
 }
 
+# 失败阈值调整建议。窗口是**近 7 天**的 ban_events，样本门槛：该 jail 在这 7 天里
+# 至少 10 条封禁事件才出场。
+#
+# 复发的口径是**按地址、在本 jail 内**：一个地址在这 7 天里被**本 jail**封 ≥2 次才算复发。
+# 不拿 ban_events.ban_count>1 判定——那个数是跨 jail 的全局累计次数，「被 sshd 封过一次
+# 这次被 mysql 封」会被记进 mysql 的复发，而这一栏要回答的是「这个 jail 拦得住吗」。
+#
+# 只有**配置里现存的 jail** 会出现：事件里的 jail 名可能来自已删除的 jail，也可能来自
+# POST /api/v1/bans 那条手工路径（固定写 "api"，它不是个有阈值可调的 jail）。对这些名字
+# 谈「把阈值从几改到几」没有落点，而分析层对查不到的 jail 会给一个兜底默认值（5），
+# 那个数在载荷里长得和真读数一样，所以读侧滤掉。
 type ThresholdRecommendation {
   jail_name: String
+  # 该 jail **当前配置**的 max_retries（每次读取现取，热重载后即变；不是启动快照）
   current_threshold: u32
+  # 推荐值。direction=maintain 时它**等于 current_threshold**——「要不要改」由 direction
+  # 这一栏表达，不用 0 当哨兵（载荷里 0 会被读成一个真实的阈值；
+  # 见 defect HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS 的 resolution）
   recommended_threshold: u32
+  # 调整方向枚举：decrease（复发率 >30%，取 current×0.7、下限 1）/ increase
+  # （复发率 <10% 且事件 >20 条，取 current×1.5）/ maintain
   direction: String
+  # 该 jail 近 7 天的封禁事件数
   total_bans: u32
+  # 近 7 天在本 jail 出现过的不同地址数
   unique_ips: u32
+  # 其中被封 ≥2 次的地址数（本 jail 内）
   recidivist_ips: u32
+  # recidivist_ips / unique_ips 的**百分数 0-100**（与 /stats/recidivism 同口径）
   recidivism_rate: f64
   avg_bans_per_ip: f64
   reason: String
+  # 证据强度 **百分数 0-100**，只看样本量：≥50→90、≥20→70、≥10→50、其余 30。
+  # 与 /whitelist/recommendations 的 confidence 同一套阶梯
   confidence: u8
 }
 
 type ThresholdRecommendationResponse {
   recommendations: Vec<ThresholdRecommendation>
+  # 一句话结论：出场 jail 数与其中建议调整的条数（按复发率降序排列）
   summary: String
 }
 
+# 封禁时长调整建议。窗口是**整份底账**（最近 10000 条 ban_events，不截 7 天）——
+# 回归间隔是个慢变量，把它截进 7 天会让低频 jail 永远凑不出中位数。
+# 只统计被封 ≥2 次的地址（一次没有「回归间隔」可言），因此 recidivist_count=0 的 jail 不出场。
 type BanDurationRecommendation {
   jail_name: String
+  # 该 jail **当前配置**的 ban_time（秒）。配置级永久（负值）的 jail **不出现在本载荷里**：
+  # 它没有「时长」可调，硬套进算式会得到 current=-1 / recommended=0 这种在两处都读成
+  # 「立刻过期」的形状。0 按 3600 兜底（现网配置不会出现 0，见 config 的 smart default）
   current_ban_time: i32
+  # 该 jail 内被封 ≥2 次的地址数（排序键，降序）
   recidivist_count: u32
+  # 这些地址相邻两次封禁间隔的**中位数**（秒）
   median_return_secs: u64
+  # 推荐时长：中位数超过当前时长时取 max(中位数×1.5, 当前×2)，否则等于 current_ban_time
   recommended_ban_time: u64
   reason: String
+  # 是否建议调整 = 「当前时长是否已足够」的取反（同一件事的两面，不另设判据）
   needs_adjustment: bool
 }
 
@@ -1393,12 +1536,20 @@ type BanDurationRecommendationResponse {
   summary: String
 }
 
+# 低信誉地址清单。阈值固定 80：那是判定层信誉系数的第一档分界（80 分以下才开始收紧阈值），
+# 所以「需要看一眼的名单」与判定层实际改行为的分界同源。
 type ReputationEntryResponse {
   ip: String
+  # 信誉分 0-100：初值 100，失败与封禁各按 persist 的扣分常量递减并钳到 0
   score: u32
+  # 最近一次失败时刻；该地址从未记过失败时为 0（不是 null——这一栏在载荷里恒为整数）
   last_failure_at: i64
+  # 累计失败次数。**自本列上线起累计**：迁移只补列不补史，旧行的计数从 0 开始
   total_failures: u32
+  # 累计封禁次数。同上，自本列上线起累计（与 ban_events 的底账计数不是同一份）
   total_bans: u32
+  # 该分数当前让阈值放宽的系数，直接取判定层的 ReputationMultiplier（≥80→1.0、≥50→0.8、
+  # 其余 0.5），不在 HTTP 面重抄分段：面板显示的系数与实际生效的阈值必须出自同一份算式
   threshold_multiplier: f64
 }
 
@@ -1447,9 +1598,21 @@ type TtlDistributionResponse {
   percentages: Vec<f64>
 }
 
+# 封禁时长分布。**形状恒定**：labels 与 counts 一一对应、长度恒为 6，没有读数时各项为 0
+# （面板因此不需要处理「桶数会变」）。
+#
+# 桶边界（秒，左闭右开）取自判定层的渐进式封禁档位：
+#   "≤5 分钟" [0,300) / "5–30 分钟" [300,1800) / "30 分钟–2 小时" [1800,7200) /
+#   "2–24 小时" [7200,86400) / ">24 小时" [86400,∞) / "永久"
+# 最后一格读 ban_events.is_permanent，不读时长（永久封禁没有时长）。
 type BanDurationHistogramResponse {
+  # 恒为上面 6 个标签，顺序固定
   labels: Vec<String>
+  # 与 labels 同长的计数
   counts: Vec<u64>
+  # **有可读时长或为永久**的事件数：迁移前写的旧行没有 duration_secs（NULL），
+  # 「封了多久」已无从追究，它们不进任何桶、也不计入 total——把它们画进「≤5 分钟」
+  # 会凭空造出一批柱子
   total: u64
 }
 
@@ -1489,11 +1652,18 @@ type ServiceProbeEntry {
   packets: u64
 }
 
+# 同网段的封禁聚合。窗口是**近 7 天**的 ban_events（最多读最近 10000 条），
+# 段边界 IPv4 取 /24、IPv6 取 /48。按 total_bans 降序、同数按 subnet 升序，长度受
+# limit（默认 50、上限 100）截断；载荷只有这一层，段内地址清单不外露。
 type NetworkBlock {
+  # 网段（已掩到段边界，如 203.0.113.0/24）
   subnet: String
   unique_ips: u32
+  # 段内地址在窗口内的封禁事件总数（可大于 unique_ips）
   total_bans: u32
   last_banned_at: i64
+  # 段内被封次数最多的地址；同次数时取地址文本较小者（不写这条 tie-break，
+  # 每次刷新都可能换一个代表地址，map 的遍历顺序是随机的）
   top_ip: String
 }
 

@@ -76,7 +76,7 @@
     "请求 PaginationParams: 3 个字段",
     "响应 SseStreamStatus: 3 个字段",
     "响应 SseStatusResponse: 2 个字段",
-    "缺陷记录: 17 条（已修 11 / 有意保留 1 / 未修 5；由 verify_http.py 核对语义）"
+    "缺陷记录: 18 条（已修 12 / 有意保留 1 / 未修 5；由 verify_http.py 核对语义）"
   ],
   "envelope": {
     "name": "ApiResponse",
@@ -427,7 +427,7 @@
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
-      "note": "请求体 CreateBanRequest；成功 201 Created，载荷 BanOperationResponse"
+      "note": "请求体 CreateBanRequest；成功 201 Created，载荷 BanOperationResponse。`duration` 三态：缺席与显式 0 都是**永久**，显式正数是时长（与 JailResponse.ban_time 的「负值=永久」是两套编码，别串用）。成功路径同时写 ban_events 底账（jail_name 固定 \"api\"）与 ban_history，任一步失败回 40001 并在 message 里说明是内核未确认、IP 非法还是内核返回错误——契约给这条路由只编了这一个失败码，区分靠 message 不靠新造数字。"
     },
     {
       "method": "DELETE",
@@ -493,7 +493,7 @@
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
-      "note": "请求体 BatchBanRequest（`{ips, duration, reason}`，单次 1..100 条）；空列表或超过 100 条 → 40005；成功 201 Created，载荷 BatchOperationResponse。duration 缺省按 3600 秒**有时长**封禁，不得升格为永久——见 defect HTTP_BATCH_BAN_BECOMES_PERMANENT（fixed）。"
+      "note": "请求体 BatchBanRequest（`{ips, duration, reason}`，单次 1..100 条）；空列表或超过 100 条 → 40005；成功 201 Created，载荷 BatchOperationResponse。duration 缺省按 3600 秒**有时长**封禁，不得升格为永久——见 defect HTTP_BATCH_BAN_BECOMES_PERMANENT（fixed）。每条成功的封禁都同时落 ban_events 底账（jail_name 固定 \"api\"、ban_count 记 1）与 ban_history，因此批量路径的封禁也会出现在复发统计、分级成效与时长直方图里——过去只有自动封禁进底账，面板上的「被封几次」会漏掉手工封禁。"
     },
     {
       "method": "GET",
@@ -507,7 +507,7 @@
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
-      "note": "载荷 JailResponse 数组"
+      "note": "载荷 JailResponse 数组（按配置顺序，不排序）。这条路由**不编业务码**：jail 配置出自内存，历史库缺席不影响它，读侧不会收到 50002/50003。配置与启用状态读的是运行时发布的 jail 配置快照——属主是执行体，在装配、热重载、回滚、内核指令与启用状态同步时发布，改名或删除的 jail 随下一次发布从表里消失，读侧不会看到配置与快照各一半的形状。运行时计数（lines_parsed…bans_triggered）是本进程累计值，重启归零；ban_count 是当前活跃封禁数而非历史累计（见 JailResponse 的字段注释）"
     },
     {
       "method": "PUT",
@@ -626,7 +626,7 @@
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
-      "note": "载荷 WhitelistRecommendation 数组"
+      "note": "载荷 WhitelistRecommendation 数组（**数组本身**，不另包 {recommendations,total,min_bans} 信封：条数由 limit 决定、阈值由 min_bans 决定，读侧不需要服务端再报一遍）。查询参数 min_bans（最小封禁次数阈值，默认 5）、limit（条数上限，默认 20、最大 100）；无推荐时载荷是 []，不是 null"
     },
     {
       "method": "GET",
@@ -713,7 +713,7 @@
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
-      "note": "载荷 BanEffectivenessResponse；其中 recidivism_rate（含 overall_recidivism_rate 与各 level 的）统一为**百分数 0-100**，与 /api/v1/stats/recidivism 同一个口径，前端两处共用同一个格式化函数（见 defect HTTP_RECIDIVISM_RATE_UNIT 的 resolution）"
+      "note": "载荷 BanEffectivenessResponse；其中 recidivism_rate（含 overall_recidivism_rate 与各 level 的）统一为**百分数 0-100**，与 /api/v1/stats/recidivism 同一个口径，前端两处共用同一个格式化函数（见 defect HTTP_RECIDIVISM_RATE_UNIT 的 resolution）。**不编业务码 = 历史库未初始化或查询失败也在 200 内降级**：levels 为 []、total_unique_ips/overall_recidivism_rate 为 0，summary 分别写「历史库未初始化：没有封禁底账…」与「封禁底账查询失败：本次没有分级成效读数」——面板上同一句「无样本」背后的两种原因必须能分开，否则运维不知道是该等数据还是该修库（服务端各留一条日志）"
     },
     {
       "method": "GET",
@@ -803,7 +803,7 @@
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
-      "note": "载荷 BanDurationHistogramResponse"
+      "note": "载荷 BanDurationHistogramResponse。样本是一次取最近 10000 条 ban_events（分布需要样本厚度，上限同时也是读取成本的闸门；该列无索引，走的是全表尾部）。**不编业务码**：库缺席或查不动时同样在 200 内回「6 个标签 + 全 0 计数 + total=0」。**没有 limit 查询参数**——这一条报的是分布而不是列表，条数由桶数决定。桶边界与 total 的口径见该类型的注释（迁移前的旧行没有时长读数，不进桶也不进 total）"
     },
     {
       "method": "GET",
@@ -986,7 +986,7 @@
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
-      "note": "攻击源地理分布（依赖 GeoIP 库，未装配时 geoip_enabled=false）；载荷 AttackGeoResponse"
+      "note": "攻击源地理分布；载荷 AttackGeoResponse。**不编业务码**：这条恒成功。当前实现**没有 GeoIP 读库**（见 defect HTTP_GEOIP_NOT_IMPLEMENTED），因此 geoip_enabled 恒为 false、points 恒为 []、total_ips/located_ips 恒为 0——这是「没有读数」而不是「没有攻击来自远方」。本机坐标三件套有真源（配置项 server_latitude/server_longitude，必须成对给出）：设了就回数值 + source=\"config\"，没设就两个 null + source=\"none\"。契约里的第三个取值 \"detected\"（由 egress 探测推断，配置项 geoip_detect_egress）本实现没有做，不拿猜出来的经纬度冒充探测结果"
     },
     {
       "method": "GET",
@@ -3026,10 +3026,10 @@
       "name": "HTTP_RECIDIVISM_RATE_UNIT",
       "severity": "medium",
       "status": "fixed",
-      "fix": "src/daemon/internal/analysis/recommendations.go:float64(stats.recidive) / float64(stats.total) * 100",
+      "fix": "src/daemon/internal/analysis/recommendations.go:float64(recidivistIPs) / float64(uniqueIPs) * 100",
       "reason": "",
       "resolution": "统一为百分数 0–100：Go 面两处 recidivism_rate 产出点（persist/ban_events.go 的 REST 取数、analysis/recommendations.go 的阈值推荐）同为 `* 100`。契约保留的前置要求：/api/v1/stats/ban-effectiveness 接回时其各 level 必须沿用同一百分数口径，前端对两处使用同一个格式化函数。",
-      "text": "recidivism_rate 同名不同单位：旧 Rust 实现里 /api/v1/stats/recidivism 返回百分数（0–100）而 /api/v1/stats/ban-effectiveness 的各 level 返回比例（0–1），前端用同一个格式化函数渲染会差 100 倍。Go 重写后只剩两处产出点且都是百分数（src/daemon/internal/persist/ban_events.go 与 src/daemon/internal/analysis/recommendations.go），ban-effectiveness 尚未接线，因此现网上没有第二单位可比——缺陷按 Go 现状记为已修，但口径要求随 resolution 一并留在契约里"
+      "text": "recidivism_rate 同名不同单位：旧 Rust 实现里 /api/v1/stats/recidivism 返回百分数（0–100）而 /api/v1/stats/ban-effectiveness 的各 level 返回比例（0–1），前端用同一个格式化函数渲染会差 100 倍。Go 重写后只剩两处产出点且都是百分数（src/daemon/internal/persist/ban_events.go 与 src/daemon/internal/analysis/recommendations.go），ban-effectiveness 当时尚未接线，因此现网上没有第二单位可比——缺陷按 Go 现状记为已修，但口径要求随 resolution 一并留在契约里。**现在前置要求也落实了**：ban-effectiveness 已接线（src/daemon/internal/http/analysis_payload.go 的 mapBanEffectiveness），各 level 与 overall 都是 `* 100` 的百分数，前端 types.ts 里那两处曾写「0.0-1.0 的比例值」的注释同步改成百分数口径（那一栏没有任何渲染分支读过它，写错只会在接回时把人带偏）"
     },
     {
       "name": "HTTP_TODAY_BANS_EQUALS_TOTAL",
@@ -3070,11 +3070,20 @@
     {
       "name": "HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS",
       "severity": "low",
+      "status": "fixed",
+      "fix": "src/daemon/internal/analysis/recommendations.go:recommended = current",
+      "reason": "",
+      "resolution": "「要不要调整」由 direction 一栏单独表达（枚举 increase / decrease / maintain，载荷里同时就有它，不需要另一个字段来重复说），recommended_threshold 在 maintain 时**等于 current_threshold**（一个可直接应用的数）。契约与前端都不再用 0 当「无需调整」的哨兵：这一栏的类型是 u32，0 在那里读起来就是一个真实阈值，把它当成「不用改」等于让读侧猜编码。",
+      "text": "ThresholdRecommendation.recommended_threshold 的注释称『0=无需调整』（前端 frontend/src/api/types.ts 曾这么写），但 Go 面 src/daemon/internal/analysis/recommendations.go 的三个分支都不产生 0：decrease 分支把结果夹到 >= 1，increase 分支乘 1.5，maintain 分支直接 `recommended = current`。按注释判断『无需调整』的调用永远不成立。接线时核过消费方：前端没有任何一处按 0 分支渲染（Jails.tsx 读的是另一条载荷的 needs_adjustment），所以这里闭合的是**注释与算式的说法不合**而不是一个在跑的错判。现在载荷里 maintain 的条目给出与原值相同的推荐数、direction 说明不必改，契约的字段注释与 types.ts 同步改成这个口径。同一条路数还顺手补了两处只在这里可见的空转：analyzeJailTrends 在七天窗口无样本时按 ratio=0 报 falling（把「没有样本」读成「在下降」，现记 stable），jail_trends.predicted_attackers_24h 过去从来没有赋值点（恒 0），现在按截断前的全集统计"
+    },
+    {
+      "name": "HTTP_GEOIP_NOT_IMPLEMENTED",
+      "severity": "medium",
       "status": "open",
       "fix": "",
       "reason": "",
-      "resolution": "0 表示「无需调整」：维护分支改为返回 0（而非原阈值），前端据此显示「无需调整」；非 0 时始终是具体推荐阈值。",
-      "text": "ThresholdRecommendation.recommended_threshold 的注释称『0=无需调整』（前端 frontend/src/api/types.ts 仍这么写），但 Go 面 src/daemon/internal/analysis/recommendations.go 的三个分支都不产生 0：decrease 分支把结果夹到 >= 1，increase 分支乘 1.5，maintain 分支直接 `recommended = current`。前端按注释判断『无需调整』会永远不成立"
+      "resolution": "接一个 MaxMind 读库（mmdb）：把 ban_events 里出现过的地址逐条查库，按 (国家, 城市) 聚合成 GeoPoint（同段内 unique_ips/total_bans 计数、top_ip 取封禁次数最多者、last_banned_at 取最近一次），最多 200 个并按 total_bans 降序；geoip_enabled 改为「路径存在且可读」的实测结果而不是配置项的字符串非空；server_location_source 若要给 \"detected\"，必须由 geoip_detect_egress + geoip_egress_probe_url 那条探测路径真实产出并在配置有值时让位给 \"config\"。前端 Globe.tsx 的 EmptyState 分支因此才有真正的退出条件。",
+      "text": "GET /api/v1/stats/attack-geo 已接线，但它**只能**报「没有地理读数」。配置项 geoip_db_path 与 geoip_detect_egress / geoip_egress_probe_url 在 src/daemon/internal/config/parser.go 里被解析并保存（applyGeoip），却没有任何消费方——仓库里没有 mmdb 读取实现，也没有 egress 探测。于是这一条恒定产出 geoip_enabled=false、points=[]、total_ips=0、located_ips=0，前端 frontend/src/views/Globe.tsx 的 `!data.geoip_enabled` 分支永远为真，整个页面停在 EmptyState：运维看不出这是「这台机器上没有地理库」还是「攻击全部来自无法定位的地址」，而全球攻击视图是面板上唯一回答「攻击从哪儿来」的一页。本机坐标三件套有真源（server_latitude/server_longitude，成对给出才生效），所以地图上的本机标记与 server_location_source=\"config\" 是可用的一半；\"detected\" 这个取值本实现不产出，也不拿猜测的经纬度冒充探测结果。这是**功能缺失**而不是数据缺失：路由、载荷与降级形状都已按契约就位，缺的是地址→坐标那一步"
     },
     {
       "name": "HTTP_SERVICE_PROBE_NO_TOTAL",
@@ -3137,7 +3146,7 @@
       "fix": "",
       "reason": "",
       "resolution": "jails 域必须有真实生产者：写入点（jail 启用/禁用、内核 jail 配置变化）显式 Publish 该域，前端订阅侧因此能在变更后收到新帧，而不是只在整页刷新时重收首帧。",
-      "text": "契约把 jails 列为 /api/v1/events 的订阅域，但 Go 面没有任何 jails 发布者：src/daemon/internal/kernel/consumer.go 的发布域常量只有 DomainBans 与 DomainWhitelist，采样周期变化的也只有 stats/rates 一类数值域。前端订阅 jails 后取值写作 sseJails ?? restJails.data，SSE 一旦有过首帧，REST 那份永远取不到，于是写后的 reload() 与页内刷新按钮全是死代码——改 Jail 开关后界面弹「已启用」，开关却弹回原位，只有整页刷新（重连 SSE、重收首帧）才看得到新值。旧实现靠每个 tick 无条件重发全部 5 个域掩盖了「jails 没有真实变更触发」，按域推送把掩盖拿掉后缺失的生产者就暴露成用户可见的不更新"
+      "text": "契约把 jails 列为 /api/v1/events 的订阅域，但 Go 面没有任何 jails 发布者：src/daemon/internal/kernel/consumer.go 的发布域常量只有 DomainBans、DomainWhitelist、DomainStats、DomainRates，采样周期变化的也只有 stats/rates 一类数值域。前端订阅 jails 后取值写作 sseJails ?? restJails.data，SSE 一旦有过首帧，REST 那份永远取不到，于是写后的 reload() 与页内刷新按钮全是死代码——改 Jail 开关后界面弹「已启用」，开关却弹回原位，只有整页刷新（重连 SSE、重收首帧）才看得到新值。旧实现靠每个 tick 无条件重发全部 5 个域掩盖了「jails 没有真实变更触发」，按域推送把掩盖拿掉后缺失的生产者就暴露成用户可见的不更新。REST 侧的数据源这一半已就位（执行体在装配、热重载、回滚、内核指令与启用状态同步时发布 jail 配置快照，见 GET /api/v1/jails 的注释），本缺陷未闭合的仍是**变更触发上的 SSE 生产者**：快照更新了，订阅者收不到"
     },
     {
       "name": "HTTP_WHITELIST_KEY_DIVERGENCE",

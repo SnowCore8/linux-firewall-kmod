@@ -39,21 +39,29 @@ func (db *DB) GetBanHistory(ip string) (*BanHistory, error) {
 	return &h, nil
 }
 
-func (db *DB) RecordBanHistory(ip string, isPermanent bool) error {
+// RecordBanHistory 落一次封禁并返回**写入后**的累计次数。
+//
+// 返回值是给调用方的：ban_events.ban_count 记的是「这次是第几封」，而底账里唯一权威
+// 的那个序号就是这里加完之后的 ban_count。手工封禁路径（POST /bans 与 /bans/batch）
+// 没有判定层给它喂这个数，早先硬写 1，于是重复手工封禁的地址在分级成效里永远停在
+// 第 1 级、复发统计也认不出它——面板把「被封过三次」读成「只被封过一次」。
+func (db *DB) RecordBanHistory(ip string, isPermanent bool) (int, error) {
 	now := time.Now().Unix()
-	_, err := db.conn.Exec(
+	var count int
+	err := db.conn.QueryRow(
 		`INSERT INTO ban_history (ip, ban_count, last_banned_at, is_permanent, created_at)
 		 VALUES (?, 1, ?, ?, ?)
 		 ON CONFLICT(ip) DO UPDATE SET 
 			ban_count = ban_count + 1,
 			last_banned_at = excluded.last_banned_at,
-			is_permanent = excluded.is_permanent`,
+			is_permanent = excluded.is_permanent
+		 RETURNING ban_count`,
 		ip, now, boolToInt(isPermanent), now,
-	)
+	).Scan(&count)
 	if err != nil {
-		return fmt.Errorf("upsert ban_history: %w", err)
+		return 0, fmt.Errorf("upsert ban_history: %w", err)
 	}
-	return nil
+	return count, nil
 }
 
 // RecordUnbanHistory 把某个 IP 的最近一次显式解封时刻写进 ban_history。

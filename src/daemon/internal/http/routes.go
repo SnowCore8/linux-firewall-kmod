@@ -160,13 +160,19 @@ func (s *Server) RegisterRoutes(api *APIHandlers) {
 
 	// ---- 需认证：统计子路由（历史库分析面）------------------------------------
 	//
-	// 契约还声明了 stats/{ban-effectiveness,ban-duration-histogram,attack-geo}；它们要接
-	// 真实数据才有意义，尚未注册，逐条记在 contract/http_gap_baseline.txt 里（见计划 P5-c）。
-	// 空壳注册会让面板拿到一份看起来正常、实际恒零的载荷。
+	// 三条「在 200 信封内降级」的统计（ban-effectiveness / ban-duration-histogram /
+	// attack-geo）与其余各条不同：契约没给它们编业务码，读不到数据时回空读数 + 一句
+	// summary，而不是 50002/50003。理由与逐条口径见 handlers.go 的包注释与契约 note。
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsRecidivism,
 		RequireAuth(api.username, api.password, api.lockout, api.Recidivism))
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsReputation,
 		RequireAuth(api.username, api.password, api.lockout, api.Reputation))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsBanEffectiveness,
+		RequireAuth(api.username, api.password, api.lockout, api.BanEffectiveness))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsBanDurationHistogram,
+		RequireAuth(api.username, api.password, api.lockout, api.BanDurationHistogram))
+	s.HandleFunc(httpcontract.RouteGetApiV1StatsAttackGeo,
+		RequireAuth(api.username, api.password, api.lockout, api.AttackGeo))
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsPeriodicAttackers,
 		RequireAuth(api.username, api.password, api.lockout, api.PeriodicAttackers))
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsCollaborativeAttacks,

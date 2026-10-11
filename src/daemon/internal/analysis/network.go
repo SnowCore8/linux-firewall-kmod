@@ -74,11 +74,15 @@ func AnalyzeNetworkDistribution(db *persist.DB, days int, limit int) ([]NetworkD
 		for ip, count := range data.ips {
 			totalBans += count
 			ips = append(ips, ip)
-			if count > maxCount {
+			// 同封禁数时取地址文本较小者：map 的遍历顺序是随机的，不写这条 tie-break
+			// 每次刷新都可能换一个「代表 IP」，面板上那一栏就会无故跳字。
+			if count > maxCount || (count == maxCount && (representativeIP == "" || ip < representativeIP)) {
 				maxCount = count
 				representativeIP = ip
 			}
 		}
+
+		sort.Strings(ips)
 
 		distributions = append(distributions, NetworkDistribution{
 			Subnet:           subnet,
@@ -91,7 +95,10 @@ func AnalyzeNetworkDistribution(db *persist.DB, days int, limit int) ([]NetworkD
 	}
 
 	sort.Slice(distributions, func(i, j int) bool {
-		return distributions[i].TotalBans > distributions[j].TotalBans
+		if distributions[i].TotalBans != distributions[j].TotalBans {
+			return distributions[i].TotalBans > distributions[j].TotalBans
+		}
+		return distributions[i].Subnet < distributions[j].Subnet
 	})
 
 	if len(distributions) > limit {

@@ -19,10 +19,20 @@ type JailRuntimeStats struct {
 	BansTriggered  uint64 `json:"bans_triggered"`
 }
 
+// SetActiveJails 发布当前生效的 jail 配置快照。
+//
+// 存**副本**而不是调用方给的那条切片：写入方（入站执行体）之后还会原地改元素的
+// Enabled（Web UI 的启用状态桥接），与读侧的拷贝就是同一块内存上的裸数据竞争；
+// 更糟的是读侧会看到「配置里已经变了、但还没重建监视集合」的中间形状。副本让快照一旦
+// 发布就不可变，启用状态的变化靠下一次 SetActiveJails 显式推上来。
+//
+// 只拷到元素这一层：LogFiles/Regexes 在配置编译之后就固定了，没有写入方。
 func SetActiveJails(jails []Jail) {
 	activeJailsMu.Lock()
 	defer activeJailsMu.Unlock()
-	activeJails = jails
+	copied := make([]Jail, len(jails))
+	copy(copied, jails)
+	activeJails = copied
 }
 
 func GetActiveJails() []Jail {
