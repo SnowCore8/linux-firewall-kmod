@@ -17,7 +17,7 @@
 //     而不是写成需要通读的长说明——用户扫一眼就知道哪一项不满足。
 //
 // 一致性策略：
-//   * 客户端校验**逐条对齐**后端 `api.rs::update_webui_config`（warning < critical、
+//   * 客户端校验**逐条对齐**后端 `internal/http/config_api.go` 的 UpdateConfig（warning < critical、
 //     各阈值/容量非 0、SSE 间隔 1-60、clear_logs_at 空串 = 取消过滤），
 //     前端这一层只为减少无效请求；后端仍会独立校验并返回 400。
 //   * 只提交**真正被改动**的字段（契约里所有字段可选），避免用陈旧值覆盖别处
@@ -35,7 +35,7 @@ import { PageHeader } from '../components/PageHeader'
 import { BackLink, Badge, Panel, Row, Rows, SubHead, Toolbar, errorText } from '../components/console'
 import { formatDatetime } from '../lib/format'
 
-/** 端点常量：与 handler.rs 的 build_router() 路由一一对应 */
+/** 端点常量：与 internal/http/routes.go 的路由一一对应 */
 const CONFIG_URL = '/api/v1/config'
 
 /** 面板内的一行 dim 说明（10px 紧凑，不参与密度压缩） */
@@ -76,7 +76,7 @@ const GRID_CELL = {
   borderBottom: 'none',
 } as const
 
-/** 数值型配置项的键（与 Rust `WebuiConfigResponse` 的可编辑数字字段一一对应） */
+/** 数值型配置项的键（与契约 `WebuiConfigResponse` 的可编辑数字字段一一对应） */
 type NumericKey =
   | 'sse_push_interval'
   | 'rate_warning_pps'

@@ -1,6 +1,6 @@
 // 路由表：hash 路由 + AppShell 外壳
 //
-// 为什么必须用 hash 路由：守护进程（src/daemon/http_exporter/handler.rs）只对
+// 为什么必须用 hash 路由：守护进程（src/daemon/internal/http/routes.go）只对
 // /、/dashboard、/bans、/whitelist、/jails、/ddos、/logs、/settings、/more
 // 这些页面路径返回 HTML，且没有 catch-all。若用 history 路由，用户在 /bans 上按
 // 刷新会被服务端 404。hash 路由（#/bans）永远只请求 `/`，因此刷新与直达都安全。

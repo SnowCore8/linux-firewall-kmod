@@ -23,7 +23,7 @@
 // ============================================================================
 
 /**
- * 统一响应信封（`src/daemon/web_ui/api.rs` 的 `ApiResponse<T>`）。
+ * 统一响应信封（`src/daemon/internal/http/envelope.go` 的 `ApiResponse`）。
  * 契约：HTTP 2xx 且 `code === 0` 才算成功；`code !== 0` 时 `message` 是失败原因。
  */
 export interface ApiResponse<T> {
@@ -33,7 +33,7 @@ export interface ApiResponse<T> {
 }
 
 /**
- * 图表数据（Rust `ChartData`）：labels 与 values 按下标一一对应。
+ * 图表数据：labels 与 values 按下标一一对应。
  * 用于封禁趋势 / Jail 分布 / 失败原因分布等。
  */
 export interface ChartData {
@@ -42,10 +42,10 @@ export interface ChartData {
 }
 
 // ============================================================================
-// 统计与仪表盘（stats.rs / api.rs）
+// 统计与仪表盘（internal/http/stats.go / handlers.go）
 // ============================================================================
 
-/** 实时威胁等级评估（Rust `ThreatLevel`） */
+/** 实时威胁等级评估 */
 export interface ThreatLevel {
   /** 等级标签：safe / low / medium / high / critical */
   level: string
@@ -67,7 +67,7 @@ export interface ThreatLevel {
   peak_hours: boolean
 }
 
-/** `GET /api/v1/stats` 响应（Rust `StatsResponse`） */
+/** `GET /api/v1/stats` 响应 */
 export interface StatsResponse {
   daemon_version: string
   kernel_version: string
@@ -89,11 +89,11 @@ export interface StatsResponse {
 }
 
 // ============================================================================
-// 封禁 / 白名单 / Jail（api.rs / ban_ops.rs）
+// 封禁 / 白名单 / Jail（internal/http/bans.go / whitelist.go / jails.go）
 // ============================================================================
 
 /**
- * 封禁条目（Rust `BanResponse`）。
+ * 封禁条目。
  * `remaining_seconds` 为 `-1` 表示永久封禁（与后端一致，不是「剩余 -1 秒」）。
  */
 export interface BanResponse {
@@ -109,7 +109,7 @@ export interface BanResponse {
   is_permanent: boolean
 }
 
-/** Jail 条目（Rust `JailResponse`） */
+/** Jail 条目 */
 export interface JailResponse {
   name: string
   enabled: boolean
@@ -133,7 +133,7 @@ export interface JailResponse {
   bans_triggered: number
 }
 
-/** DDoS 速率快照（Rust `RateResponse`），来自全局 RATE_CACHE */
+/** DDoS 速率快照，来自全局 RATE_CACHE */
 export interface RateResponse {
   ip: string
   packets_per_sec: number
@@ -146,7 +146,7 @@ export interface RateResponse {
   fin_packets_per_sec: number
 }
 
-/** 速率历史点（Rust `RateHistoryResponse`），后端每 2 秒一条、保留约 1 小时 */
+/** 速率历史点，后端每 2 秒一条、保留约 1 小时 */
 export interface RateHistoryResponse {
   /** 采样时间（Unix 秒） */
   timestamp: number
@@ -156,7 +156,7 @@ export interface RateHistoryResponse {
   tracked_ips: number
 }
 
-/** 多窗口速率 EWMA 快照（Rust `RateWindowSnapshot`）：短期 ~5s / 中期 ~60s / 长期 ~300s */
+/** 多窗口速率 EWMA 快照：短期 ~5s / 中期 ~60s / 长期 ~300s */
 export interface RateWindowSnapshot {
   pps_short: number
   pps_mid: number
@@ -166,14 +166,14 @@ export interface RateWindowSnapshot {
   bps_long: number
 }
 
-/** Whitelist 条目（Rust `WhitelistEntryResponse`，序列化字段 cidr/device） */
+/** Whitelist 条目（序列化字段 cidr/device） */
 export interface WhitelistEntry {
   cidr: string
   /** 绑定的设备名（未绑定时为空串） */
   device: string
 }
 
-/** 封禁操作结果（Rust `BanOperationResponse`） */
+/** 封禁操作结果 */
 export interface BanOperationResponse {
   ip: string
   /** "banned" 或 "unbanned" */
@@ -183,14 +183,14 @@ export interface BanOperationResponse {
   duration_seconds: number | null
 }
 
-/** 白名单操作结果（Rust `WhitelistOperationResponse`） */
+/** 白名单操作结果 */
 export interface WhitelistOperationResponse {
   cidr: string
   /** "added" 或 "removed" */
   action: string
 }
 
-/** 批量操作汇总（Rust `BatchOperationResponse`） */
+/** 批量操作汇总 */
 export interface BatchOperationResponse {
   total: number
   succeeded: number
@@ -200,7 +200,7 @@ export interface BatchOperationResponse {
 }
 
 /**
- * 封禁详情（Rust `BanDetailResponse`）：当前封禁状态 + 历史 + 渐进式等级 + 信誉分。
+ * 封禁详情：当前封禁状态 + 历史 + 渐进式等级 + 信誉分。
  * 未在封禁中时 `jail_name`/`reason` 为空串，各时间戳为 0。
  */
 export interface BanDetailResponse {
@@ -247,14 +247,14 @@ export type BanSortKey =
   | 'remaining_asc'
   | 'remaining_desc'
 
-/** `GET /api/v1/bans` 分页参数（Rust `PaginationParams`）；后端缺省 page=1、page_size=20 */
+/** `GET /api/v1/bans` 分页参数；后端缺省 page=1、page_size=20 */
 export interface PaginationParams {
   page?: number
   page_size?: number
   sort_by?: BanSortKey
 }
 
-/** 分页包装（Rust `PaginatedResponse<T>`） */
+/** 分页包装 */
 export interface PaginatedResponse<T> {
   items: T[]
   total: number
@@ -263,7 +263,7 @@ export interface PaginatedResponse<T> {
   total_pages: number
 }
 
-/** `POST /api/v1/bans` 请求体（Rust `CreateBanRequest`） */
+/** `POST /api/v1/bans` 请求体 */
 export interface CreateBanRequest {
   ip: string
   /** 封禁时长（秒）：0 或省略 = 永久封禁（与内核 ban_time=-1 语义一致） */
@@ -272,22 +272,22 @@ export interface CreateBanRequest {
   reason?: string
 }
 
-/** `POST /api/v1/whitelist` 请求体（Rust `CreateWhitelistRequest`） */
+/** `POST /api/v1/whitelist` 请求体 */
 export interface CreateWhitelistRequest {
   /** CIDR 或单个 IP，如 "10.0.0.0/8"、"192.168.1.1" */
   cidr: string
 }
 
-/** `PUT /api/v1/jails/:name` 请求体（Rust `UpdateJailRequest`） */
+/** `PUT /api/v1/jails/:name` 请求体 */
 export interface UpdateJailRequest {
   enabled: boolean
 }
 
 // ============================================================================
-// Web UI 配置（api.rs）
+// Web UI 配置（internal/http/config_api.go）
 // ============================================================================
 
-/** `GET /api/v1/config` 响应（Rust `WebuiConfigResponse`） */
+/** `GET /api/v1/config` 响应 */
 export interface WebuiConfigResponse {
   sse_push_interval: number
   rate_warning_pps: number
@@ -315,7 +315,7 @@ export interface WebuiConfigResponse {
 }
 
 /**
- * `PUT /api/v1/config` 请求体（Rust `UpdateConfigRequest`）。
+ * `PUT /api/v1/config` 请求体。
  * 所有字段可选：只提交需要修改的字段，未提交的字段保持后端现值。
  * 约束（后端会校验并返回 400）：warning < critical；各阈值与容量均不能为 0；
  * `sse_push_interval` 必须在 1-60 之间。
@@ -344,10 +344,10 @@ export interface UpdateConfigRequest {
 }
 
 // ============================================================================
-// 封禁效果与智能推荐（stats.rs / analysis.rs / recommendations.rs）
+// 封禁效果与智能推荐（internal/http/stats.go / analysis_payload.go / internal/analysis/recommendations.go）
 // ============================================================================
 
-/** 复发 IP 条目（Rust `RecidivistEntry`） */
+/** 复发 IP 条目 */
 export interface RecidivistEntry {
   ip: string
   ban_count: number
@@ -355,7 +355,7 @@ export interface RecidivistEntry {
   was_permanent: boolean
 }
 
-/** 复发率统计（Rust `RecidivismResponse`） */
+/** 复发率统计 */
 export interface RecidivismResponse {
   total_ips: number
   recidivist_ips: number
@@ -365,7 +365,7 @@ export interface RecidivismResponse {
   top_recidivists: RecidivistEntry[]
 }
 
-/** 单级别封禁效果（Rust `BanLevelEffectiveness`） */
+/** 单级别封禁效果 */
 export interface BanLevelEffectiveness {
   /** 1=首次, 2=二次, 3=三次, 4=四次+ */
   level: number
@@ -378,7 +378,7 @@ export interface BanLevelEffectiveness {
   verdict: string
 }
 
-/** 封禁效果分析（Rust `BanEffectivenessResponse`） */
+/** 封禁效果分析 */
 export interface BanEffectivenessResponse {
   levels: BanLevelEffectiveness[]
   total_unique_ips: number
@@ -387,7 +387,7 @@ export interface BanEffectivenessResponse {
   summary: string
 }
 
-/** 白名单推荐条目（Rust `WhitelistRecommendation`） */
+/** 白名单推荐条目 */
 export interface WhitelistRecommendation {
   /** "subnet" 或 "ip" */
   rec_type: string
@@ -399,7 +399,7 @@ export interface WhitelistRecommendation {
   confidence: number
 }
 
-/** 封禁时长推荐条目（Rust `BanDurationRecommendation`） */
+/** 封禁时长推荐条目 */
 export interface BanDurationRecommendation {
   jail_name: string
   /** 当前配置的封禁时长（秒），-1 = 永久 */
@@ -411,13 +411,13 @@ export interface BanDurationRecommendation {
   needs_adjustment: boolean
 }
 
-/** 封禁时长推荐汇总（Rust `BanDurationRecommendationResponse`） */
+/** 封禁时长推荐汇总 */
 export interface BanDurationRecommendationResponse {
   recommendations: BanDurationRecommendation[]
   summary: string
 }
 
-/** IP 信誉分条目（Rust `ReputationEntryResponse`） */
+/** IP 信誉分条目 */
 export interface ReputationEntryResponse {
   ip: string
   /** 0-100 */
@@ -429,7 +429,7 @@ export interface ReputationEntryResponse {
   threshold_multiplier: number
 }
 
-/** 阈值调优建议条目（Rust `ThresholdRecommendation`） */
+/** 阈值调优建议条目 */
 export interface ThresholdRecommendation {
   jail_name: string
   current_threshold: number
@@ -448,17 +448,17 @@ export interface ThresholdRecommendation {
   confidence: number
 }
 
-/** 阈值调优建议汇总（Rust `ThresholdRecommendationResponse`） */
+/** 阈值调优建议汇总 */
 export interface ThresholdRecommendationResponse {
   recommendations: ThresholdRecommendation[]
   summary: string
 }
 
 // ============================================================================
-// 内核/流量特征分析（ddos_stats.rs / packet_analysis.rs）
+// 内核/流量特征分析（internal/analysis/detection.go / network.go）
 // ============================================================================
 
-/** UDP 端口分布条目（Rust `UdpPortEntry`） */
+/** UDP 端口分布条目 */
 export interface UdpPortEntry {
   port: number
   packets: number
@@ -467,7 +467,7 @@ export interface UdpPortEntry {
   last_seen_secs: number
 }
 
-/** UDP 端口分布响应（Rust `UdpPortDistributionResponse`） */
+/** UDP 端口分布响应 */
 export interface UdpPortDistributionResponse {
   /** 已按 packets 降序排序 */
   ports: UdpPortEntry[]
@@ -475,7 +475,7 @@ export interface UdpPortDistributionResponse {
   max_entries: number
 }
 
-/** ICMP 类型分布条目（Rust `IcmpTypeEntry`，serde 把 `r#type` 序列化为 "type"） */
+/** ICMP 类型分布条目（serde 把 `r#type` 序列化为 "type"） */
 export interface IcmpTypeEntry {
   type: number
   code: number
@@ -484,7 +484,7 @@ export interface IcmpTypeEntry {
   last_seen_secs: number
 }
 
-/** ICMP 类型分布响应（Rust `IcmpTypeDistributionResponse`） */
+/** ICMP 类型分布响应 */
 export interface IcmpTypeDistributionResponse {
   /** 已按 packets 降序排序 */
   types: IcmpTypeEntry[]
@@ -492,14 +492,14 @@ export interface IcmpTypeDistributionResponse {
   max_entries: number
 }
 
-/** 封禁时长分布直方图（Rust `BanDurationHistogramResponse`），counts 已转成非累积值 */
+/** 封禁时长分布直方图，counts 已转成非累积值 */
 export interface BanDurationHistogramResponse {
   labels: string[]
   counts: number[]
   total: number
 }
 
-/** 包大小分布（Rust `PacketSizeDistributionResponse`）：counts 与 percentages 按下标对应 labels */
+/** 包大小分布：counts 与 percentages 按下标对应 labels */
 export interface PacketSizeDistributionResponse {
   labels: string[]
   counts: number[]
@@ -507,7 +507,7 @@ export interface PacketSizeDistributionResponse {
   percentages: number[]
 }
 
-/** TTL 分布（Rust `TtlDistributionResponse`） */
+/** TTL 分布 */
 export interface TtlDistributionResponse {
   labels: string[]
   counts: number[]
@@ -515,7 +515,7 @@ export interface TtlDistributionResponse {
   percentages: number[]
 }
 
-/** IP 分片统计（Rust `IpFragmentStatsResponse`），fragment_ratio 是百分数 */
+/** IP 分片统计，fragment_ratio 是百分数 */
 export interface IpFragmentStatsResponse {
   total_packets: number
   fragment_packets: number
@@ -523,14 +523,14 @@ export interface IpFragmentStatsResponse {
   fragment_ratio: number
 }
 
-/** 端口扫描者条目（Rust `PortScannerEntry`） */
+/** 端口扫描者条目 */
 export interface PortScannerEntry {
   ip: string
   unique_ports: number
   packets: number
 }
 
-/** 端口扫描检测（Rust `PortScanResponse`） */
+/** 端口扫描检测 */
 export interface PortScanResponse {
   /** 判定阈值（不同端口数） */
   threshold: number
@@ -538,7 +538,7 @@ export interface PortScanResponse {
   scanners: PortScannerEntry[]
 }
 
-/** 服务探测者条目（Rust `ServiceProbeEntry`） */
+/** 服务探测者条目 */
 export interface ServiceProbeEntry {
   ip: string
   /** 探测过的协议数量 */
@@ -546,7 +546,7 @@ export interface ServiceProbeEntry {
   packets: number
 }
 
-/** 服务探测检测（Rust `ServiceProbeResponse`） */
+/** 服务探测检测 */
 export interface ServiceProbeResponse {
   threshold: number
   /**
@@ -559,10 +559,10 @@ export interface ServiceProbeResponse {
 }
 
 // ============================================================================
-// 历史分析（history_snapshot/*.rs）
+// 历史分析（internal/persist/*，处理器在 internal/http/handlers.go）
 // ============================================================================
 
-/** 单小时聚合桶（Rust `HourlyBucket`） */
+/** 单小时聚合桶 */
 export interface HourlyBucket {
   /** 小时编号 0-23 */
   hour: number
@@ -571,12 +571,12 @@ export interface HourlyBucket {
   ddos_events: number
 }
 
-/** 24 小时热力图（Rust `HourlyHeatmap`）：`hours` 固定 24 项，下标即小时 */
+/** 24 小时热力图：`hours` 固定 24 项，下标即小时 */
 export interface HourlyHeatmap {
   hours: HourlyBucket[]
 }
 
-/** 周期性攻击者（Rust `PeriodicAttacker`） */
+/** 周期性攻击者 */
 export interface PeriodicAttacker {
   ip: string
   ban_count: number
@@ -590,7 +590,7 @@ export interface PeriodicAttacker {
   timestamps: number[]
 }
 
-/** 协同攻击（Rust `CollaborativeAttack`） */
+/** 协同攻击 */
 export interface CollaborativeAttack {
   jail_name: string
   window_start: number
@@ -602,7 +602,7 @@ export interface CollaborativeAttack {
   correlation_score: number
 }
 
-/** 攻击源网络分布（Rust `NetworkBlock`），按 IPv4 /24 或 IPv6 /48 聚合 */
+/** 攻击源网络分布，按 IPv4 /24 或 IPv6 /48 聚合 */
 export interface NetworkBlock {
   /** 子网前缀，如 "192.168.1" */
   subnet: string
@@ -613,7 +613,7 @@ export interface NetworkBlock {
   top_ip: string
 }
 
-/** 单 IP 攻击预测（Rust `AttackPrediction`） */
+/** 单 IP 攻击预测 */
 export interface AttackPrediction {
   ip: string
   ban_count: number
@@ -630,7 +630,7 @@ export interface AttackPrediction {
   urgency: string
 }
 
-/** Jail 级攻击趋势（Rust `JailAttackTrend`） */
+/** Jail 级攻击趋势 */
 export interface JailAttackTrend {
   jail_name: string
   bans_24h: number
@@ -640,7 +640,7 @@ export interface JailAttackTrend {
   predicted_attackers_24h: number
 }
 
-/** 攻击预测汇总（Rust `AttackPredictionSummary`） */
+/** 攻击预测汇总 */
 export interface AttackPredictionSummary {
   /** 已按紧急程度排序 */
   predictions: AttackPrediction[]
@@ -651,7 +651,7 @@ export interface AttackPredictionSummary {
   within_24h_count: number
 }
 
-/** 异常检测响应（Rust `AnomalyResponse`） */
+/** 异常检测响应 */
 export interface AnomalyResponse {
   /** 全局异常评分（0-100） */
   global_score: number
@@ -698,7 +698,7 @@ export interface IpAnomalyEntry {
  */
 export type ServerLocationSource = 'config' | 'detected' | 'none'
 
-/** 攻击源地理分布（Rust `AttackGeoResponse`） */
+/** 攻击源地理分布 */
 export interface AttackGeoResponse {
   /** 地理解析是否可用（GeoIP 数据库是否已装配） */
   geoip_enabled: boolean
@@ -737,16 +737,16 @@ export interface GeoPoint {
 }
 
 // ============================================================================
-// 日志（log_viewer.rs）
+// 日志（internal/http/logs.go）
 // ============================================================================
 
-/** 日志条目（Rust `LogEntry`） */
+/** 日志条目 */
 export interface LogEntry {
   line_number: number
   content: string
 }
 
-/** 日志分页响应（Rust `LogPageResponse`） */
+/** 日志分页响应 */
 export interface LogPageResponse {
   items: LogEntry[]
   total_lines: number
@@ -755,7 +755,7 @@ export interface LogPageResponse {
   total_pages: number
 }
 
-/** `GET /api/v1/logs` 查询参数（Rust `LogQueryParams`）；后端缺省 page=1、page_size=100（上限 500） */
+/** `GET /api/v1/logs` 查询参数；后端缺省 page=1、page_size=100（上限 500） */
 export interface LogQueryParams {
   page?: number
   page_size?: number
@@ -768,10 +768,10 @@ export interface LogQueryParams {
 }
 
 // ============================================================================
-// SSE 诊断与运行时健康（api.rs / runtime_status.rs）
+// SSE 诊断与运行时健康（internal/http/sse.go / snapshot.go）
 // ============================================================================
 
-/** 单条 SSE 流的连接状态（Rust `SseStreamStatus`） */
+/** 单条 SSE 流的连接状态 */
 export interface SseStreamStatus {
   current_connections: number
   max_connections: number
@@ -780,7 +780,7 @@ export interface SseStreamStatus {
 }
 
 /**
- * `GET /api/v1/stats/sse-status` 响应（Rust `SseStatusResponse`）。
+ * `GET /api/v1/stats/sse-status` 响应。
  * 两条流各自独立的上限（events 10 / logs 5）；`limit_reached` 必须按所属流判断，
  * 不能用一条流的上限推断另一条（这正是修复前的缺陷）。
  */
@@ -792,7 +792,7 @@ export interface SseStatusResponse {
 }
 
 /**
- * `GET /health`（与 `/healthz`）响应（Rust `RuntimeSnapshot`）。
+ * `GET /health`（与 `/healthz`）响应。
  * 注意：该端点不套 ApiResponse 信封；未就绪时 HTTP 状态为 503 但响应体仍是本结构。
  */
 export interface RuntimeSnapshot {

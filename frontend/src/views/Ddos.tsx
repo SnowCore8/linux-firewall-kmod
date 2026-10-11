@@ -21,7 +21,7 @@
 //   - 其余分区均为 REST 端点（/api/v1/rates/windows、/api/v1/stats/*），只在对应分区激活时请求，
 //     避免一次性打出一堆慢查询；
 //   - 判决条用的速率阈值取自 GET /api/v1/config 的 rate_warning_pps / rate_critical_pps，
-//     与守护进程计算威胁等级时用的是同一组配置（见 web_ui/stats.rs）。
+//     与守护进程计算威胁等级时用的是同一组配置（见 internal/http/stats.go）。
 
 import { useCallback, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -401,7 +401,7 @@ export default function Ddos() {
    * 态势判决：把「现在有没有事」压成一行结论（整页只此一处放大字号）。
    *
    * 判级口径与守护进程一致：拿**合计**包速率与配置阈值比较
-   * （web_ui/stats.rs 的威胁等级同用 rate_warning_pps / rate_critical_pps），
+   * （internal/http/stats.go 的威胁等级同用 rate_warning_pps / rate_critical_pps），
    * 不另立标准；配置未取到时退化为不判级，只说「在追踪」。
    */
   const verdict = useMemo((): { text: string; tone: Tone; sub: string; right: string } => {

@@ -28,7 +28,7 @@ import { EmptyState } from '../components/EmptyState'
 import { PageHeader } from '../components/PageHeader'
 import { formatDuration, formatNumber } from '../lib/format'
 
-/** 端点常量：与 handler.rs 的 build_router() 路由一一对应 */
+/** 端点常量：与 internal/http/routes.go 的路由一一对应 */
 const JAILS_URL = '/api/v1/jails'
 const DURATION_RECOMMENDATIONS_URL = '/api/v1/stats/ban-duration-recommendations'
 

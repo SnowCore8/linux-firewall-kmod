@@ -1,6 +1,6 @@
 // 异常检测面板：全局流量偏离 + per-IP 行为离群
 //
-// 数据来源：`GET /api/v1/stats/anomalies`（后端 `src/daemon/anomaly/` + `web_ui/anomaly.rs`）。
+// 数据来源：`GET /api/v1/stats/anomalies`（后端 `src/daemon/internal/analysis/anomaly.go` + `internal/http/snapshot.go`）。
 // 与 RecidivismPanel 同模式：自取数据、按 poll 间隔自动刷新、后台标签页暂停。
 
 import { CheckCircleOutline } from 'antd-mobile-icons'

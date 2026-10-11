@@ -1,8 +1,8 @@
 /**
  * 表单校验（纯函数）
  *
- * 与后端校验保持一致（真源：`src/daemon/web_ui/ban_ops.rs` 的
- * `create_whitelist` / `delete_whitelist` / `create_ban`）：
+ * 与后端校验保持一致（真源：`src/daemon/internal/http/whitelist.go` 与 `bans.go` 的
+ * `AddWhitelist` / `RemoveWhitelist` / `CreateBan`）：
  * 前端先拦一道，减少无效请求与「点了提交才报错」的体验损耗；
  * 后端仍然会独立校验，前端通过不代表后端一定接受。
  *
@@ -14,14 +14,14 @@
 /** 单段十六进制组（IPv6 用）：1-4 位 */
 const HEX_GROUP = /^[0-9a-fA-F]{1,4}$/
 
-/** 严格 IPv4（不去空白）：4 段十进制、0-255、禁止前导 0（与 Rust `Ipv4Addr` 解析一致） */
+/** 严格 IPv4（不去空白）：4 段十进制、0-255、禁止前导 0（严格十进制，与后端解析一致） */
 function isIpv4Strict(ip: string): boolean {
   if (ip === '') return false
   const parts = ip.split('.')
   if (parts.length !== 4) return false
   return parts.every((part) => {
     if (!/^\d{1,3}$/.test(part)) return false
-    // 前导 0（"01"）在 Rust 中解析失败，这里同样拒绝，避免前后端判定不一致
+    // 前导 0（"01"）不是合法十进制写法，这里拒绝，避免前后端判定不一致
     if (part.length > 1 && part.startsWith('0')) return false
     const value = Number(part)
     return value <= 255

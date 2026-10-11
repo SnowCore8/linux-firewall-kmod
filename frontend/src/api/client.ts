@@ -1,7 +1,7 @@
 /**
  * HTTP 客户端：fetch 封装 + 后端信封解包 + 统一错误类型
  *
- * 契约要点（来自后端 `src/daemon/http_exporter/handler.rs` 与 `web_ui/api.rs`）：
+ * 契约要点（来自后端 `src/daemon/internal/http/routes.go` 与 `handlers.go`）：
  * - 所有 `/api/v1/*` 接口返回信封 `{ code, data, message }`
  * - **HTTP 2xx 且 `code === 0`** 才算业务成功；`code !== 0` 时 `message` 为失败原因
  * - 失败一律抛出 `ApiError`，让调用方（视图 / useAsync）无需再判断返回码
@@ -181,7 +181,7 @@ export function delJson<T>(url: string): Promise<T> {
 /**
  * GET 请求并返回**未套信封**的原始 JSON。
  *
- * 仅用于 `/health`、`/healthz` 这类直接返回裸结构的端点（Rust `RuntimeSnapshot`）。
+ * 仅用于 `/health`、`/healthz` 这类直接返回裸结构（未套 `{code,data,message}` 信封）的端点。
  * 它们在未就绪时返回 503，但响应体仍是完整 JSON —— 这里故意不按状态码抛错，
  * 让离线横幅能读到 `status: "degraded"` 的具体原因。
  *

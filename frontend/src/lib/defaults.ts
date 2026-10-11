@@ -5,7 +5,7 @@
  * 避免到处写 `stats?.today_bans ?? 0` 这类散落的空值判断。
  *
  * 关键约束：`emptyStats()` 的字段必须与后端 `StatsResponse`
- * （`src/daemon/web_ui/stats.rs`）**逐字段对齐** —— 返回类型标注为 `StatsResponse`，
+ * （`src/daemon/internal/http/stats.go`）**逐字段对齐** —— 返回类型标注为 `StatsResponse`，
  * 少了或多了字段都会在 `tsc --noEmit` 阶段报错，这是刻意的编译期保护。
  */
 

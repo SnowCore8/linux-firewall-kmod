@@ -10,11 +10,11 @@
 //   额外网络请求是地球贴图 `/static/earth-night.webp`（随前端产物一起嵌入守护进程二进制）。
 //
 // 数据来源（真实端点，无占位假数据）：
-//   GET /api/v1/stats/attack-geo → AttackGeoResponse（api/types.ts 中由 Rust 契约推导）
+//   GET /api/v1/stats/attack-geo → AttackGeoResponse（api/types.ts 中由契约推导）
 //   该域**没有** SSE 实时推送，因此按 usePollInterval（与 SSE 推送同源）轮询固定间隔，
 //   页面切到后台时 useAsync 会自动暂停。
 //
-// 降级语义（与后端 src/daemon/history_snapshot/attack_geo.rs 一致）：
+// 降级语义（与后端 src/daemon/internal/http/handlers.go 的 AttackGeo 一致）：
 //   `geoip_enabled === false`（配置项 geoip_db_path 未设置或数据库缺失）时**不创建
 //   WebGL 上下文**，直接以共享的 EmptyState 说明如何启用；地理解析不可用不影响封禁功能。
 //

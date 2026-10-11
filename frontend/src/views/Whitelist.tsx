@@ -41,7 +41,7 @@ import { PageHeader } from '../components/PageHeader'
 import { copyToClipboard, formatNumber } from '../lib/format'
 import { isValidCidr } from '../lib/validation'
 
-/** 端点常量：与 handler.rs 的 build_router() 路由一一对应 */
+/** 端点常量：与 internal/http/routes.go 的路由一一对应 */
 const WHITELIST_URL = '/api/v1/whitelist'
 const WHITELIST_RECOMMENDATIONS_URL = '/api/v1/whitelist/recommendations'
 

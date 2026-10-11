@@ -1,7 +1,7 @@
 // 封禁复发分析面板：复发率 + 复发 IP TOP 列表（控制台风格）
 //
-// 数据来源：`GET /api/v1/stats/recidivism`（后端 `src/daemon/web_ui/stats.rs` 的
-// `get_ban_recidivism()`）。响应类型直接复用 api/types.ts 中由 Rust 推导的模型，
+// 数据来源：`GET /api/v1/stats/recidivism`（后端 `src/daemon/internal/http/handlers.go` 的
+// `get_ban_recidivism()`）。响应类型直接复用 api/types.ts 中的契约模型，
 // 不在本文件重复声明，避免同一份服务端契约出现两套字段定义。
 //
 // 与「当前封禁列表」不同，这里是**历史**维度：只有被解封后再次被封的 IP 才算复发
@@ -36,7 +36,7 @@ import {
 } from './console'
 import { EmptyState } from './EmptyState'
 
-/** 端点：复发率统计（见 handler.rs 的 `/api/v1/stats/recidivism`） */
+/** 端点：复发率统计（见 internal/http/handlers.go 的 `/api/v1/stats/recidivism`） */
 const RECIDIVISM_ENDPOINT = '/api/v1/stats/recidivism'
 
 export interface RecidivismPanelProps {
