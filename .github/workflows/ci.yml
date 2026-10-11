@@ -65,7 +65,7 @@ jobs:
           python3 contract/verify_layout.py
           python3 contract/verify_procfs.py
 
-      # HTTP 面按契约补齐（daemon 从 Rust 迁到 Go）。尚未接线的条目冻结在
+      # HTTP 面按契约校验。尚未接线的条目冻结在
       # contract/http_gap_baseline.txt 里，规则是只减不增：新缺口必须显式加行，
       # 补上了必须删行，所以这一步阻塞。
       - name: 校验 HTTP 契约 vs daemon
@@ -151,7 +151,8 @@ jobs:
           sudo apt-get install -y build-essential \
             linux-headers-"$(uname -r)" 2>/dev/null || \
           sudo apt-get install -y linux-headers-generic
-          sudo apt-get install -y libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev
+          # 守护进程为纯 Go 构建（modernc.org/sqlite 等均为纯 Go，无 cgo），
+          # 不需要 libyaml / libsqlite3 / libmicrohttpd / libpcre2 等系统库。
 
       - name: 验证内核头文件匹配运行内核
         continue-on-error: true
@@ -203,8 +204,8 @@ jobs:
           set -e
           echo "=== 编译守护进程（含前端构建与格式检查）==="
           make clean || true
-          # make daemon：先 npm ci + vite build 产出静态面板，再 by go build；
-          # 面板文件由 src/daemon/web_ui/static/assets.go 的 go:embed "." 携带进二进制。
+          # make daemon：先 npm ci + vite build 产出静态面板，再 go build；
+          # 面板文件由 src/daemon/web_ui/static/assets.go 的 //go:embed * 携带进二进制。
           make all -j$(nproc)
           echo "✓ 守护进程编译完成"
 
@@ -284,10 +285,10 @@ jobs:
   #
   # 环境门禁：守护进程启动期检查 /proc/firewall（见
   # src/daemon/cmd/firewall-daemon/main.go 的 checkProcfs）。
-  # 即「有守护进程」蕴含「内核模块已加载」。当前 Go 构建不含 HTTP 服务
-  # （HTTP API/SSE 尚未移植到 Go 侧），故 e2e 只断言 procfs 就绪。GitHub 托管 runner 为自定义内核，
-  # 编译出的模块可能加载不了——这是环境限制而非代码缺陷，与 test 作业采取同一策略：
-  # 加载不了就显式跳过（带注解说明），而不是让 CI 长期变红。
+  # 即「有守护进程」蕴含「内核模块已加载」。HTTP 服务（API/SSE/静态面板）已随 daemon 装配，
+  # 但 e2e 的就绪条件仍按 procfs 判定：/health 要内核租约到手才回 200，而 GitHub 托管 runner
+  # 为自定义内核，编译出的模块可能加载不了——这是环境限制而非代码缺陷，与 test 作业采取同一
+  # 策略：加载不了就显式跳过（带注解说明），而不是让 CI 长期变红。
   e2e:
     name: 浏览器端到端测试
     needs: [build]
@@ -310,7 +311,7 @@ jobs:
       - name: 安装运行时依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y libyaml-0-2 libsqlite3-0 libmicrohttpd12 libpcre2-8-0
+          # 守护进程是纯 Go 静态二进制，无 libyaml / libsqlite3 / libmicrohttpd / libpcre2 依赖。
 
       - name: 安装 Node.js
         uses: actions/setup-node@v4
@@ -398,7 +399,7 @@ jobs:
       - name: 安装运行时依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y libyaml-0-2 libsqlite3-0 libmicrohttpd12 libpcre2-8-0
+          # 守护进程是纯 Go 静态二进制，无 libyaml / libsqlite3 / libmicrohttpd / libpcre2 依赖。
           # 测试套件强制要求 sqlite3 CLI（禁止跳过）
           sudo apt-get install -y sqlite3
           sqlite3 --version

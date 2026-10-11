@@ -11,7 +11,8 @@ defaults:
   interval: 1           # 检查间隔（秒）
   metrics_port: 9119    # Prometheus 指标端口
   metrics_bind_address: "0.0.0.0"  # 监听地址（0.0.0.0 = 所有接口，支持局域网访问；127.0.0.1 = 仅本地）
-  # 非回环绑定必须配认证，否则 daemon 拒绝启动 HTTP 服务（http_exporter/lifecycle.rs 有意为之）。
+  # 凭据装入 HTTP 认证中间件（cmd/firewall-daemon/main.go → internal/http 的 RequireAuth）；
+  # 两项都留空即不启用认证，面板对所有可达者开放。绑定到非回环地址时务必配置。
   # 凭据是明文，且本文件已被 git 跟踪 —— 不要提交本改动。
   metrics_username: "snow"
   metrics_password: "9420"

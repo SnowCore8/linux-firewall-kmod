@@ -2,7 +2,7 @@
 # check_contract.sh - 契约门禁：重新生成各契约产物并逐一校验
 #
 # 做什么：
-#   1. 遍历 contract/*.fwidl，按契约各自的默认产物集重新生成（C/Rust/TS/JSON）
+#   1. 遍历 contract/*.fwidl，按契约各自的默认产物集重新生成（C/Go/TS/JSON）
 #      ——  不显式传 --targets，产物集由 gen.py 的 CONTRACTS 决定，避免脚本
 #          与生成器各维护一份映射而漂移。
 #   2. 按契约类型调用对应的第三方校验器：

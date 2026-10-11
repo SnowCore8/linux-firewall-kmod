@@ -110,7 +110,7 @@ $(KERNEL_MODULE): $(wildcard $(KERNEL_SRC_DIR)/*.c) $(wildcard $(KERNEL_SRC_DIR)
 # install / deb / clean 三处最终都要取这个二进制；换成 Go 前需一并更新。
 .PHONY: daemon
 daemon: $(WEBUI_STATIC_DIR) | $(DAEMON_SRCS_DIR)/cmd/firewall-daemon/main.go
-	@# Web UI static panel（$(WEBUI_STATIC_DIR)）必须先产出，go:embed "." 才
+	@# Web UI static panel（$(WEBUI_STATIC_DIR)）必须先产出，go:embed "*" 才
 	@# 有东西可嵌；go build 本身不检查面板内容，缺面板时守护进程启动会报错。
 	@echo "  GOC     building Go daemon from $(DAEMON_SRCS_DIR)"
 	@mkdir -p $(DAEMON_BUILD_DIR)

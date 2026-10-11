@@ -9,7 +9,7 @@
 #
 # 用法：
 #   scripts/e2e-daemon.sh probe     # 环境探测：内核能否加载本模块（只读，不改状态）
-#   scripts/e2e-daemon.sh start     # 载模块 + 起守护进程 + 事件驱动等待监听端口
+#   scripts/e2e-daemon.sh start     # 载模块 + 起守护进程 + 等守护进程 HTTP 面就绪
 #   scripts/e2e-daemon.sh stop      # 停守护进程 + 卸模块 + 清理临时目录
 #   scripts/e2e-daemon.sh env       # 打印 BASE_URL / 凭据（供 eval "$(... env)" 使用）
 #
@@ -20,8 +20,11 @@
 #      端口与凭据都由本脚本决定，测试因此可复现且可并行于真实部署。
 #   2. 模块用 state_file= 指向临时路径：避免 rmmod 时把测试期间的封禁写进
 #      真实的 /var/lib/firewall/state。
-#   3. 只等就绪条件，不等固定秒数：轮询 /health 直到返回 200（未就绪时是 503），
-#      与服务端实际进度挂钩。
+#   3. 就绪分两级判定，都不用固定秒数：模块级轮询 /proc/firewall/bans（守护进程启动期也用
+#      它做前置检查），守护进程级轮询「HTTP 面已在服务」。后者刻意**不要求 200**：/health 要
+#      内核租约到手才回 200，而托管 runner 的自定义内核未必能让租约成立——按 200 判定会把
+#      「环境不支持」误判成「daemon 起不来」。连得上、拿得到响应（503 也算）即视为就绪，
+#      只有连接被拒或进程退出才算失败。写操作用例仍按 procfs 就绪与否决定执行还是跳过。
 
 set -euo pipefail
 
@@ -57,6 +60,22 @@ module_loaded() {
     lsmod | awk '{print $1}' | grep -qx 'firewall'
 }
 
+# 守护进程的 HTTP 面是否已经在服务：连得上、拿得到 HTTP 响应即真，**状态码不限**。
+#
+# 为什么不看 200：/health 要内核租约到手才回 200，托管 runner 的自定义内核未必能让租约
+# 成立；按 200 判定会把「环境不支持」误判成「daemon 起不来」。无租约时 /health 回 503，那
+# 同样是「在服务」，只有连接被拒/超时才算没起来。
+#
+# curl 缺席时退回 bash 的 /dev/tcp 探测「端口可连」——本脚本不保证 runner 上有 curl。
+probe_daemon_http() {
+    if command -v curl >/dev/null 2>&1; then
+        # 不加 -f：4xx/5xx 也算「拿到响应」，-f 会把它们当失败。
+        curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$E2E_PORT/health"
+        return $?
+    fi
+    (exec 3<>"/dev/tcp/127.0.0.1/$E2E_PORT") 2>/dev/null
+}
+
 # ============================================================================
 # probe：能否加载并卸载本模块
 # ============================================================================
@@ -83,11 +102,10 @@ do_probe() {
 # ============================================================================
 # start：载模块 + 起守护进程 + 等 procfs 就绪
 #
-# 当前 Go 构建只有 procfs 接口，没有 HTTP 服务：/health、/metrics、/api/v1、
-# /static/*path 都尚未移植到 Go 侧（见
-# src/daemon/cmd/firewall-daemon/main.go 的「未装配」标注与文档
-# docs/zh/architecture/daemon.md）。因此就绪条件按 procfs 接口判定，
-# 不再轮询 HTTP 端口。
+# 就绪条件按 procfs 接口（/proc/firewall/bans）判定，而不是 HTTP 端口：守护进程启动期
+# 先做 checkProcfs 前置检查，接口可见即「模块已加载、daemon 能起」。HTTP 服务（/health、
+# /metrics、/api/v1、/static/*path）已随 daemon 一起装配，但它的就绪与否绑在内核租约上，
+# 见上面的「关键设计点 3」。因此这里等的是模块接口，不是监听端口。
 # ============================================================================
 do_start() {
     require_root
@@ -166,22 +184,30 @@ YAML
     echo $! >"$PID_FILE"
 
     # ---- 等就绪（事件驱动，不用固定 sleep）----
-    # Go 构建启动期前置检查 /proc/firewall（见 main.go 的 checkProcfs），
-    # 「/proc/firewall/bans 可见」即模块接口就绪、守护进程能起。
+    # 这里等的是**守护进程**就绪，不是模块接口：模块接口在起 daemon 之前已经确认过
+    # （上面的 /proc/firewall/bans 前置等待），再等一次是空转。真实判据是 HTTP 面已在
+    # 服务（probe_daemon_http，不要求 200，见该函数注释）；进程提前退出则直接失败，不必
+    # 耗满超时。
     local deadline=$((SECONDS + E2E_WAIT_SECS))
+    local ready=0 pid
     while ((SECONDS < deadline)); do
-        [[ -e /proc/firewall/bans ]] && break
+        pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+        if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+            break # 进程没了，日志尾部会说明原因
+        fi
+        if probe_daemon_http; then
+            ready=1
+            break
+        fi
         sleep 0.1
     done
-    [[ -e /proc/firewall/bans ]] && {
-        log "模块接口就绪：/proc/firewall/bans 可见"
-        break
-    }
-    [[ -e /proc/firewall/bans ]] || {
-        log "守护进程启动后 /proc/firewall/bans 未出现，日志末尾："
+    if (( ready == 1 )); then
+        log "守护进程已就绪：http://127.0.0.1:$E2E_PORT 有 HTTP 响应（/health 不要求 200）"
+    else
+        log "守护进程未在 ${E2E_WAIT_SECS}s 内提供服务，日志末尾："
         tail -n 40 "$DAEMON_LOG" >&2 || true
-        die "模块接口未就绪（当前 Go 构建只有 procfs，HTTP 服务尚未移植）"
-    }
+        die "守护进程未就绪：$E2E_PORT 无 HTTP 响应（进程可能已退出，见上面日志）"
+    fi
 }
 
 # ============================================================================

@@ -3,11 +3,11 @@ import { defineConfig, devices } from '@playwright/test';
 /**
  * Firewall 项目 E2E 测试配置
  *
- * 测试目标：daemon 内置 Web UI（axum，默认 http://127.0.0.1:9119）
+ * 测试目标：daemon 内置 Web UI（Go net/http，默认 http://127.0.0.1:9119）
  * 运行前置：启动 daemon 进程并确保 Web UI 可访问
  */
 export default defineConfig({
-  // 测试目录：与现有 Rust 集成测试隔离，专门存放浏览器测试
+  // 测试目录：与现有 Python 集成测试隔离，专门存放浏览器测试
   testDir: './tests/e2e',
 
   // 每次运行前清理测试产物目录
@@ -24,7 +24,7 @@ export default defineConfig({
   //
   // 为什么不用并行：每个页面实例都会建立一条 `/api/v1/events` SSE 长连接
   // （前端的 SseProvider 挂在认证闸门内部），而守护进程对**管理流**的连接位有
-  // 硬上限（见 src/daemon/api/sse.rs 的 SseStatus 与契约 http.fwidl）。多 worker
+  // 硬上限（见 src/daemon/internal/http/sse.go 的 SseStatus 与契约 http.fwidl）。多 worker
   // 叠加本地可能已在跑的控制台标签页，会随机触顶 503，表现为用例莫名失败。
   // 本套件用例数有限，串行换来确定性；要提速应先调大服务端连接位配额，
   // 而不是把不确定性带进 CI。
@@ -53,7 +53,7 @@ export default defineConfig({
     },
   ],
 
-  // 不在配置中启动 dev server —— daemon 是 Rust 二进制。
+  // 不在配置中启动 dev server —— daemon 是 Go 二进制。
   //
   // 为什么不用 Playwright 的 webServer：本套件需要的不是「一条命令」，而是
   // 「insmod 内核模块 → 生成临时配置 → 起守护进程 → 等 /health 就绪 → 收尾 rmmod」，

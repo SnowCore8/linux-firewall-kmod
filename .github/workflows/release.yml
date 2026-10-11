@@ -20,8 +20,9 @@ jobs:
       - name: 安装依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential \
-            libyaml-dev libsqlite3-dev libmicrohttpd-dev libpcre2-dev dpkg-dev
+          # 守护进程为纯 Go 构建（前端经 npm/vite），打包只需 build-essential 与 dpkg-dev；
+          # 内核模块由 DKMS 在安装时编译，此处 SKIP_KERNEL_BUILD。
+          sudo apt-get install -y build-essential dpkg-dev
 
       - name: 获取版本号
         id: version
