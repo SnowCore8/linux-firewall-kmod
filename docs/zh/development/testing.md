@@ -66,9 +66,6 @@ cd src/daemon && gofmt -l ./cmd ./internal  # 格式检查（CI 同款命令）
 `go test` 跑的是源码内 `Test*` 用例并同时执行 doctest；与 `tests/` 下的 pytest
 集成测试互补——单测在源码层验证逻辑，pytest 在 Python 端做端到端。
 
-> 仓库根目录没有 Cargo.toml（Rust 实现已被 Go module 取代），`cargo test` 不再有效：
-> 需要 `cd src/daemon && go test ./...`。
-
 ## 集成测试
 
 ### 运行测试
@@ -197,7 +194,7 @@ HTML 报告，CI 上传为 artifact。
 
 部分套件需要内核模块可加载。GitHub Actions Azure VM 的内核与
 host headers 常不匹配，模块加载会失败但不影响功能测试——runner
-会自动跳过（详见 [ci.yml](../../../../.github/workflows/ci.yml)）。
+会自动跳过（详见 [ci.yml](../../../.github/workflows/ci.yml)）。
 
 ## 安全与质量检测
 
@@ -214,10 +211,9 @@ sudo valgrind --leak-check=full \
     /tmp/firewall-daemon -c config/default.yaml
 ```
 
-### Unsafe 块清单
+### 代码检查清单
 
-Go module 不再使用 Rust 风格的 `unsafe { ... } // SAFETY:` 论证。仓库要求
-的是 `gofmt -l ./cmd ./internal` 干净 + `go vet ./cmd/... ./internal/...`
+仓库要求 `gofmt -l ./cmd ./internal` 干净 + `go vet ./cmd/... ./internal/...`
 通过（CI lint 作业）；违反时先修代码，再重新跑这两条命令。
 
 ### go test 与 pytest 的关系

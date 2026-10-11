@@ -30,7 +30,7 @@ Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用�
 - ✅ **自动过期清理** — 定时清理过期封禁记录
 - ✅ **IP 白名单保护** — 自动发现系统 IP + 手动添加
 - ✅ **procfs 用户接口** — 封禁/解封/白名单/配置操作
-- ✅ **Go 守护进程（`src/daemon` Go module）** — `go build -ldflags "-s -w=1"`，输出即为带符号剥离的单文件二进制；前端由 `src/daemon/web_ui/static/assets.go` 的 `//go:embed .` 携带进包
+- ✅ **Go 守护进程（`src/daemon` Go module）** — `go build -ldflags "-s -w=1"`，输出即为带符号剥离的单文件二进制；前端由 `src/daemon/web_ui/static/assets.go` 的 `//go:embed *` 携带进包
 - ✅ **React 移动端前端** — React 19 + TypeScript + Vite + antd-mobile 5 构建，移动优先，hash 路由，手写 SVG 图表，支持 PWA
 - ✅ **正则解析** — 支持命名捕获组提取 IP
 - ✅ **RCU 并发安全** — spinlock 保护，高并发安全

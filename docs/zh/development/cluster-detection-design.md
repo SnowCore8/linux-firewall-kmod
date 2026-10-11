@@ -62,7 +62,7 @@
 - `contract/netlink.fwidl` 的 ban 段增 `prefix_len`
 - 跑 `contract/gen.py` 重新生成 `contract/generated/netlink_uapi.h`（**必须先 gen 再 verify**，见 `contract-assertion-verification`）
 - `struct fw_ban_ip` 的 `_Static_assert(sizeof(...) == 65)` 需同步更新
-- daemon 侧下发路径：`ban::ban_ip` 增前缀参数（或新增 `ban_cidr`），`ban/operations.rs` 的 `validate_ip` 需接受 CIDR 形式
+- daemon 侧下发路径：封禁走 `kernel.Client.Ban`（已带 `prefixLen` 参数），地址校验需接受 CIDR 形式
 
 ### 4.4 热路径性能
 
@@ -83,33 +83,33 @@ lookup 一次哈希即返回，与旧哈希表同阶。
 
 ### 5.1 新纯函数
 
-`src/daemon/decision/cluster.rs`：输入（窗口内失败源的 IP + 时间戳、`prefix`、`now`、`M`、`N`、`K`），输出待处置网段与命中 IP 列表。与 `decision/window.rs` 同层，纯计算、无 I/O，便于单测。
+`internal/decision/cluster.go`：输入（窗口、`now`、集群配置），输出待处置网段与命中 IP 列表（`DetectCluster` / `ClusterHit`）。与 `internal/detect/window.go` 同层，纯计算、无 I/O，便于单测。
 
 复用：
-- `src/daemon/state/cidr.rs` 的 `CidrKey::new(addr, 24)` 取网段（`mask_v4`/`mask_v6` 现为私有，需提为 `pub` 或经 `CidrKey` 取）
-- `src/daemon/web_ui/analysis.rs` 已有「同 /24 ≥ 3 个不同 IP」的同类分组逻辑（消费封禁历史、用途是推荐白名单），语义应对齐，避免两处判据漂移
+- `internal/detect/cidr.go` 的 `SubnetKey` / `NewCidrKey` 取网段（网络位已置零）
+- `internal/analysis/network.go` 已有按 `/24` 分组的同类逻辑（用途是攻击源网络分布），语义应对齐，避免两处判据漂移
 
 ### 5.2 接入点
 
-- 判定：`src/daemon/pipeline/mod.rs` 的 `Pipeline::scan_clusters`——集群检测的输入是**跨 IP** 的（同一网段内有多少个不同源），单行判定只看得到一个源，凑不出这个结论，故只能周期判定
-- 处置：`src/daemon/pipeline/executor.rs` 的 `dispatch_cluster_hit`，把命中网段按 `(网络地址, prefix_len)` 下发内核
+- 判定：`internal/runtime/pipeline.go` 的 `Pipeline.ScanClusters`——集群检测的输入是**跨 IP** 的（同一网段内有多少个不同源），单行判定只看得到一个源，凑不出这个结论，故只能周期判定
+- 处置：`internal/runtime/executor.go` 的 `dispatchClusterHit`，把命中网段按 `(网络地址, prefix_len)` 下发内核
 
-**检测周期必须显著小于 `cluster.window`**（实现取 10 秒 vs 默认窗口 60 秒）。理由：`FailureWindow::peek` 按 `now - ts <= window` 计数，若检测恰好每 `window` 秒跑一次，一批刚写入的失败会在下一次检测前滑出窗口，扫描永远凑不够 `min_ips`。实测：在 `window=600` 的夹具上前者与清理周期（60 秒）同拍时，写入的 4 个源**一个也没被检出**。故检测单独一个短周期，不跟着清理周期走。
+**检测周期必须显著小于 `cluster.window`**（实现取 10 秒 vs 默认窗口 60 秒）。理由：`FailureWindow.Peek` 按 `now - ts <= window` 计数，若检测恰好每 `window` 秒跑一次，一批刚写入的失败会在下一次检测前滑出窗口，扫描永远凑不够 `min_ips`。实测：在 `window=600` 的夹具上前者与清理周期（60 秒）同拍时，写入的 4 个源**一个也没被检出**。故检测单独一个短周期，不跟着清理周期走。
 
 检测是纯读（`detect` 不改窗口），故可远快于清理周期重复而不影响窗口状态。
 
-**下发形状**：与白名单路径一致，取 `CidrKey::addr()`（已归一，主机位为零）+ `prefix_len`，对应内核的 `(af, addr, prefix_len)` 三元组；**不要**用 `CidrKey::as_str()` 的 `a.b.c.0/24` 文本——那是给人看与当键用的。
+**下发形状**：与白名单路径一致，取 `CidrKey.Addr()`（已归一，主机位为零）+ `prefix_len`，对应内核的 `(af, addr, prefix_len)` 三元组；**不要**用 `CidrKey.String()` 的 `a.b.c.0/24` 文本——那是给人看与当键用的。
 
 ### 5.3 配置项
 
-`YamlJail` 是 `deny_unknown_fields`，新增 `cluster: { enabled, window, min_ips, max_per_ip, ban_time }` 需同步：
+`YamlJail` 拒绝未知字段（`KnownFields(true)`），新增 `cluster: { enabled, window, min_ips, max_per_ip, ban_time }` 需同步：
 
-1. `src/daemon/config/parser.rs`（`YamlJail` + `apply_jail_definition`）
-2. `src/daemon/types/jail.rs`（字段 + `Jail::new` 初值）
-3. `src/daemon/pipeline/mod.rs`（`JailPolicy`）
-4. `src/daemon/pipeline/executor.rs`（重建规则集时的桥接）
-5. `src/daemon/config_reloader.rs`（可回滚字段：捕获/回滚/发布，共 4 处）
-6. `src/daemon/jail/config_ops.rs`（参数范围校验）
+1. `internal/config/parser.go`（`YamlJail` 的解析与 jail 后处理）
+2. `internal/config/types.go` + `internal/jail/jail.go`（字段与初值）
+3. `internal/runtime/pipeline.go`（`JailPolicy`）
+4. `internal/runtime/executor.go`（重建规则集时的桥接）
+5. `internal/runtime/file_reloader.go`（可回滚字段：捕获/回滚/发布）
+6. `internal/jail/compile.go`（参数范围校验）
 7. 若透出 HTTP：`contract/http.fwidl` 的 `JailResponse` + `gen.py` + 前端类型
 
 ### 5.4 误伤控制与上线顺序
@@ -121,7 +121,7 @@ lookup 一次哈希即返回，与旧哈希表同阶。
 
 | 层 | 方式 |
 |---|---|
-| 算式 | `decision/cluster.rs` 内嵌 `mod tests`：边界（恰好 N、恰好 K、跨窗口、/24 边界 IP 如 x.y.z.255） |
+| 算式 | `internal/decision/cluster.go` 内嵌单测：边界（恰好 N、恰好 K、跨窗口、/24 边界 IP 如 x.y.z.255） |
 | 端到端 | `tests/` 新增 pytest：照 `tests/test_21_multi_jail.py` 造多 IP 日志，断言网段被处置 |
 | 内核 | `make kernel-module`；封禁表新判定加内核侧对照测试 |
 | 契约 | `bash scripts/check_contract.sh`（`netlink.fwidl` 改动后先 `gen.py`） |
@@ -129,7 +129,7 @@ lookup 一次哈希即返回，与旧哈希表同阶。
 
 ## 7. 分期
 
-1. **P1**：`decision/cluster.rs` + 单测 + audit 日志/指标（零行为变更，可独立合入）
+1. **P1**：`internal/decision/cluster.go` + 单测 + audit 日志/指标（零行为变更，可独立合入）
 2. **P2**：内核 prefix 封禁（4.x）→ daemon 处置接入（5.2）+ 配置项（5.3）+ pytest
 3. 上线顺序：先 audit 观察，确认无误判后再开处置
 
@@ -139,11 +139,11 @@ P1 与 P2 均已落地（2026-09-22）：
 
 | 项 | 落点 |
 |---|---|
-| 判定算式 | `src/daemon/decision/cluster.rs`（含 9 条内嵌单测） |
+| 判定算式 | `internal/decision/cluster.go`（含内嵌单测） |
 | 内核前缀封禁 | `fw_types.h` 分层桶表 + `fw_ban.c` 按 `(af, addr, prefix_len)` 匹配 |
 | 线格式 | `contract/netlink.fwidl` 的四个 ban 消息增 `prefix_len` |
 | 配置 | `YamlJail.cluster`（全字段 `Option`，逐字段覆盖默认值） |
-| 周期检测 | `Pipeline::scan_clusters`，10 秒独立周期，经 `dispatch_cluster_hit` 下发 |
+| 周期检测 | `Pipeline.ScanClusters`，10 秒独立周期，经 `dispatchClusterHit` 下发 |
 | 端到端 | `tests/test_22_cluster_scan.py`（配置接受 / 单高频 IP 不触发 / 同 /24 多源触发） |
 
 默认 `enabled: false`、`audit_only: true`——**默认关闭，且开启后首版只审计**，与 §5.4 的上线顺序一致。

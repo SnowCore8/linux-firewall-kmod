@@ -10,7 +10,6 @@
 | 实现语言 | **C**，按新设计重写 | 不新增任何构建依赖；既有 softirq/包基线可直接复用；per-CPU、RCU、static_key 等语义在 C 中完全可控 |
 | 旧代码复用 | **不复用** | 新代码不复用旧文件划分、旧数据结构与旧热路径算法。旧实现只作为**行为证据与缺陷证据**的来源 |
 | 契约地位 | 三份 `contract/*.fwidl` 是接口真相源 | 重写不得偏离生成物；需要改接口时先改契约再改代码 |
-| 上游翻译方案 | **作废** | `rust-kmod-design.md` 描述的「C 逐文件翻译为 Rust」不再执行，见该文件的取代说明 |
 
 > 为什么不是 Rust：本机内核 `6.17.0-35-generic` 有 `CONFIG_RUST=y` 且 `CONFIG_RUSTC_VERSION=108200`
 > （rustup 侧 `1.82.0` 工具链已装），但 `build/rust` 指向未安装的
@@ -247,7 +246,8 @@ lo 接口在**入口即豁免**（与旧实现一致，旧实现在入口跳过 
 `unsigned long bitmap[]`（`test_bit`/`bitmap_weight` 要求该类型），线格式仍是 8192 字节。
 置位数由内核用 `bitmap_weight` 重算，不采信发送方给的 `count`（展示字段不作为状态依据）。
 
-发现侧（`src/daemon/protected_ports.rs`）扫 `/proc/net/{tcp,tcp6,udp,udp6}`：
+发现侧（由 daemon 扫描 `/proc/net/{tcp,tcp6,udp,udp6}`；Go 侧的下发入口是
+`internal/kernel/client.go` 的 `Client.SetProtectedPorts`）：
 TCP 取 `st == 0A`（LISTEN），UDP 取 `st == 07`（未连接绑定，须排除 `st == 01` 已连接）。
 环回判据是**整个 127.0.0.0/8**：`/proc` 里 IPv4 地址是小端十六进制，首字节落在最后一个
 字节对上，故 `127.0.0.53` 写作 `3500007F`，只看 `0100007F` 会把 systemd-resolved 的

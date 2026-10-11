@@ -138,7 +138,7 @@ go test ./...
 - 前端构建产物**不是**编译输入，而是**嵌入内容**：vite 的 `outDir` 直接指向
   `src/daemon/web_ui/static/`，文件固定为 `index.html` / `app.js` / `style.css` /
   `sw.js` / `manifest.webmanifest` / `icons/`，由
-  `src/daemon/web_ui/static/assets.go`（`package webuiassets` + `//go:embed .`）
+  `src/daemon/web_ui/static/assets.go`（`package static` + `//go:embed *`）
   声明携带。改动静态文件后必须重新跑 `make daemon`，否则守护进程仍提供旧面板。
 - `go build -ldflags "-s -w=1"`：产出即最终 strip 二进制，`target/` 下没有原始输出；
   体积用 `stat -c %s build/daemon/firewall-daemon` 实测即可（内嵌前端大小随版本变化）。
@@ -246,7 +246,7 @@ make kernel-module KDIR=/path/to/kernel/source
 |------|------|
 | `build/daemon/firewall-daemon` | 守护进程二进制（带 `-ldflags "-s -w=1"`，即 strip 版；内嵌前端产物） |
 | `src/daemon/cmd/firewall-daemon/main.go` + `src/daemon/internal/*` | Go module 源码；组合根是 `cmd/firewall-daemon/main.go` |
-| `src/daemon/web_ui/static/assets.go` | `//go:embed .`，携带面板文件进二进制（`index.html` / `app.js` / `style.css` / `sw.js` / `manifest.webmanifest` / `icons/`） |
+| `src/daemon/web_ui/static/assets.go` | `package static` 的 `//go:embed *`，携带面板文件进二进制（`index.html` / `app.js` / `style.css` / `sw.js` / `manifest.webmanifest` / `icons/`） |
 
 ## 安装位置
 

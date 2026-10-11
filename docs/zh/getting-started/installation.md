@@ -110,7 +110,7 @@ lsmod | grep firewall
 ls /proc/firewall/
 ```
 
-> 如果 `make deb` 报 `make: cargo: 没有那个文件或目录`,说明 PATH 里没有 cargo。可以 `source ~/.cargo/env` 后重试,或安装 rustup (https://rustup.rs)。
+> 如果 `make deb` 报 `go: 未找到命令`,说明 PATH 里没有 Go 工具链。安装 Go 1.26+ 后确保 `go` 在 PATH 中再重试。
 
 ### 3. 安装
 

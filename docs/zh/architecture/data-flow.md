@@ -1,12 +1,6 @@
 # 数据流
 
-本文档描述 Linux Firewall 内核模块的**报文判定路径**、**封禁/解封事件链**，以及内核与守护进程之间的通信通道。内核侧实现见 `src/kernel-module/`（当前为 `fw_*` 文件），接口以 `contract/*.fwidl` 为准。本文档描述 Linux Firewall 内核模块的**报文判定路径**、**封禁/解封事件链**，以及内核与守护进程之间的通信通道。内核侧实现见 `src/kernel-module/`（当前为 `fw_*` 文件，其内部结构见 [kernel-module.md](kernel-module.md)），接口以 `contract/*.fwidl` 为准。
-
-## 范围说明
-
-**内核侧章节是当前的、可核对的**：路径在 `src/kernel-module/`（C），守护进程侧与它分列记录。内核与 procfs/netlink 通道的语义、模块参数规模、哈希表设计为当前实现；
-
-**封禁事件流 / 解封事件流两节是 v2.2.0 Rust 实现的冻结语义记录**：路径为历史 `src/daemon/*.rs`，被原样搬进 Go module `src/daemon` 后不再改动。当前形态见 [用户态守护进程](daemon.md)（组合根 `cmd/firewall-daemon/main.go` 装配并托管一个顺序驱动四段的 goroutine），逐项落地状态以该文档的「范围说明」为准。
+本文档描述 Linux Firewall 内核模块的**报文判定路径**、**封禁/解封事件链**，以及内核与守护进程之间的通信通道。内核侧实现见 `src/kernel-module/`（当前为 `fw_*` 文件，其内部结构见 [kernel-module.md](kernel-module.md)），守护进程侧见 [daemon.md](daemon.md)（Go module `src/daemon`），接口以 `contract/*.fwidl` 为准。
 
 相关文档：
 
@@ -131,24 +125,24 @@ bool fw_wl_lookup(u8 af, const void *ip) {
 
 ## 封禁事件流
 
-该执行体把「日志 → 行分割 → 规则判定 → 封禁」四段**顺序驱动为单一装配点**：这是设计冻结面，改写不得改变（[用户态守护进程](daemon.md) 的「运行时模型」描述当前形态）。旧 `file_monitor/`、`signals.rs`、`log_rotation.rs`、`line_processor.rs` 已随本批次退役。
+`internal/runtime` 把「日志 → 行分割 → 规则判定 → 封禁」四段**顺序驱动为单一装配点**：这是一个 goroutine 内的顺序主链路，段与段之间没有队列（详见 [用户态守护进程](daemon.md) 的「运行时模型」）。
 
 ```mermaid
 sequenceDiagram
     participant Log as 日志文件
-    participant EX as pipeline::executor::InboundExecutor
-    participant Pipe as pipeline（装配体）
-    participant Win as decision（窗口+策略）
-    participant Ban as ban 层
+    participant EX as runtime.InboundExecutor
+    participant Pipe as internal/runtime/pipeline
+    participant Win as internal/decision（窗口+策略）
+    participant Ban as internal/bans
     participant Kernel as 内核模块
 
     Log->>EX: inotify MODIFY / CLOSE_WRITE / ATTRIB
     EX->>EX: 按 offset 读取新增字节（每源长驻 fd + 复用缓冲）
-    EX->>Pipe: on_chunk 按换行切行（半行留缓冲）
+    EX->>Pipe: 按换行切行（半行留缓冲）
     Pipe->>Pipe: 规则匹配 + IP 提取与保留段校验
-    Pipe->>Win: observe 累计失败 + effective_threshold（时段/来源/信誉系数）
-    Pipe-->>EX: 达阈值 → BanIntent
-    EX->>Ban: ban::ban_ip（时长、原因=jail 名）
+    Pipe->>Win: 累计失败 + EffectiveThreshold（时段/来源/信誉系数）
+    Pipe-->>EX: 达阈值 → 封禁意图
+    EX->>Ban: 封禁（时长、原因=jail 名）
     Ban->>Kernel: netlink BAN_IP
     Kernel->>Kernel: fw_ban_try_add：白名单前检 + 泛洪闸门 + 容量检查 + 插入
     Kernel-->>Ban: netlink BAN_STATE_CHANGE（BAN 回执 + 实时统计）
@@ -157,11 +151,11 @@ sequenceDiagram
 
 关键事实：
 
-- 监听掩码是 `MODIFY | ATTRIB | CLOSE_WRITE | MOVE_SELF | DELETE_SELF`（`src/daemon/ingest/watcher.rs:27`）。日志内容变更触发读取（`src/daemon/pipeline/executor.rs:399` 的 `drain_source` 经 `src/daemon/ingest/reader.rs:111` 的 `read_new`），`MOVE_SELF` / `DELETE_SELF` 触发轮转处理并重挂新 inode（`src/daemon/pipeline/executor.rs:500`）。
-- 源的身份是稳定的 `SourceId`，不再用 `Vec<FileState>` 下标（`src/daemon/ingest/registry.rs`）；每个源持有长驻 fd 与复用读缓冲，读满一批即送判定。
-- 有效阈值不是配置里的 `max_retries` 原值，而是叠加时段（高峰 ×1.5）、来源（内网 ×2.0）与信誉分系数后的结果（`src/daemon/decision/policy.rs:80`）；判定前先记一次失败再取信誉分，顺序即语义（`src/daemon/pipeline/mod.rs:352`）。
-- 守护进程只保留应用层检测（如 SSH 暴力破解）；网络层 DDoS 检测已下沉到内核钩子，内核自决封禁经 `DDOS_EVENT` 推给消费体（`src/daemon/inbound.rs:185`）。
-- 周期维护分两处、各自独占：入站侧（失败窗口清理、watch 重扫、历史快照、数据清理）由入站执行体自己的单调时钟定时器表驱动（`src/daemon/pipeline/executor.rs:844`），内核侧（计数器镜像、过期封禁清理）由 `runtime::spawn_periodic` 驱动。
+- 监听掩码是 `MODIFY | ATTRIB | CLOSE_WRITE | MOVE_SELF | DELETE_SELF`（`internal/ingest/watcher.go`）。日志内容变更触发读取（`internal/ingest/reader.go`），`MOVE_SELF` / `DELETE_SELF` 触发轮转处理并重挂新 inode。
+- 源的身份是稳定的 `SourceId`，不用切片下标（`internal/ingest/registry.go`）；每个源持有长驻 fd 与复用读缓冲，读满一批即送判定。
+- 有效阈值不是配置里的 `max_retries` 原值，而是叠加时段（高峰 ×1.5）、来源（内网 ×2.0）与信誉分系数后的结果（`internal/decision/policy.go::EffectiveThreshold`）。
+- 守护进程只保留应用层检测（如 SSH 暴力破解）；网络层 DDoS 检测已下沉到内核钩子，内核自决封禁经 `DDOS_EVENT` 推给消费体（`internal/kernel/consumer.go`）。
+- 周期维护分两处、各自独占：入站侧（失败窗口清理、watch 重扫、历史快照、数据清理）由入站执行体自己的单调时钟定时器表驱动（`internal/runtime/timers.go`）；内核侧（计数器镜像、过期封禁清理）由内核事件泵的周期任务驱动（`internal/kernel/consumer.go`）。
 - 内核侧封禁入口统一：procfs、netlink、DDoS 自决三条路径都走 `fw_ban_try_add()`（白名单前检 → 泛洪闸门 → 容量检查）（`src/kernel-module/fw_ban.c:335-357`）。
 
 ## 解封事件流
@@ -292,7 +286,7 @@ graph TB
 
 | 组件 | 通信方式 | 数据 |
 |------|----------|------|
-| 守护进程 → HTTP 客户端 | HTTP (axum) | `/metrics`（Prometheus 抓取）、`/api/v1/*`（JSON API 与 `/api/v1/events` SSE）、`/health` 与 `/healthz` |
+| 守护进程 → HTTP 客户端 | HTTP（Go net/http，`internal/http`） | `/metrics`（Prometheus 抓取）、`/api/v1/*`（JSON API 与 `/api/v1/events` SSE）、`/health` 与 `/healthz` |
 | 守护进程 → 内核 | netlink | 每秒 `STATS_QUERY` + `ANALYSIS_QUERY`，每 60 次追加一次 `LIST_BANS_QUERY` 对账（`internal/kernel/client.go`） |
 | 守护进程 → 日志 | 文件 I/O | 运行日志 |
 

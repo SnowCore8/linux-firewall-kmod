@@ -8,11 +8,11 @@
 |------|----------|----------------|
 | 封禁方式 | iptables/nftables 规则 | Netfilter Hook 内核拦截 |
 | 性能 | 规则越多越慢 | O(1) 哈希查找，恒定性能 |
-| 正则引擎 | Python re | Rust regex |
+| 正则引擎 | Python re | Go regexp（RE2 语法） |
 | 配置文件 | INI 格式 | YAML 格式 |
 | 持久化 | 无（纯内存） | 无（纯内存） |
 | 监控 | 无内置 | Prometheus 指标 |
-| 语言 | Python | Rust（用户态）+ C（内核模块） |
+| 语言 | Python | Go（用户态）+ C（内核模块） |
 
 ## 架构差异
 

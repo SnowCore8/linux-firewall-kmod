@@ -23,12 +23,15 @@
 ```bash
 # Debian/Ubuntu
 sudo apt install build-essential linux-headers-$(uname -r) \
-  pkg-config git
+  git
 
 # RHEL/CentOS/Fedora
 sudo dnf install gcc make kernel-devel kernel-headers \
-  pkg-config git
+  git
 ```
+
+守护进程为 Go 1.26+（`make` 会在缺失时尝试用 `golangc` 引导），前端构建需要
+Node.js 22 + npm。二者均无需额外的系统开发库（Go 依赖全为纯 Go）。
 
 ### 克隆与编译
 
@@ -52,14 +55,14 @@ make daemon
 # 运行全部测试（集成测试套件）
 make test
 
-# 仅运行 Rust 单元测试
-cargo test --release
+# 仅运行守护进程 Go 单元测试
+cd src/daemon && go test ./...
 
 # 仅运行集成测试
 sudo python3 -m pytest tests/ -v
 
-# 现场 crash 调试（带 DWARF + 符号表）
-cargo build --release --profile dev-with-debug
+# 现场 crash 调试（带 DWARF + 符号表，即不加 -s -w 的默认构建）
+cd src/daemon && go build -o firewall-daemon-debug ./cmd/firewall-daemon
 ```
 
 ## 贡献方式
@@ -112,15 +115,16 @@ cargo build --release --profile dev-with-debug
 | 括号 | K&R 风格，左括号不换行 |
 | 函数长度 | 单个函数不超过 50 行，复杂逻辑拆分为子函数 |
 
-### 守护进程 Rust 编码规范
+### 守护进程 Go 编码规范
 
-守护进程使用 Rust 编写,遵循:
-- `cargo fmt` 格式化代码
-- `cargo clippy` 通过 lint 检查
-- 使用 `anyhow::Result` 进行错误处理
-- 模块注释使用中文
+守护进程使用 Go 编写，遵循：
 
-> **提交前必须 `cargo fmt` + `cargo clippy -- -D warnings` 通过 (CI 卡口)**。任何 warning 都会被 CI 拒绝合并,合入前请先本地跑通这两个命令。
+- `gofmt` 格式化代码（CI 卡口是 `cd src/daemon && gofmt -l ./cmd ./internal` 输出为空）
+- `go vet` 通过 lint 检查（CI 卡口是 `go vet ./cmd/... ./internal/...`）
+- 错误链路用 `fmt.Errorf("...: %w", err)` 包装，保留可判定性
+- 模块与导出符号注释使用中文
+
+> **提交前必须 `gofmt` 干净 + `go vet` 通过（CI 卡口）**。任何问题都会被 CI 拒绝合并，合入前请先本地跑通这两条命令。
 
 ### 注释规范
 
@@ -144,9 +148,9 @@ int whitelist_check(__be32 ip);
 
 | 测试类型 | 命令 | 规模 / 说明 |
 |----------|------|------------|
-| Rust 单元测试 | `cargo test` | `#[test]` 单元测试与 doctest；用例数随开发变动，以命令实时输出为准。doctest 全部真跑，不写 `no_run` / `ignore` |
+| Go 单元测试 | `cd src/daemon && go test ./...` | Go 包内 `_test.go` 用例（含契约往返与算式边界）；用例数随开发变动，以命令实时输出为准 |
 | 集成测试 | `make test` | 集成测试套件（`tests/test_*_*.py`）；套件数与用例数随开发变动，以命令实时输出为准 |
-| 行为审计 | `c-to-rust-behavioral-audit` skill | C 守护进程已退役,审计按需触发,确保 Rust 版零回归 |
+| 浏览器端到端 | `npx playwright test` | `tests/e2e/*.spec.ts`；内核模块不可加载的环境会显式跳过 |
 
 **修改下列内容时必跑 `make test` 集成测试**:
 
@@ -154,59 +158,33 @@ int whitelist_check(__be32 ip);
 - procfs 命令接口(增减 `/proc/firewall/*` 节点)
 - 守护进程与内核模块的交互协议（netlink 消息与契约，见 `contract/`）
 
-跑测试时 `make test` 会用 `sudo python3 -m pytest tests/ -v` 运行集成测试，Rust 单元测试推荐直接在仓库根目录跑 `cargo test`。
+跑测试时 `make test` 会用 `sudo python3 -m pytest tests/ -v` 运行集成测试，Go 单元测试推荐直接在 `src/daemon` 下跑 `go test ./...`。
 
-### 内存安全 (Rust unsafe 块)
+### 代码检查（Go）
 
-当前代码库的 `unsafe` 块集中在内核交互与系统调用封装层。数量与分布以
-`grep -rn 'unsafe {' src/daemon` 的实时输出为准，常见区域与动机：
+守护进程为纯 Go 模块（`modernc.org/sqlite` 等依赖均为纯 Go，无 cgo），不再使用
+Rust 风格的 `unsafe { ... } // SAFETY:` 论证。仓库要求的检查是：
 
-- netlink socket 生命周期（创建 / 绑定 / 非阻塞 / 收发）
-- 内核回包反序列化（`#[repr(C)]` 结构体的 `ptr::read` / `from_raw_parts`）
-- 信号处理（signalfd / `sigaction`）
-- 守护进程化（`fork` / `flock` / `from_raw_fd` 接管 fd）
-- inotify fd 的事件等待（`poll`）
-- 原始 IP 地址校验（SSE2）与 syslog(3) 接入
+- `cd src/daemon && gofmt -l ./cmd ./internal` 输出为空
+- `cd src/daemon && go vet ./cmd/... ./internal/...` 通过
 
-**每个 `unsafe` 块都必须紧跟 `// SAFETY:` 注释**,说明:
+违反时先修代码，再重新跑这两条命令；CI 的 lint 作业按同样两条卡口。
 
-1. **前置条件**:为什么这个操作是必要的、什么不变式已经确保它安全
-2. **后置不变量**:操作完成后,程序状态依旧保持的强约束(例如:fd 所有权不泄露、`O_NOFOLLOW` 已设防 symlink 攻击、调用方拿到的 `RawFd` 唯一)
-3. **错误路径**:出错时 fd / 内存 / 全局状态如何回滚
+### 守护进程构建
 
-例:
+构建由 Makefile 统一驱动，不需要手工推导 Go 构建参数：
 
-```rust
-// SAFETY: 调用方已持有 path 的所有权(From<CString>),
-// O_NOFOLLOW 阻止 symlink 攻击,O_WRONLY 不会读文件。
-// 失败时返回 -1,本调用方立即检查并走 cleanup 分支。
-let new_fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_NOFOLLOW) };
-```
+| 目标 | 命令 | 产物 / 说明 |
+|------|------|-------------|
+| `daemon` | `make daemon` | 先 `npm run build` 产出面板，再 `go build -ldflags "-s -w=1"`；产物 `build/daemon/firewall-daemon`（stripped） |
+| `all` | `make all` | 内核模块 + 守护进程（含前端） |
+| 调试构建 | `cd src/daemon && go build -o firewall-daemon-debug ./cmd/firewall-daemon` | 不加 `-s -w`，保留 DWARF 与符号表，供 `gdb` / core 复盘 |
 
-> **PR 审查硬性要求**:提交新 `unsafe` 块或修改现有 `unsafe` 块的 PR,必须在描述中包含 `// SAFETY:` 注释,**没有 SAFETY 注释的 unsafe 代码一律不合并**。如果一个 unsafe 块的安全论证超过 5 行,改写为封装函数并把 SAFETY 注释写在该函数顶端。
+**不要做的事**：
 
-### Cargo release profile
-
-`Cargo.toml` 定义了 `release` / `dev` / `dev-with-debug` / `asan` 四套 profile,按用途选用:
-
-| Profile | 命令 | 构建产物 | 用途 |
-|---------|------|----------|------|
-| `release` (默认) | `cargo build --release` | stripped，启用 `lto = "fat"` + `strip = "symbols"` + `codegen-units = 1` | 生产 / 发行版 |
-| `dev-with-debug` | `cargo build --release --profile dev-with-debug` | 未 strip，带 DWARF + 完整符号表 | 现场 crash 复盘,用 `coredumpctl` / `gdb` 拿回精确行号 |
-| `asan` | `cargo +nightly build --profile asan` | 需 nightly | 内存检测,需 `cargo +nightly` + opt-in `.cargo/config.toml` 重编 std |
-
-**选型建议**:
-
-- 日常开发:`cargo build`(默认 dev profile,带调试信息但未优化)
-- 性能基准 / 发版前:`cargo build --release`(LTO 后的最终优化)
-- 现场 crash:`cargo build --release --profile dev-with-debug`,把 binary 拷到现场跑,crash 后用 gdb attach core 还原栈
-- ASAN 内存体检:仅在 nightly 工具链上跑,平时不开
-
-**不要做的事**:
-
-- 不要在 release profile 上加 debug 符号(会显著增大 binary)
-- 不要在 dev profile 上做性能基准(LTO 缺失,数据偏差 20%+)
-- 不要把 `dev-with-debug` 的 binary 发到生产环境
+- 不要绕过 Makefile 手工 `go build` 后直接发版：缺 `-ldflags "-s -w=1"` 会显著增大二进制
+- 不要把未 strip 的调试构建二进制发到生产环境
+- 不要引入需要 cgo 的依赖，那会打破「单一静态二进制」的交付形态
 
 ### 提交信息规范
 

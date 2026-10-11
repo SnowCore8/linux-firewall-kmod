@@ -1,9 +1,8 @@
 # Web 前端
 
 面向运维与二次开发：说清界面由哪些页面构成、数据从哪里来、凭据放在哪里、哪些能力受浏览器
-约束。Go module `src/daemon` **尚未装配 HTTP 服务**：本文件描述的是已构建的 React 面板（页面构成、数据源、
-凭据处理），而服务端的路由分层 / SSE 约束 / 信封与认证集中在 [用户态守护进程](daemon.md)，本文只从
-消费方角度说明怎么用，不复制那边的结论。
+约束。本文件从**消费方**角度描述已构建的 React 面板（页面构成、数据源、凭据处理），服务端的
+路由分层 / SSE 约束 / 信封与认证集中在 [用户态守护进程](daemon.md)，本文不复制那边的结论。
 
 ## 本文档的口径
 
@@ -11,8 +10,8 @@
 
 - **服务端契约**以 `contract/http.fwidl` 为准，核对以 `contract/verify_http.py` 的输出为准；
 - **前端路由表**读 `frontend/src/App.tsx` 的 `createHashRouter`；
-- Go module `src/daemon` **尚未装配 HTTP 服务**，服务端固定路径清单以
-  `web_ui/static/assets.go` 的 `//go:embed .` 声明内容为准（[用户态守护进程](daemon.md)）；
+- 服务端固定路径清单以 `src/daemon/web_ui/static/assets.go` 的 `//go:embed *` 声明内容为准
+  （[用户态守护进程](daemon.md)）；
 - 数据面与凭据行为以 `frontend/src/api/` 与 `frontend/src/hooks/` 的源码为准。
 
 ## 技术栈与构建落点
@@ -23,14 +22,14 @@
 | 组件库 | antd-mobile v5 |
 | 路由 | react-router 的 `createHashRouter`（**hash 路由**，理由见下） |
 | 构建 | vite，产物直接输出到 `src/daemon/web_ui/static/`，由 `src/daemon/web_ui/static/assets.go` 的
-`//go:embed .` 携带进 Go 守护进程二进制（该目录当前尚无落盘产物） |
+`//go:embed *` 携带进 Go 守护进程二进制 |
 
 `frontend/vite.config.ts` 固定了三项与守护进程对齐的约束：`base = "/static/"`（资源经
 `GET /static/*path` 提供）、资源平铺且文件名固定（`app.js` / `style.css`，便于 go:embed
 按名查找）、单 CSS 文件。
 
 > **前端改动必须重新构建守护进程才可见**：vite 产物写进 `src/daemon/web_ui/static/` 后，
-> 再由 `make daemon` 编译、由 `assets.go` 的 `//go:embed .` 携带进二进制；只改前端而不重跑
+> 再由 `make daemon` 编译、由 `assets.go` 的 `//go:embed *` 携带进二进制；只改前端而不重跑
 > `make daemon`，守护进程提供的仍是旧包。详见 [构建](../development/building.md)「构建守护进程」。
 
 ## 页面与路由映射
@@ -187,7 +186,7 @@ hash 路由只解决客户端；服务端还认一份固定路径清单，漏一
 1. `frontend/src/App.tsx` —— 路由表加一条；
 2. `frontend/src/components/AppShell.tsx` —— `PAGE_TITLES` 加标题；一级页还要加进 `TABS`
    或 `MORE_CHILD_PATHS`；
-3. 服务端侧：vite 产物落盘后由 `web_ui/static/assets.go` 的 `//go:embed .` 声明路径，
+3. 服务端侧：vite 产物落盘后由 `web_ui/static/assets.go` 的 `//go:embed *` 声明路径，
    Go 守护进程已注册 SPA 路由（已移植），前端校验文档中记录这套约束；
 4. `contract/http.fwidl` —— 改契约，再 `python3 contract/gen.py contract/http.fwidl` 重新生成
    工件，最后 `python3 contract/verify_http.py` 核对。
@@ -199,5 +198,4 @@ hash 路由只解决客户端；服务端还认一份固定路径清单，漏一
 
 - [用户态守护进程](daemon.md) —— 路由分层、SSE 约束、信封与认证
 - [数据流](data-flow.md)
-- [前端重写设计](../development/frontend-rewrite-design.md) —— 批次划分与验收门槛
 - [测试](../development/testing.md) —— 浏览器端到端测试的夹具与 CI 作业

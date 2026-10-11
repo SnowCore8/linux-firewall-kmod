@@ -1,4 +1,4 @@
-# QWEN.md - Linux Firewall Kernel Module 项目指南
+# AGENTS.md - Linux Firewall Kernel Module 项目指南
 
 ## 项目概述
 
@@ -9,19 +9,19 @@
 ### 技术栈
 
 - **内核模块**：C 语言，Linux Kernel Module + netfilter hooks
-- **守护进程**：Rust（v2.2.0 起从 C 翻译），单文件 stripped 二进制（含前端构建产物）
+- **守护进程**：Go（组合根 `cmd/firewall-daemon/main.go`，业务在 `internal/*`），单文件 stripped 二进制（含前端构建产物）
 - **前端**：React 19 + TypeScript + Vite + antd-mobile 5（移动优先，hash 路由），底部 TabBar + 卡片式布局，手写 SVG 图表，支持 PWA
-- **构建系统**：Makefile + Cargo + npm/vite
-- **测试框架**：Python pytest（集成测试）+ Rust 单元测试；用例数随开发变动，跑 `make test` / `cargo test --release` 取实时值
+- **构建系统**：Makefile + Go toolchain + npm/vite
+- **测试框架**：Python pytest（集成测试）+ Go 单元测试；用例数随开发变动，跑 `make test` / `cd src/daemon && go test ./...` 取实时值
 - **配置格式**：YAML（Jail 配置）
-- **监控导出**：Prometheus 指标（端口 9119；指标清单以 `src/daemon/http_exporter/metrics.rs` 为准）
+- **监控导出**：Prometheus 指标（端口 9119；清单以内核 `cmd/firewall-daemon/main.go` 的 statsSink 与 `internal/kernel/consumer.go` 为准）
 
 ### 核心架构
 
 ```
 ┌──────────────────────────────────────────────────────────┐
 │                                                          │
-│                用户空间（Rust 守护进程）                 │
+│                用户空间（Go 守护进程）                   │
 │                                                          │
 │   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │
 │   │ 日志解析 │  │DDoS 检测 │  │Jail 管理 │  │  Web UI  │ │
@@ -43,7 +43,7 @@
 └──────────────────────────────────────────────────────────┘
 ```
 
-> 守护进程与内核模块之间走 **netlink** 双向通道（`src/daemon/kernel/` ↔ `fw_netlink.c`）：
+> 守护进程与内核模块之间走 **netlink** 双向通道（`src/daemon/internal/kernel/` ↔ `fw_netlink.c`）：
 > 下发封禁/白名单指令、回推内核事件与统计。`/proc/firewall` 的 procfs 条目仍保留，
 > 供手动操作与调试读取（见下文「procfs 接口」）。
 
@@ -65,22 +65,24 @@ linux-firewall-kmod/
 │   │   ├── fw_stats.c          # 每 CPU 统计聚合
 │   │   ├── fw_netdev.c         # 网卡事件（本机地址维护）
 │   │   └── fw_types.h          # 契约公共类型与表规模常量
-│   └── daemon/                 # Rust 守护进程源码
-│       ├── main.rs, lib.rs     # 入口与库根（模块装配）
-│       ├── kernel/             # netlink 传输层（transport/codec/reactor/client/lease）
-│       ├── api/                # HTTP/JSON API（routes/、SSE 推送、envelope 封装）
-│       ├── state/              # 内存状态（封禁/白名单/CIDR/速率/统计）
-│       ├── runtime/            # 运行时（通道/调度/关闭/定时器/监督）
-│       ├── ingest/, pipeline/  # 入站主链路（inotify 读取 + 装配执行体）
-│       ├── signal/             # signalfd 信号层（阻塞四个信号，与 inotify 同池 poll）
-│       ├── parse/, log_parser/ # 日志解析（正则/规则/切分/提取）
-│       ├── decision/           # DDoS 决策（ddos/policy/window）
-│       ├── ban/                # 封禁动作（校验 + netlink 投递）
-│       ├── jail/               # Jail 配置与匹配
-│       ├── config/             # 配置加载和校验
-│       ├── web_ui/             # Web UI 后端（统计/日志/分析）
-│       ├── http_exporter/      # Prometheus 指标导出
-│       └── types/              # 公共类型定义
+│   └── daemon/                 # Go 守护进程源码
+│       ├── cmd/firewall-daemon/main.go  # 组合根（装配与生命周期）
+│       ├── internal/kernel/    # netlink 传输层（transport/codec/reactor/client）
+│       ├── internal/http/      # HTTP/JSON API（路由、SSE、envelope、认证）
+│       ├── internal/httpcontract/ # 契约生成的处理器接口与路由常量
+│       ├── internal/bans/      # 封禁/白名单动作（校验 + netlink 投递）
+│       ├── internal/detect/    # CIDR 与失败窗口等检测原语
+│       ├── internal/decision/  # 决策（policy/window/cluster）
+│       ├── internal/runtime/   # 运行时（监督/调度/关闭/定时器/执行体）
+│       ├── internal/ingest/    # 入站主链路（inotify 读取）
+│       ├── internal/logparse/  # 日志解析（正则/IP 提取）
+│       ├── internal/jail/      # Jail 配置、匹配与校验
+│       ├── internal/config/    # 配置加载和校验
+│       ├── internal/analysis/  # 分析面（异常/预测/推荐/网络分布）
+│       ├── internal/telemetry/ # 内核快照与速率历史
+│       ├── internal/persist/   # SQLite 历史库
+│       ├── internal/logger/    # JSON Lines 日志
+│       └── web_ui/static/      # 面板产物；assets.go 的 //go:embed * 携带进二进制
 ├── config/                     # Jail 配置文件（YAML）
 │   ├── default.yaml            # 默认配置
 │   ├── nginx.yaml              # Nginx Jail
@@ -96,7 +98,7 @@ linux-firewall-kmod/
 │   ├── kernel-module/firewall.ko
 │   └── daemon/firewall-daemon
 ├── Makefile                    # 构建脚本
-├── Cargo.toml                  # Rust 依赖配置
+├── src/daemon/go.mod           # Go module 与依赖
 └── README.md                   # 项目说明
 ```
 
@@ -106,13 +108,13 @@ linux-firewall-kmod/
 
 ```bash
 # 完整构建（含格式检查）
-make                            # 编译内核模块 + Rust 守护进程（前端经 npm/vite 构建后嵌入）
+make                            # 编译内核模块 + Go 守护进程（前端经 npm/vite 构建后嵌入）
 make kernel-module              # 仅内核模块
-make daemon                     # 仅 Rust 守护进程（含前端构建）
+make daemon                     # 仅 Go 守护进程（含前端构建）
 make frontend                   # 仅前端（npm ci + vite build）
 make frontend-typecheck         # 仅前端类型检查（tsc --noEmit）
 
-# 快速构建（跳过格式检查，用于调试）
+# 快速构建（内核模块 + 守护进程）
 make build-quick
 
 # 清理
@@ -120,18 +122,19 @@ make clean
 
 # 代码格式化（提交前必做）
 make format                     # C 代码格式化（clang-format）
-cargo fmt                       # Rust 代码格式化
+cd src/daemon && gofmt -w ./cmd ./internal   # Go 代码格式化
 ```
 
 ### 构建依赖
 
-- Rust 工具链（`cargo`）
-- **Node.js ≥ 20 + npm**（前端为 React 19 + TypeScript + Vite + antd-mobile，`make daemon` / `make all` 会先跑 `npm ci` 再 `vite build`）
+- Go 1.26+（`src/daemon/go.mod` 要求；Makefile 会在缺失时尝试引导）
+- **Node.js 22 + npm**（前端为 React 19 + TypeScript + Vite + antd-mobile，`make daemon` / `make all` 会先跑 `npm ci` 再 `vite build`）
 - 前端依赖锁在 `frontend/package-lock.json`（已入库），CI 使用 `npm ci` 保证可复现
+- Go 依赖全为纯 Go，无需额外的系统开发库
 
 ### Web UI / PWA
 
-移动端优先的 React 应用，构建产物经 `rust-embed` 嵌入守护进程，访问 `http://<host>:9119/dashboard`。
+移动端优先的 React 应用，构建产物经 `//go:embed *`（`src/daemon/web_ui/static/assets.go`）嵌入守护进程，访问 `http://<host>:9119/dashboard`。
 
 - 前端入口：`frontend/index.html` + `frontend/src/main.tsx`；路由用 hash 模式（守护进程只对若干页面路径返回同一份 HTML，无 catch-all）
 - **认证**：配置了 `metrics_username` / `metrics_password` 时，页面会显示应用内登录表单（不使用浏览器原生 Basic 对话框 —— SPA 外壳是公开路由，顶层文档不返回 401，原生对话框根本不会出现）。
@@ -159,11 +162,11 @@ sudo rmmod firewall
 ### 运行测试
 
 ```bash
-# 集成测试套件（需要 root；`make test` 只跑 pytest，不含 cargo test），用例数见实时输出
+# 集成测试套件（需要 root；`make test` 只跑 pytest，不含 Go 单元测试），用例数见实时输出
 make test
 
-# 仅 Rust 单元测试（含 doctest）
-cargo test --release
+# 仅 Go 单元测试
+cd src/daemon && go test ./...
 
 # 直接调用集成测试（需要 root 权限）
 sudo python3 -m pytest tests/ -v
@@ -199,10 +202,10 @@ sudo journalctl -u firewall-daemon -f
 
 ```bash
 make format     # C 内核代码（clang-format）
-cargo fmt       # Rust 守护进程
+cd src/daemon && gofmt -w ./cmd ./internal   # Go 守护进程
 ```
 
-CI 会检查代码格式，不符合规范将拒绝合并。
+CI 会检查代码格式（内核 `make format-check`、守护进程 `gofmt -l`），不符合规范将拒绝合并。
 
 ### 编码规范
 
@@ -215,13 +218,13 @@ CI 会检查代码格式，不符合规范将拒绝合并。
 - **注释**：统一使用中文
 - **函数长度**：单个函数不超过 50 行
 
-#### Rust 守护进程
+#### Go 守护进程
 
-- **格式化**：`cargo fmt`（强制）
-- **Lint**：`cargo clippy -- -D warnings`（强制，零警告）
-- **错误处理**：使用 `anyhow::Result`
+- **格式化**：`gofmt`（强制；CI 跑 `gofmt -l ./cmd ./internal` 须为空）
+- **Lint**：`go vet ./cmd/... ./internal/...`（强制）
+- **错误处理**：用 `fmt.Errorf("...: %w", err)` 包装，保留可判定性
 - **注释**：统一使用中文
-- **unsafe 块**：每个 unsafe 块必须紧跟 `// SAFETY:` 注释
+- **无 unsafe**：模块为纯 Go（无 cgo），不使用 Rust 风格的 `unsafe { ... } // SAFETY:` 论证
 
 ### 提交规范
 
@@ -259,28 +262,19 @@ perf(kmod): 优化速率检测使用平均速率
 - 守护进程与内核模块的交互协议
 
 **测试分层**：
-- **单元测试**：`cargo test`
+- **单元测试**：`cd src/daemon && go test ./...`
 - **集成测试**：`make test`
-- **行为审计**：C 到 Rust 移植时按需触发
+- **浏览器端到端**：`npx playwright test`（`tests/e2e/*.spec.ts`，内核模块不可加载时显式跳过）
 
-### 内存安全（Rust unsafe）
+### 内存安全（Go）
 
-unsafe 块集中在 netlink 传输、signalfd 信号、守护进程化（fork/flock/fd）、
-线格式指针访问、syslog、IP 地址操作、inotify/poll 封装等处。具体清单与块数以
-`grep -rn 'unsafe {' src/daemon` 为准：
-- `kernel/transport.rs` — netlink socket 的 open/bind/send/recv/close
-- `signal/mod.rs` — signalfd 读取 siginfo（信号转 fd）
-- `daemonizer.rs` — fork 守护进程化 / flock / fd 接管
-- `kernel/codec/mod.rs` — 线格式布局的指针访问
-- `logger.rs` — syslog(3) 接入
-- `ip_utils.rs` — IP 地址原始操作
-- `ingest/watcher.rs` — inotify fd 读取
-- `pipeline/executor.rs` — poll 系统调用封装（inotify fd + signalfd 同池等待）
+守护进程为纯 Go 模块（`modernc.org/sqlite` 等依赖均为纯 Go，无 cgo），不再使用
+Rust 风格的 `unsafe { ... } // SAFETY:` 论证。仓库要求的检查是：
 
-**硬性要求**：
-- 每个 unsafe 块必须紧跟 `// SAFETY:` 注释
-- 说明前置条件、后置不变量、错误路径
-- 没有 SAFETY 注释的 unsafe 代码一律不合并
+- `cd src/daemon && gofmt -l ./cmd ./internal` 输出为空
+- `cd src/daemon && go vet ./cmd/... ./internal/...` 通过
+
+**硬性要求**：违反上述任一检查的代码不得合并。
 
 ## 核心功能
 
@@ -327,39 +321,21 @@ cat /proc/firewall/config
 
 ### Prometheus 指标
 
-端口 9119 导出监控指标（清单以 `src/daemon/http_exporter/metrics.rs` 为准）：
+端口 9119 的 `/metrics` 只导出一组**守护进程计数器**（清单以内核
+`cmd/firewall-daemon/main.go` 的 statsSink 与 `internal/kernel/consumer.go` 为准，
+注册即导出、无 gauge）：
 
-**内核侧指标**：
-- `firewall_kernel_banned_ips_current` - 当前封禁 IP 数
-- `firewall_kernel_bans_total` - 累计封禁操作数
-- `firewall_kernel_unbans_total` - 累计解封操作数
-- `firewall_kernel_whitelist_count` - 当前白名单条目数
+- `firewall_lines_parsed_total` - 已解析的非空日志行数
+- `firewall_lines_skipped_total` - 跳过的日志行数
+- `firewall_regex_matches_total` - 正则匹配次数
+- `firewall_inotify_events_total` - inotify 事件数
+- `firewall_log_rotations_total` - 日志轮转次数
+- `firewall_bans_triggered_total` - 触发的封禁数
+- `firewall_ddos_events_total` - DDoS 事件检测数
+- `firewall_kernel_commands_rejected_total` - 内核下发被拒绝的命令数
 
-**守护进程侧指标**：
-- `firewall_daemon_uptime_seconds` - 守护进程运行时长
-- `firewall_daemon_config_reloads_total` - 配置重载次数
-- `firewall_daemon_inotify_events_total` - inotify 事件数
-- `firewall_daemon_log_rotations_total` - 日志轮转次数
-- `firewall_daemon_lines_parsed_total` - 已解析日志行数
-- `firewall_daemon_lines_skipped_total` - 跳过的日志行数
-- `firewall_daemon_regex_matches_total` - 正则匹配次数
-- `firewall_daemon_ips_extracted_total` - 提取的 IP 数
-- `firewall_daemon_ips_banned_total` - 触发封禁的 IP 数
-- `firewall_daemon_failed_attempts_total` - 封禁失败次数
-- `firewall_ddos_events_detected_total` - DDoS 事件检测数
-- `firewall_ddos_auto_bans_total` - DDoS 自动封禁数
-- `firewall_ddos_tracked_ips_current` - DDoS 跟踪 IP 数
-
-**Netlink 健康指标**：
-- `firewall_netlink_messages_sent_total` - netlink 发送消息数
-- `firewall_netlink_messages_received_total` - netlink 接收消息数
-- `firewall_netlink_send_errors_total` - netlink 发送失败数
-- `firewall_netlink_recv_errors_total` - netlink 接收/解析失败数
-
-**IP 信誉分指标**：
-- `firewall_reputation_tracked_ips` - 信誉系统跟踪 IP 数
-- `firewall_reputation_low_count` - 低信誉 IP 数（< 80）
-- `firewall_reputation_critical_count` - 高危 IP 数（< 50）
+**内核侧读数不走 Prometheus**：封禁/白名单/速率等内核统计由 `/proc/firewall/stats`
+的键值文本给出，经事件泵汇入内存快照，再由 `/api/v1/stats` 与 `/health` 透出。
 
 ## 质量门禁
 
@@ -367,19 +343,19 @@ cat /proc/firewall/config
 
 1. **格式化检查**
    ```bash
-   make format-check   # C 代码
-   cargo fmt --check   # Rust 代码
+   make format-check                            # C 代码 + YAML
+   cd src/daemon && gofmt -l ./cmd ./internal   # Go 代码（输出须为空）
    ```
 
 2. **Lint 检查**
    ```bash
-   cargo clippy --all-targets -- -D warnings   # Rust（零警告）
+   cd src/daemon && go vet ./cmd/... ./internal/...   # Go
    ```
 
 3. **测试套件**
    ```bash
-   make test           # 集成测试（仅 pytest）
-   cargo test --release # Rust 单元测试（含 doctest）
+   make test                    # 集成测试（仅 pytest）
+   cd src/daemon && go test ./...   # Go 单元测试
    ```
 
 **任一环节失败不得提交**。
@@ -424,12 +400,12 @@ sudo insmod build/kernel-module/firewall.ko
 
 | 指标 | 数值 |
 |------|------|
-| 封禁查找 | O(1) 哈希表 |
+| 封禁查找 | 哈希表；前缀封禁用分层桶表，常态一次哈希即返回 |
 | 封禁表 | hlist + RCU + per-entry 定时器；桶数与条目录上限见 `fw_types.h` 与 `fw_main.c` 模块参数 |
 | 白名单 | 精确桶 + 子网链两阶段匹配；桶数与条目录上限同上 |
 | 速率表 | 哈希表；桶数与条目上限同上 |
 | 守护进程体积 | 单文件 stripped 二进制（含前端产物），`stat -c %s build/daemon/firewall-daemon` 实测 |
-| 测试覆盖 | 集成测试 + Rust 单元测试；以 `make test` / `cargo test` 实时输出为准 |
+| 测试覆盖 | 集成测试 + Go 单元测试；以 `make test` / `go test ./...` 实时输出为准 |
 | 响应延迟 | 毫秒级 |
 
 ## 相关文档
@@ -463,7 +439,8 @@ sudo insmod build/kernel-module/firewall.ko
 #### 开发指南
 - [docs/zh/development/building.md](docs/zh/development/building.md) - 编译指南
 - [docs/zh/development/testing.md](docs/zh/development/testing.md) - 测试指南
-- [docs/zh/development/rust-kmod-design.md](docs/zh/development/rust-kmod-design.md) - Rust 内核模块设计
+- [docs/zh/development/kernel-rewrite-design.md](docs/zh/development/kernel-rewrite-design.md) - 内核重写设计
+- [docs/zh/development/cluster-detection-design.md](docs/zh/development/cluster-detection-design.md) - 集群扫描检测设计
 
 #### 运维管理
 - [docs/zh/operations/management.md](docs/zh/operations/management.md) - 日常管理

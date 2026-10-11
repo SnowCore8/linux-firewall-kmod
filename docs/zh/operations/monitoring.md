@@ -1,12 +1,12 @@
 # 监控
 
-本文档介绍如何监控 Linux Firewall 内核模块的运行状态。
+本文档介绍如何监控 Linux Firewall 内核模块与守护进程的运行状态。
 
 ## Prometheus 监控
 
 ### 配置 Prometheus
 
-在 `prometheus.yml` 中添加 job：
+在 `prometheus.yml` 中添加 job（`/metrics` 在认证组内，若配置了凭据需带 `basic_auth`）：
 
 ```yaml
 scrape_configs:
@@ -14,238 +14,163 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9119']
     scrape_interval: 15s
+    basic_auth:
+      username: <metrics_username>
+      password: <metrics_password>
 ```
 
-### 可用指标
+### 本进程暴露的指标（`/metrics`）
 
-> **历史清单**：以下指标是 v2.2.0 Rust 实现的冻结记录，取自
-> `src/daemon/http_exporter/metrics.rs`（磁盘上不存在）；Go module `src/daemon`
-> 当前不实现 HTTP，下列条目在运行时不可抓取。
-> 早期文档中 `firewall_ban_events_total` / `firewall_packets_dropped_total` /
-> `firewall_hash_table_*` / `firewall_jail_*` 等条目均不存在。
+`internal/http` 暴露 `/metrics`；注册点为 `cmd/firewall-daemon/main.go` 的 `statsSink`
+（日志/判定计数、配置重载）、`internal/kernel/transport.go`（netlink 链路健康）与
+`internal/kernel/consumer.go`（内核事件）。当前注册的 counter：
 
-#### 内核侧（来自 `/proc/firewall/stats`）
+| 指标 | 说明 |
+|------|------|
+| `firewall_lines_parsed_total` | 已解析日志行数 |
+| `firewall_lines_skipped_total` | 因超长/异常跳过的行数 |
+| `firewall_regex_matches_total` | 正则命中总数 |
+| `firewall_inotify_events_total` | inotify 唤醒次数（非事件数） |
+| `firewall_log_rotations_total` | 轮转检测次数 |
+| `firewall_bans_triggered_total` | 实际发起封禁的次数 |
+| `firewall_ddos_events_total` | 检出的 DDoS 事件数 |
+| `firewall_kernel_commands_rejected_total` | 被内核拒绝的指令数 |
+| `firewall_daemon_config_reloads_total` | 配置热重载成功次数（SIGHUP / 文件变化） |
+| `firewall_netlink_messages_sent_total` | netlink 报文成功投递到内核的次数 |
+| `firewall_netlink_messages_received_total` | 从内核成功收取的 netlink 报文数 |
+| `firewall_netlink_send_errors_total` | netlink 发送失败次数 |
+| `firewall_netlink_recv_errors_total` | netlink 收取失败次数（含截断/畸形报文） |
 
-`/proc/firewall/stats` 暴露的内核级计数器映射到以下指标，字段定义以
-`contract/procfs.fwidl` 为准。
+清单以代码里的注册点为唯一真相源；当前没有注册任何 gauge。上述计数器在启动时预注册，
+因此从进程启动起就各有一条 0 值样本行。
 
-| 指标 | 类型 | 说明 |
-|------|------|------|
-| `firewall_kernel_banned_ips_current` | gauge | 当前封禁 IP 数（`current_bans`） |
-| `firewall_kernel_bans_total` | counter | 累计封禁操作数（`total_bans`） |
-| `firewall_kernel_unbans_total` | counter | 累计解封操作数（`total_unbans`） |
-| `firewall_kernel_whitelist_count` | gauge | 当前白名单条目数（`current_whitelist`） |
-| `firewall_kernel_whitelist_rejects_total` | counter | 白名单拒绝的封禁请求数 |
-| `firewall_kernel_ban_table_full_rejects_total` | counter | 因封禁表满而拒绝的请求数 |
-| `firewall_kernel_alloc_failures_total` | counter | `kmalloc` 失败次数 |
-| `firewall_kernel_packets_dropped_total` | counter | 因命中封禁而丢弃的数据包数 |
-| `firewall_kernel_packets_accepted_total` | counter | 经 netfilter 钩子放行的数据包数 |
-| `firewall_kernel_cleanup_cycles_total` | counter | 遗留计数（旧全局清理周期；现已无全局清理线程，通常为 0） |
-| `firewall_kernel_cleanup_expired_total` | counter | per-entry 定时器过期回调累计移除的条目数 |
-| `firewall_kernel_recent_additions` | gauge | 当前 1 秒窗口内的封禁操作数 |
+### 内核侧计数（经 `/proc/firewall/stats` 读取）
+
+内核级计数**不走 Prometheus**，而以 `key value` 行暴露在 `/proc/firewall/stats`
+（`read_format = machine`，字段清单以 `contract/procfs.fwidl` 的 `key stats` 为准）。关键键：
+
+| 键 | 说明 |
+|----|------|
+| `total_bans` | 累计封禁操作数 |
+| `total_unbans` | 累计解封操作数 |
+| `current_bans` | 当前封禁条目数 |
+| `current_whitelist` | 当前白名单条目数 |
+| `whitelist_rejects` | 白名单拒绝的封禁请求数 |
+| `packets_dropped` | 因命中封禁而丢弃的数据包数 |
+| `packets_accepted` | 经 netfilter 钩子放行的数据包数 |
+| `cleanup_expired_total` | per-entry 定时器过期回调累计移除的条目数 |
+| `cleanup_cycles` | 遗留键位：已无全局清理线程，恒为 0（保留以兼容解析） |
+| `recent_additions` | 当前 1 秒窗口内的封禁操作数 |
 
 **不变量**：`total_bans == current_bans + total_unbans + cleanup_expired_total`
 
-#### 守护进程侧
-
-| 指标 | 类型 | 说明 |
-|------|------|------|
-| `firewall_daemon_uptime_seconds` | counter | 守护进程运行时长 |
-| `firewall_daemon_config_reloads_total` | counter | SIGHUP 触发的配置重载次数 |
-| `firewall_daemon_inotify_events_total` | counter | inotify 事件总数 |
-| `firewall_daemon_log_rotations_total` | counter | 日志轮转次数 |
-| `firewall_daemon_lines_parsed_total` | counter | 已解析日志行数 |
-| `firewall_daemon_lines_skipped_total` | counter | 跳过的日志行数 |
-| `firewall_daemon_regex_matches_total` | counter | 正则匹配命中数 |
-| `firewall_daemon_ips_extracted_total` | counter | 提取出的 IP 数 |
-| `firewall_daemon_ips_banned_total` | counter | 实际触发内核封禁的 IP 数 |
-| `firewall_daemon_failed_attempts_total` | counter | 封禁失败次数（与 max_retries 相关） |
+读 `stats` 前内核会经 `fw_stats_snapshot()` 跨 CPU flush，与 netlink `STATS_QUERY` 同口径。
+若要把这些计数也送进 Prometheus，需要额外的 procfs→metrics 适配；仓库当前不提供。
 
 ### 查询示例
 
 ```promql
-# 当前封禁 IP 数
-firewall_kernel_banned_ips_current
+# 日志解析速率
+rate(firewall_lines_parsed_total[5m])
 
-# 最近 5 分钟封禁速率（内核态）
-rate(firewall_kernel_bans_total[5m])
+# 匹配率（解析中命中正则的比例）
+rate(firewall_regex_matches_total[5m])
+  / rate(firewall_lines_parsed_total[5m])
 
-# 最近 5 分钟 IP 提取速率
-rate(firewall_daemon_ips_extracted_total[5m])
+# 封禁速率
+rate(firewall_bans_triggered_total[5m])
 
-# 匹配率（提取但未触发封禁 = 仍在窗口内累积）
-rate(firewall_daemon_ips_extracted_total[5m])
-  - rate(firewall_daemon_ips_banned_total[5m])
+# 内核拒绝指令速率（非零说明下发有问题）
+rate(firewall_kernel_commands_rejected_total[5m])
 
-# 守护进程 uptime（小时）
-firewall_daemon_uptime_seconds / 3600
+# 配置热重载速率（运维改配置的频次）
+rate(firewall_daemon_config_reloads_total[5m])
 
-# 解析与匹配比（健康度）
-rate(firewall_daemon_regex_matches_total[5m])
-  / rate(firewall_daemon_lines_parsed_total[5m])
-```
-
-## Grafana 仪表板
-
-### 导入仪表板
-
-1. 打开 Grafana
-2. 点击 `+` → `Import`
-3. 输入仪表板 JSON 或上传文件
-
-### 推荐面板
-
-#### 当前封禁 IP
-
-```
-Title: Current Banned IPs
-Panel: Stat
-Query: firewall_kernel_banned_ips_current
-Thresholds: 100 (warning), 1000 (critical)
-```
-
-#### 封禁速率趋势
-
-```
-Title: Ban Rate (kernel)
-Panel: Time Series
-Query: rate(firewall_kernel_bans_total[5m])
-```
-
-#### 解封速率趋势
-
-```
-Title: Unban Rate (kernel)
-Panel: Time Series
-Query: rate(firewall_kernel_unbans_total[5m])
-```
-
-#### 守护进程健康度
-
-```
-Title: Daemon Health
-Panel: Time Series
-Queries:
-  - rate(firewall_daemon_lines_parsed_total[5m])    # 解析
-  - rate(firewall_daemon_regex_matches_total[5m])   # 匹配
-  - rate(firewall_daemon_lines_skipped_total[5m])   # 跳过
-  - rate(firewall_daemon_failed_attempts_total[5m])  # 失败
-```
-
-#### 容量使用
-
-```
-Title: Whitelist Capacity
-Panel: Gauge
-Query: firewall_kernel_whitelist_count
-Max: 按 capacity.max_whitelist_entries 配置（默认见 config/default.yaml）
-Thresholds: 该上限的 80% (warning) / 95% (critical)
+# netlink 发送错误速率（非零说明与内核的链路有问题）
+rate(firewall_netlink_send_errors_total[5m])
 ```
 
 ## 日志监控
 
 ### 日志格式
 
+守护进程写 **JSON Lines**：每行一条 JSON 对象，字段顺序固定为
+`ts` → `level` → `msg` → `version` → 记录自身属性。默认路径 `/var/log/firewall-daemon.log`。
+
 ```
-[2024-01-15 10:30:45] [INFO] [sshd] Banned 192.168.1.100 (5 failures in 600s)
-[2024-01-15 10:30:45] [INFO] Kernel: Added 192.168.1.100 to hash table
-[2024-01-15 11:30:45] [INFO] [sshd] Unbanned 192.168.1.100 (expired)
-[2024-01-15 12:00:00] [WARN] Hash table 75% full
+{"ts":"2026-10-11T10:30:45.123Z","level":"INFO","msg":"内核 netlink 链路已就绪","version":"..."}
 ```
 
 ### 日志级别
 
-| 级别 | 说明 | 示例 |
-|------|------|------|
-| `DEBUG` | 调试信息 | 详细匹配过程 |
-| `INFO` | 一般信息 | 封禁/解封事件 |
-| `WARN` | 警告 | 资源接近上限 |
-| `ERROR` | 错误 | 操作失败 |
+| 级别 | 说明 |
+|------|------|
+| `DEBUG` | 调试信息（详细匹配过程） |
+| `INFO` | 一般信息（封禁/解封事件、启动/关停） |
+| `WARN` | 警告（资源接近上限、链路降级） |
+| `ERROR` | 错误（操作失败） |
 
 ### 日志轮转
 
-配置 logrotate：
-
-```
-/etc/logrotate.d/firewall
-
-/var/log/firewall.log {
-    daily
-    rotate 30
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 root adm
-    postrotate
-        systemctl reload firewall > /dev/null 2>&1 || true
-    endscript
-}
-```
+守护进程内置**按大小轮转**：`log_max_size_mb`（默认 10MB）切片、`log_max_files`（默认 10，含
+当前片）控制保留片数，`log_max_size_mb=0` 关闭轮转。轮转不需要 logrotate，也不需要 `SIGHUP`
+（`log_max_*` 不随热重载切换，改后需重启 daemon）。
 
 ### 日志分析命令
 
+日志是 JSON Lines，配合 `jq` 统计：
+
 ```bash
-# 统计今日封禁数
-grep "$(date +%Y-%m-%d)" /var/log/firewall.log | grep "Banned" | wc -l
+# 统计今日封禁次数
+grep "$(date +%Y-%m-%d)" /var/log/firewall-daemon.log | jq -c 'select(.msg|test("封禁|ban"))' | wc -l
 
-# 查看最常被封禁的 IP
-grep "Banned" /var/log/firewall.log | grep -oP '\d+\.\d+\.\d+\.\d+' | sort | uniq -c | sort -rn | head -20
+# 按 jail 聚合封禁条数
+jq -r 'select(.jail) | .jail' /var/log/firewall-daemon.log | sort | uniq -c | sort -rn
 
-# 查看各 Jail 封禁数
-grep "Banned" /var/log/firewall.log | grep -oP '\[\w+\]' | sort | uniq -c | sort -rn
-
-# 查看最近 10 次封禁
-grep "Banned" /var/log/firewall.log | tail -10
+# 只看 ERROR / WARN
+jq -c 'select(.level=="ERROR" or .level=="WARN")' /var/log/firewall-daemon.log
 ```
 
 ## 告警规则
 
 ### Prometheus AlertManager
 
+下例只使用本进程确实产出的指标：
+
 ```yaml
 groups:
   - name: firewall
     rules:
       - alert: HighBanRate
-        expr: rate(firewall_kernel_bans_total[5m]) > 10
+        expr: rate(firewall_bans_triggered_total[5m]) > 10
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "High kernel ban rate detected"
+          summary: "High ban rate detected"
           description: "Ban rate is {{ $value }} per second"
 
-      - alert: WhitelistNearlyFull
-        # 上限由 capacity.max_whitelist_entries 配置（默认见 config/default.yaml）；
-        # 阈值按该上限的 80% 取，此处以占位符表示
-        expr: firewall_kernel_whitelist_count > <0.8 * 上限>
-        for: 5m
+      - alert: KernelRejectingCommands
+        expr: rate(firewall_kernel_commands_rejected_total[5m]) > 0
+        for: 10m
         labels:
-          severity: critical
+          severity: warning
         annotations:
-          summary: "Whitelist nearly full"
-          description: "{{ $value }} whitelist entries in use"
+          summary: "内核在拒绝指令"
+          description: "{{ $value }} rejections per second"
 
       - alert: DaemonDown
-        # 守护进程崩溃或未运行时，uptime 计数器停止递增
-        expr: rate(firewall_daemon_uptime_seconds[5m]) == 0
+        # 进程不在时 /metrics 抓取失败，用 up 判定
+        expr: up{job="firewall"} == 0
         for: 1m
         labels:
           severity: critical
         annotations:
           summary: "firewall-daemon not running"
-          description: "Daemon uptime counter not advancing"
-
-      - alert: DaemonFailingExtraction
-        expr: rate(firewall_daemon_failed_attempts_total[5m]) > 100
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High daemon failure rate"
-          description: "Failure rate is {{ $value }} per second"
 ```
+
+仓库另附 `grafana/alert-rules.yaml` 与 `grafana/firewall-dashboard.json` 作为导入起点；
+其中的指标名需与本进程 `/metrics` 的实际产出对齐后再启用。
 
 ## 健康检查
 
@@ -262,25 +187,21 @@ if ! lsmod | grep -q firewall; then
 fi
 
 # 检查守护进程
-if ! systemctl is-active --quiet firewall; then
+if ! systemctl is-active --quiet firewall-daemon; then
     echo "CRITICAL: Daemon not running"
     exit 2
 fi
 
 # 检查 ProcFS
-if [ ! -f /proc/firewall/config ]; then
+if [ ! -f /proc/firewall/stats ]; then
     echo "CRITICAL: ProcFS interface not available"
     exit 2
 fi
 
-# 检查 Prometheus 端口
-HTTP 已移植，同时检查 ProcFS：
-
-```bash
-# 只检查 ProcFS
-echo "当前模块接口可用性检查（HTTP 指标待移植后接入）"
-if [ ! -f /proc/firewall/config ]; then
-    echo "CRITICAL: ProcFS interface not available"
+# 检查只读 HTTP 探针（/health 就绪返回 200，否则 503；探针在认证组之外，无需凭据）
+code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9119/health)
+if [ "$code" != "200" ]; then
+    echo "CRITICAL: /health returned $code"
     exit 2
 fi
 
