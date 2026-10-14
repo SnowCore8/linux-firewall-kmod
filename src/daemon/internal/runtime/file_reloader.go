@@ -42,8 +42,13 @@ func (r *fileReloader) Reload(cfg *config.Config) error {
 		}
 	}
 
-	if err := jail.Finalize(&newCfg); err != nil {
+	// 正则编译失败不阻断重载（见 jail.Finalize）：该 jail 退化为关键字回退，逐条告警后照常应用。
+	warnings, err := jail.Finalize(&newCfg)
+	if err != nil {
 		return err
+	}
+	for _, warning := range warnings {
+		r.logger.Warn("配置正则未能编译，该 jail 退化为其关键字回退", "detail", warning)
 	}
 
 	*cfg = newCfg
@@ -65,8 +70,13 @@ func (r *fileReloader) Rollback(cfg *config.Config) error {
 		return err
 	}
 
-	if err := jail.Finalize(&newCfg); err != nil {
+	// 与 Reload 同一口径：正则编译失败只告警，回滚照常应用。
+	warnings, err := jail.Finalize(&newCfg)
+	if err != nil {
 		return err
+	}
+	for _, warning := range warnings {
+		r.logger.Warn("配置正则未能编译，该 jail 退化为其关键字回退", "detail", warning)
 	}
 
 	*cfg = newCfg

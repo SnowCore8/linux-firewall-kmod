@@ -11,10 +11,16 @@ import "github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
 // 两处共用同一个函数，判定口径就不会各走各路。
 //
 // 会就地改 cfg：智能默认写进各 jail 的阈值，编译结果写进各 jail 的 Regexes。
-func Finalize(cfg *config.Config) error {
+//
+// 返回值分两级：err 只在智能默认之后、Validate 拒绝时非 nil（配置本身不合法，必须拒绝
+// 启动/重载/写入）；正则编译失败只进 warnings，**不致命**——与 compile.go 顶部语义②同源：
+// 空/坏正则只让该 jail 退化为解析层的关键字回退（logparse.RuleSet.Parse），防护仍在，
+// 不构成拒绝启动或拒绝重载的理由。历史上把它当致命错误处理，导致一份只给了空模式的
+// 配置让守护进程直接退出，而文档承诺的关键字回退根本没机会生效。
+func Finalize(cfg *config.Config) (warnings []string, err error) {
 	ApplySmartDefaults(cfg)
 	if err := Validate(cfg); err != nil {
-		return err
+		return nil, err
 	}
-	return CompileRegexes(cfg)
+	return compileFailures(cfg), nil
 }

@@ -24,6 +24,13 @@ const DefaultPatternName = "default"
 //     解析层的关键字回退（见 logparse.RuleSet.Parse）仍会命中 sshd 的
 //     `Failed password for` 行。判定按此口径，否则同一份配置行为不同。
 func CompileRegexes(cfg *config.Config) error {
+	return JoinErrors(compileFailures(cfg))
+}
+
+// compileFailures 收集所有 enabled jail 的编译失败文案，语义与 CompileRegexes 的
+// 「尽力而为 + 汇总失败」一致，只是把逐条文本留给调用方：启动路径要把它们降级成
+// 告警逐条写出，聚合错误做不到这一点。
+func compileFailures(cfg *config.Config) []string {
 	errs := make([]string, 0, len(cfg.Jails))
 	for i := range cfg.Jails {
 		j := &cfg.Jails[i]
@@ -34,7 +41,7 @@ func CompileRegexes(cfg *config.Config) error {
 			errs = append(errs, err.Error())
 		}
 	}
-	return JoinErrors(errs)
+	return errs
 }
 
 // CompileJailRegexes 编译单个 jail 的正则。

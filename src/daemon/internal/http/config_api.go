@@ -144,11 +144,15 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, up
 		return false
 	}
 
-	newCfg, err := loadConfigContent(merged)
+	newCfg, warnings, err := loadConfigContent(merged)
 	if err != nil {
 		h.server.logger.Warn("配置内容未通过加载校验，拒绝写入", "error", err)
 		WriteCode(w, httpcontract.Code40004, "更新配置失败：内容按加载口径校验未通过（"+err.Error()+"），配置文件保持原样")
 		return false
+	}
+	// 正则编译告警不拒绝写入（与启动/重载同口径），只逐条记下来。
+	for _, warning := range warnings {
+		h.server.logger.Warn("配置正则未能编译，该 jail 退化为其关键字回退", "detail", warning)
 	}
 
 	if err := os.WriteFile(path, []byte(merged), 0o644); err != nil {
@@ -343,20 +347,22 @@ func patchWebuiYAML(content string, w config.WebuiConfig) (string, error) {
 	return string(out), nil
 }
 
-// loadConfigContent 按守护进程真正加载配置的口径校验一份 YAML 内容，返回它落成的配置。
+// loadConfigContent 按守护进程真正加载配置的口径校验一份 YAML 内容，返回它落成的配置
+// 以及正则编译告警（告警不致命，见 jail.Finalize：对应 jail 退化为关键字回退）。
 //
 // 与启动/重载同一条流水线：config.Default() 打底 → 解析内容 → jail 后处理（智能默认、
 // 校验、编译正则）。打底必须是 Default() 而不是零值，也必须是 Default() 而不是当前活配置：
 // 重载器从 Default() 起步，而 PUT 写下去的是「文件其余段落 + 新 webui 段」的合并结果，所以
 // 「这份内容会被加载成什么」的答案只能这么算。返回的配置用来投影 SET_CONFIG，故它必须与
 // 重载器最终拿到的那一份同值。
-func loadConfigContent(content string) (config.Config, error) {
+func loadConfigContent(content string) (cfg config.Config, warnings []string, err error) {
 	probe := config.Default()
 	if err := config.ParseConfig(content, &probe); err != nil {
-		return config.Config{}, err
+		return config.Config{}, nil, err
 	}
-	if err := jail.Finalize(&probe); err != nil {
-		return config.Config{}, err
+	warnings, err = jail.Finalize(&probe)
+	if err != nil {
+		return config.Config{}, nil, err
 	}
-	return probe, nil
+	return probe, warnings, nil
 }

@@ -81,8 +81,9 @@ func run(args []string) error {
 
 	// 后处理三步（智能默认 → 校验 → 编译）与重载器、PUT /config 的落盘前校验共用同一个
 	// 函数：启动能过的配置、热重载与 API 写入必须按同一口径判，否则「能启动但不能重载」
-	// 这类现象就没有解释。
-	if err := jail.Finalize(&cfg); err != nil {
+	// 这类现象就没有解释。正则编译失败在这里只是告警（见 jail.Finalize），不能让进程退出。
+	finalWarnings, err := jail.Finalize(&cfg)
+	if err != nil {
 		return fmt.Errorf("配置后处理失败: %w", err)
 	}
 
@@ -90,6 +91,11 @@ func run(args []string) error {
 
 	// 日志系统按配置初始化：目的地、格式、级别门槛与文件轮转都在 internal/logger 内落地。
 	logger := newLogger(&cfg)
+
+	// logger 建在 Finalize 之后，warnings 只能先暂存到这里再逐条告警。
+	for _, warning := range finalWarnings {
+		logger.Warn("配置正则未能编译，该 jail 退化为其关键字回退", "detail", warning)
+	}
 
 	if err := checkProcfs(); err != nil {
 		return err
