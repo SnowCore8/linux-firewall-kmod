@@ -273,7 +273,7 @@ journalctl -u firewall-daemon | grep "正则未能编译"
 | 速率检测像在误伤 | `sudo cat /proc/firewall/rates` 表头的 `rate_slot_spill` | 非零说明活跃源已超上限，新源**有意放行**（表满不丢包）；提高 `fw_max_rate_entries` 不会突破 `FW_RATE_CPU_SLOTS` = 512 这个瓶颈 |
 | 端口扫描嫌疑刷屏 | `sudo cat /proc/firewall/port_scanners` | 阈值是 5 个唯一端口（`fw_types.h` 的 `PORT_SCAN_THRESHOLD`） |
 | 封禁数持续走高 | `current_bans`；各 jail 的 `bans_triggered` | 减 `findtime` 或加 `max_retries`；`fw_max_ban_entries` 到限会拒绝新增 |
-| 历史库变大 | `sudo ls -lh /var/lib/firewall/` | 由清理调度器按保留天数删除旧记录；保留天数取自代码默认值 7（`internal/config/types.go` 的 `HistoryRetentionDays`），**当前不是 YAML 可配项**（`internal/config/parser.go` 无对应键） |
+| 历史库变大 | `sudo ls -lh /var/lib/firewall/` | 由清理调度器按保留天数删除旧记录；保留天数取 `defaults.history_retention_days`（默认 7，`internal/config/types.go` 的 `HistoryRetentionDays`）。库本身由 `defaults.history_db_path` 决定开不开：留空时 persist 根本不建，面板的分析面全部回 503 |
 | 日志变大 | `sudo du -m /var/log/firewall*` | 内置按大小轮转，`log_max_size_mb` / `log_max_files`；改后要重启 |
 
 绝对性能数字不要照文档引用。口径与复现方法见

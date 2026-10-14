@@ -140,6 +140,9 @@ defaults:
   metrics_password: "$E2E_METRICS_PASSWORD"
   log_file: $DAEMON_LOG
   log_level: 3
+  # 历史库：面板的分析面（复发、分级成效、时长直方图、三类推荐）以它为依赖，路径为空时
+  # 那些端点一律 503。E2E 的控制台洁净度断言把 503 记成用例失败，所以这里必须开库。
+  history_db_path: $E2E_STATE_DIR/history.db
 
 jails:
   sshd:

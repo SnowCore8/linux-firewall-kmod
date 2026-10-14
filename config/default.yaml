@@ -21,6 +21,12 @@ defaults:
   log_file: /var/log/firewall.log
   # 运行时日志级别: 0=NONE, 1=ERR, 2=WARN, 3=INFO(默认), 4=DEBUG
   log_level: 3
+  # 历史库（SQLite）。面板的分析面——复发统计、分级成效、封禁时长直方图、三类调参建议——
+  # 都以它为依据；这一项留空即整片关掉，那些端点回 503「依赖未就绪」。
+  # 目录由 `make install-state` 建（/var/lib/firewall，0700），随包 systemd 单元已放行写入。
+  history_db_path: /var/lib/firewall/history.db
+  # 历史行保留天数，清理调度器按它删旧记录
+  history_retention_days: 7
 
 # ============================================================
 # Jail 定义 - 每个服务独立监控

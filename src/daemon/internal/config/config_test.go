@@ -332,3 +332,34 @@ func TestListenAddressBracketsIPv6(t *testing.T) {
 		t.Errorf("IPv6 绑定合成结果 = %q，期望 \"[::]:9119\"", got)
 	}
 }
+
+// 历史库的两个键此前只能待在 Config 结构里：YAML 没有对应键，persist 就永远不建，
+// 面板的分析面（复发、分级成效、时长直方图、三类推荐）在真实部署里一律 503。
+// 用例钉住「写得进、并且默认是关」这两条——默认不开库是有意的：不配路径就不该在
+// /var/lib 下凭空造一个文件。
+func TestHistoryDatabaseIsConfigurable(t *testing.T) {
+	if got := Default().HistoryDBPath; got != "" {
+		t.Errorf("默认不应开历史库，实际 HistoryDBPath = %q", got)
+	}
+
+	cfg := Default()
+	if err := ParseConfig("defaults:\n  history_db_path: /var/lib/firewall/history.db\n  history_retention_days: 30\n", &cfg); err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if cfg.HistoryDBPath != "/var/lib/firewall/history.db" {
+		t.Errorf("history_db_path 未落到配置: %q", cfg.HistoryDBPath)
+	}
+	if cfg.HistoryRetentionDays != 30 {
+		t.Errorf("history_retention_days = %d，期望 30", cfg.HistoryRetentionDays)
+	}
+
+	// 显式写空串必须能关掉它：只判断「键存在与否」的话，一份想关库的配置会被忽略。
+	cfg = Default()
+	cfg.HistoryDBPath = "/tmp/pre-set.db"
+	if err := ParseConfig("defaults:\n  history_db_path: \"\"\n", &cfg); err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if cfg.HistoryDBPath != "" {
+		t.Errorf("显式空串应关库，实际 %q", cfg.HistoryDBPath)
+	}
+}

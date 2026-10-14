@@ -23,7 +23,7 @@
 
 ## 二、`defaults` 段
 
-14 个字段。缺省表示用内置默认值。
+16 个字段。缺省表示用内置默认值。
 
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
@@ -39,6 +39,8 @@
 | `log_level` | 整数 | 否 | 3 | 0 无、1 错误、2 警告、3 信息、4 调试 |
 | `log_destination` | 字符串 | 否 | `both` | `syslog` / `file` / `both` / `journal` |
 | `log_format` | 字符串 | 否 | `plain` | `plain` 或 `json` |
+| `history_db_path` | 字符串 | 否 | 空 | SQLite 历史库路径；留空即关闭整个分析面 |
+| `history_retention_days` | 整数 | 否 | 7 | 历史行保留天数，清理调度器按它删旧记录 |
 | `log_max_size_mb` | 整数 | 否 | 10 | 单个日志文件上限 |
 | `log_max_files` | 整数 | 否 | 10 | 保留几个轮转文件 |
 

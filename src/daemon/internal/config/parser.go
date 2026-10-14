@@ -43,6 +43,9 @@ type yamlDefaults struct {
 	LogFormat       *string `yaml:"log_format"`
 	LogMaxSizeMB    *uint32 `yaml:"log_max_size_mb"`
 	LogMaxFiles     *uint32 `yaml:"log_max_files"`
+	// 历史库：路径为空 = 不启用（面板的分析页全部回 503「依赖未就绪」）。
+	HistoryDBPath        *string `yaml:"history_db_path"`
+	HistoryRetentionDays *uint32 `yaml:"history_retention_days"`
 }
 
 // yamlJail 是单个 jail 的 YAML 表示：支持 `regex` 单条 + `regexes` 嵌套映射两种写法。
@@ -227,6 +230,15 @@ func applyDefaults(yc *yamlConfig, cfg *Config) error {
 	}
 	if d.LogMaxFiles != nil {
 		cfg.LogMaxFiles = *d.LogMaxFiles
+	}
+	// 历史库：路径是总开关——空串时 persist 根本不建，面板的分析面（复发/分级成效/时长
+	// 直方图/三类推荐）全部回 503。这两个键此前只存在于 Config 结构里、YAML 无法写，
+	// 于是整片分析面在真实部署里点不亮（E2E 的控制台洁净度断言就是这么撞开的）。
+	if d.HistoryDBPath != nil {
+		cfg.HistoryDBPath = *d.HistoryDBPath
+	}
+	if d.HistoryRetentionDays != nil {
+		cfg.HistoryRetentionDays = int(*d.HistoryRetentionDays)
 	}
 	return nil
 }
