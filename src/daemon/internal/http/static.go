@@ -54,7 +54,17 @@ func (s *Server) RegisterStaticFiles(fsys fs.FS) {
 // <token> 直达是登录页与外部跳转的唯一凭据入口，丢掉 query 就等于丢掉凭据。
 //
 // 状态码固定 303（不是 302）：它明确表达「响应是另一个资源、原请求无副作用」。
+//
+// `GET /` 在 ServeMux 里是**子树模式**：任何没被更具体模式接住的 GET 都会落到这里，
+// 于是 `/api/v1/typo` 读到的是 303 + 面板外壳，而契约说「路径无匹配模式 → 框架自产
+// 404，body `404 page not found`」（contract/http.fwidl 的 FRAMEWORK_DEFAULT）。所以
+// 只有真正的根路径才重定向，其余交给 net/http 自己的 404 生产者——不手写响应体，
+// 保持契约「daemon 源码里不该有 404 构造点」这句话成立。
 func redirectRoot(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
 	target := "/dashboard"
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
