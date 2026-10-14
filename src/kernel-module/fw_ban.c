@@ -44,11 +44,25 @@
 
 #include <linux/ktime.h>
 #include <linux/slab.h>
+#include <linux/timer.h>
 
 #include "fw_ban.h"
 #include "fw_wl.h"
 #include "fw_stats.h"
 #include "fw_netlink.h"
+
+/*
+ * 内核 API 兼容层：`timer_container_of()` 是 6.16 才引入的名字，此前的内核里同一
+ * 件事叫 `from_timer()`，而 7.0 起旧名已经删除，两个名字不共存。Ubuntu 24.04 的 GA
+ * 内核 6.8 只有 `from_timer`，缺这段就直接卡在 -Werror=implicit-function-declaration。
+ *
+ * 这里按**宏是否存在**来适配，而不是比 `LINUX_VERSION_CODE`：发行版会把新宏
+ * backport 进旧版本号的内核（也反过来砍掉旧宏），照版本号判断在这类内核上正好判反。
+ */
+#ifndef timer_container_of
+#  define timer_container_of(var, callback_timer, timer_fieldname) \
+    from_timer(var, callback_timer, timer_fieldname)
+#endif
 
 /*
  * 编译期自检（分层桶表的尺寸不变量）。
