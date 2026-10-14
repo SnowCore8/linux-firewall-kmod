@@ -10,22 +10,15 @@
 // 资源天然只有 /static/ 作用域，故 sw.js 由守护进程单独用 /sw.js 路由提供，
 // 这里只负责把它输出到 static/。
 //
-// JSX 运行时：不使用 React。tsconfig 的 jsxImportSource 指向自研运行时，esbuild
-// 会把 JSX 编译成 `import { jsx } from "@fw/jsx/jsx-runtime"` 这类裸标识符，
-// 由下面的 alias 落到 src/jsx。tsconfig 的 paths 与本段 alias 必须成对维护，
-// 否则 tsc 与打包器的解析结果会不一致（tsc 报找不到模块、打包器另找一份实现）。
-import { fileURLToPath } from 'node:url'
+// JSX 运行时：React 19 自动运行时（tsconfig 的 jsx = "react-jsx"、
+// jsxImportSource = "react"）。@vitejs/plugin-react 负责把 .tsx 编译到
+// `react/jsx-runtime` 并接上 Fast Refresh；这两处配置必须成对维护，否则 tsc 与
+// 打包器会各自解析一份 JSX 实现（tsc 报类型不匹配、产物却跑另一套运行时）。
+import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
-const jsxRuntime = fileURLToPath(new URL('./src/jsx', import.meta.url))
-
 export default defineConfig({
-  resolve: {
-    alias: [
-      { find: '@fw/jsx/jsx-runtime', replacement: `${jsxRuntime}/jsx-runtime.ts` },
-      { find: '@fw/jsx/jsx-dev-runtime', replacement: `${jsxRuntime}/jsx-dev-runtime.ts` },
-    ],
-  },
+  plugins: [react()],
 
   // 产物按 /static/*path 提供，必须带该前缀；文件名固定以便
   // 守护进程的 go:embed 按名查找（assets.go 位于 src/daemon/web_ui/static/assets.go）。
@@ -35,7 +28,10 @@ export default defineConfig({
     // 直接输出到 Go 守护进程的嵌入目录（相对 frontend/）：src/daemon 是模块根，
     // 产物必须是 ../src/daemon/web_ui/static，与 go:embed 目录同名同层。
     outDir: '../src/daemon/web_ui/static',
-    emptyOutDir: true,
+    // 不能用 emptyOutDir：本目录里还有已入库的 assets.go（//go:embed 的持有文件），
+    // vite 清空输出目录会连它一起删掉，随后 go build 就以「包内无 .go 文件」失败。
+    // 陈旧面板文件的清理由 make frontend 的构建前置步骤完成（保留 assets.go）。
+    emptyOutDir: false,
     target: 'es2020',
     // 资源平铺到输出根目录，避免 assets/ 子目录带来的相对路径差异
     assetsDir: '',

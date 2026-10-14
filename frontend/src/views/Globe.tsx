@@ -34,7 +34,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
 import { getAttackGeo } from '../api/endpoints'
-import type { AttackGeoResponse, GeoPoint } from '../api/types'
+import type { AttackGeoResponse, GeoPoint } from '../api/contract'
 import {
   Badge,
   InlineError,
@@ -138,11 +138,23 @@ const MARKER_SIZE_PX = 26
  * 才构造出本对象：`server_location_source` 为 `none`、或任一侧不是有限数值，都视为
  * 未配置——此时既不画本机标记、也不画弧线，而不是退回某个占位坐标。
  */
+/**
+ * 契约把 `server_location_source` 声明成自由字符串（后端当前只产出
+ * `config` / `detected` / `none`），页面不能假设它一定是这三个值之一，
+ * 因此显式列出「本页面能安全标注」的两个取值，其余一律按未配置处理。
+ */
+const SELF_SOURCES = ['config', 'detected'] as const
+type SelfSource = (typeof SELF_SOURCES)[number]
+
+function knownSelfSource(value: string | null | undefined): SelfSource | undefined {
+  return SELF_SOURCES.find((source) => source === value)
+}
+
 interface SelfPosition {
   latitude: number
   longitude: number
   /** 来源；`none` 不会构造出本对象（未配置即「没有本机位置」） */
-  source: 'config' | 'detected'
+  source: SelfSource
 }
 
 /** 本机坐标来源的中文标注（与后端 ServerLocationSource 对应，`none` 不在此列） */
@@ -908,8 +920,8 @@ export default function Globe() {
   const selfPosition = useMemo<SelfPosition | null>(() => {
     const latitude = data?.server_latitude
     const longitude = data?.server_longitude
-    const source = data?.server_location_source
-    if (source !== 'config' && source !== 'detected') return null
+    const source = knownSelfSource(data?.server_location_source)
+    if (source === undefined) return null
     if (
       typeof latitude !== 'number' ||
       typeof longitude !== 'number' ||

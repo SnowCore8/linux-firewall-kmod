@@ -382,11 +382,11 @@ export function getAttackGeo(): Promise<AttackGeoResponse> {
 /**
  * `GET /api/v1/logs` — 分页日志查询。
  *
- * 契约里的 `LogQueryParams` 字段全部是**必填可空**（`page: number | null`），
- * 不是可选字段，所以默认值用 `{} as LogQueryParams`，让调用方只传关心的项；
- * `withQuery` 会跳过 `null` / `undefined`，未填项不会出现在查询串里。
+ * 契约里的 `LogQueryParams` 是请求侧 `Option<T>`，生成出来即可选可为空
+ * （`page?: number | null`），调用方只传关心的项即可；`withQuery` 会跳过
+ * `null` / `undefined`，未填项不会出现在查询串里。
  */
-export function getLogs(params: LogQueryParams = {} as LogQueryParams): Promise<LogPageResponse> {
+export function getLogs(params: LogQueryParams = {}): Promise<LogPageResponse> {
   return getJson<LogPageResponse>(
     withQuery(ROUTES.GET_API_V1_LOGS, {
       page: params.page,
