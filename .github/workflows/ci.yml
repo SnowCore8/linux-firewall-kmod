@@ -403,6 +403,14 @@ jobs:
           # 测试套件强制要求 sqlite3 CLI（禁止跳过）
           sudo apt-get install -y sqlite3
           sqlite3 --version
+          # 测试套件本身的两处第三方依赖：pytest 与 tests/config.py 读 YAML 用的 PyYAML。
+          # runner 镜像里的系统 python3 不带这两个模块，缺任一个都会在收集阶段就
+          # "No module named pytest" 退出 1；下面的 pytest 是 `sudo python3 -m pytest`
+          # 起的（内核测试要 root 权限），所以必须装进系统站点目录，
+          # --user 安装对 root 不可见。
+          sudo apt-get install -y python3-pytest python3-yaml
+          python3 -m pytest --version
+          python3 -c "import yaml; print('PyYAML', yaml.__version__)"
 
       - name: 验证内核模块兼容性
         id: check-module
