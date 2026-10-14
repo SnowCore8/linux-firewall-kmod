@@ -33,6 +33,11 @@
   `illegal size (86016) or align (64) for percpu allocation` → 初始化失败 `-12` → `insmod` 报
   `Cannot allocate memory`，模块在该内核根本加载不进去。现按 128 槽 × 4 块分别申请，索引空间仍是
   0..511、`slot_idx` 语义与探测回绕逻辑不变。（`6797b851`）
+- **PWA 清单以 `application/octet-stream` 发出** - Go 的内建 MIME 表没有 `.webmanifest`（清单的规范扩展名），
+  `mime.TypeByExtension` 回空串，`writeAsset` 于是落到二进制流：设备拿不到可读清单，装不上图标与启动方式。
+  这项能力在旧实现里有，迁到 Go 时丢了，而 E2E 的内容类型断言一直空跑（runner 加载不了模块 → 整套跳过）。
+  内核侧解掉 per-CPU 上限后 E2E 第一次真跑就把它暴露了。改在包初始化处注册扩展名，让扩展名推断仍是
+  唯一决定这个头的地方。（`4c461d12`）
 
 ### 变更
 - **CI 依赖补齐** - 「运行测试」任务此前连 `pytest` 都没有（`No module named pytest`），补装
@@ -63,6 +68,13 @@
   与统计，72 字节），而 `BanIp.reason` 是 `str[32]`，编码阶段报错，封禁表始终为空（test_22.3）。
   生产者改发 `<jail>: cluster scan`，投递侧加 `contract.ClampFixedString` 兜底——标签超长不该把
   封禁判死，日志/SSE/历史库仍留原文。（`f0398232`）
+- **历史库在任何部署里都建不起来** - `history_db_path` 与 `history_retention_days` 只存在于
+  `config.Config` 结构里，`parser.go` 没有对应键，而 `KnownFields(true)` 会让写了这两个键的配置直接
+  加载失败：`main.go` 的 `if cfg.HistoryDBPath != ""` 永远为假，面板的复发统计、分级成效、封禁时长
+  直方图与三类调参建议一律回 503「依赖未就绪：历史库未初始化」，而这是 README 列出的能力。现补上两个
+  键（显式写空串就是关库，不被当成「没写」而回落默认），内置默认仍为关；`config/default.yaml` 打开它
+  （`/var/lib/firewall/history.db`，保留 7 天），`scripts/e2e-daemon.sh` 的临时配置同步带上。
+  **这是行为变更**：按 `config/default.yaml` 部署的进程从此会写历史库。（`5509e5b3`）
 
 ### 文档
 - **全库文档重写并去参照系** - README、AGENTS、CONTRIBUTING、SECURITY、STANDARDS、两个 issue
@@ -76,9 +88,16 @@
 - **包描述与模块 description** - `apt show` / `modinfo` / PWA manifest 四处对外文案同步，并删掉
   「1024/4096 容量的哈希表」（上限是模块参数）、`PCRE2 + JIT`（实际是 Go `regexp`）、
   「SQLite 持久化永久封禁」（永久封禁在内核表，重启由状态快照还原）。（`97c34951`）
+- **两处随代码变更补的落点** - `installation.md` 的状态目录表补 `history.db`（路径留空则不建），
+  `frontend.md` 的 PWA 表补清单内容类型一行，并写明这处丢失是 Go 迁移造成的。（`8f09414f`）
+- **文档措辞撞了契约的旧缺陷锚点** - `make contract-check` 报「`PROC_CONFIG_DOC_SAYS_READONLY`
+  status=fixed 但旧文档现场仍在」：重写后的 procfs 文档在讲展示行数上限时写出「只读文件」四个字，
+  被按子串匹配的锚点当成旧缺陷回潮。改成同文其余处对这批条目的叫法「0400 条目」，语义不变。（`5b2edf67`）
 
 ### 验证
-- CI run `38574040800`：代码质量检查 / 契约一致性 / 前端构建 / 编译 / 运行测试 / 浏览器端到端测试 全部 success。
+- CI run `38593578717`：契约一致性 / 前端构建 / 代码质量检查 / 编译 / 运行测试 / 浏览器端到端测试 六项全
+  success。这轮 runner **第一次能 `insmod`**（日志 `✓ 内核模块加载成功`），集成套件按 97 条收集
+  （`collected 97 items` → `74 passed, 23 skipped in 279.65s`），浏览器套件不再空跳（`19 passed (12.4s)`）。
 - 6.8.0-146 虚机：`make kernel-module` 通过、`insmod` 成功、`/proc/firewall/` 13 个条目齐全、dmesg 无
   percpu WARN；7.0.0-38：`make kernel-module` 通过。
 - 同一虚机首次真跑完整集成套件（`sudo python3 -m pytest tests/`）：64 passed / 5 failed / 26 skipped /
@@ -87,20 +106,21 @@
 - **修复后同一套件复跑：74 passed / 23 skipped / 0 failed / 0 errors（280.16s）**。23 条跳过全部是
   「守护进程未运行」（test_16 8 条、test_17 7 条、test_15 4 条、test_19 3 条、test_12 1 条数据库缺失）：
   这几套要求**外部已装好并起好** daemon，不像 test_18/20/21/22 那样自起进程。
-- **补跑 daemon-up 形态（同一虚机手工起 daemon 后跑这五套）**：14 passed / 12 failed / 2 skipped。
-  其中 11 条是同一处耦合，不是功能坏：仓库的 `config/default.yaml` 带着 `metrics_username` /
-  `metrics_password`，照它装好的进程启用了 Basic 认证，而这几套用裸 `curl` 取 `/metrics` 与
-  `/api/v1/*`，于是 `/api/v1/stats 返回 HTTP 401`、`SIGHUP 未触发重载（计数仍为 0.0）`、
-  `firewall_netlink_* 指标缺失` 全是读不到而非不存在。**待定**：夹具按配置带认证，还是测试环境
-  装一份不带凭据的配置。
-  另 1 条是真 bug 并已修：`/api/v1/nonexistent` 返回 303（根路径重定向是子树模式，把未匹配
-  路径全接住了），契约期望框架自产的 404（`156dba62`）。修完这一条，daemon-up 形态是
-  15 passed / 11 failed / 2 skipped，剩下的 11 条全部指向同一处认证耦合。
+- **daemon-up 形态（同一虚机按 `/etc/firewall` 手工起 daemon 后跑这五套）**：修完上述各项后为
+  **16 passed / 11 failed / 1 skipped（58.78s）**。11 条失败全部是同一处耦合，不是功能坏：仓库的
+  `config/default.yaml` 带着 `metrics_username` / `metrics_password`，照它装好的进程启用了 Basic 认证，
+  而这几套用裸 `curl` 取 `/metrics` 与 `/api/v1/*`，于是 `/api/v1/stats 返回 HTTP 401`、
+  `SIGHUP 未触发重载（计数仍为 0.0）`、`firewall_netlink_* 指标缺失` 全是读不到而非不存在
+  （用例自己的提示就是「daemon 是否以回环免鉴权配置运行？」）。**待定**：夹具按配置带认证，还是
+  测试环境装一份不带凭据的配置。此前两条真 bug 已修并有独立验证：`/api/v1/nonexistent` 返回 303
+  （根路径重定向是子树模式，把未匹配路径全接住了），契约期望框架自产的 404（`156dba62`）；
+  清单与四个分析端点分别由 `curl -D -` 看到 `application/manifest+json`、带认证一律 200
+  （`4c461d12`、`5509e5b3`）。
 - 本地守护进程门禁：`gofmt -l` 为空、`go vet` 通过、`go test ./...` 全绿、`make contract-drift` 与
   `make contract-check` 通过（其中 `http_contract.ts tsc --noEmit` 由跳过转为 OK）。
-- 文档自检：32 个 md 文件相对链接 0 条断链；`fail2ban` 与 Rust 时代词汇在 README/AGENTS/
-  CONTRIBUTING/SECURITY/STANDARDS 与 docs/zh 命中 0 行；`yaml-config.md` 的字段表与 `parser.go`
-  的 64 个 yaml tag 双向比对零缺失。
+- 文档自检：31 个 md 文件相对链接 0 条断链；`fail2ban` / `leptos` / `pcre2` / Rust 时代词汇在
+  README、AGENTS、CONTRIBUTING、SECURITY、STANDARDS 与 docs/zh 命中 0 行；`yaml-config.md` 的字段表与
+  `internal/config` 的 66 个 yaml tag 双向比对零缺失、零多余。
 
 ## [Unreleased] - 守护进程日志：整行一次写出
 
