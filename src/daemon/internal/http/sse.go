@@ -68,6 +68,12 @@ type SSEStream struct {
 
 	mu   sync.Mutex
 	live map[chan struct{}]struct{}
+
+	// stopOnce 与 stopCh 一起把「这条流不再接受也不再有连接」做成可等待的信号：
+	// Stop 可重复调用（组合根的执行体路径与 defer 兜底两处都会调它），而 streamSSE 的
+	// 选择循环挂在这条通道上，关停时才不会把连接留到 HTTP 层超时。
+	stopOnce sync.Once
+	stopCh   chan struct{}
 }
 
 // NewSSEStream 建一条流：上限与心跳间隔一律取自生成物常量
@@ -92,6 +98,21 @@ func NewSSEStream(name string, max int, keepaliveSecs int, logger *slog.Logger) 
 		heartbeat: heartbeat,
 		logger:    logger,
 		live:      make(map[chan struct{}]struct{}),
+		stopCh:    make(chan struct{}),
+	}
+}
+
+// Stop 关掉这条流：之后不再接受新连接，已在线的连接由调用方（或 SSEBroker.Stop 的扇出）
+// 逐个结束。重复调用无副作用。
+func (s *SSEStream) Stop() { s.stopOnce.Do(func() { close(s.stopCh) }) }
+
+// stopped 报告这条流是否已关停，供名额判定与连接循环使用。
+func (s *SSEStream) stopped() bool {
+	select {
+	case <-s.stopCh:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -157,6 +178,10 @@ type SSEBroker struct {
 	unregister chan chan []byte
 	broadcast  chan []byte
 	stopCh     chan struct{}
+	stopOnce   sync.Once
+	// stopped 在 clientsMu 下读写：它让 run() 的扇出与 Stop() 的 close 互斥，
+	// 不然 select 会在「stopCh 已关闭」与「广播帧正好可读」之间任选一个。
+	stopped bool
 }
 
 // NewSSEBroker 建事件流 broker。max/keepalive 由调用点从契约生成物取，
@@ -179,9 +204,16 @@ func NewSSEBroker(name string, maxClients int, keepaliveSecs int, logger *slog.L
 	return broker
 }
 
+// Stop 结束这条广播流：先停扇出循环，再逐个关掉在线连接的发送通道。
+//
+// 可重复调用（组合根的执行体关停路径与 defer 兜底都会调它），也不会与 run() 抢同一条
+// 通道：closed 标志与 clients 表在同一把锁下改写，run() 在锁内先看标志再写扇出，
+// 于是「已关闭的通道」不可能再被投递或二次 close。
 func (b *SSEBroker) Stop() {
-	close(b.stopCh)
+	b.SSEStream.Stop()
+	b.stopOnce.Do(func() { close(b.stopCh) })
 	b.clientsMu.Lock()
+	b.stopped = true
 	for client := range b.clients {
 		close(client)
 	}
@@ -200,12 +232,24 @@ func (b *SSEBroker) run() {
 			return
 		case ch := <-b.register:
 			b.clientsMu.Lock()
+			if b.stopped {
+				// attach 与 Stop 竞争时 attach 可能仍返回 true（select 两个分支同时就绪
+				// 是任选的）。这种连接不能进已停用的扇出表，直接关闭让它立刻结束。
+				b.clientsMu.Unlock()
+				close(ch)
+				return
+			}
 			b.clients[ch] = true
 			b.clientsMu.Unlock()
 			b.logger.Debug("SSE client connected", "stream", b.name, "active", b.Active())
 
 		case ch := <-b.unregister:
 			b.clientsMu.Lock()
+			// 关停后不再 close：这些通道已由 Stop() 关闭过，二次 close 会 panic。
+			if b.stopped {
+				b.clientsMu.Unlock()
+				return
+			}
 			if _, ok := b.clients[ch]; ok {
 				delete(b.clients, ch)
 				close(ch)
@@ -215,6 +259,11 @@ func (b *SSEBroker) run() {
 
 		case frame := <-b.broadcast:
 			b.clientsMu.Lock()
+			if b.stopped {
+				// 关停已经接管：扇出表由 Stop() 清空并关闭，这里再写就是 send on closed channel。
+				b.clientsMu.Unlock()
+				return
+			}
 			for client := range b.clients {
 				select {
 				case client <- frame:
@@ -316,6 +365,15 @@ func streamSSE(
 		return
 	}
 
+	// 关停中的流不再握手：响应头一旦写出就改不了状态码，所以这条检查必须在写头之前，
+	// 也在占名额之前——关停期间不该再有一条连接占住计数。
+	select {
+	case <-stream.stopCh:
+		WriteServiceUnavailable(w, "SSE stream is shutting down")
+		return
+	default:
+	}
+
 	release, ok := stream.Acquire()
 	if !ok {
 		WriteServiceUnavailable(w, "SSE connection limit reached")
@@ -351,6 +409,8 @@ func streamSSE(
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-stream.stopCh:
 			return
 		case frame, ok := <-out:
 			if !ok {

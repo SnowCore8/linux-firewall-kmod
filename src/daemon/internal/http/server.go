@@ -89,13 +89,23 @@ func (s *Server) Start() error {
 	return nil
 }
 
+// Stop 关停 HTTP 服务器：先按 ctx 的预算等活跃连接变空闲，等不到就强制关掉。
+//
+// 强制那一步不能省：`http.Server.Shutdown` 超时会返回 ctx 的错误但**不**替调用方关闭
+// 仍在忙的连接，监听端口于是继续被占着，紧接着的重启就撞 `bind: address already in use`。
+// 由 Start 的执行体在关停令牌置位后调用本方法，配合先停 SSE 流，正常路径几乎瞬时返回。
+// 重复调用安全：底层 Shutdown/Close 都幂等。
 func (s *Server) Stop(ctx context.Context) error {
 	s.logger.Info("HTTP server stopping")
 	ctx, cancel := context.WithTimeout(ctx, s.shutdownTimeout)
 	defer cancel()
 
-	if err := s.httpServer.Shutdown(ctx); err != nil {
-		s.logger.Error("HTTP server shutdown failed", "error", err)
+	err := s.httpServer.Shutdown(ctx)
+	if err != nil {
+		s.logger.Warn("HTTP server graceful shutdown incomplete, forcing close", "error", err)
+		if cerr := s.httpServer.Close(); cerr != nil {
+			s.logger.Error("HTTP server force close failed", "error", cerr)
+		}
 		return err
 	}
 	s.logger.Info("HTTP server stopped")

@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -265,8 +266,31 @@ func run(args []string) error {
 
 			httpToken := runtime.NewShutdown()
 			sup.Spawn("http-server", httpToken, func() {
-				if err := httpServer.Start(); err != nil {
-					logger.Error("HTTP 服务器异常退出", "error", err)
+				// Start 只负责伺服；关停由本执行体在自己的令牌上等待，然后调 Stop。
+				// 此前这个令牌没人看，http.Server.Stop 没有调用点，监督器只能等满
+				// 每段 5 秒的超时并记「执行体关停未在超时内完成」，端口在这 5 秒里
+				// 一直被占着，紧接着重启就撞 bind: address already in use。
+				serveDone := make(chan struct{})
+				go func() {
+					defer close(serveDone)
+					if err := httpServer.Start(); err != nil {
+						logger.Error("HTTP 服务器异常退出", "error", err)
+					}
+				}()
+				select {
+				case <-serveDone:
+					// Start 自己返回了（监听侧故障），无需再关停一遍。
+				case <-httpToken.Done():
+					// 先断两条 SSE 流再关服务器：Shutdown 要等所有活跃连接变空闲，
+					// 而 SSE 连接永远不会空闲——顺序反了就只能等超时。
+					sseBroker.Stop()
+					logStream.Stop()
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					if err := httpServer.Stop(ctx); err != nil {
+						logger.Warn("HTTP 服务器关停未完全收敛", "error", err)
+					}
+					<-serveDone
 				}
 			})
 			logger.Info("HTTP 服务器已启动", "addr", httpAddr)
