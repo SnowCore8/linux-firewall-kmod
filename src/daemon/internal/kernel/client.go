@@ -190,6 +190,10 @@ func (c *Client) Register(timeout time.Duration) (contract.DaemonRegisterAck, er
 // Ban 下发封禁。返回值表示已投递，不表示已生效。
 //
 // 失败时内核会单播 CmdResult，它进入事件流，不在本方法的返回路径上。
+//
+// reason 在这里裁进契约的定长字段（str[32]）：它是标签，不是数据。让它超长即失败，
+// 后果是「因为一句话太长而没有封掉这个 IP」——集群网段封禁就是这样静默不下发的。
+// 日志、SSE 与历史库保留原文，只有线上一份是截断视图。
 func (c *Client) Ban(addr netip.Addr, prefixLen uint8, durationSecs uint32, reason string) (Delivered, error) {
 	af, a, err := addrToWire(addr)
 	if err != nil {
@@ -200,7 +204,7 @@ func (c *Client) Ban(addr netip.Addr, prefixLen uint8, durationSecs uint32, reas
 		PrefixLen:    prefixLen,
 		DurationSecs: durationSecs,
 		Addr:         a,
-		Reason:       reason,
+		Reason:       contract.ClampFixedString(reason, contract.FixedReasonLen),
 	}
 	payload, err := cmd.Encode(c.allocSeq())
 	if err != nil {

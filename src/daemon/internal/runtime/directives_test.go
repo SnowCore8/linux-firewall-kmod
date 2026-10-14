@@ -17,10 +17,11 @@ import (
 
 // fakeSink 是 BanSink 的替身：只记调用序列与下发次数。
 type fakeSink struct {
-	mu     sync.Mutex
-	sends  []string
-	acked  []string
-	rolled []string
+	mu      sync.Mutex
+	sends   []string
+	reasons []string
+	acked   []string
+	rolled  []string
 	// insertWinner 控制 TryInsert 是否让位（false 时模拟「已在镜像里」）。
 	insertWinner bool
 }
@@ -42,10 +43,11 @@ func (s *fakeSink) MarkPendingAck(ip string) {
 	s.acked = append(s.acked, ip)
 }
 
-func (s *fakeSink) Send(addr netip.Addr, _ uint8, _ uint32, _ string) error {
+func (s *fakeSink) Send(addr netip.Addr, _ uint8, _ uint32, reason string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sends = append(s.sends, addr.String())
+	s.reasons = append(s.reasons, reason)
 	return nil
 }
 
@@ -59,6 +61,16 @@ func (s *fakeSink) sendCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.sends)
+}
+
+// lastReason 返回最后一次下发的原因文本；没有下发过时返回 ok=false。
+func (s *fakeSink) lastReason() (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.reasons) == 0 {
+		return "", false
+	}
+	return s.reasons[len(s.reasons)-1], true
 }
 
 // directiveFixture 是带反向指令通道与假下发端的执行体。

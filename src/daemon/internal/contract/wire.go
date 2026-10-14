@@ -26,6 +26,9 @@ const (
 	Endianness = "big"
 	// Addr16Len 是 addr16 别名的字节数。
 	Addr16Len = 16
+	// FixedReasonLen 是契约里 str[32] reason 的字节数（含结尾 NUL）。
+	// 也就是说一个封禁原因最多只能带 31 字节进内核。
+	FixedReasonLen = 32
 )
 
 // AddrFamily 地址族；取值与 Linux AF_INET / AF_INET6 同值。
@@ -222,6 +225,29 @@ func putStr(b []byte, off, n int, s string) error {
 	}
 	copy(b[off:off+n], s)
 	return nil
+}
+
+// ClampFixedString 把 s 裁到定长字段装得下的长度：最多 n-1 字节（putStr 要留结尾
+// NUL），且不切断 UTF-8 序列。
+//
+// 为什么在投递前裁剪、而不是让 putStr 报错：reason 这类字段是给人看的标签，标签超长
+// 就把整条封禁判死，等于「因为一句话太长而没有拦住攻击」——集群网段封禁正是这样静默
+// 不下发的（原因里带 CIDR 与统计，编码后 72 字节）。标签截断可以接受，封禁丢失不能。
+// 原文仍完整留在日志、SSE 与历史库里，内核字段只是显示用的截断视图。
+func ClampFixedString(s string, n int) string {
+	if n <= 1 {
+		return ""
+	}
+	limit := n - 1
+	if len(s) <= limit {
+		return s
+	}
+	// 从 limit 往前退到 rune 起始字节：UTF-8 的续字节形如 10xxxxxx。
+	cut := limit
+	for cut > 0 && s[cut]&0xC0 == 0x80 {
+		cut--
+	}
+	return s[:cut]
 }
 
 // getStr 读取 NUL 结尾的定长字符串，取首个 NUL 之前的部分。
