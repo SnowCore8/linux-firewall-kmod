@@ -1,11 +1,14 @@
-linux-firewall-kmod (2.0.0-1) unstable; urgency=medium
+linux-firewall-kmod (2.2.0-1) unstable; urgency=medium
 
-  * Initial release
-  * Kernel module version of fail2ban
-  * High-performance real-time IP ban protection
+  * Release 2.2.0 (tag v2.2.0)
+  * Kernel-space IP banning via netfilter hooks; decisions stay in user space
   * Jail system for multi-service isolation
-  * PCRE2 regex log parsing with JIT acceleration
-  * SQLite persistence for permanent bans
+  * Go regexp (RE2) log parsing in the daemon, no PCRE2, no JIT
+  * Up to 10 regex patterns per jail (config.MaxRegexPatterns)
+  * Ban table capacities are module parameters (fw_max_ban_entries and friends)
+  * Permanent bans live in the kernel ban table and come back from the module
+    state snapshot (state_file); SQLite holds ban history only
+    (defaults.history_db_path, empty means the history DB is off)
   * Prometheus metrics export
 
- -- SnowCore8 <snowcore8@gmail.com>  Mon, 05 May 2026 00:00:00 +0000
+ -- SnowCore8 <snowcore8@gmail.com>  Thu, 11 Jun 2026 02:53:17 +0800

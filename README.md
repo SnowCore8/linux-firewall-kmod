@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Release](https://img.shields.io/badge/release-v2.2.0-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
 [![Language](https://img.shields.io/badge/Language-Go%20%7C%20C-blue.svg)]()
-[![Platform](https://img.shields.io/badge/Platform-Linux%205.x%20%7C%206.x-orange.svg)]()
+[![Platform](https://img.shields.io/badge/Platform-Linux%206.8%20loaded%20%7C%207.0%20builds-orange.svg)](#内核版本口径)
 
 ## 这是什么
 
@@ -205,12 +205,16 @@ npx playwright test                # 浏览器端到端，见 tests/e2e/
 
 ## 内核版本口径
 
-顶部徽章写的 `Linux 5.x | 6.x` 是意图，不是实测结论。
+顶部徽章写的是实测范围，不是兼容承诺。
 
-已实测的记录在 [`CHANGELOG.md`](CHANGELOG.md)：6.8.0-146 可编译、可 `insmod`、
-dmesg 无 percpu WARN；7.0.0-38 可编译。**5.x 没有做过任何验证（未验证）。**
+| 内核 | 验证到哪一步 | 出处 |
+|------|--------------|------|
+| 6.8.0-146（Ubuntu 24.04 GA） | `make kernel-module` 通过、可 `insmod`、`/proc/firewall/` 13 个条目齐全、dmesg 无 percpu WARN | [`CHANGELOG.md`](CHANGELOG.md) 的「验证」段 |
+| 7.0.0-38 | 仅 `make kernel-module` 通过，未在该内核上加载验证 | 同上 |
+| 5.x | 未做过任何验证（未验证） | — |
 
-6.x 内部有真实的 API 断层，两处已在 `src/kernel-module/` 显式适配：
+「6.x」不等于 6.x 里每个内核都验证过。6.x 内部有真实的 API 断层，两处已在
+`src/kernel-module/` 显式适配：
 
 1. `timer_container_of` 与 `from_timer` 是两个时期的名字，不共存。适配按「宏是否
    存在」判断，不比 `LINUX_VERSION_CODE`，因为发行版会 backport。出处：`fw_ban.c`
@@ -219,7 +223,7 @@ dmesg 无 percpu WARN；7.0.0-38 可编译。**5.x 没有做过任何验证（�
    128 槽 × 4 块分别申请。索引空间仍是 0..511，容量没变。出处：`fw_types.h` 的
    `FW_RATE_CHUNK_SLOTS` 与 `fw_rate.c` 的注释。
 
-新内核上的验证记录随 `CHANGELOG.md` 补。别只凭徽章宣称兼容范围。
+新内核上的验证记录随 `CHANGELOG.md` 补。没实测过的版本范围不写进徽章。
 
 ## 文档索引
 

@@ -110,7 +110,7 @@ linux-firewall-kmod/
 ├── scripts/                    # deploy.sh、e2e-daemon.sh、check_contract.sh、bench/
 ├── grafana/                    # 面板 JSON 与告警规则
 ├── docs/                       # HonKit 文档站，中文在 docs/zh/
-├── debian/                     # deb 打包元数据
+├── debian/                     # deb 打包元数据（dpkg-buildpackage 那条路；make deb 不走它）
 ├── build/                      # 构建产物，git 忽略
 ├── .github/workflows/          # ci.yml、gitbook.yml、release.yml
 ├── Makefile                    # 唯一的构建入口
@@ -141,7 +141,7 @@ linux-firewall-kmod/
 | `test` | `sudo python3 -m pytest tests/ -v`（依赖 `.ko` 与二进制） |
 | `install` | 装模块、二进制、配置、状态目录、systemd、启动、验证 |
 | `uninstall` | 反向卸载，逐项验证 |
-| `deb` | 调 `./build-deb.sh` |
+| `deb` | 调 `./build-deb.sh`（它自己用 heredoc 生成 `DEBIAN/control`，不读 `debian/`） |
 | `clean` | 删 `build/`、`go clean`、清面板产物但留 `assets.go` |
 | `distclean` | `clean` + 清内核中间文件 |
 | `help` | 打印目标列表 |
@@ -492,8 +492,8 @@ cat /proc/firewall/stats
 `/proc/firewall` 条目齐全。7.0.0-38 可编译。
 5.x 未做过任何验证（未验证）。
 
-CI 徽章写的 `Linux 5.x | 6.x` 目前只是意图，不是实测结论。
-6.x 内部有真实的 API 断层，两处已在 `src/kernel-module/` 显式适配：
+README 顶部的徽章写的是实测范围（`Linux 6.8 loaded | 7.0 builds`），不是兼容承诺；
+没实测过的版本范围不写进徽章。6.x 内部有真实的 API 断层，两处已在 `src/kernel-module/` 显式适配：
 
 1. `timer_container_of` 与 `from_timer`
    按「宏是否存在」适配，不比 `LINUX_VERSION_CODE`。
