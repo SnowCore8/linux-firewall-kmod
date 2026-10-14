@@ -7,6 +7,24 @@ import (
 	"testing"
 )
 
+// TestManifestIsServedAsManifestJSON 钉住 PWA 清单的内容类型。
+//
+// `.webmanifest` 不在 Go 的内建 MIME 表里，`mime.TypeByExtension` 回空串，writeAsset 就落到
+// `application/octet-stream`——浏览器读不到清单，「添加到主屏幕」拿不到可解析的 manifest，
+// 而 E2E 的断言（content-type 含 json）直接失败。
+func TestManifestIsServedAsManifestJSON(t *testing.T) {
+	s, _ := newTestServer(t, nil)
+
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/static/manifest.webmanifest", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("清单应可取回，状态码 %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "application/manifest+json") {
+		t.Errorf("Content-Type = %q，期望含 \"application/manifest+json\"", ct)
+	}
+}
+
 // TestRootRedirectDoesNotSwallowUnmatchedPaths 钉住 `GET /` 这条注册串在 ServeMux 里
 // 的真实语义。
 //

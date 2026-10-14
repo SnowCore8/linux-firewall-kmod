@@ -21,6 +21,16 @@ const (
 	staticNotFoundBody = staticNotFoundText + "\n"
 )
 
+// Go 的内建 MIME 表没有 `.webmanifest`（PWA 清单的规范扩展名），`mime.TypeByExtension`
+// 对它回空串，writeAsset 于是落到 `application/octet-stream`：浏览器拿不到清单类型，
+// 「添加到主屏幕」少一份可读的 manifest，E2E 的 content-type 断言也直接失败（本轮就是在
+// 实跑的 E2E 里暴露的）。在这里注册一次，扩展名推断仍是唯一的内容类型来源——不在每条
+// 路由上手写 Content-Type，避免出现第二个来源。
+func init() {
+	// 两个入参都是常量字面量：AddExtensionType 只在扩展名或类型写法非法时报错，这里不可能失败。
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
+}
+
 // spaRoutes 是 SPA 的 9 个页面路径 → 同一个 index.html。
 //
 // 注册必须逐条写： ServeMux 的模式与契约的注册串是核对锚点，用循环遍历生成物表会让
