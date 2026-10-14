@@ -25,8 +25,6 @@
 * [开发指南](development/README.md)
   * [构建](development/building.md)
   * [测试](development/testing.md)
-  * [性能基线](development/perf-baseline.md)
-  * [内核重写设计](development/kernel-rewrite-design.md)
+  * [性能口径与测量方法](development/perf-baseline.md)
+  * [内核模块重写设计](development/kernel-rewrite-design.md)
   * [集群扫描检测设计](development/cluster-detection-design.md)
-
-* [从 fail2ban 迁移](migration/from-fail2ban.md)

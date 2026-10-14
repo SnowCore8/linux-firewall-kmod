@@ -1,330 +1,363 @@
 # 用户态守护进程
 
-`firewall-daemon` 是内核模块的用户态对手侧：监控日志、做失败计数与封禁判定、经 netlink
-把指令下发给内核，并把状态经 HTTP / SSE 呈现给运维与前端。内核负责报文级判定（速率、DDoS），
-daemon 负责应用层检测（如 SSH 暴力破解）与对外接口。
+`firewall-daemon` 是内核模块的用户态对手侧。它读日志、判定坏 IP、
+经 netlink 下发封禁与白名单，并把状态经 HTTP / SSE 透出。
 
-两条硬边界：
+两条边界：
 
-- daemon 与内核之间的**内部通道只有 netlink**；`/proc/firewall/*` 是给用户/运维的接口，
-  不是 daemon 的内部通道（`cmd/firewall-daemon/main.go`）。
-- 威胁模型是**入站单向防守**：不引入出站钩子、外发检测或外联行为分析。
+- 守护进程与内核之间的内部通道**只有 netlink**。
+  `/proc/firewall/*` 给人和运维用，不是内部通道。
+- 威胁模型是入站单向防守。没有出站钩子，没有外发检测。
 
 相关文档：
 
-- 报文判定路径、封禁/解封事件链：`data-flow.md`
-- 内核侧内部结构、模块参数与哈希表规模：`kernel-module.md`
+- 报文判定路径：[数据流](data-flow.md)
+- 内核侧结构：[内核模块](kernel-module.md)
+- 面板：[Web 前端](frontend.md)
 - 接口真相源：`contract/netlink.fwidl`、`contract/procfs.fwidl`、`contract/http.fwidl`
-- 配置字段与语义：`../configuration/yaml-config.md`
+- 配置字段：`docs/zh/configuration/yaml-config.md`
 
 ## 技术栈
 
-| 组件 | 用途 |
+| 项 | 内容 | 出处 |
+|----|------|------|
+| 语言 | Go，纯 Go，无 cgo | `src/daemon/go.mod`；全仓无 `import "C"` |
+| Go 版本 | `go 1.26.0` | `src/daemon/go.mod` |
+| 组合根 | `cmd/firewall-daemon/main.go` | `main` / `run` |
+| 业务包 | `internal/*` | 见下文包职责表 |
+| 依赖 | `golang.org/x/sys`、`gopkg.in/yaml.v3`、`modernc.org/sqlite` | `src/daemon/go.mod` 的 `require` |
+| 产物 | 单文件 stripped 二进制，内嵌面板 | 根 `Makefile`：`go build -ldflags "-s -w=1"` |
+| 面板嵌入 | `//go:embed *` | `src/daemon/web_ui/static/assets.go` |
+
+## 包职责
+
+包名以 `ls src/daemon/internal/` 为准。
+
+| 包 | 拥有什么 | 对外提供 |
+|----|---------|---------|
+| `kernel/` | netlink socket 与在途请求 | `transport`（单写者）、`codec`（字节↔语义）、`router`（按 `(type, seq)` 路由）、`reactor`（接收回路）、`client`（类型化请求）、`consumer`（事件泵、采样、对账） |
+| `http/` | HTTP 面 | 路由注册、REST 处理器、两条 SSE 流、`/metrics`、认证与失败锁定、静态面板挂载 |
+| `httpcontract/` | 无（生成物） | 契约生成的路由常量、业务码、SSE 上限与安全头表；`contract/verify_http.py` 与 `routes.go` 逐项核对 |
+| `contract/` | 无（生成物） | netlink 线格式的消息名与字段，供 `kernel/codec` 与配置下发引用 |
+| `bans/` | 活跃封禁集合与白名单镜像 | 封禁/白名单动作的参数校验与 netlink 投递、缓存 |
+| `detect/` | 无（纯原语） | `cidr.go` 的网段键、`window.go` 的失败窗口 |
+| `decision/` | 无（纯计算） | `policy.go` 的有效阈值与时长、`ddos.go` 的内核阈值投影、`cluster.go` 的集群扫描判据 |
+| `runtime/` | 执行体生命周期与配置所有权 | `supervisor`（登记与逆序关停）、`executor`（入站主链路）、`pipeline`（行判定与集群扫描）、`shutdown`、`signals`、`timers`、`hooks`、`file_reloader`、`directives`、`enabled` |
+| `ingest/` | 日志源与读偏移 | `watcher`（inotify）、`reader`（按 offset 读增量）、`registry`（稳定源标识） |
+| `logparse/` | 行缓冲与规则 | `splitter`（切行）、`rule`（正则与 IP 提取）、`ip`（地址归类） |
+| `jail/` | jail 状态与规则集 | `jail.go`、`compile.go`、`pipeline.go`、`service.go`；`Finalize` 是启动、热重载与 PUT 写入共用的后处理 |
+| `config/` | 配置对象与字段语义 | `args`（CLI）、`parser`（YAML）、`loader`、`types`、`path`、`logging`、`jails_api`、`kernel_view` |
+| `analysis/` | 分析派生 | 异常（`anomaly`、`detection`）、预测（`prediction`）、时长与阈值推荐（`recommendations`）、网络分布（`network`）、平滑（`ewma`） |
+| `telemetry/` | 内核观测快照 | `store`（版本化快照）、`ring` + `rate_history`（速率环形缓冲） |
+| `persist/` | SQLite 历史库 | `db`、`history`、`ban_events`、`reputation`、`activity`、`recovery`、`facts`（按 IP 折叠的判定缓存） |
+| `logger/` | 日志目的地与整行不变量 | slog handler，JSON Lines，按大小轮转 |
+
+跨包只传消息或不可变快照。共享状态用显式对象承载
+（`bans.GlobalCache()`、`bans.GlobalWhitelist()`、`telemetry.Store`），其余构造期注入。
+
+## 运行时形态
+
+组合根装配四条 goroutine，登记在同一个 `Supervisor` 上：
+
+| 名称 | 承担者 | 形态 |
+|------|--------|------|
+| `ingest` | `runtime.InboundExecutor.Run` | 一个 goroutine 顺序走「读字节 → 切行 → 规则判定 → 封禁下发」；段间无队列，因此不存在「满时丢弃」 |
+| `kernel-reactor` | `kernel.Reactor.Run` | 阻塞收包 + 路由 |
+| `kernel-event-pump` | `kernel.EventPump.Run` | 消费事件流、周期采样与对账、按域发布 SSE |
+| `http-server` | `http.Server.Start` | 网络 IO |
+
+信号层（`runtime.NewSignalSource`）不是 goroutine，它先把信号转成
+与 inotify 同一个 `poll` 池里的普通 fd。inotify fd 和信号管道 fd 一起 poll。
+
+### 关停
+
+`Supervisor.Shutdown()` 按**登记逆序逐段串行**：对当前段 `Request()` 后
+`join` 到结束，才停下一段（`runtime/supervisor.go`）。
+
+一次性广播停止信号会让上下游同时收尾，「上游已完全停止」就不成立了。
+登记的必要不变量是：netlink 停止后才能在途事件写库。
+
+生产顺序是 `ingest` 最先停，随后 `kernel-event-pump`、`http-server`、
+`kernel-reactor`；登记顺序即依赖顺序，下游先登记。
+之后延迟清理按 LIFO 释放依赖资源。`persist.DB.Close` 会把已入队的持久化落盘。
+
+## 组合根的装配顺序
+
+`run(args []string) error` 是 `main` 的可测入口。顺序（`cmd/firewall-daemon/main.go`）：
+
+| # | 动作 | 为什么在这个位置 |
+|---|------|----------------|
+| 1 | `config.ParseConfigArgs`；`--help` 返回成功，`--rollback` 走短路径 | 回滚不加载配置，只给运行中的进程发 SIGUSR1 |
+| 2 | 检查 `panelres.PanelDir` 非空 | 面板缺失直接返回启动错误，不假装可运行 |
+| 3 | `runtime.NewSignalSource` | 必须早于任何 goroutine，否则启动窗口内的信号丢失 |
+| 4 | `startedAt = time.Now()` | `uptime_seconds` 从这里起算，不是从 HTTP 构造起算 |
+| 5 | `config.Default` + `loadConfig` | 后面所有装配都读它 |
+| 6 | `jail.Finalize` | 智能默认 → 校验 → 编译正则；与热重载、PUT 写入同一个函数，保证三处口径一致 |
+| 7 | `newLogger` | 日志目的地、格式、级别门槛、轮转都在 `internal/logger` |
+| 8 | 逐条 `logger.Warn` 输出 `finalWarnings` | logger 建在 `Finalize` 之后，告警只能暂存到这里 |
+| 9 | `checkProcfs` | `/proc/firewall` 与 `/proc/firewall/bans` 缺失即启动失败 |
+| 10 | `runtime.NewSupervisor` | 后续每段都登记在它上面 |
+| 11 | `http.NewMetrics` + 预注册 5 个计数器 | 内核链路、入站、HTTP 三面都要往里写，且装配顺序不固定；预注册让 `/metrics` 从启动起就有稳定 0 值行 |
+| 12 | `persist.NewDB` + 两个调度器 + `persist.NewFacts` | 库缺失只降级，不影响主链路 |
+| 13 | 内核链路：`OpenTransport` → `Subscribe` → `SetMetrics` → `NewEventChannel` → `NewReactor` → `NewClient` | 打开失败只告警；`Subscribe` 必须先于接收回路，否则 `Poll` 永远只返回 deadline |
+| 14 | `newBanSink` / `newWhitelistSink` / `newConfigSink` | 入站主链路与 HTTP 共用同一实例，避免两份配置分叉 |
+| 15 | `telemetry.NewStore` | 无条件建立；链路缺失时保持零值快照，读侧不必区分「没有内核」与「还没采到样」 |
+| 16 | `runtime.NewJailEnabledSource` | HTTP API 与入站主链路共享启用状态 |
+| 17 | HTTP 段：`NewServer` → `NewEventsBroker` → `NewLogsStream` → `NewAPIHandlers` → `RegisterRoutes` → `RegisterStaticFiles` → `Spawn("http-server")` | 只在 `HTTPAddress` 非空时装配 |
+| 18 | `kernelCmd` 通道（容量 256） | 内核反向指令交给入站执行体落地 |
+| 19 | `kernel.NewEventPump` + `Spawn("kernel-event-pump")` | `NewEventChannel` 的事件流到这里才有消费者 |
+| 20 | `runtime.NewInboundExecutor` + `Spawn("ingest")` | 配置所有权此后归执行体 |
+| 21 | 主 goroutine 阻塞在 `stopCh`；`sup.Shutdown(5 * time.Second)` | 先逆序停执行体，再由延迟清理释放资源 |
+
+三条降级规则：
+
+| 缺失 | 行为 |
 |------|------|
-| Go module `src/daemon`（组合根 `cmd/firewall-daemon/main.go` + `internal/*`） | 实现语言，编译为单文件 stripped 二进制。组合根只负责装配与生命周期，业务判定在 `internal/*`（bans / config / jail / kernel / logger / logparse / runtime） |
-| golang.org/x/sys (unix) + yaml.v3 | netlink unix socket、procfs 读写、YAML 配置解析（字段名必须与 Go module 内 YamlConfig 一致，多一个 key 即启动失败） |
-| HTTP / SSE / `/metrics` / 历史快照 / Web UI | 由 `internal/http` 承载：HTTP 服务、两条 SSE 流、Prometheus exporter、SQLite 历史快照与数据清理均已装配并启用；装配清单以 `cmd/firewall-daemon/main.go` 的装配标注为准（见下表与下文） |
-| unix socket + syscall netlink | 与内核双向通信：命令下发、分页查询、事件推送 |
-| log/slog + 自管日志文件 | 结构化日志（JSON Lines，整行单次写入；文件打开失败回退 syslog-only）与按大小轮转 |
-| go:embed（`src/daemon/web_ui/static/assets.go`）+ vite | SPA 面板携带进二进制：vite 产物直接输出到 `src/daemon/web_ui/static/`，文件名固定后由 `assets.go` 的 `//go:embed *` 按名取走 |
-
-## 组件关系
-
-| 组件 | 空间 | 职责 |
-|------|------|------|
-| 内核模块 | 内核 | 报文判定、封禁/白名单表、速率与 DDoS 检测、procfs 与 netlink 接口 |
-| 守护进程 | 用户 | 日志监控、行解析、失败计数与封禁判定、配置下发；HTTP/SSE/指标一并承载（见「技术栈」表） |
-| netlink | 内核 ↔ 用户 | daemon 与内核的**唯一**内部通道：命令、分页查询响应、事件推送 |
-| ProcFS | 内核 ↔ 用户 | 运维接口，daemon 只做启动期存在性检查，不用它做内部通信 |
-
-## 运行时模型
-
-Go module `src/daemon` 当前是**单执行体驱动四段**：组合根不创建任何业务 goroutine，只装配一个
-`InboundExecutor`；其主链路 `executor.Run()` 在一个 goroutine 内顺序走「读字节 → 行分割 → 正则判
-定 → 封禁下发」，段与段之间没有队列、也就不存在「满时丢弃」。信号层先于该 goroutine 建立
-（见下一节），`inotify fd` 与信号管道 fd 并入同一个 `poll`，周期任务走执行体自己的单调时钟
-定时器表；内核侧交互经 `kernel.Client`（syscall netlink + unix socket），发/收都在同一段阻塞 IO
-上等待确认。除入站执行体外，内核接收回路（`kernel-reactor`）、HTTP 服务（`http-server`）与内核
-事件泵（`kernel-event-pump`）各由一条 goroutine 承担，登记在 `Supervisor` 上统一关停。
-
-| 承担者 | 职责 | 形态 |
-|--------|------|------|
-| `ingest` goroutine（`InboundExecutor.Run`） | 四段顺序驱动：读字节、行分割、正则判定、封禁下发；单线程独占每源偏移、半行缓冲与失败窗口，故段间无队列、不存在「满时丢弃」 | 阻塞 IO + CPU 正则 |
-| `signals`（`runtime.NewSignalSource`） | 先于任何 goroutine 建立信号管道 fd；inotify fd 与信号 fd 同一池 poll | 阻塞 IO |
-| `kernel-reactor`（`kernel.Reactor.Run`） | 接收回路 + `(type, seq)` 路由，`Supervisor` 统一关停 | 阻塞 IO |
-| `kernel-event-pump`（`kernel.EventPump.Run`） | 消费内核事件流、周期采样与对账、按域发布 SSE | 阻塞 IO + 定时 |
-| `http-server`（`http.Server.Start`） | REST / SSE / `/metrics` / 静态面板 | 网络 IO |
-
-### 关停顺序
-
-关停不变量是「**netlink 停止后才能在途事件写库**」。要让它真正成立，就不能一次性把停止信号
-广播给所有执行体——那样上下游同时收尾，「上游已完全停止」不成立。故 `Supervisor.Shutdown()`
-按**登记逆序逐段串行**停止：对当前段 `Request()` 后 `join` 到结束，才停下一段
-（`internal/runtime/supervisor.go`）。登记顺序即依赖顺序（下游先登记）。
-
-生产的实际顺序：`main` 阻塞在终止令牌上 → 停 `runtime` 执行体（入站执行体
-最先停，随后内核事件泵、HTTP 服务与内核接收回路）→ 延迟清理按 LIFO 释放执行体依赖的资源
-（关历史库、写 PID 文件清理），见 `cmd/firewall-daemon/main.go`。`persist.DB.Close` 自身会把已入队的
-持久化落盘，故「netlink 停止后在途事件写库」由这个顺序保证。
-
-## 模块划分（按数据所有权）
-
-每个模块**独占**自己的状态，跨模块只传消息或不可变快照；共享状态以显式的总线/缓存对象
-（如 `bans.GlobalCache()`、`telemetry.Store`）承载，其余一律构造期注入。
-
-| 模块（Go 路径） | 数据所有权 | 对外接口 |
-|------|-----------|---------|
-| `cmd/firewall-daemon/main.go` | 装配状态 | CLI 解析 → 严格校验配置 → checkProcfs → 按登记顺序 Spawn → 逆序关停；每处装配都显式标注，缺席时降级而不假装完成 |
-| `internal/config/`（args / parser / loader / types / path / logging） | 配置对象与字段语义 | `ParseConfigArgs` / `Default` / `ParseConfigFile|LoadConfigDirectory` / `Validate`；YamlConfig 带未知字段拒绝，多一个 key 即启动失败 |
-| `internal/logger/`（logger / file / json / handler） | 日志目的地与整行不变量 | `Init(cfg)` 返回 slog Logger：JSON Lines、自定义 handler 整行单次写入；文件不可写时回退 stderr / syslog-only |
-| `internal/runtime/`（supervisor / executor / pipeline / shutdown / signals / timers / hooks / file_reloader） | 执行体生命周期 | `NewSignalSource`（早于任何 goroutine）、`Spawn`/`Shutdown`、`InboundExecutor.Run`（阻塞 IO + CPU 正则的主链路口径）、周期维护与单调时钟定时器 |
-| `internal/jail/`（jail / compile / service / pipeline） | jail 状态与规则集 | 智能默认 + `Validate` + 编译各 regex；`Finalize` 是启动/热重载/PUT 写入共用的一条流水线 |
-| `internal/bans/`（ban / cache / endian / global） | 活跃封禁集合 | Ban 的入参编码/解码与活跃缓存、镜像插入、撤销路径 |
-| `internal/logparse/`（splitter / rule / ip） | 日志行缓冲与规则 | 行分割、命名捕获组提取 IP（返回 `netip.Addr` 而非 `String`）、超时判定 |
-| `internal/kernel/`（transport / reactor / router / client / codec / consumer） | netlink socket 与在途请求 | unix socket 单写者、按 `(type, seq)` 路由未知即计数、类型化 Ban/Unban/List/SetConfig；事件消费与对账在 `consumer` |
-| `internal/kernel/client.go` | 类型化客户端 API | `Ban(addr, prefixLen, durationSecs, reason)` / `Unban` / 分页 `List*` / `SetConfig` / `AddWhitelist` / `RemoveWhitelist` |
-| `internal/runtime/executor.go` | 入站主链路装配态 | `Deps.Logger/Facts/Sink/Stats/Hooks/Reloader/Enabled`：全部由组合根装配（Hooks=周期维护副作用、Reloader=配置热重载与回滚、Enabled=Web UI 权威启用状态源）；任一为 nil 时对应能力降级而不报错，装配参数来自读 `cfg()` |
-| `internal/runtime/timers.go` + `shutdown.go` | 定时器表与关停令牌 | 周期任务按原定时刻重排；Shutdown 只有 Request/IsShutdown，完成通道由调用方自备 |
-
-**已装配的能力**（以 `main.go` 的装配标注为准）：HTTP / `/health` / `/metrics` API、两条 SSE 流、Prometheus exporter、SQLite 历史快照与数据清理、配置热重载。
-
-## 启动流程
-
-`main()`（`cmd/firewall-daemon/main.go`）的顺序：
-
-```mermaid
-graph TB
-    A["CLI 解析（--help 直接返回 / --rollback 走回滚分支）"] --> B["建信号管道 fd（必须先于任何 goroutine）"]
-    B --> C["加载配置（文件或目录）+ 严格模式校验"]
-    C --> D["jail.Finalize：智能默认 + 校验 + 编译正则"]
-    D --> E["初始化日志 + checkProcfs（/proc/firewall 与 /proc/firewall/bans 必须存在）"]
-    E --> F["open 持久化库 + 起清理/信誉恢复调度器 + Facts flusher"]
-    F --> G["打开内核 netlink 链路（可降级）：Subscribe → 建事件通道 → 起 kernel-reactor → 建 Client"]
-    G --> H["装配封禁/白名单/配置三个下发汇聚点（共用同一个内核 Client）"]
-    H --> I["建内核观测快照 telemetry.Store 与 Jail 启用状态源"]
-    I --> J["起 HTTP 服务（HTTPAddress 非空时）：REST + SSE + /metrics + 静态面板"]
-    J --> K["起内核事件泵 kernel-event-pump（消费事件、周期采样与对账、按域推送）"]
-    K --> L["装配 InboundExecutor + 起 ingest goroutine"]
-    L --> M["主线程阻塞在终止令牌上，收到 SIGTERM/SIGINT 后按登记逆序关停"]
-```
-
-关键顺序约束（都有明确理由，不是习惯）：
-
-- **信号层在任何 goroutine 创建之前建立**：`NewSignalSource` 先于执行体，其后启动的日志 /
-  HTTP / 各执行体都能看见同一份信号；启动窗口内送达的信号不会丢。
-- **配置后处理在所有消费者之前**：`jail.Finalize`（智能默认 → 校验 → 编译正则）与热重载、
-  PUT 写入共用同一函数，保证「能启动的配置」与「能重载/能写入的配置」同口径。
-- **配置所有权在入站执行体**：它是唯一改配置的执行体（自动重载 / 回滚 / 启用状态同步），
-  组合根经 `InboundExecutor` 暴露的读口取装配参数，避免重载后两份配置分叉。
-- **内核观测快照无条件建立**：`telemetry.Store` 由事件泵唯一写入；链路缺失时保持零值快照，
-  读侧（`/health` 与统计面）无需区分「没有内核」与「还没采到样」。
-- **内核链路可降级**：`OpenTransport` / `Subscribe` 失败只告警，入站主链路仍能独立运行，
-  封禁表只反映本进程的下发记录。
-- **找不到可监视的日志源即启动失败**：配置错 / 权限不足 / 内核模块未加载时不该留一个
-  「界面正常但永不算」的进程。
-- **`/proc/firewall` 与 `/proc/firewall/bans` 缺失直接启动失败**：内核模块未加载时 daemon
-  不具有可工作的判定与下发通道。
-
-## 判定语义
-
-这条判据是**对外承诺**：`internal/decision/policy.go` 实现，`internal/detect/window.go` 提供窗口。
-
-- **白名单命中 ⇒ 永不封禁**（内核侧还有一道白名单短路，daemon 侧不重复判定为「可封」）。
-- **有效阈值** = `max_retries × 高峰期(×1.5) × 内网来源(×2.0) × 信誉系数`，再 `.Ceil().max(1.0)`
-  （`EffectiveThreshold`）。
-- **高峰时段**：UTC `9..18`（`IsPeakHours(hourUTC)`，时间源由调用方注入，便于用固定小时测试）。
-- **信誉系数**：`≥80 → 1.0`、`≥50 → 0.8`、否则 `0.5`（`ReputationMultiplier`）。
-- **渐进式时长**：第 1 次 `base`、第 2 次 `1800`、第 3 次 `86400`、第 4 次起永久；
-  `ban_time < 0` 即配置级永久（`ProgressiveDuration` / `PlanBan`）。
-- **失败窗口**：只统计 `now - findtime <= ts <= now` 的时间戳；单 IP 时间戳上限
-  `MaxTimestampsPerIP = 100`（FIFO 淘汰最旧，`countRecent`）。
+| 内核链路打不开 | 只告警，入站主链路照常；封禁表只反映本进程的下发记录 |
+| 历史库打不开 | 判定层退回 `runtime.NoHistory{}`，阈值乘数按满分算 |
+| 未配 HTTP 监听 | `api` 为 nil，事件泵的域载荷镜像与 jail 快照通知都按缺席处理 |
 
 ## netlink 层
 
-线格式以契约生成物为**唯一**定义：协议号 `NETLINK_USERSOCK`、魔数 `0x46574C4E`、自定义公共头
-12 字节、全部多字节整数大端、全部结构 `packed`。实现侧读的是契约里的字段名与偏移
-（`internal/contract`），「手抄结构体」这一漂移来源被生成物消除。
+线格式以契约生成物为唯一定义。
 
-`internal/kernel/` 的分层：
+| 事实 | 值 |
+|------|-----|
+| 协议号 | `NETLINK_USERSOCK` |
+| 魔数 | `0x46574C4E` |
+| 公共头 | 12 字节 |
+| 字节序 | 多字节整数一律大端 |
+| 结构 | `packed` |
 
-| 层 | 职责 | 关键取舍 |
-|----|------|---------|
-| `codec` | 字节 ↔ 语义类型，唯一的转义层 | 每个多字节字段显式 `from_be` / `to_be`，不依赖 `packed` 的内存表示；`decode` 搬完即逐字段转宿主序，原始字节不流出本模块 |
-| `transport` | socket 唯一所有者（单写者） | 长度以 `nlmsghdr.nlmsg_len` 为准而非收包字节数（netlink 按 4 字节对齐，收包数可能多出至多 3 字节填充） |
-| `reactor` + `router` | 接收回路 + `(type, seq)` 路由 | `Router` 是纯状态机可单测；路由白名单只收「回显请求 seq」的那一组 |
-| `client` | 类型化请求 API | 「已投递」与「已确认」用类型分开；`List*` 一律请求契约单页上限并续页到底 |
-| `consumer` | 事件消费与对账 | 重建封禁/白名单镜像、周期对账、注册租约与失联可见（`telemetry.LeaseState`） |
+出处：`contract/netlink.fwidl` 与 `contract/generated/netlink_uapi.h`。
 
-两条容易踩错的语义，写在这里以免被后来的实现改回去：
+分层与取舍（`internal/kernel/`）：
 
-- **配对只允许白名单内的类型**。内核里有**两套**序号来源：`DaemonRegisterAck` /
-  `ConfigAck` / `StatsResponse` / `AnalysisResponse` / 三个 `List*Response` 回显请求 `seq`；
-  而 `DdosEvent` / `BanStateChange` / `WhitelistStateChange` / `ConfigChange` /
-  `CmdResult` 用内核自增序号。两组取值必然碰撞，若把 `CmdResult` 也拿去配对，一条「封禁失败」
-  通知会被误认成某次 LIST 的回复而被吞掉。
-- **分页的收尾信号是空页，不是 `total`**。契约里 `limit == 0` 表示「内核默认页大小」而非
-  「不限量」；内核在 `offset >= total` 时直接回空页，且 `total` 是另一时刻取的值，与已收条数
-  不保证一致。故续页以空页为唯一可靠收尾，另加「本页起点未推进即停」的防死循环判据。
+| 文件 | 职责 | 关键取舍 |
+|------|------|---------|
+| `codec.go` | 字节 ↔ 语义类型 | 每个多字节字段显式转宿主序，原始字节不流出本包 |
+| `transport.go` | socket 唯一所有者，单写者 | 长度以 `nlmsghdr.nlmsg_len` 为准，不用收包字节数：netlink 按 4 字节对齐，收包数可能多 3 字节填充 |
+| `reactor.go` + `router.go` | 接收回路 + `(type, seq)` 路由 | `Router` 是纯状态机，可单测；未知类型即计数 |
+| `client.go` | 类型化请求 API | 区分「已投递」与「已确认」；`List*` 请求契约单页上限并续页到底 |
+| `consumer.go` | 事件消费与对账 | 重建封禁/白名单镜像、周期采样、注册租约与失联可见 |
+
+泵的四类周期（`consumer.go`，命名常量而非配置项）：
+
+| 常量 | 值 | 用途 |
+|------|-----|------|
+| `SampleInterval` | 5 秒 | 统计 / 分析 / 速率三张表一并取回 |
+| `ReconcileInterval` | 30 秒 | 封禁表与内核对账 |
+| `RegisterInterval` | 10 秒 | 注册租约续约，须明显短于内核 30 秒判死 |
+| `DefaultRequestTimeout` | 2 秒 | 单次 netlink 请求超时 |
+
+两条容易被改回去的语义：
+
+1. **配对只允许白名单内的类型**。内核有两套序号：`DaemonRegisterAck`、
+   `ConfigAck`、`StatsResponse`、`AnalysisResponse`、三个 `List*Response`
+   回显请求 `seq`；`DdosEvent`、`BanStateChange`、`WhitelistStateChange`、
+   `ConfigChange`、`CmdResult` 用内核自增序号。两组取值必然碰撞。
+   把 `CmdResult` 拿去配对，一条「封禁失败」通知会被误认成某次 LIST 的回复而吞掉。
+2. **分页的收尾信号是空页，不是 `total`**。契约里 `limit == 0` 表示
+   「内核默认页大小」，不是「不限量」。内核在 `offset >= total` 时回空页，
+   而 `total` 是另一时刻取的值。续页另加「本页起点未推进即停」的防死循环判据。
+
+## 判定语义
+
+这条判据是对外承诺，实现落在 `internal/decision/policy.go`，
+窗口由 `internal/detect/window.go` 提供。
+
+| 项 | 规则 |
+|----|------|
+| 白名单 | 命中即永不封禁 |
+| 有效阈值 | `max_retries × 高峰系数 × 内网系数 × 信誉系数`，向上取整且不小于 1 |
+| 高峰时段 | UTC `9..18`；时间源由调用方注入，便于用固定小时写测试 |
+| 信誉系数 | 分数 ≥80 取 1.0，≥50 取 0.8，否则 0.5 |
+| 渐进式时长 | 第 1 次 `base`、第 2 次 1800、第 3 次 86400、第 4 次起永久 |
+| 配置级永久 | `ban_time < 0` |
+| 失败窗口 | 只统计 `now - findtime <= ts <= now` 的时间戳 |
+| 单 IP 时间戳上限 | `MaxTimestampsPerIP = 100`，FIFO 淘汰最旧 |
+
+集群扫描判据（`internal/decision/cluster.go`）：窗口内同一网段的失败源 IP 数达到
+`min_ips`，且各 IP 自身次数不超过 `max_per_ip`。默认关闭、默认只审计。
+设计论证见 `docs/zh/development/cluster-detection-design.md`。
 
 ## 状态层与 SSE
 
-内核事件泵持有唯一的内核观测快照（`telemetry.Store`，版本化 `atomic.Pointer` 发布）：写侧
-独占数据，读侧拿不可变快照，永远看不到半个更新。域载荷的形状出自表现层：泵只报「哪个域变了、
-它那张表里现在有什么」，由 `internal/http` 的纯函数（`SSEReplicas`）派生具体载荷。
+内核观测快照由事件泵唯一写入（`telemetry.Store`）。写侧独占，读侧拿不可变快照。
+域载荷形状出自表现层：泵只报「哪个域变了、那张表里现在有什么」，
+具体载荷由 `internal/http` 的纯函数派生（`SSEReplicas`）。
 
 | 域 | 事件名 | 说明 |
 |----|-------|------|
-| `Stats` | `stats` | 计数器快照；**周期事件**（无变化也要按 `sse_push_interval` 重发，否则安静时段数字冻住） |
+| `Stats` | `stats` | 周期事件：无变化也按契约间隔重发，否则安静时段数字会冻住 |
 | `Bans` | `bans` | 活跃封禁 |
-| `Jails` | `jails` | Jail 列表与状态（**派生域**，其变更由知道输入变了的一方显式推进，见下） |
-| `Whitelist` | `whitelist` | 白名单（键是规范化 `CidrKey`） |
+| `Jails` | `jails` | 派生域：载荷渲染时现读内核快照与封禁表计数，没有内容可比对，故由知道输入变了的一方显式推进 |
+| `Whitelist` | `whitelist` | 键是规范化 `CidrKey` |
 | `Rates` | `rates` | 速率与 EWMA 基线 |
 
-**每个域都必须有生产者**——推送只发「版本变化过」的域，没有生产者的域收完首帧就永远不再
-更新。除 `Jails` 外都是所有者模块在内容变更时自行 `Publish`；`Jails` 是**派生域**（载荷在
-渲染时现读内核快照与封禁表的计数，没有内容比对可用），故由知道派生输入变了的写入点显式推进：
-封禁集合变更（`internal/http/publish.go::publishBans`）、jail 启用/禁用与 jail 配置快照变更
-（`internal/http/jails_control.go`、组合根的 `jailSnapshotBridge`）、峰值时段翻转。`verify_http.py`
-的 `check_sse_events` 会断言契约声明的每个域事件在生产代码里都有发布者。
+每个域都必须有生产者。`contract/verify_http.py` 的 `check_sse_events`
+断言契约声明的每个域事件在生产代码里都有发布者。
 
-### SSE 约束（契约）
+结构性保证：
 
-| 项 | 值 | 出处 |
-|----|-----|------|
-| `/api/v1/events` 连接上限 | 10 | `internal/httpcontract/http_contract.go` |
-| `/api/v1/logs/stream` 连接上限 | 5 | 同上 |
-| `events` 事件集 | `connected`、`stats`、`bans`、`jails`、`whitelist`、`rates` | 同上 |
-| keepalive | 15 s（两条流各自声明） | 同上 |
-| 超限响应 | `503` | `internal/http/sse.go` |
+| 保证 | 做法 |
+|------|------|
+| 只序列化变化的域 | 连接持有上次发出的版本集合，每轮求差集；只有新连接发全部五域 |
+| SSE 与 REST 同形 | 域载荷由同一批纯函数派生，改一处字段只有一处可改 |
+| 慢消费者被断开 | 写侧只做「推进版本 + 覆盖式通知」，序列化与发送在各连接自己的 goroutine 里 |
+| 两条流各自计数 | `events` 与 `logs/stream` 各自上限、各自回 503、各自声明心跳；合用会让日志页开满连接时饿死事件流 |
 
-两条流各自计数、各自回 503、各自声明心跳，不共用上限：共用会让「日志页开满 5 条连接」把实时
-事件流一起饿死。
+数值（连接上限、keepalive、事件集）以 `contract/http.fwidl` 与生成物
+`internal/httpcontract/http_contract.go` 为准，本文不复制。
 
-三条结构性保证：
+### 白名单键的规范化
 
-- **只序列化变化的域**。连接持有上一次发出的版本集合，每轮与当前版本求差集；只有新连接才发
-  全部五域。
-- **SSE 与 REST 共用同一份视图**。域载荷全部由 `internal/http` 的纯函数派生，SSE 渲染器与路由调
-  的是同一批函数——想改一个字段的显示方式，只有一处可改。
-- **慢消费者被断开，而不是让写侧等待**。写侧只做「推进版本 + 覆盖式通知」，序列化与发送在每
-  条连接自己的 goroutine 里。
+键是 `CidrKey`，不是 `String`。两个构造入口（`NewCidrKey` 走结构、
+`ParseCidrKey` 走文本）都过同一套规范化。
 
-### 白名单 CIDR 规范化
-
-键是 `CidrKey` 而不是 `String`，两个构造入口（`NewCidrKey` 走结构路径、`ParseCidrKey` 走文本路径）
-都过同一套规范化，外部无法塞入未规范化的键。规则取自内核而不是自拟：内核把白名单存成**网络
-地址**（`fw_addr_normalize`），精确主机条目的判据是 IPv4 `/32` / IPv6 `/128`。故键的形态固定为
-「主机位清零 + 恒带 `/prefix`」：`10.0.0.5/24` 存为 `10.0.0.0/24`，裸地址 `10.0.0.1` 存为
-`10.0.0.1/32`。界面上从 `10.0.0.1` 显示为 `10.0.0.1/32` 是这一规则的直接结果。
+规则取自内核，不是自拟：内核把白名单存成**网络地址**（`fw_addr_normalize`），
+精确主机条目的判据是 IPv4 `/32`、IPv6 `/128`。键的形态固定为
+「主机位清零 + 恒带 `/prefix`」。`10.0.0.5/24` 存成 `10.0.0.0/24`，
+裸地址 `10.0.0.1` 存成 `10.0.0.1/32`。
 
 ## HTTP 与 API
 
-单个 HTTP 服务（`internal/http`）承载全部内容（Web UI、REST、SSE、指标），监听
-`metrics_bind_address:metrics_port`：代码默认 `127.0.0.1:9119`（`internal/config`），随包
-`config/default.yaml` 给的是 `0.0.0.0:9119`（要局域网访问需后者那种绑定，且必须配凭据，见下）。
+单个 HTTP 服务承载全部内容：面板、REST、SSE、指标。
+监听 `metrics_bind_address` + `metrics_port`。
+
+| 事实 | 值 | 出处 |
+|------|-----|------|
+| 端口 | 9119 | `config/default.yaml` 的 `defaults.metrics_port` |
+| 代码默认绑定地址 | `127.0.0.1` | `internal/config` |
+| 随包配置绑定地址 | `0.0.0.0` | `config/default.yaml` |
 
 ### 路由分层
 
 | 组 | 认证 | 内容 |
 |----|------|------|
-| SPA 外壳与静态资源 | 无 | 一组**固定的**页面路径 + `/static/*path` + `/sw.js`（注册见 `internal/http/static.go`，路径清单以 `contract/http.fwidl` 为准）；静态资源由 `web_ui/static/assets.go` 的 `//go:embed *` 携带进二进制。页面语义（哪个页面做什么、数据从哪来）见 [Web 前端](frontend.md) |
-| 探针 | 无 | `/health`、`/healthz`（有意不套信封，由就绪判定决定 200/503） |
-| 需认证 | Basic Auth | `/metrics` 与 `/api/v1/*`（完整路由清单以 `contract/` 为准；`verify_http.py` 会对照契约核对） |
+| SPA 外壳与静态资源 | 无 | 一组**固定的**页面路径 + `/static/*path` + `/sw.js`；注册见 `internal/http/static.go`，清单以 `contract/http.fwidl` 为准 |
+| 探针 | 无 | `/health`、`/healthz`：有意不套信封，由就绪判定决定 200/503 |
+| 业务面 | Basic Auth | `/metrics` 与 `/api/v1/*`；完整清单以 `contract/http.fwidl` 为准，`verify_http.py` 逐项核对 |
 
-> 新增页面路径必须同时加进 `security_headers` 中间件的 `is_webui` 判定，否则外壳会以
-> `default-src 'none'` 下发——页面能打开但样式与脚本全被拦掉。
+新增页面路径必须同时加进安全头中间件的面板路径判定
+（`internal/http/headers.go` 的 `isWebUIPath`），
+否则外壳以 `default-src 'none'` 下发：页面能打开，样式与脚本全被拦掉。
 
 ### 信封与认证
 
-- **信封单一形状**：`{code, data, message}`，成功 `code = 0` 且 `message` 为空串，失败
-  `data = null`；两个字段都必然存在。
-- **业务码与 HTTP 状态码是两套编号**：业务码常量与状态码一起在契约里声明。
-- **认证**：`/metrics` 与 `/api/v1/*` 需 Basic Auth；凭据由中间件**每请求读取**，故 SIGHUP 改
-  凭据无需重启；**未配置凭据时中间件直接放行**（此时只允许回环绑定，见下条）。不发
-  `WWW-Authenticate`（该头会触发浏览器原生对话框，表现为「输错密码按钮永久转圈」）；
-  EventSource 无法自定义请求头，故额外接受 `?access_token=<base64(user:pass)>`。
-- **失败锁定**：连续失败达阈值后锁定一段时间（契约常量）。
-- **启动期硬约束**：非回环地址绑定且完全未配置凭据 → **拒绝启动** HTTP 服务（避免管理 API 对
-  全网开放）；`metrics_username` / `metrics_password` 只配一项 → 同样拒绝启动。
-- **读路径零副作用**：读端点不清理、不累加统计、不限流——清扫与计数都在内核事件泵的
-  reconcile 里，读侧没有任何写点。
+| 项 | 规则 |
+|----|------|
+| 形状 | `{code, data, message}`；成功 `code = 0` 且 `message` 空串，失败 `data = null`；两个字段都必然存在 |
+| 业务码 | 与 HTTP 状态码是两套编号，常量在契约里声明 |
+| 凭据读取 | 中间件**每请求**读取，故 SIGHUP 换凭据无需重启 |
+| 未配置凭据 | 两项都为空时中间件直接放行；只填一项拒绝启动 |
+| 401 响应 | **有意不发 `WWW-Authenticate`**：那个头会让浏览器弹原生对话框，并让 `fetch` 挂起 |
+| SSE 令牌 | 额外接受 `?access_token=<base64(user:pass)>`，因为 `EventSource` 不能设请求头 |
+| 失败锁定 | 连续失败达阈值锁定一段时间，参数名 `failure_threshold` / `lockout_seconds`，取值见契约 |
+| 启动硬约束 | 非回环地址绑定且完全未配置凭据 → 拒绝启动 HTTP 服务 |
+| 读路径 | 零副作用：不清理、不累加统计、不限流 |
+
+### 健康与统计出口
+
+| 端点 | 数据来源 |
+|------|---------|
+| `/health`、`/healthz` | `telemetry.Store` 快照：netlink 就绪、`/proc/firewall` 存在、封禁缓存与历史是否初始化、当前封禁数 |
+| `/api/v1/stats` | 同一份快照 + `StartedAt` 起算的运行时长 + `telemetry.Ring` 的速率样本 + `KernelVersion` |
+| `/api/v1/stats/sse-status` | 两条流各自的连接数与上限 |
 
 ## 配置与热重载
 
-- **来源**：单个文件或目录（`--config`），文件不存在直接启动失败。
-- **严格模式**：任何未知 key 直接报错退出（默认开启）。
-- **运行期回写**：Web UI 改动的字段（如 webui 段）经 `internal/http/config_api.go` 回写到原始
-  YAML 路径；目标为**目录**时写该目录下带 `_` 前缀的自动管理文件，该文件在目录加载时**最后
-  合并**（`internal/config/loader.go::RuntimeOverridePrefix`），因此它只承载运行期状态，不复制
-  别处已声明的 jail 定义。
-- **SIGHUP 热重载**：重读配置 → 比较差异 → 新增/移除源的 watch、重编译正则、更新内核白名单；
-  失败保留旧快照。**重载只替换规则集与参数，不重置失败窗口**——否则一次 SIGHUP 就能帮攻击者
-  清零已积累的失败计数。
+| 项 | 规则 | 出处 |
+|----|------|------|
+| 来源 | `-c` 单文件或 `-C` 目录；路径不存在直接启动失败 | `internal/config/args.go`、`main.go` 的 `loadConfig` |
+| 严格模式 | 未知 key 报错退出；`--no-strict` 才忽略 | `internal/config/parser.go` |
+| 后处理 | `jail.Finalize` 三步；正则编译失败只告警，该 jail 退化为关键字回退，进程不退 | `internal/jail/compile.go` |
+| 运行期回写 | Web UI 改的字段经 `internal/http/config_api.go` 回写原路径；目标是目录时写该目录下 `_` 前缀的自动管理文件 | `internal/config/loader.go` 的 `RuntimeOverridePrefix` |
+| 覆盖文件合并 | 目录加载时**最后**合并，只承载运行期状态 | 同上 |
+| 热重载 | SIGHUP 或文件变化：重读 → 比较差异 → 重挂 watch、重编译正则、更新内核白名单；失败保留旧快照 | `internal/runtime/file_reloader.go` |
+| 重载不重置失败窗口 | 只换规则集与参数；否则一次 SIGHUP 就帮攻击者清零已积累的失败计数 | 同上 |
+| 回滚 | `SIGUSR1` 或 `--rollback` | `internal/runtime/directives.go` |
+| 配置下发内核 | `configSink.ApplyConfig` 投影成 `SetConfig`；手工改文件、SIGHUP、SIGUSR1、PUT 共用同一出口 | `main.go` 的 `newConfigSink` |
 
-容量字段（`capacity.max_ban_entries` / `max_whitelist_entries` / `max_rate_entries` /
-`max_local_ip_cache`，默认均为 65535）在 daemon 侧只做持久化与展示：**`SetConfig` 消息没有
-容量字段**，真正的条目上限是内核模块参数 `fw_max_*`（见 `kernel-module.md`）。
+容量字段（`capacity.max_ban_entries` / `max_whitelist_entries` /
+`max_rate_entries` / `max_local_ip_cache`）在守护进程侧只做持久化与展示。
+`SetConfig` 消息没有容量字段，真正的上限是内核模块参数 `fw_max_*`
+（见 [内核模块](kernel-module.md)）。
 
 ## 持久化
 
-`internal/persist` 用 SQLite 保存四类数据：时序统计（`historical_stats`）、封禁历史
-（`ban_history`）、封禁事件（`ban_events`）、IP 信誉分（`ip_reputation`），并派生攻击预测、
-协同检测、封禁时长推荐等分析数据（供分析类端点使用）。
+`internal/persist` 用 SQLite 保存三类数据（建表语句见该包）：
 
-读侧不重活：判定层每行日志都要扣一次信誉分并立刻取分，直接查库会把入站主链路钉在磁盘上，
-故 `persist.Facts` 按 IP 折叠缓存并周期刷盘；库自带清理调度器（按保留天数）与信誉恢复调度器，
-三者在关停时共用同一条 stop 通道，最后刷一次盘。
+| 表 | 内容 |
+|----|------|
+| `ban_history` | 按 IP 折叠的封禁历史：封禁次数、最近封禁/解封时刻、是否永久 |
+| `ban_events` | 逐条封禁事件底账，趋势与热力图读它 |
+| `ip_reputation` | IP 信誉分 |
 
-## 日志与信号
+时序统计没有独立的表：趋势与「今日」窗口都从 `ban_events` 的原始时间戳读，
+归桶在调用方用同一个 `time.Location` 做（`internal/persist/activity.go` 的注释说明为什么不
+把分桶下推到 SQL）。
 
-**日志**：基于 slog 的结构化日志，JSON Lines 格式（每行一条 JSON 对象），写入配置
-`defaults.log_file` 指定的路径；未指定或为空时用默认路径 `/var/log/firewall-daemon.log`。日志
-由自定义 handler 同步写出，**整行（含换行）合并为单次 `write()`**——这保证多个写者（例如重启
-期间新旧进程短暂并存）追加同一文件时每行仍是独立合法 JSON。文件打开失败回退 stderr（用
-`dup` 复制 fd 2，不接管原始 stderr）。
+分析面（`internal/analysis`）在这些表上派生攻击预测、协同检测、
+时长与阈值推荐、网络分布。
 
-**按大小轮转**：独立日志文件支持按 `log_max_size_mb`（默认 10MB）切片，超过上限时
-当前文件改名为 `.1`、旧切片（`.1` → `.2` …）依次顺移，保留片数由 `log_max_files`
-（默认 10，含当前片）控制，超出则删最旧的一片。`log_max_size_mb=0` 关闭轮转；
-`log_max_files=1` 表示只保留当前片（轮转时直接截断）。`log_max_*` 不随 SIGHUP 热切换，
-需要重启 daemon 才生效。
+读侧不做重活：判定层每行日志都要扣一次信誉分并立刻取分，直接查库会把
+入站主链路钉在磁盘上。`persist.Facts` 按 IP 折叠缓存并周期刷盘
+（`StartFlusher`）。库自带清理调度器与信誉恢复调度器，三者共用同一条
+stop 通道，关停时最后刷一次盘。
 
-**信号**（当前生产实现，`internal/runtime/signals.go`）：
+已知缺口：失败次数与 DDoS 命中没有按天历史，
+见 `contract/http.fwidl` 的 `HTTP_FAILURE_HISTORY_NOT_PERSISTED`。
 
-| 信号 | 行为 |
-|------|------|
-| `SIGTERM` / `SIGINT` | 入站执行体收到后置位终止令牌，主线程醒来走清理流程 |
-| `SIGHUP` | 触发配置热重载（执行体读入新配置后重扫 watch） |
-| `SIGUSR1` | 触发配置回滚 |
-| `SIGPIPE` | Go 运行时不发送、按需要忽略（HTTP 客户端断开不应杀死进程） |
+## 日志
 
-信号层先于任何 goroutine 建立，把信号转成与 inotify 同池 `poll` 的普通 fd；不依赖 `EINTR`
-打断 `poll` 的隐式协议，也没有信号处理函数写的全局原子标志。
+| 项 | 规则 | 出处 |
+|----|------|------|
+| 格式 | JSON Lines，每行一条 JSON 对象 | `internal/logger/json.go` |
+| 写入 | 自定义 handler，整行（含换行）合并为单次 `write()` | `internal/logger/handler.go`；多写者并存时每行仍是独立合法 JSON |
+| 路径 | 取 `defaults.log_file`；为空时用 `defaultLogPath` | `config/default.yaml`；`internal/logger/logger.go` 的 `/var/log/firewall-daemon.log` |
+| 打开失败 | 回退 stderr（`dup` 复制 fd 2，不接管原始 stderr） | `internal/logger/file.go` |
+| 轮转 | `log_max_size_mb`（默认 10）切片，当前片改名 `.1`，旧片依次顺移；`log_max_files`（默认 10，含当前片）控制保留数 | `internal/logger/file.go` |
+| 关闭轮转 | `log_max_size_mb=0`；`log_max_files=1` 表示轮转时直接截断 | 同上 |
+| 不随热重载切换 | `log_max_*` 改动需要重启守护进程 | `internal/runtime/file_reloader.go` |
+
+## 信号
+
+| 信号 | 行为 | 出处 |
+|------|------|------|
+| `SIGTERM` / `SIGINT` | 置位终止令牌，主线程醒来走逆序关停 | `internal/runtime/signals.go`、`main.go` |
+| `SIGHUP` | 配置热重载 | `internal/runtime/file_reloader.go` |
+| `SIGUSR1` | 配置回滚 | `internal/runtime/directives.go` |
+| `SIGPIPE` | 忽略：HTTP 客户端断开不应杀死进程 | Go 运行时不向其发送 |
 
 ## 可观测性
 
-### Prometheus 指标
+### 指标
 
-`/metrics` 由 `internal/http` 暴露。指标注册在 `internal/http` 的指标表中，计数点分布在
-`cmd/firewall-daemon/main.go` 的 `statsSink` 与 `internal/kernel/consumer.go`。当前注册的
-counter：
+`/metrics` 由 `internal/http/metrics.go` 渲染，注册即导出，当前没有 gauge。
+`main.go` 预注册 5 个计数器，其余在首次调用 `Counter(name)` 时登记。
 
-| 指标 | 说明 |
-|------|------|
-| `firewall_lines_parsed_total` | 已解析日志行数 |
-| `firewall_lines_skipped_total` | 因超长/异常跳过的行数 |
-| `firewall_regex_matches_total` | 正则命中总数 |
-| `firewall_inotify_events_total` | inotify 唤醒次数（非事件数） |
-| `firewall_log_rotations_total` | 轮转检测次数 |
-| `firewall_bans_triggered_total` | 实际发起封禁的次数 |
-| `firewall_ddos_events_total` | 检出的 DDoS 事件数 |
-| `firewall_kernel_commands_rejected_total` | 被内核拒绝的指令数 |
+| 指标 | 计数点 |
+|------|--------|
+| `firewall_lines_parsed_total` | `main.go` 的 `statsSink.AddGlobal` / `AddJail` |
+| `firewall_lines_skipped_total` | `statsSink.AddGlobal` |
+| `firewall_regex_matches_total` | `statsSink.AddGlobal` / `AddJail` |
+| `firewall_inotify_events_total` | `statsSink.IncInotifyEvents` |
+| `firewall_log_rotations_total` | `statsSink.IncLogRotations` |
+| `firewall_bans_triggered_total` | `statsSink.IncBansTriggered` |
+| `firewall_daemon_config_reloads_total` | `statsSink.IncConfigReloads`（`configReloadsMetric`） |
+| `firewall_ddos_events_total` | `internal/kernel/consumer.go` 的 `CounterDdosEvents` |
+| `firewall_kernel_commands_rejected_total` | 同文件的 `CounterCommandRejected` |
+| `firewall_netlink_messages_sent_total` | `internal/kernel/transport.go` |
+| `firewall_netlink_messages_received_total` | 同上 |
+| `firewall_netlink_send_errors_total` | 同上 |
+| `firewall_netlink_recv_errors_total` | 同上 |
 
-清单以代码里的注册点为唯一真相源；当前没有注册任何 gauge。
+清单以这三处注册点为唯一真相源。运维口径见
+`docs/zh/operations/monitoring.md`。
 
-### 健康与诊断
+### 内核读数不走 Prometheus
 
-- `/health`、`/healthz`：套 `telemetry.Snapshot`（netlink 就绪、`/proc/firewall` 存在、封禁缓存与
-  历史是否初始化、当前封禁数），就绪返回 200、否则 503。
-- `/api/v1/stats/sse-status`：分别上报两条 SSE 流的当前连接数与上限（10 / 5）——用一条流的上限
-  推断另一条是曾经的缺陷成因。
+封禁、白名单、速率等内核统计由 `/proc/firewall/stats` 的键值文本给出，
+由事件泵按 `SampleInterval` 采样汇入 `telemetry.Store`，
+再经 `/api/v1/stats` 与 `/health` 透出。仓库不提供 procfs → metrics 的适配。

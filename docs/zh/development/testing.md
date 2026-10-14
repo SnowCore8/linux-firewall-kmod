@@ -1,337 +1,269 @@
 # 测试
 
-本文档介绍 Linux Firewall 项目的测试框架和测试套件。
+三层测试，互相不能替代。
 
-## 测试架构
+| 层 | 命令 | 需要 root | 覆盖 |
+|----|------|----------|------|
+| 单元 | `cd src/daemon && go test ./...` | 否 | Go 包内 `_test.go` |
+| 集成 | `make test` | 是 | `tests/test_*_*.py` |
+| 端到端 | `npx playwright test` | 需要能起守护进程 | `tests/e2e/*.spec.ts` |
 
-```mermaid
-graph TD
-    ROOT["tests/"]
-    CONF["conftest.py pytest fixtures、辅助函数、测试隔离"]
-    CFG["config.py 路径与参数变量（KERNEL_MODULE_PATH 等）"]
+**用例数量一律以命令实时输出为准，本文不写死数字。**
+`go test ./...`、`sudo python3 -m pytest tests/ --collect-only -q`、
+`npx playwright test --list` 各自会给出计数。
 
-    subgraph SUITES["test_*.py 编号测试套件（按编号顺序执行，个别编号跳过）"]
-        S01["test_01_module_lifecycle.py"]
-        S02["test_02_procfs_interface.py"]
-        S03["test_03_ban_unban.py"]
-        S04["test_04_whitelist.py"]
-        S07["test_07_concurrency.py"]
-        S08["test_08_stress_perf.py"]
-        S09["test_09_daemon_config.py"]
-        S10["test_10_daemon_logparse.py"]
-        S11["test_11_resource_mgmt.py"]
-        S12["test_12_permanent_ban.py"]
-        S13["test_13_frp_jail.py"]
-        S14["test_14_ban_netfilter.py"]
-        S15["test_15_ddos_detection.py"]
-        S16["test_16_webui_api.py"]
-        S17["test_17_config_reload.py"]
-        S18["test_18_log_rotation.py"]
-        S19["test_19_netlink_comm.py"]
-        S20["test_20_daemon_lifecycle.py"]
-        S21["test_21_multi_jail.py"]
-    end
+## 第一层：Go 单元测试
 
-    ROOT --> CONF
-    ROOT --> CFG
-    ROOT --> SUITES
-    SUITES --> S01
-    SUITES --> S02
-    SUITES --> S03
-    SUITES --> S04
-    SUITES --> S07
-    SUITES --> S08
-    SUITES --> S09
-    SUITES --> S10
-    SUITES --> S11
-    SUITES --> S12
-```
-
-> 早期版本按 `tests/{unit,integration,stress}/` 拆分；v1.5 起重构为
-> 编号套件 + 共享 Bash 框架；v2.x 起迁移至 Python pytest，
-> 消除大量重复代码并获得更好的断言、报告和过滤能力。
-
-## 单元测试（Go module）
-
-守护进程由 Go 实现于 `src/daemon`（module `github.com/snowcore8/linux-firewall-kmod/daemon`），
-单元测试用 `go test ./...` 跑，组合根的可测入口即 `run(args []string) error`：
+守护进程是 Go module `src/daemon`
+（模块名 `github.com/snowcore8/linux-firewall-kmod/daemon`，见 `src/daemon/go.mod`）。
 
 ```bash
-cd src/daemon && go test ./...          # 全部单测 + 集成断言（无需 sudo）
-cd src/daemon && go test ./cmd/... -v   # 只看守护进程主包，带详细输出
-cd src/daemon && go vet ./cmd/... ./internal/...  # lint：等价于 CI 的 go vet
-cd src/daemon && gofmt -l ./cmd ./internal  # 格式检查（CI 同款命令）
+cd src/daemon && go test ./...                # 全部
+cd src/daemon && go test ./cmd/... -v         # 只看组合根
+cd src/daemon && go test ./internal/kernel/ -run TestXxx -v
+cd src/daemon && go vet ./cmd/... ./internal/...   # lint，等价 CI 的同款命令
+cd src/daemon && gofmt -l ./cmd ./internal         # 格式，输出须为空
 ```
 
-`go test` 跑的是源码内 `Test*` 用例并同时执行 doctest；与 `tests/` 下的 pytest
-集成测试互补——单测在源码层验证逻辑，pytest 在 Python 端做端到端。
+组合根的可测入口是 `cmd/firewall-daemon/main.go` 的 `run(args []string) error`，
+`main` 只是它的一层包装。
 
-## 集成测试
+契约生成的 `http_contract.go` 另有自检：`contract/verify_http.py` 会把它真编一遍，
+所以跑校验时要传 `GO` 环境变量（`make contract-check` 已传）。
 
-### 运行测试
+## 第二层：集成测试（pytest）
 
 ```bash
-# 编译后运行全部套件
-make test
-# 实际命令：sudo python3 -m pytest tests/ -v
+make test                       # 实际执行 sudo python3 -m pytest tests/ -v
+sudo python3 -m pytest tests/ -v
+sudo python3 -m pytest tests/test_03_ban_unban.py -v    # 单个套件
+sudo python3 -m pytest tests/ -k "ban" -v               # 关键字过滤
+sudo python3 -m pytest tests/ --tb=short --collect-only # 只列出，不执行
 ```
 
-```bash
-# 直接调用 pytest
-sudo python3 -m pytest tests/ -v                    # 运行所有套件
-sudo python3 -m pytest tests/test_03_ban_unban.py -v  # 仅运行 test_03_ban_unban
-sudo python3 -m pytest tests/ -k "daemon" -v        # 按关键字过滤（匹配函数名/类名）
-sudo python3 -m pytest tests/ --tb=short            # 简短回溯输出
-sudo python3 -m pytest tests/ --html=report.html    # 生成 HTML 报告（需 pytest-html 插件）
-sudo python3 -m pytest tests/ --collect-only        # 仅列出所有测试，不执行
-```
+框架入口：`tests/conftest.py`（fixtures 与辅助函数）、`tests/config.py`
+（路径与参数配置）。需要 root 的动作是 insmod / rmmod 和 procfs 写入。
 
-测试框架是 Python pytest，入口为 `tests/conftest.py`（fixtures 与辅助函数）
-和 `tests/config.py`（路径与参数配置）。
+`make test` 依赖 `$(KERNEL_MODULE)` 与 `$(DAEMON_BIN)`，所以要先编译。
+
+### 套件清单
+
+按 `ls tests/` 核对。编号不连续（05、06 缺失，重构时已合并进现有套件）。
+
+| 编号 | 文件 | 覆盖 |
+|------|------|------|
+| 01 | `test_01_module_lifecycle.py` | 模块加载/卸载、带参数加载、sysfs 参数可读 |
+| 02 | `test_02_procfs_interface.py` | `/proc/firewall/{bans,whitelist,config,stats}` 读写 |
+| 03 | `test_03_ban_unban.py` | 封禁、解封、临时/永久封禁、到期清理 |
+| 04 | `test_04_whitelist.py` | 精确匹配、CIDR 子网匹配、容量上限 |
+| 07 | `test_07_concurrency.py` | 多进程并发读写、RCU 正确性 |
+| 08 | `test_08_stress_perf.py` | 满表操作、延迟统计 |
+| 09 | `test_09_daemon_config.py` | YAML 加载、严格模式校验、jail 解析 |
+| 10 | `test_10_daemon_logparse.py` | 日志监听、正则匹配、jail 触发 |
+| 11 | `test_11_resource_mgmt.py` | 内存、句柄、procfs 资源生命周期 |
+| 12 | `test_12_permanent_ban.py` | 永久封禁 |
+| 13 | `test_13_frp_jail.py` | frp jail 的配置加载与触发 |
+| 14 | `test_14_ban_netfilter.py` | 封禁后的 netfilter 行为（真实可路由 IP） |
+| 15 | `test_15_ddos_detection.py` | DDoS 检测（PPS / SYN / UDP / ICMP 速率违规） |
+| 16 | `test_16_webui_api.py` | Web UI API 端点 |
+| 17 | `test_17_config_reload.py` | 配置热重载（SIGHUP） |
+| 18 | `test_18_log_rotation.py` | 日志轮转检测 |
+| 19 | `test_19_netlink_comm.py` | netlink 内核 ↔ 守护进程通信 |
+| 20 | `test_20_daemon_lifecycle.py` | 守护进程启动/停止/重启 |
+| 21 | `test_21_multi_jail.py` | 多 jail 并发、独立日志、隔离性 |
+| 22 | `test_22_cluster_scan.py` | 集群扫描：配置接受、单高频 IP 不触发、同 /24 多源触发 |
+
+「需要模块可加载」与「只测守护进程」的分组以 `.github/workflows/ci.yml` 里
+`运行测试` 任务打印的那两行为准。
+
+### 集成测试是行为规格
+
+`tests/` 与 `scripts/e2e-daemon.sh` 描述的是接口契约。
+规格与实现冲突时先确认哪一侧错，**不要改测试迁就刚改的实现**。
 
 ### 在 sudo 下运行
 
-`make test` 内部走 `sudo python3 -m pytest tests/ -v`。测试需要 root
-权限操作内核模块（insmod/rmmod）和 procfs 写入；Python 侧的 pytest / sqlite3 /
-playwright 不受 `secure_path` 影响。
+`make test` 内部就是 `sudo python3 -m pytest tests/ -v`。
 
-Go 守护进程现在由 Go 编译，同样依赖 PATH：`sudo` 默认 `secure_path` 不含
-`~/.go/bin` 或系统外的 Go 安装目录时直接 `sudo make daemon` 会失败：
-
-```
-sudo make daemon
-make: go: 没有那个文件或目录
-make: *** [Makefile] 错误 127
-```
-
-先确认 PATH 里确实有 go，必要时显式带环境再 sudo（与 CI 的
-`sudo env "PATH=$PATH"` 一致）：
+`sudo` 默认 `secure_path` 可能不含用户目录下的 Go 安装位置，
+`sudo make daemon` 会以 `make: go: 没有那个文件或目录`（错误 127）失败。
+仓库 CI 的写法是保留当前 PATH：
 
 ```bash
-go version
-sudo --preserve-env=PATH make daemon   # 或在 shell 中 export PATH=$(printf '%s\n' "$PATH" ~/.go/bin)
+go version                                      # 先确认
+sudo env "PATH=$PATH" make test                 # 与 CI 一致
+sudo --preserve-env=PATH make daemon
 ```
 
-### 过滤器与输出
+Python 侧的 pytest 装在系统站点目录：`--user` 安装对 root 不可见。
 
-| 参数 | 用途 |
+## 第三层：浏览器端到端（Playwright）
+
+跑在真实守护进程的 Web UI 上，配置在仓库根 `playwright.config.ts`，
+`testDir` 是 `./tests/e2e`。
+
+```bash
+sudo bash scripts/e2e-daemon.sh start     # insmod + 起守护进程 + 等 procfs 就绪
+eval "$(bash scripts/e2e-daemon.sh env)"  # 打印连接参数，不需要 root
+npx playwright test
+sudo bash scripts/e2e-daemon.sh stop      # 停进程并 rmmod，释放内核 portid 租约
+```
+
+前置条件是**加载了内核模块的守护进程**：`cmd/firewall-daemon/main.go`
+启动期先做 `checkProcfs`，`/proc/firewall` 与 `/proc/firewall/bans`
+缺失即以启动错误退出。
+
+内核把单守护进程实现为 portid 独占 + 30 秒活动超时，且无注销消息。
+整条夹具因此独立成 `scripts/e2e-daemon.sh`，本地与 CI 共用同一份逻辑。
+`scripts/e2e-daemon.sh probe` 只探测模块能否加载，不启动任何进程。
+
+### 断言范围
+
+| 类别 | 内容 | 出处 |
+|------|------|------|
+| 路由 | 逐一访问每个页面路径，断言区块标题与顶栏标题 | `tests/e2e/routes.spec.ts` |
+| 写操作回环 | 封禁 → 解封，界面 / 接口 / 内核三层状态同步翻转 | `tests/e2e/write-flow.spec.ts` |
+| 仪表盘 | 首屏渲染与实时数据 | `tests/e2e/dashboard.spec.ts` |
+| 控制台洁净度 | 整个用例期间无 `console.error` / `console.warn` / 未捕获异常 | `tests/e2e/support.ts`（共享夹具） |
+| PWA 上下文对照 | 安全上下文下 SW 可注册；局域网 IP 下该 API 不存在但界面照常 | `tests/e2e/pwa-context.spec.ts` |
+
+新增用例默认继承夹具里的洁净度门槛，不各自重复断言。
+
+### 两处配置取舍
+
+| 配置 | 值 | 原因 |
+|------|-----|------|
+| `retries` | 0 | 重试会把间歇性缺陷（偶发告警、偶发 503）洗成绿 |
+| `workers` | 1 | 每个页面实例建一条 `/api/v1/events` SSE 长连接，而守护进程对管理流有连接位硬上限；多 worker 叠加本地已开的标签页会随机触顶 503 |
+
+要提速应先调大服务侧的连接位配额，而不是把不确定性带进 CI。
+
+局域网一侧的对照由 `E2E_LAN_ORIGIN=http://<局域网IP>:<port>` 开启；
+不设置则该侧显式跳过（CI 即如此）。
+
+## CI 的六个任务
+
+任务名取自 `.github/workflows/ci.yml` 的 `name:` 字段。
+
+| 任务名 | job id | 做什么 |
+|--------|--------|--------|
+| 代码质量检查 | `lint` | `clang-format --dry-run --Werror`、`gofmt -l`、`go vet`、`go test ./cmd/... ./internal/...`、`yamllint config/` |
+| 契约一致性 | `contract` | `make contract-drift` + `verify_layout` / `verify_procfs` / `verify_http` |
+| 前端构建 | `frontend` | `npm ci`、`tsc --noEmit`、`vite build`、产物与 PWA 清单校验、`node --check sw.js` |
+| 编译 | `build` | 编内核模块与守护进程，上传产物 |
+| 浏览器端到端测试 | `e2e` | `scripts/e2e-daemon.sh` 起真守护进程后跑 Playwright |
+| 运行测试 | `test` | 装 `sqlite3`、`python3-pytest`、`python3-yaml`，跑 pytest |
+
+六项全过才允许合入。
+
+### 必须知道的实测结论
+
+**CI 的 runner 加载不了内核模块。**
+GitHub Actions 的 Azure VM 用自定义内核，`insmod` 编出的 `.ko` 会失败。
+`运行测试` 与 `浏览器端到端测试` 两个任务都先探测：
+
+```bash
+if sudo insmod build/kernel-module/firewall.ko 2>&1; then compatible=true
+else compatible=false; fi
+```
+
+`compatible=false` 时：
+
+| 任务 | 降级行为 |
+|------|---------|
+| 运行测试 | 只跑守护进程子集：`-k "daemon or logparse or frp or ddos or webui or config_reload or log_rotation or netlink or lifecycle or multi_jail"` |
+| 浏览器端到端测试 | 整段带 `::warning::` 注解跳过（环境限制，非代码问题） |
+
+**结论：CI 绿不代表内核模块套件跑过。**
+要验证内核侧，必须在真能 `insmod` 的机器上跑 `make test`。
+
+**编译通过不等于加载得进去。** 这两件事的检查点不同：
+
+| 阶段 | 检什么 | 漏检的后果 |
+|------|--------|-----------|
+| `make kernel-module` | 符号、头文件、类型 | 编得过 |
+| `insmod` | vermagic、每 CPU 申请上限、init 路径返回值 | 报 `Unknown symbol` / `Invalid module format` / `Cannot allocate memory` |
+
+实测撞过的一个例子：per-CPU 单次申请超 32 KiB 上限时，
+编译完全正常，`insmod` 才报 `Cannot allocate memory`。
+细节见 [内核模块](../architecture/kernel-module.md)「两处内核适配」。
+
+## 代码检查
+
+| 检查 | 命令 | 要求 |
+|------|------|------|
+| C 格式 | `make format-check` | 通过 |
+| Go 格式 | `cd src/daemon && gofmt -l ./cmd ./internal` | 输出为空 |
+| Go lint | `cd src/daemon && go vet ./cmd/... ./internal/...` | 通过 |
+| TS 类型 | `make frontend-typecheck` | 通过 |
+| 契约 | `make contract-check` | 三个校验器全绿 |
+
+`make format` 只格式化 C，不管 Go 和 YAML。三件事互相独立。
+
+### 关于 `unsafe`
+
+守护进程是纯 Go、无 cgo（全仓无 `import "C"`）。
+代码里有两处 `unsafe.Pointer`，都不跨 FFI 边界：
+
+| 位置 | 用途 |
 |------|------|
-| `tests/test_03_ban_unban.py` | 只运行指定测试文件 |
-| `-k "关键字"` | 按关键字过滤（匹配函数名、类名），如 `-k "daemon"` |
-| `-m "标记"` | 按 pytest 标记过滤（如自定义标记） |
-| `--tb=short` | 简短回溯输出 |
-| `--html=report.html` | 生成 HTML 报告（需 `pip install pytest-html`） |
-| `--collect-only` | 仅列出所有测试，不执行 |
-| `-x` | 遇到第一个失败即停止 |
-| `-v` | 详细输出（显示每个测试名称） |
+| `src/daemon/internal/bans/endian.go` | 字节 ↔ 数值的搬移 |
+| `src/daemon/internal/ingest/watcher.go` | inotify 事件结构的封装 |
 
-pytest 输出示例：
+可执行的检查是 `gofmt -l` 与 `go vet ./cmd/... ./internal/...`（CI 同款命令）。
+本仓库不使用逐行论证式的注释。
 
-```
-tests/test_03_ban_unban.py::TestBanUnban::test_basic_ban PASSED
-tests/test_03_ban_unban.py::TestBanUnban::test_unban PASSED
-tests/test_09_daemon_config.py::TestDaemonConfig::test_yaml_load PASSED
-...
+### Valgrind（可选）
 
-========================= all passed in 45.32s =========================
-```
-
-加 `--html=report.html` 会生成包含每条测试通过/失败/输出/耗时的
-HTML 报告，CI 上传为 artifact。
-
-## 测试套件
-
-| 编号 | 文件 | 覆盖范围 |
-|------|------|----------|
-| 01 | `test_01_module_lifecycle.py` | 模块加载/卸载、带参数加载、sysfs 参数可读 |
-| 02 | `test_02_procfs_interface.py` | `/proc/firewall/{bans,whitelist,config,stats}` 读写 |
-| 03 | `test_03_ban_unban.py` | 封禁、解封、临时/永久封禁、过期清理 |
-| 04 | `test_04_whitelist.py` | 白名单精确匹配、CIDR 子网匹配、容量上限 |
-| 07 | `test_07_concurrency.py` | 多进程并发读写、RCU 正确性 |
-| 08 | `test_08_stress_perf.py` | 满表操作、延迟统计 |
-| 09 | `test_09_daemon_config.py` | YAML 配置加载、严格模式校验、jail 解析 |
-| 10 | `test_10_daemon_logparse.py` | 日志监听（inotify）、正则匹配、jail 触发 |
-| 11 | `test_11_resource_mgmt.py` | 内存、句柄、procfs 资源生命周期 |
-| 12 | `test_12_permanent_ban.py` | 永久封禁（内存中） |
-| 13 | `test_13_frp_jail.py` | FRP（Fail2ban-Recover-Pattern）jail 配置加载与触发 |
-| 14 | `test_14_ban_netfilter.py` | 黑名单 netfilter 链表条目格式与功能（真实可路由 IP） |
-| 15 | `test_15_ddos_detection.py` | DDoS 检测（PPS/BPS/SYN/UDP/ICMP 速率违规） |
-| 16 | `test_16_webui_api.py` | Web UI API 端点测试 |
-| 17 | `test_17_config_reload.py` | 配置热重载（SIGHUP） |
-| 18 | `test_18_log_rotation.py` | 日志轮转检测（inotify + inode 重连） |
-| 19 | `test_19_netlink_comm.py` | Netlink 内核↔守护进程通信 |
-| 20 | `test_20_daemon_lifecycle.py` | 守护进程启动/停止/重启生命周期 |
-| 21 | `test_21_multi_jail.py` | 多 jail 并发、独立日志、隔离性 |
-
-> 编号不连续（05、06 缺失）：原对应旧测试套件，重构时已合并到
-> 现有套件中。
-
-## 框架辅助函数
-
-测试用 `tests/conftest.py` 提供的 fixtures 和辅助函数：
-
-| 函数 / Fixture | 用途 |
-|------|------|
-| `ban_ip(ip)` | 封禁 IP |
-| `ban_ip_with_time(ip, seconds)` | 封禁 IP 带时长 |
-| `ban_ip_permanent(ip)` | 永久封禁 IP |
-| `unban_ip(ip)` | 解封 IP |
-| `ip_is_banned(ip)` | 检查 IP 是否在封禁列表中 |
-| `whitelist_add(subnet)` | 添加白名单 |
-| `whitelist_remove(subnet)` | 移除白名单 |
-| `get_stat(name)` | 获取 procfs 统计值 |
-| `count_bans()` | 获取封禁列表行数 |
-| `count_whitelist()` | 获取白名单行数 |
-| `reset_all_data()` | 重置所有测试数据 |
-| `load_module()` / `unload_module()` | 加载/卸载内核模块 |
-| `session_setup` (fixture) | 会话级设置：确保模块加载 |
-| `test_isolation` (fixture) | 每个测试前后的数据隔离 |
-| `clean_bans` (fixture) | 确保封禁列表为空 |
-| `daemon_binary` (fixture) | 确保守护进程二进制存在 |
-| `tmp_config` (fixture) | 创建临时配置目录 |
-
-## 内核模块测试约束
-
-部分套件需要内核模块可加载。GitHub Actions Azure VM 的内核与
-host headers 常不匹配，模块加载会失败但不影响功能测试——runner
-会自动跳过（详见 [ci.yml](../../../.github/workflows/ci.yml)）。
-
-## 安全与质量检测
-
-Go 守护进程同样有两处 `unsafe.Pointer`：字节↔内存的搬移
-（`internal/bans/endian.go`）与 inotify 事件结构的封装
-（`internal/ingest/watcher.go`），都用标准库原语 + runtime 语义保证。可执行的检查是
-`go vet ./...` + `gofmt -l`（CI 已集成）；下面列的是仍适用于守护进程的静态分析手段。
-
-### Valgrind（可选，用于二进制不变、只换分析器的场景）
+用于「二进制不变、只换分析器」的场景：
 
 ```bash
 cd src/daemon && go build -o /tmp/firewall-daemon ./cmd/firewall-daemon
-sudo valgrind --leak-check=full \
-    /tmp/firewall-daemon -c config/default.yaml
+sudo valgrind --leak-check=full /tmp/firewall-daemon -c config/default.yaml
 ```
 
-### 代码检查清单
+本机跑过没有：未验证。
 
-仓库要求 `gofmt -l ./cmd ./internal` 干净 + `go vet ./cmd/... ./internal/...`
-通过（CI lint 作业）；违反时先修代码，再重新跑这两条命令。
+## 写新测试
 
-### go test 与 pytest 的关系
+新文件放 `tests/`，命名 `test_NN_description.py`，NN 取下一个可用编号。
+辅助函数从 `tests/conftest.py` 导入。
 
-单测失败时先看 `cd src/daemon && go test ./... -v` 的堆栈定位到具体包，
-再做集成测试复现（`tests/conftest.py`）；两者是互补关系，不要只靠一侧判断回归。
+| 函数 / fixture | 用途 |
+|------|------|
+| `ban_ip(ip)` / `ban_ip_with_time(ip, seconds)` / `ban_ip_permanent(ip)` | 封禁 |
+| `unban_ip(ip)` | 解封 |
+| `ip_is_banned(ip)` | 查封禁列表 |
+| `whitelist_add(subnet)` / `whitelist_remove(subnet)` | 白名单 |
+| `get_stat(name)` | 取 procfs 统计值 |
+| `count_bans()` / `count_whitelist()` | 数行数 |
+| `reset_all_data()` | 重置测试数据 |
+| `load_module()` / `unload_module()` | 加载 / 卸载模块 |
+| `session_setup`（fixture） | 会话级设置，确保模块加载 |
+| `test_isolation`（fixture） | 每个测试前后的数据隔离 |
+| `clean_bans`（fixture） | 确保封禁列表为空 |
+| `daemon_binary`（fixture） | 确保守护进程二进制存在 |
+| `tmp_config`（fixture） | 创建临时配置目录 |
 
-## 编写新测试
+清单以 `tests/conftest.py` 为准，上表按其中的定义与 fixture 核对过。
 
-新测试应放在 `tests/` 目录，文件名格式 `test_NN_description.py`（NN 为
-下一个可用编号）。使用 conftest.py 提供的 fixtures 和辅助函数：
+## 环境受限时的做法
 
-```python
-# test_22_my_feature.py - 新功能测试
-
-from .conftest import ban_ip, ban_ip_with_time, unban_ip, ip_is_banned, get_stat
-
-
-class TestMyFeature:
-    """新功能测试"""
-
-    def test_basic_behavior(self, clean_bans):
-        """基本行为"""
-        ban_ip("203.0.113.1")
-        assert ip_is_banned("203.0.113.1")
-
-    def test_boundary_condition(self, clean_bans):
-        """边界条件"""
-        ban_ip_with_time("203.0.113.2", 1)
-        assert ip_is_banned("203.0.113.2")
-```
-
-## 浏览器端到端测试（E2E）
-
-浏览器测试跑在真实守护进程的 Web UI 上（Playwright + Chromium），只做三类硬断言：
-
-- **全量 hash 路由**：逐一访问每个页面路径，断言区块标题与顶栏标题；
-- **写操作回环**：走通「封禁 → 解封」，界面 / 接口 / 内核三层状态同步翻转；
-- **控制台洁净度**：整个用例期间无 `console.error` / `console.warn` / 未捕获异常。
-
-用例与断言锚点全部在 `tests/e2e/`（`support.ts` 是共享夹具与鉴权，其余是用例）；
-新增用例默认继承夹具里的控制台洁净度门槛，不需要各自重复断言。
-
-`pwa-context.spec.ts` 另做一对**对照**：安全上下文（localhost）下 Service Worker 可注册，
-非安全上下文（局域网 IP）下该 API 不存在但界面照常工作。后者由
-`E2E_LAN_ORIGIN=http://<局域网IP>:<port>` 开启，不设置则显式跳过（CI 即如此）；
-观察结果见 [Web 前端](../architecture/frontend.md) 的「验收记录：安全上下文边界」。
-
-前置条件是**加载了内核模块的守护进程**：`main.go` 启动期先做 `checkProcfs`——
-`/proc/firewall` 与 `/proc/firewall/bans` 必须已挂载，否则直接以启动错误退出。
-且内核把单守护进程实现为 portid 独占 + 30 秒活动超时、无注销消息，因此整条夹具
-（insmod → 生成临时配置 → 起守护进程 → 等 procfs 接口就绪 → 收尾 rmmod）独立为
-`scripts/e2e-daemon.sh`，本地与 CI 共用同一份逻辑：
+集成测试需要 root 与可加载的模块。当前开发机若两条都不满足，就**不能**把「没跑」
+写成「通过」。可执行的闸门是：
 
 ```bash
-# 1) 起夹具（需要 root）：insmod + 起守护进程 + 等 /proc/firewall 接口就绪；同时打印连接参数
-sudo bash scripts/e2e-daemon.sh start
-
-# 2) 用夹具给出的参数跑用例（env 子命令纯打印，不需要 root）
-eval "$(bash scripts/e2e-daemon.sh env)"
-npm run test:e2e
-
-# 3) 收尾：停守护进程并卸载模块，释放内核的 portid 租约（否则下次启动会被拒）
-sudo bash scripts/e2e-daemon.sh stop
+cd src/daemon && gofmt -l ./cmd ./internal      # 须为空
+cd src/daemon && go vet ./cmd/... ./internal/...
+cd src/daemon && go test ./...
+make format-check
+make contract-check
 ```
 
-`scripts/e2e-daemon.sh probe` 只探测内核模块能否加载、不启动任何进程，供 CI 判定
-本机是否具备运行条件。
+能 `insmod` 的机器上再跑 `make test`。这是唯一能验证内核套件的途径。
 
-## CI 集成
+## 相关文档
 
-`.github/workflows/ci.yml` 的 job 全部通过才允许合入：
-
-| Job | 检查项 | 失败处理 |
-|-----|--------|----------|
-| `lint` | **go**fmt -l + go vet（守护进程）+ clang-format（内核模块）+ yamllint | 不通过则阻断 merge |
-| `frontend` | 前端类型检查（`tsc --noEmit`）+ vite 构建 + 构建产物 / PWA 清单 / Service Worker 校验 | 不通过则阻断 merge |
-| `build` | 内核模块（`make kernel-module`）+ 守护进程（`make daemon`） | 编译失败阻断 merge |
-| `e2e` | 浏览器端到端（Playwright）：`scripts/e2e-daemon.sh` 起守护进程后 `npm run test:e2e` | 用例 fail 阻断 merge；本机内核不可加载时整段带注解跳过（同 `test` job 的约定） |
-| `test` | `sudo python3 -m pytest tests/ -v` | 任何 fail 阻断 merge |
-
-测试编排细节（`test` job）：
-
-1. 复用 `build` job 编译产物（`build/kernel-module/firewall.ko` + `build/daemon/firewall-daemon`）
-2. 在 runner 上 `sudo python3 -m pytest tests/ -v`
-3. 若内核模块不可加载（Azure VM 环境限制），conftest.py 的 `session_setup` fixture 自动跳过需要模块的测试
-4. 报告上传为 artifact，保留 14 天
-
-`e2e` job 与 `test` job 同源：复用 `build` 的编译产物，先用 `scripts/e2e-daemon.sh probe`
-判定本机能否加载内核模块，能则起守护进程并跑 Playwright（失败即阻断 merge），
-不能则带 `::warning::` 注解跳过浏览器用例（环境限制，非代码问题）。
-夹具与判定逻辑见上一节，不在 CI 里另写一份。
-
-> `lint` 失败通常意味着 gofmt 漂移 / vet 告警；内核侧则是 clang-format
-> `--dry-run --Werror` 不通过。修复后重跑即可。
-
-## 集成测试的地位（本机不可执行）
-
-本仓库的 Python 集成套件（`tests/`，含 `scripts/e2e-daemon.sh`）**在当前开发机上无法执行**，
-有三条互相独立的阻塞，缺任何一条都不足以解开：
-
-1. **系统 python3 没有 pytest / PyYAML / sqlite3 CLI** —— 直接调用会报 `ModuleNotFoundError`。
-2. **内核模块 vermagic 与运行内核不匹配** —— `build/kernel-module/firewall.ko` 是旧内核交叉编译产物，
-   在 `insmod` 时必报 `Invalid module format`，依赖它的套件无法加载。
-3. **集成测试需要 root** —— 写 procfs、insmod/rmmod、sudo 启动守护进程；当前 shell 无 sudo 环境。
-
-因此不能把「没跑」说成「通过」。集成测试的正确用法是：
-
-- **行为规格**：`scripts/e2e-daemon.sh` 与 `tests/` 描述的是接口契约（起夹具 → 等 `/proc/firewall`
-  就绪 → 停守护进程并释放 portid 租约），在能跑的 CI runner 上执行；
-- **可执行的闸门**：Go 侧 `go test ./...` + `go vet ./cmd/... ./internal/...` +
-  `gofmt -l ./cmd ./internal`（CI lint 作业同款命令）；前端类型检查与 vite 构建同样在 CI 执行。
-
-e2e 夹具的三条断言仍是硬承诺，本机无法验证不代表它不成立：全量 hash 路由标题、封禁→解封三层状态同步翻转、
-控制台无 `console.error`/`warn`/未捕获异常——新增用例继承夹具里的控制台洁净度门槛，不各自重复断言。
-
-### 为什么 e2e 独立成文件
-
-整条夹具（insmod → 生成临时配置 → 起守护进程 → 等 procfs 接口就绪 → 收尾 rmmod）依赖 portid
-独占 + 30 秒活动超时、且模块无注销消息；必须和浏览器用例共用同一份逻辑，才能确保用例连的守护进程
-确实由同一套参数启动（参见 [Web 前端](../architecture/frontend.md)）。
+- [构建](building.md)：门禁命令与 CI 依赖
+- [性能基线](perf-baseline.md)：热路径口径
+- [Web 前端](../architecture/frontend.md)：端到端断言的对象

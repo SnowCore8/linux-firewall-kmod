@@ -1,164 +1,184 @@
 # 快速上手
 
-本指南将在 5 分钟内帮助你配置并运行第一个 jail 规则。
+一条主路径，五步跑通。
+每步都写「预期看到什么」，对不上就别往下走。
 
-## 前提条件
+前置：仓库已经编出两个产物。没有就先跑 `make build-quick`，见 [安装](installation.md)。
+下面的命令都在仓库根目录执行，都需要 root。
 
-确保已完成 [安装](installation.md) 并验证模块正常工作。
-
-## 第一步：配置文件
-
-编辑主配置文件 `/etc/firewall/default.yaml`：
+## 第 1 步：加载内核模块
 
 ```bash
-sudo vim /etc/firewall/default.yaml
+sudo insmod build/kernel-module/firewall.ko fw_ban_time=600
 ```
 
-### 基本配置
+预期：这条命令不打印任何东西，退出码 0。
 
-```yaml
-# 全局设置
-global:
-  log_level: info
-  log_file: /var/log/firewall.log
-  db_path: /var/lib/firewall/bans.db
-
-# SSH 防护 Jail
-jails:
-  - name: sshd
-    enabled: true
-    log_path: /var/log/auth.log
-    filter:
-      regex: 'Failed password for .* from <HOST>'
-    action:
-      ban_time: 3600        # 封禁 1 小时
-      find_time: 600        # 10 分钟内
-      max_retries: 5        # 5 次失败后封禁
-    port: 22
-    protocol: tcp
-```
-
-### 配置说明
-
-| 参数 | 说明 | 示例值 |
-|------|------|--------|
-| `name` | Jail 名称 | `sshd` |
-| `enabled` | 是否启用 | `true` |
-| `log_path` | 监控的日志文件 | `/var/log/auth.log` |
-| `regex` | 匹配失败登录的正则 | `Failed password for .* from <HOST>` |
-| `ban_time` | 封禁时长（秒） | `3600` |
-| `find_time` | 统计窗口（秒） | `600` |
-| `max_retries` | 最大重试次数 | `5` |
-| `port` | 监控的端口 | `22` |
-| `protocol` | 协议类型 | `tcp` |
-
-## 第二步：添加白名单
-
-将你的管理 IP 加入白名单，防止被误封：
-
-```yaml
-# 在配置文件中添加
-whitelist:
-  - 192.168.1.0/24
-  - 10.0.0.1
-```
-
-> **注意**：白名单条目上限由 `capacity.max_whitelist_entries`（内核侧
-> `fw_max_whitelist_entries`）控制，默认值见 `config/default.yaml`；到限后内核拒绝新增条目。
-
-## 第三步：启动服务
+验证模块在跑：
 
 ```bash
-# 重新加载配置并启动
-sudo systemctl restart firewall
-
-# 检查状态
-sudo systemctl status firewall
+lsmod | grep firewall
 ```
 
-## 第四步：验证封禁
+预期：输出第一列是 `firewall`。
 
-### 方法一：查看 ProcFS
+看内核侧配置：
 
 ```bash
-cat /proc/firewall/bans
+sudo cat /proc/firewall/config
 ```
 
-### 方法二：使用 firewall-daemon
+预期：四行内容，`ban_time` 是你传进去的 600。
+
+```text
+Current Firewall Configuration:
+--------------------------------
+ban_time: 600 seconds
+Ban entries: 0
+Whitelist entries: 0
+```
+
+## 第 2 步：起守护进程
 
 ```bash
-# 查看封禁列表
-cat /proc/firewall/bans
-
-# 查看统计信息
-cat /proc/firewall/stats
+sudo ./build/daemon/firewall-daemon -c config/default.yaml
 ```
 
-### 方法三：手动测试
+预期：进程不退出，终端（stderr）连续打出日志，其中有两行：
+
+```text
+内核 netlink 链路已就绪
+HTTP 服务器已启动
+```
+
+模块没加载时不会走到这一步。启动检查会直接报错退出，退出码 1：
+
+```text
+内核接口不可用: /proc/firewall/... 不存在（内核模块未加载？）
+```
+
+想同时看到日志文件，看配置里的 `defaults.log_file`。
+
+## 第 3 步：打开面板
+
+浏览器访问：
+
+```text
+http://127.0.0.1:9119/dashboard
+```
+
+端口来自 `defaults.metrics_port`，默认 9119。
+`config/default.yaml` 把 `metrics_bind_address` 写成 `0.0.0.0`，所以局域网地址也能访问。
+
+配了 `metrics_username` 和 `metrics_password` 时，页面显示登录表单。
+填配置文件里的那两个值。
+令牌存在浏览器 `sessionStorage`，键名 `firewall.access_token`，关掉标签页就没了。
+
+想跳过登录表单，直接用免登录地址：
+
+```text
+http://127.0.0.1:9119/?access_token=<base64(用户名:密码)>
+```
+
+令牌会先被写进 `sessionStorage`，然后从地址栏清掉。
+
+预期：登录后面板出数据，不用刷新页面也会自己更新。
+更新间隔是 `webui.sse_push_interval`，默认 1 秒。
+
+一个已知限制：Service Worker 只在安全上下文（HTTPS 或 localhost）注册。
+通过 `http://<局域网IP>:9119` 访问时界面正常，但无法「添加到主屏幕」。
+
+## 第 4 步：手工封禁一个 IP
 
 ```bash
-# 手动封禁一个测试 IP
-echo "192.168.1.100 3600" | sudo tee /proc/firewall/bans
-
-# 确认已封禁
-cat /proc/firewall/bans
-
-# 解除封禁
-echo "unban 192.168.1.100" | sudo tee /proc/firewall/bans
+echo "203.0.113.9" | sudo tee /proc/firewall/bans
 ```
 
-## 第五步：状态（procfs / 日志）
+预期：`tee` 把命令原样回显一次，退出码 0。
+接口本身不回文本，成功与否只看写入字节数和退出码。
 
-Go module `src/daemon` 已移植 HTTP 服务，守护进程同时暴露 `/proc/firewall/*` 与 HTTP 接口；
-先看 procfs 与日志：
+确认它进了封禁表：
 
 ```bash
-# 当前封禁 / 白名单 / 统计 / 配置
-sudo cat /proc/firewall/bans /proc/firewall/stats /proc/firewall/config
+sudo cat /proc/firewall/bans
 ```
 
-### 查看日志
+预期：地址列按 40 列左对齐，剩余秒数从 600 往下走。
+
+```text
+Banned IP List:
+-------------------
+203.0.113.9                              (expires in 571 seconds)
+-------------------
+Total: 1 active bans (0 permanent, 1 temporary)
+```
+
+面板的封禁页此时也能看到这个地址。
+
+想指定时长或封成永久：
 
 ```bash
-sudo tail -f /var/log/firewall.log
+echo "203.0.113.10 3600" | sudo tee /proc/firewall/bans   # 一小时
+echo "203.0.113.11 0"    | sudo tee /proc/firewall/bans   # 永久
 ```
 
-## 配置更多 Jail
+预期：`cat /proc/firewall/bans` 里那两条变成三条，`203.0.113.11` 显示 `(permanent)`。
 
-### Nginx 暴力破解防护
+## 第 5 步：解封
 
-```yaml
-  - name: nginx-http-auth
-    enabled: true
-    log_path: /var/log/nginx/error.log
-    filter:
-      regex: 'no user/password was provided for basic authentication.*client: <HOST>'
-    action:
-      ban_time: 1800
-      find_time: 300
-      max_retries: 10
-    port: 80
-    protocol: tcp
+```bash
+echo "unban 203.0.113.9"  | sudo tee /proc/firewall/bans
+echo "unban 203.0.113.10" | sudo tee /proc/firewall/bans
+echo "unban 203.0.113.11" | sudo tee /proc/firewall/bans
 ```
 
-### Postfix 防护
+预期：三条命令都只回显输入。
 
-```yaml
-  - name: postfix
-    enabled: true
-    log_path: /var/log/mail.log
-    filter:
-      regex: 'warning: .*\[<HOST>\]: SASL .+ authentication failed'
-    action:
-      ban_time: 7200
-      find_time: 600
-      max_retries: 3
-    port: 25
-    protocol: tcp
+看结果：
+
+```bash
+sudo cat /proc/firewall/bans
+sudo cat /proc/firewall/stats | grep -E "^(total_bans|total_unbans|current_bans) "
 ```
 
-## 下一步
+预期：列表只剩表头和计数行，`Total: 0 active bans (0 permanent, 0 temporary)`。
+`stats` 是每行「键 空格 值」的机器可读格式，这三行对应刚才的三次封、三次解：
 
-- 阅读 [YAML 配置详解](../configuration/yaml-config.md) 了解所有配置选项
-- 查看 [配置示例](../configuration/examples.md) 获取更多模板
-- 了解 [架构设计](../architecture/) 深入理解工作原理
+```text
+total_bans 3
+total_unbans 3
+current_bans 0
+```
+
+字段清单和其余条目见 [ProcFS 接口](../configuration/procfs.md)。
+
+## 顺手试两件事
+
+```bash
+# 白名单：这个网段之后封不进去
+echo "203.0.113.0/24" | sudo tee /proc/firewall/whitelist
+
+# 改内核默认封禁时长
+echo "ban_time 300" | sudo tee /proc/firewall/config
+```
+
+预期：写白名单后 `sudo cat /proc/firewall/whitelist` 多一行 `203.0.113.0/24  on manual`。
+手工添加的条目，设备列固定写 `manual`。
+写 `ban_time` 后 `sudo cat /proc/firewall/config` 的第一行变成 `ban_time: 300 seconds`。
+
+## 收尾
+
+守护进程那个终端按 Ctrl-C。它会按登记的逆序关停各执行体。
+
+```bash
+sudo rmmod firewall
+```
+
+预期：`lsmod | grep firewall` 没有输出。
+`/proc/firewall/` 这个目录也随之消失。
+
+## 接下来
+
+- 让它开机自启：[安装](installation.md) 的第四节和第五节。
+- 加自己的 Jail：[YAML 配置](../configuration/yaml-config.md)。
+- 抄现成配置：[配置示例](../configuration/examples.md)。

@@ -1,80 +1,51 @@
 # Linux Firewall 内核模块
 
-Linux 内核模块版本的 fail2ban，在内核网络数据包层面直接封禁 IP。
+实时 IP 封禁。日志判定在用户态，丢包在内核里。
 
-## 概述
+## 文档地图
 
-Linux Firewall 内核模块是一个高性能的 IP 封禁解决方案，作为传统 fail2ban 的替代方案。与传统方案在 iptables/nftables 层面添加规则不同，本项目通过 Netfilter Hook 在内核网络栈中直接拦截数据包，提供更低的延迟和更高的性能。
+| 目录 | 一句话 |
+|------|--------|
+| [快速开始](getting-started/README.md) | 装环境、编译、安装、五步跑通 |
+| [配置指南](configuration/README.md) | YAML 字段、配置示例、`/proc/firewall` 接口 |
+| [架构设计](architecture/README.md) | 内核模块、守护进程、前端、数据怎么流 |
+| [开发指南](development/README.md) | 构建、测试、契约与设计文档 |
+| [运维管理](operations/README.md) | 日常管理、监控接入、故障排查 |
 
-## 核心特性
+## 三句话说清这个项目
 
-| 特性 | 描述 |
-|------|------|
-| Netfilter Hook | 在内核网络栈层面直接拦截数据包 |
-| Jail 系统 | 支持多个独立的封禁规则 |
-| 哈希表 | 内核哈希表，O(1) 查找；桶数与条目上限见模块参数 |
-| 自动过期清理 | 后台定时任务自动清理过期封禁 |
-| IP 白名单 | 内核白名单，防止误封关键 IP |
-| ProcFS 接口 | 通过 `/proc` 文件系统进行管理和监控 |
-| 正则匹配 | 用户态守护进程支持正则表达式匹配日志 |
-| RCU 并发 | 使用 Read-Copy-Update 实现高并发安全 |
-| Prometheus 指标 | Go module `src/daemon` 已移植 HTTP，通过端口 9119 暴露 `/metrics`；
-指标口径见 [用户态守护进程](architecture/daemon.md)「可观测性」，运行时用 procfs
-`/proc/firewall/{stats,config}` + 日志查看
+- 守护进程用 inotify 跟日志，正则或关键字取出地址，在窗口内数失败次数。
+- 判定成立后经 netlink 下发，内核在 netfilter 钩子上查封禁表，命中就丢包。
+- 封禁状态存在内核里，用户态进程被调度走也不影响丢包。
 
-## 系统架构
+## 从哪儿开始读
 
-```mermaid
-graph TB
-    PKT[网络数据包] --> NF[Netfilter Hook PREROUTING]
+只想跑起来：[快速上手](getting-started/quick-start.md)。
+要装到机器上长期跑：[安装](getting-started/installation.md)。
+要看某个字段能不能这么写：[YAML 配置](configuration/yaml-config.md)。
+要绕过守护进程直接操作内核：[ProcFS 接口](configuration/procfs.md)。
 
-    subgraph KERNEL[Linux 内核空间]
-        NF --> WL{IP 白名单}
-        NF --> HT[哈希表 封禁 IP 列表]
+## 内核版本口径
 
-        WL -->|匹配| ALLOW[允许通过]
-        HT -->|命中| DROP[DROP 数据包]
+实测记录：6.8.0-146 可编译、可加载；7.0.0-38 可编译，加载未验证；5.x 未验证。
+先按你自己的内核编，编不过看 [故障排查](operations/troubleshooting.md)。
 
-        NF --> PROC[ProcFS 接口 /proc/firewall]
-    end
+## 接口真相源
 
-    KERNEL -->|netlink 控制通道| DAEMON[守护进程 Go module `src/daemon`]
-    PROC -.->|手动操作 / 调试| DAEMON
+条目、权限、写文法、HTTP 路由都由契约生成，文档只描述不定义：
 
-    subgraph USERSPACE[用户空间]
-        DAEMON --> INOTIFY[inotify 日志监控]
-        DAEMON --> REGEX[正则匹配]
-        DAEMON -.->|已移植：HTTP + procfs 双接口| STATS[ProcFS /proc/firewall/{bans,stats,config}]
-    end
-```
+- `contract/procfs.fwidl` → `contract/generated/procfs_uapi.h`
+- `contract/http.fwidl` → `contract/generated/http_contract.ts`
+- `contract/netlink.fwidl` → `contract/generated/netlink_uapi.h`
 
-## 系统要求
+改接口先改 `.fwidl`，再跑 `python3 contract/gen.py`，然后 `make contract-check`。
 
-| 项目 | 要求 |
-|------|------|
-| 内核 | Linux 5.x / 6.x |
-| 架构 | x86_64 |
-| 编译器 | GCC 10+ |
+## 守护进程与 HTTP 面
 
-## 依赖
+- 面板与 API 同端口，默认 9119，路由前缀 `/api/v1`，共 57 条路由。
+  完整清单看生成物，别在这里抄。
+- 认证是 HTTP Basic，凭据来自配置的 `metrics_username` / `metrics_password`。
+  连续失败 10 次锁定 60 秒，锁定期内正确凭据同样被拒。
+- SSE 不能设请求头，凭据走 `?access_token=<令牌>`。
 
-| 依赖 | 用途 |
-|------|------|
-| linux-headers | 内核模块编译 |
-
-## 快速开始
-
-```bash
-# 克隆仓库
-git clone https://github.com/SnowCore8/linux-firewall-kmod.git
-cd linux-firewall-kmod
-
-# 编译
-make
-
-# 安装
-sudo make install
-
-# 启动守护进程
-sudo systemctl start firewall-daemon
-```
+细节见 [用户态守护进程](architecture/daemon.md)。

@@ -1,481 +1,269 @@
 # ProcFS 接口
 
-Linux Firewall 内核模块通过 `/proc/firewall/` 目录提供运行时管理和监控接口。
+内核模块在 `/proc/firewall/` 下建 13 个条目。
+这份文档的条目名、权限、写文法、字段名都以生成物为准：
 
-本文件描述的协议由 `contract/procfs.fwidl` 冻结（单一真相源），权限、条目名
-与读取格式都要与生成物 `contract/generated/procfs_uapi.h` 一致，并由
-`contract/verify_procfs.py` 机械核对。修改本文件前请先改契约。
+- 契约源文件：`contract/procfs.fwidl`
+- 生成物：`contract/generated/procfs_uapi.h`
 
-## 接口总览
+改接口要先改契约，再重跑生成器。手改生成物会被 `make contract-drift` 拦下。
 
-```mermaid
-graph TB
-    root["/proc/firewall/"]
-    root --> bans["bans — 封禁列表（0600 rw：ban / unban）"]
-    root --> wl["whitelist — 白名单（0600 rw：add / remove）"]
-    root --> cfg["config — 运行时配置（0600 rw：ban_time）"]
-    root --> stats["stats — 计数器（0400 r，机器可读）"]
-    root --> rates["rates — 速率表（0400 r）"]
-    root --> udp["udp_ports — UDP 端口分布（0400 r）"]
-    root --> icmp["icmp_types — ICMP 类型分布（0400 r）"]
-    root --> pkt["pkt_sizes — 包大小分布（0400 r）"]
-    root --> ttl["ttl_dist — TTL 分布（0400 r）"]
-    root --> frag["ip_frags — IP 分片统计（0400 r）"]
-    root --> scan["port_scanners — 端口扫描检测（0400 r）"]
-    root --> probe["service_probes — 服务探测检测（0400 r）"]
-    root --> prot["protected_ports — 受保护端口（0400 r）"]
-```
+## 一、条目清单
 
-上表即全部真实条目。早期文档中曾出现 `status` / `clear` / `version` 等条目，
-源码中并不存在。
+| 条目 | 权限 | 能做什么 |
+|------|------|----------|
+| `bans` | 0600 可读写 | 看当前封禁列表；下封锁、时长封、永久封、解封 |
+| `whitelist` | 0600 可读写 | 看白名单；加子网、删子网 |
+| `config` | 0600 可读写 | 看内核运行时配置；改默认封禁时长 |
+| `stats` | 0400 只读 | 13 个计数器，机器可读的「键 值」行 |
+| `rates` | 0400 只读 | 速率表：每个被跟踪地址的包数、字节数、窗口 |
+| `udp_ports` | 0400 只读 | UDP 端口分布 |
+| `icmp_types` | 0400 只读 | ICMP 类型与代码分布 |
+| `pkt_sizes` | 0400 只读 | 包长分布，5 个固定区间加百分比 |
+| `ttl_dist` | 0400 只读 | TTL 分布，6 个固定区间加百分比 |
+| `ip_frags` | 0400 只读 | IP 分片统计：总包数、分片数、比例 |
+| `port_scanners` | 0400 只读 | 端口扫描嫌疑地址，最多 20 条 |
+| `service_probes` | 0400 只读 | 多协议探测嫌疑地址，最多 20 条 |
+| `protected_ports` | 0400 只读 | 受保护端口集合，由守护进程下发 |
 
-**读侧契约强度**：只有 `stats` 是机器可读格式（`key value` 行，测试与运维脚本
-按行取值，重排会破坏下游）；其余 10 个只读条目是给人看的表格，契约显式标注为
-`unstable`，排版允许重写改变，但不得依赖条目顺序——列表按哈希遍历顺序输出，
-无排序保证。
+只有 `bans`、`whitelist`、`config` 可写，其余全部只读。
+0600 意味着只有 root 能读能写。
 
-## 读取接口
+## 二、写侧的规矩
 
-### 运行时配置
+这四条适用于全部三个可写条目：
 
-```bash
-cat /proc/firewall/config
-```
+- 一次 `write(2)` 写一条命令，末尾可以带换行。
+- 成功返回写入的字节数；失败返回负 errno。没有文本错误通道，拒绝原因只进内核日志。
+- 分隔符只能是空格或制表符，不接受多余参数。
+- 除制表符以外，所有小于 `0x20` 的字节一律拒绝。
 
-输出：
+errno 只能区分到 `-EINVAL`、`-EBUSY`、`-ENOMEM`、`-EPERM` 这一层。
+想知道具体为什么被拒，看 `dmesg`。
 
-```
-Current Firewall Configuration:
---------------------------------
-ban_time: 600 seconds
-Ban entries: 15
-Whitelist entries: 3
-```
+## 三、bans
 
-| 字段 | 说明 |
+写文法四种：
+
+| 写法 | 含义 |
 |------|------|
-| `ban_time` | 默认封禁时长（秒），即模块参数 `fw_ban_time` 的当前值 |
-| `Ban entries` | 当前封禁条目数（永久 + 临时） |
-| `Whitelist entries` | 当前白名单条目数 |
+| `<ip>` | 用内核默认时长封（`fw_ban_time`） |
+| `<ip> <seconds>` | 封指定秒数，可填 1 到 31536000 |
+| `<ip> 0` | 永久封 |
+| `unban <ip>` | 解封 |
 
-### 封禁列表
+时长必须是纯十进制数字。超过 31536000 秒会被拒。
+`<ip>` 只接受单个地址，IPv4 和 IPv6 都行，不认 CIDR 写法。
+网段封禁只有守护进程经 netlink 才能下发。
+`unban` 后面不允许再跟任何东西。
+
+可抄的命令：
 
 ```bash
-cat /proc/firewall/bans
+# 按内核默认时长封
+echo "203.0.113.9"      | sudo tee /proc/firewall/bans
+
+# 封一小时
+echo "203.0.113.9 3600" | sudo tee /proc/firewall/bans
+
+# 永久封
+echo "203.0.113.9 0"    | sudo tee /proc/firewall/bans
+
+# 解封
+echo "unban 203.0.113.9" | sudo tee /proc/firewall/bans
 ```
 
-输出：
+读回来的样子：
 
-```
+```text
 Banned IP List:
 -------------------
-192.168.1.100                            (expires in 3452 seconds)
-10.0.0.50                                (permanent)
+203.0.113.9                              (expires in 3540 seconds)
+2001:db8::66                             (permanent)
 -------------------
 Total: 2 active bans (1 permanent, 1 temporary)
 ```
 
-| 字段 | 说明 |
+行格式是「地址按 40 列左对齐 + 状态」。
+精确到单机的条目只打地址；网段条目会带 `/前缀`。
+已过期待摘链的临时条目不显示。
+
+## 四、whitelist
+
+写文法三种：
+
+| 写法 | 含义 |
 |------|------|
-| `<ip>` | 被封禁的 IP 地址；按 40 列左对齐填充 |
-| `(permanent)` | 永久封禁（写入时 `seconds` 为 0） |
-| `(expires in N seconds)` | 剩余封禁时间（秒） |
+| `add <subnet>` | 加一条白名单 |
+| `<subnet>` | 不写动词也是加 |
+| `remove <subnet>` | 删一条 |
 
-已过期待摘链的条目（定时器尚未回收）不会显示，因此 `Total` 统计的是**有效**
-封禁数。输出不含 Jail / 协议 / 端口信息：封禁表按 IP 粒度存储，不存在端口维度。
-
-### 白名单列表
+`<subnet>` 是「地址」或「地址/前缀长度」。
+不写前缀时按地址族补齐：IPv4 补 `/32`，IPv6 补 `/128`。
+前缀超过 32（IPv4）或 128（IPv6）会被拒。
+入表前先把地址归一化成网络地址，主机位清零。
+`0.0.0.0`、广播、组播、回环、链路本地地址不允许加进来。
 
 ```bash
-cat /proc/firewall/whitelist
+# 加一个网段
+echo "203.0.113.0/24"      | sudo tee /proc/firewall/whitelist
+
+# 同样的效果，带动词
+echo "add 203.0.113.0/24"  | sudo tee /proc/firewall/whitelist
+
+# 加单个地址
+echo "add 198.51.100.7"    | sudo tee /proc/firewall/whitelist
+
+# 删掉
+echo "remove 203.0.113.0/24" | sudo tee /proc/firewall/whitelist
 ```
 
-输出：
+读回来的样子：
 
-```
+```text
 Whitelisted IPs (protected from banning):
 --------------------------------------
-10.0.0.0/8  on manual
-127.0.0.1/32  on lo
-192.168.1.0/24  on eth0
+203.0.113.0/24  on manual
+198.51.100.7/32  on manual
 --------------------------------------
-Total: 3 entries
+Total: 2 entries
 ```
 
-| 字段 | 说明 |
-|------|------|
-| `<ip>/<prefix>` | 白名单条目；本机接口地址由 `fw_netdev.c` 按接口状态自动维护 |
-| `on <dev>` | 条目来源：手工 `echo` 添加的固定为 `manual`；本机接口地址为接口名（如 `lo` / `eth0`），状态恢复的条目为 `restored` |
+设备列写 `manual` 的是这里手工加的，`restored` 是从状态文件恢复的。
+网卡事件带进来的本机地址，那一列是网卡名。
+本机接口地址由内核自己维护，不用手工加，也删不掉：删它返回 `-EPERM`。
 
-`<ip>/<prefix>` 与 `on` 之间是两个空格。本机接口地址由内核自动增删，手工
-`remove` 它会返回 `-EPERM`。
+`remove` 有连带效果，动手前要看清：
+删掉一条白名单时，落在它覆盖范围内的封禁会一并解除，`total_unbans` 跟着涨。
+`fw_wl_remove_quiet` 那条不联动的路径只给网卡变更用，procfs 走不到。
 
-### 统计信息
+## 五、config
+
+读它看运行时配置，写它只认一个参数。
+
+写文法：`ban_time <seconds>`，取值 1 到 31536000。
+参数名写错、超出范围、值不是十进制，都返回 `-EINVAL`。
 
 ```bash
-cat /proc/firewall/stats
+# 改内核默认封禁时长
+echo "ban_time 300" | sudo tee /proc/firewall/config
+
+# 确认
+sudo cat /proc/firewall/config
 ```
 
-输出（key-value 格式，每行一个指标，共 13 个键）：
+读回来的样子：
 
-```
-total_bans 0
-total_unbans 0
-whitelist_rejects 0
-ban_table_full_rejects 0
-alloc_failures 0
-packets_dropped 0
-packets_accepted 0
-tcp_anomaly_dropped 0
-cleanup_cycles 0
-cleanup_expired_total 0
-current_bans 0
-current_whitelist 19
-recent_additions 0
+```text
+Current Firewall Configuration:
+--------------------------------
+ban_time: 300 seconds
+Ban entries: 0
+Whitelist entries: 2
 ```
 
-读取前会先做一次跨 CPU 汇总（`fw_stats_snapshot()` 内部调用
-`fw_stats_flush_all()`），因此低速率下也不会读到各 CPU 尚未汇出的陈旧值。
+## 六、stats
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `total_bans` | counter | 累计产生新条目的封禁操作数（对已封禁 IP 的重复封禁、对过期条目的续期**不计入**） |
-| `total_unbans` | counter | 累计解封操作数（手工解封、白名单联动解封、DDoS 撤销） |
-| `whitelist_rejects` | counter | 因命中白名单而被拒绝的封禁请求（白名单前检） |
-| `ban_table_full_rejects` | counter | 因封禁表达到 `fw_max_ban_entries` 而被拒绝的封禁请求 |
-| `alloc_failures` | counter | 申请封禁节点内存失败的次数 |
-| `packets_dropped` | counter | netfilter 钩子因命中封禁而丢弃的数据包 |
-| `packets_accepted` | counter | netfilter 钩子经白名单/封禁检查后放行的数据包 |
-| `tcp_anomaly_dropped` | counter | 因 TCP 异常被丢弃的数据包 |
-| `cleanup_cycles` | counter | **恒为 0**。历史遗留键：全局清理线程已改为 per-entry 定时器，不再有「清理周期」概念；保留键位只为不破坏外部按行解析的脚本 |
-| `cleanup_expired_total` | counter | per-entry `expire_timer` 回调累计移除的过期条目数 |
-| `current_bans` | gauge | 当前封禁条目数（永久 + 临时） |
-| `current_whitelist` | gauge | 当前白名单条目数 |
-| `recent_additions` | gauge | 当前 1 秒泛洪保护窗口内的封禁操作数 |
+这是唯一一个机器可读的只读条目，格式是每行「键 空格 十进制整数」。
+键名和数值宽度都是契约，下游脚本按键取值。
 
-**计数口径**（模块加载期间任一时刻成立）：
-
-```
-total_bans == current_bans + total_unbans + cleanup_expired_total
-```
-
-对已有效封禁的重复 ban、对过期条目的续期刷新均不计入等式任何一项，保证该式
-在计数器递增/递减的每条路径上自洽。模块卸载（`fw_ban_exit()`）会直接清零
-`current_bans`，此式不再适用。
-
-### 速率表
+| 键 | 宽度 | 含义 |
+|----|------|------|
+| `total_bans` | u32 | 累计封禁次数 |
+| `total_unbans` | u32 | 累计解封次数 |
+| `whitelist_rejects` | u32 | 两处都记在这个键上：封禁请求命中白名单被拒；白名单表到条目上限被拒 |
+| `ban_table_full_rejects` | u32 | 封禁表到上限被拒的次数 |
+| `alloc_failures` | u32 | 建条目时内存分配失败的次数 |
+| `packets_dropped` | u64 | 丢弃的数据包数 |
+| `packets_accepted` | u64 | 放行的数据包数 |
+| `tcp_anomaly_dropped` | u64 | 按 TCP 异常丢弃的包数 |
+| `cleanup_cycles` | u32 | 恒为 0，见下文 |
+| `cleanup_expired_total` | u32 | 因到期被摘除的封禁条目数 |
+| `current_bans` | i32 | 当前封禁条目数 |
+| `current_whitelist` | i32 | 当前白名单条目数 |
+| `recent_additions` | u32 | 当前一秒窗口内已记的封禁添加次数，泛洪限流用它判断 |
 
 ```bash
-cat /proc/firewall/rates
+sudo cat /proc/firewall/stats
 ```
 
-输出：
+读这个文件时内核会先把各 CPU 的批量计数汇总，再取快照。
+低速率下不会看到落后的数。
 
-```
-IP Rate Statistics (DDoS Detection):
-------------------------------------
-Configuration:
-  rate_window_seconds: 2
-  max_packets_per_second: 0
-  max_bytes_per_second: 0
-------------------------------------
-IP Address                                  Packets        Bytes Window(s)
-203.0.113.7                                   12345        891234      2s
-------------------------------------
-Total: 1 active rate entries
-```
+`cleanup_cycles` 恒为 0。
+现在过期条目靠每条自己的定时器摘除，没有全局清理线程。
+这个键留着只为不破坏外部脚本的行解析。
 
-`Window(s)` 列打印的是**配置的窗口宽度**，不是每条记录各自的窗口起点：读侧行
-结构不带窗口起点，而为读侧给热路径条目加共享字段是不允许的。
+## 七、其余只读条目
 
-### 分析类条目
-
-以下 5 个文件共用同一份分析快照（与 netlink `AnalysisResponse` 同源）。
-
-`udp_ports`：
+这些是人类可读的表格，没有稳定性承诺。
+排版允许改，别拿它们当机器可读接口。
 
 ```bash
-cat /proc/firewall/udp_ports
+sudo cat /proc/firewall/rates
+sudo cat /proc/firewall/udp_ports
+sudo cat /proc/firewall/icmp_types
+sudo cat /proc/firewall/pkt_sizes
+sudo cat /proc/firewall/ttl_dist
+sudo cat /proc/firewall/ip_frags
+sudo cat /proc/firewall/port_scanners
+sudo cat /proc/firewall/service_probes
+sudo cat /proc/firewall/protected_ports
 ```
 
-```
-UDP Port Distribution:
-----------------------
-Total entries: 3 / 512
-----------------------
-Port            Packets        Bytes  LastSeen
-...
-----------------------
-Displayed: 3 ports
-```
+列表类条目的顺序是哈希遍历顺序，两次读取不保证一致。
+别按行号取值。
 
-`icmp_types`：
+| 条目 | 内容形状 |
+|------|----------|
+| `rates` | 先是配置头（窗口秒数、每秒包上限、每秒字节上限、表容量、CPU 槽位、溢出计数），再是明细行「地址 包数 字节数 窗口秒」 |
+| `udp_ports` | 头行 `Total entries: <n> / 512`，明细列端口、包数、字节数、最后可见 |
+| `icmp_types` | 头行 `Total entries: <n> / 128`，明细列类型、代码、包数、字节数、最后可见 |
+| `pkt_sizes` | 5 个长度区间，带计数和百分比 |
+| `ttl_dist` | 6 个 TTL 区间，带计数和百分比 |
+| `ip_frags` | 总包数、分片数、比例 |
+| `port_scanners` | 判定阈值 5 个唯一端口，最多列 20 条 |
+| `service_probes` | 判定阈值 3 种协议，最多列 20 条 |
+| `protected_ports` | 一行状态加端口清单；守护进程没下发时按全端口受保护处理 |
 
-```
-ICMP Type Distribution:
------------------------
-Total entries: 2 / 128
------------------------
-Type   Code        Packets        Bytes  LastSeen
-...
------------------------
-Displayed: 2 types
-```
+`protected_ports` 只读。运维侧改不了这个集合，它由守护进程扫描本机监听端口后经 netlink 下发。
 
-`Total entries` 打印的是分析表的真实条目数（分母为
-`MAX_UDP_PORT_ENTRIES` / `MAX_ICMP_TYPE_ENTRIES`），而单次快照的**展示行数**
-受 `FW_ANALYSIS_UDP_PACK_MAX` / `FW_ANALYSIS_ICMP_PACK_MAX`（均为 64）限制。
+## 八、容量上限
 
-`pkt_sizes`（5 个固定区间）与 `ttl_dist`（6 个固定区间）输出区间、包数、百分比：
+| 条目 | 条目上限 | 由什么控制 | 代码锚点 |
+|------|----------|------------|----------|
+| `bans` | 65535 | 模块参数 `fw_max_ban_entries` | `src/kernel-module/fw_ban.c:fw_info.max_ban_entries` |
+| `whitelist` | 65535 | 模块参数 `fw_max_whitelist_entries` | `src/kernel-module/fw_wl.c:fw_info.max_wl_entries` |
+| `rates` | 65536 | 模块参数 `fw_max_rate_entries`，文档化范围 1024–262144 | `src/kernel-module/fw_main.c:fw_max_rate_entries` |
+| `udp_ports` | 512 | 常量 | `src/kernel-module/fw_types.h:MAX_UDP_PORT_ENTRIES` |
+| `icmp_types` | 128 | 常量 | `src/kernel-module/fw_types.h:MAX_ICMP_TYPE_ENTRIES` |
+| `port_scanners` | 20 | 常量 | `src/kernel-module/fw_types.h:PORT_SCAN_MAX_RESULTS` |
+| `service_probes` | 20 | 常量 | `src/kernel-module/fw_types.h:SERVICE_PROBE_MAX_RESULTS` |
+| `protected_ports` | 256 | 只读文件的展示行数上限 | `src/kernel-module/fw_types.h:FW_PROCFS_PROTECTED_PORTS_MAX_LINES` |
+
+几条要分清：
+
+- 封禁表到上限时返回 `-ENOSPC`，并把 `ban_table_full_rejects` 加一。4096 是哈希桶数，不是容量。
+- 速率表满时新来的源地址有意放行，因为满了就丢包会误伤正常流量。溢出计数是 `rate_slot_spill`，在 `rates` 的配置头里看。
+- `protected_ports` 的展示上限是 256 行，位图本身有 65536 位。超出会在末尾打一行截断提示。
+- `udp_ports` 与 `icmp_types` 的明细行来自同一份分析快照，单次快照各最多打包 64 行。
+
+## 九、出错怎么查
+
+写命令没生效，按这个顺序看：
 
 ```bash
-cat /proc/firewall/pkt_sizes
+# 1. 内核日志里的拒绝原因
+sudo dmesg | tail
+
+# 2. 目标是不是被白名单挡住了
+sudo cat /proc/firewall/whitelist
+
+# 3. 封禁表是不是到顶了
+sudo cat /proc/firewall/stats | grep ban_table_full_rejects
+
+# 4. 写进去的到底是什么
+echo "203.0.113.9 3600" | sudo tee /proc/firewall/bans
 ```
 
-```
-Packet Size Distribution:
--------------------------
-Size Range        Packets  Percent
--------------------------
-<64B                 1000    50%
-64-256B              1000    50%
-...
--------------------------
-Total: 2000 packets
-```
-
-`ip_frags`：
-
-```bash
-cat /proc/firewall/ip_frags
-```
-
-```
-IP Fragment Statistics:
--------------------------
-Total IP packets:  2000
-Fragmented packets: 17
-Fragment ratio:    0%
-```
-
-`port_scanners`（触发阈值为 5 个唯一端口）：
-
-```bash
-cat /proc/firewall/port_scanners
-```
-
-```
-Port Scan Detection:
-Threshold: 5 unique ports
-Total scans detected: 1
--------------------------
-IP                     Unique Ports      Packets
--------------------------
-203.0.113.7                      12         1532
-```
-
-`service_probes`（触发阈值为 3 种协议）：
-
-```bash
-cat /proc/firewall/service_probes
-```
-
-```
-Service Probe Detection:
-Threshold: 3 protocol types
--------------------------
-IP                      Protocols      Packets
--------------------------
-203.0.113.7                      4          210
-```
-
-两个检测文件最多各列 20 条（`PORT_SCAN_MAX_RESULTS` /
-`SERVICE_PROBE_MAX_RESULTS`），无命中时打印
-`No port scanners detected` / `No service probes detected`。
-
-### 受保护端口
-
-```bash
-cat /proc/firewall/protected_ports
-```
-
-daemon 定期（30 秒）扫描本机对外监听端口后经 netlink 下发的集合。**只读观测面**：
-没有写入口，运维侧无法手改「谁受保护」。
-
-```
-Protected Ports (rate detection scope):
-State: published
-Protected port count: 2
--------------------------
-Port     Proto
--------------------------
-22       tcp/udp
-9119     tcp/udp
-```
-
-`State` 有两个取值，含义**相反**，不要误读：
-
-| State | 含义 |
-|-------|------|
-| `not published - ALL ports participate in rate detection` | daemon 尚未下发（如未运行）⇒ **全端口**参与速率判定，行为与本特性引入前一致 |
-| `published` | 已按 daemon 下发的集合收窄判定作用面 |
-
-置位端口 = 该端口入站流量参与 DDoS 速率判定。公网唯一能打到本机的地方就是这些对外
-监听端口，判定因此聚焦于此；未置位端口不参与速率判定，避免内部流量误封。**封禁表不受
-影响**：jail 判定与手工下发的封禁对所有端口一律生效。
-
-`State: not published` 时打印「全端口受保护」提示而不是空清单——空清单会被读成
-「没有任何端口受保护」，与实际的失败开放语义正好相反。展示行数上限 256
-（`FW_PROCFS_PROTECTED_PORTS_MAX_LINES`）；超限截断并打印
-`... (N protected, output truncated)`，受保护总数始终可读。
-
-带 daemon 的部署中本集合由 `ddos.protect_open_ports` 控制（默认 `true`）。置为
-`false` 时 daemon 下发**全零**位图，此时会显示 `State: published` 且
-`Protected port count: 0`——那是显式关闭（检测面为空），与上面的
-`not published` 是两回事。该开关仅供排查与对照测试，正常应保持开启。
-
-### 模块版本
-
-模块不提供单独的 `version` 条目；版本号从模块本身读取：
-
-```bash
-modinfo firewall | grep '^version:'
-```
-
-启动与注册日志用 `dmesg | grep firewall`。
-
-## 写入接口
-
-可写条目是 `bans`、`whitelist`、`config`。一次 `write(2)` 只处理**一条**命令，
-末尾换行可选。
-
-- 成功返回写入的字节数；
-- 失败返回**负 errno**，没有文本错误通道：错误原因只进内核日志。调用方只能
-  从 errno 区分，例如 `-EINVAL`（语法或参数非法）、`-EPERM`（命中白名单，或
-  白名单条目落在本机地址）、`-ENOSPC`（表满）、`-EBUSY`（泛洪闸门拒绝）、
-  `-ENOENT`（解封不存在的条目）、`-ENOMEM`。
-- 分隔符为空格或制表符；除 `\t` 外，所有 `< 0x20` 的控制字符一律拒绝。
-
-### 添加封禁
-
-```bash
-# 默认时长（模块参数 fw_ban_time）
-echo "1.2.3.4" | sudo tee /proc/firewall/bans
-
-# 指定时长（秒，1..31536000）
-echo "1.2.3.4 3600" | sudo tee /proc/firewall/bans
-
-# 永久封禁
-echo "1.2.3.4 0" | sudo tee /proc/firewall/bans
-```
-
-格式：`<ip>` 或 `<ip> <seconds>`。时长只接受十进制数字串，**不接受负号**：
-早期文档宣传的 `<ip> -1` 解封形式从不可达（旧实现要求时长首字符为数字），
-已删除。永久封禁等价于 `seconds` 为 0。
-
-### 解除封禁
-
-```bash
-echo "unban 1.2.3.4" | sudo tee /proc/firewall/bans
-```
-
-格式：`unban <ip>`。解封命令之后不允许再跟其它 token。
-
-### 添加白名单
-
-```bash
-# 单个 IP
-echo "10.0.0.1" | sudo tee /proc/firewall/whitelist
-
-# CIDR 网段
-echo "10.0.0.0/8" | sudo tee /proc/firewall/whitelist
-
-# 显式写动词（与上一行等价）
-echo "add 10.0.0.0/8" | sudo tee /proc/firewall/whitelist
-```
-
-格式：`<subnet>` 或 `add <subnet>`，`<subnet>` 为 `<ip>` 或 `<ip>/<prefix>`，
-省略前缀时按地址族全长（IPv4 为 32，IPv6 为 128）。条目上限由模块参数
-`fw_max_whitelist_entries` 控制（默认 65535），到限返回 `-ENOSPC`。
-
-拒绝 `0.0.0.0` / 广播 / 组播 / 回环 / 链路本地地址。本机接口地址由内核自动
-维护，无需手工添加。
-
-### 移除白名单
-
-```bash
-echo "remove 10.0.0.0/8" | sudo tee /proc/firewall/whitelist
-```
-
-格式：`remove <subnet>`（动词不可省略）。移除会归一化网络地址后按精确主机地址
-匹配，并联动解封落在该前缀范围内的封禁条目。
-
-### 修改运行时配置
-
-```bash
-# 将默认封禁时长改为 600 秒（范围 1..31536000）
-echo "ban_time 600" | sudo tee /proc/firewall/config
-```
-
-格式：`ban_time <seconds>`。未知参数名一律 `-EINVAL`，不做静默成功。
-
-### 清空所有封禁
-
-内核不提供「一键清空」接口。如需清空：
-
-```bash
-# 方案一：逐条 unban（脚本中可循环）
-while read -r ip _; do
-  [ -n "$ip" ] && echo "unban $ip" | sudo tee /proc/firewall/bans >/dev/null
-done < <(awk '/^[0-9]/ {print $1}' /proc/firewall/bans)
-
-# 方案二：重载模块（清空所有内核态封禁/白名单）
-sudo rmmod firewall && sudo insmod $(modinfo -n firewall) fw_ban_time=600
-```
-
-## 权限
-
-权限位由契约声明并固化在生成物里：可写条目为 `0600`（`bans` / `whitelist` /
-`config`），只读条目为 `0400`。两者都只对 root 开放，模块本身不
-提供组权限方案；如需让非 root 用户读取，需自行添加 udev 规则改写权限。
-
-```bash
-ls -l /proc/firewall/
-```
-
-## 模块参数
-
-模块加载时可传入以下参数（`/sys/module/firewall/parameters/` 可查看）：
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `fw_ban_time` | 600 | 默认封禁时长（秒） |
-| `state_file` | `/var/lib/firewall/state` | 封禁/白名单状态持久化路径 |
-| `fw_max_bans_per_second` | 200 | 泛洪保护下每秒最大封禁添加次数 |
-| `fw_max_rate_entries` | 65536 | 速率表条目上限（1024..262144） |
-| `fw_max_ban_entries` | 65535 | 封禁表条目上限，到限拒绝并计入 `ban_table_full_rejects` |
-| `fw_max_whitelist_entries` | 65535 | 白名单条目上限，到限拒绝 |
-| `fw_max_local_ips` | 256 | 本机地址集合容量下界（不足时按需扩容） |
-| `fw_static_threshold` | 1 | 启用静态阈值检测 |
-| `fw_dynamic_threshold` | 0 | 启用动态阈值检测 |
-| `fw_ddos_detection` | 1 | DDoS 检测总开关 |
-
-```bash
-sudo insmod firewall.ko fw_ban_time=600 fw_max_ban_entries=10000
-```
-
-## 调试
-
-模块不提供自有的调试级别开关（历史文档中的 `make debug DL=2` 与
-`DL=0..3` 分级并不存在）。排查时使用内核通用手段：
-
-```bash
-# 模块启动与注册日志
-sudo dmesg | grep firewall
-```
-
-## 相关文档
-
-- 契约与契约校验：`contract/procfs.fwidl`、`contract/verify_procfs.py`
-- 监控指标映射：`docs/zh/operations/monitoring.md`
-- 内核模块重写设计：`docs/zh/development/kernel-rewrite-design.md`
+`tee` 退出码非 0，说明内核返回了负 errno。

@@ -1,296 +1,262 @@
 # 安装
 
-本文档介绍如何安装 Linux Firewall 内核模块及其用户态守护进程。
+本文给出编译、安装、启动、卸载的真实命令。
+所有命令都与仓库的 `Makefile` 和 `.github/workflows/ci.yml` 核对过。
 
-## 系统要求
+## 一、需要的环境
 
-| 项目 | 最低要求 | 推荐配置 |
-|------|----------|----------|
-| 内核版本 | Linux 5.x | Linux 6.x LTS |
-| CPU 架构 | x86_64 | x86_64 |
-| 内存 | 256 MB | 512 MB+ |
-| 磁盘空间 | 50 MB | 100 MB+ |
-| 编译器 | GCC 10+ | GCC 12+ |
+| 项目 | 要求 | 依据 |
+|------|------|------|
+| 内核头文件 | 与运行内核一致 | `Makefile` 检查 `/lib/modules/$(uname -r)/build` |
+| C 编译工具链 | build-essential | CI build 作业安装它 |
+| clang-format | 必装（默认目标会跑格式检查） | `Makefile` 的 `format-check` |
+| Go | 1.26 以上 | `src/daemon/go.mod` 声明 `go 1.26.0` |
+| Node.js + npm | Node 22 | CI 用 `setup-node` 装 22 |
+| root 权限 | 加载模块、装服务都需要 | `insmod`、`systemctl` |
 
-### 支持的发行版
+前端依赖锁在 `frontend/package-lock.json`，构建用 `npm ci`。
 
-| 发行版 | 状态 |
-|--------|------|
-| Ubuntu 20.04+ | 完全支持 |
-| Debian 11+ | 完全支持 |
-| CentOS 8+ | 完全支持 |
-| RHEL 8+ | 完全支持 |
-| Arch Linux | 社区支持 |
-| Fedora 35+ | 社区支持 |
+跑集成测试还需要：`python3-pytest`、`python3-yaml`、`sqlite3` 命令行工具（CI 的 test 作业装的就是这三个）。
 
-## 安装依赖
+### 内核版本
 
-### Ubuntu / Debian
+仓库的实测记录：
+
+| 内核 | 编译 | 加载 |
+|------|------|------|
+| 6.8.0-146 | 通过 | 通过 |
+| 7.0.0-38 | 通过 | 未验证 |
+| 5.x | 未验证 | 未验证 |
+
+不要把这行当成保证清单。做法是：先按你自己的内核编译，再试着加载。
+编译或加载过不去，看 [故障排查](../operations/troubleshooting.md) 的「模块无法加载」。
+
+## 二、装编译依赖
+
+Debian / Ubuntu：
 
 ```bash
 sudo apt update
-sudo apt install -y \
-    build-essential \
-    linux-headers-$(uname -r) \
-    pkg-config
+sudo apt install -y build-essential clang-format \
+    linux-headers-$(uname -r)
 ```
 
-### CentOS / RHEL
+Go、Node、npm 请装到上面的版本，并确保它们在 `PATH` 里。
+`sudo` 默认会换掉 `PATH`，所以安装命令里要显式带上它（见第四节）。
 
-```bash
-sudo dnf install -y \
-    gcc gcc-c++ make \
-    kernel-devel-$(uname -r) \
-    kernel-headers-$(uname -r) \
-    pkg-config
-```
-
-### Arch Linux
-
-```bash
-sudo pacman -S --needed \
-    base-devel \
-    linux-headers \
-    pkg-config
-```
-
-## 编译安装
-
-### 1. 克隆仓库
+## 三、编译
 
 ```bash
 git clone https://github.com/SnowCore8/linux-firewall-kmod.git
 cd linux-firewall-kmod
 ```
 
-### 2. 编译
+| 命令 | 产出 |
+|------|------|
+| `make` | 格式检查 + 内核模块 + 守护进程（默认目标） |
+| `make build-quick` | 同上，跳过格式检查 |
+| `make SKIP_FORMAT_CHECK=1 all` | 同上，用变量跳过 |
+| `make kernel-module` | 只编内核模块 |
+| `make daemon` | 只编守护进程（先跑 `npm ci` 和 vite 构建） |
+| `make frontend` | 只构建前端 |
+| `make frontend-typecheck` | 只跑前端类型检查 |
+| `make clean` | 清掉构建产物 |
 
-编译完整项目（内核模块 + 守护进程）：
+产物路径固定两个：
 
-```bash
-make
-```
+| 产物 | 路径 |
+|------|------|
+| 内核模块 | `build/kernel-module/firewall.ko` |
+| 守护进程 | `build/daemon/firewall-daemon` |
 
-仅编译内核模块：
+### 内核头文件不在标准位置
 
-```bash
-make kernel-module
-```
-
-仅编译守护进程：
-
-```bash
-make daemon
-```
-
-### 从源码构建 .deb 包
-
-推荐使用 `make deb` 一步构建可分发的 .deb 安装包(适用于 Debian/Ubuntu 系发行版)。
+CI 的 Azure 机器就是这个情况。指定构建目录即可：
 
 ```bash
-# 编译产物
-make                    # 编译内核模块 + Go 守护进程 + React 前端
-                        # 内核模块: build/kernel-module/firewall.ko
-                        # 守护进程: build/daemon/firewall-daemon (stripped，内嵌前端产物)
-
-# 构建 .deb
-make deb                # 输出: build/deb/linux-firewall-kmod-<版本>.deb
-
-# 安装
-sudo dpkg -i build/deb/linux-firewall-kmod-<版本>.deb
-# 等同于:
-#   1. dkms add + build + install firewall/<版本>
-#   2. modprobe firewall
-#   3. systemctl enable --now firewall-daemon
-#   4. cp /etc/firewall/*.yaml (从 /usr/share/firewall/ 复制)
-
-# 验证
-systemctl status firewall-daemon
-lsmod | grep firewall
-ls /proc/firewall/
+make kernel-module KDIR=/lib/modules/$(uname -r)/build
 ```
 
-> 如果 `make deb` 报 `go: 未找到命令`,说明 PATH 里没有 Go 工具链。安装 Go 1.26+ 后确保 `go` 在 PATH 中再重试。
+不知道有哪些目录可用时：
 
-### 3. 安装
+```bash
+find /lib/modules -maxdepth 2 -name build -type d
+```
 
-#### 方式一：一键安装（推荐）
+只要守护进程，不编内核模块，用 `make daemon`。
+
+## 四、安装到系统
 
 ```bash
 sudo env "PATH=$PATH" make install
 ```
 
-此命令会自动：
-1. 构建内核模块和守护进程（如果尚未构建）
-2. 安装所有组件到系统目录
-3. 验证安装完整性
-4. 加载内核模块
-5. 启动 systemd 服务
+`env "PATH=$PATH"` 是把当前 `PATH` 带进 root 环境，让 `make` 找到 Go 和 npm。
 
-> 💡 **提示**：守护进程用 Go（要求 **Go 1.23+**），安装脚本会执行 `go build`，故需确认
-> Go 在 PATH 中。使用 `sudo env "PATH=$PATH"` 确保 Go 在 PATH 中（仓库的 Makefile 与 CI
-> 均按此写法）。
+这条命令按固定顺序做八件事（与 `Makefile` 的 `install` 目标一致）：
 
-#### 方式二：先构建后安装
+1. `build`：编译内核模块和守护进程
+2. `install-kernel-module`：装模块，然后跑 `depmod -a`
+3. `install-daemon`：装守护进程
+4. `install-config`：装 `config/*.yaml`
+5. `install-state`：建状态目录
+6. `install-systemd`：装服务单元和开机加载配置，跑 `daemon-reload`
+7. `install-start`：加载模块、enable 并 start 服务
+8. `install-verify`：逐项检查文件和服务是否就位
+
+装出来的位置：
+
+| 内容 | 位置 |
+|------|------|
+| 内核模块 | `/lib/modules/$(uname -r)/extra/firewall.ko` |
+| 守护进程 | `/usr/local/sbin/firewall-daemon` |
+| 配置文件 | `/etc/firewall/`（目录 0700，YAML 0600，属主 root:root） |
+| 状态目录 | `/var/lib/firewall/`（0700） |
+| 服务单元 | `/etc/systemd/system/firewall-daemon.service` |
+| 开机加载 | `/etc/modules-load.d/firewall.conf` |
+
+`/etc/firewall/` 里装的是 `config/` 目录下全部 `*.yaml`，当前 13 份。
+
+### 关于本机安装守卫
+
+`Makefile` 里另有一个 `_guard_local_install` 目标，注释写着禁止直接装本机，
+并给出三条路径：`./scripts/deploy.sh <远程主机>`、`make install DESTDIR=<目录>`、
+`make install FIREWALL_REMOTE_DEPLOY=1`。
+
+按当前 `Makefile`，`install` 和 `uninstall` 都没有依赖这个守卫目标
+（`make -n install` 里看不到它的任何输出），所以直接 `sudo make install` 不会被拦。
+想走审计轨迹就用上面三条之一；只想暂存不写本机时，`DESTDIR` 非空会让 `depmod` /
+`insmod` / `systemctl` 这些动本机的步骤按 `[ -z "$(DESTDIR)" ]` 跳过。
+
+### 只想打包，不写本机
 
 ```bash
-# 先构建
-make build
-
-# 再安装
-sudo env "PATH=$PATH" make install
+make install DESTDIR=$(pwd)/build/stage
 ```
 
-#### 安装流程说明
+DESTDIR 模式下服务不会启动。装完包后要自己 enable 和 start。
 
-`make install` 按以下顺序执行：
-1. **build** - 构建内核模块和守护进程
-2. **install-kernel-module** - 安装内核模块到 `/lib/modules/$(uname -r)/extra/`
-3. **install-daemon** - 安装守护进程到 `/usr/local/sbin/`
-4. **install-config** - 安装配置文件到 `/etc/firewall/`
-5. **install-state** - 创建状态目录 `/var/lib/firewall/`
-6. **install-systemd** - 安装 systemd 服务单元
-7. **install-start** - 加载内核模块并启动守护进程
-8. **install-verify** - 验证所有组件安装成功
-
-安装完成后：
-
-- 内核模块 `firewall.ko` 安装到 `/lib/modules/$(uname -r)/extra/`
-- 守护进程 `firewall-daemon` 安装到 `/usr/local/sbin/`
-- 配置文件安装到 `/etc/firewall/`（包含 12 个 jail 配置）
-- 状态数据目录 `/var/lib/firewall/`
-- systemd 服务文件安装到 `/etc/systemd/system/`
-
-### 4. 验证安装
-
-安装完成后，验证服务状态：
+### 打成 .deb
 
 ```bash
-# 检查服务状态
-sudo systemctl status firewall-daemon
+make deb
+```
 
-# 检查内核模块
+它调用 `./build-deb.sh`，产物在 `build/deb/linux-firewall-kmod-<版本>.deb`。
+内核模块走 DKMS：在目标机器安装时才编译，内核升级后自动重编。
+
+## 五、systemd 服务
+
+服务单元的执行命令是：
+
+```text
+/usr/local/sbin/firewall-daemon -C /etc/firewall
+```
+
+`-C` 是配置目录，目录下所有 `.yaml` / `.yml` 按文件名字母序合并。
+热重载靠 `systemctl reload firewall-daemon`，单元里写的是给主进程发 `HUP`。
+
+| 命令 | 作用 |
+|------|------|
+| `sudo systemctl start firewall-daemon` | 启动 |
+| `sudo systemctl stop firewall-daemon` | 停止 |
+| `sudo systemctl enable firewall-daemon` | 开机自启 |
+| `sudo systemctl status firewall-daemon` | 看状态 |
+| `sudo journalctl -u firewall-daemon -f` | 追日志 |
+
+开机自动加载模块由 `/etc/modules-load.d/firewall.conf` 负责，里面一行：`firewall`。
+
+## 六、手动加载模块
+
+不装服务，直接试：
+
+```bash
+sudo insmod build/kernel-module/firewall.ko fw_ban_time=600
+```
+
+验证：
+
+```bash
 lsmod | grep firewall
-
-# 查看 procfs 接口
 ls /proc/firewall/
-
-# 查看日志
-journalctl -u firewall-daemon.service -f
+sudo cat /proc/firewall/config
 ```
 
-### 5. 手动加载内核模块（可选）
+`ls /proc/firewall/` 应列出 13 个条目，清单见 [ProcFS 接口](../configuration/procfs.md)。
 
-如果服务未自动加载内核模块：
+装好之后改用 `modprobe` 也行：
 
 ```bash
 sudo modprobe firewall
 ```
 
-验证模块已加载：
+卸载模块：
 
 ```bash
-lsmod | grep firewall
+sudo rmmod firewall
 ```
 
-## 验证安装
+### 模块参数
 
-### 检查内核模块
+参数名与默认值以 `src/kernel-module/fw_main.c` 为准：
+
+| 参数 | 默认值 | 含义 |
+|------|--------|------|
+| `fw_ban_time` | 600 | 默认封禁时长（秒） |
+| `state_file` | `/var/lib/firewall/state` | 封禁与白名单的状态文件 |
+| `fw_max_bans_per_second` | 200 | 每秒最多新增多少条封禁 |
+| `fw_max_ban_entries` | 65535 | 封禁表条目上限 |
+| `fw_max_whitelist_entries` | 65535 | 白名单条目上限 |
+| `fw_max_rate_entries` | 65536 | 速率表条目上限，可用范围 1024–262144 |
+| `fw_max_local_ips` | 256 | 本机地址集合的容量下界，不够时按需扩容 |
+| `fw_static_threshold` | 1 | 静态阈值检测开关 |
+| `fw_dynamic_threshold` | 0 | 动态阈值检测开关 |
+| `fw_ddos_detection` | 1 | DDoS 检测总开关 |
+
+## 七、前台试跑守护进程
 
 ```bash
-cat /proc/firewall/config
+sudo ./build/daemon/firewall-daemon -c config/default.yaml
 ```
 
-应输出类似（字段与顺序以模块实际输出为准）：
+常用参数（来自 `src/daemon/internal/config/args.go`）：
 
-```
-Current Firewall Configuration:
---------------------------------
-ban_time: 600 seconds
-Ban entries: 0
-Whitelist entries: 0
-```
+| 参数 | 作用 |
+|------|------|
+| `-c`、`--config <文件>` | 单文件配置，缺省路径 `/etc/firewall-daemon/config.yml` |
+| `-C`、`--config-dir <目录>` | 目录配置，按名字母序合并 |
+| `-d`、`--daemon` | 后台运行并写 PID 文件 |
+| `--no-strict` | 忽略未知配置键（默认严格，未知键直接报错） |
+| `--rollback` | 回滚到上一个配置版本，要求守护进程在跑 |
+| `-h`、`--help` | 打印帮助 |
 
-### 检查守护进程
+## 八、跑测试
 
 ```bash
-sudo systemctl status firewall-daemon
+# 集成测试（只跑 pytest，需要 root）
+make test
+
+# 守护进程单元测试
+cd src/daemon && go test ./...
 ```
 
-### 检查状态：Go module `src/daemon` 已移植 HTTP，守护进程同时暴露 `/proc/firewall/*` 与 HTTP 接口
+`make test` 展开成 `sudo python3 -m pytest tests/ -v`。
+它先依赖内核模块和守护进程两个产物。
+
+## 九、卸载
 
 ```bash
-sudo cat /proc/firewall/bans /proc/firewall/stats /proc/firewall/config
-```
-
-## 安装后行为
-
-无论是 `sudo make install` 还是 `sudo dpkg -i *.deb` 安装完成,系统会自动执行以下动作:
-
-1. **systemd 启动 `firewall-daemon.service`**
-   - 单元文件位于 `/etc/systemd/system/firewall-daemon.service`
-   - `enable --now` 后立即启动并设为开机自启
-   - 单元配置已启用安全沙箱:`ProtectSystem=strict`、`ReadOnlyPaths=/etc/firewall`、`ReadWritePaths=/var/lib/firewall`
-
-2. **加载内核模块 `firewall.ko`**
-   - 通过 `modprobe firewall` 或 `install-systemd` 钩子加载
-   - 模块在 `/proc/firewall/` 下导出 config / stats / bans / whitelist / log_level 等 procfs 文件
-
-3. **守护进程启动流程**
-   - 读取 `/etc/firewall/*.yaml` 下的所有配置文件(按字典序加载,后加载的覆盖前加载的)
-   - 编译各 jail 的正则表达式(`regex::Regex::new`)
-   - 当前 Go 实现初始化 procfs、规则集、inotify 与 HTTP 服务（已移植）
-   - 进入主监控循环：正则匹配 → 失败计数 → 阈值判定 → 封禁
-   - 进入主监控循环:正则匹配 → 失败计数 → 阈值判定 → 调用 procfs 触发封禁
-
-4. **首次启动观察**
-   ```bash
-   journalctl -u firewall-daemon -f
-   # 正常输出:
-   #   Loaded config: /etc/firewall/default.yaml
-   #   Compiled regex for jail 'sshd' (12 patterns)
-   #   inotify watching /var/log/auth.log
-   #   ProcFS interfaces mounted: /proc/firewall/{bans,stats,config}
-   #   Daemon ready
-   ```
-
-> 注意:守护进程启动后若 `log_file: /var/log/firewall.log` 打开失败,会以 warning 级别记录 "Failed to open log file ... (falling back to syslog-only)"。这是 systemd 单元 `ProtectSystem=strict` 故意让 `/var/log` 不可写的设计 — 详见 [故障排查 - 守护进程无法打开 /var/log/firewall.log](../operations/troubleshooting.md#守护进程无法打开-varlogfirewalllog)。
-
-## 卸载
-
-```bash
-sudo systemctl stop firewall-daemon
-sudo systemctl disable firewall-daemon
 sudo make uninstall
 ```
 
-卸载将移除：
+顺序是：停服务 → 卸模块并删模块文件 → 删服务单元 → 删开机加载配置 → 删二进制和运行期文件 → 删 `/etc/firewall` → 删 `/var/lib/firewall` 和 `/var/log/firewall.log*` → 复查。
 
-- 内核模块（自动卸载）
-- 守护进程二进制文件
-- 配置文件（可选，保留用户配置）
-- systemd 服务文件
+系统日志（`/var/log/auth.log`、journal）不归本项目管，不会被删。
 
-## 常见问题
+## 十、装完之后
 
-### 内核头文件找不到
+打开面板：`http://<主机地址>:9119/dashboard`。
+端口来自配置的 `defaults.metrics_port`，默认 9119。
+配了 `metrics_username` 和 `metrics_password` 就要先登录，细节见 [YAML 配置](../configuration/yaml-config.md)。
 
-```bash
-# Ubuntu/Debian
-sudo apt install linux-headers-$(uname -r)
-
-# CentOS/RHEL
-sudo dnf install kernel-devel-$(uname -r) kernel-headers-$(uname -r)
-```
-
-### Secure Boot 问题
-
-如果启用了 Secure Boot，需要签名内核模块或使用 MOK (Machine Owner Key)：
-
-```bash
-sudo mokutil --import /path/to/signing_key.der
-```
-
-### 权限不足
-
-确保使用 `sudo` 或 root 用户执行安装命令。
+封禁和白名单的手工操作见 [ProcFS 接口](../configuration/procfs.md)。

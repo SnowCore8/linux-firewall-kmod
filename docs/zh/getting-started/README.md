@@ -1,18 +1,20 @@
 # 快速开始
 
-本章节将引导你完成 Linux Firewall 内核模块的安装和初始配置。
+从零装好并看到第一个封禁。
 
-## 工作流程
+## 两篇文档
 
-1. 确认系统满足 [要求](installation.md#系统要求)
-2. [安装](installation.md) 内核模块和守护进程
-3. 按照 [快速上手](quick-start.md) 配置第一个 jail
-4. 验证封禁功能正常工作
+| 文档 | 内容 |
+|------|------|
+| [安装](installation.md) | 环境要求、编译、安装、systemd 服务、卸载 |
+| [快速上手](quick-start.md) | 五步跑通：加载模块 → 起守护进程 → 开面板 → 封禁 → 解封 |
 
-## 前置知识
+## 先装还是先试
 
-使用本项目需要了解：
+- 只想看它长什么样：走 [快速上手](quick-start.md)，用仓库里的构建产物。
+- 要长期运行：走 [安装](installation.md)，装成 systemd 服务。
 
-- Linux 命令行基本操作
-- 内核模块的基本概念
-- 日志文件格式和正则表达式
+## 装好之后
+
+配置字段见 [配置指南](../configuration/README.md)。
+出问题先看 [故障排查](../operations/troubleshooting.md)。
