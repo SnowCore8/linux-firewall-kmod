@@ -108,7 +108,8 @@
 - **夹具按部署配置带上 Basic 认证** - 守护进程在位时那五套 16 passed / 11 failed，11 条全是 401：
   `config/default.yaml` 带着凭据，装好的进程启用了认证，而用例用裸 `curl` 取 `/metrics` 与
   `/api/v1/**`。**断言一字未改**，改的是取数通道：`conftest.daemon_credentials()` 与
-  `daemon_http_port()` 同源，从部署配置读凭据；`run_curl()` 经 `curl --config -` 从 stdin 注入
+  `daemon_http_port()` 同源，从夹具一直使用的那份 `config/default.yaml` 读凭据（虚机上
+  `/etc/firewall` 正是这一份装出来的）；`run_curl()` 经 `curl --config -` 从 stdin 注入
   `Authorization: Basic`（`-u` 与 `?access_token=` 都会把凭据放进 argv，而 pytest 失败时会打印命令行）；
   `http_request()` 成为唯一入口，test_16 的 `curl_get`、test_19 的 `_curl`、test_21.3 自带的那段
   `subprocess.run(["curl", …])` 都收敛过来。凭据不落任何文件、测试常量或断言消息。（`cbfc99a8`）

@@ -376,9 +376,10 @@ def daemon_http_port() -> int:
 
 
 def daemon_credentials() -> tuple[str, str] | None:
-    """读取 daemon 的 HTTP Basic 凭据；部署形态未启用认证时返回 None。
+    """读取 daemon 的 HTTP Basic 凭据；未启用认证时返回 None。
 
-    取值路径与 `daemon_http_port()` 同源（部署配置的 `defaults` 段），凭据只在运行时
+    取值路径与 `daemon_http_port()` 同源：夹具约定读 `CONFIG_DIR`（即仓库的 `config/`，
+    装到 `/etc/firewall` 的就是这一份）的 `default.yaml` 的 `defaults` 段。凭据只在运行时
     读出，不写进代码、测试常量或断言消息。
 
     语义照契约（`contract/http.fwidl` 的 `auth` 段）：`metrics_username` 与
