@@ -111,7 +111,7 @@ sudo env "PATH=$PATH" make install
 | 内核模块 | `/lib/modules/$(uname -r)/extra/firewall.ko` |
 | 守护进程 | `/usr/local/sbin/firewall-daemon` |
 | 配置文件 | `/etc/firewall/`（目录 0700，YAML 0600，属主 root:root） |
-| 状态目录 | `/var/lib/firewall/`（0700） |
+| 状态目录 | `/var/lib/firewall/`（0700）；内核侧写 `state`，守护进程写 `history.db`（由 `defaults.history_db_path` 决定，留空则不建库） |
 | 服务单元 | `/etc/systemd/system/firewall-daemon.service` |
 | 开机加载 | `/etc/modules-load.d/firewall.conf` |
 

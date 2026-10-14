@@ -250,6 +250,7 @@ SPA 外壳是公开路由，返回不含数据的静态壳，顶层文档**不�
 | 项 | 内容 | 出处 |
 |----|------|------|
 | 清单 | `frontend/public/manifest.webmanifest`，`index.html` 以 `/static/manifest.webmanifest` 引用 | `frontend/index.html` |
+| 清单内容类型 | `application/manifest+json`；Go 的内建 MIME 表没有 `.webmanifest`，`internal/http/static.go` 的 `init` 注册该扩展名，否则按 `application/octet-stream` 发出，浏览器不会把它当清单 | `internal/http/static.go` |
 | Service Worker | 手写 `frontend/public/sw.js` | 同上 |
 | 注册路径 | 根作用域 `/sw.js`，不是 `/static/sw.js` | `internal/http/static.go` |
 | 作用域抬升 | 响应带 `Service-Worker-Allowed: /` | 同文件 |
