@@ -10,7 +10,45 @@
 
 ## 概述
 
-Firewall 是一个 Linux 内核模块版本的 fail2ban，将封禁逻辑从用户空间移至内核空间，使用 netfilter 框架在数据包级别进行实时 IP 封禁，具有更低的延迟和更高的性能。守护进程用 Go 实现（v2.2.0 起 Rust 版本被 Go module `src/daemon` 取代），编译为单文件 stripped 二进制（移动端优先的 React 控制面板一并通过 go:embed 嵌入）；内核模块仍是 C，`src/daemon` 用 `go test ./...`、`go vet`、`gofmt` 自验证
+Firewall 是 Linux 内核模块版的 fail2ban：**把「封哪个 IP」的判定留在用户态，把「丢掉这个包」搬进内核**。
+Go 守护进程读日志、算失败窗口、做判定，经 netlink 把结果下发给内核模块；内核模块挂在 netfilter
+钩子上，在包路径上用哈希表查封禁表，命中即丢。封禁因此不再受用户态进程调度与规则遍历拖累。
+
+### 项目目标
+
+目标不是「做一个防火墙」，而是把 fail2ban 的三类痛点做实。三条判据都可验证，也都有对应的验收方：
+
+| 判据 | 说的是什么 | 由谁验收 |
+|------|------------|----------|
+| **防护真的在跑** | 守护进程与内核模块必须处于工作状态。任一 jail 的配置劣化不得让整个进程拒绝启动——那等于把所有 jail 的防护一起下线 | [`STANDARDS.md`](STANDARDS.md) 把「核心功能完全不可用（封禁失效、日志解析完全错误）」定为 Critical；`tests/` 集成套件是行为规格 |
+| **装得进普通 Linux** | 目标用户的那台发行版上，`.ko` 要编得出来、载得进去、`/proc/firewall` 要出现。编译通过不等于加载得了 | [`tests/test_01_module_lifecycle.py`](tests/test_01_module_lifecycle.py) 等内核套件；见下方「内核版本口径」 |
+| **分得开扫描器和正常访客** | 判据方向必须对：扫描的形态是「同一网段内 IP 多、每个 IP 少」，单 IP 计数器恰好把这类流量漏掉 | [`docs/zh/development/cluster-detection-design.md`](docs/zh/development/cluster-detection-design.md) 与 `config/frp.yaml` 的停用说明（这条教训的出处） |
+
+一句话口径：**宁可少封，也不能不封、不能乱封，也不能在用户的机器上起不来。**
+
+### 非目标
+
+- 不是通用防火墙：不表达 allow 规则、不做 NAT / 端口映射 / QoS，也不替代 iptables 的规则表达能力。
+- 不是转发设备：包路径上只做「命中封禁表就丢」，不追求吞吐性能本身。性能口径是「不拖垮宿主」
+  （`STANDARDS.md` 以 10Gbps 目标场景下 30% 的性能下降为 High 级红线），不是「拿它当路由器」。
+- 不做应用层防护：不解析 HTTP 语义、不识别 payload、不管 WAF 那一类问题。
+- 不追求无配置：需要 jail 的日志路径与正则；正则写坏时降级为告警 + 关键字回退，而不是假装能识别。
+
+### 交付形态
+
+| 部件 | 形态 | 位置 |
+|------|------|------|
+| 内核模块 | 单个 `firewall.ko`，C 语言，netfilter + RCU + 哈希表 | `src/kernel-module/` |
+| 守护进程 | 单文件 Go 二进制，移动端优先的 React 面板经 `//go:embed` 一并嵌入 | `src/daemon/`（组合根 `cmd/firewall-daemon`） |
+| 操作接口 | procfs 条目（`/proc/firewall/*`）、HTTP/JSON API、SSE 实时推送、Prometheus 指标 | 契约单一真相源：`contract/` |
+
+### 内核版本口径
+
+顶部徽章写的 `Linux 5.x | 6.x` 目前是**意图而非实测结论**。已验证的是 6.8.0-146（Ubuntu 24.04 GA
+内核）：可编译、可 `insmod`、`/proc/firewall` 条目齐全；7.0.0-38 亦可编译。**5.x 未做过任何验证**，
+而 6.x 内部也存在真实的 API 断层（例：`timer_container_of` 与 `from_timer` 的改名、
+单次 per-CPU 分配的 32KiB 上限），这两处都已在 `src/kernel-module/` 里显式适配。
+新版本内核上的验证记录应随 CHANGELOG 补充，不要仅凭徽章宣称兼容范围。
 
 ## 为什么选择本项目
 
