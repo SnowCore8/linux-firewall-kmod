@@ -228,47 +228,6 @@ func DefaultCapacityConfig() CapacityConfig {
 	}
 }
 
-// RetentionConfig 是数据保留策略（单位：天）。
-type RetentionConfig struct {
-	BanHistoryDays uint32
-	FailedLogsDays uint32
-	JailStatsDays  uint32
-	DdosEventsDays uint32
-}
-
-// DefaultRetentionConfig 返回保留策略默认值。
-func DefaultRetentionConfig() RetentionConfig {
-	return RetentionConfig{
-		BanHistoryDays: 90,
-		FailedLogsDays: 30,
-		JailStatsDays:  365,
-		DdosEventsDays: 30,
-	}
-}
-
-// WriterConfig 是异步写入器配置。
-type WriterConfig struct {
-	ChannelSize       int
-	BatchSize         int
-	FlushIntervalSecs uint32
-}
-
-// DefaultWriterConfig 返回写入器配置默认值。
-func DefaultWriterConfig() WriterConfig {
-	return WriterConfig{ChannelSize: 1000, BatchSize: 50, FlushIntervalSecs: 5}
-}
-
-// StorageConfig 是混合存储配置。
-type StorageConfig struct {
-	Retention RetentionConfig
-	Writer    WriterConfig
-}
-
-// DefaultStorageConfig 返回存储配置默认值。
-func DefaultStorageConfig() StorageConfig {
-	return StorageConfig{Retention: DefaultRetentionConfig(), Writer: DefaultWriterConfig()}
-}
-
 // 日志目的地与格式取值。
 const (
 	LogDestinationSyslog  uint8 = 0
@@ -314,7 +273,6 @@ type Config struct {
 	StrictMode bool
 
 	Jails      []Jail
-	Storage    StorageConfig
 	Ddos       DdosConfig
 	Webui      WebuiConfig
 	TrustedIPs []string
@@ -339,20 +297,19 @@ type Config struct {
 // 字段改动必须验证集成测试仍通过，以保证行为等价。
 func Default() Config {
 	return Config{
-		DefaultMaxRetries:    3,
-		DefaultFindTime:      600,
-		DefaultBanTime:       600,
-		Daemon:               false,
-		Interval:             1,
-		MetricsPort:          9119,
-		MetricsBindAddress:   "127.0.0.1",
-		LogLevel:             LogLevelInfo,
-		LogDestination:       LogDestinationBoth,
+		DefaultMaxRetries:  3,
+		DefaultFindTime:    600,
+		DefaultBanTime:     600,
+		Daemon:             false,
+		Interval:           1,
+		MetricsPort:        9119,
+		MetricsBindAddress: "127.0.0.1",
+		LogLevel:           LogLevelInfo,
+		LogDestination:     LogDestinationBoth,
 		LogFormat:            LogFormatPlain,
 		LogMaxSizeMB:         10,
 		LogMaxFiles:          10,
 		StrictMode:           true,
-		Storage:              DefaultStorageConfig(),
 		Ddos:                 DefaultDdosConfig(),
 		Webui:                DefaultWebuiConfig(),
 		Capacity:             DefaultCapacityConfig(),

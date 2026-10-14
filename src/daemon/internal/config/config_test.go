@@ -63,8 +63,6 @@ func TestDefaultConfigValues(t *testing.T) {
 		{"Webui.SSEPushInterval", c.Webui.SSEPushInterval, uint32(1)},
 		{"Webui.RateWarningPPS", c.Webui.RateWarningPPS, uint64(50000)},
 		{"Capacity.MaxBanEntries", c.Capacity.MaxBanEntries, uint32(65535)},
-		{"Storage.Retention.BanHistoryDays", c.Storage.Retention.BanHistoryDays, uint32(90)},
-		{"Storage.Writer.ChannelSize", c.Storage.Writer.ChannelSize, 1000},
 	}
 	for _, ck := range checks {
 		if ck.got != ck.want {
