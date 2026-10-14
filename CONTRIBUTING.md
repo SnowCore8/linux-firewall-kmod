@@ -1,37 +1,44 @@
 # 贡献指南
 
-## 欢迎贡献
-
-感谢你关注 **linux-firewall-kmod** 项目！无论是修复 Bug、添加新功能、改进文档，还是提出建议，每一份贡献都让项目变得更好。
+本文说清三件事：怎么把改动跑通、提交成什么形状、评审看什么。
+项目机制与目录说明见 [AGENTS.md](AGENTS.md)。
 
 ## 开始之前
 
-- 阅读 [README.md](README.md) 了解项目目标和核心特性
-- 浏览 [文档目录](docs/zh/) 熟悉项目文档
-- 查看现有 [Issues](https://github.com/SnowCore8/linux-firewall-kmod/issues) 避免重复
+- 读 [README.md](README.md) 了解目标与非目标。
+- 读 [AGENTS.md](AGENTS.md) 了解构建入口与质量门禁。
+- 翻一遍 [docs/zh/](docs/zh/) 的相关章节。
+- 查现有 [Issues](https://github.com/SnowCore8/linux-firewall-kmod/issues)，避免重复。
 
-## 开发环境设置
+## 开发环境
 
 ### 系统要求
 
-- **操作系统**：Linux（Debian/Ubuntu 或 RHEL/CentOS/Fedora）
-- **内核版本**：4.19+（推荐 5.10+）
-- **架构**：x86_64
+- Linux，x86_64。
+- 内核：已验证 6.8.0-146（Ubuntu 24.04 GA），可编译可加载。
+  7.0.0-38 可编译。5.x 未验证。
+  口径见 README 的「内核版本口径」。
+- 要真验证 `insmod`，得在一台能加载模块的机器上跑集成测试。
+  CI runner 用自定义内核，编译过不代表加载得了。
 
-### 安装依赖
+### 装依赖
 
 ```bash
 # Debian/Ubuntu
-sudo apt install build-essential linux-headers-$(uname -r) \
-  git
+sudo apt install build-essential linux-headers-$(uname -r) git clang-format
 
 # RHEL/CentOS/Fedora
-sudo dnf install gcc make kernel-devel kernel-headers \
-  git
+sudo dnf install gcc make kernel-devel kernel-headers git clang-format
 ```
 
-守护进程为 Go 1.26+（`make` 会在缺失时尝试用 `golangc` 引导），前端构建需要
-Node.js 22 + npm。二者均无需额外的系统开发库（Go 依赖全为纯 Go）。
+另外需要：
+
+- Go：`src/daemon/go.mod` 写 `go 1.26.0`。
+- Node.js 22 + npm：前端构建用，CI 也是 22。
+- Python 3 + pytest + PyYAML：集成测试用。
+- sqlite3 命令行：集成测试强制要求，缺了不许跳过。
+
+Go 依赖全是纯 Go，无 cgo，不需要系统开发库。
 
 ### 克隆与编译
 
@@ -39,254 +46,241 @@ Node.js 22 + npm。二者均无需额外的系统开发库（Go 依赖全为纯 
 git clone https://github.com/SnowCore8/linux-firewall-kmod.git
 cd linux-firewall-kmod
 
-# 编译内核模块 + 守护进程
-make
-
-# 仅编译内核模块
-make kernel-module
-
-# 仅编译守护进程
-make daemon
+make                 # 格式检查 + 内核模块 + 守护进程
+make kernel-module   # 只编内核模块
+make daemon          # 只编守护进程（先出面板产物）
+make frontend        # 只构前端
+make build-quick     # 跳过格式检查
 ```
 
-### 运行测试
+`make kernel-module` 需要内核头文件。缺了会打印可用目录并退出 1。
+也可以显式指定：
 
 ```bash
-# 运行全部测试（集成测试套件）
-make test
+make kernel-module KDIR=/lib/modules/$(uname -r)/build
+```
 
-# 仅运行守护进程 Go 单元测试
-cd src/daemon && go test ./...
+### 装到机器上
 
-# 仅运行集成测试
-sudo python3 -m pytest tests/ -v
+`make install` 与 `make uninstall` 直接在本机跑会被守卫拒。
+三条合规路径：
 
-# 现场 crash 调试（带 DWARF + 符号表，即不加 -s -w 的默认构建）
+```bash
+./scripts/deploy.sh <远程主机> [远程用户]        # 远程部署，有审计轨迹
+make install DESTDIR=$(pwd)/build/stage         # 打包暂存，不写本机
+make install FIREWALL_REMOTE_DEPLOY=1           # 显式授权，只用于沙箱
+```
+
+## 跑测试
+
+| 层 | 命令 | 需要 root |
+|----|------|-----------|
+| Go 单元 | `cd src/daemon && go test ./...` | 否 |
+| 集成 | `make test` | 是 |
+| 单套件 | `sudo python3 -m pytest tests/test_03_ban_unban.py -v` | 是 |
+| 端到端 | `npx playwright test` | 见下 |
+
+端到端要真守护进程，走 `scripts/e2e-daemon.sh` 的
+probe / start / stop / env 四个子命令。
+内核模块加载不了时用例显式跳过。
+
+调试构建（保留 DWARF 与符号表）：
+
+```bash
 cd src/daemon && go build -o firewall-daemon-debug ./cmd/firewall-daemon
 ```
 
-## 贡献方式
+产物是仓库自己的目录里的临时文件，别提交。
+注意 `go build` 不检查面板产物，缺面板时二进制能编出来但启动会报错。
+发版或对比体积请用 `make daemon`，它带 `-ldflags "-s -w=1"`。
 
-### 1. 报告 Bug
+## 提交前必过的门禁
 
-使用 [Bug 报告模板](.github/ISSUE_TEMPLATE/bug_report.md) 提交 Issue，包含：
-- 环境信息（内核版本、发行版、项目版本）
-- 问题描述和复现步骤
-- 预期行为与实际行为
-- 相关日志输出（kernel log、daemon log）
+```bash
+make format-check
+make contract-check
+cd src/daemon && gofmt -l ./cmd ./internal   # 输出必须为空
+cd src/daemon && go vet ./cmd/... ./internal/...
+cd src/daemon && go test ./...
+make test
+```
 
-### 2. 提出新功能
-
-使用 [功能请求模板](.github/ISSUE_TEMPLATE/feature_request.md) 提交 Issue，说明：
-- 功能描述和使用场景
-- 替代方案（如有）
-- 参考实现或设计思路
-
-### 3. 提交代码修复
-
-1. 在 Issue 中说明你打算修复的问题
-2. Fork 仓库并创建功能分支
-3. 编写代码并添加测试
-4. 确保所有测试通过
-5. 提交 Pull Request
-
-### 4. 改进文档
-
-- 修正拼写错误或表述不清
-- 补充缺失的配置说明
-- 添加使用示例和最佳实践
-- 翻译文档为其他语言
-
-### 5. 添加测试用例
-
-- 为未覆盖的代码路径添加单元测试
-- 为边界条件添加回归测试
-- 完善集成测试场景
+`make format` 只格式化 C。Go 要单独 `gofmt -w ./cmd ./internal`。
+跑了一件不等于另外两件，常见漏检就在这里。
 
 ## 代码规范
 
-### 内核模块 C 语言编码规范
+### C 内核模块
 
-| 规则 | 说明 |
+以 `.clang-format` 为准。
+
+| 规则 | 要求 |
 |------|------|
-| 命名 | 函数/变量使用 `snake_case`，宏使用 `UPPER_CASE` |
-| 缩进 | 2 个空格，禁止使用 Tab（以 `.clang-format` 的 `IndentWidth` 为准） |
-| 行宽 | 最大 80 字符（以 `.clang-format` 的 `ColumnLimit` 为准） |
-| 括号 | K&R 风格，左括号不换行 |
-| 函数长度 | 单个函数不超过 50 行，复杂逻辑拆分为子函数 |
+| 命名 | 函数与变量 `snake_case`，宏 `UPPER_CASE`，统一 `fw_` 前缀 |
+| 缩进 | 2 空格，禁 Tab |
+| 行宽 | 80 |
+| 括号 | K&R，左括号不换行 |
+| 函数长度 | 不超过 50 行 |
+| 注释 | 中文，解释为什么 |
 
-### 守护进程 Go 编码规范
+内核侧两条要注意：
 
-守护进程使用 Go 编写，遵循：
+- 跨内核版本的 API 差异按「宏或符号是否存在」适配，
+  不比 `LINUX_VERSION_CODE`。已有例子：`timer_container_of`
+  与 `from_timer` 的改名，见 `src/kernel-module/fw_ban.c`。
+- 单次 per-CPU 申请有 32 KiB 上限，超了拿到 NULL。
+  已有例子：速率槽表按 128 槽 × 4 块分块申请，
+  见 `src/kernel-module/fw_rate.c` 与 `fw_types.h`。
+  索引空间和 `slot_idx` 语义不变。
 
-- `gofmt` 格式化代码（CI 卡口是 `cd src/daemon && gofmt -l ./cmd ./internal` 输出为空）
-- `go vet` 通过 lint 检查（CI 卡口是 `go vet ./cmd/... ./internal/...`）
-- 错误链路用 `fmt.Errorf("...: %w", err)` 包装，保留可判定性
-- 模块与导出符号注释使用中文
+### Go 守护进程
 
-> **提交前必须 `gofmt` 干净 + `go vet` 通过（CI 卡口）**。任何问题都会被 CI 拒绝合并，合入前请先本地跑通这两条命令。
+- `gofmt` 干净（CI 卡 `gofmt -l ./cmd ./internal` 为空）。
+- `go vet ./cmd/... ./internal/...` 通过。
+- 错误用 `fmt.Errorf("...: %w", err)` 包装，保留可判定性。
+- 注释写中文，包括包注释与导出符号注释。
+- 纯 Go，无 cgo，无 `unsafe`。别引入需要 cgo 的依赖，
+  那会打破单文件静态二进制的交付形态。
 
-### 注释规范
+### 前端 TypeScript
 
-- **统一使用中文注释**
-- 注释解释"为什么"而非"做什么"
-- 公共函数必须包含文档字符串（功能、参数、返回值）
-- 复杂算法必须包含思路说明
+- `frontend/tsconfig.json` 开了 `strict`、`noUnusedLocals`、
+  `noUnusedParameters`，别绕过。
+- 类型检查用 `make frontend-typecheck`，等价于 `tsc --noEmit`。
+- JSX 运行时是 React 自动运行时：`jsx: "react-jsx"` +
+  `jsxImportSource: "react"` + `@vitejs/plugin-react`。
+  这三处必须成对维护，否则 tsc 与打包器各解析一套实现。
+- 装依赖只用 `npm ci`。`frontend/package.json` 与
+  `frontend/package-lock.json` 必须同步提交，只改一个 CI 装不全。
+- 别把 `vite.config.ts` 的 `emptyOutDir` 改成 true。
+  输出目录里住着 `//go:embed` 的持有文件
+  `src/daemon/web_ui/static/assets.go`，清空会连它一起删。
 
-```c
-/**
- * 检查 IP 是否在白名单中
- * @param ip 待检查的 IPv4 地址（网络字节序）
- * @return 1 表示在白名单中，0 表示不在
- * 
- * 注意：使用 RCU 读端临界区，调用方无需额外加锁
- */
-int whitelist_check(__be32 ip);
+### 契约
+
+改动涉及下面任一项，先改契约再改实现：
+
+- HTTP 路由、载荷字段、SSE 事件、错误码。
+- `/proc/firewall/*` 的节点、权限、读写文法。
+- netlink 消息的线格式与字段。
+
+流程：
+
+1. 改 `contract/*.fwidl`。
+2. 跑 `python3 contract/gen.py`。
+3. 跑 `make contract-drift`。
+4. 跑 `make contract-check`。
+
+请求体的 `Option<T>` 生成 TS 的 `field?: T | null`。
+缺席和 `null` 都合法，表示「可以整个不提交」。
+
+HTTP 未接线条目基线在 `contract/http_gap_baseline.txt`，只减不增。
+补上一个缺口要删一行，新增缺口必须加一行并说明原因。
+
+## 注释约定
+
+- 全仓库统一中文注释。
+- 注释解释为什么，不解释是什么。
+- 危险路径、并发模型、失败取值语义要写清楚为什么这样定。
+- 不写「这是某某函数」这类废话注释。
+
+## 提交信息
+
+遵循 Conventional Commits，格式：
+
+```text
+类型(范围): 简短描述
+
+可选的详细说明
+
+可选的关联 issue
 ```
 
-### 测试 / Tests
-
-| 测试类型 | 命令 | 规模 / 说明 |
-|----------|------|------------|
-| Go 单元测试 | `cd src/daemon && go test ./...` | Go 包内 `_test.go` 用例（含契约往返与算式边界）；用例数随开发变动，以命令实时输出为准 |
-| 集成测试 | `make test` | 集成测试套件（`tests/test_*_*.py`）；套件数与用例数随开发变动，以命令实时输出为准 |
-| 浏览器端到端 | `npx playwright test` | `tests/e2e/*.spec.ts`；内核模块不可加载的环境会显式跳过 |
-
-**修改下列内容时必跑 `make test` 集成测试**:
-
-- YAML 配置 schema / 字段含义(例如新增 `defaults:` 块下的字段)
-- procfs 命令接口(增减 `/proc/firewall/*` 节点)
-- 守护进程与内核模块的交互协议（netlink 消息与契约，见 `contract/`）
-
-跑测试时 `make test` 会用 `sudo python3 -m pytest tests/ -v` 运行集成测试，Go 单元测试推荐直接在 `src/daemon` 下跑 `go test ./...`。
-
-### 代码检查（Go）
-
-守护进程为纯 Go 模块（`modernc.org/sqlite` 等依赖均为纯 Go，无 cgo），不再使用
-Rust 风格的 `unsafe { ... } // SAFETY:` 论证。仓库要求的检查是：
-
-- `cd src/daemon && gofmt -l ./cmd ./internal` 输出为空
-- `cd src/daemon && go vet ./cmd/... ./internal/...` 通过
-
-违反时先修代码，再重新跑这两条命令；CI 的 lint 作业按同样两条卡口。
-
-### 守护进程构建
-
-构建由 Makefile 统一驱动，不需要手工推导 Go 构建参数：
-
-| 目标 | 命令 | 产物 / 说明 |
-|------|------|-------------|
-| `daemon` | `make daemon` | 先 `npm run build` 产出面板，再 `go build -ldflags "-s -w=1"`；产物 `build/daemon/firewall-daemon`（stripped） |
-| `all` | `make all` | 内核模块 + 守护进程（含前端） |
-| 调试构建 | `cd src/daemon && go build -o firewall-daemon-debug ./cmd/firewall-daemon` | 不加 `-s -w`，保留 DWARF 与符号表，供 `gdb` / core 复盘 |
-
-**不要做的事**：
-
-- 不要绕过 Makefile 手工 `go build` 后直接发版：缺 `-ldflags "-s -w=1"` 会显著增大二进制
-- 不要把未 strip 的调试构建二进制发到生产环境
-- 不要引入需要 cgo 的依赖，那会打破「单一静态二进制」的交付形态
-
-### 提交信息规范
-
-遵循 [Conventional Commits](https://www.conventionalcommits.org/) 规范：
-
-```
-<type>(<scope>): <subject>
-
-<body>
-
-<footer>
-```
-
-| Type | 说明 | 示例 |
+| 类型 | 用途 | 例子 |
 |------|------|------|
-| `feat` | 新功能 | `feat(rules): add CIDR range matching support` |
-| `fix` | Bug 修复 | `fix(kernel): resolve RCU grace period deadlock` |
-| `docs` | 文档更新 | `docs(readme): add quick start guide` |
-| `style` | 代码格式 | `style: fix indentation in rule_parser.c` |
-| `refactor` | 代码重构 | `refactor(hash): simplify resize logic` |
-| `perf` | 性能优化 | `perf(lookup): reduce lock contention in hot path` |
-| `test` | 测试相关 | `test(rules): add edge case for empty rule file` |
-| `chore` | 构建/工具 | `chore(ci): add kernel 6.1 to test matrix` |
+| `feat` | 新功能 | `feat(kmod): 受保护端口位图支持空集语义` |
+| `fix` | 修缺陷 | `fix(build): daemon 的 -o 改绝对路径` |
+| `docs` | 文档 | `docs(readme): 补内核版本口径` |
+| `style` | 格式，不改行为 | `style(kmod): clang-format 18 清零` |
+| `refactor` | 重构，不改行为 | `refactor(daemon): 删除无消费者的死代码` |
+| `perf` | 性能 | `perf(kmod): 速率槽表分块申请避开 percpu 上限` |
+| `test` | 测试 | `test(ci): 运行测试任务补装 pytest 与 PyYAML` |
+| `chore` | 构建与工具 | `chore(deps): 修掉有补丁的依赖告警` |
 
-## Pull Request 流程
+范围用 `kmod`、`daemon`、`web`、`build`、`contract`、`ci`、`docs` 这类真实层次。
 
-### 1. Fork 仓库
+一次提交只做一件事。重构与功能分开提。格式改动与逻辑改动分开提。
 
-在 GitHub 上点击 "Fork" 将仓库复制到你的账号。
+## 分支与 PR
 
-### 2. 创建功能分支
-
-```bash
-git clone https://github.com/<your-username>/linux-firewall-kmod.git
-cd linux-firewall-kmod
-git checkout main
-git checkout -b feature/your-feature-name
-```
-
-### 3. 开发与提交
+主干分支是 `master`。CI 触发条件写在
+`.github/workflows/ci.yml` 的 `on.push` 与 `on.pull_request`。
 
 ```bash
-# 编写代码...
+git checkout master
+git pull
+git checkout -b feature/short-name
 
-# 确保测试通过
-make test
-
-# 提交变更
-git add <files>
-git commit -m "feat(scope): your commit message"
+# 开发，跑门禁
+git add <文件>
+git commit -m "feat(daemon): 描述"
+git push origin feature/short-name
 ```
 
-### 4. 推送并创建 PR
+在 GitHub 上向 `master` 发 Pull Request。
+模板见 [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md)。
+维护者会在 48 小时内响应。合并后功能分支可删。
 
-```bash
-git push origin feature/your-feature-name
-```
+### PR 检查清单
 
-在 GitHub 上向本仓库的 `main` 分支发起 Pull Request。
+- [ ] 上面六条门禁都跑过，输出贴进 PR。
+- [ ] 只改了本 PR 声明范围内的文件。
+- [ ] 新功能有对应测试；边界情况至少覆盖一个。
+- [ ] 契约、生成物、实现、文档四者一致。
+- [ ] 没有留下调试代码、`TODO`、`FIXME`。
+- [ ] 没有硬编码的路径、端口、凭据。
+- [ ] 文档同步更新（改了接口或配置字段时）。
+- [ ] 提交信息符合上表类型。
+- [ ] 没提交任何密钥或明文凭据。
 
-### 5. 代码审查
+## 评审看什么
 
-维护者会在 48 小时内响应。审查通过后即可合并。
+| 维度 | 关注点 |
+|------|--------|
+| 正确性 | 判定方向对不对；空值、越界、错误返回都处理了没有 |
+| 并发 | RCU 读端与写端的配合；释放路径会不会提前回收 |
+| 包路径 | 钩子里有没有分配、阻塞、系统调用 |
+| 契约 | 字段、权限、状态码、错误码是否四处一致 |
+| 失败语义 | 拿不到数据时报空还是报零；会不会把未知说成结论 |
+| 兼容性 | 内核 API 断层按存在性适配了没有 |
+| 构建 | 有没有绕过 Makefile；产物落点对不对 |
+| 可读性 | 命名看得出用途；函数只做一件事 |
+| 测试 | 关键路径有测试；没删测试、没跳过测试 |
+| 安全 | 输入校验、权限位、凭据处理 |
 
-### 6. 合并
+几条硬性回退理由：
 
-PR 合并后，功能分支可安全删除。
+- 门禁没过。
+- 改了测试预期来迁就实现。
+- 契约改了但生成物没重跑。
+- 引入 cgo 依赖。
+- 在文档里留下没跑过的命令输出。
 
-## PR 检查清单
+## 报告问题
 
-发起 PR 前请确认：
-
-- [ ] 代码通过所有测试（`make test`）
-- [ ] 遵循 Conventional Commits 提交规范
-- [ ] 新功能已添加对应测试用例
-- [ ] 文档已同步更新
-- [ ] PR 描述清晰，说明变更内容和原因
-- [ ] 无敏感信息泄露（密钥、配置等）
-
-## 审查标准
-
-| 维度 | 要求 |
-|------|------|
-| 正确性 | 逻辑正确，无已知 Bug |
-| 性能 | 内核态代码避免阻塞操作 |
-| 安全 | 输入严格验证，无内存泄漏 |
-| 可读性 | 命名清晰，注释充分 |
-| 测试 | 覆盖正常路径和边界情况 |
+- Bug 用 [.github/ISSUE_TEMPLATE/bug_report.md](.github/ISSUE_TEMPLATE/bug_report.md)：
+  写清内核版本、发行版、项目版本、复现步骤、期望与实际、相关日志。
+- 功能请求用
+  [.github/ISSUE_TEMPLATE/feature_request.md](.github/ISSUE_TEMPLATE/feature_request.md)：
+  写清使用场景、替代方案、期望行为。
+- 安全问题走 [SECURITY.md](SECURITY.md) 的渠道，不要开公开 Issue。
 
 ## 行为准则
 
-- 尊重每一位贡献者，使用友好、包容的语言
-- 接受建设性批评，专注于问题而非个人
-- 维护社区和谐，禁止人身攻击或歧视性言论
-- 发现不当行为请联系项目维护者
+- 讨论针对问题，不针对人。
+- 反对某个方案时给理由和替代方案。
+- 尊重他人的时间，评审意见一次说清。
 
 ## 许可证
 
-本项目采用 [MIT License](LICENSE) 开源协议。提交代码即表示你同意将代码以 MIT License 发布。
-
-## 联系方式
-
-- **GitHub**: [@SnowCore8](https://github.com/SnowCore8)
-- **邮箱**: snowcore8@gmail.com
-- **Issues**: [提交问题或建议](https://github.com/SnowCore8/linux-firewall-kmod/issues)
+本项目用 [MIT License](LICENSE)。提交代码即同意以 MIT 发布。

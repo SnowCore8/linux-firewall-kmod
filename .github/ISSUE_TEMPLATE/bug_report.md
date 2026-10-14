@@ -1,127 +1,121 @@
 ---
-name: "🐛 Bug 报告"
-about: "报告一个 bug 帮助我们改进"
+name: "Bug 报告"
+about: "报告一个可复现的问题"
 title: "[BUG] "
 labels: bug
 assignees: ""
 ---
 
-## 紧急程度
+## 一句话现象
 
-<!-- 请选择此 Bug 的严重程度 -->
+<!-- 说清哪里坏了。例：解封后这个 IP 还在丢包。 -->
 
-- [ ] **阻塞** - 系统完全不可用，无法启动或崩溃
-- [ ] **严重** - 核心功能失效，但有临时绕过方案
-- [ ] **一般** - 部分功能异常，不影响主要使用
-- [ ] **轻微** - UI/体验问题或边界情况
+## 严重程度
 
-## Bug 描述
+按 `STANDARDS.md` 的定级选一项。
 
-<!-- 用一两句话清晰简洁地描述 bug 是什么 -->
+- [ ] Critical：崩溃、封禁失效、日志解析完全错误
+- [ ] High：功能异常但有绕过办法，或性能掉得明显
+- [ ] Medium：影响局部功能，暂时无害
+- [ ] Low：表述、样式、命名
 
-## 环境信息
+## 环境
 
-| 项目 | 值 |
-|------|-----|
-| **操作系统** | [e.g. Ubuntu 22.04, CentOS Stream 9] |
-| **内核版本** | [e.g. 5.15.0-91-generic，运行 `uname -r` 获取] |
-| **Firewall 版本** | [e.g. v2.0.1，运行 `git describe --tags` 获取] |
-| **GCC 版本** | [e.g. gcc 11.4.0，运行 `gcc --version` 获取] |
-| **硬件架构** | [e.g. x86_64, aarch64] |
+| 项 | 值 |
+|----|-----|
+| 发行版 | 例：Ubuntu 24.04 |
+| 内核 | `uname -r` 的输出 |
+| 架构 | `uname -m` 的输出 |
+| 本项目版本 | `git describe --tags` 的输出 |
+| 内核模块版本 | `sudo cat /sys/module/firewall/version` |
+| 模块是否已加载 | `sudo lsmod` 的输出里有没有 `firewall` |
 
 ## 版本确认
 
-- [ ] 我已确认使用的是**最新版本**（或 main 分支最新提交）
-- [ ] 我已搜索过现有 Issue，未找到相同问题
+- [ ] 用的是最新版或 main 分支最新提交
+- [ ] 搜过现有 Issue，没有重复
 
 ## 复现步骤
 
-<!-- 请提供完整、可复现的操作步骤，尽量精简到最小步骤 -->
+写最小步骤。每步能照做。
 
-1. 加载内核模块（如有自定义参数请提供）：
+1. 编模块与守护进程：`make build-quick`
+2. 加载模块，带上自定义参数（没有就删掉方括号）：
    ```bash
    sudo insmod build/kernel-module/firewall.ko [参数=值]
    ```
-2. 启动守护进程：
+3. 起守护进程：
    ```bash
    sudo ./build/daemon/firewall-daemon -c config/default.yaml
    ```
-3. [描述你的具体操作，例如：发送特定类型的网络请求]
-4. [描述观察到的错误现象]
+4. 具体操作：<!-- 例：从另一台机器对 22 端口做 10 次失败登录 -->
+5. 观察到的现象：<!-- 例：30 秒后 /proc/firewall/bans 仍没有这个 IP -->
 
 ## 最小复现配置
 
-<!-- 请提供能够复现此 bug 的最小配置文件，移除无关规则 -->
+贴一份能复现问题的 YAML。删掉无关 jail。
 
 ```yaml
-# 最小可复现配置
-rules:
-  - name: example
-    # ...
+defaults:
+  # ...
+jails:
+  # ...
 ```
 
-## 内核模块参数
+## 模块参数
 
-<!-- 如果加载时传入了模块参数，请在此列出 -->
+加载时传了参数就列出来。没传就留空。
 
-| 参数名 | 值 | 说明 |
-|--------|-----|------|
-| [e.g. debug] | [e.g. 1] | [e.g. 开启调试模式] |
-| | | |
+| 参数名 | 值 |
+|--------|-----|
+| 例：fw_ban_time | 600 |
 
-<!-- 可通过 `sudo cat /sys/module/firewall/parameters/*` 查看当前参数值 -->
+当前实际值：`sudo cat /sys/module/firewall/parameters/*`
 
 ## 预期行为
 
-<!-- 清晰描述你期望发生的结果 -->
+<!-- 你本来看到什么。 -->
 
 ## 实际行为
 
-<!-- 清晰描述实际发生的结果，如有错误截图或输出请附上 -->
+<!-- 真正看到什么。有截图或原始输出就附上。 -->
 
-## 日志输出
+## 日志
 
-<!-- 请收集并提供以下日志，帮助定位问题 -->
+按顺序贴，缺哪条说明为什么缺。
 
 <details>
-<summary>日志收集命令（点击展开）</summary>
+<summary>收集命令</summary>
 
 ```bash
-# 1. 内核环形缓冲区日志（最近 100 条 firewall 相关日志）
+# 1. 内核侧
 dmesg -T | grep -i firewall | tail -n 100
 
-# 2. 守护进程日志（最近 200 条）
+# 2. 守护进程侧（用 systemd 时）
 sudo journalctl -u firewall-daemon -n 200 --no-pager
 
-# 3. 内核模块统计信息
+# 3. 内核统计，13 个计数器
 sudo cat /proc/firewall/stats
 
-# 4. 内核模块当前规则列表
-sudo cat /proc/firewall/rules
+# 4. 当前封禁列表
+sudo cat /proc/firewall/bans
 
-# 5. 被 ban 的 IP 列表
-sudo cat /proc/firewall/banned_ips
+# 5. 当前白名单
+sudo cat /proc/firewall/whitelist
+
+# 6. 运行时配置与条目计数
+sudo cat /proc/firewall/config
 ```
 
 </details>
 
-```
-# 请粘贴上述命令的输出（如内容过长可使用 Gist 或附件）
-```
-
-## 配置文件
-
-<!-- 提供完整的配置文件，或脱敏后的关键部分 -->
-
-```yaml
-# 你的 firewall 配置（注意脱敏，不要包含真实 IP 或密钥）
+```text
+# 粘贴输出。太长就用附件或 Gist。
 ```
 
 ## 其他信息
 
-<!-- 添加任何其他有助于解决问题的信息，例如：
-- 网络拓扑或部署架构
-- 触发频率（必现 / 偶现 / 特定条件下触发）
-- 是否尝试过回退到旧版本
-- 相关的系统配置（iptables/nftables 规则等）
--->
+- 必现还是偶现？概率大概多少？
+- 什么时候开始的？改过什么？
+- 装过别的封禁类软件或自定义 iptables、nftables 规则吗？
+- 回退到旧版本还复现吗？
