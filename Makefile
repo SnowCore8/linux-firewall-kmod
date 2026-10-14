@@ -114,8 +114,11 @@ daemon: $(WEBUI_STATIC_DIR) | $(DAEMON_SRCS_DIR)/cmd/firewall-daemon/main.go
 	@# 有东西可嵌；go build 本身不检查面板内容，缺面板时守护进程启动会报错。
 	@echo "  GOC     building Go daemon from $(DAEMON_SRCS_DIR)"
 	@mkdir -p $(DAEMON_BUILD_DIR)
+	@# -o 必须给绝对路径：本行在 $(DAEMON_SRCS_DIR) 里执行，相对写法会把二进制写到
+	@# src/daemon/build/daemon/ 下（Go 还会顺手建出这个目录），仓库根的 $(DAEMON_BIN)
+	@# 始终是空的，install / deb 与 CI 的「编译产物检查」都拿不到文件。
 	@cd $(DAEMON_SRCS_DIR) && go build -ldflags "-s -w=1" \
-		 -o $(DAEMON_BIN) ./cmd/firewall-daemon
+		 -o $(PWD)/$(DAEMON_BIN) ./cmd/firewall-daemon
 
 # 编译前置：golangc 保证有 Go 1.23+，没有则先安装（go 随 PATH 时直接调用）
 $(DAEMON_SRCS_DIR): $(GOC)
