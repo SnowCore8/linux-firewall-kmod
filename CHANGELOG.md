@@ -2,18 +2,119 @@
 
 所有重要的项目变更记录都在此文件中。
 
-## [Unreleased] - 守护进程日志改为整行原子写入
+## [Unreleased] - 2026-10-14 构建链、内核兼容与文档对齐
+
+本轮把「CI 红着但没人看得见」的几处一次性修直：CI 自 2026-09-18 后首次六任务全绿，并且第一次在能
+`insmod` 的机器上真跑了集成套件。
 
 ### 修复
-- **JSONL 日志行撕裂** - 旧实现有两个问题：`slog_json` 的 `serde_json::Serializer` 逐 token 对文件写入（实测每条记录约 69 次 `write()`，交错粒度细到字段级）；`slog_async` 的默认通道（`chan_size` 128、非阻塞）在通道满或进程 `exit` 时**整条丢弃**记录（实测单进程 20 万条仅落盘约 1.7%）。多个写者（重启期间新旧进程并存、pytest 起的实例）追加同一文件时，产出「两条记录并成一行 + 空行」的非法 JSON 行。改为自定义 `AtomicFileDrain`：每条记录在内存中编码为完整一行（**含换行**），在进程内 `Mutex` 保护下**单次** `write_all` 写出。换行必须与正文同处一次 `write()`，否则跨进程写者仍会插进中间
+- **CI 编译任务：产物落点错** - `daemon` 目标先 `cd src/daemon` 再 `go build -o build/daemon/firewall-daemon`，
+  相对路径按当前工作目录解析，二进制被写进 `src/daemon/build/`，仓库根的产物始终为空（`make install`、
+  deb 与 CI 的产物检查都取后者）。改为 `-o $(PWD)/$(DAEMON_BIN)`。（`00f987f0`）
+- **CI 编译任务：面板目标循环依赖** - `frontend` 与 `src/daemon/web_ui/static` 互为依赖，make 丢弃该依赖
+  （日志 `Circular ... dependency dropped`）导致 `npm ci` 从不执行。现在面板产物目标只依赖真实输入
+  （`frontend-install` + 前端源文件清单）。同时 `clean` 里的 `go clean -cached` 是非法参数，会让 `make clean`
+  以 exit 2 中断，改为 `$(GOC) clean`。（`6343770`）
+- **前端依赖与 JSX 运行时** - `frontend/package.json` 的 `dependencies` 整段丢失，CI 的 `npm ci` 按
+  package.json 裁剪安装，react/antd-mobile 装不上；`tsconfig` 的 `jsxImportSource` 又指向自研 `@fw/jsx`
+  （JSX 求值成 DOM 节点），而入口用的是 `react-dom/client`，两套类型体系对撞（本地 `tsc` 486 个错）。
+  现按 package-lock 根节点补回依赖、统一到 React，并修掉被这堵墙挡住的 5 个真实类型错误。（`7b82e1c`）
+- **`vite build` 会删掉 go:embed 的持有文件** - `emptyOutDir: true` 清空输出目录时连已入库的
+  `src/daemon/web_ui/static/assets.go` 一起删除，随后 `go build` 因包内无 `.go` 文件失败。改为
+  `emptyOutDir: false` + 构建前 `find … ! -name assets.go -delete` 清陈旧产物。（`6343770`）
+- **契约请求体的可选字段** - 生成器把请求侧 `Option<T>` 一律写成 `field: T | null`（必填可空），
+  于是 `PUT /api/v1/config` 的局部更新被迫凑齐 19 个字段。现生成 `field?: T | null`，与 Go 侧
+  「字段缺席与 null 都合法」的反序列化一致。（`e5a68dd`）
+- **内核 API 断层：`timer_container_of`** - 该名字是较新内核的改名，Ubuntu 24.04 GA 的 6.8.0-146 只有旧名
+  `from_timer`，编译直接停在 `implicit declaration`。按「宏是否存在」适配，不比 `LINUX_VERSION_CODE`
+  （发行版会 backport，按版本号判断在这类内核上正好判反）。（`1096a920`）
+- **内核 API 断层：per-CPU 32KiB 上限** - 速率槽表原先一次 `alloc_percpu` 84KB（实测
+  `sizeof(fw_rate_pcpu)=86016`），`mm/percpu.c` 对超限请求 WARN 并返回 NULL：6.8 上
+  `illegal size (86016) or align (64) for percpu allocation` → 初始化失败 `-12` → `insmod` 报
+  `Cannot allocate memory`，模块在该内核根本加载不进去。现按 128 槽 × 4 块分别申请，索引空间仍是
+  0..511、`slot_idx` 语义与探测回绕逻辑不变。（`6797b851`）
 
 ### 变更
-- **日志字段顺序** - 由 `serde_json::Map`（默认 `BTreeMap`，字典序）改为按插入顺序手工编码，恢复文档承诺的 `ts → level → msg → version → 其他`
-- **日志类型契约** - `f32` 按 `f64` 表示（`0.1f32` 输出 `0.10000000149011612`），`u128`/`i128` 落为字符串；日志 sink 是 `std::fs::File`，不再调用无实际作用的 `flush()`
-- **依赖** - 移除 `slog-async`、`slog-json`、`slog-term`（`slog-term` 本已无引用）
+- **CI 依赖补齐** - 「运行测试」任务此前连 `pytest` 都没有（`No module named pytest`），补装
+  `python3-pytest` 与 `python3-yaml`；「浏览器端到端测试」的 `setup-node` 缓存指向被 `.gitignore` 排除的
+  根 `package-lock.json`，该锁文件现改为入库（`npm ci` 也依赖它）。（`90585ab0`、`d2db83e2`）
+- **依赖告警** - frontend `source-map-js` 1.2.1→1.2.2；docs 侧 `overrides` 补 `brace-expansion ^1.1.21`
+  与 `moment ^2.31.0`。`braces`（latest 3.0.3 仍在漏洞区间）与 `sprintf-js`（无 first_patched）上游没有
+  可用补丁，按可接受风险在 Dependabot 记处置理由，面板 open 归零。（`621a269`）
+- **代码风格** - 内核 C 源码 17 处 clang-format（18）违规清零。（`a4ef7e4`）
+- **README 定位** - 项目不再以「内核版 fail2ban」自我描述；README 的概述改写为可验收的目标三条判据
+  （防护真的在跑 / 装得进普通 Linux / 分得开扫描器与正常访客）+ 非目标 + 内核版本口径。（`3a664275`）
+- **配置正则编译失败被当致命错误** - 契约说「正则缺失或全部编译失败」是**告警 + 该 jail 退化为
+  关键字回退**，实现却在四条路径（启动、SIGHUP、文件热重载、PUT /config）上把它当中止理由，
+  虚机上 6 条用例连带失败（test_09 自定义配置目录、test_10 日志不存在、test_20 启动与崩溃接管）。
+  `jail.Finalize` 现在只把「配置校验不通过」返回 error，正则失败返回 warnings，四个调用点逐条告警
+  后照常运行。（`15357dfe`）
+- **`metrics_port` 与 `metrics_bind_address` 没有消费者** - HTTP 面绑的是 `Config.HTTPAddress`，
+  而该字段只在 `Default()` 赋过一次值，YAML 没有任何键能改它：自起 daemon 的测试把空闲端口写进
+  配置却永远等不到就绪（test_18 两条 setup 报「端口未在 8.0s 内就绪」），`config/default.yaml`
+  声明的 `0.0.0.0`（局域网开面板）被静默降级成只听回环。删掉该字段，改为 `Config.ListenAddress()`
+  现场合成；`metrics_port: 0` 按契约关闭整个 HTTP 面。热重载不重绑端口，故地址变了时留一条告警。
+  **这是行为变更**：用 `config/default.yaml` 部署的进程从此真的监听 `0.0.0.0:9119`。（`39cb3ea4`）
+- **第二个实例不退出也不停手** - 单实例约束在内核（portid 独占 + 注册前探活），守护进程这边只把
+  「注册被拒」记进快照并原地重试，于是第二个进程照样开面板、显示「自己下发过的那一小撮」，而它的
+  每一条下发都被内核丢弃。事件泵新增 `ClaimLease`：只有内核**明确拒绝**才让组合根以非零码退出，
+  链路问题（超时、模块刚重载）仍交给续约周期。（`e16a0319`）
+- **集群网段封禁静默不下发** - 判定是对的，下发错了：线上原因写成 `jail + Summary()`（中文带 CIDR
+  与统计，72 字节），而 `BanIp.reason` 是 `str[32]`，编码阶段报错，封禁表始终为空（test_22.3）。
+  生产者改发 `<jail>: cluster scan`，投递侧加 `contract.ClampFixedString` 兜底——标签超长不该把
+  封禁判死，日志/SSE/历史库仍留原文。（`f0398232`）
+
+### 文档
+- **全库文档重写并去参照系** - README、AGENTS、CONTRIBUTING、SECURITY、STANDARDS、两个 issue
+  模板与 docs/zh 全部 25 篇同步到现状；删除 `docs/zh/migration/from-fail2ban.md`，SUMMARY 与
+  book.json 同步。（`b8f86664`、本轮 docs(zh) 提交）
+- **删掉没有实现的承诺** - 「所有 unsafe 块均带 SAFETY 注释」（纯 Go，无 cgo）、PIE/RELRO、
+  URL 编码检测、API 限速；信任边界改为逐条带出处（procfs 3×0600 + 10×0400 按虚机 `ls -l` 实测、
+  认证失败 10 次锁 60 秒出自 `contract/http.fwidl`）。
+- **`_guard_local_install` 改述为现状** - 该目标写好了「禁止直接部署到本机」的拒绝文案，但没有
+  挂进 `install` / `uninstall` 的依赖链，`make -n install` 看不到任何输出，旧文档却写成「会被拒」。
+- **包描述与模块 description** - `apt show` / `modinfo` / PWA manifest 四处对外文案同步，并删掉
+  「1024/4096 容量的哈希表」（上限是模块参数）、`PCRE2 + JIT`（实际是 Go `regexp`）、
+  「SQLite 持久化永久封禁」（永久封禁在内核表，重启由状态快照还原）。（`97c34951`）
+
+### 验证
+- CI run `38574040800`：代码质量检查 / 契约一致性 / 前端构建 / 编译 / 运行测试 / 浏览器端到端测试 全部 success。
+- 6.8.0-146 虚机：`make kernel-module` 通过、`insmod` 成功、`/proc/firewall/` 13 个条目齐全、dmesg 无
+  percpu WARN；7.0.0-38：`make kernel-module` 通过。
+- 同一虚机首次真跑完整集成套件（`sudo python3 -m pytest tests/`）：64 passed / 5 failed / 26 skipped /
+  2 errors，用例数量与结果一律以命令输出为准。其中 6 条同一根因（配置后处理把 warn 当致命错误），
+  修复在途；`test_22` 集群判定那条为独立的待查项。
+- **修复后同一套件复跑：74 passed / 23 skipped / 0 failed / 0 errors（280.16s）**。23 条跳过全部是
+  「守护进程未运行」（test_16 8 条、test_17 7 条、test_15 4 条、test_19 3 条、test_12 1 条数据库缺失）：
+  这几套要求**外部已装好并起好** daemon，不像 test_18/20/21/22 那样自起进程。
+- **补跑 daemon-up 形态（同一虚机手工起 daemon 后跑这五套）**：14 passed / 12 failed / 2 skipped。
+  其中 11 条是同一处耦合，不是功能坏：仓库的 `config/default.yaml` 带着 `metrics_username` /
+  `metrics_password`，照它装好的进程启用了 Basic 认证，而这几套用裸 `curl` 取 `/metrics` 与
+  `/api/v1/*`，于是 `/api/v1/stats 返回 HTTP 401`、`SIGHUP 未触发重载（计数仍为 0.0）`、
+  `firewall_netlink_* 指标缺失` 全是读不到而非不存在。**待定**：夹具按配置带认证，还是测试环境
+  装一份不带凭据的配置。
+  另 1 条是真 bug 并已修：`/api/v1/nonexistent` 返回 303（根路径重定向是子树模式，把未匹配
+  路径全接住了），契约期望框架自产的 404（`156dba62`）。修完这一条，daemon-up 形态是
+  15 passed / 11 failed / 2 skipped，剩下的 11 条全部指向同一处认证耦合。
+- 本地守护进程门禁：`gofmt -l` 为空、`go vet` 通过、`go test ./...` 全绿、`make contract-drift` 与
+  `make contract-check` 通过（其中 `http_contract.ts tsc --noEmit` 由跳过转为 OK）。
+- 文档自检：32 个 md 文件相对链接 0 条断链；`fail2ban` 与 Rust 时代词汇在 README/AGENTS/
+  CONTRIBUTING/SECURITY/STANDARDS 与 docs/zh 命中 0 行；`yaml-config.md` 的字段表与 `parser.go`
+  的 64 个 yaml tag 双向比对零缺失。
+
+## [Unreleased] - 守护进程日志：整行一次写出
+
+### 修复
+- **JSONL 行撕裂** - 每条记录在内存里拼成完整一行（含换行，`internal/logger/json.go`），再由
+  `fileSink.Write` 在进程内 `Mutex` 保护下**单次**写入（`internal/logger/file.go`）。轮转与写入共用同一把锁：
+  改名、开新文件、重置字节计数都在锁内完成，并发写者看不到中途 inode。换行必须与正文同处一次写入，
+  否则多写者（重启期新旧进程并存、pytest 起的实例）追加同一文件会拼出「两条记录并成一行 + 空行」的非法行。
+- **字段顺序** - 手工编码按插入顺序输出，守住文档承诺的 `ts → level → msg → 其余`。
 
 ### 测试
-- **logger 单元测试** - 新增 4 项：编码结果为单行合法 JSON（正文换行被转义）、字段顺序为插入序、`ts` 为 RFC3339 UTC（`Z` 结尾）、多写者原子性（4 进程 × 2000 行追加同一文件，断言每行均可解析）
+- `internal/logger` 的 `_test.go` 覆盖：并发写保持整行（`TestConcurrentWritesStayWhole`）、多进程追加保持
+  整行（`TestMultiProcessAppendStaysWhole`）、轮转后每片仍是合法 JSONL（`TestRotatedSlicesRemainValidJSONL`）、
+  目的地降级与 fanout 行为；用例数量以 `go test ./internal/logger` 输出为准。
 
 ## [Unreleased] - 前端重建：React 19 + TypeScript + Vite + antd-mobile（移动优先 + PWA）
 
@@ -24,7 +125,7 @@
 - **`.webmanifest` MIME** - `get_static_asset` 补 `.webmanifest` → `application/manifest+json`（原先落到 `application/octet-stream`）
 
 ### 变更
-- **构建链路改为 npm/vite** - `make frontend` 为 `npm ci` + `vite build`，产物输出到 `src/daemon/web_ui/static/` 供 `rust-embed` 嵌入；`make daemon` / `make all` 会先构建前端。`make frontend-typecheck` 走 `tsc --noEmit`（不再有 trunk / WASM 工具链）
+- **构建链路改为 npm/vite** - `make frontend` 为 `npm ci` + `vite build`，产物输出到 `src/daemon/web_ui/static/` 供 `go:embed` 嵌入（持有文件是该目录下的 `assets.go`）；`make daemon` / `make all` 会先构建前端。`make frontend-typecheck` 走 `tsc --noEmit`（不再有 trunk / WASM 工具链）
 - **CI 前端 job** - Node 22 + `npm ci` + `tsc --noEmit` + `vite build`，并断言产物存在（`index.html` / `app.js` / `style.css` / `sw.js` / `manifest.webmanifest` / 192 与 512 图标）、校验 manifest 必需字段与 `sw.js` 语法
 - **安全头中间件** - 已自行声明 `Cache-Control` 的响应不再被统一覆盖成 `no-store`，否则 `/sw.js` 的 `no-cache` 会被吃掉、SW 更新检查失去回源保证；`/sw.js` 纳入 Web UI 的宽松 CSP 范围，避免 `default-src 'none'` 被当作 Service Worker 自身策略而禁掉其内部 fetch
 - **`.gitignore`** - 前端产物规则收敛为 `src/daemon/web_ui/static/*`（含 `sw.js` / `manifest.webmanifest` / `icons/`），`node_modules/` 为 Node 依赖；`frontend/package-lock.json` 保持入库以配合 `npm ci`
