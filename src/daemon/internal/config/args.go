@@ -42,8 +42,9 @@ EXAMPLES:
     firewall-daemon --rollback
 
 CONFIGURATION:
-    配置文件为 YAML 格式, 必须包含 'jails' 列表。
-    每个 jail 至少需要 'name' 和 'log_file' 字段。
+    配置文件为 YAML 格式, 必须包含 'jails' 映射。
+    jails 的每个键就是 jail 名, 该 jail 至少需要 'log_files' 字段;
+    其余字段省略时取 defaults。
 
     目录模式下, 加载目录下所有 .yml/.yaml 文件 (按名字母序合并)。
     后加载的文件可覆盖先加载的配置。
