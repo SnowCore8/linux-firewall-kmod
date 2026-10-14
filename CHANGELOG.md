@@ -2,7 +2,7 @@
 
 所有重要的项目变更记录都在此文件中。
 
-## [Unreleased] - 2026-10-14 构建链、内核兼容与文档对齐
+## [Unreleased] - 2026-10-14 ~ 10-15 构建链、内核兼容、文档对齐与守护进程落地
 
 本轮把「CI 红着但没人看得见」的几处一次性修直：CI 自 2026-09-18 后首次六任务全绿，并且第一次在能
 `insmod` 的机器上真跑了集成套件。
@@ -38,6 +38,25 @@
   这项能力在旧实现里有，迁到 Go 时丢了，而 E2E 的内容类型断言一直空跑（runner 加载不了模块 → 整套跳过）。
   内核侧解掉 per-CPU 上限后 E2E 第一次真跑就把它暴露了。改在包初始化处注册扩展名，让扩展名推断仍是
   唯一决定这个头的地方。（`4c461d12`）
+- **SIGTERM 之后要等满每段关停超时** - 组合根给 `http-server` 登记了关停令牌却没人看它，
+  `http.Server.Stop` 一个调用点都没有：信号到达后那个执行体仍卡在 `Serve` 里，监督器只能等满它自己的
+  5 秒并记「执行体关停未在超时内完成」，旧进程带着监听套接字迟迟不退，紧接着的重启撞
+  `bind: address already in use`。现在执行体同时等「Serve 返回」与「停机令牌」，置位时先停两条 SSE 流
+  再关服务器（`Shutdown` 要等连接变空闲，而 SSE 连接永远不空闲）；`SSEStream/SSEBroker.Stop` 可重复调用
+  并与扇出循环在同一把锁下互斥（原先 `select` 可能在 stopCh 已关后仍向已关闭的通道发送而 panic），
+  `Server.Stop` 预算用尽后强制 `Close`。（`561650d3`）
+- **`-C` 目录模式的配置热重载拿到的是空路径** - 随包 systemd 单元用 `-C /etc/firewall` 启动，而组合根
+  把 `cfg.ConfigFile` 交给重载器；目录加载会显式清空这个字段，于是每次 SIGHUP 都停在
+  `stat : no such file or directory`——改了文件、重发了信号，配置一个字没变，重载计数器也永远不自增
+  （集成规格 17.4 的现场）。改为组合根算出唯一的「配置来源」，PUT /config 与重载器共用；顺带把
+  `Rollback` 的备份位置改成「配置来源旁边」，目录路径再取一次 Dir 会爬到父级去。（`ef685130`）
+- **出厂默认写 plain 日志** - 集成规格 `test_15.4` 与 `docs/zh/operations/monitoring.md` 都说守护进程
+  写 JSON Lines，而 `Default().LogFormat` 是 plain、`config/default.yaml` 没写 `log_format`：照默认配置
+  部署的进程输出的是一行行 `time=… msg=…`，两处说法同时落空。默认改为 `json`，`plain` 仍是合法取值。
+  **这是行为变更**：不改任何配置就部署的进程，日志文件格式随之改变。（`3172c3a4`）
+- **`--help` 描述的 schema 与实际不符** - 帮助文本说 jails 是「列表」且每个 jail 至少要有 `name` 字段，
+  实际 `parser.go` 里 jails 是 `map[string]yamlJail`、名字就是键，`jail.Validate` 唯一的必填项是
+  `log_files`。照旧文本写配置的人会多塞一个被严格模式判为未知键的 `name`。（`ebe428fa`）
 
 ### 变更
 - **CI 依赖补齐** - 「运行测试」任务此前连 `pytest` 都没有（`No module named pytest`），补装
@@ -75,6 +94,28 @@
   键（显式写空串就是关库，不被当成「没写」而回落默认），内置默认仍为关；`config/default.yaml` 打开它
   （`/var/lib/firewall/history.db`，保留 7 天），`scripts/e2e-daemon.sh` 的临时配置同步带上。
   **这是行为变更**：按 `config/default.yaml` 部署的进程从此会写历史库。（`5509e5b3`）
+- **`trusted_ips` 从此真的有消费者** - 配置文件那段注释承诺「启动时自动加入内核白名单，防止误封」，
+  实现里却只有解析与保存：`cfg.TrustedIPs` 没有任何读取者，以为自己不会被封的运维实际照封。组合根在拿到
+  内核守护进程租约之后逐条下发（注册之前内核丢弃一切指令），裸 IP 与 CIDR 都接受，键的归一化收进
+  `internal/bans/whitelist_prefix.go` 与 HTTP 写入侧共用一份；一条写错只跳过并告警，不中止启动。
+  只在启动时下发一次，改这一段要重启。（`da7b9253`）
+- **删掉没有消费者的 Storage 配置组** - `RetentionConfig` / `WriterConfig` / `StorageConfig` 及其
+  Default 函数：`parser.go` 里没有对应 YAML 键（写了会被严格模式拒），全仓库也没有一处读 `cfg.Storage`；
+  保留策略真正生效的旋钮是 `defaults.history_retention_days`。默认值表里那两条断言随实现一起删除。
+  （`9b76dc20`）
+
+### 测试
+- **夹具按部署配置带上 Basic 认证** - 守护进程在位时那五套 16 passed / 11 failed，11 条全是 401：
+  `config/default.yaml` 带着凭据，装好的进程启用了认证，而用例用裸 `curl` 取 `/metrics` 与
+  `/api/v1/**`。**断言一字未改**，改的是取数通道：`conftest.daemon_credentials()` 与
+  `daemon_http_port()` 同源，从部署配置读凭据；`run_curl()` 经 `curl --config -` 从 stdin 注入
+  `Authorization: Basic`（`-u` 与 `?access_token=` 都会把凭据放进 argv，而 pytest 失败时会打印命令行）；
+  `http_request()` 成为唯一入口，test_16 的 `curl_get`、test_19 的 `_curl`、test_21.3 自带的那段
+  `subprocess.run(["curl", …])` 都收敛过来。凭据不落任何文件、测试常量或断言消息。（`cbfc99a8`）
+- **新增的单元规格** - 关停：`internal/http/shutdown_test.go` 四条（流停后服务器立刻收敛、预算用尽时
+  强制关闭且不留下还在忙的连接、关停中的流回 503 且不占名额、broker 重复 Stop 安全）；
+  停机令牌：`internal/runtime/shutdown_test.go` 两条；可信地址：`cmd/firewall-daemon/trusted_ips_test.go`
+  四条与 `internal/bans/whitelist_prefix_test.go` 三条；默认日志格式：`TestDefaultConfigWritesJSONLines`。
 
 ### 文档
 - **全库文档重写并去参照系** - README、AGENTS、CONTRIBUTING、SECURITY、STANDARDS、两个 issue
@@ -93,6 +134,19 @@
 - **文档措辞撞了契约的旧缺陷锚点** - `make contract-check` 报「`PROC_CONFIG_DOC_SAYS_READONLY`
   status=fixed 但旧文档现场仍在」：重写后的 procfs 文档在讲展示行数上限时写出「只读文件」四个字，
   被按子串匹配的锚点当成旧缺陷回潮。改成同文其余处对这批条目的叫法「0400 条目」，语义不变。（`5b2edf67`）
+- **内核口径改成实测表** - README 的平台徽章原写 `Linux 5.x | 6.x`，而 5.x 从未验证过：换成实测范围
+  `Linux 6.8 loaded | 7.0 builds`，「内核版本口径」一节改为三行表（6.8.0-146 编译 + insmod + 13 条目 +
+  dmesg 无 percpu WARN；7.0.0-38 仅编译；5.x 未验证），并明写「6.x 不等于每个 6.x 内核都验证过」；
+  AGENTS.md 里那句「CI 徽章写的 5.x 只是意图」随徽章一起改掉。（`250e3ffa`）
+- **deb 元数据去掉不成立的说法** - `debian/changelog` 里的 PCRE2 + JIT、SQLite 持久化永久封禁、
+  内核版 fail2ban 换成有出处的现状（Go 标准库 `regexp`、每 jail 最多 10 条正则、容量是模块参数、
+  永久封禁在内核表并由 `state_file` 快照还原）；版本头与日期同步到 v2.2.0（原 `2.0.0-1` 与
+  「Mon, 05 May 2026」这个不存在的星期几一起修掉）。同时记下 `debian/` 服务的是
+  `dpkg-buildpackage` 那条路，`make deb` 走的 `build-deb.sh` 自己生成 `DEBIAN/control`。
+  （`250e3ffa`）
+- **配置文档随实现同步** - `yaml-config.md` 的 `trusted_ips` 行由「只被解析保存，没有消费方」改为实际
+  行为，`log_format` 的默认列由 `plain` 改为 `json`；`examples.md` 里那条「未验证：`src/daemon` 没有读
+  `cfg.TrustedIPs` 的地方」按现状改写；`config/default.yaml` 的可信地址段补一句「改这一段要重启」。
 
 ### 验证
 - CI run `38593578717`：契约一致性 / 前端构建 / 代码质量检查 / 编译 / 运行测试 / 浏览器端到端测试 六项全
@@ -116,6 +170,26 @@
   （根路径重定向是子树模式，把未匹配路径全接住了），契约期望框架自产的 404（`156dba62`）；
   清单与四个分析端点分别由 `curl -D -` 看到 `application/manifest+json`、带认证一律 200
   （`4c461d12`、`5509e5b3`）。
+- **认证耦合修掉后同一形态复跑：27 passed / 1 skipped / 0 failed（55.15s）**（虚机按 `/etc/firewall`
+  起真实进程）。唯一的 skip 是 `test_15.3 DDoS 自动封禁指标不存在`，用例自己按指标缺席跳过。
+  不带凭据访问 `/api/v1/stats` 与 `/metrics` 仍回 401，认证没有被削弱。
+- **停掉守护进程复跑完整套件：75 passed / 22 skipped（223.41s）**，比改前多通过一条——历史库那条
+  从「守护进程未创建数据库」跳过转为实际执行（`defaults.history_db_path` 现在真的建得起库）。
+- **关停实测（虚机）**：SIGTERM 到进程退出 **0.459 秒**（改前同一台机上信号到达后 5.4 秒才记
+  「执行体关停未在超时内完成 name=http-server」，日志里这类告警累计 7 条，新二进制运行期间零新增）；
+  带一条真实活跃的 `/api/v1/events` 流（首帧 `event: connected`，随后收到速率帧）时 SIGTERM→退出
+  **0.525 秒**，SSE 客户端随服务器关闭而结束；关停后立即重启第二次 `health=200`，本轮无
+  `bind: address already in use`。
+- **`-C` 目录模式热重载实测**：`sudo kill -HUP` 后日志出现
+  `{"msg":"configuration reloaded successfully"}`，本轮再无 `stat : no such file`
+  （历史日志里那 85 条都是改前的）。
+- **trusted_ips 实测**：在虚机 `/etc/firewall/default.yaml` 的 `trusted_ips:` 下临时加一条
+  `198.51.100.233`，重启进程后 `sudo cat /proc/firewall/whitelist` 显示
+  `198.51.100.233/32`（Total: 1 entries），日志
+  `{"msg":"trusted_ips 已下发内核白名单","configured":1,"pushed":1,"skipped":0}`；测完已还原该配置。
+  顺带证伪一条子代理报告：旧日志的相邻重复行对数为 0，「每条启动记录写两遍」不成立。
+- **默认日志格式实测**：新二进制按默认配置起进程后，`/var/log/firewall.log` 尾行是
+  `{"ts":"…","level":"INFO","msg":"入站主链路已就绪","version":"dev","sources":1,"jails":12}`。
 - 本地守护进程门禁：`gofmt -l` 为空、`go vet` 通过、`go test ./...` 全绿、`make contract-drift` 与
   `make contract-check` 通过（其中 `http_contract.ts tsc --noEmit` 由跳过转为 OK）。
 - 文档自检：31 个 md 文件相对链接 0 条断链；`fail2ban` / `leptos` / `pcre2` / Rust 时代词汇在
