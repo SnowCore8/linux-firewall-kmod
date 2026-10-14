@@ -202,6 +202,13 @@ func run(args []string) error {
 	// HTTP 服务器：API、SSE、Prometheus 指标。
 	var httpServer *http.Server
 	var sseBroker *http.SSEBroker
+	// 配置来源：单文件优先，其次目录。重载器与 PUT /config 必须认同一个来源——目录模式
+	// 会显式清空 cfg.ConfigFile（否则重载只吃其中一个文件），拿它当路径就 stat 到空串，
+	// 每次 SIGHUP 都停在「没有那个文件或目录」，改文件的人以为重载生效了。
+	configSource := cfg.ConfigFile
+	if configSource == "" {
+		configSource = cfg.ConfigDir
+	}
 	// api 要活在 if 之外：事件泵的域载荷镜像与执行体的 jails 变更通知都挂在它身上，
 	// 而这两处都在 HTTP 段之后装配。监听地址为空（metrics_port=0）时它是 nil，
 	// 两处注入都按缺席处理。
@@ -224,12 +231,6 @@ func run(args []string) error {
 			defer sseBroker.Stop()
 			logStream := http.NewLogsStream(logger)
 
-			// 配置路径：优先单文件，其次目录
-			configPath := cfg.ConfigFile
-			if configPath == "" {
-				configPath = cfg.ConfigDir
-			}
-
 			api = http.NewAPIHandlers(http.APIConfig{
 				Server:    httpServer,
 				DB:        historyDB,
@@ -246,7 +247,7 @@ func run(args []string) error {
 				// 进程级唯一的认证失败账本：契约的锁定窗口不区分来源 IP，所以整进程一份。
 				Lockout:          http.NewAuthLockout(),
 				GetCurrentConfig: func() *config.Config { return &cfg },
-				GetConfigPath:    func() string { return configPath },
+				GetConfigPath:    func() string { return configSource },
 				JailController:   jailEnabled,
 				LogFilePath:      func() string { return cfg.LogFile },
 				// GET /health 的读数来源：链路状态只有事件泵这份快照知道，procfs 在场与否
@@ -373,7 +374,7 @@ func run(args []string) error {
 		Sink:     banSinkForDaemon,
 		Stats:    newStatsSink(logger, metrics),
 		Hooks:    runtime.NewMaintenanceHooks(historyDB, logger),
-		Reloader: runtime.NewFileReloader(cfg.ConfigFile, logger),
+		Reloader: runtime.NewFileReloader(configSource, logger),
 		// 配置一变就同步到内核：手工编辑文件、SIGHUP、SIGUSR1 都只经过执行体，
 		// 少这一条那些路径改的值永远上不了内核（与 PUT /config 共用同一个出口实例）。
 		KernelConfig: configSinkForDaemon,

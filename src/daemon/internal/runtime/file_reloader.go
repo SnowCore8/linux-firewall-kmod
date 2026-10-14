@@ -57,7 +57,12 @@ func (r *fileReloader) Reload(cfg *config.Config) error {
 
 func (r *fileReloader) Rollback(cfg *config.Config) error {
 	r.logger.Warn("configuration rollback requested")
-	dir := filepath.Dir(r.path)
+	// 备份住在配置来源**旁边**：目录模式下 r.path 本身就是那个目录，再取一次 Dir 会爬到
+	// 目录的父级去，那里没有本次部署的备份，于是回滚永远退化成「重新加载当前配置」。
+	dir := r.path
+	if info, err := os.Stat(r.path); err != nil || !info.IsDir() {
+		dir = filepath.Dir(r.path)
+	}
 	backupPath := filepath.Join(dir, "config.yaml.rollback")
 
 	if _, err := os.Stat(backupPath); err != nil {
