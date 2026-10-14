@@ -239,7 +239,7 @@ sudo cat /proc/firewall/protected_ports
 | `icmp_types` | 128 | 常量 | `src/kernel-module/fw_types.h:MAX_ICMP_TYPE_ENTRIES` |
 | `port_scanners` | 20 | 常量 | `src/kernel-module/fw_types.h:PORT_SCAN_MAX_RESULTS` |
 | `service_probes` | 20 | 常量 | `src/kernel-module/fw_types.h:SERVICE_PROBE_MAX_RESULTS` |
-| `protected_ports` | 256 | 只读文件的展示行数上限 | `src/kernel-module/fw_types.h:FW_PROCFS_PROTECTED_PORTS_MAX_LINES` |
+| `protected_ports` | 256 | 0400 条目的展示行数上限 | `src/kernel-module/fw_types.h:FW_PROCFS_PROTECTED_PORTS_MAX_LINES` |
 
 几条要分清：
 
