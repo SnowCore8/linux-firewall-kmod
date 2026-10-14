@@ -159,6 +159,20 @@ type PumpDeps struct {
 	ShutdownPollEvery time.Duration
 }
 
+// registerOutcome 是内核对本进程注册的三种答复。「链路没通」与「明确拒绝」必须分开
+// 对待：前者重试就能恢复，后者意味着另一个守护进程活着，重试只会让两份面板各说各话。
+type registerOutcome uint8
+
+const (
+	registerLinkFailed registerOutcome = iota
+	registerRefused
+	registerAccepted
+)
+
+// ErrLeaseRefused 表示内核已明确拒绝本进程接管守护进程租约：另有活跃的守护进程在位，
+// 本进程一切下发都会被内核丢弃。组合根据此以非零码退出（见 ClaimLease）。
+var ErrLeaseRefused = errors.New("内核拒绝本进程成为守护进程：已有活跃的守护进程在位")
+
 // EventPump 消费内核事件流并按周期采样、对账。由单个 goroutine 独占。
 type EventPump struct {
 	sampler    Sampler
@@ -179,6 +193,11 @@ type EventPump struct {
 	reconcileEvery time.Duration
 	registerEvery  time.Duration
 	shutdownPoll   time.Duration
+
+	// leaseClaimed 记录启动注册已由 ClaimLease 完成，Run 不再重复一次。重复注册在内核
+	// 侧没有坏处（同一个 portid 刷新租约），但会让「开机收到了几条 DAEMON_REGISTER」
+	// 这条排障线索变成随机数。
+	leaseClaimed bool
 
 	// 上次已成功取回的采样值，用于「只在变化时推送」：安静时段不重复序列化同样的内容。
 	lastStats    contract.StatsResponse
@@ -245,7 +264,10 @@ func (p *EventPump) Ring() *telemetry.Ring { return p.ring }
 // 进程还没被判死，此时每个周期都会重试，链路恢复后自动接上；反之若在此 return，组合根
 // 只会在「内核曾经不可用」的情况下永久失去事件。
 func (p *EventPump) Run(stop *runtime.Shutdown) {
-	p.register("启动")
+	// 组合根如果先调过 ClaimLease，这里就不再重复一次启动注册。
+	if !p.leaseClaimed {
+		p.register("启动")
+	}
 
 	sample := time.NewTicker(p.sampleEvery)
 	defer sample.Stop()
@@ -283,7 +305,7 @@ func (p *EventPump) Run(stop *runtime.Shutdown) {
 // 「发送成功」不等于「注册成功」：内核拒绝时（已有活跃守护进程）仍回 ack 并置
 // Accepted=0，必须解析后才能区分二者。注册被拒是运维必须看见的状态——此时本进程的
 // 所有指令都会被内核丢弃。
-func (p *EventPump) register(why string) {
+func (p *EventPump) register(why string) registerOutcome {
 	ack, err := p.sampler.Register(p.timeout)
 	now := time.Now()
 	if err != nil {
@@ -291,18 +313,40 @@ func (p *EventPump) register(why string) {
 		p.store.MarkLeaseAttemptFailed()
 		p.logger.Warn("内核守护进程注册失败", "reason", why, "error", err)
 		p.syncRouterCounters()
-		return
+		return registerLinkFailed
 	}
 	if !ack.Accepted {
 		p.store.SetLinkError("注册被内核拒绝：已有活跃守护进程", now)
 		p.store.SetLeaseRefused()
 		p.logger.Error("内核拒绝本进程注册为守护进程，指令将被丢弃", "reason", why)
 		p.syncRouterCounters()
-		return
+		return registerRefused
 	}
 	p.store.SetLinkRegistered(now)
 	p.logger.Debug("内核守护进程注册已确认", "reason", why)
 	p.syncRouterCounters()
+	return registerAccepted
+}
+
+// ClaimLease 在启动时抢占守护进程租约，供组合根决定要不要继续跑下去。
+//
+// 单实例约束的执法者在内核那边（fw_netlink.c 的 portid 独占 + 注册前先探活旧 portid），
+// 守护进程这边只能问一句「我能不能当这个守护进程」。答案有两种必须区分：
+//   - 内核明确拒绝：另有活着的守护进程，本进程每一条下发都会被丢弃。继续跑只是让
+//     运维以为防护生效，面板上还只显示自己下发过的那一小撮，所以这里返回
+//     ErrLeaseRefused，由组合根以非零码退出。
+//   - 链路问题（内核刚重载、还没应答）：不是结论，不能据此退出，否则一次偶发超时
+//     就把事件泵永久摘掉。交给 Run 的续约周期重试即可。
+//
+// 成功抢占时置位 leaseClaimed，Run 不再重复注册一次。
+func (p *EventPump) ClaimLease() error {
+	switch outcome := p.register("启动"); outcome {
+	case registerRefused:
+		return ErrLeaseRefused
+	case registerAccepted:
+		p.leaseClaimed = true
+	}
+	return nil
 }
 
 // handle 分派一条内核事件。

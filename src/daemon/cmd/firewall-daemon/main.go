@@ -316,6 +316,12 @@ func run(args []string) error {
 		})
 		if err != nil {
 			logger.Error("内核事件泵装配失败，内核事件将无人消费", "error", err)
+		} else if err := pump.ClaimLease(); err != nil {
+			// 单实例约束在这里落地：内核明确说「已有活跃的守护进程」时，本进程每一条
+			// 下发都会被丢弃——继续跑只会多一块显示自己那一小撮的面板。以非零码退出，
+			// 让 systemd/运维看得见「第二个实例被拒」，而不是让它静默并跑。
+			// 链路问题（超时、模块刚重载）不走这条路，交给泵按周期重试。
+			return err
 		} else {
 			pumpToken := runtime.NewShutdown()
 			sup.Spawn("kernel-event-pump", pumpToken, func() { pump.Run(pumpToken) })

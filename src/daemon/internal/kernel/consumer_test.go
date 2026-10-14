@@ -949,3 +949,64 @@ func TestHandleWithoutDirectiveChannelIsSafe(t *testing.T) {
 		OriginalCmd: contract.MsgBanIP, ErrorCode: -28, AF: af, Addr: addr,
 	}})
 }
+
+// TestClaimLeaseSeparatesRefusalFromLinkFailure 钉住启动期抢占租约的三条分界：
+// 内核接受 → 照常启动；内核明确拒绝 → ErrLeaseRefused，组合根据此以非零码退出；
+// 链路没通 → 不是结论，不能据此摘掉事件泵。
+//
+// 此前第二种情况只是泵原地重试：第二个守护进程既不退出也不响应得干净，运维看到一块
+// 「一切正常」的面板，而它每一条下发都被内核丢弃（test_20.2 撞的就是这个）。
+func TestClaimLeaseSeparatesRefusalFromLinkFailure(t *testing.T) {
+	t.Run("内核接受则不阻断", func(t *testing.T) {
+		f := newPumpFixture(t)
+		if err := f.pump.ClaimLease(); err != nil {
+			t.Fatalf("Accepted 不应阻断启动: %v", err)
+		}
+		if !f.store.Snapshot().Link.Registered {
+			t.Error("抢占成功却没把 Registered 置起来")
+		}
+	})
+
+	t.Run("内核明确拒绝返回 ErrLeaseRefused", func(t *testing.T) {
+		f := newPumpFixture(t)
+		f.sampler.ack = contract.DaemonRegisterAck{Accepted: false}
+		if err := f.pump.ClaimLease(); !errors.Is(err, ErrLeaseRefused) {
+			t.Fatalf("被拒时 err = %v，期望 ErrLeaseRefused", err)
+		}
+	})
+
+	t.Run("链路失败不是结论", func(t *testing.T) {
+		f := newPumpFixture(t)
+		f.sampler.regErr = errors.New("内核未应答")
+		if err := f.pump.ClaimLease(); err != nil {
+			t.Fatalf("链路失败不该阻断启动: %v", err)
+		}
+	})
+
+	// 抢占成功后 Run 不能再注册一次，否则「开机收到几条 DAEMON_REGISTER」变成随机数。
+	t.Run("抢占成功后 Run 不重复注册", func(t *testing.T) {
+		f := newPumpFixture(t)
+		f.pump.shutdownPoll = 2 * time.Millisecond
+		f.pump.sampleEvery = time.Hour
+		f.pump.reconcileEvery = time.Hour
+		f.pump.registerEvery = time.Hour
+		if err := f.pump.ClaimLease(); err != nil {
+			t.Fatalf("抢占失败: %v", err)
+		}
+		stop := runtime.NewShutdown()
+		done := make(chan struct{})
+		go func() {
+			f.pump.Run(stop)
+			close(done)
+		}()
+		stop.Request()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("关停请求后泵未退出")
+		}
+		if n := f.sampler.Calls("register"); n != 1 {
+			t.Errorf("注册调用 %d 次，期望只有 ClaimLease 那一次", n)
+		}
+	})
+}
