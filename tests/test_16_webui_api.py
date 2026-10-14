@@ -1,26 +1,20 @@
 """16 - Web UI API 端到端集成测试（版本化 /api/v1/*）"""
 
 import json
-import subprocess
 import time
 
 import pytest
 
-from .conftest import daemon_http_port, is_daemon_running
+from .conftest import daemon_http_port, http_request, is_daemon_running, run_curl
 
 
 def curl_get(url: str, timeout: int = 5) -> tuple[int, str]:
-    """GET 一次，返回 (HTTP 状态码, 响应体)；不跟随重定向以便断言 3xx。"""
-    try:
-        result = subprocess.run(
-            ["curl", "-s", "-w", "%{http_code}", "-o", "/dev/stdout", url],
-            capture_output=True, text=True, timeout=timeout,
-        )
-        body = result.stdout[:-3] if len(result.stdout) > 3 else ""
-        code = int(result.stdout[-3:]) if len(result.stdout) >= 3 else 0
-        return code, body
-    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
-        return 0, ""
+    """GET 一次，返回 (HTTP 状态码, 响应体)；不跟随重定向以便断言 3xx。
+
+    实现收敛到 `conftest.http_request`：部署配置带凭据时自动补 Basic 认证，凭据经
+    stdin 注入，不进 argv（否则 pytest 打印命令行时会漏密码）。
+    """
+    return http_request("GET", url, None, timeout)
 
 
 class TestWebuiApi:
@@ -82,15 +76,22 @@ class TestWebuiApi:
         assert isinstance(data.get("data"), dict), "/api/v1/config 的 data 非对象"
 
     def test_sse_endpoint(self):
-        """16.6 SSE 连接（/api/v1/events）返回行首 event: 字段"""
-        result = subprocess.run(
-            ["curl", "-s", "-N", "--max-time", "2", f"{self._base()}/api/v1/events"],
-            capture_output=True, text=True, timeout=5,
+        """16.6 SSE 连接（/api/v1/events）返回行首 event: 字段
+
+        `/api/v1/events` 是 `auth = required`。curl 设得了请求头，所以走契约的
+        `Authorization: Basic` 首选通道（`run_curl` 经 stdin 注入），不用只给
+        `EventSource` 兜底的 `?access_token=`：那种写法会把凭据拼进 URL，而 URL
+        出现在 argv 里、也会出现在失败输出里。
+        """
+        result = run_curl(
+            ["-s", "-N", "--max-time", "2"],
+            f"{self._base()}/api/v1/events",
         )
-        assert "event:" in result.stdout, "SSE 未返回任何事件字段"
+        stdout = result.stdout if result is not None else ""
+        assert "event:" in stdout, "SSE 未返回任何事件字段"
         fields = [
             line.split(":", 1)[0]
-            for line in result.stdout.splitlines()
+            for line in stdout.splitlines()
             if ":" in line
         ]
         assert "event" in fields, "SSE 响应缺少行首 event: 字段"

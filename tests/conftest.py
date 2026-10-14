@@ -1,5 +1,7 @@
 """pytest 测试框架 - fixtures 和辅助函数"""
 
+import base64
+import json
 import os
 import re
 import shutil
@@ -373,16 +375,90 @@ def daemon_http_port() -> int:
         return 9119
 
 
-def get_prometheus_metrics(port: int = 9119) -> str:
-    """获取 Prometheus 指标"""
+def daemon_credentials() -> tuple[str, str] | None:
+    """读取 daemon 的 HTTP Basic 凭据；部署形态未启用认证时返回 None。
+
+    取值路径与 `daemon_http_port()` 同源（部署配置的 `defaults` 段），凭据只在运行时
+    读出，不写进代码、测试常量或断言消息。
+
+    语义照契约（`contract/http.fwidl` 的 `auth` 段）：`metrics_username` 与
+    `metrics_password` **两项都为空**才是「未配置认证并放行」；只填一项是非法配置，
+    daemon 侧对 `auth = required` 的整组端点一律 401（`internal/http/auth.go` 的
+    `alwaysUnauthorized`）。所以这里不做任何回落：任一为空就按裸请求处理，让配置问题
+    原样暴露成 401，而不是被夹具悄悄绕开。
+    """
     try:
-        result = subprocess.run(
-            ["curl", "-s", f"http://localhost:{port}/metrics"],
-            capture_output=True, text=True, timeout=5,
+        defaults = yaml.safe_load((CONFIG_DIR / "default.yaml").read_text())["defaults"]
+    except (OSError, KeyError, TypeError):
+        return None
+    username = str(defaults.get("metrics_username") or "")
+    password = str(defaults.get("metrics_password") or "")
+    if not username or not password:
+        return None
+    return username, password
+
+
+def _curl_config_value(value: str) -> str:
+    """按 curl 配置文件的语法写一个值：加引号，并转义引号与反斜杠。"""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def run_curl(opts: list[str], url: str, timeout: float = 5.0) -> subprocess.CompletedProcess | None:
+    """跑一次 curl；部署配置带凭据时自动补 Basic 认证。
+
+    凭据经 `--config -` 从 stdin 注入，**不进 argv、也不拼进 URL**：`-u user:pass`
+    和 `?access_token=<base64>` 都会让密码（base64 只是编码）出现在命令行参数里，
+    而 pytest 打印异常时会带上命令行。认证头是契约里 `scheme = Basic` 的首选通道
+    （`internal/http/auth.go` 的 `requestCredentials` 是「请求头优先、query 兜底」），
+    query 兜底只是给设不了请求头的浏览器 `EventSource` 用的，curl 用不上。
+
+    `curl` 不存在或整体超时返回 None，由调用方决定失败形状。
+    """
+    argv = ["curl"]
+    stdin: str | None = None
+    credentials = daemon_credentials()
+    if credentials is not None:
+        token = base64.b64encode(
+            f"{credentials[0]}:{credentials[1]}".encode()
+        ).decode()
+        argv += ["--config", "-"]
+        stdin = f"header = {_curl_config_value(f'Authorization: Basic {token}')}\n"
+    try:
+        return subprocess.run(
+            argv + opts + [url],
+            input=stdin, capture_output=True, text=True, timeout=timeout,
         )
-        return result.stdout
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return ""
+        return None
+
+
+def _split_status_and_body(stdout: str) -> tuple[int, str]:
+    """拆 `curl -w %{http_code} -o /dev/stdout` 的输出：末三位是状态码，其余是响应体。"""
+    body = stdout[:-3] if len(stdout) > 3 else ""
+    try:
+        code = int(stdout[-3:]) if len(stdout) >= 3 else 0
+    except ValueError:
+        code = 0
+    return code, body
+
+
+def http_request(method: str, url: str, data: dict | None = None, timeout: float = 5.0) -> tuple[int, str]:
+    """发一次 HTTP 请求，返回 (状态码, 响应体)；不可达时状态码为 0。"""
+    opts = ["-s", "-w", "%{http_code}", "-o", "/dev/stdout"]
+    if method.upper() != "GET":
+        opts += ["-X", method]
+    if data is not None:
+        opts += ["-H", "Content-Type: application/json", "-d", json.dumps(data)]
+    result = run_curl(opts, url, timeout)
+    if result is None:
+        return 0, ""
+    return _split_status_and_body(result.stdout)
+
+
+def get_prometheus_metrics(port: int = 9119) -> str:
+    """获取 Prometheus 指标（`/metrics` 在契约里是 `auth = required`）"""
+    result = run_curl(["-s"], f"http://localhost:{port}/metrics")
+    return result.stdout if result is not None else ""
 
 
 def parse_metric(metrics: str, name: str) -> float:

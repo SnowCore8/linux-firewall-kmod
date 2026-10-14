@@ -125,21 +125,15 @@ class TestMultiJail:
 
         time.sleep(2)
 
-        try:
-            result = subprocess.run(
-                ["curl", "-s", f"http://localhost:{metrics_port}/metrics"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.stdout:
-                # "or True" 使断言恒真；改为要求指标以真实样本行出现
-                assert any(
-                    line.startswith("firewall_lines_parsed_total ")
-                    for line in result.stdout.splitlines()
-                ), "指标端点未暴露 firewall_lines_parsed_total 样本行"
-            else:
-                pytest.skip(f"Prometheus 端点不可达 (端口 {metrics_port})")
-        except (subprocess.TimeoutExpired, FileNotFoundError):
+        # 取指标走 conftest 的同一通道：本套自起的配置不带凭据，但部署环境可能带，
+        # 一处实现才不会因为「这一套自己 curl」而漏掉认证（21.2 与 16/19 同口径）。
+        metrics = get_prometheus_metrics(metrics_port)
+        if not metrics:
             pytest.skip(f"Prometheus 端点不可达 (端口 {metrics_port})")
+        assert any(
+            line.startswith("firewall_lines_parsed_total ")
+            for line in metrics.splitlines()
+        ), "指标端点未暴露 firewall_lines_parsed_total 样本行"
 
     def test_cleanup(self, multi_jail_setup):
         """21.4 清理"""

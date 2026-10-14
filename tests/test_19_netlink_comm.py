@@ -9,8 +9,6 @@
 后断言内核 netlink 发送计数**确实自增**。
 """
 
-import json
-import subprocess
 import time
 
 import pytest
@@ -19,6 +17,7 @@ from .config import TEST_IP
 from .conftest import (
     daemon_http_port,
     get_prometheus_metrics,
+    http_request,
     is_daemon_running,
     parse_metric,
 )
@@ -40,19 +39,12 @@ def _has_sample(metrics: str, name: str) -> bool:
 
 
 def _curl(method: str, url: str, data: dict | None = None, timeout: int = 5) -> tuple[int, str]:
-    """发一次 HTTP 请求，返回 (状态码, 响应体)；不可达时状态码为 0。"""
-    cmd = ["curl", "-s", "-w", "%{http_code}", "-o", "/dev/stdout", "-X", method]
-    if data is not None:
-        cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(data)]
-    cmd.append(url)
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return 0, ""
-    out = result.stdout
-    body = out[:-3] if len(out) > 3 else ""
-    code = int(out[-3:]) if len(out) >= 3 else 0
-    return code, body
+    """发一次 HTTP 请求，返回 (状态码, 响应体)；不可达时状态码为 0。
+
+    实现收敛到 `conftest.http_request`：部署配置带凭据时自动补 Basic 认证，凭据经
+    stdin 注入，不进 argv（否则 pytest 打印命令行时会漏密码）。
+    """
+    return http_request(method, url, data, timeout)
 
 
 class TestNetlinkComm:
