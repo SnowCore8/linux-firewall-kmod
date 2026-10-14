@@ -93,6 +93,33 @@ static inline u16 fw_rate_slot_idx(u8 af, const void *addr) {
   return (u16)(fw_hash_addr(af, addr, 16) & (FW_RATE_CPU_SLOTS - 1));
 }
 
+/*
+ * 取本 CPU 的槽位：块号 = 全局下标右移 FW_RATE_CHUNK_SHIFT，块内下标 = 取低位。
+ *
+ * 为什么拆块：内核对单次 per-CPU 申请有 32 KiB 上限（mm/percpu.c 里 size 超过
+ * PCPU_MIN_UNIT_SIZE 直接 WARN 并返回 NULL）。整表 512 槽是 168 × 512 = 86016 B，
+ * 在 Ubuntu 24.04 GA 的 6.8.0-146 上实测报
+ * "illegal size (86016) or align (64) for percpu allocation"，随后模块
+ * 初始化失败（速率表初始化失败: -12），insmod 报 Cannot allocate memory。
+ * 改成 FW_RATE_CPU_CHUNKS 块、每块 FW_RATE_CHUNK_SLOTS 槽（168 × 128 = 21504 B）
+ * 后单块申请合法。索引空间与 slot_idx 的语义都不变（仍是 0..511），只是底层
+ * 分了 4 块，探测与回绕逻辑因此无需改动。
+ */
+static struct fw_rate_cpu_slot *fw_rate_this_slot(u16 idx) {
+  struct fw_rate_pcpu_chunk __percpu *chunk;
+
+  chunk = fw_info.rate_pcpu[idx >> FW_RATE_CHUNK_SHIFT];
+  return &this_cpu_ptr(chunk)->slots[idx & (FW_RATE_CHUNK_SLOTS - 1)];
+}
+
+/* 取指定 CPU 的槽位（槽位发布与窗口滚动汇总用，均非每包路径） */
+static struct fw_rate_cpu_slot *fw_rate_slot_on(unsigned int cpu, u16 idx) {
+  struct fw_rate_pcpu_chunk __percpu *chunk;
+
+  chunk = fw_info.rate_pcpu[idx >> FW_RATE_CHUNK_SHIFT];
+  return &per_cpu_ptr(chunk, cpu)->slots[idx & (FW_RATE_CHUNK_SLOTS - 1)];
+}
+
 /* ============================================================================
  * 生命周期
  * ==========================================================================*/
@@ -109,11 +136,10 @@ static void fw_rate_free_rcu(struct rcu_head *head) {
  */
 static void fw_rate_clear_slots_this_cpu(void *info) {
   struct fw_rate_node *victim = info;
-  struct fw_rate_pcpu *r = this_cpu_ptr(fw_info.rate_pcpu);
   int i;
 
   for (i = 0; i < FW_RATE_CPU_SLOTS; i++) {
-    struct fw_rate_cpu_slot *s = &r->slots[i];
+    struct fw_rate_cpu_slot *s = fw_rate_this_slot((u16)i);
 
     if (victim && rcu_access_pointer(s->entry) != victim)
       continue;
@@ -151,7 +177,6 @@ struct fw_rate_reclaim_batch {
  */
 static void fw_rate_reclaim_slots_this_cpu(void *info) {
   struct fw_rate_reclaim_batch *b = info;
-  struct fw_rate_pcpu *r = this_cpu_ptr(fw_info.rate_pcpu);
   u32 i;
 
   for (i = 0; i < b->n; i++) {
@@ -160,7 +185,7 @@ static void fw_rate_reclaim_slots_this_cpu(void *info) {
 
     if (n->slot_idx >= FW_RATE_CPU_SLOTS)
       continue;
-    s = &r->slots[n->slot_idx];
+    s = fw_rate_this_slot(n->slot_idx);
     if (rcu_access_pointer(s->entry) != n)
       continue; /* 已被别的路径清掉，不动别人的槽 */
 
@@ -221,7 +246,7 @@ static void fw_rate_reclaim_work(struct work_struct *work) {
 
   batch.n = 0;
 
-  if (!fw_info.rate_pcpu || READ_ONCE(fw_info.rate_clear_ctx.clearing))
+  if (!fw_info.rate_pcpu[0] || READ_ONCE(fw_info.rate_clear_ctx.clearing))
     goto requeue;
 
   for (bkt = 0; bkt < RATE_HASH_SIZE; bkt++) {
@@ -299,6 +324,19 @@ static void fw_rate_drain_tables(void) {
   }
 }
 
+/*
+ * 释放全部槽表块并置 NULL：free_percpu 接受 NULL，因此本函数既可用作 init
+ * 失败时的回滚（未分配到的块保持 NULL），也可用作 exit 的收尾。
+ */
+static void fw_rate_free_pcpu(void) {
+  u32 i;
+
+  for (i = 0; i < FW_RATE_CPU_CHUNKS; i++) {
+    free_percpu(fw_info.rate_pcpu[i]);
+    fw_info.rate_pcpu[i] = NULL;
+  }
+}
+
 int fw_rate_init(void) {
   u32 i;
 
@@ -314,9 +352,14 @@ int fw_rate_init(void) {
   fw_info.rate_clear_ctx.clearing = false;
   INIT_DELAYED_WORK(&fw_info.rate_reclaim_work, fw_rate_reclaim_work);
 
-  fw_info.rate_pcpu = alloc_percpu(struct fw_rate_pcpu);
-  if (!fw_info.rate_pcpu)
-    return -ENOMEM;
+  /* 逐块申请（拆块原因见 fw_rate_this_slot）；任一块失败就回滚已分配的部分 */
+  for (i = 0; i < FW_RATE_CPU_CHUNKS; i++) {
+    fw_info.rate_pcpu[i] = alloc_percpu(struct fw_rate_pcpu_chunk);
+    if (!fw_info.rate_pcpu[i]) {
+      fw_rate_free_pcpu();
+      return -ENOMEM;
+    }
+  }
 
   /* 新分配的 per-CPU 块已清零；显式清一遍以防复用残留 */
   on_each_cpu(fw_rate_clear_slots_this_cpu, NULL, 1);
@@ -327,7 +370,7 @@ int fw_rate_init(void) {
 }
 
 void fw_rate_exit(void) {
-  if (!fw_info.rate_pcpu)
+  if (!fw_info.rate_pcpu[0])
     return;
 
   /* 先停回收，再拆表：否则 drain 与回收会在桶锁上交错 */
@@ -340,14 +383,13 @@ void fw_rate_exit(void) {
 
   synchronize_rcu();
   rcu_barrier();
-  free_percpu(fw_info.rate_pcpu);
-  fw_info.rate_pcpu = NULL;
+  fw_rate_free_pcpu();
   atomic_set(&fw_info.rate_count, 0);
   fw_info.rate_clear_ctx.clearing = false;
 }
 
 void fw_rate_clear_all(void) {
-  if (!fw_info.rate_pcpu)
+  if (!fw_info.rate_pcpu[0])
     return;
 
   fw_info.rate_clear_ctx.clearing = true;
@@ -369,7 +411,7 @@ static void fw_rate_publish_slots(struct fw_rate_node *n) {
   int cpu;
 
   for_each_possible_cpu(cpu) {
-    struct fw_rate_cpu_slot *s = &per_cpu_ptr(fw_info.rate_pcpu, cpu)->slots[n->slot_idx];
+    struct fw_rate_cpu_slot *s = fw_rate_slot_on((unsigned int)cpu, n->slot_idx);
 
     atomic64_set(&s->packets, 0);
     atomic64_set(&s->bytes, 0);
@@ -419,7 +461,7 @@ static struct fw_rate_node *fw_rate_create(u8 af, const void *addr, u32 bkt) {
 
   slot_idx = fw_rate_slot_idx(af, addr);
   for (probe = 0; probe < FW_RATE_CPU_SLOTS; probe++) {
-    struct fw_rate_cpu_slot *s = &per_cpu_ptr(fw_info.rate_pcpu, 0)->slots[slot_idx];
+    struct fw_rate_cpu_slot *s = fw_rate_slot_on(0, slot_idx);
 
     if (!rcu_access_pointer(s->entry))
       break;
@@ -471,7 +513,7 @@ static void fw_rate_roll(struct fw_rate_node *n, unsigned long now) {
     elapsed = 1;
 
   for_each_possible_cpu(cpu) {
-    struct fw_rate_cpu_slot *s = &per_cpu_ptr(fw_info.rate_pcpu, cpu)->slots[n->slot_idx];
+    struct fw_rate_cpu_slot *s = fw_rate_slot_on((unsigned int)cpu, n->slot_idx);
     u8 i;
 
     if (rcu_access_pointer(s->entry) != n)
@@ -647,7 +689,7 @@ const char *fw_rate_observe(u8 af, const void *addr, u32 packet_len, u8 protocol
   if (unlikely(slot_idx >= FW_RATE_CPU_SLOTS))
     return NULL;
 
-  s = &this_cpu_ptr(fw_info.rate_pcpu)->slots[slot_idx];
+  s = fw_rate_this_slot(slot_idx);
   /* 清表/退出窗口内槽位已被置空：本包不计、不判定 */
   if (unlikely(rcu_access_pointer(s->entry) != n))
     return NULL;

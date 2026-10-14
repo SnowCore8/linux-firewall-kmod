@@ -99,11 +99,20 @@
  *
  * 速率槽是「一条目占一槽」，所以 FW_RATE_CPU_SLOTS 就是**同时在跟踪的源地址数**
  * 硬上限（比 fw_max_rate_entries 更靠前）：槽位由 per-CPU 内存支付，512 槽约
- * 每 CPU 84 KB（槽结构 168 B），128 槽时为 21 KB。上限之上的新源按契约
+ * 每 CPU 84 KB（槽结构 168 B），128 槽时为 21 KB，故按 FW_RATE_CHUNK_SLOTS
+ * 分块申请。上限之上的新源按契约
  * 「满则放行」，由 rate_slot_spill 观测；空闲槽由回收工作项（fw_rate.c）在
  * 静默超过保留时长后释放。
  */
 #define FW_RATE_CPU_SLOTS 512
+/*
+ * 槽表分块：内核对单次 per-CPU 申请有 32 KiB 上限，整表一槽不拆会超限而加载
+ * 失败（为什么拆、超限的实测现象见 fw_rate.c 的 fw_rate_this_slot 注释）。
+ * 三个常数都取 2 的幂：块内下标 = 全局下标取低位、块号 = 右移 FW_RATE_CHUNK_SHIFT。
+ */
+#define FW_RATE_CHUNK_SLOTS 128
+#define FW_RATE_CHUNK_SHIFT 7
+#define FW_RATE_CPU_CHUNKS (FW_RATE_CPU_SLOTS / FW_RATE_CHUNK_SLOTS)
 #define FW_UDP_CPU_SLOTS 64
 #define FW_ICMP_CPU_SLOTS 32
 
@@ -349,9 +358,9 @@ struct fw_rate_cpu_slot {
   unsigned long last_activity;
 };
 
-/* 每 CPU 速率槽表 */
-struct fw_rate_pcpu {
-  struct fw_rate_cpu_slot slots[FW_RATE_CPU_SLOTS];
+/* 每 CPU 速率槽表的一块（拆块原因见 fw_rate.c 的 fw_rate_this_slot） */
+struct fw_rate_pcpu_chunk {
+  struct fw_rate_cpu_slot slots[FW_RATE_CHUNK_SLOTS];
 } ____cacheline_aligned_in_smp;
 
 /*
@@ -612,7 +621,8 @@ struct fw_info {
   spinlock_t rate_locks[RATE_HASH_SIZE];
   atomic_t rate_count;
   spinlock_t rate_slot_lock; /* 保护槽位「探测空槽 + 发布」这一对操作 */
-  struct fw_rate_pcpu __percpu *rate_pcpu;
+  /* 每 CPU 槽表按 FW_RATE_CPU_CHUNKS 块分别申请（拆块原因见 fw_rate.c） */
+  struct fw_rate_pcpu_chunk __percpu *rate_pcpu[FW_RATE_CPU_CHUNKS];
   struct fw_rate_clear_ctx rate_clear_ctx;
   struct delayed_work rate_reclaim_work; /* 静默条目的周期回收（fw_rate.c） */
   atomic64_t rate_reclaimed; /* 累计回收条目数（rates 表头） */
