@@ -193,8 +193,7 @@ static int fw_state_write_bans(struct file *file, loff_t *pos, u32 *crc,
       int n;
 
       if (offset + i >= FW_STATE_MAX_BAN) {
-        pr_warn("封禁条目超过保存上限 %u，其余条目本次不写入状态文件\n",
-                FW_STATE_MAX_BAN);
+        pr_warn("封禁条目超过保存上限 %u，其余条目本次不写入状态文件\n", FW_STATE_MAX_BAN);
         goto out;
       }
 
@@ -256,8 +255,7 @@ static int fw_state_write_whitelist(struct file *file, loff_t *pos, u32 *crc,
       int n;
 
       if (offset + i >= FW_STATE_MAX_WL) {
-        pr_warn("白名单条目超过保存上限 %u，其余本次不写入\n",
-                FW_STATE_MAX_WL);
+        pr_warn("白名单条目超过保存上限 %u，其余本次不写入\n", FW_STATE_MAX_WL);
         goto out;
       }
 
@@ -487,8 +485,7 @@ static int fw_state_restore_ban(const char *rest, u8 af) {
   /* 与 fw_wl 恢复一样先归一化：短前缀条目必须存网络地址，否则同一网段的不同主机位
    * 会在同一桶里各建一条（fw_ban_find_locked 按地址全等比较） */
   fw_addr_normalize(af, &addr, prefix_len);
-  ret = fw_ban_restore(af, &addr, prefix_len, (u32)remaining,
-                       remaining ? now : 0,
+  ret = fw_ban_restore(af, &addr, prefix_len, (u32)remaining, remaining ? now : 0,
                        reason_str && reason_str[0] ? reason_str : "restored",
                        jail_str && jail_str[0] ? jail_str : "api");
 

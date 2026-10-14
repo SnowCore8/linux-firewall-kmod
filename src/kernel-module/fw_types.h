@@ -615,7 +615,7 @@ struct fw_info {
   struct fw_rate_pcpu __percpu *rate_pcpu;
   struct fw_rate_clear_ctx rate_clear_ctx;
   struct delayed_work rate_reclaim_work; /* 静默条目的周期回收（fw_rate.c） */
-  atomic64_t rate_reclaimed;             /* 累计回收条目数（rates 表头） */
+  atomic64_t rate_reclaimed; /* 累计回收条目数（rates 表头） */
 
   /* 速率配置（运行态，由 SET_CONFIG / procfs 修改） */
   unsigned int rate_window_seconds;

@@ -225,8 +225,7 @@ static void fw_rate_reclaim_work(struct work_struct *work) {
     goto requeue;
 
   for (bkt = 0; bkt < RATE_HASH_SIZE; bkt++) {
-    if (hlist_empty(&fw_info.rate_ipv4[bkt]) &&
-        hlist_empty(&fw_info.rate_ipv6[bkt]))
+    if (hlist_empty(&fw_info.rate_ipv4[bkt]) && hlist_empty(&fw_info.rate_ipv6[bkt]))
       continue;
 
     spin_lock_bh(&fw_info.rate_locks[bkt]);
@@ -323,8 +322,7 @@ int fw_rate_init(void) {
   on_each_cpu(fw_rate_clear_slots_this_cpu, NULL, 1);
 
   /* 回收工作项是槽位唯一的周转机制，必须与表同生命周期 */
-  queue_delayed_work(system_wq, &fw_info.rate_reclaim_work,
-                     FW_RATE_RECLAIM_INTERVAL);
+  queue_delayed_work(system_wq, &fw_info.rate_reclaim_work, FW_RATE_RECLAIM_INTERVAL);
   return 0;
 }
 

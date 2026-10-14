@@ -26,8 +26,7 @@ void fw_ports_init(void) {
 }
 
 void fw_ports_exit(void) {
-  struct fw_protected_ports *ports =
-    rcu_dereference_protected(fw_info.protected_ports, 1);
+  struct fw_protected_ports *ports = rcu_dereference_protected(fw_info.protected_ports, 1);
 
   RCU_INIT_POINTER(fw_info.protected_ports, NULL);
   if (ports)
@@ -39,8 +38,7 @@ void fw_ports_exit(void) {
  * ==========================================================================*/
 
 bool fw_ports_is_protected(u16 port) {
-  const struct fw_protected_ports *ports =
-    rcu_dereference(fw_info.protected_ports);
+  const struct fw_protected_ports *ports = rcu_dereference(fw_info.protected_ports);
 
   if (unlikely(!ports))
     return true; /* 未下发位图：保持全端口防护，不静默关掉检测 */
@@ -78,14 +76,13 @@ int fw_ports_replace(const u8 *bitmap) {
   if (old)
     kfree_rcu(old, rcu);
 
-  pr_info("protected ports updated: %u port(s) now participate in rate detection\n",
-          count);
+  pr_info("protected ports updated: %u port(s) now participate in rate detection\n", count);
   return 0;
 }
 
 u32 fw_ports_count(void) {
-  const struct fw_protected_ports *ports =
-    rcu_dereference_protected(fw_info.protected_ports, 1);
+  const struct fw_protected_ports *ports = rcu_dereference_protected(
+    fw_info.protected_ports, 1);
 
   return ports ? ports->count : 0;
 }

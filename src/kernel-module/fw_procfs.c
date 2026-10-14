@@ -623,8 +623,7 @@ static int rates_show(struct seq_file *m, void *v) {
    */
   seq_printf(m, "  max_rate_entries: %u\n", fw_max_rate_entries);
   seq_printf(m, "  rate_cpu_slots: %u\n", (unsigned int)FW_RATE_CPU_SLOTS);
-  seq_printf(m, "  rate_slot_spill: %llu\n",
-             (unsigned long long)fw_stats_rate_slot_spill());
+  seq_printf(m, "  rate_slot_spill: %llu\n", (unsigned long long)fw_stats_rate_slot_spill());
   seq_printf(m, "  rate_reclaimed: %llu\n",
              (unsigned long long)atomic64_read(&fw_info.rate_reclaimed));
   seq_printf(m, "------------------------------------\n");
@@ -1069,10 +1068,9 @@ int fw_procfs_init(void) {
 
   if (!fw_info.proc_bans || !fw_info.proc_config || !fw_info.proc_whitelist ||
       !fw_info.proc_stats || !fw_info.proc_rates || !fw_info.proc_udp_ports ||
-      !fw_info.proc_icmp_types || !fw_info.proc_pkt_sizes ||
-      !fw_info.proc_ttl_dist || !fw_info.proc_ip_frags ||
-      !fw_info.proc_port_scanners || !fw_info.proc_service_probes ||
-      !fw_info.proc_protected_ports) {
+      !fw_info.proc_icmp_types || !fw_info.proc_pkt_sizes || !fw_info.proc_ttl_dist ||
+      !fw_info.proc_ip_frags || !fw_info.proc_port_scanners ||
+      !fw_info.proc_service_probes || !fw_info.proc_protected_ports) {
     pr_err("创建 procfs 条目失败\n");
     fw_procfs_exit();
     return -ENOMEM;
