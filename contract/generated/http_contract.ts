@@ -319,15 +319,15 @@ export interface BatchOperationResponse {
 /** 契约类型 `CreateBanRequest` */
 export interface CreateBanRequest {
   ip: string
-  duration: number | null
-  reason: string | null
+  duration?: number | null
+  reason?: string | null
 }
 
 /** 契约类型 `BatchBanRequest` */
 export interface BatchBanRequest {
   ips: string[]
-  duration: number | null
-  reason: string | null
+  duration?: number | null
+  reason?: string | null
 }
 
 /** 契约类型 `JailResponse` */
@@ -379,25 +379,25 @@ export interface WebuiConfigResponse {
 
 /** 契约类型 `UpdateConfigRequest` */
 export interface UpdateConfigRequest {
-  sse_push_interval: number | null
-  rate_warning_pps: number | null
-  rate_critical_pps: number | null
-  rate_warning_syn: number | null
-  rate_critical_syn: number | null
-  max_syn_per_second: number | null
-  max_udp_per_second: number | null
-  max_icmp_per_second: number | null
-  max_ack_per_second: number | null
-  max_rst_per_second: number | null
-  max_fin_per_second: number | null
-  static_threshold: boolean | null
-  dynamic_threshold: boolean | null
-  ddos_detection: boolean | null
-  max_ban_entries: number | null
-  max_whitelist_entries: number | null
-  max_rate_entries: number | null
-  max_local_ip_cache: number | null
-  clear_logs_at: string | null
+  sse_push_interval?: number | null
+  rate_warning_pps?: number | null
+  rate_critical_pps?: number | null
+  rate_warning_syn?: number | null
+  rate_critical_syn?: number | null
+  max_syn_per_second?: number | null
+  max_udp_per_second?: number | null
+  max_icmp_per_second?: number | null
+  max_ack_per_second?: number | null
+  max_rst_per_second?: number | null
+  max_fin_per_second?: number | null
+  static_threshold?: boolean | null
+  dynamic_threshold?: boolean | null
+  ddos_detection?: boolean | null
+  max_ban_entries?: number | null
+  max_whitelist_entries?: number | null
+  max_rate_entries?: number | null
+  max_local_ip_cache?: number | null
+  clear_logs_at?: string | null
 }
 
 /** 契约类型 `WhitelistEntryResponse`（前端名） */
@@ -722,18 +722,18 @@ export interface LogEntry {
 
 /** 契约类型 `LogQueryParams` */
 export interface LogQueryParams {
-  page: number | null
-  page_size: number | null
-  level: string | null
-  keyword: string | null
-  since: string | null
+  page?: number | null
+  page_size?: number | null
+  level?: string | null
+  keyword?: string | null
+  since?: string | null
 }
 
 /** 契约类型 `PaginationParams` */
 export interface PaginationParams {
-  page: number | null
-  page_size: number | null
-  sort_by: string | null
+  page?: number | null
+  page_size?: number | null
+  sort_by?: string | null
 }
 
 /** 契约类型 `SseStreamStatus` */

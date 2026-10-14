@@ -2489,7 +2489,20 @@ def emit_ts_http(contract: HttpContract) -> str:
             L.append(f"/** 契约类型 `{name}`{'（前端名）' if d.ts_name else ''} */")
             L.append(f"export interface {ifname}{generic} {{")
             for f in d.fields:
-                L.append(f"  {f.key}: {contract_type_to_ts(f.ftype)}")
+                # 请求侧的 `Option<T>` 是「可以整个不提交」，不是「必填但可为 null」：
+                # `PUT /api/v1/config` 一类局部更新只带要改的字段，未出现的字段保持后端
+                # 现值。生成 `field?: T | null` 才与该语义一致 —— Go 侧 `Option<T>` 的反
+                # 序列化同时接受「字段缺席」与「字段为 null」两种写法，调用方两种都会用，
+                # 只给 `?: T` 会把已经写 `null` 的调用点判成类型错误。
+                opt = (
+                    re.fullmatch(r"Option\s*<\s*(.+)\s*>", f.ftype.strip())
+                    if d.kind == "request"
+                    else None
+                )
+                if opt:
+                    L.append(f"  {f.key}?: {contract_type_to_ts(opt.group(1))} | null")
+                else:
+                    L.append(f"  {f.key}: {contract_type_to_ts(f.ftype)}")
             L.append("}")
             L.append("")
     return "\n".join(L)
