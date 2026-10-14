@@ -1,8 +1,11 @@
 package logger
 
 import (
+	"bytes"
+	"encoding/json"
 	"log/slog"
 	"log/syslog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -220,5 +223,40 @@ func TestLogThrottler(t *testing.T) {
 		if !always.CanLog() {
 			t.Fatal("间隔为 0 时应始终放行")
 		}
+	}
+}
+
+// TestDefaultConfigWritesJSONLines 钉住出厂默认：写进 log_file 的每一行都是可直接解析的
+// JSON 对象。
+//
+// 默认值曾一度是 plain，而集成规格 test_15.4 与 docs/zh/operations/monitoring.md 都说
+// 「守护进程写 JSON Lines」——照默认配置部署的进程让两条断言同时落空（日志文件里一行
+// 花括号都没有）。plain 仍然是 log_format 的一个合法取值，只是不再当默认。
+func TestDefaultConfigWritesJSONLines(t *testing.T) {
+	cfg := config.Default()
+	cfg.LogDestination = config.LogDestinationFile
+	cfg.LogFile = filepath.Join(t.TempDir(), "fw.log")
+
+	opts := optionsFromConfig(&cfg)
+	if opts.format != config.LogFormatJSON {
+		t.Fatalf("出厂默认日志格式 = %d，期望 JSON(%d)", opts.format, config.LogFormatJSON)
+	}
+
+	lg, closeSinks := initLogger(opts)
+	lg.Info("内核 netlink 链路已就绪", "sample", "1s")
+	if err := closeSinks(); err != nil {
+		t.Fatalf("关闭 sink 失败: %v", err)
+	}
+
+	data, err := os.ReadFile(cfg.LogFile)
+	if err != nil {
+		t.Fatalf("读取日志文件失败: %v", err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(data), &record); err != nil {
+		t.Fatalf("默认格式的日志行不是合法 JSON: %q（%v）", data, err)
+	}
+	if record["msg"] != "内核 netlink 链路已就绪" {
+		t.Errorf("日志记录的 msg = %v，期望原文", record["msg"])
 	}
 }

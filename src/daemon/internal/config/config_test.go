@@ -53,7 +53,7 @@ func TestDefaultConfigValues(t *testing.T) {
 		{"MetricsBindAddress", c.MetricsBindAddress, "127.0.0.1"},
 		{"LogLevel", c.LogLevel, uint8(LogLevelInfo)},
 		{"LogDestination", c.LogDestination, uint8(LogDestinationBoth)},
-		{"LogFormat", c.LogFormat, uint8(LogFormatPlain)},
+		{"LogFormat", c.LogFormat, uint8(LogFormatJSON)},
 		{"LogMaxSizeMB", c.LogMaxSizeMB, uint32(10)},
 		{"LogMaxFiles", c.LogMaxFiles, uint32(10)},
 		{"StrictMode", c.StrictMode, true},

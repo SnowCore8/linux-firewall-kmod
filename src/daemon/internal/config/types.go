@@ -306,7 +306,10 @@ func Default() Config {
 		MetricsBindAddress: "127.0.0.1",
 		LogLevel:           LogLevelInfo,
 		LogDestination:     LogDestinationBoth,
-		LogFormat:            LogFormatPlain,
+		// 默认 JSON Lines：写进 log_file 的每行都要能被采集端直接解析（集成规格
+		// test_15.4 与 docs/zh/operations/monitoring.md 说的都是这件事）。plain 仍是
+		// log_format 的可选取值，给人读的开发机用。
+		LogFormat:            LogFormatJSON,
 		LogMaxSizeMB:         10,
 		LogMaxFiles:          10,
 		StrictMode:           true,
