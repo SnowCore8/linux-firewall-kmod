@@ -125,10 +125,23 @@ $(DAEMON_SRCS_DIR): $(GOC)
 # 前端 (React 19 + TypeScript + Vite + antd-mobile，移动优先)
 # 依赖锁定：frontend/package-lock.json 已入库，CI 用 npm ci 保证可复现
 .PHONY: frontend frontend-install frontend-typecheck
-frontend: $(DAEMON_SRCS_DIR)/web_ui/static
+frontend: $(WEBUI_STATIC_DIR)
 
-$(DAEMON_SRCS_DIR)/web_ui/static: frontend
+# 面板产物的真实依赖：装好的依赖（frontend-install）+ 全部前端源文件。
+# 本目标**不得**反过来被 frontend-install 或 .PHONY 的 frontend 依赖：
+# 此前写作 `$(DAEMON_SRCS_DIR)/web_ui/static: frontend` 而 `frontend: $(DAEMON_SRCS_DIR)/web_ui/static`，
+# 构成 frontend <-> 面板目录 的循环，make 只会丢弃这条依赖（CI 日志里的
+# "Circular frontend <- src/daemon/web_ui/static dependency dropped"），
+# 结果是 npm ci 从不执行、tsc 因找不到 react / vite/client 类型而全线报错。
+FRONTEND_SRCS := $(PFX_FRONTEND)/package.json $(PFX_FRONTEND)/package-lock.json \
+	$(PFX_FRONTEND)/tsconfig.json $(PFX_FRONTEND)/vite.config.ts $(PFX_FRONTEND)/index.html \
+	$(shell find $(PFX_FRONTEND)/src $(PFX_FRONTEND)/public -type f 2>/dev/null)
+
+$(WEBUI_STATIC_DIR): frontend-install $(FRONTEND_SRCS)
 	@mkdir -p $(WEBUI_STATIC_DIR)
+	@# 先清掉上一轮面板产物再重建：vite 侧 emptyOutDir=false（不能清目录，否则会连
+	@# 已入库的 assets.go 一起删），改名或被删的视图就不会留成陈旧产物。
+	@find $(WEBUI_STATIC_DIR) -mindepth 1 ! -name assets.go -delete
 	@cd $(PFX_FRONTEND) && npm run build
 	@echo "  ✓ Frontend built to $(WEBUI_STATIC_DIR)/"
 
@@ -537,7 +550,10 @@ clean:
 	@echo "Cleaning build artifacts..."
 	@rm -rf $(BUILD_DIR)
 	@rm -rf target
-	@cd $(DAEMON_SRCS_DIR) && go clean -cached
+	@# 守护二进制的产物只有 build/（上面已整目录删除）；这里做模块内的包级清理。
+	@# 注意 `-cached` 不是 go clean 的合法参数（合法的是 `-cache`，但那是清空全局
+	@# 构建缓存，不该由本仓库的 clean 触发），写错时本行会以 exit 2 中断 clean。
+	@cd $(DAEMON_SRCS_DIR) && $(GOC) clean
 	@mkdir -p $(WEBUI_STATIC_DIR)
 	@# 只删面板文件，保留 embed 所有者 assets.go（它位于构建产物目录内，
 	@# 由 make frontend 的 vite 输出路径自然生成，见 src/daemon/web_ui/static/assets.go）。
