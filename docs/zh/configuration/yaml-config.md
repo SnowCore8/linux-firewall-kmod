@@ -11,7 +11,7 @@
 | `jails` | 映射 | 否 | 键是 jail 名，值是 jail 定义 |
 | `ddos` | 映射 | 否 | 速率与 DDoS 参数，下发给内核 |
 | `webui` | 映射 | 否 | 面板推送与告警阈值 |
-| `trusted_ips` | 字符串数组 | 否 | 想放行自己的地址优先用内核白名单条目，见 [ProcFS 接口](procfs.md)。这一段现在只被解析保存，没有消费方（未验证：`src/daemon` 里没有读到它的地方） |
+| `trusted_ips` | 字符串数组 | 否 | 启动时（内核注册成功后）逐条下发内核白名单，单 IP 与 CIDR 都支持；解析失败或内核拒绝的条目跳过并告警，不阻断启动。改这一段要重启守护进程才生效，热重载不重下发。见 [ProcFS 接口](procfs.md) |
 | `capacity` | 映射 | 否 | 四张表的条目上限 |
 | `geoip_db_path` | 字符串 | 否 | 城市级 GeoIP 库路径 |
 | `server_latitude` | 数值或字符串 | 否 | 本机纬度，必须与经度成对 |
@@ -38,7 +38,7 @@
 | `log_file` | 字符串 | 否 | 空 | 独立日志文件路径 |
 | `log_level` | 整数 | 否 | 3 | 0 无、1 错误、2 警告、3 信息、4 调试 |
 | `log_destination` | 字符串 | 否 | `both` | `syslog` / `file` / `both` / `journal` |
-| `log_format` | 字符串 | 否 | `plain` | `plain` 或 `json` |
+| `log_format` | 字符串 | 否 | `json` | `plain` 或 `json`；默认每行一条 JSON 对象，采集端可直接解析（见 [监控与告警](../operations/monitoring.md)） |
 | `history_db_path` | 字符串 | 否 | 空 | SQLite 历史库路径；留空即关闭整个分析面 |
 | `history_retention_days` | 整数 | 否 | 7 | 历史行保留天数，清理调度器按它删旧记录 |
 | `log_max_size_mb` | 整数 | 否 | 10 | 单个日志文件上限 |

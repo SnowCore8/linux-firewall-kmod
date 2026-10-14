@@ -366,6 +366,11 @@ cat /proc/firewall/stats
 受保护端口集合只由守护进程经 netlink 下发，procfs 不提供写入口。
 位图为空时语义是「全端口受保护」，出处 `src/kernel-module/fw_ports.c`。
 
+配置的 `trusted_ips` 是白名单的第二个写入者：组合根在拿到内核守护进程租约之后逐条下发
+（`src/daemon/cmd/firewall-daemon/main.go` 的 `pushTrustedIPs`）。单 IP 与 CIDR 都接受，
+键的归一化与 HTTP 写入侧同源（`internal/bans/whitelist_prefix.go`）；一条解析失败只跳过
+并告警，不阻断启动。只有启动时下发一次，改这一段要重启。
+
 ### Jail
 
 一个 Jail = 一个日志源 + 一组正则 + 一套封禁参数。

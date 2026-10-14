@@ -106,7 +106,7 @@ func (h *APIHandlers) RemoveWhitelist(w http.ResponseWriter, r *http.Request) {
 		WriteCode(w, httpcontract.Code40004, "移除白名单失败：CIDR 非法 "+cidr)
 		return
 	}
-	prefix = normalizeWhitelistPrefix(prefix).Masked()
+	prefix = bans.NormalizeWhitelistPrefix(prefix).Masked()
 
 	if !bans.GlobalWhitelist().Remove(prefix) {
 		WriteCode(w, httpcontract.Code40004, "移除白名单失败：该网段不在表中 "+cidr)
@@ -129,33 +129,8 @@ func (h *APIHandlers) RemoveWhitelist(w http.ResponseWriter, r *http.Request) {
 
 // parseWhitelistTarget 把「CIDR 或裸 IP」两种写法折成一个前缀。
 //
-// 裸 IP 的主机位长度必须由地址自己决定：写死 32 会让 IPv6 的 /128 变成非法前缀，
-// 而 Add 的调用方不该关心这次输入是 v4 还是 v6。
+// 归一化本身不在这里重复实现：写入侧的三条路径（这条 HTTP 路径、组合根启动时下发配置里
+// 的可信地址、事件泵按内核回显重建镜像）必须共用同一套键规则，见 bans.WhitelistPrefixFromText。
 func parseWhitelistTarget(text string) (netip.Prefix, error) {
-	if prefix, err := netip.ParsePrefix(text); err == nil {
-		return normalizeWhitelistPrefix(prefix), nil
-	}
-	addr, err := netip.ParseAddr(text)
-	if err != nil {
-		return netip.Prefix{}, err
-	}
-	if addr.Is4() || addr.Is4In6() {
-		return netip.PrefixFrom(addr.Unmap(), 32), nil
-	}
-	return netip.PrefixFrom(addr, 128), nil
-}
-
-// normalizeWhitelistPrefix 把 IPv4 映射前缀（::ffff:10.0.0.0/104 这类）折成 IPv4 本体。
-//
-// 不归一会有两份键：镜像里存 "::ffff:10.0.0.0/104"，而内核按 AF_INET 回显同一条规则时
-// 事件泵算出的是 "10.0.0.0/32"（kernel/consumer.go 的 prefixFromAddr 从线格式的
-// af+addr+prefix_len 重建）——同一条白名单在表里出现两次，删除只能打中其中一条。这与
-// 缺陷 HTTP_WHITELIST_KEY_DIVERGENCE 记的是同一类病，只是发生在写入侧而不是旧实现的
-// 三条读侧。前缀长度不足 96 的映射写法（::ffff:0:0/8）不是「一个 IPv4 前缀」，保持原样。
-func normalizeWhitelistPrefix(prefix netip.Prefix) netip.Prefix {
-	addr := prefix.Addr()
-	if addr.Is4In6() && prefix.Bits() >= 96 {
-		return netip.PrefixFrom(addr.Unmap(), prefix.Bits()-96)
-	}
-	return prefix
+	return bans.WhitelistPrefixFromText(text)
 }

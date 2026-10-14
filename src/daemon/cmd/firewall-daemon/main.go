@@ -350,6 +350,14 @@ func run(args []string) error {
 		} else {
 			pumpToken := runtime.NewShutdown()
 			sup.Spawn("kernel-event-pump", pumpToken, func() { pump.Run(pumpToken) })
+			// 可信地址必须在注册成功之后下发：内核在收到 DAEMON_REGISTER 之前丢弃一切指令，
+			// 白名单写进去也不会落表。放在事件泵启动之后、入站链路装配之前，让第一批判定
+			// 就已经跑在有放行的内核上。
+			if len(cfg.TrustedIPs) > 0 {
+				pushed, skipped := pushTrustedIPs(whitelistSinkForDaemon, cfg.TrustedIPs, logger)
+				logger.Info("trusted_ips 已下发内核白名单",
+					"configured", len(cfg.TrustedIPs), "pushed", pushed, "skipped", skipped)
+			}
 			logger.Info("内核事件泵已启动",
 				"sample", kernel.SampleInterval.String(),
 				"reconcile", kernel.ReconcileInterval.String(),
@@ -649,6 +657,49 @@ func (s *whitelistSink) Remove(addr netip.Addr, prefixLen uint8, device string) 
 	}
 	_, err := s.client.RemoveWhitelist(addr, prefixLen, device)
 	return err
+}
+
+// pushTrustedIPs 把 `trusted_ips` 里声明的地址下发进内核白名单，返回下发成功与被跳过
+// 的条数。
+//
+// 为什么值得单独走一次下发：放行必须在丢包之前决定才算数，而判定链路口子在内核那边；
+// 用户态镜像那份只是面板读的表。配置文件的注释承诺「启动时自动加入内核白名单」，这个函数
+// 就是那句承诺的消费者。
+//
+// 形状照 http.AddWhitelist：先占镜像、再下发、下发失败撤回镜像。区别是**一条失败不影响
+// 其余**，也不中止启动——一个写错的地址不该让防火墙整个起不来，但必须显眼告警，因为漏
+// 放行的代价是运维自己被自己的规则封掉。
+func pushTrustedIPs(sink http.KernelWhitelist, list []string, logger *slog.Logger) (pushed, skipped int) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	for _, text := range list {
+		prefix, err := bans.WhitelistPrefixFromText(text)
+		if err != nil {
+			logger.Warn("trusted_ips 有一条无法解析，已跳过：该地址不会进内核白名单", "entry", text, "error", err)
+			skipped++
+			continue
+		}
+		prefix = prefix.Masked()
+		added := bans.GlobalWhitelist().Add(prefix)
+		if sink == nil {
+			// 内核客户端缺席（模块没加载 / netlink 链路没建起来）：镜像里仍留着这条规则，
+			// 与 HTTP 写入侧同一口径——契约没给白名单编「依赖未就绪」这个码。
+			logger.Debug("内核白名单出口未装配，可信地址只留在镜像里", "cidr", prefix.String())
+			pushed++
+			continue
+		}
+		if err := sink.Add(prefix.Addr(), uint8(prefix.Bits()), ""); err != nil {
+			logger.Warn("可信地址下发内核白名单失败", "cidr", prefix.String(), "error", err)
+			if added {
+				bans.GlobalWhitelist().Remove(prefix)
+			}
+			skipped++
+			continue
+		}
+		pushed++
+	}
+	return pushed, skipped
 }
 
 // configSink 是配置的内核下发出口，同时满足 http.KernelConfig 与

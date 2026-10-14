@@ -171,9 +171,10 @@ trusted_ips:
 - `ban_time: -1` 是这个 jail 的永久封禁写法。
 - `sshd` 三个数值都显式写了，服务名表的推断不会动它们。
 - 只填 `metrics_username` 或只填 `metrics_password` 判为配置失败，两项要一起填。
-- 文件里 `trusted_ips` 那段注释说「启动时自动加入内核白名单」。
-  实际读代码只找到解析和保存，没找到消费方（未验证：`src/daemon` 里没有读 `cfg.TrustedIPs` 的地方）。
-  要放行自己的地址，用 `echo "<网段>" | sudo tee /proc/firewall/whitelist`。
+- 文件里 `trusted_ips` 那段注释说的「启动时自动加入内核白名单」是真的：组合根在注册成功
+  （拿到内核的守护进程租约）之后逐条下发，裸 IP 与 CIDR 两种写法都接受，键按内核的归一化
+  规则折叠。一条写错只跳过那一条并告警，不会让守护进程起不来；改这一段要重启才生效，
+  热重载不重下发。临时放行仍可以直接写 `echo "<网段>" | sudo tee /proc/firewall/whitelist`。
 - 这份文件里的 `metrics_bind_address` 是 `0.0.0.0`，局域网能连，所以凭据必须配。
 
 ## 六、开关覆盖：`config/_overrides.yaml`
