@@ -93,8 +93,10 @@ opencode.json
 
 # ---- Node.js / Playwright E2E ----
 node_modules/
-# 仅忽略根目录锁文件；frontend/package-lock.json 必须入库（CI 用 npm ci 保证可复现）
-/package-lock.json
+# 锁文件一律入库，CI 用 npm ci 保证可复现（frontend/ 与仓库根的 e2e 套件同规则）。
+# 早先这里排除根锁、只留 frontend/package-lock.json，后果是 e2e 任务两头落空：
+# setup-node 的 cache-dependency-path 解析不到文件（"Some specified paths were not
+# resolved, unable to cache dependencies"）直接失败，后面的 `npm ci` 也没有 lock 可用。
 test-results/
 playwright-report/
 blob-report/
