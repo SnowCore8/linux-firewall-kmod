@@ -1,7 +1,7 @@
 {
   "name": "Firewall — 实时 IP 封禁防护",
   "short_name": "Firewall",
-  "description": "Linux 内核模块版 fail2ban 控制面板：实时封禁、白名单、DDoS 监控",
+  "description": "Linux 内核模块防火墙控制面板：实时封禁、白名单、DDoS 监控",
   "lang": "zh-CN",
   "dir": "ltr",
   "start_url": "/dashboard#/dashboard",

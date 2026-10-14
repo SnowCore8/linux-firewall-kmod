@@ -76,23 +76,24 @@ Priority: optional
 Architecture: amd64
 Depends: dkms, build-essential, linux-headers
 Maintainer: SnowCore8 <snowcore8@gmail.com>
-Description: Linux kernel module version of fail2ban
- Firewall is a high-performance real-time IP ban protection system.
- It moves fail2ban's core functionality from userspace to the kernel,
- using netfilter framework for packet-level banning with lower latency.
+Description: Linux kernel module firewall with real-time IP banning
+ Firewall bans at packet level in kernel space via netfilter hooks, with a
+ userspace daemon that reads logs, decides, and pushes ban/whitelist commands
+ over netlink. Decisions stay in user space; only the drop moves into the
+ kernel.
  .
  This package uses DKMS to build the kernel module for the running
  kernel during installation. The module will be automatically rebuilt
  when the kernel is upgraded.
  .
  Features:
-  - Kernel-space IP banning via netfilter hooks
-  - Jail system for multi-service isolation
-  - Hash table for O(1) IP lookup (4096 capacity)
-  - RCU concurrency safety + spinlock protection
-  - PCRE2 regex log parsing with JIT acceleration
-  - SQLite persistence for permanent bans
-  - Prometheus metrics export
+  - Kernel-space IP banning via netfilter hooks (hash + layered prefix buckets)
+  - Jail system for per-service log/regex/ban-time isolation
+  - Entry caps are module parameters (fw_max_ban_entries and friends)
+  - RCU lookups with per-entry timers; spinlock only on bucket writes
+  - Go regexp (RE2) log parsing in the daemon, no PCRE2/JIT
+  - Ban history in SQLite; kernel state snapshot restores bans across reload
+  - Prometheus metrics export and an embedded mobile-first web panel
 EOF
 
 # 创建 postinst 脚本（DKMS 模式）
