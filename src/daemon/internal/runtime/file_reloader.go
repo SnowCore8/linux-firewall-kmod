@@ -25,7 +25,6 @@ func (r *fileReloader) Reload(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-
 	// 从 Default() 起步，而不是零值：初始加载（main.go）就是「Default() + 文件」，重载必须
 	// 同一条口径。零值起步会让一份没写 defaults 段的文件把 defaults.max_retries/findtime/
 	// ban_time、整个 ddos 段、interval 都清成 0——Validate 会因 default_max_retries == 0
@@ -51,7 +50,7 @@ func (r *fileReloader) Reload(cfg *config.Config) error {
 		r.logger.Warn("配置正则未能编译，该 jail 退化为其关键字回退", "detail", warning)
 	}
 
-	*cfg = newCfg
+	r.applyConfig(cfg, newCfg)
 	r.logger.Info("configuration reloaded successfully")
 	return nil
 }
@@ -79,7 +78,21 @@ func (r *fileReloader) Rollback(cfg *config.Config) error {
 		r.logger.Warn("配置正则未能编译，该 jail 退化为其关键字回退", "detail", warning)
 	}
 
-	*cfg = newCfg
+	r.applyConfig(cfg, newCfg)
 	r.logger.Info("configuration rolled back successfully")
 	return nil
+}
+
+// applyConfig 换入新配置，并说破监听地址的错位。
+//
+// HTTP 服务器只在启动时绑定一次端口，重载与回滚都不重绑。metrics_port 现在真的会
+// 改变合成地址（此前那个字段没有消费者，怎么改都是 127.0.0.1:9119），所以两份不一致
+// 时留一条告警，而不是让人以为把端口写进文件就立刻生效。
+func (r *fileReloader) applyConfig(cfg *config.Config, newCfg config.Config) {
+	running := cfg.ListenAddress()
+	*cfg = newCfg
+	if configured := cfg.ListenAddress(); configured != running {
+		r.logger.Warn("HTTP 监听地址已改变，本进程不会重新绑定，需重启守护进程才会生效",
+			"running", running, "configured", configured)
+	}
 }

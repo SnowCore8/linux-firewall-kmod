@@ -5,8 +5,10 @@
 package config
 
 import (
+	"net"
 	"net/netip"
 	"regexp"
+	"strconv"
 )
 
 // FamilyOf 返回地址族的判定码，与 netlink 契约的 `fw_addr_family` 取值一致。
@@ -325,7 +327,8 @@ type Config struct {
 	GeoipDetectEgress   bool
 	GeoipEgressProbeURL string
 
-	HTTPAddress          string
+	// HTTP 面的监听地址不是独立配置项，而是由 metrics_bind_address + metrics_port
+	// 现场合成，见 ListenAddress。
 	MaxSSEConnections    int
 	HistoryDBPath        string
 	HistoryRetentionDays int
@@ -353,11 +356,32 @@ func Default() Config {
 		Ddos:                 DefaultDdosConfig(),
 		Webui:                DefaultWebuiConfig(),
 		Capacity:             DefaultCapacityConfig(),
-		HTTPAddress:          "127.0.0.1:9119",
 		MaxSSEConnections:    32,
 		HistoryDBPath:        "",
 		HistoryRetentionDays: 7,
 	}
+}
+
+// ListenAddress 是 HTTP 面（面板、/api/v1、/metrics 共用同一端口）的监听地址，
+// 由 metrics_bind_address 与 metrics_port 现场合成。
+//
+// 这两个键此前没有消费者：监听地址取自一个写死 127.0.0.1:9119 的字段，改
+// metrics_port 不生效，`config/default.yaml` 声明的 0.0.0.0（局域网访问面板）
+// 也被静默降级成只听回环。改成方法后不存在「缓存值与配置不一致」这种状态，
+// PUT /config 与热重载落盘之后再读就是新值。
+//
+// metrics_port = 0 表示关闭 HTTP 面（口径见 jail.Validate 的注释），返回空串，
+// 由组合根按「缺席」处理。
+func (c *Config) ListenAddress() string {
+	if c.MetricsPort == 0 {
+		return ""
+	}
+	// 绑定地址为空时按回环处理：宁可只听本地，也不让一个空值把面板开放到所有网卡。
+	host := c.MetricsBindAddress
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, strconv.Itoa(int(c.MetricsPort)))
 }
 
 // NewJail 创建新 jail：数值字段为 0，运行期容器按上限预分配。

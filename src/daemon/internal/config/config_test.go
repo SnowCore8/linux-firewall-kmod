@@ -293,3 +293,42 @@ func TestNewJailDefaults(t *testing.T) {
 		t.Error("PrefixFor 未按地址族选择")
 	}
 }
+
+// ListenAddress 曾是写死的 127.0.0.1:9119，defaults.metrics_port 与
+// metrics_bind_address 因此没有消费者：集成测试自起 daemon 时取空闲端口写进配置，
+// daemon 却仍只听 9119，于是「端口未在 8s 内就绪」。这里钉住合成规则本身。
+func TestListenAddressFollowsMetricsKnobs(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{"默认", "", "127.0.0.1:9119"},
+		{"只改端口", "defaults:\n  metrics_port: 49729\n", "127.0.0.1:49729"},
+		{"端口与绑定", "defaults:\n  metrics_port: 49729\n  metrics_bind_address: \"0.0.0.0\"\n", "0.0.0.0:49729"},
+		{"绑定值为空退回回环", "defaults:\n  metrics_bind_address: \"\"\n", "127.0.0.1:9119"},
+		{"端口 0 表示关闭", "defaults:\n  metrics_port: 0\n", ""},
+	}
+	for _, c := range cases {
+		cfg := Default()
+		if c.yaml != "" {
+			if err := ParseConfig(c.yaml, &cfg); err != nil {
+				t.Fatalf("%s: 解析失败: %v", c.name, err)
+			}
+		}
+		if got := cfg.ListenAddress(); got != c.want {
+			t.Errorf("%s: ListenAddress() = %q，期望 %q", c.name, got, c.want)
+		}
+	}
+}
+
+// IPv6 绑定地址必须带方括号，否则 net.SplitHostPort 在监听侧就报错。
+func TestListenAddressBracketsIPv6(t *testing.T) {
+	cfg := Default()
+	if err := ParseConfig("defaults:\n  metrics_bind_address: \"::\"\n", &cfg); err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if got := cfg.ListenAddress(); got != "[::]:9119" {
+		t.Errorf("IPv6 绑定合成结果 = %q，期望 \"[::]:9119\"", got)
+	}
+}

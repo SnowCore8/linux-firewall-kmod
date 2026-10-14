@@ -105,8 +105,8 @@ func run(args []string) error {
 
 	// Prometheus 指标注册表在整条装配链的最前面建立：内核链路、入站执行体、HTTP 面都要
 	// 往里写计数，而它们的装配顺序不固定（内核链路早于 HTTP）。此前它只在 HTTP 段里建，
-	// 于是 netlink 与配置重载这两组计数没有可写之处。HTTPAddress 为空时它依旧存在，
-	// 只是无人抓取。
+	// 于是 netlink 与配置重载这两组计数没有可写之处。禁用 HTTP 面（metrics_port=0）
+	// 时它依旧存在，只是无人抓取。
 	metrics := http.NewMetrics()
 	// 预注册这些计数器，使 /metrics 从启动起就有稳定的 0 值样本行，而不是等到第一次自增
 	// 才出现（Prometheus 抓取与集成测试都以此为存在性判据）。netlink 那四个即使链路建不
@@ -202,12 +202,14 @@ func run(args []string) error {
 	var httpServer *http.Server
 	var sseBroker *http.SSEBroker
 	// api 要活在 if 之外：事件泵的域载荷镜像与执行体的 jails 变更通知都挂在它身上，
-	// 而这两处都在 HTTP 段之后装配。HTTPAddress 为空时它是 nil，两处注入都按缺席处理。
+	// 而这两处都在 HTTP 段之后装配。监听地址为空（metrics_port=0）时它是 nil，
+	// 两处注入都按缺席处理。
 	var api *http.APIHandlers
-	if cfg.HTTPAddress != "" {
+	httpAddr := cfg.ListenAddress()
+	if httpAddr != "" {
 		var err error
 		httpServer, err = http.NewServer(http.Config{
-			Address:         cfg.HTTPAddress,
+			Address:         httpAddr,
 			MaxConnections:  cfg.MaxSSEConnections,
 			ShutdownTimeout: 5 * time.Second,
 			Logger:          logger,
@@ -267,7 +269,7 @@ func run(args []string) error {
 					logger.Error("HTTP 服务器异常退出", "error", err)
 				}
 			})
-			logger.Info("HTTP 服务器已启动", "addr", cfg.HTTPAddress)
+			logger.Info("HTTP 服务器已启动", "addr", httpAddr)
 		}
 	}
 
