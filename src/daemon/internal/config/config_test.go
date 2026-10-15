@@ -89,8 +89,13 @@ func TestParseDefaultYaml(t *testing.T) {
 	if cfg.Interval != 1 || cfg.MetricsPort != 9119 || cfg.MetricsBindAddress != "0.0.0.0" {
 		t.Errorf("defaults 网络项未生效: %+v", cfg)
 	}
-	if cfg.MetricsUsername != "snow" || cfg.MetricsPassword != "9420" {
-		t.Errorf("metrics 认证未生效: %q/%q", cfg.MetricsUsername, cfg.MetricsPassword)
+	// 出厂配置必须**带着**凭据：`metrics_bind_address` 是 0.0.0.0，而契约里两项都空即
+	// 「未配置认证并放行」，那等于把面板开给整个局域网。断言只问「有没有配」，不比对
+	// 具体值——把部署用的凭据写进源码既多余（值本身就在那份 YAML 里），又会让每次改密
+	// 都要跟着改测试。
+	if cfg.MetricsUsername == "" || cfg.MetricsPassword == "" {
+		t.Errorf("default.yaml 绑定 0.0.0.0 却缺凭据（username 空=%v password 空=%v）：契约按「两项都空」放行整个面板",
+			cfg.MetricsUsername == "", cfg.MetricsPassword == "")
 	}
 	if cfg.LogFile != "/var/log/firewall.log" || cfg.LogLevel != LogLevelInfo {
 		t.Errorf("日志项未生效: %q/%d", cfg.LogFile, cfg.LogLevel)
@@ -328,6 +333,38 @@ func TestListenAddressBracketsIPv6(t *testing.T) {
 	}
 	if got := cfg.ListenAddress(); got != "[::]:9119" {
 		t.Errorf("IPv6 绑定合成结果 = %q，期望 \"[::]:9119\"", got)
+	}
+}
+
+// TestMetricsCredentialsParseFromYaml 用夹具值盯住「这两项真的读得进配置」。
+//
+// 之前这件事是靠比对出厂 `config/default.yaml` 里的真实凭据来断言的——那份文件是部署用的，
+// 值不该复制进源码，也不该在测试失败时被 `%q` 打到输出里（CI 日志会原样收下）。
+// 读取语义本身仍在：两项都空即「未配置认证」，只填一项由认证中间件判为非法并一律拒绝，
+// 配置层不做任何回落。
+func TestMetricsCredentialsParseFromYaml(t *testing.T) {
+	cases := []struct {
+		name     string
+		yaml     string
+		wantUser string
+		wantPass string
+	}{
+		{"两项都写", "defaults:\n  metrics_username: fixture-user\n  metrics_password: fixture-pass\n", "fixture-user", "fixture-pass"},
+		{"两项留空", "defaults:\n  metrics_username: \"\"\n  metrics_password: \"\"\n", "", ""},
+		{"只写用户名", "defaults:\n  metrics_username: fixture-user\n", "fixture-user", ""},
+		{"没写这两项保持出厂空值", "", "", ""},
+	}
+	for _, c := range cases {
+		cfg := Default()
+		if c.yaml != "" {
+			if err := ParseConfig(c.yaml, &cfg); err != nil {
+				t.Fatalf("%s: 解析失败: %v", c.name, err)
+			}
+		}
+		if cfg.MetricsUsername != c.wantUser || cfg.MetricsPassword != c.wantPass {
+			t.Errorf("%s: 用户名/口令读取不符（用户名相符=%v 口令相符=%v）",
+				c.name, cfg.MetricsUsername == c.wantUser, cfg.MetricsPassword == c.wantPass)
+		}
 	}
 }
 
