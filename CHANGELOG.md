@@ -113,6 +113,13 @@
   `Authorization: Basic`（`-u` 与 `?access_token=` 都会把凭据放进 argv，而 pytest 失败时会打印命令行）；
   `http_request()` 成为唯一入口，test_16 的 `curl_get`、test_19 的 `_curl`、test_21.3 自带的那段
   `subprocess.run(["curl", …])` 都收敛过来。凭据不落任何文件、测试常量或断言消息。（`cbfc99a8`）
+- **认证项不再拿部署凭据当期望值** - `TestParseDefaultYaml` 原先比对 `config/default.yaml` 里的真实
+  用户名与口令，失败分支还把两者 `%q` 打进输出（CI 日志会原样收下）。现在出厂那份只断言「配了没有」
+  （`metrics_bind_address` 是 `0.0.0.0`，而契约把「两项都空」定义为不认证并放行整个面板），
+  「读得进来」交给新增的 `TestMetricsCredentialsParseFromYaml`，用夹具值覆盖四种形态。全仓扫描确认
+  凭据只出现在 `config/default.yaml` 一处（`tests/`、`tests/e2e/`、`.github/`、`frontend/src` 均无）。
+  **仍待处置**：本仓库在 GitHub 上是 PUBLIC，那份凭据已随历史公开，轮换与是否重写历史都是运维决定。
+  （`cc9fbda1`）
 - **新增的单元规格** - 关停：`internal/http/shutdown_test.go` 四条（流停后服务器立刻收敛、预算用尽时
   强制关闭且不留下还在忙的连接、关停中的流回 503 且不占名额、broker 重复 Stop 安全）；
   停机令牌：`internal/runtime/shutdown_test.go` 两条；可信地址：`cmd/firewall-daemon/trusted_ips_test.go`
