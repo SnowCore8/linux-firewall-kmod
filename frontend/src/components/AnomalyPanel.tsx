@@ -6,6 +6,7 @@
 import { CheckCircleOutline } from 'antd-mobile-icons'
 
 import { getJson } from '../api/client'
+import { ROUTES } from '../api/contract'
 import type { AnomalyResponse } from '../api/types'
 import { useAsync } from '../hooks/useAsync'
 import { usePollInterval } from '../hooks/usePollInterval'
@@ -21,7 +22,7 @@ import {
 } from './console'
 import { EmptyState } from './EmptyState'
 
-const ANOMALY_ENDPOINT = '/api/v1/stats/anomalies'
+const ANOMALY_ENDPOINT = ROUTES.GET_API_V1_STATS_ANOMALIES
 
 /** 评分 → 展示等级 */
 function scoreTone(score: number): Tone {

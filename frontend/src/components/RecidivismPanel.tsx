@@ -17,6 +17,7 @@
 import { ExclamationTriangleOutline } from 'antd-mobile-icons'
 
 import { getJson } from '../api/client'
+import { ROUTES } from '../api/contract'
 import type { RecidivismResponse } from '../api/types'
 import { useAsync } from '../hooks/useAsync'
 import { usePollInterval } from '../hooks/usePollInterval'
@@ -36,8 +37,8 @@ import {
 } from './console'
 import { EmptyState } from './EmptyState'
 
-/** 端点：复发率统计（见 internal/http/handlers.go 的 `/api/v1/stats/recidivism`） */
-const RECIDIVISM_ENDPOINT = '/api/v1/stats/recidivism'
+/** 端点：复发率统计；路径取契约生成物，不在组件里手写 */
+const RECIDIVISM_ENDPOINT = ROUTES.GET_API_V1_STATS_RECIDIVISM
 
 export interface RecidivismPanelProps {
   /** TOP 列表展示条数，默认 10（后端最多也只返回 10 条） */

@@ -29,6 +29,7 @@ import {
 import { AddOutline } from 'antd-mobile-icons'
 import type { WhitelistEntry, WhitelistRecommendation } from '../api/types'
 import { delJson, getJson, sendJson } from '../api/client'
+import { ROUTES } from '../api/contract'
 import { useAsync } from '../hooks/useAsync'
 import { pickLiveData } from '../hooks/useLiveData'
 import { useSse } from '../hooks/useSse'
@@ -41,9 +42,9 @@ import { PageHeader } from '../components/PageHeader'
 import { copyToClipboard, formatNumber } from '../lib/format'
 import { isValidCidr } from '../lib/validation'
 
-/** 端点常量：与 internal/http/routes.go 的路由一一对应 */
-const WHITELIST_URL = '/api/v1/whitelist'
-const WHITELIST_RECOMMENDATIONS_URL = '/api/v1/whitelist/recommendations'
+/** 端点常量：一律取契约生成物，不在页面里手写路径 */
+const WHITELIST_URL = ROUTES.GET_API_V1_WHITELIST
+const WHITELIST_RECOMMENDATIONS_URL = ROUTES.GET_API_V1_WHITELIST_RECOMMENDATIONS
 
 /** 空列表常量：避免 `?? []` 每次渲染都产生新数组，导致 useMemo 失效 */
 const EMPTY_ENTRIES: WhitelistEntry[] = []

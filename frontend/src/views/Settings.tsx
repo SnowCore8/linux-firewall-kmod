@@ -29,14 +29,15 @@ import { LoopOutline } from 'antd-mobile-icons'
 import { useNavigate } from 'react-router-dom'
 import type { UpdateConfigRequest, WebuiConfigResponse } from '../api/types'
 import { getJson, sendJson } from '../api/client'
+import { ROUTES } from '../api/contract'
 import { useAsync } from '../hooks/useAsync'
 import { useToast } from '../hooks/useToast'
 import { PageHeader } from '../components/PageHeader'
 import { BackLink, Badge, Panel, Row, Rows, SubHead, Toolbar, errorText } from '../components/console'
 import { formatDatetime } from '../lib/format'
 
-/** 端点常量：与 internal/http/routes.go 的路由一一对应 */
-const CONFIG_URL = '/api/v1/config'
+/** GET 与 PUT 共用同一路径；取生成物，不在页面里手写 */
+const CONFIG_URL = ROUTES.GET_API_V1_CONFIG
 
 /** 面板内的一行 dim 说明（10px 紧凑，不参与密度压缩） */
 const DIM_NOTE = {

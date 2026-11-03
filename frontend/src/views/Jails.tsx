@@ -19,6 +19,7 @@ import { NoticeBar, PullToRefresh, Skeleton, Switch } from 'antd-mobile'
 import { useNavigate } from 'react-router-dom'
 import type { BanDurationRecommendationResponse, JailResponse } from '../api/types'
 import { getJson, sendJson } from '../api/client'
+import { ROUTES } from '../api/contract'
 import { useAsync } from '../hooks/useAsync'
 import { pickLiveData } from '../hooks/useLiveData'
 import { useSse } from '../hooks/useSse'
@@ -28,9 +29,9 @@ import { EmptyState } from '../components/EmptyState'
 import { PageHeader } from '../components/PageHeader'
 import { formatDuration, formatNumber } from '../lib/format'
 
-/** 端点常量：与 internal/http/routes.go 的路由一一对应 */
-const JAILS_URL = '/api/v1/jails'
-const DURATION_RECOMMENDATIONS_URL = '/api/v1/stats/ban-duration-recommendations'
+/** 端点常量：一律取契约生成物，不在页面里手写路径 */
+const JAILS_URL = ROUTES.GET_API_V1_JAILS
+const DURATION_RECOMMENDATIONS_URL = ROUTES.GET_API_V1_STATS_BAN_DURATION_RECOMMENDATIONS
 
 /** 空列表常量：避免 `?? []` 每次渲染产生新数组 */
 const EMPTY_JAILS: JailResponse[] = []
