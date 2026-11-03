@@ -1,0 +1,196 @@
+/*
+ * 全局样式层 —— 承载设计系统里「AntD token 管不到」的部分：CSS 变量默认值、
+ * 自绘元素（实时灯脉冲、页面标题区、表格工具条）、滚动条、可访问性焦点环、
+ * 以及 prefers-reduced-motion 的动效降级。
+ *
+ * 分工约定：颜色/字体/圆角等**能走 AntD ConfigProvider token 的一律走 token**
+ * （见 theme/tokens.ts）；这里只补三类：
+ *   1. `:root` 上 CSS 变量的**兜底默认值**（ThemeProvider 会在挂载后覆盖成明/暗两套，
+ *      但首屏那一帧、以及 Provider 之外的 DOM 仍需要一组可用值）；
+ *   2. 纯 CSS 自绘的微件（无对应 AntD 组件）；
+ *   3. 全局体验（滚动条、焦点环、动效降级、字体渲染）。
+ *
+ * 不写死具体色值到组件类里：一律引用 var(--fw-*)，与 tokens 同源，切主题自动跟随。
+ */
+
+/* --- 兜底默认值（暗色）：ThemeProvider 挂载后按明/暗覆盖 --- */
+:root {
+  --fw-brand: #13aebf;
+  --fw-font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --fw-font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  --fw-success: #2fbf71;
+  --fw-warning: #f5a524;
+  --fw-danger: #ff5561;
+  --fw-info: #4a9eff;
+  --fw-bg-body: #05080d;
+  --fw-bg-sider: #0a0f16;
+  --fw-bg-header: #0b1119;
+  --fw-bg-elevated: #0e1621;
+  --fw-text-primary: #e6edf3;
+  --fw-text-secondary: #93a7b6;
+  --fw-border: #1c2836;
+  --fw-radius: 6px;
+  --fw-sider-width: 232px;
+  --fw-sider-collapsed-width: 64px;
+  --fw-header-height: 56px;
+  --fw-ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--fw-bg-body);
+  color: var(--fw-text-primary);
+  font-family: var(--fw-font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overscroll-behavior: none;
+}
+
+/* 等宽：IP / 速率 / 计数 / 时间戳统一走等宽，保证表格列数字对齐、可扫读 */
+.fw-mono {
+  font-family: var(--fw-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- 可访问性：键盘焦点环（鼠标点击不显示，避免视觉噪声） --- */
+:focus-visible {
+  outline: 2px solid var(--fw-brand);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* --- 实时状态灯 --- */
+.fw-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.fw-dot--pulse {
+  position: relative;
+}
+
+/* 脉冲：一圈向外扩散的同色光环，表示「数据在动」。尊重 reduced-motion（见文件末）。 */
+.fw-dot--pulse::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: inherit;
+  animation: fw-pulse 2s var(--fw-ease) infinite;
+}
+
+@keyframes fw-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  70% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+/* --- 页面标题区：吸顶，滚动时保持上下文（标题 + 实时灯不消失） --- */
+.fw-page-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 16px 0 12px;
+  margin-bottom: 16px;
+  background: linear-gradient(to bottom, var(--fw-bg-body) 72%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+/* --- 表格工具条：筛选/批量操作/刷新所在的横向区，窄屏可换行 --- */
+.fw-table-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* --- 应用外壳布局 --- */
+.fw-app-content {
+  padding: 0 20px 24px;
+  max-width: 1680px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+@media (max-width: 768px) {
+  .fw-app-content {
+    padding: 0 12px 20px;
+  }
+}
+
+/* --- 滚动条：暗色下默认滚动条太亮，统一压暗；亮色主题跟随变量 --- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--fw-border) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--fw-border);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--fw-text-secondary);
+  background-clip: content-box;
+}
+
+/* --- 数值滚动/淡入微动效（用于实时数字变化，克制、不喧宾夺主） --- */
+.fw-fade-in {
+  animation: fw-fade-in 0.24s var(--fw-ease);
+}
+
+@keyframes fw-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* --- 动效降级：用户系统开启「减少动态效果」时，关闭脉冲与淡入，只保留瞬时状态 --- */
+@media (prefers-reduced-motion: reduce) {
+  .fw-dot--pulse::after {
+    animation: none;
+    opacity: 0.5;
+  }
+  .fw-fade-in {
+    animation: none;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,331 +1,418 @@
-// Jail 管理页（控制台风格，二级页位于「更多」之下）
-//
-// 做什么：每个 Jail 一个面板——面板头 = 名称（等宽）+ 当前封禁数；面板体 = 运行状态开关行
-//        （整行 44px 触摸目标）+ 配置数据行（失败阈值 / 检测窗口 / 封禁时长 / 内网倍数 /
-//        高峰倍数）+ 解析与命中统计瓦片（本次运行累计）；页面末尾是「封禁时长推荐」面板——
-//        按累犯回归间隔判断当前时长是否偏短。
-// 影响什么：切换开关是**写操作**，会下发到 Jail 运行状态并持久化到运行时配置；
-//          其余内容为只读展示。开关是受控组件（checked 直接来自后端数据），
-//          保存失败时界面自动回到真实状态，不会出现「界面已切换但实际没生效」。
-//
-// 数据来源：
-//   1) 全局 SSE 的 jails 事件（useSse().jails）——实时且变更后立即推送；
-//   2) GET /api/v2/jails —— 实时通道未就绪时的回退（两者按共享新鲜度戳取较新一份）；
-//   3) GET /api/v2/stats/ban-duration-recommendations —— 推荐为按需计算，走 REST。
+import { useCallback, useMemo, useState } from 'react'
+import {
+  App,
+  Button,
+  Descriptions,
+  Drawer,
+  Space,
+  Switch,
+  Tag,
+  Tooltip,
+  Typography,
+  type TableProps,
+} from 'antd'
+import {
+  CheckCircleOutlined,
+  ProfileOutlined,
+  ReloadOutlined,
+  SafetyOutlined,
+  ThunderboltOutlined,
+  WarningOutlined,
+} from '@ant-design/icons'
+import { PageHeader } from '../components/PageHeader.tsx'
+import { DataTable } from '../components/DataTable.tsx'
+import { StatCard } from '../components/StatCard.tsx'
+import { useLiveData } from '../hooks/useLiveData.ts'
+import { useRefreshSignal } from '../hooks/useRefreshSignal.ts'
+import { useSseDomain, useSseState } from '../providers/SseProvider.tsx'
+import { ApiError } from '../api/client.ts'
+import { getJails, updateJail } from '../api/endpoints.ts'
+import { formatDuration, formatNumber } from '../lib/format.ts'
+import type { JailResponse } from '../api/types.ts'
 
-import { useState } from 'react'
-import type { CSSProperties } from 'react'
-import { NoticeBar, PullToRefresh, Skeleton, Switch } from 'antd-mobile'
-import { useNavigate } from 'react-router-dom'
-import type { BanDurationRecommendationResponse, JailResponse } from '../api/types'
-import { getJson, sendJson } from '../api/client'
-import { ROUTES } from '../api/contract'
-import { useAsync } from '../hooks/useAsync'
-import { pickLiveData } from '../hooks/useLiveData'
-import { useSse } from '../hooks/useSse'
-import { useToast } from '../hooks/useToast'
-import { BackLink, Badge, Panel, Row, Rows, SubHead, Tile, Tiles, Toolbar, errorText } from '../components/console'
-import { EmptyState } from '../components/EmptyState'
-import { PageHeader } from '../components/PageHeader'
-import { formatDuration, formatNumber } from '../lib/format'
+/**
+ * 越狱规则页 —— jail 配置（阈值/时长/系数）+ 运行时计数（解析漏斗/触发量）一表看全。
+ *
+ * 数据读法：SSE jails 域帧与 REST 拉取用 useLiveData 按新鲜度序号仲裁，视图只消费一个 value。
+ * 注意 PUT /jails 是**异步生效且不推 SSE 帧**的：切换开关成功后必须 refetch() 重读权威状态，
+ * 不能拿 PUT 的回包就地改表（回包只有 name/enabled/status 三个字段）。
+ *
+ * 表格可读性：主列只放「配置 + 关键计数」，五个解析漏斗指标（lines_parsed → regex_matches →
+ * ips_extracted → failed_attempts → bans_triggered）收进展开行；全字段中文画像在详情抽屉。
+ */
 
-/** 端点常量：一律取契约生成物，不在页面里手写路径 */
-const JAILS_URL = ROUTES.GET_API_V2_JAILS
-const DURATION_RECOMMENDATIONS_URL = ROUTES.GET_API_V2_STATS_BAN_DURATION_RECOMMENDATIONS
+/** SSE 断连时的 REST 兜底轮询间隔（ms）。 */
+const JAILS_POLL_MS = 30_000
 
-/** 空列表常量：避免 `?? []` 每次渲染产生新数组 */
-const EMPTY_JAILS: JailResponse[] = []
+type JailColumns = NonNullable<TableProps<JailResponse>['columns']>
 
-/** 失败阈值行里的补充说明（等宽小字） */
-const THRESHOLD_NOTE = (effective: number): string => `（生效 ${formatNumber(effective, false)}）`
-
-/** 次要说明文本：小字、弱化、允许换行（配置口径说明与推荐理由用） */
-const NOTE_TEXT: CSSProperties = {
-  fontSize: 10,
-  lineHeight: 1.45,
-  color: 'var(--fw-text-3)',
-  wordBreak: 'break-all',
-}
-
-/** 推荐条目的容器：条目之间用发丝线分界，不靠间距分组 */
-const REC_ITEM: CSSProperties = {
-  padding: '4px 6px',
-  borderBottom: '1px solid var(--fw-border)',
-}
-
-/** Jail 面板内的开关行：整行作为触摸目标，开关靠右 */
-const SWITCH_ROW: CSSProperties = { minHeight: 'var(--fw-tap)', alignItems: 'center' }
-
-/** 解析统计瓦片网格的占位格：3 列网格 5 个瓦片会空出第 6 格，
- *  不补满的话会露出网格缝隙底色（--fw-border），形成一块假色斑 */
-function TilePlaceholder() {
-  return <div className="fw-tile" aria-hidden="true" />
-}
-
-/** 把任意抛出物转成可展示文案 */
-/** 封禁时长文案：后端用 -1 表示永久，formatDuration 会渲染成「永久」 */
-function banTimeText(seconds: number): string {
-  return seconds < 0 ? '永久封禁' : formatDuration(seconds)
+/** 把未知异常归一成可读文案（后端信封 message 优先）。 */
+function errText(err: unknown, fallback: string): string {
+  return err instanceof ApiError && err.message ? err.message : fallback
 }
 
 export default function Jails() {
-  const navigate = useNavigate()
-  const toast = useToast()
-  const { jails: sseJails, payloadSeq } = useSse()
+  const { message } = App.useApp()
+  const realtimeState = useSseState()
 
-  // SSE 未就绪时的回退：GET /api/v2/jails
-  const restJails = useAsync(() => getJson<JailResponse[]>(JAILS_URL), [])
-  // 取较新的一份而非「SSE 优先」：写操作后 restJails.reload() 必须真正反映到界面。
-  // `liveJails === null` 表示**两条来源都还没有数据**，用于骨架/错误提示的判据。
-  const liveJails = pickLiveData(sseJails, payloadSeq.jails, restJails)
-  const jails = liveJails ?? EMPTY_JAILS
+  // --- 主列表：SSE jails 域 + REST 拉取合流 ---
+  const jailsDomain = useSseDomain('jails')
+  const live = useLiveData<JailResponse[]>({
+    sseValue: jailsDomain.value,
+    sseSeq: jailsDomain.seq,
+    rest: (signal) => getJails(signal),
+    refreshInterval: JAILS_POLL_MS,
+  })
+  const {
+    value: jails,
+    isLoading,
+    isRefreshing,
+    error,
+    refetch,
+  } = live
 
-  // 封禁时长推荐：与列表解耦，失败不影响开关操作
-  const recommendations = useAsync(
-    () => getJson<BanDurationRecommendationResponse>(DURATION_RECOMMENDATIONS_URL),
-    [],
+  // 命令面板「刷新当前页」
+  useRefreshSignal(() => refetch())
+
+  // --- 启停开关：按行独立的 in-flight 状态 ---
+  const [toggling, setToggling] = useState<Record<string, boolean>>({})
+
+  const handleToggle = useCallback(
+    async (record: JailResponse) => {
+      const next = !record.enabled
+      setToggling((prev) => ({ ...prev, [record.name]: true }))
+      try {
+        const res = await updateJail(record.name, { enabled: next })
+        message.success(`规则 ${res.name} 已${res.enabled ? '启用' : '停用'}（${res.status}）`)
+        // PUT 异步生效且不推 SSE 帧：重取列表拿权威状态
+        refetch()
+      } catch (err) {
+        // Switch 是受控组件（checked 直接来自数据），失败时不更新数据即自然回滚
+        message.error(errText(err, '切换失败，请稍后重试'))
+        refetch()
+      } finally {
+        setToggling((prev) => {
+          const copy = { ...prev }
+          delete copy[record.name]
+          return copy
+        })
+      }
+    },
+    [message, refetch],
   )
 
-  /** 正在提交的 Jail 名：用于开关 loading，避免同一 Jail 重复提交 */
-  const [busyName, setBusyName] = useState<string | null>(null)
+  // --- 详情抽屉 ---
+  const [detailName, setDetailName] = useState<string | null>(null)
+  const detail = useMemo(
+    () => jails?.find((j) => j.name === detailName) ?? null,
+    [jails, detailName],
+  )
 
-  /**
-   * 切换 Jail 启用状态。
-   * PUT /api/v2/jails/:name 的语义是「整体设置 enabled」，因此直接传目标值而不是取反，
-   * 避免与实时推送回来的最新状态产生竞态。
-   */
-  const toggleJail = async (jail: JailResponse, nextEnabled: boolean) => {
-    setBusyName(jail.name)
-    try {
-      const updated = await sendJson<{ enabled: boolean }, JailResponse>(
-        `${JAILS_URL}/${encodeURIComponent(jail.name)}`,
-        'PUT',
-        { enabled: nextEnabled },
-      )
-      toast.success(`${updated.name} 已${updated.enabled ? '启用' : '禁用'}`)
-      restJails.reload()
-    } catch (e) {
-      // 失败后不修改本地状态：开关受控于后端数据，会自动回到真实值
-      toast.error(`切换失败：${errorText(e)}`)
-    } finally {
-      setBusyName(null)
-    }
-  }
+  // --- 本页派生指标（只用 JailResponse 已有字段） ---
+  const derived = useMemo(() => {
+    const items = jails ?? []
+    const enabled = items.filter((j) => j.enabled).length
+    const bansTriggered = items.reduce((sum, j) => sum + j.bans_triggered, 0)
+    const failedAttempts = items.reduce((sum, j) => sum + j.failed_attempts, 0)
+    return { total: items.length, enabled, bansTriggered, failedAttempts }
+  }, [jails])
 
-  const recData = recommendations.data
-  const needsAdjust = (recData?.recommendations ?? []).filter((rec) => rec.needs_adjustment)
+  const cardsLoading = isLoading && jails == null
+
+  const columns = useMemo<JailColumns>(
+    () => [
+      {
+        title: '规则名',
+        dataIndex: 'name',
+        key: 'name',
+        width: 160,
+        render: (name: string) => (
+          <Typography.Text strong className="fw-mono">
+            {name}
+          </Typography.Text>
+        ),
+      },
+      {
+        title: '启用',
+        dataIndex: 'enabled',
+        key: 'enabled',
+        width: 90,
+        render: (_: unknown, record: JailResponse) => (
+          <Switch
+            size="small"
+            checked={record.enabled}
+            loading={toggling[record.name] === true}
+            onChange={() => void handleToggle(record)}
+            aria-label={`启用/停用规则 ${record.name}`}
+          />
+        ),
+      },
+      {
+        title: '当前封禁',
+        dataIndex: 'ban_count',
+        key: 'ban_count',
+        width: 100,
+        render: (n: number) => <span className="fw-mono">{formatNumber(n)}</span>,
+      },
+      {
+        title: '重试上限',
+        dataIndex: 'max_retries',
+        key: 'max_retries',
+        width: 120,
+        render: (_: unknown, record: JailResponse) => (
+          <Tooltip title={`此刻外部新地址实际面对的阈值（已折算高峰系数）：${record.effective_max_retries}`}>
+            <Space direction="vertical" size={0}>
+              <span className="fw-mono">{record.max_retries}</span>
+              {record.effective_max_retries !== record.max_retries && (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }} className="fw-mono">
+                  生效 {record.effective_max_retries}
+                </Typography.Text>
+              )}
+            </Space>
+          </Tooltip>
+        ),
+      },
+      {
+        title: '观察窗口',
+        dataIndex: 'findtime',
+        key: 'findtime',
+        width: 110,
+        render: (seconds: number) => <span className="fw-mono">{formatDuration(seconds)}</span>,
+      },
+      {
+        title: '封禁时长',
+        dataIndex: 'ban_time',
+        key: 'ban_time',
+        width: 110,
+        render: (seconds: number) => <span className="fw-mono">{formatDuration(seconds)}</span>,
+      },
+      {
+        title: '时段',
+        dataIndex: 'is_peak_hours',
+        key: 'is_peak_hours',
+        width: 120,
+        render: (_: unknown, record: JailResponse) =>
+          record.is_peak_hours ? (
+            <Space size={4}>
+              <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+                高峰
+              </Tag>
+              <span className="fw-mono">×{record.peak_hours_multiplier}</span>
+            </Space>
+          ) : (
+            <Tag style={{ marginInlineEnd: 0 }}>常规</Tag>
+          ),
+      },
+      {
+        title: '内网系数',
+        dataIndex: 'internal_ip_multiplier',
+        key: 'internal_ip_multiplier',
+        width: 100,
+        render: (m: number) => <span className="fw-mono">×{m}</span>,
+      },
+      {
+        title: '操作',
+        key: 'actions',
+        width: 80,
+        render: (_: unknown, record: JailResponse) => (
+          <Button type="link" size="small" onClick={() => setDetailName(record.name)}>
+            详情
+          </Button>
+        ),
+      },
+    ],
+    [toggling, handleToggle],
+  )
 
   return (
     <>
-      {/* 二级页头部：统一工具条（左端返回更多；刷新走全局下拉手势，不设页内刷新按钮） */}
-      <Toolbar>
-        <BackLink onClick={() => navigate('/more')} />
-      </Toolbar>
-
       <PageHeader
-        title="Jail 列表"
-        srOnly
-        subtitle={`共 ${formatNumber(jails.length, false)} 个 Jail；统计值为本次运行的累计口径`}
+        title="越狱规则"
+        description="日志解析规则（jail）的阈值配置、启停切换与运行时触发计数"
+        breadcrumb={[{ title: '防护' }, { title: '越狱规则' }]}
+        realtimeState={realtimeState}
       />
 
-      <PullToRefresh
-        onRefresh={async () => {
-          await Promise.all([restJails.reload(), recommendations.reload()])
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+          gap: 16,
+          marginBottom: 16,
         }}
       >
-        <div className="fw-page">
-        {/* 回退取数失败且两条来源都无数据：错误可见并提供重试 */}
-        {liveJails === null && restJails.error !== null && (
-          <NoticeBar
-            color="error"
-            wrap
-            content={`Jail 列表加载失败：${restJails.error}`}
-            extra={
-              <a onClick={() => restJails.reload()} style={{ color: 'inherit', textDecoration: 'underline' }}>
-                重试
-              </a>
-            }
-          />
-        )}
+        <StatCard
+          label="规则总数"
+          value={formatNumber(derived.total)}
+          icon={ProfileOutlined}
+          tone="info"
+          loading={cardsLoading}
+          footer="守护进程当前加载的 jail 数量"
+        />
+        <StatCard
+          label="已启用"
+          value={formatNumber(derived.enabled)}
+          icon={CheckCircleOutlined}
+          tone="success"
+          loading={cardsLoading}
+          footer={`停用 ${formatNumber(Math.max(derived.total - derived.enabled, 0))} 条`}
+        />
+        <StatCard
+          label="累计触发封禁"
+          value={formatNumber(derived.bansTriggered)}
+          icon={ThunderboltOutlined}
+          tone="danger"
+          loading={cardsLoading}
+          footer="全部规则 bans_triggered 之和"
+        />
+        <StatCard
+          label="累计失败尝试"
+          value={formatNumber(derived.failedAttempts)}
+          icon={WarningOutlined}
+          tone="warning"
+          loading={cardsLoading}
+          footer="全部规则 failed_attempts 之和"
+        />
+      </div>
 
-        {/* 首屏加载骨架：避免误显示「没有 Jail」 */}
-        {liveJails === null && restJails.loading && (
-          <Panel title="Jail 列表" padded>
-            <Skeleton.Title animated />
-            <Skeleton.Paragraph lineCount={6} animated />
-          </Panel>
-        )}
-
-        {liveJails !== null && jails.length === 0 && (
-          <Panel title="Jail 列表" padded={false}>
-            <EmptyState
-              title="没有可用 Jail"
-              description="Jail 由守护进程按配置加载；若配置中已定义却仍为空，请检查守护进程日志"
+      <DataTable<JailResponse>
+        data={jails}
+        isLoading={isLoading}
+        error={error}
+        onRetry={refetch}
+        rowKey="name"
+        columns={columns}
+        emptyScenario="no-data"
+        emptyTitle="暂无越狱规则"
+        emptyDescription="守护进程尚未配置任何 jail；规则加载后会出现在这里"
+        expandable={{
+          expandedRowRender: (record: JailResponse) => (
+            <Descriptions
+              size="small"
+              column={{ xs: 1, sm: 2, md: 3, lg: 5 }}
+              items={[
+                {
+                  key: 'lines_parsed',
+                  label: '已解析日志行',
+                  children: <span className="fw-mono">{formatNumber(record.lines_parsed)}</span>,
+                },
+                {
+                  key: 'regex_matches',
+                  label: '正则命中',
+                  children: <span className="fw-mono">{formatNumber(record.regex_matches)}</span>,
+                },
+                {
+                  key: 'ips_extracted',
+                  label: '提取 IP 数',
+                  children: <span className="fw-mono">{formatNumber(record.ips_extracted)}</span>,
+                },
+                {
+                  key: 'failed_attempts',
+                  label: '失败尝试',
+                  children: <span className="fw-mono">{formatNumber(record.failed_attempts)}</span>,
+                },
+                {
+                  key: 'bans_triggered',
+                  label: '触发封禁',
+                  children: <span className="fw-mono">{formatNumber(record.bans_triggered)}</span>,
+                },
+              ]}
             />
-          </Panel>
+          ),
+        }}
+        toolbar={
+          <>
+            <Button icon={<ReloadOutlined />} onClick={refetch} loading={isRefreshing}>
+              刷新
+            </Button>
+            <Typography.Text type="secondary" style={{ marginLeft: 'auto', fontSize: 12 }}>
+              共 {formatNumber(derived.total)} 条规则 · 展开行查看解析漏斗
+            </Typography.Text>
+          </>
+        }
+        pagination={false}
+        scroll={{ x: 'max-content' }}
+      />
+
+      {/* 单条规则详情：全字段中文画像 */}
+      <Drawer
+        open={detailName !== null}
+        title={`规则详情 · ${detailName ?? ''}`}
+        width={520}
+        onClose={() => setDetailName(null)}
+        destroyOnHidden
+      >
+        {detail ? (
+          <JailDescriptions jail={detail} />
+        ) : (
+          <Typography.Text type="secondary">
+            该规则已不在当前列表中，请关闭抽屉后刷新。
+          </Typography.Text>
         )}
+      </Drawer>
+    </>
+  )
+}
 
-        {jails.map((jail) => (
-          <Panel
-            key={jail.name}
-            title={<span className="fw-mono">{jail.name}</span>}
-            meta={`${formatNumber(jail.ban_count, false)} 个封禁中`}
-            padded={false}
-          >
-            {/* 开关行：antd Switch 自身小于触摸目标，靠整行 44px 补齐 */}
-            <div className="fw-row" style={SWITCH_ROW}>
-              <span className="fw-row-label">运行状态</span>
-              <span
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'flex-end',
-                  gap: 6,
-                }}
-              >
-                <Badge tone={jail.enabled ? 'success' : 'default'} dim={!jail.enabled}>
-                  {jail.enabled ? '已启用' : '已禁用'}
-                </Badge>
-                {/* 开关套 .fw-tap：antd Switch 默认尺寸小于触摸目标下限，容器补齐 44px */}
-                <span className="fw-tap">
-                  <Switch
-                    checked={jail.enabled}
-                    loading={busyName === jail.name}
-                    style={{ '--width': '42px', '--height': '26px' }}
-                    onChange={(checked) => {
-                      void toggleJail(jail, checked)
-                    }}
-                  />
-                </span>
-              </span>
-            </div>
+// ---------------------------------------------------------------------------
+// 详情抽屉内容
+// ---------------------------------------------------------------------------
 
-            <Rows>
-              <Row
-                label="失败次数阈值"
-                value={formatNumber(jail.max_retries, false)}
-                unit={THRESHOLD_NOTE(jail.effective_max_retries)}
-              />
-              <Row label="检测窗口" value={formatDuration(jail.findtime)} />
-              <Row
-                label="封禁时长"
-                value={banTimeText(jail.ban_time)}
-                tone={jail.ban_time < 0 ? 'danger' : 'default'}
-              />
-              <Row label="内网阈值倍数" value={`×${jail.internal_ip_multiplier}`} />
-              <Row
-                label="业务高峰期"
-                value={jail.is_peak_hours ? `是（阈值 ×${jail.peak_hours_multiplier}）` : '否'}
-                tone={jail.is_peak_hours ? 'warning' : 'default'}
-              />
-            </Rows>
+function JailDescriptions({ jail }: { jail: JailResponse }) {
+  const items = useMemo(
+    () => [
+      {
+        key: 'name',
+        label: '规则名',
+        children: <span className="fw-mono">{jail.name}</span>,
+      },
+      {
+        key: 'enabled',
+        label: '启用状态',
+        children: jail.enabled ? <Tag color="green">已启用</Tag> : <Tag>已停用</Tag>,
+      },
+      { key: 'ban_count', label: '当前封禁数', children: formatNumber(jail.ban_count) },
+      { key: 'max_retries', label: '重试上限', children: formatNumber(jail.max_retries) },
+      {
+        key: 'effective_max_retries',
+        label: '生效重试上限',
+        children: formatNumber(jail.effective_max_retries),
+      },
+      { key: 'findtime', label: '观察窗口', children: formatDuration(jail.findtime) },
+      { key: 'ban_time', label: '封禁时长', children: formatDuration(jail.ban_time) },
+      {
+        key: 'is_peak_hours',
+        label: '当前时段',
+        children: jail.is_peak_hours ? <Tag color="orange">高峰</Tag> : <Tag>常规</Tag>,
+      },
+      {
+        key: 'peak_hours_multiplier',
+        label: '高峰系数',
+        children: `×${jail.peak_hours_multiplier}`,
+      },
+      {
+        key: 'internal_ip_multiplier',
+        label: '内网 IP 系数',
+        children: `×${jail.internal_ip_multiplier}`,
+      },
+      { key: 'lines_parsed', label: '已解析日志行', children: formatNumber(jail.lines_parsed) },
+      { key: 'regex_matches', label: '正则命中次数', children: formatNumber(jail.regex_matches) },
+      { key: 'ips_extracted', label: '提取 IP 数', children: formatNumber(jail.ips_extracted) },
+      { key: 'failed_attempts', label: '失败尝试次数', children: formatNumber(jail.failed_attempts) },
+      { key: 'bans_triggered', label: '触发封禁次数', children: formatNumber(jail.bans_triggered) },
+    ],
+    [jail],
+  )
 
-            {/* 统计瓦片：5 个计数用 3 列网格压成两行，比 5 行数据行更省首屏 */}
-            <SubHead right="本次运行累计">解析与命中</SubHead>
-            <Tiles columns={3}>
-              <Tile label="解析行" value={formatNumber(jail.lines_parsed, true)} />
-              <Tile label="正则命中" value={formatNumber(jail.regex_matches, true)} />
-              <Tile label="提取 IP" value={formatNumber(jail.ips_extracted, true)} />
-              <Tile label="失败尝试" value={formatNumber(jail.failed_attempts, true)} />
-              <Tile label="触发封禁" value={formatNumber(jail.bans_triggered, true)} />
-              <TilePlaceholder />
-            </Tiles>
-          </Panel>
-        ))}
-
-        {/* 封禁时长推荐：只读建议，采纳需要人工到配置页修改（本页不隐式改配置） */}
-        <Panel
-          title="封禁时长推荐"
-          meta={
-            recommendations.data === null
-              ? undefined
-              : `${formatNumber(recommendations.data.recommendations.length, false)} 条建议`
-          }
-          padded={false}
-        >
-          {recommendations.error !== null ? (
-            <div style={{ padding: 6 }}>
-              <NoticeBar
-                color="error"
-                wrap
-                content={`推荐加载失败：${recommendations.error}`}
-                extra={
-                  <a onClick={() => recommendations.reload()} style={{ color: 'inherit', textDecoration: 'underline' }}>
-                    重试
-                  </a>
-                }
-              />
-            </div>
-          ) : recData === null ? (
-            <div style={{ padding: 6 }}>
-              <Skeleton.Paragraph lineCount={3} animated />
-            </div>
-          ) : recData.recommendations.length === 0 ? (
-            <EmptyState
-              compact
-              title="暂无推荐"
-              description="需要足够的历史封禁样本才能推断回归间隔；样本不足时不给出建议"
-            />
-          ) : (
-            <>
-              {/* 汇总说明与「无需调整」提示：都由后端给出，界面不改写结论 */}
-              {recData.summary !== '' && (
-                <div style={{ ...NOTE_TEXT, padding: '4px 6px', borderBottom: '1px solid var(--fw-border)' }}>
-                  {recData.summary}
-                </div>
-              )}
-              {needsAdjust.length === 0 && (
-                <div style={{ ...NOTE_TEXT, padding: '4px 6px', borderBottom: '1px solid var(--fw-border)' }}>
-                  当前所有 Jail 的封禁时长均处于合理区间，无需调整。
-                </div>
-              )}
-
-              {recData.recommendations.map((rec, index) => (
-                <div
-                  key={rec.jail_name}
-                  style={{
-                    ...REC_ITEM,
-                    borderBottom:
-                      index === recData.recommendations.length - 1
-                        ? 'none'
-                        : '1px solid var(--fw-border)',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                    <span className="fw-mono" style={{ ...NOTE_TEXT, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {rec.jail_name}
-                    </span>
-                    <Badge tone={rec.needs_adjustment ? 'warning' : 'success'} dim={!rec.needs_adjustment}>
-                      {rec.needs_adjustment ? '建议调整' : '保持现状'}
-                    </Badge>
-                  </div>
-
-                  <Rows>
-                    <Row label="当前时长" value={banTimeText(rec.current_ban_time)} />
-                    <Row
-                      label="建议时长"
-                      value={banTimeText(rec.recommended_ban_time)}
-                      tone={rec.needs_adjustment ? 'warning' : 'default'}
-                    />
-                    <Row label="累犯" value={formatNumber(rec.recidivist_count, false)} unit="个" />
-                    <Row
-                      label="回归中位数"
-                      value={rec.median_return_secs > 0 ? formatDuration(rec.median_return_secs) : '样本不足'}
-                    />
-                  </Rows>
-
-                  {rec.reason !== '' && (
-                    <div style={{ ...NOTE_TEXT, marginTop: 2 }}>{rec.reason}</div>
-                  )}
-                </div>
-              ))}
-            </>
-          )}
-        </Panel>
-        </div>
-      </PullToRefresh>
+  return (
+    <>
+      <Descriptions column={1} size="small" bordered items={items} className="fw-fade-in" />
+      <Space size={6} style={{ marginTop: 12 }}>
+        <SafetyOutlined style={{ color: 'var(--fw-text-secondary)' }} />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          生效重试上限已折算高峰系数；内网/信誉系数按来源地址生效，不计入该值。
+        </Typography.Text>
+      </Space>
     </>
   )
 }

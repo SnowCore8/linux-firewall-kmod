@@ -1,325 +1,326 @@
-// 命令面板：一处输入即可跳转任意页面（受控件：可用 Ctrl / Cmd + K 唤起）
-//
-// 交互约定：
-//   - 打开方式：Ctrl/Cmd+K（组件内自行注册，全局生效），或由父组件控制 open 打开
-//   - 键盘：↑/↓ 移动光标、Enter 执行、Esc 关闭（事件从 SearchBar 的 input 冒泡到内容区）
-//   - 触摸：每条命令整行可点（≥44px），手机端无需键盘也能用
-//
-// 受控/非受控两种用法都支持（两种写法都能编过，避免调用方被绑死）：
-//   <CommandPalette />                                  ← 非受控，仅热键
-//   <CommandPalette open={open} onOpenChange={setOpen} /> ← 受控，可由顶栏按钮打开
-import { Popup, SearchBar } from 'antd-mobile'
-import type { InputRef } from 'antd-mobile'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { Input, Modal, Tag, Typography, type InputRef } from 'antd'
 import {
-  AppOutline,
-  CheckShieldOutline,
-  FileOutline,
-  HistogramOutline,
-  LockOutline,
-  MoreOutline,
-  SearchOutline,
-  SetOutline,
-  UnorderedListOutline,
-} from 'antd-mobile-icons'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
+  EnterOutlined,
+  SearchOutlined,
+  SwapOutlined,
+  LogoutOutlined,
+  PlusOutlined,
+  SyncOutlined,
+  ArrowRightOutlined,
+  CompressOutlined,
+} from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
+import { NAV_ITEMS, type NavIcon } from '../app/nav.ts'
+import { useTheme } from '../providers/ThemeProvider.tsx'
+import { useAuth } from '../providers/AuthProvider.tsx'
+import { useSse } from '../providers/SseProvider.tsx'
 
-import { useTheme } from '../hooks/useTheme'
-import { EmptyState } from './EmptyState'
+/**
+ * 命令面板（Ctrl/Cmd+K）—— 键盘全可达的跳转 + 快捷动作入口。
+ *
+ * 一个输入框统一两类命令：页面跳转（来自 nav.ts，模糊匹配 label/keywords）与快捷动作
+ * （新建封禁、同步情报、切主题/密度、登出）。↑↓ 选择、Enter 执行、Esc 关闭——手不离键盘
+ * 就能在多页控制台里穿梭，这对安全运维（经常要快速跳到某页再动手）是核心效率项。
+ *
+ * 快捷动作用「导航 + 查询参数」表达意图（如 /bans?new=1 让封禁页自动开新建弹窗），
+ * 避免命令面板直接持有各页的弹窗状态——那会让它和每个页面强耦合。
+ */
 
-export interface CommandPaletteProps {
-  /** 受控打开状态；不传则由组件内部维护（配合热键） */
-  open?: boolean
-  /** 打开状态变化回调；受控/非受控都会触发 */
-  onOpenChange?: (open: boolean) => void
-}
-
-interface PaletteCommand {
-  /** 稳定唯一 id，同时作为路径类命令的跳转目标 */
+interface Command {
   id: string
-  title: string
-  description: string
-  /** 额外检索词（中文别名 / 英文名 / 路径片段） */
+  label: string
+  group: string
+  hint?: string
   keywords: string
-  /** 行首图标；antd-mobile-icons 无主题类图标，动作类命令可以不传 */
-  icon?: ReactNode
+  icon: NavIcon
   run: () => void
 }
 
-/**
- * 计算某条命令对当前查询的匹配得分。
- * 返回 null 表示不匹配（多词查询按「全部命中」处理，即 AND 语义）。
- * 权重：标题前缀 > 标题包含 > 其它字段包含，让最相关的命令排在前面。
- */
-function scoreCommand(command: PaletteCommand, tokens: string[]): number | null {
-  const title = command.title.toLowerCase()
-  const haystack =
-    `${title} ${command.description.toLowerCase()} ${command.keywords.toLowerCase()} ${command.id}`.toLowerCase()
-
-  let score = 0
-  for (const token of tokens) {
-    if (title.startsWith(token)) score += 3
-    else if (title.includes(token)) score += 2
-    else if (haystack.includes(token)) score += 1
-    else return null
-  }
-  return score
+export interface CommandPaletteProps {
+  open: boolean
+  onClose: () => void
+  /** 手动触发一次全局刷新（各页把 refetch 注册进来）。 */
+  onRefresh?: () => void
 }
 
-const ICON_STYLE: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: 17,
-  height: 17,
-  flexShrink: 0,
-  fontSize: 16,
-  color: 'var(--fw-text-3)',
+/** 极简模糊匹配：子串命中即可，label 前缀命中排在前面。 */
+function score(query: string, cmd: Command): number {
+  if (!query) return 0
+  const q = query.toLowerCase()
+  const label = cmd.label.toLowerCase()
+  if (label === q) return 100
+  if (label.startsWith(q)) return 80
+  if (label.includes(q)) return 60
+  if (cmd.keywords.includes(q)) return 40
+  if (cmd.keywords.split(' ').some((k) => k.startsWith(q))) return 30
+  return -1
 }
 
-export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, onRefresh }: CommandPaletteProps) {
   const navigate = useNavigate()
-  const { theme, toggle } = useTheme()
-
-  const [internalOpen, setInternalOpen] = useState(false)
+  const { toggleMode, toggleDensity, isDark, density } = useTheme()
+  const { logout } = useAuth()
+  const sse = useSse()
   const [query, setQuery] = useState('')
-  const [cursor, setCursor] = useState(0)
-
-  const searchRef = useRef<InputRef>(null)
+  const [active, setActive] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<InputRef>(null)
 
-  const isControlled = open !== undefined
-  const visible = open ?? internalOpen
-
-  /** 统一的开关入口：受控时只通知父组件，非受控时同时更新内部状态 */
-  const changeOpen = useCallback(
-    (next: boolean) => {
-      if (!isControlled) setInternalOpen(next)
-      onOpenChange?.(next)
-    },
-    [isControlled, onOpenChange],
-  )
-
-  const go = useCallback(
-    (path: string) => {
+  const commands = useMemo<Command[]>(() => {
+    const go = (path: string): Command['run'] => () => {
       navigate(path)
-      changeOpen(false)
-    },
-    [changeOpen, navigate],
-  )
-
-  const commands = useMemo<PaletteCommand[]>(() => {
-    const entries: [string, string, string, string, ReactNode][] = [
-      ['/dashboard', '仪表盘', '总览、威胁等级与今日封禁', 'dashboard 首页 概览 统计', <AppOutline key="i" />],
-      ['/bans', '封禁管理', '查看、新增、解封被封 IP', 'bans ban 封禁 ip 黑名单 解封', <LockOutline key="i" />],
-      ['/whitelist', '白名单', '可信 IP 与网段管理', 'whitelist 白名单 cidr 可信 放行', <CheckShieldOutline key="i" />],
-      ['/ddos', 'DDoS 监控', '实时速率、协议分布与攻击面', 'ddos 速率 pps 流量 攻击 syn', <HistogramOutline key="i" />],
-      ['/jails', 'Jail 管理', '日志源、阈值与启用开关', 'jail 阈值 开关 日志源', <UnorderedListOutline key="i" />],
-      ['/logs', '日志', '日志检索与实时跟踪', 'logs 日志 检索 跟踪', <FileOutline key="i" />],
-      ['/settings', '设置', '阈值、容量与检测开关', 'settings 设置 配置 阈值 容量', <SetOutline key="i" />],
-      ['/more', '更多', '二级功能入口', 'more 更多 其它 其他', <MoreOutline key="i" />],
-    ]
-
-    const list: PaletteCommand[] = entries.map(([path, title, description, keywords, icon]) => ({
-      id: path,
-      title,
-      description,
-      keywords,
-      icon,
-      run: () => go(path),
+      onClose()
+    }
+    const pageCmds: Command[] = NAV_ITEMS.map((item) => ({
+      id: `nav:${item.path}`,
+      label: item.label,
+      group: '跳转到',
+      hint: item.description,
+      keywords: [item.path, ...(item.keywords ?? [])].join(' '),
+      icon: item.icon,
+      run: go(item.path),
     }))
 
-    // 动作类命令（并非页面跳转）一并纳入，统一检索。
-    // 不配图标：antd-mobile-icons 里没有主题/外观类图标，留空比用错图标更好。
-    list.push({
-      id: 'toggle-theme',
-      title: theme === 'dark' ? '切换到浅色主题' : '切换到深色主题',
-      description: `当前：${theme === 'dark' ? '深色' : '浅色'}主题`,
-      keywords: 'theme 主题 深色 浅色 夜间 外观',
-      run: () => {
-        toggle()
-        changeOpen(false)
+    const actionCmds: Command[] = [
+      {
+        id: 'act:new-ban',
+        label: '新建封禁',
+        group: '快捷动作',
+        keywords: 'ban new 封禁 新建 加黑',
+        icon: PlusOutlined,
+        run: () => {
+          navigate('/bans?new=1')
+          onClose()
+        },
       },
-    })
+      {
+        id: 'act:sync-feeds',
+        label: '同步威胁情报',
+        group: '快捷动作',
+        keywords: 'threat sync 情报 同步 刷新',
+        icon: SyncOutlined,
+        run: () => {
+          navigate('/threat-feeds?sync=1')
+          onClose()
+        },
+      },
+      {
+        id: 'act:refresh',
+        label: '刷新当前页数据',
+        group: '快捷动作',
+        hint: onRefresh ? undefined : '当前页未提供刷新',
+        keywords: 'refresh reload 刷新',
+        icon: SyncOutlined,
+        run: () => {
+          onRefresh?.()
+          onClose()
+        },
+      },
+      {
+        id: 'act:theme',
+        label: isDark ? '切换到亮色主题' : '切换到暗色主题',
+        group: '外观',
+        keywords: 'theme dark light 主题 暗 亮',
+        icon: SwapOutlined,
+        run: () => {
+          toggleMode()
+          onClose()
+        },
+      },
+      {
+        id: 'act:density',
+        label: density === 'standard' ? '切换到紧凑密度' : '切换到标准密度',
+        group: '外观',
+        keywords: 'density compact 密度 紧凑',
+        icon: CompressOutlined,
+        run: () => {
+          toggleDensity()
+          onClose()
+        },
+      },
+      {
+        id: 'act:logout',
+        label: '退出登录',
+        group: '账户',
+        hint: sse.isLive ? '实时流将断开' : undefined,
+        keywords: 'logout signout 登出 退出',
+        icon: LogoutOutlined,
+        run: () => {
+          logout()
+          onClose()
+        },
+      },
+    ]
 
-    return list
-  }, [changeOpen, go, theme, toggle])
+    return [...actionCmds, ...pageCmds]
+  }, [navigate, onClose, onRefresh, isDark, density, toggleMode, toggleDensity, logout, sse.isLive])
 
   const filtered = useMemo(() => {
-    const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
-    if (tokens.length === 0) return commands
-
-    return commands
-      .map((command) => ({ command, score: scoreCommand(command, tokens) }))
-      .filter((entry): entry is { command: PaletteCommand; score: number } => entry.score !== null)
-      .sort((a, b) => b.score - a.score)
-      .map((entry) => entry.command)
+    const scored = commands
+      .map((cmd) => ({ cmd, s: score(query.trim(), cmd) }))
+      .filter((x) => x.s >= 0)
+    scored.sort((a, b) => b.s - a.s)
+    return scored.map((x) => x.cmd)
   }, [commands, query])
 
-  // 全局热键：Ctrl/Cmd + K 切换面板。带修饰键，输入框内打字也不会误触发。
+  // 打开时复位输入与选中项，并聚焦输入框
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') return
-      event.preventDefault()
-      changeOpen(!(open ?? internalOpen))
+    if (open) {
+      setQuery('')
+      setActive(0)
+      const t = window.setTimeout(() => inputRef.current?.focus(), 0)
+      return () => window.clearTimeout(t)
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [changeOpen, internalOpen, open])
+  }, [open])
 
-  // 每次打开重置查询与光标，避免上次的搜索结果残留
+  // 选中项变化时滚进可视区
   useEffect(() => {
-    if (!visible) return
-    setQuery('')
-    setCursor(0)
-  }, [visible])
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-index="${active}"]`)
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [active, filtered.length])
 
-  // 光标越界保护：过滤结果变短（边输入边过滤）时把光标夹回合法范围
-  useEffect(() => {
-    setCursor((prev) => (prev >= filtered.length ? Math.max(filtered.length - 1, 0) : prev))
-  }, [filtered.length])
+  const runActive = () => {
+    const cmd = filtered[active]
+    if (cmd) cmd.run()
+  }
 
-  // 光标移动后把当前项滚进可视区（键盘上下键操作时不会跑到屏幕外）
-  useEffect(() => {
-    const active = listRef.current?.querySelector<HTMLElement>('[data-active="true"]')
-    active?.scrollIntoView({ block: 'nearest' })
-  }, [cursor, filtered])
+  const onKeyDown = (e: ReactKeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setActive((i) => (filtered.length === 0 ? 0 : (i + 1) % filtered.length))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setActive((i) => (filtered.length === 0 ? 0 : (i - 1 + filtered.length) % filtered.length))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      runActive()
+    }
+  }
 
-  const close = useCallback(() => changeOpen(false), [changeOpen])
+  // 按 group 分段渲染
+  const grouped = useMemo(() => {
+    const order: string[] = []
+    const map = new Map<string, Command[]>()
+    for (const cmd of filtered) {
+      if (!map.has(cmd.group)) {
+        map.set(cmd.group, [])
+        order.push(cmd.group)
+      }
+      map.get(cmd.group)!.push(cmd)
+    }
+    return order.map((g) => ({ group: g, items: map.get(g)! }))
+  }, [filtered])
 
-  const onContentKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLDivElement>) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        close()
-        return
-      }
-      if (event.key === 'ArrowDown') {
-        event.preventDefault()
-        if (filtered.length > 0) setCursor((prev) => (prev + 1) % filtered.length)
-        return
-      }
-      if (event.key === 'ArrowUp') {
-        event.preventDefault()
-        if (filtered.length > 0) setCursor((prev) => (prev - 1 + filtered.length) % filtered.length)
-        return
-      }
-      if (event.key === 'Enter') {
-        event.preventDefault()
-        filtered[cursor]?.run()
-      }
-    },
-    [close, cursor, filtered],
-  )
+  let flatIndex = -1
 
   return (
-    <Popup
-      visible={visible}
-      position="top"
-      // 关闭路径只走 onMaskClick 一条：避免与 closeOnMaskClick 双触发
-      closeOnMaskClick={false}
-      onMaskClick={close}
-      // 展示动画结束后再聚焦，把手机软键盘直接带出来（不依赖固定延时）
-      afterShow={() => searchRef.current?.focus()}
-      bodyStyle={{
-        display: 'flex',
-        flexDirection: 'column',
-        maxHeight: '76vh',
-        paddingTop: 'calc(var(--fw-safe-top) + 5px)',
-        paddingBottom: 5,
-        borderBottomLeftRadius: 10,
-        borderBottomRightRadius: 10,
-        background: 'var(--fw-surface)',
-      }}
+    <Modal
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      closable={false}
+      width={560}
+      styles={{ body: { padding: 0 } }}
+      style={{ top: 96 }}
+      destroyOnHidden
     >
-      <div onKeyDown={onContentKeyDown} style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        <SearchBar
-          ref={searchRef}
+      <div style={{ padding: 12, borderBottom: '1px solid var(--fw-border)' }}>
+        <Input
+          ref={inputRef}
+          size="large"
+          variant="borderless"
+          prefix={<SearchOutlined style={{ color: 'var(--fw-text-secondary)' }} />}
+          placeholder="搜索页面或执行命令…"
           value={query}
-          onChange={setQuery}
-          placeholder="搜索页面或操作…（Ctrl / ⌘ + K）"
-          searchIcon={<SearchOutline />}
-          style={{ '--background': 'var(--fw-surface-hi)' }}
+          onChange={(e) => {
+            setQuery(e.target.value)
+            setActive(0)
+          }}
+          onKeyDown={onKeyDown}
+          aria-label="命令面板搜索"
         />
-
-        <div
-          ref={listRef}
-          role="listbox"
-          aria-label="命令列表"
-          style={{ overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '2px 5px 0' }}
-        >
-          {filtered.length === 0 ? (
-            <EmptyState
-              compact
-              title="没有匹配的命令"
-              description={`未找到与「${query.trim()}」相关的页面或操作`}
-            />
-          ) : (
-            filtered.map((command, index) => {
-              const active = index === cursor
-              return (
-                <div
-                  key={command.id}
-                  role="option"
-                  aria-selected={active}
-                  data-active={active ? 'true' : 'false'}
-                  onClick={command.run}
-                  onMouseEnter={() => setCursor(index)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    minHeight: 'var(--fw-tap)',
-                    padding: '4px 6px',
-                    borderRadius: 'var(--fw-radius-sm)',
-                    cursor: 'pointer',
-                    background: active ? 'var(--fw-primary-soft)' : 'transparent',
-                  }}
-                >
-                  <span style={{ ...ICON_STYLE, color: active ? 'var(--fw-primary-strong)' : 'var(--fw-text-3)' }}>
-                    {command.icon}
-                  </span>
-                  <span style={{ flex: 1, minWidth: 0 }}>
-                    <span
-                      style={{
-                        display: 'block',
-                        fontSize: 14,
-                        fontWeight: 500,
-                        color: active ? 'var(--fw-primary-strong)' : 'var(--fw-text)',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {command.title}
-                    </span>
-                    <span
-                      style={{
-                        display: 'block',
-                        fontSize: 12,
-                        color: 'var(--fw-text-3)',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {command.description}
-                    </span>
-                  </span>
-                  {command.id.startsWith('/') ? (
-                    <span className="fw-mono" style={{ fontSize: 11, color: 'var(--fw-text-3)', flexShrink: 0 }}>
-                      {command.id}
-                    </span>
-                  ) : null}
-                </div>
-              )
-            })
-          )}
-        </div>
       </div>
-    </Popup>
+      <div ref={listRef} style={{ maxHeight: 380, overflowY: 'auto', padding: '6px 0' }} role="listbox">
+        {filtered.length === 0 ? (
+          <Typography.Text type="secondary" style={{ display: 'block', padding: 24, textAlign: 'center' }}>
+            没有匹配的命令
+          </Typography.Text>
+        ) : (
+          grouped.map((section) => (
+            <div key={section.group}>
+              <Typography.Text
+                type="secondary"
+                style={{ display: 'block', padding: '8px 14px 4px', fontSize: 11, letterSpacing: 0.5 }}
+              >
+                {section.group}
+              </Typography.Text>
+              {section.items.map((cmd) => {
+                flatIndex += 1
+                const index = flatIndex
+                const isActive = index === active
+                const Icon = cmd.icon
+                return (
+                  <div
+                    key={cmd.id}
+                    data-index={index}
+                    role="option"
+                    aria-selected={isActive}
+                    onClick={cmd.run}
+                    onMouseEnter={() => setActive(index)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '8px 14px',
+                      cursor: 'pointer',
+                      background: isActive
+                        ? 'color-mix(in srgb, var(--fw-brand) 14%, transparent)'
+                        : 'transparent',
+                      borderInlineStart: `2px solid ${isActive ? 'var(--fw-brand)' : 'transparent'}`,
+                    }}
+                  >
+                    <Icon style={{ fontSize: 15, color: isActive ? 'var(--fw-brand)' : 'var(--fw-text-secondary)' }} />
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <Typography.Text strong={isActive} style={{ fontSize: 13 }}>
+                        {cmd.label}
+                      </Typography.Text>
+                      {cmd.hint && (
+                        <Typography.Text
+                          type="secondary"
+                          ellipsis
+                          style={{ display: 'block', fontSize: 11 }}
+                        >
+                          {cmd.hint}
+                        </Typography.Text>
+                      )}
+                    </span>
+                    {isActive && (
+                      <Tag icon={<EnterOutlined />} bordered={false} style={{ marginInlineEnd: 0 }}>
+                        Enter
+                      </Tag>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          ))
+        )}
+      </div>
+      <div
+        style={{
+          padding: '8px 14px',
+          borderTop: '1px solid var(--fw-border)',
+          display: 'flex',
+          gap: 16,
+          fontSize: 11,
+          color: 'var(--fw-text-secondary)',
+        }}
+      >
+        <span><ArrowRightOutlined /> ↑↓ 选择</span>
+        <span><EnterOutlined /> 执行</span>
+        <span>Esc 关闭</span>
+      </div>
+    </Modal>
   )
 }
-
-export default CommandPalette

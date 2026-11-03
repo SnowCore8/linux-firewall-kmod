@@ -1,29 +1,27 @@
 /**
- * SSE 实时数据单例 Context
+ * `/api/v2/events` 实时流的核心连接管理（纯 hook，无 JSX）。
  *
- * 设计要点（事件名与连接上限的声明见 contract/http.fwidl）：
- * - **单例连接**：Provider 挂在应用根部，只创建一条 `EventSource`；
- *   路由切换（hash 路由）不会重建连接，避免每次切页都重新握手、错过增量推送。
- * - **令牌走 query**：`EventSource` 无法设置 `Authorization` 头，故经 `withAccessToken()`
- *   把令牌拼成 `?access_token=`（服务端对应做百分号解码，两侧必须成对改，见 api/auth.ts）。
- *   不改用 fetch + 自定义头：那会丢掉 EventSource 的重连与命名事件语义。
- * - **指数退避重连**：EventSource 自带的重连节奏不受控，因此收到 error 时主动 close，
- *   由本模块按 `delay = min(2^min(attempt,5), 30)` 秒调度下一次连接。
- * - **防重入**：每个连接周期一个 error 标志，onerror 只处理一次；
- *   同时用「当前连接对象 === 触发者」判断，丢弃旧连接的迟到回调。
- * - **连接上限**：重连第 2 次起先探测 `GET /api/v2/stats/sse-status`，
- *   服务端已达 `MAX_SSE_CONNECTIONS` 时置 `connection_limit` 并**停止**重连
- *   （继续重试只会持续打满服务端日志，且永远不可能成功）。
+ * 门禁约束：`verify_http.py` 的 `check_sse_events` 要求契约声明的每个事件名
+ * （connected / stats / bans / jails / whitelist / rates）都**逐字**出现在本文件里
+ * （`'x'` 或 `"x"` 形式），且 Go 侧有对应发布点。所以下面用逐个 `addEventListener('名字', …)`
+ * 的写法，而不是拿数组循环——字面量必须落在源码里，这条检查才成立。
  *
- * 本文件是 `.ts` 而非 `.tsx`（契约指定的路径），因此不使用 JSX，改用 createElement。
+ * 形状约束（见 http.fwidl 对 /api/v2/events 的 note）：五个域帧的 data 与该域 REST 端点
+ * **同源同形**，前端把帧 data 直接按 REST 的类型解析，不写形状分支。唯一的差异是 bans——
+ * SSE 帧是**镜像全表**（BanResponse[]），REST 是分页对象；视图按帧整表替换本地状态。
+ *
+ * 重连策略：EventSource 自带的重连不可控（固定几秒、且不理会「已达连接上限」），这里一律
+ * 自己接管——出错即 close，按 `min(2**min(n,5),30)` 秒退避重连；重连前先探一次
+ * GET /api/v2/stats/sse-status，若 events.limit_reached 为真就**停手**（再连也是 503），
+ * 把状态标成 'limit' 交给 UI 降级到 REST 轮询，而不是无限重试把 503 当网络故障。
+ *
+ * 日志流（/api/v2/logs/stream）不在这里：它的事件名（connected/log/error）按门禁要求必须
+ * 出现在 views/Logs.tsx，故那条流由日志页自己接管。
  */
 
-import { createContext, createElement, useContext, useEffect, useReducer } from 'react'
-import type { JSX, ReactNode } from 'react'
-
-import { withAccessToken } from '../api/auth'
-import { SSE_EVENTS_URL, getSseStatus } from '../api/endpoints'
-import { nextFreshnessStamp } from './freshness'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { eventsStreamUrl, getSseStatus } from '../api/endpoints'
+import { nextSeq } from '../lib/freshness'
 import type {
   BanResponse,
   JailResponse,
@@ -32,329 +30,215 @@ import type {
   WhitelistEntry,
 } from '../api/types'
 
-/** 连接状态：connecting（握手/重试中）、connected、disconnected（暂时断开、稍后重试）、connection_limit（服务端已满，停止重试） */
-export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'connection_limit'
+/** 连接生命周期状态；UI 据此显示实时灯与降级提示。 */
+export type SseConnectionState =
+  | 'idle' // 未启用（未登录 / 主动关闭）
+  | 'connecting' // 首次握手中
+  | 'open' // 已连通、正在收帧
+  | 'reconnecting' // 断线退避重连中
+  | 'limit' // 服务端连接数已达上限（10），停止重试
+  | 'closed' // 主动关闭
 
-/** 趋势图单点：由 `rates` 事件按时间聚合出的全网速率 */
-export interface RateHistoryPoint {
-  /** 本地时间标签 HH:MM:SS */
-  label: string
-  /** 所有被追踪 IP 的包速率之和 */
-  pps: number
-  /** 所有被追踪 IP 的字节速率之和 */
-  bps: number
-  /** 该时刻被追踪的 IP 数 */
-  trackedIps: number
-}
-
-/** SseProvider 通过 Context 暴露的全部实时状态 */
-export interface SseState {
-  status: ConnectionStatus
+/** 每个域各自的数据 + 新鲜度序号（域之间独立更新，独立比较）。 */
+export interface SseSnapshot {
+  state: SseConnectionState
   stats: StatsResponse | null
   bans: BanResponse[] | null
   jails: JailResponse[] | null
-  rates: RateResponse[] | null
   whitelist: WhitelistEntry[] | null
-  /**
-   * 各域载荷的新鲜度戳：收到该域某帧时取一个全局单调戳（见
-   * [`nextFreshnessStamp`](./freshness.ts)），未收到过为 0。供
-   * [`useLiveData`](./useLiveData.ts) 与 `useAsync().dataSeq` 比较「谁的数据更新」，
-   * **不参与渲染**。
-   */
-  payloadSeq: PayloadSeq
-  /** 速率趋势环形缓冲，最多保留最近 300 点 */
-  rateHistory: RateHistoryPoint[]
-  /** 已连续失败次数（成功握手后归零），用于界面提示「第 N 次重连」 */
-  reconnectAttempt: number
-}
-
-/** 各域载荷的新鲜度戳（域名 → 戳），见 [`SseState.payloadSeq`] */
-export interface PayloadSeq {
-  stats: number
-  bans: number
-  jails: number
-  rates: number
-  whitelist: number
-}
-
-/** 速率趋势保留点数上限：约 300 × 1 秒推送间隔 = 5 分钟窗口 */
-const RATE_HISTORY_LIMIT = 300
-
-type SseAction =
-  | { type: 'connecting' }
-  | { type: 'connected' }
-  | { type: 'failed'; attempt: number }
-  | { type: 'connection_limit' }
-  | { type: 'stats'; payload: StatsResponse }
-  | { type: 'bans'; payload: BanResponse[] }
-  | { type: 'jails'; payload: JailResponse[] }
-  | { type: 'rates'; payload: RateResponse[] }
-  | { type: 'whitelist'; payload: WhitelistEntry[] }
-
-/** 首帧前的 payloadSeq：所有域都还没收到过 */
-function emptyPayloadSeq(): PayloadSeq {
-  return { stats: 0, bans: 0, jails: 0, rates: 0, whitelist: 0 }
-}
-
-function createInitialState(): SseState {
-  return {
-    status: 'connecting',
-    stats: null,
-    bans: null,
-    jails: null,
-    rates: null,
-    whitelist: null,
-    payloadSeq: emptyPayloadSeq(),
-    rateHistory: [],
-    reconnectAttempt: 0,
+  rates: RateResponse[] | null
+  seq: {
+    stats: number
+    bans: number
+    jails: number
+    whitelist: number
+    rates: number
   }
+  /** 最近一帧到达的时刻（Date.now()）；用于「数据新鲜度」指示。 */
+  lastEventAt: number
+  /** 已尝试的重连次数（成功连通后归零）。 */
+  attempts: number
 }
 
-/** 生成本地时间标签（HH:MM:SS），用作趋势图 X 轴 */
-function makeRateLabel(date: Date): string {
-  const pad = (value: number): string => String(value).padStart(2, '0')
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+const INITIAL_SNAPSHOT: SseSnapshot = {
+  state: 'idle',
+  stats: null,
+  bans: null,
+  jails: null,
+  whitelist: null,
+  rates: null,
+  seq: { stats: 0, bans: 0, jails: 0, whitelist: 0, rates: 0 },
+  lastEventAt: 0,
+  attempts: 0,
 }
 
-/** 把一帧 rates 事件聚合成趋势点（空闲时刻速率为 0 同样入图，保持时间轴连续） */
-function toRatePoint(payload: RateResponse[]): RateHistoryPoint {
-  let pps = 0
-  let bps = 0
-  for (const entry of payload) {
-    pps += entry.packets_per_sec
-    bps += entry.bytes_per_sec
-  }
-  return {
-    label: makeRateLabel(new Date()),
-    pps,
-    bps,
-    trackedIps: payload.length,
-  }
+/** 退避秒数：min(2**min(n,5), 30)。n=0→1s … n≥5→30s（契约规定，两条流共用同一公式）。 */
+export function backoffSeconds(attempt: number): number {
+  return Math.min(2 ** Math.min(attempt, 5), 30)
 }
 
-/** 把某域的新鲜度戳更新为当前全局戳（返回新对象，保持 reducer 不可变语义） */
-function bump(seq: PayloadSeq, domain: keyof PayloadSeq): PayloadSeq {
-  return { ...seq, [domain]: nextFreshnessStamp() }
-}
-
-function sseReducer(state: SseState, action: SseAction): SseState {
-  switch (action.type) {
-    case 'connecting':
-      return { ...state, status: 'connecting' }
-    case 'connected':
-      // 握手成功：清零失败计数，避免下次断开时从大的退避基数开始
-      return { ...state, status: 'connected', reconnectAttempt: 0 }
-    case 'failed':
-      return { ...state, status: 'disconnected', reconnectAttempt: action.attempt }
-    case 'connection_limit':
-      return { ...state, status: 'connection_limit' }
-    case 'stats':
-      return { ...state, stats: action.payload, payloadSeq: bump(state.payloadSeq, 'stats') }
-    case 'bans':
-      return { ...state, bans: action.payload, payloadSeq: bump(state.payloadSeq, 'bans') }
-    case 'jails':
-      return { ...state, jails: action.payload, payloadSeq: bump(state.payloadSeq, 'jails') }
-    case 'rates': {
-      const next = [...state.rateHistory, toRatePoint(action.payload)]
-      // 环形缓冲：超出上限时丢弃最旧的采样点
-      if (next.length > RATE_HISTORY_LIMIT) {
-        next.splice(0, next.length - RATE_HISTORY_LIMIT)
-      }
-      return {
-        ...state,
-        rates: action.payload,
-        rateHistory: next,
-        payloadSeq: bump(state.payloadSeq, 'rates'),
-      }
-    }
-    case 'whitelist':
-      return {
-        ...state,
-        whitelist: action.payload,
-        payloadSeq: bump(state.payloadSeq, 'whitelist'),
-      }
-    default:
-      return state
-  }
-}
-
-/**
- * 探测服务端 SSE 连接上限。
- * 探测本身失败（守护进程刚重启、瞬时网络抖动）不视为「已满」——
- * 否则一次抖动就会被误判成永久停止重连。
- *
- * 只看 `events` 一条流：本模块订阅的是 `/api/v2/events`，日志流有自己的上限
- * （5）与自己的订阅者，它满了与这里无关。
- */
-async function probeConnectionLimit(): Promise<boolean> {
+/** 安全解析帧 data；解析失败返回 null（不因一条坏帧打断整条流）。 */
+function parseFrame<T>(raw: string): T | null {
   try {
-    const info = await getSseStatus()
-    return info.events.limit_reached
-  } catch (err) {
-    // 记到 debug 级别：保留排查线索，又不污染面向用户的 console
-    console.debug('[useSse] SSE 状态探测失败，按未达上限处理并继续退避重连', err)
-    return false
+    return JSON.parse(raw) as T
+  } catch {
+    return null
   }
 }
 
-/** 订阅命名事件，只把字符串型 data 交给处理函数（非 MessageEvent / 非字符串一律忽略） */
-function subscribe(es: EventSource, event: string, handler: (data: string) => void): void {
-  es.addEventListener(event, (ev: Event) => {
-    if (ev instanceof MessageEvent && typeof ev.data === 'string') {
-      handler(ev.data)
-    }
-  })
-}
-
-const SseContext = createContext<SseState | null>(null)
-
 /**
- * 实时数据 Provider：整个应用只挂一个，内部持有唯一的 EventSource。
- * 必须在路由之外（应用根部）使用，否则路由切换会重建连接。
+ * 接管 `/api/v2/events` 连接。
+ * @param enabled 为 true 且已登录时才连接；false 时保持 idle 并断开已有连接。
  */
-export function SseProvider(props: { children: ReactNode }): JSX.Element {
-  const [state, dispatch] = useReducer(sseReducer, undefined, createInitialState)
+export function useEventStream(enabled: boolean): SseSnapshot {
+  const [snapshot, setSnapshot] = useState<SseSnapshot>(INITIAL_SNAPSHOT)
+  const esRef = useRef<EventSource | null>(null)
+  const timerRef = useRef<number | null>(null)
+  const attemptsRef = useRef(0)
+  const enabledRef = useRef(enabled)
+  enabledRef.current = enabled
 
-  useEffect(() => {
-    // stopped：卸载后阻止所有迟到的定时器/回调继续动作
-    let stopped = false
-    // source：当前生效的连接；用于丢弃旧连接的迟到事件（防重入的关键）
-    let source: EventSource | null = null
-    let retryTimer: number | null = null
-    // 连续失败次数（成功握手后归零）
-    let attempt = 0
-
-    const detach = (): void => {
-      if (source) {
-        source.close()
-        source = null
-      }
-    }
-
-    const clearRetryTimer = (): void => {
-      if (retryTimer !== null) {
-        window.clearTimeout(retryTimer)
-        retryTimer = null
-      }
-    }
-
-    /**
-     * 建立一次连接（含事件订阅与一次性 error 处理）。
-     * 用函数声明而非箭头常量：与 scheduleRetry 互相引用，靠声明提升避免「先用后定义」。
-     */
-    function connect(): void {
-      if (stopped) return
-      clearRetryTimer()
-      detach()
-      dispatch({ type: 'connecting' })
-
-      // 令牌走 query：EventSource 无法设置 Authorization 头（见 api/auth.ts）
-      const es = new EventSource(withAccessToken(SSE_EVENTS_URL))
-      source = es
-      // 本连接周期内 error 是否已处理：避免 onerror 连续触发导致重复调度
-      let errorHandled = false
-
-      subscribe(es, 'connected', () => {
-        if (stopped || source !== es) return
-        attempt = 0
-        errorHandled = false
-        dispatch({ type: 'connected' })
-      })
-      subscribe(es, 'stats', (data) => {
-        if (stopped || source !== es) return
-        try {
-          dispatch({ type: 'stats', payload: JSON.parse(data) as StatsResponse })
-        } catch (err) {
-          console.debug('[useSse] stats 事件解析失败，丢弃该帧', err)
-        }
-      })
-      subscribe(es, 'bans', (data) => {
-        if (stopped || source !== es) return
-        try {
-          dispatch({ type: 'bans', payload: JSON.parse(data) as BanResponse[] })
-        } catch (err) {
-          console.debug('[useSse] bans 事件解析失败，丢弃该帧', err)
-        }
-      })
-      subscribe(es, 'jails', (data) => {
-        if (stopped || source !== es) return
-        try {
-          dispatch({ type: 'jails', payload: JSON.parse(data) as JailResponse[] })
-        } catch (err) {
-          console.debug('[useSse] jails 事件解析失败，丢弃该帧', err)
-        }
-      })
-      subscribe(es, 'rates', (data) => {
-        if (stopped || source !== es) return
-        try {
-          dispatch({ type: 'rates', payload: JSON.parse(data) as RateResponse[] })
-        } catch (err) {
-          console.debug('[useSse] rates 事件解析失败，丢弃该帧', err)
-        }
-      })
-      subscribe(es, 'whitelist', (data) => {
-        if (stopped || source !== es) return
-        try {
-          dispatch({ type: 'whitelist', payload: JSON.parse(data) as WhitelistEntry[] })
-        } catch (err) {
-          console.debug('[useSse] whitelist 事件解析失败，丢弃该帧', err)
-        }
-      })
-
-      // 底层连接建立时先给出乐观状态：服务端的 connected 命名事件可能滞后到达
-      es.onopen = () => {
-        if (stopped || source !== es) return
-        attempt = 0
-        dispatch({ type: 'connected' })
-      }
-
-      es.onerror = () => {
-        if (stopped || source !== es || errorHandled) return
-        errorHandled = true
-        void scheduleRetry()
-      }
-    }
-
-    /** 断开后调度重连：先判连接上限，再按指数退避等待 */
-    async function scheduleRetry(): Promise<void> {
-      if (stopped) return
-      detach()
-      attempt += 1
-      dispatch({ type: 'failed', attempt })
-
-      if (attempt >= 2 && (await probeConnectionLimit())) {
-        if (stopped) return
-        // 服务端连接数已满：停止重连，由界面提示用户手动重试
-        dispatch({ type: 'connection_limit' })
-        return
-      }
-      if (stopped) return
-
-      // 指数退避：1、2、4、8、16、32 → 截断到 30 秒上限
-      const delayMs = Math.min(2 ** Math.min(attempt, 5), 30) * 1000
-      retryTimer = window.setTimeout(connect, delayMs)
-    }
-
-    connect()
-
-    return () => {
-      stopped = true
-      clearRetryTimer()
-      detach()
+  const clearTimer = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current)
+      timerRef.current = null
     }
   }, [])
 
-  return createElement(SseContext.Provider, { value: state }, props.children)
-}
+  const closeStream = useCallback(() => {
+    clearTimer()
+    if (esRef.current) {
+      // 先摘 onerror 再 close：避免我们主动关闭时又触发一次错误重连
+      esRef.current.onerror = null
+      esRef.current.close()
+      esRef.current = null
+    }
+  }, [clearTimer])
 
-/**
- * 读取实时状态。
- * @throws Error 在 `<SseProvider>` 之外调用时（说明应用根部漏挂 Provider）
- */
-export function useSse(): SseState {
-  const ctx = useContext(SseContext)
-  if (!ctx) {
-    throw new Error('useSse 必须在 <SseProvider> 内使用（请检查应用根部的 Provider 组合）')
-  }
-  return ctx
+  const setState = useCallback((state: SseConnectionState) => {
+    setSnapshot((prev) => (prev.state === state ? prev : { ...prev, state }))
+  }, [])
+
+  const connect = useCallback(() => {
+    if (!enabledRef.current) return
+    closeStream()
+    setState(attemptsRef.current === 0 ? 'connecting' : 'reconnecting')
+
+    const es = new EventSource(eventsStreamUrl())
+    esRef.current = es
+
+    es.addEventListener('connected', () => {
+      attemptsRef.current = 0
+      setSnapshot((prev) => ({ ...prev, state: 'open', attempts: 0, lastEventAt: Date.now() }))
+    })
+
+    es.addEventListener('stats', (e: MessageEvent<string>) => {
+      const data = parseFrame<StatsResponse>(e.data)
+      if (!data) return
+      setSnapshot((prev) => ({
+        ...prev,
+        state: 'open',
+        stats: data,
+        seq: { ...prev.seq, stats: nextSeq() },
+        lastEventAt: Date.now(),
+      }))
+    })
+
+    es.addEventListener('bans', (e: MessageEvent<string>) => {
+      const data = parseFrame<BanResponse[]>(e.data)
+      if (!data) return
+      setSnapshot((prev) => ({
+        ...prev,
+        state: 'open',
+        bans: data,
+        seq: { ...prev.seq, bans: nextSeq() },
+        lastEventAt: Date.now(),
+      }))
+    })
+
+    es.addEventListener('jails', (e: MessageEvent<string>) => {
+      const data = parseFrame<JailResponse[]>(e.data)
+      if (!data) return
+      setSnapshot((prev) => ({
+        ...prev,
+        state: 'open',
+        jails: data,
+        seq: { ...prev.seq, jails: nextSeq() },
+        lastEventAt: Date.now(),
+      }))
+    })
+
+    es.addEventListener('whitelist', (e: MessageEvent<string>) => {
+      const data = parseFrame<WhitelistEntry[]>(e.data)
+      if (!data) return
+      setSnapshot((prev) => ({
+        ...prev,
+        state: 'open',
+        whitelist: data,
+        seq: { ...prev.seq, whitelist: nextSeq() },
+        lastEventAt: Date.now(),
+      }))
+    })
+
+    es.addEventListener('rates', (e: MessageEvent<string>) => {
+      const data = parseFrame<RateResponse[]>(e.data)
+      if (!data) return
+      setSnapshot((prev) => ({
+        ...prev,
+        state: 'open',
+        rates: data,
+        seq: { ...prev.seq, rates: nextSeq() },
+        lastEventAt: Date.now(),
+      }))
+    })
+
+    // 退避重连：用 attemptsRef 当前值算延迟（首次失败 n=0→1s），再自增。
+    // 定义成 connect 内的具名函数，好让 onerror 的异步分支也能调到同一个实现。
+    function scheduleReconnect() {
+      const delay = backoffSeconds(attemptsRef.current) * 1000
+      attemptsRef.current += 1
+      clearTimer()
+      timerRef.current = window.setTimeout(() => {
+        timerRef.current = null
+        connect()
+      }, delay)
+    }
+
+    es.onerror = () => {
+      // 首次失败或连通后又断：一律自己接管重连（不用 EventSource 自带的不可控重连）
+      closeStream()
+      if (!enabledRef.current) return
+      setSnapshot((prev) => ({ ...prev, state: 'reconnecting', attempts: attemptsRef.current }))
+
+      // 重连前探一次上限：达上限就停手，交给 UI 降级到 REST 轮询
+      void getSseStatus()
+        .then((status) => {
+          if (!enabledRef.current) return
+          if (status.events.limit_reached) {
+            attemptsRef.current = 0
+            setSnapshot((prev) => ({ ...prev, state: 'limit' }))
+            return
+          }
+          scheduleReconnect()
+        })
+        .catch(() => {
+          // 探测本身失败（多半也是断网）：照常退避重连
+          if (enabledRef.current) scheduleReconnect()
+        })
+    }
+  }, [closeStream, setState, clearTimer])
+
+  useEffect(() => {
+    if (enabled) {
+      attemptsRef.current = 0
+      connect()
+    } else {
+      closeStream()
+      setSnapshot((prev) => ({ ...prev, state: 'idle' }))
+    }
+    return closeStream
+    // connect/closeStream 均为 useCallback 稳定引用；只在 enabled 翻转时重建连接
+  }, [enabled, connect, closeStream])
+
+  return snapshot
 }

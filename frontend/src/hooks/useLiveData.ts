@@ -1,56 +1,76 @@
-/**
- * 「实时通道 vs REST 回退」的取值裁决。
- *
- * 做什么：比较两份来源的新鲜度戳（共用 [`nextFreshnessStamp`](./freshness.ts) 的全局
- *         单调计数器），返回写入更晚的那一份数据。两者都为空时返回 null，由调用方用
- *         语义默认值兜底。
- *
- * 影响什么：取代原先的 `sseX ?? restX.data`。后者是「SSE 优先」——只要 SSE 到过任何一帧，
- *           `sseX` 就恒为非 null，REST 那份此后**永远取不到**；于是一旦某个域在服务端
- *           没有生产者（帧不会重发），写操作后的 `reload()` 与页内刷新按钮全部变成死代码，
- *           界面只能靠整页刷新（重连 SSE、重收首帧）才更新。本裁决让「后到的写入」胜出，
- *           两侧的刷新路径都真正生效。
- *
- * 为什么必须共用同一个计数器：两个来源各自计数时，比较退化成「谁计的数更大」而非「谁更新」。
- *          典型反例——REST 每 5 s 轮询、SSE 每 1 s 推帧，独立计数器下 REST 的计数值会在
- *          小节拍上反超 SSE，把更旧的 REST 快照判成更新的那份。共用计数器后，戳的大小
- *          严格等价于「写入时刻的先后」。
- *
- * 边界：不解决「服务端到底推不推」。某域在服务端无生产者时该域仍需靠 REST 刷新，此时戳比较
- *       恰好选中 REST 那份，行为正确。
- */
-
-import type { AsyncState } from './useAsync'
+import { useEffect, useMemo, useState } from 'react'
+import { useAsync } from './useAsync.ts'
+import { nextSeq, pickFresher } from '../lib/freshness.ts'
+import type { ApiError } from '../api/client.ts'
 
 /**
- * 取实时与回退两份数据中较新的一份。
+ * 实时 + 轮询的合流点 —— 一个域的数据同时有两条来路：SSE 域帧（快、可能断）和
+ * REST 拉取（慢、可靠）。本 hook 用全局新鲜度序号仲裁「谁更新」，视图只消费一个值，
+ * 不必关心它这次是从哪条路来的。
  *
- * @param live     实时通道当前载荷（该域尚未收到帧时为 null）
- * @param liveSeq  实时通道该域的新鲜度戳（`useSse().payloadSeq[domain]`）
- * @param rest     同一域 REST 回退的 `useAsync` 结果
- * @returns        较新的数据；两者都没有时返回 null
+ * 为什么两条都留着：SSE 断了（'limit' / 重连中 / 未登录）时，REST 轮询是唯一的兜底；
+ * SSE 活着时，REST 轮询退化为低频校准（服务端真值），SSE 负责秒级抖动。两者按 seq 取胜，
+ * 于是「慢 REST 晚到」不会把「新 SSE 帧」盖掉，界面不会来回跳。
+ *
+ * 用法：视图从 SseProvider 取出该域的 `sseValue` 与 `sseSeq` 传进来；REST fetcher 直接给
+ * endpoints 里的函数。bans 这类「SSE 是整表、REST 是分页」形状不一致的域，不用本 hook，
+ * 由页面自行处理（它需要服务端分页/排序，无法用整表镜像替代）。
  */
-export function pickLiveData<T>(
-  live: T | null,
-  liveSeq: number,
-  rest: AsyncState<T>,
-): T | null {
-  if (live === null) return rest.data
-  if (rest.data === null) return live
-  // 戳更大者胜出；相等只可能出现在两边都没写入过（都为 0）的情形
-  return rest.dataSeq > liveSeq ? rest.data : live
+
+export interface LiveDataOptions<T> {
+  /** SSE 该域最新值；无帧时为 null。 */
+  sseValue: T | null
+  /** SSE 该域的新鲜度序号（来自 SseSnapshot.seq）。 */
+  sseSeq: number
+  /** REST 拉取函数（带取消信号）。 */
+  rest: (signal: AbortSignal) => Promise<T>
+  /** REST 轮询间隔（ms）；SSE 活着时可放慢，断了它就是主数据源。0=只取一次。 */
+  refreshInterval?: number
+  /** 为 false 时完全不取（如未登录）。 */
+  enabled?: boolean
 }
 
-/**
- * 判断「两条来源都还没有数据」。
- *
- * 用于骨架屏与错误提示的判据：此时界面确实无内容可显示。与 `pickLiveData(...) === null`
- * 等价，但**意图更清楚**——调用处通常先拿 `pickLiveData` 的结果做渲染，再单独判断要不要
- * 骨架/错误，避免把「取到的数据本身为空」与「还没取到」混为一谈。
- *
- * @param live     实时通道当前载荷
- * @param rest     同一域 REST 回退的 `useAsync` 结果
- */
-export function noDataYet<T>(live: T | null, rest: AsyncState<T>): boolean {
-  return live === null && rest.data === null
+export type LiveSource = 'sse' | 'rest' | null
+
+export interface LiveDataResult<T> {
+  value: T | null
+  /** 当前值取自哪条路；用于实时/新鲜度徽标。 */
+  source: LiveSource
+  isLoading: boolean
+  isRefreshing: boolean
+  isStale: boolean
+  error: ApiError | null
+  lastUpdatedAt: number
+  refetch: () => void
+}
+
+export function useLiveData<T>(options: LiveDataOptions<T>): LiveDataResult<T> {
+  const { sseValue, sseSeq, rest, refreshInterval = 0, enabled = true } = options
+
+  const query = useAsync<T>(rest, { refreshInterval, enabled })
+
+  // 给每次 REST 成功落地盖一个 seq（data 引用每轮都变，effect 随之重新盖号）
+  const [restStamped, setRestStamped] = useState<{ data: T; seq: number } | null>(null)
+  useEffect(() => {
+    if (query.data != null) setRestStamped({ data: query.data, seq: nextSeq() })
+  }, [query.data])
+
+  const sseStamped = useMemo(
+    () => (sseValue != null ? { data: sseValue, seq: sseSeq } : null),
+    [sseValue, sseSeq],
+  )
+
+  // pickFresher：a=SSE（实时源，相等时偏向它），b=REST
+  const winner = pickFresher<T>(sseStamped, restStamped)
+
+  return {
+    value: winner?.data ?? null,
+    source: winner == null ? null : winner === sseStamped ? 'sse' : 'rest',
+    isLoading: query.isLoading && winner == null,
+    isRefreshing: query.isRefreshing,
+    isStale: query.isStale,
+    error: query.error,
+    lastUpdatedAt: query.lastUpdatedAt,
+    refetch: query.refetch,
+  }
 }

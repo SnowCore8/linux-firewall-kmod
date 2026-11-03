@@ -1,105 +1,52 @@
-// Web UI 配置页（二级页，位于「更多」之下）
-//
-// 做什么：把后端 `GET /api/v2/config` 返回的运行时可配置项组织成**控制台式高密度面板**，
-//        并允许就地编辑：SSE 推送间隔、速率告警阈值（总速率 / SYN）、六种协议的每秒
-//        上限、三个 DDoS 检测算法开关、四张表的容量上限、以及日志视图的时间过滤起点。
-// 影响什么：本页是**唯一的配置写入口**（`PUT /api/v2/config`）。保存会立即：
-//          1) 改写守护进程内存中的全局 WebUI 配置；
-//          2) 把协议阈值经 netlink 下发内核，DDoS 检测开关写入内核参数
-//             （sysfs：fw_ddos_detection / fw_static_threshold / fw_dynamic_threshold）；
-//          3) 持久化到运行时配置文件，使守护进程重启后仍生效。
-//        因此任何保存都必须二次确认，且失败原因原样呈现给用户。
-//
-// 版式（控制台式高密度）：
-//   * 每组配置一个 Panel；可编辑项是「标签 dim + 方框输入（等宽、右对齐）」的行；
-//   * 可点 / 可编辑区域一律 ≥44px（--fw-tap），数据密度不压缩触摸目标；
-//   * 约束关系（警告 < 严重、非 0、1-60 秒）以行内 Badge 直接标在数值旁，
-//     而不是写成需要通读的长说明——用户扫一眼就知道哪一项不满足。
-//
-// 一致性策略：
-//   * 客户端校验**逐条对齐**后端 `internal/http/config_api.go` 的 UpdateConfig（warning < critical、
-//     各阈值/容量非 0、SSE 间隔 1-60、clear_logs_at 空串 = 取消过滤），
-//     前端这一层只为减少无效请求；后端仍会独立校验并返回 400。
-//   * 只提交**真正被改动**的字段（契约里所有字段可选），避免用陈旧值覆盖别处
-//     （例如日志页刚写入的 `clear_logs_at`）已做出的修改。
-
-import { useEffect, useMemo, useState } from 'react'
-import { Dialog, PullToRefresh, Skeleton, Switch } from 'antd-mobile'
-import { LoopOutline } from 'antd-mobile-icons'
-import { useNavigate } from 'react-router-dom'
-import type { UpdateConfigRequest, WebuiConfigResponse } from '../api/types'
-import { getJson, sendJson } from '../api/client'
-import { ROUTES } from '../api/contract'
-import { useAsync } from '../hooks/useAsync'
-import { useToast } from '../hooks/useToast'
-import { PageHeader } from '../components/PageHeader'
-import { BackLink, Badge, Panel, Row, Rows, SubHead, Toolbar, errorText } from '../components/console'
-import { formatDatetime } from '../lib/format'
-
-/** GET 与 PUT 共用同一路径；取生成物，不在页面里手写 */
-const CONFIG_URL = ROUTES.GET_API_V2_CONFIG
-
-/** 面板内的一行 dim 说明（10px 紧凑，不参与密度压缩） */
-const DIM_NOTE = {
-  fontSize: 10,
-  color: 'var(--fw-text-3)',
-  lineHeight: 1.45,
-  padding: '1px 0',
-} as const
-
-/** 错误 / 提示条的方框样式：fw-banner 只带下边框，这里补成完整一圈（页面内独立出现） */
-const BANNER_BOX = {
-  border: '1px solid var(--fw-border)',
-  borderRadius: 'var(--fw-radius)',
-  marginBottom: 'var(--fw-gap)',
-} as const
-
-/** 行尾「输入 + 标记」的组合容器：横向排列并居中对齐 */
-const TAIL_FLEX = { display: 'flex', alignItems: 'center', gap: 4 } as const
+import { useEffect, useState, type CSSProperties } from 'react'
+import {
+  App,
+  Button,
+  Card,
+  Descriptions,
+  Flex,
+  Form,
+  InputNumber,
+  Switch,
+  Tag,
+  TimePicker,
+  Typography,
+  type FormInstance,
+} from 'antd'
+import { ReloadOutlined, SaveOutlined, UndoOutlined } from '@ant-design/icons'
+import dayjs, { type Dayjs } from 'dayjs'
+import { PageHeader } from '../components/PageHeader.tsx'
+import { LoadingState } from '../components/state/LoadingState.tsx'
+import { ErrorState } from '../components/state/ErrorState.tsx'
+import { useAsync } from '../hooks/useAsync.ts'
+import { useRefreshSignal } from '../hooks/useRefreshSignal.ts'
+import { getConfig, getHealth, updateConfig } from '../api/endpoints.ts'
+import { formatNumber } from '../lib/format.ts'
+import type { RuntimeSnapshot, UpdateConfigRequest, WebuiConfigResponse } from '../api/types.ts'
 
 /**
- * 双列网格：协议阈值与容量上限用。
- * 固定 2 列（640px 宽时每列 ~310px，360px 窄屏时 ~173px），
- * 单元格 overflow hidden 兜底，避免极窄屏下把面板撑出横向滚动。
+ * 设置页 —— Web UI / 阈值 / DDoS / 容量配置的读写，外加守护进程运行时探针。
+ *
+ * 两条数据流各自独立、互不阻塞：
+ *   * 配置表单走 getConfig 取快照、updateConfig 落盘；运行时状态走 getHealth（裸探针，
+ *     就绪与否由后端 status 给出，前端只如实渲染，不用它去改表单）。
+ *
+ * 提交纪律是**差分**：onFinish 只把「与服务端快照不同」的字段装进 UpdateConfigRequest，
+ * 未改动的一律不出现（后端请求体全字段可选，缺席即不改）。这样既避免把 19 个字段整体
+ * 覆盖回去，也让「保存」按钮的可用性等价于「表单确实脏了」。
+ *
+ * 表单基线（initialValues）始终跟着 config.data 走：rc-form 每次渲染都会用最新的
+ * initialValues 刷新内部「重置目标」，所以保存成功后把返回快照写回 config.data，
+ * 「重置」与后续脏检查都会以服务端权威值为准，而不是首屏那份旧值。
+ *
+ * 阈值成对校验：警告必须严格小于严重（pps 一对、syn 一对）。校验器挂在**严重**字段上、
+ * 经 dependencies 读兄弟字段，于是无论改动哪一侧都会重算这对约束，错误只落在一处不重复报。
  */
-const GRID_2 = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-  gap: 1, // 1px 缝露出网格底色（--fw-border）充当分隔线，与 .fw-tiles 同一手法
-  background: 'var(--fw-border)',
-} as const
 
-/** 网格单元格：贴边、无内边距（分隔线由网格缝提供），行高抬到触摸目标下限 */
-const GRID_CELL = {
-  background: 'var(--fw-surface)',
-  overflow: 'hidden',
-  minHeight: 44,
-  borderBottom: 'none',
-} as const
+// --- 字段分组（差分与渲染共用同一份键名清单，避免两处漂移）---
 
-/** 数值型配置项的键（与契约 `WebuiConfigResponse` 的可编辑数字字段一一对应） */
-type NumericKey =
-  | 'sse_push_interval'
-  | 'rate_warning_pps'
-  | 'rate_critical_pps'
-  | 'rate_warning_syn'
-  | 'rate_critical_syn'
-  | 'max_syn_per_second'
-  | 'max_udp_per_second'
-  | 'max_icmp_per_second'
-  | 'max_ack_per_second'
-  | 'max_rst_per_second'
-  | 'max_fin_per_second'
-  | 'max_ban_entries'
-  | 'max_whitelist_entries'
-  | 'max_rate_entries'
-  | 'max_local_ip_cache'
-
-/** 布尔型配置项（DDoS 检测算法开关） */
-type BoolKey = 'static_threshold' | 'dynamic_threshold' | 'ddos_detection'
-
-/** 数值键清单：用于构造草稿、校验与差异比较（顺序即界面上的字段顺序无要求） */
-const NUMERIC_KEYS = [
+/** 数值字段：差分时逐一按数值直接比较。 */
+const NUMBER_FIELDS = [
   'sse_push_interval',
   'rate_warning_pps',
   'rate_critical_pps',
@@ -115,768 +62,540 @@ const NUMERIC_KEYS = [
   'max_whitelist_entries',
   'max_rate_entries',
   'max_local_ip_cache',
-] as const
+] as const satisfies readonly (keyof WebuiConfigResponse)[]
 
-/** 布尔键清单 */
-const BOOL_KEYS = ['static_threshold', 'dynamic_threshold', 'ddos_detection'] as const
-
-/** 后端明确拒绝取 0 的数值键（协议专项阈值 + 四张表容量） */
-const ZERO_FORBIDDEN: readonly NumericKey[] = [
-  'max_syn_per_second',
-  'max_udp_per_second',
-  'max_icmp_per_second',
-  'max_ack_per_second',
-  'max_rst_per_second',
-  'max_fin_per_second',
-  'max_ban_entries',
-  'max_whitelist_entries',
-  'max_rate_entries',
-  'max_local_ip_cache',
-]
-
-/** 数值键的中文名：出现在校验错误里，必须与后端错误文案指向同一个字段 */
-const NUMERIC_LABELS: Record<NumericKey, string> = {
-  sse_push_interval: 'SSE 推送间隔',
-  rate_warning_pps: '速率警告阈值',
-  rate_critical_pps: '速率严重阈值',
-  rate_warning_syn: 'SYN 警告阈值',
-  rate_critical_syn: 'SYN 严重阈值',
-  max_syn_per_second: 'SYN 阈值',
-  max_udp_per_second: 'UDP 阈值',
-  max_icmp_per_second: 'ICMP 阈值',
-  max_ack_per_second: 'ACK 阈值',
-  max_rst_per_second: 'RST 阈值',
-  max_fin_per_second: 'FIN 阈值',
-  max_ban_entries: '封禁表容量',
-  max_whitelist_entries: '白名单容量',
-  max_rate_entries: '速率表容量',
-  max_local_ip_cache: '本地 IP 缓存容量',
-}
+/** 布尔开关字段：差分时按布尔直接比较。 */
+const BOOL_FIELDS = [
+  'static_threshold',
+  'dynamic_threshold',
+  'ddos_detection',
+] as const satisfies readonly (keyof WebuiConfigResponse)[]
 
 /**
- * 布尔键的中文名与说明。
- * 说明依据内核模块参数与 firewall.h 的字段语义；标签下方一行 dim 小字，
- * 不再占用独立的大卡片（控制台式密度）。
+ * 表单值形状：数值/布尔与配置快照同名同型，唯独 clear_logs_at 在表单里是
+ * `Dayjs | null`（TimePicker 的值），落库前再格式化成 "HH:mm" 字符串或 null。
  */
-const BOOL_FIELDS: ReadonlyArray<{ key: BoolKey; label: string; hint: string }> = [
-  {
-    key: 'ddos_detection',
-    label: 'DDoS 检测总开关',
-    hint: '写入内核参数 fw_ddos_detection；关闭后停止 DDoS 判定，已产生的封禁不受影响',
-  },
-  {
-    key: 'static_threshold',
-    label: '静态阈值算法',
-    hint: '内核参数 fw_static_threshold；按配置的固定阈值判定，行为可预期',
-  },
-  {
-    key: 'dynamic_threshold',
-    label: '动态阈值算法',
-    hint: '内核参数 fw_dynamic_threshold；实际阈值 = max(静态阈值, EWMA 基线 × 倍数)，需要样本积累',
-  },
-]
-
-/** 数值字段元信息（分组与网格共用） */
-interface NumericFieldMeta {
-  key: NumericKey
-  label: string
-  hint: string
+interface SettingsFormValues {
+  sse_push_interval: number
+  rate_warning_pps: number
+  rate_critical_pps: number
+  rate_warning_syn: number
+  rate_critical_syn: number
+  max_syn_per_second: number
+  max_udp_per_second: number
+  max_icmp_per_second: number
+  max_ack_per_second: number
+  max_rst_per_second: number
+  max_fin_per_second: number
+  static_threshold: boolean
+  dynamic_threshold: boolean
+  ddos_detection: boolean
+  max_ban_entries: number
+  max_whitelist_entries: number
+  max_rate_entries: number
+  max_local_ip_cache: number
+  clear_logs_at: Dayjs | null
 }
 
-/** 协议专项阈值：下发内核，任一为 0 会被后端拒绝 */
-const PROTOCOL_FIELDS: readonly NumericFieldMeta[] = [
-  { key: 'max_syn_per_second', label: 'SYN', hint: '每秒上限，不能为 0' },
-  { key: 'max_udp_per_second', label: 'UDP', hint: '每秒上限，不能为 0' },
-  { key: 'max_icmp_per_second', label: 'ICMP', hint: '每秒上限，不能为 0' },
-  { key: 'max_ack_per_second', label: 'ACK', hint: '每秒上限，不能为 0' },
-  { key: 'max_rst_per_second', label: 'RST', hint: '每秒上限，不能为 0' },
-  { key: 'max_fin_per_second', label: 'FIN', hint: '每秒上限，不能为 0' },
-]
-
-/**
- * 容量上限：决定各表能容纳的条目数，不能为 0。
- * label 是网格内的短名（完整名见 NUMERIC_LABELS，用于校验错误文案）。
- */
-const CAPACITY_FIELDS: readonly NumericFieldMeta[] = [
-  { key: 'max_ban_entries', label: '封禁表', hint: '条目数，不能为 0' },
-  { key: 'max_whitelist_entries', label: '白名单', hint: '条目数，不能为 0' },
-  { key: 'max_rate_entries', label: '速率表', hint: '条目数，不能为 0' },
-  { key: 'max_local_ip_cache', label: 'IP 缓存', hint: '条目数，不能为 0' },
-]
-
-/** 把任意抛出物转成可展示文案（client 抛出的 ApiError 就是 Error 子类） */
-/** 后端配置 → 编辑草稿（全部转成字符串，便于输入过程中的中间态，如清空后重输） */
-function makeNumbers(cfg: WebuiConfigResponse): Record<NumericKey, string> {
-  return {
-    sse_push_interval: String(cfg.sse_push_interval),
-    rate_warning_pps: String(cfg.rate_warning_pps),
-    rate_critical_pps: String(cfg.rate_critical_pps),
-    rate_warning_syn: String(cfg.rate_warning_syn),
-    rate_critical_syn: String(cfg.rate_critical_syn),
-    max_syn_per_second: String(cfg.max_syn_per_second),
-    max_udp_per_second: String(cfg.max_udp_per_second),
-    max_icmp_per_second: String(cfg.max_icmp_per_second),
-    max_ack_per_second: String(cfg.max_ack_per_second),
-    max_rst_per_second: String(cfg.max_rst_per_second),
-    max_fin_per_second: String(cfg.max_fin_per_second),
-    max_ban_entries: String(cfg.max_ban_entries),
-    max_whitelist_entries: String(cfg.max_whitelist_entries),
-    max_rate_entries: String(cfg.max_rate_entries),
-    max_local_ip_cache: String(cfg.max_local_ip_cache),
-  }
+/** 数值字段统一的栅格布局（窄屏自动折行，宽屏一行多列）。 */
+const FIELD_GRID: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+  columnGap: 16,
 }
 
-/** 后端配置 → 开关草稿 */
-function makeFlags(cfg: WebuiConfigResponse): Record<BoolKey, boolean> {
+/** InputNumber 在表单里的宽度，避免数字框撑满整格。 */
+const NUMBER_STYLE: CSSProperties = { width: '100%' }
+
+/** 探针 status 的两个取值（与后端 health.go 的 ok / degraded 逐字一致）。 */
+const STATUS_META: Record<string, { label: string; color: string }> = {
+  ok: { label: '就绪', color: 'success' },
+  degraded: { label: '降级', color: 'warning' },
+}
+
+/** 内核租约 lease_state 的五个取值 → 中文（未知取值原样回显，便于发现后端新增态）。 */
+const LEASE_LABELS: Record<string, string> = {
+  none: '未注册',
+  idle: '空闲',
+  held: '已持有',
+  refused: '被拒绝',
+  lost: '已丢失',
+}
+
+/** 把后端异常归一成可读文案（ApiError 继承 Error，message 已是服务端信封文案）。 */
+function errText(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback
+}
+
+/** "HH:mm" 字符串 → Dayjs（今天日期 + 该时分）；空/非法一律 null。不依赖任何 dayjs 插件。 */
+function parseHHmm(value: string | null): Dayjs | null {
+  if (!value) return null
+  const m = /^(\d{1,2}):(\d{2})$/.exec(value.trim())
+  if (!m) return null
+  const hour = Number(m[1])
+  const minute = Number(m[2])
+  if (hour > 23 || minute > 59) return null
+  return dayjs().hour(hour).minute(minute).second(0).millisecond(0)
+}
+
+/** 把任意来源的时间串归一成规范 "HH:mm"（用于差分时两侧同口径比较）；空/非法 → null。 */
+function normalizeHHmm(value: string | null): string | null {
+  const parsed = parseHHmm(value)
+  return parsed ? parsed.format('HH:mm') : null
+}
+
+/** 配置快照 → 表单值。 */
+function configToForm(cfg: WebuiConfigResponse): SettingsFormValues {
   return {
+    sse_push_interval: cfg.sse_push_interval,
+    rate_warning_pps: cfg.rate_warning_pps,
+    rate_critical_pps: cfg.rate_critical_pps,
+    rate_warning_syn: cfg.rate_warning_syn,
+    rate_critical_syn: cfg.rate_critical_syn,
+    max_syn_per_second: cfg.max_syn_per_second,
+    max_udp_per_second: cfg.max_udp_per_second,
+    max_icmp_per_second: cfg.max_icmp_per_second,
+    max_ack_per_second: cfg.max_ack_per_second,
+    max_rst_per_second: cfg.max_rst_per_second,
+    max_fin_per_second: cfg.max_fin_per_second,
     static_threshold: cfg.static_threshold,
     dynamic_threshold: cfg.dynamic_threshold,
     ddos_detection: cfg.ddos_detection,
+    max_ban_entries: cfg.max_ban_entries,
+    max_whitelist_entries: cfg.max_whitelist_entries,
+    max_rate_entries: cfg.max_rate_entries,
+    max_local_ip_cache: cfg.max_local_ip_cache,
+    clear_logs_at: parseHHmm(cfg.clear_logs_at),
   }
 }
 
 /**
- * 校验草稿，返回第一条错误文案；全部合法返回 null。
- * 规则顺序与错误措辞刻意贴近后端 `update_webui_config`，让同一条规则在两端说法一致。
+ * 差分：只挑出与服务端快照 base 不同的字段，装进 UpdateConfigRequest。
+ * 数值/布尔直接比；clear_logs_at 两侧都归一成 "HH:mm" 再比，避免格式差异造成伪脏。
  */
-function validateDraft(numbers: Record<NumericKey, string>, clearLogs: string): string | null {
-  for (const key of NUMERIC_KEYS) {
-    const raw = numbers[key].trim()
-    if (raw === '') return `${NUMERIC_LABELS[key]}不能为空`
-    // 后端字段是无符号整数：只接受纯数字，明确拒绝负数、小数与科学计数法
-    if (!/^\d+$/.test(raw)) return `${NUMERIC_LABELS[key]}必须是不小于 0 的整数`
+function buildDiff(values: SettingsFormValues, base: WebuiConfigResponse): UpdateConfigRequest {
+  const diff: UpdateConfigRequest = {}
+  for (const key of NUMBER_FIELDS) {
+    if (values[key] !== base[key]) diff[key] = values[key]
   }
-
-  /** 已确认是纯数字，这里读取是安全的 */
-  const val = (key: NumericKey): number => Number(numbers[key])
-
-  if (val('sse_push_interval') === 0 || val('sse_push_interval') > 60) {
-    return 'SSE 推送间隔必须在 1-60 秒之间'
+  for (const key of BOOL_FIELDS) {
+    if (values[key] !== base[key]) diff[key] = values[key]
   }
-  if (val('rate_warning_pps') >= val('rate_critical_pps')) {
-    return '速率警告阈值必须小于严重阈值'
-  }
-  if (val('rate_warning_syn') >= val('rate_critical_syn')) {
-    return 'SYN 警告阈值必须小于严重阈值'
-  }
-  for (const key of ZERO_FORBIDDEN) {
-    if (val(key) === 0) return `${NUMERIC_LABELS[key]}不能为 0`
-  }
-
-  // 日志过滤起点：空串 = 取消过滤；非空必须是可解析的时间戳
-  if (clearLogs !== '' && Number.isNaN(Date.parse(clearLogs))) {
-    return '日志过滤时间格式不合法'
-  }
-  return null
+  const clearAt = values.clear_logs_at ? values.clear_logs_at.format('HH:mm') : null
+  if (clearAt !== normalizeHHmm(base.clear_logs_at)) diff.clear_logs_at = clearAt
+  return diff
 }
 
-/** 差异结果：待提交的请求体与改动项数量 */
-interface DraftDiff {
-  payload: UpdateConfigRequest
-  changedCount: number
+/** 必填数值字段的校验规则（InputNumber 的 min 负责范围，这里只挡「被清空」）。 */
+function requiredNumber(label: string): { required: true; message: string }[] {
+  return [{ required: true, message: `请填写${label}` }]
 }
 
 /**
- * 只挑出与后端现值不同的字段。
- * 契约里所有字段可选，提交子集可避免「用页面上打开时的旧值」覆盖别处刚做的修改。
+ * 成对阈值校验器：断言 sibling（警告）严格小于当前字段（严重）。
+ * 挂在严重字段上、配合 dependencies=[警告]，两侧任一改动都会重算，错误只落在严重字段。
  */
-function buildPayload(
-  numbers: Record<NumericKey, string>,
-  flags: Record<BoolKey, boolean>,
-  clearLogs: string,
-  baseline: WebuiConfigResponse,
-): DraftDiff {
-  const payload: UpdateConfigRequest = {}
-  let changedCount = 0
-
-  for (const key of NUMERIC_KEYS) {
-    const value = Number(numbers[key].trim())
-    // 草稿非法（NaN）时必然视为有改动，交给校验环节给出明确错误
-    if (value !== baseline[key]) {
-      payload[key] = value
-      changedCount += 1
-    }
+function greaterThanSibling(
+  form: FormInstance<SettingsFormValues>,
+  sibling: keyof SettingsFormValues,
+  message: string,
+): { validator: (rule: unknown, value: unknown) => Promise<void> } {
+  return {
+    validator: (_rule: unknown, value: unknown) => {
+      const crit = typeof value === 'number' ? value : null
+      const warnRaw = form.getFieldValue(sibling)
+      const warn = typeof warnRaw === 'number' ? warnRaw : null
+      if (crit == null || warn == null) return Promise.resolve()
+      return crit > warn ? Promise.resolve() : Promise.reject(new Error(message))
+    },
   }
-  for (const key of BOOL_KEYS) {
-    if (flags[key] !== baseline[key]) {
-      payload[key] = flags[key]
-      changedCount += 1
-    }
-  }
-  if (clearLogs !== (baseline.clear_logs_at ?? '')) {
-    payload.clear_logs_at = clearLogs
-    changedCount += 1
-  }
-  return { payload, changedCount }
 }
 
-/** 把后端保存的 ISO 字符串转成本地可读时间；无法解析时原样返回（不静默丢信息） */
-function isoToLocalText(iso: string): string {
-  if (iso === '') return '未设置（不做时间过滤）'
-  const parsed = Date.parse(iso.includes('T') ? iso : iso.replace(' ', 'T'))
-  if (Number.isNaN(parsed)) return iso
-  return formatDatetime(Math.floor(parsed / 1000))
+/** 布尔探针 → 彩色 Tag（真=绿，假=灰；不喧宾夺主，缺失内核属正常态而非报错）。 */
+function boolTag(ok: boolean, yesLabel: string, noLabel: string) {
+  return <Tag color={ok ? 'success' : 'default'}>{ok ? yesLabel : noLabel}</Tag>
 }
 
-/** 生成与日志页一致的时间戳形态（本地时间，秒级，空格换成 T） */
-function nowTimestamp(): string {
-  return formatDatetime(Math.floor(Date.now() / 1000)).replace(' ', 'T')
+/** 探针 status → Tag（ok/degraded 映射中文，未知取值原样回显）。 */
+function statusTag(status: string) {
+  const meta = STATUS_META[status]
+  return <Tag color={meta?.color ?? 'default'}>{meta ? `${meta.label}（${status}）` : status}</Tag>
 }
 
-/** 输入框可点区域 ≥44px，输入框本体 28px：密度与触摸目标分离 */
-const INPUT_BOX = {
-  flex: '0 1 84px',
-  width: 84,
-  minWidth: 0,
-  height: 28,
-  padding: '0 5px',
-  textAlign: 'right',
-  fontFamily: 'var(--fw-font-mono)',
-  fontVariantNumeric: 'tabular-nums',
-  fontSize: 16, // 小于 16px 会让 iOS Safari 聚焦时放大整页
-  color: 'var(--fw-text)',
-  background: 'var(--fw-bg)',
-  borderRadius: 'var(--fw-radius-sm)',
-  outline: 'none',
-} as const
-
-/**
- * 数值输入行尾：标签 + 方框输入 + 单位。
- *
- * 为什么用 <label> 包住输入：输入框本体只有 28px 高（控制台密度），
- * 但可点 / 可聚焦区域由 label 撑到 44px，满足 --fw-tap 下限；
- * 同时 label 的空白区域点击即聚焦输入框（浏览器原生行为），不需要 JS。
- */
-function NumInput(props: {
-  label: string
-  value: string
-  unit?: string
-  onChange: (value: string) => void
-  /** 当前值明显非法（空 / 0 / 越界）时标红，作为保存前的第一眼提示 */
-  invalid?: boolean
-}) {
-  const { label, value, unit, onChange, invalid } = props
-  const [focused, setFocused] = useState(false)
-  return (
-    <label
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'flex-end',
-        gap: 4,
-        minHeight: 44,
-        minWidth: 0,
-      }}
-    >
-      <input
-        aria-label={label}
-        inputMode="numeric"
-        autoComplete="off"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
-        style={{
-          ...INPUT_BOX,
-          border: `1px solid ${
-            focused
-              ? 'var(--fw-primary-strong)'
-              : invalid
-                ? 'var(--fw-danger)'
-                : 'var(--fw-border-strong)'
-          }`,
-        }}
-      />
-      {unit !== undefined ? (
-        <span className="fw-row-unit" style={{ width: 26 }}>
-          {unit}
-        </span>
-      ) : null}
-    </label>
-  )
+/** lease_state → 文本（中文标签 + 原文）。 */
+function leaseText(state: string): string {
+  const label = LEASE_LABELS[state]
+  return label ? `${label}（${state}）` : state
 }
 
-/**
- * 阈值对的关系标：把「警告 < 严重」这条约束直接标在数值旁。
- * - 满足：dim 的 green「< 严重」（默认预期，不抢视线）
- * - 违规：danger「≥ 严重」（保存会被后端拒绝，先在此处预警）
- * - 任一侧未填/非法：中性「待填写」（此时比较无意义，不能显示成违规）
- */
-function PairBadge(props: { ok: boolean; valid: boolean }) {
-  if (!props.valid) return <Badge dim>待填写</Badge>
-  return (
-    <Badge tone={props.ok ? 'success' : 'danger'} dim={props.ok}>
-      {props.ok ? '< 严重' : '≥ 严重'}
-    </Badge>
-  )
-}
-
-/**
- * 保存 / 撤销操作条：全页仅此一份，置于内容末尾——读完最后一屏即就地保存。
- * 顶部不再重复一份操作条：待保存与否已由工具条的常驻状态标表达，同一组按钮
- * 在一页里出现两次只会让人怀疑哪一份才是生效的那个。
- */
-function ActionBar(props: {
-  dirty: boolean
-  count: number
-  saving: boolean
-  onSave: () => void
-  onReset: () => void
-}) {
-  const { dirty, count, saving, onSave, onReset } = props
-  return (
-    <div style={{ display: 'flex', gap: 5, marginBottom: 'var(--fw-gap)' }}>
-      <button
-        type="button"
-        className="fw-cmd"
-        style={{
-          flex: 2,
-          color: dirty ? 'var(--fw-primary-strong)' : 'var(--fw-text-3)',
-          borderColor: dirty ? 'var(--fw-primary-strong)' : 'var(--fw-border-strong)',
-        }}
-        disabled={!dirty || saving}
-        onClick={onSave}
-      >
-        {/* 按钮只讲动作、不讲状态：待保存与否由上方工具条的常驻状态标表达，
-            两处都写「无待保存修改」会让同一句话在一屏里出现两次 */}
-        {saving ? '保存中…' : dirty ? `保存修改（${count}）` : '保存修改'}
-      </button>
-      <button
-        type="button"
-        className="fw-cmd"
-        style={{ flex: 1 }}
-        disabled={!dirty || saving}
-        onClick={onReset}
-      >
-        撤销
-      </button>
-    </div>
-  )
+/** 运行时快照 → Descriptions 条目（中文标签；布尔彩 Tag、status Tag、计数走等宽数字）。 */
+function healthItems(snap: RuntimeSnapshot) {
+  return [
+    { key: 'status', label: '健康状态', children: statusTag(snap.status) },
+    { key: 'netlink_ready', label: 'Netlink 链路', children: boolTag(snap.netlink_ready, '就绪', '未就绪') },
+    {
+      key: 'kmod_proc_present',
+      label: '内核模块 procfs',
+      children: boolTag(snap.kmod_proc_present, '存在', '缺失'),
+    },
+    {
+      key: 'ban_cache_initialized',
+      label: '封禁镜像',
+      children: boolTag(snap.ban_cache_initialized, '已初始化', '未初始化'),
+    },
+    {
+      key: 'ban_history_initialized',
+      label: '历史库',
+      children: boolTag(snap.ban_history_initialized, '已初始化', '未初始化'),
+    },
+    {
+      key: 'active_bans',
+      label: '活跃封禁',
+      children: <span className="fw-mono">{formatNumber(snap.active_bans)}</span>,
+    },
+    { key: 'lease_state', label: '内核租约', children: leaseText(snap.lease_state) },
+    {
+      key: 'lease_losses',
+      label: '租约丢失次数',
+      children: <span className="fw-mono">{formatNumber(snap.lease_losses)}</span>,
+    },
+  ]
 }
 
 export default function Settings() {
-  const navigate = useNavigate()
-  const toast = useToast()
+  const { message } = App.useApp()
+  const [form] = Form.useForm<SettingsFormValues>()
+  const [dirty, setDirty] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
 
-  // 配置读取：GET /api/v2/config
-  const config = useAsync(() => getJson<WebuiConfigResponse>(CONFIG_URL), [])
+  const config = useAsync((signal) => getConfig(signal))
+  const health = useAsync((signal) => getHealth(signal))
 
-  /** 当前后端现值（作为差异比较的基准；保存成功后用后端返回体刷新） */
-  const [baseline, setBaseline] = useState<WebuiConfigResponse | null>(null)
-  /** 数值草稿：字符串形态，允许输入过程中的空值 */
-  const [numbers, setNumbers] = useState<Record<NumericKey, string> | null>(null)
-  /** 开关草稿 */
-  const [flags, setFlags] = useState<Record<BoolKey, boolean> | null>(null)
-  /** 日志过滤起点草稿：空串 = 取消过滤 */
-  const [clearLogs, setClearLogs] = useState('')
-  const [saving, setSaving] = useState(false)
+  // 顶栏 / 命令面板广播的「刷新当前页」：配置与探针一起重取。
+  useRefreshSignal(() => {
+    config.refetch()
+    health.refetch()
+  })
 
-  // 首次加载或手动刷新后，用后端现值重建草稿（丢弃未保存的本地修改）
+  const refreshAll = (): void => {
+    config.refetch()
+    health.refetch()
+  }
+
+  // 基线（config.data）变化时重算脏标记：首屏载入、保存回写、刷新拉到新值都经这里对齐。
   useEffect(() => {
-    if (config.data === null) return
-    setBaseline(config.data)
-    setNumbers(makeNumbers(config.data))
-    setFlags(makeFlags(config.data))
-    setClearLogs(config.data.clear_logs_at ?? '')
-  }, [config.data])
+    const base = config.data
+    if (!base) return
+    setDirty(Object.keys(buildDiff(form.getFieldsValue(), base)).length > 0)
+  }, [config.data, form])
 
-  const ready = numbers !== null && flags !== null && baseline !== null
-
-  /** 与后端现值的差异：待提交请求体 + 改动项数（dirty ⇔ changedCount > 0） */
-  const diff = useMemo<DraftDiff>(() => {
-    if (numbers === null || flags === null || baseline === null) {
-      return { payload: {}, changedCount: 0 }
-    }
-    return buildPayload(numbers, flags, clearLogs, baseline)
-  }, [numbers, flags, clearLogs, baseline])
-  const dirty = diff.changedCount > 0
-
-  /** 修改单个数值字段 */
-  const updateNumber = (key: NumericKey, value: string) => {
-    setNumbers((prev) => {
-      if (prev === null) return prev
-      const next = { ...prev }
-      next[key] = value
-      return next
-    })
+  const handleValuesChange = (_changed: Partial<SettingsFormValues>, all: SettingsFormValues): void => {
+    const base = config.data
+    if (!base) return
+    setDirty(Object.keys(buildDiff(all, base)).length > 0)
   }
 
-  /** 修改单个开关 */
-  const updateFlag = (key: BoolKey, checked: boolean) => {
-    setFlags((prev) => {
-      if (prev === null) return prev
-      const next = { ...prev }
-      next[key] = checked
-      return next
-    })
-  }
-
-  /** 丢弃本地修改，回到后端现值 */
-  const resetDraft = () => {
-    if (baseline === null) return
-    setNumbers(makeNumbers(baseline))
-    setFlags(makeFlags(baseline))
-    setClearLogs(baseline.clear_logs_at ?? '')
-    toast.info('已撤销未保存的修改')
-  }
-
-  /** 保存：校验 → 二次确认 → PUT → 用后端返回体重建草稿 */
-  const save = async () => {
-    if (numbers === null || flags === null || baseline === null) return
-
-    const problem = validateDraft(numbers, clearLogs)
-    if (problem !== null) {
-      toast.error(problem)
-      return
-    }
-
-    const { payload, changedCount } = buildPayload(numbers, flags, clearLogs, baseline)
-    if (changedCount === 0) {
-      toast.info('没有需要保存的修改')
-      return
-    }
-
-    const confirmed = await Dialog.confirm({
-      content: `确定保存 ${changedCount} 项配置修改？阈值会立即同步到内核，可能改变正在生效的封禁判定。`,
-      confirmText: '保存',
-    })
-    if (!confirmed) return
-
-    setSaving(true)
+  const handleFinish = async (values: SettingsFormValues): Promise<void> => {
+    const base = config.data
+    if (!base) return
+    const diff = buildDiff(values, base)
+    if (Object.keys(diff).length === 0) return
+    setSubmitting(true)
     try {
-      const updated = await sendJson<UpdateConfigRequest, WebuiConfigResponse>(CONFIG_URL, 'PUT', payload)
-      // 后端返回的完整配置即最新真值：直接作为新基准，避免再次请求造成短暂不一致
-      setBaseline(updated)
-      setNumbers(makeNumbers(updated))
-      setFlags(makeFlags(updated))
-      setClearLogs(updated.clear_logs_at ?? '')
-      toast.success(`配置已保存（${changedCount} 项）`)
-    } catch (e) {
-      // 后端会返回 400 + 具体原因（如「速率警告阈值必须小于严重阈值」），原样呈现
-      toast.error(`保存失败：${errorText(e)}`)
+      const updated = await updateConfig(diff)
+      message.success('配置已保存')
+      // 以返回快照为权威：写回基线（下轮渲染刷新 initialValues）+ 同步表单当前值。
+      config.setData(updated)
+      form.setFieldsValue(configToForm(updated))
+      setDirty(false)
+    } catch (err) {
+      // 失败保留用户已填内容，仅提示；表单不重置、不清空。
+      message.error(errText(err, '保存失败，请稍后重试'))
     } finally {
-      setSaving(false)
+      setSubmitting(false)
     }
   }
 
-  // 行内合法性标记（只做展示预警，真值仍以保存时的 validateDraft 为准）
-  /** 空值或非纯数字：保存必被拒绝，输入框先标红 */
-  const badNumber = (key: NumericKey): boolean => {
-    if (numbers === null) return false
-    return !/^\d+$/.test(numbers[key].trim())
+  const handleReset = (): void => {
+    // 重置到当前基线（config.data）：rc-form 已把最新 initialValues 作为重置目标。
+    form.resetFields()
+    setDirty(false)
   }
-  /** 非 0 约束字段的预警：空值或字面 0 都标红（两者保存时都会被拒绝） */
-  const zeroBad = (key: NumericKey): boolean => badNumber(key) || numbers?.[key].trim() === '0'
-  const num = (key: NumericKey): number => (numbers === null ? NaN : Number(numbers[key]))
-  const sseValue = numbers?.sse_push_interval.trim() ?? ''
-  const sseOk = /^\d+$/.test(sseValue) && Number(sseValue) >= 1 && Number(sseValue) <= 60
-  const ppsValid = !badNumber('rate_warning_pps') && !badNumber('rate_critical_pps')
-  const synValid = !badNumber('rate_warning_syn') && !badNumber('rate_critical_syn')
-  const ppsPairOk = num('rate_warning_pps') < num('rate_critical_pps')
-  const synPairOk = num('rate_warning_syn') < num('rate_critical_syn')
+
+  const cfg = config.data
 
   return (
     <>
-      {/* 二级页头部：统一工具条——左端返回更多 + 待保存状态 + 重新读取。
-          刷新走下拉手势；「读取」是丢弃草稿重新拉配置，语义不同于刷新，故保留 */}
-      <Toolbar>
-        <BackLink onClick={() => navigate('/more')} />
-
-        <span style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'flex-end' }}>
-          {/* 「无待保存修改」是既有的核心状态提示，这里升级为常驻状态标 */}
-          <Badge tone={dirty ? 'warning' : 'success'} dim={!dirty}>
-            {dirty ? `${diff.changedCount} 项待保存` : '无待保存修改'}
-          </Badge>
-        </span>
-
-        <button
-          type="button"
-          className="fw-cmd"
-          aria-label="重新读取后端配置"
-          disabled={config.loading}
-          onClick={() => void config.reload()}
-        >
-          <LoopOutline /> 读取
-        </button>
-      </Toolbar>
-
-      {/* 区块标题（h2）：e2e 以 level-2 标题精确匹配本页，文案不可改 */}
       <PageHeader
-        title="Web UI 配置"
-        srOnly
-        subtitle="保存即写入守护进程运行时配置并持久化；协议阈值与 DDoS 开关同时下发内核"
+        title="设置"
+        description="调整推送间隔、速率阈值、DDoS 检测开关与容量上限，并查看守护进程运行时状态"
+        breadcrumb={[{ title: '运维' }, { title: '设置' }]}
+        extra={
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={refreshAll}
+            loading={config.isRefreshing || health.isRefreshing}
+          >
+            刷新
+          </Button>
+        }
       />
 
-      <PullToRefresh
-        onRefresh={async () => {
-          await config.reload()
-        }}
-      >
-        <div className="fw-page">
-          {/* 读取失败：错误对用户可见并提供重试 */}
-          {config.error !== null && (
-            <div className="fw-banner fw-banner-danger" style={BANNER_BOX} role="alert">
-              <span className="fw-banner-icon">!</span>
-              <span style={{ flex: 1, minWidth: 0 }}>配置读取失败：{config.error}</span>
-              <a
-                onClick={() => void config.reload()}
-                role="button"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  minHeight: 44,
-                  color: 'inherit',
-                  textDecoration: 'underline',
-                  cursor: 'pointer',
-                }}
-              >
-                重试
-              </a>
-            </div>
-          )}
+      <Flex vertical gap={16} className="fw-fade-in">
+        {/* --- 配置表单：加载 / 错误 / 就绪三态 --- */}
+        {config.isLoading && cfg == null && <LoadingState variant="detail" />}
+        {config.error != null && cfg == null && (
+          <ErrorState error={config.error} onRetry={config.refetch} />
+        )}
 
-          {/* 首屏骨架：配置未就绪时不渲染可编辑控件，避免用户对着空表单修改 */}
-          {!ready && config.error === null && (
-            <Panel title="配置读取中" meta="LOADING">
-              <Skeleton.Title animated />
-              <Skeleton.Paragraph lineCount={8} animated />
-            </Panel>
-          )}
+        {cfg != null && (
+          <>
+            {/* 已持有旧数据时后台刷新失败：内联提示，不打断正在编辑的表单 */}
+            {config.error != null && (
+              <ErrorState error={config.error} onRetry={config.refetch} compact />
+            )}
 
-          {ready && numbers !== null && flags !== null && (
-            <>
-              {dirty && (
-                <div
-                  style={{
-                    fontSize: 10,
-                    color: 'var(--fw-warning)',
-                    lineHeight: 1.45,
-                    marginBottom: 'var(--fw-gap)',
-                  }}
-                >
-                  待保存的值会立即影响内核判定：协议阈值与 DDoS 开关保存后同步到内核（同步失败不影响配置保存）。
-                </div>
-              )}
+            <Form<SettingsFormValues>
+              form={form}
+              layout="vertical"
+              initialValues={configToForm(cfg)}
+              onFinish={handleFinish}
+              onValuesChange={handleValuesChange}
+            >
+              <Flex vertical gap={16}>
+                <Card title="推送与实时" size="small">
+                  <Form.Item
+                    name="sse_push_interval"
+                    label="推送间隔（秒）"
+                    extra="SSE 实时推送的最小间隔，越小越实时但负载越高；最小 1 秒"
+                    rules={requiredNumber('推送间隔')}
+                    style={{ maxWidth: 260, marginBottom: 0 }}
+                  >
+                    <InputNumber min={1} step={1} precision={0} style={NUMBER_STYLE} />
+                  </Form.Item>
+                </Card>
 
-              {/* 实时推送 */}
-              <Panel title="实时推送" meta="1-60 s">
-                <Rows>
-                  <Row
-                    label="SSE 推送间隔"
-                    tail={
-                      <span style={TAIL_FLEX}>
-                        <NumInput
-                          label="SSE 推送间隔"
-                          value={numbers.sse_push_interval}
-                          unit="s"
-                          invalid={!sseOk}
-                          onChange={(value) => updateNumber('sse_push_interval', value)}
-                        />
-                        <Badge tone={sseOk ? 'success' : 'danger'} dim={sseOk}>
-                          {sseOk ? '1-60' : '越界'}
-                        </Badge>
-                      </span>
-                    }
-                  />
-                </Rows>
-                <div style={DIM_NOTE}>
-                  控制台统计数据经 SSE 按此周期推送（计数器镜像间隔）；越短越实时，也越耗电。
-                </div>
-              </Panel>
-
-              {/* 速率告警阈值：两对「警告 < 严重」，关系标直接跟在数值后 */}
-              <Panel title="速率告警阈值" meta={<Badge dim>警告 &lt; 严重</Badge>}>
-                <SubHead>总速率 · pps</SubHead>
-                <Rows>
-                  <Row
-                    label="警告"
-                    tail={
-                      <span style={TAIL_FLEX}>
-                        <NumInput
-                          label="速率警告阈值"
-                          value={numbers.rate_warning_pps}
-                          unit="pps"
-                          invalid={badNumber('rate_warning_pps')}
-                          onChange={(value) => updateNumber('rate_warning_pps', value)}
-                        />
-                        <PairBadge ok={ppsPairOk} valid={ppsValid} />
-                      </span>
-                    }
-                  />
-                  <Row
-                    label="严重"
-                    tail={
-                      <NumInput
-                        label="速率严重阈值"
-                        value={numbers.rate_critical_pps}
-                        unit="pps"
-                        invalid={badNumber('rate_critical_pps')}
-                        onChange={(value) => updateNumber('rate_critical_pps', value)}
-                      />
-                    }
-                  />
-                </Rows>
-
-                <SubHead>SYN 专项 · pps</SubHead>
-                <Rows>
-                  <Row
-                    label="警告"
-                    tail={
-                      <span style={TAIL_FLEX}>
-                        <NumInput
-                          label="SYN 警告阈值"
-                          value={numbers.rate_warning_syn}
-                          unit="pps"
-                          invalid={badNumber('rate_warning_syn')}
-                          onChange={(value) => updateNumber('rate_warning_syn', value)}
-                        />
-                        <PairBadge ok={synPairOk} valid={synValid} />
-                      </span>
-                    }
-                  />
-                  <Row
-                    label="严重"
-                    tail={
-                      <NumInput
-                        label="SYN 严重阈值"
-                        value={numbers.rate_critical_syn}
-                        unit="pps"
-                        invalid={badNumber('rate_critical_syn')}
-                        onChange={(value) => updateNumber('rate_critical_syn', value)}
-                      />
-                    }
-                  />
-                </Rows>
-              </Panel>
-
-              {/* 协议专项阈值：2 列网格，一屏内看全 6 个协议 */}
-              <Panel title="协议专项阈值" meta={<Badge dim>全部 &gt; 0</Badge>} padded={false}>
-                <div style={GRID_2}>
-                  {PROTOCOL_FIELDS.map((field) => (
-                    <div key={field.key} className="fw-row" style={GRID_CELL}>
-                      <span className="fw-row-label" style={{ width: 'auto', flexShrink: 0 }}>
-                        {field.label}
-                      </span>
-                      <NumInput
-                        label={field.label}
-                        value={numbers[field.key]}
-                        unit="pps"
-                        invalid={zeroBad(field.key)}
-                        onChange={(value) => updateNumber(field.key, value)}
-                      />
-                    </div>
-                  ))}
-                </div>
-                <div style={{ ...DIM_NOTE, padding: '2px 6px' }}>
-                  保存后经 netlink 下发内核，作为每 IP 的协议速率判定阈值；任一为 0 会被拒绝。
-                </div>
-              </Panel>
-
-              {/* DDoS 检测算法开关：标签 + 一行 dim 说明 + 44px 开关行 */}
-              <Panel
-                title="DDoS 检测算法"
-                meta={
-                  <Badge tone={flags.ddos_detection ? 'success' : 'danger'} dim>
-                    {flags.ddos_detection ? '总开关 ON' : '总开关 OFF'}
-                  </Badge>
-                }
-              >
-                <Rows>
-                  {BOOL_FIELDS.map((field) => (
-                    <div
-                      key={field.key}
-                      className="fw-row"
-                      style={{ minHeight: 44, alignItems: 'center' }}
+                <Card title="速率阈值" size="small">
+                  <div style={FIELD_GRID}>
+                    <Form.Item
+                      name="rate_warning_pps"
+                      label="总速率警告（pps）"
+                      extra="单 IP 每秒包数达到此值标记为警告"
+                      rules={requiredNumber('总速率警告阈值')}
                     >
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12, color: 'var(--fw-text)' }}>{field.label}</div>
-                        <div style={{ fontSize: 10, color: 'var(--fw-text-3)', lineHeight: 1.35 }}>
-                          {field.hint}
-                        </div>
-                      </div>
-                      {/* 开关外面套 44px 高的容器：antd-mobile 默认尺寸小于触摸目标下限 */}
-                      <div className="fw-tap" style={{ flexShrink: 0 }}>
-                        <Switch
-                          checked={flags[field.key]}
-                          style={{ '--width': '42px', '--height': '26px' }}
-                          onChange={(checked) => updateFlag(field.key, checked)}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </Rows>
-              </Panel>
+                      <InputNumber min={0} step={1000} precision={0} style={NUMBER_STYLE} />
+                    </Form.Item>
+                    <Form.Item
+                      name="rate_critical_pps"
+                      label="总速率严重（pps）"
+                      extra="须大于总速率警告阈值"
+                      dependencies={['rate_warning_pps']}
+                      rules={[
+                        ...requiredNumber('总速率严重阈值'),
+                        greaterThanSibling(form, 'rate_warning_pps', '严重阈值必须大于警告阈值'),
+                      ]}
+                    >
+                      <InputNumber min={0} step={1000} precision={0} style={NUMBER_STYLE} />
+                    </Form.Item>
+                    <Form.Item
+                      name="rate_warning_syn"
+                      label="SYN 速率警告（pps）"
+                      extra="单 IP 每秒 SYN 包数达到此值标记为警告"
+                      rules={requiredNumber('SYN 速率警告阈值')}
+                    >
+                      <InputNumber min={0} step={100} precision={0} style={NUMBER_STYLE} />
+                    </Form.Item>
+                    <Form.Item
+                      name="rate_critical_syn"
+                      label="SYN 速率严重（pps）"
+                      extra="须大于 SYN 速率警告阈值"
+                      dependencies={['rate_warning_syn']}
+                      rules={[
+                        ...requiredNumber('SYN 速率严重阈值'),
+                        greaterThanSibling(form, 'rate_warning_syn', '严重阈值必须大于警告阈值'),
+                      ]}
+                    >
+                      <InputNumber min={0} step={100} precision={0} style={NUMBER_STYLE} />
+                    </Form.Item>
+                  </div>
+                </Card>
 
-              {/* 容量上限：2 列网格 */}
-              <Panel title="容量上限" meta={<Badge dim>全部 &gt; 0</Badge>} padded={false}>
-                <div style={GRID_2}>
-                  {CAPACITY_FIELDS.map((field) => (
-                    <div key={field.key} className="fw-row" style={GRID_CELL}>
-                      <span className="fw-row-label" style={{ width: 'auto', flexShrink: 0 }}>
-                        {field.label}
-                      </span>
-                      <NumInput
-                        label={field.label}
-                        value={numbers[field.key]}
-                        unit="条"
-                        invalid={zeroBad(field.key)}
-                        onChange={(value) => updateNumber(field.key, value)}
-                      />
-                    </div>
-                  ))}
-                </div>
-                <div style={{ ...DIM_NOTE, padding: '2px 6px' }}>
-                  各表能容纳的最大条目数，取值为不能为 0 的整数。
-                </div>
-              </Panel>
+                <Card title="每协议上限" size="small">
+                  <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
+                    各协议每秒包数上限，超过即判为对应泛洪（同步到内核模块，参考正常主机量级）
+                  </Typography.Paragraph>
+                  <div style={FIELD_GRID}>
+                    <Form.Item
+                      name="max_syn_per_second"
+                      label="SYN 上限（pps）"
+                      rules={requiredNumber('SYN 上限')}
+                    >
+                      <InputNumber min={0} step={100} precision={0} style={NUMBER_STYLE} />
+                    </Form.Item>
+                    <Form.Item
+                      name="max_udp_per_second"
+                      label="UDP 上限（pps）"
+                      rules={requiredNumber('UDP 上限')}
+                    >
+                      <InputNumber min={0} step={100} precision={0} style={NUMBER_STYLE} />
+                    </Form.Item>
+                    <Form.Item
+                      name="max_icmp_per_second"
+                      label="ICMP 上限（pps）"
+                      rules={requiredNumber('ICMP 上限')}
+                    >
+                      <InputNumber min={0} step={100} precision={0} style={NUMBER_STYLE} />
+                    </Form.Item>
+                    <Form.Item
+                      name="max_ack_per_second"
+                      label="ACK 上限（pps）"
+                      rules={requiredNumber('ACK 上限')}
+                    >
+                      <InputNumber min={0} step={100} precision={0} style={NUMBER_STYLE} />
+                    </Form.Item>
+                    <Form.Item
+                      name="max_rst_per_second"
+                      label="RST 上限（pps）"
+                      rules={requiredNumber('RST 上限')}
+                    >
+                      <InputNumber min={0} step={100} precision={0} style={NUMBER_STYLE} />
+                    </Form.Item>
+                    <Form.Item
+                      name="max_fin_per_second"
+                      label="FIN 上限（pps）"
+                      rules={requiredNumber('FIN 上限')}
+                    >
+                      <InputNumber min={0} step={100} precision={0} style={NUMBER_STYLE} />
+                    </Form.Item>
+                  </div>
+                </Card>
 
-              {/* 日志视图时间过滤：本页只写入起点，不直接删除日志文件 */}
-              <Panel title="日志视图过滤" meta={clearLogs === '' ? '未设置' : '已设置'}>
-                <Rows>
-                  <Row label="过滤起点" value={isoToLocalText(clearLogs)} wide />
-                </Rows>
-                <div style={{ display: 'flex', gap: 5, marginTop: 5 }}>
-                  <button
-                    type="button"
-                    className="fw-cmd"
-                    style={{ flex: 1 }}
-                    onClick={() => setClearLogs(nowTimestamp())}
+                <Card title="检测开关" size="small">
+                  <div style={FIELD_GRID}>
+                    <Form.Item
+                      name="ddos_detection"
+                      label="DDoS 检测总开关"
+                      valuePropName="checked"
+                      extra="关闭后下方两种阈值检测均不生效"
+                    >
+                      <Switch />
+                    </Form.Item>
+                    <Form.Item
+                      name="static_threshold"
+                      label="静态阈值检测"
+                      valuePropName="checked"
+                      extra="按上面固定的每协议上限判定"
+                    >
+                      <Switch />
+                    </Form.Item>
+                    <Form.Item
+                      name="dynamic_threshold"
+                      label="动态阈值检测"
+                      valuePropName="checked"
+                      extra="按历史基线 × 倍数自适应判定"
+                    >
+                      <Switch />
+                    </Form.Item>
+                  </div>
+                </Card>
+
+                <Card title="容量上限" size="small">
+                  <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
+                    各内核表的最大条目数，决定可承载的规模；调整通常需重载内核模块后生效
+                  </Typography.Paragraph>
+                  <div style={FIELD_GRID}>
+                    <Form.Item
+                      name="max_ban_entries"
+                      label="封禁表条目"
+                      rules={requiredNumber('封禁表最大条目数')}
+                    >
+                      <InputNumber min={1} step={1024} precision={0} style={NUMBER_STYLE} />
+                    </Form.Item>
+                    <Form.Item
+                      name="max_whitelist_entries"
+                      label="白名单条目"
+                      rules={requiredNumber('白名单最大条目数')}
+                    >
+                      <InputNumber min={1} step={1024} precision={0} style={NUMBER_STYLE} />
+                    </Form.Item>
+                    <Form.Item
+                      name="max_rate_entries"
+                      label="速率表条目"
+                      extra="支持并发监测的源 IP 数"
+                      rules={requiredNumber('速率表最大条目数')}
+                    >
+                      <InputNumber min={1} step={1024} precision={0} style={NUMBER_STYLE} />
+                    </Form.Item>
+                    <Form.Item
+                      name="max_local_ip_cache"
+                      label="本地 IP 缓存"
+                      rules={requiredNumber('本地 IP 缓存最大条目数')}
+                    >
+                      <InputNumber min={1} step={1024} precision={0} style={NUMBER_STYLE} />
+                    </Form.Item>
+                  </div>
+                </Card>
+
+                <Card title="日志清理" size="small">
+                  <Form.Item
+                    name="clear_logs_at"
+                    label="每日日志清理时间"
+                    extra="每天到该时刻（HH:mm）清理历史日志；留空表示不按时间清理"
+                    style={{ maxWidth: 260, marginBottom: 0 }}
                   >
-                    设为当前时间
-                  </button>
-                  <button
-                    type="button"
-                    className="fw-cmd"
-                    style={{ flex: 1 }}
-                    disabled={clearLogs === ''}
-                    onClick={() => setClearLogs('')}
+                    <TimePicker format="HH:mm" allowClear style={NUMBER_STYLE} placeholder="选择时间" />
+                  </Form.Item>
+                </Card>
+
+                {/* 提交区：仅在表单脏时可保存/重置 */}
+                <Flex justify="flex-end" align="center" gap={12}>
+                  {dirty && (
+                    <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                      有未保存的修改
+                    </Typography.Text>
+                  )}
+                  <Button icon={<UndoOutlined />} onClick={handleReset} disabled={!dirty || submitting}>
+                    重置
+                  </Button>
+                  <Button
+                    type="primary"
+                    icon={<SaveOutlined />}
+                    htmlType="submit"
+                    loading={submitting}
+                    disabled={!dirty}
                   >
-                    取消过滤
-                  </button>
-                </div>
-                <div style={DIM_NOTE}>
-                  只影响日志页的展示范围，不删除磁盘上的日志文件；保存后写入 clear_logs_at 并持久化。
-                </div>
-              </Panel>
+                    保存
+                  </Button>
+                </Flex>
+              </Flex>
+            </Form>
+          </>
+        )}
 
-              {/* 生效方式说明：让用户知道「保存」之后发生了什么 */}
-              <Panel title="保存后的行为" meta="PUT /api/v2/config">
-                <div style={DIM_NOTE}>· 配置写入守护进程内存并持久化到运行时配置文件，重启后保留</div>
-                <div style={DIM_NOTE}>· 协议阈值与 DDoS 开关会即时同步到内核；同步失败不影响配置保存</div>
-                <div style={DIM_NOTE}>· 「日志视图过滤」以空字符串保存即表示取消过滤</div>
-              </Panel>
-
-              <ActionBar
-                dirty={dirty}
-                count={diff.changedCount}
-                saving={saving}
-                onSave={() => void save()}
-                onReset={resetDraft}
-              />
-            </>
+        {/* --- 运行时状态：独立探针，与配置表单互不阻塞 --- */}
+        <Card
+          title="运行时状态"
+          size="small"
+          extra={
+            <Button size="small" icon={<ReloadOutlined />} onClick={health.refetch} loading={health.isRefreshing}>
+              刷新
+            </Button>
+          }
+        >
+          {health.isLoading && health.data == null && <LoadingState variant="detail" />}
+          {health.error != null && health.data == null && (
+            <ErrorState error={health.error} onRetry={health.refetch} compact />
           )}
-        </div>
-      </PullToRefresh>
+          {health.data != null && (
+            <Descriptions
+              column={{ xs: 1, sm: 2, md: 2, lg: 3, xl: 3 }}
+              size="small"
+              bordered
+              items={healthItems(health.data)}
+            />
+          )}
+        </Card>
+      </Flex>
     </>
   )
 }

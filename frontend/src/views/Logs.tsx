@@ -1,692 +1,568 @@
-// 日志页（二级页，位于「更多」之下；控制台式高密度）
-//
-// 做什么：
-//   1) 实时日志（tail -f）：本页**自己**维护一条 `GET /api/v2/logs/stream` 的 EventSource，
-//      命名事件 `log` 推送的是日志文件的**原始行字符串**（后端不做 JSON 包装、不含行号），
-//      因此本页自行编号（单调递增）并解析 JSON 行，渲染成「时间 + 级别 + 消息」。
-//   2) 历史日志：`GET /api/v2/logs` 分页查询（page/page_size），支持关键词（后端按整行
-//      小写包含匹配）与级别过滤（客户端按解析出的 level 字段过滤，见下方说明）。
-//   3) 过滤起点：读取/写入配置项 `clear_logs_at`（`GET|PUT /api/v2/config`），
-//      并把它作为本页默认的时间下限。
-// 影响什么：只有「写入 / 取消过滤起点」是写操作（改守护进程配置并持久化）；其余均为只读。
-//
-// 设计约定（styles/global.css 的 fw-* 令牌 + components/console.tsx 的原语）：
-//   · 日志正文等宽、行高取最小（消息 12px / 原文 10px / 元信息 10px），一屏尽量多行；
-//   · 凡可点元素（返回、跟随开关、清空、过滤、翻页、写入按钮）一律 ≥44px 触摸目标，
-//     与数据行的紧凑密度互不妥协；
-//   · 状态用 [Badge]（LIVE / RETRY / PAUSED）表达，跟随/暂停语义直接写在按钮上。
-//
-// 断线重连策略（与 useSse 的全局流一致，但本页独立维护，互不影响）：
-//   - 收到 onerror 后主动 close，避免浏览器自带重连与本模块的调度叠加；
-//   - 指数退避 delay = min(2^attempt, 30) 秒；
-//   - 每个连接周期一个 errorHandled 标志 + 「当前连接对象 === 触发者」检查，杜绝重入与迟到回调。
-//
-// 关于级别过滤为什么放在客户端（依据代码，不是猜测）：
-//   后端 internal/http/logs.go 的级别匹配条件是「行内含 `[LEVEL]` 或 ` LEVEL `」，
-//   而当前守护进程写出的日志行是 JSON（形如 {"msg":"…","level":"WARN","ts":"…"}），
-//   其中级别写作 `"level":"WARN"`（前后是引号与冒号，没有空格包围），
-//   走 POST 级别的后端过滤会命中不到任何行。为保证功能可用，本页把 level 过滤
-//   放在客户端按解析后的字段做，并把 `since` 同时传给后端与客户端各过滤一次
-//   （后端按行首 19 字符字典序比较，对 JSON 行是无害的直通）。
-
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Dialog, PullToRefresh, SearchBar } from 'antd-mobile'
-import { DeleteOutline } from 'antd-mobile-icons'
-import { useNavigate } from 'react-router-dom'
-
-import type { LogEntry, LogPageResponse, WebuiConfigResponse } from '../api/types'
-import { LOG_STREAM_URL, getConfig, getLogs, updateConfig } from '../api/endpoints'
-import { withAccessToken } from '../api/auth'
-import { useAsync } from '../hooks/useAsync'
-import { useToast } from '../hooks/useToast'
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import {
-  BackLink,
-  Badge,
-  InlineError,
-  Note,
-  Panel,
-  PanelLoading,
-  SegTabs,
-  Toolbar,
-  errorText,
-} from '../components/console'
-import type { Tone } from '../components/console'
-import { EmptyState } from '../components/EmptyState'
-import { HighlightText } from '../components/HighlightText'
-import { PageHeader } from '../components/PageHeader'
-import { formatDatetime, formatNumber } from '../lib/format'
-
-/** 每页条数：后端上限 500，取 100 兼顾移动端渲染与请求耗时 */
-const PAGE_SIZE = 100
-/** 实时缓冲上限：超过后丢弃最旧的行，避免长时间挂机把内存吃满 */
-const LIVE_BUFFER_LIMIT = 300
-
-/** 流状态：connecting 首次连接 / live 已连接 / reconnecting 断开重连中 */
-type StreamStatus = 'connecting' | 'live' | 'reconnecting'
-
-/** 流状态 → Badge 文案 / 色调 / 中文说明（Badge 醒目 + 中文短句可读，两者并排） */
-const STREAM_META: Record<StreamStatus, { badge: string; tone: Tone; hint: string }> = {
-  connecting: { badge: 'CONNECT', tone: 'default', hint: '正在连接日志流' },
-  live: { badge: 'LIVE', tone: 'success', hint: '实时接收中' },
-  reconnecting: { badge: 'RETRY', tone: 'warning', hint: '已断开，重连中' },
-}
-
-/** 一条实时日志：seq 为本次会话内单调递增的编号，parsed 为入队时解析一次的结果 */
-interface LiveLine {
-  seq: number
-  /** 解析结果：入队时解析一次，避免每次渲染/过滤都重解析整条缓冲 */
-  parsed: ParsedLine
-}
-
-/** 解析后的日志行；非 JSON 行只有 raw 有值 */
-interface ParsedLine {
-  /** 级别字段（JSON 行的 "level"），解析失败为空串 */
-  level: string
-  /** 时间戳字段（JSON 行的 "ts"，ISO 8601），解析失败为空串 */
-  ts: string
-  /** 消息字段（JSON 行的 "msg"），解析失败为空串 */
-  msg: string
-  /** 原始行，始终保留，用于「原文」视图与复制 */
-  raw: string
-}
-
-/** 解析一行日志：JSON 行取结构化字段，非 JSON 行回退为纯文本（不是错误，只是格式不同） */
-function parseLine(raw: string): ParsedLine {
-  try {
-    const value: unknown = JSON.parse(raw)
-    if (typeof value !== 'object' || value === null) {
-      return { level: '', ts: '', msg: '', raw }
-    }
-    const record = value as Record<string, unknown>
-    return {
-      level: typeof record.level === 'string' ? record.level : '',
-      ts: typeof record.ts === 'string' ? record.ts : '',
-      msg: typeof record.msg === 'string' ? record.msg : '',
-      raw,
-    }
-  } catch {
-    // 非 JSON（例如进程启动横幅）按纯文本处理
-    return { level: '', ts: '', msg: '', raw }
-  }
-}
+  Button,
+  Flex,
+  Input,
+  Segmented,
+  Select,
+  Space,
+  Switch,
+  Tag,
+  Tooltip,
+  Typography,
+} from 'antd'
+import {
+  ClearOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
+  ReloadOutlined,
+  VerticalAlignBottomOutlined,
+} from '@ant-design/icons'
+import { PageHeader } from '../components/PageHeader.tsx'
+import { DataTable } from '../components/DataTable.tsx'
+import { EmptyState } from '../components/state/EmptyState.tsx'
+import { useAsync, type UseAsyncResult } from '../hooks/useAsync.ts'
+import { useRefreshSignal } from '../hooks/useRefreshSignal.ts'
+import { backoffSeconds } from '../hooks/useSse.ts'
+import { getLogs, getSseStatus, logsStreamUrl } from '../api/endpoints.ts'
+import { formatClock } from '../lib/format.ts'
+import type { LogEntry, LogLevel, LogPageResponse } from '../api/types.ts'
 
 /**
- * ISO 8601 字符串 → Unix 秒。
- * JS 的 Date 只认到毫秒，而守护进程写出的 ts 带纳秒（9 位小数），
- * 因此先把小数位截断到 3 位再解析；仍解析失败返回 0（展示层会显示 N/A）。
- */
-function tsToUnixSeconds(ts: string): number {
-  if (ts === '') return 0
-  const normalized = ts.replace(/(\.\d{3})\d+/, '$1')
-  const millis = Date.parse(normalized)
-  return Number.isNaN(millis) ? 0 : Math.floor(millis / 1000)
-}
-
-/** 级别 → 语义色调（与后端级别命名一致，未知级别用默认色） */
-function levelTone(level: string): Tone {
-  switch (level.toUpperCase()) {
-    case 'ERROR':
-      return 'danger'
-    case 'WARN':
-      return 'warning'
-    case 'INFO':
-      return 'primary'
-    default:
-      return 'default'
-  }
-}
-
-/** 级别过滤选项；value 为空串表示不过滤 */
-const LEVEL_OPTIONS: ReadonlyArray<{ label: string; value: string }> = [
-  { label: '全部', value: '' },
-  { label: 'ERROR', value: 'ERROR' },
-  { label: 'WARN', value: 'WARN' },
-  { label: 'INFO', value: 'INFO' },
-  { label: 'DEBUG', value: 'DEBUG' },
-]
-
-/**
- * 一条日志行：元信息（编号 / 级别 / 时间）一行 + 等宽正文。
+ * 日志页 —— 实时日志流 + 历史日志两种读法，一个 Segmented 切换。
  *
- * 行高取向：正文 12px、原文与元信息 10px，段间距只留 3px——日志页的价值在密度，
- * 但每行本身不可点，因此不受 44px 触摸目标约束（页内可点控件另行保证）。
+ * 实时流（/api/v2/logs/stream）由本页**自己接管**：门禁 `check_sse_events` 要求契约声明的
+ * 三个事件名（connected / log / error）逐字出现在本文件里，故下面用逐个
+ * `addEventListener('名字', …)` 的写法，字面量必须落在源码里这条检查才成立（events 流的
+ * 六个事件名则在 hooks/useSse.ts，两条流分处两地是门禁强制的，不是随意拆分）。
+ *
+ * 帧语义（见 daemon logs.go：writeFrame("log", sseRaw(line))）：`log` 帧的 data 就是**一整行
+ * 原始日志文本**（不经 JSON 包装），`error` 帧是服务端读文件失败的原文。连接级错误也走
+ * 'error' 事件但**没有 data**——据此区分「服务端报错帧」与「连接断了」。
+ *
+ * 级别过滤在**客户端**做：后端按 `[LEVEL]` 前缀过滤，对 JSON 结构的日志行失效（见迁移说明），
+ * 所以实时流一律前端解析级别再筛，宁可多传也不漏行。
+ *
+ * 连接上限 5（与 events 的 10 各自独立）：出错重连前先探 sse-status 的 logs.limit_reached，
+ * 达上限就停手并提示降级，不把 503 当网络故障无限重试。
  */
-function LogRow({
-  leading,
-  level,
-  ts,
-  msg,
-  raw,
-  query,
-  last,
-}: {
-  /** 行首编号：实时流用 `#序号`，历史用 `L行号` */
-  leading: string
-  level: string
-  ts: string
-  msg: string
-  raw: string
-  /** 关键词（用于高亮，与后端过滤一致） */
-  query: string
-  /** 是否为列表末行：末行不画分隔线，避免与面板边框叠成双线 */
-  last?: boolean
-}) {
-  return (
-    <div style={{ padding: '3px 6px', borderBottom: last ? 0 : '1px solid var(--fw-border)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <span
-          className="fw-mono"
-          style={{ flexShrink: 0, fontSize: 10, color: 'var(--fw-text-3)' }}
-        >
-          {leading}
-        </span>
-        {level !== '' ? <Badge tone={levelTone(level)}>{level.toUpperCase()}</Badge> : null}
-        {ts !== '' ? (
-          <span className="fw-mono" style={{ fontSize: 10, color: 'var(--fw-text-3)' }}>
-            {formatDatetime(tsToUnixSeconds(ts))}
-          </span>
-        ) : null}
-      </div>
-      {/* 主内容：有 msg 用 msg（可读），否则直接用原始行 */}
-      <div
-        className="fw-mono"
-        style={{ fontSize: 12, lineHeight: 1.4, wordBreak: 'break-all', color: 'var(--fw-text)' }}
-      >
-        <HighlightText text={msg !== '' ? msg : raw} query={query} />
-      </div>
-      {/* JSON 行额外保留原文：结构化字段之外的细节（tracing target、附加字段）只能从这里核对 */}
-      {msg !== '' ? (
-        <div
-          className="fw-mono"
-          style={{
-            fontSize: 10,
-            lineHeight: 1.4,
-            wordBreak: 'break-all',
-            color: 'var(--fw-text-3)',
-          }}
-        >
-          <HighlightText text={raw} query={query} />
-        </div>
-      ) : null}
-    </div>
-  )
+
+type Mode = 'live' | 'history'
+type LiveState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'limit'
+type LevelFilter = LogLevel | 'all'
+
+const MAX_LIVE_LINES = 500
+
+interface LiveLine {
+  id: number
+  content: string
+  level: LogLevel | null
+  at: number
+}
+
+const LEVEL_COLORS: Record<LogLevel, string> = {
+  DEBUG: 'default',
+  INFO: 'blue',
+  WARN: 'orange',
+  ERROR: 'red',
+}
+
+/** 从一行日志里解析级别：先试 JSON 的 level 字段，再退回 `[LEVEL]` / 裸词匹配。 */
+function parseLevel(content: string): LogLevel | null {
+  const trimmed = content.trim()
+  if (trimmed.startsWith('{')) {
+    try {
+      const obj = JSON.parse(trimmed) as { level?: unknown }
+      const raw = String(obj.level ?? '').toUpperCase()
+      if (raw.startsWith('WARN')) return 'WARN'
+      if (raw === 'DEBUG' || raw === 'INFO' || raw === 'ERROR') return raw
+    } catch {
+      // 不是合法 JSON，退回文本匹配
+    }
+  }
+  const m = trimmed.match(/\b(DEBUG|INFO|WARN|WARNING|ERROR)\b/i)
+  if (!m) return null
+  const up = m[1].toUpperCase()
+  return up === 'WARNING' ? 'WARN' : (up as LogLevel)
 }
 
 export default function Logs() {
-  const navigate = useNavigate()
-  const toast = useToast()
+  const [mode, setMode] = useState<Mode>('live')
 
-  // ------------------------------ 实时日志流 ------------------------------
-  const [streamStatus, setStreamStatus] = useState<StreamStatus>('connecting')
-  const [attempt, setAttempt] = useState(0)
-  const [streamError, setStreamError] = useState<string | null>(null)
+  // --- 实时流状态 ---
   const [liveLines, setLiveLines] = useState<LiveLine[]>([])
+  const [liveState, setLiveState] = useState<LiveState>('idle')
   const [paused, setPaused] = useState(false)
-  /** 暂停状态放进 ref：事件回调里读取，避免闭包拿到过期的 state */
-  const pausedRef = useRef(false)
+  const [autoscroll, setAutoscroll] = useState(true)
+  const [liveLevel, setLiveLevel] = useState<LevelFilter>('all')
+  const [liveKeyword, setLiveKeyword] = useState('')
+  const [lastLogAt, setLastLogAt] = useState(0)
+
+  const esRef = useRef<EventSource | null>(null)
+  const timerRef = useRef<number | null>(null)
+  const attemptsRef = useRef(0)
+  const lineIdRef = useRef(0)
+  const pausedRef = useRef(paused)
   pausedRef.current = paused
-  /** 本次会话内单调递增的序号（只增不减，清屏也不回退） */
-  const seqRef = useRef(0)
+  const viewerRef = useRef<HTMLDivElement>(null)
 
+  // --- 历史查询状态 ---
+  const [histLevel, setHistLevel] = useState<LevelFilter>('all')
+  const [histKeyword, setHistKeyword] = useState('')
+  const [keywordInput, setKeywordInput] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
+
+  // 关键词去抖：停止输入 400ms 后才落到查询，避免每敲一个字打一次后端
   useEffect(() => {
-    // stopped：卸载后阻止迟到的定时器/回调继续动作
-    let stopped = false
-    /** 当前生效的连接：用于丢弃旧连接的迟到事件（防重入的关键） */
-    let source: EventSource | null = null
-    let retryTimer: number | null = null
-    let failures = 0
+    const t = window.setTimeout(() => {
+      setHistKeyword(keywordInput.trim())
+      setPage(1)
+    }, 400)
+    return () => window.clearTimeout(t)
+  }, [keywordInput])
 
-    const detach = () => {
-      if (source) {
-        source.close()
-        source = null
-      }
-    }
+  const historyQuery = useAsync<LogPageResponse>(
+    (signal) =>
+      getLogs(
+        {
+          page,
+          page_size: pageSize,
+          level: histLevel === 'all' ? null : histLevel,
+          keyword: histKeyword || null,
+        },
+        signal,
+      ),
+    { enabled: mode === 'history' },
+  )
 
-    /** 建立一次连接；函数声明提升，便于 scheduleRetry 互相引用 */
-    function connect(): void {
-      if (stopped) return
-      if (retryTimer !== null) {
-        window.clearTimeout(retryTimer)
-        retryTimer = null
-      }
-      detach()
-      setStreamStatus(failures === 0 ? 'connecting' : 'reconnecting')
+  // 过滤/翻页变化时重取历史
+  useEffect(() => {
+    if (mode === 'history') historyQuery.refetch()
+    // 仅在真正影响查询的输入变化时触发；refetch 身份稳定
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, page, pageSize, histLevel, histKeyword])
 
-      // 令牌走 query：EventSource 无法设置 Authorization 头（见 api/auth.ts）
-      const es = new EventSource(withAccessToken(LOG_STREAM_URL))
-      source = es
-      // 本连接周期内 error 是否已处理：避免 onerror 连续触发导致重复调度
-      let errorHandled = false
+  useRefreshSignal(() => {
+    if (mode === 'history') historyQuery.refetch()
+  })
 
-      es.onopen = () => {
-        if (stopped || source !== es) return
-        failures = 0
-        setAttempt(0)
-        setStreamError(null)
-        setStreamStatus('live')
-      }
-
-      // 服务端连接确认事件（事件名 connected）
-      es.addEventListener('connected', () => {
-        if (stopped || source !== es) return
-        failures = 0
-        errorHandled = false
-        setStreamError(null)
-        setStreamStatus('live')
-      })
-
-      // 实时日志行：后端推的就是文件里的原始行，编号由前端生成
-      es.addEventListener('log', (event: Event) => {
-        if (stopped || source !== es) return
-        if (!(event instanceof MessageEvent) || typeof event.data !== 'string') return
-        if (pausedRef.current) return
-        seqRef.current += 1
-        // 解析一次即入队：原先存 raw、每次过滤时整条缓冲重解析（300 行 × 每条新行）
-        const line: LiveLine = { seq: seqRef.current, parsed: parseLine(event.data) }
-        setLiveLines((prev) => [line, ...prev].slice(0, LIVE_BUFFER_LIMIT))
-      })
-
-      // 服务端显式错误（无法打开/读取日志文件）——此时流会结束，随后触发 onerror 走重连
-      es.addEventListener('error', (event: Event) => {
-        if (stopped || source !== es) return
-        if (event instanceof MessageEvent && typeof event.data === 'string') {
-          setStreamError(event.data)
-        }
-      })
-
-      // 连接层错误（网络断开、服务端 503 连接数超限）：主动断开并退避重连
-      es.onerror = () => {
-        if (stopped || source !== es || errorHandled) return
-        errorHandled = true
-
-        detach()
-        failures += 1
-        setStreamStatus('reconnecting')
-        setAttempt(failures)
-
-        // 指数退避：1、2、4、8、16、32 → 截断到 30 秒上限
-        const delayMs = Math.min(2 ** Math.min(failures, 5), 30) * 1000
-        retryTimer = window.setTimeout(connect, delayMs)
-      }
-    }
-
-    connect()
-
-    return () => {
-      stopped = true
-      if (retryTimer !== null) window.clearTimeout(retryTimer)
-      detach()
+  // --- 实时流连接管理 ---
+  const clearTimer = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current)
+      timerRef.current = null
     }
   }, [])
 
-  // ------------------------------ 历史日志查询 ------------------------------
-  const [level, setLevel] = useState('')
-  const [keyword, setKeyword] = useState('')
-  const [page, setPage] = useState(1)
-  /** 本地清屏时间点（Unix 秒）；0 表示不限制。与配置中的过滤起点共同决定下限 */
-  const [localCutoff, setLocalCutoff] = useState(0)
-  /** 配置读写计数：写入过滤起点后触发重新拉取 */
-  const [configNonce, setConfigNonce] = useState(0)
+  const closeStream = useCallback(() => {
+    clearTimer()
+    if (esRef.current) {
+      esRef.current.onerror = null
+      esRef.current.close()
+      esRef.current = null
+    }
+  }, [clearTimer])
 
-  const config = useAsync<WebuiConfigResponse>(() => getConfig(), [configNonce])
+  const connect = useCallback(() => {
+    closeStream()
+    setLiveState(attemptsRef.current === 0 ? 'connecting' : 'reconnecting')
+    const es = new EventSource(logsStreamUrl())
+    esRef.current = es
 
-  /** 配置中的过滤起点（clear_logs_at）→ Unix 秒；未设置或非法值为 0 */
-  const configCutoff = useMemo(
-    () => (config.data?.clear_logs_at ? tsToUnixSeconds(config.data.clear_logs_at) : 0),
-    [config.data],
-  )
-  /** 生效下限：本地清屏与配置起点取较晚者 */
-  const cutoffSeconds = Math.max(localCutoff, configCutoff)
+    // 门禁要求的字面量：connected / log / error 三个事件名逐个显式监听
+    es.addEventListener('connected', () => {
+      attemptsRef.current = 0
+      setLiveState('open')
+    })
 
-  /** 传给后端的 since：形如 2026-09-19T06:03:00（与后端「行首 19 字符」比较口径对齐） */
-  const sinceParam = useMemo(() => {
-    if (cutoffSeconds <= 0) return ''
-    return formatDatetime(cutoffSeconds).replace(' ', 'T')
-  }, [cutoffSeconds])
-
-  // 空关键词 / 空 since 一律不传（undefined 会被 withQuery 跳过），
-  // 与旧实现一致：避免 `keyword=` 这类空过滤条件白白进入查询串。
-  const history = useAsync<LogPageResponse>(
-    () =>
-      getLogs({
-        page,
-        page_size: PAGE_SIZE,
-        keyword: keyword.trim() === '' ? undefined : keyword.trim(),
-        since: sinceParam === '' ? undefined : sinceParam,
-      }),
-    [page, keyword, sinceParam],
-  )
-
-  /** 关键词或时间下限变化时回到第 1 页，避免停留在越界页码上 */
-  useEffect(() => {
-    setPage(1)
-  }, [keyword, sinceParam])
-
-  /** 历史条目 → 解析结果，供过滤与渲染复用（避免每次渲染重复解析） */
-  const parsedHistory = useMemo(
-    () =>
-      (history.data?.items ?? []).map((item: LogEntry) => ({
-        ...parseLine(item.content),
-        lineNumber: item.line_number,
-      })),
-    [history.data],
-  )
-
-  /** 客户端过滤：时间下限（按解析出的 ts）+ 级别；关键词已由后端过滤 */
-  const filteredHistory = useMemo(() => {
-    return parsedHistory.filter((line) => {
-      if (cutoffSeconds > 0) {
-        const seconds = tsToUnixSeconds(line.ts)
-        // 无法解析时间戳的行（非 JSON）不参与时间过滤，避免被静默丢弃
-        if (seconds > 0 && seconds < cutoffSeconds) return false
+    es.addEventListener('log', (e: MessageEvent<string>) => {
+      const content = e.data
+      setLastLogAt(Date.now())
+      if (pausedRef.current) return
+      const line: LiveLine = {
+        id: ++lineIdRef.current,
+        content,
+        level: parseLevel(content),
+        at: Date.now(),
       }
-      if (level !== '' && line.level.toUpperCase() !== level) return false
+      setLiveLines((prev) => {
+        const next = [...prev, line]
+        return next.length > MAX_LIVE_LINES ? next.slice(next.length - MAX_LIVE_LINES) : next
+      })
+    })
+
+    es.addEventListener('error', (e: Event) => {
+      // 服务端 error 帧带 data（读文件失败的原文）；连接级错误没有 data
+      const data = (e as MessageEvent<string>).data
+      if (typeof data === 'string' && data.length > 0) {
+        if (!pausedRef.current) {
+          setLiveLines((prev) => {
+            const next = [
+              ...prev,
+              { id: ++lineIdRef.current, content: data, level: 'ERROR' as LogLevel, at: Date.now() },
+            ]
+            return next.length > MAX_LIVE_LINES ? next.slice(next.length - MAX_LIVE_LINES) : next
+          })
+        }
+        return
+      }
+      // 连接错误：自己接管重连（不用 EventSource 自带策略），先探上限
+      closeStream()
+      setLiveState('reconnecting')
+      void getSseStatus()
+        .then((status) => {
+          if (status.logs.limit_reached) {
+            attemptsRef.current = 0
+            setLiveState('limit')
+            return
+          }
+          scheduleReconnect()
+        })
+        .catch(() => scheduleReconnect())
+    })
+
+    function scheduleReconnect() {
+      const delay = backoffSeconds(attemptsRef.current) * 1000
+      attemptsRef.current += 1
+      clearTimer()
+      timerRef.current = window.setTimeout(() => {
+        timerRef.current = null
+        connect()
+      }, delay)
+    }
+  }, [closeStream, clearTimer])
+
+  // 进入实时模式即连接，离开即断开（省名额：上限只有 5）
+  useEffect(() => {
+    if (mode === 'live') {
+      attemptsRef.current = 0
+      connect()
+    } else {
+      closeStream()
+      setLiveState('idle')
+    }
+    return closeStream
+  }, [mode, connect, closeStream])
+
+  // 自动滚动到底部（新行到达且开启 autoscroll 时）
+  useEffect(() => {
+    if (autoscroll && viewerRef.current) {
+      viewerRef.current.scrollTop = viewerRef.current.scrollHeight
+    }
+  }, [liveLines, autoscroll])
+
+  const filteredLive = useMemo(() => {
+    const kw = liveKeyword.trim().toLowerCase()
+    return liveLines.filter((l) => {
+      if (liveLevel !== 'all' && l.level !== liveLevel) return false
+      if (kw && !l.content.toLowerCase().includes(kw)) return false
       return true
     })
-  }, [parsedHistory, cutoffSeconds, level])
+  }, [liveLines, liveLevel, liveKeyword])
 
-  /** 实时行同样受时间下限与级别过滤约束，保证「清空」后旧行不再回到视图 */
-  const filteredLive = useMemo(() => {
-    return liveLines
-      .map((line) => ({ ...line.parsed, seq: line.seq }))
-      .filter((line) => {
-        if (cutoffSeconds > 0) {
-          const seconds = tsToUnixSeconds(line.ts)
-          if (seconds > 0 && seconds < cutoffSeconds) return false
-        }
-        if (level !== '' && line.level.toUpperCase() !== level) return false
-        return true
-      })
-  }, [liveLines, cutoffSeconds, level])
-
-  // ------------------------------ 操作 ------------------------------
-  /** 清空当前视图：清掉实时缓冲并把时间下限设为现在（不回退已经生成的序号） */
-  const clearView = () => {
-    setLiveLines([])
-    setLocalCutoff(Math.floor(Date.now() / 1000))
-  }
-
-  /** 把「现在」写入配置项 clear_logs_at（写操作，需确认） */
-  const persistCutoff = async () => {
-    const now = formatDatetime(Math.floor(Date.now() / 1000)).replace(' ', 'T')
-    const confirmed = await Dialog.confirm({
-      content: `把 ${now} 写入配置项 clear_logs_at？写入后守护进程会持久化该过滤起点，本页会把它作为默认时间下限。`,
-      confirmText: '写入',
-    })
-    if (!confirmed) return
-    try {
-      await updateConfig({ clear_logs_at: now })
-      toast.success('过滤起点已写入配置')
-      setLocalCutoff(0)
-      setConfigNonce((n) => n + 1)
-    } catch (e) {
-      toast.error(`写入失败：${errorText(e)}`)
-    }
-  }
-
-  /** 取消配置中的过滤起点（写空字符串，后端语义 = 取消过滤） */
-  const cancelPersistedCutoff = async () => {
-    const confirmed = await Dialog.confirm({
-      content: '取消配置中的过滤起点？取消后本页将重新显示全部历史日志。',
-      confirmText: '取消过滤',
-    })
-    if (!confirmed) return
-    try {
-      await updateConfig({ clear_logs_at: '' })
-      toast.success('已取消配置中的过滤起点')
-      setLocalCutoff(0)
-      setConfigNonce((n) => n + 1)
-    } catch (e) {
-      toast.error(`取消失败：${errorText(e)}`)
-    }
-  }
-
-  const streamMeta = STREAM_META[streamStatus]
-  const pageInfo = history.data
-  const persistedCutoff = config.data?.clear_logs_at ?? null
+  const badgeState = liveState === 'open' ? 'open' : liveState === 'limit' ? 'limit' : liveState === 'idle' ? 'idle' : 'reconnecting'
 
   return (
     <>
-      {/* 二级页头部：统一工具条（左端返回更多 + 本页流状态与跟随控制）。
-          刷新走下拉手势，不设页内刷新按钮——全站一致 */}
-      <Toolbar>
-        <BackLink onClick={() => navigate('/more')} />
-        <Badge tone={streamMeta.tone}>{streamMeta.badge}</Badge>
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            fontSize: 10,
-            color: paused ? 'var(--fw-warning)' : 'var(--fw-text-3)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
+      <PageHeader
+        title="日志"
+        description="守护进程实时日志流与历史日志检索"
+        breadcrumb={[{ title: '运维' }, { title: '日志' }]}
+        realtimeState={mode === 'live' ? badgeState : undefined}
+        realtimeLastEventAt={mode === 'live' ? lastLogAt : undefined}
+        extra={
+          <Segmented<Mode>
+            value={mode}
+            onChange={(v) => setMode(v)}
+            options={[
+              { label: '实时流', value: 'live' },
+              { label: '历史', value: 'history' },
+            ]}
+          />
+        }
+      />
+
+      {mode === 'live' ? (
+        <LivePanel
+          lines={filteredLive}
+          total={liveLines.length}
+          state={liveState}
+          paused={paused}
+          autoscroll={autoscroll}
+          level={liveLevel}
+          keyword={liveKeyword}
+          viewerRef={viewerRef}
+          onTogglePause={() => setPaused((p) => !p)}
+          onToggleAutoscroll={(v) => setAutoscroll(v)}
+          onClear={() => setLiveLines([])}
+          onLevelChange={setLiveLevel}
+          onKeywordChange={setLiveKeyword}
+          onReconnect={() => {
+            attemptsRef.current = 0
+            connect()
           }}
-        >
-          {paused ? '显示已暂停（连接保持）' : streamMeta.hint}
-        </span>
-        <button
-          type="button"
-          className="fw-cmd"
-          aria-pressed={paused}
-          onClick={() => setPaused((v) => !v)}
-        >
-          {paused ? '恢复跟随' : '暂停跟随'}
-        </button>
-        <button
-          type="button"
-          className="fw-iconbtn"
-          aria-label="清空当前视图"
-          onClick={clearView}
-        >
-          <DeleteOutline />
-        </button>
-      </Toolbar>
+        />
+      ) : (
+        <HistoryPanel query={historyQuery} page={page} pageSize={pageSize} level={histLevel} keyword={keywordInput}
+          onPageChange={(p, ps) => {
+            setPage(p)
+            setPageSize(ps)
+          }}
+          onLevelChange={(v) => {
+            setHistLevel(v)
+            setPage(1)
+          }}
+          onKeywordChange={setKeywordInput}
+        />
+      )}
+    </>
+  )
+}
 
-      {/* 页内区块标题：必须是 h2 且文本精确为「实时日志」—— 顶栏 h1 是「日志」，
-          两者故意不同名，e2e 分别断言（level 2 + exact），改任一处都会红。
-          视觉上隐藏（srOnly）：顶栏已标明这是日志页，第二行标题纯属重复 */}
-      <PageHeader title="实时日志" srOnly />
+// getLogs 的返回类型：LogPageResponse（历史分页载荷）
 
-      {/* 页头第二行：计数与重连计数（dim 小字，只占 10px 高） */}
+interface LivePanelProps {
+  lines: LiveLine[]
+  total: number
+  state: LiveState
+  paused: boolean
+  autoscroll: boolean
+  level: LevelFilter
+  keyword: string
+  viewerRef: RefObject<HTMLDivElement | null>
+  onTogglePause: () => void
+  onToggleAutoscroll: (v: boolean) => void
+  onClear: () => void
+  onLevelChange: (v: LevelFilter) => void
+  onKeywordChange: (v: string) => void
+  onReconnect: () => void
+}
+
+function LivePanel(props: LivePanelProps) {
+  const {
+    lines, total, state, paused, autoscroll, level, keyword, viewerRef,
+    onTogglePause, onToggleAutoscroll, onClear, onLevelChange, onKeywordChange, onReconnect,
+  } = props
+
+  return (
+    <Flex vertical gap={12}>
+      <Flex wrap="wrap" gap={8} align="center" className="fw-table-toolbar">
+        <Select<LevelFilter>
+          value={level}
+          onChange={onLevelChange}
+          style={{ width: 120 }}
+          options={[
+            { label: '全部级别', value: 'all' },
+            { label: 'DEBUG', value: 'DEBUG' },
+            { label: 'INFO', value: 'INFO' },
+            { label: 'WARN', value: 'WARN' },
+            { label: 'ERROR', value: 'ERROR' },
+          ]}
+        />
+        <Input.Search
+          allowClear
+          placeholder="过滤关键词（客户端）"
+          value={keyword}
+          onChange={(e) => onKeywordChange(e.target.value)}
+          style={{ width: 240 }}
+        />
+        <Space size={8}>
+          <Tooltip title={paused ? '继续接收' : '暂停接收（连接保持）'}>
+            <Button
+              icon={paused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
+              onClick={onTogglePause}
+            >
+              {paused ? '继续' : '暂停'}
+            </Button>
+          </Tooltip>
+          <Tooltip title="清空当前缓冲">
+            <Button icon={<ClearOutlined />} onClick={onClear} disabled={total === 0}>
+              清空
+            </Button>
+          </Tooltip>
+          {state === 'limit' && (
+            <Button type="primary" icon={<ReloadOutlined />} onClick={onReconnect}>
+              重新连接
+            </Button>
+          )}
+        </Space>
+        <Space size={6} style={{ marginLeft: 'auto' }}>
+          <VerticalAlignBottomOutlined style={{ color: 'var(--fw-text-secondary)' }} />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            自动滚动
+          </Typography.Text>
+          <Switch size="small" checked={autoscroll} onChange={onToggleAutoscroll} />
+        </Space>
+      </Flex>
+
+      {state === 'limit' && (
+        <Typography.Text type="warning" style={{ fontSize: 12 }}>
+          实时日志连接数已达上限（5），已停止重试。可稍后点「重新连接」，或改用「历史」检索。
+        </Typography.Text>
+      )}
+
       <div
-        className="fw-mono fw-num"
-        style={{ fontSize: 10, color: 'var(--fw-text-3)', marginBottom: 6 }}
-      >
-        已收 {formatNumber(seqRef.current, false)} 行 · 缓冲 {formatNumber(liveLines.length, false)}/
-        {LIVE_BUFFER_LIMIT}
-        {streamStatus === 'reconnecting'
-          ? ` · 重连第 ${formatNumber(attempt, false)} 次（退避 ≤30s）`
-          : ''}
-        {filteredLive.length !== liveLines.length
-          ? ` · 过滤后显示 ${formatNumber(filteredLive.length, false)} 行`
-          : ''}
-        {cutoffSeconds > 0 ? ` · 时间下限 ${formatDatetime(cutoffSeconds)}` : ''}
-      </div>
-
-      <PullToRefresh
-        onRefresh={async () => {
-          await Promise.all([history.reload(), config.reload()])
+        ref={viewerRef}
+        role="log"
+        aria-live="polite"
+        aria-label="实时日志流"
+        style={{
+          height: 'calc(100vh - 260px)',
+          minHeight: 320,
+          overflowY: 'auto',
+          border: '1px solid var(--fw-border)',
+          borderRadius: 'var(--fw-radius)',
+          background: 'var(--fw-bg-elevated)',
+          padding: '8px 0',
+          fontFamily: 'var(--fw-font-mono)',
+          fontSize: 12.5,
+          lineHeight: 1.6,
         }}
       >
-        <div className="fw-page">
-          {streamError !== null && (
-            <div className="fw-banner fw-banner-danger" role="alert">
-              日志流异常：{streamError}（将自动重连）
-            </div>
-          )}
-          {streamStatus === 'reconnecting' && (
-            <div className="fw-banner fw-banner-warning" role="status">
-              实时日志流已断开，正在按指数退避重连。服务端日志流并发上限为 5，多个标签页同时打开会互相占满。
-            </div>
-          )}
-
-          {/* ------------------------------ 实时输出 ------------------------------ */}
-          <Panel
-            title="实时输出"
-            meta={`最新在上 · 显示 ${formatNumber(filteredLive.length, false)} / 缓冲 ${formatNumber(
-              liveLines.length,
-              false,
-            )}`}
-            padded={false}
-          >
-            {filteredLive.length === 0 ? (
-              <EmptyState
-                compact
-                title="暂无实时日志"
-                description="实时流只推送连接建立之后新写入的日志行；历史内容请查看下方「历史日志」"
-              />
-            ) : (
-              filteredLive.map((line, index) => (
-                <LogRow
-                  key={line.seq}
-                  leading={`#${line.seq}`}
-                  level={line.level}
-                  ts={line.ts}
-                  msg={line.msg}
-                  raw={line.raw}
-                  query={keyword}
-                  last={index === filteredLive.length - 1}
-                />
-              ))
-            )}
-          </Panel>
-
-          {/* ------------------------------ 历史日志 ------------------------------ */}
-          <Panel
-            title="历史日志"
-            meta={
-              pageInfo === null
-                ? '分页查询'
-                : `匹配 ${formatNumber(pageInfo.total_lines, false)} 行 · 第 ${formatNumber(
-                    pageInfo.page,
-                    false,
-                  )}/${formatNumber(Math.max(pageInfo.total_pages, 1), false)} 页`
+        {lines.length === 0 ? (
+          <EmptyState
+            scenario={state === 'open' ? 'no-data' : 'disabled'}
+            title={state === 'open' ? '等待日志…' : '实时流未连接'}
+            description={
+              state === 'open'
+                ? '连接已建立，新的日志行会出现在这里'
+                : '切换到本面板即自动连接；若显示已降级请点重新连接'
             }
-            padded={false}
-          >
-            {/* 过滤区：搜索 + 级别分段 + 时间下限说明 + 两个 44px 操作钮
-                （刷新不在这里：顶栏「刷新」与下拉手势已覆盖，见 console.tsx 工具条说明） */}
-            <div style={{ padding: '5px 6px 0' }}>
-              <SearchBar
-                placeholder="关键词（后端按整行小写包含匹配）"
-                value={keyword}
-                onChange={setKeyword}
-              />
-              <div style={{ marginTop: 5 }}>
-                <SegTabs label="级别过滤" items={LEVEL_OPTIONS} value={level} onChange={setLevel} />
-              </div>
-              <div
-                style={{
-                  marginTop: 4,
-                  fontSize: 10,
-                  lineHeight: 1.45,
-                  color: 'var(--fw-text-3)',
-                }}
-              >
-                时间下限：
-                {cutoffSeconds > 0 ? formatDatetime(cutoffSeconds) : '未设置'}
-                {configCutoff > 0 && configCutoff >= localCutoff ? '（来自配置 clear_logs_at）' : ''}
-                {localCutoff > 0 && localCutoff > configCutoff ? '（来自本页清空）' : ''}
-                ；配置中的过滤起点：{persistedCutoff === null ? '未设置' : persistedCutoff || '空（未过滤）'}
-                <br />
-                级别过滤在客户端按解析出的 level 字段执行：后端日志行为 JSON，级别写作
-                {' "level":"WARN"'}，服务端的 [LEVEL] 匹配对它无效。
-              </div>
-              <div style={{ display: 'flex', gap: 4, marginTop: 5, flexWrap: 'wrap' }}>
-                <button type="button" className="fw-cmd" onClick={() => void persistCutoff()}>
-                  写入过滤起点
-                </button>
-                <button
-                  type="button"
-                  className="fw-cmd"
-                  disabled={persistedCutoff === null}
-                  onClick={() => void cancelPersistedCutoff()}
-                >
-                  取消配置起点
-                </button>
-              </div>
+          />
+        ) : (
+          lines.map((l) => (
+            <div
+              key={l.id}
+              style={{
+                display: 'flex',
+                gap: 8,
+                padding: '1px 12px',
+                alignItems: 'baseline',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+              }}
+            >
+              <span style={{ color: 'var(--fw-text-secondary)', flex: 'none' }}>{formatClock(l.at)}</span>
+              {l.level && (
+                <Tag color={LEVEL_COLORS[l.level]} style={{ marginInlineEnd: 0, flex: 'none', lineHeight: '16px' }}>
+                  {l.level}
+                </Tag>
+              )}
+              <span style={{ flex: 1, minWidth: 0 }}>{l.content}</span>
             </div>
+          ))
+        )}
+      </div>
 
-            {history.error !== null ? (
-              <InlineError message={`历史日志加载失败：${history.error}`} onRetry={history.reload} />
-            ) : pageInfo === null ? (
-              <PanelLoading lines={5} />
-            ) : filteredHistory.length === 0 ? (
-              <EmptyState
-                compact
-                title="没有匹配的日志"
-                description={
-                  keyword.trim() === '' && level === '' && cutoffSeconds === 0
-                    ? '日志文件为空，或尚未写入任何内容'
-                    : '当前筛选条件下本页没有匹配行；可放宽关键词/级别，或翻到其它页'
-                }
-              />
-            ) : (
-              filteredHistory.map((line, index) => (
-                <LogRow
-                  key={line.lineNumber}
-                  leading={`L${line.lineNumber}`}
-                  level={line.level}
-                  ts={line.ts}
-                  msg={line.msg}
-                  raw={line.raw}
-                  query={keyword}
-                  last={index === filteredHistory.length - 1}
-                />
-              ))
-            )}
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        已缓冲 {lines.length} 行（过滤后） / 共 {total} 行 · 上限 {MAX_LIVE_LINES} 行，超出丢弃最旧
+      </Typography.Text>
+    </Flex>
+  )
+}
 
-            {/* 分页控制：页码与总页数来自后端 LogPageResponse */}
-            {pageInfo !== null && (
-              <div style={{ padding: '5px 6px' }}>
-                <div
-                  className="fw-mono fw-num"
-                  style={{ fontSize: 10, color: 'var(--fw-text-3)', marginBottom: 4 }}
-                >
-                  共 {formatNumber(pageInfo.total_lines, false)} 行 · 每页{' '}
-                  {formatNumber(pageInfo.page_size, false)} 行 · 按时间下限与级别过滤后本页显示{' '}
-                  {formatNumber(filteredHistory.length, false)} 行
-                </div>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  <button
-                    type="button"
-                    className="fw-cmd"
-                    style={{ flex: 1 }}
-                    disabled={pageInfo.page <= 1}
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  >
-                    上一页
-                  </button>
-                  <button
-                    type="button"
-                    className="fw-cmd"
-                    style={{ flex: 1 }}
-                    disabled={pageInfo.page >= pageInfo.total_pages}
-                    onClick={() => setPage((p) => p + 1)}
-                  >
-                    下一页
-                  </button>
-                </div>
-              </div>
-            )}
-          </Panel>
+interface HistoryPanelProps {
+  query: UseAsyncResult<LogPageResponse>
+  page: number
+  pageSize: number
+  level: LevelFilter
+  keyword: string
+  onPageChange: (page: number, pageSize: number) => void
+  onLevelChange: (v: LevelFilter) => void
+  onKeywordChange: (v: string) => void
+}
 
-          {/* -------------------------------- 说明 -------------------------------- */}
-          <Panel title="说明" padded={false}>
-            <Note>
-              行首编号：#N 是本次会话内的接收序号（后端只推原始行、不含行号），LN 才是日志文件中的行号。
-            </Note>
-            <Note>
-              日志文件由守护进程按配置路径写入（默认 /var/log/firewall.log），本页只读不写文件。
-            </Note>
-            <Note>
-              「清空」只清空本页视图并设本地时间下限，不删除文件内容；要把过滤起点持久化请用「写入过滤起点」。
-            </Note>
-          </Panel>
-        </div>
-      </PullToRefresh>
-    </>
+function HistoryPanel(props: HistoryPanelProps) {
+  const { query, page, pageSize, level, keyword, onPageChange, onLevelChange, onKeywordChange } = props
+
+  const columns = useMemo(
+    () => [
+      {
+        title: '行号',
+        dataIndex: 'line_number',
+        key: 'line_number',
+        width: 90,
+        render: (n: number) => <span className="fw-mono" style={{ color: 'var(--fw-text-secondary)' }}>{n}</span>,
+      },
+      {
+        title: '内容',
+        dataIndex: 'content',
+        key: 'content',
+        render: (text: string) => {
+          const lv = parseLevel(text)
+          return (
+            <Space align="start" size={8}>
+              {lv && <Tag color={LEVEL_COLORS[lv]} style={{ marginInlineEnd: 0 }}>{lv}</Tag>}
+              <span className="fw-mono" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 12.5 }}>
+                {text}
+              </span>
+            </Space>
+          )
+        },
+      },
+    ],
+    [],
+  )
+
+  const data: LogEntry[] = query.data?.items ?? []
+  const total = query.data?.total_lines ?? 0
+
+  return (
+    <DataTable<LogEntry>
+      data={query.data ? data : null}
+      isLoading={query.isLoading}
+      error={query.error}
+      onRetry={query.refetch}
+      rowKey="line_number"
+      columns={columns}
+      emptyScenario={keyword || level !== 'all' ? 'no-results' : 'no-data'}
+      emptyTitle={keyword || level !== 'all' ? '没有匹配的日志' : '暂无历史日志'}
+      emptyDescription={
+        keyword || level !== 'all' ? '试试放宽关键词或级别过滤' : '守护进程尚未写出可检索的历史日志'
+      }
+      toolbar={
+        <>
+          <Select<LevelFilter>
+            value={level}
+            onChange={onLevelChange}
+            style={{ width: 120 }}
+            options={[
+              { label: '全部级别', value: 'all' },
+              { label: 'DEBUG', value: 'DEBUG' },
+              { label: 'INFO', value: 'INFO' },
+              { label: 'WARN', value: 'WARN' },
+              { label: 'ERROR', value: 'ERROR' },
+            ]}
+          />
+          <Input.Search
+            allowClear
+            placeholder="搜索关键词"
+            defaultValue={keyword}
+            onSearch={(v) => onKeywordChange(v)}
+            onChange={(e) => {
+              if (e.target.value === '') onKeywordChange('')
+            }}
+            style={{ width: 260 }}
+          />
+          <Button icon={<ReloadOutlined />} onClick={query.refetch} loading={query.isRefreshing}>
+            刷新
+          </Button>
+          <Typography.Text type="secondary" style={{ marginLeft: 'auto', fontSize: 12 }}>
+            共 {total} 行
+          </Typography.Text>
+        </>
+      }
+      pagination={{
+        current: page,
+        pageSize,
+        total,
+        showSizeChanger: true,
+        pageSizeOptions: [20, 50, 100, 200],
+        showTotal: (t) => `共 ${t} 行`,
+        onChange: onPageChange,
+      }}
+      scroll={{ x: 'max-content' }}
+    />
   )
 }

@@ -1,221 +1,204 @@
 /**
- * HTTP 客户端：fetch 封装 + 后端信封解包 + 统一错误类型
+ * HTTP 客户端内核 —— fetch + 信封解包 + 错误分类。
  *
- * 契约要点（来自后端 `src/daemon/internal/http/routes.go` 与 `handlers.go`）：
- * - 所有 `/api/v2/*` 接口返回信封 `{ code, data, message }`
- * - **HTTP 2xx 且 `code === 0`** 才算业务成功；`code !== 0` 时 `message` 为失败原因
- * - 失败一律抛出 `ApiError`，让调用方（视图 / useAsync）无需再判断返回码
- * - 认证由本客户端**显式携带** `Authorization: Basic <令牌>`（令牌来自 api/auth.ts）。
- *   不能依赖浏览器原生认证弹窗：SPA 外壳是公开路由，顶层文档不返回 401，
- *   弹窗永远不会出现，页面自身的 API 请求会全部 401。
- *   另外，未携带凭据的请求在服务端**不计入**暴力破解计数（只有带错才算一次尝试），
- *   所以初始加载的匿名 401 不会把 API 锁死，但也不等于「多试几次没关系」。
+ * 全站所有 REST 调用都经这里，于是「成功长什么样、失败分几类」只有一处定义：
+ *   * 成功 = HTTP 2xx **且** 信封 `code === 0`，此时把 `data` 交回调用方；
+ *   * 401 = 守护进程回**纯文本**（不经信封），单独归 `unauthorized`，并广播给订阅者
+ *     （AuthProvider 据此自动登出 + 跳登录），不让每个调用点各写一遍 401 处理；
+ *   * 业务失败（`code !== 0`）归 `business`，带上服务端的 message 与业务码；
+ *   * 网络断开归 `network`、超时归 `timeout`、响应体不是合法 JSON 归 `parse`、
+ *     其余非 2xx 归 `http`。
  *
- * 影响范围：所有 REST 取数（useAsync / views）。SSE 长连接不走本文件（见 hooks/useSse.ts）。
+ * 特例：`/api/v2/health` **不经信封**（裸 RuntimeSnapshot，200=就绪 / 503=未就绪，
+ * 见 defect HTTP_HEALTH_NOT_ENVELOPED），走 `apiFetchRaw` 直接取 JSON。
+ *
+ * 本文件不出现任何 `/api/v…` 字面量：`path` 一律由 endpoints.ts 从 ROUTES 解出后传入，
+ * 客户端只认「一个已经拼好的路径」，与具体路由解耦。
  */
 
-import { authHeaders, clearAccessToken } from './auth'
-import { AUTH } from './contract'
-import type { ApiResponse } from './contract'
+import { authorizationHeader } from './auth'
+import type { ApiResponse } from './types'
 
-/**
- * 请求超时（毫秒）。
- * 后端部分统计端点会扫描 SQLite 历史表（如攻击预测、阈值建议），故留出较宽裕的时间；
- * 超时后抛出可读错误，避免界面永久停在 loading。
- */
-const REQUEST_TIMEOUT_MS = 30_000
+/** 失败的种类；视图据此选择文案与重试策略。 */
+export type ApiErrorKind =
+  | 'network' // fetch 被拒（断网、DNS、CORS）
+  | 'timeout' // 超过 timeoutMs 主动中断
+  | 'unauthorized' // HTTP 401，凭据缺失/错误/锁定
+  | 'business' // 信封 code !== 0
+  | 'http' // 其余非 2xx
+  | 'parse' // 响应体不是合法 JSON
+  | 'aborted' // 调用方主动取消（组件卸载等），通常应被忽略
 
-/**
- * 统一的接口错误。
- * `status` 为 HTTP 状态码；网络层失败（DNS/连接被拒/超时）时为 `0`，
- * 便于调用方区分「服务端明确拒绝」与「根本连不上」。
- */
+/** 归一化的 API 错误。`message` 优先取服务端信封里的可读文案。 */
 export class ApiError extends Error {
+  readonly kind: ApiErrorKind
+  /** HTTP 状态码；无响应（网络/超时）时为 0。 */
   readonly status: number
+  /** 业务码；非业务错误为 0。 */
+  readonly code: number
 
-  constructor(message: string, status: number) {
+  constructor(kind: ApiErrorKind, message: string, status = 0, code = 0) {
     super(message)
-    // 名称固定，便于日志与错误边界识别
     this.name = 'ApiError'
+    this.kind = kind
     this.status = status
+    this.code = code
+  }
+
+  get isUnauthorized(): boolean {
+    return this.kind === 'unauthorized'
+  }
+
+  /** 是否值得自动重试（网络/超时/5xx）；业务码与 401 重试无意义。 */
+  get isRetryable(): boolean {
+    return this.kind === 'network' || this.kind === 'timeout' || this.status >= 500
   }
 }
 
-/** 判断响应体是否是后端信封结构（防御网关/代理返回的意外 JSON） */
-function isApiEnvelope(payload: unknown): payload is ApiResponse<unknown> {
-  if (typeof payload !== 'object' || payload === null) return false
-  const candidate = payload as Record<string, unknown>
-  return (
-    typeof candidate.code === 'number' &&
-    typeof candidate.message === 'string' &&
-    'data' in candidate
-  )
+// --- 401 广播：AuthProvider 订阅后自动登出 -----------------------------------
+
+type UnauthorizedListener = () => void
+const unauthorizedListeners = new Set<UnauthorizedListener>()
+
+/** 订阅「收到 401」事件；返回取消订阅函数。 */
+export function onUnauthorized(listener: UnauthorizedListener): () => void {
+  unauthorizedListeners.add(listener)
+  return () => unauthorizedListeners.delete(listener)
 }
 
-/**
- * 发起请求并解包信封。
- *
- * @param url 目标地址（同源相对路径即可）
- * @param init 请求初始化参数
- * @returns 信封中的 `data`
- * @throws ApiError 网络失败（status=0）、非 2xx、`code !== 0`、或响应体不是信封
- */
-async function request<T>(url: string, init: RequestInit): Promise<T> {
-  // 超时用 AbortController 实现：避免慢查询把界面挂在 loading 状态
+function emitUnauthorized(): void {
+  for (const listener of unauthorizedListeners) listener()
+}
+
+// --- 请求选项 ----------------------------------------------------------------
+
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE'
+
+/** 查询参数值：null/undefined 会被跳过（不写进 URL）。 */
+export type QueryValue = string | number | boolean | null | undefined
+
+export interface ApiRequestOptions {
+  method?: HttpMethod
+  query?: Record<string, QueryValue>
+  /** 请求体；对象会被 JSON 序列化并带上 Content-Type。 */
+  body?: unknown
+  /** 调用方的取消信号（组件卸载时中断）。 */
+  signal?: AbortSignal
+  /** 超时毫秒数，默认 15s。SSE 不走这里。 */
+  timeoutMs?: number
+}
+
+const DEFAULT_TIMEOUT_MS = 15_000
+
+/** 把 query 拼到 path 上；跳过 null/undefined，其余按字符串编码。 */
+function buildUrl(path: string, query?: Record<string, QueryValue>): string {
+  if (!query) return path
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) {
+    if (value === null || value === undefined) continue
+    params.set(key, String(value))
+  }
+  const qs = params.toString()
+  return qs ? `${path}?${qs}` : path
+}
+
+/** 执行 fetch，返回 Response；把网络/超时/取消归一化成 ApiError。 */
+async function doFetch(url: string, opts: ApiRequestOptions): Promise<Response> {
+  const method = opts.method ?? 'GET'
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  let timedOut = false
 
-  // 显式附加 Basic 凭据（见 api/auth.ts）；用 Headers 合并，兼容 init.headers 的各种形态
-  const headers = new Headers(init.headers)
-  for (const [key, value] of Object.entries(authHeaders())) {
-    headers.set(key, value)
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+
+  // 调用方信号与内部超时共用一个 controller：任一触发都中断
+  const external = opts.signal
+  if (external) {
+    if (external.aborted) controller.abort()
+    else external.addEventListener('abort', () => controller.abort(), { once: true })
   }
 
-  let response: Response
+  const headers: Record<string, string> = {}
+  const auth = authorizationHeader()
+  if (auth) headers.Authorization = auth
+  if (opts.body !== undefined) headers['Content-Type'] = 'application/json'
+
   try {
-    response = await fetch(url, {
-      ...init,
+    return await fetch(url, {
+      method,
       headers,
-      // 同源请求带上已缓存的凭据（与显式 Authorization 头冗余，但覆盖代理场景）
-      credentials: 'same-origin',
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
       signal: controller.signal,
     })
   } catch (err) {
-    // fetch 只在网络层失败时 reject（连接被拒、DNS、CSP 拦截、abort）
-    const aborted = err instanceof DOMException && err.name === 'AbortError'
-    const message = aborted
-      ? `请求超时（${Math.round(REQUEST_TIMEOUT_MS / 1000)} 秒）：${url}`
-      : `网络请求失败：${err instanceof Error ? err.message : String(err)}`
-    throw new ApiError(message, 0)
+    if (timedOut) {
+      throw new ApiError('timeout', `请求超时（${timeoutMs}ms）：${url}`)
+    }
+    if (external?.aborted) {
+      // 调用方主动取消（组件卸载 / 竞态丢弃）：原样抛出，交给调用方忽略
+      throw new ApiError('aborted', '请求已取消', 0, 0)
+    }
+    throw new ApiError('network', '无法连接到守护进程（网络中断或服务未启动）')
   } finally {
-    window.clearTimeout(timer)
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * 信封端点：解 `{code,data,message}`，成功回 data，失败按种类抛 ApiError。
+ * 401 走纯文本分支并广播；其余非 2xx 若带合法信封则按业务码归类。
+ */
+export async function apiFetch<T>(path: string, opts: ApiRequestOptions = {}): Promise<T> {
+  const res = await doFetch(buildUrl(path, opts.query), opts)
+
+  if (res.status === 401) {
+    emitUnauthorized()
+    // 401 是纯文本（如 "Unauthorized\n"），读出来当 message，不按信封解析
+    const text = (await res.text().catch(() => '')).trim()
+    throw new ApiError('unauthorized', text || '未认证或凭据无效', 401)
   }
 
-  // 先把响应读成文本：非 JSON（如反向代理的 HTML 错误页）时能给出可读回退
-  const text = await response.text()
-
-  // 401 = 令牌缺失 / 失效：清除本地令牌，界面据此回到登录页。
-  // 注意服务端锁定（连续失败 AUTH.FAILURE_THRESHOLD 次后锁 AUTH.LOCKOUT_SECONDS 秒）期间
-  // 正确凭据也返回 401，因此这里只清令牌不做自动重登，由用户重新输入触发一次新凭据。
-  if (response.status === AUTH.UNAUTHORIZED_STATUS) {
-    clearAccessToken()
-  }
-
-  if (text === '') {
-    // 2xx 空响应体（理论上本后端不产生）：返回 null，由调用方按可空处理
-    if (response.ok) return null as T
-    throw new ApiError(`HTTP ${response.status}`, response.status)
-  }
-
-  let payload: unknown
+  let body: unknown
   try {
-    payload = JSON.parse(text)
+    body = await res.json()
   } catch {
-    // 非 JSON 响应：回退为 HTTP 状态描述
-    throw new ApiError(`HTTP ${response.status}`, response.status)
+    throw new ApiError(
+      res.ok ? 'parse' : 'http',
+      res.ok ? '响应体不是合法 JSON' : `HTTP ${res.status}`,
+      res.status,
+    )
   }
 
-  if (!isApiEnvelope(payload)) {
-    // 是 JSON 但不是信封（拿错端点、被代理改写）——按协议违反处理
-    throw new ApiError(`HTTP ${response.status}：响应体不符合接口信封格式`, response.status)
+  const envelope = body as Partial<ApiResponse<T>> | null
+  if (envelope && typeof envelope === 'object' && 'code' in envelope) {
+    if (res.ok && envelope.code === 0) {
+      return envelope.data as T
+    }
+    const message = envelope.message || `请求失败（业务码 ${envelope.code}）`
+    throw new ApiError('business', message, res.status, envelope.code ?? 0)
   }
 
-  if (!response.ok) {
-    // 后端在 4xx/5xx 上同样返回信封，错误原因以 message 为准
-    throw new ApiError(payload.message || `HTTP ${response.status}`, response.status)
-  }
-
-  if (payload.code !== 0) {
-    // HTTP 200 但业务失败（如「速率警告阈值必须小于严重阈值」）
-    throw new ApiError(payload.message || `接口返回错误码 ${payload.code}`, response.status)
-  }
-
-  return payload.data as T
+  // 不是信封形状：2xx 时按裸值交回（理论上信封端点不会走到），否则按 HTTP 归类
+  if (res.ok) return body as T
+  throw new ApiError('http', `HTTP ${res.status}`, res.status)
 }
 
 /**
- * GET 请求并返回信封中的 `data`。
- * @throws ApiError 失败时
+ * 裸端点：不解信封，直接把响应体 JSON 当 T 返回（/api/v2/health 专用）。
+ * 非 2xx 也尝试解析（health 在 503 时同样带 RuntimeSnapshot）；解析不了才抛。
  */
-export function getJson<T>(url: string): Promise<T> {
-  return request<T>(url, {
-    method: 'GET',
-    headers: { Accept: 'application/json' },
-  })
-}
-
-/**
- * 带 JSON 请求体的写操作（POST / PUT / PATCH / DELETE-with-body）。
- *
- * `body` 为 `undefined` 或 `null` 时不发送请求体 —— 后端部分端点（如批量解封）
- * 不接受 Json 提取器，发了多余的 body 只会新增解析风险。
- *
- * @throws ApiError 失败时
- */
-export function sendJson<B, T>(url: string, method: string, body: B): Promise<T> {
-  const hasBody = body !== undefined && body !== null
-  const init: RequestInit = {
-    method,
-    headers: hasBody
-      ? { Accept: 'application/json', 'Content-Type': 'application/json' }
-      : { Accept: 'application/json' },
-  }
-  if (hasBody) {
-    init.body = JSON.stringify(body)
-  }
-  return request<T>(url, init)
-}
-
-/**
- * DELETE 请求并返回信封中的 `data`。
- * 本后端的 DELETE 端点都不带请求体，因此不接收 body 参数。
- * @throws ApiError 失败时
- */
-export function delJson<T>(url: string): Promise<T> {
-  return request<T>(url, {
-    method: 'DELETE',
-    headers: { Accept: 'application/json' },
-  })
-}
-
-/**
- * GET 请求并返回**未套信封**的原始 JSON。
- *
- * 仅用于 `/health`、`/healthz` 这类直接返回裸结构（未套 `{code,data,message}` 信封）的端点。
- * 它们在未就绪时返回 503，但响应体仍是完整 JSON —— 这里故意不按状态码抛错，
- * 让离线横幅能读到 `status: "degraded"` 的具体原因。
- *
- * @throws ApiError 网络失败、响应为空或非 JSON 时
- */
-export async function getRawJson<T>(url: string): Promise<T> {
-  const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
-
-  let response: Response
+export async function apiFetchRaw<T>(path: string, opts: ApiRequestOptions = {}): Promise<T> {
+  const res = await doFetch(buildUrl(path, opts.query), opts)
   try {
-    response = await fetch(url, {
-      method: 'GET',
-      headers: { Accept: 'application/json', ...authHeaders() },
-      credentials: 'same-origin',
-      signal: controller.signal,
-    })
-  } catch (err) {
-    const aborted = err instanceof DOMException && err.name === 'AbortError'
-    const message = aborted
-      ? `请求超时（${Math.round(REQUEST_TIMEOUT_MS / 1000)} 秒）：${url}`
-      : `网络请求失败：${err instanceof Error ? err.message : String(err)}`
-    throw new ApiError(message, 0)
-  } finally {
-    window.clearTimeout(timer)
-  }
-
-  const text = await response.text()
-  if (text === '') {
-    throw new ApiError(`HTTP ${response.status}：空响应体`, response.status)
-  }
-  try {
-    return JSON.parse(text) as T
+    return (await res.json()) as T
   } catch {
-    throw new ApiError(`HTTP ${response.status}`, response.status)
+    throw new ApiError(
+      res.ok ? 'parse' : 'http',
+      res.ok ? '响应体不是合法 JSON' : `HTTP ${res.status}`,
+      res.status,
+    )
   }
 }

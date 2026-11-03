@@ -1,471 +1,468 @@
-// 白名单管理页（控制台风格）
-//
-// 做什么：白名单条目压成单行——CIDR（等宽）+ 绑定设备 + 行尾「复制」提示，
-//        整行点击即复制 CIDR，左滑露出「移出」；上方是搜索框与「新增」入口；
-//        「智能推荐」面板展示后端按历史封禁统计给出的建议条目（网段 / 单 IP，
-//        带置信度徽标与细条），逐条二次确认后采纳。
-// 影响什么：新增 / 移出 / 采纳推荐都是**写操作**，会真实改写内核白名单表并持久化配置，
-//          全部需要二次确认；关键词过滤与复制只在浏览器内完成，不产生请求。
-//
-// 数据来源（任何一级都是真实端点，无占位假数据）：
-//   1) 全局 SSE 的 whitelist 事件（useSse().whitelist）—— 状态变更后服务端会立即推送；
-//   2) GET /api/v2/whitelist —— 实时通道未就绪时的回退（两者按共享新鲜度戳取较新一份）；
-//   3) 推荐列表走 REST GET /api/v2/whitelist/recommendations（后端按需计算，非推送项）。
-
-import { useMemo, useState } from 'react'
-import type { CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  App,
   Button,
-  Dialog,
+  Flex,
   Form,
   Input,
-  NoticeBar,
-  Popup,
-  PullToRefresh,
-  SearchBar,
-  Skeleton,
-  SwipeAction,
-} from 'antd-mobile'
-import { AddOutline } from 'antd-mobile-icons'
-import type { WhitelistEntry, WhitelistRecommendation } from '../api/types'
-import { delJson, getJson, sendJson } from '../api/client'
-import { ROUTES } from '../api/contract'
-import { useAsync } from '../hooks/useAsync'
-import { pickLiveData } from '../hooks/useLiveData'
-import { useSse } from '../hooks/useSse'
-import { useToast } from '../hooks/useToast'
-import { Badge, Meter, Panel, errorText } from '../components/console'
-import type { Tone } from '../components/console'
-import { EmptyState } from '../components/EmptyState'
-import { HighlightText } from '../components/HighlightText'
-import { PageHeader } from '../components/PageHeader'
-import { copyToClipboard, formatNumber } from '../lib/format'
-import { isValidCidr } from '../lib/validation'
-
-/** 端点常量：一律取契约生成物，不在页面里手写路径 */
-const WHITELIST_URL = ROUTES.GET_API_V2_WHITELIST
-const WHITELIST_RECOMMENDATIONS_URL = ROUTES.GET_API_V2_WHITELIST_RECOMMENDATIONS
-
-/** 空列表常量：避免 `?? []` 每次渲染都产生新数组，导致 useMemo 失效 */
-const EMPTY_ENTRIES: WhitelistEntry[] = []
-
-// ---------------------------------------------------------------------------
-// 布局常量（只引用 global.css 的 fw-* 令牌，不引入新颜色）
-// ---------------------------------------------------------------------------
-
-/** 次要说明文本：小字、弱化、允许换行（推荐理由与口径说明用） */
-const NOTE_TEXT: CSSProperties = {
-  fontSize: 10,
-  lineHeight: 1.45,
-  color: 'var(--fw-text-3)',
-  wordBreak: 'break-all',
-}
-
-/** 列表项：整行可点（≥44px 触摸目标），单行结构（CIDR + 设备 + 复制提示） */
-const LIST_ROW: CSSProperties = { minHeight: 'var(--fw-tap)', alignItems: 'center', cursor: 'pointer' }
-
-/** 面板内的交互提示行（列表可点 / 可滑的说明） */
-const HINT_ROW: CSSProperties = {
-  padding: '3px 6px',
-  fontSize: 10,
-  color: 'var(--fw-text-3)',
-  borderBottom: '1px solid var(--fw-border)',
-}
-
-/** 推荐条目的容器：条目之间用发丝线分界，不靠间距分组 */
-const REC_ITEM: CSSProperties = {
-  padding: '5px 6px',
-  borderBottom: '1px solid var(--fw-border)',
-}
-
-// ---------------------------------------------------------------------------
-// 纯函数工具
-// ---------------------------------------------------------------------------
+  Popconfirm,
+  Select,
+  Space,
+  Tag,
+  Typography,
+  type TableColumnsType,
+} from 'antd'
+import {
+  CheckCircleOutlined,
+  DeleteOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SafetyCertificateOutlined,
+} from '@ant-design/icons'
+import { PageHeader } from '../components/PageHeader.tsx'
+import { StatCard } from '../components/StatCard.tsx'
+import { DataTable } from '../components/DataTable.tsx'
+import { DrawerForm } from '../components/DrawerForm.tsx'
+import { useLiveData } from '../hooks/useLiveData.ts'
+import { useAsync } from '../hooks/useAsync.ts'
+import { useRefreshSignal } from '../hooks/useRefreshSignal.ts'
+import { useSseDomain, useSseState } from '../providers/SseProvider.tsx'
+import {
+  addWhitelist,
+  getWhitelist,
+  getWhitelistRecommendations,
+  removeWhitelist,
+} from '../api/endpoints.ts'
+import { formatNumber, formatPercent } from '../lib/format.ts'
+import { isValidCidr } from '../lib/validation.ts'
+import type {
+  CreateWhitelistRequest,
+  WhitelistEntry,
+  WhitelistRecommendation,
+} from '../api/types.ts'
 
 /**
- * CIDR 表单校验：直接复用共享校验（与后端 `IpAddr`/`Ipv4Addr` 解析规则一致）。
- * 后端 create_whitelist 仍会独立校验，前端这一层只为减少无效请求。
+ * 白名单页 —— 永不封禁的可信地址/网段维护 + 基于封禁历史的加白推荐。
+ *
+ * 主列表是「整表镜像」域：SSE 的 whitelist 帧与 REST 拉取同形（WhitelistEntry[]），
+ * 用 useLiveData 按新鲜度序号仲裁，视图只消费一个 value；SSE 断连时 REST 轮询自动兜底。
+ * 推荐区是 REST 独占（SSE 不推这个视图），用 useAsync 独立管理自己的加载/错误态，
+ * 与主列表互不干扰：推荐拉取失败不影响白名单条目展示，反之亦然。
+ *
+ * 三处写操作（新增 / 移除 / 一键加白）都落到后端后 message 提示 + 重取主列表，
+ * 让服务端真值回填界面，不做乐观更新以免与 SSE 帧打架。
  */
-function cidrValidator(_rule: unknown, value: unknown): Promise<void> {
-  const raw = String(value ?? '').trim()
-  if (raw === '') return Promise.reject(new Error('请输入 CIDR 或单个 IP'))
-  return isValidCidr(raw)
-    ? Promise.resolve()
-    : Promise.reject(new Error('格式不合法：需形如 10.0.0.0/8、192.168.1.1 或 2001:db8::/32'))
+
+/** 主列表 REST 校准轮询间隔：SSE 活着时兜底校准，断连时充当主数据源。 */
+const WHITELIST_POLL_MS = 30_000
+
+/** 推荐类型枚举 → 中文标签；未知取值落回原文（契约要求不崩）。 */
+const REC_TYPE_LABELS: Record<string, string> = {
+  subnet: '网段',
+  ip: '单 IP',
 }
 
-/** 推荐类型 → 中文标签（后端 rec_type 取值 "subnet" / "ip"） */
+/** 推荐类型 → Tag 配色；未知取值不给色（走 Tag 默认色）。 */
+const REC_TYPE_COLORS: Record<string, string> = {
+  subnet: 'geekblue',
+  ip: 'green',
+}
+
 function recTypeLabel(recType: string): string {
-  if (recType === 'subnet') return '网段'
-  if (recType === 'ip') return '单个 IP'
-  return recType === '' ? '未知类型' : recType
+  return REC_TYPE_LABELS[recType] ?? recType
 }
 
-/** 置信度 → 色调（三档，便于一眼区分采纳优先级） */
-function confidenceTone(confidence: number): Tone {
-  if (confidence >= 80) return 'success'
-  if (confidence >= 50) return 'primary'
-  return 'default'
+/** 把后端错误归一成可读文案（ApiError 继承 Error，message 已是服务端信封文案）。 */
+function errText(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback
 }
 
-/** 把任意抛出物转成可展示文案（client 抛出的 ApiError 就是 Error 子类） */
-// ---------------------------------------------------------------------------
-// 页面
-// ---------------------------------------------------------------------------
+const MIN_BANS_OPTIONS = [1, 3, 5, 10, 20, 50].map((n) => ({ label: String(n), value: n }))
+const LIMIT_OPTIONS = [10, 20, 50, 100].map((n) => ({ label: String(n), value: n }))
 
 export default function Whitelist() {
-  const toast = useToast()
-  const { whitelist: sseWhitelist, payloadSeq } = useSse()
+  const { message } = App.useApp()
+  const realtimeState = useSseState()
 
-  // SSE 未就绪时的回退：GET /api/v2/whitelist（后端直接返回数组）
-  const restEntries = useAsync(() => getJson<WhitelistEntry[]>(WHITELIST_URL), [])
-  // 取较新的一份而非「SSE 优先」：增删白名单后的 restEntries.reload() 必须真正生效
-  const liveEntries = pickLiveData(sseWhitelist, payloadSeq.whitelist, restEntries)
-  const entries = liveEntries ?? EMPTY_ENTRIES
+  // --- 主列表：SSE whitelist 域 + REST 拉取合流 ---
+  const whitelistDomain = useSseDomain('whitelist')
+  const live = useLiveData<WhitelistEntry[]>({
+    sseValue: whitelistDomain.value,
+    sseSeq: whitelistDomain.seq,
+    rest: getWhitelist,
+    refreshInterval: WHITELIST_POLL_MS,
+  })
+  const {
+    value: entries,
+    isLoading: mainLoading,
+    isRefreshing: mainRefreshing,
+    error: mainError,
+    refetch: refetchMain,
+  } = live
+  const entryCount = entries?.length ?? 0
 
-  // 智能推荐：与实时列表解耦，失败不影响主列表展示
-  const recommendations = useAsync(
-    () => getJson<WhitelistRecommendation[]>(WHITELIST_RECOMMENDATIONS_URL),
-    [],
+  // --- 新增白名单抽屉 ---
+  const [form] = Form.useForm<CreateWhitelistRequest>()
+  const [addOpen, setAddOpen] = useState(false)
+
+  const openAdd = useCallback(() => setAddOpen(true), [])
+  const handleAddCancel = useCallback(() => {
+    setAddOpen(false)
+    form.resetFields()
+  }, [form])
+
+  const handleAddSubmit = useCallback(
+    async (values: CreateWhitelistRequest) => {
+      const cidr = values.cidr.trim()
+      try {
+        const res = await addWhitelist({ cidr })
+        message.success(`已新增白名单：${res.cidr}`)
+        setAddOpen(false)
+        form.resetFields()
+        refetchMain()
+      } catch (err) {
+        message.error(errText(err, '新增失败'))
+      }
+    },
+    [message, form, refetchMain],
   )
 
-  const [keyword, setKeyword] = useState('')
-  const [createOpen, setCreateOpen] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-  /** 正在被删除 / 采纳的 CIDR：用于按钮 loading，防止重复提交 */
-  const [busyCidr, setBusyCidr] = useState<string | null>(null)
+  const handleRemove = useCallback(
+    async (cidr: string) => {
+      try {
+        const res = await removeWhitelist(cidr)
+        message.success(`已移除白名单：${res.cidr}`)
+        refetchMain()
+      } catch (err) {
+        message.error(errText(err, '移除失败'))
+      }
+    },
+    [message, refetchMain],
+  )
 
-  const filtered = useMemo(() => {
-    const kw = keyword.trim().toLowerCase()
-    if (kw === '') return entries
-    return entries.filter(
-      (entry) =>
-        entry.cidr.toLowerCase().includes(kw) || entry.device.toLowerCase().includes(kw),
-    )
-  }, [entries, keyword])
+  // --- 推荐区：REST 独占，独立加载/错误态 ---
+  const [minBans, setMinBans] = useState(5)
+  const [recLimit, setRecLimit] = useState(20)
+  const [addingCidr, setAddingCidr] = useState<string | null>(null)
 
-  const recList = recommendations.data ?? []
+  const recs = useAsync<WhitelistRecommendation[]>((signal) =>
+    getWhitelistRecommendations({ min_bans: minBans, limit: recLimit }, signal),
+  )
+  const {
+    data: recData,
+    isLoading: recLoading,
+    isRefreshing: recRefreshing,
+    error: recError,
+    refetch: refetchRecs,
+  } = recs
 
-  /**
-   * 列表变化后统一刷新「白名单 + 推荐」（推荐会随白名单变化而变化）。
-   * 返回 Promise 供下拉刷新等待：转圈要转到两份数据都落定再收起。
-   */
-  const refreshAll = async (): Promise<void> => {
-    await Promise.all([restEntries.reload(), recommendations.reload()])
-  }
-
-  /** 复制 CIDR：helper 会在不安全上下文里自动降级，失败也静默，故提示留出回退办法 */
-  const handleCopy = (cidr: string) => {
-    copyToClipboard(cidr)
-    toast.info(`已复制 ${cidr}（若剪贴板未更新，请长按手动复制）`)
-  }
-
-  /** 新增白名单：写操作，成功后关闭弹层并刷新 */
-  const submitCreate = async (values: Record<string, unknown>) => {
-    const cidr = String(values.cidr ?? '').trim()
-    setSubmitting(true)
-    try {
-      await sendJson<{ cidr: string }, unknown>(WHITELIST_URL, 'POST', { cidr })
-      toast.success(`已加入白名单：${cidr}`)
-      setCreateOpen(false)
-      refreshAll()
-    } catch (e) {
-      // 后端会返回 40003 等错误码与原因，这里原样呈现给用户
-      toast.error(`新增失败：${errorText(e)}`)
-    } finally {
-      setSubmitting(false)
+  // 阈值/条数变化后重取推荐（首屏由 useAsync 的 immediate 负责，这里跳过第一次）
+  const firstRecRun = useRef(true)
+  useEffect(() => {
+    if (firstRecRun.current) {
+      firstRecRun.current = false
+      return
     }
-  }
+    refetchRecs()
+  }, [minBans, recLimit, refetchRecs])
 
-  /** 删除白名单：写操作，必须先二次确认 */
-  const removeEntry = async (cidr: string) => {
-    const confirmed = await Dialog.confirm({
-      content: `确定将 ${cidr} 移出白名单？移出后该来源将重新受封禁策略约束。`,
-      confirmText: '移出',
-    })
-    if (!confirmed) return
-    setBusyCidr(cidr)
-    try {
-      await delJson<unknown>(`${WHITELIST_URL}/${encodeURIComponent(cidr)}`)
-      toast.success(`已移出白名单：${cidr}`)
-      refreshAll()
-    } catch (e) {
-      toast.error(`移除失败：${errorText(e)}`)
-    } finally {
-      setBusyCidr(null)
-    }
-  }
+  const handleWhitelistRec = useCallback(
+    async (cidr: string) => {
+      setAddingCidr(cidr)
+      try {
+        const res = await addWhitelist({ cidr })
+        message.success(`已加白：${res.cidr}`)
+        refetchMain()
+      } catch (err) {
+        message.error(errText(err, '加白失败'))
+      } finally {
+        setAddingCidr(null)
+      }
+    },
+    [message, refetchMain],
+  )
 
-  /** 采纳推荐：等价于新增同一条 CIDR，同样需要确认（推荐是建议，不是自动动作） */
-  const acceptRecommendation = async (rec: WhitelistRecommendation) => {
-    const confirmed = await Dialog.confirm({
-      content: `确定将推荐条目 ${rec.cidr} 加入白名单？共影响 ${formatNumber(rec.affected_ips, false)} 个 IP。`,
-      confirmText: '加入',
-    })
-    if (!confirmed) return
-    setBusyCidr(rec.cidr)
-    try {
-      await sendJson<{ cidr: string }, unknown>(WHITELIST_URL, 'POST', { cidr: rec.cidr })
-      toast.success(`已采纳推荐：${rec.cidr}`)
-      refreshAll()
-    } catch (e) {
-      toast.error(`采纳失败：${errorText(e)}`)
-    } finally {
-      setBusyCidr(null)
-    }
-  }
+  // 顶栏/命令面板广播的「刷新当前页」：主列表与推荐区一起刷
+  useRefreshSignal(() => {
+    refetchMain()
+    refetchRecs()
+  })
+
+  const mainColumns = useMemo<TableColumnsType<WhitelistEntry>>(
+    () => [
+      {
+        title: 'CIDR / IP',
+        dataIndex: 'cidr',
+        key: 'cidr',
+        render: (cidr: string) => <span className="fw-mono">{cidr}</span>,
+      },
+      {
+        title: '设备备注',
+        dataIndex: 'device',
+        key: 'device',
+        render: (device: string) =>
+          device ? device : <Typography.Text type="secondary">—</Typography.Text>,
+      },
+      {
+        title: '操作',
+        key: 'actions',
+        width: 96,
+        align: 'right',
+        render: (_value, record) => (
+          <Popconfirm
+            title="移除白名单？"
+            description={
+              <span>
+                移除后 <span className="fw-mono">{record.cidr}</span> 将可能被重新封禁。
+              </span>
+            }
+            okText="移除"
+            okButtonProps={{ danger: true }}
+            cancelText="取消"
+            onConfirm={() => handleRemove(record.cidr)}
+          >
+            <Button danger type="text" size="small" icon={<DeleteOutlined />}>
+              移除
+            </Button>
+          </Popconfirm>
+        ),
+      },
+    ],
+    [handleRemove],
+  )
+
+  const recColumns = useMemo<TableColumnsType<WhitelistRecommendation>>(
+    () => [
+      {
+        title: '类型',
+        dataIndex: 'rec_type',
+        key: 'rec_type',
+        width: 88,
+        render: (recType: string) => (
+          <Tag color={REC_TYPE_COLORS[recType]} style={{ marginInlineEnd: 0 }}>
+            {recTypeLabel(recType)}
+          </Tag>
+        ),
+      },
+      {
+        title: '网段 / CIDR',
+        dataIndex: 'cidr',
+        key: 'cidr',
+        render: (cidr: string) => <span className="fw-mono">{cidr}</span>,
+      },
+      {
+        title: '依据',
+        dataIndex: 'reason',
+        key: 'reason',
+        render: (reason: string) => (
+          <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>
+            {reason}
+          </Typography.Text>
+        ),
+      },
+      {
+        title: '受影响 IP',
+        dataIndex: 'affected_ips',
+        key: 'affected_ips',
+        width: 104,
+        align: 'right',
+        render: (n: number) => <span className="fw-mono">{formatNumber(n)}</span>,
+      },
+      {
+        title: '累计封禁',
+        dataIndex: 'total_bans',
+        key: 'total_bans',
+        width: 104,
+        align: 'right',
+        render: (n: number) => <span className="fw-mono">{formatNumber(n)}</span>,
+      },
+      {
+        title: '证据强度',
+        dataIndex: 'confidence',
+        key: 'confidence',
+        width: 96,
+        align: 'right',
+        render: (confidence: number) => (
+          <span className="fw-mono">{formatPercent(confidence)}</span>
+        ),
+      },
+      {
+        title: '操作',
+        key: 'actions',
+        width: 92,
+        align: 'right',
+        render: (_value, record) => (
+          <Button
+            type="link"
+            size="small"
+            icon={<CheckCircleOutlined />}
+            loading={addingCidr === record.cidr}
+            onClick={() => handleWhitelistRec(record.cidr)}
+          >
+            加白
+          </Button>
+        ),
+      },
+    ],
+    [handleWhitelistRec, addingCidr],
+  )
 
   return (
     <>
       <PageHeader
         title="白名单"
-        srOnly
-        subtitle={`共 ${formatNumber(entries.length, false)} 条；白名单内来源不参与封禁判定`}
+        description="维护永不被封禁的可信地址与网段，并按封禁历史给出可疑误伤的加白推荐"
+        breadcrumb={[{ title: '防护' }, { title: '白名单' }]}
+        realtimeState={realtimeState}
       />
 
-      <PullToRefresh onRefresh={refreshAll}>
-        <div className="fw-page">
-        {/* 回退取数失败且两条来源都无数据：错误必须对用户可见，并提供重试入口 */}
-        {liveEntries === null && restEntries.error !== null && (
-          <NoticeBar
-            color="error"
-            wrap
-            content={`白名单加载失败：${restEntries.error}`}
-            extra={
-              <a onClick={() => restEntries.reload()} style={{ color: 'inherit', textDecoration: 'underline' }}>
-                重试
-              </a>
-            }
-          />
-        )}
-
-        {/* 搜索与新增：搜索只过滤本地列表；新增打开表单弹层 */}
-        <Panel title="筛选与新增" padded={false}>
-          <div style={{ padding: '4px 6px', display: 'flex', alignItems: 'stretch', gap: 5 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <SearchBar
-                placeholder="搜索 CIDR / 设备名"
-                value={keyword}
-                onChange={setKeyword}
-                // antd-mobile 默认高度偏小，显式抬到 44px 触摸目标
-                style={{ '--height': '44px' }}
-              />
-            </div>
-            <Button
-              color="primary"
-              style={{ minHeight: 44, flexShrink: 0 }}
-              onClick={() => setCreateOpen(true)}
-            >
-              <AddOutline /> 新增
-            </Button>
-          </div>
-        </Panel>
-
-        {/* 智能推荐：按置信度展示后端建议，逐条确认后采纳 */}
-        <Panel
-          title="智能推荐"
-          meta={`${formatNumber(recList.length, false)} 条建议`}
-          padded={false}
-        >
-          {recommendations.error !== null ? (
-            <div style={{ padding: 6 }}>
-              <NoticeBar
-                color="error"
-                wrap
-                content={`推荐加载失败：${recommendations.error}`}
-                extra={
-                  <a onClick={() => recommendations.reload()} style={{ color: 'inherit', textDecoration: 'underline' }}>
-                    重试
-                  </a>
-                }
-              />
-            </div>
-          ) : recommendations.data === null ? (
-            <div style={{ padding: 6 }}>
-              <Skeleton.Paragraph lineCount={3} animated />
-            </div>
-          ) : recList.length === 0 ? (
-            <EmptyState
-              compact
-              title="暂无推荐"
-              description="后端按历史封禁统计给出建议；样本不足或当前无需放行时为空"
-            />
-          ) : (
-            recList.map((rec, index) => (
-              <div
-                key={`${rec.rec_type}:${rec.cidr}`}
-                style={{
-                  ...REC_ITEM,
-                  borderBottom:
-                    index === recList.length - 1 ? 'none' : '1px solid var(--fw-border)',
-                }}
-              >
-                {/* 主行：建议网段（等宽）+ 类型与置信度徽标 */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <span
-                    className="fw-mono"
-                    style={{
-                      flex: 1,
-                      minWidth: 0,
-                      fontSize: 12,
-                      fontWeight: 600,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {rec.cidr}
-                  </span>
-                  <Badge tone="primary" dim>
-                    {recTypeLabel(rec.rec_type)}
-                  </Badge>
-                  <Badge tone={confidenceTone(rec.confidence)}>置信 {Math.round(rec.confidence)}</Badge>
-                </div>
-
-                {/* 置信度细条：数值已在上行给出，这里只表达量级 */}
-                <div style={{ marginTop: 3 }}>
-                  <Meter ratio={rec.confidence / 100} tone={confidenceTone(rec.confidence)} />
-                </div>
-
-                {rec.reason !== '' && <div style={{ ...NOTE_TEXT, marginTop: 3 }}>{rec.reason}</div>}
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
-                  <span style={{ ...NOTE_TEXT, flex: 1, minWidth: 0 }}>
-                    影响 {formatNumber(rec.affected_ips, false)} 个 IP · 历史封禁{' '}
-                    {formatNumber(rec.total_bans, false)} 次
-                  </span>
-                  <Button
-                    size="mini"
-                    color="primary"
-                    fill="outline"
-                    style={{ minHeight: 44, minWidth: 72, flexShrink: 0 }}
-                    loading={busyCidr === rec.cidr}
-                    onClick={() => {
-                      void acceptRecommendation(rec)
-                    }}
-                  >
-                    采纳
-                  </Button>
-                </div>
-              </div>
-            ))
-          )}
-        </Panel>
-
-        {/* 首屏加载：SSE 与 REST 都还没有结果时给骨架屏，避免误显示「白名单为空」 */}
-        {liveEntries === null && restEntries.loading ? (
-          <Panel title="已放行" padded>
-            <Skeleton.Title animated />
-            <Skeleton.Paragraph lineCount={5} animated />
-          </Panel>
-        ) : (
-          <Panel
-            title="已放行"
-            meta={`${formatNumber(filtered.length, false)} / ${formatNumber(entries.length, false)}`}
-            padded={false}
-          >
-            {/* 交互提示：点击复制与左滑移出的动作在列表上方一句话讲清 */}
-            {filtered.length > 0 && <div style={HINT_ROW}>点击行复制 CIDR · 左滑移出</div>}
-
-            {filtered.length === 0 ? (
-              <EmptyState
-                title={keyword.trim() === '' ? '白名单为空' : '没有匹配的白名单条目'}
-                description={
-                  keyword.trim() === ''
-                    ? '白名单为空时所有来源都受封禁策略约束；可点击「新增」放行可信来源'
-                    : `关键词「${keyword.trim()}」未命中任何 CIDR 或设备名`
-                }
-              />
-            ) : (
-              filtered.map((entry, index) => {
-                const isLast = index === filtered.length - 1
-                return (
-                  <SwipeAction
-                    key={entry.cidr}
-                    rightActions={[
-                      {
-                        key: 'remove',
-                        text: busyCidr === entry.cidr ? '移出中' : '移出',
-                        color: 'danger',
-                        onClick: () => {
-                          void removeEntry(entry.cidr)
-                        },
-                      },
-                    ]}
-                  >
-                    {/* SwipeAction 会把子元素包进滑动轨道，`:last-child` 去线规则会命中每一行，
-                        因此分隔线在行内显式控制 */}
-                    <div
-                      className="fw-row"
-                      style={{ ...LIST_ROW, borderBottom: isLast ? 'none' : '1px solid var(--fw-border)' }}
-                      onClick={() => handleCopy(entry.cidr)}
-                    >
-                      <span className="fw-mono" style={{ fontSize: 12, fontWeight: 600 }}>
-                        <HighlightText text={entry.cidr} query={keyword} />
-                      </span>
-                      <span style={{ flex: 1 }} />
-                      <span
-                        style={{
-                          fontSize: 10,
-                          color: 'var(--fw-text-3)',
-                          maxWidth: '38%',
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                        }}
-                      >
-                        {entry.device === '' ? (
-                          '未绑定设备'
-                        ) : (
-                          <HighlightText text={entry.device} query={keyword} />
-                        )}
-                      </span>
-                      <span style={{ fontSize: 10, color: 'var(--fw-primary-strong)', flexShrink: 0 }}>
-                        复制
-                      </span>
-                    </div>
-                  </SwipeAction>
-                )
-              })
-            )}
-          </Panel>
-        )}
-
-        {/* 口径说明：让用户知道列表字段来自哪里 */}
-        <Panel title="口径" padded={false}>
-          <div style={{ padding: '4px 6px', display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <div style={NOTE_TEXT}>· 白名单按 CIDR 或单个 IP 匹配，命中后跳过该来源的失败计数与封禁</div>
-            <div style={NOTE_TEXT}>· 「绑定设备」由后端按 IP 反查本机网络设备，未识别时为空</div>
-          </div>
-        </Panel>
-        </div>
-      </PullToRefresh>
-
-      {/* 新增白名单：destroyOnClose 保证每次打开都是干净表单 */}
-      <Popup
-        visible={createOpen}
-        position="bottom"
-        destroyOnClose
-        closeOnMaskClick
-        onMaskClick={() => setCreateOpen(false)}
-      >
-        <Form
-          layout="horizontal"
-          onFinish={(values) => {
-            void submitCreate(values as Record<string, unknown>)
+      <Flex vertical gap={16} className="fw-fade-in">
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+            gap: 16,
           }}
-          footer={
-            <Button block type="submit" color="primary" size="large" loading={submitting} style={{ minHeight: 44 }}>
-              提交
-            </Button>
-          }
         >
-          <Form.Header>新增白名单（写操作：直接改写内核白名单表）</Form.Header>
-          <Form.Item name="cidr" label="CIDR / IP" rules={[{ validator: cidrValidator }]}>
-            <Input placeholder="例如 10.0.0.0/8、192.168.1.1、2001:db8::/32" clearable />
-          </Form.Item>
-        </Form>
-      </Popup>
+          <StatCard
+            label="条目总数"
+            value={formatNumber(entryCount)}
+            icon={SafetyCertificateOutlined}
+            tone="success"
+            footer="永不会被封禁的可信地址与网段"
+            loading={mainLoading && entries == null}
+          />
+        </div>
+
+        <DataTable<WhitelistEntry>
+          data={entries}
+          isLoading={mainLoading}
+          error={mainError}
+          onRetry={refetchMain}
+          rowKey="cidr"
+          columns={mainColumns}
+          emptyScenario="no-data"
+          emptyTitle="白名单为空"
+          emptyDescription="白名单里的地址/网段永不会被封禁，可先把可信的内网段或运维 IP 加进来"
+          emptyActionLabel="新增白名单"
+          onEmptyAction={openAdd}
+          toolbar={
+            <>
+              <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
+                新增白名单
+              </Button>
+              <Button icon={<ReloadOutlined />} onClick={refetchMain} loading={mainRefreshing}>
+                刷新
+              </Button>
+              <Typography.Text type="secondary" style={{ marginLeft: 'auto', fontSize: 12 }}>
+                共 {entryCount} 条
+              </Typography.Text>
+            </>
+          }
+          pagination={{
+            pageSize: 20,
+            showSizeChanger: true,
+            hideOnSinglePage: true,
+            showTotal: (t) => `共 ${t} 条`,
+          }}
+          scroll={{ x: 'max-content' }}
+        />
+
+        <Flex vertical gap={10}>
+          <Flex align="baseline" gap={8} wrap="wrap">
+            <Typography.Title level={5} style={{ margin: 0 }}>
+              加白推荐
+            </Typography.Title>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              按封禁历史聚合出的可疑误伤网段，可一键加白
+            </Typography.Text>
+          </Flex>
+
+          <DataTable<WhitelistRecommendation>
+            data={recData}
+            isLoading={recLoading}
+            error={recError}
+            onRetry={refetchRecs}
+            rowKey={(record) => `${record.rec_type}:${record.cidr}`}
+            columns={recColumns}
+            emptyScenario="no-data"
+            emptyTitle="暂无加白推荐"
+            emptyDescription="当前阈值下没有聚合出可疑误伤的网段，可尝试降低「最小封禁次数」"
+            toolbar={
+              <>
+                <Space size={6}>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    最小封禁次数
+                  </Typography.Text>
+                  <Select<number>
+                    value={minBans}
+                    onChange={(v) => setMinBans(v)}
+                    options={MIN_BANS_OPTIONS}
+                    style={{ width: 84 }}
+                  />
+                </Space>
+                <Space size={6}>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    条数上限
+                  </Typography.Text>
+                  <Select<number>
+                    value={recLimit}
+                    onChange={(v) => setRecLimit(v)}
+                    options={LIMIT_OPTIONS}
+                    style={{ width: 84 }}
+                  />
+                </Space>
+                <Button icon={<ReloadOutlined />} onClick={refetchRecs} loading={recRefreshing}>
+                  刷新
+                </Button>
+                <Typography.Text type="secondary" style={{ marginLeft: 'auto', fontSize: 12 }}>
+                  共 {recData?.length ?? 0} 条推荐
+                </Typography.Text>
+              </>
+            }
+            pagination={{
+              pageSize: 10,
+              showSizeChanger: true,
+              hideOnSinglePage: true,
+              showTotal: (t) => `共 ${t} 条推荐`,
+            }}
+            scroll={{ x: 'max-content' }}
+          />
+        </Flex>
+      </Flex>
+
+      <DrawerForm<CreateWhitelistRequest>
+        open={addOpen}
+        title="新增白名单"
+        form={form}
+        onSubmit={handleAddSubmit}
+        onCancel={handleAddCancel}
+        submitText="新增"
+        cancelText="取消"
+      >
+        <Form.Item
+          name="cidr"
+          label="CIDR / IP"
+          extra="支持 IPv4/IPv6，可带 /前缀；不带前缀视为单主机"
+          rules={[
+            { required: true, message: '请输入要加白的地址或网段' },
+            {
+              validator: (_rule, value: string) =>
+                !value || isValidCidr(value)
+                  ? Promise.resolve()
+                  : Promise.reject(new Error('地址或网段格式不正确')),
+            },
+          ]}
+        >
+          <Input
+            className="fw-mono"
+            placeholder="例如 203.0.113.0/24 或 192.168.1.10"
+            allowClear
+            autoFocus
+            aria-label="CIDR 或 IP"
+          />
+        </Form.Item>
+      </DrawerForm>
     </>
   )
 }

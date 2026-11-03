@@ -1,103 +1,76 @@
-// 页内区块标题：视图内部的分组标题 + 说明 + 右侧操作
-//
-// 与 AppShell 顶栏的分工：顶栏（h1）只放「当前页面名称」，本组件（h2）承载
-// 页面内部的分区标题 —— 二者不同级，也不会出现两个并列的一级标题。
-//
-// 控制台形态：11px 字距加宽的小标题 + 左侧 2px 强调色方块（与面板头同一套语言，
-// 见 global.css 的 .fw-panel-head::before），副标题降一档到 10px 弱化色。
-// 字号刻意小于顶栏标题：一屏要放下的信息更多，层级靠颜色与字距区分而不是靠放大。
-//
-// 无障碍与 E2E：标题必须是 h2 且文本就是 title 本身（装饰方块放在 h2 之外，
-// 不会混进可访问名），否则按标题检索的用例会失配。
-import type { CSSProperties, ReactNode } from 'react'
+import type { ReactNode } from 'react'
+import { Breadcrumb, Flex, Space, Typography } from 'antd'
+import { Link } from 'react-router-dom'
+import { RealtimeBadge } from './state/RealtimeBadge.tsx'
+import type { SseConnectionState } from '../hooks/useSse.ts'
 
-export interface PageHeaderProps {
-  /** 区块标题（必填） */
-  title: ReactNode
-  /** 副标题：放统计口径、时间范围等限定信息 */
-  subtitle?: ReactNode
-  /** 右侧操作区（切换器、状态标等窄元素；不放刷新按钮——刷新只走顶栏与下拉手势） */
-  extra?: ReactNode
-  /** 标题下方的补充内容（说明文字、图例） */
-  children?: ReactNode
-  /**
-   * 标题与顶栏（h1）文字相同时置为 true：视觉上不再重复显示同名标题。
-   *
-   * 为什么不能直接删掉：读屏器需要标题层级、e2e 按 h2 文本断言（两者都要求
-   * 它存在于 DOM）。因此改为只读屏可见（.fw-sr-only），副标题与操作区照常显示——
-   * 顶栏已经告诉用户「这是哪一页」，再重复一行同名标题纯属噪音。
-   */
-  srOnly?: boolean
-  style?: CSSProperties
+/**
+ * 页面标题区 —— 每页统一的顶部：面包屑 + 标题 + 说明 + 上下文操作 + 实时徽标。
+ *
+ * 统一的理由：运维在多页之间来回切，标题区的**结构**固定（左标题右操作），眼睛不用每页重新
+ * 找「刷新在哪、新建在哪、数据新不新」。实时徽标放在标题右侧，让「这页数据是不是活的」一眼可见。
+ *
+ * 面包屑用 react-router 的 hash 路由链接；最后一项是当前页（不可点）。
+ */
+
+export interface BreadcrumbItem {
+  title: string
+  /** 提供 path 则可点击跳转；省略表示当前页（末项）。 */
+  path?: string
 }
 
-export function PageHeader({ title, subtitle, extra, children, srOnly = false, style }: PageHeaderProps) {
+export interface PageHeaderProps {
+  title: ReactNode
+  /** 一句话说明这页是干什么的（次要文字色）。 */
+  description?: ReactNode
+  breadcrumb?: BreadcrumbItem[]
+  /** 右侧操作区（刷新、新建、筛选等按钮）。 */
+  extra?: ReactNode
+  /** 传入则渲染实时徽标。 */
+  realtimeState?: SseConnectionState
+  realtimeLastEventAt?: number
+  /** 标题下方的一整行自定义内容（如全局筛选工具条）。 */
+  footer?: ReactNode
+}
+
+export function PageHeader({
+  title,
+  description,
+  breadcrumb,
+  extra,
+  realtimeState,
+  realtimeLastEventAt,
+  footer,
+}: PageHeaderProps) {
   return (
-    <div style={{ marginBottom: 5, ...style }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 5,
-          // 标题只读屏可见时不占位，操作区独自靠右，避免左边留一段空白
-          justifyContent: srOnly ? 'flex-end' : undefined,
-        }}
-      >
-        {/* 强调色方块：与面板头对齐的视觉锚点，纯装饰，不进可访问名 */}
-        {srOnly ? null : (
-          <span
-            aria-hidden="true"
-            style={{
-              width: 2,
-              height: 10,
-              flexShrink: 0,
-              background: 'var(--fw-primary-strong)',
-            }}
-          />
-        )}
-        <h2
-          className={srOnly ? 'fw-sr-only' : undefined}
-          style={
-            srOnly
-              ? { margin: 0 }
-              : {
-                  flex: 1,
-                  minWidth: 0,
-                  margin: 0,
-                  fontSize: 11,
-                  fontWeight: 600,
-                  letterSpacing: '0.06em',
-                  color: 'var(--fw-text-2)',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                }
-          }
-        >
-          {title}
-        </h2>
-        {extra ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-            {extra}
-          </div>
-        ) : null}
-      </div>
-      {subtitle ? (
-        <p
-          style={{
-            margin: '1px 0 0',
-            marginLeft: srOnly ? 0 : 7,
-            fontSize: 10,
-            lineHeight: 1.4,
-            color: 'var(--fw-text-3)',
-          }}
-        >
-          {subtitle}
-        </p>
-      ) : null}
-      {children}
+    <div className="fw-page-header">
+      {breadcrumb && breadcrumb.length > 0 && (
+        <Breadcrumb
+          style={{ marginBottom: 8, fontSize: 12 }}
+          items={breadcrumb.map((item) => ({
+            title: item.path ? <Link to={item.path}>{item.title}</Link> : item.title,
+          }))}
+        />
+      )}
+      <Flex justify="space-between" align="flex-start" gap={16} wrap="wrap">
+        <Space direction="vertical" size={2} style={{ minWidth: 0 }}>
+          <Flex align="center" gap={12} wrap="wrap">
+            <Typography.Title level={4} style={{ margin: 0 }}>
+              {title}
+            </Typography.Title>
+            {realtimeState && (
+              <RealtimeBadge state={realtimeState} lastEventAt={realtimeLastEventAt} />
+            )}
+          </Flex>
+          {description && (
+            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+              {description}
+            </Typography.Text>
+          )}
+        </Space>
+        {extra && <Space size={8} wrap>{extra}</Space>}
+      </Flex>
+      {footer && <div style={{ marginTop: 12 }}>{footer}</div>}
     </div>
   )
 }
-
-export default PageHeader

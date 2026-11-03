@@ -1,73 +1,78 @@
 /**
- * 后端数据模型（TypeScript 侧视图）
+ * 前端类型镜像 —— 与 contract/http.fwidl 生成的载荷逐字段对齐。
  *
- * 唯一真源：`contract/http.fwidl` 的 `type` / `request` 块。本文件是它的手工镜像，
- * 由 `contract/verify_http.py` 逐字段核对（interface 名可经契约的 `ts_name` 与类型名
- * 不同，字段集合必须相同），所以两侧漂移会直接把门禁跑红。
- * `contract/generated/http_contract.ts` 是同一份契约的生成物，`src/api/contract.ts`
- * 转出它；两份并存是本文件待收的重复（新代码应从 '../api/contract' 取类型）。
+ * 这一份不是「随手写的 TS 类型」：`contract/verify_http.py` 的 `check_types_frontend`
+ * 会把这里每个 `export interface` 与契约的同名载荷做**字段名逐项**比对（缺一个、多一个都
+ * 判红）。所以规则很简单——契约里有的字段这里必须有、名字必须一致；契约里没有的字段这里
+ * 一个都不能加。字段的 TS 类型按契约的线上语义标注（数值一律 number、可空一律 `| null`），
+ * 门禁只核对字段名，但类型标准确才能让视图层拿到真实的自动补全。
  *
- * 命名约定：字段名一律保持后端 JSON 序列化后的 snake_case 原样，不做驼峰映射 ——
- * 这样任何一个字段名/类型写错都会在联调时立刻暴露，不会被一层转换函数悄悄吞掉。
+ * 请求体（`*Request` / `*Params`）门禁不在 types.ts 核对（它们由 endpoints.ts 的调用签名
+ * 体现），但视图与端点封装要用，故一并声明在此，集中一处便于校验规则复用。
  *
- * 类型映射（契约为 Go 侧写的 `u*`/`i*`/`Option<T>`，落到 JSON 就是这些形态）：
- * - `u8`/`u16`/`u32`/`usize`/`u64`/`i*` → `number`（超过 2^53 才丢精度，本系统的
- *   计数与时间戳量级远低于该上限）
- * - `f64` → `number`
- * - `Option<T>` 且未加 `omitempty` → `T | null`（字段本身仍会出现）
- * - 请求体里的 `Option<T>` → `?:` 可选字段（反序列化时缺省即零值/nil）
+ * 唯一真相源是契约；改这里之前先改 `contract/http.fwidl` 再 `python3 contract/gen.py`。
  */
 
-// ============================================================================
-// 通用信封与图表结构
-// ============================================================================
+// ---------------------------------------------------------------------------
+// 信封与分页
+// ---------------------------------------------------------------------------
 
-/**
- * 统一响应信封（`src/daemon/internal/http/envelope.go` 的 `ApiResponse`）。
- * 契约：HTTP 2xx 且 `code === 0` 才算成功；`code !== 0` 时 `message` 是失败原因。
- */
+/** 统一响应信封：成功 = HTTP 2xx 且 code === 0，data 才是业务载荷。 */
 export interface ApiResponse<T> {
   code: number
   data: T
   message: string
 }
 
-/**
- * 图表数据：labels 与 values 按下标一一对应。
- * 用于封禁趋势 / Jail 分布 / 失败原因分布等。
- */
+/** 分页信封：GET /api/v2/bans、/api/v2/logs 等列表端点的外层形状。 */
+export interface PaginatedResponse<T> {
+  items: T[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+
+// ---------------------------------------------------------------------------
+// 运行时状态 / 健康
+// ---------------------------------------------------------------------------
+
+/** GET /api/v2/health 的载荷；注意这条**不经信封**，直接是裸 RuntimeSnapshot。 */
+export interface RuntimeSnapshot {
+  status: string
+  netlink_ready: boolean
+  kmod_proc_present: boolean
+  ban_cache_initialized: boolean
+  ban_history_initialized: boolean
+  active_bans: number
+  lease_state: string
+  lease_losses: number
+}
+
+// ---------------------------------------------------------------------------
+// 统计总览
+// ---------------------------------------------------------------------------
+
+/** 图表通用形状：labels 与 values 等长同下标。 */
 export interface ChartData {
   labels: string[]
   values: number[]
 }
 
-// ============================================================================
-// 统计与仪表盘（internal/http/stats.go / handlers.go）
-// ============================================================================
-
-/** 实时威胁等级评估 */
+/** 威胁等级读数：level 取 safe/low/medium/high/critical 之一。 */
 export interface ThreatLevel {
-  /** 等级标签：safe / low / medium / high / critical */
   level: string
-  /** 数值化等级（0-4） */
   score: number
-  /** 评估依据文案（为空时后端会填入「一切正常」） */
   factors: string[]
-  /** 当前短期窗口 PPS */
   current_pps: number
-  /** 当前 PPS 与警告阈值的比率（>1 表示已超阈值） */
   pps_ratio: number
-  /** 内核封禁表桶使用率（0.0-1.0，按 4096 桶计算） */
   ban_table_usage: number
-  /** 最近 5 分钟封禁数 */
   recent_bans: number
-  /** 基线是否已冻结（异常流量突增时停用基线） */
   baseline_frozen: boolean
-  /** 是否处于业务高峰期（基线上调 50%） */
   peak_hours: boolean
 }
 
-/** `GET /api/v2/stats` 响应 */
+/** GET /api/v2/stats 的载荷：首屏总览，混合内核快照 / 历史库时间窗 / 本进程状态。 */
 export interface StatsResponse {
   daemon_version: string
   kernel_version: string
@@ -88,40 +93,68 @@ export interface StatsResponse {
   threat_level: ThreatLevel
 }
 
-// ============================================================================
-// 封禁 / 白名单 / Jail（internal/http/bans.go / whitelist.go / jails.go）
-// ============================================================================
+// ---------------------------------------------------------------------------
+// 封禁管理
+// ---------------------------------------------------------------------------
 
-/**
- * 封禁条目。
- * `remaining_seconds` 为 `-1` 表示永久封禁（与后端一致，不是「剩余 -1 秒」）。
- */
+/** 封禁列表条目（GET /api/v2/bans 分页项、SSE bans 帧条目同形）。 */
 export interface BanResponse {
   ip: string
   jail: string
-  /** 封禁时间（Unix 秒） */
   banned_at: number
-  /** 剩余秒数；-1 = 永久封禁 */
   remaining_seconds: number
   reason: string
-  /** 该 IP 累计被封禁次数（渐进式封禁依据） */
   ban_count: number
   is_permanent: boolean
 }
 
-/** Jail 条目 */
+/** 单个封禁的完整画像（GET /api/v2/bans/:ip/detail）。 */
+export interface BanDetailResponse {
+  ip: string
+  is_banned: boolean
+  jail_name: string
+  reason: string
+  banned_at: number
+  expires_at: number
+  is_permanent: boolean
+  fail_count: number
+  ban_count: number
+  last_unbanned_at: number
+  was_permanent: boolean
+  progressive_level: string
+  next_ban_duration: string
+  reputation_score: number
+  reputation_multiplier: number
+}
+
+/** 封禁/解封单条操作结果（POST /api/v2/bans、DELETE /api/v2/bans/:ip）。 */
+export interface BanOperationResponse {
+  ip: string
+  action: string
+  permanent: boolean
+  duration_seconds: number | null
+}
+
+/** 批量操作结果（POST /api/v2/bans/batch、/api/v2/bans/unban-temporary）。 */
+export interface BatchOperationResponse {
+  total: number
+  succeeded: number
+  failed_count: number
+  details: string[]
+}
+
+// ---------------------------------------------------------------------------
+// Jail
+// ---------------------------------------------------------------------------
+
+/** Jail 配置 + 运行时计数（GET /api/v2/jails 数组项）。 */
 export interface JailResponse {
   name: string
   enabled: boolean
-  /** 该 Jail 当前封禁的 IP 数 */
   ban_count: number
-  /** 配置的失败次数阈值 */
   max_retries: number
-  /** 当前生效阈值（高峰期会按倍数放宽） */
   effective_max_retries: number
-  /** 滑动窗口大小（秒） */
   findtime: number
-  /** 封禁时长（秒），-1 表示永久 */
   ban_time: number
   is_peak_hours: boolean
   peak_hours_multiplier: number
@@ -133,7 +166,67 @@ export interface JailResponse {
   bans_triggered: number
 }
 
-/** DDoS 速率快照，来自全局 RATE_CACHE */
+// ---------------------------------------------------------------------------
+// 配置
+// ---------------------------------------------------------------------------
+
+/** Web UI 相关配置快照（GET /api/v2/config、PUT /api/v2/config）。 */
+export interface WebuiConfigResponse {
+  sse_push_interval: number
+  rate_warning_pps: number
+  rate_critical_pps: number
+  rate_warning_syn: number
+  rate_critical_syn: number
+  max_syn_per_second: number
+  max_udp_per_second: number
+  max_icmp_per_second: number
+  max_ack_per_second: number
+  max_rst_per_second: number
+  max_fin_per_second: number
+  static_threshold: boolean
+  dynamic_threshold: boolean
+  ddos_detection: boolean
+  max_ban_entries: number
+  max_whitelist_entries: number
+  max_rate_entries: number
+  max_local_ip_cache: number
+  clear_logs_at: string | null
+}
+
+// ---------------------------------------------------------------------------
+// 白名单
+// ---------------------------------------------------------------------------
+
+/**
+ * 白名单条目。契约名是 `WhitelistEntryResponse`，但通过 ts_name 显式声明前端名为
+ * `WhitelistEntry`（门禁按 ts_name 核对），故这里就叫 WhitelistEntry。
+ */
+export interface WhitelistEntry {
+  cidr: string
+  device: string
+}
+
+/** 白名单增删结果（POST/DELETE /api/v2/whitelist）。 */
+export interface WhitelistOperationResponse {
+  cidr: string
+  action: string
+}
+
+/** 白名单推荐（GET /api/v2/whitelist/recommendations 数组项）。 */
+export interface WhitelistRecommendation {
+  rec_type: string
+  cidr: string
+  reason: string
+  affected_ips: number
+  total_bans: number
+  confidence: number
+}
+
+// ---------------------------------------------------------------------------
+// 速率
+// ---------------------------------------------------------------------------
+
+/** 单 IP 速率读数（GET /api/v2/rates/current 数组项、SSE rates 帧同形）。 */
 export interface RateResponse {
   ip: string
   packets_per_sec: number
@@ -146,17 +239,15 @@ export interface RateResponse {
   fin_packets_per_sec: number
 }
 
-/** 速率历史点，后端每 2 秒一条、保留约 1 小时 */
+/** 速率历史点（GET /api/v2/rates/history 数组项，时间升序）。 */
 export interface RateHistoryResponse {
-  /** 采样时间（Unix 秒） */
   timestamp: number
   total_pps: number
   total_bps: number
-  /** 该采样时刻被追踪的 IP 数 */
   tracked_ips: number
 }
 
-/** 多窗口速率 EWMA 快照：短期 ~5s / 中期 ~60s / 长期 ~300s */
+/** 三档窗口速率快照（GET /api/v2/rates/windows）。 */
 export interface RateWindowSnapshot {
   pps_short: number
   pps_mid: number
@@ -166,188 +257,20 @@ export interface RateWindowSnapshot {
   bps_long: number
 }
 
-/** Whitelist 条目（序列化字段 cidr/device） */
-export interface WhitelistEntry {
-  cidr: string
-  /** 绑定的设备名（未绑定时为空串） */
-  device: string
+// ---------------------------------------------------------------------------
+// 复发 / 成效 / 周期性 / 协同
+// ---------------------------------------------------------------------------
+
+/** 复发统计（GET /api/v2/stats/recidivism）；recidivism_rate 是百分数 0-100。 */
+export interface RecidivismResponse {
+  total_ips: number
+  recidivist_ips: number
+  recidivism_rate: number
+  permanent_bans: number
+  top_recidivists: RecidivistEntry[]
 }
 
-/** 封禁操作结果 */
-export interface BanOperationResponse {
-  ip: string
-  /** "banned" 或 "unbanned" */
-  action: string
-  permanent: boolean
-  /** 永久封禁时为 null */
-  duration_seconds: number | null
-}
-
-/** 白名单操作结果 */
-export interface WhitelistOperationResponse {
-  cidr: string
-  /** "added" 或 "removed" */
-  action: string
-}
-
-/** 批量操作汇总 */
-export interface BatchOperationResponse {
-  total: number
-  succeeded: number
-  failed_count: number
-  /** 成功项明细（批量解封时是 IP，批量封禁时也是 IP） */
-  details: string[]
-}
-
-/**
- * 封禁详情：当前封禁状态 + 历史 + 渐进式等级 + 信誉分。
- * 未在封禁中时 `jail_name`/`reason` 为空串，各时间戳为 0。
- */
-export interface BanDetailResponse {
-  ip: string
-  is_banned: boolean
-  jail_name: string
-  reason: string
-  /** 封禁时间（Unix 秒，0 = 无记录） */
-  banned_at: number
-  /** 过期时间（Unix 秒，0 = 永久或无记录） */
-  expires_at: number
-  is_permanent: boolean
-  /** 触发封禁前的失败次数 */
-  fail_count: number
-  ban_count: number
-  /**
-   * 上次**显式解封**的时间（Unix 秒）。
-   * 0 = 没有过显式解封记录（从未封禁、或封禁后到期自然消失都算在内）；它不是
-   * 「仍在封禁中」的同义词——那由 is_banned 表达。
-   */
-  last_unbanned_at: number
-  was_permanent: boolean
-  /** 渐进式封禁等级说明（如「二次封禁（累犯）」） */
-  progressive_level: string
-  /** 下次封禁时长说明（如 "300 秒" / "永久封禁" / "未知"，是文案而非纯数字） */
-  next_ban_duration: string
-  /** IP 信誉分（0-100，100 = 完全信任） */
-  reputation_score: number
-  /** 信誉阈值乘数（0.5 / 0.8 / 1.0） */
-  reputation_multiplier: number
-}
-
-/**
- * 封禁列表排序字段：取值与 contract/http.fwidl 的 request PaginationParams.sort_by、
- * 服务端 src/daemon/internal/http/bans.go 的 banSortKeys 逐字一致（7 个），
- * 也与 frontend/src/api/params.ts 的 BanSortKey 同源。未识别的值回落 banned_at_desc。
- */
-export type BanSortKey =
-  | 'banned_at_desc'
-  | 'banned_at_asc'
-  | 'ip_asc'
-  | 'ip_desc'
-  | 'jail_asc'
-  | 'remaining_asc'
-  | 'remaining_desc'
-
-/** `GET /api/v2/bans` 分页参数；后端缺省 page=1、page_size=20 */
-export interface PaginationParams {
-  page?: number
-  page_size?: number
-  sort_by?: BanSortKey
-}
-
-/** 分页包装 */
-export interface PaginatedResponse<T> {
-  items: T[]
-  total: number
-  page: number
-  page_size: number
-  total_pages: number
-}
-
-/** `POST /api/v2/bans` 请求体 */
-export interface CreateBanRequest {
-  ip: string
-  /** 封禁时长（秒）：0 或省略 = 永久封禁（与内核 ban_time=-1 语义一致） */
-  duration?: number
-  /** 封禁原因（缺省时后端记为 "manual"） */
-  reason?: string
-}
-
-/** `POST /api/v2/whitelist` 请求体 */
-export interface CreateWhitelistRequest {
-  /** CIDR 或单个 IP，如 "10.0.0.0/8"、"192.168.1.1" */
-  cidr: string
-}
-
-/** `PUT /api/v2/jails/:name` 请求体 */
-export interface UpdateJailRequest {
-  enabled: boolean
-}
-
-// ============================================================================
-// Web UI 配置（internal/http/config_api.go）
-// ============================================================================
-
-/** `GET /api/v2/config` 响应 */
-export interface WebuiConfigResponse {
-  sse_push_interval: number
-  rate_warning_pps: number
-  rate_critical_pps: number
-  rate_warning_syn: number
-  rate_critical_syn: number
-  /** 协议专项阈值（下发到内核 netlink） */
-  max_syn_per_second: number
-  max_udp_per_second: number
-  max_icmp_per_second: number
-  max_ack_per_second: number
-  max_rst_per_second: number
-  max_fin_per_second: number
-  /** DDoS 检测算法开关 */
-  static_threshold: boolean
-  dynamic_threshold: boolean
-  ddos_detection: boolean
-  /** 容量配置 */
-  max_ban_entries: number
-  max_whitelist_entries: number
-  max_rate_entries: number
-  max_local_ip_cache: number
-  /** 日志过滤起点（ISO 8601 时间戳字符串）；null = 不做时间过滤 */
-  clear_logs_at: string | null
-}
-
-/**
- * `PUT /api/v2/config` 请求体。
- * 所有字段可选：只提交需要修改的字段，未提交的字段保持后端现值。
- * 约束（后端会校验并返回 400）：warning < critical；各阈值与容量均不能为 0；
- * `sse_push_interval` 必须在 1-60 之间。
- */
-export interface UpdateConfigRequest {
-  sse_push_interval?: number
-  rate_warning_pps?: number
-  rate_critical_pps?: number
-  rate_warning_syn?: number
-  rate_critical_syn?: number
-  max_syn_per_second?: number
-  max_udp_per_second?: number
-  max_icmp_per_second?: number
-  max_ack_per_second?: number
-  max_rst_per_second?: number
-  max_fin_per_second?: number
-  static_threshold?: boolean
-  dynamic_threshold?: boolean
-  ddos_detection?: boolean
-  max_ban_entries?: number
-  max_whitelist_entries?: number
-  max_rate_entries?: number
-  max_local_ip_cache?: number
-  /** 传空字符串 = 取消日志时间过滤；传时间戳 = 过滤早于该时间的日志行 */
-  clear_logs_at?: string
-}
-
-// ============================================================================
-// 封禁效果与智能推荐（internal/http/stats.go / analysis_payload.go / internal/analysis/recommendations.go）
-// ============================================================================
-
-/** 复发 IP 条目 */
+/** 复发榜条目。 */
 export interface RecidivistEntry {
   ip: string
   ban_count: number
@@ -355,54 +278,105 @@ export interface RecidivistEntry {
   was_permanent: boolean
 }
 
-/** 复发率统计 */
-export interface RecidivismResponse {
-  total_ips: number
-  recidivist_ips: number
-  /** 复发率，单位是百分数（0.0 ~ 100.0），不是 0-1 比例 */
-  recidivism_rate: number
-  permanent_bans: number
-  top_recidivists: RecidivistEntry[]
+/** 分级封禁成效（GET /api/v2/stats/ban-effectiveness）。 */
+export interface BanEffectivenessResponse {
+  levels: BanLevelEffectiveness[]
+  total_unique_ips: number
+  overall_recidivism_rate: number
+  summary: string
 }
 
-/** 单级别封禁效果 */
+/** 单个分级档位的成效。 */
 export interface BanLevelEffectiveness {
-  /** 1=首次, 2=二次, 3=三次, 4=四次+ */
   level: number
   label: string
   total_ips: number
   recidivist_ips: number
-  /** 复发率，**百分数 0-100**（与 RecidivismResponse.recidivism_rate 同一口径，不是 0-1 比例） */
   recidivism_rate: number
   permanent_bans: number
   verdict: string
 }
 
-/** 封禁效果分析 */
-export interface BanEffectivenessResponse {
-  levels: BanLevelEffectiveness[]
-  total_unique_ips: number
-  /** 总体复发率，**百分数 0-100**（同上，不是 0-1 比例） */
-  overall_recidivism_rate: number
-  summary: string
+/** 周期性攻击者（GET /api/v2/stats/periodic-attackers 数组项）。 */
+export interface PeriodicAttacker {
+  ip: string
+  ban_count: number
+  avg_interval_secs: number
+  interval_stddev: number
+  periodicity_score: number
+  jail_name: string
+  timestamps: number[]
 }
 
-/** 白名单推荐条目 */
-export interface WhitelistRecommendation {
-  /** "subnet" 或 "ip" */
-  rec_type: string
-  cidr: string
-  reason: string
-  affected_ips: number
+/** 协同攻击窗口（GET /api/v2/stats/collaborative-attacks 数组项）。 */
+export interface CollaborativeAttack {
+  jail_name: string
+  window_start: number
+  window_end: number
+  ip_count: number
+  ips: string[]
   total_bans: number
-  /** 置信度 0-100 */
+  correlation_score: number
+}
+
+// ---------------------------------------------------------------------------
+// 预测 / 阈值推荐 / 时长推荐
+// ---------------------------------------------------------------------------
+
+/** 单 IP 攻击预测。 */
+export interface AttackPrediction {
+  ip: string
+  ban_count: number
+  jail_name: string
+  last_ban_at: number
+  median_interval_secs: number
+  predicted_next_attack: number
+  remaining_secs: number
+  confidence: number
+  urgency: string
+}
+
+/** 攻击预测汇总（GET /api/v2/stats/attack-predictions）。 */
+export interface AttackPredictionSummary {
+  predictions: AttackPrediction[]
+  jail_trends: JailAttackTrend[]
+  imminent_count: number
+  within_24h_count: number
+}
+
+/** 单 jail 的攻击趋势。 */
+export interface JailAttackTrend {
+  jail_name: string
+  bans_24h: number
+  bans_7d: number
+  trend: string
+  predicted_attackers_24h: number
+}
+
+/** 阈值推荐条目。 */
+export interface ThresholdRecommendation {
+  jail_name: string
+  current_threshold: number
+  recommended_threshold: number
+  direction: string
+  total_bans: number
+  unique_ips: number
+  recidivist_ips: number
+  recidivism_rate: number
+  avg_bans_per_ip: number
+  reason: string
   confidence: number
 }
 
-/** 封禁时长推荐条目 */
+/** 阈值推荐汇总（GET /api/v2/stats/threshold-recommendations）。 */
+export interface ThresholdRecommendationResponse {
+  recommendations: ThresholdRecommendation[]
+  summary: string
+}
+
+/** 封禁时长推荐条目。 */
 export interface BanDurationRecommendation {
   jail_name: string
-  /** 当前配置的封禁时长（秒），-1 = 永久 */
   current_ban_time: number
   recidivist_count: number
   median_return_secs: number
@@ -411,71 +385,94 @@ export interface BanDurationRecommendation {
   needs_adjustment: boolean
 }
 
-/** 封禁时长推荐汇总 */
+/** 封禁时长推荐汇总（GET /api/v2/stats/ban-duration-recommendations）。 */
 export interface BanDurationRecommendationResponse {
   recommendations: BanDurationRecommendation[]
   summary: string
 }
 
-/** IP 信誉分条目 */
+// ---------------------------------------------------------------------------
+// 信誉
+// ---------------------------------------------------------------------------
+
+/** IP 信誉条目（GET /api/v2/stats/reputation 数组项）。 */
 export interface ReputationEntryResponse {
   ip: string
-  /** 0-100 */
   score: number
   last_failure_at: number
   total_failures: number
   total_bans: number
-  /** 当前阈值乘数（0.5 / 0.8 / 1.0） */
   threshold_multiplier: number
 }
 
-/** 阈值调优建议条目 */
-export interface ThresholdRecommendation {
-  jail_name: string
-  current_threshold: number
-  /** direction=maintain 时等于 current_threshold；「要不要改」看 direction，0 不是「无需调整」的哨兵值 */
-  recommended_threshold: number
-  /** "increase" / "decrease" / "maintain" */
-  direction: string
-  total_bans: number
-  unique_ips: number
-  recidivist_ips: number
-  /** 复发率，**百分数 0-100**（与 RecidivismResponse 同口径，不是 0-1 比例） */
-  recidivism_rate: number
-  avg_bans_per_ip: number
-  reason: string
-  /** 置信度 0-100 */
-  confidence: number
+// ---------------------------------------------------------------------------
+// 多维风险引擎（v2）
+// ---------------------------------------------------------------------------
+
+/** 单 IP 的 7 维风险向量。 */
+export interface RiskVectorResponse {
+  ip: string
+  failure: number
+  ban: number
+  scan: number
+  bruteforce: number
+  ddos: number
+  geo: number
+  cluster: number
+  total_risk: number
+  last_event_at: number
+  updated_at: number
 }
 
-/** 阈值调优建议汇总 */
-export interface ThresholdRecommendationResponse {
-  recommendations: ThresholdRecommendation[]
-  summary: string
+/** 风险向量列表（GET /api/v2/risk/vectors，按总风险降序）。 */
+export interface RiskVectorListResponse {
+  vectors: RiskVectorResponse[]
+  total: number
 }
 
-// ============================================================================
-// 内核/流量特征分析（internal/analysis/detection.go / network.go）
-// ============================================================================
-
-/** UDP 端口分布条目 */
-export interface UdpPortEntry {
-  port: number
-  packets: number
-  bytes: number
-  /** 距最近一次出现的秒数 */
-  last_seen_secs: number
+/** 单条风险事件。 */
+export interface RiskEventEntry {
+  id: number
+  ip: string
+  event_type: string
+  increment: number
+  occurred_at: number
 }
 
-/** UDP 端口分布响应 */
+/** 单 IP 的风险事件历史（GET /api/v2/risk/events/:ip）。 */
+export interface RiskEventResponse {
+  ip: string
+  events: RiskEventEntry[]
+  total: number
+}
+
+// ---------------------------------------------------------------------------
+// 内核分布统计（UDP / ICMP / 包长 / TTL / 分片 / 扫描 / 探测）
+// ---------------------------------------------------------------------------
+
+/** UDP 端口分布（GET /api/v2/stats/udp-ports）。 */
 export interface UdpPortDistributionResponse {
-  /** 已按 packets 降序排序 */
   ports: UdpPortEntry[]
   total_entries: number
   max_entries: number
 }
 
-/** ICMP 类型分布条目（serde 把 `r#type` 序列化为 "type"） */
+/** UDP 端口条目。 */
+export interface UdpPortEntry {
+  port: number
+  packets: number
+  bytes: number
+  last_seen_secs: number
+}
+
+/** ICMP 类型分布（GET /api/v2/stats/icmp-types）。 */
+export interface IcmpTypeDistributionResponse {
+  types: IcmpTypeEntry[]
+  total_entries: number
+  max_entries: number
+}
+
+/** ICMP 类型条目。 */
 export interface IcmpTypeEntry {
   type: number
   code: number
@@ -484,22 +481,7 @@ export interface IcmpTypeEntry {
   last_seen_secs: number
 }
 
-/** ICMP 类型分布响应 */
-export interface IcmpTypeDistributionResponse {
-  /** 已按 packets 降序排序 */
-  types: IcmpTypeEntry[]
-  total_entries: number
-  max_entries: number
-}
-
-/** 封禁时长分布直方图，counts 已转成非累积值 */
-export interface BanDurationHistogramResponse {
-  labels: string[]
-  counts: number[]
-  total: number
-}
-
-/** 包大小分布：counts 与 percentages 按下标对应 labels */
+/** 包长分布（GET /api/v2/stats/packet-sizes）；labels/counts/percentages 等长。 */
 export interface PacketSizeDistributionResponse {
   labels: string[]
   counts: number[]
@@ -507,7 +489,7 @@ export interface PacketSizeDistributionResponse {
   percentages: number[]
 }
 
-/** TTL 分布 */
+/** TTL 分布（GET /api/v2/stats/ttl-distribution）；labels/counts/percentages 等长。 */
 export interface TtlDistributionResponse {
   labels: string[]
   counts: number[]
@@ -515,238 +497,79 @@ export interface TtlDistributionResponse {
   percentages: number[]
 }
 
-/** IP 分片统计，fragment_ratio 是百分数 */
+/** 封禁时长直方图（GET /api/v2/stats/ban-duration-histogram）。 */
+export interface BanDurationHistogramResponse {
+  labels: string[]
+  counts: number[]
+  total: number
+}
+
+/** IP 分片统计（GET /api/v2/stats/ip-fragments）；fragment_ratio 是百分数 0-100。 */
 export interface IpFragmentStatsResponse {
   total_packets: number
   fragment_packets: number
-  /** 分片占比（百分数 0-100） */
   fragment_ratio: number
 }
 
-/** 端口扫描者条目 */
+/** 端口扫描检出（GET /api/v2/stats/port-scanners）。 */
+export interface PortScanResponse {
+  threshold: number
+  total_detected: number
+  scanners: PortScannerEntry[]
+}
+
+/** 端口扫描源条目。 */
 export interface PortScannerEntry {
   ip: string
   unique_ports: number
   packets: number
 }
 
-/** 端口扫描检测 */
-export interface PortScanResponse {
-  /** 判定阈值（不同端口数） */
-  threshold: number
-  total_detected: number
-  scanners: PortScannerEntry[]
-}
-
-/** 服务探测者条目 */
-export interface ServiceProbeEntry {
-  ip: string
-  /** 探测过的协议数量 */
-  protocol_count: number
-  packets: number
-}
-
-/** 服务探测检测 */
+/** 服务探测检出（GET /api/v2/stats/service-probes）。 */
 export interface ServiceProbeResponse {
   threshold: number
-  /**
-   * 本次快照打包带出的行数（≤ probes 的容量 20）。与 PortScanResponse.total_detected
-   * 同名不同量：那一侧是内核的累计检出事件计数，所以 port-scanners 页上的「检出 N 个」
-   * 会大于列表行数，不是列表被前端截断了
-   */
   total_detected: number
   probes: ServiceProbeEntry[]
 }
 
-// ============================================================================
-// 历史分析（internal/persist/*，处理器在 internal/http/handlers.go）
-// ============================================================================
+/** 服务探测源条目。 */
+export interface ServiceProbeEntry {
+  ip: string
+  protocol_count: number
+  packets: number
+}
 
-/** 单小时聚合桶 */
+// ---------------------------------------------------------------------------
+// 网段分布 / 热力图
+// ---------------------------------------------------------------------------
+
+/** 网段聚合（GET /api/v2/stats/network-distribution 数组项）。 */
+export interface NetworkBlock {
+  subnet: string
+  unique_ips: number
+  total_bans: number
+  last_banned_at: number
+  top_ip: string
+}
+
+/** 24 小时热力图（GET /api/v2/stats/heatmap）；hours 恒为 24 项。 */
+export interface HourlyHeatmap {
+  hours: HourlyBucket[]
+}
+
+/** 单个钟点槽（本地时区自然小时 0-23）。 */
 export interface HourlyBucket {
-  /** 小时编号 0-23 */
   hour: number
   bans: number
   failed_attempts: number
   ddos_events: number
 }
 
-/** 24 小时热力图：`hours` 固定 24 项，下标即小时 */
-export interface HourlyHeatmap {
-  hours: HourlyBucket[]
-}
+// ---------------------------------------------------------------------------
+// 日志
+// ---------------------------------------------------------------------------
 
-/** 周期性攻击者 */
-export interface PeriodicAttacker {
-  ip: string
-  ban_count: number
-  /** 平均封禁间隔（秒） */
-  avg_interval_secs: number
-  interval_stddev: number
-  /** 周期规律性评分 0-100，越高越像机器人 */
-  periodicity_score: number
-  jail_name: string
-  /** 事件时间戳列表（Unix 秒） */
-  timestamps: number[]
-}
-
-/** 协同攻击 */
-export interface CollaborativeAttack {
-  jail_name: string
-  window_start: number
-  window_end: number
-  ip_count: number
-  ips: string[]
-  total_bans: number
-  /** 协同评分 0-100，越高越协同 */
-  correlation_score: number
-}
-
-/** 攻击源网络分布，按 IPv4 /24 或 IPv6 /48 聚合 */
-export interface NetworkBlock {
-  /** 子网前缀，如 "192.168.1" */
-  subnet: string
-  unique_ips: number
-  total_bans: number
-  last_banned_at: number
-  /** 该子网内封禁次数最多的 IP */
-  top_ip: string
-}
-
-/** 单 IP 攻击预测 */
-export interface AttackPrediction {
-  ip: string
-  ban_count: number
-  jail_name: string
-  last_ban_at: number
-  /** 预期攻击间隔中位数（秒） */
-  median_interval_secs: number
-  predicted_next_attack: number
-  /** 距预测时刻的剩余秒数（负数 = 已超期） */
-  remaining_secs: number
-  /** 置信度 0-100 */
-  confidence: number
-  /** "imminent"（<1h）/ "soon"（<6h）/ "later"（<24h）/ "distant" */
-  urgency: string
-}
-
-/** Jail 级攻击趋势 */
-export interface JailAttackTrend {
-  jail_name: string
-  bans_24h: number
-  bans_7d: number
-  /** "rising" / "stable" / "falling" */
-  trend: string
-  predicted_attackers_24h: number
-}
-
-/** 攻击预测汇总 */
-export interface AttackPredictionSummary {
-  /** 已按紧急程度排序 */
-  predictions: AttackPrediction[]
-  jail_trends: JailAttackTrend[]
-  /** 预测 1 小时内会有攻击的 IP 数 */
-  imminent_count: number
-  /** 预测 24 小时内会有攻击的 IP 数 */
-  within_24h_count: number
-}
-
-/** 异常检测响应 */
-export interface AnomalyResponse {
-  /** 全局异常评分（0-100） */
-  global_score: number
-  /** 全局各维度偏差分 */
-  global_dimensions: DimensionScore[]
-  /** 全局当前特征值 */
-  global_features: FeatureValue[] | null
-  /** 全局 p50 基线 */
-  global_baseline_p50: FeatureValue[]
-  /** 全局 p95 基线 */
-  global_baseline_p95: FeatureValue[]
-  /** 滚动窗口样本数 */
-  global_sample_count: number
-  /** per-IP 异常 IP 列表 */
-  ip_anomalies: IpAnomalyEntry[]
-  /** 最近更新时间戳（Unix 秒） */
-  timestamp: number
-}
-
-/** 单维度偏差分 */
-export interface DimensionScore {
-  name: string
-  score: number
-}
-
-/** 单个特征维度值 */
-export interface FeatureValue {
-  name: string
-  value: number
-}
-
-/** per-IP 异常条目 */
-export interface IpAnomalyEntry {
-  ip: string
-  score: number
-  dimensions: DimensionScore[]
-}
-
-/**
- * 本机坐标的来源。
- * - `config`：来自配置项 server_latitude / server_longitude（权威值）
- * - `detected`：由守护进程探测出口 IP + 本地 GeoIP 库解析得到（非权威，仅供展示）
- * - `none`：未配置也未探测到 → 不绘制本机标记与弧线
- */
-export type ServerLocationSource = 'config' | 'detected' | 'none'
-
-/** 攻击源地理分布 */
-export interface AttackGeoResponse {
-  /** 地理解析是否可用（GeoIP 数据库是否已装配） */
-  geoip_enabled: boolean
-  /** 按总封禁数降序的地点列表 */
-  points: GeoPoint[]
-  /** 参与统计的 IP 总数（含无法定位的） */
-  total_ips: number
-  /** 成功定位的 IP 数 */
-  located_ips: number
-  /** 本机（服务器）纬度；未配置且未探测到时为 null（此时不绘制本机标记与弧线） */
-  server_latitude: number | null
-  /** 本机（服务器）经度；未配置且未探测到时为 null */
-  server_longitude: number | null
-  /** 本机坐标的来源；`none` 时前端不绘制本机标记与相关弧线 */
-  server_location_source: ServerLocationSource
-}
-
-/** 单个地理位置的攻击统计 */
-export interface GeoPoint {
-  latitude: number
-  longitude: number
-  /** 国家 ISO 代码（如 CN） */
-  country_code: string
-  country: string
-  city: string
-  /** 一级行政区名 */
-  subdivision: string
-  /** 该位置被封禁的唯一 IP 数 */
-  unique_ips: number
-  /** 该位置的总封禁次数 */
-  total_bans: number
-  /** 代表 IP（封禁次数最多者） */
-  top_ip: string
-  /** 最近一次封禁时间（Unix 秒） */
-  last_banned_at: number
-}
-
-// ============================================================================
-// 日志（internal/http/logs.go）
-// ============================================================================
-
-/** 日志条目 */
-export interface LogEntry {
-  line_number: number
-  content: string
-}
-
-/** 日志分页响应 */
+/** 历史日志分页（GET /api/v2/logs）。 */
 export interface LogPageResponse {
   items: LogEntry[]
   total_lines: number
@@ -755,119 +578,34 @@ export interface LogPageResponse {
   total_pages: number
 }
 
-/** `GET /api/v2/logs` 查询参数；后端缺省 page=1、page_size=100（上限 500） */
-export interface LogQueryParams {
-  page?: number
-  page_size?: number
-  /** 日志级别过滤：ERROR / WARN / INFO / DEBUG */
-  level?: string
-  /** 关键词（后端按小写包含匹配） */
-  keyword?: string
-  /** 只返回此时间之后的日志行（行首前 19 字符按字典序比较，需形如 2026-07-12T07:17:40） */
-  since?: string
+/** 单条日志（原始行 + 行号）。 */
+export interface LogEntry {
+  line_number: number
+  content: string
 }
 
-// ============================================================================
-// SSE 诊断与运行时健康（internal/http/sse.go / snapshot.go）
-// ============================================================================
+// ---------------------------------------------------------------------------
+// SSE 连接状态
+// ---------------------------------------------------------------------------
 
-/** 单条 SSE 流的连接状态 */
+/** 单条流的连接名额读数。 */
 export interface SseStreamStatus {
   current_connections: number
   max_connections: number
-  /** 已达**本流**上限：客户端此时应停止重连，等用户手动重试 */
   limit_reached: boolean
 }
 
-/**
- * `GET /api/v2/stats/sse-status` 响应。
- * 两条流各自独立的上限（events 10 / logs 5）；`limit_reached` 必须按所属流判断，
- * 不能用一条流的上限推断另一条（这正是修复前的缺陷）。
- */
+/** 两条流各自的名额（GET /api/v2/stats/sse-status）；不得用一条推断另一条。 */
 export interface SseStatusResponse {
-  /** `/api/v2/events` 管理事件流 */
   events: SseStreamStatus
-  /** `/api/v2/logs/stream` 日志流 */
   logs: SseStreamStatus
 }
 
-/**
- * `GET /health`（与 `/healthz`）响应。
- * 注意：该端点不套 ApiResponse 信封；未就绪时 HTTP 状态为 503 但响应体仍是本结构。
- */
-export interface RuntimeSnapshot {
-  /** "ok"（内核租约已持有且 /proc/firewall 存在）或 "degraded" */
-  status: 'ok' | 'degraded'
-  /** 内核是否会接受本进程的指令：等价于 lease_state === 'held' */
-  netlink_ready: boolean
-  kmod_proc_present: boolean
-  ban_cache_initialized: boolean
-  ban_history_initialized: boolean
-  active_bans: number
-  /** 内核单实例注册租约的状态：非 held 时本进程指令会被内核静默丢弃 */
-  lease_state: 'none' | 'idle' | 'held' | 'refused' | 'lost'
-  /** 进入 lost 的累计次数（某一刻的快照看不出反复失联） */
-  lease_losses: number
-}
+// ---------------------------------------------------------------------------
+// 威胁情报源
+// ---------------------------------------------------------------------------
 
-// ============================================================================
-// 多维风险引擎（internal/risk/）
-// ============================================================================
-
-/** 单个 IP 的多维风险向量 */
-export interface RiskVectorResponse {
-  /** IP 地址 */
-  ip: string
-  /** 7 个维度的风险值（各维度独立衰减，半衰期 7 天） */
-  failure: number
-  ban: number
-  scan: number
-  bruteforce: number
-  ddos: number
-  geo: number
-  cluster: number
-  /** 加权和（各维度权重默认为 1.0） */
-  total_risk: number
-  /** 最近一次事件时刻（Unix 秒） */
-  last_event_at: number
-  /** 向量更新时间（Unix 秒） */
-  updated_at: number
-}
-
-/** `GET /api/v2/risk/vectors` 响应 */
-export interface RiskVectorListResponse {
-  /** 风险向量列表 */
-  vectors: RiskVectorResponse[]
-  /** 总数 */
-  total: number
-}
-
-/** 单条攻击事件记录 */
-export interface RiskEventEntry {
-  /** 事件 ID */
-  id: number
-  /** IP 地址 */
-  ip: string
-  /** 事件类型：failure / ban / scan / bruteforce / ddos / geo / cluster */
-  event_type: string
-  /** 该事件对风险向量的增量 */
-  increment: number
-  /** 事件发生时刻（Unix 秒） */
-  occurred_at: number
-}
-
-/** `GET /api/v2/risk/events/:ip` 响应 */
-export interface RiskEventResponse {
-  /** 查询的 IP */
-  ip: string
-  /** 该 IP 的事件列表（按时间倒序） */
-  events: RiskEventEntry[]
-  /** 事件总数 */
-  total: number
-}
-
-
-/** 单个威胁情报源 */
+/** 单个情报源状态。 */
 export interface ThreatFeedResponse {
   id: string
   name: string
@@ -881,13 +619,13 @@ export interface ThreatFeedResponse {
   last_error: string | null
 }
 
-/** 威胁情报源列表响应 */
+/** 情报源列表（GET /api/v2/threat-feeds）。 */
 export interface ThreatFeedListResponse {
   feeds: ThreatFeedResponse[]
   total: number
 }
 
-/** 威胁情报同步结果 */
+/** 一次同步的结果（POST /api/v2/threat-feeds/sync）。 */
 export interface ThreatFeedSyncResult {
   feed_id: string
   new_entries: number
@@ -895,7 +633,79 @@ export interface ThreatFeedSyncResult {
   synced_at: number
 }
 
-/** 综合分析摘要响应 */
+// ---------------------------------------------------------------------------
+// 异常检测
+// ---------------------------------------------------------------------------
+
+/** 异常检测载荷（GET /api/v2/stats/anomalies）；只观测、不触发封禁。 */
+export interface AnomalyResponse {
+  global_score: number
+  global_dimensions: DimensionScore[]
+  global_features: FeatureValue[] | null
+  global_baseline_p50: FeatureValue[]
+  global_baseline_p95: FeatureValue[]
+  global_sample_count: number
+  ip_anomalies: IpAnomalyEntry[]
+  timestamp: number
+}
+
+/** 单维度偏差分（0-1 归一化）。 */
+export interface DimensionScore {
+  name: string
+  score: number
+}
+
+/** 具名特征值。 */
+export interface FeatureValue {
+  name: string
+  value: number
+}
+
+/** per-IP 异常条目。 */
+export interface IpAnomalyEntry {
+  ip: string
+  score: number
+  dimensions: DimensionScore[]
+}
+
+// ---------------------------------------------------------------------------
+// 攻击源地理分布
+// ---------------------------------------------------------------------------
+
+/**
+ * 攻击源地理分布（GET /api/v2/stats/attack-geo）。
+ * 当前实现无 GeoIP 读库：geoip_enabled 恒 false、points 恒 []、located_ips 恒 0；
+ * 本机坐标三件套仍按配置返回。
+ */
+export interface AttackGeoResponse {
+  geoip_enabled: boolean
+  points: GeoPoint[]
+  total_ips: number
+  located_ips: number
+  server_latitude: number | null
+  server_longitude: number | null
+  server_location_source: string
+}
+
+/** 单个地理位置聚合。 */
+export interface GeoPoint {
+  latitude: number
+  longitude: number
+  country_code: string
+  country: string
+  city: string
+  subdivision: string
+  unique_ips: number
+  total_bans: number
+  top_ip: string
+  last_banned_at: number
+}
+
+// ---------------------------------------------------------------------------
+// 综合分析
+// ---------------------------------------------------------------------------
+
+/** 综合分析摘要（GET /api/v2/analysis/summary）。 */
 export interface AnalysisSummaryResponse {
   threat_level: ThreatLevel
   top_risk_ips: RiskVectorResponse[]
@@ -906,7 +716,7 @@ export interface AnalysisSummaryResponse {
   timestamp: number
 }
 
-/** 单 IP 综合分析响应 */
+/** 单 IP 综合分析（GET /api/v2/analysis/ip/:ip）。 */
 export interface AnalysisIpResponse {
   ip: string
   risk: RiskVectorResponse | null
@@ -915,3 +725,94 @@ export interface AnalysisIpResponse {
   prediction: AttackPrediction | null
   is_whitelisted: boolean
 }
+
+// ===========================================================================
+// 请求体（门禁不在 types.ts 核对，但端点与视图需要；集中声明便于校验复用）
+// ===========================================================================
+
+/** POST /api/v2/bans 请求体。duration 三态：缺席/0=永久，正数=时长（秒）。 */
+export interface CreateBanRequest {
+  ip: string
+  duration?: number | null
+  reason?: string | null
+}
+
+/** POST /api/v2/bans/batch 请求体（单次 1..100 条；duration 缺省 3600 秒）。 */
+export interface BatchBanRequest {
+  ips: string[]
+  duration?: number | null
+  reason?: string | null
+}
+
+/** PUT /api/v2/jails/:name 请求体：当前只允许改启用状态。 */
+export interface UpdateJailRequest {
+  enabled: boolean
+}
+
+/** PUT /api/v2/config 请求体：全部可选，只提交要改的字段。 */
+export interface UpdateConfigRequest {
+  sse_push_interval?: number | null
+  rate_warning_pps?: number | null
+  rate_critical_pps?: number | null
+  rate_warning_syn?: number | null
+  rate_critical_syn?: number | null
+  max_syn_per_second?: number | null
+  max_udp_per_second?: number | null
+  max_icmp_per_second?: number | null
+  max_ack_per_second?: number | null
+  max_rst_per_second?: number | null
+  max_fin_per_second?: number | null
+  static_threshold?: boolean | null
+  dynamic_threshold?: boolean | null
+  ddos_detection?: boolean | null
+  max_ban_entries?: number | null
+  max_whitelist_entries?: number | null
+  max_rate_entries?: number | null
+  max_local_ip_cache?: number | null
+  clear_logs_at?: string | null
+}
+
+/** POST /api/v2/whitelist 请求体。 */
+export interface CreateWhitelistRequest {
+  cidr: string
+}
+
+/** GET /api/v2/logs 查询参数。 */
+export interface LogQueryParams {
+  page?: number | null
+  page_size?: number | null
+  level?: string | null
+  keyword?: string | null
+  since?: string | null
+}
+
+/** 通用分页/排序查询参数（GET /api/v2/bans 等）。 */
+export interface PaginationParams {
+  page?: number | null
+  page_size?: number | null
+  sort_by?: string | null
+}
+
+// ===========================================================================
+// 前端专属辅助类型（非契约载荷；门禁只核对上面与契约同名的 interface）
+// ===========================================================================
+
+/**
+ * GET /api/v2/bans 支持的排序键。契约固定 7 个取值，未识别的值服务端回落
+ * `banned_at_desc`（见 defect HTTP_BAN_SORT_DOC_INCOMPLETE，已 fixed）。
+ * 这里独立成联合类型，供排序下拉与查询构造复用，避免散落字符串。
+ */
+export type BanSortKey =
+  | 'banned_at_desc'
+  | 'banned_at_asc'
+  | 'ip_asc'
+  | 'ip_desc'
+  | 'jail_asc'
+  | 'remaining_asc'
+  | 'remaining_desc'
+
+/** 威胁等级枚举（ThreatLevel.level 的取值域）；用于配色与文案映射。 */
+export type ThreatLevelName = 'safe' | 'low' | 'medium' | 'high' | 'critical'
+
+/** 日志级别（客户端过滤用；后端按 `[LEVEL]` 前缀，对 JSON 行失效）。 */
+export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR'
