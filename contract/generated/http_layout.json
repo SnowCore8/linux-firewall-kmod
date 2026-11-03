@@ -3,14 +3,14 @@
   "kind": "http",
   "name": "firewall_daemon_http",
   "namespace": "Http",
-  "base": "/api/v1",
+  "base": "/api/v2",
   "notes": [
     "信封 ApiResponse: code / data / message",
     "认证: 失败 10 次锁 60s，未授权状态码 401",
     "安全头 4 条",
-    "路由 60 条（无认证 14 / 需认证 46）",
-    "SSE GET /api/v1/events: 上限 10 连接，6 个事件",
-    "SSE GET /api/v1/logs/stream: 上限 5 连接，3 个事件",
+    "路由 65 条（无认证 14 / 需认证 51）",
+    "SSE GET /api/v2/events: 上限 10 连接，6 个事件",
+    "SSE GET /api/v2/logs/stream: 上限 5 连接，3 个事件",
     "错误形状 4 种",
     "响应 AnomalyResponse: 8 个字段",
     "响应 DimensionScore: 2 个字段",
@@ -80,6 +80,11 @@
     "请求 PaginationParams: 3 个字段",
     "响应 SseStreamStatus: 3 个字段",
     "响应 SseStatusResponse: 2 个字段",
+    "响应 ThreatFeedResponse: 10 个字段",
+    "响应 ThreatFeedListResponse: 2 个字段",
+    "响应 ThreatFeedSyncResult: 4 个字段",
+    "响应 AnalysisSummaryResponse: 7 个字段",
+    "响应 AnalysisIpResponse: 6 个字段",
     "缺陷记录: 18 条（已修 13 / 有意保留 1 / 未修 4；由 verify_http.py 核对语义）"
   ],
   "envelope": {
@@ -134,7 +139,7 @@
   "routes": [
     {
       "method": "GET",
-      "path": "/health",
+      "path": "/api/v2/health",
       "auth": "none",
       "handler": "Health",
       "returns": "type",
@@ -148,7 +153,7 @@
     },
     {
       "method": "GET",
-      "path": "/healthz",
+      "path": "/api/v2/healthz",
       "auth": "none",
       "handler": "Health",
       "returns": "type",
@@ -344,7 +349,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/events",
+      "path": "/api/v2/events",
       "auth": "required",
       "handler": "ServeHTTP",
       "returns": "stream",
@@ -367,7 +372,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/logs/stream",
+      "path": "/api/v2/logs/stream",
       "auth": "required",
       "handler": "StreamLogs",
       "returns": "stream",
@@ -383,11 +388,11 @@
         "error"
       ],
       "keepalive_secs": 15,
-      "note": "上限 5 与 /api/v1/events 的 10 **各自独立**；keep-alive 文本同为 \"keep-alive\"。"
+      "note": "上限 5 与 /api/v2/events 的 10 **各自独立**；keep-alive 文本同为 \"keep-alive\"。"
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats",
+      "path": "/api/v2/stats",
       "auth": "required",
       "handler": "Stats",
       "returns": "type",
@@ -401,7 +406,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/bans",
+      "path": "/api/v2/bans",
       "auth": "required",
       "handler": "ListBans",
       "returns": "type",
@@ -417,7 +422,7 @@
     },
     {
       "method": "POST",
-      "path": "/api/v1/bans",
+      "path": "/api/v2/bans",
       "auth": "required",
       "handler": "CreateBan",
       "returns": "type",
@@ -435,7 +440,7 @@
     },
     {
       "method": "DELETE",
-      "path": "/api/v1/bans/:ip",
+      "path": "/api/v2/bans/:ip",
       "auth": "required",
       "handler": "DeleteBan",
       "returns": "type",
@@ -451,7 +456,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/bans/:ip/detail",
+      "path": "/api/v2/bans/:ip/detail",
       "auth": "required",
       "handler": "BanDetail",
       "returns": "type",
@@ -467,7 +472,7 @@
     },
     {
       "method": "POST",
-      "path": "/api/v1/bans/unban-temporary",
+      "path": "/api/v2/bans/unban-temporary",
       "auth": "required",
       "handler": "UnbanAllTemporary",
       "returns": "type",
@@ -483,7 +488,7 @@
     },
     {
       "method": "POST",
-      "path": "/api/v1/bans/batch",
+      "path": "/api/v2/bans/batch",
       "auth": "required",
       "handler": "BatchBan",
       "returns": "type",
@@ -501,7 +506,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/jails",
+      "path": "/api/v2/jails",
       "auth": "required",
       "handler": "ListJails",
       "returns": "type",
@@ -515,7 +520,7 @@
     },
     {
       "method": "PUT",
-      "path": "/api/v1/jails/:name",
+      "path": "/api/v2/jails/:name",
       "auth": "required",
       "handler": "UpdateJail",
       "returns": "type",
@@ -530,11 +535,11 @@
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
-      "note": "请求体 UpdateJailRequest；Jail 不存在 → 404（信封内 code=404，非 HTTP 404）。成功载荷 {name, enabled, status: \"updated\"} 报的是这次写入的**期望状态**：写入点只改启用状态来源，执行体在下一个 poll 周期把它并进配置、重建监视集合并发布新的 jail 快照，GET /api/v1/jails 与 jails 域帧在那一刻之后才读到新值。这条写路径因此**不推 SSE 帧**——快照还没换形状时推一帧，发出的正是改动**前**的 jail 列表，而界面按 sseJails ?? restJails.data 取值，刚拨的开关会立刻弹回原位（见 defect HTTP_SSE_JAILS_NO_PUBLISHER 的接法）。"
+      "note": "请求体 UpdateJailRequest；Jail 不存在 → 404（信封内 code=404，非 HTTP 404）。成功载荷 {name, enabled, status: \"updated\"} 报的是这次写入的**期望状态**：写入点只改启用状态来源，执行体在下一个 poll 周期把它并进配置、重建监视集合并发布新的 jail 快照，GET /api/v2/jails 与 jails 域帧在那一刻之后才读到新值。这条写路径因此**不推 SSE 帧**——快照还没换形状时推一帧，发出的正是改动**前**的 jail 列表，而界面按 sseJails ?? restJails.data 取值，刚拨的开关会立刻弹回原位（见 defect HTTP_SSE_JAILS_NO_PUBLISHER 的接法）。"
     },
     {
       "method": "GET",
-      "path": "/api/v1/config",
+      "path": "/api/v2/config",
       "auth": "required",
       "handler": "GetConfig",
       "returns": "type",
@@ -550,7 +555,7 @@
     },
     {
       "method": "PUT",
-      "path": "/api/v1/config",
+      "path": "/api/v2/config",
       "auth": "required",
       "handler": "UpdateConfig",
       "returns": "type",
@@ -569,7 +574,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/whitelist",
+      "path": "/api/v2/whitelist",
       "auth": "required",
       "handler": "ListWhitelist",
       "returns": "type",
@@ -583,7 +588,7 @@
     },
     {
       "method": "POST",
-      "path": "/api/v1/whitelist",
+      "path": "/api/v2/whitelist",
       "auth": "required",
       "handler": "AddWhitelist",
       "returns": "type",
@@ -601,7 +606,7 @@
     },
     {
       "method": "DELETE",
-      "path": "/api/v1/whitelist/:cidr",
+      "path": "/api/v2/whitelist/:cidr",
       "auth": "required",
       "handler": "RemoveWhitelist",
       "returns": "type",
@@ -617,7 +622,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/whitelist/recommendations",
+      "path": "/api/v2/whitelist/recommendations",
       "auth": "required",
       "handler": "GetWhitelistRecommendations",
       "returns": "type",
@@ -634,7 +639,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/rates/current",
+      "path": "/api/v2/rates/current",
       "auth": "required",
       "handler": "RatesCurrent",
       "returns": "type",
@@ -648,7 +653,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/rates/history",
+      "path": "/api/v2/rates/history",
       "auth": "required",
       "handler": "GetRatesHistory",
       "returns": "type",
@@ -662,7 +667,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/rates/windows",
+      "path": "/api/v2/rates/windows",
       "auth": "required",
       "handler": "RatesWindows",
       "returns": "type",
@@ -676,7 +681,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/heatmap",
+      "path": "/api/v2/stats/heatmap",
       "auth": "required",
       "handler": "Heatmap",
       "returns": "type",
@@ -690,7 +695,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/recidivism",
+      "path": "/api/v2/stats/recidivism",
       "auth": "required",
       "handler": "Recidivism",
       "returns": "type",
@@ -707,7 +712,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/ban-effectiveness",
+      "path": "/api/v2/stats/ban-effectiveness",
       "auth": "required",
       "handler": "BanEffectiveness",
       "returns": "type",
@@ -717,11 +722,11 @@
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
-      "note": "载荷 BanEffectivenessResponse；其中 recidivism_rate（含 overall_recidivism_rate 与各 level 的）统一为**百分数 0-100**，与 /api/v1/stats/recidivism 同一个口径，前端两处共用同一个格式化函数（见 defect HTTP_RECIDIVISM_RATE_UNIT 的 resolution）。**不编业务码 = 历史库未初始化或查询失败也在 200 内降级**：levels 为 []、total_unique_ips/overall_recidivism_rate 为 0，summary 分别写「历史库未初始化：没有封禁底账…」与「封禁底账查询失败：本次没有分级成效读数」——面板上同一句「无样本」背后的两种原因必须能分开，否则运维不知道是该等数据还是该修库（服务端各留一条日志）"
+      "note": "载荷 BanEffectivenessResponse；其中 recidivism_rate（含 overall_recidivism_rate 与各 level 的）统一为**百分数 0-100**，与 /api/v2/stats/recidivism 同一个口径，前端两处共用同一个格式化函数（见 defect HTTP_RECIDIVISM_RATE_UNIT 的 resolution）。**不编业务码 = 历史库未初始化或查询失败也在 200 内降级**：levels 为 []、total_unique_ips/overall_recidivism_rate 为 0，summary 分别写「历史库未初始化：没有封禁底账…」与「封禁底账查询失败：本次没有分级成效读数」——面板上同一句「无样本」背后的两种原因必须能分开，否则运维不知道是该等数据还是该修库（服务端各留一条日志）"
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/periodic-attackers",
+      "path": "/api/v2/stats/periodic-attackers",
       "auth": "required",
       "handler": "PeriodicAttackers",
       "returns": "type",
@@ -738,7 +743,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/collaborative-attacks",
+      "path": "/api/v2/stats/collaborative-attacks",
       "auth": "required",
       "handler": "CollaborativeAttacks",
       "returns": "type",
@@ -755,7 +760,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/udp-ports",
+      "path": "/api/v2/stats/udp-ports",
       "auth": "required",
       "handler": "UdpPorts",
       "returns": "type",
@@ -769,7 +774,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/icmp-types",
+      "path": "/api/v2/stats/icmp-types",
       "auth": "required",
       "handler": "IcmpTypes",
       "returns": "type",
@@ -783,7 +788,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/sse-status",
+      "path": "/api/v2/stats/sse-status",
       "auth": "required",
       "handler": "SSEStatus",
       "returns": "type",
@@ -797,7 +802,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/ban-duration-histogram",
+      "path": "/api/v2/stats/ban-duration-histogram",
       "auth": "required",
       "handler": "BanDurationHistogram",
       "returns": "type",
@@ -811,7 +816,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/packet-sizes",
+      "path": "/api/v2/stats/packet-sizes",
       "auth": "required",
       "handler": "PacketSizes",
       "returns": "type",
@@ -825,7 +830,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/ttl-distribution",
+      "path": "/api/v2/stats/ttl-distribution",
       "auth": "required",
       "handler": "TtlDistribution",
       "returns": "type",
@@ -839,7 +844,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/ip-fragments",
+      "path": "/api/v2/stats/ip-fragments",
       "auth": "required",
       "handler": "IpFragments",
       "returns": "type",
@@ -853,7 +858,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/port-scanners",
+      "path": "/api/v2/stats/port-scanners",
       "auth": "required",
       "handler": "PortScanners",
       "returns": "type",
@@ -867,7 +872,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/service-probes",
+      "path": "/api/v2/stats/service-probes",
       "auth": "required",
       "handler": "ServiceProbes",
       "returns": "type",
@@ -881,7 +886,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/ban-duration-recommendations",
+      "path": "/api/v2/stats/ban-duration-recommendations",
       "auth": "required",
       "handler": "BanDurationRecommendations",
       "returns": "type",
@@ -898,7 +903,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/reputation",
+      "path": "/api/v2/stats/reputation",
       "auth": "required",
       "handler": "Reputation",
       "returns": "type",
@@ -965,7 +970,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/threshold-recommendations",
+      "path": "/api/v2/stats/threshold-recommendations",
       "auth": "required",
       "handler": "ThresholdRecommendations",
       "returns": "type",
@@ -982,7 +987,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/network-distribution",
+      "path": "/api/v2/stats/network-distribution",
       "auth": "required",
       "handler": "NetworkDistribution",
       "returns": "type",
@@ -999,7 +1004,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/attack-predictions",
+      "path": "/api/v2/stats/attack-predictions",
       "auth": "required",
       "handler": "AttackPredictions",
       "returns": "type",
@@ -1016,7 +1021,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/anomalies",
+      "path": "/api/v2/stats/anomalies",
       "auth": "required",
       "handler": "Anomalies",
       "returns": "type",
@@ -1030,7 +1035,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/stats/attack-geo",
+      "path": "/api/v2/stats/attack-geo",
       "auth": "required",
       "handler": "AttackGeo",
       "returns": "type",
@@ -1044,7 +1049,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/logs",
+      "path": "/api/v2/logs",
       "auth": "required",
       "handler": "GetLogs",
       "returns": "type",
@@ -1059,6 +1064,91 @@
       "events": [],
       "keepalive_secs": null,
       "note": "查询参数 LogQueryParams；分页参数非法 → 40005；载荷 LogPageResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/threat-feeds",
+      "auth": "required",
+      "handler": "ListThreatFeeds",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        50003
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "外部威胁情报源列表与同步状态；载荷 ThreatFeedListResponse"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/threat-feeds/sync",
+      "auth": "required",
+      "handler": "SyncThreatFeed",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        50002,
+        50003
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "手动触发一次威胁情报同步；载荷 ThreatFeedSyncResult"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/threat-feeds/:id",
+      "auth": "required",
+      "handler": "GetThreatFeed",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        404,
+        50003
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "单个威胁情报源详情；载荷 ThreatFeedResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/analysis/summary",
+      "auth": "required",
+      "handler": "AnalysisSummary",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        50002,
+        50003
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "综合分析摘要：聚合复发、预测、异常检测的一页结论；载荷 AnalysisSummaryResponse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/analysis/ip/:ip",
+      "auth": "required",
+      "handler": "AnalysisIp",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        40006,
+        50002,
+        50003
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "单个 IP 的综合分析（风险向量 + 封禁历史 + 信誉 + 预测）；载荷 AnalysisIpResponse"
     }
   ],
   "types": {
@@ -3081,6 +3171,162 @@
           "type": "SseStreamStatus"
         }
       ]
+    },
+    "ThreatFeedResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "ThreatFeedResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "id",
+          "type": "String"
+        },
+        {
+          "key": "name",
+          "type": "String"
+        },
+        {
+          "key": "source_url",
+          "type": "String"
+        },
+        {
+          "key": "enabled",
+          "type": "bool"
+        },
+        {
+          "key": "category",
+          "type": "String"
+        },
+        {
+          "key": "confidence",
+          "type": "f64"
+        },
+        {
+          "key": "last_synced_at",
+          "type": "Option<i64>"
+        },
+        {
+          "key": "entry_count",
+          "type": "u32"
+        },
+        {
+          "key": "sync_status",
+          "type": "String"
+        },
+        {
+          "key": "last_error",
+          "type": "Option<String>"
+        }
+      ]
+    },
+    "ThreatFeedListResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "ThreatFeedListResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "feeds",
+          "type": "Vec<ThreatFeedResponse>"
+        },
+        {
+          "key": "total",
+          "type": "u32"
+        }
+      ]
+    },
+    "ThreatFeedSyncResult": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "ThreatFeedSyncResult",
+      "inline": false,
+      "fields": [
+        {
+          "key": "feed_id",
+          "type": "String"
+        },
+        {
+          "key": "new_entries",
+          "type": "u32"
+        },
+        {
+          "key": "updated_entries",
+          "type": "u32"
+        },
+        {
+          "key": "synced_at",
+          "type": "i64"
+        }
+      ]
+    },
+    "AnalysisSummaryResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "AnalysisSummaryResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "threat_level",
+          "type": "ThreatLevel"
+        },
+        {
+          "key": "top_risk_ips",
+          "type": "Vec<RiskVectorResponse>"
+        },
+        {
+          "key": "active_attacks",
+          "type": "u32"
+        },
+        {
+          "key": "anomalies_count",
+          "type": "u32"
+        },
+        {
+          "key": "collaborative_count",
+          "type": "u32"
+        },
+        {
+          "key": "summary",
+          "type": "String"
+        },
+        {
+          "key": "timestamp",
+          "type": "i64"
+        }
+      ]
+    },
+    "AnalysisIpResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "AnalysisIpResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ip",
+          "type": "String"
+        },
+        {
+          "key": "risk",
+          "type": "Option<RiskVectorResponse>"
+        },
+        {
+          "key": "ban_history",
+          "type": "Vec<BanResponse>"
+        },
+        {
+          "key": "reputation",
+          "type": "Option<ReputationEntryResponse>"
+        },
+        {
+          "key": "prediction",
+          "type": "Option<AttackPrediction>"
+        },
+        {
+          "key": "is_whitelisted",
+          "type": "bool"
+        }
+      ]
     }
   },
   "codes": {
@@ -3180,7 +3426,7 @@
       "status": "fixed",
       "fix": "src/daemon/internal/http/bans.go:WriteSuccess(w, PaginatedResponse[BanResponse]{",
       "reason": "",
-      "resolution": "统一为单一形状：GET /api/v1/bans 一律返回分页信封 PaginatedResponse<BanResponse>（读 page / page_size / sort_by，缺省 page=1、page_size=20、上限 100），前端只保留一层返回类型。",
+      "resolution": "统一为单一形状：GET /api/v2/bans 一律返回分页信封 PaginatedResponse<BanResponse>（读 page / page_size / sort_by，缺省 page=1、page_size=20、上限 100），前端只保留一层返回类型。",
       "text": "『data 一定是对象』这一前提曾不成立：Go 面 src/daemon/internal/http/bans.go 的 ListBans 把内存镜像**全量写成裸数组**（既不读 page/page_size 也不读 sort_by），而前端 types.ts 只声明 PaginatedResponse<BanResponse> 一层——同一份契约在两侧是两个形状，按信封取 items 的调用一律落空。旧 Rust 实现的现场是另一种表现（不带 query 返回裸数组、带了才返回信封，前端为此维护两个重载签名与运行期分支），那条现场随旧实现一并退役。Go 面现在只有一条返回路径：ListBans 经 queryPagination 读三个参数、排序后切出页内区间，写出 PaginatedResponse[BanResponse]，没有任何裸数组分支；前端 endpoints.ts 的 getBans 也只有一个签名，返回 Promise<PaginatedResponse<BanResponse>>"
     },
     {
@@ -3190,7 +3436,7 @@
       "fix": "src/daemon/internal/http/routes.go:streamStatus(h.logStream)",
       "reason": "",
       "resolution": "sse-status 载荷扩展为同时报告两条流：events 与 logs 各自的 current / max，前端按所属流的上限判断 limit_reached，不再用单一上限推断另一条流。",
-      "text": "/api/v1/stats/sse-status 报的是**进程级单一计数**（Go 面 routes.go 的 SSEStatus 取 server.ActiveConnections / MaxConnections），而不是两条 SSE 流各自的连接数与上限：契约给 /api/v1/events 定 10、给 /api/v1/logs/stream 定 5，Go 里两者共用同一个 broker（config.MaxSSEConnections=32）。前端用它判断『是否达到上限』会在日志流被拒时误判为未达上限，从而把 503 当成网络故障无限重连。Go 面现在按流报：SSEStatus 的载荷是 events / logs 两份读数，各自取自所在流的名额账本（Active/Max/AtLimit），上限来自生成物常量，没有第三处副本"
+      "text": "/api/v2/stats/sse-status 报的是**进程级单一计数**（Go 面 routes.go 的 SSEStatus 取 server.ActiveConnections / MaxConnections），而不是两条 SSE 流各自的连接数与上限：契约给 /api/v2/events 定 10、给 /api/v2/logs/stream 定 5，Go 里两者共用同一个 broker（config.MaxSSEConnections=32）。前端用它判断『是否达到上限』会在日志流被拒时误判为未达上限，从而把 503 当成网络故障无限重连。Go 面现在按流报：SSEStatus 的载荷是 events / logs 两份读数，各自取自所在流的名额账本（Active/Max/AtLimit），上限来自生成物常量，没有第三处副本"
     },
     {
       "name": "HTTP_RECIDIVISM_RATE_UNIT",
@@ -3198,8 +3444,8 @@
       "status": "fixed",
       "fix": "src/daemon/internal/analysis/recommendations.go:float64(recidivistIPs) / float64(uniqueIPs) * 100",
       "reason": "",
-      "resolution": "统一为百分数 0–100：Go 面两处 recidivism_rate 产出点（persist/ban_events.go 的 REST 取数、analysis/recommendations.go 的阈值推荐）同为 `* 100`。契约保留的前置要求：/api/v1/stats/ban-effectiveness 接回时其各 level 必须沿用同一百分数口径，前端对两处使用同一个格式化函数。",
-      "text": "recidivism_rate 同名不同单位：旧 Rust 实现里 /api/v1/stats/recidivism 返回百分数（0–100）而 /api/v1/stats/ban-effectiveness 的各 level 返回比例（0–1），前端用同一个格式化函数渲染会差 100 倍。Go 重写后只剩两处产出点且都是百分数（src/daemon/internal/persist/ban_events.go 与 src/daemon/internal/analysis/recommendations.go），ban-effectiveness 当时尚未接线，因此现网上没有第二单位可比——缺陷按 Go 现状记为已修，但口径要求随 resolution 一并留在契约里。**现在前置要求也落实了**：ban-effectiveness 已接线（src/daemon/internal/http/analysis_payload.go 的 mapBanEffectiveness），各 level 与 overall 都是 `* 100` 的百分数，前端 types.ts 里那两处曾写「0.0-1.0 的比例值」的注释同步改成百分数口径（那一栏没有任何渲染分支读过它，写错只会在接回时把人带偏）"
+      "resolution": "统一为百分数 0–100：Go 面两处 recidivism_rate 产出点（persist/ban_events.go 的 REST 取数、analysis/recommendations.go 的阈值推荐）同为 `* 100`。契约保留的前置要求：/api/v2/stats/ban-effectiveness 接回时其各 level 必须沿用同一百分数口径，前端对两处使用同一个格式化函数。",
+      "text": "recidivism_rate 同名不同单位：旧 Rust 实现里 /api/v2/stats/recidivism 返回百分数（0–100）而 /api/v2/stats/ban-effectiveness 的各 level 返回比例（0–1），前端用同一个格式化函数渲染会差 100 倍。Go 重写后只剩两处产出点且都是百分数（src/daemon/internal/persist/ban_events.go 与 src/daemon/internal/analysis/recommendations.go），ban-effectiveness 当时尚未接线，因此现网上没有第二单位可比——缺陷按 Go 现状记为已修，但口径要求随 resolution 一并留在契约里。**现在前置要求也落实了**：ban-effectiveness 已接线（src/daemon/internal/http/analysis_payload.go 的 mapBanEffectiveness），各 level 与 overall 都是 `* 100` 的百分数，前端 types.ts 里那两处曾写「0.0-1.0 的比例值」的注释同步改成百分数口径（那一栏没有任何渲染分支读过它，写错只会在接回时把人带偏）"
     },
     {
       "name": "HTTP_TODAY_BANS_EQUALS_TOTAL",
@@ -3208,7 +3454,7 @@
       "fix": "src/daemon/internal/http/stats.go:func startOfToday(t time.Time) time.Time",
       "reason": "",
       "resolution": "today_bans 必须是真实「今日」窗口：本地时区自然日 00:00 起，按各封禁的 banned_at 计数，窗口定义与时区写进 StatsResponse.today_bans 的字段注释；REST 与 SSE 两条读路径共用同一个取值。",
-      "text": "today_bans 与 total_bans 取同一个值，『今日』这一时间窗从未实现，仪表盘上两个数字永远相同。Go 面接线时（契约声明的 GET /api/v1/stats 尚未注册）这条缺陷没有现场，但**不因未实现而算已修**。现在端点已接线且带真实窗口：src/daemon/internal/http/stats.go 以本地时区自然日 00:00 为起点，经 persist.CountBanEventsBetween 的半开区间 [start, end) 统计历史库 ban_events.banned_at，与 total_bans（内核自加载起的累计计数器）分属两路；结果连同近 5 分钟窗口一起缓存 30 秒（午夜切换最多晚 30 秒），REST 与 SSE 共用同一个 buildStats(now)，同一个数字不取决于它从哪条路读出来。历史库缺席时 today_bans 报 0——那一格说的是「没有读数」，不是抄一个别的计数"
+      "text": "today_bans 与 total_bans 取同一个值，『今日』这一时间窗从未实现，仪表盘上两个数字永远相同。Go 面接线时（契约声明的 GET /api/v2/stats 尚未注册）这条缺陷没有现场，但**不因未实现而算已修**。现在端点已接线且带真实窗口：src/daemon/internal/http/stats.go 以本地时区自然日 00:00 为起点，经 persist.CountBanEventsBetween 的半开区间 [start, end) 统计历史库 ban_events.banned_at，与 total_bans（内核自加载起的累计计数器）分属两路；结果连同近 5 分钟窗口一起缓存 30 秒（午夜切换最多晚 30 秒），REST 与 SSE 共用同一个 buildStats(now)，同一个数字不取决于它从哪条路读出来。历史库缺席时 today_bans 报 0——那一格说的是「没有读数」，不是抄一个别的计数"
     },
     {
       "name": "HTTP_FAILURE_HISTORY_NOT_PERSISTED",
@@ -3216,7 +3462,7 @@
       "status": "open",
       "fix": "",
       "reason": "",
-      "resolution": "失败尝试与 DDoS 命中要能按时间窗回读，才谈得上热力图与趋势：持久化面需要一张按小时（或更细）归集的活动表，写入者是日志解析器与事件泵，读取者是 /api/v1/stats 的 failed_attempts_trend 与 /api/v1/stats/heatmap。在此之前这两个端点**只报已持久化的那一维**（封禁），其余槽位报 0 且不猜。",
+      "resolution": "失败尝试与 DDoS 命中要能按时间窗回读，才谈得上热力图与趋势：持久化面需要一张按小时（或更细）归集的活动表，写入者是日志解析器与事件泵，读取者是 /api/v2/stats 的 failed_attempts_trend 与 /api/v2/stats/heatmap。在此之前这两个端点**只报已持久化的那一维**（封禁），其余槽位报 0 且不猜。",
       "text": "failed_attempts 只有**本进程**的累计计数（config.GetJailStats(name).FailedAttempts），重启归零、没有按天历史；ddos_events 同理是进程内计数器（kernel.CounterDdosEvents）。于是 StatsResponse.failed_attempts_trend 无法由真源产出（Go 面写的是空标签 + 全零序列），HourlyHeatmap 的 failed_attempts 与 ddos_events 两列也恒为 0——只有 bans 一列来自历史库 ban_events 的真实时间窗。把当前累计值平摊到 7 天会凭空造出一条斜线，读图的人会当趋势看，因此这里选择报空"
     },
     {
@@ -3253,7 +3499,7 @@
       "fix": "",
       "reason": "",
       "resolution": "接一个 MaxMind 读库（mmdb）：把 ban_events 里出现过的地址逐条查库，按 (国家, 城市) 聚合成 GeoPoint（同段内 unique_ips/total_bans 计数、top_ip 取封禁次数最多者、last_banned_at 取最近一次），最多 200 个并按 total_bans 降序；geoip_enabled 改为「路径存在且可读」的实测结果而不是配置项的字符串非空；server_location_source 若要给 \"detected\"，必须由 geoip_detect_egress + geoip_egress_probe_url 那条探测路径真实产出并在配置有值时让位给 \"config\"。前端 Globe.tsx 的 EmptyState 分支因此才有真正的退出条件。",
-      "text": "GET /api/v1/stats/attack-geo 已接线，但它**只能**报「没有地理读数」。配置项 geoip_db_path 与 geoip_detect_egress / geoip_egress_probe_url 在 src/daemon/internal/config/parser.go 里被解析并保存（applyGeoip），却没有任何消费方——仓库里没有 mmdb 读取实现，也没有 egress 探测。于是这一条恒定产出 geoip_enabled=false、points=[]、total_ips=0、located_ips=0，前端 frontend/src/views/Globe.tsx 的 `!data.geoip_enabled` 分支永远为真，整个页面停在 EmptyState：运维看不出这是「这台机器上没有地理库」还是「攻击全部来自无法定位的地址」，而全球攻击视图是面板上唯一回答「攻击从哪儿来」的一页。本机坐标三件套有真源（server_latitude/server_longitude，成对给出才生效），所以地图上的本机标记与 server_location_source=\"config\" 是可用的一半；\"detected\" 这个取值本实现不产出，也不拿猜测的经纬度冒充探测结果。这是**功能缺失**而不是数据缺失：路由、载荷与降级形状都已按契约就位，缺的是地址→坐标那一步"
+      "text": "GET /api/v2/stats/attack-geo 已接线，但它**只能**报「没有地理读数」。配置项 geoip_db_path 与 geoip_detect_egress / geoip_egress_probe_url 在 src/daemon/internal/config/parser.go 里被解析并保存（applyGeoip），却没有任何消费方——仓库里没有 mmdb 读取实现，也没有 egress 探测。于是这一条恒定产出 geoip_enabled=false、points=[]、total_ips=0、located_ips=0，前端 frontend/src/views/Globe.tsx 的 `!data.geoip_enabled` 分支永远为真，整个页面停在 EmptyState：运维看不出这是「这台机器上没有地理库」还是「攻击全部来自无法定位的地址」，而全球攻击视图是面板上唯一回答「攻击从哪儿来」的一页。本机坐标三件套有真源（server_latitude/server_longitude，成对给出才生效），所以地图上的本机标记与 server_location_source=\"config\" 是可用的一半；\"detected\" 这个取值本实现不产出，也不拿猜测的经纬度冒充探测结果。这是**功能缺失**而不是数据缺失：路由、载荷与降级形状都已按契约就位，缺的是地址→坐标那一步"
     },
     {
       "name": "HTTP_SERVICE_PROBE_NO_TOTAL",
@@ -3262,7 +3508,7 @@
       "fix": "src/daemon/internal/http/snapshot.go:TotalDetected: a.ServiceProbeCount",
       "reason": "",
       "resolution": "ServiceProbeResponse 补 total_detected（与 PortScanResponse 形状对齐），前端两处共用同一套「检出 N 个」文案。",
-      "text": "ServiceProbeResponse 缺 total_detected，而同类的 PortScanResponse 有，前端在两个页面上无法用同一套『检出 N 个』文案。旧 Rust 面 service-probes 从未产出这个字段。Go 面两条端点已接线（/api/v1/stats/service-probes 与 /api/v1/stats/port-scanners），两侧现在都有 total_detected，形状差异消失。**注意闭合的只是形状**：两处同名不同量——port-scanners 带的是内核累计检出事件数，service-probes 带的是本次快照打包的行数，该口径差异由 defect HTTP_SCANNER_TOTAL_COUNT_ASYMMETRY 单独跟踪"
+      "text": "ServiceProbeResponse 缺 total_detected，而同类的 PortScanResponse 有，前端在两个页面上无法用同一套『检出 N 个』文案。旧 Rust 面 service-probes 从未产出这个字段。Go 面两条端点已接线（/api/v2/stats/service-probes 与 /api/v2/stats/port-scanners），两侧现在都有 total_detected，形状差异消失。**注意闭合的只是形状**：两处同名不同量——port-scanners 带的是内核累计检出事件数，service-probes 带的是本次快照打包的行数，该口径差异由 defect HTTP_SCANNER_TOTAL_COUNT_ASYMMETRY 单独跟踪"
     },
     {
       "name": "HTTP_HEALTH_NOT_ENVELOPED",
@@ -3277,10 +3523,10 @@
       "name": "HTTP_LOG_SSE_LIMIT_DOC_DRIFT",
       "severity": "low",
       "status": "fixed",
-      "fix": "src/daemon/internal/http/sse.go:httpcontract.SSEMaxConnectionsApiV1LogsStream",
+      "fix": "src/daemon/internal/http/sse.go:httpcontract.SSEMaxConnectionsApiV2LogsStream",
       "reason": "",
       "resolution": "两条流各自独立计数与上限（events 10 / logs 5），并且注释只描述自己那条流；文档、常量、实现三者一致。",
-      "text": "契约声明两条流各自独立上限（/api/v1/events 10、/api/v1/logs/stream 5）。Go 面两个数都不存在：/api/v1/events 由 src/daemon/internal/http/sse.go 的 SSEBroker 承接，上限只有一个 `maxClients`，取自 config.MaxSSEConnections（默认 32，见 src/daemon/internal/config/types.go）；/api/v1/logs/stream 更根本没走 broker——logs.go 的 StreamLogs 每连接起一个 goroutine 直接写响应，没有任何连接计数与上限。表现：events 连到 30 条才拒，而按契约它本该在 10 条就拒；日志流则无上限，慢客户端只会把 broadcast 队列挤满（Publish 队列满时直接丢消息）。Go 面现在是一条流一个名额账本（SSEStream）：组合根分别建 NewEventsBroker 与 NewLogsStream，两者的 max 与心跳各自引用生成物常量 SSEMaxConnectionsApiV1* / SSEKeepaliveSecondsApiV1*，日志流改走同一条 streamSSE 接入路径，满额同样回 503"
+      "text": "契约声明两条流各自独立上限（/api/v2/events 10、/api/v2/logs/stream 5）。Go 面两个数都不存在：/api/v2/events 由 src/daemon/internal/http/sse.go 的 SSEBroker 承接，上限只有一个 `maxClients`，取自 config.MaxSSEConnections（默认 32，见 src/daemon/internal/config/types.go）；/api/v2/logs/stream 更根本没走 broker——logs.go 的 StreamLogs 每连接起一个 goroutine 直接写响应，没有任何连接计数与上限。表现：events 连到 30 条才拒，而按契约它本该在 10 条就拒；日志流则无上限，慢客户端只会把 broadcast 队列挤满（Publish 队列满时直接丢消息）。Go 面现在是一条流一个名额账本（SSEStream）：组合根分别建 NewEventsBroker 与 NewLogsStream，两者的 max 与心跳各自引用生成物常量 SSEMaxConnectionsApiV1* / SSEKeepaliveSecondsApiV1*，日志流改走同一条 streamSSE 接入路径，满额同样回 503"
     },
     {
       "name": "HTTP_BAN_SORT_DOC_INCOMPLETE",
@@ -3289,7 +3535,7 @@
       "fix": "src/daemon/internal/http/bans.go:sort.SliceStable(items",
       "reason": "",
       "resolution": "服务端实现并文档化同一套 7 个取值（banned_at_desc / banned_at_asc / ip_asc / ip_desc / remaining_asc / remaining_desc / jail_asc），注释、代码分支与前端 BanSortKey 三者逐字一致；未识别的取值回落 banned_at_desc。",
-      "text": "排序键曾三层各有说法：前端 frontend/src/api/params.ts 与 types.ts 的 BanSortKey 各列 7 个取值（types.ts 的注释还指向已删除的 ban_ops.rs），契约要求 GET /api/v1/bans 支持这些取值，而 Go 面 src/daemon/internal/http/bans.go 的 ListBans **一个都不实现**——它不读 sort_by，连 page/page_size 也不读。旧现场（Rust 的 sort_by 文档只列 4 值、实现 7 值）随旧实现退役。现在服务端有一份 banSortKeys 表承载全部 7 个分支（每项一个比较闭包），ListBans 取 params.sortByOr() 查表、未识别的值回落 banned_at_desc，取值集合与前端 params.ts / types.ts 的 BanSortKey 逐字相同"
+      "text": "排序键曾三层各有说法：前端 frontend/src/api/params.ts 与 types.ts 的 BanSortKey 各列 7 个取值（types.ts 的注释还指向已删除的 ban_ops.rs），契约要求 GET /api/v2/bans 支持这些取值，而 Go 面 src/daemon/internal/http/bans.go 的 ListBans **一个都不实现**——它不读 sort_by，连 page/page_size 也不读。旧现场（Rust 的 sort_by 文档只列 4 值、实现 7 值）随旧实现退役。现在服务端有一份 banSortKeys 表承载全部 7 个分支（每项一个比较闭包），ListBans 取 params.sortByOr() 查表、未识别的值回落 banned_at_desc，取值集合与前端 params.ts / types.ts 的 BanSortKey 逐字相同"
     },
     {
       "name": "HTTP_READ_PATH_WRITES_STATE",
@@ -3316,7 +3562,7 @@
       "fix": "src/daemon/internal/http/publish.go:func (h *APIHandlers) PublishJails",
       "reason": "",
       "resolution": "jails 域的生产者接在**快照真正换形状的那一刻**：入站执行体发布 jail 配置快照后经 runtime.JailSnapshotListener 同步通知组合根，由 HTTP 侧 Publish 域名 jails，载荷与该域 REST 由同一个折表函数产出。各写入点（jail 启用/禁用、热重载、回滚、内核配置指令）不再各自推帧——只在快照属主那里推一次，订阅者收到的必然是生效后的形状。",
-      "text": "契约把 jails 列为 /api/v1/events 的订阅域，但 Go 面曾没有任何 jails 发布者：src/daemon/internal/kernel/consumer.go 的发布域常量只有 DomainBans、DomainWhitelist、DomainStats、DomainRates，采样周期变化的也只有 stats/rates 一类数值域。前端订阅 jails 后取值写作 sseJails ?? restJails.data，SSE 一旦有过首帧，REST 那份永远取不到，于是写后的 reload() 与页内刷新按钮全是死代码——改 Jail 开关后界面弹「已启用」，开关却弹回原位，只有整页刷新（重连 SSE、重收首帧）才看得到新值。旧实现靠每个 tick 无条件重发全部 5 个域掩盖了「jails 没有真实变更触发」，按域推送把掩盖拿掉后缺失的生产者就暴露成用户可见的不更新。REST 侧的数据源这一半先就位（执行体在装配、热重载、回滚、内核指令与启用状态同步时发布 jail 配置快照，见 GET /api/v1/jails 的注释），本缺陷闭合的是剩下那一半：**变更触发上的 SSE 生产者**。接法不是把 jails 塞回泵的域常量（jails 不随采样变化，塞回去等于每个 tick 无脑重发同一份载荷，正是 HTTP_SSE_RESERIALIZES_EVERY_DOMAIN 记过的病），而是让快照的属主在发布的那一刻喊一声：runtime.InboundExecutor.publishJailSnapshot → JailSnapshotListener.OnJailSnapshotChanged → 组合根的桥 → http.APIHandlers.PublishJails → SSEBroker 的逐字面量帧。监听器接口定义在 runtime 侧、由组合根接线，执行体不依赖 HTTP 包；帧载荷出自 http/sse_payload.go，与 GET /api/v1/jails 同形同值。机械探针的判据随之从「consumer.go 里有没有 jails 这个域」改成「jails 有没有字面发布点，且执行体的快照发布点会不会通知它」——前一句在按域推送的设计下永远是假的，后两句才是这个缺陷真正要的因果"
+      "text": "契约把 jails 列为 /api/v2/events 的订阅域，但 Go 面曾没有任何 jails 发布者：src/daemon/internal/kernel/consumer.go 的发布域常量只有 DomainBans、DomainWhitelist、DomainStats、DomainRates，采样周期变化的也只有 stats/rates 一类数值域。前端订阅 jails 后取值写作 sseJails ?? restJails.data，SSE 一旦有过首帧，REST 那份永远取不到，于是写后的 reload() 与页内刷新按钮全是死代码——改 Jail 开关后界面弹「已启用」，开关却弹回原位，只有整页刷新（重连 SSE、重收首帧）才看得到新值。旧实现靠每个 tick 无条件重发全部 5 个域掩盖了「jails 没有真实变更触发」，按域推送把掩盖拿掉后缺失的生产者就暴露成用户可见的不更新。REST 侧的数据源这一半先就位（执行体在装配、热重载、回滚、内核指令与启用状态同步时发布 jail 配置快照，见 GET /api/v2/jails 的注释），本缺陷闭合的是剩下那一半：**变更触发上的 SSE 生产者**。接法不是把 jails 塞回泵的域常量（jails 不随采样变化，塞回去等于每个 tick 无脑重发同一份载荷，正是 HTTP_SSE_RESERIALIZES_EVERY_DOMAIN 记过的病），而是让快照的属主在发布的那一刻喊一声：runtime.InboundExecutor.publishJailSnapshot → JailSnapshotListener.OnJailSnapshotChanged → 组合根的桥 → http.APIHandlers.PublishJails → SSEBroker 的逐字面量帧。监听器接口定义在 runtime 侧、由组合根接线，执行体不依赖 HTTP 包；帧载荷出自 http/sse_payload.go，与 GET /api/v2/jails 同形同值。机械探针的判据随之从「consumer.go 里有没有 jails 这个域」改成「jails 有没有字面发布点，且执行体的快照发布点会不会通知它」——前一句在按域推送的设计下永远是假的，后两句才是这个缺陷真正要的因果"
     },
     {
       "name": "HTTP_WHITELIST_KEY_DIVERGENCE",
@@ -3334,7 +3580,7 @@
       "fix": "src/daemon/internal/http/bans.go:duration := uint64(banDefaultBatchSecs)",
       "reason": "",
       "resolution": "批量封禁显式下发有时长（契约里 duration 缺省即 3600 秒），并且只有显式 `permanent = true` 才产生永久封禁；`duration` 缺省/0 一律不得升格为永久。请求体形状与上限按契约：`{ips, duration, reason}`，单次 1..100 条，越界返回业务码 40005。",
-      "text": "『多选若干 IP → 批量封禁』曾在确认弹窗承诺『统一使用 3600 秒』的情况下把这批 IP 全部永久封禁。Go 面的现场与旧实现同源：src/daemon/internal/http/bans.go 的 BatchBan 写作 `isPermanent := req.Duration == 0`，请求体不带 duration 就是永久。两个次生后果一条是退路、一条是形状：① /api/v1/bans/unban-temporary 只解封临时封禁，这些条目它看不见（total=0）；② 前端 endpoints.ts 的 batchBan 曾 POST 裸 `string[]`，与服务端解的 `{ips, duration, reason}` 不同形。现在 BatchBan 解的是契约的 BatchBanRequest，`IsPermanent` 恒为 false、到期时间按 `duration` 缺省 3600 秒算出，越界（空列表 / >100 条）在任何一条封禁落下之前整批回 40005；前端 batchBan 也改为发送同形对象，注释与契约的 100 条上限一致"
+      "text": "『多选若干 IP → 批量封禁』曾在确认弹窗承诺『统一使用 3600 秒』的情况下把这批 IP 全部永久封禁。Go 面的现场与旧实现同源：src/daemon/internal/http/bans.go 的 BatchBan 写作 `isPermanent := req.Duration == 0`，请求体不带 duration 就是永久。两个次生后果一条是退路、一条是形状：① /api/v2/bans/unban-temporary 只解封临时封禁，这些条目它看不见（total=0）；② 前端 endpoints.ts 的 batchBan 曾 POST 裸 `string[]`，与服务端解的 `{ips, duration, reason}` 不同形。现在 BatchBan 解的是契约的 BatchBanRequest，`IsPermanent` 恒为 false、到期时间按 `duration` 缺省 3600 秒算出，越界（空列表 / >100 条）在任何一条封禁落下之前整批回 40005；前端 batchBan 也改为发送同形对象，注释与契约的 100 条上限一致"
     }
   ]
 }

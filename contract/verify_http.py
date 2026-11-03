@@ -158,8 +158,8 @@ AUTH_CONSTS = {
 # 两条流各自一个常量（10 / 5）是契约里「两条流互不共享」的唯一机械证据：
 # 若 Go 侧只留一个共用值，缺陷 HTTP_LOG_SSE_LIMIT_DOC_DRIFT 就换了个形态复发。
 SSE_LIMIT_CONST = {
-    "/api/v1/events": ("SSEMaxConnectionsApiV1Events", "MAX_SSE_CONNECTIONS"),
-    "/api/v1/logs/stream": ("SSEMaxConnectionsApiV1LogsStream", "MAX_LOG_SSE_CONNECTIONS"),
+    "/api/v2/events": ("SSEMaxConnectionsApiV2Events", "MAX_SSE_CONNECTIONS"),
+    "/api/v2/logs/stream": ("SSEMaxConnectionsApiV2LogsStream", "MAX_LOG_SSE_CONNECTIONS"),
 }
 
 # 框架默认错误（``shape = framework_default``）只应列出 net/http **自己**会产出的状态码：
@@ -575,8 +575,8 @@ def _payload_names(note: str) -> list[str]:
     泛型取外层与实参两侧的名字，故 `PaginatedResponse<BanResponse>` 会同时核对
     这两个类型是否都有定义。
 
-    注意这是**尽力而为**的抽取：note 没写载荷名的路由（如 `DELETE /api/v1/bans/:ip`
-    的 note 为空、`PUT /api/v1/config` 只写了请求体）不产生任何断言，故调用方会
+    注意这是**尽力而为**的抽取：note 没写载荷名的路由（如 `DELETE /api/v2/bans/:ip`
+    的 note 为空、`PUT /api/v2/config` 只写了请求体）不产生任何断言，故调用方会
     打印覆盖数，让「未被这条检查覆盖的路由有几条」始终可见。
     """
     names: list[str] = []
@@ -1271,7 +1271,7 @@ def check_sse_events(contract: dict) -> list[str]:
     for r in contract["routes"]:
         if r["returns"] != "stream":
             continue
-        if r["path"] == "/api/v1/events":
+        if r["path"] == "/api/v2/events":
             consumer_path, consumer_name = TS_SSE, "useSse.ts"
         else:
             consumer_path, consumer_name = TS_LOGS_PAGE, "Logs.tsx"
@@ -1435,7 +1435,7 @@ def check_types_frontend(contract: dict) -> list[str]:
 def strip_ts_comments(src: str) -> str:
     """去掉 TS 里的块注释与行注释。
 
-    注释里的示例路径（`` `/api/v1/whitelist/10.0.0.0/8` ``）只是说明文字，
+    注释里的示例路径（`` `/api/v2/whitelist/10.0.0.0/8` ``）只是说明文字，
     不剥离会被当成"契约外路径"。endpoints.ts 的字符串字面量中不含 ``//``
     与 ``/*``，因此按注释剥离不会误伤真实调用。
     """
@@ -1480,7 +1480,7 @@ def check_routes_frontend(contract: dict) -> list[str]:
     missing = [
         f'{r["method"]} {r["path"]}'
         for r in contract["routes"]
-        if r["path"].startswith("/api/v1") and r["path"] not in used_paths
+        if r["path"].startswith("/api/v") and r["path"] not in used_paths
     ]
     for m in missing:
         problems.append(f"前端 endpoints.ts 未调用契约路由 {m}")
@@ -1493,9 +1493,9 @@ def check_routes_frontend(contract: dict) -> list[str]:
     for n in sorted(used & set(table)):
         if table[n] not in declared_paths:
             problems.append(f"前端 endpoints.ts 经 ROUTES.{n} 调用了契约外的路径 {table[n]}")
-    # 兜底：前端若绕过生成物直接写 `/api/v1…` 字面量，就是脱离了单一真相源
+    # 兜底：前端若绕过生成物直接写 `/api/v…` 字面量，就是脱离了单一真相源
     # （注释里出现的路径示例已由 strip_ts_comments 去掉）。
-    for literal in sorted(set(re.findall(r"['\"`](/api/v1[^'\"`]*)['\"`]", src))):
+    for literal in sorted(set(re.findall(r"['\"`](/api/v\d[^'\"`]*)['\"`]", src))):
         problems.append(f"前端 endpoints.ts 手写了契约路径字面量 {literal}（应引用 ROUTES 常量）")
 
     print(
@@ -1508,7 +1508,7 @@ def check_routes_frontend(contract: dict) -> list[str]:
 def check_frontend_route_literals() -> list[str]:
     """前端除 endpoints.ts 与生成物桥之外不得出现契约路径字面量。
 
-    上一版只扫 endpoints.ts，视图与组件里手写的 `/api/v1/...` 能绕过门禁：页面照常工作，
+    上一版只扫 endpoints.ts，视图与组件里手写的 `/api/v…/...` 能绕过门禁：页面照常工作，
     直到契约改名才在运行期 404。这里把搜索面扩到整个 frontend/src；注释先剥掉，
     避免文档示例被当成调用点。
     """
@@ -1525,7 +1525,7 @@ def check_frontend_route_literals() -> list[str]:
                 continue
             scanned += 1
             src = strip_ts_comments(read(path))
-            for literal in sorted(set(re.findall(r"['\"`](/api/v1[^'\"`]*)['\"`]", src))):
+            for literal in sorted(set(re.findall(r"['\"`](/api/v\d[^'\"`]*)['\"`]", src))):
                 rel = os.path.relpath(path, ROOT)
                 problems.append(f"{rel} 手写了契约路径字面量 {literal}（应引用 api/contract 的 ROUTES 常量）")
     print(f"  前端源码: {scanned} 个 .ts/.tsx 文件无契约路径字面量")
@@ -1739,7 +1739,7 @@ def check_defect_claims(contract: dict) -> list[str]:
                 )
         elif name == "HTTP_HEALTH_NOT_ENVELOPED":
             # retained 说的是「契约那两条探针端点有意不套信封」。Go 面注册的是
-            # /api/v1/health（另一条端点，走信封），契约的 GET /health 与 /healthz
+            # /api/v2/health（另一条端点，走信封），契约的 GET /health 与 /healthz
             # 还没接线——拿它冒充现场就是自欺，所以返回 None，缺路由由 check_routes 报。
             actual, _ = go_registrations()
             probe = [f"{m} {p}" for (m, p) in actual if p in ("/health", "/healthz")]
@@ -1939,7 +1939,7 @@ def check_defect_claims(contract: dict) -> list[str]:
             # 一段提到 `00:00` 或 `today_bans` 的注释不是算法（见 go_tree_code）。
             tree = go_tree_code()
             if "today_bans" not in tree and "TodayBans" not in tree:
-                verdict(name, None, "Go 面还没有 today_bans 字段与 GET /api/v1/stats")
+                verdict(name, None, "Go 面还没有 today_bans 字段与 GET /api/v2/stats")
             else:
                 # 接回来之后：现场仍在 = 找不到任何「自然日窗口」的算法（今日与总计同源）。
                 day_window = bool(
@@ -1971,8 +1971,8 @@ def check_defect_claims(contract: dict) -> list[str]:
             logs_body = _fn_body(read(LOGS_GO), "StreamLogs") or ""
             two_streams = "NewEventsBroker(" in main_src and "NewLogsStream(" in main_src
             per_stream_caps = (
-                "httpcontract.SSEMaxConnectionsApiV1Events" in sse_src
-                and "httpcontract.SSEMaxConnectionsApiV1LogsStream" in sse_src
+                "httpcontract.SSEMaxConnectionsApiV2Events" in sse_src
+                and "httpcontract.SSEMaxConnectionsApiV2LogsStream" in sse_src
             )
             logs_capped = "streamSSE(" in logs_body and "h.logStream" in logs_body
             verdict(

@@ -46,7 +46,7 @@ httpproto firewall_daemon_http
 namespace Http
 
 # API 前缀（所有 RESTful 端点都在其下）
-base "/api/v1"
+base "/api/v2"
 
 # ============================================================================
 # 统一信封
@@ -230,7 +230,7 @@ defect HTTP_BANS_DUAL_SHAPE {
   severity = high
   status = fixed
   fix = "src/daemon/internal/http/bans.go:WriteSuccess(w, PaginatedResponse[BanResponse]{"
-  resolution = "统一为单一形状：GET /api/v1/bans 一律返回分页信封 PaginatedResponse<BanResponse>（读 page / page_size / sort_by，缺省 page=1、page_size=20、上限 100），前端只保留一层返回类型。"
+  resolution = "统一为单一形状：GET /api/v2/bans 一律返回分页信封 PaginatedResponse<BanResponse>（读 page / page_size / sort_by，缺省 page=1、page_size=20、上限 100），前端只保留一层返回类型。"
   text = "『data 一定是对象』这一前提曾不成立：Go 面 src/daemon/internal/http/bans.go 的 ListBans 把内存镜像**全量写成裸数组**（既不读 page/page_size 也不读 sort_by），而前端 types.ts 只声明 PaginatedResponse<BanResponse> 一层——同一份契约在两侧是两个形状，按信封取 items 的调用一律落空。旧 Rust 实现的现场是另一种表现（不带 query 返回裸数组、带了才返回信封，前端为此维护两个重载签名与运行期分支），那条现场随旧实现一并退役。Go 面现在只有一条返回路径：ListBans 经 queryPagination 读三个参数、排序后切出页内区间，写出 PaginatedResponse[BanResponse]，没有任何裸数组分支；前端 endpoints.ts 的 getBans 也只有一个签名，返回 Promise<PaginatedResponse<BanResponse>>"
 }
 
@@ -239,15 +239,15 @@ defect HTTP_SSE_STATUS_INCOMPLETE {
   status = fixed
   fix = "src/daemon/internal/http/routes.go:streamStatus(h.logStream)"
   resolution = "sse-status 载荷扩展为同时报告两条流：events 与 logs 各自的 current / max，前端按所属流的上限判断 limit_reached，不再用单一上限推断另一条流。"
-  text = "/api/v1/stats/sse-status 报的是**进程级单一计数**（Go 面 routes.go 的 SSEStatus 取 server.ActiveConnections / MaxConnections），而不是两条 SSE 流各自的连接数与上限：契约给 /api/v1/events 定 10、给 /api/v1/logs/stream 定 5，Go 里两者共用同一个 broker（config.MaxSSEConnections=32）。前端用它判断『是否达到上限』会在日志流被拒时误判为未达上限，从而把 503 当成网络故障无限重连。Go 面现在按流报：SSEStatus 的载荷是 events / logs 两份读数，各自取自所在流的名额账本（Active/Max/AtLimit），上限来自生成物常量，没有第三处副本"
+  text = "/api/v2/stats/sse-status 报的是**进程级单一计数**（Go 面 routes.go 的 SSEStatus 取 server.ActiveConnections / MaxConnections），而不是两条 SSE 流各自的连接数与上限：契约给 /api/v2/events 定 10、给 /api/v2/logs/stream 定 5，Go 里两者共用同一个 broker（config.MaxSSEConnections=32）。前端用它判断『是否达到上限』会在日志流被拒时误判为未达上限，从而把 503 当成网络故障无限重连。Go 面现在按流报：SSEStatus 的载荷是 events / logs 两份读数，各自取自所在流的名额账本（Active/Max/AtLimit），上限来自生成物常量，没有第三处副本"
 }
 
 defect HTTP_RECIDIVISM_RATE_UNIT {
   severity = medium
   status = fixed
   fix = "src/daemon/internal/analysis/recommendations.go:float64(recidivistIPs) / float64(uniqueIPs) * 100"
-  resolution = "统一为百分数 0–100：Go 面两处 recidivism_rate 产出点（persist/ban_events.go 的 REST 取数、analysis/recommendations.go 的阈值推荐）同为 `* 100`。契约保留的前置要求：/api/v1/stats/ban-effectiveness 接回时其各 level 必须沿用同一百分数口径，前端对两处使用同一个格式化函数。"
-  text = "recidivism_rate 同名不同单位：旧 Rust 实现里 /api/v1/stats/recidivism 返回百分数（0–100）而 /api/v1/stats/ban-effectiveness 的各 level 返回比例（0–1），前端用同一个格式化函数渲染会差 100 倍。Go 重写后只剩两处产出点且都是百分数（src/daemon/internal/persist/ban_events.go 与 src/daemon/internal/analysis/recommendations.go），ban-effectiveness 当时尚未接线，因此现网上没有第二单位可比——缺陷按 Go 现状记为已修，但口径要求随 resolution 一并留在契约里。**现在前置要求也落实了**：ban-effectiveness 已接线（src/daemon/internal/http/analysis_payload.go 的 mapBanEffectiveness），各 level 与 overall 都是 `* 100` 的百分数，前端 types.ts 里那两处曾写「0.0-1.0 的比例值」的注释同步改成百分数口径（那一栏没有任何渲染分支读过它，写错只会在接回时把人带偏）"
+  resolution = "统一为百分数 0–100：Go 面两处 recidivism_rate 产出点（persist/ban_events.go 的 REST 取数、analysis/recommendations.go 的阈值推荐）同为 `* 100`。契约保留的前置要求：/api/v2/stats/ban-effectiveness 接回时其各 level 必须沿用同一百分数口径，前端对两处使用同一个格式化函数。"
+  text = "recidivism_rate 同名不同单位：旧 Rust 实现里 /api/v2/stats/recidivism 返回百分数（0–100）而 /api/v2/stats/ban-effectiveness 的各 level 返回比例（0–1），前端用同一个格式化函数渲染会差 100 倍。Go 重写后只剩两处产出点且都是百分数（src/daemon/internal/persist/ban_events.go 与 src/daemon/internal/analysis/recommendations.go），ban-effectiveness 当时尚未接线，因此现网上没有第二单位可比——缺陷按 Go 现状记为已修，但口径要求随 resolution 一并留在契约里。**现在前置要求也落实了**：ban-effectiveness 已接线（src/daemon/internal/http/analysis_payload.go 的 mapBanEffectiveness），各 level 与 overall 都是 `* 100` 的百分数，前端 types.ts 里那两处曾写「0.0-1.0 的比例值」的注释同步改成百分数口径（那一栏没有任何渲染分支读过它，写错只会在接回时把人带偏）"
 }
 
 defect HTTP_TODAY_BANS_EQUALS_TOTAL {
@@ -255,13 +255,13 @@ defect HTTP_TODAY_BANS_EQUALS_TOTAL {
   status = fixed
   fix = "src/daemon/internal/http/stats.go:func startOfToday(t time.Time) time.Time"
   resolution = "today_bans 必须是真实「今日」窗口：本地时区自然日 00:00 起，按各封禁的 banned_at 计数，窗口定义与时区写进 StatsResponse.today_bans 的字段注释；REST 与 SSE 两条读路径共用同一个取值。"
-  text = "today_bans 与 total_bans 取同一个值，『今日』这一时间窗从未实现，仪表盘上两个数字永远相同。Go 面接线时（契约声明的 GET /api/v1/stats 尚未注册）这条缺陷没有现场，但**不因未实现而算已修**。现在端点已接线且带真实窗口：src/daemon/internal/http/stats.go 以本地时区自然日 00:00 为起点，经 persist.CountBanEventsBetween 的半开区间 [start, end) 统计历史库 ban_events.banned_at，与 total_bans（内核自加载起的累计计数器）分属两路；结果连同近 5 分钟窗口一起缓存 30 秒（午夜切换最多晚 30 秒），REST 与 SSE 共用同一个 buildStats(now)，同一个数字不取决于它从哪条路读出来。历史库缺席时 today_bans 报 0——那一格说的是「没有读数」，不是抄一个别的计数"
+  text = "today_bans 与 total_bans 取同一个值，『今日』这一时间窗从未实现，仪表盘上两个数字永远相同。Go 面接线时（契约声明的 GET /api/v2/stats 尚未注册）这条缺陷没有现场，但**不因未实现而算已修**。现在端点已接线且带真实窗口：src/daemon/internal/http/stats.go 以本地时区自然日 00:00 为起点，经 persist.CountBanEventsBetween 的半开区间 [start, end) 统计历史库 ban_events.banned_at，与 total_bans（内核自加载起的累计计数器）分属两路；结果连同近 5 分钟窗口一起缓存 30 秒（午夜切换最多晚 30 秒），REST 与 SSE 共用同一个 buildStats(now)，同一个数字不取决于它从哪条路读出来。历史库缺席时 today_bans 报 0——那一格说的是「没有读数」，不是抄一个别的计数"
 }
 
 defect HTTP_FAILURE_HISTORY_NOT_PERSISTED {
   severity = medium
   status = open
-  resolution = "失败尝试与 DDoS 命中要能按时间窗回读，才谈得上热力图与趋势：持久化面需要一张按小时（或更细）归集的活动表，写入者是日志解析器与事件泵，读取者是 /api/v1/stats 的 failed_attempts_trend 与 /api/v1/stats/heatmap。在此之前这两个端点**只报已持久化的那一维**（封禁），其余槽位报 0 且不猜。"
+  resolution = "失败尝试与 DDoS 命中要能按时间窗回读，才谈得上热力图与趋势：持久化面需要一张按小时（或更细）归集的活动表，写入者是日志解析器与事件泵，读取者是 /api/v2/stats 的 failed_attempts_trend 与 /api/v2/stats/heatmap。在此之前这两个端点**只报已持久化的那一维**（封禁），其余槽位报 0 且不猜。"
   text = "failed_attempts 只有**本进程**的累计计数（config.GetJailStats(name).FailedAttempts），重启归零、没有按天历史；ddos_events 同理是进程内计数器（kernel.CounterDdosEvents）。于是 StatsResponse.failed_attempts_trend 无法由真源产出（Go 面写的是空标签 + 全零序列），HourlyHeatmap 的 failed_attempts 与 ddos_events 两列也恒为 0——只有 bans 一列来自历史库 ban_events 的真实时间窗。把当前累计值平摊到 7 天会凭空造出一条斜线，读图的人会当趋势看，因此这里选择报空"
 }
 
@@ -291,7 +291,7 @@ defect HTTP_GEOIP_NOT_IMPLEMENTED {
   severity = medium
   status = open
   resolution = "接一个 MaxMind 读库（mmdb）：把 ban_events 里出现过的地址逐条查库，按 (国家, 城市) 聚合成 GeoPoint（同段内 unique_ips/total_bans 计数、top_ip 取封禁次数最多者、last_banned_at 取最近一次），最多 200 个并按 total_bans 降序；geoip_enabled 改为「路径存在且可读」的实测结果而不是配置项的字符串非空；server_location_source 若要给 \"detected\"，必须由 geoip_detect_egress + geoip_egress_probe_url 那条探测路径真实产出并在配置有值时让位给 \"config\"。前端 Globe.tsx 的 EmptyState 分支因此才有真正的退出条件。"
-  text = "GET /api/v1/stats/attack-geo 已接线，但它**只能**报「没有地理读数」。配置项 geoip_db_path 与 geoip_detect_egress / geoip_egress_probe_url 在 src/daemon/internal/config/parser.go 里被解析并保存（applyGeoip），却没有任何消费方——仓库里没有 mmdb 读取实现，也没有 egress 探测。于是这一条恒定产出 geoip_enabled=false、points=[]、total_ips=0、located_ips=0，前端 frontend/src/views/Globe.tsx 的 `!data.geoip_enabled` 分支永远为真，整个页面停在 EmptyState：运维看不出这是「这台机器上没有地理库」还是「攻击全部来自无法定位的地址」，而全球攻击视图是面板上唯一回答「攻击从哪儿来」的一页。本机坐标三件套有真源（server_latitude/server_longitude，成对给出才生效），所以地图上的本机标记与 server_location_source=\"config\" 是可用的一半；\"detected\" 这个取值本实现不产出，也不拿猜测的经纬度冒充探测结果。这是**功能缺失**而不是数据缺失：路由、载荷与降级形状都已按契约就位，缺的是地址→坐标那一步"
+  text = "GET /api/v2/stats/attack-geo 已接线，但它**只能**报「没有地理读数」。配置项 geoip_db_path 与 geoip_detect_egress / geoip_egress_probe_url 在 src/daemon/internal/config/parser.go 里被解析并保存（applyGeoip），却没有任何消费方——仓库里没有 mmdb 读取实现，也没有 egress 探测。于是这一条恒定产出 geoip_enabled=false、points=[]、total_ips=0、located_ips=0，前端 frontend/src/views/Globe.tsx 的 `!data.geoip_enabled` 分支永远为真，整个页面停在 EmptyState：运维看不出这是「这台机器上没有地理库」还是「攻击全部来自无法定位的地址」，而全球攻击视图是面板上唯一回答「攻击从哪儿来」的一页。本机坐标三件套有真源（server_latitude/server_longitude，成对给出才生效），所以地图上的本机标记与 server_location_source=\"config\" 是可用的一半；\"detected\" 这个取值本实现不产出，也不拿猜测的经纬度冒充探测结果。这是**功能缺失**而不是数据缺失：路由、载荷与降级形状都已按契约就位，缺的是地址→坐标那一步"
 }
 
 defect HTTP_SERVICE_PROBE_NO_TOTAL {
@@ -299,7 +299,7 @@ defect HTTP_SERVICE_PROBE_NO_TOTAL {
   status = fixed
   fix = "src/daemon/internal/http/snapshot.go:TotalDetected: a.ServiceProbeCount"
   resolution = "ServiceProbeResponse 补 total_detected（与 PortScanResponse 形状对齐），前端两处共用同一套「检出 N 个」文案。"
-  text = "ServiceProbeResponse 缺 total_detected，而同类的 PortScanResponse 有，前端在两个页面上无法用同一套『检出 N 个』文案。旧 Rust 面 service-probes 从未产出这个字段。Go 面两条端点已接线（/api/v1/stats/service-probes 与 /api/v1/stats/port-scanners），两侧现在都有 total_detected，形状差异消失。**注意闭合的只是形状**：两处同名不同量——port-scanners 带的是内核累计检出事件数，service-probes 带的是本次快照打包的行数，该口径差异由 defect HTTP_SCANNER_TOTAL_COUNT_ASYMMETRY 单独跟踪"
+  text = "ServiceProbeResponse 缺 total_detected，而同类的 PortScanResponse 有，前端在两个页面上无法用同一套『检出 N 个』文案。旧 Rust 面 service-probes 从未产出这个字段。Go 面两条端点已接线（/api/v2/stats/service-probes 与 /api/v2/stats/port-scanners），两侧现在都有 total_detected，形状差异消失。**注意闭合的只是形状**：两处同名不同量——port-scanners 带的是内核累计检出事件数，service-probes 带的是本次快照打包的行数，该口径差异由 defect HTTP_SCANNER_TOTAL_COUNT_ASYMMETRY 单独跟踪"
 }
 
 defect HTTP_HEALTH_NOT_ENVELOPED {
@@ -313,9 +313,9 @@ defect HTTP_HEALTH_NOT_ENVELOPED {
 defect HTTP_LOG_SSE_LIMIT_DOC_DRIFT {
   severity = low
   status = fixed
-  fix = "src/daemon/internal/http/sse.go:httpcontract.SSEMaxConnectionsApiV1LogsStream"
+  fix = "src/daemon/internal/http/sse.go:httpcontract.SSEMaxConnectionsApiV2LogsStream"
   resolution = "两条流各自独立计数与上限（events 10 / logs 5），并且注释只描述自己那条流；文档、常量、实现三者一致。"
-  text = "契约声明两条流各自独立上限（/api/v1/events 10、/api/v1/logs/stream 5）。Go 面两个数都不存在：/api/v1/events 由 src/daemon/internal/http/sse.go 的 SSEBroker 承接，上限只有一个 `maxClients`，取自 config.MaxSSEConnections（默认 32，见 src/daemon/internal/config/types.go）；/api/v1/logs/stream 更根本没走 broker——logs.go 的 StreamLogs 每连接起一个 goroutine 直接写响应，没有任何连接计数与上限。表现：events 连到 30 条才拒，而按契约它本该在 10 条就拒；日志流则无上限，慢客户端只会把 broadcast 队列挤满（Publish 队列满时直接丢消息）。Go 面现在是一条流一个名额账本（SSEStream）：组合根分别建 NewEventsBroker 与 NewLogsStream，两者的 max 与心跳各自引用生成物常量 SSEMaxConnectionsApiV1* / SSEKeepaliveSecondsApiV1*，日志流改走同一条 streamSSE 接入路径，满额同样回 503"
+  text = "契约声明两条流各自独立上限（/api/v2/events 10、/api/v2/logs/stream 5）。Go 面两个数都不存在：/api/v2/events 由 src/daemon/internal/http/sse.go 的 SSEBroker 承接，上限只有一个 `maxClients`，取自 config.MaxSSEConnections（默认 32，见 src/daemon/internal/config/types.go）；/api/v2/logs/stream 更根本没走 broker——logs.go 的 StreamLogs 每连接起一个 goroutine 直接写响应，没有任何连接计数与上限。表现：events 连到 30 条才拒，而按契约它本该在 10 条就拒；日志流则无上限，慢客户端只会把 broadcast 队列挤满（Publish 队列满时直接丢消息）。Go 面现在是一条流一个名额账本（SSEStream）：组合根分别建 NewEventsBroker 与 NewLogsStream，两者的 max 与心跳各自引用生成物常量 SSEMaxConnectionsApiV1* / SSEKeepaliveSecondsApiV1*，日志流改走同一条 streamSSE 接入路径，满额同样回 503"
 }
 
 defect HTTP_BAN_SORT_DOC_INCOMPLETE {
@@ -323,7 +323,7 @@ defect HTTP_BAN_SORT_DOC_INCOMPLETE {
   status = fixed
   fix = "src/daemon/internal/http/bans.go:sort.SliceStable(items"
   resolution = "服务端实现并文档化同一套 7 个取值（banned_at_desc / banned_at_asc / ip_asc / ip_desc / remaining_asc / remaining_desc / jail_asc），注释、代码分支与前端 BanSortKey 三者逐字一致；未识别的取值回落 banned_at_desc。"
-  text = "排序键曾三层各有说法：前端 frontend/src/api/params.ts 与 types.ts 的 BanSortKey 各列 7 个取值（types.ts 的注释还指向已删除的 ban_ops.rs），契约要求 GET /api/v1/bans 支持这些取值，而 Go 面 src/daemon/internal/http/bans.go 的 ListBans **一个都不实现**——它不读 sort_by，连 page/page_size 也不读。旧现场（Rust 的 sort_by 文档只列 4 值、实现 7 值）随旧实现退役。现在服务端有一份 banSortKeys 表承载全部 7 个分支（每项一个比较闭包），ListBans 取 params.sortByOr() 查表、未识别的值回落 banned_at_desc，取值集合与前端 params.ts / types.ts 的 BanSortKey 逐字相同"
+  text = "排序键曾三层各有说法：前端 frontend/src/api/params.ts 与 types.ts 的 BanSortKey 各列 7 个取值（types.ts 的注释还指向已删除的 ban_ops.rs），契约要求 GET /api/v2/bans 支持这些取值，而 Go 面 src/daemon/internal/http/bans.go 的 ListBans **一个都不实现**——它不读 sort_by，连 page/page_size 也不读。旧现场（Rust 的 sort_by 文档只列 4 值、实现 7 值）随旧实现退役。现在服务端有一份 banSortKeys 表承载全部 7 个分支（每项一个比较闭包），ListBans 取 params.sortByOr() 查表、未识别的值回落 banned_at_desc，取值集合与前端 params.ts / types.ts 的 BanSortKey 逐字相同"
 }
 
 defect HTTP_READ_PATH_WRITES_STATE {
@@ -347,7 +347,7 @@ defect HTTP_SSE_JAILS_NO_PUBLISHER {
   status = fixed
   fix = "src/daemon/internal/http/publish.go:func (h *APIHandlers) PublishJails"
   resolution = "jails 域的生产者接在**快照真正换形状的那一刻**：入站执行体发布 jail 配置快照后经 runtime.JailSnapshotListener 同步通知组合根，由 HTTP 侧 Publish 域名 jails，载荷与该域 REST 由同一个折表函数产出。各写入点（jail 启用/禁用、热重载、回滚、内核配置指令）不再各自推帧——只在快照属主那里推一次，订阅者收到的必然是生效后的形状。"
-  text = "契约把 jails 列为 /api/v1/events 的订阅域，但 Go 面曾没有任何 jails 发布者：src/daemon/internal/kernel/consumer.go 的发布域常量只有 DomainBans、DomainWhitelist、DomainStats、DomainRates，采样周期变化的也只有 stats/rates 一类数值域。前端订阅 jails 后取值写作 sseJails ?? restJails.data，SSE 一旦有过首帧，REST 那份永远取不到，于是写后的 reload() 与页内刷新按钮全是死代码——改 Jail 开关后界面弹「已启用」，开关却弹回原位，只有整页刷新（重连 SSE、重收首帧）才看得到新值。旧实现靠每个 tick 无条件重发全部 5 个域掩盖了「jails 没有真实变更触发」，按域推送把掩盖拿掉后缺失的生产者就暴露成用户可见的不更新。REST 侧的数据源这一半先就位（执行体在装配、热重载、回滚、内核指令与启用状态同步时发布 jail 配置快照，见 GET /api/v1/jails 的注释），本缺陷闭合的是剩下那一半：**变更触发上的 SSE 生产者**。接法不是把 jails 塞回泵的域常量（jails 不随采样变化，塞回去等于每个 tick 无脑重发同一份载荷，正是 HTTP_SSE_RESERIALIZES_EVERY_DOMAIN 记过的病），而是让快照的属主在发布的那一刻喊一声：runtime.InboundExecutor.publishJailSnapshot → JailSnapshotListener.OnJailSnapshotChanged → 组合根的桥 → http.APIHandlers.PublishJails → SSEBroker 的逐字面量帧。监听器接口定义在 runtime 侧、由组合根接线，执行体不依赖 HTTP 包；帧载荷出自 http/sse_payload.go，与 GET /api/v1/jails 同形同值。机械探针的判据随之从「consumer.go 里有没有 jails 这个域」改成「jails 有没有字面发布点，且执行体的快照发布点会不会通知它」——前一句在按域推送的设计下永远是假的，后两句才是这个缺陷真正要的因果"
+  text = "契约把 jails 列为 /api/v2/events 的订阅域，但 Go 面曾没有任何 jails 发布者：src/daemon/internal/kernel/consumer.go 的发布域常量只有 DomainBans、DomainWhitelist、DomainStats、DomainRates，采样周期变化的也只有 stats/rates 一类数值域。前端订阅 jails 后取值写作 sseJails ?? restJails.data，SSE 一旦有过首帧，REST 那份永远取不到，于是写后的 reload() 与页内刷新按钮全是死代码——改 Jail 开关后界面弹「已启用」，开关却弹回原位，只有整页刷新（重连 SSE、重收首帧）才看得到新值。旧实现靠每个 tick 无条件重发全部 5 个域掩盖了「jails 没有真实变更触发」，按域推送把掩盖拿掉后缺失的生产者就暴露成用户可见的不更新。REST 侧的数据源这一半先就位（执行体在装配、热重载、回滚、内核指令与启用状态同步时发布 jail 配置快照，见 GET /api/v2/jails 的注释），本缺陷闭合的是剩下那一半：**变更触发上的 SSE 生产者**。接法不是把 jails 塞回泵的域常量（jails 不随采样变化，塞回去等于每个 tick 无脑重发同一份载荷，正是 HTTP_SSE_RESERIALIZES_EVERY_DOMAIN 记过的病），而是让快照的属主在发布的那一刻喊一声：runtime.InboundExecutor.publishJailSnapshot → JailSnapshotListener.OnJailSnapshotChanged → 组合根的桥 → http.APIHandlers.PublishJails → SSEBroker 的逐字面量帧。监听器接口定义在 runtime 侧、由组合根接线，执行体不依赖 HTTP 包；帧载荷出自 http/sse_payload.go，与 GET /api/v2/jails 同形同值。机械探针的判据随之从「consumer.go 里有没有 jails 这个域」改成「jails 有没有字面发布点，且执行体的快照发布点会不会通知它」——前一句在按域推送的设计下永远是假的，后两句才是这个缺陷真正要的因果"
 }
 
 defect HTTP_WHITELIST_KEY_DIVERGENCE {
@@ -363,7 +363,7 @@ defect HTTP_BATCH_BAN_BECOMES_PERMANENT {
   status = fixed
   fix = "src/daemon/internal/http/bans.go:duration := uint64(banDefaultBatchSecs)"
   resolution = "批量封禁显式下发有时长（契约里 duration 缺省即 3600 秒），并且只有显式 `permanent = true` 才产生永久封禁；`duration` 缺省/0 一律不得升格为永久。请求体形状与上限按契约：`{ips, duration, reason}`，单次 1..100 条，越界返回业务码 40005。"
-  text = "『多选若干 IP → 批量封禁』曾在确认弹窗承诺『统一使用 3600 秒』的情况下把这批 IP 全部永久封禁。Go 面的现场与旧实现同源：src/daemon/internal/http/bans.go 的 BatchBan 写作 `isPermanent := req.Duration == 0`，请求体不带 duration 就是永久。两个次生后果一条是退路、一条是形状：① /api/v1/bans/unban-temporary 只解封临时封禁，这些条目它看不见（total=0）；② 前端 endpoints.ts 的 batchBan 曾 POST 裸 `string[]`，与服务端解的 `{ips, duration, reason}` 不同形。现在 BatchBan 解的是契约的 BatchBanRequest，`IsPermanent` 恒为 false、到期时间按 `duration` 缺省 3600 秒算出，越界（空列表 / >100 条）在任何一条封禁落下之前整批回 40005；前端 batchBan 也改为发送同形对象，注释与契约的 100 条上限一致"
+  text = "『多选若干 IP → 批量封禁』曾在确认弹窗承诺『统一使用 3600 秒』的情况下把这批 IP 全部永久封禁。Go 面的现场与旧实现同源：src/daemon/internal/http/bans.go 的 BatchBan 写作 `isPermanent := req.Duration == 0`，请求体不带 duration 就是永久。两个次生后果一条是退路、一条是形状：① /api/v2/bans/unban-temporary 只解封临时封禁，这些条目它看不见（total=0）；② 前端 endpoints.ts 的 batchBan 曾 POST 裸 `string[]`，与服务端解的 `{ips, duration, reason}` 不同形。现在 BatchBan 解的是契约的 BatchBanRequest，`IsPermanent` 恒为 false、到期时间按 `duration` 缺省 3600 秒算出，越界（空列表 / >100 条）在任何一条封禁落下之前整批回 40005；前端 batchBan 也改为发送同形对象，注释与契约的 100 条上限一致"
 }
 
 # ============================================================================
@@ -382,7 +382,7 @@ defect HTTP_BATCH_BAN_BECOMES_PERMANENT {
 
 # ---- 无认证：健康检查 -------------------------------------------------------
 
-route GET "/health" {
+route GET "/api/v2/health" {
   auth = none
   handler = Health
   returns = type
@@ -391,7 +391,7 @@ route GET "/health" {
   note = "唯一『HTTP 状态码即语义』的端点：200 = status==\"ok\"，503 = 未就绪。载荷直接是 RuntimeSnapshot，不经信封（见 defect HTTP_HEALTH_NOT_ENVELOPED）。"
 }
 
-route GET "/healthz" {
+route GET "/api/v2/healthz" {
   auth = none
   handler = Health
   returns = type
@@ -403,7 +403,7 @@ route GET "/healthz" {
 # ---- 无认证：SPA 外壳与静态资源 ---------------------------------------------
 #
 # 这些路由返回的都是**不含运行时数据**的静态壳；所有数据一律经受保护的
-# /api/v1/* 取用。因此公开不泄露状态，且浏览器直接打开页面、加载子资源都不
+# /api/v2/* 取用。因此公开不泄露状态，且浏览器直接打开页面、加载子资源都不
 # 需要凭据（若放进认证组，配了凭据后页面反而打不开）。
 
 route GET "/" {
@@ -505,7 +505,7 @@ route GET "/metrics" {
   note = "Prometheus 文本格式 text/plain; version=0.0.4; charset=utf-8"
 }
 
-route GET "/api/v1/events" {
+route GET "/api/v2/events" {
   auth = required
   handler = ServeHTTP
   returns = stream
@@ -518,7 +518,7 @@ route GET "/api/v1/events" {
   note = "超过 10 连接返回 503。keep-alive 事件文本为 \"keep-alive\"。五个域名帧（stats/bans/jails/whitelist/rates）的 data **必须与该域 REST 端点的载荷同源同形**：同一批 key、同一份权威源、同一套口径，前端把帧 data 直接按 REST 的类型解析，不写形状分支。同形不是「看起来差不多」——面板每个读数都写作 sseX ?? restX.data，帧与 REST 一旦不同形，同一个数字就取决于它是从哪条路读出来的（内核内部结构没有 json tag，原样转发出去是 Go 字段名，前端按契约 key 取值会整栏落空）。bans 帧是镜像全表、REST 是分页对象（前端按帧整表替换本地状态），两者比的是**条目形状**而不是外层信封。"
 }
 
-route GET "/api/v1/logs/stream" {
+route GET "/api/v2/logs/stream" {
   auth = required
   handler = StreamLogs
   returns = stream
@@ -528,12 +528,12 @@ route GET "/api/v1/logs/stream" {
   max_connections = 5
   events = connected, log, error
   keepalive_secs = 15
-  note = "上限 5 与 /api/v1/events 的 10 **各自独立**；keep-alive 文本同为 \"keep-alive\"。"
+  note = "上限 5 与 /api/v2/events 的 10 **各自独立**；keep-alive 文本同为 \"keep-alive\"。"
 }
 
 # ---- 需认证：统计总览 -------------------------------------------------------
 
-route GET "/api/v1/stats" {
+route GET "/api/v2/stats" {
   auth = required
   handler = Stats
   returns = type
@@ -543,7 +543,7 @@ route GET "/api/v1/stats" {
 
 # ---- 需认证：封禁管理 -------------------------------------------------------
 
-route GET "/api/v1/bans" {
+route GET "/api/v2/bans" {
   auth = required
   handler = ListBans
   returns = type
@@ -552,7 +552,7 @@ route GET "/api/v1/bans" {
   note = "**单一形状**：一律返回分页信封 PaginatedResponse<BanResponse>（读 page / page_size / sort_by，缺省见 request PaginationParams），不得有裸数组分支。排序键是契约的 7 个取值，未识别的值回落 banned_at_desc——见 defect HTTP_BANS_DUAL_SHAPE 与 HTTP_BAN_SORT_DOC_INCOMPLETE（两条均 fixed）。"
 }
 
-route POST "/api/v1/bans" {
+route POST "/api/v2/bans" {
   auth = required
   handler = CreateBan
   returns = type
@@ -562,7 +562,7 @@ route POST "/api/v1/bans" {
   note = "请求体 CreateBanRequest；成功 201 Created，载荷 BanOperationResponse。`duration` 三态：缺席与显式 0 都是**永久**，显式正数是时长（与 JailResponse.ban_time 的「负值=永久」是两套编码，别串用）。成功路径同时写 ban_events 底账（jail_name 固定 \"api\"）与 ban_history，任一步失败回 40001 并在 message 里说明是内核未确认、IP 非法还是内核返回错误——契约给这条路由只编了这一个失败码，区分靠 message 不靠新造数字。"
 }
 
-route DELETE "/api/v1/bans/:ip" {
+route DELETE "/api/v2/bans/:ip" {
   auth = required
   handler = DeleteBan
   returns = type
@@ -570,7 +570,7 @@ route DELETE "/api/v1/bans/:ip" {
   codes = 40002
 }
 
-route GET "/api/v1/bans/:ip/detail" {
+route GET "/api/v2/bans/:ip/detail" {
   auth = required
   handler = BanDetail
   returns = type
@@ -579,7 +579,7 @@ route GET "/api/v1/bans/:ip/detail" {
   note = "载荷 BanDetailResponse"
 }
 
-route POST "/api/v1/bans/unban-temporary" {
+route POST "/api/v2/bans/unban-temporary" {
   auth = required
   handler = UnbanAllTemporary
   returns = type
@@ -587,7 +587,7 @@ route POST "/api/v1/bans/unban-temporary" {
   codes = 40003
 }
 
-route POST "/api/v1/bans/batch" {
+route POST "/api/v2/bans/batch" {
   auth = required
   handler = BatchBan
   returns = type
@@ -599,7 +599,7 @@ route POST "/api/v1/bans/batch" {
 
 # ---- 需认证：Jail -----------------------------------------------------------
 
-route GET "/api/v1/jails" {
+route GET "/api/v2/jails" {
   auth = required
   handler = ListJails
   returns = type
@@ -607,18 +607,18 @@ route GET "/api/v1/jails" {
   note = "载荷 JailResponse 数组（按配置顺序，不排序）。这条路由**不编业务码**：jail 配置出自内存，历史库缺席不影响它，读侧不会收到 50002/50003。配置与启用状态读的是运行时发布的 jail 配置快照——属主是执行体，在装配、热重载、回滚、内核指令与启用状态同步时发布，改名或删除的 jail 随下一次发布从表里消失，读侧不会看到配置与快照各一半的形状。运行时计数（lines_parsed…bans_triggered）是本进程累计值，重启归零；ban_count 是当前活跃封禁数而非历史累计（见 JailResponse 的字段注释）"
 }
 
-route PUT "/api/v1/jails/:name" {
+route PUT "/api/v2/jails/:name" {
   auth = required
   handler = UpdateJail
   returns = type
   status = 200
   codes = 404, 40007, 40008, 50003
-  note = "请求体 UpdateJailRequest；Jail 不存在 → 404（信封内 code=404，非 HTTP 404）。成功载荷 {name, enabled, status: \"updated\"} 报的是这次写入的**期望状态**：写入点只改启用状态来源，执行体在下一个 poll 周期把它并进配置、重建监视集合并发布新的 jail 快照，GET /api/v1/jails 与 jails 域帧在那一刻之后才读到新值。这条写路径因此**不推 SSE 帧**——快照还没换形状时推一帧，发出的正是改动**前**的 jail 列表，而界面按 sseJails ?? restJails.data 取值，刚拨的开关会立刻弹回原位（见 defect HTTP_SSE_JAILS_NO_PUBLISHER 的接法）。"
+  note = "请求体 UpdateJailRequest；Jail 不存在 → 404（信封内 code=404，非 HTTP 404）。成功载荷 {name, enabled, status: \"updated\"} 报的是这次写入的**期望状态**：写入点只改启用状态来源，执行体在下一个 poll 周期把它并进配置、重建监视集合并发布新的 jail 快照，GET /api/v2/jails 与 jails 域帧在那一刻之后才读到新值。这条写路径因此**不推 SSE 帧**——快照还没换形状时推一帧，发出的正是改动**前**的 jail 列表，而界面按 sseJails ?? restJails.data 取值，刚拨的开关会立刻弹回原位（见 defect HTTP_SSE_JAILS_NO_PUBLISHER 的接法）。"
 }
 
 # ---- 需认证：配置 -----------------------------------------------------------
 
-route GET "/api/v1/config" {
+route GET "/api/v2/config" {
   auth = required
   handler = GetConfig
   returns = type
@@ -627,7 +627,7 @@ route GET "/api/v1/config" {
   note = "载荷 WebuiConfigResponse"
 }
 
-route PUT "/api/v1/config" {
+route PUT "/api/v2/config" {
   auth = required
   handler = UpdateConfig
   returns = type
@@ -638,7 +638,7 @@ route PUT "/api/v1/config" {
 
 # ---- 需认证：白名单 ---------------------------------------------------------
 
-route GET "/api/v1/whitelist" {
+route GET "/api/v2/whitelist" {
   auth = required
   handler = ListWhitelist
   returns = type
@@ -646,7 +646,7 @@ route GET "/api/v1/whitelist" {
   note = "载荷 WhitelistEntryResponse 数组（前端 interface 名为 WhitelistEntry）"
 }
 
-route POST "/api/v1/whitelist" {
+route POST "/api/v2/whitelist" {
   auth = required
   handler = AddWhitelist
   returns = type
@@ -656,7 +656,7 @@ route POST "/api/v1/whitelist" {
   note = "请求体 CreateWhitelistRequest"
 }
 
-route DELETE "/api/v1/whitelist/:cidr" {
+route DELETE "/api/v2/whitelist/:cidr" {
   auth = required
   handler = RemoveWhitelist
   returns = type
@@ -665,7 +665,7 @@ route DELETE "/api/v1/whitelist/:cidr" {
   note = "载荷 WhitelistOperationResponse"
 }
 
-route GET "/api/v1/whitelist/recommendations" {
+route GET "/api/v2/whitelist/recommendations" {
   auth = required
   handler = GetWhitelistRecommendations
   returns = type
@@ -676,7 +676,7 @@ route GET "/api/v1/whitelist/recommendations" {
 
 # ---- 需认证：速率 -----------------------------------------------------------
 
-route GET "/api/v1/rates/current" {
+route GET "/api/v2/rates/current" {
   auth = required
   handler = RatesCurrent
   returns = type
@@ -684,7 +684,7 @@ route GET "/api/v1/rates/current" {
   note = "载荷 RateResponse 数组，不分页：内核速率表的容量（FW_RATE_CPU_SLOTS=512 个在跟踪的源地址）在一次响应带得下，事件泵也是整表取回。行来自事件泵快照，服务端按 packets_per_sec 降序、同值按 IP 升序（内核按哈希序回表，不排序会让同一个地址在两次刷新之间跳到图的另一端）。速率是内核给的**自上次查询以来的平均**，不是瞬时值；地址族无法识别的条目丢弃并记日志，不把空串当 IP 写出去"
 }
 
-route GET "/api/v1/rates/history" {
+route GET "/api/v2/rates/history" {
   auth = required
   handler = GetRatesHistory
   returns = type
@@ -692,7 +692,7 @@ route GET "/api/v1/rates/history" {
   note = "载荷 RateHistoryResponse **数组**，时间升序（最早在前，折线图直接按 x 轴递增画）。数据源是守护进程侧的速率历史环（internal/telemetry/rate_history.go）：事件泵每成功问一次内核速率表落一个点，节奏 = 采样周期（当前 5 秒），容量 720 点 ≈ 1 小时。查询参数 limit 取最近 n 个点，上限与默认都是环容量——要更多时环里也没有，回一批零等于伪造历史。采样中断留下的是**空洞**而不是补出来的零点；环是进程内的，重启后从空开始。曾经有一条从 /proc/firewall/rates 解析历史的路径，那个格式内核从未产出过，端点因此恒在走降级分支"
 }
 
-route GET "/api/v1/rates/windows" {
+route GET "/api/v2/rates/windows" {
   auth = required
   handler = RatesWindows
   returns = type
@@ -707,7 +707,7 @@ route GET "/api/v1/rates/windows" {
 # 空数组（快照缺席不等于服务坏了）；带 `codes = 50002, 50003` 的是历史库分析族，
 # 整页数据都建在一次查询上，查询失败只能报错而不是给一张全零的图。
 
-route GET "/api/v1/stats/heatmap" {
+route GET "/api/v2/stats/heatmap" {
   auth = required
   handler = Heatmap
   returns = type
@@ -715,7 +715,7 @@ route GET "/api/v1/stats/heatmap" {
   note = "载荷 HourlyHeatmap：24 个 HourlyBucket 的定长数组，hour 是**本地时区**的自然小时槽（0-23），bans 把最近 7 个自然日的封禁按小时归槽后叠在一起（热力图读的是「哪个钟点最容易被打」，不是某一天的小时分布）；缺数据的小时保留为全零行而不是跳过，数组长度恒为 24。failed_attempts 与 ddos_events 两列恒为 0（见 defect HTTP_FAILURE_HISTORY_NOT_PERSISTED）"
 }
 
-route GET "/api/v1/stats/recidivism" {
+route GET "/api/v2/stats/recidivism" {
   auth = required
   handler = Recidivism
   returns = type
@@ -724,15 +724,15 @@ route GET "/api/v1/stats/recidivism" {
   note = "载荷 RecidivismResponse；其 recidivism_rate 是**百分数 0-100**（见 defect HTTP_RECIDIVISM_RATE_UNIT）"
 }
 
-route GET "/api/v1/stats/ban-effectiveness" {
+route GET "/api/v2/stats/ban-effectiveness" {
   auth = required
   handler = BanEffectiveness
   returns = type
   status = 200
-  note = "载荷 BanEffectivenessResponse；其中 recidivism_rate（含 overall_recidivism_rate 与各 level 的）统一为**百分数 0-100**，与 /api/v1/stats/recidivism 同一个口径，前端两处共用同一个格式化函数（见 defect HTTP_RECIDIVISM_RATE_UNIT 的 resolution）。**不编业务码 = 历史库未初始化或查询失败也在 200 内降级**：levels 为 []、total_unique_ips/overall_recidivism_rate 为 0，summary 分别写「历史库未初始化：没有封禁底账…」与「封禁底账查询失败：本次没有分级成效读数」——面板上同一句「无样本」背后的两种原因必须能分开，否则运维不知道是该等数据还是该修库（服务端各留一条日志）"
+  note = "载荷 BanEffectivenessResponse；其中 recidivism_rate（含 overall_recidivism_rate 与各 level 的）统一为**百分数 0-100**，与 /api/v2/stats/recidivism 同一个口径，前端两处共用同一个格式化函数（见 defect HTTP_RECIDIVISM_RATE_UNIT 的 resolution）。**不编业务码 = 历史库未初始化或查询失败也在 200 内降级**：levels 为 []、total_unique_ips/overall_recidivism_rate 为 0，summary 分别写「历史库未初始化：没有封禁底账…」与「封禁底账查询失败：本次没有分级成效读数」——面板上同一句「无样本」背后的两种原因必须能分开，否则运维不知道是该等数据还是该修库（服务端各留一条日志）"
 }
 
-route GET "/api/v1/stats/periodic-attackers" {
+route GET "/api/v2/stats/periodic-attackers" {
   auth = required
   handler = PeriodicAttackers
   returns = type
@@ -741,7 +741,7 @@ route GET "/api/v1/stats/periodic-attackers" {
   note = "载荷 PeriodicAttacker 数组"
 }
 
-route GET "/api/v1/stats/collaborative-attacks" {
+route GET "/api/v2/stats/collaborative-attacks" {
   auth = required
   handler = CollaborativeAttacks
   returns = type
@@ -750,7 +750,7 @@ route GET "/api/v1/stats/collaborative-attacks" {
   note = "载荷 CollaborativeAttack 数组"
 }
 
-route GET "/api/v1/stats/udp-ports" {
+route GET "/api/v2/stats/udp-ports" {
   auth = required
   handler = UdpPorts
   returns = type
@@ -758,7 +758,7 @@ route GET "/api/v1/stats/udp-ports" {
   note = "载荷 UdpPortDistributionResponse：ports 最多 64 行（FW_ANALYSIS_UDP_PACK_MAX），行按端口升序以便两次刷新可比。total_entries 是**本次快照带出的行数**而不是表内总数，max_entries 是跟踪容量 512——载荷因此无法回答「是否还有没带出来的端口」，见 defect HTTP_UDP_PORT_TOTAL_IS_PACKED_COUNT"
 }
 
-route GET "/api/v1/stats/icmp-types" {
+route GET "/api/v2/stats/icmp-types" {
   auth = required
   handler = IcmpTypes
   returns = type
@@ -766,7 +766,7 @@ route GET "/api/v1/stats/icmp-types" {
   note = "载荷 IcmpTypeDistributionResponse：截断口径与 udp-ports 相同（types 最多 64 行，total_entries 是带出的行数，max_entries 是跟踪容量 128），同见 defect HTTP_UDP_PORT_TOTAL_IS_PACKED_COUNT"
 }
 
-route GET "/api/v1/stats/sse-status" {
+route GET "/api/v2/stats/sse-status" {
   auth = required
   handler = SSEStatus
   returns = type
@@ -774,7 +774,7 @@ route GET "/api/v1/stats/sse-status" {
   note = "载荷 SseStatusResponse（events / logs 各一份 SseStreamStatus）：两条流各自的上限与当前连接数都可见，前端按所属流判断 limit_reached，不得用一条流的上限推断另一条（缺陷 HTTP_SSE_STATUS_INCOMPLETE 已按此形状闭合）。"
 }
 
-route GET "/api/v1/stats/ban-duration-histogram" {
+route GET "/api/v2/stats/ban-duration-histogram" {
   auth = required
   handler = BanDurationHistogram
   returns = type
@@ -782,7 +782,7 @@ route GET "/api/v1/stats/ban-duration-histogram" {
   note = "载荷 BanDurationHistogramResponse。样本是一次取最近 10000 条 ban_events（分布需要样本厚度，上限同时也是读取成本的闸门；该列无索引，走的是全表尾部）。**不编业务码**：库缺席或查不动时同样在 200 内回「6 个标签 + 全 0 计数 + total=0」。**没有 limit 查询参数**——这一条报的是分布而不是列表，条数由桶数决定。桶边界与 total 的口径见该类型的注释（迁移前的旧行没有时长读数，不进桶也不进 total）"
 }
 
-route GET "/api/v1/stats/packet-sizes" {
+route GET "/api/v2/stats/packet-sizes" {
   auth = required
   handler = PacketSizes
   returns = type
@@ -790,7 +790,7 @@ route GET "/api/v1/stats/packet-sizes" {
   note = "载荷 PacketSizeDistributionResponse：5 个长度桶，labels/counts/percentages 等长同下标。计数是**自模块加载起的累计值**（内核那组数组只在 init/unload 归零，flush 只搬 accept/drop 那组），横轴不是时间窗口——面板读的是「本机见过什么样的包」而不是「最近 5 秒长什么样」。读数来自事件泵快照，链路断开时是上一次成功采样的陈旧值"
 }
 
-route GET "/api/v1/stats/ttl-distribution" {
+route GET "/api/v2/stats/ttl-distribution" {
   auth = required
   handler = TtlDistribution
   returns = type
@@ -798,7 +798,7 @@ route GET "/api/v1/stats/ttl-distribution" {
   note = "载荷 TtlDistributionResponse：6 个 TTL 桶，累计口径与 packet-sizes 相同（自模块加载起，不是时间窗口），labels/counts/percentages 等长同下标"
 }
 
-route GET "/api/v1/stats/ip-fragments" {
+route GET "/api/v2/stats/ip-fragments" {
   auth = required
   handler = IpFragments
   returns = type
@@ -806,7 +806,7 @@ route GET "/api/v1/stats/ip-fragments" {
   note = "载荷 IpFragmentStatsResponse：total_packets 是**所有**被记账的 IP 包（内核逐包累加），fragment_packets 只数分片，fragment_ratio 因此是百分数 0-100；累计口径同 packet-sizes。总数为 0 时比例取 0 而不是 NaN——encoding/json 遇到 NaN 会直接报错、整个响应发不出去"
 }
 
-route GET "/api/v1/stats/port-scanners" {
+route GET "/api/v2/stats/port-scanners" {
   auth = required
   handler = PortScanners
   returns = type
@@ -814,7 +814,7 @@ route GET "/api/v1/stats/port-scanners" {
   note = "载荷 PortScanResponse：scanners 最多 20 行（内核只带最近活跃的地址），threshold 是判定阈值。total_detected 是内核的**累计检出事件计数**（fw_info.port_scan_detected，每次判定 +1、模块重载归零），与行数不是同一个量，见 defect HTTP_SCANNER_TOTAL_COUNT_ASYMMETRY"
 }
 
-route GET "/api/v1/stats/service-probes" {
+route GET "/api/v2/stats/service-probes" {
   auth = required
   handler = ServiceProbes
   returns = type
@@ -822,7 +822,7 @@ route GET "/api/v1/stats/service-probes" {
   note = "载荷 ServiceProbeResponse：probes 最多 20 行，threshold 是判定阈值。total_detected 与 port-scanners 同名，但这一侧带的是**本次快照打包的行数**而不是累计检出数——形状对齐（两处都有该字段）由 defect HTTP_SERVICE_PROBE_NO_TOTAL 闭合，口径差异见 HTTP_SCANNER_TOTAL_COUNT_ASYMMETRY，读侧不把两个量伪造成相等"
 }
 
-route GET "/api/v1/stats/ban-duration-recommendations" {
+route GET "/api/v2/stats/ban-duration-recommendations" {
   auth = required
   handler = BanDurationRecommendations
   returns = type
@@ -831,7 +831,7 @@ route GET "/api/v1/stats/ban-duration-recommendations" {
   note = "载荷 BanDurationRecommendationResponse"
 }
 
-route GET "/api/v1/stats/reputation" {
+route GET "/api/v2/stats/reputation" {
   auth = required
   handler = Reputation
   returns = type
@@ -872,7 +872,7 @@ route GET "/api/v2/risk/vectors" {
   note = "载荷 RiskVectorListResponse：所有 IP 的风险向量列表（按总风险降序，最多 100 条）。仅在 risk_engine.enabled=true 时可用，否则返回 503"
 }
 
-route GET "/api/v1/stats/threshold-recommendations" {
+route GET "/api/v2/stats/threshold-recommendations" {
   auth = required
   handler = ThresholdRecommendations
   returns = type
@@ -881,7 +881,7 @@ route GET "/api/v1/stats/threshold-recommendations" {
   note = "载荷 ThresholdRecommendationResponse（recommended_threshold 的 0 语义见 defect HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS）"
 }
 
-route GET "/api/v1/stats/network-distribution" {
+route GET "/api/v2/stats/network-distribution" {
   auth = required
   handler = NetworkDistribution
   returns = type
@@ -890,7 +890,7 @@ route GET "/api/v1/stats/network-distribution" {
   note = "载荷 NetworkBlock 数组"
 }
 
-route GET "/api/v1/stats/attack-predictions" {
+route GET "/api/v2/stats/attack-predictions" {
   auth = required
   handler = AttackPredictions
   returns = type
@@ -899,7 +899,7 @@ route GET "/api/v1/stats/attack-predictions" {
   note = "载荷 AttackPredictionSummary"
 }
 
-route GET "/api/v1/stats/anomalies" {
+route GET "/api/v2/stats/anomalies" {
   auth = required
   handler = Anomalies
   returns = type
@@ -950,7 +950,7 @@ type IpAnomalyEntry {
   dimensions: Vec<DimensionScore>
 }
 
-route GET "/api/v1/stats/attack-geo" {
+route GET "/api/v2/stats/attack-geo" {
   auth = required
   handler = AttackGeo
   returns = type
@@ -1002,13 +1002,62 @@ type GeoPoint {
 
 # ---- 需认证：日志 -----------------------------------------------------------
 
-route GET "/api/v1/logs" {
+route GET "/api/v2/logs" {
   auth = required
   handler = GetLogs
   returns = type
   status = 200
   codes = 40005, 50002, 50003
   note = "查询参数 LogQueryParams；分页参数非法 → 40005；载荷 LogPageResponse"
+}
+
+# ---- 需认证：威胁情报源 -----------------------------------------------------
+
+route GET "/api/v2/threat-feeds" {
+  auth = required
+  handler = ListThreatFeeds
+  returns = type
+  status = 200
+  codes = 50003
+  note = "外部威胁情报源列表与同步状态；载荷 ThreatFeedListResponse"
+}
+
+route POST "/api/v2/threat-feeds/sync" {
+  auth = required
+  handler = SyncThreatFeed
+  returns = type
+  status = 200
+  codes = 50002, 50003
+  note = "手动触发一次威胁情报同步；载荷 ThreatFeedSyncResult"
+}
+
+route GET "/api/v2/threat-feeds/:id" {
+  auth = required
+  handler = GetThreatFeed
+  returns = type
+  status = 200
+  codes = 404, 50003
+  note = "单个威胁情报源详情；载荷 ThreatFeedResponse"
+}
+
+# ---- 需认证：综合分析 -------------------------------------------------------
+
+route GET "/api/v2/analysis/summary" {
+  auth = required
+  handler = AnalysisSummary
+  returns = type
+  status = 200
+  codes = 50002, 50003
+  note = "综合分析摘要：聚合复发、预测、异常检测的一页结论；载荷 AnalysisSummaryResponse"
+}
+
+route GET "/api/v2/analysis/ip/:ip" {
+  auth = required
+  handler = AnalysisIp
+  returns = type
+  status = 200
+  codes = 40006, 50002, 50003
+  note = "单个 IP 的综合分析（风险向量 + 封禁历史 + 信誉 + 预测）；载荷 AnalysisIpResponse"
 }
 
 # ============================================================================
@@ -1188,7 +1237,7 @@ request CreateBanRequest {
 
 # 批量封禁的请求体。`duration` 缺省即契约的 3600 秒（见 defect
 # HTTP_BATCH_BAN_BECOMES_PERMANENT：这里**没有**「缺省 = 永久」的读法，永久封禁只能由
-# 单条 POST /api/v1/bans 的 duration 缺省/0 产生）。`ips` 是 1..100 条，越界 40005。
+# 单条 POST /api/v2/bans 的 duration 缺省/0 产生）。`ips` 是 1..100 条，越界 40005。
 request BatchBanRequest {
   ips: Vec<String>
   duration: Option<u64>
@@ -1197,12 +1246,12 @@ request BatchBanRequest {
 
 # ---- Jail -------------------------------------------------------------------
 
-# 一个 jail 的配置 + 运行时读数。契约里 jail 只在 /api/v1/jails 这一层暴露（没有
-# /api/v1/jails/{name}），逐 jail 的计数因此都并进这里。
+# 一个 jail 的配置 + 运行时读数。契约里 jail 只在 /api/v2/jails 这一层暴露（没有
+# /api/v2/jails/{name}），逐 jail 的计数因此都并进这里。
 #
 # 三组数的**原点不同**，面板不能把它们排成一列就当同类读：
 #   - max_retries / findtime / ban_time 是配置值，随热重载变；
-#   - ban_count 是当前活跃封禁数（内存镜像，与 /api/v1/stats 的 current_bans 同源），
+#   - ban_count 是当前活跃封禁数（内存镜像，与 /api/v2/stats 的 current_bans 同源），
 #     不是历史累计——历史累计在 ban_events 里，由 /stats/ban-effectiveness 回答；
 #   - lines_parsed … bans_triggered 是本进程解析日志以来的累计计数，**重启归零**。
 type JailResponse {
@@ -1385,7 +1434,7 @@ type RecidivistEntry {
   # 该地址最近一次封禁时刻
   last_banned_at: i64
   # 该地址的事件里**有过**永久封禁（按底账 MAX(is_permanent) 读，不代表它此刻仍是永久——
-  # 永久封禁可被人工解封，「此刻」在 ban_history 与 /api/v1/bans 里）
+  # 永久封禁可被人工解封，「此刻」在 ban_history 与 /api/v2/bans 里）
   was_permanent: bool
 }
 
@@ -1509,7 +1558,7 @@ type JailAttackTrend {
 # 这次被 mysql 封」会被记进 mysql 的复发，而这一栏要回答的是「这个 jail 拦得住吗」。
 #
 # 只有**配置里现存的 jail** 会出现：事件里的 jail 名可能来自已删除的 jail，也可能来自
-# POST /api/v1/bans 那条手工路径（固定写 "api"，它不是个有阈值可调的 jail）。对这些名字
+# POST /api/v2/bans 那条手工路径（固定写 "api"，它不是个有阈值可调的 jail）。对这些名字
 # 谈「把阈值从几改到几」没有落点，而分析层对查不到的 jail 会给一个兜底默认值（5），
 # 那个数在载荷里长得和真读数一样，所以读侧滤掉。
 type ThresholdRecommendation {
@@ -1804,4 +1853,52 @@ type SseStreamStatus {
 type SseStatusResponse {
   events: SseStreamStatus
   logs: SseStreamStatus
+}
+
+# ---- 威胁情报源 -------------------------------------------------------------
+
+type ThreatFeedResponse {
+  id: String
+  name: String
+  source_url: String
+  enabled: bool
+  category: String
+  confidence: f64
+  last_synced_at: Option<i64>
+  entry_count: u32
+  sync_status: String
+  last_error: Option<String>
+}
+
+type ThreatFeedListResponse {
+  feeds: Vec<ThreatFeedResponse>
+  total: u32
+}
+
+type ThreatFeedSyncResult {
+  feed_id: String
+  new_entries: u32
+  updated_entries: u32
+  synced_at: i64
+}
+
+# ---- 综合分析 ---------------------------------------------------------------
+
+type AnalysisSummaryResponse {
+  threat_level: ThreatLevel
+  top_risk_ips: Vec<RiskVectorResponse>
+  active_attacks: u32
+  anomalies_count: u32
+  collaborative_count: u32
+  summary: String
+  timestamp: i64
+}
+
+type AnalysisIpResponse {
+  ip: String
+  risk: Option<RiskVectorResponse>
+  ban_history: Vec<BanResponse>
+  reputation: Option<ReputationEntryResponse>
+  prediction: Option<AttackPrediction>
+  is_whitelisted: bool
 }

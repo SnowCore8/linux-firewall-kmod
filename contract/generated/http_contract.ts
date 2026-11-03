@@ -4,8 +4,8 @@
  * 守护进程 HTTP 接口的路径与 SSE 事件名单一真相源。前端不得再手写这些字面量。
  */
 
-/** API 前缀：/api/v1 */
-export const API_BASE = "/api/v1"
+/** API 前缀：/api/v2 */
+export const API_BASE = "/api/v2"
 
 /** 鉴权参数：scheme、query 凭据键名、失败计数阈值与锁定时长 */
 export const AUTH = {
@@ -23,10 +23,10 @@ export const AUTH = {
 
 /** 全部路由路径（与守护进程注册的字面量逐字一致） */
 export const ROUTES = {
-  /** `GET /health` */
-  GET_HEALTH: "/health",
-  /** `GET /healthz` */
-  GET_HEALTHZ: "/healthz",
+  /** `GET /api/v2/health` */
+  GET_API_V2_HEALTH: "/api/v2/health",
+  /** `GET /api/v2/healthz` */
+  GET_API_V2_HEALTHZ: "/api/v2/healthz",
   /** `GET /` */
   GET: "/",
   /** `GET /dashboard` */
@@ -53,103 +53,113 @@ export const ROUTES = {
   GET_SW_JS: "/sw.js",
   /** `GET /metrics` */
   GET_METRICS: "/metrics",
-  /** `GET /api/v1/events` */
-  GET_API_V1_EVENTS: "/api/v1/events",
-  /** `GET /api/v1/logs/stream` */
-  GET_API_V1_LOGS_STREAM: "/api/v1/logs/stream",
-  /** `GET /api/v1/stats` */
-  GET_API_V1_STATS: "/api/v1/stats",
-  /** `GET /api/v1/bans` */
-  GET_API_V1_BANS: "/api/v1/bans",
-  /** `POST /api/v1/bans` */
-  POST_API_V1_BANS: "/api/v1/bans",
-  /** `DELETE /api/v1/bans/:ip` */
-  DELETE_API_V1_BANS_IP: "/api/v1/bans/:ip",
-  /** `GET /api/v1/bans/:ip/detail` */
-  GET_API_V1_BANS_IP_DETAIL: "/api/v1/bans/:ip/detail",
-  /** `POST /api/v1/bans/unban-temporary` */
-  POST_API_V1_BANS_UNBAN_TEMPORARY: "/api/v1/bans/unban-temporary",
-  /** `POST /api/v1/bans/batch` */
-  POST_API_V1_BANS_BATCH: "/api/v1/bans/batch",
-  /** `GET /api/v1/jails` */
-  GET_API_V1_JAILS: "/api/v1/jails",
-  /** `PUT /api/v1/jails/:name` */
-  PUT_API_V1_JAILS_NAME: "/api/v1/jails/:name",
-  /** `GET /api/v1/config` */
-  GET_API_V1_CONFIG: "/api/v1/config",
-  /** `PUT /api/v1/config` */
-  PUT_API_V1_CONFIG: "/api/v1/config",
-  /** `GET /api/v1/whitelist` */
-  GET_API_V1_WHITELIST: "/api/v1/whitelist",
-  /** `POST /api/v1/whitelist` */
-  POST_API_V1_WHITELIST: "/api/v1/whitelist",
-  /** `DELETE /api/v1/whitelist/:cidr` */
-  DELETE_API_V1_WHITELIST_CIDR: "/api/v1/whitelist/:cidr",
-  /** `GET /api/v1/whitelist/recommendations` */
-  GET_API_V1_WHITELIST_RECOMMENDATIONS: "/api/v1/whitelist/recommendations",
-  /** `GET /api/v1/rates/current` */
-  GET_API_V1_RATES_CURRENT: "/api/v1/rates/current",
-  /** `GET /api/v1/rates/history` */
-  GET_API_V1_RATES_HISTORY: "/api/v1/rates/history",
-  /** `GET /api/v1/rates/windows` */
-  GET_API_V1_RATES_WINDOWS: "/api/v1/rates/windows",
-  /** `GET /api/v1/stats/heatmap` */
-  GET_API_V1_STATS_HEATMAP: "/api/v1/stats/heatmap",
-  /** `GET /api/v1/stats/recidivism` */
-  GET_API_V1_STATS_RECIDIVISM: "/api/v1/stats/recidivism",
-  /** `GET /api/v1/stats/ban-effectiveness` */
-  GET_API_V1_STATS_BAN_EFFECTIVENESS: "/api/v1/stats/ban-effectiveness",
-  /** `GET /api/v1/stats/periodic-attackers` */
-  GET_API_V1_STATS_PERIODIC_ATTACKERS: "/api/v1/stats/periodic-attackers",
-  /** `GET /api/v1/stats/collaborative-attacks` */
-  GET_API_V1_STATS_COLLABORATIVE_ATTACKS: "/api/v1/stats/collaborative-attacks",
-  /** `GET /api/v1/stats/udp-ports` */
-  GET_API_V1_STATS_UDP_PORTS: "/api/v1/stats/udp-ports",
-  /** `GET /api/v1/stats/icmp-types` */
-  GET_API_V1_STATS_ICMP_TYPES: "/api/v1/stats/icmp-types",
-  /** `GET /api/v1/stats/sse-status` */
-  GET_API_V1_STATS_SSE_STATUS: "/api/v1/stats/sse-status",
-  /** `GET /api/v1/stats/ban-duration-histogram` */
-  GET_API_V1_STATS_BAN_DURATION_HISTOGRAM: "/api/v1/stats/ban-duration-histogram",
-  /** `GET /api/v1/stats/packet-sizes` */
-  GET_API_V1_STATS_PACKET_SIZES: "/api/v1/stats/packet-sizes",
-  /** `GET /api/v1/stats/ttl-distribution` */
-  GET_API_V1_STATS_TTL_DISTRIBUTION: "/api/v1/stats/ttl-distribution",
-  /** `GET /api/v1/stats/ip-fragments` */
-  GET_API_V1_STATS_IP_FRAGMENTS: "/api/v1/stats/ip-fragments",
-  /** `GET /api/v1/stats/port-scanners` */
-  GET_API_V1_STATS_PORT_SCANNERS: "/api/v1/stats/port-scanners",
-  /** `GET /api/v1/stats/service-probes` */
-  GET_API_V1_STATS_SERVICE_PROBES: "/api/v1/stats/service-probes",
-  /** `GET /api/v1/stats/ban-duration-recommendations` */
-  GET_API_V1_STATS_BAN_DURATION_RECOMMENDATIONS: "/api/v1/stats/ban-duration-recommendations",
-  /** `GET /api/v1/stats/reputation` */
-  GET_API_V1_STATS_REPUTATION: "/api/v1/stats/reputation",
+  /** `GET /api/v2/events` */
+  GET_API_V2_EVENTS: "/api/v2/events",
+  /** `GET /api/v2/logs/stream` */
+  GET_API_V2_LOGS_STREAM: "/api/v2/logs/stream",
+  /** `GET /api/v2/stats` */
+  GET_API_V2_STATS: "/api/v2/stats",
+  /** `GET /api/v2/bans` */
+  GET_API_V2_BANS: "/api/v2/bans",
+  /** `POST /api/v2/bans` */
+  POST_API_V2_BANS: "/api/v2/bans",
+  /** `DELETE /api/v2/bans/:ip` */
+  DELETE_API_V2_BANS_IP: "/api/v2/bans/:ip",
+  /** `GET /api/v2/bans/:ip/detail` */
+  GET_API_V2_BANS_IP_DETAIL: "/api/v2/bans/:ip/detail",
+  /** `POST /api/v2/bans/unban-temporary` */
+  POST_API_V2_BANS_UNBAN_TEMPORARY: "/api/v2/bans/unban-temporary",
+  /** `POST /api/v2/bans/batch` */
+  POST_API_V2_BANS_BATCH: "/api/v2/bans/batch",
+  /** `GET /api/v2/jails` */
+  GET_API_V2_JAILS: "/api/v2/jails",
+  /** `PUT /api/v2/jails/:name` */
+  PUT_API_V2_JAILS_NAME: "/api/v2/jails/:name",
+  /** `GET /api/v2/config` */
+  GET_API_V2_CONFIG: "/api/v2/config",
+  /** `PUT /api/v2/config` */
+  PUT_API_V2_CONFIG: "/api/v2/config",
+  /** `GET /api/v2/whitelist` */
+  GET_API_V2_WHITELIST: "/api/v2/whitelist",
+  /** `POST /api/v2/whitelist` */
+  POST_API_V2_WHITELIST: "/api/v2/whitelist",
+  /** `DELETE /api/v2/whitelist/:cidr` */
+  DELETE_API_V2_WHITELIST_CIDR: "/api/v2/whitelist/:cidr",
+  /** `GET /api/v2/whitelist/recommendations` */
+  GET_API_V2_WHITELIST_RECOMMENDATIONS: "/api/v2/whitelist/recommendations",
+  /** `GET /api/v2/rates/current` */
+  GET_API_V2_RATES_CURRENT: "/api/v2/rates/current",
+  /** `GET /api/v2/rates/history` */
+  GET_API_V2_RATES_HISTORY: "/api/v2/rates/history",
+  /** `GET /api/v2/rates/windows` */
+  GET_API_V2_RATES_WINDOWS: "/api/v2/rates/windows",
+  /** `GET /api/v2/stats/heatmap` */
+  GET_API_V2_STATS_HEATMAP: "/api/v2/stats/heatmap",
+  /** `GET /api/v2/stats/recidivism` */
+  GET_API_V2_STATS_RECIDIVISM: "/api/v2/stats/recidivism",
+  /** `GET /api/v2/stats/ban-effectiveness` */
+  GET_API_V2_STATS_BAN_EFFECTIVENESS: "/api/v2/stats/ban-effectiveness",
+  /** `GET /api/v2/stats/periodic-attackers` */
+  GET_API_V2_STATS_PERIODIC_ATTACKERS: "/api/v2/stats/periodic-attackers",
+  /** `GET /api/v2/stats/collaborative-attacks` */
+  GET_API_V2_STATS_COLLABORATIVE_ATTACKS: "/api/v2/stats/collaborative-attacks",
+  /** `GET /api/v2/stats/udp-ports` */
+  GET_API_V2_STATS_UDP_PORTS: "/api/v2/stats/udp-ports",
+  /** `GET /api/v2/stats/icmp-types` */
+  GET_API_V2_STATS_ICMP_TYPES: "/api/v2/stats/icmp-types",
+  /** `GET /api/v2/stats/sse-status` */
+  GET_API_V2_STATS_SSE_STATUS: "/api/v2/stats/sse-status",
+  /** `GET /api/v2/stats/ban-duration-histogram` */
+  GET_API_V2_STATS_BAN_DURATION_HISTOGRAM: "/api/v2/stats/ban-duration-histogram",
+  /** `GET /api/v2/stats/packet-sizes` */
+  GET_API_V2_STATS_PACKET_SIZES: "/api/v2/stats/packet-sizes",
+  /** `GET /api/v2/stats/ttl-distribution` */
+  GET_API_V2_STATS_TTL_DISTRIBUTION: "/api/v2/stats/ttl-distribution",
+  /** `GET /api/v2/stats/ip-fragments` */
+  GET_API_V2_STATS_IP_FRAGMENTS: "/api/v2/stats/ip-fragments",
+  /** `GET /api/v2/stats/port-scanners` */
+  GET_API_V2_STATS_PORT_SCANNERS: "/api/v2/stats/port-scanners",
+  /** `GET /api/v2/stats/service-probes` */
+  GET_API_V2_STATS_SERVICE_PROBES: "/api/v2/stats/service-probes",
+  /** `GET /api/v2/stats/ban-duration-recommendations` */
+  GET_API_V2_STATS_BAN_DURATION_RECOMMENDATIONS: "/api/v2/stats/ban-duration-recommendations",
+  /** `GET /api/v2/stats/reputation` */
+  GET_API_V2_STATS_REPUTATION: "/api/v2/stats/reputation",
   /** `GET /api/v2/risk/vectors/:ip` */
   GET_API_V2_RISK_VECTORS_IP: "/api/v2/risk/vectors/:ip",
   /** `GET /api/v2/risk/events/:ip` */
   GET_API_V2_RISK_EVENTS_IP: "/api/v2/risk/events/:ip",
   /** `GET /api/v2/risk/vectors` */
   GET_API_V2_RISK_VECTORS: "/api/v2/risk/vectors",
-  /** `GET /api/v1/stats/threshold-recommendations` */
-  GET_API_V1_STATS_THRESHOLD_RECOMMENDATIONS: "/api/v1/stats/threshold-recommendations",
-  /** `GET /api/v1/stats/network-distribution` */
-  GET_API_V1_STATS_NETWORK_DISTRIBUTION: "/api/v1/stats/network-distribution",
-  /** `GET /api/v1/stats/attack-predictions` */
-  GET_API_V1_STATS_ATTACK_PREDICTIONS: "/api/v1/stats/attack-predictions",
-  /** `GET /api/v1/stats/anomalies` */
-  GET_API_V1_STATS_ANOMALIES: "/api/v1/stats/anomalies",
-  /** `GET /api/v1/stats/attack-geo` */
-  GET_API_V1_STATS_ATTACK_GEO: "/api/v1/stats/attack-geo",
-  /** `GET /api/v1/logs` */
-  GET_API_V1_LOGS: "/api/v1/logs",
+  /** `GET /api/v2/stats/threshold-recommendations` */
+  GET_API_V2_STATS_THRESHOLD_RECOMMENDATIONS: "/api/v2/stats/threshold-recommendations",
+  /** `GET /api/v2/stats/network-distribution` */
+  GET_API_V2_STATS_NETWORK_DISTRIBUTION: "/api/v2/stats/network-distribution",
+  /** `GET /api/v2/stats/attack-predictions` */
+  GET_API_V2_STATS_ATTACK_PREDICTIONS: "/api/v2/stats/attack-predictions",
+  /** `GET /api/v2/stats/anomalies` */
+  GET_API_V2_STATS_ANOMALIES: "/api/v2/stats/anomalies",
+  /** `GET /api/v2/stats/attack-geo` */
+  GET_API_V2_STATS_ATTACK_GEO: "/api/v2/stats/attack-geo",
+  /** `GET /api/v2/logs` */
+  GET_API_V2_LOGS: "/api/v2/logs",
+  /** `GET /api/v2/threat-feeds` */
+  GET_API_V2_THREAT_FEEDS: "/api/v2/threat-feeds",
+  /** `POST /api/v2/threat-feeds/sync` */
+  POST_API_V2_THREAT_FEEDS_SYNC: "/api/v2/threat-feeds/sync",
+  /** `GET /api/v2/threat-feeds/:id` */
+  GET_API_V2_THREAT_FEEDS_ID: "/api/v2/threat-feeds/:id",
+  /** `GET /api/v2/analysis/summary` */
+  GET_API_V2_ANALYSIS_SUMMARY: "/api/v2/analysis/summary",
+  /** `GET /api/v2/analysis/ip/:ip` */
+  GET_API_V2_ANALYSIS_IP_IP: "/api/v2/analysis/ip/:ip",
 } as const
 
-/** `/api/v1/events` 的事件名联合类型（上限 10 连接） */
-export type SseEventsApiV1Events = "connected" | "stats" | "bans" | "jails" | "whitelist" | "rates"
+/** `/api/v2/events` 的事件名联合类型（上限 10 连接） */
+export type SseEventsApiV2Events = "connected" | "stats" | "bans" | "jails" | "whitelist" | "rates"
 
-/** `/api/v1/logs/stream` 的事件名联合类型（上限 5 连接） */
-export type SseEventsApiV1LogsStream = "connected" | "log" | "error"
+/** `/api/v2/logs/stream` 的事件名联合类型（上限 5 连接） */
+export type SseEventsApiV2LogsStream = "connected" | "log" | "error"
 
 /** 响应/请求载荷类型（字段与 daemon 序列化出的 JSON key 一一对应） */
 /** 契约类型 `AnomalyResponse` */
@@ -790,4 +800,53 @@ export interface SseStreamStatus {
 export interface SseStatusResponse {
   events: SseStreamStatus
   logs: SseStreamStatus
+}
+
+/** 契约类型 `ThreatFeedResponse` */
+export interface ThreatFeedResponse {
+  id: string
+  name: string
+  source_url: string
+  enabled: boolean
+  category: string
+  confidence: number
+  last_synced_at: number | null
+  entry_count: number
+  sync_status: string
+  last_error: string | null
+}
+
+/** 契约类型 `ThreatFeedListResponse` */
+export interface ThreatFeedListResponse {
+  feeds: ThreatFeedResponse[]
+  total: number
+}
+
+/** 契约类型 `ThreatFeedSyncResult` */
+export interface ThreatFeedSyncResult {
+  feed_id: string
+  new_entries: number
+  updated_entries: number
+  synced_at: number
+}
+
+/** 契约类型 `AnalysisSummaryResponse` */
+export interface AnalysisSummaryResponse {
+  threat_level: ThreatLevel
+  top_risk_ips: RiskVectorResponse[]
+  active_attacks: number
+  anomalies_count: number
+  collaborative_count: number
+  summary: string
+  timestamp: number
+}
+
+/** 契约类型 `AnalysisIpResponse` */
+export interface AnalysisIpResponse {
+  ip: string
+  risk: RiskVectorResponse | null
+  ban_history: BanResponse[]
+  reputation: ReputationEntryResponse | null
+  prediction: AttackPrediction | null
+  is_whitelisted: boolean
 }

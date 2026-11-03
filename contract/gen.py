@@ -2490,7 +2490,7 @@ def emit_ts_http(contract: HttpContract) -> str:
             L.append(f"export interface {ifname}{generic} {{")
             for f in d.fields:
                 # 请求侧的 `Option<T>` 是「可以整个不提交」，不是「必填但可为 null」：
-                # `PUT /api/v1/config` 一类局部更新只带要改的字段，未出现的字段保持后端
+                # `PUT /api/v2/config` 一类局部更新只带要改的字段，未出现的字段保持后端
                 # 现值。生成 `field?: T | null` 才与该语义一致 —— Go 侧 `Option<T>` 的反
                 # 序列化同时接受「字段缺席」与「字段为 null」两种写法，调用方两种都会用，
                 # 只给 `?: T` 会把已经写 `null` 的调用点判成类型错误。
@@ -2590,6 +2590,275 @@ def emit_json_http(contract: HttpContract, notes: List[str]) -> str:
 
 
 # ============================================================================
+# OpenAPI 3.0 产物（HTTP 契约专用）
+# ============================================================================
+
+# 契约标量 -> OpenAPI schema 片段
+_OPENAPI_SCALAR: Dict[str, Dict[str, object]] = {
+    "i8": {"type": "integer", "format": "int32"},
+    "i16": {"type": "integer", "format": "int32"},
+    "i32": {"type": "integer", "format": "int32"},
+    "i64": {"type": "integer", "format": "int64"},
+    "isize": {"type": "integer", "format": "int64"},
+    "u8": {"type": "integer", "format": "int32", "minimum": 0},
+    "u16": {"type": "integer", "format": "int32", "minimum": 0},
+    "u32": {"type": "integer", "format": "int64", "minimum": 0},
+    "u64": {"type": "integer", "format": "int64", "minimum": 0},
+    "usize": {"type": "integer", "format": "int64", "minimum": 0},
+    "f32": {"type": "number", "format": "float"},
+    "f64": {"type": "number", "format": "double"},
+    "bool": {"type": "boolean"},
+    "String": {"type": "string"},
+    "str": {"type": "string"},
+}
+
+# 从路由 note 里抽载荷类型名（与 verify_http.py 的 _PAYLOAD_RE 同口径）
+_OA_PAYLOAD_RE = re.compile(r"(?:载荷(?:直接是)?|返回)\s*([A-Za-z_]\w*(?:<[^>]*>)?)")
+
+
+def _oa_schema_for_type(decl: str, contract: HttpContract) -> Dict[str, object]:
+    """把契约类型声明转成 OpenAPI schema 对象（引用 components 或内联标量）。"""
+    t = decl.strip()
+
+    m = re.fullmatch(r"Vec\s*<\s*(.+)\s*>", t)
+    if m:
+        return {"type": "array", "items": _oa_schema_for_type(m.group(1), contract)}
+
+    m = re.fullmatch(r"\[\s*(.+?)\s*;\s*(\d+)\s*\]", t)
+    if m:
+        inner = _oa_schema_for_type(m.group(1), contract)
+        return {"type": "array", "items": inner, "minItems": int(m.group(2)), "maxItems": int(m.group(2))}
+
+    m = re.fullmatch(r"&\s*(?:'\w+\s*)?(.+)", t)
+    if m:
+        return _oa_schema_for_type(m.group(1), contract)
+
+    m = re.fullmatch(r"Option\s*<\s*(.+)\s*>", t)
+    if m:
+        inner = _oa_schema_for_type(m.group(1), contract)
+        return {"oneOf": [inner, {"type": "null"}]}
+
+    # 泛型实例化（如 PaginatedResponse<BanResponse>）：生成 allOf 组合
+    m = re.fullmatch(r"([A-Za-z_]\w*)\s*<\s*(.+)\s*>", t)
+    if m:
+        base_name, arg = m.group(1), m.group(2)
+        if base_name in contract.types:
+            return {
+                "allOf": [
+                    {"$ref": f"#/components/schemas/{base_name}"},
+                    {"type": "object", "properties": {"_generic_arg": _oa_schema_for_type(arg, contract)}},
+                ]
+            }
+        return _oa_schema_for_type(arg, contract)
+
+    if t in _OPENAPI_SCALAR:
+        return dict(_OPENAPI_SCALAR[t])
+
+    # 具名类型引用
+    if t in contract.types:
+        return {"$ref": f"#/components/schemas/{t}"}
+
+    # &'static str 等带生命周期的字符串
+    if t.startswith("&"):
+        return {"type": "string"}
+
+    return {"type": "object", "description": f"未解析的契约类型: {t}"}
+
+
+def _oa_path_params(path: str) -> List[Dict[str, object]]:
+    """从路由路径里提取 {param} 段，生成 OpenAPI path parameters。"""
+    params = []
+    for m in re.finditer(r"\{(\w+)\}", path):
+        params.append({
+            "name": m.group(1),
+            "in": "path",
+            "required": True,
+            "schema": {"type": "string"},
+        })
+    return params
+
+
+def emit_openapi_http(contract: HttpContract) -> str:
+    """生成 OpenAPI 3.0.3 规范 JSON。
+
+    只为 v2 路由生成文档（契约里已无 v1）。SSE 流路由标记为 text/event-stream。
+    响应载荷类型从路由 note 里尽力抽取；抽不到时回退为通用 object。
+    """
+    schemas: Dict[str, object] = {}
+
+    # 1. 信封
+    env = contract.envelope
+    env_props: Dict[str, object] = {}
+    for f in env.fields:
+        env_props[f.key] = _oa_schema_for_type(f.ftype, contract)
+    schemas[env.name] = {
+        "type": "object",
+        "required": [f.key for f in env.fields],
+        "properties": env_props,
+        "description": "统一响应信封",
+    }
+
+    # 2. 载荷类型
+    for name in contract.type_order:
+        td = contract.types[name]
+        if td.inline:
+            continue
+        props: Dict[str, object] = {}
+        required: List[str] = []
+        for f in td.fields:
+            props[f.key] = _oa_schema_for_type(f.ftype, contract)
+            is_opt = bool(re.fullmatch(r"Option\s*<.+>", f.ftype.strip()))
+            if not is_opt and td.kind != "request":
+                required.append(f.key)
+        schema: Dict[str, object] = {"type": "object", "properties": props}
+        if required:
+            schema["required"] = required
+        if td.params:
+            schema["description"] = f"泛型类型，参数: {', '.join(td.params)}"
+        schemas[name] = schema
+
+    # 3. 路由 -> paths
+    paths: Dict[str, Dict[str, object]] = {}
+    for r in contract.routes:
+        oa_path = r.path
+        # 契约用 :param，OpenAPI 用 {param}
+        oa_path = re.sub(r":(\w+)", r"{\1}", oa_path)
+
+        method_lower = r.method.lower()
+        operation: Dict[str, object] = {
+            "operationId": r.handler or f"{method_lower}_{re.sub(r'[^A-Za-z0-9]', '_', oa_path).strip('_')}",
+            "summary": r.note[:120] if r.note else f"{r.method} {r.path}",
+            "tags": [oa_path.split("/")[2] if len(oa_path.split("/")) > 2 else "default"],
+        }
+
+        # 认证
+        if r.auth == "required":
+            operation["security"] = [{"basicAuth": []}]
+        elif r.auth == "optional":
+            operation["security"] = [{}, {"basicAuth": []}]
+
+        # 路径参数
+        pp = _oa_path_params(oa_path)
+        if pp:
+            operation["parameters"] = pp
+
+        # SSE 流
+        if r.returns == "stream":
+            operation["responses"] = {
+                "200": {
+                    "description": f"SSE 事件流（事件: {', '.join(r.events)}）",
+                    "content": {"text/event-stream": {"schema": {"type": "string"}}},
+                }
+            }
+            if r.max_connections:
+                operation["description"] = f"最大并发连接: {r.max_connections}"
+            paths.setdefault(oa_path, {})[method_lower] = operation
+            continue
+
+        # 响应载荷：从 note 抽取类型名
+        resp_type = None
+        m = _OA_PAYLOAD_RE.search(r.note or "")
+        if m:
+            raw = m.group(1)
+            # 取外层类型名（泛型取基名）
+            base = re.match(r"([A-Za-z_]\w*)", raw)
+            if base and base.group(1) in contract.types:
+                resp_type = base.group(1)
+
+        status_code = str(r.status or 200)
+        if resp_type:
+            # 套信封：data 字段引用载荷类型
+            resp_schema = {
+                "allOf": [
+                    {"$ref": f"#/components/schemas/{env.name}"},
+                    {
+                        "type": "object",
+                        "properties": {"data": {"$ref": f"#/components/schemas/{resp_type}"}},
+                    },
+                ]
+            }
+        else:
+            resp_schema = {"$ref": f"#/components/schemas/{env.name}"}
+
+        responses: Dict[str, object] = {
+            status_code: {
+                "description": r.note[:200] if r.note else "成功",
+                "content": {"application/json": {"schema": resp_schema}},
+            }
+        }
+
+        # 错误码
+        for code in r.codes:
+            if code == 0:
+                continue
+            cd = contract.codes.get(code)
+            if cd:
+                responses[str(cd.status)] = {
+                    "description": f"业务码 {code}: {cd.text}",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "allOf": [
+                                    {"$ref": f"#/components/schemas/{env.name}"},
+                                    {"type": "object", "properties": {"code": {"type": "integer", "enum": [code]}}},
+                                ]
+                            }
+                        }
+                    },
+                }
+
+        # 401（需认证路由）
+        if r.auth == "required":
+            unauth_status = int(contract.auth.get("unauthorized_status", 401))
+            responses[str(unauth_status)] = {
+                "description": "未认证或凭据错误",
+                "content": {"text/plain": {"schema": {"type": "string"}}},
+            }
+
+        operation["responses"] = responses
+
+        # 请求体（POST/PUT 且有 request 类型）
+        if r.method in ("POST", "PUT", "PATCH"):
+            # 从 note 或 handler 名推断请求类型
+            req_type = None
+            for tname in contract.type_order:
+                td = contract.types[tname]
+                if td.kind == "request" and tname.lower().replace("request", "") in (r.handler or "").lower():
+                    req_type = tname
+                    break
+            if req_type:
+                operation["requestBody"] = {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": f"#/components/schemas/{req_type}"}
+                        }
+                    },
+                }
+
+        paths.setdefault(oa_path, {})[method_lower] = operation
+
+    doc: Dict[str, object] = {
+        "openapi": "3.0.3",
+        "info": {
+            "title": contract.name or "Firewall Daemon API",
+            "version": "2.0.0",
+            "description": "由 contract/http.fwidl 自动生成的 OpenAPI 规范。请勿手工编辑。",
+        },
+        "servers": [{"url": "/", "description": "守护进程本地监听"}],
+        "paths": paths,
+        "components": {
+            "schemas": schemas,
+            "securitySchemes": {
+                "basicAuth": {"type": "http", "scheme": "basic"},
+            },
+        },
+    }
+
+    return json.dumps(doc, indent=2, ensure_ascii=False, sort_keys=False) + "\n"
+
+
+# ============================================================================
 # 入口
 # ============================================================================
 
@@ -2616,11 +2885,12 @@ CONTRACTS: Dict[str, Dict[str, object]] = {
     "http.fwidl": {
         # HTTP 契约是 daemon 与前端之间的接口，故产出 Go 侧路由表与 TS 侧常量；
         # 无 C 产物（内核不经由 HTTP 暴露任何东西）。
-        "targets": ["go", "ts", "json"],
+        "targets": ["go", "ts", "json", "openapi"],
         "out": {
             "go": "http_contract.go",
             "ts": "http_contract.ts",
             "json": "http_layout.json",
+            "openapi": "openapi.json",
         },
         # Go 产物不落 contract/generated，而是直接写进 daemon 的 module：Go 以 module
         # 根（src/daemon）为界，界外目录不是包，跨界 import 编不过。写两份同内容文件
@@ -2691,6 +2961,8 @@ def generate(
                     content, fname = emit_ts_http(http), out_names.get("ts", "generated.ts")
                 elif t == "json":
                     content, fname = emit_json_http(http, notes), out_names.get("json", "layout.json")
+                elif t == "openapi":
+                    content, fname = emit_openapi_http(http), out_names.get("openapi", "openapi.json")
                 else:
                     raise ContractError(f"HTTP 契约不支持产物类型 {t!r}")
             elif kind == "textproto":

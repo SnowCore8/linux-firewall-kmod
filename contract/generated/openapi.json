@@ -1,0 +1,7098 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "firewall_daemon_http",
+    "version": "2.0.0",
+    "description": "由 contract/http.fwidl 自动生成的 OpenAPI 规范。请勿手工编辑。"
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "守护进程本地监听"
+    }
+  ],
+  "paths": {
+    "/api/v2/health": {
+      "get": {
+        "operationId": "Health",
+        "summary": "唯一『HTTP 状态码即语义』的端点：200 = status==\"ok\"，503 = 未就绪。载荷直接是 RuntimeSnapshot，不经信封（见 defect HTTP_HEALTH_NOT_ENVELOPED）。",
+        "tags": [
+          "v2"
+        ],
+        "responses": {
+          "200": {
+            "description": "唯一『HTTP 状态码即语义』的端点：200 = status==\"ok\"，503 = 未就绪。载荷直接是 RuntimeSnapshot，不经信封（见 defect HTTP_HEALTH_NOT_ENVELOPED）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/RuntimeSnapshot"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/healthz": {
+      "get": {
+        "operationId": "Health",
+        "summary": "与 /health 同函数，供 k8s/负载均衡探针使用",
+        "tags": [
+          "v2"
+        ],
+        "responses": {
+          "200": {
+            "description": "与 /health 同函数，供 k8s/负载均衡探针使用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "operationId": "redirectRoot",
+        "summary": "重定向到 /dashboard；**必须原样保留 query string**，否则 /?access_token=<token> 直达会丢凭据。状态码固定为 303 See Other（不是 302）：303 明确表达「响应是另一个资源、",
+        "tags": [
+          "default"
+        ],
+        "responses": {
+          "303": {
+            "description": "重定向到 /dashboard；**必须原样保留 query string**，否则 /?access_token=<token> 直达会丢凭据。状态码固定为 303 See Other（不是 302）：303 明确表达「响应是另一个资源、原请求无副作用」，浏览器对两者的 GET 重定向行为一致。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dashboard": {
+      "get": {
+        "operationId": "spaShell",
+        "summary": "GET /dashboard",
+        "tags": [
+          "default"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bans": {
+      "get": {
+        "operationId": "spaShell",
+        "summary": "GET /bans",
+        "tags": [
+          "default"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whitelist": {
+      "get": {
+        "operationId": "spaShell",
+        "summary": "GET /whitelist",
+        "tags": [
+          "default"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jails": {
+      "get": {
+        "operationId": "spaShell",
+        "summary": "GET /jails",
+        "tags": [
+          "default"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ddos": {
+      "get": {
+        "operationId": "spaShell",
+        "summary": "GET /ddos",
+        "tags": [
+          "default"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/globe": {
+      "get": {
+        "operationId": "spaShell",
+        "summary": "GET /globe",
+        "tags": [
+          "default"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/logs": {
+      "get": {
+        "operationId": "spaShell",
+        "summary": "GET /logs",
+        "tags": [
+          "default"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings": {
+      "get": {
+        "operationId": "spaShell",
+        "summary": "GET /settings",
+        "tags": [
+          "default"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/more": {
+      "get": {
+        "operationId": "spaShell",
+        "summary": "GET /more",
+        "tags": [
+          "default"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/static/*path": {
+      "get": {
+        "operationId": "serveAsset",
+        "summary": "未命中时返回纯文本 \"404 Not Found\\n\"（errmodel STATIC_NOT_FOUND）",
+        "tags": [
+          "*path"
+        ],
+        "responses": {
+          "200": {
+            "description": "未命中时返回纯文本 \"404 Not Found\\n\"（errmodel STATIC_NOT_FOUND）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sw.js": {
+      "get": {
+        "operationId": "serviceWorker",
+        "summary": "带 Service-Worker-Allowed: / 与 Cache-Control: no-cache；浏览器注册 SW 时不带交互式凭据，放进认证组会 401 导致注册失败",
+        "tags": [
+          "default"
+        ],
+        "responses": {
+          "200": {
+            "description": "带 Service-Worker-Allowed: / 与 Cache-Control: no-cache；浏览器注册 SW 时不带交互式凭据，放进认证组会 401 导致注册失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "ServeHTTP",
+        "summary": "Prometheus 文本格式 text/plain; version=0.0.4; charset=utf-8",
+        "tags": [
+          "default"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prometheus 文本格式 text/plain; version=0.0.4; charset=utf-8",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/events": {
+      "get": {
+        "operationId": "ServeHTTP",
+        "summary": "超过 10 连接返回 503。keep-alive 事件文本为 \"keep-alive\"。五个域名帧（stats/bans/jails/whitelist/rates）的 data **必须与该域 REST 端点的载荷同源同形**：同一批 ",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE 事件流（事件: connected, stats, bans, jails, whitelist, rates）",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "最大并发连接: 10"
+      }
+    },
+    "/api/v2/logs/stream": {
+      "get": {
+        "operationId": "StreamLogs",
+        "summary": "上限 5 与 /api/v2/events 的 10 **各自独立**；keep-alive 文本同为 \"keep-alive\"。",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE 事件流（事件: connected, log, error）",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "最大并发连接: 5"
+      }
+    },
+    "/api/v2/stats": {
+      "get": {
+        "operationId": "Stats",
+        "summary": "载荷 StatsResponse：首屏总览，一张混合三路真源的表——内核统计快照（current_bans / total_bans / total_unbans / whitelist_count / packets_dropped / ",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 StatsResponse：首屏总览，一张混合三路真源的表——内核统计快照（current_bans / total_bans / total_unbans / whitelist_count / packets_dropped / packets_accepted）、历史库时间窗（today_bans 的本地自然日窗口、threat_level.recent_bans 的最近 5 分钟，两",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/StatsResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/bans": {
+      "get": {
+        "operationId": "ListBans",
+        "summary": "**单一形状**：一律返回分页信封 PaginatedResponse<BanResponse>（读 page / page_size / sort_by，缺省见 request PaginationParams），不得有裸数组分支。排序键",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "**单一形状**：一律返回分页信封 PaginatedResponse<BanResponse>（读 page / page_size / sort_by，缺省见 request PaginationParams），不得有裸数组分支。排序键是契约的 7 个取值，未识别的值回落 banned_at_desc——见 defect HTTP_BANS_DUAL_SHAPE 与 HTTP_BAN_SORT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "CreateBan",
+        "summary": "请求体 CreateBanRequest；成功 201 Created，载荷 BanOperationResponse。`duration` 三态：缺席与显式 0 都是**永久**，显式正数是时长（与 JailResponse.ban_ti",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "请求体 CreateBanRequest；成功 201 Created，载荷 BanOperationResponse。`duration` 三态：缺席与显式 0 都是**永久**，显式正数是时长（与 JailResponse.ban_time 的「负值=永久」是两套编码，别串用）。成功路径同时写 ban_events 底账（jail_name 固定 \"api\"）与 ban_history，任一步",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/BanOperationResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务码 40001: 封禁失败（内核未确认、IP 非法、或内核返回错误）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40001
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "业务码 40007: 请求体不是合法 JSON 或字段类型不符（daemon 解析，框架不会自产此码）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40007
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "业务码 40008: Content-Type 不是 application/json（本 API 只说这一种媒体类型）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40008
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBanRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/bans/{ip}": {
+      "delete": {
+        "operationId": "DeleteBan",
+        "summary": "DELETE /api/v2/bans/:ip",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ip",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务码 40002: 解封失败（IP 非法或内核拒绝）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/bans/{ip}/detail": {
+      "get": {
+        "operationId": "BanDetail",
+        "summary": "载荷 BanDetailResponse",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ip",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 BanDetailResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/BanDetailResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务码 40006: 封禁详情查询失败（IP 非法）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40006
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/bans/unban-temporary": {
+      "post": {
+        "operationId": "UnbanAllTemporary",
+        "summary": "POST /api/v2/bans/unban-temporary",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务码 40003: 批量解封临时封禁失败 / 添加白名单失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/bans/batch": {
+      "post": {
+        "operationId": "BatchBan",
+        "summary": "请求体 BatchBanRequest（`{ips, duration, reason}`，单次 1..100 条）；空列表或超过 100 条 → 40005；成功 201 Created，载荷 BatchOperationResponse",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "请求体 BatchBanRequest（`{ips, duration, reason}`，单次 1..100 条）；空列表或超过 100 条 → 40005；成功 201 Created，载荷 BatchOperationResponse。duration 缺省按 3600 秒**有时长**封禁，不得升格为永久——见 defect HTTP_BATCH_BAN_BECOMES_PERMANENT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/BatchOperationResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务码 40005: 批量封禁参数非法（列表为空或超过 100 条）/ 日志查询参数非法",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40005
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "业务码 40007: 请求体不是合法 JSON 或字段类型不符（daemon 解析，框架不会自产此码）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40007
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "业务码 40008: Content-Type 不是 application/json（本 API 只说这一种媒体类型）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40008
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchBanRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/jails": {
+      "get": {
+        "operationId": "ListJails",
+        "summary": "载荷 JailResponse 数组（按配置顺序，不排序）。这条路由**不编业务码**：jail 配置出自内存，历史库缺席不影响它，读侧不会收到 50002/50003。配置与启用状态读的是运行时发布的 jail 配置快照——属主是执行体，",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 JailResponse 数组（按配置顺序，不排序）。这条路由**不编业务码**：jail 配置出自内存，历史库缺席不影响它，读侧不会收到 50002/50003。配置与启用状态读的是运行时发布的 jail 配置快照——属主是执行体，在装配、热重载、回滚、内核指令与启用状态同步时发布，改名或删除的 jail 随下一次发布从表里消失，读侧不会看到配置与快照各一半的形状。运行时计数（lines_",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/JailResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/jails/{name}": {
+      "put": {
+        "operationId": "UpdateJail",
+        "summary": "请求体 UpdateJailRequest；Jail 不存在 → 404（信封内 code=404，非 HTTP 404）。成功载荷 {name, enabled, status: \"updated\"} 报的是这次写入的**期望状态**：写",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "请求体 UpdateJailRequest；Jail 不存在 → 404（信封内 code=404，非 HTTP 404）。成功载荷 {name, enabled, status: \"updated\"} 报的是这次写入的**期望状态**：写入点只改启用状态来源，执行体在下一个 poll 周期把它并进配置、重建监视集合并发布新的 jail 快照，GET /api/v2/jails 与 jails 域",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "业务码 404: Jail 不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            404
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "业务码 40007: 请求体不是合法 JSON 或字段类型不符（daemon 解析，框架不会自产此码）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40007
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "业务码 40008: Content-Type 不是 application/json（本 API 只说这一种媒体类型）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40008
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateJailRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/config": {
+      "get": {
+        "operationId": "GetConfig",
+        "summary": "载荷 WebuiConfigResponse",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 WebuiConfigResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/WebuiConfigResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "UpdateConfig",
+        "summary": "请求体 UpdateConfigRequest",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "请求体 UpdateConfigRequest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务码 40004: 更新配置失败 / 移除白名单失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40004
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "业务码 40007: 请求体不是合法 JSON 或字段类型不符（daemon 解析，框架不会自产此码）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40007
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "业务码 40008: Content-Type 不是 application/json（本 API 只说这一种媒体类型）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40008
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConfigRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/whitelist": {
+      "get": {
+        "operationId": "ListWhitelist",
+        "summary": "载荷 WhitelistEntryResponse 数组（前端 interface 名为 WhitelistEntry）",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 WhitelistEntryResponse 数组（前端 interface 名为 WhitelistEntry）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/WhitelistEntryResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "AddWhitelist",
+        "summary": "请求体 CreateWhitelistRequest",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "请求体 CreateWhitelistRequest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务码 40003: 批量解封临时封禁失败 / 添加白名单失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "业务码 40007: 请求体不是合法 JSON 或字段类型不符（daemon 解析，框架不会自产此码）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40007
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "业务码 40008: Content-Type 不是 application/json（本 API 只说这一种媒体类型）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40008
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/whitelist/{cidr}": {
+      "delete": {
+        "operationId": "RemoveWhitelist",
+        "summary": "载荷 WhitelistOperationResponse",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cidr",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 WhitelistOperationResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/WhitelistOperationResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务码 40004: 更新配置失败 / 移除白名单失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40004
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/whitelist/recommendations": {
+      "get": {
+        "operationId": "GetWhitelistRecommendations",
+        "summary": "载荷 WhitelistRecommendation 数组（**数组本身**，不另包 {recommendations,total,min_bans} 信封：条数由 limit 决定、阈值由 min_bans 决定，读侧不需要服务端再报一遍",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 WhitelistRecommendation 数组（**数组本身**，不另包 {recommendations,total,min_bans} 信封：条数由 limit 决定、阈值由 min_bans 决定，读侧不需要服务端再报一遍）。查询参数 min_bans（最小封禁次数阈值，默认 5）、limit（条数上限，默认 20、最大 100）；无推荐时载荷是 []，不是 null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/WhitelistRecommendation"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/rates/current": {
+      "get": {
+        "operationId": "RatesCurrent",
+        "summary": "载荷 RateResponse 数组，不分页：内核速率表的容量（FW_RATE_CPU_SLOTS=512 个在跟踪的源地址）在一次响应带得下，事件泵也是整表取回。行来自事件泵快照，服务端按 packets_per_sec 降序、同值按 I",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 RateResponse 数组，不分页：内核速率表的容量（FW_RATE_CPU_SLOTS=512 个在跟踪的源地址）在一次响应带得下，事件泵也是整表取回。行来自事件泵快照，服务端按 packets_per_sec 降序、同值按 IP 升序（内核按哈希序回表，不排序会让同一个地址在两次刷新之间跳到图的另一端）。速率是内核给的**自上次查询以来的平均**，不是瞬时值；地址族无法识别的条目丢弃",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/RateResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/rates/history": {
+      "get": {
+        "operationId": "GetRatesHistory",
+        "summary": "载荷 RateHistoryResponse **数组**，时间升序（最早在前，折线图直接按 x 轴递增画）。数据源是守护进程侧的速率历史环（internal/telemetry/rate_history.go）：事件泵每成功问一次内核速率",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 RateHistoryResponse **数组**，时间升序（最早在前，折线图直接按 x 轴递增画）。数据源是守护进程侧的速率历史环（internal/telemetry/rate_history.go）：事件泵每成功问一次内核速率表落一个点，节奏 = 采样周期（当前 5 秒），容量 720 点 ≈ 1 小时。查询参数 limit 取最近 n 个点，上限与默认都是环容量——要更多时环里也没",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/RateHistoryResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/rates/windows": {
+      "get": {
+        "operationId": "RatesWindows",
+        "summary": "载荷 RateWindowSnapshot：三档窗口（短期/中期/长期）各一对 pps、bps。窗口是**守护进程侧的派生量**（EWMA），内核没有窗口概念、只回答自上次查询以来的平均速率，所以这条路由的数据源是快照的 Windows 字",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 RateWindowSnapshot：三档窗口（短期/中期/长期）各一对 pps、bps。窗口是**守护进程侧的派生量**（EWMA），内核没有窗口概念、只回答自上次查询以来的平均速率，所以这条路由的数据源是快照的 Windows 字段而不是内核。平滑值本身是浮点，载荷按契约的 u64 四舍五入——截断会把 0.6 pps 报成 0，读成「完全没有流量」",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/RateWindowSnapshot"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/heatmap": {
+      "get": {
+        "operationId": "Heatmap",
+        "summary": "载荷 HourlyHeatmap：24 个 HourlyBucket 的定长数组，hour 是**本地时区**的自然小时槽（0-23），bans 把最近 7 个自然日的封禁按小时归槽后叠在一起（热力图读的是「哪个钟点最容易被打」，不是某一天",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 HourlyHeatmap：24 个 HourlyBucket 的定长数组，hour 是**本地时区**的自然小时槽（0-23），bans 把最近 7 个自然日的封禁按小时归槽后叠在一起（热力图读的是「哪个钟点最容易被打」，不是某一天的小时分布）；缺数据的小时保留为全零行而不是跳过，数组长度恒为 24。failed_attempts 与 ddos_events 两列恒为 0（见 defect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/HourlyHeatmap"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/recidivism": {
+      "get": {
+        "operationId": "Recidivism",
+        "summary": "载荷 RecidivismResponse；其 recidivism_rate 是**百分数 0-100**（见 defect HTTP_RECIDIVISM_RATE_UNIT）",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 RecidivismResponse；其 recidivism_rate 是**百分数 0-100**（见 defect HTTP_RECIDIVISM_RATE_UNIT）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/RecidivismResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/ban-effectiveness": {
+      "get": {
+        "operationId": "BanEffectiveness",
+        "summary": "载荷 BanEffectivenessResponse；其中 recidivism_rate（含 overall_recidivism_rate 与各 level 的）统一为**百分数 0-100**，与 /api/v2/stats/rec",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 BanEffectivenessResponse；其中 recidivism_rate（含 overall_recidivism_rate 与各 level 的）统一为**百分数 0-100**，与 /api/v2/stats/recidivism 同一个口径，前端两处共用同一个格式化函数（见 defect HTTP_RECIDIVISM_RATE_UNIT 的 resolution）。**",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/BanEffectivenessResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/periodic-attackers": {
+      "get": {
+        "operationId": "PeriodicAttackers",
+        "summary": "载荷 PeriodicAttacker 数组",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 PeriodicAttacker 数组",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/PeriodicAttacker"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/collaborative-attacks": {
+      "get": {
+        "operationId": "CollaborativeAttacks",
+        "summary": "载荷 CollaborativeAttack 数组",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 CollaborativeAttack 数组",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/CollaborativeAttack"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/udp-ports": {
+      "get": {
+        "operationId": "UdpPorts",
+        "summary": "载荷 UdpPortDistributionResponse：ports 最多 64 行（FW_ANALYSIS_UDP_PACK_MAX），行按端口升序以便两次刷新可比。total_entries 是**本次快照带出的行数**而不是表内总",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 UdpPortDistributionResponse：ports 最多 64 行（FW_ANALYSIS_UDP_PACK_MAX），行按端口升序以便两次刷新可比。total_entries 是**本次快照带出的行数**而不是表内总数，max_entries 是跟踪容量 512——载荷因此无法回答「是否还有没带出来的端口」，见 defect HTTP_UDP_PORT_TOTAL_IS_P",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/UdpPortDistributionResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/icmp-types": {
+      "get": {
+        "operationId": "IcmpTypes",
+        "summary": "载荷 IcmpTypeDistributionResponse：截断口径与 udp-ports 相同（types 最多 64 行，total_entries 是带出的行数，max_entries 是跟踪容量 128），同见 defect H",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 IcmpTypeDistributionResponse：截断口径与 udp-ports 相同（types 最多 64 行，total_entries 是带出的行数，max_entries 是跟踪容量 128），同见 defect HTTP_UDP_PORT_TOTAL_IS_PACKED_COUNT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/IcmpTypeDistributionResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/sse-status": {
+      "get": {
+        "operationId": "SSEStatus",
+        "summary": "载荷 SseStatusResponse（events / logs 各一份 SseStreamStatus）：两条流各自的上限与当前连接数都可见，前端按所属流判断 limit_reached，不得用一条流的上限推断另一条（缺陷 HTTP_",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 SseStatusResponse（events / logs 各一份 SseStreamStatus）：两条流各自的上限与当前连接数都可见，前端按所属流判断 limit_reached，不得用一条流的上限推断另一条（缺陷 HTTP_SSE_STATUS_INCOMPLETE 已按此形状闭合）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/SseStatusResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/ban-duration-histogram": {
+      "get": {
+        "operationId": "BanDurationHistogram",
+        "summary": "载荷 BanDurationHistogramResponse。样本是一次取最近 10000 条 ban_events（分布需要样本厚度，上限同时也是读取成本的闸门；该列无索引，走的是全表尾部）。**不编业务码**：库缺席或查不动时同样在 ",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 BanDurationHistogramResponse。样本是一次取最近 10000 条 ban_events（分布需要样本厚度，上限同时也是读取成本的闸门；该列无索引，走的是全表尾部）。**不编业务码**：库缺席或查不动时同样在 200 内回「6 个标签 + 全 0 计数 + total=0」。**没有 limit 查询参数**——这一条报的是分布而不是列表，条数由桶数决定。桶边界与 t",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/BanDurationHistogramResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/packet-sizes": {
+      "get": {
+        "operationId": "PacketSizes",
+        "summary": "载荷 PacketSizeDistributionResponse：5 个长度桶，labels/counts/percentages 等长同下标。计数是**自模块加载起的累计值**（内核那组数组只在 init/unload 归零，flush",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 PacketSizeDistributionResponse：5 个长度桶，labels/counts/percentages 等长同下标。计数是**自模块加载起的累计值**（内核那组数组只在 init/unload 归零，flush 只搬 accept/drop 那组），横轴不是时间窗口——面板读的是「本机见过什么样的包」而不是「最近 5 秒长什么样」。读数来自事件泵快照，链路断开时是上一",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/PacketSizeDistributionResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/ttl-distribution": {
+      "get": {
+        "operationId": "TtlDistribution",
+        "summary": "载荷 TtlDistributionResponse：6 个 TTL 桶，累计口径与 packet-sizes 相同（自模块加载起，不是时间窗口），labels/counts/percentages 等长同下标",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 TtlDistributionResponse：6 个 TTL 桶，累计口径与 packet-sizes 相同（自模块加载起，不是时间窗口），labels/counts/percentages 等长同下标",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TtlDistributionResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/ip-fragments": {
+      "get": {
+        "operationId": "IpFragments",
+        "summary": "载荷 IpFragmentStatsResponse：total_packets 是**所有**被记账的 IP 包（内核逐包累加），fragment_packets 只数分片，fragment_ratio 因此是百分数 0-100；累计口径",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 IpFragmentStatsResponse：total_packets 是**所有**被记账的 IP 包（内核逐包累加），fragment_packets 只数分片，fragment_ratio 因此是百分数 0-100；累计口径同 packet-sizes。总数为 0 时比例取 0 而不是 NaN——encoding/json 遇到 NaN 会直接报错、整个响应发不出去",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/IpFragmentStatsResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/port-scanners": {
+      "get": {
+        "operationId": "PortScanners",
+        "summary": "载荷 PortScanResponse：scanners 最多 20 行（内核只带最近活跃的地址），threshold 是判定阈值。total_detected 是内核的**累计检出事件计数**（fw_info.port_scan_dete",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 PortScanResponse：scanners 最多 20 行（内核只带最近活跃的地址），threshold 是判定阈值。total_detected 是内核的**累计检出事件计数**（fw_info.port_scan_detected，每次判定 +1、模块重载归零），与行数不是同一个量，见 defect HTTP_SCANNER_TOTAL_COUNT_ASYMMETRY",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/PortScanResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/service-probes": {
+      "get": {
+        "operationId": "ServiceProbes",
+        "summary": "载荷 ServiceProbeResponse：probes 最多 20 行，threshold 是判定阈值。total_detected 与 port-scanners 同名，但这一侧带的是**本次快照打包的行数**而不是累计检出数——形",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 ServiceProbeResponse：probes 最多 20 行，threshold 是判定阈值。total_detected 与 port-scanners 同名，但这一侧带的是**本次快照打包的行数**而不是累计检出数——形状对齐（两处都有该字段）由 defect HTTP_SERVICE_PROBE_NO_TOTAL 闭合，口径差异见 HTTP_SCANNER_TOTAL_COU",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ServiceProbeResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/ban-duration-recommendations": {
+      "get": {
+        "operationId": "BanDurationRecommendations",
+        "summary": "载荷 BanDurationRecommendationResponse",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 BanDurationRecommendationResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/BanDurationRecommendationResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/reputation": {
+      "get": {
+        "operationId": "Reputation",
+        "summary": "载荷 ReputationEntryResponse 数组；threshold_multiplier 由内联分段函数生成（1.0 / 0.8 / 0.5）",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 ReputationEntryResponse 数组；threshold_multiplier 由内联分段函数生成（1.0 / 0.8 / 0.5）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ReputationEntryResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/risk/vectors/{ip}": {
+      "get": {
+        "operationId": "RiskVectors",
+        "summary": "载荷 RiskVectorResponse：指定 IP 的多维风险向量（7 个维度）。仅在 risk_engine.enabled=true 时可用，否则返回 503。IP 非法 → 40006",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ip",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 RiskVectorResponse：指定 IP 的多维风险向量（7 个维度）。仅在 risk_engine.enabled=true 时可用，否则返回 503。IP 非法 → 40006",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/RiskVectorResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务码 40006: 封禁详情查询失败（IP 非法）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40006
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/risk/events/{ip}": {
+      "get": {
+        "operationId": "RiskEvents",
+        "summary": "载荷 RiskEventResponse：指定 IP 的攻击事件历史（最近 100 条，按时间降序）。仅在 risk_engine.enabled=true 时可用，否则返回 503。IP 非法 → 40006",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ip",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 RiskEventResponse：指定 IP 的攻击事件历史（最近 100 条，按时间降序）。仅在 risk_engine.enabled=true 时可用，否则返回 503。IP 非法 → 40006",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/RiskEventResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务码 40006: 封禁详情查询失败（IP 非法）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40006
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/risk/vectors": {
+      "get": {
+        "operationId": "ListRiskVectors",
+        "summary": "载荷 RiskVectorListResponse：所有 IP 的风险向量列表（按总风险降序，最多 100 条）。仅在 risk_engine.enabled=true 时可用，否则返回 503",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 RiskVectorListResponse：所有 IP 的风险向量列表（按总风险降序，最多 100 条）。仅在 risk_engine.enabled=true 时可用，否则返回 503",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/RiskVectorListResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/threshold-recommendations": {
+      "get": {
+        "operationId": "ThresholdRecommendations",
+        "summary": "载荷 ThresholdRecommendationResponse（recommended_threshold 的 0 语义见 defect HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS）",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 ThresholdRecommendationResponse（recommended_threshold 的 0 语义见 defect HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ThresholdRecommendationResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/network-distribution": {
+      "get": {
+        "operationId": "NetworkDistribution",
+        "summary": "载荷 NetworkBlock 数组",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 NetworkBlock 数组",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/NetworkBlock"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/attack-predictions": {
+      "get": {
+        "operationId": "AttackPredictions",
+        "summary": "载荷 AttackPredictionSummary",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "载荷 AttackPredictionSummary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/AttackPredictionSummary"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/anomalies": {
+      "get": {
+        "operationId": "Anomalies",
+        "summary": "异常检测：全局流量偏离 + per-IP 行为离群；载荷 AnomalyResponse。两路各有真源且都不猜：全局用**速率历史环**（一个点 = 事件泵问内核一次，容量 720 点 ≈ 1 小时），当前值取最新一个点，行数未达最小样本护",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "异常检测：全局流量偏离 + per-IP 行为离群；载荷 AnomalyResponse。两路各有真源且都不猜：全局用**速率历史环**（一个点 = 事件泵问内核一次，容量 720 点 ≈ 1 小时），当前值取最新一个点，行数未达最小样本护栏（10）时整段基线不给——global_features 写成 null（本轮没有当前值），global_dimensions 与两条基线是**空数组**而不",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/AnomalyResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/stats/attack-geo": {
+      "get": {
+        "operationId": "AttackGeo",
+        "summary": "攻击源地理分布；载荷 AttackGeoResponse。**不编业务码**：这条恒成功。当前实现**没有 GeoIP 读库**（见 defect HTTP_GEOIP_NOT_IMPLEMENTED），因此 geoip_enabled 恒",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "攻击源地理分布；载荷 AttackGeoResponse。**不编业务码**：这条恒成功。当前实现**没有 GeoIP 读库**（见 defect HTTP_GEOIP_NOT_IMPLEMENTED），因此 geoip_enabled 恒为 false、points 恒为 []、total_ips/located_ips 恒为 0——这是「没有读数」而不是「没有攻击来自远方」。本机坐标三件套有真",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/AttackGeoResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/logs": {
+      "get": {
+        "operationId": "GetLogs",
+        "summary": "查询参数 LogQueryParams；分页参数非法 → 40005；载荷 LogPageResponse",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "查询参数 LogQueryParams；分页参数非法 → 40005；载荷 LogPageResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/LogPageResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务码 40005: 批量封禁参数非法（列表为空或超过 100 条）/ 日志查询参数非法",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40005
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/threat-feeds": {
+      "get": {
+        "operationId": "ListThreatFeeds",
+        "summary": "外部威胁情报源列表与同步状态；载荷 ThreatFeedListResponse",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "外部威胁情报源列表与同步状态；载荷 ThreatFeedListResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ThreatFeedListResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/threat-feeds/sync": {
+      "post": {
+        "operationId": "SyncThreatFeed",
+        "summary": "手动触发一次威胁情报同步；载荷 ThreatFeedSyncResult",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "手动触发一次威胁情报同步；载荷 ThreatFeedSyncResult",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ThreatFeedSyncResult"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/threat-feeds/{id}": {
+      "get": {
+        "operationId": "GetThreatFeed",
+        "summary": "单个威胁情报源详情；载荷 ThreatFeedResponse",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "单个威胁情报源详情；载荷 ThreatFeedResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ThreatFeedResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "业务码 404: Jail 不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            404
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/analysis/summary": {
+      "get": {
+        "operationId": "AnalysisSummary",
+        "summary": "综合分析摘要：聚合复发、预测、异常检测的一页结论；载荷 AnalysisSummaryResponse",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "综合分析摘要：聚合复发、预测、异常检测的一页结论；载荷 AnalysisSummaryResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/AnalysisSummaryResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/analysis/ip/{ip}": {
+      "get": {
+        "operationId": "AnalysisIp",
+        "summary": "单个 IP 的综合分析（风险向量 + 封禁历史 + 信誉 + 预测）；载荷 AnalysisIpResponse",
+        "tags": [
+          "v2"
+        ],
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ip",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "单个 IP 的综合分析（风险向量 + 封禁历史 + 信誉 + 预测）；载荷 AnalysisIpResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/AnalysisIpResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务码 40006: 封禁详情查询失败（IP 非法）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            40006
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭据错误",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "data": {
+            "type": "object",
+            "description": "未解析的契约类型: T"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "data",
+          "message"
+        ],
+        "description": "泛型类型，参数: T"
+      },
+      "AnomalyResponse": {
+        "type": "object",
+        "properties": {
+          "global_score": {
+            "type": "number",
+            "format": "double"
+          },
+          "global_dimensions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DimensionScore"
+            }
+          },
+          "global_features": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FeatureValue"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "global_baseline_p50": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeatureValue"
+            }
+          },
+          "global_baseline_p95": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeatureValue"
+            }
+          },
+          "global_sample_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "ip_anomalies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IpAnomalyEntry"
+            }
+          },
+          "timestamp": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "global_score",
+          "global_dimensions",
+          "global_baseline_p50",
+          "global_baseline_p95",
+          "global_sample_count",
+          "ip_anomalies",
+          "timestamp"
+        ]
+      },
+      "DimensionScore": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "name",
+          "score"
+        ]
+      },
+      "FeatureValue": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ]
+      },
+      "IpAnomalyEntry": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number",
+            "format": "double"
+          },
+          "dimensions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DimensionScore"
+            }
+          }
+        },
+        "required": [
+          "ip",
+          "score",
+          "dimensions"
+        ]
+      },
+      "AttackGeoResponse": {
+        "type": "object",
+        "properties": {
+          "geoip_enabled": {
+            "type": "boolean"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GeoPoint"
+            }
+          },
+          "total_ips": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "located_ips": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "server_latitude": {
+            "oneOf": [
+              {
+                "type": "number",
+                "format": "double"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "server_longitude": {
+            "oneOf": [
+              {
+                "type": "number",
+                "format": "double"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "server_location_source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "geoip_enabled",
+          "points",
+          "total_ips",
+          "located_ips",
+          "server_location_source"
+        ]
+      },
+      "GeoPoint": {
+        "type": "object",
+        "properties": {
+          "latitude": {
+            "type": "number",
+            "format": "double"
+          },
+          "longitude": {
+            "type": "number",
+            "format": "double"
+          },
+          "country_code": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "subdivision": {
+            "type": "string"
+          },
+          "unique_ips": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_bans": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "top_ip": {
+            "type": "string"
+          },
+          "last_banned_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "latitude",
+          "longitude",
+          "country_code",
+          "country",
+          "city",
+          "subdivision",
+          "unique_ips",
+          "total_bans",
+          "top_ip",
+          "last_banned_at"
+        ]
+      },
+      "PaginatedResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "未解析的契约类型: T"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_pages": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "total_pages"
+        ],
+        "description": "泛型类型，参数: T"
+      },
+      "RuntimeSnapshot": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "netlink_ready": {
+            "type": "boolean"
+          },
+          "kmod_proc_present": {
+            "type": "boolean"
+          },
+          "ban_cache_initialized": {
+            "type": "boolean"
+          },
+          "ban_history_initialized": {
+            "type": "boolean"
+          },
+          "active_bans": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "lease_state": {
+            "type": "string"
+          },
+          "lease_losses": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "status",
+          "netlink_ready",
+          "kmod_proc_present",
+          "ban_cache_initialized",
+          "ban_history_initialized",
+          "active_bans",
+          "lease_state",
+          "lease_losses"
+        ]
+      },
+      "StatsResponse": {
+        "type": "object",
+        "properties": {
+          "daemon_version": {
+            "type": "string"
+          },
+          "kernel_version": {
+            "type": "string"
+          },
+          "today_bans": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failed_attempts": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "ddos_events": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "uptime_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "ban_trend": {
+            "$ref": "#/components/schemas/ChartData"
+          },
+          "jail_distribution": {
+            "$ref": "#/components/schemas/ChartData"
+          },
+          "failure_reasons": {
+            "$ref": "#/components/schemas/ChartData"
+          },
+          "failed_attempts_trend": {
+            "$ref": "#/components/schemas/ChartData"
+          },
+          "current_bans": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_bans": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_unbans": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "whitelist_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "packets_dropped": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "packets_accepted": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "threat_level": {
+            "$ref": "#/components/schemas/ThreatLevel"
+          }
+        },
+        "required": [
+          "daemon_version",
+          "kernel_version",
+          "today_bans",
+          "failed_attempts",
+          "ddos_events",
+          "uptime_seconds",
+          "ban_trend",
+          "jail_distribution",
+          "failure_reasons",
+          "failed_attempts_trend",
+          "current_bans",
+          "total_bans",
+          "total_unbans",
+          "whitelist_count",
+          "packets_dropped",
+          "packets_accepted",
+          "threat_level"
+        ]
+      },
+      "ChartData": {
+        "type": "object",
+        "properties": {
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        },
+        "required": [
+          "labels",
+          "values"
+        ]
+      },
+      "ThreatLevel": {
+        "type": "object",
+        "properties": {
+          "level": {
+            "type": "string"
+          },
+          "score": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "factors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "current_pps": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "pps_ratio": {
+            "type": "number",
+            "format": "double"
+          },
+          "ban_table_usage": {
+            "type": "number",
+            "format": "double"
+          },
+          "recent_bans": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "baseline_frozen": {
+            "type": "boolean"
+          },
+          "peak_hours": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "level",
+          "score",
+          "factors",
+          "current_pps",
+          "pps_ratio",
+          "ban_table_usage",
+          "recent_bans",
+          "baseline_frozen",
+          "peak_hours"
+        ]
+      },
+      "BanResponse": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "jail": {
+            "type": "string"
+          },
+          "banned_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "remaining_seconds": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "ban_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "is_permanent": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ip",
+          "jail",
+          "banned_at",
+          "remaining_seconds",
+          "reason",
+          "ban_count",
+          "is_permanent"
+        ]
+      },
+      "BanDetailResponse": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "is_banned": {
+            "type": "boolean"
+          },
+          "jail_name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "banned_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "is_permanent": {
+            "type": "boolean"
+          },
+          "fail_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "ban_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_unbanned_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "was_permanent": {
+            "type": "boolean"
+          },
+          "progressive_level": {
+            "type": "string"
+          },
+          "next_ban_duration": {
+            "type": "string"
+          },
+          "reputation_score": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "reputation_multiplier": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "ip",
+          "is_banned",
+          "jail_name",
+          "reason",
+          "banned_at",
+          "expires_at",
+          "is_permanent",
+          "fail_count",
+          "ban_count",
+          "last_unbanned_at",
+          "was_permanent",
+          "progressive_level",
+          "next_ban_duration",
+          "reputation_score",
+          "reputation_multiplier"
+        ]
+      },
+      "BanOperationResponse": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "permanent": {
+            "type": "boolean"
+          },
+          "duration_seconds": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "ip",
+          "action",
+          "permanent"
+        ]
+      },
+      "BatchOperationResponse": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "succeeded": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failed_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "total",
+          "succeeded",
+          "failed_count",
+          "details"
+        ]
+      },
+      "CreateBanRequest": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "duration": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "BatchBanRequest": {
+        "type": "object",
+        "properties": {
+          "ips": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "duration": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "JailResponse": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "ban_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_retries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "effective_max_retries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "findtime": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "ban_time": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "is_peak_hours": {
+            "type": "boolean"
+          },
+          "peak_hours_multiplier": {
+            "type": "number",
+            "format": "double"
+          },
+          "internal_ip_multiplier": {
+            "type": "number",
+            "format": "double"
+          },
+          "lines_parsed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "regex_matches": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "ips_extracted": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failed_attempts": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "bans_triggered": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "name",
+          "enabled",
+          "ban_count",
+          "max_retries",
+          "effective_max_retries",
+          "findtime",
+          "ban_time",
+          "is_peak_hours",
+          "peak_hours_multiplier",
+          "internal_ip_multiplier",
+          "lines_parsed",
+          "regex_matches",
+          "ips_extracted",
+          "failed_attempts",
+          "bans_triggered"
+        ]
+      },
+      "UpdateJailRequest": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "WebuiConfigResponse": {
+        "type": "object",
+        "properties": {
+          "sse_push_interval": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "rate_warning_pps": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "rate_critical_pps": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "rate_warning_syn": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "rate_critical_syn": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_syn_per_second": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_udp_per_second": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_icmp_per_second": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_ack_per_second": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_rst_per_second": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_fin_per_second": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "static_threshold": {
+            "type": "boolean"
+          },
+          "dynamic_threshold": {
+            "type": "boolean"
+          },
+          "ddos_detection": {
+            "type": "boolean"
+          },
+          "max_ban_entries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_whitelist_entries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_rate_entries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_local_ip_cache": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "clear_logs_at": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "sse_push_interval",
+          "rate_warning_pps",
+          "rate_critical_pps",
+          "rate_warning_syn",
+          "rate_critical_syn",
+          "max_syn_per_second",
+          "max_udp_per_second",
+          "max_icmp_per_second",
+          "max_ack_per_second",
+          "max_rst_per_second",
+          "max_fin_per_second",
+          "static_threshold",
+          "dynamic_threshold",
+          "ddos_detection",
+          "max_ban_entries",
+          "max_whitelist_entries",
+          "max_rate_entries",
+          "max_local_ip_cache"
+        ]
+      },
+      "UpdateConfigRequest": {
+        "type": "object",
+        "properties": {
+          "sse_push_interval": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rate_warning_pps": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rate_critical_pps": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rate_warning_syn": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rate_critical_syn": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_syn_per_second": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_udp_per_second": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_icmp_per_second": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_ack_per_second": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_rst_per_second": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_fin_per_second": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "static_threshold": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dynamic_threshold": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ddos_detection": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_ban_entries": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_whitelist_entries": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_rate_entries": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_local_ip_cache": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "clear_logs_at": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "WhitelistEntryResponse": {
+        "type": "object",
+        "properties": {
+          "cidr": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cidr",
+          "device"
+        ]
+      },
+      "WhitelistOperationResponse": {
+        "type": "object",
+        "properties": {
+          "cidr": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cidr",
+          "action"
+        ]
+      },
+      "WhitelistRecommendation": {
+        "type": "object",
+        "properties": {
+          "rec_type": {
+            "type": "string"
+          },
+          "cidr": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "affected_ips": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_bans": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "confidence": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "rec_type",
+          "cidr",
+          "reason",
+          "affected_ips",
+          "total_bans",
+          "confidence"
+        ]
+      },
+      "CreateWhitelistRequest": {
+        "type": "object",
+        "properties": {
+          "cidr": {
+            "type": "string"
+          }
+        }
+      },
+      "RateResponse": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "packets_per_sec": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "bytes_per_sec": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "syn_packets_per_sec": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "udp_packets_per_sec": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "icmp_packets_per_sec": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "ack_packets_per_sec": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "rst_packets_per_sec": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "fin_packets_per_sec": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "ip",
+          "packets_per_sec",
+          "bytes_per_sec",
+          "syn_packets_per_sec",
+          "udp_packets_per_sec",
+          "icmp_packets_per_sec",
+          "ack_packets_per_sec",
+          "rst_packets_per_sec",
+          "fin_packets_per_sec"
+        ]
+      },
+      "RateHistoryResponse": {
+        "type": "object",
+        "properties": {
+          "timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_pps": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_bps": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "tracked_ips": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "timestamp",
+          "total_pps",
+          "total_bps",
+          "tracked_ips"
+        ]
+      },
+      "RateWindowSnapshot": {
+        "type": "object",
+        "properties": {
+          "pps_short": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "pps_mid": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "pps_long": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "bps_short": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "bps_mid": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "bps_long": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "pps_short",
+          "pps_mid",
+          "pps_long",
+          "bps_short",
+          "bps_mid",
+          "bps_long"
+        ]
+      },
+      "RecidivismResponse": {
+        "type": "object",
+        "properties": {
+          "total_ips": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "recidivist_ips": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "recidivism_rate": {
+            "type": "number",
+            "format": "double"
+          },
+          "permanent_bans": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "top_recidivists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecidivistEntry"
+            }
+          }
+        },
+        "required": [
+          "total_ips",
+          "recidivist_ips",
+          "recidivism_rate",
+          "permanent_bans",
+          "top_recidivists"
+        ]
+      },
+      "RecidivistEntry": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "ban_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_banned_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "was_permanent": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ip",
+          "ban_count",
+          "last_banned_at",
+          "was_permanent"
+        ]
+      },
+      "BanEffectivenessResponse": {
+        "type": "object",
+        "properties": {
+          "levels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BanLevelEffectiveness"
+            }
+          },
+          "total_unique_ips": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "overall_recidivism_rate": {
+            "type": "number",
+            "format": "double"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "levels",
+          "total_unique_ips",
+          "overall_recidivism_rate",
+          "summary"
+        ]
+      },
+      "BanLevelEffectiveness": {
+        "type": "object",
+        "properties": {
+          "level": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "label": {
+            "type": "string"
+          },
+          "total_ips": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "recidivist_ips": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "recidivism_rate": {
+            "type": "number",
+            "format": "double"
+          },
+          "permanent_bans": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "verdict": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "level",
+          "label",
+          "total_ips",
+          "recidivist_ips",
+          "recidivism_rate",
+          "permanent_bans",
+          "verdict"
+        ]
+      },
+      "PeriodicAttacker": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "ban_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "avg_interval_secs": {
+            "type": "number",
+            "format": "double"
+          },
+          "interval_stddev": {
+            "type": "number",
+            "format": "double"
+          },
+          "periodicity_score": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "jail_name": {
+            "type": "string"
+          },
+          "timestamps": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        },
+        "required": [
+          "ip",
+          "ban_count",
+          "avg_interval_secs",
+          "interval_stddev",
+          "periodicity_score",
+          "jail_name",
+          "timestamps"
+        ]
+      },
+      "CollaborativeAttack": {
+        "type": "object",
+        "properties": {
+          "jail_name": {
+            "type": "string"
+          },
+          "window_start": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "window_end": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ip_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "ips": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "total_bans": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "correlation_score": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "jail_name",
+          "window_start",
+          "window_end",
+          "ip_count",
+          "ips",
+          "total_bans",
+          "correlation_score"
+        ]
+      },
+      "AttackPrediction": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "ban_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "jail_name": {
+            "type": "string"
+          },
+          "last_ban_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "median_interval_secs": {
+            "type": "number",
+            "format": "double"
+          },
+          "predicted_next_attack": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "remaining_secs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "confidence": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "urgency": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ip",
+          "ban_count",
+          "jail_name",
+          "last_ban_at",
+          "median_interval_secs",
+          "predicted_next_attack",
+          "remaining_secs",
+          "confidence",
+          "urgency"
+        ]
+      },
+      "AttackPredictionSummary": {
+        "type": "object",
+        "properties": {
+          "predictions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttackPrediction"
+            }
+          },
+          "jail_trends": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JailAttackTrend"
+            }
+          },
+          "imminent_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "within_24h_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "predictions",
+          "jail_trends",
+          "imminent_count",
+          "within_24h_count"
+        ]
+      },
+      "JailAttackTrend": {
+        "type": "object",
+        "properties": {
+          "jail_name": {
+            "type": "string"
+          },
+          "bans_24h": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "bans_7d": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "trend": {
+            "type": "string"
+          },
+          "predicted_attackers_24h": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "jail_name",
+          "bans_24h",
+          "bans_7d",
+          "trend",
+          "predicted_attackers_24h"
+        ]
+      },
+      "ThresholdRecommendation": {
+        "type": "object",
+        "properties": {
+          "jail_name": {
+            "type": "string"
+          },
+          "current_threshold": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "recommended_threshold": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "direction": {
+            "type": "string"
+          },
+          "total_bans": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "unique_ips": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "recidivist_ips": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "recidivism_rate": {
+            "type": "number",
+            "format": "double"
+          },
+          "avg_bans_per_ip": {
+            "type": "number",
+            "format": "double"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "jail_name",
+          "current_threshold",
+          "recommended_threshold",
+          "direction",
+          "total_bans",
+          "unique_ips",
+          "recidivist_ips",
+          "recidivism_rate",
+          "avg_bans_per_ip",
+          "reason",
+          "confidence"
+        ]
+      },
+      "ThresholdRecommendationResponse": {
+        "type": "object",
+        "properties": {
+          "recommendations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThresholdRecommendation"
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "recommendations",
+          "summary"
+        ]
+      },
+      "BanDurationRecommendation": {
+        "type": "object",
+        "properties": {
+          "jail_name": {
+            "type": "string"
+          },
+          "current_ban_time": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "recidivist_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "median_return_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "recommended_ban_time": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "reason": {
+            "type": "string"
+          },
+          "needs_adjustment": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "jail_name",
+          "current_ban_time",
+          "recidivist_count",
+          "median_return_secs",
+          "recommended_ban_time",
+          "reason",
+          "needs_adjustment"
+        ]
+      },
+      "BanDurationRecommendationResponse": {
+        "type": "object",
+        "properties": {
+          "recommendations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BanDurationRecommendation"
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "recommendations",
+          "summary"
+        ]
+      },
+      "ReputationEntryResponse": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "score": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_failure_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_failures": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_bans": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "threshold_multiplier": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "ip",
+          "score",
+          "last_failure_at",
+          "total_failures",
+          "total_bans",
+          "threshold_multiplier"
+        ]
+      },
+      "RiskVectorResponse": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "failure": {
+            "type": "number",
+            "format": "double"
+          },
+          "ban": {
+            "type": "number",
+            "format": "double"
+          },
+          "scan": {
+            "type": "number",
+            "format": "double"
+          },
+          "bruteforce": {
+            "type": "number",
+            "format": "double"
+          },
+          "ddos": {
+            "type": "number",
+            "format": "double"
+          },
+          "geo": {
+            "type": "number",
+            "format": "double"
+          },
+          "cluster": {
+            "type": "number",
+            "format": "double"
+          },
+          "total_risk": {
+            "type": "number",
+            "format": "double"
+          },
+          "last_event_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "ip",
+          "failure",
+          "ban",
+          "scan",
+          "bruteforce",
+          "ddos",
+          "geo",
+          "cluster",
+          "total_risk",
+          "last_event_at",
+          "updated_at"
+        ]
+      },
+      "RiskVectorListResponse": {
+        "type": "object",
+        "properties": {
+          "vectors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RiskVectorResponse"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "vectors",
+          "total"
+        ]
+      },
+      "RiskEventEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "increment": {
+            "type": "number",
+            "format": "double"
+          },
+          "occurred_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "id",
+          "ip",
+          "event_type",
+          "increment",
+          "occurred_at"
+        ]
+      },
+      "RiskEventResponse": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RiskEventEntry"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "ip",
+          "events",
+          "total"
+        ]
+      },
+      "UdpPortDistributionResponse": {
+        "type": "object",
+        "properties": {
+          "ports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UdpPortEntry"
+            }
+          },
+          "total_entries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_entries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "ports",
+          "total_entries",
+          "max_entries"
+        ]
+      },
+      "UdpPortEntry": {
+        "type": "object",
+        "properties": {
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "packets": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_seen_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "port",
+          "packets",
+          "bytes",
+          "last_seen_secs"
+        ]
+      },
+      "IcmpTypeDistributionResponse": {
+        "type": "object",
+        "properties": {
+          "types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IcmpTypeEntry"
+            }
+          },
+          "total_entries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_entries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "types",
+          "total_entries",
+          "max_entries"
+        ]
+      },
+      "IcmpTypeEntry": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "code": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "packets": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_seen_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "type",
+          "code",
+          "packets",
+          "bytes",
+          "last_seen_secs"
+        ]
+      },
+      "PacketSizeDistributionResponse": {
+        "type": "object",
+        "properties": {
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "counts": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "percentages": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        },
+        "required": [
+          "labels",
+          "counts",
+          "total",
+          "percentages"
+        ]
+      },
+      "TtlDistributionResponse": {
+        "type": "object",
+        "properties": {
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "counts": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "percentages": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        },
+        "required": [
+          "labels",
+          "counts",
+          "total",
+          "percentages"
+        ]
+      },
+      "BanDurationHistogramResponse": {
+        "type": "object",
+        "properties": {
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "counts": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "labels",
+          "counts",
+          "total"
+        ]
+      },
+      "IpFragmentStatsResponse": {
+        "type": "object",
+        "properties": {
+          "total_packets": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "fragment_packets": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "fragment_ratio": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "total_packets",
+          "fragment_packets",
+          "fragment_ratio"
+        ]
+      },
+      "PortScanResponse": {
+        "type": "object",
+        "properties": {
+          "threshold": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_detected": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "scanners": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PortScannerEntry"
+            }
+          }
+        },
+        "required": [
+          "threshold",
+          "total_detected",
+          "scanners"
+        ]
+      },
+      "PortScannerEntry": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "unique_ports": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "packets": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "ip",
+          "unique_ports",
+          "packets"
+        ]
+      },
+      "ServiceProbeResponse": {
+        "type": "object",
+        "properties": {
+          "threshold": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_detected": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "probes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceProbeEntry"
+            }
+          }
+        },
+        "required": [
+          "threshold",
+          "total_detected",
+          "probes"
+        ]
+      },
+      "ServiceProbeEntry": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "protocol_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "packets": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "ip",
+          "protocol_count",
+          "packets"
+        ]
+      },
+      "NetworkBlock": {
+        "type": "object",
+        "properties": {
+          "subnet": {
+            "type": "string"
+          },
+          "unique_ips": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_bans": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_banned_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "top_ip": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subnet",
+          "unique_ips",
+          "total_bans",
+          "last_banned_at",
+          "top_ip"
+        ]
+      },
+      "HourlyHeatmap": {
+        "type": "object",
+        "properties": {
+          "hours": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HourlyBucket"
+            },
+            "minItems": 24,
+            "maxItems": 24
+          }
+        },
+        "required": [
+          "hours"
+        ]
+      },
+      "HourlyBucket": {
+        "type": "object",
+        "properties": {
+          "hour": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "bans": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failed_attempts": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "ddos_events": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "hour",
+          "bans",
+          "failed_attempts",
+          "ddos_events"
+        ]
+      },
+      "LogPageResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogEntry"
+            }
+          },
+          "total_lines": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_pages": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "total_lines",
+          "page",
+          "page_size",
+          "total_pages"
+        ]
+      },
+      "LogEntry": {
+        "type": "object",
+        "properties": {
+          "line_number": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "line_number",
+          "content"
+        ]
+      },
+      "LogQueryParams": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page_size": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "level": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "keyword": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "since": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "PaginationParams": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page_size": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sort_by": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SseStreamStatus": {
+        "type": "object",
+        "properties": {
+          "current_connections": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_connections": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "limit_reached": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "current_connections",
+          "max_connections",
+          "limit_reached"
+        ]
+      },
+      "SseStatusResponse": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "$ref": "#/components/schemas/SseStreamStatus"
+          },
+          "logs": {
+            "$ref": "#/components/schemas/SseStreamStatus"
+          }
+        },
+        "required": [
+          "events",
+          "logs"
+        ]
+      },
+      "ThreatFeedResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source_url": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "category": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number",
+            "format": "double"
+          },
+          "last_synced_at": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "entry_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "sync_status": {
+            "type": "string"
+          },
+          "last_error": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "source_url",
+          "enabled",
+          "category",
+          "confidence",
+          "entry_count",
+          "sync_status"
+        ]
+      },
+      "ThreatFeedListResponse": {
+        "type": "object",
+        "properties": {
+          "feeds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThreatFeedResponse"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "feeds",
+          "total"
+        ]
+      },
+      "ThreatFeedSyncResult": {
+        "type": "object",
+        "properties": {
+          "feed_id": {
+            "type": "string"
+          },
+          "new_entries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "updated_entries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "synced_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "feed_id",
+          "new_entries",
+          "updated_entries",
+          "synced_at"
+        ]
+      },
+      "AnalysisSummaryResponse": {
+        "type": "object",
+        "properties": {
+          "threat_level": {
+            "$ref": "#/components/schemas/ThreatLevel"
+          },
+          "top_risk_ips": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RiskVectorResponse"
+            }
+          },
+          "active_attacks": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "anomalies_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "collaborative_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "summary": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "threat_level",
+          "top_risk_ips",
+          "active_attacks",
+          "anomalies_count",
+          "collaborative_count",
+          "summary",
+          "timestamp"
+        ]
+      },
+      "AnalysisIpResponse": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "risk": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RiskVectorResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ban_history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BanResponse"
+            }
+          },
+          "reputation": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReputationEntryResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prediction": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttackPrediction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "is_whitelisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ip",
+          "ban_history",
+          "is_whitelisted"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "basicAuth": {
+        "type": "http",
+        "scheme": "basic"
+      }
+    }
+  }
+}
