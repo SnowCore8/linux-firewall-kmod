@@ -188,7 +188,7 @@ make test
 
 ## 常见坑
 
-1. **编译过 ≠ 加载得了**。CI runner 用自定义内核，`.ko` 可能 `insmod` 不了。真验证加载得在能加载的机器上跑 `make test`。
+1. **编译过 ≠ 加载得了：`.ko` 按 vermagic 锁死编译时的内核，跨机不通用**。本地 `7.0.0-42-generic`、CI runner `7.0.0-1017-azure`、测试 VM `6.8.0-147-generic` 互不兼容，拿一台的 `.ko` 去另一台 `insmod` 必失败。CI（`ubuntu-latest`）装 `linux-headers-$(uname -r)` 对着 runner 自己的内核编译，实测 `insmod` 成功并跑完整测试套件（run 41675230877，2026-11-03）；仅当头文件装不到才回退通用 KDIR，此时可能加载失败、CI 自动降级为只跑守护进程测试（见 `ci.yml` 的 `check-module` 步骤）。要在目标机真验证加载，必须在该机对着它的内核重编再 `make test`。
 2. **本地 `node_modules` 全会掩盖 `package.json` 缺依赖**。验证前端必须走 `npm ci`。
 3. **`make format` 只格式化 C**。Go 要单独 `gofmt -w`，YAML 只在 `format-check` 里查。
 4. **`go build` 的 `-o` 要用绝对路径**。`Makefile` 已处理，别自己改。
