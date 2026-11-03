@@ -121,6 +121,8 @@ ANALYSIS_RECOMMENDATIONS_GO = os.path.join(DAEMON, "internal", "analysis", "reco
 
 TS_TYPES = os.path.join(ROOT, "frontend", "src", "api", "types.ts")
 TS_ENDPOINTS = os.path.join(ROOT, "frontend", "src", "api", "endpoints.ts")
+TS_CONTRACT_BRIDGE = os.path.join(ROOT, "frontend", "src", "api", "contract.ts")
+TS_FRONTEND_SRC = os.path.join(ROOT, "frontend", "src")
 TS_SSE = os.path.join(ROOT, "frontend", "src", "hooks", "useSse.ts")
 TS_LOGS_PAGE = os.path.join(ROOT, "frontend", "src", "views", "Logs.tsx")
 
@@ -1503,6 +1505,33 @@ def check_routes_frontend(contract: dict) -> list[str]:
     return problems
 
 
+def check_frontend_route_literals() -> list[str]:
+    """前端除 endpoints.ts 与生成物桥之外不得出现契约路径字面量。
+
+    上一版只扫 endpoints.ts，视图与组件里手写的 `/api/v1/...` 能绕过门禁：页面照常工作，
+    直到契约改名才在运行期 404。这里把搜索面扩到整个 frontend/src；注释先剥掉，
+    避免文档示例被当成调用点。
+    """
+    problems: list[str] = []
+    allowed = {os.path.abspath(TS_ENDPOINTS), os.path.abspath(TS_CONTRACT_BRIDGE)}
+    scanned = 0
+    for base, dirs, files in os.walk(TS_FRONTEND_SRC):
+        dirs[:] = [d for d in dirs if d not in {"node_modules", "dist"}]
+        for name in sorted(files):
+            if not name.endswith((".ts", ".tsx")):
+                continue
+            path = os.path.abspath(os.path.join(base, name))
+            if path in allowed:
+                continue
+            scanned += 1
+            src = strip_ts_comments(read(path))
+            for literal in sorted(set(re.findall(r"['\"`](/api/v1[^'\"`]*)['\"`]", src))):
+                rel = os.path.relpath(path, ROOT)
+                problems.append(f"{rel} 手写了契约路径字面量 {literal}（应引用 api/contract 的 ROUTES 常量）")
+    print(f"  前端源码: {scanned} 个 .ts/.tsx 文件无契约路径字面量")
+    return problems
+
+
 # ---------------------------------------------------------------------------
 # 10. where 锚点
 # ---------------------------------------------------------------------------
@@ -2217,6 +2246,8 @@ def main() -> int:
     failures += check_types_frontend(contract)
     print()
     failures += check_routes_frontend(contract)
+    print()
+    failures += check_frontend_route_literals()
     print()
     failures += check_anchors(contract)
     print()

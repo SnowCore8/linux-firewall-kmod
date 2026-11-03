@@ -2632,8 +2632,18 @@ CONTRACTS: Dict[str, Dict[str, object]] = {
 }
 
 
-def generate(source: str, targets: Optional[List[str]], out_dir: str, check: bool) -> int:
-    """校验一份契约并按需产出绑定。返回 0 通过、1 校验失败、2 用法错误。"""
+def generate(
+    source: str,
+    targets: Optional[List[str]],
+    out_dir: str,
+    check: bool,
+    write_in_module: bool = True,
+) -> int:
+    """校验一份契约并按需产出绑定。返回 0 通过、1 校验失败、2 用法错误。
+
+    write_in_module=False 时连 in-module 产物也写进 out_dir：漂移检查需要拿到
+    生成器的当前输出，再与仓库里那份逐字节比对，而不是让生成器直接覆盖它。
+    """
     base = os.path.basename(source)
     cfg = CONTRACTS.get(base, {})
     chosen = (
@@ -2700,7 +2710,7 @@ def generate(source: str, targets: Optional[List[str]], out_dir: str, check: boo
             else:
                 raise ContractError(f"未知产物类型 {t!r}")
             dest = os.path.join(out_dir, fname)
-            if t in in_module:
+            if write_in_module and t in in_module:
                 dest = os.path.join(repo_root, in_module[t])
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
             with open(dest, "w", encoding="utf-8") as fh:
@@ -2723,6 +2733,11 @@ def main(argv: List[str]) -> int:
         help=".fwidl 文件路径；省略时处理 contract/ 下登记的全部契约",
     )
     ap.add_argument("--out-dir", default="contract/generated", help="产物输出目录")
+    ap.add_argument(
+        "--no-in-module",
+        action="store_true",
+        help="连 in-module 产物（HTTP 的 Go 契约）也写入 --out-dir，供漂移检查比对",
+    )
     ap.add_argument("--targets", default=None, help="逗号分隔的产物: c,go,ts,json")
     ap.add_argument("--check", action="store_true", help="只校验并打印布局，不写文件")
     args = ap.parse_args(argv)
@@ -2739,7 +2754,7 @@ def main(argv: List[str]) -> int:
         sources = [os.path.join(here, name) for name in sorted(CONTRACTS)]
 
     for src in sources:
-        code = generate(src, targets, args.out_dir, args.check)
+        code = generate(src, targets, args.out_dir, args.check, not args.no_in_module)
         if code:
             return code
     return 0

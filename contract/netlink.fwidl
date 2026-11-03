@@ -111,15 +111,19 @@ alias addr16 = u8[16]
 # packed 布局为 12 字节。gen.py 会给出 static_assert，以生成值为准。
 #
 # seq 是**请求/响应配对序列号**，语义如下（daemon 侧必须按此实现）：
-#   - 请求：daemon 发起的每个请求（包括 DAEMON_REGISTER）用非 0 且当前在途
-#     请求内唯一的 seq，内核在响应中原样回填。daemon 按 (msg_type, seq) 关联
-#     到发起方。
+#   - 请求：daemon 发起的每个请求（包括 DAEMON_REGISTER、SET_CONFIG，以及
+#     BAN_IP / UNBAN_IP / ADD_WHITELIST 等单向指令）都用非 0 且当前在途请求内
+#     唯一的 seq。内核只在需要回复的类型上原样回填；单向指令的 seq 不用于配对。
+#   - 回显响应：DaemonRegisterAck / ConfigAck / STATS_RESPONSE /
+#     ANALYSIS_RESPONSE / LIST_BANS_RESPONSE / LIST_WHITELIST_RESPONSE /
+#     LIST_RATES_RESPONSE 回显请求 seq，daemon 按 (msg_type, seq) 关联到发起方。
 #   - 推送：内核主动推送的事件（DdosEvent / BanStateChange /
-#     WhitelistStateChange / CmdResult / ConfigAck 等）与 SET_CONFIG、
-#     BAN_IP 等无需配对的指令，seq = 0，表示「不参与配对」。
-#   - daemon 收到 seq = 0 的响应是协议违例；收到无法匹配在途请求的响应时
-#     必须记入可观测计数并告警，不得静默丢弃——否则「响应丢失 / 内核未实现
-#     某查询」会表现为无提示的功能失效。
+#     WhitelistStateChange / ConfigChange / CmdResult）使用内核内部自增 seq，
+#     **不参与配对**。daemon 必须按事件类型消费，不能拿 seq 去匹配在途请求——
+#     两组取值会碰撞，误配会把一条失败回执吞成某次查询的回复。
+#   - daemon 收到 seq = 0 的回显响应是协议违例；收到无法匹配在途请求的回显
+#     响应时必须记入可观测计数并告警，不得静默丢弃——否则「响应丢失 / 内核未
+#     实现某查询」会表现为无提示的功能失效。
 # ---------------------------------------------------------------------------
 struct MsgHdr {
     u32 magic      # 恒为 FW_NL_MAGIC
