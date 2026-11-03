@@ -17,7 +17,7 @@
  * （与内核模块可加载性的门禁同一约定：环境不具备则显式跳过并说明原因）。
  */
 
-import { expect, gotoHash, openRoute, test } from './support'
+import { expect, expectHeading, gotoHash, openRoute, test } from './support'
 
 /** 局域网（非安全上下文）地址，形如 http://192.168.8.5:9119；未设置则不跑这一侧 */
 const LAN_ORIGIN = process.env.E2E_LAN_ORIGIN
@@ -34,9 +34,13 @@ test.describe('PWA：安全上下文下可用', () => {
 
     // 注册发生在 window load 之后（main.tsx 的 load 监听），因此用轮询等待而不是立即断言
     await expect
-      .poll(async () => app.evaluate(() => navigator.serviceWorker.getRegistration().then((r) => r !== undefined)), {
-        message: '安全上下文下 /sw.js 应注册成功',
-      })
+      .poll(
+        async () =>
+          app.evaluate(() =>
+            navigator.serviceWorker.getRegistration().then((r) => r !== undefined),
+          ),
+        { message: '安全上下文下 /sw.js 应注册成功' },
+      )
       .toBe(true)
 
     // manifest 由守护进程提供；安装 PWA 需要它可取且是合法 JSON
@@ -64,10 +68,11 @@ test.describe('PWA：非安全上下文下的已知限制', () => {
       '非安全上下文下 navigator.serviceWorker 应为 undefined',
     ).toBe(true)
 
-    // 关键：SW 缺席不影响应用本体——离线能力降级为「普通网页」，数据面照常工作
-    await expect(app.getByRole('heading', { level: 2, name: '总览', exact: true })).toBeVisible()
+    // 关键：SW 缺席不影响应用本体——离线能力降级为「普通网页」，数据面照常工作。
+    // 页面区块标题由 PageHeader 渲染成 h4（expectHeading 已按 level 4 断言）。
+    await expectHeading(app, '概览')
     await gotoHash(app, '/bans')
-    await expect(app.getByRole('heading', { level: 2, name: '封禁管理', exact: true })).toBeVisible()
+    await expectHeading(app, '封禁管理')
 
     // 控制台洁净度由 app 夹具统一断言：此处不额外断言，避免重复
   })

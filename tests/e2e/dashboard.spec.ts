@@ -6,16 +6,18 @@
  *
  * 与其它规格的分工：本文件只回答「服务是不是活着」，不访问页面、不依赖凭据；
  * 路由覆盖在 `routes.spec.ts`，写操作回环在 `write-flow.spec.ts`。
- * `/health` 是**无认证**端点（见 internal/http/routes.go 的分层），
+ * `/api/v2/health` 是**无认证**端点（见 internal/http/routes.go 的「无认证：就绪探针」分层，
+ * 契约常量 RouteGetApiV2Health = "GET /api/v2/health"；`/api/v2/healthz` 是其别名），
  * 未就绪时返回 503，因此「200」就是 netlink 链路与内核 procfs 同时就绪的判据。
+ * 注意：裸 `/health`（不带 `/api/v2` 前缀）并未注册，会 404——探针路径必须带前缀。
  */
 
 import { expect, test } from './support'
 
 test.describe('守护进程健康检查', () => {
   test('health 端点返回健康状态', async ({ request }) => {
-    const response = await request.get('/health')
-    expect(response.status(), '/health 应在就绪时返回 200').toBe(200)
+    const response = await request.get('/api/v2/health')
+    expect(response.status(), '/api/v2/health 应在就绪时返回 200').toBe(200)
 
     // 只断言「200」是不够的：响应体是 RuntimeSnapshot，必须真的自报 ok
     const snapshot = (await response.json()) as {
