@@ -224,7 +224,7 @@ kmod: kernel-module
 kernel-module: contract $(KERNEL_MODULE)
 
 $(KERNEL_MODULE): $(wildcard $(KERNEL_SRC_DIR)/*.c) $(wildcard $(KERNEL_SRC_DIR)/*.h) \
-	$(KERNEL_SRC_DIR)/Makefile contract/generated/netlink_uapi.h
+	$(KERNEL_SRC_DIR)/Makefile | contract
 	@if [ ! -d "$(KDIR)" ]; then \
 		echo ""; \
 		echo "======================================================="; \
