@@ -449,13 +449,6 @@ route GET "/ddos" {
   status = 200
 }
 
-route GET "/globe" {
-  auth = none
-  handler = spaShell
-  returns = text
-  status = 200
-}
-
 route GET "/logs" {
   auth = none
   handler = spaShell

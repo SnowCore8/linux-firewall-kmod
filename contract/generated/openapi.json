@@ -192,27 +192,6 @@
         }
       }
     },
-    "/globe": {
-      "get": {
-        "operationId": "spaShell",
-        "summary": "GET /globe",
-        "tags": [
-          "default"
-        ],
-        "responses": {
-          "200": {
-            "description": "成功",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/logs": {
       "get": {
         "operationId": "spaShell",

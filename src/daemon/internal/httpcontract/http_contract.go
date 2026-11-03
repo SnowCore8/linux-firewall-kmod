@@ -136,8 +136,6 @@ const (
 	RouteGetJails = "GET /jails"
 	// GET /ddos → spaShell（无认证）
 	RouteGetDdos = "GET /ddos"
-	// GET /globe → spaShell（无认证）
-	RouteGetGlobe = "GET /globe"
 	// GET /logs → spaShell（无认证）
 	RouteGetLogs = "GET /logs"
 	// GET /settings → spaShell（无认证）
@@ -308,7 +306,6 @@ var Routes = []Route{
 	{Pattern: RouteGetWhitelist, Path: "/whitelist", Method: "GET", Auth: AuthNone, Handler: "spaShell", Returns: ReturnsText, Status: 200},
 	{Pattern: RouteGetJails, Path: "/jails", Method: "GET", Auth: AuthNone, Handler: "spaShell", Returns: ReturnsText, Status: 200},
 	{Pattern: RouteGetDdos, Path: "/ddos", Method: "GET", Auth: AuthNone, Handler: "spaShell", Returns: ReturnsText, Status: 200},
-	{Pattern: RouteGetGlobe, Path: "/globe", Method: "GET", Auth: AuthNone, Handler: "spaShell", Returns: ReturnsText, Status: 200},
 	{Pattern: RouteGetLogs, Path: "/logs", Method: "GET", Auth: AuthNone, Handler: "spaShell", Returns: ReturnsText, Status: 200},
 	{Pattern: RouteGetSettings, Path: "/settings", Method: "GET", Auth: AuthNone, Handler: "spaShell", Returns: ReturnsText, Status: 200},
 	{Pattern: RouteGetMore, Path: "/more", Method: "GET", Auth: AuthNone, Handler: "spaShell", Returns: ReturnsText, Status: 200},

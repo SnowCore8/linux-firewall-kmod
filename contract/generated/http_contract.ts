@@ -39,8 +39,6 @@ export const ROUTES = {
   GET_JAILS: "/jails",
   /** `GET /ddos` */
   GET_DDOS: "/ddos",
-  /** `GET /globe` */
-  GET_GLOBE: "/globe",
   /** `GET /logs` */
   GET_LOGS: "/logs",
   /** `GET /settings` */
