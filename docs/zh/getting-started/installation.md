@@ -93,16 +93,18 @@ sudo env "PATH=$PATH" make install
 
 `env "PATH=$PATH"` 是把当前 `PATH` 带进 root 环境，让 `make` 找到 Go 和 npm。
 
-这条命令按固定顺序做八件事（与 `Makefile` 的 `install` 目标一致）：
+这条命令按固定顺序做九件事（与 `Makefile` 的 `install` 目标一致）：
 
 1. `build`：编译内核模块和守护进程
 2. `install-kernel-module`：装模块，然后跑 `depmod -a`
 3. `install-daemon`：装守护进程
 4. `install-config`：装 `config/*.yaml`
-5. `install-state`：建状态目录
-6. `install-systemd`：装服务单元和开机加载配置，跑 `daemon-reload`
-7. `install-start`：加载模块、enable 并 start 服务
-8. `install-verify`：逐项检查文件和服务是否就位
+5. `install-credentials`：准备 `/etc/firewall/credentials.env`（只在文件不存在时建，
+   内容是两行注释掉的空键；不生成口令，已存在则原样保留）
+6. `install-state`：建状态目录
+7. `install-systemd`：装服务单元和开机加载配置，跑 `daemon-reload`
+8. `install-start`：加载模块、enable 并 start 服务
+9. `install-verify`：逐项检查文件和服务是否就位
 
 装出来的位置：
 
@@ -111,11 +113,28 @@ sudo env "PATH=$PATH" make install
 | 内核模块 | `/lib/modules/$(uname -r)/extra/firewall.ko` |
 | 守护进程 | `/usr/local/sbin/firewall-daemon` |
 | 配置文件 | `/etc/firewall/`（目录 0700，YAML 0600，属主 root:root） |
+| 凭据环境文件 | `/etc/firewall/credentials.env`（0600，属主 root:root，只装空模板） |
 | 状态目录 | `/var/lib/firewall/`（0700）；内核侧写 `state`，守护进程写 `history.db`（由 `defaults.history_db_path` 决定，留空则不建库） |
 | 服务单元 | `/etc/systemd/system/firewall-daemon.service` |
 | 开机加载 | `/etc/modules-load.d/firewall.conf` |
 
 `/etc/firewall/` 里装的是 `config/` 目录下全部 `*.yaml`，当前 13 份。
+
+面板凭据有两条来源：YAML 的 `defaults.metrics_username` / `metrics_password`，
+以及环境变量 `FIREWALL_METRICS_USERNAME` / `FIREWALL_METRICS_PASSWORD`。
+服务单元用 `EnvironmentFile=-/etc/firewall/credentials.env` 读后者，前缀 `-`
+表示文件缺失也照常启动，凭据回落到 YAML。`config/default.yaml` 是被 git 跟踪的，
+把凭据从它挪到这台机器上的 0600 文件里，就是在拆「钥匙和锁一起发出去」：
+
+```bash
+sudo vi /etc/firewall/credentials.env      # 去掉行首 #，填用户名与口令
+sudo chmod 600 /etc/firewall/credentials.env
+sudo systemctl restart firewall-daemon
+```
+
+启动日志会打印两项凭据各自的来源（配置文件 / 环境变量 / 未配置），永不打印值。
+卸载按 `rm -rf /etc/firewall` 收目录，`credentials.env` 连同你自己改过的 YAML
+一起删除——先备份再卸载。
 
 ### 关于本机安装守卫
 

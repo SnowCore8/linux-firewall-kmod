@@ -44,12 +44,17 @@
 | `log_max_size_mb` | 整数 | 否 | 10 | 单个日志文件上限 |
 | `log_max_files` | 整数 | 否 | 10 | 保留几个轮转文件 |
 
-关于凭据的两条：
+关于凭据的几条：
 
 - 两项都留空才是「没配认证」，面板对所有能连上的人开放。
 - 只填一项判为配置失败，不会退化成开放状态。
 - 绑到非回环地址时必须配凭据。
 - 凭据在文件里是明文。这个文件如果进了版本库，不要把真实凭据提交进去。
+- `FIREWALL_METRICS_USERNAME` / `FIREWALL_METRICS_PASSWORD` 两个环境变量
+  会盖在 YAML 之上，用把凭据挪出版本库；随包 systemd 单元从
+  `/etc/firewall/credentials.env` 读它们（`make install` 准备该文件，
+  0600 且不含任何值）。环境变量把某项设成空串是「显式关掉认证」，
+  与「没设这个变量」不同。出处：`src/daemon/internal/config/credentials_env.go`。
 
 ## 三、`jails` 段
 

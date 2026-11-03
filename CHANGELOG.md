@@ -2,6 +2,99 @@
 
 所有重要的项目变更记录都在此文件中。
 
+## [Unreleased] - 2026-10-22 凭据来源、关停刷盘、strict 贯通与两处门禁盲区
+
+工作树里带着一份未提交的 WIP（认证凭据走环境变量），它引用了 `bindsBeyondLoopback`
+却没有实现，`go build ./...` 停在 undefined——这条链从编译不过开始，把这处接完，
+再补运行期三处、门禁两处。以下改动均未提交，故本轮不带提交号。
+
+### 修复
+- **组合根引用了不存在的函数** - WIP 在 `run()` 里调用 `bindsBeyondLoopback(cfg.MetricsBindAddress)`
+  来决定「绑定到非回环地址又没配凭据」要不要告警，函数没有实现，整个包编译失败。
+  补 `cmd/firewall-daemon/bind_address.go`：空串、`localhost`、`127.0.0.1`、`::1`、`[::1]`
+  判为只在回环，`0.0.0.0`、`::`、局域网地址、主机名判为越过回环（主机名解析不了时按
+  「可能对外」处理，宁可多报一条告警）。15 例表驱动测试。
+- **凭据只能写在被 git 跟踪的 YAML 里** - `config/default.yaml` 入库且在公开仓库，
+  把可用凭据写在那里等于把钥匙和锁一起发出去。`internal/config/credentials_env.go`
+  那两个环境变量原先只是解析出来没人用：`applyEnvCredentials` 没有调用点、
+  `AuthEnabled`/`CredentialSources` 没有消费者。现在覆盖发生在 YAML 应用成功之后
+  （`parser.go`，所以「解析失败不改 cfg」的原子性仍然成立），`PUT /config` 写回的
+  仍是 webui 段补丁、不会把环境变量值抄进配置文件。随包单元加
+  `EnvironmentFile=-/etc/firewall/credentials.env`（前缀 `-`：文件缺失照常启动、
+  凭据回落 YAML），`make install` 新增 `install-credentials` 目标——只准备 0600、
+  属主 root 的空模板，两行键都是注释掉的，**不生成任何口令**。
+  `credentialSource` 同时改掉一处误报：把环境变量显式设成空串原先报「未配置」，
+  而契约的语义是「两项都空即放行」，显式设空是有意关闭认证的决定，现在报「环境变量」。
+  启动日志打印两项凭据各自的来源与「认证是否启用」，永不打印值；绑定越过回环且无凭据时
+  额外一条 Warn 并给出三种修法。
+  **这是安全相关变更**：暴露面与凭据是否配置从此一起被报告，凭据也有了一条不入库的来源。
+- **`trusted_ips` 的下发点判断错了** - 「`ClaimLease` 没报错」不等于「内核已接受注册」：
+  链路超时或模块刚重载时注册只是失败，`ClaimLease` 返回 nil，组合根照旧往下走并下发白名单，
+  而内核在收到 `DAEMON_REGISTER` 之前丢弃一切指令——这批地址静默不进表，续约成功也不会重发。
+  现在下发挪到 `PumpDeps.OnLeaseClaimed` 回调里，由事件泵在 `register()` 确认
+  `ack.Accepted` 之后触发，`sync.Once` 保证只发一次（续约不代表可以重发启动期配置）。
+  回调读的是启动时复制的一份列表，不在回调里并发读 `*cfg`（热重载会替换它）。
+- **关停时最后一笔信誉分会丢** - `Facts.StartFlusher` 收到 stop 信号后调 `Flush()`，
+  但调用方 `defer close(dbStopCh)` 之后紧跟着 `defer db.Close()`，LIFO 顺序下库先关、
+  刷盘协程还在写：`RecordFailure` 撞上已关闭的连接，那批脏账无声消失。
+  `StartFlusher` 现在返回 done 通道，组合根等它关闭之后才关库
+  （`persist/facts.go`、`cmd/firewall-daemon/main.go`），与 DB 自带两个调度器共用同一条 stop 通道。
+- **`--no-strict` 不生效** - `Config.StrictMode` 一路被赋值、一路没人读：
+  `ParseConfig` 里写死 `dec.KnownFields(true)`，未知顶层键在两种模式下都拒。
+  而 `args.go` 的帮助文本、`SECURITY.md`、`docs/zh/configuration/yaml-config.md`、
+  `docs/zh/getting-started/installation.md` 四处都写「加 `--no-strict` 才忽略未知字段名」。
+  现在 strict 贯通到解析器与重载器（`FileReloader` 由组合根带上 `parsed.Strict`，
+  SIGHUP、文件热重载、启动三条路径同一口径）。
+  **这是行为变更**：照文档挂 `--no-strict` 的部署从此真的能带着未知键启动。
+  随之改写一条断言：`TestUnknownFieldAlwaysRejected` 把上述坏行为当成契约（名字叫「恒被拒绝」），
+  换成 `TestUnknownFieldRejectedOnlyInStrictMode` 分别验两种模式，未知键在严格模式下仍被拒。
+
+### 变更
+- **契约漂移门禁不再漏掉在模块里的那份产物** - `make contract-drift` 原先只 diff
+  `contract/generated/`，而 `src/daemon/internal/httpcontract/http_contract.go` 也是生成物
+  （AGENTS 明列），手改它没人查。生成器加 `--no-in-module`，把产物整体写到临时目录，
+  先比 `contract/generated`（排除该 Go 文件），再单独比模块内那份，两处各报各的差异。
+- **前端不再出现契约路径字面量** - `verify_http.py` 加 `check_frontend_route_literals()`：
+  扫 `frontend/src` 全部 `.ts`/`.tsx`（`endpoints.ts` 与 `api/contract.ts` 除外），
+  剥离注释后出现 `'/api/v1…'` 即报错；一条 `const DRIFT_PROBE = '/api/v1/probe'` 探针
+  验证过它确实在拦。5 个视图/组件（`Jails.tsx`、`Whitelist.tsx`、`Settings.tsx`、
+  `AnomalyPanel.tsx`、`RecidivismPanel.tsx`）改用生成的 `ROUTES` 常量。
+- **netlink 的 `seq` 口径按实现改写** - `contract/netlink.fwidl` 原文让读者以为所有消息
+  都按 seq 配对，实现却是两类：守护进程发起的请求用非零且唯一的 seq，应答
+  （`DaemonRegisterAck`/`ConfigAck`/`STATS`/`ANALYSIS`/`LIST_*`）按 (type, seq) 配对，
+  内核主动推的事件（`DdosEvent`/`BanStateChange`/`WhitelistStateChange`/`ConfigChange`/
+  `CmdResult`）带内核自己的自增 seq、不参与配对。补上「seq=0 的应答是协议违例」。
+
+### 测试
+- 新增单元规格：`cmd/firewall-daemon/bind_address_test.go` 15 例（含 `[::1]`、`localhost`、
+  空串、主机名）；`internal/config/credentials_env_test.go` 6 条（环境变量盖 YAML、
+  显式设空即关认证、混合来源、来源标签区分显式空、回落 YAML、解析失败不改 cfg，
+  夹具用 `os.Unsetenv` + `t.Cleanup` 恢复进程原值）；`internal/kernel/consumer_test.go`
+  一条（接受后回调恰好一次、续约不再触发、被拒与链路失败各 0 次）；
+  `internal/persist/facts_test.go` 一条（脏账只有在 done 通道关闭后才在库里可见）；
+  `internal/runtime/file_reloader_test.go` 一条（非严格模式的热重载接受未知键、严格模式失败且不改 cfg）。
+
+### 文档
+- `SECURITY.md` 的认证表与「监听地址与凭据存放」补环境变量来源、`install-credentials`
+  只装空模板、以及「越过回环且无凭据会进日志」这条。README 的面板段同步指向该来源。
+- `docs/zh/configuration/yaml-config.md` 的凭据说明补环境变量覆盖与「显式设空 ≠ 没设」。
+- `docs/zh/getting-started/installation.md` 的 `make install` 步骤从八件改九件（插入
+  `install-credentials`）、位置表加凭据文件一行，并写明卸载按 `rm -rf /etc/firewall`
+  连 `credentials.env` 一起删，先备份。
+- `AGENTS.md` 四处：`--no-strict` 与解析器/重载器的贯通、`trusted_ips` 的下发时机改成
+  「内核确认注册之后」、契约流程写明 `contract-drift` 要比两处产物与前端字面量扫描、
+  netlink `seq` 口径；`jail.Finalize` 那条从「当前改动方向、未提交前以工作树为准」
+  改成对现状的描述（`15357dfe` 已提交）。
+
+### 验证与未验证
+- 跑过：`go build ./...`、`go vet ./cmd/... ./internal/...`、`gofmt -l ./cmd ./internal`（空）、
+  `go test ./...`（全部包 ok）、`make contract-drift`、`make contract-check`
+  （三个校验器全通过，含生成物 `go build` 自检）、`tsc --noEmit`、
+  `python3 -m py_compile contract/gen.py contract/verify_http.py`。
+- 没跑：`make format-check`（本机无 clang-format）、`yamllint`（同上，未装）、
+  `make test` 与 pytest 集成套件（需要 root 且要能 `insmod`，本轮不加载模块）、
+  `npx playwright test`（依赖集成环境）。
+
 ## [Unreleased] - 2026-10-14 ~ 10-15 构建链、内核兼容、文档对齐与守护进程落地
 
 本轮把「CI 红着但没人看得见」的几处一次性修直：CI 自 2026-09-18 后首次六任务全绿，并且第一次在能

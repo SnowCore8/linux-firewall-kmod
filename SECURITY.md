@@ -63,7 +63,7 @@ procfs 不提供受保护端口的写入口，集合只由守护进程经 netlin
 
 | 项 | 值 | 说明 |
 |----|----|------|
-| 方案 | `Basic` | 凭据来自 `defaults.metrics_username` / `defaults.metrics_password` |
+| 方案 | `Basic` | 凭据来自 `defaults.metrics_username` / `defaults.metrics_password`；环境变量 `FIREWALL_METRICS_USERNAME` / `FIREWALL_METRICS_PASSWORD` 设了就盖在其上 |
 | 未配置判定 | 两项都为空 | 只填一项判失败，避免配置笔误把整个 API 开放 |
 | 失败锁定 | `failure_threshold = 10`、`lockout_seconds = 60` | 锁定期内正确凭据也拒 |
 | 查询参数 | `token_query = "access_token"` | SSE 与免登录直达用 |
@@ -88,12 +88,23 @@ procfs 不提供受保护端口的写入口，集合只由守护进程经 netlin
 - 代码默认值是 `127.0.0.1`（`src/daemon/internal/config/types.go`）。
 - 仓库的 `config/default.yaml` 写的是 `0.0.0.0`，即对所有接口开放。
 - 绑定到非回环地址时必须配凭据；两项留空等于面板对所有可达者开放。
-  这条警告写在 `config/default.yaml` 的注释里。
+  这条警告写在 `config/default.yaml` 的注释里，启动时也会进日志：
+  `cmd/firewall-daemon/bind_address.go` 判监听地址是否越过回环，
+  越过且 `AuthEnabled()` 为假时记一条 Warn（只报来源与形状，不报值）。
 - **只在可信网络暴露面板。** 明文 Basic + 无 TLS 的组合，
   不适合直接放到公网。
 - 凭据在 YAML 里是明文。安装时 `/etc/firewall` 目录 0700、
   配置文件 0600、属主 root（`Makefile` 的 `install-config`）。
   `config/default.yaml` 已被 git 跟踪，不要把真实凭据提交进去。
+- 把凭据挪出版本库的第二条来源：环境变量
+  `FIREWALL_METRICS_USERNAME` / `FIREWALL_METRICS_PASSWORD`
+  （`src/daemon/internal/config/credentials_env.go`）。
+  随包 systemd 单元用 `EnvironmentFile=-/etc/firewall/credentials.env`
+  读取，`make install` 的 `install-credentials` 目标准备那个文件：
+  0600、属主 root、两行都是注释掉的空键，**不生成任何值**。
+  语义与契约一致：把某项显式设成空串属于「设过」，与「没设」不同，
+  因此 `FIREWALL_METRICS_PASSWORD=` 是用来关掉认证或覆盖 YAML 的，
+  不是回落到 YAML 里那个值。
 
 ### 输入校验
 
