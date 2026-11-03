@@ -239,7 +239,7 @@ YAML 键名照 `internal/config/parser.go` 的 `yamlCluster`：
 | 算式 | `internal/decision/cluster.go` 的内嵌单测：边界（恰好 N、恰好 K、跨窗口、/24 边界 IP 如 `x.y.z.255`） | 已落地：`cluster_test.go` |
 | 端到端 | `tests/test_22_cluster_scan.py`：配置接受 / 单高频 IP 不触发 / 同 /24 多源触发 | 已落地 |
 | 内核 | `make kernel-module`，封禁表新判定加内核侧对照 | 已落地 |
-| 契约 | `bash scripts/check_contract.sh`；`netlink.fwidl` 改动后先 `gen.py` | 已落地 |
+| 契约 | `make contract-check`；`netlink.fwidl` 改动后先 `gen.py` | 已落地 |
 | 性能 | `scripts/bench/` 新旧对照，确认封禁查找无回归 | 见 §4.4；当前内核未复测（未验证） |
 
 `tests/` 里的多 IP 日志夹具照 `tests/test_21_multi_jail.py` 的写法造。

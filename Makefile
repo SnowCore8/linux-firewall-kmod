@@ -657,20 +657,3 @@ test: $(KERNEL_MODULE) $(DAEMON_BIN)
 # ============================================================================
 # 已迁移至 build-deb.sh(DKMS 模式,安装时编译内核模块)。
 # 使用方式: ./build-deb.sh [版本号]
-
-# ============================================================================
-# 10. .PHONY 声明
-# ============================================================================
-
-# 构建相关
-.PHONY: all build kernel-module daemon
-# 代码质量
-.PHONY: format-check format ci
-# 安装相关
-.PHONY: install install-kernel-module install-daemon install-config install-state install-systemd install-start
-# 卸载相关
-.PHONY: uninstall uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel uninstall-modload uninstall-verify
-# 清理相关
-.PHONY: clean distclean
-# 辅助功能
-.PHONY: help test
