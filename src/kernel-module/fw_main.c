@@ -51,6 +51,7 @@
 #include "fw_state.h"
 #include "fw_stats.h"
 #include "fw_wl.h"
+#include "fw_compat.h"
 
 /* ============================================================================
  * 模块参数（名称与默认值是对外承诺，见设计文档「module_param」）
@@ -185,6 +186,13 @@ static int __init fw_init(void) {
   int ret;
 
   pr_info("模块初始化开始\n");
+
+  /* 第一步：内核兼容性检查 */
+  ret = fw_compat_init();
+  if (ret) {
+    pr_err("内核兼容性检查失败，模块加载终止\n");
+    return ret;
+  }
 
   ret = fw_params_validate();
   if (ret)

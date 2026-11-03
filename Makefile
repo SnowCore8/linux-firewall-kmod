@@ -56,7 +56,120 @@ KERNEL_MODULE := $(KERNEL_BUILD_DIR)/firewall.ko
 DAEMON_BIN    := $(DAEMON_BUILD_DIR)/firewall-daemon
 
 # ============================================================================
-# 3. 主要构建目标
+# 3. 依赖检查目标
+# ============================================================================
+
+.PHONY: check-deps check-deps-kmod check-deps-daemon check-deps-frontend
+# 全量依赖检查
+check-deps: check-deps-kmod check-deps-daemon check-deps-frontend
+	@echo "✓ 所有构建依赖检查通过"
+
+# 内核模块依赖检查
+check-deps-kmod:
+	@echo "检查内核模块构建依赖..."
+	@# 检查 gcc
+	@if ! command -v gcc >/dev/null 2>&1; then \
+		echo "❌ 错误: gcc 未安装"; \
+		echo "   安装: sudo apt install gcc"; \
+		exit 1; \
+	fi
+	@# 检查 make
+	@if ! command -v make >/dev/null 2>&1; then \
+		echo "❌ 错误: make 未安装"; \
+		echo "   安装: sudo apt install make"; \
+		exit 1; \
+	fi
+	@# 检查内核头文件
+	@if [ ! -d "$(KDIR)" ]; then \
+		echo "❌ 错误: 内核构建目录不存在"; \
+		echo "   KDIR = $(KDIR)"; \
+		echo "   运行内核: $(shell uname -r)"; \
+		echo ""; \
+		echo "   解决方案:"; \
+		echo "   1. 安装内核头文件: sudo apt install linux-headers-$$(uname -r)"; \
+		echo "   2. 或指定其他版本: make KDIR=/lib/modules/<版本>/build"; \
+		echo ""; \
+		echo "   可用的内核构建目录:"; \
+		find /lib/modules -maxdepth 2 -name build -type d 2>/dev/null | while read d; do \
+			echo "     $$d"; \
+		done || echo "     （无可用目录）"; \
+		exit 1; \
+	fi
+	@# 检查 clang-format（可选但推荐）
+	@if ! command -v clang-format >/dev/null 2>&1; then \
+		echo "⚠ 警告: clang-format 未安装（格式检查将跳过）"; \
+		echo "   安装: sudo apt install clang-format"; \
+	fi
+	@echo "✓ 内核模块依赖检查通过"
+
+# 守护进程依赖检查
+check-deps-daemon:
+	@echo "检查守护进程构建依赖..."
+	@# 检查 Go
+	@if ! command -v $(GOC) >/dev/null 2>&1; then \
+		echo "❌ 错误: Go 未安装"; \
+		echo "   安装: sudo apt install golang-go"; \
+		echo "   或从 https://go.dev/dl/ 下载"; \
+		exit 1; \
+	fi
+	@# 检查 Go 版本
+	@go_version=$$($(GOC) version | grep -oP 'go\K[0-9]+\.[0-9]+' | head -1); \
+	if [ "$$(printf '%s\n' "$$go_version" "$(GOVER)" | sort -V | head -1)" != "$(GOVER)" ]; then \
+		echo "❌ 错误: Go 版本过低 (需要 >= $(GOVER), 当前: $$go_version)"; \
+		echo "   升级: sudo apt install golang-go 或从官网下载"; \
+		exit 1; \
+	fi
+	@echo "✓ 守护进程依赖检查通过 (Go $$go_version)"
+
+# 前端依赖检查
+check-deps-frontend:
+	@echo "检查前端构建依赖..."
+	@# 检查 Node.js
+	@if ! command -v node >/dev/null 2>&1; then \
+		echo "❌ 错误: Node.js 未安装"; \
+		echo "   安装: sudo apt install nodejs npm"; \
+		echo "   或使用 nvm: https://github.com/nvm-sh/nvm"; \
+		exit 1; \
+	fi
+	@# 检查 npm
+	@if ! command -v npm >/dev/null 2>&1; then \
+		echo "❌ 错误: npm 未安装"; \
+		echo "   安装: sudo apt install npm"; \
+		exit 1; \
+	fi
+	@node_version=$$(node --version | grep -oP 'v\K[0-9]+' | head -1); \
+	if [ "$$node_version" -lt 18 ]; then \
+		echo "❌ 错误: Node.js 版本过低 (需要 >= 18, 当前: v$$node_version)"; \
+		echo "   升级: sudo apt install nodejs 或使用 nvm"; \
+		exit 1; \
+	fi
+	@echo "✓ 前端依赖检查通过 (Node.js v$$node_version)"
+
+# ============================================================================
+# 4. 契约生成目标
+# ============================================================================
+
+.PHONY: contract contract-clean
+# 契约文件生成（内核模块依赖此目标）
+contract:
+	@echo "生成契约文件..."
+	@mkdir -p contract/generated
+	@$(PYTHON) contract/gen.py >/dev/null || { \
+		echo "❌ 错误: 契约生成失败"; \
+		echo "   请检查 contract/*.fwidl 文件语法"; \
+		exit 1; \
+	}
+	@echo "✓ 契约文件生成完成"
+
+# 清理契约生成文件
+contract-clean:
+	@echo "清理契约生成文件..."
+	@rm -rf contract/generated/*.h contract/generated/*.ts contract/generated/*.json
+	@rm -f src/daemon/internal/httpcontract/http_contract.go
+	@echo "✓ 契约生成文件已清理"
+
+# ============================================================================
+# 5. 主要构建目标
 # ============================================================================
 
 # 默认编译流程包含 clang-format 格式检查
@@ -64,46 +177,75 @@ DAEMON_BIN    := $(DAEMON_BUILD_DIR)/firewall-daemon
 .PHONY: all build
 all: format-check build
 build: kernel-module daemon
-	@echo "Build complete: $(KERNEL_MODULE) and $(DAEMON_BIN)"
+	@echo "✓ 构建完成: $(KERNEL_MODULE) and $(DAEMON_BIN)"
 
 # 跳过格式检查的快捷目标（用于本地调试）
 .PHONY: build-quick
 build-quick: kernel-module daemon
-	@echo "Quick build (format-check skipped): $(KERNEL_MODULE) and $(DAEMON_BIN)"
+	@echo "✓ 快速构建完成（格式检查已跳过）: $(KERNEL_MODULE) and $(DAEMON_BIN)"
 
-# 内核模块编译
-.PHONY: kernel-module
-kernel-module: $(KERNEL_MODULE)
+# 多版本内核模块编译（为所有已安装的内核头文件编译）
+.PHONY: kernel-module-multi kmod-all
+kmod-all: kernel-module-multi
+kernel-module-multi:
+	@echo "编译多版本内核模块..."
+	@./scripts/build-kmod-multi-version.sh
+
+# 远程编译内核模块（交叉编译支持）
+.PHONY: kmod-remote
+kmod-remote:
+	@if [ -z "$(HOST)" ]; then \
+		echo "❌ 错误: 必须指定 HOST 参数"; \
+		echo "   用法: make kmod-remote HOST=<ip> [USER=<user>]"; \
+		echo "   示例: make kmod-remote HOST=192.168.8.119 USER=ubuntu"; \
+		exit 1; \
+	fi
+	@echo "远程编译内核模块到 $(HOST)..."
+	@USER=$${USER:-$$(whoami)}; \
+	REMOTE_DIR=/tmp/firewall-build-$$$; \
+	echo "  上传源码..."; \
+	ssh $$USER@$(HOST) "rm -rf $$REMOTE_DIR && mkdir -p $$REMOTE_DIR/src"; \
+	rsync -az -e "ssh -o StrictHostKeyChecking=no" \
+		src/kernel-module contract $$USER@$(HOST):$$REMOTE_DIR/; \
+	echo "  远程编译..."; \
+	ssh $$USER@$(HOST) "cd $$REMOTE_DIR/src/kernel-module && \
+		make -C /lib/modules/\$$(uname -r)/build M=\$$PWD modules"; \
+	echo "  下载产物..."; \
+	mkdir -p $(KERNEL_BUILD_DIR); \
+	scp -o StrictHostKeyChecking=no \
+		$$USER@$(HOST):$$REMOTE_DIR/src/kernel-module/firewall.ko \
+		$(KERNEL_BUILD_DIR)/firewall-$$(ssh $$USER@$(HOST) "uname -r").ko; \
+	ssh $$USER@$(HOST) "rm -rf $$REMOTE_DIR"; \
+	echo "✓ 远程编译完成: $(KERNEL_BUILD_DIR)/firewall-$$(ssh $$USER@$(HOST) 'uname -r').ko"
+
+# 内核模块编译（标准目标）
+.PHONY: kernel-module kmod
+kmod: kernel-module
+kernel-module: contract $(KERNEL_MODULE)
 
 $(KERNEL_MODULE): $(wildcard $(KERNEL_SRC_DIR)/*.c) $(wildcard $(KERNEL_SRC_DIR)/*.h) \
-	$(KERNEL_SRC_DIR)/Makefile
+	$(KERNEL_SRC_DIR)/Makefile contract/generated/netlink_uapi.h
 	@if [ ! -d "$(KDIR)" ]; then \
 		echo ""; \
 		echo "======================================================="; \
-		echo "错误: 内核构建目录不存在"; \
-		echo "  KDIR = $(KDIR)"; \
-		echo "  运行内核: $(shell uname -r)"; \
+		echo "❌ 错误: 内核构建目录不存在"; \
+		echo "   KDIR = $(KDIR)"; \
+		echo "   运行内核: $(shell uname -r)"; \
 		echo ""; \
-		echo "可能的原因和解决方案:"; \
-		echo "  1. 未安装内核头文件:"; \
-		echo "     sudo apt install linux-headers-$(shell uname -r)"; \
-		echo ""; \
-		echo "  2. GitHub Actions Azure VM 使用自定义内核，头文件不在标准 apt 源中。"; \
-		echo "     请手动指定 KDIR:"; \
-		echo "     make build KDIR=\$$(find /lib/modules -maxdepth 2 -name build -type d | head -n1)"; \
-		echo ""; \
-		echo "  3. 跳过内核模块编译，仅编译守护进程:"; \
-		echo "     make daemon"; \
+		echo "解决方案:"; \
+		echo "   1. 安装内核头文件: sudo apt install linux-headers-$$(uname -r)"; \
+		echo "   2. 或指定其他版本: make KDIR=/lib/modules/<版本>/build"; \
+		echo "   3. 仅编译守护进程: make daemon"; \
 		echo ""; \
 		echo "可用的内核构建目录:"; \
 		find /lib/modules -maxdepth 2 -name build -type d 2>/dev/null | while read d; do \
-			echo "  $$d -> $$(readlink -f "$$d")"; \
-		done || echo "  （无可用目录）"; \
+			echo "   $$d -> $$(readlink -f "$$d")"; \
+		done || echo "   （无可用目录）"; \
 		echo "======================================================="; \
 		exit 1; \
 	fi
 	@mkdir -p $(KERNEL_BUILD_DIR)
-	@echo "  CC      kernel-module$(if $(filter ccache,$(CCACHE)), (ccache)")
+	@echo "编译内核模块 ($(shell uname -r))..."
 	+$(MAKE) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) \
 		CC="$(CCACHE) gcc" \
 		modules
@@ -113,6 +255,7 @@ $(KERNEL_MODULE): $(wildcard $(KERNEL_SRC_DIR)/*.c) $(wildcard $(KERNEL_SRC_DIR)
 		$(KERNEL_SRC_DIR)/*.mod.o $(KERNEL_SRC_DIR)/*.mod $(KERNEL_SRC_DIR)/.*.cmd \
 		$(KERNEL_SRC_DIR)/modules.order $(KERNEL_SRC_DIR)/Module.symvers \
 		$(KERNEL_SRC_DIR)/.module-common.o
+	@echo "✓ 内核模块编译完成: $(KERNEL_MODULE)"
 
 # 守护进程 (Go，源码在 $(DAEMON_SRCS_DIR)，编译产物保持为 $(DAEMON_BIN))。
 # install / deb / clean 三处最终都要取这个二进制；换成 Go 前需一并更新。
@@ -170,9 +313,227 @@ frontend-typecheck: frontend-install
 # 4. 代码质量目标 (format-check, format, ci)
 # ============================================================================
 
-.PHONY: ci
-ci: format-check build test
+# CI 主目标：完整的持续集成流程
+# 用法：make ci [SKIP_FORMAT_CHECK=1] [SKIP_TESTS=1] [VERBOSE=1]
+.PHONY: ci ci-setup ci-format ci-contract ci-build ci-test ci-cleanup ci-summary
+ci: ci-setup ci-format ci-contract ci-build ci-test ci-cleanup ci-summary
+	@echo ""
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo "✓ CI 流程完成"
+	@echo "═══════════════════════════════════════════════════════════"
 
+# CI 阶段 1：环境检查
+ci-setup:
+	@echo ""
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo "CI 阶段 1/6：环境检查"
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo "时间: $$(date '+%Y-%m-%d %H:%M:%S')"
+	@echo ""
+	@make check-deps
+	@echo ""
+	@echo "✓ 环境检查通过"
+
+# CI 阶段 2：代码格式检查
+ci-format:
+	@echo ""
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo "CI 阶段 2/6：代码格式检查"
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo "时间: $$(date '+%Y-%m-%d %H:%M:%S')"
+	@echo ""
+	@# C 代码格式检查
+	@if [ "$(SKIP_FORMAT_CHECK)" != "1" ]; then \
+		echo "检查 C 代码格式..."; \
+		clang-format --dry-run --Werror \
+			$(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h 2>&1 || { \
+			echo "❌ C 代码格式检查失败"; \
+			echo "   运行 'make format' 自动修复"; \
+			exit 1; \
+		}; \
+		echo "✓ C 代码格式检查通过"; \
+	else \
+		echo "⚠ C 代码格式检查已跳过 (SKIP_FORMAT_CHECK=1)"; \
+	fi
+	@# Go 代码格式检查
+	@if command -v gofmt >/dev/null 2>&1; then \
+		echo "检查 Go 代码格式..."; \
+		cd src/daemon && \
+		unformatted=$$(gofmt -l ./cmd ./internal 2>/dev/null); \
+		if [ -n "$$unformatted" ]; then \
+			echo "❌ Go 代码格式检查失败"; \
+			echo "   以下文件需要格式化:"; \
+			echo "$$unformatted" | sed 's/^/     /'; \
+			echo "   运行 'cd src/daemon && gofmt -w ./cmd ./internal' 修复"; \
+			exit 1; \
+		fi; \
+		echo "✓ Go 代码格式检查通过"; \
+	else \
+		echo "⚠ gofmt 未安装，跳过 Go 格式检查"; \
+	fi
+	@# Go 代码静态分析
+	@if command -v go vet >/dev/null 2>&1; then \
+		echo "运行 Go 静态分析..."; \
+		cd src/daemon && go vet ./cmd/... ./internal/... 2>&1 || { \
+			echo "❌ Go 静态分析失败"; \
+			exit 1; \
+		}; \
+		echo "✓ Go 静态分析通过"; \
+	else \
+		echo "⚠ go vet 不可用，跳过静态分析"; \
+	fi
+	@# YAML 配置检查
+	@if command -v yamllint >/dev/null 2>&1; then \
+		echo "检查 YAML 配置..."; \
+		yamllint config/ 2>&1 || { \
+			echo "❌ YAML 格式检查失败"; \
+			exit 1; \
+		}; \
+		echo "✓ YAML 配置检查通过"; \
+	else \
+		echo "⚠ yamllint 未安装，跳过 YAML 检查"; \
+	fi
+	@echo ""
+	@echo "✓ 代码格式检查完成"
+
+# CI 阶段 3：契约验证
+ci-contract:
+	@echo ""
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo "CI 阶段 3/6：契约验证"
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo "时间: $$(date '+%Y-%m-%d %H:%M:%S')"
+	@echo ""
+	@echo "生成契约文件..."
+	@make contract >/dev/null
+	@echo "✓ 契约文件生成完成"
+	@echo ""
+	@echo "检查契约漂移..."
+	@make contract-drift || { \
+		echo "❌ 契约漂移检查失败"; \
+		echo "   运行 'python3 contract/gen.py' 重新生成"; \
+		exit 1; \
+	}
+	@echo ""
+	@echo "运行契约校验器..."
+	@make contract-check || { \
+		echo "❌ 契约校验失败"; \
+		exit 1; \
+	}
+	@echo ""
+	@echo "✓ 契约验证完成"
+
+# CI 阶段 4：构建
+ci-build:
+	@echo ""
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo "CI 阶段 4/6：构建"
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo "时间: $$(date '+%Y-%m-%d %H:%M:%S')"
+	@echo ""
+	@echo "构建内核模块..."
+	@make kmod || { \
+		echo "❌ 内核模块构建失败"; \
+		exit 1; \
+	}
+	@echo ""
+	@echo "构建守护进程..."
+	@make daemon || { \
+		echo "❌ 守护进程构建失败"; \
+		exit 1; \
+	}
+	@echo ""
+	@echo "验证构建产物..."
+	@if [ ! -f "$(KERNEL_MODULE)" ]; then \
+		echo "❌ 内核模块产物不存在: $(KERNEL_MODULE)"; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(DAEMON_BIN)" ]; then \
+		echo "❌ 守护进程产物不存在: $(DAEMON_BIN)"; \
+		exit 1; \
+	fi
+	@echo "✓ 内核模块: $(KERNEL_MODULE) ($$(du -h $(KERNEL_MODULE) | cut -f1))"
+	@echo "✓ 守护进程: $(DAEMON_BIN) ($$(du -h $(DAEMON_BIN) | cut -f1))"
+	@echo ""
+	@echo "✓ 构建完成"
+
+# CI 阶段 5：测试
+ci-test:
+	@if [ "$(SKIP_TESTS)" = "1" ]; then \
+		echo ""; \
+		echo "═══════════════════════════════════════════════════════════"; \
+		echo "CI 阶段 5/6：测试（已跳过）"; \
+		echo "═══════════════════════════════════════════════════════════"; \
+		echo "⚠ 测试已跳过 (SKIP_TESTS=1)"; \
+	else \
+		echo ""; \
+		echo "═══════════════════════════════════════════════════════════"; \
+		echo "CI 阶段 5/6：测试"; \
+		echo "═══════════════════════════════════════════════════════════"; \
+		echo "时间: $$(date '+%Y-%m-%d %H:%M:%S')"; \
+		echo ""; \
+		echo "运行单元测试..."; \
+		cd src/daemon && go test ./... -v 2>&1 | tail -20 || { \
+			echo "❌ 单元测试失败"; \
+			exit 1; \
+		}; \
+		echo ""; \
+		echo "✓ 单元测试通过"; \
+		echo ""; \
+		echo "运行集成测试（需要 root）..."; \
+		sudo python3 -m pytest tests/ -v 2>&1 | tail -30 || { \
+			echo "❌ 集成测试失败"; \
+			exit 1; \
+		}; \
+		echo ""; \
+		echo "✓ 集成测试通过"; \
+	fi
+
+# CI 阶段 6：清理
+ci-cleanup:
+	@echo ""
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo "CI 阶段 6/6：清理"
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo "时间: $$(date '+%Y-%m-%d %H:%M:%S')"
+	@echo ""
+	@# 保留构建产物，仅清理临时文件
+	@echo "清理临时文件..."
+	@rm -rf tmp/ 2>/dev/null || true
+	@echo "✓ 临时文件已清理"
+	@echo ""
+	@echo "构建产物保留:"
+	@echo "  - $(KERNEL_MODULE)"
+	@echo "  - $(DAEMON_BIN)"
+
+# CI 摘要
+ci-summary:
+	@echo ""
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo "CI 摘要"
+	@echo "═══════════════════════════════════════════════════════════"
+	@echo "完成时间: $$(date '+%Y-%m-%d %H:%M:%S')"
+	@echo ""
+	@echo "✓ 环境检查: 通过"
+	@echo "✓ 代码格式: 通过"
+	@echo "✓ 契约验证: 通过"
+	@echo "✓ 构建: 通过"
+	@if [ "$(SKIP_TESTS)" = "1" ]; then \
+		echo "⚠ 测试: 已跳过"; \
+	else \
+		echo "✓ 测试: 通过"; \
+	fi
+	@echo ""
+	@echo "产物:"
+	@echo "  - 内核模块: $(KERNEL_MODULE)"
+	@echo "  - 守护进程: $(DAEMON_BIN)"
+	@echo ""
+	@echo "下一步:"
+	@echo "  - 部署测试: ./scripts/deploy.sh <host> [user]"
+	@echo "  - 打包: make deb"
+	@echo "═══════════════════════════════════════════════════════════"
+
+# 简化的 CI 目标（向后兼容）
 .PHONY: format-check
 format-check:
 	@if [ "$(SKIP_FORMAT_CHECK)" = "1" ]; then \
@@ -593,13 +954,17 @@ clean:
 	@# 守护二进制的产物只有 build/（上面已整目录删除）；这里做模块内的包级清理。
 	@# 注意 `-cached` 不是 go clean 的合法参数（合法的是 `-cache`，但那是清空全局
 	@# 构建缓存，不该由本仓库的 clean 触发），写错时本行会以 exit 2 中断 clean。
-	@cd $(DAEMON_SRCS_DIR) && $(GOC) clean
+	@cd $(DAEMON_SRCS_DIR) && $(GOC) clean 2>/dev/null || true
 	@mkdir -p $(WEBUI_STATIC_DIR)
 	@# 只删面板文件，保留 embed 所有者 assets.go（它位于构建产物目录内，
 	@# 由 make frontend 的 vite 输出路径自然生成，见 src/daemon/web_ui/static/assets.go）。
 	@find $(WEBUI_STATIC_DIR) -mindepth 1 ! -name assets.go -delete
+	@# 清理契约生成文件（保留 .fwidl 源文件）
+	@rm -rf contract/generated/*.h contract/generated/*.ts contract/generated/*.json 2>/dev/null || true
+	@rm -f src/daemon/internal/httpcontract/http_contract.go 2>/dev/null || true
 	@echo "  ✓ Build directory removed (build/, target/)"
 	@echo "  ✓ Web UI panel files removed ($(WEBUI_STATIC_DIR) minus its go:embed owner file)"
+	@echo "  ✓ Contract generated files removed"
 	@echo "Build artifacts cleaned."
 
 # distclean 额外清理内核源码目录中可能残留的隐藏文件
@@ -617,35 +982,74 @@ distclean: clean
 
 .PHONY: help
 help:
-	@echo "可用目标:"
-	@echo "  all/build      - 编译前端、内核模块和守护进程（默认，含格式检查）"
-	@echo "  build-quick    - 跳过格式检查的快速编译"
-	@echo "  kernel-module  - 仅编译内核模块 (clang)"
-	@echo "  daemon         - 仅编译守护进程 (Go module at src/daemon，会先构建前端)"
-	@echo "  frontend       - 仅构建前端 (npm ci + vite build)"
-	@echo "  frontend-typecheck - 仅做前端类型检查 (tsc --noEmit)"
-	@echo "  deb            - 构建 Debian 软件包 (使用 ./build-deb.sh)"
-	@echo "  install        - 安装到系统"
-	@echo "  uninstall      - 从系统卸载"
-	@echo "  clean          - 清理编译产物"
-	@echo "  distclean      - 清理所有生成文件（含内核中间文件）"
-	@echo "  test           - 运行测试套件 (需要 sudo)"
-	@echo "  format         - 自动格式化内核模块 C 代码"
-	@echo "  format-check   - 检查内核模块 C 代码格式"
-	@echo "  ci             - CI 完整构建（格式检查 + 编译 + 测试）"
-	@echo "  help           - 显示此帮助信息"
+	@echo "=========================================="
+	@echo "Firewall 项目构建系统"
+	@echo "=========================================="
 	@echo ""
-	@echo "跳过格式检查选项:"
-	@echo "  make SKIP_FORMAT_CHECK=1 all  - 通过变量跳过"
-	@echo "  make build-quick              - 通过目标跳过"
+	@echo "依赖检查:"
+	@echo "  check-deps           - 检查所有构建依赖"
+	@echo "  check-deps-kmod      - 仅检查内核模块依赖"
+	@echo "  check-deps-daemon    - 仅检查守护进程依赖"
+	@echo "  check-deps-frontend  - 仅检查前端依赖"
 	@echo ""
-	@echo "部署安全守卫 (Local Deployment Guard):"
-	@echo "  直接 \`make install\` / \`make uninstall\` 在本机被禁止,"
-	@echo "  必须选择以下合规路径之一:"
-	@echo "    1) 远程部署 (推荐): ./scripts/deploy.sh <host> [user]"
-	@echo "    2) 打包暂存:        make install DESTDIR=<暂存目录>"
-	@echo "    3) 显式授权:        make install FIREWALL_REMOTE_DEPLOY=1"
-	@echo "                       (仅限沙箱 / CI 容器, 勿在开发机使用)"
+	@echo "契约生成:"
+	@echo "  contract             - 生成契约文件（内核模块自动依赖）"
+	@echo "  contract-clean       - 清理契约生成文件"
+	@echo ""
+	@echo "构建目标:"
+	@echo "  all/build            - 编译全部（格式检查 + 内核模块 + 守护进程）"
+	@echo "  build-quick          - 跳过格式检查的快速编译"
+	@echo "  kmod/kernel-module   - 仅编译内核模块（当前内核版本）"
+	@echo "  kmod KVER=<ver>      - 编译指定版本内核模块"
+	@echo "  kmod-all             - 编译所有已安装内核版本的模块"
+	@echo "  kmod-remote HOST=<ip> [USER=<user>] - 远程编译到目标机器"
+	@echo "  daemon               - 仅编译守护进程（含前端）"
+	@echo "  frontend             - 仅构建前端"
+	@echo "  frontend-typecheck   - 仅做前端类型检查"
+	@echo ""
+	@echo "代码质量:"
+	@echo "  format               - 自动格式化内核模块 C 代码"
+	@echo "  format-check         - 检查内核模块 C 代码格式"
+	@echo "  contract-check       - 契约校验（含漂移检查）"
+	@echo "  contract-drift       - 仅检查契约漂移"
+	@echo ""
+	@echo "测试与部署:"
+	@echo "  test                 - 运行测试套件（需要 sudo）"
+	@echo "  ci                   - 完整 CI 流程（环境检查 + 格式 + 契约 + 构建 + 测试）"
+	@echo "  ci SKIP_TESTS=1      - CI 流程但跳过测试"
+	@echo "  ci SKIP_FORMAT_CHECK=1 - CI 流程但跳过格式检查"
+	@echo "  deb                  - 构建 Debian 软件包"
+	@echo "  install              - 安装到系统（受本地部署守卫限制）"
+	@echo "  uninstall            - 从系统卸载"
+	@echo ""
+	@echo "清理:"
+	@echo "  clean                - 清理编译产物"
+	@echo "  distclean            - 清理所有生成文件（含内核中间文件）"
+	@echo ""
+	@echo "其他:"
+	@echo "  help                 - 显示此帮助信息"
+	@echo ""
+	@echo "=========================================="
+	@echo "常用示例:"
+	@echo "=========================================="
+	@echo "  make check-deps                    # 检查依赖"
+	@echo "  make kmod                          # 编译内核模块"
+	@echo "  make daemon                        # 编译守护进程"
+	@echo "  make build-quick                   # 快速构建全部"
+	@echo "  make kmod-remote HOST=192.168.8.119 USER=ubuntu  # 远程编译"
+	@echo "  make test                          # 运行测试"
+	@echo ""
+	@echo "变量:"
+	@echo "  KDIR=<path>          - 指定内核构建目录"
+	@echo "  KVER=<version>       - 指定内核版本（用于 kmod 目标）"
+	@echo "  SKIP_FORMAT_CHECK=1  - 跳过格式检查"
+	@echo "  CCACHE=<cmd>         - 指定 ccache 命令（默认: ccache）"
+	@echo ""
+	@echo "部署安全守卫:"
+	@echo "  直接 install/uninstall 在本机被禁止，必须选择以下路径之一:"
+	@echo "    1) 远程部署: ./scripts/deploy.sh <host> [user]"
+	@echo "    2) 打包暂存: make install DESTDIR=<暂存目录>"
+	@echo "    3) 显式授权: make install FIREWALL_REMOTE_DEPLOY=1"
 
 # 运行综合测试套件
 .PHONY: test

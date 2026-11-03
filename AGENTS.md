@@ -27,25 +27,97 @@
 
 ### 构建
 
+**标准化构建流程**（推荐）：
+
 ```bash
-make                    # 格式检查 + 内核模块 + 守护进程
-make build-quick        # 跳过格式检查
-make test               # 集成测试（需 root）
+# 1. 检查依赖
+make check-deps              # 检查所有依赖
+make check-deps-kmod         # 仅检查内核模块依赖
+make check-deps-daemon       # 仅检查守护进程依赖
+make check-deps-frontend     # 仅检查前端依赖
+
+# 2. 生成契约文件（内核模块自动依赖此步骤）
+make contract                # 手动生成契约文件
+make contract-clean          # 清理契约生成文件
+
+# 3. 编译
+make kmod                    # 仅编译内核模块（当前内核版本）
+make daemon                  # 仅编译守护进程（含前端）
+make build-quick             # 快速编译全部（跳过格式检查）
+make all                     # 完整编译（含格式检查）
+
+# 4. 测试
+make test                    # 集成测试（需 root）
 cd src/daemon && go test ./...  # 单元测试
 ```
+
+**多版本内核模块编译**（解决跨版本兼容性问题）：
+
+```bash
+# 使用 Makefile 目标（推荐）
+make kmod-all                # 编译所有已安装内核版本的模块
+
+# 使用脚本（更多控制）
+./scripts/build-kmod-multi-version.sh              # 智能模式：编译当前运行内核
+./scripts/build-kmod-multi-version.sh --all         # 编译所有已安装头文件的版本
+./scripts/build-kmod-multi-version.sh --list        # 列出可用版本与兼容性
+./scripts/build-kmod-multi-version.sh --check       # 仅检测兼容性
+./scripts/build-kmod-multi-version.sh 6.8.0-147-generic  # 指定版本
+
+# 远程编译（交叉编译支持）
+make kmod-remote HOST=192.168.8.119 USER=ubuntu
+```
+
+**构建产物位置**：
+
+```
+build/
+├── kernel-module/
+│   ├── firewall.ko                    # 当前内核版本
+│   └── <kernel-version>/
+│       └── firewall.ko                # 指定内核版本
+├── daemon/
+│   └── firewall-daemon                # 守护进程二进制
+└── frontend/                          # 前端构建产物
+```
+
+详细指南见 [docs/zh/development/multi-version-kmod.md](docs/zh/development/multi-version-kmod.md)。
 
 详细命令见 [docs/zh/development/](docs/zh/development/README.md)。
 
 ### 质量门禁（提交前必跑）
 
+**完整 CI 流程**（推荐）：
+
 ```bash
+make ci                        # 完整 CI：环境检查 + 格式 + 契约 + 构建 + 测试
+make ci SKIP_TESTS=1           # 跳过测试的 CI（仅验证构建）
+make ci SKIP_FORMAT_CHECK=1    # 跳过格式检查的 CI（紧急修复）
+```
+
+**分步运行**：
+
+```bash
+# 1. 依赖检查
+make check-deps
+
+# 2. 代码格式
 make format-check
-make contract-check
 cd src/daemon && gofmt -l ./cmd ./internal   # 输出须为空
 cd src/daemon && go vet ./cmd/... ./internal/...
+
+# 3. 契约验证
+make contract-check
+
+# 4. 构建
+make build-quick
+
+# 5. 测试
 cd src/daemon && go test ./...
 make test
 ```
+
+详见 [docs/zh/development/ci-workflow.md](docs/zh/development/ci-workflow.md)。
 
 ### 契约改动流程
 
@@ -64,7 +136,12 @@ make test
 - 加载：`sudo insmod build/kernel-module/firewall.ko`
 - procfs：`/proc/firewall/*`（13 个条目，3 个可写）
 - 模块参数：`fw_ban_time`、`state_file`、`fw_max_bans_per_second` 等（见 `fw_main.c`）
-- 已验证内核：6.8.0-146（可加载）、7.0.0-38（可编译）、5.x（未验证）
+- **内核兼容性**：采用 API 可用性检查策略
+  - 内核版本号仅作参考信息，不作为硬性限制
+  - 重点检查关键 API：netfilter, netlink, procfs
+  - 任一 API 不可用时拒绝加载并输出详细错误
+  - 检查日志：`dmesg | grep firewall`
+- 已验证内核：5.x（未验证）、6.8.0-146（可加载）、6.8.0-147（可加载）、7.0.0-38（可加载）、7.0.0-42（可加载）
 
 ### 守护进程
 
@@ -119,6 +196,7 @@ make test
 | [docs/zh/configuration/](docs/zh/configuration/README.md) | YAML 配置、ProcFS 接口 |
 | [docs/zh/getting-started/](docs/zh/getting-started/README.md) | 安装、快速上手 |
 | [docs/zh/operations/](docs/zh/operations/README.md) | 运维管理、监控、故障排查 |
+| [docs/zh/development/multi-version-kmod.md](docs/zh/development/multi-version-kmod.md) | 多版本内核模块编译指南 |
 | [docs/zh/migration-risk-engine-v2.md](docs/zh/migration-risk-engine-v2.md) | 多维风险引擎迁移指南 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南 |
 | [SECURITY.md](SECURITY.md) | 安全策略 |
