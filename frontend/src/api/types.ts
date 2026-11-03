@@ -67,7 +67,7 @@ export interface ThreatLevel {
   peak_hours: boolean
 }
 
-/** `GET /api/v1/stats` 响应 */
+/** `GET /api/v2/stats` 响应 */
 export interface StatsResponse {
   daemon_version: string
   kernel_version: string
@@ -247,7 +247,7 @@ export type BanSortKey =
   | 'remaining_asc'
   | 'remaining_desc'
 
-/** `GET /api/v1/bans` 分页参数；后端缺省 page=1、page_size=20 */
+/** `GET /api/v2/bans` 分页参数；后端缺省 page=1、page_size=20 */
 export interface PaginationParams {
   page?: number
   page_size?: number
@@ -263,7 +263,7 @@ export interface PaginatedResponse<T> {
   total_pages: number
 }
 
-/** `POST /api/v1/bans` 请求体 */
+/** `POST /api/v2/bans` 请求体 */
 export interface CreateBanRequest {
   ip: string
   /** 封禁时长（秒）：0 或省略 = 永久封禁（与内核 ban_time=-1 语义一致） */
@@ -272,13 +272,13 @@ export interface CreateBanRequest {
   reason?: string
 }
 
-/** `POST /api/v1/whitelist` 请求体 */
+/** `POST /api/v2/whitelist` 请求体 */
 export interface CreateWhitelistRequest {
   /** CIDR 或单个 IP，如 "10.0.0.0/8"、"192.168.1.1" */
   cidr: string
 }
 
-/** `PUT /api/v1/jails/:name` 请求体 */
+/** `PUT /api/v2/jails/:name` 请求体 */
 export interface UpdateJailRequest {
   enabled: boolean
 }
@@ -287,7 +287,7 @@ export interface UpdateJailRequest {
 // Web UI 配置（internal/http/config_api.go）
 // ============================================================================
 
-/** `GET /api/v1/config` 响应 */
+/** `GET /api/v2/config` 响应 */
 export interface WebuiConfigResponse {
   sse_push_interval: number
   rate_warning_pps: number
@@ -315,7 +315,7 @@ export interface WebuiConfigResponse {
 }
 
 /**
- * `PUT /api/v1/config` 请求体。
+ * `PUT /api/v2/config` 请求体。
  * 所有字段可选：只提交需要修改的字段，未提交的字段保持后端现值。
  * 约束（后端会校验并返回 400）：warning < critical；各阈值与容量均不能为 0；
  * `sse_push_interval` 必须在 1-60 之间。
@@ -755,7 +755,7 @@ export interface LogPageResponse {
   total_pages: number
 }
 
-/** `GET /api/v1/logs` 查询参数；后端缺省 page=1、page_size=100（上限 500） */
+/** `GET /api/v2/logs` 查询参数；后端缺省 page=1、page_size=100（上限 500） */
 export interface LogQueryParams {
   page?: number
   page_size?: number
@@ -780,14 +780,14 @@ export interface SseStreamStatus {
 }
 
 /**
- * `GET /api/v1/stats/sse-status` 响应。
+ * `GET /api/v2/stats/sse-status` 响应。
  * 两条流各自独立的上限（events 10 / logs 5）；`limit_reached` 必须按所属流判断，
  * 不能用一条流的上限推断另一条（这正是修复前的缺陷）。
  */
 export interface SseStatusResponse {
-  /** `/api/v1/events` 管理事件流 */
+  /** `/api/v2/events` 管理事件流 */
   events: SseStreamStatus
-  /** `/api/v1/logs/stream` 日志流 */
+  /** `/api/v2/logs/stream` 日志流 */
   logs: SseStreamStatus
 }
 
@@ -866,3 +866,52 @@ export interface RiskEventResponse {
   total: number
 }
 
+
+/** 单个威胁情报源 */
+export interface ThreatFeedResponse {
+  id: string
+  name: string
+  source_url: string
+  enabled: boolean
+  category: string
+  confidence: number
+  last_synced_at: number | null
+  entry_count: number
+  sync_status: string
+  last_error: string | null
+}
+
+/** 威胁情报源列表响应 */
+export interface ThreatFeedListResponse {
+  feeds: ThreatFeedResponse[]
+  total: number
+}
+
+/** 威胁情报同步结果 */
+export interface ThreatFeedSyncResult {
+  feed_id: string
+  new_entries: number
+  updated_entries: number
+  synced_at: number
+}
+
+/** 综合分析摘要响应 */
+export interface AnalysisSummaryResponse {
+  threat_level: ThreatLevel
+  top_risk_ips: RiskVectorResponse[]
+  active_attacks: number
+  anomalies_count: number
+  collaborative_count: number
+  summary: string
+  timestamp: number
+}
+
+/** 单 IP 综合分析响应 */
+export interface AnalysisIpResponse {
+  ip: string
+  risk: RiskVectorResponse | null
+  ban_history: BanResponse[]
+  reputation: ReputationEntryResponse | null
+  prediction: AttackPrediction | null
+  is_whitelisted: boolean
+}

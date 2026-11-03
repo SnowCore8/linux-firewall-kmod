@@ -17,10 +17,10 @@
 //
 // 数据来源（真实端点，无占位假数据）：
 //   - 实时速率：优先全局 SSE 的 rates 事件（useSse().rates / rateHistory），未就绪时回退
-//     GET /api/v1/rates/current 与 GET /api/v1/rates/history；
-//   - 其余分区均为 REST 端点（/api/v1/rates/windows、/api/v1/stats/*），只在对应分区激活时请求，
+//     GET /api/v2/rates/current 与 GET /api/v2/rates/history；
+//   - 其余分区均为 REST 端点（/api/v2/rates/windows、/api/v2/stats/*），只在对应分区激活时请求，
 //     避免一次性打出一堆慢查询；
-//   - 判决条用的速率阈值取自 GET /api/v1/config 的 rate_warning_pps / rate_critical_pps，
+//   - 判决条用的速率阈值取自 GET /api/v2/config 的 rate_warning_pps / rate_critical_pps，
 //     与守护进程计算威胁等级时用的是同一组配置（见 internal/http/stats.go）。
 
 import { useCallback, useMemo, useState } from 'react'

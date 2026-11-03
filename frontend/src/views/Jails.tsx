@@ -10,8 +10,8 @@
 //
 // 数据来源：
 //   1) 全局 SSE 的 jails 事件（useSse().jails）——实时且变更后立即推送；
-//   2) GET /api/v1/jails —— 实时通道未就绪时的回退（两者按共享新鲜度戳取较新一份）；
-//   3) GET /api/v1/stats/ban-duration-recommendations —— 推荐为按需计算，走 REST。
+//   2) GET /api/v2/jails —— 实时通道未就绪时的回退（两者按共享新鲜度戳取较新一份）；
+//   3) GET /api/v2/stats/ban-duration-recommendations —— 推荐为按需计算，走 REST。
 
 import { useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -30,8 +30,8 @@ import { PageHeader } from '../components/PageHeader'
 import { formatDuration, formatNumber } from '../lib/format'
 
 /** 端点常量：一律取契约生成物，不在页面里手写路径 */
-const JAILS_URL = ROUTES.GET_API_V1_JAILS
-const DURATION_RECOMMENDATIONS_URL = ROUTES.GET_API_V1_STATS_BAN_DURATION_RECOMMENDATIONS
+const JAILS_URL = ROUTES.GET_API_V2_JAILS
+const DURATION_RECOMMENDATIONS_URL = ROUTES.GET_API_V2_STATS_BAN_DURATION_RECOMMENDATIONS
 
 /** 空列表常量：避免 `?? []` 每次渲染产生新数组 */
 const EMPTY_JAILS: JailResponse[] = []
@@ -73,7 +73,7 @@ export default function Jails() {
   const toast = useToast()
   const { jails: sseJails, payloadSeq } = useSse()
 
-  // SSE 未就绪时的回退：GET /api/v1/jails
+  // SSE 未就绪时的回退：GET /api/v2/jails
   const restJails = useAsync(() => getJson<JailResponse[]>(JAILS_URL), [])
   // 取较新的一份而非「SSE 优先」：写操作后 restJails.reload() 必须真正反映到界面。
   // `liveJails === null` 表示**两条来源都还没有数据**，用于骨架/错误提示的判据。
@@ -91,7 +91,7 @@ export default function Jails() {
 
   /**
    * 切换 Jail 启用状态。
-   * PUT /api/v1/jails/:name 的语义是「整体设置 enabled」，因此直接传目标值而不是取反，
+   * PUT /api/v2/jails/:name 的语义是「整体设置 enabled」，因此直接传目标值而不是取反，
    * 避免与实时推送回来的最新状态产生竞态。
    */
   const toggleJail = async (jail: JailResponse, nextEnabled: boolean) => {

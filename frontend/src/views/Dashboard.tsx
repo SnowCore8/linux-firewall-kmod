@@ -8,11 +8,11 @@
 // 影响什么：本页全部为只读展示，不触发任何写操作，不改变内核或守护进程状态。
 //
 // 数据来源（每个域都走「SSE 优先 + REST 回退」，由 pickLiveData 按新鲜度戳裁决谁更新）：
-//   stats  ← SSE `stats` 事件   / GET /api/v1/stats
-//   rates  ← SSE `rates` 事件   / GET /api/v1/rates/current
-//   jails  ← SSE `jails` 事件   / GET /api/v1/jails
-//   bans   ← SSE `bans` 事件    / GET /api/v1/bans（第 1 页，按封禁时间倒序）
-//   走势   ← SSE rateHistory（客户端环形缓冲）/ GET /api/v1/rates/history（通道断开时才轮询）
+//   stats  ← SSE `stats` 事件   / GET /api/v2/stats
+//   rates  ← SSE `rates` 事件   / GET /api/v2/rates/current
+//   jails  ← SSE `jails` 事件   / GET /api/v2/jails
+//   bans   ← SSE `bans` 事件    / GET /api/v2/bans（第 1 页，按封禁时间倒序）
+//   走势   ← SSE rateHistory（客户端环形缓冲）/ GET /api/v2/rates/history（通道断开时才轮询）
 // 已有推送的域一律不轮询 REST：那会让两份快照互相覆盖（见 hooks/useAsync.ts 的说明）。
 //
 // 密度取舍：长列表只展示前几条（最新封禁 5 条、Jail 4 个、失败原因 4 类），
@@ -512,7 +512,7 @@ export default function Dashboard() {
         <AnomalyPanel />
 
         {/* 10) 封禁效果：历史维度（复发率 + 复发 TOP），回答「这套封禁策略有没有效」。
-            组件自带面板、判决条与取数（GET /api/v1/stats/recidivism，按 SSE 同源间隔自动刷新）；
+            组件自带面板、判决条与取数（GET /api/v2/stats/recidivism，按 SSE 同源间隔自动刷新）；
             TOP 列表只取 5 条，与最新封禁 / Jail 状态保持同一档密度。 */}
         <RecidivismPanel limit={5} />
         </div>

@@ -99,10 +99,10 @@ export function Login() {
       // 先用待验证的凭据探测一个受保护端点，避免把错误凭据写进会话存储。
       //
       // 探测目标必须是**已注册**且 auth=required 的路由：`GET /` 在 daemon 的 ServeMux
-      // 里是一棵兜住所有路径的子树，未注册的路径（例如尚未接线的 /api/v1/stats）会被它
+      // 里是一棵兜住所有路径的子树，未注册的路径（例如尚未接线的 /api/v2/stats）会被它
       // 接住并 303 到面板外壳——fetch 自动跟随重定向后拿到 200，于是任何凭据都算通过。
       const candidate = encodeCredentials(username, password)
-      const response = await fetch(ROUTES.GET_API_V1_BANS, {
+      const response = await fetch(ROUTES.GET_API_V2_BANS, {
         headers: { Authorization: `${AUTH.SCHEME} ${candidate}` },
         credentials: 'same-origin',
       })

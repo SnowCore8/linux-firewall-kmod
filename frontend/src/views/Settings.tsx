@@ -1,9 +1,9 @@
 // Web UI 配置页（二级页，位于「更多」之下）
 //
-// 做什么：把后端 `GET /api/v1/config` 返回的运行时可配置项组织成**控制台式高密度面板**，
+// 做什么：把后端 `GET /api/v2/config` 返回的运行时可配置项组织成**控制台式高密度面板**，
 //        并允许就地编辑：SSE 推送间隔、速率告警阈值（总速率 / SYN）、六种协议的每秒
 //        上限、三个 DDoS 检测算法开关、四张表的容量上限、以及日志视图的时间过滤起点。
-// 影响什么：本页是**唯一的配置写入口**（`PUT /api/v1/config`）。保存会立即：
+// 影响什么：本页是**唯一的配置写入口**（`PUT /api/v2/config`）。保存会立即：
 //          1) 改写守护进程内存中的全局 WebUI 配置；
 //          2) 把协议阈值经 netlink 下发内核，DDoS 检测开关写入内核参数
 //             （sysfs：fw_ddos_detection / fw_static_threshold / fw_dynamic_threshold）；
@@ -37,7 +37,7 @@ import { BackLink, Badge, Panel, Row, Rows, SubHead, Toolbar, errorText } from '
 import { formatDatetime } from '../lib/format'
 
 /** GET 与 PUT 共用同一路径；取生成物，不在页面里手写 */
-const CONFIG_URL = ROUTES.GET_API_V1_CONFIG
+const CONFIG_URL = ROUTES.GET_API_V2_CONFIG
 
 /** 面板内的一行 dim 说明（10px 紧凑，不参与密度压缩） */
 const DIM_NOTE = {
@@ -458,7 +458,7 @@ export default function Settings() {
   const navigate = useNavigate()
   const toast = useToast()
 
-  // 配置读取：GET /api/v1/config
+  // 配置读取：GET /api/v2/config
   const config = useAsync(() => getJson<WebuiConfigResponse>(CONFIG_URL), [])
 
   /** 当前后端现值（作为差异比较的基准；保存成功后用后端返回体刷新） */
@@ -860,7 +860,7 @@ export default function Settings() {
               </Panel>
 
               {/* 生效方式说明：让用户知道「保存」之后发生了什么 */}
-              <Panel title="保存后的行为" meta="PUT /api/v1/config">
+              <Panel title="保存后的行为" meta="PUT /api/v2/config">
                 <div style={DIM_NOTE}>· 配置写入守护进程内存并持久化到运行时配置文件，重启后保留</div>
                 <div style={DIM_NOTE}>· 协议阈值与 DDoS 开关会即时同步到内核；同步失败不影响配置保存</div>
                 <div style={DIM_NOTE}>· 「日志视图过滤」以空字符串保存即表示取消过滤</div>

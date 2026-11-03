@@ -11,7 +11,7 @@
  *   由本模块按 `delay = min(2^min(attempt,5), 30)` 秒调度下一次连接。
  * - **防重入**：每个连接周期一个 error 标志，onerror 只处理一次；
  *   同时用「当前连接对象 === 触发者」判断，丢弃旧连接的迟到回调。
- * - **连接上限**：重连第 2 次起先探测 `GET /api/v1/stats/sse-status`，
+ * - **连接上限**：重连第 2 次起先探测 `GET /api/v2/stats/sse-status`，
  *   服务端已达 `MAX_SSE_CONNECTIONS` 时置 `connection_limit` 并**停止**重连
  *   （继续重试只会持续打满服务端日志，且永远不可能成功）。
  *
@@ -183,7 +183,7 @@ function sseReducer(state: SseState, action: SseAction): SseState {
  * 探测本身失败（守护进程刚重启、瞬时网络抖动）不视为「已满」——
  * 否则一次抖动就会被误判成永久停止重连。
  *
- * 只看 `events` 一条流：本模块订阅的是 `/api/v1/events`，日志流有自己的上限
+ * 只看 `events` 一条流：本模块订阅的是 `/api/v2/events`，日志流有自己的上限
  * （5）与自己的订阅者，它满了与这里无关。
  */
 async function probeConnectionLimit(): Promise<boolean> {

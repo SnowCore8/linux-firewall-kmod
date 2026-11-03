@@ -23,7 +23,7 @@ const MAX_SECONDS = 60
  * 模块级缓存：多视图共用一次请求。
  *
  * 配置在运行期可能被设置页改写，但**刷新间隔本身**不需要秒级同步——下次页面加载自然会
- * 取到新值，为此在每个视图里反复请求 `/api/v1/config` 不划算。
+ * 取到新值，为此在每个视图里反复请求 `/api/v2/config` 不划算。
  */
 let cached: Promise<number> | null = null
 

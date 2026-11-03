@@ -10,7 +10,7 @@
 //          不产生额外请求。
 //
 // 数据来源：优先全局 SSE 的 bans 事件（后端推的就是全量活跃封禁列表）；
-//          SSE 未就绪时回退 GET /api/v1/bans（分页信封，取第一页 items），
+//          SSE 未就绪时回退 GET /api/v2/bans（分页信封，取第一页 items），
 //          两者按共享新鲜度戳取较新一份（见 hooks/useLiveData.ts）——写操作后的
 //          reload() 必须真正反映到界面，不能写回「SSE 优先」。
 // 排序语义与 contract/http.fwidl 的 request PaginationParams.sort_by、服务端
@@ -62,7 +62,7 @@ import { formatDatetime, formatDuration, formatNumber } from '../lib/format'
 import { isValidDuration, isValidIp } from '../lib/validation'
 
 /**
- * REST 回退取第一页的条数：契约给 GET /api/v1/bans 的 page_size 上限就是 100。
+ * REST 回退取第一页的条数：契约给 GET /api/v2/bans 的 page_size 上限就是 100。
  *
  * 这一份只用于「SSE 首帧还没到」的首屏（本表的全量来源是 bans 事件推送，见
  * hooks/useLiveData.ts）。写 100 而不是默认的 20，是为了让回退窗口和 SSE 到达后的
@@ -71,7 +71,7 @@ import { isValidDuration, isValidIp } from '../lib/validation'
 const FALLBACK_PAGE_SIZE = 100
 
 /**
- * 批量封禁的单次上限：契约 `POST /api/v1/bans/batch` 定 100 条，越界整批回 40005。
+ * 批量封禁的单次上限：契约 `POST /api/v2/bans/batch` 定 100 条，越界整批回 40005。
  * 界面提前拦一次，用户就不必为「选了 120 个」等一个必定失败的请求。
  */
 const BATCH_BAN_MAX_IPS = 100
@@ -265,7 +265,7 @@ export default function Bans() {
   const toast = useToast()
   const { bans: sseBans, payloadSeq } = useSse()
 
-  // SSE 未就绪时的回退：GET /api/v1/bans 恒为分页信封，取第一页 items 即可
+  // SSE 未就绪时的回退：GET /api/v2/bans 恒为分页信封，取第一页 items 即可
   // （SSE 的 bans 事件推的才是全量；此回退只在连接建立前短暂生效）。
   const restBans = useAsync(
     () => getBans({ page: 1, page_size: FALLBACK_PAGE_SIZE }).then((page) => page.items),
@@ -368,7 +368,7 @@ export default function Bans() {
     setCreating(true)
     try {
       // 契约的 Option<T> 在 TS 侧是「必填 + 可为 null」，所以留空写 null 而不是省略字段：
-      // 服务端把 null 与缺席同样按「永久封禁」处理（单条 POST /api/v1/bans 的语义）。
+      // 服务端把 null 与缺席同样按「永久封禁」处理（单条 POST /api/v2/bans 的语义）。
       const body: CreateBanRequest = {
         ip,
         duration: durationRaw === '' ? null : Number(durationRaw),

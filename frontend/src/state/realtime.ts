@@ -1,7 +1,7 @@
 /**
  * 实时通道（SSE）状态：整个应用只建立**一条** EventSource，任何视图都从这里读数据。
  *
- * 为什么必须全局唯一：每条连接都会占用服务端一个名额（上限见 `/api/v1/stats/sse-status`），
+ * 为什么必须全局唯一：每条连接都会占用服务端一个名额（上限见 `/api/v2/stats/sse-status`），
  * 且服务端按域推送整份快照，多个连接纯属浪费。因此这里用模块级单例而非「每个视图各连一个」。
  *
  * 数据新鲜度：每收到某域一帧就盖一个全局单调戳（见 [`nextFreshnessStamp`](../hooks/freshness.ts)），
@@ -127,7 +127,7 @@ function toRatePoint(payload: RateResponse[]): RateHistoryPoint {
  * 探测服务端 SSE 连接上限。探测本身失败（守护进程刚重启、瞬时抖动）不视为「已满」——
  * 否则一次抖动就会被误判成永久停止重连。
  *
- * 只看 `events` 一条流：这里订阅的是 `/api/v1/events`，日志流有自己的上限与订阅者，
+ * 只看 `events` 一条流：这里订阅的是 `/api/v2/events`，日志流有自己的上限与订阅者，
  * 它满了与这里无关。
  */
 async function probeConnectionLimit(): Promise<boolean> {

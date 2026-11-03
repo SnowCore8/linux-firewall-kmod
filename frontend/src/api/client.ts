@@ -2,7 +2,7 @@
  * HTTP 客户端：fetch 封装 + 后端信封解包 + 统一错误类型
  *
  * 契约要点（来自后端 `src/daemon/internal/http/routes.go` 与 `handlers.go`）：
- * - 所有 `/api/v1/*` 接口返回信封 `{ code, data, message }`
+ * - 所有 `/api/v2/*` 接口返回信封 `{ code, data, message }`
  * - **HTTP 2xx 且 `code === 0`** 才算业务成功；`code !== 0` 时 `message` 为失败原因
  * - 失败一律抛出 `ApiError`，让调用方（视图 / useAsync）无需再判断返回码
  * - 认证由本客户端**显式携带** `Authorization: Basic <令牌>`（令牌来自 api/auth.ts）。

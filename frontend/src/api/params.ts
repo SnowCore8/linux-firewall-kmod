@@ -6,7 +6,7 @@
  * 其中 `sort_by` 的取值必须与服务端的排序键逐字一致。
  */
 
-/** `GET /api/v1/bans` 的排序键；取值对应服务端的排序分支 */
+/** `GET /api/v2/bans` 的排序键；取值对应服务端的排序分支 */
 export type BanSortKey =
   | 'banned_at_desc'
   | 'banned_at_asc'

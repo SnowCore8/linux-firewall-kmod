@@ -1,6 +1,6 @@
 // 攻击地图页（3D 地球）：把封禁 IP 的地理分布画在一颗可自转、可拖拽的地球上
 //
-// 做什么：从 `GET /api/v1/stats/attack-geo` 取近 7 天封禁记录的城市级地理聚合，用
+// 做什么：从 `GET /api/v2/stats/attack-geo` 取近 7 天封禁记录的城市级地理聚合，用
 //   Three.js 在球面上打发光点（点径与颜色随封禁次数）。同一响应里的
 //   `server_latitude` / `server_longitude` 给出本机坐标：两者都有值时，额外绘制
 //   「本机」标记并从每个攻击源画一条弧线连到本机；任一缺失则只画点位、不画标记与弧线
@@ -10,7 +10,7 @@
 //   额外网络请求是地球贴图 `/static/earth-night.webp`（随前端产物一起嵌入守护进程二进制）。
 //
 // 数据来源（真实端点，无占位假数据）：
-//   GET /api/v1/stats/attack-geo → AttackGeoResponse（api/types.ts 中由契约推导）
+//   GET /api/v2/stats/attack-geo → AttackGeoResponse（api/types.ts 中由契约推导）
 //   该域**没有** SSE 实时推送，因此按 usePollInterval（与 SSE 推送同源）轮询固定间隔，
 //   页面切到后台时 useAsync 会自动暂停。
 //
@@ -133,7 +133,7 @@ const MARKER_SIZE_PX = 26
 /**
  * 本机（服务器）坐标。
  *
- * 来源：`GET /api/v1/stats/attack-geo` 的 `server_latitude` / `server_longitude`
+ * 来源：`GET /api/v2/stats/attack-geo` 的 `server_latitude` / `server_longitude`
  * 两个字段（由守护进程的配置项提供，或未配置时由出口 IP 探测确定）。三者必须一致
  * 才构造出本对象：`server_location_source` 为 `none`、或任一侧不是有限数值，都视为
  * 未配置——此时既不画本机标记、也不画弧线，而不是退回某个占位坐标。
@@ -1314,7 +1314,7 @@ export default function Globe() {
                 <Note>
                   列表只展示封禁次数最高的 {formatNumber(TOP_VISIBLE, false)} 个地点，共{' '}
                   {formatNumber(points.length, false)} 个；完整数据见{' '}
-                  <span className="fw-mono">GET /api/v1/stats/attack-geo</span>。
+                  <span className="fw-mono">GET /api/v2/stats/attack-geo</span>。
                 </Note>
               ) : null}
             </Panel>

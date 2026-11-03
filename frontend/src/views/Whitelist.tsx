@@ -9,8 +9,8 @@
 //
 // 数据来源（任何一级都是真实端点，无占位假数据）：
 //   1) 全局 SSE 的 whitelist 事件（useSse().whitelist）—— 状态变更后服务端会立即推送；
-//   2) GET /api/v1/whitelist —— 实时通道未就绪时的回退（两者按共享新鲜度戳取较新一份）；
-//   3) 推荐列表走 REST GET /api/v1/whitelist/recommendations（后端按需计算，非推送项）。
+//   2) GET /api/v2/whitelist —— 实时通道未就绪时的回退（两者按共享新鲜度戳取较新一份）；
+//   3) 推荐列表走 REST GET /api/v2/whitelist/recommendations（后端按需计算，非推送项）。
 
 import { useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -43,8 +43,8 @@ import { copyToClipboard, formatNumber } from '../lib/format'
 import { isValidCidr } from '../lib/validation'
 
 /** 端点常量：一律取契约生成物，不在页面里手写路径 */
-const WHITELIST_URL = ROUTES.GET_API_V1_WHITELIST
-const WHITELIST_RECOMMENDATIONS_URL = ROUTES.GET_API_V1_WHITELIST_RECOMMENDATIONS
+const WHITELIST_URL = ROUTES.GET_API_V2_WHITELIST
+const WHITELIST_RECOMMENDATIONS_URL = ROUTES.GET_API_V2_WHITELIST_RECOMMENDATIONS
 
 /** 空列表常量：避免 `?? []` 每次渲染都产生新数组，导致 useMemo 失效 */
 const EMPTY_ENTRIES: WhitelistEntry[] = []
@@ -117,7 +117,7 @@ export default function Whitelist() {
   const toast = useToast()
   const { whitelist: sseWhitelist, payloadSeq } = useSse()
 
-  // SSE 未就绪时的回退：GET /api/v1/whitelist（后端直接返回数组）
+  // SSE 未就绪时的回退：GET /api/v2/whitelist（后端直接返回数组）
   const restEntries = useAsync(() => getJson<WhitelistEntry[]>(WHITELIST_URL), [])
   // 取较新的一份而非「SSE 优先」：增删白名单后的 restEntries.reload() 必须真正生效
   const liveEntries = pickLiveData(sseWhitelist, payloadSeq.whitelist, restEntries)
