@@ -13,7 +13,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/bans"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/risk"
 )
 
 // TestAnalysisSummaryUnavailableWithoutDB 核对库缺席时摘要端点报 503/50003。
@@ -109,5 +111,99 @@ func TestAnalysisIpValidation(t *testing.T) {
 	}
 	if !strings.Contains(raw, `"is_whitelisted":false`) {
 		t.Errorf("is_whitelisted 缺席或不是 false: %s", truncate(env["data"]))
+	}
+}
+
+// TestAnalysisIpPopulatedWiring 核对库里有真实读数时，综合分析确把它们接了出来——
+// 风险向量 / 封禁历史 / 信誉 / 白名单命中都非降级值。降级形状由上面两个用例钉住，
+// 这一条钉「接线到位」：桩改成真查库后，读数必须真的流到载荷里。
+func TestAnalysisIpPopulatedWiring(t *testing.T) {
+	db := newAnalysisDB(t, "populated.db")
+	const ip = "203.0.113.7"
+
+	// 风险向量：七维给定值，total_risk 应为各维之和 = 15。
+	vec := risk.RiskVector{Failure: 1, Ban: 2, Scan: 3, Bruteforce: 4, DDoS: 5, Geo: 0, Cluster: 0}
+	if err := db.UpsertRiskVector(ip, vec, 1_700_000_000); err != nil {
+		t.Fatalf("写风险向量失败: %v", err)
+	}
+	// 封禁历史：一条临时封禁（计划 3600s），ban_count=2。
+	dur := int64(3600)
+	if err := db.RecordBanEvent(ip, "sshd", 2, false, &dur); err != nil {
+		t.Fatalf("写封禁事件失败: %v", err)
+	}
+	// 信誉：score=30。
+	if err := db.SetIPReputation(ip, 30); err != nil {
+		t.Fatalf("写信誉失败: %v", err)
+	}
+	// 白名单：覆盖该 IP 的 /24。GlobalWhitelist 是全局单例，测后必须清理，别污染其他用例。
+	prefix := mustPrefix(t, "203.0.113.0/24")
+	bans.GlobalWhitelist().Add(prefix)
+	t.Cleanup(func() { _ = bans.GlobalWhitelist().Remove(prefix) })
+
+	s, _ := newTestServer(t, func(cfg *APIConfig) { cfg.DB = db })
+
+	w := authedGet(t, s, "/api/v2/analysis/ip/"+ip)
+	if w.Code != http.StatusOK {
+		t.Fatalf("合法 IP 状态码 %d，期望 200（body=%s）", w.Code, truncate(w.Body.Bytes()))
+	}
+	env := decodeEnvelope(t, w.Body.Bytes())
+	var data map[string]any
+	if err := json.Unmarshal(env["data"], &data); err != nil {
+		t.Fatalf("data 不是对象: %v（data=%s）", err, env["data"])
+	}
+
+	riskObj, ok := data["risk"].(map[string]any)
+	if !ok {
+		t.Fatalf("risk = %v，期望对象（已写入风险向量，不该是 null）", data["risk"])
+	}
+	if got, _ := riskObj["total_risk"].(float64); got != 15 {
+		t.Errorf("risk.total_risk = %v，期望 15（七维之和）", riskObj["total_risk"])
+	}
+
+	hist, ok := data["ban_history"].([]any)
+	if !ok || len(hist) == 0 {
+		t.Fatalf("ban_history = %v，期望非空（已写入一条封禁事件）", data["ban_history"])
+	}
+	first, _ := hist[0].(map[string]any)
+	if first["jail"] != "sshd" {
+		t.Errorf("ban_history[0].jail = %v，期望 sshd", first["jail"])
+	}
+	if got, _ := first["ban_count"].(float64); got != 2 {
+		t.Errorf("ban_history[0].ban_count = %v，期望 2", first["ban_count"])
+	}
+	if got, _ := first["is_permanent"].(bool); got {
+		t.Errorf("ban_history[0].is_permanent = %v，期望 false", first["is_permanent"])
+	}
+
+	rep, ok := data["reputation"].(map[string]any)
+	if !ok {
+		t.Fatalf("reputation = %v，期望对象（已写入信誉，不该是 null）", data["reputation"])
+	}
+	if got, _ := rep["score"].(float64); got != 30 {
+		t.Errorf("reputation.score = %v，期望 30", rep["score"])
+	}
+
+	if data["is_whitelisted"] != true {
+		t.Errorf("is_whitelisted = %v，期望 true（IP 落在 203.0.113.0/24）", data["is_whitelisted"])
+	}
+
+	// summary 的 top_risk_ips 也应含这条向量（同一 ip_risk_vectors 真源）。
+	summary := dataOf(t, s, httpcontract.RouteGetApiV2AnalysisSummary)
+	arr, ok := summary["top_risk_ips"].([]any)
+	if !ok || len(arr) == 0 {
+		t.Fatalf("top_risk_ips = %v，期望含已写入的向量", summary["top_risk_ips"])
+	}
+	found := false
+	for _, item := range arr {
+		m, _ := item.(map[string]any)
+		if m["ip"] == ip {
+			found = true
+			if got, _ := m["total_risk"].(float64); got != 15 {
+				t.Errorf("top_risk_ips[%s].total_risk = %v，期望 15", ip, m["total_risk"])
+			}
+		}
+	}
+	if !found {
+		t.Errorf("top_risk_ips 未含 %s: %v", ip, arr)
 	}
 }
