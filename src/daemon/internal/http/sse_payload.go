@@ -39,7 +39,7 @@ func (h *APIHandlers) SSEReplicas() *SSEReplicas {
 //
 // entries 由调用方给出而不是在这里读全局缓存：泵可以被装配成用自己那份镜像
 // （PumpDeps.Cache），载荷必须反映**那张表**的内容。排序与分页属于 REST
-// （GET /api/v1/bans 报的是 PaginatedResponse），帧报的是全表镜像——前端拿它整表替换
+// （GET /api/v2/bans 报的是 PaginatedResponse），帧报的是全表镜像——前端拿它整表替换
 // 本地状态，分页参数由 REST 那一侧自己重取。
 func (r *SSEReplicas) Bans(entries []bans.BanInfo) any {
 	return banResponses(entries, time.Now().Unix())
@@ -50,7 +50,7 @@ func (r *SSEReplicas) Whitelist(cidrs []string) any {
 	return whitelistEntries(cidrs)
 }
 
-// Stats 装配 stats 域载荷，与 GET /api/v1/stats 同一个 buildStats。
+// Stats 装配 stats 域载荷，与 GET /api/v2/stats 同一个 buildStats。
 //
 // 泵在每次采样「统计变了」之后才调这里，所以一帧就是一次首屏读数：内核快照 + 历史库
 // 时间窗 + 本进程计数三路合到同一个函数上，仪表盘不需要区分数字是从哪条路来的。
@@ -59,13 +59,13 @@ func (r *SSEReplicas) Stats() any {
 	return r.h.buildStats(time.Now())
 }
 
-// Rates 装配 rates 域载荷，与 GET /api/v1/rates/current 同一条折表路径
+// Rates 装配 rates 域载荷，与 GET /api/v2/rates/current 同一条折表路径
 // （含按 pps 降序与地址族不识别时的跳过）。
 func (r *SSEReplicas) Rates() any {
 	return r.h.ratesCurrent(r.h.kernelSnapshot())
 }
 
-// Jails 装配 jails 域载荷，与 GET /api/v1/jails 同一个 jailResponses。
+// Jails 装配 jails 域载荷，与 GET /api/v2/jails 同一个 jailResponses。
 //
 // 泵不参与这一域：jail 配置的所有权在入站执行体，变更触发由它的快照发布点喊一声
 // （见 runtime.JailSnapshotListener 与 APIHandlers.PublishJails）。

@@ -7,14 +7,14 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 )
 
-// UpdateJail 启用或禁用指定 jail（PUT /api/v1/jails/{name}）。
+// UpdateJail 启用或禁用指定 jail（PUT /api/v2/jails/{name}）。
 //
 // 请求体：{"enabled": true/false}
 //
 // 状态变更通过 JailController 写入权威源，InboundExecutor 在下一个 poll 周期自动同步
 // 并重建监视集合。
 //
-// **这里不推 jails 帧**：这条写路径改的是「期望状态」，而 jails 帧与 GET /api/v1/jails 报的是
+// **这里不推 jails 帧**：这条写路径改的是「期望状态」，而 jails 帧与 GET /api/v2/jails 报的是
 // 执行体发布的那份快照，两者在同步之前本就不同——在这里推一帧反而会把改动**前**的快照发给
 // 订阅者，前端按 `sseJails ?? restJails.data` 取值，界面上刚拨的开关立刻弹回原位。推送点因此
 // 收在快照真正换形状的那一刻（runtime.JailSnapshotListener），而不是在各个写入点各推一次。

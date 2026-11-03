@@ -5,8 +5,8 @@
 // 契约逐字一致，否则跨层核对在这一层没有锚点。
 //
 // 字段全用指针，因为契约把它们声明成 Option<…>，而「没带这个参数」与「带了但值读不懂」
-// 在不同路由上的处理**不一样**：GET /api/v1/bans 只编了 code 0，读不懂只能回落默认；
-// GET /api/v1/logs 编了 40005，读不懂必须报错。值类型分不出这两种情形。
+// 在不同路由上的处理**不一样**：GET /api/v2/bans 只编了 code 0，读不懂只能回落默认；
+// GET /api/v2/logs 编了 40005，读不懂必须报错。值类型分不出这两种情形。
 package http
 
 import (
@@ -24,7 +24,7 @@ type PaginationParams struct {
 	SortBy   *string `json:"sort_by"`
 }
 
-// LogQueryParams 是 GET /api/v1/logs 的查询参数（契约 request LogQueryParams）。
+// LogQueryParams 是 GET /api/v2/logs 的查询参数（契约 request LogQueryParams）。
 //
 // 与 PaginationParams 同形但**不共用**：契约把它们分成两个 request 块，日志多出
 // level/keyword/since 三个过滤项。合并成一个 Go 结构体等于宣布两个契约类型是一个。
@@ -116,7 +116,7 @@ type logQuery struct {
 	pageSize uint32
 }
 
-// parseLogQuery 解析并校验 GET /api/v1/logs 的查询参数。
+// parseLogQuery 解析并校验 GET /api/v2/logs 的查询参数。
 //
 // 与封禁列表的宽容处理相反，这里**任何**读不懂的值都回错：契约给这条路由编了
 // 40005「日志查询参数非法」。默默按默认值查更糟——运维以为自己在看第 5000 页，

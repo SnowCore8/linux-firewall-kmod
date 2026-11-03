@@ -59,11 +59,11 @@ func dataNumber(t *testing.T, data map[string]any, key string) uint64 {
 	return uint64(f)
 }
 
-// putConfig 带上合法 Content-Type 打一次 PUT /api/v1/config，返回解析后的信封与 HTTP 状态。
+// putConfig 带上合法 Content-Type 打一次 PUT /api/v2/config，返回解析后的信封与 HTTP 状态。
 func putConfig(t *testing.T, s *Server, body string) (map[string]json.RawMessage, int) {
 	t.Helper()
 
-	w := authedSend(t, s, http.MethodPut, "/api/v1/config", "application/json", body)
+	w := authedSend(t, s, http.MethodPut, "/api/v2/config", "application/json", body)
 	return decodeEnvelope(t, w.Body.Bytes()), w.Code
 }
 
@@ -285,7 +285,7 @@ func TestUpdateConfigWithoutKernelClient(t *testing.T) {
 
 // TestGetConfigReturnsContractShapeWithoutLeakingCredentials 盯住两件事：
 //
-//   - GET /api/v1/config 的载荷是契约的 WebuiConfigResponse——snake_case 的**扁平** 19 字段，
+//   - GET /api/v2/config 的载荷是契约的 WebuiConfigResponse——snake_case 的**扁平** 19 字段，
 //     不是整份 config.Config（键名是 Go 字段名、形状是嵌套的）；
 //   - config.Config 根上的凭据（MetricsPassword）根本不在载荷里。读路径只投影 cfg.Webui
 //     这一段，因此凭据不在取值范围内，不靠「在副本上清零」。
@@ -298,7 +298,7 @@ func TestGetConfigReturnsContractShapeWithoutLeakingCredentials(t *testing.T) {
 		cfg.GetCurrentConfig = func() *config.Config { return &live }
 	})
 
-	out := get[map[string]any](t, s, "/api/v1/config")
+	out := get[map[string]any](t, s, "/api/v2/config")
 
 	if v, ok := out["rate_warning_pps"]; !ok || v != float64(12345) {
 		t.Errorf("rate_warning_pps = %v，期望 12345（契约字段名与取值）", v)

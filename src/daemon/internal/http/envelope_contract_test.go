@@ -123,7 +123,7 @@ func assertNullData(t *testing.T, env map[string]json.RawMessage) {
 func TestSuccessEnvelopeCarriesCode0AndEmptyMessage(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 
-	w := authedGet(t, s, httpcontract.RouteGetApiV1StatsSseStatus[strings.Index(httpcontract.RouteGetApiV1StatsSseStatus, " ")+1:])
+	w := authedGet(t, s, httpcontract.RouteGetApiV2StatsSseStatus[strings.Index(httpcontract.RouteGetApiV2StatsSseStatus, " ")+1:])
 	if w.Code != http.StatusOK {
 		t.Fatalf("状态码 %d，期望 200（body=%s）", w.Code, w.Body)
 	}
@@ -155,7 +155,7 @@ func TestSuccessEnvelopeCarriesCode0AndEmptyMessage(t *testing.T) {
 func TestFailureEnvelopeCarriesBusinessCode(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 
-	w := authedGet(t, s, "/api/v1/bans/not-an-ip/detail")
+	w := authedGet(t, s, "/api/v2/bans/not-an-ip/detail")
 	wantStatus := httpcontract.CodeHTTPStatus[httpcontract.Code40006]
 	if w.Code != wantStatus {
 		t.Fatalf("状态码 %d，契约给 40006 编的是 %d（body=%s）", w.Code, wantStatus, w.Body)
@@ -218,7 +218,7 @@ func TestWriteCodeWithUndeclaredCodeFailsLoudly(t *testing.T) {
 func TestNonJSONContentTypeIsEnveloped415(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 
-	w := authedSend(t, s, http.MethodPost, "/api/v1/bans", "text/plain", `{"ip":"10.0.0.7"}`)
+	w := authedSend(t, s, http.MethodPost, "/api/v2/bans", "text/plain", `{"ip":"10.0.0.7"}`)
 	if w.Code != http.StatusUnsupportedMediaType {
 		t.Fatalf("状态码 %d，期望 415（body=%s）", w.Code, w.Body)
 	}
@@ -229,7 +229,7 @@ func TestNonJSONContentTypeIsEnveloped415(t *testing.T) {
 	assertNullData(t, env)
 
 	// 缺席的 Content-Type 不拒：curl 之类客户端常不带该头，body 照样是 JSON。
-	ok := authedSend(t, s, http.MethodPost, "/api/v1/bans", "", `{"ip":"10.0.0.8"}`)
+	ok := authedSend(t, s, http.MethodPost, "/api/v2/bans", "", `{"ip":"10.0.0.8"}`)
 	t.Cleanup(func() { _ = removeBanForTest("10.0.0.8") })
 	if ok.Code == http.StatusUnsupportedMediaType {
 		t.Errorf("不带 Content-Type 的合法 JSON 被判 415，契约只拒「说了别的类型」")
@@ -253,7 +253,7 @@ func TestMalformedOrOversizedBodyIsEnveloped422(t *testing.T) {
 		"超限体":     `{"cidr":"` + strings.Repeat("a", maxRequestBodyBytes+1) + `"}`,
 	}
 	for name, body := range cases {
-		w := authedSend(t, s, http.MethodPost, "/api/v1/whitelist", "application/json", body)
+		w := authedSend(t, s, http.MethodPost, "/api/v2/whitelist", "application/json", body)
 		if w.Code != http.StatusUnprocessableEntity {
 			t.Errorf("%s：状态码 %d，期望 422（body=%s）", name, w.Code, truncate(w.Body.Bytes()))
 			continue
@@ -275,12 +275,12 @@ func TestJSONContentTypeVariantsAreAccepted(t *testing.T) {
 
 	body := `{"cidr":"not-a-prefix"}`
 	for _, ct := range []string{"application/json; charset=utf-8", "APPLICATION/JSON", "application/api+json"} {
-		w := authedSend(t, s, http.MethodPost, "/api/v1/whitelist", ct, body)
+		w := authedSend(t, s, http.MethodPost, "/api/v2/whitelist", ct, body)
 		if w.Code == http.StatusUnsupportedMediaType {
 			t.Errorf("Content-Type %q 被判 415，它是 JSON", ct)
 		}
 	}
-	w := authedSend(t, s, http.MethodPost, "/api/v1/whitelist", "application/jsonml", body)
+	w := authedSend(t, s, http.MethodPost, "/api/v2/whitelist", "application/jsonml", body)
 	if w.Code != http.StatusUnsupportedMediaType {
 		t.Errorf("application/jsonml 状态码 %d，期望 415：前缀相同不等于同一种媒体类型", w.Code)
 	}
@@ -301,13 +301,13 @@ func TestBusinessCodesPerRoute(t *testing.T) {
 		body        string
 		wantCode    int
 	}{
-		{"解封非法 IP", http.MethodDelete, "/api/v1/bans/not-an-ip", "", "", httpcontract.Code40002},
-		{"解封不在表中", http.MethodDelete, "/api/v1/bans/10.9.9.8", "", "", httpcontract.Code40002},
-		{"批量封禁列表为空", http.MethodPost, "/api/v1/bans/batch", "application/json", `{"ips":[]}`, httpcontract.Code40005},
-		{"添加白名单 CIDR 非法", http.MethodPost, "/api/v1/whitelist", "application/json", `{"cidr":"10.0.0.0/99"}`, httpcontract.Code40003},
-		{"移除不在表中的网段", http.MethodDelete, "/api/v1/whitelist/203.0.113.0%2F24", "", "", httpcontract.Code40004},
-		{"jail 不存在", http.MethodPut, "/api/v1/jails/no-such-jail", "application/json", `{"enabled":true}`, httpcontract.Code404},
-		{"日志文件未配置", http.MethodGet, "/api/v1/logs", "", "", httpcontract.Code50003},
+		{"解封非法 IP", http.MethodDelete, "/api/v2/bans/not-an-ip", "", "", httpcontract.Code40002},
+		{"解封不在表中", http.MethodDelete, "/api/v2/bans/10.9.9.8", "", "", httpcontract.Code40002},
+		{"批量封禁列表为空", http.MethodPost, "/api/v2/bans/batch", "application/json", `{"ips":[]}`, httpcontract.Code40005},
+		{"添加白名单 CIDR 非法", http.MethodPost, "/api/v2/whitelist", "application/json", `{"cidr":"10.0.0.0/99"}`, httpcontract.Code40003},
+		{"移除不在表中的网段", http.MethodDelete, "/api/v2/whitelist/203.0.113.0%2F24", "", "", httpcontract.Code40004},
+		{"jail 不存在", http.MethodPut, "/api/v2/jails/no-such-jail", "application/json", `{"enabled":true}`, httpcontract.Code404},
+		{"日志文件未配置", http.MethodGet, "/api/v2/logs", "", "", httpcontract.Code50003},
 	}
 	for _, c := range cases {
 		w := authedSend(t, s, c.method, c.path, c.contentType, c.body)
@@ -342,7 +342,7 @@ func TestBatchBanOverCap(t *testing.T) {
 	}
 	body += `],"duration":60}`
 
-	w := authedSend(t, s, http.MethodPost, "/api/v1/bans/batch", "application/json", body)
+	w := authedSend(t, s, http.MethodPost, "/api/v2/bans/batch", "application/json", body)
 	env := assertEnvelopeKeys(t, w.Body.Bytes())
 	if got := envelopeCode(t, env); got != httpcontract.Code40005 {
 		t.Fatalf("code = %d，期望 %d（body=%s）", got, httpcontract.Code40005, w.Body)

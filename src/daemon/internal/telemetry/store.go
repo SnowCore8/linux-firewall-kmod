@@ -153,7 +153,7 @@ func (s *Store) Snapshot() Snapshot { return *s.pub.Load() }
 
 // RateSamples 返回最近 n 个速率采样点（按时间升序）；n <= 0 时返回环内全部。
 //
-// 读侧是 /api/v1/rates/history（画折线）与异常检测（取分位基线），两者的判据都要求
+// 读侧是 /api/v2/rates/history（画折线）与异常检测（取分位基线），两者的判据都要求
 // 「这些点真的来自内核回答」，所以这里不做按墙上时钟补点：采样中断（链路断开）就是
 // 空洞，图上表现为线段变长，而不是凭空多出一个零速率样本。
 func (s *Store) RateSamples(n int) []RateSample { return s.rateHistory.Samples(n) }

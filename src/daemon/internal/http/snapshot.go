@@ -1,5 +1,5 @@
-// 内核快照读数面：GET /api/v1/rates/{current,windows} 与
-// GET /api/v1/stats/{packet-sizes,ttl-distribution,ip-fragments,udp-ports,icmp-types,
+// 内核快照读数面：GET /api/v2/rates/{current,windows} 与
+// GET /api/v2/stats/{packet-sizes,ttl-distribution,ip-fragments,udp-ports,icmp-types,
 // port-scanners,service-probes,anomalies}。
 //
 // 这一组端点只有一个数据源：事件泵发布的 telemetry 快照（内核最近一次回答的形状）。
@@ -25,7 +25,7 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/telemetry"
 )
 
-// RatesCurrent 返回每个被跟踪源地址的当前速率（GET /api/v1/rates/current）。
+// RatesCurrent 返回每个被跟踪源地址的当前速率（GET /api/v2/rates/current）。
 //
 // 载荷是数组而不是分页：内核速率表的容量上限（FW_RATE_CPU_SLOTS=512 个在跟踪的源地址）
 // 本来就在一次响应能带出的量级内，事件泵也是整表取回的。分页在这里只会多一次往返。
@@ -72,7 +72,7 @@ func (h *APIHandlers) ratesCurrent(snap telemetry.Snapshot) []RateResponse {
 	return out
 }
 
-// RatesWindows 返回全局速率的多窗口 EWMA（GET /api/v1/rates/windows）。
+// RatesWindows 返回全局速率的多窗口 EWMA（GET /api/v2/rates/windows）。
 //
 // 三档窗口（5 秒 / 60 秒 / 300 秒）是守护进程侧的派生量：内核只回答「自上次查询以来的
 // 平均速率」，没有窗口概念，所以这条路由的数据源是快照的 Windows 字段而不是内核。
@@ -96,7 +96,7 @@ func rateWindows(snap telemetry.Snapshot) RateWindowSnapshot {
 	}
 }
 
-// PacketSizes 返回包长分桶直方图（GET /api/v1/stats/packet-sizes）。
+// PacketSizes 返回包长分桶直方图（GET /api/v2/stats/packet-sizes）。
 func (h *APIHandlers) PacketSizes(w http.ResponseWriter, r *http.Request) {
 	a := h.kernelSnapshot().Analysis
 	counts := uint64Slice(a.PktSizes[:])
@@ -109,7 +109,7 @@ func (h *APIHandlers) PacketSizes(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// TtlDistribution 返回 TTL 分桶直方图（GET /api/v1/stats/ttl-distribution）。
+// TtlDistribution 返回 TTL 分桶直方图（GET /api/v2/stats/ttl-distribution）。
 func (h *APIHandlers) TtlDistribution(w http.ResponseWriter, r *http.Request) {
 	a := h.kernelSnapshot().Analysis
 	counts := uint64Slice(a.TTLDist[:])
@@ -122,7 +122,7 @@ func (h *APIHandlers) TtlDistribution(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// IpFragments 返回分片流量占比（GET /api/v1/stats/ip-fragments）。
+// IpFragments 返回分片流量占比（GET /api/v2/stats/ip-fragments）。
 //
 // total_packets 是**所有**被记账的 IP 包（内核在 fw_stat_account 里对每个包都加 total，
 // 只在 is_fragment 时加 count），故 ratio 是「分片包占全部流量的百分比」。
@@ -139,7 +139,7 @@ func (h *APIHandlers) IpFragments(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// UdpPorts 返回 UDP 端口分布（GET /api/v1/stats/udp-ports）。
+// UdpPorts 返回 UDP 端口分布（GET /api/v2/stats/udp-ports）。
 //
 // 截断在这里是看得见的：ports 最多 FW_ANALYSIS_UDP_PACK_MAX=64 行，而内核的跟踪容量是
 // MAX_UDP_PORT_ENTRIES=512。内核在打包满 64 行时就停止遍历（哈希序），并在同一个字段
@@ -164,7 +164,7 @@ func (h *APIHandlers) UdpPorts(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// IcmpTypes 返回 ICMP 类型分布（GET /api/v1/stats/icmp-types）。截断口径同 UDP。
+// IcmpTypes 返回 ICMP 类型分布（GET /api/v2/stats/icmp-types）。截断口径同 UDP。
 func (h *APIHandlers) IcmpTypes(w http.ResponseWriter, r *http.Request) {
 	a := h.kernelSnapshot().Analysis
 	n := packedRows(a.ICMPTypeCount, len(a.ICMPTypes))
@@ -185,7 +185,7 @@ func (h *APIHandlers) IcmpTypes(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// PortScanners 返回疑似端口扫描者（GET /api/v1/stats/port-scanners）。
+// PortScanners 返回疑似端口扫描者（GET /api/v2/stats/port-scanners）。
 func (h *APIHandlers) PortScanners(w http.ResponseWriter, r *http.Request) {
 	a := h.kernelSnapshot().Analysis
 	n := packedRows(a.PortScanCount, len(a.PortScanners))
@@ -200,7 +200,7 @@ func (h *APIHandlers) PortScanners(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ServiceProbes 返回多协议探测者（GET /api/v1/stats/service-probes）。
+// ServiceProbes 返回多协议探测者（GET /api/v2/stats/service-probes）。
 func (h *APIHandlers) ServiceProbes(w http.ResponseWriter, r *http.Request) {
 	a := h.kernelSnapshot().Analysis
 	n := packedRows(a.ServiceProbeCount, len(a.ServiceProbes))
@@ -215,7 +215,7 @@ func (h *APIHandlers) ServiceProbes(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Anomalies 返回全局流量偏离与 per-IP 行为离群（GET /api/v1/stats/anomalies）。
+// Anomalies 返回全局流量偏离与 per-IP 行为离群（GET /api/v2/stats/anomalies）。
 //
 // 两路的基线各自来自一路真源，都不含任何猜测值：
 //   - 全局用速率历史环（每问一次内核一个点，容量 ≈ 1 小时），当前值 = 最新一个点；

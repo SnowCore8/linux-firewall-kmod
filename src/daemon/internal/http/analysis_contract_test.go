@@ -25,7 +25,7 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
 )
 
-// analysisPath 把生成物里的注册串（"GET /api/v1/…"）换成可请求路径。
+// analysisPath 把生成物里的注册串（"GET /api/v2/…"）换成可请求路径。
 //
 // 测试里不复制第二份路径字符串：改了契约而用例仍绿，等于测试在给旧形状背书。
 func analysisPath(pattern string) string { return strings.TrimPrefix(pattern, "GET ") }
@@ -173,7 +173,7 @@ func TestBanEffectivenessAndHistogramReadHistory(t *testing.T) {
 	}
 	s, _ := newTestServer(t, func(cfg *APIConfig) { cfg.DB = db })
 
-	data := dataOf(t, s, httpcontract.RouteGetApiV1StatsBanEffectiveness)
+	data := dataOf(t, s, httpcontract.RouteGetApiV2StatsBanEffectiveness)
 	requireKeys(t, data, "levels", "total_unique_ips", "overall_recidivism_rate", "summary")
 	if data["total_unique_ips"] != float64(2) {
 		t.Errorf("total_unique_ips = %v，期望 2（库里两个地址）", data["total_unique_ips"])
@@ -199,7 +199,7 @@ func TestBanEffectivenessAndHistogramReadHistory(t *testing.T) {
 		t.Errorf("overall_recidivism_rate = %v，期望 50", data["overall_recidivism_rate"])
 	}
 
-	hist := dataOf(t, s, httpcontract.RouteGetApiV1StatsBanDurationHistogram)
+	hist := dataOf(t, s, httpcontract.RouteGetApiV2StatsBanDurationHistogram)
 	requireKeys(t, hist, "labels", "counts", "total")
 	counts, ok := hist["counts"].([]any)
 	if !ok || len(counts) != 6 {
@@ -223,9 +223,9 @@ func TestAnalysisRoutesDegradeInsideEnvelope(t *testing.T) {
 	s, _ := newTestServer(t, nil) // cfg.DB 为 nil
 
 	for _, pattern := range []string{
-		httpcontract.RouteGetApiV1StatsBanEffectiveness,
-		httpcontract.RouteGetApiV1StatsBanDurationHistogram,
-		httpcontract.RouteGetApiV1StatsAttackGeo,
+		httpcontract.RouteGetApiV2StatsBanEffectiveness,
+		httpcontract.RouteGetApiV2StatsBanDurationHistogram,
+		httpcontract.RouteGetApiV2StatsAttackGeo,
 	} {
 		w := authedGet(t, s, analysisPath(pattern))
 		if w.Code != http.StatusOK {
@@ -240,7 +240,7 @@ func TestAnalysisRoutesDegradeInsideEnvelope(t *testing.T) {
 	}
 
 	// 空读数仍要给全形状：levels 是空数组（不是 null），summary 要说清原因。
-	data := dataOf(t, s, httpcontract.RouteGetApiV1StatsBanEffectiveness)
+	data := dataOf(t, s, httpcontract.RouteGetApiV2StatsBanEffectiveness)
 	if arr, ok := data["levels"].([]any); !ok || len(arr) != 0 {
 		t.Errorf("库缺失时 levels = %v，期望空数组", data["levels"])
 	}
@@ -249,7 +249,7 @@ func TestAnalysisRoutesDegradeInsideEnvelope(t *testing.T) {
 	}
 
 	// 对照组：契约给 recidivism 编了业务码，库缺失时那条必须如实报缺，不能伪装成空读数。
-	w := authedGet(t, s, analysisPath(httpcontract.RouteGetApiV1StatsRecidivism))
+	w := authedGet(t, s, analysisPath(httpcontract.RouteGetApiV2StatsRecidivism))
 	if w.Code == http.StatusOK {
 		t.Errorf("recidivism 在库缺失时回 200，契约给它编了 50003（body=%s）", truncate(w.Body.Bytes()))
 	}
@@ -269,7 +269,7 @@ func TestAttackGeoReportsRealCoords(t *testing.T) {
 
 	withCoords := dataOf(t, geoServer(t, &config.Config{
 		ServerLatitude: lat, ServerLongitude: lon, ServerCoordsSet: true,
-	}), httpcontract.RouteGetApiV1StatsAttackGeo)
+	}), httpcontract.RouteGetApiV2StatsAttackGeo)
 	requireKeys(t, withCoords, "geoip_enabled", "points", "total_ips", "located_ips",
 		"server_latitude", "server_longitude", "server_location_source")
 	if withCoords["geoip_enabled"] != false {
@@ -289,7 +289,7 @@ func TestAttackGeoReportsRealCoords(t *testing.T) {
 			withCoords["server_latitude"], withCoords["server_longitude"], lat, lon)
 	}
 
-	without := dataOf(t, geoServer(t, &config.Config{}), httpcontract.RouteGetApiV1StatsAttackGeo)
+	without := dataOf(t, geoServer(t, &config.Config{}), httpcontract.RouteGetApiV2StatsAttackGeo)
 	if without["server_location_source"] != "none" {
 		t.Errorf("server_location_source = %v，配置没给经纬度时期望 none", without["server_location_source"])
 	}
@@ -306,7 +306,7 @@ func geoServer(t *testing.T, cfg *config.Config) *Server {
 	return s
 }
 
-// TestJailsPayloadIsRealData 核对 /api/v1/jails 的三组数各自来自正确的源。
+// TestJailsPayloadIsRealData 核对 /api/v2/jails 的三组数各自来自正确的源。
 //
 // 配置（enabled/max_retries/findtime/ban_time）、活跃封禁镜像（ban_count）、判定层的常量
 // 与时刻（两个乘数、is_peak_hours、effective_max_retries）。最容易错的两件：
@@ -362,13 +362,13 @@ func TestJailsPayloadIsRealData(t *testing.T) {
 	config.UpdateJailStats(jailPayloadName, 100, 20, 15, 12, 3)
 
 	s, _ := newTestServer(t, func(cfg *APIConfig) { cfg.DB = db })
-	w := authedGet(t, s, analysisPath(httpcontract.RouteGetApiV1Jails))
+	w := authedGet(t, s, analysisPath(httpcontract.RouteGetApiV2Jails))
 	if w.Code != http.StatusOK {
 		t.Fatalf("状态码 %d（body=%s）", w.Code, truncate(w.Body.Bytes()))
 	}
 	var jails []map[string]any
 	if err := json.Unmarshal(decodeEnvelope(t, w.Body.Bytes())["data"], &jails); err != nil {
-		t.Fatalf("/api/v1/jails 载荷不是对象数组: %v（data=%s）", err, truncate(w.Body.Bytes()))
+		t.Fatalf("/api/v2/jails 载荷不是对象数组: %v（data=%s）", err, truncate(w.Body.Bytes()))
 	}
 	byName := map[string]map[string]any{}
 	for _, j := range jails {
@@ -457,7 +457,7 @@ func TestWhitelistRecommendationsAggregatesBySubnet(t *testing.T) {
 	}
 	s, _ := newTestServer(t, func(cfg *APIConfig) { cfg.DB = db })
 
-	raw := decodeEnvelope(t, authedGet(t, s, analysisPath(httpcontract.RouteGetApiV1WhitelistRecommendations)).Body.Bytes())["data"]
+	raw := decodeEnvelope(t, authedGet(t, s, analysisPath(httpcontract.RouteGetApiV2WhitelistRecommendations)).Body.Bytes())["data"]
 	var recs []map[string]any
 	if err := json.Unmarshal(raw, &recs); err != nil {
 		t.Fatalf("推荐载荷不是对象数组: %v（data=%s）", err, raw)
@@ -480,7 +480,7 @@ func TestWhitelistRecommendationsAggregatesBySubnet(t *testing.T) {
 
 	// 阈值抬到样本够不到的地方：仍是空数组而不是 null（前端对载荷直接 .map()）。
 	strict := decodeEnvelope(t,
-		authedGet(t, s, "/api/v1/whitelist/recommendations?min_bans=999").Body.Bytes())["data"]
+		authedGet(t, s, "/api/v2/whitelist/recommendations?min_bans=999").Body.Bytes())["data"]
 	if trimmed := strings.TrimSpace(string(strict)); trimmed != "[]" {
 		t.Errorf("无推荐时 data = %s，期望空数组而不是 null", trimmed)
 	}
@@ -568,7 +568,7 @@ func TestRecidivismAndReputationReadPercentScale(t *testing.T) {
 	}
 	s, _ := newTestServer(t, func(cfg *APIConfig) { cfg.DB = db })
 
-	data := dataOf(t, s, httpcontract.RouteGetApiV1StatsRecidivism)
+	data := dataOf(t, s, httpcontract.RouteGetApiV2StatsRecidivism)
 	requireKeys(t, data, "total_ips", "recidivist_ips", "recidivism_rate", "permanent_bans", "top_recidivists")
 	if data["total_ips"] != float64(3) || data["recidivist_ips"] != float64(2) {
 		t.Errorf("复发计数 = %v/%v，期望 3/2", data["total_ips"], data["recidivist_ips"])
@@ -588,7 +588,7 @@ func TestRecidivismAndReputationReadPercentScale(t *testing.T) {
 	requireKeys(t, top[0].(map[string]any), "ip", "ban_count", "last_banned_at", "was_permanent")
 
 	var list []map[string]any
-	raw := decodeEnvelope(t, authedGet(t, s, analysisPath(httpcontract.RouteGetApiV1StatsReputation)).Body.Bytes())["data"]
+	raw := decodeEnvelope(t, authedGet(t, s, analysisPath(httpcontract.RouteGetApiV2StatsReputation)).Body.Bytes())["data"]
 	if err := json.Unmarshal(raw, &list); err != nil {
 		t.Fatalf("信誉载荷不是对象数组: %v（data=%s）", err, raw)
 	}

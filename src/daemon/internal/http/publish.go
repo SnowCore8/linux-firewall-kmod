@@ -1,6 +1,6 @@
 // 写入点之后的域事件推送。
 //
-// 契约给 `/api/v1/events` 声明的事件名只有一套：connected、stats、bans、jails、
+// 契约给 `/api/v2/events` 声明的事件名只有一套：connected、stats、bans、jails、
 // whitelist、rates。handler 改完状态之后推的必须是**域名**，载荷是该域的当前镜像——
 // 而不是 `ban` / `whitelist_add` / `jail_updated` 这类「动作名 + 动作参数」。前端按域名
 // 订阅（`es.addEventListener('bans', …)`），动作名的帧没有任何监听者；即便有人听，动作

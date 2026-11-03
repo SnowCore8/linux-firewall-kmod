@@ -74,11 +74,11 @@ func sseFixtureServer(t *testing.T, mutate func(*APIConfig)) (*Server, *APIHandl
 	})
 }
 
-// TestSSEReplicaStatsMatchesREST 核对 stats 帧与 GET /api/v1/stats 同形同值。
+// TestSSEReplicaStatsMatchesREST 核对 stats 帧与 GET /api/v2/stats 同形同值。
 func TestSSEReplicaStatsMatchesREST(t *testing.T) {
 	s, api := sseFixtureServer(t, nil)
 
-	rest := get[StatsResponse](t, s, "/api/v1/stats")
+	rest := get[StatsResponse](t, s, "/api/v2/stats")
 	payload := api.SSEReplicas().Stats()
 	frame, ok := payload.(StatsResponse)
 	if !ok {
@@ -91,12 +91,12 @@ func TestSSEReplicaStatsMatchesREST(t *testing.T) {
 	}
 }
 
-// TestSSEReplicaRatesMatchesREST 核对 rates 帧就是 GET /api/v1/rates/current 那份数组
+// TestSSEReplicaRatesMatchesREST 核对 rates 帧就是 GET /api/v2/rates/current 那份数组
 // （含按 pps 降序与点分地址文本），而不是内核快照条目。
 func TestSSEReplicaRatesMatchesREST(t *testing.T) {
 	s, api := sseFixtureServer(t, nil)
 
-	rest := get[[]RateResponse](t, s, "/api/v1/rates/current")
+	rest := get[[]RateResponse](t, s, "/api/v2/rates/current")
 	payload := api.SSEReplicas().Rates()
 	frame, ok := payload.([]RateResponse)
 	if !ok {
@@ -118,7 +118,7 @@ func TestSSEReplicaRatesMatchesREST(t *testing.T) {
 func TestSSEReplicaJailsMatchesREST(t *testing.T) {
 	s, api := sseFixtureServer(t, nil)
 
-	rest := get[[]JailResponse](t, s, "/api/v1/jails")
+	rest := get[[]JailResponse](t, s, "/api/v2/jails")
 	payload := api.SSEReplicas().Jails()
 	frame, ok := payload.([]JailResponse)
 	if !ok {
@@ -163,7 +163,7 @@ func TestSSEReplicaJailsMatchesREST(t *testing.T) {
 func TestSSEReplicaBansAndWhitelistMatchREST(t *testing.T) {
 	s, api := sseFixtureServer(t, nil)
 
-	rest := get[map[string]any](t, s, "/api/v1/bans?page=1&page_size=100")
+	rest := get[map[string]any](t, s, "/api/v2/bans?page=1&page_size=100")
 	items, ok := rest["items"].([]any)
 	if !ok {
 		t.Fatalf("REST 封禁载荷的 items 形状不符: %#v", rest["items"])
@@ -214,7 +214,7 @@ func TestSSEReplicaBansAndWhitelistMatchREST(t *testing.T) {
 		}
 	}
 
-	wlRest := get[[]WhitelistEntryResponse](t, s, "/api/v1/whitelist")
+	wlRest := get[[]WhitelistEntryResponse](t, s, "/api/v2/whitelist")
 	wlPayload := api.SSEReplicas().Whitelist(bans.GlobalWhitelist().List())
 	wlFrame, ok := wlPayload.([]WhitelistEntryResponse)
 	if !ok {
@@ -232,7 +232,7 @@ func TestSSEReplicaBansAndWhitelistMatchREST(t *testing.T) {
 }
 
 // TestPublishJailsFrameCarriesRESTPayload 走一遍真实的推送路径：PublishJails 经 broker
-// 序列化的那一帧，事件名是域名、data 与 GET /api/v1/jails 的 data 语义相同。
+// 序列化的那一帧，事件名是域名、data 与 GET /api/v2/jails 的 data 语义相同。
 //
 // 前面的用例比的是返回值，这一条比的是**帧文本**——事件名与 data 行都在这里成形
 // （sse.go 的 sseFrame），前端两行都读。
@@ -263,7 +263,7 @@ func TestPublishJailsFrameCarriesRESTPayload(t *testing.T) {
 	}
 	data := frameData(t, frame)
 
-	want := unwrapData(t, authedGet(t, s, "/api/v1/jails").Body.Bytes())
+	want := unwrapData(t, authedGet(t, s, "/api/v2/jails").Body.Bytes())
 	var gotValue, wantValue any
 	if err := json.Unmarshal([]byte(data), &gotValue); err != nil {
 		t.Fatalf("帧的 data 不是合法 JSON: %v（data=%s）", err, data)

@@ -1,7 +1,7 @@
 // jail 配置快照的发布点核对。
 //
 // 配置所有权在入站执行体（组合根只留一个指向同一份 cfg 的闭包），而表现层
-// （/api/v1/jails、SSE 的 jails 事件、两个调参建议端点）读的是 config.GetActiveJails()
+// （/api/v2/jails、SSE 的 jails 事件、两个调参建议端点）读的是 config.GetActiveJails()
 // 那一份快照。这里钉住两件本步骤新接上的事：装配完成就能读到，以及启用状态同步之后
 // 读到的是新形状。
 package runtime

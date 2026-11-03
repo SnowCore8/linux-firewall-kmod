@@ -58,7 +58,7 @@ func WriteSuccess(w http.ResponseWriter, data any) {
 
 // WriteCreated 写出 201 与成功信封。
 //
-// 契约给 POST /api/v1/bans 与 POST /api/v1/bans/batch 写的都是 `status = 201`
+// 契约给 POST /api/v2/bans 与 POST /api/v2/bans/batch 写的都是 `status = 201`
 // （`alt_status = 200` 留给「幂等重试时资源早已存在」这类分支，不是实现可以随手挑的
 // 第二个偏好）：新建资源用 201，前端与 curl 都按这个区分「创建成功」与「查到一个列表」。
 func WriteCreated(w http.ResponseWriter, data any) {

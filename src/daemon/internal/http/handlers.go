@@ -61,7 +61,7 @@ func (p jailParams) known(jail string) bool {
 	return ok
 }
 
-// Recidivism 返回复发统计（GET /api/v1/stats/recidivism）。
+// Recidivism 返回复发统计（GET /api/v2/stats/recidivism）。
 //
 // permanent_bans 取自 ban_history（**当前**标记为永久的地址数），与前三项取自
 // ban_events（累计封禁底账）不同源——两个表回答的是两个问题，契约的字段注释各写各自的口径。
@@ -107,7 +107,7 @@ func (h *APIHandlers) Recidivism(w http.ResponseWriter, r *http.Request) {
 	WriteSuccess(w, resp)
 }
 
-// Reputation 返回低信誉地址清单（GET /api/v1/stats/reputation）。
+// Reputation 返回低信誉地址清单（GET /api/v2/stats/reputation）。
 //
 // 阈值固定 80：那是判定层信誉系数的第一档分界（ReputationMultiplier 在 80 分以下才开始
 // 收紧阈值），面板上「需要看一眼的名单」因此与判定层实际改行为的分界同源。
@@ -126,7 +126,7 @@ func (h *APIHandlers) Reputation(w http.ResponseWriter, r *http.Request) {
 	WriteSuccess(w, mapReputationEntries(reps))
 }
 
-// PeriodicAttackers 返回等间隔复现的扫描源（GET /api/v1/stats/periodic-attackers）。
+// PeriodicAttackers 返回等间隔复现的扫描源（GET /api/v2/stats/periodic-attackers）。
 func (h *APIHandlers) PeriodicAttackers(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		WriteServiceUnavailable(w, "history database not initialized")
@@ -142,7 +142,7 @@ func (h *APIHandlers) PeriodicAttackers(w http.ResponseWriter, r *http.Request) 
 	WriteSuccess(w, mapPeriodicAttackers(findings))
 }
 
-// CollaborativeAttacks 返回同窗口多源联动（GET /api/v1/stats/collaborative-attacks）。
+// CollaborativeAttacks 返回同窗口多源联动（GET /api/v2/stats/collaborative-attacks）。
 func (h *APIHandlers) CollaborativeAttacks(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		WriteServiceUnavailable(w, "history database not initialized")
@@ -158,7 +158,7 @@ func (h *APIHandlers) CollaborativeAttacks(w http.ResponseWriter, r *http.Reques
 	WriteSuccess(w, mapCollaborativeAttacks(findings))
 }
 
-// NetworkDistribution 返回同网段的封禁聚合（GET /api/v1/stats/network-distribution）。
+// NetworkDistribution 返回同网段的封禁聚合（GET /api/v2/stats/network-distribution）。
 func (h *APIHandlers) NetworkDistribution(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		WriteServiceUnavailable(w, "history database not initialized")
@@ -174,7 +174,7 @@ func (h *APIHandlers) NetworkDistribution(w http.ResponseWriter, r *http.Request
 	WriteSuccess(w, mapNetworkBlocks(rows))
 }
 
-// AttackPredictions 返回下次动手的估计（GET /api/v1/stats/attack-predictions）。
+// AttackPredictions 返回下次动手的估计（GET /api/v2/stats/attack-predictions）。
 func (h *APIHandlers) AttackPredictions(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		WriteServiceUnavailable(w, "history database not initialized")
@@ -192,7 +192,7 @@ func (h *APIHandlers) AttackPredictions(w http.ResponseWriter, r *http.Request) 
 	WriteSuccess(w, mapPredictions(summary, time.Now()))
 }
 
-// BanDurationRecommendations 返回封禁时长建议（GET /api/v1/stats/ban-duration-recommendations）。
+// BanDurationRecommendations 返回封禁时长建议（GET /api/v2/stats/ban-duration-recommendations）。
 func (h *APIHandlers) BanDurationRecommendations(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		WriteServiceUnavailable(w, "history database not initialized")
@@ -208,7 +208,7 @@ func (h *APIHandlers) BanDurationRecommendations(w http.ResponseWriter, r *http.
 	WriteSuccess(w, mapBanDurationRecommendations(findings, params.known))
 }
 
-// ThresholdRecommendations 返回失败阈值建议（GET /api/v1/stats/threshold-recommendations）。
+// ThresholdRecommendations 返回失败阈值建议（GET /api/v2/stats/threshold-recommendations）。
 func (h *APIHandlers) ThresholdRecommendations(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		WriteServiceUnavailable(w, "history database not initialized")
@@ -224,7 +224,7 @@ func (h *APIHandlers) ThresholdRecommendations(w http.ResponseWriter, r *http.Re
 	WriteSuccess(w, mapThresholdRecommendations(findings, params.known))
 }
 
-// BanEffectiveness 返回渐进式封禁各级的成效（GET /api/v1/stats/ban-effectiveness）。
+// BanEffectiveness 返回渐进式封禁各级的成效（GET /api/v2/stats/ban-effectiveness）。
 //
 // 契约没给这条路由编 codes，所以库缺失与查询失败都在 200 里降级（空 levels + 一句
 // summary），并只在服务端留日志。summary 会说清是「没有底账」还是「查不动」：
@@ -250,7 +250,7 @@ func (h *APIHandlers) BanEffectiveness(w http.ResponseWriter, r *http.Request) {
 	WriteSuccess(w, mapBanEffectiveness(rows))
 }
 
-// BanDurationHistogram 返回封禁时长的分布直方图（GET /api/v1/stats/ban-duration-histogram）。
+// BanDurationHistogram 返回封禁时长的分布直方图（GET /api/v2/stats/ban-duration-histogram）。
 //
 // 桶形状恒定（6 格：5 个时长档 + 永久），没有可读时长时全为 0。契约没给这条路由编 codes，
 // 因此同样在 200 内降级。
@@ -277,7 +277,7 @@ func (h *APIHandlers) BanDurationHistogram(w http.ResponseWriter, r *http.Reques
 // 而再多就被 limit 本身的成本超过了——这一列没有索引可走，读的是全表尾部。
 const banDurationSampleLimit = 10000
 
-// AttackGeo 返回攻击源地理分布（GET /api/v1/stats/attack-geo）。
+// AttackGeo 返回攻击源地理分布（GET /api/v2/stats/attack-geo）。
 //
 // 本守护进程**没有 GeoIP 读库**：配置项 geoip_db_path 没有任何消费方（契约里记为缺陷
 // HTTP_GEOIP_NOT_IMPLEMENTED）。这一条因此恒为 geoip_enabled=false、points 空、两个计数 0。

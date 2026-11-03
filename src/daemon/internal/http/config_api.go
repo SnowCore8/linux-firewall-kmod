@@ -44,7 +44,7 @@ func (h *APIHandlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 	WriteSuccess(w, webuiConfigResponse(cfg.Webui))
 }
 
-// UpdateConfig 接收 Web UI 配置的**局部更新**（PUT /api/v1/config）。
+// UpdateConfig 接收 Web UI 配置的**局部更新**（PUT /api/v2/config）。
 //
 // 流程：认证（注册面已保证）→ 解出 UpdateConfigRequest → 逐字段覆盖到当前 webui 段
 // （未提交的字段保持现值）→ 校验取值 → 把 webui 段并回配置文件 → 按加载口径复核 →

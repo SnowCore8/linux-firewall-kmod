@@ -1,4 +1,4 @@
-// 白名单面：GET/POST/DELETE /api/v1/whitelist。
+// 白名单面：GET/POST/DELETE /api/v2/whitelist。
 //
 // 契约给这条资源编的两个码各自覆盖一段操作：40003 = 添加失败，40004 = 移除失败。
 // 两者都是 400，区分只能靠 code，所以这里不出现「顺手写个 409/404」——那两个数字在
@@ -29,7 +29,7 @@ type KernelWhitelist interface {
 	Remove(addr netip.Addr, prefixLen uint8, device string) error
 }
 
-// ListWhitelist 返回白名单镜像（GET /api/v1/whitelist）。
+// ListWhitelist 返回白名单镜像（GET /api/v2/whitelist）。
 //
 // 载荷是 WhitelistEntryResponse 数组而不是裸 CIDR 列表：前端 types.ts 的 WhitelistEntry
 // 有两个字段，把 []string 直接写出去会让 `device` 在读侧根本不存在（面板上那一列恒为空，
@@ -97,7 +97,7 @@ func (h *APIHandlers) AddWhitelist(w http.ResponseWriter, r *http.Request) {
 	WriteCreated(w, WhitelistOperationResponse{CIDR: prefix.String(), Action: "added"})
 }
 
-// RemoveWhitelist 从白名单移除一个前缀（DELETE /api/v1/whitelist/{cidr}），失败回 40004。
+// RemoveWhitelist 从白名单移除一个前缀（DELETE /api/v2/whitelist/{cidr}），失败回 40004。
 func (h *APIHandlers) RemoveWhitelist(w http.ResponseWriter, r *http.Request) {
 	cidr := r.PathValue("cidr")
 

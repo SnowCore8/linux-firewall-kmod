@@ -29,7 +29,7 @@ func TestManifestIsServedAsManifestJSON(t *testing.T) {
 // 的真实语义。
 //
 // 「GET /」是**子树模式**：任何没被更具体模式接住的 GET 都会落到 redirectRoot，于是
-// /api/v1/nonexistent 读到的是 303 + 一个指向面板的 Location，而契约（contract/http.fwidl
+// /api/v2/nonexistent 读到的是 303 + 一个指向面板的 Location，而契约（contract/http.fwidl
 // 的 FRAMEWORK_DEFAULT）说「路径无匹配模式 → 框架自产 404，body `404 page not found`」。
 // 虚机上跑 daemon-up 形态的 test_16.7 就是这么撞出来的（断言 404，实得 303）。
 // 拼错的 API 路径被重定向前端外壳，客户端拿到的是 HTML 而不是 404，等于把「这条路不存在」
@@ -47,7 +47,7 @@ func TestRootRedirectDoesNotSwallowUnmatchedPaths(t *testing.T) {
 		t.Errorf("Location = %q，期望 \"/dashboard?access_token=abc\"（query 必须原样带上）", got)
 	}
 
-	for _, path := range []string{"/api/v1/nonexistent", "/nonexistent-page", "/dashboard/extra"} {
+	for _, path := range []string{"/api/v2/nonexistent", "/nonexistent-page", "/dashboard/extra"} {
 		w := httptest.NewRecorder()
 		s.mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
 		if w.Code != http.StatusNotFound {

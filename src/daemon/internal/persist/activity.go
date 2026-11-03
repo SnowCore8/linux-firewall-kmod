@@ -1,6 +1,6 @@
 // 封禁活动的读取面：趋势、热力图与「今日」窗口共用的三条查询。
 //
-// 一律**只读**：契约把 /api/v1/stats* 全归在只读面（缺陷 HTTP_READ_PATH_WRITES_STATE
+// 一律**只读**：契约把 /api/v2/stats* 全归在只读面（缺陷 HTTP_READ_PATH_WRITES_STATE
 // 的门禁会扫这些 handler，读到写点就红）。清扫与过期保留由 CleanupExpired 的定时器负责。
 //
 // 为什么不把分桶下推到 SQL：桶边界是**本地时区**的自然日与自然小时（契约把 today_bans

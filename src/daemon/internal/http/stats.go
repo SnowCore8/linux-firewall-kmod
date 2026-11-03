@@ -1,4 +1,4 @@
-// 统计总览面：GET /api/v1/stats 的装配与它的「今日 / 近 5 分钟」窗口缓存。
+// 统计总览面：GET /api/v2/stats 的装配与它的「今日 / 近 5 分钟」窗口缓存。
 //
 // 每一个字段都写清它来自哪一路真源，因为这张面板上的数字会被当成结论用：
 //   - current_bans / total_bans / total_unbans / whitelist_count / packets_* 来自内核统计
@@ -47,7 +47,7 @@ var threatLevels = []string{"safe", "low", "medium", "high", "critical"}
 // dayLabel 是趋势图的横轴标签格式（本地时区的月-日）。
 const dayLabel = "01-02"
 
-// Stats 返回总览面板的一次读数（GET /api/v1/stats）。
+// Stats 返回总览面板的一次读数（GET /api/v2/stats）。
 func (h *APIHandlers) Stats(w http.ResponseWriter, r *http.Request) {
 	WriteSuccess(w, h.buildStats(time.Now()))
 }
@@ -87,7 +87,7 @@ func (h *APIHandlers) buildStats(now time.Time) StatsResponse {
 	}
 }
 
-// Heatmap 返回 24 小时热力图（GET /api/v1/stats/heatmap）。
+// Heatmap 返回 24 小时热力图（GET /api/v2/stats/heatmap）。
 func (h *APIHandlers) Heatmap(w http.ResponseWriter, r *http.Request) {
 	WriteSuccess(w, h.buildHeatmap(time.Now()))
 }

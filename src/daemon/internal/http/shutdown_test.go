@@ -52,7 +52,7 @@ func newShutdownTestServer(t *testing.T, shutdownTimeout time.Duration) *Server 
 // sseEndpoint 把一条测试流接到服务器上：attach 一律放行，因为这条用例关心的是关停，
 // 不是名额；握手留空，让连接停在「已写响应头、正在等待帧」的形态。
 func sseEndpoint(srv *Server, stream *SSEStream) {
-	srv.HandleFunc("GET /api/v1/events", func(w http.ResponseWriter, r *http.Request) {
+	srv.HandleFunc("GET /api/v2/events", func(w http.ResponseWriter, r *http.Request) {
 		streamSSE(w, r, stream,
 			func(chan []byte) bool { return true },
 			func(chan []byte) {},
@@ -67,7 +67,7 @@ func TestStoppedStreamLetsServerShutDownImmediately(t *testing.T) {
 	srv := newShutdownTestServer(t, 2*time.Second)
 	sseEndpoint(srv, stream)
 
-	resp := openSSE(t, srv.Addr(), "/api/v1/events")
+	resp := openSSE(t, srv.Addr(), "/api/v2/events")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("SSE 握手状态码 = %d，期望 200", resp.StatusCode)
 	}
@@ -88,7 +88,7 @@ func TestServerShutDownForceClosesLingeringConnections(t *testing.T) {
 	stream := NewSSEStream("events", 10, 15, nil)
 	srv := newShutdownTestServer(t, 150*time.Millisecond)
 	released := make(chan struct{})
-	srv.HandleFunc("GET /api/v1/events", func(w http.ResponseWriter, r *http.Request) {
+	srv.HandleFunc("GET /api/v2/events", func(w http.ResponseWriter, r *http.Request) {
 		streamSSE(w, r, stream,
 			func(chan []byte) bool { return true },
 			func(chan []byte) {},
@@ -97,7 +97,7 @@ func TestServerShutDownForceClosesLingeringConnections(t *testing.T) {
 	})
 	addr := srv.Addr()
 
-	if resp := openSSE(t, addr, "/api/v1/events"); resp.StatusCode != http.StatusOK {
+	if resp := openSSE(t, addr, "/api/v2/events"); resp.StatusCode != http.StatusOK {
 		t.Fatalf("SSE 握手状态码 = %d，期望 200", resp.StatusCode)
 	}
 
@@ -134,7 +134,7 @@ func TestStoppedStreamRejectsNewConnections(t *testing.T) {
 	sseEndpoint(srv, stream)
 	stream.Stop()
 
-	resp := openSSE(t, srv.Addr(), "/api/v1/events")
+	resp := openSSE(t, srv.Addr(), "/api/v2/events")
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("关停中的流仍接受新连接: 状态码 = %d，期望 503", resp.StatusCode)
 	}

@@ -29,6 +29,7 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/runtime"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/telemetry"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/threatfeeds"
 	panelres "github.com/snowcore8/linux-firewall-kmod/daemon/web_ui/static"
 )
 
@@ -71,7 +72,7 @@ func run(args []string) error {
 	}
 	defer signals.Close()
 
-	// startedAt 是进程开始装配的时刻：GET /api/v1/stats 的 uptime_seconds 从这里起算，
+	// startedAt 是进程开始装配的时刻：GET /api/v2/stats 的 uptime_seconds 从这里起算，
 	// 而不是 HTTP 服务器构造时刻——读配置、开历史库这些时间也算「启动了多久」。
 	startedAt := time.Now()
 
@@ -208,7 +209,7 @@ func run(args []string) error {
 	//
 	// 无条件建立，让读侧将来只有一个持有者：链路缺失时它保持零值快照，读侧就不需要区分
 	// 「没有内核」与「内核还没采到样」。读侧接两处：/health 的链路字段，以及统计面
-	// （/api/v1/stats 与 rates/*、协议分布那组端点）——它们都只读这一份快照。
+	// （/api/v2/stats 与 rates/*、协议分布那组端点）——它们都只读这一份快照。
 	kernelStore := telemetry.NewStore()
 
 	// Jail 启用状态源：HTTP API 与入站主链路共享。
@@ -246,6 +247,35 @@ func run(args []string) error {
 			defer sseBroker.Stop()
 			logStream := http.NewLogsStream(logger)
 
+			// 威胁情报源管理器：未启用或装配失败时为 nil，threat-feeds 三个 handler 按
+			// 可空依赖口径应答「服务不可用」，不阻断 HTTP 装配。
+			var feedMgr *threatfeeds.FeedManager
+			if cfg.ThreatFeeds.Enabled {
+				feedCfg := threatfeeds.Config{
+					Enabled:         true,
+					RefreshInterval: time.Duration(cfg.ThreatFeeds.RefreshInterval) * time.Second,
+					HTTPTimeout:     time.Duration(cfg.ThreatFeeds.HTTPTimeout) * time.Second,
+					MaxRetries:      cfg.ThreatFeeds.MaxRetries,
+				}
+				for _, s := range cfg.ThreatFeeds.Sources {
+					feedCfg.Sources = append(feedCfg.Sources, threatfeeds.SourceConfig{
+						Name:       s.Name,
+						URL:        s.URL,
+						Enabled:    s.Enabled,
+						Category:   s.Category,
+						Confidence: s.Confidence,
+					})
+				}
+				feedMgr, err = threatfeeds.NewFeedManager(feedCfg)
+				if err != nil {
+					logger.Warn("装配威胁情报源管理器失败，threat-feeds 接口将应答服务不可用", "error", err)
+					feedMgr = nil
+				} else if feedMgr != nil {
+					defer feedMgr.Stop()
+					feedMgr.StartScheduler()
+				}
+			}
+
 			api = http.NewAPIHandlers(http.APIConfig{
 				Server:    httpServer,
 				DB:        historyDB,
@@ -274,8 +304,9 @@ func run(args []string) error {
 				StartedAt:      startedAt,
 				GetRateSamples: kernelStore.RateSamples,
 				KernelVersion:  kernelModuleVersion,
+				ThreatFeeds:    feedMgr,
 			})
-			// 路由全部由 RegisterRoutes 按契约 pattern 注册，包括 /api/v1/events 与
+			// 路由全部由 RegisterRoutes 按契约 pattern 注册，包括 /api/v2/events 与
 			// /metrics：它们都在契约的认证组里，在这里另注册一遍会绕过 RequireAuth。
 			httpServer.RegisterRoutes(api)
 			httpServer.RegisterStaticFiles(panelres.StaticFS())
@@ -659,7 +690,7 @@ func newWhitelistSink(client *kernel.Client, logger *slog.Logger) *whitelistSink
 }
 
 // Add 见 http.KernelWhitelist。client 为 nil 时按「未装配、跳过下发」处理并回 nil——
-// 契约给 POST /api/v1/whitelist 编的码里没有「依赖未就绪」，模块缺席不是一次失败。
+// 契约给 POST /api/v2/whitelist 编的码里没有「依赖未就绪」，模块缺席不是一次失败。
 func (s *whitelistSink) Add(addr netip.Addr, prefixLen uint8, device string) error {
 	if s.client == nil {
 		s.logger.Debug("内核客户端未装配，跳过白名单下发", "cidr", addr.String(), "prefix_len", prefixLen)

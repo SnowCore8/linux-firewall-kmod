@@ -30,7 +30,7 @@ const (
 	logMaxPageSize     = 1000
 )
 
-// GetLogs 按契约的分页与过滤查询日志文件（GET /api/v1/logs）。
+// GetLogs 按契约的分页与过滤查询日志文件（GET /api/v2/logs）。
 //
 // 载荷是 LogPageResponse：items 里每行带**文件中的物理行号**，顺序是最新在前，
 // total_lines 是过滤后的匹配总行数。过去的形状（lines/count/offset/limit/file_size/
@@ -251,9 +251,9 @@ func collectLogWindow(path string, filter logFilter, totalLines, start, n uint64
 	return out, nil
 }
 
-// StreamLogs 经 `/api/v1/logs/stream` 推送实时日志行。
+// StreamLogs 经 `/api/v2/logs/stream` 推送实时日志行。
 //
-// 接入名额、握手帧、心跳与 503 全部由 streamSSE 统一处理（与 `/api/v1/events` 同一套
+// 接入名额、握手帧、心跳与 503 全部由 streamSSE 统一处理（与 `/api/v2/events` 同一套
 // 语义、各自独立的上限），这里只负责「把文件末尾之后的新行写成 log 帧」。
 //
 // 文件在占名额**之前**就打开并定位：流一旦写出响应头就无法再改状态码，而契约给这条流
@@ -274,7 +274,7 @@ func (h *APIHandlers) StreamLogs(w http.ResponseWriter, r *http.Request) {
 		WriteServiceUnavailable(w, "日志文件不可读")
 		return
 	}
-	// 定位到末尾：这条流推的是「从这里开始的未来」，历史行由 GET /api/v1/logs 负责。
+	// 定位到末尾：这条流推的是「从这里开始的未来」，历史行由 GET /api/v2/logs 负责。
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		_ = f.Close()
 		WriteServiceUnavailable(w, "日志文件定位失败")

@@ -15,9 +15,9 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 )
 
-// bansPath 是 /api/v1/bans 的路径部分（生成物常量带方法前缀）。
+// bansPath 是 /api/v2/bans 的路径部分（生成物常量带方法前缀）。
 func bansPath() string {
-	return httpcontract.RouteGetApiV1Bans[strings.Index(httpcontract.RouteGetApiV1Bans, " ")+1:]
+	return httpcontract.RouteGetApiV2Bans[strings.Index(httpcontract.RouteGetApiV2Bans, " ")+1:]
 }
 
 // basic 造一条 Basic 凭据头值。
@@ -188,7 +188,7 @@ func TestHalfConfiguredAuthRejectsEverything(t *testing.T) {
 	lockout := NewAuthLockout()
 	s := &Server{mux: http.NewServeMux(), logger: discardLogger()}
 	api := NewAPIHandlers(APIConfig{Server: s, Username: testUser, Password: "", Lockout: lockout})
-	s.HandleFunc(httpcontract.RouteGetApiV1Bans,
+	s.HandleFunc(httpcontract.RouteGetApiV2Bans,
 		RequireAuth(api.username, api.password, lockout, api.ListBans))
 
 	for i := 0; i < 2*httpcontract.AuthFailureThreshold; i++ {
@@ -210,7 +210,7 @@ func TestUnconfiguredAuthPassesThrough(t *testing.T) {
 	api := NewAPIHandlers(APIConfig{Server: s})
 	handler := RequireAuth(api.username, api.password, api.lockout, api.ListBans)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/bans", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/bans", nil)
 	w := httptest.NewRecorder()
 	handler(w, req)
 	if w.Code != http.StatusOK {

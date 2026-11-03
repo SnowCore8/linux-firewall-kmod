@@ -1,7 +1,7 @@
 // SSE 接入面：两条流各自的名额、心跳与帧格式。
 //
-// 契约把 `/api/v1/events`（上限 10，事件 connected/stats/bans/jails/whitelist/rates）
-// 与 `/api/v1/logs/stream`（上限 5，事件 connected/log/error）声明成**两条互不相干的
+// 契约把 `/api/v2/events`（上限 10，事件 connected/stats/bans/jails/whitelist/rates）
+// 与 `/api/v2/logs/stream`（上限 5，事件 connected/log/error）声明成**两条互不相干的
 // 流**：各自计数、各自回 503。共用一个上限会让「日志页开满 5 个连接」把实时事件流也
 // 一起饿死，所以名额本身收进 SSEStream，由两条流各持一个实例。
 package http
@@ -165,7 +165,7 @@ func (s *SSEStream) AtLimit() bool {
 	return len(s.live) >= s.max
 }
 
-// SSEBroker 是 `/api/v1/events` 的广播实现：一条流一个实例，名额来自内嵌的 SSEStream。
+// SSEBroker 是 `/api/v2/events` 的广播实现：一条流一个实例，名额来自内嵌的 SSEStream。
 //
 // 两套锁是刻意的：SSEStream.mu 只记账名额，clientsMu 只保护扇出登记表。合成一把会让
 // 「广播扇出」与「能不能再收一条连接」互相阻塞——Active() 在广播持锁期间要读名额，
@@ -442,24 +442,24 @@ const (
 	streamLogs   = "logs"
 )
 
-// NewEventsBroker 建 `/api/v1/events` 的广播流：上限 10、心跳 15 秒都直接取自契约生成物。
+// NewEventsBroker 建 `/api/v2/events` 的广播流：上限 10、心跳 15 秒都直接取自契约生成物。
 //
 // 两个构造函数各自读自己的常量，是「两条流互不共享名额」这件事在代码里的唯一证据——
 // 合成一个共用上限会让日志页开满 5 个连接时把实时事件流一起饿死（缺陷
 // HTTP_LOG_SSE_LIMIT_DOC_DRIFT 的现场）。
 func NewEventsBroker(logger *slog.Logger) *SSEBroker {
 	return NewSSEBroker(streamEvents,
-		httpcontract.SSEMaxConnectionsApiV1Events,
-		httpcontract.SSEKeepaliveSecondsApiV1Events,
+		httpcontract.SSEMaxConnectionsApiV2Events,
+		httpcontract.SSEKeepaliveSecondsApiV2Events,
 		logger)
 }
 
-// NewLogsStream 建 `/api/v1/logs/stream` 的名额：上限 5、心跳 15 秒同样取自生成物。
+// NewLogsStream 建 `/api/v2/logs/stream` 的名额：上限 5、心跳 15 秒同样取自生成物。
 //
 // 这条流不需要 broker——每帧只写给发起请求的那一条连接，所以只有名额，没有扇出表。
 func NewLogsStream(logger *slog.Logger) *SSEStream {
 	return NewSSEStream(streamLogs,
-		httpcontract.SSEMaxConnectionsApiV1LogsStream,
-		httpcontract.SSEKeepaliveSecondsApiV1LogsStream,
+		httpcontract.SSEMaxConnectionsApiV2LogsStream,
+		httpcontract.SSEKeepaliveSecondsApiV2LogsStream,
 		logger)
 }

@@ -96,9 +96,9 @@ func TestProbeAndAPIResponsesUseStrictCSP(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 
 	for _, path := range []string{
-		httpcontract.RouteGetHealth[strings.Index(httpcontract.RouteGetHealth, " ")+1:],
-		httpcontract.RouteGetHealthz[strings.Index(httpcontract.RouteGetHealthz, " ")+1:],
-		httpcontract.RouteGetApiV1Bans[strings.Index(httpcontract.RouteGetApiV1Bans, " ")+1:],
+		httpcontract.RouteGetApiV2Health[strings.Index(httpcontract.RouteGetApiV2Health, " ")+1:],
+		httpcontract.RouteGetApiV2Healthz[strings.Index(httpcontract.RouteGetApiV2Healthz, " ")+1:],
+		httpcontract.RouteGetApiV2Bans[strings.Index(httpcontract.RouteGetApiV2Bans, " ")+1:],
 	} {
 		w := getThrough(t, s, path, true)
 		assertContractHeaders(t, w, path, false)
@@ -123,21 +123,21 @@ func TestSecurityHeadersOnErrorResponses(t *testing.T) {
 
 	// 匿名请求的 401 由 RequireAuth 写，同样在中间件之内。
 	denied := getThrough(t, s,
-		httpcontract.RouteGetApiV1Bans[strings.Index(httpcontract.RouteGetApiV1Bans, " ")+1:], false)
+		httpcontract.RouteGetApiV2Bans[strings.Index(httpcontract.RouteGetApiV2Bans, " ")+1:], false)
 	if denied.Code != http.StatusUnauthorized {
 		t.Fatalf("匿名请求状态码 %d，期望 401", denied.Code)
 	}
-	assertContractHeaders(t, denied, "/api/v1/bans", false)
+	assertContractHeaders(t, denied, "/api/v2/bans", false)
 
 	methodNotAllowed := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete,
-		httpcontract.RouteGetApiV1Bans[strings.Index(httpcontract.RouteGetApiV1Bans, " ")+1:], nil)
+		httpcontract.RouteGetApiV2Bans[strings.Index(httpcontract.RouteGetApiV2Bans, " ")+1:], nil)
 	req.Header.Set("Authorization", authHeader())
 	s.securityHeaders(s.mux).ServeHTTP(methodNotAllowed, req)
 	if methodNotAllowed.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("未声明的动词状态码 %d，期望 405", methodNotAllowed.Code)
 	}
-	assertContractHeaders(t, methodNotAllowed, "/api/v1/bans", false)
+	assertContractHeaders(t, methodNotAllowed, "/api/v2/bans", false)
 }
 
 // TestSecurityHeadersSurviveConnectionLimit 是中间件顺序的行为断言：安全头必须排在连接
@@ -174,7 +174,7 @@ func TestPanelPathsComeFromTheContract(t *testing.T) {
 		}
 	}
 	// API 与探针必须在严格档一侧。
-	for _, path := range []string{"/health", "/api/v1/bans", "/metrics"} {
+	for _, path := range []string{"/health", "/api/v2/bans", "/metrics"} {
 		if isWebUIPath(path) {
 			t.Errorf("%q 被判成面板路径，会拿到更宽的 CSP", path)
 		}

@@ -85,11 +85,11 @@ func useWhitelistKey(t *testing.T, cidrs ...string) {
 	t.Cleanup(remove)
 }
 
-// postWhitelist 打 POST /api/v1/whitelist 并回信封。
+// postWhitelist 打 POST /api/v2/whitelist 并回信封。
 func postWhitelist(t *testing.T, s *Server, body string) (map[string]json.RawMessage, int) {
 	t.Helper()
 
-	rec := authedSend(t, s, http.MethodPost, "/api/v1/whitelist", "application/json", body)
+	rec := authedSend(t, s, http.MethodPost, "/api/v2/whitelist", "application/json", body)
 	env := decodeEnvelope(t, rec.Body.Bytes())
 	return env, rec.Code
 }
@@ -101,7 +101,7 @@ func TestWhitelistAddDeliversToKernel(t *testing.T) {
 
 	env, status := postWhitelist(t, s, `{"cidr":"203.0.113.0/24"}`)
 	if want := httpcontract.CodeHTTPStatus[httpcontract.CodeOK]; status != http.StatusCreated && status != want {
-		t.Fatalf("HTTP 状态 = %d，契约给 POST /api/v1/whitelist 定的是 201（alt 200）", status)
+		t.Fatalf("HTTP 状态 = %d，契约给 POST /api/v2/whitelist 定的是 201（alt 200）", status)
 	}
 	if code := envelopeCode(t, env); code != httpcontract.CodeOK {
 		t.Fatalf("code = %d，期望 %d（body=%s）", code, httpcontract.CodeOK, env["data"])
@@ -113,7 +113,7 @@ func TestWhitelistAddDeliversToKernel(t *testing.T) {
 		t.Errorf("镜像里没有那条规则：%v", bans.GlobalWhitelist().List())
 	}
 
-	list := get[[]WhitelistEntryResponse](t, s, "/api/v1/whitelist")
+	list := get[[]WhitelistEntryResponse](t, s, "/api/v2/whitelist")
 	found := false
 	for _, row := range list {
 		if row.CIDR == "203.0.113.0/24" {
@@ -212,7 +212,7 @@ func TestWhitelistRemoveKeepsMirrorOnKernelFailure(t *testing.T) {
 
 	// CIDR 里的 / 必须编码：未编码时那是两段路径，ServeMux 根本匹配不上这条路由
 	// （前端 endpoints.ts 的 fill() 就是为此做 encodeURIComponent）。
-	rec := authedSend(t, s, http.MethodDelete, "/api/v1/whitelist/203.0.113.64%2F28", "", "")
+	rec := authedSend(t, s, http.MethodDelete, "/api/v2/whitelist/203.0.113.64%2F28", "", "")
 	env := decodeEnvelope(t, rec.Body.Bytes())
 	if code := envelopeCode(t, env); code != httpcontract.CodeOK {
 		t.Errorf("移除时内核回绝导致 code = %d，期望仍按成功（0）处理", code)
@@ -234,7 +234,7 @@ func TestWhitelistRemoveSuccessDeliversNormalizedKey(t *testing.T) {
 		t.Fatalf("前置添加失败: %v", fake.added)
 	}
 	// 删除时带主机位（192.0.2.200/25）：按掩码后的键定位，与镜像里的键同源。
-	rec := authedSend(t, s, http.MethodDelete, "/api/v1/whitelist/192.0.2.200%2F25", "", "")
+	rec := authedSend(t, s, http.MethodDelete, "/api/v2/whitelist/192.0.2.200%2F25", "", "")
 	if code := envelopeCode(t, decodeEnvelope(t, rec.Body.Bytes())); code != httpcontract.CodeOK {
 		t.Fatalf("带主机位的删除 code = %d，期望 0（归一化后应命中）", code)
 	}

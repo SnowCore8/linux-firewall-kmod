@@ -912,7 +912,7 @@ func (e *InboundExecutor) syncJailEnabled() {
 	if changed {
 		e.reconcileWatches()
 		// 快照存的是副本，原地改 Enabled 不会自己浮到读侧——这里显式把新形状推上去，
-		// 否则 /api/v1/jails 上的 enabled 会停在同步之前。
+		// 否则 /api/v2/jails 上的 enabled 会停在同步之前。
 		e.publishJailSnapshot()
 	}
 }
@@ -937,7 +937,7 @@ func (e *InboundExecutor) refreshJails() {
 
 // publishJailSnapshot 把当前生效的 jail 配置发布给表现层，并通知订阅方。
 //
-// 配置所有权在本执行体（组合根只留一个指向同一份 cfg 的闭包），而 /api/v1/jails、SSE 的
+// 配置所有权在本执行体（组合根只留一个指向同一份 cfg 的闭包），而 /api/v2/jails、SSE 的
 // jails 事件、以及两个调参建议端点都读 config.GetActiveJails() 那一份快照。不在这里发布，
 // 那三处就永远读到空表——面板上的 jail 页是空的、调参建议永远「无样本」，而两者看起来
 // 都像「暂时还没有数据」。
@@ -947,7 +947,7 @@ func (e *InboundExecutor) refreshJails() {
 //
 // 发布之后的那一声是给 SSE 的 jails 域：订阅者只有靠这一声才知道快照换了，否则
 // SIGHUP 或内核侧改完配置，界面继续显示旧形状（契约缺陷 HTTP_SSE_JAILS_NO_PUBLISHER）。
-// 载荷取的是刚发布的那份快照，与 GET /api/v1/jails 同一个折表函数。
+// 载荷取的是刚发布的那份快照，与 GET /api/v2/jails 同一个折表函数。
 func (e *InboundExecutor) publishJailSnapshot() {
 	config.SetActiveJails(e.cfg.Jails)
 	if e.jailSnapshot != nil {

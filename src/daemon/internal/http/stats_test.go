@@ -57,7 +57,7 @@ func TestStatsTodayBansIsNotTotalBans(t *testing.T) {
 		Link:  telemetry.Link{Lease: telemetry.LeaseHeld},
 	}))
 
-	stats := get[StatsResponse](t, s, "/api/v1/stats")
+	stats := get[StatsResponse](t, s, "/api/v2/stats")
 	if stats.TotalBans != 7 {
 		t.Errorf("total_bans = %d，期望透传内核的 7", stats.TotalBans)
 	}
@@ -90,7 +90,7 @@ func TestStatsUptimeUsesConfiguredStart(t *testing.T) {
 		}
 	})
 
-	stats := get[StatsResponse](t, s, "/api/v1/stats")
+	stats := get[StatsResponse](t, s, "/api/v2/stats")
 	if stats.UptimeSeconds < 89 || stats.UptimeSeconds > 92 {
 		t.Errorf("uptime_seconds = %d，起点在 90 秒前时应约为 90", stats.UptimeSeconds)
 	}
@@ -108,7 +108,7 @@ func TestRatesCurrentSortsByPps(t *testing.T) {
 	}
 	s, _ := newTestServer(t, snapshotProvider(snap))
 
-	rows := get[[]RateResponse](t, s, "/api/v1/rates/current")
+	rows := get[[]RateResponse](t, s, "/api/v2/rates/current")
 	if len(rows) != 3 {
 		t.Fatalf("取回 %d 行，期望 3 行", len(rows))
 	}
@@ -135,7 +135,7 @@ func TestRatesWindowsRoundsInsteadOfTruncating(t *testing.T) {
 	}
 	s, _ := newTestServer(t, snapshotProvider(snap))
 
-	w := get[RateWindowSnapshot](t, s, "/api/v1/rates/windows")
+	w := get[RateWindowSnapshot](t, s, "/api/v2/rates/windows")
 	if w.PpsShort != 1 {
 		t.Errorf("pps_short = %d，0.6 应四舍五入成 1 而不是截成 0", w.PpsShort)
 	}
@@ -166,7 +166,7 @@ func TestRatesHistoryIsAscendingAndLimited(t *testing.T) {
 		cfg.GetRateSamples = recent
 	})
 
-	all := get[[]RateHistoryResponse](t, s, "/api/v1/rates/history")
+	all := get[[]RateHistoryResponse](t, s, "/api/v2/rates/history")
 	if len(all) != 3 {
 		t.Fatalf("取回 %d 点，期望 3 点", len(all))
 	}
@@ -180,7 +180,7 @@ func TestRatesHistoryIsAscendingAndLimited(t *testing.T) {
 		t.Errorf("第 2 点 tracked_ips = %d，期望 3", all[1].TrackedIps)
 	}
 
-	limited := get[[]RateHistoryResponse](t, s, "/api/v1/rates/history?limit=2")
+	limited := get[[]RateHistoryResponse](t, s, "/api/v2/rates/history?limit=2")
 	if len(limited) != 2 {
 		t.Fatalf("limit=2 取回 %d 点，期望 2 点", len(limited))
 	}
@@ -203,7 +203,7 @@ func TestPacketSizesAndTtlCarryLabelsAndPercentages(t *testing.T) {
 	}
 	s, _ := newTestServer(t, snapshotProvider(snap))
 
-	pkts := get[PacketSizeDistributionResponse](t, s, "/api/v1/stats/packet-sizes")
+	pkts := get[PacketSizeDistributionResponse](t, s, "/api/v2/stats/packet-sizes")
 	if len(pkts.Labels) != contract.AnalysisPktSizeBins {
 		t.Fatalf("包长标签 %d 个，期望 %d 个", len(pkts.Labels), contract.AnalysisPktSizeBins)
 	}
@@ -218,7 +218,7 @@ func TestPacketSizesAndTtlCarryLabelsAndPercentages(t *testing.T) {
 			pkts.Percentages[0], pkts.Percentages[2])
 	}
 
-	ttl := get[TtlDistributionResponse](t, s, "/api/v1/stats/ttl-distribution")
+	ttl := get[TtlDistributionResponse](t, s, "/api/v2/stats/ttl-distribution")
 	if len(ttl.Labels) != contract.AnalysisTTLBins {
 		t.Errorf("TTL 标签 %d 个，期望 %d 个", len(ttl.Labels), contract.AnalysisTTLBins)
 	}
@@ -232,13 +232,13 @@ func TestIpFragmentsRatioIsPercent(t *testing.T) {
 	s, _ := newTestServer(t, snapshotProvider(telemetry.Snapshot{
 		Analysis: contract.AnalysisResponse{IPFragTotal: 400, IPFragCount: 4},
 	}))
-	got := get[IpFragmentStatsResponse](t, s, "/api/v1/stats/ip-fragments")
+	got := get[IpFragmentStatsResponse](t, s, "/api/v2/stats/ip-fragments")
 	if got.FragmentRatio != 1.0 {
 		t.Errorf("fragment_ratio = %v，4/400 应为 1.0（百分数，不是 0-1 比例）", got.FragmentRatio)
 	}
 
 	empty, _ := newTestServer(t, snapshotProvider(telemetry.Snapshot{}))
-	zero := get[IpFragmentStatsResponse](t, empty, "/api/v1/stats/ip-fragments")
+	zero := get[IpFragmentStatsResponse](t, empty, "/api/v2/stats/ip-fragments")
 	if zero.FragmentRatio != 0 {
 		t.Errorf("无流量时 fragment_ratio = %v，期望 0 而不是 NaN", zero.FragmentRatio)
 	}
@@ -257,7 +257,7 @@ func TestUdpPortsClampsKernelCount(t *testing.T) {
 	}
 	s, _ := newTestServer(t, snapshotProvider(telemetry.Snapshot{Analysis: a}))
 
-	got := get[UdpPortDistributionResponse](t, s, "/api/v1/stats/udp-ports")
+	got := get[UdpPortDistributionResponse](t, s, "/api/v2/stats/udp-ports")
 	if len(got.Ports) != contract.AnalysisUDPPortCap {
 		t.Errorf("ports = %d 行，期望夹到容量 %d", len(got.Ports), contract.AnalysisUDPPortCap)
 	}
@@ -281,7 +281,7 @@ func TestScannersReportThresholdAndRows(t *testing.T) {
 	}
 	s, _ := newTestServer(t, snapshotProvider(telemetry.Snapshot{Analysis: a}))
 
-	scanners := get[PortScanResponse](t, s, "/api/v1/stats/port-scanners")
+	scanners := get[PortScanResponse](t, s, "/api/v2/stats/port-scanners")
 	if scanners.Threshold != 5 || scanners.TotalDetected != 4_096 {
 		t.Errorf("port-scanners threshold/total = %d/%d，期望 5/4096",
 			scanners.Threshold, scanners.TotalDetected)
@@ -293,7 +293,7 @@ func TestScannersReportThresholdAndRows(t *testing.T) {
 		t.Errorf("unique_ports = %d，期望内核的 metric 12", scanners.Scanners[0].UniquePorts)
 	}
 
-	probes := get[ServiceProbeResponse](t, s, "/api/v1/stats/service-probes")
+	probes := get[ServiceProbeResponse](t, s, "/api/v2/stats/service-probes")
 	if probes.TotalDetected == 0 {
 		t.Error("service-probes 缺 total_detected（缺陷 HTTP_SERVICE_PROBE_NO_TOTAL 复发）")
 	}
@@ -309,7 +309,7 @@ func TestScannersReportThresholdAndRows(t *testing.T) {
 func TestHeatmapAlwaysHasTwentyFourBuckets(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 
-	h := get[HourlyHeatmap](t, s, "/api/v1/stats/heatmap")
+	h := get[HourlyHeatmap](t, s, "/api/v2/stats/heatmap")
 	if len(h.Hours) != 24 {
 		t.Fatalf("hours = %d 项，期望定长 24", len(h.Hours))
 	}
@@ -333,7 +333,7 @@ func TestAnomaliesGuardKeepsNullVsZero(t *testing.T) {
 			return []telemetry.RateSample{{TotalPPS: 1}, {TotalPPS: 2}}
 		}
 	})
-	guarded := get[AnomalyResponse](t, short, "/api/v1/stats/anomalies")
+	guarded := get[AnomalyResponse](t, short, "/api/v2/stats/anomalies")
 	if guarded.GlobalFeatures != nil {
 		t.Errorf("样本仅 2 点时 global_features = %v，期望 null", guarded.GlobalFeatures)
 	}
@@ -344,7 +344,7 @@ func TestAnomaliesGuardKeepsNullVsZero(t *testing.T) {
 		t.Errorf("护栏未过时 score=%v anomalies=%d，期望 0 与空", guarded.GlobalScore, len(guarded.IpAnomalies))
 	}
 	// 两条基线与维度表是空数组（不是 null）：前端对它们做 .map()。
-	raw := getRaw(t, short, "/api/v1/stats/anomalies")
+	raw := getRaw(t, short, "/api/v2/stats/anomalies")
 	if _, ok := raw["global_baseline_p50"].(string); ok {
 		t.Error("global_baseline_p50 不是数组")
 	}
@@ -378,7 +378,7 @@ func TestAnomaliesGuardKeepsNullVsZero(t *testing.T) {
 			}
 		}
 	})
-	out := get[AnomalyResponse](t, full, "/api/v1/stats/anomalies")
+	out := get[AnomalyResponse](t, full, "/api/v2/stats/anomalies")
 	if out.GlobalFeatures == nil {
 		t.Fatal("样本达护栏后 global_features 仍是 null")
 	}

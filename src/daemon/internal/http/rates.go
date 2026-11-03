@@ -1,4 +1,4 @@
-// 速率历史读数面：GET /api/v1/rates/history。
+// 速率历史读数面：GET /api/v2/rates/history。
 //
 // 数据源是守护进程侧的速率历史环（internal/telemetry/rate_history.go）：事件泵每成功
 // 问一次内核速率表就落一个点，节奏 = 采样周期（当前 5 秒）。
@@ -24,7 +24,7 @@ const (
 	ratesHistoryMax     = telemetry.DefaultRateHistorySize
 )
 
-// GetRatesHistory 返回全局速率的时间序列（GET /api/v1/rates/history）。
+// GetRatesHistory 返回全局速率的时间序列（GET /api/v2/rates/history）。
 //
 // 载荷是 RateHistoryResponse **数组**，按时间升序（最早在前）：折线图按 x 轴递增画，
 // 倒序会让前端每次自己反转。查询参数 limit 取最近 n 个点。

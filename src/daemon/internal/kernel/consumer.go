@@ -50,7 +50,7 @@ const (
 	DefaultRequestTimeout = 2 * time.Second
 )
 
-// SSE 域名取值，与契约 /api/v1/events 的订阅域一致。
+// SSE 域名取值，与契约 /api/v2/events 的订阅域一致。
 //
 // 这里刻意没有 jails：jail 配置的所有权在入站执行体，本泵只是内核指令的搬运工
 // （CONFIG_CHANGE 经 directives 队列交给执行体落地），它既不知道新形状也不拥有那张表，
@@ -694,7 +694,7 @@ func (p *EventPump) reconcile() {
 // 每个域的载荷来自**它自己**的数据源：bans 读本泵的封禁镜像、whitelist 读本泵的白名单
 // 镜像、stats 与 rates 读同一份 telemetry 快照（本函数总在 SetStats/SetRates 之后调用，
 // 镜像方取到的就是这一轮的值）。此前 default 分支把 bans 的镜像发给所有未知的域，于是
-// `/api/v1/events` 的 stats 与 rates 两帧带的是封禁列表——前端按 StatsResponse 解析，
+// `/api/v2/events` 的 stats 与 rates 两帧带的是封禁列表——前端按 StatsResponse 解析，
 // 得到的是形状完全不同的对象，仪表盘上的读数与 REST 悄悄分叉。
 //
 // 载荷的**形状**由 DomainMirror 定（表现层），本函数只定**内容来自哪张表**：把内核内部

@@ -23,7 +23,7 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
 )
 
-// RecidivismResponse 是复发统计（GET /api/v1/stats/recidivism）。
+// RecidivismResponse 是复发统计（GET /api/v2/stats/recidivism）。
 //
 // recidivism_rate 是**百分数 0-100**（与 ban-effectiveness 同一个口径，见契约的
 // HTTP_RECIDIVISM_RATE_UNIT）：库里算出来的就是 ×100 的数，这里原样搬，不再除回去。
@@ -43,7 +43,7 @@ type RecidivistEntry struct {
 	WasPermanent bool   `json:"was_permanent"`
 }
 
-// ReputationEntryResponse 是一个低信誉地址的读数（GET /api/v1/stats/reputation）。
+// ReputationEntryResponse 是一个低信誉地址的读数（GET /api/v2/stats/reputation）。
 //
 // total_failures / total_bans 是**该列开始记录以来**的累计数：这两列比表晚，迁移只补列
 // 不补史，老地址从 0 起算（契约字段注释同此口径）。
@@ -56,7 +56,7 @@ type ReputationEntryResponse struct {
 	ThresholdMultiplier float64 `json:"threshold_multiplier"`
 }
 
-// PeriodicAttacker 是周期性攻击者（GET /api/v1/stats/periodic-attackers）。
+// PeriodicAttacker 是周期性攻击者（GET /api/v2/stats/periodic-attackers）。
 type PeriodicAttacker struct {
 	IP               string  `json:"ip"`
 	BanCount         uint32  `json:"ban_count"`
@@ -67,7 +67,7 @@ type PeriodicAttacker struct {
 	Timestamps       []int64 `json:"timestamps"`
 }
 
-// CollaborativeAttack 是多源联动窗口（GET /api/v1/stats/collaborative-attacks）。
+// CollaborativeAttack 是多源联动窗口（GET /api/v2/stats/collaborative-attacks）。
 //
 // ip_count 与 ips 的长度可以不等：ips 带出的是窗口内参与者（截断到前若干个），
 // ip_count 是那一窗口内的**唯一地址数**，读侧靠差值知道还有多少人没列出来。
@@ -82,7 +82,7 @@ type CollaborativeAttack struct {
 }
 
 // NetworkBlock 是同一 /24（v6 为 /48）网段的封禁聚合
-// （GET /api/v1/stats/network-distribution）。
+// （GET /api/v2/stats/network-distribution）。
 type NetworkBlock struct {
 	Subnet       string `json:"subnet"`
 	UniqueIPs    uint32 `json:"unique_ips"`
@@ -92,7 +92,7 @@ type NetworkBlock struct {
 }
 
 // AttackPrediction 是一个地址的下次动手估计
-// （/api/v1/stats/attack-predictions 的 predictions 元素）。
+// （/api/v2/stats/attack-predictions 的 predictions 元素）。
 //
 // remaining_secs 可以为负：预测时刻已经过去（该地址按它的周期早就该再来了），
 // 面板把它读成「随时可能」而不是「还有 -120 秒」。
@@ -118,7 +118,7 @@ type JailAttackTrend struct {
 }
 
 // AttackPredictionSummary 是预测面板的整体载荷
-// （GET /api/v1/stats/attack-predictions）。
+// （GET /api/v2/stats/attack-predictions）。
 type AttackPredictionSummary struct {
 	Predictions    []AttackPrediction `json:"predictions"`
 	JailTrends     []JailAttackTrend  `json:"jail_trends"`
@@ -173,7 +173,7 @@ type BanDurationRecommendationResponse struct {
 }
 
 // BanLevelEffectiveness 是渐进式封禁某一级的成效
-// （GET /api/v1/stats/ban-effectiveness 的 levels 元素）。
+// （GET /api/v2/stats/ban-effectiveness 的 levels 元素）。
 //
 // 「级」就是该地址被封的**第几次**（第 1 级 = 基础时长，第 2 级 = 30 分钟，第 3 级 =
 // 24 小时，第 4 级 = 永久及以后，见 decision.ProgressiveDuration）。
@@ -199,7 +199,7 @@ type BanEffectivenessResponse struct {
 }
 
 // BanDurationHistogramResponse 是封禁时长的分布直方图
-// （GET /api/v1/stats/ban-duration-histogram）。
+// （GET /api/v2/stats/ban-duration-histogram）。
 //
 // labels/counts 等长同下标，total = counts 之和。落在「未知」之外：迁移前写的旧行没有
 // 时长读数，不进任何一桶也不进 total（宁可少算，不把不知道画成 0 秒）。
@@ -209,7 +209,7 @@ type BanDurationHistogramResponse struct {
 	Total  uint64   `json:"total"`
 }
 
-// AttackGeoResponse 是攻击源地理分布（GET /api/v1/stats/attack-geo）。
+// AttackGeoResponse 是攻击源地理分布（GET /api/v2/stats/attack-geo）。
 //
 // 本守护进程**没有 GeoIP 读库**（配置项 geoip_db_path 无人消费，见契约的
 // HTTP_GEOIP_NOT_IMPLEMENTED），因此 geoip_enabled 恒为 false、points 恒为空、两个计数
@@ -239,7 +239,7 @@ type GeoPoint struct {
 	LastBannedAt int64   `json:"last_banned_at"`
 }
 
-// JailResponse 是一个 jail 的配置与运行时读数（GET /api/v1/jails 的元素）。
+// JailResponse 是一个 jail 的配置与运行时读数（GET /api/v2/jails 的元素）。
 //
 // 三项乘数与 is_peak_hours 来自判定层的**常量与时刻**（decision 包），不是配置项；
 // effective_max_retries 是「此刻一个外部新地址实际面对的阈值」= ceil(max_retries ×
@@ -247,7 +247,7 @@ type GeoPoint struct {
 // 不属于 jail，jail 级的读数不能把它们乘进去（乘了就变成「这个 jail 对所有地址的阈值」，
 // 而那个数不存在）。
 //
-// ban_count 是**当前活跃**封禁数（内存镜像，与 /api/v1/stats 的 current_bans 同源），
+// ban_count 是**当前活跃**封禁数（内存镜像，与 /api/v2/stats 的 current_bans 同源），
 // 不是历史累计——后者在 ban_events 里，由 /stats/ban-effectiveness 那一面回答。
 // 后五个计数器是本进程解析日志以来的累计值，重启归零；jail 尚未产生任何读数的字段记 0。
 type JailResponse struct {

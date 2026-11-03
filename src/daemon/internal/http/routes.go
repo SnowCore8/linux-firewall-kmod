@@ -8,6 +8,7 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/telemetry"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/threatfeeds"
 )
 
 // JailController 是 jail 启用/禁用的写入端接口。
@@ -62,21 +63,25 @@ type APIConfig struct {
 	// StartedAt 是进程开始装配的时刻（GET /stats 的 uptime_seconds 起点）。
 	StartedAt time.Time
 
-	// GetRateSamples 取回速率历史的最近 n 个采样点，供 /api/v1/rates/history 与异常
+	// GetRateSamples 取回速率历史的最近 n 个采样点，供 /api/v2/rates/history 与异常
 	// 检测的分位基线共用。来源是事件泵每成功查询一次速率表落的一个点。
 	GetRateSamples func(n int) []telemetry.RateSample
 
 	// KernelVersion 读内核模块自报的版本号（/sys/module/firewall/version）。
 	// 模块未加载时返回空串——面板上就是「内核 」，不拿守护进程版本顶上去。
 	KernelVersion func() string
+
+	// ThreatFeeds 是威胁情报源管理器（/api/v2/threat-feeds*）。可空：情报系统未启用
+	// 或装配失败时为 nil，三个 handler 按「服务不可用」应答，与其余可空依赖同一口径。
+	ThreatFeeds *threatfeeds.FeedManager
 }
 
 func (s *Server) RegisterRoutes(api *APIHandlers) {
 	// ---- 无认证：就绪探针 -----------------------------------------------------
 	//
 	// 两条路由同一个 handler：契约让 /healthz 成为 /health 的别名，供 k8s/负载均衡用。
-	s.HandleFunc(httpcontract.RouteGetHealth, api.Health)
-	s.HandleFunc(httpcontract.RouteGetHealthz, api.Health)
+	s.HandleFunc(httpcontract.RouteGetApiV2Health, api.Health)
+	s.HandleFunc(httpcontract.RouteGetApiV2Healthz, api.Health)
 
 	// ---- 需认证：指标与 SSE ---------------------------------------------------
 	//
@@ -93,77 +98,77 @@ func (s *Server) RegisterRoutes(api *APIHandlers) {
 			RequireAuth(api.username, api.password, api.lockout, api.metrics.ServeHTTP))
 	}
 	if api.sse != nil {
-		s.HandleFunc(httpcontract.RouteGetApiV1Events,
+		s.HandleFunc(httpcontract.RouteGetApiV2Events,
 			RequireAuth(api.username, api.password, api.lockout, api.sse.ServeHTTP))
 	}
 
 	// ---- 需认证：封禁管理 -----------------------------------------------------
-	s.HandleFunc(httpcontract.RouteGetApiV1Bans,
+	s.HandleFunc(httpcontract.RouteGetApiV2Bans,
 		RequireAuth(api.username, api.password, api.lockout, api.ListBans))
-	s.HandleFunc(httpcontract.RoutePostApiV1Bans,
+	s.HandleFunc(httpcontract.RoutePostApiV2Bans,
 		RequireAuth(api.username, api.password, api.lockout, api.CreateBan))
-	s.HandleFunc(httpcontract.RouteDeleteApiV1BansIp,
+	s.HandleFunc(httpcontract.RouteDeleteApiV2BansIp,
 		RequireAuth(api.username, api.password, api.lockout, api.DeleteBan))
-	s.HandleFunc(httpcontract.RouteGetApiV1BansIpDetail,
+	s.HandleFunc(httpcontract.RouteGetApiV2BansIpDetail,
 		RequireAuth(api.username, api.password, api.lockout, api.BanDetail))
-	s.HandleFunc(httpcontract.RoutePostApiV1BansUnbanTemporary,
+	s.HandleFunc(httpcontract.RoutePostApiV2BansUnbanTemporary,
 		RequireAuth(api.username, api.password, api.lockout, api.UnbanAllTemporary))
-	s.HandleFunc(httpcontract.RoutePostApiV1BansBatch,
+	s.HandleFunc(httpcontract.RoutePostApiV2BansBatch,
 		RequireAuth(api.username, api.password, api.lockout, api.BatchBan))
 
 	// ---- 需认证：Jail ---------------------------------------------------------
-	s.HandleFunc(httpcontract.RouteGetApiV1Jails,
+	s.HandleFunc(httpcontract.RouteGetApiV2Jails,
 		RequireAuth(api.username, api.password, api.lockout, api.ListJails))
-	s.HandleFunc(httpcontract.RoutePutApiV1JailsName,
+	s.HandleFunc(httpcontract.RoutePutApiV2JailsName,
 		RequireAuth(api.username, api.password, api.lockout, api.UpdateJail))
 
 	// ---- 需认证：配置 ---------------------------------------------------------
-	s.HandleFunc(httpcontract.RouteGetApiV1Config,
+	s.HandleFunc(httpcontract.RouteGetApiV2Config,
 		RequireAuth(api.username, api.password, api.lockout, api.GetConfig))
-	s.HandleFunc(httpcontract.RoutePutApiV1Config,
+	s.HandleFunc(httpcontract.RoutePutApiV2Config,
 		RequireAuth(api.username, api.password, api.lockout, api.UpdateConfig))
 
 	// ---- 需认证：白名单 -------------------------------------------------------
-	s.HandleFunc(httpcontract.RouteGetApiV1Whitelist,
+	s.HandleFunc(httpcontract.RouteGetApiV2Whitelist,
 		RequireAuth(api.username, api.password, api.lockout, api.ListWhitelist))
-	s.HandleFunc(httpcontract.RoutePostApiV1Whitelist,
+	s.HandleFunc(httpcontract.RoutePostApiV2Whitelist,
 		RequireAuth(api.username, api.password, api.lockout, api.AddWhitelist))
-	s.HandleFunc(httpcontract.RouteDeleteApiV1WhitelistCidr,
+	s.HandleFunc(httpcontract.RouteDeleteApiV2WhitelistCidr,
 		RequireAuth(api.username, api.password, api.lockout, api.RemoveWhitelist))
-	s.HandleFunc(httpcontract.RouteGetApiV1WhitelistRecommendations,
+	s.HandleFunc(httpcontract.RouteGetApiV2WhitelistRecommendations,
 		RequireAuth(api.username, api.password, api.lockout, api.GetWhitelistRecommendations))
 
 	// ---- 需认证：速率 ---------------------------------------------------------
-	s.HandleFunc(httpcontract.RouteGetApiV1RatesCurrent,
+	s.HandleFunc(httpcontract.RouteGetApiV2RatesCurrent,
 		RequireAuth(api.username, api.password, api.lockout, api.RatesCurrent))
-	s.HandleFunc(httpcontract.RouteGetApiV1RatesHistory,
+	s.HandleFunc(httpcontract.RouteGetApiV2RatesHistory,
 		RequireAuth(api.username, api.password, api.lockout, api.GetRatesHistory))
-	s.HandleFunc(httpcontract.RouteGetApiV1RatesWindows,
+	s.HandleFunc(httpcontract.RouteGetApiV2RatesWindows,
 		RequireAuth(api.username, api.password, api.lockout, api.RatesWindows))
 
 	// ---- 需认证：统计总览与内核快照 -------------------------------------------
 	//
 	// 这一组全部读事件泵发布的**同一份快照**（telemetry.Snapshot）：面板上的速率、协议
 	// 分布与 Top-N 因此出自同一次采样，不会出现「包大小图说 3 秒前、扫描者图说 8 秒前」。
-	s.HandleFunc(httpcontract.RouteGetApiV1Stats,
+	s.HandleFunc(httpcontract.RouteGetApiV2Stats,
 		RequireAuth(api.username, api.password, api.lockout, api.Stats))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsHeatmap,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsHeatmap,
 		RequireAuth(api.username, api.password, api.lockout, api.Heatmap))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsPacketSizes,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsPacketSizes,
 		RequireAuth(api.username, api.password, api.lockout, api.PacketSizes))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsTtlDistribution,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsTtlDistribution,
 		RequireAuth(api.username, api.password, api.lockout, api.TtlDistribution))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsIpFragments,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsIpFragments,
 		RequireAuth(api.username, api.password, api.lockout, api.IpFragments))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsUdpPorts,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsUdpPorts,
 		RequireAuth(api.username, api.password, api.lockout, api.UdpPorts))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsIcmpTypes,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsIcmpTypes,
 		RequireAuth(api.username, api.password, api.lockout, api.IcmpTypes))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsPortScanners,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsPortScanners,
 		RequireAuth(api.username, api.password, api.lockout, api.PortScanners))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsServiceProbes,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsServiceProbes,
 		RequireAuth(api.username, api.password, api.lockout, api.ServiceProbes))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsAnomalies,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsAnomalies,
 		RequireAuth(api.username, api.password, api.lockout, api.Anomalies))
 
 	// ---- 需认证：统计子路由（历史库分析面）------------------------------------
@@ -171,29 +176,29 @@ func (s *Server) RegisterRoutes(api *APIHandlers) {
 	// 三条「在 200 信封内降级」的统计（ban-effectiveness / ban-duration-histogram /
 	// attack-geo）与其余各条不同：契约没给它们编业务码，读不到数据时回空读数 + 一句
 	// summary，而不是 50002/50003。理由与逐条口径见 handlers.go 的包注释与契约 note。
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsRecidivism,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsRecidivism,
 		RequireAuth(api.username, api.password, api.lockout, api.Recidivism))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsReputation,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsReputation,
 		RequireAuth(api.username, api.password, api.lockout, api.Reputation))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsBanEffectiveness,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsBanEffectiveness,
 		RequireAuth(api.username, api.password, api.lockout, api.BanEffectiveness))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsBanDurationHistogram,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsBanDurationHistogram,
 		RequireAuth(api.username, api.password, api.lockout, api.BanDurationHistogram))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsAttackGeo,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsAttackGeo,
 		RequireAuth(api.username, api.password, api.lockout, api.AttackGeo))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsPeriodicAttackers,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsPeriodicAttackers,
 		RequireAuth(api.username, api.password, api.lockout, api.PeriodicAttackers))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsCollaborativeAttacks,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsCollaborativeAttacks,
 		RequireAuth(api.username, api.password, api.lockout, api.CollaborativeAttacks))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsNetworkDistribution,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsNetworkDistribution,
 		RequireAuth(api.username, api.password, api.lockout, api.NetworkDistribution))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsAttackPredictions,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsAttackPredictions,
 		RequireAuth(api.username, api.password, api.lockout, api.AttackPredictions))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsBanDurationRecommendations,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsBanDurationRecommendations,
 		RequireAuth(api.username, api.password, api.lockout, api.BanDurationRecommendations))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsThresholdRecommendations,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsThresholdRecommendations,
 		RequireAuth(api.username, api.password, api.lockout, api.ThresholdRecommendations))
-	s.HandleFunc(httpcontract.RouteGetApiV1StatsSseStatus,
+	s.HandleFunc(httpcontract.RouteGetApiV2StatsSseStatus,
 		RequireAuth(api.username, api.password, api.lockout, api.SSEStatus))
 
 	// ---- 需认证：风险引擎 -----------------------------------------------------
@@ -205,12 +210,26 @@ func (s *Server) RegisterRoutes(api *APIHandlers) {
 		RequireAuth(api.username, api.password, api.lockout, api.RiskEvents))
 
 	// ---- 需认证：日志 ---------------------------------------------------------
-	s.HandleFunc(httpcontract.RouteGetApiV1Logs,
+	s.HandleFunc(httpcontract.RouteGetApiV2Logs,
 		RequireAuth(api.username, api.password, api.lockout, api.GetLogs))
 	if api.logStream != nil {
-		s.HandleFunc(httpcontract.RouteGetApiV1LogsStream,
+		s.HandleFunc(httpcontract.RouteGetApiV2LogsStream,
 			RequireAuth(api.username, api.password, api.lockout, api.StreamLogs))
 	}
+
+	// ---- 需认证：威胁情报源 ---------------------------------------------------
+	s.HandleFunc(httpcontract.RouteGetApiV2ThreatFeeds,
+		RequireAuth(api.username, api.password, api.lockout, api.ListThreatFeeds))
+	s.HandleFunc(httpcontract.RoutePostApiV2ThreatFeedsSync,
+		RequireAuth(api.username, api.password, api.lockout, api.SyncThreatFeed))
+	s.HandleFunc(httpcontract.RouteGetApiV2ThreatFeedsId,
+		RequireAuth(api.username, api.password, api.lockout, api.GetThreatFeed))
+
+	// ---- 需认证：综合分析 -----------------------------------------------------
+	s.HandleFunc(httpcontract.RouteGetApiV2AnalysisSummary,
+		RequireAuth(api.username, api.password, api.lockout, api.AnalysisSummary))
+	s.HandleFunc(httpcontract.RouteGetApiV2AnalysisIpIp,
+		RequireAuth(api.username, api.password, api.lockout, api.AnalysisIp))
 }
 
 type APIHandlers struct {
@@ -223,6 +242,7 @@ type APIHandlers struct {
 	kernelWhitelist KernelWhitelist
 	kernelConfig    KernelConfig
 	lockout         *AuthLockout
+	threatFeeds     *threatfeeds.FeedManager
 
 	// 认证凭据
 	username string
@@ -276,13 +296,14 @@ func NewAPIHandlers(cfg APIConfig) *APIHandlers {
 		startedAt:         cfg.StartedAt,
 		getRateSamples:    cfg.GetRateSamples,
 		kernelVersion:     cfg.KernelVersion,
+		threatFeeds:       cfg.ThreatFeeds,
 	}
 }
 
 // currentConfig 读当前配置；未注入来源或来源报 nil 时报 nil。
 //
 // 读侧（统计面）拿到 nil 时的动作是「那一项没有读数」而不是 panic：装配测试里 APIHandlers
-// 可以完全不接配置，而 /api/v1/stats 仍要能回答形状正确的载荷。写侧（PUT /config）自己
+// 可以完全不接配置，而 /api/v2/stats 仍要能回答形状正确的载荷。写侧（PUT /config）自己
 // 检查来源是否存在并回错误码，不走这里。
 func (h *APIHandlers) currentConfig() *config.Config {
 	if h.getCurrentConfig == nil {
@@ -299,7 +320,7 @@ func (h *APIHandlers) rateSamples(n int) []telemetry.RateSample {
 	return h.getRateSamples(n)
 }
 
-// SSEStatus 报两条 SSE 流各自的连接诊断（GET /api/v1/stats/sse-status）。
+// SSEStatus 报两条 SSE 流各自的连接诊断（GET /api/v2/stats/sse-status）。
 //
 // 必须**按流**报：契约给 events 定 10、给 logs 定 5，前端拿 `events.limit_reached` 决定
 // 要不要停止重连。用 HTTP 服务器级的单一 active/max 推断，日志流被拒时前端会判成「还没

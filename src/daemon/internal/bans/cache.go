@@ -231,7 +231,7 @@ func (c *ActiveBanCache) List() []BanInfo {
 
 // CountByJail 返回每个 jail 当前的活跃封禁数（读 byJail 反向索引，不复制封禁内容）。
 //
-// 这一份是**活跃**封禁的口径，与 /api/v1/stats 的 current_bans 同源；历史累计次数在
+// 这一份是**活跃**封禁的口径，与 /api/v2/stats 的 current_bans 同源；历史累计次数在
 // ban_events 里，两者不是同一个数（契约的 JailResponse.ban_count 注释写明取前者）。
 // 没有活跃封禁的 jail 不出现在返回值里，调用方按缺失记 0。
 func (c *ActiveBanCache) CountByJail() map[string]uint64 {

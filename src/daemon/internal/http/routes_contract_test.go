@@ -50,6 +50,7 @@ var paramSamples = map[string]string{
 	"ip":   "10.0.0.1",
 	"cidr": "10.0.0.0%2F8",
 	"name": "sshd",
+	"id":   "ipsum",
 }
 
 // wildcardSlot 匹配生成物里的多段通配槽 `{path...}`（契约写法是 `*path`）。
@@ -207,9 +208,9 @@ func TestUndeclaredMethodFallsToFramework405(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 
 	cases := []struct{ method, pattern string }{
-		{http.MethodDelete, httpcontract.RouteGetApiV1Bans},
-		{http.MethodPatch, httpcontract.RouteGetApiV1Config},
-		{http.MethodPost, httpcontract.RouteGetApiV1StatsSseStatus},
+		{http.MethodDelete, httpcontract.RouteGetApiV2Bans},
+		{http.MethodPatch, httpcontract.RouteGetApiV2Config},
+		{http.MethodPost, httpcontract.RouteGetApiV2StatsSseStatus},
 	}
 	for _, c := range cases {
 		path := c.pattern[strings.Index(c.pattern, " ")+1:]
@@ -229,11 +230,11 @@ func TestRequiredGroupRejectsAnonymous(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 
 	for _, pattern := range []string{
-		httpcontract.RouteGetApiV1Bans,
-		httpcontract.RouteGetApiV1Events,
+		httpcontract.RouteGetApiV2Bans,
+		httpcontract.RouteGetApiV2Events,
 		httpcontract.RouteGetMetrics,
-		httpcontract.RouteGetApiV1Logs,
-		httpcontract.RouteGetApiV1Whitelist,
+		httpcontract.RouteGetApiV2Logs,
+		httpcontract.RouteGetApiV2Whitelist,
 	} {
 		path := pattern[strings.Index(pattern, " ")+1:]
 		w := httptest.NewRecorder()
@@ -258,7 +259,7 @@ func TestQueryTokenAuthenticatesSSE(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
-		httpcontract.RouteGetApiV1Bans[strings.Index(httpcontract.RouteGetApiV1Bans, " ")+1:]+
+		httpcontract.RouteGetApiV2Bans[strings.Index(httpcontract.RouteGetApiV2Bans, " ")+1:]+
 			"?"+httpcontract.AuthTokenQuery+"="+queryToken(), nil)
 	s.mux.ServeHTTP(w, req)
 	if w.Code == http.StatusUnauthorized {
@@ -268,10 +269,10 @@ func TestQueryTokenAuthenticatesSSE(t *testing.T) {
 	// 半配置凭据按失败处理：只填用户名时任何人都进不来。
 	half := &Server{mux: http.NewServeMux(), logger: discardLogger()}
 	api := NewAPIHandlers(APIConfig{Server: half, Username: testUser, Password: ""})
-	half.HandleFunc(httpcontract.RouteGetApiV1Bans,
+	half.HandleFunc(httpcontract.RouteGetApiV2Bans,
 		RequireAuth(api.username, api.password, api.lockout, api.ListBans))
 	w2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/bans", nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v2/bans", nil)
 	req2.SetBasicAuth(testUser, "")
 	half.mux.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusUnauthorized {
@@ -322,7 +323,7 @@ func TestHealthIsRawSnapshotWithoutEnvelope(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 
 	w := httptest.NewRecorder()
-	s.mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
+	s.mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v2/health", nil))
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("未持有租约时 /health 期望 503，实际 %d", w.Code)
 	}
@@ -358,8 +359,8 @@ func TestHealthzIsTheSameHandler(t *testing.T) {
 
 	a := httptest.NewRecorder()
 	b := httptest.NewRecorder()
-	s.mux.ServeHTTP(a, httptest.NewRequest(http.MethodGet, "/health", nil))
-	s.mux.ServeHTTP(b, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	s.mux.ServeHTTP(a, httptest.NewRequest(http.MethodGet, "/api/v2/health", nil))
+	s.mux.ServeHTTP(b, httptest.NewRequest(http.MethodGet, "/api/v2/healthz", nil))
 	if a.Code != b.Code || a.Body.String() != b.Body.String() {
 		t.Errorf("/healthz 与 /health 不同形：%d/%d 体相等=%v",
 			a.Code, b.Code, a.Body.String() == b.Body.String())
@@ -382,11 +383,11 @@ func TestStreamCapsAreIndependent(t *testing.T) {
 	defer events.Stop()
 	logs := NewLogsStream(logger)
 
-	if events.Max() != httpcontract.SSEMaxConnectionsApiV1Events {
-		t.Errorf("事件流上限 %d，契约 %d", events.Max(), httpcontract.SSEMaxConnectionsApiV1Events)
+	if events.Max() != httpcontract.SSEMaxConnectionsApiV2Events {
+		t.Errorf("事件流上限 %d，契约 %d", events.Max(), httpcontract.SSEMaxConnectionsApiV2Events)
 	}
-	if logs.Max() != httpcontract.SSEMaxConnectionsApiV1LogsStream {
-		t.Errorf("日志流上限 %d，契约 %d", logs.Max(), httpcontract.SSEMaxConnectionsApiV1LogsStream)
+	if logs.Max() != httpcontract.SSEMaxConnectionsApiV2LogsStream {
+		t.Errorf("日志流上限 %d，契约 %d", logs.Max(), httpcontract.SSEMaxConnectionsApiV2LogsStream)
 	}
 	if events.Max() == logs.Max() {
 		t.Fatal("两条流上限相同，本用例无法证明它们各自独立")
@@ -443,7 +444,7 @@ func TestSSEStatusReportsTwoStreams(t *testing.T) {
 	defer rel()
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats/sse-status", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/stats/sse-status", nil)
 	req.Header.Set("Authorization", authHeader())
 	s.mux.ServeHTTP(w, req)
 
@@ -463,11 +464,11 @@ func TestSSEStatusReportsTwoStreams(t *testing.T) {
 	if got := body["logs"]["current_connections"]; got != float64(1) {
 		t.Errorf("logs.current_connections = %v，占了一个名额应为 1", got)
 	}
-	if got := body["logs"]["max_connections"]; got != float64(httpcontract.SSEMaxConnectionsApiV1LogsStream) {
-		t.Errorf("logs.max_connections = %v，契约 %d", got, httpcontract.SSEMaxConnectionsApiV1LogsStream)
+	if got := body["logs"]["max_connections"]; got != float64(httpcontract.SSEMaxConnectionsApiV2LogsStream) {
+		t.Errorf("logs.max_connections = %v，契约 %d", got, httpcontract.SSEMaxConnectionsApiV2LogsStream)
 	}
-	if got := body["events"]["max_connections"]; got != float64(httpcontract.SSEMaxConnectionsApiV1Events) {
-		t.Errorf("events.max_connections = %v，契约 %d", got, httpcontract.SSEMaxConnectionsApiV1Events)
+	if got := body["events"]["max_connections"]; got != float64(httpcontract.SSEMaxConnectionsApiV2Events) {
+		t.Errorf("events.max_connections = %v，契约 %d", got, httpcontract.SSEMaxConnectionsApiV2Events)
 	}
 }
 
@@ -488,14 +489,14 @@ func unwrapData(t *testing.T, raw []byte) []byte {
 	return raw
 }
 
-// TestEventsStreamHandshakeAndDomainEvents 用真连接核对 `/api/v1/events` 的三件事：
+// TestEventsStreamHandshakeAndDomainEvents 用真连接核对 `/api/v2/events` 的三件事：
 // query 凭据放行、connected 握手帧带本流上限、Publish 的帧写成 `event: <域名>`。
 func TestEventsStreamHandshakeAndDomainEvents(t *testing.T) {
 	s, api := newTestServer(t, nil)
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := srv.Client().Get(srv.URL + "/api/v1/events?" + httpcontract.AuthTokenQuery + "=" + queryToken())
+	resp, err := srv.Client().Get(srv.URL + "/api/v2/events?" + httpcontract.AuthTokenQuery + "=" + queryToken())
 	if err != nil {
 		t.Fatalf("请求事件流失败: %v", err)
 	}
@@ -509,7 +510,7 @@ func TestEventsStreamHandshakeAndDomainEvents(t *testing.T) {
 
 	a := newSSEAccumulator(resp.Body)
 	text := a.waitFor(t, "event: connected", 3*time.Second)
-	want := fmt.Sprintf(`"max_connections":%d`, httpcontract.SSEMaxConnectionsApiV1Events)
+	want := fmt.Sprintf(`"max_connections":%d`, httpcontract.SSEMaxConnectionsApiV2Events)
 	if !strings.Contains(text, want) {
 		t.Errorf("connected 帧没带本流上限 %s，读到:\n%s", want, text)
 	}
@@ -539,7 +540,7 @@ func TestLogsStreamSendsRawLine(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := srv.Client().Get(srv.URL + "/api/v1/logs/stream?" +
+	resp, err := srv.Client().Get(srv.URL + "/api/v2/logs/stream?" +
 		httpcontract.AuthTokenQuery + "=" + queryToken())
 	if err != nil {
 		t.Fatalf("请求日志流失败: %v", err)
@@ -584,7 +585,7 @@ func TestLogsStreamRejectsOverCap(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	url := srv.URL + "/api/v1/logs/stream?" + httpcontract.AuthTokenQuery + "=" + queryToken()
+	url := srv.URL + "/api/v2/logs/stream?" + httpcontract.AuthTokenQuery + "=" + queryToken()
 	for i := 0; i < api.logStream.Max(); i++ {
 		resp, err := srv.Client().Get(url)
 		if err != nil {

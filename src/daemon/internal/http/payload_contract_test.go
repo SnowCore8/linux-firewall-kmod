@@ -53,7 +53,7 @@ func requireKeys(t *testing.T, obj map[string]any, want ...string) {
 func TestListBansAlwaysReturnsPaginationEnvelope(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 
-	for _, path := range []string{"/api/v1/bans", "/api/v1/bans?page=1&page_size=5&sort_by=ip_asc"} {
+	for _, path := range []string{"/api/v2/bans", "/api/v2/bans?page=1&page_size=5&sort_by=ip_asc"} {
 		w := authedGet(t, s, path)
 		if w.Code != http.StatusOK {
 			t.Fatalf("%s 状态码 %d，期望 200", path, w.Code)
@@ -98,7 +98,7 @@ func TestListBansSortAndPaging(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 
 	// 第 1 页 / 每页 2 条 / 按 ip_asc：全集按 IP 升序是 .5 .7 .9，切页后第一页是 .5 .7。
-	w := authedGet(t, s, "/api/v1/bans?page=1&page_size=2&sort_by=ip_asc")
+	w := authedGet(t, s, "/api/v2/bans?page=1&page_size=2&sort_by=ip_asc")
 	data := decodeKeys(t, decodeEnvelope(t, w.Body.Bytes())["data"])
 	items := data["items"].([]any)
 	if len(items) != 2 {
@@ -115,7 +115,7 @@ func TestListBansSortAndPaging(t *testing.T) {
 	}
 
 	// remaining_seconds：永久封禁写 0，临时封禁写真实剩余。
-	w = authedGet(t, s, "/api/v1/bans?page=1&page_size=10&sort_by=ip_desc")
+	w = authedGet(t, s, "/api/v2/bans?page=1&page_size=10&sort_by=ip_desc")
 	items = decodeKeys(t, decodeEnvelope(t, w.Body.Bytes())["data"])["items"].([]any)
 	byIP := map[string]map[string]any{}
 	for _, raw := range items {
@@ -130,14 +130,14 @@ func TestListBansSortAndPaging(t *testing.T) {
 	}
 
 	// 未识别的取值回落 banned_at_desc（契约 HTTP_BAN_SORT_DOC_INCOMPLETE）。
-	w = authedGet(t, s, "/api/v1/bans?sort_by=bogus_key")
+	w = authedGet(t, s, "/api/v2/bans?sort_by=bogus_key")
 	items = decodeKeys(t, decodeEnvelope(t, w.Body.Bytes())["data"])["items"].([]any)
 	if top := items[0].(map[string]any); top["ip"] != "10.0.0.5" {
 		t.Errorf("非法 sort_by 的首条 = %v，期望 banned_at_desc 回落后的 10.0.0.5（最晚封的那条）", top["ip"])
 	}
 
 	// page_size 超过上限 100 时夹到上限，而不是退回缺省 20。
-	w = authedGet(t, s, "/api/v1/bans?page_size=1000")
+	w = authedGet(t, s, "/api/v2/bans?page_size=1000")
 	data = decodeKeys(t, decodeEnvelope(t, w.Body.Bytes())["data"])
 	if data["page_size"] != float64(banMaxPageSize) {
 		t.Errorf("page_size = %v，期望夹到 %d", data["page_size"], banMaxPageSize)
@@ -147,13 +147,13 @@ func TestListBansSortAndPaging(t *testing.T) {
 // TestBatchBanNeverPermanent 是缺陷 HTTP_BATCH_BAN_BECOMES_PERMANENT 的行为断言。
 //
 // 确认弹窗承诺「统一使用 3600 秒」，那么不带 duration 的批量请求就必须落成 3600 秒的
-// 临时封禁：/api/v1/bans/unban-temporary 只解临时封禁，批量升格成永久等于没有批量退路。
+// 临时封禁：/api/v2/bans/unban-temporary 只解临时封禁，批量升格成永久等于没有批量退路。
 func TestBatchBanNeverPermanent(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 
 	ips := []string{"10.30.0.1", "10.30.0.2"}
 	body := `{"ips":["` + strings.Join(ips, `","`) + `"]}`
-	w := authedSend(t, s, http.MethodPost, "/api/v1/bans/batch", "application/json", body)
+	w := authedSend(t, s, http.MethodPost, "/api/v2/bans/batch", "application/json", body)
 	if w.Code != http.StatusCreated {
 		t.Errorf("状态码 %d，契约给这条路由的成功状态码是 201（body=%s）", w.Code, truncate(w.Body.Bytes()))
 	}
@@ -191,7 +191,7 @@ func TestBatchBanNeverPermanent(t *testing.T) {
 func TestBanDetailUnbannedIPSucceeds(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 
-	w := authedGet(t, s, "/api/v1/bans/10.9.9.9/detail")
+	w := authedGet(t, s, "/api/v2/bans/10.9.9.9/detail")
 	if w.Code != http.StatusOK {
 		t.Fatalf("状态码 %d，未被封禁的合法 IP 期望 200（body=%s）", w.Code, truncate(w.Body.Bytes()))
 	}
@@ -208,7 +208,7 @@ func TestBanDetailUnbannedIPSucceeds(t *testing.T) {
 	}
 
 	// IP 非法才是 40006。
-	bad := authedGet(t, s, "/api/v1/bans/not-an-ip/detail")
+	bad := authedGet(t, s, "/api/v2/bans/not-an-ip/detail")
 	wantStatus := httpcontract.CodeHTTPStatus[httpcontract.Code40006]
 	if bad.Code != wantStatus {
 		t.Errorf("非法 IP 状态码 %d，契约 40006 编的是 %d", bad.Code, wantStatus)
@@ -258,7 +258,7 @@ func TestBanDetailProgressiveFields(t *testing.T) {
 		}
 	})
 
-	data := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v1/bans/"+ip+"/detail").Body.Bytes())["data"])
+	data := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v2/bans/"+ip+"/detail").Body.Bytes())["data"])
 	if data["is_banned"] != true || data["jail_name"] != "sshd" || data["reason"] != "契约用例" {
 		t.Errorf("当前封禁状态读数 = %v", data)
 	}
@@ -278,11 +278,11 @@ func TestBanDetailProgressiveFields(t *testing.T) {
 	}
 
 	// 解封之后：is_banned 翻成 false，last_unbanned_at 落下真实时刻，历史仍在。
-	del := authedSend(t, s, http.MethodDelete, "/api/v1/bans/"+ip, "", "")
+	del := authedSend(t, s, http.MethodDelete, "/api/v2/bans/"+ip, "", "")
 	if del.Code != http.StatusOK {
 		t.Fatalf("解封状态码 %d（body=%s）", del.Code, truncate(del.Body.Bytes()))
 	}
-	after := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v1/bans/"+ip+"/detail").Body.Bytes())["data"])
+	after := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v2/bans/"+ip+"/detail").Body.Bytes())["data"])
 	if after["is_banned"] != false {
 		t.Errorf("解封后 is_banned = %v，期望 false", after["is_banned"])
 	}
@@ -312,7 +312,7 @@ func TestCreateBanDurationTriState(t *testing.T) {
 		{"显式 120", `{"ip":"10.32.0.3","duration":120,"reason":"巡检"}`, false},
 	}
 	for _, c := range cases {
-		w := authedSend(t, s, http.MethodPost, "/api/v1/bans", "application/json", c.body)
+		w := authedSend(t, s, http.MethodPost, "/api/v2/bans", "application/json", c.body)
 		if w.Code != http.StatusCreated {
 			t.Errorf("%s：状态码 %d，契约给的成功状态码是 201（body=%s）",
 				c.name, w.Code, truncate(w.Body.Bytes()))
@@ -354,7 +354,7 @@ func TestGetLogsPaginatesWithLineNumbers(t *testing.T) {
 		cfg.LogFilePath = func() string { return path }
 	})
 
-	data := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v1/logs?page=1&page_size=2").Body.Bytes())["data"])
+	data := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v2/logs?page=1&page_size=2").Body.Bytes())["data"])
 	requireKeys(t, data, "items", "total_lines", "page", "page_size", "total_pages")
 	if data["total_lines"] != float64(4) || data["total_pages"] != float64(2) {
 		t.Errorf("total_lines=%v total_pages=%v，期望 4/2", data["total_lines"], data["total_pages"])
@@ -375,14 +375,14 @@ func TestGetLogsPaginatesWithLineNumbers(t *testing.T) {
 	}
 
 	// 第二页拿到第 2、1 行。
-	page2 := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v1/logs?page=2&page_size=2").Body.Bytes())["data"])
+	page2 := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v2/logs?page=2&page_size=2").Body.Bytes())["data"])
 	items = page2["items"].([]any)
 	if len(items) != 2 || items[0].(map[string]any)["line_number"] != float64(2) {
 		t.Fatalf("第 2 页 = %v，期望首条行号 2", items)
 	}
 
 	// 越界页：空 items 而不是报错（契约这条路由没有可编的「页码越界」码）。
-	over := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v1/logs?page=99&page_size=2").Body.Bytes())["data"])
+	over := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v2/logs?page=99&page_size=2").Body.Bytes())["data"])
 	if over["items"] == nil {
 		t.Errorf("越界页的 items 缺失或为 null: %v", over["items"])
 	}
@@ -391,13 +391,13 @@ func TestGetLogsPaginatesWithLineNumbers(t *testing.T) {
 	}
 
 	// level 过滤后 total_lines 是**过滤后**的行数。
-	level := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v1/logs?level=info").Body.Bytes())["data"])
+	level := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v2/logs?level=info").Body.Bytes())["data"])
 	if level["total_lines"] != float64(2) {
 		t.Errorf("level=info 的 total_lines = %v，期望 2", level["total_lines"])
 	}
 
 	// keyword 过滤命中第 2 行。
-	keyword := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v1/logs?keyword=here").Body.Bytes())["data"])
+	keyword := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v2/logs?keyword=here").Body.Bytes())["data"])
 	items = keyword["items"].([]any)
 	if keyword["total_lines"] != float64(1) || len(items) != 1 ||
 		items[0].(map[string]any)["line_number"] != float64(2) {
@@ -406,7 +406,7 @@ func TestGetLogsPaginatesWithLineNumbers(t *testing.T) {
 
 	// since 过滤掉 10-01 那一行（不带时区的写法按本地时区解释）。
 	since := decodeKeys(t, decodeEnvelope(t,
-		authedGet(t, s, "/api/v1/logs?since=2026-10-05T00:00:00").Body.Bytes())["data"])
+		authedGet(t, s, "/api/v2/logs?since=2026-10-05T00:00:00").Body.Bytes())["data"])
 	if since["total_lines"] != float64(3) {
 		t.Errorf("since=2026-10-05 的 total_lines = %v，期望 3", since["total_lines"])
 	}
@@ -425,11 +425,11 @@ func TestGetLogsRejectsInvalidQuery(t *testing.T) {
 	})
 
 	cases := map[string]string{
-		"page 不是数字":     "/api/v1/logs?page=abc",
-		"page 为 0":      "/api/v1/logs?page=0",
-		"page_size 超上限": fmt.Sprintf("/api/v1/logs?page_size=%d", logMaxPageSize+1),
-		"level 不认识":     "/api/v1/logs?level=critical",
-		"since 读不懂":     "/api/v1/logs?since=last-week",
+		"page 不是数字":     "/api/v2/logs?page=abc",
+		"page 为 0":      "/api/v2/logs?page=0",
+		"page_size 超上限": fmt.Sprintf("/api/v2/logs?page_size=%d", logMaxPageSize+1),
+		"level 不认识":     "/api/v2/logs?level=critical",
+		"since 读不懂":     "/api/v2/logs?since=last-week",
 	}
 	for name, path := range cases {
 		w := authedGet(t, s, path)
@@ -453,7 +453,7 @@ func TestGetLogsRejectsInvalidQuery(t *testing.T) {
 func TestWhitelistPayloadIsNamed(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 
-	add := authedSend(t, s, http.MethodPost, "/api/v1/whitelist", "application/json", `{"cidr":"10.0.0.1/8"}`)
+	add := authedSend(t, s, http.MethodPost, "/api/v2/whitelist", "application/json", `{"cidr":"10.0.0.1/8"}`)
 	if add.Code != http.StatusCreated {
 		t.Errorf("添加白名单状态码 %d，契约给的成功状态码是 201（body=%s）",
 			add.Code, truncate(add.Body.Bytes()))
@@ -471,7 +471,7 @@ func TestWhitelistPayloadIsNamed(t *testing.T) {
 	prefix := mustPrefix(t, "10.0.0.0/8")
 	t.Cleanup(func() { _ = bans.GlobalWhitelist().Remove(prefix) })
 
-	list := decodeEnvelope(t, authedGet(t, s, "/api/v1/whitelist").Body.Bytes())
+	list := decodeEnvelope(t, authedGet(t, s, "/api/v2/whitelist").Body.Bytes())
 	var entries []map[string]any
 	if err := json.Unmarshal(list["data"], &entries); err != nil {
 		t.Fatalf("白名单载荷不是对象数组: %v（data=%s）", err, list["data"])
@@ -489,7 +489,7 @@ func TestWhitelistPayloadIsNamed(t *testing.T) {
 		t.Errorf("列表里没有刚加的 10.0.0.0/8: %v", entries)
 	}
 
-	rm := authedSend(t, s, http.MethodDelete, "/api/v1/whitelist/10.0.0.0%2F8", "", "")
+	rm := authedSend(t, s, http.MethodDelete, "/api/v2/whitelist/10.0.0.0%2F8", "", "")
 	removed := decodeKeys(t, decodeEnvelope(t, rm.Body.Bytes())["data"])
 	requireKeys(t, removed, "cidr", "action")
 	if removed["action"] != "removed" || removed["cidr"] != "10.0.0.0/8" {
@@ -502,7 +502,7 @@ func TestWhitelistPayloadIsNamed(t *testing.T) {
 func TestSSEStatusIsTypedPayload(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 
-	data := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v1/stats/sse-status").Body.Bytes())["data"])
+	data := decodeKeys(t, decodeEnvelope(t, authedGet(t, s, "/api/v2/stats/sse-status").Body.Bytes())["data"])
 	for _, name := range []string{"events", "logs"} {
 		stream, ok := data[name].(map[string]any)
 		if !ok {

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// last_unbanned_at 是后加的列：现网的库里没有它，GET /api/v1/bans/:ip/detail 的
+// last_unbanned_at 是后加的列：现网的库里没有它，GET /api/v2/bans/:ip/detail 的
 // last_unbanned_at 必须有真实来源，否则那一栏在面板上永远是 0，而 0 的意思
 // （「没有过显式解封」）与「读不到」完全无法区分。
 func TestMigrationAddsLastUnbannedAt(t *testing.T) {

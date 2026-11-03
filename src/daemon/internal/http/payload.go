@@ -30,7 +30,7 @@ type PaginatedResponse[T any] struct {
 	TotalPages uint32 `json:"total_pages"`
 }
 
-// BanResponse 是封禁表里一条活跃封禁（GET /api/v1/bans 的 items 元素）。
+// BanResponse 是封禁表里一条活跃封禁（GET /api/v2/bans 的 items 元素）。
 type BanResponse struct {
 	IP               string `json:"ip"`
 	Jail             string `json:"jail"`
@@ -41,7 +41,7 @@ type BanResponse struct {
 	IsPermanent      bool   `json:"is_permanent"`
 }
 
-// BanDetailResponse 是单个 IP 的封禁详情（GET /api/v1/bans/:ip/detail）。
+// BanDetailResponse 是单个 IP 的封禁详情（GET /api/v2/bans/:ip/detail）。
 //
 // **未封禁不是错误**：is_banned=false 的 200 响应照样带历史与信誉读数（契约给这条路由
 // 只编了 40006 = IP 非法）。前端详情面板正是靠这个形状在「解封之后还想看历史」时可用。
@@ -63,8 +63,8 @@ type BanDetailResponse struct {
 	ReputationMultiplier float64 `json:"reputation_multiplier"`
 }
 
-// BanOperationResponse 是单条封禁/解封操作的结果（POST /api/v1/bans、
-// DELETE /api/v1/bans/:ip、POST /api/v1/bans/unban-temporary）。
+// BanOperationResponse 是单条封禁/解封操作的结果（POST /api/v2/bans、
+// DELETE /api/v2/bans/:ip、POST /api/v2/bans/unban-temporary）。
 type BanOperationResponse struct {
 	IP           string  `json:"ip"`
 	Action       string  `json:"action"`
@@ -72,7 +72,7 @@ type BanOperationResponse struct {
 	DurationSecs *uint64 `json:"duration_seconds"`
 }
 
-// BatchOperationResponse 是批量操作的汇总（POST /api/v1/bans/batch）。
+// BatchOperationResponse 是批量操作的汇总（POST /api/v2/bans/batch）。
 //
 // details 逐条给出失败原因（与请求里的 ips 同序），条数可以少于 total——只为失败的
 // 那几条留原文，成功条目没有需要解释的东西。
@@ -83,7 +83,7 @@ type BatchOperationResponse struct {
 	Details     []string `json:"details"`
 }
 
-// CreateBanRequest 是 POST /api/v1/bans 的请求体。
+// CreateBanRequest 是 POST /api/v2/bans 的请求体。
 //
 // duration 用指针：契约把它声明成 Option<u64>，Go 侧要能原样表达「字段缺席」——单条封禁
 // 里缺席与显式 0 同为永久（契约的这条路由就是这么定义的），但指针是契约类型本身，
@@ -94,11 +94,11 @@ type CreateBanRequest struct {
 	Reason   *string `json:"reason"`
 }
 
-// BatchBanRequest 是 POST /api/v1/bans/batch 的请求体。
+// BatchBanRequest 是 POST /api/v2/bans/batch 的请求体。
 //
 // 与单条那条路由**共用不了**这个 struct 的地方是 duration 的缺省语义：这里缺席或 0 都是
 // 「3600 秒的有时长封禁」，永不升格为永久（缺陷 HTTP_BATCH_BAN_BECOMES_PERMANENT 的
-// resolution）。批量入口一旦把缺省读成永久，/api/v1/bans/unban-temporary 就看不见这批
+// resolution）。批量入口一旦把缺省读成永久，/api/v2/bans/unban-temporary 就看不见这批
 // 条目（它只解临时），用户没有批量退路。
 type BatchBanRequest struct {
 	IPs      []string `json:"ips"`
@@ -118,12 +118,12 @@ type WhitelistOperationResponse struct {
 	Action string `json:"action"`
 }
 
-// CreateWhitelistRequest 是 POST /api/v1/whitelist 的请求体。
+// CreateWhitelistRequest 是 POST /api/v2/whitelist 的请求体。
 type CreateWhitelistRequest struct {
 	CIDR string `json:"cidr"`
 }
 
-// UpdateJailRequest 是 PUT /api/v1/jails/{name} 的请求体。
+// UpdateJailRequest 是 PUT /api/v2/jails/{name} 的请求体。
 //
 // 只带 enabled 一个字段：这条路由改的是「期望状态」，其余 jail 参数走配置文件热重载，
 // 不从这个入口改。用值类型而不是指针——契约把它声明成 bool（非 Option），缺席的解码
@@ -133,10 +133,10 @@ type UpdateJailRequest struct {
 }
 
 // ============================================================================
-// 配置（GET /api/v1/config、PUT /api/v1/config）
+// 配置（GET /api/v2/config、PUT /api/v2/config）
 // ============================================================================
 
-// UpdateConfigRequest 是 PUT /api/v1/config 的请求体（契约 request UpdateConfigRequest）。
+// UpdateConfigRequest 是 PUT /api/v2/config 的请求体（契约 request UpdateConfigRequest）。
 //
 // 全字段可选（指针）：契约把这条路由定成**局部更新**——只提交要改的字段，未提交的字段保持
 // 后端现值。指针是「字段缺席」与「显式给零值」的唯一区分手段；用值类型会把「没写
@@ -167,8 +167,8 @@ type UpdateConfigRequest struct {
 	ClearLogsAt         *string `json:"clear_logs_at"`
 }
 
-// WebuiConfigResponse 是 GET /api/v1/config 的响应载荷（契约 type WebuiConfigResponse），
-// 也是 PUT /api/v1/config 的响应载荷（前端 updateConfig 的返回类型就是它）。
+// WebuiConfigResponse 是 GET /api/v2/config 的响应载荷（契约 type WebuiConfigResponse），
+// 也是 PUT /api/v2/config 的响应载荷（前端 updateConfig 的返回类型就是它）。
 //
 // 它只覆盖 Web UI 关心的那一段（config.WebuiConfig 的 19 个字段），**不是**整份 config.Config：
 // 整份配置含 MetricsPassword 等凭据与信号量类内部字段，把整个结构读出去既泄露凭据又让线上面
@@ -243,7 +243,7 @@ type LogEntry struct {
 	Content    string `json:"content"`
 }
 
-// LogPageResponse 是 GET /api/v1/logs 的分页载荷。
+// LogPageResponse 是 GET /api/v2/logs 的分页载荷。
 //
 // total_lines 是**过滤后**的匹配行数（level/keyword/since 之后），前端据此算可翻页数；
 // 与 PaginatedResponse.total 同义，但契约给日志单独起了名字，这里就照契约的形状写。
@@ -265,7 +265,7 @@ type SseStreamStatus struct {
 	LimitReached       bool `json:"limit_reached"`
 }
 
-// SseStatusResponse 是两条流各一份的诊断（GET /api/v1/stats/sse-status）。
+// SseStatusResponse 是两条流各一份的诊断（GET /api/v2/stats/sse-status）。
 //
 // events 与 logs 的上限独立（10 / 5），limit_reached 由**所属流**判定：用一条流的上限
 // 推断另一条，前端会在日志流被拒时判成「还没满」，把 503 当网络故障无限重连。
@@ -275,7 +275,7 @@ type SseStatusResponse struct {
 }
 
 // ============================================================================
-// 统计总览（GET /api/v1/stats）
+// 统计总览（GET /api/v2/stats）
 // ============================================================================
 
 // ChartData 是一组「标签 ↔ 数值」按下标对齐的图表数据。
@@ -304,7 +304,7 @@ type ThreatLevel struct {
 	PeakHours      bool     `json:"peak_hours"`
 }
 
-// StatsResponse 是总览面板的一次读数（GET /api/v1/stats）。
+// StatsResponse 是总览面板的一次读数（GET /api/v2/stats）。
 //
 // 三个口径写在这里而不是留给前端猜：
 //   - today_bans 带真实时间窗（本地时区自然日 00:00 起，历史库 ban_events 计数），
@@ -335,10 +335,10 @@ type StatsResponse struct {
 }
 
 // ============================================================================
-// 速率（GET /api/v1/rates/*）
+// 速率（GET /api/v2/rates/*）
 // ============================================================================
 
-// RateResponse 是一个源地址的当前速率（GET /api/v1/rates/current 的数组元素）。
+// RateResponse 是一个源地址的当前速率（GET /api/v2/rates/current 的数组元素）。
 //
 // 八个数值都是**每秒速率**而不是累计计数：内核速率表对外语义就是速率
 // （fw_rate.c:fw_rate_fill_row 填的是 smoothed_*），累计值留在内核侧做窗口滚动。
@@ -354,7 +354,7 @@ type RateResponse struct {
 	FinPacketsPerSec  uint64 `json:"fin_packets_per_sec"`
 }
 
-// RateHistoryResponse 是全局速率的一次采样点（GET /api/v1/rates/history 的数组元素）。
+// RateHistoryResponse 是全局速率的一次采样点（GET /api/v2/rates/history 的数组元素）。
 //
 // 采样节奏 = 内核事件泵的查询周期：每问一次速率表就落一个点，而不是按墙上时钟插值补
 // 空白——补出来的点没有对应的内核回答，图上看着连续，实际是猜的。
@@ -365,12 +365,12 @@ type RateHistoryResponse struct {
 	TrackedIps uint32 `json:"tracked_ips"`
 }
 
-// RateWindowSnapshot 是速率的多窗口 EWMA（GET /api/v1/rates/windows）。
+// RateWindowSnapshot 是速率的多窗口 EWMA（GET /api/v2/rates/windows）。
 //
 // 短/中/长 = 5 秒 / 60 秒 / 300 秒，三档都在守护进程侧派生（内核只回答「自上次查询以来
 // 的平均速率」，没有窗口概念）。还没有任何样本时六个数都是 0，与「速率为 0」不可区分——
 // 契约给这条路由只编了 code 0，所以这里不额外造一个 initialized 字段：读侧要区分就看
-// /api/v1/rates/current 有没有速率表。
+// /api/v2/rates/current 有没有速率表。
 type RateWindowSnapshot struct {
 	PpsShort uint64 `json:"pps_short"`
 	PpsMid   uint64 `json:"pps_mid"`
@@ -381,7 +381,7 @@ type RateWindowSnapshot struct {
 }
 
 // ============================================================================
-// 内核协议分布快照（GET /api/v1/stats/{packet-sizes,ttl-distribution,ip-fragments,
+// 内核协议分布快照（GET /api/v2/stats/{packet-sizes,ttl-distribution,ip-fragments,
 // udp-ports,icmp-types,port-scanners,service-probes}）
 // ============================================================================
 

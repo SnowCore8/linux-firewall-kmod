@@ -1,6 +1,6 @@
-// 封禁面：POST/DELETE /api/v1/bans 与其子路由。错误一律走契约声明的业务码。
+// 封禁面：POST/DELETE /api/v2/bans 与其子路由。错误一律走契约声明的业务码。
 //
-// 这里没有一处 `r.Method` 自查：路由按 `"GET /api/v1/bans"` 这种带方法的模式注册，
+// 这里没有一处 `r.Method` 自查：路由按 `"GET /api/v2/bans"` 这种带方法的模式注册，
 // 动词不符由 ServeMux 直接回 405（契约 errmodel FRAMEWORK_DEFAULT）。handler 里再查
 // 一遍等于写两份 405，而且那份永远不会被执行——契约的 405 是纯文本，信封版 405 反而
 // 会让前端两种形状都要防。
@@ -27,13 +27,13 @@ type KernelBan interface {
 	Remove(addr netip.Addr, prefixLen uint8) error
 }
 
-// batchBanMaxIPs 是 POST /api/v1/bans/batch 的单批上限（契约 code 40005 的 text 写死 100）。
+// batchBanMaxIPs 是 POST /api/v2/bans/batch 的单批上限（契约 code 40005 的 text 写死 100）。
 const batchBanMaxIPs = 100
 
 // 封禁列表的分页缺省与上限（契约 HTTP_BANS_DUAL_SHAPE 的 resolution 写死这三个数）。
 //
 // 这里的分页是**宽容**的：读不懂的 page/page_size 当作没带（见 query.go 的
-// queryPagination），因为契约给 GET /api/v1/bans 只编了 code 0，没有「分页参数非法」
+// queryPagination），因为契约给 GET /api/v2/bans 只编了 code 0，没有「分页参数非法」
 // 这个失败码可用。日志那条路由编了 40005，所以它才做严格校验（parseLogQuery）——两边的
 // 宽容度是契约分别定的，不是实现随手挑的。
 const (
@@ -43,7 +43,7 @@ const (
 	banDefaultBatchSecs = 3600
 )
 
-// banSortKeys 是 GET /api/v1/bans 的 sort_by 合法取值（契约 HTTP_BAN_SORT_DOC_INCOMPLETE
+// banSortKeys 是 GET /api/v2/bans 的 sort_by 合法取值（契约 HTTP_BAN_SORT_DOC_INCOMPLETE
 // 要求注释、代码分支与前端 BanSortKey 三者逐字一致，未识别的值回落 banned_at_desc）。
 var banSortKeys = map[string]func(a, b BanResponse) bool{
 	"banned_at_desc": func(a, b BanResponse) bool { return a.BannedAt > b.BannedAt },
@@ -55,7 +55,7 @@ var banSortKeys = map[string]func(a, b BanResponse) bool{
 	"remaining_desc": func(a, b BanResponse) bool { return a.RemainingSeconds > b.RemainingSeconds },
 }
 
-// ListBans 返回分页后的活跃封禁表（GET /api/v1/bans）。
+// ListBans 返回分页后的活跃封禁表（GET /api/v2/bans）。
 //
 // 单一形状：任何情况下都是 PaginatedResponse<BanResponse>，没有「不带 query 就写裸数组」
 // 的分支。前端 Bans 页过去按客户端分页取全量，现在改为把 page/page_size/sort_by 交给
@@ -111,7 +111,7 @@ func durationSeconds(p *uint64) (secs int64, permanent bool) {
 
 // CreateBan 落一条封禁：镜像 → 内核 → 历史 → 推送，任一步失败都回业务码 40001。
 //
-// 契约给 POST /api/v1/bans 只编了一个失败码（40001，text 覆盖「内核未确认、IP 非法、
+// 契约给 POST /api/v2/bans 只编了一个失败码（40001，text 覆盖「内核未确认、IP 非法、
 // 内核返回错误」三种情形），区分它们靠 message，不靠临时新造数字。
 func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 	var req CreateBanRequest
@@ -214,7 +214,7 @@ func (h *APIHandlers) DeleteBan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 记下解封时刻：GET /api/v1/bans/:ip/detail 的 last_unbanned_at 只有这一个来源
+	// 记下解封时刻：GET /api/v2/bans/:ip/detail 的 last_unbanned_at 只有这一个来源
 	// （见 persist.RecordUnbanHistory）。写失败只记日志——封禁已经撤掉了，不能因为
 	// 一条审计时间戳把响应改成 40002。
 	if h.db != nil {
@@ -282,8 +282,8 @@ func (h *APIHandlers) UnbanAllTemporary(w http.ResponseWriter, r *http.Request) 
 //
 // 批量**永远不产生永久封禁**：请求里的 duration 缺席或为 0 一律按 3600 秒下发（缺陷
 // HTTP_BATCH_BAN_BECOMES_PERMANENT 的现场就是「确认弹窗承诺 3600 秒、实际把整批永久
-// 封了」，而 /api/v1/bans/unban-temporary 只解临时封禁，永久条目没有批量退路）。
-// 单条 POST /api/v1/bans 仍按契约保留「缺席/0 = 永久」——那是运维逐条点下的决定。
+// 封了」，而 /api/v2/bans/unban-temporary 只解临时封禁，永久条目没有批量退路）。
+// 单条 POST /api/v2/bans 仍按契约保留「缺席/0 = 永久」——那是运维逐条点下的决定。
 func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 	var req BatchBanRequest
 	if !decodeJSON(w, r, &req) {
@@ -373,7 +373,7 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// BanDetail 报单个 IP 的封禁详情与历史记录（GET /api/v1/bans/{ip}/detail）。
+// BanDetail 报单个 IP 的封禁详情与历史记录（GET /api/v2/bans/{ip}/detail）。
 //
 // **未被封禁不是错误**：契约给这条路由只编了 40006，而它的 text 写的是「封禁详情查询失败
 // （IP 非法）」——「这个 IP 目前没被封」是查询成功后的一个读数，不是查询失败。载荷里的
