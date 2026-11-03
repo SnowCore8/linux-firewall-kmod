@@ -150,8 +150,8 @@ Provider 挂载之前把它们切到 `react-dom/client` 的 `createRoot`。
 
 | 通道 | 承担 | 入口 |
 |------|------|------|
-| REST `/api/v1/*` | 首帧取数、翻页、**全部写操作** | `api/client.ts` + `hooks/useAsync.ts` |
-| SSE `/api/v1/events` | 实时增量（统计、封禁、jail、速率、白名单） | `hooks/useSse.ts` |
+| REST `/api/v2/*` | 首帧取数、翻页、**全部写操作** | `api/client.ts` + `hooks/useAsync.ts` |
+| SSE `/api/v2/events` | 实时增量（统计、封禁、jail、速率、白名单） | `hooks/useSse.ts` |
 
 ### REST 侧
 

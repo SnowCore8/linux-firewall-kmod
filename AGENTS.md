@@ -176,6 +176,16 @@ make test
 - **阈值模型**：加法模型（修复旧乘法 Bug：内网×低信誉=1.0 导致系数抵消）
 - **迁移指南**：`docs/zh/migration-risk-engine-v2.md`
 
+### 威胁情报源系统（v2.4）
+
+- **Feature Flag**：`threat_feeds.enabled`（默认 true，启用 IPsum + FireHOL Level 1）
+- **新包**：`src/daemon/internal/threatfeeds/`（types.go、config.go、manager.go、parser.go、http.go、cache.go、scheduler.go）
+- **源适配器**：`src/daemon/internal/threatfeeds/sources/`（ipsum.go、firehol.go、dshield.go、blocklist.go、feodo.go）
+- **核心能力**：自动拉取、并发刷新、错误隔离、热重载、SSRF 防护
+- **推荐情报源**：IPsum（多源聚合）、FireHOL Level 1（保守名单）、DShield、Blocklist.de、Feodo Tracker
+- **配置文档**：`docs/zh/configuration/threat-feeds.md`
+- **迁移指南**：`docs/zh/migration-threat-feeds.md`
+
 ## 常见坑
 
 1. **编译过 ≠ 加载得了**。CI runner 用自定义内核，`.ko` 可能 `insmod` 不了。真验证加载得在能加载的机器上跑 `make test`。
@@ -198,6 +208,8 @@ make test
 | [docs/zh/operations/](docs/zh/operations/README.md) | 运维管理、监控、故障排查 |
 | [docs/zh/development/multi-version-kmod.md](docs/zh/development/multi-version-kmod.md) | 多版本内核模块编译指南 |
 | [docs/zh/migration-risk-engine-v2.md](docs/zh/migration-risk-engine-v2.md) | 多维风险引擎迁移指南 |
+| [docs/zh/configuration/threat-feeds.md](docs/zh/configuration/threat-feeds.md) | 威胁情报源配置指南 |
+| [docs/zh/migration-threat-feeds.md](docs/zh/migration-threat-feeds.md) | 威胁情报源迁移指南 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南 |
 | [SECURITY.md](SECURITY.md) | 安全策略 |
 | [STANDARDS.md](STANDARDS.md) | 定级规范 |

@@ -1,10 +1,10 @@
 # Firewall
 
-智能内核防火墙：多维风险引擎 + 自动化封禁 + 实时监控面板。
+智能内核防火墙：多维风险引擎 + 威胁情报聚合 + 自动化封禁 + 实时监控面板。
 
 [![CI](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml/badge.svg)](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v2.3.0-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
+[![Release](https://img.shields.io/badge/release-v2.4.0-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
 [![Platform](https://img.shields.io/badge/Platform-Linux%205.x%20%7C%206.x%20%7C%207.x-orange.svg)](#内核兼容性)
 
 ## 这是什么
@@ -85,6 +85,17 @@ http://<host>:9119/dashboard
 | 自动分类 | 基于风险向量自动判定攻击类型 |
 | 历史库分析 | SQLite 存储攻击事件，支持趋势分析和预测 |
 
+### 威胁情报源（v2.4）
+
+| 能力 | 说明 |
+|------|------|
+| 自动聚合 | 每日自动拉取公网威胁情报（IPsum、FireHOL、DShield 等） |
+| 并发刷新 | 多源并行拉取，总耗时取最慢源 |
+| 错误隔离 | 单个源失败不影响其他源 |
+| 热重载 | SIGHUP 触发配置重载时同步刷新情报 |
+| SSRF 防护 | HTTPS 强制 + 域名白名单 + 重定向限制 |
+| 智能判定 | 高置信度 IP 直接封禁，跳过窗口计数 |
+
 ### 封禁与防护
 
 | 能力 | 说明 |
@@ -134,6 +145,8 @@ http://<host>:9119/dashboard
 | [docs/zh/getting-started/](docs/zh/getting-started/README.md) | 安装、快速上手 |
 | [docs/zh/operations/](docs/zh/operations/README.md) | 运维管理、监控、故障排查 |
 | [docs/zh/migration-risk-engine-v2.md](docs/zh/migration-risk-engine-v2.md) | 多维风险引擎迁移指南 |
+| [docs/zh/configuration/threat-feeds.md](docs/zh/configuration/threat-feeds.md) | 威胁情报源配置指南 |
+| [docs/zh/migration-threat-feeds.md](docs/zh/migration-threat-feeds.md) | 威胁情报源迁移指南 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南、代码规范 |
 | [SECURITY.md](SECURITY.md) | 安全策略、信任边界 |
 | [STANDARDS.md](STANDARDS.md) | 问题定级规范 |

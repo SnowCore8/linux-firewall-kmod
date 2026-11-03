@@ -62,7 +62,7 @@ risk_engine:
 
 ### 旧路由（v1 API，已废弃）
 
-- `GET /api/v1/stats/reputation`：仍可用，但建议迁移到 v2 API
+- `GET /api/v1/stats/reputation`：已随 v1 API 整体删除，改用 `GET /api/v2/stats/reputation`
 
 ## 代码变更
 

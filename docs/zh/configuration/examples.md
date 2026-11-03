@@ -238,4 +238,4 @@ sudo systemctl reload firewall-daemon
 sudo cat /proc/firewall/config
 ```
 
-界面上也能看 jail 列表与生效阈值，路径是 `/api/v1/jails`。
+界面上也能看 jail 列表与生效阈值，路径是 `/api/v2/jails`。

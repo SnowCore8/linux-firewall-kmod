@@ -50,7 +50,7 @@
 
 - 日志器的全局 `sync.Mutex`（`src/daemon/internal/logger/file.go`）
   争用，解析吞吐掉一半。
-- `/api/v1/stats` 的 `failed_attempts_trend` 是全零序列。
+- `/api/v2/stats` 的 `failed_attempts_trend` 是全零序列。
   读图的人会当趋势看。契约里已记为缺口
   （`contract/http.fwidl` 的 `HTTP_FAILURE_HISTORY_NOT_PERSISTED`）。
 - SSE 载荷与同域 REST 端点不同形。同一个数字有两个来源。

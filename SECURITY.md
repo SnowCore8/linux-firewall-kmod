@@ -67,7 +67,7 @@ procfs 不提供受保护端口的写入口，集合只由守护进程经 netlin
 | 未配置判定 | 两项都为空 | 只填一项判失败，避免配置笔误把整个 API 开放 |
 | 失败锁定 | `failure_threshold = 10`、`lockout_seconds = 60` | 锁定期内正确凭据也拒 |
 | 查询参数 | `token_query = "access_token"` | SSE 与免登录直达用 |
-| 未授权状态 | `unauthorized_status = 401` | `/api/v1/**` 的 401 不带 `WWW-Authenticate` |
+| 未授权状态 | `unauthorized_status = 401` | `/api/v2/**` 的 401 不带 `WWW-Authenticate` |
 
 要点：
 
@@ -78,8 +78,8 @@ procfs 不提供受保护端口的写入口，集合只由守护进程经 netlin
   未找到 TLS 配置。要 HTTPS 自己放反向代理。
 - 面板的 SPA 外壳是公开路由，顶层文档不返回 401。
   这是登录表单做成应用内页面的原因，不是绕过认证的口子：
-  拿到 HTML 不等于拿到数据，`/api/v1/**`、`/metrics`、SSE 都要认证。
-- SSE 有连接上限：`/api/v1/events` 10 条、`/api/v1/logs/stream` 5 条，
+  拿到 HTML 不等于拿到数据，`/api/v2/**`、`/metrics`、SSE 都要认证。
+- SSE 有连接上限：`/api/v2/events` 10 条、`/api/v2/logs/stream` 5 条，
   两条各自独立，超限返回 503。出处：`contract/http.fwidl`。
   除此之外没有对 API 做限速（未在本仓库找到实现）。
 
@@ -141,7 +141,7 @@ procfs 不提供受保护端口的写入口，集合只由守护进程经 netlin
 写在这里，不在别处含糊：
 
 - 失败次数与 DDoS 命中只有本进程累计值，没有按天历史。
-  所以 `/api/v1/stats` 的 `failed_attempts_trend` 是空标签 + 全零序列，
+  所以 `/api/v2/stats` 的 `failed_attempts_trend` 是空标签 + 全零序列，
   热力图的 `failed_attempts` 与 `ddos_events` 两列恒为 0。
   出处：`contract/http.fwidl` 的
   `HTTP_FAILURE_HISTORY_NOT_PERSISTED`。

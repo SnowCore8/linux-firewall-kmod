@@ -159,10 +159,10 @@ make frontend && make daemon
 grep -n "metrics_username\|metrics_password" /etc/firewall/*.yaml
 
 # 2) 命令行验证凭据本身对不对（绕过前端）
-curl -i -u <user>:<pass> http://127.0.0.1:9119/api/v1/stats
+curl -i -u <user>:<pass> http://127.0.0.1:9119/api/v2/stats
 
 # 3) 不带凭据时的响应里确实没有 WWW-Authenticate
-curl -i http://127.0.0.1:9119/api/v1/stats | grep -i www-authenticate   # 应无输出
+curl -i http://127.0.0.1:9119/api/v2/stats | grep -i www-authenticate   # 应无输出
 
 # 4) 是否已被锁定：连续失败达阈值后锁定一段时间
 journalctl -u firewall-daemon -n 50 | grep -i 认证
@@ -245,7 +245,7 @@ sudo dmesg | grep firewall | tail -30        # 写侧失败原因只在这里
 journalctl -u firewall-daemon | grep -i "jail\|inotify"
 
 # 2) 有没有解析到行
-curl -s -u <user>:<pass> http://127.0.0.1:9119/api/v1/stats | jq '.data'
+curl -s -u <user>:<pass> http://127.0.0.1:9119/api/v2/stats | jq '.data'
 curl -s -u <user>:<pass> http://127.0.0.1:9119/metrics | grep firewall_lines_parsed_total
 
 # 3) 正则能不能匹配这一行（先离线验）

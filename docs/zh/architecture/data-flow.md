@@ -273,7 +273,7 @@ procfs 与 netlink 复用同一条路径（`fw_wl.c` 调 `fw_ban_del_matching()`
 
 | 组件 | 通信方式 | 数据 |
 |------|----------|------|
-| 守护进程 → HTTP 客户端 | HTTP（`internal/http`） | `/metrics`、`/api/v1/*`、`/api/v1/events`（SSE）、`/health`、`/healthz` |
+| 守护进程 → HTTP 客户端 | HTTP（`internal/http`） | `/metrics`、`/api/v2/*`、`/api/v2/events`（SSE）、`/health`、`/healthz` |
 | 守护进程 → 内核 | netlink | 每 5 秒采样（`SampleInterval`），每 30 秒对账（`ReconcileInterval`），每 10 秒续约（`RegisterInterval`） |
 | 守护进程 → 磁盘 | 文件 I/O | JSON Lines 运行日志、SQLite 历史库 |
 

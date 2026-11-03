@@ -214,7 +214,7 @@ sudo rmmod firewall && sudo insmod build/kernel-module/firewall.ko
 
 ### 临时封禁批量解除
 
-HTTP API 有这条路由（`POST /api/v1/bans/unban-temporary`），
+HTTP API 有这条路由（`POST /api/v2/bans/unban-temporary`），
 procfs 没有对应命令。见 [用户态守护进程](../architecture/daemon.md)。
 
 ## 白名单管理
@@ -343,7 +343,7 @@ sudo dmesg --level=err,warn | grep firewall
 | 热重载 | `sudo systemctl reload firewall-daemon`（等价 `kill -HUP`） |
 | 回滚上一个配置版本 | `sudo firewall-daemon --rollback`（需进程在跑） |
 | 查看运行时生效的内核配置 | `sudo cat /proc/firewall/config` |
-| 查看当前 jail 与启用状态 | `curl -u <user>:<pass> http://127.0.0.1:9119/api/v1/jails` |
+| 查看当前 jail 与启用状态 | `curl -u <user>:<pass> http://127.0.0.1:9119/api/v2/jails` |
 
 字段说明与示例见 [配置指南 - YAML 配置](../configuration/yaml-config.md)。
 

@@ -69,7 +69,7 @@ SSE 不能设请求头，凭据走 `?access_token=<令牌>`。
 完整路由清单看生成物 `contract/generated/http_contract.ts` 的 `ROUTES` 常量。
 前端调 HTTP 路径只走这个常量，不手写字符串字面量。
 `contract/verify_http.py` 会扫 `frontend/src` 全部 `.ts`/`.tsx`（`endpoints.ts`、`api/contract.ts` 除外），
-出现 `'/api/v1…'` 这类字面量就报错。
+出现 `'/api/v2…'` 这类字面量就报错。
 
 ## netlink 契约
 

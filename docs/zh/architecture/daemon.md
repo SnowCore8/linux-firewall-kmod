@@ -237,7 +237,7 @@
 |----|------|------|
 | SPA 外壳与静态资源 | 无 | 一组**固定的**页面路径 + `/static/*path` + `/sw.js`；注册见 `internal/http/static.go`，清单以 `contract/http.fwidl` 为准 |
 | 探针 | 无 | `/health`、`/healthz`：有意不套信封，由就绪判定决定 200/503 |
-| 业务面 | Basic Auth | `/metrics` 与 `/api/v1/*`；完整清单以 `contract/http.fwidl` 为准，`verify_http.py` 逐项核对 |
+| 业务面 | Basic Auth | `/metrics` 与 `/api/v2/*`；完整清单以 `contract/http.fwidl` 为准，`verify_http.py` 逐项核对 |
 
 新增页面路径必须同时加进安全头中间件的面板路径判定
 （`internal/http/headers.go` 的 `isWebUIPath`），
@@ -262,8 +262,8 @@
 | 端点 | 数据来源 |
 |------|---------|
 | `/health`、`/healthz` | `telemetry.Store` 快照：netlink 就绪、`/proc/firewall` 存在、封禁缓存与历史是否初始化、当前封禁数 |
-| `/api/v1/stats` | 同一份快照 + `StartedAt` 起算的运行时长 + `telemetry.Ring` 的速率样本 + `KernelVersion` |
-| `/api/v1/stats/sse-status` | 两条流各自的连接数与上限 |
+| `/api/v2/stats` | 同一份快照 + `StartedAt` 起算的运行时长 + `telemetry.Ring` 的速率样本 + `KernelVersion` |
+| `/api/v2/stats/sse-status` | 两条流各自的连接数与上限 |
 
 ## 配置与热重载
 
@@ -360,4 +360,4 @@ stop 通道，关停时最后刷一次盘。
 
 封禁、白名单、速率等内核统计由 `/proc/firewall/stats` 的键值文本给出，
 由事件泵按 `SampleInterval` 采样汇入 `telemetry.Store`，
-再经 `/api/v1/stats` 与 `/health` 透出。仓库不提供 procfs → metrics 的适配。
+再经 `/api/v2/stats` 与 `/health` 透出。仓库不提供 procfs → metrics 的适配。

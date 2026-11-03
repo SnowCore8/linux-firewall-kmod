@@ -18,12 +18,12 @@
       ↓ kernel.EventPump 每 5 秒 STATS_QUERY / ANALYSIS_QUERY
 telemetry.Store（内存快照，唯一写入者是事件泵）
       ↓
-/api/v1/stats 与 /health          ← 面板与外部探针读这里
+/api/v2/stats 与 /health          ← 面板与外部探针读这里
 ```
 
 **内核读数不走 Prometheus。** 封禁、白名单、速率等内核统计由
 `/proc/firewall/stats` 的键值文本给出，经事件泵汇入内存快照，
-再由 `/api/v1/stats` 与 `/health` 透出。
+再由 `/api/v2/stats` 与 `/health` 透出。
 出处：`src/daemon/internal/kernel/consumer.go`、`internal/telemetry/store.go`、
 `internal/http/stats.go`、`internal/http/health.go`。
 
@@ -159,9 +159,9 @@ sudo cat /proc/firewall/stats | awk '$1=="current_bans"{print $2}'
 | 端点 | 认证 | 内容 |
 |------|------|------|
 | `GET /health`、`GET /healthz` | 无 | 就绪判定：200 / 503，**有意不套信封** |
-| `GET /api/v1/stats` | Basic | 内核快照 + 运行时长 + 速率样本 + 内核模块版本 |
-| `GET /api/v1/stats/sse-status` | Basic | 两条 SSE 流各自的连接数与上限 |
-| `GET /api/v1/rates*`、协议分布类端点 | Basic | 同一份内核快照的投影 |
+| `GET /api/v2/stats` | Basic | 内核快照 + 运行时长 + 速率样本 + 内核模块版本 |
+| `GET /api/v2/stats/sse-status` | Basic | 两条 SSE 流各自的连接数与上限 |
+| `GET /api/v2/rates*`、协议分布类端点 | Basic | 同一份内核快照的投影 |
 | `GET /metrics` | Basic | Prometheus 文本 |
 
 `/health` 与 `/healthz` 的出处：`contract/http.fwidl`，
@@ -169,7 +169,7 @@ sudo cat /proc/firewall/stats | awk '$1=="current_bans"{print $2}'
 
 ```bash
 curl -s http://127.0.0.1:9119/health
-curl -s -u <user>:<pass> http://127.0.0.1:9119/api/v1/stats
+curl -s -u <user>:<pass> http://127.0.0.1:9119/api/v2/stats
 ```
 
 ### `/health` 报什么
