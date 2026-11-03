@@ -16,7 +16,7 @@
  * 升级方式：改动本文件后把 CACHE_VERSION 加一，activate 阶段会自动清掉旧缓存。
  */
 
-const CACHE_VERSION = 'v2'
+const CACHE_VERSION = 'v3'
 
 // 应用外壳缓存（index.html）
 const SHELL_CACHE = `firewall-shell-${CACHE_VERSION}`
