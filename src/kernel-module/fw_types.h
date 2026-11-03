@@ -236,7 +236,7 @@ struct fw_ban_node {
   u8 af;
   u8 prefix_len; /* 32/128 = 精确单机；更短 = 网段封禁（条目身份的一部分） */
   u8 is_permanent;
-  u32 duration_secs; /* 本次封禁时长（秒），永久为 0；续期时更新 */
+  u32 duration_secs;           /* 本次封禁时长（秒），永久为 0；续期时更新 */
   unsigned long banned_at;     /* jiffies */
   unsigned long unban_jiffies; /* 到期 jiffies；永久条目无意义 */
   union fw_addr addr;
@@ -625,7 +625,7 @@ struct fw_info {
   struct fw_rate_pcpu_chunk __percpu *rate_pcpu[FW_RATE_CPU_CHUNKS];
   struct fw_rate_clear_ctx rate_clear_ctx;
   struct delayed_work rate_reclaim_work; /* 静默条目的周期回收（fw_rate.c） */
-  atomic64_t rate_reclaimed; /* 累计回收条目数（rates 表头） */
+  atomic64_t rate_reclaimed;             /* 累计回收条目数（rates 表头） */
 
   /* 速率配置（运行态，由 SET_CONFIG / procfs 修改） */
   unsigned int rate_window_seconds;
