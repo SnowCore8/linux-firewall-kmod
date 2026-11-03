@@ -154,7 +154,11 @@ make test
 
 ### 前端
 
-- 依赖：React 19 + antd-mobile 5 + react-router-dom 7
+- 依赖：React 19 + Ant Design 6（`antd`）+ ECharts 6（`echarts-for-react`）+ react-router-dom 7（hash 路由）
+- 桌面优先、响应式：侧边栏 + 顶栏布局，全新重写（不沿用旧移动页面范式）
+- `tslib` 是显式依赖：补 `echarts-for-react` 用 `importHelpers` 却漏声明 `tslib` 的打包缺口，别删
+- 信息架构单一真相源：`src/app/nav.ts` 的 `NAV_GROUPS`（驱动侧边栏 / 命令面板 / 面包屑）
+- `views/` 必须平铺为 `views/<Name>.tsx`：`contract/verify_http.py` 按此路径核对 `views/Logs.tsx` 的日志流事件名字面量
 - 构建：`npm ci` → `npm run build` → 产物写入 `src/daemon/web_ui/static/`
 - 嵌入：`assets.go` 用 `//go:embed *` 带进二进制
 - **不要删 `assets.go`**，它是 embed 持有文件

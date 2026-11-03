@@ -121,7 +121,7 @@ http://<host>:9119/dashboard
 
 | 能力 | 说明 |
 |------|------|
-| Web 面板 | React 19 + antd-mobile 5，嵌入二进制 |
+| Web 面板 | React 19 + Ant Design 6 + ECharts，桌面优先响应式，嵌入二进制 |
 | HTTP API | RESTful API，支持认证和速率限制 |
 | SSE 事件流 | 实时推送封禁事件和统计更新 |
 | Prometheus 指标 | `/metrics` 端点，支持 Grafana 集成 |

@@ -291,7 +291,7 @@ cd src/daemon && GOOS=linux GOARCH=arm64 \
 |------|------|
 | `build/kernel-module/firewall.ko` | 内核模块 |
 | `build/daemon/firewall-daemon` | 守护进程二进制（stripped，内嵌面板） |
-| `src/daemon/web_ui/static/` | 面板产物：`index.html`、`app.js`、`style.css`、`sw.js`、`manifest.webmanifest`、`icons/`、`earth-night.webp`，另有已入库的 `assets.go` |
+| `src/daemon/web_ui/static/` | 面板产物：`index.html`、`app.js`、`chunk-*.js`、`style.css`、`sw.js`、`manifest.webmanifest`、`icons/`，另有已入库的 `assets.go` |
 | `src/kernel-module/Makefile` | Kbuild 描述（12 个 `.o`） |
 
 `build/` 与 `target/` 都不入库。
