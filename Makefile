@@ -39,6 +39,13 @@ PFX_FRONTEND   := frontend
 GOC            ?= go
 GOVER          ?= 1.23
 
+# ccache 支持（内核模块 C 编译缓存，加速重复构建）
+# 设为空字符串可禁用：make kernel-module CCACHE=
+CCACHE         ?= ccache
+
+# HTTP 契约的 Go 生成物住在 daemon module 内，不在 contract/generated
+HTTP_CONTRACT_GO := src/daemon/internal/httpcontract/http_contract.go
+
 # 构建输出目录
 BUILD_DIR      := build
 KERNEL_BUILD_DIR := $(BUILD_DIR)/kernel-module
@@ -96,8 +103,9 @@ $(KERNEL_MODULE): $(wildcard $(KERNEL_SRC_DIR)/*.c) $(wildcard $(KERNEL_SRC_DIR)
 		exit 1; \
 	fi
 	@mkdir -p $(KERNEL_BUILD_DIR)
-	@echo "  CC      kernel-module"
+	@echo "  CC      kernel-module$(if $(filter ccache,$(CCACHE)), (ccache)")
 	+$(MAKE) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) \
+		CC="$(CCACHE) gcc" \
 		modules
 	@cp $(KERNEL_SRC_DIR)/firewall.ko $(KERNEL_BUILD_DIR)/firewall.ko
 	@# 清理源码目录中的中间文件
@@ -205,15 +213,24 @@ PYTHON ?= python3
 CONTRACT_CHECKS := verify_layout verify_procfs verify_http
 
 .PHONY: contract-drift contract-check
-# 生成物必须等于生成器当前输出：手改 contract/generated/ 或改了 .fwidl 却忘了
-# 重跑，下游（内核 BUILD_BUG_ON 对账、daemon 编解码、前端 d.ts）会按旧布局走。
+# 生成物必须等于生成器当前输出：手改生成物或改了 .fwidl 却忘了重跑，下游
+# （内核 BUILD_BUG_ON 对账、daemon 编解码、前端 d.ts）会按旧布局走。
+#
+# HTTP 的 Go 生成物住在 daemon module 内。生成器默认直接写回那里；若这里也让它
+# 写回，手改会被静默覆盖、漂移永远检不出来。所以检查时用 --no-in-module 把所有
+# 产物收进临时目录，再分别比对目录与那个 Go 文件。
 contract-drift:
 	@mkdir -p tmp
 	@rm -rf tmp/fw_gencheck; \
-	$(PYTHON) contract/gen.py --out-dir tmp/fw_gencheck >/dev/null || exit 1; \
-	if ! diff -r -q tmp/fw_gencheck contract/generated >/dev/null 2>&1; then \
+	$(PYTHON) contract/gen.py --out-dir tmp/fw_gencheck --no-in-module >/dev/null || exit 1; \
+	if ! diff -r -q --exclude=http_contract.go tmp/fw_gencheck contract/generated >/dev/null 2>&1; then \
 		echo "ERROR: contract/generated 与生成器输出不一致，请运行 python3 contract/gen.py"; \
-		diff -r -q tmp/fw_gencheck contract/generated | head -20; \
+		diff -r -q --exclude=http_contract.go tmp/fw_gencheck contract/generated | head -20; \
+		rm -rf tmp/fw_gencheck; exit 1; \
+	fi; \
+	if ! diff -q tmp/fw_gencheck/http_contract.go $(HTTP_CONTRACT_GO) >/dev/null 2>&1; then \
+		echo "ERROR: $(HTTP_CONTRACT_GO) 与生成器输出不一致，请运行 python3 contract/gen.py"; \
+		diff -u tmp/fw_gencheck/http_contract.go $(HTTP_CONTRACT_GO) | head -40; \
 		rm -rf tmp/fw_gencheck; exit 1; \
 	fi; \
 	rm -rf tmp/fw_gencheck; \
@@ -281,8 +298,8 @@ _guard_local_install:
 		exit 1; \
 	fi
 
-.PHONY: install install-kernel-module install-daemon install-config install-state install-systemd install-start install-verify
-install: build install-kernel-module install-daemon install-config install-state install-systemd install-start install-verify
+.PHONY: install install-kernel-module install-daemon install-config install-credentials install-state install-systemd install-start install-verify
+install: build install-kernel-module install-daemon install-config install-credentials install-state install-systemd install-start install-verify
 	@echo ""
 	@echo "=========================================="
 	@echo "Firewall Installation Complete"
@@ -341,6 +358,26 @@ install-config:
 		chown root:root $(DESTDIR)$(FIREWALLETC) $(DESTDIR)$(FIREWALLETC)/*.yaml; \
 	fi
 	@echo "  ✓ Configuration files installed ($(FIREWALLETC)/)"
+
+# 凭据文件只准备空模板，不生成值：安装不应替运维决定面板口令。填好两项后
+# systemd 的 EnvironmentFile 会覆盖 YAML 里的 defaults.metrics_*。
+install-credentials:
+	@echo "Preparing credentials environment file..."
+	@install -d -m 700 $(DESTDIR)$(FIREWALLETC)
+	@if [ ! -e "$(DESTDIR)$(FIREWALLETC)/credentials.env" ]; then \
+		{ \
+			echo '# 面板认证凭据（systemd EnvironmentFile 读取，本文件应为 0600）。'; \
+			echo '# 取消注释并填值即覆盖 YAML 的 defaults.metrics_username / metrics_password；'; \
+			echo '# 两项都留空等于未配置认证。不要提交本文件。'; \
+			echo '#FIREWALL_METRICS_USERNAME='; \
+			echo '#FIREWALL_METRICS_PASSWORD='; \
+		} > "$(DESTDIR)$(FIREWALLETC)/credentials.env"; \
+		chmod 600 "$(DESTDIR)$(FIREWALLETC)/credentials.env"; \
+	fi
+	@if [ -z "$(DESTDIR)" ]; then \
+		chown root:root $(DESTDIR)$(FIREWALLETC)/credentials.env; \
+	fi
+	@echo "  ✓ Credentials file ready ($(FIREWALLETC)/credentials.env)"
 
 install-state:
 	@echo "Creating state directory..."
