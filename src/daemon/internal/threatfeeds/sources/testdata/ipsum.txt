@@ -1,0 +1,10 @@
+# IPsum - aggregated feed of malicious IPs
+# https://github.com/stamparm/ipsum
+# Last updated: 2026-11-03
+185.220.101.1
+185.220.101.2
+45.155.205.100
+194.26.29.102
+# Known scanners
+91.240.118.50
+193.42.33.10

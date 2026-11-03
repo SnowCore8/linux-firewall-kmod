@@ -20,6 +20,7 @@ type yamlConfig struct {
 	Webui               *yamlWebui          `yaml:"webui"`
 	TrustedIPs          []string            `yaml:"trusted_ips"`
 	Capacity            *yamlCapacity       `yaml:"capacity"`
+	ThreatFeeds         *yamlThreatFeeds    `yaml:"threat_feeds"`
 	GeoipDBPath         *string             `yaml:"geoip_db_path"`
 	ServerLatitude      yaml.Node           `yaml:"server_latitude"`
 	ServerLongitude     yaml.Node           `yaml:"server_longitude"`
@@ -133,6 +134,24 @@ type yamlCapacity struct {
 	MaxLocalIPCache     *uint32 `yaml:"max_local_ip_cache"`
 }
 
+// yamlThreatFeeds 是威胁情报源配置的 YAML 表示。
+type yamlThreatFeeds struct {
+	Enabled         *bool                  `yaml:"enabled"`
+	RefreshInterval *uint32                `yaml:"refresh_interval"`
+	HTTPTimeout     *uint32                `yaml:"http_timeout"`
+	MaxRetries      *int                   `yaml:"max_retries"`
+	Sources         []yamlThreatFeedSource `yaml:"sources"`
+}
+
+// yamlThreatFeedSource 是单个情报源的 YAML 表示。
+type yamlThreatFeedSource struct {
+	Name       string   `yaml:"name"`
+	URL        string   `yaml:"url"`
+	Enabled    *bool    `yaml:"enabled"`
+	Category   string   `yaml:"category"`
+	Confidence *float64 `yaml:"confidence"`
+}
+
 // ParseConfig 把 YAML 内容解析进 cfg。
 //
 // 失败时不修改 cfg（原子性）：所有字段在局部结构上校验通过后，才一次性写入。
@@ -175,11 +194,13 @@ func parseConfigFrom(content string, cfg *Config, runtimeOverride, strict bool) 
 	}
 	// 6. capacity
 	applyCapacity(&yc, cfg)
-	// 7~9. geoip / 本机坐标 / 探测地址
+	// 7. threat_feeds
+	applyThreatFeeds(&yc, cfg)
+	// 8~10. geoip / 本机坐标 / 探测地址
 	if err := applyGeoip(&yc, cfg); err != nil {
 		return err
 	}
-	// 10. 认证凭据的环境变量覆盖（见 credentials_env.go）：放在 YAML 全部应用之后，
+	// 11. 认证凭据的环境变量覆盖（见 credentials_env.go）：放在 YAML 全部应用之后，
 	// 于是优先级是「环境变量 > YAML > Default()」，且失败路径仍然不碰 cfg。
 	applyEnvCredentials(cfg)
 	return nil
@@ -535,6 +556,38 @@ func applyCapacity(yc *yamlConfig, cfg *Config) {
 	setU32(&cfg.Capacity.MaxWhitelistEntries, c.MaxWhitelistEntries)
 	setU32(&cfg.Capacity.MaxRateEntries, c.MaxRateEntries)
 	setU32(&cfg.Capacity.MaxLocalIPCache, c.MaxLocalIPCache)
+}
+
+// applyThreatFeeds 应用威胁情报源配置。
+func applyThreatFeeds(yc *yamlConfig, cfg *Config) {
+	tf := yc.ThreatFeeds
+	if tf == nil {
+		return
+	}
+	setBool(&cfg.ThreatFeeds.Enabled, tf.Enabled)
+	setU32(&cfg.ThreatFeeds.RefreshInterval, tf.RefreshInterval)
+	setU32(&cfg.ThreatFeeds.HTTPTimeout, tf.HTTPTimeout)
+	if tf.MaxRetries != nil {
+		cfg.ThreatFeeds.MaxRetries = *tf.MaxRetries
+	}
+	// 情报源列表：YAML 给出完整列表时替换默认值
+	if len(tf.Sources) > 0 {
+		cfg.ThreatFeeds.Sources = make([]ThreatFeedSourceConfig, 0, len(tf.Sources))
+		for _, src := range tf.Sources {
+			sc := ThreatFeedSourceConfig{
+				Name:     src.Name,
+				URL:      src.URL,
+				Category: src.Category,
+			}
+			if src.Enabled != nil {
+				sc.Enabled = *src.Enabled
+			}
+			if src.Confidence != nil {
+				sc.Confidence = *src.Confidence
+			}
+			cfg.ThreatFeeds.Sources = append(cfg.ThreatFeeds.Sources, sc)
+		}
+	}
 }
 
 // applyGeoip 应用 geoip 段与本机坐标 / 探测地址。

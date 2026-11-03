@@ -1,0 +1,6 @@
+# DShield block list
+# https://www.dshield.org/block.txt
+# Last updated: 2026-11-03
+185.220.101.1	185.220.101.255	50	example-attacker
+45.155.205.100	45.155.205.100	30	scanner-1
+194.26.29.102	194.26.29.102	25	brute-force

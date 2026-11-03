@@ -120,6 +120,53 @@ capacity:
 # geoip_db_path: /var/lib/firewall/geoip/city.mmdb
 
 # ============================================================
+# 威胁情报源（可选，默认启用 IPsum + FireHOL Level 1）
+# ============================================================
+# 自动拉取公网威胁情报，每日更新，SIGHUP 热重载。
+# 情报用于增强判定：高置信度 IP 直接封禁，跳过窗口计数。
+#
+# enabled: 总开关，false 时整个情报系统不启动
+# refresh_interval: 自动刷新间隔（秒），默认 86400（24 小时）
+# http_timeout: 单次拉取的 HTTP 超时（秒），默认 30
+# max_retries: 拉取失败后的重试次数，默认 3
+threat_feeds:
+  enabled: true
+  refresh_interval: 86400
+  http_timeout: 30
+  max_retries: 3
+  sources:
+    # IPsum：多源聚合，质量高，每日更新
+    - name: ipsum
+      url: https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt
+      enabled: true
+      category: abuse
+      confidence: 0.8
+    # FireHOL Level 1：保守名单，误报低，每日更新
+    - name: firehol_level1
+      url: https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset
+      enabled: true
+      category: abuse
+      confidence: 0.85
+    # DShield：老牌名单，稳定性好，每日更新（默认关闭）
+    - name: dshield
+      url: https://www.dshield.org/block.txt
+      enabled: false
+      category: scanner
+      confidence: 0.7
+    # Blocklist.de：按攻击类型分类，每小时更新（默认关闭）
+    - name: blocklist_de
+      url: https://lists.blocklist.de/lists/all.txt
+      enabled: false
+      category: abuse
+      confidence: 0.75
+    # Feodo Tracker：专注 botnet C2，每日更新（默认关闭）
+    - name: feodo
+      url: https://feodotracker.abuse.ch/downloads/ipblocklist.csv
+      enabled: false
+      category: botnet
+      confidence: 0.9
+
+# ============================================================
 # 本机（服务器）经纬度（可选）
 # ============================================================
 # 攻击地图用它标出「本机」位置，并从每个攻击源画一条弧线连到本机。

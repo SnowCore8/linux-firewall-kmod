@@ -248,6 +248,85 @@ func DefaultRiskEngineConfig() RiskEngineConfig {
 	}
 }
 
+// ThreatFeedsConfig 是威胁情报源配置。
+//
+// 控制情报系统的启用状态、刷新间隔、HTTP 超时等全局参数，以及每个情报源的独立配置。
+type ThreatFeedsConfig struct {
+	// Enabled 是总开关，false 时整个情报系统不启动。
+	Enabled bool
+	// RefreshInterval 是自动刷新间隔（秒），默认 86400（24 小时）。
+	RefreshInterval uint32
+	// HTTPTimeout 是单次拉取的 HTTP 超时（秒），默认 30。
+	HTTPTimeout uint32
+	// MaxRetries 是拉取失败后的重试次数，默认 3。
+	MaxRetries int
+	// Sources 是配置的情报源列表。
+	Sources []ThreatFeedSourceConfig
+}
+
+// ThreatFeedSourceConfig 是单个情报源的配置。
+type ThreatFeedSourceConfig struct {
+	// Name 是源的唯一标识（如 "ipsum", "firehol"）。
+	Name string
+	// URL 是拉取地址。
+	URL string
+	// Enabled 控制该源是否启用。
+	Enabled bool
+	// Category 是默认分类（可被解析器覆盖）。
+	Category string
+	// Confidence 是默认置信度（可被解析器覆盖）。
+	Confidence float64
+}
+
+// DefaultThreatFeedsConfig 返回威胁情报源默认配置。
+//
+// 默认启用 IPsum 和 FireHOL Level 1（质量高、误报低）。
+func DefaultThreatFeedsConfig() ThreatFeedsConfig {
+	return ThreatFeedsConfig{
+		Enabled:         true,
+		RefreshInterval: 86400, // 24 小时
+		HTTPTimeout:     30,
+		MaxRetries:      3,
+		Sources: []ThreatFeedSourceConfig{
+			{
+				Name:       "ipsum",
+				URL:        "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt",
+				Enabled:    true,
+				Category:   "abuse",
+				Confidence: 0.8,
+			},
+			{
+				Name:       "firehol_level1",
+				URL:        "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset",
+				Enabled:    true,
+				Category:   "abuse",
+				Confidence: 0.85,
+			},
+			{
+				Name:       "dshield",
+				URL:        "https://www.dshield.org/block.txt",
+				Enabled:    false,
+				Category:   "scanner",
+				Confidence: 0.7,
+			},
+			{
+				Name:       "blocklist_de",
+				URL:        "https://lists.blocklist.de/lists/all.txt",
+				Enabled:    false,
+				Category:   "abuse",
+				Confidence: 0.75,
+			},
+			{
+				Name:       "feodo",
+				URL:        "https://feodotracker.abuse.ch/downloads/ipblocklist.csv",
+				Enabled:    false,
+				Category:   "botnet",
+				Confidence: 0.9,
+			},
+		},
+	}
+}
+
 // 日志目的地与格式取值。
 const (
 	LogDestinationSyslog  uint8 = 0
@@ -302,6 +381,10 @@ type Config struct {
 	// Enabled 为 false 时退化为旧单维度模型（向后兼容）。
 	RiskEngine RiskEngineConfig
 
+	// ThreatFeeds 是威胁情报源配置。
+	// Enabled 为 false 时整个情报系统不启动。
+	ThreatFeeds ThreatFeedsConfig
+
 	GeoipDBPath         string
 	ServerLatitude      float64
 	ServerLongitude     float64
@@ -341,13 +424,14 @@ func Default() Config {
 		Webui:                DefaultWebuiConfig(),
 		Capacity:             DefaultCapacityConfig(),
 		RiskEngine:           DefaultRiskEngineConfig(),
+		ThreatFeeds:          DefaultThreatFeedsConfig(),
 		MaxSSEConnections:    32,
 		HistoryDBPath:        "",
 		HistoryRetentionDays: 7,
 	}
 }
 
-// ListenAddress 是 HTTP 面（面板、/api/v1、/metrics 共用同一端口）的监听地址，
+// ListenAddress 是 HTTP 面（面板、/api/v2、/metrics 共用同一端口）的监听地址，
 // 由 metrics_bind_address 与 metrics_port 现场合成。
 //
 // 这两个键此前没有消费者：监听地址取自一个写死 127.0.0.1:9119 的字段，改

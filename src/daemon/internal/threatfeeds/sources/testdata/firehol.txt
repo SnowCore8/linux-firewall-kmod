@@ -1,0 +1,8 @@
+# FireHOL Level 1 blacklist
+# https://github.com/firehol/blocklist-ipsets
+# Last modified: 2026-11-03
+185.220.101.0/24
+45.155.205.0/24
+194.26.29.0/24
+91.240.118.0/24
+193.42.33.0/24

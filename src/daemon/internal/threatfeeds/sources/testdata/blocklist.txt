@@ -1,0 +1,7 @@
+# Blocklist.de all attacks
+# https://lists.blocklist.de/lists/all.txt
+185.220.101.1
+45.155.205.100
+194.26.29.102
+91.240.118.50
+193.42.33.10
