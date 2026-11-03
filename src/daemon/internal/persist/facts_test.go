@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func newTestDB(t *testing.T) *DB {
@@ -106,6 +107,27 @@ func TestIPv4MappedSharesOneEntry(t *testing.T) {
 	}
 	if entries, _ := f.Stats(); entries != 1 {
 		t.Fatalf("缓存条目数 = %d，期望 1", entries)
+	}
+}
+
+// 关停时必须等最终刷盘真正完成后才能关库：组合根按 done 通道等待，而不是只看 stopCh。
+func TestFlusherDrainsBeforeDone(t *testing.T) {
+	db := newTestDB(t)
+	f := NewFacts(db, FactsOptions{FlushEvery: time.Hour})
+	ip := "203.0.113.13"
+	f.RecordFailure(addr(t, ip))
+
+	stop := make(chan struct{})
+	done := f.StartFlusher(stop)
+	close(stop)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stopCh 关闭后 flusher 未在超时内完成最终刷盘")
+	}
+	if got := dbScore(t, db, ip); got != 90 {
+		t.Fatalf("最终刷盘后库里分数 = %d，期望 90", got)
 	}
 }
 

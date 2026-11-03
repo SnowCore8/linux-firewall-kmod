@@ -238,7 +238,7 @@ func TestFileReloaderSeedsDefaults(t *testing.T) {
 		}, "\n"))
 
 		cfg := config.Default()
-		if err := NewFileReloader(path, slog.New(slog.NewTextHandler(io.Discard, nil))).Reload(&cfg); err != nil {
+		if err := NewFileReloader(path, true, slog.New(slog.NewTextHandler(io.Discard, nil))).Reload(&cfg); err != nil {
 			t.Fatalf("重载失败: %v", err)
 		}
 		def := config.Default().Ddos
@@ -271,7 +271,7 @@ func TestFileReloaderSeedsDefaults(t *testing.T) {
 		}, "\n"))
 
 		cfg := config.Default()
-		if err := NewFileReloader(path, slog.New(slog.NewTextHandler(io.Discard, nil))).Reload(&cfg); err != nil {
+		if err := NewFileReloader(path, true, slog.New(slog.NewTextHandler(io.Discard, nil))).Reload(&cfg); err != nil {
 			t.Fatalf("重载失败（修复前这里是 default_max_retries is 0）: %v", err)
 		}
 		if cfg.DefaultMaxRetries == 0 || cfg.DefaultBanTime == 0 {

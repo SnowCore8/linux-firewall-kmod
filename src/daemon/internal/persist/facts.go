@@ -290,8 +290,12 @@ func (f *Facts) writeN(ip string, delta uint32) error {
 
 // StartFlusher 起一个后台 goroutine，按 opts.FlushEvery 的节拍把脏账落盘，stopCh 关闭
 // 时做最后一次刷盘再退出（与 DB 自带的两个周期调度器同一关停口径，可复用同一条 stop 通道）。
-func (f *Facts) StartFlusher(stopCh <-chan struct{}) {
+// 返回的通道在最终刷盘结束后关闭；调用方必须先等它关闭再关数据库，否则最后一批
+// 信誉分可能写到已经关闭的连接上。
+func (f *Facts) StartFlusher(stopCh <-chan struct{}) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(f.flushGap)
 		defer ticker.Stop()
 		for {
@@ -311,6 +315,7 @@ func (f *Facts) StartFlusher(stopCh <-chan struct{}) {
 			}
 		}
 	}()
+	return done
 }
 
 // Stats 返回缓存条目数与待落盘条目数，供调试与测试观察。

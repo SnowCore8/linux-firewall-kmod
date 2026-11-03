@@ -38,7 +38,7 @@ func TestReloadAdoptsConfiguredListenAddress(t *testing.T) {
 
 	cfg := config.Default()
 	var logs bytes.Buffer
-	reloader := NewFileReloader(path, slog.New(slog.NewTextHandler(&logs, nil)))
+	reloader := NewFileReloader(path, true, slog.New(slog.NewTextHandler(&logs, nil)))
 	if err := reloader.Reload(&cfg); err != nil {
 		t.Fatalf("重载失败: %v", err)
 	}
@@ -78,13 +78,57 @@ func TestReloadInDirectoryModeUsesTheDirectory(t *testing.T) {
 
 	cfg := config.Default()
 	var logs bytes.Buffer
-	reloader := NewFileReloader(dir, slog.New(slog.NewTextHandler(&logs, nil)))
+	reloader := NewFileReloader(dir, true, slog.New(slog.NewTextHandler(&logs, nil)))
 	if err := reloader.Reload(&cfg); err != nil {
 		t.Fatalf("目录模式重载失败: %v（日志: %s）", err, logs.String())
 	}
 	if len(cfg.Jails) != 1 || cfg.Jails[0].MaxRetries != 5 {
 		t.Errorf("目录里的 jail 没被采纳: jails = %+v", cfg.Jails)
 	}
+}
+
+// TestReloadHonorsNonStrict 钉住启动与重载的同一口径：--no-strict 启动的进程，
+// SIGHUP 重载同一份带未知键的文件也必须成功；严格模式则拒绝且不改写当前配置。
+func TestReloadHonorsNonStrict(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "auth.log")
+	writeFile(t, logPath, "")
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, strings.Join([]string{
+		"defaults:",
+		"  max_retries: 4",
+		"  unknown_key: 1",
+		"jails:",
+		"  sshd:",
+		"    enabled: true",
+		"    log_files:",
+		"      - " + logPath,
+		"",
+	}, "\n"))
+
+	t.Run("宽松模式接受未知键", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.DefaultMaxRetries = 3
+		reloader := NewFileReloader(path, false, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+		if err := reloader.Reload(&cfg); err != nil {
+			t.Fatalf("--no-strict 下重载失败: %v", err)
+		}
+		if cfg.DefaultMaxRetries != 4 {
+			t.Fatalf("重载后的 max_retries = %d，期望 4", cfg.DefaultMaxRetries)
+		}
+	})
+
+	t.Run("严格模式拒绝且不改写", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.DefaultMaxRetries = 7
+		reloader := NewFileReloader(path, true, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+		if err := reloader.Reload(&cfg); err == nil {
+			t.Fatal("严格模式应拒绝未知键")
+		}
+		if cfg.DefaultMaxRetries != 7 {
+			t.Fatalf("失败的重载改写了 cfg: max_retries = %d", cfg.DefaultMaxRetries)
+		}
+	})
 }
 
 // TestRollbackInDirectoryModeReadsTheBackupNextToTheSource：备份文件住在配置来源旁边。
@@ -116,7 +160,7 @@ func TestRollbackInDirectoryModeReadsTheBackupNextToTheSource(t *testing.T) {
 	}, jails...), "\n"))
 
 	cfg := config.Default()
-	reloader := NewFileReloader(dir, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	reloader := NewFileReloader(dir, true, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 	if err := reloader.Rollback(&cfg); err != nil {
 		t.Fatalf("目录模式回滚失败: %v", err)
 	}

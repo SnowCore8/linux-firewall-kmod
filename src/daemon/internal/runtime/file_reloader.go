@@ -11,11 +11,14 @@ import (
 
 type fileReloader struct {
 	path   string
+	strict bool
 	logger *slog.Logger
 }
 
-func NewFileReloader(path string, logger *slog.Logger) ConfigReloader {
-	return &fileReloader{path: path, logger: logger}
+// NewFileReloader 构造配置重载器。strict 必须与启动时 `--no-strict` 的取值一致：
+// 启动能接受的文件，SIGHUP 与回滚也必须按同一口径接受，否则会出现「能启动、不能重载」。
+func NewFileReloader(path string, strict bool, logger *slog.Logger) ConfigReloader {
+	return &fileReloader{path: path, strict: strict, logger: logger}
 }
 
 func (r *fileReloader) Reload(cfg *config.Config) error {
@@ -32,11 +35,11 @@ func (r *fileReloader) Reload(cfg *config.Config) error {
 	// defaults 却没写 ddos 的文件会加载成功，于是内核收到一排全零速率并被逐位拒绝。
 	var newCfg = config.Default()
 	if info.IsDir() {
-		if err := config.LoadConfigDirectory(r.path, &newCfg, true); err != nil {
+		if err := config.LoadConfigDirectory(r.path, &newCfg, r.strict); err != nil {
 			return err
 		}
 	} else {
-		if err := config.ParseConfigFile(r.path, &newCfg, true); err != nil {
+		if err := config.ParseConfigFile(r.path, &newCfg, r.strict); err != nil {
 			return err
 		}
 	}
@@ -70,7 +73,7 @@ func (r *fileReloader) Rollback(cfg *config.Config) error {
 	}
 
 	var newCfg = config.Default()
-	if err := config.ParseConfigFile(backupPath, &newCfg, true); err != nil {
+	if err := config.ParseConfigFile(backupPath, &newCfg, r.strict); err != nil {
 		return err
 	}
 

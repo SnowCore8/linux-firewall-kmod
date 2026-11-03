@@ -98,6 +98,16 @@ func run(args []string) error {
 		logger.Warn("配置正则未能编译，该 jail 退化为其关键字回退", "detail", warning)
 	}
 
+	// 认证与暴露面一起说：契约把「两项凭据都空」定义为不认证并放行，而监听地址出自同一个
+	// defaults 段。绑定到局域网却没有凭据时显眼告警——这一步只报来源与形状，永不报值。
+	userSrc, passSrc := cfg.CredentialSources()
+	logger.Info("面板认证凭据", "username", userSrc, "password", passSrc, "authenticated", cfg.AuthEnabled())
+	if addr := cfg.ListenAddress(); addr != "" && !cfg.AuthEnabled() && bindsBeyondLoopback(cfg.MetricsBindAddress) {
+		logger.Warn("监听地址对外开放但未配置认证凭据：任何可达者都能读写面板并下发封禁",
+			"addr", addr,
+			"怎么修", "设置 FIREWALL_METRICS_USERNAME / FIREWALL_METRICS_PASSWORD（随包 EnvironmentFile 已备好），或把 defaults 段两项一起填，或把 metrics_bind_address 收回 127.0.0.1")
+	}
+
 	if err := checkProcfs(); err != nil {
 		return err
 	}
@@ -132,13 +142,18 @@ func run(args []string) error {
 		} else {
 			defer db.Close()
 			dbStopCh := make(chan struct{})
-			defer close(dbStopCh)
 			db.StartCleanupScheduler(0, cfg.HistoryRetentionDays, dbStopCh)
 			db.StartReputationRecoveryScheduler(0, 1, 100, dbStopCh)
 			// 判定层每行日志都要扣一次信誉分并立刻取分，直接查库会把入站主链路钉在磁盘上；
 			// 这里按 IP 折叠，与库自带的两个调度器共用同一条 stop 通道（关停时最后刷一次盘）。
 			facts = persist.NewFacts(db, persist.FactsOptions{Logger: logger})
-			facts.StartFlusher(dbStopCh)
+			factsDone := facts.StartFlusher(dbStopCh)
+			// 关停顺序：先停各调度器，再等 Facts 的最终刷盘结束，最后才关库。
+			// 这段 defer 在 db.Close 之后登记，LIFO 执行时排在它前面。
+			defer func() {
+				close(dbStopCh)
+				<-factsDone
+			}()
 			historyDB = db
 			logger.Info("持久化数据库已就绪", "path", cfg.HistoryDBPath)
 		}
@@ -323,6 +338,17 @@ func run(args []string) error {
 		if metrics != nil {
 			met = kernelMetrics{m: metrics}
 		}
+		// trusted_ips 只在启动时下发一次：先复制一份，避免回调在配置热重载替换 *cfg 后
+		// 与执行体并发读同一字段。语义与配置文件注释一致：改这一段要重启。
+		trustedIPs := append([]string(nil), cfg.TrustedIPs...)
+		pushConfiguredTrustedIPs := func() {
+			if len(trustedIPs) == 0 {
+				return
+			}
+			pushed, skipped := pushTrustedIPs(whitelistSinkForDaemon, trustedIPs, logger)
+			logger.Info("trusted_ips 已下发内核白名单",
+				"configured", len(trustedIPs), "pushed", pushed, "skipped", skipped)
+		}
 		pump, err := kernel.NewEventPump(kernel.PumpDeps{
 			Sampler:   kernelClient,
 			Events:    kernelEvents,
@@ -338,6 +364,8 @@ func run(args []string) error {
 			Whitelist: bans.GlobalWhitelist(),
 			// 内核侧配置变更与封禁下发被拒要交给入站执行体落地（配置所有权在它手上）。
 			Directives: kernelCmd,
+			// 注册成功之前内核丢弃一切指令；trusted_ips 必须在确认租约之后才发。
+			OnLeaseClaimed: pushConfiguredTrustedIPs,
 		})
 		if err != nil {
 			logger.Error("内核事件泵装配失败，内核事件将无人消费", "error", err)
@@ -350,14 +378,6 @@ func run(args []string) error {
 		} else {
 			pumpToken := runtime.NewShutdown()
 			sup.Spawn("kernel-event-pump", pumpToken, func() { pump.Run(pumpToken) })
-			// 可信地址必须在注册成功之后下发：内核在收到 DAEMON_REGISTER 之前丢弃一切指令，
-			// 白名单写进去也不会落表。放在事件泵启动之后、入站链路装配之前，让第一批判定
-			// 就已经跑在有放行的内核上。
-			if len(cfg.TrustedIPs) > 0 {
-				pushed, skipped := pushTrustedIPs(whitelistSinkForDaemon, cfg.TrustedIPs, logger)
-				logger.Info("trusted_ips 已下发内核白名单",
-					"configured", len(cfg.TrustedIPs), "pushed", pushed, "skipped", skipped)
-			}
 			logger.Info("内核事件泵已启动",
 				"sample", kernel.SampleInterval.String(),
 				"reconcile", kernel.ReconcileInterval.String(),
@@ -382,7 +402,7 @@ func run(args []string) error {
 		Sink:     banSinkForDaemon,
 		Stats:    newStatsSink(logger, metrics),
 		Hooks:    runtime.NewMaintenanceHooks(historyDB, logger),
-		Reloader: runtime.NewFileReloader(configSource, logger),
+		Reloader: runtime.NewFileReloader(configSource, parsed.Strict, logger),
 		// 配置一变就同步到内核：手工编辑文件、SIGHUP、SIGUSR1 都只经过执行体，
 		// 少这一条那些路径改的值永远上不了内核（与 PUT /config 共用同一个出口实例）。
 		KernelConfig: configSinkForDaemon,

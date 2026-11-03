@@ -146,16 +146,31 @@ func TestDirectoryLoadRollsBackAtomically(t *testing.T) {
 	}
 }
 
-// 未知字段恒被拒绝：`deny_unknown_fields` 语义是结构性恒开的，
-// `strict_mode` 字段虽被传递但并不放宽解析，Go 侧对齐同一行为。
-func TestUnknownFieldAlwaysRejected(t *testing.T) {
+// 未知字段只在严格模式下被拒绝。`--no-strict` 的公开承诺就是放宽这一条，
+// 所以宽松模式必须真的把未知键交给解码器忽略，而不是只在 Config 里记一个标志。
+func TestUnknownFieldRejectedOnlyInStrictMode(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, dir, "sshd.yaml", "jails:\n  sshd:\n    log_files:\n      - /var/log/auth.log\n    unknown_field: 1\n")
 
-	cfg := Default()
-	if err := LoadConfigDirectory(dir, &cfg, false); err == nil {
-		t.Fatal("未知字段应被拒绝")
-	}
+	t.Run("严格模式拒绝", func(t *testing.T) {
+		cfg := Default()
+		if err := LoadConfigDirectory(dir, &cfg, true); err == nil {
+			t.Fatal("未知字段应被严格模式拒绝")
+		}
+	})
+
+	t.Run("宽松模式接受", func(t *testing.T) {
+		cfg := Default()
+		if err := LoadConfigDirectory(dir, &cfg, false); err != nil {
+			t.Fatalf("宽松模式应忽略未知字段: %v", err)
+		}
+		if cfg.StrictMode {
+			t.Error("宽松模式加载后 StrictMode 应为 false")
+		}
+		if len(cfg.Jails) != 1 || cfg.Jails[0].Name != "sshd" {
+			t.Fatalf("宽松模式仍应加载合法 jail: %+v", cfg.Jails)
+		}
+	})
 }
 
 // 单文件加载设置 ConfigFile，目录加载设置 ConfigDir 并清空 ConfigFile。

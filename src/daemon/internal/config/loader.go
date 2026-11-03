@@ -42,7 +42,7 @@ func ParseConfigFile(path string, cfg *Config, strict bool) error {
 	// 运行期覆盖文件（`_` 前缀）只带运行期状态，jail 处理规则不同。
 	runtimeOverride := strings.HasPrefix(filepath.Base(path), string(RuntimeOverridePrefix))
 
-	if err := parseConfigFrom(string(data), cfg, runtimeOverride); err != nil {
+	if err := parseConfigFrom(string(data), cfg, runtimeOverride, strict); err != nil {
 		*cfg = saved
 		return err
 	}

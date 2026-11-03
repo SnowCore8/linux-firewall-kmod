@@ -136,19 +136,23 @@ type yamlCapacity struct {
 // ParseConfig 把 YAML 内容解析进 cfg。
 //
 // 失败时不修改 cfg（原子性）：所有字段在局部结构上校验通过后，才一次性写入。
+// 唯一的例外后置步骤是认证凭据的环境变量覆盖（见 credentials_env.go），它只在成功后执行。
 func ParseConfig(content string, cfg *Config) error {
-	return parseConfigFrom(content, cfg, false)
+	return parseConfigFrom(content, cfg, false, true)
 }
 
-// ParseConfigFrom 同 ParseConfig，但可声明内容来自守护进程自动管理的运行期覆盖文件。
+// parseConfigFrom 是文件与目录两条加载路径的共同实现。
 //
-// 这类文件只携带运行期状态（当前是 jail 的 enabled），因此 jail 处理多一条规则：
-// 未定义的 jail 名忽略并告警——自动写回的文件不能凭空造出一个缺 log_files 的 jail，
-// 否则它下一次启动会直接拒绝加载。
-func parseConfigFrom(content string, cfg *Config, runtimeOverride bool) error {
+// runtimeOverride 声明内容来自守护进程自动管理的运行期覆盖文件：这类文件只携带运行期
+// 状态（当前是 jail 的 enabled），因此 jail 处理多一条规则——未定义的 jail 名忽略并
+// 告警，自动写回的文件不能凭空造出一个缺 log_files 的 jail。
+//
+// strict 对应 `--no-strict`：为 false 时忽略未知 YAML 键。它必须从加载入口一路传进来，
+// 不能在解码处写死——否则「启动宽松、重载严格」这类偏差会让同一个文件的行为取决于谁读它。
+func parseConfigFrom(content string, cfg *Config, runtimeOverride, strict bool) error {
 	var yc yamlConfig
 	dec := yaml.NewDecoder(bytes.NewReader([]byte(content)))
-	dec.KnownFields(true)
+	dec.KnownFields(strict)
 	if err := dec.Decode(&yc); err != nil {
 		return fmt.Errorf("解析 YAML 配置失败: %w", err)
 	}
@@ -172,7 +176,13 @@ func parseConfigFrom(content string, cfg *Config, runtimeOverride bool) error {
 	// 6. capacity
 	applyCapacity(&yc, cfg)
 	// 7~9. geoip / 本机坐标 / 探测地址
-	return applyGeoip(&yc, cfg)
+	if err := applyGeoip(&yc, cfg); err != nil {
+		return err
+	}
+	// 10. 认证凭据的环境变量覆盖（见 credentials_env.go）：放在 YAML 全部应用之后，
+	// 于是优先级是「环境变量 > YAML > Default()」，且失败路径仍然不碰 cfg。
+	applyEnvCredentials(cfg)
+	return nil
 }
 
 // applyDefaults 把 defaults 段应用到 cfg。

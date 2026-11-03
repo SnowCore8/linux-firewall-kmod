@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/bans"
@@ -151,6 +152,10 @@ type PumpDeps struct {
 	// nil 时 CONFIG_CHANGE 与封禁下发被拒只记日志，执行体不会收到。
 	Directives chan<- runtime.Directive
 
+	// OnLeaseClaimed 在内核确认本进程注册成功后调用一次（含启动抢占与后续重试）。
+	// 组合根用它把 trusted_ips 放到注册之后下发：注册前内核会丢弃一切指令。
+	OnLeaseClaimed func()
+
 	// 周期覆盖项：零值取上方常量，供测试缩短节拍。
 	Timeout           time.Duration
 	SampleEvery       time.Duration
@@ -175,18 +180,20 @@ var ErrLeaseRefused = errors.New("内核拒绝本进程成为守护进程：已�
 
 // EventPump 消费内核事件流并按周期采样、对账。由单个 goroutine 独占。
 type EventPump struct {
-	sampler    Sampler
-	events     <-chan Incoming
-	store      *telemetry.Store
-	ring       *telemetry.Ring
-	router     *Router
-	cache      *bans.ActiveBanCache
-	whitelist  *bans.Whitelist
-	publish    Publisher
-	mirror     DomainMirror
-	metrics    Metrics
-	logger     *slog.Logger
-	directives chan<- runtime.Directive
+	sampler        Sampler
+	events         <-chan Incoming
+	store          *telemetry.Store
+	ring           *telemetry.Ring
+	router         *Router
+	cache          *bans.ActiveBanCache
+	whitelist      *bans.Whitelist
+	publish        Publisher
+	mirror         DomainMirror
+	metrics        Metrics
+	logger         *slog.Logger
+	directives     chan<- runtime.Directive
+	onLeaseClaimed func()
+	leaseOnce      sync.Once
 
 	timeout        time.Duration
 	sampleEvery    time.Duration
@@ -247,6 +254,7 @@ func NewEventPump(deps PumpDeps) (*EventPump, error) {
 		metrics:        deps.Metrics,
 		logger:         logger,
 		directives:     deps.Directives,
+		onLeaseClaimed: deps.OnLeaseClaimed,
 		timeout:        orDefault(deps.Timeout, DefaultRequestTimeout),
 		sampleEvery:    orDefault(deps.SampleEvery, SampleInterval),
 		reconcileEvery: orDefault(deps.ReconcileEvery, ReconcileInterval),
@@ -324,6 +332,13 @@ func (p *EventPump) register(why string) registerOutcome {
 	}
 	p.store.SetLinkRegistered(now)
 	p.logger.Debug("内核守护进程注册已确认", "reason", why)
+	// 注册成功后的第一件事：让组合根下发那些「注册前会被内核丢弃」的指令。
+	// 只执行一次——后续续约成功不代表可以重复下发启动期配置。
+	p.leaseOnce.Do(func() {
+		if p.onLeaseClaimed != nil {
+			p.onLeaseClaimed()
+		}
+	})
 	p.syncRouterCounters()
 	return registerAccepted
 }

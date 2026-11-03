@@ -1010,3 +1010,69 @@ func TestClaimLeaseSeparatesRefusalFromLinkFailure(t *testing.T) {
 		}
 	})
 }
+
+// TestLeaseClaimedCallbackRunsOnceAfterAcceptance 钉住 trusted_ips 的时序：
+// 只有内核确认注册成功之后才允许下发启动期白名单，且续约成功不能重复触发。
+func TestLeaseClaimedCallbackRunsOnceAfterAcceptance(t *testing.T) {
+	newPump := func(t *testing.T, sampler *fakeSampler, cb func()) *EventPump {
+		t.Helper()
+		p, err := NewEventPump(PumpDeps{
+			Sampler:        sampler,
+			Events:         make(chan Incoming, 1),
+			Store:          telemetry.NewStore(),
+			Cache:          bans.NewActiveBanCache(),
+			Whitelist:      bans.NewWhitelist(),
+			OnLeaseClaimed: cb,
+		})
+		if err != nil {
+			t.Fatalf("装配事件泵失败: %v", err)
+		}
+		return p
+	}
+
+	t.Run("确认后才回调且只一次", func(t *testing.T) {
+		sampler := newFakeSampler()
+		sampler.ack = contract.DaemonRegisterAck{Accepted: true}
+		calls := 0
+		p := newPump(t, sampler, func() { calls++ })
+
+		if err := p.ClaimLease(); err != nil {
+			t.Fatalf("抢占租约失败: %v", err)
+		}
+		if calls != 1 {
+			t.Fatalf("确认注册后回调 %d 次，期望 1", calls)
+		}
+		if outcome := p.register("续约"); outcome != registerAccepted {
+			t.Fatalf("续约结果 = %v，期望 accepted", outcome)
+		}
+		if calls != 1 {
+			t.Fatalf("续约成功后回调累计 %d 次，期望仍为 1", calls)
+		}
+	})
+
+	t.Run("明确拒绝不回调", func(t *testing.T) {
+		sampler := newFakeSampler()
+		sampler.ack = contract.DaemonRegisterAck{Accepted: false}
+		calls := 0
+		p := newPump(t, sampler, func() { calls++ })
+		if err := p.ClaimLease(); !errors.Is(err, ErrLeaseRefused) {
+			t.Fatalf("被拒时 err = %v，期望 ErrLeaseRefused", err)
+		}
+		if calls != 0 {
+			t.Fatalf("注册被拒仍回调 %d 次，期望 0", calls)
+		}
+	})
+
+	t.Run("链路失败不回调", func(t *testing.T) {
+		sampler := newFakeSampler()
+		sampler.regErr = errors.New("内核未应答")
+		calls := 0
+		p := newPump(t, sampler, func() { calls++ })
+		if err := p.ClaimLease(); err != nil {
+			t.Fatalf("链路失败不该阻断启动: %v", err)
+		}
+		if calls != 0 {
+			t.Fatalf("注册未确认仍回调 %d 次，期望 0", calls)
+		}
+	})
+}
