@@ -22,7 +22,7 @@ export default defineConfig({
 
   // 单 worker 串行执行。
   //
-  // 为什么不用并行：每个页面实例都会建立一条 `/api/v1/events` SSE 长连接
+  // 为什么不用并行：每个页面实例都会建立一条 `/api/v2/events` SSE 长连接
   // （前端的 SseProvider 挂在认证闸门内部），而守护进程对**管理流**的连接位有
   // 硬上限（见 src/daemon/internal/http/sse.go 的 SseStatus 与契约 http.fwidl）。多 worker
   // 叠加本地可能已在跑的控制台标签页，会随机触顶 503，表现为用例莫名失败。

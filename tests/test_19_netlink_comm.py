@@ -1,7 +1,7 @@
 """19 - Netlink 通信与健康指标集成测试（版本化 API + 真实计数器增量）
 
 与 test_16 同口径：Web UI / JSON API / SSE / metrics 共用**同一监听端口**
-（`daemon_http_port()` 读自仓库默认配置），路径带 `/api/v1` 前缀，响应为
+（`daemon_http_port()` 读自仓库默认配置），路径带 `/api/v2` 前缀，响应为
 `{"code","data","message"}` 信封。旧用例的独立 `WEBUI_PORT = 8080` 与
 非版本化路径（`POST /api/bans`）已不存在。
 
@@ -73,7 +73,7 @@ class TestNetlinkComm:
     def test_ban_triggers_netlink_count(self):
         """19.2 真实封禁操作使 netlink 发送计数自增（不满足于「未减少」）
 
-        经 `POST /api/v1/bans` 下发一次临时封禁，内核确认后 daemon 的 netlink
+        经 `POST /api/v2/bans` 下发一次临时封禁，内核确认后 daemon 的 netlink
         发送计数必然 +1；据此轮询断言，而不是断言一个恒真的 `>=`。
         """
         port = daemon_http_port()
@@ -83,7 +83,7 @@ class TestNetlinkComm:
 
         code, body = _curl(
             "POST",
-            f"http://localhost:{port}/api/v1/bans",
+            f"http://localhost:{port}/api/v2/bans",
             {"ip": TEST_IP, "duration": 60},
         )
         assert code == 201, (
@@ -104,7 +104,7 @@ class TestNetlinkComm:
             )
         finally:
             # 清理：解封测试 IP，避免污染后续用例
-            _curl("DELETE", f"http://localhost:{port}/api/v1/bans/{TEST_IP}")
+            _curl("DELETE", f"http://localhost:{port}/api/v2/bans/{TEST_IP}")
 
     def test_netlink_error_counts(self):
         """19.3 netlink 错误计数存在（错误计数本身可非零，不作等值断言）"""

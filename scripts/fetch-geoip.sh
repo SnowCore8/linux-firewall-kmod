@@ -8,7 +8,7 @@
 #
 # ⚠️ 必须是 City 级，不要下 Country 级：
 #     dbip-country-lite-YYYY-MM.mmdb.gz 只有国家代码、**没有经纬度坐标**，本项目的地理分布
-#     （GET /api/v1/stats/attack-geo）与 Web UI 的 3D 攻击地图都依赖坐标，用 Country 库会得到
+#     （GET /api/v2/stats/attack-geo）与 Web UI 的 3D 攻击地图都依赖坐标，用 Country 库会得到
 #     「地理解析可用但没有任何点位」的结果——功能看起来是坏的，其实只是下错了库。
 #
 # 预期体积（实测）：压缩包约 58MB，解压后约 122MB。
@@ -199,7 +199,7 @@ cat <<EOF
   1) 在 config/default.yaml 里设置数据库路径（改为你的实际路径即可）：
        geoip_db_path: $TARGET
   2) 重启守护进程使其生效（例如 systemctl restart firewall-daemon）。
-     之后 Web UI 的攻击地图与 GET /api/v1/stats/attack-geo 即可返回城市级坐标。
+     之后 Web UI 的攻击地图与 GET /api/v2/stats/attack-geo 即可返回城市级坐标。
 
 归属声明（许可要求，请勿删除）：
   地理数据来自 DB-IP —— https://db-ip.com

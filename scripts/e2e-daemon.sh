@@ -104,7 +104,7 @@ do_probe() {
 #
 # 就绪条件按 procfs 接口（/proc/firewall/bans）判定，而不是 HTTP 端口：守护进程启动期
 # 先做 checkProcfs 前置检查，接口可见即「模块已加载、daemon 能起」。HTTP 服务（/health、
-# /metrics、/api/v1、/static/*path）已随 daemon 一起装配，但它的就绪与否绑在内核租约上，
+# /metrics、/api/v2、/static/*path）已随 daemon 一起装配，但它的就绪与否绑在内核租约上，
 # 见上面的「关键设计点 3」。因此这里等的是模块接口，不是监听端口。
 # ============================================================================
 do_start() {

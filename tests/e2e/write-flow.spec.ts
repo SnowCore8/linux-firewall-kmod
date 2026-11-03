@@ -12,7 +12,7 @@
  *
  * 两个回环断言三层，逐层收紧：
  *   1. 界面层：卡片/开关就地变化、成功提示文案；
- *   2. 接口层：`GET /api/v1/bans` 或 `GET /api/v1/jails` 的可见性随之翻转
+ *   2. 接口层：`GET /api/v2/bans` 或 `GET /api/v2/jails` 的可见性随之翻转
  *      （证明 UI 不是自己骗自己）；
  *   3. 干净层：整个用例期间无 console.error / console.warn（由 support.ts 夹具断言）。
  *
@@ -32,12 +32,12 @@ const TEST_DURATION = 300
 /** 带 Basic 凭据的请求头：`request` 夹具不共享页面的 sessionStorage，需显式携带 */
 const AUTH_HEADERS = { Authorization: `Basic ${ACCESS_TOKEN}` }
 
-/** 从分页信封里取出封禁条目（`GET /api/v1/bans` 恒为 { code, data: { items } }） */
+/** 从分页信封里取出封禁条目（`GET /api/v2/bans` 恒为 { code, data: { items } }） */
 async function listBanIps(
   request: import('@playwright/test').APIRequestContext,
 ): Promise<string[]> {
-  const response = await request.get('/api/v1/bans', { headers: AUTH_HEADERS })
-  expect(response.status(), 'GET /api/v1/bans 应返回 200').toBe(200)
+  const response = await request.get('/api/v2/bans', { headers: AUTH_HEADERS })
+  expect(response.status(), 'GET /api/v2/bans 应返回 200').toBe(200)
   const body = (await response.json()) as { code: number; data: { items: { ip: string }[] } }
   expect(body.code, '业务码应为 0').toBe(0)
   return body.data.items.map((item) => item.ip)
@@ -51,7 +51,7 @@ test.describe('写操作回环：封禁后解封', () => {
 
   test.beforeEach(async ({ request }) => {
     // 前置清理：上一条用例异常中断时可能留下同一 IP 的封禁
-    await request.delete(`/api/v1/bans/${TEST_IP}`, { headers: AUTH_HEADERS })
+    await request.delete(`/api/v2/bans/${TEST_IP}`, { headers: AUTH_HEADERS })
   })
 
   test('封禁写入内核，再解封恢复原状', async ({ app, page, request }) => {
@@ -109,7 +109,7 @@ test.describe('写操作回环：封禁后解封', () => {
 })
 
 /**
- * 单个 Jail 的实时状态（`GET /api/v1/jails` 返回裸数组）。
+ * 单个 Jail 的实时状态（`GET /api/v2/jails` 返回裸数组）。
  *
  * 按名字取 `enabled`：列表里通常只有 `sshd` 一个 Jail，但按名字定位不依赖顺序，
  * 后续新增 Jail 也不会让断言错位。
@@ -118,8 +118,8 @@ async function getJailEnabled(
   request: import('@playwright/test').APIRequestContext,
   name: string,
 ): Promise<boolean> {
-  const response = await request.get('/api/v1/jails', { headers: AUTH_HEADERS })
-  expect(response.status(), 'GET /api/v1/jails 应返回 200').toBe(200)
+  const response = await request.get('/api/v2/jails', { headers: AUTH_HEADERS })
+  expect(response.status(), 'GET /api/v2/jails 应返回 200').toBe(200)
   const body = (await response.json()) as {
     code: number
     data: { name: string; enabled: boolean }[]
