@@ -90,6 +90,15 @@ make test
 - 端到端：`npx playwright test`
 - 集成测试是行为规格，不是可协商的文档
 
+### 多维风险引擎（v2）
+
+- **Feature Flag**：`risk_engine.enabled`（默认 false，使用旧单维度模型）
+- **新包**：`src/daemon/internal/risk/`（types.go、decay.go、classifier.go、engine.go）
+- **新表**：`schema_migrations`、`attack_events`、`ip_risk_vectors`
+- **新 API**：`/api/v2/risk/vectors/*`、`/api/v2/risk/events/*`
+- **阈值模型**：加法模型（修复旧乘法 Bug：内网×低信誉=1.0 导致系数抵消）
+- **迁移指南**：`docs/zh/migration-risk-engine-v2.md`
+
 ## 常见坑
 
 1. **编译过 ≠ 加载得了**。CI runner 用自定义内核，`.ko` 可能 `insmod` 不了。真验证加载得在能加载的机器上跑 `make test`。
@@ -110,6 +119,7 @@ make test
 | [docs/zh/configuration/](docs/zh/configuration/README.md) | YAML 配置、ProcFS 接口 |
 | [docs/zh/getting-started/](docs/zh/getting-started/README.md) | 安装、快速上手 |
 | [docs/zh/operations/](docs/zh/operations/README.md) | 运维管理、监控、故障排查 |
+| [docs/zh/migration-risk-engine-v2.md](docs/zh/migration-risk-engine-v2.md) | 多维风险引擎迁移指南 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南 |
 | [SECURITY.md](SECURITY.md) | 安全策略 |
 | [STANDARDS.md](STANDARDS.md) | 定级规范 |

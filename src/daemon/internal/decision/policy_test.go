@@ -163,3 +163,102 @@ func TestPlanBanZeroBanTimeFallsBackToOneSecond(t *testing.T) {
 		t.Errorf("Duration=%d, want 0", plan.Duration)
 	}
 }
+
+func TestNewReputationAdjustment(t *testing.T) {
+	cases := map[uint32]int{
+		0: -2, 49: -2, 50: -1, 79: -1, 80: 0, 100: 0,
+	}
+	for score, want := range cases {
+		if got := NewReputationAdjustment(score); got != want {
+			t.Errorf("NewReputationAdjustment(%d)=%d, want %d", score, got, want)
+		}
+	}
+}
+
+func TestNewEffectiveThresholdAdditiveModel(t *testing.T) {
+	cases := []struct {
+		name       string
+		maxRetries uint32
+		peak       bool
+		internal   bool
+		score      uint32
+		want       uint32
+	}{
+		{"基准", 5, false, false, 100, 5},
+		{"高峰期 +2", 5, true, false, 100, 7},
+		{"内网 +3", 5, false, true, 100, 8},
+		{"高峰 + 内网 = +5", 5, true, true, 100, 10},
+		{"中信誉 -1", 5, false, false, 60, 4},
+		{"低信誉 -2", 5, false, false, 30, 3},
+		{"内网 + 低信誉 (Bug 修复)", 5, false, true, 30, 6},
+		{"高峰 + 内网 + 低信誉", 5, true, true, 30, 8},
+		{"阈值 0 仍至少为 1", 0, false, false, 100, 1},
+		{"最小阈值 1", 1, false, false, 0, 1},
+	}
+	for _, c := range cases {
+		got := NewEffectiveThreshold(c.maxRetries, c.peak, c.internal, c.score)
+		if got != c.want {
+			t.Errorf("%s: NewEffectiveThreshold=%d, want %d", c.name, got, c.want)
+		}
+		if got == 0 {
+			t.Errorf("%s: 阈值不得为 0，否则封禁触发点无定义", c.name)
+		}
+	}
+}
+
+// TestNewEffectiveThresholdFixesMultiplicativeBug 验证新加法模型修复了旧乘法 Bug。
+//
+// 旧 Bug：内网(2.0) × 低信誉(0.5) = 1.0，导致内网低信誉 IP 与外网低信誉 IP 阈值相同。
+// 新模型：内网(+3) + 低信誉(-2) = +1，内网低信誉 IP 阈值高于外网低信誉 IP。
+func TestNewEffectiveThresholdFixesMultiplicativeBug(t *testing.T) {
+	base := uint32(5)
+
+	// 外网低信誉
+	externalLowRep := NewEffectiveThreshold(base, false, false, 30)
+
+	// 内网低信誉
+	internalLowRep := NewEffectiveThreshold(base, false, true, 30)
+
+	if internalLowRep <= externalLowRep {
+		t.Errorf("内网低信誉 IP 阈值(%d)应大于外网低信誉 IP 阈值(%d)，否则 Bug 未修复",
+			internalLowRep, externalLowRep)
+	}
+
+	// 验证具体数值
+	if externalLowRep != 3 {
+		t.Errorf("外网低信誉阈值=%d, want 3 (base=5, adj=-2)", externalLowRep)
+	}
+	if internalLowRep != 6 {
+		t.Errorf("内网低信誉阈值=%d, want 6 (base=5, internal=+3, adj=-2)", internalLowRep)
+	}
+}
+
+// TestOldVsNewThresholdComparison 对比新旧模型在不同场景下的差异。
+func TestOldVsNewThresholdComparison(t *testing.T) {
+	cases := []struct {
+		name       string
+		maxRetries uint32
+		peak       bool
+		internal   bool
+		score      uint32
+	}{
+		{"基准", 5, false, false, 100},
+		{"高峰", 5, true, false, 100},
+		{"内网", 5, false, true, 100},
+		{"低信誉", 5, false, false, 30},
+		{"内网+低信誉", 5, false, true, 30},
+		{"全系数", 5, true, true, 30},
+	}
+
+	for _, c := range cases {
+		oldVal := EffectiveThreshold(c.maxRetries, c.peak, c.internal, c.score)
+		newVal := NewEffectiveThreshold(c.maxRetries, c.peak, c.internal, c.score)
+
+		t.Logf("%s: old=%d, new=%d, diff=%d", c.name, oldVal, newVal, int(newVal)-int(oldVal))
+
+		// 新模型不应产生 0 阈值
+		if newVal == 0 {
+			t.Errorf("%s: 新模型阈值不得为 0", c.name)
+		}
+	}
+}

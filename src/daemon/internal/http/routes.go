@@ -196,6 +196,14 @@ func (s *Server) RegisterRoutes(api *APIHandlers) {
 	s.HandleFunc(httpcontract.RouteGetApiV1StatsSseStatus,
 		RequireAuth(api.username, api.password, api.lockout, api.SSEStatus))
 
+	// ---- 需认证：风险引擎 -----------------------------------------------------
+	s.HandleFunc(httpcontract.RouteGetApiV2RiskVectors,
+		RequireAuth(api.username, api.password, api.lockout, api.ListRiskVectors))
+	s.HandleFunc(httpcontract.RouteGetApiV2RiskVectorsIp,
+		RequireAuth(api.username, api.password, api.lockout, api.RiskVectors))
+	s.HandleFunc(httpcontract.RouteGetApiV2RiskEventsIp,
+		RequireAuth(api.username, api.password, api.lockout, api.RiskEvents))
+
 	// ---- 需认证：日志 ---------------------------------------------------------
 	s.HandleFunc(httpcontract.RouteGetApiV1Logs,
 		RequireAuth(api.username, api.password, api.lockout, api.GetLogs))

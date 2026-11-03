@@ -74,6 +74,8 @@ type DecisionFacts interface {
 	ReputationScore(ip netip.Addr) uint32
 	// PriorBanCount 返回该 IP 此前已封禁次数（用于渐进式时长）。
 	PriorBanCount(ip netip.Addr) uint32
+	// RiskEngineEnabled 返回多维风险引擎是否启用。
+	RiskEngineEnabled() bool
 }
 
 // NoHistory 是无历史、信誉满分的默认事实：用于启动初期与测试。
@@ -87,6 +89,9 @@ func (NoHistory) ReputationScore(netip.Addr) uint32 { return 100 }
 
 // PriorBanCount 恒为 0。
 func (NoHistory) PriorBanCount(netip.Addr) uint32 { return 0 }
+
+// RiskEngineEnabled 恒为 false（无历史模式不启用风险引擎）。
+func (NoHistory) RiskEngineEnabled() bool { return false }
 
 // Tick 是一轮处理的时间上下文。时钟与高峰判定都由调用方给出，本层不读系统时钟。
 type Tick struct {
@@ -303,12 +308,27 @@ func (p *Pipeline) judgeLine(ctx *lineCtx, ip netip.Addr, via logparse.MatchVia,
 	state := p.jails[ctx.jail]
 	// 顺序是语义的一部分：先记这次失败，再取分数算阈值（见 DecisionFacts）。
 	ctx.facts.RecordFailure(ip)
-	threshold := decision.EffectiveThreshold(
-		state.policy.MaxRetries,
-		ctx.tick.PeakHours,
-		decision.IsInternal(ip),
-		ctx.facts.ReputationScore(ip),
-	)
+
+	// 根据 feature flag 选择阈值计算模型
+	var threshold uint32
+	if ctx.facts.RiskEngineEnabled() {
+		// 新加法模型（修复旧乘法 Bug）
+		threshold = decision.NewEffectiveThreshold(
+			state.policy.MaxRetries,
+			ctx.tick.PeakHours,
+			decision.IsInternal(ip),
+			ctx.facts.ReputationScore(ip),
+		)
+	} else {
+		// 旧乘法模型（向后兼容）
+		threshold = decision.EffectiveThreshold(
+			state.policy.MaxRetries,
+			ctx.tick.PeakHours,
+			decision.IsInternal(ip),
+			ctx.facts.ReputationScore(ip),
+		)
+	}
+
 	verdict := state.window.Observe(ip, ctx.tick.Now, state.policy.FindTime, threshold)
 	if !verdict.ReachedCap {
 		return out

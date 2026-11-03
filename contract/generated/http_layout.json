@@ -8,7 +8,7 @@
     "信封 ApiResponse: code / data / message",
     "认证: 失败 10 次锁 60s，未授权状态码 401",
     "安全头 4 条",
-    "路由 57 条（无认证 14 / 需认证 43）",
+    "路由 60 条（无认证 14 / 需认证 46）",
     "SSE GET /api/v1/events: 上限 10 连接，6 个事件",
     "SSE GET /api/v1/logs/stream: 上限 5 连接，3 个事件",
     "错误形状 4 种",
@@ -55,6 +55,10 @@
     "响应 BanDurationRecommendation: 7 个字段",
     "响应 BanDurationRecommendationResponse: 2 个字段",
     "响应 ReputationEntryResponse: 6 个字段",
+    "响应 RiskVectorResponse: 11 个字段",
+    "响应 RiskVectorListResponse: 2 个字段",
+    "响应 RiskEventEntry: 5 个字段",
+    "响应 RiskEventResponse: 3 个字段",
     "响应 UdpPortDistributionResponse: 3 个字段",
     "响应 UdpPortEntry: 4 个字段",
     "响应 IcmpTypeDistributionResponse: 3 个字段",
@@ -908,6 +912,56 @@
       "events": [],
       "keepalive_secs": null,
       "note": "载荷 ReputationEntryResponse 数组；threshold_multiplier 由内联分段函数生成（1.0 / 0.8 / 0.5）"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/risk/vectors/:ip",
+      "auth": "required",
+      "handler": "RiskVectors",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        50003,
+        40006
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 RiskVectorResponse：指定 IP 的多维风险向量（7 个维度）。仅在 risk_engine.enabled=true 时可用，否则返回 503。IP 非法 → 40006"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/risk/events/:ip",
+      "auth": "required",
+      "handler": "RiskEvents",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        50003,
+        40006
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 RiskEventResponse：指定 IP 的攻击事件历史（最近 100 条，按时间降序）。仅在 risk_engine.enabled=true 时可用，否则返回 503。IP 非法 → 40006"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/risk/vectors",
+      "auth": "required",
+      "handler": "ListRiskVectors",
+      "returns": "type",
+      "status": 200,
+      "alt_status": null,
+      "codes": [
+        50003
+      ],
+      "max_connections": null,
+      "events": [],
+      "keepalive_secs": null,
+      "note": "载荷 RiskVectorListResponse：所有 IP 的风险向量列表（按总风险降序，最多 100 条）。仅在 risk_engine.enabled=true 时可用，否则返回 503"
     },
     {
       "method": "GET",
@@ -2457,6 +2511,122 @@
         {
           "key": "threshold_multiplier",
           "type": "f64"
+        }
+      ]
+    },
+    "RiskVectorResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "RiskVectorResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ip",
+          "type": "String"
+        },
+        {
+          "key": "failure",
+          "type": "f64"
+        },
+        {
+          "key": "ban",
+          "type": "f64"
+        },
+        {
+          "key": "scan",
+          "type": "f64"
+        },
+        {
+          "key": "bruteforce",
+          "type": "f64"
+        },
+        {
+          "key": "ddos",
+          "type": "f64"
+        },
+        {
+          "key": "geo",
+          "type": "f64"
+        },
+        {
+          "key": "cluster",
+          "type": "f64"
+        },
+        {
+          "key": "total_risk",
+          "type": "f64"
+        },
+        {
+          "key": "last_event_at",
+          "type": "i64"
+        },
+        {
+          "key": "updated_at",
+          "type": "i64"
+        }
+      ]
+    },
+    "RiskVectorListResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "RiskVectorListResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "vectors",
+          "type": "Vec<RiskVectorResponse>"
+        },
+        {
+          "key": "total",
+          "type": "u32"
+        }
+      ]
+    },
+    "RiskEventEntry": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "RiskEventEntry",
+      "inline": false,
+      "fields": [
+        {
+          "key": "id",
+          "type": "i64"
+        },
+        {
+          "key": "ip",
+          "type": "String"
+        },
+        {
+          "key": "event_type",
+          "type": "String"
+        },
+        {
+          "key": "increment",
+          "type": "f64"
+        },
+        {
+          "key": "occurred_at",
+          "type": "i64"
+        }
+      ]
+    },
+    "RiskEventResponse": {
+      "kind": "type",
+      "params": [],
+      "ts_name": "RiskEventResponse",
+      "inline": false,
+      "fields": [
+        {
+          "key": "ip",
+          "type": "String"
+        },
+        {
+          "key": "events",
+          "type": "Vec<RiskEventEntry>"
+        },
+        {
+          "key": "total",
+          "type": "u32"
         }
       ]
     },

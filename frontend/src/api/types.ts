@@ -809,3 +809,60 @@ export interface RuntimeSnapshot {
   /** 进入 lost 的累计次数（某一刻的快照看不出反复失联） */
   lease_losses: number
 }
+
+// ============================================================================
+// 多维风险引擎（internal/risk/）
+// ============================================================================
+
+/** 单个 IP 的多维风险向量 */
+export interface RiskVectorResponse {
+  /** IP 地址 */
+  ip: string
+  /** 7 个维度的风险值（各维度独立衰减，半衰期 7 天） */
+  failure: number
+  ban: number
+  scan: number
+  bruteforce: number
+  ddos: number
+  geo: number
+  cluster: number
+  /** 加权和（各维度权重默认为 1.0） */
+  total_risk: number
+  /** 最近一次事件时刻（Unix 秒） */
+  last_event_at: number
+  /** 向量更新时间（Unix 秒） */
+  updated_at: number
+}
+
+/** `GET /api/v2/risk/vectors` 响应 */
+export interface RiskVectorListResponse {
+  /** 风险向量列表 */
+  vectors: RiskVectorResponse[]
+  /** 总数 */
+  total: number
+}
+
+/** 单条攻击事件记录 */
+export interface RiskEventEntry {
+  /** 事件 ID */
+  id: number
+  /** IP 地址 */
+  ip: string
+  /** 事件类型：failure / ban / scan / bruteforce / ddos / geo / cluster */
+  event_type: string
+  /** 该事件对风险向量的增量 */
+  increment: number
+  /** 事件发生时刻（Unix 秒） */
+  occurred_at: number
+}
+
+/** `GET /api/v2/risk/events/:ip` 响应 */
+export interface RiskEventResponse {
+  /** 查询的 IP */
+  ip: string
+  /** 该 IP 的事件列表（按时间倒序） */
+  events: RiskEventEntry[]
+  /** 事件总数 */
+  total: number
+}
+

@@ -222,6 +222,12 @@ const (
 	RouteGetApiV1StatsBanDurationRecommendations = "GET /api/v1/stats/ban-duration-recommendations"
 	// GET /api/v1/stats/reputation → Reputation（需认证）
 	RouteGetApiV1StatsReputation = "GET /api/v1/stats/reputation"
+	// GET /api/v2/risk/vectors/:ip → RiskVectors（需认证）
+	RouteGetApiV2RiskVectorsIp = "GET /api/v2/risk/vectors/{ip}"
+	// GET /api/v2/risk/events/:ip → RiskEvents（需认证）
+	RouteGetApiV2RiskEventsIp = "GET /api/v2/risk/events/{ip}"
+	// GET /api/v2/risk/vectors → ListRiskVectors（需认证）
+	RouteGetApiV2RiskVectors = "GET /api/v2/risk/vectors"
 	// GET /api/v1/stats/threshold-recommendations → ThresholdRecommendations（需认证）
 	RouteGetApiV1StatsThresholdRecommendations = "GET /api/v1/stats/threshold-recommendations"
 	// GET /api/v1/stats/network-distribution → NetworkDistribution（需认证）
@@ -335,6 +341,9 @@ var Routes = []Route{
 	{Pattern: RouteGetApiV1StatsServiceProbes, Path: "/api/v1/stats/service-probes", Method: "GET", Auth: AuthRequired, Handler: "ServiceProbes", Returns: ReturnsType, Status: 200},
 	{Pattern: RouteGetApiV1StatsBanDurationRecommendations, Path: "/api/v1/stats/ban-duration-recommendations", Method: "GET", Auth: AuthRequired, Handler: "BanDurationRecommendations", Returns: ReturnsType, Status: 200, Codes: []int{Code50002, Code50003}},
 	{Pattern: RouteGetApiV1StatsReputation, Path: "/api/v1/stats/reputation", Method: "GET", Auth: AuthRequired, Handler: "Reputation", Returns: ReturnsType, Status: 200, Codes: []int{Code50002, Code50003}},
+	{Pattern: RouteGetApiV2RiskVectorsIp, Path: "/api/v2/risk/vectors/{ip}", Method: "GET", Auth: AuthRequired, Handler: "RiskVectors", Returns: ReturnsType, Status: 200, Codes: []int{Code50003, Code40006}},
+	{Pattern: RouteGetApiV2RiskEventsIp, Path: "/api/v2/risk/events/{ip}", Method: "GET", Auth: AuthRequired, Handler: "RiskEvents", Returns: ReturnsType, Status: 200, Codes: []int{Code50003, Code40006}},
+	{Pattern: RouteGetApiV2RiskVectors, Path: "/api/v2/risk/vectors", Method: "GET", Auth: AuthRequired, Handler: "ListRiskVectors", Returns: ReturnsType, Status: 200, Codes: []int{Code50003}},
 	{Pattern: RouteGetApiV1StatsThresholdRecommendations, Path: "/api/v1/stats/threshold-recommendations", Method: "GET", Auth: AuthRequired, Handler: "ThresholdRecommendations", Returns: ReturnsType, Status: 200, Codes: []int{Code50002, Code50003}},
 	{Pattern: RouteGetApiV1StatsNetworkDistribution, Path: "/api/v1/stats/network-distribution", Method: "GET", Auth: AuthRequired, Handler: "NetworkDistribution", Returns: ReturnsType, Status: 200, Codes: []int{Code50002, Code50003}},
 	{Pattern: RouteGetApiV1StatsAttackPredictions, Path: "/api/v1/stats/attack-predictions", Method: "GET", Auth: AuthRequired, Handler: "AttackPredictions", Returns: ReturnsType, Status: 200, Codes: []int{Code50002, Code50003}},

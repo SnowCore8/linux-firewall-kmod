@@ -19,6 +19,8 @@ import (
 	"net/netip"
 	"sync"
 	"time"
+
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/risk"
 )
 
 const (
@@ -47,6 +49,9 @@ type FactsOptions struct {
 	FlushEvery time.Duration
 	// Logger 为 nil 时用 slog.Default()。
 	Logger *slog.Logger
+	// RiskEngineEnabled 启用多维风险向量引擎（feature flag）。
+	// 为 false 时退化为旧单维度模型（向后兼容）。
+	RiskEngineEnabled bool
 }
 
 // factsEntry 是一个 IP 的缓存项。
@@ -75,6 +80,10 @@ type Facts struct {
 	lru      *list.List
 	index    map[string]*list.Element
 	flushGap time.Duration
+
+	// riskEngine 是多维风险向量引擎（Phase 4 新增）。
+	// 为 nil 时退化为旧单维度模型（向后兼容）。
+	riskEngine *risk.Engine
 }
 
 // NewFacts 装配缓存。db 为 nil 时退化为纯内存实现（不落盘，读侧永远满分起算）。
@@ -95,14 +104,22 @@ func NewFacts(db *DB, opts FactsOptions) *Facts {
 	if logger == nil {
 		logger = slog.Default()
 	}
+
+	var riskEngine *risk.Engine
+	if opts.RiskEngineEnabled {
+		riskEngine = risk.NewEngine(risk.DefaultDimensionWeights())
+		logger.Info("multi-dimensional risk engine enabled")
+	}
+
 	return &Facts{
-		db:       db,
-		penalty:  uint32(penalty),
-		capacity: capacity,
-		logger:   logger,
-		lru:      list.New(),
-		index:    make(map[string]*list.Element, capacity),
-		flushGap: gap,
+		db:         db,
+		penalty:    uint32(penalty),
+		capacity:   capacity,
+		logger:     logger,
+		lru:        list.New(),
+		index:      make(map[string]*list.Element, capacity),
+		flushGap:   gap,
+		riskEngine: riskEngine,
 	}
 }
 
@@ -189,6 +206,51 @@ func (f *Facts) RecordFailure(addr netip.Addr) {
 		e.score = 0
 	}
 	e.pending += f.penalty
+
+	// 多维风险引擎：记录失败事件（feature flag 控制）
+	if f.riskEngine != nil {
+		ip := key(addr)
+		f.riskEngine.RecordEvent(ip, risk.EventFailure, 1.0)
+		// 异步持久化到数据库（不阻塞主链路）
+		if f.db != nil {
+			go func() {
+				_ = f.db.InsertEvent(ip, risk.EventFailure, 1.0, 0)
+			}()
+		}
+	}
+}
+
+// RecordRiskEvent 记录自定义风险事件到多维引擎。
+//
+// 仅在 riskEngine != nil 时生效（feature flag 控制）。
+// eventType 和 increment 由调用方决定（如 ClassifyFailure 的返回值）。
+func (f *Facts) RecordRiskEvent(addr netip.Addr, eventType risk.EventType, increment float64) {
+	if f.riskEngine == nil {
+		return
+	}
+	ip := key(addr)
+	f.riskEngine.RecordEvent(ip, eventType, increment)
+	// 异步持久化
+	if f.db != nil {
+		go func() {
+			_ = f.db.InsertEvent(ip, eventType, increment, 0)
+		}()
+	}
+}
+
+// RiskVector 返回指定 IP 的当前风险向量（多维引擎启用时）。
+//
+// 返回 (零向量, false) 表示引擎未启用或该 IP 无记录。
+func (f *Facts) RiskVector(addr netip.Addr) (risk.RiskVector, bool) {
+	if f.riskEngine == nil {
+		return risk.RiskVector{}, false
+	}
+	return f.riskEngine.GetVector(key(addr))
+}
+
+// RiskEngineEnabled 报告多维风险引擎是否启用。
+func (f *Facts) RiskEngineEnabled() bool {
+	return f.riskEngine != nil
 }
 
 // ReputationScore 返回该 IP 当前的信誉分（含本次失败，见调用契约的顺序要求）。

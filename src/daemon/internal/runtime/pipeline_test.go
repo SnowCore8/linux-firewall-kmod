@@ -43,6 +43,8 @@ func (f fixedFacts) ReputationScore(netip.Addr) uint32 { return f.score }
 
 func (f fixedFacts) PriorBanCount(netip.Addr) uint32 { return f.prior }
 
+func (fixedFacts) RiskEngineEnabled() bool { return false }
+
 func mustAddr(t *testing.T, text string) netip.Addr {
 	t.Helper()
 	a, err := netip.ParseAddr(text)
@@ -508,6 +510,8 @@ func (d *decayingFacts) RecordFailure(netip.Addr) {
 func (d *decayingFacts) ReputationScore(netip.Addr) uint32 { return d.score.Load() }
 
 func (d *decayingFacts) PriorBanCount(netip.Addr) uint32 { return 0 }
+
+func (d *decayingFacts) RiskEngineEnabled() bool { return false }
 
 // 记账顺序必须是「先 RecordFailure，后 ReputationScore」。
 //

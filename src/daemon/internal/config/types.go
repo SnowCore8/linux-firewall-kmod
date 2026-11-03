@@ -228,6 +228,26 @@ func DefaultCapacityConfig() CapacityConfig {
 	}
 }
 
+// RiskEngineConfig 是多维风险向量引擎配置（feature flag）。
+//
+// Enabled 为 false 时退化为旧单维度模型（向后兼容）。
+type RiskEngineConfig struct {
+	Enabled bool
+	// HalfLifeDays 是向量衰减的半衰期（天），默认 7 天。
+	HalfLifeDays float64
+	// Weights 是各维度权重配置（可选，零值使用默认权重 1.0）。
+	Weights map[string]float64
+}
+
+// DefaultRiskEngineConfig 返回风险引擎默认配置（默认关闭）。
+func DefaultRiskEngineConfig() RiskEngineConfig {
+	return RiskEngineConfig{
+		Enabled:      false,
+		HalfLifeDays: 7.0,
+		Weights:      nil,
+	}
+}
+
 // 日志目的地与格式取值。
 const (
 	LogDestinationSyslog  uint8 = 0
@@ -278,6 +298,10 @@ type Config struct {
 	TrustedIPs []string
 	Capacity   CapacityConfig
 
+	// RiskEngine 是多维风险向量引擎配置（feature flag）。
+	// Enabled 为 false 时退化为旧单维度模型（向后兼容）。
+	RiskEngine RiskEngineConfig
+
 	GeoipDBPath         string
 	ServerLatitude      float64
 	ServerLongitude     float64
@@ -316,6 +340,7 @@ func Default() Config {
 		Ddos:                 DefaultDdosConfig(),
 		Webui:                DefaultWebuiConfig(),
 		Capacity:             DefaultCapacityConfig(),
+		RiskEngine:           DefaultRiskEngineConfig(),
 		MaxSSEConnections:    32,
 		HistoryDBPath:        "",
 		HistoryRetentionDays: 7,

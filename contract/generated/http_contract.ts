@@ -125,6 +125,12 @@ export const ROUTES = {
   GET_API_V1_STATS_BAN_DURATION_RECOMMENDATIONS: "/api/v1/stats/ban-duration-recommendations",
   /** `GET /api/v1/stats/reputation` */
   GET_API_V1_STATS_REPUTATION: "/api/v1/stats/reputation",
+  /** `GET /api/v2/risk/vectors/:ip` */
+  GET_API_V2_RISK_VECTORS_IP: "/api/v2/risk/vectors/:ip",
+  /** `GET /api/v2/risk/events/:ip` */
+  GET_API_V2_RISK_EVENTS_IP: "/api/v2/risk/events/:ip",
+  /** `GET /api/v2/risk/vectors` */
+  GET_API_V2_RISK_VECTORS: "/api/v2/risk/vectors",
   /** `GET /api/v1/stats/threshold-recommendations` */
   GET_API_V1_STATS_THRESHOLD_RECOMMENDATIONS: "/api/v1/stats/threshold-recommendations",
   /** `GET /api/v1/stats/network-distribution` */
@@ -592,6 +598,43 @@ export interface ReputationEntryResponse {
   total_failures: number
   total_bans: number
   threshold_multiplier: number
+}
+
+/** 契约类型 `RiskVectorResponse` */
+export interface RiskVectorResponse {
+  ip: string
+  failure: number
+  ban: number
+  scan: number
+  bruteforce: number
+  ddos: number
+  geo: number
+  cluster: number
+  total_risk: number
+  last_event_at: number
+  updated_at: number
+}
+
+/** 契约类型 `RiskVectorListResponse` */
+export interface RiskVectorListResponse {
+  vectors: RiskVectorResponse[]
+  total: number
+}
+
+/** 契约类型 `RiskEventEntry` */
+export interface RiskEventEntry {
+  id: number
+  ip: string
+  event_type: string
+  increment: number
+  occurred_at: number
+}
+
+/** 契约类型 `RiskEventResponse` */
+export interface RiskEventResponse {
+  ip: string
+  events: RiskEventEntry[]
+  total: number
 }
 
 /** 契约类型 `UdpPortDistributionResponse` */

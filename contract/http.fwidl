@@ -840,6 +840,38 @@ route GET "/api/v1/stats/reputation" {
   note = "载荷 ReputationEntryResponse 数组；threshold_multiplier 由内联分段函数生成（1.0 / 0.8 / 0.5）"
 }
 
+# ---- 需认证：多维风险向量（v2 API）------------------------------------------
+#
+# 新风险引擎 API：提供多维风险向量查询与事件历史。
+# 仅在 risk_engine.enabled = true 时可用，否则返回 503。
+
+route GET "/api/v2/risk/vectors/:ip" {
+  auth = required
+  handler = RiskVectors
+  returns = type
+  status = 200
+  codes = 50003, 40006
+  note = "载荷 RiskVectorResponse：指定 IP 的多维风险向量（7 个维度）。仅在 risk_engine.enabled=true 时可用，否则返回 503。IP 非法 → 40006"
+}
+
+route GET "/api/v2/risk/events/:ip" {
+  auth = required
+  handler = RiskEvents
+  returns = type
+  status = 200
+  codes = 50003, 40006
+  note = "载荷 RiskEventResponse：指定 IP 的攻击事件历史（最近 100 条，按时间降序）。仅在 risk_engine.enabled=true 时可用，否则返回 503。IP 非法 → 40006"
+}
+
+route GET "/api/v2/risk/vectors" {
+  auth = required
+  handler = ListRiskVectors
+  returns = type
+  status = 200
+  codes = 50003
+  note = "载荷 RiskVectorListResponse：所有 IP 的风险向量列表（按总风险降序，最多 100 条）。仅在 risk_engine.enabled=true 时可用，否则返回 503"
+}
+
 route GET "/api/v1/stats/threshold-recommendations" {
   auth = required
   handler = ThresholdRecommendations
@@ -1552,6 +1584,54 @@ type ReputationEntryResponse {
   # 该分数当前让阈值放宽的系数，直接取判定层的 ReputationMultiplier（≥80→1.0、≥50→0.8、
   # 其余 0.5），不在 HTTP 面重抄分段：面板显示的系数与实际生效的阈值必须出自同一份算式
   threshold_multiplier: f64
+}
+
+# ---- 多维风险向量（v2 API）--------------------------------------------------
+#
+# 新风险引擎的载荷类型。仅在 risk_engine.enabled=true 时可用。
+
+# 单个 IP 的多维风险向量。
+type RiskVectorResponse {
+  ip: String
+  # 7 个维度的风险值（各维度独立衰减，半衰期 7 天）
+  failure: f64
+  ban: f64
+  scan: f64
+  bruteforce: f64
+  ddos: f64
+  geo: f64
+  cluster: f64
+  # 加权和（各维度权重默认为 1.0）
+  total_risk: f64
+  # 最近一次事件时刻（Unix 秒）
+  last_event_at: i64
+  # 向量更新时间（Unix 秒）
+  updated_at: i64
+}
+
+# 风险向量列表（所有 IP）。
+type RiskVectorListResponse {
+  vectors: Vec<RiskVectorResponse>
+  total: u32
+}
+
+# 攻击事件记录。
+type RiskEventEntry {
+  id: i64
+  ip: String
+  # 事件类型：failure / ban / scan / bruteforce / ddos / geo / cluster
+  event_type: String
+  # 向量增量
+  increment: f64
+  # 事件发生时刻（Unix 秒）
+  occurred_at: i64
+}
+
+# 攻击事件历史。
+type RiskEventResponse {
+  ip: String
+  events: Vec<RiskEventEntry>
+  total: u32
 }
 
 # ---- 分析：内核统计分布 -----------------------------------------------------

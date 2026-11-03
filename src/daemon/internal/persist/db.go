@@ -109,10 +109,46 @@ func (db *DB) migrate() error {
 
 		CREATE INDEX IF NOT EXISTS idx_ban_history_ban_count ON ban_history(ban_count);
 		CREATE INDEX IF NOT EXISTS idx_ban_history_last_banned ON ban_history(last_banned_at);
+
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version INTEGER PRIMARY KEY,
+			applied_at INTEGER NOT NULL
+		);
+
+		CREATE TABLE IF NOT EXISTS attack_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ip TEXT NOT NULL,
+			event_type TEXT NOT NULL,
+			increment REAL NOT NULL,
+			occurred_at INTEGER NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_attack_events_ip ON attack_events(ip, occurred_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_attack_events_type ON attack_events(event_type);
+		CREATE INDEX IF NOT EXISTS idx_attack_events_occurred_at ON attack_events(occurred_at);
+
+		CREATE TABLE IF NOT EXISTS ip_risk_vectors (
+			ip TEXT PRIMARY KEY,
+			failure REAL NOT NULL DEFAULT 0,
+			ban REAL NOT NULL DEFAULT 0,
+			scan REAL NOT NULL DEFAULT 0,
+			bruteforce REAL NOT NULL DEFAULT 0,
+			ddos REAL NOT NULL DEFAULT 0,
+			geo REAL NOT NULL DEFAULT 0,
+			cluster REAL NOT NULL DEFAULT 0,
+			last_event_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_ip_risk_vectors_updated ON ip_risk_vectors(updated_at);
 	`
 
 	if _, err := db.conn.Exec(schema); err != nil {
 		return fmt.Errorf("create schema: %w", err)
+	}
+
+	if err := db.applyMigrations(); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
 	}
 
 	// 已在现场的库由 CREATE TABLE IF NOT EXISTS 跳过，新加的列只能靠 ALTER 补上。
@@ -176,6 +212,71 @@ func (db *DB) ensureColumn(table, column, definition string) error {
 	return nil
 }
 
+// applyMigrations 按版本号顺序执行增量迁移。
+//
+// 每次启动检查当前版本，依次执行未应用的迁移。迁移失败时回滚并报错，不会留下半完成状态。
+func (db *DB) applyMigrations() error {
+	migrations := []struct {
+		version int
+		up      func() error
+	}{
+		{1, db.migrationV1},
+	}
+
+	for _, m := range migrations {
+		applied, err := db.isMigrationApplied(m.version)
+		if err != nil {
+			return fmt.Errorf("check migration v%d: %w", m.version, err)
+		}
+		if applied {
+			continue
+		}
+
+		db.logger.Info("applying migration", "version", m.version)
+		if err := m.up(); err != nil {
+			return fmt.Errorf("apply migration v%d: %w", m.version, err)
+		}
+		if err := db.recordMigration(m.version); err != nil {
+			return fmt.Errorf("record migration v%d: %w", m.version, err)
+		}
+		db.logger.Info("migration applied", "version", m.version)
+	}
+
+	return nil
+}
+
+// isMigrationApplied 检查指定版本的迁移是否已应用。
+func (db *DB) isMigrationApplied(version int) (bool, error) {
+	var count int
+	err := db.conn.QueryRow(
+		"SELECT COUNT(*) FROM schema_migrations WHERE version = ?",
+		version,
+	).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("query schema_migrations: %w", err)
+	}
+	return count > 0, nil
+}
+
+// recordMigration 记录已应用的迁移版本。
+func (db *DB) recordMigration(version int) error {
+	_, err := db.conn.Exec(
+		"INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+		version, time.Now().Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("insert schema_migrations: %w", err)
+	}
+	return nil
+}
+
+// migrationV1 初始化多维风险向量表（首次部署时表已存在，此迁移为空操作）。
+//
+// 保留此迁移是为了版本号一致性：未来新增迁移从 v2 开始。
+func (db *DB) migrationV1() error {
+	return nil
+}
+
 // CleanupExpired 清理超过保留期的封禁事件、信誉分与历史记录，防止数据库无限增长。
 func (db *DB) CleanupExpired(retentionDays int) error {
 	if retentionDays <= 0 {
@@ -205,6 +306,22 @@ func (db *DB) CleanupExpired(retentionDays int) error {
 	}
 	if rows, _ := result.RowsAffected(); rows > 0 {
 		db.logger.Info("cleaned up expired ban_history", "count", rows, "retention_days", retentionDays)
+	}
+
+	result, err = db.conn.Exec("DELETE FROM attack_events WHERE occurred_at < ?", cutoff)
+	if err != nil {
+		return fmt.Errorf("cleanup attack_events: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows > 0 {
+		db.logger.Info("cleaned up expired attack_events", "count", rows, "retention_days", retentionDays)
+	}
+
+	result, err = db.conn.Exec("DELETE FROM ip_risk_vectors WHERE updated_at < ?", cutoff)
+	if err != nil {
+		return fmt.Errorf("cleanup ip_risk_vectors: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows > 0 {
+		db.logger.Info("cleaned up expired ip_risk_vectors", "count", rows, "retention_days", retentionDays)
 	}
 
 	return nil
