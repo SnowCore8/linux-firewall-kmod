@@ -362,6 +362,12 @@ jobs:
         run: |
           sudo apt-get update
           # 守护进程是纯 Go 静态二进制，无 libyaml / libsqlite3 / libmicrohttpd / libpcre2 依赖。
+          # 但 e2e 要真正 insmod 内核模块：下载来的 firewall.ko 是 build 作业那台 VM 对着它
+          # 自己的内核编的，vermagic 锁死；e2e 是另一台 VM，内核小版本可能不同，直接 insmod
+          # 会「Invalid module format」。故装齐工具链 + 本机内核头文件，稍后对着本机内核重编。
+          sudo apt-get install -y build-essential ccache \
+            linux-headers-"$(uname -r)" 2>/dev/null || \
+          sudo apt-get install -y linux-headers-generic
 
       - name: 安装 Node.js
         uses: actions/setup-node@v5
@@ -376,6 +382,20 @@ jobs:
           # 只装 chromium：套件只跑 Desktop Chrome 一个 project。
           # --with-deps 会连同系统库一起装齐。
           npx playwright install --with-deps chromium
+
+      - name: 针对本机内核重编内核模块
+        run: |
+          # 跨 VM 的 .ko vermagic 不匹配（见「安装运行时依赖」注释）。对着本机 uname -r 重编，
+          # probe 才能加载成功、Playwright 用例才不必整体跳过。下载产物的 mtime 比源码新，
+          # 先删掉以强制重编。头文件缺失时保留下载产物，由 probe 决定跳过（环境限制，非代码问题）。
+          KDIR="/lib/modules/$(uname -r)/build"
+          if [[ -d "$KDIR" ]]; then
+            rm -f build/kernel-module/firewall.ko
+            make kernel-module KDIR="$KDIR"
+            echo "✓ 已针对本机内核 $(uname -r) 重编 firewall.ko"
+          else
+            echo "⚠ 本机内核 $(uname -r) 头文件不可用，沿用下载产物（probe 可能跳过）"
+          fi
 
       - name: 探测内核模块可加载性
         id: check-module
@@ -450,6 +470,12 @@ jobs:
         run: |
           sudo apt-get update
           # 守护进程是纯 Go 静态二进制，无 libyaml / libsqlite3 / libmicrohttpd / libpcre2 依赖。
+          # 内核测试要真正 insmod：下载来的 firewall.ko 由 build 作业那台 VM 对着它的内核编，
+          # vermagic 锁死；test 是另一台 VM，内核小版本可能不同，直接 insmod 会「Invalid module
+          # format」。故装齐工具链 + 本机内核头文件，稍后对着本机 uname -r 重编。
+          sudo apt-get install -y build-essential ccache \
+            linux-headers-"$(uname -r)" 2>/dev/null || \
+          sudo apt-get install -y linux-headers-generic
           # 测试套件强制要求 sqlite3 CLI（禁止跳过）
           sudo apt-get install -y sqlite3
           sqlite3 --version
@@ -461,6 +487,20 @@ jobs:
           sudo apt-get install -y python3-pytest python3-yaml
           python3 -m pytest --version
           python3 -c "import yaml; print('PyYAML', yaml.__version__)"
+
+      - name: 针对本机内核重编内核模块
+        run: |
+          # 跨 VM 的 .ko vermagic 不匹配（见「安装运行时依赖」注释）。对着本机 uname -r 重编，
+          # 下面的 insmod 才能加载、内核测试才不必整体跳过。下载产物的 mtime 比源码新，先删掉
+          # 以强制重编。头文件缺失时保留下载产物，由随后的兼容性验证决定跳过（环境限制，非代码问题）。
+          KDIR="/lib/modules/$(uname -r)/build"
+          if [[ -d "$KDIR" ]]; then
+            rm -f build/kernel-module/firewall.ko
+            make kernel-module KDIR="$KDIR"
+            echo "✓ 已针对本机内核 $(uname -r) 重编 firewall.ko"
+          else
+            echo "⚠ 本机内核 $(uname -r) 头文件不可用，沿用下载产物（可能无法加载）"
+          fi
 
       - name: 验证内核模块兼容性
         id: check-module
