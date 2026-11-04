@@ -10,7 +10,7 @@ jobs:
   # 代码质量任务：最先执行，仅包含静态检查（代码风格 + YAML 配置）
   lint:
     name: 代码质量检查
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: 检出代码
@@ -94,7 +94,7 @@ jobs:
   # 前端任务：类型检查 + 构建 + 产物校验（独立执行，与 lint 并行）
   frontend:
     name: 前端构建
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: 检出代码
@@ -103,7 +103,7 @@ jobs:
       - name: 安装 Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -157,7 +157,7 @@ jobs:
   # 编译任务：独立执行，与 lint 并行运行
   build:
     name: 编译
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: 检出代码
@@ -239,7 +239,7 @@ jobs:
       - name: 安装 Node.js（前端构建）
         uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -342,7 +342,7 @@ jobs:
   e2e:
     name: 浏览器端到端测试
     needs: [build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
 
     steps:
@@ -366,7 +366,7 @@ jobs:
       - name: 安装 Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -427,7 +427,7 @@ jobs:
   test:
     name: 运行测试
     needs: [build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       # 跳过测试脚本内部的重新编译步骤，使用 build 任务的产物
