@@ -234,27 +234,6 @@
         }
       }
     },
-    "/more": {
-      "get": {
-        "operationId": "spaShell",
-        "summary": "GET /more",
-        "tags": [
-          "default"
-        ],
-        "responses": {
-          "200": {
-            "description": "成功",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/static/*path": {
       "get": {
         "operationId": "serveAsset",
@@ -3505,7 +3484,7 @@
     "/api/v2/stats/attack-geo": {
       "get": {
         "operationId": "AttackGeo",
-        "summary": "攻击源地理分布；载荷 AttackGeoResponse。**不编业务码**：这条恒成功。当前实现**没有 GeoIP 读库**（见 defect HTTP_GEOIP_NOT_IMPLEMENTED），因此 geoip_enabled 恒",
+        "summary": "攻击源地理分布；载荷 AttackGeoResponse。**不编业务码**：这条恒成功。当前实现**没有 GeoIP 读库**（仓库内无 mmdb 读取实现，也无 egress 探测），因此 geoip_enabled 恒为 false、",
         "tags": [
           "v2"
         ],
@@ -3516,7 +3495,7 @@
         ],
         "responses": {
           "200": {
-            "description": "攻击源地理分布；载荷 AttackGeoResponse。**不编业务码**：这条恒成功。当前实现**没有 GeoIP 读库**（见 defect HTTP_GEOIP_NOT_IMPLEMENTED），因此 geoip_enabled 恒为 false、points 恒为 []、total_ips/located_ips 恒为 0——这是「没有读数」而不是「没有攻击来自远方」。本机坐标三件套有真",
+            "description": "攻击源地理分布；载荷 AttackGeoResponse。**不编业务码**：这条恒成功。当前实现**没有 GeoIP 读库**（仓库内无 mmdb 读取实现，也无 egress 探测），因此 geoip_enabled 恒为 false、points 恒为 []、total_ips/located_ips 恒为 0——这是「没有读数」而不是「没有攻击来自远方」。本机坐标三件套有真源（配置项 se",
             "content": {
               "application/json": {
                 "schema": {

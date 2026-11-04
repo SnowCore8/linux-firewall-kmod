@@ -279,8 +279,8 @@ const banDurationSampleLimit = 10000
 
 // AttackGeo 返回攻击源地理分布（GET /api/v2/stats/attack-geo）。
 //
-// 本守护进程**没有 GeoIP 读库**：配置项 geoip_db_path 没有任何消费方（契约里记为缺陷
-// HTTP_GEOIP_NOT_IMPLEMENTED）。这一条因此恒为 geoip_enabled=false、points 空、两个计数 0。
+// 本守护进程**没有 GeoIP 读库**：配置项 geoip_db_path 没有任何消费方（仓库内无 mmdb 读取
+// 实现）。这一条因此恒为 geoip_enabled=false、points 空、两个计数 0。
 //
 // 本机坐标三件套**有**真源（config 的 server_latitude/server_longitude，必须成对给出），
 // 所以它照实返回：前端画地图时靠它决定本机标记与弧线，地理库缺席不影响这件事。

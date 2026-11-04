@@ -48,7 +48,6 @@ func (s *Server) RegisterStaticFiles(fsys fs.FS) {
 	s.HandleFunc(httpcontract.RouteGetDdos, spaShell(fsys))
 	s.HandleFunc(httpcontract.RouteGetLogs, spaShell(fsys))
 	s.HandleFunc(httpcontract.RouteGetSettings, spaShell(fsys))
-	s.HandleFunc(httpcontract.RouteGetMore, spaShell(fsys))
 
 	s.HandleFunc(httpcontract.RouteGetStaticPath, serveAsset(fsys))
 
@@ -94,7 +93,7 @@ func serviceWorker(fsys fs.FS) http.HandlerFunc {
 	}
 }
 
-// spaShell 返回「把 index.html 原样交出去」的 handler：8 个页面路径共用它。
+// spaShell 返回「把 index.html 原样交出去」的 handler：7 个页面路径共用它。
 //
 // 前端用 hash 路由，服务端不需要按路径改写内容——它要做的只是让每个页面路径都能拿到壳。
 func spaShell(fsys fs.FS) http.HandlerFunc {

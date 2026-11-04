@@ -140,8 +140,6 @@ const (
 	RouteGetLogs = "GET /logs"
 	// GET /settings → spaShell（无认证）
 	RouteGetSettings = "GET /settings"
-	// GET /more → spaShell（无认证）
-	RouteGetMore = "GET /more"
 	// GET /static/*path → serveAsset（无认证）
 	RouteGetStaticPath = "GET /static/{path...}"
 	// GET /sw.js → serviceWorker（无认证）
@@ -308,7 +306,6 @@ var Routes = []Route{
 	{Pattern: RouteGetDdos, Path: "/ddos", Method: "GET", Auth: AuthNone, Handler: "spaShell", Returns: ReturnsText, Status: 200},
 	{Pattern: RouteGetLogs, Path: "/logs", Method: "GET", Auth: AuthNone, Handler: "spaShell", Returns: ReturnsText, Status: 200},
 	{Pattern: RouteGetSettings, Path: "/settings", Method: "GET", Auth: AuthNone, Handler: "spaShell", Returns: ReturnsText, Status: 200},
-	{Pattern: RouteGetMore, Path: "/more", Method: "GET", Auth: AuthNone, Handler: "spaShell", Returns: ReturnsText, Status: 200},
 	{Pattern: RouteGetStaticPath, Path: "/static/{path...}", Method: "GET", Auth: AuthNone, Handler: "serveAsset", Returns: ReturnsBytes, Status: 200, AltStatus: 404},
 	{Pattern: RouteGetSwJs, Path: "/sw.js", Method: "GET", Auth: AuthNone, Handler: "serviceWorker", Returns: ReturnsBytes, Status: 200, AltStatus: 404},
 	{Pattern: RouteGetMetrics, Path: "/metrics", Method: "GET", Auth: AuthRequired, Handler: "ServeHTTP", Returns: ReturnsText, Status: 200},

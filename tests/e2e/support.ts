@@ -83,8 +83,8 @@ export const ROUTE_CASES: RouteCase[] = [
  *
  * 与 ROUTE_CASES **刻意解耦**：/risk、/threat-feeds、/analysis 是仅前端的 hash 路由，
  * 服务端没有为它们注册壳（GET /risk 落到 `/` 子树模式 → 404），只能经「已知壳路径 +
- * `#/risk`」直达（openRoute 正是这么做的）。/more 虽是已注册的壳路径，但已无对应视图
- * （死路由，单独跟踪待移除），故不纳入断言，以免把待删行为锁进测试。
+ * `#/risk`」直达（openRoute 正是这么做的）。SHELL_PATHS 因此就是服务端逐条注册的全部页面壳
+ * （与 static.go 的 spaShell 注册项、契约 RouteGet* 一一对应），不多也不少。
  */
 export const SHELL_PATHS: string[] = [
   '/dashboard',

@@ -211,9 +211,9 @@ type BanDurationHistogramResponse struct {
 
 // AttackGeoResponse 是攻击源地理分布（GET /api/v2/stats/attack-geo）。
 //
-// 本守护进程**没有 GeoIP 读库**（配置项 geoip_db_path 无人消费，见契约的
-// HTTP_GEOIP_NOT_IMPLEMENTED），因此 geoip_enabled 恒为 false、points 恒为空、两个计数
-// 恒为 0；本机坐标三件套仍有真源（config 的 server_latitude/longitude），照常给出。
+// 本守护进程**没有 GeoIP 读库**（配置项 geoip_db_path 无人消费，仓库内无 mmdb 读取实现），
+// 因此 geoip_enabled 恒为 false、points 恒为空、两个计数恒为 0；本机坐标三件套仍有真源
+// （config 的 server_latitude/longitude），照常给出。
 type AttackGeoResponse struct {
 	GeoipEnabled         bool       `json:"geoip_enabled"`
 	Points               []GeoPoint `json:"points"`

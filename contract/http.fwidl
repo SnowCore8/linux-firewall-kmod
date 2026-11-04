@@ -287,13 +287,6 @@ defect HTTP_THRESHOLD_RECOMMENDATION_ZERO_AMBIGUOUS {
   text = "ThresholdRecommendation.recommended_threshold 的注释称『0=无需调整』（前端 frontend/src/api/types.ts 曾这么写），但 Go 面 src/daemon/internal/analysis/recommendations.go 的三个分支都不产生 0：decrease 分支把结果夹到 >= 1，increase 分支乘 1.5，maintain 分支直接 `recommended = current`。按注释判断『无需调整』的调用永远不成立。接线时核过消费方：前端没有任何一处按 0 分支渲染（Jails.tsx 读的是另一条载荷的 needs_adjustment），所以这里闭合的是**注释与算式的说法不合**而不是一个在跑的错判。现在载荷里 maintain 的条目给出与原值相同的推荐数、direction 说明不必改，契约的字段注释与 types.ts 同步改成这个口径。同一条路数还顺手补了两处只在这里可见的空转：analyzeJailTrends 在七天窗口无样本时按 ratio=0 报 falling（把「没有样本」读成「在下降」，现记 stable），jail_trends.predicted_attackers_24h 过去从来没有赋值点（恒 0），现在按截断前的全集统计"
 }
 
-defect HTTP_GEOIP_NOT_IMPLEMENTED {
-  severity = medium
-  status = open
-  resolution = "接一个 MaxMind 读库（mmdb）：把 ban_events 里出现过的地址逐条查库，按 (国家, 城市) 聚合成 GeoPoint（同段内 unique_ips/total_bans 计数、top_ip 取封禁次数最多者、last_banned_at 取最近一次），最多 200 个并按 total_bans 降序；geoip_enabled 改为「路径存在且可读」的实测结果而不是配置项的字符串非空；server_location_source 若要给 \"detected\"，必须由 geoip_detect_egress + geoip_egress_probe_url 那条探测路径真实产出并在配置有值时让位给 \"config\"。前端 Globe.tsx 的 EmptyState 分支因此才有真正的退出条件。"
-  text = "GET /api/v2/stats/attack-geo 已接线，但它**只能**报「没有地理读数」。配置项 geoip_db_path 与 geoip_detect_egress / geoip_egress_probe_url 在 src/daemon/internal/config/parser.go 里被解析并保存（applyGeoip），却没有任何消费方——仓库里没有 mmdb 读取实现，也没有 egress 探测。于是这一条恒定产出 geoip_enabled=false、points=[]、total_ips=0、located_ips=0，前端 frontend/src/views/Globe.tsx 的 `!data.geoip_enabled` 分支永远为真，整个页面停在 EmptyState：运维看不出这是「这台机器上没有地理库」还是「攻击全部来自无法定位的地址」，而全球攻击视图是面板上唯一回答「攻击从哪儿来」的一页。本机坐标三件套有真源（server_latitude/server_longitude，成对给出才生效），所以地图上的本机标记与 server_location_source=\"config\" 是可用的一半；\"detected\" 这个取值本实现不产出，也不拿猜测的经纬度冒充探测结果。这是**功能缺失**而不是数据缺失：路由、载荷与降级形状都已按契约就位，缺的是地址→坐标那一步"
-}
-
 defect HTTP_SERVICE_PROBE_NO_TOTAL {
   severity = low
   status = fixed
@@ -457,13 +450,6 @@ route GET "/logs" {
 }
 
 route GET "/settings" {
-  auth = none
-  handler = spaShell
-  returns = text
-  status = 200
-}
-
-route GET "/more" {
   auth = none
   handler = spaShell
   returns = text
@@ -948,14 +934,14 @@ route GET "/api/v2/stats/attack-geo" {
   handler = AttackGeo
   returns = type
   status = 200
-  note = "攻击源地理分布；载荷 AttackGeoResponse。**不编业务码**：这条恒成功。当前实现**没有 GeoIP 读库**（见 defect HTTP_GEOIP_NOT_IMPLEMENTED），因此 geoip_enabled 恒为 false、points 恒为 []、total_ips/located_ips 恒为 0——这是「没有读数」而不是「没有攻击来自远方」。本机坐标三件套有真源（配置项 server_latitude/server_longitude，必须成对给出）：设了就回数值 + source=\"config\"，没设就两个 null + source=\"none\"。契约里的第三个取值 \"detected\"（由 egress 探测推断，配置项 geoip_detect_egress）本实现没有做，不拿猜出来的经纬度冒充探测结果"
+  note = "攻击源地理分布；载荷 AttackGeoResponse。**不编业务码**：这条恒成功。当前实现**没有 GeoIP 读库**（仓库内无 mmdb 读取实现，也无 egress 探测），因此 geoip_enabled 恒为 false、points 恒为 []、total_ips/located_ips 恒为 0——这是「没有读数」而不是「没有攻击来自远方」。本机坐标三件套有真源（配置项 server_latitude/server_longitude，必须成对给出）：设了就回数值 + source=\"config\"，没设就两个 null + source=\"none\"。契约里的第三个取值 \"detected\"（由 egress 探测推断，配置项 geoip_detect_egress）本实现没有做，不拿猜出来的经纬度冒充探测结果"
 }
 
 # 攻击源地理分布载荷。
 #
 # `geoip_enabled=false`（数据库未装配）时 points 为空、total_ips/located_ips 为 0，
 # 本机坐标三件套仍照常返回（它们不依赖地理库）。**当前实现就停在这个分支上**：
-# 配置项 geoip_db_path 没有任何消费方，见 defect HTTP_GEOIP_NOT_IMPLEMENTED。
+# 配置项 geoip_db_path 没有任何消费方（仓库内无 mmdb 读取实现）。
 type AttackGeoResponse {
   # 地理解析是否可用（数据库是否已装配且可用）
   geoip_enabled: bool
