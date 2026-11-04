@@ -14,10 +14,10 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 配置 Go 模块缓存
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
@@ -27,7 +27,7 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: 配置 pip 缓存
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-yamllint
@@ -70,7 +70,7 @@ jobs:
         continue-on-error: true
 
       - name: 上传覆盖率报告
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: go-coverage
           path: src/daemon/coverage.out
@@ -98,10 +98,10 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 安装 Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
@@ -161,7 +161,7 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 安装编译依赖
         run: |
@@ -176,7 +176,7 @@ jobs:
           # ccache 加速内核模块重复编译（CI 缓存命中时跳过预处理+编译阶段）
 
       - name: 配置 ccache 缓存
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.ccache
           key: ${{ runner.os }}-ccache-${{ hashFiles('src/kernel-module/*.c', 'src/kernel-module/*.h') }}
@@ -184,7 +184,7 @@ jobs:
             ${{ runner.os }}-ccache-
 
       - name: 配置 Go 模块缓存
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
@@ -237,7 +237,7 @@ jobs:
           fi
 
       - name: 安装 Node.js（前端构建）
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
@@ -318,7 +318,7 @@ jobs:
           fi
 
       - name: 上传编译产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: build-artifacts
           path: |
@@ -347,10 +347,10 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 下载编译产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: build-artifacts
           path: build/
@@ -364,7 +364,7 @@ jobs:
           # 守护进程是纯 Go 静态二进制，无 libyaml / libsqlite3 / libmicrohttpd / libpcre2 依赖。
 
       - name: 安装 Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
@@ -412,7 +412,7 @@ jobs:
 
       - name: 上传 Playwright 报告
         if: always() && steps.check-module.outputs.compatible == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-report
           path: playwright-report/
@@ -435,10 +435,10 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 下载编译产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: build-artifacts
           path: build/

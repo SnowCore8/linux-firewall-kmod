@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 安装依赖
         run: |
@@ -36,7 +36,7 @@ jobs:
           ./build-deb.sh ${{ steps.version.outputs.VERSION }}
 
       - name: 创建 GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: build/deb/linux-firewall-kmod-*.deb
           generate_release_notes: true
