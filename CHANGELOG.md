@@ -311,10 +311,13 @@
   整行（`TestMultiProcessAppendStaysWhole`）、轮转后每片仍是合法 JSONL（`TestRotatedSlicesRemainValidJSONL`）、
   目的地降级与 fanout 行为；用例数量以 `go test ./internal/logger` 输出为准。
 
-## [Unreleased] - 前端重建：React 19 + TypeScript + Vite + antd-mobile（移动优先 + PWA）
+## [Unreleased] - 前端全新重写：React 19 + TypeScript + Vite + Ant Design 6（桌面优先 + 响应式 + PWA）
 
 ### 新增
-- **前端重建为 React 19 移动端应用** - 前端技术栈定为 **React 19 + TypeScript + Vite + antd-mobile 5**（移动优先）。布局为底部 TabBar（仪表盘 / 封禁 / 白名单 / DDoS / 更多）+ 卡片式列表，「更多」页收纳 Jails / 系统日志 / 设置三个二级页。此前的 Leptos WASM 实现与中间一轮 Vue 3 实现均已删除，本次按新契约从零重写，**不复用任何旧前端代码**；图表继续手写 SVG（未引入图表库）
+- **前端按桌面控制台范式全新重写** - 技术栈定为 **React 19 + TypeScript + Vite + Ant Design 6（`antd`）+ @ant-design/icons + ECharts 6（`echarts-for-react`）+ react-router-dom 7（hash 路由）**。桌面优先、响应式：常驻可折叠侧边栏 + 顶栏（命令面板入口、实时连接状态灯、主题/密度切换、通知中心、账户菜单），窄屏降级为抽屉导航。信息架构单一真相源是 `src/app/nav.ts` 的 `NAV_GROUPS`（总览 / 防护 / 智能 / 运维），驱动侧边栏、命令面板与面包屑。**不复用任何旧前端代码**：此前一轮 antd-mobile 5 移动优先实现（底部 TabBar + 卡片列表 + 手写 SVG 图表）从未发布即被本次重写整体取代，更早的 Leptos WASM 与 Vue 3 实现亦已删除
+- **迷你设计系统** - 建于 AntD token 之上：语义色 + 威胁等级色阶、等宽字体承载 IP/速率/计数、暗/亮双主题（默认跟随系统、首屏内联防闪烁）、标准/紧凑双密度；偏好落 localStorage 且跨标签同步
+- **命令面板与全局快捷键** - `Ctrl/⌘+K` 唤出命令面板（页面跳转 + 快捷动作，↑↓/Enter/Esc 全键盘可达），`Ctrl/⌘+J` 切主题、`R` 刷新当前页
+- **智能分析新页** - 新增风险引擎、威胁情报、智能分析三页，消费既有后端端点；配套把后端 `analysis/summary` 与 `analysis/ip/{ip}` 桩填成真实数据
 - **PWA 支持** - 新增 `frontend/public/manifest.webmanifest`（`display: standalone`、`start_url: /dashboard#/dashboard`、192/512 图标）与手写零依赖 Service Worker `frontend/public/sw.js`。SW 安装即 `skipWaiting`，激活时清理旧版本缓存并 `clients.claim`；fetch 策略：页面导航网络优先、失败回退缓存外壳，`/static/*` 缓存优先 + 后台刷新，**`/api/*` 一律不拦截**（实时封禁与统计数据不得读缓存）
 - **`GET /sw.js` 路由** - 守护进程新增公开（无认证）路由返回嵌入的 `sw.js`，响应带 `Service-Worker-Allowed: /` 与 `Cache-Control: no-cache`。走根路径而非 `/static/sw.js` 是因为 Service Worker 的作用域上限由脚本路径决定，`/static/sw.js` 只能接管 `/static/`，无法处理页面导航
 - **`.webmanifest` MIME** - `get_static_asset` 补 `.webmanifest` → `application/manifest+json`（原先落到 `application/octet-stream`）
@@ -324,9 +327,14 @@
 - **CI 前端 job** - Node 22 + `npm ci` + `tsc --noEmit` + `vite build`，并断言产物存在（`index.html` / `app.js` / `style.css` / `sw.js` / `manifest.webmanifest` / 192 与 512 图标）、校验 manifest 必需字段与 `sw.js` 语法
 - **安全头中间件** - 已自行声明 `Cache-Control` 的响应不再被统一覆盖成 `no-store`，否则 `/sw.js` 的 `no-cache` 会被吃掉、SW 更新检查失去回源保证；`/sw.js` 纳入 Web UI 的宽松 CSP 范围，避免 `default-src 'none'` 被当作 Service Worker 自身策略而禁掉其内部 fetch
 - **`.gitignore`** - 前端产物规则收敛为 `src/daemon/web_ui/static/*`（含 `sw.js` / `manifest.webmanifest` / `icons/`），`node_modules/` 为 Node 依赖；`frontend/package-lock.json` 保持入库以配合 `npm ci`
+- **`vite` 抬到 `^8.3.5`** - 8.3.0–8.3.2 带 dev-server / launch-editor 高危审计告警（GHSA-698v-4r3x-3vcv、GHSA-r825-w8mm-5pxw 等），把新装下限抬到已修复的 8.3.5，`npm audit` 归零。仅影响开发期 dev server：交付产物是 Go 守护进程服务的预构建静态文件，Vite 不在线上运行
+- **显式声明 `dayjs` 与 `tslib`** - `dayjs` 被 `ThemeProvider`/`Settings` 直接 import，`tslib` 补 `echarts-for-react`（`importHelpers`）的打包缺口；两者原先只靠 antd 提升解析，现写进 `frontend/package.json` 的 `dependencies`
+- **E2E 套件重写** - `tests/e2e/`（Playwright + Desktop Chrome）改为匹配全新桌面前端：全量 hash 路由渲染、认证闸门、写操作回环（封禁/解封落内核再复原）、外壳交互 UX（主题/密度/命令面板/`Ctrl+K`/侧栏折叠，均含落盘 + 刷新保持）、控制台洁净度守卫
 
 ### 移除
-- **旧前端源码与构建配置** - 删除 `frontend/{Cargo.toml,Cargo.lock,Trunk.toml}` 与 `frontend/src/**/*.rs`（Leptos 版本），以及中间一轮 Vue 3 实现留下的全部源码与样式文件（含曾被复用的 `frontend/src/styles/global.css`）
+- **3D 地图页与 three.js** - 删除 Globe（`frontend/src/views/Globe.tsx`）与 three.js 依赖及其契约路由 `RouteGetGlobe`。去掉地图后 GeoIP 无 UI 消费者：`attack-geo` 端点作为契约完整性桩保留（恒 `geoip_enabled=false`、`points=[]`），并退休了 `HTTP_GEOIP_NOT_IMPLEMENTED` 缺陷记录（其叙述锚定已删除的 Globe 页）；端点仍如实标注「无 GeoIP 读库」
+- **死路由 `/more`** - 旧移动实现的「更多」页收纳 Jails / 日志 / 设置，桌面重写后由侧边栏分组直接承载，`/more` 已无对应视图；删除契约 `route GET "/more"`、生成的 `RouteGetMore` 与 `static.go` 注册行（SPA 页面壳由 8 条收敛为 7 条）
+- **antd-mobile 与旧前端源码** - 移除 `antd-mobile`(-icons) 依赖、手写 SVG 图表、`src/state/*` 死代码；以及更早的 Leptos（`frontend/{Cargo.toml,Cargo.lock,Trunk.toml}`、`frontend/src/**/*.rs`）与 Vue 3 实现遗留（含曾被复用的 `frontend/src/styles/global.css`）
 
 > 二进制体积：前端产物变化后尚未统一核算，本文不再沿用旧的 `5.6MB` 数字。需要写具体数值时以 `stat -c %s build/daemon/firewall-daemon` 实测为准。
 
