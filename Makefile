@@ -1053,9 +1053,19 @@ help:
 	@echo "    3) 显式授权: make install FIREWALL_REMOTE_DEPLOY=1"
 
 # 运行综合测试套件
-.PHONY: test
+.PHONY: test test-html test-cov
 test: $(KERNEL_MODULE) $(DAEMON_BIN)
 	sudo python3 -m pytest tests/ -v
+
+# 运行测试并生成 HTML 报告（需要 pytest-html: pip install pytest-html）
+test-html: $(KERNEL_MODULE) $(DAEMON_BIN)
+	sudo python3 -m pytest tests/ -v --html=report.html --self-contained-html
+	@echo "✓ HTML 报告已生成: report.html"
+
+# 运行测试并生成覆盖率报告（Python 集成测试覆盖率意义不大，仅供参考）
+test-cov: $(KERNEL_MODULE) $(DAEMON_BIN)
+	sudo python3 -m pytest tests/ -v --cov=tests --cov-report=term-missing
+	@echo "✓ 覆盖率报告已生成"
 
 # ============================================================================
 # 9. Debian 软件包构建

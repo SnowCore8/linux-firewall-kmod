@@ -632,6 +632,28 @@ def daemon_binary():
 
 
 @pytest.fixture
+def check_daemon():
+    """检查守护进程是否存在，不存在则跳过测试。
+
+    共享 fixture，供需要 daemon 二进制的测试使用。
+    与 daemon_binary 功能相同，命名更清晰。
+    """
+    if not DAEMON_PATH.exists():
+        pytest.skip(f"守护进程不存在: {DAEMON_PATH}")
+    return DAEMON_PATH
+
+
+@pytest.fixture
+def running_daemon():
+    """确保有 daemon 在运行，否则跳过测试。
+
+    用于 test_15/16/17/19 等需要外部 daemon 的测试。
+    """
+    if not is_daemon_running():
+        pytest.skip("需要外部 daemon 运行")
+
+
+@pytest.fixture
 def tmp_config(tmp_path):
     """创建临时配置目录的 fixture"""
     config_dir = tmp_path / "config"

@@ -20,6 +20,7 @@ from .conftest import (
 )
 
 
+@pytest.mark.requires_sqlite3
 class TestPermanentBan:
     """永久封禁功能测试"""
 

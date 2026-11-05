@@ -9,6 +9,7 @@ from .config import CONFIG_DIR, PROC_CONFIG, PROC_STATS
 from .conftest import get_prometheus_metrics, is_daemon_running, get_daemon_pid
 
 
+@pytest.mark.requires_daemon
 class TestDdosDetection:
     """DDoS 检测集成测试"""
 

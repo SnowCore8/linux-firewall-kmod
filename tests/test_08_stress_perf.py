@@ -14,9 +14,12 @@ from .config import (
 from .conftest import wait_procfs
 
 
+@pytest.mark.slow
+@pytest.mark.stress
 class TestStressPerf:
     """压力/性能测试"""
 
+    @pytest.mark.perf
     def test_ban_performance(self, clean_bans):
         """8.1 封禁性能"""
         from .config import PROC_BANS

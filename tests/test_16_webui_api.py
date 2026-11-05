@@ -17,6 +17,7 @@ def curl_get(url: str, timeout: int = 5) -> tuple[int, str]:
     return http_request("GET", url, None, timeout)
 
 
+@pytest.mark.requires_daemon
 class TestWebuiApi:
     """Web UI API 端到端集成测试。
 

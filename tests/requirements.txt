@@ -1,0 +1,14 @@
+# Python 测试依赖
+# 安装: pip install -r tests/requirements.txt
+
+# 核心测试框架
+pytest>=7.0
+
+# YAML 配置解析（test_09/13 等需要）
+pyyaml>=6.0
+
+# 测试报告生成
+pytest-html>=3.0
+
+# 覆盖率收集（可选，Python 集成测试覆盖率意义不大）
+pytest-cov>=4.0

@@ -47,6 +47,7 @@ def _curl(method: str, url: str, data: dict | None = None, timeout: int = 5) -> 
     return http_request(method, url, data, timeout)
 
 
+@pytest.mark.requires_daemon
 class TestNetlinkComm:
     """Netlink 通信与健康指标集成测试。
 

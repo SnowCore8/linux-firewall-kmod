@@ -498,6 +498,8 @@ jobs:
           # 起的（内核测试要 root 权限），所以必须装进系统站点目录，
           # --user 安装对 root 不可见。
           sudo apt-get install -y python3-pytest python3-yaml
+          # 安装测试报告生成依赖（pytest-html 生成 HTML 报告）
+          sudo pip3 install pytest-html --break-system-packages
           python3 -m pytest --version
           python3 -c "import yaml; print('PyYAML', yaml.__version__)"
 
@@ -537,10 +539,25 @@ jobs:
           echo "=== 执行测试 ==="
           if [[ "${{ steps.check-module.outputs.compatible }}" == "true" ]]; then
             echo "运行环境：完整测试（模块可加载）"
-            sudo python3 -m pytest tests/ -v --tb=short
+            sudo python3 -m pytest tests/ -v --tb=short \
+              --junitxml=junit.xml \
+              --html=report.html --self-contained-html
           else
             echo "运行环境：守护进程功能测试（模块不兼容）"
             echo "注：内核模块测试套件（01-04/07/08/11/12/14）需要模块可加载"
             echo "仅运行守护进程相关测试（09/10/13/15-21）"
-            sudo python3 -m pytest tests/ -v --tb=short -k "daemon or logparse or frp or ddos or webui or config_reload or log_rotation or netlink or lifecycle or multi_jail"
+            sudo python3 -m pytest tests/ -v --tb=short \
+              --junitxml=junit.xml \
+              --html=report.html --self-contained-html \
+              -k "daemon or logparse or frp or ddos or webui or config_reload or log_rotation or netlink or lifecycle or multi_jail"
           fi
+
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            junit.xml
+            report.html
+          retention-days: 7

@@ -1,0 +1,48 @@
+# pyproject.toml - 项目配置
+# 本文件定义 Python 工具链配置（pytest、coverage 等）
+
+# =============================================================================
+# pytest 配置
+# =============================================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+    "--strict-config",
+]
+markers = [
+    "slow: 运行时间超过 10 秒的测试（压力测试、性能测试）",
+    "requires_daemon: 需要外部 daemon 运行（test_15/16/17/19）",
+    "requires_module: 需要内核模块加载（大多数集成测试）",
+    "requires_sqlite3: 需要 sqlite3 CLI 工具（test_12 永久封禁）",
+    "e2e: 端到端测试（依赖真实网络环境）",
+    "stress: 压力测试（大量并发、高频操作）",
+    "perf: 性能测试（阈值敏感，可能因机器差异失败）",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+# =============================================================================
+# 覆盖率配置
+# =============================================================================
+# 注意：Python 集成测试测试的是内核模块和守护进程的行为，不是 Python 代码本身。
+# 覆盖率收集对 Python 测试意义不大。Go 单元测试已有覆盖率配置（见 CI）。
+# 此处配置仅为完整性，实际运行 pytest 时通常不带 --cov。
+[tool.coverage.run]
+source = ["tests"]
+omit = [
+    "tests/conftest.py",
+    "tests/config.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.",
+    "pytest.skip",
+]
