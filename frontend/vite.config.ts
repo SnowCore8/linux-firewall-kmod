@@ -1,4 +1,7 @@
-// Vite 构建配置 — 产物直接落到 Go 守护进程的嵌入目录（src/daemon/web_ui/static）
+// Vite 构建配置 — 产物落到 build/obj/frontend（源码树之外）
+//
+// 中间产物与源码分离：Makefile 的 `make daemon` 在 go build 前把这里的内容临时
+// 拷入 src/daemon/web_ui/static（go:embed 的输入），构建结束立即删除。
 //
 // 关键约束（与守护进程随二进制携带面板的契约对齐，迁移前后不变）：
 //   1. base = "/static/"：守护进程对外提供 `GET /static/*path`，
@@ -25,13 +28,10 @@ export default defineConfig({
   base: '/static/',
 
   build: {
-    // 直接输出到 Go 守护进程的嵌入目录（相对 frontend/）：src/daemon 是模块根，
-    // 产物必须是 ../src/daemon/web_ui/static，与 go:embed 目录同名同层。
-    outDir: '../src/daemon/web_ui/static',
-    // 不能用 emptyOutDir：本目录里还有已入库的 assets.go（//go:embed 的持有文件），
-    // vite 清空输出目录会连它一起删掉，随后 go build 就以「包内无 .go 文件」失败。
-    // 陈旧面板文件的清理由 make frontend 的构建前置步骤完成（保留 assets.go）。
-    emptyOutDir: false,
+    // 中间产物写到 build/obj/frontend（相对 frontend/）。embed 目录不在源码树内，
+    // 由 make daemon 临时同步，因此这里可以放心清空输出目录。
+    outDir: '../build/obj/frontend',
+    emptyOutDir: true,
     target: 'es2020',
     // 资源平铺到输出根目录，避免 assets/ 子目录带来的相对路径差异
     assetsDir: '',

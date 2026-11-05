@@ -46,9 +46,11 @@ TanStack Query 之类的数据缓存库——REST 拉取、SSE 增量、轮询�
 
 ### 构建落点
 
-`frontend/vite.config.ts` 的 `build.outDir` 直接指向
-`src/daemon/web_ui/static/`，由 `src/daemon/web_ui/static/assets.go` 的
-`//go:embed *` 携带进守护进程二进制。产物文件名固定：
+`frontend/vite.config.ts` 的 `build.outDir` 是 `../build/obj/frontend`。
+`make daemon` 在 `go build` 期间把这批文件临时拷进
+`src/daemon/web_ui/static/`，由该目录的 `assets.go`（`//go:embed *`）
+携带进守护进程二进制；`go build` 退出时 `trap` 删除临时文件，只留 `assets.go`。
+产物文件名固定：
 
 | 产物 | 配置项 |
 |------|--------|
@@ -81,20 +83,21 @@ TanStack Query 之类的数据缓存库——REST 拉取、SSE 增量、轮询�
 `allowImportingTsExtensions`（相对导入一律带 `.ts`/`.tsx` 后缀），
 以及 `noUnusedLocals`/`noUnusedParameters`——这三条是 `tsc --noEmit` 会拦的硬约束。
 
-### `emptyOutDir: false` 的原因
+### 中间产物与源码树隔离
 
-输出目录 `src/daemon/web_ui/static/` 里住着一个已入库的文件
-`assets.go`，它是 `//go:embed` 的持有文件。Vite 清空输出目录会连它一起删掉，
-随后 `go build` 以「包内无 .go 文件」失败。
-
-陈旧面板文件的清理由根 `Makefile` 的 `$(WEBUI_STATIC_DIR)` 目标完成，
-那条命令保留了 `assets.go`：
+Vite 输出目录 `build/obj/frontend/` 在源码树之外，因此 `emptyOutDir: true`：
+每次构建清空的是构建目录。`src/daemon/web_ui/static/` 里只有已入库的
+`assets.go`，面板文件仅在 `make daemon` 执行 `go build` 期间临时存在，
+由 `trap cleanup EXIT` 在退出时删除，并保留 `assets.go`：
 
 ```
-find $(WEBUI_STATIC_DIR) -mindepth 1 ! -name assets.go -delete
+find src/daemon/web_ui/static -mindepth 1 ! -name assets.go -delete
 ```
 
-> **改前端必须重新构建守护进程才可见**：产物落盘后要再跑 `make daemon`
+`assets.go` 是 `//go:embed` 的持有文件，不能删，否则 `go build` 报
+「包内无 .go 文件」。
+
+> **改前端必须重新构建守护进程才可见**：面板产物落盘后要再跑 `make daemon`
 > 才会重编二进制。只改前端不重编，守护进程提供的仍是旧包。
 > 详见 [构建](../development/building.md)。
 

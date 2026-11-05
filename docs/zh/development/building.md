@@ -30,9 +30,9 @@ Go 依赖全为纯 Go，无 cgo，不需要系统开发库。
 | `make` / `make all` | `.DEFAULT_GOAL := all`，`all: format-check build` | `Makefile` |
 | `make build` | `kernel-module` + `daemon` | `Makefile` |
 | `make build-quick` | 同上，不跑 `format-check` | `Makefile` |
-| `make kernel-module` | 编内核模块，产物 `build/kernel-module/firewall.ko` | `Makefile` |
-| `make daemon` | 先出面板产物，再 `go build` | `Makefile` |
-| `make frontend` | 面板构建，产物写入 `src/daemon/web_ui/static/` | `Makefile` |
+| `make kernel-module` | 编内核模块，产物 `build/kernel-module/firewall.ko`（中间文件在 `build/obj/kernel-module/`） | `Makefile` |
+| `make daemon` | 先出面板产物，再临时拷入 embed 目录 `go build`，退出即清理 | `Makefile` |
+| `make frontend` | 面板构建，产物写入 `build/obj/frontend/` | `Makefile` |
 | `make frontend-install` | 只装依赖：`npm ci --no-audit --no-fund` | `Makefile` |
 | `make frontend-typecheck` | 只跑 `tsc --noEmit`，不产出文件 | `Makefile` |
 | `make format` | `clang-format -i src/kernel-module/*.c *.h` | `Makefile` |
@@ -60,11 +60,12 @@ make SKIP_FORMAT_CHECK=1 all     # 通过变量
 make kernel-module
 ```
 
-产物 `build/kernel-module/firewall.ko`。构建过程在 `src/kernel-module/` 里跑
-`$(MAKE) -C $(KDIR) M=$(PWD)/src/kernel-module modules`，随后把 `.ko` 复制到
-`build/kernel-module/`，并清掉源码目录里的中间文件
-（`.o`、`.ko`、`.mod.c`、`.mod.o`、`.mod`、`.*.cmd`、`modules.order`、
-`Module.symvers`、`.module-common.o`）。
+产物 `build/kernel-module/firewall.ko`。构建时把 `src/kernel-module/*.{c,h}`、
+`Makefile` 与 `contract/generated/*.h` 拷进
+`build/obj/kernel-module/$(KERNEL_RELEASE)/tree/`，再在该副本上跑
+`$(MAKE) -C $(KDIR) M=<副本>/src/kernel-module modules`，最后把 `.ko` 复制到
+`build/kernel-module/`。`src/kernel-module/` 只放源码，不产生 `.o`、`.cmd`、
+`Module.symvers` 等中间文件。
 
 ### Kbuild 描述
 
@@ -96,28 +97,26 @@ make daemon          # 只要守护进程时跳过内核模块
 
 ## 构建面板产物
 
-面板产物的真实依赖是两件事：装好的依赖，和全部前端源文件。
+面板产物落在 `build/obj/frontend/`（源码树之外），由 stamp 文件记录新鲜度：
 
 ```make
-FRONTEND_SRCS := frontend/package.json frontend/package-lock.json \
-    frontend/tsconfig.json frontend/vite.config.ts frontend/index.html \
-    $(shell find frontend/src frontend/public -type f)
+FRONTEND_OUT   := $(BUILD_OBJ_DIR)/frontend
+FRONTEND_STAMP := $(BUILD_OBJ_DIR)/.frontend.stamp
 
-$(WEBUI_STATIC_DIR): frontend-install $(FRONTEND_SRCS)
-	mkdir -p $(WEBUI_STATIC_DIR)
-	find $(WEBUI_STATIC_DIR) -mindepth 1 ! -name assets.go -delete
+frontend: $(FRONTEND_STAMP)
+
+$(FRONTEND_STAMP): frontend-install $(FRONTEND_SRCS)
 	cd frontend && npm run build
+	touch $@
 ```
 
 三条要点：
 
-1. **依赖方向不能反过来。** 早期写法让 `frontend` 与面板目录互为依赖，
-   make 会丢弃其中一条（CI 日志
-   `Circular frontend <- src/daemon/web_ui/static dependency dropped`），
-   结果是 `npm ci` 从不执行、`tsc` 因找不到 `react` / `vite/client` 类型而全线报错。
-2. **重建前清陈旧产物，但必须留下 `assets.go`。**
-   它是 `//go:embed` 的持有文件，删掉后 `go build` 报「包内无 .go 文件」。
-   Vite 侧配 `emptyOutDir: false` 正是因为同一个目录里住着它。
+1. **依赖方向单一。** `frontend-install` 与前端源码是 stamp 的前置；面板目录不再与 `frontend` 互相依赖，
+   make 不会丢弃依赖边，`npm ci` 一定先于 `npm run build`。
+2. **构建目录在源码树之外。** `vite.config.ts` 的 `outDir` 是
+   `../build/obj/frontend`，因此 `emptyOutDir: true` 安全——它只清构建目录，
+   不会碰 `src/daemon/web_ui/static/` 里已入库的 `assets.go`。
    见 `frontend/vite.config.ts` 的注释与 [Web 前端](../architecture/frontend.md)。
 3. **验证前端要走 `npm ci`。** 本地已存在的 `node_modules` 会掩盖
    `frontend/package.json` 里缺的依赖声明。
@@ -131,11 +130,19 @@ $(WEBUI_STATIC_DIR): frontend-install $(FRONTEND_SRCS)
 make daemon
 ```
 
-`make daemon` 的前置是面板产物目录，再跑 `go build`：
+`//go:embed` 只认包目录内的文件，所以 `make daemon` 在 `go build` 期间把面板
+临时拷进 `src/daemon/web_ui/static/`，并用 `trap` 保证退出时清干净：
 
 ```make
-@cd $(DAEMON_SRCS_DIR) && go build -ldflags "-s -w=1" \
-        -o $(PWD)/$(DAEMON_BIN) ./cmd/firewall-daemon
+daemon: $(FRONTEND_STAMP)
+	@set -e; \
+	    webui="$(PWD)/$(WEBUI_STATIC_DIR)"; \
+	    cleanup() { find "$$webui" -mindepth 1 ! -name assets.go -delete; }; \
+	    trap cleanup EXIT; \
+	    cleanup; \
+	    cp -a $(PWD)/$(FRONTEND_OUT)/. "$$webui"/; \
+	    cd $(PWD)/$(DAEMON_SRCS_DIR) && go build -ldflags "-s -w=1" \
+	        -o $(PWD)/$(DAEMON_BIN) ./cmd/firewall-daemon
 ```
 
 | 要点 | 说明 |
@@ -143,14 +150,17 @@ make daemon
 | `-o` 必须是绝对路径 | 那一行先 `cd $(DAEMON_SRCS_DIR)`。相对写法会把二进制写到 `src/daemon/build/daemon/` 下（Go 还会顺手建出这个目录），仓库根的 `$(DAEMON_BIN)` 始终是空的，`install` / `deb` 与 CI 的产物检查都拿不到文件 |
 | `-ldflags "-s -w=1"` | 链接期去掉符号表，产物即最终 stripped 二进制 |
 | 面板必须先产出 | `//go:embed *`（`src/daemon/web_ui/static/assets.go`）才有东西可嵌；`go build` 本身不检查面板内容 |
+| 拷贝必须可回滚 | `trap cleanup EXIT` 在成功、失败、Ctrl-C 下都执行；`assets.go` 由 `! -name assets.go` 保留，否则 `go build` 报「包内无 .go 文件」 |
 | 体积 | `stat -c %s build/daemon/firewall-daemon` 实测 |
 
 手动分步执行等价于：
 
 ```bash
 make frontend
+cp -a build/obj/frontend/. src/daemon/web_ui/static/
 cd src/daemon && go build -ldflags "-s -w=1" \
     -o "$PWD/../../build/daemon/firewall-daemon" ./cmd/firewall-daemon
+cd ../.. && find src/daemon/web_ui/static -mindepth 1 ! -name assets.go -delete
 ```
 
 ## 契约门禁
@@ -298,12 +308,14 @@ cd src/daemon && GOOS=linux GOARCH=arm64 \
 
 | 文件 | 说明 |
 |------|------|
-| `build/kernel-module/firewall.ko` | 内核模块 |
+| `build/kernel-module/firewall.ko` | 内核模块（最终产物） |
 | `build/daemon/firewall-daemon` | 守护进程二进制（stripped，内嵌面板） |
-| `src/daemon/web_ui/static/` | 面板产物：`index.html`、`app.js`、`chunk-*.js`、`style.css`、`sw.js`、`manifest.webmanifest`、`icons/`，另有已入库的 `assets.go` |
-| `src/kernel-module/Makefile` | Kbuild 描述（12 个 `.o`） |
+| `build/deb/*.deb` | Debian 包（最终产物） |
+| `build/obj/kernel-module/<kernel.release>/tree/` | kbuild 中间产物：源码副本 + `.o`/`.cmd`/`Module.symvers` 等 |
+| `build/obj/frontend/` | vite 产物：`index.html`、`app.js`、`chunk-*.js`、`style.css`、`sw.js`、`manifest.webmanifest`、`icons/` |
+| `src/daemon/web_ui/static/assets.go` | `//go:embed` 持有文件（入库；面板文件只在 `make daemon` 期间临时出现在同目录） |
 
-`build/` 与 `target/` 都不入库。
+`build/` 与 `target/` 都不入库。源码树（`src/**`）在构建后保持零中间产物。
 
 ## 常见构建问题
 

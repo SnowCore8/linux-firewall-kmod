@@ -50,7 +50,8 @@ graph LR
     KERNEL["src/kernel-module/<br/>C 内核模块"]
     DAEMON["src/daemon/<br/>Go 守护进程"]
     FRONTEND["frontend/<br/>React 19 + Vite"]
-    STATIC["src/daemon/web_ui/static/<br/>面板产物，assets.go 持有 go:embed"]
+    STATIC["src/daemon/web_ui/static/<br/>assets.go 持有 go:embed"]
+    OBJ["build/obj/frontend/<br/>vite 产物"]
     CONTRACT["contract/<br/>.fwidl + gen.py + 三个校验器"]
     SUPPORT["config/ · tests/ · docs/ · scripts/ · grafana/ · debian/"]
 
@@ -59,7 +60,8 @@ graph LR
     ROOT --> FRONTEND
     ROOT --> CONTRACT
     ROOT --> SUPPORT
-    FRONTEND -->|"vite build"| STATIC
+    FRONTEND -->|"vite build"| OBJ
+    OBJ -->|"make daemon 临时拷入"| STATIC
     STATIC -->|"//go:embed *"| DAEMON
     CONTRACT -->|"gen.py 生成"| KERNEL
     CONTRACT -->|"gen.py 生成"| DAEMON
@@ -97,12 +99,12 @@ graph LR
 
 `make daemon` 先产出面板，再编守护进程：
 
-1. `$(WEBUI_STATIC_DIR)` 目标依赖 `frontend-install`（`npm ci`）与 `$(FRONTEND_SRCS)`。
-2. 重建前清陈旧产物，但保留 `assets.go`：
-   `find $(WEBUI_STATIC_DIR) -mindepth 1 ! -name assets.go -delete`。
-3. Vite 按 `frontend/vite.config.ts` 输出到 `src/daemon/web_ui/static/`
-   （`emptyOutDir: false`，否则会删掉 `assets.go`）。
-4. `src/daemon/web_ui/static/assets.go` 的 `//go:embed *` 把目录带进二进制。
+1. 面板由 `$(FRONTEND_STAMP)` 目标构建：前置是 `frontend-install`（`npm ci`）与前端源码。
+2. Vite 按 `frontend/vite.config.ts` 输出到 `build/obj/frontend/`；
+   输出在源码树外，`emptyOutDir: true` 只清构建目录。
+3. `make daemon` 在 `go build` 期间把 `build/obj/frontend/` 临时拷入
+   `src/daemon/web_ui/static/`，由该目录的 `assets.go`（`//go:embed *`）带进二进制。
+4. `go build` 退出时 `trap` 删除临时文件，只保留 `assets.go`。
 
 细节与三条易错点见[构建](building.md)。
 

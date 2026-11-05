@@ -72,13 +72,17 @@ make kmod-remote HOST=192.168.8.119 USER=ubuntu
 
 ```
 build/
+├── obj/                               # 中间产物（kbuild 暂存树、vite 输出）
+│   ├── kernel-module/<release>/tree/  # 内核源码副本 + .o/.cmd 等中间文件
+│   └── frontend/                      # vite 产物（构建期临时拷入 embed 目录）
 ├── kernel-module/
 │   ├── firewall.ko                    # 当前内核版本
 │   └── <kernel-version>/
 │       └── firewall.ko                # 指定内核版本
 ├── daemon/
 │   └── firewall-daemon                # 守护进程二进制
-└── frontend/                          # 前端构建产物
+└── deb/
+    └── *.deb                          # 打包产物
 ```
 
 详细指南见 [docs/zh/development/multi-version-kmod.md](docs/zh/development/multi-version-kmod.md)。
@@ -133,6 +137,7 @@ make test
 ### 内核模块
 
 - 产物：`build/kernel-module/firewall.ko`
+- 中间产物：`build/obj/kernel-module/<kernel.release>/tree/`——构建时把 `src/kernel-module/*.{c,h}` 与 `contract/generated/*.h` 拷进该副本，`M=` 指向副本；`src/kernel-module/` 不留 `.o`/`.cmd`
 - 加载：`sudo insmod build/kernel-module/firewall.ko`
 - procfs：`/proc/firewall/*`（13 个条目，3 个可写）
 - 模块参数：`fw_ban_time`、`state_file`、`fw_max_bans_per_second` 等（见 `fw_main.c`）
@@ -159,10 +164,10 @@ make test
 - `tslib` 是显式依赖：补 `echarts-for-react` 用 `importHelpers` 却漏声明 `tslib` 的打包缺口，别删
 - 信息架构单一真相源：`src/app/nav.ts` 的 `NAV_GROUPS`（驱动侧边栏 / 命令面板 / 面包屑）
 - `views/` 必须平铺为 `views/<Name>.tsx`：`contract/verify_http.py` 按此路径核对 `views/Logs.tsx` 的日志流事件名字面量
-- 构建：`npm ci` → `npm run build` → 产物写入 `src/daemon/web_ui/static/`
-- 嵌入：`assets.go` 用 `//go:embed *` 带进二进制
+- 构建：`npm ci` → `npm run build` → 产物写入 `build/obj/frontend/`
+- 嵌入：`make daemon` 构建期把面板临时拷进 `src/daemon/web_ui/static/`，`assets.go` 用 `//go:embed *` 带进二进制，`go build` 结束即删（`trap` 清理），源码目录零残留
 - **不要删 `assets.go`**，它是 embed 持有文件
-- **`vite.config.ts` 的 `emptyOutDir` 必须是 false**
+- **`vite.config.ts` 的 `emptyOutDir` 为 true**：输出在源码树外，可以安全清空
 
 ### 测试
 

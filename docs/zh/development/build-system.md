@@ -244,6 +244,9 @@ build/kernel-module/firewall-7.0.0-42-generic.ko
 
 ```
 build/
+├── obj/                               # 中间产物
+│   ├── kernel-module/<release>/tree/  # kbuild 源码副本与 .o/.cmd
+│   └── frontend/                      # vite 产物
 ├── kernel-module/
 │   ├── firewall.ko                    # 当前内核版本
 │   ├── <kernel-version>/
@@ -251,8 +254,8 @@ build/
 │   └── firewall-<kernel-version>.ko   # 远程编译产物
 ├── daemon/
 │   └── firewall-daemon                # 守护进程二进制
-└── frontend/                          # 前端构建产物
-    └── ...                            # 静态文件（嵌入守护进程）
+└── deb/
+    └── *.deb                          # Debian 包
 ```
 
 ### 内核模块信息

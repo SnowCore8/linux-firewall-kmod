@@ -135,11 +135,11 @@ jobs:
       - name: 校验构建产物
         run: |
           echo "=== 前端构建产物 ==="
-          ls -la src/daemon/web_ui/static/
+          ls -la build/obj/frontend/
           for f in index.html app.js style.css sw.js manifest.webmanifest \
                    icons/icon-192.png icons/icon-512.png; do
-            if [[ ! -f "src/daemon/web_ui/static/$f" ]]; then
-              echo "::error::缺少构建产物: src/daemon/web_ui/static/$f"
+            if [[ ! -f "build/obj/frontend/$f" ]]; then
+              echo "::error::缺少构建产物: build/obj/frontend/$f"
               exit 1
             fi
           done
@@ -149,7 +149,7 @@ jobs:
         run: |
           node -e '
             const fs = require("fs");
-            const p = "src/daemon/web_ui/static/manifest.webmanifest";
+            const p = "build/obj/frontend/manifest.webmanifest";
             const m = JSON.parse(fs.readFileSync(p, "utf8"));
             for (const k of ["name", "short_name", "start_url", "display", "background_color", "theme_color", "icons"]) {
               if (!(k in m)) { console.error("::error::manifest 缺少字段 " + k); process.exit(1); }
@@ -164,7 +164,7 @@ jobs:
 
       - name: 校验 Service Worker 语法
         run: |
-          node --check src/daemon/web_ui/static/sw.js
+          node --check build/obj/frontend/sw.js
           echo "✓ sw.js 语法合法"
 
   # 编译任务：独立执行，与 lint 并行运行
@@ -261,8 +261,8 @@ jobs:
           set -e
           echo "=== 编译守护进程（含前端构建与格式检查）==="
           make clean || true
-          # make daemon：先 npm ci + vite build 产出静态面板，再 go build；
-          # 面板文件由 src/daemon/web_ui/static/assets.go 的 //go:embed * 携带进二进制。
+          # make daemon：先 npm ci + vite build 产出到 build/obj/frontend，再临时拷入
+          # src/daemon/web_ui/static 供 //go:embed * 携带进二进制，构建后清掉。
           make all -j$(nproc)
           echo "✓ 守护进程编译完成"
 

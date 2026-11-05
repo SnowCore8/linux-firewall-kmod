@@ -11,10 +11,8 @@ site/
 docs/_book/
 docs/node_modules/
 
-# 前端构建产物（vite 输出到 rust-embed 嵌入目录）
-# 整个目录内容都是生成物（index.html / app.js / style.css / sw.js /
-# manifest.webmanifest / icons/），统一忽略；目录本身由构建过程创建
-# （vite 的 emptyOutDir 或 CI 里的 mkdir -p），因此不放入库占位文件。
+# 面板文件只在 make daemon 期间临时拷入 embed 目录，退出即删；
+# 这里防御性忽略残留（vite 产物实际落在 build/obj/frontend/）。
 src/daemon/web_ui/static/*
 
 # 内核模块编译产物（in-tree 构建时产生，Makefile 会在构建后清理但需防御性忽略）

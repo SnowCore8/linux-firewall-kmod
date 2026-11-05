@@ -155,9 +155,9 @@ make test
   这三处必须成对维护，否则 tsc 与打包器各解析一套实现。
 - 装依赖只用 `npm ci`。`frontend/package.json` 与
   `frontend/package-lock.json` 必须同步提交，只改一个 CI 装不全。
-- 别把 `vite.config.ts` 的 `emptyOutDir` 改成 true。
-  输出目录里住着 `//go:embed` 的持有文件
-  `src/daemon/web_ui/static/assets.go`，清空会连它一起删。
+- `vite.config.ts` 的 `outDir` 是 `build/obj/frontend`，`emptyOutDir: true`。
+  不要把它改回 `src/daemon/web_ui/static/`：那里只放 `//go:embed` 的持有文件
+  `assets.go`，面板文件由 `make daemon` 在 `go build` 期间临时拷入并删除。
 
 ### 契约
 

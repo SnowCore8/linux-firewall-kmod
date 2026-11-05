@@ -20,8 +20,9 @@ KERNEL_MODDIR ?= /lib/modules/$(shell uname -r)/extra
 # DESTDIR 支持打包和暂存安装，默认为空（直接安装到系统）
 DESTDIR     ?=
 
-# 内核构建目录
-KDIR        ?= /lib/modules/$(shell uname -r)/build
+# 内核构建目录（KVER 可显式指定；KDIR 跟随 KVER，也可单独覆盖）
+KVER        ?= $(shell uname -r)
+KDIR        ?= /lib/modules/$(KVER)/build
 
 # 项目路径
 PWD := $(CURDIR)
@@ -29,7 +30,7 @@ PWD := $(CURDIR)
 # 源码目录
 KERNEL_SRC_DIR := src/kernel-module
 
-# 前端构建产物目录（vite 输出；Go 守护进程通过 embed 随二进制携带）
+# go:embed 输入目录：常驻内容只有 assets.go，面板文件由 make daemon 临时拷入
 WEBUI_STATIC_DIR := src/daemon/web_ui/static
 
 # Go 守护进程源码根（前端输出目录，vite 产物）
@@ -51,6 +52,13 @@ HTTP_CONTRACT_GO := src/daemon/internal/httpcontract/http_contract.go
 BUILD_DIR      := build
 KERNEL_BUILD_DIR := $(BUILD_DIR)/kernel-module
 DAEMON_BUILD_DIR := $(BUILD_DIR)/daemon
+
+# 中间产物：kbuild / vite 的输出全部落在 build/obj，源码树只放源码
+BUILD_OBJ_DIR    := $(BUILD_DIR)/obj
+KERNEL_RELEASE   := $(shell cat $(KDIR)/include/config/kernel.release 2>/dev/null || echo $(KVER))
+KERNEL_STAGE_DIR := $(BUILD_OBJ_DIR)/kernel-module/$(KERNEL_RELEASE)/tree
+FRONTEND_OUT     := $(BUILD_OBJ_DIR)/frontend
+FRONTEND_STAMP   := $(BUILD_OBJ_DIR)/.frontend.stamp
 
 # 最终输出路径
 KERNEL_MODULE := $(KERNEL_BUILD_DIR)/firewall.ko
@@ -248,59 +256,57 @@ $(KERNEL_MODULE): $(wildcard $(KERNEL_SRC_DIR)/*.c) $(wildcard $(KERNEL_SRC_DIR)
 		exit 1; \
 	fi
 	@mkdir -p $(KERNEL_BUILD_DIR)
-	@echo "编译内核模块 ($(shell uname -r))..."
-	+$(MAKE) -C $(KDIR) M=$(PWD)/$(KERNEL_SRC_DIR) \
+	@echo "编译内核模块 ($(KERNEL_RELEASE))..."
+	@# 外部模块的 kbuild 中间产物只能写进 M= 指向的源码目录（MO= 仅 6.13+ 支持）。
+	@# 因此每次把源码与契约头复制成 staging 树再编译，.o/.cmd/.mod 全部留在
+	@# build/obj，源码树零残留。
+	@rm -rf $(KERNEL_STAGE_DIR)
+	@mkdir -p $(KERNEL_STAGE_DIR)/src/kernel-module $(KERNEL_STAGE_DIR)/contract/generated
+	@cp $(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h $(KERNEL_SRC_DIR)/Makefile \
+		$(KERNEL_STAGE_DIR)/src/kernel-module/
+	@cp contract/generated/*.h $(KERNEL_STAGE_DIR)/contract/generated/
+	+$(MAKE) -C $(KDIR) M=$(PWD)/$(KERNEL_STAGE_DIR)/src/kernel-module \
 		CC="$(CCACHE) gcc" \
 		modules
-	@cp $(KERNEL_SRC_DIR)/firewall.ko $(KERNEL_BUILD_DIR)/firewall.ko
-	@# 清理源码目录中的中间文件
-	@rm -f $(KERNEL_SRC_DIR)/*.o $(KERNEL_SRC_DIR)/*.ko $(KERNEL_SRC_DIR)/*.mod.c \
-		$(KERNEL_SRC_DIR)/*.mod.o $(KERNEL_SRC_DIR)/*.mod $(KERNEL_SRC_DIR)/.*.cmd \
-		$(KERNEL_SRC_DIR)/modules.order $(KERNEL_SRC_DIR)/Module.symvers \
-		$(KERNEL_SRC_DIR)/.module-common.o
+	@cp $(KERNEL_STAGE_DIR)/src/kernel-module/firewall.ko $(KERNEL_MODULE)
 	@echo "✓ 内核模块编译完成: $(KERNEL_MODULE)"
 
-# 守护进程 (Go，源码在 $(DAEMON_SRCS_DIR)，编译产物保持为 $(DAEMON_BIN))。
-# install / deb / clean 三处最终都要取这个二进制；换成 Go 前需一并更新。
+# 守护进程 (Go，源码在 $(DAEMON_SRCS_DIR)，最终产物 $(DAEMON_BIN))。
+# 面板是 go:embed 的输入，必须位于 $(WEBUI_STATIC_DIR)；构建时临时拷入，退出即删，
+# 源码树里只留 embed 持有者 assets.go。
 .PHONY: daemon
-daemon: $(WEBUI_STATIC_DIR) | $(DAEMON_SRCS_DIR)/cmd/firewall-daemon/main.go
-	@# Web UI static panel（$(WEBUI_STATIC_DIR)）必须先产出，go:embed "*" 才
-	@# 有东西可嵌；go build 本身不检查面板内容，缺面板时守护进程启动会报错。
+daemon: $(FRONTEND_STAMP) | $(DAEMON_SRCS_DIR)/cmd/firewall-daemon/main.go
 	@echo "  GOC     building Go daemon from $(DAEMON_SRCS_DIR)"
 	@mkdir -p $(DAEMON_BUILD_DIR)
-	@# -o 必须给绝对路径：本行在 $(DAEMON_SRCS_DIR) 里执行，相对写法会把二进制写到
-	@# src/daemon/build/daemon/ 下（Go 还会顺手建出这个目录），仓库根的 $(DAEMON_BIN)
-	@# 始终是空的，install / deb 与 CI 的「编译产物检查」都拿不到文件。
-	@cd $(DAEMON_SRCS_DIR) && go build -ldflags "-s -w=1" \
-		 -o $(PWD)/$(DAEMON_BIN) ./cmd/firewall-daemon
+	@# -o 必须给绝对路径：相对写法会把二进制写到 $(DAEMON_SRCS_DIR)/build/ 下。
+	@set -e; \
+		webui="$(PWD)/$(WEBUI_STATIC_DIR)"; \
+		cleanup() { find "$$webui" -mindepth 1 ! -name assets.go -delete; }; \
+		trap cleanup EXIT; \
+		cleanup; \
+		cp -a $(PWD)/$(FRONTEND_OUT)/. "$$webui"/; \
+		cd $(PWD)/$(DAEMON_SRCS_DIR) && go build -ldflags "-s -w=1" \
+			-o $(PWD)/$(DAEMON_BIN) ./cmd/firewall-daemon
 
 # 编译前置：golangc 保证有 Go 1.23+，没有则先安装（go 随 PATH 时直接调用）
 $(DAEMON_SRCS_DIR): $(GOC)
 	@echo "  GOC     checking Go $(GOVER)"
 	@$(GOC) version
 
-# 前端 (React 19 + TypeScript + Vite + antd-mobile，移动优先)
-# 依赖锁定：frontend/package-lock.json 已入库，CI 用 npm ci 保证可复现
+# 前端 (React 19 + TypeScript + Vite + antd)
+# 依赖锁定：frontend/package-lock.json 已入库，CI 用 npm ci 保证可复现。
+# 产物写 $(FRONTEND_OUT)（源码树外），由 make daemon 临时拷入 embed 目录。
 .PHONY: frontend frontend-install frontend-typecheck
-frontend: $(WEBUI_STATIC_DIR)
+frontend: $(FRONTEND_STAMP)
 
-# 面板产物的真实依赖：装好的依赖（frontend-install）+ 全部前端源文件。
-# 本目标**不得**反过来被 frontend-install 或 .PHONY 的 frontend 依赖：
-# 此前写作 `$(DAEMON_SRCS_DIR)/web_ui/static: frontend` 而 `frontend: $(DAEMON_SRCS_DIR)/web_ui/static`，
-# 构成 frontend <-> 面板目录 的循环，make 只会丢弃这条依赖（CI 日志里的
-# "Circular frontend <- src/daemon/web_ui/static dependency dropped"），
-# 结果是 npm ci 从不执行、tsc 因找不到 react / vite/client 类型而全线报错。
 FRONTEND_SRCS := $(PFX_FRONTEND)/package.json $(PFX_FRONTEND)/package-lock.json \
 	$(PFX_FRONTEND)/tsconfig.json $(PFX_FRONTEND)/vite.config.ts $(PFX_FRONTEND)/index.html \
 	$(shell find $(PFX_FRONTEND)/src $(PFX_FRONTEND)/public -type f 2>/dev/null)
 
-$(WEBUI_STATIC_DIR): frontend-install $(FRONTEND_SRCS)
-	@mkdir -p $(WEBUI_STATIC_DIR)
-	@# 先清掉上一轮面板产物再重建：vite 侧 emptyOutDir=false（不能清目录，否则会连
-	@# 已入库的 assets.go 一起删），改名或被删的视图就不会留成陈旧产物。
-	@find $(WEBUI_STATIC_DIR) -mindepth 1 ! -name assets.go -delete
+$(FRONTEND_STAMP): frontend-install $(FRONTEND_SRCS)
+	@echo "  VITE    building frontend -> $(FRONTEND_OUT)"
 	@cd $(PFX_FRONTEND) && npm run build
-	@echo "  ✓ Frontend built to $(WEBUI_STATIC_DIR)/"
+	@touch $@
 
 # 仅安装依赖（不产出构建物），CI 用 npm ci 保证可复现
 .PHONY: frontend-install
@@ -964,8 +970,8 @@ clean:
 	@# 构建缓存，不该由本仓库的 clean 触发），写错时本行会以 exit 2 中断 clean。
 	@cd $(DAEMON_SRCS_DIR) && $(GOC) clean 2>/dev/null || true
 	@mkdir -p $(WEBUI_STATIC_DIR)
-	@# 只删面板文件，保留 embed 所有者 assets.go（它位于构建产物目录内，
-	@# 由 make frontend 的 vite 输出路径自然生成，见 src/daemon/web_ui/static/assets.go）。
+	@# 面板文件是 make daemon 构建期间临时拷入的，正常退出已删除；这里兜底清理，
+	@# 保留 embed 持有者 assets.go（入库源码，不是产物）。
 	@find $(WEBUI_STATIC_DIR) -mindepth 1 ! -name assets.go -delete
 	@# 性能基线工具的源码入库，blast2 / sink 产物不入库
 	@$(MAKE) -C scripts/bench clean >/dev/null 2>&1 || true
@@ -1052,7 +1058,8 @@ help:
 	@echo "  make daemon                        # 编译守护进程"
 	@echo "  make build-quick                   # 快速构建全部"
 	@echo "  make kmod-remote HOST=192.168.8.119 USER=ubuntu  # 远程编译"
-	@echo "  make test                          # 运行测试"	@echo ""
+	@echo "  make test                          # 运行测试"
+	@echo ""
 	@echo "变量:"
 	@echo "  KDIR=<path>          - 指定内核构建目录"
 	@echo "  KVER=<version>       - 指定内核版本（用于 kmod 目标）"

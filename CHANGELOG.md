@@ -15,6 +15,7 @@
 - **防路径冲突** - deb postinst 清理 `/etc/systemd/system/` 脚本模式残留；deploy.sh 检测 deb 已装时询问是否卸载
 
 ### 构建清理
+- **源码 / 中间产物 / 最终产物隔离** - 内核模块改在 `build/obj/kernel-module/<kernel.release>/tree/` 的源码副本上编译（`M=` 指向副本），`src/kernel-module/` 不再产生 `.o`/`.cmd`；vite 输出改到 `build/obj/frontend/`（`emptyOutDir: true`），`make daemon` 仅在 `go build` 期间把面板临时拷入 `src/daemon/web_ui/static/` 并由 `trap` 清理，构建后源码树零残留
 - **`make clean` 补全并修正** - 补清散落产物：`src/daemon/firewall-daemon`、`scripts/bench/{blast2,sink}`、`test-results/`、`playwright-report/`、`blob-report/`、`.playwright-mcp/`、`.pytest_cache/`、`__pycache__/`；不再删除入库的 `contract/generated/*` 与 `http_contract.go`（此前 clean 后工作区变脏，且 `go build` 会因缺生成文件失败）
 - **`make distclean`** - 在 `clean` 基础上额外清内核中间文件、clangd 缓存 `.cache/` 与 `compile_commands.json`
 

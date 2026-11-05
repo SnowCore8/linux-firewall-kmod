@@ -146,13 +146,10 @@ build_for_version() {
     fi
     
     log_info "编译 firewall.ko for $kernel_version"
-    
-    # 创建输出目录
+
     mkdir -p "$output_dir"
-    
-    # 进入项目根目录
     cd "$PROJECT_ROOT"
-    
+
     # 生成契约文件（如果还没有）
     if [ ! -f "contract/generated/netlink_uapi.h" ]; then
         log_info "生成契约文件..."
@@ -161,31 +158,27 @@ build_for_version() {
             return 1
         }
     fi
-    
-    # 编译内核模块
-    cd src/kernel-module
-    make clean >/dev/null 2>&1 || true
-    
-    # 使用内核构建系统编译
-    make -C "$kdir" M="$PWD" modules CC="gcc" 2>&1 | \
-        grep -E "(error|warning:|CC|LD|MODPOST)" || true
-    
-    # 检查编译结果
-    if [ ! -f "firewall.ko" ]; then
+
+    # Makefile 内部把源码 stage 到 build/obj 再编译，中间产物不写 src/。
+    # 多个版本共用同一个最终产物路径，先删掉以免 make 判定 up-to-date。
+    rm -f "$BUILD_BASE/kernel-module/firewall.ko"
+    if ! make kernel-module KDIR="$kdir" KVER="$kernel_version"; then
         log_error "编译失败: $kernel_version"
         return 1
     fi
-    
-    # 复制产物
-    cp firewall.ko "$output_dir/"
+
+    local ko="$BUILD_BASE/kernel-module/firewall.ko"
+    if [ ! -f "$ko" ]; then
+        log_error "编译产物不存在: $ko"
+        return 1
+    fi
+
+    cp "$ko" "$output_dir/"
     log_info "✓ $kernel_version -> $output_dir/firewall.ko"
-    
+
     # 显示模块信息
     modinfo "$output_dir/firewall.ko" | grep -E "^(filename|vermagic|srcversion)" | sed 's/^/  /'
-    
-    # 清理源码目录中的中间文件
-    make clean >/dev/null 2>&1 || true
-    
+
     return 0
 }
 
