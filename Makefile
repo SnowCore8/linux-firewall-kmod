@@ -670,8 +670,8 @@ _guard_local_install:
 		exit 1; \
 	fi
 
-.PHONY: install install-kernel-module install-daemon install-config install-credentials install-state install-systemd install-start install-verify
-install: _guard_local_install build install-kernel-module install-daemon install-config install-credentials install-state install-systemd install-start install-verify
+.PHONY: install install-kernel-module install-daemon install-config install-credentials install-state install-log install-systemd install-start install-verify
+install: _guard_local_install build install-kernel-module install-daemon install-config install-credentials install-state install-log install-systemd install-start install-verify
 	@echo ""
 	@echo "=========================================="
 	@echo "Firewall Installation Complete"
@@ -758,6 +758,25 @@ install-state:
 		chown root:root $(DESTDIR)$(STATEDIR)/firewall; \
 	fi
 	@echo "  ✓ State directory created ($(STATEDIR)/firewall/)"
+
+# 守护进程日志文件，与 uninstall-state 的删除动作对应。
+# 随包 systemd 单元在 ProtectSystem=strict 下把 /var/log/firewall.log 列入 ReadWritePaths，
+# 该路径缺失会让单元以 226/NAMESPACE 失败在 ExecStart 之前，守护进程没机会自行创建它。
+# DESTDIR 模式下跳过：日志文件一旦进包，每次升级 dpkg 都会用空文件覆盖掉现有日志。
+# deb 路径由 build-deb.sh 生成的 postinst 幂等创建。
+install-log:
+	@echo "Creating daemon log file..."
+	@if [ -z "$(DESTDIR)" ]; then \
+		if [ ! -e /var/log/firewall.log ]; then \
+			install -m 0640 -o root -g adm /dev/null /var/log/firewall.log 2>/dev/null \
+				|| install -m 0640 /dev/null /var/log/firewall.log; \
+			echo "  ✓ Log file created (/var/log/firewall.log)"; \
+		else \
+			echo "  ✓ Log file already exists, left untouched (/var/log/firewall.log)"; \
+		fi; \
+	else \
+		echo "  Skipping log file creation in DESTDIR mode"; \
+	fi
 
 install-systemd:
 	@echo "Installing systemd service..."
