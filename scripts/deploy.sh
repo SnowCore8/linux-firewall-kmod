@@ -20,12 +20,21 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts -o IdentitiesOnly=yes)
 
-# 检测远端是否已通过 deb 安装（包管理优先，不允许脚本覆盖）
+# 检测远端是否已通过 deb 安装（包管理优先，脚本部署会遮蔽）
 if ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" "dpkg -s linux-firewall-kmod 2>/dev/null | grep -q 'Status:.*installed'"; then
-    echo "❌ 远端已通过 deb 包安装 linux-firewall-kmod"
+    echo ""
+    echo "⚠️  远端已通过 deb 包安装 linux-firewall-kmod"
     echo "   脚本部署会遮蔽包管理的 systemd 单元和 DKMS 模块。"
-    echo "   如需切换到脚本部署，先卸载：ssh $REMOTE_USER@$REMOTE_HOST 'sudo dpkg --purge linux-firewall-kmod'"
-    exit 1
+    read -rp "   是否卸载 deb 并继续脚本部署？[y/N] " purge_confirm
+    if [[ "$purge_confirm" == "y" || "$purge_confirm" == "Y" ]]; then
+        echo "   卸载 deb 包..."
+        # shellcheck disable=SC2029
+        ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" "sudo dpkg --purge linux-firewall-kmod" 2>&1
+        echo "   ✓ 已卸载"
+    else
+        echo "部署已取消。"
+        exit 0
+    fi
 fi
 
 echo "========================================="
