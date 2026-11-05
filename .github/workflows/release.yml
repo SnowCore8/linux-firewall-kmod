@@ -21,8 +21,9 @@ jobs:
         run: |
           sudo apt-get update
           # 打包走 debhelper + dpkg-buildpackage；内核模块由 DKMS 在安装时编译，
-          # 构建机不需要内核头文件。
-          sudo apt-get install -y build-essential dpkg-dev debhelper
+          # 构建机不需要内核头文件。nodejs/npm/python3 是 debian/control 的
+          # Build-Depends，dpkg-checkbuilddeps 会强制校验。
+          sudo apt-get install -y build-essential dpkg-dev debhelper nodejs npm python3
 
       - name: 获取版本号
         id: version
