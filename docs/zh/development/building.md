@@ -245,24 +245,31 @@ sudo env "PATH=$PATH" make install FIREWALL_REMOTE_DEPLOY=1   # 显式授权直�
 ## 构建 Debian 软件包
 
 ```bash
+sudo apt install debhelper   # 构建机一次性依赖
 make deb
 # 或
 ./build-deb.sh [版本号]
 ```
 
-`make deb` 依赖 `build`，再调 `./build-deb.sh`。中间目录是 `build/deb`。
+打包走 debhelper：`build-deb.sh` 先由 `CHANGELOG.md` 生成临时的 `debian/changelog`，
+再调用 `dpkg-buildpackage -b -us -uc`，最后把产物从项目上级目录搬到 `build/deb/`，
+并按 `linux-firewall-kmod-<版本>.deb` 命名。`debian/rules` 只编译守护进程（含前端）；
+内核模块由 DKMS 在目标机安装时编译。
+
+`debian/changelog` 是生成物且不入库，版本只有一个来源：`CHANGELOG.md`。
 
 版本号行为（`build-deb.sh`）：
 
 | 情况 | 行为 |
 |------|------|
-| 不传参数 | 从 `CHANGELOG.md` 第一条 `## v` 记录提取；取不到则回退默认值 `2.2.0` |
-| 位置参数 | `./build-deb.sh 2.2.0` 显式指定 |
-| `VERSION=` 环境变量 | **不生效**：脚本只解析 `$1`，不读 `VERSION` |
+| 不传参数 | 从 `CHANGELOG.md` 第一条 `## v` 记录提取；取不到直接报错退出 |
+| 位置参数 | `./build-deb.sh 2.4.0` 显式指定 |
+| `VERSION_ENV` 环境变量 | 优先级高于位置参数（`VERSION` 本身不生效） |
 | 前缀 `v` | 会被剥掉（`VERSION="${VERSION#v}"`） |
 
-包是 DKMS 模式：安装时由 dkms 针对当前内核编译模块，
-脚本模板里 `dkms add` / `dkms build` / `dkms install` 三条按顺序执行。
+维护者脚本在 `debian/linux-firewall-kmod.{postinst,prerm,postrm}`：`postinst` 依次执行
+`dkms add` / `dkms build` / `dkms install`，加载模块、预创建 `/var/log/firewall.log`，
+并在 `#DEBHELPER#` 展开（启用并启动服务）之后断言服务进入 active。
 
 ## 清理
 
@@ -326,6 +333,7 @@ cd src/daemon && GOOS=linux GOARCH=arm64 \
 | `make: go: 没有那个文件或目录`，错误 127 | `sudo` 默认 `secure_path` 不含用户目录下的 Go 安装位置。先 `go version` 确认，再 `sudo --preserve-env=PATH make daemon`，或 `sudo env "PATH=$PATH" make ...` |
 | `ERROR: Kernel configuration is invalid.` | 内核头文件与运行内核不匹配：`sudo apt install --reinstall linux-headers-$(uname -r)` |
 | `没有规则可制作目标 'deb'` | 当前根 `Makefile` 已有 `deb:` 目标；确认在仓库根执行 `make deb` |
+| `dpkg-buildpackage` 报 `debhelper-compat (= 13) but it is not installable` | 构建机缺 debhelper：`sudo apt install debhelper` |
 | 面板改了但界面上看不到 | 只跑了 `make frontend`，没重跑 `make daemon`；二进制里嵌的还是旧包 |
 | `go build` 报「包内无 .go 文件」 | `assets.go` 被清理动作删掉了。检查那条 `find` 是否带了 `! -name assets.go` |
 | CI 的 `tsc` 全线找不到 `react` | `npm ci` 没执行，或 `frontend/package.json` 缺依赖声明。见上文面板目标的第 1、3 条要点 |

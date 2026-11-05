@@ -26,6 +26,14 @@
 - **`make clean` 补全并修正** - 补清散落产物：`src/daemon/firewall-daemon`、`scripts/bench/{blast2,sink}`、`test-results/`、`playwright-report/`、`blob-report/`、`.playwright-mcp/`、`.pytest_cache/`、`__pycache__/`；不再删除入库的 `contract/generated/*` 与 `http_contract.go`（此前 clean 后工作区变脏，且 `go build` 会因缺生成文件失败）
 - **`make distclean`** - 在 `clean` 基础上额外清内核中间文件、clangd 缓存 `.cache/` 与 `compile_commands.json`
 
+### 打包（debhelper）
+- **打包改由 `debian/rules` 驱动** - 真实路径从 `build-deb.sh` 手拼目录 + `dpkg-deb --build` 改为 `debian/rules` + `dpkg-buildpackage`；`build-deb.sh` 退化为薄壳：生成 `debian/changelog`、调用 `dpkg-buildpackage`、把产物从上级目录搬到 `build/deb/` 并恢复 `linux-firewall-kmod-<版本>.deb` 文件名。原 `debian/rules` 是 0644、从未被执行，且会把本机预编 `.ko` 塞进 `lib/modules/$(uname -r)/extra`（vermagic 陷阱）；现在只编守护进程
+- **维护者脚本落盘到 `debian/`** - `postinst`/`prerm`/`postrm` 从 heredoc 变成真实文件。`postinst` 走 `dkms add`/`build`/`install`、加载模块、预创建 `/var/log/firewall.log`，随后由 `dh_installsystemd` 展开的片段启用并启动服务，末尾仍断言 `is-active`；`prerm` 的 rmmod 只在 remove/deconfigure 时执行
+- **版本单一真相源** - `debian/changelog` 由 `CHANGELOG.md` 在构建期生成且不入库，删除过期的被跟踪文件（2.2.0-1）；`debian/compat` 由 `debhelper-compat (= 13)` 取代
+- **控制文件修正** - 删除从未实现的 `linux-firewall-kmod-source` 二进制包；`dkms` 从 Build-Depends 移到运行时 Depends；`/etc` 下配置由 debhelper 自动登记为 conffiles；`/etc/firewall` 保持 0700、`*.yaml` 保持 0600（`dh_fixperms` 会放宽权限，`override_dh_fixperms` 还原）
+- **升级时真正更换内核模块** - `postinst` 在 `dkms install` 前无条件卸载已加载的旧模块。此前只在「同版本残留」分支里 rmmod，版本号变化时 `lsmod` 命中会跳过 `modprobe`，新编的 `.ko` 实际不生效
+- **构建依赖与入口同步** - `release.yml` 安装 `debhelper`，tag 版本经环境变量传入；`make deb`、本机安装守卫提示、`docs/zh/development/building.md`、`docs/zh/getting-started/installation.md` 一并更新
+
 ## [Unreleased] - 2026-11-05 公开规范整改（17 项）
 
 全面扫描并修复 FHS 路径合规、安全加固、文档一致性、CI/CD 规范、版本号管理五个维度的不规范项。

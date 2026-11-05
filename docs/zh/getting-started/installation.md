@@ -159,10 +159,12 @@ DESTDIR 模式下服务不会启动。装完包后要自己 enable 和 start。
 ### 打成 .deb
 
 ```bash
+sudo apt install debhelper   # 构建机依赖
 make deb
 ```
 
-它调用 `./build-deb.sh`，产物在 `build/deb/linux-firewall-kmod-<版本>.deb`。
+它调用 `./build-deb.sh`（debhelper + `dpkg-buildpackage`），产物在
+`build/deb/linux-firewall-kmod-<版本>.deb`。
 内核模块走 DKMS：在目标机器安装时才编译，内核升级后自动重编。
 
 ## 五、systemd 服务

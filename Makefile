@@ -659,7 +659,7 @@ _guard_local_install:
 		echo ""; \
 		echo "  2) 打包暂存, 不写本机 (用于打 .deb 或分发):"; \
 		echo "       make install DESTDIR=\$$(pwd)/build/stage"; \
-		echo "       ./build-deb.sh   # 然后 apt install ./firewall-*.deb"; \
+		echo "       make deb          # 产物在 build/deb/linux-firewall-kmod-*.deb"; \
 		echo ""; \
 		echo "  3) 显式授权 (仅限在受控沙箱 / CI 容器内):"; \
 		echo "       make install FIREWALL_REMOTE_DEPLOY=1"; \
@@ -848,11 +848,11 @@ endif
 # ============================================================================
 # 构建 .deb 包
 # ============================================================================
-# 不依赖 build：build-deb.sh 只编守护进程（内核模块由远端 DKMS 对目标内核编译），
+# 打包走 debian/rules（debhelper）：只编守护进程，内核模块由目标机的 DKMS 编译，
 # 本地对当前内核编 .ko 在这里既浪费又用不上。
 .PHONY: deb
 deb:
-	@echo "Running ./build-deb.sh ..."
+	@echo "Running ./build-deb.sh (debhelper) ..."
 	@./build-deb.sh
 
 # ============================================================================
@@ -1109,5 +1109,6 @@ test-cov: $(KERNEL_MODULE) $(DAEMON_BIN)
 # ============================================================================
 # 9. Debian 软件包构建
 # ============================================================================
-# 已迁移至 build-deb.sh(DKMS 模式,安装时编译内核模块)。
-# 使用方式: ./build-deb.sh [版本号]
+# 打包入口是 build-deb.sh：生成 debian/changelog 后调用 dpkg-buildpackage，
+# 打包逻辑本体在 debian/rules 与 debian/linux-firewall-kmod.* 维护者脚本里。
+# 使用方式: make deb，或 ./build-deb.sh [版本号]
