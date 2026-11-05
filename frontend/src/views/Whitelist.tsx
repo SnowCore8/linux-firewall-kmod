@@ -22,6 +22,7 @@ import {
 import { PageHeader } from '../components/PageHeader.tsx'
 import { StatCard } from '../components/StatCard.tsx'
 import { DataTable } from '../components/DataTable.tsx'
+import { StaleNotice } from '../components/state/StaleNotice.tsx'
 import { DrawerForm } from '../components/DrawerForm.tsx'
 import { useLiveData } from '../hooks/useLiveData.ts'
 import { useAsync } from '../hooks/useAsync.ts'
@@ -317,6 +318,7 @@ export default function Whitelist() {
       />
 
       <Flex vertical gap={16} className="fw-fade-in">
+        <StaleNotice visible={live.isStale && live.source !== 'sse'} onRetry={refetchMain} />
         <div
           style={{
             display: 'grid',

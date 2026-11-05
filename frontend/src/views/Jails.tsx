@@ -21,6 +21,7 @@ import {
 } from '@ant-design/icons'
 import { PageHeader } from '../components/PageHeader.tsx'
 import { DataTable } from '../components/DataTable.tsx'
+import { StaleNotice } from '../components/state/StaleNotice.tsx'
 import { StatCard } from '../components/StatCard.tsx'
 import { useLiveData } from '../hooks/useLiveData.ts'
 import { useRefreshSignal } from '../hooks/useRefreshSignal.ts'
@@ -231,6 +232,12 @@ export default function Jails() {
         description="日志解析规则（jail）的阈值配置、启停切换与运行时触发计数"
         breadcrumb={[{ title: '防护' }, { title: '越狱规则' }]}
         realtimeState={realtimeState}
+      />
+
+      <StaleNotice
+        visible={live.isStale && live.source !== 'sse'}
+        onRetry={refetch}
+        style={{ marginBottom: 16 }}
       />
 
       <div

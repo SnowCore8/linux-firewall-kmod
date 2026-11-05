@@ -14,6 +14,7 @@ import { PageHeader } from '../components/PageHeader.tsx'
 import { StatCard } from '../components/StatCard.tsx'
 import { ChartCard } from '../components/ChartCard.tsx'
 import { DataTable } from '../components/DataTable.tsx'
+import { StaleNotice } from '../components/state/StaleNotice.tsx'
 import { BaseChart, useChartBase } from '../components/charts/BaseChart.tsx'
 import { LoadingState } from '../components/state/LoadingState.tsx'
 import { ErrorState } from '../components/state/ErrorState.tsx'
@@ -298,6 +299,10 @@ function RatesSection() {
 
   return (
     <Flex vertical gap={16}>
+      <StaleNotice
+        visible={ratesLive.isStale && ratesLive.source !== 'sse'}
+        onRetry={ratesLive.refetch}
+      />
       {windows.data == null && windows.error ? (
         <ErrorState error={windows.error} onRetry={windows.refetch} />
       ) : (

@@ -15,6 +15,7 @@ import { ChartCard } from '../components/ChartCard.tsx'
 import { BaseChart, useChartBase } from '../components/charts/BaseChart.tsx'
 import { LoadingState } from '../components/state/LoadingState.tsx'
 import { ErrorState } from '../components/state/ErrorState.tsx'
+import { StaleNotice } from '../components/state/StaleNotice.tsx'
 import { useLiveData } from '../hooks/useLiveData.ts'
 import { useAsync } from '../hooks/useAsync.ts'
 import { useRefreshSignal } from '../hooks/useRefreshSignal.ts'
@@ -135,6 +136,12 @@ export default function Dashboard() {
             </Button>
           </Space>
         }
+      />
+
+      <StaleNotice
+        visible={live.isStale && live.source !== 'sse'}
+        onRetry={live.refetch}
+        style={{ marginBottom: 16 }}
       />
 
       {!hasData && live.isLoading && <LoadingState variant="cards" rows={6} />}
