@@ -2,7 +2,7 @@
 /*
  * fw_ban.c - 封禁表（按 prefix_len 分层的桶表 + RCU + 层内桶锁，per-entry 定时器）
  *
- * 与旧实现的差别（见 docs/zh/development/kernel-rewrite-design.md）：
+ * 与旧实现的差别（见 docs/zh/development/kernel-module-design.md）：
  *
  *   - **容量上限**：新增 fw_max_ban_entries（默认 65535），在桶锁内原子检查；
  *     到限拒绝并递增 ban_table_full_rejects —— 这给了该计数器唯一递增点，

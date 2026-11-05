@@ -3,7 +3,7 @@
  * fw_main.c - 模块生命周期、模块参数与 fw_info 单例
  *
  * init / exit 的顺序本身就是设计的一部分，见
- * docs/zh/development/kernel-rewrite-design.md「并发与生命周期」：
+ * docs/zh/development/kernel-module-design.md「并发与生命周期」：
  *
  *   init: 参数校验 → 单例字段与运行态默认值 → 各子系统表/锁/原子初始化
  *         → netlink → 状态恢复 → 本机地址首次发现 → netdev notifier

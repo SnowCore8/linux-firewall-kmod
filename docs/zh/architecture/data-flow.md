@@ -59,7 +59,7 @@ struct nf_hook_ops nf_ops_ipv4 = {
 | 约束 | 原因 |
 |------|------|
 | 本机地址判定先于封禁表 | 本机豁免由 `fw_local.c` 承担，接口地址不写进白名单。顺序颠倒会让本机地址被自己的封禁条目丢弃 |
-| 四张表在同一个 RCU 读侧临界区内读完 | 旧实现分三处进出 RCU。自决封禁在临界区外执行：要取桶锁、分配内存、推 netlink 事件 |
+| 四张表在同一个 RCU 读侧临界区内读完 | 自决封禁在临界区外执行：要取桶锁、分配内存、推 netlink 事件 |
 | 端口门控只加在速率判定这一支 | 封禁表对所有端口生效。`dst_port == 0`（ICMP、非首片、解析失败）一律参与速率判定 |
 
 代码（`fw_hook.c` 的 `fw_ban_check`）：
@@ -165,7 +165,7 @@ sequenceDiagram
     EX->>EX: 按 offset 读增量字节（每源长驻 fd + 复用缓冲）
     EX->>Pipe: 按换行切行，半行留缓冲
     Pipe->>Pipe: 规则匹配 + IP 提取与保留段校验
-    Pipe->>Win: 累计失败 + EffectiveThreshold（时段 / 来源 / 信誉系数）
+    Pipe->>Win: 累计失败 + EffectiveThreshold（时段 / 来源 / 信誉调整）
     Pipe-->>EX: 达阈值 → 封禁意图
     EX->>Ban: 封禁（时长、原因 = jail 名）
     Ban->>Kernel: netlink BAN_IP
@@ -181,7 +181,7 @@ sequenceDiagram
 | inotify 掩码 | `MODIFY \| ATTRIB \| CLOSE_WRITE \| MOVE_SELF \| DELETE_SELF` | `src/daemon/internal/ingest/watcher.go` |
 | 轮转处理 | `MOVE_SELF` / `DELETE_SELF` 触发重挂新 inode | `internal/ingest/reader.go` |
 | 源标识 | 稳定的 `SourceID`，不用切片下标 | `internal/ingest/registry.go` |
-| 有效阈值 | 不是配置里的 `max_retries` 原值，叠加时段、来源与信誉系数 | `internal/decision/policy.go` 的 `EffectiveThreshold` |
+| 有效阈值 | 不是配置里的 `max_retries` 原值，叠加时段、来源与信誉调整量 | `internal/decision/policy.go` 的 `EffectiveThreshold` |
 | 分工 | 守护进程只做应用层检测（如 SSH 暴力破解）；网络层 DDoS 检测在内核钩子里 | `src/kernel-module/fw_rate.c` |
 | 内核自决封禁回执 | 经 netlink `DDOS_EVENT` 推给事件泵 | `internal/kernel/consumer.go` |
 | 封禁入口统一 | procfs、netlink、DDoS 自决三条路径都走 `fw_ban_try_add()`：白名单前检 → 泛洪闸门 → 容量检查 | `src/kernel-module/fw_ban.c` 的 `fw_ban_try_add` |

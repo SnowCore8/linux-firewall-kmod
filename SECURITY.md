@@ -124,11 +124,11 @@ procfs 不提供受保护端口的写入口，集合只由守护进程经 netlin
   `fw_ban_flood_allow`（`src/kernel-module/fw_ban.c`），
   上限来自 `fw_max_bans_per_second` 模块参数与配置的
   `ddos.max_bans_per_second`。
-- 本机地址集合在 netfilter 钩子注册之前发布，运行期必然有一张已发布的表。
-  旧实现的「空表即判非本机」失败开放窗口已消除。
+- 本机地址集合在 netfilter 钩子注册之前发布，运行期必然有一张已发布的表，
+  空表不会导致放行。
   出处：`src/kernel-module/fw_local.c`、`fw_netdev.c` 的头部注释。
-- 本机地址只存精确主机地址（IPv4 /32、IPv6 /128），不扩成子网豁免。
-  旧实现按掩码比较，接口配 /24 时整段的显式白名单条目删不掉。
+- 本机地址只存精确主机地址（IPv4 /32、IPv6 /128），不扩成子网豁免；
+  白名单删除同样按精确地址匹配，接口配 /24 时仍可删掉单条。
   出处：`src/kernel-module/fw_local.c`。
 - 受保护端口位图为空时按「全端口受保护」处理，不会静默关掉检测。
   出处：`src/kernel-module/fw_ports.c`。
@@ -176,9 +176,5 @@ procfs 不提供受保护端口的写入口，集合只由守护进程经 netlin
 | 保持配置校验严格 | 默认开，别长期挂 `--no-strict` |
 | 看 `/proc/firewall/stats` 与指标 | 端口默认 9119 |
 | 定期回看封禁面 | `bans` 与 `whitelist` 都要看 |
-
-## 变更记录
-
-历史修复不在此重复。见 [CHANGELOG.md](CHANGELOG.md)。
 
 机制细节见 [docs/zh/architecture/](docs/zh/architecture/)。

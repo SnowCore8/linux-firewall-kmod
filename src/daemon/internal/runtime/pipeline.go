@@ -309,7 +309,7 @@ func (p *Pipeline) judgeLine(ctx *lineCtx, ip netip.Addr, via logparse.MatchVia,
 	// 顺序是语义的一部分：先记这次失败，再取分数算阈值（见 DecisionFacts）。
 	ctx.facts.RecordFailure(ip)
 
-	// 使用加法模型计算阈值（修复旧乘法 Bug：内网×低信誉=1.0 导致系数抵消）
+	// 阈值走加法模型：内网与低信誉的系数不会互相抵消。
 	threshold := decision.EffectiveThreshold(
 		state.policy.MaxRetries,
 		ctx.tick.PeakHours,

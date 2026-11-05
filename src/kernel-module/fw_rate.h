@@ -2,7 +2,7 @@
 /*
  * fw_rate.h - 速率表、窗口滚动、EWMA、违规判定
  *
- * 与旧实现的关键差别（见 docs/zh/development/kernel-rewrite-design.md
+ * 与旧实现的关键差别（见 docs/zh/development/kernel-module-design.md
  * 「速率表」与「热路径重设计」）：
  *
  *   1. **一次查表**。旧实现的 update_rate_stats / check_rate_violation /

@@ -1,10 +1,9 @@
 # 集群扫描检测（按网段）设计
 
-本文是设计论证，属于 ADR 一类。里面描述「当初为什么这样定」。
+本文记录按网段检测集群扫描的判据、内核与守护进程的实现取舍。
 
-**现状口径**请以[内核模块](../architecture/kernel-module.md)与
+当前实现结构以[内核模块](../architecture/kernel-module.md)与
 [用户态守护进程](../architecture/daemon.md)为准。
-文中标注「落地前」「原设计」的句子说的是过去。
 
 ## 1. 背景
 
@@ -13,7 +12,7 @@
 
 | 事实 | 说明 |
 |------|------|
-| 旧 `frp` jail 的判据 | 把「成功建立连接」当失败计数 |
+| `frp` jail 的判据 | 把「成功建立连接」当失败计数（该 jail 已停用，见 `config/frp.yaml`） |
 | 后果 | 频繁访问的访客被封，真实扫描器反而碰不到阈值：扫描器每个源 IP 只连 1 次 |
 | 定性 | 这不是正则写错，而是判据方向错了 |
 
@@ -32,7 +31,7 @@
 | CGNAT / 运营商 NAT（多用户共性出口） | 多 | 多 | 不命中（被 K 排除） |
 | 分布式扫描 / 暴力破解 | 多 | 少 | **命中** |
 
-## 3. 实测依据（2026-09-22，frps 全量日志 6337 条连接）
+## 3. 实测依据（frps 全量日志 6337 条连接）
 
 | 流量 | /24 | 同 /24 不同 IP 数 | 总连接 |
 |---|---|---|---|
@@ -47,32 +46,21 @@
 结论：正常流量永远是「一个 /24 一个 IP」，扫描与暴力破解是「一个 /24 一堆 IP」。
 判据在真实数据上可分。
 
-这批数据是一次性观察，不在仓库里（原始日志未入库）。
-表格数值以当时记录为准：未验证（本次未重跑）。
+这批数据来自一次外部观察，原始日志未入库；表内数值未在当前环境复跑，
+引用前按[性能基线](perf-baseline.md)重新采样。
 
-## 4. 内核侧改动（网段封禁能力）
+## 4. 内核侧：网段封禁
 
-**落地前**的状态：封禁表是精确 IP 哈希，不支持前缀。
-
-当时的四处事实（现已按下面 §4.1–§4.3 改掉）：
-
-| 位置 | 落地前 |
-|------|--------|
-| `src/kernel-module/fw_ban.c` | `fw_ban_find_locked` 与 `fw_ban_lookup` 只做 `fw_addr_equal` 精确比较 |
-| `src/kernel-module/fw_types.h` | `struct fw_ban_node` 无 `prefix_len` 字段 |
-| `contract/generated/netlink_uapi.h` | `struct fw_ban_ip` 只有 `af` / `duration_secs` / `addr` / `reason`，**无 `prefix_len`**；而白名单的 `fw_add_whitelist` / `fw_whitelist_state_change` **有** `prefix_len`——协议本身能表达前缀，封禁故意没带 |
-| `src/kernel-module/fw_netlink.c` | ban 处理分支只取 `af` / `addr` |
-
-**为什么故意不带**：威胁模型里封禁是「对单个源 IP 的判定结果」。
-加前缀等于把封禁的作用面从一台主机放大到一片网段，
-误伤半径变化很大，必须先有能分得开扫描器与正常访客的判据（§2、§3），
-再放大力度。
+封禁默认作用于单个源 IP。加前缀会把作用面从一台主机放大到一片网段，
+误伤半径变化很大，因此必须先有能分得开扫描器与正常访客的判据（§2、§3），
+再允许放大力度。前缀封禁贯穿 `fw_types.h`、`fw_ban.c`、`fw_netlink.c`
+与 `contract/generated/netlink_uapi.h` 四处，见 §4.1–§4.3。
 
 ### 4.1 数据结构
 
 `struct fw_ban_node` 增 `u8 prefix_len`，`32` / `128` 表示精确单机。
-匹配从 `fw_addr_equal` 改为**前缀比较**，复用白名单已有的 `fw_prefix_match`
-（`fw_types.h`），避免出现两套前缀比较逻辑漂移。
+匹配走**前缀比较**，复用白名单已有的 `fw_prefix_match`（`fw_types.h`），
+不引入第二套前缀比较逻辑。
 
 条目身份从 `(af, addr)` 变成 `(af, addr, prefix_len)` 三元组。
 
@@ -88,52 +76,50 @@
 
 选定方案的具体形状（`fw_types.h`）：全长层复用 4096 桶的大数组，
 短前缀层各用 64 桶的小数组。这样「分层省内存」这条取舍才成立，
-同时精确单机封禁的常数项与落地前一致。
+同时精确单机封禁的常数项保持不变。
 
 层下标即 `prefix_len`，所以 IPv6 最长 128 要有 129 层，IPv4 只用前 33 层。
 层号与位移量的不变量放在**编译期**断言，不留到运行时。
 
 ### 4.3 协议与契约
 
-| 步骤 | 内容 | 现状 |
-|------|------|------|
-| 1 | `contract/netlink.fwidl` 的 ban 段增 `prefix_len` | 已落地 |
-| 2 | 跑 `python3 contract/gen.py` 重新生成 `contract/generated/netlink_uapi.h` | **必须先 gen 再 verify**，见下 |
-| 3 | `struct fw_ban_ip` 的尺寸断言随之更新 | 落地前是 65 字节；加 `prefix_len` 后是 **66 字节**（`contract/generated/netlink_uapi.h` 的 `_Static_assert`） |
-| 4 | 守护进程下发路径：`kernel.Client.Ban` 已带 `prefixLen` 参数 | `src/daemon/internal/kernel/client.go` |
-| 5 | 地址校验接受 CIDR 形式 | `src/daemon/internal/bans/` |
+| 项 | 内容 | 落点 |
+|----|------|------|
+| ban 消息带 `prefix_len` | 线格式字段 | `contract/netlink.fwidl` |
+| 生成头文件 | `python3 contract/gen.py` 的输出 | `contract/generated/netlink_uapi.h` |
+| `struct fw_ban_ip` 尺寸 | 66 字节（含 `prefix_len`） | 生成物里的 `_Static_assert` |
+| 下发路径 | `kernel.Client.Ban` 带 `prefixLen` 参数 | `src/daemon/internal/kernel/client.go` |
+| 地址校验 | 接受 CIDR 形式 | `src/daemon/internal/bans/` |
 
-顺序固定的原因：`contract/verify_layout.py` 与内核的编译期断言都读生成物。
-先改代码再改契约，两边会按不同布局走。
+生成物是 `verify_layout.py` 与内核编译期断言的共同输入，契约与代码必须同步修改。
 
 ### 4.4 热路径性能
 
 封禁查找在包处理热路径上（每个报文调一次 `fw_ban_lookup`）。
 分层查表改变了常数项，**必须重测**：
-用 `scripts/bench/` 的对照法跑新旧模块，确认无回归。
+用 `scripts/bench/` 的对照法比较两种查表方案，确认无回归。
 验收口径是实时性 / 稳定性 / 规范性，见
-[内核重写设计](kernel-rewrite-design.md)「范围与验收」。
+[内核模块设计](kernel-module-design.md)「范围与验收」。
 
-**实测（2026-09-22，同一台机、同一份 `scripts/bench/fwsweep.sh`、
-新旧模块交替 `insmod`）**。
+**对照测量：同一台机、同一份 `scripts/bench/fwsweep.sh`、
+两种查表方案交替 `insmod`**。
 A 路径 = 白名单未命中 + 封禁表未命中，即分层查表的成本落点。
 单通路 3 线程、`secs=8`、重复 3 次取中位：
 
-| 版本 | E 白名单短路 | A 两表未命中 | D 已封禁丢弃 |
+| 查表方案 | E 白名单短路 | A 两表未命中 | D 已封禁丢弃 |
 |------|------|------|------|
-| 落地前（精确哈希） | 2.176 / 2.147 µs | 2.237 / 2.220 µs | 1.266 / 1.167 µs |
-| 落地后（分层前缀表） | 2.232 / 2.124 µs | 2.295 / 2.202 µs | 1.263 / 1.219 µs |
+| 精确哈希（对照） | 2.176 / 2.147 µs | 2.237 / 2.220 µs | 1.266 / 1.167 µs |
+| 分层前缀表（当前） | 2.232 / 2.124 µs | 2.295 / 2.202 µs | 1.263 / 1.219 µs |
 
 A 路径两轮均值差 **+0.9%**，小于同一次运行内本应同路径的 E 与 C 之间的自身离散
 （0.02–0.29 µs，即 2–13%）——**无可测回归**。
 
 原因与设计一致：未封禁时 `used` 位图全零（或只有精确层），
-查找一次哈希即返回，与落地前的哈希表同阶。
+查找一次哈希即返回，与精确哈希同阶。
 
-这批数字是当时的单次测量，测的是当时的内核与主机。
-当前内核上的复测：未验证。引用时按[性能基线](perf-baseline.md)的判定纪律重跑。
+这些数字依赖内核与主机，引用前按[性能基线](perf-baseline.md)的判定纪律重跑。
 
-## 5. 守护进程侧改动
+## 5. 守护进程侧
 
 ### 5.1 新纯函数
 
@@ -163,7 +149,8 @@ A 路径两轮均值差 **+0.9%**，小于同一次运行内本应同路径的 E
 
 ### 5.3 检测周期必须显著小于 `window`
 
-这是实现阶段撞出来的结论，不是先验设计。
+集群计数随窗口清理周期滚动；扫描周期若接近或大于清理周期，
+跨 IP 的计数会在一次扫描前被清掉，集群判据失效。因此扫描周期必须显著更短。
 
 | 事实 | 值 | 出处 |
 |------|-----|------|
@@ -223,38 +210,28 @@ YAML 键名照 `internal/config/parser.go` 的 `yamlCluster`：
 第 7 步顺序不能倒：`contract/verify_http.py` 拿契约与生成物、
 `internal/http/routes.go`、前端 TS 三面对账。
 
-### 5.6 误伤控制与上线顺序
+### 5.6 误伤控制与默认值
 
 | 控制 | 做法 | 出处 |
 |------|------|------|
 | 热路径白名单短路 | 内核判定时 `fw_wl_lookup` 在 `fw_ban_lookup` **之前**，白名单内的主机即使落在被封网段也照样放行 | `src/kernel-module/fw_hook.c` |
 | 下发侧白名单前检 | `fw_ban_try_add` 对「网段地址本身落在白名单覆盖范围内」直接返回 `-EPERM` | `src/kernel-module/fw_ban.c` |
 | 无需在守护进程侧另加前检 | 上面两条合起来已覆盖，再加一道只是重复 | 设计裁定 |
-| **首版以 audit 模式落地** | `cluster.audit_only: true`：只记日志，不封禁；观察一段确无误判再接处置 | `internal/config/types.go` 的默认值 |
+| **默认以 audit 模式运行** | `cluster.audit_only: true`：只记日志，不封禁；观察一段确无误判再接处置 | `internal/config/types.go` 的默认值 |
 
-## 6. 验证计划
+## 6. 验证
 
-| 层 | 方式 | 现状 |
+| 层 | 方式 | 落点 |
 |---|------|------|
-| 算式 | `internal/decision/cluster.go` 的内嵌单测：边界（恰好 N、恰好 K、跨窗口、/24 边界 IP 如 `x.y.z.255`） | 已落地：`cluster_test.go` |
-| 端到端 | `tests/test_22_cluster_scan.py`：配置接受 / 单高频 IP 不触发 / 同 /24 多源触发 | 已落地 |
-| 内核 | `make kernel-module`，封禁表新判定加内核侧对照 | 已落地 |
-| 契约 | `make contract-check`；`netlink.fwidl` 改动后先 `gen.py` | 已落地 |
-| 性能 | `scripts/bench/` 新旧对照，确认封禁查找无回归 | 见 §4.4；当前内核未复测（未验证） |
+| 算式 | 边界（恰好 N、恰好 K、跨窗口、/24 边界 IP 如 `x.y.z.255`） | `internal/decision/cluster.go` 的内嵌单测 `cluster_test.go` |
+| 端到端 | 配置接受 / 单高频 IP 不触发 / 同 /24 多源触发 | `tests/test_22_cluster_scan.py` |
+| 内核 | 封禁表新判定的内核侧对照 | `make kernel-module` |
+| 契约 | `netlink.fwidl` 改动后先 `gen.py` | `make contract-check` |
+| 性能 | 两种查表方案的封禁查找对照 | `scripts/bench/`，方法与判定见 §4.4 |
 
 `tests/` 里的多 IP 日志夹具照 `tests/test_21_multi_jail.py` 的写法造。
 
-## 7. 分期
-
-| 期 | 内容 | 结果 |
-|----|------|------|
-| **P1** | `internal/decision/cluster.go` + 单测 + audit 日志 | 零行为变更，可独立合入。已落地 |
-| **P2** | 内核前缀封禁（§4）→ 守护进程处置接入（§5.2）+ 配置项（§5.5）+ pytest | 已落地 |
-| 上线顺序 | 先 audit 观察，确认无误判后再开处置 | 默认仍是 `enabled: false`、`audit_only: true` |
-
-## 8. 当前实现状态
-
-P1 与 P2 均已落地（2026-09-22）。下表逐项在当次重写中重新核对过代码。
+## 7. 实现落点
 
 | 项 | 落点 |
 |---|---|
@@ -265,9 +242,9 @@ P1 与 P2 均已落地（2026-09-22）。下表逐项在当次重写中重新核
 | 周期检测 | `ScanClusters`，10 秒独立周期，经 `dispatchClusterHit` 下发 |
 | 端到端 | `tests/test_22_cluster_scan.py` |
 
-默认关闭、且开启后首版只审计，与 §5.6 的上线顺序一致。
+默认关闭；开启后只审计，确认真实流量无误判后再开处置。
 
-## 9. 未决事项
+## 8. 未决事项
 
 | 项 | 状态 |
 |----|------|
@@ -277,6 +254,6 @@ P1 与 P2 均已落地（2026-09-22）。下表逐项在当次重写中重新核
 
 ## 相关文档
 
-- [内核重写设计](kernel-rewrite-design.md)：封禁表骨架的设计来源
+- [内核模块设计](kernel-module-design.md)：封禁表骨架的设计来源
 - [内核模块](../architecture/kernel-module.md)：分层桶表的当前结构
 - [性能基线](perf-baseline.md)：复测的判定纪律

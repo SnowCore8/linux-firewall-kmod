@@ -5,7 +5,7 @@
  * 对外协议由 contract/procfs.fwidl 冻结，生成物 contract/generated/procfs_uapi.h。
  * 本模块是**表现层**：只做「取数 → 格式化」与「解析 → 调模块 API」，不含表结构。
  *
- * 与旧实现的差别（见 docs/zh/development/kernel-rewrite-design.md）：
+ * 与旧实现的差别（见 docs/zh/development/kernel-module-design.md）：
  *
  *   1. **stats 读前先刷**。旧实现 stats_show 直接读全局 atomic，而热路径只写本
  *      CPU 槽，导致读数陈旧（缺陷 PROC_STATS_STALE_NO_FLUSH）。新实现经

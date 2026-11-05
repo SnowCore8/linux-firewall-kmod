@@ -3,7 +3,7 @@
  * fw_state.c - 状态文件读写（封禁表 + 白名单）
  *
  * 与旧实现（state-persist.c）的差别（见
- * docs/zh/development/kernel-rewrite-design.md 与契约修订说明）：
+ * docs/zh/development/kernel-module-design.md 与契约修订说明）：
  *
  *   1. **恢复保留容量检查**。旧实现在两处都写着「跳过容量限制（按需恢复）」，
  *      即状态文件里的行数可以突破模块参数上限，且因为恢复路径直接操作旧表结构

@@ -304,7 +304,7 @@ sudo cat /proc/firewall/service_probes   # 服务探测嫌疑
 | `packets_dropped` | 丢弃的报文数 |
 | `packets_accepted` | 经钩子放行的报文数 |
 | `tcp_anomaly_dropped` | TCP 标志异常丢弃数 |
-| `cleanup_cycles` | 遗留键位：无全局清理线程，恒为 0 |
+| `cleanup_cycles` | 恒为 0：无全局清理线程 |
 | `cleanup_expired_total` | per-entry 定时器到期摘链的条目数 |
 | `current_bans` | 当前封禁条目数 |
 | `current_whitelist` | 当前白名单条目数 |

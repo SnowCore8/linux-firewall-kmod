@@ -21,7 +21,7 @@ Go 依赖全为纯 Go，无 cgo，不需要系统开发库。
 > **clang-format 版本要对齐。** 不同大版本的排版规则不同，
 > 本机版本与 CI 不一致时 `make format-check` 会误报。
 > 本机没有系统包时可用 `pip install clang-format==18.1.8` 对齐。
-> 该安装方式：未验证（本次未执行）。
+> 该安装方式：未验证。
 
 ## 目标清单
 
@@ -323,7 +323,7 @@ cd src/daemon && GOOS=linux GOARCH=arm64 \
 |------|-----------|
 | `make: go: 没有那个文件或目录`，错误 127 | `sudo` 默认 `secure_path` 不含用户目录下的 Go 安装位置。先 `go version` 确认，再 `sudo --preserve-env=PATH make daemon`，或 `sudo env "PATH=$PATH" make ...` |
 | `ERROR: Kernel configuration is invalid.` | 内核头文件与运行内核不匹配：`sudo apt install --reinstall linux-headers-$(uname -r)` |
-| `没有规则可制作目标 'deb'` | 用的是旧版 `Makefile`；当前仓库已有 `deb:` 目标 |
+| `没有规则可制作目标 'deb'` | 当前根 `Makefile` 已有 `deb:` 目标；确认在仓库根执行 `make deb` |
 | 面板改了但界面上看不到 | 只跑了 `make frontend`，没重跑 `make daemon`；二进制里嵌的还是旧包 |
 | `go build` 报「包内无 .go 文件」 | `assets.go` 被清理动作删掉了。检查那条 `find` 是否带了 `! -name assets.go` |
 | CI 的 `tsc` 全线找不到 `react` | `npm ci` 没执行，或 `frontend/package.json` 缺依赖声明。见上文面板目标的第 1、3 条要点 |

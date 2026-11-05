@@ -2,7 +2,7 @@
 /*
  * fw_wl.c - 白名单（64 精确桶 + 子网链表）
  *
- * 与旧实现的差别（见 docs/zh/development/kernel-rewrite-design.md「白名单」）：
+ * 与旧实现的差别（见 docs/zh/development/kernel-module-design.md「白名单」）：
  *
  *   - **容量上限**：新增模块参数 fw_max_whitelist_entries（默认 65535），插入前在
  *     wl_lock 内原子检查，修复 PROC_WHITELIST_CAPACITY_UNENFORCED。

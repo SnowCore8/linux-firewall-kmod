@@ -7,7 +7,7 @@
  * 里手抄了 16 个与契约同形的 __packed 结构体，与生成头各改各的，是契约漂移的
  * 主要来源。现在一律用 `struct fw_*`。
  *
- * 与旧实现的行为差别（见 docs/zh/development/kernel-rewrite-design.md）：
+ * 与旧实现的行为差别（见 docs/zh/development/kernel-module-design.md）：
  *
  *   1. **DaemonRegisterAck 载荷错位修复**：旧实现把 accepted 写进 12 字节头的
  *      最后一个字节（offset 11）并用 NLMSG_DONE 做 nlmsg_type，契约要求

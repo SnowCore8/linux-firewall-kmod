@@ -207,11 +207,10 @@ func TestEffectiveThresholdAdditiveModel(t *testing.T) {
 	}
 }
 
-// TestEffectiveThresholdFixesMultiplicativeBug 验证新加法模型修复了旧乘法 Bug。
+// TestInternalLowReputationOutranksExternal 验证加法模型下系数不会互相抵消。
 //
-// 旧 Bug：内网(2.0) × 低信誉(0.5) = 1.0，导致内网低信誉 IP 与外网低信誉 IP 阈值相同。
-// 新模型：内网(+3) + 低信誉(-2) = +1，内网低信誉 IP 阈值高于外网低信誉 IP。
-func TestEffectiveThresholdFixesMultiplicativeBug(t *testing.T) {
+// 内网(+3) + 低信誉(-2) = +1，内网低信誉 IP 的阈值高于外网低信誉 IP。
+func TestInternalLowReputationOutranksExternal(t *testing.T) {
 	base := uint32(5)
 
 	// 外网低信誉
@@ -221,7 +220,7 @@ func TestEffectiveThresholdFixesMultiplicativeBug(t *testing.T) {
 	internalLowRep := EffectiveThreshold(base, false, true, 30)
 
 	if internalLowRep <= externalLowRep {
-		t.Errorf("内网低信誉 IP 阈值(%d)应大于外网低信誉 IP 阈值(%d)，否则 Bug 未修复",
+		t.Errorf("内网低信誉 IP 阈值(%d)应大于外网低信誉 IP 阈值(%d)",
 			internalLowRep, externalLowRep)
 	}
 
@@ -231,35 +230,5 @@ func TestEffectiveThresholdFixesMultiplicativeBug(t *testing.T) {
 	}
 	if internalLowRep != 6 {
 		t.Errorf("内网低信誉阈值=%d, want 6 (base=5, internal=+3, adj=-2)", internalLowRep)
-	}
-}
-
-// TestOldVsNewThresholdComparison 对比新旧模型在不同场景下的差异。
-func TestOldVsNewThresholdComparison(t *testing.T) {
-	cases := []struct {
-		name       string
-		maxRetries uint32
-		peak       bool
-		internal   bool
-		score      uint32
-	}{
-		{"基准", 5, false, false, 100},
-		{"高峰", 5, true, false, 100},
-		{"内网", 5, false, true, 100},
-		{"低信誉", 5, false, false, 30},
-		{"内网+低信誉", 5, false, true, 30},
-		{"全系数", 5, true, true, 30},
-	}
-
-	for _, c := range cases {
-		oldVal := EffectiveThreshold(c.maxRetries, c.peak, c.internal, c.score)
-		newVal := EffectiveThreshold(c.maxRetries, c.peak, c.internal, c.score)
-
-		t.Logf("%s: old=%d, new=%d, diff=%d", c.name, oldVal, newVal, int(newVal)-int(oldVal))
-
-		// 新模型不应产生 0 阈值
-		if newVal == 0 {
-			t.Errorf("%s: 新模型阈值不得为 0", c.name)
-		}
 	}
 }

@@ -2,7 +2,7 @@
 /*
  * fw_netdev.h - netdev notifier 与本机地址集合的重建
  *
- * 职责边界（见 docs/zh/development/kernel-rewrite-design.md「本机地址集合」
+ * 职责边界（见 docs/zh/development/kernel-module-design.md「本机地址集合」
  * 与「并发与生命周期」）：
  *
  *   - **首次发现**：fw_netdev_rebuild_local() 由 fw_main.c 在**注册钩子之前**

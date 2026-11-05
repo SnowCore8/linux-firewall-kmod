@@ -74,13 +74,9 @@ http://127.0.0.1:9119/dashboard
 填配置文件里的那两个值。
 令牌存在浏览器 `sessionStorage`，键名 `firewall.access_token`，关掉标签页就没了。
 
-想跳过登录表单，直接用免登录地址：
-
-```text
-http://127.0.0.1:9119/?access_token=<base64(用户名:密码)>
-```
-
-令牌会先被写进 `sessionStorage`，然后从地址栏清掉。
+前端不消费 URL 里的 `access_token`，没有免登录深链；登录只能走表单。
+`?access_token=<base64(用户名:密码)>` 是服务端接受的 query 凭据通道，
+供 `EventSource`（设不了请求头）与脚本调用使用。
 
 预期：登录后面板出数据，不用刷新页面也会自己更新。
 更新间隔是 `webui.sse_push_interval`，默认 1 秒。

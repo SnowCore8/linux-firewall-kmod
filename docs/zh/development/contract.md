@@ -153,6 +153,6 @@ un<ip>            # 删除
 
 ## 相关文档
 
-- 开发流程中的契约门禁：[开发指南](development/README.md) 的「质量门禁」
-- procfs 接口详解：[ProcFS 接口](configuration/procfs.md)
-- 内核模块 netlink 侧：[内核模块](architecture/kernel-module.md) 的「Netlink 接口」
+- 开发流程中的契约门禁：[开发指南](README.md) 的「质量门禁」
+- procfs 接口详解：[ProcFS 接口](../configuration/procfs.md)
+- 内核模块 netlink 侧：[内核模块](../architecture/kernel-module.md) 的「Netlink 接口」

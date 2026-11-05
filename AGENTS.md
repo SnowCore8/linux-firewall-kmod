@@ -160,7 +160,7 @@ make test
 ### 前端
 
 - 依赖：React 19 + Ant Design 6（`antd`）+ ECharts 6（`echarts-for-react`）+ react-router-dom 7（hash 路由）
-- 桌面优先、响应式：侧边栏 + 顶栏布局，全新重写（不沿用旧移动页面范式）
+- 桌面优先、响应式：侧边栏 + 顶栏布局，不使用底部 TabBar / 下拉刷新 / 滑动操作
 - `tslib` 是显式依赖：补 `echarts-for-react` 用 `importHelpers` 却漏声明 `tslib` 的打包缺口，别删
 - 信息架构单一真相源：`src/app/nav.ts` 的 `NAV_GROUPS`（驱动侧边栏 / 命令面板 / 面包屑）
 - `views/` 必须平铺为 `views/<Name>.tsx`：`contract/verify_http.py` 按此路径核对 `views/Logs.tsx` 的日志流事件名字面量
@@ -178,11 +178,11 @@ make test
 
 ### 多维风险引擎（v2）
 
-- **Feature Flag**：`risk_engine.enabled`（默认 false，使用旧单维度模型）
+- **Feature Flag**：`risk_engine.enabled`（默认 false，控制风险向量记录与分析 API；阈值计算始终走加法模型）
 - **新包**：`src/daemon/internal/risk/`（types.go、decay.go、classifier.go、engine.go）
 - **新表**：`schema_migrations`、`attack_events`、`ip_risk_vectors`
 - **新 API**：`/api/v2/risk/vectors/*`、`/api/v2/risk/events/*`
-- **阈值模型**：加法模型（修复旧乘法 Bug：内网×低信誉=1.0 导致系数抵消）
+- **阈值模型**：加法模型（各因子相加，内网与低信誉不会互相抵消）
 - **迁移指南**：`docs/zh/migration-risk-engine-v2.md`
 
 ### 威胁情报源系统（v2.4）
@@ -197,7 +197,7 @@ make test
 
 ## 常见坑
 
-1. **编译过 ≠ 加载得了：`.ko` 按 vermagic 锁死编译时的内核，跨机不通用**。本地 `7.0.0-42-generic`、CI runner `7.0.0-1017-azure`、测试 VM `6.8.0-147-generic` 互不兼容，拿一台的 `.ko` 去另一台 `insmod` 必报 `Invalid module format`。CI 的 `build`/`test`/`e2e` 是三台独立 VM，Azure 内核灰度轮换时各自 `uname -r` 可能不同，故 `build` 上传的 `.ko` 不保证能在 `test`/`e2e` 那台加载。为此 `test`、`e2e` 作业各自装 `build-essential`+`ccache`+`linux-headers-$(uname -r)`，在 `insmod` 探测前删掉下载产物、对着**本机** KDIR 重编 `firewall.ko`（守护进程二进制仍用下载产物，纯 Go 静态、与内核无关）；实测重编后 `test` 跑完整套件、`e2e` 的 26 条 Playwright 用例全过（run 41784783278，2026-11-04）。仅当头文件装不到才回退通用 KDIR，此时可能加载失败、CI 自动降级为只跑守护进程测试（见 `ci.yml` 的 `check-module` 步骤）。要在任意目标机真验证加载，必须在该机对着它的内核重编再 `make test`。
+1. **编译过 ≠ 加载得了：`.ko` 按 vermagic 锁死编译时的内核，跨机不通用**。本地 `7.0.0-42-generic`、CI runner `7.0.0-1017-azure`、测试 VM `6.8.0-147-generic` 互不兼容，拿一台的 `.ko` 去另一台 `insmod` 必报 `Invalid module format`。CI 的 `build`/`test`/`e2e` 是三台独立 VM，Azure 内核灰度轮换时各自 `uname -r` 可能不同，故 `build` 上传的 `.ko` 不保证能在 `test`/`e2e` 那台加载。为此 `test`、`e2e` 作业各自装 `build-essential`+`ccache`+`linux-headers-$(uname -r)`，在 `insmod` 探测前删掉下载产物、对着**本机** KDIR 重编 `firewall.ko`（守护进程二进制仍用下载产物，纯 Go 静态、与内核无关）；这样 `test` 能跑完整套件、`e2e` 的 26 条 Playwright 用例可全过。仅当头文件装不到才回退通用 KDIR，此时可能加载失败、CI 自动降级为只跑守护进程测试（见 `ci.yml` 的 `check-module` 步骤）。要在任意目标机真验证加载，必须在该机对着它的内核重编再 `make test`。
 2. **本地 `node_modules` 全会掩盖 `package.json` 缺依赖**。验证前端必须走 `npm ci`。
 3. **`make format` 只格式化 C**。Go 要单独 `gofmt -w`，YAML 只在 `format-check` 里查。
 4. **`go build` 的 `-o` 要用绝对路径**。`Makefile` 已处理，别自己改。

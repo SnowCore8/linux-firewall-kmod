@@ -49,8 +49,8 @@ type FactsOptions struct {
 	FlushEvery time.Duration
 	// Logger 为 nil 时用 slog.Default()。
 	Logger *slog.Logger
-	// RiskEngineEnabled 启用多维风险向量引擎（feature flag）。
-	// 为 false 时退化为旧单维度模型（向后兼容）。
+	// RiskEngineEnabled 启用多维风险向量记录（feature flag）。
+	// 为 false 时不构建风险引擎，阈值计算不受影响。
 	RiskEngineEnabled bool
 }
 

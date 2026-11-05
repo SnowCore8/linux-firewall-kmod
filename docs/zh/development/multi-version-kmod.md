@@ -399,9 +399,9 @@ export MAKEFLAGS="-j$(nproc)"
 
 ## 相关文档
 
-- [AGENTS.md](../AGENTS.md) - 项目工作指令
-- [docs/zh/development/](../docs/zh/development/) - 开发规范
-- [contract/](../contract/) - 接口契约定义
+- [AGENTS.md](../../../AGENTS.md) - 项目工作指令
+- [开发指南](README.md) - 开发规范
+- [contract/](../../../contract/) - 接口契约定义
 
 ## 维护者
 

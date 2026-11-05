@@ -8,7 +8,7 @@
 | [测试](testing.md) | 三层测试、CI 六个任务、CI 加载不了模块这条实测结论 |
 | [契约系统](contract.md) | 契约文件、改动流程、HTTP/netlink/procfs 契约详解 |
 | [性能口径与测量方法](perf-baseline.md) | 红线定义、结构口径、`scripts/bench/` 的复现方法与判定纪律 |
-| [内核模块重写设计](kernel-rewrite-design.md) | 设计决策、冻结面、缺陷处置、分阶段验收 |
+| [内核模块设计](kernel-module-design.md) | 设计决策、冻结面、缺陷处置、验收范围 |
 | [集群扫描检测设计](cluster-detection-design.md) | 判据、实测依据、分层前缀表的取舍 |
 
 架构侧文档在 [docs/zh/architecture/](../architecture/README.md)。

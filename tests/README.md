@@ -34,13 +34,10 @@ tests/
 └── test_22_cluster_scan.py        # 集群扫描检测
 ```
 
-### 编号说明
+### 编号规则
 
-编号 05/06 缺失，这是历史原因：
-
-- **test_05** 和 **test_06** 曾是独立的测试文件，但在某次重构中被合并到其他文件
-- 为避免重新编号导致 git 历史混乱，保留了当前的编号跳跃
-- 新增测试文件继续使用递增编号（从 23 开始）
+- 编号 05/06 不使用；编号一旦分配就不再重排，避免破坏已有引用。
+- 新增测试文件继续递增编号（从 23 开始）。
 
 ## 运行测试
 
@@ -110,7 +107,7 @@ sudo python3 -m pytest --html=report.html --self-contained-html
    - teardown: 清理状态 + 释放内核租约
 
 3. **clean_bans** (显式使用)
-   - 提供干净的封禁状态（与 test_isolation 有冗余，历史遗留）
+   - 提供干净的封禁状态（与 test_isolation 有重叠，保留给显式调用的用例）
 
 4. **共享 fixture** (conftest.py)
    - `check_daemon`: 检查 daemon 二进制存在

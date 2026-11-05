@@ -226,7 +226,7 @@ A: 不会。情报数据仅保存在内存中，重启守护进程后会重新�
 
 ### Q: 如何添加自定义情报源？
 
-A: 参考 [威胁情报源配置指南](threat-feeds.md#自定义情报源)。
+A: 参考 [威胁情报源配置指南](configuration/threat-feeds.md#自定义情报源)。
 
 ### Q: 情报源的置信度如何影响判定？
 
@@ -239,6 +239,6 @@ A:
 
 如有问题，请：
 
-1. 查阅 [威胁情报源配置指南](threat-feeds.md)
+1. 查阅 [威胁情报源配置指南](configuration/threat-feeds.md)
 2. 检查日志：`journalctl -u firewall-daemon | grep "threat feed"`
 3. 提交 Issue：https://github.com/SnowCore8/linux-firewall-kmod/issues

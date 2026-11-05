@@ -2,7 +2,7 @@
 /*
  * fw_local.c - 本机接口精确地址集合（开放寻址线性探测哈希集）
  *
- * 与旧实现的差别（见 docs/zh/development/kernel-rewrite-design.md「本机地址集合」）：
+ * 与旧实现的差别（见 docs/zh/development/kernel-module-design.md「本机地址集合」）：
  *
  *   - 旧实现是「数组 + 每包 O(N) 线性扫描 + 掩码比较」，且 count == 0 时直接
  *     返回「非本机」——一个空表窗口即失败开放。新实现是 O(1) 哈希集。

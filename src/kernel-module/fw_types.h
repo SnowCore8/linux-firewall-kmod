@@ -7,7 +7,7 @@
  *   2. 内部结构体定义（每个结构体归属一个模块，见各模块头文件）
  *   3. 热路径 static inline 原语（哈希、地址比较、校验、协议异常判定）
  *
- * 设计来源：docs/zh/development/kernel-rewrite-design.md
+ * 设计来源：docs/zh/development/kernel-module-design.md
  *
  * 锁顺序协议（必须遵守，违反即死锁）
  * ----------------------------------

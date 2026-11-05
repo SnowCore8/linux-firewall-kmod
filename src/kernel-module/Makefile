@@ -1,6 +1,6 @@
 # 内核模块构建（Kbuild）
 #
-# 模块划分按数据所有权切分，见 docs/zh/development/kernel-rewrite-design.md。
+# 模块划分按数据所有权切分，见 docs/zh/development/kernel-module-design.md。
 # 每个 .o 只对应一个 fw_*.c，且只触碰自己拥有的数据。
 
 obj-m := firewall.o

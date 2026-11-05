@@ -44,17 +44,17 @@ func IsInternal(ip netip.Addr) bool {
 	return b[0]&0xFE == 0xFC
 }
 
-// EffectiveThreshold 计算有效阈值（加法模型，修复旧乘法 Bug）。
+// EffectiveThreshold 计算有效阈值（加法模型）。
 //
 // 公式：baseThreshold + peakAddend + internalAddend + reputationAdjustment
 //
 //	baseThreshold：配置值（max_retries）
-//	peakAddend：高峰期固定加 2（不再乘 1.5）
-//	internalAddend：内网固定加 3（不再乘 2.0）
+//	peakAddend：高峰期固定加 2
+//	internalAddend：内网固定加 3
 //	reputationAdjustment：信誉调整（-2 到 0，连续函数）
 //
-// 修复旧乘法模型的 Bug：内网(2.0) × 低信誉(0.5) = 1.0，导致系数抵消。
-// 新模型下，内网低信誉 IP 的阈值 = base + 3 - 2 = base + 1，高于外网低信誉 IP（base - 2）。
+// 各因子相加而非相乘：内网低信誉 IP 的阈值 = base + 3 - 2 = base + 1，
+// 高于外网低信誉 IP（base - 2），任意两个系数都不会互相抵消。
 func EffectiveThreshold(maxRetries uint32, peakHours, internal bool, reputationScore uint32) uint32 {
 	addend := int(maxRetries)
 
@@ -75,7 +75,7 @@ func EffectiveThreshold(maxRetries uint32, peakHours, internal bool, reputationS
 	return uint32(addend)
 }
 
-// ReputationAdjustment 根据信誉分返回阈值调整值（连续函数，替代旧阶梯乘法）。
+// ReputationAdjustment 根据信誉分返回阈值调整值。
 //
 //	信誉 >= 80：0（高信誉不调整）
 //	信誉 >= 50：-1（中信誉减 1）

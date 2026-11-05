@@ -2,7 +2,7 @@
 /*
  * fw_netdev.c - netdev notifier、本机地址集合重建、自动白名单对账
  *
- * 与旧实现（netdev.c）的差别（见 docs/zh/development/kernel-rewrite-design.md）：
+ * 与旧实现（netdev.c）的差别（见 docs/zh/development/kernel-module-design.md）：
  *
  *   - **空表窗口消除**：旧实现在 `local_ip_cache` 为 NULL / count == 0 时直接
  *     返回「非本机」，那是个失败开放窗口。新实现由 fw_main.c 在注册钩子**之前**

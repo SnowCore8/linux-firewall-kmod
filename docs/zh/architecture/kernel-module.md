@@ -12,7 +12,7 @@
 相关文档：
 
 - procfs 读写文法与模块参数：`docs/zh/configuration/procfs.md`
-- 设计决策与论证：`docs/zh/development/kernel-rewrite-design.md`
+- 设计决策与论证：`docs/zh/development/kernel-module-design.md`
 - 报文路径时序：[数据流](data-flow.md)
 
 ## 模块概览
@@ -222,7 +222,7 @@ struct fw_ban_table {
 };
 ```
 
-全长层复用 `full_buckets` / `full_locks`，规模与旧实现一致，热路径常数项不变。
+全长层复用 `full_buckets` / `full_locks`，规模固定，热路径常数项不变。
 短前缀层条目稀少，各用 64 桶的小数组，避免 129 组大桶数组撑爆段。
 层内桶索引按**该层前缀归一化后的地址**计算，所以同一网段内任意源 IP 必落同一桶。
 
@@ -354,8 +354,8 @@ call_rcu(&n->rcu, fw_ban_free_rcu);
 | `FW_RATE_CPU_CHUNKS` | 4 = 512 / 128 | `fw_types.h` |
 | `sizeof(struct fw_rate_cpu_slot)` | 168 字节 | `fw_types.h` 定义处 |
 
-**索引空间仍是 0..511，`slot_idx` 的语义不变。** 分块只改底层申请方式，
-探测与回绕逻辑（`(slot_idx + 1) & (FW_RATE_CPU_SLOTS - 1)`）照旧，容量没有变化。
+**索引空间是 0..511，`slot_idx` 的语义不随分块改变。** 分块只影响底层申请方式，
+探测与回绕逻辑（`(slot_idx + 1) & (FW_RATE_CPU_SLOTS - 1)`）保持不变，容量也不变。
 
 拆块的原因是内核对单次 per-CPU 申请有 32 KiB 上限：`mm/percpu.c` 对超限
 `WARN` 并返回 NULL。整表一次申请是 168 × 512 = 86016 字节。实测（Ubuntu 24.04 GA
@@ -365,8 +365,8 @@ call_rcu(&n->rcu, fw_ban_free_rcu);
 illegal size (86016) or align (64) for percpu allocation
 ```
 
-随后模块初始化失败，`insmod` 报 `Cannot allocate memory`。改成 4 块、每块
-128 槽后单块是 168 × 128 = 21504 字节，申请合法。三个常数都取 2 的幂：
+此时模块初始化失败，`insmod` 报 `Cannot allocate memory`。因此槽表按 4 块、
+每块 128 槽申请，单块 168 × 128 = 21504 字节，在限额内。三个常数都取 2 的幂：
 块号 = 全局下标右移 `FW_RATE_CHUNK_SHIFT`，块内下标 = 取低位。
 
 取槽的两个入口（`fw_rate.c`）：
@@ -463,14 +463,14 @@ static void fw_ban_expire_cb(struct timer_list *t) {
 
 ## 两处内核适配
 
-这两处都是按**实测**决定的，不是照文档写的。
+这两处按实测决定。
 
 ### 1. `timer_container_of` 与 `from_timer`
 
 | 事实 | 说明 |
 |------|------|
-| `timer_container_of()` | 6.16 引入的名字 |
-| `from_timer()` | 此前的同名机制；7.0 起旧名已删除 |
+| `timer_container_of()` | 6.16 起的接口名 |
+| `from_timer()` | 6.16 之前的接口名，7.0 已移除 |
 | 两个名字 | 不共存 |
 | Ubuntu 24.04 GA 的 6.8 | 只有 `from_timer`；缺适配会卡在 `-Werror=implicit-function-declaration` |
 
@@ -624,8 +624,7 @@ graph TB
 | `pr_warn_once` | 本机地址数超过 `fw_max_local_ips` 下界，只提示一次 |
 | `pr_warn_ratelimited` | netlink 事件广播失败 |
 
-模块**不提供**自有的调试级别开关。历史文档里的 `make debug DL=2` 与
-`DL=0..3` 分级在当前仓库不存在（`Makefile` 无 `debug` 目标）。
+模块**不提供**自有的调试级别开关（`Makefile` 无 `debug` 目标）。
 
 ```bash
 # 读模块版本

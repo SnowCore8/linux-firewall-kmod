@@ -2,7 +2,7 @@
 /*
  * fw_stats.c - per-CPU 统计与分析分布
  *
- * 设计要点（见 docs/zh/development/kernel-rewrite-design.md）：
+ * 设计要点（见 docs/zh/development/kernel-module-design.md）：
  *   - 热路径 `fw_stat_account()` 只写本 CPU 的 fw_stats_pcpu，无锁、无共享
  *     cache line 写。旧实现用全局 atomic64 递增直方图与分布，是多通路并发下
  *     每包 6/10 次共享写的来源。

@@ -69,11 +69,11 @@ error: implicit declaration of function 'timer_container_of'
        [-Werror=implicit-function-declaration]
 ```
 
-**同样是本仓库真撞到的问题。**
+**这是本仓库支持的内核范围里会遇到的编译错误。**
 
 | 项 | 内容 |
 |----|------|
-| 根因 | `timer_container_of()` 是 6.16 才引入的名字；此前同一件事叫 `from_timer()`，而 7.0 起旧名已删除。**两个名字不共存** |
+| 根因 | `timer_container_of()` 是 6.16 起的接口名；6.16 之前用 `from_timer()`，7.0 已移除旧名。**两个名字不共存** |
 | 具体表现 | Ubuntu 24.04 GA 的 6.8 只有 `from_timer`，缺适配就直接卡在 `-Werror=implicit-function-declaration` |
 | 修法 | 按**宏是否存在**适配：`#ifndef timer_container_of` 时用 `from_timer` 定义它 |
 | 出处 | `src/kernel-module/fw_ban.c` 的兼容宏段 |
@@ -176,8 +176,8 @@ journalctl -u firewall-daemon -n 50 | grep -i 认证
 | 前端令牌过期 | 界面回到登录页 | 重新输入。前端**不做自动重登**：锁定期间重试只会延长锁定 |
 | SSE 一直 401，REST 正常 | 两条通道携带凭据的方式不同 | `withAccessToken()` 做 `encodeURIComponent`，服务侧做百分号解码；只改一边就永久 401（`frontend/src/api/auth.ts`、`internal/http/auth.go`） |
 
-免登录直达（本机调试用）：`http://<host>:9119/?access_token=<base64(user:pass)>`。
-令牌写入 `sessionStorage` 后会从地址栏清掉。
+`?access_token=<base64(user:pass)>` 是服务端接受的 query 凭据通道，供 `EventSource`
+与脚本调用；前端不从 URL 读取令牌，访问面板仍需走登录表单。
 
 ### 症状：`Failed to open log file ... Read-only file system (os error 30)`
 
@@ -259,7 +259,7 @@ journalctl -u firewall-daemon | grep "正则未能编译"
 |------|------|------|
 | `firewall_lines_parsed_total` 为 0 | 文件没被 watch：路径错、权限不足或目录不存在 | 核对 `log_files`；守护进程找不到可监视的日志源会**启动失败** |
 | 解析有、命中为 0 | 正则与真实日志格式不符 | 用第 3 步离线验，注意转义 |
-| 命中有、封禁为 0 | 没到阈值。有效阈值不等于 `max_retries` 原值：高峰时段 ×1.5、内网来源 ×2.0、再乘信誉系数 | 看 `internal/decision/policy.go` 的 `EffectiveThreshold`；`internal/analysis/ewma.go` 的 `PeakHours` |
+| 命中有、封禁为 0 | 没到阈值。有效阈值不等于 `max_retries` 原值：高峰时段 +2、内网来源 +3、再叠加信誉调整（0 到 -2） | 看 `internal/decision/policy.go` 的 `EffectiveThreshold`；`internal/analysis/ewma.go` 的 `PeakHours` |
 | 反复重载后计数归零 | 不会发生：重载只换规则集与参数，不重置失败窗口 | 若确实在归零，是配置换了 jail 名，窗口键随之变了 |
 | 轮转后不再增长 | 轮转靠 `MOVE_SELF` / `DELETE_SELF` 重挂新 inode | 看 `firewall_log_rotations_total` 是否在涨 |
 | 日志文件缺失 | 守护进程容忍缺失文件（按行解析那一侧不校验存在性） | 文件出现后会自动跟上 |
@@ -322,9 +322,7 @@ runner 镜像的系统 python3 不带 pytest 与 PyYAML，且 `--user` 安装对
 | 抓包看是否到钩子 | `sudo tcpdump -ni <if> host <ip>` |
 | 热路径测量 | `scripts/bench/`，方法与判定纪律见性能基线 |
 
-模块不提供自有的调试级别开关。历史文档里的 `make debug DL=2` 与
-`DL=0..3` 分级在当前仓库不存在（`Makefile` 无 `debug` 目标）。
-要更详细的信息就用 `log_level: 4`（DEBUG）。
+模块不提供自有的调试级别开关（`Makefile` 无 `debug` 目标）。
 
 ## 报告问题前收集
 

@@ -230,7 +230,7 @@ func DefaultCapacityConfig() CapacityConfig {
 
 // RiskEngineConfig 是多维风险向量引擎配置（feature flag）。
 //
-// Enabled 为 false 时退化为旧单维度模型（向后兼容）。
+// Enabled 控制是否记录多维风险向量并开放分析 API；阈值计算始终使用加法模型。
 type RiskEngineConfig struct {
 	Enabled bool
 	// HalfLifeDays 是向量衰减的半衰期（天），默认 7 天。
@@ -378,7 +378,7 @@ type Config struct {
 	Capacity   CapacityConfig
 
 	// RiskEngine 是多维风险向量引擎配置（feature flag）。
-	// Enabled 为 false 时退化为旧单维度模型（向后兼容）。
+	// Enabled 控制风险向量记录与分析 API，不影响阈值计算。
 	RiskEngine RiskEngineConfig
 
 	// ThreatFeeds 是威胁情报源配置。

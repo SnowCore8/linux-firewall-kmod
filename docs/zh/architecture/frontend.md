@@ -7,8 +7,8 @@
 [用户态守护进程](daemon.md)，本文不复制那边的结论。
 
 前端是**桌面优先、响应式**的单页控制台：侧边栏 + 顶栏 + 内容区，
-UI 用 Ant Design，图表用 ECharts。它是全新重写，不沿用任何旧移动页面范式
-（无底部 TabBar、无下拉刷新、无滑动操作、无 Popup 表单）。
+UI 用 Ant Design，图表用 ECharts。布局不使用底部 TabBar、下拉刷新、
+滑动操作或 Popup 表单。
 
 ## 口径
 
@@ -178,10 +178,9 @@ hash 路由下地址是 `#/bans`，浏览器只请求 `/`，刷新与分享直�
 | 智能 | 风险引擎、威胁情报、综合分析 |
 | 运维 | 日志、设置 |
 
-「智能」组多为只读洞察，消费既有但旧界面未接的后端端点。
+「智能」组多为只读洞察，消费后端既有的只读端点。
 `risk`/`threat-feeds` 带 `featureFlag`：对应后端 flag 关闭时端点回 503，
-页面显示 `disabled` 空态而非报错。旧版的 3D 地图页（three.js）已移除，
-攻击源地理分布并入分析页的只读视图。
+页面显示 `disabled` 空态而非报错。攻击源地理分布是分析页的只读视图。
 
 ## 应用外壳（AppShell）
 
@@ -323,11 +322,9 @@ ThemeProvider（AntD ConfigProvider：主题 token / 暗色算法 / 中文 local
 - SSE 侧由 `endpoints.ts` 的 `eventsStreamUrl()`/`logsStreamUrl()` 从 `getAccessToken()`
   取令牌、拼成 `?access_token=<token>`（`EventSource` 设不了请求头）。
 
-> **不再支持 `?access_token=` 深链引导**：旧移动前端有一个从 URL query 读取令牌、
-> 写进 `sessionStorage` 再从地址栏抹掉的入口（`initAccessToken`）。本次重写**没有**保留它——
-> 前端不消费 URL 里的 `access_token`，访问任何页面都先过登录页。守护进程的 `GET /`
-> 仍会原样保留 query string 跳到 `/dashboard`，但前端不读它。若外部系统依赖
-> `http://<host>/?access_token=<令牌>` 免登录直达，这是一个行为回退，需要时再单独接回。
+> **不支持 `?access_token=` 深链引导**：前端不消费 URL 里的 `access_token`，
+> 访问任何页面都先过登录页。守护进程的 `GET /` 会把 query string 原样带到
+> `/dashboard`，但前端不读它。外部系统免登录直达不在支持范围内。
 
 ### 登录探测与锁定
 
@@ -423,7 +420,7 @@ sudo bash scripts/e2e-daemon.sh stop
 > 同一套用例会在多个源上跑，写死一个源会让另一侧的判定整体失效
 > （`tests/e2e/support.ts`）。
 
-上表的具体观察结果：未验证（本次重写未运行浏览器用例）。
+上表的具体观察结果：未验证（未运行浏览器用例）。
 用例本身是可执行断言，跑通即成立。
 
 ## 二次开发
