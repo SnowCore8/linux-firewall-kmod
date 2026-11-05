@@ -75,6 +75,14 @@ if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
     exit 0
 fi
 
+# 两次部署会各自 rm -rf build/deb，先完成的那个会在打包末尾找不到产物
+LOCK_FILE="${TMPDIR:-/tmp}/firewall-deploy-$(id -u).lock"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    echo "❌ 已有部署在进行（锁: $LOCK_FILE），等它结束再试"
+    exit 1
+fi
+
 # ----------------------------------------------------------------------------
 # deb 模式：打包 → 远端装依赖/清残留 → apt 安装（同版本 --reinstall）→ 验证
 # ----------------------------------------------------------------------------
