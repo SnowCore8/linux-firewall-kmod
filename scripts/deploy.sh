@@ -18,7 +18,7 @@ REMOTE_HOST="$1"
 REMOTE_USER="${2:-root}"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-SSH_OPTS="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts -o IdentitiesOnly=yes"
+SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts -o IdentitiesOnly=yes)
 
 echo "========================================="
 echo "Firewall Deployment Script (local-build mode)"
@@ -36,7 +36,8 @@ fi
 # ----------------------------------------------------------------------------
 rollback() {
     echo "⚠️  检测到部署失败，正在回滚..."
-    ssh $SSH_OPTS "$REMOTE_USER@$REMOTE_HOST" << 'ROLLBACK_SCRIPT'
+    # shellcheck disable=SC2029
+    ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" << 'ROLLBACK_SCRIPT'
 rmmod firewall 2>/dev/null || true
 systemctl stop firewall-daemon 2>/dev/null || true
 systemctl disable firewall-daemon 2>/dev/null || true
@@ -77,7 +78,7 @@ echo ""
 echo "[1/5] 检查远端环境..."
 
 LOCAL_KERNEL=$(uname -r)
-REMOTE_KERNEL=$(ssh $SSH_OPTS "$REMOTE_USER@$REMOTE_HOST" 'uname -r')
+REMOTE_KERNEL=$(ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" 'uname -r')
 
 echo "  本地内核: $LOCAL_KERNEL"
 echo "  远端内核: $REMOTE_KERNEL"
@@ -95,7 +96,8 @@ fi
 echo "  ✓ 内核版本一致"
 
 # 远端最小依赖 (只需 systemd + curl)
-ssh $SSH_OPTS "$REMOTE_USER@$REMOTE_HOST" << 'EOF'
+# shellcheck disable=SC2029
+ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" << 'EOF'
 set -e
 echo "  检查 systemd..."
 command -v systemctl >/dev/null 2>&1 || { echo "❌ 缺少 systemd"; exit 1; }
@@ -146,7 +148,7 @@ echo "  ✓ 上传完成"
 # ----------------------------------------------------------------------------
 echo ""
 echo "[4/5] 远端安装..."
-ssh $SSH_OPTS "$REMOTE_USER@$REMOTE_HOST" sudo bash << 'REMOTE_SCRIPT'
+ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" sudo bash << 'REMOTE_SCRIPT'
 set -euo pipefail
 
 WORK_DIR=$(mktemp -d /tmp/firewall-deploy.XXXXX)
@@ -212,7 +214,7 @@ REMOTE_SCRIPT
 # ----------------------------------------------------------------------------
 echo ""
 echo "[5/5] 验证部署..."
-ssh $SSH_OPTS "$REMOTE_USER@$REMOTE_HOST" bash << 'VERIFY_SCRIPT'
+ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" bash << 'VERIFY_SCRIPT'
 set -e
 echo "  内核版本: $(uname -r)"
 echo "  内核模块: $(lsmod | grep '^firewall ' || echo '未加载')"

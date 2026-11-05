@@ -94,10 +94,19 @@ detect_compatibility() {
     for version in "${available_versions[@]}"; do
         if [ "$version" = "$running_kernel" ]; then
             echo -e "  ${GREEN}✓ $version (当前运行)${NC}"
-        elif [[ " ${compatible_versions[@]} " =~ " ${version} " ]]; then
-            echo -e "  ${YELLOW}~ $version (兼容，可编译)${NC}"
         else
-            echo -e "  ${RED}✗ $version (不兼容，仅编译)${NC}"
+            is_compatible=false
+            for compat in "${compatible_versions[@]}"; do
+                if [ "$version" = "$compat" ]; then
+                    is_compatible=true
+                    break
+                fi
+            done
+            if $is_compatible; then
+                echo -e "  ${YELLOW}~ $version (兼容，可编译)${NC}"
+            else
+                echo -e "  ${RED}✗ $version (不兼容，仅编译)${NC}"
+            fi
         fi
     done
     echo
