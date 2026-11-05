@@ -181,6 +181,38 @@ body {
   }
 }
 
+/* --- StatCard hover 微交互：可点击时轻微上浮 + 阴影加深 --- */
+.fw-stat-card {
+  position: relative;
+}
+
+.fw-stat-card:hover {
+  transform: translateY(-2px);
+}
+
+.ant-card.fw-stat-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 0 0 1px var(--fw-border);
+}
+
+/* 暗色主题下加强阴影 */
+[data-theme='dark'] .ant-card.fw-stat-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 0 1px var(--fw-border);
+}
+
+/* --- ChartCard hover 微交互 --- */
+.fw-chart-card {
+  transition: transform 0.2s var(--fw-ease), box-shadow 0.2s var(--fw-ease);
+}
+
+.fw-chart-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] .fw-chart-card:hover {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
 /* --- 动效降级：用户系统开启「减少动态效果」时，关闭脉冲与淡入，只保留瞬时状态 --- */
 @media (prefers-reduced-motion: reduce) {
   .fw-dot--pulse::after {

@@ -130,6 +130,9 @@ export function buildTheme(mode: ThemeMode, density: Density): ThemeConfig {
       fontFamily: FONT_SANS,
       fontSize: density === 'compact' ? 13 : 14,
       wireframe: false,
+      // 增强视觉层次
+      boxShadow: '0 2px 8px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.04)',
+      boxShadowSecondary: '0 4px 16px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.06)',
     },
     components: {
       Layout: {
@@ -145,15 +148,29 @@ export function buildTheme(mode: ThemeMode, density: Density): ThemeConfig {
         itemHeight: density === 'compact' ? 36 : 42,
         darkItemBg: 'transparent',
         darkSubMenuItemBg: 'transparent',
+        // 选中项增强视觉
+        itemSelectedBg: mode === 'dark' ? 'rgba(19,174,191,0.12)' : 'rgba(19,174,191,0.08)',
+        itemSelectedColor: BRAND,
       },
       Table: {
         headerBg: mode === 'dark' ? '#0e1621' : '#fafafa',
         rowHoverBg: mode === 'dark' ? 'rgba(19,174,191,0.08)' : 'rgba(19,174,191,0.06)',
         cellPaddingBlock: density === 'compact' ? 6 : 12,
         cellPaddingInline: density === 'compact' ? 8 : 16,
+        // 表头增强
+        headerColor: mode === 'dark' ? '#e6edf3' : '#1f2937',
+        headerSplitColor: mode === 'dark' ? '#1c2836' : '#e5e7eb',
       },
       Card: {
         paddingLG: density === 'compact' ? 14 : 20,
+        // 卡片阴影增强
+        boxShadowTertiary: mode === 'dark'
+          ? '0 1px 3px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.04)'
+          : '0 1px 3px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.04)',
+      },
+      Button: {
+        // 主按钮增强
+        primaryShadow: `0 2px 4px ${BRAND}40`,
       },
     },
   }

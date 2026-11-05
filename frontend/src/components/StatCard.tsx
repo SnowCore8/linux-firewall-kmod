@@ -8,6 +8,11 @@ import type { NavIcon } from '../app/nav.ts'
  * 统一的读法：左上图标 + 标签，主数值用等宽（数字对齐、可扫读），底部一行放同比/说明。
  * `tone` 把数值染成语义色（success/warning/danger/info/brand），让「这个数是好消息还是坏消息」
  * 不必读文案就知道——安全控制台里颜色即语义。
+ *
+ * 视觉增强：
+ * - 左侧 3px 色条标识语义（与 tone 同色）
+ * - 图标置于浅色圆形背景，提升层次
+ * - hover 时轻微上浮 + 阴影加深，暗示可交互
  */
 
 export type StatTone = 'default' | 'brand' | 'success' | 'warning' | 'danger' | 'info'
@@ -19,6 +24,15 @@ const TONE_VAR: Record<StatTone, string> = {
   warning: 'var(--fw-warning)',
   danger: 'var(--fw-danger)',
   info: 'var(--fw-info)',
+}
+
+const TONE_BG: Record<StatTone, string> = {
+  default: 'rgba(147,167,182,0.08)',
+  brand: 'rgba(19,174,191,0.12)',
+  success: 'rgba(47,191,113,0.12)',
+  warning: 'rgba(245,165,36,0.12)',
+  danger: 'rgba(255,85,97,0.12)',
+  info: 'rgba(74,158,255,0.12)',
 }
 
 export interface StatCardProps {
@@ -48,20 +62,41 @@ export function StatCard({
   mono = true,
 }: StatCardProps) {
   const color = TONE_VAR[tone]
+  const iconBg = TONE_BG[tone]
   return (
     <Card
       size="small"
       hoverable={!!onClick}
       onClick={onClick}
-      styles={{ body: { padding: 16 } }}
-      style={{ cursor: onClick ? 'pointer' : 'default' }}
+      styles={{ body: { padding: '16px 16px 16px 19px' } }}
+      style={{
+        cursor: onClick ? 'pointer' : 'default',
+        borderLeft: `3px solid ${color}`,
+        transition: 'transform 0.2s var(--fw-ease), box-shadow 0.2s var(--fw-ease)',
+      }}
+      className="fw-stat-card"
     >
       {loading ? (
         <Skeleton active paragraph={{ rows: 1 }} title={{ width: '50%' }} />
       ) : (
         <Flex vertical gap={10}>
-          <Flex align="center" gap={8}>
-            {Icon && <Icon style={{ fontSize: 15, color: 'var(--fw-text-secondary)' }} />}
+          <Flex align="center" gap={10}>
+            {Icon && (
+              <div
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 8,
+                  background: iconBg,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <Icon style={{ fontSize: 16, color }} />
+              </div>
+            )}
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {label}
             </Typography.Text>
@@ -69,7 +104,7 @@ export function StatCard({
           <Flex align="baseline" gap={4}>
             <span
               className={mono ? 'fw-mono' : undefined}
-              style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.1, color }}
+              style={{ fontSize: 28, fontWeight: 600, lineHeight: 1.1, color }}
             >
               {value}
             </span>
@@ -80,7 +115,7 @@ export function StatCard({
             )}
           </Flex>
           {footer && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12, lineHeight: 1.5 }}>
               {footer}
             </Typography.Text>
           )}
