@@ -15,7 +15,7 @@ import (
 // 固定的系统路径：均为操作系统约定位置，不随部署变化。
 const (
 	// defaultLogPath 是未配置 log_file 时使用的独立日志文件路径。
-	defaultLogPath = "/var/log/firewall-daemon.log"
+	defaultLogPath = "/var/log/firewall.log"
 	// syslogSocket 是本地 syslog 的域套接字。
 	syslogSocket = "/dev/log"
 	// journaldSocket 是 systemd-journald 的兼容 syslog 入口。

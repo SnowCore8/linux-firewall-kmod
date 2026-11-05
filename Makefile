@@ -13,7 +13,8 @@
 PREFIX      ?= /usr/local
 SBINDIR     ?= $(PREFIX)/sbin
 FIREWALLETC ?= /etc/firewall
-RUNSTATEDIR ?= /var/lib
+STATEDIR    ?= /var/lib
+SYSTEMDDIR  ?= /etc/systemd/system
 KERNEL_MODDIR ?= /lib/modules/$(shell uname -r)/extra
 
 # DESTDIR 支持打包和暂存安装，默认为空（直接安装到系统）
@@ -660,7 +661,7 @@ _guard_local_install:
 	fi
 
 .PHONY: install install-kernel-module install-daemon install-config install-credentials install-state install-systemd install-start install-verify
-install: build install-kernel-module install-daemon install-config install-credentials install-state install-systemd install-start install-verify
+install: _guard_local_install build install-kernel-module install-daemon install-config install-credentials install-state install-systemd install-start install-verify
 	@echo ""
 	@echo "=========================================="
 	@echo "Firewall Installation Complete"
@@ -669,7 +670,7 @@ install: build install-kernel-module install-daemon install-config install-crede
 	@echo "  ✓ Kernel module: $(DESTDIR)$(KERNEL_MODDIR)/firewall.ko"
 	@echo "  ✓ Daemon:        $(DESTDIR)$(SBINDIR)/firewall-daemon"
 	@echo "  ✓ Configuration: $(DESTDIR)$(FIREWALLETC)/"
-	@echo "  ✓ State data:    $(DESTDIR)$(RUNSTATEDIR)/firewall/"
+	@echo "  ✓ State data:    $(DESTDIR)$(STATEDIR)/firewall/"
 	@echo "  ✓ Systemd unit:  $(DESTDIR)/etc/systemd/system/firewall-daemon.service"
 	@echo ""
 ifeq ($(DESTDIR),)
@@ -742,16 +743,16 @@ install-credentials:
 
 install-state:
 	@echo "Creating state directory..."
-	@install -d -m 700 $(DESTDIR)$(RUNSTATEDIR)/firewall
+	@install -d -m 700 $(DESTDIR)$(STATEDIR)/firewall
 	@if [ -z "$(DESTDIR)" ]; then \
-		chown root:root $(DESTDIR)$(RUNSTATEDIR)/firewall; \
+		chown root:root $(DESTDIR)$(STATEDIR)/firewall; \
 	fi
-	@echo "  ✓ State directory created ($(RUNSTATEDIR)/firewall/)"
+	@echo "  ✓ State directory created ($(STATEDIR)/firewall/)"
 
 install-systemd:
 	@echo "Installing systemd service..."
 	@sed 's|__SBINDIR__|$(SBINDIR)|g' firewall-daemon.service | \
-		install -D -m 644 /dev/stdin $(DESTDIR)/etc/systemd/system/firewall-daemon.service
+		install -D -m 644 /dev/stdin $(DESTDIR)$(SYSTEMDDIR)/firewall-daemon.service
 	@echo "Installing kernel module autoload config..."
 	@install -D -m 644 config/modules-load.d/firewall.conf $(DESTDIR)/etc/modules-load.d/firewall.conf
 	@if [ -z "$(DESTDIR)" ]; then \
@@ -797,7 +798,7 @@ install-verify:
 		echo "  ✗ Configuration directory not found"; \
 		exit 1; \
 	fi
-	@if [ ! -d "$(DESTDIR)$(RUNSTATEDIR)/firewall" ]; then \
+	@if [ ! -d "$(DESTDIR)$(STATEDIR)/firewall" ]; then \
 		echo "  ✗ State directory not found"; \
 		exit 1; \
 	fi
@@ -828,7 +829,7 @@ deb: build
 # ============================================================================
 
 .PHONY: uninstall uninstall-stop uninstall-systemd uninstall-files uninstall-config uninstall-state uninstall-kernel uninstall-modload uninstall-verify
-uninstall: uninstall-stop uninstall-kernel uninstall-systemd uninstall-modload uninstall-files uninstall-config uninstall-state uninstall-verify
+uninstall: _guard_local_install uninstall-stop uninstall-kernel uninstall-systemd uninstall-modload uninstall-files uninstall-config uninstall-state uninstall-verify
 	@echo ""
 	@echo "=========================================="
 	@echo "Firewall uninstallation complete!"
@@ -883,10 +884,10 @@ uninstall-config:
 
 uninstall-state:
 	@echo "Removing state and log files..."
-	@rm -rf $(DESTDIR)$(RUNSTATEDIR)/firewall
+	@rm -rf $(DESTDIR)$(STATEDIR)/firewall
 	@rm -f /var/log/firewall.log
 	@rm -f /var/log/firewall.log.*
-	@echo "  ✓ State directory removed ($(RUNSTATEDIR)/firewall/)"
+	@echo "  ✓ State directory removed ($(STATEDIR)/firewall/)"
 	@echo "  ✓ Log files removed (/var/log/firewall.log*)"
 
 uninstall-kernel:

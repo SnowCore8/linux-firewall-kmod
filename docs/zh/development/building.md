@@ -9,7 +9,7 @@
 |------|---------|------|
 | Go | `src/daemon/go.mod` 声明 `go 1.26.0` | `src/daemon/go.mod` |
 | Makefile 的 Go 引导检查 | `GOVER ?= 1.23`，只保证有 Go 可用 | 根 `Makefile` |
-| Node.js + npm | CI 用 `node-version: '22'` | `.github/workflows/ci.yml` 的 `frontend` / `build` / `e2e` |
+| Node.js + npm | CI 用 `node-version: '24'` | `.github/workflows/ci.yml` 的 `frontend` / `build` / `e2e` |
 | clang-format | 本仓库以 18 为准；`CHANGELOG.md` 记有一次「clang-format（18）违规清零」 | `.github/workflows/ci.yml`、`CHANGELOG.md` |
 | 内核构建目录 | `KDIR ?= /lib/modules/$(shell uname -r)/build` | 根 `Makefile` |
 | yamllint | 可选；缺失时 `format-check` 打印跳过 | 根 `Makefile` 的 `format-check` |
@@ -190,10 +190,11 @@ make contract-check
 
 ## 安装与卸载
 
-`make install` 没有本机部署守卫：`DESTDIR` 为空时它直接写宿主机的根文件系统。
-`Makefile` 里定义了 `_guard_local_install`（打印「禁止直接部署到本机」与三条合规
-路径），但它既不是 `install` 也不是 `uninstall` 的依赖，`make -n install` 里看不到
-它的任何输出，`FIREWALL_REMOTE_DEPLOY` 因此也只是那个未挂接目标自己的变量。
+`make install` 与 `make uninstall` 都挂了本机部署守卫：`_guard_local_install` 是两者
+的第一个前置依赖。`DESTDIR` 为空且 `FIREWALL_REMOTE_DEPLOY != 1` 时它以 1 退出，打印
+「禁止直接部署到本机」与三条合规路径，**不会进入 `build`**，宿主机根文件系统不被触碰。
+
+守卫只在串行 make 下保证先于其它前置执行；`make -j install` 不保证前置顺序。
 
 想「装但不碰本机」，用 `DESTDIR`：所有 `install -D` 都落在暂存目录下，而
 `depmod` / `insmod` / `systemctl` 那几步按 `[ -z "$(DESTDIR)" ]` 跳过。
@@ -201,19 +202,19 @@ make contract-check
 ```bash
 ./scripts/deploy.sh <远程主机> [远程用户]          # 推荐：本地编译，只上传产物
 make install DESTDIR=$(pwd)/build/stage           # 只暂存，不写本机
-sudo env "PATH=$PATH" make install                # 直接写本机（当前无守卫）
+sudo env "PATH=$PATH" make install FIREWALL_REMOTE_DEPLOY=1   # 显式授权直写本机
 ```
 
-`install` 的顺序：`build` → `install-kernel-module` → `install-daemon` →
-`install-config` → `install-state` → `install-systemd` → `install-start` →
-`install-verify`。
+`install` 的顺序：`_guard_local_install` → `build` → `install-kernel-module` →
+`install-daemon` → `install-config` → `install-state` → `install-systemd` →
+`install-start` → `install-verify`。
 
 | 产物 | 默认路径 | 出处 |
 |------|---------|------|
 | `firewall.ko` | `/lib/modules/$(uname -r)/extra/` | `KERNEL_MODDIR` |
 | `firewall-daemon` | `/usr/local/sbin/` | `PREFIX ?= /usr/local`、`SBINDIR` |
 | YAML 配置 | `/etc/firewall/`，目录 0700、文件 0600 | `FIREWALLETC` |
-| 状态目录 | `/var/lib/firewall/`，0700 | `RUNSTATEDIR` |
+| 状态目录 | `/var/lib/firewall/`，0700 | `$(STATEDIR)/firewall` |
 | systemd 单元 | `/etc/systemd/system/firewall-daemon.service` | `install-systemd` |
 | 模块自动加载 | `/etc/modules-load.d/firewall.conf` | 同上 |
 

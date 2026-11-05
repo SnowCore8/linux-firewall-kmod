@@ -37,17 +37,30 @@ jobs:
       - name: 安装检查工具
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-format
+          sudo apt-get install -y clang-format shellcheck
           pip install yamllint
           # Go 守护进程（src/daemon，Go module）的格式 / vet 工具
           go version
+
+      - name: 配置 Go 版本
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: src/daemon/go.sum
 
       - name: 检查代码风格（clang-format 内核模块 / gofmt 守护进程）
         run: |
           echo "检查内核模块代码..."
           clang-format --dry-run --Werror src/kernel-module/*.c src/kernel-module/*.h
           echo "检查守护进程代码..."
-          cd src/daemon && gofmt -l ./cmd ./internal
+          cd src/daemon && test -z "$(gofmt -l ./cmd ./internal)" || { echo "gofmt 发现格式问题，请运行 gofmt -w ./cmd ./internal"; exit 1; }
+
+      - name: 检查 Shell 脚本（shellcheck）
+        run: |
+          echo "检查 Shell 脚本..."
+          shellcheck build-deb.sh scripts/*.sh
+          echo "✓ shellcheck 通过"
 
       - name: 检查守护进程 lint（go vet）
         run: |

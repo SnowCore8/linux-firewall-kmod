@@ -41,7 +41,7 @@ make contract                # 手动生成契约文件
 make contract-clean          # 清理契约生成文件
 
 # 3. 编译
-make kmod                    # 仅编译内核模块（当前内核版本）
+make kmod                    # 仅编译内核模块（当前内核版本，kmod 是 kernel-module 的快捷别名）
 make daemon                  # 仅编译守护进程（含前端）
 make build-quick             # 快速编译全部（跳过格式检查）
 make all                     # 完整编译（含格式检查）

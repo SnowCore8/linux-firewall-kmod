@@ -2,7 +2,38 @@
 
 所有重要的项目变更记录都在此文件中。
 
-## [Unreleased] - 2026-10-22 凭据来源、关停刷盘、strict 贯通与两处门禁盲区
+## [Unreleased] - 2026-11-05 公开规范整改（17 项）
+
+全面扫描并修复 FHS 路径合规、安全加固、文档一致性、CI/CD 规范、版本号管理五个维度的不规范项。
+
+### 安全相关（3 项）
+- **明文凭据被 git 跟踪** - `config/default.yaml` 中 `metrics_username: "snow"` / `metrics_password: "9420"` 是真实凭据。清空为注释示例，引导用户使用 `/etc/firewall/credentials.env`（0600）覆盖
+- **metrics_bind_address 文档默认值错误** - `docs/zh/configuration/yaml-config.md:35` 声称默认 `127.0.0.1`，实际 `config/default.yaml:13` 为 `0.0.0.0`。安全相关：用户以为只监听本地，实际暴露所有网卡。修正文档为 `0.0.0.0`
+- **systemd 单元缺少安全指令** - 添加 `ProtectKernelLogs=yes`、`ProtectClock=yes`、`PrivateDevices=yes`、`RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK`、`UMask=0077`
+
+### FHS 路径合规（4 项）
+- **debian/rules daemon 路径错误** - `/usr/local/sbin` → `/usr/sbin`（Debian Policy 10.4）
+- **debian/rules systemd 单元路径错误** - `/etc/systemd/system` → `/lib/systemd/system`（Debian Policy 9.1.1）
+- **deploy.sh 硬编码路径** - `SBINDIR="/usr/local/sbin"` → `/usr/sbin`
+- **service 模板默认路径** - `ExecStart=/usr/local/sbin/firewall-daemon` → `/usr/sbin`
+
+### CI/CD 规范（3 项）
+- **gofmt lint 形同虚设** - `gofmt -l` 只列文件名不返回非零码。改为 `test -z "$(gofmt -l ./cmd ./internal)"` 确保失败时步骤报错
+- **CI 缺少 shellcheck** - 在 lint job 添加 `shellcheck build-deb.sh scripts/*.sh`
+- **CI Go 版本未固定** - 添加 `actions/setup-go@v5` 并指定 `go-version: '1.26'`
+
+### 版本号管理（2 项）
+- **CHANGELOG 版本号不一致** - `[Unreleased]` vs README badge `v2.4.0` vs deb fallback `2.2.0`。将已合并的 `[Unreleased]` 改为正式版本号 `v2.4.0`，更新 deb fallback 到 `2.4.0`
+- **build-deb.sh 版本号提取失败** - `auto_version()` 用 `grep -m1 '^## v'` 但 CHANGELOG 用 `## [Unreleased]`。改为跳过 `[Unreleased]` 取第一个带版本号的条目；支持 `VERSION_ENV` 环境变量；提升 fallback 到 `2.4.0`
+
+### 文档一致性（5 项）
+- **Node.js 版本文档错误** - `docs/zh/development/building.md:12` 写 `22`，CI 用 `24`。改文档为 `24`
+- **日志文件命名不一致** - `config/default.yaml:21` 用 `firewall.log`，`src/daemon/internal/logger/logger.go:18` 默认 `firewall-daemon.log`。统一为 `firewall.log`
+- **building.md 状态目录出处不精确** - "出处"列写 `STATEDIR`，但 `STATEDIR ?= /var/lib`，实际路径是 `$(STATEDIR)/firewall`。改为 `$(STATEDIR)/firewall`
+- **AGENTS.md 未说明 kmod 别名** - 补充说明 `kmod` 是 `kernel-module` 的快捷别名
+- **redis.yaml 注释不准确** - 智能推断值写 `max_retries=3, findtime=300, ban_time=3600`，但实际生效的是 defaults 的 3/600/900。修正注释
+
+## v2.4.0 - 2026-10-22 凭据来源、关停刷盘、strict 贯通与两处门禁盲区
 
 工作树里带着一份未提交的 WIP（认证凭据走环境变量），它引用了 `bindsBeyondLoopback`
 却没有实现，`go build ./...` 停在 undefined——这条链从编译不过开始，把这处接完，

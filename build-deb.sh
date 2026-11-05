@@ -15,12 +15,13 @@ auto_version() {
     local changelog
     changelog="$(dirname "${BASH_SOURCE[0]}")/CHANGELOG.md"
     if [[ -f "$changelog" ]]; then
-        grep -m1 '^## v' "$changelog" | sed 's/^## v//;s/[^0-9.].*//'
+        # 跳过 [Unreleased]，取第一个带版本号的条目（## v 或 ## [数字]）
+        grep -E '^## (v|[0-9])' "$changelog" | head -1 | sed 's/^## v//;s/^## //;s/[^0-9.].*//'
     fi
 }
 DEFAULT_VERSION="$(auto_version)"
-: "${DEFAULT_VERSION:=2.2.0}"
-VERSION="${1:-$DEFAULT_VERSION}"
+: "${DEFAULT_VERSION:=2.4.0}"
+VERSION="${VERSION_ENV:-${1:-$DEFAULT_VERSION}}"
 # 移除版本号前的 'v' 前缀（deb 版本必须以数字开头）
 VERSION="${VERSION#v}"
 BUILD_DIR="build/deb"
@@ -44,7 +45,7 @@ make -C "$PROJECT_ROOT" daemon
 TEMP_DIR="$BUILD_DIR/$PACKAGE_NAME-$VERSION"
 echo "安装到暂存目录: $TEMP_DIR"
 make -C "$PROJECT_ROOT" install-daemon install-config install-state install-systemd \
-    DESTDIR="$TEMP_DIR" PREFIX=/usr
+    DESTDIR="$TEMP_DIR" PREFIX=/usr SYSTEMDDIR=/lib/systemd/system
 
 # 安装 DKMS 源码到标准位置 /usr/src/{dkms_name}-{version}/
 echo "安装 DKMS 源码..."
@@ -182,10 +183,11 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
     # 从 DKMS 树中彻底移除
     dkms remove -m linux-firewall-kmod -v __VERSION__ --all 2>/dev/null || true
 
-    # 强制清理残留
+    # 强制清理残留（DKMS updates/ 与手动安装 extra/ 两条路径）
     rm -rf /var/lib/dkms/linux-firewall-kmod-__VERSION__
     rm -rf /var/lib/dkms/linux-firewall-kmod
     rm -f /lib/modules/*/updates/dkms/firewall.ko*
+    rm -f /lib/modules/*/extra/firewall.ko*
 
     if command -v depmod &> /dev/null; then
         depmod -a 2>/dev/null || true

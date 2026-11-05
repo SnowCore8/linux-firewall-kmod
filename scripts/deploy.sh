@@ -118,7 +118,7 @@ cp "$DAEMON_BIN"    "$STAGE_DIR/root/firewall-daemon"
 chmod 755 "$STAGE_DIR/root/firewall-daemon"
 
 # systemd 单元需要替换 __SBINDIR__ 占位符
-SBINDIR="/usr/local/sbin"
+SBINDIR="/usr/sbin"
 sed "s|__SBINDIR__|$SBINDIR|g" "$PROJECT_DIR/firewall-daemon.service" \
     > "$STAGE_DIR/root/firewall-daemon.service"
 
@@ -159,7 +159,7 @@ install -D -m 644 root/firewall.ko \
 depmod -a
 
 echo "  [4.2] 安装守护进程..."
-install -D -m 755 root/firewall-daemon /usr/local/sbin/firewall-daemon
+install -D -m 755 root/firewall-daemon /usr/sbin/firewall-daemon
 
 echo "  [4.3] 安装配置..."
 install -d -m 700 /etc/firewall
@@ -168,8 +168,7 @@ chown -R root:root /etc/firewall
 
 echo "  [4.4] 创建状态目录..."
 install -d -m 700 /var/lib/firewall
-install -d -m 755 /var/log/frp
-chown root:root /var/lib/firewall /var/log/frp
+chown root:root /var/lib/firewall
 
 echo "  [4.5] 安装 systemd 单元..."
 install -D -m 644 root/firewall-daemon.service \

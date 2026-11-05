@@ -138,14 +138,15 @@ sudo systemctl restart firewall-daemon
 
 ### 关于本机安装守卫
 
-`Makefile` 里另有一个 `_guard_local_install` 目标，注释写着禁止直接装本机，
-并给出三条路径：`./scripts/deploy.sh <远程主机>`、`make install DESTDIR=<目录>`、
-`make install FIREWALL_REMOTE_DEPLOY=1`。
+`Makefile` 里的 `_guard_local_install` 是 `install` 与 `uninstall` 的第一个前置依赖。
+`DESTDIR` 为空且 `FIREWALL_REMOTE_DEPLOY != 1` 时，直接 `sudo make install` 会被拦下
+（退出码 1，不进入编译），并给出三条合规路径：`./scripts/deploy.sh <远程主机>`、
+`make install DESTDIR=<目录>`、`make install FIREWALL_REMOTE_DEPLOY=1`。
 
-按当前 `Makefile`，`install` 和 `uninstall` 都没有依赖这个守卫目标
-（`make -n install` 里看不到它的任何输出），所以直接 `sudo make install` 不会被拦。
 想走审计轨迹就用上面三条之一；只想暂存不写本机时，`DESTDIR` 非空会让 `depmod` /
 `insmod` / `systemctl` 这些动本机的步骤按 `[ -z "$(DESTDIR)" ]` 跳过。
+
+> 守卫依赖串行 make 的前置顺序，`make -j install` 不保证它先执行。
 
 ### 只想打包，不写本机
 

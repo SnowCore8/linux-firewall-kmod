@@ -9,7 +9,7 @@ Group=root
 # 可选：把面板凭据从被 git 跟踪的 YAML 移到这台机器上的 0600 文件。
 # 文件缺失时 systemd 仍会启动（前缀 `-`），凭据回落到 YAML。
 EnvironmentFile=-/etc/firewall/credentials.env
-ExecStart=/usr/local/sbin/firewall-daemon -C /etc/firewall 
+ExecStart=/usr/sbin/firewall-daemon -C /etc/firewall
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
@@ -19,20 +19,25 @@ TimeoutStopSec=10
 # Security Hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/firewall /var/log
+ReadWritePaths=/var/lib/firewall /var/log/firewall.log /var/log/firewall-daemon.log
 ReadOnlyPaths=/etc/firewall
 PrivateTmp=yes
 ProtectHome=yes
 ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+PrivateDevices=yes
 # ProtectKernelModules=yes  # 注释：模块已通过 modules-load.d 在启动时加载
 ProtectControlGroups=yes
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 MemoryDenyWriteExecute=yes
 LockPersonality=yes
 SystemCallFilter=@system-service
 SystemCallArchitectures=native
+UMask=0077
 
 # Resource limits
 LimitNOFILE=65536
