@@ -1,6 +1,7 @@
 #!/bin/bash
 # deploy.sh - 部署防火墙到远程服务器
-# 用法: ./deploy.sh <远程主机> [远程用户] [--mode deb|script]
+# 用法: ./deploy.sh <主机> [用户] [--mode deb|script]
+#       ./deploy.sh <用户@主机> [--mode deb|script]
 #
 # MODE=deb（默认）: 打包 DKMS deb，远端对目标内核编译——跨内核版本 / HWE 也能装。
 # MODE=script    : 上传本地预编译的 .ko + 二进制，要求 .ko vermagic 与远端一致。
@@ -10,10 +11,11 @@
 set -euo pipefail
 
 usage() {
-    echo "用法：./deploy.sh <远程主机> [远程用户] [--mode deb|script]"
-    echo "  remote_host: 目标服务器 IP 或主机名（必需）"
-    echo "  remote_user: SSH 用户（默认：root）"
-    echo "  --mode:      deb（默认，远端 DKMS 编译）/ script（预编译 .ko）"
+    echo "用法：./deploy.sh <主机> [用户] [--mode deb|script]"
+    echo "      ./deploy.sh <用户@主机> [--mode deb|script]"
+    echo "  主机:   目标服务器 IP 或主机名（必需，放第一个）"
+    echo "  用户:   SSH 用户（默认：root）"
+    echo "  --mode: deb（默认，远端 DKMS 编译）/ script（预编译 .ko）"
     exit 1
 }
 
@@ -33,7 +35,30 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$REMOTE_HOST" ]] || usage
+
+# 支持 user@host 单参数写法
+if [[ "$REMOTE_HOST" == *@* ]]; then
+    if [[ -n "$REMOTE_USER" ]]; then
+        echo "❌ 用户指定了两遍：$REMOTE_HOST 与 $REMOTE_USER"
+        usage
+    fi
+    REMOTE_USER="${REMOTE_HOST%@*}"
+    REMOTE_HOST="${REMOTE_HOST#*@}"
+fi
+
 REMOTE_USER="${REMOTE_USER:-root}"
+[[ -n "$REMOTE_USER" && -n "$REMOTE_HOST" ]] || usage
+
+# 位置参数写反（用户在前、主机在后）时提前报错，
+# 否则会拼成 <IP>@<用户名>，ssh 只会报无解的 "Could not resolve hostname"
+if [[ "$REMOTE_HOST" != *.* && "$REMOTE_HOST" != *:* && "$REMOTE_HOST" != "localhost" \
+      && "$REMOTE_USER" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+    echo "❌ 参数顺序写反了：第一个是主机，第二个是用户。"
+    echo "   收到：主机=$REMOTE_HOST 用户=$REMOTE_USER"
+    echo "   应写：./scripts/deploy.sh $REMOTE_USER $REMOTE_HOST"
+    echo "   或写：./scripts/deploy.sh $REMOTE_HOST@$REMOTE_USER"
+    exit 1
+fi
 case "$MODE" in deb|script) ;; *) echo "❌ 未知 MODE=$MODE（可选 deb / script）"; exit 1 ;; esac
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"

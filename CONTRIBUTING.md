@@ -66,7 +66,8 @@ make kernel-module KDIR=/lib/modules/$(uname -r)/build
 三条合规路径：
 
 ```bash
-./scripts/deploy.sh <远程主机> [远程用户] [--mode deb|script]  # 远程部署，有审计轨迹
+./scripts/deploy.sh <主机> [用户] [--mode deb|script]  # 远程部署，有审计轨迹
+./scripts/deploy.sh <用户@主机> [--mode deb|script]  # 同上，单参数写法
 make install DESTDIR=$(pwd)/build/stage         # 打包暂存，不写本机
 make install FIREWALL_REMOTE_DEPLOY=1           # 显式授权，只用于沙箱
 ```

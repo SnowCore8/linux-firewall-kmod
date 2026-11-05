@@ -7,6 +7,7 @@
 ### 部署体验
 - **部署入口收敛为 `scripts/deploy.sh`** - 位置参数 `<host> [user] [--mode deb|script]`，不再包一层 make 目标（make 只负责构建/打包，运维动作直接调脚本）
 - **脚本参数只认显式传值** - 环境变量不再影响目标：远程用户省略即 `root`，模式省略即 `deb`；`MODE=script` 只能通过 `--mode` 指定
+- **`deploy.sh` 参数校验** - 支持 `<用户@主机>` 单参数写法；位置参数写反（用户在前、主机在后）时直接报错并给出正确写法，不再拼成 `<IP>@<用户名>` 让 ssh 报 `Could not resolve hostname`
 - **守卫只认命令行授权** - 环境变量里残留的 `FIREWALL_REMOTE_DEPLOY=1` 不再能静默放行本机安装
 - **`scripts/deploy.sh` 双模式合一** - `deb`（默认，DKMS 远端编译，跨内核版本可用）/ `script`（预编译 .ko，要求 vermagic 一致）。deb 模式自动安装远端 DKMS 依赖、清理脚本模式残留、同版本 `--reinstall` 强制重装、失败回滚半配置状态、正确识别 Basic 认证下的面板可达性
 - **deploy.sh 改用 vermagic 校验** - 不再对比本地/远端 `uname -r`，远程编译的 .ko 也能正确放行

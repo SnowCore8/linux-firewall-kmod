@@ -210,12 +210,14 @@ make contract-check
 `depmod` / `insmod` / `systemctl` 那几步按 `[ -z "$(DESTDIR)" ]` 跳过。
 
 ```bash
-./scripts/deploy.sh <远程主机> [远程用户] [--mode deb|script]  # 推荐：deb 模式远端编译
+./scripts/deploy.sh <主机> [用户] [--mode deb|script]  # 推荐：deb 模式远端编译
 make install DESTDIR=$(pwd)/build/stage           # 只暂存，不写本机
 sudo env "PATH=$PATH" make install FIREWALL_REMOTE_DEPLOY=1   # 显式授权直写本机
 ```
 
 部署不包成 make 目标：make 只负责构建/打包，运维动作直接调 `deploy.sh`。
+主机也可以写成 `用户@主机` 单参数形式；位置参数顺序是「主机在前、用户在后」，
+写反会直接报错，不会去连错地址。
 脚本默认 `--mode deb`（远端 DKMS 编译，跨内核版本可用），`--mode script` 上传
 本地预编译 `.ko`（要求 vermagic 与远端一致）；远程用户省略时默认 `root`。
 
