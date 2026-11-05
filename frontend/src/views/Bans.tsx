@@ -678,11 +678,6 @@ function BanDetailDrawer({ ip, onClose, onUnban }: BanDetailDrawerProps) {
       { key: 'progressive_level', label: '递进等级', children: d.progressive_level || '—' },
       { key: 'next_ban_duration', label: '下次封禁时长', children: d.next_ban_duration || '—' },
       { key: 'reputation_score', label: '信誉分', children: formatNumber(d.reputation_score) },
-      {
-        key: 'reputation_multiplier',
-        label: '信誉系数',
-        children: formatNumber(d.reputation_multiplier),
-      },
     ]
   }, [detail.data])
 

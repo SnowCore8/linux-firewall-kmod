@@ -309,7 +309,6 @@ export interface BanDetailResponse {
   progressive_level: string
   next_ban_duration: string
   reputation_score: number
-  reputation_multiplier: number
 }
 
 /** 契约类型 `BanOperationResponse` */
@@ -352,8 +351,8 @@ export interface JailResponse {
   findtime: number
   ban_time: number
   is_peak_hours: boolean
-  peak_hours_multiplier: number
-  internal_ip_multiplier: number
+  peak_hours_addend: number
+  internal_ip_addend: number
   lines_parsed: number
   regex_matches: number
   ips_extracted: number
@@ -603,7 +602,7 @@ export interface ReputationEntryResponse {
   last_failure_at: number
   total_failures: number
   total_bans: number
-  threshold_multiplier: number
+  threshold_adjustment: number
 }
 
 /** 契约类型 `RiskVectorResponse` */

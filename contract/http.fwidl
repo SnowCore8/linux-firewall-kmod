@@ -816,7 +816,7 @@ route GET "/api/v2/stats/reputation" {
   returns = type
   status = 200
   codes = 50002, 50003
-  note = "载荷 ReputationEntryResponse 数组；threshold_multiplier 由内联分段函数生成（1.0 / 0.8 / 0.5）"
+  note = "载荷 ReputationEntryResponse 数组；threshold_adjustment 由内联分段函数生成（0 / -1 / -2）"
 }
 
 # ---- 需认证：多维风险向量（v2 API）------------------------------------------
@@ -1191,7 +1191,6 @@ type BanDetailResponse {
   progressive_level: String
   next_ban_duration: String
   reputation_score: u32
-  reputation_multiplier: f64
 }
 
 type BanOperationResponse {
@@ -1249,10 +1248,10 @@ type JailResponse {
   ban_time: i32
   # 本次读取时刻（UTC 小时）是否落在业务高峰 9–18 点
   is_peak_hours: bool
-  # 判定层的高峰期阈值系数（常量，非配置项）
-  peak_hours_multiplier: f64
-  # 判定层的内网来源阈值系数（常量，非配置项；按来源地址生效）
-  internal_ip_multiplier: f64
+  # 判定层的高峰期阈值加数（常量，非配置项）
+  peak_hours_addend: i32
+  # 判定层的内网来源阈值加数（常量，非配置项；按来源地址生效）
+  internal_ip_addend: i32
   # 以下五项是本进程累计计数，重启归零；该 jail 尚无读数时逐项 0
   lines_parsed: u64
   regex_matches: u64
@@ -1609,9 +1608,9 @@ type ReputationEntryResponse {
   total_failures: u32
   # 累计封禁次数。同上，自本列上线起累计（与 ban_events 的底账计数不是同一份）
   total_bans: u32
-  # 该分数当前让阈值放宽的系数，直接取判定层的 ReputationMultiplier（≥80→1.0、≥50→0.8、
-  # 其余 0.5），不在 HTTP 面重抄分段：面板显示的系数与实际生效的阈值必须出自同一份算式
-  threshold_multiplier: f64
+  # 该分数当前对阈值的加法调整量，直接取判定层的 ReputationAdjustment（≥80→0、≥50→-1、
+  # 其余 -2），不在 HTTP 面重抄分段：面板显示的调整量与实际生效的阈值必须出自同一份算式
+  threshold_adjustment: i32
 }
 
 # ---- 多维风险向量（v2 API）--------------------------------------------------

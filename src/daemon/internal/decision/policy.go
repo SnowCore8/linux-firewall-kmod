@@ -16,12 +16,12 @@ import (
 	"net/netip"
 )
 
-// 判定系数。
+// 判定调整量（加法模型）。
 const (
-	// PeakHoursMultiplier 是高峰期阈值系数（业务高峰 9–18 点 UTC，含 9 不含 18）。
-	PeakHoursMultiplier = 1.5
-	// InternalSourceMultiplier 是内网来源的阈值系数。
-	InternalSourceMultiplier = 2.0
+	// PeakHoursAddend 是高峰期阈值加数（业务高峰 9–18 点 UTC，含 9 不含 18）。
+	PeakHoursAddend = 2
+	// InternalSourceAddend 是内网来源的阈值加数。
+	InternalSourceAddend = 3
 )
 
 // IsPeakHours 报告 hourUTC 是否落在判定用的「业务高峰期」内。
@@ -30,18 +30,6 @@ const (
 // 完全覆盖，不依赖跑测试时的真实时钟。
 func IsPeakHours(hourUTC uint32) bool {
 	return hourUTC >= 9 && hourUTC < 18
-}
-
-// ReputationMultiplier 把信誉分映射为阈值系数：分越高越宽松。
-func ReputationMultiplier(score uint32) float64 {
-	switch {
-	case score >= 80:
-		return 1.0
-	case score >= 50:
-		return 0.8
-	default:
-		return 0.5
-	}
 }
 
 // IsInternal 报告 ip 是否为内网（私有）地址，即「来源可信度较高、阈值可放宽」的来源。
@@ -71,11 +59,11 @@ func EffectiveThreshold(maxRetries uint32, peakHours, internal bool, reputationS
 	addend := int(maxRetries)
 
 	if peakHours {
-		addend += 2
+		addend += PeakHoursAddend
 	}
 
 	if internal {
-		addend += 3
+		addend += InternalSourceAddend
 	}
 
 	addend += ReputationAdjustment(reputationScore)
@@ -93,7 +81,7 @@ func EffectiveThreshold(maxRetries uint32, peakHours, internal bool, reputationS
 //	信誉 >= 50：-1（中信誉减 1）
 //	信誉 < 50：-2（低信誉减 2）
 //
-// 替代旧的 ReputationMultiplier（返回 1.0/0.8/0.5 的乘法系数），改为加法调整。
+// 加法调整量，直接叠加到基础阈值上。
 func ReputationAdjustment(score uint32) int {
 	switch {
 	case score >= 80:

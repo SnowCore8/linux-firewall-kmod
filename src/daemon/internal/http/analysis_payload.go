@@ -48,12 +48,12 @@ type RecidivistEntry struct {
 // total_failures / total_bans 是**该列开始记录以来**的累计数：这两列比表晚，迁移只补列
 // 不补史，老地址从 0 起算（契约字段注释同此口径）。
 type ReputationEntryResponse struct {
-	IP                  string  `json:"ip"`
-	Score               uint32  `json:"score"`
-	LastFailureAt       int64   `json:"last_failure_at"`
-	TotalFailures       uint32  `json:"total_failures"`
-	TotalBans           uint32  `json:"total_bans"`
-	ThresholdMultiplier float64 `json:"threshold_multiplier"`
+	IP                  string `json:"ip"`
+	Score               uint32 `json:"score"`
+	LastFailureAt       int64  `json:"last_failure_at"`
+	TotalFailures       uint32 `json:"total_failures"`
+	TotalBans           uint32 `json:"total_bans"`
+	ThresholdAdjustment int    `json:"threshold_adjustment"`
 }
 
 // PeriodicAttacker 是周期性攻击者（GET /api/v2/stats/periodic-attackers）。
@@ -241,10 +241,10 @@ type GeoPoint struct {
 
 // JailResponse 是一个 jail 的配置与运行时读数（GET /api/v2/jails 的元素）。
 //
-// 三项乘数与 is_peak_hours 来自判定层的**常量与时刻**（decision 包），不是配置项；
-// effective_max_retries 是「此刻一个外部新地址实际面对的阈值」= ceil(max_retries ×
-// 高峰期系数)，信誉系数取满分 1.0——内网系数与信誉系数都**按来源地址**生效，
-// 不属于 jail，jail 级的读数不能把它们乘进去（乘了就变成「这个 jail 对所有地址的阈值」，
+// 三项调整量与 is_peak_hours 来自判定层的**常量与时刻**（decision 包），不是配置项；
+// effective_max_retries 是「此刻一个外部新地址实际面对的阈值」= max_retries +
+// 高峰期调整量（+2），信誉调整取满分 0——内网调整与信誉调整都**按来源地址**生效，
+// 不属于 jail，jail 级的读数不能把它们加进去（加了就变成「这个 jail 对所有地址的阈值」，
 // 而那个数不存在）。
 //
 // ban_count 是**当前活跃**封禁数（内存镜像，与 /api/v2/stats 的 current_bans 同源），
@@ -259,8 +259,8 @@ type JailResponse struct {
 	Findtime             uint32  `json:"findtime"`
 	BanTime              int32   `json:"ban_time"`
 	IsPeakHours          bool    `json:"is_peak_hours"`
-	PeakHoursMultiplier  float64 `json:"peak_hours_multiplier"`
-	InternalIPMultiplier float64 `json:"internal_ip_multiplier"`
+	PeakHoursAddend      int32   `json:"peak_hours_addend"`
+	InternalIPAddend     int32   `json:"internal_ip_addend"`
 	LinesParsed          uint64  `json:"lines_parsed"`
 	RegexMatches         uint64  `json:"regex_matches"`
 	IPsExtracted         uint64  `json:"ips_extracted"`
@@ -337,8 +337,8 @@ func mapNetworkBlocks(rows []analysis.NetworkDistribution) []NetworkBlock {
 
 // mapReputationEntries 把信誉读数折成载荷。
 //
-// threshold_multiplier 直接取判定层的信誉系数（decision.ReputationMultiplier：80 分以上
-// 1.0、50 分以上 0.8、其余 0.5）——载荷里这一栏要回答的就是「这个分数现在让阈值放宽了几成」，
+// threshold_adjustment 直接取判定层的信誉调整（decision.ReputationAdjustment：80 分以上
+// 0、50 分以上 -1、其余 -2）——载荷里这一栏要回答的就是「这个分数现在让阈值调整了多少」，
 // 用判定层那一份算式而不是在这里重抄一遍分段，两处才会一起改。
 func mapReputationEntries(reps []persist.IPReputation) []ReputationEntryResponse {
 	out := make([]ReputationEntryResponse, 0, len(reps))
@@ -353,7 +353,7 @@ func mapReputationEntries(reps []persist.IPReputation) []ReputationEntryResponse
 			LastFailureAt:       lastFailure,
 			TotalFailures:       uint32(clampInt(r.TotalFailures)),
 			TotalBans:           uint32(clampInt(r.TotalBans)),
-			ThresholdMultiplier: reputationMultiplier(r.Score),
+			ThresholdAdjustment: reputationAdjustment(r.Score),
 		})
 	}
 	return out
@@ -368,16 +368,16 @@ func clampInt(v int) int {
 	return v
 }
 
-// reputationMultiplier 取判定层的信誉系数（≥80 → 1.0，≥50 → 0.8，其余 0.5）。
+// reputationAdjustment 取判定层的信誉调整（≥80 → 0，≥50 → -1，其余 -2）。
 //
-// 转调 decision.ReputationMultiplier 而不是在这里重抄一遍分段：载荷里 threshold_multiplier
-// 要回答的就是「这个分数现在让阈值放宽了几成」，那件事只有判定层那一份算式说了算，
-// 两处各写一遍迟早会给出不同的数（面板显示的系数与实际生效的阈值对不上）。
-func reputationMultiplier(score int) float64 {
+// 转调 decision.ReputationAdjustment 而不是在这里重抄一遍分段：载荷里 threshold_adjustment
+// 要回答的就是「这个分数现在让阈值调整了多少」，那件事只有判定层那一份算式说了算，
+// 两处各写一遍迟早会给出不同的数（面板显示的调整值与实际生效的阈值对不上）。
+func reputationAdjustment(score int) int {
 	if score < 0 {
 		score = 0
 	}
-	return decision.ReputationMultiplier(uint32(score))
+	return decision.ReputationAdjustment(uint32(score))
 }
 
 // mapPredictions 把攻击预测折成整体载荷。remaining_secs 以**本次读取的时刻**为基准。

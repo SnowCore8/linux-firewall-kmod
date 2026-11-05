@@ -109,7 +109,7 @@ func (h *APIHandlers) Recidivism(w http.ResponseWriter, r *http.Request) {
 
 // Reputation 返回低信誉地址清单（GET /api/v2/stats/reputation）。
 //
-// 阈值固定 80：那是判定层信誉系数的第一档分界（ReputationMultiplier 在 80 分以下才开始
+// 阈值固定 80：那是判定层信誉调整的第一档分界（ReputationAdjustment 在 80 分以下才开始
 // 收紧阈值），面板上「需要看一眼的名单」因此与判定层实际改行为的分界同源。
 func (h *APIHandlers) Reputation(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {

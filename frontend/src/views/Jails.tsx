@@ -197,18 +197,18 @@ export default function Jails() {
               <Tag color="orange" style={{ marginInlineEnd: 0 }}>
                 高峰
               </Tag>
-              <span className="fw-mono">×{record.peak_hours_multiplier}</span>
+              <span className="fw-mono">+{record.peak_hours_addend}</span>
             </Space>
           ) : (
             <Tag style={{ marginInlineEnd: 0 }}>常规</Tag>
           ),
       },
       {
-        title: '内网系数',
-        dataIndex: 'internal_ip_multiplier',
-        key: 'internal_ip_multiplier',
+        title: '内网加数',
+        dataIndex: 'internal_ip_addend',
+        key: 'internal_ip_addend',
         width: 100,
-        render: (m: number) => <span className="fw-mono">×{m}</span>,
+        render: (m: number) => <span className="fw-mono">+{m}</span>,
       },
       {
         title: '操作',
@@ -386,14 +386,14 @@ function JailDescriptions({ jail }: { jail: JailResponse }) {
         children: jail.is_peak_hours ? <Tag color="orange">高峰</Tag> : <Tag>常规</Tag>,
       },
       {
-        key: 'peak_hours_multiplier',
-        label: '高峰系数',
-        children: `×${jail.peak_hours_multiplier}`,
+        key: 'peak_hours_addend',
+        label: '高峰加数',
+        children: `+${jail.peak_hours_addend}`,
       },
       {
-        key: 'internal_ip_multiplier',
-        label: '内网 IP 系数',
-        children: `×${jail.internal_ip_multiplier}`,
+        key: 'internal_ip_addend',
+        label: '内网 IP 加数',
+        children: `+${jail.internal_ip_addend}`,
       },
       { key: 'lines_parsed', label: '已解析日志行', children: formatNumber(jail.lines_parsed) },
       { key: 'regex_matches', label: '正则命中次数', children: formatNumber(jail.regex_matches) },

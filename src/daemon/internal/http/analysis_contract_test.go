@@ -309,9 +309,9 @@ func geoServer(t *testing.T, cfg *config.Config) *Server {
 // TestJailsPayloadIsRealData 核对 /api/v2/jails 的三组数各自来自正确的源。
 //
 // 配置（enabled/max_retries/findtime/ban_time）、活跃封禁镜像（ban_count）、判定层的常量
-// 与时刻（两个乘数、is_peak_hours、effective_max_retries）。最容易错的两件：
+// 与时刻（两个调整量、is_peak_hours、effective_max_retries）。最容易错的两件：
 //   - ban_count 写成 ban_events 的历史累计（那是 ban-effectiveness 那一面的口径）；
-//   - effective_max_retries 把内网/信誉系数也乘进去（那两个按**来源地址**生效，
+//   - effective_max_retries 把内网/信誉调整也加进去（那两个按**来源地址**生效，
 //     jail 级不存在「对所有地址的阈值」这个数）。
 //
 // 同时钉住「配置里不存在的 jail 不进载荷」：镜像与库里的孤儿条目不能变成一个新的 jail。
@@ -379,7 +379,7 @@ func TestJailsPayloadIsRealData(t *testing.T) {
 		t.Fatalf("载荷里没有 %s（读到 %d 个 jail: %v）", jailPayloadName, len(jails), jails)
 	}
 	requireKeys(t, got, "name", "enabled", "ban_count", "max_retries", "effective_max_retries",
-		"findtime", "ban_time", "is_peak_hours", "peak_hours_multiplier", "internal_ip_multiplier",
+		"findtime", "ban_time", "is_peak_hours", "peak_hours_addend", "internal_ip_addend",
 		"lines_parsed", "regex_matches", "ips_extracted", "failed_attempts", "bans_triggered")
 
 	if got["enabled"] != true || got["max_retries"] != float64(maxRetries) ||
@@ -391,9 +391,9 @@ func TestJailsPayloadIsRealData(t *testing.T) {
 	if got["ban_count"] != float64(2) {
 		t.Errorf("ban_count = %v，期望 2（当前活跃封禁；历史累计归 ban-effectiveness）", got["ban_count"])
 	}
-	if got["peak_hours_multiplier"] != 1.5 || got["internal_ip_multiplier"] != 2.0 {
-		t.Errorf("乘数读数 = %v/%v，期望判定层的 1.5 / 2.0",
-			got["peak_hours_multiplier"], got["internal_ip_multiplier"])
+	if got["peak_hours_addend"] != float64(2) || got["internal_ip_addend"] != float64(3) {
+		t.Errorf("调整量读数 = %v/%v，期望判定层的 2 / 3",
+			got["peak_hours_addend"], got["internal_ip_addend"])
 	}
 
 	// is_peak_hours 与 effective_max_retries：按测试此刻的 UTC 小时独立算一遍。
@@ -404,10 +404,10 @@ func TestJailsPayloadIsRealData(t *testing.T) {
 	}
 	wantEffective := float64(maxRetries)
 	if wantPeak {
-		wantEffective = math.Ceil(wantEffective * 1.5)
+		wantEffective += 2
 	}
 	if got["effective_max_retries"] != wantEffective {
-		t.Errorf("effective_max_retries = %v，期望 %v（只乘高峰期系数：内网与信誉按来源地址生效）",
+		t.Errorf("effective_max_retries = %v，期望 %v（只加高峰期调整量：内网与信誉按来源地址生效）",
 			got["effective_max_retries"], wantEffective)
 	}
 
@@ -597,15 +597,15 @@ func TestRecidivismAndReputationReadPercentScale(t *testing.T) {
 	}
 	entry := list[0]
 	requireKeys(t, entry, "ip", "score", "last_failure_at", "total_failures", "total_bans",
-		"threshold_multiplier")
+		"threshold_adjustment")
 	if entry["ip"] != "203.0.140.9" {
 		t.Fatalf("清单里是 %v，期望刚写的那条", entry["ip"])
 	}
-	// 60 分被 RecordFailure(10) 与 RecordBan(10) 各扣 10 → 40，落判定层第三档系数 0.5：
+	// 60 分被 RecordFailure(10) 与 RecordBan(10) 各扣 10 → 40，落判定层第三档调整量 -2：
 	// 载荷与真正生效的阈值同源，不能另抄一份分段表。
-	if entry["score"] != float64(40) || entry["threshold_multiplier"] != 0.5 {
-		t.Errorf("信誉条目 = score %v / multiplier %v，期望 40 与 0.5（判定层 <50 那一档）",
-			entry["score"], entry["threshold_multiplier"])
+	if entry["score"] != float64(40) || entry["threshold_adjustment"] != float64(-2) {
+		t.Errorf("信誉条目 = score %v / adjustment %v，期望 40 与 -2（判定层 <50 那一档）",
+			entry["score"], entry["threshold_adjustment"])
 	}
 	if entry["total_failures"] != float64(1) || entry["total_bans"] != float64(1) {
 		t.Errorf("累计计数 = %v/%v，期望 1/1", entry["total_failures"], entry["total_bans"])

@@ -155,7 +155,7 @@ func (e *Engine) ComputeEffectiveThreshold(
 //	信誉 >= 50：-1（中信誉减 1）
 //	信誉 < 50：-2（低信誉减 2）
 //
-// 替代旧的 ReputationMultiplier（乘法模型），改为加法调整。
+// 加法模型：信誉分映射为阈值调整量。
 func ReputationAdjustment(score uint32) int {
 	switch {
 	case score >= 80:

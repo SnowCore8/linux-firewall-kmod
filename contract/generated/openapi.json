@@ -2755,7 +2755,7 @@
     "/api/v2/stats/reputation": {
       "get": {
         "operationId": "Reputation",
-        "summary": "载荷 ReputationEntryResponse 数组；threshold_multiplier 由内联分段函数生成（1.0 / 0.8 / 0.5）",
+        "summary": "载荷 ReputationEntryResponse 数组；threshold_adjustment 由内联分段函数生成（0 / -1 / -2）",
         "tags": [
           "v2"
         ],
@@ -2766,7 +2766,7 @@
         ],
         "responses": {
           "200": {
-            "description": "载荷 ReputationEntryResponse 数组；threshold_multiplier 由内联分段函数生成（1.0 / 0.8 / 0.5）",
+            "description": "载荷 ReputationEntryResponse 数组；threshold_adjustment 由内联分段函数生成（0 / -1 / -2）",
             "content": {
               "application/json": {
                 "schema": {
@@ -4763,10 +4763,6 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
-          },
-          "reputation_multiplier": {
-            "type": "number",
-            "format": "double"
           }
         },
         "required": [
@@ -4783,8 +4779,7 @@
           "was_permanent",
           "progressive_level",
           "next_ban_duration",
-          "reputation_score",
-          "reputation_multiplier"
+          "reputation_score"
         ]
       },
       "BanOperationResponse": {
@@ -4949,13 +4944,13 @@
           "is_peak_hours": {
             "type": "boolean"
           },
-          "peak_hours_multiplier": {
-            "type": "number",
-            "format": "double"
+          "peak_hours_addend": {
+            "type": "integer",
+            "format": "int32"
           },
-          "internal_ip_multiplier": {
-            "type": "number",
-            "format": "double"
+          "internal_ip_addend": {
+            "type": "integer",
+            "format": "int32"
           },
           "lines_parsed": {
             "type": "integer",
@@ -4992,8 +4987,8 @@
           "findtime",
           "ban_time",
           "is_peak_hours",
-          "peak_hours_multiplier",
-          "internal_ip_multiplier",
+          "peak_hours_addend",
+          "internal_ip_addend",
           "lines_parsed",
           "regex_matches",
           "ips_extracted",
@@ -6073,9 +6068,9 @@
             "format": "int64",
             "minimum": 0
           },
-          "threshold_multiplier": {
-            "type": "number",
-            "format": "double"
+          "threshold_adjustment": {
+            "type": "integer",
+            "format": "int32"
           }
         },
         "required": [
@@ -6084,7 +6079,7 @@
           "last_failure_at",
           "total_failures",
           "total_bans",
-          "threshold_multiplier"
+          "threshold_adjustment"
         ]
       },
       "RiskVectorResponse": {

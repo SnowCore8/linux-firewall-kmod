@@ -25,13 +25,13 @@ func TestIsPeakHoursCoversNineToEighteenExclusive(t *testing.T) {
 	}
 }
 
-func TestReputationMultiplierLadder(t *testing.T) {
-	cases := map[uint32]float64{
-		0: 0.5, 49: 0.5, 50: 0.8, 79: 0.8, 80: 1.0, 100: 1.0,
+func TestReputationAdjustmentLadder(t *testing.T) {
+	cases := map[uint32]int{
+		0: -2, 49: -2, 50: -1, 79: -1, 80: 0, 100: 0,
 	}
 	for score, want := range cases {
-		if got := ReputationMultiplier(score); got != want {
-			t.Errorf("ReputationMultiplier(%d)=%v, want %v", score, got, want)
+		if got := ReputationAdjustment(score); got != want {
+			t.Errorf("ReputationAdjustment(%d)=%v, want %v", score, got, want)
 		}
 	}
 }

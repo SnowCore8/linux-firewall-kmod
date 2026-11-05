@@ -25,7 +25,7 @@
     "响应 ChartData: 2 个字段",
     "响应 ThreatLevel: 9 个字段",
     "响应 BanResponse: 7 个字段",
-    "响应 BanDetailResponse: 15 个字段",
+    "响应 BanDetailResponse: 14 个字段",
     "响应 BanOperationResponse: 4 个字段",
     "响应 BatchOperationResponse: 4 个字段",
     "请求 CreateBanRequest: 3 个字段",
@@ -888,7 +888,7 @@
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
-      "note": "载荷 ReputationEntryResponse 数组；threshold_multiplier 由内联分段函数生成（1.0 / 0.8 / 0.5）"
+      "note": "载荷 ReputationEntryResponse 数组；threshold_adjustment 由内联分段函数生成（0 / -1 / -2）"
     },
     {
       "method": "GET",
@@ -1625,10 +1625,6 @@
         {
           "key": "reputation_score",
           "type": "u32"
-        },
-        {
-          "key": "reputation_multiplier",
-          "type": "f64"
         }
       ]
     },
@@ -1759,12 +1755,12 @@
           "type": "bool"
         },
         {
-          "key": "peak_hours_multiplier",
-          "type": "f64"
+          "key": "peak_hours_addend",
+          "type": "i32"
         },
         {
-          "key": "internal_ip_multiplier",
-          "type": "f64"
+          "key": "internal_ip_addend",
+          "type": "i32"
         },
         {
           "key": "lines_parsed",
@@ -2571,8 +2567,8 @@
           "type": "u32"
         },
         {
-          "key": "threshold_multiplier",
-          "type": "f64"
+          "key": "threshold_adjustment",
+          "type": "i32"
         }
       ]
     },

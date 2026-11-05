@@ -38,14 +38,14 @@ func (h *APIHandlers) jailResponses() []JailResponse {
 			Enabled:    j.Enabled,
 			BanCount:   active[j.Name],
 			MaxRetries: j.MaxRetries,
-			// 内网系数按**来源地址**生效、信誉系数按该地址的分数生效，都不属于 jail，
-			// 所以 jail 级只折高峰期这一项（其余两个系数原样给出，让读侧知道自己那档是多少）。
+			// 内网调整按**来源地址**生效、信誉调整按该地址的分数生效，都不属于 jail，
+			// 所以 jail 级只折高峰期这一项（其余两个调整量原样给出，让读侧知道自己那档是多少）。
 			EffectiveMaxRetries:  decision.EffectiveThreshold(j.MaxRetries, peak, false, 100),
 			Findtime:             j.FindTime,
 			BanTime:              j.BanTime,
 			IsPeakHours:          peak,
-			PeakHoursMultiplier:  decision.PeakHoursMultiplier,
-			InternalIPMultiplier: decision.InternalSourceMultiplier,
+			PeakHoursAddend:      decision.PeakHoursAddend,
+			InternalIPAddend:     decision.InternalSourceAddend,
 		}
 		if stats, ok := config.GetJailStats(j.Name); ok && stats != nil {
 			resp.LinesParsed = stats.LinesParsed

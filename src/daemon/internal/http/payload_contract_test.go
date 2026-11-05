@@ -199,7 +199,7 @@ func TestBanDetailUnbannedIPSucceeds(t *testing.T) {
 	requireKeys(t, data,
 		"ip", "is_banned", "jail_name", "reason", "banned_at", "expires_at", "is_permanent",
 		"fail_count", "ban_count", "last_unbanned_at", "was_permanent", "progressive_level",
-		"next_ban_duration", "reputation_score", "reputation_multiplier")
+		"next_ban_duration", "reputation_score")
 	if data["is_banned"] != false {
 		t.Errorf("is_banned = %v，期望 false", data["is_banned"])
 	}
@@ -272,9 +272,8 @@ func TestBanDetailProgressiveFields(t *testing.T) {
 	if data["next_ban_duration"] != "1800 秒" {
 		t.Errorf("next_ban_duration = %v，期望「1800 秒」", data["next_ban_duration"])
 	}
-	if data["reputation_score"] != float64(60) || data["reputation_multiplier"] != 0.8 {
-		t.Errorf("信誉读数 = %v/%v，期望 60 与 0.8（同一套映射，不是第二份表）",
-			data["reputation_score"], data["reputation_multiplier"])
+	if data["reputation_score"] != float64(60) {
+		t.Errorf("信誉读数 = %v，期望 60", data["reputation_score"])
 	}
 
 	// 解封之后：is_banned 翻成 false，last_unbanned_at 落下真实时刻，历史仍在。

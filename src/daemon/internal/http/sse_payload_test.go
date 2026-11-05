@@ -145,7 +145,7 @@ func TestSSEReplicaJailsMatchesREST(t *testing.T) {
 	}
 	for _, key := range []string{"name", "enabled", "ban_count", "max_retries",
 		"effective_max_retries", "findtime", "ban_time", "is_peak_hours",
-		"peak_hours_multiplier", "internal_ip_multiplier", "lines_parsed", "regex_matches",
+		"peak_hours_addend", "internal_ip_addend", "lines_parsed", "regex_matches",
 		"ips_extracted", "failed_attempts", "bans_triggered"} {
 		if _, ok := rows[0][key]; !ok {
 			t.Errorf("jails 帧缺契约 key %q", key)

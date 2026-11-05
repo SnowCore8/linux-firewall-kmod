@@ -1015,11 +1015,11 @@ function ReputationSection({ result, onOpenIp }: ReputationSectionProps) {
         render: (n: number) => <span className="fw-mono">{formatNumber(n)}</span>,
       },
       {
-        title: '阈值系数',
-        dataIndex: 'threshold_multiplier',
-        key: 'threshold_multiplier',
+        title: '阈值调整',
+        dataIndex: 'threshold_adjustment',
+        key: 'threshold_adjustment',
         width: 110,
-        render: (n: number) => <span className="fw-mono">×{formatNumber(n)}</span>,
+        render: (n: number) => <span className="fw-mono">{n > 0 ? `+${n}` : n}</span>,
       },
       {
         title: '最近失败',
@@ -1446,7 +1446,7 @@ function IpAnalysisDrawer({ ip, onClose }: IpAnalysisDrawerProps) {
       },
       { key: 'total_failures', label: '失败次数', children: formatNumber(rep.total_failures) },
       { key: 'total_bans', label: '封禁次数', children: formatNumber(rep.total_bans) },
-      { key: 'threshold_multiplier', label: '阈值系数', children: `×${formatNumber(rep.threshold_multiplier)}` },
+      { key: 'threshold_adjustment', label: '阈值调整', children: rep.threshold_adjustment > 0 ? `+${rep.threshold_adjustment}` : `${rep.threshold_adjustment}` },
       {
         key: 'last_failure_at',
         label: '最近失败',

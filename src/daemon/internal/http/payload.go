@@ -60,7 +60,6 @@ type BanDetailResponse struct {
 	ProgressiveLevel     string  `json:"progressive_level"`
 	NextBanDuration      string  `json:"next_ban_duration"`
 	ReputationScore      uint32  `json:"reputation_score"`
-	ReputationMultiplier float64 `json:"reputation_multiplier"`
 }
 
 // BanOperationResponse 是单条封禁/解封操作的结果（POST /api/v2/bans、

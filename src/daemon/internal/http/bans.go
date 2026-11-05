@@ -433,7 +433,6 @@ func (h *APIHandlers) BanDetail(w http.ResponseWriter, r *http.Request) {
 	banTime, jailKnown := h.jailBaseDuration(detail.JailName)
 	detail.ProgressiveLevel = progressiveLevel(detail.BanCount)
 	detail.NextBanDuration = nextBanDuration(banTime, jailKnown, detail.BanCount)
-	detail.ReputationMultiplier = decision.ReputationMultiplier(detail.ReputationScore)
 
 	WriteSuccess(w, detail)
 }
