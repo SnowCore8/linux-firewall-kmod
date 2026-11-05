@@ -19,7 +19,10 @@ TimeoutStopSec=10
 # Security Hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/firewall /var/log/firewall.log /var/log/firewall-daemon.log
+# ProtectSystem=strict 把整个文件系统挂成只读，systemd 需把下列每一项 bind-mount 回可写。
+# 条目在启动时必须已存在，否则单元以 226/NAMESPACE 失败在 ExecStart 之前，
+# 守护进程没有机会自行创建日志文件。/var/log/firewall.log 由包 postinst 预创建。
+ReadWritePaths=/var/lib/firewall /var/log/firewall.log
 ReadOnlyPaths=/etc/firewall
 PrivateTmp=yes
 ProtectHome=yes

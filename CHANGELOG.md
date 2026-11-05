@@ -15,6 +15,7 @@
 - **修复 `kmod-remote`** - `$$$` 变量展开吞掉 PID、rsync 缺 `--relative` 导致 `src/` 前缀丢失，产物同时写入 `firewall.ko` 标准路径
 - **修复 DKMS 打包** - `build-deb.sh` 的 DKMS 源码树补上 `contract/generated/*.h`；去掉每次全量 `make clean`（改 `CLEAN=1` 按需）
 - **防路径冲突** - deb postinst 清理 `/etc/systemd/system/` 脚本模式残留；deploy.sh 检测 deb 已装时询问是否卸载
+- **修复 deb 装完守护进程起不来（`status=226/NAMESPACE`）** - `ProtectSystem=strict` 下 systemd 要把 `ReadWritePaths` 每一项 bind-mount 回可写，条目缺失就在 `ExecStart` 之前装配失败，守护进程没机会自行创建日志文件；`Restart=on-failure` 让它无限重启。单元去掉无人写入的 `/var/log/firewall-daemon.log`（`logger.go` 的 `defaultLogPath` 与 `config/default.yaml` 均为 `/var/log/firewall.log`），deb postinst 幂等预创建 `/var/log/firewall.log`（0640 root:adm，已存在不覆盖，避免升级清空历史日志）。放 postinst 而非 `debian/rules`：`build-deb.sh` 自行 `dpkg-deb --build`，不经 `debian/rules`，那里预创建日志文件的步骤从未执行
 
 ### 构建清理
 - **源码 / 中间产物 / 最终产物隔离** - 内核模块改在 `build/obj/kernel-module/<kernel.release>/tree/` 的源码副本上编译（`M=` 指向副本），`src/kernel-module/` 不再产生 `.o`/`.cmd`；vite 输出改到 `build/obj/frontend/`（`emptyOutDir: true`），`make daemon` 仅在 `go build` 期间把面板临时拷入 `src/daemon/web_ui/static/` 并由 `trap` 清理，构建后源码树零残留

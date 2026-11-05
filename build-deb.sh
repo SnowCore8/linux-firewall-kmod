@@ -144,6 +144,16 @@ if ! lsmod | grep -q "^firewall"; then
     }
 fi
 
+# 预创建守护进程日志文件
+# 随包 systemd 单元在 ProtectSystem=strict 下把 /var/log/firewall.log 列入 ReadWritePaths，
+# 路径缺失会让单元以 226/NAMESPACE 失败在 ExecStart 之前，守护进程没机会自行创建它。
+# 已存在时不覆盖，避免升级清空历史日志、冲掉 logrotate 设定的权限。
+if [ ! -e /var/log/firewall.log ]; then
+    echo "创建日志文件 /var/log/firewall.log..."
+    install -m 0640 -o root -g adm /dev/null /var/log/firewall.log 2>/dev/null \
+        || install -m 0640 /dev/null /var/log/firewall.log
+fi
+
 # 启用并启动 systemd 服务
 if command -v systemctl &> /dev/null; then
     # 清理 deploy.sh 残留：/etc/systemd/system/ 下的普通文件会遮蔽包管理的 /lib/systemd/system/
