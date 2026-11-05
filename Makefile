@@ -203,21 +203,23 @@ kmod-remote:
 	fi
 	@echo "远程编译内核模块到 $(HOST)..."
 	@USER=$${USER:-$$(whoami)}; \
-	REMOTE_DIR=/tmp/firewall-build-$$$; \
+	REMOTE_DIR=/tmp/firewall-build-$$$$; \
 	echo "  上传源码..."; \
-	ssh $$USER@$(HOST) "rm -rf $$REMOTE_DIR && mkdir -p $$REMOTE_DIR/src"; \
-	rsync -az -e "ssh -o StrictHostKeyChecking=no" \
+	ssh $$USER@$(HOST) "rm -rf $$REMOTE_DIR && mkdir -p $$REMOTE_DIR"; \
+	rsync -azR -e "ssh -o StrictHostKeyChecking=no" \
 		src/kernel-module contract $$USER@$(HOST):$$REMOTE_DIR/; \
 	echo "  远程编译..."; \
 	ssh $$USER@$(HOST) "cd $$REMOTE_DIR/src/kernel-module && \
 		make -C /lib/modules/\$$(uname -r)/build M=\$$PWD modules"; \
 	echo "  下载产物..."; \
 	mkdir -p $(KERNEL_BUILD_DIR); \
+	REMOTE_KVER=$$(ssh $$USER@$(HOST) "uname -r"); \
 	scp -o StrictHostKeyChecking=no \
 		$$USER@$(HOST):$$REMOTE_DIR/src/kernel-module/firewall.ko \
-		$(KERNEL_BUILD_DIR)/firewall-$$(ssh $$USER@$(HOST) "uname -r").ko; \
+		$(KERNEL_BUILD_DIR)/firewall.ko; \
+	cp $(KERNEL_BUILD_DIR)/firewall.ko $(KERNEL_BUILD_DIR)/firewall-$$REMOTE_KVER.ko; \
 	ssh $$USER@$(HOST) "rm -rf $$REMOTE_DIR"; \
-	echo "✓ 远程编译完成: $(KERNEL_BUILD_DIR)/firewall-$$(ssh $$USER@$(HOST) 'uname -r').ko"
+	echo "✓ 远程编译完成: $(KERNEL_BUILD_DIR)/firewall.ko ($$REMOTE_KVER)"
 
 # 内核模块编译（标准目标）
 .PHONY: kernel-module kmod

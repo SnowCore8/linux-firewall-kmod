@@ -72,28 +72,27 @@ echo "  ✓ 内核模块: $KERNEL_MODULE ($(du -h "$KERNEL_MODULE" | cut -f1))"
 echo "  ✓ 守护进程: $DAEMON_BIN ($(du -h "$DAEMON_BIN" | cut -f1))"
 
 # ----------------------------------------------------------------------------
-# 1. 内核版本对齐 + 远端最小依赖
+# 1. vermagic 对齐 + 远端最小依赖
 # ----------------------------------------------------------------------------
 echo ""
 echo "[1/5] 检查远端环境..."
 
-LOCAL_KERNEL=$(uname -r)
 REMOTE_KERNEL=$(ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" 'uname -r')
+KO_VERMAGIC=$(modinfo -F vermagic "$KERNEL_MODULE" 2>/dev/null | awk '{print $1}')
 
-echo "  本地内核: $LOCAL_KERNEL"
 echo "  远端内核: $REMOTE_KERNEL"
+echo "  .ko vermagic: ${KO_VERMAGIC:-无法读取}"
 
-if [[ "$LOCAL_KERNEL" != "$REMOTE_KERNEL" ]]; then
+if [[ "$KO_VERMAGIC" != "$REMOTE_KERNEL" ]]; then
     echo ""
-    echo "❌ 内核版本不匹配 —— 无法部署预编译的内核模块"
-    echo "   内核模块 (.ko) 包含 vermagic 校验, 跨内核版本加载会被拒绝。"
+    echo "❌ .ko 的 vermagic ($KO_VERMAGIC) 与远端内核 ($REMOTE_KERNEL) 不匹配"
+    echo "   内核模块加载时会被拒绝。"
     echo "   解决方案 (任选其一):"
-    echo "     1) 在远端安装与本机一致的内核并重启"
-    echo "     2) 在本机用目标内核重新编译 (设置 KDIR / 切内核)"
-    echo "     3) 改用 build-deb.sh 在远端本地编译 (DKMS 模式)"
+    echo "     1) make kmod-remote HOST=$REMOTE_HOST USER=$REMOTE_USER  # 远程编译"
+    echo "     2) 改用 build-deb.sh 在远端本地编译 (DKMS 模式)"
     exit 1
 fi
-echo "  ✓ 内核版本一致"
+echo "  ✓ vermagic 与远端内核一致"
 
 # 远端最小依赖 (只需 systemd + curl)
 # shellcheck disable=SC2029
