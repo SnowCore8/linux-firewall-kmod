@@ -2,18 +2,21 @@ Source: linux-firewall-kmod
 Section: net
 Priority: optional
 Maintainer: SnowCore8 <snowcore8@gmail.com>
-Build-Depends: debhelper (>= 12), build-essential, dkms
+Build-Depends: debhelper-compat (= 13), build-essential, python3, nodejs, npm
 Standards-Version: 4.5.1
 Rules-Requires-Root: no
 
 Package: linux-firewall-kmod
 Architecture: amd64
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Depends: ${misc:Depends}, ${shlibs:Depends}, dkms, build-essential, linux-headers
 Description: Linux kernel module firewall with real-time IP banning
  Firewall bans at packet level in kernel space via netfilter hooks, with a
  userspace daemon that reads logs, decides, and pushes ban/whitelist commands
  over netlink. Decisions stay in user space; only the drop moves into the
  kernel.
+ .
+ The kernel module is built by DKMS on the target machine during installation
+ and rebuilt automatically when the kernel is upgraded.
  .
  Features:
   - Kernel-space IP banning via netfilter hooks (hash + layered prefix buckets)
@@ -23,9 +26,3 @@ Description: Linux kernel module firewall with real-time IP banning
   - Go regexp (RE2) log parsing in the daemon, no PCRE2/JIT
   - Ban history in SQLite; kernel state snapshot restores bans across reload
   - Prometheus metrics export and an embedded mobile-first web panel
-
-Package: linux-firewall-kmod-source
-Architecture: all
-Description: Source code for linux-firewall-kmod
- This package contains the full source code for building
- the firewall kernel module and userspace daemon.

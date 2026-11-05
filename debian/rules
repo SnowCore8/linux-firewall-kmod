@@ -1,48 +1,42 @@
 #!/usr/bin/make -f
-# debian/rules - 使用 dh 构建系统
+# debian/rules - debhelper 驱动。build-deb.sh 只负责生成 debian/changelog 与搬运产物。
+
+VERSION := $(shell dpkg-parsechangelog -S Version)
+PKGDIR  := $(CURDIR)/debian/linux-firewall-kmod
 
 %:
 	dh $@
 
+# 内核模块由目标机的 DKMS 编译，本地只编守护进程（含前端）。
 override_dh_auto_build:
-	make all
+	$(MAKE) contract
+	$(MAKE) daemon
+
+# 上游 test 目标要 root，且会编译并加载 .ko；打包时不跑。
+override_dh_auto_test:
+	@echo "Skipping upstream 'make test' (integration tests need root and a loaded kernel module)"
 
 override_dh_auto_install:
-	# 安装内核模块
-	install -d $(CURDIR)/debian/linux-firewall-kmod/lib/modules/$(shell uname -r)/extra
-	install -m 644 build/kernel-module/firewall.ko $(CURDIR)/debian/linux-firewall-kmod/lib/modules/$(shell uname -r)/extra/
+	$(MAKE) install-daemon install-config install-state install-systemd \
+	    DESTDIR=$(PKGDIR) PREFIX=/usr SYSTEMDDIR=/lib/systemd/system
 
-	# 安装守护进程
-	install -d $(CURDIR)/debian/linux-firewall-kmod/usr/sbin
-	install -m 755 build/daemon/firewall-daemon $(CURDIR)/debian/linux-firewall-kmod/usr/sbin/
+	# DKMS 源码树：dkms.conf 的 PACKAGE_VERSION 占位符在构建期替换
+	install -d $(PKGDIR)/usr/src/linux-firewall-kmod-$(VERSION)/src/kernel-module
+	cp -r src/kernel-module/* $(PKGDIR)/usr/src/linux-firewall-kmod-$(VERSION)/src/kernel-module/
+	install -d $(PKGDIR)/usr/src/linux-firewall-kmod-$(VERSION)/contract/generated
+	cp contract/generated/*.h $(PKGDIR)/usr/src/linux-firewall-kmod-$(VERSION)/contract/generated/
+	install -m 644 Makefile.dkms dkms.conf $(PKGDIR)/usr/src/linux-firewall-kmod-$(VERSION)/
+	sed -i 's|#MODULE_VERSION#|$(VERSION)|g' \
+	    $(PKGDIR)/usr/src/linux-firewall-kmod-$(VERSION)/dkms.conf
 
-	# 安装配置文件
-	install -d $(CURDIR)/debian/linux-firewall-kmod/etc/firewall
-	install -m 644 config/*.yaml $(CURDIR)/debian/linux-firewall-kmod/etc/firewall/
-	install -d $(CURDIR)/debian/linux-firewall-kmod/etc/modules-load.d
-	install -m 644 config/modules-load.d/firewall.conf $(CURDIR)/debian/linux-firewall-kmod/etc/modules-load.d/
+# dh_fixperms 默认把 0600/0700 放宽成 0644/0755；配置与状态目录保持安装目标的权限。
+override_dh_fixperms:
+	dh_fixperms
+	chmod 0700 $(PKGDIR)/etc/firewall
+	chmod 0600 $(PKGDIR)/etc/firewall/*.yaml
+	chmod 0700 $(PKGDIR)/var/lib/firewall
 
-	# 安装 systemd 服务
-	install -d $(CURDIR)/debian/linux-firewall-kmod/lib/systemd/system
-	install -m 644 firewall-daemon.service $(CURDIR)/debian/linux-firewall-kmod/lib/systemd/system/
-
-	# 创建状态目录
-	install -d -m 700 $(CURDIR)/debian/linux-firewall-kmod/var/lib/firewall
-
-	# 预创建独立日志文件 /var/log/firewall.log（0640 root:adm）
-	# 守护进程启动时会以 O_APPEND 模式打开此文件（无需预先存在也能自动创建）
-	touch $(CURDIR)/debian/linux-firewall-kmod/var/log/firewall.log
-	chmod 0640 $(CURDIR)/debian/linux-firewall-kmod/var/log/firewall.log
-	chown root:adm $(CURDIR)/debian/linux-firewall-kmod/var/log/firewall.log 2>/dev/null || true
-
-	# 安装 logrotate 配置
-	install -d $(CURDIR)/debian/linux-firewall-kmod/etc/logrotate.d
-	install -m 644 config/logrotate/firewall-daemon $(CURDIR)/debian/linux-firewall-kmod/etc/logrotate.d/
-
-	# 安装文档
-	install -d $(CURDIR)/debian/linux-firewall-kmod/usr/share/doc/linux-firewall-kmod
-	install -m 644 README.md CHANGELOG.md LICENSE $(CURDIR)/debian/linux-firewall-kmod/usr/share/doc/linux-firewall-kmod/
-
+# dh_auto_clean 默认跑上游 make clean，会连带重建前端；设为空操作保留增量构建。
+# 序列末尾的 dh_clean 仍会清掉 debian/<pkg> 等暂存物。
 override_dh_auto_clean:
-	make clean
-	dh_auto_clean
+	@echo "Skipping upstream 'make clean' to keep incremental daemon/frontend builds"

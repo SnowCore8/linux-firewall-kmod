@@ -1,0 +1,41 @@
+#!/bin/bash
+# 不 set -e：dkms remove 在某些状态下返回非零，不能因此中断卸载。
+
+PKG=linux-firewall-kmod
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    VERSION="$(dpkg-query -W -f='${Version}' "$PKG" 2>/dev/null || true)"
+
+    if [ -n "$VERSION" ]; then
+        # 从所有已安装的内核中卸载 DKMS 模块
+        for kernel_dir in /lib/modules/*; do
+            [ -d "$kernel_dir" ] || continue
+            dkms remove -m "$PKG" -v "$VERSION" -k "${kernel_dir##*/}" 2>/dev/null || true
+        done
+        dkms remove -m "$PKG" -v "$VERSION" --all 2>/dev/null || true
+        rm -rf "/var/lib/dkms/$PKG-$VERSION"
+    fi
+
+    # 强制清理残留：DKMS updates/ 与手动安装 extra/ 两条路径
+    rm -rf "/var/lib/dkms/$PKG"
+    rm -f /lib/modules/*/updates/dkms/firewall.ko*
+    rm -f /lib/modules/*/extra/firewall.ko*
+
+    if command -v depmod &> /dev/null; then
+        depmod -a 2>/dev/null || true
+    fi
+
+    # 删除运行时状态目录
+    rm -rf /var/lib/firewall
+
+    # dpkg 不会删除非空目录，强制清理文档目录
+    rm -rf /usr/share/doc/$PKG
+fi
+
+# purge 时额外删除用户配置与 DKMS 源码
+if [ "$1" = "purge" ]; then
+    rm -rf /etc/firewall
+    rm -rf /usr/src/linux-firewall-kmod-*
+fi
+
+#DEBHELPER#

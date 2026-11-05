@@ -73,6 +73,18 @@ desktop.ini
 *.deb
 *.rpm
 
+# debhelper 构建期生成物。debian/changelog 由 build-deb.sh 从 CHANGELOG.md 派生，
+# 是 Debian 侧唯一的版本来源，不入库以免与 CHANGELOG.md 各说各话。
+debian/changelog
+debian/files
+debian/debhelper-build-stamp
+debian/.debhelper/
+debian/linux-firewall-kmod/
+debian/tmp/
+debian/*.substvars
+debian/*.debhelper.log
+debian/*.debhelper
+
 # ---- AI 工具 ----
 .qwen/
 !.qwen/skills/

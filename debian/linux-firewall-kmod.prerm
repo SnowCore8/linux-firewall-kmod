@@ -1,0 +1,13 @@
+#!/bin/bash
+set -e
+
+# 升级不做 rmmod：compat 13 默认 --restart-after-upgrade，服务在 postinst 重启，
+# 而 postinst 会在 dkms install 前卸载旧模块。
+
+#DEBHELPER#
+
+if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
+    if lsmod | grep -q '^firewall '; then
+        rmmod firewall 2>/dev/null || true
+    fi
+fi

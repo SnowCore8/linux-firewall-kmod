@@ -1,0 +1,69 @@
+#!/bin/bash
+# DKMS 编译安装内核模块 → 加载模块 → 预创建日志文件 → 启动并断言服务状态。
+set -e
+
+PKG=linux-firewall-kmod
+VERSION="$(dpkg-query -W -f='${Version}' "$PKG")"
+CURRENT_KERNEL="$(uname -r)"
+
+# 同版本重装时先清掉 DKMS 树残留，否则 dkms add 报 "DKMS tree already contains"。
+if dkms status -m "$PKG" -v "$VERSION" 2>/dev/null | grep -q .; then
+    dkms remove -m "$PKG" -v "$VERSION" --all 2>/dev/null || true
+    rm -rf "/var/lib/dkms/$PKG-$VERSION"
+fi
+
+# 版本升级时旧模块仍驻留内存；不卸载则 modprobe 被跳过，新编的 .ko 不会生效。
+if lsmod | grep -q '^firewall '; then
+    rmmod firewall 2>/dev/null || true
+fi
+
+echo "为内核 $CURRENT_KERNEL 编译内核模块..."
+dkms add -m "$PKG" -v "$VERSION"
+dkms build -m "$PKG" -v "$VERSION" -k "$CURRENT_KERNEL"
+dkms install -m "$PKG" -v "$VERSION" -k "$CURRENT_KERNEL" --force
+
+if ! lsmod | grep -q '^firewall '; then
+    echo "加载内核模块..."
+    modprobe firewall || {
+        echo "ERROR: 无法加载 firewall 内核模块"
+        echo "请检查 dmesg 获取详细信息"
+        exit 1
+    }
+fi
+
+# ProtectSystem=strict 下单元 ReadWritePaths 的每一项在启动时必须已存在，否则
+# systemd 以 226/NAMESPACE 失败在 ExecStart 之前，守护进程没机会自行创建日志文件。
+# 已存在不覆盖：避免升级清空历史日志、冲掉 logrotate 设定的权限。
+if [ ! -e /var/log/firewall.log ]; then
+    echo "创建日志文件 /var/log/firewall.log..."
+    install -m 0640 -o root -g adm /dev/null /var/log/firewall.log 2>/dev/null \
+        || install -m 0640 /dev/null /var/log/firewall.log
+fi
+
+# script 模式部署会在 /etc/systemd/system/ 留下普通文件，遮蔽包内的 /lib/systemd/system/ 单元。
+if [ -f /etc/systemd/system/firewall-daemon.service ] && \
+   [ ! -L /etc/systemd/system/firewall-daemon.service ]; then
+    echo "清理 script 模式残留的 /etc/systemd/system/firewall-daemon.service..."
+    rm -f /etc/systemd/system/firewall-daemon.service
+fi
+
+#DEBHELPER#
+
+# 两类失败都要抓：沙箱装配错误让 start 直接非 0；Type=simple 下进程 exec 后再崩溃，
+# start 仍返回 0，只能靠轮询 is-active 发现。
+if command -v systemctl >/dev/null 2>&1; then
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        systemctl is-active --quiet firewall-daemon && break
+        sleep 1
+    done
+    if ! systemctl is-active --quiet firewall-daemon; then
+        echo "ERROR: firewall-daemon 未能进入 active 状态"
+        echo "守护进程未运行时封禁链路完全失效，安装不视为成功。诊断信息："
+        systemctl status firewall-daemon --no-pager -l 2>&1 | head -20 || true
+        journalctl -u firewall-daemon -n 30 --no-pager 2>&1 || true
+        exit 1
+    fi
+    echo "守护进程已进入 active 状态"
+fi
+
+echo "linux-firewall-kmod $VERSION installed successfully."
