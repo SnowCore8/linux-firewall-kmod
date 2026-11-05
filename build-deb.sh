@@ -164,7 +164,21 @@ if command -v systemctl &> /dev/null; then
     fi
     systemctl daemon-reload
     systemctl enable firewall-daemon || true
+    # 两类失败都要抓：沙箱装配错误(226/NAMESPACE)让 start 直接非 0；
+    # 而 Type=simple 下进程 exec 后再崩溃，start 仍返回 0，只能靠轮询 is-active 发现。
     systemctl start firewall-daemon || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        systemctl is-active --quiet firewall-daemon && break
+        sleep 1
+    done
+    if ! systemctl is-active --quiet firewall-daemon; then
+        echo "ERROR: firewall-daemon 未能进入 active 状态"
+        echo "守护进程未运行时封禁链路完全失效，安装不视为成功。诊断信息："
+        systemctl status firewall-daemon --no-pager -l 2>&1 | head -20 || true
+        journalctl -u firewall-daemon -n 30 --no-pager 2>&1 || true
+        exit 1
+    fi
+    echo "守护进程已进入 active 状态"
 fi
 
 echo "linux-firewall-kmod installed successfully."

@@ -162,17 +162,42 @@ REMOTE_INSTALL
     ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" bash <<'VERIFY_DEB'
 set -e
 for _ in $(seq 1 10); do systemctl is-active --quiet firewall-daemon && break; sleep 1; done
+
+HTTP_CODE=""
+for _ in $(seq 1 10); do
+    HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9119/dashboard || true)"
+    [ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "000" ] && break
+    sleep 1
+done
+
+SVC_STATE="$(systemctl is-active firewall-daemon 2>/dev/null || true)"
+MOD_STATE="$(lsmod | grep '^firewall ' || true)"
+DKMS_STATE="$(dkms status -m linux-firewall-kmod 2>/dev/null | head -1 || true)"
+
 echo "  内核版本: $(uname -r)"
-echo "  内核模块: $(lsmod | grep '^firewall ' || echo '未加载')"
-echo "  守护进程: $(systemctl is-active firewall-daemon)"
-echo "  DKMS: $(dkms status -m linux-firewall-kmod 2>/dev/null | head -1 || echo '无')"
-echo "  单元文件: $(systemctl show -p FragmentPath --value firewall-daemon)"
-HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9119/dashboard || true)"
+echo "  内核模块: ${MOD_STATE:-未加载}"
+echo "  守护进程: ${SVC_STATE:-未知}"
+echo "  DKMS: ${DKMS_STATE:-无}"
+echo "  单元文件: $(systemctl show -p FragmentPath --value firewall-daemon 2>/dev/null || true)"
 if [ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "000" ]; then
     echo "  面板: 可达 (HTTP $HTTP_CODE)"
 else
     echo "  面板: 不可达"
 fi
+
+# 只打印不断言会让死掉的守护进程照样走到 "Deployment complete!"，故此处硬性判定
+FAIL=0
+[ "$SVC_STATE" = "active" ] || { echo "❌ 守护进程不是 active（当前: ${SVC_STATE:-未知}）"; FAIL=1; }
+[ -n "$MOD_STATE" ]         || { echo "❌ 内核模块未加载"; FAIL=1; }
+if [ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "000" ]; then :; else echo "❌ 面板 9119 不可达"; FAIL=1; fi
+
+if [ "$FAIL" != 0 ]; then
+    echo "--- 诊断 ---"
+    systemctl status firewall-daemon --no-pager -l 2>&1 | head -20 || true
+    journalctl -u firewall-daemon -n 30 --no-pager 2>&1 || true
+    exit 1
+fi
+echo "  ✓ 验证通过"
 VERIFY_DEB
 }
 
@@ -328,16 +353,40 @@ REMOTE_SCRIPT
     ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" bash << 'VERIFY_SCRIPT'
 set -e
 for _ in $(seq 1 10); do systemctl is-active --quiet firewall-daemon && break; sleep 1; done
+
+HTTP_CODE=""
+for _ in $(seq 1 10); do
+    HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9119/dashboard || true)"
+    [ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "000" ] && break
+    sleep 1
+done
+
+SVC_STATE="$(systemctl is-active firewall-daemon 2>/dev/null || true)"
+MOD_STATE="$(lsmod | grep '^firewall ' || true)"
+
 echo "  内核版本: $(uname -r)"
-echo "  内核模块: $(lsmod | grep '^firewall ' || echo '未加载')"
-echo "  守护进程: $(systemctl is-active firewall-daemon)"
+echo "  内核模块: ${MOD_STATE:-未加载}"
+echo "  守护进程: ${SVC_STATE:-未知}"
 echo "  封禁统计: $(cat /proc/firewall/stats 2>/dev/null | tr '\n' ' ' || echo 'N/A')"
-HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9119/dashboard || true)"
 if [ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "000" ]; then
     echo "  面板: 可达 (HTTP $HTTP_CODE)"
 else
     echo "  面板: 不可达"
 fi
+
+# 与 deb 模式一致：断言而非仅打印，失败让本地 ERR trap 走回滚
+FAIL=0
+[ "$SVC_STATE" = "active" ] || { echo "❌ 守护进程不是 active（当前: ${SVC_STATE:-未知}）"; FAIL=1; }
+[ -n "$MOD_STATE" ]         || { echo "❌ 内核模块未加载"; FAIL=1; }
+if [ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "000" ]; then :; else echo "❌ 面板 9119 不可达"; FAIL=1; fi
+
+if [ "$FAIL" != 0 ]; then
+    echo "--- 诊断 ---"
+    systemctl status firewall-daemon --no-pager -l 2>&1 | head -20 || true
+    journalctl -u firewall-daemon -n 30 --no-pager 2>&1 || true
+    exit 1
+fi
+echo "  ✓ 验证通过"
 VERIFY_SCRIPT
 }
 
