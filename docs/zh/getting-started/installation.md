@@ -140,7 +140,7 @@ sudo systemctl restart firewall-daemon
 
 `Makefile` 里的 `_guard_local_install` 是 `install` 与 `uninstall` 的第一个前置依赖。
 `DESTDIR` 为空且 `FIREWALL_REMOTE_DEPLOY != 1` 时，直接 `sudo make install` 会被拦下
-（退出码 1，不进入编译），并给出三条合规路径：`make deploy HOST=<远程主机>`、
+（退出码 1，不进入编译），并给出三条合规路径：`./scripts/deploy.sh <远程主机>`、
 `make install DESTDIR=<目录>`、`make install FIREWALL_REMOTE_DEPLOY=1`。
 
 想走审计轨迹就用上面三条之一；只想暂存不写本机时，`DESTDIR` 非空会让 `depmod` /

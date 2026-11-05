@@ -532,7 +532,7 @@ ci-summary:
 	@echo "  - 守护进程: $(DAEMON_BIN)"
 	@echo ""
 	@echo "下一步:"
-	@echo "  - 部署: make deploy HOST=<host> [USER=<user>] [MODE=deb|script]"
+	@echo "  - 部署: ./scripts/deploy.sh <host> [user] [--mode deb|script]"
 	@echo "  - 打包: make deb"
 	@echo "═══════════════════════════════════════════════════════════"
 
@@ -631,8 +631,7 @@ contract-check: contract-drift
 #
 # 目的:
 #   防止开发者 / AI Agent 意外把未审版本直接装到开发机，污染宿主环境。
-#   所有"实机安装"必须走 `make deploy HOST=<host>`（内部按 MODE 传给
-#   scripts/deploy.sh），或打包成 .deb 后在目标机器安装。
+#   所有"实机安装"必须走 `scripts/deploy.sh`，或打包成 .deb 后在目标机器安装。
 # ----------------------------------------------------------------------------
 # 只认命令行传入的授权值
 GUARD_AUTH := $(if $(filter command line,$(origin FIREWALL_REMOTE_DEPLOY)),$(FIREWALL_REMOTE_DEPLOY),)
@@ -650,7 +649,7 @@ _guard_local_install:
 		echo ""; \
 		echo "可选的合规路径 (任选其一):"; \
 		echo "  1) 远程部署到目标服务器 (推荐):"; \
-		echo "       make deploy HOST=<远程主机> [USER=<远程用户>] [MODE=deb|script]"; \
+		echo "       ./scripts/deploy.sh <远程主机> [远程用户] [--mode deb|script]"; \
 		echo ""; \
 		echo "  2) 打包暂存, 不写本机 (用于打 .deb 或分发):"; \
 		echo "       make install DESTDIR=\$$(pwd)/build/stage"; \
@@ -659,9 +658,8 @@ _guard_local_install:
 		echo "  3) 显式授权 (仅限在受控沙箱 / CI 容器内):"; \
 		echo "       make install FIREWALL_REMOTE_DEPLOY=1"; \
 		echo ""; \
-		echo "若你确实需要在物理机本地安装做最终调试, 请在"; \
-		echo "scripts/deploy.sh 内把本机作为 REMOTE_HOST 传入, 以"; \
-		echo "保持审计轨迹。"; \
+		echo "若你确实需要在物理机本地安装做最终调试, 请把本机作为"; \
+		echo "scripts/deploy.sh 的主机参数传入, 以保持审计轨迹。"; \
 		echo "======================================================="; \
 		exit 1; \
 	fi
@@ -831,33 +829,6 @@ endif
 deb:
 	@echo "Running ./build-deb.sh ..."
 	@./build-deb.sh
-
-# ============================================================================
-# 远程部署（统一入口）
-# ============================================================================
-# 参数只认命令行传值：HOST / USER / MODE。环境变量里的同名值（USER 永远有值、
-# zsh 自带 HOST、部分工具会设 MODE）一律忽略，避免误指向其它主机或用户。
-#   MODE=deb（默认）: 打包 DKMS deb，远端对目标内核编译——内核版本不同也能装
-#   MODE=script     : 上传预编译 .ko + 二进制，要求本地 .ko vermagic 与远端一致
-.PHONY: deploy
-deploy:
-	@HOST_ARG="$(if $(filter command line,$(origin HOST)),$(HOST),)"; \
-	MODE_ARG="$(if $(filter command line,$(origin MODE)),$(MODE),deb)"; \
-	USER_ARG="$(if $(filter command line,$(origin USER)),$(USER),)"; \
-	if [ -z "$$HOST_ARG" ]; then \
-		echo "❌ 错误: 必须显式指定 HOST（环境变量 HOST 不算）"; \
-		echo "   用法: make deploy HOST=<ip> [USER=<user>] [MODE=deb|script]"; \
-		echo "   USER 省略时由 deploy.sh 默认 root"; \
-		echo "   MODE=deb（默认）: DKMS 包，远端对目标内核编译（跨内核版本可用）"; \
-		echo "   MODE=script: 预编译 .ko，要求本地 vermagic 与远端一致"; \
-		exit 1; \
-	fi; \
-	[ -n "$$MODE_ARG" ] || MODE_ARG=deb; \
-	if [ -n "$$USER_ARG" ]; then \
-		./scripts/deploy.sh "$$HOST_ARG" "$$USER_ARG" --mode "$$MODE_ARG"; \
-	else \
-		./scripts/deploy.sh "$$HOST_ARG" --mode "$$MODE_ARG"; \
-	fi
 
 # ============================================================================
 # 6. 卸载目标 (Uninstall Targets)
@@ -1082,7 +1053,7 @@ help:
 	@echo ""
 	@echo "部署安全守卫:"
 	@echo "  直接 install/uninstall 在本机被禁止，必须选择以下路径之一:"
-	@echo "    1) 远程部署: make deploy HOST=<host> [USER=<user>] [MODE=deb|script]"
+	@echo "    1) 远程部署: ./scripts/deploy.sh <host> [user] [--mode deb|script]"
 	@echo "    2) 打包暂存: make install DESTDIR=<暂存目录>"
 	@echo "    3) 显式授权: make install FIREWALL_REMOTE_DEPLOY=1"
 

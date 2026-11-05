@@ -206,8 +206,8 @@ ROLLBACK_SCRIPT
     if [[ "$ko_vermagic" != "$remote_kernel" ]]; then
         echo ""
         echo "❌ .ko 的 vermagic ($ko_vermagic) 与远端内核 ($remote_kernel) 不匹配"
-        echo "   改用 MODE=deb 让远端 DKMS 编译："
-        echo "     make deploy HOST=$REMOTE_HOST USER=$REMOTE_USER MODE=deb"
+        echo "   改用 deb 模式让远端 DKMS 编译："
+        echo "     ./scripts/deploy.sh $REMOTE_HOST $REMOTE_USER --mode deb"
         exit 1
     fi
     echo "  ✓ vermagic 与远端内核一致"

@@ -200,14 +200,14 @@ make contract-check
 `depmod` / `insmod` / `systemctl` 那几步按 `[ -z "$(DESTDIR)" ]` 跳过。
 
 ```bash
-make deploy HOST=<远程主机> [USER=<远程用户>] [MODE=deb|script]  # 推荐：MODE=deb 远端编译
+./scripts/deploy.sh <远程主机> [远程用户] [--mode deb|script]  # 推荐：deb 模式远端编译
 make install DESTDIR=$(pwd)/build/stage           # 只暂存，不写本机
 sudo env "PATH=$PATH" make install FIREWALL_REMOTE_DEPLOY=1   # 显式授权直写本机
 ```
 
-`make deploy` 的 `HOST` / `USER` / `MODE` 只认命令行传值；同名环境变量（`USER`
-永远有值、zsh 自带 `HOST`）一律忽略，避免误指向其它主机或用户。`USER` 省略时
-由 `deploy.sh` 使用默认值 `root`。
+部署不包成 make 目标：make 只负责构建/打包，运维动作直接调 `deploy.sh`。
+脚本默认 `--mode deb`（远端 DKMS 编译，跨内核版本可用），`--mode script` 上传
+本地预编译 `.ko`（要求 vermagic 与远端一致）；远程用户省略时默认 `root`。
 
 `install` 的顺序：`_guard_local_install` → `build` → `install-kernel-module` →
 `install-daemon` → `install-config` → `install-state` → `install-systemd` →

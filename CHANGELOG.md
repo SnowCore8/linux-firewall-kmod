@@ -5,8 +5,8 @@
 ## [Unreleased] - 2026-11-06 部署流程统一
 
 ### 部署体验
-- **新增 `make deploy`** - 唯一部署入口，内部调用唯一脚本 `scripts/deploy.sh --mode deb|script`
-- **严格化 make 参数** - `HOST` / `USER` / `MODE` 只认命令行传值，环境变量同名值忽略（此前 `USER` 恒有值会把远端用户变成当前用户，zsh 的 `HOST` 甚至能让缺少 `HOST=` 的调用通过检查）；`USER` 省略时统一由 `deploy.sh` 默认 `root`
+- **部署入口收敛为 `scripts/deploy.sh`** - 位置参数 `<host> [user] [--mode deb|script]`，不再包一层 make 目标（make 只负责构建/打包，运维动作直接调脚本）
+- **脚本参数只认显式传值** - 环境变量不再影响目标：远程用户省略即 `root`，模式省略即 `deb`；`MODE=script` 只能通过 `--mode` 指定
 - **守卫只认命令行授权** - 环境变量里残留的 `FIREWALL_REMOTE_DEPLOY=1` 不再能静默放行本机安装
 - **`scripts/deploy.sh` 双模式合一** - `deb`（默认，DKMS 远端编译，跨内核版本可用）/ `script`（预编译 .ko，要求 vermagic 一致）。deb 模式自动安装远端 DKMS 依赖、清理脚本模式残留、同版本 `--reinstall` 强制重装、失败回滚半配置状态、正确识别 Basic 认证下的面板可达性
 - **deploy.sh 改用 vermagic 校验** - 不再对比本地/远端 `uname -r`，远程编译的 .ko 也能正确放行
