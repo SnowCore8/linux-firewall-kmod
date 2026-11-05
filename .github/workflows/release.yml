@@ -20,9 +20,9 @@ jobs:
       - name: 安装依赖
         run: |
           sudo apt-get update
-          # 守护进程为纯 Go 构建（前端经 npm/vite），打包只需 build-essential 与 dpkg-dev；
-          # 内核模块由 DKMS 在安装时编译，此处 SKIP_KERNEL_BUILD。
-          sudo apt-get install -y build-essential dpkg-dev
+          # 打包走 debhelper + dpkg-buildpackage；内核模块由 DKMS 在安装时编译，
+          # 构建机不需要内核头文件。
+          sudo apt-get install -y build-essential dpkg-dev debhelper
 
       - name: 获取版本号
         id: version
@@ -30,10 +30,10 @@ jobs:
 
       - name: 构建 deb 包
         env:
-          SKIP_KERNEL_BUILD: "1"
+          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           chmod +x build-deb.sh
-          ./build-deb.sh ${{ steps.version.outputs.VERSION }}
+          ./build-deb.sh "$VERSION"
 
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v3
