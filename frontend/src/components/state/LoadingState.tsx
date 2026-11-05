@@ -42,8 +42,31 @@ function CardsSkeleton({ rows }: { rows: number }) {
       }}
     >
       {Array.from({ length: rows }, (_, i) => (
-        <Card key={i} size="small" style={{ borderRadius: 'var(--fw-radius, 6px)' }}>
-          <Skeleton active paragraph={{ rows: 1 }} title={{ width: '40%' }} />
+        <Card
+          key={i}
+          size="small"
+          style={{
+            borderRadius: 'var(--fw-radius, 6px)',
+            borderLeft: '3px solid var(--fw-border)',
+          }}
+          styles={{ body: { padding: '16px 16px 16px 19px' } }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <div
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                background: 'var(--fw-border)',
+                opacity: 0.3,
+              }}
+            />
+            <Skeleton.Input active size="small" style={{ width: 60, height: 14 }} />
+          </div>
+          <Skeleton.Input active size="large" style={{ width: 80, height: 28 }} />
+          <div style={{ marginTop: 10 }}>
+            <Skeleton.Input active size="small" style={{ width: 120, height: 12 }} />
+          </div>
         </Card>
       ))}
     </div>

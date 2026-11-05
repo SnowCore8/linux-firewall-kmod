@@ -213,6 +213,37 @@ body {
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
 }
 
+/* --- 威胁等级卡片特殊样式：品牌色边框 + 渐变背景 --- */
+.fw-threat-card {
+  border: 1px solid var(--fw-brand);
+  background: linear-gradient(135deg, rgba(19, 174, 191, 0.04) 0%, transparent 60%);
+}
+
+[data-theme='dark'] .fw-threat-card {
+  background: linear-gradient(135deg, rgba(19, 174, 191, 0.08) 0%, transparent 60%);
+}
+
+.fw-threat-card:hover {
+  border-color: var(--fw-brand);
+  box-shadow: 0 4px 16px rgba(19, 174, 191, 0.15), 0 0 0 1px var(--fw-brand);
+}
+
+/* --- 暗色主题侧边栏渐变：从上到下微妙变深，增强深度感 --- */
+[data-theme='dark'] .ant-layout-sider {
+  background: linear-gradient(180deg, #0c1219 0%, #080c12 100%);
+}
+
+/* --- 暗色主题顶栏渐变：从左到右微妙变化，增强层次感 --- */
+[data-theme='dark'] .ant-layout-header {
+  background: linear-gradient(90deg, #0b1119 0%, #0d141d 50%, #0b1119 100%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+/* --- 亮色主题顶栏底部分隔线 --- */
+[data-theme='light'] .ant-layout-header {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
 /* --- 动效降级：用户系统开启「减少动态效果」时，关闭脉冲与淡入，只保留瞬时状态 --- */
 @media (prefers-reduced-motion: reduce) {
   .fw-dot--pulse::after {

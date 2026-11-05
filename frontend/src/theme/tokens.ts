@@ -137,6 +137,7 @@ export function buildTheme(mode: ThemeMode, density: Density): ThemeConfig {
     components: {
       Layout: {
         // 侧边栏与顶栏用比内容区更深的底色，形成层次（暗色下尤为明显）
+        // 暗色主题下添加微妙渐变，增强深度感
         siderBg: mode === 'dark' ? '#0a0f16' : '#ffffff',
         headerBg: mode === 'dark' ? '#0b1119' : '#ffffff',
         bodyBg: mode === 'dark' ? '#05080d' : '#f4f6f8',
@@ -149,8 +150,10 @@ export function buildTheme(mode: ThemeMode, density: Density): ThemeConfig {
         darkItemBg: 'transparent',
         darkSubMenuItemBg: 'transparent',
         // 选中项增强视觉
-        itemSelectedBg: mode === 'dark' ? 'rgba(19,174,191,0.12)' : 'rgba(19,174,191,0.08)',
+        itemSelectedBg: mode === 'dark' ? 'rgba(19,174,191,0.15)' : 'rgba(19,174,191,0.08)',
         itemSelectedColor: BRAND,
+        // 悬停效果增强
+        itemHoverBg: mode === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
       },
       Table: {
         headerBg: mode === 'dark' ? '#0e1621' : '#fafafa',

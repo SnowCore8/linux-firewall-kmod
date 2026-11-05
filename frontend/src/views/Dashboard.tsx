@@ -142,7 +142,69 @@ export default function Dashboard() {
 
       {hasData && (
         <Flex vertical gap={16} className="fw-fade-in">
-          {/* 第一行：威胁仪表 + 关键计数 */}
+          {/* 第一行：威胁等级仪表（突出显示） */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(280px, 1fr) 2fr',
+              gap: 16,
+            }}
+          >
+            <ChartCard title="威胁态势" className="fw-threat-card">
+              <BaseChart option={gauge} height={200} />
+              <Flex justify="center" gap={12} style={{ marginTop: 8 }}>
+                <Tag color={threatColor} style={{ fontWeight: 600, fontSize: 13, padding: '4px 12px' }}>
+                  {threatLabel(stats.threat_level.level)}
+                </Tag>
+                <Tag className="fw-mono" style={{ fontSize: 12 }}>
+                  分数 {stats.threat_level.score}
+                </Tag>
+              </Flex>
+            </ChartCard>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: 12,
+                alignContent: 'start',
+              }}
+            >
+              <StatCard
+                label="今日封禁"
+                value={formatNumber(stats.today_bans)}
+                icon={StopOutlined}
+                tone="danger"
+                footer={`当前在表 ${formatNumber(stats.current_bans)} · 累计 ${formatNumber(stats.total_bans)}`}
+                onClick={() => navigate('/bans')}
+              />
+              <StatCard
+                label="白名单"
+                value={formatNumber(stats.whitelist_count)}
+                icon={SafetyCertificateOutlined}
+                tone="success"
+                footer="永不封禁的可信地址/网段"
+                onClick={() => navigate('/whitelist')}
+              />
+              <StatCard
+                label="DDoS 命中"
+                value={formatNumber(stats.ddos_events)}
+                icon={ThunderboltOutlined}
+                tone="warning"
+                footer="本进程收到的内核 DDoS 事件"
+                onClick={() => navigate('/ddos')}
+              />
+              <StatCard
+                label="丢弃数据包"
+                value={formatNumber(stats.packets_dropped)}
+                icon={DeleteOutlined}
+                tone="info"
+                footer={`放行 ${formatNumber(stats.packets_accepted)}`}
+              />
+            </div>
+          </div>
+
+          {/* 第二行：补充指标 */}
           <div
             style={{
               display: 'grid',
@@ -150,46 +212,6 @@ export default function Dashboard() {
               gap: 16,
             }}
           >
-            <ChartCard title="威胁等级">
-              <BaseChart option={gauge} height={180} />
-              <Flex justify="center" style={{ marginTop: -8 }}>
-                <Tag color={threatColor} style={{ fontWeight: 600 }}>
-                  {threatLabel(stats.threat_level.level)}
-                </Tag>
-              </Flex>
-            </ChartCard>
-
-            <StatCard
-              label="今日封禁"
-              value={formatNumber(stats.today_bans)}
-              icon={StopOutlined}
-              tone="danger"
-              footer={`当前在表 ${formatNumber(stats.current_bans)} · 累计 ${formatNumber(stats.total_bans)}`}
-              onClick={() => navigate('/bans')}
-            />
-            <StatCard
-              label="白名单"
-              value={formatNumber(stats.whitelist_count)}
-              icon={SafetyCertificateOutlined}
-              tone="success"
-              footer="永不封禁的可信地址/网段"
-              onClick={() => navigate('/whitelist')}
-            />
-            <StatCard
-              label="DDoS 命中"
-              value={formatNumber(stats.ddos_events)}
-              icon={ThunderboltOutlined}
-              tone="warning"
-              footer="本进程收到的内核 DDoS 事件"
-              onClick={() => navigate('/ddos')}
-            />
-            <StatCard
-              label="丢弃数据包"
-              value={formatNumber(stats.packets_dropped)}
-              icon={DeleteOutlined}
-              tone="info"
-              footer={`放行 ${formatNumber(stats.packets_accepted)}`}
-            />
             <StatCard
               label="失败尝试"
               value={formatNumber(stats.failed_attempts)}

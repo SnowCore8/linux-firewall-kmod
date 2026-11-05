@@ -21,9 +21,11 @@ export interface ChartCardProps {
   footnote?: ReactNode
   /** 占据网格的列宽（配合外层 grid 使用，1=最小单元）。 */
   span?: number
+  /** 自定义 CSS 类名。 */
+  className?: string
 }
 
-export function ChartCard({ title, extra, children, footnote, span = 1 }: ChartCardProps) {
+export function ChartCard({ title, extra, children, footnote, span = 1, className }: ChartCardProps) {
   return (
     <Card
       size="small"
@@ -40,7 +42,7 @@ export function ChartCard({ title, extra, children, footnote, span = 1 }: ChartC
         body: { padding: '12px 16px 16px' },
         header: { borderBottom: '1px solid var(--fw-border)', minHeight: 40 },
       }}
-      className="fw-chart-card"
+      className={`fw-chart-card ${className || ''}`}
     >
       {children}
       {footnote && (
