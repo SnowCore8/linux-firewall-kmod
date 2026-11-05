@@ -173,6 +173,7 @@ sudo ./tests/run_stress.sh
 ### 文档
 
 - [ ] 已更新相关文档（README、API 文档、配置说明）
+- [ ] 文档只陈述当前状态，不写变更记录（历史只进 CHANGELOG）
 - [ ] 破坏性变更已记录在 CHANGELOG
 - [ ] 新增配置项已添加说明和示例
 
