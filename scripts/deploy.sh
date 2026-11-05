@@ -19,7 +19,7 @@ usage() {
 
 REMOTE_HOST=""
 REMOTE_USER=""
-MODE="${MODE:-deb}"
+MODE="deb"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --mode=*) MODE="${1#*=}"; shift ;;

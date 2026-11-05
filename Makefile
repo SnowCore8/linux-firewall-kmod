@@ -625,7 +625,8 @@ contract-check: contract-drift
 # ----------------------------------------------------------------------------
 # 策略:
 #   * DESTDIR 非空  -> 打包暂存模式，不写本机根文件系统，放行。
-#   * FIREWALL_REMOTE_DEPLOY=1 -> 由 scripts/deploy.sh 通过 SSH 触发，放行。
+#   * 命令行 FIREWALL_REMOTE_DEPLOY=1 -> 沙箱 / CI 内显式授权，放行。
+#     环境变量里的同名值不算授权（防止 shell 里残留的 export 静默放行）。
 #   * 其它情况(直接在本机执行 `make install` / `make uninstall`) -> 拒绝。
 #
 # 目的:
@@ -633,9 +634,12 @@ contract-check: contract-drift
 #   所有"实机安装"必须走 `make deploy HOST=<host>`（内部按 MODE 传给
 #   scripts/deploy.sh），或打包成 .deb 后在目标机器安装。
 # ----------------------------------------------------------------------------
+# 只认命令行传入的授权值
+GUARD_AUTH := $(if $(filter command line,$(origin FIREWALL_REMOTE_DEPLOY)),$(FIREWALL_REMOTE_DEPLOY),)
+
 .PHONY: _guard_local_install
 _guard_local_install:
-	@if [ -z "$(DESTDIR)" ] && [ "$(FIREWALL_REMOTE_DEPLOY)" != "1" ]; then \
+	@if [ -z "$(DESTDIR)" ] && [ "$(GUARD_AUTH)" != "1" ]; then \
 		echo ""; \
 		echo "======================================================="; \
 		echo "❌ 拒绝: 禁止直接部署到本机"; \
@@ -831,24 +835,29 @@ deb:
 # ============================================================================
 # 远程部署（统一入口）
 # ============================================================================
-# MODE=deb（默认）: 打包 DKMS deb，远端对目标内核编译——内核版本不同也能装
-# MODE=script     : 上传预编译 .ko + 二进制，要求本地 .ko vermagic 与远端一致
+# 参数只认命令行传值：HOST / USER / MODE。环境变量里的同名值（USER 永远有值、
+# zsh 自带 HOST、部分工具会设 MODE）一律忽略，避免误指向其它主机或用户。
+#   MODE=deb（默认）: 打包 DKMS deb，远端对目标内核编译——内核版本不同也能装
+#   MODE=script     : 上传预编译 .ko + 二进制，要求本地 .ko vermagic 与远端一致
 .PHONY: deploy
 deploy:
-	@if [ -z "$(HOST)" ]; then \
-		echo "❌ 错误: 必须指定 HOST 参数"; \
+	@HOST_ARG="$(if $(filter command line,$(origin HOST)),$(HOST),)"; \
+	MODE_ARG="$(if $(filter command line,$(origin MODE)),$(MODE),deb)"; \
+	USER_ARG="$(if $(filter command line,$(origin USER)),$(USER),)"; \
+	if [ -z "$$HOST_ARG" ]; then \
+		echo "❌ 错误: 必须显式指定 HOST（环境变量 HOST 不算）"; \
 		echo "   用法: make deploy HOST=<ip> [USER=<user>] [MODE=deb|script]"; \
+		echo "   USER 省略时由 deploy.sh 默认 root"; \
 		echo "   MODE=deb（默认）: DKMS 包，远端对目标内核编译（跨内核版本可用）"; \
 		echo "   MODE=script: 预编译 .ko，要求本地 vermagic 与远端一致"; \
 		exit 1; \
+	fi; \
+	[ -n "$$MODE_ARG" ] || MODE_ARG=deb; \
+	if [ -n "$$USER_ARG" ]; then \
+		./scripts/deploy.sh "$$HOST_ARG" "$$USER_ARG" --mode "$$MODE_ARG"; \
+	else \
+		./scripts/deploy.sh "$$HOST_ARG" --mode "$$MODE_ARG"; \
 	fi
-	@MODE="$${MODE:-deb}"; \
-	USER_ARG="$(USER)"; \
-	[ -n "$$USER_ARG" ] || USER_ARG="$$(whoami)"; \
-	case "$$MODE" in \
-		deb|script) ./scripts/deploy.sh "$(HOST)" "$$USER_ARG" --mode "$$MODE" ;; \
-		*) echo "❌ 未知 MODE=$$MODE（可选 deb / script）"; exit 1 ;; \
-	esac
 
 # ============================================================================
 # 6. 卸载目标 (Uninstall Targets)

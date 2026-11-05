@@ -6,6 +6,8 @@
 
 ### 部署体验
 - **新增 `make deploy`** - 唯一部署入口，内部调用唯一脚本 `scripts/deploy.sh --mode deb|script`
+- **严格化 make 参数** - `HOST` / `USER` / `MODE` 只认命令行传值，环境变量同名值忽略（此前 `USER` 恒有值会把远端用户变成当前用户，zsh 的 `HOST` 甚至能让缺少 `HOST=` 的调用通过检查）；`USER` 省略时统一由 `deploy.sh` 默认 `root`
+- **守卫只认命令行授权** - 环境变量里残留的 `FIREWALL_REMOTE_DEPLOY=1` 不再能静默放行本机安装
 - **`scripts/deploy.sh` 双模式合一** - `deb`（默认，DKMS 远端编译，跨内核版本可用）/ `script`（预编译 .ko，要求 vermagic 一致）。deb 模式自动安装远端 DKMS 依赖、清理脚本模式残留、同版本 `--reinstall` 强制重装、失败回滚半配置状态、正确识别 Basic 认证下的面板可达性
 - **deploy.sh 改用 vermagic 校验** - 不再对比本地/远端 `uname -r`，远程编译的 .ko 也能正确放行
 - **修复 `kmod-remote`** - `$$$` 变量展开吞掉 PID、rsync 缺 `--relative` 导致 `src/` 前缀丢失，产物同时写入 `firewall.ko` 标准路径

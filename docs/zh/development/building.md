@@ -205,6 +205,10 @@ make install DESTDIR=$(pwd)/build/stage           # 只暂存，不写本机
 sudo env "PATH=$PATH" make install FIREWALL_REMOTE_DEPLOY=1   # 显式授权直写本机
 ```
 
+`make deploy` 的 `HOST` / `USER` / `MODE` 只认命令行传值；同名环境变量（`USER`
+永远有值、zsh 自带 `HOST`）一律忽略，避免误指向其它主机或用户。`USER` 省略时
+由 `deploy.sh` 使用默认值 `root`。
+
 `install` 的顺序：`_guard_local_install` → `build` → `install-kernel-module` →
 `install-daemon` → `install-config` → `install-state` → `install-systemd` →
 `install-start` → `install-verify`。
