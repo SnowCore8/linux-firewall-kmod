@@ -317,7 +317,7 @@ stop 通道，关停时最后刷一次盘。
 |----|------|------|
 | 格式 | JSON Lines，每行一条 JSON 对象 | `internal/logger/json.go` |
 | 写入 | 自定义 handler，整行（含换行）合并为单次 `write()` | `internal/logger/handler.go`；多写者并存时每行仍是独立合法 JSON |
-| 路径 | 取 `defaults.log_file`；为空时用 `defaultLogPath` | `config/default.yaml`；`internal/logger/logger.go` 的 `/var/log/firewall-daemon.log` |
+| 路径 | 取 `defaults.log_file`；为空时用 `defaultLogPath` | `config/default.yaml`；`internal/logger/logger.go` 的 `/var/log/firewall.log` |
 | 打开失败 | 回退 stderr（`dup` 复制 fd 2，不接管原始 stderr） | `internal/logger/file.go` |
 | 轮转 | `log_max_size_mb`（默认 10）切片，当前片改名 `.1`，旧片依次顺移；`log_max_files`（默认 10，含当前片）控制保留数 | `internal/logger/file.go` |
 | 关闭轮转 | `log_max_size_mb=0`；`log_max_files=1` 表示轮转时直接截断 | 同上 |

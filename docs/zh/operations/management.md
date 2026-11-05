@@ -319,8 +319,8 @@ sudo cat /proc/firewall/service_probes   # 服务探测嫌疑
 # 守护进程日志（路径来自 defaults.log_file）
 sudo tail -f /var/log/firewall.log
 
-# 随包配置的默认路径；defaults.log_file 留空时代码回退到
-# /var/log/firewall-daemon.log（src/daemon/internal/logger/logger.go）
+# 随包配置与代码回落默认值同为 /var/log/firewall.log
+# （config/default.yaml、src/daemon/internal/logger/logger.go）
 
 # 经 systemd 时看 journal
 journalctl -u firewall-daemon -f

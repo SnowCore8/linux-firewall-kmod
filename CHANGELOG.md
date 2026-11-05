@@ -18,6 +18,7 @@
 - **修复 deb 装完守护进程起不来（`status=226/NAMESPACE`）** - `ProtectSystem=strict` 下 systemd 要把 `ReadWritePaths` 每一项 bind-mount 回可写，条目缺失就在 `ExecStart` 之前装配失败，守护进程没机会自行创建日志文件；`Restart=on-failure` 让它无限重启。单元去掉无人写入的 `/var/log/firewall-daemon.log`（`logger.go` 的 `defaultLogPath` 与 `config/default.yaml` 均为 `/var/log/firewall.log`），deb postinst 幂等预创建 `/var/log/firewall.log`（0640 root:adm，已存在不覆盖，避免升级清空历史日志）。放 postinst 而非 `debian/rules`：`build-deb.sh` 自行 `dpkg-deb --build`，不经 `debian/rules`，那里预创建日志文件的步骤从未执行
 - **deb postinst 不再静默吞掉启动失败** - `systemctl start firewall-daemon || true` 改为启动后轮询 `is-active`，非 active 即打印 `status`/`journal` 诊断并 `exit 1`。`Type=simple` 下 `start` 在 fork 成功即返回 0、进程随后崩溃不会被发现，而沙箱装配错误又会让 `start` 直接非 0，两类都要覆盖
 - **`deploy.sh` 验证步骤改为断言** - deb 的 `[4/4]`、script 的 `[5/5]` 原本只打印状态从不断言，守护进程死掉也照样输出 "Deployment complete!"。现断言 `is-active=active`、内核模块已加载、面板 9119 可达，任一不满足即输出诊断并 `exit 1`（script 模式由此触发既有 ERR trap 回滚）；面板探测改为轮询，避开守护进程刚起时 HTTP 尚未监听的假失败
+- **文档同步** - `docs/zh/operations/troubleshooting.md` 的 `ReadWritePaths` 取值与单元对齐，并新增 `status=226/NAMESPACE` 症状小节（区分运行期 `os error 30` 回退 stderr 继续跑、与运行前装配失败进程根本不存在）；`architecture/daemon.md`、`operations/management.md`、`operations/monitoring.md` 中残留的 `/var/log/firewall-daemon.log` 回落路径改为 `/var/log/firewall.log`
 
 ### 构建清理
 - **源码 / 中间产物 / 最终产物隔离** - 内核模块改在 `build/obj/kernel-module/<kernel.release>/tree/` 的源码副本上编译（`M=` 指向副本），`src/kernel-module/` 不再产生 `.o`/`.cmd`；vite 输出改到 `build/obj/frontend/`（`emptyOutDir: true`），`make daemon` 仅在 `go build` 期间把面板临时拷入 `src/daemon/web_ui/static/` 并由 `trap` 清理，构建后源码树零残留

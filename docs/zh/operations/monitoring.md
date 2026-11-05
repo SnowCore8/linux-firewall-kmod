@@ -198,8 +198,8 @@ curl -s -u <user>:<pass> http://127.0.0.1:9119/api/v2/stats
 
 | 项 | 值 | 出处 |
 |----|-----|------|
-| 路径 | `defaults.log_file`；留空时用 `/var/log/firewall-daemon.log` | `config/default.yaml`、`internal/logger/logger.go` |
-| 随包配置的默认路径 | `/var/log/firewall.log` | `config/default.yaml` |
+| 路径 | `defaults.log_file`；留空时回落到 `defaultLogPath` | `config/default.yaml`、`internal/logger/logger.go` |
+| 随包配置的默认路径 | `/var/log/firewall.log`，与代码回落值一致 | `config/default.yaml`、`internal/logger/logger.go` |
 | 级别取值 | `0=NONE 1=ERR 2=WARN 3=INFO 4=DEBUG` | `internal/config/types.go` |
 | 打开失败 | 回退 stderr，进程继续 | `internal/logger/file.go` |
 

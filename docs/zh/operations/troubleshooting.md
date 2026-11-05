@@ -184,7 +184,7 @@ journalctl -u firewall-daemon -n 50 | grep -i 认证
 | 项 | 内容 |
 |----|------|
 | 原因 | systemd 单元的 `ProtectSystem=strict` 让除 `ReadWritePaths` 之外的路径都只读 |
-| 现状 | 随包单元里 `ReadWritePaths=/var/lib/firewall /var/log`，所以默认路径 `/var/log/firewall.log` 可写（`firewall-daemon.service`） |
+| 现状 | 随包单元里 `ReadWritePaths=/var/lib/firewall /var/log/firewall.log`，所以默认路径 `/var/log/firewall.log` 可写（`firewall-daemon.service`） |
 | 触发场景 | 你把 `defaults.log_file` 改到了 `ReadWritePaths` 没覆盖的目录；或本地 override 删掉了那行 |
 | 行为 | 守护进程回退 stderr 继续运行，**不会退出**（`internal/logger/file.go`） |
 
@@ -203,6 +203,29 @@ journalctl -u firewall-daemon -f
 ```
 
 不要把 `ProtectSystem=strict` 整行删掉：那是随包单元的安全基线。
+
+### 症状：`status=226/NAMESPACE`，守护进程一直 `activating (auto-restart)`
+
+与上一节相反：这里守护进程**一行代码都没执行**。
+
+| 项 | 内容 |
+|----|------|
+| 原因 | `ProtectSystem=strict` 把整个文件系统挂成只读，systemd 需把 `ReadWritePaths` 每一项 bind-mount 回可写；条目不存在就装配不出命名空间 |
+| 失败时机 | `ExecStart` 之前。守护进程没跑，也就没机会用 `O_APPEND` 自行创建日志文件 |
+| 表现 | `systemctl status` 是 `activating (auto-restart)`、`Result: exit-code`、`status=226/NAMESPACE`；`Restart=on-failure` 让它无限重启，restart counter 持续上涨 |
+| 定位 | `journalctl -u firewall-daemon`，报错里直接点名缺失的路径 |
+| 与 `os error 30` 的区别 | `os error 30` 发生在运行期，守护进程回退 stderr 后**继续运行**；226 发生在运行前，进程根本不存在 |
+
+```bash
+sudo journalctl -u firewall-daemon -n 20 --no-pager   # 看是哪个路径缺失
+sudo systemctl show -p ReadWritePaths firewall-daemon # 单元实际放行了哪些路径
+
+# 补上缺失路径（随包的 /var/log/firewall.log 由 postinst 预创建）
+sudo install -m 0640 -o root -g adm /dev/null /var/log/firewall.log
+sudo systemctl restart firewall-daemon
+```
+
+`ReadWritePaths` 里的每一项都必须在启动时存在。要改 `defaults.log_file` 到新目录，就得同步给单元加放行项并先建好该路径，不能只改 YAML。把 `ReadWritePaths` 放宽回 `/var/log` 能绕过报错，但会丢掉最小权限收敛。
 
 ## IP 未被封禁
 
