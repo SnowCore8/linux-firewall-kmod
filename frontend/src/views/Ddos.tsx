@@ -387,6 +387,7 @@ function RatesSection() {
       <DataTable<RateResponse>
         data={ratesLive.value}
         isLoading={ratesLive.isLoading}
+        isRefreshing={ratesLive.isRefreshing}
         error={ratesLive.error}
         onRetry={ratesLive.refetch}
         rowKey="ip"
@@ -914,6 +915,7 @@ function ScanSection() {
         <DataTable<PortScannerEntry>
           data={scanners.data ? scanners.data.scanners : null}
           isLoading={scanners.isLoading}
+          isRefreshing={scanners.isRefreshing}
           error={scanners.error}
           onRetry={scanners.refetch}
           rowKey="ip"
@@ -947,6 +949,7 @@ function ScanSection() {
         <DataTable<ServiceProbeEntry>
           data={probes.data ? probes.data.probes : null}
           isLoading={probes.isLoading}
+          isRefreshing={probes.isRefreshing}
           error={probes.error}
           onRetry={probes.refetch}
           rowKey="ip"
@@ -983,6 +986,7 @@ function ScanSection() {
         <DataTable<CollaborativeAttack>
           data={collaborative.data}
           isLoading={collaborative.isLoading}
+          isRefreshing={collaborative.isRefreshing}
           error={collaborative.error}
           onRetry={collaborative.refetch}
           rowKey={(r) => `${r.jail_name}:${r.window_start}`}

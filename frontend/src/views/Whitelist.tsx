@@ -337,6 +337,7 @@ export default function Whitelist() {
         <DataTable<WhitelistEntry>
           data={entries}
           isLoading={mainLoading}
+          isRefreshing={mainRefreshing}
           error={mainError}
           onRetry={refetchMain}
           rowKey="cidr"

@@ -442,6 +442,7 @@ export default function Bans() {
       <DataTable<BanResponse>
         data={query.data ? query.data.items : null}
         isLoading={query.isLoading}
+        isRefreshing={query.isRefreshing}
         error={query.error}
         onRetry={query.refetch}
         rowKey="ip"

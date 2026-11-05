@@ -278,6 +278,7 @@ export default function Jails() {
       <DataTable<JailResponse>
         data={jails}
         isLoading={isLoading}
+        isRefreshing={isRefreshing}
         error={error}
         onRetry={refetch}
         rowKey="name"

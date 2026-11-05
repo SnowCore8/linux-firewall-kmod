@@ -512,6 +512,7 @@ function HistoryPanel(props: HistoryPanelProps) {
     <DataTable<LogEntry>
       data={query.data ? data : null}
       isLoading={query.isLoading}
+      isRefreshing={query.isRefreshing}
       error={query.error}
       onRetry={query.refetch}
       rowKey="line_number"

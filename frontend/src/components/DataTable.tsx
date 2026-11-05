@@ -22,6 +22,8 @@ export interface DataTableProps<T> extends Omit<TableProps<T>, 'dataSource' | 'l
   /** 当前数据；null 表示尚未取到（区别于空数组）。 */
   data: T[] | null
   isLoading?: boolean
+  /** 后台再取中（轮询 / 翻页 / 手动刷新）；已有数据时以表格 loading 遮罩呈现。 */
+  isRefreshing?: boolean
   error?: ApiError | null
   onRetry?: () => void
   /** 空数组时展示的空态场景与文案。 */
@@ -39,6 +41,7 @@ export interface DataTableProps<T> extends Omit<TableProps<T>, 'dataSource' | 'l
 export function DataTable<T extends object>({
   data,
   isLoading = false,
+  isRefreshing = false,
   error = null,
   onRetry,
   emptyScenario = 'no-data',
@@ -70,7 +73,7 @@ export function DataTable<T extends object>({
       <Table<T>
         {...tableProps}
         dataSource={data ?? []}
-        loading={false}
+        loading={isRefreshing}
         sticky
         locale={{ emptyText: emptyNode }}
         rowKey={tableProps.rowKey ?? ((record) => JSON.stringify(record))}

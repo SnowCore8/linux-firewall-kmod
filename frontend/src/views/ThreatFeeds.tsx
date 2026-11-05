@@ -473,6 +473,7 @@ export default function ThreatFeeds() {
           <DataTable<ThreatFeedResponse>
             data={feeds}
             isLoading={isLoading}
+            isRefreshing={isRefreshing}
             error={error}
             onRetry={refetch}
             rowKey="id"
