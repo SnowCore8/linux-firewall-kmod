@@ -143,6 +143,12 @@ fi
 
 # 启用并启动 systemd 服务
 if command -v systemctl &> /dev/null; then
+    # 清理 deploy.sh 残留：/etc/systemd/system/ 下的普通文件会遮蔽包管理的 /lib/systemd/system/
+    if [ -f /etc/systemd/system/firewall-daemon.service ] && \
+       [ ! -L /etc/systemd/system/firewall-daemon.service ]; then
+        echo "清理 deploy.sh 残留的 /etc/systemd/system/firewall-daemon.service..."
+        rm -f /etc/systemd/system/firewall-daemon.service
+    fi
     systemctl daemon-reload
     systemctl enable firewall-daemon || true
     systemctl start firewall-daemon || true

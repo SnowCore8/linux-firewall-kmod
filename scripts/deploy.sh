@@ -20,6 +20,14 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts -o IdentitiesOnly=yes)
 
+# 检测远端是否已通过 deb 安装（包管理优先，不允许脚本覆盖）
+if ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" "dpkg -s linux-firewall-kmod 2>/dev/null | grep -q 'Status:.*installed'"; then
+    echo "❌ 远端已通过 deb 包安装 linux-firewall-kmod"
+    echo "   脚本部署会遮蔽包管理的 systemd 单元和 DKMS 模块。"
+    echo "   如需切换到脚本部署，先卸载：ssh $REMOTE_USER@$REMOTE_HOST 'sudo dpkg --purge linux-firewall-kmod'"
+    exit 1
+fi
+
 echo "========================================="
 echo "Firewall Deployment Script (local-build mode)"
 echo "Target server: $REMOTE_USER@$REMOTE_HOST"
