@@ -630,8 +630,8 @@ contract-check: contract-drift
 #
 # 目的:
 #   防止开发者 / AI Agent 意外把未审版本直接装到开发机，污染宿主环境。
-#   所有"实机安装"必须走 `make deploy HOST=<host>`（内部按 MODE 分发到
-#   scripts/deploy-deb.sh / scripts/deploy.sh），或打包成 .deb 后在目标机器安装。
+#   所有"实机安装"必须走 `make deploy HOST=<host>`（内部按 MODE 传给
+#   scripts/deploy.sh），或打包成 .deb 后在目标机器安装。
 # ----------------------------------------------------------------------------
 .PHONY: _guard_local_install
 _guard_local_install:
@@ -846,8 +846,7 @@ deploy:
 	USER_ARG="$(USER)"; \
 	[ -n "$$USER_ARG" ] || USER_ARG="$$(whoami)"; \
 	case "$$MODE" in \
-		deb) ./scripts/deploy-deb.sh "$(HOST)" "$$USER_ARG" ;; \
-		script) ./scripts/deploy.sh "$(HOST)" "$$USER_ARG" ;; \
+		deb|script) ./scripts/deploy.sh "$(HOST)" "$$USER_ARG" --mode "$$MODE" ;; \
 		*) echo "❌ 未知 MODE=$$MODE（可选 deb / script）"; exit 1 ;; \
 	esac
 
