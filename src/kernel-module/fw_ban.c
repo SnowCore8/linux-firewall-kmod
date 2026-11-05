@@ -323,7 +323,8 @@ static void fw_ban_expire_cb(struct timer_list *t) {
    * 双重检查 socket 是否可用（exit 可能已将其置空）。 */
   fw_nl_send_lock();
   if (fw_nl_sock_available())
-    fw_nl_send_ban_state_change(FW_BAN_ACTION_UNBAN, af, prefix_len, &addr, 0, "expired", NULL);
+    fw_nl_send_ban_state_change(
+      FW_BAN_ACTION_UNBAN, af, prefix_len, &addr, 0, "expired", NULL);
   fw_nl_send_unlock();
 }
 
