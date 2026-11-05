@@ -362,18 +362,14 @@ ssh USER@HOST "cd /tmp/firewall-build-$$ && make kmod"
 
 **解决**：
 ```bash
-# 标准清理
+# 标准清理（构建 / 测试产物；入库的契约生成物保持不动）
 make clean
 
-# 深度清理（含内核中间文件）
+# 深度清理（额外清内核中间文件、clangd 缓存、compile_commands.json）
 make distclean
 
-# 清理契约文件
+# 清空契约生成物以强制重新生成（会弄脏工作区，随后 make contract 恢复）
 make contract-clean
-
-# 手动清理
-rm -rf build/
-rm -rf contract/generated/
 ```
 
 ## 最佳实践

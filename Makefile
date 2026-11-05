@@ -956,8 +956,9 @@ uninstall-verify:
 .PHONY: clean distclean
 clean:
 	@echo "Cleaning build artifacts..."
-	@rm -rf $(BUILD_DIR)
-	@rm -rf target
+	@rm -rf $(BUILD_DIR) target
+	@# 在 src/daemon/ 里手动 go build 留下的二进制（正常构建只写 build/）
+	@rm -f src/daemon/firewall-daemon
 	@# 守护二进制的产物只有 build/（上面已整目录删除）；这里做模块内的包级清理。
 	@# 注意 `-cached` 不是 go clean 的合法参数（合法的是 `-cache`，但那是清空全局
 	@# 构建缓存，不该由本仓库的 clean 触发），写错时本行会以 exit 2 中断 clean。
@@ -966,21 +967,28 @@ clean:
 	@# 只删面板文件，保留 embed 所有者 assets.go（它位于构建产物目录内，
 	@# 由 make frontend 的 vite 输出路径自然生成，见 src/daemon/web_ui/static/assets.go）。
 	@find $(WEBUI_STATIC_DIR) -mindepth 1 ! -name assets.go -delete
-	@# 清理契约生成文件（保留 .fwidl 源文件）
-	@rm -rf contract/generated/*.h contract/generated/*.ts contract/generated/*.json 2>/dev/null || true
-	@rm -f src/daemon/internal/httpcontract/http_contract.go 2>/dev/null || true
+	@# 性能基线工具的源码入库，blast2 / sink 产物不入库
+	@$(MAKE) -C scripts/bench clean >/dev/null 2>&1 || true
+	@# Playwright / pytest 产物
+	@rm -rf test-results playwright-report blob-report .playwright-mcp .pytest_cache
+	@find contract tests -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+	@# 契约生成物已入库（contract-drift 以入库内容为基线），clean 不删除；
+	@# 要重新生成用 `make contract`，要清空重来用 `make contract-clean`。
 	@echo "  ✓ Build directory removed (build/, target/)"
 	@echo "  ✓ Web UI panel files removed ($(WEBUI_STATIC_DIR) minus its go:embed owner file)"
-	@echo "  ✓ Contract generated files removed"
+	@echo "  ✓ Bench binaries and test artifacts removed"
 	@echo "Build artifacts cleaned."
 
-# distclean 额外清理内核源码目录中可能残留的隐藏文件
+# distclean 额外清理内核源码目录中间文件与 clangd / bear 工具缓存
 distclean: clean
-	find $(KERNEL_SRC_DIR) -name ".*.cmd" -delete 2>/dev/null || true
-	find $(KERNEL_SRC_DIR) -name ".*.o" -delete 2>/dev/null || true
-	find $(KERNEL_SRC_DIR) -name ".*.d" -delete 2>/dev/null || true
-	find $(KERNEL_SRC_DIR) -name ".tmp_versions" -exec rm -rf {} + 2>/dev/null || true
-	find $(KERNEL_SRC_DIR) -name "*.symversions" -delete 2>/dev/null || true
+	@find $(KERNEL_SRC_DIR) -name ".*.cmd" -delete 2>/dev/null || true
+	@find $(KERNEL_SRC_DIR) -name ".*.o" -delete 2>/dev/null || true
+	@find $(KERNEL_SRC_DIR) -name ".*.d" -delete 2>/dev/null || true
+	@find $(KERNEL_SRC_DIR) -name ".tmp_versions" -exec rm -rf {} + 2>/dev/null || true
+	@find $(KERNEL_SRC_DIR) -name "*.symversions" -delete 2>/dev/null || true
+	@# compile_commands.json 及其 clangd 索引不是构建产物，clean 保留、distclean 清掉
+	@rm -rf .cache
+	@rm -f compile_commands.json
 	@echo "All generated files cleaned."
 
 # ============================================================================

@@ -43,8 +43,8 @@ Go 依赖全为纯 Go，无 cgo，不需要系统开发库。
 | `make ci` | `format-check` + `build` + `test` | `Makefile` |
 | `make deb` | `build` 之后调 `./build-deb.sh` | `Makefile` |
 | `make install` / `make uninstall` | 见下文「安装与卸载」 | `Makefile` |
-| `make clean` | 清 `build/`、`target/`、`go clean`、清面板产物但留 `assets.go` | `Makefile` |
-| `make distclean` | `clean` + 清内核源码目录的中间文件 | `Makefile` |
+| `make clean` | 清 `build/`、`target/`、`go clean`、面板产物（留 `assets.go`）、bench 二进制、Playwright/pytest 产物；不动入库的契约生成物 | `Makefile` |
+| `make distclean` | `clean` + 内核源码目录中间文件 + clangd 缓存与 `compile_commands.json` | `Makefile` |
 | `make help` | 打印目标列表 | `Makefile` |
 
 跳过格式检查有两种方式：
@@ -255,9 +255,13 @@ make deb
 ## 清理
 
 ```bash
-make clean      # 删 build/ 与 target/，cd src/daemon && go clean，清面板产物并保留 assets.go
-make distclean  # clean + 清内核源码目录的 .*.cmd / .*.o / .*.d / .tmp_versions / *.symversions
+make clean      # 删 build/、target/、面板产物（留 assets.go）、bench 二进制、测试产物；契约生成物保持入库状态
+make distclean  # clean + 内核中间文件 + .cache/ 与 compile_commands.json
 ```
+
+`clean` 不会删除 `contract/generated/*` 与 `httpcontract/http_contract.go`：它们是入库
+文件，`contract-drift` 以入库内容为基线。需要重新生成用 `make contract`，要清空
+重来用 `make contract-clean`。
 
 `clean` 里那行是 `$(GOC) clean`，**不带参数**。
 `go clean -cached` 不是合法参数（合法的是 `-cache`，那是清全局构建缓存，

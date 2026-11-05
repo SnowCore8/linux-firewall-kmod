@@ -14,6 +14,10 @@
 - **修复 DKMS 打包** - `build-deb.sh` 的 DKMS 源码树补上 `contract/generated/*.h`；去掉每次全量 `make clean`（改 `CLEAN=1` 按需）
 - **防路径冲突** - deb postinst 清理 `/etc/systemd/system/` 脚本模式残留；deploy.sh 检测 deb 已装时询问是否卸载
 
+### 构建清理
+- **`make clean` 补全并修正** - 补清散落产物：`src/daemon/firewall-daemon`、`scripts/bench/{blast2,sink}`、`test-results/`、`playwright-report/`、`blob-report/`、`.playwright-mcp/`、`.pytest_cache/`、`__pycache__/`；不再删除入库的 `contract/generated/*` 与 `http_contract.go`（此前 clean 后工作区变脏，且 `go build` 会因缺生成文件失败）
+- **`make distclean`** - 在 `clean` 基础上额外清内核中间文件、clangd 缓存 `.cache/` 与 `compile_commands.json`
+
 ## [Unreleased] - 2026-11-05 公开规范整改（17 项）
 
 全面扫描并修复 FHS 路径合规、安全加固、文档一致性、CI/CD 规范、版本号管理五个维度的不规范项。
