@@ -6,6 +6,18 @@ PKG=linux-firewall-kmod
 VERSION="$(dpkg-query -W -f='${Version}' "$PKG")"
 CURRENT_KERNEL="$(uname -r)"
 
+# 升级时 dpkg 删掉旧包的 /usr/src/linux-firewall-kmod-<oldver>，但旧版本条目仍留在
+# /var/lib/dkms，source 符号链接悬空会让 dkms status 与 dkms autoinstall 整体报错。
+for stale in /var/lib/dkms/"$PKG"/*; do
+    [ -d "$stale" ] || continue
+    stale_ver="${stale##*/}"
+    case "$stale_ver" in [0-9]*) ;; *) continue ;; esac
+    [ "$stale_ver" = "$VERSION" ] && continue
+    dkms remove -m "$PKG" -v "$stale_ver" --all 2>/dev/null || true
+    rm -rf "$stale"
+done
+find "/var/lib/dkms/$PKG" -maxdepth 1 -xtype l -delete 2>/dev/null || true
+
 # 同版本重装时先清掉 DKMS 树残留，否则 dkms add 报 "DKMS tree already contains"。
 if dkms status -m "$PKG" -v "$VERSION" 2>/dev/null | grep -q .; then
     dkms remove -m "$PKG" -v "$VERSION" --all 2>/dev/null || true

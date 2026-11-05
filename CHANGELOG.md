@@ -32,6 +32,7 @@
 - **版本单一真相源** - `debian/changelog` 由 `CHANGELOG.md` 在构建期生成且不入库，删除过期的被跟踪文件（2.2.0-1）；`debian/compat` 由 `debhelper-compat (= 13)` 取代
 - **控制文件修正** - 删除从未实现的 `linux-firewall-kmod-source` 二进制包；`dkms` 从 Build-Depends 移到运行时 Depends；`/etc` 下配置由 debhelper 自动登记为 conffiles；`/etc/firewall` 保持 0700、`*.yaml` 保持 0600（`dh_fixperms` 会放宽权限，`override_dh_fixperms` 还原）
 - **升级时真正更换内核模块** - `postinst` 在 `dkms install` 前无条件卸载已加载的旧模块。此前只在「同版本残留」分支里 rmmod，版本号变化时 `lsmod` 命中会跳过 `modprobe`，新编的 `.ko` 实际不生效
+- **升级时清理旧版本 DKMS 条目** - dpkg 升级会删掉旧包的 `/usr/src/linux-firewall-kmod-<旧版本>`，旧版本在 `/var/lib/dkms` 的条目却会留下悬空 `source` 链接，使 `dkms status` 与 `dkms autoinstall` 整体报错。`postinst` 现在先移除所有非当前版本的 DKMS 条目及悬空符号链接
 - **构建依赖与入口同步** - `release.yml` 安装 `debhelper`，tag 版本经环境变量传入；`make deb`、本机安装守卫提示、`docs/zh/development/building.md`、`docs/zh/getting-started/installation.md` 一并更新
 
 ## [Unreleased] - 2026-11-05 公开规范整改（17 项）
