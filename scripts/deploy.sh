@@ -232,12 +232,21 @@ echo ""
 echo "[5/5] 验证部署..."
 ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" bash << 'VERIFY_SCRIPT'
 set -e
+for _ in $(seq 1 10); do
+    systemctl is-active --quiet firewall-daemon && break
+    sleep 1
+done
 echo "  内核版本: $(uname -r)"
 echo "  内核模块: $(lsmod | grep '^firewall ' || echo '未加载')"
 echo "  守护进程: $(systemctl is-active firewall-daemon)"
 echo "  封禁统计: $(cat /proc/firewall/stats 2>/dev/null | tr '\n' ' ' || echo 'N/A')"
-echo "  Prometheus:"
-curl -sf http://127.0.0.1:9119/metrics 2>/dev/null | head -3 || echo "  ✗ metrics 不可达"
+# metrics 走 Basic 认证，401 也说明服务在监听
+HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9119/dashboard || true)"
+if [ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "000" ]; then
+    echo "  面板: 可达 (HTTP $HTTP_CODE)"
+else
+    echo "  面板: 不可达"
+fi
 VERIFY_SCRIPT
 
 echo ""

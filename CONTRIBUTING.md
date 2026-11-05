@@ -66,10 +66,13 @@ make kernel-module KDIR=/lib/modules/$(uname -r)/build
 三条合规路径：
 
 ```bash
-./scripts/deploy.sh <远程主机> [远程用户]        # 远程部署，有审计轨迹
+make deploy HOST=<远程主机> [USER=<远程用户>] [MODE=deb|script]  # 远程部署，有审计轨迹
 make install DESTDIR=$(pwd)/build/stage         # 打包暂存，不写本机
 make install FIREWALL_REMOTE_DEPLOY=1           # 显式授权，只用于沙箱
 ```
+
+`MODE=deb`（默认）打包 DKMS deb，远端对目标内核编译，内核版本不同也能装；
+`MODE=script` 上传本地预编译的 `.ko`，要求 vermagic 与远端一致。
 
 ## 跑测试
 

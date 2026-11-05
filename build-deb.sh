@@ -32,13 +32,16 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "=== 构建 Debian 软件包 (DKMS) ==="
 echo "版本: $VERSION"
 
-# 清理旧构建产物
+# 清理旧构建产物（默认增量构建；CLEAN=1 时全量清理）
+if [[ "${CLEAN:-0}" == "1" ]]; then
+    echo "全量清理后构建..."
+    make -C "$PROJECT_ROOT" clean
+fi
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
 # 仅编译守护进程（内核模块由 DKMS 在安装时编译）
 echo "编译守护进程..."
-make -C "$PROJECT_ROOT" clean
 make -C "$PROJECT_ROOT" contract
 make -C "$PROJECT_ROOT" daemon
 

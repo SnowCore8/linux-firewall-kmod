@@ -2,6 +2,16 @@
 
 所有重要的项目变更记录都在此文件中。
 
+## [Unreleased] - 2026-11-06 部署流程统一
+
+### 部署体验
+- **新增 `make deploy`** - 统一入口，`MODE=deb`（默认，DKMS 远端编译）/ `MODE=script`（预编译 .ko），不再需要记两套脚本
+- **新增 `scripts/deploy-deb.sh`** - 自动安装远端 DKMS 依赖、清理脚本模式残留、同版本 `--reinstall` 强制重装、失败回滚半配置状态、正确识别 Basic 认证下的面板可达性
+- **deploy.sh 改用 vermagic 校验** - 不再对比本地/远端 `uname -r`，远程编译的 .ko 也能正确放行
+- **修复 `kmod-remote`** - `$$$` 变量展开吞掉 PID、rsync 缺 `--relative` 导致 `src/` 前缀丢失，产物同时写入 `firewall.ko` 标准路径
+- **修复 DKMS 打包** - `build-deb.sh` 的 DKMS 源码树补上 `contract/generated/*.h`；去掉每次全量 `make clean`（改 `CLEAN=1` 按需）
+- **防路径冲突** - deb postinst 清理 `/etc/systemd/system/` 脚本模式残留；deploy.sh 检测 deb 已装时询问是否卸载
+
 ## [Unreleased] - 2026-11-05 公开规范整改（17 项）
 
 全面扫描并修复 FHS 路径合规、安全加固、文档一致性、CI/CD 规范、版本号管理五个维度的不规范项。

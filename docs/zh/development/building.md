@@ -200,7 +200,7 @@ make contract-check
 `depmod` / `insmod` / `systemctl` 那几步按 `[ -z "$(DESTDIR)" ]` 跳过。
 
 ```bash
-./scripts/deploy.sh <远程主机> [远程用户]          # 推荐：本地编译，只上传产物
+make deploy HOST=<远程主机> [USER=<远程用户>] [MODE=deb|script]  # 推荐：MODE=deb 远端编译
 make install DESTDIR=$(pwd)/build/stage           # 只暂存，不写本机
 sudo env "PATH=$PATH" make install FIREWALL_REMOTE_DEPLOY=1   # 显式授权直写本机
 ```
