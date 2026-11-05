@@ -251,21 +251,21 @@ type GeoPoint struct {
 // 不是历史累计——后者在 ban_events 里，由 /stats/ban-effectiveness 那一面回答。
 // 后五个计数器是本进程解析日志以来的累计值，重启归零；jail 尚未产生任何读数的字段记 0。
 type JailResponse struct {
-	Name                 string  `json:"name"`
-	Enabled              bool    `json:"enabled"`
-	BanCount             uint64  `json:"ban_count"`
-	MaxRetries           uint32  `json:"max_retries"`
-	EffectiveMaxRetries  uint32  `json:"effective_max_retries"`
-	Findtime             uint32  `json:"findtime"`
-	BanTime              int32   `json:"ban_time"`
-	IsPeakHours          bool    `json:"is_peak_hours"`
-	PeakHoursAddend      int32   `json:"peak_hours_addend"`
-	InternalIPAddend     int32   `json:"internal_ip_addend"`
-	LinesParsed          uint64  `json:"lines_parsed"`
-	RegexMatches         uint64  `json:"regex_matches"`
-	IPsExtracted         uint64  `json:"ips_extracted"`
-	FailedAttempts       uint64  `json:"failed_attempts"`
-	BansTriggered        uint64  `json:"bans_triggered"`
+	Name                string `json:"name"`
+	Enabled             bool   `json:"enabled"`
+	BanCount            uint64 `json:"ban_count"`
+	MaxRetries          uint32 `json:"max_retries"`
+	EffectiveMaxRetries uint32 `json:"effective_max_retries"`
+	Findtime            uint32 `json:"findtime"`
+	BanTime             int32  `json:"ban_time"`
+	IsPeakHours         bool   `json:"is_peak_hours"`
+	PeakHoursAddend     int32  `json:"peak_hours_addend"`
+	InternalIPAddend    int32  `json:"internal_ip_addend"`
+	LinesParsed         uint64 `json:"lines_parsed"`
+	RegexMatches        uint64 `json:"regex_matches"`
+	IPsExtracted        uint64 `json:"ips_extracted"`
+	FailedAttempts      uint64 `json:"failed_attempts"`
+	BansTriggered       uint64 `json:"bans_triggered"`
 }
 
 // u8Score 把 0-100 的分收进 u8：四舍五入后钳到 [0,100]。

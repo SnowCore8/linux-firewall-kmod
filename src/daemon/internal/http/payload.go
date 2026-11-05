@@ -46,20 +46,20 @@ type BanResponse struct {
 // **未封禁不是错误**：is_banned=false 的 200 响应照样带历史与信誉读数（契约给这条路由
 // 只编了 40006 = IP 非法）。前端详情面板正是靠这个形状在「解封之后还想看历史」时可用。
 type BanDetailResponse struct {
-	IP                   string  `json:"ip"`
-	IsBanned             bool    `json:"is_banned"`
-	JailName             string  `json:"jail_name"`
-	Reason               string  `json:"reason"`
-	BannedAt             int64   `json:"banned_at"`
-	ExpiresAt            int64   `json:"expires_at"`
-	IsPermanent          bool    `json:"is_permanent"`
-	FailCount            uint32  `json:"fail_count"`
-	BanCount             uint32  `json:"ban_count"`
-	LastUnbannedAt       int64   `json:"last_unbanned_at"`
-	WasPermanent         bool    `json:"was_permanent"`
-	ProgressiveLevel     string  `json:"progressive_level"`
-	NextBanDuration      string  `json:"next_ban_duration"`
-	ReputationScore      uint32  `json:"reputation_score"`
+	IP               string `json:"ip"`
+	IsBanned         bool   `json:"is_banned"`
+	JailName         string `json:"jail_name"`
+	Reason           string `json:"reason"`
+	BannedAt         int64  `json:"banned_at"`
+	ExpiresAt        int64  `json:"expires_at"`
+	IsPermanent      bool   `json:"is_permanent"`
+	FailCount        uint32 `json:"fail_count"`
+	BanCount         uint32 `json:"ban_count"`
+	LastUnbannedAt   int64  `json:"last_unbanned_at"`
+	WasPermanent     bool   `json:"was_permanent"`
+	ProgressiveLevel string `json:"progressive_level"`
+	NextBanDuration  string `json:"next_ban_duration"`
+	ReputationScore  uint32 `json:"reputation_score"`
 }
 
 // BanOperationResponse 是单条封禁/解封操作的结果（POST /api/v2/bans、
