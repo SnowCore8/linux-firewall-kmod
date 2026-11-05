@@ -53,6 +53,8 @@ echo "安装 DKMS 源码..."
 DKMS_SRC_DIR="$TEMP_DIR/usr/src/$DKMS_NAME-$VERSION"
 install -d "$DKMS_SRC_DIR/src/kernel-module"
 cp -r "$PROJECT_ROOT/src/kernel-module/"* "$DKMS_SRC_DIR/src/kernel-module/"
+install -d "$DKMS_SRC_DIR/contract/generated"
+cp "$PROJECT_ROOT/contract/generated/"*.h "$DKMS_SRC_DIR/contract/generated/"
 cp "$PROJECT_ROOT/Makefile.dkms" "$DKMS_SRC_DIR/"
 cp "$PROJECT_ROOT/dkms.conf" "$DKMS_SRC_DIR/"
 
