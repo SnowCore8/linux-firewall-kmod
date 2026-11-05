@@ -13,7 +13,6 @@
 package decision
 
 import (
-	"math"
 	"net/netip"
 )
 
@@ -57,29 +56,7 @@ func IsInternal(ip netip.Addr) bool {
 	return b[0]&0xFE == 0xFC
 }
 
-// EffectiveThreshold 计算有效失败阈值（达到即触发封禁）。
-//
-// Deprecated: 使用 NewEffectiveThreshold（加法模型）替代。旧乘法模型存在系数抵消 Bug：
-// 内网(2.0) × 低信誉(0.5) = 1.0，导致内网低信誉 IP 与外网低信誉 IP 阈值相同。
-//
-// 保留此函数仅为向后兼容，新代码不应调用。
-func EffectiveThreshold(maxRetries uint32, peakHours, internal bool, reputationScore uint32) uint32 {
-	peak := 1.0
-	if peakHours {
-		peak = PeakHoursMultiplier
-	}
-	source := 1.0
-	if internal {
-		source = InternalSourceMultiplier
-	}
-	value := math.Ceil(float64(maxRetries) * peak * source * ReputationMultiplier(reputationScore))
-	if value < 1 {
-		value = 1
-	}
-	return uint32(value)
-}
-
-// NewEffectiveThreshold 计算有效阈值（加法模型，修复旧乘法 Bug）。
+// EffectiveThreshold 计算有效阈值（加法模型，修复旧乘法 Bug）。
 //
 // 公式：baseThreshold + peakAddend + internalAddend + reputationAdjustment
 //
@@ -90,7 +67,7 @@ func EffectiveThreshold(maxRetries uint32, peakHours, internal bool, reputationS
 //
 // 修复旧乘法模型的 Bug：内网(2.0) × 低信誉(0.5) = 1.0，导致系数抵消。
 // 新模型下，内网低信誉 IP 的阈值 = base + 3 - 2 = base + 1，高于外网低信誉 IP（base - 2）。
-func NewEffectiveThreshold(maxRetries uint32, peakHours, internal bool, reputationScore uint32) uint32 {
+func EffectiveThreshold(maxRetries uint32, peakHours, internal bool, reputationScore uint32) uint32 {
 	addend := int(maxRetries)
 
 	if peakHours {
@@ -101,7 +78,7 @@ func NewEffectiveThreshold(maxRetries uint32, peakHours, internal bool, reputati
 		addend += 3
 	}
 
-	addend += NewReputationAdjustment(reputationScore)
+	addend += ReputationAdjustment(reputationScore)
 
 	if addend < 1 {
 		addend = 1
@@ -110,14 +87,14 @@ func NewEffectiveThreshold(maxRetries uint32, peakHours, internal bool, reputati
 	return uint32(addend)
 }
 
-// NewReputationAdjustment 根据信誉分返回阈值调整值（连续函数，替代旧阶梯乘法）。
+// ReputationAdjustment 根据信誉分返回阈值调整值（连续函数，替代旧阶梯乘法）。
 //
 //	信誉 >= 80：0（高信誉不调整）
 //	信誉 >= 50：-1（中信誉减 1）
 //	信誉 < 50：-2（低信誉减 2）
 //
 // 替代旧的 ReputationMultiplier（返回 1.0/0.8/0.5 的乘法系数），改为加法调整。
-func NewReputationAdjustment(score uint32) int {
+func ReputationAdjustment(score uint32) int {
 	switch {
 	case score >= 80:
 		return 0

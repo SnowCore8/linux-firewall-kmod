@@ -318,7 +318,13 @@ static void fw_ban_expire_cb(struct timer_list *t) {
   fw_ban_layer_release(tbl, prefix_len, 1); /* 摘链之后才清位图（文件头顺序要求） */
   fw_stat_add_expired(1);
   call_rcu(&n->rcu, fw_ban_free_rcu);
-  fw_nl_send_ban_state_change(FW_BAN_ACTION_UNBAN, af, prefix_len, &addr, 0, "expired", NULL);
+
+  /* 发送前获取读锁，防止 fw_netlink_exit() 在此期间释放 socket。
+   * 双重检查 socket 是否可用（exit 可能已将其置空）。 */
+  fw_nl_send_lock();
+  if (fw_nl_sock_available())
+    fw_nl_send_ban_state_change(FW_BAN_ACTION_UNBAN, af, prefix_len, &addr, 0, "expired", NULL);
+  fw_nl_send_unlock();
 }
 
 void fw_ban_exit(void) {

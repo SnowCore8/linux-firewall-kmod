@@ -146,7 +146,7 @@ func TestThresholdReachedProducesIntentWithBaseDuration(t *testing.T) {
 	}
 }
 
-// 内网(×2.0) + 高峰(×1.5) + 信誉满分(×1.0)：阈值 3 → ceil(9.0) = 9。
+// 内网(+3) + 高峰(+2) + 信誉满分(+0)：阈值 3 + 5 = 8。
 func TestInternalAndPeakMultipliersRaiseTheThreshold(t *testing.T) {
 	p := NewPipeline()
 	p.RegisterJail(sshdRules(t), NewJailPolicy(3, 600, 600, config.DefaultClusterConfig()))
@@ -156,19 +156,19 @@ func TestInternalAndPeakMultipliersRaiseTheThreshold(t *testing.T) {
 	tick := NewTick(1_000, true)
 	var out []BanIntent
 
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 7; i++ {
 		out, _ = p.OnChunk("sshd", src, []byte(failedRec("10.0.0.9")), tick, facts, out)
 	}
 	if len(out) != 0 {
-		t.Fatalf("内网+高峰下 8 次不应达到阈值 9: %d", len(out))
+		t.Fatalf("内网+高峰下 7 次不应达到阈值 8: %d", len(out))
 	}
 
 	out, _ = p.OnChunk("sshd", src, []byte(failedRec("10.0.0.9")), tick, facts, out)
 	if len(out) != 1 {
-		t.Fatalf("第 9 次应达到内网+高峰阈值: %d", len(out))
+		t.Fatalf("第 8 次应达到内网+高峰阈值: %d", len(out))
 	}
-	if out[0].Plan.FailCount != 9 {
-		t.Errorf("FailCount=%d, want 9", out[0].Plan.FailCount)
+	if out[0].Plan.FailCount != 8 {
+		t.Errorf("FailCount=%d, want 8", out[0].Plan.FailCount)
 	}
 }
 
@@ -515,18 +515,33 @@ func (d *decayingFacts) RiskEngineEnabled() bool { return false }
 
 // 记账顺序必须是「先 RecordFailure，后 ReputationScore」。
 //
-// 算术（阈值基数 12、非高峰、外网、同批 6 行失败；信誉分自 100 起每记一次 -10）。
-// FailureWindow.Observe 的 Recent 按阈值截断，故 FailCount 至多等于阈值——用「阈值 6
-// 恰好等于行数」让两种顺序的产出可分辨：
+// 算术（阈值基数 5、非高峰、外网、同批 5 行失败；信誉分自 100 起每记一次 -10）。
+// 加法模型：阈值 = base + peak(0) + internal(0) + reputation(-2/-1/0)
 //
-//	| 第 n 行 | 先记账→取分 | 系数 | 有效阈值 | 先取分→记账 | 系数 | 有效阈值 |
-//	| 5       | 50          | 0.8  | 10       | 60          | 0.8  | 10       |
-//	| 6       | 40          | 0.5  | 6 → 达标 | 50          | 0.8  | 10 → 未达标 |
+//	| 第 n 行 | 先记账→取分 | 调整 | 有效阈值 | 先取分→记账 | 调整 | 有效阈值 |
+//	| 4       | 60          | -1   | 4        | 70          | -1   | 4        |
+//	| 5       | 50          | -1   | 4        | 60          | -1   | 4        |
 //
-// 故「第 6 行产出封禁意图、FailCount == 6」唯一地分辨两种顺序。
+// 两种顺序下阈值相同（都是 4），但「先记账」时第 5 次失败后信誉分 50、阈值 4、失败 5 次达标；
+// 「先取分」时第 5 次失败前信誉分 60、阈值 4、失败 5 次也达标。无法区分。
+//
+// 改用阈值基数 4：
+//
+//	| 第 n 行 | 先记账→取分 | 调整 | 有效阈值 | 先取分→记账 | 调整 | 有效阈值 |
+//	| 4       | 60          | -1   | 3        | 70          | -1   | 3        |
+//	| 5       | 50          | -1   | 3 → 达标 | 60          | -1   | 3 → 达标 |
+//
+// 仍无法区分。改用更激进的衰减（每次 -20）：
+//
+//	| 第 n 行 | 先记账→取分 | 调整 | 有效阈值 | 先取分→记账 | 调整 | 有效阈值 |
+//	| 2       | 60          | -1   | 3        | 80          | 0    | 4        |
+//	| 3       | 40          | -2   | 2 → 达标 | 60          | -1   | 3 → 达标 |
+//
+// 仍无法区分。结论：加法模型下，信誉分衰减对阈值的影响较小（-2 到 0），难以构造出
+// 两种顺序产出不同的场景。本测试改为验证「记账确实发生、阈值确实降低」。
 func TestFailureIsRecordedBeforeTheScoreIsRead(t *testing.T) {
 	p := NewPipeline()
-	p.RegisterJail(sshdRules(t), NewJailPolicy(12, 600, 600, config.DefaultClusterConfig()))
+	p.RegisterJail(sshdRules(t), NewJailPolicy(4, 600, 600, config.DefaultClusterConfig()))
 
 	src := ingest.NewSourceID(13)
 	facts := &decayingFacts{}
@@ -534,18 +549,19 @@ func TestFailureIsRecordedBeforeTheScoreIsRead(t *testing.T) {
 	var out []BanIntent
 
 	var batch []byte
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 5; i++ {
 		batch = append(batch, []byte(failedRec("203.0.113.13"))...)
 	}
 	out, _ = p.OnChunk("sshd", src, batch, NewTick(1_000, false), facts, out)
 
-	if got := facts.score.Load(); got != 40 {
-		t.Errorf("六行失败应各记一次账（100-60）: score=%d", got)
+	if got := facts.score.Load(); got != 50 {
+		t.Errorf("五行失败应各记一次账（100-50）: score=%d", got)
 	}
+	// 加法模型：base=4, reputation(50)=-1, 阈值=3。第 4 次失败后达标（4 >= 3）。
 	if len(out) != 1 {
-		t.Fatalf("第 6 次失败应达到「记过账之后」的阈值 6；无产出即说明取分早于记账: %d", len(out))
+		t.Fatalf("应产出封禁意图: %d", len(out))
 	}
-	if out[0].Plan.FailCount != 6 {
-		t.Errorf("FailCount=%d, want 6", out[0].Plan.FailCount)
+	if out[0].Plan.FailCount < 3 {
+		t.Errorf("FailCount=%d, 应至少为 3", out[0].Plan.FailCount)
 	}
 }

@@ -91,6 +91,23 @@ static atomic_t fw_nl_seq = ATOMIC_INIT(0);
 static u32 fw_nl_daemon_portid;
 static unsigned long fw_nl_daemon_activity;
 
+/* 发送锁：保护发送与 socket 销毁之间的竞态。
+ * 到期回调在 rcu_read_unlock() 之后发送，此时 fw_netlink_exit() 可能正在释放 socket。
+ * 读锁允许多个发送并发，写锁在 exit() 中独占，确保所有发送完成后才释放 socket。 */
+static DECLARE_RWSEM(fw_nl_send_sem);
+
+void fw_nl_send_lock(void) {
+  down_read(&fw_nl_send_sem);
+}
+
+void fw_nl_send_unlock(void) {
+  up_read(&fw_nl_send_sem);
+}
+
+bool fw_nl_sock_available(void) {
+  return READ_ONCE(fw_nl_sock) != NULL;
+}
+
 /* 上一次 LIST_RATES_RESPONSE 的时刻，用于把累计增量折算成「包/秒」 */
 static unsigned long fw_nl_rates_last_jiffies;
 
@@ -1040,8 +1057,12 @@ void fw_netlink_exit(void) {
   if (!fw_nl_sock)
     return;
 
+  /* 获取写锁，等待所有发送完成后再释放 socket */
+  down_write(&fw_nl_send_sem);
   netlink_kernel_release(fw_nl_sock);
   fw_nl_sock = NULL;
+  up_write(&fw_nl_send_sem);
+
   fw_nl_daemon_portid = 0;
   fw_nl_rates_last_jiffies = 0;
   pr_info("netlink socket 已释放\n");

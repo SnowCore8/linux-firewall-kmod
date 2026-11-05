@@ -64,6 +64,7 @@ func TestIsInternalAcceptsOnlyPrivateRanges(t *testing.T) {
 }
 
 func TestEffectiveThresholdScalesAndNeverReachesZero(t *testing.T) {
+	// 加法模型：base + peak(+2) + internal(+3) + reputation(-2/−1/0)
 	cases := []struct {
 		name       string
 		maxRetries uint32
@@ -73,14 +74,14 @@ func TestEffectiveThresholdScalesAndNeverReachesZero(t *testing.T) {
 		want       uint32
 	}{
 		{"基准", 3, false, false, 100, 3},
-		{"高峰 ×1.5", 3, true, false, 100, 5},
-		{"内网 ×2.0", 3, false, true, 100, 6},
-		{"高峰 + 内网 = ×3.0", 3, true, true, 100, 9},
-		{"信誉 50 档 ×0.8", 3, false, false, 50, 3},
-		{"信誉低档 ×0.5", 3, false, false, 0, 2},
-		{"低信誉 + 高峰 + 内网", 3, true, true, 0, 5},
+		{"高峰 +2", 3, true, false, 100, 5},
+		{"内网 +3", 3, false, true, 100, 6},
+		{"高峰 + 内网 = +5", 3, true, true, 100, 8},
+		{"信誉 50 档 -1", 3, false, false, 50, 2},
+		{"信誉低档 -2", 3, false, false, 0, 1},
+		{"低信誉 + 高峰 + 内网", 3, true, true, 0, 6},
 		{"阈值 0 仍至少为 1", 0, false, false, 100, 1},
-		{"阈值 1 且系数小于 1 时上取整为 1", 1, false, false, 0, 1},
+		{"阈值 1 且调整为负时至少为 1", 1, false, false, 0, 1},
 	}
 	for _, c := range cases {
 		got := EffectiveThreshold(c.maxRetries, c.peak, c.internal, c.score)
@@ -164,18 +165,18 @@ func TestPlanBanZeroBanTimeFallsBackToOneSecond(t *testing.T) {
 	}
 }
 
-func TestNewReputationAdjustment(t *testing.T) {
+func TestReputationAdjustment(t *testing.T) {
 	cases := map[uint32]int{
 		0: -2, 49: -2, 50: -1, 79: -1, 80: 0, 100: 0,
 	}
 	for score, want := range cases {
-		if got := NewReputationAdjustment(score); got != want {
-			t.Errorf("NewReputationAdjustment(%d)=%d, want %d", score, got, want)
+		if got := ReputationAdjustment(score); got != want {
+			t.Errorf("ReputationAdjustment(%d)=%d, want %d", score, got, want)
 		}
 	}
 }
 
-func TestNewEffectiveThresholdAdditiveModel(t *testing.T) {
+func TestEffectiveThresholdAdditiveModel(t *testing.T) {
 	cases := []struct {
 		name       string
 		maxRetries uint32
@@ -196,9 +197,9 @@ func TestNewEffectiveThresholdAdditiveModel(t *testing.T) {
 		{"最小阈值 1", 1, false, false, 0, 1},
 	}
 	for _, c := range cases {
-		got := NewEffectiveThreshold(c.maxRetries, c.peak, c.internal, c.score)
+		got := EffectiveThreshold(c.maxRetries, c.peak, c.internal, c.score)
 		if got != c.want {
-			t.Errorf("%s: NewEffectiveThreshold=%d, want %d", c.name, got, c.want)
+			t.Errorf("%s: EffectiveThreshold=%d, want %d", c.name, got, c.want)
 		}
 		if got == 0 {
 			t.Errorf("%s: 阈值不得为 0，否则封禁触发点无定义", c.name)
@@ -206,18 +207,18 @@ func TestNewEffectiveThresholdAdditiveModel(t *testing.T) {
 	}
 }
 
-// TestNewEffectiveThresholdFixesMultiplicativeBug 验证新加法模型修复了旧乘法 Bug。
+// TestEffectiveThresholdFixesMultiplicativeBug 验证新加法模型修复了旧乘法 Bug。
 //
 // 旧 Bug：内网(2.0) × 低信誉(0.5) = 1.0，导致内网低信誉 IP 与外网低信誉 IP 阈值相同。
 // 新模型：内网(+3) + 低信誉(-2) = +1，内网低信誉 IP 阈值高于外网低信誉 IP。
-func TestNewEffectiveThresholdFixesMultiplicativeBug(t *testing.T) {
+func TestEffectiveThresholdFixesMultiplicativeBug(t *testing.T) {
 	base := uint32(5)
 
 	// 外网低信誉
-	externalLowRep := NewEffectiveThreshold(base, false, false, 30)
+	externalLowRep := EffectiveThreshold(base, false, false, 30)
 
 	// 内网低信誉
-	internalLowRep := NewEffectiveThreshold(base, false, true, 30)
+	internalLowRep := EffectiveThreshold(base, false, true, 30)
 
 	if internalLowRep <= externalLowRep {
 		t.Errorf("内网低信誉 IP 阈值(%d)应大于外网低信誉 IP 阈值(%d)，否则 Bug 未修复",
@@ -252,7 +253,7 @@ func TestOldVsNewThresholdComparison(t *testing.T) {
 
 	for _, c := range cases {
 		oldVal := EffectiveThreshold(c.maxRetries, c.peak, c.internal, c.score)
-		newVal := NewEffectiveThreshold(c.maxRetries, c.peak, c.internal, c.score)
+		newVal := EffectiveThreshold(c.maxRetries, c.peak, c.internal, c.score)
 
 		t.Logf("%s: old=%d, new=%d, diff=%d", c.name, oldVal, newVal, int(newVal)-int(oldVal))
 

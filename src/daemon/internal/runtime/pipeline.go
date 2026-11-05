@@ -309,25 +309,13 @@ func (p *Pipeline) judgeLine(ctx *lineCtx, ip netip.Addr, via logparse.MatchVia,
 	// 顺序是语义的一部分：先记这次失败，再取分数算阈值（见 DecisionFacts）。
 	ctx.facts.RecordFailure(ip)
 
-	// 根据 feature flag 选择阈值计算模型
-	var threshold uint32
-	if ctx.facts.RiskEngineEnabled() {
-		// 新加法模型（修复旧乘法 Bug）
-		threshold = decision.NewEffectiveThreshold(
-			state.policy.MaxRetries,
-			ctx.tick.PeakHours,
-			decision.IsInternal(ip),
-			ctx.facts.ReputationScore(ip),
-		)
-	} else {
-		// 旧乘法模型（向后兼容）
-		threshold = decision.EffectiveThreshold(
-			state.policy.MaxRetries,
-			ctx.tick.PeakHours,
-			decision.IsInternal(ip),
-			ctx.facts.ReputationScore(ip),
-		)
-	}
+	// 使用加法模型计算阈值（修复旧乘法 Bug：内网×低信誉=1.0 导致系数抵消）
+	threshold := decision.EffectiveThreshold(
+		state.policy.MaxRetries,
+		ctx.tick.PeakHours,
+		decision.IsInternal(ip),
+		ctx.facts.ReputationScore(ip),
+	)
 
 	verdict := state.window.Observe(ip, ctx.tick.Now, state.policy.FindTime, threshold)
 	if !verdict.ReachedCap {

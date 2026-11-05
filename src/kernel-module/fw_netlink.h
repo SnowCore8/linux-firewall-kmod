@@ -23,6 +23,16 @@
 int fw_netlink_init(void);
 void fw_netlink_exit(void);
 
+/* 发送锁：保护发送与 socket 销毁之间的竞态。
+ * 到期回调在 rcu_read_unlock() 之后发送，此时 fw_netlink_exit() 可能正在释放 socket。
+ * 读锁允许多个发送并发，写锁在 exit() 中独占，确保所有发送完成后才释放 socket。 */
+void fw_nl_send_lock(void);
+void fw_nl_send_unlock(void);
+
+/* 检查 netlink socket 是否可用（非 NULL）。
+ * 必须在持有 fw_nl_send_lock() 时调用，防止检查后 socket 被释放。 */
+bool fw_nl_sock_available(void);
+
 /* ---- 事件（多播，守护进程订阅）---- */
 
 /* DdosEvent：内核自决封禁时推送，rate_pps 为触发时的速率 */
