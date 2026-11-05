@@ -39,6 +39,7 @@ mkdir -p "$BUILD_DIR"
 # 仅编译守护进程（内核模块由 DKMS 在安装时编译）
 echo "编译守护进程..."
 make -C "$PROJECT_ROOT" clean
+make -C "$PROJECT_ROOT" contract
 make -C "$PROJECT_ROOT" daemon
 
 # P2-8: 使用 make install DESTDIR= 复用安装逻辑
