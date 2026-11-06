@@ -174,14 +174,16 @@ export default function Whitelist() {
       try {
         const res = await addWhitelist({ cidr })
         message.success(`已加白：${res.cidr}`)
+        // 主列表新增该条；推荐区里它已不再是「未加白的高频封禁」，一并重取移除
         refetchMain()
+        refetchRecs()
       } catch (err) {
         message.error(errText(err, '加白失败'))
       } finally {
         setAddingCidr(null)
       }
     },
-    [message, refetchMain],
+    [message, refetchMain, refetchRecs],
   )
 
   // 顶栏/命令面板广播的「刷新当前页」：主列表与推荐区一起刷
