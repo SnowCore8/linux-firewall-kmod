@@ -50,6 +50,9 @@ import type { ThreatFeedResponse, ThreatFeedSyncResult } from '../api/types.ts'
  * 源的旧数据闪现在新抽屉里。
  */
 
+/** 列表低频轮询：后台定时同步后，条目数/同步状态/"x 分钟前同步"要能自己跟上。 */
+const FEEDS_POLL_MS = 60_000
+
 /** 后端 sync_status 的已知取值（见 daemon threat_feeds.go：never / ok / error）。 */
 const SYNC_STATUS_META: Record<string, { label: string; color: string }> = {
   ok: { label: '正常', color: 'green' },
@@ -154,7 +157,7 @@ export default function ThreatFeeds() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   // --- 列表加载 ---
-  const query = useAsync((signal) => getThreatFeeds(signal))
+  const query = useAsync((signal) => getThreatFeeds(signal), { refreshInterval: FEEDS_POLL_MS })
   const { data, error, isLoading, isRefreshing, refetch } = query
 
   // refetch 存进 ref：深链同步等长活回调不必依赖其身份
