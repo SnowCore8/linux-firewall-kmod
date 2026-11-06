@@ -180,24 +180,6 @@ export function CommandPalette({ open, onClose, onRefresh }: CommandPaletteProps
     el?.scrollIntoView({ block: 'nearest' })
   }, [active, filtered.length])
 
-  const runActive = () => {
-    const cmd = filtered[active]
-    if (cmd) cmd.run()
-  }
-
-  const onKeyDown = (e: ReactKeyboardEvent) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      setActive((i) => (filtered.length === 0 ? 0 : (i + 1) % filtered.length))
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      setActive((i) => (filtered.length === 0 ? 0 : (i - 1 + filtered.length) % filtered.length))
-    } else if (e.key === 'Enter') {
-      e.preventDefault()
-      runActive()
-    }
-  }
-
   // 按 group 分段渲染
   const grouped = useMemo(() => {
     const order: string[] = []
@@ -211,6 +193,29 @@ export function CommandPalette({ open, onClose, onRefresh }: CommandPaletteProps
     }
     return order.map((g) => ({ group: g, items: map.get(g)! }))
   }, [filtered])
+
+  // 渲染顺序 = 分组后展平。选中态、Enter 执行、aria-activedescendant 都必须用这个顺序：
+  // 同组项在按分数排序的 filtered 里可能不连续，分组会把它们聚拢，两个顺序就此错位——
+  // 若仍用 filtered[active] 执行，Enter 会跑到另一条命令上（防火墙控制台里可能误触登出/封禁）。
+  const ordered = useMemo(() => grouped.flatMap((s) => s.items), [grouped])
+
+  const runActive = () => {
+    const cmd = ordered[active]
+    if (cmd) cmd.run()
+  }
+
+  const onKeyDown = (e: ReactKeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setActive((i) => (ordered.length === 0 ? 0 : (i + 1) % ordered.length))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setActive((i) => (ordered.length === 0 ? 0 : (i - 1 + ordered.length) % ordered.length))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      runActive()
+    }
+  }
 
   let flatIndex = -1
 
@@ -245,7 +250,7 @@ export function CommandPalette({ open, onClose, onRefresh }: CommandPaletteProps
           aria-haspopup="listbox"
           aria-autocomplete="list"
           aria-activedescendant={
-            filtered.length > 0 ? `fw-cmd-option-${Math.min(active, filtered.length - 1)}` : undefined
+            ordered.length > 0 ? `fw-cmd-option-${Math.min(active, ordered.length - 1)}` : undefined
           }
         />
       </div>
