@@ -15,6 +15,7 @@ import {
 } from 'antd'
 import { ReloadOutlined, SaveOutlined, UndoOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
+import { useBlocker } from 'react-router-dom'
 import { PageHeader } from '../components/PageHeader.tsx'
 import { LoadingState } from '../components/state/LoadingState.tsx'
 import { ErrorState } from '../components/state/ErrorState.tsx'
@@ -263,7 +264,7 @@ function healthItems(snap: RuntimeSnapshot) {
 }
 
 export default function Settings() {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const [form] = Form.useForm<SettingsFormValues>()
   const [dirty, setDirty] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -288,6 +289,31 @@ export default function Settings() {
     if (!base) return
     setDirty(Object.keys(buildDiff(form.getFieldsValue(), base)).length > 0)
   }, [config.data, form])
+
+  // 表单脏时拦截站内导航：确认弹窗决定丢弃离开还是留在本页
+  const blocker = useBlocker(dirty)
+  useEffect(() => {
+    if (blocker.state !== 'blocked') return
+    modal.confirm({
+      title: '放弃未保存的修改？',
+      content: '设置表单有未保存的修改，离开本页将丢弃这些更改。',
+      okText: '放弃并离开',
+      okButtonProps: { danger: true },
+      cancelText: '留在本页',
+      onOk: () => blocker.proceed(),
+      onCancel: () => blocker.reset(),
+    })
+  }, [blocker, modal])
+
+  // 表单脏时拦截浏览器刷新/关闭（beforeunload 只能触发浏览器通用确认，文案不可定制）
+  useEffect(() => {
+    if (!dirty) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [dirty])
 
   const handleValuesChange = (_changed: Partial<SettingsFormValues>, all: SettingsFormValues): void => {
     const base = config.data
