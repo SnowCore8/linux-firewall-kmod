@@ -20,19 +20,16 @@
  *      当成外来地址参与封禁。
  *   2. **状态保存必须在全表清理之前**（fw_state_save() 要读封禁表与白名单表）。
  *   3. **netlink 最后销毁**：前面每一步都可能推送事件（ban 到期回调在
- *      rcu_read_unlock() 之后调 fw_nl_send_*；发送函数以 fw_nl_sock 是否为
- *      NULL 作为唯一保护）。
+ *      rcu_read_unlock() 之后调 fw_nl_send_*，与销毁之间的互斥见下）。
  *
  * 本文件不复用旧实现的 get_fw_info() / is_banned() / is_permanently_banned()
  * 三个导出：新代码不导出任何符号（模块内自足），故删除（设计文档「本次新查出
  * 的稳定性问题 3」）。
  *
- * 遗留风险（本轮未修，需在 1.2d/1.2e 定夺）：fw_ban 的到期回调在
- * rcu_read_unlock() 之后推送事件，而 fw_ban_exit() 的 synchronize_rcu() +
- * rcu_barrier() 只保证「临界区内」的部分结束。理论上存在一个极窄窗口：回调已
- * 离开临界区、尚未进入 netlink_broadcast()，此时 fw_netlink_exit() 释放 socket
- * ⇒ 回调访问已释放对象。旧实现（cleanup.c/netlink.c）有同样的窗口。彻底修法
- * 是给发送/销毁加一把共用的读写锁，属独立改动。
+ * ban 到期回调在 rcu_read_unlock() 之后仍会推送事件，而 fw_ban_exit() 的
+ * synchronize_rcu() + rcu_barrier() 只保证「临界区内」的部分结束；发送与销毁因此
+ * 由 fw_nl_send_sem 读写锁互斥——回调发送持读锁并双检 fw_nl_sock 非空（fw_ban.c），
+ * fw_netlink_exit() 持写锁独占后才释放 socket（fw_netlink.c），发送不会撞上已释放对象。
  */
 
 #define pr_fmt(fmt) "firewall: " fmt
