@@ -444,14 +444,14 @@ export default function ThreatFeeds() {
           >
             <StatCard
               label="情报源总数"
-              value={formatNumber(stats?.total ?? 0)}
+              value={stats ? formatNumber(stats.total) : '—'}
               icon={CloudDownloadOutlined}
               footer="配置中登记的全部情报源（含未启用）"
               loading={cardsLoading}
             />
             <StatCard
               label="已启用"
-              value={formatNumber(stats?.enabledCount ?? 0)}
+              value={stats ? formatNumber(stats.enabledCount) : '—'}
               icon={CheckCircleOutlined}
               tone="success"
               footer="参与自动拉取与判定的情报源"
@@ -459,7 +459,7 @@ export default function ThreatFeeds() {
             />
             <StatCard
               label="累计条目"
-              value={formatNumber(stats?.entrySum ?? 0)}
+              value={stats ? formatNumber(stats.entrySum) : '—'}
               icon={DatabaseOutlined}
               tone="info"
               footer="各源当前缓存的恶意 IP 条目之和"
@@ -467,7 +467,7 @@ export default function ThreatFeeds() {
             />
             <StatCard
               label="同步异常"
-              value={formatNumber(stats?.errorCount ?? 0)}
+              value={stats ? formatNumber(stats.errorCount) : '—'}
               icon={WarningOutlined}
               tone={(stats?.errorCount ?? 0) > 0 ? 'danger' : 'default'}
               footer="最近一次同步报错的情报源"

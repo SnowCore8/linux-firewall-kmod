@@ -270,7 +270,7 @@ export default function Jails() {
       >
         <StatCard
           label="规则总数"
-          value={formatNumber(derived.total)}
+          value={jails ? formatNumber(derived.total) : '—'}
           icon={ProfileOutlined}
           tone="info"
           loading={cardsLoading}
@@ -278,15 +278,15 @@ export default function Jails() {
         />
         <StatCard
           label="已启用"
-          value={formatNumber(derived.enabled)}
+          value={jails ? formatNumber(derived.enabled) : '—'}
           icon={CheckCircleOutlined}
           tone="success"
           loading={cardsLoading}
-          footer={`停用 ${formatNumber(Math.max(derived.total - derived.enabled, 0))} 条`}
+          footer={jails ? `停用 ${formatNumber(Math.max(derived.total - derived.enabled, 0))} 条` : '—'}
         />
         <StatCard
           label="累计触发封禁"
-          value={formatNumber(derived.bansTriggered)}
+          value={jails ? formatNumber(derived.bansTriggered) : '—'}
           icon={ThunderboltOutlined}
           tone="danger"
           loading={cardsLoading}
@@ -294,7 +294,7 @@ export default function Jails() {
         />
         <StatCard
           label="累计失败尝试"
-          value={formatNumber(derived.failedAttempts)}
+          value={jails ? formatNumber(derived.failedAttempts) : '—'}
           icon={WarningOutlined}
           tone="warning"
           loading={cardsLoading}
