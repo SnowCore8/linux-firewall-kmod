@@ -279,12 +279,20 @@ export default function Dashboard() {
                 </Typography.Link>
               }
             >
-              <BaseChart
-                option={topOption}
-                height={240}
-                empty={(topAttackers.data?.top_recidivists.length ?? 0) === 0}
-                loading={topAttackers.isLoading}
-              />
+              {topAttackers.data == null ? (
+                topAttackers.error ? (
+                  <ErrorState error={topAttackers.error} onRetry={topAttackers.refetch} />
+                ) : (
+                  <LoadingState variant="chart" />
+                )
+              ) : (
+                <BaseChart
+                  option={topOption}
+                  height={240}
+                  empty={topAttackers.data.top_recidivists.length === 0}
+                  loading={topAttackers.isRefreshing}
+                />
+              )}
             </ChartCard>
           </div>
         </Flex>
