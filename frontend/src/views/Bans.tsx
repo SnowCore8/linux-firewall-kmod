@@ -201,13 +201,15 @@ export default function Bans() {
 
   // --- 处置动作 ---
   const handleUnban = useCallback(
-    async (ip: string) => {
+    async (ip: string): Promise<boolean> => {
       try {
         const res = await deleteBan(ip)
         message.success(`已解封 ${res.ip}`)
         refetchRef.current()
+        return true
       } catch (err) {
         message.error(errorMessage(err))
+        return false
       }
     },
     [message],
@@ -652,8 +654,8 @@ export default function Bans() {
 interface BanDetailDrawerProps {
   ip: string
   onClose: () => void
-  /** 解封成功后回调（父级负责 message 与列表重取）；抽屉随即关闭。 */
-  onUnban: (ip: string) => Promise<void>
+  /** 解封动作（父级负责 message 与列表重取）；返回是否成功，成功时抽屉才关闭。 */
+  onUnban: (ip: string) => Promise<boolean>
 }
 
 function BanDetailDrawer({ ip, onClose, onUnban }: BanDetailDrawerProps) {
@@ -717,8 +719,7 @@ function BanDetailDrawer({ ip, onClose, onUnban }: BanDetailDrawerProps) {
             okButtonProps={{ danger: true }}
             cancelText="取消"
             onConfirm={async () => {
-              await onUnban(ip)
-              onClose()
+              if (await onUnban(ip)) onClose()
             }}
           >
             <Button danger disabled={!detail.data}>
