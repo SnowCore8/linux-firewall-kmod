@@ -10,6 +10,9 @@ import { isPageVisible } from '../lib/visibility.ts'
  *     旧请求即便晚到也被丢弃，组件卸载则中断在途请求（`aborted` 错误被吞掉不置错）。
  *   * 三态区分：`isLoading`（首屏、尚无数据）/ `isRefreshing`（有数据、后台再取）/
  *     `isStale`（持有旧数据但这次失败了）——骨架屏只在 isLoading 出，避免刷新时闪空。
+ *   * 前台 / 后台取数分离：`isUserFetching` 只在首屏、手动刷新、翻页时为真；内部轮询与
+ *     可见性补取走 `refetchSilent`，不置此位。表格遮罩绑 `isUserFetching`，于是后台轮询
+ *     静默换数据、不会用 loading 遮罩（pointer-events:none）挡住用户点击。
  *   * 轮询：`refreshInterval` 到点自动重取，`pauseWhenHidden` 时页面不可见则暂停，
  *     回到前台立即补一次，省得后台标签页空跑请求。
  */
@@ -19,8 +22,10 @@ export interface AsyncState<T> {
   error: ApiError | null
   /** 首屏加载中（还没有任何数据）。 */
   isLoading: boolean
-  /** 有一次请求在途（含刷新）。 */
+  /** 有一次请求在途（含后台轮询）。 */
   isRefreshing: boolean
+  /** 仅「前台取数」在途：首屏、手动刷新、翻页。后台轮询不置此位。 */
+  isUserFetching: boolean
   /** 持有旧数据但最近一次刷新失败。 */
   isStale: boolean
   /** 最近一次成功写入数据的时刻（ms epoch）；0 表示从未成功。 */
@@ -39,8 +44,10 @@ export interface UseAsyncOptions {
 }
 
 export interface UseAsyncResult<T> extends AsyncState<T> {
-  /** 手动重取（工具条刷新、命令面板、失败重试共用）。 */
+  /** 手动重取（工具条刷新、命令面板、失败重试共用）；视为前台取数，会置 isUserFetching。 */
   refetch: () => void
+  /** 静默重取（SSE 帧驱动、内部轮询）；只更新数据，不触发前台加载态与表格遮罩。 */
+  refetchSilent: () => void
   /** 就地改数据（乐观更新 / SSE 帧喂入）；不动 error 与 loading。 */
   setData: (updater: T | ((prev: T | null) => T | null)) => void
   /** 清空错误（用户在错误态里点了「知道了」）。 */
@@ -53,6 +60,7 @@ function initialState<T>(): AsyncState<T> {
     error: null,
     isLoading: false,
     isRefreshing: false,
+    isUserFetching: false,
     isStale: false,
     lastUpdatedAt: 0,
   }
@@ -73,6 +81,7 @@ export function useAsync<T>(
     ...initialState<T>(),
     isLoading: enabled && immediate,
     isRefreshing: enabled && immediate,
+    isUserFetching: enabled && immediate,
   }))
 
   // fetcher 每渲染都是新函数；存进 ref 由 run 读，避免把它列进 effect 依赖导致每次渲染重取。
@@ -106,14 +115,16 @@ export function useAsync<T>(
       timerRef.current = null
       // 页面不可见时不空跑，改为等可见性恢复时补取（见下方 visibilitychange）
       if (pauseWhenHidden && !isPageVisible()) return
-      void run()
+      // 轮询是后台行为：静默重取，不置 isUserFetching，避免表格遮罩挡住点击
+      void run({ silent: true })
     }, refreshInterval)
     // run 在下面声明；这里用函数提升引用它
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshInterval, enabled, pauseWhenHidden, clearTimer])
 
-  const run = useCallback(() => {
+  const run = useCallback((opts?: { silent?: boolean }) => {
     if (!enabled) return
+    const silent = opts?.silent ?? false
     const id = ++runIdRef.current
     // 中断上一次在途请求
     abortRef.current?.abort()
@@ -127,6 +138,8 @@ export function useAsync<T>(
         error: null,
         isLoading: startedWithNoData,
         isRefreshing: true,
+        // 前台取数才置 isUserFetching；后台轮询（silent）保持原值不动
+        isUserFetching: silent ? prev.isUserFetching : true,
       }))
     }
 
@@ -140,6 +153,7 @@ export function useAsync<T>(
           error: null,
           isLoading: false,
           isRefreshing: false,
+          isUserFetching: false,
           isStale: false,
           lastUpdatedAt: Date.now(),
         })
@@ -154,6 +168,7 @@ export function useAsync<T>(
           error: apiErr,
           isLoading: false,
           isRefreshing: false,
+          isUserFetching: false,
           isStale: hasDataRef.current,
         }))
       })
@@ -191,7 +206,8 @@ export function useAsync<T>(
   useEffect(() => {
     if (refreshInterval <= 0 || !pauseWhenHidden || !enabled) return
     const onVisible = () => {
-      if (isPageVisible()) run()
+      // 回到前台补取属于后台校准，静默进行，不打断用户当前操作
+      if (isPageVisible()) run({ silent: true })
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
@@ -200,6 +216,10 @@ export function useAsync<T>(
 
   const refetch = useCallback(() => {
     run()
+  }, [run])
+
+  const refetchSilent = useCallback(() => {
+    run({ silent: true })
   }, [run])
 
   const setData = useCallback<UseAsyncResult<T>['setData']>((updater) => {
@@ -217,5 +237,5 @@ export function useAsync<T>(
     setState((prev) => ({ ...prev, error: null, isStale: false }))
   }, [])
 
-  return { ...state, refetch, setData, clearError }
+  return { ...state, refetch, refetchSilent, setData, clearError }
 }

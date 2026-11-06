@@ -68,6 +68,7 @@ export default function Jails() {
     value: jails,
     isLoading,
     isRefreshing,
+    isUserFetching,
     error,
     refetch,
   } = live
@@ -304,7 +305,7 @@ export default function Jails() {
       <DataTable<JailResponse>
         data={jails}
         isLoading={isLoading}
-        isRefreshing={isRefreshing}
+        isFetching={isUserFetching}
         error={error}
         onRetry={refetch}
         rowKey="name"

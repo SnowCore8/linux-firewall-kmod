@@ -281,7 +281,7 @@ export default function Risk() {
           <DataTable<RiskVectorResponse>
             data={vectors}
             isLoading={query.isLoading}
-            isRefreshing={query.isRefreshing}
+            isFetching={query.isUserFetching}
             error={null}
             rowKey="ip"
             columns={columns}
@@ -455,7 +455,7 @@ function RiskDetailDrawer({ ip, onClose }: RiskDetailDrawerProps) {
             <DataTable<RiskEventEntry>
               data={events.data ? events.data.events : null}
               isLoading={events.isLoading}
-              isRefreshing={events.isRefreshing}
+              isFetching={events.isUserFetching}
               error={events.error}
               onRetry={events.refetch}
               rowKey="id"

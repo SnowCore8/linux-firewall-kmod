@@ -38,6 +38,8 @@ export interface LiveDataResult<T> {
   source: LiveSource
   isLoading: boolean
   isRefreshing: boolean
+  /** 仅前台取数（首屏 / 手动刷新 / 翻页）在途；后台轮询与可见性补取不置此位。 */
+  isUserFetching: boolean
   isStale: boolean
   error: ApiError | null
   lastUpdatedAt: number
@@ -68,6 +70,7 @@ export function useLiveData<T>(options: LiveDataOptions<T>): LiveDataResult<T> {
     source: winner == null ? null : winner === sseStamped ? 'sse' : 'rest',
     isLoading: query.isLoading && winner == null,
     isRefreshing: query.isRefreshing,
+    isUserFetching: query.isUserFetching,
     isStale: query.isStale,
     error: query.error,
     lastUpdatedAt: query.lastUpdatedAt,

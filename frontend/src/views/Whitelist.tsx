@@ -97,6 +97,7 @@ export default function Whitelist() {
     value: entries,
     isLoading: mainLoading,
     isRefreshing: mainRefreshing,
+    isUserFetching: mainUserFetching,
     error: mainError,
     refetch: refetchMain,
   } = live
@@ -339,7 +340,7 @@ export default function Whitelist() {
         <DataTable<WhitelistEntry>
           data={entries}
           isLoading={mainLoading}
-          isRefreshing={mainRefreshing}
+          isFetching={mainUserFetching}
           error={mainError}
           onRetry={refetchMain}
           rowKey="cidr"

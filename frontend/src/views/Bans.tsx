@@ -117,6 +117,9 @@ function batchResultNode(res: BatchOperationResponse): ReactNode {
   )
 }
 
+/** SSE bans 帧驱动重取的最短间隔（ms）：突发时前沿立即取、尾沿补一次，中间高频帧丢弃。 */
+const SSE_REFETCH_MIN_MS = 2000
+
 export default function Bans() {
   const { message, notification } = App.useApp()
   const navigate = useNavigate()
@@ -138,6 +141,9 @@ export default function Bans() {
   // refetch 存进 ref：让列定义、SSE 帧、深链处理等长活回调不必依赖其身份
   const refetchRef = useRef(query.refetch)
   refetchRef.current = query.refetch
+  // SSE 帧驱动的静默重取：不置 isUserFetching，不弹表格遮罩
+  const refetchSilentRef = useRef(query.refetchSilent)
+  refetchSilentRef.current = query.refetchSilent
 
   // 翻页/改页长/换排序 → 重取（首屏由 useAsync immediate 负责，这里跳过第一次）
   const mountedRef = useRef(false)
@@ -150,10 +156,35 @@ export default function Bans() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, pageSize, sortBy])
 
-  // SSE bans 域来帧（全表镜像）→ 不拼进分页表，只重取当前页
+  // SSE 帧节流状态：上次真正重取的时刻 + 待触发的尾沿定时器
+  const lastSseRefetchRef = useRef(0)
+  const sseTrailingRef = useRef<number | null>(null)
+
+  // SSE bans 域来帧（全表镜像）→ 不拼进分页表，只静默重取当前页。
+  // 封禁风暴时帧很密，节流到最短 SSE_REFETCH_MIN_MS 一次并保留尾沿：
+  // 前沿立即取一次，突发末尾再补一次，中间的高频帧被丢弃，避免请求风暴与遮罩闪烁。
   useEffect(() => {
-    if (bansSeq > 0) refetchRef.current()
+    if (bansSeq <= 0) return
+    const elapsed = Date.now() - lastSseRefetchRef.current
+    if (elapsed >= SSE_REFETCH_MIN_MS) {
+      lastSseRefetchRef.current = Date.now()
+      refetchSilentRef.current()
+    } else if (sseTrailingRef.current == null) {
+      sseTrailingRef.current = window.setTimeout(() => {
+        sseTrailingRef.current = null
+        lastSseRefetchRef.current = Date.now()
+        refetchSilentRef.current()
+      }, SSE_REFETCH_MIN_MS - elapsed)
+    }
   }, [bansSeq])
+
+  // 卸载时清掉未触发的尾沿定时器
+  useEffect(
+    () => () => {
+      if (sseTrailingRef.current != null) window.clearTimeout(sseTrailingRef.current)
+    },
+    [],
+  )
 
   // 命令面板「刷新当前页」
   useRefreshSignal(() => refetchRef.current())
@@ -462,7 +493,7 @@ export default function Bans() {
       <DataTable<BanResponse>
         data={query.data ? query.data.items : null}
         isLoading={query.isLoading}
-        isRefreshing={query.isRefreshing}
+        isFetching={query.isUserFetching}
         error={query.error}
         onRetry={query.refetch}
         rowKey="ip"

@@ -158,7 +158,7 @@ export default function ThreatFeeds() {
 
   // --- 列表加载 ---
   const query = useAsync((signal) => getThreatFeeds(signal), { refreshInterval: FEEDS_POLL_MS })
-  const { data, error, isLoading, isRefreshing, refetch } = query
+  const { data, error, isLoading, isRefreshing, isUserFetching, refetch } = query
 
   // refetch 存进 ref：深链同步等长活回调不必依赖其身份
   const refetchRef = useRef(refetch)
@@ -476,7 +476,7 @@ export default function ThreatFeeds() {
           <DataTable<ThreatFeedResponse>
             data={feeds}
             isLoading={isLoading}
-            isRefreshing={isRefreshing}
+            isFetching={isUserFetching}
             error={error}
             onRetry={refetch}
             rowKey="id"

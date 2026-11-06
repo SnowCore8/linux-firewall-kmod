@@ -764,7 +764,7 @@ function PeriodicSection({ result, onOpenIp }: PeriodicSectionProps) {
     <DataTable<PeriodicAttacker>
       data={result.data}
       isLoading={result.isLoading}
-      isRefreshing={result.isRefreshing}
+      isFetching={result.isUserFetching}
       error={result.error}
       onRetry={result.refetch}
       columns={columns}
@@ -853,7 +853,7 @@ function CollabSection({ result, onOpenIp }: CollabSectionProps) {
     <DataTable<CollaborativeAttack>
       data={result.data}
       isLoading={result.isLoading}
-      isRefreshing={result.isRefreshing}
+      isFetching={result.isUserFetching}
       error={result.error}
       onRetry={result.refetch}
       columns={columns}
@@ -1038,7 +1038,7 @@ function ReputationSection({ result, onOpenIp }: ReputationSectionProps) {
     <DataTable<ReputationEntryResponse>
       data={result.data}
       isLoading={result.isLoading}
-      isRefreshing={result.isRefreshing}
+      isFetching={result.isUserFetching}
       error={result.error}
       onRetry={result.refetch}
       rowKey="ip"
