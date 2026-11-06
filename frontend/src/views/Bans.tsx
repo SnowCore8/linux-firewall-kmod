@@ -128,7 +128,7 @@ const SSE_REFETCH_MIN_MS = 2000
 function RemainingCell({ record, fetchedAt }: { record: BanResponse; fetchedAt: number }) {
   const compute = useCallback(() => {
     const elapsed = Math.max(0, Math.floor((Date.now() - fetchedAt) / 1000))
-    return record.remaining_seconds - elapsed
+    return Math.max(0, record.remaining_seconds - elapsed)
   }, [fetchedAt, record.remaining_seconds])
 
   const [remaining, setRemaining] = useState(compute)
