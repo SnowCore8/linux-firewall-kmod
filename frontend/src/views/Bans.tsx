@@ -120,6 +120,42 @@ function batchResultNode(res: BatchOperationResponse): ReactNode {
 /** SSE bans 帧驱动重取的最短间隔（ms）：突发时前沿立即取、尾沿补一次，中间高频帧丢弃。 */
 const SSE_REFETCH_MIN_MS = 2000
 
+/**
+ * 「剩余」单元：remaining_seconds 是取数时刻的快照，本地按墙钟每秒扣减。
+ * 自持 1s 定时器，永久封禁或倒计时归零后停表——把每秒重渲染收敛到单个单元，
+ * 不再让整张封禁表（含图表、抽屉）随页面级 now 一起每秒重绘。
+ */
+function RemainingCell({ record, fetchedAt }: { record: BanResponse; fetchedAt: number }) {
+  const compute = useCallback(() => {
+    const elapsed = Math.max(0, Math.floor((Date.now() - fetchedAt) / 1000))
+    return record.remaining_seconds - elapsed
+  }, [fetchedAt, record.remaining_seconds])
+
+  const [remaining, setRemaining] = useState(compute)
+
+  // 取数刷新（fetchedAt / remaining_seconds 变化）时把倒计时对齐到新快照
+  useEffect(() => {
+    setRemaining(compute())
+  }, [compute])
+
+  // 归零或已过期后停表；否则每秒扣减一次
+  const ticking = !record.is_permanent && remaining > 0
+  useEffect(() => {
+    if (!ticking) return
+    const id = window.setInterval(() => setRemaining(compute()), 1000)
+    return () => window.clearInterval(id)
+  }, [ticking, compute])
+
+  if (record.is_permanent) return <Tag color="red">永久</Tag>
+  return remaining > 0 ? (
+    <span className="fw-mono">{formatDuration(remaining)}</span>
+  ) : (
+    <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+      已到期
+    </Typography.Text>
+  )
+}
+
 export default function Bans() {
   const { message, notification } = App.useApp()
   const navigate = useNavigate()
@@ -188,18 +224,6 @@ export default function Bans() {
 
   // 命令面板「刷新当前页」
   useRefreshSignal(() => refetchRef.current())
-
-  // 「剩余」列倒计时：remaining_seconds 是取数时刻的快照，本地按墙钟扣减、每秒刷新渲染，
-  // SSE 断连且未轮询时倒计时不再冻结。仅当前页存在临时封禁时才起表。
-  const [now, setNow] = useState(() => Date.now())
-  const hasCountdown = (query.data?.items ?? []).some(
-    (b) => !b.is_permanent && b.remaining_seconds > 0,
-  )
-  useEffect(() => {
-    if (!hasCountdown) return
-    const id = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(id)
-  }, [hasCountdown])
 
   // --- 抽屉与深链 ---
   const [detailIp, setDetailIp] = useState<string | null>(null)
@@ -392,18 +416,9 @@ export default function Bans() {
         dataIndex: 'remaining_seconds',
         key: 'remaining_seconds',
         width: 110,
-        render: (_: unknown, record: BanResponse) => {
-          if (record.is_permanent) return <Tag color="red">永久</Tag>
-          const elapsed = Math.max(0, Math.floor((now - query.lastUpdatedAt) / 1000))
-          const remaining = record.remaining_seconds - elapsed
-          return remaining > 0 ? (
-            <span className="fw-mono">{formatDuration(remaining)}</span>
-          ) : (
-            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-              已到期
-            </Typography.Text>
-          )
-        },
+        render: (_: unknown, record: BanResponse) => (
+          <RemainingCell record={record} fetchedAt={query.lastUpdatedAt} />
+        ),
       },
       {
         title: '累计封禁',
@@ -437,7 +452,7 @@ export default function Bans() {
         ),
       },
     ],
-    [openDetail, handleUnban, now, query.lastUpdatedAt],
+    [openDetail, handleUnban, query.lastUpdatedAt],
   )
 
   return (
