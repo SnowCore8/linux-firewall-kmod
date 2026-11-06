@@ -435,10 +435,12 @@ function LivePanel(props: LivePanelProps) {
         </Typography.Text>
       )}
 
+      {/* role="log" 已隐含 aria-live="polite"；高频日志流下读屏器会逐条播报形成轰炸，
+          故显式关掉自动播报——区域仍可被读屏器导航访问，只是不再每来一条就打断用户 */}
       <div
         ref={viewerRef}
         role="log"
-        aria-live="polite"
+        aria-live="off"
         aria-label="实时日志流"
         style={{
           height: 'calc(100vh - 260px)',
