@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Badge, Button, Empty, Flex, List, Popover, Space, Tag, Tooltip, Typography } from 'antd'
+import { Badge, Button, Empty, Flex, List, Popconfirm, Popover, Space, Tag, Tooltip, Typography } from 'antd'
 import { BellOutlined, CheckOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useNotify, type NoticeItem, type NoticeType } from '../providers/NotificationProvider.tsx'
@@ -97,15 +97,23 @@ export function NotificationCenter() {
               disabled={unreadCount === 0}
             />
           </Tooltip>
-          <Tooltip title="清空">
+          <Popconfirm
+            title="清空全部通知？"
+            description="将移除列表中的所有通知，此操作不可撤销。"
+            okText="清空"
+            okButtonProps={{ danger: true }}
+            cancelText="取消"
+            onConfirm={clear}
+            disabled={items.length === 0}
+          >
             <Button
               size="small"
               type="text"
               icon={<DeleteOutlined />}
-              onClick={clear}
               disabled={items.length === 0}
+              aria-label="清空全部通知"
             />
-          </Tooltip>
+          </Popconfirm>
         </Space>
       </Flex>
       <div style={{ maxHeight: 420, overflowY: 'auto' }}>
