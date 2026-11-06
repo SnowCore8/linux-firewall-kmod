@@ -19,6 +19,7 @@ import { StaleNotice } from '../components/state/StaleNotice.tsx'
 import { useLiveData } from '../hooks/useLiveData.ts'
 import { useAsync } from '../hooks/useAsync.ts'
 import { useRefreshSignal } from '../hooks/useRefreshSignal.ts'
+import { useIsBelow } from '../hooks/useMediaQuery.ts'
 import { useSse, useSseDomain } from '../providers/SseProvider.tsx'
 import { getStats, getRecidivism } from '../api/endpoints.ts'
 import { formatNumber, formatUptime } from '../lib/format.ts'
@@ -42,6 +43,7 @@ const STAT_POLL_MS = 30_000
 export default function Dashboard() {
   const navigate = useNavigate()
   const base = useChartBase()
+  const isNarrow = useIsBelow('md')
   const sseSnap = useSse()
   const statsDomain = useSseDomain('stats')
 
@@ -153,7 +155,7 @@ export default function Dashboard() {
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'minmax(280px, 1fr) 2fr',
+              gridTemplateColumns: isNarrow ? '1fr' : 'minmax(280px, 1fr) 2fr',
               gap: 16,
             }}
           >
@@ -172,7 +174,7 @@ export default function Dashboard() {
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))',
                 gap: 12,
                 alignContent: 'start',
               }}
@@ -215,7 +217,7 @@ export default function Dashboard() {
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 100%), 1fr))',
               gap: 16,
             }}
           >
@@ -238,7 +240,7 @@ export default function Dashboard() {
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(min(360px, 100%), 1fr))',
               gap: 16,
             }}
           >
@@ -259,7 +261,7 @@ export default function Dashboard() {
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))',
               gap: 16,
             }}
           >
