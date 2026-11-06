@@ -81,6 +81,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (prev <= 1) {
           clearLockoutTimer()
           setFailCount(0)
+          // 锁定到期：清掉「已锁定」残留提示，还给用户一个干净的登录表单
+          setError(null)
           return 0
         }
         return prev - 1
@@ -118,11 +120,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setStatus('authenticated')
         return true
       } catch (err) {
-        // 探测失败：清掉刚写的令牌，按失败计数推进，达阈值则本地锁定
+        // 探测失败：清掉刚写的令牌
         clearAccessToken()
-        const next = failCountRef.current + 1
-        setFailCount(next)
         if (err instanceof ApiError && err.isUnauthorized) {
+          // 仅凭据错误（401）计入失败次数；网络/服务端错误不推进锁定计数，
+          // 免得断网时把账号「越试越接近锁定」
+          const next = failCountRef.current + 1
+          setFailCount(next)
           if (next >= AUTH_FAILURE_THRESHOLD) {
             startLockout()
             setError(
