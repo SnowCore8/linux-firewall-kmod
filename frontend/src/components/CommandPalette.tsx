@@ -239,9 +239,23 @@ export function CommandPalette({ open, onClose, onRefresh }: CommandPaletteProps
           }}
           onKeyDown={onKeyDown}
           aria-label="命令面板搜索"
+          role="combobox"
+          aria-expanded={open}
+          aria-controls="fw-cmd-listbox"
+          aria-haspopup="listbox"
+          aria-autocomplete="list"
+          aria-activedescendant={
+            filtered.length > 0 ? `fw-cmd-option-${Math.min(active, filtered.length - 1)}` : undefined
+          }
         />
       </div>
-      <div ref={listRef} style={{ maxHeight: 380, overflowY: 'auto', padding: '6px 0' }} role="listbox">
+      <div
+        ref={listRef}
+        id="fw-cmd-listbox"
+        style={{ maxHeight: 380, overflowY: 'auto', padding: '6px 0' }}
+        role="listbox"
+        aria-label="命令列表"
+      >
         {filtered.length === 0 ? (
           <Typography.Text type="secondary" style={{ display: 'block', padding: 24, textAlign: 'center' }}>
             没有匹配的命令
@@ -263,6 +277,7 @@ export function CommandPalette({ open, onClose, onRefresh }: CommandPaletteProps
                 return (
                   <div
                     key={cmd.id}
+                    id={`fw-cmd-option-${index}`}
                     data-index={index}
                     role="option"
                     aria-selected={isActive}
