@@ -7,7 +7,6 @@ import {
   LogoutOutlined,
   PlusOutlined,
   SyncOutlined,
-  ArrowRightOutlined,
   CompressOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
@@ -337,7 +336,7 @@ export function CommandPalette({ open, onClose, onRefresh }: CommandPaletteProps
           color: 'var(--fw-text-secondary)',
         }}
       >
-        <span><ArrowRightOutlined /> ↑↓ 选择</span>
+        <span>↑↓ 选择</span>
         <span><EnterOutlined /> 执行</span>
         <span>Esc 关闭</span>
       </div>
