@@ -53,7 +53,7 @@ function errText(err: unknown, fallback: string): string {
 }
 
 export default function Jails() {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const realtimeState = useSseState()
 
   // --- 主列表：SSE jails 域 + REST 拉取合流 ---
@@ -78,9 +78,8 @@ export default function Jails() {
   // --- 启停开关：按行独立的 in-flight 状态 ---
   const [toggling, setToggling] = useState<Record<string, boolean>>({})
 
-  const handleToggle = useCallback(
-    async (record: JailResponse) => {
-      const next = !record.enabled
+  const applyToggle = useCallback(
+    async (record: JailResponse, next: boolean) => {
       setToggling((prev) => ({ ...prev, [record.name]: true }))
       try {
         const res = await updateJail(record.name, { enabled: next })
@@ -100,6 +99,26 @@ export default function Jails() {
       }
     },
     [message, refetch],
+  )
+
+  const handleToggle = useCallback(
+    (record: JailResponse) => {
+      const next = !record.enabled
+      if (next) {
+        void applyToggle(record, next)
+        return
+      }
+      // 停用会让该规则停止判定日志，属于防护降级，需二次确认；启用直通
+      modal.confirm({
+        title: `停用规则 ${record.name}？`,
+        content: '停用后该规则将不再判定日志、不再产生新的封禁。',
+        okText: '停用',
+        okButtonProps: { danger: true },
+        cancelText: '取消',
+        onOk: () => applyToggle(record, next),
+      })
+    },
+    [modal, applyToggle],
   )
 
   // --- 详情抽屉 ---
@@ -143,7 +162,7 @@ export default function Jails() {
             size="small"
             checked={record.enabled}
             loading={toggling[record.name] === true}
-            onChange={() => void handleToggle(record)}
+            onChange={() => handleToggle(record)}
             aria-label={`启用/停用规则 ${record.name}`}
           />
         ),
