@@ -154,6 +154,7 @@ export default function Whitelist() {
     data: recData,
     isLoading: recLoading,
     isRefreshing: recRefreshing,
+    isUserFetching: recUserFetching,
     error: recError,
     refetch: refetchRecs,
   } = recs
@@ -387,6 +388,7 @@ export default function Whitelist() {
           <DataTable<WhitelistRecommendation>
             data={recData}
             isLoading={recLoading}
+            isFetching={recUserFetching}
             error={recError}
             onRetry={refetchRecs}
             rowKey={(record) => `${record.rec_type}:${record.cidr}`}
