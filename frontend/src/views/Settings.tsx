@@ -613,12 +613,18 @@ export default function Settings() {
             <ErrorState error={health.error} onRetry={health.refetch} compact />
           )}
           {health.data != null && (
-            <Descriptions
-              column={{ xs: 1, sm: 2, md: 2, lg: 3, xl: 3 }}
-              size="small"
-              bordered
-              items={healthItems(health.data)}
-            />
+            <>
+              {/* 已拿到过一次数据后刷新失败：内联提示，别让运维误以为运行时状态还是新的 */}
+              {health.error != null && (
+                <ErrorState error={health.error} onRetry={health.refetch} compact />
+              )}
+              <Descriptions
+                column={{ xs: 1, sm: 2, md: 2, lg: 3, xl: 3 }}
+                size="small"
+                bordered
+                items={healthItems(health.data)}
+              />
+            </>
           )}
         </Card>
       </Flex>
