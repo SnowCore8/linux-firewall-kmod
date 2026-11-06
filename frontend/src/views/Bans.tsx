@@ -158,6 +158,18 @@ export default function Bans() {
   // 命令面板「刷新当前页」
   useRefreshSignal(() => refetchRef.current())
 
+  // 「剩余」列倒计时：remaining_seconds 是取数时刻的快照，本地按墙钟扣减、每秒刷新渲染，
+  // SSE 断连且未轮询时倒计时不再冻结。仅当前页存在临时封禁时才起表。
+  const [now, setNow] = useState(() => Date.now())
+  const hasCountdown = (query.data?.items ?? []).some(
+    (b) => !b.is_permanent && b.remaining_seconds > 0,
+  )
+  useEffect(() => {
+    if (!hasCountdown) return
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [hasCountdown])
+
   // --- 抽屉与深链 ---
   const [detailIp, setDetailIp] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
@@ -347,12 +359,18 @@ export default function Bans() {
         dataIndex: 'remaining_seconds',
         key: 'remaining_seconds',
         width: 110,
-        render: (_: unknown, record: BanResponse) =>
-          record.is_permanent ? (
-            <Tag color="red">永久</Tag>
+        render: (_: unknown, record: BanResponse) => {
+          if (record.is_permanent) return <Tag color="red">永久</Tag>
+          const elapsed = Math.max(0, Math.floor((now - query.lastUpdatedAt) / 1000))
+          const remaining = record.remaining_seconds - elapsed
+          return remaining > 0 ? (
+            <span className="fw-mono">{formatDuration(remaining)}</span>
           ) : (
-            <span className="fw-mono">{formatDuration(record.remaining_seconds)}</span>
-          ),
+            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+              已到期
+            </Typography.Text>
+          )
+        },
       },
       {
         title: '累计封禁',
@@ -386,7 +404,7 @@ export default function Bans() {
         ),
       },
     ],
-    [openDetail, handleUnban],
+    [openDetail, handleUnban, now, query.lastUpdatedAt],
   )
 
   return (
