@@ -214,7 +214,10 @@ func (db *DB) ensureColumn(table, column, definition string) error {
 
 // applyMigrations 按版本号顺序执行增量迁移。
 //
-// 每次启动检查当前版本，依次执行未应用的迁移。迁移失败时回滚并报错，不会留下半完成状态。
+// 每次启动检查当前版本，依次执行未应用的迁移。迁移失败时报错且不记录该版本，
+// 下次启动会重试。注意：本函数不把单个迁移包进事务——当前 v1 为空操作，不存在
+// 半完成状态；未来新增含多条语句的迁移时，必须自带 BEGIN/COMMIT，否则中途失败
+// 会留下半完成状态且不会自动回滚。
 func (db *DB) applyMigrations() error {
 	migrations := []struct {
 		version int
