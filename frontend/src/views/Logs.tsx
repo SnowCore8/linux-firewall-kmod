@@ -496,6 +496,11 @@ interface HistoryPanelProps {
 function HistoryPanel(props: HistoryPanelProps) {
   const { query, page, pageSize, level, keyword, onPageChange, onLevelChange, onKeywordChange } = props
 
+  // 受控关键词输入：本地持有输入中文本（敲字不打后端），回车/点搜索/清空才回调父级；
+  // 父级 keyword 变化（如清空）时同步回输入框
+  const [inputValue, setInputValue] = useState(keyword)
+  useEffect(() => setInputValue(keyword), [keyword])
+
   const columns = useMemo(
     () => [
       {
@@ -559,9 +564,10 @@ function HistoryPanel(props: HistoryPanelProps) {
           <Input.Search
             allowClear
             placeholder="搜索关键词"
-            defaultValue={keyword}
+            value={inputValue}
             onSearch={(v) => onKeywordChange(v)}
             onChange={(e) => {
+              setInputValue(e.target.value)
               if (e.target.value === '') onKeywordChange('')
             }}
             style={{ width: 260 }}
