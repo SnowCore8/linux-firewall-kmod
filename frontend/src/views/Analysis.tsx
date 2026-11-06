@@ -320,6 +320,37 @@ export default function Analysis() {
     [openIp, summary, predictions, periodic, collab, network, reputation, threshold, effectiveness, histogram, durationRec],
   )
 
+  // 顶栏「刷新」只重取当前分区（见 useRefreshSignal），故 loading 只反映当前分区取数态；
+  // 封禁成效页一次刷三张表，任一在途即视为刷新中
+  let activeRefreshing = false
+  switch (activeKey) {
+    case 'summary':
+      activeRefreshing = summary.isUserFetching
+      break
+    case 'predict':
+      activeRefreshing = predictions.isUserFetching
+      break
+    case 'periodic':
+      activeRefreshing = periodic.isUserFetching
+      break
+    case 'collab':
+      activeRefreshing = collab.isUserFetching
+      break
+    case 'network':
+      activeRefreshing = network.isUserFetching
+      break
+    case 'reputation':
+      activeRefreshing = reputation.isUserFetching
+      break
+    case 'threshold':
+      activeRefreshing = threshold.isUserFetching
+      break
+    case 'effectiveness':
+      activeRefreshing =
+        effectiveness.isUserFetching || histogram.isUserFetching || durationRec.isUserFetching
+      break
+  }
+
   return (
     <>
       <PageHeader
@@ -337,7 +368,7 @@ export default function Analysis() {
               onSearch={handleSearch}
               style={{ width: 300 }}
             />
-            <Button icon={<ReloadOutlined />} onClick={() => emitRefresh()}>
+            <Button icon={<ReloadOutlined />} onClick={() => emitRefresh()} loading={activeRefreshing}>
               刷新
             </Button>
           </Space>
@@ -485,6 +516,7 @@ function SummarySection({ result, onOpenIp }: SummarySectionProps) {
         </Typography.Title>
         <DataTable<RiskVectorResponse>
           data={d.top_risk_ips}
+          isFetching={result.isUserFetching}
           rowKey="ip"
           columns={columns}
           emptyScenario="no-data"
@@ -659,6 +691,7 @@ function PredictionSection({ result, onOpenIp }: PredictionSectionProps) {
         </Typography.Title>
         <DataTable<AttackPrediction>
           data={d.predictions}
+          isFetching={result.isUserFetching}
           rowKey="ip"
           columns={predColumns}
           emptyScenario="no-data"
@@ -679,6 +712,7 @@ function PredictionSection({ result, onOpenIp }: PredictionSectionProps) {
         <div style={{ marginTop: 12 }}>
           <DataTable<JailAttackTrend>
             data={trends}
+            isFetching={result.isUserFetching}
             rowKey="jail_name"
             columns={trendColumns}
             emptyScenario="no-data"
@@ -959,6 +993,7 @@ function NetworkSection({ result }: NetworkSectionProps) {
       </ChartCard>
       <DataTable<NetworkBlock>
         data={d}
+        isFetching={result.isUserFetching}
         rowKey="subnet"
         columns={columns}
         emptyScenario="no-data"
@@ -1131,6 +1166,7 @@ function ThresholdSection({ result }: ThresholdSectionProps) {
       </Typography.Paragraph>
       <DataTable<ThresholdRecommendation>
         data={d.recommendations}
+        isFetching={result.isUserFetching}
         rowKey="jail_name"
         columns={columns}
         emptyScenario="no-data"
@@ -1236,6 +1272,7 @@ function EffectivenessBlock({ result }: { result: UseAsyncResult<BanEffectivenes
       </div>
       <DataTable<BanLevelEffectiveness>
         data={d.levels}
+        isFetching={result.isUserFetching}
         rowKey="level"
         columns={columns}
         emptyScenario="no-data"
@@ -1349,6 +1386,7 @@ function DurationRecBlock({ result }: { result: UseAsyncResult<BanDurationRecomm
       </Typography.Paragraph>
       <DataTable<BanDurationRecommendation>
         data={d.recommendations}
+        isFetching={result.isUserFetching}
         rowKey="jail_name"
         columns={columns}
         emptyScenario="no-data"
