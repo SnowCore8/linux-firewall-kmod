@@ -707,9 +707,8 @@ function AnomalySection() {
         />
         <StatCard
           label="数据时刻"
-          value={formatDatetime(data.timestamp)}
-          mono={false}
-          footer="本次异常检测的时间戳"
+          value={formatClock(data.timestamp)}
+          footer={`本次异常检测 · ${formatDatetime(data.timestamp)}`}
         />
       </div>
 
