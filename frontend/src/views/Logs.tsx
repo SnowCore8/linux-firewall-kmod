@@ -93,6 +93,8 @@ export default function Logs() {
   const [liveLines, setLiveLines] = useState<LiveLine[]>([])
   const [liveState, setLiveState] = useState<LiveState>('idle')
   const [paused, setPaused] = useState(false)
+  // 暂停期间到达并被丢弃的行数；恢复接收时清零
+  const [missed, setMissed] = useState(0)
   const [autoscroll, setAutoscroll] = useState(true)
   const [liveLevel, setLiveLevel] = useState<LevelFilter>('all')
   const [liveKeyword, setLiveKeyword] = useState('')
@@ -179,7 +181,10 @@ export default function Logs() {
     es.addEventListener('log', (e: MessageEvent<string>) => {
       const content = e.data
       setLastLogAt(Date.now())
-      if (pausedRef.current) return
+      if (pausedRef.current) {
+        setMissed((m) => m + 1)
+        return
+      }
       const line: LiveLine = {
         id: ++lineIdRef.current,
         content,
@@ -204,6 +209,8 @@ export default function Logs() {
             ]
             return next.length > MAX_LIVE_LINES ? next.slice(next.length - MAX_LIVE_LINES) : next
           })
+        } else {
+          setMissed((m) => m + 1)
         }
         return
       }
@@ -289,11 +296,16 @@ export default function Logs() {
           total={liveLines.length}
           state={liveState}
           paused={paused}
+          missed={missed}
           autoscroll={autoscroll}
           level={liveLevel}
           keyword={liveKeyword}
           viewerRef={viewerRef}
-          onTogglePause={() => setPaused((p) => !p)}
+          onTogglePause={() => {
+            // 正在暂停 → 本次点击是恢复：清零计数，下一轮暂停重新计
+            if (pausedRef.current) setMissed(0)
+            setPaused((p) => !p)
+          }}
           onToggleAutoscroll={(v) => setAutoscroll(v)}
           onClear={() => setLiveLines([])}
           onLevelChange={setLiveLevel}
@@ -327,6 +339,8 @@ interface LivePanelProps {
   total: number
   state: LiveState
   paused: boolean
+  /** 暂停期间到达并被丢弃的行数。 */
+  missed: number
   autoscroll: boolean
   level: LevelFilter
   keyword: string
@@ -341,7 +355,7 @@ interface LivePanelProps {
 
 function LivePanel(props: LivePanelProps) {
   const {
-    lines, total, state, paused, autoscroll, level, keyword, viewerRef,
+    lines, total, state, paused, missed, autoscroll, level, keyword, viewerRef,
     onTogglePause, onToggleAutoscroll, onClear, onLevelChange, onKeywordChange, onReconnect,
   } = props
 
@@ -399,6 +413,12 @@ function LivePanel(props: LivePanelProps) {
       {state === 'limit' && (
         <Typography.Text type="warning" style={{ fontSize: 12 }}>
           实时日志连接数已达上限（5），已停止重试。可稍后点「重新连接」，或改用「历史」检索。
+        </Typography.Text>
+      )}
+
+      {paused && missed > 0 && (
+        <Typography.Text type="warning" style={{ fontSize: 12 }}>
+          暂停中：已到达 {missed} 条新日志被丢弃，恢复后不会补回。
         </Typography.Text>
       )}
 
