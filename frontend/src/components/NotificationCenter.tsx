@@ -38,7 +38,8 @@ function NoticeRow({ item, onOpen }: { item: NoticeItem; onOpen: (item: NoticeIt
           type="secondary"
           style={{ fontSize: 11, fontFamily: 'var(--fw-font-mono)' }}
         >
-          {formatClock(item.at)}
+          {/* item.at 是 Date.now() 毫秒；formatClock 按 Unix 秒设计，先换算 */}
+          {formatClock(Math.floor(item.at / 1000))}
         </Typography.Text>,
       ]}
     >

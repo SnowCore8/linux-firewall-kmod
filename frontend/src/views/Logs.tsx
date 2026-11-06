@@ -463,7 +463,10 @@ function LivePanel(props: LivePanelProps) {
                 wordBreak: 'break-all',
               }}
             >
-              <span style={{ color: 'var(--fw-text-secondary)', flex: 'none' }}>{formatClock(l.at)}</span>
+              {/* l.at 是 Date.now() 毫秒；formatClock 按 Unix 秒设计，先换算 */}
+              <span style={{ color: 'var(--fw-text-secondary)', flex: 'none' }}>
+                {formatClock(Math.floor(l.at / 1000))}
+              </span>
               {l.level && (
                 <Tag color={LEVEL_COLORS[l.level]} style={{ marginInlineEnd: 0, flex: 'none', lineHeight: '16px' }}>
                   {l.level}
