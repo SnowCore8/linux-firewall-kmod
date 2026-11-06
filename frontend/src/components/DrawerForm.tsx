@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Button, Drawer, Form, Modal, Space, type FormInstance } from 'antd'
+import { App, Button, Drawer, Form, Space, type FormInstance } from 'antd'
 
 /**
  * 抽屉表单封装 —— 桌面范式下，「新建/编辑」不再是移动端的底部 Popup，而是右侧 Drawer + Form。
@@ -7,7 +7,7 @@ import { Button, Drawer, Form, Modal, Space, type FormInstance } from 'antd'
  * 统一三件事，避免各页各写：
  *   1. 提交流程：校验 → 调 onSubmit → 成功关抽屉、失败留在原地并弹错误（不清空用户已填内容）；
  *   2. 脏检查：填了一半点关闭/遮罩时二次确认，防误触丢失输入（这是桌面表单的基本礼貌）；
- *   3. 危险动作二次确认：`confirmText` 存在时，提交前弹 Modal.confirm（如「解封全部临时封禁」）。
+ *   3. 危险动作二次确认：`confirmText` 存在时，提交前弹确认框（如「解封全部临时封禁」）。
  *
  * 表单实例由调用方用 `Form.useForm()` 建好后传入——这样调用方能在打开前 setFieldsValue、
  * 关闭后 resetFields，生命周期握在页面手里，封装只管渲染与提交编排。
@@ -55,6 +55,8 @@ export function DrawerForm<T>({
   extraFooter,
 }: DrawerFormProps<T>) {
   const [submitting, setSubmitting] = useState(false)
+  // 用上下文感知的 modal 实例（随主题走），静态 Modal.confirm 在暗色下会渲染成亮色
+  const { modal } = App.useApp()
 
   const doSubmit = async (): Promise<void> => {
     let values: T
@@ -76,7 +78,7 @@ export function DrawerForm<T>({
 
   const handleSubmit = (): void => {
     if (confirmText) {
-      Modal.confirm({
+      modal.confirm({
         title: confirmTitle,
         content: confirmText,
         okText: '确认',
@@ -91,7 +93,7 @@ export function DrawerForm<T>({
 
   const handleCancel = (): void => {
     if (dirtyCheck && form.isFieldsTouched()) {
-      Modal.confirm({
+      modal.confirm({
         title: '放弃未保存的修改？',
         content: '表单已改动但尚未提交，关闭后这些输入会丢失。',
         okText: '放弃',
