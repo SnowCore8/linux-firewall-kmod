@@ -250,6 +250,8 @@ export default function ThreatFeeds() {
         const next = new URLSearchParams(searchParams)
         next.delete('sync')
         setSearchParams(next, { replace: true })
+        // 复位守卫：?sync 已清、本次不会再触发；但下次命令面板再带 ?sync=1 进来时要能重新同步
+        deepSyncFired.current = false
       })
   }, [searchParams, setSearchParams, notifySyncResult, notifySyncError])
 
