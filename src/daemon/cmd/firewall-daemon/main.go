@@ -37,6 +37,10 @@ import (
 // 它是启动期必须存在的资源：缺失时直接以启动错误返回，而不是反复报接口失败。
 var panelDir = panelres.PanelDir
 
+// factoryDefaultPassword 是 config/default.yaml 的出厂占位口令。它随仓库公开分发、
+// 人尽可猜，本身不是机密；这里只用它做启动期比对，检测「面板仍在用出厂口令」。
+const factoryDefaultPassword = "changeme"
+
 func main() {
 	if err := run(os.Args); err != nil {
 		fmt.Fprintf(os.Stderr, "firewall-daemon: %v\n", err)
@@ -107,6 +111,12 @@ func run(args []string) error {
 		logger.Warn("监听地址对外开放但未配置认证凭据：任何可达者都能读写面板并下发封禁",
 			"addr", addr,
 			"怎么修", "设置 FIREWALL_METRICS_USERNAME / FIREWALL_METRICS_PASSWORD（随包 EnvironmentFile 已备好），或把 defaults 段两项一起填，或把 metrics_bind_address 收回 127.0.0.1")
+	}
+	// 出厂占位口令是公开值：两项都非空（AuthEnabled 为真）也算「已认证」，但口令人人可猜，
+	// 等同于无防护。命中就显眼告警——同样只报事实、绝不回显口令值本身。
+	if cfg.AuthEnabled() && cfg.MetricsPassword == factoryDefaultPassword {
+		logger.Warn("面板仍在使用出厂默认口令，等同于无防护：任何知道默认值的人都能登录并下发封禁",
+			"怎么修", "设置 FIREWALL_METRICS_PASSWORD（随包 EnvironmentFile 已备好），或把 defaults.metrics_password 改成强随机口令，改后重启守护进程")
 	}
 
 	if err := checkProcfs(); err != nil {
