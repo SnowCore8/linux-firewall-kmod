@@ -18,7 +18,7 @@ import { useAuth } from '../providers/AuthProvider.tsx'
 import { useSse } from '../providers/SseProvider.tsx'
 import { useNotify } from '../providers/NotificationProvider.tsx'
 import { useIsBelow } from '../hooks/useMediaQuery.ts'
-import { useHotkey } from '../hooks/useHotkey.ts'
+import { useHotkey, IS_MAC } from '../hooks/useHotkey.ts'
 import { usePersistentState } from '../hooks/usePersistentState.ts'
 import { emitRefresh } from '../lib/appEvents.ts'
 import { threatLabel, threatRank } from '../theme/tokens.ts'
@@ -37,7 +37,7 @@ import type { SseConnectionState } from '../hooks/useSse.ts'
  *   * md–lg(768–1023)：侧边栏自动折叠为图标条（省横向空间给表格）；
  *   * <md(768)：侧边栏收进抽屉，顶栏出现汉堡按钮——此时表格由页面各自降级为卡片/横滚。
  *
- * 顶栏聚合全局能力：命令面板入口（⌘K）、实时状态灯、主题/密度切换、通知中心、账户菜单。
+ * 顶栏聚合全局能力：命令面板入口（mod+K）、实时状态灯、主题/密度切换、通知中心、账户菜单。
  * 这些是「跨页常驻」的，放顶栏而非各页，保证在任何页面都能一键触达。
  *
  * 实时告警：外壳订阅 SSE 连接态与威胁等级，在**状态跃迁**时推通知（降级/重连/等级升高），
@@ -45,6 +45,9 @@ import type { SseConnectionState } from '../hooks/useSse.ts'
  */
 
 const { Header, Sider, Content } = Layout
+
+/** 把 mod 组合键渲染成当前平台的实际按键标签：macOS 显示 ⌘K，其余显示 Ctrl+K。 */
+const modLabel = (key: string): string => (IS_MAC ? `⌘${key}` : `Ctrl+${key}`)
 
 function BrandMark({ collapsed }: { collapsed: boolean }) {
   return (
@@ -248,8 +251,8 @@ export default function AppShell() {
                   <kbd className="fw-mono">R</kbd> 刷新当前页
                 </div>
                 <div>
-                  <kbd className="fw-mono">⌘K</kbd> 命令面板 ·{' '}
-                  <kbd className="fw-mono">⌘J</kbd> 切换主题
+                  <kbd className="fw-mono">{modLabel('K')}</kbd> 命令面板 ·{' '}
+                  <kbd className="fw-mono">{modLabel('J')}</kbd> 切换主题
                 </div>
               </div>
             )}
@@ -294,13 +297,13 @@ export default function AppShell() {
           >
             <span style={{ marginRight: 'auto', fontSize: 13 }}>搜索或输入命令</span>
             <kbd className="fw-mono" style={{ fontSize: 11, opacity: 0.7 }}>
-              {isMobile ? 'K' : '⌘K'}
+              {isMobile ? 'K' : modLabel('K')}
             </kbd>
           </Button>
 
           <Flex align="center" gap={4} style={{ marginLeft: 'auto' }}>
             <RealtimeBadge state={sse.state} lastEventAt={sse.lastEventAt} showLabel={!isMobile} />
-            <Tooltip title={isDark ? '切换到亮色 (⌘J)' : '切换到暗色 (⌘J)'}>
+            <Tooltip title={isDark ? `切换到亮色 (${modLabel('J')})` : `切换到暗色 (${modLabel('J')})`}>
               <Button
                 type="text"
                 icon={isDark ? <BulbFilled /> : <BulbOutlined />}

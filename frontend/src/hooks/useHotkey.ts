@@ -25,16 +25,21 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable
 }
 
+/**
+ * 是否 macOS 系平台 —— mod 键解析与 UI 快捷键标签（⌘ vs Ctrl）的唯一判定来源。
+ * 导出给外壳等需要显示「mod+K」实际按键的地方复用，避免各处各判一遍导致标签与行为不一致。
+ */
+export const IS_MAC =
+  typeof navigator !== 'undefined' && /mac|iphone|ipad|ipod/i.test(navigator.platform || '')
+
 /** 把 'mod+shift+k' 解析成 { key, ctrl, shift, alt, meta, needsMod }。 */
 function parseCombo(combo: string) {
   const parts = combo.toLowerCase().split('+').map((p) => p.trim())
   const spec = { key: '', ctrl: false, shift: false, alt: false, meta: false, needsMod: false }
-  const isMac =
-    typeof navigator !== 'undefined' && /mac|iphone|ipad|ipod/i.test(navigator.platform || '')
   for (const part of parts) {
     if (part === 'mod') {
       spec.needsMod = true
-      if (isMac) spec.meta = true
+      if (IS_MAC) spec.meta = true
       else spec.ctrl = true
     } else if (part === 'ctrl' || part === 'control') spec.ctrl = true
     else if (part === 'meta' || part === 'cmd' || part === 'command') spec.meta = true
