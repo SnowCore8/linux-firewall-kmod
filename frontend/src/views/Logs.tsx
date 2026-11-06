@@ -261,15 +261,15 @@ export default function Logs() {
     })
   }, [liveLines, liveLevel, liveKeyword])
 
-  const badgeState = liveState === 'open' ? 'open' : liveState === 'limit' ? 'limit' : liveState === 'idle' ? 'idle' : 'reconnecting'
-
+  // LiveState 五个取值都是合法的 SseConnectionState，直传即可；此前 connecting
+  // 被三元兜底分支误并成 reconnecting，首次连接时徽标显示「重连中」
   return (
     <>
       <PageHeader
         title="日志"
         description="守护进程实时日志流与历史日志检索"
         breadcrumb={[{ title: '运维' }, { title: '日志' }]}
-        realtimeState={mode === 'live' ? badgeState : undefined}
+        realtimeState={mode === 'live' ? liveState : undefined}
         realtimeLastEventAt={mode === 'live' ? lastLogAt : undefined}
         extra={
           <Segmented<Mode>
