@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { Alert, Button, Card, Form, Input, Space, Typography, Flex } from 'antd'
 import { LockOutlined, UserOutlined, SafetyOutlined } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../providers/AuthProvider.tsx'
 import { AUTH_LOCKOUT_SECONDS } from '../api/auth.ts'
 import { DEFAULT_PATH } from '../app/nav.ts'
@@ -25,13 +25,17 @@ interface LoginForm {
 
 export default function Login() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { isAuthenticated, isLoggingIn, login, error, failCount, threshold, lockoutRemaining, clearError } =
     useAuth()
 
-  // 已认证（含刷新后 sessionStorage 仍有令牌）→ 直接进概览
+  // 已认证（含刷新后 sessionStorage 仍有令牌）→ 回到登录前想去的页面，没有则进概览
   useEffect(() => {
-    if (isAuthenticated) navigate(DEFAULT_PATH, { replace: true })
-  }, [isAuthenticated, navigate])
+    if (isAuthenticated) {
+      const from = (location.state as { from?: string } | null)?.from
+      navigate(from ?? DEFAULT_PATH, { replace: true })
+    }
+  }, [isAuthenticated, navigate, location.state])
 
   const locked = lockoutRemaining > 0
   const remainingAttempts = Math.max(0, threshold - failCount)
