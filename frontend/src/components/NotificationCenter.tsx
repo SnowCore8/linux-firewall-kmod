@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, type KeyboardEvent } from 'react'
 import { Badge, Button, Empty, Flex, List, Popconfirm, Popover, Space, Tag, Tooltip, Typography } from 'antd'
 import { BellOutlined, CheckOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
@@ -32,6 +32,20 @@ function NoticeRow({ item, onOpen }: { item: NoticeItem; onOpen: (item: NoticeIt
         borderInlineStart: `2px solid ${item.read ? 'transparent' : 'var(--fw-brand)'}`,
       }}
       onClick={() => clickable && onOpen(item)}
+      // 带链接的行要能被键盘激活：补 role/tabIndex 与 Enter/Space，否则运维用 Tab 走不到「去处理」
+      {...(clickable
+        ? {
+            role: 'button' as const,
+            tabIndex: 0,
+            'aria-label': `${item.title}，打开详情`,
+            onKeyDown: (e: KeyboardEvent) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onOpen(item)
+              }
+            },
+          }
+        : {})}
       actions={[
         <Typography.Text
           key="time"
