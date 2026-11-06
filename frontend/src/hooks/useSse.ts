@@ -86,11 +86,17 @@ function parseFrame<T>(raw: string): T | null {
   }
 }
 
+/** useEventStream 的返回：连接快照 + 一个手动重连入口。 */
+export interface EventStreamResult extends SseSnapshot {
+  /** 手动重连：清零退避计数并立即重探（供「已达上限」降级后用户主动重试）。 */
+  reconnect: () => void
+}
+
 /**
  * 接管 `/api/v2/events` 连接。
  * @param enabled 为 true 且已登录时才连接；false 时保持 idle 并断开已有连接。
  */
-export function useEventStream(enabled: boolean): SseSnapshot {
+export function useEventStream(enabled: boolean): EventStreamResult {
   const [snapshot, setSnapshot] = useState<SseSnapshot>(INITIAL_SNAPSHOT)
   const esRef = useRef<EventSource | null>(null)
   const timerRef = useRef<number | null>(null)
@@ -240,5 +246,13 @@ export function useEventStream(enabled: boolean): SseSnapshot {
     // connect/closeStream 均为 useCallback 稳定引用；只在 enabled 翻转时重建连接
   }, [enabled, connect, closeStream])
 
-  return snapshot
+  // 手动重连：清零退避计数、立即重探。用于「已达上限」降级后的用户主动重试——
+  // 服务端名额是瞬时的（别的标签页关掉就腾出来），不该逼用户刷新整页才能恢复实时。
+  const reconnect = useCallback(() => {
+    if (!enabledRef.current) return
+    attemptsRef.current = 0
+    connect()
+  }, [connect])
+
+  return { ...snapshot, reconnect }
 }

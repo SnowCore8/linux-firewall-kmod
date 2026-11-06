@@ -8,6 +8,7 @@ import {
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  ReloadOutlined,
   SearchOutlined,
   UserOutlined,
 } from '@ant-design/icons'
@@ -303,6 +304,17 @@ export default function AppShell() {
 
           <Flex align="center" gap={4} style={{ marginLeft: 'auto' }}>
             <RealtimeBadge state={sse.state} lastEventAt={sse.lastEventAt} showLabel={!isMobile} />
+            {sse.isLimited && (
+              <Tooltip title="实时连接已达上限，点击重试">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<ReloadOutlined />}
+                  onClick={sse.reconnect}
+                  aria-label="重试实时连接"
+                />
+              </Tooltip>
+            )}
             <Tooltip title={isDark ? `切换到亮色 (${modLabel('J')})` : `切换到暗色 (${modLabel('J')})`}>
               <Button
                 type="text"

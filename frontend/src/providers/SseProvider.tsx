@@ -40,6 +40,8 @@ export interface SseContextValue extends SseSnapshot {
   isLive: boolean
   /** 是否处于「连接数达上限」的降级态。 */
   isLimited: boolean
+  /** 手动重连：清零退避计数并立即重探（供「已达上限」降级后的用户主动重试）。 */
+  reconnect: () => void
 }
 
 const SseContext = createContext<SseContextValue | null>(null)
