@@ -228,10 +228,32 @@ export default function AppShell() {
           collapsedWidth={64}
           collapsed={collapsed}
           breakpoint={undefined}
-          style={{ position: 'sticky', top: 0, height: '100vh', overflow: 'auto', borderInlineEnd: '1px solid var(--fw-border)' }}
+          style={{ position: 'sticky', top: 0, height: '100vh', overflow: 'hidden', borderInlineEnd: '1px solid var(--fw-border)' }}
         >
-          <BrandMark collapsed={collapsed} />
-          {siderMenu}
+          <Flex vertical style={{ height: '100%' }}>
+            <BrandMark collapsed={collapsed} />
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{siderMenu}</div>
+            {!collapsed && (
+              <div
+                style={{
+                  padding: '10px 20px',
+                  borderTop: '1px solid var(--fw-border)',
+                  fontSize: 11,
+                  lineHeight: 1.9,
+                  color: 'var(--fw-text-secondary)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <div>
+                  <kbd className="fw-mono">R</kbd> 刷新当前页
+                </div>
+                <div>
+                  <kbd className="fw-mono">⌘K</kbd> 命令面板 ·{' '}
+                  <kbd className="fw-mono">⌘J</kbd> 切换主题
+                </div>
+              </div>
+            )}
+          </Flex>
         </Sider>
       )}
 
