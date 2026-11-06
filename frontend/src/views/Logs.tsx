@@ -95,6 +95,8 @@ export default function Logs() {
   const [paused, setPaused] = useState(false)
   // 暂停期间到达并被丢弃的行数；恢复接收时清零
   const [missed, setMissed] = useState(0)
+  // 高频丢行先在 ref 上累加，由下方 1s 定时器批量同步到 missed，避免每条丢弃都重渲染整个面板
+  const missedRef = useRef(0)
   const [autoscroll, setAutoscroll] = useState(true)
   const [liveLevel, setLiveLevel] = useState<LevelFilter>('all')
   const [liveKeyword, setLiveKeyword] = useState('')
@@ -107,6 +109,14 @@ export default function Logs() {
   const pausedRef = useRef(paused)
   pausedRef.current = paused
   const viewerRef = useRef<HTMLDivElement>(null)
+
+  // 暂停期间每秒把 missedRef 批量同步到 missed state 一次；恢复接收（paused→false）即停表。
+  // 于是「暂停时高频丢行」只引起每秒一次重渲染，而不是每条丢弃各渲染一次。
+  useEffect(() => {
+    if (!paused) return
+    const id = window.setInterval(() => setMissed(missedRef.current), 1000)
+    return () => window.clearInterval(id)
+  }, [paused])
 
   // --- 历史查询状态 ---
   const [histLevel, setHistLevel] = useState<LevelFilter>('all')
@@ -182,7 +192,7 @@ export default function Logs() {
       const content = e.data
       setLastLogAt(Date.now())
       if (pausedRef.current) {
-        setMissed((m) => m + 1)
+        missedRef.current += 1
         return
       }
       const line: LiveLine = {
@@ -210,7 +220,7 @@ export default function Logs() {
             return next.length > MAX_LIVE_LINES ? next.slice(next.length - MAX_LIVE_LINES) : next
           })
         } else {
-          setMissed((m) => m + 1)
+          missedRef.current += 1
         }
         return
       }
@@ -302,8 +312,11 @@ export default function Logs() {
           keyword={liveKeyword}
           viewerRef={viewerRef}
           onTogglePause={() => {
-            // 正在暂停 → 本次点击是恢复：清零计数，下一轮暂停重新计
-            if (pausedRef.current) setMissed(0)
+            // 正在暂停 → 本次点击是恢复：清零 ref 与 state，下一轮暂停重新计
+            if (pausedRef.current) {
+              missedRef.current = 0
+              setMissed(0)
+            }
             setPaused((p) => !p)
           }}
           onToggleAutoscroll={(v) => setAutoscroll(v)}
