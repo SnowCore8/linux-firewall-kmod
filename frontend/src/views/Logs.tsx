@@ -148,12 +148,14 @@ export default function Logs() {
     { enabled: mode === 'history' },
   )
 
-  // 过滤/翻页变化时重取历史
+  // 过滤/翻页变化时重取历史。
+  // 不含 mode：切到历史时的首次取数由 useAsync 的 enabled 翻转（false→true）负责，
+  // 这里再依赖 mode 会和它撞车、同一次切换打两个相同请求。
   useEffect(() => {
     if (mode === 'history') historyQuery.refetch()
     // 仅在真正影响查询的输入变化时触发；refetch 身份稳定
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, page, pageSize, histLevel, histKeyword])
+  }, [page, pageSize, histLevel, histKeyword])
 
   useRefreshSignal(() => {
     if (mode === 'history') historyQuery.refetch()
