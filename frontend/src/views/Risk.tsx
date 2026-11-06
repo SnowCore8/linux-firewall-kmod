@@ -23,6 +23,7 @@ import { BaseChart, useChartBase } from '../components/charts/BaseChart.tsx'
 import { EmptyState } from '../components/state/EmptyState.tsx'
 import { ErrorState } from '../components/state/ErrorState.tsx'
 import { LoadingState } from '../components/state/LoadingState.tsx'
+import { StaleNotice } from '../components/state/StaleNotice.tsx'
 import { useAsync } from '../hooks/useAsync.ts'
 import { useRefreshSignal } from '../hooks/useRefreshSignal.ts'
 import { getRiskVectors, getRiskVector, getRiskEvents } from '../api/endpoints.ts'
@@ -212,6 +213,13 @@ export default function Risk() {
             刷新
           </Button>
         }
+      />
+
+      <StaleNotice
+        visible={query.isStale}
+        onRetry={query.refetch}
+        description="最近一次刷新失败，以下为上一次成功获取的风险向量，可能已不是最新状态。"
+        style={{ marginBottom: 16 }}
       />
 
       {showLoading && (
