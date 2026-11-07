@@ -28,6 +28,44 @@ jobs:
           gh api repos/SnowCore8/linux-firewall-kmod --jq '"clara 换到令牌，可见仓库 " + .full_name'
           gh api installation/repositories --jq '"  安装覆盖 \(.total_count) 个仓库：\([.repositories[].full_name] | join(", "))"'
 
+      # 证明「多要一档」确实会被接口拒掉：绕过 action 直接换，请求 PR 写权限
+      - name: '多申请一档会怎样'
+        env:
+          APP_ID: '${{ vars.APP_ID_CLARA }}'
+          APP_KEY: '${{ secrets.APP_PRIVATE_KEY_CLARA }}'
+        run: |-
+          set -euo pipefail
+          cat > /tmp/probe.mjs <<'JS'
+          import crypto from 'node:crypto';
+
+          const b = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+          const now = Math.floor(Date.now() / 1000);
+          const h = b({ alg: 'RS256', typ: 'JWT' });
+          const p = b({ iat: now - 60, exp: now + 540, iss: process.env.APP_ID });
+          const sig = crypto.createSign('RSA-SHA256').update(`${h}.${p}`).sign(process.env.APP_KEY, 'base64url');
+          const jwt = `${h}.${p}.${sig}`;
+
+          const call = (path, init = {}) =>
+            fetch(`https://api.github.com${path}`, {
+              ...init,
+              headers: {
+                authorization: `Bearer ${jwt}`,
+                accept: 'application/vnd.github+json',
+                'user-agent': 'probe',
+                ...(init.body ? { 'content-type': 'application/json' } : {}),
+              },
+            });
+
+          const inst = (await (await call('/app/installations')).json())[0];
+          const r = await call(`/app/installations/${inst.id}/access_tokens`, {
+            method: 'POST',
+            body: JSON.stringify({ permissions: { pull_requests: 'write' } }),
+          });
+          const body = await r.json();
+          console.log(`HTTP ${r.status} ${JSON.stringify(body.message || body)}`);
+          JS
+          node /tmp/probe.mjs
+
   nora:
     runs-on: 'ubuntu-latest'
     steps:
