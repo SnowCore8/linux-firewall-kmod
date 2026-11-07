@@ -87,7 +87,7 @@ func (h *APIHandlers) buildStats(now time.Time) StatsResponse {
 		PacketsDropped:  snap.Stats.PacketsDropped,
 		PacketsAccepted: snap.Stats.PacketsAccepted,
 
-		StateSaveTruncated: readStateSaveTruncated(),
+		StateSaveTruncated: readStateSaveTruncated("/proc/firewall/stats"),
 
 		ThreatLevel: h.buildThreatLevel(snap, now, recentBans),
 	}
@@ -507,8 +507,8 @@ func (h *APIHandlers) kernelModuleVersion() string {
 // 该计数由内核模块在状态保存截断时递增（fw_state.c），procfs 是唯一的读路径——
 // netlink StatsResponse 是定长二进制报文，加字段会破坏线格式契约，故走文件读取。
 // 模块未加载或文件不存在时返回 0（面板不显示警告），读取失败同理降级。
-func readStateSaveTruncated() uint64 {
-	f, err := os.Open("/proc/firewall/stats")
+func readStateSaveTruncated(path string) uint64 {
+	f, err := os.Open(path)
 	if err != nil {
 		return 0
 	}
@@ -516,13 +516,9 @@ func readStateSaveTruncated() uint64 {
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "state_save_truncated ") {
+		parts := strings.Fields(scanner.Text())
+		if len(parts) != 2 || parts[0] != "state_save_truncated" {
 			continue
-		}
-		parts := strings.Fields(line)
-		if len(parts) != 2 {
-			return 0
 		}
 		v, err := strconv.ParseUint(parts[1], 10, 64)
 		if err != nil {
