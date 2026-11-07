@@ -199,6 +199,58 @@ jobs:
           # 统一按远端分支判断，避免把「未推送」误判成「有新提交」
           echo "sha=$(git ls-remote --heads origin "${HEAD_REF}" | awk '{print $1}')" >> "${GITHUB_OUTPUT}"
 
+      # 合并前条件原写在 auto-miles.toml 里由陈实自己读、自己执行 `gh pr merge`，
+      # 实测两次都没对上（PR #38 在 e2e 判失败后合并，PR #39 在批准挂在旧提交时合并）。
+      # 所以合并不再经过模型：它只能写 <!-- qwen:merge-request -->，由下面的闸门执行。
+      #
+      # 这一步按 PATH 把 gh 包一层，拒掉合并入口。它不是安全边界 —— 令牌就在环境里，
+      # 绕道 curl 照样能合；真正的保底是 job 末尾那道检查。这一步只是让「顺手合了」
+      # 当场失败，而不是事后才发现。
+      - name: 'Put merging out of the model reach'
+        if: |-
+          ${{ steps.context.outputs.skip != 'true' }}
+        env:
+          WRAPPER: '${{ github.workspace }}/.github/scripts/no-merge-gh'
+        run: |-
+          set -euo pipefail
+
+          SHIM_DIR="${RUNNER_TEMP}/qwen-no-merge"
+          REAL_GH="$(command -v gh)"
+
+          rm -rf "${SHIM_DIR}"
+          mkdir -p "${SHIM_DIR}"
+          # 复制而不是引用工作区里那份：模型这一轮有写权限，改掉源文件就等于给自己
+          # 开了一道门。副本在 RUNNER_TEMP 下，它够不着。
+          cp "${WRAPPER}" "${SHIM_DIR}/no-merge-gh"
+          chmod +x "${SHIM_DIR}/no-merge-gh"
+          {
+            echo '#!/usr/bin/env bash'
+            echo "export REAL_GH='${REAL_GH}'"
+            echo "exec '${SHIM_DIR}/no-merge-gh' \"\$@\""
+          } > "${SHIM_DIR}/gh"
+          chmod +x "${SHIM_DIR}/gh"
+
+          # 装到 PATH 之前先自己验一遍：放行一条、拦下一条。验不过就不装，
+          # 退化成「事后检查」而不是把模型手里的 gh 弄坏。
+          if ! PATH="${SHIM_DIR}:${PATH}" gh --version >/dev/null 2>&1; then
+            echo '::warning title=合并拦截层没装上::gh 包装器透传失败，本次只有事后检查兜底。'
+            exit 0
+          fi
+          # 只认我们自己的拒绝文案：pr merge 0 在真 gh 上也必然失败，
+          # 只看退出码会把「没拦住」误判成「拦住了」。
+          # 不用 grep -q 接管道：pipefail 下 grep 提前退出会让左侧吃 SIGPIPE 而误判。
+          REFUSED="$(PATH="${SHIM_DIR}:${PATH}" gh pr merge 0 --repo a/b 2>&1 || true)"
+          case "${REFUSED}" in
+            *'没有合并权限'*) ;;
+            *)
+              echo '::warning title=合并拦截层没装上::包装器没能拦下 gh pr merge，本次只有事后检查兜底。'
+              exit 0
+              ;;
+          esac
+
+          echo "${SHIM_DIR}" >> "${GITHUB_PATH}"
+          echo "合并入口已接管：${SHIM_DIR}/gh"
+
       - name: 'Run Qwen miles'
         id: 'qwen_miles'
         if: |-
@@ -309,6 +361,98 @@ jobs:
               echo '::error title=模型 API 返回了错误::这一轮没有完成，动作不可用。这是接口侧的问题，重跑即可。'
               printf '%s\n' "${EXCERPT}" >&2
               exit 1
+              ;;
+          esac
+
+      # 模型只能写申请，合不合由脚本判。这一行标记就是申请，在最终回复里。
+      - name: 'Detect the merge request in the final reply'
+        id: 'merge_request'
+        if: |-
+          ${{ steps.context.outputs.skip != 'true' && steps.qwen_miles.outcome == 'success' && steps.context.outputs.mode == 'respond-pr' }}
+        run: |-
+          set -euo pipefail
+
+          if [ ! -f qwen-artifacts/stdout.log ]; then
+            echo 'requested=false' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          REPLY="$(jq -r '[.[] | select(.type == "assistant")] | last | .message.content[]? | select(.type == "text") | .text' \
+            qwen-artifacts/stdout.log 2>/dev/null || true)"
+
+          case "${REPLY}" in
+            *'<!-- qwen:merge-request -->'*)
+              echo 'requested=true' >> "${GITHUB_OUTPUT}"
+              echo '陈实申请了合并，交给闸门判定。'
+              ;;
+            *)
+              echo 'requested=false' >> "${GITHUB_OUTPUT}"
+              echo '这一轮没有申请合并。'
+              ;;
+          esac
+
+      - name: 'Merge only if the gate allows it'
+        id: 'gate'
+        if: |-
+          ${{ steps.merge_request.outputs.requested == 'true' }}
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
+          # 这一步就是闸门本身，要放行上面那层 gh 包装器
+          QWEN_MERGE_GATE: '1'
+          PR_NUMBER: '${{ steps.context.outputs.pr_number }}'
+          REPOSITORY: '${{ github.repository }}'
+          MILES_CI_WAIT_MINUTES: '${{ vars.MILES_CI_WAIT_MINUTES || vars.ENGINEER_CI_WAIT_MINUTES || 10 }}'
+        run: |-
+          set -euo pipefail
+
+          set +e
+          node .github/scripts/merge-gate.mjs "${PR_NUMBER}" --repo "${REPOSITORY}" --merge
+          CODE=$?
+          set -e
+
+          case "${CODE}" in
+            0) echo 'gate=merged' >> "${GITHUB_OUTPUT}" ;;
+            # 1 是「条件没满足」，结论已经贴在 PR 上了，不是出错
+            1)
+              echo 'gate=blocked' >> "${GITHUB_OUTPUT}"
+              echo '闸门拦下了这次合并，原因见 PR 上的评论。' >> "${GITHUB_STEP_SUMMARY}"
+              ;;
+            *)
+              echo 'gate=error' >> "${GITHUB_OUTPUT}"
+              echo "::error title=合并闸门自己出错了::退出码 ${CODE}，这次合并没有完成，判据本身也没跑完。"
+              exit "${CODE}"
+              ;;
+          esac
+
+      # 闸门的真保底在这里，不在上面那层包装器里：包装器只是拦 gh，绕道 curl 拦不住。
+      # 所以这一轮结束后核一次 PR 状态 —— 被机器人合掉却没过闸门，整轮判失败。
+      - name: 'Fail when the pull request was merged outside the gate'
+        if: |-
+          ${{ always() && steps.context.outputs.skip != 'true' && steps.context.outputs.pr_number != '' }}
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
+          PR_NUMBER: '${{ steps.context.outputs.pr_number }}'
+          REPOSITORY: '${{ github.repository }}'
+          GATE: '${{ steps.gate.outputs.gate }}'
+        run: |-
+          set -euo pipefail
+
+          STATE="$(gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json state --jq '.state')"
+          MERGED_BY="$(gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json mergedBy --jq '.mergedBy.login // ""')"
+          echo "PR #${PR_NUMBER} 状态 ${STATE}，合并者 ${MERGED_BY:-无}，闸门 ${GATE:-未运行}"
+
+          if [ "${STATE}" != 'MERGED' ] || [ "${GATE}" = 'merged' ]; then
+            exit 0
+          fi
+
+          # 人自己合的不管：合并条件该由人判断，这里只盯机器人。
+          case "${MERGED_BY}" in
+            *'[bot]')
+              echo '::error title=PR 在闸门之外被合掉了::这一轮没有经过 merge-gate.mjs 就合并了 PR，合并条件未核。'
+              exit 1
+              ;;
+            *)
+              echo "PR 是由 ${MERGED_BY:-非机器人} 合并的，不归这一轮。"
               ;;
           esac
 

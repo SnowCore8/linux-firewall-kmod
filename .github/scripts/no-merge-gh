@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# 包在 gh 外面的合并拦截层：模型这一轮里合不了。
+#
+# 为什么需要：合并前条件原写在 auto-miles.toml 里由陈实自己读、自己执行 `gh pr merge`。
+# 实测两次都没对上 —— PR #38 在「浏览器端到端测试」判失败后照常合并，PR #39 在批准挂在
+# 旧提交 447ff12a 时于新提交 b2763785 上合并。写给人读的清单不构成闸门。
+#
+# 所以合并不再经过模型：它只能写 <!-- qwen:merge-request -->，由 qwen-miles.yml 的闸门
+# 步骤调 .github/scripts/merge-gate.mjs 判定后执行。
+#
+# 这不是安全边界：令牌就在环境里，绕道 curl 照样能合。真正的保底检查在闸门那一步 ——
+# PR 在闸门之前就变成 MERGED，整轮判失败。这一层挡的是「顺手合了」。
+#
+# 用法：qwen-miles.yml 把它软链成 $RUNNER_TEMP/qwen-no-merge/gh 并前置到 PATH，
+# 真实 gh 的路径写在同目录的 real-gh 里。
+set -euo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REAL_GH="${REAL_GH:-$(cat "${SELF_DIR}/real-gh" 2>/dev/null || true)}"
+
+if [ -z "${REAL_GH}" ] || [ "$(readlink -f "${REAL_GH}")" = "$(readlink -f "${BASH_SOURCE[0]}")" ]; then
+  # 找不到真实 gh 时必须失败，不能 exec 回自己（会无限递归）
+  echo 'no-merge-gh 找不到真实的 gh：real-gh 文件缺失或指向自己' >&2
+  exit 127
+fi
+
+if [ "${QWEN_MERGE_GATE:-}" != '1' ]; then
+  BLOCKED=''
+  PREV=''
+  for ARG in "$@"; do
+    case "${ARG}" in
+      # gh api repos/o/r/pulls/39/merge、graphql 的 mergePullRequest
+      */merge | *mergePullRequest*) BLOCKED=1 ;;
+    esac
+    if [ "${PREV}" = 'pr' ] && [ "${ARG}" = 'merge' ]; then BLOCKED=1; fi
+    PREV="${ARG}"
+  done
+
+  if [ -n "${BLOCKED}" ]; then
+    cat >&2 <<'MSG'
+没有合并权限：合并由 .github/scripts/merge-gate.mjs 判定后执行，不经过你。
+要申请合并，在这一轮的最终回复里单独写一行 <!-- qwen:merge-request -->。
+MSG
+    exit 1
+  fi
+fi
+
+exec "${REAL_GH}" "$@"
