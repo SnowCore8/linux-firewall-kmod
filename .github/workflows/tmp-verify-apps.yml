@@ -1,0 +1,81 @@
+name: '临时：验证四个 App 令牌'
+
+# 只为验证变量与密钥写对了、申请的权限档次落在安装授权范围内。
+# 跑完即删，不进主干。
+on:
+  pull_request:
+
+defaults:
+  run:
+    shell: 'bash'
+
+jobs:
+  clara:
+    runs-on: 'ubuntu-latest'
+    steps:
+      - id: 'mint'
+        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b'
+        with:
+          app-id: '${{ vars.APP_ID_CLARA }}'
+          private-key: '${{ secrets.APP_PRIVATE_KEY_CLARA }}'
+          permission-contents: 'read'
+          permission-issues: 'write'
+          permission-pull-requests: 'read'
+      - env:
+          GH_TOKEN: '${{ steps.mint.outputs.token }}'
+        run: |-
+          set -euo pipefail
+          gh api repos/SnowCore8/linux-firewall-kmod --jq '"clara 换到令牌，可见仓库 " + .full_name'
+          gh api installation/repositories --jq '"  安装覆盖 \(.total_count) 个仓库：\([.repositories[].full_name] | join(", "))"'
+
+  nora:
+    runs-on: 'ubuntu-latest'
+    steps:
+      - id: 'mint'
+        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b'
+        with:
+          app-id: '${{ vars.APP_ID_NORA }}'
+          private-key: '${{ secrets.APP_PRIVATE_KEY_NORA }}'
+          permission-contents: 'read'
+          permission-issues: 'write'
+          permission-pull-requests: 'read'
+      - env:
+          GH_TOKEN: '${{ steps.mint.outputs.token }}'
+        run: |-
+          set -euo pipefail
+          gh api repos/SnowCore8/linux-firewall-kmod --jq '"nora 换到令牌，可见仓库 " + .full_name'
+
+  frank:
+    runs-on: 'ubuntu-latest'
+    steps:
+      - id: 'mint'
+        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b'
+        with:
+          app-id: '${{ vars.APP_ID_FRANK }}'
+          private-key: '${{ secrets.APP_PRIVATE_KEY_FRANK }}'
+          permission-contents: 'read'
+          permission-issues: 'read'
+          permission-pull-requests: 'write'
+      - env:
+          GH_TOKEN: '${{ steps.mint.outputs.token }}'
+        run: |-
+          set -euo pipefail
+          gh api repos/SnowCore8/linux-firewall-kmod --jq '"frank 换到令牌，可见仓库 " + .full_name'
+
+  miles:
+    runs-on: 'ubuntu-latest'
+    steps:
+      - id: 'mint'
+        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b'
+        with:
+          app-id: '${{ vars.APP_ID_MILES }}'
+          private-key: '${{ secrets.APP_PRIVATE_KEY_MILES }}'
+          permission-contents: 'write'
+          permission-issues: 'write'
+          permission-pull-requests: 'write'
+          permission-workflows: 'write'
+      - env:
+          GH_TOKEN: '${{ steps.mint.outputs.token }}'
+        run: |-
+          set -euo pipefail
+          gh api repos/SnowCore8/linux-firewall-kmod --jq '"miles 换到令牌，可见仓库 " + .full_name'
