@@ -86,8 +86,12 @@ debian/*.debhelper.log
 debian/*.debhelper
 
 # ---- AI 工具 ----
-.qwen/
+# 用 .qwen/* 而不是 .qwen/：排除整个目录之后，下面的 ! 规则一律失效，
+# 写在这里的放行项会静默不生效（.qwen/settings.json 等本机状态仍不入库）。
+.qwen/*
 !.qwen/skills/
+# 四个角色的提示词由 CI 按名字解析（/auto-clara 等），必须入库。
+!.qwen/commands/
 .cursor/
 .cursorrules
 .claude/
