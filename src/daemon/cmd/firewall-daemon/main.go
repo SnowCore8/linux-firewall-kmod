@@ -199,12 +199,27 @@ func run(args []string) error {
 		}
 	}
 
+	// 重试队列：DB 写入失败时暂存操作，后台协程按指数退避重试。
+	// 持久化文件与 DB 同目录（<db_path>.retry.json），保证重启后能恢复未写入的事件。
+	var retryQueue *persist.RetryQueue
+	if historyDB != nil && cfg.HistoryDBPath != "" {
+		retryQueue = persist.NewRetryQueue(historyDB, persist.RetryQueueConfig{
+			MaxSize:          1000,
+			PersistPath:      cfg.HistoryDBPath + ".retry.json",
+			Logger:           logger,
+			RetryInterval:    2 * time.Second,
+			MaxRetryInterval: 2 * time.Minute,
+		})
+		retryQueue.LoadPersisted()
+		defer retryQueue.Stop()
+	}
+
 	// 封禁下发汇聚点：入站主链路与 HTTP API 共用同一个实例。
 	//
 	// 此前两处各建一个 banSink，写的是同一份进程级缓存所以结果没分叉，但「谁通知信誉缓存」
 	// 这类回调只能挂在其中一个上，共用实例就把这个坑填平：封禁落库后由它同步 Facts 里的
 	// 封禁次数与扣分，否则渐进式时长读到的是封禁前的旧次数。
-	banSinkForDaemon := newBanSink(kernelClient, logger, historyDB)
+	banSinkForDaemon := newBanSink(kernelClient, logger, historyDB, retryQueue)
 	if facts != nil {
 		banSinkForDaemon.noteBan = facts.NoteBan
 	}
@@ -610,15 +625,17 @@ type banSink struct {
 	cache  *bans.ActiveBanCache
 	logger *slog.Logger
 	db     *persist.DB
+	// retryQueue 在 DB 写入失败时暂存操作，由后台协程重试（可空）。
+	retryQueue *persist.RetryQueue
 	// noteBan 在封禁落库后将「刚刚封了一次」同步进信誉缓存（可空）。
 	noteBan func(netip.Addr)
 }
 
-func newBanSink(client *kernel.Client, logger *slog.Logger, db *persist.DB) *banSink {
+func newBanSink(client *kernel.Client, logger *slog.Logger, db *persist.DB, rq *persist.RetryQueue) *banSink {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &banSink{client: client, cache: bans.GlobalCache(), logger: logger, db: db}
+	return &banSink{client: client, cache: bans.GlobalCache(), logger: logger, db: db, retryQueue: rq}
 }
 
 // TryInsert 见 runtime.BanSink。原子地插入主表与反向索引。
@@ -633,12 +650,21 @@ func (s *banSink) TryInsert(info bans.BanInfo) bool {
 		// 不被历史表的写入顺序牵着走。
 		if err := s.db.RecordBanEvent(info.IP, info.JailName, int(info.BanCount), info.IsPermanent, info.PlannedDuration()); err != nil {
 			s.logger.Error("record ban event", "error", err)
+			if s.retryQueue != nil {
+				s.retryQueue.EnqueueBanEvent(info.IP, info.JailName, int(info.BanCount), info.IsPermanent, info.PlannedDuration())
+			}
 		}
 		if _, err := s.db.RecordBanHistory(info.IP, info.IsPermanent); err != nil {
 			s.logger.Error("record ban history", "error", err)
+			if s.retryQueue != nil {
+				s.retryQueue.EnqueueBanHistory(info.IP, info.IsPermanent)
+			}
 		}
 		if err := s.db.RecordBan(info.IP, persist.DefaultBanPenalty); err != nil {
 			s.logger.Error("record ban reputation", "error", err)
+			if s.retryQueue != nil {
+				s.retryQueue.EnqueueBanReputation(info.IP, persist.DefaultBanPenalty)
+			}
 		}
 	}
 	// 库里的封禁次数与信誉分都被本方法改过了，判定层的缓存必须跟着走，否则它继续报告
