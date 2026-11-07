@@ -46,3 +46,63 @@ func TestNormalizeWhitelistPrefixLeavesIPv6Alone(t *testing.T) {
 		t.Errorf("IPv6 前缀被改写: %s → %s", prefix, got)
 	}
 }
+
+// TestWhitelistListStableOrder 验证同一实例连调多次 List()，结果逐项相等。
+// Issue #37：map 迭代顺序每次不同，前端面板刷新后条目重排，无法肉眼比对差异。
+func TestWhitelistListStableOrder(t *testing.T) {
+	w := NewWhitelist()
+	for _, s := range []string{
+		"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "203.0.113.0/24",
+		"2001:db8::/32", "fe80::/10",
+	} {
+		w.Add(netip.MustParsePrefix(s))
+	}
+
+	first := w.List()
+	for i := 0; i < 10; i++ {
+		got := w.List()
+		if len(got) != len(first) {
+			t.Fatalf("第 %d 次 List() 长度 = %d，期望 %d", i+1, len(got), len(first))
+		}
+		for j := range got {
+			if got[j] != first[j] {
+				t.Errorf("第 %d 次 List()[%d] = %s，期望 %s", i+1, j, got[j], first[j])
+			}
+		}
+	}
+}
+
+// TestWhitelistListIPv4BeforeIPv6 验证 IPv4 排在 IPv6 之前。
+func TestWhitelistListIPv4BeforeIPv6(t *testing.T) {
+	w := NewWhitelist()
+	for _, s := range []string{
+		"2001:db8::/32", "10.0.0.0/8", "fe80::/10", "192.168.0.0/16",
+	} {
+		w.Add(netip.MustParsePrefix(s))
+	}
+
+	got := w.List()
+	if len(got) != 4 {
+		t.Fatalf("List() 长度 = %d，期望 4", len(got))
+	}
+	// 前两条应该是 IPv4
+	for i := 0; i < 2; i++ {
+		p, err := netip.ParsePrefix(got[i])
+		if err != nil {
+			t.Fatalf("解析 %q 失败: %v", got[i], err)
+		}
+		if !p.Addr().Is4() {
+			t.Errorf("List()[%d] = %s，期望 IPv4", i, got[i])
+		}
+	}
+	// 后两条应该是 IPv6
+	for i := 2; i < 4; i++ {
+		p, err := netip.ParsePrefix(got[i])
+		if err != nil {
+			t.Fatalf("解析 %q 失败: %v", got[i], err)
+		}
+		if p.Addr().Is4() {
+			t.Errorf("List()[%d] = %s，期望 IPv6", i, got[i])
+		}
+	}
+}

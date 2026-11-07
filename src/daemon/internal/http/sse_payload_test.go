@@ -220,9 +220,6 @@ func TestSSEReplicaBansAndWhitelistMatchREST(t *testing.T) {
 	if !ok {
 		t.Fatalf("whitelist 帧载荷类型 = %T，期望 []http.WhitelistEntryResponse", wlPayload)
 	}
-	// 两侧都是无序集合（镜像按 map 迭代），比之前先按 cidr 排一次。
-	sort.Slice(wlRest, func(i, j int) bool { return wlRest[i].CIDR < wlRest[j].CIDR })
-	sort.Slice(wlFrame, func(i, j int) bool { return wlFrame[i].CIDR < wlFrame[j].CIDR })
 	if !reflect.DeepEqual(wlRest, wlFrame) {
 		t.Errorf("whitelist 帧与 REST 不同形\n帧:   %+v\nREST: %+v", wlFrame, wlRest)
 	}

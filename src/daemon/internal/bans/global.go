@@ -2,6 +2,7 @@ package bans
 
 import (
 	"net/netip"
+	"sort"
 	"sync"
 )
 
@@ -100,7 +101,8 @@ func (w *Whitelist) Contains(addr netip.Addr) bool {
 	return false
 }
 
-// List 返回全部键（归一后的 CIDR 文本）。
+// List 返回全部键（归一后的 CIDR 文本），按 IPv4 在前、IPv6 在后排序，
+// 各自按前缀文本升序。同样的条目集合，任意两次调用得到的序列相同。
 func (w *Whitelist) List() []string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -108,5 +110,26 @@ func (w *Whitelist) List() []string {
 	for key := range w.entries {
 		result = append(result, key)
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return whitelistLess(result[i], result[j])
+	})
 	return result
+}
+
+// whitelistLess 比较两个已归一的 CIDR 文本：IPv4 排在 IPv6 之前；
+// 同族内按文本升序（同一网段的条目相邻）。
+func whitelistLess(a, b string) bool {
+	aPrefix, aErr := netip.ParsePrefix(a)
+	bPrefix, bErr := netip.ParsePrefix(b)
+	if aErr != nil || bErr != nil {
+		// 不应发生：键由 whitelistKey 生成，一定是合法前缀。
+		// 兜底按文本比，保证排序仍然稳定。
+		return a < b
+	}
+	aIs4 := aPrefix.Addr().Is4()
+	bIs4 := bPrefix.Addr().Is4()
+	if aIs4 != bIs4 {
+		return aIs4 // IPv4 在前
+	}
+	return a < b
 }
