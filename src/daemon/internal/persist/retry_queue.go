@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,7 +24,9 @@ const (
 // retryTask 是一条待重试的数据库写入操作。
 //
 // 字段与对应的 DB 方法参数一一匹配；Op 决定回放时调用哪个方法。
+// id 是内存中递增分配的唯一标识，用于 retryBatch 并发合并时区分新旧任务，不参与 JSON 序列化。
 type retryTask struct {
+	id           uint64
 	Op           retryOp `json:"op"`
 	IP           string  `json:"ip"`
 	JailName     string  `json:"jail_name,omitempty"`
@@ -60,9 +63,11 @@ type RetryQueue struct {
 	mu    sync.Mutex
 	tasks []retryTask
 
-	wake chan struct{}
-	stop chan struct{}
-	done chan struct{}
+	wake       chan struct{}
+	stop       chan struct{}
+	done       chan struct{}
+	nextID     uint64
+	persistSeq uint64
 }
 
 // NewRetryQueue 建队列并启动后台重试协程。
@@ -102,6 +107,8 @@ func (q *RetryQueue) Enqueue(task retryTask) {
 		task.EnqueuedAt = time.Now().UnixNano()
 	}
 	q.mu.Lock()
+	task.id = q.nextID
+	q.nextID++
 	if len(q.tasks) >= q.cfg.MaxSize {
 		dropped := q.tasks[0]
 		q.tasks = q.tasks[1:]
@@ -197,6 +204,7 @@ func (q *RetryQueue) backoff(consecutive int) time.Duration {
 // retryBatch 尝试执行队列中的所有任务，返回成功与失败计数。
 //
 // 成功执行的任务从队列中移除；失败的任务保留在队列中等待下次重试。
+// 通过递增 id 区分 batch 拷贝期间新入队的任务，避免并发替换导致丢失。
 func (q *RetryQueue) retryBatch() (succeeded, failed int) {
 	q.mu.Lock()
 	if len(q.tasks) == 0 {
@@ -206,6 +214,9 @@ func (q *RetryQueue) retryBatch() (succeeded, failed int) {
 	// 拷贝一份，避免长时间持锁。
 	batch := make([]retryTask, len(q.tasks))
 	copy(batch, q.tasks)
+	// maxID 是拷贝时刻的 nextID；batch 中所有任务的 id < maxID。
+	// 锁释放期间新入队的任务 id >= maxID，重新加锁后据此保留。
+	maxID := q.nextID
 	q.mu.Unlock()
 
 	var remaining []retryTask
@@ -223,7 +234,14 @@ func (q *RetryQueue) retryBatch() (succeeded, failed int) {
 	}
 
 	q.mu.Lock()
-	q.tasks = remaining
+	// 收集在 batch 拷贝之后新入队的任务（id >= maxID）。
+	var newTasks []retryTask
+	for i := range q.tasks {
+		if q.tasks[i].id >= maxID {
+			newTasks = append(newTasks, q.tasks[i])
+		}
+	}
+	q.tasks = append(remaining, newTasks...)
 	q.mu.Unlock()
 	if succeeded > 0 {
 		q.persist()
@@ -266,6 +284,8 @@ func (q *RetryQueue) flush(ctx context.Context) {
 }
 
 // persist 把当前队列写入持久化文件。
+//
+// 使用原子递增的序号生成唯一临时文件名，避免多协程并发 persist 时互相覆盖。
 func (q *RetryQueue) persist() {
 	if q.cfg.PersistPath == "" {
 		return
@@ -280,8 +300,8 @@ func (q *RetryQueue) persist() {
 		q.log.Error("retry queue: marshal for persist", "error", err)
 		return
 	}
-	// 先写临时文件再 rename，避免写到一半进程崩溃留下损坏文件。
-	tmp := q.cfg.PersistPath + ".tmp"
+	seq := atomic.AddUint64(&q.persistSeq, 1)
+	tmp := fmt.Sprintf("%s.tmp.%d", q.cfg.PersistPath, seq)
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		q.log.Error("retry queue: write persist file", "error", err)
 		return
@@ -318,14 +338,18 @@ func (q *RetryQueue) LoadPersisted() {
 		return
 	}
 	q.mu.Lock()
+	actualCount := 0
 	for _, t := range tasks {
 		if len(q.tasks) >= q.cfg.MaxSize {
 			break
 		}
+		t.id = q.nextID
+		q.nextID++
 		q.tasks = append(q.tasks, t)
+		actualCount++
 	}
 	q.mu.Unlock()
-	q.log.Info("retry queue: loaded persisted tasks", "count", len(tasks))
+	q.log.Info("retry queue: loaded persisted tasks", "count", actualCount)
 }
 
 // EnqueueBanEvent 把失败的 RecordBanEvent 放入重试队列。
