@@ -125,6 +125,7 @@ export default function Dashboard() {
         breadcrumb={[{ title: '总览' }, { title: '概览' }]}
         realtimeState={sseSnap.state}
         realtimeLastEventAt={sseSnap.lastEventAt}
+        realtimeDisconnectedAt={sseSnap.disconnectedAt}
         extra={
           <Space>
             {stats.kernel_version && (

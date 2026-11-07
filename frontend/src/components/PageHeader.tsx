@@ -29,6 +29,7 @@ export interface PageHeaderProps {
   /** 传入则渲染实时徽标。 */
   realtimeState?: SseConnectionState
   realtimeLastEventAt?: number
+  realtimeDisconnectedAt?: number
   /** 标题下方的一整行自定义内容（如全局筛选工具条）。 */
   footer?: ReactNode
 }
@@ -40,6 +41,7 @@ export function PageHeader({
   extra,
   realtimeState,
   realtimeLastEventAt,
+  realtimeDisconnectedAt,
   footer,
 }: PageHeaderProps) {
   return (
@@ -59,7 +61,7 @@ export function PageHeader({
               {title}
             </Typography.Title>
             {realtimeState && (
-              <RealtimeBadge state={realtimeState} lastEventAt={realtimeLastEventAt} />
+              <RealtimeBadge state={realtimeState} lastEventAt={realtimeLastEventAt} disconnectedAt={realtimeDisconnectedAt} />
             )}
           </Flex>
           {description && (

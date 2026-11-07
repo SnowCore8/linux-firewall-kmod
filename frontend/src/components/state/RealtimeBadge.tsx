@@ -34,6 +34,12 @@ const STATE_META: Record<
     pulse: false,
     tip: '实时连接数已达上限，改用 REST 轮询刷新',
   },
+  exhausted: {
+    color: 'var(--fw-danger)',
+    label: '已断开',
+    pulse: false,
+    tip: '实时连接已断开，自动重连次数耗尽，请点击重试按钮手动重连',
+  },
   idle: { color: 'var(--fw-text-secondary)', label: '未连接', pulse: false, tip: '实时流未启用（未登录或已关闭）' },
   closed: { color: 'var(--fw-text-secondary)', label: '已关闭', pulse: false, tip: '实时流已关闭' },
 }
@@ -53,6 +59,8 @@ export interface RealtimeBadgeProps {
   state: SseConnectionState
   /** 最近一帧到达时刻（ms epoch）；缺省则不显示新鲜度尾标。 */
   lastEventAt?: number
+  /** 进入断开态的时刻（ms epoch）；exhausted 态时显示「已断开 X 分钟」。 */
+  disconnectedAt?: number
   /** 是否显示文案（false 时只剩一个灯，用于空间紧凑处）。 */
   showLabel?: boolean
   /** 是否显示新鲜度尾标。 */
@@ -62,6 +70,7 @@ export interface RealtimeBadgeProps {
 export function RealtimeBadge({
   state,
   lastEventAt = 0,
+  disconnectedAt = 0,
   showLabel = true,
   showFreshness = true,
 }: RealtimeBadgeProps) {
@@ -75,6 +84,8 @@ export function RealtimeBadge({
   }, [showFreshness, lastEventAt])
 
   const fresh = showFreshness && lastEventAt > 0 ? freshnessText(lastEventAt, now) : ''
+  const disconnectedText =
+    state === 'exhausted' && disconnectedAt > 0 ? freshnessText(disconnectedAt, now) : ''
 
   return (
     <Tooltip title={meta.tip}>
@@ -91,6 +102,9 @@ export function RealtimeBadge({
         />
         {showLabel && <span style={{ fontSize: 12, color: 'var(--fw-text-secondary)' }}>{meta.label}</span>}
         {fresh && <span style={{ fontSize: 12, color: 'var(--fw-text-secondary)', opacity: 0.7 }}>{fresh}</span>}
+        {disconnectedText && (
+          <span style={{ fontSize: 12, color: 'var(--fw-danger)', opacity: 0.9 }}>{disconnectedText}</span>
+        )}
       </span>
     </Tooltip>
   )
