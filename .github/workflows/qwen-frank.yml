@@ -1,0 +1,251 @@
+name: '🔎 Qwen Frank'
+
+# 周正，技术负责人：读 diff、留行内意见、批准或要求修改。不写业务代码，不合并。
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        type: 'string'
+        description: '要评审的 PR 编号'
+        required: true
+      head_ref:
+        type: 'string'
+        description: 'PR 分支名'
+        required: false
+        default: ''
+      reason:
+        type: 'string'
+        description: '为什么叫周正来'
+        required: false
+        default: '手动触发'
+    outputs:
+      verdict:
+        description: '本次给出的结论：approve / request-changes / comment / skipped'
+        value: '${{ jobs.review.outputs.verdict }}'
+
+concurrency:
+  group: '${{ github.workflow }}-frank-${{ inputs.pr_number }}'
+  # 默认的 queue: single 只留一个排队位，新来的会把排着的那次取消掉——被取消的运行
+  # jobs 为空，等于这次评审被静默丢弃
+  queue: max
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: 'bash'
+
+jobs:
+  review:
+    runs-on: 'ubuntu-latest'
+    timeout-minutes: 20
+    outputs:
+      verdict: '${{ steps.verdict.outputs.verdict }}'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+      issues: 'read'
+      pull-requests: 'write'
+    steps:
+      - name: 'Mint identity token'
+        id: 'mint_identity_token'
+        if: |-
+          ${{ vars.APP_ID_FRANK || vars.APP_ID_REVIEWER || vars.APP_ID }}
+        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # ratchet:actions/create-github-app-token@v2
+        with:
+          app-id: '${{ vars.APP_ID_FRANK || vars.APP_ID_REVIEWER || vars.APP_ID }}'
+          private-key: '${{ secrets.APP_PRIVATE_KEY_FRANK || secrets.APP_PRIVATE_KEY_REVIEWER || secrets.APP_PRIVATE_KEY }}'
+          permission-contents: 'read'
+          permission-issues: 'read'
+          permission-pull-requests: 'write'
+
+      - name: 'Inspect the pull request'
+        id: 'context'
+        uses: 'actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea' # ratchet:actions/github-script@v7
+        env:
+          PR_NUMBER: '${{ inputs.pr_number }}'
+          HEAD_REF_INPUT: '${{ inputs.head_ref }}'
+        with:
+          github-token: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          script: |-
+            const { owner, repo } = context.repo;
+            const pull_number = Number(process.env.PR_NUMBER);
+            const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number });
+            const headRef = pull.head.ref;
+            const isOwnPr = headRef.startsWith('qwen-fix-');
+            const before = await github.rest.issues.listComments({
+              owner, repo, issue_number: pull_number, per_page: 100,
+            });
+
+            // 同一件事会被安排两遍：PR 一打开就叫了周正，陈实随后又在 PR 上写一条交接
+            // 评论。判据只能放在这里，不能放在路由里 —— 路由判定的时刻（PR 打开后约
+            // 10 秒）第一次的评审还没提交，看出去永远是「没有评审」。而 qwen-frank 的
+            // 并发组按 pr_number 分组、queue: max，第二次一定排在第一次之后启动，
+            // 到这一刻评审已经落地，查一下当前提交就能准确认出来。
+            //
+            // 只挡机器人发起的叫醒。人写「再看看」是他明确要看，哪怕没有新提交。
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner, repo, pull_number, per_page: 100,
+            });
+            const reviewedAtHead = reviews.some((r) => r.commit_id === pull.head.sha);
+            const repeated = reviewedAtHead && context.payload.sender?.type === 'Bot';
+
+            const skip = [];
+            if (pull.state !== 'open') skip.push('PR 已关闭或已合并');
+            if (pull.draft) skip.push('PR 仍是草稿');
+            if (pull.head.repo?.fork) skip.push('PR 来自 fork，无法读取完整上下文');
+            if (repeated) {
+              skip.push('当前提交上已有评审，这次是机器人重复叫醒');
+              // 静默跳过等于没人知道这次没评：在运行的注解里留一条，不往 PR 上发评论
+              core.notice(`当前提交 ${pull.head.sha.slice(0, 8)} 上已有评审，这次机器人叫醒不再是必要的`);
+            }
+
+            core.setOutput('head_ref', headRef);
+            core.setOutput('head_sha', pull.head.sha);
+            core.setOutput('is_own_pr', isOwnPr ? 'true' : 'false');
+            core.setOutput('skip', skip.length > 0 ? 'true' : 'false');
+            core.setOutput('skip_reason', skip.join('；'));
+            core.setOutput('comments_before', String(before.data.length));
+            core.info(`PR #${pull_number} 分支 ${headRef}，我方分支=${isOwnPr}，跳过原因=${skip.join('；') || '无'}`);
+
+      - name: 'Checkout repository'
+        if: |-
+          ${{ steps.context.outputs.skip != 'true' }}
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+
+      - name: 'Run Qwen frank'
+        id: 'qwen_frank'
+        if: |-
+          ${{ steps.context.outputs.skip != 'true' }}
+        uses: 'QwenLM/qwen-code-action@v1'
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
+          REPOSITORY: '${{ github.repository }}'
+          PR_NUMBER: '${{ inputs.pr_number }}'
+          HEAD_REF: '${{ steps.context.outputs.head_ref }}'
+          IS_OWN_PR: '${{ steps.context.outputs.is_own_pr }}'
+          REASON: '${{ inputs.reason }}'
+        with:
+          openai_api_key: '${{ secrets.QWEN_API_KEY }}'
+          openai_base_url: '${{ vars.QWEN_BASE_URL }}'
+          openai_model: '${{ vars.QWEN_MODEL }}'
+          qwen_cli_version: '${{ vars.QWEN_CLI_VERSION }}'
+          qwen_debug: '${{ fromJSON(vars.DEBUG || vars.ACTIONS_STEP_DEBUG || false) }}'
+          upload_artifacts: '${{ vars.UPLOAD_ARTIFACTS }}'
+          workflow_name: 'qwen-frank'
+          settings: |-
+            {
+              "model": {
+                "maxSessionTurns": 40
+              },
+              "memory": {
+                "enableManagedAutoMemory": false,
+                "enableManagedAutoDream": false
+              },
+              "telemetry": {
+                "enabled": false
+              },
+              "mcpServers": {
+                "github": {
+                  "command": "docker",
+                  "args": [
+                    "run",
+                    "-i",
+                    "--rm",
+                    "-e",
+                    "GITHUB_PERSONAL_ACCESS_TOKEN",
+                    "ghcr.io/github/github-mcp-server:v0.18.0"
+                  ],
+                  "includeTools": [
+                    "pull_request_read",
+                    "get_file_contents",
+                    "search_code",
+                    "list_commits",
+                    "get_commit"
+                  ],
+                  "env": {
+                    "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+                  }
+                }
+              },
+              "tools": {
+                "core": [
+                  "run_shell_command(gh)",
+                  "run_shell_command(ls)",
+                  "run_shell_command(cat)",
+                  "run_shell_command(grep)",
+                  "run_shell_command(head)",
+                  "run_shell_command(tail)"
+                ]
+              }
+            }
+          prompt: '/auto-frank'
+
+      # API 报错时 CLI 仍然退出 0，把错误文本当成最后一段 assistant 输出
+      # （qwen-code#8920、#11217，两者的修复 PR 至今都还没合并）。所以判据只能是
+      # 「最后一句长什么样」。官方 qwen-triage.yml:1379 记的那次事故就是这样：
+      # 一次 268 字符的裸 [API Error: ...] 被当成成功，没人重试也没人告警。
+      # 尾部匹配而不是 contains：真实回复正文里哪怕引了一句 API 错误，后面还会
+      # 继续写下去，不该因此判失败。
+      - name: 'Fail when the model API returned an error'
+        if: |-
+          ${{ steps.qwen_frank.outcome == 'success' }}
+        run: |-
+          set -euo pipefail
+
+          if [ ! -f qwen-artifacts/stdout.log ]; then
+            echo '::error title=没有 qwen 的输出::找不到 qwen-artifacts/stdout.log，无法判断这一轮做了什么。'
+            exit 1
+          fi
+
+          # 与 action 自己解析 qwen_response 的口径一致：取最后一段 assistant 文本
+          BODY="$(jq -r '[.[] | select(.type == "assistant")] | last | .message.content[]? | select(.type == "text") | .text' \
+            qwen-artifacts/stdout.log 2>/dev/null || true)"
+
+          for S in \
+            'Possible quota limitations in place or slow response times detected. Please wait and try again later.' \
+            'Please wait and try again later. To increase your limits, request a quota increase through AI Studio, or switch to another /auth method' \
+            'Please wait and try again later. To increase your limits, request a quota increase through Vertex, or switch to another /auth method'; do
+            BODY="${BODY%"$S"}"
+          done
+          BODY="${BODY%"${BODY##*[![:space:]]}"}"
+
+          case "${BODY}" in
+            *"[API Error: "*"]")
+              # 正文来自外部接口，别让它里面的 :: 或 ##[ 被当成 workflow 命令
+              EXCERPT="$(printf '%s' "${BODY:0:300}" | sed -e 's/::/;;/g' -e 's/##\[/##［/g')"
+              echo '::error title=模型 API 返回了错误::这一轮没有完成，结论不可用。这是接口侧的问题，重跑即可。'
+              printf '%s\n' "${EXCERPT}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: 'Read the verdict Frank submitted'
+        id: 'verdict'
+        if: |-
+          ${{ always() }}
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          REPOSITORY: '${{ github.repository }}'
+          PR_NUMBER: '${{ inputs.pr_number }}'
+          HEAD_SHA: '${{ steps.context.outputs.head_sha }}'
+          SKIP: '${{ steps.context.outputs.skip }}'
+          SKIP_REASON: '${{ steps.context.outputs.skip_reason }}'
+        run: |-
+          set -euo pipefail
+
+          if [ "${SKIP}" = 'true' ]; then
+            echo 'verdict=skipped' >> "${GITHUB_OUTPUT}"
+            echo "跳过评审：${SKIP_REASON}"
+            exit 0
+          fi
+
+          # 以本次提交上的评审为准，避免把上一轮的批准当成本轮结论
+          STATE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews" --paginate \
+            --jq "[.[] | select(.commit_id == \"${HEAD_SHA}\")] | last | .state // empty")"
+
+          case "${STATE}" in
+            APPROVED) echo 'verdict=approve' >> "${GITHUB_OUTPUT}" ;;
+            CHANGES_REQUESTED) echo 'verdict=request-changes' >> "${GITHUB_OUTPUT}" ;;
+            *) echo 'verdict=comment' >> "${GITHUB_OUTPUT}" ;;
+          esac
+          echo "本次评审结论：${STATE:-未提交评审}"

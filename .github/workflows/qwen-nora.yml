@@ -1,0 +1,206 @@
+name: '🧩 Qwen Nora'
+
+# 叶澜，产品经理：决定做什么、不做什么、做到什么程度，并裁决陈实与周正的僵持。
+on:
+  workflow_call:
+    inputs:
+      number:
+        type: 'string'
+        description: 'Issue 或 PR 编号'
+        required: true
+      on_pr:
+        type: 'string'
+        description: "'true' 表示处理对象是 PR"
+        required: false
+        default: 'false'
+      issue_number:
+        type: 'string'
+        description: '关联 Issue 编号'
+        required: false
+        default: ''
+      pr_number:
+        type: 'string'
+        description: 'PR 编号'
+        required: false
+        default: ''
+      head_ref:
+        type: 'string'
+        description: 'PR 分支名'
+        required: false
+        default: ''
+      reason:
+        type: 'string'
+        description: '为什么找叶澜'
+        required: false
+        default: '手动触发'
+    outputs:
+      decision:
+        description: '本次是否给出了决定'
+        value: '${{ jobs.decide.outputs.decided }}'
+
+concurrency:
+  group: '${{ github.workflow }}-nora-${{ inputs.number }}'
+  # 默认的 queue: single 只留一个排队位，新来的会把排着的那次取消掉——被取消的运行
+  # jobs 为空，等于这次叫醒被静默丢弃
+  queue: max
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: 'bash'
+
+jobs:
+  decide:
+    runs-on: 'ubuntu-latest'
+    timeout-minutes: 15
+    outputs:
+      decided: '${{ steps.context.outputs.proceed }}'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+      issues: 'write'
+      pull-requests: 'read'
+    steps:
+      - name: 'Mint identity token'
+        id: 'mint_identity_token'
+        if: |-
+          ${{ vars.APP_ID_NORA || vars.APP_ID_PRODUCT || vars.APP_ID }}
+        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # ratchet:actions/create-github-app-token@v2
+        with:
+          app-id: '${{ vars.APP_ID_NORA || vars.APP_ID_PRODUCT || vars.APP_ID }}'
+          private-key: '${{ secrets.APP_PRIVATE_KEY_NORA || secrets.APP_PRIVATE_KEY_PRODUCT || secrets.APP_PRIVATE_KEY }}'
+          permission-contents: 'read'
+          permission-issues: 'write'
+          permission-pull-requests: 'read'
+
+      - name: 'Check the target is still open'
+        id: 'context'
+        uses: 'actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea' # ratchet:actions/github-script@v7
+        env:
+          NUMBER: '${{ inputs.number }}'
+        with:
+          github-token: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          script: |-
+            const { owner, repo } = context.repo;
+            const number = Number(process.env.NUMBER);
+            const { data: item } = await github.rest.issues.get({ owner, repo, issue_number: number });
+
+            if (item.state !== 'open') {
+              core.setOutput('proceed', 'false');
+              core.info(`#${number} 已关闭，不再做产品决策`);
+              return;
+            }
+
+            core.setOutput('proceed', 'true');
+            core.info(`对 #${number} 做产品决策`);
+
+      - name: 'Checkout repository'
+        if: |-
+          ${{ steps.context.outputs.proceed == 'true' }}
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+
+      - name: 'Run Qwen nora'
+        id: 'qwen_nora'
+        if: |-
+          ${{ steps.context.outputs.proceed == 'true' }}
+        uses: 'QwenLM/qwen-code-action@v1'
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
+          REPOSITORY: '${{ github.repository }}'
+          NUMBER: '${{ inputs.number }}'
+          ON_PR: '${{ inputs.on_pr }}'
+          ISSUE_NUMBER: '${{ inputs.issue_number }}'
+          PR_NUMBER: '${{ inputs.pr_number }}'
+          HEAD_REF: '${{ inputs.head_ref }}'
+          REASON: '${{ inputs.reason }}'
+        with:
+          openai_api_key: '${{ secrets.QWEN_API_KEY }}'
+          openai_base_url: '${{ vars.QWEN_BASE_URL }}'
+          openai_model: '${{ vars.QWEN_MODEL }}'
+          qwen_cli_version: '${{ vars.QWEN_CLI_VERSION }}'
+          qwen_debug: '${{ fromJSON(vars.DEBUG || vars.ACTIONS_STEP_DEBUG || false) }}'
+          upload_artifacts: '${{ vars.UPLOAD_ARTIFACTS }}'
+          workflow_name: 'qwen-nora'
+          settings: |-
+            {
+              "model": {
+                "maxSessionTurns": 30
+              },
+              "memory": {
+                "enableManagedAutoMemory": false,
+                "enableManagedAutoDream": false
+              },
+              "telemetry": {
+                "enabled": false
+              },
+              "mcpServers": {
+                "github": {
+                  "command": "docker",
+                  "args": [
+                    "run",
+                    "-i",
+                    "--rm",
+                    "-e",
+                    "GITHUB_PERSONAL_ACCESS_TOKEN",
+                    "ghcr.io/github/github-mcp-server:v0.18.0"
+                  ],
+                  "includeTools": [
+                    "pull_request_read",
+                    "get_file_contents",
+                    "search_code",
+                    "get_issue_comments"
+                  ],
+                  "env": {
+                    "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+                  }
+                }
+              },
+              "tools": {
+                "core": [
+                  "run_shell_command(gh)",
+                  "run_shell_command(ls)",
+                  "run_shell_command(cat)",
+                  "run_shell_command(grep)"
+                ]
+              }
+            }
+          prompt: '/auto-nora'
+
+      # API 报错时 CLI 仍然退出 0，把错误文本当成最后一段 assistant 输出
+      # （qwen-code#8920、#11217，两者的修复 PR 至今都还没合并）。所以判据只能是
+      # 「最后一句长什么样」。官方 qwen-triage.yml:1379 记的那次事故就是这样：
+      # 一次 268 字符的裸 [API Error: ...] 被当成成功，没人重试也没人告警。
+      # 尾部匹配而不是 contains：真实回复正文里哪怕引了一句 API 错误，后面还会
+      # 继续写下去，不该因此判失败。
+      - name: 'Fail when the model API returned an error'
+        if: |-
+          ${{ steps.qwen_nora.outcome == 'success' }}
+        run: |-
+          set -euo pipefail
+
+          if [ ! -f qwen-artifacts/stdout.log ]; then
+            echo '::error title=没有 qwen 的输出::找不到 qwen-artifacts/stdout.log，无法判断这一轮做了什么。'
+            exit 1
+          fi
+
+          # 与 action 自己解析 qwen_response 的口径一致：取最后一段 assistant 文本
+          BODY="$(jq -r '[.[] | select(.type == "assistant")] | last | .message.content[]? | select(.type == "text") | .text' \
+            qwen-artifacts/stdout.log 2>/dev/null || true)"
+
+          for S in \
+            'Possible quota limitations in place or slow response times detected. Please wait and try again later.' \
+            'Please wait and try again later. To increase your limits, request a quota increase through AI Studio, or switch to another /auth method' \
+            'Please wait and try again later. To increase your limits, request a quota increase through Vertex, or switch to another /auth method'; do
+            BODY="${BODY%"$S"}"
+          done
+          BODY="${BODY%"${BODY##*[![:space:]]}"}"
+
+          case "${BODY}" in
+            *"[API Error: "*"]")
+              # 正文来自外部接口，别让它里面的 :: 或 ##[ 被当成 workflow 命令
+              EXCERPT="$(printf '%s' "${BODY:0:300}" | sed -e 's/::/;;/g' -e 's/##\[/##［/g')"
+              echo '::error title=模型 API 返回了错误::这一轮没有完成，决定不可用。这是接口侧的问题，重跑即可。'
+              printf '%s\n' "${EXCERPT}" >&2
+              exit 1
+              ;;
+          esac
