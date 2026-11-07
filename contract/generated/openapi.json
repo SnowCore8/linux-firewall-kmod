@@ -6882,6 +6882,22 @@
                 "type": "null"
               }
             ]
+          },
+          "consecutive_failures": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "circuit_broken_until": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -6892,7 +6908,8 @@
           "category",
           "confidence",
           "entry_count",
-          "sync_status"
+          "sync_status",
+          "consecutive_failures"
         ]
       },
       "ThreatFeedListResponse": {

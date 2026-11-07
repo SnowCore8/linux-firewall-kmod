@@ -277,10 +277,12 @@ func run(args []string) error {
 			var feedMgr *threatfeeds.FeedManager
 			if cfg.ThreatFeeds.Enabled {
 				feedCfg := threatfeeds.Config{
-					Enabled:         true,
-					RefreshInterval: time.Duration(cfg.ThreatFeeds.RefreshInterval) * time.Second,
-					HTTPTimeout:     time.Duration(cfg.ThreatFeeds.HTTPTimeout) * time.Second,
-					MaxRetries:      cfg.ThreatFeeds.MaxRetries,
+					Enabled:          true,
+					RefreshInterval:  time.Duration(cfg.ThreatFeeds.RefreshInterval) * time.Second,
+					HTTPTimeout:      time.Duration(cfg.ThreatFeeds.HTTPTimeout) * time.Second,
+					MaxRetries:       cfg.ThreatFeeds.MaxRetries,
+					FailureThreshold: cfg.ThreatFeeds.FailureThreshold,
+					CooldownDuration: time.Duration(cfg.ThreatFeeds.CooldownDuration) * time.Second,
 				}
 				for _, s := range cfg.ThreatFeeds.Sources {
 					feedCfg.Sources = append(feedCfg.Sources, threatfeeds.SourceConfig{

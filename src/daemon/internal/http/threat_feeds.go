@@ -13,16 +13,18 @@ import (
 // 静态字段（URL/分类/置信度）来自配置，动态字段（同步时刻/条目数/错误）来自 FeedManager
 // 的源统计——两边按源名对齐，配置里有而统计缺席的源按「从未同步」给出。
 type ThreatFeedResponse struct {
-	ID           string  `json:"id"`
-	Name         string  `json:"name"`
-	SourceURL    string  `json:"source_url"`
-	Enabled      bool    `json:"enabled"`
-	Category     string  `json:"category"`
-	Confidence   float64 `json:"confidence"`
-	LastSyncedAt *int64  `json:"last_synced_at"`
-	EntryCount   uint32  `json:"entry_count"`
-	SyncStatus   string  `json:"sync_status"`
-	LastError    *string `json:"last_error"`
+	ID                  string  `json:"id"`
+	Name                string  `json:"name"`
+	SourceURL           string  `json:"source_url"`
+	Enabled             bool    `json:"enabled"`
+	Category            string  `json:"category"`
+	Confidence          float64 `json:"confidence"`
+	LastSyncedAt        *int64  `json:"last_synced_at"`
+	EntryCount          uint32  `json:"entry_count"`
+	SyncStatus          string  `json:"sync_status"`
+	LastError           *string `json:"last_error"`
+	ConsecutiveFailures uint32  `json:"consecutive_failures"`
+	CircuitBrokenUntil  *int64  `json:"circuit_broken_until"`
 }
 
 // ThreatFeedListResponse 是情报源列表载荷（GET /api/v2/threat-feeds）。
@@ -128,6 +130,11 @@ func (h *APIHandlers) threatFeedViews() []ThreatFeedResponse {
 				msg := stats.Error.Error()
 				view.LastError = &msg
 				view.SyncStatus = "error"
+			}
+			view.ConsecutiveFailures = uint32(stats.ConsecutiveFailures)
+			if !stats.CircuitBrokenUntil.IsZero() {
+				until := stats.CircuitBrokenUntil.Unix()
+				view.CircuitBrokenUntil = &until
 			}
 		}
 		feeds = append(feeds, view)

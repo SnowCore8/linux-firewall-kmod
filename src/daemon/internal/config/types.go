@@ -260,6 +260,10 @@ type ThreatFeedsConfig struct {
 	HTTPTimeout uint32
 	// MaxRetries 是拉取失败后的重试次数，默认 3。
 	MaxRetries int
+	// FailureThreshold 是触发熔断的连续失败次数，默认 3。
+	FailureThreshold int
+	// CooldownDuration 是熔断冷却时长（秒），默认 3600（1 小时）。
+	CooldownDuration uint32
 	// Sources 是配置的情报源列表。
 	Sources []ThreatFeedSourceConfig
 }
@@ -283,10 +287,12 @@ type ThreatFeedSourceConfig struct {
 // 默认启用 IPsum 和 FireHOL Level 1（质量高、误报低）。
 func DefaultThreatFeedsConfig() ThreatFeedsConfig {
 	return ThreatFeedsConfig{
-		Enabled:         true,
-		RefreshInterval: 86400, // 24 小时
-		HTTPTimeout:     30,
-		MaxRetries:      3,
+		Enabled:          true,
+		RefreshInterval:  86400, // 24 小时
+		HTTPTimeout:      30,
+		MaxRetries:       3,
+		FailureThreshold: 3,
+		CooldownDuration: 3600, // 1 小时
 		Sources: []ThreatFeedSourceConfig{
 			{
 				Name:       "ipsum",

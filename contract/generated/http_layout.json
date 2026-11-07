@@ -80,7 +80,7 @@
     "请求 PaginationParams: 3 个字段",
     "响应 SseStreamStatus: 3 个字段",
     "响应 SseStatusResponse: 2 个字段",
-    "响应 ThreatFeedResponse: 10 个字段",
+    "响应 ThreatFeedResponse: 12 个字段",
     "响应 ThreatFeedListResponse: 2 个字段",
     "响应 ThreatFeedSyncResult: 4 个字段",
     "响应 AnalysisSummaryResponse: 7 个字段",
@@ -3185,6 +3185,14 @@
         {
           "key": "last_error",
           "type": "Option<String>"
+        },
+        {
+          "key": "consecutive_failures",
+          "type": "u32"
+        },
+        {
+          "key": "circuit_broken_until",
+          "type": "Option<i64>"
         }
       ]
     },

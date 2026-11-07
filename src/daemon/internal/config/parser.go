@@ -136,11 +136,13 @@ type yamlCapacity struct {
 
 // yamlThreatFeeds 是威胁情报源配置的 YAML 表示。
 type yamlThreatFeeds struct {
-	Enabled         *bool                  `yaml:"enabled"`
-	RefreshInterval *uint32                `yaml:"refresh_interval"`
-	HTTPTimeout     *uint32                `yaml:"http_timeout"`
-	MaxRetries      *int                   `yaml:"max_retries"`
-	Sources         []yamlThreatFeedSource `yaml:"sources"`
+	Enabled          *bool                  `yaml:"enabled"`
+	RefreshInterval  *uint32                `yaml:"refresh_interval"`
+	HTTPTimeout      *uint32                `yaml:"http_timeout"`
+	MaxRetries       *int                   `yaml:"max_retries"`
+	FailureThreshold *int                   `yaml:"failure_threshold"`
+	CooldownDuration *uint32                `yaml:"cooldown_duration"`
+	Sources          []yamlThreatFeedSource `yaml:"sources"`
 }
 
 // yamlThreatFeedSource 是单个情报源的 YAML 表示。
@@ -569,6 +571,12 @@ func applyThreatFeeds(yc *yamlConfig, cfg *Config) {
 	setU32(&cfg.ThreatFeeds.HTTPTimeout, tf.HTTPTimeout)
 	if tf.MaxRetries != nil {
 		cfg.ThreatFeeds.MaxRetries = *tf.MaxRetries
+	}
+	if tf.FailureThreshold != nil {
+		cfg.ThreatFeeds.FailureThreshold = *tf.FailureThreshold
+	}
+	if tf.CooldownDuration != nil {
+		cfg.ThreatFeeds.CooldownDuration = *tf.CooldownDuration
 	}
 	// 情报源列表：YAML 给出完整列表时替换默认值
 	if len(tf.Sources) > 0 {

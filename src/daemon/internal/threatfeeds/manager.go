@@ -24,6 +24,7 @@ type FeedSource = sources.FeedSource
 //   - 错误隔离：单个源失败不影响其他源
 //   - 性能隔离：刷新在后台 goroutine，不阻塞主判定链路
 //   - 可观测：每个源的状态、错误、条目数可查询
+//   - 熔断器：连续失败超过阈值的源自动暂停刷新，冷却期后恢复
 type FeedManager struct {
 	cfg       Config
 	sources   []FeedSource
@@ -42,19 +43,29 @@ type FeedManager struct {
 
 // SourceStats 是单个源的统计信息。
 type SourceStats struct {
-	Name         string
-	Enabled      bool
-	LastUpdate   time.Time
-	EntryCount   int
-	Error        error
-	RefreshCount uint64
-	ErrorCount   uint64
+	Name                string
+	Enabled             bool
+	LastUpdate          time.Time
+	EntryCount          int
+	Error               error
+	RefreshCount        uint64
+	ErrorCount          uint64
+	ConsecutiveFailures int
+	CircuitBrokenUntil  time.Time
 }
 
 // NewFeedManager 创建新的情报管理器。
 func NewFeedManager(cfg Config) (*FeedManager, error) {
 	if !cfg.Enabled {
 		return nil, nil // 未启用时返回 nil
+	}
+
+	// 熔断器默认值兜底：配置未给出时使用合理默认
+	if cfg.FailureThreshold <= 0 {
+		cfg.FailureThreshold = 3
+	}
+	if cfg.CooldownDuration <= 0 {
+		cfg.CooldownDuration = 1 * time.Hour
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -108,7 +119,23 @@ func (m *FeedManager) buildSource(cfg SourceConfig) (FeedSource, error) {
 	}
 }
 
+// isCircuitBroken 检查指定源是否处于熔断冷却期。
+// 调用方必须持有 m.mu 的读锁或写锁。
+func (m *FeedManager) isCircuitBroken(name string) bool {
+	stats, ok := m.stats[name]
+	if !ok {
+		return false
+	}
+	if stats.CircuitBrokenUntil.IsZero() {
+		return false
+	}
+	return time.Now().Before(stats.CircuitBrokenUntil)
+}
+
 // RefreshAll 并发刷新所有源。
+//
+// 熔断器：调度前检查每个源的熔断状态，处于冷却期内的源跳过本轮刷新，
+// 冷却期过后自动恢复尝试。
 func (m *FeedManager) RefreshAll(ctx context.Context) error {
 	if len(m.sources) == 0 {
 		return nil
@@ -118,6 +145,17 @@ func (m *FeedManager) RefreshAll(ctx context.Context) error {
 	results := make(chan RefreshResult, len(m.sources))
 
 	for _, src := range m.sources {
+		// 熔断检查：冷却期内的源跳过刷新
+		m.mu.RLock()
+		broken := m.isCircuitBroken(src.Name())
+		m.mu.RUnlock()
+
+		if broken {
+			slog.Debug("情报源处于熔断冷却期，跳过本轮刷新",
+				"source", src.Name())
+			continue
+		}
+
 		wg.Add(1)
 		go func(s FeedSource) {
 			defer wg.Done()
@@ -183,7 +221,10 @@ func (m *FeedManager) refreshOne(ctx context.Context, src FeedSource) RefreshRes
 	}
 }
 
-// updateSourceStats 更新源统计信息。
+// updateSourceStats 更新源统计信息，包含熔断器逻辑。
+//
+// 成功时：ConsecutiveFailures 归零，清除冷却时间。
+// 失败时：ConsecutiveFailures 累加；达到阈值时设置冷却截止时间并记录告警。
 func (m *FeedManager) updateSourceStats(result RefreshResult) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -197,10 +238,24 @@ func (m *FeedManager) updateSourceStats(result RefreshResult) {
 	if result.Err != nil {
 		stats.Error = result.Err
 		stats.ErrorCount++
+		stats.ConsecutiveFailures++
+
+		// 达到熔断阈值：设置冷却截止时间
+		if stats.ConsecutiveFailures >= m.cfg.FailureThreshold && stats.CircuitBrokenUntil.IsZero() {
+			stats.CircuitBrokenUntil = time.Now().Add(m.cfg.CooldownDuration)
+			slog.Warn("情报源连续失败达到阈值，进入熔断冷却期",
+				"source", result.Source,
+				"consecutive_failures", stats.ConsecutiveFailures,
+				"cooldown_until", stats.CircuitBrokenUntil,
+				"cooldown_duration", m.cfg.CooldownDuration)
+		}
 	} else {
 		stats.Error = nil
 		stats.LastUpdate = time.Now()
 		stats.EntryCount = len(result.Entries)
+		// 成功：连续失败计数归零，清除冷却时间
+		stats.ConsecutiveFailures = 0
+		stats.CircuitBrokenUntil = time.Time{}
 	}
 }
 

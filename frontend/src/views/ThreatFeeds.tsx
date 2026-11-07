@@ -55,6 +55,7 @@ const FEEDS_POLL_MS = 60_000
 
 /** 后端 sync_status 的已知取值（见 daemon threat_feeds.go：never / ok / error）。 */
 const SYNC_STATUS_META: Record<string, { label: string; color: string }> = {
+  circuit_broken: { label: '已熔断', color: 'orange' },
   ok: { label: '正常', color: 'green' },
   error: { label: '异常', color: 'red' },
   never: { label: '从未同步', color: 'default' },
@@ -148,6 +149,29 @@ function feedDescriptionItems(feed: ThreatFeedResponse) {
       ) : (
         <Typography.Text type="secondary">—</Typography.Text>
       ),
+    },
+    {
+      key: 'consecutive_failures',
+      label: '连续失败',
+      children: (
+        <span className="fw-mono">
+          {feed.consecutive_failures > 0 ? feed.consecutive_failures : '—'}
+        </span>
+      ),
+    },
+    {
+      key: 'circuit_broken_until',
+      label: '熔断状态',
+      children: (() => {
+        const nowSec = Math.floor(Date.now() / 1000)
+        const isBroken = feed.circuit_broken_until != null && feed.circuit_broken_until > nowSec
+        if (!isBroken) return <Typography.Text type="secondary">正常</Typography.Text>
+        return (
+          <Typography.Text type="warning">
+            已熔断（冷却至 {formatDatetime(feed.circuit_broken_until!)}）
+          </Typography.Text>
+        )
+      })(),
     },
   ]
 }
@@ -344,13 +368,24 @@ export default function ThreatFeeds() {
         title: '同步状态',
         dataIndex: 'sync_status',
         key: 'sync_status',
-        width: 100,
-        render: (status: string) => {
-          const meta = syncStatusMeta(status)
+        width: 120,
+        render: (status: string, record: ThreatFeedResponse) => {
+          const nowSec = Math.floor(Date.now() / 1000)
+          const isBroken = record.circuit_broken_until != null && record.circuit_broken_until > nowSec
+          const displayStatus = isBroken ? 'circuit_broken' : status
+          const meta = syncStatusMeta(displayStatus)
           return (
-            <Tag color={meta.color} style={{ marginInlineEnd: 0 }}>
-              {meta.label}
-            </Tag>
+            <Tooltip
+              title={
+                isBroken && record.circuit_broken_until
+                  ? `冷却至 ${formatDatetime(record.circuit_broken_until)}（连续失败 ${record.consecutive_failures} 次）`
+                  : undefined
+              }
+            >
+              <Tag color={meta.color} style={{ marginInlineEnd: 0 }}>
+                {meta.label}
+              </Tag>
+            </Tooltip>
           )
         },
       },

@@ -26,6 +26,10 @@ type Config struct {
 	HTTPTimeout time.Duration `yaml:"http_timeout"`
 	// MaxRetries 是拉取失败后的重试次数，默认 3。
 	MaxRetries int `yaml:"max_retries"`
+	// FailureThreshold 是触发熔断的连续失败次数，默认 3。
+	FailureThreshold int `yaml:"failure_threshold"`
+	// CooldownDuration 是熔断冷却时长，默认 1 小时。
+	CooldownDuration time.Duration `yaml:"cooldown_duration"`
 	// Sources 是配置的情报源列表。
 	Sources []SourceConfig `yaml:"sources"`
 }
@@ -36,10 +40,12 @@ type Config struct {
 // 其他源（DShield、Blocklist.de、Feodo Tracker）可选启用。
 func DefaultConfig() Config {
 	return Config{
-		Enabled:         true,
-		RefreshInterval: 24 * time.Hour,
-		HTTPTimeout:     30 * time.Second,
-		MaxRetries:      3,
+		Enabled:          true,
+		RefreshInterval:  24 * time.Hour,
+		HTTPTimeout:      30 * time.Second,
+		MaxRetries:       3,
+		FailureThreshold: 3,
+		CooldownDuration: 1 * time.Hour,
 		Sources: []SourceConfig{
 			{
 				Name:       "ipsum",

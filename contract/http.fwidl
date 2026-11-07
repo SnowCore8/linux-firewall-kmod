@@ -1846,6 +1846,8 @@ type ThreatFeedResponse {
   entry_count: u32
   sync_status: String
   last_error: Option<String>
+  consecutive_failures: u32
+  circuit_broken_until: Option<i64>
 }
 
 type ThreatFeedListResponse {
