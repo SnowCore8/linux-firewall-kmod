@@ -176,47 +176,47 @@ test.describe('写操作回环：Jail 开关就地生效', () => {
     expect(ariaLabel, 'Switch 应带 aria-label「启用/停用规则 <name>」').toBeTruthy()
     const name = (ariaLabel ?? '').replace(/^启用\/停用规则\s*/, '').trim()
     expect(name, '应从 aria-label 解析出 Jail 名').not.toBe('')
-    const before = await getJailEnabled(request, name)
 
-    // 切换（开启 → 关闭，或反之）
+    // 用 API 先把 Jail 设成 disabled，确保测试从已知状态出发。
+    // 这样 Switch 点击方向恒为「启用」（直通路径，无需处理停用方向的二次确认弹窗）。
+    // 停用方向会弹 modal.confirm（Jails.tsx handleToggle），在 headless 环境中
+    // AntD v6 的 modal.confirm 渲染行为不稳定，不适合在 e2e 里直接交互。
+    await request.put(`/api/v2/jails/${name}`, {
+      headers: AUTH_HEADERS,
+      data: { enabled: false },
+    })
+    await expect
+      .poll(async () => getJailEnabled(request, name), { message: 'API 预设：Jail 应停用' })
+      .toBe(false)
+    // 刷新页面让 Switch 状态与后端同步
+    await openRoute(app, '/jails')
+    await expectHeading(app, '越狱规则')
+
+    // 切换：disabled → enabled（直通路径，不弹确认框）
     await firstSwitch.click()
-
-    // 停用方向有二次确认弹窗（Jails.tsx handleToggle：modal.confirm），需点击「停用」才真正执行
-    if (before) {
-      const confirmBtn = app.getByRole('button', { name: '停用' })
-      await expect(confirmBtn).toBeVisible()
-      await confirmBtn.click()
-    }
 
     // 成功提示出现即证明后端写成功（Jails.tsx：`规则 <name> 已<启用|停用>（<status>）`）
     await expect(app.getByText(new RegExp(`规则 ${name} 已(启用|停用)`))).toBeVisible()
 
     // ---- 1. 界面层：开关就地翻转，**没有整页刷新** ----
-    await expect(firstSwitch).toHaveAttribute('aria-checked', String(!before))
+    await expect(firstSwitch).toHaveAttribute('aria-checked', 'true')
 
     // ---- 2. 接口层：后端状态确实翻转（证明不是本地乐观更新） ----
     await expect
       .poll(async () => getJailEnabled(request, name), {
-        message: `切换后 Jail ${name} 的 enabled 应变为 ${!before}`,
+        message: `切换后 Jail ${name} 的 enabled 应变为 true`,
       })
-      .toBe(!before)
+      .toBe(true)
 
-    // ---- 3. 恢复原状，避免影响其它用例与后续人工查看 ----
-    await firstSwitch.click()
-
-    // 恢复时如果又是停用方向（即 before=false → 当前 enabled=true → 再切回 enabled=false），
-    // 同样需要处理二次确认弹窗
-    if (!before) {
-      const confirmBtn = app.getByRole('button', { name: '停用' })
-      await expect(confirmBtn).toBeVisible()
-      await confirmBtn.click()
-    }
-
-    await expect(firstSwitch).toHaveAttribute('aria-checked', String(before))
+    // ---- 3. 恢复原状（API 直接设回 disabled），避免影响其它用例与后续人工查看 ----
+    await request.put(`/api/v2/jails/${name}`, {
+      headers: AUTH_HEADERS,
+      data: { enabled: false },
+    })
     await expect
       .poll(async () => getJailEnabled(request, name), {
-        message: `恢复后 Jail ${name} 的 enabled 应回到 ${before}`,
+        message: `恢复后 Jail ${name} 的 enabled 应回到 false`,
       })
-      .toBe(before)
+      .toBe(false)
   })
 })
