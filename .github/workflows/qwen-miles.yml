@@ -1,0 +1,338 @@
+name: '🔧 Qwen Miles'
+
+# 陈实，研发工程师：认领任务、写代码、响应评审、合并。像作者一样对自己的改动负责。
+on:
+  workflow_call:
+    inputs:
+      number:
+        type: 'string'
+        description: 'Issue 或 PR 编号'
+        required: true
+      on_pr:
+        type: 'string'
+        description: "'true' 表示处理对象是 PR"
+        required: false
+        default: 'false'
+      issue_number:
+        type: 'string'
+        description: '关联 Issue 编号（PR 场景）'
+        required: false
+        default: ''
+      pr_number:
+        type: 'string'
+        description: 'PR 编号'
+        required: false
+        default: ''
+      head_ref:
+        type: 'string'
+        description: 'PR 分支名'
+        required: false
+        default: ''
+      reason:
+        type: 'string'
+        description: '为什么叫陈实来'
+        required: false
+        default: '手动触发'
+    outputs:
+      mode:
+        description: '本次执行的模式'
+        value: '${{ jobs.work.outputs.mode }}'
+      pushed:
+        description: "'true' 表示本次有新提交被推送到分支"
+        value: '${{ jobs.work.outputs.pushed }}'
+
+concurrency:
+  group: '${{ github.workflow }}-miles-${{ inputs.number }}'
+  # 默认的 queue: single 只留一个排队位，新来的会把排着的那次取消掉——被取消的运行
+  # jobs 为空，等于这次叫醒被静默丢弃。追加的评审意见不能被丢掉，得排着。
+  queue: max
+  # 同一对象的两次修复会互相踩，必须串行；已开始的工作不能被中断
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: 'bash'
+
+jobs:
+  work:
+    runs-on: 'ubuntu-latest'
+    timeout-minutes: 45
+    outputs:
+      mode: '${{ steps.context.outputs.mode }}'
+      pushed: '${{ steps.detect.outputs.pushed }}'
+    permissions:
+      contents: 'write'
+      id-token: 'write'
+      issues: 'write'
+      pull-requests: 'write'
+    steps:
+      - name: 'Mint identity token'
+        id: 'mint_identity_token'
+        if: |-
+          ${{ vars.APP_ID_MILES || vars.APP_ID_ENGINEER || vars.APP_ID }}
+        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # ratchet:actions/create-github-app-token@v2
+        with:
+          app-id: '${{ vars.APP_ID_MILES || vars.APP_ID_ENGINEER || vars.APP_ID }}'
+          private-key: '${{ secrets.APP_PRIVATE_KEY_MILES || secrets.APP_PRIVATE_KEY_ENGINEER || secrets.APP_PRIVATE_KEY }}'
+          permission-contents: 'write'
+          permission-issues: 'write'
+          permission-pull-requests: 'write'
+          # 改 .github/workflows/ 必须带这个权限，否则推送会被 GitHub 拒绝
+          permission-workflows: 'write'
+
+      - name: 'Work out the mode and branch'
+        id: 'context'
+        uses: 'actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea' # ratchet:actions/github-script@v7
+        env:
+          NUMBER: '${{ inputs.number }}'
+          ON_PR: '${{ inputs.on_pr }}'
+          ISSUE_NUMBER: '${{ inputs.issue_number }}'
+          PR_NUMBER: '${{ inputs.pr_number }}'
+          HEAD_REF_INPUT: '${{ inputs.head_ref }}'
+        with:
+          github-token: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          script: |-
+            const { owner, repo } = context.repo;
+            const number = Number(process.env.NUMBER);
+            const onPr = process.env.ON_PR === 'true';
+
+            let mode = 'fix-issue';
+            let issueNumber = process.env.ISSUE_NUMBER || '';
+            let prNumber = process.env.PR_NUMBER || '';
+            let headRef = process.env.HEAD_REF_INPUT || '';
+            let baseBranch = '';
+
+            if (onPr) {
+              mode = 'respond-pr';
+              prNumber = String(number);
+              const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+              headRef = pull.head.ref;
+              baseBranch = pull.base.ref;
+
+              // 只碰自己开的分支，别人的 PR 一律不动
+              if (!headRef.startsWith('qwen-fix-')) {
+                core.setOutput('skip', 'true');
+                core.setOutput('skip_reason', `分支 ${headRef} 不是我方创建的，不修改他人的 PR`);
+                core.setOutput('mode', mode);
+                return;
+              }
+
+              if (!issueNumber) {
+                issueNumber = headRef.replace('qwen-fix-', '');
+              }
+
+              // 已合并或已关闭就别再动
+              if (pull.state !== 'open') {
+                core.setOutput('skip', 'true');
+                core.setOutput('skip_reason', '该 PR 已关闭或已合并');
+                core.setOutput('mode', mode);
+                return;
+              }
+            } else {
+              issueNumber = String(number);
+              headRef = `qwen-fix-${issueNumber}`;
+              baseBranch = context.payload.repository?.default_branch || 'master';
+              const { data: issue } = await github.rest.issues.get({
+                owner, repo, issue_number: number,
+              });
+              if (issue.state !== 'open') {
+                core.setOutput('skip', 'true');
+                core.setOutput('skip_reason', '该 Issue 已关闭');
+                core.setOutput('mode', mode);
+                return;
+              }
+            }
+
+            core.setOutput('skip', 'false');
+            core.setOutput('mode', mode);
+            core.setOutput('issue_number', issueNumber);
+            core.setOutput('pr_number', prNumber);
+            core.setOutput('head_ref', headRef);
+            core.setOutput('base_branch', baseBranch);
+            core.setOutput('previous_head', mode === 'respond-pr' ? headRef : '');
+            core.info(`模式 ${mode}，分支 ${headRef} → ${baseBranch}，Issue #${issueNumber}，PR #${prNumber}`);
+
+      - name: 'Explain why Miles is not touching this'
+        if: |-
+          ${{ steps.context.outputs.skip == 'true' }}
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          NUMBER: '${{ inputs.number }}'
+          REPOSITORY: '${{ github.repository }}'
+          SKIP_REASON: '${{ steps.context.outputs.skip_reason }}'
+        run: |-
+          gh issue comment "${NUMBER}" \
+            --repo "${REPOSITORY}" \
+            --body "这条我不动手：${SKIP_REASON}
+
+          需要我处理的话直接说一声。
+
+          <!-- qwen:role=miles -->"
+
+      - name: 'Checkout repository'
+        if: |-
+          ${{ steps.context.outputs.skip != 'true' }}
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
+
+      - name: 'Checkout existing branch when responding'
+        if: |-
+          ${{ steps.context.outputs.skip != 'true' && steps.context.outputs.mode == 'respond-pr' }}
+        env:
+          HEAD_REF: '${{ steps.context.outputs.head_ref }}'
+        run: |-
+          set -euo pipefail
+          git fetch origin "${HEAD_REF}"
+          git checkout "${HEAD_REF}"
+          git pull --ff-only origin "${HEAD_REF}"
+
+      - name: 'Record the remote head before work'
+        if: |-
+          ${{ steps.context.outputs.skip != 'true' }}
+        id: 'before'
+        env:
+          HEAD_REF: '${{ steps.context.outputs.head_ref }}'
+        run: |-
+          set -euo pipefail
+          # 统一按远端分支判断，避免把「未推送」误判成「有新提交」
+          echo "sha=$(git ls-remote --heads origin "${HEAD_REF}" | awk '{print $1}')" >> "${GITHUB_OUTPUT}"
+
+      - name: 'Run Qwen miles'
+        id: 'qwen_miles'
+        if: |-
+          ${{ steps.context.outputs.skip != 'true' }}
+        uses: 'QwenLM/qwen-code-action@v1'
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
+          REPOSITORY: '${{ github.repository }}'
+          NUMBER: '${{ inputs.number }}'
+          ON_PR: '${{ inputs.on_pr }}'
+          MODE: '${{ steps.context.outputs.mode }}'
+          ISSUE_NUMBER: '${{ steps.context.outputs.issue_number }}'
+          PR_NUMBER: '${{ steps.context.outputs.pr_number }}'
+          HEAD_REF: '${{ steps.context.outputs.head_ref }}'
+          BASE_BRANCH: '${{ steps.context.outputs.base_branch }}'
+          OWNED_BRANCH_PREFIX: 'qwen-fix-'
+          REASON: '${{ inputs.reason }}'
+          CI_WAIT_MINUTES: '${{ vars.MILES_CI_WAIT_MINUTES || vars.ENGINEER_CI_WAIT_MINUTES || 10 }}'
+          # 删主分支前要 @ 到具体的人。默认取仓库所有者，可用变量覆盖成任意成员。
+          OWNER_MENTION: '${{ vars.QWEN_OWNER_MENTION || format(''@{0}'', github.repository_owner) }}'
+        with:
+          openai_api_key: '${{ secrets.QWEN_API_KEY }}'
+          openai_base_url: '${{ vars.QWEN_BASE_URL }}'
+          openai_model: '${{ vars.QWEN_MODEL }}'
+          qwen_cli_version: '${{ vars.QWEN_CLI_VERSION }}'
+          qwen_debug: '${{ fromJSON(vars.DEBUG || vars.ACTIONS_STEP_DEBUG || false) }}'
+          upload_artifacts: '${{ vars.UPLOAD_ARTIFACTS }}'
+          workflow_name: 'qwen-miles'
+          settings: |-
+            {
+              "model": {
+                "maxSessionTurns": 150
+              },
+              "memory": {
+                "enableManagedAutoMemory": false,
+                "enableManagedAutoDream": false
+              },
+              "telemetry": {
+                "enabled": false
+              },
+              "mcpServers": {
+                "github": {
+                  "command": "docker",
+                  "args": [
+                    "run",
+                    "-i",
+                    "--rm",
+                    "-e",
+                    "GITHUB_PERSONAL_ACCESS_TOKEN",
+                    "ghcr.io/github/github-mcp-server:v0.18.0"
+                  ],
+                  "includeTools": [
+                    "pull_request_read",
+                    "get_file_contents",
+                    "search_code",
+                    "list_commits"
+                  ],
+                  "env": {
+                    "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+                  }
+                }
+              },
+              "tools": {
+                "core": [
+                  "run_shell_command(git)",
+                  "run_shell_command(gh)",
+                  "run_shell_command(ls)",
+                  "run_shell_command(cat)",
+                  "run_shell_command(grep)"
+                ]
+              }
+            }
+          prompt: '/auto-miles'
+
+      # API 报错时 CLI 仍然退出 0，把错误文本当成最后一段 assistant 输出
+      # （qwen-code#8920、#11217，两者的修复 PR 至今都还没合并）。所以判据只能是
+      # 「最后一句长什么样」。官方 qwen-triage.yml:1379 记的那次事故就是这样：
+      # 一次 268 字符的裸 [API Error: ...] 被当成成功，没人重试也没人告警。
+      # 尾部匹配而不是 contains：真实回复正文里哪怕引了一句 API 错误，后面还会
+      # 继续写下去，不该因此判失败。
+      - name: 'Fail when the model API returned an error'
+        if: |-
+          ${{ steps.qwen_miles.outcome == 'success' }}
+        run: |-
+          set -euo pipefail
+
+          if [ ! -f qwen-artifacts/stdout.log ]; then
+            echo '::error title=没有 qwen 的输出::找不到 qwen-artifacts/stdout.log，无法判断这一轮做了什么。'
+            exit 1
+          fi
+
+          # 与 action 自己解析 qwen_response 的口径一致：取最后一段 assistant 文本
+          BODY="$(jq -r '[.[] | select(.type == "assistant")] | last | .message.content[]? | select(.type == "text") | .text' \
+            qwen-artifacts/stdout.log 2>/dev/null || true)"
+
+          for S in \
+            'Possible quota limitations in place or slow response times detected. Please wait and try again later.' \
+            'Please wait and try again later. To increase your limits, request a quota increase through AI Studio, or switch to another /auth method' \
+            'Please wait and try again later. To increase your limits, request a quota increase through Vertex, or switch to another /auth method'; do
+            BODY="${BODY%"$S"}"
+          done
+          BODY="${BODY%"${BODY##*[![:space:]]}"}"
+
+          case "${BODY}" in
+            *"[API Error: "*"]")
+              # 正文来自外部接口，别让它里面的 :: 或 ##[ 被当成 workflow 命令
+              EXCERPT="$(printf '%s' "${BODY:0:300}" | sed -e 's/::/;;/g' -e 's/##\[/##［/g')"
+              echo '::error title=模型 API 返回了错误::这一轮没有完成，动作不可用。这是接口侧的问题，重跑即可。'
+              printf '%s\n' "${EXCERPT}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: 'Detect whether a new commit was pushed'
+        id: 'detect'
+        if: |-
+          ${{ steps.context.outputs.skip != 'true' }}
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          HEAD_REF: '${{ steps.context.outputs.head_ref }}'
+          BEFORE_SHA: '${{ steps.before.outputs.sha }}'
+          REPOSITORY: '${{ github.repository }}'
+          MODE: '${{ steps.context.outputs.mode }}'
+          PR_NUMBER: '${{ steps.context.outputs.pr_number }}'
+        run: |-
+          set -euo pipefail
+
+          # 两种模式都以远端分支为准，空值表示分支此前不存在
+          REMOTE_SHA="$(git ls-remote --heads origin "${HEAD_REF}" | awk '{print $1}')"
+
+          if [ -n "${REMOTE_SHA}" ] && [ "${REMOTE_SHA}" != "${BEFORE_SHA}" ]; then
+            echo "pushed=true" >> "${GITHUB_OUTPUT}"
+            echo "分支 ${HEAD_REF} 有新提交：${BEFORE_SHA:0:8} -> ${REMOTE_SHA:0:8}"
+          else
+            echo "pushed=false" >> "${GITHUB_OUTPUT}"
+            echo "本次没有新提交（远端 ${REMOTE_SHA:0:8}）"
+          fi

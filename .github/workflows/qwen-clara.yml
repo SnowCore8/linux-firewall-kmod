@@ -1,0 +1,181 @@
+name: '🧭 Qwen Clara'
+
+# 顾清，值班维护者：读 Issue、提问、打标、把可修的活交给陈实。
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        type: 'string'
+        description: '要处理的 Issue 编号；留空表示批量扫 backlog'
+        required: false
+        default: ''
+      reason:
+        type: 'string'
+        description: '为什么叫顾清来'
+        required: false
+        default: '手动触发'
+    outputs:
+      handled:
+        description: '本次是否处理了 Issue'
+        value: '${{ jobs.watch.outputs.handled }}'
+  schedule:
+    # 每小时扫一遍没人管的 Issue，像维护者定期过 backlog
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: '${{ github.workflow }}-clara-${{ inputs.issue_number }}'
+  # 默认的 queue: single 只留一个排队位，新来的会把排着的那次取消掉——被取消的运行
+  # jobs 为空，等于这次叫醒被静默丢弃。顾清在一小时内可能被连叫几次，得留住。
+  queue: max
+  # 中断正在进行的运行会留下说了一半的评论，宁可排队
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: 'bash'
+
+jobs:
+  watch:
+    runs-on: 'ubuntu-latest'
+    timeout-minutes: 15
+    outputs:
+      handled: '${{ steps.prepare.outputs.handled }}'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+      issues: 'write'
+      pull-requests: 'read'
+    steps:
+      - name: 'Mint identity token'
+        id: 'mint_identity_token'
+        if: |-
+          ${{ vars.APP_ID_CLARA || vars.APP_ID_TRIAGER || vars.APP_ID }}
+        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # ratchet:actions/create-github-app-token@v2
+        with:
+          app-id: '${{ vars.APP_ID_CLARA || vars.APP_ID_TRIAGER || vars.APP_ID }}'
+          private-key: '${{ secrets.APP_PRIVATE_KEY_CLARA || secrets.APP_PRIVATE_KEY_TRIAGER || secrets.APP_PRIVATE_KEY }}'
+          permission-contents: 'read'
+          permission-issues: 'write'
+          permission-pull-requests: 'read'
+
+      - name: 'Checkout repository'
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+
+      - name: 'Prepare watch targets'
+        id: 'prepare'
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          ISSUE_NUMBER: '${{ inputs.issue_number }}'
+          REPOSITORY: '${{ github.repository }}'
+          BATCH_LIMIT: '${{ vars.TRIAGE_BATCH_LIMIT || 5 }}'
+        run: |-
+          set -euo pipefail
+
+          if [ -n "${ISSUE_NUMBER}" ]; then
+            echo "MODE=single" >> "${GITHUB_OUTPUT}"
+            echo "TARGETS=${ISSUE_NUMBER}" >> "${GITHUB_OUTPUT}"
+            echo "handled=true" >> "${GITHUB_OUTPUT}"
+            echo "本次处理 #${ISSUE_NUMBER}"
+            exit 0
+          fi
+
+          # 定时巡检：无标签的，或被标了 status/needs-triage 的
+          UNLABELED="$(gh issue list --repo "${REPOSITORY}" --state open \
+            --search 'no:label' --limit "${BATCH_LIMIT}" --json number --jq '.[].number' || true)"
+          NEEDS="$(gh issue list --repo "${REPOSITORY}" --state open \
+            --label 'status/needs-triage' --limit "${BATCH_LIMIT}" --json number --jq '.[].number' || true)"
+
+          TARGETS="$(printf '%s\n%s\n' "${UNLABELED}" "${NEEDS}" | grep -E '^[0-9]+$' | sort -n -u | head -n "${BATCH_LIMIT}" | paste -sd, - || true)"
+
+          if [ -z "${TARGETS}" ]; then
+            echo '没有需要处理的 Issue'
+            echo "handled=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "MODE=batch" >> "${GITHUB_OUTPUT}"
+          echo "TARGETS=${TARGETS}" >> "${GITHUB_OUTPUT}"
+          echo "handled=true" >> "${GITHUB_OUTPUT}"
+          echo "本次处理：${TARGETS}"
+
+      - name: 'Run Qwen clara'
+        id: 'qwen_clara'
+        if: |-
+          ${{ steps.prepare.outputs.handled == 'true' }}
+        uses: 'QwenLM/qwen-code-action@v1'
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
+          REPOSITORY: '${{ github.repository }}'
+          TARGETS: '${{ steps.prepare.outputs.TARGETS }}'
+          REASON: '${{ inputs.reason }}'
+          MODE: '${{ steps.prepare.outputs.MODE }}'
+        with:
+          openai_api_key: '${{ secrets.QWEN_API_KEY }}'
+          openai_base_url: '${{ vars.QWEN_BASE_URL }}'
+          openai_model: '${{ vars.QWEN_MODEL }}'
+          qwen_cli_version: '${{ vars.QWEN_CLI_VERSION }}'
+          qwen_debug: '${{ fromJSON(vars.DEBUG || vars.ACTIONS_STEP_DEBUG || false) }}'
+          upload_artifacts: '${{ vars.UPLOAD_ARTIFACTS }}'
+          workflow_name: 'qwen-clara'
+          settings: |-
+            {
+              "model": {
+                "maxSessionTurns": 30
+              },
+              "memory": {
+                "enableManagedAutoMemory": false,
+                "enableManagedAutoDream": false
+              },
+              "telemetry": {
+                "enabled": false
+              },
+              "tools": {
+                "core": [
+                  "run_shell_command(gh)",
+                  "run_shell_command(ls)",
+                  "run_shell_command(cat)",
+                  "run_shell_command(grep)"
+                ]
+              }
+            }
+          prompt: '/auto-clara'
+
+      # API 报错时 CLI 仍然退出 0，把错误文本当成最后一段 assistant 输出
+      # （qwen-code#8920、#11217，两者的修复 PR 至今都还没合并）。所以判据只能是
+      # 「最后一句长什么样」。官方 qwen-triage.yml:1379 记的那次事故就是这样：
+      # 一次 268 字符的裸 [API Error: ...] 被当成成功，没人重试也没人告警。
+      # 尾部匹配而不是 contains：真实回复正文里哪怕引了一句 API 错误，后面还会
+      # 继续写下去，不该因此判失败。
+      - name: 'Fail when the model API returned an error'
+        if: |-
+          ${{ steps.qwen_clara.outcome == 'success' }}
+        run: |-
+          set -euo pipefail
+
+          if [ ! -f qwen-artifacts/stdout.log ]; then
+            echo '::error title=没有 qwen 的输出::找不到 qwen-artifacts/stdout.log，无法判断这一轮做了什么。'
+            exit 1
+          fi
+
+          # 与 action 自己解析 qwen_response 的口径一致：取最后一段 assistant 文本
+          BODY="$(jq -r '[.[] | select(.type == "assistant")] | last | .message.content[]? | select(.type == "text") | .text' \
+            qwen-artifacts/stdout.log 2>/dev/null || true)"
+
+          for S in \
+            'Possible quota limitations in place or slow response times detected. Please wait and try again later.' \
+            'Please wait and try again later. To increase your limits, request a quota increase through AI Studio, or switch to another /auth method' \
+            'Please wait and try again later. To increase your limits, request a quota increase through Vertex, or switch to another /auth method'; do
+            BODY="${BODY%"$S"}"
+          done
+          BODY="${BODY%"${BODY##*[![:space:]]}"}"
+
+          case "${BODY}" in
+            *"[API Error: "*"]")
+              # 正文来自外部接口，别让它里面的 :: 或 ##[ 被当成 workflow 命令
+              EXCERPT="$(printf '%s' "${BODY:0:300}" | sed -e 's/::/;;/g' -e 's/##\[/##［/g')"
+              echo '::error title=模型 API 返回了错误::这一轮没有完成，判断不可用。这是接口侧的问题，重跑即可。'
+              printf '%s\n' "${EXCERPT}" >&2
+              exit 1
+              ;;
+          esac
