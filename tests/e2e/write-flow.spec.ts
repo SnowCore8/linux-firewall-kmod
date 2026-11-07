@@ -181,6 +181,13 @@ test.describe('写操作回环：Jail 开关就地生效', () => {
     // 切换（开启 → 关闭，或反之）
     await firstSwitch.click()
 
+    // 停用方向有二次确认弹窗（Jails.tsx handleToggle：modal.confirm），需点击「停用」才真正执行
+    if (before) {
+      const confirmBtn = app.getByRole('button', { name: '停用' })
+      await expect(confirmBtn).toBeVisible()
+      await confirmBtn.click()
+    }
+
     // 成功提示出现即证明后端写成功（Jails.tsx：`规则 <name> 已<启用|停用>（<status>）`）
     await expect(app.getByText(new RegExp(`规则 ${name} 已(启用|停用)`))).toBeVisible()
 
@@ -196,6 +203,15 @@ test.describe('写操作回环：Jail 开关就地生效', () => {
 
     // ---- 3. 恢复原状，避免影响其它用例与后续人工查看 ----
     await firstSwitch.click()
+
+    // 恢复时如果又是停用方向（即 before=false → 当前 enabled=true → 再切回 enabled=false），
+    // 同样需要处理二次确认弹窗
+    if (!before) {
+      const confirmBtn = app.getByRole('button', { name: '停用' })
+      await expect(confirmBtn).toBeVisible()
+      await confirmBtn.click()
+    }
+
     await expect(firstSwitch).toHaveAttribute('aria-checked', String(before))
     await expect
       .poll(async () => getJailEnabled(request, name), {
