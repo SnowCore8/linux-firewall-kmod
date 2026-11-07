@@ -1124,6 +1124,10 @@ type StatsResponse {
   whitelist_count: u64
   packets_dropped: u64
   packets_accepted: u64
+  # 状态文件保存时因条目超过上限而被截断的累计次数（来自 /proc/firewall/stats 的
+  # state_save_truncated）。>0 表示至少有一次保存丢失了部分封禁或白名单条目，
+  # 面板据此显示警告
+  state_save_truncated: u64
   threat_level: ThreatLevel
 }
 

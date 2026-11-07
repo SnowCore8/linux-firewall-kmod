@@ -70,6 +70,7 @@
 #define FW_PROCFS_KEY_CURRENT_BANS "current_bans"
 #define FW_PROCFS_KEY_CURRENT_WHITELIST "current_whitelist"
 #define FW_PROCFS_KEY_RECENT_ADDITIONS "recent_additions"
+#define FW_PROCFS_KEY_STATE_SAVE_TRUNCATED "state_save_truncated"
 
 /* 容量上限；未列出的表表示实现中无条目上限 */
 #define FW_PROCFS_LIMIT_BANS 65535

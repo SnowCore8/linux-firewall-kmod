@@ -58,6 +58,7 @@
 #include "fw_wl.h"
 #include "fw_rate.h"
 #include "fw_stats.h"
+#include "fw_state.h"
 #include "fw_netlink.h"
 
 /* 分页取数时的单页行数：限制单次 kmalloc 大小，避免读侧大块分配 */
@@ -582,6 +583,8 @@ static int stats_show(struct seq_file *m, void *v) {
   seq_printf(m, "current_bans %d\n", (int)fw_ban_count());
   seq_printf(m, "current_whitelist %d\n", (int)fw_wl_count());
   seq_printf(m, "recent_additions %u\n", fw_ban_recent_additions_stat());
+  seq_printf(m, "state_save_truncated %llu\n",
+             (unsigned long long)fw_state_truncated_count());
   return 0;
 }
 

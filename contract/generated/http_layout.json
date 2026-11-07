@@ -21,7 +21,7 @@
     "响应 ApiResponse: 3 个字段（泛型参数 T）",
     "响应 PaginatedResponse: 5 个字段（泛型参数 T）",
     "响应 RuntimeSnapshot: 8 个字段",
-    "响应 StatsResponse: 17 个字段",
+    "响应 StatsResponse: 18 个字段",
     "响应 ChartData: 2 个字段",
     "响应 ThreatLevel: 9 个字段",
     "响应 BanResponse: 7 个字段",
@@ -1460,6 +1460,10 @@
         },
         {
           "key": "packets_accepted",
+          "type": "u64"
+        },
+        {
+          "key": "state_save_truncated",
           "type": "u64"
         },
         {

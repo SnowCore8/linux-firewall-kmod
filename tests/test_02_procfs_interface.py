@@ -47,7 +47,7 @@ class TestProcfsInterface:
     def test_stats_has_expected_fields(self):
         """2.3 stats 包含预期字段"""
         content = PROC_STATS.read_text()
-        expected_fields = ["current_bans", "total_bans", "total_unbans"]
+        expected_fields = ["current_bans", "total_bans", "total_unbans", "state_save_truncated"]
         for field in expected_fields:
             assert field in content, f"stats 缺少字段: {field}"
 

@@ -63,6 +63,10 @@
 
 /* 恢复只做一次：模块生命周期内的守卫 */
 static bool fw_state_restored;
+/* 状态保存截断累计计数：fw_state_write_bans/whitelist 遇到条目超过保存上限时递增，
+ * 由 procfs stats 暴露给守护进程。用 atomic64 因为递增发生在保存路径（无锁上下文），
+ * 而读取发生在 procfs show（不同 CPU）。 */
+static atomic64_t fw_state_save_truncated_count;
 
 /* 按容量参数推出状态文件的可读上限（超出即视为损坏，不尝试恢复） */
 static size_t fw_state_max_file_size(void) {
@@ -193,6 +197,7 @@ static int fw_state_write_bans(struct file *file, loff_t *pos, u32 *crc,
       int n;
 
       if (offset + i >= FW_STATE_MAX_BAN) {
+        atomic64_inc(&fw_state_save_truncated_count);
         pr_warn("封禁条目超过保存上限 %u，其余条目本次不写入状态文件\n", FW_STATE_MAX_BAN);
         goto out;
       }
@@ -255,6 +260,7 @@ static int fw_state_write_whitelist(struct file *file, loff_t *pos, u32 *crc,
       int n;
 
       if (offset + i >= FW_STATE_MAX_WL) {
+        atomic64_inc(&fw_state_save_truncated_count);
         pr_warn("白名单条目超过保存上限 %u，其余本次不写入\n", FW_STATE_MAX_WL);
         goto out;
       }
@@ -650,4 +656,8 @@ out_close:
 out:
   kvfree(buf);
   return ret;
+}
+
+u64 fw_state_truncated_count(void) {
+  return (u64)atomic64_read(&fw_state_save_truncated_count);
 }

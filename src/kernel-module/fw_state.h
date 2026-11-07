@@ -40,4 +40,7 @@ int fw_state_save(void);
  */
 int fw_state_restore(void);
 
+/* 状态保存截断累计次数（procfs stats 读取）。 */
+u64 fw_state_truncated_count(void);
+
 #endif /* FW_STATE_H */

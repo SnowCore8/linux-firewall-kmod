@@ -330,6 +330,7 @@ type StatsResponse struct {
 	WhitelistCount      uint64      `json:"whitelist_count"`
 	PacketsDropped      uint64      `json:"packets_dropped"`
 	PacketsAccepted     uint64      `json:"packets_accepted"`
+	StateSaveTruncated  uint64      `json:"state_save_truncated"`
 	ThreatLevel         ThreatLevel `json:"threat_level"`
 }
 
