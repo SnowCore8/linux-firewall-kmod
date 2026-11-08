@@ -617,6 +617,8 @@ export interface ThreatFeedResponse {
   entry_count: number
   sync_status: string
   last_error: string | null
+  consecutive_failures: number
+  circuit_broken_until: number | null
 }
 
 /** 情报源列表（GET /api/v2/threat-feeds）。 */

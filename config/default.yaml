@@ -135,6 +135,8 @@ threat_feeds:
   refresh_interval: 86400
   http_timeout: 30
   max_retries: 3
+  failure_threshold: 3
+  cooldown_duration: 3600
   sources:
     # IPsum：多源聚合，质量高，每日更新
     - name: ipsum
