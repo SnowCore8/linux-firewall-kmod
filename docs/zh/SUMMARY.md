@@ -29,3 +29,8 @@
   * [性能口径与测量方法](development/perf-baseline.md)
   * [内核模块设计](development/kernel-module-design.md)
   * [集群扫描检测设计](development/cluster-detection-design.md)
+  * [CI 流程](development/ci-workflow.md)
+
+* [AI 协作](development/agent-architecture.md)
+  * [合并闸门](development/merge-gate.md)
+  * [引擎层](development/qwen-cli-runner.md)

@@ -59,6 +59,7 @@ jobs:
       pull-requests: 'write'
     outputs:
       role: '${{ steps.decide.outputs.role }}'
+      who: '${{ steps.decide.outputs.who }}'
       number: '${{ steps.decide.outputs.number }}'
       on_pr: '${{ steps.decide.outputs.on_pr }}'
       reason: '${{ steps.decide.outputs.reason }}'
@@ -72,23 +73,20 @@ jobs:
           ${{ vars.APP_ID_CLARA || vars.APP_ID_TRIAGER || vars.APP_ID }}
         uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # ratchet:actions/create-github-app-token@v2
         with:
-          # dispatch 只读评论计数、发闸门说明，用顾清的身份即可。
-          # 申请的权限必须落在 App 已授权的范围内，多要一档 GitHub 就回 422，
-          # 这一步直接失败、分派整个不跑——顾清的 App 只有 PR 读权限。
+          # dispatch 只读评论计数、发闸门说明，用顾清的身份即可
           app-id: '${{ vars.APP_ID_CLARA || vars.APP_ID_TRIAGER || vars.APP_ID }}'
           private-key: '${{ secrets.APP_PRIVATE_KEY_CLARA || secrets.APP_PRIVATE_KEY_TRIAGER || secrets.APP_PRIVATE_KEY }}'
           permission-contents: 'read'
           permission-issues: 'write'
-          permission-pull-requests: 'read'
+          permission-pull-requests: 'write'
 
       - name: 'Check out the routing rules'
         uses: 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683' # ratchet:actions/checkout@v4
         with:
           # 必须显式钉在默认分支。checkout 默认检出的 ref 在 PR 事件下是那个 PR 的
           # 合并提交，而这里随后要 node 执行检出来的 .mjs —— 于是 fork PR 里的代码
-          # 就会在拿着 App 令牌的 runner 上跑起来。原先的内联脚本没这个洞：它写在
-          # workflow 文件里，PR 事件下 GitHub 本来就用 base 分支的版本。
-          # 钉住默认分支后，脚本与 workflow 定义始终来自同一处，与 GitHub 的语义一致。
+          # 就会在拿着 App 令牌的 runner 上跑起来。钉住默认分支后，脚本与 workflow
+          # 定义始终来自同一处，与 GitHub「PR 事件用 base 分支的 workflow 定义」一致。
           ref: '${{ github.event.repository.default_branch }}'
           sparse-checkout: '.github/scripts'
           persist-credentials: false
@@ -103,7 +101,7 @@ jobs:
           AGENT_MAX_CALLS: '${{ vars.AGENT_MAX_CALLS || 40 }}'
           AGENT_CALL_COOLDOWN_MINUTES: '${{ vars.AGENT_CALL_COOLDOWN_MINUTES || 10 }}'
         # 判断规则在 .github/scripts/route.mjs，取数与回写在 dispatch.mjs。
-        # 原本这里是 300 多行内联 JS：本地跑不了、没法测，错了的表现是「什么都不发生」。
+        # 写成脚本而不是内联 JS 是为了能本地跑、能单测：这里的错法表现为「什么都不发生」。
         run: |-
           set -euo pipefail
           node .github/scripts/dispatch.mjs
@@ -207,23 +205,18 @@ jobs:
           private-key: '${{ secrets.APP_PRIVATE_KEY_CLARA || secrets.APP_PRIVATE_KEY_TRIAGER || secrets.APP_PRIVATE_KEY }}'
           permission-contents: 'read'
           permission-issues: 'write'
-          permission-pull-requests: 'read'
+          permission-pull-requests: 'write'
 
       - name: 'Explain the failure in the thread'
         env:
           GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
           NUMBER: '${{ needs.route.outputs.number }}'
-          ROLE: '${{ needs.route.outputs.role }}'
+          WHO: '${{ needs.route.outputs.who }}'
           REPOSITORY: '${{ github.repository }}'
         run: |-
           set -euo pipefail
-          case "${ROLE}" in
-            clara)  WHO='顾清' ;;
-            nora)   WHO='叶澜' ;;
-            miles)  WHO='陈实' ;;
-            frank)  WHO='周正' ;;
-            *)      WHO='这一轮的分派' ;;
-          esac
+          # route 没派给具体的人时 who 是空的，那句说明里得有个能读的主语
+          WHO="${WHO:-这一轮的分派}"
           gh issue comment "${NUMBER}" \
             --repo "${REPOSITORY}" \
             --body "我这边执行时出错了（没跑完的是：${WHO}），这条没有处理完。日志：[查看本次运行](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})。

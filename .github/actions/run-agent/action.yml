@@ -1,0 +1,150 @@
+name: 'Run a Qwen agent'
+description: '按角色读引擎配置、跑一轮模型、并把「这一轮到底算不算成功」判清楚。'
+
+# 四个角色（顾清 / 叶澜 / 陈实 / 周正）跑模型的方式一模一样，差别只在三处：提示词、
+# 引擎配置、以及谁被叫来。前三样里有一样此前散在四个 workflow 里 —— 30 到 40 行
+# 反斜杠转义的 JSON 字符串，贴了四份。改一处漏三处不会有任何报错，只会让某个人
+# 用着旧配置继续跑。
+#
+# 同样的还有收尾判定：模型 API 报错时 CLI 仍然退出 0（见下面那一步的注释），所以
+# 「最后一段话是不是一句错误」这一判断必须自己做。那份 bash 也是四份逐字相同。
+#
+# 所以收成这一处。workflow 里留下的只有它自己真正特有的接线：谁来、传给谁、做完
+# 之后看什么。
+#
+# 引擎仍是 QwenLM/qwen-code-action@v1：真在跑的路径不换。换引擎（docs/qwen-cli-runner.md
+# 那份自建 runner）只需要改这里的 `uses:` 一步，四个 workflow 不用动 —— 这正是把
+# 「怎么跑模型」收到一处的另一个理由。
+inputs:
+  role:
+    description: '角色英文名，决定读哪份引擎配置：clara / nora / miles / frank'
+    required: true
+  prompt:
+    description: '这一轮跑什么，如 /clara-triage {"repo":"…","targets":"7,9"}'
+    required: true
+  workflow_name:
+    description: '传给 action 的 workflow 名，只影响产物归档路径'
+    required: true
+  openai_api_key:
+    description: 'Qwen API 密钥'
+    required: true
+  openai_base_url:
+    description: 'API 基础 URL'
+    required: false
+    default: ''
+  openai_model:
+    description: '模型名'
+    required: false
+    default: ''
+  qwen_cli_version:
+    description: 'CLI 版本'
+    required: false
+    default: ''
+  qwen_debug:
+    description: "调试日志开关：true / false"
+    required: false
+    default: 'false'
+  upload_artifacts:
+    description: '是否上传产物'
+    required: false
+    default: ''
+  settings_file:
+    description: '引擎配置文件；留空则用 .github/agents/<role>.json'
+    required: false
+    default: ''
+
+outputs:
+  summary:
+    description: '最后一段 assistant 文本'
+    value: '${{ steps.qwen.outputs.summary }}'
+
+runs:
+  using: 'composite'
+  steps:
+    # 配置先落成文件再读，而不是继续写在 workflow 里：文件能被 jq 校验、能被契约
+    # 测试盯住、能在本地对着改，YAML 里那个反斜杠字符串一样都不能。写坏了在这里
+    # 就停，而不是等模型跑到一半才报错。
+    - name: 'Load the engine settings for this role'
+      id: 'settings'
+      shell: 'bash'
+      env:
+        ROLE: '${{ inputs.role }}'
+        SETTINGS_FILE: '${{ inputs.settings_file }}'
+      run: |-
+        set -euo pipefail
+
+        FILE="${SETTINGS_FILE:-.github/agents/${ROLE}.json}"
+        if [ ! -f "${FILE}" ]; then
+          echo "::error title=找不到引擎配置::${FILE} 不存在。每个角色在 .github/agents/<名字>.json 里有一份。"
+          exit 1
+        fi
+
+        # 校验与读取分开两步：坏 JSON 要让报错指向文件和行，而不是被后面的
+        # 多行输出吞成一句「解析失败」
+        if ! python3 -m json.tool "${FILE}" >/dev/null; then
+          echo "::error title=引擎配置不是合法 JSON::${FILE}"
+          exit 1
+        fi
+
+        echo "settings<<QWEN_SETTINGS_EOF" >> "${GITHUB_OUTPUT}"
+        cat "${FILE}" >> "${GITHUB_OUTPUT}"
+        echo 'QWEN_SETTINGS_EOF' >> "${GITHUB_OUTPUT}"
+        echo "用 ${FILE} 这份配置"
+
+    - name: 'Run Qwen ${{ inputs.role }}'
+      id: 'qwen'
+      uses: 'QwenLM/qwen-code-action@v1'
+      env:
+        # CLI 自己读 GH_TOKEN / GITHUB_TOKEN 去调 GitHub API；这一层由调用方注入
+        GITHUB_TOKEN: '${{ env.GITHUB_TOKEN }}'
+        REPOSITORY: '${{ github.repository }}'
+      with:
+        openai_api_key: '${{ inputs.openai_api_key }}'
+        openai_base_url: '${{ inputs.openai_base_url }}'
+        openai_model: '${{ inputs.openai_model }}'
+        qwen_cli_version: '${{ inputs.qwen_cli_version }}'
+        qwen_debug: '${{ inputs.qwen_debug }}'
+        upload_artifacts: '${{ inputs.upload_artifacts }}'
+        workflow_name: '${{ inputs.workflow_name }}'
+        settings: '${{ steps.settings.outputs.settings }}'
+        prompt: '${{ inputs.prompt }}'
+
+    # API 报错时 CLI 仍然退出 0，把错误文本当成最后一段 assistant 输出
+    # （qwen-code#8920、#11217，两者的修复 PR 至今都还没合并）。所以判据只能是
+    # 「最后一句长什么样」。官方 qwen-triage.yml:1379 记的那次事故就是这样：
+    # 一次 268 字符的裸 [API Error: ...] 被当成成功，没人重试也没人告警。
+    # 尾部匹配而不是 contains：真实回复正文里哪怕引了一句 API 错误，后面还会
+    # 继续写下去，不该因此判失败。
+    - name: 'Fail when the model API returned an error'
+      shell: 'bash'
+      env:
+        ROLE: '${{ inputs.role }}'
+      run: |-
+        set -euo pipefail
+
+        if [ ! -f qwen-artifacts/stdout.log ]; then
+          echo "::error title=没有 qwen 的输出::找不到 qwen-artifacts/stdout.log，无法判断这一轮做了什么。"
+          exit 1
+        fi
+
+        # 与 action 自己解析 qwen_response 的口径一致：取最后一段 assistant 文本
+        BODY="$(jq -r '[.[] | select(.type == "assistant")] | last | .message.content[]? | select(.type == "text") | .text' \
+          qwen-artifacts/stdout.log 2>/dev/null || true)"
+
+        for S in \
+          'Possible quota limitations in place or slow response times detected. Please wait and try again later.' \
+          'Please wait and try again later. To increase your limits, request a quota increase through AI Studio, or switch to another /auth method' \
+          'Please wait and try again later. To increase your limits, request a quota increase through Vertex, or switch to another /auth method'; do
+          BODY="${BODY%"$S"}"
+        done
+        BODY="${BODY%"${BODY##*[![:space:]]}"}"
+
+        case "${BODY}" in
+          *"[API Error: "*"]")
+            # 正文来自外部接口，别让它里面的 :: 或 ##[ 被当成 workflow 命令
+            EXCERPT="$(printf '%s' "${BODY:0:300}" | sed -e 's/::/;;/g' -e 's/##\[/##［/g')"
+            echo "::error title=模型 API 返回了错误::${ROLE} 这一轮没有完成。这是接口侧的问题，重跑即可。"
+            printf '%s\n' "${EXCERPT}" >&2
+            exit 1
+            ;;
+        esac

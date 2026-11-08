@@ -138,6 +138,9 @@ http://<host>:9119/dashboard
 | [docs/zh/development/](docs/zh/development/README.md) | 构建、测试、开发规范、质量门禁 |
 | [docs/zh/development/build-system.md](docs/zh/development/build-system.md) | **构建系统指南**：标准化流程、依赖检查、多版本编译 |
 | [docs/zh/development/ci-workflow.md](docs/zh/development/ci-workflow.md) | **CI 流程**：6 阶段自动化、配置选项、故障排查 |
+| [docs/zh/development/agent-architecture.md](docs/zh/development/agent-architecture.md) | **AI 协作**：四个角色怎么分工、一条评论怎么推动下一棒、状态存在哪 |
+| [docs/zh/development/merge-gate.md](docs/zh/development/merge-gate.md) | **合并闸门**：五条判据、为什么模型不能自己合、主干红了怎么办 |
+| [docs/zh/development/qwen-cli-runner.md](docs/zh/development/qwen-cli-runner.md) | **引擎层**：`.github/actions/run-agent` 怎么跑模型，换引擎要动哪 |
 | [docs/zh/development/kernel-api-compatibility.md](docs/zh/development/kernel-api-compatibility.md) | **API 兼容性检查**：netfilter/netlink/procfs 自动检测 |
 | [docs/zh/development/multi-version-kmod.md](docs/zh/development/multi-version-kmod.md) | **多版本编译**：跨内核版本支持、远程编译 |
 | [docs/zh/development/contract.md](docs/zh/development/contract.md) | 契约系统、API/netlink/procfs 契约 |
@@ -215,6 +218,66 @@ cd src/daemon && go test ./... # 单元测试
 ```
 
 详细文档见 [docs/zh/development/build-system.md](docs/zh/development/build-system.md) 和 [docs/zh/development/ci-workflow.md](docs/zh/development/ci-workflow.md)。
+
+## 🤖 仓库里的四个 AI 同事
+
+四个 App 各自装到这个仓库上，一条 Issue / 评论 / PR 由 `.github/scripts/route.mjs` 判给其中一个人，`qwen-dispatch.yml` 起一次 runner，跑完即弃。没有常驻进程，状态全在 GitHub 上。
+
+| 名字 | 英文名 | 干什么 | 不干什么 |
+|---|---|---|---|
+| 顾清 | `clara` | 读 Issue、问清情况、打标、判断该谁接手 | 不改代码、不合并 |
+| 叶澜 | `nora` | 定做不做、做多大、先做哪个、怎么算做完 | 不写代码、不评审、不合并 |
+| 陈实 | `miles` | 写代码、跑测试、开 PR、按意见改、批准后申请合并 | 不动别人的分支、不为变绿删测试 |
+| 周正 | `frank` | 读 diff、留行内意见、批准或要求修改 | 不写业务代码、不合并 |
+
+他们的行为写在 `.qwen/workflows/*.js`（`clara-triage.js` / `nora-decide.js` / `miles-fix.js` / `frank-review.js`），红线与协作规矩在 [QWEN.md](QWEN.md)。架构与失败处理见 [docs/zh/development/agent-architecture.md](docs/zh/development/agent-architecture.md)。
+
+### 配置说明
+
+| 名称 | 类型 | 必需 | 描述 |
+|---|---|---|---|
+| `QWEN_API_KEY` | Secret | ✅ | Qwen API 密钥 |
+| `QWEN_BASE_URL` | Variable | ❌ | API 基础 URL |
+| `QWEN_MODEL` | Variable | ❌ | 模型名称 |
+| `QWEN_CLI_VERSION` | Variable | ❌ | CLI 版本 |
+| `QWEN_MENTION` | Variable | ❌ | 触发用的提及词，默认 `@qwencoder` |
+| `APP_ID` | Variable | ❌ | GitHub App ID（四个角色共用时的退路） |
+| `APP_PRIVATE_KEY` | Secret | ❌ | GitHub App 私钥（同上） |
+| `AGENT_MAX_HANDOFFS` | Variable | ❌ | 24 小时内机器人自动交接上限，默认 20 |
+| `AGENT_MAX_CALLS` | Variable | ❌ | 24 小时内机器人点名上限，默认 40 |
+| `AGENT_CALL_COOLDOWN_MINUTES` | Variable | ❌ | 同一话题两次点名的最短间隔（分钟），默认 10 |
+| `TRIAGE_BATCH_LIMIT` | Variable | ❌ | 顾清每次批量分诊处理的 Issue 数，默认 5 |
+| `PATROL_IDLE_MINUTES` | Variable | ❌ | 巡检叫陈实前，PR 至少安静多少分钟，默认 15 |
+| `PATROL_REVIEW_IDLE_MINUTES` | Variable | ❌ | 巡检叫周正前，PR 至少开了多少分钟，默认 30 |
+| `PATROL_DECISION_IDLE_HOURS` | Variable | ❌ | 巡检叫叶澜前，Issue 至少停了多少小时，默认 24 |
+| `PATROL_MAX_INSPECT` | Variable | ❌ | 巡检时最多翻多少个 Issue 的评论，默认 15 |
+| `MILES_CI_WAIT_MINUTES` | Variable | ❌ | 合并前等待检查的上限（分钟），默认 10 |
+| `UPLOAD_ARTIFACTS` | Variable | ❌ | 让 action 把运行产物（含 `stdout.log`）上传成 artifact |
+| `APP_ID_CLARA` / `APP_PRIVATE_KEY_CLARA` | Variable / Secret | ❌ | 顾清独立身份，未配则退回 `APP_ID_TRIAGER`、再退回 `APP_ID` |
+| `APP_ID_NORA` / `APP_PRIVATE_KEY_NORA` | Variable / Secret | ❌ | 叶澜独立身份，未配则退回 `APP_ID_PRODUCT`、再退回 `APP_ID` |
+| `APP_ID_MILES` / `APP_PRIVATE_KEY_MILES` | Variable / Secret | ❌ | 陈实独立身份，未配则退回 `APP_ID_ENGINEER`、再退回 `APP_ID` |
+| `APP_ID_FRANK` / `APP_PRIVATE_KEY_FRANK` | Variable / Secret | ❌ | 周正独立身份，未配则退回 `APP_ID_REVIEWER`、再退回 `APP_ID` |
+
+建 App 与写这些配置可以用 `.github/scripts/setup-app.mjs`（用 CDP 驱动一个已登录的 Chrome，登录与 2FA 只能由人输入）。
+
+标签三枚：`status/needs-triage`（顾清还没看完，巡检会跳过）、`do-not-merge` 与 `manual-review`（人放的闸，巡检和陈实都认）。
+
+### 验证改动
+
+改工作流或 `.qwen/workflows/` 下的脚本后，至少跑这几条自检：
+
+```bash
+python3 -c "import yaml,glob;[yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]"
+for f in .qwen/workflows/*.js; do node --check "$f"; done
+python3 -c "import json,glob;[json.load(open(f)) for f in glob.glob('.github/agents/*.json')]"
+node --test .github/scripts/*.test.mjs
+```
+
+这几条在 `.github/workflows/qwen-ci.yml` 里也会跑，PR 上多出一个叫 `qwen test` 的检查项（不叫 `test`：`ci.yml` 里已经有一个同名 job）。它不只是图方便 —— 合并闸门的 `checks` 判据看的是 PR 上的检查项，测试不进 CI 就等于闸门在核一堆不验判断逻辑的东西。
+
+哪些事件跑哪份工作流：`pull_request_review`、`pull_request_review_comment` 与 `pull_request` 跑的是 **PR 分支里的** workflow 定义，其余事件跑默认分支。所以改完 `.github/workflows/` 想验证效果，得先让改动出现在 PR 分支上。
+
+`qwen-dispatch.yml` 里那一步 `actions/checkout` 显式钉在**默认分支**上取 `.github/scripts/`，所以事件触发的那次运行用的永远是主干上的脚本。**改了脚本要先合进默认分支才会生效。**
 
 ## 许可证
 

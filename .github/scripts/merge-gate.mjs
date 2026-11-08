@@ -2,13 +2,10 @@
 /**
  * 合并闸门：把「能不能合」从模型的判断里拿出来，交给这个脚本机械判定。
  *
- * 为什么要有它：合并前条件原本写在 auto-miles.toml 的提示词里，由陈实自己读、
- * 自己判断、自己执行 `gh pr merge`。实测两次都没逐条对上 —— PR #38 在「浏览器端到端
- * 测试」判失败后照常合并（他判断为「与本次无关的 flaky」，判断可能对，但没落证据），
- * PR #39 在批准挂在旧提交 447ff12a 的情况下，于新提交 b2763785 上合并。提示词写了
- * 这两条，他就是没执行：证明「写给人读的清单」不构成闸门。
+ * 为什么要有它：写在提示词里的合并条件是给人读的清单，只在读的人当时愿意遵守时
+ * 才生效。闸门要在没人遵守时也生效，所以条件由脚本核，模型只负责判断「该不该合」
+ * 并写出申请。
  *
- * 所以分工改成：模型只负责判断「该不该合」并写出申请，条件由这个脚本核。
  * 模型写完 merge-request 就结束，合并由 qwen-miles.yml 的闸门步骤调用本脚本执行。
  *
  * 用法（workflow 里也是这么调的）：
@@ -17,15 +14,21 @@
  *
  * 退出码：0 = 通过（或已在 --merge 下合并成功）；1 = 被拦；2 = 用法错误。
  *
- * 判据只收「能机械判」的四条。第五条「变更内容与 PR 描述一致」机器判不了，
- * 不进闸门 —— 假装判了比不判更坏。
+ * 判据只收「能机械判」的五条。第六条「变更内容与 PR 描述一致」机器判不了，
+ * 不进闸门 —— 假装判了比不判更坏。判据逐条说明见 docs/merge-gate.md。
  */
 
 import { execFileSync } from 'node:child_process';
-import { approvedAtHead } from './patrol.mjs';
+
+// 评审语义与人工闸标签都归 review.mjs。闸门不自己判「当前提交上有没有仍然成立的
+// 批准」—— 那要跟巡检判同一件事，两处各写一份迟早不一致。
+import { approvedAtHead, hasStopLabel, STOP_LABELS } from './review.mjs';
+
+// 「哪些行是别人引用的代码」这件事只有一份，在 markdown.mjs。
+import { tickCheckboxes } from './markdown.mjs';
 
 // 人放的闸：放上去就是「先别动」。合并闸门必须认这两个标签，否则闸门本身成了绕道。
-export const STOP_LABELS = ['do-not-merge', 'manual-review'];
+export { STOP_LABELS };
 
 const FAILURE_CONCLUSIONS = ['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED'];
 const FAILURE_STATES = ['FAILURE', 'ERROR'];
@@ -81,10 +84,11 @@ export function evaluateMerge({ pr, preexisting = [] }) {
       : `当前提交 ${String(pr.headRefOid || '').slice(0, 8)} 上没有有效批准：批准必须挂在 head 上，且比任何驳回都新`,
   );
 
+  // 取出具体是哪几个闸标签：判定只需要真假，但贴到 PR 上时要说是哪一个
   const stopLabels = (pr.labels || []).map((l) => l.name).filter((n) => STOP_LABELS.includes(n));
   add(
     'no-stop-label',
-    stopLabels.length === 0,
+    !hasStopLabel(pr.labels),
     stopLabels.length ? `带闸标签：${stopLabels.join('、')}` : '没有 do-not-merge / manual-review 标签',
   );
 
@@ -101,12 +105,16 @@ export function evaluateMerge({ pr, preexisting = [] }) {
   const tolerated = failed.filter((n) => preexisting.includes(n));
   const blocking = failed.filter((n) => !preexisting.includes(n));
 
+  // 顺序要紧：先问「还在跑没有」，再问「失败的是不是主干上也红」。
+  // 反过来写会漏掉一类 PR —— 主干红着（比如那张 test 检查），PR 上另有一项还在跑，
+  // 于是走了「只有主干上同样失败的检查」这条放行分支，合并说明里只提了红的那项，
+  // 「检查全部跑完」这一条判据就被静默跳过了。
   if (blocking.length) {
     add('checks', false, `检查失败且不是主干上已有的：${blocking.join('、')}`);
-  } else if (tolerated.length) {
-    add('checks', true, `只有主干上同样失败的检查：${tolerated.join('、')}（合并说明里要写明）`);
   } else if (isPending(pr)) {
     add('checks', false, '还有检查在跑');
+  } else if (tolerated.length) {
+    add('checks', true, `只有主干上同样失败的检查：${tolerated.join('、')}（合并说明里要写明）`);
   } else {
     const total = (pr.statusCheckRollup || []).length;
     add('checks', true, total ? '检查全部完成且没有失败' : '这个 PR 没有配检查');
@@ -146,8 +154,7 @@ const PR_FIELDS = [
  * 查某个失败检查在 base 分支上是不是也一样失败。
  *
  * 为什么需要这条：主干本来就红的时候，按「检查项没有失败」任何 PR 都永远合不了，
- * 而修它又得先把 PR 合进去 —— 死循环。陈实 PR #38 遇到的就是这个局面（Jail 开关的
- * e2e 从 3c9b1437 起在 master 上一直红）。正确的出路不是「他觉得无关就合」，
+ * 而修它又得先把 PR 合进去 —— 死循环。正确的出路不是「他觉得无关就合」，
  * 而是「拿数据证明主干上同样红」，并且把这件事写进合并说明。
  */
 function preexistingFailures(names, repo, baseSha) {
@@ -157,7 +164,7 @@ function preexistingFailures(names, repo, baseSha) {
     try {
       const data = ghJson([
         'api',
-        `repos/${repo}/commits/${baseSha}/check-runs?check_name=${encodeURIComponent(name)}&filter=latest`,
+        `repos/${encodeURIComponent(repo)}/commits/${baseSha}/check-runs?check_name=${encodeURIComponent(name)}&filter=latest`,
       ]);
       // REST 接口的 conclusion 是小写（failure），gh pr view 给的是大写（FAILURE），
       // 统一抬成大写在两边比对，否则「主干上同样红」永远认不出来
@@ -176,7 +183,7 @@ function preexistingFailures(names, repo, baseSha) {
  *
  * 闸门跑在陈实那次运行里，而那次运行本身就是 PR 上的一个检查项（`route`、`miles / work`）。
  * 不剔掉的话，`isPending` 永远看到自己在跑：先白等满 MILES_CI_WAIT_MINUTES，再以
- * 「还有检查在跑」拦下自己 —— 每张 PR 都合不了。实测 PR #26 就是这样。
+ * 「还有检查在跑」拦下自己 —— 每张 PR 都合不了。
  *
  * 判据是 detailsUrl 里那一段 `/runs/<runId>/`，只在 CI 里有 GITHUB_RUN_ID，本地跑为空、
  * 一律保留。
@@ -221,6 +228,30 @@ function announce(number, repo, body) {
     gh(['pr', 'comment', String(number), '--repo', repo, '--body', body]);
   } catch {
     // 发不出评论不该让判定结果失真；判定本身已经在 stdout 上
+  }
+}
+
+/**
+ * 把 Issue 里没勾的 checkbox 勾上，返回勾了几项。
+ *
+ * QWEN.md 的合并规范里写着这一条，而在这之前没有任何代码碰过它 —— 清单会一直空着，
+ * 下一个人读到的是「还没做完」。
+ *
+ * 失败不抛：合并已经发生了，这时候让整轮失败只会报出一句「闸门自己出错了」，
+ * 而五条判据其实全过了。所以只在 stderr 里说清楚，合并说明里不写勾了几项。
+ */
+export function tickIssueChecklist(issue, repo) {
+  try {
+    const body = ghJson(['issue', 'view', String(issue), '--repo', repo, '--json', 'body'])?.body || '';
+    const { body: next, ticked } = tickCheckboxes(body);
+    if (!ticked) return 0;
+    gh(['issue', 'edit', String(issue), '--repo', repo, '--body', next]);
+    return ticked;
+  } catch (err) {
+    process.stderr.write(
+      `Issue #${issue} 的 checklist 没勾上：${err && err.message ? err.message : String(err)}\n`,
+    );
+    return 0;
   }
 }
 
@@ -282,19 +313,24 @@ function main() {
   gh(['pr', 'merge', String(number), '--repo', repo, '--squash', '--delete-branch']);
 
   const issue = String(pr.headRefName || '').replace(/^qwen-fix-/, '');
+  const linked = Boolean(issue) && /^\d+$/.test(issue);
+  const ticked = linked ? tickIssueChecklist(issue, repo) : 0;
   const toleratedNote = result.tolerated.length
     ? `\n\n合并时这些检查在主干上同样失败，不是本次改动引入：${result.tolerated.join('、')}。`
+    : '';
+  const checklistNote = ticked
+    ? `\n\nIssue #${issue} 里的 checklist 已勾完（${ticked} 项）。`
     : '';
 
   announce(
     number,
     repo,
-    `## ✅ 已合并\n\nSquash 合并并删除分支 \`${pr.headRefName}\`。${toleratedNote}\n\n` +
+    `## ✅ 已合并\n\nSquash 合并并删除分支 \`${pr.headRefName}\`。${toleratedNote}${checklistNote}\n\n` +
       '判定由 `.github/scripts/merge-gate.mjs` 逐条核过，结果见上一条评论之外的运行日志。\n\n' +
       '<!-- qwen:role=miles -->',
   );
 
-  if (issue && /^\d+$/.test(issue)) {
+  if (linked) {
     try {
       gh(['issue', 'close', issue, '--repo', repo, '--comment', `已由 #${number} 修复`]);
     } catch {

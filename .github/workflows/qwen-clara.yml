@@ -38,7 +38,10 @@ defaults:
 jobs:
   watch:
     runs-on: 'ubuntu-latest'
-    timeout-minutes: 15
+    # 这一轮是「每条 Issue 一个代理并行 + 一路核对」，不再是单会话跑完。
+    # 批量上限由 TRIAGE_BATCH_LIMIT 定（默认 5），并行跑，所以墙钟不随条数线性涨。
+    # 这个超时是唯一的硬边界：模型跑满就被 SIGKILL，评论可能只写了一半。
+    timeout-minutes: 25
     outputs:
       handled: '${{ steps.prepare.outputs.handled }}'
     permissions:
@@ -66,116 +69,61 @@ jobs:
         id: 'prepare'
         env:
           GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
-          ISSUE_NUMBER: '${{ inputs.issue_number }}'
           REPOSITORY: '${{ github.repository }}'
+          ISSUE_NUMBER: '${{ inputs.issue_number }}'
           BATCH_LIMIT: '${{ vars.TRIAGE_BATCH_LIMIT || 5 }}'
+        # 挑哪几条 Issue 的判据在 context.mjs 的 prepareClara()：排序、去重、上限这些
+        # 错了不会报错，只会安静地漏处理或者重复处理，所以要能单测。
         run: |-
           set -euo pipefail
-
-          if [ -n "${ISSUE_NUMBER}" ]; then
-            echo "MODE=single" >> "${GITHUB_OUTPUT}"
-            echo "TARGETS=${ISSUE_NUMBER}" >> "${GITHUB_OUTPUT}"
-            echo "handled=true" >> "${GITHUB_OUTPUT}"
-            echo "本次处理 #${ISSUE_NUMBER}"
-            exit 0
-          fi
-
-          # 定时巡检：无标签的，或被标了 status/needs-triage 的
-          UNLABELED="$(gh issue list --repo "${REPOSITORY}" --state open \
-            --search 'no:label' --limit "${BATCH_LIMIT}" --json number --jq '.[].number' || true)"
-          NEEDS="$(gh issue list --repo "${REPOSITORY}" --state open \
-            --label 'status/needs-triage' --limit "${BATCH_LIMIT}" --json number --jq '.[].number' || true)"
-
-          TARGETS="$(printf '%s\n%s\n' "${UNLABELED}" "${NEEDS}" | grep -E '^[0-9]+$' | sort -n -u | head -n "${BATCH_LIMIT}" | paste -sd, - || true)"
-
-          if [ -z "${TARGETS}" ]; then
-            echo '没有需要处理的 Issue'
-            echo "handled=false" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-
-          echo "MODE=batch" >> "${GITHUB_OUTPUT}"
-          echo "TARGETS=${TARGETS}" >> "${GITHUB_OUTPUT}"
-          echo "handled=true" >> "${GITHUB_OUTPUT}"
-          echo "本次处理：${TARGETS}"
+          node .github/scripts/context.mjs clara
 
       - name: 'Run Qwen clara'
         id: 'qwen_clara'
         if: |-
           ${{ steps.prepare.outputs.handled == 'true' }}
-        uses: 'QwenLM/qwen-code-action@v1'
+        uses: './.github/actions/run-agent'
         env:
           GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
           REPOSITORY: '${{ github.repository }}'
           TARGETS: '${{ steps.prepare.outputs.TARGETS }}'
           REASON: '${{ inputs.reason }}'
           MODE: '${{ steps.prepare.outputs.MODE }}'
+          # 工作流自己的容量。默认是「CPU 数 - 2，夹在 2..16」个代理、6 个并发，
+          # 以及 30 分钟总墙钟。批量分诊最多 5 条并行 + 1 路核对 = 6 个代理，
+          # 默认的 30 分钟墙钟会在最后一拍把核对砍掉 —— 而核对是唯一能发现
+          # 「代理说处理了、GitHub 上没有」的那一拍。
+          #
+          # 墙钟给 24 小时，等于不设限。CLI 只在值 > 0 时采纳它（resolveMaxWallClockMs），
+          # 删掉这个变量只会退回更短的 30 分钟，所以不能靠删。
+          # 真正的硬边界是上面 job 的 timeout-minutes。
+          QWEN_CODE_ENABLE_WORKFLOWS: '1'
+          QWEN_CODE_MAX_WORKFLOW_AGENTS: '10'
+          QWEN_CODE_MAX_WORKFLOW_CONCURRENCY: '6'
+          QWEN_CODE_MAX_WORKFLOW_SECONDS: '86400'
         with:
+          role: 'clara'
+          # 这一轮怎么干写在 .qwen/workflows/clara-triage.js 里，不再是一份长提示词。
+          # 参数用 JSON 显式拼：让模型自己从环境变量凑 args，凑错一个字段不会报错，
+          # 只会把一批 Issue 的编号读成空。
+          prompt: >-
+            /clara-triage {"repo":"${{ github.repository }}","mode":"${{ steps.prepare.outputs.MODE }}","targets":"${{ steps.prepare.outputs.TARGETS }}","reason":"${{ inputs.reason }}"}
+          workflow_name: 'qwen-clara'
           openai_api_key: '${{ secrets.QWEN_API_KEY }}'
           openai_base_url: '${{ vars.QWEN_BASE_URL }}'
           openai_model: '${{ vars.QWEN_MODEL }}'
           qwen_cli_version: '${{ vars.QWEN_CLI_VERSION }}'
           qwen_debug: '${{ fromJSON(vars.DEBUG || vars.ACTIONS_STEP_DEBUG || false) }}'
           upload_artifacts: '${{ vars.UPLOAD_ARTIFACTS }}'
-          workflow_name: 'qwen-clara'
-          settings: |-
-            {
-              "model": {
-                "maxSessionTurns": 30
-              },
-              "memory": {
-                "enableManagedAutoMemory": false,
-                "enableManagedAutoDream": false
-              },
-              "telemetry": {
-                "enabled": false
-              },
-              "tools": {
-                "core": [
-                  "run_shell_command(gh)",
-                  "run_shell_command(ls)",
-                  "run_shell_command(cat)",
-                  "run_shell_command(grep)"
-                ]
-              }
-            }
-          prompt: '/auto-clara'
 
-      # API 报错时 CLI 仍然退出 0，把错误文本当成最后一段 assistant 输出
-      # （qwen-code#8920、#11217，两者的修复 PR 至今都还没合并）。所以判据只能是
-      # 「最后一句长什么样」。官方 qwen-triage.yml:1379 记的那次事故就是这样：
-      # 一次 268 字符的裸 [API Error: ...] 被当成成功，没人重试也没人告警。
-      # 尾部匹配而不是 contains：真实回复正文里哪怕引了一句 API 错误，后面还会
-      # 继续写下去，不该因此判失败。
-      - name: 'Fail when the model API returned an error'
+      # 工作流脚本抛错时 CLI 仍然退出 0，只把「Workflow failed: …」写进工具的返回内容。
+      # 所以「这一轮到底跑完没有」得单独判一次，否则失败会被读成成功。
+      # （另一类是「最后一段话是不是 API 报错」，那一判断在 run-agent 内部，四个人共用。）
+      - name: 'Fail when the workflow did not complete'
         if: |-
-          ${{ steps.qwen_clara.outcome == 'success' }}
+          ${{ always() && steps.prepare.outputs.handled == 'true' && steps.qwen_clara.outcome == 'success' }}
+        env:
+          ROLE: 'clara'
         run: |-
           set -euo pipefail
-
-          if [ ! -f qwen-artifacts/stdout.log ]; then
-            echo '::error title=没有 qwen 的输出::找不到 qwen-artifacts/stdout.log，无法判断这一轮做了什么。'
-            exit 1
-          fi
-
-          # 与 action 自己解析 qwen_response 的口径一致：取最后一段 assistant 文本
-          BODY="$(jq -r '[.[] | select(.type == "assistant")] | last | .message.content[]? | select(.type == "text") | .text' \
-            qwen-artifacts/stdout.log 2>/dev/null || true)"
-
-          for S in \
-            'Possible quota limitations in place or slow response times detected. Please wait and try again later.' \
-            'Please wait and try again later. To increase your limits, request a quota increase through AI Studio, or switch to another /auth method' \
-            'Please wait and try again later. To increase your limits, request a quota increase through Vertex, or switch to another /auth method'; do
-            BODY="${BODY%"$S"}"
-          done
-          BODY="${BODY%"${BODY##*[![:space:]]}"}"
-
-          case "${BODY}" in
-            *"[API Error: "*"]")
-              # 正文来自外部接口，别让它里面的 :: 或 ##[ 被当成 workflow 命令
-              EXCERPT="$(printf '%s' "${BODY:0:300}" | sed -e 's/::/;;/g' -e 's/##\[/##［/g')"
-              echo '::error title=模型 API 返回了错误::这一轮没有完成，判断不可用。这是接口侧的问题，重跑即可。'
-              printf '%s\n' "${EXCERPT}" >&2
-              exit 1
-              ;;
-          esac
+          node .github/scripts/workflow-run.mjs

@@ -1,9 +1,8 @@
 /**
  * 路由规则的测试。
  *
- * 这段逻辑原本是 qwen-dispatch.yml 里的 300 多行内联 JS，错了的表现是
- * **什么也不发生** —— 被取消的运行 jobs 为空，日志里一个字都不留。
- * 所以每条判据都要有一条测试盯着，尤其是「什么情况下不派活」和「派给谁」。
+ * 这段逻辑错了的表现是**什么也不发生** —— 被取消的运行 jobs 为空，日志里一个字
+ * 都不留。所以每条判据都要有一条测试盯着，尤其是「什么情况下不派活」和「派给谁」。
  *
  *   /usr/bin/node --test .github/scripts/route.test.mjs
  */
@@ -103,6 +102,53 @@ test('reason 里带 > 也不会让整条交接丢掉', () => {
   const parsed = parseHandoff('<!-- qwen:handoff=miles reason=a > b -->');
   assert.equal(parsed.role, 'miles');
   assert.equal(parsed.reason, 'a > b');
+});
+
+test('代码里的标记不认：贴一段示例不是在要求它生效', () => {
+  // 行内代码
+  assert.equal(parseHandoff('一条 `<!-- qwen:handoff=miles reason=试试 -->` 的评论'), null);
+  // 围栏块，反引号与波浪线两种
+  assert.equal(parseHandoff('日志如下\n```\n<!-- qwen:handoff=miles reason=试试 -->\n```\n'), null);
+  assert.equal(parseHandoff('~~~\n<!-- qwen:to=frank -->\n~~~\n'), null);
+});
+
+test('代码外面还有真标记时照认', () => {
+  const text = '示例 `<!-- qwen:handoff=nora reason=不是这条 -->`\n\n<!-- qwen:handoff=miles reason=这条才是 -->';
+  assert.deepEqual(parseHandoff(text), { role: 'miles', reason: '这条才是' });
+});
+
+test('围栏没闭合时，后面的标记一并当引用', () => {
+  // Markdown 也这么渲染。宁可漏认一条交接，也不要在引用块里认出一条指令。
+  assert.equal(parseHandoff('```\n<!-- qwen:handoff=miles reason=x -->\n'), null);
+});
+
+test('数历史交接时也不数代码里的', () => {
+  assert.equal(countRecentHandoffs([{ body: '贴一段：\n```\n<!-- qwen:handoff=frank reason=x -->\n```' }]), 0);
+  assert.equal(recentCalls([{ body: '`<!-- qwen:to=nora -->`' }]).length, 0);
+  // 同一条评论里代码内外都有时，只认外面那个
+  assert.equal(countRecentHandoffs([{ body: '`<!-- qwen:handoff=frank reason=x -->`\n<!-- qwen:handoff=miles reason=y -->' }]), 1);
+});
+
+test('PR 描述里贴出交接标记，不会把这条 PR 从周正手里抢走', () => {
+  // 真的踩到过：描述里为了说明「这条评论带了交接标记」把标记原样贴进行内代码，
+  // 这条 PR 打开时就被派给了陈实，周正压根没被叫去评审。
+  const input = ev(
+    { prNumber: 47, issueIsPr: true, prBody: '改法：\n\n`<!-- qwen:handoff=miles reason=试试 -->`\n' },
+    { eventName: 'pull_request', action: 'opened' },
+  );
+  const result = route(input);
+  assert.equal(result.role, 'frank');
+  assert.equal(result.prNumber, 47);
+});
+
+test('描述里真写了交接（不在代码里）照旧认', () => {
+  const input = ev(
+    { prNumber: 48, issueIsPr: true, prBody: '<!-- qwen:handoff=miles reason=先跑一遍 -->' },
+    { eventName: 'pull_request', action: 'opened' },
+  );
+  const result = route({ ...input, pull: { headRef: 'qwen-fix-48' } });
+  assert.equal(result.role, 'miles');
+  assert.equal(result.reason, '交接：先跑一遍');
 });
 
 test('只有两种评论事件算评论', () => {
@@ -241,7 +287,7 @@ test('交接不区分人类还是机器人', () => {
   }
 });
 
-test('机器人第 21 次交接 → 超限，不再派人', () => {
+test('24 小时内已有 21 次交接 → 超限，不再派人', () => {
   const result = route(
     ev({ commentBody: HANDOFF('miles') }, { senderType: 'Bot', gates: { now: NOW, recentHandoffs: 21, maxHandoffs: 20 } }),
   );
@@ -251,9 +297,18 @@ test('机器人第 21 次交接 → 超限，不再派人', () => {
   assert.equal(result.max, 20);
 });
 
-test('机器人第 20 次交接 → 仍然派，边界用 > 不用 >=', () => {
+test('24 小时内刚好 20 次交接 → 这次是第 21 次，停下', () => {
+  // 计数的语义是「本次之前发生过几次」，所以 20 次历史意味着这一条就超了。
+  // 早先这里用 >，靠的是「本次这条也数在里面」—— 与点名冷却失效同源，见 dispatch.mjs。
   const result = route(
     ev({ commentBody: HANDOFF('miles') }, { senderType: 'Bot', gates: { now: NOW, recentHandoffs: 20, maxHandoffs: 20 } }),
+  );
+  assert.equal(result.kind, 'handoff-limit');
+});
+
+test('24 小时内 19 次交接 → 还能派，额度没被提前收紧', () => {
+  const result = route(
+    ev({ commentBody: HANDOFF('miles') }, { senderType: 'Bot', gates: { now: NOW, recentHandoffs: 19, maxHandoffs: 20 } }),
   );
   assert.equal(result.kind, 'assign');
 });
@@ -339,7 +394,10 @@ test('Issue 上的其他动作不归任何人', () => {
 
 test('指派给本次动作者 → 陈实接手', () => {
   const result = route(
-    ev({ issueNumber: 3, assignee: 'qwencoder[bot]' }, { eventName: 'issues', action: 'assigned' }),
+    ev(
+      { issueNumber: 3, assignee: 'qwencoder[bot]', assigneeType: 'Bot' },
+      { eventName: 'issues', action: 'assigned' },
+    ),
   );
   assert.equal(result.role, 'miles');
   assert.equal(result.issueNumber, 3);
@@ -347,6 +405,73 @@ test('指派给本次动作者 → 陈实接手', () => {
 
 test('指派给别人 → 忽略，不抢活', () => {
   const result = route(ev({ issueNumber: 3, assignee: 'human' }, { eventName: 'issues', action: 'assigned' }));
+  assert.equal(result.kind, 'ignore');
+});
+
+test('人把 Issue 指派给 AI 账号 → 陈实接手', () => {
+  // 真实形态：assignee 是机器人、触发事件的是那个人。早先的判据拿 assignee
+  // 和触发者比，两者永远不相等，这条规则因此从来没生效过。
+  const result = route(
+    ev(
+      { issueNumber: 42, assignee: 'qwencoder-clara[bot]', assigneeType: 'Bot' },
+      { eventName: 'issues', action: 'assigned', senderType: 'User' },
+    ),
+  );
+  assert.equal(result.kind, 'assign');
+  assert.equal(result.role, 'miles');
+  assert.equal(result.issueNumber, 42);
+  assert.equal(result.onPr, false);
+});
+
+test('人把 PR 指派给 AI 账号 → 当成 PR 派下去，不是当成 Issue', () => {
+  // GitHub 对 PR 也发 issues.assigned。当成 Issue 派下去，陈实会去读一个
+  // 没有 checkout 分支的 PR。
+  const result = route(
+    ev(
+      { issueNumber: 51, issueIsPr: true, assignee: 'qwencoder-miles[bot]', assigneeType: 'Bot' },
+      { eventName: 'issues', action: 'assigned', senderType: 'User' },
+    ),
+  );
+  assert.equal(result.kind, 'need-pull', '要先知道分支名才能判它是不是我方 PR');
+
+  const withPull = route({
+    ...ev(
+      { issueNumber: 51, issueIsPr: true, assignee: 'qwencoder-miles[bot]', assigneeType: 'Bot' },
+      { eventName: 'issues', action: 'assigned', senderType: 'User' },
+    ),
+    pull: { headRef: 'qwen-fix-42' },
+  });
+  assert.equal(withPull.onPr, true);
+  assert.equal(withPull.prNumber, 51);
+  assert.equal(withPull.issueNumber, '42', 'qwen-fix-42 对应 42 号 Issue');
+  assert.equal(withPull.headRef, 'qwen-fix-42');
+});
+
+test('人把 Issue 指派给另一个人 → 仍然忽略', () => {
+  const result = route(
+    ev(
+      { issueNumber: 42, assignee: 'teammate', assigneeType: 'User' },
+      { eventName: 'issues', action: 'assigned', senderType: 'User' },
+    ),
+  );
+  assert.equal(result.kind, 'ignore');
+});
+
+test('取消指派（assignee 为空）不会被当成派活', () => {
+  // unassigned 走的是另一个 action；但载荷缺 assignee 时也不能误派
+  const result = route(
+    ev({ issueNumber: 42, assignee: '', assigneeType: '' }, { eventName: 'issues', action: 'assigned' }),
+  );
+  assert.equal(result.kind, 'ignore');
+});
+
+test('机器人把 Issue 指派给自己 → 不当指令，否则是一轮接一轮的无限跑', () => {
+  const result = route(
+    ev(
+      { issueNumber: 42, assignee: 'qwencoder-miles[bot]', assigneeType: 'Bot' },
+      { eventName: 'issues', action: 'assigned', senderType: 'Bot' },
+    ),
+  );
   assert.equal(result.kind, 'ignore');
 });
 

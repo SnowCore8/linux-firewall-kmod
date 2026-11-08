@@ -90,8 +90,9 @@ debian/*.debhelper
 # 写在这里的放行项会静默不生效（.qwen/settings.json 等本机状态仍不入库）。
 .qwen/*
 !.qwen/skills/
-# 四个角色的提示词由 CI 按名字解析（/auto-clara 等），必须入库。
-!.qwen/commands/
+# 四个角色的做法由 CI 按文件名解析（/clara-triage 等），必须入库：
+# 本机有、runner 上没有，那么「这一轮怎么干」在两边就不是同一件事。
+!.qwen/workflows/
 .cursor/
 .cursorrules
 .claude/

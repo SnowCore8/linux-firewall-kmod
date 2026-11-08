@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # 包在 gh 外面的合并拦截层：模型这一轮里合不了。
 #
-# 为什么需要：合并前条件原写在 auto-miles.toml 里由陈实自己读、自己执行 `gh pr merge`。
-# 实测两次都没对上 —— PR #38 在「浏览器端到端测试」判失败后照常合并，PR #39 在批准挂在
-# 旧提交 447ff12a 时于新提交 b2763785 上合并。写给人读的清单不构成闸门。
+# 为什么需要：把合并条件写进提示词，等于让它只在执行者愿意遵守时才生效 ——
+# 读的人当时松一下就过去了，而闸门要在没人遵守时也生效。所以条件归脚本，
+# 模型只剩「申请」这一个动作。
 #
-# 所以合并不再经过模型：它只能写 <!-- qwen:merge-request -->，由 qwen-miles.yml 的闸门
+# 合并不经过模型：它只能写 <!-- qwen:merge-request -->，由 qwen-miles.yml 的闸门
 # 步骤调 .github/scripts/merge-gate.mjs 判定后执行。
 #
 # 这不是安全边界：令牌就在环境里，绕道 curl 照样能合。真正的保底检查在闸门那一步 ——
 # PR 在闸门之前就变成 MERGED，整轮判失败。这一层挡的是「顺手合了」。
 #
-# 用法：qwen-miles.yml 把它软链成 $RUNNER_TEMP/qwen-no-merge/gh 并前置到 PATH，
-# 真实 gh 的路径写在同目录的 real-gh 里。
+# 用法：qwen-miles.yml 把它复制到 $RUNNER_TEMP/qwen-no-merge/no-merge-gh，
+# 再在同目录生成一个 gh 转发脚本（把真实 gh 的路径 export 成 REAL_GH，然后 exec 这份
+# 副本），最后前置到 PATH。复制而非引用工作区那份，是因为模型这一轮有写权限。
+# 本脚本自身不写 real-gh 文件；REAL_GH 由那个转发脚本提供。
 set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,15 +26,42 @@ if [ -z "${REAL_GH}" ] || [ "$(readlink -f "${REAL_GH}")" = "$(readlink -f "${BA
   exit 127
 fi
 
+# 人放的闸标签。摘掉它等于把闸门看不见的东西拿走，所以连摘的动作一起拦。
+STOP_LABELS='do-not-merge manual-review'
+
+is_stop_label() {
+  local list="$1" name
+  local -a names
+  IFS=',' read -r -a names <<< "${list}"
+  for name in "${names[@]}"; do
+    name="${name//[[:space:]]/}"
+    case " ${STOP_LABELS} " in
+      *" ${name} "*) [ -n "${name}" ] && return 0 ;;
+    esac
+  done
+  return 1
+}
+
 if [ "${QWEN_MERGE_GATE:-}" != '1' ]; then
   BLOCKED=''
+  STOP_REMOVAL=''
+  IS_PR_EDIT=''
   PREV=''
-  for ARG in "$@"; do
+  ARGS=("$@")
+  for ((i = 0; i < ${#ARGS[@]}; i++)); do
+    ARG="${ARGS[i]}"
     case "${ARG}" in
       # gh api repos/o/r/pulls/39/merge、graphql 的 mergePullRequest
       */merge | *mergePullRequest*) BLOCKED=1 ;;
+      --remove-label)
+        if [ "${IS_PR_EDIT}" = '1' ] && is_stop_label "${ARGS[i + 1]:-}"; then STOP_REMOVAL=1; fi
+        ;;
+      --remove-label=*)
+        if [ "${IS_PR_EDIT}" = '1' ] && is_stop_label "${ARG#--remove-label=}"; then STOP_REMOVAL=1; fi
+        ;;
     esac
     if [ "${PREV}" = 'pr' ] && [ "${ARG}" = 'merge' ]; then BLOCKED=1; fi
+    if [ "${PREV}" = 'pr' ] && [ "${ARG}" = 'edit' ]; then IS_PR_EDIT=1; fi
     PREV="${ARG}"
   done
 
@@ -40,6 +69,14 @@ if [ "${QWEN_MERGE_GATE:-}" != '1' ]; then
     cat >&2 <<'MSG'
 没有合并权限：合并由 .github/scripts/merge-gate.mjs 判定后执行，不经过你。
 要申请合并，在这一轮的最终回复里单独写一行 <!-- qwen:merge-request -->。
+MSG
+    exit 1
+  fi
+
+  if [ -n "${STOP_REMOVAL}" ]; then
+    cat >&2 <<'MSG'
+没有摘闸标签的权限：do-not-merge / manual-review 是人放的闸，只有人能摘。
+看到它就先在评论里问一句为什么，不要自己摘掉再合并。
 MSG
     exit 1
   fi

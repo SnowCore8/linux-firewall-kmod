@@ -4,9 +4,9 @@ name: '🩺 Qwen Patrol'
 #
 # 为什么不给三个角色工作流各加一条 schedule：
 #   qwen-miles / qwen-frank / qwen-nora 是纯 workflow_call 接收方，`number` 之类
-#   是必填输入。加了 schedule 之后 `inputs.number` 会是空串，传到下游就是 0，
-#   issues.get(0) 直接 404。要么改一堆下游 env，要么在这里「先扫、扫到了再调」——
-#   后者不动任何已经跑通的代码。
+#   是必填输入。schedule 触发时 `inputs.number` 是空串，传到下游就是 0，
+#   issues.get(0) 直接 404。所以定时这条路只在这里「先扫、扫到了再调」，
+#   下游一行不用改。
 #
 # 判断规则在 .github/scripts/patrol.mjs，带测试（patrol.test.mjs）。
 # 规则决定了「该不该叫醒一个人」，写错会叫错人或该叫的人一直没人叫，
@@ -173,6 +173,7 @@ jobs:
           GH_TOKEN: '${{ secrets.GITHUB_TOKEN || github.token }}'
           REPOSITORY: '${{ github.repository }}'
           PATROL_DECISION_IDLE_HOURS: '${{ vars.PATROL_DECISION_IDLE_HOURS || 24 }}'
+          PATROL_MAX_INSPECT: '${{ vars.PATROL_MAX_INSPECT || 15 }}'
         run: |-
           set -euo pipefail
           node .github/scripts/patrol.mjs nora --repo "${REPOSITORY}"

@@ -52,7 +52,9 @@ defaults:
 jobs:
   decide:
     runs-on: 'ubuntu-latest'
-    timeout-minutes: 15
+    # 这一轮是「两路取证并行 + 一个决定 + 一路核对」，不再是单会话跑完。
+    # 这个超时是唯一的硬边界：模型跑满就被 SIGKILL，决定可能只写了一半。
+    timeout-minutes: 25
     outputs:
       decided: '${{ steps.context.outputs.proceed }}'
     permissions:
@@ -73,37 +75,27 @@ jobs:
           permission-issues: 'write'
           permission-pull-requests: 'read'
 
+      # 先 checkout 再判断：判据是工作区里的 .github/scripts/context.mjs，
+      # checkout 之前工作区是空的。所以这一步无条件执行。
+      - name: 'Checkout repository'
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+
       - name: 'Check the target is still open'
         id: 'context'
-        uses: 'actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea' # ratchet:actions/github-script@v7
         env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          REPOSITORY: '${{ github.repository }}'
           NUMBER: '${{ inputs.number }}'
-        with:
-          github-token: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
-          script: |-
-            const { owner, repo } = context.repo;
-            const number = Number(process.env.NUMBER);
-            const { data: item } = await github.rest.issues.get({ owner, repo, issue_number: number });
-
-            if (item.state !== 'open') {
-              core.setOutput('proceed', 'false');
-              core.info(`#${number} 已关闭，不再做产品决策`);
-              return;
-            }
-
-            core.setOutput('proceed', 'true');
-            core.info(`对 #${number} 做产品决策`);
-
-      - name: 'Checkout repository'
-        if: |-
-          ${{ steps.context.outputs.proceed == 'true' }}
-        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+        # 目标关着、或者取不到状态，都不往下跑。判据在 context.mjs 的 prepareNora()。
+        run: |-
+          set -euo pipefail
+          node .github/scripts/context.mjs nora
 
       - name: 'Run Qwen nora'
         id: 'qwen_nora'
         if: |-
           ${{ steps.context.outputs.proceed == 'true' }}
-        uses: 'QwenLM/qwen-code-action@v1'
+        uses: './.github/actions/run-agent'
         env:
           GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
           REPOSITORY: '${{ github.repository }}'
@@ -113,94 +105,37 @@ jobs:
           PR_NUMBER: '${{ inputs.pr_number }}'
           HEAD_REF: '${{ inputs.head_ref }}'
           REASON: '${{ inputs.reason }}'
+          # 工作流自己的容量：两路取证 + 一个决定 + 一路核对，最多 4 个代理。
+          # 默认 30 分钟墙钟会在核对那一拍把整轮砍断，而核对是唯一能发现
+          # 「决定了但没写出去」的那一拍。
+          #
+          # 墙钟给 24 小时，等于不设限。CLI 只在值 > 0 时采纳它（resolveMaxWallClockMs），
+          # 删掉这个变量只会退回更短的 30 分钟，所以不能靠删。
+          QWEN_CODE_ENABLE_WORKFLOWS: '1'
+          QWEN_CODE_MAX_WORKFLOW_AGENTS: '10'
+          QWEN_CODE_MAX_WORKFLOW_CONCURRENCY: '6'
+          QWEN_CODE_MAX_WORKFLOW_SECONDS: '86400'
         with:
+          role: 'nora'
+          # 这一轮怎么干写在 .qwen/workflows/nora-decide.js 里，不再是一份长提示词。
+          prompt: >-
+            /nora-decide {"repo":"${{ github.repository }}","number":"${{ inputs.number }}","onPr":"${{ inputs.on_pr }}","issueNumber":"${{ inputs.issue_number }}","prNumber":"${{ inputs.pr_number }}","headRef":"${{ inputs.head_ref }}","reason":"${{ inputs.reason }}"}
+          workflow_name: 'qwen-nora'
           openai_api_key: '${{ secrets.QWEN_API_KEY }}'
           openai_base_url: '${{ vars.QWEN_BASE_URL }}'
           openai_model: '${{ vars.QWEN_MODEL }}'
           qwen_cli_version: '${{ vars.QWEN_CLI_VERSION }}'
           qwen_debug: '${{ fromJSON(vars.DEBUG || vars.ACTIONS_STEP_DEBUG || false) }}'
           upload_artifacts: '${{ vars.UPLOAD_ARTIFACTS }}'
-          workflow_name: 'qwen-nora'
-          settings: |-
-            {
-              "model": {
-                "maxSessionTurns": 30
-              },
-              "memory": {
-                "enableManagedAutoMemory": false,
-                "enableManagedAutoDream": false
-              },
-              "telemetry": {
-                "enabled": false
-              },
-              "mcpServers": {
-                "github": {
-                  "command": "docker",
-                  "args": [
-                    "run",
-                    "-i",
-                    "--rm",
-                    "-e",
-                    "GITHUB_PERSONAL_ACCESS_TOKEN",
-                    "ghcr.io/github/github-mcp-server:v0.18.0"
-                  ],
-                  "includeTools": [
-                    "pull_request_read",
-                    "get_file_contents",
-                    "search_code",
-                    "get_issue_comments"
-                  ],
-                  "env": {
-                    "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
-                  }
-                }
-              },
-              "tools": {
-                "core": [
-                  "run_shell_command(gh)",
-                  "run_shell_command(ls)",
-                  "run_shell_command(cat)",
-                  "run_shell_command(grep)"
-                ]
-              }
-            }
-          prompt: '/auto-nora'
 
-      # API 报错时 CLI 仍然退出 0，把错误文本当成最后一段 assistant 输出
-      # （qwen-code#8920、#11217，两者的修复 PR 至今都还没合并）。所以判据只能是
-      # 「最后一句长什么样」。官方 qwen-triage.yml:1379 记的那次事故就是这样：
-      # 一次 268 字符的裸 [API Error: ...] 被当成成功，没人重试也没人告警。
-      # 尾部匹配而不是 contains：真实回复正文里哪怕引了一句 API 错误，后面还会
-      # 继续写下去，不该因此判失败。
-      - name: 'Fail when the model API returned an error'
+      # 工作流脚本抛错时 CLI 仍然退出 0，只把「Workflow failed: …」写进工具的返回内容。
+      # 所以「这一轮到底跑完没有」得单独判一次，否则失败会被读成成功。
+      # （另一类是「最后一段话是不是 API 报错」，那一判断在 run-agent 内部，四个人共用。）
+      - name: 'Fail when the workflow did not complete'
         if: |-
-          ${{ steps.qwen_nora.outcome == 'success' }}
+          ${{ always() && steps.context.outputs.proceed == 'true' && steps.qwen_nora.outcome == 'success' }}
+        env:
+          ROLE: 'nora'
         run: |-
           set -euo pipefail
-
-          if [ ! -f qwen-artifacts/stdout.log ]; then
-            echo '::error title=没有 qwen 的输出::找不到 qwen-artifacts/stdout.log，无法判断这一轮做了什么。'
-            exit 1
-          fi
-
-          # 与 action 自己解析 qwen_response 的口径一致：取最后一段 assistant 文本
-          BODY="$(jq -r '[.[] | select(.type == "assistant")] | last | .message.content[]? | select(.type == "text") | .text' \
-            qwen-artifacts/stdout.log 2>/dev/null || true)"
-
-          for S in \
-            'Possible quota limitations in place or slow response times detected. Please wait and try again later.' \
-            'Please wait and try again later. To increase your limits, request a quota increase through AI Studio, or switch to another /auth method' \
-            'Please wait and try again later. To increase your limits, request a quota increase through Vertex, or switch to another /auth method'; do
-            BODY="${BODY%"$S"}"
-          done
-          BODY="${BODY%"${BODY##*[![:space:]]}"}"
-
-          case "${BODY}" in
-            *"[API Error: "*"]")
-              # 正文来自外部接口，别让它里面的 :: 或 ##[ 被当成 workflow 命令
-              EXCERPT="$(printf '%s' "${BODY:0:300}" | sed -e 's/::/;;/g' -e 's/##\[/##［/g')"
-              echo '::error title=模型 API 返回了错误::这一轮没有完成，决定不可用。这是接口侧的问题，重跑即可。'
-              printf '%s\n' "${EXCERPT}" >&2
-              exit 1
-              ;;
-          esac
+          node .github/scripts/workflow-run.mjs

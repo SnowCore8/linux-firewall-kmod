@@ -33,6 +33,7 @@ import {
   countRecentHandoffs,
   recentCalls,
   handoffLimitMessage,
+  PEOPLE,
 } from './route.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY || '';
@@ -48,15 +49,30 @@ const api = (path) => gh(['api', `repos/${REPO}/${path}`]);
 const isPull = (number) => Boolean(api(`issues/${number}`)?.pull_request);
 const headRefOf = (number) => api(`pulls/${number}`)?.head?.ref || '';
 
-function commentsOf(number) {
+/**
+ * 分页取回的每个元素各自一行 JSON（NDJSON），逐行解析。
+ *
+ * 为什么不用 `--slurp`：那个 flag 只有较新的 gh 才有，本机 `gh version 2.46.0`
+ * （Ubuntu 官方包）直接报 `unknown flag: --slurp`。README 把「本地跑一遍 dispatch」
+ * 当成验证手段，用上新 flag 就等于把这条路堵死，而报错长得像脚本自己坏了。
+ *
+ * 也不能直接 `JSON.parse` 整个输出：`gh api --paginate` 不带 --jq 时把各页的数组
+ * 首尾相接（`[...][...]`），超过一页就解析不了。
+ *
+ * `--jq '.[]'` 两头都避开：gh 对每页分别跑 jq，把数组摊成一行一个对象，跨页累加。
+ * 对象的字符串字段里换行会被转义成 `\n`，所以一行始终是一个完整的 JSON。
+ */
+const ghLines = (args) =>
+  execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line));
+
+export function commentsOf(number) {
   // 取不到评论不能当成「没有评论」—— 那会让防打转闸门失效，机器人可以无限转交。
   // 宁可这次运行失败（report-failure 会在话题里说明），也不要在没有依据的情况下继续派活。
-  //
-  // --slurp 是必须的：`gh api --paginate` 默认把每页的 JSON 数组直接拼在输出里，
-  // 一旦评论超过 100 条就是 `[...][...]`，JSON.parse 直接抛；--slurp 会包成
-  // `[[...],[...]]`，flatten 之后才是完整的一份。
-  const pages = gh(['api', '--paginate', '--slurp', `repos/${REPO}/issues/${number}/comments`]);
-  return (pages || []).flat() || [];
+  // 出错时 execFileSync 抛异常，正好落到这条。
+  return ghLines(['api', '--paginate', '--jq', '.[]', `repos/${REPO}/issues/${number}/comments`]);
 }
 
 /**
@@ -82,6 +98,7 @@ export function buildInput({ event, eventName, env = process.env, deps = {} }) {
     reviewState: event.review?.state || '',
     prHeadRef: pr?.head?.ref || '',
     assignee: event.assignee?.login || '',
+    assigneeType: event.assignee?.type || '',
     // 手动触发的事件里没有 Issue/PR 正文，得自己问一次它是不是 PR
     ...(manualNumber ? { issueIsPr: checkPr(manualNumber) } : {}),
   };
@@ -107,7 +124,13 @@ export function buildInput({ event, eventName, env = process.env, deps = {} }) {
   const needsCounting = senderType === 'Bot' && (parseHandoff(body) || parseCall(body));
   const number = payload.issueNumber || payload.prNumber;
   if (needsCounting && number) {
-    const recent = recentBotComments(readComments(number), now);
+    // 触发本次运行的那条评论不是「历史」，它正是这次要判的动作本身。
+    // 不剔掉的话，点名冷却会拿它当「上一次点名」，算出来 waited 恒为 0 ——
+    // 机器人之间的 `<!-- qwen:to=… -->` 永远发不出去，人写的才过得去。
+    // 交接额度与每日上限有同一处依赖：它们数的都该是「之前发生过几次」。
+    const triggerId = event.comment?.id;
+    const history = readComments(number).filter((c) => triggerId == null || c.id !== triggerId);
+    const recent = recentBotComments(history, now);
     gates.recentHandoffs = countRecentHandoffs(recent);
     gates.calls = recentCalls(recent);
   }
@@ -130,14 +153,24 @@ export function formatOutput(key, value) {
   return `${key}<<__END__\n${value}\n__END__\n`;
 }
 
-const OUTPUT_KEYS = ['role', 'number', 'on_pr', 'reason', 'issue_number', 'pr_number', 'head_ref'];
+const OUTPUT_KEYS = ['role', 'who', 'number', 'on_pr', 'reason', 'issue_number', 'pr_number', 'head_ref'];
 
-/** 结果 → 输出行。不派活时角色留空：下游四个 job 的 if 都不成立，一个模型都不会启动。 */
-export function outputLines(result) {
+/**
+ * 结果 → 输出行。不派活时角色留空：下游四个 job 的 if 都不成立，一个模型都不会启动。
+ *
+ * who 是 role 对应的中文名，给「出错说明」那条评论用：那句话要写给人看，
+ * 而 route.mjs 里已经有一份英文名到中文名的对应，这里直接带出去，别在 yml 里再抄一张表 ——
+ * 抄出来的那张改了名字不会报错，只会在出错说明里叫错人。
+ *
+ * eventNumber 只在 fail 时用得上：route() 判出「配置有误」时手里没有编号，
+ * 而下游要知道去哪个话题里说明。由调用方从事件里取，纯函数才好测。
+ */
+export function outputLines(result, eventNumber = '') {
   const values = { role: '' };
   if (result.kind === 'assign') {
     Object.assign(values, {
       role: result.role,
+      who: PEOPLE[result.role] || '',
       number: String(result.number ?? ''),
       on_pr: result.onPr ? 'true' : 'false',
       reason: result.reason,
@@ -145,6 +178,13 @@ export function outputLines(result) {
       pr_number: String(result.prNumber ?? ''),
       head_ref: result.headRef || '',
     });
+  } else if (result.kind === 'fail') {
+    // 失败时也要把编号写出去：qwen-dispatch.yml 的 report-failure 判据是
+    // `needs.route.outputs.number != ''`，编号空着它就不出面 —— 于是这次失败
+    // 只在 Actions 里留一行红叉，话题里一个字都没有。而失败恰恰是最需要说明的。
+    // role 仍留空：这次是失败的，不该顺手把活派给谁。
+    const n = Number(eventNumber);
+    if (Number.isFinite(n) && n > 0) values.number = String(n);
   }
   return OUTPUT_KEYS.filter((k) => k in values).map((k) => formatOutput(k, values[k]));
 }
@@ -205,7 +245,7 @@ function main() {
   }
 
   // 先把输出写掉再失败：report-failure 靠 number 才知道去哪个话题里说明
-  writeOutput(outputLines(result));
+  writeOutput(outputLines(result, numberOfEvent(event)));
 
   if (result.kind === 'fail') {
     process.stderr.write(`${result.why}\n`);

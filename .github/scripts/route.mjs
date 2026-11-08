@@ -1,10 +1,9 @@
 /**
  * dispatch 的路由规则：一条动静该由谁来处理。
  *
- * 为什么从 qwen-dispatch.yml 里搬出来：这段判断原本是 300 多行内联 JS，
- * 塞在 github-script 里，本地没法跑、没法测。而它恰好是整个系统最容易出错的一处 ——
- * 判断错了会导致该处理的动静被静默丢弃（被取消的运行 jobs 为空，日志里什么都不留），
- * 或者两个人的活互相顶掉。这种规则必须能单测。
+ * 为什么单独成文件：这套判断是整个系统最容易出错的一处 —— 判断错了会导致该处理的
+ * 动静被静默丢弃（被取消的运行 jobs 为空，日志里什么都不留），或者两个人的活互相顶掉。
+ * 这种规则必须能单测，所以它不能塞在 workflow 的内联脚本里。
  *
  * 这里只做**纯判断**：给同样的事件与数据，永远得到同样的结论。所有 I/O
  * （查 PR 分支、数评论、发「交接额度用完」的说明）都留在 workflow 里。
@@ -14,12 +13,14 @@
  * 测试：`node --test .github/scripts/route.test.mjs`
  */
 
+import { stripCode } from './markdown.mjs';
+
 export const ROLES = ['clara', 'nora', 'miles', 'frank'];
 
 /** 写给人看的话里一律用中文名 */
 export const PEOPLE = { clara: '顾清', nora: '叶澜', miles: '陈实', frank: '周正' };
 
-/** 改名前的旧标记还留在 24 小时内的评论里：读的时候认下来，写的时候一律写新名字 */
+/** 这几个别名来自更早的职称命名，仍会出现在最近的评论里：读的时候认下来，写一律用正式名 */
 export const ALIASES = { triager: 'clara', product: 'nora', engineer: 'miles', reviewer: 'frank' };
 
 export const asPerson = (token) => {
@@ -46,14 +47,14 @@ export const issueNumberOfBranch = (ref) =>
   (isOwnedBranch(ref) ? String(ref).slice(OWNED_PREFIX.length) : '');
 
 export const parseHandoff = (text) => {
-  const m = HANDOFF_RE.exec(text || '');
+  const m = HANDOFF_RE.exec(stripCode(text));
   if (!m) return null;
   const role = asPerson(m[1]);
   return role ? { role, reason: m[2].trim() } : null;
 };
 
 export const parseCall = (text) => {
-  const m = CALL_RE.exec(text || '');
+  const m = CALL_RE.exec(stripCode(text));
   if (!m) return null;
   const role = asPerson(m[1]);
   return role ? { role } : null;
@@ -76,10 +77,10 @@ export function recentBotComments(comments, now) {
 }
 
 export const countRecentHandoffs = (botComments) =>
-  (botComments || []).filter((c) => HANDOFF_RE.test(c.body || '')).length;
+  (botComments || []).filter((c) => HANDOFF_RE.test(stripCode(c.body))).length;
 
 export const recentCalls = (botComments) =>
-  (botComments || []).filter((c) => CALL_RE.test(c.body || ''));
+  (botComments || []).filter((c) => CALL_RE.test(stripCode(c.body)));
 
 /** 距离最近一次点名过了多久（分钟）。没有点过名返回 Infinity。 */
 export function minutesSinceLastCall(calls, now) {
@@ -114,7 +115,6 @@ export function route(input) {
     payload = {},
     senderType,
     authorAssociation,
-    actor,
     mention,
     pull,
     gates = {},
@@ -166,8 +166,11 @@ export function route(input) {
     // 防打转闸门只拦机器人自己发起的转交；人写的交接永远放行
     if (senderType === 'Bot') {
       const recent = gates.recentHandoffs ?? 0;
-      // 用 > 而不是 >=：本次这条交接本身也在计数里
-      if (recent > (gates.maxHandoffs ?? 20)) {
+      // 用 >= 而不是 >：gates.recentHandoffs 数的是「本次之前」已经发生的交接
+      // （dispatch.mjs 把触发本次运行的那条评论剔掉了），所以刚好用满 20 次时，
+      // 这条就是第 21 次，该停下。早先这里写 >，靠的是「本次这条也算在计数里」——
+      // 那个前提是点名冷却永远失效的同一个原因，一并改掉。
+      if (recent >= (gates.maxHandoffs ?? 20)) {
         return {
           kind: 'handoff-limit',
           role: handoff.role,
@@ -228,11 +231,32 @@ export function route(input) {
   }
 
   // ── 3. 指派给我方账号 → 陈实接手 ──
+  // 真实用法是人把 Issue 指派给 AI 账号：assignee 是机器人、actor 是人，两者永远
+  // 不相等 —— 早先拿 assignee 和 actor 比，这条规则因此从来没生效过，且安静到没人发现。
+  //
+  // 判「是不是我方」只看账号类型，不看登录名：四个角色各有自己的 App，登录名不在
+  // 代码里；仓库里其它地方（isOwnIssue / isOwnComment）也是用标记而不是登录名。
+  //
+  // 但不接受机器人发起的指派：那等于「自己叫醒自己」，没有终止条件 —— 一次指派
+  // 一轮模型运行，写错就是无限跑。角色之间交接有专门的标记，带冷却和每日上限。
   if (eventName === 'issues' && action === 'assigned') {
     const assignee = payload.assignee || '';
-    if (assignee !== actor) return ignore(`指派给 ${assignee}，不是本次动作者 ${actor}，忽略`);
-    return assign('miles', payload.issueNumber, false, `被指派给 ${assignee}`, {
-      issueNumber: payload.issueNumber,
+    if (payload.assigneeType !== 'Bot') {
+      return ignore(`指派给 ${assignee || '(空)'}，不是我方账号，忽略`);
+    }
+    if (senderType === 'Bot') {
+      return ignore(`机器人把 ${assignee} 指派给自己，不当指令（交接请用交接标记）`);
+    }
+    // PR 也会发 issues.assigned（GitHub 对 opened / assigned / labeled 这些 action
+    // 同时发 issues 事件）。不分开看的话，指派一个 PR 会被当成 Issue 派下去 ——
+    // 陈实会去读一个没有 checkout 分支的 PR。
+    const onPr = Boolean(payload.issueIsPr);
+    if (onPr && !pull) return { kind: 'need-pull' };
+    const headRef = pull?.headRef || '';
+    return assign('miles', payload.issueNumber, onPr, `被指派给 ${assignee}`, {
+      issueNumber: onPr ? issueNumberOfBranch(headRef) : payload.issueNumber,
+      prNumber: onPr ? payload.issueNumber : '',
+      headRef,
     });
   }
 

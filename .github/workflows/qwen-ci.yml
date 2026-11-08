@@ -1,0 +1,135 @@
+name: '🧪 Tests'
+
+# `.github/scripts` 里放的是判断逻辑：谁该接手、谁该被叫醒、能不能合。这些错了不会
+# 报错，只会安静地做错事 —— 判据写歪，闸门就会放行不该放的 PR。所以它们全都配了
+# 测试，README 也写着「改完跑这几条」。
+#
+# 只在本机跑等于没跑：合并闸门的 checks 判据查的是 PR 上的检查项，而 CI 里只有
+# dispatch 的 route 一个 pass —— 测试改坏了、断言删掉了，闸门看到的仍然是绿的。
+# 最可信的那层判断，恰好没有被执行。
+#
+# 这份工作流补的就是这一环。它必须是**独立 workflow**：merge-gate.mjs 的
+# withoutOwnRun() 会剔掉「本次运行自己产生的检查项」，塞进 qwen-miles.yml 的 job
+# 会被当成自检剔除，等于没加。
+#
+# 不加 paths 过滤：markdown 改动也跑一遍，几十秒。按路径跳过会让「没跑」显示成
+# SKIPPED，而 merge-gate 的 checkState() 把 SKIPPED 判为 SUCCESS —— 跳过的成本比跑完高。
+on:
+  pull_request:
+    # synchronize 不可省：dispatch 只在 opened / ready_for_review 触发，
+    # 而陈实每推一次修都要重新验一遍，否则闸门看的是旧提交上的绿
+    types: ['opened', 'synchronize', 'reopened', 'ready_for_review']
+  push:
+    branches: ['master']
+  workflow_dispatch:
+
+permissions:
+  contents: 'read'
+
+# 同一张 PR 连续推几次，只跑最后一次。取消了也算不通过之前的那次运行，
+# 不会让闸门拿着旧结果放行。
+concurrency:
+  group: 'qwen-ci-${{ github.event.pull_request.number || github.ref }}'
+  cancel-in-progress: true
+
+jobs:
+  # job 键与显示名都不能叫 `test`：ci.yml 里已经有一个 `test`（「运行测试」，
+  # 跑守护进程与集成测试）。两个同名检查项挂在同一个提交上时，看日志与写判据
+  # 的人分不清是哪一条红的。
+  qwen-test:
+    name: 'qwen test'
+    runs-on: 'ubuntu-latest'
+    timeout-minutes: 10
+    steps:
+      - name: 'Checkout repository'
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+
+      - name: 'Set up Node'
+        uses: 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020' # ratchet:actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # 判断逻辑的测试：路由、巡检、合并闸门、评审语义、gh 包装器
+      - name: 'Test the scripts that decide'
+        run: |-
+          set -euo pipefail
+          node --test .github/scripts/*.test.mjs
+
+      # 四个人的这一轮都是工作流脚本（.qwen/workflows/*.js）。写坏了只会在下一轮
+      # 真跑起来时才炸 —— 写坏的时候模型还没有上下文，报错在 runner 里，本地看不出来。
+      # `node --check` 足够：工作流脚本的顶层 `return` 是它的返回值，被当成模块加载，
+      # 所以不需要额外包装（实测：删掉一个分号返回 1，顶层 return 返回 0）。
+      - name: 'Check the workflow scripts parse'
+        run: |-
+          set -euo pipefail
+          for f in .qwen/workflows/*.js; do
+            node --check "${f}"
+            echo "${f} OK"
+          done
+
+      # 四个人的引擎配置是 JSON，由 run-agent 读进来交给引擎。写坏了同样只在
+      # 下一轮才炸，而且报错在 runner 里、本地看不出来。
+      - name: 'Check the agent settings parse'
+        run: |-
+          set -euo pipefail
+          python3 -c "import json,glob;[json.load(open(f)) for f in glob.glob('.github/agents/*.json')]"
+          echo 'JSON OK'
+
+      # 主干红了没人知道：这条路以前是空的。上游的处理方式是自动开一张
+      # 「Main CI failed」的 issue，交给分诊那一层接手 —— 这里照做。
+      #
+      # 用调度同一个 App 身份，不用 GITHUB_TOKEN：后者开出的 issue 不触发
+      # issues 事件（GitHub 防递归），开出来也只是躺在那里，谁都不会被叫醒。
+      # 换成 App 身份之后，这张 issue 和新开的 issue 走同一条路 —— 顾清接手。
+      - name: 'Mint identity token'
+        id: 'mint_identity_token'
+        if: |-
+          ${{ failure() && github.event_name == 'push' && github.ref == 'refs/heads/master'
+              && (vars.APP_ID_CLARA || vars.APP_ID_TRIAGER || vars.APP_ID) }}
+        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # ratchet:actions/create-github-app-token@v2
+        with:
+          app-id: '${{ vars.APP_ID_CLARA || vars.APP_ID_TRIAGER || vars.APP_ID }}'
+          private-key: '${{ secrets.APP_PRIVATE_KEY_CLARA || secrets.APP_PRIVATE_KEY_TRIAGER || secrets.APP_PRIVATE_KEY }}'
+          permission-issues: 'write'
+
+      - name: 'Report a red main'
+        if: |-
+          ${{ failure() && github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        env:
+          # 没配 App 时退回 GITHUB_TOKEN：叫不醒人，但至少留下一张能查到的记录
+          GH_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          RUN_URL: '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          SHA: '${{ github.sha }}'
+          REPOSITORY: '${{ github.repository }}'
+          JOB: 'qwen test'
+        run: |-
+          set -euo pipefail
+
+          # 标题跟着 job 名走：将来加了别的 job，红的是哪个一眼能看出来
+          title="Main CI failed: ${JOB}"
+
+          # 只开一张：连着红几次，开第二张只是把同一件事说两遍。
+          # 但「已经开着」不等于「这次不用记」—— 线上那张可能是上周另一个原因留下的、
+          # 修完之后没人关。直接 exit 0 会把这一次静默吞掉，所以改成在它下面追加一条。
+          existing="$(gh issue list --repo "$REPOSITORY" --state open \
+            --search "in:title \"${title}\"" --json number --jq '.[0].number // empty')"
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPOSITORY" --body-file - <<BODY
+          又红了一次，位置在 commit \`${SHA}\`。
+
+          失败的那一轮：${RUN_URL}
+          BODY
+            echo "已追加到开着的 #${existing}"
+            exit 0
+          fi
+
+          gh issue create --repo "$REPOSITORY" --title "$title" --body-file - <<BODY
+          主干上的测试挂了，位置在 commit \`${SHA}\`。
+
+          失败的那一轮：${RUN_URL}
+
+          这是自动开的一张记录，不是谁在催。修好之后把这张关掉即可。
+
+          <!-- qwen:opened-by=agent -->
+          BODY

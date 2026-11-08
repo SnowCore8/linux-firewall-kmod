@@ -56,18 +56,20 @@ defaults:
 jobs:
   work:
     runs-on: 'ubuntu-latest'
+    # 这个超时只管模型那一轮。闸门在下面的 gate job 里，有自己的超时，
+    # 不再从这 45 分钟里分时间 —— 模型跑多慢都不吃掉合并的时间。
     timeout-minutes: 45
     outputs:
       mode: '${{ steps.context.outputs.mode }}'
       pushed: '${{ steps.detect.outputs.pushed }}'
+      # 闸门要知道「这一轮有没有写合并申请」和合并哪个 PR。判据留在这里：
+      # 申请靠 STARTED_AT 把本轮新增的评论切出来，而那个时间点在 work 里。
+      merge_requested: '${{ steps.merge_request.outputs.requested }}'
+      pr_number: '${{ steps.context.outputs.pr_number }}'
     permissions:
-      # 闸门要读检查项：statusCheckRollup 除了 checks 还会展开 checkSuite.workflowRun，
-      # 老式状态上下文另走 statuses —— 少一档 gh 就报 Resource not accessible by integration。
-      # App 令牌没有这三档，所以闸门那一步用这个令牌。
-      actions: 'read'
-      checks: 'read'
+      # 检查项那三档（actions / checks / statuses）不在这里：闸门已经搬到 gate job，
+      # 由它自己声明。这个 job 只剩模型那一轮和它前后几步要用的权限。
       contents: 'write'
-      statuses: 'read'
       id-token: 'write'
       issues: 'write'
       pull-requests: 'write'
@@ -86,77 +88,32 @@ jobs:
           # 改 .github/workflows/ 必须带这个权限，否则推送会被 GitHub 拒绝
           permission-workflows: 'write'
 
+      # 先 checkout 再判断：判据是工作区里的 .github/scripts/context.mjs，
+      # checkout 之前工作区是空的。所以这一步无条件执行 —— 原先它按 context 的
+      # skip 输出裁掉自己，而 context 又需要它，那个依赖是循环的。
+      # 无条件 checkout 只是把代码读下来，不写任何东西；该跳过时下面照旧跳过。
+      - name: 'Checkout repository'
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
+
       - name: 'Work out the mode and branch'
         id: 'context'
-        uses: 'actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea' # ratchet:actions/github-script@v7
         env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          REPOSITORY: '${{ github.repository }}'
           NUMBER: '${{ inputs.number }}'
           ON_PR: '${{ inputs.on_pr }}'
           ISSUE_NUMBER: '${{ inputs.issue_number }}'
           PR_NUMBER: '${{ inputs.pr_number }}'
           HEAD_REF_INPUT: '${{ inputs.head_ref }}'
-        with:
-          github-token: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
-          script: |-
-            const { owner, repo } = context.repo;
-            const number = Number(process.env.NUMBER);
-            const onPr = process.env.ON_PR === 'true';
-
-            let mode = 'fix-issue';
-            let issueNumber = process.env.ISSUE_NUMBER || '';
-            let prNumber = process.env.PR_NUMBER || '';
-            let headRef = process.env.HEAD_REF_INPUT || '';
-            let baseBranch = '';
-
-            if (onPr) {
-              mode = 'respond-pr';
-              prNumber = String(number);
-              const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: number });
-              headRef = pull.head.ref;
-              baseBranch = pull.base.ref;
-
-              // 只碰自己开的分支，别人的 PR 一律不动
-              if (!headRef.startsWith('qwen-fix-')) {
-                core.setOutput('skip', 'true');
-                core.setOutput('skip_reason', `分支 ${headRef} 不是我方创建的，不修改他人的 PR`);
-                core.setOutput('mode', mode);
-                return;
-              }
-
-              if (!issueNumber) {
-                issueNumber = headRef.replace('qwen-fix-', '');
-              }
-
-              // 已合并或已关闭就别再动
-              if (pull.state !== 'open') {
-                core.setOutput('skip', 'true');
-                core.setOutput('skip_reason', '该 PR 已关闭或已合并');
-                core.setOutput('mode', mode);
-                return;
-              }
-            } else {
-              issueNumber = String(number);
-              headRef = `qwen-fix-${issueNumber}`;
-              baseBranch = context.payload.repository?.default_branch || 'master';
-              const { data: issue } = await github.rest.issues.get({
-                owner, repo, issue_number: number,
-              });
-              if (issue.state !== 'open') {
-                core.setOutput('skip', 'true');
-                core.setOutput('skip_reason', '该 Issue 已关闭');
-                core.setOutput('mode', mode);
-                return;
-              }
-            }
-
-            core.setOutput('skip', 'false');
-            core.setOutput('mode', mode);
-            core.setOutput('issue_number', issueNumber);
-            core.setOutput('pr_number', prNumber);
-            core.setOutput('head_ref', headRef);
-            core.setOutput('base_branch', baseBranch);
-            core.setOutput('previous_head', mode === 'respond-pr' ? headRef : '');
-            core.info(`模式 ${mode}，分支 ${headRef} → ${baseBranch}，Issue #${issueNumber}，PR #${prNumber}`);
+          DEFAULT_BRANCH: '${{ github.event.repository.default_branch }}'
+        # 模式、分支、以及「该不该动手」三条判据都在 context.mjs 的 prepareMiles()：
+        # 别人的 PR 不动、已关的不动、取不到对象不动。
+        run: |-
+          set -euo pipefail
+          node .github/scripts/context.mjs miles
 
       - name: 'Explain why Miles is not touching this'
         if: |-
@@ -174,14 +131,6 @@ jobs:
           需要我处理的话直接说一声。
 
           <!-- qwen:role=miles -->"
-
-      - name: 'Checkout repository'
-        if: |-
-          ${{ steps.context.outputs.skip != 'true' }}
-        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
-        with:
-          fetch-depth: 0
-          token: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
 
       - name: 'Checkout existing branch when responding'
         if: |-
@@ -207,9 +156,8 @@ jobs:
           # 这一轮的起点。识别合并申请时，用它区分「这一轮新发的评论」和上一轮留下的
           echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
 
-      # 合并前条件原写在 auto-miles.toml 里由陈实自己读、自己执行 `gh pr merge`，
-      # 实测两次都没对上（PR #38 在 e2e 判失败后合并，PR #39 在批准挂在旧提交时合并）。
-      # 所以合并不再经过模型：它只能写 <!-- qwen:merge-request -->，由下面的闸门执行。
+      # 合并这个动作不经过模型：它只能写 <!-- qwen:merge-request -->，由下面的闸门执行。
+      # 条件写进提示词时，执行与否取决于读的人当时愿不愿意遵守；写成脚本后才不取决于此。
       #
       # 这一步按 PATH 把 gh 包一层，拒掉合并入口。它不是安全边界 —— 令牌就在环境里，
       # 绕道 curl 照样能合；真正的保底是 job 末尾那道检查。这一步只是让「顺手合了」
@@ -263,7 +211,7 @@ jobs:
         id: 'qwen_miles'
         if: |-
           ${{ steps.context.outputs.skip != 'true' }}
-        uses: 'QwenLM/qwen-code-action@v1'
+        uses: './.github/actions/run-agent'
         env:
           GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
           REPOSITORY: '${{ github.repository }}'
@@ -277,107 +225,58 @@ jobs:
           OWNED_BRANCH_PREFIX: 'qwen-fix-'
           REASON: '${{ inputs.reason }}'
           CI_WAIT_MINUTES: '${{ vars.MILES_CI_WAIT_MINUTES || vars.ENGINEER_CI_WAIT_MINUTES || 10 }}'
-          # 删主分支前要 @ 到具体的人。默认取仓库所有者，可用变量覆盖成任意成员。
-          OWNER_MENTION: '${{ vars.QWEN_OWNER_MENTION || format(''@{0}'', github.repository_owner) }}'
+          # 工作流自己的容量。默认是「CPU 数 - 2，夹在 2..16」个代理、6 个并发，
+          # 以及 30 分钟总墙钟。这一轮要跑五六个代理（取证 2 + 动手 1 + 自检 2 +
+          # 收场 1，收尾还可能再翻一倍），30 分钟会被砍在最后一拍。
+          #
+          # 墙钟给 24 小时，等于不设限。CLI 只在值 > 0 时采纳它（resolveMaxWallClockMs），
+          # 没有「无限」的写法 —— 删掉这个变量只会退回更短的 30 分钟，所以不能靠删。
+          # 这样真正的硬边界只剩这个 job 的 timeout-minutes: 45，由 GitHub 兜底；
+          # 好处是不会因为这一层设得太紧，在工作流内部留下跑了一半的状态。
+          #
+          # 闸门不在这 45 分钟里：它在下面的 gate job 里，有自己的超时和预算，
+          # 所以模型跑满 45 分钟也不会把等 CI 的时间挤掉。
+          QWEN_CODE_ENABLE_WORKFLOWS: '1'
+          QWEN_CODE_MAX_WORKFLOW_AGENTS: '20'
+          QWEN_CODE_MAX_WORKFLOW_CONCURRENCY: '6'
+          QWEN_CODE_MAX_WORKFLOW_SECONDS: '86400'
         with:
+          role: 'miles'
+          # 这一轮怎么干写在 .qwen/workflows/miles-fix.js 里，不再是一份长提示词。
+          # 参数用 JSON 显式拼：让模型自己从环境变量凑 args，凑错一个字段不会报错，
+          # 只会让分支名错、或者把别人的 PR 当成自己的。
+          prompt: >-
+            /miles-fix {"repo":"${{ github.repository }}","mode":"${{ steps.context.outputs.mode }}","number":"${{ inputs.number }}","issueNumber":"${{ steps.context.outputs.issue_number }}","prNumber":"${{ steps.context.outputs.pr_number }}","headRef":"${{ steps.context.outputs.head_ref }}","base":"${{ steps.context.outputs.base_branch }}","reason":"${{ inputs.reason }}","ciWaitMinutes":${{ vars.MILES_CI_WAIT_MINUTES || vars.ENGINEER_CI_WAIT_MINUTES || 10 }},"ownedPrefix":"qwen-fix-"}
+          workflow_name: 'qwen-miles'
           openai_api_key: '${{ secrets.QWEN_API_KEY }}'
           openai_base_url: '${{ vars.QWEN_BASE_URL }}'
           openai_model: '${{ vars.QWEN_MODEL }}'
           qwen_cli_version: '${{ vars.QWEN_CLI_VERSION }}'
           qwen_debug: '${{ fromJSON(vars.DEBUG || vars.ACTIONS_STEP_DEBUG || false) }}'
           upload_artifacts: '${{ vars.UPLOAD_ARTIFACTS }}'
-          workflow_name: 'qwen-miles'
-          settings: |-
-            {
-              "model": {
-                "maxSessionTurns": 150
-              },
-              "memory": {
-                "enableManagedAutoMemory": false,
-                "enableManagedAutoDream": false
-              },
-              "telemetry": {
-                "enabled": false
-              },
-              "mcpServers": {
-                "github": {
-                  "command": "docker",
-                  "args": [
-                    "run",
-                    "-i",
-                    "--rm",
-                    "-e",
-                    "GITHUB_PERSONAL_ACCESS_TOKEN",
-                    "ghcr.io/github/github-mcp-server:v0.18.0"
-                  ],
-                  "includeTools": [
-                    "pull_request_read",
-                    "get_file_contents",
-                    "search_code",
-                    "list_commits"
-                  ],
-                  "env": {
-                    "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
-                  }
-                }
-              },
-              "tools": {
-                "core": [
-                  "run_shell_command(git)",
-                  "run_shell_command(gh)",
-                  "run_shell_command(ls)",
-                  "run_shell_command(cat)",
-                  "run_shell_command(grep)"
-                ]
-              }
-            }
-          prompt: '/auto-miles'
 
-      # API 报错时 CLI 仍然退出 0，把错误文本当成最后一段 assistant 输出
-      # （qwen-code#8920、#11217，两者的修复 PR 至今都还没合并）。所以判据只能是
-      # 「最后一句长什么样」。官方 qwen-triage.yml:1379 记的那次事故就是这样：
-      # 一次 268 字符的裸 [API Error: ...] 被当成成功，没人重试也没人告警。
-      # 尾部匹配而不是 contains：真实回复正文里哪怕引了一句 API 错误，后面还会
-      # 继续写下去，不该因此判失败。
-      - name: 'Fail when the model API returned an error'
+      # 模型 API 报错时 CLI 仍然退出 0，工作流自己失败时也一样 —— 实测脚本抛错，
+      # `qwen -p '/名字'` 照样返回 0，只把「Workflow failed: …」写进工具的返回内容。
+      # 所以「这一轮到底跑完没有」得单独判一次，否则失败会被读成成功。
+      - name: 'Fail when the workflow did not complete'
         if: |-
-          ${{ steps.qwen_miles.outcome == 'success' }}
+          ${{ always() && steps.context.outputs.skip != 'true' && steps.qwen_miles.outcome == 'success' }}
+        env:
+          ROLE: 'miles'
         run: |-
           set -euo pipefail
-
-          if [ ! -f qwen-artifacts/stdout.log ]; then
-            echo '::error title=没有 qwen 的输出::找不到 qwen-artifacts/stdout.log，无法判断这一轮做了什么。'
-            exit 1
-          fi
-
-          # 与 action 自己解析 qwen_response 的口径一致：取最后一段 assistant 文本
-          BODY="$(jq -r '[.[] | select(.type == "assistant")] | last | .message.content[]? | select(.type == "text") | .text' \
-            qwen-artifacts/stdout.log 2>/dev/null || true)"
-
-          for S in \
-            'Possible quota limitations in place or slow response times detected. Please wait and try again later.' \
-            'Please wait and try again later. To increase your limits, request a quota increase through AI Studio, or switch to another /auth method' \
-            'Please wait and try again later. To increase your limits, request a quota increase through Vertex, or switch to another /auth method'; do
-            BODY="${BODY%"$S"}"
-          done
-          BODY="${BODY%"${BODY##*[![:space:]]}"}"
-
-          case "${BODY}" in
-            *"[API Error: "*"]")
-              # 正文来自外部接口，别让它里面的 :: 或 ##[ 被当成 workflow 命令
-              EXCERPT="$(printf '%s' "${BODY:0:300}" | sed -e 's/::/;;/g' -e 's/##\[/##［/g')"
-              echo '::error title=模型 API 返回了错误::这一轮没有完成，动作不可用。这是接口侧的问题，重跑即可。'
-              printf '%s\n' "${EXCERPT}" >&2
-              exit 1
-              ;;
-          esac
+          node .github/scripts/workflow-run.mjs
 
       # 模型只能写申请，合不合由脚本判。这一行标记就是申请：写在最终回复里，或写在这一轮
       # 的最后那条评论里，两处都认。
       - name: 'Detect the merge request from this round'
         id: 'merge_request'
+        # 判据是「有 PR 编号」而不是「模式是 respond-pr」：申请现在由工作流的「收场」
+        # 那一拍写成 PR 评论，闸门该不该起来只取决于有没有 PR 可核。fix-issue 模式下
+        # context.mjs 给的 pr_number 是空的（那一刻 PR 还没开出来），所以这里自然不会
+        # 触发 —— 刚开的单子还没有评审，第一条判据过不了，本来也不该合。
         if: |-
-          ${{ steps.context.outputs.skip != 'true' && steps.qwen_miles.outcome == 'success' && steps.context.outputs.mode == 'respond-pr' }}
+          ${{ steps.context.outputs.skip != 'true' && steps.qwen_miles.outcome == 'success' && steps.context.outputs.pr_number != '' }}
         env:
           # 这一步要读 PR 评论，而 Actions 里的 gh 没有隐式凭据：缺了它 gh 直接报
           # 「set the GH_TOKEN environment variable」，取回为空，申请就被读成没有。
@@ -385,125 +284,11 @@ jobs:
           REPOSITORY: '${{ github.repository }}'
           PR_NUMBER: '${{ steps.context.outputs.pr_number }}'
           STARTED_AT: '${{ steps.before.outputs.started_at }}'
+        # 判据在 merge-request.mjs：先剥掉围栏与行内代码，再认独占一行的标记。
+        # 最终回复与这一轮动过的评论两处都认。
         run: |-
           set -euo pipefail
-
-          PATTERN='^[[:space:]]*<!-- qwen:merge-request -->[[:space:]]*$'
-          REQUESTED=''
-
-          # 先看这一轮最后一段说出来的话。注意不能取「最后一个 assistant 条目」：
-          # 那一轮实际是发评论的工具调用，里面没有 text 块，取 last 会拿到空串。
-          if [ -f qwen-artifacts/stdout.log ]; then
-            REPLY="$(jq -r '[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | last // ""' \
-              qwen-artifacts/stdout.log 2>/dev/null || true)"
-            if grep -Eq "${PATTERN}" <<< "${REPLY}"; then
-              REQUESTED=final-reply
-            fi
-          fi
-
-          # 没写在最后那段话里，就看这一轮新发的机器人评论 —— 陈实习惯把结论写成评论，
-          # 那也算申请。免得把上一轮留下的、或者顺嘴引用出来的标记当成申请：标记必须
-          # 单独占一行，且这条评论在这一轮里动过；真判断仍在闸门里，这里只决定要不要跑闸门。
-          #
-          # 不给 API 传 since：与其猜服务端怎么筛，不如整份取回、在 jq 里按 updated_at
-          # 自己筛。另外失败绝不能静默 —— 前两次之所以查不出原因，是 `2>/dev/null || true`
-          # 把 gh 的报错吞了（真原因就是上面那个缺 GITHUB_TOKEN）。所以这里取不到就重试
-          # 三次，并且把 gh 的报错原样打出来。
-          if [ -z "${REQUESTED}" ] && [ -n "${STARTED_AT:-}" ] && [ -n "${PR_NUMBER:-}" ]; then
-            JQ_FILTER="[.[] | select(.user.type == \"Bot\") | select(.updated_at >= \"${STARTED_AT}\") | .body] | join(\"\n\n\")"
-            ERRLOG="${RUNNER_TEMP}/merge-request-comments.err"
-            COMMENTS=''
-            for ATTEMPT in 1 2 3; do
-              if ! COMMENTS="$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
-                --jq "${JQ_FILTER}" 2>"${ERRLOG}")"; then
-                echo "取评论失败（第 ${ATTEMPT} 次）：$(cat "${ERRLOG}")"
-                COMMENTS=''
-              fi
-              if grep -Eq "${PATTERN}" <<< "${COMMENTS}"; then
-                REQUESTED=comment
-                break
-              fi
-              [ "${ATTEMPT}" = '3' ] || sleep 5
-            done
-          fi
-
-          if [ -n "${REQUESTED}" ]; then
-            echo 'requested=true' >> "${GITHUB_OUTPUT}"
-            echo "陈实申请了合并（来自 ${REQUESTED}），交给闸门判定。"
-          else
-            echo 'requested=false' >> "${GITHUB_OUTPUT}"
-            echo '这一轮没有申请合并。'
-          fi
-
-      - name: 'Merge only if the gate allows it'
-        id: 'gate'
-        if: |-
-          ${{ steps.merge_request.outputs.requested == 'true' }}
-        env:
-          # 这里用工作流自己的令牌，不用 App 令牌：`gh pr view --json statusCheckRollup`
-          # 和 base 分支的 check-runs 都要 checks: read，而陈实的 App 只给了
-          # contents / issues / pull-requests / workflows —— 用它查会得到
-          # 「Resource not accessible by integration」，判据一条都跑不了。
-          # 工作流令牌的权限由下面 job 的 permissions 块声明，够用且不含多余授权。
-          GITHUB_TOKEN: '${{ github.token }}'
-          # 这一步就是闸门本身，要放行上面那层 gh 包装器
-          QWEN_MERGE_GATE: '1'
-          PR_NUMBER: '${{ steps.context.outputs.pr_number }}'
-          REPOSITORY: '${{ github.repository }}'
-          MILES_CI_WAIT_MINUTES: '${{ vars.MILES_CI_WAIT_MINUTES || vars.ENGINEER_CI_WAIT_MINUTES || 10 }}'
-        run: |-
-          set -euo pipefail
-
-          set +e
-          node .github/scripts/merge-gate.mjs "${PR_NUMBER}" --repo "${REPOSITORY}" --merge
-          CODE=$?
-          set -e
-
-          case "${CODE}" in
-            0) echo 'gate=merged' >> "${GITHUB_OUTPUT}" ;;
-            # 1 是「条件没满足」，结论已经贴在 PR 上了，不是出错
-            1)
-              echo 'gate=blocked' >> "${GITHUB_OUTPUT}"
-              echo '闸门拦下了这次合并，原因见 PR 上的评论。' >> "${GITHUB_STEP_SUMMARY}"
-              ;;
-            *)
-              echo 'gate=error' >> "${GITHUB_OUTPUT}"
-              echo "::error title=合并闸门自己出错了::退出码 ${CODE}，这次合并没有完成，判据本身也没跑完。"
-              exit "${CODE}"
-              ;;
-          esac
-
-      # 闸门的真保底在这里，不在上面那层包装器里：包装器只是拦 gh，绕道 curl 拦不住。
-      # 所以这一轮结束后核一次 PR 状态 —— 被机器人合掉却没过闸门，整轮判失败。
-      - name: 'Fail when the pull request was merged outside the gate'
-        if: |-
-          ${{ always() && steps.context.outputs.skip != 'true' && steps.context.outputs.pr_number != '' }}
-        env:
-          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
-          PR_NUMBER: '${{ steps.context.outputs.pr_number }}'
-          REPOSITORY: '${{ github.repository }}'
-          GATE: '${{ steps.gate.outputs.gate }}'
-        run: |-
-          set -euo pipefail
-
-          STATE="$(gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json state --jq '.state')"
-          MERGED_BY="$(gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json mergedBy --jq '.mergedBy.login // ""')"
-          echo "PR #${PR_NUMBER} 状态 ${STATE}，合并者 ${MERGED_BY:-无}，闸门 ${GATE:-未运行}"
-
-          if [ "${STATE}" != 'MERGED' ] || [ "${GATE}" = 'merged' ]; then
-            exit 0
-          fi
-
-          # 人自己合的不管：合并条件该由人判断，这里只盯机器人。
-          case "${MERGED_BY}" in
-            *'[bot]')
-              echo '::error title=PR 在闸门之外被合掉了::这一轮没有经过 merge-gate.mjs 就合并了 PR，合并条件未核。'
-              exit 1
-              ;;
-            *)
-              echo "PR 是由 ${MERGED_BY:-非机器人} 合并的，不归这一轮。"
-              ;;
-          esac
+          node .github/scripts/merge-request.mjs
 
       - name: 'Detect whether a new commit was pushed'
         id: 'detect'
@@ -529,3 +314,106 @@ jobs:
             echo "pushed=false" >> "${GITHUB_OUTPUT}"
             echo "本次没有新提交（远端 ${REMOTE_SHA:0:8}）"
           fi
+
+  # 闸门单独一个 job。原先它排在 work 的最后一步，于是「模型能跑多久」和
+  # 「闸门有多少时间」是同一笔预算：job 一共 45 分钟，模型跑 40 分钟，闸门就只剩
+  # 5 分钟 —— 而它等 CI 最多要 MILES_CI_WAIT_MINUTES（默认 10）分钟，数学上不够。
+  # 拆开以后两边各有各的超时，模型多慢都吃不掉合并的时间。
+  #
+  # 顺序不变：申请由模型写在评论里，闸门在它之后核「该不该合」并执行。
+  # 判据（有没有申请、合哪个 PR）由 work 用 outputs 递过来，因为申请要靠
+  # STARTED_AT 把本轮新增的评论切出来，那个时间点只在 work 里。
+  gate:
+    needs: ['work']
+    runs-on: 'ubuntu-latest'
+    # 等 CI 的预算在这里，不再和模型抢。把 MILES_CI_WAIT_MINUTES 调大时，
+    # 这个数得跟着往上抬 —— 它是闸门自己的天花板。
+    timeout-minutes: 30
+    # pr_number 为空表示这一轮没有 PR 可核（跳过执行的轮次、fix-issue 还没开出单子）。
+    # always() 是为了 work 失败时也能核一遍「有没有被机器人绕过闸门合掉」。
+    if: |-
+      ${{ always() && needs.work.outputs.pr_number != '' }}
+    permissions:
+      # 闸门要读检查项：statusCheckRollup 除了 checks 还会展开 checkSuite.workflowRun，
+      # 老式状态上下文另走 statuses —— 少一档 gh 就报 Resource not accessible by integration。
+      # 用工作流令牌而不是陈实的 App 令牌，因为 App 没有这三档。
+      actions: 'read'
+      checks: 'read'
+      contents: 'write'
+      statuses: 'read'
+      # 合并之后要勾 Issue 里的 checklist
+      issues: 'write'
+      pull-requests: 'write'
+    steps:
+      - name: 'Checkout repository'
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+        with:
+          # 只是为了拿 .github/scripts/ 下的判据，不碰分支
+          fetch-depth: 1
+
+      - name: 'Merge only if the gate allows it'
+        id: 'gate'
+        if: |-
+          ${{ needs.work.outputs.merge_requested == 'true' }}
+        env:
+          GITHUB_TOKEN: '${{ github.token }}'
+          # 这个 job 里没装那层 gh 包装器（它属于模型那个 job），合并本来就走真 gh。
+          # 留着这个变量是防御：闸门哪天被挪回模型那个 job 时，不会被包装器拦住自己。
+          QWEN_MERGE_GATE: '1'
+          PR_NUMBER: '${{ needs.work.outputs.pr_number }}'
+          REPOSITORY: '${{ github.repository }}'
+          MILES_CI_WAIT_MINUTES: '${{ vars.MILES_CI_WAIT_MINUTES || vars.ENGINEER_CI_WAIT_MINUTES || 10 }}'
+        run: |-
+          set -euo pipefail
+
+          set +e
+          node .github/scripts/merge-gate.mjs "${PR_NUMBER}" --repo "${REPOSITORY}" --merge
+          CODE=$?
+          set -e
+
+          case "${CODE}" in
+            0) echo 'gate=merged' >> "${GITHUB_OUTPUT}" ;;
+            # 1 是「条件没满足」，结论已经贴在 PR 上了，不是出错
+            1)
+              echo 'gate=blocked' >> "${GITHUB_OUTPUT}"
+              echo '闸门拦下了这次合并，原因见 PR 上的评论。' >> "${GITHUB_STEP_SUMMARY}"
+              ;;
+            *)
+              echo 'gate=error' >> "${GITHUB_OUTPUT}"
+              echo "::error title=合并闸门自己出错了::退出码 ${CODE}，这次合并没有完成，判据本身也没跑完。"
+              exit "${CODE}"
+              ;;
+          esac
+
+      # 闸门的真保底在这里，不在模型那层包装器里：包装器只是拦 gh，绕道 curl 拦不住。
+      # 所以这一轮结束后核一次 PR 状态 —— 被机器人合掉却没过闸门，整轮判失败。
+      # 它跟闸门一起在这个 job 里，模型跑满超时也挤不掉这道检查。
+      - name: 'Fail when the pull request was merged outside the gate'
+        if: |-
+          ${{ always() }}
+        env:
+          GITHUB_TOKEN: '${{ github.token }}'
+          PR_NUMBER: '${{ needs.work.outputs.pr_number }}'
+          REPOSITORY: '${{ github.repository }}'
+          GATE: '${{ steps.gate.outputs.gate }}'
+        run: |-
+          set -euo pipefail
+
+          STATE="$(gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json state --jq '.state')"
+          MERGED_BY="$(gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json mergedBy --jq '.mergedBy.login // ""')"
+          echo "PR #${PR_NUMBER} 状态 ${STATE}，合并者 ${MERGED_BY:-无}，闸门 ${GATE:-未运行}"
+
+          if [ "${STATE}" != 'MERGED' ] || [ "${GATE}" = 'merged' ]; then
+            exit 0
+          fi
+
+          # 人自己合的不管：合并条件该由人判断，这里只盯机器人。
+          case "${MERGED_BY}" in
+            *'[bot]')
+              echo '::error title=PR 在闸门之外被合掉了::这一轮没有经过 merge-gate.mjs 就合并了 PR，合并条件未核。'
+              exit 1
+              ;;
+            *)
+              echo "PR 是由 ${MERGED_BY:-非机器人} 合并的，不归这一轮。"
+              ;;
+          esac
