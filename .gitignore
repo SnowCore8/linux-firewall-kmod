@@ -98,6 +98,11 @@ debian/*.debhelper
 .claude/
 .agents/
 agents/
+# 上面那条 `agents/` 会连带命中 .github/agents/，但那里放的是四个角色的引擎配置，
+# 必须入库——漏了它 CI 上的 run-agent 找不到配置，四个人的每一轮都停在第一步
+# （本地有文件、测试也绿，所以看不出来）。放行目录本身，不是目录里的文件：
+# 父目录被排除后，针对文件的 ! 规则一律失效。
+!.github/agents/
 opencode.json
 .opencode/
 

@@ -1,0 +1,39 @@
+{
+  "model": {
+    "maxSessionTurns": 150
+  },
+  "memory": {
+    "enableManagedAutoMemory": false,
+    "enableManagedAutoDream": false
+  },
+  "telemetry": {
+    "enabled": false
+  },
+  "mcpServers": {
+    "github": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "ghcr.io/github/github-mcp-server:v0.18.0"
+      ],
+      "includeTools": [
+        "pull_request_read",
+        "get_file_contents",
+        "search_code",
+        "list_commits"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      }
+    }
+  },
+  "tools": {
+    "core": [
+      "run_shell_command"
+    ]
+  }
+}
