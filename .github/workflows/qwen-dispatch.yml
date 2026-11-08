@@ -148,10 +148,14 @@ jobs:
       ${{ needs.route.outputs.role == 'miles' }}
     uses: './.github/workflows/qwen-miles.yml'
     permissions:
+      # 被调用的工作流里闸门要读检查项，调用方少给一档就整次 startup_failure
+      actions: 'read'
+      checks: 'read'
       contents: 'write'
       id-token: 'write'
       issues: 'write'
       pull-requests: 'write'
+      statuses: 'read'
     with:
       number: '${{ needs.route.outputs.number }}'
       on_pr: '${{ needs.route.outputs.on_pr }}'

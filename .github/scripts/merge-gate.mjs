@@ -171,8 +171,29 @@ function preexistingFailures(names, repo, baseSha) {
   return out;
 }
 
+/**
+ * 去掉「这次运行自己产生的检查项」。
+ *
+ * 闸门跑在陈实那次运行里，而那次运行本身就是 PR 上的一个检查项（`route`、`miles / work`）。
+ * 不剔掉的话，`isPending` 永远看到自己在跑：先白等满 MILES_CI_WAIT_MINUTES，再以
+ * 「还有检查在跑」拦下自己 —— 每张 PR 都合不了。实测 PR #26 就是这样。
+ *
+ * 判据是 detailsUrl 里那一段 `/runs/<runId>/`，只在 CI 里有 GITHUB_RUN_ID，本地跑为空、
+ * 一律保留。
+ */
+export function withoutOwnRun(checks, runId) {
+  const list = Array.isArray(checks) ? checks : [];
+  if (!runId) return list;
+  const marker = `/runs/${runId}/`;
+  return list.filter((check) => !String(check?.detailsUrl || '').includes(marker));
+}
+
 function loadPr(number, repo) {
-  return ghJson(['pr', 'view', String(number), '--repo', repo, '--json', PR_FIELDS]);
+  const pr = ghJson(['pr', 'view', String(number), '--repo', repo, '--json', PR_FIELDS]);
+  if (pr && 'statusCheckRollup' in pr) {
+    pr.statusCheckRollup = withoutOwnRun(pr.statusCheckRollup, process.env.GITHUB_RUN_ID || '');
+  }
+  return pr;
 }
 
 /** base 分支当前的提交哈希。查不到返回空串 —— 调用方按「不是预存在」处理。 */
@@ -285,5 +306,12 @@ function main() {
 }
 
 if (process.argv[1] && process.argv[1].endsWith('merge-gate.mjs')) {
-  main();
+  try {
+    main();
+  } catch (err) {
+    // 崩溃不能退出 1：1 是「条件没满足，结论已贴在 PR 上」，会被读成闸门判过了。
+    // 取数失败（令牌权限不够、接口报错）属于判据根本没跑完，用 2，那一步会失败。
+    process.stderr.write(`闸门自己出错了，判据没跑完：${err && err.message ? err.message : String(err)}\n`);
+    process.exit(2);
+  }
 }

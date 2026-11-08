@@ -14,8 +14,20 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-import { evaluateMerge, failedCheckNames, isPending, checkState, STOP_LABELS } from './merge-gate.mjs';
+import {
+  evaluateMerge,
+  failedCheckNames,
+  isPending,
+  checkState,
+  STOP_LABELS,
+  withoutOwnRun,
+} from './merge-gate.mjs';
 
 const NOW = Date.now();
 const ago = (minutes) => new Date(NOW - minutes * 60000).toISOString();
@@ -233,4 +245,69 @@ test('多条不满足时全部列出，不是只报第一条', () => {
     result.rules.filter((r) => !r.ok).map((r) => r.id),
     ['approval-at-head', 'no-stop-label', 'not-draft', 'not-conflicting', 'checks'],
   );
+});
+
+// ───────────────────────── 自己这次运行 ─────────────────────────
+// 闸门跑在陈实那次运行里，那次运行本身就是 PR 上的检查项。实测 PR #26：闸门先白等满
+// 10 分钟，再以「还有检查在跑」把自己拦下来 —— 每张 PR 都合不了。
+const checkRun = (name, runId, over = {}) => ({
+  name,
+  status: 'IN_PROGRESS',
+  conclusion: null,
+  detailsUrl: `https://github.com/o/r/actions/runs/${runId}/job/${runId}01`,
+  ...over,
+});
+
+test('剔掉自己这次运行产生的检查项', () => {
+  const kept = withoutOwnRun(
+    [
+      checkRun('miles / work', '42407645741'),
+      checkRun('route', '42407645741', { status: 'COMPLETED', conclusion: 'SUCCESS' }),
+      checkRun('浏览器端到端测试', '42399000000', { status: 'COMPLETED', conclusion: 'SUCCESS' }),
+    ],
+    '42407645741',
+  );
+  assert.deepEqual(kept.map((c) => c.name), ['浏览器端到端测试']);
+});
+
+test('自己那次运行是唯一的检查项时，等于没有检查，不该拦', () => {
+  const pr42 = pr({
+    statusCheckRollup: withoutOwnRun([checkRun('miles / work', '42407645741')], '42407645741'),
+  });
+  assert.equal(rule(evaluateMerge({ pr: pr42 }), 'checks').ok, true);
+  assert.equal(isPending(pr42), false);
+});
+
+test('没有 GITHUB_RUN_ID（本地跑）时一个都不剔', () => {
+  const all = [checkRun('miles / work', '42407645741'), checkRun('单元测试', '42407645741')];
+  assert.deepEqual(withoutOwnRun(all, ''), all);
+  assert.deepEqual(withoutOwnRun(all, undefined), all);
+});
+
+test('别的运行还在跑，照样算没跑完', () => {
+  const mixed = withoutOwnRun(
+    [checkRun('miles / work', '42407645741'), checkRun('单元测试', '42407000000')],
+    '42407645741',
+  );
+  assert.equal(isPending({ statusCheckRollup: mixed }), true);
+});
+
+// ───────────────────────── 退出码 ─────────────────────────
+// 0 合并了、1 条件没满足、2 闸门自己没跑完。1 和 2 混用是最坏的错法：取数失败
+// （令牌权限不够、接口报错）会被读成「闸门判过了，只是拦下了」，没人会去查。
+test('取数失败时退出码是 2，不是 1', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'merge-gate-'));
+  const bin = join(dir, 'gh');
+  writeFileSync(bin, '#!/usr/bin/env bash\necho "GraphQL: Resource not accessible by integration" >&2\nexit 1\n');
+  chmodSync(bin, 0o755);
+
+  const res = spawnSync(
+    process.execPath,
+    [fileURLToPath(new URL('./merge-gate.mjs', import.meta.url)), '39', '--repo', 'owner/name'],
+    { encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } },
+  );
+  rmSync(dir, { recursive: true, force: true });
+
+  assert.equal(res.status, 2, `退出码应为 2，实际 ${res.status}；stderr: ${res.stderr}`);
+  assert.match(res.stderr, /判据没跑完/);
 });

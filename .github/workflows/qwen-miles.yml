@@ -61,7 +61,13 @@ jobs:
       mode: '${{ steps.context.outputs.mode }}'
       pushed: '${{ steps.detect.outputs.pushed }}'
     permissions:
+      # 闸门要读检查项：statusCheckRollup 除了 checks 还会展开 checkSuite.workflowRun，
+      # 老式状态上下文另走 statuses —— 少一档 gh 就报 Resource not accessible by integration。
+      # App 令牌没有这三档，所以闸门那一步用这个令牌。
+      actions: 'read'
+      checks: 'read'
       contents: 'write'
+      statuses: 'read'
       id-token: 'write'
       issues: 'write'
       pull-requests: 'write'
@@ -198,6 +204,8 @@ jobs:
           set -euo pipefail
           # 统一按远端分支判断，避免把「未推送」误判成「有新提交」
           echo "sha=$(git ls-remote --heads origin "${HEAD_REF}" | awk '{print $1}')" >> "${GITHUB_OUTPUT}"
+          # 这一轮的起点。识别合并申请时，用它区分「这一轮新发的评论」和上一轮留下的
+          echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
 
       # 合并前条件原写在 auto-miles.toml 里由陈实自己读、自己执行 `gh pr merge`，
       # 实测两次都没对上（PR #38 在 e2e 判失败后合并，PR #39 在批准挂在旧提交时合并）。
@@ -364,39 +372,80 @@ jobs:
               ;;
           esac
 
-      # 模型只能写申请，合不合由脚本判。这一行标记就是申请，在最终回复里。
-      - name: 'Detect the merge request in the final reply'
+      # 模型只能写申请，合不合由脚本判。这一行标记就是申请：写在最终回复里，或写在这一轮
+      # 的最后那条评论里，两处都认。
+      - name: 'Detect the merge request from this round'
         id: 'merge_request'
         if: |-
           ${{ steps.context.outputs.skip != 'true' && steps.qwen_miles.outcome == 'success' && steps.context.outputs.mode == 'respond-pr' }}
+        env:
+          # 这一步要读 PR 评论，而 Actions 里的 gh 没有隐式凭据：缺了它 gh 直接报
+          # 「set the GH_TOKEN environment variable」，取回为空，申请就被读成没有。
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
+          REPOSITORY: '${{ github.repository }}'
+          PR_NUMBER: '${{ steps.context.outputs.pr_number }}'
+          STARTED_AT: '${{ steps.before.outputs.started_at }}'
         run: |-
           set -euo pipefail
 
-          if [ ! -f qwen-artifacts/stdout.log ]; then
-            echo 'requested=false' >> "${GITHUB_OUTPUT}"
-            exit 0
+          PATTERN='^[[:space:]]*<!-- qwen:merge-request -->[[:space:]]*$'
+          REQUESTED=''
+
+          # 先看这一轮最后一段说出来的话。注意不能取「最后一个 assistant 条目」：
+          # 那一轮实际是发评论的工具调用，里面没有 text 块，取 last 会拿到空串。
+          if [ -f qwen-artifacts/stdout.log ]; then
+            REPLY="$(jq -r '[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | last // ""' \
+              qwen-artifacts/stdout.log 2>/dev/null || true)"
+            if grep -Eq "${PATTERN}" <<< "${REPLY}"; then
+              REQUESTED=final-reply
+            fi
           fi
 
-          REPLY="$(jq -r '[.[] | select(.type == "assistant")] | last | .message.content[]? | select(.type == "text") | .text' \
-            qwen-artifacts/stdout.log 2>/dev/null || true)"
+          # 没写在最后那段话里，就看这一轮新发的机器人评论 —— 陈实习惯把结论写成评论，
+          # 那也算申请。免得把上一轮留下的、或者顺嘴引用出来的标记当成申请：标记必须
+          # 单独占一行，且这条评论在这一轮里动过；真判断仍在闸门里，这里只决定要不要跑闸门。
+          #
+          # 不给 API 传 since：与其猜服务端怎么筛，不如整份取回、在 jq 里按 updated_at
+          # 自己筛。另外失败绝不能静默 —— 前两次之所以查不出原因，是 `2>/dev/null || true`
+          # 把 gh 的报错吞了（真原因就是上面那个缺 GITHUB_TOKEN）。所以这里取不到就重试
+          # 三次，并且把 gh 的报错原样打出来。
+          if [ -z "${REQUESTED}" ] && [ -n "${STARTED_AT:-}" ] && [ -n "${PR_NUMBER:-}" ]; then
+            JQ_FILTER="[.[] | select(.user.type == \"Bot\") | select(.updated_at >= \"${STARTED_AT}\") | .body] | join(\"\n\n\")"
+            ERRLOG="${RUNNER_TEMP}/merge-request-comments.err"
+            COMMENTS=''
+            for ATTEMPT in 1 2 3; do
+              if ! COMMENTS="$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+                --jq "${JQ_FILTER}" 2>"${ERRLOG}")"; then
+                echo "取评论失败（第 ${ATTEMPT} 次）：$(cat "${ERRLOG}")"
+                COMMENTS=''
+              fi
+              if grep -Eq "${PATTERN}" <<< "${COMMENTS}"; then
+                REQUESTED=comment
+                break
+              fi
+              [ "${ATTEMPT}" = '3' ] || sleep 5
+            done
+          fi
 
-          case "${REPLY}" in
-            *'<!-- qwen:merge-request -->'*)
-              echo 'requested=true' >> "${GITHUB_OUTPUT}"
-              echo '陈实申请了合并，交给闸门判定。'
-              ;;
-            *)
-              echo 'requested=false' >> "${GITHUB_OUTPUT}"
-              echo '这一轮没有申请合并。'
-              ;;
-          esac
+          if [ -n "${REQUESTED}" ]; then
+            echo 'requested=true' >> "${GITHUB_OUTPUT}"
+            echo "陈实申请了合并（来自 ${REQUESTED}），交给闸门判定。"
+          else
+            echo 'requested=false' >> "${GITHUB_OUTPUT}"
+            echo '这一轮没有申请合并。'
+          fi
 
       - name: 'Merge only if the gate allows it'
         id: 'gate'
         if: |-
           ${{ steps.merge_request.outputs.requested == 'true' }}
         env:
-          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
+          # 这里用工作流自己的令牌，不用 App 令牌：`gh pr view --json statusCheckRollup`
+          # 和 base 分支的 check-runs 都要 checks: read，而陈实的 App 只给了
+          # contents / issues / pull-requests / workflows —— 用它查会得到
+          # 「Resource not accessible by integration」，判据一条都跑不了。
+          # 工作流令牌的权限由下面 job 的 permissions 块声明，够用且不含多余授权。
+          GITHUB_TOKEN: '${{ github.token }}'
           # 这一步就是闸门本身，要放行上面那层 gh 包装器
           QWEN_MERGE_GATE: '1'
           PR_NUMBER: '${{ steps.context.outputs.pr_number }}'

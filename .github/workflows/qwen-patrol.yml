@@ -53,9 +53,13 @@ jobs:
       head_ref: '${{ steps.scan.outputs.head_ref }}'
       reason: '${{ steps.scan.outputs.reason }}'
     permissions:
+      # patrol.mjs 的 loadOpenPrs 取 statusCheckRollup（checks + checkSuite.workflowRun + statuses）
+      actions: 'read'
+      checks: 'read'
       contents: 'read'
       issues: 'read'
       pull-requests: 'read'
+      statuses: 'read'
     steps:
       - name: 'Checkout repository'
         uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
@@ -76,10 +80,14 @@ jobs:
       ${{ needs.scan-miles.outputs.found == 'true' }}
     uses: './.github/workflows/qwen-miles.yml'
     permissions:
+      # 被调用的工作流里闸门要读检查项，调用方少给一档就整次 startup_failure
+      actions: 'read'
+      checks: 'read'
       contents: 'write'
       id-token: 'write'
       issues: 'write'
       pull-requests: 'write'
+      statuses: 'read'
     with:
       number: '${{ needs.scan-miles.outputs.number }}'
       on_pr: 'true'
@@ -102,9 +110,13 @@ jobs:
       head_ref: '${{ steps.scan.outputs.head_ref }}'
       reason: '${{ steps.scan.outputs.reason }}'
     permissions:
+      # patrol.mjs 的 loadOpenPrs 取 statusCheckRollup（checks + checkSuite.workflowRun + statuses）
+      actions: 'read'
+      checks: 'read'
       contents: 'read'
       issues: 'read'
       pull-requests: 'read'
+      statuses: 'read'
     steps:
       - name: 'Checkout repository'
         uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
