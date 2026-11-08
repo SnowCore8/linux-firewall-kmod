@@ -23,7 +23,7 @@ import { DataTable } from '../components/DataTable.tsx'
 import { EmptyState } from '../components/state/EmptyState.tsx'
 import { useAsync, type UseAsyncResult } from '../hooks/useAsync.ts'
 import { useRefreshSignal } from '../hooks/useRefreshSignal.ts'
-import { backoffSeconds } from '../hooks/useSse.ts'
+import { backoffSeconds, MAX_RECONNECT_ATTEMPTS } from '../hooks/useSse.ts'
 import { getLogs, getSseStatus, logsStreamUrl } from '../api/endpoints.ts'
 import { formatClock } from '../lib/format.ts'
 import type { LogEntry, LogLevel, LogPageResponse } from '../api/types.ts'
@@ -48,7 +48,7 @@ import type { LogEntry, LogLevel, LogPageResponse } from '../api/types.ts'
  */
 
 type Mode = 'live' | 'history'
-type LiveState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'limit'
+type LiveState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'limit' | 'exhausted'
 type LevelFilter = LogLevel | 'all'
 
 const MAX_LIVE_LINES = 500
@@ -242,6 +242,10 @@ export default function Logs() {
     })
 
     function scheduleReconnect() {
+      if (attemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+        setLiveState('exhausted')
+        return
+      }
       const delay = backoffSeconds(attemptsRef.current) * 1000
       attemptsRef.current += 1
       clearTimer()
@@ -410,7 +414,7 @@ function LivePanel(props: LivePanelProps) {
               清空
             </Button>
           </Tooltip>
-          {state === 'limit' && (
+          {(state === 'limit' || state === 'exhausted') && (
             <Button type="primary" icon={<ReloadOutlined />} onClick={onReconnect}>
               重新连接
             </Button>
@@ -428,6 +432,12 @@ function LivePanel(props: LivePanelProps) {
       {state === 'limit' && (
         <Typography.Text type="warning" style={{ fontSize: 12 }}>
           实时日志连接数已达上限（5），已停止重试。可稍后点「重新连接」，或改用「历史」检索。
+        </Typography.Text>
+      )}
+
+      {state === 'exhausted' && (
+        <Typography.Text type="danger" style={{ fontSize: 12 }}>
+          自动重连次数已耗尽，实时日志流已断开。可点「重新连接」重试，或改用「历史」检索。
         </Typography.Text>
       )}
 

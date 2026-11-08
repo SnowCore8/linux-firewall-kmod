@@ -303,9 +303,9 @@ export default function AppShell() {
           </Button>
 
           <Flex align="center" gap={4} style={{ marginLeft: 'auto' }}>
-            <RealtimeBadge state={sse.state} lastEventAt={sse.lastEventAt} showLabel={!isMobile} />
-            {sse.isLimited && (
-              <Tooltip title="实时连接已达上限，点击重试">
+            <RealtimeBadge state={sse.state} lastEventAt={sse.lastEventAt} disconnectedAt={sse.disconnectedAt} showLabel={!isMobile} />
+            {(sse.isLimited || sse.isExhausted) && (
+              <Tooltip title={sse.isExhausted ? '实时连接已断开，点击重试' : '实时连接已达上限，点击重试'}>
                 <Button
                   type="text"
                   size="small"

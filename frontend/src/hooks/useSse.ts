@@ -14,6 +14,8 @@
  * 自己接管——出错即 close，按 `min(2**min(n,5),30)` 秒退避重连；重连前先探一次
  * GET /api/v2/stats/sse-status，若 events.limit_reached 为真就**停手**（再连也是 503），
  * 把状态标成 'limit' 交给 UI 降级到 REST 轮询，而不是无限重试把 503 当网络故障。
+ * 连续重连超过 `MAX_RECONNECT_ATTEMPTS`（100）次后进入 'exhausted' 态，停止自动重试，
+ * 等用户手动点「重新连接」——避免守护进程长期缺席时无限退避。
  *
  * 日志流（/api/v2/logs/stream）不在这里：它的事件名（connected/log/error）按门禁要求必须
  * 出现在 views/Logs.tsx，故那条流由日志页自己接管。
@@ -37,6 +39,7 @@ export type SseConnectionState =
   | 'open' // 已连通、正在收帧
   | 'reconnecting' // 断线退避重连中
   | 'limit' // 服务端连接数已达上限（10），停止重试
+  | 'exhausted' // 重连次数耗尽，停止自动重试
   | 'closed' // 主动关闭
 
 /** 每个域各自的数据 + 新鲜度序号（域之间独立更新，独立比较）。 */
@@ -58,6 +61,8 @@ export interface SseSnapshot {
   lastEventAt: number
   /** 已尝试的重连次数（成功连通后归零）。 */
   attempts: number
+  /** 进入断开态的时刻（Date.now()）；用于 UI 显示「已断开 X 分钟」。0 表示未断开。 */
+  disconnectedAt: number
 }
 
 const INITIAL_SNAPSHOT: SseSnapshot = {
@@ -70,12 +75,16 @@ const INITIAL_SNAPSHOT: SseSnapshot = {
   seq: { stats: 0, bans: 0, jails: 0, whitelist: 0, rates: 0 },
   lastEventAt: 0,
   attempts: 0,
+  disconnectedAt: 0,
 }
 
 /** 退避秒数：min(2**min(n,5), 30)。n=0→1s … n≥5→30s（契约规定，两条流共用同一公式）。 */
 export function backoffSeconds(attempt: number): number {
   return Math.min(2 ** Math.min(attempt, 5), 30)
 }
+
+/** 最大自动重连次数；超过后进入 exhausted 态，停止退避重连，等用户手动重试。 */
+export const MAX_RECONNECT_ATTEMPTS = 100
 
 /** 安全解析帧 data；解析失败返回 null（不因一条坏帧打断整条流）。 */
 function parseFrame<T>(raw: string): T | null {
@@ -135,7 +144,7 @@ export function useEventStream(enabled: boolean): EventStreamResult {
 
     es.addEventListener('connected', () => {
       attemptsRef.current = 0
-      setSnapshot((prev) => ({ ...prev, state: 'open', attempts: 0, lastEventAt: Date.now() }))
+      setSnapshot((prev) => ({ ...prev, state: 'open', attempts: 0, lastEventAt: Date.now(), disconnectedAt: 0 }))
     })
 
     es.addEventListener('stats', (e: MessageEvent<string>) => {
@@ -201,6 +210,15 @@ export function useEventStream(enabled: boolean): EventStreamResult {
     // 退避重连：用 attemptsRef 当前值算延迟（首次失败 n=0→1s），再自增。
     // 定义成 connect 内的具名函数，好让 onerror 的异步分支也能调到同一个实现。
     function scheduleReconnect() {
+      if (attemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+        // 重连次数耗尽：停止自动重试，交给 UI 显示「已断开」与手动重连入口
+        setSnapshot((prev) => ({
+          ...prev,
+          state: 'exhausted',
+          disconnectedAt: prev.disconnectedAt || Date.now(),
+        }))
+        return
+      }
       const delay = backoffSeconds(attemptsRef.current) * 1000
       attemptsRef.current += 1
       clearTimer()
@@ -214,7 +232,12 @@ export function useEventStream(enabled: boolean): EventStreamResult {
       // 首次失败或连通后又断：一律自己接管重连（不用 EventSource 自带的不可控重连）
       closeStream()
       if (!enabledRef.current) return
-      setSnapshot((prev) => ({ ...prev, state: 'reconnecting', attempts: attemptsRef.current }))
+      setSnapshot((prev) => ({
+        ...prev,
+        state: 'reconnecting',
+        attempts: attemptsRef.current,
+        disconnectedAt: prev.disconnectedAt || Date.now(),
+      }))
 
       // 重连前探一次上限：达上限就停手，交给 UI 降级到 REST 轮询
       void getSseStatus()
@@ -251,6 +274,7 @@ export function useEventStream(enabled: boolean): EventStreamResult {
   const reconnect = useCallback(() => {
     if (!enabledRef.current) return
     attemptsRef.current = 0
+    setSnapshot((prev) => ({ ...prev, disconnectedAt: 0 }))
     connect()
   }, [connect])
 
