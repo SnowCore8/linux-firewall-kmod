@@ -4570,6 +4570,11 @@
             "format": "int64",
             "minimum": 0
           },
+          "state_save_truncated": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
           "threat_level": {
             "$ref": "#/components/schemas/ThreatLevel"
           }
@@ -4591,6 +4596,7 @@
           "whitelist_count",
           "packets_dropped",
           "packets_accepted",
+          "state_save_truncated",
           "threat_level"
         ]
       },

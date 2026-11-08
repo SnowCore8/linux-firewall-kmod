@@ -28,6 +28,7 @@ export function emptyStats(): StatsResponse {
     whitelist_count: 0,
     packets_dropped: 0,
     packets_accepted: 0,
+    state_save_truncated: 0,
     threat_level: {
       level: 'safe',
       score: 0,

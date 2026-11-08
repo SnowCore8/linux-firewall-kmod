@@ -90,6 +90,7 @@ export interface StatsResponse {
   whitelist_count: number
   packets_dropped: number
   packets_accepted: number
+  state_save_truncated: number
   threat_level: ThreatLevel
 }
 

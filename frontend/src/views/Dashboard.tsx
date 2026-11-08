@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Button, Flex, Space, Tag, Tooltip, Typography } from 'antd'
+import { Alert, Button, Flex, Space, Tag, Tooltip, Typography } from 'antd'
 import {
   ClockCircleOutlined,
   DeleteOutlined,
@@ -7,6 +7,7 @@ import {
   SafetyCertificateOutlined,
   StopOutlined,
   ThunderboltOutlined,
+  WarningOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { PageHeader } from '../components/PageHeader.tsx'
@@ -145,6 +146,18 @@ export default function Dashboard() {
         onRetry={live.refetch}
         style={{ marginBottom: 16 }}
       />
+
+
+      {stats.state_save_truncated > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          icon={<WarningOutlined />}
+          message="状态文件已截断"
+          description={`内核模块保存状态文件时条目超过上限，累计 ${stats.state_save_truncated} 次截断。部分封禁或白名单条目可能丢失，重启后无法恢复。`}
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
       {!hasData && live.isLoading && <LoadingState variant="cards" rows={6} />}
       {!hasData && live.error && <ErrorState error={live.error} onRetry={live.refetch} />}

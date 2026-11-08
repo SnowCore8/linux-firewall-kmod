@@ -213,6 +213,7 @@ key stats {
   "current_bans" = i32
   "current_whitelist" = i32
   "recent_additions" = u32
+  "state_save_truncated" = u64
 }
 
 # ============================================================================

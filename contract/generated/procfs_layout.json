@@ -24,7 +24,7 @@
     "write bans: 4 种形式",
     "write whitelist: 3 种形式",
     "write config: 1 种形式",
-    "key stats: 13 个机器可读字段",
+    "key stats: 14 个机器可读字段",
     "limit bans: 65535 条（锚点 src/kernel-module/fw_ban.c:fw_info.max_ban_entries）",
     "limit whitelist: 65535 条（锚点 src/kernel-module/fw_wl.c:fw_info.max_wl_entries）",
     "limit rates: 65536 条（锚点 src/kernel-module/fw_main.c:fw_max_rate_entries）",
@@ -213,7 +213,8 @@
       "cleanup_expired_total": "u32",
       "current_bans": "i32",
       "current_whitelist": "i32",
-      "recent_additions": "u32"
+      "recent_additions": "u32",
+      "state_save_truncated": "u64"
     }
   },
   "limits": {
