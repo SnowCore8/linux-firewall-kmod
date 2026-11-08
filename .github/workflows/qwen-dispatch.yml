@@ -73,12 +73,16 @@ jobs:
           ${{ vars.APP_ID_CLARA || vars.APP_ID_TRIAGER || vars.APP_ID }}
         uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # ratchet:actions/create-github-app-token@v2
         with:
-          # dispatch 只读评论计数、发闸门说明，用顾清的身份即可
+          # dispatch 只读评论计数、发闸门说明，用顾清的身份即可。
+          # 申请的权限必须落在 App 已授权的范围内，多要一档 GitHub 就回 422，
+          # 这一步直接失败、分派整个不跑——顾清的 App 只有 PR 读权限。
+          # 唯一要写的是 issue 评论（PR 在 API 里也是 issue，走同一档 issues: write）；
+          # 读 pulls/{n} 只取 head.ref（dispatch.mjs:50），不需要 PR 写权限。
           app-id: '${{ vars.APP_ID_CLARA || vars.APP_ID_TRIAGER || vars.APP_ID }}'
           private-key: '${{ secrets.APP_PRIVATE_KEY_CLARA || secrets.APP_PRIVATE_KEY_TRIAGER || secrets.APP_PRIVATE_KEY }}'
           permission-contents: 'read'
           permission-issues: 'write'
-          permission-pull-requests: 'write'
+          permission-pull-requests: 'read'
 
       - name: 'Check out the routing rules'
         uses: 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683' # ratchet:actions/checkout@v4
@@ -205,7 +209,7 @@ jobs:
           private-key: '${{ secrets.APP_PRIVATE_KEY_CLARA || secrets.APP_PRIVATE_KEY_TRIAGER || secrets.APP_PRIVATE_KEY }}'
           permission-contents: 'read'
           permission-issues: 'write'
-          permission-pull-requests: 'write'
+          permission-pull-requests: 'read'
 
       - name: 'Explain the failure in the thread'
         env:
