@@ -47,7 +47,7 @@
 
 ## 合并之前
 
-陈实不执行合并。他判断这一轮该不该合，然后在最终回复里单独写一行 `<!-- qwen:merge-request -->`；`qwen-miles.yml` 认出这一行，交给 `.github/scripts/merge-gate.mjs` 核完再合。申请只是一行标记，指定不了合并方式，也跳不过任何一条判据。
+陈实不执行合并。他判断这一轮该不该合，然后在最终回复里单独写一行 `<!-- qwen:merge-request -->`（写在这一轮最后那条评论里也认，标记必须独占一行）；`qwen-miles.yml` 认出这一行，交给 `.github/scripts/merge-gate.mjs` 核完再合。申请只是一行标记，指定不了合并方式，也跳不过任何一条判据。
 
 闸门核这四条，有一条不满足就不合，并在 PR 上列出没过的那几条：
 
@@ -60,7 +60,7 @@
 
 合并用 squash，删掉分支，关闭关联的 Issue，把 Issue 里的 checklist 勾完。闸门之外自己 `gh pr merge` 是被拦住的；真绕过去了，job 末尾那道检查会让整轮失败。
 
-判据的来龙去脉与每一项怎么折算，写在 `.github/scripts/merge-gate.mjs` 的头部注释里。
+判据的来龙去脉与每一项怎么折算，写在 `.github/scripts/merge-gate.mjs` 的头部注释里。两处与权限相关的坑记在这里：读检查项用的是工作流自己的令牌（`github.token`），不是陈实的 App 令牌 —— `statusCheckRollup` 要 `checks`、`actions`、`statuses` 三档只读，App 一档都没有；`qwen-dispatch.yml` 与 `qwen-patrol.yml` 里调用本工作流的 job 也必须给这三档，少一档整次运行就是 `startup_failure`，没有 job 也没有日志。闸门自己那次运行也是 PR 上的检查项，脚本会按 `GITHUB_RUN_ID` 把它剔掉，别再按「还有检查在跑」去读。
 
 ## 不做的事
 
