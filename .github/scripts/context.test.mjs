@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import {
   OWNED_BRANCH_PREFIX,
   isOwnedBranch,
+  parseBatchLimit,
   prepareClara,
   prepareNora,
   prepareMiles,
@@ -57,6 +58,37 @@ test('非数字的取回值被丢掉，不会拼进 TARGETS', () => {
 test('批量上限为 0 时一条都不取', () => {
   const r = prepareClara({ unlabeled: ['1', '2'], batchLimit: 0 });
   assert.equal(r.handled, false);
+});
+
+// ───────────────────────── parseBatchLimit：校验输入 ─────────────────────────
+
+test('空串回落默认值 5', () => {
+  assert.equal(parseBatchLimit(''), 5);
+});
+
+test('undefined 回落默认值 5', () => {
+  assert.equal(parseBatchLimit(undefined), 5);
+});
+
+test('合法正整数原样返回', () => {
+  assert.equal(parseBatchLimit('10'), 10);
+  assert.equal(parseBatchLimit(3), 3);
+});
+
+test('非数字字符串抛错', () => {
+  assert.throws(() => parseBatchLimit('abc'), /必须是正整数/);
+});
+
+test('负数抛错', () => {
+  assert.throws(() => parseBatchLimit('-1'), /必须是正整数/);
+});
+
+test('零抛错', () => {
+  assert.throws(() => parseBatchLimit('0'), /必须是正整数/);
+});
+
+test('小数抛错', () => {
+  assert.throws(() => parseBatchLimit('3.5'), /必须是正整数/);
 });
 
 // ───────────────────────── 叶澜：目标还开着吗 ─────────────────────────

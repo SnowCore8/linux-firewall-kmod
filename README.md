@@ -246,7 +246,7 @@ cd src/daemon && go test ./... # 单元测试
 | `AGENT_MAX_HANDOFFS` | Variable | ❌ | 24 小时内机器人自动交接上限，默认 20 |
 | `AGENT_MAX_CALLS` | Variable | ❌ | 24 小时内机器人点名上限，默认 40 |
 | `AGENT_CALL_COOLDOWN_MINUTES` | Variable | ❌ | 同一话题两次点名的最短间隔（分钟），默认 10 |
-| `TRIAGE_BATCH_LIMIT` | Variable | ❌ | 顾清每次批量分诊处理的 Issue 数，默认 5 |
+| `TRIAGE_BATCH_LIMIT` | Variable | ❌ | 顾清每次批量分诊处理的 Issue 数，默认 5。手动触发 `qwen-clara` 时可在界面填 `batch_limit` 单次覆盖，留空仍取此变量 |
 | `PATROL_IDLE_MINUTES` | Variable | ❌ | 巡检叫陈实前，PR 至少安静多少分钟，默认 15 |
 | `PATROL_REVIEW_IDLE_MINUTES` | Variable | ❌ | 巡检叫周正前，PR 至少开了多少分钟，默认 30 |
 | `PATROL_DECISION_IDLE_HOURS` | Variable | ❌ | 巡检叫叶澜前，Issue 至少停了多少小时，默认 24 |

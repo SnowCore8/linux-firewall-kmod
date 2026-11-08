@@ -14,6 +14,11 @@ on:
         description: '为什么叫顾清来'
         required: false
         default: '手动触发'
+      batch_limit:
+        type: 'string'
+        description: '批量上限；留空取仓库变量 TRIAGE_BATCH_LIMIT，默认 5'
+        required: false
+        default: ''
     outputs:
       handled:
         description: '本次是否处理了 Issue'
@@ -22,6 +27,12 @@ on:
     # 每小时扫一遍没人管的 Issue，像维护者定期过 backlog
     - cron: '0 * * * *'
   workflow_dispatch:
+    inputs:
+      batch_limit:
+        description: '批量上限；留空取仓库变量 TRIAGE_BATCH_LIMIT，默认 5'
+        required: false
+        type: 'string'
+        default: ''
 
 concurrency:
   group: '${{ github.workflow }}-clara-${{ inputs.issue_number }}'
@@ -71,7 +82,7 @@ jobs:
           GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
           REPOSITORY: '${{ github.repository }}'
           ISSUE_NUMBER: '${{ inputs.issue_number }}'
-          BATCH_LIMIT: '${{ vars.TRIAGE_BATCH_LIMIT || 5 }}'
+          BATCH_LIMIT: '${{ inputs.batch_limit || vars.TRIAGE_BATCH_LIMIT || 5 }}'
         # 挑哪几条 Issue 的判据在 context.mjs 的 prepareClara()：排序、去重、上限这些
         # 错了不会报错，只会安静地漏处理或者重复处理，所以要能单测。
         run: |-

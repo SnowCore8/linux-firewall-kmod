@@ -23,6 +23,20 @@ export const isOwnedBranch = (ref) => String(ref || '').startsWith(OWNED_BRANCH_
 
 const issueNumberOfBranch = (ref) => String(ref || '').slice(OWNED_BRANCH_PREFIX.length);
 
+/**
+ * 校验批量上限。手动触发时 inputs.batch_limit 是字符串，可能是空串、非数字或负数。
+ * 空串表示「没填」，回落默认值；非数字或 ≤0 直接报错——静默变 NaN 会让批量一条都不取，
+ * 操作者以为扫了 10 条其实一条没扫，比报错更危险。
+ */
+export function parseBatchLimit(raw) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return 5;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+    throw new Error(`BATCH_LIMIT 必须是正整数，当前值为 ${JSON.stringify(raw)}`);
+  }
+  return n;
+}
+
 // ───────────────────────── 顾清：挑要处理的 Issue ─────────────────────────
 
 /**
@@ -312,7 +326,7 @@ function main() {
     process.exit(2);
   }
   const handlers = {
-    clara: () => runClara(repo, Number(process.env.BATCH_LIMIT || 5)),
+    clara: () => runClara(repo, parseBatchLimit(process.env.BATCH_LIMIT)),
     nora: () => runNora(repo),
     miles: () => runMiles(repo),
     frank: () => runFrank(repo),
