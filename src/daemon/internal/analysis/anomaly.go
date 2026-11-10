@@ -143,13 +143,18 @@ func Deviate(m FeatureMatrix, minSamples int) DeviationReport {
 		out.Rows[i] = RowDeviation{Dimensions: dims}
 		out.RowScores[i] = sum / float64(len(dims)) * 100
 	}
-	out.Dimensions = out.Rows[n-1].Dimensions
+	// 拷贝切片避免底层数组共享导致的数据竞争
+	out.Dimensions = append([]Dimension(nil), out.Rows[n-1].Dimensions...)
 	out.Score = out.RowScores[n-1]
 	return out
 }
 
 // deviation 把当前值折成 0-1 的偏差分：p50 及以下为 0，p95 及以上为 1。
 func deviation(v, p50, p95 float64) float64 {
+	// NaN 输入会污染整个评分，直接返回 0
+	if math.IsNaN(v) || math.IsNaN(p50) || math.IsNaN(p95) {
+		return 0
+	}
 	spread := p95 - p50
 	if spread <= 0 || math.IsNaN(spread) {
 		if v > p95 {

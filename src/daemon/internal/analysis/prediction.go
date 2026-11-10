@@ -122,7 +122,7 @@ func PredictAttacks(db *persist.DB, limit int) (*PredictionSummary, error) {
 		confidence := regularityScore*0.6 + dataAmountScore*0.4
 
 		lastBan := data.timestamps[len(data.timestamps)-1]
-		nextAttack := lastBan + int64(median)
+		nextAttack := lastBan + int64(math.Round(median))
 
 		var urgency string
 		hoursUntil := float64(nextAttack-now) / 3600
