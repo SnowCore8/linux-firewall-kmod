@@ -132,3 +132,72 @@ func TestApplyCapacityValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyRiskEngineValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr string
+	}{
+		{
+			name: "half_life_days zero rejected",
+			yaml: `risk_engine:
+  half_life_days: 0`,
+			wantErr: "risk_engine.half_life_days",
+		},
+		{
+			name: "half_life_days negative rejected",
+			yaml: `risk_engine:
+  half_life_days: -5`,
+			wantErr: "risk_engine.half_life_days",
+		},
+		{
+			name: "half_life_days too large rejected",
+			yaml: `risk_engine:
+  half_life_days: 400`,
+			wantErr: "risk_engine.half_life_days",
+		},
+		{
+			name: "weight negative rejected",
+			yaml: `risk_engine:
+  weights:
+    ssh: -1.0`,
+			wantErr: "risk_engine.weights[ssh]",
+		},
+		{
+			name: "weight too large rejected",
+			yaml: `risk_engine:
+  weights:
+    ssh: 150.0`,
+			wantErr: "risk_engine.weights[ssh]",
+		},
+		{
+			name: "valid config accepted",
+			yaml: `risk_engine:
+  enabled: true
+  half_life_days: 14
+  weights:
+    ssh: 2.5
+    http: 1.0`,
+			wantErr: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			err := ParseConfig(tt.yaml, &cfg)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("expected no error, got %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("expected error containing %q, got nil", tt.wantErr)
+				} else if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("expected error containing %q, got %v", tt.wantErr, err)
+				}
+			}
+		})
+	}
+}

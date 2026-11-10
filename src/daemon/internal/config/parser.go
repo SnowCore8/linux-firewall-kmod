@@ -21,6 +21,7 @@ type yamlConfig struct {
 	TrustedIPs          []string            `yaml:"trusted_ips"`
 	Capacity            *yamlCapacity       `yaml:"capacity"`
 	ThreatFeeds         *yamlThreatFeeds    `yaml:"threat_feeds"`
+	RiskEngine          *yamlRiskEngine     `yaml:"risk_engine"`
 	GeoipDBPath         *string             `yaml:"geoip_db_path"`
 	ServerLatitude      yaml.Node           `yaml:"server_latitude"`
 	ServerLongitude     yaml.Node           `yaml:"server_longitude"`
@@ -154,6 +155,13 @@ type yamlThreatFeedSource struct {
 	Confidence *float64 `yaml:"confidence"`
 }
 
+// yamlRiskEngine 是多维风险引擎配置的 YAML 表示。
+type yamlRiskEngine struct {
+	Enabled      *bool              `yaml:"enabled"`
+	HalfLifeDays *float64           `yaml:"half_life_days"`
+	Weights      map[string]float64 `yaml:"weights"`
+}
+
 // ParseConfig 把 YAML 内容解析进 cfg。
 //
 // 失败时不修改 cfg（原子性）：所有字段在局部结构上校验通过后，才一次性写入。
@@ -206,7 +214,11 @@ func parseConfigFrom(content string, cfg *Config, runtimeOverride, strict bool) 
 	if err := applyThreatFeeds(&yc, cfg); err != nil {
 		return err
 	}
-	// 8~10. geoip / 本机坐标 / 探测地址
+	// 8. risk_engine
+	if err := applyRiskEngine(&yc, cfg); err != nil {
+		return err
+	}
+	// 9~11. geoip / 本机坐标 / 探测地址
 	if err := applyGeoip(&yc, cfg); err != nil {
 		return err
 	}
@@ -667,6 +679,39 @@ func applyThreatFeeds(yc *yamlConfig, cfg *Config) error {
 				sc.Confidence = *src.Confidence
 			}
 			cfg.ThreatFeeds.Sources = append(cfg.ThreatFeeds.Sources, sc)
+		}
+	}
+	return nil
+}
+
+// applyRiskEngine 应用 risk_engine 段。
+//
+// half_life_days 必须 > 0：半衰期为零或负数会让衰减函数失去意义（所有历史事件瞬间归零
+// 或计算出发散值），风险引擎的判定结果将不可预测。
+func applyRiskEngine(yc *yamlConfig, cfg *Config) error {
+	re := yc.RiskEngine
+	if re == nil {
+		return nil
+	}
+	setBool(&cfg.RiskEngine.Enabled, re.Enabled)
+	if re.HalfLifeDays != nil {
+		if *re.HalfLifeDays <= 0 {
+			return fmt.Errorf("risk_engine.half_life_days 必须大于 0，实际是 %v", *re.HalfLifeDays)
+		}
+		if *re.HalfLifeDays > 365 {
+			return fmt.Errorf("risk_engine.half_life_days 不能超过 365（一年），实际是 %v", *re.HalfLifeDays)
+		}
+		cfg.RiskEngine.HalfLifeDays = *re.HalfLifeDays
+	}
+	if len(re.Weights) > 0 {
+		if cfg.RiskEngine.Weights == nil {
+			cfg.RiskEngine.Weights = make(map[string]float64, len(re.Weights))
+		}
+		for k, v := range re.Weights {
+			if v < 0 || v > 100 {
+				return fmt.Errorf("risk_engine.weights[%s] 必须在 [0, 100] 范围内，实际是 %v", k, v)
+			}
+			cfg.RiskEngine.Weights[k] = v
 		}
 	}
 	return nil
