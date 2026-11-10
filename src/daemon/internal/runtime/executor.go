@@ -320,11 +320,15 @@ func NewInboundExecutor(cfg *config.Config, signals *SignalSource, deps Deps) (*
 	return e, nil
 }
 
-// Close 释放 inotify fd 与信号桥。
+// Close 释放 inotify fd、信号桥与所有日志文件读取器。
 func (e *InboundExecutor) Close() {
 	_ = e.watcher.Close()
 	if e.signals != nil {
 		e.signals.Close()
+	}
+	// 关闭所有日志文件读取器，释放 fd
+	for _, reader := range e.readers {
+		_ = reader.Close()
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -43,6 +44,7 @@ func kindFromByte(b byte) (SignalKind, bool) {
 type SignalSource struct {
 	ch   chan os.Signal
 	done chan struct{}
+	wg   sync.WaitGroup // 等待 pump goroutine 退出后再关闭 fd
 	r    int
 	w    int
 }
@@ -63,12 +65,14 @@ func NewSignalSource() (*SignalSource, error) {
 		w:    fds[1],
 	}
 	signal.Notify(s.ch, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP, syscall.SIGUSR1)
+	s.wg.Add(1)
 	go s.pump()
 	return s, nil
 }
 
 // pump 把收到的信号转成一个字节写进自管道；退出时停止。
 func (s *SignalSource) pump() {
+	defer s.wg.Done()
 	for {
 		select {
 		case <-s.done:
@@ -131,6 +135,8 @@ func (s *SignalSource) Close() {
 	default:
 		close(s.done)
 	}
+	// 等待 pump goroutine 退出，避免在写操作进行中关闭 fd
+	s.wg.Wait()
 	if s.r >= 0 {
 		_ = unix.Close(s.r)
 		s.r = -1
