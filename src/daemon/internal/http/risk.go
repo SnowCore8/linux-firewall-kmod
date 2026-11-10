@@ -64,7 +64,8 @@ func (h *APIHandlers) ListRiskVectors(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vectors, err := h.db.GetAllRiskVectors()
+	// 限制返回数量，避免无界查询导致内存耗尽
+	vectors, err := h.db.GetAllRiskVectors(100)
 	if err != nil {
 		h.server.logger.Error("query risk vectors failed", "error", err)
 		WriteInternalError(w, "查询风险向量列表失败")

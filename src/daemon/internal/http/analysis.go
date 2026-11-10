@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
-	"sort"
 	"strings"
 	"time"
 
@@ -135,20 +134,22 @@ func riskVectorResponse(vec persist.RiskVectorRow) RiskVectorResponse {
 
 // getTopRiskIPs 取总风险最高的前 limit 个 IP（复用风险引擎的 ip_risk_vectors）。
 //
-// GetAllRiskVectors 的顺序不保证，这里按 total_risk 显式降序排一遍再截断，确保「top」名副
-// 其实。引擎未启用 / 无读数 / 查询失败都降级为空数组（契约是 Vec，不是 null）。
+// GetAllRiskVectors 已按 total_risk 降序排列并限制返回数量，这里只需截断到 limit。
+// 引擎未启用 / 无读数 / 查询失败都降级为空数组（契约是 Vec，不是 null）。
 func (h *APIHandlers) getTopRiskIPs(limit int) []RiskVectorResponse {
 	if h.db == nil || limit <= 0 {
 		return []RiskVectorResponse{}
 	}
-	vectors, err := h.db.GetAllRiskVectors()
+	// 多取一些以应对可能的排序差异，但不超过合理范围
+	fetchLimit := limit * 2
+	if fetchLimit > 1000 {
+		fetchLimit = 1000
+	}
+	vectors, err := h.db.GetAllRiskVectors(fetchLimit)
 	if err != nil {
 		h.server.logger.Error("analysis: query risk vectors", "error", err)
 		return []RiskVectorResponse{}
 	}
-	sort.SliceStable(vectors, func(i, j int) bool {
-		return totalRisk(vectors[i]) > totalRisk(vectors[j])
-	})
 	if len(vectors) > limit {
 		vectors = vectors[:limit]
 	}
