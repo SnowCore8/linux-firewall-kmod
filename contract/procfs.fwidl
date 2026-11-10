@@ -93,7 +93,7 @@ file stats {
   mode = 0400
   access = r
   read_format = machine
-  summary = "13 个计数器，每行 '<key> <value>'"
+  summary = "14 个计数器，每行 '<key> <value>'"
 }
 
 file rates {

@@ -109,6 +109,7 @@ export default function Logs() {
   const pausedRef = useRef(paused)
   pausedRef.current = paused
   const viewerRef = useRef<HTMLDivElement>(null)
+  const mountedRef = useRef(true)
 
   // 暂停期间每秒把 missedRef 批量同步到 missed state 一次；恢复接收（paused→false）即停表。
   // 于是「暂停时高频丢行」只引起每秒一次重渲染，而不是每条丢弃各渲染一次。
@@ -117,6 +118,13 @@ export default function Logs() {
     const id = window.setInterval(() => setMissed(missedRef.current), 1000)
     return () => window.clearInterval(id)
   }, [paused])
+
+  // 卸载保护：异步回调在组件卸载后不应触发状态更新
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   // --- 历史查询状态 ---
   const [histLevel, setHistLevel] = useState<LevelFilter>('all')
@@ -231,6 +239,7 @@ export default function Logs() {
       setLiveState('reconnecting')
       void getSseStatus()
         .then((status) => {
+          if (!mountedRef.current) return
           if (status.logs.limit_reached) {
             attemptsRef.current = 0
             setLiveState('limit')
@@ -238,7 +247,9 @@ export default function Logs() {
           }
           scheduleReconnect()
         })
-        .catch(() => scheduleReconnect())
+        .catch(() => {
+          if (mountedRef.current) scheduleReconnect()
+        })
     })
 
     function scheduleReconnect() {

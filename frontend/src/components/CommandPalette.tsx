@@ -216,7 +216,16 @@ export function CommandPalette({ open, onClose, onRefresh }: CommandPaletteProps
     }
   }
 
-  let flatIndex = -1
+  // 预计算每个分组起始的 flat index，避免渲染期间变异
+  const groupStartIndex = useMemo(() => {
+    const starts = new Map<string, number>()
+    let acc = 0
+    for (const section of grouped) {
+      starts.set(section.group, acc)
+      acc += section.items.length
+    }
+    return starts
+  }, [grouped])
 
   return (
     <Modal
@@ -273,9 +282,8 @@ export function CommandPalette({ open, onClose, onRefresh }: CommandPaletteProps
               >
                 {section.group}
               </Typography.Text>
-              {section.items.map((cmd) => {
-                flatIndex += 1
-                const index = flatIndex
+              {section.items.map((cmd, itemIdx) => {
+                const index = (groupStartIndex.get(section.group) ?? 0) + itemIdx
                 const isActive = index === active
                 const Icon = cmd.icon
                 return (

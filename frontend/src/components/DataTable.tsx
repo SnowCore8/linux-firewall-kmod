@@ -76,7 +76,7 @@ export function DataTable<T extends object>({
         loading={isFetching}
         sticky
         locale={{ emptyText: emptyNode }}
-        rowKey={tableProps.rowKey ?? ((record) => JSON.stringify(record))}
+        rowKey={tableProps.rowKey ?? ((_, index) => (index ?? 0).toString())}
       />
     )
   }

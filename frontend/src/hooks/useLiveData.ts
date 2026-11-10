@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAsync } from './useAsync.ts'
 import { nextSeq, pickFresher } from '../lib/freshness.ts'
 import type { ApiError } from '../api/client.ts'
@@ -51,10 +51,19 @@ export function useLiveData<T>(options: LiveDataOptions<T>): LiveDataResult<T> {
 
   const query = useAsync<T>(rest, { refreshInterval, enabled })
 
-  // 给每次 REST 成功落地盖一个 seq（data 引用每轮都变，effect 随之重新盖号）
+  // 给每次 REST 成功落地盖一个 seq，但仅在数据真正变化时推进（避免 REST 轮询淹没 SSE）
   const [restStamped, setRestStamped] = useState<{ data: T; seq: number } | null>(null)
+  const prevDataRef = useRef<T | null>(null)
   useEffect(() => {
-    if (query.data != null) setRestStamped({ data: query.data, seq: nextSeq() })
+    if (query.data != null) {
+      // 浅比较：JSON.stringify 对 API 响应足够安全，避免引用变化触发无意义序号推进
+      const changed = prevDataRef.current === null ||
+        JSON.stringify(prevDataRef.current) !== JSON.stringify(query.data)
+      if (changed) {
+        prevDataRef.current = query.data
+        setRestStamped({ data: query.data, seq: nextSeq() })
+      }
+    }
   }, [query.data])
 
   const sseStamped = useMemo(
