@@ -199,7 +199,9 @@ func parseConfigFrom(content string, cfg *Config, runtimeOverride, strict bool) 
 	// 6. capacity
 	applyCapacity(&yc, cfg)
 	// 7. threat_feeds
-	applyThreatFeeds(&yc, cfg)
+	if err := applyThreatFeeds(&yc, cfg); err != nil {
+		return err
+	}
 	// 8~10. geoip / 本机坐标 / 探测地址
 	if err := applyGeoip(&yc, cfg); err != nil {
 		return err
@@ -580,18 +582,28 @@ func applyCapacity(yc *yamlConfig, cfg *Config) {
 }
 
 // applyThreatFeeds 应用威胁情报源配置。
-func applyThreatFeeds(yc *yamlConfig, cfg *Config) {
+func applyThreatFeeds(yc *yamlConfig, cfg *Config) error {
 	tf := yc.ThreatFeeds
 	if tf == nil {
-		return
+		return nil
 	}
 	setBool(&cfg.ThreatFeeds.Enabled, tf.Enabled)
-	setU32(&cfg.ThreatFeeds.RefreshInterval, tf.RefreshInterval)
-	setU32(&cfg.ThreatFeeds.HTTPTimeout, tf.HTTPTimeout)
+	if err := setU32Bounded(&cfg.ThreatFeeds.RefreshInterval, tf.RefreshInterval, 60, 86400, "threat_feeds.refresh_interval"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.ThreatFeeds.HTTPTimeout, tf.HTTPTimeout, 5, 300, "threat_feeds.http_timeout"); err != nil {
+		return err
+	}
 	if tf.MaxRetries != nil {
+		if *tf.MaxRetries < 0 || *tf.MaxRetries > 10 {
+			return fmt.Errorf("threat_feeds.max_retries 必须在 0-10 范围内，实际是 %d", *tf.MaxRetries)
+		}
 		cfg.ThreatFeeds.MaxRetries = *tf.MaxRetries
 	}
 	if tf.FailureThreshold != nil {
+		if *tf.FailureThreshold < 1 || *tf.FailureThreshold > 100 {
+			return fmt.Errorf("threat_feeds.failure_threshold 必须在 1-100 范围内，实际是 %d", *tf.FailureThreshold)
+		}
 		cfg.ThreatFeeds.FailureThreshold = *tf.FailureThreshold
 	}
 	if tf.CooldownDuration != nil {
@@ -615,6 +627,7 @@ func applyThreatFeeds(yc *yamlConfig, cfg *Config) {
 			cfg.ThreatFeeds.Sources = append(cfg.ThreatFeeds.Sources, sc)
 		}
 	}
+	return nil
 }
 
 // applyGeoip 应用 geoip 段与本机坐标 / 探测地址。
