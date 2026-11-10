@@ -37,7 +37,7 @@ type fileSink struct {
 //
 // maxBytes 为 0 表示关闭轮转；maxFiles 至少为 1（1 表示只留当前片）。
 func newFileSink(path string, maxBytes uint64, maxFiles uint32) (*fileSink, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +109,7 @@ func (s *fileSink) rotate() error {
 	if err := os.Rename(s.path, rotatedPath(s.path, 1)); err != nil {
 		return err
 	}
-	next, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	next, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err != nil {
 		return err
 	}

@@ -154,7 +154,7 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, up
 		h.server.logger.Warn("配置正则未能编译，该 jail 退化为其关键字回退", "detail", warning)
 	}
 
-	if err := os.WriteFile(path, []byte(merged), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(merged), 0o600); err != nil {
 		h.server.logger.Error("写入配置文件失败", "path", path, "error", err)
 		WriteCode(w, httpcontract.Code40004, "更新配置失败：写入配置文件失败")
 		return false
