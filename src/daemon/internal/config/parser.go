@@ -187,7 +187,9 @@ func parseConfigFrom(content string, cfg *Config, runtimeOverride, strict bool) 
 		return err
 	}
 	// 3. ddos
-	applyDdos(&yc, cfg)
+	if err := applyDdos(&yc, cfg); err != nil {
+		return err
+	}
 	// 4. webui
 	applyWebui(&yc, cfg)
 	// 5. trusted_ips
@@ -259,9 +261,15 @@ func applyDefaults(yc *yamlConfig, cfg *Config) error {
 		cfg.LogFormat = v
 	}
 	if d.LogMaxSizeMB != nil {
+		if *d.LogMaxSizeMB > 100000 {
+			return fmt.Errorf("log_max_size_mb 不能超过 100000 (100GB)")
+		}
 		cfg.LogMaxSizeMB = *d.LogMaxSizeMB
 	}
 	if d.LogMaxFiles != nil {
+		if *d.LogMaxFiles > 1000 {
+			return fmt.Errorf("log_max_files 不能超过 1000")
+		}
 		cfg.LogMaxFiles = *d.LogMaxFiles
 	}
 	// 历史库：路径是总开关——空串时 persist 根本不建，面板的分析面（复发/分级成效/时长
@@ -498,20 +506,30 @@ func applySmartDefaults(j *Jail, hasRetries, hasFindtime, hasBantime bool) {
 	}
 }
 
-func applyDdos(yc *yamlConfig, cfg *Config) {
+func applyDdos(yc *yamlConfig, cfg *Config) error {
 	d := yc.Ddos
 	if d == nil {
-		return
+		return nil
 	}
 	setBool(&cfg.Ddos.Enabled, d.Enabled)
-	setU32(&cfg.Ddos.GlobalConnRate, d.GlobalConnRate)
+	if err := setU32Bounded(&cfg.Ddos.GlobalConnRate, d.GlobalConnRate, 1, 10000000, "ddos.global_conn_rate"); err != nil {
+		return err
+	}
 	setU32(&cfg.Ddos.AutoBanDuration, d.AutoBanDuration)
 	setU32(&cfg.Ddos.AutoBanThreshold, d.AutoBanThreshold)
-	setU32(&cfg.Ddos.CheckInterval, d.CheckInterval)
+	if err := setU32Bounded(&cfg.Ddos.CheckInterval, d.CheckInterval, 1, 3600, "ddos.check_interval"); err != nil {
+		return err
+	}
 	setU32(&cfg.Ddos.BaselineWarmupSample, d.BaselineWarmupSample)
-	setU32(&cfg.Ddos.MaxSynPerSecond, d.MaxSynPerSecond)
-	setU32(&cfg.Ddos.MaxUDPPerSecond, d.MaxUDPPerSecond)
-	setU32(&cfg.Ddos.MaxICMPPerSecond, d.MaxICMPPerSecond)
+	if err := setU32Bounded(&cfg.Ddos.MaxSynPerSecond, d.MaxSynPerSecond, 1, 10000000, "ddos.max_syn_per_second"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Ddos.MaxUDPPerSecond, d.MaxUDPPerSecond, 1, 10000000, "ddos.max_udp_per_second"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Ddos.MaxICMPPerSecond, d.MaxICMPPerSecond, 1, 10000000, "ddos.max_icmp_per_second"); err != nil {
+		return err
+	}
 	setU32(&cfg.Ddos.MaxACKPerSecond, d.MaxACKPerSecond)
 	setU32(&cfg.Ddos.MaxRSTPerSecond, d.MaxRSTPerSecond)
 	setU32(&cfg.Ddos.MaxFINPerSecond, d.MaxFINPerSecond)
@@ -521,6 +539,7 @@ func applyDdos(yc *yamlConfig, cfg *Config) {
 	setU32(&cfg.Ddos.MaxBansPerSecond, d.MaxBansPerSecond)
 	setU32(&cfg.Ddos.MaxRateEntries, d.MaxRateEntries)
 	setBool(&cfg.Ddos.ProtectOpenPorts, d.ProtectOpenPorts)
+	return nil
 }
 
 func applyWebui(yc *yamlConfig, cfg *Config) {
@@ -723,6 +742,16 @@ func setU32(dst *uint32, v *uint32) {
 	if v != nil {
 		*dst = *v
 	}
+}
+
+func setU32Bounded(dst *uint32, v *uint32, min, max uint32, name string) error {
+	if v != nil {
+		if *v < min || *v > max {
+			return fmt.Errorf("%s 必须在 %d-%d 范围内，实际是 %d", name, min, max, *v)
+		}
+		*dst = *v
+	}
+	return nil
 }
 
 func setU64(dst *uint64, v *uint64) {
