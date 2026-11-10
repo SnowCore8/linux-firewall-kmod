@@ -97,7 +97,7 @@ func classifyBruteforceIncrement(payload map[string]any) float64 {
 		return 5.0
 	}
 	if rate, ok := payload["rate"]; ok {
-		if r, ok := rate.(float64); ok && r > 100 {
+		if r, ok := toFloat64(rate); ok && r > 100 {
 			return 10.0
 		}
 	}

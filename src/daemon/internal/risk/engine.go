@@ -1,6 +1,7 @@
 package risk
 
 import (
+	"math"
 	"sync"
 	"time"
 )
@@ -41,6 +42,16 @@ func NewEngine(weights DimensionWeights) *Engine {
 // ip 是来源 IP，eventType 是事件类型，increment 是向量增量。
 // 返回更新后的向量（已衰减）。
 func (e *Engine) RecordEvent(ip string, eventType EventType, increment float64) RiskVector {
+	// 验证增量：负值/NaN/Inf 会破坏风险计算，直接忽略
+	if increment < 0 || math.IsNaN(increment) || math.IsInf(increment, 0) {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if cached, ok := e.vectors[ip]; ok {
+			return cached.vector
+		}
+		return RiskVector{}
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
