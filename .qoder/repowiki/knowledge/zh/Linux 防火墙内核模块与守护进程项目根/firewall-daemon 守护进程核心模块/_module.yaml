@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: daemon
+title: firewall-daemon 守护进程核心模块
+scope:
+    - src/daemon/
+source_files: []
+depends_on: []
+related_to: []

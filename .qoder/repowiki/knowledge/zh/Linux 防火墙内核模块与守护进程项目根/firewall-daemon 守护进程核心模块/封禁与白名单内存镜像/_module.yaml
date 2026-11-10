@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: daemon/bans_and_whitelist
+title: 封禁与白名单内存镜像
+scope:
+    - src/daemon/internal/bans/
+source_files: []
+depends_on: []
+related_to: []

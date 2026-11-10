@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: daemon/http_api_server/analysis_recommendations
+title: 综合分析、白名单推荐与风险向量 API
+scope:
+    - src/daemon/internal/http/analysis.go
+    - src/daemon/internal/http/recommendations.go
+    - src/daemon/internal/http/risk.go
+source_files: []
+depends_on: []
+related_to: []

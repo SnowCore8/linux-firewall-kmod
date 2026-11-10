@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: daemon/jail_management
+title: Jail 配置后处理与规则编译
+scope:
+    - src/daemon/internal/jail/
+source_files: []
+depends_on: []
+related_to: []

@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: daemon/ingest_pipeline
+title: 日志采集与解析管线（inotify 读取 + 行分割 + IP 提取）
+scope:
+    - src/daemon/internal/ingest/
+    - src/daemon/internal/logparse/
+source_files: []
+depends_on: []
+related_to: []

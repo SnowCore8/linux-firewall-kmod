@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: daemon/wire_contract
+title: netlink 内核-守护进程线格式契约绑定
+scope:
+    - src/daemon/internal/contract/
+source_files: []
+depends_on: []
+related_to: []

@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: daemon/http_api_server/metrics_stats_health
+title: HTTP 监控指标、统计总览与健康探针端点
+scope:
+    - src/daemon/internal/http/metrics.go
+    - src/daemon/internal/http/stats.go
+    - src/daemon/internal/http/health.go
+source_files: []
+depends_on: []
+related_to: []

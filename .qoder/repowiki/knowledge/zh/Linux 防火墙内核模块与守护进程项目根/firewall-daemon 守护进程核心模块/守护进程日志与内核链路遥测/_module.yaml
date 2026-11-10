@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: daemon/logging_telemetry
+title: 守护进程日志与内核链路遥测
+scope:
+    - src/daemon/internal/logger/
+    - src/daemon/internal/telemetry/
+source_files: []
+depends_on: []
+related_to: []

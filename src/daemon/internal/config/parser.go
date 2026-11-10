@@ -191,13 +191,17 @@ func parseConfigFrom(content string, cfg *Config, runtimeOverride, strict bool) 
 		return err
 	}
 	// 4. webui
-	applyWebui(&yc, cfg)
+	if err := applyWebui(&yc, cfg); err != nil {
+		return err
+	}
 	// 5. trusted_ips
 	if yc.TrustedIPs != nil {
 		cfg.TrustedIPs = append([]string(nil), yc.TrustedIPs...)
 	}
 	// 6. capacity
-	applyCapacity(&yc, cfg)
+	if err := applyCapacity(&yc, cfg); err != nil {
+		return err
+	}
 	// 7. threat_feeds
 	if err := applyThreatFeeds(&yc, cfg); err != nil {
 		return err
@@ -544,41 +548,79 @@ func applyDdos(yc *yamlConfig, cfg *Config) error {
 	return nil
 }
 
-func applyWebui(yc *yamlConfig, cfg *Config) {
+func applyWebui(yc *yamlConfig, cfg *Config) error {
 	w := yc.Webui
 	if w == nil {
-		return
+		return nil
 	}
-	setU32(&cfg.Webui.SSEPushInterval, w.SSEPushInterval)
+	if err := setU32Bounded(&cfg.Webui.SSEPushInterval, w.SSEPushInterval, 1, 60, "webui.sse_push_interval"); err != nil {
+		return err
+	}
 	setU64(&cfg.Webui.RateWarningPPS, w.RateWarningPPS)
 	setU64(&cfg.Webui.RateCriticalPPS, w.RateCriticalPPS)
 	setU64(&cfg.Webui.RateWarningSYN, w.RateWarningSYN)
 	setU64(&cfg.Webui.RateCriticalSYN, w.RateCriticalSYN)
-	setU32(&cfg.Webui.MaxSynPerSecond, w.MaxSynPerSecond)
-	setU32(&cfg.Webui.MaxUDPPerSecond, w.MaxUDPPerSecond)
-	setU32(&cfg.Webui.MaxICMPPerSecond, w.MaxICMPPerSecond)
-	setU32(&cfg.Webui.MaxACKPerSecond, w.MaxACKPerSecond)
-	setU32(&cfg.Webui.MaxRSTPerSecond, w.MaxRSTPerSecond)
-	setU32(&cfg.Webui.MaxFINPerSecond, w.MaxFINPerSecond)
+	if cfg.Webui.RateWarningPPS >= cfg.Webui.RateCriticalPPS {
+		return fmt.Errorf("webui.rate_warning_pps(%d) 必须小于 rate_critical_pps(%d)", cfg.Webui.RateWarningPPS, cfg.Webui.RateCriticalPPS)
+	}
+	if cfg.Webui.RateWarningSYN >= cfg.Webui.RateCriticalSYN {
+		return fmt.Errorf("webui.rate_warning_syn(%d) 必须小于 rate_critical_syn(%d)", cfg.Webui.RateWarningSYN, cfg.Webui.RateCriticalSYN)
+	}
+	if err := setU32Bounded(&cfg.Webui.MaxSynPerSecond, w.MaxSynPerSecond, 1, 10_000_000, "webui.max_syn_per_second"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Webui.MaxUDPPerSecond, w.MaxUDPPerSecond, 1, 10_000_000, "webui.max_udp_per_second"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Webui.MaxICMPPerSecond, w.MaxICMPPerSecond, 1, 10_000_000, "webui.max_icmp_per_second"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Webui.MaxACKPerSecond, w.MaxACKPerSecond, 1, 10_000_000, "webui.max_ack_per_second"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Webui.MaxRSTPerSecond, w.MaxRSTPerSecond, 1, 10_000_000, "webui.max_rst_per_second"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Webui.MaxFINPerSecond, w.MaxFINPerSecond, 1, 10_000_000, "webui.max_fin_per_second"); err != nil {
+		return err
+	}
 	setBool(&cfg.Webui.StaticThreshold, w.StaticThreshold)
 	setBool(&cfg.Webui.DynamicThreshold, w.DynamicThreshold)
 	setBool(&cfg.Webui.DdosDetection, w.DdosDetection)
-	setU32(&cfg.Webui.MaxBanEntries, w.MaxBanEntries)
-	setU32(&cfg.Webui.MaxWhitelistEntries, w.MaxWhitelistEntries)
-	setU32(&cfg.Webui.MaxRateEntries, w.MaxRateEntries)
-	setU32(&cfg.Webui.MaxLocalIPCache, w.MaxLocalIPCache)
+	if err := setU32Bounded(&cfg.Webui.MaxBanEntries, w.MaxBanEntries, 1, 10_000_000, "webui.max_ban_entries"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Webui.MaxWhitelistEntries, w.MaxWhitelistEntries, 1, 1_000_000, "webui.max_whitelist_entries"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Webui.MaxRateEntries, w.MaxRateEntries, 1, 10_000_000, "webui.max_rate_entries"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Webui.MaxLocalIPCache, w.MaxLocalIPCache, 1, 1_000_000, "webui.max_local_ip_cache"); err != nil {
+		return err
+	}
 	setString(&cfg.Webui.ClearLogsAt, w.ClearLogsAt)
+	return nil
 }
 
-func applyCapacity(yc *yamlConfig, cfg *Config) {
+func applyCapacity(yc *yamlConfig, cfg *Config) error {
 	c := yc.Capacity
 	if c == nil {
-		return
+		return nil
 	}
-	setU32(&cfg.Capacity.MaxBanEntries, c.MaxBanEntries)
-	setU32(&cfg.Capacity.MaxWhitelistEntries, c.MaxWhitelistEntries)
-	setU32(&cfg.Capacity.MaxRateEntries, c.MaxRateEntries)
-	setU32(&cfg.Capacity.MaxLocalIPCache, c.MaxLocalIPCache)
+	if err := setU32Bounded(&cfg.Capacity.MaxBanEntries, c.MaxBanEntries, 1, 10_000_000, "capacity.max_ban_entries"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Capacity.MaxWhitelistEntries, c.MaxWhitelistEntries, 1, 1_000_000, "capacity.max_whitelist_entries"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Capacity.MaxRateEntries, c.MaxRateEntries, 1, 10_000_000, "capacity.max_rate_entries"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Capacity.MaxLocalIPCache, c.MaxLocalIPCache, 1, 1_000_000, "capacity.max_local_ip_cache"); err != nil {
+		return err
+	}
+	return nil
 }
 
 // applyThreatFeeds 应用威胁情报源配置。

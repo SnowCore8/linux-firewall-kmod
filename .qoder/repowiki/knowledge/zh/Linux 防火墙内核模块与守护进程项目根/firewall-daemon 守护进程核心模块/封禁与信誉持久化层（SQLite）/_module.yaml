@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: daemon/persistence
+title: 封禁与信誉持久化层（SQLite）
+scope:
+    - src/daemon/internal/persist/
+source_files: []
+depends_on: []
+related_to: []

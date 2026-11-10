@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: kernel_module
+title: 内核态 IP 防火墙模块（netfilter + netlink）
+scope:
+    - src/kernel-module/
+source_files: []
+depends_on: []
+related_to: []

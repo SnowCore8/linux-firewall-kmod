@@ -1,0 +1,28 @@
+schema_version: 1
+module_path: ""
+title: Linux 防火墙内核模块与守护进程项目根
+scope:
+    - README.md
+    - CONTRIBUTING.md
+    - SECURITY.md
+    - .gitignore
+    - .clang-format
+    - .yamllint
+    - Makefile
+    - Makefile.dkms
+    - dkms.conf
+    - build-deb.sh
+    - firewall-daemon.service
+    - package.json
+    - package-lock.json
+    - pyproject.toml
+    - skills-lock.json
+    - AGENTS.md
+    - CHANGELOG.md
+    - LICENSE
+    - NOTICE
+    - STANDARDS.md
+    - playwright.config.ts
+source_files: []
+depends_on: []
+related_to: []

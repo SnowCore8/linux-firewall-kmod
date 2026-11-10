@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: daemon/analysis_risk_engine
+title: 威胁分析、风险向量与封禁判定引擎
+scope:
+    - src/daemon/internal/analysis/
+    - src/daemon/internal/risk/
+    - src/daemon/internal/detect/
+source_files: []
+depends_on: []
+related_to: []

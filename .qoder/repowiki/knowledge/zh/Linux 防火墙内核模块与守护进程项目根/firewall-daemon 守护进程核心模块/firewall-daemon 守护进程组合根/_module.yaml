@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: daemon/cmd_firewall_daemon
+title: firewall-daemon 守护进程组合根
+scope:
+    - src/daemon/cmd/firewall-daemon/
+source_files: []
+depends_on: []
+related_to: []

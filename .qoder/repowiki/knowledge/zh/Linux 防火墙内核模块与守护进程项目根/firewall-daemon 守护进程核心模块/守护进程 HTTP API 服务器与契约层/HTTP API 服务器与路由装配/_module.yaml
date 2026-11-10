@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: daemon/http_api_server/core_routing
+title: HTTP API 服务器与路由装配
+scope:
+    - src/daemon/internal/http/server.go
+    - src/daemon/internal/http/routes.go
+    - src/daemon/internal/http/handlers.go
+source_files: []
+depends_on: []
+related_to: []

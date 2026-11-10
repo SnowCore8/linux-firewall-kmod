@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: daemon/runtime_supervisor
+title: 入站日志封禁运行时与执行体编排
+scope:
+    - src/daemon/internal/runtime/
+source_files: []
+depends_on: []
+related_to: []

@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: daemon/config_loader
+title: 守护进程配置加载与模型
+scope:
+    - src/daemon/internal/config/
+source_files: []
+depends_on: []
+related_to: []

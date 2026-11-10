@@ -1,0 +1,290 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+branch: qwen-fix-scripts
+nodes_managed: true
+exported_at: "2026-11-10T01:57:53Z"
+modules:
+    "":
+        dir_name: Linux 防火墙内核模块与守护进程项目根
+        title: Linux 防火墙内核模块与守护进程项目根
+        scope:
+            - README.md
+            - CONTRIBUTING.md
+            - SECURITY.md
+            - .gitignore
+            - .clang-format
+            - .yamllint
+            - Makefile
+            - Makefile.dkms
+            - dkms.conf
+            - build-deb.sh
+            - firewall-daemon.service
+            - package.json
+            - package-lock.json
+            - pyproject.toml
+            - skills-lock.json
+            - AGENTS.md
+            - CHANGELOG.md
+            - LICENSE
+            - NOTICE
+            - STANDARDS.md
+            - playwright.config.ts
+        source_files: []
+        children:
+            - build_scripts
+            - config_and_infra
+            - contract_generator
+            - daemon
+            - docs
+            - frontend
+            - kernel_module
+            - tests
+        depends_on: []
+        related_to: []
+    build_scripts:
+        dir_name: 构建、打包与部署脚本集
+        title: 构建、打包与部署脚本集
+        scope:
+            - scripts/
+            - debian/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    config_and_infra:
+        dir_name: 守护进程配置、监控与 CI_CD 基础设施
+        title: 守护进程配置、监控与 CI/CD 基础设施
+        scope:
+            - config/
+            - grafana/
+            - .github/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    contract_generator:
+        dir_name: 契约 IDL 与跨端一致性校验
+        title: 契约 IDL 与跨端一致性校验
+        scope:
+            - contract/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    daemon:
+        dir_name: firewall-daemon 守护进程核心模块
+        title: firewall-daemon 守护进程核心模块
+        scope:
+            - src/daemon/
+        source_files: []
+        children:
+            - daemon/analysis_risk_engine
+            - daemon/bans_and_whitelist
+            - daemon/cmd_firewall_daemon
+            - daemon/config_loader
+            - daemon/http_api_server
+            - daemon/ingest_pipeline
+            - daemon/jail_management
+            - daemon/kernel_ipc_transport
+            - daemon/logging_telemetry
+            - daemon/persistence
+            - daemon/runtime_supervisor
+            - daemon/threat_feeds
+            - daemon/wire_contract
+        depends_on: []
+        related_to: []
+    daemon/analysis_risk_engine:
+        dir_name: 威胁分析、风险向量与封禁判定引擎
+        title: 威胁分析、风险向量与封禁判定引擎
+        scope:
+            - src/daemon/internal/analysis/
+            - src/daemon/internal/risk/
+            - src/daemon/internal/detect/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    daemon/bans_and_whitelist:
+        dir_name: 封禁与白名单内存镜像
+        title: 封禁与白名单内存镜像
+        scope:
+            - src/daemon/internal/bans/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    daemon/cmd_firewall_daemon:
+        dir_name: firewall-daemon 守护进程组合根
+        title: firewall-daemon 守护进程组合根
+        scope:
+            - src/daemon/cmd/firewall-daemon/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    daemon/config_loader:
+        dir_name: 守护进程配置加载与模型
+        title: 守护进程配置加载与模型
+        scope:
+            - src/daemon/internal/config/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    daemon/http_api_server:
+        dir_name: 守护进程 HTTP API 服务器与契约层
+        title: 守护进程 HTTP API 服务器与契约层
+        scope:
+            - src/daemon/internal/http/
+            - src/daemon/internal/httpcontract/
+        source_files: []
+        children:
+            - daemon/http_api_server/analysis_recommendations
+            - daemon/http_api_server/core_routing
+            - daemon/http_api_server/metrics_stats_health
+        depends_on: []
+        related_to: []
+    daemon/http_api_server/analysis_recommendations:
+        dir_name: 综合分析、白名单推荐与风险向量 API
+        title: 综合分析、白名单推荐与风险向量 API
+        scope:
+            - src/daemon/internal/http/analysis.go
+            - src/daemon/internal/http/recommendations.go
+            - src/daemon/internal/http/risk.go
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    daemon/http_api_server/core_routing:
+        dir_name: HTTP API 服务器与路由装配
+        title: HTTP API 服务器与路由装配
+        scope:
+            - src/daemon/internal/http/server.go
+            - src/daemon/internal/http/routes.go
+            - src/daemon/internal/http/handlers.go
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    daemon/http_api_server/metrics_stats_health:
+        dir_name: HTTP 监控指标、统计总览与健康探针端点
+        title: HTTP 监控指标、统计总览与健康探针端点
+        scope:
+            - src/daemon/internal/http/metrics.go
+            - src/daemon/internal/http/stats.go
+            - src/daemon/internal/http/health.go
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    daemon/ingest_pipeline:
+        dir_name: 日志采集与解析管线（inotify 读取 + 行分割 + IP 提取）
+        title: 日志采集与解析管线（inotify 读取 + 行分割 + IP 提取）
+        scope:
+            - src/daemon/internal/ingest/
+            - src/daemon/internal/logparse/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    daemon/jail_management:
+        dir_name: Jail 配置后处理与规则编译
+        title: Jail 配置后处理与规则编译
+        scope:
+            - src/daemon/internal/jail/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    daemon/kernel_ipc_transport:
+        dir_name: 内核 netlink IPC 传输层
+        title: 内核 netlink IPC 传输层
+        scope:
+            - src/daemon/internal/kernel/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    daemon/logging_telemetry:
+        dir_name: 守护进程日志与内核链路遥测
+        title: 守护进程日志与内核链路遥测
+        scope:
+            - src/daemon/internal/logger/
+            - src/daemon/internal/telemetry/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    daemon/persistence:
+        dir_name: 封禁与信誉持久化层（SQLite）
+        title: 封禁与信誉持久化层（SQLite）
+        scope:
+            - src/daemon/internal/persist/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    daemon/runtime_supervisor:
+        dir_name: 入站日志封禁运行时与执行体编排
+        title: 入站日志封禁运行时与执行体编排
+        scope:
+            - src/daemon/internal/runtime/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    daemon/threat_feeds:
+        dir_name: 威胁情报源拉取与缓存子系统
+        title: 威胁情报源拉取与缓存子系统
+        scope:
+            - src/daemon/internal/threatfeeds/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    daemon/wire_contract:
+        dir_name: netlink 内核-守护进程线格式契约绑定
+        title: netlink 内核-守护进程线格式契约绑定
+        scope:
+            - src/daemon/internal/contract/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    docs:
+        dir_name: 项目文档站点（GitBook_HonKit）
+        title: 项目文档站点（GitBook/HonKit）
+        scope:
+            - docs/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    frontend:
+        dir_name: 防火墙控制面板前端（React + Vite + Ant Design）
+        title: 防火墙控制面板前端（React + Vite + Ant Design）
+        scope:
+            - frontend/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    kernel_module:
+        dir_name: 内核态 IP 防火墙模块（netfilter + netlink）
+        title: 内核态 IP 防火墙模块（netfilter + netlink）
+        scope:
+            - src/kernel-module/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    tests:
+        dir_name: 内核模块与守护进程集成测试套件
+        title: 内核模块与守护进程集成测试套件
+        scope:
+            - tests/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
