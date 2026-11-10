@@ -37,12 +37,25 @@ export default defineConfig({
     assetsDir: '',
     // 单一 CSS 文件，减少请求数
     cssCodeSplit: false,
+    // vendor chunk（echarts/antd）体积大但可长期缓存，提高警告阈值避免噪音
+    chunkSizeWarningLimit: 1500,
     rollupOptions: {
       output: {
         // 固定入口文件名，index.html 引用稳定
         entryFileNames: 'app.js',
         chunkFileNames: 'chunk-[name].js',
         assetFileNames: '[name].[ext]',
+        // 手动分割大依赖，避免单个 chunk 超过 500 kB 警告阈值
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            // ECharts 体积大且仅在图表页使用，独立 chunk 按需加载
+            if (id.includes('echarts')) return 'vendor-echarts'
+            // Ant Design 组件库独立，避免与业务代码混在一起
+            if (id.includes('antd') || id.includes('@ant-design')) return 'vendor-antd'
+            // React 核心稳定不变，长期缓存
+            if (id.includes('react')) return 'vendor-react'
+          }
+        },
       },
     },
   },
