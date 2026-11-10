@@ -85,7 +85,7 @@ func (h *APIHandlers) AddWhitelist(w http.ResponseWriter, r *http.Request) {
 		if err := h.kernelWhitelist.Add(prefix.Addr(), uint8(prefix.Bits()), ""); err != nil {
 			h.server.logger.Error("内核白名单下发失败", "cidr", prefix.String(), "error", err)
 			bans.GlobalWhitelist().Remove(prefix)
-			WriteCode(w, httpcontract.Code40003, "添加白名单失败：内核未确认（"+err.Error()+"）")
+			WriteCode(w, httpcontract.Code40003, "添加白名单失败：内核未确认")
 			return
 		}
 	}

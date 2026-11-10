@@ -26,7 +26,8 @@ func (h *APIHandlers) RiskVectors(w http.ResponseWriter, r *http.Request) {
 
 	vec, err := h.db.GetRiskVector(addr.String())
 	if err != nil {
-		WriteInternalError(w, "query risk vector failed: "+err.Error())
+		h.server.logger.Error("query risk vector failed", "ip", addr.String(), "error", err)
+		WriteInternalError(w, "查询风险向量失败")
 		return
 	}
 
@@ -65,7 +66,8 @@ func (h *APIHandlers) ListRiskVectors(w http.ResponseWriter, r *http.Request) {
 
 	vectors, err := h.db.GetAllRiskVectors()
 	if err != nil {
-		WriteInternalError(w, "query risk vectors failed: "+err.Error())
+		h.server.logger.Error("query risk vectors failed", "error", err)
+		WriteInternalError(w, "查询风险向量列表失败")
 		return
 	}
 
@@ -111,7 +113,8 @@ func (h *APIHandlers) RiskEvents(w http.ResponseWriter, r *http.Request) {
 	// 查询该 IP 的所有事件（最近 100 条）
 	events, err := h.db.GetEventsSince(addr.String(), 0)
 	if err != nil {
-		WriteInternalError(w, "query events failed: "+err.Error())
+		h.server.logger.Error("query events failed", "ip", addr.String(), "error", err)
+		WriteInternalError(w, "查询攻击事件失败")
 		return
 	}
 

@@ -38,7 +38,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodyBytes+1))
 	if err != nil {
-		WriteCode(w, httpcontract.Code40007, "读取请求体失败: "+err.Error())
+		WriteCode(w, httpcontract.Code40007, "读取请求体失败")
 		return false
 	}
 	if len(raw) > maxRequestBodyBytes {
@@ -46,7 +46,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	if err := json.Unmarshal(raw, dst); err != nil {
-		WriteCode(w, httpcontract.Code40007, "请求体解析失败: "+err.Error())
+		WriteCode(w, httpcontract.Code40007, "请求体解析失败：请检查 JSON 格式与字段类型")
 		return false
 	}
 	return true

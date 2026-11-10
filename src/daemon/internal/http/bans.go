@@ -247,7 +247,7 @@ func (h *APIHandlers) UnbanAllTemporary(w http.ResponseWriter, r *http.Request) 
 			prefixLen := bans.FullPrefixLen(addr)
 			if err := h.kernelBan.Remove(addr, prefixLen); err != nil {
 				h.server.logger.Error("批量内核解封失败", "ip", ip, "error", err)
-				failed = append(failed, ip+"（"+err.Error()+"）")
+				failed = append(failed, ip+"（内核解封失败）")
 			}
 		}
 	}

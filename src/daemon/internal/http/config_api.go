@@ -97,7 +97,6 @@ func (h *APIHandlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		WriteCode(w, httpcontract.Code40004, "更新配置失败："+err.Error())
 		return
 	}
-
 	// 提交了任一字段就走写盘 + 下发路径；空 body（什么都没提交）时 fileBacked 为假，既不改
 	// 文件也不下发，只回当前快照。写盘路径在文件写成功的那一刻把内存对齐（在 persistWebui
 	// 内完成），所以下面统一拿 cfg.Webui 组响应。
@@ -133,21 +132,21 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, up
 	content, err := os.ReadFile(path)
 	if err != nil {
 		h.server.logger.Error("读取配置文件失败", "path", path, "error", err)
-		WriteCode(w, httpcontract.Code40004, "更新配置失败：读取 "+path+" 失败（"+err.Error()+"）")
+		WriteCode(w, httpcontract.Code40004, "更新配置失败：读取配置文件失败")
 		return false
 	}
 
 	merged, err := patchWebuiYAML(string(content), updated)
 	if err != nil {
 		h.server.logger.Error("合并 webui 段失败", "path", path, "error", err)
-		WriteCode(w, httpcontract.Code40004, "更新配置失败：合并 webui 段失败（"+err.Error()+"）")
+		WriteCode(w, httpcontract.Code40004, "更新配置失败：合并配置段失败")
 		return false
 	}
 
 	newCfg, warnings, err := loadConfigContent(merged)
 	if err != nil {
 		h.server.logger.Warn("配置内容未通过加载校验，拒绝写入", "error", err)
-		WriteCode(w, httpcontract.Code40004, "更新配置失败：内容按加载口径校验未通过（"+err.Error()+"），配置文件保持原样")
+		WriteCode(w, httpcontract.Code40004, "更新配置失败：配置内容校验未通过，配置文件保持原样")
 		return false
 	}
 	// 正则编译告警不拒绝写入（与启动/重载同口径），只逐条记下来。
@@ -157,7 +156,7 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, up
 
 	if err := os.WriteFile(path, []byte(merged), 0o644); err != nil {
 		h.server.logger.Error("写入配置文件失败", "path", path, "error", err)
-		WriteCode(w, httpcontract.Code40004, "更新配置失败：写入 "+path+" 失败（"+err.Error()+"）")
+		WriteCode(w, httpcontract.Code40004, "更新配置失败：写入配置文件失败")
 		return false
 	}
 	h.server.logger.Info("配置文件 webui 段已通过 API 更新", "path", path)
@@ -173,7 +172,7 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, up
 			// 配置。重载器随后还会重试，这里不把它算成已生效。
 			h.server.logger.Error("配置已落盘但下发内核失败", "path", path, "error", err)
 			WriteCode(w, httpcontract.Code50003,
-				"配置已写入 "+path+"，但下发内核失败（"+err.Error()+"）：内核保持原有取值，重载时会再次尝试")
+				"配置已写入，但下发内核失败：内核保持原有取值，重载时会再次尝试")
 			return false
 		}
 		if names := rejected.Names(); len(names) > 0 {

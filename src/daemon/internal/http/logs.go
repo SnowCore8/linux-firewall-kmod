@@ -346,7 +346,8 @@ func tailLogs(ctx context.Context, f *os.File, level string, conn *sseConn, done
 			}
 			if err := scanner.Err(); err != nil {
 				// 前端把 error 帧的 data 当人类可读文本直接显示，所以这里给纯文本而不是对象。
-				_ = conn.writeFrame("error", sseRaw("读取日志文件失败: "+err.Error()))
+				// 不暴露底层错误细节，只给通用提示。
+				_ = conn.writeFrame("error", sseRaw("读取日志文件失败"))
 				return
 			}
 		}
