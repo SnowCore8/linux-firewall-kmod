@@ -214,6 +214,8 @@ int fw_wl_remove(u8 af, const void *ip, u8 prefix_len) {
 
   if (!ip || (af != FW_AF_INET && af != FW_AF_INET6))
     return -EINVAL;
+  if (prefix_len > fw_wl_max_prefix(af))
+    return -EINVAL;
 
   /*
 	 * 本机接口地址不允许从白名单直接移除：它由 fw_netdev.c 依据接口状态维护。
@@ -249,6 +251,8 @@ int fw_wl_remove_quiet(u8 af, const void *ip, u8 prefix_len) {
   struct fw_wl_entry *e;
 
   if (!ip || (af != FW_AF_INET && af != FW_AF_INET6))
+    return -EINVAL;
+  if (prefix_len > fw_wl_max_prefix(af))
     return -EINVAL;
 
   spin_lock_bh(&fw_info.wl_lock);
