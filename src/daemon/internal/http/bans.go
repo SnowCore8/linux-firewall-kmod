@@ -8,6 +8,7 @@ package http
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"net/netip"
 	"sort"
@@ -29,6 +30,15 @@ type KernelBan interface {
 
 // batchBanMaxIPs 是 POST /api/v2/bans/batch 的单批上限（契约 code 40005 的 text 写死 100）。
 const batchBanMaxIPs = 100
+
+// banMaxDurationSecs 是单条封禁时长的上限（秒）。
+//
+// 内核模块用 u32 存 duration_secs（见 contract/netlink.fwidl 与 fw_ban.c 的
+// `n->unban_jiffies = jiffies + (unsigned long)duration_secs * HZ`），超过 math.MaxUint32
+// 的值会在 uint32() 强转时回绕，导致「想封 136 年结果变成永久」或「想封 10 年结果变成
+// 几分钟」这类与用户意图完全相反的静默错误。HTTP API 的 duration 是 Option<u64>，类型上
+// 装得下更大的数，故这里必须显式拦截。
+const banMaxDurationSecs = math.MaxUint32
 
 // 封禁列表的分页缺省与上限（契约 HTTP_BANS_DUAL_SHAPE 的 resolution 写死这三个数）。
 //
@@ -102,11 +112,17 @@ func (h *APIHandlers) ListBans(w http.ResponseWriter, r *http.Request) {
 //
 // 缺席与显式 0 都是永久（契约的 Option<u64> 加前端 types.ts 那句「0 或省略 = 永久」）；
 // 这里用指针把它们与「显式给了时长」分开，负数在 uint64 下根本解不进来。
-func durationSeconds(p *uint64) (secs int64, permanent bool) {
+//
+// 返回的 error 只在 duration 超过内核 u32 容量时非空：超过 math.MaxUint32 的值会在
+// uint32() 强转时回绕，导致封禁时长与用户意图完全相反（见 banMaxDurationSecs 注释）。
+func durationSeconds(p *uint64) (secs int64, permanent bool, err error) {
 	if p == nil || *p == 0 {
-		return 0, true
+		return 0, true, nil
 	}
-	return int64(*p), false
+	if *p > banMaxDurationSecs {
+		return 0, false, fmt.Errorf("duration=%d 超过上限 %d 秒", *p, banMaxDurationSecs)
+	}
+	return int64(*p), false, nil
 }
 
 // CreateBan 落一条封禁：镜像 → 内核 → 历史 → 推送，任一步失败都回业务码 40001。
@@ -125,7 +141,11 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	duration, isPermanent := durationSeconds(req.Duration)
+	duration, isPermanent, err := durationSeconds(req.Duration)
+	if err != nil {
+		WriteCode(w, httpcontract.Code40001, "封禁失败："+err.Error())
+		return
+	}
 	reason := "manual"
 	if req.Reason != nil && *req.Reason != "" {
 		reason = *req.Reason
@@ -302,6 +322,11 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 
 	duration := uint64(banDefaultBatchSecs)
 	if req.Duration != nil && *req.Duration > 0 {
+		if *req.Duration > banMaxDurationSecs {
+			WriteCode(w, httpcontract.Code40005, fmt.Sprintf(
+				"批量封禁参数非法：duration=%d 超过上限 %d 秒", *req.Duration, banMaxDurationSecs))
+			return
+		}
 		duration = *req.Duration
 	}
 	reason := "manual"
