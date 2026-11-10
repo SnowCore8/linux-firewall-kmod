@@ -4,8 +4,8 @@ import "strings"
 
 // toFloat64 把 payload 里的数值统一成 float64。
 //
-// JSON 反序列化后数字默认类型是 float64，但调用方也可能直接传 int。
-// 两处都认，避免类型断言失败导致分类逻辑永远走默认分支。
+// JSON 反序列化后数字默认类型是 float64，但调用方也可能直接传 int 或 uint。
+// 全部支持，避免类型断言失败导致分类逻辑永远走默认分支。
 func toFloat64(v any) (float64, bool) {
 	switch n := v.(type) {
 	case float64:
@@ -17,6 +17,16 @@ func toFloat64(v any) (float64, bool) {
 	case int64:
 		return float64(n), true
 	case int32:
+		return float64(n), true
+	case uint:
+		return float64(n), true
+	case uint64:
+		return float64(n), true
+	case uint32:
+		return float64(n), true
+	case uint16:
+		return float64(n), true
+	case uint8:
 		return float64(n), true
 	default:
 		return 0, false
@@ -82,7 +92,7 @@ func classifyScanIncrement(payload map[string]any) float64 {
 		}
 	}
 	if path, ok := payload["path"]; ok {
-		if p, ok := path.(string); ok && (strings.Contains(p, "..") || strings.Contains(p, "%2e")) {
+		if p, ok := path.(string); ok && (strings.Contains(p, "..") || strings.Contains(strings.ToLower(p), "%2e")) {
 			return 5.0
 		}
 	}
