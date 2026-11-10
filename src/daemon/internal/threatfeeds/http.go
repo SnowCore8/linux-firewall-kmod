@@ -119,10 +119,23 @@ func (c *HTTPClient) Fetch(ctx context.Context, urlStr string) ([]byte, error) {
 	}
 
 	var lastErr error
-	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+	// 负数 maxRetries 按 0 处理，避免跳过循环返回包装 nil 的错误
+	maxRetries := c.maxRetries
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
-			// 指数退避：1s, 2s, 4s
-			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			// 指数退避：1s, 2s, 4s, 8s, 16s，上限 30s
+			// 防止 attempt>=64 时 1<<uint(attempt-1) 溢出为 0 导致零延迟重试风暴
+			shift := attempt - 1
+			if shift > 4 {
+				shift = 4 // 上限 2^4 = 16s
+			}
+			backoff := time.Duration(1<<uint(shift)) * time.Second
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
+			}
 			select {
 			case <-time.After(backoff):
 			case <-ctx.Done():
