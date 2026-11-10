@@ -90,6 +90,8 @@ static struct sock *fw_nl_sock;
 static atomic_t fw_nl_seq = ATOMIC_INIT(0);
 static u32 fw_nl_daemon_portid;
 static unsigned long fw_nl_daemon_activity;
+/* 守护进程注册锁：保护 portid/activity 的读写，避免并发注册导致竞态 */
+static DEFINE_SPINLOCK(fw_nl_daemon_lock);
 
 /* 发送锁：保护发送与 socket 销毁之间的竞态。
  * 到期回调在 rcu_read_unlock() 之后发送，此时 fw_netlink_exit() 可能正在释放 socket。
@@ -853,40 +855,61 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
 
     /* ---- 单守护进程互斥：不同 portid 抢注册时，先探活旧 portid ---- */
     if (type == FW_MSG_TYPE_DAEMON_REGISTER) {
+      unsigned long flags;
+      bool reject = false;
+
+      spin_lock_irqsave(&fw_nl_daemon_lock, flags);
       if (fw_nl_daemon_portid && portid != fw_nl_daemon_portid) {
         bool within_timeout = time_before(jiffies, fw_nl_daemon_activity + FW_NL_DAEMON_TIMEOUT);
 
-        if (within_timeout && fw_nl_daemon_alive()) {
-          pr_warn("netlink: 拒绝注册 portid=%u（已注册 %u 仍活跃）\n", portid,
-                  fw_nl_daemon_portid);
-          fw_nl_send_register_ack(portid, be32_to_cpu(h->seq), 0);
-          goto next;
+        if (within_timeout) {
+          /* 释放锁后再探活（netlink_unicast 不可在持锁时调用） */
+          u32 old_portid = fw_nl_daemon_portid;
+          spin_unlock_irqrestore(&fw_nl_daemon_lock, flags);
+          if (fw_nl_daemon_alive()) {
+            pr_warn("netlink: 拒绝注册 portid=%u（已注册 %u 仍活跃）\n", portid, old_portid);
+            fw_nl_send_register_ack(portid, be32_to_cpu(h->seq), 0);
+            goto next;
+          }
+          pr_info("netlink: 原守护进程 portid=%u 已死，portid=%u 立即接管\n", old_portid, portid);
+          /* 重新加锁以完成注册 */
+          spin_lock_irqsave(&fw_nl_daemon_lock, flags);
         }
-        if (within_timeout)
-          pr_info("netlink: 原守护进程 portid=%u 已死，portid=%u 立即接管\n",
-                  fw_nl_daemon_portid, portid);
       }
       fw_nl_daemon_portid = portid;
       fw_nl_daemon_activity = jiffies;
-      pr_info("netlink: 守护进程已注册 portid=%u\n", portid);
-      fw_nl_send_register_ack(portid, be32_to_cpu(h->seq), 1);
+      spin_unlock_irqrestore(&fw_nl_daemon_lock, flags);
+
+      if (!reject) {
+        pr_info("netlink: 守护进程已注册 portid=%u\n", portid);
+        fw_nl_send_register_ack(portid, be32_to_cpu(h->seq), 1);
+      }
       goto next;
     }
 
-    if (!fw_nl_daemon_portid) {
-      pr_warn_ratelimited("netlink: 无守护进程注册，丢弃类型 %u\n", type);
-      goto next;
-    }
-    if (portid != fw_nl_daemon_portid) {
-      if (time_before(jiffies, fw_nl_daemon_activity + FW_NL_DAEMON_TIMEOUT)) {
-        pr_warn_ratelimited("netlink: 拒绝未注册 portid=%u 的指令\n", portid);
+    {
+      unsigned long flags;
+      u32 registered_portid;
+
+      spin_lock_irqsave(&fw_nl_daemon_lock, flags);
+      registered_portid = fw_nl_daemon_portid;
+      if (!registered_portid) {
+        spin_unlock_irqrestore(&fw_nl_daemon_lock, flags);
+        pr_warn_ratelimited("netlink: 无守护进程注册，丢弃类型 %u\n", type);
         goto next;
       }
-      pr_info("netlink: 原守护进程 portid=%u 超时，portid=%u 接管\n",
-              fw_nl_daemon_portid, portid);
-      fw_nl_daemon_portid = portid;
+      if (portid != registered_portid) {
+        if (time_before(jiffies, fw_nl_daemon_activity + FW_NL_DAEMON_TIMEOUT)) {
+          spin_unlock_irqrestore(&fw_nl_daemon_lock, flags);
+          pr_warn_ratelimited("netlink: 拒绝未注册 portid=%u 的指令\n", portid);
+          goto next;
+        }
+        pr_info("netlink: 原守护进程 portid=%u 超时，portid=%u 接管\n", registered_portid, portid);
+        fw_nl_daemon_portid = portid;
+      }
+      fw_nl_daemon_activity = jiffies;
+      spin_unlock_irqrestore(&fw_nl_daemon_lock, flags);
     }
-    fw_nl_daemon_activity = jiffies;
 
     switch (type) {
     case FW_MSG_TYPE_BAN_IP:
