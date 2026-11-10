@@ -9,16 +9,19 @@ import (
 // Engine 是多维风险向量引擎的状态管理器。
 //
 // 职责：
-//   - 维护内存缓存（LRU，避免每次查询都读数据库）
+//   - 维护内存缓存（带 TTL 过期与容量上限，避免每次查询都读数据库）
 //   - 记录事件并更新向量
 //   - 计算有效阈值（加法模型，修复旧乘法 Bug）
 //
 // 线程安全：所有公开方法都可并发调用。
 type Engine struct {
-	mu      sync.RWMutex
-	vectors map[string]*cachedVector
-	weights DimensionWeights
+	mu       sync.RWMutex
+	vectors  map[string]*cachedVector
+	weights  DimensionWeights
+	maxSize  int
 }
+
+const defaultMaxSize = 100000
 
 // cachedVector 是内存缓存的向量（带过期时间）。
 type cachedVector struct {
@@ -34,6 +37,7 @@ func NewEngine(weights DimensionWeights) *Engine {
 	return &Engine{
 		vectors: make(map[string]*cachedVector),
 		weights: weights,
+		maxSize: defaultMaxSize,
 	}
 }
 
@@ -58,6 +62,10 @@ func (e *Engine) RecordEvent(ip string, eventType EventType, increment float64) 
 	now := time.Now().Unix()
 	cached, ok := e.vectors[ip]
 	if !ok {
+		// 容量检查：超过上限时先清理过期条目，仍超则按 expiresAt 淘汰最旧的
+		if len(e.vectors) >= e.maxSize {
+			e.evictLocked()
+		}
 		cached = &cachedVector{
 			vector:    RiskVector{},
 			lastEvent: now,
@@ -209,6 +217,45 @@ func (e *Engine) Cleanup() {
 		if now.After(cached.expiresAt) {
 			delete(e.vectors, ip)
 		}
+	}
+}
+
+// evictLocked 在持锁期间清理过期条目，若仍超容量则按 expiresAt 升序淘汰最旧的 10%。
+// 调用方必须已持有 e.mu。
+func (e *Engine) evictLocked() {
+	now := time.Now()
+	// 先清理过期条目
+	for ip, cached := range e.vectors {
+		if now.After(cached.expiresAt) {
+			delete(e.vectors, ip)
+		}
+	}
+	if len(e.vectors) < e.maxSize {
+		return
+	}
+	// 仍超容量：找 expiresAt 最小的 10% 淘汰
+	target := len(e.vectors) - e.maxSize/10
+	if target <= 0 {
+		target = 1
+	}
+	type entry struct {
+		ip        string
+		expiresAt time.Time
+	}
+	entries := make([]entry, 0, len(e.vectors))
+	for ip, cached := range e.vectors {
+		entries = append(entries, entry{ip: ip, expiresAt: cached.expiresAt})
+	}
+	// 按 expiresAt 升序排序
+	for i := 0; i < len(entries) && i < target; i++ {
+		minIdx := i
+		for j := i + 1; j < len(entries); j++ {
+			if entries[j].expiresAt.Before(entries[minIdx].expiresAt) {
+				minIdx = j
+			}
+		}
+		delete(e.vectors, entries[minIdx].ip)
+		entries[minIdx], entries[i] = entries[i], entries[minIdx]
 	}
 }
 
