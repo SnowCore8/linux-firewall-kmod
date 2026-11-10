@@ -319,7 +319,7 @@ static unsigned int fw_hook_ipv6(void *priv, struct sk_buff *skb,
   if (unlikely(pkt_len > skb->len))
     return NF_ACCEPT;
 
-  /* 扩展头遍历：深度超限即丢包，防止恶意报文耗尽 CPU */
+  /* 扩展头遍历：深度超限或解析失败即丢包，防止恶意报文耗尽 CPU 或绕过判定 */
   nexthdr = iph6->nexthdr;
   offset = sizeof(struct ipv6hdr);
   {
@@ -330,9 +330,9 @@ static unsigned int fw_hook_ipv6(void *priv, struct sk_buff *skb,
       if (++depth > FW_HOOK_MAX_EXT_HDR_DEPTH)
         return NF_DROP;
       if (!pskb_may_pull(skb, offset + sizeof(struct ipv6_opt_hdr)))
-        break;
+        return NF_DROP;
       if (!skb_header_pointer(skb, offset, sizeof(opt), &opt))
-        break;
+        return NF_DROP;
       offset += ipv6_optlen(&opt);
       nexthdr = opt.nexthdr;
     }
