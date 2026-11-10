@@ -163,14 +163,16 @@ func (db *DB) DeleteRiskVector(ip string) error {
 }
 
 // GetAllRiskVectors 查询 IP 的风险向量（用于面板展示、导出）。
-// limit <= 0 时返回所有行；> 0 时限制返回数量，避免无界查询导致内存耗尽。
+// limit <= 0 时退化为默认上限 1000，避免无界查询导致内存耗尽。
 func (db *DB) GetAllRiskVectors(limit int) ([]RiskVectorRow, error) {
+	const defaultLimit = 1000
+	if limit <= 0 {
+		limit = defaultLimit
+	}
 	query := `SELECT ip, failure, ban, scan, bruteforce, ddos, geo, cluster, last_event_at, updated_at
 		 FROM ip_risk_vectors
 		 ORDER BY (failure + ban + scan + bruteforce + ddos + geo + cluster) DESC`
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
-	}
+	query += fmt.Sprintf(" LIMIT %d", limit)
 	rows, err := db.conn.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("query all risk_vectors: %w", err)

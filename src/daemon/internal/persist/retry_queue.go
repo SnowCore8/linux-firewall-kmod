@@ -278,12 +278,22 @@ func (q *RetryQueue) flush(ctx context.Context) {
 			return
 		default:
 		}
+		q.mu.Lock()
+		before := len(q.tasks)
+		q.mu.Unlock()
 		retried, failed := q.retryBatch()
 		if retried == 0 && failed == 0 {
 			return
 		}
 		if failed > 0 && retried == 0 {
 			// DB 仍不可用，停止 flush 避免阻塞关停。
+			return
+		}
+		q.mu.Lock()
+		after := len(q.tasks)
+		q.mu.Unlock()
+		if after >= before {
+			// 队列未缩短说明有任务持续失败（如畸形数据），继续循环无意义，停止。
 			return
 		}
 	}
