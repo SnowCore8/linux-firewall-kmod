@@ -87,7 +87,13 @@ func PredictAttacks(db *persist.DB, limit int) (*PredictionSummary, error) {
 		}
 
 		sort.Float64s(intervals)
-		median := intervals[len(intervals)/2]
+		var median float64
+		mid := len(intervals) / 2
+		if len(intervals)%2 == 0 {
+			median = (intervals[mid-1] + intervals[mid]) / 2
+		} else {
+			median = intervals[mid]
+		}
 
 		var sum float64
 		for _, v := range intervals {

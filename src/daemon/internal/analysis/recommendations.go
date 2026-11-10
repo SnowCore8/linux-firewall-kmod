@@ -55,7 +55,13 @@ func RecommendBanDurations(db *persist.DB, currentDurations map[string]int64) ([
 		}
 
 		sort.Float64s(intervals)
-		median := intervals[len(intervals)/2]
+		var median float64
+		mid := len(intervals) / 2
+		if len(intervals)%2 == 0 {
+			median = (intervals[mid-1] + intervals[mid]) / 2
+		} else {
+			median = intervals[mid]
+		}
 
 		current := currentDurations[jail]
 		switch {
