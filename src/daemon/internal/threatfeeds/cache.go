@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+// MaxCacheEntries 是缓存条目上限，防止恶意/错误配置的源导致内存耗尽。
+// 100 万条约 100-200 MB，覆盖已知大型情报源（如 IPsum 聚合多源）。
+const MaxCacheEntries = 1_000_000
+
 // FeedCache 是情报缓存，支持并发安全的读写。
 //
 // 设计目标：
@@ -55,28 +59,29 @@ func (c *FeedCache) Merge(newEntries []FeedEntry) {
 		return
 	}
 
-	// 构建新 map
+	// 构建新 map —— 全程持有写锁，避免 RUnlock→Lock 间隙导致并发 Merge 丢失更新
+	c.mu.Lock()
+	now := time.Now()
 	merged := make(map[string]*FeedEntry)
 
 	// 复制未过期的旧条目
-	c.mu.RLock()
-	now := time.Now()
 	for k, v := range c.entries {
 		if now.Before(v.ExpiresAt) {
 			merged[k] = v
 		}
 	}
-	c.mu.RUnlock()
 
-	// 添加新条目
+	// 添加新条目（受上限保护）
 	for i := range newEntries {
+		if len(merged) >= MaxCacheEntries {
+			break
+		}
 		e := &newEntries[i]
 		key := e.IP.String()
 		merged[key] = e
 	}
 
-	// 原子替换
-	c.mu.Lock()
+	// 替换并更新统计
 	c.entries = merged
 	c.stats.TotalEntries = len(merged)
 	c.stats.LastUpdate = time.Now()
