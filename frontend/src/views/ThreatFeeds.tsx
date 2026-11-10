@@ -256,7 +256,11 @@ export default function ThreatFeeds() {
   // ref 守卫防 StrictMode 双执行；完成后清参数，防止刷新页面反复同步。
   const deepSyncFired = useRef(false)
   useEffect(() => {
-    if (searchParams.get('sync') !== '1') return
+    if (searchParams.get('sync') !== '1') {
+      // sync 参数已清除，重置守卫以便下次命令面板再带 ?sync=1 时能重新同步
+      deepSyncFired.current = false
+      return
+    }
     if (deepSyncFired.current) return
     deepSyncFired.current = true
 
@@ -274,8 +278,6 @@ export default function ThreatFeeds() {
         const next = new URLSearchParams(searchParams)
         next.delete('sync')
         setSearchParams(next, { replace: true })
-        // 复位守卫：?sync 已清、本次不会再触发；但下次命令面板再带 ?sync=1 进来时要能重新同步
-        deepSyncFired.current = false
       })
   }, [searchParams, setSearchParams, notifySyncResult, notifySyncError])
 
