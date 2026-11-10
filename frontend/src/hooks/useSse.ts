@@ -112,6 +112,8 @@ export function useEventStream(enabled: boolean): EventStreamResult {
   const attemptsRef = useRef(0)
   const enabledRef = useRef(enabled)
   enabledRef.current = enabled
+  // 卸载保护：异步回调（如 getSseStatus 的 .then）在组件卸载后不应再触发状态更新
+  const mountedRef = useRef(true)
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -242,6 +244,8 @@ export function useEventStream(enabled: boolean): EventStreamResult {
       // 重连前探一次上限：达上限就停手，交给 UI 降级到 REST 轮询
       void getSseStatus()
         .then((status) => {
+          // 组件已卸载时不再触发状态更新或新建连接
+          if (!mountedRef.current) return
           if (!enabledRef.current) return
           if (status.events.limit_reached) {
             attemptsRef.current = 0
@@ -252,7 +256,7 @@ export function useEventStream(enabled: boolean): EventStreamResult {
         })
         .catch(() => {
           // 探测本身失败（多半也是断网）：照常退避重连
-          if (enabledRef.current) scheduleReconnect()
+          if (mountedRef.current && enabledRef.current) scheduleReconnect()
         })
     }
   }, [closeStream, setState, clearTimer])
@@ -268,6 +272,13 @@ export function useEventStream(enabled: boolean): EventStreamResult {
     return closeStream
     // connect/closeStream 均为 useCallback 稳定引用；只在 enabled 翻转时重建连接
   }, [enabled, connect, closeStream])
+
+  // 卸载保护：标记组件已卸载，防止异步回调在卸载后触发状态更新
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   // 手动重连：清零退避计数、立即重探。用于「已达上限」降级后的用户主动重试——
   // 服务端名额是瞬时的（别的标签页关掉就腾出来），不该逼用户刷新整页才能恢复实时。
