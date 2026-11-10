@@ -89,7 +89,7 @@ func (h *APIHandlers) AnalysisIp(w http.ResponseWriter, r *http.Request) {
 
 	ip, err := netip.ParseAddr(ipStr)
 	if err != nil {
-		WriteCode(w, httpcontract.Code40006, "IP 地址非法: "+err.Error())
+		WriteCode(w, httpcontract.Code40006, "IP 地址非法: "+ipStr)
 		return
 	}
 
