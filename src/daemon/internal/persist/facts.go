@@ -175,10 +175,11 @@ func key(addr netip.Addr) string {
 }
 
 // touchLocked 取（或建）缓存项并标为最近使用。容量满时逐出最久未用的一条并先落其脏账。
-func (f *Facts) touchLocked(ip string) *factsEntry {
+// 返回 (entry, evicted)：evicted 非 nil 时调用方需在锁外执行 writeBack，避免持锁期间做 DB I/O。
+func (f *Facts) touchLocked(ip string) (*factsEntry, *factsEntry) {
 	if el, ok := f.index[ip]; ok {
 		f.lru.MoveToFront(el)
-		return el.Value.(*factsEntry)
+		return el.Value.(*factsEntry), nil
 	}
 	var evicted *factsEntry
 	if f.lru.Len() >= f.capacity {
@@ -190,11 +191,7 @@ func (f *Facts) touchLocked(ip string) *factsEntry {
 	}
 	e := &factsEntry{ip: ip}
 	f.index[ip] = f.lru.PushFront(e)
-	if evicted != nil && evicted.pending > 0 {
-		// 逐出即落盘，否则这条 IP 的扣分就只剩内存里那一份、重启后凭空消失。
-		f.writeBack(evicted)
-	}
-	return e
+	return e, evicted
 }
 
 // loadScoreLocked 把内存分对齐到库里的值（未知 IP 按满分起算）。
@@ -239,8 +236,7 @@ func (f *Facts) loadBansLocked(e *factsEntry) {
 // RecordFailure 记一次失败尝试：内存扣分并记入待落盘量。
 func (f *Facts) RecordFailure(addr netip.Addr) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	e := f.touchLocked(key(addr))
+	e, evicted := f.touchLocked(key(addr))
 	f.loadScoreLocked(e)
 	if e.score > f.penalty {
 		e.score -= f.penalty
@@ -261,6 +257,11 @@ func (f *Facts) RecordFailure(addr netip.Addr) {
 			// channel 满时丢弃事件，不阻塞主链路
 			f.logger.Warn("risk event queue full, dropping event", "ip", ip)
 		}
+	}
+	f.mu.Unlock()
+	// 逐出落盘在锁外执行，避免持锁期间做 DB I/O 阻塞其他缓存操作
+	if evicted != nil && evicted.pending > 0 {
+		f.writeBack(evicted)
 	}
 }
 
@@ -301,19 +302,27 @@ func (f *Facts) RiskEngineEnabled() bool {
 // ReputationScore 返回该 IP 当前的信誉分（含本次失败，见调用契约的顺序要求）。
 func (f *Facts) ReputationScore(addr netip.Addr) uint32 {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	e := f.touchLocked(key(addr))
+	e, evicted := f.touchLocked(key(addr))
 	f.loadScoreLocked(e)
-	return e.score
+	score := e.score
+	f.mu.Unlock()
+	if evicted != nil && evicted.pending > 0 {
+		f.writeBack(evicted)
+	}
+	return score
 }
 
 // PriorBanCount 返回该 IP 此前已封禁次数。
 func (f *Facts) PriorBanCount(addr netip.Addr) uint32 {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	e := f.touchLocked(key(addr))
+	e, evicted := f.touchLocked(key(addr))
 	f.loadBansLocked(e)
-	return e.bans
+	bans := e.bans
+	f.mu.Unlock()
+	if evicted != nil && evicted.pending > 0 {
+		f.writeBack(evicted)
+	}
+	return bans
 }
 
 // NoteBan 把「刚刚发生了一次封禁」同步进缓存。
@@ -323,8 +332,7 @@ func (f *Facts) PriorBanCount(addr netip.Addr) uint32 {
 // 读的就是这个次数。扣分量不进 pending——库里那笔已经由 RecordBan 落好了。
 func (f *Facts) NoteBan(addr netip.Addr) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	e := f.touchLocked(key(addr))
+	e, evicted := f.touchLocked(key(addr))
 	f.loadScoreLocked(e)
 	f.loadBansLocked(e)
 	e.bans++
@@ -332,6 +340,10 @@ func (f *Facts) NoteBan(addr netip.Addr) {
 		e.score -= pen
 	} else {
 		e.score = 0
+	}
+	f.mu.Unlock()
+	if evicted != nil && evicted.pending > 0 {
+		f.writeBack(evicted)
 	}
 }
 
