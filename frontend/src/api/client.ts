@@ -67,7 +67,13 @@ export function onUnauthorized(listener: UnauthorizedListener): () => void {
 }
 
 function emitUnauthorized(): void {
-  for (const listener of unauthorizedListeners) listener()
+  for (const listener of unauthorizedListeners) {
+    try {
+      listener()
+    } catch {
+      // 单个监听器异常不影响其他监听器接收 401 通知
+    }
+  }
 }
 
 // --- 请求选项 ----------------------------------------------------------------
@@ -117,8 +123,13 @@ async function doFetch(url: string, opts: ApiRequestOptions): Promise<Response> 
   // 调用方信号与内部超时共用一个 controller：任一触发都中断
   const external = opts.signal
   if (external) {
-    if (external.aborted) controller.abort()
-    else external.addEventListener('abort', () => controller.abort(), { once: true })
+    if (external.aborted) {
+      controller.abort()
+    } else {
+      external.addEventListener('abort', () => controller.abort(), { once: true })
+      // 防止注册期间信号被取消导致事件丢失
+      if (external.aborted) controller.abort()
+    }
   }
 
   const headers: Record<string, string> = {}
