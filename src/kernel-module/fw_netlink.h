@@ -27,6 +27,7 @@ void fw_netlink_exit(void);
  * 到期回调在 rcu_read_unlock() 之后发送，此时 fw_netlink_exit() 可能正在释放 socket。
  * 读锁允许多个发送并发，写锁在 exit() 中独占，确保所有发送完成后才释放 socket。 */
 void fw_nl_send_lock(void);
+bool fw_nl_send_trylock(void);
 void fw_nl_send_unlock(void);
 
 /* 检查 netlink socket 是否可用（非 NULL）。

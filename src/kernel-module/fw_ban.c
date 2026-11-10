@@ -319,13 +319,18 @@ static void fw_ban_expire_cb(struct timer_list *t) {
   fw_stat_add_expired(1);
   call_rcu(&n->rcu, fw_ban_free_rcu);
 
-  /* 发送前获取读锁，防止 fw_netlink_exit() 在此期间释放 socket。
-   * 双重检查 socket 是否可用（exit 可能已将其置空）。 */
-  fw_nl_send_lock();
-  if (fw_nl_sock_available())
-    fw_nl_send_ban_state_change(
-      FW_BAN_ACTION_UNBAN, af, prefix_len, &addr, 0, "expired", NULL);
-  fw_nl_send_unlock();
+  /*
+   * 发送前尝试获取读锁，防止 fw_netlink_exit() 在此期间释放 socket。
+   * 使用 trylock 避免在 softirq 上下文中休眠（非 PREEMPT_RT 内核的定时器回调
+   * 在 softirq 中执行，down_read 是可休眠的 rwsem，会导致 might_sleep 警告）。
+   * 获取失败时跳过通知，不影响封禁解除的正确性。
+   */
+  if (fw_nl_send_trylock()) {
+    if (fw_nl_sock_available())
+      fw_nl_send_ban_state_change(
+        FW_BAN_ACTION_UNBAN, af, prefix_len, &addr, 0, "expired", NULL);
+    fw_nl_send_unlock();
+  }
 }
 
 void fw_ban_exit(void) {
@@ -476,30 +481,53 @@ static int fw_ban_insert(u8 af, const void *addr, u8 prefix_len,
     return 0;
   }
 
-  if (atomic_read(&fw_info.ban_count) >= (int)fw_info.max_ban_entries) {
+  /*
+   * 容量检查用 atomic_inc_return 保证原子性，避免多桶并发插入导致超限。
+   * 先增后判：超限时回滚递减。
+   */
+  if (atomic_inc_return(&fw_info.ban_count) > (int)fw_info.max_ban_entries) {
+    atomic_dec(&fw_info.ban_count);
     fw_stat_bump_ban_full();
     spin_unlock_bh(&layer->locks[bkt]);
     kfree(n);
     return -ENOSPC;
   }
 
+  /*
+   * 定时器在发布前武装：避免 PREEMPT_RT 下节点发布后、mod_timer 前被其他 CPU
+   * 删除并释放，导致操作已释放的 timer_list（use-after-free）。
+   */
+  if (duration_secs)
+    mod_timer(&n->expire_timer, n->unban_jiffies);
+
   hlist_add_head_rcu(&n->hash, &layer->buckets[bkt]);
-  atomic_inc(&fw_info.ban_count);
   spin_unlock_bh(&layer->locks[bkt]);
 
   /* 位图维护在桶锁之外，且必须在挂链之后（顺序理由见文件头） */
   fw_ban_layer_mark(t, prefix_len);
 
-  if (duration_secs)
-    mod_timer(&n->expire_timer, n->unban_jiffies);
-
   if (is_new)
     *is_new = true;
   fw_stat_inc_bans();
 
-  if (notify)
-    fw_nl_send_ban_state_change(FW_BAN_ACTION_BAN, af, prefix_len, &n->addr,
-                                duration_secs, n->reason, n->jail_name);
+  /*
+   * 通知发送：拷贝字段到栈上，避免节点被并发删除后访问已释放内存。
+   * 同时持有 netlink 发送锁，防止 socket 被并发释放。
+   */
+  if (notify) {
+    union fw_addr addr_copy = n->addr;
+    char reason_copy[32];
+    char jail_copy[32];
+
+    strscpy(reason_copy, n->reason, sizeof(reason_copy));
+    strscpy(jail_copy, n->jail_name, sizeof(jail_copy));
+
+    fw_nl_send_lock();
+    if (fw_nl_sock_available())
+      fw_nl_send_ban_state_change(FW_BAN_ACTION_BAN, af, prefix_len, &addr_copy,
+                                  duration_secs, reason_copy, jail_copy);
+    fw_nl_send_unlock();
+  }
   return 0;
 }
 

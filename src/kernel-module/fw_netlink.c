@@ -102,6 +102,10 @@ void fw_nl_send_lock(void) {
   down_read(&fw_nl_send_sem);
 }
 
+bool fw_nl_send_trylock(void) {
+  return down_read_trylock(&fw_nl_send_sem);
+}
+
 void fw_nl_send_unlock(void) {
   up_read(&fw_nl_send_sem);
 }
