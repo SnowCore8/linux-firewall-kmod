@@ -186,6 +186,11 @@ func (q *RetryQueue) backoff(consecutive int) time.Duration {
 	}
 	d := q.cfg.RetryInterval
 	for i := 0; i < consecutive; i++ {
+		// 防溢出：d 接近 MaxInt64/2 时翻倍会溢出成负数
+		if d > q.cfg.MaxRetryInterval/2 {
+			d = q.cfg.MaxRetryInterval
+			break
+		}
 		d *= 2
 		if d > q.cfg.MaxRetryInterval {
 			d = q.cfg.MaxRetryInterval
@@ -193,6 +198,7 @@ func (q *RetryQueue) backoff(consecutive int) time.Duration {
 		}
 	}
 	// ±25% 抖动，避免多个任务同时重试。
+	// d/2 保证为正数（d >= RetryInterval > 0），Int63n 不会 panic。
 	jitter := time.Duration(rand.Int63n(int64(d/2)+1)) - d/4
 	d += jitter
 	if d < q.cfg.RetryInterval {

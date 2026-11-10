@@ -84,6 +84,21 @@ type Facts struct {
 	// riskEngine 是多维风险向量引擎（Phase 4 新增）。
 	// 为 nil 时退化为旧单维度模型（向后兼容）。
 	riskEngine *risk.Engine
+
+	// eventCh 是风险事件异步持久化的有界工作队列。
+	// 容量 1024 是「高流量攻击下几秒内可能堆积的事件数」的宽裕上界；
+	// 满时丢弃新事件而非阻塞主链路或创建无界 goroutine。
+	eventCh chan riskEvent
+	// eventWorkers 是持久化 worker 数量，与 CPU 数解耦（SQLite 单写连接，多 worker 无益）。
+	eventWorkers int
+	eventOnce    sync.Once
+}
+
+// riskEvent 是异步持久化的风险事件。
+type riskEvent struct {
+	ip        string
+	eventType risk.EventType
+	increment float64
 }
 
 // NewFacts 装配缓存。db 为 nil 时退化为纯内存实现（不落盘，读侧永远满分起算）。
@@ -111,15 +126,42 @@ func NewFacts(db *DB, opts FactsOptions) *Facts {
 		logger.Info("multi-dimensional risk engine enabled")
 	}
 
-	return &Facts{
-		db:         db,
-		penalty:    uint32(penalty),
-		capacity:   capacity,
-		logger:     logger,
-		lru:        list.New(),
-		index:      make(map[string]*list.Element, capacity),
-		flushGap:   gap,
-		riskEngine: riskEngine,
+	f := &Facts{
+		db:           db,
+		penalty:      uint32(penalty),
+		capacity:     capacity,
+		logger:       logger,
+		lru:          list.New(),
+		index:        make(map[string]*list.Element, capacity),
+		flushGap:     gap,
+		riskEngine:   riskEngine,
+		eventCh:      make(chan riskEvent, 1024),
+		eventWorkers: 1, // SQLite 单写连接，多 worker 无益
+	}
+
+	// 启动异步持久化 worker（仅在 db 和 riskEngine 都存在时）
+	if db != nil && riskEngine != nil {
+		f.startEventWorkers()
+	}
+
+	return f
+}
+
+// startEventWorkers 启动风险事件持久化 worker。
+func (f *Facts) startEventWorkers() {
+	f.eventOnce.Do(func() {
+		for i := 0; i < f.eventWorkers; i++ {
+			go f.eventWorker()
+		}
+	})
+}
+
+// eventWorker 从 eventCh 读取事件并持久化到数据库。
+func (f *Facts) eventWorker() {
+	for ev := range f.eventCh {
+		if err := f.db.InsertEvent(ev.ip, ev.eventType, ev.increment, 0); err != nil {
+			f.logger.Warn("risk event persist failed", "ip", ev.ip, "error", err)
+		}
 	}
 }
 
@@ -212,10 +254,12 @@ func (f *Facts) RecordFailure(addr netip.Addr) {
 		ip := key(addr)
 		f.riskEngine.RecordEvent(ip, risk.EventFailure, 1.0)
 		// 异步持久化到数据库（不阻塞主链路）
-		if f.db != nil {
-			go func() {
-				_ = f.db.InsertEvent(ip, risk.EventFailure, 1.0, 0)
-			}()
+		// 使用有界 channel 而非无界 goroutine，防止高流量下内存耗尽
+		select {
+		case f.eventCh <- riskEvent{ip: ip, eventType: risk.EventFailure, increment: 1.0}:
+		default:
+			// channel 满时丢弃事件，不阻塞主链路
+			f.logger.Warn("risk event queue full, dropping event", "ip", ip)
 		}
 	}
 }
@@ -230,11 +274,12 @@ func (f *Facts) RecordRiskEvent(addr netip.Addr, eventType risk.EventType, incre
 	}
 	ip := key(addr)
 	f.riskEngine.RecordEvent(ip, eventType, increment)
-	// 异步持久化
-	if f.db != nil {
-		go func() {
-			_ = f.db.InsertEvent(ip, eventType, increment, 0)
-		}()
+	// 异步持久化，使用有界 channel 防止高流量下内存耗尽
+	select {
+	case f.eventCh <- riskEvent{ip: ip, eventType: eventType, increment: increment}:
+	default:
+		// channel 满时丢弃事件，不阻塞主链路
+		f.logger.Warn("risk event queue full, dropping event", "ip", ip, "type", eventType)
 	}
 }
 
