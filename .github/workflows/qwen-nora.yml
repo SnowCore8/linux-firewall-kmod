@@ -1,0 +1,143 @@
+name: '🧩 叶澜'
+
+# 叶澜，产品经理：决定做什么、不做什么、做到什么程度，并裁决陈实与周正的僵持。
+on:
+  workflow_call:
+    inputs:
+      number:
+        type: 'string'
+        description: 'Issue 或 PR 编号'
+        required: true
+      on_pr:
+        type: 'string'
+        description: "'true' 表示处理对象是 PR"
+        required: false
+        default: 'false'
+      issue_number:
+        type: 'string'
+        description: '关联 Issue 编号'
+        required: false
+        default: ''
+      pr_number:
+        type: 'string'
+        description: 'PR 编号'
+        required: false
+        default: ''
+      head_ref:
+        type: 'string'
+        description: 'PR 分支名'
+        required: false
+        default: ''
+      reason:
+        type: 'string'
+        description: '为什么找叶澜'
+        required: false
+        default: '手动触发'
+    outputs:
+      decision:
+        description: '本次是否给出了决定'
+        value: '${{ jobs.decide.outputs.decided }}'
+
+concurrency:
+  group: '${{ github.workflow }}-nora-${{ inputs.number }}'
+  # 默认的 queue: single 只留一个排队位，新来的会把排着的那次取消掉——被取消的运行
+  # jobs 为空，等于这次叫醒被静默丢弃
+  queue: max
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: 'bash'
+
+jobs:
+  decide:
+    name: '裁决'
+    runs-on: 'ubuntu-latest'
+    # 这一轮是「两路取证并行 + 一个决定 + 一路核对」，不再是单会话跑完。
+    # 这个超时是唯一的硬边界：模型跑满就被 SIGKILL，决定可能只写了一半。
+    timeout-minutes: 25
+    outputs:
+      decided: '${{ steps.context.outputs.proceed }}'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+      issues: 'write'
+      pull-requests: 'read'
+    steps:
+      - name: '换取 App 令牌'
+        id: 'mint_identity_token'
+        if: |-
+          ${{ vars.APP_ID_NORA }}
+        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # ratchet:actions/create-github-app-token@v2
+        with:
+          app-id: '${{ vars.APP_ID_NORA }}'
+          private-key: '${{ secrets.APP_PRIVATE_KEY_NORA }}'
+          permission-contents: 'read'
+          permission-issues: 'write'
+          permission-pull-requests: 'read'
+
+      # 先 checkout 再判断：判据是工作区里的 .github/scripts/context.mjs，
+      # checkout 之前工作区是空的。所以这一步无条件执行。
+      - name: '检出仓库'
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+
+      - name: '确认目标还开着'
+        id: 'context'
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          REPOSITORY: '${{ github.repository }}'
+          NUMBER: '${{ inputs.number }}'
+        # 目标关着、或者取不到状态，都不往下跑。判据在 context.mjs 的 prepareNora()。
+        run: |-
+          set -euo pipefail
+          node .github/scripts/context.mjs nora
+
+      - name: '跑一轮叶澜'
+        id: 'qwen_nora'
+        if: |-
+          ${{ steps.context.outputs.proceed == 'true' }}
+        uses: './.github/actions/run-agent'
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
+          REPOSITORY: '${{ github.repository }}'
+          NUMBER: '${{ inputs.number }}'
+          ON_PR: '${{ inputs.on_pr }}'
+          ISSUE_NUMBER: '${{ inputs.issue_number }}'
+          PR_NUMBER: '${{ inputs.pr_number }}'
+          HEAD_REF: '${{ inputs.head_ref }}'
+          REASON: '${{ inputs.reason }}'
+          # 工作流自己的容量：两路取证 + 一个决定 + 一路核对，最多 4 个代理。
+          # 默认 30 分钟墙钟会在核对那一拍把整轮砍断，而核对是唯一能发现
+          # 「决定了但没写出去」的那一拍。
+          #
+          # 墙钟给 24 小时，等于不设限。CLI 只在值 > 0 时采纳它（resolveMaxWallClockMs），
+          # 删掉这个变量只会退回更短的 30 分钟，所以不能靠删。
+          QWEN_CODE_ENABLE_WORKFLOWS: '1'
+          QWEN_CODE_MAX_WORKFLOW_AGENTS: '10'
+          QWEN_CODE_MAX_WORKFLOW_CONCURRENCY: '6'
+          QWEN_CODE_MAX_WORKFLOW_SECONDS: '86400'
+        with:
+          role: 'nora'
+          # 这一轮怎么干写在 .qwen/workflows/nora-decide.js 里，不再是一份长提示词。
+          prompt: >-
+            /nora-decide {"repo":"${{ github.repository }}","number":"${{ inputs.number }}","onPr":"${{ inputs.on_pr }}","issueNumber":"${{ inputs.issue_number }}","prNumber":"${{ inputs.pr_number }}","headRef":"${{ inputs.head_ref }}","reason":"${{ inputs.reason }}"}
+          workflow_name: 'qwen-nora'
+          openai_api_key: '${{ secrets.QWEN_API_KEY }}'
+          openai_base_url: '${{ vars.QWEN_BASE_URL }}'
+          openai_model: '${{ vars.QWEN_MODEL }}'
+          qwen_cli_version: '${{ vars.QWEN_CLI_VERSION }}'
+          qwen_debug: '${{ fromJSON(vars.DEBUG || vars.ACTIONS_STEP_DEBUG || false) }}'
+          upload_artifacts: '${{ vars.UPLOAD_ARTIFACTS }}'
+          cleanup_target: '${{ inputs.number }}'
+
+      # 工作流脚本抛错时 CLI 仍然退出 0，只把「Workflow failed: …」写进工具的返回内容。
+      # 所以「这一轮到底跑完没有」得单独判一次，否则失败会被读成成功。
+      # （另一类是「最后一段话是不是 API 报错」，那一判断在 run-agent 内部，四个人共用。）
+      - name: '工作流没跑完就判失败'
+        if: |-
+          ${{ always() && steps.context.outputs.proceed == 'true' && steps.qwen_nora.outcome == 'success' }}
+        env:
+          ROLE: 'nora'
+        run: |-
+          set -euo pipefail
+          node .github/scripts/workflow-run.mjs

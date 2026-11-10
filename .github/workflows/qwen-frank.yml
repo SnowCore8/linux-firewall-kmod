@@ -1,0 +1,144 @@
+name: '🔎 周正'
+
+# 周正，技术负责人：读 diff、留行内意见、批准或要求修改。不写业务代码，不合并。
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        type: 'string'
+        description: '要评审的 PR 编号'
+        required: true
+      head_ref:
+        type: 'string'
+        description: 'PR 分支名'
+        required: false
+        default: ''
+      reason:
+        type: 'string'
+        description: '为什么叫周正来'
+        required: false
+        default: '手动触发'
+    outputs:
+      verdict:
+        description: '本次给出的结论：approve / request-changes / comment / skipped'
+        value: '${{ jobs.review.outputs.verdict }}'
+
+concurrency:
+  group: '${{ github.workflow }}-frank-${{ inputs.pr_number }}'
+  # 默认的 queue: single 只留一个排队位，新来的会把排着的那次取消掉——被取消的运行
+  # jobs 为空，等于这次评审被静默丢弃
+  queue: max
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: 'bash'
+
+jobs:
+  review:
+    name: '评审'
+    runs-on: 'ubuntu-latest'
+    # 这一轮是「两路取证并行 + 一次评审 + 一路核对」，不再是单会话跑完。
+    # 这个超时是唯一的硬边界：模型跑满就被 SIGKILL，评审可能只写了一半。
+    timeout-minutes: 25
+    outputs:
+      verdict: '${{ steps.verdict.outputs.verdict }}'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+      issues: 'read'
+      pull-requests: 'write'
+    steps:
+      - name: '换取 App 令牌'
+        id: 'mint_identity_token'
+        if: |-
+          ${{ vars.APP_ID_FRANK }}
+        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # ratchet:actions/create-github-app-token@v2
+        with:
+          app-id: '${{ vars.APP_ID_FRANK }}'
+          private-key: '${{ secrets.APP_PRIVATE_KEY_FRANK }}'
+          permission-contents: 'read'
+          permission-issues: 'read'
+          permission-pull-requests: 'write'
+
+      # 必须先 checkout 再跑判断脚本：判据现在是工作区里的 .github/scripts/context.mjs，
+      # 而 checkout 之前工作区是空的，node 直接报 Cannot find module。
+      # 所以这一步无条件执行（原先靠 context 的 skip 输出裁掉它，那是个循环依赖）。
+      - name: '检出仓库'
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+
+      - name: '看清这个 PR'
+        id: 'context'
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          REPOSITORY: '${{ github.repository }}'
+          PR_NUMBER: '${{ inputs.pr_number }}'
+          SENDER_TYPE: '${{ github.event.sender.type }}'
+        # 关着的 / 草稿 / fork 的 PR 不评；当前提交上已有评审且这次是机器人重复叫醒，
+        # 也不评。判据在 context.mjs 的 prepareFrank()。
+        run: |-
+          set -euo pipefail
+          node .github/scripts/context.mjs frank
+
+      - name: '跑一轮周正'
+        id: 'qwen_frank'
+        if: |-
+          ${{ steps.context.outputs.skip != 'true' }}
+        uses: './.github/actions/run-agent'
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
+          REPOSITORY: '${{ github.repository }}'
+          PR_NUMBER: '${{ inputs.pr_number }}'
+          HEAD_REF: '${{ steps.context.outputs.head_ref }}'
+          IS_OWN_PR: '${{ steps.context.outputs.is_own_pr }}'
+          REASON: '${{ inputs.reason }}'
+          # 工作流自己的容量：两路取证 + 一次评审 + 一路核对，最多 4 个代理。
+          # 默认 30 分钟墙钟会在核对那一拍把整轮砍断，而核对是那唯一能发现
+          # 「评审挂在旧提交上」的一拍。
+          #
+          # 墙钟给 24 小时，等于不设限。CLI 只在值 > 0 时采纳它（resolveMaxWallClockMs），
+          # 删掉这个变量只会退回更短的 30 分钟，所以不能靠删。
+          QWEN_CODE_ENABLE_WORKFLOWS: '1'
+          QWEN_CODE_MAX_WORKFLOW_AGENTS: '10'
+          QWEN_CODE_MAX_WORKFLOW_CONCURRENCY: '6'
+          QWEN_CODE_MAX_WORKFLOW_SECONDS: '86400'
+        with:
+          role: 'frank'
+          # 这一轮怎么干写在 .qwen/workflows/frank-review.js 里，不再是一份长提示词。
+          prompt: >-
+            /frank-review {"repo":"${{ github.repository }}","prNumber":"${{ inputs.pr_number }}","headRef":"${{ steps.context.outputs.head_ref }}","isOwnPr":"${{ steps.context.outputs.is_own_pr }}","reason":"${{ inputs.reason }}"}
+          workflow_name: 'qwen-frank'
+          openai_api_key: '${{ secrets.QWEN_API_KEY }}'
+          openai_base_url: '${{ vars.QWEN_BASE_URL }}'
+          openai_model: '${{ vars.QWEN_MODEL }}'
+          qwen_cli_version: '${{ vars.QWEN_CLI_VERSION }}'
+          qwen_debug: '${{ fromJSON(vars.DEBUG || vars.ACTIONS_STEP_DEBUG || false) }}'
+          upload_artifacts: '${{ vars.UPLOAD_ARTIFACTS }}'
+          cleanup_target: '${{ inputs.pr_number }}'
+
+      # 工作流脚本抛错时 CLI 仍然退出 0，只把「Workflow failed: …」写进工具的返回内容。
+      # 所以「这一轮到底跑完没有」得单独判一次，否则失败会被读成成功。
+      # （另一类是「最后一段话是不是 API 报错」，那一判断在 run-agent 内部，四个人共用。）
+      - name: '工作流没跑完就判失败'
+        if: |-
+          ${{ always() && steps.context.outputs.skip != 'true' && steps.qwen_frank.outcome == 'success' }}
+        env:
+          ROLE: 'frank'
+        run: |-
+          set -euo pipefail
+          node .github/scripts/workflow-run.mjs
+
+      - name: '读出周正给出的结论'
+        id: 'verdict'
+        if: |-
+          ${{ always() }}
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          REPOSITORY: '${{ github.repository }}'
+          PR_NUMBER: '${{ inputs.pr_number }}'
+          HEAD_SHA: '${{ steps.context.outputs.head_sha }}'
+          SKIP: '${{ steps.context.outputs.skip }}'
+          SKIP_REASON: '${{ steps.context.outputs.skip_reason }}'
+        run: |-
+          set -euo pipefail
+          node .github/scripts/verdict.mjs

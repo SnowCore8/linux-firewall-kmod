@@ -1,0 +1,23 @@
+version: 2
+
+# action 钉在 40 位 SHA 上等于永不滚动 —— 不配这份文件，连安全修复都不会自己进来。
+# 它改的是注释里的 `ratchet:` 那个 tag，不动 SHA 本身；PR 进来照样过 CI 和闸门。
+
+updates:
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      time: '04:23'
+      timezone: 'Etc/UTC'
+    # 互不相干的升级放一个 PR：拆开就是七八个 PR 抢同一个闸门
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: 'chore(ci)'
+    labels:
+      - 'dependencies'
+    # 闸门一次只合一个，多挂只会积压
+    open-pull-requests-limit: 1

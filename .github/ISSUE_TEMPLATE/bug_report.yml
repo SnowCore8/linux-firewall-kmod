@@ -1,0 +1,41 @@
+name: Bug 报告
+description: 报告一个不符合预期的行为
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请按顺序列出能稳定复现此问题的步骤
+      placeholder: |
+        1. 进入 '...'
+        2. 点击 '...'
+        3. 观察到 '...'
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+      description: 你预期会发生什么？
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+      description: 实际发生了什么？如果有错误日志或截图请一并附上。
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      description: 操作系统、运行时版本、相关配置等
+      placeholder: |
+        OS: Ubuntu 22.04
+        Node: v20.x
+        相关配置: ...
+    validations:
+      required: false

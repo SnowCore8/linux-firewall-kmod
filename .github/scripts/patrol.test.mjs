@@ -110,7 +110,6 @@ test('已批准但和主干冲突 → 叫陈实解决冲突', () => {
 });
 
 test('mergeable 是 UNKNOWN 时仍然叫陈实 —— 实测 GitHub 常返回 unknown，按 MERGEABLE 判会永远漏掉已批准的 PR', () => {
-  // 真实数据：PR #19 连查三次 mergeable 都是 UNKNOWN
   const [found] = pickForMiles(
     [pr({ mergeable: 'UNKNOWN', reviews: [approveOn('aaa111')] })], { now: NOW },
   );
@@ -231,6 +230,29 @@ test('别人已经接下活了 → 不叫叶澜', () => {
 
 test('叶澜已经说过话 → 不再说一遍', () => {
   const comments = new Map([[9, [{ body: '决定：做。\n<!-- qwen:role=nora -->' }]]]);
+  assert.deepEqual(pickForNora([issue()], { now: NOW, commentsByIssue: comments }), []);
+});
+
+test('代码块里被引用的交接标记不算交接 → 照样叫叶澜', () => {
+  // 有人贴一段「格式长这样」的围栏。当成真交接的后果是叶澜永远不被叫，
+  // 而「该叫的人一直没人叫」正是巡检要防的那个方向。
+  const comments = new Map([
+    [9, [{ body: '这条规则长这样：\n\n```\n<!-- qwen:handoff=miles reason=接着做 -->\n```\n' }]],
+  ]);
+  assert.equal(pickForNora([issue()], { now: NOW, commentsByIssue: comments }).length, 1);
+});
+
+test('代码块里引用叶澜的签名，不等于她说过话', () => {
+  const comments = new Map([
+    [9, [{ body: '她的评论结尾是这样的：`<!-- qwen:role=nora -->`，很好认。' }]],
+  ]);
+  assert.equal(pickForNora([issue()], { now: NOW, commentsByIssue: comments }).length, 1);
+});
+
+test('围栏里的标记不算数，围栏外的照旧算数', () => {
+  const quoted = '```\n<!-- qwen:handoff=miles reason=x -->\n```';
+  const real = '<!-- qwen:handoff=miles reason=真的接了 -->';
+  const comments = new Map([[9, [{ body: `${quoted}\n\n然后：\n\n${real}` }]]]);
   assert.deepEqual(pickForNora([issue()], { now: NOW, commentsByIssue: comments }), []);
 });
 

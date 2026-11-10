@@ -1,9 +1,8 @@
 /**
  * 路由规则的测试。
  *
- * 这段逻辑原本是 qwen-dispatch.yml 里的 300 多行内联 JS，错了的表现是
- * **什么也不发生** —— 被取消的运行 jobs 为空，日志里一个字都不留。
- * 所以每条判据都要有一条测试盯着，尤其是「什么情况下不派活」和「派给谁」。
+ * 这段逻辑错了的表现是**什么也不发生** —— 被取消的运行 jobs 为空，日志里一个字
+ * 都不留。所以每条判据都要有一条测试盯着，尤其是「什么情况下不派活」和「派给谁」。
  *
  *   /usr/bin/node --test .github/scripts/route.test.mjs
  */
@@ -26,6 +25,7 @@ import {
   minutesSinceLastCall,
   route,
   handoffLimitMessage,
+  turnsLimitMessage,
 } from './route.mjs';
 
 const NOW = new Date('2026-11-07T12:00:00Z').getTime();
@@ -38,7 +38,7 @@ const CALL = (role) => `有空看一眼。\n\n<!-- qwen:to=${role} -->`;
 const base = () => ({
   eventName: 'issue_comment',
   action: 'created',
-  payload: { issueNumber: 7, issueIsPr: false, commentBody: '@qwencoder 这个报错麻烦看下' },
+  payload: { issueNumber: 7, issueIsPr: false, topicClosed: false, commentBody: '@qwencoder 这个报错麻烦看下' },
   senderType: 'User',
   authorAssociation: 'MEMBER',
   actor: 'qwencoder[bot]',
@@ -105,6 +105,53 @@ test('reason 里带 > 也不会让整条交接丢掉', () => {
   assert.equal(parsed.reason, 'a > b');
 });
 
+test('代码里的标记不认：贴一段示例不是在要求它生效', () => {
+  // 行内代码
+  assert.equal(parseHandoff('一条 `<!-- qwen:handoff=miles reason=试试 -->` 的评论'), null);
+  // 围栏块，反引号与波浪线两种
+  assert.equal(parseHandoff('日志如下\n```\n<!-- qwen:handoff=miles reason=试试 -->\n```\n'), null);
+  assert.equal(parseHandoff('~~~\n<!-- qwen:to=frank -->\n~~~\n'), null);
+});
+
+test('代码外面还有真标记时照认', () => {
+  const text = '示例 `<!-- qwen:handoff=nora reason=不是这条 -->`\n\n<!-- qwen:handoff=miles reason=这条才是 -->';
+  assert.deepEqual(parseHandoff(text), { role: 'miles', reason: '这条才是' });
+});
+
+test('围栏没闭合时，后面的标记一并当引用', () => {
+  // Markdown 也这么渲染。宁可漏认一条交接，也不要在引用块里认出一条指令。
+  assert.equal(parseHandoff('```\n<!-- qwen:handoff=miles reason=x -->\n'), null);
+});
+
+test('数历史交接时也不数代码里的', () => {
+  assert.equal(countRecentHandoffs([{ body: '贴一段：\n```\n<!-- qwen:handoff=frank reason=x -->\n```' }]), 0);
+  assert.equal(recentCalls([{ body: '`<!-- qwen:to=nora -->`' }]).length, 0);
+  // 同一条评论里代码内外都有时，只认外面那个
+  assert.equal(countRecentHandoffs([{ body: '`<!-- qwen:handoff=frank reason=x -->`\n<!-- qwen:handoff=miles reason=y -->' }]), 1);
+});
+
+test('PR 描述里贴出交接标记，不会把这条 PR 从周正手里抢走', () => {
+  // 真的踩到过：描述里为了说明「这条评论带了交接标记」把标记原样贴进行内代码，
+  // 这条 PR 打开时就被派给了陈实，周正压根没被叫去评审。
+  const input = ev(
+    { prNumber: 47, issueIsPr: true, prBody: '改法：\n\n`<!-- qwen:handoff=miles reason=试试 -->`\n' },
+    { eventName: 'pull_request', action: 'opened' },
+  );
+  const result = route(input);
+  assert.equal(result.role, 'frank');
+  assert.equal(result.prNumber, 47);
+});
+
+test('描述里真写了交接（不在代码里）照旧认', () => {
+  const input = ev(
+    { prNumber: 48, issueIsPr: true, prBody: '<!-- qwen:handoff=miles reason=先跑一遍 -->' },
+    { eventName: 'pull_request', action: 'opened' },
+  );
+  const result = route({ ...input, pull: { headRef: 'qwen-fix-48' } });
+  assert.equal(result.role, 'miles');
+  assert.equal(result.reason, '交接：先跑一遍');
+});
+
 test('只有两种评论事件算评论', () => {
   assert.equal(isCommentEvent('issue_comment'), true);
   assert.equal(isCommentEvent('pull_request_review_comment'), true);
@@ -168,21 +215,156 @@ test('手动触发：PR 要先查分支名，查到后补齐 prNumber', () => {
   assert.equal(result.headRef, 'qwen-fix-7');
 });
 
-// ────────────────────────── 自言自语与信任边界 ──────────────────────────
+// ────────────────────────── 机器人状态评论 ──────────────────────────
+//
+// 机器人用评论请人接手，必须带交接或点名标记；没有标记的只是状态说明。
+// 不区分的话，「Issue 回复归顾清」「我方 PR 回复归陈实」会让机器人自己叫醒
+// 自己：陈实在 Issue 收尾会叫醒顾清，在自家 PR 写合并申请会再叫醒陈实。
 
-test('机器人评论既没交接也没点名 → 忽略', () => {
-  const result = route(ev({ commentBody: '收到。' }, { senderType: 'Bot' }));
-  assert.equal(result.kind, 'ignore');
-  assert.match(result.why, /自言自语|既没有交接也没有点名/);
+test('机器人评论不带交接、点名或提及 → 只是状态说明，不叫醒任何人', () => {
+  for (const commentBody of ['收到。', '<!-- qwen:role=miles --> 改完了，PR #9']) {
+    const result = route(ev({ commentBody }, { senderType: 'Bot' }));
+    assert.equal(result.kind, 'ignore');
+    assert.match(result.why, /状态说明/);
+  }
 });
 
-test('机器人评论带交接 → 派活，不被自言自语闸门拦掉', () => {
+test('机器人评论 @ 了我们 → 仍按话题归谁派活', () => {
+  const onIssue = route(ev({ commentBody: '@qwencoder 这里还要看一眼' }, { senderType: 'Bot' }));
+  assert.equal(onIssue.role, 'clara');
+
+  const onOwnedPr = route({
+    ...ev(
+      { issueNumber: 9, prNumber: 9, issueIsPr: true, commentBody: '@qwencoder 这里还要看一眼' },
+      { senderType: 'Bot' },
+    ),
+    pull: { headRef: 'qwen-fix-7' },
+  });
+  assert.equal(onOwnedPr.role, 'miles');
+});
+
+// ────────────────────────── 终止条件：话题关闭 ──────────────────────────
+
+test('话题关闭后机器人不再往下接 —— 收尾那句不该再叫醒一轮', () => {
+  const result = route(
+    ev(
+      { topicClosed: true, commentBody: '已合并、已关闭。\n\n<!-- qwen:role=miles -->' },
+      { senderType: 'Bot' },
+    ),
+  );
+  assert.equal(result.kind, 'ignore');
+  assert.match(result.why, /话题已关闭/);
+});
+
+test('关闭的话题上带交接标记也不派 —— 关掉就是这件事做完了', () => {
+  const result = route(
+    ev({ topicClosed: true, commentBody: HANDOFF('miles', '还有个小尾巴') }, { senderType: 'Bot' }),
+  );
+  assert.equal(result.kind, 'ignore');
+});
+
+test('关闭的话题上人说话仍然派活 —— 他大概是要重开或再问一句', () => {
+  const result = route(ev({ topicClosed: true, commentBody: '@qwencoder 这个又出现了' }));
+  assert.equal(result.kind, 'assign');
+  assert.equal(result.role, 'clara');
+});
+
+// ────────────────────────── 保险丝：机器人轮次上限 ──────────────────────────
+//
+// 话题还开着的时候就靠这条兜底，只拦「自己开的话题上反复说话」这种跑飞。
+// 它不是主判据：真活干到一半不该被它截住。
+
+test('机器人自己在 Issue 上写状态评论不再叫醒自己', () => {
+  const result = route(
+    ev(
+      { issueNumber: 3, issueBody: '别人的 Issue', commentBody: '<!-- qwen:role=clara --> 我看过了' },
+      { senderType: 'Bot' },
+    ),
+  );
+  assert.equal(result.kind, 'ignore');
+  assert.match(result.why, /状态说明/);
+});
+
+test('机器人发言到 24 小时上限就不叫醒 —— 话题一直不关时只剩这条保险丝', () => {
+  const result = route(
+    ev({ commentBody: HANDOFF('miles', '继续') }, { senderType: 'Bot', gates: { now: NOW, recentBotComments: 60 } }),
+  );
+  assert.equal(result.kind, 'turns-limit');
+  assert.equal(result.recent, 60);
+  assert.equal(result.max, 60);
+});
+
+test('差一次到上限时仍然派活，别把边界判错一轮', () => {
+  const result = route(
+    ev({ commentBody: HANDOFF('miles', '继续') }, { senderType: 'Bot', gates: { now: NOW, recentBotComments: 59 } }),
+  );
+  assert.equal(result.kind, 'assign');
+});
+
+test('机器人状态评论不占轮次上限，也不会触发超限说明', () => {
+  const result = route(
+    ev({ commentBody: '接着说' }, { senderType: 'Bot', gates: { now: NOW, recentBotComments: 60 } }),
+  );
+  assert.equal(result.kind, 'ignore');
+  assert.match(result.why, /状态说明/);
+});
+
+test('轮次上限只管机器人，人写的评论不受限', () => {
+  const result = route(
+    ev({ commentBody: '@qwencoder 再看看' }, { gates: { now: NOW, recentBotComments: 999, maxTurns: 60 } }),
+  );
+  assert.equal(result.kind, 'assign');
+  assert.equal(result.role, 'clara');
+});
+
+test('轮次上限说明用中文，不带交接或点名标记', () => {
+  const text = turnsLimitMessage({ recent: 60, max: 60 });
+  assert.match(text, /60 次/);
+  assert.match(text, /上限/);
+  assert.equal(parseHandoff(text), null);
+  assert.equal(parseCall(text), null);
+  assert.match(text, /<!-- qwen:role=dispatch -->/);
+});
+
+test('轮次上限刚好达到时返回 turns-limit，带 number', () => {
+  const result = route(
+    ev(
+      { issueNumber: 5, commentBody: HANDOFF('miles', '继续') },
+      { senderType: 'Bot', gates: { now: NOW, recentBotComments: 60, maxTurns: 60 } },
+    ),
+  );
+  assert.equal(result.kind, 'turns-limit');
+  assert.equal(result.number, 5);
+  assert.equal(result.recent, 60);
+  assert.equal(result.max, 60);
+});
+
+test('轮次上限在 PR 上也带 number', () => {
+  const result = route(
+    ev(
+      { issueNumber: 9, prNumber: 9, issueIsPr: true, commentBody: CALL('frank') },
+      { senderType: 'Bot', gates: { now: NOW, recentBotComments: 60, maxTurns: 60 } },
+    ),
+  );
+  assert.equal(result.kind, 'turns-limit');
+  assert.equal(result.number, 9);
+});
+
+test('轮次上限只管机器人，人写的评论不受限 —— 真人发言永远不被拦', () => {
+  const result = route(
+    ev({ commentBody: '@qwencoder 再看看' }, { gates: { now: NOW, recentBotComments: 999, maxTurns: 60 } }),
+  );
+  assert.equal(result.kind, 'assign');
+  assert.equal(result.role, 'clara');
+});
+
+test('机器人评论带交接 → 派给被交接的人', () => {
   const result = route(ev({ commentBody: HANDOFF('nora', '范围要定') }, { senderType: 'Bot' }));
   assert.equal(result.kind, 'assign');
   assert.equal(result.role, 'nora');
 });
 
-test('机器人提交评审不带标记 → 不当成自言自语，仍然派活', () => {
+test('机器人提交评审不带标记 → 仍然派活', () => {
   const result = route(
     ev(
       { issueNumber: 9, prNumber: 9, prHeadRef: 'qwen-fix-7', reviewBody: '改完了，可以合', reviewState: 'approved' },
@@ -241,7 +423,7 @@ test('交接不区分人类还是机器人', () => {
   }
 });
 
-test('机器人第 21 次交接 → 超限，不再派人', () => {
+test('24 小时内已有 21 次交接 → 超限，不再派人', () => {
   const result = route(
     ev({ commentBody: HANDOFF('miles') }, { senderType: 'Bot', gates: { now: NOW, recentHandoffs: 21, maxHandoffs: 20 } }),
   );
@@ -251,9 +433,18 @@ test('机器人第 21 次交接 → 超限，不再派人', () => {
   assert.equal(result.max, 20);
 });
 
-test('机器人第 20 次交接 → 仍然派，边界用 > 不用 >=', () => {
+test('24 小时内刚好 20 次交接 → 这次是第 21 次，停下', () => {
+  // 计数的语义是「本次之前发生过几次」，所以 20 次历史意味着这一条就超了。
+  // 早先这里用 >，靠的是「本次这条也数在里面」—— 与点名冷却失效同源，见 dispatch.mjs。
   const result = route(
     ev({ commentBody: HANDOFF('miles') }, { senderType: 'Bot', gates: { now: NOW, recentHandoffs: 20, maxHandoffs: 20 } }),
+  );
+  assert.equal(result.kind, 'handoff-limit');
+});
+
+test('24 小时内 19 次交接 → 还能派，额度没被提前收紧', () => {
+  const result = route(
+    ev({ commentBody: HANDOFF('miles') }, { senderType: 'Bot', gates: { now: NOW, recentHandoffs: 19, maxHandoffs: 20 } }),
   );
   assert.equal(result.kind, 'assign');
 });
@@ -339,7 +530,10 @@ test('Issue 上的其他动作不归任何人', () => {
 
 test('指派给本次动作者 → 陈实接手', () => {
   const result = route(
-    ev({ issueNumber: 3, assignee: 'qwencoder[bot]' }, { eventName: 'issues', action: 'assigned' }),
+    ev(
+      { issueNumber: 3, assignee: 'qwencoder[bot]', assigneeType: 'Bot' },
+      { eventName: 'issues', action: 'assigned' },
+    ),
   );
   assert.equal(result.role, 'miles');
   assert.equal(result.issueNumber, 3);
@@ -347,6 +541,73 @@ test('指派给本次动作者 → 陈实接手', () => {
 
 test('指派给别人 → 忽略，不抢活', () => {
   const result = route(ev({ issueNumber: 3, assignee: 'human' }, { eventName: 'issues', action: 'assigned' }));
+  assert.equal(result.kind, 'ignore');
+});
+
+test('人把 Issue 指派给 AI 账号 → 陈实接手', () => {
+  // 真实形态：assignee 是机器人、触发事件的是那个人。早先的判据拿 assignee
+  // 和触发者比，两者永远不相等，这条规则因此从来没生效过。
+  const result = route(
+    ev(
+      { issueNumber: 42, assignee: 'qwencoder-clara[bot]', assigneeType: 'Bot' },
+      { eventName: 'issues', action: 'assigned', senderType: 'User' },
+    ),
+  );
+  assert.equal(result.kind, 'assign');
+  assert.equal(result.role, 'miles');
+  assert.equal(result.issueNumber, 42);
+  assert.equal(result.onPr, false);
+});
+
+test('人把 PR 指派给 AI 账号 → 当成 PR 派下去，不是当成 Issue', () => {
+  // GitHub 对 PR 也发 issues.assigned。当成 Issue 派下去，陈实会去读一个
+  // 没有 checkout 分支的 PR。
+  const result = route(
+    ev(
+      { issueNumber: 51, issueIsPr: true, assignee: 'qwencoder-miles[bot]', assigneeType: 'Bot' },
+      { eventName: 'issues', action: 'assigned', senderType: 'User' },
+    ),
+  );
+  assert.equal(result.kind, 'need-pull', '要先知道分支名才能判它是不是我方 PR');
+
+  const withPull = route({
+    ...ev(
+      { issueNumber: 51, issueIsPr: true, assignee: 'qwencoder-miles[bot]', assigneeType: 'Bot' },
+      { eventName: 'issues', action: 'assigned', senderType: 'User' },
+    ),
+    pull: { headRef: 'qwen-fix-42' },
+  });
+  assert.equal(withPull.onPr, true);
+  assert.equal(withPull.prNumber, 51);
+  assert.equal(withPull.issueNumber, '42', 'qwen-fix-42 对应 42 号 Issue');
+  assert.equal(withPull.headRef, 'qwen-fix-42');
+});
+
+test('人把 Issue 指派给另一个人 → 仍然忽略', () => {
+  const result = route(
+    ev(
+      { issueNumber: 42, assignee: 'teammate', assigneeType: 'User' },
+      { eventName: 'issues', action: 'assigned', senderType: 'User' },
+    ),
+  );
+  assert.equal(result.kind, 'ignore');
+});
+
+test('取消指派（assignee 为空）不会被当成派活', () => {
+  // unassigned 走的是另一个 action；但载荷缺 assignee 时也不能误派
+  const result = route(
+    ev({ issueNumber: 42, assignee: '', assigneeType: '' }, { eventName: 'issues', action: 'assigned' }),
+  );
+  assert.equal(result.kind, 'ignore');
+});
+
+test('机器人把 Issue 指派给自己 → 不当指令，否则是一轮接一轮的无限跑', () => {
+  const result = route(
+    ev(
+      { issueNumber: 42, assignee: 'qwencoder-miles[bot]', assigneeType: 'Bot' },
+      { eventName: 'issues', action: 'assigned', senderType: 'Bot' },
+    ),
+  );
   assert.equal(result.kind, 'ignore');
 });
 
@@ -388,11 +649,11 @@ test('自家 Issue 上被 @ → 顾清', () => {
   assert.equal(result.onPr, false);
 });
 
-test('自家 Issue 上不 @ 也跟进：正文带我方标记', () => {
-  const body = `<!-- qwen:opened-by=agent -->\n现状是这样`;
+test('自家 Issue 上不 @ 也跟进：正文写什么都不影响', () => {
+  const body = `现状是这样`;
   const result = route(ev({ issueNumber: 3, issueBody: body, commentBody: '再补一句' }));
   assert.equal(result.role, 'clara');
-  assert.match(result.reason, /我方 Issue/);
+  assert.match(result.reason, /Issue 上有新回复/);
 });
 
 test('自家 Issue 上不 @ 也跟进：评论带角色标记', () => {
@@ -402,15 +663,18 @@ test('自家 Issue 上不 @ 也跟进：评论带角色标记', () => {
   assert.equal(result.role, 'clara');
 });
 
-test('别人的 Issue 上不 @ → 忽略，不乱插话', () => {
-  const result = route(ev({ issueNumber: 3, issueBody: '别人的 Issue', commentBody: '路人甲发言' }));
-  assert.equal(result.kind, 'ignore');
-  assert.match(result.why, /未提及我方/);
+test('别人开的 Issue 上不 @ 也交给顾清 —— 真人的单和机器人的单一样处理', () => {
+  const result = route(ev({ issueNumber: 3, issueBody: '别人的 Issue', commentBody: '这个还是红的' }));
+  assert.equal(result.role, 'clara');
+  assert.equal(result.issueNumber, 3);
+  assert.equal(result.onPr, false);
+  assert.match(result.reason, /Issue 上有新回复/);
 });
 
 test('mention 为空时不能把每条评论都当成被提及', () => {
   const result = route(ev({ issueNumber: 3, commentBody: '路人甲发言' }, { mention: '' }));
-  assert.equal(result.kind, 'ignore', '`includes("")` 恒真会让机器人对每条评论都开口');
+  assert.equal(result.role, 'clara', '不 @ 也会叫醒顾清');
+  assert.doesNotMatch(result.reason, /被提及/, '`includes("")` 恒真会让日志谎称有人 @ 了我们');
 });
 
 test('@ 不区分大小写', () => {
@@ -444,12 +708,15 @@ test('他人 PR 上被 @ → 周正只给意见', () => {
   assert.equal(result.issueNumber, '');
 });
 
-test('他人 PR 上没 @ → 忽略', () => {
+test('他人 PR 上没 @ 也交给周正 —— 只出意见，边界在职责里', () => {
   const result = route({
     ...ev({ issueNumber: 9, issueIsPr: true, commentBody: '写得不错' }),
     pull: { headRef: 'someone-else/feature' },
   });
-  assert.equal(result.kind, 'ignore');
+  assert.equal(result.kind, 'assign');
+  assert.equal(result.role, 'frank');
+  assert.equal(result.onPr, true);
+  assert.match(result.reason, /仅提供评审意见/);
 });
 
 test('行内评审评论和普通评论走同一套', () => {

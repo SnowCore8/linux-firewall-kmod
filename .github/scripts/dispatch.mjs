@@ -13,50 +13,60 @@
  * 用法（workflow 里就这么一行）：
  *   node .github/scripts/dispatch.mjs
  *
+ * 退出码：0 = 处理完了（含「不归任何人」）；2 = 脚本自己没跑成（取数失败、输入不合规）。
+ * 不用 1：这个脚本没有「判定为否且已说明」那种结论 —— 判为「否」时它以 role 空着
+ * 表达，下游四个 job 的 if 全不成立，不需要靠退出码传递。
+ *
  * 需要的环境变量：
  *   GH_TOKEN                          取数用（App 令牌或 github.token）
  *   GITHUB_REPOSITORY                 owner/name
  *   GITHUB_EVENT_PATH                 事件原文，Actions 自动提供
  *   GITHUB_EVENT_NAME                 事件名，Actions 自动提供
  *   QWEN_MENTION                      触发词，默认 @qwencoder
- *   AGENT_MAX_HANDOFFS / AGENT_MAX_CALLS / AGENT_CALL_COOLDOWN_MINUTES
+ *   AGENT_MAX_HANDOFFS / AGENT_MAX_CALLS / AGENT_MAX_TURNS / AGENT_CALL_COOLDOWN_MINUTES
  */
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 
+import { ghJson, ghLines } from './gh.mjs';
 import {
   route,
-  parseHandoff,
-  parseCall,
   recentBotComments,
   countRecentHandoffs,
   recentCalls,
   handoffLimitMessage,
+  turnsLimitMessage,
+  PEOPLE,
 } from './route.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY || '';
 
-/** 取数一律走 gh：与 patrol.mjs 一致，省得再引一个 SDK */
-function gh(args) {
-  const raw = execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
-  return raw.trim() ? JSON.parse(raw) : null;
-}
-
-const api = (path) => gh(['api', `repos/${REPO}/${path}`]);
+const api = (path) => ghJson(['api', `repos/${REPO}/${path}`]);
 
 const isPull = (number) => Boolean(api(`issues/${number}`)?.pull_request);
 const headRefOf = (number) => api(`pulls/${number}`)?.head?.ref || '';
 
-function commentsOf(number) {
+/**
+ * 分页取回的每个元素各自一行 JSON（NDJSON），逐行解析。
+ *
+ * 为什么不用 `--slurp`：那个 flag 只有较新的 gh 才有，本机 `gh version 2.46.0`
+ * （Ubuntu 官方包）直接报 `unknown flag: --slurp`。README 把「本地跑一遍 dispatch」
+ * 当成验证手段，用上新 flag 就等于把这条路堵死，而报错长得像脚本自己坏了。
+ *
+ * 也不能直接 `JSON.parse` 整个输出：`gh api --paginate` 不带 --jq 时把各页的数组
+ * 首尾相接（`[...][...]`），超过一页就解析不了。
+ *
+ * `--jq '.[]'` 两头都避开：gh 对每页分别跑 jq，把数组摊成一行一个对象，跨页累加。
+ * 对象的字符串字段里换行会被转义成 `\n`，所以一行始终是一个完整的 JSON。
+ *
+ * 实现已收到 gh.mjs 的 ghLines()，与其余四处的取数共用一份。
+ */
+export function commentsOf(number) {
   // 取不到评论不能当成「没有评论」—— 那会让防打转闸门失效，机器人可以无限转交。
   // 宁可这次运行失败（report-failure 会在话题里说明），也不要在没有依据的情况下继续派活。
-  //
-  // --slurp 是必须的：`gh api --paginate` 默认把每页的 JSON 数组直接拼在输出里，
-  // 一旦评论超过 100 条就是 `[...][...]`，JSON.parse 直接抛；--slurp 会包成
-  // `[[...],[...]]`，flatten 之后才是完整的一份。
-  const pages = gh(['api', '--paginate', '--slurp', `repos/${REPO}/issues/${number}/comments`]);
-  return (pages || []).flat() || [];
+  // 出错时 execFileSync 抛异常，正好落到这条。
+  return ghLines(['api', '--paginate', '--jq', '.[]', `repos/${REPO}/issues/${number}/comments`]);
 }
 
 /**
@@ -78,10 +88,14 @@ export function buildInput({ event, eventName, env = process.env, deps = {} }) {
     issueBody: issue?.body || '',
     prBody: pr?.body || '',
     issueIsPr: Boolean(issue?.pull_request),
+    // 话题关没关，是路由要用的终止条件：事做完、单关掉，机器人就不再自己往下接。
+    // 关闭的 Issue 也会收到 issue_comment，所以这个字段不能只看事件名。
+    topicClosed: (issue?.state || pr?.state) === 'closed',
     prIsFork: Boolean(pr?.head?.repo?.fork),
     reviewState: event.review?.state || '',
     prHeadRef: pr?.head?.ref || '',
     assignee: event.assignee?.login || '',
+    assigneeType: event.assignee?.type || '',
     // 手动触发的事件里没有 Issue/PR 正文，得自己问一次它是不是 PR
     ...(manualNumber ? { issueIsPr: checkPr(manualNumber) } : {}),
   };
@@ -98,16 +112,24 @@ export function buildInput({ event, eventName, env = process.env, deps = {} }) {
     now,
     maxHandoffs: Number(env.AGENT_MAX_HANDOFFS || 20),
     maxCalls: Number(env.AGENT_MAX_CALLS || 40),
+    maxTurns: Number(env.AGENT_MAX_TURNS || 60),
     cooldownMinutes: Number(env.AGENT_CALL_COOLDOWN_MINUTES || 10),
   };
 
-  // 只在真的要判额度时才数评论：这几十次 API 调用没必要每条事件都付。
-  // 判据很窄 —— 机器人自己发的、且带交接或点名标记。
-  const body = payload.commentBody || payload.reviewBody || '';
-  const needsCounting = senderType === 'Bot' && (parseHandoff(body) || parseCall(body));
+  // 只有机器人触发的动静才需要数评论：轮次上限管的是机器人，人写的评论不受限。
+  // 数的是全部机器人评论，而不只是带标记的那些 —— 上限问的是「这个话题上机器人
+  // 说过多少话」，因为每一条机器人的话都会叫醒下一轮。
+  const needsCounting = senderType === 'Bot';
   const number = payload.issueNumber || payload.prNumber;
   if (needsCounting && number) {
-    const recent = recentBotComments(readComments(number), now);
+    // 触发本次运行的那条评论不是「历史」，它正是这次要判的动作本身。
+    // 不剔掉的话，点名冷却会拿它当「上一次点名」，算出来 waited 恒为 0 ——
+    // 机器人之间的 `<!-- qwen:to=… -->` 永远发不出去，人写的才过得去。
+    // 交接额度、每日上限与轮次上限有同一处依赖：它们数的都该是「之前发生过几次」。
+    const triggerId = event.comment?.id;
+    const history = readComments(number).filter((c) => triggerId == null || c.id !== triggerId);
+    const recent = recentBotComments(history, now);
+    gates.recentBotComments = recent.length;
     gates.recentHandoffs = countRecentHandoffs(recent);
     gates.calls = recentCalls(recent);
   }
@@ -130,14 +152,24 @@ export function formatOutput(key, value) {
   return `${key}<<__END__\n${value}\n__END__\n`;
 }
 
-const OUTPUT_KEYS = ['role', 'number', 'on_pr', 'reason', 'issue_number', 'pr_number', 'head_ref'];
+const OUTPUT_KEYS = ['role', 'who', 'number', 'on_pr', 'reason', 'issue_number', 'pr_number', 'head_ref'];
 
-/** 结果 → 输出行。不派活时角色留空：下游四个 job 的 if 都不成立，一个模型都不会启动。 */
-export function outputLines(result) {
+/**
+ * 结果 → 输出行。不派活时角色留空：下游四个 job 的 if 都不成立，一个模型都不会启动。
+ *
+ * who 是 role 对应的中文名，给「出错说明」那条评论用：那句话要写给人看，
+ * 而 route.mjs 里已经有一份英文名到中文名的对应，这里直接带出去，别在 yml 里再抄一张表 ——
+ * 抄出来的那张改了名字不会报错，只会在出错说明里叫错人。
+ *
+ * eventNumber 只在 fail 时用得上：route() 判出「配置有误」时手里没有编号，
+ * 而下游要知道去哪个话题里说明。由调用方从事件里取，纯函数才好测。
+ */
+export function outputLines(result, eventNumber = '') {
   const values = { role: '' };
   if (result.kind === 'assign') {
     Object.assign(values, {
       role: result.role,
+      who: PEOPLE[result.role] || '',
       number: String(result.number ?? ''),
       on_pr: result.onPr ? 'true' : 'false',
       reason: result.reason,
@@ -145,6 +177,17 @@ export function outputLines(result) {
       pr_number: String(result.prNumber ?? ''),
       head_ref: result.headRef || '',
     });
+  } else if (result.kind === 'fail') {
+    // 失败时也要把编号写出去：qwen-dispatch.yml 的 report-failure 判据是
+    // `needs.route.outputs.number != ''`，编号空着它就不出面 —— 于是这次失败
+    // 只在 Actions 里留一行红叉，话题里一个字都没有。而失败恰恰是最需要说明的。
+    // role 仍留空：这次是失败的，不该顺手把活派给谁。
+    const n = Number(eventNumber);
+    if (Number.isFinite(n) && n > 0) values.number = String(n);
+  } else if (result.kind === 'turns-limit') {
+    // turns-limit 也要输出编号：与 fail 同理，report-failure 靠它才知道去哪个话题说明。
+    // result.number 由 route() 直接给出，不需要 eventNumber 回退。
+    values.number = String(result.number ?? '');
   }
   return OUTPUT_KEYS.filter((k) => k in values).map((k) => formatOutput(k, values[k]));
 }
@@ -153,12 +196,37 @@ export function outputLines(result) {
 export const numberOfEvent = (event) =>
   event?.issue?.number ?? event?.pull_request?.number ?? (event?.inputs?.number ? Number(event.inputs.number) : '');
 
+/**
+ * 检查评论列表里是否已有 dispatch 发过的轮次上限说明。
+ * 用于去重：每个话题只发一次，避免把安全网变成噪声。
+ */
+export function hasExistingTurnsLimitNotice(comments) {
+  return (comments || []).some(
+    (c) => c.user?.type === 'Bot' && c.body?.includes('机器人发言已达 24 小时上限') && c.body?.includes('<!-- qwen:role=dispatch -->'),
+  );
+}
+
 function writeOutput(lines) {
   const text = lines.join('');
   const file = process.env.GITHUB_OUTPUT;
   if (file) fs.appendFileSync(file, text);
   else process.stdout.write(text);
 }
+
+/**
+ * 发一条说明类评论。
+ *
+ * 用工作流自己的令牌（`NOTICE_TOKEN`）而不是 `GH_TOKEN`：那个是 App 令牌，顾清的
+ * App 只有 `issues: write`，而 GitHub 按「这条线程是不是 PR」分权限 —— 编号落在
+ * PR 上时 `issues: write` 不够，REST 与 GraphQL 都回 `Resource not accessible by
+ * integration`（实测）。工作流令牌给到 `pull-requests: write` 就够，且它发的评论不
+ * 触发下游工作流，说明类评论本来也不该再叫醒谁。
+ */
+const postNotice = (number, body) =>
+  execFileSync('gh', ['issue', 'comment', String(number), '--repo', REPO, '--body', body], {
+    encoding: 'utf8',
+    env: { ...process.env, GH_TOKEN: process.env.NOTICE_TOKEN || process.env.GH_TOKEN },
+  });
 
 function main() {
   const eventPath = process.env.GITHUB_EVENT_PATH;
@@ -172,9 +240,9 @@ function main() {
   } catch (error) {
     // 取数失败就把编号写出去，好让 report-failure 能在话题里说明这次没处理完。
     // role 仍然留空 —— 这次是失败的，不该顺手把活派给谁。
+    // 说明只由最外层打一次，这里不重复写 stderr。
     const number = numberOfEvent(event);
     if (number !== '') writeOutput([formatOutput('number', String(number))]);
-    process.stderr.write(`取数失败：${error.message}\n`);
     throw error;
   }
 
@@ -194,26 +262,50 @@ function main() {
     process.stderr.write(`${result.why}\n`);
   } else if (result.kind === 'handoff-limit') {
     // 静默丢弃会让人以为交接生效了，这里留一条说明；这条不带交接标记，不会再触发下一轮
-    execFileSync(
-      'gh',
-      ['issue', 'comment', String(result.number), '--repo', REPO, '--body', handoffLimitMessage(result)],
-      { encoding: 'utf8' },
-    );
+    postNotice(result.number, handoffLimitMessage(result));
     process.stderr.write(
       `最近 24 小时已有 ${result.recent} 次自动交接，超过上限 ${result.max}，停止自动转交，已在话题里说明\n`,
+    );
+  } else if (result.kind === 'turns-limit') {
+    // 轮次保险丝触发：发一条说明，但每个话题只发一次，避免把安全网变成噪声。
+    // 去重：查最近评论里是否已有 dispatch 发过的同类说明。
+    const number = result.number;
+    const body = turnsLimitMessage(result);
+    // commentsOf 可能抛异常（API 超时/403）。失败时降级为直接发帖、跳过去重 ——
+    // 宁可偶尔多发一条，也不能让保险丝静默失效。
+    let alreadyPosted = false;
+    try {
+      alreadyPosted = hasExistingTurnsLimitNotice(commentsOf(number));
+    } catch {
+      process.stderr.write('去重查询失败，跳过去重直接发帖\n');
+    }
+    if (!alreadyPosted) {
+      postNotice(number, body);
+    }
+    process.stderr.write(
+      `最近 24 小时机器人已发言 ${result.recent} 次，达到上限 ${result.max}，${alreadyPosted ? '已有说明，跳过' : '已在话题里说明'}\n`,
     );
   }
 
   // 先把输出写掉再失败：report-failure 靠 number 才知道去哪个话题里说明
-  writeOutput(outputLines(result));
+  writeOutput(outputLines(result, numberOfEvent(event)));
 
   if (result.kind === 'fail') {
+    // 配置或输入有误：判据根本没跑完，不是「判为否」，所以用 2。
+    // report-failure 只看 job 有没有失败，1 与 2 在 CI 里行为相同，区别只在于人读日志。
     process.stderr.write(`${result.why}\n`);
-    process.exit(1);
+    process.exit(2);
   }
 }
 
 // 被 import 时不执行，只有脚本自己跑起来才取数
 if (process.argv[1] && process.argv[1].endsWith('dispatch.mjs')) {
-  main();
+  try {
+    main();
+  } catch (error) {
+    // 取数失败、事件读不了，都属于「判据没跑完」。node 默认的未捕获异常退 1，
+    // 而 1 在别的脚本里是「判定为否」，这里统一改成 2。
+    process.stderr.write(`dispatch 自己出错了，这次没有派活：${error?.message ?? String(error)}\n`);
+    process.exit(2);
+  }
 }

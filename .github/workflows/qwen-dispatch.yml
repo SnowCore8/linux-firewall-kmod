@@ -1,0 +1,231 @@
+name: '🔀 调度'
+
+# 四个人像同事一样工作：顾清决定谁来接手，叶澜定范围，陈实写代码并合并，周正批准或驳回。
+# 这里只做一件事 —— 判断"这条动静该由谁来处理"，不解析斜杠命令。
+on:
+  issues:
+    types:
+      - 'opened'
+      - 'reopened'
+      - 'assigned'
+  issue_comment:
+    types:
+      - 'created'
+  pull_request:
+    types:
+      - 'opened'
+      - 'ready_for_review'
+  pull_request_review:
+    types:
+      - 'submitted'
+  pull_request_review_comment:
+    types:
+      - 'created'
+  workflow_dispatch:
+    inputs:
+      number:
+        description: 'Issue 或 PR 编号'
+        required: true
+      role:
+        description: '手动指定由谁接手'
+        required: true
+        type: 'choice'
+        options:
+          - 'clara'
+          - 'nora'
+          - 'miles'
+          - 'frank'
+
+defaults:
+  run:
+    shell: 'bash'
+
+jobs:
+  route:
+    name: '分派'
+    runs-on: 'ubuntu-latest'
+    timeout-minutes: 5
+    # 并发压在这一步，而不是整个 workflow：四个人各自的 workflow 已经有按编号的并发组，
+    # 真正需要串行的东西由它们保证。这里只负责别让同一条动静被下一条挤掉。
+    concurrency:
+      group: '${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.number }}'
+      # 默认的 queue: single 只留一个排队位，新来的会把排着的那次取消掉——被取消的运行
+      # jobs 为空，等于事件被静默丢弃。queue: max 留 100 个位，按开始排队的时间先到先跑。
+      queue: max
+      # 中断正在进行的运行会留下半成品提交，宁可排队
+      cancel-in-progress: false
+    permissions:
+      contents: 'read'
+      issues: 'write'
+      # 说明类评论可能落在 PR 上，那一侧按 pull-requests 授权；App 令牌没有这一档，
+      # 所以发说明走工作流令牌（见 dispatch.mjs 的 postNotice）
+      pull-requests: 'write'
+    outputs:
+      role: '${{ steps.decide.outputs.role }}'
+      who: '${{ steps.decide.outputs.who }}'
+      number: '${{ steps.decide.outputs.number }}'
+      on_pr: '${{ steps.decide.outputs.on_pr }}'
+      reason: '${{ steps.decide.outputs.reason }}'
+      issue_number: '${{ steps.decide.outputs.issue_number }}'
+      pr_number: '${{ steps.decide.outputs.pr_number }}'
+      head_ref: '${{ steps.decide.outputs.head_ref }}'
+    steps:
+      - name: '换取 App 令牌'
+        id: 'mint_identity_token'
+        if: |-
+          ${{ vars.APP_ID_CLARA }}
+        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # ratchet:actions/create-github-app-token@v2
+        with:
+          # dispatch 只读评论计数、发闸门说明，用顾清的身份即可
+          app-id: '${{ vars.APP_ID_CLARA }}'
+          private-key: '${{ secrets.APP_PRIVATE_KEY_CLARA }}'
+          permission-contents: 'read'
+          permission-issues: 'write'
+          permission-pull-requests: 'read'
+
+      - name: '检出判断规则'
+        uses: 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683' # ratchet:actions/checkout@v4
+        with:
+          # 必须显式钉在默认分支。checkout 默认检出的 ref 在 PR 事件下是那个 PR 的
+          # 合并提交，而这里随后要 node 执行检出来的 .mjs —— 于是 fork PR 里的代码
+          # 就会在拿着 App 令牌的 runner 上跑起来。钉住默认分支后，脚本与 workflow
+          # 定义始终来自同一处，与 GitHub「PR 事件用 base 分支的 workflow 定义」一致。
+          ref: '${{ github.event.repository.default_branch }}'
+          sparse-checkout: '.github/scripts'
+          persist-credentials: false
+
+      - name: '判断这条该由谁接手'
+        id: 'decide'
+        env:
+          GH_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          NOTICE_TOKEN: '${{ github.token }}'
+          ACTOR: '${{ github.actor }}'
+          QWEN_MENTION: '${{ vars.QWEN_MENTION || ''@qwencoder'' }}'
+          AGENT_MAX_HANDOFFS: '${{ vars.AGENT_MAX_HANDOFFS || 20 }}'
+          AGENT_MAX_CALLS: '${{ vars.AGENT_MAX_CALLS || 40 }}'
+          AGENT_MAX_TURNS: '${{ vars.AGENT_MAX_TURNS || 60 }}'
+          AGENT_CALL_COOLDOWN_MINUTES: '${{ vars.AGENT_CALL_COOLDOWN_MINUTES || 10 }}'
+        # 判断规则在 .github/scripts/route.mjs，取数与回写在 dispatch.mjs。
+        # 写成脚本而不是内联 JS 是为了能本地跑、能单测：这里的错法表现为「什么都不发生」。
+        run: |-
+          set -euo pipefail
+          node .github/scripts/dispatch.mjs
+
+  clara:
+    name: '顾清'
+    needs: 'route'
+    if: |-
+      ${{ needs.route.outputs.role == 'clara' }}
+    uses: './.github/workflows/qwen-clara.yml'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+      issues: 'write'
+      pull-requests: 'read'
+    with:
+      issue_number: '${{ needs.route.outputs.issue_number }}'
+      reason: '${{ needs.route.outputs.reason }}'
+    secrets: 'inherit'
+
+  nora:
+    name: '叶澜'
+    needs: 'route'
+    if: |-
+      ${{ needs.route.outputs.role == 'nora' }}
+    uses: './.github/workflows/qwen-nora.yml'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+      issues: 'write'
+      pull-requests: 'read'
+    with:
+      number: '${{ needs.route.outputs.number }}'
+      on_pr: '${{ needs.route.outputs.on_pr }}'
+      issue_number: '${{ needs.route.outputs.issue_number }}'
+      pr_number: '${{ needs.route.outputs.pr_number }}'
+      head_ref: '${{ needs.route.outputs.head_ref }}'
+      reason: '${{ needs.route.outputs.reason }}'
+    secrets: 'inherit'
+
+  miles:
+    name: '陈实'
+    needs: 'route'
+    if: |-
+      ${{ needs.route.outputs.role == 'miles' }}
+    uses: './.github/workflows/qwen-miles.yml'
+    permissions:
+      # 被调用的工作流里闸门要读检查项，调用方少给一档就整次 startup_failure
+      actions: 'read'
+      checks: 'read'
+      contents: 'write'
+      id-token: 'write'
+      issues: 'write'
+      pull-requests: 'write'
+      statuses: 'read'
+    with:
+      number: '${{ needs.route.outputs.number }}'
+      on_pr: '${{ needs.route.outputs.on_pr }}'
+      issue_number: '${{ needs.route.outputs.issue_number }}'
+      pr_number: '${{ needs.route.outputs.pr_number }}'
+      head_ref: '${{ needs.route.outputs.head_ref }}'
+      reason: '${{ needs.route.outputs.reason }}'
+    secrets: 'inherit'
+
+  frank:
+    name: '周正'
+    needs: 'route'
+    if: |-
+      ${{ needs.route.outputs.role == 'frank' }}
+    uses: './.github/workflows/qwen-frank.yml'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+      issues: 'read'
+      pull-requests: 'write'
+    with:
+      pr_number: '${{ needs.route.outputs.pr_number }}'
+      head_ref: '${{ needs.route.outputs.head_ref }}'
+      reason: '${{ needs.route.outputs.reason }}'
+    secrets: 'inherit'
+
+  # 只有真的出错才出面说明；正常被忽略的动静不会打扰任何人
+  report-failure:
+    name: '出错说明'
+    needs:
+      - 'route'
+      - 'clara'
+      - 'nora'
+      - 'miles'
+      - 'frank'
+    if: |-
+      ${{ always() && failure() && needs.route.outputs.number != '' }}
+    runs-on: 'ubuntu-latest'
+    permissions:
+      contents: 'read'
+      issues: 'write'
+      pull-requests: 'write'
+    steps:
+      - name: '在话题里说明这次出错'
+        env:
+          # 不用顾清的 App 令牌：它只有 issues 一档，编号落在 PR 上时 REST 和 GraphQL
+          # 都回 Resource not accessible by integration（实测 42564206213、42603941536）。
+          # PR 线程按 pull-requests 授权，用工作流令牌正好；它发的评论也不触发下游，
+          # 一条出错说明不该再叫醒谁。
+          GITHUB_TOKEN: '${{ github.token }}'
+          NUMBER: '${{ needs.route.outputs.number }}'
+          WHO: '${{ needs.route.outputs.who }}'
+          REPOSITORY: '${{ github.repository }}'
+        run: |-
+          set -euo pipefail
+          # route 没派给具体的人时 who 是空的，那句说明里得有个能读的主语
+          WHO="${WHO:-这一轮的分派}"
+
+          # 走 REST 的 issue comments：编号落在 PR 上时 PR 按 issue 处理，
+          # 工作流令牌的 pull-requests: write 覆盖它。
+          body="我这边执行时出错了（没跑完的是：${WHO}），这条没有处理完。日志：[查看本次运行](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})。
+
+          要重试再 @ 一次或重新指派即可。
+
+          <!-- qwen:role=dispatch -->"
+
+          gh api "repos/${REPOSITORY}/issues/${NUMBER}/comments" -f body="${body}" --silent

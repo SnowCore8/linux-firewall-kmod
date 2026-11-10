@@ -21,15 +21,22 @@
  * 不叫任何人。
  */
 
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 
+// 取数只有一份实现，见 gh.mjs。这里的调用点全是列表，空输出显式传 `[]` ——
+// 默认的 null 会让下游 `.length` 直接抛。
+import { ghJson } from './gh.mjs';
+import { hasHandoff, hasRole } from './markers.mjs';
+
 // 这两个标签是人放的闸：放上去就是「先别动」。巡检不能绕过 —— 否则人刚说停，
-// 下一小时的巡检又把它推起来，那这个闸就白设了。
-const STOP_LABELS = ['do-not-merge', 'manual-review'];
+// 下一小时的巡检又把它推起来，那这个闸就白设了。清单与闸门共用一份，见 review.mjs。
+import { STOP_LABELS, approvedAtHead, hasStopLabel } from './review.mjs';
+
+// 这里转出 approvedAtHead 只为不动已有调用方，定义在 review.mjs。
+export { approvedAtHead };
 
 // 顾清的场子。她还没看完的 Issue 不该被叶澜抢走。
-const NORA_SKIP_LABELS = ['status/needs-triage', 'manual-review'];
+const NORA_SKIP_LABELS = ['status/needs-triage', ...STOP_LABELS];
 
 const MINUTE = 60000;
 const HOUR = 3600000;
@@ -48,28 +55,6 @@ export function rollupState(checks) {
   return 'SUCCESS';
 }
 
-/** 最新一条评审要能覆盖前面的：新的 REQUEST_CHANGES 之后不该还按旧的批准合并。 */
-const latest = (reviews) => [...reviews].sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt))[0];
-
-const isApprove = (r) => r.state === 'APPROVED' || /qwen:verdict=approve/.test(r.body || '');
-const isReject = (r) => r.state === 'CHANGES_REQUESTED' || /qwen:verdict=request-changes/.test(r.body || '');
-
-/**
- * 当前提交上有没有一个仍然成立的批准。
- *
- * 「仍然成立」要求三件事：评审挂在当前 head 上、是批准、且它比任何停留在当前 head
- * 上的驳回都新。用旧提交上的批准去合新代码，是这套规矩里最危险的一步。
- */
-export function approvedAtHead(pr) {
-  const head = pr.headRefOid || '';
-  if (!head) return false;
-  const atHead = (pr.reviews || []).filter((r) => r.commit?.oid === head);
-  const ok = latest(atHead.filter(isApprove));
-  const no = latest(atHead.filter(isReject));
-  if (!ok) return false;
-  return !no || new Date(ok.submittedAt) > new Date(no.submittedAt);
-}
-
 /**
  * 陈实该处理的 PR：自家分支上，已经批准该合并了，或者检查红了没人管。
  *
@@ -80,7 +65,7 @@ export function pickForMiles(prs, { now, idleMinutes = 15, ownPrefix = 'qwen-fix
   for (const pr of prs) {
     if (!String(pr.headRefName || '').startsWith(ownPrefix)) continue;
     if (pr.isDraft) continue;
-    if ((pr.labels || []).some((l) => STOP_LABELS.includes(l.name))) continue;
+    if (hasStopLabel(pr.labels)) continue;
 
     const idle = (now - new Date(pr.updatedAt).getTime()) / MINUTE;
     if (idle < idleMinutes) continue;
@@ -132,7 +117,7 @@ export function pickForFrank(prs, { now, idleMinutes = 30 } = {}) {
   const picked = [];
   for (const pr of prs) {
     if (pr.isDraft) continue;
-    if ((pr.labels || []).some((l) => STOP_LABELS.includes(l.name))) continue;
+    if (hasStopLabel(pr.labels)) continue;
 
     const waiting = (now - new Date(pr.createdAt).getTime()) / MINUTE;
     if (waiting < idleMinutes) continue;
@@ -185,8 +170,11 @@ export function pickForNora(issues, { now, commentsByIssue = new Map(), openPrs 
     if (!noraCandidate(issue, { now, openPrs, idleHours })) continue;
 
     const comments = commentsByIssue.get(issue.number) || [];
-    if (comments.some((c) => /qwen:handoff=/.test(c.body || ''))) continue;
-    if (comments.some((c) => /qwen:role=nora/.test(c.body || ''))) continue;
+    // 先剥代码再判：有人贴一段「格式长这样」的围栏、或引用一句别人的签名，都不是
+    // 交接、也不是她自己说过话。认错了的方向是最坏的那个 —— 叶澜永远不被叫，
+    // 而「该叫的人一直没人叫」正是巡检要防的。判断本身在 markers.mjs。
+    if (comments.some((c) => hasHandoff(c.body))) continue;
+    if (comments.some((c) => hasRole(c.body, 'nora'))) continue;
 
     const idle = (now - new Date(issue.updatedAt).getTime()) / HOUR;
     const hint = comments.length === 0 ? '还没有任何回复' : `最后一条之后没有下一步（共 ${comments.length} 条评论）`;
@@ -202,8 +190,6 @@ export function pickForNora(issues, { now, commentsByIssue = new Map(), openPrs 
 
 // ────────────────────────── 取数（只在 CLI 模式跑） ──────────────────────────
 
-const ghJson = (args) => JSON.parse(execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }) || '[]');
-
 function repoArgs() {
   const i = process.argv.indexOf('--repo');
   const repo = i >= 0 ? process.argv[i + 1] : '';
@@ -218,19 +204,21 @@ const PR_FIELDS = [
 function loadOpenPrs() {
   return ghJson([
     'pr', 'list', ...repoArgs(), '--state', 'open', '--limit', '100', '--json', PR_FIELDS,
-  ]);
+  ], { fallback: [] });
 }
 
 function loadOpenIssues() {
   return ghJson([
     'issue', 'list', ...repoArgs(), '--state', 'open', '--limit', '50',
     '--json', 'number,title,labels,updatedAt,comments',
-  ]);
+  ], { fallback: [] });
 }
 
 function loadComments(number) {
   try {
-    return ghJson(['issue', 'view', String(number), ...repoArgs(), '--json', 'comments', '--jq', '.comments']);
+    return ghJson(['issue', 'view', String(number), ...repoArgs(), '--json', 'comments', '--jq', '.comments'], {
+      fallback: [],
+    });
   } catch {
     return [];
   }

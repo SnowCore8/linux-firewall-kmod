@@ -1,0 +1,202 @@
+name: '🩺 巡检'
+
+# 定时补位：没人叫的时候，自己看一眼有没有该接手却没人动的活。
+#
+# 为什么不给三个角色工作流各加一条 schedule：
+#   qwen-miles / qwen-frank / qwen-nora 是纯 workflow_call 接收方，`number` 之类
+#   是必填输入。schedule 触发时 `inputs.number` 是空串，传到下游就是 0，
+#   issues.get(0) 直接 404。所以定时这条路只在这里「先扫、扫到了再调」，
+#   下游一行不用改。
+#
+# 判断规则在 .github/scripts/patrol.mjs，带测试（patrol.test.mjs）。
+# 规则决定了「该不该叫醒一个人」，写错会叫错人或该叫的人一直没人叫，
+# 所以它必须能在本地对着真实数据跑一遍看结果，不能塞进 yml 里只靠推上去等一小时。
+on:
+  schedule:
+    # 每小时一次，避开整点：整点是所有仓库的 cron 高峰，排队会把巡检推到很后面
+    - cron: '23 * * * *'
+  workflow_dispatch:
+    inputs:
+      role:
+        description: '补哪一个；all 表示三个人都扫'
+        required: true
+        type: 'choice'
+        options:
+          - 'all'
+          - 'miles'
+          - 'frank'
+          - 'nora'
+
+concurrency:
+  group: '${{ github.workflow }}'
+  # 同 dispatch：默认 queue: single 会把排着的那次取消掉，被取消的运行 jobs 为空，
+  # 等于这次巡检被静默丢弃。巡检被丢掉不会有人知道。
+  queue: max
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: 'bash'
+
+jobs:
+  # ────────────────────────────────────────────────────────────────
+  # 陈实：已批准却没合并的、检查红了没人管的自家 PR
+  # ────────────────────────────────────────────────────────────────
+  scan-miles:
+    name: '查陈实的活'
+    if: |-
+      ${{ !inputs.role || inputs.role == 'all' || inputs.role == 'miles' }}
+    runs-on: 'ubuntu-latest'
+    timeout-minutes: 5
+    outputs:
+      found: '${{ steps.scan.outputs.found }}'
+      number: '${{ steps.scan.outputs.number }}'
+      head_ref: '${{ steps.scan.outputs.head_ref }}'
+      reason: '${{ steps.scan.outputs.reason }}'
+    permissions:
+      # patrol.mjs 的 loadOpenPrs 取 statusCheckRollup（checks + checkSuite.workflowRun + statuses）
+      actions: 'read'
+      checks: 'read'
+      contents: 'read'
+      issues: 'read'
+      pull-requests: 'read'
+      statuses: 'read'
+    steps:
+      - name: '检出仓库'
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+
+      - name: '扫没人推的 PR'
+        id: 'scan'
+        env:
+          GH_TOKEN: '${{ secrets.GITHUB_TOKEN || github.token }}'
+          REPOSITORY: '${{ github.repository }}'
+          PATROL_IDLE_MINUTES: '${{ vars.PATROL_IDLE_MINUTES || 15 }}'
+        run: |-
+          set -euo pipefail
+          node .github/scripts/patrol.mjs miles --repo "${REPOSITORY}"
+
+  call-miles:
+    name: '叫陈实'
+    needs: 'scan-miles'
+    if: |-
+      ${{ needs.scan-miles.outputs.found == 'true' }}
+    uses: './.github/workflows/qwen-miles.yml'
+    permissions:
+      # 被调用的工作流里闸门要读检查项，调用方少给一档就整次 startup_failure
+      actions: 'read'
+      checks: 'read'
+      contents: 'write'
+      id-token: 'write'
+      issues: 'write'
+      pull-requests: 'write'
+      statuses: 'read'
+    with:
+      number: '${{ needs.scan-miles.outputs.number }}'
+      on_pr: 'true'
+      pr_number: '${{ needs.scan-miles.outputs.number }}'
+      head_ref: '${{ needs.scan-miles.outputs.head_ref }}'
+      reason: '${{ needs.scan-miles.outputs.reason }}'
+    secrets: 'inherit'
+
+  # ────────────────────────────────────────────────────────────────
+  # 周正：开了很久、当前提交上还没有人评审过的 PR
+  # ────────────────────────────────────────────────────────────────
+  scan-frank:
+    name: '查周正的活'
+    if: |-
+      ${{ !inputs.role || inputs.role == 'all' || inputs.role == 'frank' }}
+    runs-on: 'ubuntu-latest'
+    timeout-minutes: 5
+    outputs:
+      found: '${{ steps.scan.outputs.found }}'
+      number: '${{ steps.scan.outputs.number }}'
+      head_ref: '${{ steps.scan.outputs.head_ref }}'
+      reason: '${{ steps.scan.outputs.reason }}'
+    permissions:
+      # patrol.mjs 的 loadOpenPrs 取 statusCheckRollup（checks + checkSuite.workflowRun + statuses）
+      actions: 'read'
+      checks: 'read'
+      contents: 'read'
+      issues: 'read'
+      pull-requests: 'read'
+      statuses: 'read'
+    steps:
+      - name: '检出仓库'
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+
+      - name: '扫没人评审的 PR'
+        id: 'scan'
+        env:
+          GH_TOKEN: '${{ secrets.GITHUB_TOKEN || github.token }}'
+          REPOSITORY: '${{ github.repository }}'
+          PATROL_REVIEW_IDLE_MINUTES: '${{ vars.PATROL_REVIEW_IDLE_MINUTES || 30 }}'
+        run: |-
+          set -euo pipefail
+          node .github/scripts/patrol.mjs frank --repo "${REPOSITORY}"
+
+  call-frank:
+    name: '叫周正'
+    needs: 'scan-frank'
+    if: |-
+      ${{ needs.scan-frank.outputs.found == 'true' }}
+    uses: './.github/workflows/qwen-frank.yml'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+      issues: 'read'
+      pull-requests: 'write'
+    with:
+      pr_number: '${{ needs.scan-frank.outputs.number }}'
+      head_ref: '${{ needs.scan-frank.outputs.head_ref }}'
+      reason: '${{ needs.scan-frank.outputs.reason }}'
+    secrets: 'inherit'
+
+  # ────────────────────────────────────────────────────────────────
+  # 叶澜：停在中间、没有任何下一步的 Issue
+  # ────────────────────────────────────────────────────────────────
+  scan-nora:
+    name: '查叶澜的活'
+    if: |-
+      ${{ !inputs.role || inputs.role == 'all' || inputs.role == 'nora' }}
+    runs-on: 'ubuntu-latest'
+    timeout-minutes: 5
+    outputs:
+      found: '${{ steps.scan.outputs.found }}'
+      number: '${{ steps.scan.outputs.number }}'
+      reason: '${{ steps.scan.outputs.reason }}'
+    permissions:
+      contents: 'read'
+      issues: 'read'
+      pull-requests: 'read'
+    steps:
+      - name: '检出仓库'
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+
+      - name: '扫停住没有下一步的 Issue'
+        id: 'scan'
+        env:
+          GH_TOKEN: '${{ secrets.GITHUB_TOKEN || github.token }}'
+          REPOSITORY: '${{ github.repository }}'
+          PATROL_DECISION_IDLE_HOURS: '${{ vars.PATROL_DECISION_IDLE_HOURS || 24 }}'
+          PATROL_MAX_INSPECT: '${{ vars.PATROL_MAX_INSPECT || 15 }}'
+        run: |-
+          set -euo pipefail
+          node .github/scripts/patrol.mjs nora --repo "${REPOSITORY}"
+
+  call-nora:
+    name: '叫叶澜'
+    needs: 'scan-nora'
+    if: |-
+      ${{ needs.scan-nora.outputs.found == 'true' }}
+    uses: './.github/workflows/qwen-nora.yml'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+      issues: 'write'
+      pull-requests: 'read'
+    with:
+      number: '${{ needs.scan-nora.outputs.number }}'
+      on_pr: 'false'
+      issue_number: '${{ needs.scan-nora.outputs.number }}'
+      reason: '${{ needs.scan-nora.outputs.reason }}'
+    secrets: 'inherit'

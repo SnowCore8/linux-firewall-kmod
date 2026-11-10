@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: '使用问题与部署求助'
+    url: 'https://github.com/SnowCore8/github-workflow/blob/master/SUPPORT.md'
+    about: '装不上、配不对、不知道某个行为为什么这样，先看这份。'
+  - name: '报告安全漏洞'
+    url: 'https://github.com/SnowCore8/github-workflow/blob/master/.github/SECURITY.md'
+    about: '不要开公开 Issue。按这份说明走私密渠道或最小披露的公开 Issue。'
+  - name: '贡献前该读的规矩'
+    url: 'https://github.com/SnowCore8/github-workflow/blob/master/CONTRIBUTING.md'
+    about: '分支名、提交信息、PR 正文、本地自检，以及行为准则。'

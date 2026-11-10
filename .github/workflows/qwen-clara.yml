@@ -1,0 +1,234 @@
+name: '🧭 顾清'
+
+# 顾清，值班维护者：读 Issue、提问、打标、把可修的活交给陈实。
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        type: 'string'
+        description: '要处理的 Issue 编号；留空表示批量扫 backlog'
+        required: false
+        default: ''
+      reason:
+        type: 'string'
+        description: '为什么叫顾清来'
+        required: false
+        default: '手动触发'
+      batch_limit:
+        type: 'string'
+        description: '批量上限；留空取仓库变量 TRIAGE_BATCH_LIMIT，默认 5'
+        required: false
+        default: ''
+    outputs:
+      handled:
+        description: '本次是否处理了 Issue'
+        value: '${{ jobs.watch.outputs.handled }}'
+  schedule:
+    # 每小时扫一遍没人管的 Issue，像维护者定期过 backlog
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      batch_limit:
+        description: '批量上限；留空取仓库变量 TRIAGE_BATCH_LIMIT，默认 5'
+        required: false
+        type: 'string'
+        default: ''
+
+concurrency:
+  group: '${{ github.workflow }}-clara-${{ inputs.issue_number }}'
+  # 默认的 queue: single 只留一个排队位，新来的会把排着的那次取消掉——被取消的运行
+  # jobs 为空，等于这次叫醒被静默丢弃。顾清在一小时内可能被连叫几次，得留住。
+  queue: max
+  # 中断正在进行的运行会留下说了一半的评论，宁可排队
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: 'bash'
+
+jobs:
+  watch:
+    name: '值守'
+    runs-on: 'ubuntu-latest'
+    # 这一轮是「每条 Issue 一个代理并行 + 一路核对」，不再是单会话跑完。
+    # 批量上限由 TRIAGE_BATCH_LIMIT 定（默认 5），并行跑，所以墙钟不随条数线性涨。
+    # 这个超时是唯一的硬边界：模型跑满就被 SIGKILL，评论可能只写了一半。
+    timeout-minutes: 25
+    outputs:
+      handled: '${{ steps.prepare.outputs.handled }}'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+      issues: 'write'
+      pull-requests: 'read'
+    steps:
+      - name: '换取 App 令牌'
+        id: 'mint_identity_token'
+        if: |-
+          ${{ vars.APP_ID_CLARA }}
+        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # ratchet:actions/create-github-app-token@v2
+        with:
+          app-id: '${{ vars.APP_ID_CLARA }}'
+          private-key: '${{ secrets.APP_PRIVATE_KEY_CLARA }}'
+          permission-contents: 'read'
+          permission-issues: 'write'
+          permission-pull-requests: 'read'
+
+      - name: '检出仓库'
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+
+      - name: '挑出这一轮要看的 Issue'
+        id: 'prepare'
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          REPOSITORY: '${{ github.repository }}'
+          ISSUE_NUMBER: '${{ inputs.issue_number }}'
+          BATCH_LIMIT: '${{ inputs.batch_limit || vars.TRIAGE_BATCH_LIMIT || 5 }}'
+        # 挑哪几条 Issue 的判据在 context.mjs 的 prepareClara()：排序、去重、上限这些
+        # 错了不会报错，只会安静地漏处理或者重复处理，所以要能单测。
+        run: |-
+          set -euo pipefail
+          node .github/scripts/context.mjs clara
+
+      # 开跑前先占位。批量与单条分在两个并发组（`顾清-clara-` 与 `顾清-clara-42`），
+      # 同一张单会在两条运行里各被挑中一次，于是两条复述评论、两次交接。
+      # 占位标签让后来那条的批量跳过它（判据在 prepareClara 的 claiming）。
+      # 贴不上不拦这一轮：占位是防重复，不是干活的前提。
+      - name: '开跑前先占位'
+        if: |-
+          ${{ steps.prepare.outputs.handled == 'true' }}
+        env:
+          GH_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          REPOSITORY: '${{ github.repository }}'
+          TARGETS: '${{ steps.prepare.outputs.TARGETS }}'
+          LABEL: '${{ steps.prepare.outputs.CLAIM_LABEL }}'
+        run: |-
+          set -uo pipefail
+          # 第一次跑之前仓库里还没有这张标签；已存在时 gh 也退出 1，两种都不用管
+          gh label create "$LABEL" --repo "$REPOSITORY" \
+            --description '顾清正在看这一条' --color 'FBCA04' >/dev/null 2>&1 || true
+          IFS=',' read -ra numbers <<< "$TARGETS"
+          for n in "${numbers[@]}"; do
+            [ -n "$n" ] || continue
+            gh issue edit "$n" --repo "$REPOSITORY" --add-label "$LABEL" \
+              || echo "::warning::给 #$n 贴占位标签失败，这一轮照常跑"
+          done
+
+      # 顾清这一轮也有 issues: write，能改标签。停手标签 do-not-merge / manual-review
+      # 由叶澜独家掌管，所以这里和 qwen-miles.yml 一样装一层 gh 包装器：合并、设/摘
+      # 闸标签都会当场失败。收尾摘 status/triaging 不是闸标签，照常放行。
+      # 叶澜那轮不装，所以她本来就动得了；用 ROLE 环境变量判权不可靠，模型能自己设。
+      - name: '让模型够不到合并入口'
+        if: |-
+          ${{ steps.prepare.outputs.handled == 'true' }}
+        env:
+          WRAPPER: '${{ github.workspace }}/.github/scripts/no-merge-gh'
+        run: |-
+          set -euo pipefail
+
+          SHIM_DIR="${RUNNER_TEMP}/qwen-no-merge"
+          REAL_GH="$(command -v gh)"
+
+          rm -rf "${SHIM_DIR}"
+          mkdir -p "${SHIM_DIR}"
+          # 复制而不是引用工作区里那份：模型这一轮有写权限，改掉源文件就等于给自己
+          # 开了一道门。副本在 RUNNER_TEMP 下，它够不着。
+          cp "${WRAPPER}" "${SHIM_DIR}/no-merge-gh"
+          chmod +x "${SHIM_DIR}/no-merge-gh"
+          {
+            echo '#!/usr/bin/env bash'
+            echo "export REAL_GH='${REAL_GH}'"
+            echo "exec '${SHIM_DIR}/no-merge-gh' \"\$@\""
+          } > "${SHIM_DIR}/gh"
+          chmod +x "${SHIM_DIR}/gh"
+
+          # 装到 PATH 之前先自己验一遍：放行一条、拦下一条。验不过就不装，
+          # 退化成「事后检查」而不是把模型手里的 gh 弄坏。
+          if ! PATH="${SHIM_DIR}:${PATH}" gh --version >/dev/null 2>&1; then
+            echo '::warning title=合并拦截层没装上::gh 包装器透传失败，本次只有事后检查兜底。'
+            exit 0
+          fi
+          # 只认我们自己的拒绝文案：pr merge 0 在真 gh 上也必然失败，
+          # 只看退出码会把「没拦住」误判成「拦住了」。
+          # 不用 grep -q 接管道：pipefail 下 grep 提前退出会让左侧吃 SIGPIPE 而误判。
+          REFUSED="$(PATH="${SHIM_DIR}:${PATH}" gh pr merge 0 --repo a/b 2>&1 || true)"
+          case "${REFUSED}" in
+            *'没有合并权限'*) ;;
+            *)
+              echo '::warning title=合并拦截层没装上::包装器没能拦下 gh pr merge，本次只有事后检查兜底。'
+              exit 0
+              ;;
+          esac
+
+          echo "${SHIM_DIR}" >> "${GITHUB_PATH}"
+          echo "合并入口已接管：${SHIM_DIR}/gh"
+
+      - name: '跑一轮顾清'
+        id: 'qwen_clara'
+        if: |-
+          ${{ steps.prepare.outputs.handled == 'true' }}
+        uses: './.github/actions/run-agent'
+        env:
+          GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}'
+          REPOSITORY: '${{ github.repository }}'
+          TARGETS: '${{ steps.prepare.outputs.TARGETS }}'
+          REASON: '${{ inputs.reason }}'
+          MODE: '${{ steps.prepare.outputs.MODE }}'
+          # 工作流自己的容量。默认是「CPU 数 - 2，夹在 2..16」个代理、6 个并发，
+          # 以及 30 分钟总墙钟。批量分诊最多 5 条并行 + 1 路核对 = 6 个代理，
+          # 默认的 30 分钟墙钟会在最后一拍把核对砍掉 —— 而核对是唯一能发现
+          # 「代理说处理了、GitHub 上没有」的那一拍。
+          #
+          # 墙钟给 24 小时，等于不设限。CLI 只在值 > 0 时采纳它（resolveMaxWallClockMs），
+          # 删掉这个变量只会退回更短的 30 分钟，所以不能靠删。
+          # 真正的硬边界是上面 job 的 timeout-minutes。
+          QWEN_CODE_ENABLE_WORKFLOWS: '1'
+          QWEN_CODE_MAX_WORKFLOW_AGENTS: '10'
+          QWEN_CODE_MAX_WORKFLOW_CONCURRENCY: '6'
+          QWEN_CODE_MAX_WORKFLOW_SECONDS: '86400'
+        with:
+          role: 'clara'
+          # 这一轮怎么干写在 .qwen/workflows/clara-triage.js 里，不再是一份长提示词。
+          # 参数用 JSON 显式拼：让模型自己从环境变量凑 args，凑错一个字段不会报错，
+          # 只会把一批 Issue 的编号读成空。
+          prompt: >-
+            /clara-triage {"repo":"${{ github.repository }}","mode":"${{ steps.prepare.outputs.MODE }}","targets":"${{ steps.prepare.outputs.TARGETS }}","reason":"${{ inputs.reason }}"}
+          workflow_name: 'qwen-clara'
+          openai_api_key: '${{ secrets.QWEN_API_KEY }}'
+          openai_base_url: '${{ vars.QWEN_BASE_URL }}'
+          openai_model: '${{ vars.QWEN_MODEL }}'
+          qwen_cli_version: '${{ vars.QWEN_CLI_VERSION }}'
+          qwen_debug: '${{ fromJSON(vars.DEBUG || vars.ACTIONS_STEP_DEBUG || false) }}'
+          upload_artifacts: '${{ vars.UPLOAD_ARTIFACTS }}'
+          cleanup_target: '${{ inputs.issue_number }}'
+
+      # 工作流脚本抛错时 CLI 仍然退出 0，只把「Workflow failed: …」写进工具的返回内容。
+      # 所以「这一轮到底跑完没有」得单独判一次，否则失败会被读成成功。
+      # （另一类是「最后一段话是不是 API 报错」，那一判断在 run-agent 内部，四个人共用。）
+      - name: '工作流没跑完就判失败'
+        if: |-
+          ${{ always() && steps.prepare.outputs.handled == 'true' && steps.qwen_clara.outcome == 'success' }}
+        env:
+          ROLE: 'clara'
+        run: |-
+          set -euo pipefail
+          node .github/scripts/workflow-run.mjs
+
+      # 收尾摘掉占位，失败也要摘。留着的话下一次批量会跳过这张单，它就再没人看 ——
+      # 一次崩溃变成一张永久无人处理的 Issue，比这轮失败本身更贵。
+      - name: '收尾摘掉占位'
+        if: |-
+          ${{ always() && steps.prepare.outputs.handled == 'true' }}
+        env:
+          GH_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          REPOSITORY: '${{ github.repository }}'
+          TARGETS: '${{ steps.prepare.outputs.TARGETS }}'
+          LABEL: '${{ steps.prepare.outputs.CLAIM_LABEL }}'
+        run: |-
+          set -uo pipefail
+          IFS=',' read -ra numbers <<< "$TARGETS"
+          for n in "${numbers[@]}"; do
+            [ -n "$n" ] || continue
+            gh issue edit "$n" --repo "$REPOSITORY" --remove-label "$LABEL" \
+              || echo "::warning::#$n 上的占位标签没摘掉，下一次批量会跳过它，需要手动摘"
+          done
