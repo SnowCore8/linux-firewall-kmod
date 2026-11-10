@@ -178,7 +178,40 @@ func ParseConfig(content string, cfg *Config) error {
 //
 // strict 对应 `--no-strict`：为 false 时忽略未知 YAML 键。它必须从加载入口一路传进来，
 // 不能在解码处写死——否则「启动宽松、重载严格」这类偏差会让同一个文件的行为取决于谁读它。
+
+// checkYAMLAliasBomb 检测 YAML 别名展开炸弹（billion laughs 攻击）。
+// 统计锚点 (&name) 与别名 (*name) 数量，别名引用总数超过 1000 或别名数远超锚点数时拒绝。
+func checkYAMLAliasBomb(content string) error {
+	const maxAliasRefs = 1000
+	anchors := 0
+	aliases := 0
+	for i := 0; i < len(content); i++ {
+		if content[i] == '&' && i+1 < len(content) && isIdentStart(content[i+1]) {
+			anchors++
+		} else if content[i] == '*' && i+1 < len(content) && isIdentStart(content[i+1]) {
+			aliases++
+		}
+	}
+	if aliases > maxAliasRefs {
+		return fmt.Errorf("YAML 别名引用数 %d 超过上限 %d，疑似别名展开攻击", aliases, maxAliasRefs)
+	}
+	if anchors > 0 && aliases > anchors*10 {
+		return fmt.Errorf("YAML 别名数 %d 远超锚点数 %d，疑似别名展开攻击", aliases, anchors)
+	}
+	return nil
+}
+
+func isIdentStart(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+}
+
 func parseConfigFrom(content string, cfg *Config, runtimeOverride, strict bool) error {
+	// 防止 YAML 别名展开炸弹（billion laughs 攻击）：统计锚点与别名数量，
+	// 别名数超过锚点数 10 倍或总引用超过 1000 时拒绝。
+	if err := checkYAMLAliasBomb(content); err != nil {
+		return err
+	}
+
 	var yc yamlConfig
 	dec := yaml.NewDecoder(bytes.NewReader([]byte(content)))
 	dec.KnownFields(strict)
@@ -333,6 +366,10 @@ func applyJails(yc *yamlConfig, cfg *Config, runtimeOverride bool) error {
 
 // applyJailDefinition 应用单个 jail 的定义。
 func applyJailDefinition(cfg *Config, name string, yj *yamlJail, runtimeOverride bool) error {
+	// jail 名校验：防止空串、路径分隔符、控制字符、过长名称
+	if err := validateJailName(name); err != nil {
+		return err
+	}
 	// 运行期覆盖文件里出现未定义的 jail 名时忽略并告警，不凭空创建。
 	if runtimeOverride {
 		if findJail(cfg, name) == nil {
@@ -448,6 +485,24 @@ func findJail(cfg *Config, name string) *Jail {
 // FindJail 按名查找 jail，返回指向 cfg.Jails 元素的指针（供包外使用）。
 func (c *Config) FindJail(name string) *Jail { return findJail(c, name) }
 
+// validateJailName 校验 jail 名：非空、长度上限、禁止路径分隔符和控制字符。
+// jail 名用于日志、指标标签、运行期覆盖文件名，非法字符可能导致路径穿越或指标注入。
+func validateJailName(name string) error {
+	const maxJailNameLen = 64
+	if name == "" {
+		return fmt.Errorf("jail 名不能为空")
+	}
+	if len(name) > maxJailNameLen {
+		return fmt.Errorf("jail 名 %q 长度 %d 超过上限 %d", name, len(name), maxJailNameLen)
+	}
+	for _, r := range name {
+		if r == '/' || r == '\\' || r == '\x00' || r < ' ' {
+			return fmt.Errorf("jail 名 %q 包含非法字符 %q", name, r)
+		}
+	}
+	return nil
+}
+
 func validateLogFiles(j *Jail, files []string) error {
 	if len(files) > MaxLogFiles {
 		return fmt.Errorf("jail %q 的 log_files 数量 %d 超过上限 %d", j.Name, len(files), MaxLogFiles)
@@ -541,12 +596,18 @@ func applyDdos(yc *yamlConfig, cfg *Config) error {
 	if err := setU32Bounded(&cfg.Ddos.GlobalConnRate, d.GlobalConnRate, 1, 10000000, "ddos.global_conn_rate"); err != nil {
 		return err
 	}
-	setU32(&cfg.Ddos.AutoBanDuration, d.AutoBanDuration)
-	setU32(&cfg.Ddos.AutoBanThreshold, d.AutoBanThreshold)
+	if err := setU32Bounded(&cfg.Ddos.AutoBanDuration, d.AutoBanDuration, 1, 86400, "ddos.auto_ban_duration"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Ddos.AutoBanThreshold, d.AutoBanThreshold, 1, 1000000, "ddos.auto_ban_threshold"); err != nil {
+		return err
+	}
 	if err := setU32Bounded(&cfg.Ddos.CheckInterval, d.CheckInterval, 1, 3600, "ddos.check_interval"); err != nil {
 		return err
 	}
-	setU32(&cfg.Ddos.BaselineWarmupSample, d.BaselineWarmupSample)
+	if err := setU32Bounded(&cfg.Ddos.BaselineWarmupSample, d.BaselineWarmupSample, 1, 100000, "ddos.baseline_warmup_sample"); err != nil {
+		return err
+	}
 	if err := setU32Bounded(&cfg.Ddos.MaxSynPerSecond, d.MaxSynPerSecond, 1, 10000000, "ddos.max_syn_per_second"); err != nil {
 		return err
 	}
@@ -556,14 +617,24 @@ func applyDdos(yc *yamlConfig, cfg *Config) error {
 	if err := setU32Bounded(&cfg.Ddos.MaxICMPPerSecond, d.MaxICMPPerSecond, 1, 10000000, "ddos.max_icmp_per_second"); err != nil {
 		return err
 	}
-	setU32(&cfg.Ddos.MaxACKPerSecond, d.MaxACKPerSecond)
-	setU32(&cfg.Ddos.MaxRSTPerSecond, d.MaxRSTPerSecond)
-	setU32(&cfg.Ddos.MaxFINPerSecond, d.MaxFINPerSecond)
+	if err := setU32Bounded(&cfg.Ddos.MaxACKPerSecond, d.MaxACKPerSecond, 1, 10000000, "ddos.max_ack_per_second"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Ddos.MaxRSTPerSecond, d.MaxRSTPerSecond, 1, 10000000, "ddos.max_rst_per_second"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Ddos.MaxFINPerSecond, d.MaxFINPerSecond, 1, 10000000, "ddos.max_fin_per_second"); err != nil {
+		return err
+	}
 	setBool(&cfg.Ddos.StaticThreshold, d.StaticThreshold)
 	setBool(&cfg.Ddos.DynamicThreshold, d.DynamicThreshold)
 	setBool(&cfg.Ddos.DdosDetection, d.DdosDetection)
-	setU32(&cfg.Ddos.MaxBansPerSecond, d.MaxBansPerSecond)
-	setU32(&cfg.Ddos.MaxRateEntries, d.MaxRateEntries)
+	if err := setU32Bounded(&cfg.Ddos.MaxBansPerSecond, d.MaxBansPerSecond, 1, 10000, "ddos.max_bans_per_second"); err != nil {
+		return err
+	}
+	if err := setU32Bounded(&cfg.Ddos.MaxRateEntries, d.MaxRateEntries, 1, 10000000, "ddos.max_rate_entries"); err != nil {
+		return err
+	}
 	setBool(&cfg.Ddos.ProtectOpenPorts, d.ProtectOpenPorts)
 	return nil
 }
