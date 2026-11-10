@@ -374,13 +374,17 @@ func (t *Transport) Poll(timeout time.Duration, interesting EventType) (EventTyp
 	}
 
 	observed := EventType(0)
+	// 在 closeMu 保护下读取 fd 值，防止与 Close 并发时读到已关闭的 fd
+	t.closeMu.Lock()
+	wakeFd, fd := t.wakeFd, t.fd
+	t.closeMu.Unlock()
 	for i := 0; i < n; i++ {
 		switch evs[i].Fd {
-		case int32(t.wakeFd):
+		case int32(wakeFd):
 			// 必须消费计数器：eventfd 是水平触发，留着它下次等待会立刻返回。
-			drainWakeFd(t.wakeFd)
+			drainWakeFd(wakeFd)
 			return EventLinkDown, nil
-		case int32(t.fd):
+		case int32(fd):
 			// 错误/挂断：socket 已被内核侧终结，再 recvfrom 只会拿到同样的错误。
 			if evs[i].Events&(unix.EPOLLERR|unix.EPOLLHUP|unix.EPOLLRDHUP) != 0 {
 				return EventLinkDown, nil
@@ -495,17 +499,30 @@ func (t *Transport) Close() {
 		return
 	}
 	t.closed = true
-	epFd, wakeFd := t.epFd, t.wakeFd
-	t.epFd, t.wakeFd = -1, -1
+	// 先信号告知消费者链路已断，使其退出循环，避免在 fd 关闭后仍尝试操作
+	wakeFd := t.wakeFd
 	t.closeMu.Unlock()
-	unix.Close(t.fd)
+	// 写入 eventfd 唤醒 Poll（如果正在等待）
+	if wakeFd >= 0 {
+		var buf [8]byte
+		binary.LittleEndian.PutUint64(buf[:], 1)
+		_, _ = unix.Write(wakeFd, buf[:])
+	}
+	t.SignalLinkDown()
+	// 消费者已退出，安全关闭 fd
+	t.closeMu.Lock()
+	epFd, fd := t.epFd, t.fd
+	t.epFd, t.wakeFd, t.fd = -1, -1, -1
+	t.closeMu.Unlock()
+	if fd >= 0 {
+		unix.Close(fd)
+	}
 	if wakeFd >= 0 {
 		unix.Close(wakeFd)
 	}
 	if epFd >= 0 {
 		unix.Close(epFd)
 	}
-	t.SignalLinkDown()
 }
 
 // SetDeadline 设定截止时间；零值清除。

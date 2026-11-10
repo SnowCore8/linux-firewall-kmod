@@ -26,6 +26,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/bans"
@@ -204,7 +205,10 @@ type EventPump struct {
 	// leaseClaimed 记录启动注册已由 ClaimLease 完成，Run 不再重复一次。重复注册在内核
 	// 侧没有坏处（同一个 portid 刷新租约），但会让「开机收到了几条 DAEMON_REGISTER」
 	// 这条排障线索变成随机数。
-	leaseClaimed bool
+	//
+	// 用 atomic.Bool：ClaimLease 在主 goroutine 写入，Run 在独立 goroutine 读取，
+	// 普通 bool 存在数据竞争。
+	leaseClaimed atomic.Bool
 
 	// 上次已成功取回的采样值，用于「只在变化时推送」：安静时段不重复序列化同样的内容。
 	lastStats    contract.StatsResponse
@@ -273,7 +277,7 @@ func (p *EventPump) Ring() *telemetry.Ring { return p.ring }
 // 只会在「内核曾经不可用」的情况下永久失去事件。
 func (p *EventPump) Run(stop *runtime.Shutdown) {
 	// 组合根如果先调过 ClaimLease，这里就不再重复一次启动注册。
-	if !p.leaseClaimed {
+	if !p.leaseClaimed.Load() {
 		p.register("启动")
 	}
 
@@ -359,7 +363,7 @@ func (p *EventPump) ClaimLease() error {
 	case registerRefused:
 		return ErrLeaseRefused
 	case registerAccepted:
-		p.leaseClaimed = true
+		p.leaseClaimed.Store(true)
 	}
 	return nil
 }
