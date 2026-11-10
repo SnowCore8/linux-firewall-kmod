@@ -129,6 +129,10 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, up
 	}
 	path := h.getConfigPath()
 
+	// 持锁保护读-改-写序列，防止并发请求互相覆盖
+	h.configFileMu.Lock()
+	defer h.configFileMu.Unlock()
+
 	content, err := os.ReadFile(path)
 	if err != nil {
 		h.server.logger.Error("读取配置文件失败", "path", path, "error", err)

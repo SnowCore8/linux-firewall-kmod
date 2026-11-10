@@ -245,6 +245,7 @@ type APIHandlers struct {
 	lockout         *AuthLockout
 	threatFeeds     *threatfeeds.FeedManager
 	threatFeedSync  sync.Mutex
+	configFileMu    sync.Mutex // 保护配置文件读写，防止并发更新丢失
 
 	// 认证凭据
 	username string

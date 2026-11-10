@@ -66,7 +66,7 @@ func (h *APIHandlers) SyncThreatFeed(w http.ResponseWriter, r *http.Request) {
 
 	// 防止并发同步：TryLock 失败说明已有一次同步在进行，直接返回。
 	if !h.threatFeedSync.TryLock() {
-		WriteCode(w, http.StatusConflict, "sync already in progress")
+		WriteCode(w, httpcontract.Code50003, "已有同步任务正在进行中")
 		return
 	}
 
