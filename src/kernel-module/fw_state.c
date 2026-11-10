@@ -225,6 +225,10 @@ static int fw_state_write_bans(struct file *file, loff_t *pos, u32 *crc,
                    r->af == FW_AF_INET6 ? "BAN_V6" : "BAN_V4", ip_str,
                    (unsigned int)r->prefix_len, (unsigned long long)remaining,
                    jail[0] ? jail : "api", r->reason[0] ? r->reason : "(none)");
+      if (n >= (int)buf_size) {
+        ret = -ENOSPC;
+        goto out;
+      }
       ret = fw_state_write_chunk(file, pos, crc, buf, n);
       if (ret)
         goto out;
@@ -269,6 +273,10 @@ static int fw_state_write_whitelist(struct file *file, loff_t *pos, u32 *crc,
       n = snprintf(buf, buf_size, "%s %s %u %s\n",
                    r->af == FW_AF_INET6 ? "WL_V6" : "WL_V4", ip_str,
                    r->prefix_len, r->device_name[0] ? r->device_name : "api");
+      if (n >= (int)buf_size) {
+        ret = -ENOSPC;
+        goto out;
+      }
       ret = fw_state_write_chunk(file, pos, crc, buf, n);
       if (ret)
         goto out;

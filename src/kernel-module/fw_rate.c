@@ -63,11 +63,22 @@ static inline struct hlist_head *fw_rate_bucket_head(u8 af, u32 bkt) {
   return af == FW_AF_INET6 ? &fw_info.rate_ipv6[bkt] : &fw_info.rate_ipv4[bkt];
 }
 
-/* 桶内查找同一 (af, addr)。热路径与建条目路径都用；调用者决定是否持锁 */
+/* 桶内查找同一 (af, addr)。持锁版本，用非 RCU 遍历宏 */
 static struct fw_rate_node *fw_rate_find_locked(u8 af, const void *addr, u32 bkt) {
   struct fw_rate_node *n;
 
   hlist_for_each_entry(n, fw_rate_bucket_head(af, bkt), hash) {
+    if (n->af == af && fw_addr_equal(af, &n->addr, addr))
+      return n;
+  }
+  return NULL;
+}
+
+/* 桶内查找同一 (af, addr)。RCU 版本，用于无锁热路径（调用者持 rcu_read_lock） */
+static struct fw_rate_node *fw_rate_find_rcu(u8 af, const void *addr, u32 bkt) {
+  struct fw_rate_node *n;
+
+  hlist_for_each_entry_rcu(n, fw_rate_bucket_head(af, bkt), hash) {
     if (n->af == af && fw_addr_equal(af, &n->addr, addr))
       return n;
   }
@@ -671,7 +682,7 @@ const char *fw_rate_observe(u8 af, const void *addr, u32 packet_len, u8 protocol
   if (unlikely(fw_info.rate_clear_ctx.clearing))
     return NULL;
 
-  n = fw_rate_find_locked(af, addr, bkt);
+  n = fw_rate_find_rcu(af, addr, bkt);
   if (unlikely(!n)) {
     /* 冷路径建条目：rate_locks[bkt] → rate_slot_lock（唯一允许的嵌套） */
     spin_lock_bh(&fw_info.rate_locks[bkt]);
