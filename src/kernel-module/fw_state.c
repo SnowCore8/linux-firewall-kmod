@@ -61,8 +61,8 @@
 /* 分页收集时每页行数 */
 #define FW_STATE_PAGE 64
 
-/* 恢复只做一次：模块生命周期内的守卫 */
-static bool fw_state_restored;
+/* 恢复只做一次：模块生命周期内的守卫。用 bit 操作保证原子性。 */
+static unsigned long fw_state_restored_flag;
 /* 状态保存截断累计计数：fw_state_write_bans/whitelist 遇到条目超过保存上限时递增，
  * 由 procfs stats 暴露给守护进程。用 atomic64 因为递增发生在保存路径（无锁上下文），
  * 而读取发生在 procfs show（不同 CPU）。 */
@@ -562,9 +562,9 @@ int fw_state_restore(void) {
   ssize_t len = 0;
   int ret = 0;
 
-  if (fw_state_restored)
+  /* test_and_set_bit 返回旧值：已恢复则跳过，保证并发调用只执行一次 */
+  if (test_and_set_bit(0, &fw_state_restored_flag))
     return 0;
-  fw_state_restored = true;
 
   if (fw_state_validate_path(path))
     return -EINVAL;
