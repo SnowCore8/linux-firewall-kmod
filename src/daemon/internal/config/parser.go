@@ -297,6 +297,9 @@ func applyDefaults(yc *yamlConfig, cfg *Config) error {
 		cfg.HistoryDBPath = *d.HistoryDBPath
 	}
 	if d.HistoryRetentionDays != nil {
+		if *d.HistoryRetentionDays == 0 || *d.HistoryRetentionDays > 3650 {
+			return fmt.Errorf("history_retention_days=%d 超出合理范围 (1-3650)", *d.HistoryRetentionDays)
+		}
 		cfg.HistoryRetentionDays = int(*d.HistoryRetentionDays)
 	}
 	return nil
@@ -448,6 +451,11 @@ func (c *Config) FindJail(name string) *Jail { return findJail(c, name) }
 func validateLogFiles(j *Jail, files []string) error {
 	if len(files) > MaxLogFiles {
 		return fmt.Errorf("jail %q 的 log_files 数量 %d 超过上限 %d", j.Name, len(files), MaxLogFiles)
+	}
+	for _, p := range files {
+		if err := ValidateAndNormalizePath(p); err != nil {
+			return fmt.Errorf("jail %q 的 log_file %q 不合法: %w", j.Name, p, err)
+		}
 	}
 	j.LogFiles = append(j.LogFiles[:0], files...)
 	return nil
