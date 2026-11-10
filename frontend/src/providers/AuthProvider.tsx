@@ -63,6 +63,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const failCountRef = useRef(0)
   failCountRef.current = failCount
+  const lockoutRemainingRef = useRef(0)
+  lockoutRemainingRef.current = lockoutRemaining
   const lockoutTimerRef = useRef<number | null>(null)
 
   const clearLockoutTimer = useCallback(() => {
@@ -102,8 +104,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (username: string, password: string): Promise<boolean> => {
-      if (lockoutRemaining > 0) {
-        setError(`登录已被锁定，请在 ${lockoutRemaining} 秒后重试`)
+      if (lockoutRemainingRef.current > 0) {
+        setError(`登录已被锁定，请在 ${lockoutRemainingRef.current} 秒后重试`)
         return false
       }
       setIsLoggingIn(true)
@@ -149,7 +151,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setIsLoggingIn(false)
       }
     },
-    [lockoutRemaining, startLockout],
+    [startLockout],
   )
 
   const logout = useCallback(() => {
