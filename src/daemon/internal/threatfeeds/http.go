@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -36,9 +37,39 @@ const maxFeedResponseBytes = 100 << 20
 
 // NewHTTPClient 创建新的 HTTP 客户端。
 func NewHTTPClient(timeout time.Duration, maxRetries int) *HTTPClient {
+	// 自定义 DialContext：DNS 解析后检查目标 IP，防止 DNS rebinding SSRF
+	dialer := &net.Dialer{Timeout: 30 * time.Second}
+	safeDialContext := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		// 分离 host 和 port
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("解析地址失败: %w", err)
+		}
+		// 解析 DNS
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("DNS 解析失败: %w", err)
+		}
+		// 检查所有解析出的 IP，任一为私有地址则拒绝
+		for _, ip := range ips {
+			addr, ok := netip.AddrFromSlice(ip.IP)
+			if !ok {
+				continue
+			}
+			if isPrivateAddr(addr) {
+				return nil, fmt.Errorf("DNS 解析到私有地址 %s，拒绝连接（SSRF 防护）", ip.IP)
+			}
+		}
+		// 使用第一个非私有 IP 连接
+		return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+	}
+
 	return &HTTPClient{
 		client: &http.Client{
 			Timeout: timeout,
+			Transport: &http.Transport{
+				DialContext: safeDialContext,
+			},
 			// 禁止自动跟随重定向，防止重定向到内网地址
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 3 {

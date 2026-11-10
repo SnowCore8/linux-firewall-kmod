@@ -2,6 +2,7 @@ package threatfeeds
 
 import (
 	"context"
+	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -72,11 +73,16 @@ func (s *Scheduler) Stop() {
 //
 // 返回 interval ± jitter 范围内的随机延迟。
 func (s *Scheduler) calculateJitter() time.Duration {
-	if s.jitter == 0 {
+	if s.jitter <= 0 {
 		return s.interval
 	}
+	// 防止 2*jitter 溢出 int64：jitter 超过 MaxInt64/2 时截断
+	jitter := s.jitter
+	if jitter > time.Duration(math.MaxInt64/2) {
+		jitter = time.Duration(math.MaxInt64 / 2)
+	}
 	// 随机范围：[-jitter, +jitter]
-	offset := rand.Int63n(int64(2*s.jitter)) - int64(s.jitter)
+	offset := rand.Int63n(int64(2*jitter)) - int64(jitter)
 	return s.interval + time.Duration(offset)
 }
 

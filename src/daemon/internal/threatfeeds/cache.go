@@ -126,8 +126,8 @@ func (c *FeedCache) Lookup(ip netip.Addr) (*FeedEntry, bool) {
 
 // Stats 返回缓存统计信息。
 func (c *FeedCache) Stats() CacheStats {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.updateActiveCountLocked()
 	// 从 atomic 计数器读取，避免与 Lookup 的数据竞争
 	c.stats.ExactHits = c.exactHits.Load()
