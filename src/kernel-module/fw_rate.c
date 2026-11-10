@@ -85,17 +85,23 @@ static struct fw_rate_node *fw_rate_find_rcu(u8 af, const void *addr, u32 bkt) {
   return NULL;
 }
 
-/* EWMA 定点更新：smoothed = (3 * cur + 7 * old) / 10 */
+/* EWMA 定点更新：smoothed = (3 * cur + 7 * old) / 10
+ * 先除后乘避免中间值溢出：(cur/10)*3 + (old/10)*7 */
 static inline u64 fw_ewma(u64 cur, u64 old) {
-  return (FW_EWMA_NUM * cur + (FW_EWMA_DEN - FW_EWMA_NUM) * old) / FW_EWMA_DEN;
+  return (cur / FW_EWMA_DEN) * FW_EWMA_NUM + (old / FW_EWMA_DEN) * (FW_EWMA_DEN - FW_EWMA_NUM);
 }
 
 /* 计数折算为「每秒」。溢出时退化为先除再乘，避免中间值回绕 */
 static inline u64 fw_pps(u64 count, unsigned long elapsed) {
   unsigned long e = elapsed ? elapsed : 1;
 
-  if (count > U64_MAX / HZ)
-    return (count / e) * HZ;
+  if (count > U64_MAX / HZ) {
+    /* 先除后乘仍可能溢出，改用饱和算术：上限钳到 U64_MAX/HZ*HZ */
+    u64 safe = count / e;
+    if (safe > U64_MAX / HZ)
+      return U64_MAX / HZ * HZ;
+    return safe * HZ;
+  }
   return count * HZ / e;
 }
 
