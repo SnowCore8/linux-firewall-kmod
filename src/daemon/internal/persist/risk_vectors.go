@@ -88,6 +88,7 @@ func (db *DB) UpsertRiskVector(ip string, vec risk.RiskVector, lastEventAt int64
 // 衰减公式：vec *= DecayFactor(days_since_last_event)
 // 衰减后向量接近 0 时直接删除，避免数据库无限增长。
 func (db *DB) BatchDecayVectors(now int64) error {
+	// 先读完所有行再关闭迭代器，避免在单连接模式下嵌套写操作导致死锁
 	rows, err := db.conn.Query(
 		`SELECT ip, failure, ban, scan, bruteforce, ddos, geo, cluster, last_event_at
 		 FROM ip_risk_vectors`,
@@ -95,43 +96,52 @@ func (db *DB) BatchDecayVectors(now int64) error {
 	if err != nil {
 		return fmt.Errorf("query all risk_vectors: %w", err)
 	}
-	defer rows.Close()
 
+	type decayEntry struct {
+		ip          string
+		vec         risk.RiskVector
+		lastEventAt int64
+	}
+	var entries []decayEntry
 	var toDelete []string
+
 	for rows.Next() {
-		var (
-			ip          string
-			vec         risk.RiskVector
-			lastEventAt int64
-		)
+		var entry decayEntry
 		if err := rows.Scan(
-			&ip,
-			&vec.Failure,
-			&vec.Ban,
-			&vec.Scan,
-			&vec.Bruteforce,
-			&vec.DDoS,
-			&vec.Geo,
-			&vec.Cluster,
-			&lastEventAt,
+			&entry.ip,
+			&entry.vec.Failure,
+			&entry.vec.Ban,
+			&entry.vec.Scan,
+			&entry.vec.Bruteforce,
+			&entry.vec.DDoS,
+			&entry.vec.Geo,
+			&entry.vec.Cluster,
+			&entry.lastEventAt,
 		); err != nil {
+			rows.Close()
 			return fmt.Errorf("scan risk_vector: %w", err)
 		}
 
-		days := risk.DaysSince(now, lastEventAt)
-		vec.Decay(days)
+		days := risk.DaysSince(now, entry.lastEventAt)
+		entry.vec.Decay(days)
 
-		if vec.IsZero() || (vec.Total(risk.DefaultDimensionWeights()) < 0.01) {
-			toDelete = append(toDelete, ip)
+		if entry.vec.IsZero() || (entry.vec.Total(risk.DefaultDimensionWeights()) < 0.01) {
+			toDelete = append(toDelete, entry.ip)
 			continue
 		}
-
-		if err := db.UpsertRiskVector(ip, vec, lastEventAt); err != nil {
-			return fmt.Errorf("update decayed vector for %s: %w", ip, err)
-		}
+		entries = append(entries, entry)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return fmt.Errorf("iterate risk_vectors: %w", err)
+	}
+	rows.Close()
+
+	// 关闭迭代器后再执行写操作
+	for _, entry := range entries {
+		if err := db.UpsertRiskVector(entry.ip, entry.vec, entry.lastEventAt); err != nil {
+			return fmt.Errorf("update decayed vector for %s: %w", entry.ip, err)
+		}
 	}
 
 	for _, ip := range toDelete {
