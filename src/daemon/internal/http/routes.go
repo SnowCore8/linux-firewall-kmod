@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
@@ -243,6 +244,7 @@ type APIHandlers struct {
 	kernelConfig    KernelConfig
 	lockout         *AuthLockout
 	threatFeeds     *threatfeeds.FeedManager
+	threatFeedSync  sync.Mutex
 
 	// 认证凭据
 	username string

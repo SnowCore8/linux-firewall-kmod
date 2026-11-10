@@ -182,6 +182,7 @@ Whitelist entries: 2
 | `current_bans` | i32 | 当前封禁条目数 |
 | `current_whitelist` | i32 | 当前白名单条目数 |
 | `recent_additions` | u32 | 当前一秒窗口内已记的封禁添加次数，泛洪限流用它判断 |
+| `state_save_truncated` | u64 | 状态持久化时因超出上限被截断的次数 |
 
 ```bash
 sudo cat /proc/firewall/stats

@@ -64,8 +64,15 @@ func (h *APIHandlers) SyncThreatFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 防止并发同步：TryLock 失败说明已有一次同步在进行，直接返回。
+	if !h.threatFeedSync.TryLock() {
+		WriteCode(w, http.StatusConflict, "sync already in progress")
+		return
+	}
+
 	// 触发同步（异步执行）。RefreshAll 自带每源错误隔离，失败落在源统计里由读侧报出。
 	go func() {
+		defer h.threatFeedSync.Unlock()
 		_ = h.threatFeeds.RefreshAll(h.threatFeeds.BackgroundContext())
 	}()
 
