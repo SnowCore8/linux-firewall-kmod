@@ -100,7 +100,8 @@ func (h *APIHandlers) GetLogs(w http.ResponseWriter, r *http.Request) {
 // 不是「你要的日志行不存在」，更不是服务端 bug；其余读失败才是 50002。
 func (h *APIHandlers) writeLogReadError(w http.ResponseWriter, logFile string, err error) {
 	if os.IsNotExist(err) {
-		WriteServiceUnavailable(w, "日志文件不可读: "+logFile)
+		h.server.logger.Warn("日志文件不存在", "path", logFile)
+		WriteServiceUnavailable(w, "日志文件不可用")
 		return
 	}
 	h.server.logger.Error("读取日志文件失败", "path", logFile, "error", err)

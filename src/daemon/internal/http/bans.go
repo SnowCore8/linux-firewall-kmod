@@ -158,7 +158,7 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 		if sendErr := h.kernelBan.Send(addr, prefixLen, durationSecs, reason); sendErr != nil {
 			h.server.logger.Error("内核封禁下发失败", "ip", req.IP, "error", sendErr)
 			bans.GlobalCache().Remove(req.IP)
-			WriteCode(w, httpcontract.Code40001, "封禁失败：内核未确认（"+sendErr.Error()+"）")
+			WriteCode(w, httpcontract.Code40001, "封禁失败：内核未确认")
 			return
 		}
 	}
@@ -341,7 +341,7 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 				h.server.logger.Error("batch ban kernel send failed", "ip", ip, "error", sendErr)
 				bans.GlobalCache().Remove(ip)
 				failCount++
-				details = append(details, ip+": 内核未确认（"+sendErr.Error()+"）")
+				details = append(details, ip+": 内核未确认")
 				continue
 			}
 		}
