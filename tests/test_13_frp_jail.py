@@ -72,8 +72,12 @@ class TestFrpJail:
         frp_yaml.write_text(yaml.dump(config))
 
         run_daemon_captured([str(DAEMON_PATH), "-c", str(frp_yaml)], timeout=5)
-        time.sleep(1)
 
+        # 轮询等待封禁出现（日志解析是异步链路，固定 sleep 可能不足）
         if PROC_BANS.exists():
+            deadline = time.monotonic() + 4.0
             ban_count = count_bans()
+            while ban_count < 1 and time.monotonic() < deadline:
+                time.sleep(0.2)
+                ban_count = count_bans()
             assert ban_count >= 1, "FRP 日志解析处理成功，有 IP 被封禁"

@@ -49,10 +49,14 @@ class TestDaemonLogparse:
         generate_test_yaml(str(yaml_config), str(test_log), max_retries=1, findtime=1, ban_time=5)
 
         run_daemon_captured([str(DAEMON_PATH), "-c", str(yaml_config)], timeout=5)
-        time.sleep(1)
 
+        # 轮询等待封禁出现（日志解析→正则匹配→封禁下发是异步链路，固定 sleep 可能不足）
         assert PROC_BANS.exists(), "守护进程运行后 procfs 不可访问"
+        deadline = time.monotonic() + 4.0
         ban_count = count_bans()
+        while ban_count < 1 and time.monotonic() < deadline:
+            time.sleep(0.2)
+            ban_count = count_bans()
         assert ban_count >= 1, (
             "日志解析后无 IP 被封禁（5 行含有效 IP 的失败日志应触发封禁，"
             "可能是正则未匹配）"
