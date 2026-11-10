@@ -27,6 +27,13 @@ type HTTPClient struct {
 	userAgent  string
 }
 
+// maxFeedResponseBytes 是单个情报源响应体的上限：100 MiB。
+//
+// 正常情报源列表远小于此（IPsum 约 2-5 MiB，FireHOL Level 1 约 50 KiB）。
+// 上限存在的意义是把「远端被攻陷或配置错误返回数 GB 数据」从内存耗尽降级成一次
+// 错误返回，而不是让守护进程被 OOM killer 干掉。安全基础设施本身不能成为 DoS 入口。
+const maxFeedResponseBytes = 100 << 20
+
 // NewHTTPClient 创建新的 HTTP 客户端。
 func NewHTTPClient(timeout time.Duration, maxRetries int) *HTTPClient {
 	return &HTTPClient{
@@ -120,9 +127,14 @@ func (c *HTTPClient) fetchOnce(ctx context.Context, u *url.URL) ([]byte, error) 
 		return nil, fmt.Errorf("HTTP 状态码 %d", resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	// 限制读取量，防止远端返回超大响应导致 OOM
+	limited := io.LimitReader(resp.Body, maxFeedResponseBytes+1)
+	data, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应体失败: %w", err)
+	}
+	if int64(len(data)) > maxFeedResponseBytes {
+		return nil, fmt.Errorf("响应体超过 %d MiB 上限", maxFeedResponseBytes>>20)
 	}
 	return data, nil
 }

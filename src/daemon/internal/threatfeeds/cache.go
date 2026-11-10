@@ -3,6 +3,7 @@ package threatfeeds
 import (
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,6 +17,10 @@ type FeedCache struct {
 	mu      sync.RWMutex
 	entries map[string]*FeedEntry // key: IP.String() 或 CIDR.String()
 	stats   CacheStats
+	// 命中/未命中计数器用 atomic，避免在读锁下修改 stats 导致数据竞争
+	exactHits atomic.Uint64
+	cidrHits  atomic.Uint64
+	misses    atomic.Uint64
 }
 
 // CacheStats 是缓存统计信息。
@@ -94,7 +99,7 @@ func (c *FeedCache) Lookup(ip netip.Addr) (*FeedEntry, bool) {
 	key := ip.String()
 	if e, ok := c.entries[key]; ok {
 		if now.Before(e.ExpiresAt) {
-			c.stats.ExactHits++
+			c.exactHits.Add(1)
 			return e, true
 		}
 	}
@@ -105,12 +110,12 @@ func (c *FeedCache) Lookup(ip netip.Addr) (*FeedEntry, bool) {
 			continue
 		}
 		if e.IP.Contains(ip) {
-			c.stats.CIDRHits++
+			c.cidrHits.Add(1)
 			return e, true
 		}
 	}
 
-	c.stats.Misses++
+	c.misses.Add(1)
 	return nil, false
 }
 
@@ -119,6 +124,10 @@ func (c *FeedCache) Stats() CacheStats {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	c.updateActiveCountLocked()
+	// 从 atomic 计数器读取，避免与 Lookup 的数据竞争
+	c.stats.ExactHits = c.exactHits.Load()
+	c.stats.CIDRHits = c.cidrHits.Load()
+	c.stats.Misses = c.misses.Load()
 	return c.stats
 }
 
@@ -128,6 +137,9 @@ func (c *FeedCache) Clear() {
 	defer c.mu.Unlock()
 	c.entries = make(map[string]*FeedEntry)
 	c.stats = CacheStats{}
+	c.exactHits.Store(0)
+	c.cidrHits.Store(0)
+	c.misses.Store(0)
 }
 
 // updateActiveCount 更新有效条目数（带锁版本）。

@@ -35,29 +35,27 @@ func NewScheduler(interval, jitter time.Duration) *Scheduler {
 // Run 启动调度循环。
 //
 // 每次触发时调用 fn()。支持通过 context 或 Stop() 停止。
+// 抖动通过每次动态重建 timer 实现，避免与 ticker 双重触发。
 func (s *Scheduler) Run(ctx context.Context, fn func()) {
 	// 首次立即触发
 	fn()
 
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
-
 	for {
-		// 计算抖动延迟
+		// 每次循环重建 timer，实现 interval ± jitter 的抖动
 		delay := s.calculateJitter()
+		timer := time.NewTimer(delay)
 
 		select {
-		case <-time.After(delay):
+		case <-timer.C:
 			// 抖动延迟到期，触发刷新
 			fn()
-		case <-ticker.C:
-			// 定时间隔到期，触发刷新
-			fn()
 		case <-s.stopCh:
-			// 收到停止信号
+			// 收到停止信号，清理 timer 后退出
+			timer.Stop()
 			return
 		case <-ctx.Done():
-			// context 取消
+			// context 取消，清理 timer 后退出
+			timer.Stop()
 			return
 		}
 	}

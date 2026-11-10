@@ -2,6 +2,27 @@ package risk
 
 import "strings"
 
+// toFloat64 把 payload 里的数值统一成 float64。
+//
+// JSON 反序列化后数字默认类型是 float64，但调用方也可能直接传 int。
+// 两处都认，避免类型断言失败导致分类逻辑永远走默认分支。
+func toFloat64(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	default:
+		return 0, false
+	}
+}
+
 // ClassifyFailure 根据事件类型和负载分类攻击事件，返回事件类型和向量增量。
 //
 // 纯函数，不依赖任何状态，便于测试。
@@ -41,7 +62,7 @@ func classifyFailureIncrement(payload map[string]any) float64 {
 		return 1.0
 	}
 	if count, ok := payload["count"]; ok {
-		if c, ok := count.(int); ok && c > 10 {
+		if c, ok := toFloat64(count); ok && c > 10 {
 			return 5.0
 		}
 	}
@@ -56,7 +77,7 @@ func classifyScanIncrement(payload map[string]any) float64 {
 		return 3.0
 	}
 	if ports, ok := payload["ports"]; ok {
-		if p, ok := ports.(int); ok && p > 100 {
+		if p, ok := toFloat64(ports); ok && p > 100 {
 			return 10.0
 		}
 	}
@@ -91,7 +112,7 @@ func classifyDDoSIncrement(payload map[string]any) float64 {
 		return 10.0
 	}
 	if pps, ok := payload["pps"]; ok {
-		if p, ok := pps.(int); ok && p > 10000 {
+		if p, ok := toFloat64(pps); ok && p > 10000 {
 			return 20.0
 		}
 	}
