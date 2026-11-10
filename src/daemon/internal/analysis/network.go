@@ -114,8 +114,9 @@ func getSubnet(ipStr string) (string, error) {
 		return "", fmt.Errorf("invalid IP: %s", ipStr)
 	}
 
-	if ip.To4() != nil {
-		parts := strings.Split(ipStr, ".")
+	if ip4 := ip.To4(); ip4 != nil {
+		// Use ip4.String() to handle IPv4-mapped IPv6 addresses correctly
+		parts := strings.Split(ip4.String(), ".")
 		if len(parts) != 4 {
 			return "", fmt.Errorf("invalid IPv4: %s", ipStr)
 		}
