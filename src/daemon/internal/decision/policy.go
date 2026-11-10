@@ -35,7 +35,10 @@ func IsPeakHours(hourUTC uint32) bool {
 // IsInternal 报告 ip 是否为内网（私有）地址，即「来源可信度较高、阈值可放宽」的来源。
 //
 // 判据：v4 的 10/8、172.16/12、192.168/16；v6 的 fc00::/7（ULA）。
+// IPv4-mapped IPv6（`::ffff:x.x.x.x`）先 Unmap 再走 IPv4 判据，否则 `::ffff:10.0.0.1`
+// 这类内网地址无法获得阈值放宽，易被误封。
 func IsInternal(ip netip.Addr) bool {
+	ip = ip.Unmap()
 	if ip.Is4() {
 		o := ip.As4()
 		return o[0] == 10 || (o[0] == 172 && o[1] >= 16 && o[1] <= 31) || (o[0] == 192 && o[1] == 168)

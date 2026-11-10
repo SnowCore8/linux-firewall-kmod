@@ -83,10 +83,13 @@ func validateCandidate(candidate string) (netip.Addr, bool) {
 
 // IsReserved 报告该地址是否属于「永不作为封禁对象」的保留段。
 //
-// 判据按地址族的字面形式走（不从 IPv4 映射地址还原）：v4 的 `0.0.0.0/8`、
-// `127.0.0.0/8`、`224.0.0.0/4`、`255.255.255.255`；v6 的 `::`、`::1`、
-// `ff00::/8`、`fe80::/10`。
+// 判据按地址族的字面形式走：v4 的 `0.0.0.0/8`、`127.0.0.0/8`、`224.0.0.0/4`、
+// `255.255.255.255`；v6 的 `::`、`::1`、`ff00::/8`、`fe80::/10`。
+// IPv4-mapped IPv6（`::ffff:x.x.x.x`）先 Unmap 再走 IPv4 判据，否则 `::ffff:127.0.0.1`
+// 这类环回地址会穿透过滤被当作可封禁对象。
 func IsReserved(addr netip.Addr) bool {
+	// Unmap 把 ::ffff:x.x.x.x 还原为 IPv4；纯 IPv4/IPv6 不受影响
+	addr = addr.Unmap()
 	if addr.Is4() {
 		return isReservedV4(addr.As4())
 	}

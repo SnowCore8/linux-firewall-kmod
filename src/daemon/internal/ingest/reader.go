@@ -146,6 +146,9 @@ func (r *SourceReader) ReadNew(path string) (Chunk, error) {
 
 	if r.offset > 0 {
 		if _, err := r.fd.Seek(r.offset, io.SeekStart); err != nil {
+			// Seek 失败说明 fd 状态异常，关闭防止泄漏；调用方应通过 Reset() 清理
+			r.fd.Close()
+			r.fd = nil
 			return Chunk{}, err
 		}
 	}
