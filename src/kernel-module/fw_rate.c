@@ -393,8 +393,10 @@ void fw_rate_exit(void) {
   /* 先停回收，再拆表：否则 drain 与回收会在桶锁上交错 */
   cancel_delayed_work_sync(&fw_info.rate_reclaim_work);
 
-  fw_info.rate_clear_ctx.clearing = true;
-  smp_mb__after_atomic();
+  WRITE_ONCE(fw_info.rate_clear_ctx.clearing, true);
+  /* 普通标量的发布屏障：smp_mb__after_atomic 只保证「此前的原子操作」可见，
+   * 对这里紧邻的普通写入没有排序语义。 */
+  smp_mb();
 
   fw_rate_drain_tables();
 
@@ -402,21 +404,21 @@ void fw_rate_exit(void) {
   rcu_barrier();
   fw_rate_free_pcpu();
   atomic_set(&fw_info.rate_count, 0);
-  fw_info.rate_clear_ctx.clearing = false;
+  WRITE_ONCE(fw_info.rate_clear_ctx.clearing, false);
 }
 
 void fw_rate_clear_all(void) {
   if (!fw_info.rate_pcpu[0])
     return;
 
-  fw_info.rate_clear_ctx.clearing = true;
-  smp_mb__after_atomic();
+  WRITE_ONCE(fw_info.rate_clear_ctx.clearing, true);
+  smp_mb();
 
   fw_rate_drain_tables();
 
   synchronize_rcu();
   atomic_set(&fw_info.rate_count, 0);
-  fw_info.rate_clear_ctx.clearing = false;
+  WRITE_ONCE(fw_info.rate_clear_ctx.clearing, false);
 }
 
 /* ============================================================================
@@ -465,7 +467,7 @@ static struct fw_rate_node *fw_rate_create(u8 af, const void *addr, u32 bkt) {
     return NULL;
   }
   /* 清表/退出进行中：不建新条目（否则可能与 on_each_cpu 清槽交错） */
-  if (unlikely(fw_info.rate_clear_ctx.clearing))
+  if (unlikely(READ_ONCE(fw_info.rate_clear_ctx.clearing)))
     return NULL;
 
   n = kzalloc(sizeof(*n), GFP_ATOMIC);
@@ -687,7 +689,7 @@ const char *fw_rate_observe(u8 af, const void *addr, u32 packet_len, u8 protocol
   u16 slot_idx;
 
   /* 清表/退出进行中：本包不参与速率判定（放行） */
-  if (unlikely(fw_info.rate_clear_ctx.clearing))
+  if (unlikely(READ_ONCE(fw_info.rate_clear_ctx.clearing)))
     return NULL;
 
   n = fw_rate_find_rcu(af, addr, bkt);
