@@ -36,7 +36,7 @@ log_test() {
 # 测试单个内核版本
 test_kernel_version() {
     local kernel_version="$1"
-    local ko_path="$BUILD_BASE/kernel-module-$kernel_version/firewall.ko"
+    local ko_path="$BUILD_BASE/kernel-module/$kernel_version/firewall.ko"
     
     if [ ! -f "$ko_path" ]; then
         log_error "未找到: $ko_path"
@@ -89,7 +89,7 @@ test_current_kernel() {
     echo
     
     # 查找对应的 .ko
-    local ko_path="$BUILD_BASE/kernel-module-$current_kernel/firewall.ko"
+    local ko_path="$BUILD_BASE/kernel-module/$current_kernel/firewall.ko"
     
     if [ ! -f "$ko_path" ]; then
         log_warn "未找到当前内核的编译产物: $ko_path"
@@ -119,10 +119,10 @@ test_all_versions() {
     local failed=0
     local total=0
     
-    for ko_dir in "$BUILD_BASE"/kernel-module-*/; do
+    for ko_dir in "$BUILD_BASE"/kernel-module/*/; do
         if [ -d "$ko_dir" ]; then
             local kernel_version
-            kernel_version=$(basename "$ko_dir" | sed 's/kernel-module-//')
+            kernel_version=$(basename "$ko_dir")
             
             ((total+=1))
             

@@ -399,6 +399,8 @@ static unsigned int fw_hook_ipv6(void *priv, struct sk_buff *skb,
         offset += ((unsigned int)opt.hdrlen + 2) * 4;
       else
         offset += ipv6_optlen(&opt);
+      if (offset > skb->len)
+        return NF_DROP;
       nexthdr = opt.nexthdr;
     }
   }

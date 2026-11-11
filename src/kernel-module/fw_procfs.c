@@ -45,6 +45,7 @@
 
 #define pr_fmt(fmt) "firewall: " fmt
 
+#include <linux/capability.h>
 #include <linux/inet.h>
 #include <linux/kernel.h>
 #include <linux/ktime.h>
@@ -167,6 +168,9 @@ static int fw_procfs_parse_duration(const char *rest, bool *has, u32 *v) {
 
 static ssize_t bans_write(struct file *file, const char __user *buf,
                           size_t count, loff_t *ppos) {
+  if (!capable(CAP_SYS_ADMIN))
+    return -EPERM;
+
   char input[FW_PROCFS_BANS_INPUT];
   union fw_addr addr;
   u8 af;
@@ -411,6 +415,9 @@ static int fw_procfs_parse_whitelist_cmd(char *input, bool *is_remove, u8 *af,
 
 static ssize_t whitelist_write(struct file *file, const char __user *buf,
                                size_t count, loff_t *ppos) {
+  if (!capable(CAP_SYS_ADMIN))
+    return -EPERM;
+
   char input[FW_PROCFS_WHITELIST_INPUT];
   union fw_addr addr;
   u8 af, prefix_len;
@@ -522,6 +529,9 @@ static int config_open(struct inode *inode, struct file *file) {
 
 static ssize_t config_write(struct file *file, const char __user *buf,
                             size_t count, loff_t *ppos) {
+  if (!capable(CAP_SYS_ADMIN))
+    return -EPERM;
+
   char input[FW_PROCFS_CONFIG_INPUT];
   char *p, *value;
   unsigned long val;

@@ -103,6 +103,10 @@ static int fw_state_validate_path(const char *path) {
     return -EINVAL;
 
   for (p = path; *p; p++) {
+    if ((unsigned char)*p < 0x20) {
+      pr_warn("state path contains control character at pos %zu\n", (size_t)(p - path));
+      return -EINVAL;
+    }
     if (strchr(bad_chars, *p))
       return -EINVAL;
   }
