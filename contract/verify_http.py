@@ -706,6 +706,8 @@ def _const_value(src: str, name: str) -> int | None:
         return None
     try:
         return int(eval(expr, {"__builtins__": {}}, {}))  # noqa: S307 - 上面已限定只含算术
+    except ZeroDivisionError:
+        raise ValueError(f"constant expression {expr!r} divides by zero")
     except Exception:
         return None
 

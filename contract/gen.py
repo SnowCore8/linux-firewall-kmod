@@ -458,6 +458,8 @@ def field_size(contract: Contract, f: Field, stack: List[str]) -> int:
     if t.kind == "int":
         return SCALARS[t.ref] * mult
     if t.kind in ("str", "bytes"):
+        if t.count <= 0:
+            raise ValueError(f"str/bytes field must have count > 0 (got {t.count} for {f.name})")
         return t.count
     if t.kind == "alias":
         base = contract.aliases[t.ref]
@@ -2595,16 +2597,16 @@ def emit_json_http(contract: HttpContract, notes: List[str]) -> str:
 
 # 契约标量 -> OpenAPI schema 片段
 _OPENAPI_SCALAR: Dict[str, Dict[str, object]] = {
-    "i8": {"type": "integer", "format": "int32"},
-    "i16": {"type": "integer", "format": "int32"},
+    "i8": {"type": "integer", "format": "int8", "minimum": -128, "maximum": 127},
+    "i16": {"type": "integer", "format": "int16", "minimum": -32768, "maximum": 32767},
     "i32": {"type": "integer", "format": "int32"},
     "i64": {"type": "integer", "format": "int64"},
     "isize": {"type": "integer", "format": "int64"},
-    "u8": {"type": "integer", "format": "int32", "minimum": 0},
-    "u16": {"type": "integer", "format": "int32", "minimum": 0},
-    "u32": {"type": "integer", "format": "int64", "minimum": 0},
-    "u64": {"type": "integer", "format": "int64", "minimum": 0},
-    "usize": {"type": "integer", "format": "int64", "minimum": 0},
+    "u8": {"type": "integer", "format": "uint8", "minimum": 0, "maximum": 255},
+    "u16": {"type": "integer", "format": "uint16", "minimum": 0, "maximum": 65535},
+    "u32": {"type": "integer", "format": "uint32", "minimum": 0},
+    "u64": {"type": "integer", "format": "uint64", "minimum": 0},
+    "usize": {"type": "integer", "format": "uint64", "minimum": 0},
     "f32": {"type": "number", "format": "float"},
     "f64": {"type": "number", "format": "double"},
     "bool": {"type": "boolean"},
@@ -2734,8 +2736,6 @@ def emit_openapi_http(contract: HttpContract) -> str:
         # 认证
         if r.auth == "required":
             operation["security"] = [{"basicAuth": []}]
-        elif r.auth == "optional":
-            operation["security"] = [{}, {"basicAuth": []}]
 
         # 路径参数
         pp = _oa_path_params(oa_path)

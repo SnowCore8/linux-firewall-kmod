@@ -264,7 +264,7 @@ $(KERNEL_MODULE): $(wildcard $(KERNEL_SRC_DIR)/*.c) $(wildcard $(KERNEL_SRC_DIR)
 	@mkdir -p $(KERNEL_STAGE_DIR)/src/kernel-module $(KERNEL_STAGE_DIR)/contract/generated
 	@cp $(KERNEL_SRC_DIR)/*.c $(KERNEL_SRC_DIR)/*.h $(KERNEL_SRC_DIR)/Makefile \
 		$(KERNEL_STAGE_DIR)/src/kernel-module/
-	@cp contract/generated/*.h $(KERNEL_STAGE_DIR)/contract/generated/
+	@cp contract/generated/*.h $(KERNEL_STAGE_DIR)/contract/generated/ 2>/dev/null || test -z "$$(ls contract/generated/*.h 2>/dev/null)"
 	+$(MAKE) -C $(KDIR) M=$(PWD)/$(KERNEL_STAGE_DIR)/src/kernel-module \
 		CC="$(CCACHE) gcc" \
 		modules

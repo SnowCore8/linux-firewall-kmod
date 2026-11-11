@@ -4227,7 +4227,7 @@
           },
           "global_sample_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "ip_anomalies": {
@@ -4320,12 +4320,12 @@
           },
           "total_ips": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "located_ips": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "server_latitude": {
@@ -4387,12 +4387,12 @@
           },
           "unique_ips": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "total_bans": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "top_ip": {
@@ -4428,22 +4428,22 @@
           },
           "total": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "page": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "page_size": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "total_pages": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           }
         },
@@ -4476,7 +4476,7 @@
           },
           "active_bans": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "lease_state": {
@@ -4484,7 +4484,7 @@
           },
           "lease_losses": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           }
         },
@@ -4510,22 +4510,22 @@
           },
           "today_bans": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "failed_attempts": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "ddos_events": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "uptime_seconds": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "ban_trend": {
@@ -4542,37 +4542,37 @@
           },
           "current_bans": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "total_bans": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "total_unbans": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "whitelist_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "packets_dropped": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "packets_accepted": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "state_save_truncated": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "threat_level": {
@@ -4613,7 +4613,7 @@
             "type": "array",
             "items": {
               "type": "integer",
-              "format": "int64",
+              "format": "uint64",
               "minimum": 0
             }
           }
@@ -4631,8 +4631,9 @@
           },
           "score": {
             "type": "integer",
-            "format": "int32",
-            "minimum": 0
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
           },
           "factors": {
             "type": "array",
@@ -4642,7 +4643,7 @@
           },
           "current_pps": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "pps_ratio": {
@@ -4655,7 +4656,7 @@
           },
           "recent_bans": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "baseline_frozen": {
@@ -4699,7 +4700,7 @@
           },
           "ban_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "is_permanent": {
@@ -4744,12 +4745,12 @@
           },
           "fail_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "ban_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "last_unbanned_at": {
@@ -4767,7 +4768,7 @@
           },
           "reputation_score": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           }
         },
@@ -4804,7 +4805,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint64",
                 "minimum": 0
               },
               {
@@ -4824,17 +4825,17 @@
         "properties": {
           "total": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "succeeded": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "failed_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "details": {
@@ -4861,7 +4862,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint64",
                 "minimum": 0
               },
               {
@@ -4894,7 +4895,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint64",
                 "minimum": 0
               },
               {
@@ -4925,22 +4926,22 @@
           },
           "ban_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "max_retries": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "effective_max_retries": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "findtime": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "ban_time": {
@@ -4960,27 +4961,27 @@
           },
           "lines_parsed": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "regex_matches": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "ips_extracted": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "failed_attempts": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "bans_triggered": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           }
         },
@@ -5015,57 +5016,57 @@
         "properties": {
           "sse_push_interval": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "rate_warning_pps": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "rate_critical_pps": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "rate_warning_syn": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "rate_critical_syn": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "max_syn_per_second": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "max_udp_per_second": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "max_icmp_per_second": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "max_ack_per_second": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "max_rst_per_second": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "max_fin_per_second": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "static_threshold": {
@@ -5079,22 +5080,22 @@
           },
           "max_ban_entries": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "max_whitelist_entries": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "max_rate_entries": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "max_local_ip_cache": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "clear_logs_at": {
@@ -5136,7 +5137,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint32",
                 "minimum": 0
               },
               {
@@ -5148,7 +5149,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint64",
                 "minimum": 0
               },
               {
@@ -5160,7 +5161,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint64",
                 "minimum": 0
               },
               {
@@ -5172,7 +5173,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint64",
                 "minimum": 0
               },
               {
@@ -5184,7 +5185,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint64",
                 "minimum": 0
               },
               {
@@ -5196,7 +5197,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint32",
                 "minimum": 0
               },
               {
@@ -5208,7 +5209,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint32",
                 "minimum": 0
               },
               {
@@ -5220,7 +5221,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint32",
                 "minimum": 0
               },
               {
@@ -5232,7 +5233,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint32",
                 "minimum": 0
               },
               {
@@ -5244,7 +5245,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint32",
                 "minimum": 0
               },
               {
@@ -5256,7 +5257,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint32",
                 "minimum": 0
               },
               {
@@ -5298,7 +5299,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint32",
                 "minimum": 0
               },
               {
@@ -5310,7 +5311,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint32",
                 "minimum": 0
               },
               {
@@ -5322,7 +5323,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint32",
                 "minimum": 0
               },
               {
@@ -5334,7 +5335,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint32",
                 "minimum": 0
               },
               {
@@ -5398,18 +5399,19 @@
           },
           "affected_ips": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "total_bans": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "confidence": {
             "type": "integer",
-            "format": "int32",
-            "minimum": 0
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
           }
         },
         "required": [
@@ -5437,42 +5439,42 @@
           },
           "packets_per_sec": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "bytes_per_sec": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "syn_packets_per_sec": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "udp_packets_per_sec": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "icmp_packets_per_sec": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "ack_packets_per_sec": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "rst_packets_per_sec": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "fin_packets_per_sec": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           }
         },
@@ -5493,22 +5495,22 @@
         "properties": {
           "timestamp": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "total_pps": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "total_bps": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "tracked_ips": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           }
         },
@@ -5524,32 +5526,32 @@
         "properties": {
           "pps_short": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "pps_mid": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "pps_long": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "bps_short": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "bps_mid": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "bps_long": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           }
         },
@@ -5567,12 +5569,12 @@
         "properties": {
           "total_ips": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "recidivist_ips": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "recidivism_rate": {
@@ -5581,7 +5583,7 @@
           },
           "permanent_bans": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "top_recidivists": {
@@ -5607,7 +5609,7 @@
           },
           "ban_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "last_banned_at": {
@@ -5636,7 +5638,7 @@
           },
           "total_unique_ips": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "overall_recidivism_rate": {
@@ -5659,20 +5661,21 @@
         "properties": {
           "level": {
             "type": "integer",
-            "format": "int32",
-            "minimum": 0
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
           },
           "label": {
             "type": "string"
           },
           "total_ips": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "recidivist_ips": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "recidivism_rate": {
@@ -5681,7 +5684,7 @@
           },
           "permanent_bans": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "verdict": {
@@ -5706,7 +5709,7 @@
           },
           "ban_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "avg_interval_secs": {
@@ -5719,8 +5722,9 @@
           },
           "periodicity_score": {
             "type": "integer",
-            "format": "int32",
-            "minimum": 0
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
           },
           "jail_name": {
             "type": "string"
@@ -5759,7 +5763,7 @@
           },
           "ip_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "ips": {
@@ -5770,13 +5774,14 @@
           },
           "total_bans": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "correlation_score": {
             "type": "integer",
-            "format": "int32",
-            "minimum": 0
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
           }
         },
         "required": [
@@ -5797,7 +5802,7 @@
           },
           "ban_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "jail_name": {
@@ -5821,8 +5826,9 @@
           },
           "confidence": {
             "type": "integer",
-            "format": "int32",
-            "minimum": 0
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
           },
           "urgency": {
             "type": "string"
@@ -5857,12 +5863,12 @@
           },
           "imminent_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "within_24h_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           }
         },
@@ -5881,12 +5887,12 @@
           },
           "bans_24h": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "bans_7d": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "trend": {
@@ -5894,7 +5900,7 @@
           },
           "predicted_attackers_24h": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           }
         },
@@ -5914,12 +5920,12 @@
           },
           "current_threshold": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "recommended_threshold": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "direction": {
@@ -5927,17 +5933,17 @@
           },
           "total_bans": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "unique_ips": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "recidivist_ips": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "recidivism_rate": {
@@ -5953,8 +5959,9 @@
           },
           "confidence": {
             "type": "integer",
-            "format": "int32",
-            "minimum": 0
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
           }
         },
         "required": [
@@ -6001,17 +6008,17 @@
           },
           "recidivist_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "median_return_secs": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "recommended_ban_time": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "reason": {
@@ -6057,7 +6064,7 @@
           },
           "score": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "last_failure_at": {
@@ -6066,12 +6073,12 @@
           },
           "total_failures": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "total_bans": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "threshold_adjustment": {
@@ -6160,7 +6167,7 @@
           },
           "total": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           }
         },
@@ -6213,7 +6220,7 @@
           },
           "total": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           }
         },
@@ -6234,12 +6241,12 @@
           },
           "total_entries": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "max_entries": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           }
         },
@@ -6254,22 +6261,23 @@
         "properties": {
           "port": {
             "type": "integer",
-            "format": "int32",
-            "minimum": 0
+            "format": "uint16",
+            "minimum": 0,
+            "maximum": 65535
           },
           "packets": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "bytes": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "last_seen_secs": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           }
         },
@@ -6291,12 +6299,12 @@
           },
           "total_entries": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "max_entries": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           }
         },
@@ -6311,27 +6319,29 @@
         "properties": {
           "type": {
             "type": "integer",
-            "format": "int32",
-            "minimum": 0
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
           },
           "code": {
             "type": "integer",
-            "format": "int32",
-            "minimum": 0
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
           },
           "packets": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "bytes": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "last_seen_secs": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           }
         },
@@ -6356,13 +6366,13 @@
             "type": "array",
             "items": {
               "type": "integer",
-              "format": "int64",
+              "format": "uint64",
               "minimum": 0
             }
           },
           "total": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "percentages": {
@@ -6393,13 +6403,13 @@
             "type": "array",
             "items": {
               "type": "integer",
-              "format": "int64",
+              "format": "uint64",
               "minimum": 0
             }
           },
           "total": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "percentages": {
@@ -6430,13 +6440,13 @@
             "type": "array",
             "items": {
               "type": "integer",
-              "format": "int64",
+              "format": "uint64",
               "minimum": 0
             }
           },
           "total": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           }
         },
@@ -6451,12 +6461,12 @@
         "properties": {
           "total_packets": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "fragment_packets": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "fragment_ratio": {
@@ -6475,12 +6485,12 @@
         "properties": {
           "threshold": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "total_detected": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "scanners": {
@@ -6504,12 +6514,12 @@
           },
           "unique_ports": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "packets": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           }
         },
@@ -6524,12 +6534,12 @@
         "properties": {
           "threshold": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "total_detected": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "probes": {
@@ -6553,12 +6563,12 @@
           },
           "protocol_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "packets": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           }
         },
@@ -6576,12 +6586,12 @@
           },
           "unique_ips": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "total_bans": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "last_banned_at": {
@@ -6621,22 +6631,22 @@
         "properties": {
           "hour": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "bans": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "failed_attempts": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "ddos_events": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           }
         },
@@ -6658,22 +6668,22 @@
           },
           "total_lines": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "page": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "page_size": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "total_pages": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           }
         },
@@ -6690,7 +6700,7 @@
         "properties": {
           "line_number": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "content": {
@@ -6709,7 +6719,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint32",
                 "minimum": 0
               },
               {
@@ -6721,7 +6731,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint32",
                 "minimum": 0
               },
               {
@@ -6768,7 +6778,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint32",
                 "minimum": 0
               },
               {
@@ -6780,7 +6790,7 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64",
+                "format": "uint32",
                 "minimum": 0
               },
               {
@@ -6805,12 +6815,12 @@
         "properties": {
           "current_connections": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "max_connections": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint64",
             "minimum": 0
           },
           "limit_reached": {
@@ -6873,7 +6883,7 @@
           },
           "entry_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "sync_status": {
@@ -6891,7 +6901,7 @@
           },
           "consecutive_failures": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "circuit_broken_until": {
@@ -6929,7 +6939,7 @@
           },
           "total": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           }
         },
@@ -6946,12 +6956,12 @@
           },
           "new_entries": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "updated_entries": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "synced_at": {
@@ -6980,17 +6990,17 @@
           },
           "active_attacks": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "anomalies_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "collaborative_count": {
             "type": "integer",
-            "format": "int64",
+            "format": "uint32",
             "minimum": 0
           },
           "summary": {
