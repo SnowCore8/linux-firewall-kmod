@@ -35,6 +35,9 @@ const (
 	defaultFactsCapacity = 4096
 	// defaultFactsFlushEvery 是脏条目的最长驻留时间。
 	defaultFactsFlushEvery = 5 * time.Second
+	// eventDropWarnInterval 是风险事件队列丢弃告警的最小间隔：队列满说明在灌流量，
+	// 每条丢弃都打日志会把日志本身变成放大源。
+	eventDropWarnInterval = 30 * time.Second
 	// fullReputation 是未知 IP 的起始信誉分（库里没有该行时按满分算）。
 	fullReputation = 100
 )
@@ -100,6 +103,11 @@ type Facts struct {
 	// stopped 在 mu 下读写：关停时同一个临界区内「置位 + 关闭 eventCh」，
 	// 生产方的非阻塞发送也持同一把锁，故不会向已关闭的 channel 发送。
 	stopped bool
+	// eventDrops 是队列满时累计丢弃的事件数；lastEventDropWarn 是上次告警时间。
+	// 两者在 mu 下读写。丢弃本身不可恢复（内存里的向量已经记上），累计值让
+	// 「到底丢了多少」可查，限流告警避免每条丢弃都写一行日志。
+	eventDrops        uint64
+	lastEventDropWarn time.Time
 }
 
 // riskEvent 是异步持久化的风险事件。
@@ -288,23 +296,48 @@ func (f *Facts) RecordFailure(addr netip.Addr) {
 	e.pending += f.penalty
 
 	// 多维风险引擎：记录失败事件（feature flag 控制）
+	drops, dropIP, warnDrop := uint64(0), "", false
 	if f.riskEngine != nil && !f.stopped {
 		ip := key(addr)
 		f.riskEngine.RecordEvent(ip, risk.EventFailure, 1.0)
 		// 异步持久化到数据库（不阻塞主链路）
 		// 使用有界 channel 而非无界 goroutine，防止高流量下内存耗尽
-		select {
-		case f.eventCh <- riskEvent{ip: ip, eventType: risk.EventFailure, increment: 1.0}:
-		default:
-			// channel 满时丢弃事件，不阻塞主链路
-			f.logger.Warn("risk event queue full, dropping event", "ip", ip)
-		}
+		drops, dropIP, warnDrop = f.enqueueRiskLocked(riskEvent{ip: ip, eventType: risk.EventFailure, increment: 1.0})
 	}
 	f.mu.Unlock()
+	// 日志在锁外写：告警要落到文件，持缓存锁做 I/O 会钉住所有判定。
+	if warnDrop {
+		f.warnEventDrop(dropIP, drops)
+	}
 	// 逐出落盘在锁外执行，避免持锁期间做 DB I/O 阻塞其他缓存操作
 	if evicted != nil {
 		f.writeBack(evicted)
 	}
+}
+
+// enqueueRiskLocked 非阻塞入队一条风险事件。
+//
+// 队列满时累加丢弃计数并按 eventDropWarnInterval 限流告警，返回本次是否该写日志
+// 及累计丢弃数。调用方必须持有 f.mu，且在释放后再调用 warnEventDrop。
+func (f *Facts) enqueueRiskLocked(ev riskEvent) (drops uint64, ip string, warn bool) {
+	select {
+	case f.eventCh <- ev:
+		return 0, "", false
+	default:
+		f.eventDrops++
+		if now := time.Now(); f.lastEventDropWarn.IsZero() ||
+			now.Sub(f.lastEventDropWarn) >= eventDropWarnInterval {
+			f.lastEventDropWarn = now
+			return f.eventDrops, ev.ip, true
+		}
+		return f.eventDrops, "", false
+	}
+}
+
+// warnEventDrop 写一条丢弃告警；必须在释放 f.mu 之后调用。
+func (f *Facts) warnEventDrop(ip string, drops uint64) {
+	f.logger.Warn("risk event queue full, dropping events",
+		"last_ip", ip, "dropped_total", drops, "capacity", cap(f.eventCh))
 }
 
 // RecordRiskEvent 记录自定义风险事件到多维引擎。
@@ -319,16 +352,15 @@ func (f *Facts) RecordRiskEvent(addr netip.Addr, eventType risk.EventType, incre
 	f.riskEngine.RecordEvent(ip, eventType, increment)
 	// 发送与 Stop 的关闭共用 f.mu：否则 Stop 关掉 channel 后仍可能有一条事件发进来。
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.stopped {
+		f.mu.Unlock()
 		return
 	}
 	// 异步持久化，使用有界 channel 防止高流量下内存耗尽
-	select {
-	case f.eventCh <- riskEvent{ip: ip, eventType: eventType, increment: increment}:
-	default:
-		// channel 满时丢弃事件，不阻塞主链路
-		f.logger.Warn("risk event queue full, dropping event", "ip", ip, "type", eventType)
+	drops, dropIP, warnDrop := f.enqueueRiskLocked(riskEvent{ip: ip, eventType: eventType, increment: increment})
+	f.mu.Unlock()
+	if warnDrop {
+		f.warnEventDrop(dropIP, drops)
 	}
 }
 

@@ -1,8 +1,11 @@
 package persist
 
 import (
+	"bytes"
+	"log/slog"
 	"net/netip"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -275,6 +278,37 @@ func TestRecordRiskEventAfterStopIsSafe(t *testing.T) {
 	f.Stop()
 	f.RecordRiskEvent(addr(t, "203.0.113.51"), risk.EventFailure, 1.0)
 	f.RecordFailure(addr(t, "203.0.113.51"))
+}
+
+// 队列满时丢弃必须可计数，且告警按窗口限流：每条丢弃都打日志会把日志变成放大源。
+func TestRiskEventQueueDropIsCountedAndRateLimited(t *testing.T) {
+	var buf bytes.Buffer
+	f := NewFacts(nil, FactsOptions{
+		RiskEngineEnabled: true,
+		Logger:            slog.New(slog.NewTextHandler(&buf, nil)),
+	})
+	ip := addr(t, "203.0.113.52")
+
+	// 没有 DB 时不会启动 worker，队列填满后一直保持满状态。
+	for i := 0; i < cap(f.eventCh); i++ {
+		f.RecordRiskEvent(ip, risk.EventFailure, 1.0)
+	}
+	if got := len(f.eventCh); got != cap(f.eventCh) {
+		t.Fatalf("队列长度 = %d，期望填满 %d", got, cap(f.eventCh))
+	}
+
+	f.RecordRiskEvent(ip, risk.EventFailure, 1.0) // 首次丢弃：告警
+	f.RecordRiskEvent(ip, risk.EventFailure, 1.0) // 窗口内再丢：只计数
+
+	f.mu.Lock()
+	drops := f.eventDrops
+	f.mu.Unlock()
+	if drops != 2 {
+		t.Fatalf("累计丢弃 = %d，期望 2", drops)
+	}
+	if n := strings.Count(buf.String(), "risk event queue full"); n != 1 {
+		t.Fatalf("30 秒窗口内告警 %d 次，期望 1 次", n)
+	}
 }
 
 // 逐出时落盘失败必须把欠账留在缓存里（重新入队），而不是随被逐出的对象一起丢掉。
