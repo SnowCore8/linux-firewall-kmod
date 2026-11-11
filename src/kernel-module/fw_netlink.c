@@ -761,8 +761,19 @@ static u32 fw_nl_apply_config(const struct fw_set_config *c) {
   if (flags & FW_CONFIG_FLAGS_BASELINE_UPDATE)
     fw_rate_update_baseline(be64_to_cpu(c->baseline_pps), be64_to_cpu(c->baseline_bps));
 
-  if (flags & FW_CONFIG_FLAGS_DDOS_BAN_DURATION)
-    WRITE_ONCE(fw_info.ddos_ban_duration, be32_to_cpu(c->ddos_ban_duration));
+  if (flags & FW_CONFIG_FLAGS_DDOS_BAN_DURATION) {
+    u32 v = be32_to_cpu(c->ddos_ban_duration);
+
+    /*
+     * 0 表示走 fw_ban_time（见 DEFAULT_DDOS_BAN_DURATION）；非零不得超过
+     * FW_BAN_TIME_MAX——更长的时长在 fw_state.c 恢复时会被当成损坏行丢弃
+     * （以 365 天为界），封禁重启后静默消失。
+     */
+    if (v > FW_BAN_TIME_MAX)
+      rejected |= FW_CONFIG_FLAGS_DDOS_BAN_DURATION;
+    else
+      WRITE_ONCE(fw_info.ddos_ban_duration, v);
+  }
 
   return rejected;
 }
@@ -780,6 +791,15 @@ static void fw_nl_handle_ban(u32 portid, u16 type, u8 af, u8 prefix_len,
     ret = fw_ban_del(af, addr, prefix_len, true);
     if (ret)
       fw_nl_send_cmd_result(portid, type, ret, af, addr);
+    return;
+  }
+
+  /*
+   * 超过 FW_BAN_TIME_MAX 的时长在 fw_state.c 恢复时会被当成损坏行丢弃（以
+   * 365 天为界），封禁重启后静默消失，故在入口直接拒绝，经 CmdResult 回传。
+   */
+  if (duration > FW_BAN_TIME_MAX) {
+    fw_nl_send_cmd_result(portid, type, -EINVAL, af, addr);
     return;
   }
 
@@ -860,11 +880,25 @@ static bool fw_nl_daemon_alive(void) {
 
 static void fw_nl_recv_msg(struct sk_buff *skb) {
   while (skb->len >= nlmsg_total_size(0)) {
-    struct nlmsghdr *nlh = nlmsg_hdr(skb);
+    struct nlmsghdr *nlh;
     struct fw_msg_hdr *h;
     size_t payload;
     u32 portid = NETLINK_CB(skb).portid;
     u16 type;
+
+    /*
+     * fw_exit() 先置位 shutting_down，但要到最后一步才销毁 netlink socket：
+     * 这个窗口里 daemon 仍能下发 BAN_IP / ADD_WHITELIST 等指令，而 ban / wl /
+     * rate / stats 表已被清表释放——照常处理就是 UAF，并会在卸载后重建出无人
+     * 回收的定时器。故关闭中一律丢弃，不改表、不广播。skb 由 netlink 核心在
+     * input 回调返回后释放，这里直接 return 是安全的。
+     */
+    if (fw_is_shutting_down()) {
+      pr_debug_ratelimited("netlink: 模块关闭中，丢弃指令\n");
+      return;
+    }
+
+    nlh = nlmsg_hdr(skb);
 
     if (!nlmsg_ok(nlh, skb->len))
       break;
