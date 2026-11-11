@@ -97,6 +97,9 @@ export default function Logs() {
   const [missed, setMissed] = useState(0)
   // 高频丢行先在 ref 上累加，由下方 1s 定时器批量同步到 missed，避免每条丢弃都重渲染整个面板
   const missedRef = useRef(0)
+  // 未暂停但缓冲已满时被挤出的较早行数；恢复接收/清空缓冲时清零，与 missedRef 同语义
+  const [dropped, setDropped] = useState(0)
+  const droppedRef = useRef(0)
   const [autoscroll, setAutoscroll] = useState(true)
   const [liveLevel, setLiveLevel] = useState<LevelFilter>('all')
   const [liveKeyword, setLiveKeyword] = useState('')
@@ -114,6 +117,9 @@ export default function Logs() {
   modeRef.current = mode
   const viewerRef = useRef<HTMLDivElement>(null)
   const mountedRef = useRef(true)
+  // 渲染期同步缓冲行数：事件回调据此判断下一行是否会挤掉最旧一行（同 pausedRef / modeRef 的写法）
+  const liveCountRef = useRef(0)
+  liveCountRef.current = liveLines.length
 
   // 暂停期间每秒把 missedRef 批量同步到 missed state 一次；恢复接收（paused→false）即停表。
   // 于是「暂停时高频丢行」只引起每秒一次重渲染，而不是每条丢弃各渲染一次。
@@ -208,6 +214,20 @@ export default function Logs() {
     const es = new EventSource(logsStreamUrl())
     esRef.current = es
 
+    // 收一行进缓冲。缓冲已满时会把最旧一行挤出去——这类丢弃与暂停期丢行一样要计数，
+    // 否则面板顶部静默变短，用户无从知道有日志没看到
+    const appendLine = (content: string, level: LogLevel | null) => {
+      if (liveCountRef.current >= MAX_LIVE_LINES) {
+        droppedRef.current += 1
+        setDropped(droppedRef.current)
+      }
+      const line: LiveLine = { id: ++lineIdRef.current, content, level, at: Date.now() }
+      setLiveLines((prev) => {
+        const next = [...prev, line]
+        return next.length > MAX_LIVE_LINES ? next.slice(next.length - MAX_LIVE_LINES) : next
+      })
+    }
+
     // 门禁要求的字面量：connected / log / error 三个事件名逐个显式监听
     es.addEventListener('connected', () => {
       attemptsRef.current = 0
@@ -221,16 +241,7 @@ export default function Logs() {
         missedRef.current += 1
         return
       }
-      const line: LiveLine = {
-        id: ++lineIdRef.current,
-        content,
-        level: parseLevel(content),
-        at: Date.now(),
-      }
-      setLiveLines((prev) => {
-        const next = [...prev, line]
-        return next.length > MAX_LIVE_LINES ? next.slice(next.length - MAX_LIVE_LINES) : next
-      })
+      appendLine(content, parseLevel(content))
     })
 
     es.addEventListener('error', (e: Event) => {
@@ -238,13 +249,7 @@ export default function Logs() {
       const data = (e as MessageEvent<string>).data
       if (typeof data === 'string' && data.length > 0) {
         if (!pausedRef.current) {
-          setLiveLines((prev) => {
-            const next = [
-              ...prev,
-              { id: ++lineIdRef.current, content: data, level: 'ERROR' as LogLevel, at: Date.now() },
-            ]
-            return next.length > MAX_LIVE_LINES ? next.slice(next.length - MAX_LIVE_LINES) : next
-          })
+          appendLine(data, 'ERROR' as LogLevel)
         } else {
           missedRef.current += 1
         }
@@ -342,6 +347,7 @@ export default function Logs() {
           state={liveState}
           paused={paused}
           missed={missed}
+          dropped={dropped}
           autoscroll={autoscroll}
           level={liveLevel}
           keyword={liveKeyword}
@@ -351,11 +357,18 @@ export default function Logs() {
             if (pausedRef.current) {
               missedRef.current = 0
               setMissed(0)
+              droppedRef.current = 0
+              setDropped(0)
             }
             setPaused((p) => !p)
           }}
           onToggleAutoscroll={(v) => setAutoscroll(v)}
-          onClear={() => setLiveLines([])}
+          onClear={() => {
+            setLiveLines([])
+            // 缓冲清空后旧的丢弃计数无意义
+            droppedRef.current = 0
+            setDropped(0)
+          }}
           onLevelChange={setLiveLevel}
           onKeywordChange={setLiveKeyword}
           onReconnect={() => {
@@ -389,6 +402,8 @@ interface LivePanelProps {
   paused: boolean
   /** 暂停期间到达并被丢弃的行数。 */
   missed: number
+  /** 未暂停时缓冲溢出被挤出的较早行数。 */
+  dropped: number
   autoscroll: boolean
   level: LevelFilter
   keyword: string
@@ -403,7 +418,7 @@ interface LivePanelProps {
 
 function LivePanel(props: LivePanelProps) {
   const {
-    lines, total, state, paused, missed, autoscroll, level, keyword, viewerRef,
+    lines, total, state, paused, missed, dropped, autoscroll, level, keyword, viewerRef,
     onTogglePause, onToggleAutoscroll, onClear, onLevelChange, onKeywordChange, onReconnect,
   } = props
 
@@ -473,6 +488,12 @@ function LivePanel(props: LivePanelProps) {
       {paused && missed > 0 && (
         <Typography.Text type="warning" style={{ fontSize: 12 }}>
           暂停中：已到达 {missed} 条新日志被丢弃，恢复后不会补回。
+        </Typography.Text>
+      )}
+
+      {dropped > 0 && (
+        <Typography.Text type="warning" style={{ fontSize: 12 }}>
+          缓冲已满：已丢弃 {dropped} 行较早日志（上限 {MAX_LIVE_LINES} 行）。
         </Typography.Text>
       )}
 

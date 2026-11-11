@@ -161,8 +161,16 @@ export function useAsync<T>(
       .catch((err: unknown) => {
         if (!mountedRef.current || id !== runIdRef.current) return
         if (err instanceof ApiError && err.kind === 'aborted') return
+        if (!(err instanceof ApiError) && import.meta.env.DEV) {
+          // 非 ApiError 说明 fetcher 里有漏归一的抛出（如 TypeError）：开发期原样暴露，
+          // 免得被归一成「未知错误」后连堆栈都查不到
+          console.error('[useAsync] fetcher 抛出了非 ApiError：', err)
+        }
+        // 归一后的 message 保留原始可读信息，生产环境仍能看出失败原因
         const apiErr =
-          err instanceof ApiError ? err : new ApiError('network', '未知错误')
+          err instanceof ApiError
+            ? err
+            : new ApiError('network', err instanceof Error ? err.message : '未知错误')
         setState((prev) => ({
           ...prev,
           error: apiErr,

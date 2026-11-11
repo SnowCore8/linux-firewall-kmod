@@ -129,11 +129,10 @@ export default function Dashboard() {
         realtimeDisconnectedAt={sseSnap.disconnectedAt}
         extra={
           <Space>
-            {stats.kernel_version && (
-              <Tooltip title="内核模块版本">
-                <Tag className="fw-mono">kmod {stats.kernel_version || '未加载'}</Tag>
-              </Tooltip>
-            )}
+            {/* 无条件渲染：外层条件为真时内层回退永远走不到，模块未加载就会整块消失 */}
+            <Tooltip title="内核模块版本">
+              <Tag className="fw-mono">kmod {stats.kernel_version || '未加载'}</Tag>
+            </Tooltip>
             <Tag className="fw-mono">daemon {stats.daemon_version || '—'}</Tag>
             <Button icon={<ReloadOutlined />} onClick={live.refetch} loading={live.isRefreshing}>
               刷新

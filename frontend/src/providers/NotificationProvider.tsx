@@ -89,12 +89,17 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, read: true } : i)))
   }, [])
 
+  // 用 ref 持有最新 items：clear 若依赖 items，每条新通知都会重建它，context value
+  // 随之整体变化，所有消费者跟着重渲染
+  const itemsRef = useRef(items)
+  itemsRef.current = items
+
   const clear = useCallback(() => {
     // 错误 toast 的 duration 为 0（永不自动关闭）；清空列表时一并销毁，
     // 否则列表空了、右上角的错误 toast 还孤零零挂着
-    items.forEach((i) => notification.destroy(String(i.id)))
+    itemsRef.current.forEach((i) => notification.destroy(String(i.id)))
     setItems([])
-  }, [items, notification])
+  }, [notification])
 
   const dismiss = useCallback((id: number) => {
     setItems((prev) => prev.filter((i) => i.id !== id))

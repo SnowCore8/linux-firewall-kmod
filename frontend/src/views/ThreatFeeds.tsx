@@ -239,14 +239,23 @@ export default function ThreatFeeds() {
     [message],
   )
 
+  // 按钮同步的 controller：卸载时中止在途请求，离开页面后长同步不必跑完
+  const syncAbortRef = useRef<AbortController | null>(null)
+  useEffect(() => () => syncAbortRef.current?.abort(), [])
+
   const handleSync = useCallback(async () => {
+    // 重复点击时先掐掉上一次，避免同一份结果弹两次通知
+    syncAbortRef.current?.abort()
+    const controller = new AbortController()
+    syncAbortRef.current = controller
     setSyncing(true)
     try {
-      const res = await syncThreatFeeds()
+      const res = await syncThreatFeeds(controller.signal)
       notifySyncResult(res)
       refetchRef.current()
     } catch (err) {
-      notifySyncError(err)
+      // 主动取消不是失败，不弹错误提示
+      if (!(err instanceof ApiError && err.kind === 'aborted')) notifySyncError(err)
     } finally {
       setSyncing(false)
     }
@@ -264,21 +273,32 @@ export default function ThreatFeeds() {
     if (deepSyncFired.current) return
     deepSyncFired.current = true
 
+    const controller = new AbortController()
+    let settled = false
     setDeepSyncing(true)
-    void syncThreatFeeds()
+    void syncThreatFeeds(controller.signal)
       .then((res) => {
         notifySyncResult(res)
         refetchRef.current()
       })
       .catch((err: unknown) => {
-        notifySyncError(err)
+        // 主动取消不是失败，不弹错误提示
+        if (!(err instanceof ApiError && err.kind === 'aborted')) notifySyncError(err)
       })
       .finally(() => {
+        settled = true
         setDeepSyncing(false)
+        // 已离开页面时不再回写参数：此时 current location 可能已是别的路由
+        if (controller.signal.aborted) return
         const next = new URLSearchParams(searchParams)
         next.delete('sync')
         setSearchParams(next, { replace: true })
       })
+    return () => {
+      controller.abort()
+      // 中途中止说明这次同步没跑完（StrictMode 重放 effect / 卸载）：放开守卫，重放时能重新发起
+      if (!settled) deepSyncFired.current = false
+    }
   }, [searchParams, setSearchParams, notifySyncResult, notifySyncError])
 
   // 顶栏/命令面板广播的「刷新当前页」
