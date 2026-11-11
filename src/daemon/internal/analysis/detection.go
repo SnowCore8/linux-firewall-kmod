@@ -83,6 +83,12 @@ func DetectPeriodicAttackers(db *persist.DB, minEvents int, limit int, eventLimi
 			sum += v
 		}
 		avg := sum / float64(len(intervals))
+		if avg <= 0 {
+			// 全部事件落在同一秒（同一 IP 被多个 jail 同时封禁等），间隔恒为 0。
+			// 这不是「完美等间隔」：零均值下变异系数无定义，继续算会把重复数据
+			// 报成最规律的攻击者，并挤掉真正的周期目标。
+			continue
+		}
 
 		var varianceSum float64
 		for _, v := range intervals {
@@ -90,11 +96,7 @@ func DetectPeriodicAttackers(db *persist.DB, minEvents int, limit int, eventLimi
 			varianceSum += diff * diff
 		}
 		stddev := math.Sqrt(varianceSum / float64(len(intervals)))
-
-		cv := 0.0
-		if avg > 0 {
-			cv = stddev / avg
-		}
+		cv := stddev / avg
 
 		regularity := 0.0
 		if cv < 0.3 {
@@ -114,8 +116,15 @@ func DetectPeriodicAttackers(db *persist.DB, minEvents int, limit int, eventLimi
 		})
 	}
 
+	// 规则度相同（尤其满分）是常态，只按它排序会让 limit 截断结果随 map 遍历顺序变化。
 	sort.Slice(attackers, func(i, j int) bool {
-		return attackers[i].Regularity > attackers[j].Regularity
+		if attackers[i].Regularity != attackers[j].Regularity {
+			return attackers[i].Regularity > attackers[j].Regularity
+		}
+		if attackers[i].EventCount != attackers[j].EventCount {
+			return attackers[i].EventCount > attackers[j].EventCount
+		}
+		return attackers[i].IP < attackers[j].IP
 	})
 
 	if len(attackers) > limit {

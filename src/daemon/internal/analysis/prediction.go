@@ -94,6 +94,11 @@ func PredictAttacks(db *persist.DB, limit int) (*PredictionSummary, error) {
 		} else {
 			median = intervals[mid]
 		}
+		if median <= 0 {
+			// 中位间隔为 0：事件聚集在同一秒，给不出「下一次」的时刻。
+			// 继续算会得到 next = 上次封禁、urgency = imminent 的假预测。
+			continue
+		}
 
 		var sum float64
 		for _, v := range intervals {

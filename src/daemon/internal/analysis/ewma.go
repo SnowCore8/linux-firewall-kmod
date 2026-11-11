@@ -11,6 +11,7 @@
 package analysis
 
 import (
+	"math"
 	"sync"
 	"time"
 )
@@ -46,11 +47,6 @@ type EWMASmoother struct {
 	mediumVal float64
 	longVal   float64
 
-	// 各窗口平滑系数（α = 2/(N+1)，N 为窗口秒数）。
-	shortAlpha  float64
-	mediumAlpha float64
-	longAlpha   float64
-
 	// 是否已收到首个样本（首样本直接赋值，不做平滑）。
 	initialized bool
 
@@ -60,17 +56,34 @@ type EWMASmoother struct {
 	frozen      bool
 	frozenUntil time.Time
 
-	// 最近一次采样时间戳（用于判断采样间隔）。
-	lastSampleAt time.Time
+	// 最近一次与首次采样时间戳：前者换算采样间隔，后者判断基线是否已预热。
+	lastSampleAt  time.Time
+	firstSampleAt time.Time
 }
+
+// warmupDuration 是基线预热期：这段时间内不报异常，冻结机制也不生效。
+//
+// 首样本到长期基线收敛之间，short 已经跟上真实流量而 baseline 还停在初始值，
+// 比值天然很大；此时若按「超过基线×3」冻结，基线会被钉在初始值附近，解冻后又
+// 立刻重新触发，守卫能持续很久。预热期取长期窗口长度，期间无条件学习基线。
+const warmupDuration = LongWindow * time.Second
 
 // NewEWMASmoother 创建多窗口 EWMA 平滑器。
 func NewEWMASmoother() *EWMASmoother {
-	return &EWMASmoother{
-		shortAlpha:  2.0 / (float64(ShortWindow) + 1),
-		mediumAlpha: 2.0 / (float64(MediumWindow) + 1),
-		longAlpha:   2.0 / (float64(LongWindow) + 1),
+	return &EWMASmoother{}
+}
+
+// decayAlpha 返回采样间隔 dt 秒的等效 EWMA 系数。
+//
+// 窗口 N 秒的 1 Hz 系数是 α=2/(N+1)，跨 dt 秒的等效系数是 1-(1-α)^dt。
+// 写死 1 Hz 系数、却按 5 秒喂样本，会把 5s/60s/300s 三个窗口分别放大成
+// 约 25s/5min/25min。
+func decayAlpha(dt float64, windowSecs int) float64 {
+	if dt <= 0 {
+		dt = 1
 	}
+	alpha1 := 2 / (float64(windowSecs) + 1)
+	return 1 - math.Pow(1-alpha1, dt)
 }
 
 // Sample 喂入一个速率样本（每秒事件数）。
@@ -90,6 +103,7 @@ func (s *EWMASmoother) Sample(rate float64) {
 		s.longVal = rate
 		s.baseline = rate
 		s.initialized = true
+		s.firstSampleAt = now
 		s.lastSampleAt = now
 		return
 	}
@@ -99,20 +113,33 @@ func (s *EWMASmoother) Sample(rate float64) {
 		s.frozen = false
 	}
 
-	// 标准 EWMA 更新：new = α × input + (1-α) × old。
-	s.shortVal = s.shortAlpha*rate + (1-s.shortAlpha)*s.shortVal
-	s.mediumVal = s.mediumAlpha*rate + (1-s.mediumAlpha)*s.mediumVal
-	s.longVal = s.longAlpha*rate + (1-s.longAlpha)*s.longVal
+	// 标准 EWMA 更新：new = α(dt) × input + (1-α(dt)) × old。
+	dt := now.Sub(s.lastSampleAt).Seconds()
+	shortA := decayAlpha(dt, ShortWindow)
+	mediumA := decayAlpha(dt, MediumWindow)
+	longA := decayAlpha(dt, LongWindow)
+	s.shortVal = shortA*rate + (1-shortA)*s.shortVal
+	s.mediumVal = mediumA*rate + (1-mediumA)*s.mediumVal
+	s.longVal = longA*rate + (1-longA)*s.longVal
 
 	// 基线更新：仅在未冻结且样本未超过异常阈值时执行。
-	effectiveBaseline := s.baseline
+	//
+	// 冻结判据的参照取 baseline 与 longVal 的较大者：baseline 以 α=0.01 学习，
+	// 启动/长时间空闲后仍在 0 附近，此时任何非零流量都会「超过基线×3」并把基线
+	// 钉死在初始值。longVal 在一个长期窗口内就完成收敛，用它兜住收敛期。
+	reference := s.baseline
+	if s.longVal > reference {
+		reference = s.longVal
+	}
 	if PeakHours(now) {
-		effectiveBaseline *= PeakMultiplier
+		reference *= PeakMultiplier
 	}
 
-	if !s.frozen && rate <= effectiveBaseline*AnomalyMultiplier {
-		s.baseline = BaselineAlpha*rate + (1-BaselineAlpha)*s.baseline
-	} else if !s.frozen && rate > effectiveBaseline*AnomalyMultiplier {
+	baselineAlpha := 1 - math.Pow(1-BaselineAlpha, dt) // 与 1 Hz 的 BaselineAlpha 同源
+	warming := now.Sub(s.firstSampleAt) < warmupDuration
+	if !s.frozen && (warming || reference <= 0 || rate <= reference*AnomalyMultiplier) {
+		s.baseline = baselineAlpha*rate + (1-baselineAlpha)*s.baseline
+	} else if !s.frozen {
 		// 异常值：冻结基线更新。
 		s.frozen = true
 		s.frozenUntil = now.Add(FreezeDurationSecs * time.Second)
@@ -126,8 +153,9 @@ func (s *EWMASmoother) Snapshot() EWMASnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	now := time.Now()
 	effectiveBaseline := s.baseline
-	if PeakHours(time.Now()) {
+	if PeakHours(now) {
 		effectiveBaseline *= PeakMultiplier
 	}
 
@@ -137,8 +165,9 @@ func (s *EWMASmoother) Snapshot() EWMASnapshot {
 		Long:              s.longVal,
 		Baseline:          s.baseline,
 		EffectiveBaseline: effectiveBaseline,
-		Frozen:            s.frozen,
-		Initialized:       s.initialized,
+		// 冻结的解除只在 Sample 里发生；采样停止（链路断开）时不能一直报 frozen。
+		Frozen:      s.frozen && now.Before(s.frozenUntil),
+		Initialized: s.initialized,
 	}
 }
 
@@ -148,6 +177,10 @@ func (s *EWMASmoother) AnomalyLevel() int {
 	defer s.mu.Unlock()
 
 	if !s.initialized || s.baseline <= 0 {
+		return 0
+	}
+	// 预热期内基线还没收敛，short/baseline 的比值没有意义。
+	if time.Since(s.firstSampleAt) < warmupDuration {
 		return 0
 	}
 
