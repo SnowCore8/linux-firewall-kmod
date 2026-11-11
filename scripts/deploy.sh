@@ -297,7 +297,7 @@ EOF
 
     echo ""
     echo "[3/5] 上传到远端..."
-    scp /tmp/firewall-deploy.tar.gz "$REMOTE_USER@$REMOTE_HOST":/tmp/
+    scp "${SSH_OPTS[@]}" /tmp/firewall-deploy.tar.gz "$REMOTE_USER@$REMOTE_HOST":/tmp/
     echo "  ✓ 上传完成"
 
     echo ""

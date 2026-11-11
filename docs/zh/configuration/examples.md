@@ -62,17 +62,15 @@ jails:
     enabled: true
     log_files:
       - /var/log/redis/redis-server.log
-    # 智能推断参数：max_retries=3, findtime=300, ban_time=3600
+    # 智能推断参数：max_retries=3（来自 defaults），findtime=600、ban_time=900（来自 defaults）
     # 匹配 Redis 密码错误日志
     regexes:
       invalid_password:
         pattern: 'Client ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+).*invalid password'
 ```
 
-一处与实现不符，提出来：
-`src/daemon/internal/jail/service.go` 的服务名表里没有 redis。
-所以这份文件里那行注释写的推断值拿不到。
-实际生效的是 `defaults` 段里的三个值，仓库的 `config/default.yaml` 给的是 3 / 600 / 900。
+`src/daemon/internal/jail/service.go` 的服务名表里没有 redis，所以注释里标注了数值来源是 `defaults` 段。
+实际生效的三个值来自 `config/default.yaml` 的 `defaults` 段：3 / 600 / 900。
 
 ## 四、停用一个 jail：`config/frp.yaml`
 

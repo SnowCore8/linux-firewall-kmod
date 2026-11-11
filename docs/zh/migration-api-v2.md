@@ -10,7 +10,7 @@
 | 项目 | v1 | v2 |
 |------|----|----|
 | 路由前缀 | `/api/v1/*` | `/api/v2/*` |
-| 健康检查 | `/health`、`/healthz`（根路径） | `/api/v2/health`、`/api/v2/healthz` |
+| 健康检查 | `/health`、`/healthz`（根路径，已删除） | `/api/v2/health`、`/api/v2/healthz` |
 | 威胁情报端点 | 无（404） | `/api/v2/threat-feeds/*` |
 | 综合分析端点 | 无（404） | `/api/v2/analysis/*` |
 | OpenAPI 文档 | 无 | `contract/generated/openapi.json` |
@@ -44,8 +44,8 @@ GET    /api/v1/whitelist             → GET    /api/v2/whitelist
 POST   /api/v1/whitelist             → POST   /api/v2/whitelist
 DELETE /api/v1/whitelist/:cidr       → DELETE /api/v2/whitelist/:cidr
 GET    /api/v1/whitelist/recommendations → GET /api/v2/whitelist/recommendations
-GET    /health                       → GET    /api/v2/health
-GET    /healthz                      → GET    /api/v2/healthz
+GET    /health                       → GET    /api/v2/health   （根路径已删除，仅 /api/v2 路径有效）
+GET    /healthz                      → GET    /api/v2/healthz  （根路径已删除，仅 /api/v2 路径有效）
 ```
 
 ## 新增端点

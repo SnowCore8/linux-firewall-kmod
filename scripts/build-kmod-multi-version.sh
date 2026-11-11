@@ -148,12 +148,11 @@ build_for_version() {
     log_info "编译 firewall.ko for $kernel_version"
 
     mkdir -p "$output_dir"
-    cd "$PROJECT_ROOT"
 
     # 生成契约文件（如果还没有）
     if [ ! -f "contract/generated/netlink_uapi.h" ]; then
         log_info "生成契约文件..."
-        make contract >/dev/null || {
+        (cd "$PROJECT_ROOT" && make contract >/dev/null) || {
             log_error "契约生成失败"
             return 1
         }
@@ -162,7 +161,7 @@ build_for_version() {
     # Makefile 内部把源码 stage 到 build/obj 再编译，中间产物不写 src/。
     # 多个版本共用同一个最终产物路径，先删掉以免 make 判定 up-to-date。
     rm -f "$BUILD_BASE/kernel-module/firewall.ko"
-    if ! make kernel-module KDIR="$kdir" KVER="$kernel_version"; then
+    if ! (cd "$PROJECT_ROOT" && make kernel-module KDIR="$kdir" KVER="$kernel_version"); then
         log_error "编译失败: $kernel_version"
         return 1
     fi

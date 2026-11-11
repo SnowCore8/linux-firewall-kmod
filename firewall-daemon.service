@@ -9,7 +9,7 @@ Group=root
 # 可选：把面板凭据从被 git 跟踪的 YAML 移到这台机器上的 0600 文件。
 # 文件缺失时 systemd 仍会启动（前缀 `-`），凭据回落到 YAML。
 EnvironmentFile=-/etc/firewall/credentials.env
-ExecStart=/usr/sbin/firewall-daemon -C /etc/firewall
+ExecStart=__SBINDIR__/firewall-daemon -C /etc/firewall
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
