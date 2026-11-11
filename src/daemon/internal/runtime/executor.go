@@ -662,17 +662,11 @@ func (e *InboundExecutor) handleRotation(id ingest.SourceID, path string) {
 	e.dropSource(id)
 
 	if _, err := os.Stat(path); err == nil {
-		// 重新添加第一个 jail，其他 jail 会在 reconcileWatches 或下次配置加载时追加
-		if _, added := e.addLogSource(jails[0], path, true); !added {
+		// 轮转重挂会分配新的 SourceID，owner 必须一次性全部迁过去：否则除第一个
+		// jail 外，其余 jail 直到下次周期重扫（60 秒）都收不到这个文件的新行。
+		// 也要在首轮读取之前登记齐全——新文件在挂 watch 前写入的内容按 owner 表分发。
+		if _, added := e.addSharedLogSource(jails, path, true); !added {
 			e.pendingReadd[ingest.CleanPath(path)] = struct{}{}
-		} else {
-			// 恢复其他 jail 的 owner 信息
-			newEntry, ok := e.registry.Get(id)
-			if ok {
-				for i := 1; i < len(jails); i++ {
-					e.registry.Register(ingest.LogOwner(jails[i]), path, newEntry.WD, newEntry.Inode)
-				}
-			}
 		}
 	} else {
 		e.debug("日志轮转后文件暂不可见，待重挂", "path", path)
@@ -698,13 +692,13 @@ func (e *InboundExecutor) retryPendingReadd() {
 		if _, err := os.Stat(path); err != nil {
 			continue
 		}
-		jail, ok := e.jailForPath(path)
-		if !ok {
-			// 配置里已不再监视该文件（或该 jail 被禁用）：交给重扫摘除。
+		jails := e.jailsForPath(path)
+		if len(jails) == 0 {
+			// 配置里已不再监视该文件（或所有相关 jail 被禁用）：交给重扫摘除。
 			delete(e.pendingReadd, path)
 			continue
 		}
-		if _, added := e.addLogSource(jail, path, true); added {
+		if _, added := e.addSharedLogSource(jails, path, true); added {
 			delete(e.pendingReadd, path)
 			e.info("轮转后的日志文件已重新挂载", "path", path)
 		}
@@ -764,7 +758,19 @@ func (e *InboundExecutor) reconcileWatches() {
 //
 // fromStart=false 时定位到文件末尾（不回放历史）。返回值 added=false 表示路径当前不可
 // 挂（符号链接 / 不存在 / watch 失败），由调用方决定是否登记为待重挂。
+// addLogSource 挂一个只属于单个 jail 的日志源。
 func (e *InboundExecutor) addLogSource(jail, path string, fromStart bool) (ingest.SourceID, bool) {
+	return e.addSharedLogSource([]string{jail}, path, fromStart)
+}
+
+// addSharedLogSource 挂一个日志源，并把内容分发给 jails 中的每个 jail。
+//
+// 所有 owner 在首轮读取之前登记：轮转重挂时新文件可能已经写入了内容，首轮读取按
+// owner 表逐 jail 分发，晚登记的 jail 会永久错过这段内容。
+func (e *InboundExecutor) addSharedLogSource(jails []string, path string, fromStart bool) (ingest.SourceID, bool) {
+	if len(jails) == 0 {
+		return 0, false
+	}
 	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		e.warn("跳过符号链接日志文件", "path", path)
 		return 0, false
@@ -779,7 +785,10 @@ func (e *InboundExecutor) addLogSource(jail, path string, fromStart bool) (inges
 		return 0, false
 	}
 	inode := inodeOfPath(path)
-	id := e.registry.Register(ingest.LogOwner(jail), path, wd, inode)
+	id := e.registry.Register(ingest.LogOwner(jails[0]), path, wd, inode)
+	for _, jail := range jails[1:] {
+		e.registry.Register(ingest.LogOwner(jail), path, wd, inode)
+	}
 	reader := ingest.NewSourceReader(e.logger)
 	if !fromStart {
 		reader.OpenAtEnd(path)
@@ -852,8 +861,10 @@ func (e *InboundExecutor) enabledLogSources() []logSource {
 }
 
 // jailForPath 找出监视该路径的 jail（按当前配置，取启用的）。
-func (e *InboundExecutor) jailForPath(path string) (string, bool) {
+// jailsForPath 返回配置里监视该路径的全部已启用 jail（同一文件可被多个 jail 共享）。
+func (e *InboundExecutor) jailsForPath(path string) []string {
 	clean := ingest.CleanPath(path)
+	var out []string
 	for i := range e.cfg.Jails {
 		jail := &e.cfg.Jails[i]
 		if !jail.Enabled {
@@ -861,11 +872,12 @@ func (e *InboundExecutor) jailForPath(path string) (string, bool) {
 		}
 		for _, file := range jail.LogFiles {
 			if ingest.CleanPath(file) == clean {
-				return jail.Name, true
+				out = append(out, jail.Name)
+				break
 			}
 		}
 	}
-	return "", false
+	return out
 }
 
 // reloadConfig 处理 SIGHUP（或配置文件自身变化）触发的热重载。

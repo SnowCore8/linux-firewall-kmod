@@ -317,3 +317,74 @@ func TestBanIntentIsMappedToBanInfoFieldByField(t *testing.T) {
 		t.Error("IPv4 必须带上网络字节序整数索引")
 	}
 }
+
+// 共享同一日志文件的多个 jail 必须全部在轮转后恢复归属：轮转重挂会分配新的 SourceID，
+// owner 列表要跟着迁移过去；漏掉的话除第一个 jail 外，其余 jail 直到下次周期重扫
+// （60 秒）都收不到任何新行。新文件在重挂前已写入的内容也必须喂给每个 jail。
+func TestRotationKeepsAllSharedJailOwners(t *testing.T) {
+	dir := tempLogDir(t)
+	defer os.RemoveAll(dir)
+	log := filepath.Join(dir, "auth.log")
+	if err := os.WriteFile(log, nil, 0o644); err != nil {
+		t.Fatalf("写日志失败: %v", err)
+	}
+
+	cfg := config.Default()
+	for _, name := range []string{"rot-a", "rot-b"} {
+		jail := config.NewJail(name)
+		jail.MaxRetries = 1
+		jail.FindTime = 600
+		jail.BanTime = 60
+		jail.LogFiles = append(jail.LogFiles, log)
+		jail.Regexes = append(jail.Regexes, config.RegexInfo{
+			Name:     "default",
+			Pattern:  logparse.DefaultSSHDPattern,
+			Compiled: regexp.MustCompile(logparse.DefaultSSHDPattern),
+		})
+		cfg.Jails = append(cfg.Jails, jail)
+	}
+
+	signals, err := NewSignalSource()
+	if err != nil {
+		t.Fatalf("创建信号源失败: %v", err)
+	}
+	ex, err := NewInboundExecutor(&cfg, signals, Deps{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Stats:  &fakeStats{},
+	})
+	if err != nil {
+		t.Fatalf("入站执行体应能装配: %v", err)
+	}
+	defer ex.Close()
+
+	if id, _, _, ok := ex.entryForPath(log); !ok {
+		t.Fatal("初始应监视该日志")
+	} else if entry, _ := ex.registry.Get(id); len(entry.Owners) != 2 {
+		t.Fatalf("初始应有 2 个 owner，实得 %+v", entry.Owners)
+	}
+
+	// logrotate 风格：先改名，再新建同名文件；新内容在重挂 watch 之前就已写入，
+	// 只能靠重挂后的首轮读取补上。
+	if err := os.Rename(log, log+".1"); err != nil {
+		t.Fatalf("改名失败: %v", err)
+	}
+	batch := failedRec("203.0.113.90") + failedRec("203.0.113.91") + failedRec("203.0.113.92")
+	if err := os.WriteFile(log, []byte(batch), 0o644); err != nil {
+		t.Fatalf("建新文件失败: %v", err)
+	}
+
+	// 3 行 × 2 个 jail = 6 次解析。
+	driveUntil(t, ex, func() bool { return ex.pipeline.Counters().IPsExtracted >= 6 })
+
+	id, _, _, ok := ex.entryForPath(log)
+	if !ok {
+		t.Fatal("轮转后仍应监视该路径")
+	}
+	entry, ok := ex.registry.Get(id)
+	if !ok {
+		t.Fatal("登记项应存在")
+	}
+	if len(entry.Owners) != 2 {
+		t.Errorf("轮转后两个 jail 的 owner 都必须恢复，实得 %+v", entry.Owners)
+	}
+}
