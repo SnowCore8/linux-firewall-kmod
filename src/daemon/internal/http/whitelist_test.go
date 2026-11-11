@@ -199,7 +199,7 @@ func TestWhitelistAddNormalizesIPv4Mapped(t *testing.T) {
 	}
 }
 
-// TestWhitelistRemoveKeepsMirrorOnKernelFailure 与解封同口径：镜像已经撤了就别再塞回去。
+// TestWhitelistRemoveKeepsMirrorOnKernelFailure 内核删除失败时内存条目保持不变，返回错误码，与 AddWhitelist 同一口径。
 func TestWhitelistRemoveKeepsMirrorOnKernelFailure(t *testing.T) {
 	useWhitelistKey(t, "203.0.113.64/28")
 	fake := &recordingWhitelist{}
@@ -214,11 +214,11 @@ func TestWhitelistRemoveKeepsMirrorOnKernelFailure(t *testing.T) {
 	// （前端 endpoints.ts 的 fill() 就是为此做 encodeURIComponent）。
 	rec := authedSend(t, s, http.MethodDelete, "/api/v2/whitelist/203.0.113.64%2F28", "", "")
 	env := decodeEnvelope(t, rec.Body.Bytes())
-	if code := envelopeCode(t, env); code != httpcontract.CodeOK {
-		t.Errorf("移除时内核回绝导致 code = %d，期望仍按成功（0）处理", code)
+	if code := envelopeCode(t, env); code != httpcontract.Code40004 {
+		t.Errorf("移除时内核回绝导致 code = %d，期望 40004", code)
 	}
-	if slices.Contains(bans.GlobalWhitelist().List(), "203.0.113.64/28") {
-		t.Errorf("镜像里那条规则被塞回去了：%v", bans.GlobalWhitelist().List())
+	if !slices.Contains(bans.GlobalWhitelist().List(), "203.0.113.64/28") {
+		t.Errorf("内核失败后内存条目被误删：%v", bans.GlobalWhitelist().List())
 	}
 	if len(fake.removed) != 1 {
 		t.Errorf("移除下发记录 = %v，期望一条", fake.removed)

@@ -206,23 +206,43 @@ type timers struct {
 
 // newTimers 登记五个周期任务。首个到期点都是「当前 + 一个周期」：与旧实现「启动时把
 // last_* 置为 now」同义，即启动后不在第 0 秒抢跑一轮维护。
-func newTimers(now time.Time) *timers {
+// 登记失败时返回 error，由调用方处理，避免 panic 导致整个守护进程崩溃。
+func newTimers(now time.Time) (*timers, error) {
 	table := NewTimerTable(5)
-	must := func(id TimerID, ok bool) TimerID {
+	register := func(id TimerID, ok bool) (TimerID, error) {
 		if !ok {
-			// 容量 5 的表登记五个周期任务不应失败，是编码错误。
-			panic("timers: 容量 5 的定时器表登记五个周期任务失败")
+			return 0, errors.New("容量 5 的定时器表登记五个周期任务失败")
 		}
-		return id
+		return id, nil
+	}
+	cleanup, err := register(table.Every(cleanupInterval, now.Add(cleanupInterval)))
+	if err != nil {
+		return nil, fmt.Errorf("timers: 注册 cleanup 周期任务失败: %w", err)
+	}
+	cluster, err := register(table.Every(clusterScanInterval, now.Add(clusterScanInterval)))
+	if err != nil {
+		return nil, fmt.Errorf("timers: 注册 cluster 周期任务失败: %w", err)
+	}
+	rescan, err := register(table.Every(rescanInterval, now.Add(rescanInterval)))
+	if err != nil {
+		return nil, fmt.Errorf("timers: 注册 rescan 周期任务失败: %w", err)
+	}
+	history, err := register(table.Every(historyInterval, now.Add(historyInterval)))
+	if err != nil {
+		return nil, fmt.Errorf("timers: 注册 history 周期任务失败: %w", err)
+	}
+	dataCleanup, err := register(table.Every(dataCleanupInterval, now.Add(dataCleanupInterval)))
+	if err != nil {
+		return nil, fmt.Errorf("timers: 注册 dataCleanup 周期任务失败: %w", err)
 	}
 	return &timers{
 		table:       table,
-		cleanup:     must(table.Every(cleanupInterval, now.Add(cleanupInterval))),
-		cluster:     must(table.Every(clusterScanInterval, now.Add(clusterScanInterval))),
-		rescan:      must(table.Every(rescanInterval, now.Add(rescanInterval))),
-		history:     must(table.Every(historyInterval, now.Add(historyInterval))),
-		dataCleanup: must(table.Every(dataCleanupInterval, now.Add(dataCleanupInterval))),
-	}
+		cleanup:     cleanup,
+		cluster:     cluster,
+		rescan:      rescan,
+		history:     history,
+		dataCleanup: dataCleanup,
+	}, nil
 }
 
 // InboundExecutor 是入站主链路执行体。**由单个 goroutine 独占**，内部状态一律不加锁。
@@ -307,9 +327,14 @@ func NewInboundExecutor(cfg *config.Config, signals *SignalSource, deps Deps) (*
 		cmd:          deps.KernelCmd,
 		rejected:     make(map[string]time.Time),
 		rejectionTTL: dispatchRejectionCooldown,
-		timers:       newTimers(time.Now()),
 		pendingReadd: make(map[string]struct{}),
 	}
+	t, err := newTimers(time.Now())
+	if err != nil {
+		_ = watcher.Close()
+		return nil, fmt.Errorf("runtime: 初始化周期任务失败: %w", err)
+	}
+	e.timers = t
 	e.refreshJails()
 	e.pipeline.intel = deps.ThreatIntel
 	e.reconcileWatches()
@@ -1135,7 +1160,10 @@ func (e *InboundExecutor) dispatchIntent(intent *BanIntent) {
 			durationSecs = uint32(plan.Duration)
 		}
 	}
-	if err := e.sink.Send(intent.IP, bans.FullPrefixLen(intent.IP), durationSecs, jail); err != nil {
+	// intent.IP 可能是 mapped IPv4（16 字节形式），统一 unmapped 后再下发，
+	// 避免与内核回显的 canonical 形式不一致导致镜像分裂。
+	canonicalAddr := intent.IP.Unmap()
+	if err := e.sink.Send(canonicalAddr, bans.FullPrefixLen(canonicalAddr), durationSecs, jail); err != nil {
 		e.sink.RollbackInsert(ip)
 		e.warn("内核封禁失败，已回滚缓存标记", "ip", ip, "jail", jail, "error", err)
 		return

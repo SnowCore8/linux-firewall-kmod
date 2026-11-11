@@ -108,20 +108,22 @@ func (h *APIHandlers) RemoveWhitelist(w http.ResponseWriter, r *http.Request) {
 	}
 	prefix = bans.NormalizeWhitelistPrefix(prefix).Masked()
 
-	if !bans.GlobalWhitelist().Remove(prefix) {
+	// 先检查条目是否存在（不删除），等内核确认后再真正移除内存。
+	if !bans.GlobalWhitelist().Has(prefix) {
 		WriteCode(w, httpcontract.Code40004, "移除白名单失败：该网段不在表中 "+cidr)
 		return
 	}
 
-	// 与添加路径相反，这里下发失败**不回滚**镜像：内核里那条规则最多活到下一条事件把
-	// 镜像对齐，而把「镜像已撤、面板显示不再放行」报成一次失败，会让运维重复点删除按钮
-	// 去追一个已经消失的条目。与 DeleteBan 同一口径。
+	// 先下发内核，成功后再删内存；失败时内存保持不变，与 AddWhitelist 同一口径。
 	if h.kernelWhitelist != nil {
 		if err := h.kernelWhitelist.Remove(prefix.Addr(), uint8(prefix.Bits()), ""); err != nil {
 			h.server.logger.Error("内核白名单移除下发失败", "cidr", prefix.String(), "error", err)
+			WriteCode(w, httpcontract.Code40004, "移除白名单失败：内核未确认")
+			return
 		}
 	}
 
+	bans.GlobalWhitelist().Remove(prefix)
 	h.publishWhitelist()
 
 	WriteSuccess(w, WhitelistOperationResponse{CIDR: prefix.String(), Action: "removed"})

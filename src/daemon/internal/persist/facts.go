@@ -519,7 +519,11 @@ func (f *Facts) Stats() (entries, pending int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for el := f.lru.Front(); el != nil; el = el.Next() {
-		if el.Value.(*factsEntry).pending > 0 {
+		entry, ok := el.Value.(*factsEntry)
+		if !ok {
+			continue
+		}
+		if entry.pending > 0 {
 			pending++
 		}
 	}

@@ -89,6 +89,15 @@ func (w *Whitelist) Remove(prefix netip.Prefix) bool {
 	return true
 }
 
+// Has 报告指定前缀是否已在表中（按归一后的键匹配）。
+func (w *Whitelist) Has(prefix netip.Prefix) bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	key := whitelistKey(prefix)
+	_, exists := w.entries[key]
+	return exists
+}
+
 // Contains 报告地址是否落在任一已记录的前缀内。
 func (w *Whitelist) Contains(addr netip.Addr) bool {
 	w.mu.RLock()

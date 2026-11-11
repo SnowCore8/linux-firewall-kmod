@@ -228,7 +228,8 @@ func (t *Transport) Subscribe() error {
 		return fmt.Errorf("读取 socket 标志失败：%w", err)
 	}
 	if err := unix.SetNonblock(t.fd, false); err != nil {
-		_ = flags
+		// 恢复原始 flags，避免 SetNonblock 失败后标志被静默丢弃。
+		_, _ = unix.FcntlInt(uintptr(t.fd), unix.F_SETFL, flags)
 		return fmt.Errorf("清除 socket 非阻塞标志失败：%w", err)
 	}
 	return nil
@@ -499,10 +500,14 @@ func (t *Transport) pokeWakeFd() {
 }
 
 // Close 关闭 socket 并宣告接收侧退出。
+// 先获取 sendMu 确保所有进行中的 Send 完成，再获取 closeMu 执行关闭，
+// 避免 Send 在 Close 关闭 fd 后仍使用该 fd 的竞态。
 func (t *Transport) Close() {
+	t.sendMu.Lock()
 	t.closeMu.Lock()
 	if t.closed {
 		t.closeMu.Unlock()
+		t.sendMu.Unlock()
 		return
 	}
 	t.closed = true
@@ -521,6 +526,7 @@ func (t *Transport) Close() {
 	epFd, fd := t.epFd, t.fd
 	t.epFd, t.wakeFd, t.fd = -1, -1, -1
 	t.closeMu.Unlock()
+	t.sendMu.Unlock()
 	if fd >= 0 {
 		unix.Close(fd)
 	}
