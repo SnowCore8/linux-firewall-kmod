@@ -66,8 +66,9 @@ func NewServer(cfg Config) (*Server, error) {
 		Handler:           s.securityHeaders(s.connectionLimiter(mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// WriteTimeout 只约束普通响应；SSE 长连接在 streamSSE 里清掉写截止（sse.go）。
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	return s, nil

@@ -390,6 +390,14 @@ func streamSSE(
 	}
 	defer release()
 
+	// Server 的 WriteTimeout 是「请求头读完 + N 秒」的绝对截止，不会因为心跳持续
+	// 写出而顺延。SSE 的存活期应由连接本身决定，这里必须清掉写截止，否则每条流都会
+	// 在 WriteTimeout 到点时写心跳失败、被 handler 主动返回，前端表现为周期性断连。
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		stream.logger.Warn("SSE 清除写截止失败，连接仍受 WriteTimeout 限制",
+			"stream", stream.name, "error", err)
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
