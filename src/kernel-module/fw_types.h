@@ -364,20 +364,16 @@ struct fw_rate_pcpu_chunk {
 } ____cacheline_aligned_in_smp;
 
 /*
- * 速率表清空（fw_rate_clear_all）的跨 CPU 上下文。
+ * 速率表清空（fw_rate_clear_all / fw_rate_exit）的共享状态。
  *
  * 摘链必须与「热路径重绑槽位」互斥，否则可能把一个即将被释放的条目重新挂进
- * 某个槽（其 entry 指针随后悬空）。做法：先置 clearing 让热路径的槽位重绑
- * 走慢路径（本函数已完成清槽后，重绑会重新查表），再用 on_each_cpu 在**各
- * CPU 本地**清掉指向待删条目的槽（本地写，避免跨 CPU 写槽）。CFS 上
- * on_each_cpu 的每个回调都能抢占软中断，故清槽与任意在跑的热路径必然串行。
+ * 某个槽（其 entry 指针随后悬空）。做法：先置 clearing 让热路径与建条目走
+ * 短路分支，再用 on_each_cpu 在**各 CPU 本地**清掉指向待删条目的槽（本地写，
+ * 避免跨 CPU 写槽）。CFS 上 on_each_cpu 的每个回调都能抢占软中断，故清槽与
+ * 任意在跑的热路径必然串行。清表者之间由 fw_rate.c 的静态 mutex 串行。
  */
 struct fw_rate_clear_ctx {
   bool clearing;
-  u8 af;
-  struct {
-    DECLARE_HASHTABLE(buckets, RATE_HASH_BITS);
-  } pre;
 };
 
 /* 每 CPU 统计分析槽（UDP 端口分布） */

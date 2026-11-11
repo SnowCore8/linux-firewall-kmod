@@ -51,6 +51,12 @@
 #define FW_RATE_RECLAIM_INTERVAL (10 * HZ)
 #define FW_RATE_RECLAIM_BATCH 64
 
+/* 清表单批摘链条目数：栈上指针数组，避免再引入一张与桶表等大的暂存表 */
+#define FW_RATE_DRAIN_BATCH 32
+
+/* 清表互斥：fw_rate_clear_all 与 fw_rate_exit 串行，任一时刻只有一个清表者 */
+static DEFINE_MUTEX(fw_rate_clear_lock);
+
 /* ============================================================================
  * 小工具
  * ==========================================================================*/
@@ -309,36 +315,51 @@ requeue:
 }
 
 /*
- * 把 tables 中的全部条目摘链到 ctx->pre，再逐条清槽 + 释放。
- * 冷路径专用（清表 / 退出）。摘链后统一走二次遍历，避免在桶锁内做 on_each_cpu。
- * 关键：清槽依赖 on_each_cpu 的各 CPU 回调能抢占软中断，因此不与热路径交错。
+ * 清空一张表：逐桶把条目摘链到栈上批次（每批最多 FW_RATE_DRAIN_BATCH 条），
+ * 释放桶锁后逐条清槽并 call_rcu，循环到该桶为空。
+ *
+ * 每条只做一次 hlist_del_rcu：节点的 hash.next 保持指向原桶中的后续节点，
+ * 正在遍历旧链的 RCU 读者可以由此续走，不会读到毒化指针。条目不再挂进第二张
+ * 表，因此不存在「同一 hlist_node 被两次挂链、其中一次是普通 hlist_del」的窗口。
+ *
+ * 清槽依赖 on_each_cpu（要等全部 CPU），故只在桶锁之外做。循环到桶空是安全的：
+ * 调用者已置位 clearing，此后 fw_rate_create 在桶锁内看到的必然是置位后的值，
+ * 该桶不会再出现新条目。
  */
-static void fw_rate_drain_tables(void) {
-  struct fw_rate_node *n;
-  struct hlist_node *tmp;
+static void fw_rate_drain_table(struct hlist_head *table) {
+  struct fw_rate_node *batch[FW_RATE_DRAIN_BATCH];
   u32 bkt;
 
   for (bkt = 0; bkt < RATE_HASH_SIZE; bkt++) {
-    spin_lock_bh(&fw_info.rate_locks[bkt]);
-    hlist_for_each_entry_safe(n, tmp, &fw_info.rate_ipv4[bkt], hash) {
-      hlist_del_rcu(&n->hash);
-      hlist_add_head(&n->hash, &fw_info.rate_clear_ctx.pre.buckets[bkt]);
-    }
-    hlist_for_each_entry_safe(n, tmp, &fw_info.rate_ipv6[bkt], hash) {
-      hlist_del_rcu(&n->hash);
-      hlist_add_head(&n->hash, &fw_info.rate_clear_ctx.pre.buckets[bkt]);
-    }
-    spin_unlock_bh(&fw_info.rate_locks[bkt]);
-  }
+    u32 nr;
 
-  for (bkt = 0; bkt < RATE_HASH_SIZE; bkt++) {
-    hlist_for_each_entry_safe(n, tmp, &fw_info.rate_clear_ctx.pre.buckets[bkt], hash) {
-      hlist_del(&n->hash);
-      on_each_cpu(fw_rate_clear_slots_this_cpu, n, 1);
-      call_rcu(&n->rcu, fw_rate_free_rcu);
-    }
-    INIT_HLIST_HEAD(&fw_info.rate_clear_ctx.pre.buckets[bkt]);
+    do {
+      struct fw_rate_node *n;
+      u32 i;
+
+      nr = 0;
+      spin_lock_bh(&fw_info.rate_locks[bkt]);
+      hlist_for_each_entry(n, &table[bkt], hash) {
+        if (nr == FW_RATE_DRAIN_BATCH)
+          break;
+        batch[nr++] = n;
+      }
+      for (i = 0; i < nr; i++)
+        hlist_del_rcu(&batch[i]->hash);
+      spin_unlock_bh(&fw_info.rate_locks[bkt]);
+
+      for (i = 0; i < nr; i++) {
+        on_each_cpu(fw_rate_clear_slots_this_cpu, batch[i], 1);
+        call_rcu(&batch[i]->rcu, fw_rate_free_rcu);
+      }
+    } while (nr == FW_RATE_DRAIN_BATCH);
   }
+}
+
+/* 清空两张表。冷路径专用（清表 / 退出），调用者持 fw_rate_clear_lock */
+static void fw_rate_drain_tables(void) {
+  fw_rate_drain_table(fw_info.rate_ipv4);
+  fw_rate_drain_table(fw_info.rate_ipv6);
 }
 
 /*
@@ -361,8 +382,6 @@ int fw_rate_init(void) {
   hash_init(fw_info.rate_ipv6);
   for (i = 0; i < RATE_HASH_SIZE; i++)
     spin_lock_init(&fw_info.rate_locks[i]);
-  for (i = 0; i < RATE_HASH_SIZE; i++)
-    INIT_HLIST_HEAD(&fw_info.rate_clear_ctx.pre.buckets[i]);
   spin_lock_init(&fw_info.rate_slot_lock);
   atomic_set(&fw_info.rate_count, 0);
   atomic64_set(&fw_info.rate_reclaimed, 0);
@@ -387,8 +406,11 @@ int fw_rate_init(void) {
 }
 
 void fw_rate_exit(void) {
-  if (!fw_info.rate_pcpu[0])
+  mutex_lock(&fw_rate_clear_lock);
+  if (!fw_info.rate_pcpu[0]) {
+    mutex_unlock(&fw_rate_clear_lock);
     return;
+  }
 
   /* 先停回收，再拆表：否则 drain 与回收会在桶锁上交错 */
   cancel_delayed_work_sync(&fw_info.rate_reclaim_work);
@@ -405,11 +427,15 @@ void fw_rate_exit(void) {
   fw_rate_free_pcpu();
   atomic_set(&fw_info.rate_count, 0);
   WRITE_ONCE(fw_info.rate_clear_ctx.clearing, false);
+  mutex_unlock(&fw_rate_clear_lock);
 }
 
 void fw_rate_clear_all(void) {
-  if (!fw_info.rate_pcpu[0])
+  mutex_lock(&fw_rate_clear_lock);
+  if (!fw_info.rate_pcpu[0]) {
+    mutex_unlock(&fw_rate_clear_lock);
     return;
+  }
 
   WRITE_ONCE(fw_info.rate_clear_ctx.clearing, true);
   smp_mb();
@@ -419,6 +445,7 @@ void fw_rate_clear_all(void) {
   synchronize_rcu();
   atomic_set(&fw_info.rate_count, 0);
   WRITE_ONCE(fw_info.rate_clear_ctx.clearing, false);
+  mutex_unlock(&fw_rate_clear_lock);
 }
 
 /* ============================================================================
