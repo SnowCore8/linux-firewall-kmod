@@ -7,9 +7,11 @@
 package daemonize
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -73,7 +75,13 @@ func childEnv(environ []string) []string {
 }
 
 // WritePIDFile 原子写入 pid 到 path（临时文件 + rename，权限 0644）。
+//
+// 覆盖前读取旧内容：旧 pid 仍存活（kill(pid,0) 成功或 EPERM）时返回错误，拒绝
+// 第二实例；内容无法解析或进程已不存在视为陈旧记录，直接覆盖。
 func WritePIDFile(path string, pid int) error {
+	if old, ok := readPIDFile(path); ok && processAlive(old) {
+		return fmt.Errorf("pid 文件 %s 已被存活进程 %d 占用，拒绝启动第二实例", path, old)
+	}
 	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp*")
 	if err != nil {
 		return fmt.Errorf("创建 pid 临时文件: %w", err)
@@ -101,10 +109,36 @@ func WritePIDFile(path string, pid int) error {
 	return nil
 }
 
-// RemovePIDFile 删除 path，文件不存在不算错误。
+// RemovePIDFile 删除 path，仅当文件内容等于当前进程 pid；文件不存在视为成功。
+//
+// 先核对归属：前台父进程、崩溃残留或另一实例写下的 pid 文件不能被本进程误删。
 func RemovePIDFile(path string) error {
+	pid, ok := readPIDFile(path)
+	if !ok || pid != os.Getpid() {
+		return nil
+	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("删除 pid 文件: %w", err)
 	}
 	return nil
+}
+
+// readPIDFile 读取并解析 pid 文件。文件不存在、内容为空或非法时返回 ok=false。
+func readPIDFile(path string) (pid int, ok bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	pid, err = strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
+}
+
+// processAlive 报告 pid 对应进程是否存在。EPERM 表示进程存在但无权限发信号，
+// 同样按存活处理。
+func processAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }

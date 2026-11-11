@@ -4,7 +4,9 @@ package daemonize
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -64,13 +66,29 @@ func TestWritePIDFileContentAndMode(t *testing.T) {
 	}
 }
 
-func TestWritePIDFileOverwrite(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "daemon.pid")
-	if err := WritePIDFile(path, 1); err != nil {
-		t.Fatalf("首次写入失败: %v", err)
+// writePIDContent 直接写 pid 文件内容，绕过 WritePIDFile 的存活校验。
+func writePIDContent(t *testing.T, path string, pid int) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
+		t.Fatalf("写 pid 内容失败: %v", err)
 	}
+}
+
+// deadPID 返回一个已退出并被回收的进程 pid，用作陈旧记录。
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("启动辅助进程失败: %v", err)
+	}
+	return cmd.Process.Pid
+}
+
+func TestWritePIDFileOverwriteStalePID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.pid")
+	writePIDContent(t, path, deadPID(t))
 	if err := WritePIDFile(path, 4321); err != nil {
-		t.Fatalf("覆盖写入失败: %v", err)
+		t.Fatalf("陈旧 pid 应可覆盖: %v", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -89,6 +107,24 @@ func TestWritePIDFileOverwrite(t *testing.T) {
 	}
 }
 
+// 旧 pid 对应进程仍存活时必须拒绝覆盖，阻止第二实例启动。
+func TestWritePIDFileRefusesLivePID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.pid")
+	live := os.Getpid()
+	writePIDContent(t, path, live)
+
+	if err := WritePIDFile(path, live+1); err == nil {
+		t.Fatal("存活 pid 必须导致写入失败")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读 pid 文件失败: %v", err)
+	}
+	if string(data) != strconv.Itoa(live)+"\n" {
+		t.Fatalf("失败时不得改动原文件，实际 %q", data)
+	}
+}
+
 func TestWritePIDFileMissingDir(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing", "daemon.pid")
 	if err := WritePIDFile(path, 1); err == nil {
@@ -98,9 +134,7 @@ func TestWritePIDFileMissingDir(t *testing.T) {
 
 func TestRemovePIDFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "daemon.pid")
-	if err := WritePIDFile(path, 9); err != nil {
-		t.Fatalf("写 pid 文件失败: %v", err)
-	}
+	writePIDContent(t, path, os.Getpid())
 	if err := RemovePIDFile(path); err != nil {
 		t.Fatalf("删除 pid 文件失败: %v", err)
 	}
@@ -109,5 +143,23 @@ func TestRemovePIDFile(t *testing.T) {
 	}
 	if err := RemovePIDFile(path); err != nil {
 		t.Fatalf("删除不存在的文件不应报错: %v", err)
+	}
+}
+
+// 内容不属于当前进程的 pid 文件不得删除。
+func TestRemovePIDFileKeepsForeignPID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.pid")
+	other := deadPID(t)
+	writePIDContent(t, path, other)
+
+	if err := RemovePIDFile(path); err != nil {
+		t.Fatalf("不应报错: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("文件应保留，读取失败: %v", err)
+	}
+	if string(data) != strconv.Itoa(other)+"\n" {
+		t.Fatalf("内容不应变化，实际 %q", data)
 	}
 }
