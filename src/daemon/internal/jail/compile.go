@@ -37,9 +37,15 @@ func compileFailures(cfg *config.Config) []string {
 		if !j.Enabled {
 			continue
 		}
-		if err := CompileJailRegexes(j); err != nil {
+		skipped, err := CompileJailRegexesWithWarnings(j)
+		// 被跳过的模式逐条上报：部分成功时返回值是 nil，不另开通道就没人知道
+		// 配置里写的这几条正则没有生效。全部失败时只报汇总错误，避免同一条
+		// 模式既出现在逐条告警里、又被打包进「一条都没编译成功」。
+		if err != nil {
 			errs = append(errs, err.Error())
+			continue
 		}
+		errs = append(errs, skipped...)
 	}
 	return errs
 }
@@ -49,6 +55,16 @@ func compileFailures(cfg *config.Config) []string {
 // 校验失败与编译失败都只跳过**该条**模式，不影响同一 jail 的其他模式：一条写错的
 // 正则不该让整个 jail 失去防护。全部失败时返回错误，由调用方决定是告警还是拒绝启动。
 func CompileJailRegexes(j *config.Jail) error {
+	_, err := CompileJailRegexesWithWarnings(j)
+	return err
+}
+
+// CompileJailRegexesWithWarnings 同 CompileJailRegexes，另返回被跳过的模式说明。
+//
+// 返回值分两路：warnings 逐条说明哪条模式为什么没生效（空串/安全校验/编译失败），
+// err 只在一条都没编译成功时非 nil。调用方要把 warnings 写进日志——否则「配置了
+// 三条正则、只有两条在跑」这件事在运行期完全不可见。
+func CompileJailRegexesWithWarnings(j *config.Jail) (warnings []string, err error) {
 	clearCompiled(j)
 
 	if len(j.Regexes) == 0 {
@@ -60,15 +76,21 @@ func CompileJailRegexes(j *config.Jail) error {
 
 	compiled := 0
 	for i := range j.Regexes {
+		name := j.Regexes[i].Name
 		pattern := j.Regexes[i].Pattern
 		if pattern == "" {
+			warnings = append(warnings, fmt.Sprintf("jail '%s' 的模式 '%s' 为空，已跳过", j.Name, name))
 			continue
 		}
 		if err := logparse.ValidateRegexSafety(j.Name, pattern); err != nil {
+			warnings = append(warnings, fmt.Sprintf(
+				"jail '%s' 的模式 '%s' 未通过安全校验，已跳过：%v", j.Name, name, err))
 			continue
 		}
 		re, err := regexp.Compile(pattern)
 		if err != nil {
+			warnings = append(warnings, fmt.Sprintf(
+				"jail '%s' 的模式 '%s' 编译失败，已跳过：%v", j.Name, name, err))
 			continue
 		}
 		j.Regexes[i].Compiled = re
@@ -76,9 +98,9 @@ func CompileJailRegexes(j *config.Jail) error {
 	}
 
 	if compiled == 0 {
-		return fmt.Errorf("No regex patterns compiled for jail '%s'", j.Name)
+		return warnings, fmt.Errorf("No regex patterns compiled for jail '%s'", j.Name)
 	}
-	return nil
+	return warnings, nil
 }
 
 // clearCompiled 丢弃既有的编译结果。

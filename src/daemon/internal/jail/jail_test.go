@@ -422,6 +422,30 @@ func TestCompileKeepsOneBadPatternFromKillingTheJail(t *testing.T) {
 	}
 }
 
+// TestCompileWarnsOnSkippedPatterns 覆盖「部分模式被跳过时必须逐条上报」：
+// 返回 nil 错误不代表配置里的每条正则都生效了。
+func TestCompileWarnsOnSkippedPatterns(t *testing.T) {
+	j := config.NewJail("sshd")
+	j.Regexes = []config.RegexInfo{
+		{Name: "redos", Pattern: `(a+)+$`},
+		{Name: "broken", Pattern: `(`},
+		{Name: "valid", Pattern: logparse.DefaultSSHDPattern},
+	}
+	warnings, err := CompileJailRegexesWithWarnings(&j)
+	if err != nil {
+		t.Fatalf("至少一条成功时不应报错：%v", err)
+	}
+	if len(warnings) != 2 {
+		t.Fatalf("应逐条报告 2 条被跳过的模式，实得 %d：%v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "redos") || !strings.Contains(warnings[1], "broken") {
+		t.Fatalf("告警应点名具体模式，实得 %v", warnings)
+	}
+	if j.Regexes[2].Compiled == nil {
+		t.Fatal("合法模式应编译成功")
+	}
+}
+
 // TestRecompileMustClearStaleCompiledEntries 覆盖重复编译不得残留旧编译结果。
 //
 // 若不清空，上一轮编译成功的条目会让 `BuildRuleSet` 把一条已不在配置里的规则

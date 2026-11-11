@@ -40,6 +40,7 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/contract"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/decision"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/ingest"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/jail"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/logparse"
 )
 
@@ -953,10 +954,32 @@ func (e *InboundExecutor) syncJailEnabled() {
 		changed = true
 	}
 	if changed {
+		// 启动/重载只编译 enabled jail 的正则，禁用中的 jail 的 Compiled 全是 nil。
+		// 这里启用时补一次编译，否则规则集为空：sshd 只剩关键字回退，nginx/FRP 等
+		// 只配正则的 jail 会完全失去防护。
+		for i := range e.cfg.Jails {
+			local := &e.cfg.Jails[i]
+			if !local.Enabled {
+				continue
+			}
+			skipped, err := jail.CompileJailRegexesWithWarnings(local)
+			// 被跳过的模式逐条告警：部分成功时 err 为 nil，不写出来就没人知道
+			// 这条正则没有生效。全部失败时只报汇总，避免重复。
+			if err != nil {
+				e.warn("启用 jail 时编译正则失败", "jail", local.Name, "error", err)
+			} else {
+				for _, w := range skipped {
+					e.warn(w)
+				}
+			}
+			if len(local.LogFiles) == 0 {
+				e.warn("jail 已启用但未配置 log_files，不会监视任何日志文件", "jail", local.Name)
+			}
+		}
+		// refreshJails 重建规则集并发布快照（快照存的是副本，原地改 Enabled 不会自己
+		// 浮到读侧），比单独 publishJailSnapshot 更完整。
+		e.refreshJails()
 		e.reconcileWatches()
-		// 快照存的是副本，原地改 Enabled 不会自己浮到读侧——这里显式把新形状推上去，
-		// 否则 /api/v2/jails 上的 enabled 会停在同步之前。
-		e.publishJailSnapshot()
 	}
 }
 
