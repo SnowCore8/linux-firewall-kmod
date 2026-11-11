@@ -122,7 +122,7 @@ check-deps-daemon:
 		exit 1; \
 	fi
 	@# 检查 Go 版本
-	@go_version=$$($(GOC) version | grep -oP 'go\K[0-9]+\.[0-9]+' | head -1); \
+	@go_version=$$($(GOC) version | grep -oE 'go[0-9]+\.[0-9]+' | head -1 | sed 's/^go//'); \
 	if [ "$$(printf '%s\n' "$$go_version" "$(GOVER)" | sort -V | head -1)" != "$(GOVER)" ]; then \
 		echo "❌ 错误: Go 版本过低 (需要 >= $(GOVER), 当前: $$go_version)"; \
 		echo "   升级: sudo apt install golang-go 或从官网下载"; \
@@ -146,7 +146,7 @@ check-deps-frontend:
 		echo "   安装: sudo apt install npm"; \
 		exit 1; \
 	fi
-	@node_version=$$(node --version | grep -oP 'v\K[0-9]+' | head -1); \
+	@node_version=$$(node --version | grep -oE 'v[0-9]+' | head -1 | sed 's/^v//'); \
 	if [ "$$node_version" -lt 18 ]; then \
 		echo "❌ 错误: Node.js 版本过低 (需要 >= 18, 当前: v$$node_version)"; \
 		echo "   升级: sudo apt install nodejs 或使用 nvm"; \
