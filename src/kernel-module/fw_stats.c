@@ -206,6 +206,46 @@ void fw_stat_bump_rate_spill(void) {
  * flush：把本 CPU 计数并入全局
  * ==========================================================================*/
 
+/*
+ * 全局分布表满时淘汰 last_seen 最旧的一条：调用方须已持有对应 spin_lock，
+ * 单次有界扫描（至多 MAX_*_ENTRIES 个桶），hash_del_rcu + call_rcu 保证
+ * RCU 读侧（fw_netlink 的 hash_for_each_rcu）仍可安全遍历，同时递减 count。
+ * 返回被淘汰的条目（供调用方计入既有 spill 观测），表空时返回 NULL。
+ */
+static struct fw_udp_port_entry *fw_udp_evict_oldest_locked(void) {
+  struct fw_udp_port_entry *e, *victim = NULL;
+  u32 bkt;
+
+  hash_for_each(fw_info.udp_port_table, bkt, e, hash) {
+    if (!victim || time_before(e->last_seen, victim->last_seen))
+      victim = e;
+  }
+  if (!victim)
+    return NULL;
+
+  hash_del_rcu(&victim->hash);
+  atomic_dec(&fw_info.udp_port_count);
+  call_rcu(&victim->rcu, fw_stats_free_udp_entry_rcu);
+  return victim;
+}
+
+static struct fw_icmp_type_entry *fw_icmp_evict_oldest_locked(void) {
+  struct fw_icmp_type_entry *e, *victim = NULL;
+  u32 bkt;
+
+  hash_for_each(fw_info.icmp_type_table, bkt, e, hash) {
+    if (!victim || time_before(e->last_seen, victim->last_seen))
+      victim = e;
+  }
+  if (!victim)
+    return NULL;
+
+  hash_del_rcu(&victim->hash);
+  atomic_dec(&fw_info.icmp_type_count);
+  call_rcu(&victim->rcu, fw_stats_free_icmp_entry_rcu);
+  return victim;
+}
+
 static void fw_udp_merge(struct fw_udp_cpu_slot *slot) {
   struct fw_udp_port_entry *e;
   u32 bkt;
@@ -231,16 +271,24 @@ static void fw_udp_merge(struct fw_udp_cpu_slot *slot) {
     return;
   }
 
-  if (atomic_read(&fw_info.udp_port_count) >= MAX_UDP_PORT_ENTRIES) {
-    spin_unlock_bh(&fw_info.udp_port_lock);
-    fw_stat_bump_rate_spill();
-    return;
-  }
   e = kzalloc(sizeof(*e), GFP_ATOMIC);
   if (!e) {
     spin_unlock_bh(&fw_info.udp_port_lock);
     fw_stat_bump_alloc_fail();
     return;
+  }
+  if (atomic_read(&fw_info.udp_port_count) >= MAX_UDP_PORT_ENTRIES) {
+    /*
+     * 表满：淘汰 last_seen 最旧的条目再插入新键，容量保持不变。淘汰即旧分布
+     * 丢失，沿用既有 spill 观测记一笔；找不到可淘汰条目时退回丢弃新键的既有处理。
+     */
+    if (!fw_udp_evict_oldest_locked()) {
+      kfree(e);
+      spin_unlock_bh(&fw_info.udp_port_lock);
+      fw_stat_bump_rate_spill();
+      return;
+    }
+    fw_stat_bump_rate_spill();
   }
   e->port = port;
   atomic64_set(&e->packets, slot->packets);
@@ -275,16 +323,21 @@ static void fw_icmp_merge(struct fw_icmp_cpu_slot *slot) {
     return;
   }
 
-  if (atomic_read(&fw_info.icmp_type_count) >= MAX_ICMP_TYPE_ENTRIES) {
-    spin_unlock_bh(&fw_info.icmp_type_lock);
-    fw_stat_bump_rate_spill();
-    return;
-  }
   e = kzalloc(sizeof(*e), GFP_ATOMIC);
   if (!e) {
     spin_unlock_bh(&fw_info.icmp_type_lock);
     fw_stat_bump_alloc_fail();
     return;
+  }
+  if (atomic_read(&fw_info.icmp_type_count) >= MAX_ICMP_TYPE_ENTRIES) {
+    /* 同 UDP：淘汰 last_seen 最旧的条目再插入新键，旧分布丢失记入既有 spill */
+    if (!fw_icmp_evict_oldest_locked()) {
+      kfree(e);
+      spin_unlock_bh(&fw_info.icmp_type_lock);
+      fw_stat_bump_rate_spill();
+      return;
+    }
+    fw_stat_bump_rate_spill();
   }
   e->type = slot->type;
   e->code = slot->code;
