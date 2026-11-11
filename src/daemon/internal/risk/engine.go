@@ -2,6 +2,7 @@ package risk
 
 import (
 	"math"
+	"sort"
 	"sync"
 	"time"
 )
@@ -121,10 +122,15 @@ func (e *Engine) GetVector(ip string) (RiskVector, bool) {
 }
 
 // SetVector 直接设置指定 IP 的向量（用于从数据库加载）。
+// 插入前检查容量，超限时触发淘汰，防止缓存无限增长。
 func (e *Engine) SetVector(ip string, vec RiskVector, lastEvent int64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// 若已存在则直接覆盖，不触发淘汰
+	if _, exists := e.vectors[ip]; !exists {
+		e.evictLocked()
+	}
 	e.vectors[ip] = &cachedVector{
 		vector:    vec,
 		lastEvent: lastEvent,
@@ -233,8 +239,8 @@ func (e *Engine) evictLocked() {
 	if len(e.vectors) < e.maxSize {
 		return
 	}
-	// 仍超容量：找 expiresAt 最小的 10% 淘汰
-	target := len(e.vectors) - e.maxSize/10
+	// 仍超容量：淘汰 expiresAt 最旧的 10%（按 maxSize 计算）
+	target := e.maxSize / 10
 	if target <= 0 {
 		target = 1
 	}
@@ -246,16 +252,12 @@ func (e *Engine) evictLocked() {
 	for ip, cached := range e.vectors {
 		entries = append(entries, entry{ip: ip, expiresAt: cached.expiresAt})
 	}
-	// 按 expiresAt 升序排序
-	for i := 0; i < len(entries) && i < target; i++ {
-		minIdx := i
-		for j := i + 1; j < len(entries); j++ {
-			if entries[j].expiresAt.Before(entries[minIdx].expiresAt) {
-				minIdx = j
-			}
-		}
-		delete(e.vectors, entries[minIdx].ip)
-		entries[minIdx], entries[i] = entries[i], entries[minIdx]
+	// 按 expiresAt 升序排序，取前 target 个淘汰
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].expiresAt.Before(entries[j].expiresAt)
+	})
+	for i := 0; i < target && i < len(entries); i++ {
+		delete(e.vectors, entries[i].ip)
 	}
 }
 
