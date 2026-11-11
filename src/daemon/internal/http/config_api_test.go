@@ -373,3 +373,64 @@ func TestUpdateConfigEmptyBodyIsNoOp(t *testing.T) {
 		t.Errorf("空 body 下发了 %d 次内核配置", len(rec.changes))
 	}
 }
+
+// TestUpdateConfigRejectsDirectoryMode 核对目录部署下的「诚实失败」。
+//
+// 目录模式里 ConfigFile 为空、组合根把 ConfigDir 交出来，os.ReadFile 撞 EISDIR；旧口径把
+// 它报成「读取配置文件失败」，运维会去查权限或文件是否存在，而真正的原因是这种部署形态
+// 根本没法把改动写回单一文件（systemd 单元还挂着 ReadOnlyPaths=/etc/firewall）。用例盯住：
+// 回 40004、文案点明「目录模式」、目录内容一字未动、活配置与内核下发都没发生。
+func TestUpdateConfigRejectsDirectoryMode(t *testing.T) {
+	dir := t.TempDir()
+	name := filepath.Join(dir, "10-base.yaml")
+	original := "defaults:\n  max_retries: 3\njails:\n  sshd:\n    enabled: true\n    log_files:\n      - /var/log/auth.log\n"
+	if err := os.WriteFile(name, []byte(original), 0o600); err != nil {
+		t.Fatalf("预置配置目录失败: %v", err)
+	}
+
+	live := config.Default()
+	rec := &recordingKernelConfig{}
+	s, _ := newTestServer(t, func(cfg *APIConfig) {
+		cfg.GetConfigPath = func() string { return dir }
+		cfg.GetCurrentConfig = func() *config.Config { return &live }
+		cfg.KernelConfig = rec
+	})
+
+	env, status := putConfig(t, s, `{"rate_warning_pps":60000}`)
+	if want := httpcontract.CodeHTTPStatus[httpcontract.Code40004]; status != want {
+		t.Errorf("HTTP 状态 = %d，契约 40004 对应 %d", status, want)
+	}
+	if code := envelopeCode(t, env); code != httpcontract.Code40004 {
+		t.Errorf("code = %d，期望 40004", code)
+	}
+	if msg := envelopeMessage(t, env); !strings.Contains(msg, "目录模式") {
+		t.Errorf("message 未点明部署形态限制（应含「目录模式」）: %q", msg)
+	}
+
+	// 「不尝试写文件」有两层可核对：目录里没有新增条目（临时文件、改名后的文件都没有），
+	// 原文件内容也一字未变。
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("读取配置目录失败: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(name) {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("配置目录被改动，条目 = %v，期望只有 %s", names, filepath.Base(name))
+	}
+	after, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatalf("重读配置失败: %v", err)
+	}
+	if string(after) != original {
+		t.Errorf("目录模式下仍改写了文件:\n%s", after)
+	}
+	if live.Webui.RateWarningPPS == 60000 {
+		t.Errorf("被拒绝的更新改动了活配置：RateWarningPPS = %d", live.Webui.RateWarningPPS)
+	}
+	if len(rec.changes) != 0 {
+		t.Errorf("目录模式拒绝了更新，却下发了 %d 次内核配置", len(rec.changes))
+	}
+}

@@ -612,7 +612,7 @@ route PUT "/api/v2/config" {
   returns = type
   status = 200
   codes = 40004, 40007, 40008, 50003
-  note = "请求体 UpdateConfigRequest"
+  note = "请求体 UpdateConfigRequest；目录模式（配置由目录下多份 YAML 合并，daemon 的 config_file 为空）不支持通过面板保存：此时回 40004，文案指明请编辑配置文件后重载，且不会写任何文件"
 }
 
 # ---- 需认证：白名单 ---------------------------------------------------------

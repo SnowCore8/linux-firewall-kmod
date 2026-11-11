@@ -158,14 +158,22 @@ func (h *APIHandlers) banWindows(now time.Time) (today, recent5 uint64) {
 	count, err := h.db.CountBanEventsBetween(dayStart, end)
 	if err != nil {
 		h.server.logger.Error("统计今日封禁数失败", "error", err)
-		return h.statsWindow.today, h.statsWindow.recent5
+		// 只有「缓存仍属于同一个自然日」时才能把旧读数当本次结果；跨日之后那份缓存
+		// 属于昨天的窗口，回读它会让今天的今日封禁数直接继承昨天的值。
+		if h.statsWindow.valid && h.statsWindow.dayStart.Equal(dayStart) {
+			return h.statsWindow.today, h.statsWindow.recent5
+		}
+		return 0, 0
 	}
 	recent, err := h.db.CountBanEventsBetween(now.Add(-recentBanWindow), end)
 	if err != nil {
 		// 与上面同一口径：失败不落缓存，否则会把一次查询失败当成「近 5 分钟零封禁」
 		// 固定 30 秒，威胁等级随之被低估。
 		h.server.logger.Error("统计近 5 分钟封禁数失败", "error", err)
-		return h.statsWindow.today, h.statsWindow.recent5
+		if h.statsWindow.valid && h.statsWindow.dayStart.Equal(dayStart) {
+			return h.statsWindow.today, h.statsWindow.recent5
+		}
+		return 0, 0
 	}
 
 	h.statsWindow.dayStart = dayStart
@@ -212,7 +220,12 @@ func (h *APIHandlers) banActivity(now time.Time) []persist.BanActivity {
 	rows, err := h.db.GetBanActivitySince(dayStart.AddDate(0, 0, -(trendDays - 1)))
 	if err != nil {
 		h.server.logger.Error("读取封禁活动失败", "error", err)
-		return h.statsActivity.rows
+		// 跨日后的旧缓存属于上一个 7 天窗口，不是本次要画的图：宁可返回空，
+		// 也不要把昨天那一批活动行原样画到今天的横轴上。
+		if h.statsActivity.valid && h.statsActivity.dayStart.Equal(dayStart) {
+			return h.statsActivity.rows
+		}
+		return nil
 	}
 	h.statsActivity.dayStart = dayStart
 	h.statsActivity.rows = rows

@@ -24,12 +24,12 @@ func TestDetectEgressKeys(t *testing.T) {
 		body string
 		want string
 	}{
-		{`{"ip":"203.0.113.7"}`, "203.0.113.7"},
-		{`{"query":"198.51.100.9"}`, "198.51.100.9"},
-		{`{"address":"192.0.2.4"}`, "192.0.2.4"},
-		{`{"ip":"not-an-ip","query":"198.51.100.10"}`, "198.51.100.10"},
-		{`{"ip":" 203.0.113.8 ","query":"198.51.100.10"}`, "203.0.113.8"},
-		{`{"address":"2001:db8::1"}`, "2001:db8::1"},
+		{`{"ip":"8.8.8.8"}`, "8.8.8.8"},
+		{`{"query":"1.1.1.1"}`, "1.1.1.1"},
+		{`{"address":"9.9.9.9"}`, "9.9.9.9"},
+		{`{"ip":"not-an-ip","query":"8.8.4.4"}`, "8.8.4.4"},
+		{`{"ip":" 8.8.4.4 ","query":"1.1.1.1"}`, "8.8.4.4"},
+		{`{"address":"2606:4700:4700::1111"}`, "2606:4700:4700::1111"},
 	}
 	for _, tc := range cases {
 		srv := newProbeServer(t, tc.body)
@@ -82,7 +82,7 @@ func TestDetectEgressErrors(t *testing.T) {
 }
 
 func TestDetectEgressHonorsContext(t *testing.T) {
-	srv := newProbeServer(t, `{"ip":"203.0.113.7"}`)
+	srv := newProbeServer(t, `{"ip":"8.8.8.8"}`)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := DetectEgress(ctx, srv.URL); err == nil {
@@ -97,6 +97,8 @@ func TestDetectEgressRejectsNonPublicAddrs(t *testing.T) {
 		"127.0.0.1", "10.1.2.3", "172.16.0.9", "192.168.1.1",
 		"169.254.10.20", "0.0.0.0", "224.0.0.1", "255.255.255.255",
 		"::1", "fe80::1", "fd00::1", "::", "ff02::1", "::ffff:10.0.0.1",
+		"0.1.2.3", "192.0.2.10", "198.51.100.20", "203.0.113.30",
+		"2001:db8::1", "100::1",
 	} {
 		srv := newProbeServer(t, `{"ip":"`+raw+`"}`)
 		if got, err := DetectEgress(context.Background(), srv.URL); err == nil {
@@ -123,22 +125,41 @@ func TestIsPublicEgressAddrReservedPrefixes(t *testing.T) {
 		addr string
 		want bool
 	}{
+		{"0.0.0.0", false},
+		{"0.1.2.3", false},
+		{"0.255.255.255", false},
 		{"100.63.255.255", true},
 		{"100.64.0.0", false},
 		{"100.127.255.255", false},
 		{"100.128.0.0", true},
 		{"192.0.0.255", false},
 		{"192.0.1.0", true},
+		{"192.0.2.0", false},
+		{"192.0.2.255", false},
+		{"192.0.3.0", true},
+		{"192.88.99.0", false},
 		{"198.17.255.255", true},
+		{"198.51.100.0", false},
+		{"198.51.100.255", false},
+		{"198.51.101.0", true},
 		{"198.18.0.0", false},
 		{"198.19.255.255", false},
 		{"198.20.0.0", true},
+		{"203.0.113.0", false},
+		{"203.0.113.255", false},
+		{"203.0.114.0", true},
 		{"223.255.255.255", true},
 		{"239.255.255.255", false},
 		{"240.0.0.0", false},
 		{"255.255.255.254", false},
 		{"255.255.255.255", false},
 		{"8.8.8.8", true},
+		{"1.1.1.1", true},
+		{"2606:4700:4700::1111", true},
+		{"2001:db8::1", false},
+		{"2001:db9::1", true},
+		{"100::1", false},
+		{"2001:2::1", false},
 		{"::ffff:100.64.0.1", false},
 		{"::ffff:192.0.0.1", false},
 	}

@@ -142,6 +142,15 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, re
 	}
 	path := h.getConfigPath()
 
+	// 目录模式（config_file 为空、配置由若干 YAML 文件合起来）不能走这条写路径：组合根给的
+	// 来源是目录，ReadFile 只会撞 EISDIR，转成「读取配置文件失败」之后运维无从判断是权限、
+	// 文件不存在还是部署形态不支持。这里在动手前就认出来，直接说明限制，且不尝试写任何文件——
+	// 目录里该改哪一份、要不要叠写，属于产品决策，不在这次「诚实失败」的范围里。
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		WriteCode(w, httpcontract.Code40004, "更新配置失败：目录模式不支持通过面板保存配置，请编辑配置文件后重载")
+		return false
+	}
+
 	// 持锁保护读-改-写序列，防止并发请求互相覆盖
 	h.configFileMu.Lock()
 	defer h.configFileMu.Unlock()

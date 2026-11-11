@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/detect"
 	"gopkg.in/yaml.v3"
 )
 
@@ -271,6 +272,11 @@ func applyDefaults(yc *yamlConfig, cfg *Config) error {
 		return nil
 	}
 	if d.MaxRetries != nil {
+		// 全局默认也走同一上限：jail 未显式写 max_retries 时取的就是这个值，
+		// 放行一个不可能触发的默认值会让整份配置的 jail 一起静默不封禁。
+		if err := checkMaxRetriesCeiling(*d.MaxRetries, "defaults.max_retries"); err != nil {
+			return err
+		}
 		cfg.DefaultMaxRetries = *d.MaxRetries
 	}
 	if d.FindTime != nil {
@@ -401,7 +407,11 @@ func applyJailDefinition(cfg *Config, name string, yj *yamlJail, runtimeOverride
 		}
 	}
 	if yj.MaxRetries != nil {
-		j.MaxRetries = validateMaxRetries(cfg, *yj.MaxRetries)
+		v, err := validateMaxRetries(cfg, *yj.MaxRetries)
+		if err != nil {
+			return fmt.Errorf("jail %q: %w", name, err)
+		}
+		j.MaxRetries = v
 		j.MaxRetriesSet = true
 	}
 	if yj.FindTime != nil {
@@ -519,11 +529,44 @@ func validateLogFiles(j *Jail, files []string) error {
 	return nil
 }
 
-func validateMaxRetries(cfg *Config, v uint32) uint32 {
-	if v == 0 {
-		return retriesOr(cfg.DefaultMaxRetries, 3)
+// 判定层的阈值加数：高峰期 +2、内网 +3（decision/policy.go 的 PeakHoursAddend /
+// InternalSourceAddend）。这里镜像一份而不是 import：decision 反向依赖本包，
+// config 引它会成环。镜像的漂移由 internal/config 的边界用例对着 decision 的常量核出来。
+const (
+	peakHoursAddend      = 2
+	internalSourceAddend = 3
+)
+
+// maxRetriesCeiling 是 max_retries（含 defaults.max_retries）的可配置上限。
+//
+// 单个 IP 的失败时间戳只保留 detect.MaxTimestampsPerIP 条，窗口计数按这个条数截断；
+// 有效阈值又要再叠加高峰期与内网两个加数（decision.EffectiveThreshold）。于是阈值
+// 一旦大于「保留条数 - 两个加数」，内网地址在高峰期的窗口计数永远到不了阈值，
+// ReachedCap 恒为 false——jail 看似配置成功，实际一条都不封。
+const maxRetriesCeiling = uint32(detect.MaxTimestampsPerIP) - peakHoursAddend - internalSourceAddend
+
+// checkMaxRetriesCeiling 拒绝永远不可能触发的阈值。
+//
+// 不静默钳到上限：面板与配置文件显示的值会和实际生效值分叉，运维无从得知自己写的数
+// 没被采纳。这里直接拒绝启动/重载，并写明上限与算法的由来。
+func checkMaxRetriesCeiling(v uint32, key string) error {
+	if v <= maxRetriesCeiling {
+		return nil
 	}
-	return v
+	return fmt.Errorf("%s=%d 超过上限 %d：单个 IP 只保留 %d 个失败时间戳，判定阈值还要叠加高峰期 +%d 与内网 +%d，更大的阈值在这两类来源上永远达不到",
+		key, v, maxRetriesCeiling, detect.MaxTimestampsPerIP, peakHoursAddend, internalSourceAddend)
+}
+
+func validateMaxRetries(cfg *Config, v uint32) (uint32, error) {
+	// 0 仍表示「取全局默认」；默认值本身在 applyDefaults 里已按同一上限校验过，
+	// 这里对解析后的值再校一次，保证任何一条加载路径取值都不会越界。
+	if v == 0 {
+		v = retriesOr(cfg.DefaultMaxRetries, 3)
+	}
+	if err := checkMaxRetriesCeiling(v, "max_retries"); err != nil {
+		return 0, err
+	}
+	return v, nil
 }
 
 func validateFindtime(cfg *Config, v uint32) uint32 {

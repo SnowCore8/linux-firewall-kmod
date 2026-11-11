@@ -134,26 +134,28 @@ func TestBanDurationHistogramBuckets(t *testing.T) {
 		{IP: "203.0.113.31", IsPermanent: true},         // 永久：按标记入最后一桶
 		{IP: "203.0.113.32"},                            // 旧行无时长：不进任何桶
 		{IP: "203.0.113.33", DurationSecs: secs(60)},    // ≤5 分钟
-		{IP: "203.0.113.34", DurationSecs: secs(300)},   // 边界：300 不在 [0,300) → 5–30 分钟
-		{IP: "203.0.113.35", DurationSecs: secs(1800)},  // 30 分钟–2 小时
-		{IP: "203.0.113.36", DurationSecs: secs(7200)},  // 2–24 小时
-		{IP: "203.0.113.37", DurationSecs: secs(86400)}, // >24 小时
-		{IP: "203.0.113.38", DurationSecs: secs(-5)},    // 被写坏的负数：收进 0，落第一桶
+		{IP: "203.0.113.34", DurationSecs: secs(300)},   // 边界 300：右闭，落 ≤5 分钟
+		{IP: "203.0.113.35", DurationSecs: secs(1800)},  // 边界 1800：右闭，落 5–30 分钟
+		{IP: "203.0.113.36", DurationSecs: secs(1801)},  // 越过 1800 → 30 分钟–2 小时
+		{IP: "203.0.113.37", DurationSecs: secs(7200)},  // 边界 7200：右闭，落 30 分钟–2 小时
+		{IP: "203.0.113.38", DurationSecs: secs(86400)}, // 边界 86400：右闭，落 2–24 小时
+		{IP: "203.0.113.39", DurationSecs: secs(86401)}, // 越过 86400 → >24 小时
+		{IP: "203.0.113.40", DurationSecs: secs(-5)},    // 被写坏的负数：收进 0，落第一桶
 	}
 	resp := mapBanDurationHistogram(samples)
 
 	if len(resp.Labels) != len(resp.Counts) {
 		t.Fatalf("labels/counts 长度不等: %d vs %d", len(resp.Labels), len(resp.Counts))
 	}
-	wantCounts := []uint64{2, 1, 1, 1, 1, 1}
+	wantCounts := []uint64{3, 1, 2, 1, 1, 1}
 	for i, want := range wantCounts {
 		if resp.Counts[i] != want {
 			t.Errorf("桶 %q = %d 条，期望 %d（全部读数 %v）", resp.Labels[i], resp.Counts[i], want, resp.Counts)
 		}
 	}
-	// 8 条样本里有 1 条没有时长读数 → total 只算能归桶的 7 条。
-	if resp.Total != 7 {
-		t.Errorf("total = %d，期望 7（无时长读数的旧行不计入，画成 0 秒是凭空造柱子）", resp.Total)
+	// 10 条样本里有 1 条没有时长读数 → total 只算能归桶的 9 条。
+	if resp.Total != 9 {
+		t.Errorf("total = %d，期望 9（无时长读数的旧行不计入，画成 0 秒是凭空造柱子）", resp.Total)
 	}
 }
 
@@ -205,9 +207,9 @@ func TestBanEffectivenessAndHistogramReadHistory(t *testing.T) {
 	if !ok || len(counts) != 6 {
 		t.Fatalf("counts = %v，期望 6 桶", hist["counts"])
 	}
-	// 两次 1800 秒 → 「30 分钟–2 小时」桶（下标 2）；一次 60 秒 → 第一桶；第三次封禁是永久，
-	// is_permanent 优先于时长，所以它落最后一桶而不是第三桶。
-	if counts[2] != float64(2) || counts[0] != float64(1) || counts[5] != float64(1) {
+	// 两次 1800 秒 → 「5–30 分钟」桶（下标 1，右闭：恰好 30 分钟仍属这一档）；一次 60 秒
+	// → 第一桶；第三次封禁是永久，is_permanent 优先于时长，所以它落最后一桶而不是第二桶。
+	if counts[1] != float64(2) || counts[0] != float64(1) || counts[5] != float64(1) {
 		t.Errorf("直方图 = %v，期望 60 秒 1 条、1800 秒 2 条、永久 1 条", counts)
 	}
 	if hist["total"] != float64(4) {

@@ -506,3 +506,54 @@ func TestIPFeatureRowColumnsMatchNames(t *testing.T) {
 		}
 	}
 }
+
+// 跨日且查询失败时不得回读上一日的缓存：那份读数属于昨天的窗口，拿来当「今日」
+// 会让今日封禁数直接继承昨天的值，趋势图也会把昨天那批活动行画到今天的横轴上。
+//
+// 同一天内的失败仍可回读缓存（缓存就是这一天的），这里一并钉住两条分支。
+func TestStatsCacheDoesNotLeakAcrossDayOnQueryFailure(t *testing.T) {
+	db, err := persist.NewDB(persist.Config{
+		Path:   filepath.Join(t.TempDir(), "cross-day.db"),
+		Logger: discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("打开历史库失败: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, api := newTestServer(t, func(cfg *APIConfig) { cfg.DB = db })
+	now := time.Now()
+
+	if err := db.RecordBanEvent("203.0.113.50", "sshd", 1, false, nil); err != nil {
+		t.Fatalf("记录封禁事件失败: %v", err)
+	}
+	if today, recent := api.banWindows(now); today != 1 || recent != 1 {
+		t.Fatalf("首次读取 = 今日 %d / 近 5 分钟 %d，期望 1/1", today, recent)
+	}
+	if rows := api.banActivity(now); len(rows) != 1 {
+		t.Fatalf("首次活动行 = %d 行，期望 1 行", len(rows))
+	}
+
+	// 关库：之后的查询必然失败。
+	if err := db.Close(); err != nil {
+		t.Fatalf("关闭历史库失败: %v", err)
+	}
+
+	// 同一天、缓存过期：查询失败但缓存仍属本日，可以回读。
+	sameDay := now.Add(statsWindowTTL + time.Second)
+	if today, recent := api.banWindows(sameDay); today != 1 || recent != 1 {
+		t.Errorf("同日查询失败 = 今日 %d / 近 5 分钟 %d，期望回读本日缓存 1/1", today, recent)
+	}
+	if rows := api.banActivity(sameDay); len(rows) != 1 {
+		t.Errorf("同日查询失败 = %d 行，期望回读本日缓存 1 行", len(rows))
+	}
+
+	// 跨日：缓存属于昨天，查询又失败，只能报零/空。
+	tomorrow := now.AddDate(0, 0, 1)
+	if today, recent := api.banWindows(tomorrow); today != 0 || recent != 0 {
+		t.Errorf("跨日查询失败 = 今日 %d / 近 5 分钟 %d，期望 0/0（不得继承昨日缓存）", today, recent)
+	}
+	if rows := api.banActivity(tomorrow); rows != nil {
+		t.Errorf("跨日查询失败 = %d 行，期望 nil（不得把昨日活动行画到今天）", len(rows))
+	}
+}

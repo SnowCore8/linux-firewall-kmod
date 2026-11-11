@@ -17,6 +17,7 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/decision"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
 )
 
 // KernelBan 是内核封禁下发与解封的最小接口。
@@ -198,6 +199,13 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.db.RecordBanEvent(ip, "api", historyCount, isPermanent, info.PlannedDuration()); err != nil {
 			h.server.logger.Error("record ban event", "error", err)
+		}
+		// 信誉扣分与自动路径同一个常量（persist.DefaultBanPenalty）：漏掉它，手工封禁过的地址
+		// 在这张表里没有 last_ban、total_bans 也停在 0，下一次自动判定读到的信誉偏高，
+		// 渐进时长与低信誉阈值一律算错。扣分失败不回滚封禁——封禁已经在内核与镜像里生效，
+		// 撤销它比少扣一次分代价大得多。
+		if err := h.db.RecordBan(ip, persist.DefaultBanPenalty); err != nil {
+			h.server.logger.Error("record ban reputation", "ip", ip, "error", err)
 		}
 	}
 
@@ -423,6 +431,11 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := h.db.RecordBanEvent(canonical, "api", historyCount, false, info.PlannedDuration()); err != nil {
 				h.server.logger.Error("record ban event", "ip", canonical, "error", err)
+			}
+			// 同 CreateBan：批量封的地址也要扣信誉分。扣分只发生在这一条成功下发之后，
+			// 失败的那几条上面已 continue，不会出现「没封成却扣了分」。
+			if err := h.db.RecordBan(canonical, persist.DefaultBanPenalty); err != nil {
+				h.server.logger.Error("record ban reputation", "ip", canonical, "error", err)
 			}
 		}
 	}

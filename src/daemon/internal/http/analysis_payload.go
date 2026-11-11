@@ -610,11 +610,14 @@ func effectivenessVerdict(level int, total uint32, movedUp uint32, rate float64)
 	}
 }
 
-// 时长直方图的桶边界（秒，左闭右开）。
+// 时长直方图的桶边界（秒，右闭：d <= upper 落进该桶）。
 //
 // 边界按 decision.ProgressiveDuration 的实际档位来（基础时长 / 30 分钟 / 24 小时 / 永久），
 // 面板因此能把「哪一桶鼓起来」对上「渐进式封禁有没有真的往上走」。最后一桶「永久」读
 // is_permanent 而不是时长，所以边界表比标签表少一格。
+//
+// 右闭是必须的：档位本身就是 1800 / 86400 这样的整值，用 d < upper 会把恰好 1800 秒的
+// 封禁归进「30 分钟–2 小时」、把 86400 秒归进「>24 小时」，与标签说的档位错开一格。
 var (
 	durationBucketUpper  = []int64{300, 1800, 7200, 86400}
 	durationBucketLabels = []string{"≤5 分钟", "5–30 分钟", "30 分钟–2 小时", "2–24 小时", ">24 小时", "永久"}
@@ -638,7 +641,7 @@ func mapBanDurationHistogram(samples []persist.BanEvent) BanDurationHistogramRes
 		d := clampInt64(*s.DurationSecs)
 		idx := len(durationBucketUpper)
 		for i, upper := range durationBucketUpper {
-			if d < upper {
+			if d <= upper {
 				idx = i
 				break
 			}

@@ -7,6 +7,7 @@ package http
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -88,5 +89,29 @@ func TestRiskEventsPaginatesAndReportsFullTotal(t *testing.T) {
 	}
 	if junk := get[RiskEventResponse](t, s, base+"?offset=abc"); len(junk.Events) != 100 {
 		t.Errorf("offset=abc 的页 = %d 条，期望按第一页读", len(junk.Events))
+	}
+}
+
+// 列表的 total 是表内全集条数，不是本页条数：面板上「共 N 个地址」必须与库一致，
+// 不能恒等于 100。limit 仍按契约的固定上限返回 100 条（契约没有 limit/offset 参数）。
+func TestListRiskVectorsReportsFullTotal(t *testing.T) {
+	db := newAnalysisDB(t, "risk-vectors-list.db")
+	const total = 130
+	for i := 0; i < total; i++ {
+		ip := fmt.Sprintf("10.0.%d.%d", i/256, i%256)
+		if err := db.UpsertRiskVector(ip, risk.RiskVector{Failure: float64(i + 1)}, 1000+int64(i)); err != nil {
+			t.Fatalf("写向量 %s 失败: %v", ip, err)
+		}
+	}
+
+	s, _ := newTestServer(t, func(cfg *APIConfig) { cfg.DB = db })
+	path := strings.TrimPrefix(httpcontract.RouteGetApiV2RiskVectors, "GET ")
+	got := get[RiskVectorListResponse](t, s, path)
+
+	if got.Total != total {
+		t.Errorf("total = %d，期望表内全集 %d", got.Total, total)
+	}
+	if len(got.Vectors) != 100 {
+		t.Errorf("返回 %d 条，期望上限 100 条", len(got.Vectors))
 	}
 }

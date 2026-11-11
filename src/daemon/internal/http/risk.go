@@ -59,10 +59,20 @@ func (h *APIHandlers) RiskVectors(w http.ResponseWriter, r *http.Request) {
 
 // ListRiskVectors 处理 GET /api/v2/risk/vectors
 //
-// 返回所有 IP 的风险向量列表（按总风险降序，最多 100 条）。
+// 返回所有 IP 的风险向量列表（按总风险降序，最多 100 条）。total 是表内全集条数，
+// 不是本次返回的条数。
 func (h *APIHandlers) ListRiskVectors(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		WriteServiceUnavailable(w, "risk engine not initialized")
+		return
+	}
+
+	// total 先取：COUNT 与列表查询分开走，避免在打开 rows 的连接上再发一条查询
+	//（库只配了 1 个连接，嵌套查询会自己等自己）。
+	total, err := h.db.CountRiskVectors()
+	if err != nil {
+		h.server.logger.Error("count risk vectors failed", "error", err)
+		WriteInternalError(w, "查询风险向量列表失败")
 		return
 	}
 
@@ -75,7 +85,7 @@ func (h *APIHandlers) ListRiskVectors(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := RiskVectorListResponse{
-		Total: uint32(len(vectors)),
+		Total: uint32(total),
 	}
 
 	for _, vec := range vectors {

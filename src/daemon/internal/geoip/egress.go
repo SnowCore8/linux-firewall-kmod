@@ -90,14 +90,25 @@ func DetectEgress(ctx context.Context, probeURL string) (netip.Addr, error) {
 
 // nonPublicPrefixes 列出标准库分类未覆盖、但同样不能当作公网出口的网段。
 //
-// 100.64.0.0/10 是运营商级 NAT，192.0.0.0/24 是 IETF 协议分配段，198.18.0.0/15 是
-// 基准测试段，240.0.0.0/4 是保留段（含有限广播 255.255.255.255）：探测服务返回这些
-// 地址只可能是响应被伪造或来自内网，拿它定位会把地理数据污染成服务器自己所在的网段。
+// 0.0.0.0/8 是「本网络」段，100.64.0.0/10 是运营商级 NAT，192.0.0.0/24 是 IETF 协议
+// 分配段，192.0.2.0/24、198.51.100.0/24、203.0.113.0/24 是文档示例段（TEST-NET-1/2/3），
+// 192.88.99.0/24 是已废弃的 6to4 中继任播，198.18.0.0/15 是基准测试段，240.0.0.0/4 是
+// 保留段（含有限广播 255.255.255.255）。IPv6 侧 100::/64 是丢弃前缀、2001:2::/48 是
+// 基准测试段、2001:db8::/32 是文档示例段。探测服务返回这些地址只可能是响应被伪造或来自
+// 内网，拿它定位会把地理数据污染成服务器自己所在的网段。
 var nonPublicPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("100.64.0.0/10"),
 	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
 	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
 	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001:2::/48"),
+	netip.MustParsePrefix("2001:db8::/32"),
 }
 
 // isNonPublicPrefix 报告 addr 是否落在上述保留/特殊用途网段内。
