@@ -50,6 +50,8 @@
  */
 #define FW_STATE_MAX_LINE 160
 #define FW_STATE_MAX_FILE_CAP (32 * 1024 * 1024)
+/* CRC32 尾行 "CRC32 %08x\n" 的固定字节数（6 + 8 + 1） */
+#define FW_STATE_CRC_LINE_LEN 15
 
 /*
  * 保存时每张表的写出上限：取运行时容量参数，快照才可能覆盖表的全部内容
@@ -64,7 +66,7 @@
 /* 成功恢复只做一次：模块生命周期内的守卫。失败路径会放位，故失败仍可重试；
  * 用 bit 操作保证并发下只有一个执行者进入恢复流程。 */
 static unsigned long fw_state_restored_flag;
-/* 状态保存截断累计计数：fw_state_write_bans/whitelist 遇到条目超过保存上限时递增，
+/* 状态保存截断累计计数：fw_state_save 在因条目上限或字节预算丢弃条目时递增一次，
  * 由 procfs stats 暴露给守护进程。用 atomic64 因为递增发生在保存路径（无锁上下文），
  * 而读取发生在 procfs show（不同 CPU）。 */
 static atomic64_t fw_state_save_truncated_count;
@@ -175,8 +177,26 @@ static void fw_state_unlink(const char *path) {
  * 保存
  * ==========================================================================*/
 
+/*
+ * 保存侧的字节预算。上限取 fw_state_max_file_size()，与恢复端的拒绝阈值同一
+ * 口径：写出的文件必然 ≤ 该值，否则下次启动会因 -EFBIG 整份拒绝恢复。
+ * used 计入已写字节（含头行）；判断每条时另加 CRC 尾行长度，保证尾行也放得下。
+ * dropped 是本轮因条目上限或字节预算未写入的条目数，告警在保存收尾时统一发一次。
+ */
+struct fw_state_write_ctx {
+  size_t limit;
+  size_t used;
+  u64 dropped;
+};
+
+/* 一条 n 字节的条目行（外加必写的 CRC 尾行）是否仍在字节预算内 */
+static bool fw_state_line_fits(const struct fw_state_write_ctx *ctx, int n) {
+  return ctx->used + (size_t)n + FW_STATE_CRC_LINE_LEN <= ctx->limit;
+}
+
 static int fw_state_write_bans(struct file *file, loff_t *pos, u32 *crc,
-                               char *buf, size_t buf_size) {
+                               char *buf, size_t buf_size,
+                               struct fw_state_write_ctx *ctx) {
   struct fw_ban_row *rows;
   u64 now = ktime_get_real_seconds();
   u32 offset = 0;
@@ -198,9 +218,8 @@ static int fw_state_write_bans(struct file *file, loff_t *pos, u32 *crc,
       int n;
 
       if (offset + i >= FW_STATE_MAX_BAN) {
-        atomic64_inc(&fw_state_save_truncated_count);
-        pr_warn("封禁条目超过保存上限 %u，其余条目本次不写入状态文件\n", FW_STATE_MAX_BAN);
-        goto out;
+        ctx->dropped++;
+        continue;
       }
 
       if (r->is_permanent) {
@@ -230,9 +249,14 @@ static int fw_state_write_bans(struct file *file, loff_t *pos, u32 *crc,
         ret = -ENOSPC;
         goto out;
       }
+      if (!fw_state_line_fits(ctx, n)) {
+        ctx->dropped++;
+        continue; /* 超出预算：不再写后续条目，文件保持在恢复端可接受的大小 */
+      }
       ret = fw_state_write_chunk(file, pos, crc, buf, n);
       if (ret)
         goto out;
+      ctx->used += (size_t)n;
     }
 
     offset += got;
@@ -246,7 +270,8 @@ out:
 }
 
 static int fw_state_write_whitelist(struct file *file, loff_t *pos, u32 *crc,
-                                    char *buf, size_t buf_size) {
+                                    char *buf, size_t buf_size,
+                                    struct fw_state_write_ctx *ctx) {
   struct fw_wl_row *rows;
   u32 offset = 0;
   int ret = 0;
@@ -265,9 +290,8 @@ static int fw_state_write_whitelist(struct file *file, loff_t *pos, u32 *crc,
       int n;
 
       if (offset + i >= FW_STATE_MAX_WL) {
-        atomic64_inc(&fw_state_save_truncated_count);
-        pr_warn("白名单条目超过保存上限 %u，其余本次不写入\n", FW_STATE_MAX_WL);
-        goto out;
+        ctx->dropped++;
+        continue;
       }
 
       fw_addr_to_str(r->af, &r->addr, ip_str, sizeof(ip_str));
@@ -278,9 +302,14 @@ static int fw_state_write_whitelist(struct file *file, loff_t *pos, u32 *crc,
         ret = -ENOSPC;
         goto out;
       }
+      if (!fw_state_line_fits(ctx, n)) {
+        ctx->dropped++;
+        continue; /* 超出预算：不再写后续条目，文件保持在恢复端可接受的大小 */
+      }
       ret = fw_state_write_chunk(file, pos, crc, buf, n);
       if (ret)
         goto out;
+      ctx->used += (size_t)n;
     }
 
     offset += got;
@@ -299,6 +328,7 @@ int fw_state_save(void) {
   char *buf, *tmp;
   loff_t pos = 0;
   u32 crc = ~0U;
+  struct fw_state_write_ctx ctx = { .limit = 0, .used = 0, .dropped = 0 };
   int ret, n;
 
   if (fw_state_validate_path(path))
@@ -330,13 +360,24 @@ int fw_state_save(void) {
   if (ret)
     goto out_abort;
 
-  ret = fw_state_write_bans(file, &pos, &crc, buf, 512);
+  /* 头行计入预算；上限与恢复端同一口径，保证写出的文件一定能被恢复接受 */
+  ctx.limit = fw_state_max_file_size();
+  ctx.used = (size_t)n;
+
+  ret = fw_state_write_bans(file, &pos, &crc, buf, 512, &ctx);
   if (ret)
     goto out_abort;
 
-  ret = fw_state_write_whitelist(file, &pos, &crc, buf, 512);
+  ret = fw_state_write_whitelist(file, &pos, &crc, buf, 512, &ctx);
   if (ret)
     goto out_abort;
+
+  /* 截断只告警一次，带本轮丢弃条数与实际上限，便于定位容量参数配得过大 */
+  if (ctx.dropped) {
+    atomic64_inc(&fw_state_save_truncated_count);
+    pr_warn("状态文件达到上限 %zu 字节，本次丢弃 %llu 个条目\n",
+            ctx.limit, (unsigned long long)ctx.dropped);
+  }
 
   /* CRC 行不参与校验和计算，故用 kernel_write 直接落盘 */
   n = snprintf(buf, 512, "CRC32 %08x\n", ~crc);
