@@ -213,6 +213,11 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteBan 撤一条封禁，失败回业务码 40002（契约给这条路由只编了这一个码）。
+//
+// 顺序是「查镜像 → 下发内核 → 撤镜像」：内核解封没确认就保留镜像并回 40002。反过来的
+// 顺序（先撤镜像再下发）在永久封禁上会留下一个面板说已解封、netfilter 却还在丢包的地址
+// ——duration_secs=0 的条目没有到期定时器，不会自行消失（见 fw_ban.c 的插入路径：只有
+// 给了时长才 mod_timer）。
 func (h *APIHandlers) DeleteBan(w http.ResponseWriter, r *http.Request) {
 	ip := r.PathValue("ip")
 
@@ -225,20 +230,27 @@ func (h *APIHandlers) DeleteBan(w http.ResponseWriter, r *http.Request) {
 	// 调用方复制响应里的 IP 再解封不会落空。
 	ip = bans.CanonicalIP(addr)
 
-	if !bans.GlobalCache().Remove(ip) {
+	// 只读确认在表中：不存在就不必往内核发一次解封指令，也保住「不在封禁表中」这句
+	// 有别于「内核未确认」的 message。
+	if _, banned := bans.GlobalCache().Get(ip); !banned {
 		WriteCode(w, httpcontract.Code40002, "解封失败：该 IP 不在封禁表中 "+ip)
 		return
 	}
 
-	// 下发内核解封。这里的失败**不回滚**也不改状态码：镜像已经撤了，netfilter 里那条
-	// 会在 TTL 到点自行消失；把它记成一次日志而不是 400，是因为调用方要的效果（不再
-	// 拦截）已经达到了。
+	// 先下发内核解封。失败时镜像保持原样：面板上那条封禁仍在，运维看到的就是拦截仍在。
 	if h.kernelBan != nil {
 		prefixLen := bans.FullPrefixLen(addr)
 		if err := h.kernelBan.Remove(addr, prefixLen); err != nil {
 			h.server.logger.Error("内核解封下发失败", "ip", ip, "error", err)
+			WriteCode(w, httpcontract.Code40002, "解封失败：内核未确认")
+			return
 		}
 	}
+
+	// 内核已确认（或未装配内核客户端）才撤镜像。两个并发 DELETE 同一 IP 时，后到的那次
+	// 可能在上一步之后、这里之前已被前一次撤掉，Remove 返回 false 也按成功处理：两次请求
+	// 要的终态一致，为此加锁会把封禁面串行化，代价不成比例。
+	bans.GlobalCache().Remove(ip)
 
 	// 记下解封时刻：GET /api/v2/bans/:ip/detail 的 last_unbanned_at 只有这一个来源
 	// （见 persist.RecordUnbanHistory）。写失败只记日志——封禁已经撤掉了，不能因为
