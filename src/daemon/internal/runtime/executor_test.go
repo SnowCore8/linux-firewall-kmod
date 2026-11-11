@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -27,11 +28,14 @@ type fakeStats struct {
 	reloads    uint64
 	globalAdds int
 	jailAdds   int
+	// globalParsed 是 AddGlobal 累加的已解析行数，用来核对全局口径只算一次。
+	globalParsed uint64
 }
 
-func (s *fakeStats) AddGlobal(_, _, _, _ uint64) {
+func (s *fakeStats) AddGlobal(parsed, _, _, _ uint64) {
 	s.mu.Lock()
 	s.globalAdds++
+	s.globalParsed += parsed
 	s.mu.Unlock()
 }
 
@@ -65,6 +69,18 @@ func (s *fakeStats) rotationCount() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.rotations
+}
+
+func (s *fakeStats) globalSnapshot() (calls int, parsed uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.globalAdds, s.globalParsed
+}
+
+func (s *fakeStats) jailAddCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.jailAdds
 }
 
 // fakeEnabled 是 Web UI 权威启用状态的可变替身。
@@ -517,5 +533,225 @@ func TestRotationKeepsAllSharedJailOwners(t *testing.T) {
 	}
 	if len(entry.Owners) != 2 {
 		t.Errorf("轮转后两个 jail 的 owner 都必须恢复，实得 %+v", entry.Owners)
+	}
+}
+
+// sharedJailConfig 构造多个 jail 共享同一日志文件的最小配置。
+func sharedJailConfig(t *testing.T, log string, names ...string) *config.Config {
+	t.Helper()
+
+	cfg := config.Default()
+	for _, name := range names {
+		jail := config.NewJail(name)
+		jail.MaxRetries = 1
+		jail.FindTime = 600
+		jail.BanTime = 60
+		jail.LogFiles = append(jail.LogFiles, log)
+		jail.Regexes = append(jail.Regexes, config.RegexInfo{
+			Name:     "default",
+			Pattern:  logparse.DefaultSSHDPattern,
+			Compiled: regexp.MustCompile(logparse.DefaultSSHDPattern),
+		})
+		cfg.Jails = append(cfg.Jails, jail)
+	}
+	return &cfg
+}
+
+// sharedFixture 用共享文件配置装配执行体。
+func sharedFixture(t *testing.T, cfg *config.Config, stats StatsSink, enabled JailEnabledSource) *InboundExecutor {
+	t.Helper()
+
+	signals, err := NewSignalSource()
+	if err != nil {
+		t.Fatalf("创建信号源失败: %v", err)
+	}
+	ex, err := NewInboundExecutor(cfg, signals, Deps{
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Stats:   stats,
+		Enabled: enabled,
+	})
+	if err != nil {
+		t.Fatalf("入站执行体应能装配: %v", err)
+	}
+	return ex
+}
+
+// ownerJails 返回某路径当前的日志 owner 集合（已排序）。
+func ownerJails(t *testing.T, ex *InboundExecutor, path string) []string {
+	t.Helper()
+
+	id, _, _, ok := ex.entryForPath(path)
+	if !ok {
+		t.Fatalf("路径未登记: %s", path)
+	}
+	entry, ok := ex.registry.Get(id)
+	if !ok {
+		t.Fatal("登记项应存在")
+	}
+	var out []string
+	for _, owner := range entry.Owners {
+		if owner.Jail != "" {
+			out = append(out, owner.Jail)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestSharedFileDisabledJailStopsReceivingLines：共享文件上禁用其中一个 jail 后，只有
+// 启用的 jail 收到行；重新启用后恢复。
+func TestSharedFileDisabledJailStopsReceivingLines(t *testing.T) {
+	dir := tempLogDir(t)
+	defer os.RemoveAll(dir)
+	log := filepath.Join(dir, "shared.log")
+	if err := os.WriteFile(log, nil, 0o644); err != nil {
+		t.Fatalf("写日志失败: %v", err)
+	}
+
+	cfg := sharedJailConfig(t, log, "shared-a", "shared-b")
+	enabled := newFakeEnabled()
+	ex := sharedFixture(t, cfg, &fakeStats{}, enabled)
+	defer ex.Close()
+
+	if got := ownerJails(t, ex, log); len(got) != 2 {
+		t.Fatalf("初始应有两个 owner，实得 %v", got)
+	}
+
+	enabled.set("shared-b", false)
+	ex.syncJailEnabled()
+
+	if got := ownerJails(t, ex, log); len(got) != 1 || got[0] != "shared-a" {
+		t.Fatalf("禁用后 owner 应只剩 shared-a，实得 %v", got)
+	}
+	if rules := ex.pipeline.jails["shared-b"].rules; rules.Len() != 0 {
+		t.Fatalf("禁用 jail 不应保留规则，实得 %d 条", rules.Len())
+	}
+
+	before := ex.pipeline.Counters().IPsExtracted
+	appendFile(t, log, []byte(failedRec("203.0.113.31")))
+	driveUntil(t, ex, func() bool { return ex.pipeline.Counters().IPsExtracted > before })
+	if got := ex.pipeline.Counters().IPsExtracted - before; got != 1 {
+		t.Fatalf("禁用后应只有一个 jail 收到行，实得 %d 次解析", got)
+	}
+
+	enabled.set("shared-b", true)
+	ex.syncJailEnabled()
+	if got := ownerJails(t, ex, log); len(got) != 2 {
+		t.Fatalf("重新启用后 owner 应恢复为两个，实得 %v", got)
+	}
+
+	before = ex.pipeline.Counters().IPsExtracted
+	appendFile(t, log, []byte(failedRec("203.0.113.32")))
+	driveUntil(t, ex, func() bool { return ex.pipeline.Counters().IPsExtracted-before >= 2 })
+	if got := ex.pipeline.Counters().IPsExtracted - before; got != 2 {
+		t.Fatalf("重新启用后两个 jail 都应收到行，实得 %d 次解析", got)
+	}
+}
+
+// TestRotationAfterModifyBeforeMoveSelfDoesNotReRead：同一批事件中内容变更先于
+// MOVE_SELF 到达时，读取器已切到新 inode 并推进偏移；轮转处理不得从头重读同一批行。
+func TestRotationAfterModifyBeforeMoveSelfDoesNotReRead(t *testing.T) {
+	dir := tempLogDir(t)
+	defer os.RemoveAll(dir)
+	log := filepath.Join(dir, "auth.log")
+	if err := os.WriteFile(log, nil, 0o644); err != nil {
+		t.Fatalf("写日志失败: %v", err)
+	}
+
+	ex := fixture(t, log, "rotation-sequence", &fakeStats{}, nil)
+	defer ex.Close()
+
+	id, wd, _, ok := ex.entryForPath(log)
+	if !ok {
+		t.Fatal("应已登记该日志源")
+	}
+
+	// 旧文件写入一行尚未读取，随后 logrotate：改名 + 新文件写入一行。
+	appendFile(t, log, []byte(failedRec("203.0.113.41")))
+	if err := os.Rename(log, log+".1"); err != nil {
+		t.Fatalf("改名失败: %v", err)
+	}
+	if err := os.WriteFile(log, []byte(failedRec("203.0.113.42")), 0o644); err != nil {
+		t.Fatalf("建新文件失败: %v", err)
+	}
+
+	// 事件顺序：MODIFY（读旧尾）→ MODIFY（切新 inode 并读）→ MOVE_SELF。
+	ex.handleEvent(ingest.WatchEvent{WD: wd, Mask: unix.IN_MODIFY})
+	ex.handleEvent(ingest.WatchEvent{WD: wd, Mask: unix.IN_MODIFY})
+	ex.handleEvent(ingest.WatchEvent{WD: wd, Mask: unix.IN_MOVE_SELF})
+
+	if got := ex.pipeline.Counters().IPsExtracted; got != 2 {
+		t.Fatalf("旧尾与新文件各一行应只判定一次，共 2 次解析，实得 %d", got)
+	}
+	if gotID, _, _, ok := ex.entryForPath(log); !ok || gotID != id {
+		t.Fatalf("轮转后应保持 SourceID %v，实得 %v ok=%v", id, gotID, ok)
+	}
+	reader := ex.readers[id]
+	if reader == nil {
+		t.Fatal("轮转后读取器应保留")
+	}
+	info, err := os.Stat(log)
+	if err != nil {
+		t.Fatalf("stat 失败: %v", err)
+	}
+	if reader.Offset() != info.Size() {
+		t.Fatalf("偏移应保持在新文件末尾 %d，实得 %d", info.Size(), reader.Offset())
+	}
+}
+
+// TestRollbackReconcilesWatches：SIGUSR1 回滚改变了 log_files 后，监视集合必须立即
+// 按回滚后的配置对齐，而不是等下一轮周期重扫。
+func TestRollbackReconcilesWatches(t *testing.T) {
+	dir := tempLogDir(t)
+	defer os.RemoveAll(dir)
+	oldLog := filepath.Join(dir, "old.log")
+	newLog := filepath.Join(dir, "new.log")
+	for _, p := range []string{oldLog, newLog} {
+		if err := os.WriteFile(p, nil, 0o644); err != nil {
+			t.Fatalf("写日志失败: %v", err)
+		}
+	}
+
+	cfg := configWithLog(t, oldLog, "rollback-jail")
+	reloader := &fakeReloader{apply: func(c *config.Config) {
+		c.Jails[0].LogFiles = []string{newLog}
+	}}
+	ex := pushFixture(t, cfg, reloader, nil)
+
+	if !ex.registry.ContainsPath(oldLog) {
+		t.Fatal("初始应监视旧日志")
+	}
+	ex.rollbackConfig()
+	if ex.registry.ContainsPath(oldLog) {
+		t.Error("回滚后不应继续监视已移除的日志")
+	}
+	if !ex.registry.ContainsPath(newLog) {
+		t.Error("回滚后应监视回滚配置里的日志")
+	}
+}
+
+// TestSharedFileGlobalCountersAddedOnce：两个 jail 共享同一文件时，全局行数只按源累加
+// 一次，jail 级仍各自累加。
+func TestSharedFileGlobalCountersAddedOnce(t *testing.T) {
+	dir := tempLogDir(t)
+	defer os.RemoveAll(dir)
+	log := filepath.Join(dir, "shared.log")
+	if err := os.WriteFile(log, nil, 0o644); err != nil {
+		t.Fatalf("写日志失败: %v", err)
+	}
+
+	cfg := sharedJailConfig(t, log, "count-a", "count-b")
+	stats := &fakeStats{}
+	ex := sharedFixture(t, cfg, stats, nil)
+	defer ex.Close()
+
+	appendFile(t, log, []byte(failedRec("203.0.113.51")))
+	driveUntil(t, ex, func() bool { return ex.pipeline.Counters().IPsExtracted >= 2 })
+
+	if calls, parsed := stats.globalSnapshot(); calls != 1 || parsed != 1 {
+		t.Fatalf("全局计数应只累加一次一行，实得 calls=%d parsed=%d", calls, parsed)
+	}
+	if got := stats.jailAddCount(); got != 2 {
+		t.Fatalf("jail 级计数应各累加一次，实得 %d 次", got)
 	}
 }

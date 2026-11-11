@@ -638,14 +638,18 @@ func (e *InboundExecutor) drainSource(id ingest.SourceID) {
 		reader.Reset()
 		return
 	}
-	// 把日志分发给所有共享此文件的 jail
-	for _, jail := range jails {
-		e.feed(jail, id, chunk.Bytes, chunk.Rotated)
+	// 把日志分发给所有共享此文件的 jail。全局计数只取第一个 jail 的差值，按源只累加
+	// 一次；jail 级计数各自累加。
+	for i, jail := range jails {
+		e.feed(jail, id, chunk.Bytes, chunk.Rotated, i == 0)
 	}
 }
 
 // feed 把一批新增字节喂给判定层，并镜像计数、下发意图。
-func (e *InboundExecutor) feed(jail string, id ingest.SourceID, bytes []byte, rotated bool) {
+//
+// global 为真表示本批字节的计数差值同时计入全局口径；共享源的同一批字节只在第一个
+// jail 上置真，全局行数/正则/IP 计数因此按源各只增一次。
+func (e *InboundExecutor) feed(jail string, id ingest.SourceID, bytes []byte, rotated, global bool) {
 	if rotated {
 		// 轮转 / 截断：旧文件的半行不得与新文件的开头拼接。
 		e.pipeline.OnSourceRotated(id)
@@ -664,6 +668,9 @@ func (e *InboundExecutor) feed(jail string, id ingest.SourceID, bytes []byte, ro
 		return
 	}
 	e.mirrorCounters(jail, before, after)
+	if global {
+		e.mirrorGlobal(before, after)
+	}
 	for i := range e.intents {
 		e.dispatchIntent(&e.intents[i])
 	}
@@ -671,7 +678,9 @@ func (e *InboundExecutor) feed(jail string, id ingest.SourceID, bytes []byte, ro
 }
 
 // flushPendingLine 把某源挂起的半行当作完整行处理（源关闭 / 轮转前调用）。
-func (e *InboundExecutor) flushPendingLine(jail string, id ingest.SourceID) {
+//
+// global 的语义与 feed 相同。
+func (e *InboundExecutor) flushPendingLine(jail string, id ingest.SourceID, global bool) {
 	tick := e.tick()
 	before := e.pipeline.Counters()
 	e.intents = e.intents[:0]
@@ -682,6 +691,9 @@ func (e *InboundExecutor) flushPendingLine(jail string, id ingest.SourceID) {
 		return
 	}
 	e.mirrorCounters(jail, before, after)
+	if global {
+		e.mirrorGlobal(before, after)
+	}
 	for i := range e.intents {
 		e.dispatchIntent(&e.intents[i])
 	}
@@ -746,18 +758,28 @@ func (e *InboundExecutor) handleRotation(id ingest.SourceID, path string) {
 		e.stats.IncLogRotations()
 	}
 
+	// 同一批事件里内容变更可能先于 MOVE_SELF 到达：ReadNew 已把 fd 切到新 inode 并
+	// 推进偏移。此时再从头重挂会把同一批行判定两次，故只把 watch 挂到新 inode 上，
+	// SourceID 与读取偏移保持不变。
+	if reader := e.readers[id]; reader != nil {
+		if current := inodeOfPath(path); reader.Inode() != 0 && reader.Inode() == current {
+			e.rebindWatch(id, entry, path)
+			return
+		}
+	}
+
 	// 旧文件最后未读的尾部仍是证据：先按 jail 喂入尾部字节，再 flush 半行。
 	// 顺序不能反——先 flush 会把旧半行单独成行，尾部随后又与新文件拼在一起或
 	// 单独成行，两者都会丢掉或伪造内容。
 	if reader := e.readers[id]; reader != nil {
 		if tail := reader.DrainTail(rotationDrainBatches); len(tail) > 0 {
-			for _, jail := range jails {
-				e.feed(jail, id, tail, false)
+			for i, jail := range jails {
+				e.feed(jail, id, tail, false, i == 0)
 			}
 		}
 	}
-	for _, jail := range jails {
-		e.flushPendingLine(jail, id)
+	for i, jail := range jails {
+		e.flushPendingLine(jail, id, i == 0)
 	}
 	e.dropSource(id)
 
@@ -772,6 +794,29 @@ func (e *InboundExecutor) handleRotation(id ingest.SourceID, path string) {
 		e.debug("日志轮转后文件暂不可见，待重挂", "path", path)
 		e.pendingReadd[ingest.CleanPath(path)] = struct{}{}
 	}
+}
+
+// rebindWatch 把一个源重挂到 path 当前指向的 inode 上，保留 SourceID 与读取偏移。
+//
+// 用于读取器已由内容变更事件切到新文件的轮转：旧 watch 仍钉在被移走的 inode 上，
+// 不重挂的话新文件此后的写入没有事件可唤醒。摘除旧 watch 与登记新 wd 之间没有读取，
+// 该源的偏移与半行缓冲不受影响。
+func (e *InboundExecutor) rebindWatch(id ingest.SourceID, entry ingest.SourceEntry, path string) {
+	wd, err := e.watcher.Add(path, ingest.LogFileWatchMask())
+	if err != nil {
+		// 重挂失败不能把旧 watch 留在被移走的 inode 上：摘源并登记待重挂，
+		// 由 retryPendingReadd 在路径重新可见时按当前 jail 归属挂回。
+		e.warn("轮转后重挂 watch 失败", "path", path, "error", err)
+		e.dropSource(id)
+		e.pendingReadd[ingest.CleanPath(path)] = struct{}{}
+		return
+	}
+	if wd != entry.WD {
+		if err := e.watcher.Remove(entry.WD); err != nil {
+			e.debug("摘除旧 inode 的 watch 失败", "path", path, "error", err)
+		}
+	}
+	e.registry.Rebind(id, wd, inodeOfPath(path))
 }
 
 // retryPendingReadd 重试「轮转后待重挂」的源：路径一出现就挂上（上限 1 秒），失败保持
@@ -818,8 +863,16 @@ func (e *InboundExecutor) reconcileWatches() {
 		keep[ingest.CleanPath(configFile)] = struct{}{}
 	}
 	logs := e.enabledLogSources()
+	// 同一路径可能被多个已启用 jail 共享：按路径汇总 owner 集合，后面一次对齐。
+	logPaths := make([]string, 0, len(logs))
+	logOwners := make(map[string][]string, len(logs))
 	for _, ls := range logs {
-		keep[ingest.CleanPath(ls.path)] = struct{}{}
+		clean := ingest.CleanPath(ls.path)
+		if _, seen := logOwners[clean]; !seen {
+			logPaths = append(logPaths, ls.path)
+		}
+		logOwners[clean] = append(logOwners[clean], ls.jail)
+		keep[clean] = struct{}{}
 	}
 
 	var stale []ingest.SourceID
@@ -836,17 +889,18 @@ func (e *InboundExecutor) reconcileWatches() {
 		e.addConfigWatch(configFile)
 	}
 
-	for _, ls := range logs {
-		if _, wd, inode, ok := e.entryForPath(ls.path); ok {
-			// 已在监视：只更新归属（同一路径可能被改挂到别的 jail）。
-			e.registry.Register(ingest.LogOwner(ls.jail), ls.path, wd, inode)
+	for _, lsPath := range logPaths {
+		clean := ingest.CleanPath(lsPath)
+		if _, _, _, ok := e.entryForPath(lsPath); ok {
+			// 已在监视：把日志 owner 集合精确对齐到当前启用的 jail，保留 SourceID、
+			// wd、inode 与读取偏移；禁用但仍留在 owner 表里的 jail 由此被摘掉。
+			e.registry.SetLogOwners(clean, logOwners[clean])
 			continue
 		}
 		// 待重挂的源从文件头读；其余（新出现的文件）定位到末尾，不回放历史。
-		key := ingest.CleanPath(ls.path)
-		_, fromStart := e.pendingReadd[key]
-		delete(e.pendingReadd, key)
-		e.addLogSource(ls.jail, ls.path, fromStart)
+		_, fromStart := e.pendingReadd[clean]
+		delete(e.pendingReadd, clean)
+		e.addSharedLogSource(logOwners[clean], lsPath, fromStart)
 	}
 
 	// 已不再配置的路径不必再等。
@@ -857,19 +911,11 @@ func (e *InboundExecutor) reconcileWatches() {
 	}
 }
 
-// addLogSource 给一个日志文件挂 watch、登记身份、建读取器，并立即读一次。
-//
-// fromStart=false 时定位到文件末尾（不回放历史）。返回值 added=false 表示路径当前不可
-// 挂（符号链接 / 不存在 / watch 失败），由调用方决定是否登记为待重挂。
-// addLogSource 挂一个只属于单个 jail 的日志源。
-func (e *InboundExecutor) addLogSource(jail, path string, fromStart bool) (ingest.SourceID, bool) {
-	return e.addSharedLogSource([]string{jail}, path, fromStart)
-}
-
 // addSharedLogSource 挂一个日志源，并把内容分发给 jails 中的每个 jail。
 //
-// 所有 owner 在首轮读取之前登记：轮转重挂时新文件可能已经写入了内容，首轮读取按
-// owner 表逐 jail 分发，晚登记的 jail 会永久错过这段内容。
+// fromStart=false 时定位到文件末尾（不回放历史）。所有 owner 在首轮读取之前登记：
+// 轮转重挂时新文件可能已经写入了内容，首轮读取按 owner 表逐 jail 分发，晚登记的
+// jail 会永久错过这段内容。
 func (e *InboundExecutor) addSharedLogSource(jails []string, path string, fromStart bool) (ingest.SourceID, bool) {
 	if len(jails) == 0 {
 		return 0, false
@@ -1032,6 +1078,9 @@ func (e *InboundExecutor) rollbackConfig() {
 	e.info("配置回滚成功")
 	// 回滚会改 max_retries / findtime / ban_time 与启用状态，判定参数必须跟着走。
 	e.refreshJails()
+	// 回滚同样会改启用状态与 log_files：监视集合必须按回滚后的配置对齐，否则被回滚
+	// 禁用的 jail 会继续收行判定，直到下一轮周期重扫。
+	e.reconcileWatches()
 	// 回滚掉的那份配置同样要回到内核上，否则「SIGUSR1 之后」= 面板与判定回到旧值、内核
 	// 仍停在被回滚掉的新值。
 	e.pushKernelConfig("配置回滚")
@@ -1148,10 +1197,27 @@ type pendingLog struct {
 // 遍历共享 slice 会读到新旧混杂的元素。拷出来的那份在本执行体内不再变化。
 func (e *InboundExecutor) refreshJails() {
 	jails := e.snapshotJails()
+	// 禁用 jail 不保留编译结果：运行期被停用的 jail 还带着上一次启用时编译的正则，
+	// 这些规则不参与判定，也不该留在配置里等下一次误用。
+	config.LockConfig()
+	for i := range e.cfg.Jails {
+		if e.cfg.Jails[i].Enabled {
+			continue
+		}
+		for j := range e.cfg.Jails[i].Regexes {
+			e.cfg.Jails[i].Regexes[j].Compiled = nil
+		}
+	}
+	config.UnlockConfig()
 	keep := make([]string, 0, len(jails))
 	for i := range jails {
 		jail := &jails[i]
-		rules := e.ruleSetFor(jail)
+		// 禁用 jail 不登记任何规则：它的 Regexes 里可能还留着上一次启用时编译的结果，
+		// 但禁用状态下的行不该再按这些规则判定。
+		rules := logparse.NewRuleSet(jail.Name, nil)
+		if jail.Enabled {
+			rules = e.ruleSetFor(jail)
+		}
 		policy := NewJailPolicy(jail.MaxRetries, jail.FindTime, jail.BanTime, jail.Cluster)
 		e.pipeline.RegisterJail(rules, policy)
 		keep = append(keep, jail.Name)
@@ -1335,7 +1401,10 @@ func (e *InboundExecutor) banInfoFor(intent *BanIntent) (bans.BanInfo, bool) {
 	}, true
 }
 
-// mirrorCounters 把一批处理产生的计数差值镜像到全局与 per-jail 计数器。
+// mirrorCounters 把一批处理产生的计数差值镜像到 per-jail 计数器。
+//
+// 全局计数不在这里累加：共享源的一批字节会被依次喂给多个 jail，全局口径按源只算一次，
+// 由 feed / flushPendingLine 在第一个 jail 上另走 mirrorGlobal。
 func (e *InboundExecutor) mirrorCounters(jail string, before, after Counters) {
 	parsed := satSub(after.LinesParsed, before.LinesParsed)
 	skipped := satSub(after.LinesSkipped, before.LinesSkipped)
@@ -1346,11 +1415,26 @@ func (e *InboundExecutor) mirrorCounters(jail string, before, after Counters) {
 		return
 	}
 	if e.stats != nil {
-		e.stats.AddGlobal(parsed, skipped, regexes, ips)
 		e.stats.AddJail(jail, parsed, regexes, ips)
 	}
 	// 镜像到全局 jail 运行时统计（Web UI 可读）。
 	config.UpdateJailStats(jail, parsed, regexes, ips, ips, bans)
+}
+
+// mirrorGlobal 把一段处理（可能覆盖同一源的多个 jail）的计数差值镜像到全局计数器。
+//
+// 每个源的一批字节只调用一次：共享文件的同一行在 jail 级各计一次，在全局只计一次。
+func (e *InboundExecutor) mirrorGlobal(before, after Counters) {
+	parsed := satSub(after.LinesParsed, before.LinesParsed)
+	skipped := satSub(after.LinesSkipped, before.LinesSkipped)
+	regexes := satSub(after.RegexMatches, before.RegexMatches)
+	ips := satSub(after.IPsExtracted, before.IPsExtracted)
+	if parsed+skipped+regexes+ips == 0 {
+		return
+	}
+	if e.stats != nil {
+		e.stats.AddGlobal(parsed, skipped, regexes, ips)
+	}
 }
 
 // ruleSetFor 把配置里的 jail 规则编译结果转成判定层要的 RuleSet。

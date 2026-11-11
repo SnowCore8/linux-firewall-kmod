@@ -95,6 +95,38 @@ func (r *SourceRegistry) Register(owner SourceOwner, path string, wd int32, inod
 	return id
 }
 
+// SetLogOwners 把某路径的日志 owner 集合精确替换为 jails 中的集合。
+//
+// 非日志 owner（配置文件）原样保留；身份、wd、inode 与读取偏移不受影响。路径未登记时
+// 返回 false。空 jail 名忽略，重复的 jail 名只保留一次。
+func (r *SourceRegistry) SetLogOwners(path string, jails []string) bool {
+	path = CleanPath(path)
+	id, ok := r.byPath[path]
+	if !ok {
+		return false
+	}
+	entry := r.byID[id]
+	owners := make([]SourceOwner, 0, len(entry.Owners)+len(jails))
+	for _, o := range entry.Owners {
+		if o.Jail == "" {
+			owners = append(owners, o)
+		}
+	}
+	seen := make(map[string]struct{}, len(jails))
+	for _, jail := range jails {
+		if jail == "" {
+			continue
+		}
+		if _, dup := seen[jail]; dup {
+			continue
+		}
+		seen[jail] = struct{}{}
+		owners = append(owners, LogOwner(jail))
+	}
+	entry.Owners = owners
+	return true
+}
+
 // Rebind 更新某个身份当前的 wd 与 inode（轮转后重挂 watch 时调用）。
 func (r *SourceRegistry) Rebind(id SourceID, wd int32, inode uint64) {
 	entry, ok := r.byID[id]
