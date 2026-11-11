@@ -486,3 +486,61 @@ func TestRequeueLostReinsertsEvictedEntry(t *testing.T) {
 		t.Fatalf("落库分数 = %d，期望 90（重新入队的欠账已落盘）", got)
 	}
 }
+
+// 封禁先落库、条目随后被逐出（或从未加载过）时，NoteBan 不得把同一次封禁记两遍。
+//
+// banSink 的顺序是 RecordBanHistory/RecordBan 先写库、再 NoteBan；两条路径的库值都
+// 已经包含本次封禁。条目若在两者之间被 LRU 逐出，重新建条目从库里读到的就是封禁后的
+// 值，再按「封禁前的内存读数」+1 会把这次封禁算成两次（次数多 1、扣分多 10）。
+func TestNoteBanAfterEvictionDoesNotDoubleCount(t *testing.T) {
+	const ip = "203.0.113.41"
+
+	cases := []struct {
+		name string
+		// preload 表示 NoteBan 之前该条目已在内存里加载过（封禁前的读数）。
+		preload bool
+		// evict 表示落库与 NoteBan 之间条目被容量挤掉。
+		evict bool
+	}{
+		{name: "从未加载", preload: false, evict: false},
+		{name: "落库后被逐出", preload: true, evict: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newTestDB(t)
+			f := NewFacts(db, FactsOptions{Capacity: 1})
+
+			if tc.preload {
+				if got := f.PriorBanCount(addr(t, ip)); got != 0 {
+					t.Fatalf("预加载时历史次数 = %d，期望 0", got)
+				}
+			}
+			if _, err := db.RecordBanHistory(ip, false); err != nil {
+				t.Fatalf("落封禁历史失败: %v", err)
+			}
+			if err := db.RecordBan(ip, DefaultBanPenalty); err != nil {
+				t.Fatalf("落信誉扣分失败: %v", err)
+			}
+			if tc.evict {
+				// 容量 1：触碰另一个地址就挤掉 ip 的条目。
+				f.RecordFailure(addr(t, "203.0.113.42"))
+			}
+
+			f.NoteBan(addr(t, ip))
+
+			if got := f.PriorBanCount(addr(t, ip)); got != 1 {
+				t.Errorf("NoteBan 后历史次数 = %d，期望 1（库里的那次已计入）", got)
+			}
+			if got := f.ReputationScore(addr(t, ip)); got != 90 {
+				t.Errorf("NoteBan 后信誉分 = %d，期望 90（只扣一次 %d）", got, DefaultBanPenalty)
+			}
+			if err := f.Flush(); err != nil {
+				t.Fatalf("刷盘失败: %v", err)
+			}
+			if got := dbScore(t, db, ip); got != 90 {
+				t.Errorf("刷盘后库里的分数 = %d，期望 90（NoteBan 不该再写一笔扣分）", got)
+			}
+		})
+	}
+}

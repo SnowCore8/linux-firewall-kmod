@@ -49,73 +49,31 @@ func PredictAttacks(db *persist.DB, limit int) (*PredictionSummary, error) {
 		limit = 15
 	}
 
-	events, err := db.GetBanEvents(10000)
+	// 每个地址的间隔统计在 SQL 内聚合：返回的是一行一个地址，不随事件总量增长，
+	// 也不再有「先取最近 1 万条」的截断——窗口外的老事件不会挤掉窗口内的样本。
+	ipStats, err := db.GetIPBanIntervalStats()
 	if err != nil {
 		return nil, err
-	}
-
-	ipData := make(map[string]*struct {
-		jail       string
-		timestamps []int64
-	})
-
-	for _, e := range events {
-		if ipData[e.IP] == nil {
-			// 事件按 banned_at 降序读入，首次出现即该地址**最近一次**封禁，
-			// 于是 jail 取的就是最近那条的归属（后续同一 IP 不再覆盖它）。
-			ipData[e.IP] = &struct {
-				jail       string
-				timestamps []int64
-			}{jail: e.JailName}
-		}
-		ipData[e.IP].timestamps = append(ipData[e.IP].timestamps, e.BannedAt)
 	}
 
 	now := time.Now().Unix()
 	var predictions []AttackPredictionFinding
 
-	for ip, data := range ipData {
-		if len(data.timestamps) < 3 {
+	for _, stats := range ipStats {
+		if stats.EventCount < 3 {
 			continue
 		}
-
-		sort.Slice(data.timestamps, func(i, j int) bool { return data.timestamps[i] < data.timestamps[j] })
-
-		var intervals []float64
-		for i := 1; i < len(data.timestamps); i++ {
-			intervals = append(intervals, float64(data.timestamps[i]-data.timestamps[i-1]))
-		}
-
-		sort.Float64s(intervals)
-		var median float64
-		mid := len(intervals) / 2
-		if len(intervals)%2 == 0 {
-			median = (intervals[mid-1] + intervals[mid]) / 2
-		} else {
-			median = intervals[mid]
-		}
+		median := stats.MedianInterval
 		if median <= 0 {
 			// 中位间隔为 0：事件聚集在同一秒，给不出「下一次」的时刻。
 			// 继续算会得到 next = 上次封禁、urgency = imminent 的假预测。
 			continue
 		}
 
-		var sum float64
-		for _, v := range intervals {
-			sum += v
-		}
-		avg := sum / float64(len(intervals))
-
-		var varianceSum float64
-		for _, v := range intervals {
-			diff := v - avg
-			varianceSum += diff * diff
-		}
-		stddev := math.Sqrt(varianceSum / float64(len(intervals)))
-
+		avg := stats.AvgInterval
 		cv := 0.0
 		if avg > 0 {
-			cv = stddev / avg
+			cv = stats.StdDev / avg
 		}
 
 		regularityScore := 0.0
@@ -123,10 +81,10 @@ func PredictAttacks(db *persist.DB, limit int) (*PredictionSummary, error) {
 			regularityScore = (1 - cv) * 100
 		}
 
-		dataAmountScore := math.Min(100, float64(len(data.timestamps))/5*100)
+		dataAmountScore := math.Min(100, float64(stats.EventCount)/5*100)
 		confidence := regularityScore*0.6 + dataAmountScore*0.4
 
-		lastBan := data.timestamps[len(data.timestamps)-1]
+		lastBan := stats.LastBannedAt
 		nextAttack := lastBan + int64(math.Round(median))
 
 		var urgency string
@@ -142,13 +100,13 @@ func PredictAttacks(db *persist.DB, limit int) (*PredictionSummary, error) {
 		}
 
 		predictions = append(predictions, AttackPredictionFinding{
-			IP:           ip,
-			JailName:     data.jail,
+			IP:           stats.IP,
+			JailName:     stats.JailName,
 			NextAttackAt: nextAttack,
 			LastBanAt:    lastBan,
 			Confidence:   confidence,
 			Urgency:      urgency,
-			EventCount:   len(data.timestamps),
+			EventCount:   stats.EventCount,
 			MedianPeriod: median,
 		})
 	}
@@ -186,7 +144,10 @@ func PredictAttacks(db *persist.DB, limit int) (*PredictionSummary, error) {
 		}
 	}
 
-	jailTrends := analyzeJailTrends(events, perJailUpcoming)
+	jailTrends, err := analyzeJailTrends(db, now, perJailUpcoming)
+	if err != nil {
+		return nil, err
+	}
 
 	return &PredictionSummary{
 		Predictions:    predictions,
@@ -200,50 +161,26 @@ func PredictAttacks(db *persist.DB, limit int) (*PredictionSummary, error) {
 //
 // upcoming 是调用方从预测集算出的「24 小时内预计再动手」计数（按 jail 传入）；
 // 本层自己不做预测，只把趋势与那个读数并排放好。
-func analyzeJailTrends(events []persist.BanEvent, upcoming map[string]int) []JailTrend {
-	now := time.Now().Unix()
-	dayAgo := now - 86400
-	prevDayAgo := now - 2*86400
-	weekAgo := now - 7*86400
-
-	jailData := make(map[string]*struct {
-		bans24h     int
-		bansPrev24h int
-		bans7d      int
-	})
-
-	for _, e := range events {
-		if jailData[e.JailName] == nil {
-			jailData[e.JailName] = &struct {
-				bans24h     int
-				bansPrev24h int
-				bans7d      int
-			}{}
-		}
-		if e.BannedAt >= dayAgo {
-			jailData[e.JailName].bans24h++
-		} else if e.BannedAt >= prevDayAgo {
-			jailData[e.JailName].bansPrev24h++
-		}
-		if e.BannedAt >= weekAgo {
-			jailData[e.JailName].bans7d++
-		}
+func analyzeJailTrends(db *persist.DB, now int64, upcoming map[string]int) ([]JailTrend, error) {
+	counts, err := db.GetJailBanWindowCounts(now)
+	if err != nil {
+		return nil, err
 	}
 
 	var trends []JailTrend
-	for jail, data := range jailData {
+	for _, data := range counts {
 		// 趋势 = 近 24 小时的封禁数相对**前一日同一段**（now-48h..now-24h）的倍数，
 		// 与契约 JailAttackTrend.trend 的口径一致。除以 7 天日均会把一周前的高发日
 		// 摊进分母：近一天的回落在面板上读成 stable，而不是契约承诺的「与前一日的
 		// 量比较」。
 		ratio := 0.0
-		if data.bansPrev24h > 0 {
-			ratio = float64(data.bans24h) / float64(data.bansPrev24h)
+		if data.BansPrev24h > 0 {
+			ratio = float64(data.Bans24h) / float64(data.BansPrev24h)
 		}
 
 		var trend string
 		switch {
-		case data.bansPrev24h <= 0:
+		case data.BansPrev24h <= 0:
 			// 前一日没有样本就没有基数可比，只能记 stable（契约同口径）。此处若拿
 			// 24h 的数量硬判 rising，等于把「昨天没样本」读成「今天在涨」。
 			trend = "stable"
@@ -256,11 +193,11 @@ func analyzeJailTrends(events []persist.BanEvent, upcoming map[string]int) []Jai
 		}
 
 		trends = append(trends, JailTrend{
-			JailName:           jail,
+			JailName:           data.JailName,
 			Trend:              trend,
-			Bans24h:            data.bans24h,
-			Bans7d:             data.bans7d,
-			PredictedAttackers: upcoming[jail],
+			Bans24h:            data.Bans24h,
+			Bans7d:             data.Bans7d,
+			PredictedAttackers: upcoming[data.JailName],
 		})
 	}
 
@@ -271,5 +208,5 @@ func analyzeJailTrends(events []persist.BanEvent, upcoming map[string]int) []Jai
 		return trends[i].JailName < trends[j].JailName
 	})
 
-	return trends
+	return trends, nil
 }

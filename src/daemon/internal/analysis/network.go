@@ -27,23 +27,18 @@ func AnalyzeNetworkDistribution(db *persist.DB, days int, limit int) ([]NetworkD
 		limit = 50
 	}
 
-	events, err := db.GetBanEvents(10000)
+	aggregates, err := db.BanAggregatesByIPSince(time.Now().AddDate(0, 0, -days).Unix())
 	if err != nil {
 		return nil, err
 	}
 
-	cutoff := time.Now().AddDate(0, 0, -days).Unix()
 	subnetData := make(map[string]*struct {
 		ips        map[string]int
 		lastBanned int64
 	})
 
-	for _, e := range events {
-		if e.BannedAt < cutoff {
-			continue
-		}
-
-		subnet, err := getSubnet(e.IP)
+	for _, a := range aggregates {
+		subnet, err := getSubnet(a.IP)
 		if err != nil {
 			continue
 		}
@@ -58,9 +53,9 @@ func AnalyzeNetworkDistribution(db *persist.DB, days int, limit int) ([]NetworkD
 		}
 
 		data := subnetData[subnet]
-		data.ips[e.IP]++
-		if e.BannedAt > data.lastBanned {
-			data.lastBanned = e.BannedAt
+		data.ips[a.IP] += a.Bans
+		if a.LastBannedAt > data.lastBanned {
+			data.lastBanned = a.LastBannedAt
 		}
 	}
 

@@ -178,6 +178,10 @@ func NewFacts(db *DB, opts FactsOptions) *Facts {
 		setWeight("geo", &weights.Geo)
 		setWeight("cluster", &weights.Cluster)
 		riskEngine = risk.NewEngineWithHalfLife(weights, opts.RiskHalfLifeDays)
+		if db != nil {
+			// 后台衰减与「近零记录删除」用引擎同一份权重，避免两套默认值各说各话。
+			db.SetRiskVectorWeights(weights)
+		}
 		logger.Info("multi-dimensional risk engine enabled")
 	}
 
@@ -506,13 +510,25 @@ func (f *Facts) PriorBanCount(addr netip.Addr) uint32 {
 func (f *Facts) NoteBan(addr netip.Addr) {
 	f.mu.Lock()
 	e, evicted := f.touchLocked(key(addr))
+	// 库侧的这次封禁已经由 RecordBanHistory/RecordBan 落好了，因此「本次封禁前是否
+	// 已经有内存读数」决定了要不要自增：
+	//   - 已加载的条目记的是封禁前的值，落库后库值比内存新一次，必须增量；
+	//   - 新建或尚未加载的条目读到的就是**封禁后**的库值，再自增会把同一次封禁记两遍
+	//     （条目在落库与 NoteBan 之间被 LRU 逐出，就是这个形状）。
+	// 无库时没有那笔落库，始终按内存增量。
+	hadScore := e.scoreLoaded
+	hadBans := e.bansLoaded
 	f.loadScoreLocked(e)
 	f.loadBansLocked(e)
-	e.bans++
-	if pen := uint32(DefaultBanPenalty); e.score > pen {
-		e.score -= pen
-	} else {
-		e.score = 0
+	if hadBans || f.db == nil {
+		e.bans++
+	}
+	if hadScore || f.db == nil {
+		if pen := uint32(DefaultBanPenalty); e.score > pen {
+			e.score -= pen
+		} else {
+			e.score = 0
+		}
 	}
 	f.mu.Unlock()
 	if evicted != nil {

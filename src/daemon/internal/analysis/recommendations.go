@@ -7,6 +7,14 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
 )
 
+const (
+	// thresholdWindowDays 是阈值建议的样本窗口（契约 ThresholdRecommendation 声明的近 7 天）。
+	thresholdWindowDays = 7
+	// banDurationWindowDays 是时长建议的复发窗口。间隔中位数要看到足够长的复发周期，
+	// 7 天会把「每周来一次」的样本截成单个间隔；30 天与历史库的常见保留期同量级。
+	banDurationWindowDays = 30
+)
+
 // BanDurationFinding 是「某个 jail 的封禁时长该不该改」的读数。
 //
 // 与契约载荷 BanDurationRecommendation 刻意不同名，理由见 PeriodicAttackFinding。
@@ -21,47 +29,17 @@ type BanDurationFinding struct {
 }
 
 func RecommendBanDurations(db *persist.DB, currentDurations map[string]int64) ([]BanDurationFinding, error) {
-	events, err := db.GetBanEvents(10000)
+	since := time.Now().AddDate(0, 0, -banDurationWindowDays).Unix()
+	jailStats, err := db.BanDurationStatsSince(since)
 	if err != nil {
 		return nil, err
 	}
 
-	jailIPs := make(map[string]map[string][]int64)
-	for _, e := range events {
-		if jailIPs[e.JailName] == nil {
-			jailIPs[e.JailName] = make(map[string][]int64)
-		}
-		jailIPs[e.JailName][e.IP] = append(jailIPs[e.JailName][e.IP], e.BannedAt)
-	}
-
 	var recommendations []BanDurationFinding
-	for jail, ipTimestamps := range jailIPs {
-		var intervals []float64
-		recidivistCount := 0
-
-		for _, timestamps := range ipTimestamps {
-			if len(timestamps) < 2 {
-				continue
-			}
-			recidivistCount++
-			sort.Slice(timestamps, func(i, j int) bool { return timestamps[i] < timestamps[j] })
-			for i := 1; i < len(timestamps); i++ {
-				intervals = append(intervals, float64(timestamps[i]-timestamps[i-1]))
-			}
-		}
-
-		if len(intervals) == 0 {
-			continue
-		}
-
-		sort.Float64s(intervals)
-		var median float64
-		mid := len(intervals) / 2
-		if len(intervals)%2 == 0 {
-			median = (intervals[mid-1] + intervals[mid]) / 2
-		} else {
-			median = intervals[mid]
-		}
+	for _, stats := range jailStats {
+		jail := stats.JailName
+		median := stats.MedianInterval
+		recidivistCount := stats.RecidivistCount
 
 		current := currentDurations[jail]
 		switch {
@@ -130,55 +108,25 @@ type ThresholdFinding struct {
 }
 
 func RecommendThresholds(db *persist.DB, currentThresholds map[string]int) ([]ThresholdFinding, error) {
-	events, err := db.GetBanEvents(10000)
+	sevenDaysAgo := time.Now().AddDate(0, 0, -thresholdWindowDays).Unix()
+	jailStats, err := db.BanJailStatsSince(sevenDaysAgo)
 	if err != nil {
 		return nil, err
 	}
 
-	sevenDaysAgo := time.Now().AddDate(0, 0, -7).Unix()
-	jailStats := make(map[string]*struct {
-		total    int
-		ips      map[string]int
-		lastSeen int64
-	})
-
-	for _, e := range events {
-		if e.BannedAt < sevenDaysAgo {
-			continue
-		}
-		stats := jailStats[e.JailName]
-		if stats == nil {
-			stats = &struct {
-				total    int
-				ips      map[string]int
-				lastSeen int64
-			}{ips: make(map[string]int)}
-			jailStats[e.JailName] = stats
-		}
-		stats.total++
-		stats.ips[e.IP]++
-		if e.BannedAt > stats.lastSeen {
-			stats.lastSeen = e.BannedAt
-		}
-	}
-
 	var recommendations []ThresholdFinding
-	for jail, stats := range jailStats {
-		if stats.total < MinThresholdSampleEvents {
+	for _, stats := range jailStats {
+		if stats.TotalBans < MinThresholdSampleEvents {
 			continue
 		}
 
-		uniqueIPs := len(stats.ips)
-		recidivistIPs := 0
-		for _, count := range stats.ips {
-			if count >= 2 {
-				recidivistIPs++
-			}
-		}
+		uniqueIPs := stats.UniqueIPs
+		recidivistIPs := stats.RecidivistIPs
 		if uniqueIPs == 0 {
 			continue
 		}
 
+		jail := stats.JailName
 		rate := float64(recidivistIPs) / float64(uniqueIPs) * 100
 		current := currentThresholds[jail]
 		if current == 0 {
@@ -196,7 +144,7 @@ func RecommendThresholds(db *persist.DB, currentThresholds map[string]int) ([]Th
 				recommended = 1
 			}
 			explanation = "复发率过高，攻击者未被充分阻止，建议降低阈值"
-		} else if rate < 10 && stats.total > 20 {
+		} else if rate < 10 && stats.TotalBans > 20 {
 			direction = "increase"
 			recommended = int(float64(current) * 1.5)
 			explanation = "复发率低且封禁数多，可能存在误封，建议放宽阈值"
@@ -218,11 +166,11 @@ func RecommendThresholds(db *persist.DB, currentThresholds map[string]int) ([]Th
 		// 置信度只看样本量（封禁事件数）：样本越厚，同一复发率越不像巧合。
 		// 阶梯与载荷口径是 u8 百分数，这里给 0-1，由读侧换算。
 		confidence := 0.3
-		if stats.total >= 50 {
+		if stats.TotalBans >= 50 {
 			confidence = 0.9
-		} else if stats.total >= 20 {
+		} else if stats.TotalBans >= 20 {
 			confidence = 0.7
-		} else if stats.total >= 10 {
+		} else if stats.TotalBans >= 10 {
 			confidence = 0.5
 		}
 
@@ -231,11 +179,11 @@ func RecommendThresholds(db *persist.DB, currentThresholds map[string]int) ([]Th
 			Direction:      direction,
 			CurrentValue:   current,
 			RecommendedVal: recommended,
-			TotalBans:      stats.total,
+			TotalBans:      stats.TotalBans,
 			UniqueIPs:      uniqueIPs,
 			RecidivistIPs:  recidivistIPs,
 			RecidivismRate: rate,
-			AvgBansPerIP:   float64(stats.total) / float64(uniqueIPs),
+			AvgBansPerIP:   float64(stats.TotalBans) / float64(uniqueIPs),
 			Confidence:     confidence,
 			Explanation:    explanation,
 		})

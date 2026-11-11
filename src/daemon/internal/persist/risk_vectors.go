@@ -87,81 +87,92 @@ func (db *DB) UpsertRiskVector(ip string, vec risk.RiskVector, lastEventAt int64
 // 「没有新事件的 IP」也按 7 天半衰期收敛，又不至于每秒扫一遍向量表。
 const defaultRiskVectorDecayInterval = time.Hour
 
+// SetRiskVectorWeights 设置后台衰减与近零判据使用的维度权重。
+//
+// 由装配多维引擎的一方（Facts）写入：引擎按配置权重判定风险，库侧的衰减与清理必须
+// 读同一份权重，否则两处对「同一个向量算多高风险」给出不同答案。全零权重没有意义
+// （会把所有记录判成近零），按未设置处理。
+func (db *DB) SetRiskVectorWeights(weights risk.DimensionWeights) {
+	if weights.Failure <= 0 && weights.Ban <= 0 && weights.Scan <= 0 &&
+		weights.Bruteforce <= 0 && weights.DDoS <= 0 && weights.Geo <= 0 && weights.Cluster <= 0 {
+		return
+	}
+	db.riskWeightsMu.Lock()
+	db.riskWeights = weights
+	db.riskWeightsSet = true
+	db.riskWeightsMu.Unlock()
+}
+
+// riskDecayWeights 返回衰减与近零判据使用的权重，未设置时用引擎默认值。
+func (db *DB) riskDecayWeights() risk.DimensionWeights {
+	db.riskWeightsMu.RLock()
+	defer db.riskWeightsMu.RUnlock()
+	if !db.riskWeightsSet {
+		return risk.DefaultDimensionWeights()
+	}
+	return db.riskWeights
+}
+
 // BatchDecayVectors 对所有向量施加衰减（定期调用，如每小时一次）。
 //
-// 衰减公式：vec *= DecayFactor(自上次快照写入以来的天数)。
+// 衰减公式：vec *= 0.5^(自上次快照写入以来的天数 / 半衰期)。
+//
+// 衰减在**一条 UPDATE 里**按各行自己的 updated_at 计算因子，不再「先全表读、再逐行
+// 全列回写」：后者会把写回期间事件 worker 刚写入的新快照覆盖成旧值的衰减结果，谁后写
+// 谁赢。单条语句与删除同处一个事务，读到的行与写回的行不会错位。
 //
 // 基准取 updated_at 而不是 last_event_at：向量值代表「上次写库时的风险」，每拍衰减的
 // 只能是这段间隔；若每拍都按「距事件的天数」重算，一小时的节拍会把同一个衰减因子反复
-// 乘上去，向量在半天内就被压到零，7 天半衰期名存实亡。写回时 last_event_at 保持原值，
-// updated_at 由 UpsertRiskVector 刷成当前时刻，下一拍从这里继续。
+// 乘上去，向量在半天内就被压到零，7 天半衰期名存实亡。last_event_at 保持原值，
+// updated_at 刷成当前时刻，下一拍从这里继续。
 //
-// 衰减后向量接近 0 时直接删除，避免数据库无限增长。
+// 衰减后加权和接近 0 的向量直接删除，避免数据库无限增长；权重与引擎同源。
 func (db *DB) BatchDecayVectors(now int64) error {
-	// 先读完所有行再关闭迭代器，避免在单连接模式下嵌套写操作导致死锁
-	rows, err := db.conn.Query(
-		`SELECT ip, failure, ban, scan, bruteforce, ddos, geo, cluster, last_event_at, updated_at
-		 FROM ip_risk_vectors`,
-	)
+	weights := db.riskDecayWeights()
+
+	tx, err := db.conn.Begin()
 	if err != nil {
-		return fmt.Errorf("query all risk_vectors: %w", err)
+		return fmt.Errorf("begin risk vector decay: %w", err)
+	}
+	defer tx.Rollback()
+
+	decayExpr := "pow(0.5, MAX(0, ? - updated_at) / 86400.0 / ?)"
+	if _, err := tx.Exec(
+		`UPDATE ip_risk_vectors SET
+			failure = failure * `+decayExpr+`,
+			ban = ban * `+decayExpr+`,
+			scan = scan * `+decayExpr+`,
+			bruteforce = bruteforce * `+decayExpr+`,
+			ddos = ddos * `+decayExpr+`,
+			geo = geo * `+decayExpr+`,
+			cluster = cluster * `+decayExpr+`,
+			updated_at = ?
+		 WHERE updated_at <= ?`,
+		now, risk.HalfLifeDays,
+		now, risk.HalfLifeDays,
+		now, risk.HalfLifeDays,
+		now, risk.HalfLifeDays,
+		now, risk.HalfLifeDays,
+		now, risk.HalfLifeDays,
+		now, risk.HalfLifeDays,
+		now, now,
+	); err != nil {
+		return fmt.Errorf("decay risk vectors: %w", err)
 	}
 
-	type decayEntry struct {
-		ip          string
-		vec         risk.RiskVector
-		lastEventAt int64
-		updatedAt   int64
-	}
-	var entries []decayEntry
-	var toDelete []string
-
-	for rows.Next() {
-		var entry decayEntry
-		if err := rows.Scan(
-			&entry.ip,
-			&entry.vec.Failure,
-			&entry.vec.Ban,
-			&entry.vec.Scan,
-			&entry.vec.Bruteforce,
-			&entry.vec.DDoS,
-			&entry.vec.Geo,
-			&entry.vec.Cluster,
-			&entry.lastEventAt,
-			&entry.updatedAt,
-		); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan risk_vector: %w", err)
-		}
-
-		days := risk.DaysSince(now, entry.updatedAt)
-		entry.vec.Decay(days)
-
-		if entry.vec.IsZero() || (entry.vec.Total(risk.DefaultDimensionWeights()) < 0.01) {
-			toDelete = append(toDelete, entry.ip)
-			continue
-		}
-		entries = append(entries, entry)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("iterate risk_vectors: %w", err)
-	}
-	rows.Close()
-
-	// 关闭迭代器后再执行写操作
-	for _, entry := range entries {
-		if err := db.UpsertRiskVector(entry.ip, entry.vec, entry.lastEventAt); err != nil {
-			return fmt.Errorf("update decayed vector for %s: %w", entry.ip, err)
-		}
+	if _, err := tx.Exec(
+		`DELETE FROM ip_risk_vectors
+		 WHERE failure * ? + ban * ? + scan * ? + bruteforce * ? + ddos * ? + geo * ? + cluster * ? < 0.01
+		   AND updated_at = ?`,
+		weights.Failure, weights.Ban, weights.Scan, weights.Bruteforce,
+		weights.DDoS, weights.Geo, weights.Cluster, now,
+	); err != nil {
+		return fmt.Errorf("delete decayed risk vectors: %w", err)
 	}
 
-	for _, ip := range toDelete {
-		if err := db.DeleteRiskVector(ip); err != nil {
-			return fmt.Errorf("delete zero vector for %s: %w", ip, err)
-		}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit risk vector decay: %w", err)
 	}
-
 	return nil
 }
 
@@ -212,11 +223,13 @@ func (db *DB) GetAllRiskVectors(limit int) ([]RiskVectorRow, error) {
 	if limit <= 0 {
 		limit = defaultLimit
 	}
-	query := `SELECT ip, failure, ban, scan, bruteforce, ddos, geo, cluster, last_event_at, updated_at
+	rows, err := db.conn.Query(
+		`SELECT ip, failure, ban, scan, bruteforce, ddos, geo, cluster, last_event_at, updated_at
 		 FROM ip_risk_vectors
-		 ORDER BY (failure + ban + scan + bruteforce + ddos + geo + cluster) DESC`
-	query += fmt.Sprintf(" LIMIT %d", limit)
-	rows, err := db.conn.Query(query)
+		 ORDER BY (failure + ban + scan + bruteforce + ddos + geo + cluster) DESC
+		 LIMIT ?`,
+		limit,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("query all risk_vectors: %w", err)
 	}
@@ -245,6 +258,19 @@ func (db *DB) GetAllRiskVectors(limit int) ([]RiskVectorRow, error) {
 		return nil, fmt.Errorf("iterate risk_vectors: %w", err)
 	}
 	return result, nil
+}
+
+// CountRiskVectors 返回风险向量表的总行数（与 GetAllRiskVectors 的筛选条件一致：
+// 当前表没有额外过滤，COUNT(*) 即全集）。
+//
+// 列表接口的 total 要用它：拿本次返回的条数当 total，会在记录超过一页时把「共 N 条」
+// 永远钉在页大小上。
+func (db *DB) CountRiskVectors() (int, error) {
+	var count int
+	if err := db.conn.QueryRow(`SELECT COUNT(*) FROM ip_risk_vectors`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count risk_vectors: %w", err)
+	}
+	return count, nil
 }
 
 // GetHighRiskIPs 查询风险值超过阈值的 IP（用于自动封禁）。

@@ -1,6 +1,7 @@
 package persist
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -82,4 +83,114 @@ func TestRiskVectorDecaySchedulerRuns(t *testing.T) {
 		row, err := db.GetRiskVector(ip)
 		return err == nil && row != nil && row.Vector.Failure > 3.9 && row.Vector.Failure < 4.1
 	})
+}
+
+// CountRiskVectors 是全表条数，不是本次列表查询的返回条数。
+func TestCountRiskVectors(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Now().Unix()
+	for i := 1; i <= 3; i++ {
+		ip := "203.0.113." + string(rune('0'+i))
+		if err := db.UpsertRiskVector(ip, risk.RiskVector{Failure: float64(i)}, now); err != nil {
+			t.Fatalf("写向量 %s 失败: %v", ip, err)
+		}
+	}
+	got, err := db.CountRiskVectors()
+	if err != nil {
+		t.Fatalf("CountRiskVectors 失败: %v", err)
+	}
+	if got != 3 {
+		t.Fatalf("CountRiskVectors = %d，期望 3", got)
+	}
+}
+
+// 衰减与事件写入并发时，进程内的新快照不能被「读旧值再全列写回」覆盖掉。
+//
+// 旧实现先全表读、再逐行把读到的旧值衰减后写回；这中间 worker 写入的新向量会被后写
+// 的旧值盖掉，谁后写谁赢。这里让衰减循环与 upsert 循环并行，每次 upsert 之后立刻读回：
+// 新实现是一条原子 UPDATE（按各行 updated_at 现算因子），读到的只会是刚写入的 100
+// 或它的同秒衰减（≈100），不会退回旧快照的 0/1。
+func TestBatchDecayVectorsDoesNotOverwriteConcurrentUpsert(t *testing.T) {
+	db := newTestDB(t)
+	const target = "203.0.113.70"
+	if err := db.UpsertRiskVector(target, risk.RiskVector{Failure: 1}, time.Now().Unix()); err != nil {
+		t.Fatalf("预置向量失败: %v", err)
+	}
+	ageVector(t, db, target, 7*24*time.Hour)
+
+	// 拉长旧实现的读-写窗口：表里多放一些行，衰减一趟需要更久。
+	for i := 0; i < 200; i++ {
+		ip := fmt.Sprintf("203.0.114.%d", i)
+		if err := db.UpsertRiskVector(ip, risk.RiskVector{Failure: 100}, time.Now().Unix()); err != nil {
+			t.Fatalf("填充向量 %s 失败: %v", ip, err)
+		}
+	}
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if err := db.BatchDecayVectors(time.Now().Unix()); err != nil {
+				t.Errorf("并发衰减失败: %v", err)
+				return
+			}
+		}
+	}()
+
+	const rounds = 300
+	var lost bool
+	for i := 0; i < rounds; i++ {
+		if err := db.UpsertRiskVector(target, risk.RiskVector{Failure: 100}, time.Now().Unix()); err != nil {
+			t.Errorf("第 %d 轮写向量失败: %v", i, err)
+			break
+		}
+		row, err := db.GetRiskVector(target)
+		if err != nil {
+			t.Errorf("第 %d 轮读向量失败: %v", i, err)
+			break
+		}
+		if row == nil || row.Vector.Failure < 99 {
+			got := 0.0
+			if row != nil {
+				got = row.Vector.Failure
+			}
+			t.Errorf("第 %d 轮 upsert 后 failure = %v，期望 ≈100：并发衰减把旧快照写了回来", i, got)
+			lost = true
+			break
+		}
+	}
+	close(stop)
+	<-done
+	if lost {
+		t.Log("并发窗口内出现过旧快照覆盖")
+	}
+}
+
+// 近零清理由注入的权重决定：权重只算 ban 时，只剩 failure 的记录就是近零。
+//
+// 权重必须与引擎同源，库里再写死一份默认值会让同一向量在判定与清理两处得到不同答案。
+func TestBatchDecayVectorsUsesInjectedWeights(t *testing.T) {
+	db := newTestDB(t)
+	ip := "203.0.113.71"
+	if err := db.UpsertRiskVector(ip, risk.RiskVector{Failure: 100}, time.Now().Unix()); err != nil {
+		t.Fatalf("写向量失败: %v", err)
+	}
+	db.SetRiskVectorWeights(risk.DimensionWeights{Ban: 1})
+
+	if err := db.BatchDecayVectors(time.Now().Unix()); err != nil {
+		t.Fatalf("衰减失败: %v", err)
+	}
+	row, err := db.GetRiskVector(ip)
+	if err != nil {
+		t.Fatalf("读向量失败: %v", err)
+	}
+	if row != nil {
+		t.Fatalf("failure=100 但权重只算 ban 时应判近零删除，实际 failure=%v", row.Vector.Failure)
+	}
 }

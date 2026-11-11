@@ -39,50 +39,22 @@ func DetectPeriodicAttackers(db *persist.DB, minEvents int, limit int, eventLimi
 	if limit <= 0 {
 		limit = 20
 	}
-	if eventLimit <= 0 {
-		eventLimit = 10000
-	}
+	// eventLimit 保留在签名里供既有调用方使用；间隔统计已按地址在 SQL 内聚合，
+	// 不再需要用它截断事件行数。
+	_ = eventLimit
 
-	events, err := db.GetBanEvents(eventLimit)
+	ipStats, err := db.GetIPBanIntervalStats()
 	if err != nil {
 		return nil, err
 	}
 
-	ipEvents := make(map[string][]int64)
-	ipJail := make(map[string]string)
-	latestBan := make(map[string]int64)
-	for _, e := range events {
-		ipEvents[e.IP] = append(ipEvents[e.IP], e.BannedAt)
-		// jail_name 取该地址**最近一次**封禁所属的 jail：事件按 banned_at 降序读入，
-		// 直接覆盖会停在最早那条的归属上（同一个地址换了 jail 时就会报错来源）。
-		if at, ok := latestBan[e.IP]; !ok || e.BannedAt >= at {
-			latestBan[e.IP] = e.BannedAt
-			ipJail[e.IP] = e.JailName
-		}
-	}
-
 	var attackers []PeriodicAttackFinding
-	for ip, timestamps := range ipEvents {
-		if len(timestamps) < minEvents {
+	for _, stats := range ipStats {
+		if stats.EventCount < minEvents {
 			continue
 		}
 
-		sort.Slice(timestamps, func(i, j int) bool { return timestamps[i] < timestamps[j] })
-
-		var intervals []float64
-		for i := 1; i < len(timestamps); i++ {
-			intervals = append(intervals, float64(timestamps[i]-timestamps[i-1]))
-		}
-
-		if len(intervals) == 0 {
-			continue
-		}
-
-		var sum float64
-		for _, v := range intervals {
-			sum += v
-		}
-		avg := sum / float64(len(intervals))
+		avg := stats.AvgInterval
 		if avg <= 0 {
 			// 全部事件落在同一秒（同一 IP 被多个 jail 同时封禁等），间隔恒为 0。
 			// 这不是「完美等间隔」：零均值下变异系数无定义，继续算会把重复数据
@@ -90,13 +62,7 @@ func DetectPeriodicAttackers(db *persist.DB, minEvents int, limit int, eventLimi
 			continue
 		}
 
-		var varianceSum float64
-		for _, v := range intervals {
-			diff := v - avg
-			varianceSum += diff * diff
-		}
-		stddev := math.Sqrt(varianceSum / float64(len(intervals)))
-		cv := stddev / avg
+		cv := stats.StdDev / avg
 
 		regularity := 0.0
 		if cv < 0.3 {
@@ -104,15 +70,13 @@ func DetectPeriodicAttackers(db *persist.DB, minEvents int, limit int, eventLimi
 		}
 
 		attackers = append(attackers, PeriodicAttackFinding{
-			IP:          ip,
-			JailName:    ipJail[ip],
+			IP:          stats.IP,
+			JailName:    stats.JailName,
 			Regularity:  regularity,
 			AvgInterval: avg,
 			Jitter:      cv,
-			StdDev:      stddev,
-			EventCount:  len(timestamps),
-			// 交副本而不是内部切片：调用方（含未来的缓存）排序或截断它不能改到本层的账。
-			Timestamps: append([]int64(nil), timestamps...),
+			StdDev:      stats.StdDev,
+			EventCount:  stats.EventCount,
 		})
 	}
 
@@ -129,6 +93,21 @@ func DetectPeriodicAttackers(db *persist.DB, minEvents int, limit int, eventLimi
 
 	if len(attackers) > limit {
 		attackers = attackers[:limit]
+	}
+
+	// 原始时刻只为最终入选的地址取回：载荷要的是证据，先把候选缩到 limit 条，
+	// 避免为整张表搬明细。
+	ips := make([]string, 0, len(attackers))
+	for _, a := range attackers {
+		ips = append(ips, a.IP)
+	}
+	timestamps, err := db.BanTimestampsByIPs(ips)
+	if err != nil {
+		return nil, err
+	}
+	for i := range attackers {
+		// 交副本而不是内部切片：调用方（含未来的缓存）排序或截断它不能改到本层的账。
+		attackers[i].Timestamps = append([]int64(nil), timestamps[attackers[i].IP]...)
 	}
 
 	return attackers, nil
@@ -166,71 +145,106 @@ func DetectCollaborativeAttacks(db *persist.DB, windowSeconds int, minIPs int, l
 	if limit <= 0 {
 		limit = 20
 	}
-	if eventLimit <= 0 {
-		eventLimit = 10000
-	}
+	// eventLimit 保留在签名里供既有调用方使用；滑窗改为按 (jail, 时间) 排序流式扫描，
+	// 内存上界是「一个窗口内的事件数」，不再需要按行数截断输入。
+	_ = eventLimit
 
-	events, err := db.GetBanEvents(eventLimit)
-	if err != nil {
-		return nil, err
-	}
-
-	// 时间戳要和地址一起排：只看时刻就无法回答「这个窗口里有谁」。
-	type jailBan struct {
-		ts int64
-		ip string
-	}
-	jailEvents := make(map[string][]jailBan)
-	for _, e := range events {
-		jailEvents[e.JailName] = append(jailEvents[e.JailName], jailBan{ts: e.BannedAt, ip: e.IP})
+	type candidateWindow struct {
+		start   int64
+		end     int64
+		records []persist.JailBanRecord
 	}
 
 	var attacks []CollaborativeAttackFinding
-	for jail, bans := range jailEvents {
-		sort.Slice(bans, func(i, j int) bool {
-			if bans[i].ts != bans[j].ts {
-				return bans[i].ts < bans[j].ts
-			}
-			return bans[i].ip < bans[j].ip
-		})
+	var (
+		curJail   string
+		window    []persist.JailBanRecord
+		ipCounts  map[string]int
+		candidate *candidateWindow
+		found     bool
+	)
 
-		for i := 0; i < len(bans); i++ {
-			windowEnd := bans[i].ts + int64(windowSeconds)
-			seen := make(map[string]bool)
-			var count int
-			for j := i; j < len(bans) && bans[j].ts <= windowEnd; j++ {
-				count++
-				seen[bans[j].ip] = true
-			}
-
-			// 判据是**窗口内的唯一地址数**（参数名就叫 minIPs）：旧实现拿事件数去比，
-			// 于是同一个 IP 在窗口里被封 3 次会被读成「3 个源联动」。
-			if len(seen) < minIPs {
-				continue
-			}
-
-			ips := make([]string, 0, len(seen))
-			for ip := range seen {
-				ips = append(ips, ip)
-			}
-			sort.Strings(ips)
-
-			attacks = append(attacks, CollaborativeAttackFinding{
-				JailName:    jail,
-				WindowStart: bans[i].ts,
-				WindowEnd:   windowEnd,
-				IPs:         ips[:min(len(ips), MaxWindowIPs)],
-				UniqueIPs:   len(seen),
-				BanCount:    count,
-				// 强度按窗口内的封禁事件数线性放大，10 次封顶 100：保持旧口径不变，
-				// 换判据（改按地址数）会让面板上同一根柱子的含义前后对不上。
-				Score: math.Min(100, float64(count)/10*100),
-			})
-			// 每个 jail 只报**第一个**达标窗口：同一批攻击在滑窗里会命中几十个起点，
-			// 全列出来等于把一次事件复制成一排，而 limit 会把别的 jail 挤出载荷。
-			break
-		}
+	resetJail := func(jail string) {
+		curJail = jail
+		window = nil
+		ipCounts = make(map[string]int)
+		candidate = nil
+		found = false
 	}
+
+	finalizeCandidate := func() {
+		if candidate == nil {
+			return
+		}
+		seen := make(map[string]bool, len(candidate.records))
+		for _, r := range candidate.records {
+			seen[r.IP] = true
+		}
+		ips := make([]string, 0, len(seen))
+		for ip := range seen {
+			ips = append(ips, ip)
+		}
+		sort.Strings(ips)
+		count := len(candidate.records)
+		attacks = append(attacks, CollaborativeAttackFinding{
+			JailName:    curJail,
+			WindowStart: candidate.start,
+			WindowEnd:   candidate.end,
+			IPs:         ips[:min(len(ips), MaxWindowIPs)],
+			UniqueIPs:   len(seen),
+			BanCount:    count,
+			// 强度按窗口内的封禁事件数线性放大，10 次封顶 100：保持旧口径不变，
+			// 换判据（改按地址数）会让面板上同一根柱子的含义前后对不上。
+			Score: math.Min(100, float64(count)/10*100),
+		})
+		candidate = nil
+		found = true
+	}
+
+	err := db.StreamJailBans(func(r persist.JailBanRecord) error {
+		if r.JailName != curJail {
+			finalizeCandidate()
+			resetJail(r.JailName)
+		}
+		if found {
+			return nil
+		}
+		// 已锁定起点：只继续收集起点窗口内的证据，窗口右边界之后的行不再考虑——
+		// 每个 jail 只报**第一个**达标窗口（同一批攻击在滑窗里会命中几十个起点）。
+		if candidate != nil {
+			if r.BannedAt <= candidate.end {
+				candidate.records = append(candidate.records, r)
+			} else {
+				finalizeCandidate()
+			}
+			return nil
+		}
+
+		window = append(window, r)
+		ipCounts[r.IP]++
+		// 起点早于「当前时刻 - 窗口」的行，其窗口已经闭合且当时未达标，可以丢弃。
+		for len(window) > 0 && window[0].BannedAt < r.BannedAt-int64(windowSeconds) {
+			old := window[0]
+			window = window[1:]
+			ipCounts[old.IP]--
+			if ipCounts[old.IP] == 0 {
+				delete(ipCounts, old.IP)
+			}
+		}
+		if len(ipCounts) >= minIPs {
+			start := window[0].BannedAt
+			candidate = &candidateWindow{
+				start:   start,
+				end:     start + int64(windowSeconds),
+				records: append([]persist.JailBanRecord(nil), window...),
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	finalizeCandidate()
 
 	sort.Slice(attacks, func(i, j int) bool {
 		if attacks[i].Score != attacks[j].Score {

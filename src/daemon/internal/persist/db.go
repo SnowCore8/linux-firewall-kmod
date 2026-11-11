@@ -4,15 +4,24 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/risk"
 )
 
 type DB struct {
 	conn   *sql.DB
 	logger *slog.Logger
 	path   string
+
+	// riskWeights 是风险向量衰减/清理判据使用的维度权重，由装配多维引擎的一方
+	// 通过 SetRiskVectorWeights 写入，保证库侧的后台衰减与引擎读的是同一份权重。
+	riskWeightsMu  sync.RWMutex
+	riskWeights    risk.DimensionWeights
+	riskWeightsSet bool
 }
 
 type Config struct {
