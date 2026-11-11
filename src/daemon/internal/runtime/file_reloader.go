@@ -108,6 +108,9 @@ func (r *fileReloader) Rollback(cfg *config.Config) error {
 func (r *fileReloader) applyConfig(cfg *config.Config, newCfg config.Config) {
 	config.LockConfig()
 	running := cfg.ListenAddress()
+	// 日志的 sink、级别与格式只在启动时的 logger.Init 建立，换入新配置不会重建它们；
+	// 记下旧值，换入后若变了就告警，否则表现为「文件里改了 log_file、面板却一直空白」。
+	oldLogFile, oldLogLevel, oldLogFormat := cfg.LogFile, cfg.LogLevel, cfg.LogFormat
 	// 出口探测得到的本机坐标不是 YAML 键，只在启动时填一次；新配置从文件重建后这两组
 	// 字段为空，若直接换入，一次热重载就会把地图上的本机标记抹掉，直到进程重启才恢复。
 	// 文件显式给了坐标时以文件为准（ServerCoordsSet），探测结果只作兜底。
@@ -122,5 +125,19 @@ func (r *fileReloader) applyConfig(cfg *config.Config, newCfg config.Config) {
 	if configured != running {
 		r.logger.Warn("HTTP 监听地址已改变，本进程不会重新绑定，需重启守护进程才会生效",
 			"running", running, "configured", configured)
+	}
+	// 日志键同样只在启动时生效。逐项带 old/new 说破是哪一个键动了：只说「日志配置变了」
+	// 时，运维还得自己翻两份文件比对。
+	if oldLogFile != newCfg.LogFile {
+		r.logger.Warn("log_file 已改变，本进程不会重建日志输出，需重启守护进程才会生效",
+			"old", oldLogFile, "new", newCfg.LogFile)
+	}
+	if oldLogLevel != newCfg.LogLevel {
+		r.logger.Warn("log_level 已改变，本进程不会重建日志级别，需重启守护进程才会生效",
+			"old", oldLogLevel, "new", newCfg.LogLevel)
+	}
+	if oldLogFormat != newCfg.LogFormat {
+		r.logger.Warn("log_format 已改变，本进程不会重建日志格式，需重启守护进程才会生效",
+			"old", oldLogFormat, "new", newCfg.LogFormat)
 	}
 }

@@ -180,6 +180,33 @@ func TestInitRegistersConfiguredLogFile(t *testing.T) {
 	}
 }
 
+// TestLogFilePathRegistrationRule 钉住「登记路径 = 实际写入路径」的两半：
+// 目的地含文件时登记 resolveLogPath 的结果（未配置 log_file 也登记默认路径，否则日志
+// 接口回 503 而文件里明明有内容）；目的地不含文件时不得登记。
+func TestLogFilePathRegistrationRule(t *testing.T) {
+	if got := resolveLogPath(""); got != defaultLogPath {
+		t.Fatalf("未配置 log_file 时应解析到默认路径，实际 %q", got)
+	}
+	if got := resolveLogPath("/tmp/x.log"); got != "/tmp/x.log" {
+		t.Fatalf("显式配置时应原样返回，实际 %q", got)
+	}
+
+	tests := []struct {
+		destination uint8
+		want        bool
+	}{
+		{config.LogDestinationSyslog, false},
+		{config.LogDestinationJournal, false},
+		{config.LogDestinationFile, true},
+		{config.LogDestinationBoth, true},
+	}
+	for _, tt := range tests {
+		if got := destinationWritesFile(tt.destination); got != tt.want {
+			t.Errorf("destinationWritesFile(%d) = %v，想要 %v", tt.destination, got, tt.want)
+		}
+	}
+}
+
 // TestSetLogFileRegistersOnce 断言路径只可登记一次，空路径被拒绝。
 func TestSetLogFileRegistersOnce(t *testing.T) {
 	resetLogFilePath()

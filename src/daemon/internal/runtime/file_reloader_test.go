@@ -114,6 +114,46 @@ func TestReloadAdoptsConfiguredListenAddress(t *testing.T) {
 	}
 }
 
+// TestReloadWarnsOnLogSettingsChange 钉住「日志键热重载不生效、但必须说破」。
+//
+// slog 的 sink、级别与格式只在启动时的 logger.Init 建立，重载整份换入配置不会重建它们；
+// 不告警时现场表现为「文件里改了 log_file、面板却一直空白」。
+func TestReloadWarnsOnLogSettingsChange(t *testing.T) {
+	dir := t.TempDir()
+	authLog := filepath.Join(dir, "auth.log")
+	writeFile(t, authLog, "")
+	newLogFile := filepath.Join(dir, "new.log")
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, strings.Join([]string{
+		"defaults:",
+		"  log_file: " + newLogFile,
+		"  log_level: 4",
+		"  log_format: plain",
+		"jails:",
+		"  sshd:",
+		"    enabled: true",
+		"    log_files:",
+		"      - " + authLog,
+		"",
+	}, "\n"))
+
+	cfg := config.Default()
+	var logs bytes.Buffer
+	reloader := NewFileReloader(path, true, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err := reloader.Reload(&cfg); err != nil {
+		t.Fatalf("重载失败: %v", err)
+	}
+	for _, want := range []string{"log_file 已改变", "log_level 已改变", "log_format 已改变"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("缺少 %q 告警，日志: %s", want, logs.String())
+		}
+	}
+	// 配置本身就换了：告警说的是「新值要重启才生效」，不是「重载没吃到新值」。
+	if cfg.LogFile != newLogFile {
+		t.Errorf("cfg.LogFile = %q，期望 %q", cfg.LogFile, newLogFile)
+	}
+}
+
 // TestReloadInDirectoryModeUsesTheDirectory 钉住随包 systemd 那条路：进程以 `-C <目录>`
 // 启动，重载器拿到的必须是**那个目录**。
 //

@@ -450,10 +450,14 @@ func run(args []string) error {
 				GetConfigPath:    func() string { return configSource },
 				JailController:   jailEnabled,
 				LogFilePath: func() string {
-					// 每次请求现取：热重载会整份替换 cfg，直接读 cfg.LogFile 就是数据竞争。
-					config.RLockConfig()
-					defer config.RUnlockConfig()
-					return cfg.LogFile
+					// 重载不会重建 slog sink，实际写入目标只在启动时确定；只报日志系统
+					// 登记的那个路径，让接口与文件一致。未登记说明目的地不含文件
+					// （syslog/journal），此时回空串让接口如实报「未配置」，而不是让
+					// 面板去读一个没人写入的 cfg.LogFile。
+					if path, ok := registeredLogFilePath(); ok {
+						return path
+					}
+					return ""
 				},
 				// GET /health 的读数来源：链路状态只有事件泵这份快照知道，procfs 在场与否
 				// 由本进程自己 stat。
@@ -765,6 +769,12 @@ func kernelModuleVersion() string {
 // *slog.Logger 始终可用，各调用点沿用 logger.Info/Warn/Debug 形式不变。
 func newLogger(cfg *config.Config) *slog.Logger {
 	return logger.Init(cfg)
+}
+
+// registeredLogFilePath 返回日志系统实际写入的文件路径（含未配置 log_file 时的默认
+// 路径）。run 内的局部 logger 是 *slog.Logger、遮蔽了包名，故把包级调用收在这里。
+func registeredLogFilePath() (string, bool) {
+	return logger.LogFilePath()
 }
 
 // warnIfFactoryDefaultCredentials 在面板仍用出厂凭据时告警，绝不拒绝启动。

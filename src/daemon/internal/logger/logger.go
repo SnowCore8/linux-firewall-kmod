@@ -71,6 +71,12 @@ func levelFromConfig(level uint8) slog.Level {
 	}
 }
 
+// destinationWritesFile 报告日志目的地是否包含文件 sink。只有包含文件时登记的路径
+// 才与实际写入一致；syslog/journal 单独使用时不能登记，否则面板会去读一个没人写的文件。
+func destinationWritesFile(destination uint8) bool {
+	return destination == config.LogDestinationFile || destination == config.LogDestinationBoth
+}
+
 // resolveLogPath 返回配置的日志文件路径；未配置或为空时用默认路径。
 func resolveLogPath(configured string) string {
 	if configured != "" {
@@ -92,11 +98,13 @@ func warnStderr(format string, args ...any) {
 // Init 按配置初始化日志系统并返回结构化日志器。
 //
 // 调用方此后经返回的 *slog.Logger 使用日志（logger.Info/Warn/Error/Debug），不存在全局
-// 实例。配置了 log_file 时，路径同时登记给日志查看器使用（见 SetLogFile）；
-// 未配置时保持未登记。
+// 实例。登记给日志查看器的是 resolveLogPath 的结果，而不是 cfg.LogFile：未配置
+// log_file 时 sink 仍写到默认路径，登记空串会让日志接口按「未配置」回 503，面板一片
+// 空白而文件里明明有内容。目的地不含文件时（syslog/journal 单独使用）不登记，否则
+// 面板会去读一个没有任何写入的文件。
 func Init(cfg *config.Config) *slog.Logger {
-	if cfg.LogFile != "" {
-		if err := SetLogFile(cfg.LogFile); err != nil {
+	if destinationWritesFile(cfg.LogDestination) {
+		if err := SetLogFile(resolveLogPath(cfg.LogFile)); err != nil {
 			warnStderr("登记日志文件路径失败: %v", err)
 		}
 	}
