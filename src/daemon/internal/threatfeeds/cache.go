@@ -2,6 +2,7 @@ package threatfeeds
 
 import (
 	"net/netip"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,12 +16,17 @@ const MaxCacheEntries = 1_000_000
 //
 // 设计目标：
 //   - 原子更新：Merge 时构建新 map，避免长时间持有写锁
-//   - 精确匹配 + CIDR 匹配：先查精确 IP，再遍历 CIDR
+//   - 精确匹配 + CIDR 匹配：精确条目按地址直查；网段按前缀长度分桶，
+//     查询时只对「实际出现过的长度」各做一次 map 查找，不遍历全部条目
 //   - 过期清理：Lookup 时跳过已过期条目
 type FeedCache struct {
 	mu      sync.RWMutex
-	entries map[string]*FeedEntry // key: IP.String() 或 CIDR.String()
-	stats   CacheStats
+	entries map[string]*FeedEntry // key: 全长条目用地址，网段条目用掩码后的 prefix
+	// cidr 按前缀长度分桶，桶键是掩码后的网段字符串。分桶的原因：判定层每行日志都
+	// 查一次缓存，网段条目有数千条，逐条 Contains 会让热路径变成 O(条目数)。
+	cidr     map[uint8]map[string]*FeedEntry
+	cidrLens []uint8
+	stats    CacheStats
 	// 命中/未命中计数器用 atomic，避免在读锁下修改 stats 导致数据竞争
 	exactHits atomic.Uint64
 	cidrHits  atomic.Uint64
@@ -45,9 +51,44 @@ type CacheStats struct {
 
 // NewFeedCache 创建新的缓存。
 func NewFeedCache() *FeedCache {
-	return &FeedCache{
+	c := &FeedCache{
 		entries: make(map[string]*FeedEntry),
+		cidr:    make(map[uint8]map[string]*FeedEntry),
 	}
+	return c
+}
+
+// entryKey 返回条目在缓存里的规范键：全长条目用裸地址，网段用掩码后的 prefix。
+//
+// 全长条目必须落到裸地址键上，否则 Lookup 的 `ip.String()` 永远对不上
+// `prefix.String()`（带 `/32`），精确快路径会退化成全表遍历。
+func entryKey(p netip.Prefix) (key string, isCIDR bool, bits uint8) {
+	p = p.Masked()
+	addr := p.Addr()
+	if (addr.Is4() && p.Bits() == 32) || (addr.Is6() && p.Bits() == 128) {
+		return addr.String(), false, 0
+	}
+	return p.String(), true, uint8(p.Bits())
+}
+
+// rebuildIndexLocked 按 entries 重建网段索引；调用方必须持有写锁。
+func (c *FeedCache) rebuildIndexLocked() {
+	cidr := make(map[uint8]map[string]*FeedEntry)
+	for key, e := range c.entries {
+		if _, isCIDR, bits := entryKey(e.IP); isCIDR {
+			if cidr[bits] == nil {
+				cidr[bits] = make(map[string]*FeedEntry)
+			}
+			cidr[bits][key] = e
+		}
+	}
+	lens := make([]uint8, 0, len(cidr))
+	for bits := range cidr {
+		lens = append(lens, bits)
+	}
+	sort.Slice(lens, func(i, j int) bool { return lens[i] < lens[j] })
+	c.cidr = cidr
+	c.cidrLens = lens
 }
 
 // Merge 合并新条目到缓存。
@@ -77,12 +118,13 @@ func (c *FeedCache) Merge(newEntries []FeedEntry) {
 			break
 		}
 		e := &newEntries[i]
-		key := e.IP.String()
+		key, _, _ := entryKey(e.IP)
 		merged[key] = e
 	}
 
 	// 替换并更新统计
 	c.entries = merged
+	c.rebuildIndexLocked()
 	c.stats.TotalEntries = len(merged)
 	c.stats.LastUpdate = time.Now()
 	c.mu.Unlock()
@@ -93,30 +135,35 @@ func (c *FeedCache) Merge(newEntries []FeedEntry) {
 
 // Lookup 查询 IP 是否在缓存中。
 //
-// 先精确匹配，再 CIDR 匹配。跳过已过期条目。
+// 先查精确索引，再按出现过的前缀长度逐桶查网段（桶数即前缀种类数，通常个位数）。
+// 跳过已过期条目。
 func (c *FeedCache) Lookup(ip netip.Addr) (*FeedEntry, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	now := time.Now()
+	ip = ip.Unmap()
 
 	// 精确匹配
-	key := ip.String()
-	if e, ok := c.entries[key]; ok {
+	if e, ok := c.entries[ip.String()]; ok {
 		if now.Before(e.ExpiresAt) {
 			c.exactHits.Add(1)
 			return e, true
 		}
 	}
 
-	// CIDR 匹配
-	for _, e := range c.entries {
-		if now.After(e.ExpiresAt) {
+	// CIDR 匹配：按前缀长度分桶，每桶一次 map 查找
+	for _, bits := range c.cidrLens {
+		p := netip.PrefixFrom(ip, int(bits))
+		if !p.IsValid() {
+			// 前缀长度超出该地址族（v4 地址遇到 >32 的桶）时跳过。
 			continue
 		}
-		if e.IP.Contains(ip) {
-			c.cidrHits.Add(1)
-			return e, true
+		if e, ok := c.cidr[bits][p.Masked().String()]; ok {
+			if now.Before(e.ExpiresAt) {
+				c.cidrHits.Add(1)
+				return e, true
+			}
 		}
 	}
 
@@ -141,6 +188,8 @@ func (c *FeedCache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries = make(map[string]*FeedEntry)
+	c.cidr = make(map[uint8]map[string]*FeedEntry)
+	c.cidrLens = nil
 	c.stats = CacheStats{}
 	c.exactHits.Store(0)
 	c.cidrHits.Store(0)
@@ -172,10 +221,15 @@ func (c *FeedCache) Cleanup() {
 	defer c.mu.Unlock()
 
 	now := time.Now()
+	removed := false
 	for k, e := range c.entries {
 		if now.After(e.ExpiresAt) {
 			delete(c.entries, k)
+			removed = true
 		}
+	}
+	if removed {
+		c.rebuildIndexLocked()
 	}
 	c.stats.TotalEntries = len(c.entries)
 	c.updateActiveCountLocked()

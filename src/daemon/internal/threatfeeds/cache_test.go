@@ -106,6 +106,44 @@ func TestFeedCache_Lookup_CIDR(t *testing.T) {
 	}
 }
 
+func TestFeedCache_Lookup_ExactUsesExactIndex(t *testing.T) {
+	// 全长条目必须走精确索引：查询一次就记一次 ExactHits，而不是退化到网段遍历
+	// （旧实现把 prefix.String() 当键，永远匹配不上 ip.String()）。
+	cache := NewFeedCache()
+	entries := []FeedEntry{
+		{
+			IP:         netip.MustParsePrefix("192.168.1.1/32"),
+			Source:     "exact",
+			Category:   "abuse",
+			Confidence: 0.8,
+			ExpiresAt:  time.Now().Add(24 * time.Hour),
+		},
+		{
+			IP:         netip.MustParsePrefix("10.0.0.0/8"),
+			Source:     "cidr",
+			Category:   "abuse",
+			Confidence: 0.8,
+			ExpiresAt:  time.Now().Add(24 * time.Hour),
+		},
+	}
+	cache.Merge(entries)
+
+	if _, ok := cache.Lookup(netip.MustParseAddr("192.168.1.1")); !ok {
+		t.Fatal("精确条目应命中")
+	}
+	if _, ok := cache.Lookup(netip.MustParseAddr("10.1.2.3")); !ok {
+		t.Fatal("网段条目应命中")
+	}
+
+	stats := cache.Stats()
+	if stats.ExactHits != 1 {
+		t.Errorf("ExactHits = %d，想要 1", stats.ExactHits)
+	}
+	if stats.CIDRHits != 1 {
+		t.Errorf("CIDRHits = %d，想要 1", stats.CIDRHits)
+	}
+}
+
 func TestFeedCache_Expired(t *testing.T) {
 	cache := NewFeedCache()
 

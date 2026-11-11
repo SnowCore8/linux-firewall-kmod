@@ -8,7 +8,7 @@ v2.4 版本新增威胁情报源自动聚合系统，主要特性：
 
 - **自动拉取**：每日自动从公网拉取威胁情报（IPsum、FireHOL、DShield 等）
 - **智能聚合**：多源数据并发拉取、去重、聚合
-- **热重载**：SIGHUP 触发配置重载时同步刷新情报
+- **定时刷新**：按 `refresh_interval` 自动拉取，也可调用 `POST /api/v2/threat-feeds/sync` 手动同步
 - **性能隔离**：情报更新不阻塞主判定链路
 - **错误容忍**：单个源失败不影响其他源
 
@@ -85,10 +85,8 @@ INFO 情报源刷新成功 source=firehol_level1 entries=2876 duration=189ms
 
 - 启动时自动拉取所有启用的情报源
 - 每日自动刷新（间隔可配置）
-- SIGHUP 热重载时同步刷新
-- 高置信度（≥ 0.9）IP 直接封禁，跳过窗口计数
-- 中置信度（0.7-0.9）IP 降低阈值
-- 低置信度（< 0.7）IP 仅记录
+- 置信度 ≥ 0.8 的情报命中直接封禁，跳过失败窗口计数
+- 置信度 < 0.8 的命中仍按常规阈值判定
 
 ### 禁用情报源
 
@@ -140,7 +138,7 @@ INFO 情报源刷新成功 source=firehol_level1 entries=2876 duration=189ms
 **处理**：
 1. 检查网络连接
 2. 等待下次自动刷新（24 小时后）
-3. 或手动触发：`sudo kill -HUP $(pidof firewall-daemon)`
+3. 或手动触发：`curl -u admin:changeme -X POST http://127.0.0.1:9119/api/v2/threat-feeds/sync`
 
 **影响**：不影响核心封禁功能，系统退化为纯本地判定
 
@@ -179,11 +177,13 @@ threat_feeds:
   enabled: false
 ```
 
-重载配置：
+重启守护进程：
 
 ```bash
-sudo kill -HUP $(pidof firewall-daemon)
+sudo systemctl restart firewall-daemon
 ```
+
+`threat_feeds.enabled` 只在启动时决定是否创建情报管理器，SIGHUP 不会停掉它。
 
 ### 方案 2：回退配置文件
 

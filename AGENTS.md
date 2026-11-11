@@ -193,7 +193,8 @@ make test
 - **Feature Flag**：`threat_feeds.enabled`（默认 true，启用 IPsum + FireHOL Level 1）
 - **新包**：`src/daemon/internal/threatfeeds/`（types.go、config.go、manager.go、parser.go、http.go、cache.go、scheduler.go）
 - **源适配器**：`src/daemon/internal/threatfeeds/sources/`（ipsum.go、firehol.go、dshield.go、blocklist.go、feodo.go）
-- **核心能力**：自动拉取、并发刷新、错误隔离、热重载、SSRF 防护
+- **核心能力**：自动拉取、定时/手动刷新、错误隔离、SSRF 防护
+- **命中封禁**：判定链路先查情报缓存，置信度 ≥ 0.8 直接封禁（时长取 jail 的 `ban_time`，跳过失败窗口），低于阈值走常规判定；白名单与本机地址仍由内核拦截
 - **推荐情报源**：IPsum（多源聚合）、FireHOL Level 1（保守名单）、DShield、Blocklist.de、Feodo Tracker
 - **配置文档**：`docs/zh/configuration/threat-feeds.md`
 - **迁移指南**：`docs/zh/migration-threat-feeds.md`

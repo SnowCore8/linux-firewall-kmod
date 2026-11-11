@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"net/netip"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -563,5 +564,73 @@ func TestFailureIsRecordedBeforeTheScoreIsRead(t *testing.T) {
 	}
 	if out[0].Plan.FailCount < 3 {
 		t.Errorf("FailCount=%d, 应至少为 3", out[0].Plan.FailCount)
+	}
+}
+
+// fakeIntel 按 IP 注入情报命中，未列出的地址视为未命中。
+type fakeIntel map[string]struct {
+	source     string
+	confidence float64
+}
+
+func (f fakeIntel) ThreatLookup(ip netip.Addr) (string, float64, bool) {
+	hit, ok := f[ip.String()]
+	if !ok {
+		return "", 0, false
+	}
+	return hit.source, hit.confidence, true
+}
+
+// 高置信度情报命中应直接封禁，不等失败窗口攒够次数。
+func TestThreatIntelHitBansBeforeThreshold(t *testing.T) {
+	p := NewPipeline()
+	p.RegisterJail(sshdRules(t), NewJailPolicy(100, 600, 600, config.DefaultClusterConfig()))
+	p.intel = fakeIntel{
+		"203.0.113.9": {source: "ipsum", confidence: 0.9},
+	}
+
+	out, ok := p.OnChunk("sshd", ingest.NewSourceID(14), []byte(failedRec("203.0.113.9")),
+		NewTick(20_000, false), fixedFacts{score: 100}, nil)
+	if !ok {
+		t.Fatal("已注册的 jail 应接收本批")
+	}
+	if len(out) != 1 {
+		t.Fatalf("情报命中应产出恰好一条封禁意图: %d", len(out))
+	}
+	intent := out[0]
+	if intent.Jail != "sshd" || intent.IP != mustAddr(t, "203.0.113.9") {
+		t.Errorf("意图参数错误: jail=%q ip=%v", intent.Jail, intent.IP)
+	}
+	if intent.Plan.Duration != 600 || intent.Plan.BanCount != 1 || intent.Plan.FailCount != 1 {
+		t.Errorf("封禁计划应取基础时长与单次失败: %+v", intent.Plan)
+	}
+	if !strings.Contains(intent.Reason, "情报源 ipsum") {
+		t.Errorf("原因应标出情报源: %q", intent.Reason)
+	}
+}
+
+// 低于置信度下限的情报命中不改变判定路径：仍要攒够窗口次数。
+func TestThreatIntelLowConfidenceFallsBackToWindow(t *testing.T) {
+	p := NewPipeline()
+	p.RegisterJail(sshdRules(t), NewJailPolicy(3, 600, 600, config.DefaultClusterConfig()))
+	p.intel = fakeIntel{
+		"203.0.113.10": {source: "dshield", confidence: 0.7},
+	}
+
+	src := ingest.NewSourceID(15)
+	facts := fixedFacts{score: 100}
+	var out []BanIntent
+	out, _ = p.OnChunk("sshd", src, []byte(failedRec("203.0.113.10")), NewTick(30_000, false), facts, out)
+	if len(out) != 0 {
+		t.Fatalf("低置信度命中不应越过窗口: %d", len(out))
+	}
+
+	out, _ = p.OnChunk("sshd", src, []byte(failedRec("203.0.113.10")+failedRec("203.0.113.10")),
+		NewTick(30_000, false), facts, out)
+	if len(out) != 1 {
+		t.Fatalf("达到阈值后应产出封禁意图: %d", len(out))
+	}
+	if strings.Contains(out[0].Reason, "情报源") {
+		t.Errorf("低置信度命中应走常规阈值原因: %q", out[0].Reason)
 	}
 }

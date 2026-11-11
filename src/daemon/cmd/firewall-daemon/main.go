@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -265,14 +266,17 @@ func run(args []string) error {
 	// 受保护端口位图：protect_open_ports 打开时把本机非回环监听端口发给内核，
 	// 关闭时下发全零位图（语义见 config.DdosConfig.ProtectOpenPorts）。
 	//
-	// 周期性重扫而不是只在启动时发一次：监听端口随服务增减变化，内核模块重载也会
-	// 丢掉位图；每 30 秒重发一遍（8 KiB 报文）比「等下一次重启才对」更接近配置承诺。
-	var pushProtectedPorts func()
+	// 周期重扫覆盖「监听端口随服务增减」，但只有位图真的变了才发：内核每收一次都会
+	// 打一行 pr_info，无条件重发会让 dmesg 每 30 秒长一行。内核模块重载会丢掉位图，
+	// 那条路径由租约确认后的强制下发兜住（见 OnLeaseClaimed）。
+	var pushProtectedPorts func(force bool)
 	if kernelClient != nil {
-		// 租约确认与 30 秒重扫可能并发推同一份位图，计数用原子量避免数据竞争。
-		var lastCount atomic.Int64
-		lastCount.Store(-1)
-		pushProtectedPorts = func() {
+		var (
+			portsMu   sync.Mutex
+			lastPorts [contract.ProtectedPortsLen]byte
+			hasPorts  bool
+		)
+		pushProtectedPorts = func(force bool) {
 			var bitmap [contract.ProtectedPortsLen]byte
 			count := 0
 			if cfg.Ddos.ProtectOpenPorts {
@@ -283,17 +287,24 @@ func run(args []string) error {
 				}
 				bitmap, count = bmp, n
 			}
+
+			// 扫描在锁外，比较与下发在锁内：租约确认与周期重扫可能并发调用，
+			// 谁先到谁发，后到的看到相同位图直接返回。
+			portsMu.Lock()
+			defer portsMu.Unlock()
+			if !force && hasPorts && bitmap == lastPorts {
+				return
+			}
 			if _, err := kernelClient.SetProtectedPorts(bitmap); err != nil {
 				logger.Warn("下发受保护端口位图失败", "ports", count, "error", err)
 				return
 			}
-			if prev := lastCount.Swap(int64(count)); prev != int64(count) {
-				logger.Info("受保护端口位图已下发内核", "ports", count)
-			}
+			lastPorts, hasPorts = bitmap, true
+			logger.Info("受保护端口位图已下发内核", "ports", count)
 		}
 		portsToken := runtime.NewShutdown()
 		sup.Spawn("protected-ports", portsToken, func() {
-			pushProtectedPorts()
+			pushProtectedPorts(true)
 			ticker := time.NewTicker(30 * time.Second)
 			defer ticker.Stop()
 			for {
@@ -301,7 +312,7 @@ func run(args []string) error {
 				case <-portsToken.Done():
 					return
 				case <-ticker.C:
-					pushProtectedPorts()
+					pushProtectedPorts(false)
 				}
 			}
 		})
@@ -348,6 +359,38 @@ func run(args []string) error {
 	// Jail 启用状态源：HTTP API 与入站主链路共享。
 	jailEnabled := runtime.NewJailEnabledSource()
 
+	// 威胁情报源管理器：面板展示与判定层共用同一份内存缓存。
+	// 未启用或装配失败时为 nil：threat-feeds 三个 handler 按可空依赖口径应答
+	// 「服务不可用」，判定层退回纯本地窗口判定——都不阻断启动。
+	var feedMgr *threatfeeds.FeedManager
+	if cfg.ThreatFeeds.Enabled {
+		feedCfg := threatfeeds.Config{
+			Enabled:          true,
+			RefreshInterval:  time.Duration(cfg.ThreatFeeds.RefreshInterval) * time.Second,
+			HTTPTimeout:      time.Duration(cfg.ThreatFeeds.HTTPTimeout) * time.Second,
+			MaxRetries:       cfg.ThreatFeeds.MaxRetries,
+			FailureThreshold: cfg.ThreatFeeds.FailureThreshold,
+			CooldownDuration: time.Duration(cfg.ThreatFeeds.CooldownDuration) * time.Second,
+		}
+		for _, s := range cfg.ThreatFeeds.Sources {
+			feedCfg.Sources = append(feedCfg.Sources, threatfeeds.SourceConfig{
+				Name:       s.Name,
+				URL:        s.URL,
+				Enabled:    s.Enabled,
+				Category:   s.Category,
+				Confidence: s.Confidence,
+			})
+		}
+		mgr, ferr := threatfeeds.NewFeedManager(feedCfg)
+		if ferr != nil {
+			logger.Warn("装配威胁情报源管理器失败，threat-feeds 接口将应答服务不可用", "error", ferr)
+		} else {
+			feedMgr = mgr
+			defer feedMgr.Stop()
+			feedMgr.StartScheduler()
+		}
+	}
+
 	// HTTP 服务器：API、SSE、Prometheus 指标。
 	var httpServer *http.Server
 	var sseBroker *http.SSEBroker
@@ -379,37 +422,6 @@ func run(args []string) error {
 			sseBroker = http.NewEventsBroker(logger)
 			defer sseBroker.Stop()
 			logStream := http.NewLogsStream(logger)
-
-			// 威胁情报源管理器：未启用或装配失败时为 nil，threat-feeds 三个 handler 按
-			// 可空依赖口径应答「服务不可用」，不阻断 HTTP 装配。
-			var feedMgr *threatfeeds.FeedManager
-			if cfg.ThreatFeeds.Enabled {
-				feedCfg := threatfeeds.Config{
-					Enabled:          true,
-					RefreshInterval:  time.Duration(cfg.ThreatFeeds.RefreshInterval) * time.Second,
-					HTTPTimeout:      time.Duration(cfg.ThreatFeeds.HTTPTimeout) * time.Second,
-					MaxRetries:       cfg.ThreatFeeds.MaxRetries,
-					FailureThreshold: cfg.ThreatFeeds.FailureThreshold,
-					CooldownDuration: time.Duration(cfg.ThreatFeeds.CooldownDuration) * time.Second,
-				}
-				for _, s := range cfg.ThreatFeeds.Sources {
-					feedCfg.Sources = append(feedCfg.Sources, threatfeeds.SourceConfig{
-						Name:       s.Name,
-						URL:        s.URL,
-						Enabled:    s.Enabled,
-						Category:   s.Category,
-						Confidence: s.Confidence,
-					})
-				}
-				feedMgr, err = threatfeeds.NewFeedManager(feedCfg)
-				if err != nil {
-					logger.Warn("装配威胁情报源管理器失败，threat-feeds 接口将应答服务不可用", "error", err)
-					feedMgr = nil
-				} else if feedMgr != nil {
-					defer feedMgr.Stop()
-					feedMgr.StartScheduler()
-				}
-			}
 
 			api = http.NewAPIHandlers(http.APIConfig{
 				Server:    httpServer,
@@ -535,7 +547,8 @@ func run(args []string) error {
 			OnLeaseClaimed: func() {
 				pushConfiguredTrustedIPs()
 				if pushProtectedPorts != nil {
-					pushProtectedPorts()
+					// 强制发一次：内核模块刚重载时位图是空的，即使本进程记得旧值。
+					pushProtectedPorts(true)
 				}
 			},
 		})
@@ -568,13 +581,19 @@ func run(args []string) error {
 	if facts != nil {
 		decisionFacts = facts
 	}
+	// 情报缓存只在启用时接入；关闭或装配失败时判定层不查情报。
+	var intel runtime.ThreatIntel
+	if feedMgr != nil {
+		intel = feedIntel{mgr: feedMgr}
+	}
 	deps := runtime.Deps{
-		Logger:   logger,
-		Facts:    decisionFacts,
-		Sink:     banSinkForDaemon,
-		Stats:    newStatsSink(logger, metrics),
-		Hooks:    runtime.NewMaintenanceHooks(historyDB, logger),
-		Reloader: runtime.NewFileReloader(configSource, parsed.Strict, logger),
+		Logger:      logger,
+		Facts:       decisionFacts,
+		ThreatIntel: intel,
+		Sink:        banSinkForDaemon,
+		Stats:       newStatsSink(logger, metrics),
+		Hooks:       runtime.NewMaintenanceHooks(historyDB, logger),
+		Reloader:    runtime.NewFileReloader(configSource, parsed.Strict, logger),
 		// 配置一变就同步到内核：手工编辑文件、SIGHUP、SIGUSR1 都只经过执行体，
 		// 少这一条那些路径改的值永远上不了内核（与 PUT /config 共用同一个出口实例）。
 		KernelConfig: configSinkForDaemon,
@@ -733,6 +752,18 @@ func kernelModuleVersion() string {
 // *slog.Logger 始终可用，各调用点沿用 logger.Info/Warn/Debug 形式不变。
 func newLogger(cfg *config.Config) *slog.Logger {
 	return logger.Init(cfg)
+}
+
+// feedIntel 把威胁情报管理器接到判定层，只暴露查询，不泄露管理器其余能力。
+type feedIntel struct{ mgr *threatfeeds.FeedManager }
+
+// ThreatLookup 见 runtime.ThreatIntel。
+func (f feedIntel) ThreatLookup(ip netip.Addr) (string, float64, bool) {
+	entry, ok := f.mgr.Lookup(ip)
+	if !ok || entry == nil {
+		return "", 0, false
+	}
+	return entry.Source, entry.Confidence, true
 }
 
 // banSink 是 BanSink 的生产实现：把封禁下发接到内核客户端与活跃封禁缓存。

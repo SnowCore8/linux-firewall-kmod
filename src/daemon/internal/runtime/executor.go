@@ -161,6 +161,8 @@ type Deps struct {
 	Logger *slog.Logger
 	// Facts 是判定所需的外部事实（信誉分、历史封禁次数）。
 	Facts DecisionFacts
+	// ThreatIntel 是威胁情报缓存查询口；nil 时不查情报，所有封禁都走失败窗口。
+	ThreatIntel ThreatIntel
 	// Sink 是封禁下发副作用汇聚点。
 	Sink BanSink
 	// Stats 是统计计数器写入端。
@@ -308,6 +310,7 @@ func NewInboundExecutor(cfg *config.Config, signals *SignalSource, deps Deps) (*
 		pendingReadd: make(map[string]struct{}),
 	}
 	e.refreshJails()
+	e.pipeline.intel = deps.ThreatIntel
 	e.reconcileWatches()
 	if e.registry.IsEmpty() {
 		_ = watcher.Close()
@@ -1068,6 +1071,14 @@ func (e *InboundExecutor) dispatchIntent(intent *BanIntent) {
 		e.debug("该 IP 处于下发抑制窗口内，跳过重复下发", "ip", ip, "jail", jail)
 		return
 	}
+	if e.sink == nil {
+		return
+	}
+	if !e.sink.TryInsert(info) {
+		// 同一 IP 已在活跃封禁缓存里：情报命中路径会对每行日志重算一次意图，
+		// 这里静默去重，避免「一条攻击日志一条封禁日志」。
+		return
+	}
 	e.info("触发封禁",
 		"reason", intent.Reason,
 		"ip", ip,
@@ -1076,13 +1087,6 @@ func (e *InboundExecutor) dispatchIntent(intent *BanIntent) {
 		"is_permanent", plan.IsPermanent,
 		"ban_count", plan.BanCount,
 	)
-
-	if e.sink == nil {
-		return
-	}
-	if !e.sink.TryInsert(info) {
-		return
-	}
 	e.sink.MarkPendingAck(ip)
 
 	// 永久封禁 duration 为 0；临时封禁把秒数钳进 uint32。

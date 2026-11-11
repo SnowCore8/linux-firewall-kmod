@@ -93,6 +93,21 @@ func (NoHistory) PriorBanCount(netip.Addr) uint32 { return 0 }
 // RiskEngineEnabled 恒为 false（无历史模式不启用风险引擎）。
 func (NoHistory) RiskEngineEnabled() bool { return false }
 
+// ThreatIntel 是威胁情报缓存查询口（可空）。
+//
+// 只暴露一次查询：判定层不关心缓存的刷新、统计与来源管理，那些属于威胁情报子系统。
+// 返回的 confidence 是该条目的置信度（0–1），由情报源配置给出。
+type ThreatIntel interface {
+	// ThreatLookup 查询 ip 是否命中情报缓存，命中时返回来源名与置信度。
+	ThreatLookup(ip netip.Addr) (source string, confidence float64, ok bool)
+}
+
+// feedBanConfidence 是「高置信度」的下限：命中且置信度不低于它的条目直接封禁，
+// 跳过失败窗口计数。0.8 与默认 IPsum 源对齐；更保守的源（如 DShield 0.7）仍走
+// 常规窗口判定，避免单一低质量名单直接封禁。调整源配置里的 confidence 即可改变
+// 哪些源越过这条线。
+const feedBanConfidence = 0.8
+
 // Tick 是一轮处理的时间上下文。时钟与高峰判定都由调用方给出，本层不读系统时钟。
 type Tick struct {
 	// Now 是当前 Unix 秒。
@@ -131,6 +146,7 @@ type jailState struct {
 type Pipeline struct {
 	jails     map[string]*jailState
 	splitters map[ingest.SourceID]*logparse.LineSplitter
+	intel     ThreatIntel
 	counters  Counters
 }
 
@@ -308,6 +324,27 @@ func (p *Pipeline) judgeLine(ctx *lineCtx, ip netip.Addr, via logparse.MatchVia,
 	state := p.jails[ctx.jail]
 	// 顺序是语义的一部分：先记这次失败，再取分数算阈值（见 DecisionFacts）。
 	ctx.facts.RecordFailure(ip)
+
+	// 情报命中：高置信度的已知恶意源直接封禁，跳过失败窗口计数。
+	// 低置信度命中不特殊处理，继续走常规阈值——由本地行为决定是否封禁。
+	if p.intel != nil {
+		if source, confidence, ok := p.intel.ThreatLookup(ip); ok && confidence >= feedBanConfidence {
+			plan := decision.PlanBan(
+				state.policy.BanTime,
+				ctx.facts.PriorBanCount(ip),
+				ctx.tick.Now,
+				1,
+			)
+			p.counters.BansIntent++
+			return append(out, BanIntent{
+				Jail:   ctx.jail,
+				IP:     ip,
+				Source: ctx.source,
+				Plan:   plan,
+				Reason: fmt.Sprintf("%s: 情报源 %s 命中（置信度 %.2f）", ctx.jail, source, confidence),
+			})
+		}
+	}
 
 	// 阈值走加法模型：内网与低信誉的系数不会互相抵消。
 	threshold := decision.EffectiveThreshold(
