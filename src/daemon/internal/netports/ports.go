@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"fmt"
 	"math/bits"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,10 +19,6 @@ const (
 	// 套接字状态字段（hex）。
 	stateTCPListen      = "0A"
 	stateUDPUnconnected = "07"
-
-	// 回环地址：IPv4 为小端序，IPv6 为全零前缀 + 末尾 1。
-	loopbackV4 = "0100007F"
-	loopbackV6 = "00000000000000000000000001000000"
 )
 
 // procTables 是需要扫描的套接字表，顺序即扫描顺序。
@@ -38,8 +35,12 @@ func ListeningPorts(procNetDir string) ([8192]byte, int, error) {
 	for _, name := range procTables {
 		f, err := os.Open(filepath.Join(procNetDir, name))
 		if err != nil {
-			// 缺表视为空表；其余打开错误同样跳过，由 readable 判定是否全不可读。
-			continue
+			// 缺表（IPv6 未启用）视为空表；其余打开失败不能吞——静默跳过会让位图
+			// 少一族地址的监听端口，这些端口的入站流量就不再参与速率判定。
+			if os.IsNotExist(err) {
+				continue
+			}
+			return [8192]byte{}, 0, fmt.Errorf("netports: 打开 %s 失败: %w", name, err)
 		}
 		readable++
 
@@ -127,6 +128,41 @@ func isZeroAddr(addr string) bool {
 }
 
 // isLoopback 判断本地地址是否仅绑定回环。
+//
+// 不能只比对 127.0.0.1 / ::1：systemd-resolved 默认绑定 127.0.0.53，v4-mapped 的
+// ::ffff:127.0.0.1 也常见，精确串匹配都会把它们当成可接收外部流量。
 func isLoopback(addr string) bool {
-	return strings.EqualFold(addr, loopbackV4) || strings.EqualFold(addr, loopbackV6)
+	ip, ok := parseProcAddr(addr)
+	return ok && ip.Unmap().IsLoopback()
+}
+
+// parseProcAddr 把 /proc/net 的十六进制地址字段还原成 netip.Addr。
+//
+// 字段是 4（IPv4）或 16（IPv6）字节地址按 32 位字、宿主小端序打印的十六进制串，
+// 故每个 8 字符字需要按字节倒序还原成网络字节序。
+func parseProcAddr(addr string) (netip.Addr, bool) {
+	var raw [16]byte
+	words := 0
+	switch len(addr) {
+	case 8:
+		words = 1
+	case 32:
+		words = 4
+	default:
+		return netip.Addr{}, false
+	}
+	for i := 0; i < words; i++ {
+		v, err := strconv.ParseUint(addr[i*8:(i+1)*8], 16, 32)
+		if err != nil {
+			return netip.Addr{}, false
+		}
+		raw[i*4+0] = byte(v)
+		raw[i*4+1] = byte(v >> 8)
+		raw[i*4+2] = byte(v >> 16)
+		raw[i*4+3] = byte(v >> 24)
+	}
+	if words == 1 {
+		return netip.AddrFrom4([4]byte(raw[:4])), true
+	}
+	return netip.AddrFrom16(raw), true
 }

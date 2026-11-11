@@ -69,6 +69,26 @@ func TestTCPListenIncludedEstablishedExcluded(t *testing.T) {
 	assertPorts(t, bmp, count, 22, 8080)
 }
 
+// TestLoopbackVariantsExcluded 回归：回环判定不能只认 127.0.0.1 / ::1。
+// 127.0.0.53（systemd-resolved）与 v4-mapped 的 ::ffff:127.0.0.1 同样只服务本机。
+func TestLoopbackVariantsExcluded(t *testing.T) {
+	dir := t.TempDir()
+	writeTable(t, dir, "tcp", tcpHeader+
+		"   0: 3500007F:0035 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 5001\n"+
+		"   1: 0100007F:0050 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 5002\n"+
+		"   2: 0200000A:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 5003\n")
+	writeTable(t, dir, "tcp6", tcpHeader+
+		"   0: 0000000000000000FFFF00000100007F:0051 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 5004\n"+
+		"   1: 0000000000000000FFFF00000200000A:0052 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 5005\n")
+
+	bmp, count, err := ListeningPorts(dir)
+	if err != nil {
+		t.Fatalf("ListeningPorts 返回错误: %v", err)
+	}
+	// 127.0.0.53 与 ::ffff:127.0.0.1 排除；10.0.0.2 与 ::ffff:10.0.0.2 入选。
+	assertPorts(t, bmp, count, 8080, 82)
+}
+
 func TestUDPBoundIncluded(t *testing.T) {
 	dir := t.TempDir()
 	writeTable(t, dir, "udp", tcpHeader+
@@ -133,5 +153,20 @@ func TestMissingIPv6TablesTolerated(t *testing.T) {
 func TestAllTablesMissingReturnsError(t *testing.T) {
 	if _, _, err := ListeningPorts(t.TempDir()); err == nil {
 		t.Fatal("四张表全部缺失时应返回错误")
+	}
+}
+
+// TestUnreadableTableIsFatal 回归：某张表存在但打不开（非「不存在」）时必须报错。
+// 静默跳过会产出一份缺少该族地址监听端口的位图，下发后那些端口不再参与速率判定。
+func TestUnreadableTableIsFatal(t *testing.T) {
+	dir := t.TempDir()
+	writeTable(t, dir, "tcp", tcpHeader+tcpRowFmt)
+	// 自指软链：open 返回 ELOOP，且不依赖运行用户权限（root 下同样失败）。
+	if err := os.Symlink("udp", filepath.Join(dir, "udp")); err != nil {
+		t.Fatalf("创建自指软链失败: %v", err)
+	}
+
+	if _, _, err := ListeningPorts(dir); err == nil {
+		t.Fatal("单张表不可读时应报错，而不是静默产出缺失位图")
 	}
 }
