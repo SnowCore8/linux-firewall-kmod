@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -746,6 +747,10 @@ func applyThreatFeeds(yc *yamlConfig, cfg *Config) error {
 	if len(tf.Sources) > 0 {
 		cfg.ThreatFeeds.Sources = make([]ThreatFeedSourceConfig, 0, len(tf.Sources))
 		for _, src := range tf.Sources {
+			// 校验 URL 格式，防止 file:// 等危险协议或空串
+			if err := validateThreatFeedURL(src.URL); err != nil {
+				return fmt.Errorf("threat_feeds.sources[%s].url: %w", src.Name, err)
+			}
 			sc := ThreatFeedSourceConfig{
 				Name:     src.Name,
 				URL:      src.URL,
@@ -759,6 +764,28 @@ func applyThreatFeeds(yc *yamlConfig, cfg *Config) error {
 			}
 			cfg.ThreatFeeds.Sources = append(cfg.ThreatFeeds.Sources, sc)
 		}
+	}
+	return nil
+}
+
+// validateThreatFeedURL 校验情报源 URL 格式。
+// 只允许 http/https 协议，拒绝 file://、ftp:// 等可能导致本地文件读取或 SSRF 的协议。
+func validateThreatFeedURL(rawURL string) error {
+	if rawURL == "" {
+		return fmt.Errorf("URL 不能为空")
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("URL 解析失败: %w", err)
+	}
+	switch u.Scheme {
+	case "http", "https":
+		// 允许
+	default:
+		return fmt.Errorf("不支持的协议 %q，只允许 http/https", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("URL 缺少主机名")
 	}
 	return nil
 }
