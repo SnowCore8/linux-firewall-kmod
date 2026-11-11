@@ -435,13 +435,24 @@ static ssize_t whitelist_write(struct file *file, const char __user *buf,
     ret = fw_wl_remove(af, &addr, prefix_len);
     if (ret)
       return ret;
-    fw_nl_send_whitelist_state_change(
-      FW_WHITELIST_ACTION_REMOVE, af, &addr, prefix_len, "manual");
+    /*
+     * 发送保护：持有 netlink 发送读锁，防止与 fw_netlink_exit() 的 socket 释放并发。
+     */
+    fw_nl_send_lock();
+    if (fw_nl_sock_available())
+      fw_nl_send_whitelist_state_change(
+        FW_WHITELIST_ACTION_REMOVE, af, &addr, prefix_len, "manual");
+    fw_nl_send_unlock();
   } else {
     ret = fw_wl_add(af, &addr, prefix_len, "manual");
     if (ret)
       return ret;
-    fw_nl_send_whitelist_state_change(FW_WHITELIST_ACTION_ADD, af, &addr, prefix_len, "manual");
+    /* 发送保护：同上，持有发送读锁后再广播白名单变更。 */
+    fw_nl_send_lock();
+    if (fw_nl_sock_available())
+      fw_nl_send_whitelist_state_change(
+        FW_WHITELIST_ACTION_ADD, af, &addr, prefix_len, "manual");
+    fw_nl_send_unlock();
   }
 
   return count;
@@ -548,7 +559,11 @@ static ssize_t config_write(struct file *file, const char __user *buf,
 
   /* fw_ban_time 是默认封禁时长的唯一真相源（fw_ban_try_add 直接读它） */
   WRITE_ONCE(fw_ban_time, (unsigned int)val);
-  fw_nl_send_config_change(FW_CONFIG_FLAGS_BAN_TIME, (u32)val);
+  /* 发送保护：持有 netlink 发送读锁，防止与 fw_netlink_exit() 的 socket 释放并发。 */
+  fw_nl_send_lock();
+  if (fw_nl_sock_available())
+    fw_nl_send_config_change(FW_CONFIG_FLAGS_BAN_TIME, (u32)val);
+  fw_nl_send_unlock();
 
   return count;
 }

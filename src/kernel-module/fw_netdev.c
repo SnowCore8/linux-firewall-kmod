@@ -236,9 +236,15 @@ static void fw_netdev_reconcile_whitelist(const struct fw_wl_row *locals, u32 n)
           continue;
 
         if (!fw_wl_remove_quiet(page[i].af, &page[i].addr, page[i].prefix_len)) {
-          fw_nl_send_whitelist_state_change(FW_WHITELIST_ACTION_REMOVE, page[i].af,
-                                            &page[i].addr, page[i].prefix_len,
-                                            page[i].device_name);
+          /*
+           * 发送保护：持有 netlink 发送读锁，防止与 fw_netlink_exit() 的 socket 释放并发。
+           */
+          fw_nl_send_lock();
+          if (fw_nl_sock_available())
+            fw_nl_send_whitelist_state_change(
+              FW_WHITELIST_ACTION_REMOVE, page[i].af, &page[i].addr,
+              page[i].prefix_len, page[i].device_name);
+          fw_nl_send_unlock();
           removed = true;
           break;
         }

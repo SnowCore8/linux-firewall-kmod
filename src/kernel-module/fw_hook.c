@@ -147,7 +147,16 @@ static unsigned int fw_ban_check(u8 af, const void *src, u32 packet_len,
 
     /* 自决封禁针对单个源 IP：全长前缀（精确单机），网段封禁只由 daemon 下发 */
     fw_ban_try_add(af, src, fw_max_prefix_len(af), duration, reason, FW_HOOK_DDOS_JAIL, true);
-    fw_nl_send_ddos_event(af, src, reason, pps > 0xFFFFFFFFULL ? 0xFFFFFFFFU : (u32)pps);
+    /*
+     * 发送保护：netfilter 钩子在 softirq 上下文中执行，使用 trylock 避免休眠。
+     * 获取失败时跳过事件推送，不影响丢包判定。
+     */
+    if (fw_nl_send_trylock()) {
+      if (fw_nl_sock_available())
+        fw_nl_send_ddos_event(
+          af, src, reason, pps > 0xFFFFFFFFULL ? 0xFFFFFFFFU : (u32)pps);
+      fw_nl_send_unlock();
+    }
     return NF_DROP;
   }
 
@@ -156,7 +165,10 @@ static unsigned int fw_ban_check(u8 af, const void *src, u32 packet_len,
 
 static unsigned int fw_hook_ipv4(void *priv, struct sk_buff *skb,
                                  const struct nf_hook_state *state) {
-  struct iphdr iph_copy;
+  /* IP 头部最大 60 字节（ihl 字段 4 位，最大值 15，15 * 4 = 60）。
+   * ip_fast_csum 按 ihl 读取头部，缓冲区必须容纳最大情况，
+   * 否则 ihl > 5 时栈越界读取。 */
+  u8 iph_copy[60];
   const struct iphdr *iph;
   struct fw_stats_pcpu *s;
   __be32 src;
@@ -185,7 +197,7 @@ static unsigned int fw_hook_ipv4(void *priv, struct sk_buff *skb,
   if (unlikely(!pskb_may_pull(skb, sizeof(struct iphdr))))
     return NF_ACCEPT;
 
-  iph = skb_header_pointer(skb, 0, sizeof(iph_copy), &iph_copy);
+  iph = skb_header_pointer(skb, 0, sizeof(iph_copy), iph_copy);
   if (unlikely(!iph))
     return NF_ACCEPT;
 

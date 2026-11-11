@@ -592,8 +592,16 @@ int fw_ban_del(u8 af, const void *addr, u8 prefix_len, bool notify) {
   call_rcu(&n->rcu, fw_ban_free_rcu);
   fw_stat_inc_unbans();
 
-  if (notify)
-    fw_nl_send_ban_state_change(FW_BAN_ACTION_UNBAN, af, prefix_len, &a, 0, "unban", NULL);
+  /*
+   * 发送保护：持有 netlink 发送读锁，防止与 fw_netlink_exit() 的 socket 释放并发。
+   * 与 fw_ban_insert() 保持一致的锁模式。
+   */
+  if (notify) {
+    fw_nl_send_lock();
+    if (fw_nl_sock_available())
+      fw_nl_send_ban_state_change(FW_BAN_ACTION_UNBAN, af, prefix_len, &a, 0, "unban", NULL);
+    fw_nl_send_unlock();
+  }
   return 0;
 }
 
