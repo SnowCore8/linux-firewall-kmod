@@ -165,7 +165,9 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 		info.ExpiresAt = now + duration
 	}
 
-	if !bans.GlobalCache().TryInsert(info) {
+	// 占位与「等待内核确认」标记在同一锁周期落下：两者分开时，中间跑进来的一轮对账会
+	// 把这条内核列表里尚未出现的封禁当幽灵摘掉（同 runtime 自动路径）。
+	if !bans.GlobalCache().InsertPending(info, time.Now()) {
 		WriteCode(w, httpcontract.Code40001, "封禁失败：该 IP 已在封禁表中 "+ip)
 		return
 	}
@@ -372,7 +374,7 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 			ExpiresAt:   now + int64(duration),
 		}
 
-		if !bans.GlobalCache().TryInsert(info) {
+		if !bans.GlobalCache().InsertPending(info, time.Now()) {
 			failCount++
 			details = append(details, canonical+": 该 IP 已在封禁表中")
 			continue

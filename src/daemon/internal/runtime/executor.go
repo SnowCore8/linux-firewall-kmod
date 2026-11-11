@@ -66,16 +66,16 @@ const (
 
 // BanSink 是封禁下发的副作用汇聚点。
 //
-// 执行体按「占位 → 待确认 → 下发 → 失败回滚」的顺序调用，对应旧实现
+// 执行体按「占位+待确认 → 下发 → 失败回滚」的顺序调用，对应旧实现
 // handle_failed_attempt_for_jail 的尾部。把这几步收在一个接口后，测试可注入只记录调用序列
 // 的假实现，验证顺序与回滚；生产实现挂在组合根，把内核指令与 Web UI 镜像接起来。
 type BanSink interface {
-	// TryInsert 原子地在活跃封禁缓存里为 info 占位并更新反向索引，返回「本调用是否为赢家」。
+	// InsertPending 在一个原子步骤里为 info 占位并标记「等待内核确认」，返回是否为赢家。
 	//
-	// 同一 IP 已存在则返回 false（并发去重，防止重复封禁与统计双计），调用方据此提前返回。
-	TryInsert(info bans.BanInfo) bool
-	// MarkPendingAck 标记该 IP 的封禁等待内核确认。
-	MarkPendingAck(ip string)
+	// 两步不可分开：中间一旦让对账跑进来，刚下发、内核列表里还没出现的条目会被当幽灵
+	// 摘掉，而待确认标记随后挂到一个不存在的条目上。同一 IP 已存在时返回 false，不改动
+	// 任何状态（并发去重，防止重复封禁与统计双计），调用方据此提前返回。
+	InsertPending(info bans.BanInfo) bool
 	// Send 向内核下发一次封禁；durationSecs 为 0 表示永久，prefixLen 为前缀长度。
 	Send(addr netip.Addr, prefixLen uint8, durationSecs uint32, reason string) error
 	// RollbackInsert 回滚一次下发失败：撤销占位与待确认标记，允许下次重试。
@@ -1123,7 +1123,7 @@ func (e *InboundExecutor) dispatchClusterHit(jail string, hit decision.ClusterHi
 
 // dispatchIntent 把一个封禁意图下发内核，并镜像到本地缓存与统计。
 //
-// 顺序对齐旧实现：try_insert 单赢家 → 镜像 → 标记待确认 → 下发 → 失败则三者回滚；
+// 顺序对齐旧实现：单赢家占位并标记待确认 → 下发 → 失败则一并回滚；
 // 只有下发成功后才给 per-jail 的 bans_triggered 加 1。
 func (e *InboundExecutor) dispatchIntent(intent *BanIntent) {
 	jail := intent.Jail
@@ -1146,7 +1146,7 @@ func (e *InboundExecutor) dispatchIntent(intent *BanIntent) {
 	if e.sink == nil {
 		return
 	}
-	if !e.sink.TryInsert(info) {
+	if !e.sink.InsertPending(info) {
 		// 同一 IP 已在活跃封禁缓存里：情报命中路径会对每行日志重算一次意图，
 		// 这里静默去重，避免「一条攻击日志一条封禁日志」。
 		return
@@ -1159,7 +1159,6 @@ func (e *InboundExecutor) dispatchIntent(intent *BanIntent) {
 		"is_permanent", plan.IsPermanent,
 		"ban_count", plan.BanCount,
 	)
-	e.sink.MarkPendingAck(ip)
 
 	// 永久封禁 duration 为 0；临时封禁把秒数钳进 uint32。
 	durationSecs := uint32(0)

@@ -22,25 +22,20 @@ type fakeSink struct {
 	reasons []string
 	acked   []string
 	rolled  []string
-	// insertWinner 控制 TryInsert 是否让位（false 时模拟「已在镜像里」）。
+	// insertWinner 控制占位是否让位（false 时模拟「已在镜像里」）。
 	insertWinner bool
 }
 
 func newAcceptingSink() *fakeSink { return &fakeSink{insertWinner: true} }
 
-func (s *fakeSink) TryInsert(info bans.BanInfo) bool {
+func (s *fakeSink) InsertPending(info bans.BanInfo) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.insertWinner {
 		return false
 	}
+	s.acked = append(s.acked, info.IP)
 	return true
-}
-
-func (s *fakeSink) MarkPendingAck(ip string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.acked = append(s.acked, ip)
 }
 
 func (s *fakeSink) Send(addr netip.Addr, _ uint8, _ uint32, reason string) error {

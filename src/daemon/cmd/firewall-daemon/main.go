@@ -815,9 +815,12 @@ func newBanSink(client *kernel.Client, logger *slog.Logger, db *persist.DB, rq *
 	return &banSink{client: client, cache: bans.GlobalCache(), logger: logger, db: db, retryQueue: rq}
 }
 
-// TryInsert 见 runtime.BanSink。原子地插入主表与反向索引。
-func (s *banSink) TryInsert(info bans.BanInfo) bool {
-	if !s.cache.TryInsert(info) {
+// InsertPending 见 runtime.BanSink：原子地占位并挂上「等待内核确认」标记。
+//
+// 标记必须与占位同一锁周期：分开调用会在两步之间留出对账窗口，把刚投递、内核列表里
+// 尚未出现的封禁当幽灵摘掉。
+func (s *banSink) InsertPending(info bans.BanInfo) bool {
+	if !s.cache.InsertPending(info, time.Now()) {
 		return false
 	}
 	if s.db != nil {
@@ -853,12 +856,6 @@ func (s *banSink) TryInsert(info bans.BanInfo) bool {
 	}
 	return true
 }
-
-// MarkPendingAck 见 runtime.BanSink：给刚下发的封禁挂一个「等待内核确认」的短标记。
-//
-// 对账周期以内核为准重建镜像，而内核的确认（BanStateChange）可能晚于下一个对账周期；
-// 没有这个标记，用户几十秒前点下的封禁会被对账当成幽灵抹掉。
-func (s *banSink) MarkPendingAck(ip string) { s.cache.MarkPending(ip, time.Now()) }
 
 // Send 见 runtime.BanSink。client 为 nil 时按「不动作」处理并记一条调试日志。
 func (s *banSink) Send(addr netip.Addr, prefixLen uint8, durationSecs uint32, reason string) error {

@@ -25,6 +25,36 @@ func TestTryInsertRejectsDuplicate(t *testing.T) {
 	}
 }
 
+// TestInsertPendingIsAtomic 验证占位与待确认标记落在同一锁周期：赢家同时可见两者，
+// 重复插入被拒时不改动条目、也不留下或续期标记。
+//
+// 这两步分开时，中间跑进来的一轮对账会把内核列表里尚未出现的条目当幽灵摘掉，
+// 标记随后挂到不存在的条目上，封禁静默丢失。
+func TestInsertPendingIsAtomic(t *testing.T) {
+	c := NewActiveBanCache()
+	now := time.Unix(1700000000, 0)
+	if !c.InsertPending(info("203.0.113.8", "sshd"), now) {
+		t.Fatal("首次插入应为赢家")
+	}
+	if _, ok := c.Get("203.0.113.8"); !ok {
+		t.Fatal("赢家插入后条目不可见")
+	}
+	if !c.IsPending("203.0.113.8", now.Unix()) {
+		t.Fatal("赢家插入必须同时挂上待确认标记")
+	}
+
+	if c.InsertPending(info("203.0.113.8", "other"), now.Add(30*time.Second)) {
+		t.Fatal("重复插入不应为赢家")
+	}
+	got, _ := c.Get("203.0.113.8")
+	if got.JailName != "sshd" {
+		t.Fatalf("被拒的插入改动了原条目: %+v", got)
+	}
+	if c.IsPending("203.0.113.8", now.Add(PendingAckTimeout).Unix()) {
+		t.Fatal("重复插入续期了待确认时限")
+	}
+}
+
 // TestUpsertOverwritesAndReportsChange 验证对账用的覆盖写：内容相同返回 false，字段变了返回 true。
 //
 // 「是否变化」直接决定是否推送封禁域，判错会让安静时段每轮都推一次全屏刷新。

@@ -46,6 +46,29 @@ func NewActiveBanCache() *ActiveBanCache {
 func (c *ActiveBanCache) TryInsert(info BanInfo) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.insertLocked(info)
+}
+
+// InsertPending 在一个锁周期内完成「占位 + 标记等待内核确认」。
+//
+// 分开调用 TryInsert 与 MarkPending 会留出一个对账窗口：插入返回后、标记落下前若对账
+// 跑完一轮，它看不到内核列表里的这条（下发是投递即返回），会按幽灵摘掉；随后 MarkPending
+// 又把标记挂在已不存在的条目上——封禁被静默丢失，直到下一条失败日志重新占位。合并后
+// 对账要么看到条目且带 pending 保护，要么看不到条目、也没有标记可挂。
+//
+// 返回 false 表示同一 IP 已存在，本次调用不改动任何状态（含 pending）。
+func (c *ActiveBanCache) InsertPending(info BanInfo, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.insertLocked(info) {
+		return false
+	}
+	c.pending[info.IP] = now.Add(PendingAckTimeout).Unix()
+	return true
+}
+
+// insertLocked 在主表与反向索引上原子插入；调用方必须持有写锁。
+func (c *ActiveBanCache) insertLocked(info BanInfo) bool {
 	if _, exists := c.bans[info.IP]; exists {
 		return false
 	}
