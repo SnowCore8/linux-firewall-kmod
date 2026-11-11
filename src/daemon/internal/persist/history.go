@@ -3,6 +3,7 @@ package persist
 import (
 	"database/sql"
 	"fmt"
+	"net/netip"
 	"time"
 )
 
@@ -138,6 +139,78 @@ func (db *DB) GetFrequentBans(minCount int, limit int) ([]BanHistory, error) {
 		return nil, fmt.Errorf("iterate ban_history: %w", err)
 	}
 	return histories, nil
+}
+
+// BanSubnetAggregate 是 ban_history 按网段聚合后的一行读数。
+type BanSubnetAggregate struct {
+	CIDR      string
+	BanCount  int
+	UniqueIPs int
+}
+
+// AggregateBanHistoryBySubnet 把整张 ban_history 按给定前缀长度聚合成网段读数。
+//
+// 聚合放在这一层，是因为阈值必须在**聚合之后**判定：ban_history 一行是一个地址，而读侧
+// 要回答的是「这个网段被反复封了多少次」。先按 ban_count 过滤再聚合，会把「单 IP 次数
+// 不达标、同一网段合计达标」的网段整段滤掉——那种网段永远进不了推荐。
+//
+// 只把每个网段的累计次数与唯一地址数留在内存里，不把整张表交给调用方：行数随唯一地址数
+// 增长，网段数远小于它。
+func (db *DB) AggregateBanHistoryBySubnet(v4PrefixLen, v6PrefixLen int) ([]BanSubnetAggregate, error) {
+	if v4PrefixLen < 0 || v4PrefixLen > 32 || v6PrefixLen < 0 || v6PrefixLen > 128 {
+		return nil, fmt.Errorf("invalid subnet prefix length: v4=%d v6=%d", v4PrefixLen, v6PrefixLen)
+	}
+	rows, err := db.conn.Query(`SELECT ip, ban_count FROM ban_history`)
+	if err != nil {
+		return nil, fmt.Errorf("query ban_history for subnet aggregation: %w", err)
+	}
+	defer rows.Close()
+
+	type subnetStats struct {
+		banCount int
+		ips      map[string]struct{}
+	}
+	subnets := make(map[string]*subnetStats)
+	for rows.Next() {
+		var (
+			ip       string
+			banCount int
+		)
+		if err := rows.Scan(&ip, &banCount); err != nil {
+			return nil, fmt.Errorf("scan ban_history for subnet aggregation: %w", err)
+		}
+		addr, err := netip.ParseAddr(ip)
+		if err != nil {
+			// 历史表里的坏地址跳过，而不是让整次推荐失败：一行读不懂不该拖垮整面。
+			continue
+		}
+		prefixLen := v4PrefixLen
+		if addr.Is6() {
+			prefixLen = v6PrefixLen
+		}
+		key := netip.PrefixFrom(addr, prefixLen).Masked().String()
+
+		stats := subnets[key]
+		if stats == nil {
+			stats = &subnetStats{ips: make(map[string]struct{})}
+			subnets[key] = stats
+		}
+		stats.banCount += banCount
+		stats.ips[ip] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate ban_history for subnet aggregation: %w", err)
+	}
+
+	aggregates := make([]BanSubnetAggregate, 0, len(subnets))
+	for cidr, stats := range subnets {
+		aggregates = append(aggregates, BanSubnetAggregate{
+			CIDR:      cidr,
+			BanCount:  stats.banCount,
+			UniqueIPs: len(stats.ips),
+		})
+	}
+	return aggregates, nil
 }
 
 func (db *DB) DeleteBanHistory(ip string) error {

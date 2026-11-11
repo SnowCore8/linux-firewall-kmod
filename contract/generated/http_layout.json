@@ -922,7 +922,7 @@
       "max_connections": null,
       "events": [],
       "keepalive_secs": null,
-      "note": "载荷 RiskEventResponse：指定 IP 的攻击事件历史（最近 100 条，按时间降序）。仅在 risk_engine.enabled=true 时可用，否则返回 503。IP 非法 → 40006"
+      "note": "载荷 RiskEventResponse：指定 IP 的攻击事件历史（按时间降序；默认最近 100 条）。可选查询参数 limit（默认 100，上限 100，越界或读不懂回落默认值）与 offset（默认 0，负数按 0）；分页在 SQL 侧完成，只取一页。total 是该 IP 的全部事件数（过滤条件之后的全集），不是本页条数。仅在 risk_engine.enabled=true 时可用，否则返回 503。IP 非法 → 40006"
     },
     {
       "method": "GET",

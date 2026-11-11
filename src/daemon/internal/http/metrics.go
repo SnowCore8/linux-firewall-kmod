@@ -60,32 +60,35 @@ func (m *Metrics) Gauge(name string) *atomic.Int64 {
 func (m *Metrics) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 
+	// 锁内只做快照：持读锁期间写响应会让慢客户端把锁一直攥着，Counter/Gauge 的热路径
+	// 跟着排队等它。值的读取仍需在锁内（map 会因新名字被写入），但排序与网络写放到解锁后。
+	type sample struct {
+		name  string
+		value int64
+	}
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	var counterNames []string
-	for name := range m.counters {
-		counterNames = append(counterNames, name)
+	counters := make([]sample, 0, len(m.counters))
+	for name, c := range m.counters {
+		counters = append(counters, sample{name: name, value: c.Load()})
 	}
-	sort.Strings(counterNames)
+	gauges := make([]sample, 0, len(m.gauges))
+	for name, g := range m.gauges {
+		gauges = append(gauges, sample{name: name, value: g.Load()})
+	}
+	m.mu.RUnlock()
 
-	for _, name := range counterNames {
-		value := m.counters[name].Load()
-		fmt.Fprintf(w, "# HELP %s Total count of %s\n", name, name)
-		fmt.Fprintf(w, "# TYPE %s counter\n", name)
-		fmt.Fprintf(w, "%s %d\n", name, value)
+	sort.Slice(counters, func(i, j int) bool { return counters[i].name < counters[j].name })
+	sort.Slice(gauges, func(i, j int) bool { return gauges[i].name < gauges[j].name })
+
+	for _, s := range counters {
+		fmt.Fprintf(w, "# HELP %s Total count of %s\n", s.name, s.name)
+		fmt.Fprintf(w, "# TYPE %s counter\n", s.name)
+		fmt.Fprintf(w, "%s %d\n", s.name, s.value)
 	}
 
-	var gaugeNames []string
-	for name := range m.gauges {
-		gaugeNames = append(gaugeNames, name)
-	}
-	sort.Strings(gaugeNames)
-
-	for _, name := range gaugeNames {
-		value := m.gauges[name].Load()
-		fmt.Fprintf(w, "# HELP %s Current value of %s\n", name, name)
-		fmt.Fprintf(w, "# TYPE %s gauge\n", name)
-		fmt.Fprintf(w, "%s %d\n", name, value)
+	for _, s := range gauges {
+		fmt.Fprintf(w, "# HELP %s Current value of %s\n", s.name, s.name)
+		fmt.Fprintf(w, "# TYPE %s gauge\n", s.name)
+		fmt.Fprintf(w, "%s %d\n", s.name, s.value)
 	}
 }

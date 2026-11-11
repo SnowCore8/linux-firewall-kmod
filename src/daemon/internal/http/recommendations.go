@@ -2,7 +2,6 @@ package http
 
 import (
 	"net/http"
-	"net/netip"
 	"sort"
 	"strconv"
 )
@@ -55,53 +54,28 @@ func (h *APIHandlers) GetWhitelistRecommendations(w http.ResponseWriter, r *http
 	}
 	limit := parseLimit(r, 20, 100)
 
-	histories, err := h.db.GetFrequentBans(minBans, 10000)
+	aggregates, err := h.db.AggregateBanHistoryBySubnet(24, 48)
 	if err != nil {
 		h.server.logger.Error("查询封禁历史失败", "error", err)
 		WriteInternalError(w, "查询封禁历史失败")
 		return
 	}
 
-	// 按子网聚合
-	type subnetStats struct {
-		banCount int
-		ips      map[string]bool
-	}
-	subnets := make(map[string]*subnetStats)
-
-	for _, h := range histories {
-		addr, err := netip.ParseAddr(h.IP)
-		if err != nil {
-			continue
-		}
-		// 聚合前缀：IPv4 /24, IPv6 /48
-		prefixLen := 24
-		if addr.Is6() {
-			prefixLen = 48
-		}
-		prefix := netip.PrefixFrom(addr, prefixLen).Masked()
-		key := prefix.String()
-
-		if subnets[key] == nil {
-			subnets[key] = &subnetStats{ips: make(map[string]bool)}
-		}
-		subnets[key].banCount += h.BanCount
-		subnets[key].ips[h.IP] = true
-	}
-
-	// 过滤并排序
+	// 阈值在**聚合之后**判定。聚合结果一行是一个网段（IPv4 /24、IPv6 /48），
+	// ban_history 一行是一个地址：先按单地址次数过滤会滤掉「单 IP 不达标、整段合计
+	// 达标」的网段，那种网段永远进不了推荐。
 	var recommendations []WhitelistRecommendation
-	for cidr, stats := range subnets {
-		if stats.banCount < minBans {
+	for _, stats := range aggregates {
+		if stats.BanCount < minBans {
 			continue
 		}
 		recommendations = append(recommendations, WhitelistRecommendation{
 			RecType:     "subnet",
-			CIDR:        cidr,
-			AffectedIPs: uint32(len(stats.ips)),
-			TotalBans:   uint32(stats.banCount),
+			CIDR:        stats.CIDR,
+			AffectedIPs: uint32(stats.UniqueIPs),
+			TotalBans:   uint32(stats.BanCount),
 			Reason:      "频繁临时封禁，可能为误伤网段",
-			Confidence:  whitelistConfidence(stats.banCount),
+			Confidence:  whitelistConfidence(stats.BanCount),
 		})
 	}
 

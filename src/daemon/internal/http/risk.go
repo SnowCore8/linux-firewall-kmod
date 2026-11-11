@@ -3,6 +3,8 @@ package http
 import (
 	"net/http"
 	"net/netip"
+	"strconv"
+	"strings"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
@@ -97,7 +99,14 @@ func (h *APIHandlers) ListRiskVectors(w http.ResponseWriter, r *http.Request) {
 
 // RiskEvents 处理 GET /api/v2/risk/events/:ip
 //
-// 返回指定 IP 的攻击事件历史（最近 100 条，按时间降序）。
+// 返回指定 IP 的攻击事件历史（按时间降序，默认最近 100 条）。
+//
+// 分页查询参数（都可选）：
+//   - limit: 本次返回条数上限（默认 100，上限 100，超限回落默认值）
+//   - offset: 跳过的条数（默认 0，负数按 0 处理）
+//
+// 分页下推到 SQL：读侧只取一页，不再把该 IP 的整段历史读进内存再截断。total 是
+// 该 IP 的全部事件数（过滤条件之后的全集），不是本次返回的条数。
 func (h *APIHandlers) RiskEvents(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		WriteServiceUnavailable(w, "risk engine not initialized")
@@ -111,29 +120,29 @@ func (h *APIHandlers) RiskEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 查询该 IP 的所有事件（最近 100 条）
-	events, err := h.db.GetEventsSince(addr.String(), 0)
+	limit := parseLimit(r, 100, 100)
+	offset := parseEventOffset(r)
+
+	// total 先取：COUNT 与分页查询分开走，避免在打开 rows 的连接上再发一条查询
+	//（库只配了 1 个连接，嵌套查询会自己等自己）。
+	total, err := h.db.CountEventsByIP(addr.String())
+	if err != nil {
+		h.server.logger.Error("count events failed", "ip", addr.String(), "error", err)
+		WriteInternalError(w, "查询攻击事件失败")
+		return
+	}
+
+	events, err := h.db.ListEventsByIP(addr.String(), limit, offset)
 	if err != nil {
 		h.server.logger.Error("query events failed", "ip", addr.String(), "error", err)
 		WriteInternalError(w, "查询攻击事件失败")
 		return
 	}
 
-	// 限制返回 100 条，按时间降序
-	limit := 100
-	if len(events) > limit {
-		events = events[len(events)-limit:]
-	}
-
-	// 反转为降序
-	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
-		events[i], events[j] = events[j], events[i]
-	}
-
 	response := RiskEventResponse{
 		IP:     addr.String(),
 		Events: make([]RiskEventEntry, 0, len(events)),
-		Total:  uint32(len(events)),
+		Total:  uint32(total),
 	}
 
 	for _, e := range events {
@@ -147,6 +156,22 @@ func (h *APIHandlers) RiskEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteSuccess(w, response)
+}
+
+// parseEventOffset 读 offset 查询参数：缺省、读不懂、负数一律当 0。
+//
+// 与 page_size 的宽容处理同一口径：这条路由契约里只编了 40006（IP 非法），
+// 参数读不懂没有对应的失败码，只能按第一页读。
+func parseEventOffset(r *http.Request) int {
+	raw := strings.TrimSpace(r.URL.Query().Get("offset"))
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // RiskVectorResponse 是单个 IP 的多维风险向量响应。

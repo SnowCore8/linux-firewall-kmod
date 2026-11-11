@@ -116,6 +116,43 @@ func TestRecordBanHistoryKeepsLastUnbannedAt(t *testing.T) {
 	}
 }
 
+// 网段聚合必须在 IP 级阈值之外做：ban_history 一行是一个地址，推荐要的是网段合计。
+func TestAggregateBanHistoryBySubnetGroupsAddresses(t *testing.T) {
+	db := newTestDB(t)
+	record := func(ip string, n int) {
+		for i := 0; i < n; i++ {
+			if _, err := db.RecordBanHistory(ip, false); err != nil {
+				t.Fatalf("记录封禁失败: %v", err)
+			}
+		}
+	}
+	record("203.0.113.11", 3)
+	record("203.0.113.12", 1)
+	record("2001:db8:1::7", 2)
+
+	aggregates, err := db.AggregateBanHistoryBySubnet(24, 48)
+	if err != nil {
+		t.Fatalf("聚合失败: %v", err)
+	}
+	byCIDR := make(map[string]BanSubnetAggregate, len(aggregates))
+	for _, a := range aggregates {
+		byCIDR[a.CIDR] = a
+	}
+	if len(byCIDR) != 2 {
+		t.Fatalf("聚合出 %d 个网段，期望 2 个: %+v", len(byCIDR), aggregates)
+	}
+	if v4 := byCIDR["203.0.113.0/24"]; v4.BanCount != 4 || v4.UniqueIPs != 2 {
+		t.Errorf("203.0.113.0/24 = %+v，期望 4 次 / 2 个地址", v4)
+	}
+	if v6 := byCIDR["2001:db8:1::/48"]; v6.BanCount != 2 || v6.UniqueIPs != 1 {
+		t.Errorf("2001:db8:1::/48 = %+v，期望 2 次 / 1 个地址", v6)
+	}
+
+	if _, err := db.AggregateBanHistoryBySubnet(33, 48); err == nil {
+		t.Error("IPv4 前缀长度 33 应当报错，而不是悄悄按 /32 处理")
+	}
+}
+
 func newDBAt(t *testing.T, path string) *DB {
 	t.Helper()
 	db, err := NewDB(Config{Path: path})

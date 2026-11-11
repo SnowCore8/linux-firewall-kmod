@@ -69,6 +69,51 @@ func (db *DB) GetEventsSince(ip string, since int64) ([]AttackEvent, error) {
 	return events, nil
 }
 
+// ListEventsByIP 分页查询指定 IP 的攻击事件（按时间降序，同一时刻按 id 降序）。
+//
+// 分页下推到 SQL：读侧只拿一页，不再把该 IP 的整段历史读进内存再截断。total 由
+// CountEventsByIP 单独取，两者口径都是「该 IP 的全部事件」（since 恒为 0）。
+//
+// 同一秒内按 id 降序，是为了让翻页稳定：只按 occurred_at 排序时，同一秒的多条记录
+// 在相邻两页之间的相对顺序没有保证，翻页会重复或漏掉行。
+func (db *DB) ListEventsByIP(ip string, limit, offset int) ([]AttackEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := db.conn.Query(
+		`SELECT id, ip, event_type, increment, occurred_at
+		 FROM attack_events
+		 WHERE ip = ?
+		 ORDER BY occurred_at DESC, id DESC
+		 LIMIT ? OFFSET ?`,
+		ip, limit, offset,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query attack_events page: %w", err)
+	}
+	defer rows.Close()
+
+	var events []AttackEvent
+	for rows.Next() {
+		var (
+			e         AttackEvent
+			eventType string
+		)
+		if err := rows.Scan(&e.ID, &e.IP, &eventType, &e.Increment, &e.OccurredAt); err != nil {
+			return nil, fmt.Errorf("scan attack_event: %w", err)
+		}
+		e.EventType = risk.EventType(eventType)
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate attack_events: %w", err)
+	}
+	return events, nil
+}
+
 // GetEventsByType 查询指定事件类型的所有记录（用于统计、审计）。
 func (db *DB) GetEventsByType(eventType risk.EventType, limit int) ([]AttackEvent, error) {
 	if limit <= 0 {
