@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAsync } from './useAsync.ts'
 import { nextSeq, pickFresher } from '../lib/freshness.ts'
 import type { ApiError } from '../api/client.ts'
@@ -63,21 +63,55 @@ function shallowEqual(a: any, b: any): boolean {
   return true
 }
 
+/** REST 数据与其「发起时」序号绑定的载荷，供 useAsync 原样传递。 */
+interface StampedRest<T> {
+  data: T
+  seq: number
+}
+
+/**
+ * 把一次 REST 调用的结果与**发起时刻**分配的序号绑在一起。
+ *
+ * 序号必须在发起时取，不能等响应落地再取：REST 在途期间 SSE 可能已推来更新的帧，
+ * 落地时才取号会让慢响应用一个更大的号反过来盖掉那些帧（Jails/Whitelist 要等下一轮
+ * 30 秒轮询才纠正）。每次调用都重新取号，重试/取消后重新发起的请求不会复用旧号。
+ */
+export function stampRestRequest<T>(
+  fetcher: (signal: AbortSignal) => Promise<T>,
+): (signal: AbortSignal) => Promise<StampedRest<T>> {
+  return (signal) => {
+    const seq = nextSeq()
+    return fetcher(signal).then((data) => ({ data, seq }))
+  }
+}
+
 export function useLiveData<T>(options: LiveDataOptions<T>): LiveDataResult<T> {
   const { sseValue, sseSeq, rest, refreshInterval = 0, enabled = true } = options
 
-  const query = useAsync<T>(rest, { refreshInterval, enabled })
+  // rest 通常是视图里的内联箭头函数，每次渲染都换身份；存进 ref 让包装函数保持稳定，
+  // 避免 useAsync 把它当成新依赖而重建轮询。
+  const restRef = useRef(rest)
+  restRef.current = rest
+  const fetchStamped = useCallback(
+    stampRestRequest((signal: AbortSignal) => restRef.current(signal)),
+    [],
+  )
 
-  // 给每次 REST 成功落地盖一个 seq，但仅在数据真正变化时推进（避免 REST 轮询淹没 SSE）
-  const [restStamped, setRestStamped] = useState<{ data: T; seq: number } | null>(null)
+  const query = useAsync<StampedRest<T>>(fetchStamped, { refreshInterval, enabled })
+
+  // 只在数据真正变化时推进 REST 的展示戳（避免 REST 轮询淹没 SSE），序号沿用发起时
+  // 预分配的那个，保证「发起早于 SSE 帧」的响应不会在落地后反超该帧。
+  const [restStamped, setRestStamped] = useState<StampedRest<T> | null>(null)
   const prevDataRef = useRef<T | null>(null)
   useEffect(() => {
-    if (query.data != null) {
+    const stamped = query.data
+    if (stamped != null) {
       // 浅比较：避免 JSON.stringify 的性能开销与 0/-0、key 顺序误判
-      const changed = prevDataRef.current === null || !shallowEqual(prevDataRef.current, query.data)
+      const changed =
+        prevDataRef.current === null || !shallowEqual(prevDataRef.current, stamped.data)
       if (changed) {
-        prevDataRef.current = query.data
-        setRestStamped({ data: query.data, seq: nextSeq() })
+        prevDataRef.current = stamped.data
+        setRestStamped(stamped)
       }
     }
   }, [query.data])

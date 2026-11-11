@@ -4,7 +4,6 @@ set -e
 
 PKG=linux-firewall-kmod
 VERSION="$(dpkg-query -W -f='${Version}' "$PKG")"
-CURRENT_KERNEL="$(uname -r)"
 
 # 升级时 dpkg 删掉旧包的 /usr/src/linux-firewall-kmod-<oldver>，但旧版本条目仍留在
 # /var/lib/dkms，source 符号链接悬空会让 dkms status 与 dkms autoinstall 整体报错。
@@ -29,10 +28,29 @@ if lsmod | grep -q '^firewall '; then
     rmmod firewall 2>/dev/null || true
 fi
 
-echo "为内核 $CURRENT_KERNEL 编译内核模块..."
+echo "为所有已安装头文件的内核编译内核模块..."
 dkms add -m "$PKG" -v "$VERSION"
-dkms build -m "$PKG" -v "$VERSION" -k "$CURRENT_KERNEL"
-dkms install -m "$PKG" -v "$VERSION" -k "$CURRENT_KERNEL" --force
+
+# 双内核机器（升级后仍可回退）与当前内核都需要 firewall.ko：只给当前内核 build/install
+# 会让另一内核（尤其回退内核）缺模块，服务在该内核上起不来。单个内核头文件缺失或编译
+# 失败只告警跳过，不拖垮整次安装；但一个都没装成时模块必然加载不了，按失败处理。
+installed=0
+for build_dir in /lib/modules/*/build; do
+    [ -d "$build_dir" ] || continue
+    kernel_dir="${build_dir%/build}"
+    kernel="${kernel_dir##*/}"
+    if dkms build -m "$PKG" -v "$VERSION" -k "$kernel" \
+        && dkms install -m "$PKG" -v "$VERSION" -k "$kernel" --force; then
+        installed=$((installed + 1))
+    else
+        echo "WARNING: 内核 $kernel 的 DKMS 编译/安装失败，已跳过"
+    fi
+done
+
+if [ "$installed" -eq 0 ]; then
+    echo "ERROR: 没有任何内核成功安装 firewall 模块，请先安装 linux-headers-\$(uname -r)"
+    exit 1
+fi
 
 if ! lsmod | grep -q '^firewall '; then
     echo "加载内核模块..."

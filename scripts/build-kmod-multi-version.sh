@@ -281,9 +281,9 @@ build_all() {
     
     for version in "${versions[@]}"; do
         if build_for_version "$version"; then
-            ((success++))
+            ((success+=1))
         else
-            ((failed++))
+            ((failed+=1))
         fi
         echo
     done
@@ -345,9 +345,9 @@ main() {
         
         for version in "$@"; do
             if build_for_version "$version"; then
-                ((success++))
+                ((success+=1))
             else
-                ((failed++))
+                ((failed+=1))
             fi
             echo
         done

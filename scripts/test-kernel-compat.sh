@@ -124,12 +124,12 @@ test_all_versions() {
             local kernel_version
             kernel_version=$(basename "$ko_dir" | sed 's/kernel-module-//')
             
-            ((total++))
+            ((total+=1))
             
             if test_kernel_version "$kernel_version"; then
-                ((success++))
+                ((success+=1))
             else
-                ((failed++))
+                ((failed+=1))
             fi
             
             echo

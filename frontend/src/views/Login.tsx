@@ -133,7 +133,7 @@ export default function Login() {
             style={{ fontSize: 12, textAlign: 'center', margin: 0 }}
           >
             凭据由管理员通过环境变量 <span className="fw-mono">FIREWALL_METRICS_USERNAME / PASSWORD</span>{' '}
-            下发。会话令牌仅保存在当前标签页，关闭即失效。
+            下发。凭据以 Basic token 形式保存在本机 localStorage，跨标签页共享，直到点击退出登录。
           </Typography.Paragraph>
         </Space>
       </div>

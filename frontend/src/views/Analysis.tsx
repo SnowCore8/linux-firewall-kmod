@@ -145,6 +145,7 @@ const DIRECTION_META: Record<string, { label: string; color: string }> = {
   decrease: { label: '下调', color: 'blue' },
   keep: { label: '维持', color: 'default' },
   none: { label: '维持', color: 'default' },
+  maintain: { label: '维持', color: 'default' },
 }
 
 function urgencyColor(value: string): string {
