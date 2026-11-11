@@ -37,9 +37,9 @@ WEBUI_STATIC_DIR := src/daemon/web_ui/static
 DAEMON_SRCS_DIR := src/daemon
 PFX_FRONTEND   := frontend
 
-# golangc 检查 Go 1.23+ 是否随 PATH
+# golangc 检查 Go 1.26+ 是否随 PATH
 GOC            ?= go
-GOVER          ?= 1.23
+GOVER          ?= 1.26
 
 # ccache 支持（内核模块 C 编译缓存，加速重复构建）
 # 设为空字符串可禁用：make kernel-module CCACHE=
@@ -325,6 +325,13 @@ frontend-typecheck: frontend-install
 # CI 主目标：完整的持续集成流程
 # 用法：make ci [SKIP_FORMAT_CHECK=1] [SKIP_TESTS=1] [VERBOSE=1]
 .PHONY: ci ci-setup ci-format ci-contract ci-build ci-test ci-cleanup ci-summary
+# 线性依赖链：保证 make -j 下各阶段串行执行
+ci-format: ci-setup
+ci-contract: ci-format
+ci-build: ci-contract
+ci-test: ci-build
+ci-cleanup: ci-test
+ci-summary: ci-cleanup
 ci: ci-setup ci-format ci-contract ci-build ci-test ci-cleanup ci-summary
 	@echo ""
 	@echo "═══════════════════════════════════════════════════════════"

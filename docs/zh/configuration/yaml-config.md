@@ -29,12 +29,12 @@
 |------|------|------|------|------|
 | `max_retries` | 整数 | 否 | 3 | 窗口内失败几次就封 |
 | `findtime` | 整数 | 否 | 600 | 失败计数窗口（秒） |
-| `ban_time` | 整数 | 否 | 600 | 封禁时长（秒），负数是永久 |
+| `ban_time` | 整数 | 否 | 900 | 封禁时长（秒），负数是永久 |
 | `interval` | 整数 | 否 | 1 | 检查间隔（秒） |
 | `metrics_port` | 整数 | 否 | 9119 | 面板与指标的监听端口 |
 | `metrics_bind_address` | 字符串 | 否 | `0.0.0.0` | 监听地址，`0.0.0.0` 表示所有网卡，`127.0.0.1` 仅本地 |
-| `metrics_username` | 字符串 | 否 | 空 | 面板登录用户名 |
-| `metrics_password` | 字符串 | 否 | 空 | 面板登录密码 |
+| `metrics_username` | 字符串 | 否 | `"admin"`（config/default.yaml 默认值） | 面板登录用户名 |
+| `metrics_password` | 字符串 | 否 | `"changeme"`（config/default.yaml 默认值，生产环境必须修改） | 面板登录密码 |
 | `log_file` | 字符串 | 否 | 空 | 独立日志文件路径 |
 | `log_level` | 整数 | 否 | 3 | 0 无、1 错误、2 警告、3 信息、4 调试 |
 | `log_destination` | 字符串 | 否 | `both` | `syslog` / `file` / `both` / `journal` |
