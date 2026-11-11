@@ -586,8 +586,10 @@ static void fw_rate_roll(struct fw_rate_node *n, unsigned long now) {
     atomic_inc(&fw_info.port_scan_detected);
   }
 
-  n->window_start = now;
-  n->last_activity = now;
+  /* 两个字段都被热路径无锁读，用 WRITE_ONCE 与读侧 READ_ONCE 配对，
+   * 保证 32 位平台上不会出现被拆分的两次半字写（torn write） */
+  WRITE_ONCE(n->window_start, now);
+  WRITE_ONCE(n->last_activity, now);
 
   /* 释放选举：atomic RMW 自带全屏障，保证 window_start 的写入先行可见 */
   atomic_xchg(&n->rolling, 0);
@@ -751,8 +753,14 @@ const char *fw_rate_observe(u8 af, const void *addr, u32 packet_len, u8 protocol
       s->seen_ports[s->seen_port_n++] = dst_port;
   }
 
-  /* 窗口滚动：cmpxchg 选举唯一结算者，热路径不取锁 */
-  if (unlikely(time_after(now, n->window_start + fw_info.rate_window_jiffies))) {
+  /*
+   * 窗口滚动：cmpxchg 选举唯一结算者，热路径不取锁。
+   * window_start 由滚动者写、rate_window_jiffies 由 netlink 下发线程写，两者都在
+   * 别的 CPU 上，故用 READ_ONCE 与写侧配对：只有 READ_ONCE/WRITE_ONCE 成对时，
+   * 编译器才保证这里是单次访问，不会把两次读合并或拆开而拿到不一致的窗口长度。
+   */
+  if (unlikely(time_after(
+        now, READ_ONCE(n->window_start) + READ_ONCE(fw_info.rate_window_jiffies)))) {
     if (atomic_cmpxchg(&n->rolling, 0, 1) == 0)
       fw_rate_roll(n, now);
   }

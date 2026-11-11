@@ -141,12 +141,20 @@ static inline void fw_stat_icmp_account(struct fw_stats_pcpu *s, u8 type, u8 cod
 void fw_stat_account(u32 pkt_len, u8 ttl, bool is_fragment, u16 dst_port,
                      bool is_udp, bool is_icmp, u8 icmp_type, u8 icmp_code) {
   struct fw_stats_pcpu *s = this_cpu_ptr(stats_pcpu);
+  u32 size_idx = (u32)fw_pkt_size_bucket(pkt_len);
+  u32 ttl_idx = (u32)fw_ttl_bucket(ttl);
 
-  s->pkt_sizes[fw_pkt_size_bucket(pkt_len)]++;
-  s->ttl_dist[fw_ttl_bucket(ttl)]++;
-  s->ip_frag_total++;
+  /*
+   * 直方图与分片计数是 u64，读侧（fw_stats_sum_histograms 等）在别的 CPU 上
+   * 裸循环求和。写侧无锁，故用 WRITE_ONCE 与读侧 READ_ONCE 配对：两者成对时
+   * 编译器不会把 64 位量拆成两次 32 位访问，32 位平台上也读不到撕裂值。
+   * 每个计数器只由本 CPU 递增，READ_ONCE + WRITE_ONCE 足以完成自增。
+   */
+  WRITE_ONCE(s->pkt_sizes[size_idx], READ_ONCE(s->pkt_sizes[size_idx]) + 1);
+  WRITE_ONCE(s->ttl_dist[ttl_idx], READ_ONCE(s->ttl_dist[ttl_idx]) + 1);
+  WRITE_ONCE(s->ip_frag_total, READ_ONCE(s->ip_frag_total) + 1);
   if (is_fragment)
-    s->ip_frag_count++;
+    WRITE_ONCE(s->ip_frag_count, READ_ONCE(s->ip_frag_count) + 1);
 
   if (is_udp && dst_port)
     fw_stat_udp_account(s, dst_port, pkt_len);

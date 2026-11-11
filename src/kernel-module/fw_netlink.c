@@ -1062,7 +1062,20 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
     }
 
   next:
-    skb_pull(skb, nlh->nlmsg_len);
+    /*
+     * 按 NLMSG_ALIGN 推进：nlmsg_len 不含尾部对齐填充，直接跳过它会让下一条
+     * nlmsghdr 落在非对齐地址上，ARM64 等严格对齐架构随即报对齐异常。
+     * 最后一条报文在 skb 中可能没有填充，对齐后的长度会超出 skb->len，此时
+     * 按剩余长度截断（与内核 netlink_rcv_skb 的处置一致），否则 skb_pull 因
+     * 长度越界不做任何事，循环会原地打转。
+     */
+    {
+      u32 msglen = NLMSG_ALIGN(nlh->nlmsg_len);
+
+      if (msglen > skb->len)
+        msglen = skb->len;
+      skb_pull(skb, msglen);
+    }
   }
 }
 
