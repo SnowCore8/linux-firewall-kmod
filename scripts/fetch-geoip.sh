@@ -127,8 +127,10 @@ fi
 
 # ---- 下载（官方源优先，支持镜像兜底） ---------------------------------------
 
-TMP_GZ="$(mktemp "${TMPDIR:-/tmp}/dbip-city-lite-XXXXXX.mmdb.gz")"
-TMP_OUT="$(mktemp "${TMPDIR:-/tmp}/dbip-city-lite-XXXXXX.mmdb")"
+# 临时文件放在目标目录内：与目标同一文件系统，最后的 mv 是原子 rename，
+# 守护进程不会读到半写的 MMDB（跨 /tmp 与数据目录时 mv 是拷贝+删除，非原子）。
+TMP_GZ="$(mktemp "$TARGET_DIR/.dbip-city-lite-XXXXXX.mmdb.gz")"
+TMP_OUT="$(mktemp "$TARGET_DIR/.dbip-city-lite-XXXXXX.mmdb")"
 # shellcheck disable=SC2064  # 变量在设置 trap 时已确定，此处就要立即展开
 trap "rm -f '$TMP_GZ' '$TMP_OUT'" EXIT
 
@@ -186,8 +188,8 @@ if [[ "$EXTRACTED_BYTES" -lt "$MIN_EXTRACTED_BYTES" ]]; then
     exit 1
 fi
 
+chmod 0644 "$TMP_OUT"
 mv -f "$TMP_OUT" "$TARGET"
-chmod 0644 "$TARGET"
 
 info "完成：$TARGET（$(du -h "$TARGET" | cut -f1)）"
 
