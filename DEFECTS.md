@@ -1,7 +1,7 @@
 # 功能缺陷清单
 
 > 生成时间：2026-11-11
-> 更新时间：2026-11-11（第八轮：短报文绕过、白名单设备归属、信誉分可见性、重试退避与持久化读路径）
+> 更新时间：2026-11-11（第九轮：封禁表摘链竞态、关停期 netlink、jail 归属、日志轮转尾部与阈值参数边界）
 > 状态标记：🔴 待修复 | 🟡 修复中 | 🟢 已修复 | ⚪ 设计取舍/复核为误报
 
 ---
@@ -10,17 +10,17 @@
 
 | 严重度 | 发现总数 | 已修复 | 待修复 |
 |--------|----------|--------|--------|
-| CRITICAL | 4 | 3 | 1 |
-| HIGH | 26 | 25 | 0 |
-| MEDIUM | 72 | 52 | 9 |
-| LOW | 72 | 17 | 54 |
-| **合计** | **174** | **97** | **64** |
+| CRITICAL | 5 | 4 | 1 |
+| HIGH | 31 | 30 | 0 |
+| MEDIUM | 80 | 60 | 9 |
+| LOW | 76 | 21 | 54 |
+| **合计** | **192** | **115** | **64** |
 
 另有 13 项经复核为误报或设计取舍（标 ⚪），不计入待修复：H-6、M-1、M-2、M-3、M-10、M-14、M-22、M-B7、M-D1、M-D4、M-D5、M-E2、L-E4。
 
 ---
 
-## CRITICAL 级（4 项）
+## CRITICAL 级（5 项）
 
 ### C-1 🟢 netlink 传输层 socket flags 未恢复
 - **文件**: `src/daemon/internal/kernel/transport.go:230-233`
@@ -41,9 +41,23 @@
 - **文件**: `Makefile:328`
 - **状态**: ✅ 已修复 — 7 个阶段改为线性依赖链（ci-format → ci-contract → ci-build → ci-test → ci-cleanup → ci-summary）
 
+### C-5 🟢 封禁节点摘链用 `hlist_del_rcu`，到期回调与删除路径竞态可二次摘链
+- **文件**: `src/kernel-module/fw_ban.c:303-313`（到期回调）、`581-590`（`fw_ban_del`）、`625-640`（白名单联动）、`353-356`（退出清理）
+- **问题**: `hlist_del_rcu()` 会把 `pprev` 写成 `LIST_POISON2`，而到期回调的守卫是
+  `hlist_unhashed(&n->hash)`（判 `pprev == NULL`）。删除路径先 `timer_delete()` 再摘链，但
+  `timer_delete()` 不同步：若定时器回调已在另一 CPU 上运行并卡在桶锁上，删除路径摘链、
+  `call_rcu()` 之后，回调拿到锁时 `hlist_unhashed()` 为假，会按「仍在链上」继续执行
+  `hlist_del_rcu()`；此时 `next` 已是 `LIST_POISON1`，`__hlist_del` 经毒化指针写
+  `next->pprev`，触发内核 Oops。退出清理与白名单联动同理
+- **影响**: 解封 / 到期 / 白名单删除与到期定时器重合时内核崩溃（可被正常运维操作触发）
+- **状态**: ✅ 已修复 — 到期回调、退出清理、`fw_ban_del`、白名单联动四处摘链全部改用
+  `hlist_del_init_rcu()`（恢复 `pprev == NULL`），`hlist_unhashed()` 守卫因此成立；
+  `timer_delete()` 保持非同步语义
+- **难度**: 低 | **风险**: 高（内核 Oops）
+
 ---
 
-## HIGH 级（26 项）
+## HIGH 级（31 项）
 
 ### H-1 🟢 内核模块 ip_fast_csum 读取越界
 - **文件**: `src/kernel-module/fw_hook.c:159-162,191`
@@ -144,7 +158,7 @@
   多字段判断在同一把读锁内一次取全；`config_guard_test.go` 用真实 reloader +
   两写三读并发，`go test -race ./...` 全绿
 
-### H-21 🔴 Blocklist.de 条目 TTL 固定 2 小时，每轮刷新后 92% 时间不起作用
+### H-21 🟢 Blocklist.de 条目 TTL 固定 2 小时，每轮刷新后 92% 时间不起作用
 - **文件**: `src/daemon/internal/threatfeeds/sources/blocklist.go:25`
 - **问题**: 该源 `Parse` 固定 `expiresAt = now+2h`，而其余源（ipsum/firehol/dshield/feodo）
   都是 25 小时；`refresh_interval` 默认 24 小时、允许 60s–86400s（`config/parser.go:764`），
@@ -157,7 +171,7 @@
   `ExpiresAt-now` 在 25h±1min
 - **难度**: 低 | **风险**: 中（判定命中率）
 
-### H-22 🔴 集群聚合键不做 IPv4-mapped 归一，所有映射地址塌进 `::/48`
+### H-22 🟢 集群聚合键不做 IPv4-mapped 归一，所有映射地址塌进 `::/48`
 - **文件**: `src/daemon/internal/decision/cluster.go:29-31`、`src/daemon/internal/detect/cidr.go:38-48`、
   `src/daemon/internal/config/types.go:18-23`、`src/daemon/internal/logparse/ip.go:76-88`
 - **问题**: `ExtractIP` 只对保留段检查做 Unmap，返回的仍是 `netip` 原值；`FamilyOf` 按
@@ -216,9 +230,64 @@
   合并落盘，`Stop` 强制落盘，退避在持续失败期间不再被入队打断
 - **难度**: 中 | **风险**: 中高（故障期 DB 雪崩与封禁延迟）
 
+### H-27 🟢 到期回调把「续期为永久」的封禁当作到期删除
+- **文件**: `src/kernel-module/fw_ban.c:455-470`（续期）、`300-313`（到期回调）
+- **问题**: 续期为永久时插入路径执行 `is_permanent = 1` 并 `timer_delete()`；`timer_delete()`
+  不同步，已在运行的回调仍会继续。回调只在 `!is_permanent` 分支重武装，看到
+  `is_permanent == 1` 就落入摘链删除分支，把刚续成永久的封禁解掉
+- **影响**: 永久封禁偶发消失；调用方（API / 自动判定）拿到成功回执却不再拦截
+- **状态**: ✅ 已修复 — 回调在续期判断前先读 `is_permanent`，为真则释放锁直接返回，
+  不摘链、不推送解封
+- **难度**: 低 | **风险**: 中高（封禁丢失）
+
+### H-28 🟢 自决封禁路径在 softirq 中调用可休眠的 `down_read`
+- **文件**: `src/kernel-module/fw_hook.c:146-152` → `fw_ban.c:525` → `fw_netlink.c:104`
+- **问题**: netfilter 钩子运行在 softirq，自决封禁调用
+  `fw_ban_try_add(..., notify=true)`，插入成功后 `fw_nl_send_lock()` 是
+  `down_read(&fw_nl_send_sem)`。非 PREEMPT_RT 内核在 softirq 中休眠是非法操作；
+  同一文件里到期回调与 DDoS 事件推送都已改用 `trylock`，只有这条路径漏掉
+- **影响**: 触发 `BUG: sleeping function called from invalid context`，内核告警/崩溃
+- **状态**: ✅ 已修复 — 自决路径传 `notify=false`，封禁成功后在同一 `trylock` 分支补发
+  `BanStateChange`，DDoS 事件照常单独推送；softirq 内不再取休眠锁，镜像也无需等对账
+- **难度**: 低 | **风险**: 高（内核上下文违规）
+
+### H-29 🟢 模块卸载窗口内 netlink 仍处理封禁/白名单指令
+- **文件**: `src/kernel-module/fw_netlink.c:861-1071`（`fw_nl_recv_msg`）、`fw_main.c:333-344`
+- **问题**: `fw_exit()` 先清理 `fw_ban/fw_wl/fw_rate/fw_stats/...`，最后才
+  `fw_netlink_exit()`；`fw_nl_recv_msg` 没有任何 `fw_is_shutting_down()` 检查。该窗口内
+  daemon 仍可下发 BAN_IP/ADD_WHITELIST：查白名单时表已释放（UAF），新插入的封禁会
+  重新武装定时器，模块卸载后定时器回调指向已卸载代码
+- **影响**: rmmod/升级模块时若 daemon 正在下发，内核 UAF 或卸载后回调崩溃
+- **状态**: ✅ 已修复 — `fw_nl_recv_msg` 入口检查 `fw_is_shutting_down()`，关闭中直接丢弃
+  指令并记 rate-limited 日志，不再触碰已释放的表
+- **难度**: 低 | **风险**: 高（卸载期内核崩溃）
+
+### H-30 🟢 内核事件的空 jail 覆盖守护进程镜像，所有下发封禁归入空 jail
+- **文件**: `src/daemon/internal/kernel/consumer.go:415-416,755-770,776-800`、`contract/netlink.fwidl:163,386-393`
+- **问题**: `BanIp` 没有 jail 字段，内核为 daemon 下发的封禁广播
+  `jail_name = ""`（契约约定「空串表示由 daemon 推断」）。`banInfoFromChange()` 直接用
+  `ev.JailName` 覆盖 `Upsert`，把 `InsertPending` 里记录的真实 jail 冲成空串；对账构造的
+  `banInfoFromEntry()` 同样直接取内核条目。`CountByJail()` 与按 jail 批量解封因此全部
+  落在 `""`
+- **影响**: 面板每个 jail 的活跃封禁数恒为 0/错误，按 jail 批量解封失效；正常自动封禁
+  路径全部受影响
+- **状态**: ✅ 已修复 — 事件与对账在 `JailName` 为空时保留镜像里已有的 jail 归属，
+  仅本地也无归属时才用空串
+- **难度**: 低 | **风险**: 中高（运维视图与批量操作失真）
+
+### H-31 🟢 netlink 链路断开后接收回路退出，进程继续运行但永久失聪
+- **文件**: `src/daemon/internal/kernel/reactor.go:70-86`、`src/daemon/internal/runtime/supervisor.go:57-69`
+- **问题**: `Run()` 收到 `EventLinkDown` 只记一条 Warn 后 `return`；Supervisor 只等待
+  goroutine 结束，不重启也不上报。此后封禁事件、指令回执、对账响应全部无人接收，
+  守护进程仍正常提供 HTTP/前端
+- **影响**: 模块重载或 socket 异常后，面板与判定链路静默失效，直到人工重启
+- **状态**: ✅ 已修复 — reactor 支持 `WithLinkDownHandler`，组合根把链路断开转为致命错误并
+  请求退出，由 systemd `Restart=on-failure` 拉起；回调只触发一次
+- **难度**: 中 | **风险**: 中高（控制面静默失效）
+
 ---
 
-## MEDIUM 级（72 项）
+## MEDIUM 级（80 项）
 
 ### 内核模块（4 项）
 | # | 文件 | 问题 | 状态 |
@@ -340,9 +409,21 @@
 | M-33 | `http/recommendations.go:58,95`、`persist/history.go:117` | 白名单推荐在 IP 级先按 `min_bans` 过滤，再按 /24 聚合；20 台各封 2 次的 /24（合计 40）在 `min_bans=5` 时返回空，子网级阈值成死代码，`total_bans/affected_ips` 也被低报 | 🟢 已修复：聚合下推到持久层，`min_bans` 在 /24、/48 聚合结果上判定；补段合计达标用例 |
 | M-34 | `http/risk.go:115-136`、`persist/attack_events.go:41-47` | `/api/v2/risk/events/:ip` 以 `since=0` 取该 IP 全量事件再内存截断 100；`total` 也取截断后的长度。高频攻击源单次请求可把数十万行读进内存 | 🟢 已修复：SQL `LIMIT/OFFSET` 下推、`total` 改 COUNT 全集；契约同步 limit/offset 与 total 语义 |
 
+### 第九轮补充（8 项）
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| M-36 | `kernel-module/fw_rate.c:648-674`、`daemon/internal/config/kernel_view.go:30-38` | 动态阈值以 `baseline_pps/bps` 为乘数，但全仓无 `BASELINE_UPDATE` 发送方（`ConfigFlagBaselineUpdate` 只在 `names.go` 出现），`analysis.EWMASmoother` 无生产调用者，`ddos.baseline_warmup_samples` 只解析不使用。基线恒为 0 时动态阈值算出 0；若同时关闭静态阈值，任意有流量的源都会被判「total rate」并自决封禁 | 🟢 已修复：动态阈值按维度生效——该维度基线为 0 或比例缺失时该维度不参与判定，静态仍生效；两维度都无动态阈值且静态关闭时不做总速率判定；乘法溢出时阈值取 `U64_MAX` 而非 0。基线接线与 M-29 一并决策 |
+| M-37 | `kernel-module/fw_netlink.c:776-789,765`、`daemon/internal/http/bans.go:37-40,119-124` | BAN_IP 的 `duration_secs` 与 SET_CONFIG 的 `ddos_ban_duration` 都不做 365 天上限校验；状态恢复把 `remaining > 365 天` 的行判为损坏并丢弃（`fw_state.c:481-486`）。API 允许到 `MaxUint32` 秒 | 🟢 已修复：内核 BAN_IP 与 SET_CONFIG 按 `FW_BAN_TIME_MAX` 拒绝超限；daemon `CreateBan`/`BatchBan` 限制 365 天并返回可读 4xx |
+| M-38 | `kernel-module/fw_state.c:73-78,605-610,186-205` | 保存端按「容量参数 × 160 字节」反推上限并截断，恢复端固定 32 MiB；`fw_max_ban_entries` 等参数无上限校验，配置 20 万条以上时保存文件超过恢复上限，整个状态文件被 `-EFBIG` 拒绝 | 🟢 已修复：保存端以 `fw_state_max_file_size()` 为字节预算逐行累计；超预算条目丢弃并累加 `truncated`，落盘文件不再可能超过恢复端上限 |
+| M-39 | `kernel-module/fw_stats.c:210-270` | UDP 端口表（512 项）与 ICMP 类型表（128 项）只增不老化；表满后新键直接丢弃并计入 spill，旧条目 `last_seen` 永远不更新，长期运行后分析视图固化在最早的端口集合 | 🟢 已修复：表满插入时按 `last_seen` 淘汰最旧条目（`hash_del_rcu` + `call_rcu`），被淘汰键让位新键；既有 spill 计数保留 |
+| M-40 | `daemon/internal/bans/ban.go:102-121`、`kernel/consumer.go:755-800`、`http/bans.go:244-246` | 守护进程封禁镜像没有 `PrefixLen`：事件/对账里前缀丢失，DELETE 解封一律用 `FullPrefixLen(addr)`。网段封禁（如 /24）解封时前缀不匹配，内核回 `-ENOENT`，封禁无法从面板解除 | 🟢 已修复：`BanInfo` 携带 `PrefixLen`，事件、对账、单条解封与 `UnbanAllTemporary` 统一使用镜像前缀，未知前缀才退回 `FullPrefixLen`。缓存键仍按地址归一，同地址不同前缀共用一条镜像，后写入者为准 |
+| M-41 | `daemon/internal/logparse/rule.go:50-75` | `tryMatch` 从 `len(groups)/2-1` 倒序到 1，从不检查组 0。无捕获组的正则（如整行匹配 `(?:\d{1,3}\.){3}\d{1,3}`）能编译通过、配置校验通过，但永远匹配不到 IP，jail 静默失效 | 🟢 已修复：捕获组倒序扫描到组 0 作为回退，无捕获组的规则按整体匹配命中；组 0 含额外文本时仍由完整校验拒绝 |
+| M-42 | `daemon/internal/runtime/executor.go:735-756,908-919` | 轮转事件先 flush 半行，随后 `dropSource` 对读取器 `Reset()` 关 fd；最后一批最多 256 KiB 的未读尾巴若没被前面的 MODIFY 事件单批读干（事件合并、路径已消失）就丢失，且不发生成行判定 | 🟢 已修复：轮转摘源前用 `DrainTail` 有界读干旧 fd，逐 jail 送入判定后再 `Reset`；补轮转尾部用例 |
+| M-43 | `daemon/internal/logparse/splitter.go:55-75` | 尾部达到 `MaxLineBytes` 时直接清空缓冲；若物理行跨读批次（单批上限 256 KiB，短读也会切行），剩余半行会在下一批被当成新行输出，产生伪造 IP 行 | 🟢 已修复：超长行进入「丢弃至下一个换行」状态，`Clear`/`Flush` 复位；每条超长物理行只计一次，后续半行不再成行 |
+
 ---
 
-## LOW 级（72 项）
+## LOW 级（76 项）
 
 ### 内核模块（6 项）
 | # | 文件 | 问题 |
@@ -453,6 +534,14 @@
 | L-E9 | `http/handlers.go` 包注释把 50003 写成「查询失败」，与 `envelope.go` 的「库未初始化/503」不符（🟢 已修复） |
 | L-I1 | `ingest/registry.go:183-187` Iterate 浅拷贝 Owners，注释称「改动不影响注册表」不成立 |
 
+### 第九轮补充（4 项）
+| # | 问题 |
+|---|------|
+| L-41 | `contract/procfs.fwidl:242-243` 与 `kernel-module/fw_types.h:91-107`：契约写速率表上限 65536（锚 `fw_max_rate_entries`），实际硬上限是 `FW_RATE_CPU_SLOTS=512`；该参数也没有模块文档声明的 1024–262144 范围校验，写 1 即让速率跟踪近乎失效。契约注记与 init 校验需按真实口径修正。🟢 已修复（口径）：契约注记与模块参数说明改为「有效上限 = min(`fw_max_rate_entries`, `FW_RATE_CPU_SLOTS=512`)」；参数仍只拒绝 0，低于 512 时按槽位封顶 |
+| L-42 | `daemon/internal/ingest/reader.go:118`：同 inode 的截断检测只认 `size < offset`；copytruncate 后在下一次轮询前又写回超过旧偏移时，新内容被当作已读丢弃。🟢 已修复：维护 64 字节尾部指纹，同 inode 尺寸未缩但尾部内容变化时按重写处理并从头读 |
+| L-43 | `daemon/internal/daemonize/daemonize.go:75-110`、`cmd/firewall-daemon/main.go:91`：PID 文件不加锁、不校验属主存活；第二个实例覆盖 PID 文件，先退出的实例会删掉后者文件，陈旧 PID 也可能指向无关进程。🟢 已修复：写前用 `kill(pid, 0)` 判存活并拒绝覆盖；退出只删除属主 PID 与自身一致的文件 |
+| L-44 | `daemon/internal/kernel/consumer.go:517`：`CmdResult.ErrorCode` 是负 errno，`Value: uint64(int64(...))` 回绕成极大无符号数；`telemetry.Event.Value` 注释约定承载 errno。🟢 已修复：CmdResult 事件不再写 `Value`，错误码只经 `ErrorCode` 字段传递 |
+
 ---
 
 ## 设计取舍（不修复）
@@ -502,9 +591,17 @@ C-4、H-8、H-9、H-12、H-13、H-14、H-15、H-16、H-17、H-18、M-F1、M-F2
 - 日志/读取：M-27、L-27、M-30
 - 分析读数：L-33、L-34
 
+### 批次 8（已提交）：第八轮 11 项
+H-23、H-24、H-25、H-26、M-31、M-32、M-33、M-34、L-36、L-39、L-40
+
+### 批次 9（已提交）：第九轮 18 项
+- 内核：C-5、H-27、H-28、H-29、M-36、M-37、M-38、M-39
+- 守护进程：H-30、H-31、M-40、M-41、M-42、M-43、L-42、L-43、L-44
+- 契约：L-41（提交范围 aebe60a5..44e1a118）
+
 ### 待修复重点（按风险排序）
 1. **CRITICAL**：C-2（SSE 凭据在 URL，需前后端配合）
 2. **MEDIUM 数据正确性**：M-23（内核拒绝封禁后底账不回撤）、M-29（DDoS 引擎未接线、
    `auto_ban_threshold` 无消费者）、M-F5
 3. **测试缺口**：M-T1~M-T5、M-E1
-4. **LOW 批量**：其余 52 项，按模块分批处理
+4. **LOW 批量**：其余 54 项，按模块分批处理
