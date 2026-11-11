@@ -61,7 +61,8 @@
 /* 分页收集时每页行数 */
 #define FW_STATE_PAGE 64
 
-/* 恢复只做一次：模块生命周期内的守卫。用 bit 操作保证原子性。 */
+/* 成功恢复只做一次：模块生命周期内的守卫。失败路径会放位，故失败仍可重试；
+ * 用 bit 操作保证并发下只有一个执行者进入恢复流程。 */
 static unsigned long fw_state_restored_flag;
 /* 状态保存截断累计计数：fw_state_write_bans/whitelist 遇到条目超过保存上限时递增，
  * 由 procfs stats 暴露给守护进程。用 atomic64 因为递增发生在保存路径（无锁上下文），
@@ -553,36 +554,64 @@ static int fw_state_restore_wl(const char *rest, u8 af) {
   return ret;
 }
 
+/*
+ * 返回值：0 表示恢复完成，或首次启动确实没有状态文件（ENOENT）；负 errno 表示
+ * 快照存在却读不到/不可用。后者不能静默降级——白名单没恢复回来，内核照常收包，
+ * 管理员自己的地址就可能被当成攻击源封掉。调用方据此放弃加载（fw_main.c）。
+ *
+ * 一次性标志只在「路径合法、打开成功、且本次恢复扫完整个文件」之后保留置位；
+ * 任何失败路径都 clear_bit，使同一实例内的再次调用仍有机会恢复。
+ */
 int fw_state_restore(void) {
   const char *path = fw_state_file;
   struct file *file;
   char *buf = NULL, *work, *line;
-  size_t cap = fw_state_max_file_size();
+  size_t cap;
   loff_t isize;
   ssize_t len = 0;
   int ret = 0;
 
-  /* test_and_set_bit 返回旧值：已恢复则跳过，保证并发调用只执行一次 */
+  /*
+   * test_and_set_bit 返回旧值：已（成功）恢复则直接返回。并发下只有抢到位的
+   * 线程进入恢复流程，抢不到的在任何读写之前就返回；抢到者直到函数结束才放位，
+   * 故不存在两条线程同时解析同一份快照。
+   */
   if (test_and_set_bit(0, &fw_state_restored_flag))
     return 0;
 
-  if (fw_state_validate_path(path))
-    return -EINVAL;
+  ret = fw_state_validate_path(path);
+  if (ret) {
+    /* 路径来自模块参数：报出具体 errno，管理员改对参数后重新加载即可 */
+    pr_err("state_file 路径非法: %d，白名单与封禁未恢复\n", ret);
+    goto out;
+  }
 
   file = filp_open(path, O_RDONLY | O_NOFOLLOW, 0);
   if (IS_ERR(file)) {
-    /* 首次启动没有状态文件属正常情况 */
-    return 0;
+    ret = (int)PTR_ERR(file);
+    if (ret == -ENOENT) {
+      ret = 0; /* 首次启动还没有快照：正常路径，不告警 */
+    } else {
+      /*
+       * EACCES / EIO / ELOOP（O_NOFOLLOW 撞上符号链接）等都与「没有文件」不同：
+       * 快照本该在却读不到，必须让失败可见，不能当成干净启动。
+       */
+      pr_err("打开状态文件 %s 失败: %d，白名单与封禁未恢复\n", path, ret);
+    }
+    goto out;
   }
 
   /*
-   * 读多少配多少：上限按容量参数反推（见 fw_state_max_file_size）。旧的固定
-   * 128 KB 与「保存上限 4096 行」从来不自洽——接近写满的快照必然被截断，CRC
-   * 必然不符，于是「保存成功、恢复必失败」。
+   * 读多少配多少：上限按容量参数反推（见 fw_state_max_file_size）。保存路径
+   * 必定写 FW_STATE 头行与 CRC32 尾行，故 0 字节文件只可能是损坏，不是空快照。
    */
+  cap = fw_state_max_file_size();
   isize = i_size_read(file_inode(file));
-  if (isize <= 0)
+  if (isize <= 0) {
+    pr_err("状态文件 %s 为空（保存路径总要写头行与 CRC），按损坏处理，拒绝恢复\n", path);
+    ret = -EINVAL;
     goto out_close;
+  }
   if ((u64)isize > (u64)cap) {
     pr_err("状态文件 %lld 字节超过上限 %zu（按容量参数反推），拒绝恢复\n",
            (long long)isize, cap);
@@ -605,11 +634,17 @@ int fw_state_restore(void) {
       break;
     len += got;
   }
+  if (len != isize) {
+    /* 读不满说明文件被截断或底层报错：半份 body 的 CRC 本就对不上，直接拒绝 */
+    pr_err("状态文件 %s 读取不完整: %zd/%lld 字节，拒绝恢复\n", path, len, (long long)isize);
+    ret = -EIO;
+    goto out_close;
+  }
 
 out_close:
   filp_close(file, NULL);
 
-  if (!buf || len <= 0)
+  if (ret)
     goto out;
 
   buf[len] = '\0';
@@ -663,6 +698,15 @@ out_close:
 
 out:
   kvfree(buf);
+  if (ret) {
+    /*
+     * 只有「扫完整个文件」才算消费掉这次机会，失败一律放位。CRC 不符 / 超上限 /
+     * 读失败属于「文件存在但内容不可用」，重读同一份坏文件不会变好，这里仍清位
+     * 只为把规则收敛成「恢复到底才置位」；加载失败后重新 insmod 本就是新实例，
+     * 不会因旧标志挡住重试。
+     */
+    clear_bit(0, &fw_state_restored_flag);
+  }
   return ret;
 }
 

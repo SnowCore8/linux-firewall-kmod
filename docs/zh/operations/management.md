@@ -212,6 +212,11 @@ sudo rmmod firewall && sudo insmod build/kernel-module/firewall.ko
 `state_file`（默认 `/var/lib/firewall/state`），加载时 `fw_state_restore()`
 再读回来。要真正丢弃状态，得先停守护进程并删掉状态文件。
 
+状态恢复是**失败即拒绝加载**：文件不存在（首次启动）按干净启动处理；文件存在却
+打不开（权限、`O_NOFOLLOW` 撞符号链接）、为空、超过容量上限、读取不完整或 CRC
+不符时，`insmod` 失败并在 `dmesg` 给出具体原因——白名单没恢复就照常收包，会把
+管理员自己的地址当攻击源封掉。修好或删除该文件后重新 `insmod` 即可。
+
 ### 临时封禁批量解除
 
 HTTP API 有这条路由（`POST /api/v2/bans/unban-temporary`），

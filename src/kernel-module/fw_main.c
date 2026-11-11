@@ -233,8 +233,17 @@ static int __init fw_init(void) {
     goto err_rate;
   }
 
-  /* 状态恢复：文件不存在/损坏只在日志里体现，属正常启动路径 */
-  (void)fw_state_restore();
+  /*
+   * 状态恢复：ENOENT（首次启动没有快照）由恢复函数自己返回 0；其余失败说明
+   * 白名单/封禁没恢复回来，必须放弃加载——宁可不工作，也不能把管理员自己的
+   * 地址当攻击源封掉。此处钩子、procfs、notifier 都还没建立，err_rebuild 只拆
+   * netlink 及之前的各表。
+   */
+  ret = fw_state_restore();
+  if (ret) {
+    pr_err("状态恢复失败: %d，放弃加载\n", ret);
+    goto err_rebuild;
+  }
 
   /* ---- 本机地址首次发现：必须在注册钩子之前 ---- */
   ret = fw_netdev_rebuild_local();
