@@ -50,6 +50,9 @@ type RetryQueueConfig struct {
 	RetryInterval time.Duration
 	// MaxRetryInterval 是退避上限。
 	MaxRetryInterval time.Duration
+	// PersistInterval 是把脏队列合并落盘的节拍；<=0 时取 300ms。
+	// 入队只置脏标记，落盘由该节拍合并，避免后端持续失败时每次入队都全量写盘。
+	PersistInterval time.Duration
 }
 
 // RetryQueue 把失败的数据库写入放入有界内存队列，由后台协程按指数退避重试。
@@ -63,22 +66,32 @@ type RetryQueue struct {
 
 	mu    sync.Mutex
 	tasks []retryTask
+	// dirty 表示内存队列相对持久化文件有未落盘的变更；只在 mu 内读写，
+	// 使「取快照并清脏」与「入队置脏」在同一把锁上定序，节拍协程因此不会漏写。
+	dirty bool
+	// stopped 在 Stop 内部置位；Enqueue 读到它说明节拍协程已退出，必须自己落盘。
+	// 只在 mu 内读写，保证「Stop 已经取过快照」与「入队是否需要自持久化」不会交错丢失。
+	stopped bool
 
 	// persistMu 串行化「取快照 + 落文件」。没有它，两个并发 persist 会各自写临时文件，
 	// rename 的先后与快照的新旧无关——旧快照后落盘就会覆盖掉刚入队的任务。
 	persistMu sync.Mutex
 
-	wake       chan struct{}
-	stop       chan struct{}
-	done       chan struct{}
-	stopOnce   sync.Once
-	nextID     uint64
-	persistSeq uint64
+	wake        chan struct{}
+	stop        chan struct{}
+	done        chan struct{}
+	persistDone chan struct{}
+	stopOnce    sync.Once
+	nextID      uint64
+	persistSeq  uint64
+
+	// wakeCount 是测试用观测点：统计 notify 被调用的次数。
+	wakeCount atomic.Uint64
 }
 
-// NewRetryQueue 建队列并启动后台重试协程。
+// NewRetryQueue 建队列并启动后台重试协程与合并落盘协程。
 //
-// 调用方需在进程退出时调用 Stop 以等待后台协程结束并触发最后一次持久化。
+// 调用方需在进程退出时调用 Stop 以等待后台协程结束并触发最后一次强制落盘。
 func NewRetryQueue(db *DB, cfg RetryQueueConfig) *RetryQueue {
 	if cfg.MaxSize <= 0 {
 		cfg.MaxSize = 1000
@@ -89,25 +102,31 @@ func NewRetryQueue(db *DB, cfg RetryQueueConfig) *RetryQueue {
 	if cfg.MaxRetryInterval <= 0 {
 		cfg.MaxRetryInterval = time.Minute
 	}
+	if cfg.PersistInterval <= 0 {
+		cfg.PersistInterval = 300 * time.Millisecond
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
 	q := &RetryQueue{
-		cfg:   cfg,
-		db:    db,
-		log:   cfg.Logger,
-		tasks: make([]retryTask, 0, cfg.MaxSize),
-		wake:  make(chan struct{}, 1),
-		stop:  make(chan struct{}),
-		done:  make(chan struct{}),
+		cfg:         cfg,
+		db:          db,
+		log:         cfg.Logger,
+		tasks:       make([]retryTask, 0, cfg.MaxSize),
+		wake:        make(chan struct{}, 1),
+		stop:        make(chan struct{}),
+		done:        make(chan struct{}),
+		persistDone: make(chan struct{}),
 	}
 	go q.run()
+	go q.persistLoop()
 	return q
 }
 
 // Enqueue 把一条失败任务放入队列。
 //
-// 队列满时丢弃最旧任务并记日志。成功入队后触发持久化与后台协程唤醒。
+// 只有队列由空转非空才唤醒后台协程：队列非空时后端正在退避，逐条唤醒会把退避清零、
+// 让每个入队都触发一次立即重试。落盘同理交给脏标记 + 节拍合并，不在入队路径上写全量快照。
 func (q *RetryQueue) Enqueue(task retryTask) {
 	if task.EnqueuedAt == 0 {
 		task.EnqueuedAt = time.Now().UnixNano()
@@ -115,19 +134,39 @@ func (q *RetryQueue) Enqueue(task retryTask) {
 	q.mu.Lock()
 	task.id = q.nextID
 	q.nextID++
-	if len(q.tasks) >= q.cfg.MaxSize {
-		dropped := q.tasks[0]
+	wasEmpty := len(q.tasks) == 0
+	q.tasks = append(q.tasks, task)
+	q.trimLocked()
+	q.dirty = true
+	stopped := q.stopped
+	q.mu.Unlock()
+
+	if wasEmpty {
+		q.notify()
+	}
+	if stopped {
+		// 节拍协程已退出，没人会再消费脏标记，这里自己落盘。
+		q.persist()
+	}
+}
+
+// trimLocked 在锁内把队列裁到 MaxSize，丢弃最旧任务并记日志，返回丢弃条数。
+//
+// 调用方必须持有 q.mu。入队与 retryBatch 重建队列都在同一锁周期内裁剪：批次执行期间
+// 入队丢弃的条目只从 q.tasks 里消失，重建时却会从 batch 拷贝中复活，若不在此再裁一次，
+// 队列会越过 MaxSize 并不停增长。
+func (q *RetryQueue) trimLocked() (dropped int) {
+	for len(q.tasks) > q.cfg.MaxSize {
+		oldest := q.tasks[0]
 		q.tasks = q.tasks[1:]
 		q.log.Warn("retry queue full, dropping oldest task",
-			"op", string(dropped.Op),
-			"ip", dropped.IP,
-			"enqueued_at", time.Unix(0, dropped.EnqueuedAt).UTC().Format(time.RFC3339),
+			"op", string(oldest.Op),
+			"ip", oldest.IP,
+			"enqueued_at", time.Unix(0, oldest.EnqueuedAt).UTC().Format(time.RFC3339),
 		)
+		dropped++
 	}
-	q.tasks = append(q.tasks, task)
-	q.mu.Unlock()
-	q.persist()
-	q.notify()
+	return dropped
 }
 
 // Len 返回当前队列中的任务数（测试用）。
@@ -144,6 +183,12 @@ func (q *RetryQueue) Len() int {
 func (q *RetryQueue) Stop() {
 	q.stopOnce.Do(func() { close(q.stop) })
 	<-q.done
+	<-q.persistDone
+	// 节拍协程已退出：置 stopped 让后续 Enqueue 自己落盘，再强制落盘一次，
+	// 把脏标记里还没写出的任务补上，保证关停不丢数据。
+	q.mu.Lock()
+	q.stopped = true
+	q.mu.Unlock()
 	// 最后一次 flush：尝试把队列中剩余的任务写入 DB。
 	q.flush(context.Background())
 	q.persist()
@@ -156,6 +201,7 @@ func (q *RetryQueue) Flush(ctx context.Context) {
 
 // notify 唤醒后台协程（非阻塞）。
 func (q *RetryQueue) notify() {
+	q.wakeCount.Add(1)
 	select {
 	case q.wake <- struct{}{}:
 	default:
@@ -172,7 +218,7 @@ func (q *RetryQueue) run() {
 		case <-q.stop:
 			return
 		case <-q.wake:
-			// 有新任务入队，立即尝试重试。
+			// 队列由空转非空，立即尝试一次。
 		case <-time.After(backoff):
 			// 定时重试。
 		}
@@ -182,9 +228,14 @@ func (q *RetryQueue) run() {
 		}
 		if failed > 0 {
 			consecutiveFailures++
-		} else {
-			consecutiveFailures = 0
+			continue
 		}
+		if consecutiveFailures > 0 {
+			// 退避归零：失败期间入队的任务一直没被唤醒，补一次立即重试，
+			// 否则它们要白等一个已经不需要的长退避。
+			q.notify()
+		}
+		consecutiveFailures = 0
 	}
 }
 
@@ -260,16 +311,20 @@ func (q *RetryQueue) retryBatch() (succeeded, failed int) {
 	}
 
 	q.mu.Lock()
-	// 收集在 batch 拷贝之后新入队的任务（id >= maxID）。
-	var newTasks []retryTask
+	// 收集在 batch 拷贝之后新入队的任务（id >= maxID）。更早的条目要么在 remaining 里，
+	// 要么已被成功消费。
+	rebuilt := remaining
 	for i := range q.tasks {
 		if q.tasks[i].id >= maxID {
-			newTasks = append(newTasks, q.tasks[i])
+			rebuilt = append(rebuilt, q.tasks[i])
 		}
 	}
-	q.tasks = append(remaining, newTasks...)
+	q.tasks = rebuilt
+	// 批次期间入队触发的丢弃只削掉了 q.tasks 的头部，重建会把它从 batch 里带回来；
+	// 在同一锁周期内再裁一次，容量上限始终成立。
+	trimmed := q.trimLocked()
 	q.mu.Unlock()
-	if succeeded > 0 || dropped > 0 {
+	if succeeded > 0 || dropped > 0 || trimmed > 0 {
 		q.persist()
 	}
 	return succeeded, failed
@@ -324,10 +379,11 @@ func (q *RetryQueue) flush(ctx context.Context) {
 	}
 }
 
-// persist 把当前队列写入持久化文件。
+// persist 强制把当前队列写入持久化文件。
 //
 // 快照与写入都在 persistMu 内完成，落盘顺序因此与快照顺序一致，最后一次写入必然是
 // 最新快照。临时文件名仍用递增序号，避免极端情况下与残留文件重名。
+// 快照与清脏在同一把 mu 内完成：此后入队的任务会重新置脏，不会被这次写盘吞掉。
 func (q *RetryQueue) persist() {
 	if q.cfg.PersistPath == "" {
 		return
@@ -338,6 +394,7 @@ func (q *RetryQueue) persist() {
 	q.mu.Lock()
 	tasks := make([]retryTask, len(q.tasks))
 	copy(tasks, q.tasks)
+	q.dirty = false
 	q.mu.Unlock()
 
 	data, err := json.Marshal(tasks)
@@ -358,9 +415,40 @@ func (q *RetryQueue) persist() {
 	}
 }
 
+// persistIfDirty 仅在队列有未落盘变更时写盘，供节拍协程调用。
+func (q *RetryQueue) persistIfDirty() {
+	q.mu.Lock()
+	dirty := q.dirty
+	q.mu.Unlock()
+	if dirty {
+		q.persist()
+	}
+}
+
+// persistLoop 按 PersistInterval 节拍把脏队列合并落盘。
+//
+// 与 run 分离：run 的 select 每轮都会重算退避定时器，把落盘节拍塞进去会被重试唤醒打乱。
+func (q *RetryQueue) persistLoop() {
+	defer close(q.persistDone)
+	if q.cfg.PersistPath == "" {
+		return
+	}
+	ticker := time.NewTicker(q.cfg.PersistInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-q.stop:
+			return
+		case <-ticker.C:
+			q.persistIfDirty()
+		}
+	}
+}
+
 // LoadPersisted 从持久化文件加载待重试任务并入队。
 //
-// 启动时调用一次；文件不存在或为空时静默返回。
+// 启动时调用一次；文件不存在或为空时静默返回。文件里的任务超过 MaxSize 时按容量截断，
+// 并记一条 Warn 说明丢弃条数。
 func (q *RetryQueue) LoadPersisted() {
 	if q.cfg.PersistPath == "" {
 		return
@@ -396,6 +484,13 @@ func (q *RetryQueue) LoadPersisted() {
 	}
 	q.mu.Unlock()
 	q.log.Info("retry queue: loaded persisted tasks", "count", actualCount)
+	if truncated := len(tasks) - actualCount; truncated > 0 {
+		// 容量由 MaxSize 决定，这里不改容量，只把被丢弃的条数说清楚。
+		q.log.Warn("retry queue: persisted tasks exceed capacity, dropping remainder",
+			"dropped", truncated,
+			"max_size", q.cfg.MaxSize,
+		)
+	}
 }
 
 // EnqueueBanEvent 把失败的 RecordBanEvent 放入重试队列。
