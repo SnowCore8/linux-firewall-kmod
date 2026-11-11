@@ -8,6 +8,8 @@ import shutil
 import socket
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -500,6 +502,92 @@ def wait_for_metric(
         time.sleep(interval)
         value = parse_metric(get_prometheus_metrics(port), name)
     return value
+
+
+def wait_until(predicate, timeout: float = 8.0, interval: float = 0.2) -> bool:
+    """轮询 `predicate()` 直到为真或超时；返回最后一次结果，由调用方断言。
+
+    与 `wait_for_metric` 同一思路：自起 daemon 的重载/轮转落地时刻不确定，固定
+    `sleep` 既可能过短（偶发失败）也可能过长（拖慢套件）。超时不抛错，让调用方带着
+    自己的上下文写出可读的失败信息。
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        ok = bool(predicate())
+        if ok or time.monotonic() >= deadline:
+            return ok
+        time.sleep(interval)
+
+
+def http_basic_request(
+    port: int,
+    method: str,
+    path: str,
+    credentials: tuple[str, str] | None = None,
+    body: dict | None = None,
+    timeout: float = 8.0,
+) -> tuple[int, str]:
+    """向 `127.0.0.1:<port>` 发一次请求，返回 (状态码, 响应体)；不可达时状态码 0。
+
+    与 `run_curl` 的区别：凭据由调用方显式给出，不读部署配置——认证锁定用例需要
+    分别发出「错误凭据」与「锁定期间的正确凭据」，而锁定账本是进程级状态，不能拿
+    外部 daemon 去试。凭据只进请求头，不进 argv/URL，异常信息里也不回显。
+    """
+    url = f"http://127.0.0.1:{port}{path}"
+    request = urllib.request.Request(url, method=method.upper())
+    if credentials is not None:
+        token = base64.b64encode(
+            f"{credentials[0]}:{credentials[1]}".encode()
+        ).decode()
+        request.add_header("Authorization", f"Basic {token}")
+    if body is not None:
+        request.add_header("Content-Type", "application/json")
+        request.data = json.dumps(body).encode()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, response.read().decode(errors="replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode(errors="replace")
+    except (urllib.error.URLError, OSError):
+        return 0, ""
+
+
+def start_daemon(cfg_path: str, env: dict | None = None) -> subprocess.Popen:
+    """起一个测试用 daemon 进程（stdout/stderr 收进管道），返回 Popen。
+
+    调用方必须先确认没有外部 daemon 持有内核租约（单守护进程约束）。这里调用
+    `mark_daemon_launched()`：会话收尾的 `release_kernel_lease` 依赖它重载模块，
+    否则内核租约要 30 秒才超时释放。收尾一律用 `terminate_process`。
+    """
+    mark_daemon_launched()
+    return subprocess.Popen(
+        [str(DAEMON_PATH), "-c", str(cfg_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+
+
+def wait_http_ready(
+    proc: subprocess.Popen,
+    port: int,
+    path: str = "/api/v2/health",
+    timeout: float = 8.0,
+) -> None:
+    """轮询 daemon 的就绪端点；进程提前退出或超时直接判失败（附退出码与 stderr）。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            _out, err = proc.communicate()
+            pytest.fail(
+                "daemon 启动即退出（检查内核模块、租约与配置）: "
+                f"rc={proc.returncode} stderr={err.decode(errors='replace')[:200]}"
+            )
+        code, _ = http_basic_request(port, "GET", path, None)
+        if code == 200:
+            return
+        time.sleep(0.1)
+    pytest.fail(f"daemon HTTP 端点 {path} 未在 {timeout}s 内就绪")
 
 
 def run_daemon_captured(cmd: list[str], timeout: int = 5):
