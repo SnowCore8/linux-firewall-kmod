@@ -297,3 +297,89 @@ func TestEvictionWriteFailureKeepsPending(t *testing.T) {
 		t.Fatalf("被逐出条目的分数 = %d，期望 90", got)
 	}
 }
+
+// claimPending 模拟 writeAll 把某条目的待写量摘走清零（写库前的锁内动作）。
+func claimPending(t *testing.T, f *Facts, ip string) (*factsEntry, uint32) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	el, ok := f.index[ip]
+	if !ok {
+		t.Fatalf("条目 %s 不在索引里", ip)
+	}
+	e := el.Value.(*factsEntry)
+	n := e.pending
+	e.pending = 0
+	return e, n
+}
+
+// 写库期间条目被逐出、同 IP 又建出替代条目时，写失败必须把欠账并入替代条目。
+//
+// 真实交错由调度决定；这里把顺序固定下来：先清零 pending（writeAll 已摘走），再让
+// 逐出路径看到 0（不写库、直接摘链），随后同 IP 的新日志建替代条目，最后才还账。
+// 若像旧实现那样直接还给原对象，欠账会挂到一条不再被索引的孤儿上，后续 Flush 永远
+// 摘不到它，这部分扣分再也不会落盘。
+func TestRequeueLostMergesIntoReplacement(t *testing.T) {
+	db := newTestDB(t)
+	f := NewFacts(db, FactsOptions{Capacity: 2})
+	ip := "203.0.113.70"
+
+	f.RecordFailure(addr(t, ip))
+	orphan, n := claimPending(t, f, ip)
+	// 两个新 IP 依次把孤儿挤出缓存（容量 2，期间不打乱 LRU）。
+	f.RecordFailure(addr(t, "203.0.113.71"))
+	f.RecordFailure(addr(t, "203.0.113.72"))
+	if _, ok := f.index[ip]; ok {
+		t.Fatal("孤儿条目仍在索引里，交错前提不成立")
+	}
+	// 同 IP 再出现：库中没有它的记录（欠账从未落盘），替代条目从 100 扣到 90。
+	f.RecordFailure(addr(t, ip))
+
+	f.mu.Lock()
+	f.requeueLostLocked(orphan, n)
+	f.mu.Unlock()
+
+	if got := f.ReputationScore(addr(t, ip)); got != 80 {
+		t.Fatalf("合并欠账后内存分 = %d，期望 80", got)
+	}
+	if entries, pending := f.Stats(); entries != 2 || pending != 2 {
+		t.Fatalf("entries=%d pending=%d，期望 2/2", entries, pending)
+	}
+	if err := f.Flush(); err != nil {
+		t.Fatalf("刷盘失败: %v", err)
+	}
+	if got := dbScore(t, db, ip); got != 80 {
+		t.Fatalf("落库分数 = %d，期望 80（两笔欠账都到达）", got)
+	}
+}
+
+// 写库期间条目被逐出且没有替代条目时，写失败必须把条目重新挂回索引。
+func TestRequeueLostReinsertsEvictedEntry(t *testing.T) {
+	db := newTestDB(t)
+	f := NewFacts(db, FactsOptions{Capacity: 1})
+	ip := "203.0.113.80"
+
+	f.RecordFailure(addr(t, ip))
+	orphan, n := claimPending(t, f, ip)
+	f.RecordFailure(addr(t, "203.0.113.81")) // 挤出孤儿，pending 为 0 故不写库
+	if _, ok := f.index[ip]; ok {
+		t.Fatal("孤儿条目仍在索引里，交错前提不成立")
+	}
+
+	f.mu.Lock()
+	f.requeueLostLocked(orphan, n)
+	f.mu.Unlock()
+
+	if entries, pending := f.Stats(); entries != 2 || pending != 2 {
+		t.Fatalf("entries=%d pending=%d，期望 2/2", entries, pending)
+	}
+	if got := f.ReputationScore(addr(t, ip)); got != 90 {
+		t.Fatalf("重新入队后的分数 = %d，期望 90", got)
+	}
+	if err := f.Flush(); err != nil {
+		t.Fatalf("刷盘失败: %v", err)
+	}
+	if got := dbScore(t, db, ip); got != 90 {
+		t.Fatalf("落库分数 = %d，期望 90（重新入队的欠账已落盘）", got)
+	}
+}

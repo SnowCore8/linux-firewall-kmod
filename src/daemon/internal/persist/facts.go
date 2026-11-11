@@ -433,12 +433,44 @@ func (f *Facts) writeAll(dirty []*factsEntry) error {
 			f.logger.Warn("信誉分落盘失败", "ip", e.ip, "error", err)
 			last = err
 			// 写失败就把量还回去，下一拍重试：宁可分数暂时不一致，也不要丢掉扣分记录。
+			// 还账必须认索引里的现存条目：写库在锁外，期间本条可能已被逐出、同 IP 又
+			// 建了新条目，直接还给 e 会把扣分挂到一条不再被索引的孤儿上。
 			f.mu.Lock()
-			e.pending += n
+			f.requeueLostLocked(e, n)
 			f.mu.Unlock()
 		}
 	}
 	return last
+}
+
+// requeueLostLocked 把一笔未能落盘的扣分记回索引中的条目；调用方必须持有写锁。
+//
+// e 可能已被逐出：writeAll 写库期间逐出路径取走 pending 并将条目移出索引，随后同一
+// IP 的新日志又建了一条替代条目。把量还给 e 就是还给孤儿——它不在 lru/index 里，
+// 后续 Flush 永远摘不到它，这部分扣分再也不会落盘。三种情况分别处理：
+//   - 索引里还是 e：直接追加 pending；
+//   - 换成了替代条目：按 writeBack 同一口径把欠账并入（库里尚未包含这笔扣分，故重载
+//     库值后先减分再追加 pending，保持「内存分 = 库分 - 待落盘量」）；
+//   - 索引里没有：把 e 重新挂回，下一拍继续重试。
+func (f *Facts) requeueLostLocked(e *factsEntry, n uint32) {
+	if cur, exists := f.index[e.ip]; exists {
+		ce := cur.Value.(*factsEntry)
+		if ce == e {
+			e.pending += n
+			return
+		}
+		f.loadScoreLocked(ce)
+		ce.pending += n
+		if ce.score > n {
+			ce.score -= n
+		} else {
+			ce.score = 0
+		}
+		f.lru.MoveToFront(cur)
+		return
+	}
+	e.pending += n
+	f.index[e.ip] = f.lru.PushFront(e)
 }
 
 // writeBack 是逐出路径上的同步落盘（容量已满时才走到，摊薄后仍是一次/条）。
@@ -457,22 +489,9 @@ func (f *Facts) writeBack(e *factsEntry) {
 	if err := f.writeN(e.ip, n); err != nil {
 		f.logger.Warn("逐出时信誉分落盘失败，重新入队等待重试", "ip", e.ip, "error", err)
 		f.mu.Lock()
-		// 该 IP 可能已被其他路径重新创建：把欠账并进现存的条目，而不是挂在一条
-		// 已不在索引里的对象上——后者会让这部分扣分永远不再落盘。
-		if cur, exists := f.index[e.ip]; exists {
-			ce := cur.Value.(*factsEntry)
-			f.loadScoreLocked(ce)
-			ce.pending += n
-			if ce.score > n {
-				ce.score -= n
-			} else {
-				ce.score = 0
-			}
-			f.lru.MoveToFront(cur)
-		} else {
-			e.pending = n
-			f.index[e.ip] = f.lru.PushFront(e)
-		}
+		// 该 IP 可能已被其他路径重新创建：欠账并入现存条目，而不是挂在一条已不在索引
+		// 里的对象上——后者会让这部分扣分永远不再落盘（同 writeAll 失败路径）。
+		f.requeueLostLocked(e, n)
 		f.mu.Unlock()
 	}
 }
