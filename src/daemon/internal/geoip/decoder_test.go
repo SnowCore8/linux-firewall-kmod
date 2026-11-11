@@ -136,15 +136,15 @@ func TestDecodeStringAndExtendedType(t *testing.T) {
 }
 
 // TestDecodeSpecTypeNumbers 用字面量字节钉住扩展类型编号：
-// boolean 是 13（ext 6），float32 是 14（ext 7）。
+// 扩展类型 = 第二字节 + 7，故 boolean 是 14（ext 7）、float32 是 15（ext 8）。
 func TestDecodeSpecTypeNumbers(t *testing.T) {
-	if got := decodeFirst(t, []byte{0x01, 0x06}); got != true {
-		t.Fatalf("type 13 boolean = %v", got)
+	if got := decodeFirst(t, []byte{0x01, 0x07}); got != true {
+		t.Fatalf("type 14 boolean = %v", got)
 	}
 	bits := math.Float32bits(1.5)
-	raw := []byte{0x04, 0x07, byte(bits >> 24), byte(bits >> 16), byte(bits >> 8), byte(bits)}
+	raw := []byte{0x04, 0x08, byte(bits >> 24), byte(bits >> 16), byte(bits >> 8), byte(bits)}
 	if got := decodeFirst(t, raw); got != float32(1.5) {
-		t.Fatalf("type 14 float32 = %v", got)
+		t.Fatalf("type 15 float32 = %v", got)
 	}
 }
 
@@ -220,18 +220,21 @@ func TestDecodeSizeForms(t *testing.T) {
 	}
 }
 
+// pointerTo 按 MMDB 规范编码指针：控制字节 = type<<5 | ss<<3 | 高 3 位值。
 func pointerTo(ss int, target uint64) []byte {
+	ctrl := byte(typePointer<<5) | byte(ss<<3)
 	switch ss {
 	case 0:
-		return []byte{byte(typePointer<<5) | 0, byte(target)}
+		v := target
+		return []byte{ctrl | byte(v>>8&0x7), byte(v)}
 	case 1:
 		v := target - 2048
-		return []byte{byte(typePointer<<5) | 1, byte(v >> 8), byte(v)}
+		return []byte{ctrl | byte(v>>16&0x7), byte(v >> 8), byte(v)}
 	case 2:
 		v := target - 526336
-		return []byte{byte(typePointer<<5) | 2, byte(v >> 16), byte(v >> 8), byte(v)}
+		return []byte{ctrl | byte(v>>24&0x7), byte(v >> 16), byte(v >> 8), byte(v)}
 	default:
-		b := []byte{byte(typePointer<<5) | 3}
+		b := []byte{ctrl}
 		var raw [4]byte
 		binary.BigEndian.PutUint32(raw[:], uint32(target))
 		return append(b, raw[:]...)
@@ -246,6 +249,7 @@ func TestDecodePointers(t *testing.T) {
 		size   int
 	}{
 		{"ss0", 0, 100, 200},
+		{"ss0-highbits", 0, 300, 400},
 		{"ss1", 1, 2100, 3000},
 		{"ss2", 2, 526346, 526400},
 		{"ss3", 3, 20, 200},

@@ -18,8 +18,8 @@ const (
 	typeInt32     = 8
 	typeUint64    = 9
 	typeArray     = 11
-	typeBool      = 13
-	typeFloat32   = 14
+	typeBool      = 14
+	typeFloat32   = 15
 	maxNesting    = 128
 	extendedShift = 7
 )
@@ -67,6 +67,12 @@ func (d *decoder) decode() (any, error) {
 		return nil, err
 	}
 	typ := int(ctrl >> 5)
+	if typ == typePointer {
+		// 指针的低 5 位不是长度，而是 `SSVVV`：高 2 位是 payload 字节数，
+		// 低 3 位是指针值的高位。必须先于长度扩展解析，否则会把指针值当成
+		// 长度字节消费，导致数据段错位。
+		return d.decodePointer(ctrl)
+	}
 	size := int(ctrl & 0x1f)
 	if typ == 0 {
 		ext, err := d.byte()
@@ -81,8 +87,6 @@ func (d *decoder) decode() (any, error) {
 	}
 
 	switch typ {
-	case typePointer:
-		return d.decodePointer(size)
 	case typeString:
 		if err := d.need(size); err != nil {
 			return nil, err
@@ -236,8 +240,13 @@ func (d *decoder) decodeSize(raw int) (int, error) {
 	}
 }
 
-// decodePointer 解码 type 1 指针，size 为 ss（0..3）。
-func (d *decoder) decodePointer(ss int) (any, error) {
+// decodePointer 解码 type 1 指针。
+//
+// 控制字节低 5 位的布局是 `SSVVV`：SS 决定后续 payload 字节数（0..3），VVV 是指针
+// 值的高 3 位（SS=3 时无意义）。偏移基值依次为 0 / 2048 / 526336 / 0。
+func (d *decoder) decodePointer(ctrl byte) (any, error) {
+	ss := int(ctrl>>3) & 0x3
+	vvv := uint64(ctrl&0x7) << 24
 	var off uint64
 	switch ss {
 	case 0:
@@ -245,21 +254,20 @@ func (d *decoder) decodePointer(ss int) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		off = uint64(b0)
+		off = vvv>>16 | uint64(b0)
 	case 1:
 		if err := d.need(2); err != nil {
 			return nil, err
 		}
-		b0, b1 := d.buf[d.pos], d.buf[d.pos+1]
+		off = 2048 + (vvv>>8 | uint64(d.buf[d.pos])<<8 | uint64(d.buf[d.pos+1]))
 		d.pos += 2
-		off = 2048 + uint64(b0&0x7)<<8 | uint64(b1)
 	case 2:
 		if err := d.need(3); err != nil {
 			return nil, err
 		}
-		v := uint64(d.buf[d.pos])<<16 | uint64(d.buf[d.pos+1])<<8 | uint64(d.buf[d.pos+2])
+		off = 526336 + (vvv | uint64(d.buf[d.pos])<<16 |
+			uint64(d.buf[d.pos+1])<<8 | uint64(d.buf[d.pos+2]))
 		d.pos += 3
-		off = 526336 + v
 	default: // 3
 		if err := d.need(4); err != nil {
 			return nil, err

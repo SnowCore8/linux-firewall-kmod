@@ -12,6 +12,7 @@ import (
 	"math"
 	"net/netip"
 	"os"
+	"sort"
 	"sync"
 )
 
@@ -111,7 +112,11 @@ func openBytes(data []byte) (*Reader, error) {
 		treeSize:   treeSize,
 	}
 	if r.ipVersion == 6 {
-		r.ipv4Start = r.walkZeroBits(96)
+		start, err := r.walkZeroBits(96)
+		if err != nil {
+			return nil, err
+		}
+		r.ipv4Start = start
 	}
 	return r, nil
 }
@@ -186,6 +191,10 @@ func (r *Reader) search(start uint32, ip []byte) (Location, bool) {
 	}
 
 	node := start
+	// 起点直接落在 data record：整个子树共用该记录（IPv6 库的 ::/96 提前终止即此形态）。
+	if node > nodeCount {
+		return lookupDataRecord(data, treeSize, node-nodeCount)
+	}
 	for _, octet := range ip {
 		for bit := 7; bit >= 0; bit-- {
 			if node >= nodeCount {
@@ -199,41 +208,54 @@ func (r *Reader) search(start uint32, ip []byte) (Location, bool) {
 			if record == nodeCount {
 				return Location{}, false
 			}
-			if record < nodeCount {
-				node = record
-				continue
+			if record > nodeCount {
+				return lookupDataRecord(data, treeSize, record-nodeCount)
 			}
-			// data record：偏移相对数据段起点，指针也相对数据段起点解析。
-			dataPos := int(record - nodeCount)
-			if treeSize > len(data) || dataPos < 0 || dataPos >= len(data)-treeSize {
-				return Location{}, false
-			}
-			dec := newDecoder(data[treeSize:])
-			dec.pos = dataPos
-			raw, err := dec.decode()
-			if err != nil {
-				return Location{}, false
-			}
-			return extractLocation(raw)
+			node = record
 		}
 	}
 	return Location{}, false
 }
 
-// walkZeroBits 从根节点沿 bits 个 0 位下行，返回到达的节点。
-func (r *Reader) walkZeroBits(bits int) uint32 {
+// lookupDataRecord 解码偏移为 offset 的 data record。偏移相对数据段起点。
+func lookupDataRecord(data []byte, treeSize int, offset uint32) (Location, bool) {
+	if treeSize > len(data) {
+		return Location{}, false
+	}
+	dataPos := int(offset)
+	if dataPos < 0 || dataPos >= len(data)-treeSize {
+		return Location{}, false
+	}
+	dec := newDecoder(data[treeSize:])
+	dec.pos = dataPos
+	raw, err := dec.decode()
+	if err != nil {
+		return Location{}, false
+	}
+	return extractLocation(raw)
+}
+
+// walkZeroBits 从根节点沿 bits 个 0 位下行，返回到达的记录值。
+//
+// 中途遇到 data record（`record > nodeCount`）时返回该记录而不是父节点：这正是
+// 「零路径提前终止」的表示，返回父节点会让后续的 IPv4 搜索多消费 96-k 位、落到
+// 错误分支。读到文件外才返回错误。
+func (r *Reader) walkZeroBits(bits int) (uint32, error) {
 	node := uint32(0)
 	for i := 0; i < bits; i++ {
 		if node >= r.nodeCount {
-			break
+			return node, nil
 		}
 		record, err := readRecord(r.data, node, r.recordSize, false)
-		if err != nil || record >= r.nodeCount {
-			break
+		if err != nil {
+			return 0, err
+		}
+		if record >= r.nodeCount {
+			return record, nil
 		}
 		node = record
 	}
-	return node
+	return node, nil
 }
 
 // readRecord 读取 node 的左（right=false）或右记录。
@@ -318,7 +340,10 @@ func asMap(m map[string]any, key string) map[string]any {
 	return sub
 }
 
-// namesFirst 优先取 names.en，否则取 names 中任意第一个非空字符串值。
+// namesFirst 优先取 names.en，否则取字典序最小的语言。
+//
+// 不能直接遍历 map：Go 的遍历顺序随机，同一地点会在不同请求里返回不同语言的地名，
+// 按坐标聚合的面板标签随之跳动。
 func namesFirst(item map[string]any) string {
 	names := asMap(item, "names")
 	if names == nil {
@@ -327,8 +352,13 @@ func namesFirst(item map[string]any) string {
 	if en := asString(names, "en"); en != "" {
 		return en
 	}
-	for _, v := range names {
-		if s, ok := v.(string); ok && s != "" {
+	keys := make([]string, 0, len(names))
+	for k := range names {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if s, ok := names[k].(string); ok && s != "" {
 			return s
 		}
 	}
