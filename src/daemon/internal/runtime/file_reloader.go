@@ -103,6 +103,14 @@ func (r *fileReloader) Rollback(cfg *config.Config) error {
 // 时留一条告警，而不是让人以为把端口写进文件就立刻生效。
 func (r *fileReloader) applyConfig(cfg *config.Config, newCfg config.Config) {
 	running := cfg.ListenAddress()
+	// 出口探测得到的本机坐标不是 YAML 键，只在启动时填一次；新配置从文件重建后这两组
+	// 字段为空，若直接换入，一次热重载就会把地图上的本机标记抹掉，直到进程重启才恢复。
+	// 文件显式给了坐标时以文件为准（ServerCoordsSet），探测结果只作兜底。
+	if !newCfg.ServerCoordsSet && cfg.ServerCoordsSource == "detected" {
+		newCfg.ServerLatitude = cfg.ServerLatitude
+		newCfg.ServerLongitude = cfg.ServerLongitude
+		newCfg.ServerCoordsSource = cfg.ServerCoordsSource
+	}
 	*cfg = newCfg
 	if configured := cfg.ListenAddress(); configured != running {
 		r.logger.Warn("HTTP 监听地址已改变，本进程不会重新绑定，需重启守护进程才会生效",

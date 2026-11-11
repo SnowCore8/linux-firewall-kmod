@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,69 @@ import (
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
 )
+
+// reloadFixture 写一份可被严格模式接受的最小配置（含一个 jail）并返回其路径。
+func reloadFixture(t *testing.T, extraTop string) string {
+	t.Helper()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "auth.log")
+	writeFile(t, logPath, "")
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, strings.Join([]string{
+		"defaults:",
+		"  max_retries: 3",
+		"  findtime: 600",
+		"  ban_time: 600",
+		extraTop,
+		"jails:",
+		"  sshd:",
+		"    enabled: true",
+		"    log_files:",
+		"      - " + logPath,
+		"",
+	}, "\n"))
+	return path
+}
+
+// 出口探测得到的本机坐标不是 YAML 键，只在启动时填一次：重载从文件重建配置时必须
+// 原样保留，否则一次 SIGHUP 就把地图上的本机标记抹掉，直到进程重启才会重新探测。
+func TestReloadPreservesDetectedServerCoords(t *testing.T) {
+	path := reloadFixture(t, "")
+	cfg := config.Default()
+	cfg.ServerLatitude = 31.23
+	cfg.ServerLongitude = 121.47
+	cfg.ServerCoordsSource = "detected"
+
+	reloader := NewFileReloader(path, true, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := reloader.Reload(&cfg); err != nil {
+		t.Fatalf("重载失败: %v", err)
+	}
+	if cfg.ServerCoordsSource != "detected" || cfg.ServerLatitude != 31.23 || cfg.ServerLongitude != 121.47 {
+		t.Fatalf("重载抹掉了探测坐标: source=%q lat=%v lon=%v",
+			cfg.ServerCoordsSource, cfg.ServerLatitude, cfg.ServerLongitude)
+	}
+}
+
+// 文件显式给了坐标时以文件为准：探测结果只能兜底，不能盖过运维写下的值。
+func TestReloadPrefersFileCoordsOverDetected(t *testing.T) {
+	path := reloadFixture(t, "server_latitude: 50.0\nserver_longitude: 8.0")
+	cfg := config.Default()
+	cfg.ServerLatitude = 31.23
+	cfg.ServerLongitude = 121.47
+	cfg.ServerCoordsSource = "detected"
+
+	reloader := NewFileReloader(path, true, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := reloader.Reload(&cfg); err != nil {
+		t.Fatalf("重载失败: %v", err)
+	}
+	if !cfg.ServerCoordsSet || cfg.ServerLatitude != 50 || cfg.ServerLongitude != 8 {
+		t.Fatalf("文件坐标未生效: set=%v lat=%v lon=%v",
+			cfg.ServerCoordsSet, cfg.ServerLatitude, cfg.ServerLongitude)
+	}
+	if cfg.ServerCoordsSource == "detected" {
+		t.Fatal("文件坐标被探测来源覆盖，来源标注会与坐标实际出处不符")
+	}
+}
 
 // TestReloadAdoptsConfiguredListenAddress 钉住「文件里的端口就是重载后合成的监听
 // 地址」，并断言本进程不重绑这件事有告警。
