@@ -206,6 +206,15 @@ func RecommendThresholds(db *persist.DB, currentThresholds map[string]int) ([]Th
 			explanation = "复发率在合理范围，维持当前阈值"
 		}
 
+		// 钳位与取整可能把推荐值拉回当前值：current=1 时 decrease 算 0.7→下限 1，
+		// increase 取整后也是 1。此时仍报 decrease/increase 会让面板出现「建议降到 1
+		// （当前已是 1）」这种自相矛盾的读数。载荷里「要不要改」由 direction 表达，
+		// 值相等就归为 maintain。
+		if direction != "maintain" && recommended == current {
+			direction = "maintain"
+			explanation = "推荐值与当前阈值相同，维持现状"
+		}
+
 		// 置信度只看样本量（封禁事件数）：样本越厚，同一复发率越不像巧合。
 		// 阶梯与载荷口径是 u8 百分数，这里给 0-1，由读侧换算。
 		confidence := 0.3

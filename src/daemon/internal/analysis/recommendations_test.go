@@ -248,6 +248,74 @@ func TestPeriodicAttackerReportsNewestJail(t *testing.T) {
 	}
 }
 
+// TestThresholdDirectionMatchesRecommendedValue 核对 direction 与 recommended 不自相矛盾。
+//
+// current=1 时 decrease 分支把 current×0.7 钳到下限 1、increase 分支取整后也是 1，旧写法
+// 会给出「decrease → 1」而当前值本来就是 1。方向与值必须一致：值没变就记 maintain。
+func TestThresholdDirectionMatchesRecommendedValue(t *testing.T) {
+	now := time.Now().Unix()
+	var rows []seedRow
+
+	// 高复发：每个地址被封 2 次，5 个地址 / 10 条事件 → 100%。
+	for _, c := range []struct {
+		jail string
+		base int
+	}{{"one-high", 60}, {"zero-high", 70}, {"mid-high", 80}} {
+		for i := 1; i <= 5; i++ {
+			ip := ipAt(198, 18, c.base, i)
+			rows = append(rows,
+				seedRow{ip: ip, jail: c.jail, at: now - 600, count: 1},
+				seedRow{ip: ip, jail: c.jail, at: now - 300, count: 2},
+			)
+		}
+	}
+	// 低复发且事件 >20：21 个各不相同地址各 1 次 → 0%。
+	for i := 1; i <= 21; i++ {
+		rows = append(rows, seedRow{ip: ipAt(198, 18, 90, i), jail: "one-low", at: now - 100, count: 1})
+	}
+
+	findings, err := RecommendThresholds(newSeededDB(t, rows), map[string]int{
+		"one-high": 1,
+		"mid-high": 10,
+		"one-low":  1,
+	})
+	if err != nil {
+		t.Fatalf("阈值建议失败: %v", err)
+	}
+	byJail := make(map[string]ThresholdFinding, len(findings))
+	for _, f := range findings {
+		byJail[f.JailName] = f
+	}
+
+	cases := []struct {
+		jail        string
+		current     int
+		recommended int
+		direction   string
+	}{
+		// 钳位回当前值：不能再报 decrease。
+		{"one-high", 1, 1, "maintain"},
+		// 取整回当前值：不能再报 increase。
+		{"one-low", 1, 1, "maintain"},
+		// 配置缺省（0）走兜底 5，5×0.7 取整 = 3，方向与值都真的变了。
+		{"zero-high", DefaultThresholdForRecommendation, 3, "decrease"},
+		// 中间值 10 → 7。
+		{"mid-high", 10, 7, "decrease"},
+	}
+	for _, want := range cases {
+		got, ok := byJail[want.jail]
+		if !ok {
+			t.Errorf("%s 未出现在建议里: %+v", want.jail, findings)
+			continue
+		}
+		if got.CurrentValue != want.current || got.RecommendedVal != want.recommended || got.Direction != want.direction {
+			t.Errorf("%s = current %d / %q → %d，期望 current %d / %q → %d",
+				want.jail, got.CurrentValue, got.Direction, got.RecommendedVal,
+				want.current, want.direction, want.recommended)
+		}
+	}
+}
+
 // ipAt 造一个确定性的文档用途地址段（203.0.113.0/24 之外也一律走 TEST-NET 风格），
 // 避免每个用例手写一遍四段字符串。
 func ipAt(a, b, c, d int) string {

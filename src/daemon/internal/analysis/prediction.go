@@ -203,22 +203,27 @@ func PredictAttacks(db *persist.DB, limit int) (*PredictionSummary, error) {
 func analyzeJailTrends(events []persist.BanEvent, upcoming map[string]int) []JailTrend {
 	now := time.Now().Unix()
 	dayAgo := now - 86400
+	prevDayAgo := now - 2*86400
 	weekAgo := now - 7*86400
 
 	jailData := make(map[string]*struct {
-		bans24h int
-		bans7d  int
+		bans24h     int
+		bansPrev24h int
+		bans7d      int
 	})
 
 	for _, e := range events {
 		if jailData[e.JailName] == nil {
 			jailData[e.JailName] = &struct {
-				bans24h int
-				bans7d  int
+				bans24h     int
+				bansPrev24h int
+				bans7d      int
 			}{}
 		}
 		if e.BannedAt >= dayAgo {
 			jailData[e.JailName].bans24h++
+		} else if e.BannedAt >= prevDayAgo {
+			jailData[e.JailName].bansPrev24h++
 		}
 		if e.BannedAt >= weekAgo {
 			jailData[e.JailName].bans7d++
@@ -227,20 +232,20 @@ func analyzeJailTrends(events []persist.BanEvent, upcoming map[string]int) []Jai
 
 	var trends []JailTrend
 	for jail, data := range jailData {
-		dailyAvg7d := float64(data.bans7d) / 7
-		dailyAvg24h := float64(data.bans24h)
-
-		// 趋势 = 近 24 小时的封禁数相对 7 天日均的倍数。七天窗口里一次封禁都没有时
-		// 没有基数可比，只能记 stable——旧写法在这种 jail 上算出 ratio=0 而报 falling，
-		// 面板会把「没有样本」读成「快好了」。
+		// 趋势 = 近 24 小时的封禁数相对**前一日同一段**（now-48h..now-24h）的倍数，
+		// 与契约 JailAttackTrend.trend 的口径一致。除以 7 天日均会把一周前的高发日
+		// 摊进分母：近一天的回落在面板上读成 stable，而不是契约承诺的「与前一日的
+		// 量比较」。
 		ratio := 0.0
-		if dailyAvg7d > 0 {
-			ratio = dailyAvg24h / dailyAvg7d
+		if data.bansPrev24h > 0 {
+			ratio = float64(data.bans24h) / float64(data.bansPrev24h)
 		}
 
 		var trend string
 		switch {
-		case dailyAvg7d <= 0:
+		case data.bansPrev24h <= 0:
+			// 前一日没有样本就没有基数可比，只能记 stable（契约同口径）。此处若拿
+			// 24h 的数量硬判 rising，等于把「昨天没样本」读成「今天在涨」。
 			trend = "stable"
 		case ratio > 1.5:
 			trend = "rising"
