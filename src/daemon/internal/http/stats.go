@@ -162,8 +162,10 @@ func (h *APIHandlers) banWindows(now time.Time) (today, recent5 uint64) {
 	}
 	recent, err := h.db.CountBanEventsBetween(now.Add(-recentBanWindow), end)
 	if err != nil {
+		// 与上面同一口径：失败不落缓存，否则会把一次查询失败当成「近 5 分钟零封禁」
+		// 固定 30 秒，威胁等级随之被低估。
 		h.server.logger.Error("统计近 5 分钟封禁数失败", "error", err)
-		recent = 0
+		return h.statsWindow.today, h.statsWindow.recent5
 	}
 
 	h.statsWindow.dayStart = dayStart
@@ -174,18 +176,48 @@ func (h *APIHandlers) banWindows(now time.Time) (today, recent5 uint64) {
 	return count, recent
 }
 
+// activityCache 缓存趋势与热力图共用的 7 天活动行。
+//
+// 与 windowCache 分开而不是并进一份：窗口计数走 COUNT 且口径是「今日 / 近 5 分钟」，
+// 活动行是整批明细，两者查询代价与失效条件不同，合并只会让一次失败连带另一份缓存。
+type activityCache struct {
+	mu        sync.Mutex
+	dayStart  time.Time
+	rows      []persist.BanActivity
+	fetchedAt time.Time
+	valid     bool
+}
+
 // banActivity 取回趋势与热力图需要的封禁活动行（最近 trendDays 个自然日）。
 //
-// 历史库缺席或查询失败时报 nil：图上是一片空白，而不是画一排假的零。
+// 历史库缺席或查询失败时报 nil：图上是一片空白，而不是画一排假的零。查询成功的结果
+// 缓存 statsWindowTTL：SSE 的 stats 域每隔数秒装配一次，而桶（自然日 / 小时）在 30 秒
+// 内不会因新封禁改变形状，逐帧重查只会把 7 天明细反复拉出来。查询失败**不刷新**缓存，
+// 下一位读取者会重试，而不是把空结果当成 30 秒内的有效读数。
 func (h *APIHandlers) banActivity(now time.Time) []persist.BanActivity {
 	if h.db == nil {
 		return nil
 	}
-	rows, err := h.db.GetBanActivitySince(startOfToday(now).AddDate(0, 0, -(trendDays - 1)))
+	dayStart := startOfToday(now)
+
+	h.statsActivity.mu.Lock()
+	defer h.statsActivity.mu.Unlock()
+
+	if h.statsActivity.valid &&
+		h.statsActivity.dayStart.Equal(dayStart) &&
+		now.Sub(h.statsActivity.fetchedAt) < statsWindowTTL {
+		return h.statsActivity.rows
+	}
+
+	rows, err := h.db.GetBanActivitySince(dayStart.AddDate(0, 0, -(trendDays - 1)))
 	if err != nil {
 		h.server.logger.Error("读取封禁活动失败", "error", err)
-		return nil
+		return h.statsActivity.rows
 	}
+	h.statsActivity.dayStart = dayStart
+	h.statsActivity.rows = rows
+	h.statsActivity.fetchedAt = now
+	h.statsActivity.valid = true
 	return rows
 }
 

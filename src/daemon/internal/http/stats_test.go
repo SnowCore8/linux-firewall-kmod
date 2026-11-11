@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/analysis"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/contract"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/telemetry"
 )
 
@@ -320,6 +322,41 @@ func TestHeatmapAlwaysHasTwentyFourBuckets(t *testing.T) {
 		if b.Bans != 0 || b.FailedAttempts != 0 || b.DdosEvents != 0 {
 			t.Errorf("第 %d 项 = %+v，历史库缺席时三列都应为 0", i, b)
 		}
+	}
+}
+
+// TestBanActivityIsCachedWithinStatsWindow 定住趋势/热力图活动行的缓存口径：
+//
+// SSE 的 stats 域每隔数秒装配一次，每次都重查 7 天明细会把整批活动行反复拉出来。缓存窗口
+// 内命中旧结果（新增封禁暂时不出现），过期后必须重查——否则趋势图会永远停在第一次读数。
+func TestBanActivityIsCachedWithinStatsWindow(t *testing.T) {
+	db, err := persist.NewDB(persist.Config{
+		Path:   filepath.Join(t.TempDir(), "history.db"),
+		Logger: discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("打开历史库失败: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, api := newTestServer(t, func(cfg *APIConfig) { cfg.DB = db })
+	now := time.Now()
+
+	if err := db.RecordBanEvent("203.0.113.10", "sshd", 1, false, nil); err != nil {
+		t.Fatalf("记录封禁事件失败: %v", err)
+	}
+	if got := api.banActivity(now); len(got) != 1 {
+		t.Fatalf("首次读取 = %d 行，期望 1 行", len(got))
+	}
+
+	if err := db.RecordBanEvent("203.0.113.11", "sshd", 1, false, nil); err != nil {
+		t.Fatalf("记录第二条封禁事件失败: %v", err)
+	}
+	if got := api.banActivity(now.Add(time.Second)); len(got) != 1 {
+		t.Errorf("缓存窗口内 = %d 行，应为 1 行（命中缓存，不重查）", len(got))
+	}
+	if got := api.banActivity(now.Add(statsWindowTTL + time.Second)); len(got) != 2 {
+		t.Errorf("缓存过期后 = %d 行，应为 2 行（重新查询）", len(got))
 	}
 }
 

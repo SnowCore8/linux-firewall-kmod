@@ -281,6 +281,10 @@ type APIHandlers struct {
 	// statsWindow 缓存「今日 / 近 5 分钟」两个封禁窗口（GET /stats 首屏每刷新一次就打
 	// 三条 SQL，看板按秒轮询时这个开销没有读数价值）。
 	statsWindow windowCache
+	// statsActivity 缓存趋势 / 热力图共用的 7 天活动行，与 statsWindow 同 TTL：
+	// 图表按自然日 / 小时归桶，30 秒内新增的封禁不改变桶的形状，但每帧重查
+	// 会把 7 天窗口的数据整表拉出来。
+	statsActivity activityCache
 }
 
 func NewAPIHandlers(cfg APIConfig) *APIHandlers {
