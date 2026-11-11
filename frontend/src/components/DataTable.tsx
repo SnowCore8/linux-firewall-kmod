@@ -64,7 +64,7 @@ export function DataTable<T extends object>({
   )
 
   const rowKey = tableProps.rowKey
-  if (!rowKey && process.env.NODE_ENV === 'development') {
+  if (!rowKey && import.meta.env.DEV) {
     console.warn('DataTable: rowKey is required, using "_index" as fallback')
   }
 
