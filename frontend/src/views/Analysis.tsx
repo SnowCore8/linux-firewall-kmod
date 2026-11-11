@@ -1417,9 +1417,12 @@ function IpAnalysisDrawer({ ip, onClose }: IpAnalysisDrawerProps) {
   const radar = useMemo(() => {
     const r = detail.data?.risk
     if (!r) return null
+    const values = RISK_DIMS.map((dim) => r[dim.key])
+    // 雷达量程按当前向量动态取：维度是原始分（可 >1），固定 0-1 量程会把图形压满外环
+    const dimMax = Math.ceil(Math.max(1, ...values))
     return radarOption(base, {
-      indicators: RISK_DIMS.map((dim) => ({ name: dim.label, max: 1 })),
-      values: RISK_DIMS.map((dim) => r[dim.key]),
+      indicators: RISK_DIMS.map((dim) => ({ name: dim.label, max: dimMax })),
+      values,
       name: '风险向量',
     })
   }, [base, detail.data])

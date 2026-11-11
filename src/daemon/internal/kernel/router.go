@@ -5,6 +5,7 @@
 package kernel
 
 import (
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -285,11 +286,17 @@ func (r *Router) HandleDatagram(d Datagram) {
 }
 
 // pushEvent 把一条事件交给上层；队列满即拒绝并计数，绝不阻塞接收线程。
+// 丢弃必须有可见痕迹：首次丢弃与之后每累计 1024 条丢弃时告警一次，避免高频刷屏，
+// 又不至于让运维在没有任何信号的情况下面对「镜像与内核悄悄发散」。
 func (r *Router) pushEvent(msg Incoming) {
 	select {
 	case r.events <- msg:
 	default:
-		r.counters.eventsDropped.Add(1)
+		n := r.counters.eventsDropped.Add(1)
+		if n == 1 || n%1024 == 0 {
+			slog.Warn("内核事件队列已满，丢弃事件（镜像可能暂时落后，将对账修复）",
+				"type", msg.MsgType, "dropped_total", n, "queue", EventQueue)
+		}
 	}
 }
 

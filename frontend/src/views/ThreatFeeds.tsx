@@ -552,7 +552,7 @@ export default function ThreatFeeds() {
         </Flex>
       )}
 
-      <Drawer open={detailId != null} title="情报源详情" width={480} onClose={closeDetail}>
+      <Drawer open={detailId != null} title="情报源详情" width={480} onClose={closeDetail} destroyOnHidden>
         {detailData ? (
           <Descriptions column={1} size="small" bordered items={feedDescriptionItems(detailData)} />
         ) : detail.error ? (

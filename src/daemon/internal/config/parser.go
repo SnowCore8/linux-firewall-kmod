@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strconv"
@@ -238,8 +239,8 @@ func parseConfigFrom(content string, cfg *Config, runtimeOverride, strict bool) 
 		return err
 	}
 	// 5. trusted_ips
-	if yc.TrustedIPs != nil {
-		cfg.TrustedIPs = append([]string(nil), yc.TrustedIPs...)
+	if err := applyTrustedIPs(&yc, cfg); err != nil {
+		return err
 	}
 	// 6. capacity
 	if err := applyCapacity(&yc, cfg); err != nil {
@@ -561,6 +562,29 @@ func bantimeOr(v, fallback int32) int32 {
 		return v
 	}
 	return fallback
+}
+
+// applyTrustedIPs 校验并应用 trusted_ips：每条必须是合法 IP 或 CIDR。
+// 无效条目会让启动期显式报错，而不是静默带着无意义的值运行。
+func applyTrustedIPs(yc *yamlConfig, cfg *Config) error {
+	if yc.TrustedIPs == nil {
+		return nil
+	}
+	out := make([]string, 0, len(yc.TrustedIPs))
+	for i, raw := range yc.TrustedIPs {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			return fmt.Errorf("trusted_ips[%d] 为空", i)
+		}
+		if _, err := netip.ParsePrefix(entry); err != nil {
+			if _, aerr := netip.ParseAddr(entry); aerr != nil {
+				return fmt.Errorf("trusted_ips[%d] 不是合法 IP 或 CIDR: %q", i, raw)
+			}
+		}
+		out = append(out, entry)
+	}
+	cfg.TrustedIPs = out
+	return nil
 }
 
 // applySmartDefaults 为只写了 log_files / regex 的极简 jail 推断合理默认：

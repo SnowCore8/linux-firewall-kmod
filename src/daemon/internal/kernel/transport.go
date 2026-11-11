@@ -120,6 +120,10 @@ type Transport struct {
 	receivedCounter  CounterHandle
 	sendErrorCounter CounterHandle
 	recvErrorCounter CounterHandle
+
+	// recvBuf 复用接收缓冲区，避免每收一条报文分配 128 KiB（drain 循环高频调用）。
+	// TryRecv 仅由 reactor 单 goroutine 调用；返回的 Datagram.Payload 是拷贝，可安全复用。
+	recvBuf []byte
 }
 
 // SetMetrics 接线 netlink 链路健康计数器。
@@ -269,7 +273,10 @@ func (t *Transport) Send(payload []byte) error {
 // 长度取自 `nlmsghdr` 自身（宿主字节序），与内核 `fw_nl_recv_msg` 的取值方式一致：
 // 数据报在 skb 里按 4 字节对齐，实得字节数可能比 `nlmsg_len` 多出最多 3 个填充字节。
 func (t *Transport) TryRecv() (Datagram, bool, error) {
-	buf := make([]byte, RecvBuf)
+	if t.recvBuf == nil {
+		t.recvBuf = make([]byte, RecvBuf)
+	}
+	buf := t.recvBuf
 	n, from, err := unix.Recvfrom(t.fd, buf, unix.MSG_TRUNC)
 	if err != nil {
 		if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EINTR) ||
