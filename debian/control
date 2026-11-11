@@ -8,7 +8,7 @@ Rules-Requires-Root: no
 
 Package: linux-firewall-kmod
 Architecture: amd64
-Depends: ${misc:Depends}, ${shlibs:Depends}, dkms, build-essential, linux-headers
+Depends: ${misc:Depends}, ${shlibs:Depends}, dkms, build-essential, linux-headers-generic | linux-headers-amd64
 Description: Linux kernel module firewall with real-time IP banning
  Firewall bans at packet level in kernel space via netfilter hooks, with a
  userspace daemon that reads logs, decides, and pushes ban/whitelist commands
