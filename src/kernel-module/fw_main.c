@@ -34,6 +34,7 @@
 
 #define pr_fmt(fmt) "firewall: " fmt
 
+#include <linux/limits.h>
 #include <linux/module.h>
 #include <linux/random.h>
 #include <net/net_namespace.h>
@@ -138,6 +139,19 @@ static int fw_params_validate(void) {
            "max_local_ips=%u max_rate_entries=%u\n",
            fw_max_ban_entries, fw_max_whitelist_entries, fw_max_local_ips,
            fw_max_rate_entries);
+    return -EINVAL;
+  }
+
+  /*
+   * 容量参数在比较处按 int 取值：超过 INT_MAX 会变成负数，容量检查因此恒成立
+   * （新增恒失败或速率表恒放行），与「0 即不可用」同属配置错误，加载期拒绝。
+   */
+  if (fw_max_ban_entries > INT_MAX || fw_max_whitelist_entries > INT_MAX ||
+      fw_max_local_ips > INT_MAX || fw_max_rate_entries > INT_MAX) {
+    pr_err("容量参数不得超过 %d: max_ban_entries=%u max_whitelist_entries=%u "
+           "max_local_ips=%u max_rate_entries=%u\n",
+           INT_MAX, fw_max_ban_entries, fw_max_whitelist_entries,
+           fw_max_local_ips, fw_max_rate_entries);
     return -EINVAL;
   }
 
