@@ -240,7 +240,7 @@ limit whitelist {
 limit rates {
   entries = 65536
   where = "src/kernel-module/fw_main.c:fw_max_rate_entries"
-  note = "受模块参数 fw_max_rate_entries 限制（默认 65536，文档化范围 1024..262144）；表满后新源地址有意放行，见 defect PROC_RATE_TABLE_FULL_FAILS_OPEN"
+  note = "模块参数 fw_max_rate_entries 给的是条目上限（默认 65536，文档化范围 1024..262144）；有效上限 = min(fw_max_rate_entries, FW_RATE_CPU_SLOTS=512)，512 是同时在跟踪源地址数的硬上限（每 CPU 直接映射槽位），超出部分按契约「满则放行」；表满后新源地址有意放行，见 defect PROC_RATE_TABLE_FULL_FAILS_OPEN"
 }
 
 limit udp_ports {
