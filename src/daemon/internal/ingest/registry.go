@@ -36,8 +36,8 @@ func ConfigOwner() SourceOwner { return SourceOwner{IsConfig: true} }
 
 // SourceEntry 是一个登记项的当前状态。
 type SourceEntry struct {
-	// Owner 是用途（日志源 / 配置文件）。
-	Owner SourceOwner
+	// Owners 是用途列表（日志源 / 配置文件）。同一路径可被多个 jail 共享。
+	Owners []SourceOwner
 	// Path 是被监视的路径（已归一化）。
 	Path string
 	// WD 是当前生效的 inotify watch 描述符（轮转后会更新）。
@@ -67,12 +67,23 @@ func NewSourceRegistry() *SourceRegistry {
 //
 // 同一路径重复登记（轮转重挂、重载后重扫）返回**同一个** SourceID，只更新 wd 与
 // inode；这样各源以身份为键的偏移与缓冲不会被重挂动作清空。
+// 同一路径被多个 jail 共享时，追加 owner 而不是覆盖。
 func (r *SourceRegistry) Register(owner SourceOwner, path string, wd int32, inode uint64) SourceID {
 	path = CleanPath(path)
 	if id, ok := r.byPath[path]; ok {
 		r.Rebind(id, wd, inode)
-		// 重载可能改变归属（同一路径改挂到别的 jail），故归属一并更新。
-		r.byID[id].Owner = owner
+		// 同一路径可被多个 jail 共享：追加 owner（去重）。
+		entry := r.byID[id]
+		found := false
+		for _, o := range entry.Owners {
+			if o == owner {
+				found = true
+				break
+			}
+		}
+		if !found {
+			entry.Owners = append(entry.Owners, owner)
+		}
 		return id
 	}
 
@@ -80,7 +91,7 @@ func (r *SourceRegistry) Register(owner SourceOwner, path string, wd int32, inod
 	r.next++
 	r.byWD[wd] = id
 	r.byPath[path] = id
-	r.byID[id] = &SourceEntry{Owner: owner, Path: path, WD: wd, Inode: inode}
+	r.byID[id] = &SourceEntry{Owners: []SourceOwner{owner}, Path: path, WD: wd, Inode: inode}
 	return id
 }
 
@@ -112,7 +123,15 @@ func (r *SourceRegistry) Get(id SourceID) (SourceEntry, bool) {
 	if !ok {
 		return SourceEntry{}, false
 	}
-	return *entry, true
+	// 深拷贝 Owners 切片，避免外部修改影响内部状态
+	ownersCopy := make([]SourceOwner, len(entry.Owners))
+	copy(ownersCopy, entry.Owners)
+	return SourceEntry{
+		Owners: ownersCopy,
+		Path:   entry.Path,
+		WD:     entry.WD,
+		Inode:  entry.Inode,
+	}, true
 }
 
 // Remove 摘除一个身份，返回其状态（调用方据此摘 watch）。
@@ -128,14 +147,30 @@ func (r *SourceRegistry) Remove(id SourceID) (SourceEntry, bool) {
 	if mapped, ok := r.byWD[entry.WD]; ok && mapped == id {
 		delete(r.byWD, entry.WD)
 	}
-	return *entry, true
+	// 深拷贝 Owners 切片
+	ownersCopy := make([]SourceOwner, len(entry.Owners))
+	copy(ownersCopy, entry.Owners)
+	return SourceEntry{
+		Owners: ownersCopy,
+		Path:   entry.Path,
+		WD:     entry.WD,
+		Inode:  entry.Inode,
+	}, true
 }
 
 // Entries 返回全部登记项的副本（顺序不保证）。
 func (r *SourceRegistry) Entries() []SourceEntry {
 	out := make([]SourceEntry, 0, len(r.byID))
 	for _, entry := range r.byID {
-		out = append(out, *entry)
+		// 深拷贝 Owners 切片，避免外部修改影响内部状态
+		ownersCopy := make([]SourceOwner, len(entry.Owners))
+		copy(ownersCopy, entry.Owners)
+		out = append(out, SourceEntry{
+			Owners: ownersCopy,
+			Path:   entry.Path,
+			WD:     entry.WD,
+			Inode:  entry.Inode,
+		})
 	}
 	return out
 }

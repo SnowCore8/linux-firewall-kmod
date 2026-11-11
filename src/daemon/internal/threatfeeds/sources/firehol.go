@@ -4,18 +4,19 @@ import "time"
 
 // FireHOLSource 是 FireHOL 情报源适配器。
 type FireHOLSource struct {
+	name       string
 	url        string
 	category   string
 	confidence float64
 }
 
 // NewFireHOLSource 创建 FireHOL 源适配器。
-func NewFireHOLSource(url, category string, confidence float64) *FireHOLSource {
-	return &FireHOLSource{url: url, category: category, confidence: confidence}
+func NewFireHOLSource(name, url, category string, confidence float64) *FireHOLSource {
+	return &FireHOLSource{name: name, url: url, category: category, confidence: confidence}
 }
 
 // Name 返回源名称。
-func (s *FireHOLSource) Name() string { return "firehol" }
+func (s *FireHOLSource) Name() string { return s.name }
 
 // URL 返回拉取地址。
 func (s *FireHOLSource) URL() string { return s.url }

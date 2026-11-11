@@ -43,7 +43,7 @@ func TestFireHOLSource_Parse(t *testing.T) {
 		t.Fatalf("读取测试数据失败: %v", err)
 	}
 
-	src := NewFireHOLSource("https://example.com/firehol.txt", "abuse", 0.85)
+	src := NewFireHOLSource("firehol", "https://example.com/firehol.txt", "abuse", 0.85)
 	entries, err := src.Parse(data)
 	if err != nil {
 		t.Fatalf("Parse() 错误 = %v", err)
@@ -153,7 +153,7 @@ func TestSource_Name(t *testing.T) {
 		want   string
 	}{
 		{NewIpsumSource("", "", 0), "ipsum"},
-		{NewFireHOLSource("", "", 0), "firehol"},
+		{NewFireHOLSource("firehol", "", "", 0), "firehol"},
 		{NewDShieldSource("", "", 0), "dshield"},
 		{NewBlocklistSource("", "", 0), "blocklist_de"},
 		{NewFeodoSource("", "", 0), "feodo"},

@@ -107,7 +107,7 @@ func (m *FeedManager) buildSource(cfg SourceConfig) (FeedSource, error) {
 	case "ipsum":
 		return sources.NewIpsumSource(cfg.URL, cfg.Category, cfg.Confidence), nil
 	case "firehol_level1", "firehol":
-		return sources.NewFireHOLSource(cfg.URL, cfg.Category, cfg.Confidence), nil
+		return sources.NewFireHOLSource(cfg.Name, cfg.URL, cfg.Category, cfg.Confidence), nil
 	case "dshield":
 		return sources.NewDShieldSource(cfg.URL, cfg.Category, cfg.Confidence), nil
 	case "blocklist_de":

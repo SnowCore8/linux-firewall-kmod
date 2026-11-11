@@ -497,12 +497,15 @@ func (e *InboundExecutor) handleEvent(event ingest.WatchEvent) {
 		return
 	}
 
-	if entry.Owner.IsConfig {
-		if event.IsContentChange() || event.IsSelfGone() {
-			e.info("检测到配置文件变化，自动重载", "path", entry.Path)
-			e.reloadConfig()
+	// 检查是否有配置文件 owner
+	for _, owner := range entry.Owners {
+		if owner.IsConfig {
+			if event.IsContentChange() || event.IsSelfGone() {
+				e.info("检测到配置文件变化，自动重载", "path", entry.Path)
+				e.reloadConfig()
+			}
+			return
 		}
-		return
 	}
 
 	if event.IsContentChange() {
@@ -516,7 +519,17 @@ func (e *InboundExecutor) handleEvent(event ingest.WatchEvent) {
 // drainSource 读出某个源的新增字节并送进判定。
 func (e *InboundExecutor) drainSource(id ingest.SourceID) {
 	entry, ok := e.registry.Get(id)
-	if !ok || entry.Owner.Jail == "" {
+	if !ok {
+		return
+	}
+	// 收集所有 jail owners
+	var jails []string
+	for _, owner := range entry.Owners {
+		if owner.Jail != "" {
+			jails = append(jails, owner.Jail)
+		}
+	}
+	if len(jails) == 0 {
 		return
 	}
 	reader := e.readers[id]
@@ -530,7 +543,10 @@ func (e *InboundExecutor) drainSource(id ingest.SourceID) {
 		reader.Reset()
 		return
 	}
-	e.feed(entry.Owner.Jail, id, chunk.Bytes, chunk.Rotated)
+	// 把日志分发给所有共享此文件的 jail
+	for _, jail := range jails {
+		e.feed(jail, id, chunk.Bytes, chunk.Rotated)
+	}
 }
 
 // feed 把一批新增字节喂给判定层，并镜像计数、下发意图。
@@ -617,22 +633,42 @@ type logSource struct {
 // 当前路径重挂（新 inode）并从文件头读起；路径暂不可见时登记为待重挂。
 func (e *InboundExecutor) handleRotation(id ingest.SourceID, path string) {
 	entry, ok := e.registry.Get(id)
-	if !ok || entry.Owner.Jail == "" {
+	if !ok {
 		return
 	}
-	jail := entry.Owner.Jail
+	// 收集所有 jail owners
+	var jails []string
+	for _, owner := range entry.Owners {
+		if owner.Jail != "" {
+			jails = append(jails, owner.Jail)
+		}
+	}
+	if len(jails) == 0 {
+		return
+	}
 	// 计数口径与旧实现一致：只有 MOVE_SELF / DELETE_SELF 记一次轮转。
 	if e.stats != nil {
 		e.stats.IncLogRotations()
 	}
 
 	// 旧文件最后那半行仍是证据：先 flush 再摘。
-	e.flushPendingLine(jail, id)
+	for _, jail := range jails {
+		e.flushPendingLine(jail, id)
+	}
 	e.dropSource(id)
 
 	if _, err := os.Stat(path); err == nil {
-		if _, added := e.addLogSource(jail, path, true); !added {
+		// 重新添加第一个 jail，其他 jail 会在 reconcileWatches 或下次配置加载时追加
+		if _, added := e.addLogSource(jails[0], path, true); !added {
 			e.pendingReadd[ingest.CleanPath(path)] = struct{}{}
+		} else {
+			// 恢复其他 jail 的 owner 信息
+			newEntry, ok := e.registry.Get(id)
+			if ok {
+				for i := 1; i < len(jails); i++ {
+					e.registry.Register(ingest.LogOwner(jails[i]), path, newEntry.WD, newEntry.Inode)
+				}
+			}
 		}
 	} else {
 		e.debug("日志轮转后文件暂不可见，待重挂", "path", path)

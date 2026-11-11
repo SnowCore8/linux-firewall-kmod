@@ -37,10 +37,10 @@ func TestRegisterAssignsStableIDsAndResolvesWD(t *testing.T) {
 	if !ok {
 		t.Fatal("身份应存在")
 	}
-	if entry.Owner.Jail != "sshd" || entry.Inode != 111 {
+	if len(entry.Owners) == 0 || entry.Owners[0].Jail != "sshd" || entry.Inode != 111 {
 		t.Fatalf("登记项不符：%+v", entry)
 	}
-	if entry.Owner.IsConfig {
+	if entry.Owners[0].IsConfig {
 		t.Fatal("日志源不应被标为配置文件")
 	}
 }
@@ -96,6 +96,7 @@ func TestRebindingToTheSameWDKeepsRouting(t *testing.T) {
 }
 
 // TestReRegisteringCanChangeOwner 覆盖重载后同一路径改挂到别的 jail。
+// 注意：现在同一路径可被多个 jail 共享，所以是追加而不是覆盖。
 func TestReRegisteringCanChangeOwner(t *testing.T) {
 	dir := newTempDir(t)
 	reg := NewSourceRegistry()
@@ -108,8 +109,12 @@ func TestReRegisteringCanChangeOwner(t *testing.T) {
 		t.Fatal("归属变化不应改变身份")
 	}
 	entry, _ := reg.Get(id)
-	if entry.Owner.Jail != "nginx" {
-		t.Fatalf("归属应更新为 nginx，实得 %q", entry.Owner.Jail)
+	// 现在应该有两个 owners：sshd 和 nginx
+	if len(entry.Owners) != 2 {
+		t.Fatalf("应有 2 个 owners，实得 %d", len(entry.Owners))
+	}
+	if entry.Owners[0].Jail != "sshd" || entry.Owners[1].Jail != "nginx" {
+		t.Fatalf("owners 应为 sshd 和 nginx，实得 %+v", entry.Owners)
 	}
 }
 
@@ -142,11 +147,11 @@ func TestConfigOwnerIsDistinguished(t *testing.T) {
 	if !ok {
 		t.Fatal("身份应存在")
 	}
-	if !entry.Owner.IsConfig {
+	if len(entry.Owners) == 0 || !entry.Owners[0].IsConfig {
 		t.Fatal("应标为配置文件")
 	}
-	if entry.Owner.Jail != "" {
-		t.Fatalf("配置文件不应有 jail 归属，实得 %q", entry.Owner.Jail)
+	if entry.Owners[0].Jail != "" {
+		t.Fatalf("配置文件不应有 jail 归属，实得 %q", entry.Owners[0].Jail)
 	}
 }
 
@@ -221,10 +226,13 @@ func TestRegistryEntriesSnapshotDoesNotAliasInternalState(t *testing.T) {
 	if len(snapshot) != 1 {
 		t.Fatalf("快照应有 1 项，实得 %d", len(snapshot))
 	}
-	snapshot[0].Owner.Jail = "mutated"
+	// 修改快照中的 Owners 切片不应影响内部状态
+	if len(snapshot[0].Owners) > 0 {
+		snapshot[0].Owners[0].Jail = "mutated"
+	}
 
 	entry, _ := reg.Get(id)
-	if entry.Owner.Jail != "sshd" {
+	if len(entry.Owners) == 0 || entry.Owners[0].Jail != "sshd" {
 		t.Fatal("改动快照不应影响内部状态")
 	}
 }
