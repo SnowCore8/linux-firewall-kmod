@@ -297,7 +297,7 @@ func (h *APIHandlers) StreamLogs(w http.ResponseWriter, r *http.Request) {
 				_ = f.Close()
 				return false
 			}
-			go tailLogs(r.Context(), f, level, &sseConn{out: out}, done, logger)
+			go tailLogs(r.Context(), logFile, f, level, &sseConn{out: out}, done, logger)
 			return true
 		},
 		func(chan []byte) { close(done) },
@@ -309,18 +309,67 @@ func (h *APIHandlers) StreamLogs(w http.ResponseWriter, r *http.Request) {
 		})
 }
 
+// logTailSource 是日志流当前跟随的文件句柄与路径。
+//
+// 守护进程的日志 sink 按大小自行轮转：rename 轮转把当前片改名 `.<n>` 后新建同名文件，
+// 只留一片（maxFiles=1）时则原地 Truncate(0)。两种情况下旧 fd 的偏移都读不到新行——
+// rename 之后旧 fd 永远 EOF，截断之后要等文件重新长过旧偏移才恢复。故每拍先核对
+// 「路径现在指向的 inode 是否还是我持有的那个、长度是否还够」，失配就重开路径从头读。
+type logTailSource struct {
+	path string
+	file *os.File
+}
+
+// stale 报告是否该重开：inode 变了（rename 轮转）、文件变短（原地截断），或路径被换成
+// 非普通文件。路径暂时不可见（轮转窗口内）不算，下一拍再看。截断后在同一拍内又长过旧
+// 偏移的情况无法从元数据分辨，与 tail -F 的检测窗口同一范围。
+func (s *logTailSource) stale() bool {
+	meta, err := os.Lstat(s.path)
+	if err != nil {
+		return false
+	}
+	if !meta.Mode().IsRegular() {
+		return true
+	}
+	cur, err := s.file.Stat()
+	if err != nil {
+		return true
+	}
+	offset, err := s.file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return true
+	}
+	return !os.SameFile(meta, cur) || meta.Size() < offset
+}
+
+// reopen 换到路径当前指向的文件；失败时保留旧句柄，下一拍再试。
+func (s *logTailSource) reopen(logger *slog.Logger) bool {
+	next, err := os.Open(s.path)
+	if err != nil {
+		logger.Debug("轮转后重开日志文件失败，沿用旧句柄", "path", s.path, "error", err)
+		return false
+	}
+	if err := s.file.Close(); err != nil {
+		logger.Debug("轮转后关闭旧日志句柄失败", "error", err)
+	}
+	s.file = next
+	return true
+}
+
 // tailLogs 轮询日志文件，把新增行按 `log` 事件写给这一条连接。
 //
 // 每连接一个 goroutine 而不是共用一个读取器扇出：这条流的每一帧只属于发起请求的那个
 // 客户端，且各连接的 level 过滤不同，共享读取要么重复扫描要么互相串数据。
 //
-// 不处理日志轮转（文件被 rename/truncate）：偏移在末尾之后时读不到新行，流会静默停住。
-// 与旧实现同范围，接回 inode 跟踪属于后续包。
-func tailLogs(ctx context.Context, f *os.File, level string, conn *sseConn, done chan struct{}, logger *slog.Logger) {
+// 退出时关闭发送通道：streamSSE 见到它关闭就返回，名额随之释放。少了这一步，读取失败
+// （文件被删、权限变化）之后连接会只剩心跳、一直占着名额直到客户端主动断开。
+func tailLogs(ctx context.Context, path string, f *os.File, level string, conn *sseConn, done chan struct{}, logger *slog.Logger) {
+	src := &logTailSource{path: path, file: f}
 	defer func() {
-		if err := f.Close(); err != nil {
+		if err := src.file.Close(); err != nil {
 			logger.Warn("日志流关闭文件失败", "error", err)
 		}
+		close(conn.out)
 	}()
 
 	ticker := time.NewTicker(logTailPollInterval)
@@ -342,8 +391,13 @@ func tailLogs(ctx context.Context, f *os.File, level string, conn *sseConn, done
 		case <-ticker.C:
 		}
 
+		if src.stale() && src.reopen(logger) {
+			// 旧文件的半行不属于新文件，拼上去只会造出一条错位记录。
+			pending = pending[:0]
+		}
+
 		for {
-			n, err := f.Read(buf)
+			n, err := src.file.Read(buf)
 			if n > 0 {
 				pending = append(pending, buf[:n]...)
 				var cont bool
