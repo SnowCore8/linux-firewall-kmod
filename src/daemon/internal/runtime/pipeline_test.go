@@ -634,3 +634,46 @@ func TestThreatIntelLowConfidenceFallsBackToWindow(t *testing.T) {
 		t.Errorf("低置信度命中应走常规阈值原因: %q", out[0].Reason)
 	}
 }
+
+// 同一文件被多个 jail 共享时，每个 jail 必须有各自的半行缓冲：执行体把同一批
+// 字节依次喂给每个 jail，若共用分割器，第二个 jail 会拿到「上一轮残行 + 本批首行」
+// 拼成的错行，同时漏掉本批第一行。
+func TestSharedSourceKeepsPerJailSplitterState(t *testing.T) {
+	newRules := func(jail string) *logparse.RuleSet {
+		rule, err := logparse.NewRule("default", logparse.DefaultSSHDPattern)
+		if err != nil {
+			t.Fatalf("内置 sshd 正则应可编译: %v", err)
+		}
+		return logparse.NewRuleSet(jail, []*logparse.Rule{rule})
+	}
+
+	p := NewPipeline()
+	p.RegisterJail(newRules("sshd"), NewJailPolicy(1, 60, 600, config.ClusterConfig{}))
+	p.RegisterJail(newRules("nginx"), NewJailPolicy(1, 60, 600, config.ClusterConfig{}))
+
+	src := ingest.NewSourceID(21)
+	tick := NewTick(1_000, false)
+	facts := fixedFacts{score: 100}
+	// 末行不带换行：这是分块读取最常见的形态，也是共享分割器暴露问题的前提。
+	chunk := []byte(failedLine("1.2.3.4") + "\n" + failedLine("5.6.7.8") + "\n" + failedLine("9.9.9.9"))
+
+	outA, ok := p.OnChunk("sshd", src, chunk, tick, facts, nil)
+	if !ok || len(outA) != 2 {
+		t.Fatalf("第一个 jail 应解析出 2 条完整行: ok=%v n=%d", ok, len(outA))
+	}
+	outB, ok := p.OnChunk("nginx", src, chunk, tick, facts, nil)
+	if !ok {
+		t.Fatal("第二个 jail 应接受同一批字节")
+	}
+
+	got := make(map[netip.Addr]bool, len(outB))
+	for _, in := range outB {
+		got[in.IP] = true
+	}
+	if !got[mustAddr(t, "1.2.3.4")] || !got[mustAddr(t, "5.6.7.8")] {
+		t.Errorf("第二个 jail 漏行或串行: %v", outB)
+	}
+	if got[mustAddr(t, "9.9.9.9")] {
+		t.Errorf("未完成的半行不应提前判定: %v", outB)
+	}
+}

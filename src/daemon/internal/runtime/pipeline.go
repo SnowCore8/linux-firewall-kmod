@@ -142,10 +142,19 @@ type jailState struct {
 	window *detect.FailureWindow
 }
 
+// splitterKey 是一个源的分割器槽位。
+//
+// 必须带 jail：同一日志文件可被多个 jail 共享，执行体把同一批字节依次喂给每个 jail。
+// 只按源索引会让第二个 jail 拿到「上一轮残行 + 本批首行」拼成的错行，并漏掉本批首行。
+type splitterKey struct {
+	jail   string
+	source ingest.SourceID
+}
+
 // Pipeline 是主链路装配体，由执行体独占。
 type Pipeline struct {
 	jails     map[string]*jailState
-	splitters map[ingest.SourceID]*logparse.LineSplitter
+	splitters map[splitterKey]*logparse.LineSplitter
 	intel     ThreatIntel
 	counters  Counters
 }
@@ -154,7 +163,7 @@ type Pipeline struct {
 func NewPipeline() *Pipeline {
 	return &Pipeline{
 		jails:     make(map[string]*jailState),
-		splitters: make(map[ingest.SourceID]*logparse.LineSplitter),
+		splitters: make(map[splitterKey]*logparse.LineSplitter),
 	}
 }
 
@@ -202,8 +211,14 @@ func (p *Pipeline) RetainJails(keep []string) int {
 // Counters 返回累计计数快照。
 func (p *Pipeline) Counters() Counters { return p.counters }
 
-// PendingSources 返回当前挂起半行的源数（诊断用）。
-func (p *Pipeline) PendingSources() int { return len(p.splitters) }
+// PendingSources 返回当前挂起半行的源数（诊断用；同一源被多个 jail 共享时只计一次）。
+func (p *Pipeline) PendingSources() int {
+	seen := make(map[ingest.SourceID]struct{}, len(p.splitters))
+	for key := range p.splitters {
+		seen[key.source] = struct{}{}
+	}
+	return len(seen)
+}
 
 // collectLine 解析一行并收集结果。
 //
@@ -255,10 +270,11 @@ func (p *Pipeline) OnChunk(
 	// 同时访问 jail 表与计数器（分割器回调期间缓冲区归分割器所有）。
 	var parsed []parsedLine
 	{
-		splitter := p.splitters[source]
+		key := splitterKey{jail: jail, source: source}
+		splitter := p.splitters[key]
 		if splitter == nil {
 			splitter = logparse.NewLineSplitter()
-			p.splitters[source] = splitter
+			p.splitters[key] = splitter
 		}
 		stats := logparse.SplitStats{}
 		splitter.Feed(bytes, &stats, func(line []byte) {
@@ -291,7 +307,7 @@ func (p *Pipeline) FlushSource(
 		return out, false
 	}
 
-	splitter := p.splitters[source]
+	splitter := p.splitters[splitterKey{jail: jail, source: source}]
 	if splitter == nil {
 		return out, true
 	}
@@ -378,18 +394,24 @@ func (p *Pipeline) judgeLine(ctx *lineCtx, ip netip.Addr, via logparse.MatchVia,
 	})
 }
 
-// OnSourceRotated 处理源轮转/截断：丢弃该源挂起的半行。
+// OnSourceRotated 处理源轮转/截断：丢弃该源在每个 jail 下挂起的半行。
 //
 // 旧文件的半行不该与新文件的开头拼接。与 ingest.Chunk.Rotated 配套使用。
 func (p *Pipeline) OnSourceRotated(source ingest.SourceID) {
-	if splitter := p.splitters[source]; splitter != nil {
-		splitter.Clear()
+	for key, splitter := range p.splitters {
+		if key.source == source {
+			splitter.Clear()
+		}
 	}
 }
 
-// ForgetSource 摘除源，连同其半行缓冲一并清理，避免缓冲表随轮转/重载无限增长。
+// ForgetSource 摘除源，连同其在各 jail 下的半行缓冲一并清理，避免缓冲表随轮转/重载无限增长。
 func (p *Pipeline) ForgetSource(source ingest.SourceID) {
-	delete(p.splitters, source)
+	for key := range p.splitters {
+		if key.source == source {
+			delete(p.splitters, key)
+		}
+	}
 }
 
 // Cleanup 周期维护：清理各 jail 已完全过期的失败条目，返回清理条数。
