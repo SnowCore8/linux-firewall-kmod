@@ -168,3 +168,16 @@ func TestRollbackInDirectoryModeReadsTheBackupNextToTheSource(t *testing.T) {
 		t.Errorf("回滚后的默认 max_retries = %d，期望备份里的 9", cfg.DefaultMaxRetries)
 	}
 }
+
+// TestFileReloaderNilLogger 钉住构造处的 nil 兜底：调用方没给日志器时，
+// 重载与回滚只能返回错误，不能因为 nil 解引用把进程打崩。
+func TestFileReloaderNilLogger(t *testing.T) {
+	cfg := config.Default()
+	reloader := NewFileReloader(filepath.Join(t.TempDir(), "missing.yaml"), true, nil)
+	if err := reloader.Reload(&cfg); err == nil {
+		t.Fatal("配置文件不存在时重载应返回错误")
+	}
+	if err := reloader.Rollback(&cfg); err == nil {
+		t.Fatal("配置文件不存在时回滚应返回错误")
+	}
+}

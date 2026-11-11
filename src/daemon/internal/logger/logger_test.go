@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
@@ -258,5 +260,30 @@ func TestDefaultConfigWritesJSONLines(t *testing.T) {
 	}
 	if record["msg"] != "内核 netlink 链路已就绪" {
 		t.Errorf("日志记录的 msg = %v，期望原文", record["msg"])
+	}
+}
+
+// TestLogThrottlerConcurrentExactlyOne 钉住 CAS 语义：并发首次调用只能有一个 goroutine
+// 抢到本次放行。旧实现「先 Load 比较、再 Store」在窗口内会让多个调用同时通过。
+func TestLogThrottlerConcurrentExactlyOne(t *testing.T) {
+	th := NewLogThrottler(3600)
+	const goroutines = 64
+	var allowed atomic.Int32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if th.CanLog() {
+				allowed.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if got := allowed.Load(); got != 1 {
+		t.Fatalf("并发首次调用放行了 %d 次，期望恰好 1 次", got)
 	}
 }

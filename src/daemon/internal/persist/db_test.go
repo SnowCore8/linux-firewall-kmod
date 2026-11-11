@@ -209,3 +209,39 @@ func TestReputationRecoveryScheduler_ReturnsDoneChannel(t *testing.T) {
 		t.Fatal("done channel not closed within 2s after stopCh closed")
 	}
 }
+
+// TestCleanupExpiredRollsBackOnFailure 钉住五条 DELETE 的原子性：最后一张表不可用时应整体
+// 回滚，前面已删的行必须回来，不能留下「清了一半」的数据库状态。
+func TestCleanupExpiredRollsBackOnFailure(t *testing.T) {
+	db, err := NewDB(Config{
+		Path:   filepath.Join(t.TempDir(), "test.db"),
+		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	})
+	if err != nil {
+		t.Fatalf("NewDB failed: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.conn.Exec(
+		"INSERT INTO attack_events (ip, event_type, increment, occurred_at) VALUES (?, ?, ?, ?)",
+		"192.0.2.9", "failure", 1.0, 1000000,
+	); err != nil {
+		t.Fatalf("insert attack_events failed: %v", err)
+	}
+	// 让最后一条 DELETE 必然失败：清理必须整体回滚，已删的 attack_events 行要还在。
+	if _, err := db.conn.Exec("DROP TABLE ip_risk_vectors"); err != nil {
+		t.Fatalf("drop ip_risk_vectors failed: %v", err)
+	}
+
+	if err := db.CleanupExpired(7); err == nil {
+		t.Fatal("清理应因 ip_risk_vectors 缺失而失败")
+	}
+
+	var count int
+	if err := db.conn.QueryRow("SELECT COUNT(*) FROM attack_events").Scan(&count); err != nil {
+		t.Fatalf("query attack_events count failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("清理失败后 attack_events 应保留 1 行，实际 %d 行", count)
+	}
+}

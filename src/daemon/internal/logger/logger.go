@@ -224,9 +224,15 @@ func NewLogThrottler(interval int64) *LogThrottler {
 // CanLog 在距上次放行已达 interval 秒时返回 true，并记录当前时刻。
 func (t *LogThrottler) CanLog() bool {
 	now := time.Now().Unix()
-	if now-t.last.Load() >= t.interval {
-		t.last.Store(now)
-		return true
+	// 用 CAS 取代「先 Load 比较、再 Store」：两次原子操作之间不是原子的，并发调用会同时
+	// 通过；CAS 失败说明别处刚放行过，重读 last 再判一次即可。
+	for {
+		last := t.last.Load()
+		if now-last < t.interval {
+			return false
+		}
+		if t.last.CompareAndSwap(last, now) {
+			return true
+		}
 	}
-	return false
 }

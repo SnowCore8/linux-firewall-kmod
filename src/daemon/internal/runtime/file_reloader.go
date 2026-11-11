@@ -18,6 +18,11 @@ type fileReloader struct {
 // NewFileReloader 构造配置重载器。strict 必须与启动时 `--no-strict` 的取值一致：
 // 启动能接受的文件，SIGHUP 与回滚也必须按同一口径接受，否则会出现「能启动、不能重载」。
 func NewFileReloader(path string, strict bool, logger *slog.Logger) ConfigReloader {
+	// logger 为 nil 时回退 slog.Default()：Reload/Rollback/applyConfig 都要用它记日志，
+	// 在构造处兜底比在每个调用点判空更不容易漏。
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &fileReloader{path: path, strict: strict, logger: logger}
 }
 

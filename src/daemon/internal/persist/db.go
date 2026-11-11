@@ -287,44 +287,41 @@ func (db *DB) CleanupExpired(retentionDays int) error {
 	}
 	cutoff := time.Now().AddDate(0, 0, -retentionDays).Unix()
 
-	result, err := db.conn.Exec("DELETE FROM ban_events WHERE created_at < ?", cutoff)
+	// 五条 DELETE 放进一个事务：中途失败若已提交前几条，会留下「清了一半」的状态，
+	// 既不好解释也无法与后续清理对齐，故整体成功才提交。
+	tx, err := db.conn.Begin()
 	if err != nil {
-		return fmt.Errorf("cleanup ban_events: %w", err)
+		return fmt.Errorf("begin cleanup transaction: %w", err)
 	}
-	if rows, _ := result.RowsAffected(); rows > 0 {
-		db.logger.Info("cleaned up expired ban_events", "count", rows, "retention_days", retentionDays)
+	defer tx.Rollback()
+
+	statements := []struct {
+		table string
+		query string
+	}{
+		{"ban_events", "DELETE FROM ban_events WHERE created_at < ?"},
+		{"ip_reputation", "DELETE FROM ip_reputation WHERE last_updated < ?"},
+		{"ban_history", "DELETE FROM ban_history WHERE last_banned_at < ?"},
+		{"attack_events", "DELETE FROM attack_events WHERE occurred_at < ?"},
+		{"ip_risk_vectors", "DELETE FROM ip_risk_vectors WHERE updated_at < ?"},
+	}
+	counts := make([]int64, len(statements))
+	for i, st := range statements {
+		result, err := tx.Exec(st.query, cutoff)
+		if err != nil {
+			return fmt.Errorf("cleanup %s: %w", st.table, err)
+		}
+		counts[i], _ = result.RowsAffected()
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit cleanup transaction: %w", err)
 	}
 
-	result, err = db.conn.Exec("DELETE FROM ip_reputation WHERE last_updated < ?", cutoff)
-	if err != nil {
-		return fmt.Errorf("cleanup ip_reputation: %w", err)
-	}
-	if rows, _ := result.RowsAffected(); rows > 0 {
-		db.logger.Info("cleaned up expired ip_reputation", "count", rows, "retention_days", retentionDays)
-	}
-
-	result, err = db.conn.Exec("DELETE FROM ban_history WHERE last_banned_at < ?", cutoff)
-	if err != nil {
-		return fmt.Errorf("cleanup ban_history: %w", err)
-	}
-	if rows, _ := result.RowsAffected(); rows > 0 {
-		db.logger.Info("cleaned up expired ban_history", "count", rows, "retention_days", retentionDays)
-	}
-
-	result, err = db.conn.Exec("DELETE FROM attack_events WHERE occurred_at < ?", cutoff)
-	if err != nil {
-		return fmt.Errorf("cleanup attack_events: %w", err)
-	}
-	if rows, _ := result.RowsAffected(); rows > 0 {
-		db.logger.Info("cleaned up expired attack_events", "count", rows, "retention_days", retentionDays)
-	}
-
-	result, err = db.conn.Exec("DELETE FROM ip_risk_vectors WHERE updated_at < ?", cutoff)
-	if err != nil {
-		return fmt.Errorf("cleanup ip_risk_vectors: %w", err)
-	}
-	if rows, _ := result.RowsAffected(); rows > 0 {
-		db.logger.Info("cleaned up expired ip_risk_vectors", "count", rows, "retention_days", retentionDays)
+	// 日志在提交后打：回滚掉的行不该出现在「已清理」的记录里。
+	for i, st := range statements {
+		if counts[i] > 0 {
+			db.logger.Info("cleaned up expired "+st.table, "count", counts[i], "retention_days", retentionDays)
+		}
 	}
 
 	return nil

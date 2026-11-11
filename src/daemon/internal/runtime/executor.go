@@ -431,9 +431,19 @@ func (e *InboundExecutor) poll(timeout time.Duration) (ready, error) {
 	}
 	var r ready
 	if n > 0 {
-		r.inotify = fds[0].Revents != 0
+		// 只有 POLLIN 代表「有数据可读」：POLLHUP/POLLERR/POLLNVAL 说明 fd 已关闭或出错，
+		// 当成可读会让上层对着坏 fd 反复空转，故走错误路径交给主循环终止。
+		if rv := fds[0].Revents; rv&(unix.POLLERR|unix.POLLHUP|unix.POLLNVAL) != 0 {
+			return ready{}, fmt.Errorf("inotify fd 不可用：revents=%#x", rv)
+		} else if rv&unix.POLLIN != 0 {
+			r.inotify = true
+		}
 		if signalsIdx >= 0 {
-			r.signals = fds[signalsIdx].Revents != 0
+			if rv := fds[signalsIdx].Revents; rv&(unix.POLLERR|unix.POLLHUP|unix.POLLNVAL) != 0 {
+				return ready{}, fmt.Errorf("信号 fd 不可用：revents=%#x", rv)
+			} else if rv&unix.POLLIN != 0 {
+				r.signals = true
+			}
 		}
 	}
 	return r, nil

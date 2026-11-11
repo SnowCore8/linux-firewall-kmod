@@ -89,3 +89,30 @@ func TestDetectEgressHonorsContext(t *testing.T) {
 		t.Fatal("expected error for canceled context")
 	}
 }
+
+// TestDetectEgressRejectsNonPublicAddrs 钉住「探测结果必须是公网地址」：被劫持或配置错误的
+// 探测服务返回本机/内网地址时，不能把它当成服务器出口写进定位数据。
+func TestDetectEgressRejectsNonPublicAddrs(t *testing.T) {
+	for _, raw := range []string{
+		"127.0.0.1", "10.1.2.3", "172.16.0.9", "192.168.1.1",
+		"169.254.10.20", "0.0.0.0", "224.0.0.1", "255.255.255.255",
+		"::1", "fe80::1", "fd00::1", "::", "ff02::1", "::ffff:10.0.0.1",
+	} {
+		srv := newProbeServer(t, `{"ip":"`+raw+`"}`)
+		if got, err := DetectEgress(context.Background(), srv.URL); err == nil {
+			t.Fatalf("地址 %s 应被拒绝，实际返回 %v", raw, got)
+		}
+	}
+}
+
+// TestDetectEgressSkipsNonPublicKeys 验证非公网地址只是跳过，同一响应里的公网地址仍可用。
+func TestDetectEgressSkipsNonPublicKeys(t *testing.T) {
+	srv := newProbeServer(t, `{"ip":"127.0.0.1","query":"8.8.8.8"}`)
+	got, err := DetectEgress(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("DetectEgress: %v", err)
+	}
+	if want := netip.MustParseAddr("8.8.8.8"); got != want {
+		t.Fatalf("got %v want %v", got, want)
+	}
+}
