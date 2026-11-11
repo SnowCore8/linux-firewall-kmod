@@ -179,24 +179,28 @@ func TestPlanBanNegativeBanTimeIsConfigLevelPermanent(t *testing.T) {
 	}
 }
 
-// ban_time == 0 且首次：progressive == base == 0，非永久，过期时刻用 base.max(1) 兜底，
-// 避免「0 秒即过期」。
-//
-// duration 在此退化情形下同样为 0（草案字段对照：非永久时 `duration = progressive`）。
-// 这里显式钉住它，避免后来者把它当作笔误「顺手修正」而改变判定。
-func TestPlanBanZeroBanTimeFallsBackToOneSecond(t *testing.T) {
-	plan := PlanBan(0, 0, 500, 5)
+// ban_time == 0 且首次：progressive == base == 0，非永久。退化分支必须自洽——
+// executor 把 Duration=0 当永久下发，若这里给 0 而镜像只留 1 秒，就会变成
+// 「内核永久封禁、本地 1 秒后认为已解封」。故 Duration 与 ExpiresAt 同为 1 秒。
+func TestPlanBanZeroBanTimeKeepsDurationConsistentWithExpiry(t *testing.T) {
+	const now int64 = 500
+	plan := PlanBan(0, 0, now, 5)
 	if plan.IsPermanent {
 		t.Errorf("ban_time == 0 不是永久封禁: %+v", plan)
 	}
-	if plan.ExpiresAt != 501 {
-		t.Errorf("ExpiresAt=%d, want 501", plan.ExpiresAt)
+	if plan.Duration != 1 {
+		t.Errorf("Duration=%d, want 1", plan.Duration)
 	}
+	if plan.ExpiresAt != now+1 {
+		t.Errorf("ExpiresAt=%d, want %d", plan.ExpiresAt, now+1)
+	}
+	// 非永久时线上下发时长与本地镜像的过期时刻必须一致。
+	if got, want := plan.ExpiresAt-now, int64(plan.Duration); got != want {
+		t.Errorf("ExpiresAt-now=%d 与 Duration=%d 不一致", got, plan.Duration)
+	}
+	// 渐进阶梯本身仍是 0（退化兜底只体现在下发的 Duration 上）。
 	if plan.ProgressiveDuration != 0 {
 		t.Errorf("ProgressiveDuration=%d, want 0", plan.ProgressiveDuration)
-	}
-	if plan.Duration != 0 {
-		t.Errorf("Duration=%d, want 0", plan.Duration)
 	}
 }
 

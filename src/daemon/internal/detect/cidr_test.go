@@ -92,3 +92,20 @@ func TestCidrKeyKeepsV4MappedAsIPv6(t *testing.T) {
 		t.Errorf("v4 映射地址应按 IPv6 归一: %q", got)
 	}
 }
+
+// SubnetKey 是集群聚合入口，必须先 Unmap：否则不同 /24 的映射地址会塌缩到同一个
+// `::/48` 键，既误报集群，又对一个命中不了任何 IPv4 脏网段的网段下发封禁。
+func TestSubnetKeyUnmapsV4Mapped(t *testing.T) {
+	mapped := SubnetKey(ip(t, "::ffff:10.0.0.5"), 24).Key()
+	if mapped != "10.0.0.0/24" {
+		t.Errorf("映射地址应按 IPv4 聚合: %q", mapped)
+	}
+	if dotted := SubnetKey(ip(t, "10.0.0.5"), 24).Key(); mapped != dotted {
+		t.Errorf("映射写法与点分写法应得到同一键: %q vs %q", mapped, dotted)
+	}
+	a := SubnetKey(ip(t, "::ffff:203.0.113.7"), 24).Key()
+	b := SubnetKey(ip(t, "::ffff:198.51.100.7"), 24).Key()
+	if a == b {
+		t.Errorf("不同 /24 的映射地址不得同键: %q", a)
+	}
+}

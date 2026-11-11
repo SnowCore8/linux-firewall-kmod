@@ -358,6 +358,54 @@ func TestDirectoryReplacingTheFileIsTreatedAsRotation(t *testing.T) {
 	}
 }
 
+// TestReadNewDrainsBacklogAcrossBatches 覆盖「单批读上限」之后的续读：一次写入超过
+// BatchReadMax 时，ReadNew 每轮最多交出一批，调用方必须能靠连续读取把积压读完。
+//
+// 这是事件丢失（inotify 溢出）后补读路径成立的前提：补读只会触发一次，若读完一批就
+// 停在半路，剩下的字节要等下一次事件，而溢出恰恰意味着没有下一次事件。
+func TestReadNewDrainsBacklogAcrossBatches(t *testing.T) {
+	dir := newTempDir(t)
+	path := filepath.Join(dir, "a.log")
+	appendFile(t, path, nil)
+
+	r := NewSourceReader(nil)
+	r.OpenAtEnd(path)
+
+	// 单次写入 > 单批上限，跨两批。
+	size := BatchReadMax + 1024
+	appendFile(t, path, make([]byte, size))
+
+	total := 0
+	for i := 0; i < 4; i++ {
+		chunk, err := r.ReadNew(path)
+		if err != nil {
+			t.Fatalf("第 %d 轮读失败：%v", i, err)
+		}
+		if chunk.Rotated {
+			t.Fatalf("第 %d 轮不该判为轮转", i)
+		}
+		if len(chunk.Bytes) == 0 {
+			break
+		}
+		total += len(chunk.Bytes)
+	}
+
+	if total != size {
+		t.Fatalf("连续读取交出 %d 字节，期望 %d", total, size)
+	}
+	if r.Offset() != int64(size) {
+		t.Fatalf("读干后 offset 应为 %d，实得 %d", size, r.Offset())
+	}
+	// 再读一次必须为空：补读者据「读到空」判断已经追上文件末尾。
+	chunk, err := r.ReadNew(path)
+	if err != nil {
+		t.Fatalf("读干后再读失败：%v", err)
+	}
+	if len(chunk.Bytes) != 0 {
+		t.Fatalf("读干后不应再有字节，实得 %d", len(chunk.Bytes))
+	}
+}
+
 // TestCloseIsIdempotent 覆盖重复关闭。
 func TestCloseIsIdempotent(t *testing.T) {
 	dir := newTempDir(t)

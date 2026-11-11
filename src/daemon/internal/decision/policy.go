@@ -6,8 +6,8 @@
 //
 // 判据须与设计文档「冻结面 · 判定语义」逐条一致：
 //
-//   - 有效阈值 = max_retries × 高峰(1.5) × 内网(2.0) × 信誉，再 ceil 并至少为 1
-//   - 信誉系数：≥80 → 1.0，≥50 → 0.8，否则 0.5
+//   - 有效阈值走加法模型：max_retries + 高峰(+2) + 内网(+3) + 信誉调整，再下限 1
+//   - 信誉调整量：≥80 → 0，≥50 → -1，否则 -2
 //   - 渐进式时长：第 1 次 base，第 2 次 1800，第 3 次 86400，第 4 次起 0（永久）
 //   - ban_time < 0 即配置级永久；progressive == 0 且已封禁 ≥3 次亦为永久
 package decision
@@ -146,24 +146,19 @@ func PlanBan(banTime int32, priorBanCount uint32, now int64, failCount uint32) B
 	permanent := banTime < 0 || (progressive == 0 && priorBanCount >= 3)
 
 	var expiresAt int64
+	duration := uint64(progressive)
 	switch {
 	case permanent:
 		expiresAt = 0
+		duration = 0
 	case progressive > 0:
 		expiresAt = now + int64(progressive)
 	default:
-		// progressive == 0 但非永久：banTime == 0 的退化情形。用 base 兜底并至少
-		// 1 秒，避免「0 秒即过期」导致封禁形同虚设。
-		floor := baseDuration
-		if floor < 1 {
-			floor = 1
-		}
-		expiresAt = now + int64(floor)
-	}
-
-	duration := uint64(progressive)
-	if permanent {
-		duration = 0
+		// progressive == 0 但非永久：banTime == 0 的退化情形。Duration 必须与 ExpiresAt
+		// 同源：executor 把 0 当永久下发，若这里下发 0 而镜像按 1 秒过期，就会变成
+		// 「内核永久封禁、本地 1 秒后认为已解封」。故显式下发 1 秒。
+		duration = 1
+		expiresAt = now + int64(duration)
 	}
 
 	return BanPlan{

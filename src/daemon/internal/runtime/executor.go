@@ -62,6 +62,12 @@ const (
 	dataCleanupInterval = 300 * time.Second
 	// pendingReaddRetry 是待重挂源的轮询上限：轮转后新文件出现即挂上，不必等 rescanInterval。
 	pendingReaddRetry = 1 * time.Second
+	// overflowCatchupBatches 是单次溢出补读对每个源最多连读的批数。
+	//
+	// 溢出后不再有后续事件唤醒，只读一批会把超过 BatchReadMax 的积压留在文件里；但
+	// 持续写入时无上限地追会让单线程执行体被一个源钉住，故给一批上限（64 × 256 KiB
+	// ≈ 16 MiB，远超一次溢出能堆出来的常规积压），剩下的等下一个事件接着读。
+	overflowCatchupBatches = 64
 )
 
 // BanSink 是封禁下发的副作用汇聚点。
@@ -520,9 +526,54 @@ func (e *InboundExecutor) handleInotify() {
 	if e.stats != nil {
 		e.stats.IncInotifyEvents()
 	}
+	e.handleWatchEvents(events)
+}
+
+// handleWatchEvents 分派一批 inotify 事件，溢出事件单独走补读路径。
+//
+// 溢出事件不属于任何 watch，`registry.Resolve(-1)` 必然落空——与「已摘除的旧 watch
+// 残留事件」形同，若混在逐条分派里就会被静默丢掉，而它恰恰是唯一能提示「有事件丢了」
+// 的信号。这里先于普通事件处理，保证同一批里即便另有正常事件，补读也不会被跳过。
+func (e *InboundExecutor) handleWatchEvents(events []ingest.WatchEvent) {
 	for _, event := range events {
+		if event.IsOverflow() {
+			e.drainAfterOverflow()
+			continue
+		}
 		e.handleEvent(event)
 	}
+}
+
+// drainAfterOverflow 在内核队列溢出后对所有已注册日志源做一次补读，返回尝试补读的
+// 源数量（供测试断言「全部源都被覆盖、且每个只走一遍」）。
+//
+// 单次 drainSource 只交出一批（BatchReadMax），而溢出后没有后续事件唤醒，只读一批会
+// 把更大的积压留在文件里、且不会再有第二声提示；因此这里逐源连读到「偏移不再前进」
+// 为止，批数上限见 overflowCatchupBatches。
+//
+// 只做溢出触发的补读、不引入周期全量 drain：溢出之外，读路径本身有重扫与待重挂兜底，
+// 而周期 drain 会在完全空闲时也逐源 Lstat/Seek 一遍，把「按事件读」退化成轮询。
+// 配置文件源由 drainSource 按 owners 过滤（它只收 Jail 非空的 owner），不会被顺手读。
+func (e *InboundExecutor) drainAfterOverflow() int {
+	e.warn("inotify 队列溢出，部分事件已丢失，对全部日志源补读一次")
+	var ids []ingest.SourceID
+	e.registry.Iterate(func(id ingest.SourceID, _ ingest.SourceEntry) {
+		ids = append(ids, id)
+	})
+	for _, id := range ids {
+		reader := e.readers[id]
+		if reader == nil {
+			continue
+		}
+		for batches := 0; batches < overflowCatchupBatches; batches++ {
+			before := reader.Offset()
+			e.drainSource(id)
+			if reader.Offset() == before {
+				break
+			}
+		}
+	}
+	return len(ids)
 }
 
 // handleEvent 路由单条 inotify 事件：配置文件变更触发重载，日志内容变更触发读取，
@@ -1155,7 +1206,9 @@ func (e *InboundExecutor) runDueMaintenance() {
 }
 
 // dispatchClusterHit 处置一次集群扫描命中：审计模式只记日志，否则把该网段的下发交给内核。
-func (e *InboundExecutor) dispatchClusterHit(jail string, hit decision.ClusterHit, cfg config.ClusterConfig) {
+//
+// 返回值是「是否已处置」，ScanClusters 只对已处置的命中清失败计数。
+func (e *InboundExecutor) dispatchClusterHit(jail string, hit decision.ClusterHit, cfg config.ClusterConfig) bool {
 	e.warn("检测到集群扫描",
 		"jail", jail,
 		"cidr", hit.CIDR.String(),
@@ -1167,7 +1220,9 @@ func (e *InboundExecutor) dispatchClusterHit(jail string, hit decision.ClusterHi
 		"detail", hit.Summary(),
 	)
 	if cfg.AuditOnly || e.sink == nil {
-		return
+		// 没有下发就不是处置：这些 IP 的失败计数必须留着，否则审计模式下真实来源的
+		// 累计会被周期检测清空，而封禁根本没发生。
+		return false
 	}
 	// 线上原因只写「哪个 jail 的集群判定」：契约的 reason 是 str[32]（含 NUL，实际 31
 	// 字节），把 CIDR 与命中数拼进去必然超长，超长即编码失败——于是整条网段封禁静默
@@ -1178,6 +1233,10 @@ func (e *InboundExecutor) dispatchClusterHit(jail string, hit decision.ClusterHi
 	if err := e.sink.Send(hit.CIDR.Addr(), uint8(hit.CIDR.PrefixLen()), cfg.BanTime, reason); err != nil {
 		e.warn("集群网段封禁下发失败", "jail", jail, "cidr", hit.CIDR.String(), "error", err)
 	}
+	// 下发失败也算处置过：失败已记一行日志，而检测间隔远小于 cluster.Window，
+	// 保留计数会让同一网段每个周期都重试并重复告警，把真实原因刷掉。失败后的重试
+	// 靠后续失败日志重新累计；内核拒绝（多为封禁表满）也不是本周期内能恢复的。
+	return true
 }
 
 // dispatchIntent 把一个封禁意图下发内核，并镜像到本地缓存与统计。

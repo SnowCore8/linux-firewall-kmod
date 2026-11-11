@@ -221,3 +221,52 @@ func TestSubnetKeyFollowsAddressFamily(t *testing.T) {
 		t.Errorf("v6 应按 PrefixV6 聚合: %q", got)
 	}
 }
+
+// IPv4-mapped 地址（`::ffff:a.b.c.d`）就是 IPv4：映射写法与点分写法必须得到同一网段键。
+func TestSubnetKeyTreatsV4MappedAsIPv4(t *testing.T) {
+	cfg := clusterCfg(3, 1)
+	dotted := SubnetKey(addr(t, "203.0.113.7"), cfg).Key()
+	mapped := SubnetKey(addr(t, "::ffff:203.0.113.7"), cfg).Key()
+	if mapped != dotted {
+		t.Errorf("映射写法 %q 与点分写法 %q 应同键", mapped, dotted)
+	}
+	if dotted != "203.0.113.0/24" {
+		t.Errorf("映射地址应按 PrefixV4 聚合: %q", dotted)
+	}
+}
+
+// 两个不同 /24 的映射地址必须落到不同网段：否则扫描会被并成一簇，且对一条命中不了
+// 任何 IPv4 脏网段的 `::/48` 下发封禁。
+func TestSubnetKeyKeepsDistinctSubnetsForMappedAddrs(t *testing.T) {
+	cfg := clusterCfg(3, 1)
+	a := SubnetKey(addr(t, "::ffff:203.0.113.7"), cfg).Key()
+	b := SubnetKey(addr(t, "::ffff:198.51.100.7"), cfg).Key()
+	if a == b {
+		t.Fatalf("不同 /24 的映射地址不得同键: %q", a)
+	}
+}
+
+// DetectCluster 对映射地址同样按各自的 /24 分组，不会把不同网段的来源并成一簇。
+func TestDetectClusterGroupsMappedAddrsByIPv4Prefix(t *testing.T) {
+	w := detect.NewFailureWindow()
+	observe(t, w, "::ffff:203.0.113.1", 1, 1000)
+	observe(t, w, "::ffff:198.51.100.1", 1, 1000)
+	observe(t, w, "::ffff:192.0.2.1", 1, 1000)
+
+	if hits := DetectCluster(w, 1000, clusterCfg(3, 1)); len(hits) != 0 {
+		t.Fatalf("三个不同 /24 的映射地址各 1 个，不得并成一簇: %+v", hits)
+	}
+
+	observe(t, w, "::ffff:203.0.113.2", 1, 1000)
+	observe(t, w, "::ffff:203.0.113.3", 1, 1000)
+	hits := DetectCluster(w, 1000, clusterCfg(3, 1))
+	if len(hits) != 1 {
+		t.Fatalf("仅 203.0.113.0/24 凑够 3 个映射来源: %+v", hits)
+	}
+	if got := hits[0].CIDR.Key(); got != "203.0.113.0/24" {
+		t.Errorf("命中的网段键=%q, want 203.0.113.0/24", got)
+	}
+	if len(hits[0].IPs) != 3 {
+		t.Errorf("参与判定的 IP 数=%d, want 3", len(hits[0].IPs))
+	}
+}

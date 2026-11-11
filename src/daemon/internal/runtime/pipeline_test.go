@@ -404,7 +404,7 @@ func TestClusterScanReportsHits(t *testing.T) {
 		auditOnly bool
 	}
 	var hits []hitRow
-	p.ScanClusters(1_000, func(jail string, hit decision.ClusterHit, cfg config.ClusterConfig) {
+	p.ScanClusters(1_000, func(jail string, hit decision.ClusterHit, cfg config.ClusterConfig) bool {
 		hits = append(hits, hitRow{
 			jail:      jail,
 			cidr:      hit.CIDR.Key(),
@@ -412,6 +412,7 @@ func TestClusterScanReportsHits(t *testing.T) {
 			peak:      hit.Peak,
 			auditOnly: cfg.AuditOnly,
 		})
+		return true
 	})
 
 	if len(hits) != 1 {
@@ -434,9 +435,87 @@ func TestClusterScanReportsHits(t *testing.T) {
 		t.Error("回调应把该 jail 的 cluster 配置一并传出（此处 audit_only=false）")
 	}
 
-	// 检测是纯读：不改动窗口，故未过期条目仍留在原地。
+	// 回调返回 true（已处置）：该集群涉及的 IP 计数被清掉，下一周期不会再检出。
+	if got := p.jails["sshd"].window.Len(); got != 0 {
+		t.Errorf("已处置的集群应清掉失败计数: Len=%d, want 0", got)
+	}
+}
+
+// onHit 返回 false（审计模式 / 未装配下发通道）时命中只是观测：不得清掉失败计数，
+// 否则真实来源的累计被周期检测抹掉，而封禁根本没有发生。
+func TestClusterScanKeepsCountsWhenHitIsNotHandled(t *testing.T) {
+	p := NewPipeline()
+	p.RegisterJail(sshdRules(t), NewJailPolicy(100, 600, 600, config.ClusterConfig{
+		Enabled:   true,
+		AuditOnly: true,
+		PrefixV4:  24,
+		PrefixV6:  48,
+		Window:    600,
+		MinIPs:    3,
+		MaxPerIP:  1,
+		BanTime:   300,
+	}))
+
+	src := ingest.NewSourceID(31)
+	var out []BanIntent
+	for _, host := range []string{"21", "22", "23"} {
+		out, _ = p.OnChunk("sshd", src, []byte(failedRec("203.0.113."+host)),
+			NewTick(1_000, false), NoHistory{}, out)
+	}
+	if len(out) != 0 {
+		t.Fatalf("单 IP 未达阈值，不应产出单点封禁意图: %d", len(out))
+	}
+
+	scans := 0
+	unhandled := func(string, decision.ClusterHit, config.ClusterConfig) bool {
+		scans++
+		return false
+	}
+	p.ScanClusters(1_000, unhandled)
+	p.ScanClusters(1_000, unhandled)
+	if scans != 2 {
+		t.Errorf("未处置的命中应每个周期都上报: scans=%d, want 2", scans)
+	}
 	if got := p.Cleanup(1_000); got != 0 {
-		t.Errorf("检测不应清掉未过期的条目: %d", got)
+		t.Errorf("未处置的命中不得清掉仍在窗口内的计数: removed=%d", got)
+	}
+
+	// 处置后（返回 true）才清计数，下一周期不再重复上报。
+	scans = 0
+	handled := func(string, decision.ClusterHit, config.ClusterConfig) bool {
+		scans++
+		return true
+	}
+	p.ScanClusters(1_000, handled)
+	p.ScanClusters(1_000, handled)
+	if scans != 1 {
+		t.Errorf("已处置的集群不应重复上报: scans=%d, want 1", scans)
+	}
+}
+
+// 判定入口统一 Unmap：映射写法与点分写法必须落到同一个失败窗口条目，否则同一来源
+// 会被记成两个 IP，凑出并不存在的「多源」集群。
+//
+// 用 `0:0:0:0:0:ffff:a.b.c.d` 这种展开写法：logparse 的候选扫描拒绝以 `:` 开头的
+// token，`::ffff:a.b.c.d` 进不了主链路，展开写法与它是同一个地址。
+func TestMappedIPv4SharesWindowEntryWithDotted(t *testing.T) {
+	p := NewPipeline()
+	p.RegisterJail(sshdRules(t), NewJailPolicy(2, 600, 600, config.DefaultClusterConfig()))
+
+	src := ingest.NewSourceID(32)
+	batch := failedRec("203.0.113.9") + failedRec("0:0:0:0:0:ffff:203.0.113.9")
+	out, ok := p.OnChunk("sshd", src, []byte(batch), NewTick(100, false), NoHistory{}, nil)
+	if !ok {
+		t.Fatal("jail 应已注册")
+	}
+	if len(out) != 1 {
+		t.Fatalf("同一来源的两种写法应合计达到阈值 2，产出 1 条意图: %d", len(out))
+	}
+	if got := out[0].IP.String(); got != "203.0.113.9" {
+		t.Errorf("意图 IP 应为规范 IPv4 形式: %q", got)
+	}
+	if got := p.jails["sshd"].window.Len(); got != 0 {
+		t.Errorf("封禁后窗口应清空: Len=%d", got)
 	}
 }
 

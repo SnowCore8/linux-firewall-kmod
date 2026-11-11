@@ -231,7 +231,9 @@ func collectLine(rules *logparse.RuleSet, line []byte, out *[]parsedLine) {
 	if !ok {
 		return
 	}
-	*out = append(*out, parsedLine{ip: addr, via: via})
+	// 判定层的统一入口做一次 Unmap：`::ffff:1.2.3.4` 若不折回 IPv4，失败窗口会把
+	// 同一来源记成两个 IP，集群聚合也会按 IPv6 取 /48 前缀把不同 /24 并成一簇。
+	*out = append(*out, parsedLine{ip: addr.Unmap(), via: via})
 }
 
 // parsedLine 是一行解析结果。
@@ -427,7 +429,7 @@ func (p *Pipeline) Cleanup(now int64) int {
 
 // ScanClusters 周期维护：检出集群扫描，逐个命中回调 (jail, 命中, cluster 配置)。
 //
-// 由执行体决定下发网段封禁还是只记审计日志。
+// 由执行体决定下发网段封禁还是只记审计日志；onHit 返回「本次命中是否已处置」。
 //
 // 为什么单独一个周期，而不是跟着 Cleanup：集群检测的输入是跨 IP 的——单行判定只看得到
 // 一个源，凑不出「同一网段内有多少个不同源」这个结论，故只能周期判定。而它必须比
@@ -435,11 +437,15 @@ func (p *Pipeline) Cleanup(now int64) int {
 // 跑一次，一批刚写入的失败会在下一次检测前滑出窗口，扫描永远凑不够 MinIPs。检测间隔应
 // 远小于窗口，让窗口内任意相位开始的扫描都能被至少一次完整的检测看到。
 //
-// 命中后清除该集群涉及的 IP 失败记录，避免同一集群在下一个检测周期被重复下发封禁。
-func (p *Pipeline) ScanClusters(now int64, onHit func(jail string, hit decision.ClusterHit, cfg config.ClusterConfig)) {
+// 只有 onHit 返回 true（确实处置过）才清除该集群涉及的 IP 失败记录，防止同一集群在
+// 下一个检测周期被重复下发。审计模式或未装配下发通道时命中只是观测，清计数会让真实
+// 来源 IP 的失败累计凭空消失，而封禁根本没有发生。
+func (p *Pipeline) ScanClusters(now int64, onHit func(jail string, hit decision.ClusterHit, cfg config.ClusterConfig) bool) {
 	for jail, state := range p.jails {
 		for _, hit := range decision.DetectCluster(state.window, now, state.policy.Cluster) {
-			onHit(jail, hit, state.policy.Cluster)
+			if !onHit(jail, hit, state.policy.Cluster) {
+				continue
+			}
 			// 清除已处置的集群 IP，防止下一周期重复检测同一集群
 			for _, ip := range hit.IPs {
 				state.window.Forget(ip)

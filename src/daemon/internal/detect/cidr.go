@@ -142,6 +142,11 @@ func (k CidrKey) Addr() netip.Addr { return k.Prefix().Addr() }
 func (k CidrKey) PrefixLen() int { return k.Prefix().Bits() }
 
 // SubnetKey 返回 addr 在给定前缀长度下的聚合网段键（集群扫描检测用）。
+//
+// 先 Unmap：`::ffff:a.b.c.d` 就是一个 IPv4 地址，按 128 位字面聚合会把不同 /24 的
+// 映射地址塌缩到同一个 `::` 前缀键（/48 下全是 `::/48`），既误报集群，又会对一个
+// 命中不了任何 IPv4 脏网段的 `::/48` 下发封禁。NewCidrKey 仍按字面处理，因为
+// ParseCidrKey 走文本路径时需要保留调用方写下的地址族。
 func SubnetKey(addr netip.Addr, prefix uint8) CidrKey {
-	return NewCidrKey(addr, prefix)
+	return NewCidrKey(addr.Unmap(), prefix)
 }

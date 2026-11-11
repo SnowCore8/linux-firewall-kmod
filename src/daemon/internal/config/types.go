@@ -15,8 +15,11 @@ import (
 //
 // 判定发生在 netip.Addr 层面，避免上层为「用 /32 还是 /128」自己维护一份映射：
 // 集群检测与 CIDR 归一化都依赖同一份地址族知识。
+//
+// 先 Unmap：`::ffff:1.2.3.4` 在 netip 里 Is4() 为假，按字面判成 IPv6 会让集群聚合
+// 取到 /48 前缀，从而把不同 /24 的映射地址并进同一个 `::/48` 键。
 func FamilyOf(addr netip.Addr) uint8 {
-	if addr.Is4() {
+	if addr.Unmap().Is4() {
 		return 2
 	}
 	return 10

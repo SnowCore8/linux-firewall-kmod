@@ -11,6 +11,7 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/contract"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/decision"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/detect"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/ingest"
 )
 
 // TestClusterDispatchReasonFitsWireField 钉住集群网段封禁的原因文本落在契约的定长
@@ -59,5 +60,52 @@ func TestClusterDispatchReasonFitsWireField(t *testing.T) {
 	}
 	if sink.sendCount() != 1 {
 		t.Errorf("下发次数 = %d，期望 1", sink.sendCount())
+	}
+}
+
+// 审计模式只观测：dispatchClusterHit 必须报告「未处置」，ScanClusters 才不清计数。
+// 否则审计模式下真实来源的失败累计会被周期检测清空，而封禁根本没有发生。
+func TestClusterAuditModeReportsHitAsUnhandled(t *testing.T) {
+	dir := tempLogDir(t)
+	defer os.RemoveAll(dir)
+	logPath := filepath.Join(dir, "cluster-audit.log")
+	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
+		t.Fatalf("创建测试日志失败: %v", err)
+	}
+
+	sink := newAcceptingSink()
+	ex, _ := directiveFixture(t, logPath, "probe", sink)
+	// 单 IP 阈值抬高到不可能达到，命中只可能来自集群判定。
+	ex.cfg.Jails[0].MaxRetries = 100
+	ex.cfg.Jails[0].Cluster = config.ClusterConfig{
+		Enabled:   true,
+		AuditOnly: true,
+		PrefixV4:  24,
+		PrefixV6:  48,
+		Window:    600,
+		MinIPs:    3,
+		MaxPerIP:  1,
+		BanTime:   300,
+	}
+	ex.refreshJails()
+
+	now := nowSecs()
+	batch := failedRec("203.0.113.21") + failedRec("203.0.113.22") + failedRec("203.0.113.23")
+	if _, ok := ex.pipeline.OnChunk("probe", ingest.NewSourceID(1), []byte(batch),
+		NewTick(now, false), NoHistory{}, nil); !ok {
+		t.Fatal("jail 应已注册")
+	}
+	state := ex.pipeline.jails["probe"]
+	if got := state.window.Len(); got != 3 {
+		t.Fatalf("窗口应记下 3 个来源: Len=%d", got)
+	}
+
+	ex.pipeline.ScanClusters(now, ex.dispatchClusterHit)
+
+	if got := state.window.Len(); got != 3 {
+		t.Errorf("审计模式下命中不得清掉失败计数: Len=%d, want 3", got)
+	}
+	if got := sink.sendCount(); got != 0 {
+		t.Errorf("审计模式不得下发网段封禁: %d", got)
 	}
 }

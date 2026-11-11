@@ -15,12 +15,27 @@ import (
 // 目录的一批事件，读满后下一轮会继续取走剩余事件。
 const eventBufferBytes = 4096
 
+// OverflowWatchDescriptor 是内核用于「inotify 队列溢出」的特殊 watch 描述符。
+//
+// 队列溢出时内核投递一条 wd=-1、掩码含 IN_Q_OVERFLOW 的事件：它不属于任何已挂的
+// watch，而真正的内容变更事件已经丢了。读侧必须把它认出来并对全部源做一次补读，
+// 否则这段增量就永久消失（事件驱动的读路径再也等不到第二声唤醒）。
+const OverflowWatchDescriptor int32 = -1
+
 // WatchEvent 是一次唤醒里读出的原始事件，已脱离 fd。
 type WatchEvent struct {
 	// WD 是事件来源的 watch 描述符。
 	WD int32
 	// Mask 是事件掩码。
 	Mask uint32
+}
+
+// IsOverflow 报告这是否是内核队列溢出事件。
+//
+// 同时看 wd 与掩码：wd=-1 是内核的约定，掩码位是协议上的自描述，任一命中都按溢出
+// 处理——漏判的代价是一批增量被静默丢弃。
+func (e WatchEvent) IsOverflow() bool {
+	return e.WD == OverflowWatchDescriptor || e.Mask&unix.IN_Q_OVERFLOW != 0
 }
 
 // IsContentChange 报告内容是否可能变多（需要读取新增字节）。

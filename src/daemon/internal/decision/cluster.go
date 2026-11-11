@@ -26,6 +26,9 @@ func (h ClusterHit) Summary() string {
 }
 
 // SubnetKey 返回 ip 在 cfg 规定的聚合前缀下的网段键。
+//
+// 前缀按地址族选取，而 IPv4-mapped 地址（`::ffff:a.b.c.d`）在 FamilyOf 与
+// detect.SubnetKey 里都先 Unmap，故映射写法与点分写法得到同一个键。
 func SubnetKey(ip netip.Addr, cfg config.ClusterConfig) detect.CidrKey {
 	return detect.SubnetKey(ip, cfg.PrefixFor(config.FamilyOf(ip)))
 }

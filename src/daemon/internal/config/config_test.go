@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -396,5 +397,25 @@ func TestHistoryDatabaseIsConfigurable(t *testing.T) {
 	}
 	if cfg.HistoryDBPath != "" {
 		t.Errorf("显式空串应关库，实际 %q", cfg.HistoryDBPath)
+	}
+}
+
+// IPv4-mapped 地址（`::ffff:a.b.c.d`）就是一个 IPv4 地址：按字面判成 IPv6 会让集群
+// 聚合取到 /48 前缀，把不同 /24 的映射地址并进同一个 `::/48` 键。
+func TestFamilyOfUnmapsIPv4Mapped(t *testing.T) {
+	cases := map[string]uint8{
+		"1.2.3.4":        2,
+		"::ffff:1.2.3.4": 2,
+		"2001:db8::1":    10,
+		"::1":            10,
+	}
+	for text, want := range cases {
+		addr, err := netip.ParseAddr(text)
+		if err != nil {
+			t.Fatalf("测试地址 %q 非法: %v", text, err)
+		}
+		if got := FamilyOf(addr); got != want {
+			t.Errorf("FamilyOf(%q)=%d, want %d", text, got, want)
+		}
 	}
 }

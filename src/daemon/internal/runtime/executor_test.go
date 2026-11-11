@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/decision"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/ingest"
@@ -315,6 +317,94 @@ func TestBanIntentIsMappedToBanInfoFieldByField(t *testing.T) {
 	}
 	if info.Num == 0 {
 		t.Error("IPv4 必须带上网络字节序整数索引")
+	}
+}
+
+// TestOverflowEventDrainsEveryLogSource 覆盖内核队列溢出（IN_Q_OVERFLOW，wd=-1）的补读。
+//
+// 溢出事件不属于任何 watch，registry.Resolve(-1) 必然落空；若按普通事件逐条分派，
+// 它会被当成「已摘除的旧 watch 残留」静默丢掉，而真正的内容变更事件已经随队列一起
+// 丢了，事件驱动的读路径再也等不到第二声唤醒。本用例断言溢出后每个已注册日志源都被
+// 补读一遍（各交出全部积压），且重复溢出不会重复交出字节。
+func TestOverflowEventDrainsEveryLogSource(t *testing.T) {
+	dir := tempLogDir(t)
+	defer os.RemoveAll(dir)
+
+	paths := []string{filepath.Join(dir, "a.log"), filepath.Join(dir, "b.log")}
+	names := []string{"overflow-a", "overflow-b"}
+	cfg := config.Default()
+	for i, p := range paths {
+		if err := os.WriteFile(p, nil, 0o644); err != nil {
+			t.Fatalf("写日志失败: %v", err)
+		}
+		jail := config.NewJail(names[i])
+		jail.MaxRetries = 1
+		jail.FindTime = 600
+		jail.BanTime = 60
+		jail.LogFiles = append(jail.LogFiles, p)
+		jail.Regexes = append(jail.Regexes, config.RegexInfo{
+			Name:     "default",
+			Pattern:  logparse.DefaultSSHDPattern,
+			Compiled: regexp.MustCompile(logparse.DefaultSSHDPattern),
+		})
+		cfg.Jails = append(cfg.Jails, jail)
+	}
+
+	signals, err := NewSignalSource()
+	if err != nil {
+		t.Fatalf("创建信号源失败: %v", err)
+	}
+	ex, err := NewInboundExecutor(&cfg, signals, Deps{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Stats:  &fakeStats{},
+	})
+	if err != nil {
+		t.Fatalf("入站执行体应能装配: %v", err)
+	}
+	defer ex.Close()
+
+	appendFile(t, paths[0], []byte(failedRec("203.0.113.201")))
+	// 第二个源写入超过单批上限的整段字节（无换行）：单次 drainSource 只交出一批，
+	// 补读必须连读到偏移不再前进，才能把积压追平——溢出后没有下一声事件可等。
+	bigSize := ingest.BatchReadMax + 1024
+	appendFile(t, paths[1], make([]byte, bigSize))
+
+	// 先直接验证补读函数覆盖了注册表里的每个源，且每个只走一遍。
+	if got, want := ex.drainAfterOverflow(), ex.registry.Len(); got != want {
+		t.Fatalf("补读了 %d 个源，期望 %d（注册表里的全部日志源）", got, want)
+	}
+	if got := ex.pipeline.Counters().LinesParsed; got != 1 {
+		t.Fatalf("只有第一个源有完整行可解析，lines_parsed=%d", got)
+	}
+	for i, p := range paths {
+		id, _, _, ok := ex.entryForPath(p)
+		if !ok {
+			t.Fatalf("第 %d 个源应仍在注册表里", i)
+		}
+		reader := ex.readers[id]
+		if reader == nil {
+			t.Fatalf("第 %d 个源应有读取器", i)
+		}
+		info, statErr := os.Stat(p)
+		if statErr != nil {
+			t.Fatalf("stat 失败: %v", statErr)
+		}
+		if reader.Offset() != info.Size() {
+			t.Errorf("第 %d 个源 offset=%d，期望追上文件末尾 %d", i, reader.Offset(), info.Size())
+		}
+	}
+
+	// 再走一遍真实分派路径：溢出事件必须触发补读；已有偏移保证不重复交出字节。
+	appendFile(t, paths[0], []byte(failedRec("203.0.113.203")))
+	before := ex.pipeline.Counters().LinesParsed
+	ex.handleWatchEvents([]ingest.WatchEvent{{WD: ingest.OverflowWatchDescriptor, Mask: unix.IN_Q_OVERFLOW}})
+	if got := ex.pipeline.Counters().LinesParsed - before; got != 1 {
+		t.Fatalf("溢出事件应只补读出新增的那一行，实得 %d 行", got)
+	}
+	before = ex.pipeline.Counters().LinesParsed
+	ex.handleWatchEvents([]ingest.WatchEvent{{WD: ingest.OverflowWatchDescriptor, Mask: unix.IN_Q_OVERFLOW}})
+	if got := ex.pipeline.Counters().LinesParsed - before; got != 0 {
+		t.Fatalf("无新增时溢出补读不应重复交出字节，实得 %d 行", got)
 	}
 }
 
