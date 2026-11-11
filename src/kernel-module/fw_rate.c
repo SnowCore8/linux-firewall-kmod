@@ -632,41 +632,58 @@ static const char *fw_rate_protocol_check(const struct fw_rate_node *n,
   return NULL;
 }
 
-/* 总速率阈值：静态与动态取较大者；两者都关时不判定 */
+/* 总速率阈值：静态与动态取较大者；动态项无有效基线时不参与；两者都不适用时不判定 */
 static const char *fw_rate_total_check(const struct fw_rate_node *n) {
   u64 pps_threshold = 0, bps_threshold = 0;
-  bool use_static = fw_info.static_threshold_enabled;
-  bool use_dynamic = fw_info.dynamic_threshold_enabled;
+  bool use_static = READ_ONCE(fw_info.static_threshold_enabled);
+  bool use_dynamic = READ_ONCE(fw_info.dynamic_threshold_enabled);
 
-  if (!use_static && !use_dynamic)
-    return NULL;
-
-  if (use_static) {
-    pps_threshold = READ_ONCE(fw_info.max_packets_per_second);
-    bps_threshold = READ_ONCE(fw_info.max_bytes_per_second);
-  }
   if (use_dynamic) {
     u64 ratio = READ_ONCE(fw_info.dynamic_threshold_ratio_x100);
     u64 base_pps = READ_ONCE(fw_info.baseline_pps);
     u64 base_bps = READ_ONCE(fw_info.baseline_bps);
+    bool dynamic_used = false;
 
-    if (ratio) {
-      u64 d_pps, d_bps;
+    /*
+     * 基线未学习（对应维度为 0）或比例缺失时，该维度的动态阈值算出来是 0：
+     * 任何有流量的源都会被判 total rate 并自决封禁。全仓没有 BASELINE_UPDATE
+     * 的发送方，故这是常态而非异常——无基线的维度不参与判定；静态也关闭且
+     * 两个维度都不可用时，本函数返回 NULL，不做总速率判定。
+     */
+    if (ratio && base_pps) {
+      u64 d_pps;
 
       if (check_mul_overflow(base_pps, ratio, &d_pps))
-        d_pps = 0;
+        pps_threshold = U64_MAX; /* 阈值大到不可能命中，绝不退化成 0 */
       else
-        d_pps /= 100;
-      if (check_mul_overflow(base_bps, ratio, &d_bps))
-        d_bps = 0;
-      else
-        d_bps /= 100;
-      if (d_pps > pps_threshold)
-        pps_threshold = d_pps;
-      if (d_bps > bps_threshold)
-        bps_threshold = d_bps;
+        pps_threshold = d_pps / 100;
+      dynamic_used = true;
     }
+    if (ratio && base_bps) {
+      u64 d_bps;
+
+      if (check_mul_overflow(base_bps, ratio, &d_bps))
+        bps_threshold = U64_MAX;
+      else
+        bps_threshold = d_bps / 100;
+      dynamic_used = true;
+    }
+    if (!dynamic_used)
+      use_dynamic = false;
   }
+
+  if (use_static) {
+    u64 s_pps = READ_ONCE(fw_info.max_packets_per_second);
+    u64 s_bps = READ_ONCE(fw_info.max_bytes_per_second);
+
+    if (s_pps > pps_threshold)
+      pps_threshold = s_pps;
+    if (s_bps > bps_threshold)
+      bps_threshold = s_bps;
+  }
+
+  if (!use_static && !use_dynamic)
+    return NULL;
 
   if (atomic64_read(&n->smoothed_pps) > pps_threshold)
     return "total rate";
