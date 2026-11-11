@@ -47,14 +47,14 @@ make build-quick
 make check-deps
 ```
 
-检查所有组件的依赖：gcc、make、内核头文件、Go 1.23+、Node.js 18+、npm。
+检查所有组件的依赖：gcc、make、内核头文件、Go 1.26+、Node.js 24+、npm。
 
 ### 分类检查
 
 ```bash
 make check-deps-kmod         # 仅内核模块：gcc、make、内核头文件
-make check-deps-daemon       # 仅守护进程：Go 1.23+
-make check-deps-frontend     # 仅前端：Node.js 18+、npm
+make check-deps-daemon       # 仅守护进程：Go 1.26+
+make check-deps-frontend     # 仅前端：Node.js 24+、npm
 ```
 
 ### 依赖要求
@@ -65,8 +65,8 @@ make check-deps-frontend     # 仅前端：Node.js 18+、npm
 | 内核模块 | make | - | `sudo apt install make` |
 | 内核模块 | 内核头文件 | 匹配运行内核 | `sudo apt install linux-headers-$(uname -r)` |
 | 内核模块 | clang-format | 推荐 | `sudo apt install clang-format` |
-| 守护进程 | Go | 1.23 | `sudo apt install golang-go` |
-| 前端 | Node.js | 18 | `sudo apt install nodejs` |
+| 守护进程 | Go | 1.26 | `sudo apt install golang-go` |
+| 前端 | Node.js | 24 | `sudo apt install nodejs` |
 | 前端 | npm | - | `sudo apt install npm` |
 
 ## 契约生成

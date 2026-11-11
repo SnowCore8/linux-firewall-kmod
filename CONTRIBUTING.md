@@ -34,7 +34,7 @@ sudo dnf install gcc make kernel-devel kernel-headers git clang-format
 另外需要：
 
 - Go：`src/daemon/go.mod` 写 `go 1.26.0`。
-- Node.js 22 + npm：前端构建用，CI 也是 22。
+- Node.js 24 + npm：前端构建用，CI 也是 24。
 - Python 3 + pytest + PyYAML：集成测试用。
 - sqlite3 命令行：集成测试强制要求，缺了不许跳过。
 

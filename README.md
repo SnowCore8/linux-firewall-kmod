@@ -166,7 +166,7 @@ http://<host>:9119/dashboard
 | ✓ | netlink | `netlink_kernel_create` / `netlink_kernel_release` |
 | ✓ | procfs | `proc_create` / `proc_remove` |
 
-**已验证内核版本**：
+**内核兼容性状态**：
 
 | 内核版本 | 编译 | 加载 | 功能 |
 |---------|------|------|------|
@@ -296,7 +296,7 @@ MIT License - 详见 [LICENSE](LICENSE) 文件。
 | 依赖 | 版本 |
 |------|------|
 | Go | 1.26.0 |
-| Node.js | 22 |
+| Node.js | 24 |
 | 内核头文件 | 与运行内核一致 |
 | clang-format | 18 |
 

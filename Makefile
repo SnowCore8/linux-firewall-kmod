@@ -1003,6 +1003,8 @@ clean:
 	@$(MAKE) -C scripts/bench clean >/dev/null 2>&1 || true
 	@# Playwright / pytest 产物
 	@rm -rf test-results playwright-report blob-report .playwright-mcp .pytest_cache
+	@# contract-drift 在仓库内生成校验目录 tmp/fw_gencheck，失败路径可能残留
+	@rm -rf tmp/
 	@find contract tests -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 	@# 契约生成物已入库（contract-drift 以入库内容为基线），clean 不删除；
 	@# 要重新生成用 `make contract`，要清空重来用 `make contract-clean`。

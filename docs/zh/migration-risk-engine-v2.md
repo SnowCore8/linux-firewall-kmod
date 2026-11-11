@@ -142,6 +142,5 @@ A: 运行测试 `TestNewEffectiveThresholdFixesMultiplicativeBug`，验证内网
 
 ## 参考资料
 
-- 设计文档：`/home/snow/.qoder-cn/plans/rare-island-dove.md`
 - API 契约：`contract/http.fwidl`（搜索 "v2 API"）
 - 代码实现：`src/daemon/internal/risk/`

@@ -58,6 +58,15 @@ tests/*.log
 tests/reports/
 /tmp/fw_*
 
+# ---- 测试 / 覆盖率产物 ----
+# Playwright 的 HTML 报告、pytest 的 junit 报告、Go 覆盖率
+report.html
+junit.xml
+coverage.out
+src/daemon/coverage.out
+# contract-drift 的生成校验目录（生成物落在 tmp/fw_gencheck，make clean 负责清理）
+tmp/
+
 # Python 字节码缓存（跑 pytest 时产生）
 __pycache__/
 *.py[cod]
