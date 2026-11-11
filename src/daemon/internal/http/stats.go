@@ -298,7 +298,7 @@ func jailFailureChart() ChartData {
 	counts := map[string]uint64{}
 	for _, jail := range config.GetActiveJails() {
 		stats, ok := config.GetJailStats(jail.Name)
-		if !ok || stats == nil {
+		if !ok {
 			continue
 		}
 		counts[jail.Name] = stats.FailedAttempts
@@ -311,7 +311,7 @@ func totalFailedAttempts() uint64 {
 	var total uint64
 	for _, jail := range config.GetActiveJails() {
 		stats, ok := config.GetJailStats(jail.Name)
-		if !ok || stats == nil {
+		if !ok {
 			continue
 		}
 		total += stats.FailedAttempts

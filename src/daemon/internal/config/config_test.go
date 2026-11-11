@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -418,4 +419,44 @@ func TestFamilyOfUnmapsIPv4Mapped(t *testing.T) {
 			t.Errorf("FamilyOf(%q)=%d, want %d", text, got, want)
 		}
 	}
+}
+
+// TestGetJailStatsReturnsSnapshot 核对 GetJailStats 返回的是值拷贝。
+//
+// 返回内部指针时，调用方在锁外读字段会与 UpdateJailStats 的写锁内 += 竞争（-race 可
+// 复现，32 位 uint64 还能撕裂）。改副本不得影响缓存，并发读也不得与写竞争。
+func TestGetJailStatsReturnsSnapshot(t *testing.T) {
+	const name = "__jail_stats_snapshot_test__"
+	UpdateJailStats(name, 1, 2, 3, 4, 5)
+
+	stats, ok := GetJailStats(name)
+	if !ok {
+		t.Fatal("刚写入的 jail 计数器读不到")
+	}
+	if stats.LinesParsed != 1 || stats.RegexMatches != 2 || stats.IPsExtracted != 3 ||
+		stats.FailedAttempts != 4 || stats.BansTriggered != 5 {
+		t.Fatalf("计数器 = %+v，期望各为写入值", stats)
+	}
+
+	stats.LinesParsed = 999
+	if again, _ := GetJailStats(name); again.LinesParsed != 1 {
+		t.Errorf("改返回值影响了缓存：lines_parsed = %d，期望 1", again.LinesParsed)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			UpdateJailStats(name, 1, 1, 1, 1, 1)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			s, _ := GetJailStats(name)
+			_ = s.BansTriggered
+		}
+	}()
+	wg.Wait()
 }

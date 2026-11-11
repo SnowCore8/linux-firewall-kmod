@@ -47,7 +47,7 @@ func (h *APIHandlers) jailResponses() []JailResponse {
 			PeakHoursAddend:     decision.PeakHoursAddend,
 			InternalIPAddend:    decision.InternalSourceAddend,
 		}
-		if stats, ok := config.GetJailStats(j.Name); ok && stats != nil {
+		if stats, ok := config.GetJailStats(j.Name); ok {
 			resp.LinesParsed = stats.LinesParsed
 			resp.RegexMatches = stats.RegexMatches
 			resp.IPsExtracted = stats.IPsExtracted

@@ -54,14 +54,18 @@ func GetJail(name string) (Jail, bool) {
 	return Jail{}, false
 }
 
-func GetJailStats(name string) (*JailRuntimeStats, bool) {
+// GetJailStats 返回某个 jail 运行时计数的**值拷贝**。
+//
+// 返回副本而不是内部指针：UpdateJailStats 在写锁内对同一批字段做 +=，调用方若在锁外
+// 持有指针读字段就是数据竞争（32 位 uint64 还可能撕裂）。副本一旦返回就与缓存脱钩。
+func GetJailStats(name string) (JailRuntimeStats, bool) {
 	jailStatsMu.RLock()
 	defer jailStatsMu.RUnlock()
 	stats, ok := jailStats[name]
 	if !ok {
-		return nil, false
+		return JailRuntimeStats{}, false
 	}
-	return stats, true
+	return *stats, true
 }
 
 func UpdateJailStats(name string, parsed, regexes, ips, failures, bans uint64) {
