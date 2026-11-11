@@ -50,8 +50,20 @@ class TestDaemonLifecycle:
         if os.path.exists(pid_file):
             try:
                 old_pid = int(open(pid_file).read().strip())
-                os.kill(old_pid, signal.SIGTERM)
-                time.sleep(1)
+                # 验证进程确实是测试实例，避免误杀生产进程
+                cmdline_path = f"/proc/{old_pid}/cmdline"
+                if os.path.exists(cmdline_path):
+                    cmdline = open(cmdline_path, "rb").read().decode(errors="replace")
+                    if test_config in cmdline:
+                        os.kill(old_pid, signal.SIGTERM)
+                        time.sleep(1)
+                    else:
+                        pytest.fail(
+                            f"PID {old_pid} 不是测试实例（cmdline 不含测试配置路径），拒绝终止"
+                        )
+                else:
+                    # /proc/{pid}/cmdline 不存在，进程可能已退出
+                    pass
             except (ValueError, ProcessLookupError):
                 pass
             try:

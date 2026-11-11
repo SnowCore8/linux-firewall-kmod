@@ -231,7 +231,10 @@ def ip_is_banned(ip: str) -> bool:
     """检查 IP 是否在封禁列表中"""
     try:
         content = PROC_BANS.read_text()
-        return ip in content
+        for line in content.strip().splitlines():
+            if line.strip() == ip:
+                return True
+        return False
     except (FileNotFoundError, PermissionError):
         return False
 

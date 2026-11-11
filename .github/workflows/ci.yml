@@ -549,7 +549,7 @@ jobs:
             sudo python3 -m pytest tests/ -v --tb=short \
               --junitxml=junit.xml \
               --html=report.html --self-contained-html \
-              -k "daemon or logparse or frp or ddos or webui or config_reload or log_rotation or netlink or lifecycle or multi_jail"
+              -k "daemon or logparse or frp or ddos or webui or config_reload or log_rotation or netlink or lifecycle or multi_jail or cluster_scan or auth_lockout or concurrent_reload_bans"
           fi
 
       - name: 上传测试报告

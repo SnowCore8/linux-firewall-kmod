@@ -36,11 +36,18 @@ class TestConcurrency:
         """7.1 并发封禁"""
         start = time.time()
 
+        test_ips = [f"192.168.100.{i}" for i in range(1, 21)]
+        errors = []
+
+        def safe_ban(ip):
+            try:
+                PROC_BANS.write_text(ip)
+            except Exception as e:
+                errors.append(e)
+
         threads = []
-        for i in range(1, 21):
-            t = threading.Thread(
-                target=lambda ip=f"192.168.100.{i}": PROC_BANS.write_text(ip)
-            )
+        for ip in test_ips:
+            t = threading.Thread(target=safe_ban, args=(ip,))
             threads.append(t)
             t.start()
 
@@ -49,8 +56,15 @@ class TestConcurrency:
 
         duration_ms = (time.time() - start) * 1000
         assert duration_ms <= 5000, f"并发封禁 20 IP 超时: {duration_ms:.0f}ms"
+        assert not errors, f"子线程封禁异常: {errors}"
 
         time.sleep(0.5)
+
+        # 验证所有 IP 被封禁
+        bans_content = PROC_BANS.read_text()
+        banned_ips = bans_content.split()
+        for ip in test_ips:
+            assert ip in banned_ips, f"IP {ip} not found in bans"
 
     def test_concurrent_ban_unban(self, clean_bans):
         """7.2 同时封禁和解封"""

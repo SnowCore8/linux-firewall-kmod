@@ -121,49 +121,61 @@ class TestConfigReload:
         assert after > before, f"SIGHUP 未触发配置重载（计数仍为 {before}）"
         assert is_daemon_running(), "SIGHUP 后守护进程退出"
 
-    def test_modify_config_reload(self):
+    def test_modify_config_reload(self, tmp_path):
         """17.5 修改配置文件并重新加载"""
         if not os.path.exists(self.CONFIG_PATH):
             pytest.skip("配置文件不存在")
 
-        content = open(self.CONFIG_PATH).read()
-        modified = content.replace("max_retries: 3", "max_retries: 10")
-        if modified == content:
-            modified = content.replace("max_retries: 5", "max_retries: 10")
+        # 使用 tmp_path 保存原始副本，崩溃时 try/finally 保证恢复
+        backup = tmp_path / "default.yaml.bak"
+        shutil.copy2(self.CONFIG_PATH, str(backup))
 
-        with open(self.CONFIG_PATH, "w") as f:
-            f.write(modified)
+        try:
+            content = open(self.CONFIG_PATH).read()
+            modified = content.replace("max_retries: 3", "max_retries: 10")
+            if modified == content:
+                modified = content.replace("max_retries: 5", "max_retries: 10")
 
-        pid = get_daemon_pid()
-        if pid:
-            os.kill(int(pid), 1)
-        time.sleep(2)
+            with open(self.CONFIG_PATH, "w") as f:
+                f.write(modified)
 
-        assert is_daemon_running(), "修改配置后 SIGHUP 守护进程退出"
+            pid = get_daemon_pid()
+            if pid:
+                os.kill(int(pid), 1)
+            time.sleep(2)
 
-    def test_invalid_config_tolerance(self):
+            assert is_daemon_running(), "修改配置后 SIGHUP 守护进程退出"
+        finally:
+            shutil.copy2(str(backup), self.CONFIG_PATH)
+            pid = get_daemon_pid()
+            if pid:
+                os.kill(int(pid), 1)  # SIGHUP 恢复原始配置
+
+    def test_invalid_config_tolerance(self, tmp_path):
         """17.6 无效配置测试"""
         if not os.path.exists(self.CONFIG_PATH):
             pytest.skip("配置文件不存在")
 
-        backup_content = open(self.CONFIG_PATH).read()
+        # 使用 tmp_path 保存原始副本，崩溃时 try/finally 保证恢复
+        backup = tmp_path / "default.yaml.bak"
+        shutil.copy2(self.CONFIG_PATH, str(backup))
 
-        with open(self.CONFIG_PATH, "w") as f:
-            f.write("invalid_yaml: [")
+        try:
+            with open(self.CONFIG_PATH, "w") as f:
+                f.write("invalid_yaml: [")
 
-        pid = get_daemon_pid()
-        if pid:
-            os.kill(int(pid), 1)
-        time.sleep(2)
+            pid = get_daemon_pid()
+            if pid:
+                os.kill(int(pid), 1)
+            time.sleep(2)
 
-        assert is_daemon_running(), "无效配置导致守护进程退出"
-
-        with open(self.CONFIG_PATH, "w") as f:
-            f.write(backup_content)
-
-        if pid:
-            os.kill(int(pid), 1)
-        time.sleep(1)
+            assert is_daemon_running(), "无效配置导致守护进程退出"
+        finally:
+            shutil.copy2(str(backup), self.CONFIG_PATH)
+            pid = get_daemon_pid()
+            if pid:
+                os.kill(int(pid), 1)  # SIGHUP 恢复原始配置
+            time.sleep(1)
 
     def test_multiple_sighup(self):
         """17.7 多次连续 SIGHUP 测试"""
