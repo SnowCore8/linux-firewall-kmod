@@ -902,6 +902,14 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
                   old_portid, portid);
           /* 重新加锁以完成注册 */
           spin_lock_irqsave(&fw_nl_daemon_lock, flags);
+          /* 探活期间可能有第三个 daemon 抢先注册，需重新校验 */
+          if (fw_nl_daemon_portid != old_portid && fw_nl_daemon_portid != portid) {
+            pr_warn("netlink: 注册期间 portid 已变更为 %u，放弃注册\n",
+                    fw_nl_daemon_portid);
+            spin_unlock_irqrestore(&fw_nl_daemon_lock, flags);
+            fw_nl_send_register_ack(portid, be32_to_cpu(h->seq), 0);
+            goto next;
+          }
         }
       }
       fw_nl_daemon_portid = portid;

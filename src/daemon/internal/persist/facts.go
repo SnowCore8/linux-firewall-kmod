@@ -418,11 +418,19 @@ func (f *Facts) writeAll(dirty []*factsEntry) error {
 }
 
 // writeBack 是逐出路径上的同步落盘（容量已满时才走到，摊薄后仍是一次/条）。
+// 写失败时把条目重新插入缓存，让后续周期 flush 重试，避免丢待落盘数据。
 func (f *Facts) writeBack(e *factsEntry) {
 	n := e.pending
 	e.pending = 0
 	if err := f.writeN(e.ip, n); err != nil {
-		f.logger.Warn("逐出时信誉分落盘失败", "ip", e.ip, "error", err)
+		f.logger.Warn("逐出时信誉分落盘失败，重新入队等待重试", "ip", e.ip, "error", err)
+		e.pending = n
+		f.mu.Lock()
+		// 仅当该 IP 不在缓存中时重新插入（可能已被其他路径重新创建）
+		if _, exists := f.index[e.ip]; !exists {
+			f.index[e.ip] = f.lru.PushFront(e)
+		}
+		f.mu.Unlock()
 	}
 }
 

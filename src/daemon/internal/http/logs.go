@@ -220,9 +220,10 @@ func countLogMatches(path string, filter logFilter) (uint64, error) {
 // 面板上表现为 total_lines 比上一页多几条，这是可观察的实时性而不是错乱。
 func collectLogWindow(path string, filter logFilter, totalLines, start, n uint64) ([]LogEntry, error) {
 	// 文件顺序（旧→新）上的保留区间：[lo, hi)。
+	// hi 和 lo 均为 uint64，调用方已保证 start+n <= totalLines，无需下溢保护。
 	hi := totalLines - start
 	lo := hi - n
-	if lo < 0 {
+	if n > hi {
 		lo = 0
 	}
 
@@ -360,6 +361,7 @@ func tailLogs(ctx context.Context, f *os.File, level string, conn *sseConn, done
 // 支持两种格式：
 //   - JSON 格式: {"level":"info",...}
 //   - 纯文本格式: time=... level=INFO ...
+//   - 独立级别标识: ERROR something happened（原始大小写）
 //
 // 调用方负责先验级别（REST 走 parseLogQuery 的 40005，日志流走 normalizeLogLevel）：
 // default 分支的「不过滤」只服务后者，不是一种供人挑选的宽松匹配语义。
@@ -371,23 +373,23 @@ func matchesLogLevel(line, level string) bool {
 			strings.Contains(lower, "level=error") ||
 			strings.Contains(lower, "level=err") ||
 			strings.Contains(lower, "[error]") ||
-			strings.Contains(lower, "ERROR")
+			strings.Contains(line, "ERROR")
 	case "warn", "warning":
 		return strings.Contains(lower, `"level":"warn"`) ||
 			strings.Contains(lower, "level=warn") ||
 			strings.Contains(lower, "level=warning") ||
 			strings.Contains(lower, "[warn]") ||
-			strings.Contains(lower, "WARN")
+			strings.Contains(line, "WARN")
 	case "info":
 		return strings.Contains(lower, `"level":"info"`) ||
 			strings.Contains(lower, "level=info") ||
 			strings.Contains(lower, "[info]") ||
-			strings.Contains(lower, "INFO")
+			strings.Contains(line, "INFO")
 	case "debug":
 		return strings.Contains(lower, `"level":"debug"`) ||
 			strings.Contains(lower, "level=debug") ||
 			strings.Contains(lower, "[debug]") ||
-			strings.Contains(lower, "DEBUG")
+			strings.Contains(line, "DEBUG")
 	default:
 		return true
 	}
