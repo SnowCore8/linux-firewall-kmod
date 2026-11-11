@@ -104,6 +104,9 @@ type BanInfo struct {
 	IP string
 	// Num 仅 IPv4 有效（主机序），IPv6 为 0。
 	Num uint32
+	// PrefixLen 是该封禁对应的前缀长度（IPv4 /32、IPv6 /128 为单机）。
+	// 0 表示未知：解封时调用方须回退到 FullPrefixLen，否则网段封禁会被按单机解封。
+	PrefixLen uint8
 	// JailName 是触发封禁的 jail 名。
 	JailName string
 	// Reason 是封禁原因（旧前端「原因」列显示的就是它）。

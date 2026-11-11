@@ -275,23 +275,37 @@ func (c *ActiveBanCache) UnbanTemporary() int {
 
 // UnbanTemporaryWithIPs 解封所有非永久封禁，返回被解封的 IP 列表。
 func (c *ActiveBanCache) UnbanTemporaryWithIPs() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var ips []string
-	for ip, info := range c.bans {
-		if !info.IsPermanent {
-			delete(c.bans, ip)
-			delete(c.pending, ip)
-			if set := c.byJail[info.JailName]; set != nil {
-				delete(set, ip)
-				if len(set) == 0 {
-					delete(c.byJail, info.JailName)
-				}
-			}
-			ips = append(ips, ip)
-		}
+	infos := c.UnbanTemporaryInfos()
+	ips := make([]string, len(infos))
+	for i, info := range infos {
+		ips[i] = info.IP
 	}
 	return ips
+}
+
+// UnbanTemporaryInfos 解封所有非永久封禁，返回被解封条目的完整信息。
+//
+// 与 UnbanTemporaryWithIPs 逐条同源，区别只是保留 PrefixLen：批量解封必须按镜像里
+// 记录的前缀下发，否则 /24 之类的前缀封禁会按 /32 解封，内核回 -ENOENT。
+func (c *ActiveBanCache) UnbanTemporaryInfos() []BanInfo {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var infos []BanInfo
+	for ip, info := range c.bans {
+		if info.IsPermanent {
+			continue
+		}
+		delete(c.bans, ip)
+		delete(c.pending, ip)
+		if set := c.byJail[info.JailName]; set != nil {
+			delete(set, ip)
+			if len(set) == 0 {
+				delete(c.byJail, info.JailName)
+			}
+		}
+		infos = append(infos, info)
+	}
+	return infos
 }
 
 // Stats 返回缓存统计信息。

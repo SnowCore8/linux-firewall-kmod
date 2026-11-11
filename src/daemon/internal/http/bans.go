@@ -8,7 +8,6 @@ package http
 
 import (
 	"fmt"
-	"math"
 	"net/http"
 	"net/netip"
 	"sort"
@@ -32,14 +31,12 @@ type KernelBan interface {
 // batchBanMaxIPs 是 POST /api/v2/bans/batch 的单批上限（契约 code 40005 的 text 写死 100）。
 const batchBanMaxIPs = 100
 
-// banMaxDurationSecs 是单条封禁时长的上限（秒）。
+// banMaxDurationSecs 是单条封禁时长的上限（秒），即 365 天。
 //
-// 内核模块用 u32 存 duration_secs（见 contract/netlink.fwidl 与 fw_ban.c 的
-// `n->unban_jiffies = jiffies + (unsigned long)duration_secs * HZ`），超过 math.MaxUint32
-// 的值会在 uint32() 强转时回绕，导致「想封 136 年结果变成永久」或「想封 10 年结果变成
-// 几分钟」这类与用户意图完全相反的静默错误。HTTP API 的 duration 是 Option<u64>，类型上
-// 装得下更大的数，故这里必须显式拦截。
-const banMaxDurationSecs = math.MaxUint32
+// 上限不取内核 u32 的容量（约 136 年）：内核的状态恢复把超过 365 天的时长视为损坏，
+// 放行更大的值只会下发一条「重启后就消失」的封禁。超过上限的请求在这里以业务码拒绝，
+// 与内核可接受的时长保持一致。
+const banMaxDurationSecs = 365 * 24 * 3600
 
 // 封禁列表的分页缺省与上限（契约 HTTP_BANS_DUAL_SHAPE 的 resolution 写死这三个数）。
 //
@@ -114,8 +111,8 @@ func (h *APIHandlers) ListBans(w http.ResponseWriter, r *http.Request) {
 // 缺席与显式 0 都是永久（契约的 Option<u64> 加前端 types.ts 那句「0 或省略 = 永久」）；
 // 这里用指针把它们与「显式给了时长」分开，负数在 uint64 下根本解不进来。
 //
-// 返回的 error 只在 duration 超过内核 u32 容量时非空：超过 math.MaxUint32 的值会在
-// uint32() 强转时回绕，导致封禁时长与用户意图完全相反（见 banMaxDurationSecs 注释）。
+// 返回的 error 只在 duration 超过 banMaxDurationSecs 时非空：超限值要么被内核状态
+// 恢复当成损坏（>365 天），要么在 uint32() 强转时回绕，两者都与用户意图相反。
 func durationSeconds(p *uint64) (secs int64, permanent bool, err error) {
 	if p == nil || *p == 0 {
 		return 0, true, nil
@@ -158,6 +155,7 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	info := bans.BanInfo{
 		IP:          ip,
+		PrefixLen:   bans.FullPrefixLen(addr),
 		Reason:      reason,
 		BannedAt:    now,
 		IsPermanent: isPermanent,
@@ -234,15 +232,21 @@ func (h *APIHandlers) DeleteBan(w http.ResponseWriter, r *http.Request) {
 	ip = bans.CanonicalIP(addr)
 
 	// 只读确认在表中：不存在就不必往内核发一次解封指令，也保住「不在封禁表中」这句
-	// 有别于「内核未确认」的 message。
-	if _, banned := bans.GlobalCache().Get(ip); !banned {
+	// 有别于「内核未确认」的 message。镜像条目同时给出本次解封应使用的前缀：网段封禁
+	// 若按单机前缀解封，内核会回 -ENOENT，封禁永远撤不掉。
+	mirror, banned := bans.GlobalCache().Get(ip)
+	if !banned {
 		WriteCode(w, httpcontract.Code40002, "解封失败：该 IP 不在封禁表中 "+ip)
 		return
 	}
 
 	// 先下发内核解封。失败时镜像保持原样：面板上那条封禁仍在，运维看到的就是拦截仍在。
 	if h.kernelBan != nil {
-		prefixLen := bans.FullPrefixLen(addr)
+		prefixLen := mirror.PrefixLen
+		if prefixLen == 0 {
+			// 前缀未知（未回填的条目）才退回单机前缀。
+			prefixLen = bans.FullPrefixLen(addr)
+		}
 		if err := h.kernelBan.Remove(addr, prefixLen); err != nil {
 			h.server.logger.Error("内核解封下发失败", "ip", ip, "error", err)
 			WriteCode(w, httpcontract.Code40002, "解封失败：内核未确认")
@@ -275,20 +279,28 @@ func (h *APIHandlers) DeleteBan(w http.ResponseWriter, r *http.Request) {
 // 封禁失败」，把部分失败包成 200 + fail_count 会让运维以为拦截已全部撤除，而面板上
 // 看不见的 netfilter 规则还在生效。
 func (h *APIHandlers) UnbanAllTemporary(w http.ResponseWriter, r *http.Request) {
-	ips := bans.GlobalCache().UnbanTemporaryWithIPs()
+	infos := bans.GlobalCache().UnbanTemporaryInfos()
+	ips := make([]string, len(infos))
+	for i := range infos {
+		ips[i] = infos[i].IP
+	}
 
 	var failed []string
 	if h.kernelBan != nil {
-		for _, ip := range ips {
-			addr, err := netip.ParseAddr(ip)
+		for _, info := range infos {
+			addr, err := netip.ParseAddr(info.IP)
 			if err != nil {
-				failed = append(failed, ip+"（IP 非法）")
+				failed = append(failed, info.IP+"（IP 非法）")
 				continue
 			}
-			prefixLen := bans.FullPrefixLen(addr)
+			// 按镜像里记录的前缀解封：网段封禁用单机前缀撤不掉，内核会回 -ENOENT。
+			prefixLen := info.PrefixLen
+			if prefixLen == 0 {
+				prefixLen = bans.FullPrefixLen(addr)
+			}
 			if err := h.kernelBan.Remove(addr, prefixLen); err != nil {
-				h.server.logger.Error("批量内核解封失败", "ip", ip, "error", err)
-				failed = append(failed, ip+"（内核解封失败）")
+				h.server.logger.Error("批量内核解封失败", "ip", info.IP, "error", err)
+				failed = append(failed, info.IP+"（内核解封失败）")
 			}
 		}
 	}
@@ -369,6 +381,7 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 
 		info := bans.BanInfo{
 			IP:          canonical,
+			PrefixLen:   bans.FullPrefixLen(addr),
 			Reason:      reason,
 			BannedAt:    now,
 			IsPermanent: false,

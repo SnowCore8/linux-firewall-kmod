@@ -364,6 +364,108 @@ func TestHandleBanUpdatesMirrorAndPublishesOnce(t *testing.T) {
 	}
 }
 
+// TestHandleBanEmptyJailPreservesAttribution 验证内核回显的空 jail 不会覆盖本地归属。
+//
+// daemon 下发的封禁在内核侧没有 jail 概念，BanStateChange.jail_name 恒为空串；
+// 若直接覆盖，InsertPending 时写入的真实 jail 会被冲掉，CountByJail 与按 jail 的
+// 批量操作随即失去依据。
+func TestHandleBanEmptyJailPreservesAttribution(t *testing.T) {
+	f := newPumpFixture(t)
+	now := time.Now()
+	pending := bans.BanInfo{
+		IP: "203.0.113.40", JailName: "sshd", Reason: "5 次失败",
+		BannedAt: now.Unix(), ExpiresAt: now.Unix() + 3600,
+	}
+	if !f.cache.InsertPending(pending, now) {
+		t.Fatal("占位失败")
+	}
+
+	af, addr := wireAddr(t, pending.IP)
+	f.pump.handle(Incoming{Ban: &contract.BanStateChange{
+		Action: contract.BanActionBan, AF: af, PrefixLen: 32, DurationSecs: 3600,
+		Addr: addr, Reason: "5 次失败",
+	}})
+
+	info, ok := f.cache.Get(pending.IP)
+	if !ok {
+		t.Fatal("封禁事件后条目丢失")
+	}
+	if info.JailName != "sshd" {
+		t.Fatalf("空 jail 事件覆盖了归属: %q，期望 sshd", info.JailName)
+	}
+	if info.PrefixLen != 32 {
+		t.Fatalf("事件前缀未落表: %d，期望 32", info.PrefixLen)
+	}
+	if got := f.cache.CountByJail(); got["sshd"] != 1 {
+		t.Fatalf("按 jail 统计不符: %v", got)
+	}
+}
+
+// TestHandleBanNonEmptyJailOverridesAttribution 验证非空 jail 仍能纠正归属，
+// 且旧归属从反向索引里摘掉。
+func TestHandleBanNonEmptyJailOverridesAttribution(t *testing.T) {
+	f := newPumpFixture(t)
+	now := time.Now()
+	pending := bans.BanInfo{
+		IP: "203.0.113.41", JailName: "sshd", Reason: "累犯",
+		BannedAt: now.Unix(), ExpiresAt: now.Unix() + 600,
+	}
+	if !f.cache.InsertPending(pending, now) {
+		t.Fatal("占位失败")
+	}
+
+	af, addr := wireAddr(t, pending.IP)
+	f.pump.handle(Incoming{Ban: &contract.BanStateChange{
+		Action: contract.BanActionBan, AF: af, PrefixLen: 32, DurationSecs: 600,
+		Addr: addr, Reason: "累犯", JailName: "recidive",
+	}})
+
+	info, ok := f.cache.Get(pending.IP)
+	if !ok || info.JailName != "recidive" {
+		t.Fatalf("非空 jail 未纠正归属: %+v ok=%v", info, ok)
+	}
+	got := f.cache.CountByJail()
+	if got["recidive"] != 1 {
+		t.Fatalf("新归属统计不符: %v", got)
+	}
+	if _, ok := got["sshd"]; ok {
+		t.Fatalf("旧归属残留在反向索引: %v", got)
+	}
+}
+
+// TestReconcileEmptyJailKeepsAttributionAndPrefix 验证对账同样保留本地归属，
+// 并采用内核条目的前缀长度（网段封禁解封依赖它）。
+func TestReconcileEmptyJailKeepsAttributionAndPrefix(t *testing.T) {
+	f := newPumpFixture(t)
+	now := time.Now()
+	pending := bans.BanInfo{
+		IP: "203.0.113.42", JailName: "sshd", Reason: "5 次失败",
+		BannedAt: now.Unix(), ExpiresAt: now.Unix() + 7200,
+	}
+	if !f.cache.InsertPending(pending, now) {
+		t.Fatal("占位失败")
+	}
+
+	af, addr := wireAddr(t, pending.IP)
+	f.sampler.bans = []contract.BanEntry{{
+		AF: af, PrefixLen: 24, DurationSecs: 7200,
+		BannedAt: uint64(now.Unix()), Addr: addr, Reason: "5 次失败",
+	}}
+
+	f.pump.reconcile()
+
+	info, ok := f.cache.Get(pending.IP)
+	if !ok {
+		t.Fatal("对账把内核仍有的条目当幽灵摘掉了")
+	}
+	if info.JailName != "sshd" {
+		t.Fatalf("对账的空 jail 覆盖了归属: %q", info.JailName)
+	}
+	if info.PrefixLen != 24 {
+		t.Fatalf("对账未采用内核前缀: %d，期望 24", info.PrefixLen)
+	}
+}
+
 // TestHandleUnbanRemovesMirror 验证解封事件把条目从镜像摘掉并推送封禁域。
 func TestHandleUnbanRemovesMirror(t *testing.T) {
 	f := newPumpFixture(t)

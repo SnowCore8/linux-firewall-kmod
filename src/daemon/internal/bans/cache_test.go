@@ -305,3 +305,42 @@ func TestWhitelistIPv6AndBareAddressKeys(t *testing.T) {
 		t.Fatal("Contains 未命中掩码后的前缀")
 	}
 }
+
+// TestUnbanTemporaryInfosKeepsPrefixLen 验证批量解封返回的条目保留前缀长度。
+//
+// 前缀是解封下发的必要参数：/24 封禁按 /32 解封会被内核回 -ENOENT。
+func TestUnbanTemporaryInfosKeepsPrefixLen(t *testing.T) {
+	c := NewActiveBanCache()
+	temp := info("203.0.113.60", "sshd")
+	temp.ExpiresAt = 1700000060
+	temp.PrefixLen = 24
+	c.Upsert(temp)
+
+	infos := c.UnbanTemporaryInfos()
+	if len(infos) != 1 || infos[0].IP != temp.IP || infos[0].PrefixLen != 24 {
+		t.Fatalf("批量解封返回 = %+v，期望保留 /24 前缀", infos)
+	}
+	if c.Len() != 0 {
+		t.Fatal("批量解封后条目仍在镜像里")
+	}
+}
+
+// TestUpsertIgnoresPrefixOnlyChange 验证 sameBan 不把前缀长度当作变化判据：
+// 同一地址的镜像内容未变时不应因前缀字段空转推送。
+func TestUpsertIgnoresPrefixOnlyChange(t *testing.T) {
+	c := NewActiveBanCache()
+	base := info("203.0.113.61", "sshd")
+	base.PrefixLen = 32
+	if !c.Upsert(base) {
+		t.Fatal("新增条目应报告变化")
+	}
+
+	changed := base
+	changed.PrefixLen = 24
+	if c.Upsert(changed) {
+		t.Fatal("仅前缀不同不应报告变化")
+	}
+	if got, ok := c.Get(base.IP); !ok || got.PrefixLen != 32 {
+		t.Fatalf("仅前缀变化不应覆盖镜像: %+v ok=%v", got, ok)
+	}
+}

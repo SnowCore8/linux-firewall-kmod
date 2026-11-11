@@ -183,6 +183,31 @@ func run(args []string) error {
 
 	sup := runtime.NewSupervisor()
 
+	// 终止通道与致命错误：信号（SIGTERM/SIGINT）与内核链路断开走同一个停止路径。
+	// 链路断开是终态——内核模块卸载/重载后旧 socket 已死，继续运行只会让每次下发石沉
+	// 大海。这里记录致命错误并按正常关停顺序收尾，让 run 以非零码返回，由 systemd 的
+	// Restart=on-failure 拉起并重新注册。
+	terminate := runtime.NewShutdown()
+	stopCh := make(chan struct{})
+	var (
+		stopOnce sync.Once
+		fatalMu  sync.Mutex
+		fatalErr error
+	)
+	requestStop := func(err error) {
+		if err != nil {
+			fatalMu.Lock()
+			if fatalErr == nil {
+				fatalErr = err
+			}
+			fatalMu.Unlock()
+		}
+		stopOnce.Do(func() {
+			close(stopCh)
+			terminate.Request()
+		})
+	}
+
 	// Prometheus 指标注册表在整条装配链的最前面建立：内核链路、入站执行体、HTTP 面都要
 	// 往里写计数，而它们的装配顺序不固定（内核链路早于 HTTP）。此前它只在 HTTP 段里建，
 	// 于是 netlink 与配置重载这两组计数没有可写之处。禁用 HTTP 面（metrics_port=0）
@@ -269,7 +294,11 @@ func run(args []string) error {
 			router, events := kernel.NewEventChannel(kernel.EventQueue)
 			kernelRouter, kernelEvents = router, events
 			reactorToken := runtime.NewShutdown()
-			reactor := kernel.NewReactor(transport, router, reactorToken, logger)
+			reactor := kernel.NewReactor(transport, router, reactorToken, logger,
+				kernel.WithLinkDownHandler(func(linkErr error) {
+					logger.Error("内核 netlink 链路断开，请求终止进程", "error", linkErr)
+					requestStop(fmt.Errorf("内核 netlink 链路断开: %w", linkErr))
+				}))
 			sup.Spawn("kernel-reactor", reactorToken, reactor.Run)
 			kernelClient = kernel.NewClient(transport, router)
 			logger.Info("内核 netlink 链路已就绪")
@@ -639,7 +668,6 @@ func run(args []string) error {
 	}
 	defer executor.Close()
 
-	terminate := runtime.NewShutdown()
 	ingestToken := runtime.NewShutdown()
 	// 最后登记 = 最先关停：入站主链路先于内核接收回路收尾，避免收尾期间事件堆积。
 	sup.Spawn("ingest", ingestToken, func() {
@@ -648,7 +676,6 @@ func run(args []string) error {
 
 	// 主 goroutine 等待终止。Shutdown 只有 Request/IsShutdown 而无完成通道，故这里
 	// 自备一个通道：与信号层并行地去「看见」同一个 SIGTERM/SIGINT。
-	stopCh := make(chan struct{})
 	go func() {
 		term := make(chan os.Signal, 1)
 		signal.Notify(term, syscall.SIGTERM, syscall.SIGINT)
@@ -656,9 +683,9 @@ func run(args []string) error {
 		select {
 		case <-term:
 		case <-stopCh:
+			return
 		}
-		close(stopCh)
-		terminate.Request()
+		requestStop(nil)
 	}()
 
 	<-stopCh
@@ -671,7 +698,12 @@ func run(args []string) error {
 			logger.Warn("执行体关停未在超时内完成", "name", res.Name, "outcome", res.Outcome)
 		}
 	}
-	return nil
+
+	// 链路断开是致命错误：清理完成后原样返回，main 以非零码退出，交给 systemd 重启。
+	fatalMu.Lock()
+	fatal := fatalErr
+	fatalMu.Unlock()
+	return fatal
 }
 
 // loadConfig 按 -c（文件）或 -C（目录）加载配置；两者都未指向存在的路径时失败。
@@ -850,6 +882,13 @@ func newBanSink(client *kernel.Client, logger *slog.Logger, db *persist.DB, rq *
 // 标记必须与占位同一锁周期：分开调用会在两步之间留出对账窗口，把刚投递、内核列表里
 // 尚未出现的封禁当幽灵摘掉。
 func (s *banSink) InsertPending(info bans.BanInfo) bool {
+	// 自动判定路径只封单机，构造点不带前缀；占位前回填，使镜像里的条目从一开始就有
+	// 可解封的前缀，而不是依赖解封时再猜。
+	if info.PrefixLen == 0 {
+		if addr, err := netip.ParseAddr(info.IP); err == nil {
+			info.PrefixLen = bans.FullPrefixLen(addr)
+		}
+	}
 	if !s.cache.InsertPending(info, time.Now()) {
 		return false
 	}

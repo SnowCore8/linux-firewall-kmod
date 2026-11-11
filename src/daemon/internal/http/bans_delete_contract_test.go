@@ -14,16 +14,18 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 )
 
-// fakeKernelBan 记录收到的解封地址，并按 removeErr 决定这一次下发是否成功。
+// fakeKernelBan 记录收到的解封地址与前缀，并按 removeErr 决定这一次下发是否成功。
 type fakeKernelBan struct {
-	removeErr error
-	removed   []netip.Addr
+	removeErr  error
+	removed    []netip.Addr
+	removePrfx []uint8
 }
 
 func (f *fakeKernelBan) Send(netip.Addr, uint8, uint32, string) error { return nil }
 
-func (f *fakeKernelBan) Remove(addr netip.Addr, _ uint8) error {
+func (f *fakeKernelBan) Remove(addr netip.Addr, prefixLen uint8) error {
 	f.removed = append(f.removed, addr)
+	f.removePrfx = append(f.removePrfx, prefixLen)
 	return f.removeErr
 }
 
@@ -107,5 +109,69 @@ func TestDeleteBanSkipsKernelWhenAbsent(t *testing.T) {
 	}
 	if len(kernel.removed) != 0 {
 		t.Errorf("不在封禁表中的 IP 也下发了 %d 次内核解封", len(kernel.removed))
+	}
+}
+
+// TestDeleteBanUsesMirroredPrefix 核对网段封禁的解封前缀取镜像里的 PrefixLen。
+//
+// 按单机前缀解封 /24 的条目，内核会回 -ENOENT：封禁永远撤不掉。
+func TestDeleteBanUsesMirroredPrefix(t *testing.T) {
+	const ip = "203.0.113.90"
+
+	kernel := &fakeKernelBan{}
+	s, _ := newTestServer(t, func(cfg *APIConfig) { cfg.KernelBan = kernel })
+	if !bans.GlobalCache().TryInsert(bans.BanInfo{
+		IP: ip, PrefixLen: 24, Reason: "manual", BannedAt: 1700000000, IsPermanent: true,
+	}) {
+		t.Fatalf("%s 已在封禁镜像中，用例之间的状态不干净", ip)
+	}
+	t.Cleanup(func() { removeBanForTest(ip) })
+
+	w := authedSend(t, s, http.MethodDelete, "/api/v2/bans/"+ip, "", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("状态码 %d，期望 200（body=%s）", w.Code, truncate(w.Body.Bytes()))
+	}
+	if len(kernel.removePrfx) != 1 || kernel.removePrfx[0] != 24 {
+		t.Fatalf("解封前缀 = %v，期望 [24]", kernel.removePrfx)
+	}
+}
+
+// TestBatchUnbanTemporaryUsesMirroredPrefix 核对批量解封同样按镜像前缀下发。
+func TestBatchUnbanTemporaryUsesMirroredPrefix(t *testing.T) {
+	const ip = "203.0.113.91"
+
+	kernel := &fakeKernelBan{}
+	s, _ := newTestServer(t, func(cfg *APIConfig) { cfg.KernelBan = kernel })
+	if !bans.GlobalCache().TryInsert(bans.BanInfo{
+		IP: ip, PrefixLen: 24, Reason: "manual", BannedAt: 1700000000, ExpiresAt: 1700003600,
+	}) {
+		t.Fatalf("%s 已在封禁镜像中，用例之间的状态不干净", ip)
+	}
+	t.Cleanup(func() { removeBanForTest(ip) })
+
+	w := authedSend(t, s, http.MethodPost, "/api/v2/bans/unban-temporary", "", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("状态码 %d，期望 200（body=%s）", w.Code, truncate(w.Body.Bytes()))
+	}
+	if len(kernel.removePrfx) != 1 || kernel.removePrfx[0] != 24 {
+		t.Fatalf("批量解封前缀 = %v，期望 [24]", kernel.removePrfx)
+	}
+}
+
+// TestDurationSecondsCapsAt365Days 核对上限是 365 天：恰好在界内放行，超一秒即拒绝。
+func TestDurationSecondsCapsAt365Days(t *testing.T) {
+	atLimit := uint64(365 * 24 * 3600)
+	secs, permanent, err := durationSeconds(&atLimit)
+	if err != nil || permanent || secs != int64(atLimit) {
+		t.Fatalf("边界值应放行: secs=%d permanent=%v err=%v", secs, permanent, err)
+	}
+
+	over := atLimit + 1
+	if _, _, err := durationSeconds(&over); err == nil {
+		t.Fatal("超过 365 天应返回 error")
+	}
+
+	if _, permanent, err := durationSeconds(nil); err != nil || !permanent {
+		t.Fatalf("缺席应为永久: permanent=%v err=%v", permanent, err)
 	}
 }

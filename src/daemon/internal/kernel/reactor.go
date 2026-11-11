@@ -28,27 +28,53 @@ type Reactor struct {
 	router    *Router
 	shutdown  *runtime.Shutdown
 	logger    *slog.Logger
+	// onLinkDown 在接收链路断开时调用一次；nil 时只记日志。
+	onLinkDown func(error)
+}
+
+// ReactorOption 配置接收回路的可选行为。
+type ReactorOption func(*Reactor)
+
+// WithLinkDownHandler 注入链路断开回调。
+//
+// 接收回路自己只负责「发现断开」，不知道该如何处置：重启进程是组合根的决定。回调在
+// Run 即将返回前调用一次，调用方据此记录致命错误并请求终止，使进程以非零码退出，
+// 再由 systemd 的 Restart=on-failure 重新拉起并重新注册。
+func WithLinkDownHandler(fn func(error)) ReactorOption {
+	return func(r *Reactor) {
+		if fn != nil {
+			r.onLinkDown = fn
+		}
+	}
 }
 
 // NewReactor 装配接收回路。
 //
 // router 与 transport 由调用方持有并共享（客户端也在这二者之上工作）；shutdown 是本
-// 回路专属的关停令牌。logger 为 nil 时退回 slog.Default。
+// 回路专属的关停令牌。logger 为 nil 时退回 slog.Default。可变参数保持向后兼容：
+// 不传 Option 时链路断开只记日志并返回。
 func NewReactor(
 	transport *Transport,
 	router *Router,
 	shutdown *runtime.Shutdown,
 	logger *slog.Logger,
+	opts ...ReactorOption,
 ) *Reactor {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Reactor{
+	r := &Reactor{
 		transport: transport,
 		router:    router,
 		shutdown:  shutdown,
 		logger:    logger,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(r)
+		}
+	}
+	return r
 }
 
 // errorBackoff 是 Poll 持续报错时的让出时长。
@@ -76,6 +102,12 @@ func (r *Reactor) Run() {
 		}
 		if ready.Has(EventLinkDown) {
 			r.logger.Warn("与内核的 netlink 接收链路已断开")
+			// 链路不会再恢复：内核模块卸载/重载后旧 socket 已死，继续运行只会让每次
+			// 下发石沉大海。把处置权交给组合根（记录致命错误并请求终止），由 systemd
+			// 重启本进程并重新注册，而不是在这里 os.Exit 绕过关停清理。
+			if r.onLinkDown != nil {
+				r.onLinkDown(ErrLinkDown)
+			}
 			return
 		}
 		// 只有真正确认过可读才排空：EventInterrupt 时无数据，TryRecv 会白等一轮接收超时。

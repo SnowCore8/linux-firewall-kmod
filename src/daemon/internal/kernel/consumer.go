@@ -418,7 +418,7 @@ func (p *EventPump) handleBan(ev *contract.BanStateChange) {
 			Kind:      telemetry.EventBan,
 			IP:        ip,
 			PrefixLen: ev.PrefixLen,
-			Jail:      ev.JailName,
+			Jail:      info.JailName,
 			Reason:    ev.Reason,
 			Value:     uint64(ev.DurationSecs),
 			At:        now,
@@ -514,8 +514,9 @@ func (p *EventPump) handleCmdResult(ev *contract.CmdResult) {
 		Kind:   telemetry.EventCommandError,
 		IP:     ip,
 		Reason: fmt.Sprintf("%s 失败：%d", ev.OriginalCmd, ev.ErrorCode),
-		Value:  uint64(int64(ev.ErrorCode)),
-		At:     time.Now(),
+		// Value 留 0：error_code 是负 errno，塞进无符号 Value 会回绕成极大数；
+		// 可读的错误码已写在 Reason 里。
+		At: time.Now(),
 	})
 	if p.metrics != nil {
 		p.metrics.Counter(CounterCommandRejected).Add(1)
@@ -649,7 +650,7 @@ func (p *EventPump) reconcile() {
 	skipped := 0
 	seen := make(map[string]struct{}, len(entries))
 	for i := range entries {
-		info, ok := banInfoFromEntry(&entries[i], secs)
+		info, ok := p.banInfoFromEntry(&entries[i], secs)
 		if !ok {
 			// 内核表里有本进程校验规则不接受的地址（只可能是 procfs 手工写入）。静默跳过
 			// 会让「内核有、面板没有」再次变成无从解释的现象，故计数后记一条调试日志。
@@ -752,9 +753,15 @@ func (p *EventPump) syncRouterCounters() {
 //
 // BannedAt 取本地时刻而非事件里的时长：契约的 BanStateChange 没有 banned_at 字段，
 // duration_secs 是「这次封禁多久」。
+//
+// 内核为 daemon 下发的封禁回显的 jail_name 是空串（contract netlink.fwidl：
+// 「空串表示由 daemon 推断」），直接覆盖会把 InsertPending 时写入的真实归属冲掉，
+// 使 CountByJail 与按 jail 的批量操作失去依据。事件没带归属时保留镜像里已有的
+// jail，本地也没有归属才留空。
 func (p *EventPump) banInfoFromChange(ev *contract.BanStateChange, addr netip.Addr, at time.Time) bans.BanInfo {
 	info := bans.BanInfo{
 		IP:          addr.String(),
+		PrefixLen:   ev.PrefixLen,
 		JailName:    ev.JailName,
 		Reason:      ev.Reason,
 		BannedAt:    at.Unix(),
@@ -762,6 +769,11 @@ func (p *EventPump) banInfoFromChange(ev *contract.BanStateChange, addr netip.Ad
 	}
 	if validated, err := bans.ValidateIP(info.IP); err == nil {
 		info.Num = validated.Num
+	}
+	if info.JailName == "" {
+		if prev, ok := p.cache.Get(info.IP); ok {
+			info.JailName = prev.JailName
+		}
 	}
 	if !info.IsPermanent {
 		info.ExpiresAt = at.Unix() + int64(ev.DurationSecs)
@@ -773,7 +785,10 @@ func (p *EventPump) banInfoFromChange(ev *contract.BanStateChange, addr netip.Ad
 //
 // 条目的 banned_at/duration_secs 都来自内核，因此镜像里的过期时刻与内核一致；地址无法
 // 通过守护进程侧校验的条目被跳过（返回 false），这类条目只可能来自 procfs 的手工写入。
-func banInfoFromEntry(e *contract.BanEntry, now int64) (bans.BanInfo, bool) {
+//
+// 与 banInfoFromChange 同一口径：内核条目的 jail_name 可能为空，此时保留镜像里已有的
+// 归属，避免每次对账都把 daemon 推断出的 jail 抹掉。
+func (p *EventPump) banInfoFromEntry(e *contract.BanEntry, now int64) (bans.BanInfo, bool) {
 	addr, err := addrFromWire(e.AF, e.Addr)
 	if err != nil {
 		return bans.BanInfo{}, false
@@ -789,10 +804,16 @@ func banInfoFromEntry(e *contract.BanEntry, now int64) (bans.BanInfo, bool) {
 	info := bans.BanInfo{
 		IP:          validated.Addr.String(),
 		Num:         validated.Num,
+		PrefixLen:   e.PrefixLen,
 		JailName:    e.JailName,
 		Reason:      e.Reason,
 		BannedAt:    bannedAt,
 		IsPermanent: e.IsPermanent || e.DurationSecs == 0,
+	}
+	if info.JailName == "" {
+		if prev, ok := p.cache.Get(info.IP); ok {
+			info.JailName = prev.JailName
+		}
 	}
 	if !info.IsPermanent {
 		info.ExpiresAt = bannedAt + int64(e.DurationSecs)
