@@ -50,18 +50,13 @@ func NewHTTPClient(timeout time.Duration, maxRetries int) *HTTPClient {
 		if err != nil {
 			return nil, fmt.Errorf("DNS 解析失败: %w", err)
 		}
-		// 检查所有解析出的 IP，任一为私有地址则拒绝
-		for _, ip := range ips {
-			addr, ok := netip.AddrFromSlice(ip.IP)
-			if !ok {
-				continue
-			}
-			if isPrivateAddr(addr) {
-				return nil, fmt.Errorf("DNS 解析到私有地址 %s，拒绝连接（SSRF 防护）", ip.IP)
-			}
+		// 检查所有解析出的 IP，任一为私有地址则拒绝；可连接的地址单独收集
+		candidates, err := dialTargets(host, ips, port)
+		if err != nil {
+			return nil, err
 		}
-		// 使用第一个非私有 IP 连接
-		return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+		// 只会连到已校验过的地址；不能直接取 ips[0]，那可能是被跳过的未校验项
+		return dialer.DialContext(ctx, network, candidates[0])
 	}
 
 	return &HTTPClient{
@@ -84,6 +79,28 @@ func NewHTTPClient(timeout time.Duration, maxRetries int) *HTTPClient {
 		maxRetries: maxRetries,
 		userAgent:  "Firewall-ThreatFeeds/1.0",
 	}
+}
+
+// dialTargets 把 DNS 解析结果转成可连接地址，并拒绝任何私有地址。
+//
+// 返回空列表意味着没有任何地址通过校验，调用方必须按错误处理：直接索引 ips[0]
+// 会在空结果上 panic，也可能连到被跳过的未校验项。
+func dialTargets(host string, ips []net.IPAddr, port string) ([]string, error) {
+	targets := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		addr, ok := netip.AddrFromSlice(ip.IP)
+		if !ok {
+			continue
+		}
+		if isPrivateAddr(addr) {
+			return nil, fmt.Errorf("DNS 解析到私有地址 %s，拒绝连接（SSRF 防护）", ip.IP)
+		}
+		targets = append(targets, net.JoinHostPort(addr.Unmap().String(), port))
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("DNS 解析 %s 未返回可用地址", host)
+	}
+	return targets, nil
 }
 
 // validateURL 校验 URL 是否允许访问。
