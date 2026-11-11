@@ -210,14 +210,18 @@ func (s *Store) SetLeaseRefused() {
 
 // MarkLeaseAttemptFailed 记一次注册请求失败后的租约去向。
 //
-// 曾持有过就进入 lost 并累计一次失联（模块重载、被判死、链路断开）；从没持有过则停在
-// idle。两者对运维的含义完全不同：前者意味着本进程曾经下发过、如今已经没人认领的封禁。
+// 曾持有过就进入 lost 并累计一次失联（模块重载、被判死、链路断开）；最近一次内核明确
+// 答复是 refused 时保持 refused——一次发送失败不会推翻「已有别的守护进程」这个结论，
+// 降级成 idle 会让运维再也分不清「被拒」与「还没试」；其余情况停在 idle。
 func (s *Store) MarkLeaseAttemptFailed() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.cur.Link.Lease == LeaseHeld {
+	switch s.cur.Link.Lease {
+	case LeaseHeld:
 		s.setLease(LeaseLost)
-	} else {
+	case LeaseRefused:
+		// 保持 refused，不推进状态。
+	default:
 		s.setLease(LeaseIdle)
 	}
 	s.publish()
