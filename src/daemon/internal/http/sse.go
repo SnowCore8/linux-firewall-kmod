@@ -332,11 +332,20 @@ type sseConn struct {
 // 事件名在这里是**逐字面量**（`conn.writeFrame("connected", …)`）——契约的每个事件名
 // 都要在 Go 侧有一个字面发布点，verify_http.py 按这个形式找发布点，写成变量就等于
 // 「发布点不存在」。
-func (c *sseConn) writeFrame(event string, data any) error {
+//
+// 向已关闭通道发送会 panic：run() 在广播慢客户端或关停时会 close(client)，而 handshake
+// 可能在 attach 返回后、run() 关闭通道前的微小窗口内调用 writeFrame。用 recover 捕获
+// 这种 panic，按「连接已断开」处理。
+func (c *sseConn) writeFrame(event string, data any) (err error) {
 	frame, err := sseFrame(event, data)
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("SSE 客户端通道已关闭")
+		}
+	}()
 	select {
 	case c.out <- frame:
 		return nil

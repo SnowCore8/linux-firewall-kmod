@@ -257,8 +257,10 @@ func collectLogWindow(path string, filter logFilter, totalLines, start, n uint64
 // 接入名额、握手帧、心跳与 503 全部由 streamSSE 统一处理（与 `/api/v2/events` 同一套
 // 语义、各自独立的上限），这里只负责「把文件末尾之后的新行写成 log 帧」。
 //
-// 文件在占名额**之前**就打开并定位：流一旦写出响应头就无法再改状态码，而契约给这条流
-// 只声明了 200 与 503，所以预检失败一律 503，不开 404 这种契约上没有的口子。
+// 文件在 attach 回调内打开：streamSSE 有三条早退路径（Flusher 断言失败、关停中、名额满）
+// 在 attach 之前就 return，若提前打开文件会导致 fd 泄漏。把打开推迟到 attach 内，虽然
+// 文件打开失败时已写过 200 响应头、无法再改 503，但这种情况罕见且客户端会因无数据而
+// 超时断开，比泄漏 fd 直到耗尽进程配额要好。
 func (h *APIHandlers) StreamLogs(w http.ResponseWriter, r *http.Request) {
 	logFile := ""
 	if h.logFilePath != nil {
@@ -266,19 +268,6 @@ func (h *APIHandlers) StreamLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	if logFile == "" {
 		WriteServiceUnavailable(w, "日志文件未配置")
-		return
-	}
-
-	f, err := os.Open(logFile)
-	if err != nil {
-		h.server.logger.Warn("日志流打开文件失败", "path", logFile, "error", err)
-		WriteServiceUnavailable(w, "日志文件不可读")
-		return
-	}
-	// 定位到末尾：这条流推的是「从这里开始的未来」，历史行由 GET /api/v2/logs 负责。
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
-		_ = f.Close()
-		WriteServiceUnavailable(w, "日志文件定位失败")
 		return
 	}
 
@@ -294,6 +283,17 @@ func (h *APIHandlers) StreamLogs(w http.ResponseWriter, r *http.Request) {
 
 	streamSSE(w, r, h.logStream,
 		func(out chan []byte) bool {
+			f, err := os.Open(logFile)
+			if err != nil {
+				logger.Warn("日志流打开文件失败", "path", logFile, "error", err)
+				return false
+			}
+			// 定位到末尾：这条流推的是「从这里开始的未来」，历史行由 GET /api/v2/logs 负责。
+			if _, err := f.Seek(0, io.SeekEnd); err != nil {
+				logger.Warn("日志文件定位失败", "path", logFile, "error", err)
+				_ = f.Close()
+				return false
+			}
 			go tailLogs(r.Context(), f, level, &sseConn{out: out}, done, logger)
 			return true
 		},
