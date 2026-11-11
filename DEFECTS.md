@@ -1,7 +1,7 @@
 # 功能缺陷清单
 
 > 生成时间：2026-11-11
-> 更新时间：2026-11-11（第六轮：封禁镜像原子性、信誉欠账回填、热重载坐标保留、广播丢失计数与认证/并发集成用例）
+> 更新时间：2026-11-11（第七轮：情报源 TTL/合并/失败判定、日志热重载、集群键归一与审计模式计数、DDoS 引擎与日志读取补偿）
 > 状态标记：🔴 待修复 | 🟡 修复中 | 🟢 已修复 | ⚪ 设计取舍/复核为误报
 
 ---
@@ -11,10 +11,10 @@
 | 严重度 | 发现总数 | 已修复 | 待修复 |
 |--------|----------|--------|--------|
 | CRITICAL | 4 | 3 | 1 |
-| HIGH | 20 | 19 | 0 |
-| MEDIUM | 61 | 42 | 8 |
-| LOW | 58 | 5 | 52 |
-| **合计** | **143** | **69** | **61** |
+| HIGH | 22 | 21 | 0 |
+| MEDIUM | 68 | 48 | 9 |
+| LOW | 67 | 14 | 52 |
+| **合计** | **161** | **86** | **62** |
 
 另有 13 项经复核为误报或设计取舍（标 ⚪），不计入待修复：H-6、M-1、M-2、M-3、M-10、M-14、M-22、M-B7、M-D1、M-D4、M-D5、M-E2、L-E4。
 
@@ -43,7 +43,7 @@
 
 ---
 
-## HIGH 级（19 项）
+## HIGH 级（22 项）
 
 ### H-1 🟢 内核模块 ip_fast_csum 读取越界
 - **文件**: `src/kernel-module/fw_hook.c:159-162,191`
@@ -144,9 +144,36 @@
   多字段判断在同一把读锁内一次取全；`config_guard_test.go` 用真实 reloader +
   两写三读并发，`go test -race ./...` 全绿
 
+### H-21 🔴 Blocklist.de 条目 TTL 固定 2 小时，每轮刷新后 92% 时间不起作用
+- **文件**: `src/daemon/internal/threatfeeds/sources/blocklist.go:25`
+- **问题**: 该源 `Parse` 固定 `expiresAt = now+2h`，而其余源（ipsum/firehol/dshield/feodo）
+  都是 25 小时；`refresh_interval` 默认 24 小时、允许 60s–86400s（`config/parser.go:764`），
+  调度器再加 ±30 分钟抖动（`manager.go:79`）。`Lookup` 跳过过期条目（`cache.go:166,180`），
+  `Cleanup` 随后删除，而 `/api/v2/threat-feeds` 只在拉取失败时报错——拉取成功即 `sync ok`，
+  `entry_count` 仍是解析时的数量
+- **影响**: 默认配置下每轮刷新后第 2 小时起 blocklist_de 对判定链路完全失效，面板无告警；
+  文档 `docs/zh/configuration/threat-feeds.md:276` 写「默认 24 小时过期」，与实现不符
+- **状态**: ✅ 已修复 — TTL 改为 25h，与其他源一致；`sources_test.go` 断言解析结果的
+  `ExpiresAt-now` 在 25h±1min
+- **难度**: 低 | **风险**: 中（判定命中率）
+
+### H-22 🔴 集群聚合键不做 IPv4-mapped 归一，所有映射地址塌进 `::/48`
+- **文件**: `src/daemon/internal/decision/cluster.go:29-31`、`src/daemon/internal/detect/cidr.go:38-48`、
+  `src/daemon/internal/config/types.go:18-23`、`src/daemon/internal/logparse/ip.go:76-88`
+- **问题**: `ExtractIP` 只对保留段检查做 Unmap，返回的仍是 `netip` 原值；`FamilyOf` 按
+  `addr.Is4()` 判定，`::ffff:1.2.3.4` 得 10，于是 `SubnetKey` 用 PrefixV6（默认 48）掩码，
+  不同 /24 的映射地址得到同一个 `::/48` 键
+- **影响**: 双栈 nginx/apache 日志中的 IPv4-mapped 源被当成同一网段：≥5 个、每 IP ≤3 次
+  失败即误报集群扫描；`executor.go:1178` 对 `::/48` 下发网段封禁，IPv6 前缀命不中 IPv4
+  包（脏条目）；`pipeline.go:445-447` 随后清空这些 IP 的真实失败计数，单 IP 判定被饿死
+- **状态**: ✅ 已修复 — `pipeline.collectLine` 统一 `Unmap()`，`config.FamilyOf` 与
+  `detect.SubnetKey` 各自 Unmap 兜底；新增 mapped/dotted 同键、不同 /24 不同键与
+  `DetectCluster` 分组测试
+- **难度**: 低 | **风险**: 中（误封网段 + 漏封单 IP）
+
 ---
 
-## MEDIUM 级（61 项）
+## MEDIUM 级（68 项）
 
 ### 内核模块（4 项）
 | # | 文件 | 问题 | 状态 |
@@ -249,9 +276,20 @@
 | M-E1 | fmt.Errorf 缺少 %w 导致错误链断裂（多处） | 🔴 |
 | M-E2 | CidrKey.Parse MustCidrKey panic | ⚪ 复核：`MustCidrKey` 仅在两处 `_test.go` 调用，生产路径一律走返回 error 的 `ParseCidrKey` |
 
+### 情报源/热重载/判定链路（7 项）
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| M-24 | `threatfeeds/cache.go:133-140`、`manager.go:191-203` | 同一 IP 跨源直接覆盖，置信度取决于 results 通道到达顺序。IPsum/FireHOL/DShield 大量重叠，同一地址在 0.85 与 0.7 间随机取值，直接决定「≥0.8 直接封禁」是否触发 | 🟢 已修复：键冲突保留 confidence 更高者、相等保留先到者；两种到达顺序结果一致 |
+| M-25 | `threatfeeds/manager.go:87-94`、`cmd/firewall-daemon/main.go:391-399` | 一个源名写错 → `NewFeedManager` 返回错误 → `feedMgr = nil`，三个 threat-feeds 接口全部 503、判定层失去情报能力，只有一条 Warn。与「每个源独立、失败不影响其他源」的文档口径矛盾 | 🟢 已修复：未知源 Warn 后跳过，其余源正常装配；全部未知才报错 |
+| M-26 | `threatfeeds/manager.go:216-242,272-279` | HTTP 200 但内容不可解析/为空时按成功处理：清零 `ConsecutiveFailures`、清熔断、刷新 `LastUpdate`。上游错误页/限流文本让条目数归零仍显示 ok，熔断永不触发，旧条目靠 TTL 苟活 | 🟢 已修复：0 条目按本轮失败处理，累计失败并触发熔断 |
+| M-27 | `runtime/file_reloader.go:119`、`logger/logger.go:97-105`、`cmd/firewall-daemon/main.go:452-456` | 热重载改 `log_file` 后整份换入配置，但 sink 与级别只在 `logger.Init` 建一次；`LogFilePath` 闭包读新 `cfg.LogFile`，面板去新路径读而写入仍在旧文件，日志面板永久空白且无告警 | 🟢 已修复（声明需重启）：重载检测 log_file/log_level/log_format 变化逐项 Warn；日志接口只报启动时登记的实际写入路径，面板不再指向空文件 |
+| M-28 | `runtime/pipeline.go:439-448`、`runtime/executor.go:1165-1174` | `ScanClusters` 无条件 `window.Forget`，而 `audit_only: true`（默认）时并不下发。审计观察期内单 IP 计数每检测周期被清，检出下降且无可察觉痕迹 | 🟢 已修复：`onHit` 返回是否处置，仅真正下发后清计数（下发失败也清，避免每周期重复告警） |
+| M-29 | `decision/ddos.go:70-160`、`config/parser.go:628` | `NewDdosEngine`/`HandleEvent`/`CleanupStale` 生产侧零引用（仅本包测试），`ddos.auto_ban_threshold` 因此无消费者，改它无效；每 IP 违规累计与 `TrackedIPs` 永远为空，「第 N 次越线」语义缺失 | 🔴 待修复：需决定接线或删键，涉及产品语义 |
+| M-30 | `ingest/reader.go:179`、`ingest/watcher.go:96`、`runtime/executor.go:495-526,561-591` | 读路径只有事件驱动、每次最多 256 KiB，无周期性补偿；inotify 溢出（`WD=-1`）在 `registry.Resolve` 落空被静默丢弃。执行体阻塞期间写入被合并或溢出后，写方转静默，尾部内容永久不判定（漏封）且无告警 | 🟢 已修复：识别 `IN_Q_OVERFLOW`，逐源连读补至偏移不再前进（单源上限 64 批）；新增 reader 与溢出补读测试 |
+
 ---
 
-## LOW 级（58 项）
+## LOW 级（67 项）
 
 ### 内核模块（6 项）
 | # | 文件 | 问题 |
@@ -260,7 +298,7 @@
 | L-2 | `fw_ban.c` | ban_count procfs sprintf 无溢出检查 |
 | L-3 | `fw_netlink.c` | CmdResult errno 未翻译 |
 | L-K4 | `fw_stats.c:141-160` | 直方图读侧无配对屏障（🟢 已修复：WRITE_ONCE/READ_ONCE 配对） |
-| L-K5 | `fw_rate.c:413` | smp_mb__after_atomic 用于非原子操作 |
+| L-K5 | `fw_rate.c:413` | smp_mb__after_atomic 用于非原子操作（🟢 已修复：`clearing` 发布用 `WRITE_ONCE`+`smp_mb`，读侧 `READ_ONCE`；覆盖 exit/clear 与回收、插入三条路径） |
 | L-K6 | `fw_ban.c:305-306` | 续期 mod_timer 交互（无实际影响） |
 | L-K7 | `fw_state.c:188-240` | 保存分页按 offset 遍历，期间到期摘链会跳过或重复条目 |
 
@@ -280,6 +318,19 @@
 | L-D7 | `http/logs.go:60-84` | 每次查询两遍全文件扫描，大日志下 CPU 放大 |
 | L-E3 | `daemonize.go:84,89` | PID 文件 Close 错误未检查 |
 | L-E4 | `detect/cidr.go:133` | CidrKey.Parse panic（⚪ 复核：仅测试调用 `MustCidrKey`，生产走 `ParseCidrKey`） |
+
+### 审计补充（9 项）
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| L-27 | `logger/logger.go:97-102`、`http/logs.go:46-53` | 未配置 `log_file` 时写入默认 `/var/log/firewall.log`，但 `SetLogFile` 只在配置非空时登记，HTTP 侧读空值回 503「日志文件未配置」：进程在写日志，面板却说没有。修复：登记解析后的路径 | 🟢 已修复：登记解析后的实际写入路径；目的地不含文件时不登记，接口如实回未配置 |
+| L-28 | `config/parser.go` 的 `validateThreatFeedURL`、`threatfeeds/http.go:107-119` | 配置期接受任意 http(s)，运行期只放行 4 个域名且强制 https；自定义镜像能通过启动校验，每轮失败后熔断。修复：配置期复用同一白名单 | 🟢 已修复：白名单与 https 校验抽到 `config.ValidateThreatFeedURL`，配置期与运行期共用 |
+| L-29 | `geoip/egress.go:95-109`、`threatfeeds/http.go:123-125` | 非公网判定只排除 RFC1918/ULA/环回/链路本地/组播；`netip.IsPrivate()` 不含 100.64.0.0/10、192.0.0.0/24、198.18.0.0/15、240.0.0.0/4，探测端点返回 100.64.0.1 会被当地理出口，SSRF 检查也可被解析到该段绕过 | 🟢 已修复：显式排除 100.64/10、192.0.0/24、198.18/15、240/4，两处共用同一判据 |
+| L-30 | `threatfeeds/sources/*.go`、`threatfeeds/parser.go` | 默认 `bufio.Scanner` 单行上限 64 KiB，任一行超长即 `scanner.Err()` 使整个源失败。修复：`scanner.Buffer` 调大并跳过超长行 | 🟢 已修复：`sources` 改为缓冲 1 MiB 的逐行读取，超长行丢弃后继续；100 KiB 与超上限行测试 |
+| L-31 | `threatfeeds/parser.go:23` | `ParseIPList` 与 `sources.parseIPList` 重复，生产路径不调用（仅测试），属可删除死代码 | 🔴 待修复（死代码，无行为影响） |
+| L-32 | `decision/policy.go:149-176` | 退化分支 `expiresAt=now+1` 但 `Duration=0`、`IsPermanent=false`，`executor.go:1222-1230` 会把 0 当永久下发，镜像 1 秒后过期；现被 `validateBantime`（`parser.go:539`）归一，暂不可达 | 🟢 已修复：退化分支改为 `Duration=1`、`IsPermanent=false`，字段自洽并有断言 |
+| L-33 | `analysis/prediction.go:230-239` | 趋势用「24h ÷ 7 日均值」，契约 `contract/http.fwidl:1529` 写「与前一日的量比较」，口径不一致 | 🟢 已修复：改为近 24h 与前一日 24h 比较，与契约一致；补四组样本测试 |
+| L-34 | `analysis/recommendations.go:194-201` | `current=1` 时 direction 为 decrease/increase，推荐值仍等于 1，读数自相矛盾 | 🟢 已修复：取整后与 current 相等时方向归 maintain；补 0/1/中间值测试 |
+| L-35 | `decision/policy.go:9-12` | 包注释仍写乘法模型与信誉系数 1.0/0.8/0.5，与同文件加法实现及 AGENTS「加法模型」矛盾，易误导改判据的人 | 🟢 已修复：包注释改为加法模型，行为未动 |
 
 ### 前端（12 项）
 | # | 文件 | 问题 |
@@ -310,15 +361,15 @@
 |---|------|
 | L-25 | 无 auth lockout 机制测试（🟢 已修复：`tests/test_23_auth_lockout.py`） |
 | L-26 | 无并发 config reload 测试（🟢 已修复：`tests/test_24_concurrent_reload_bans.py`） |
-| L-27 | 无分页边界测试 |
-| L-28 | 无 batch ban 限制测试 |
-| L-29 | 无 daemon 崩溃重连测试 |
+| L-27 | 无分页边界测试 | 🟢 已修复：登记解析后的实际写入路径；目的地不含文件时不登记，接口如实回未配置 |
+| L-28 | 无 batch ban 限制测试 | 🟢 已修复：白名单与 https 校验抽到 `config.ValidateThreatFeedURL`，配置期与运行期共用 |
+| L-29 | 无 daemon 崩溃重连测试 | 🟢 已修复：显式排除 100.64/10、192.0.0/24、198.18/15、240/4，两处共用同一判据 |
 
 ### 构建系统（8 项）
 | # | 问题 |
 |---|------|
-| L-30 | frontend stamp file 导致不必要重构建 |
-| L-31 | kmod-remote 依赖本地 contract 生成 |
+| L-30 | frontend stamp file 导致不必要重构建 | 🟢 已修复：`sources` 改为缓冲 1 MiB 的逐行读取，超长行丢弃后继续；100 KiB 与超上限行测试 |
+| L-31 | kmod-remote 依赖本地 contract 生成 | 🔴 待修复（死代码，无行为影响） |
 | L-B8 | Makefile.dkms 使用 $(shell pwd) |
 | L-B9 | bench Makefile sink 未用 LDFLAGS |
 | L-B10 | CI 产物名不含版本信息 |
@@ -382,12 +433,19 @@ C-4、H-8、H-9、H-12、H-13、H-14、H-15、H-16、H-17、H-18、M-F1、M-F2
 
 ### 批次 6（已提交）：封禁原子性、信誉欠账、配置锁与集成用例
 - 守护进程：H-10、H-11、H-20、M-D11、M-11、L-E9
-- 内核：M-4
+- 内核：M-4、L-K5
 - 构建/测试：M-8、M-21、L-25、L-26、M-B8
 - 复核为误报/取舍：M-2、M-3、M-22、M-B7、M-E2、L-E4
 
+### 批次 7（已提交）：情报源、日志路径、集群键与读取补偿
+- 情报源：H-21、M-24、M-25、M-26、L-28、L-29、L-30
+- 判定链路：H-22、M-28、L-32、L-35
+- 日志/读取：M-27、L-27、M-30
+- 分析读数：L-33、L-34
+
 ### 待修复重点（按风险排序）
 1. **CRITICAL**：C-2（SSE 凭据在 URL，需前后端配合）
-2. **MEDIUM 数据正确性**：M-23（内核拒绝封禁后底账不回撤）、M-F5
+2. **MEDIUM 数据正确性**：M-23（内核拒绝封禁后底账不回撤）、M-29（DDoS 引擎未接线、
+   `auto_ban_threshold` 无消费者）、M-F5
 3. **测试缺口**：M-T1~M-T5、M-E1
 4. **LOW 批量**：其余 52 项，按模块分批处理
