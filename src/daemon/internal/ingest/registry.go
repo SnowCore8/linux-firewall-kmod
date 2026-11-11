@@ -214,7 +214,15 @@ func (r *SourceRegistry) Entries() []SourceEntry {
 // 在回调内改动它不会影响注册表。
 func (r *SourceRegistry) Iterate(fn func(id SourceID, entry SourceEntry)) {
 	for id, entry := range r.byID {
-		fn(id, *entry)
+		// 深拷贝 Owners 切片，与 Get/Remove/Entries 保持一致
+		ownersCopy := make([]SourceOwner, len(entry.Owners))
+		copy(ownersCopy, entry.Owners)
+		fn(id, SourceEntry{
+			Owners: ownersCopy,
+			Path:   entry.Path,
+			WD:     entry.WD,
+			Inode:  entry.Inode,
+		})
 	}
 }
 
