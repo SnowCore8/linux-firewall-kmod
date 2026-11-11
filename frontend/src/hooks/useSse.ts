@@ -145,6 +145,9 @@ export function useEventStream(enabled: boolean): EventStreamResult {
   const openedOnceRef = useRef(false)
   // 本次重连之前确实丢过一条已建立的连接（断线期间可能有帧被错过）
   const needsResyncRef = useRef(false)
+  // getSseStatus 探测请求的 AbortController：卸载时中断在途探测，
+  // 避免组件卸载后请求仍在后台完成、浪费资源并可能触发已卸载组件的状态更新
+  const statusAbortRef = useRef<AbortController | null>(null)
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -171,6 +174,10 @@ export function useEventStream(enabled: boolean): EventStreamResult {
     if (!enabledRef.current) return
     closeStream()
     setState(attemptsRef.current === 0 ? 'connecting' : 'reconnecting')
+
+    // 为本次连接生命周期内的 getSseStatus 探测创建 AbortController；
+    // 卸载清理会 abort 它，下一次 connect 会用新实例覆盖
+    statusAbortRef.current = new AbortController()
 
     const es = new EventSource(eventsStreamUrl())
     esRef.current = es
@@ -280,7 +287,8 @@ export function useEventStream(enabled: boolean): EventStreamResult {
       }))
 
       // 重连前探一次上限：达上限就停手，交给 UI 降级到 REST 轮询
-      void getSseStatus()
+      // 传入 AbortSignal：卸载时 abort，避免组件拆除后探测请求仍在后台完成
+      void getSseStatus(statusAbortRef.current?.signal)
         .then((status) => {
           // 组件已卸载时不再触发状态更新或新建连接
           if (!mountedRef.current) return
@@ -314,10 +322,12 @@ export function useEventStream(enabled: boolean): EventStreamResult {
     // connect/closeStream 均为 useCallback 稳定引用；只在 enabled 翻转时重建连接
   }, [enabled, connect, closeStream])
 
-  // 卸载保护：标记组件已卸载，防止异步回调在卸载后触发状态更新
+  // 卸载保护：标记组件已卸载，防止异步回调在卸载后触发状态更新；
+  // 同时中断在途的 getSseStatus 探测请求，避免组件卸载后请求仍在后台完成
   useEffect(() => {
     return () => {
       mountedRef.current = false
+      statusAbortRef.current?.abort()
     }
   }, [])
 

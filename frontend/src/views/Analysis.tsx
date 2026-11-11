@@ -317,8 +317,19 @@ export default function Analysis() {
         ),
       },
     ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [openIp, summary, predictions, periodic, collab, network, reputation, threshold, effectiveness, histogram, durationRec],
+    [
+      openIp,
+      summary.data, summary.isLoading, summary.error, summary.refetch, summary.isUserFetching,
+      predictions.data, predictions.isLoading, predictions.error, predictions.refetch, predictions.isUserFetching,
+      periodic.data, periodic.isLoading, periodic.error, periodic.refetch, periodic.isUserFetching,
+      collab.data, collab.isLoading, collab.error, collab.refetch, collab.isUserFetching,
+      network.data, network.isLoading, network.error, network.refetch, network.isUserFetching,
+      reputation.data, reputation.isLoading, reputation.error, reputation.refetch, reputation.isUserFetching,
+      threshold.data, threshold.isLoading, threshold.error, threshold.refetch, threshold.isUserFetching,
+      effectiveness.data, effectiveness.isLoading, effectiveness.error, effectiveness.refetch, effectiveness.isUserFetching,
+      histogram.data, histogram.isLoading, histogram.error, histogram.refetch, histogram.isUserFetching,
+      durationRec.data, durationRec.isLoading, durationRec.error, durationRec.refetch, durationRec.isUserFetching,
+    ],
   )
 
   // 顶栏「刷新」只重取当前分区（见 useRefreshSignal），故 loading 只反映当前分区取数态；
