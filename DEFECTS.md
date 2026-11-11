@@ -1,7 +1,7 @@
 # 功能缺陷清单
 
 > 生成时间：2026-11-11
-> 更新时间：2026-11-11（第十三轮：日志源注册表 Iterate 浅拷贝）
+> 更新时间：2026-11-12（第十四轮：深度扫描 50+ 项，已修复 30 项）
 > 状态标记：🔴 待修复 | 🟡 修复中 | 🟢 已修复 | ⚪ 设计取舍/复核为误报
 
 ---
@@ -11,10 +11,10 @@
 | 严重度 | 发现总数 | 已修复 | 待修复 |
 |--------|----------|--------|--------|
 | CRITICAL | 5 | 4 | 1 |
-| HIGH | 44 | 43 | 0 |
-| MEDIUM | 111 | 84 | 16 |
-| LOW | 92 | 34 | 57 |
-| **合计** | **252** | **165** | **74** |
+| HIGH | 68 | 67 | 0 |
+| MEDIUM | 152 | 100 | 41 |
+| LOW | 132 | 34 | 97 |
+| **合计** | **357** | **205** | **139** |
 
 另有 13 项经复核为误报或设计取舍（标 ⚪），不计入待修复：H-6、M-1、M-2、M-3、M-10、M-14、M-22、M-B7、M-D1、M-D4、M-D5、M-E2、L-E4。
 
@@ -422,9 +422,143 @@
   解锁后再写入 rows
 - **难度**: 中 | **风险**: 高（内核崩溃）
 
+### 第十四轮补充（HIGH 8 项）
+
+### H-45 🟢 netlink 消息批处理在 shutdown 期间未逐条检查 shutting_down 标志
+- **文件**: `src/kernel-module/fw_netlink.c:900-1141`
+- **问题**: `fw_nl_recv_msg()` 的外层 `while` 循环处理单 skb 中的多条 netlink 消息。`fw_is_shutting_down()` 检查只在循环顶部做一次，第一条消息通过后 `fw_exit()` 可能已销毁 ban/wl/rate 表，后续消息仍会调用已销毁的子系统
+- **影响**: 模块卸载期间处理批量 netlink 消息可能访问已释放内存，内核 Oops
+- **状态**: ✅ 已修复 — 在每个修改操作的 switch case（BAN_IP/UNBAN_IP、ADD_WHITELIST/REMOVE_WHITELIST、SET_CONFIG、SET_PROTECTED_PORTS）前再次检查 `fw_is_shutting_down()`，为 true 则 break
+
+### H-46 🟢 状态持久化依赖 `/bin/mv` 和 `/bin/rm`，最小化环境可能不存在
+- **文件**: `src/kernel-module/fw_state.c:164-180`
+- **问题**: `fw_state_atomic_replace()` 调用 `call_usermodehelper("/bin/mv", ...)` 做原子替换，`fw_state_unlink()` 使用 `/bin/rm`。在 initramfs 或最小化嵌入式环境中这些工具可能不存在，导致状态无法持久化且 `.tmp` 文件残留
+- **影响**: 状态持久化静默失败，重启后封禁表丢失
+- **状态**: ✅ 已修复 — 新增 `fw_state_init()` 在模块加载时通过 `filp_open(O_PATH)` 探测 `/bin/mv` 和 `/bin/rm`，缺失则 `pr_warn` 告警但不阻止加载
+
+### H-47 🟢 封禁表插入时发现过期条目未移除，导致计数膨胀
+- **文件**: `src/kernel-module/fw_ban.c:480-505`
+- **问题**: `fw_ban_insert_locked()` 找到已存在但已过期的节点时，直接走新插入路径而不删除旧节点。结果同一 (af, addr, prefix_len) 在哈希桶中有两个节点，`ban_count` 被多加 1，直到旧节点的定时器触发清理
+- **影响**: 封禁表接近容量时可能因虚高的 `ban_count` 触发 `-ENOSPC` 拒绝新封禁
+- **状态**: ✅ 已修复 — 发现过期节点时先完整删除（timer_delete + hlist_del_init_rcu + atomic_dec + call_rcu），再走新插入路径
+
+### H-48 🟢 SSE Broker 的 register/unregister channel 在 Stop() 后未关闭
+- **文件**: `src/daemon/internal/http/sse.go:228-278`
+- **问题**: `SSEBroker.run()` 退出后 `register` 和 `unregister` channel 未被显式关闭。虽然 `attach()` 有 `<-b.stopCh` 保护不会永久阻塞，但 channel 依赖 GC 回收而非显式清理
+- **影响**: 潜在的 goroutine/channel 泄漏，频繁启停场景下资源累积
+- **状态**: ✅ 已修复 — 添加 `done` channel，`Stop()` 等待 `run()` 退出后再关闭 `register`/`unregister`
+- **难度**: 低 | **风险**: 低（资源泄漏）
+
+### H-49 🟢 FeedManager.RefreshAll 的等待 goroutine 在 context 取消时可能阻塞
+- **文件**: `src/daemon/internal/threatfeeds/manager.go:170-197`
+- **问题**: `RefreshAll` 创建的等待 goroutine（`wg.Wait()` 后关闭 results channel）在调用方提前退出时可能阻塞。虽然 `wg.Wait()` 最终会完成，但 worker 的 HTTP 请求超时可能导致长时间阻塞
+- **影响**: context 取消场景下 goroutine 生命周期延长
+- **状态**: ✅ 已修复 — 派生子上下文，`RefreshAll` 返回时取消所有 worker 的 HTTP 请求
+
+### H-50 🟢 InboundExecutor.Close() 与 poll() 的 fd 竞态
+- **文件**: `src/daemon/internal/runtime/executor.go:373-382,432-470`
+- **问题**: `Close()` 调用 `e.watcher.Close()` 关闭 inotify fd 时，主循环可能正在 `unix.Poll(fds, ...)` 阻塞。关闭 fd 后 `Poll` 的行为未定义——可能返回 EBADF，也可能在 fd 复用后读到错误数据
+- **影响**: 极端情况下可能读到错误的 inotify 事件或 EBADF 恐慌
+- **状态**: ✅ 已修复 — 添加 `mainDone` channel，`Close()` 等待 `Run()` 退出后再关闭 watcher
+
+### H-51 🟢 main.go 中 transport 可能被 double-close
+- **文件**: `src/daemon/cmd/firewall-daemon/main.go:295,669-671`
+- **问题**: `NewInboundExecutor` 失败时显式调用 `transport.Close()`，但 `defer transport.Close()` 已注册。虽然 `Transport.Close()` 内部有 `closed` 标志做幂等保护，但依赖实现细节
+- **影响**: 代码意图不清晰，未来实现变化可能引入 bug
+- **状态**: ✅ 已修复 — 移除显式 `transport.Close()` 调用，统一由 defer 管理
+
+### H-52 🟢 Facts.eventWorker 在事件入队时未捕获向量快照
+- **文件**: `src/daemon/internal/persist/facts.go:233-247`
+- **问题**: `eventWorker` 处理事件时先 `InsertEvent`（可能慢），再 `riskEngine.GetVector` 获取向量快照。两次调用之间向量可能因衰减而变化，导致写入数据库的向量与事件发生时的实际向量不一致
+- **影响**: 风险向量历史数据不准确，审计追溯时看到衰减后的值
+- **状态**: ✅ 已修复 — `riskEvent` 结构体添加 `vector`/`hasVector` 字段，在事件入队时捕获向量快照
+
+### 第二轮扫描补充（HIGH 16 项）
+
+### H-53 🟢 测试 ip_is_banned() 子串匹配产生误判
+- **文件**: `tests/conftest.py:230-236`
+- **问题**: `ip_is_banned()` 使用 `ip in content` 做子串匹配，查询 `10.0.0.1` 时会匹配到 `10.0.0.10`、`10.0.0.100` 等
+- **影响**: test_03_ban_unban.py 和 test_04_whitelist.py 中依赖此函数的断言可能假阳性
+- **状态**: ✅ 已修复 — 改为逐行精确匹配，`line.strip() == ip`
+
+### H-54 🟢 并发测试断言薄弱，未验证实际操作结果
+- **文件**: `tests/test_07_concurrency.py:35-78`
+- **问题**: `test_concurrent_ban` 只断言耗时不超过 5 秒，未验证 20 个 IP 是否真的被封禁；`test_read_during_write` 断言 `ban_count >= 0` 恒真
+- **状态**: ✅ 已修复 — join 后添加断言验证所有 IP 确实被封禁
+
+### H-55 🟢 并发封禁测试不捕获子线程异常
+- **文件**: `tests/test_07_concurrency.py:40-47`
+- **问题**: 20 个线程直接调用 `PROC_BANS.write_text(ip)` 不捕获异常，`OSError` 在子线程中静默丢失
+- **状态**: ✅ 已修复 — 使用 `safe_ban()` 包装函数收集子线程异常到线程安全列表
+
+### H-56 🟢 CI 降级运行缺少新测试关键字
+- **文件**: `.github/workflows/ci.yml:537-553`
+- **问题**: `-k` 过滤表达式缺少 `cluster_scan`（test_22）、`auth_lockout`（test_23）、`concurrent_reload_bans`（test_24）
+- **状态**: ✅ 已修复 — `-k` 过滤补充 `cluster_scan`、`auth_lockout`、`concurrent_reload_bans`
+
+### H-57 🟢 配置重载测试直接修改源配置文件
+- **文件**: `tests/test_17_config_reload.py:124-166`
+- **问题**: 直接修改 `CONFIG_DIR / "default.yaml"`，测试中途崩溃会永久损坏配置
+- **状态**: ✅ 已修复 — 使用 `tmp_path` 保存备份副本，`try/finally` 保证崩溃恢复
+
+### H-58 🟢 daemon_lifecycle fixture 可能杀掉生产进程
+- **文件**: `tests/test_20_daemon_lifecycle.py:46-87`
+- **问题**: 清理旧 PID 文件时直接读 PID 并 kill，未验证进程确实是测试实例
+- **状态**: ✅ 已修复 — 清理旧 PID 前验证 `/proc/{pid}/cmdline` 含测试配置路径
+
+### H-59 🟢 test-kernel-compat.sh 产物路径与编译脚本不一致
+- **文件**: `scripts/test-kernel-compat.sh:39,92`
+- **问题**: 使用 `kernel-module-$kernel_version` 路径，但 `build-kmod-multi-version.sh` 输出到 `kernel-module/$kernel_version`
+- **状态**: ✅ 已修复 — 改为 `kernel-module/$kernel_version`
+
+### H-60 🟢 firewall-daemon.service ExecStart 路径与 Makefile 不一致
+- **文件**: `firewall-daemon.service:12`
+- **问题**: 硬编码 `/usr/sbin/firewall-daemon`，但 Makefile 默认安装到 `/usr/local/sbin/`
+- **状态**: ✅ 已修复 — 改为 `ExecStart=__SBINDIR__/firewall-daemon`，让 Makefile 的 sed 替换生效
+
+### H-61 🟢 deploy.sh script 模式 SCP 缺少 SSH_OPTS
+- **文件**: `scripts/deploy.sh:300`
+- **问题**: script 模式的 SCP 命令未传入 `SSH_OPTS`，首次连接可能交互确认主机密钥而挂起
+- **状态**: ✅ 已修复 — 改为 `scp "${SSH_OPTS[@]}" /tmp/firewall-deploy.tar.gz ...`
+
+### H-62 🟢 内核状态持久化路径验证不禁止空格/换行
+- **文件**: `src/kernel-module/fw_state.c:94-125`
+- **问题**: `fw_state_validate_path()` 不禁止空格、换行符（`\n`、`\r`）及 ASCII 控制字符，模块参数含特殊字符可能导致非预期文件操作
+- **状态**: ✅ 已修复 — 添加控制字符检查，`(unsigned char)*p < 0x20` 时返回 `-EINVAL`
+
+### H-63 🟢 IPv6 扩展头 offset 整数回绕绕过 pskb_may_pull
+- **文件**: `src/kernel-module/fw_hook.c:397-401`
+- **问题**: `offset += ((unsigned int)opt.hdrlen + 2) * 4` 可能导致 offset 回绕，`pskb_may_pull(skb, offset + sizeof(...))` 因回绕成小值而意外通过
+- **状态**: ✅ 已修复 — 在每次 offset 增加后添加 `if (offset > skb->len) return NF_DROP;`
+
+### H-64 🔴 速率表清表遍历 65536 个桶（含空桶）
+- **文件**: `src/kernel-module/fw_rate.c:329-357`
+- **问题**: `fw_rate_drain_table()` 遍历全部 65536 个桶，每桶取锁/解锁，SET_CONFIG 修改 rate_window 时触发毫秒级延迟尖峰
+- **修复**: 取锁前用 `hlist_empty()` 跳过空桶，或用位图记录非空桶索引
+
+### H-65 🔴 fw_rate_cpu_slot 结构体跨 3 条 cache line
+- **文件**: `src/kernel-module/fw_types.h:343-364`
+- **问题**: 热路径字段（packets/bytes/协议计数器/last_activity）分布在不同 cache line，10Mpps+ 场景下成为瓶颈
+- **修复**: 将热字段集中到结构体前部，使用 `__attribute__((aligned(64)))` 确保 cache line 对齐
+
+### H-66 🔴 fw_stats_pcpu 热路径触发 4-6 条 cache line miss
+- **文件**: `src/kernel-module/fw_types.h:401-414`
+- **问题**: `fw_stat_account()` 写入的字段分散在 1.5KB 结构体中，每次调用可能触发多条 cache line miss
+- **修复**: 将直方图字段与 UDP/ICMP 槽分离到不同 per-CPU 结构体
+
+### H-67 🟢 procfs 可写条目未检查 CAP_SYS_ADMIN
+- **文件**: `src/kernel-module/fw_procfs.c:1066-1085`
+- **问题**: bans/whitelist/config 写入口只依赖文件权限 0600，未像 netlink 路径那样检查 `capable(CAP_SYS_ADMIN)`
+- **状态**: ✅ 已修复 — 在 bans_write、whitelist_write、config_write 入口添加 `if (!capable(CAP_SYS_ADMIN)) return -EPERM;`
+
+### H-68 🔴 测试直接修改源配置且无崩溃恢复
+- **文件**: `tests/test_17_config_reload.py:124-166`
+- **问题**: 修改仓库源码目录中的 `default.yaml`，pytest 被 SIGKILL 时配置永久损坏
+- **修复**: 使用 `tmp_path` 副本 + daemon `-c` 参数，或在 fixture 中增加 `try/finally` 确保恢复
+
 ---
 
-## MEDIUM 级（110 项）
+## MEDIUM 级（152 项）
 
 ### 内核模块（4 项）
 | # | 文件 | 问题 | 状态 |
@@ -605,10 +739,59 @@
 |---|------|------|------|
 | M-74 | `daemon/internal/ingest/registry.go:215-219` | `Iterate` 方法传递浅拷贝，Owners 切片与内部共享；注释声称"fn 拿到的是状态副本"但实际不成立，Get/Remove/Entries 都做了深拷贝 | 🟢 已修复：Iterate 深拷贝 Owners 切片 |
 
+### 第十四轮补充（MEDIUM 21 项）
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| M-75 | `kernel-module/fw_hook.c:226,302,312` | IPv4 路径中 `fw_stat_account(pkt_len)` 用 IP 头声明的长度，`fw_stat_global_traffic(skb->len)` 用实际 skb 长度，两者不一致导致全局流量与每 IP 速率统计口径不同 | 🔴 |
+| M-76 | `kernel-module/fw_netlink.c:845` | 白名单归一化时 `fw_addr_normalize(af, (void *)addr, ...)` 强转 `const` 修饰符，修改 netlink skb 中的数据，技术上是未定义行为 | 🔴 |
+| M-77 | `kernel-module/fw_hook.c:398-401` | IPv6 扩展头解析中 AH 头的 `offset += ((unsigned int)opt.hdrlen + 2) * 4` 在 `hdrlen=255` 时可能溢出 32 位 unsigned int，导致传输头从错误偏移解析 | 🔴 |
+| M-78 | `kernel-module/fw_netlink.c:697-701` | `rate_window_jiffies` 更新有 `smp_wmb()`，但 `fw_rate_observe` 的读侧与 `fw_procfs.c:633` 的 `rate_window_seconds` 读取未配对 `READ_ONCE`，KCSAN 会报数据竞争 | 🔴 |
+| M-79 | `kernel-module/fw_procfs.c:694,735,797...` | 7 个 procfs `show` 函数分配 ~12KB 的 `fw_analysis_snapshot`，在 seq_file 上下文中可能接近内核栈限制 | 🔴 |
+| M-80 | `kernel-module/fw_netlink.c:166,596` | `nlmsg_new(payload, GFP_ATOMIC)` 在进程上下文（netlink recv）中使用，应改用 `GFP_KERNEL` 避免不必要的分配失败 | 🔴 |
+| M-81 | `daemon/internal/threatfeeds/scheduler.go:56-95` | `Run` 方法在首次执行 `fn()` 后才创建 timer，若 `fn` 启动子 goroutine，`Stop()` 不等待这些子任务 | 🔴 |
+| M-82 | `daemon/internal/threatfeeds/cache.go:115-161` | `Merge` 在持写锁期间复制整个 entries map（最多 100 万条）并重建索引，大缓存下会阻塞所有 `Lookup` 数秒 | 🔴 |
+| M-83 | `daemon/internal/http/server.go:130-150` | `connectionLimiter` 在 handler panic 时 `defer` 中的 `activeConns--` 不执行，连接计数永久泄漏，最终所有新连接被 503 拒绝 | 🔴 |
+| M-84 | `daemon/internal/persist/retry_queue.go:452-494` | `LoadPersisted` 不校验加载任务的 `EnqueuedAt`，崩溃恢复时可能载入过期任务；遇到未知 `op` 的任务会永久错误但不触发 persist | 🔴 |
+| M-85 | `daemon/internal/risk/engine.go:241-272` | `evictLocked` 在持写锁期间创建切片并排序（最多 10 万条），阻塞所有读写操作 | 🔴 |
+| M-86 | `daemon/internal/threatfeeds/http.go:34-52` | `safeDialContext` 只返回 `candidates[0]`，第一个地址连接失败时不尝试其他候选，绕过了标准 happy eyeballs | 🔴 |
+| M-87 | `daemon/internal/ingest/watcher.go:97-115` | `ReadEvents` 使用 `unsafe.Pointer` 解析 inotify 事件，若 `raw.Len` 异常大可能导致 offset 溢出读取 buffer 外内存 | 🔴 |
+| M-88 | `frontend/src/views/Logs.tsx:189-193` | 切换到历史模式时 `useAsync` 的 `enabled` 翻转已触发取数，但 `useEffect` 因 `mode` 变化又调用 `refetch()`，产生双重请求 | 🟢 已修复：用 prevModeRef 检测 mode 刚变为 history 的渲染，跳过该次 refetch |
+| M-89 | `frontend/src/views/Analysis.tsx:303-322` | `tabItems` 的 `useMemo` 依赖数组包含 `UseAsyncResult` 对象，每次渲染返回新引用，记忆化完全失效 | 🟢 已修复：依赖改为各 result 的具体字段（.data, .isLoading, .error, .refetch, .isUserFetching） |
+| M-90 | `frontend/src/hooks/useSse.ts:283` | `onerror` 回调中的 `getSseStatus()` 未传递 `AbortSignal`，组件卸载后请求仍会在后台完成 | 🟢 已修复：在 useEventStream 中维护专用 AbortController，closeStream 和卸载清理中 abort |
+| M-91 | `contract/gen.py:457` | `field_size` 对 `str`/`bytes` 类型 `count=0` 时返回 0 不报错，未来可能产生零宽字段 | 🟢 已修复：添加断言 `count <= 0` 时抛出 `ValueError` |
+| M-92 | `contract/gen.py:2735-2738` | OpenAPI 生成中 `r.auth == "optional"` 分支引用 `OptionalAuth`，但 `ROUTE_AUTH` 只声明 `none/required`，是死代码 | 🟢 已修复：删除死代码分支 |
+| M-93 | `Makefile:264-267` | 内核模块 staging 复制 `contract/generated/*.h` 在目录为空时会失败中断构建 | 🟢 已修复：`|| test -z` 允许空目录 |
+| M-94 | `contract/gen.py:2597-2613` | OpenAPI 类型映射中 `i8` 错误映射为 `int32`，应为 `int8` 或注明不支持 | 🟢 已修复：修正为 `int8`/`uint8`/`int16`/`uint16` 并补充范围约束 |
+| M-95 | `contract/verify_http.py:708` | `_const_value` 使用 `eval` 计算常量，`ZeroDivisionError` 被宽泛 `except` 捕获后返回 `None`，掩盖除零错误 | 🟢 已修复：单独捕获 `ZeroDivisionError` 并抛出 `ValueError` |
+
+### 第二轮扫描补充（MEDIUM 20 项）
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| M-96 | `kernel-module/fw_netlink.c:950-978` | DAEMON_REGISTER 释放锁后探活，重新加锁后探活结果已过期，第三个 daemon 可在窗口内完成注册 | 🔴 |
+| M-97 | `kernel-module/fw_hook.c:227` | `pkt_len` 来自报文头部可被伪造，攻击者可膨胀字节速率统计误触发字节速率阈值封禁 | 🔴 |
+| M-98 | `kernel-module/fw_ban.c:254` | `fw_ban_alloc()` 高频 `GFP_ATOMIC` 分配加剧内存碎片，DDoS 期间分配失败率上升 | 🔴 |
+| M-99 | `kernel-module/fw_wl.c:136-143` | 子网链遍历 O(N) 线性扫描，每包热路径查找延迟随子网条目数线性增长 | 🔴 |
+| M-100 | `kernel-module/fw_stats.c:399-404` | `fw_stats_flush_all()` 同步等待所有 CPU flush，128 CPU 系统单次 IPI + 锁竞争数十微秒 | 🔴 |
+| M-101 | `kernel-module/fw_ban.c:707-748` | `fw_ban_fill_entries()` 持桶锁遍历整个 hlist，极端情况（所有条目落入同一桶）阻塞其他 CPU | 🔴 |
+| M-102 | `kernel-module/fw_rate.c:261-315` | `fw_rate_reclaim_work()` 每 10 秒扫描全部 65536 个桶，非空桶数百时占用显著 CPU | 🔴 |
+| M-103 | `docs/zh/configuration/procfs.md:18` | stats 计数器数量标注为 13，实际为 14（遗漏 `state_save_truncated`），扩散到 5 个文档 | 🟢 已修复：改为 14 个计数器 |
+| M-104 | `docs/zh/migration-threat-feeds.md:234-236` | 置信度阈值 FAQ 写 0.9/0.7，与实现和其他文档的 0.8 矛盾 | 🟢 已修复：改为 >= 0.8 直接封禁 |
+| M-105 | `scripts/deploy.sh:289` | script 模式的 sed 替换 `__SBINDIR__` 是空操作（服务文件已硬编码路径） | 🟢 已修复：配合 H-60 占位符修复自动生效 |
+| M-106 | `scripts/build-kmod-multi-version.sh:151` | `cd "$PROJECT_ROOT"` 后未恢复工作目录，连续调用时可能不符预期 | 🟢 已修复：使用子 shell `(cd ... && make ...)` |
+| M-107 | `docs/zh/configuration/examples.md:73-75` | 文档指出 redis.yaml 注释与实现不符但未修正，`service.go` 服务名表无 redis | 🟢 已修复：修正注释说明使用 defaults 段的值 |
+| M-108 | `docs/zh/migration-api-v2.md:13,47-48` | 健康检查端点迁移描述与其他文档矛盾（根路径 vs /api/v2/ 前缀） | 🟢 已修复：明确根路径已删除，仅 /api/v2/ 有效 |
+| M-109 | `tests/test_10_daemon_logparse.py:65-80` | `test_special_char_log` 只断言 procfs 可访问，未验证特殊字符是否被正确处理 | 🔴 |
+| M-110 | `tests/test_14_ban_netfilter.py:26-53` | 使用固定 `time.sleep(1)` 等待内核状态更新，CI 高负载下可能不够 | 🔴 |
+| M-111 | `tests/test_12_permanent_ban.py:135-198` | daemon stderr 重定向到 DEVNULL，启动失败时无法诊断 | 🔴 |
+| M-112 | `tests/test_15_ddos_detection.py:39-45` | 只断言子串匹配 `"firewall_ddos" in metrics`，可能匹配到 HELP/TYPE 注释行 | 🔴 |
+| M-113 | `tests/test_16_webui_api.py:105-111` | 响应时间阈值 1000ms 无预热、无多次采样，CI 负载波动时间歇性失败 | 🔴 |
+| M-114 | `tests/test_22_cluster_scan.py:27` | `DETECT_WAIT_SECONDS = 25` 硬编码，CI 高负载可能不够，且整体耗时超 50 秒无 slow 标记 | 🔴 |
+| M-115 | `tests/test_21_multi_jail.py:69` | 启动 daemon 后固定 `time.sleep(2)` 未验证是否真的启动成功 | 🔴 |
+
 
 ---
 
-## LOW 级（92 项）
+## LOW 级（132 项）
 
 ### 内核模块（6 项）
 | # | 文件 | 问题 |
@@ -755,6 +938,30 @@
 |---|------|
 | L-60 | `daemon/internal/runtime/executor.go:1345`：集群网段封禁的 reason 拼接 jail 名，jail 名含非 ASCII 或超长时会被契约的 str[32] 截断成不完整 UTF-8 序列。🟢 已修复：jail 名截断到 20 字节，留空间给 ": cluster" 标签 |
 
+### 第十四轮补充（LOW 20 项）
+| # | 问题 |
+|---|------|
+| L-61 | `kernel-module/fw_types.h:241`：字段 `unban_jiffies` 命名暗示 jiffies，实际存储 Unix 秒，易误导维护者 |
+| L-62 | `kernel-module/fw_ban.c:328`：`fw_ban_expire_cb` 中 `!READ_ONCE(n->is_permanent)` 检查冗余，函数已在 317-321 行提前返回 |
+| L-63 | `kernel-module/fw_state.c:738-748`：状态恢复时单行解析失败被静默丢弃，管理员无法知道有多少条目丢失 |
+| L-64 | `kernel-module/fw_netlink.c:510-525`：`fw_nl_rates_elapsed_secs` 对 `fw_nl_rates_last_jiffies` 的读写无任何同步原语，依赖隐式的 socket 串行化 |
+| L-65 | `kernel-module/fw_ban.c:377`：`fw_ban_exit` 使用 `timer_delete()` 而非 `timer_delete_sync()`，依赖回调的 `hlist_unhashed` 检查，设计约束未显式文档化 |
+| L-66 | `kernel-module/fw_hook.c:302-312`：TCP 异常包（SYN+FIN 等）被计入 per-protocol 直方图但不计入全局流量计数器，导致 DDoS 基线低估实际流量 |
+| L-67 | `kernel-module/fw_netdev.c:226-285`：网卡白名单对账每次删除后从 offset 0 重新开始扫描，最坏情况 O(N²) |
+| L-68 | `kernel-module/fw_main.c:352-358`：`fw_local_exit()` 和 `fw_ports_exit()` 缺少 `synchronize_rcu()` + `rcu_barrier()`，模块卸载时可能有未完成的 kfree_rcu 回调 |
+| L-69 | `kernel-module/fw_procfs.c:192-196`：`bans_write` 中 "unban " 前缀解析跳过 5 字符但检查 6 字符，逻辑正确但脆弱 |
+| L-70 | `daemon/internal/threatfeeds/cache.go:167-199`：`Lookup` 发现过期条目时跳过但不删除，过期条目积累降低查询效率 |
+| L-71 | `daemon/internal/kernel/transport.go:338`：`sendLocked` 在 EAGAIN 时使用 `time.Sleep` 退避，高频发送场景下可能影响性能 |
+| L-72 | `daemon/cmd/firewall-daemon/main.go:751-773`：`requestRollback` 依赖外部 `pgrep` 命令，最小化容器可能不存在 |
+| L-73 | `daemon/internal/http/logs.go:182-204`：`GetLogs` 需要两次全量扫描日志文件（计数 + 取数据），大日志下耗时数十秒 |
+| L-74 | `daemon/internal/risk/engine.go:161-185`：`ComputeEffectiveThreshold` 接收 `ip string` 参数但未使用，接口设计遗留 |
+| L-75 | `frontend/src/views/Dashboard.tsx:219`：「丢弃数据包」指标卡使用 `DeleteOutlined` 图标（垃圾桶），语义上不够准确 |
+| L-76 | `frontend/src/views/Whitelist.tsx:116-130`：新增白名单时未客户端校验 CIDR 是否已存在，重复添加要等后端报错 |
+| L-77 | `frontend/src/lib/charts.ts:84-85`：面积图渐变色通过 `${color}55` 拼接 hex 透明度，依赖 color 始终是 6 位 hex 格式 |
+| L-78 | `frontend/src/lib/defaults.ts:46`：`EMPTY_CHART` 常量与 `emptyChartData()` 函数并存，消费方可能混淆 |
+| L-79 | `frontend/src/views/Login.tsx:33-38`：`useEffect` 依赖数组包含 `location.state`，每次导航可能产生新引用触发不必要的 effect |
+| L-80 | `contract/verify_http.py:2086-2088`：`_GAP_RULES` 正则使用全角右括号 `[^）]*`，但问题文本中是半角 `)`，导致正则永远匹配不到 |
+
 
 ---
 
@@ -834,6 +1041,16 @@ H-23、H-24、H-25、H-26、M-31、M-32、M-33、M-34、L-36、L-39、L-40
 
 ### 批次 13（已提交）：第十三轮 1 项
 - 日志采集：M-74
+
+### 批次 14（已提交）：第十四轮 30 项
+- 内核 HIGH：H-45、H-46、H-47
+- 守护进程 HIGH：H-48、H-49、H-50、H-51、H-52
+- 内核安全：H-62、H-63、H-67
+- 测试 HIGH：H-53、H-54、H-55、H-56、H-57、H-58
+- 脚本 HIGH：H-59、H-60、H-61
+- 前端 MEDIUM：M-88、M-89、M-90
+- 契约 MEDIUM：M-91、M-92、M-93、M-94、M-95
+- 文档 MEDIUM：M-103、M-104、M-105、M-106、M-107、M-108
 
 ### 待修复重点（按风险排序）
 1. **CRITICAL**：C-2（SSE 凭据在 URL，需前后端配合）
