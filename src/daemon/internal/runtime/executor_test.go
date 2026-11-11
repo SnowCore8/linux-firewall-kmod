@@ -245,6 +245,47 @@ func TestRotationIsDetectedAndNewFileIsReadFromStart(t *testing.T) {
 	}
 }
 
+// 轮转摘源前必须补读旧 fd 未消费的尾部，且顺序是「先喂尾部、后 flush 半行」：
+// 否则挂起的半行会被单独 flush，尾部剩余半行也成不了一行。
+func TestRotationDrainsOldTailBeforeFlushingHalfLine(t *testing.T) {
+	dir := tempLogDir(t)
+	defer os.RemoveAll(dir)
+	log := filepath.Join(dir, "auth.log")
+	if err := os.WriteFile(log, nil, 0o644); err != nil {
+		t.Fatalf("写日志失败: %v", err)
+	}
+
+	ex := fixture(t, log, "inbound-rotation-drain-test", &fakeStats{}, nil)
+	defer ex.Close()
+
+	id, _, _, ok := ex.entryForPath(log)
+	if !ok {
+		t.Fatal("应已登记该日志源")
+	}
+
+	// 先把半行读进分割器（无换行，尚不成行）。
+	appendFile(t, log, []byte("Failed password for root from 203.0.113."))
+	ex.drainSource(id)
+	if got := ex.pipeline.Counters().IPsExtracted; got != 0 {
+		t.Fatalf("半行不应提取出 IP: %d", got)
+	}
+
+	// 轮转前写入残余与下一整行，均未被常规读取消费。
+	appendFile(t, log, []byte("99 port 22\nFailed password for root from 198.51.100.23 port 22\n"))
+	if err := os.Rename(log, filepath.Join(dir, "auth.log.1")); err != nil {
+		t.Fatalf("改名失败: %v", err)
+	}
+	if err := os.WriteFile(log, nil, 0o644); err != nil {
+		t.Fatalf("建新文件失败: %v", err)
+	}
+
+	ex.handleRotation(id, log)
+
+	if got := ex.pipeline.Counters().IPsExtracted; got != 2 {
+		t.Fatalf("尾部半行补全 + 后续整行应提取 2 个 IP，实得 %d", got)
+	}
+}
+
 // 禁用某个 jail 时其监视被摘除，重新启用后恢复。
 func TestDisabledJailLosesItsWatchesAndRegainsThem(t *testing.T) {
 	dir := tempLogDir(t)

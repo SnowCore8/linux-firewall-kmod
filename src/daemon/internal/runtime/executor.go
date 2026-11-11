@@ -68,6 +68,9 @@ const (
 	// 持续写入时无上限地追会让单线程执行体被一个源钉住，故给一批上限（64 × 256 KiB
 	// ≈ 16 MiB，远超一次溢出能堆出来的常规积压），剩下的等下一个事件接着读。
 	overflowCatchupBatches = 64
+	// rotationDrainBatches 是轮转摘源前补读旧 fd 尾部的最多批数，防止异常大的
+	// 旧文件把单线程主循环钉住。
+	rotationDrainBatches = 64
 )
 
 // BanSink 是封禁下发的副作用汇聚点。
@@ -721,8 +724,8 @@ type logSource struct {
 	path string
 }
 
-// handleRotation 处理轮转（MOVE_SELF / DELETE_SELF）：flush 半行 → 摘旧 watch → 按
-// 当前路径重挂（新 inode）并从文件头读起；路径暂不可见时登记为待重挂。
+// handleRotation 处理轮转（MOVE_SELF / DELETE_SELF）：补读旧尾 → flush 半行 → 摘旧
+// watch → 按当前路径重挂（新 inode）并从文件头读起；路径暂不可见时登记为待重挂。
 func (e *InboundExecutor) handleRotation(id ingest.SourceID, path string) {
 	entry, ok := e.registry.Get(id)
 	if !ok {
@@ -743,7 +746,16 @@ func (e *InboundExecutor) handleRotation(id ingest.SourceID, path string) {
 		e.stats.IncLogRotations()
 	}
 
-	// 旧文件最后那半行仍是证据：先 flush 再摘。
+	// 旧文件最后未读的尾部仍是证据：先按 jail 喂入尾部字节，再 flush 半行。
+	// 顺序不能反——先 flush 会把旧半行单独成行，尾部随后又与新文件拼在一起或
+	// 单独成行，两者都会丢掉或伪造内容。
+	if reader := e.readers[id]; reader != nil {
+		if tail := reader.DrainTail(rotationDrainBatches); len(tail) > 0 {
+			for _, jail := range jails {
+				e.feed(jail, id, tail, false)
+			}
+		}
+	}
 	for _, jail := range jails {
 		e.flushPendingLine(jail, id)
 	}

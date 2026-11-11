@@ -51,13 +51,14 @@ func NewRule(name, pattern string) (*Rule, error) {
 //
 // 捕获组从后往前扫描：先过长度窗口与首字节 hex 检查（廉价），再做完整校验（昂贵）。
 // 倒序是为了拿到最具体的那个（整体匹配组常在组 0，用户名组可能含数字，最右的才是
-// 来源地址）。
+// 来源地址）。扫到组 0 是必要回退：没有捕获组的规则（如整行就是一个 IP 的
+// `(?:\d{1,3}\.){3}\d{1,3}`）只能靠整体匹配命中；组 0 含额外文本时完整校验会拒绝它。
 func (r *Rule) tryMatch(line string) (netip.Addr, bool) {
 	groups := r.compiled.FindStringSubmatchIndex(line)
 	if groups == nil {
 		return netip.Addr{}, false
 	}
-	for g := len(groups)/2 - 1; g >= 1; g-- {
+	for g := len(groups)/2 - 1; g >= 0; g-- {
 		start, end := groups[2*g], groups[2*g+1]
 		if start < 0 || end < 0 {
 			continue

@@ -90,6 +90,75 @@ func TestOversizedUnterminatedTailIsDroppedDeterministically(t *testing.T) {
 	}
 }
 
+// 超长行跨读批次时，后续残余必须一直丢弃到真正的换行：否则剩余半行会在下一批
+// 被当成新行输出，伪造出一个 IP。
+func TestOversizedLineAcrossBatchesStaysDiscardedUntilNewline(t *testing.T) {
+	s := NewLineSplitter()
+	var st SplitStats
+
+	first := bytes.Repeat([]byte{'z'}, MaxLineBytes-1)
+	if got := collect(s, first, &st); len(got) != 0 || st.Oversized != 0 {
+		t.Fatalf("差 1 字节到上限时仍是半行: lines=%q oversized=%d", got, st.Oversized)
+	}
+	if s.Pending() != MaxLineBytes-1 {
+		t.Fatalf("Pending=%d, want %d", s.Pending(), MaxLineBytes-1)
+	}
+
+	// 第二批无换行：触发超长丢弃并入「丢弃至换行」状态。
+	if got := collect(s, bytes.Repeat([]byte{'z'}, 128), &st); len(got) != 0 || st.Oversized != 1 || s.Pending() != 0 {
+		t.Fatalf("触发超长丢弃: lines=%q oversized=%d pending=%d", got, st.Oversized, s.Pending())
+	}
+
+	// 第三批仍无换行：整批丢弃，不重复计超长，也不产出伪造行。
+	fake := []byte("Failed password for root from 198.51.100.7")
+	if got := collect(s, fake, &st); len(got) != 0 || st.Oversized != 1 {
+		t.Fatalf("无换行的后续批次必须整批丢弃: lines=%q oversized=%d", got, st.Oversized)
+	}
+
+	// 换行出现后恢复正常：前导残余属于超长行，只有换行后的内容成行。
+	assertLines(t, collect(s, []byte(" tail\nok\n"), &st), []byte("ok"))
+	if st.Oversized != 1 || st.Emitted != 1 {
+		t.Fatalf("Oversized=%d Emitted=%d, want 1 / 1", st.Oversized, st.Emitted)
+	}
+}
+
+// 若换行与后续正常行落在同一批，超长行只计一次，正常行照常交出。
+func TestOversizedLineEndingInLaterBatchEmitsFollowingLines(t *testing.T) {
+	s := NewLineSplitter()
+	var st SplitStats
+	collect(s, bytes.Repeat([]byte{'z'}, MaxLineBytes-1), &st)
+	assertLines(t, collect(s, []byte("zzz\nnext\n"), &st), []byte("next"))
+	if st.Oversized != 1 || st.Emitted != 1 {
+		t.Fatalf("Oversized=%d Emitted=%d, want 1 / 1", st.Oversized, st.Emitted)
+	}
+}
+
+// Flush 复位丢弃状态：关闭 / 轮转后不会把新文件内容继续当作超长行。
+func TestFlushResetsOversizedDiscardState(t *testing.T) {
+	s := NewLineSplitter()
+	var st SplitStats
+	collect(s, bytes.Repeat([]byte{'q'}, MaxLineBytes), &st)
+	if st.Oversized != 1 {
+		t.Fatalf("Oversized=%d, want 1", st.Oversized)
+	}
+
+	var out [][]byte
+	s.Flush(&st, func(line []byte) { out = append(out, append([]byte(nil), line...)) })
+	if len(out) != 0 {
+		t.Fatalf("超长行挂起部分不得交出: %q", out)
+	}
+	assertLines(t, collect(s, []byte("after\n"), &st), []byte("after"))
+}
+
+// Clear 同样复位丢弃状态。
+func TestClearResetsOversizedDiscardState(t *testing.T) {
+	s := NewLineSplitter()
+	var st SplitStats
+	collect(s, bytes.Repeat([]byte{'q'}, MaxLineBytes), &st)
+	s.Clear()
+	assertLines(t, collect(s, []byte("fresh\n"), &st), []byte("fresh"))
+}
+
 func TestFlushEmitsTailThenStaysEmpty(t *testing.T) {
 	s := NewLineSplitter()
 	var st SplitStats

@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -140,6 +141,124 @@ func TestTruncationResetsOffsetAndFlagsRotation(t *testing.T) {
 	}
 	if r.Offset() != 6 {
 		t.Fatalf("偏移应为 6，实得 %d", r.Offset())
+	}
+}
+
+// TestCopyTruncateFastRewriteBeyondOldOffsetIsDetected 覆盖 copytruncate 快写回：
+// 截断后立刻写回的内容超过旧偏移时 size 不再小于 offset，只能靠末尾指纹识别。
+func TestCopyTruncateFastRewriteBeyondOldOffsetIsDetected(t *testing.T) {
+	dir := newTempDir(t)
+	path := filepath.Join(dir, "a.log")
+	old := bytes.Repeat([]byte("old-line-"), 40) // 360 字节，足以建立 64 字节指纹
+	if err := os.WriteFile(path, old, 0o644); err != nil {
+		t.Fatalf("写文件失败：%v", err)
+	}
+
+	r := NewSourceReader(nil)
+	r.OpenAtEnd(path)
+	if int64(len(old)) != r.Offset() {
+		t.Fatalf("偏移应为 %d，实得 %d", len(old), r.Offset())
+	}
+
+	fresh := append(bytes.Repeat([]byte("fresh-line-"), 50), '\n')
+	if err := os.WriteFile(path, fresh, 0o644); err != nil {
+		t.Fatalf("截断写回失败：%v", err)
+	}
+	if int64(len(fresh)) <= r.Offset() {
+		t.Fatalf("测试前提：新内容（%d）必须长于旧偏移（%d）", len(fresh), r.Offset())
+	}
+
+	chunk, err := r.ReadNew(path)
+	if err != nil {
+		t.Fatalf("读失败：%v", err)
+	}
+	if !chunk.Rotated {
+		t.Fatal("截断后写回超过旧偏移必须置 Rotated")
+	}
+	if !bytes.Equal(chunk.Bytes, fresh) {
+		t.Fatalf("截断后应从 0 重读新内容，实得 %d 字节", len(chunk.Bytes))
+	}
+	if r.Offset() != int64(len(fresh)) {
+		t.Fatalf("偏移应为 %d，实得 %d", len(fresh), r.Offset())
+	}
+}
+
+// TestNormalAppendDoesNotTripFingerprintCheck 保证指纹只用于识别截断：正常追加
+// 不产生额外的 Rotated。
+func TestNormalAppendDoesNotTripFingerprintCheck(t *testing.T) {
+	dir := newTempDir(t)
+	path := filepath.Join(dir, "a.log")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("seed-"), 32), 0o644); err != nil {
+		t.Fatalf("写文件失败：%v", err)
+	}
+
+	r := NewSourceReader(nil)
+	r.OpenAtEnd(path)
+
+	for _, line := range []string{"first\n", "second-line\n", "third-line-with-more-bytes\n"} {
+		appendFile(t, path, []byte(line))
+		chunk, err := r.ReadNew(path)
+		if err != nil {
+			t.Fatalf("读失败：%v", err)
+		}
+		if chunk.Rotated {
+			t.Fatalf("正常追加不应置 Rotated（读到 %q）", chunk.Bytes)
+		}
+		if string(chunk.Bytes) != line {
+			t.Fatalf("实得 %q，期望 %q", chunk.Bytes, line)
+		}
+	}
+}
+
+// TestDrainTailReadsOldFDBeforeSwitch 覆盖轮转摘源前的尾部补读：只消费当前 fd
+// 的未读字节，不依赖路径是否还存在。
+func TestDrainTailReadsOldFDBeforeSwitch(t *testing.T) {
+	dir := newTempDir(t)
+	path := filepath.Join(dir, "a.log")
+	if err := os.WriteFile(path, []byte("seen\n"), 0o644); err != nil {
+		t.Fatalf("写文件失败：%v", err)
+	}
+
+	r := NewSourceReader(nil)
+	r.OpenAtEnd(path)
+	appendFile(t, path, []byte("unread-tail\n"))
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("删除失败：%v", err)
+	}
+
+	tail := r.DrainTail(4)
+	if string(tail) != "unread-tail\n" {
+		t.Fatalf("实得 %q", tail)
+	}
+	if r.Offset() != 17 {
+		t.Fatalf("偏移应为 17，实得 %d", r.Offset())
+	}
+	if again := r.DrainTail(4); len(again) != 0 {
+		t.Fatalf("读干后不应再有字节，实得 %d", len(again))
+	}
+}
+
+// TestDrainTailRespectsBatchLimit 覆盖批数上限：单次补读最多交出 maxBatches 批。
+func TestDrainTailRespectsBatchLimit(t *testing.T) {
+	dir := newTempDir(t)
+	path := filepath.Join(dir, "a.log")
+	appendFile(t, path, nil)
+
+	r := NewSourceReader(nil)
+	r.OpenAtEnd(path)
+	size := BatchReadMax + 1024
+	appendFile(t, path, make([]byte, size))
+
+	first := r.DrainTail(1)
+	if len(first) != BatchReadMax {
+		t.Fatalf("单批应读出 %d 字节，实得 %d", BatchReadMax, len(first))
+	}
+	rest := r.DrainTail(4)
+	if len(rest) != 1024 {
+		t.Fatalf("剩余应为 1024 字节，实得 %d", len(rest))
+	}
+	if total := len(first) + len(rest); total != size {
+		t.Fatalf("补读总量 = %d，期望 %d", total, size)
 	}
 }
 

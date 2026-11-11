@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"log/slog"
@@ -12,6 +13,10 @@ import (
 
 // BatchReadMax 是单批读上限：平衡系统调用次数与内存占用。
 const BatchReadMax = 256 * 1024
+
+// rotationTailWindow 是 copytruncate 指纹窗口：同 inode 下比对上次读到的末尾
+// 64 字节，判断文件是否被截断后立刻写回超过旧偏移的新内容。
+const rotationTailWindow = 64
 
 // Chunk 是一轮读出的新字节。
 //
@@ -43,6 +48,11 @@ type SourceReader struct {
 	offset int64
 	// inode 是持有的 fd 对应的 inode；0 表示尚未取得（未打开）。
 	inode uint64
+	// tailPrint 是上次读到的末尾至多 64 字节，用于识别同 inode 的 copytruncate
+	// 快速写回（截断后立刻写回超过旧偏移，size 不再小于 offset）。
+	tailPrint [rotationTailWindow]byte
+	// tailPrintLen 是 tailPrint 中有效字节数。
+	tailPrintLen int
 }
 
 // NewSourceReader 新建未打开的读取器。logger 为 nil 时静默（测试与不需要日志的场景）。
@@ -74,6 +84,7 @@ func (r *SourceReader) OpenAtEnd(path string) {
 	r.fd = file
 	r.inode = inode
 	r.offset = size
+	r.captureTailPrint()
 }
 
 // Reset 丢弃当前 fd 与偏移，回到「未打开」状态（源被摘除时调用）。
@@ -84,6 +95,43 @@ func (r *SourceReader) Reset() {
 	r.fd = nil
 	r.inode = 0
 	r.offset = 0
+	r.tailPrintLen = 0
+}
+
+// DrainTail 从当前持有的 fd 按当前偏移继续读到 EOF（或偏移不再前进），最多
+// maxBatches 批，返回读出的字节。
+//
+// 用于轮转摘源前把旧文件最后的尾部交给判定：只读当前 fd，不 Lstat 路径、不切换
+// inode，因此新文件已存在时也不会与既有 inode-change 的 drain 路径重复读取。
+// 批数上限防止异常大的旧文件把单线程主循环钉住。
+func (r *SourceReader) DrainTail(maxBatches int) []byte {
+	if r.fd == nil || maxBatches <= 0 {
+		return nil
+	}
+	if _, err := r.fd.Seek(r.offset, io.SeekStart); err != nil {
+		return nil
+	}
+	var out []byte
+	for batch := 0; batch < maxBatches; batch++ {
+		n, err := r.fd.Read(r.buffer)
+		if n > 0 {
+			out = append(out, r.buffer[:n]...)
+			r.offset += int64(n)
+			r.updateTailPrint(r.buffer[:n])
+		}
+		if err != nil {
+			if errors.Is(err, unix.EINTR) {
+				// EINTR 不消耗批次额度：重试当前批。
+				batch--
+				continue
+			}
+			break
+		}
+		if n == 0 {
+			break
+		}
+	}
+	return out
 }
 
 // Close 释放长驻 fd。
@@ -117,6 +165,10 @@ func (r *SourceReader) ReadNew(path string) (Chunk, error) {
 		currentInode := inodeOf(meta)
 		truncation := r.inode != 0 && meta.Size() < r.offset
 		inodeChange := r.inode != 0 && currentInode != r.inode
+		if !truncation && !inodeChange {
+			// copytruncate 后立刻写回超过旧偏移时 size 不再变小：靠末尾指纹识别。
+			truncation = r.sameInodeRewritten(meta.Size())
+		}
 		switch {
 		case inodeChange && r.fd != nil:
 			// 尾巴可能跨多批：读满一批就先以 Rotated=false 返回，下一轮继续；
@@ -152,11 +204,14 @@ func (r *SourceReader) ReadNew(path string) (Chunk, error) {
 		}
 		r.fd = file
 		r.inode = inode
-		// 轮转后新文件从头读；首次打开（无历史）也从 0 读。
+		// 轮转后新文件从头读；首次打开（无历史）也从 0 读。指纹属于此前的
+		// 文件内容，不能跨 inode 复用。
 		if rotated {
 			r.offset = 0
+			r.tailPrintLen = 0
 		} else if size < r.offset {
 			r.offset = size
+			r.tailPrintLen = 0
 		}
 	}
 
@@ -196,6 +251,9 @@ func (r *SourceReader) ReadNew(path string) (Chunk, error) {
 	}
 
 	r.offset += int64(total)
+	if total > 0 {
+		r.updateTailPrint(r.buffer[:total])
+	}
 	return Chunk{Bytes: r.buffer[:total], Rotated: rotated}, nil
 }
 
@@ -215,6 +273,7 @@ func (r *SourceReader) drainOldFile() (tail []byte, eof bool) {
 		if n > 0 {
 			total += n
 			r.offset += int64(n)
+			r.updateTailPrint(r.buffer[total-n : total])
 			if total >= BatchReadMax-1 {
 				return r.buffer[:total], false
 			}
@@ -238,6 +297,53 @@ func (r *SourceReader) closeOldFile() {
 		_ = r.fd.Close()
 		r.fd = nil
 	}
+}
+
+// updateTailPrint 把新读出的字节滚入末尾指纹，只保留最后 rotationTailWindow 字节。
+func (r *SourceReader) updateTailPrint(b []byte) {
+	if len(b) >= rotationTailWindow {
+		copy(r.tailPrint[:], b[len(b)-rotationTailWindow:])
+		r.tailPrintLen = rotationTailWindow
+		return
+	}
+	if r.tailPrintLen+len(b) > rotationTailWindow {
+		drop := r.tailPrintLen + len(b) - rotationTailWindow
+		copy(r.tailPrint[:], r.tailPrint[drop:r.tailPrintLen])
+		r.tailPrintLen -= drop
+	}
+	copy(r.tailPrint[r.tailPrintLen:], b)
+	r.tailPrintLen += len(b)
+}
+
+// captureTailPrint 在启动期从当前 fd 的末尾 pread 一次，建立初始指纹，
+// 使 OpenAtEnd 之后立即发生的 copytruncate 也能被识别。
+func (r *SourceReader) captureTailPrint() {
+	r.tailPrintLen = 0
+	if r.fd == nil || r.offset < rotationTailWindow {
+		return
+	}
+	n, err := r.fd.ReadAt(r.tailPrint[:], r.offset-rotationTailWindow)
+	if err == nil && n == rotationTailWindow {
+		r.tailPrintLen = rotationTailWindow
+	}
+}
+
+// sameInodeRewritten 报告同 inode 文件是否被 copytruncate 后写回：把上次读到的
+// 末尾 64 字节与当前文件同窗口比对，不一致即视为截断重写。offset 不足一个窗口
+// 或指纹未建立时无法判定，返回 false（正常追加永远不会触发）。
+func (r *SourceReader) sameInodeRewritten(size int64) bool {
+	if r.fd == nil || r.inode == 0 || r.tailPrintLen < rotationTailWindow {
+		return false
+	}
+	if r.offset < rotationTailWindow || size < r.offset {
+		return false
+	}
+	var probe [rotationTailWindow]byte
+	n, err := r.fd.ReadAt(probe[:], r.offset-rotationTailWindow)
+	if err != nil || n != rotationTailWindow {
+		return false
+	}
+	return !bytes.Equal(probe[:], r.tailPrint[:])
 }
 
 // openNoFollow 以 O_NOFOLLOW 打开并返回 (文件, inode, 大小)。

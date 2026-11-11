@@ -58,6 +58,45 @@ func TestSkipsInvalidRightmostCapture(t *testing.T) {
 	}
 }
 
+// 没有捕获组的规则必须回退到组 0（整体匹配），否则整行就是一个 IP 的模式永远
+// 解析不出来。
+func TestRuleWithoutCaptureGroupsMatchesWholeMatch(t *testing.T) {
+	r, err := NewRule("no-groups", `(?:\d{1,3}\.){3}\d{1,3}`)
+	if err != nil {
+		t.Fatalf("正则应可编译: %v", err)
+	}
+	rs := NewRuleSet("x", []*Rule{r})
+	addr, via, ok := rs.Parse("connection from 203.0.113.9 port 22")
+	if !ok || via != MatchViaRegex || addr != mustAddr(t, "203.0.113.9") {
+		t.Fatalf("组 0 回退应命中: ok=%v via=%v addr=%v", ok, via, addr)
+	}
+}
+
+// 组 0 含额外文本时完整校验必须拒绝，不能把「匹配片段」当成 IP。
+func TestWholeMatchWithExtraTextIsRejected(t *testing.T) {
+	r, err := NewRule("extra", `\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3} port`)
+	if err != nil {
+		t.Fatalf("正则应可编译: %v", err)
+	}
+	rs := NewRuleSet("x", []*Rule{r})
+	if addr, _, ok := rs.Parse("203.0.113.9 port 22"); ok {
+		t.Fatalf("组 0 含额外文本不应命中: addr=%v", addr)
+	}
+}
+
+// 有捕获组时组 0 是兜底而非优先：最右侧的合法捕获仍然先被选中。
+func TestRightmostCapturePreferredOverWholeMatch(t *testing.T) {
+	r, err := NewRule("prefer-capture", `from ([0-9.]+) via [0-9.]+`)
+	if err != nil {
+		t.Fatalf("正则应可编译: %v", err)
+	}
+	rs := NewRuleSet("x", []*Rule{r})
+	addr, _, ok := rs.Parse("from 10.0.0.1 via 192.168.1.1")
+	if !ok || addr != mustAddr(t, "10.0.0.1") {
+		t.Fatalf("应优先取捕获组: ok=%v addr=%v", ok, addr)
+	}
+}
+
 func TestFallbackKeywordPath(t *testing.T) {
 	rs := NewRuleSet("sshd", nil)
 	addr, via, ok := rs.Parse("Failed password for root from 172.16.0.1 port 22")

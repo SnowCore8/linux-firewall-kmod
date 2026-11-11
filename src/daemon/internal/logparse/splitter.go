@@ -1,5 +1,7 @@
 package logparse
 
+import "bytes"
+
 // MaxLineBytes 是单行硬上限。用 `>=` 判超长，因此恰好 8192 字节的行视为超长。
 const MaxLineBytes = 8192
 
@@ -17,6 +19,9 @@ type SplitStats struct {
 // 半行只与 A 文件的后续字节拼接。缓冲长驻，容量跨轮复用。
 type LineSplitter struct {
 	partial []byte
+	// discardUntilNewline 表示一个超长行尚未遇到换行。置位后后续批次必须先跳到
+	// 第一个 `\n` 之后；没有换行的批次整批丢弃，避免跨批次的残余半行被当成新行。
+	discardUntilNewline bool
 }
 
 // NewLineSplitter 新建分割器。
@@ -28,7 +33,10 @@ func NewLineSplitter() *LineSplitter {
 func (s *LineSplitter) Pending() int { return len(s.partial) }
 
 // Clear 丢弃挂起的半行。轮转 / 截断时调用：旧文件的半行不该与新文件的开头拼接。
-func (s *LineSplitter) Clear() { s.partial = s.partial[:0] }
+func (s *LineSplitter) Clear() {
+	s.partial = s.partial[:0]
+	s.discardUntilNewline = false
+}
 
 // Feed 喂入一批新字节，对每个完整行（不含换行符）调用一次 onLine。
 //
@@ -40,6 +48,19 @@ func (s *LineSplitter) Clear() { s.partial = s.partial[:0] }
 func (s *LineSplitter) Feed(data []byte, stats *SplitStats, onLine func(line []byte)) {
 	if len(data) == 0 {
 		return
+	}
+	if s.discardUntilNewline {
+		// 上一个超长行跨越了读批次：跳到它真正的换行之后才恢复成行。该行的
+		// Oversized 已在首次超限时计过，整批丢弃不再重复计数。
+		idx := bytes.IndexByte(data, '\n')
+		if idx < 0 {
+			return
+		}
+		s.discardUntilNewline = false
+		data = data[idx+1:]
+		if len(data) == 0 {
+			return
+		}
 	}
 	s.partial = append(s.partial, data...)
 
@@ -65,10 +86,11 @@ func (s *LineSplitter) Feed(data []byte, stats *SplitStats, onLine func(line []b
 	}
 
 	// 尾部自身已达上限：它既不可能再成行，也无法与后续字节拼成合法行，
-	// 确定性丢弃并记入 oversized。
+	// 确定性丢弃并记入 oversized。剩余部分属于同一物理行，须继续丢弃到换行。
 	if len(s.partial) >= MaxLineBytes {
 		s.partial = s.partial[:0]
 		stats.Oversized++
+		s.discardUntilNewline = true
 	}
 }
 
@@ -76,6 +98,8 @@ func (s *LineSplitter) Feed(data []byte, stats *SplitStats, onLine func(line []b
 //
 // 文件关闭 / 轮转 / 截断之前调用，避免丢掉最后一个不完整行。取出后缓冲保留容量。
 func (s *LineSplitter) Flush(stats *SplitStats, onLine func(line []byte)) {
+	// 文件关闭 / 轮转 / 截断意味着超长行不会再有后续字节：复位丢弃状态。
+	s.discardUntilNewline = false
 	if len(s.partial) == 0 {
 		return
 	}
