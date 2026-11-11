@@ -63,6 +63,11 @@ export function DataTable<T extends object>({
     />
   )
 
+  const rowKey = tableProps.rowKey
+  if (!rowKey && process.env.NODE_ENV === 'development') {
+    console.warn('DataTable: rowKey is required, using "_index" as fallback')
+  }
+
   let body: ReactNode
   if (isLoading && data == null) {
     body = <LoadingState variant="table" rows={skeletonRows} />
@@ -76,7 +81,7 @@ export function DataTable<T extends object>({
         loading={isFetching}
         sticky
         locale={{ emptyText: emptyNode }}
-        rowKey={tableProps.rowKey ?? ((_, index) => (index ?? 0).toString())}
+        rowKey={rowKey ?? '_index'}
       />
     )
   }

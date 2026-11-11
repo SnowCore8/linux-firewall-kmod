@@ -29,7 +29,7 @@ export default function Login() {
   const { isAuthenticated, isLoggingIn, login, error, failCount, threshold, lockoutRemaining, clearError } =
     useAuth()
 
-  // 已认证（含刷新后 sessionStorage 仍有令牌）→ 回到登录前想去的页面，没有则进概览
+  // 已认证（含刷新后 localStorage 仍有令牌）→ 回到登录前想去的页面，没有则进概览
   useEffect(() => {
     if (isAuthenticated) {
       const from = (location.state as { from?: string } | null)?.from

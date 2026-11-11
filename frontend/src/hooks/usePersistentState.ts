@@ -56,7 +56,12 @@ export function usePersistentState<T>(
   useEffect(() => {
     if (!syncTabs) return
     const onStorage = (e: StorageEvent) => {
-      if (e.key !== key || e.newValue === null) return
+      if (e.key !== key) return
+      if (e.newValue === null) {
+        // 其他 tab 删除了该键（如登出清除 token），回退到初始值
+        setValue(initialValue)
+        return
+      }
       try {
         const parsed = JSON.parse(e.newValue) as T
         setValue(parsed)
@@ -66,6 +71,8 @@ export function usePersistentState<T>(
     }
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
+    // initialValue 仅作为删除事件的回退值，不参与依赖（引用可能每渲染都变）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, syncTabs])
 
   return [value, set]

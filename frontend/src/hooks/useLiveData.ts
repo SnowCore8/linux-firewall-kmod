@@ -46,6 +46,23 @@ export interface LiveDataResult<T> {
   refetch: () => void
 }
 
+/** 浅比较：逐 key 用 Object.is，避免 JSON.stringify 的性能开销与 0/-0、key 顺序误判。 */
+function shallowEqual(a: any, b: any): boolean {
+  if (Object.is(a, b)) return true
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false
+
+  const keysA = Object.keys(a)
+  const keysB = Object.keys(b)
+  if (keysA.length !== keysB.length) return false
+
+  for (const key of keysA) {
+    if (!Object.prototype.hasOwnProperty.call(b, key) || !Object.is(a[key], b[key])) {
+      return false
+    }
+  }
+  return true
+}
+
 export function useLiveData<T>(options: LiveDataOptions<T>): LiveDataResult<T> {
   const { sseValue, sseSeq, rest, refreshInterval = 0, enabled = true } = options
 
@@ -56,9 +73,8 @@ export function useLiveData<T>(options: LiveDataOptions<T>): LiveDataResult<T> {
   const prevDataRef = useRef<T | null>(null)
   useEffect(() => {
     if (query.data != null) {
-      // 浅比较：JSON.stringify 对 API 响应足够安全，避免引用变化触发无意义序号推进
-      const changed = prevDataRef.current === null ||
-        JSON.stringify(prevDataRef.current) !== JSON.stringify(query.data)
+      // 浅比较：避免 JSON.stringify 的性能开销与 0/-0、key 顺序误判
+      const changed = prevDataRef.current === null || !shallowEqual(prevDataRef.current, query.data)
       if (changed) {
         prevDataRef.current = query.data
         setRestStamped({ data: query.data, seq: nextSeq() })

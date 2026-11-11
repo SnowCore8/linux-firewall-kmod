@@ -2,8 +2,9 @@
  * 认证凭据管理 —— 只管「令牌怎么存、怎么编码」，不碰网络。
  *
  * 约束（与守护进程的 HTTP Basic 对齐，迁移前后不变）：
- *   * 令牌 = `base64(username:password)`，存 `sessionStorage['firewall.access_token']`。
- *     用 sessionStorage 而非 localStorage：凭据只在当前标签页存活，关掉即走，缩小留存面。
+ *   * 令牌 = `base64(username:password)`，存 `localStorage['firewall.access_token']`。
+ *     用 localStorage 而非 sessionStorage：跨标签页共享凭据，配合 storage 事件实现
+ *     跨 tab 同步登出（一个 tab 登出后其它 tab 自动感知并登出）。
  *   * fetch 侧显式注入 `Authorization: Basic <token>`（见 client.ts）；EventSource 不能设
  *     请求头，改走 `?access_token=<token>`（见 endpoints.ts 的 SSE URL 构造）。
  *   * 登录成功与否由一次真实 API 探测决定（GET /api/v2/bans，见 endpoints.probeAuth），
@@ -14,7 +15,7 @@
 
 import { AUTH } from './contract'
 
-/** sessionStorage 里存放访问令牌的键名。 */
+/** localStorage 里存放访问令牌的键名。 */
 export const ACCESS_TOKEN_KEY = 'firewall.access_token'
 
 /**
@@ -34,9 +35,9 @@ export function encodeBasic(username: string, password: string): string {
 /** 读取当前令牌；未登录返回 null。 */
 export function getAccessToken(): string | null {
   try {
-    return sessionStorage.getItem(ACCESS_TOKEN_KEY)
+    return localStorage.getItem(ACCESS_TOKEN_KEY)
   } catch {
-    // 隐私模式下 sessionStorage 可能抛 SecurityError：按「无令牌」处理，不让整站崩
+    // 隐私模式下 localStorage 可能抛 SecurityError：按「无令牌」处理，不让整站崩
     return null
   }
 }
@@ -44,8 +45,8 @@ export function getAccessToken(): string | null {
 /** 写入令牌；传 null 等价于清除。 */
 export function setAccessToken(token: string | null): void {
   try {
-    if (token === null) sessionStorage.removeItem(ACCESS_TOKEN_KEY)
-    else sessionStorage.setItem(ACCESS_TOKEN_KEY, token)
+    if (token === null) localStorage.removeItem(ACCESS_TOKEN_KEY)
+    else localStorage.setItem(ACCESS_TOKEN_KEY, token)
   } catch {
     // 同上：存储不可用时静默降级（本次会话仍在内存里持有凭据由调用方决定）
   }

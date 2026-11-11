@@ -801,6 +801,7 @@ function PeriodicSection({ result, onOpenIp }: PeriodicSectionProps) {
       isFetching={result.isUserFetching}
       error={result.error}
       onRetry={result.refetch}
+      rowKey={(r) => `${r.ip}:${r.jail_name}`}
       columns={columns}
       expandable={{
         expandedRowRender: (record: PeriodicAttacker) =>
@@ -890,6 +891,7 @@ function CollabSection({ result, onOpenIp }: CollabSectionProps) {
       isFetching={result.isUserFetching}
       error={result.error}
       onRetry={result.refetch}
+      rowKey={(r) => `${r.jail_name}:${r.window_start}`}
       columns={columns}
       expandable={{
         expandedRowRender: (record: CollaborativeAttack) =>
@@ -1582,6 +1584,7 @@ function IpAnalysisDrawer({ ip, onClose }: IpAnalysisDrawerProps) {
             </Typography.Title>
             <DataTable<BanResponse>
               data={data.ban_history}
+              rowKey={(r) => `${r.ip}:${r.jail}:${r.banned_at}`}
               columns={banColumns}
               emptyScenario="no-data"
               emptyTitle="无封禁历史"

@@ -63,9 +63,10 @@ export function DrawerForm<T>({
     try {
       values = await form.validateFields()
     } catch {
-      return // 校验失败：AntD 已在字段上标红，滚动到首个错误由 Form 负责
+      // 校验失败：AntD 已在字段上标红，滚动到首个错误由 Form 负责
+      setSubmitting(false)
+      return
     }
-    setSubmitting(true)
     try {
       await onSubmit(values)
       // 成功：调用方通常在此关闭抽屉；这里不强行关，交给 onSubmit 后的 onCancel/open 控制
@@ -77,6 +78,8 @@ export function DrawerForm<T>({
   }
 
   const handleSubmit = (): void => {
+    if (submitting) return
+    setSubmitting(true)
     if (confirmText) {
       modal.confirm({
         title: confirmTitle,
@@ -85,6 +88,9 @@ export function DrawerForm<T>({
         okButtonProps: danger ? { danger: true } : undefined,
         cancelText: '再想想',
         onOk: doSubmit,
+        // 取消确认弹窗时复位：submitting 已在 handleSubmit 入口置真，
+        // 不复位会让提交按钮永久停在 loading 态。
+        onCancel: () => setSubmitting(false),
       })
     } else {
       void doSubmit()

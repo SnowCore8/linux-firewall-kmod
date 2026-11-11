@@ -10,6 +10,7 @@ import {
 } from 'react'
 import { ApiError, onUnauthorized } from '../api/client.ts'
 import {
+  ACCESS_TOKEN_KEY,
   AUTH_FAILURE_THRESHOLD,
   AUTH_LOCKOUT_SECONDS,
   clearAccessToken,
@@ -23,7 +24,7 @@ import { probeAuth } from '../api/endpoints.ts'
  * 认证 Provider —— 令牌生命周期 + 登录/登出 + 401 自动登出 + 锁定倒计时的单一真相源。
  *
  * 关键约束（迁移前后不变）：
- *   * 令牌 = base64(user:pass)，存 sessionStorage；登录成功与否由一次真实探测决定
+ *   * 令牌 = base64(user:pass)，存 localStorage；登录成功与否由一次真实探测决定
  *     （probeAuth 打 GET /api/v2/bans，不能用恒 303 的 GET /）。
  *   * 任何 REST 调用收到 401 都会经 client.ts 的 onUnauthorized 广播到这里 → 自动清令牌
  *     并跳登录，不让某个视图停在「拿着废令牌反复失败」的状态。
@@ -99,6 +100,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setStatus('unauthenticated')
     })
   }, [])
+
+  // 跨 tab 同步登出：其他 tab 清除 token 时，当前 tab 也跟着登出
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === ACCESS_TOKEN_KEY && e.newValue === null) {
+        setStatus('unauthenticated')
+        setFailCount(0)
+        setError(null)
+        clearLockoutTimer()
+        setLockoutRemaining(0)
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [clearLockoutTimer])
 
   useEffect(() => clearLockoutTimer, [clearLockoutTimer])
 

@@ -75,13 +75,13 @@ export function RealtimeBadge({
   showFreshness = true,
 }: RealtimeBadgeProps) {
   const meta = STATE_META[state]
-  // 每秒重算新鲜度文案（否则「x 秒前」会冻在渲染那一刻）
+  // 每秒重算新鲜度文案（否则「x 秒前」会冻在渲染那一刻）；SSE 断开时清除 interval
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    if (!showFreshness || lastEventAt <= 0) return
+    if (!showFreshness || lastEventAt <= 0 || state !== 'open') return
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
-  }, [showFreshness, lastEventAt])
+  }, [showFreshness, lastEventAt, state])
 
   const fresh = showFreshness && lastEventAt > 0 ? freshnessText(lastEventAt, now) : ''
   const disconnectedText =

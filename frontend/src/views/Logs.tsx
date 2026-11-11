@@ -163,6 +163,15 @@ export default function Logs() {
     { enabled: mode === 'history' },
   )
 
+  // 过滤后结果减少时，当前页码可能越界：停在空页上翻不回来。
+  // 仿照 Bans 页的做法，用 total_lines / pageSize 夹取。
+  const totalPages = historyQuery.data
+    ? Math.max(1, Math.ceil(historyQuery.data.total_lines / pageSize))
+    : 0
+  useEffect(() => {
+    if (totalPages > 0 && page > totalPages) setPage(totalPages)
+  }, [totalPages, page])
+
   // 过滤/翻页变化时重取历史。
   // 不含 mode：切到历史时的首次取数由 useAsync 的 enabled 翻转（false→true）负责，
   // 这里再依赖 mode 会和它撞车、同一次切换打两个相同请求。
