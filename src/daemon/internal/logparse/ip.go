@@ -36,34 +36,39 @@ func ExtractIP(line string) (netip.Addr, bool) {
 //
 // 词边界检查：候选前后字符不能是 hex / `.` / `:`，避免把长十六进制串或
 // `1.2.3.4.5` 这类非 IP 片段误判成 IP。起点前一字节落在长 token 中间时，
-// 从起点后移一位继续找。
+// 从起点后移一位继续找。使用迭代而非递归，避免超长输入导致栈溢出。
 func findIPCandidate(line string, startFrom int) (start, end int, ok bool) {
-	i := startFrom
-	for i < len(line) && !isHexDigit(line[i]) {
-		i++
-	}
-	if i >= len(line) {
-		return 0, 0, false
-	}
-
-	candidateStart := i
-	if candidateStart > 0 {
-		prev := line[candidateStart-1]
-		if isHexDigit(prev) || prev == '.' || prev == ':' {
-			return findIPCandidate(line, candidateStart+1)
+	pos := startFrom
+	for {
+		i := pos
+		for i < len(line) && !isHexDigit(line[i]) {
+			i++
 		}
-	}
-
-	for i < len(line) && (isHexDigit(line[i]) || line[i] == '.' || line[i] == ':') {
-		i++
-	}
-	if i < len(line) {
-		next := line[i]
-		if isHexDigit(next) || next == '.' || next == ':' {
-			return findIPCandidate(line, candidateStart+1)
+		if i >= len(line) {
+			return 0, 0, false
 		}
+
+		candidateStart := i
+		if candidateStart > 0 {
+			prev := line[candidateStart-1]
+			if isHexDigit(prev) || prev == '.' || prev == ':' {
+				pos = candidateStart + 1
+				continue
+			}
+		}
+
+		for i < len(line) && (isHexDigit(line[i]) || line[i] == '.' || line[i] == ':') {
+			i++
+		}
+		if i < len(line) {
+			next := line[i]
+			if isHexDigit(next) || next == '.' || next == ':' {
+				pos = candidateStart + 1
+				continue
+			}
+		}
+		return candidateStart, i, true
 	}
-	return candidateStart, i, true
 }
 
 // validateCandidate 校验一个已通过词边界检查的候选串。

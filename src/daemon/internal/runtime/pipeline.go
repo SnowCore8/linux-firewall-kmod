@@ -412,10 +412,16 @@ func (p *Pipeline) Cleanup(now int64) int {
 // cluster.Window 明显更快地重复：计数按 now-ts <= window 判定，若检测恰好每 window 秒
 // 跑一次，一批刚写入的失败会在下一次检测前滑出窗口，扫描永远凑不够 MinIPs。检测间隔应
 // 远小于窗口，让窗口内任意相位开始的扫描都能被至少一次完整的检测看到。
+//
+// 命中后清除该集群涉及的 IP 失败记录，避免同一集群在下一个检测周期被重复下发封禁。
 func (p *Pipeline) ScanClusters(now int64, onHit func(jail string, hit decision.ClusterHit, cfg config.ClusterConfig)) {
 	for jail, state := range p.jails {
 		for _, hit := range decision.DetectCluster(state.window, now, state.policy.Cluster) {
 			onHit(jail, hit, state.policy.Cluster)
+			// 清除已处置的集群 IP，防止下一周期重复检测同一集群
+			for _, ip := range hit.IPs {
+				state.window.Forget(ip)
+			}
 		}
 	}
 }

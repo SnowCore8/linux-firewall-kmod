@@ -102,9 +102,9 @@ func validateURL(u *url.URL) error {
 	return nil
 }
 
-// isPrivateAddr 检查 IP 是否为私有/回环地址。
+// isPrivateAddr 检查 IP 是否为私有/回环/未指定地址。
 func isPrivateAddr(addr netip.Addr) bool {
-	return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast()
+	return addr.IsUnspecified() || addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast()
 }
 
 // Fetch 从指定 URL 拉取数据，带重试逻辑。

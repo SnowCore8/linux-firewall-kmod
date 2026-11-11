@@ -34,7 +34,6 @@ type FeedManager struct {
 
 	mu         sync.RWMutex
 	lastUpdate time.Time
-	errors     map[string]error // 每个源的最新错误
 	stats      map[string]*SourceStats
 
 	ctx    context.Context
@@ -74,7 +73,6 @@ func NewFeedManager(cfg Config) (*FeedManager, error) {
 		cfg:       cfg,
 		cache:     NewFeedCache(),
 		http:      NewHTTPClient(cfg.HTTPTimeout, cfg.MaxRetries),
-		errors:    make(map[string]error),
 		stats:     make(map[string]*SourceStats),
 		ctx:       ctx,
 		cancel:    cancel,
@@ -132,6 +130,18 @@ func (m *FeedManager) isCircuitBroken(name string) bool {
 	return time.Now().Before(stats.CircuitBrokenUntil)
 }
 
+// resetExpiredCircuitBreakers 清除已过冷却期的源熔断状态，使其可重新触发。
+// 调用方必须持有写锁。
+func (m *FeedManager) resetExpiredCircuitBreakers() {
+	now := time.Now()
+	for _, stats := range m.stats {
+		if !stats.CircuitBrokenUntil.IsZero() && !now.Before(stats.CircuitBrokenUntil) {
+			stats.CircuitBrokenUntil = time.Time{}
+			stats.ConsecutiveFailures = 0
+		}
+	}
+}
+
 // RefreshAll 并发刷新所有源。
 //
 // 熔断器：调度前检查每个源的熔断状态，处于冷却期内的源跳过本轮刷新，
@@ -140,6 +150,11 @@ func (m *FeedManager) RefreshAll(ctx context.Context) error {
 	if len(m.sources) == 0 {
 		return nil
 	}
+
+	// 清除已过冷却期的熔断状态，使持续失败的源可重新触发熔断
+	m.mu.Lock()
+	m.resetExpiredCircuitBreakers()
+	m.mu.Unlock()
 
 	var wg sync.WaitGroup
 	results := make(chan RefreshResult, len(m.sources))
@@ -172,6 +187,7 @@ func (m *FeedManager) RefreshAll(ctx context.Context) error {
 
 	// 聚合结果
 	var firstErr error
+	hasSuccess := false
 	for result := range results {
 		m.updateSourceStats(result)
 		if result.Err != nil {
@@ -181,13 +197,17 @@ func (m *FeedManager) RefreshAll(ctx context.Context) error {
 			}
 			continue
 		}
+		hasSuccess = true
 		m.cache.Merge(result.Entries)
 		slog.Info("情报源刷新成功", "source", result.Source, "entries", len(result.Entries), "duration", result.Duration)
 	}
 
-	m.mu.Lock()
-	m.lastUpdate = time.Now()
-	m.mu.Unlock()
+	// 仅在有源刷新成功时更新 lastUpdate，避免全失败时误导 API 消费者
+	if hasSuccess {
+		m.mu.Lock()
+		m.lastUpdate = time.Now()
+		m.mu.Unlock()
+	}
 
 	return firstErr
 }
@@ -270,6 +290,8 @@ func (m *FeedManager) StartScheduler() {
 		if err := m.RefreshAll(m.ctx); err != nil {
 			slog.Warn("定时刷新情报失败", "error", err)
 		}
+		// 每次刷新后清理过期缓存条目，防止源停止刷新时条目持续累积
+		m.cache.Cleanup()
 	})
 }
 

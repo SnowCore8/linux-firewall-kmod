@@ -36,7 +36,6 @@ func newTestManager(t *testing.T, threshold int, cooldown time.Duration, sources
 		},
 		cache:     NewFeedCache(),
 		http:      NewHTTPClient(30*time.Second, 0),
-		errors:    make(map[string]error),
 		stats:     make(map[string]*SourceStats),
 		ctx:       ctx,
 		cancel:    cancel,
@@ -190,4 +189,51 @@ func TestCircuitBreaker_SkipsRefreshAll(t *testing.T) {
 			mgr.stats["test-src"].RefreshCount)
 	}
 	mgr.mu.RUnlock()
+}
+
+// TestCircuitBreaker_CanRetripAfterCooldown 验证熔断器可重复触发：
+// 冷却期过后，如果源继续失败，熔断器应能再次触发。
+func TestCircuitBreaker_CanRetripAfterCooldown(t *testing.T) {
+	src := &mockSource{name: "test-src", url: "https://example.com"}
+	mgr := newTestManager(t, 2, 50*time.Millisecond, src)
+	defer mgr.Stop()
+
+	// 第一次触发熔断
+	for i := 0; i < 2; i++ {
+		mgr.updateSourceStats(RefreshResult{
+			Source: "test-src",
+			Err:    errors.New("模拟失败"),
+		})
+	}
+
+	mgr.mu.RLock()
+	firstTripped := !mgr.stats["test-src"].CircuitBrokenUntil.IsZero()
+	mgr.mu.RUnlock()
+	if !firstTripped {
+		t.Fatal("第一次熔断应该触发")
+	}
+
+	// 等待冷却期结束
+	time.Sleep(100 * time.Millisecond)
+
+	// RefreshAll 会重置已过期的熔断状态
+	_ = mgr.RefreshAll(context.Background())
+
+	// 再次累积失败，应该能重新触发熔断
+	for i := 0; i < 2; i++ {
+		mgr.updateSourceStats(RefreshResult{
+			Source: "test-src",
+			Err:    errors.New("模拟失败"),
+		})
+	}
+
+	mgr.mu.RLock()
+	stats := mgr.stats["test-src"]
+	canRetrip := !stats.CircuitBrokenUntil.IsZero() && stats.ConsecutiveFailures >= 2
+	mgr.mu.RUnlock()
+
+	if !canRetrip {
+		t.Errorf("冷却期过后熔断器应能重新触发：CircuitBrokenUntil=%v, ConsecutiveFailures=%d",
+			stats.CircuitBrokenUntil, stats.ConsecutiveFailures)
+	}
 }
