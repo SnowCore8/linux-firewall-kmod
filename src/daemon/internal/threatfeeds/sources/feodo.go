@@ -1,8 +1,6 @@
 package sources
 
 import (
-	"bufio"
-	"bytes"
 	"net/netip"
 	"strings"
 	"time"
@@ -12,28 +10,26 @@ import (
 // Feodo 格式：First seen,IP address,Port,Domain,Malware,Status
 func parseCSV(data []byte, source, category string, confidence float64, expiresAt time.Time) ([]FeedEntry, error) {
 	var entries []FeedEntry
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	err := forEachLine(data, func(raw string) {
+		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+			return
 		}
 
 		// 跳过表头
 		if strings.HasPrefix(strings.ToLower(line), "first_seen") || strings.HasPrefix(strings.ToLower(line), "# first") {
-			continue
+			return
 		}
 
 		fields := strings.Split(line, ",")
 		if len(fields) < 2 {
-			continue
+			return
 		}
 
 		// Feodo 格式：IP 在第二列（索引 1）
 		ipStr := strings.TrimSpace(fields[1])
 		if ipStr == "" {
-			continue
+			return
 		}
 
 		if addr, err := netip.ParseAddr(ipStr); err == nil {
@@ -49,9 +45,8 @@ func parseCSV(data []byte, source, category string, confidence float64, expiresA
 				ExpiresAt:  expiresAt,
 			})
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 	return entries, nil

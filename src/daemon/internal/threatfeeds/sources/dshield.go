@@ -1,8 +1,6 @@
 package sources
 
 import (
-	"bufio"
-	"bytes"
 	"net/netip"
 	"strings"
 	"time"
@@ -11,22 +9,20 @@ import (
 // parseTSV 解析 TSV 格式（Tab 分隔），用于 DShield 等。
 func parseTSV(data []byte, source, category string, confidence float64, expiresAt time.Time) ([]FeedEntry, error) {
 	var entries []FeedEntry
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	err := forEachLine(data, func(raw string) {
+		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+			return
 		}
 
 		fields := strings.Split(line, "\t")
 		if len(fields) < 1 {
-			continue
+			return
 		}
 
 		ipStr := strings.TrimSpace(fields[0])
 		if ipStr == "" {
-			continue
+			return
 		}
 
 		// 尝试解析为 CIDR
@@ -38,7 +34,7 @@ func parseTSV(data []byte, source, category string, confidence float64, expiresA
 				Confidence: confidence,
 				ExpiresAt:  expiresAt,
 			})
-			continue
+			return
 		}
 
 		// 尝试解析为单个 IP
@@ -55,9 +51,8 @@ func parseTSV(data []byte, source, category string, confidence float64, expiresA
 				ExpiresAt:  expiresAt,
 			})
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 	return entries, nil

@@ -139,19 +139,21 @@ func TestValidateThreatFeedURL(t *testing.T) {
 		url     string
 		wantErr string
 	}{
-		{name: "valid https", url: "https://example.com/feed.txt", wantErr: ""},
-		{name: "valid http", url: "http://lists.example.com/blocklist.txt", wantErr: ""},
+		{name: "whitelisted https", url: "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt", wantErr: ""},
+		{name: "whitelisted https with port", url: "https://www.dshield.org:443/block.txt", wantErr: ""},
+		{name: "whitelisted http rejected", url: "http://lists.blocklist.de/lists/all.txt", wantErr: "只允许 https"},
+		{name: "non-whitelisted https rejected", url: "https://example.com/feed.txt", wantErr: "域名不在情报源白名单中"},
 		{name: "empty string", url: "", wantErr: "URL 不能为空"},
 		{name: "file protocol rejected", url: "file:///etc/passwd", wantErr: "不支持的协议"},
-		{name: "ftp protocol rejected", url: "ftp://example.com/feed.txt", wantErr: "不支持的协议"},
+		{name: "ftp protocol rejected", url: "ftp://raw.githubusercontent.com/feed.txt", wantErr: "不支持的协议"},
 		{name: "javascript rejected", url: "javascript:alert(1)", wantErr: "不支持的协议"},
 		{name: "data URI rejected", url: "data:text/plain,hello", wantErr: "不支持的协议"},
-		{name: "missing host", url: "http:///path/only", wantErr: "URL 缺少主机名"},
-		{name: "bare scheme no host", url: "http://", wantErr: "URL 缺少主机名"},
+		{name: "missing host", url: "https:///path/only", wantErr: "URL 缺少主机名"},
+		{name: "bare scheme no host", url: "https://", wantErr: "URL 缺少主机名"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateThreatFeedURL(tt.url)
+			err := ValidateThreatFeedURL(tt.url)
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)

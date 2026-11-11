@@ -2,6 +2,7 @@ package threatfeeds
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 )
@@ -259,4 +260,40 @@ func TestFeedEntry_IPContains(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestParseIPListSkipsOverlongLine 钉住「单个超长行不该让整份列表失败」。
+//
+// 默认 64 KiB 的 Scanner 上限会让 100 KiB 的一行返回 ErrTooLong，整个源解析直接失败；
+// 修好后超长行按非法内容跳过，其余有效行照常产出。
+func TestParseIPListSkipsOverlongLine(t *testing.T) {
+	expiresAt := time.Now().Add(24 * time.Hour)
+
+	t.Run("100KiB 行", func(t *testing.T) {
+		data := "192.0.2.1\n" + strings.Repeat("x", 100*1024) + "\n198.51.100.2\n"
+		entries, err := ParseIPList([]byte(data), "test", "abuse", 0.8, expiresAt)
+		if err != nil {
+			t.Fatalf("超长行不应让解析失败: %v", err)
+		}
+		if len(entries) != 2 {
+			t.Fatalf("返回 %d 条，想要 2 条", len(entries))
+		}
+		if got := entries[0].IP.String(); got != "192.0.2.1/32" {
+			t.Errorf("entries[0].IP = %s，想要 192.0.2.1/32", got)
+		}
+		if got := entries[1].IP.String(); got != "198.51.100.2/32" {
+			t.Errorf("entries[1].IP = %s，想要 198.51.100.2/32", got)
+		}
+	})
+
+	t.Run("超过单行上限的行", func(t *testing.T) {
+		data := "192.0.2.1\n" + strings.Repeat("y", maxFeedLineBytes+1024) + "\n198.51.100.2\n"
+		entries, err := ParseIPList([]byte(data), "test", "abuse", 0.8, expiresAt)
+		if err != nil {
+			t.Fatalf("超限行应被跳过而不是失败: %v", err)
+		}
+		if len(entries) != 2 {
+			t.Fatalf("返回 %d 条，想要 2 条", len(entries))
+		}
+	})
 }

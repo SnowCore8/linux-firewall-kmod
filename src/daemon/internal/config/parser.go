@@ -786,8 +786,8 @@ func applyThreatFeeds(yc *yamlConfig, cfg *Config) error {
 	if len(tf.Sources) > 0 {
 		cfg.ThreatFeeds.Sources = make([]ThreatFeedSourceConfig, 0, len(tf.Sources))
 		for _, src := range tf.Sources {
-			// 校验 URL 格式，防止 file:// 等危险协议或空串
-			if err := validateThreatFeedURL(src.URL); err != nil {
+			// 校验 URL 是否会被拉取期接受，防止危险协议或不被白名单放行的目标
+			if err := ValidateThreatFeedURL(src.URL); err != nil {
 				return fmt.Errorf("threat_feeds.sources[%s].url: %w", src.Name, err)
 			}
 			sc := ThreatFeedSourceConfig{
@@ -807,9 +807,27 @@ func applyThreatFeeds(yc *yamlConfig, cfg *Config) error {
 	return nil
 }
 
-// validateThreatFeedURL 校验情报源 URL 格式。
-// 只允许 http/https 协议，拒绝 file://、ftp:// 等可能导致本地文件读取或 SSRF 的协议。
-func validateThreatFeedURL(rawURL string) error {
+// allowedThreatFeedHosts 是运行期唯一接受的情报源域名。
+//
+// 拉取侧的 SSRF 防护（internal/threatfeeds）复用这份集合，配置解析期先拒掉运行期
+// 必然被拒的 URL：否则一份「配置成功、却从未同步」的源只会被误读成远端故障。
+var allowedThreatFeedHosts = map[string]bool{
+	"raw.githubusercontent.com": true, // IPsum, FireHOL
+	"www.dshield.org":           true, // DShield
+	"lists.blocklist.de":        true, // Blocklist.de
+	"feodotracker.abuse.ch":     true, // Feodo Tracker
+}
+
+// AllowedThreatFeedHost 报告 host（不含端口）是否在情报源域名白名单内。
+func AllowedThreatFeedHost(host string) bool {
+	return allowedThreatFeedHosts[strings.ToLower(host)]
+}
+
+// ValidateThreatFeedURL 校验情报源 URL 是否会被运行期接受。
+//
+// 只允许 https 且主机在白名单内：拉取期按同一判据拒绝一切其它目标（含 http、file://、
+// ftp:// 以及任意域名），配置期放行只会在同步时才暴露。
+func ValidateThreatFeedURL(rawURL string) error {
 	if rawURL == "" {
 		return fmt.Errorf("URL 不能为空")
 	}
@@ -817,14 +835,14 @@ func validateThreatFeedURL(rawURL string) error {
 	if err != nil {
 		return fmt.Errorf("URL 解析失败: %w", err)
 	}
-	switch u.Scheme {
-	case "http", "https":
-		// 允许
-	default:
-		return fmt.Errorf("不支持的协议 %q，只允许 http/https", u.Scheme)
+	if u.Scheme != "https" {
+		return fmt.Errorf("不支持的协议 %q，只允许 https", u.Scheme)
 	}
-	if u.Host == "" {
+	if u.Hostname() == "" {
 		return fmt.Errorf("URL 缺少主机名")
+	}
+	if !AllowedThreatFeedHost(u.Hostname()) {
+		return fmt.Errorf("域名不在情报源白名单中: %s", u.Hostname())
 	}
 	return nil
 }

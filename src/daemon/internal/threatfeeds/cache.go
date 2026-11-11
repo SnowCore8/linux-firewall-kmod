@@ -111,7 +111,7 @@ func (c *FeedCache) rebuildIndexLocked() {
 // Merge 合并新条目到缓存。
 //
 // 原子更新：构建新 map 后一次性替换，避免长时间持有写锁。
-// 已存在的条目会被新条目覆盖（新数据优先）。
+// 键冲突时保留 confidence 更高的条目；相等时保留先到的条目。
 func (c *FeedCache) Merge(newEntries []FeedEntry) {
 	if len(newEntries) == 0 {
 		return
@@ -130,12 +130,22 @@ func (c *FeedCache) Merge(newEntries []FeedEntry) {
 	}
 
 	// 添加新条目（受上限保护）
+	//
+	// 同一 IP 常被多个源重复收录（IPsum/FireHOL/DShield 大量重叠），而各源并发刷新、
+	// 结果到达顺序不确定。若按键直接覆盖，最终置信度取决于 goroutine 谁先跑完；
+	// 因此冲突时只让更高置信度的条目胜出，相等则保留先到的，保证结果与顺序无关。
 	for i := range newEntries {
+		e := &newEntries[i]
+		key, _, _ := entryKey(e.IP)
+		if existing, ok := merged[key]; ok {
+			if e.Confidence > existing.Confidence {
+				merged[key] = e
+			}
+			continue
+		}
 		if len(merged) >= MaxCacheEntries {
 			break
 		}
-		e := &newEntries[i]
-		key, _, _ := entryKey(e.IP)
 		merged[key] = e
 	}
 

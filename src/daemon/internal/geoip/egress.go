@@ -88,10 +88,33 @@ func DetectEgress(ctx context.Context, probeURL string) (netip.Addr, error) {
 	return netip.Addr{}, errors.New("geoip: probe response contains no valid public IP")
 }
 
+// nonPublicPrefixes 列出标准库分类未覆盖、但同样不能当作公网出口的网段。
+//
+// 100.64.0.0/10 是运营商级 NAT，192.0.0.0/24 是 IETF 协议分配段，198.18.0.0/15 是
+// 基准测试段，240.0.0.0/4 是保留段（含有限广播 255.255.255.255）：探测服务返回这些
+// 地址只可能是响应被伪造或来自内网，拿它定位会把地理数据污染成服务器自己所在的网段。
+var nonPublicPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+}
+
+// isNonPublicPrefix 报告 addr 是否落在上述保留/特殊用途网段内。
+func isNonPublicPrefix(addr netip.Addr) bool {
+	for _, prefix := range nonPublicPrefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
 // isPublicEgressAddr 报告 addr 是否为可作服务器出口的公网单播地址。
 //
 // 探测服务被劫持或配置错误时可能返回本机/内网地址，拿它做定位会把地理数据污染成
-// 服务器自己所在的网段，因此私有、环回、链路本地、未指定、组播一律拒收。
+// 服务器自己所在的网段，因此私有、环回、链路本地、未指定、组播以及保留/特殊用途网段
+// 一律拒收。
 func isPublicEgressAddr(addr netip.Addr) bool {
 	if !addr.IsValid() {
 		return false
@@ -99,7 +122,8 @@ func isPublicEgressAddr(addr netip.Addr) bool {
 	// ::ffff:10.0.0.1 这类 IPv4-mapped 地址按 IPv4 判定，否则内网 IPv4 会绕过检查。
 	addr = addr.Unmap()
 	if addr.IsUnspecified() || addr.IsLoopback() || addr.IsPrivate() ||
-		addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsMulticast() {
+		addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsMulticast() ||
+		isNonPublicPrefix(addr) {
 		return false
 	}
 	// 有限广播地址不属于上面的任何分类，但它不是可路由的单播地址。

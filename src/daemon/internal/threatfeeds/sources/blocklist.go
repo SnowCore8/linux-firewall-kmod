@@ -21,7 +21,10 @@ func (s *BlocklistSource) Name() string { return "blocklist_de" }
 func (s *BlocklistSource) URL() string { return s.url }
 
 // Parse 解析 Blocklist.de 数据。
+//
+// TTL 取 25 小时，与其余源同量级：默认 refresh_interval 是 24 小时，TTL 若短于
+// 刷新间隔，条目会在下一轮拉取前集体过期、判定层跳过，而面板仍显示同步成功。
 func (s *BlocklistSource) Parse(data []byte) ([]FeedEntry, error) {
-	expiresAt := time.Now().Add(2 * time.Hour)
+	expiresAt := time.Now().Add(25 * time.Hour)
 	return parseIPList(data, s.Name(), s.category, s.confidence, expiresAt)
 }

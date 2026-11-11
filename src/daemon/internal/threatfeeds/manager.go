@@ -2,6 +2,7 @@ package threatfeeds
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -80,20 +81,30 @@ func NewFeedManager(cfg Config) (*FeedManager, error) {
 	}
 
 	// 构建源适配器
+	var unknown []string
 	for _, srcCfg := range cfg.Sources {
 		if !srcCfg.Enabled {
 			continue
 		}
 		src, err := mgr.buildSource(srcCfg)
 		if err != nil {
-			cancel()
-			return nil, fmt.Errorf("构建源 %s 失败: %w", srcCfg.Name, err)
+			// 源名写错只丢这一个源：装配失败会让整个子系统下线（接口全 503、
+			// 判定层失去情报），代价远大于少一个源。
+			unknown = append(unknown, srcCfg.Name)
+			slog.Warn("跳过无法装配的情报源", "source", srcCfg.Name, "error", err)
+			continue
 		}
 		mgr.sources = append(mgr.sources, src)
 		mgr.stats[srcCfg.Name] = &SourceStats{
 			Name:    srcCfg.Name,
 			Enabled: true,
 		}
+	}
+
+	// 有配置却一个都没装配成功时仍按失败处理，让装配问题在启动日志里显性化
+	if len(mgr.sources) == 0 && len(unknown) > 0 {
+		cancel()
+		return nil, fmt.Errorf("没有任何可用的情报源，未知源配置: %v", unknown)
 	}
 
 	return mgr, nil
@@ -230,6 +241,17 @@ func (m *FeedManager) refreshOne(ctx context.Context, src FeedSource) RefreshRes
 		return RefreshResult{
 			Source:   src.Name(),
 			Err:      err,
+			Duration: time.Since(start),
+		}
+	}
+
+	// 0 条按失败处理：HTTP 200 却解析不出条目，通常是上游改了格式或返回维护页。
+	// 若当成功，则清零连续失败计数、解除熔断并刷新 LastUpdate，面板显示
+	// 「同步成功 0 条」而该源实际已失效。
+	if len(entries) == 0 {
+		return RefreshResult{
+			Source:   src.Name(),
+			Err:      errors.New("解析结果为空"),
 			Duration: time.Since(start),
 		}
 	}

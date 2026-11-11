@@ -116,3 +116,36 @@ func TestDetectEgressSkipsNonPublicKeys(t *testing.T) {
 		t.Fatalf("got %v want %v", got, want)
 	}
 }
+
+// TestIsPublicEgressAddrReservedPrefixes 覆盖标准库分类漏掉的保留/特殊用途网段边界。
+func TestIsPublicEgressAddrReservedPrefixes(t *testing.T) {
+	tests := []struct {
+		addr string
+		want bool
+	}{
+		{"100.63.255.255", true},
+		{"100.64.0.0", false},
+		{"100.127.255.255", false},
+		{"100.128.0.0", true},
+		{"192.0.0.255", false},
+		{"192.0.1.0", true},
+		{"198.17.255.255", true},
+		{"198.18.0.0", false},
+		{"198.19.255.255", false},
+		{"198.20.0.0", true},
+		{"223.255.255.255", true},
+		{"239.255.255.255", false},
+		{"240.0.0.0", false},
+		{"255.255.255.254", false},
+		{"255.255.255.255", false},
+		{"8.8.8.8", true},
+		{"::ffff:100.64.0.1", false},
+		{"::ffff:192.0.0.1", false},
+	}
+	for _, tt := range tests {
+		addr := netip.MustParseAddr(tt.addr)
+		if got := isPublicEgressAddr(addr); got != tt.want {
+			t.Errorf("isPublicEgressAddr(%s) = %v，想要 %v", tt.addr, got, tt.want)
+		}
+	}
+}

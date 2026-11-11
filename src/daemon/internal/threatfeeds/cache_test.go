@@ -246,6 +246,83 @@ func TestFeedCache_Merge_Overwrite(t *testing.T) {
 	}
 }
 
+// TestFeedCache_Merge_ConfidenceWinsRegardlessOfOrder 核对跨源重复 IP 的合并结果与
+// 到达顺序无关：各源并发刷新、结果到达顺序不确定，若按键直接覆盖，同一 IP 的最终
+// 置信度就会取决于 goroutine 谁先跑完。
+func TestFeedCache_Merge_ConfidenceWinsRegardlessOfOrder(t *testing.T) {
+	now := time.Now()
+	low := FeedEntry{
+		IP:         netip.MustParsePrefix("203.0.113.7/32"),
+		Source:     "low",
+		Category:   "abuse",
+		Confidence: 0.5,
+		ExpiresAt:  now.Add(time.Hour),
+	}
+	high := FeedEntry{
+		IP:         netip.MustParsePrefix("203.0.113.7/32"),
+		Source:     "high",
+		Category:   "botnet",
+		Confidence: 0.9,
+		ExpiresAt:  now.Add(time.Hour),
+	}
+
+	for _, order := range [][]FeedEntry{{low, high}, {high, low}} {
+		cache := NewFeedCache()
+		cache.Merge(order)
+
+		if cache.Size() != 1 {
+			t.Fatalf("Size() = %d，想要 1", cache.Size())
+		}
+		entry, ok := cache.Lookup(netip.MustParseAddr("203.0.113.7"))
+		if !ok {
+			t.Fatal("Lookup() 未命中")
+		}
+		if entry.Source != "high" || entry.Confidence != 0.9 {
+			t.Errorf("合并结果 Source=%s Confidence=%f，想要 high/0.9", entry.Source, entry.Confidence)
+		}
+	}
+
+	// 同一批内的重复键同理：低置信度不能盖掉先到的高置信度
+	cache := NewFeedCache()
+	cache.Merge([]FeedEntry{high, low})
+	entry, ok := cache.Lookup(netip.MustParseAddr("203.0.113.7"))
+	if !ok {
+		t.Fatal("同批合并后 Lookup() 未命中")
+	}
+	if entry.Confidence != 0.9 {
+		t.Errorf("同批合并结果 Confidence=%f，想要 0.9", entry.Confidence)
+	}
+}
+
+// TestFeedCache_Merge_TieKeepsFirst 置信度相等时保留先到的条目，同样保证顺序无关性。
+func TestFeedCache_Merge_TieKeepsFirst(t *testing.T) {
+	now := time.Now()
+	first := FeedEntry{
+		IP:         netip.MustParsePrefix("198.51.100.9/32"),
+		Source:     "first",
+		Confidence: 0.8,
+		ExpiresAt:  now.Add(time.Hour),
+	}
+	second := FeedEntry{
+		IP:         netip.MustParsePrefix("198.51.100.9/32"),
+		Source:     "second",
+		Confidence: 0.8,
+		ExpiresAt:  now.Add(time.Hour),
+	}
+
+	cache := NewFeedCache()
+	cache.Merge([]FeedEntry{first})
+	cache.Merge([]FeedEntry{second})
+
+	entry, ok := cache.Lookup(netip.MustParseAddr("198.51.100.9"))
+	if !ok {
+		t.Fatal("Lookup() 未命中")
+	}
+	if entry.Source != "first" {
+		t.Errorf("Source = %s，想要 first（相等置信度保留先到者）", entry.Source)
+	}
+}
+
 func TestFeedCache_Clear(t *testing.T) {
 	cache := NewFeedCache()
 

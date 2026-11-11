@@ -4,6 +4,8 @@ package sources
 import (
 	"bufio"
 	"bytes"
+	"errors"
+	"io"
 	"net/netip"
 	"strings"
 	"time"
@@ -25,15 +27,45 @@ type FeedSource interface {
 	Parse(data []byte) ([]FeedEntry, error)
 }
 
+// maxFeedLineBytes 是单行长度上限。超长行（连同剩余部分）丢弃后继续，单行坏数据
+// 不该让整个源失效；真正的读错误仍然返回。
+const maxFeedLineBytes = 1 << 20
+
+// forEachLine 逐行回调，回调收到的行已去掉行尾换行符。
+func forEachLine(data []byte, fn func(string)) error {
+	reader := bufio.NewReaderSize(bytes.NewReader(data), maxFeedLineBytes)
+	for {
+		line, err := reader.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			// 丢弃超长行的剩余部分，直到换行或读完。
+			for errors.Is(err, bufio.ErrBufferFull) {
+				_, err = reader.ReadSlice('\n')
+			}
+			if err == nil || errors.Is(err, io.EOF) {
+				continue
+			}
+			return err
+		}
+		if len(line) > 0 {
+			fn(strings.TrimRight(string(line), "\r\n"))
+		}
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+}
+
 // parseIPList 解析纯 IP 列表（每行一个 IP 或 CIDR）。
 func parseIPList(data []byte, source, category string, confidence float64, expiresAt time.Time) ([]FeedEntry, error) {
 	var entries []FeedEntry
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	err := forEachLine(data, func(raw string) {
+		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+			return
 		}
 
 		// 移除行内注释
@@ -41,7 +73,7 @@ func parseIPList(data []byte, source, category string, confidence float64, expir
 			line = strings.TrimSpace(line[:idx])
 		}
 		if line == "" {
-			continue
+			return
 		}
 
 		// 尝试解析为 CIDR
@@ -53,7 +85,7 @@ func parseIPList(data []byte, source, category string, confidence float64, expir
 				Confidence: confidence,
 				ExpiresAt:  expiresAt,
 			})
-			continue
+			return
 		}
 
 		// 尝试解析为单个 IP
@@ -70,9 +102,8 @@ func parseIPList(data []byte, source, category string, confidence float64, expir
 				ExpiresAt:  expiresAt,
 			})
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 	return entries, nil
@@ -101,19 +132,17 @@ func (s *IpsumSource) URL() string { return s.url }
 func (s *IpsumSource) Parse(data []byte) ([]FeedEntry, error) {
 	expiresAt := time.Now().Add(25 * time.Hour)
 	var entries []FeedEntry
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	err := forEachLine(data, func(raw string) {
+		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+			return
 		}
 		// ipsum 格式：IP\tCOUNT，取第一列
 		if idx := strings.IndexByte(line, '\t'); idx >= 0 {
 			line = strings.TrimSpace(line[:idx])
 		}
 		if line == "" {
-			continue
+			return
 		}
 		if addr, err := netip.ParseAddr(line); err == nil {
 			bits := 32
@@ -128,9 +157,8 @@ func (s *IpsumSource) Parse(data []byte) ([]FeedEntry, error) {
 				ExpiresAt:  expiresAt,
 			})
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 	return entries, nil

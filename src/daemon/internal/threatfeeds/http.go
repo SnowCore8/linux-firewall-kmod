@@ -8,18 +8,10 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
-	"strings"
 	"time"
-)
 
-// allowedFeedHosts 是允许拉取的情报源域名白名单。
-// 防止 SSRF：只允许访问已知的威胁情报源域名。
-var allowedFeedHosts = map[string]bool{
-	"raw.githubusercontent.com": true, // IPsum, FireHOL
-	"www.dshield.org":           true, // DShield
-	"lists.blocklist.de":        true, // Blocklist.de
-	"feodotracker.abuse.ch":     true, // Feodo Tracker
-}
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
+)
 
 // HTTPClient 封装了带超时和重试的 HTTP 请求。
 type HTTPClient struct {
@@ -104,24 +96,42 @@ func dialTargets(host string, ips []net.IPAddr, port string) ([]string, error) {
 }
 
 // validateURL 校验 URL 是否允许访问。
+//
+// 判据与配置解析期同一份（config.ValidateThreatFeedURL：https + 域名白名单），两边各写
+// 一套时，配置期放行、拉取期拒收的 URL 会让源「配置成功却从未同步」。
 func validateURL(u *url.URL) error {
-	if u.Scheme != "https" {
-		return fmt.Errorf("只允许 HTTPS 协议: %s", u.Scheme)
-	}
-	host := strings.ToLower(u.Host)
-	// 移除端口
-	if idx := strings.LastIndex(host, ":"); idx > 0 {
-		host = host[:idx]
-	}
-	if !allowedFeedHosts[host] {
-		return fmt.Errorf("域名不在白名单中: %s", host)
-	}
-	return nil
+	return config.ValidateThreatFeedURL(u.String())
 }
 
-// isPrivateAddr 检查 IP 是否为私有/回环/未指定地址。
+// nonPublicPrefixes 列出标准库分类未覆盖、但同样不能作为 SSRF 目标的网段。
+//
+// 100.64.0.0/10 是运营商级 NAT，192.0.0.0/24 是 IETF 协议分配段，198.18.0.0/15 是
+// 基准测试段，240.0.0.0/4 是保留段（含有限广播 255.255.255.255）：它们都不是可路由的
+// 公网单播地址，连过去只会打到内网设备或本机协议栈。
+var nonPublicPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+}
+
+// isNonPublicPrefix 报告 addr 是否落在上述保留/特殊用途网段内。
+func isNonPublicPrefix(addr netip.Addr) bool {
+	for _, prefix := range nonPublicPrefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPrivateAddr 检查 IP 是否为不可作为公网目标的地址。
 func isPrivateAddr(addr netip.Addr) bool {
-	return addr.IsUnspecified() || addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast()
+	// ::ffff:10.0.0.1 这类 IPv4-mapped 地址按 IPv4 判定，否则内网 IPv4 会绕过检查。
+	addr = addr.Unmap()
+	return addr.IsUnspecified() || addr.IsLoopback() || addr.IsPrivate() ||
+		addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsMulticast() ||
+		isNonPublicPrefix(addr)
 }
 
 // Fetch 从指定 URL 拉取数据，带重试逻辑。

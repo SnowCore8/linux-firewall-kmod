@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestIpsumSource_Parse(t *testing.T) {
@@ -115,6 +116,18 @@ func TestBlocklistSource_Parse(t *testing.T) {
 			t.Errorf("Source = %s，想要 blocklist_de", e.Source)
 		}
 	}
+
+	// TTL 必须覆盖默认 24h 刷新间隔（与其余源同取 25h）：TTL 更短会让条目在下一轮
+	// 拉取前就集体过期，判定层跳过而面板仍显示同步成功。
+	const wantTTL = 25 * time.Hour
+	const tolerance = time.Minute
+	now := time.Now()
+	for _, e := range entries {
+		ttl := e.ExpiresAt.Sub(now)
+		if ttl < wantTTL-tolerance || ttl > wantTTL+tolerance {
+			t.Errorf("%s 的 ExpiresAt 距 now = %v，想要约 %v", e.IP, ttl, wantTTL)
+		}
+	}
 }
 
 func TestFeodoSource_Parse(t *testing.T) {
@@ -174,5 +187,39 @@ func BenchmarkIpsumSource_Parse(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, _ = src.Parse(data)
+	}
+}
+
+func TestParseSourcesSkipOversizedLine(t *testing.T) {
+	huge := make([]byte, maxFeedLineBytes+1024)
+	for i := range huge {
+		huge[i] = 'a'
+	}
+	data := []byte("203.0.113.1\n")
+	data = append(data, huge...)
+	data = append(data, '\n')
+	data = append(data, []byte("203.0.113.2\n")...)
+
+	ipsum := NewIpsumSource("", "abuse", 0.8)
+	entries, err := ipsum.Parse(data)
+	if err != nil {
+		t.Fatalf("IpsumSource.Parse() 错误 = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("IpsumSource.Parse() 条目数 = %d，想要 2", len(entries))
+	}
+
+	dshield := NewDShieldSource("", "abuse", 0.7)
+	entries, err = dshield.Parse(data)
+	if err != nil {
+		t.Fatalf("DShieldSource.Parse() 错误 = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("DShieldSource.Parse() 条目数 = %d，想要 2", len(entries))
+	}
+
+	feodo := NewFeodoSource("", "botnet", 0.9)
+	if _, err := feodo.Parse(data); err != nil {
+		t.Fatalf("FeodoSource.Parse() 错误 = %v", err)
 	}
 }
