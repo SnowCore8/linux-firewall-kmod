@@ -1,7 +1,7 @@
 # 功能缺陷清单
 
 > 生成时间：2026-11-11
-> 更新时间：2026-11-11（第七轮：情报源 TTL/合并/失败判定、日志热重载、集群键归一与审计模式计数、DDoS 引擎与日志读取补偿）
+> 更新时间：2026-11-11（第八轮：短报文绕过、白名单设备归属、信誉分可见性、重试退避与持久化读路径）
 > 状态标记：🔴 待修复 | 🟡 修复中 | 🟢 已修复 | ⚪ 设计取舍/复核为误报
 
 ---
@@ -11,10 +11,10 @@
 | 严重度 | 发现总数 | 已修复 | 待修复 |
 |--------|----------|--------|--------|
 | CRITICAL | 4 | 3 | 1 |
-| HIGH | 22 | 21 | 0 |
-| MEDIUM | 68 | 48 | 9 |
-| LOW | 67 | 14 | 52 |
-| **合计** | **161** | **86** | **62** |
+| HIGH | 26 | 25 | 0 |
+| MEDIUM | 72 | 52 | 9 |
+| LOW | 72 | 17 | 54 |
+| **合计** | **174** | **97** | **64** |
 
 另有 13 项经复核为误报或设计取舍（标 ⚪），不计入待修复：H-6、M-1、M-2、M-3、M-10、M-14、M-22、M-B7、M-D1、M-D4、M-D5、M-E2、L-E4。
 
@@ -43,7 +43,7 @@
 
 ---
 
-## HIGH 级（22 项）
+## HIGH 级（26 项）
 
 ### H-1 🟢 内核模块 ip_fast_csum 读取越界
 - **文件**: `src/kernel-module/fw_hook.c:159-162,191`
@@ -171,9 +171,54 @@
   `DetectCluster` 分组测试
 - **难度**: 低 | **风险**: 中（误封网段 + 漏封单 IP）
 
+### H-23 🟢 IPv4 短报文（<60 字节）绕过封禁表与速率判定
+- **文件**: `src/kernel-module/fw_hook.c:171,197-203`
+- **问题**: 为修复校验和越界把 `skb_header_pointer` 的请求长度从 20 改成 60，但该函数在
+  `offset+len > skb->len` 时返回 NULL，代码随即 `return NF_ACCEPT`。裸 SYN（40 字节）、
+  小 UDP/ICMP 都不到 60 字节
+- **影响**: 已封禁 IP 的 SYN/ACK/RST flood 全部放行，`fw_ban_lookup` 与 `fw_rate_observe`
+  完全触不到，也无法自决封禁；`fw_stat_account` 不计，直方图与全局流量同时失真
+- **状态**: ✅ 已修复 — 先取 `sizeof(struct iphdr)` 校验 version/ihl/tot_len，线性化后
+  按 `ihl*4` 重取完整头到 60 字节栈缓冲；短报文进入统计、速率与封禁查找，畸形头仍放行
+- **难度**: 低 | **风险**: 高（核心拦截失效）
+
+### H-24 🟢 守护进程下发的白名单条目被 netdev 对账当作自动条目删除
+- **文件**: `src/kernel-module/fw_netdev.c:183-186`、`fw_netlink.c:812-813`、`fw_wl.c:157-200`
+- **问题**: daemon 的 `trusted_ips` 与面板白名单都以空设备名下发布；`fw_nl_handle_whitelist`
+  把空串传成 NULL，条目 `device_name` 为空；`fw_netdev_dev_is_auto()` 只排除 `"manual"`
+  与 `"restored"`，空串被判为自动条目
+- **影响**: 任意 netdev 事件（docker/veth 创建删除即可）触发对账，本机不存在的条目被
+  `fw_wl_remove_quiet` 删除并广播 REMOVE；daemon 同步删镜像，面板白名单消失，可信地址
+  重新参与封禁判定，可能自锁。daemon 的 `reconcile()` 不对账白名单，只有重启才重下发
+- **状态**: ✅ 已修复 — `fw_netdev_dev_is_auto()` 把空设备名判为非自动；daemon 下发的
+  空名白名单不再被 netdev 对账清理，manual/restored 语义不变
+- **难度**: 低 | **风险**: 高（白名单失效导致误封）
+
+### H-25 🟢 内存信誉分加载一次后不再回读，每小时信誉恢复对判定层不可见
+- **文件**: `src/daemon/internal/persist/facts.go:247-265,383-393`、`internal/persist/recovery.go:29`
+- **问题**: `loadScoreLocked` 置 `scoreLoaded=true` 后永不重读；`RecoverReputation` 只 UPDATE
+  库。IP 留在 LRU（容量 4096）期间，判定链一直用旧的低分（阈值 -1/-2 长期生效），而
+  `/stats/reputation` 从库读显示已恢复满分
+- **影响**: 两条读路径长期矛盾；同一 IP 在进程生命周期内被判为低信誉，只有被逐出 LRU
+  才可能自愈
+- **状态**: ✅ 已修复 — 每 5 分钟按 `dbScore - pending` 重载内存分，库侧恢复与封禁写库
+  对判定层可见；重载与刷盘以 `dbMu` 串行，未落盘扣分不被抹掉
+- **难度**: 中 | **风险**: 中高（阈值正确性）
+
+### H-26 🟢 每次入队都唤醒重试协程，指数退避在持续失败时被击穿
+- **文件**: `src/daemon/internal/persist/retry_queue.go:108-135,158-189`
+- **问题**: `Enqueue` 每次都 `notify()`，`run` 的 `select` 里 wake 随时抢走定时分支；
+  每次入队还同步 `persist()`（全队列 Marshal + 临时文件 + rename，持 `persistMu`）
+- **影响**: DB 不可用期间，重试频率≈入队频率而非 `RetryInterval×2^n`，每批对整条队列
+  逐条执行，单连接 busy_timeout 下可长时间钉住后台协程；封禁路径退化为 O(n) 同步磁盘
+  I/O，n 接近上限时 O(n²)
+- **状态**: ✅ 已修复 — 仅空队列→非空或退避归零后唤醒后台协程；入队改为脏标记 + 300ms
+  合并落盘，`Stop` 强制落盘，退避在持续失败期间不再被入队打断
+- **难度**: 中 | **风险**: 中高（故障期 DB 雪崩与封禁延迟）
+
 ---
 
-## MEDIUM 级（68 项）
+## MEDIUM 级（72 项）
 
 ### 内核模块（4 项）
 | # | 文件 | 问题 | 状态 |
@@ -287,9 +332,17 @@
 | M-29 | `decision/ddos.go:70-160`、`config/parser.go:628` | `NewDdosEngine`/`HandleEvent`/`CleanupStale` 生产侧零引用（仅本包测试），`ddos.auto_ban_threshold` 因此无消费者，改它无效；每 IP 违规累计与 `TrackedIPs` 永远为空，「第 N 次越线」语义缺失 | 🔴 待修复：需决定接线或删键，涉及产品语义 |
 | M-30 | `ingest/reader.go:179`、`ingest/watcher.go:96`、`runtime/executor.go:495-526,561-591` | 读路径只有事件驱动、每次最多 256 KiB，无周期性补偿；inotify 溢出（`WD=-1`）在 `registry.Resolve` 落空被静默丢弃。执行体阻塞期间写入被合并或溢出后，写方转静默，尾部内容永久不判定（漏封）且无告警 | 🟢 已修复：识别 `IN_Q_OVERFLOW`，逐源连读补至偏移不再前进（单源上限 64 批）；新增 reader 与溢出补读测试 |
 
+### 持久化/HTTP 读路径（4 项）
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| M-31 | `persist/reputation.go:87-91`、`persist/facts.go:531-536` | `total_failures` 按「每次批量落盘 +1」而不是每次失败 +1：一个刷盘周期内的 n 次失败只记 1 次，契约的累计失败次数被系统性低估 | 🟢 已修复：`RecordFailure` 携带失败条数，`total_failures` 按条累加；3 次失败断言 |
+| M-32 | `persist/risk_vectors.go:86-154` | `BatchDecayVectors` 全仓无调用者，库里的风险向量永不衰减；API 返回事件当日满值，与契约「半衰期 7 天」不符（行仍按 updated_at 清理，无无限增长） | 🟢 已修复：`risk_engine.enabled` 时每小时调度衰减，按 `updated_at` 起算间隔，避免每拍重复复利；补直接衰减与接线测试 |
+| M-33 | `http/recommendations.go:58,95`、`persist/history.go:117` | 白名单推荐在 IP 级先按 `min_bans` 过滤，再按 /24 聚合；20 台各封 2 次的 /24（合计 40）在 `min_bans=5` 时返回空，子网级阈值成死代码，`total_bans/affected_ips` 也被低报 | 🟢 已修复：聚合下推到持久层，`min_bans` 在 /24、/48 聚合结果上判定；补段合计达标用例 |
+| M-34 | `http/risk.go:115-136`、`persist/attack_events.go:41-47` | `/api/v2/risk/events/:ip` 以 `since=0` 取该 IP 全量事件再内存截断 100；`total` 也取截断后的长度。高频攻击源单次请求可把数十万行读进内存 | 🟢 已修复：SQL `LIMIT/OFFSET` 下推、`total` 改 COUNT 全集；契约同步 limit/offset 与 total 语义 |
+
 ---
 
-## LOW 级（67 项）
+## LOW 级（72 项）
 
 ### 内核模块（6 项）
 | # | 文件 | 问题 |
@@ -319,7 +372,7 @@
 | L-E3 | `daemonize.go:84,89` | PID 文件 Close 错误未检查 |
 | L-E4 | `detect/cidr.go:133` | CidrKey.Parse panic（⚪ 复核：仅测试调用 `MustCidrKey`，生产走 `ParseCidrKey`） |
 
-### 审计补充（9 项）
+### 审计补充（14 项）
 | # | 文件 | 问题 | 状态 |
 |---|------|------|------|
 | L-27 | `logger/logger.go:97-102`、`http/logs.go:46-53` | 未配置 `log_file` 时写入默认 `/var/log/firewall.log`，但 `SetLogFile` 只在配置非空时登记，HTTP 侧读空值回 503「日志文件未配置」：进程在写日志，面板却说没有。修复：登记解析后的路径 | 🟢 已修复：登记解析后的实际写入路径；目的地不含文件时不登记，接口如实回未配置 |
@@ -331,6 +384,12 @@
 | L-33 | `analysis/prediction.go:230-239` | 趋势用「24h ÷ 7 日均值」，契约 `contract/http.fwidl:1529` 写「与前一日的量比较」，口径不一致 | 🟢 已修复：改为近 24h 与前一日 24h 比较，与契约一致；补四组样本测试 |
 | L-34 | `analysis/recommendations.go:194-201` | `current=1` 时 direction 为 decrease/increase，推荐值仍等于 1，读数自相矛盾 | 🟢 已修复：取整后与 current 相等时方向归 maintain；补 0/1/中间值测试 |
 | L-35 | `decision/policy.go:9-12` | 包注释仍写乘法模型与信誉系数 1.0/0.8/0.5，与同文件加法实现及 AGENTS「加法模型」矛盾，易误导改判据的人 | 🟢 已修复：包注释改为加法模型，行为未动 |
+| L-36 | `persist/retry_queue.go:388-391` | `LoadPersisted` 超出 `MaxSize` 时静默截断（只 Info），被截掉的任务永久丢失（历史/信誉/事件底账少记） | 🟢 已修复：截断记 Warn，带丢弃条数与上限 |
+| L-37 | `kernel-module/fw_wl.c:220-225` | 本机地址的白名单条目只能添加、无法删除：`fw_wl_remove` 对 `fw_local_lookup` 命中的地址一律 `-EPERM`，而接口地址已不再自动写入白名单，残留条目还会挡住建封 | 🔴 待修复 |
+| L-38 | `kernel-module/fw_state.c:493-505` | 恢复时 `banned_at` 被重置为模块加载时刻，`duration_secs` 退化为剩余时长；到期正确，但 daemon 的历史与时长直方图每次重启后偏小 | 🔴 待修复 |
+| L-39 | `persist/retry_queue.go:118-127,230-271` | 满队丢弃与 batch 回填竞争：batch 执行期间被丢弃的任务若失败会作为 remaining 写回，丢弃语义被撤销，队列可超 `MaxSize`（未验证，时序依赖强） | 🟢 已修复：批次重建后同一锁周期再裁剪，容量上限重新成立；并发回归测试 |
+| L-40 | `http/metrics.go:63-64` | `/metrics` 在读锁内写网络；慢抓取会阻塞新指标注册（`Counter/Gauge` 的写锁），进而钉住请求路径。写错误被忽略 | 🟢 已修复：锁内只做快照，排序与响应写出移到解锁后 |
+
 
 ### 前端（12 项）
 | # | 文件 | 问题 |
