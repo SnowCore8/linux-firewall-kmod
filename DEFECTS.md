@@ -1,7 +1,7 @@
 # 功能缺陷清单
 
 > 生成时间：2026-11-11
-> 更新时间：2026-11-11（第十轮：速率表清空竞态、IPv6 分片解析、jail 日志归属、镜像顺序与构建/前端细节）
+> 更新时间：2026-11-11（第十一轮：封禁时长溢出、状态文件注入、阻塞发送、分析窗口截断与信誉/风险读数）
 > 状态标记：🔴 待修复 | 🟡 修复中 | 🟢 已修复 | ⚪ 设计取舍/复核为误报
 
 ---
@@ -11,10 +11,10 @@
 | 严重度 | 发现总数 | 已修复 | 待修复 |
 |--------|----------|--------|--------|
 | CRITICAL | 5 | 4 | 1 |
-| HIGH | 38 | 37 | 0 |
-| MEDIUM | 87 | 65 | 11 |
-| LOW | 85 | 28 | 56 |
-| **合计** | **215** | **134** | **68** |
+| HIGH | 43 | 42 | 0 |
+| MEDIUM | 108 | 81 | 16 |
+| LOW | 91 | 33 | 57 |
+| **合计** | **247** | **160** | **74** |
 
 另有 13 项经复核为误报或设计取舍（标 ⚪），不计入待修复：H-6、M-1、M-2、M-3、M-10、M-14、M-22、M-B7、M-D1、M-D4、M-D5、M-E2、L-E4。
 
@@ -57,7 +57,7 @@
 
 ---
 
-## HIGH 级（38 项）
+## HIGH 级（43 项）
 
 ### H-1 🟢 内核模块 ip_fast_csum 读取越界
 - **文件**: `src/kernel-module/fw_hook.c:159-162,191`
@@ -356,9 +356,63 @@
   未指定地址与掩码后全零网络一律拒绝并计数告警；Ipsum/DShield/Feodo 共用
 - **难度**: 低 | **风险**: 高（误封全部流量）
 
+### 第十一轮补充（HIGH 5 项）
+
+### H-39 🟢 长封禁时长经 32 位 jiffies 回绕，365 天封禁实际数分钟即到期
+- **文件**: `src/kernel-module/fw_ban.c:87-110,173-180,320-335`
+- **问题**: 到期时刻按 `jiffies + duration_secs * HZ` 计算并存进 `unsigned long`；
+  32 位内核上 365 天（约 1.1e10 个 jiffy）远超 `MAX_JIFFY_OFFSET`，乘法与加法回绕，
+  `mod_timer` 得到的是过去或极近的时刻
+- **影响**: 面板与 API 承诺的长期封禁在数分钟后被内核自行摘除，攻击者自动恢复访问
+- **状态**: ✅ 已修复 — `banned_at`/`unban_jiffies` 改存绝对 Unix 秒，定时器只武装
+  `min(剩余秒 × HZ, MAX_JIFFY_OFFSET)` 的一段，到期回调按绝对时刻续武装
+- **难度**: 中 | **风险**: 高（封禁静默失效）
+
+### H-40 🟢 状态文件按行还原，reason/device 未消毒可注入伪造的封禁与白名单行
+- **文件**: `src/kernel-module/fw_state.c:132-150,240-320`
+- **问题**: 保存端只对 jail 名做换行清洗；`reason` 与白名单 `device_name` 直接
+  `snprintf` 进行缓冲。含 `\n` 的字段能把一行拆成多行，重启恢复时被解析成额外的
+  `BAN_`/`WL_` 条目
+- **影响**: 通过封禁原因或设备名写入的换行可在重启后植入任意地址的封禁或放行规则
+- **状态**: ✅ 已修复 — 三类字符串字段都在本地副本上经 `fw_state_sanitize_field`
+  清洗后再写行，行数与字段数不可能被载荷扩张
+- **难度**: 低 | **风险**: 高（持久化规则被篡改）
+
+### H-41 🟢 netlink 发送用阻塞式 sendto 且无超时，缓冲满时钉住整条采集与关停
+- **文件**: `src/daemon/internal/kernel/transport.go:266-355,581-615`
+- **问题**: 发送路径是主链路唯一 goroutine 上的阻塞 `sendto`；对端接收队列满时
+  无限等待，`Close` 又要先取 `sendMu`，SIGTERM 后进程同样退不出去
+- **影响**: 内核侧一次拥塞即让日志采集、判定与进程关停同时停摆
+- **状态**: ✅ 已修复 — `MSG_DONTWAIT` + `poll(POLLOUT)` 分段等待（上限 2 秒），
+  每片检查关闭标志；`Close` 先置标志、信号链路断开，再取 `sendMu` 关 fd
+- **难度**: 中 | **风险**: 高（守护进程整体卡死）
+
+### H-42 🟢 风险向量后台衰减先读全表再逐行回写，覆盖并发写入的新快照
+- **文件**: `src/daemon/internal/persist/risk_vectors.go:116-190`
+- **问题**: `BatchDecayVectors` 读出全部行、在 Go 侧算衰减、再整列 upsert；
+  读与写之间事件 worker 写入的新向量会被旧值的衰减结果覆盖，谁后写谁赢
+- **影响**: 活跃攻击期间的风险分被静默回退，阈值判定与自动封禁读到过期读数
+- **状态**: ✅ 已修复 — 衰减与「近零删除」合并进单个事务：一条 UPDATE 按各行
+  `updated_at` 用 `pow(0.5, …)` 原子衰减并只处理 `updated_at <= now` 的行；
+  权重由引擎经 `SetRiskVectorWeights` 注入，两处口径同源
+- **难度**: 中 | **风险**: 中高（风险分失真）
+
+### H-43 🟢 分析面先取最近 1 万条事件再按时间过滤，窗口外事件挤掉窗口内样本
+- **文件**: `src/daemon/internal/analysis/detection.go:33-120`、`prediction.go:47-120`、
+  `recommendations.go:31-90`、`network.go:30-60`、`persist/ban_events.go:154-528`
+- **问题**: 周期性/协同/预测/建议/网段分布都从 `GetBanEvents(10000)` 拿数据；
+  先按 `banned_at` 降序截断再在 Go 里筛窗口，攻击量一大，7 天/30 天窗口只剩最近几天
+  的样本，统计与趋势在无任何提示的情况下失真
+- **影响**: 复发率、复发间隔、趋势与预测基于残缺样本，误判与误建议直接进面板
+- **状态**: ✅ 已修复 — 窗口条件与聚合下推 SQL：`BanJailStatsSince`、
+  `BanDurationStatsSince`（LAG + 中位数）、`BanAggregatesByIPSince`、
+  `GetIPBanIntervalStats`、`GetJailBanWindowCounts`、`StreamJailBans` 按
+  `(jail, banned_at)` 流式扫描；原始时刻只对最终入选地址按名单取回
+- **难度**: 高 | **风险**: 高（分析结论系统性偏差）
+
 ---
 
-## MEDIUM 级（87 项）
+## MEDIUM 级（108 项）
 
 ### 内核模块（4 项）
 | # | 文件 | 问题 | 状态 |
@@ -503,10 +557,35 @@
 | M-49 | `daemon/internal/http/config_api.go:394-437` | `patchWebuiYAML` 把整份 YAML 解析成 `map[string]any` 再 `Marshal` 写回，PUT /config 成功后文件里所有注释丢失、键顺序被重排 | 🔴 待修复：改用 `yaml.Node` 只替换 `webui`/`ddos` 对应节点，保留注释与顺序 |
 | M-50 | `daemon/internal/http/server.go:130-150` | 连接上限统计所有连接（含长驻 SSE），且满额时 `http.Error` 回裸文本 503，不走统一信封、无 `Retry-After`；前端按业务码判定的错误处理拿不到可读提示 | 🔴 待修复：SSE 连接不应占用普通请求名额，满额响应改用 `WriteServiceUnavailable` 并带重试提示 |
 
+### 第十一轮补充（MEDIUM 21 项）
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| M-51 | `kernel-module/fw_netlink.c:826-856` | 白名单只校验前缀长度与地址字段，不校验 `fw_addr_is_valid`；`1.2.3.4/0` 归一成 `0.0.0.0/0` 后可放行全部地址，删除侧按前缀匹配还能连带清掉封禁 | 🟢 已修复：归一前后各校验一次地址有效性，非法地址回 `-EINVAL` |
+| M-52 | `kernel-module/fw_ban.c:465-535` | 洪泛闸门在去重/过期/容量判定之前扣预算：重复封禁、已被淘汰条目与表满时的失败尝试都消耗配额，真实新封禁被误拒 | 🟢 已修复：闸门移到三点判定之后、插入之前，仅真正新建节点时计费 |
+| M-53 | `daemon/internal/runtime/executor.go:907-935` | 对账重挂前无条件 `delete(pendingReadd)`，Stat/inotify/权限失败时丢失 `fromStart`，下一轮以文件尾打开轮转后的新文件，整段写入被跳过 | 🟢 已修复：仅 `addSharedLogSource` 确认新增后删除待重挂项；挂失败的源保持原语义 |
+| M-54 | `daemon/internal/runtime/executor.go:595-635` | 同一路径既是配置文件又是日志文件时，配置分支直接 `return`，日志 owner 虽保留却永远无人读取；对账只对齐 owner，不会补建读取器 | 🟢 已修复：先按日志 owner 收完本批字节再重载配置；对账遇到「已 watch 但无读取器」的路径补建并读一次 |
+| M-55 | `daemon/internal/runtime/executor.go:1336-1375` | 集群网段封禁下发成功后不写任何底账：`ban_events`/`ban_history`/信誉表都看不到，复发统计与分级成效凭空缺一段 | 🟢 已修复：新增可选 `ClusterBanRecorder`，成功下发后经与自动单 IP 同一入口记账（不占活跃缓存、不动 facts） |
+| M-56 | `daemon/internal/runtime/file_reloader.go:78-95` | 回滚从备份文件解析配置后原样换入，`ConfigFile` 指向 `config.yaml.rollback`，配置 watch 从此挂在备份文件上，真实配置变更不再触发重载 | 🟢 已修复：按重载器持有的来源还原单文件/目录语义后再应用 |
+| M-57 | `daemon/internal/runtime/supervisor.go:69-95` | 关停链逐段各等一个 timeout，总时长随执行体数量线性叠加；前段超时后仍为后段耗预算，调用方资源释放被拖后 | 🟢 已修复：全部段共用一个截止时间，每段只等剩余时间；截止后其余段只置令牌并报 `TimedOut` |
+| M-58 | `daemon/internal/http/analysis_payload.go:613-650` | 时长直方图按 `d < upper` 分桶，恰好 1800/86400 秒的封禁落进下一桶，与「≤5 分钟 / 5–30 分钟」的标签错开一格 | 🟢 已修复：改为右闭 `d <= upper`，边界值用例覆盖 300/1800/7200/86400 |
+| M-59 | `daemon/internal/http/risk.go:66-90` | 风险向量列表的 `total` 取本次返回条数，记录超过 100 条时永远钉在 100，前端分页读数失真 | 🟢 已修复：`CountRiskVectors()` 单独统计全集；先 COUNT 再取列表，避免单连接嵌套查询 |
+| M-60 | `daemon/internal/geoip/egress.go:91-115` | 出口探测只拒绝私网/回环/链路本地等，未覆盖 `0.0.0.0/8`、TEST-NET-1/2/3、`192.88.99.0/24`、`100::/64`、`2001:2::/48`、`2001:db8::/32`；伪造响应可把地理库定位到本机或文档网段 | 🟢 已修复：补齐特殊用途网段表，命中即拒绝该探测结果 |
+| M-61 | `daemon/internal/http/stats.go:158-230` | 跨日后查询失败仍回读上一自然日的缓存，今日封禁数/近 5 分钟封禁数与趋势图显示昨天的读数 | 🟢 已修复：只有缓存 `dayStart` 与本次窗口相同才复用，否则回 0/空 |
+| M-62 | `daemon/internal/config/parser.go:529-572` | `max_retries` 无上限校验：单 IP 只保留 100 个失败时间戳，有效阈值还要叠加高峰期 +2 与内网 +3；配置 96 以上时窗口计数永远达不到阈值，jail 配置成功但一条都不封 | 🟢 已修复：`defaults.max_retries` 与 jail 级统一拒绝 >95，错误写明上限由来 |
+| M-63 | `daemon/internal/http/bans.go:191-215,421-441` | 手工单条与批量封禁只写历史/事件，不扣信誉分：这些地址在信誉表里没有 `last_ban`、`total_bans` 停在 0，后续自动判定的渐进时长与低信誉阈值全部算错 | 🟢 已修复：两条成功路径都补 `RecordBan(persist.DefaultBanPenalty)`；失败不下发的不扣分 |
+| M-64 | `daemon/internal/persist/facts.go:506-540` | `NoteBan` 在条目被 LRU 逐出后重新加载库值再自增，把同一次已落库的封禁记两遍，次数与扣分翻倍 | 🟢 已修复：仅「本次封禁前已有内存读数」时自增/扣分；新条目读库值不再重复计数，补逐出后调用用例 |
+| M-65 | `frontend/src/hooks/useLiveData.ts:66-116` | REST 序号在响应落地时才分配，慢响应会以更大序号反超在途期间到达的 SSE 帧，页面被旧数据覆盖直到下一轮轮询 | 🟢 已修复：序号在请求发起时预分配并随响应返回，数据未变化时不推进展示戳 |
+| M-66 | `daemon/internal/http/bans.go:191-215`、`daemon/cmd/firewall-daemon/main.go:910-925` | 手工封禁写库后不通知 `Facts` 内存缓存，同一 IP 的自动判定在下次回读前仍按旧次数/旧信誉计算渐进时长 | 🔴 待修复：把 `noteBan` 注入 HTTP 层或在底账入口统一刷新事实缓存 |
+| M-67 | `daemon/internal/risk/engine.go:130-140`、`src/daemon/internal/persist/risk_vectors.go` | 启动时从不调用 `Engine.SetVector` 载入库中向量；进程重启后内存风险分为空，后台衰减仍在改库，判定面看不到历史风险 | 🔴 待修复：启动装配时按库中向量预热引擎（或按需读取） |
+| M-68 | `daemon/internal/http/handlers.go:340` | 攻击地理分布仍用 `GetBanEvents(attackGeoEventLimit)` 取最近 N 条，超出后地理统计与总量口径不一致 | 🔴 待修复：与网段分布同口径，按窗口在 SQL 内聚合 |
+| M-69 | `daemon/internal/http/config_api.go:142-151` | 目录模式（多文件合并、`config_file` 为空）下 PUT /config 无法保存；当前只把 EISDIR 换成明确的 40004，面板仍然改不了配置 | 🔴 待修复（功能缺口）：确定目录模式的叠写策略与目标文件后再实现；当前至少不写坏文件 |
+| M-70 | `daemon/internal/persist/risk_vectors.go:130-165`、`facts.go:71-180` | `risk_engine.half_life_days` 只传给内存引擎；库侧每小时衰减固定用 `risk.HalfLifeDays=7`，配置的自定义半衰期对持久化向量不生效 | 🔴 待修复：半衰期与权重一起经 `SetRiskVectorWeights` 同源注入 |
+| M-71 | `kernel-module/fw_netdev.c:240-290` | 网卡白名单对账单轮最多 64 遍，扫到上限即返回；同一轮里摘掉的老条目不会触发下一轮工作，残留条目要等下一次外部事件才被处理，期间放行集合与网卡实际地址不一致 | 🟢 已修复：触及上限且本轮有摘除时重新排队延迟工作，直到收敛或被关停标志拦下 |
+
 
 ---
 
-## LOW 级（85 项）
+## LOW 级（91 项）
 
 ### 内核模块（6 项）
 | # | 文件 | 问题 |
@@ -638,6 +717,16 @@
 | L-52 | `contract/verify_http.py:1381-1443`：`parse_ts_interfaces` 逐行匹配，单行写多个字段（`a: string; b: number`）只取第一个；`strip_ts_comments` 还按 `//` 剥注释，会误伤 `https://` 等字符串。契约校验存在漏检/误报面。 | 🔴 待修复 |
 | L-53 | `kernel-module/fw_netlink.c:377-420,455-500`：LIST_BANS / LIST_WHITELIST / LIST_RATES 按 offset/limit 遍历活表，分页期间到期摘链或并发插入会让后续页跳过或重复条目，daemon 的全量对账因此可能漏项。 | 🔴 待修复 |
 
+### 第十一轮补充（LOW 6 项）
+| # | 问题 |
+|---|------|
+| L-54 | `scripts/build-kmod-multi-version.sh:284,348`、`scripts/test-kernel-compat.sh:127-135`：`set -e` 下 `((success++))` 首次自增前的值为 0，算术命令退出码为 1，脚本在该行直接终止，后续版本不再编译/测试。🟢 已修复：全部改成 `((x+=1))` |
+| L-55 | `debian/linux-firewall-kmod.postinst:31-45`：只对 `uname -r` 编译 DKMS 模块；双内核/回退内核机器上升级后另一内核没有 `firewall.ko`，切回即加载失败。🟢 已修复：遍历 `/lib/modules/*/build` 逐个 build/install，单内核失败告警跳过，全部失败才以 1 退出 |
+| L-56 | `frontend/src/views/Login.tsx:133-137`：登录页称会话令牌「仅保存在当前标签页，关闭即失效」，实际是 Basic token 存 `localStorage`、跨标签页共享、退出登录才清除。🟢 已修复：文案改为真实存储与失效语义 |
+| L-57 | `frontend/src/views/Analysis.tsx:145-149`：阈值建议的 `DIRECTION_META` 缺 `maintain`，后端返回该方向时标签回落成原始英文。🟢 已修复：补 `maintain → 维持` |
+| L-58 | `kernel-module/fw_types.h:240-241`：字段注释仍写 `banned_at /* jiffies */`、`unban_jiffies /* 到期 jiffies */`，与新时长模型（绝对 Unix 秒）相反。🟢 已修复：注释改为 Unix 秒/绝对到期秒 |
+| L-59 | `contract/http.fwidl:761,1339,1461,1578,1769,1718`：契约注记仍写「最多取最近 10000 条」与「桶边界左闭右开」，实现已改为窗口下推 SQL 与右闭分桶；契约作为线格式真相源与实现分叉。 | 🔴 待修复 |
+
 
 ---
 
@@ -702,10 +791,20 @@ H-23、H-24、H-25、H-26、M-31、M-32、M-33、M-34、L-36、L-39、L-40
 - 情报源：H-38
 - 前端/脚本：M-46、M-47、M-48、L-49、L-50、L-51
 
+### 批次 11（已提交）：第十一轮 25 项
+- 内核：H-39、H-40、M-51、M-52、M-71、L-58
+- 分析/持久化：H-42、H-43、M-58、M-59、M-64
+- 运行时/传输：H-41、M-53、M-54、M-55、M-56、M-57
+- 配置/HTTP：M-60、M-61、M-62、M-63
+- 前端/脚本：M-65、L-54、L-55、L-56、L-57
+
 ### 待修复重点（按风险排序）
 1. **CRITICAL**：C-2（SSE 凭据在 URL，需前后端配合）
 2. **MEDIUM 数据正确性**：M-23（内核拒绝封禁后底账不回撤）、M-29（DDoS 引擎未接线、
    `auto_ban_threshold` 无消费者）、M-49（PUT /config 抹掉 YAML 注释）、M-50（连接上限
-   与 SSE 共用名额、503 不走信封）、M-F5
-3. **测试缺口**：M-T1~M-T5、M-E1、L-52（verify_http 解析盲区）
-4. **LOW 批量**：其余 56 项，按模块分批处理
+   与 SSE 共用名额、503 不走信封）、M-66（手工封禁不刷新事实缓存）、M-67（启动不载入
+   风险向量）、M-68（地理分布仍截断 1 万条）、M-69（目录模式无法保存配置）、M-70
+   （自定义半衰期不作用于库侧衰减）、M-F5
+3. **测试缺口**：M-T1~M-T5、M-E1、L-52（verify_http 解析盲区）、L-59（契约注记与
+   实现分叉）、L-53（活表分页与对账漏项）
+4. **LOW 批量**：其余 57 项，按模块分批处理
