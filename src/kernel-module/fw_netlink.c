@@ -88,6 +88,8 @@
 
 static struct sock *fw_nl_sock;
 static atomic_t fw_nl_seq = ATOMIC_INIT(0);
+/* 事件广播失败（非「无订阅者」）的累计条数，随告警一并输出（见 fw_nl_broadcast_event） */
+static atomic64_t fw_nl_event_drops = ATOMIC64_INIT(0);
 static u32 fw_nl_daemon_portid;
 static unsigned long fw_nl_daemon_activity;
 /* 守护进程注册锁：保护 portid/activity 的读写，避免并发注册导致竞态 */
@@ -180,11 +182,29 @@ static struct nlmsghdr *fw_nl_begin(struct sk_buff **out_skb, size_t payload,
  * 事件：内核 → daemon（多播组 1）
  * ==========================================================================*/
 
+/*
+ * 多播事件统一出口：广播失败时累加计数，并把累计值一并告警。
+ *
+ * -ESRCH 表示当前没有订阅者（daemon 未运行），不属于事件丢失，跳过不计。
+ * 其余失败（典型是接收队列满导致的 -ENOBUFS）是真丢了事件：pr_warn_ratelimited
+ * 会吞掉次数，单看日志条数读不出丢了多少，故把只增不减的累计值打进每条告警。
+ * 事件不重发；daemon 侧的丢失补偿由 LIST_BANS 全量采样负责。
+ */
+static void fw_nl_broadcast_event(const char *what, struct sk_buff *skb) {
+  int ret = netlink_broadcast(fw_nl_sock, skb, 0, FW_NL_GROUP, GFP_ATOMIC);
+
+  if (ret && ret != -ESRCH) {
+    u64 dropped = (u64)atomic64_inc_return(&fw_nl_event_drops);
+
+    pr_warn_ratelimited("%s 广播失败: %d（累计已丢 %llu 条事件）\n", what, ret,
+                        (unsigned long long)dropped);
+  }
+}
+
 void fw_nl_send_ddos_event(u8 af, const void *addr, const char *reason, u32 rate_pps) {
   struct sk_buff *skb;
   struct nlmsghdr *nlh;
   struct fw_ddos_event *e;
-  int ret;
 
   nlh = fw_nl_begin(&skb, sizeof(*e), FW_MSG_TYPE_DDOS_EVENT, atomic_inc_return(&fw_nl_seq));
   if (!nlh)
@@ -196,9 +216,7 @@ void fw_nl_send_ddos_event(u8 af, const void *addr, const char *reason, u32 rate
   fw_nl_copy_str(e->reason, sizeof(e->reason), reason);
   fw_nl_copy_addr(e->addr, af, addr);
 
-  ret = netlink_broadcast(fw_nl_sock, skb, 0, FW_NL_GROUP, GFP_ATOMIC);
-  if (ret && ret != -ESRCH)
-    pr_warn_ratelimited("DdosEvent 广播失败: %d\n", ret);
+  fw_nl_broadcast_event("DdosEvent", skb);
 }
 
 void fw_nl_send_ban_state_change(u8 action, u8 af, u8 prefix_len, const void *addr,
@@ -206,7 +224,6 @@ void fw_nl_send_ban_state_change(u8 action, u8 af, u8 prefix_len, const void *ad
   struct sk_buff *skb;
   struct nlmsghdr *nlh;
   struct fw_ban_state_change *e;
-  int ret;
 
   nlh = fw_nl_begin(&skb, sizeof(*e), FW_MSG_TYPE_BAN_STATE_CHANGE,
                     atomic_inc_return(&fw_nl_seq));
@@ -226,9 +243,7 @@ void fw_nl_send_ban_state_change(u8 action, u8 af, u8 prefix_len, const void *ad
   e->current_bans = cpu_to_be32(fw_ban_count());
   e->whitelist_count = cpu_to_be32(fw_wl_count());
 
-  ret = netlink_broadcast(fw_nl_sock, skb, 0, FW_NL_GROUP, GFP_ATOMIC);
-  if (ret && ret != -ESRCH)
-    pr_warn_ratelimited("BanStateChange 广播失败: %d\n", ret);
+  fw_nl_broadcast_event("BanStateChange", skb);
 }
 
 void fw_nl_send_whitelist_state_change(u8 action, u8 af, const void *addr,
@@ -236,7 +251,6 @@ void fw_nl_send_whitelist_state_change(u8 action, u8 af, const void *addr,
   struct sk_buff *skb;
   struct nlmsghdr *nlh;
   struct fw_whitelist_state_change *e;
-  int ret;
 
   nlh = fw_nl_begin(&skb, sizeof(*e), FW_MSG_TYPE_WHITELIST_STATE_CHANGE,
                     atomic_inc_return(&fw_nl_seq));
@@ -251,16 +265,13 @@ void fw_nl_send_whitelist_state_change(u8 action, u8 af, const void *addr,
   fw_nl_copy_str(e->device, sizeof(e->device), device);
   e->whitelist_count = cpu_to_be32(fw_wl_count());
 
-  ret = netlink_broadcast(fw_nl_sock, skb, 0, FW_NL_GROUP, GFP_ATOMIC);
-  if (ret && ret != -ESRCH)
-    pr_warn_ratelimited("WhitelistStateChange 广播失败: %d\n", ret);
+  fw_nl_broadcast_event("WhitelistStateChange", skb);
 }
 
 void fw_nl_send_config_change(u32 flags, u32 ban_time) {
   struct sk_buff *skb;
   struct nlmsghdr *nlh;
   struct fw_config_change *e;
-  int ret;
 
   nlh = fw_nl_begin(
     &skb, sizeof(*e), FW_MSG_TYPE_CONFIG_CHANGE, atomic_inc_return(&fw_nl_seq));
@@ -286,9 +297,7 @@ void fw_nl_send_config_change(u32 flags, u32 ban_time) {
   e->baseline_bps = cpu_to_be64(fw_info.baseline_bps);
   e->ddos_ban_duration = cpu_to_be32(fw_info.ddos_ban_duration);
 
-  ret = netlink_broadcast(fw_nl_sock, skb, 0, FW_NL_GROUP, GFP_ATOMIC);
-  if (ret && ret != -ESRCH)
-    pr_warn_ratelimited("ConfigChange 广播失败: %d\n", ret);
+  fw_nl_broadcast_event("ConfigChange", skb);
 }
 
 /* 命令失败通知（单播回发起方） */
