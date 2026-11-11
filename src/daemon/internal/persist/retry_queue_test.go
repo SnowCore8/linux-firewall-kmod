@@ -1,6 +1,7 @@
 package persist
 
 import (
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -246,5 +247,44 @@ func TestRetryQueueDropsUnknownOp(t *testing.T) {
 	}
 	if strings.Contains(string(data), "from-the-future") {
 		t.Fatalf("未知 op 仍留在持久化文件里: %s", data)
+	}
+}
+
+// TestRetryQueueStopPersistsWhenDBUnavailable 钉住关停兜底：DB 不可用时 flush 会提前返回，
+// 队列里剩余的任务必须在 Stop 里重新落盘，否则进程重启后这些事件就丢了。
+func TestRetryQueueStopPersistsWhenDBUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	persistPath := filepath.Join(dir, "retry.json")
+	db, err := NewDB(Config{Path: filepath.Join(dir, "test.db")})
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	_ = db.Close() // DB 不可用，flush 注定失败
+
+	q := NewRetryQueue(db, RetryQueueConfig{
+		MaxSize:          10,
+		PersistPath:      persistPath,
+		Logger:           slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+		RetryInterval:    time.Second,
+		MaxRetryInterval: time.Second,
+	})
+	q.EnqueueBanEvent("203.0.113.77", "sshd", 1, false, nil)
+	// 删掉 Enqueue 写出的快照，只有 Stop 里的最后一次 persist 能把它补回来。
+	if err := os.Remove(persistPath); err != nil {
+		t.Fatalf("删除持久化文件失败: %v", err)
+	}
+
+	q.Stop()
+
+	data, err := os.ReadFile(persistPath)
+	if err != nil {
+		t.Fatalf("Stop 后持久化文件不存在，剩余任务已丢失: %v", err)
+	}
+	var tasks []retryTask
+	if err := json.Unmarshal(data, &tasks); err != nil {
+		t.Fatalf("解析持久化文件失败: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].IP != "203.0.113.77" {
+		t.Fatalf("Stop 后应从磁盘恢复 1 条任务，实际 %+v", tasks)
 	}
 }
