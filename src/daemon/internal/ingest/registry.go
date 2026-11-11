@@ -78,13 +78,6 @@ func (r *SourceRegistry) Register(owner SourceOwner, path string, wd int32, inod
 
 	id := SourceID(r.next)
 	r.next++
-	// 该路径之前可能登记过别的 wd（理论上不会：byPath 已去重），但防御性摘除可
-	// 避免 byWD 里留下指向旧身份的悬挂映射。
-	for otherWD, mapped := range r.byWD {
-		if mapped == id {
-			delete(r.byWD, otherWD)
-		}
-	}
 	r.byWD[wd] = id
 	r.byPath[path] = id
 	r.byID[id] = &SourceEntry{Owner: owner, Path: path, WD: wd, Inode: inode}

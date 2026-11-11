@@ -146,9 +146,10 @@ func (r *SourceReader) ReadNew(path string) (Chunk, error) {
 
 	if r.offset > 0 {
 		if _, err := r.fd.Seek(r.offset, io.SeekStart); err != nil {
-			// Seek 失败说明 fd 状态异常，关闭防止泄漏；调用方应通过 Reset() 清理
-			r.fd.Close()
-			r.fd = nil
+			// Seek 失败说明 fd 状态异常，Reset 清理全部状态（fd/inode/offset），
+			// 下一轮 ReadNew 会重新打开文件并从头读取，避免残留的 inode/offset
+			// 导致轮转检测误判。
+			r.Reset()
 			return Chunk{}, err
 		}
 	}
