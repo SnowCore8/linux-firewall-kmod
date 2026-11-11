@@ -101,7 +101,12 @@ func (r *fileReloader) Rollback(cfg *config.Config) error {
 // HTTP 服务器只在启动时绑定一次端口，重载与回滚都不重绑。metrics_port 现在真的会
 // 改变合成地址（此前那个字段没有消费者，怎么改都是 127.0.0.1:9119），所以两份不一致
 // 时留一条告警，而不是让人以为把端口写进文件就立刻生效。
+//
+// 换入是整结构体赋值（含 Jails/TrustedIPs 的 slice 头），HTTP handler 与其它 goroutine
+// 会并发读同一实例，所以必须在写锁内完成；监听地址的比较与告警放到锁外——日志是文件
+// I/O，不该让它在持锁期间挡住所有读方。
 func (r *fileReloader) applyConfig(cfg *config.Config, newCfg config.Config) {
+	config.LockConfig()
 	running := cfg.ListenAddress()
 	// 出口探测得到的本机坐标不是 YAML 键，只在启动时填一次；新配置从文件重建后这两组
 	// 字段为空，若直接换入，一次热重载就会把地图上的本机标记抹掉，直到进程重启才恢复。
@@ -112,7 +117,9 @@ func (r *fileReloader) applyConfig(cfg *config.Config, newCfg config.Config) {
 		newCfg.ServerCoordsSource = cfg.ServerCoordsSource
 	}
 	*cfg = newCfg
-	if configured := cfg.ListenAddress(); configured != running {
+	configured := cfg.ListenAddress()
+	config.UnlockConfig()
+	if configured != running {
 		r.logger.Warn("HTTP 监听地址已改变，本进程不会重新绑定，需重启守护进程才会生效",
 			"running", running, "configured", configured)
 	}

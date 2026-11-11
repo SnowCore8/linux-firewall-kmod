@@ -30,6 +30,7 @@ package runtime
 import (
 	"time"
 
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/contract"
 )
 
@@ -122,23 +123,31 @@ func (e *InboundExecutor) adoptKernelConfig(d Directive) {
 		// 0 在内核侧不是合法 bantime：采纳它会把每个继承默认值的 jail 变成永久封禁。
 		if d.BanTimeSecs == 0 {
 			e.warn("内核广播的 ban_time 为 0，不采纳", "flags", uint32(flags))
-		} else if secs := clampKernelBanTime(d.BanTimeSecs); secs != e.cfg.DefaultBanTime {
-			e.warn("采纳内核侧 ban_time", "old", e.cfg.DefaultBanTime, "new", secs)
-			e.cfg.DefaultBanTime = secs
-			for i := range e.cfg.Jails {
-				if !e.cfg.Jails[i].BanTimeSet && e.cfg.Jails[i].BanTime != secs {
-					e.cfg.Jails[i].BanTime = secs
+		} else {
+			secs := clampKernelBanTime(d.BanTimeSecs)
+			// 比较与写入分两次取锁：DefaultBanTime 的写方只有本执行体，读到的旧值是准的；
+			// 日志挪到解锁之后，避免持写锁做 I/O。
+			if old := e.defaultBanTime(); secs != old {
+				e.warn("采纳内核侧 ban_time", "old", old, "new", secs)
+				config.LockConfig()
+				e.cfg.DefaultBanTime = secs
+				for i := range e.cfg.Jails {
+					if !e.cfg.Jails[i].BanTimeSet && e.cfg.Jails[i].BanTime != secs {
+						e.cfg.Jails[i].BanTime = secs
+					}
 				}
+				config.UnlockConfig()
+				changed = true
 			}
-			changed = true
 		}
 	}
 
 	if flags&contract.ConfigFlagDdosBanDuration != 0 && d.DdosBanDurationSecs != 0 {
-		if d.DdosBanDurationSecs != e.cfg.Ddos.AutoBanDuration {
-			e.warn("采纳内核侧 DDoS 封禁时长",
-				"old", e.cfg.Ddos.AutoBanDuration, "new", d.DdosBanDurationSecs)
+		if old := e.ddosBanDuration(); d.DdosBanDurationSecs != old {
+			e.warn("采纳内核侧 DDoS 封禁时长", "old", old, "new", d.DdosBanDurationSecs)
+			config.LockConfig()
 			e.cfg.Ddos.AutoBanDuration = d.DdosBanDurationSecs
+			config.UnlockConfig()
 			changed = true
 		}
 	}
@@ -148,6 +157,20 @@ func (e *InboundExecutor) adoptKernelConfig(d Directive) {
 		// 否则新值要等到下一次 SIGHUP 才生效。
 		e.refreshJails()
 	}
+}
+
+// defaultBanTime 在读锁内取默认封禁时长。
+func (e *InboundExecutor) defaultBanTime() int32 {
+	config.RLockConfig()
+	defer config.RUnlockConfig()
+	return e.cfg.DefaultBanTime
+}
+
+// ddosBanDuration 在读锁内取 DDoS 自动封禁时长。
+func (e *InboundExecutor) ddosBanDuration() uint32 {
+	config.RLockConfig()
+	defer config.RUnlockConfig()
+	return e.cfg.Ddos.AutoBanDuration
 }
 
 // clampKernelBanTime 把内核的 u32 秒数收进 cfg 的 int32 表示（上界钳到 int32 最大值，

@@ -308,20 +308,25 @@ func (h *APIHandlers) AttackGeo(w http.ResponseWriter, r *http.Request) {
 		ServerLocationSource: "none",
 	}
 	if cfg := h.currentConfig(); cfg != nil {
+		// 三件套必须在同一把读锁内取完：热重载是整份替换，分行读可能拿到「来源是
+		// detected、坐标却是文件里的新值」这种混合版本，地图会标到一个没探测过的点。
+		config.RLockConfig()
 		src := cfg.ServerCoordsSource
+		coordsSet := cfg.ServerCoordsSet
+		lat := cfg.ServerLatitude
+		lon := cfg.ServerLongitude
+		config.RUnlockConfig()
 		if src == "" {
 			src = "none"
-			if cfg.ServerCoordsSet {
+			if coordsSet {
 				src = "config"
 			}
 		}
 		// 热重载可能把配置里的坐标撤掉：来源标着 config 但坐标已不在时按无坐标处理。
-		if src == "config" && !cfg.ServerCoordsSet {
+		if src == "config" && !coordsSet {
 			src = "none"
 		}
 		if src != "none" {
-			lat := cfg.ServerLatitude
-			lon := cfg.ServerLongitude
 			resp.ServerLatitude = &lat
 			resp.ServerLongitude = &lon
 			resp.ServerLocationSource = src

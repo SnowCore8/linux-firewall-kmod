@@ -282,7 +282,12 @@ func run(args []string) error {
 		pushProtectedPorts = func(force bool) {
 			var bitmap [contract.ProtectedPortsLen]byte
 			count := 0
-			if cfg.Ddos.ProtectOpenPorts {
+			// 这个闭包由 protected-ports 执行体与内核事件泵（租约确认）并发调用，而热重载
+			// 会整份替换 cfg：开关只在读锁内取一次。
+			config.RLockConfig()
+			protectOpenPorts := cfg.Ddos.ProtectOpenPorts
+			config.RUnlockConfig()
+			if protectOpenPorts {
 				bmp, n, err := netports.ListeningPorts("/proc/net")
 				if err != nil {
 					logger.Warn("扫描本机监听端口失败，保留内核现有位图", "error", err)
@@ -444,7 +449,12 @@ func run(args []string) error {
 				GetCurrentConfig: func() *config.Config { return &cfg },
 				GetConfigPath:    func() string { return configSource },
 				JailController:   jailEnabled,
-				LogFilePath:      func() string { return cfg.LogFile },
+				LogFilePath: func() string {
+					// 每次请求现取：热重载会整份替换 cfg，直接读 cfg.LogFile 就是数据竞争。
+					config.RLockConfig()
+					defer config.RUnlockConfig()
+					return cfg.LogFile
+				},
 				// GET /health 的读数来源：链路状态只有事件泵这份快照知道，procfs 在场与否
 				// 由本进程自己 stat。
 				GetKernelSnapshot: kernelStore.Snapshot,

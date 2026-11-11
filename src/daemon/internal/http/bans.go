@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/bans"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/decision"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 )
@@ -498,11 +499,16 @@ func (h *APIHandlers) jailBaseDuration(name string) (banTime int32, known bool) 
 	if cfg == nil {
 		return 0, false
 	}
+	// FindJail 返回的是 cfg.Jails 元素的指针，解锁之后就不再受保护：读锁内一次取出
+	// 需要的 BanTime 即可。
+	config.RLockConfig()
 	jail := cfg.FindJail(name)
-	if jail == nil {
-		return 0, false
+	known = jail != nil
+	if known {
+		banTime = jail.BanTime
 	}
-	return jail.BanTime, true
+	config.RUnlockConfig()
+	return banTime, known
 }
 
 // progressiveLevel 把累计封禁次数说成一句等级文案。

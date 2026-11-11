@@ -42,7 +42,11 @@ func (h *APIHandlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 		WriteServiceUnavailable(w, "config not available")
 		return
 	}
-	WriteSuccess(w, webuiConfigResponse(cfg.Webui))
+	// 读锁内只取副本：Webui 是值类型，拷贝即与共享实例脱钩。
+	config.RLockConfig()
+	webui := cfg.Webui
+	config.RUnlockConfig()
+	WriteSuccess(w, webuiConfigResponse(webui))
 }
 
 // UpdateConfig 接收 Web UI 配置的**局部更新**（PUT /api/v2/config）。
@@ -99,7 +103,7 @@ func (h *APIHandlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 	// 可能正在锁内改写它，锁外读就是数据竞争。
 	if _, fileBacked := applyWebuiUpdate(config.WebuiConfig{}, &req); !fileBacked {
 		// 空 body（什么都没提交）既不改文件也不下发，只回当前快照。
-		WriteSuccess(w, webuiConfigResponse(cfg.Webui))
+		WriteSuccess(w, webuiConfigResponse(h.snapshotWebui(cfg)))
 		return
 	}
 	// 合并与校验都必须在 configFileMu 内按**当时的** cfg.Webui 重算：两个并发 PUT 各自
@@ -109,7 +113,17 @@ func (h *APIHandlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WriteSuccess(w, webuiConfigResponse(cfg.Webui))
+	WriteSuccess(w, webuiConfigResponse(h.snapshotWebui(cfg)))
+}
+
+// snapshotWebui 在读锁内取一份 webui 段副本。
+//
+// 响应要的是「此刻的取值」，而不是一个指向共享实例的指针：解锁之后 cfg.Webui 还可能
+// 被 SIGHUP 重载或另一个 PUT 改写。
+func (h *APIHandlers) snapshotWebui(cfg *config.Config) config.WebuiConfig {
+	config.RLockConfig()
+	defer config.RUnlockConfig()
+	return cfg.Webui
 }
 
 // persistWebui 把新的 webui 段并回配置文件、按加载口径复核并下发内核，返回是否成功。
@@ -133,7 +147,9 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, re
 	defer h.configFileMu.Unlock()
 
 	// 局部更新以锁内的现值为底：锁外的旧值在并发请求下会丢掉另一个请求刚写的字段。
-	updated, _ := applyWebuiUpdate(cfg.Webui, req)
+	// 读锁只包住这一次拷贝；后续的读文件/合并/校验/写盘都在配置锁之外，不与热重载的
+	// 整份替换互斥，靠 configFileMu 串行化「合并 + 校验 + 写盘」这一段。
+	updated, _ := applyWebuiUpdate(h.snapshotWebui(cfg), req)
 	if err := validateWebui(updated); err != nil {
 		WriteCode(w, httpcontract.Code40004, "更新配置失败："+err.Error())
 		return false
@@ -172,8 +188,11 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, re
 	h.server.logger.Info("配置文件 webui 段已通过 API 更新", "path", path)
 
 	// 文件已落新值，内存立即对齐（见函数注释）：此后内核下发成败都不再改变 GET /config 的答案。
+	// 写的是共享实例上的一段，必须在写锁内；内核 netlink 下发在锁外，不让它挡住读方。
+	config.LockConfig()
 	cfg.Webui = updated
 	syncDdosToggles(cfg, updated)
+	config.UnlockConfig()
 
 	if h.kernelConfig != nil {
 		change := newCfg.KernelConfigChange()
@@ -322,6 +341,9 @@ func applyWebuiUpdate(cur config.WebuiConfig, req *UpdateConfigRequest) (config.
 }
 
 // syncDdosToggles 把面板的三个检测开关同步到内核投影读取的 ddos 段。
+//
+// 调用方必须持有 config.LockConfig：写的是共享实例上的 cfg.Ddos。这里是纯字段赋值，
+// 不带任何日志或 I/O，便于把整个写窗口压到最短。
 func syncDdosToggles(cfg *config.Config, w config.WebuiConfig) {
 	cfg.Ddos.StaticThreshold = w.StaticThreshold
 	cfg.Ddos.DynamicThreshold = w.DynamicThreshold

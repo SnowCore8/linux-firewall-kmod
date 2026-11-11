@@ -512,7 +512,11 @@ func (h *APIHandlers) banTableCapacity() uint64 {
 	if cfg == nil {
 		return 0
 	}
-	return uint64(cfg.Capacity.MaxBanEntries)
+	// 只取一个标量：读锁内拷出即解锁，容量是 Capacity 段的字段，热重载会整份替换。
+	config.RLockConfig()
+	capacity := cfg.Capacity.MaxBanEntries
+	config.RUnlockConfig()
+	return uint64(capacity)
 }
 
 // kernelSnapshot 读内核观测快照；链路未装配时给零值而不是 nil。

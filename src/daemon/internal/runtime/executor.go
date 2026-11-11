@@ -451,7 +451,9 @@ func (e *InboundExecutor) poll(timeout time.Duration) (ready, error) {
 
 // nextPollTimeout 是下一轮 poll 的超时上限。
 func (e *InboundExecutor) nextPollTimeout(now time.Time) time.Duration {
+	config.RLockConfig()
 	secs := e.cfg.Interval
+	config.RUnlockConfig()
 	if secs == 0 {
 		secs = 1
 	}
@@ -746,8 +748,11 @@ func (e *InboundExecutor) retryPendingReadd() {
 // SourceID 保持稳定，各源的读取偏移与半行缓冲不受影响。
 func (e *InboundExecutor) reconcileWatches() {
 	keep := make(map[string]struct{})
-	if e.cfg.ConfigFile != "" {
-		keep[ingest.CleanPath(e.cfg.ConfigFile)] = struct{}{}
+	config.RLockConfig()
+	configFile := e.cfg.ConfigFile
+	config.RUnlockConfig()
+	if configFile != "" {
+		keep[ingest.CleanPath(configFile)] = struct{}{}
 	}
 	logs := e.enabledLogSources()
 	for _, ls := range logs {
@@ -764,8 +769,8 @@ func (e *InboundExecutor) reconcileWatches() {
 		e.dropSource(id)
 	}
 
-	if e.cfg.ConfigFile != "" && !e.registry.ContainsPath(e.cfg.ConfigFile) {
-		e.addConfigWatch(e.cfg.ConfigFile)
+	if configFile != "" && !e.registry.ContainsPath(configFile) {
+		e.addConfigWatch(configFile)
 	}
 
 	for _, ls := range logs {
@@ -880,11 +885,23 @@ func (e *InboundExecutor) entryForPath(path string) (ingest.SourceID, int32, uin
 	return foundID, foundWD, foundInode, found
 }
 
+// snapshotJails 在读锁内拷一份 jail 列表。
+//
+// 只拷到元素这一层：LogFiles/Regexes 的底层数组在重载时整份替换，写方（本执行体）是
+// 唯一改写者，解锁后继续读这些切片不会与别的 goroutine 冲突；而 HTTP 侧的写方只碰
+// cfg.Webui / cfg.Ddos，与 Jails 无关。
+func (e *InboundExecutor) snapshotJails() []config.Jail {
+	config.RLockConfig()
+	defer config.RUnlockConfig()
+	jails := make([]config.Jail, len(e.cfg.Jails))
+	copy(jails, e.cfg.Jails)
+	return jails
+}
+
 // enabledLogSources 返回当前配置里启用的日志源。
 func (e *InboundExecutor) enabledLogSources() []logSource {
 	var out []logSource
-	for i := range e.cfg.Jails {
-		jail := &e.cfg.Jails[i]
+	for _, jail := range e.snapshotJails() {
 		if !jail.Enabled {
 			continue
 		}
@@ -900,8 +917,7 @@ func (e *InboundExecutor) enabledLogSources() []logSource {
 func (e *InboundExecutor) jailsForPath(path string) []string {
 	clean := ingest.CleanPath(path)
 	var out []string
-	for i := range e.cfg.Jails {
-		jail := &e.cfg.Jails[i]
+	for _, jail := range e.snapshotJails() {
 		if !jail.Enabled {
 			continue
 		}
@@ -970,7 +986,11 @@ func (e *InboundExecutor) pushKernelConfig(reason string) {
 	if e.kernelConfig == nil {
 		return
 	}
+	// 投影只在读锁内算完：它按 Ddos/DefaultBanTime 逐字段取值，与热重载的整份替换并发
+	// 会读到混合版本。netlink 下发在锁外，不让内核往返挡住 API 与重载。
+	config.RLockConfig()
 	change := e.cfg.KernelConfigChange()
+	config.RUnlockConfig()
 	rejected, err := e.kernelConfig.ApplyConfig(&change)
 	if err != nil {
 		e.warn("配置下发内核失败", "reason", reason, "error", err)
@@ -984,19 +1004,26 @@ func (e *InboundExecutor) pushKernelConfig(reason string) {
 }
 
 // syncJailEnabled 把 Web UI 权威的启用状态桥接进本地配置，有变化才重建监视集合。
+//
+// 启用状态与补编译都写在共享实例上，必须持写锁。日志与「重建监视集合」放到解锁之后：
+// 前者是 I/O，后者要取读锁（RWMutex 不可重入），持写锁调用会自锁。
 func (e *InboundExecutor) syncJailEnabled() {
 	if e.enabled == nil {
 		return
 	}
 	states := e.enabled.EnabledStates()
+	var logs []pendingLog
 	changed := false
+
+	config.LockConfig()
 	for i := range e.cfg.Jails {
 		local := &e.cfg.Jails[i]
 		enabled, ok := states[local.Name]
 		if !ok || local.Enabled == enabled {
 			continue
 		}
-		e.info("Jail 启用状态同步", "jail", local.Name, "enabled", enabled)
+		logs = append(logs, pendingLog{msg: "Jail 启用状态同步",
+			attrs: []any{"jail", local.Name, "enabled", enabled}})
 		local.Enabled = enabled
 		changed = true
 	}
@@ -1013,16 +1040,29 @@ func (e *InboundExecutor) syncJailEnabled() {
 			// 被跳过的模式逐条告警：部分成功时 err 为 nil，不写出来就没人知道
 			// 这条正则没有生效。全部失败时只报汇总，避免重复。
 			if err != nil {
-				e.warn("启用 jail 时编译正则失败", "jail", local.Name, "error", err)
+				logs = append(logs, pendingLog{warn: true, msg: "启用 jail 时编译正则失败",
+					attrs: []any{"jail", local.Name, "error", err}})
 			} else {
 				for _, w := range skipped {
-					e.warn(w)
+					logs = append(logs, pendingLog{warn: true, msg: w})
 				}
 			}
 			if len(local.LogFiles) == 0 {
-				e.warn("jail 已启用但未配置 log_files，不会监视任何日志文件", "jail", local.Name)
+				logs = append(logs, pendingLog{warn: true,
+					msg: "jail 已启用但未配置 log_files，不会监视任何日志文件", attrs: []any{"jail", local.Name}})
 			}
 		}
+	}
+	config.UnlockConfig()
+
+	for _, l := range logs {
+		if l.warn {
+			e.warn(l.msg, l.attrs...)
+		} else {
+			e.info(l.msg, l.attrs...)
+		}
+	}
+	if changed {
 		// refreshJails 重建规则集并发布快照（快照存的是副本，原地改 Enabled 不会自己
 		// 浮到读侧），比单独 publishJailSnapshot 更完整。
 		e.refreshJails()
@@ -1030,11 +1070,24 @@ func (e *InboundExecutor) syncJailEnabled() {
 	}
 }
 
+// pendingLog 是一条等锁外再写的日志。
+//
+// 持写锁期间不写日志：日志器可能落到文件，一次磁盘抖动会钉住所有读方。
+type pendingLog struct {
+	warn  bool
+	msg   string
+	attrs []any
+}
+
 // refreshJails 按当前配置重建各 jail 的规则集与判定参数（失败窗口由 RegisterJail 保留）。
+//
+// 先在读锁内拷一份 jail 列表再动：整份替换（*cfg = newCfg）正并发发生时，直接按下标
+// 遍历共享 slice 会读到新旧混杂的元素。拷出来的那份在本执行体内不再变化。
 func (e *InboundExecutor) refreshJails() {
-	keep := make([]string, 0, len(e.cfg.Jails))
-	for i := range e.cfg.Jails {
-		jail := &e.cfg.Jails[i]
+	jails := e.snapshotJails()
+	keep := make([]string, 0, len(jails))
+	for i := range jails {
+		jail := &jails[i]
 		rules := e.ruleSetFor(jail)
 		policy := NewJailPolicy(jail.MaxRetries, jail.FindTime, jail.BanTime, jail.Cluster)
 		e.pipeline.RegisterJail(rules, policy)
@@ -1045,7 +1098,7 @@ func (e *InboundExecutor) refreshJails() {
 		e.debug("已摘除配置中不再存在的 jail", "removed", removed)
 	}
 	// 把这一份 jail 配置推给表现层（见 publishJailSnapshot）。
-	e.publishJailSnapshot()
+	e.publishJailSnapshot(jails)
 }
 
 // publishJailSnapshot 把当前生效的 jail 配置发布给表现层，并通知订阅方。
@@ -1061,8 +1114,14 @@ func (e *InboundExecutor) refreshJails() {
 // 发布之后的那一声是给 SSE 的 jails 域：订阅者只有靠这一声才知道快照换了，否则
 // SIGHUP 或内核侧改完配置，界面继续显示旧形状（契约缺陷 HTTP_SSE_JAILS_NO_PUBLISHER）。
 // 载荷取的是刚发布的那份快照，与 GET /api/v2/jails 同一个折表函数。
-func (e *InboundExecutor) publishJailSnapshot() {
-	config.SetActiveJails(e.cfg.Jails)
+//
+// jails 由调用方给：refreshJails 传它刚从读锁内拷出的那一份，保证「重建规则集」与
+// 「发布快照」看到的是同一版本；传 nil 表示本次没有现成副本，自行在读锁内取。
+func (e *InboundExecutor) publishJailSnapshot(jails []config.Jail) {
+	if jails == nil {
+		jails = e.snapshotJails()
+	}
+	config.SetActiveJails(jails)
 	if e.jailSnapshot != nil {
 		e.jailSnapshot.OnJailSnapshotChanged()
 	}
