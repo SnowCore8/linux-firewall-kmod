@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -214,3 +215,36 @@ func TestRetryQueue_StartupSyncToDB(t *testing.T) {
 }
 
 func retryInt64Ptr(v int64) *int64 { return &v }
+
+// 未知 op（例如持久化文件来自另一个版本）永远不可能成功：必须丢弃，不能永久占住队列
+// 并把整条队列的退避推到上限。同一批里的合法任务仍要正常落库。
+func TestRetryQueueDropsUnknownOp(t *testing.T) {
+	q, db := newRetryTestQueue(t)
+
+	q.Enqueue(retryTask{Op: retryOp("from-the-future"), IP: "198.51.100.9"})
+	q.EnqueueBanEvent("198.51.100.10", "sshd", 1, false, nil)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && q.Len() > 0 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if q.Len() != 0 {
+		t.Fatalf("未知 op 未被丢弃，队列仍有 %d 条", q.Len())
+	}
+	events, err := db.GetBanEvents(10)
+	if err != nil {
+		t.Fatalf("GetBanEvents: %v", err)
+	}
+	if len(events) != 1 || events[0].IP != "198.51.100.10" {
+		t.Fatalf("合法任务未落库: %+v", events)
+	}
+
+	q.Stop()
+	data, err := os.ReadFile(q.cfg.PersistPath)
+	if err != nil {
+		t.Fatalf("读持久化文件失败: %v", err)
+	}
+	if strings.Contains(string(data), "from-the-future") {
+		t.Fatalf("未知 op 仍留在持久化文件里: %s", data)
+	}
+}

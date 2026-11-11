@@ -3,6 +3,7 @@ package persist
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -63,9 +64,14 @@ type RetryQueue struct {
 	mu    sync.Mutex
 	tasks []retryTask
 
+	// persistMu 串行化「取快照 + 落文件」。没有它，两个并发 persist 会各自写临时文件，
+	// rename 的先后与快照的新旧无关——旧快照后落盘就会覆盖掉刚入队的任务。
+	persistMu sync.Mutex
+
 	wake       chan struct{}
 	stop       chan struct{}
 	done       chan struct{}
+	stopOnce   sync.Once
 	nextID     uint64
 	persistSeq uint64
 }
@@ -132,8 +138,11 @@ func (q *RetryQueue) Len() int {
 }
 
 // Stop 通知后台协程退出，等待其结束，并执行最后一次持久化与 flush。
+//
+// 可重复调用：关停路径上「显式调用」与「defer 兜底」并存时，第二次调用不能 panic
+// （close of closed channel），也不能重复等待一个已结束的协程。
 func (q *RetryQueue) Stop() {
-	close(q.stop)
+	q.stopOnce.Do(func() { close(q.stop) })
 	<-q.done
 	// 最后一次 flush：尝试把队列中剩余的任务写入 DB。
 	q.flush(context.Background())
@@ -226,8 +235,19 @@ func (q *RetryQueue) retryBatch() (succeeded, failed int) {
 	q.mu.Unlock()
 
 	var remaining []retryTask
+	dropped := 0
 	for _, task := range batch {
 		if err := q.execute(task); err != nil {
+			if errors.Is(err, errRetryTaskPermanent) {
+				// 未知 op 永远不可能成功：丢弃并记一条错误日志，不让它拖住整条队列。
+				q.log.Error("retry queue: dropping task that can never succeed",
+					"op", string(task.Op),
+					"ip", task.IP,
+					"error", err,
+				)
+				dropped++
+				continue
+			}
 			remaining = append(remaining, task)
 			failed++
 			continue
@@ -249,11 +269,16 @@ func (q *RetryQueue) retryBatch() (succeeded, failed int) {
 	}
 	q.tasks = append(remaining, newTasks...)
 	q.mu.Unlock()
-	if succeeded > 0 {
+	if succeeded > 0 || dropped > 0 {
 		q.persist()
 	}
 	return succeeded, failed
 }
+
+// errRetryTaskPermanent 标记「重试多少次都不可能成功」的任务（如持久化文件里来自其他
+// 版本的未知 op）。这类任务不能按普通失败计入退避，否则它会永久占住队列并让所有任务
+// 的重试频率一路降到上限。
+var errRetryTaskPermanent = errors.New("retry task can never succeed")
 
 // execute 执行单条重试任务。
 func (q *RetryQueue) execute(task retryTask) error {
@@ -266,7 +291,7 @@ func (q *RetryQueue) execute(task retryTask) error {
 	case opBanReputation:
 		return q.db.RecordBan(task.IP, task.Penalty)
 	default:
-		return fmt.Errorf("unknown retry op: %s", task.Op)
+		return fmt.Errorf("%w: %s", errRetryTaskPermanent, task.Op)
 	}
 }
 
@@ -301,11 +326,15 @@ func (q *RetryQueue) flush(ctx context.Context) {
 
 // persist 把当前队列写入持久化文件。
 //
-// 使用原子递增的序号生成唯一临时文件名，避免多协程并发 persist 时互相覆盖。
+// 快照与写入都在 persistMu 内完成，落盘顺序因此与快照顺序一致，最后一次写入必然是
+// 最新快照。临时文件名仍用递增序号，避免极端情况下与残留文件重名。
 func (q *RetryQueue) persist() {
 	if q.cfg.PersistPath == "" {
 		return
 	}
+	q.persistMu.Lock()
+	defer q.persistMu.Unlock()
+
 	q.mu.Lock()
 	tasks := make([]retryTask, len(q.tasks))
 	copy(tasks, q.tasks)
@@ -320,6 +349,7 @@ func (q *RetryQueue) persist() {
 	tmp := fmt.Sprintf("%s.tmp.%d", q.cfg.PersistPath, seq)
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		q.log.Error("retry queue: write persist file", "error", err)
+		_ = os.Remove(tmp)
 		return
 	}
 	if err := os.Rename(tmp, q.cfg.PersistPath); err != nil {
