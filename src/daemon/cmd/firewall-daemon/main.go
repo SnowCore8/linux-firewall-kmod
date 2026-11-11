@@ -45,6 +45,10 @@ var panelDir = panelres.PanelDir
 // 人尽可猜，本身不是机密；这里只用它做启动期比对，检测「面板仍在用出厂口令」。
 const factoryDefaultPassword = "changeme"
 
+// factoryDefaultUsername 是 config/default.yaml 的出厂用户名，与口令同源。
+// 单独检出它不构成风险，但它是「这组凭据仍是出厂值」的另一半证据。
+const factoryDefaultUsername = "admin"
+
 // daemonPIDFile 是 `-d` 模式写下的 PID 文件路径（与 --rollback 的查找口径无关：
 // 回滚按进程名找，不读这个文件）。
 const daemonPIDFile = "/run/firewall-daemon.pid"
@@ -130,12 +134,9 @@ func run(args []string) error {
 			"addr", addr,
 			"怎么修", "设置 FIREWALL_METRICS_USERNAME / FIREWALL_METRICS_PASSWORD（随包 EnvironmentFile 已备好），或把 defaults 段两项一起填，或把 metrics_bind_address 收回 127.0.0.1")
 	}
-	// 出厂占位口令是公开值：两项都非空（AuthEnabled 为真）也算「已认证」，但口令人人可猜，
-	// 等同于无防护。命中就显眼告警——同样只报事实、绝不回显口令值本身。
-	if cfg.AuthEnabled() && cfg.MetricsPassword == factoryDefaultPassword {
-		logger.Warn("面板仍在使用出厂默认口令，等同于无防护：任何知道默认值的人都能登录并下发封禁",
-			"怎么修", "设置 FIREWALL_METRICS_PASSWORD（随包 EnvironmentFile 已备好），或把 defaults.metrics_password 改成强随机口令，改后重启守护进程")
-	}
+	// 出厂凭据是公开值：两项都非空（AuthEnabled 为真）也算「已认证」，但它们人尽可猜，
+	// 等同于无防护。命中就显眼告警——只报事实、绝不回显凭据值本身。
+	warnIfFactoryDefaultCredentials(logger, &cfg)
 
 	// GeoIP 读库是可选的：未配置或打不开时地理分布接口照常应答，只是不定位攻击源。
 	// 出口探测是显式开关（默认关）：它会把本机公网 IP 发给探测端点，只在该开关打开
@@ -754,6 +755,33 @@ func kernelModuleVersion() string {
 // *slog.Logger 始终可用，各调用点沿用 logger.Info/Warn/Debug 形式不变。
 func newLogger(cfg *config.Config) *slog.Logger {
 	return logger.Init(cfg)
+}
+
+// warnIfFactoryDefaultCredentials 在面板仍用出厂凭据时告警，绝不拒绝启动。
+//
+// 判据是「认证已启用（两项都非空）且任一维度等于出厂值」：口令是公开值，猜到就能登录；
+// 用户名仍是默认值本身不构成风险，但它说明这组凭据原封未动——只换了用户名、口令没换的
+// 半改配置反而更危险，因为改的人以为已经改过了。所以任一维度命中都告警。
+// 调用点在凭据定型之后（环境变量覆盖已在配置解析末尾完成）、HTTP 服务器开始监听之前，
+// 让告警先于任何登录尝试落到日志里；真实凭据覆盖后两个维度都不等于出厂值，不会误报。
+//
+// 只写布尔事实，不写口令、也不写用户名以外的凭据内容——日志会被收集、转发并长期留存，
+// 把凭据值写进去等于把钥匙抄在日志里。
+func warnIfFactoryDefaultCredentials(logger *slog.Logger, cfg *config.Config) {
+	if !cfg.AuthEnabled() {
+		// 两项没凑齐时认证本身是关的，入口另有一条「未配置认证」告警负责说明；
+		// 这里再报默认值只会重复。
+		return
+	}
+	usernameDefault := cfg.MetricsUsername == factoryDefaultUsername
+	passwordDefault := cfg.MetricsPassword == factoryDefaultPassword
+	if !usernameDefault && !passwordDefault {
+		return
+	}
+	logger.Warn("面板仍在使用出厂默认凭据，等同于无防护：任何能访问监听端口的人都能登录并下发封禁",
+		"username_is_default", usernameDefault,
+		"password_is_default", passwordDefault,
+		"怎么修", "设置 FIREWALL_METRICS_USERNAME / FIREWALL_METRICS_PASSWORD（随包 EnvironmentFile 已备好），或把 defaults 段两项改成强随机值，改后重启守护进程")
 }
 
 // feedIntel 把威胁情报管理器接到判定层，只暴露查询，不泄露管理器其余能力。
