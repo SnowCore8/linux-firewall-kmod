@@ -78,9 +78,9 @@ func TestReservedPredicateMatchesLegacySet(t *testing.T) {
 // 否则 ::ffff:127.0.0.1 这类环回地址会穿透过滤被当作可封禁对象。
 func TestIsReserved_IPv4Mapped(t *testing.T) {
 	reserved := []string{
-		"::ffff:127.0.0.1",   // 环回
-		"::ffff:0.0.0.0",     // 本网络
-		"::ffff:224.0.0.1",   // 组播
+		"::ffff:127.0.0.1",       // 环回
+		"::ffff:0.0.0.0",         // 本网络
+		"::ffff:224.0.0.1",       // 组播
 		"::ffff:255.255.255.255", // 广播
 	}
 	for _, s := range reserved {
