@@ -181,6 +181,104 @@ func TestInodeChangeIsDetectedAsRotation(t *testing.T) {
 	}
 }
 
+// TestInodeChangeDrainsOldTailBeforeSwitching 定住轮转不丢行：logrotate 改名后，
+// 旧文件在最后一次读取之后写入的内容仍必须交出来，且以 Rotated=false 返回（它属于
+// 旧文件，不能与新文件开头拼成一行）；旧尾巴读干后的下一次读取才切到新文件并置
+// Rotated。
+func TestInodeChangeDrainsOldTailBeforeSwitching(t *testing.T) {
+	dir := newTempDir(t)
+	path := filepath.Join(dir, "a.log")
+	if err := os.WriteFile(path, []byte("seen\n"), 0o644); err != nil {
+		t.Fatalf("写文件失败：%v", err)
+	}
+
+	r := NewSourceReader(nil)
+	r.OpenAtEnd(path)
+	oldInode := r.Inode()
+
+	// 这行写入后还没被读取，轮转就发生了——它必须被读出来，不能随 fd 一起丢弃。
+	appendFile(t, path, []byte("last-line\n"))
+	if err := os.Rename(path, filepath.Join(dir, "a.log.1")); err != nil {
+		t.Fatalf("改名失败：%v", err)
+	}
+	if err := os.WriteFile(path, []byte("new-file\n"), 0o644); err != nil {
+		t.Fatalf("建新文件失败：%v", err)
+	}
+
+	tail, err := r.ReadNew(path)
+	if err != nil {
+		t.Fatalf("读旧尾巴失败：%v", err)
+	}
+	if string(tail.Bytes) != "last-line\n" {
+		t.Fatalf("旧文件尾巴丢失，实得 %q", tail.Bytes)
+	}
+	if tail.Rotated {
+		t.Fatal("旧文件尾巴不能带 Rotated，否则上层会先清半行再把旧行当新文件内容")
+	}
+
+	chunk, err := r.ReadNew(path)
+	if err != nil {
+		t.Fatalf("读新文件失败：%v", err)
+	}
+	if !chunk.Rotated {
+		t.Fatal("切换到新文件必须置 Rotated")
+	}
+	if string(chunk.Bytes) != "new-file\n" {
+		t.Fatalf("实得 %q", chunk.Bytes)
+	}
+	if r.Inode() == oldInode {
+		t.Fatal("应换用新 inode 的 fd")
+	}
+}
+
+// TestInodeChangeDrainsTailAcrossBatches 覆盖旧尾巴超过单批上限：分多轮读出，
+// 每轮都不带 Rotated，直到读干后才切换并置 Rotated。
+func TestInodeChangeDrainsTailAcrossBatches(t *testing.T) {
+	dir := newTempDir(t)
+	path := filepath.Join(dir, "a.log")
+	if err := os.WriteFile(path, []byte("seen\n"), 0o644); err != nil {
+		t.Fatalf("写文件失败：%v", err)
+	}
+
+	r := NewSourceReader(nil)
+	r.OpenAtEnd(path)
+
+	tailSize := BatchReadMax + 1024 // 超过单批，必须分两轮
+	appendFile(t, path, make([]byte, tailSize))
+	if err := os.Rename(path, filepath.Join(dir, "a.log.1")); err != nil {
+		t.Fatalf("改名失败：%v", err)
+	}
+	if err := os.WriteFile(path, []byte("new\n"), 0o644); err != nil {
+		t.Fatalf("建新文件失败：%v", err)
+	}
+
+	total := 0
+	for i := 0; i < 3; i++ {
+		chunk, err := r.ReadNew(path)
+		if err != nil {
+			t.Fatalf("第 %d 轮读失败：%v", i, err)
+		}
+		if chunk.Rotated {
+			t.Fatalf("第 %d 轮仍在旧文件上，不应置 Rotated（读到 %q）", i, chunk.Bytes)
+		}
+		total += len(chunk.Bytes)
+		if total == tailSize {
+			break
+		}
+	}
+	if total != tailSize {
+		t.Fatalf("旧尾巴总量 = %d，期望 %d", total, tailSize)
+	}
+
+	chunk, err := r.ReadNew(path)
+	if err != nil {
+		t.Fatalf("读新文件失败：%v", err)
+	}
+	if !chunk.Rotated || string(chunk.Bytes) != "new\n" {
+		t.Fatalf("切换后应读到新文件并置 Rotated，实得 rotated=%v %q", chunk.Rotated, chunk.Bytes)
+	}
+}
+
 // TestSymlinkAfterStartupIsSoftSkip 覆盖「启动后文件被换成符号链接」。
 //
 // O_NOFOLLOW 必须拒读链接目标，否则日志路径可被替换成 /etc/shadow 之类的敏感

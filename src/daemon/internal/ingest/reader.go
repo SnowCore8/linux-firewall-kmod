@@ -104,7 +104,8 @@ func (r *SourceReader) ReadNew(path string) (Chunk, error) {
 	rotated := false
 
 	// 轮转检测：路径现在指向的 inode 与持有 fd 的不一致，或文件比偏移还小
-	// （同 inode 被 truncate / copytruncate）。两种情况都要重开并归零偏移。
+	// （同 inode 被 truncate / copytruncate）。inode 变化时旧 fd 仍指向旧文件，
+	// 必须先把它未读的尾巴读出来再切换——轮转前最后写入的几行往往正是要判定的内容。
 	meta, err := os.Lstat(path)
 	switch {
 	case err == nil:
@@ -116,7 +117,22 @@ func (r *SourceReader) ReadNew(path string) (Chunk, error) {
 		currentInode := inodeOf(meta)
 		truncation := r.inode != 0 && meta.Size() < r.offset
 		inodeChange := r.inode != 0 && currentInode != r.inode
-		if inodeChange || truncation {
+		switch {
+		case inodeChange && r.fd != nil:
+			// 尾巴可能跨多批：读满一批就先以 Rotated=false 返回，下一轮继续；
+			// 读干（或读出错）后才关旧 fd、转入新文件。
+			tail, eof := r.drainOldFile()
+			if len(tail) > 0 {
+				if eof {
+					r.closeOldFile()
+				}
+				return Chunk{Bytes: tail}, nil
+			}
+			r.closeOldFile()
+			rotated = true
+		case inodeChange || truncation:
+			// 新文件尚未出现，或同 inode 被截断（未读内容已随截断消失）：
+			// 关掉旧 fd，从头读新内容。
 			r.Reset()
 			rotated = true
 		}
@@ -181,6 +197,47 @@ func (r *SourceReader) ReadNew(path string) (Chunk, error) {
 
 	r.offset += int64(total)
 	return Chunk{Bytes: r.buffer[:total], Rotated: rotated}, nil
+}
+
+// drainOldFile 从仍指向旧 inode 的 fd 读出至多一批未读字节。
+//
+// eof 为真表示旧文件已读干（或读出错），调用方可以关闭它并切换到新文件；为假表示
+// 还有剩余，下一轮继续。返回的字节属于**旧文件**，调用方必须以 Rotated=false 交给
+// 上层——若与 Rotated 同批返回，旧文件的半行会被当成新文件的开头。
+func (r *SourceReader) drainOldFile() (tail []byte, eof bool) {
+	// fd 的文件位置不跟随 OpenAtEnd / 上次 ReadNew 的偏移：每次从已消费偏移处续读。
+	if _, err := r.fd.Seek(r.offset, io.SeekStart); err != nil {
+		return nil, true
+	}
+	total := 0
+	for {
+		n, err := r.fd.Read(r.buffer[total:])
+		if n > 0 {
+			total += n
+			r.offset += int64(n)
+			if total >= BatchReadMax-1 {
+				return r.buffer[:total], false
+			}
+		}
+		if err != nil {
+			if errors.Is(err, unix.EINTR) {
+				continue
+			}
+			return r.buffer[:total], true
+		}
+		if n == 0 {
+			return r.buffer[:total], true
+		}
+	}
+}
+
+// closeOldFile 关闭旧 inode 的 fd，保留 inode 与偏移：下一轮 Lstat 仍会判定为
+// inode 变化（fd 已空），据此置 Rotated 并从新文件 0 处开始读。
+func (r *SourceReader) closeOldFile() {
+	if r.fd != nil {
+		_ = r.fd.Close()
+		r.fd = nil
+	}
 }
 
 // openNoFollow 以 O_NOFOLLOW 打开并返回 (文件, inode, 大小)。
