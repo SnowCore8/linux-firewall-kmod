@@ -20,11 +20,24 @@ type ValidatedIP struct {
 }
 
 // FullPrefixLen 返回单机封禁应使用的完整前缀长度：IPv4 为 /32、IPv6 为 /128。
+//
+// 先 Unmap：`::ffff:1.2.3.4` 在 netip 里 BitLen 仍按 128 算，不折回 v4 就会得出 /128，
+// 而下发侧 addrToWire 会把它按 AF_INET 发出去——前缀长度与前缀族对不上，内核直接拒绝。
 func FullPrefixLen(addr netip.Addr) uint8 {
-	if addr.Is4() {
+	if addr.Unmap().Is4() {
 		return 32
 	}
 	return 128
+}
+
+// CanonicalIP 返回地址在镜像缓存与历史库里使用的规范键。
+//
+// IPv4 映射写法折回点分形式，IPv6 取压缩小写形式：同一主机只能有一个键。内核事件里的
+// 地址由 addrFromWire 还原（同样归一），下发侧 addrToWire 也会 Unmap——只有这里也归一，
+// 「手工封禁的键」与「内核回显的键」才是同一个，否则同一 IP 在表里出现两条、对账把一条
+// 当幽灵抹掉。
+func CanonicalIP(addr netip.Addr) string {
+	return addr.Unmap().String()
 }
 
 // ValidateIPv4 校验 IPv4 文本；拒绝长度越界与保留段。
@@ -52,6 +65,8 @@ func ValidateIPv4(text string) (ValidatedIP, error) {
 // ValidateIP 校验通用 IP：先试 IPv4，再试 IPv6。
 //
 // IPv6 额外拒绝 loopback / multicast / unspecified / link-local（fe80::/10）。
+// IPv4 映射写法（`::ffff:1.2.3.4`）先 Unmap 再按 IPv4 判据校验：它就是一个 IPv4 地址，
+// 必须与点分写法得到同一条键、同一个 Num，且同样拒绝映射形式的回环/组播/链路本地。
 func ValidateIP(text string) (ValidatedIP, error) {
 	// INET6_ADDRSTRLEN = 46。
 	if text == "" || len(text) >= 46 {
@@ -63,6 +78,10 @@ func ValidateIP(text string) (ValidatedIP, error) {
 	addr, err := netip.ParseAddr(text)
 	if err != nil || !addr.Is6() {
 		return ValidatedIP{}, fmt.Errorf("invalid IP: %q", text)
+	}
+	addr = addr.Unmap()
+	if addr.Is4() {
+		return ValidateIPv4(addr.String())
 	}
 	b := addr.As16()
 	if addr.IsLoopback() || addr.IsMulticast() || addr.IsUnspecified() || (b[0]&0xFF == 0xFE && b[1]&0xC0 == 0x80) {

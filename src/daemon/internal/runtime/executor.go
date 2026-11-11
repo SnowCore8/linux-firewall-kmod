@@ -1079,13 +1079,15 @@ func (e *InboundExecutor) dispatchClusterHit(jail string, hit decision.ClusterHi
 // 顺序对齐旧实现：try_insert 单赢家 → 镜像 → 标记待确认 → 下发 → 失败则三者回滚；
 // 只有下发成功后才给 per-jail 的 bans_triggered 加 1。
 func (e *InboundExecutor) dispatchIntent(intent *BanIntent) {
-	ip := intent.IP.String()
 	jail := intent.Jail
 	info, ok := e.banInfoFor(intent)
 	if !ok {
-		e.warn("IP 验证失败，跳过封禁", "ip", ip, "jail", jail)
+		e.warn("IP 验证失败，跳过封禁", "ip", intent.IP.String(), "jail", jail)
 		return
 	}
+	// 缓存键、待确认标记、抑制窗口与内核事件必须用同一个规范形式：LogParse 给出的
+	// `::ffff:1.2.3.4` 与内核回显的 `1.2.3.4` 若不归一，同一条封禁会在镜像里分裂成两条。
+	ip := info.IP
 	plan := intent.Plan
 	if e.dispatchSuppressed(ip, time.Now()) {
 		// 内核刚刚拒绝过这个 IP 的下发（多半是封禁表满）。条目已被事件泵从镜像里撤掉，
@@ -1142,7 +1144,7 @@ func (e *InboundExecutor) banInfoFor(intent *BanIntent) (bans.BanInfo, bool) {
 	}
 	jail := intent.Jail
 	return bans.BanInfo{
-		IP:          ip,
+		IP:          bans.CanonicalIP(validated.Addr),
 		Num:         validated.Num,
 		JailName:    jail,
 		Reason:      jail,

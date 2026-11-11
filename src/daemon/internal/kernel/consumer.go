@@ -801,6 +801,10 @@ func banInfoFromEntry(e *contract.BanEntry, now int64) (bans.BanInfo, bool) {
 }
 
 // addrFromWire 把契约的 (af, addr16) 还原成单播地址，与 client.addrToWire 互逆。
+//
+// 还原后立即 Unmap：AF_INET6 槽位里的 IPv4 映射地址（`::ffff:1.2.3.4`）与 AF_INET 的
+// 点分形式是同一台主机，事件泵据此写镜像键、白名单键；不归一就会与下发侧
+// （addrToWire 先 Unmap）产出的键分叉。
 func addrFromWire(af contract.AddrFamily, a contract.Addr16) (netip.Addr, error) {
 	switch af {
 	case contract.AFInet:
@@ -808,7 +812,7 @@ func addrFromWire(af contract.AddrFamily, a contract.Addr16) (netip.Addr, error)
 		copy(v4[:], a[:4])
 		return netip.AddrFrom4(v4), nil
 	case contract.AFInet6:
-		return netip.AddrFrom16(a), nil
+		return netip.AddrFrom16(a).Unmap(), nil
 	default:
 		return netip.Addr{}, fmt.Errorf("未定义的地址族 %d", uint8(af))
 	}
@@ -817,8 +821,10 @@ func addrFromWire(af contract.AddrFamily, a contract.Addr16) (netip.Addr, error)
 // prefixFromAddr 按前缀长度构造前缀；长度未给出时取完整前缀（单机）。
 //
 // 内核已把地址归一化（主机位清零），这里不再二次掩码；长度越界（IPv4 >32 或 IPv6 >128）
-// 同样退回完整前缀，避免把一个非法长度当成有效掩码。
+// 同样退回完整前缀，避免把一个非法长度当成有效掩码。地址先 Unmap：对 4-in-6 地址直接
+// PrefixFrom 会把 /32 掩成 `::/32`（netip 按 128 位算），那是把整个 IPv4 空间加进白名单。
 func prefixFromAddr(addr netip.Addr, prefixLen uint8) netip.Prefix {
+	addr = addr.Unmap()
 	full := bans.FullPrefixLen(addr)
 	if int(prefixLen) < 0 || uint8(prefixLen) > full {
 		return netip.PrefixFrom(addr, int(full))

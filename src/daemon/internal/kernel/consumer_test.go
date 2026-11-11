@@ -798,6 +798,33 @@ func TestPrefixFromAddrRejectsOverlongLength(t *testing.T) {
 	}
 }
 
+// TestAddrFromWireUnmapsMappedIPv4 验证 AF_INET6 槽位里的映射地址按 IPv4 还原：
+// 缓存键与下发侧 addrToWire（先 Unmap）必须一致，否则同一封禁在镜像里分裂成两条。
+func TestAddrFromWireUnmapsMappedIPv4(t *testing.T) {
+	var a contract.Addr16
+	a[10], a[11] = 0xff, 0xff
+	a[12], a[13], a[14], a[15] = 203, 0, 113, 30
+	got, err := addrFromWire(contract.AFInet6, a)
+	if err != nil {
+		t.Fatalf("还原失败: %v", err)
+	}
+	if !got.Is4() || got.String() != "203.0.113.30" {
+		t.Fatalf("映射地址还原 = %v，期望 203.0.113.30", got)
+	}
+}
+
+// TestPrefixFromAddrMappedStaysIPv4：对 4-in-6 地址直接构造 /32 会被 netip 按 128 位
+// 掩成 ::/32，等于把整个 IPv4 空间加进白名单；这里必须留在 IPv4 前缀上。
+func TestPrefixFromAddrMappedStaysIPv4(t *testing.T) {
+	mapped := netip.MustParseAddr("::ffff:203.0.113.30")
+	if got := prefixFromAddr(mapped, 32); got.String() != "203.0.113.30/32" {
+		t.Fatalf("映射地址 /32 = %s，期望 203.0.113.30/32", got)
+	}
+	if got := prefixFromAddr(mapped, 24); got.Bits() != 24 || !got.Addr().Is4() {
+		t.Fatalf("映射地址 /24 = %s，期望 IPv4 的 /24", got)
+	}
+}
+
 // TestAddrFromWireRoundTrip 验证 (af, addr16) 还原与 client 侧装入互逆。
 func TestAddrFromWireRoundTrip(t *testing.T) {
 	for _, s := range []string{"203.0.113.31", "2001:db8::ff"} {

@@ -140,6 +140,9 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 		WriteCode(w, httpcontract.Code40001, "封禁失败：IP 非法 "+req.IP)
 		return
 	}
+	// 镜像键取规范形式：请求里写成 `::ffff:1.2.3.4` 与内核回显的 `1.2.3.4` 是同一台主机，
+	// 不归一就会在封禁表里出现两条，且对账会把手工那条当幽灵删掉。
+	ip := bans.CanonicalIP(addr)
 
 	duration, isPermanent, err := durationSeconds(req.Duration)
 	if err != nil {
@@ -153,7 +156,7 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().Unix()
 	info := bans.BanInfo{
-		IP:          req.IP,
+		IP:          ip,
 		Reason:      reason,
 		BannedAt:    now,
 		IsPermanent: isPermanent,
@@ -163,7 +166,7 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !bans.GlobalCache().TryInsert(info) {
-		WriteCode(w, httpcontract.Code40001, "封禁失败：该 IP 已在封禁表中 "+req.IP)
+		WriteCode(w, httpcontract.Code40001, "封禁失败：该 IP 已在封禁表中 "+ip)
 		return
 	}
 
@@ -176,8 +179,8 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 		}
 		prefixLen := bans.FullPrefixLen(addr)
 		if sendErr := h.kernelBan.Send(addr, prefixLen, durationSecs, reason); sendErr != nil {
-			h.server.logger.Error("内核封禁下发失败", "ip", req.IP, "error", sendErr)
-			bans.GlobalCache().Remove(req.IP)
+			h.server.logger.Error("内核封禁下发失败", "ip", ip, "error", sendErr)
+			bans.GlobalCache().Remove(ip)
 			WriteCode(w, httpcontract.Code40001, "封禁失败：内核未确认")
 			return
 		}
@@ -187,12 +190,12 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 		// 先写历史、再拿它返回的累计序号写事件：手工封禁没有判定层告诉这里「这是第几封」，
 		// 序号只能出自 ban_history。写死 1 会让重复手工封禁的地址在分级成效里永远停在
 		// 第 1 级，复发统计也认不出它。历史写失败时退化成 1（底账不能因为上一步失败就整条不记）。
-		historyCount, err := h.db.RecordBanHistory(req.IP, isPermanent)
+		historyCount, err := h.db.RecordBanHistory(ip, isPermanent)
 		if err != nil {
 			h.server.logger.Error("record ban history", "error", err)
 			historyCount = 1
 		}
-		if err := h.db.RecordBanEvent(req.IP, "api", historyCount, isPermanent, info.PlannedDuration()); err != nil {
+		if err := h.db.RecordBanEvent(ip, "api", historyCount, isPermanent, info.PlannedDuration()); err != nil {
 			h.server.logger.Error("record ban event", "error", err)
 		}
 	}
@@ -201,7 +204,7 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 
 	// action 只说做成了什么动作，永久与否由 permanent 表达——再造一个 "banned_permanent"
 	// 会让读侧同时比较两个维度，而这两个维度说的是同一件事。
-	resp := BanOperationResponse{IP: req.IP, Action: "banned", Permanent: isPermanent}
+	resp := BanOperationResponse{IP: ip, Action: "banned", Permanent: isPermanent}
 	if !isPermanent {
 		secs := uint64(duration)
 		resp.DurationSecs = &secs
@@ -218,6 +221,9 @@ func (h *APIHandlers) DeleteBan(w http.ResponseWriter, r *http.Request) {
 		WriteCode(w, httpcontract.Code40002, "解封失败：IP 非法 "+ip)
 		return
 	}
+	// 与写入侧同一个规范键：任何写法都能删掉同一条封禁，响应也回同一个键，
+	// 调用方复制响应里的 IP 再解封不会落空。
+	ip = bans.CanonicalIP(addr)
 
 	if !bans.GlobalCache().Remove(ip) {
 		WriteCode(w, httpcontract.Code40002, "解封失败：该 IP 不在封禁表中 "+ip)
@@ -344,9 +350,10 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 			details = append(details, ip+": IP 非法")
 			continue
 		}
+		canonical := bans.CanonicalIP(addr)
 
 		info := bans.BanInfo{
-			IP:          ip,
+			IP:          canonical,
 			Reason:      reason,
 			BannedAt:    now,
 			IsPermanent: false,
@@ -355,7 +362,7 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 
 		if !bans.GlobalCache().TryInsert(info) {
 			failCount++
-			details = append(details, ip+": 该 IP 已在封禁表中")
+			details = append(details, canonical+": 该 IP 已在封禁表中")
 			continue
 		}
 
@@ -363,10 +370,10 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 		if h.kernelBan != nil {
 			prefixLen := bans.FullPrefixLen(addr)
 			if sendErr := h.kernelBan.Send(addr, prefixLen, uint32(duration), reason); sendErr != nil {
-				h.server.logger.Error("batch ban kernel send failed", "ip", ip, "error", sendErr)
-				bans.GlobalCache().Remove(ip)
+				h.server.logger.Error("batch ban kernel send failed", "ip", canonical, "error", sendErr)
+				bans.GlobalCache().Remove(canonical)
 				failCount++
-				details = append(details, ip+": 内核未确认")
+				details = append(details, canonical+": 内核未确认")
 				continue
 			}
 		}
@@ -377,13 +384,13 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 			// 分级成效）唯一的底账。只写 ban_history 的话，从面板批量封的那批地址在分析里
 			// 等于没发生过——两个表各写一半是旧实现留下的裂缝。序号取 ban_history 加完之后的
 			// 累计值（同 CreateBan），写死 1 会把重复批量封禁读成「每次都只封了一次」。
-			historyCount, err := h.db.RecordBanHistory(ip, false)
+			historyCount, err := h.db.RecordBanHistory(canonical, false)
 			if err != nil {
-				h.server.logger.Error("record ban history", "ip", ip, "error", err)
+				h.server.logger.Error("record ban history", "ip", canonical, "error", err)
 				historyCount = 1
 			}
-			if err := h.db.RecordBanEvent(ip, "api", historyCount, false, info.PlannedDuration()); err != nil {
-				h.server.logger.Error("record ban event", "ip", ip, "error", err)
+			if err := h.db.RecordBanEvent(canonical, "api", historyCount, false, info.PlannedDuration()); err != nil {
+				h.server.logger.Error("record ban event", "ip", canonical, "error", err)
 			}
 		}
 	}
@@ -411,10 +418,13 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 func (h *APIHandlers) BanDetail(w http.ResponseWriter, r *http.Request) {
 	ip := r.PathValue("ip")
 
-	if _, err := netip.ParseAddr(ip); err != nil {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
 		WriteCode(w, httpcontract.Code40006, "封禁详情查询失败：IP 非法 "+ip)
 		return
 	}
+	// 镜像、历史与响应统一用规范键：任何写法都查到同一份详情。
+	ip = bans.CanonicalIP(addr)
 
 	detail := BanDetailResponse{IP: ip}
 

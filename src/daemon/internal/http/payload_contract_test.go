@@ -331,6 +331,47 @@ func TestCreateBanDurationTriState(t *testing.T) {
 	}
 }
 
+// TestCreateBanCanonicalizesIPKey 核对封禁写侧的键：请求里的映射写法必须落成点分规范键，
+// 否则内核回显的点分键会成为另一条镜像，同一 IP 在表里出现两次、对账还会把手工那条抹掉。
+func TestCreateBanCanonicalizesIPKey(t *testing.T) {
+	s, _ := newTestServer(t, nil)
+	const dotted = "10.32.9.9"
+
+	w := authedSend(t, s, http.MethodPost, "/api/v2/bans", "application/json",
+		`{"ip":"::ffff:`+dotted+`","duration":60}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("状态码 = %d，期望 201（body=%s）", w.Code, truncate(w.Body.Bytes()))
+	}
+	data := decodeKeys(t, decodeEnvelope(t, w.Body.Bytes())["data"])
+	if data["ip"] != dotted {
+		t.Fatalf("响应 ip = %v，期望规范键 %s", data["ip"], dotted)
+	}
+	if _, ok := bans.GlobalCache().Get(dotted); !ok {
+		t.Fatal("封禁未按点分规范键写入镜像")
+	}
+	if _, ok := bans.GlobalCache().Get("::ffff:" + dotted); ok {
+		t.Fatal("镜像里出现了映射写法的第二个键")
+	}
+	t.Cleanup(func() { bans.GlobalCache().Remove(dotted) })
+
+	// 详情与解封用映射写法也必须命中同一条记录。
+	detail := authedSend(t, s, http.MethodGet, "/api/v2/bans/::ffff:"+dotted+"/detail", "", "")
+	if detail.Code != http.StatusOK {
+		t.Fatalf("映射写法查详情状态码 = %d，期望 200", detail.Code)
+	}
+	dd := decodeKeys(t, decodeEnvelope(t, detail.Body.Bytes())["data"])
+	if dd["is_banned"] != true {
+		t.Fatalf("映射写法查详情的 is_banned = %v，期望 true", dd["is_banned"])
+	}
+	del := authedSend(t, s, http.MethodDelete, "/api/v2/bans/::ffff:"+dotted, "", "")
+	if del.Code != http.StatusOK {
+		t.Fatalf("映射写法解封状态码 = %d，期望 200", del.Code)
+	}
+	if _, ok := bans.GlobalCache().Get(dotted); ok {
+		t.Fatal("解封后镜像里仍有该条目")
+	}
+}
+
 // TestGetLogsPaginatesWithLineNumbers 核对日志载荷是契约的 LogPageResponse，
 // 且 line_number 是**文件里的物理行号**。
 //
