@@ -330,7 +330,7 @@ static unsigned int fw_hook_ipv6(void *priv, struct sk_buff *skb,
   u32 pkt_len;
   u8 nexthdr, proto, tcp_flags = 0, icmp_type = 0, icmp_code = 0;
   u16 dst_port = 0;
-  bool is_fragment, is_udp = false, is_icmp = false;
+  bool is_fragment = false, frag_nonfirst = false, is_udp = false, is_icmp = false;
   unsigned int verdict;
 
   (void)priv;
@@ -367,15 +367,39 @@ static unsigned int fw_hook_ipv6(void *priv, struct sk_buff *skb,
   {
     int depth = 0;
 
-    while (nexthdr == NEXTHDR_HOP || nexthdr == NEXTHDR_ROUTING ||
-           nexthdr == NEXTHDR_DEST || nexthdr == NEXTHDR_AUTH) {
+    while (nexthdr == NEXTHDR_HOP || nexthdr == NEXTHDR_ROUTING || nexthdr == NEXTHDR_DEST ||
+           nexthdr == NEXTHDR_AUTH || nexthdr == NEXTHDR_FRAGMENT) {
       if (++depth > FW_HOOK_MAX_EXT_HDR_DEPTH)
         return NF_DROP;
+
+      /* 分片头 8 字节定长：只有首片（分片偏移 0）紧随传输层头，
+       * 其余分片没有传输层头，继续遍历也取不到东西 */
+      if (nexthdr == NEXTHDR_FRAGMENT) {
+        struct frag_hdr frag;
+
+        is_fragment = true;
+        if (!pskb_may_pull(skb, offset + sizeof(frag)))
+          return NF_DROP;
+        if (!skb_header_pointer(skb, offset, sizeof(frag), &frag))
+          return NF_DROP;
+        nexthdr = frag.nexthdr;
+        offset += sizeof(frag);
+        if (ntohs(frag.frag_off) & IP6_OFFSET) {
+          frag_nonfirst = true;
+          break;
+        }
+        continue;
+      }
+
       if (!pskb_may_pull(skb, offset + sizeof(struct ipv6_opt_hdr)))
         return NF_DROP;
       if (!skb_header_pointer(skb, offset, sizeof(opt), &opt))
         return NF_DROP;
-      offset += ipv6_optlen(&opt);
+      /* AH 长度是 (hdrlen + 2) * 4；其余扩展头按选项头的 (hdrlen + 1) * 8 */
+      if (nexthdr == NEXTHDR_AUTH)
+        offset += ((unsigned int)opt.hdrlen + 2) * 4;
+      else
+        offset += ipv6_optlen(&opt);
       nexthdr = opt.nexthdr;
     }
   }
@@ -384,9 +408,8 @@ static unsigned int fw_hook_ipv6(void *priv, struct sk_buff *skb,
   if (unlikely(fw_src_is_invalid_ipv6(&src)))
     return NF_ACCEPT;
 
-  /* 分片扩展头之后没有传输层头，与 IPv4 非首片一致传 protocol=0 */
-  is_fragment = nexthdr == NEXTHDR_FRAGMENT;
-  proto = is_fragment ? 0 : nexthdr;
+  /* 非首片没有传输层头，与 IPv4 非首片一致传 protocol=0；首片照常解析传输头 */
+  proto = frag_nonfirst ? 0 : nexthdr;
 
   if (proto == IPPROTO_TCP) {
     struct tcphdr tcph_copy;
