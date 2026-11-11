@@ -1,7 +1,7 @@
 # 功能缺陷清单
 
 > 生成时间：2026-11-11
-> 更新时间：2026-11-11（第九轮：封禁表摘链竞态、关停期 netlink、jail 归属、日志轮转尾部与阈值参数边界）
+> 更新时间：2026-11-11（第十轮：速率表清空竞态、IPv6 分片解析、jail 日志归属、镜像顺序与构建/前端细节）
 > 状态标记：🔴 待修复 | 🟡 修复中 | 🟢 已修复 | ⚪ 设计取舍/复核为误报
 
 ---
@@ -11,10 +11,10 @@
 | 严重度 | 发现总数 | 已修复 | 待修复 |
 |--------|----------|--------|--------|
 | CRITICAL | 5 | 4 | 1 |
-| HIGH | 31 | 30 | 0 |
-| MEDIUM | 80 | 60 | 9 |
-| LOW | 76 | 21 | 54 |
-| **合计** | **192** | **115** | **64** |
+| HIGH | 38 | 37 | 0 |
+| MEDIUM | 87 | 65 | 11 |
+| LOW | 85 | 28 | 56 |
+| **合计** | **215** | **134** | **68** |
 
 另有 13 项经复核为误报或设计取舍（标 ⚪），不计入待修复：H-6、M-1、M-2、M-3、M-10、M-14、M-22、M-B7、M-D1、M-D4、M-D5、M-E2、L-E4。
 
@@ -57,7 +57,7 @@
 
 ---
 
-## HIGH 级（31 项）
+## HIGH 级（38 项）
 
 ### H-1 🟢 内核模块 ip_fast_csum 读取越界
 - **文件**: `src/kernel-module/fw_hook.c:159-162,191`
@@ -285,9 +285,80 @@
   请求退出，由 systemd `Restart=on-failure` 拉起；回调只触发一次
 - **难度**: 中 | **风险**: 中高（控制面静默失效）
 
+### 第十轮补充（HIGH 7 项）
+
+### H-32 🟢 速率表清空把节点重新挂进分页表，RCU 读者看到被投毒的 `next`
+- **文件**: `src/kernel-module/fw_rate.c:329-430`、`src/kernel-module/fw_types.h`
+- **问题**: `fw_rate_clear_all` 先 `hlist_del`（非 RCU 变体）摘链，再把节点按 `af/prefix`
+  重新挂进 staging 哈希表以「按页释放」。`hlist_del` 会把 `next` 写成 `LIST_POISON1`，
+  而被摘下的节点仍可能被 RCU 读侧遍历；同时 staging 表本身没有桶锁保护
+- **影响**: 清空速率表（配置清零 / 卸载前）并发打流时读侧可能沿毒化指针访问，触发
+  Oops；staging 链损坏还会让部分节点永不释放
+- **状态**: ✅ 已修复 — 删除 staging 表，每桶在桶锁内只摘一批（≤32）到栈上，
+  逐条 `hlist_del_rcu`，锁外 `on_each_cpu` 清槽 + `call_rcu`；`clear_all` 与 `exit`
+  由 `fw_rate_clear_lock` 串行
+- **难度**: 中 | **风险**: 中高（内核崩溃 / 内存泄漏）
+
+### H-33 🟢 速率分页每页重置全局流量计数，守护进程把后续页读成 0
+- **文件**: `src/daemon/internal/kernel/client.go:380`、`src/kernel-module/fw_netlink.c`
+- **问题**: 内核在每页响应里取走并清零全局 `packets/bytes` 计数，分页时所有页都带
+  「本页期间」的增量；守护进程原先逐页用返回值覆盖全局字段，续页间隔极短，最终读数
+  被最后一页的趋零值取代
+- **影响**: 负载下速率视图与告警阈值读数偏低甚至归零，DDoS 面板失真
+- **状态**: ✅ 已修复 — `listRatesAll` 只在 `offset == 0` 时采纳全局计数，后续页
+  只合并条目；补分页测试
+- **难度**: 低 | **风险**: 中（运维视图失真）
+
+### H-34 🟢 IPv6 首片被当作无传输层头，封禁/速率判定整段失效
+- **文件**: `src/kernel-module/fw_hook.c:365-412`
+- **问题**: 扩展头遍历遇到 `NEXTHDR_FRAGMENT` 直接 `break` 并把 `proto` 置 0，
+  但分片偏移为 0 的首片**仍带传输层头**，SYN/UDP 端口/ICMPv6 Echo 全部读不到
+- **影响**: 攻击者给报文加一个分片头即可绕过 TCP 标志异常、协议专项速率与端口门控
+- **状态**: ✅ 已修复 — 解析 8 字节 `frag_hdr`，仅非首片（`ntohs(frag_off) & IP6_OFFSET`）
+  置 `frag_nonfirst`，首片继续按 `frag.nexthdr` 解析传输层；AH 长度按
+  `(hdrlen + 2) * 4` 前进
+- **难度**: 中 | **风险**: 高（可绕过封禁与速率判定）
+
+### H-35 🟢 批量解封先删镜像再逐条删内核，失败条目从面板消失但内核仍在封禁
+- **文件**: `src/daemon/internal/http/bans.go:283`
+- **问题**: `UnbanAllTemporary` 先清空本地封禁镜像，再逐条调内核删除；任一删除
+  失败时只记日志，该 IP 已不在镜像里，后续对账/页面都看不到它
+- **影响**: 内核实际仍丢包，面板显示「已全部解封」，且无法再次从面板解除
+- **状态**: ✅ 已修复 — 先取 `TemporaryInfos()` 快照，逐条删内核，成功才
+  `GlobalCache().Remove` 并记历史；失败条目保留在镜像
+- **难度**: 低 | **风险**: 中高（封禁状态与界面不一致）
+
+### H-36 🟢 `GetJailStats` 在 RLock 内返回内部结构指针，解锁后继续被改写
+- **文件**: `src/daemon/internal/config/jails_api.go:61`
+- **问题**: 返回 `*JailRuntimeStats` 指向 jail 配置里的运行态对象，`RLock` 只保护取指针；
+  调用方随后读字段时 `UpdateJailStats` 可能正在写同一结构
+- **影响**: `-race` 可复现数据竞争，统计接口读到撕裂字段（计数与速率不自洽）
+- **状态**: ✅ 已修复 — 改为返回值拷贝 `(JailRuntimeStats, bool)`，两处调用点同步调整
+- **难度**: 低 | **风险**: 中（数据竞争）
+
+### H-37 🟢 禁用 jail 仍持有共享日志文件的 owner 身份，关闭后继续收行
+- **文件**: `src/daemon/internal/ingest/registry.go:102`、`src/daemon/internal/runtime/executor.go:857`
+- **问题**: `Register` 只追加 owner，没有「按 jail 移除」的入口；jail 被禁用或改名后
+  旧 owner 残留，共享同一日志文件的判定仍把行分发给它
+- **影响**: 已停用的 jail 继续产生封禁事件/审计记录，与面板显示矛盾
+- **状态**: ✅ 已修复 — 新增 `SetLogOwners(path, jails)` 精确替换日志 owner，
+  保留非日志 owner 与 `SourceID`/watch/偏移；对账按清理后路径聚合调用；
+  配置回滚路径补 `reconcileWatches()`
+- **难度**: 中 | **风险**: 中高（停用规则仍生效）
+
+### H-38 🟢 威胁情报接受 `/0` 等超宽网段，单条记录可覆盖全部地址空间
+- **文件**: `src/daemon/internal/threatfeeds/sources/ipsum.go:69-94`
+- **问题**: 解析只校验 `net.ParseCIDR` 成功，不设前缀下界；`0.0.0.0/0`、`::/0`
+  以及掩码后为全零的地址会被当作正常条目缓存，置信度 ≥ 0.8 时直接进入封禁判定
+- **影响**: 上游一条坏记录即可让所有来源地址命中情报封禁（或反之整段被误判），
+  且白名单只能靠人工兜底
+- **状态**: ✅ 已修复 — 统一 `parseFeedEntry`：IPv4 前缀 < /8、IPv6 < /16、
+  未指定地址与掩码后全零网络一律拒绝并计数告警；Ipsum/DShield/Feodo 共用
+- **难度**: 低 | **风险**: 高（误封全部流量）
+
 ---
 
-## MEDIUM 级（80 项）
+## MEDIUM 级（87 项）
 
 ### 内核模块（4 项）
 | # | 文件 | 问题 | 状态 |
@@ -421,9 +492,21 @@
 | M-42 | `daemon/internal/runtime/executor.go:735-756,908-919` | 轮转事件先 flush 半行，随后 `dropSource` 对读取器 `Reset()` 关 fd；最后一批最多 256 KiB 的未读尾巴若没被前面的 MODIFY 事件单批读干（事件合并、路径已消失）就丢失，且不发生成行判定 | 🟢 已修复：轮转摘源前用 `DrainTail` 有界读干旧 fd，逐 jail 送入判定后再 `Reset`；补轮转尾部用例 |
 | M-43 | `daemon/internal/logparse/splitter.go:55-75` | 尾部达到 `MaxLineBytes` 时直接清空缓冲；若物理行跨读批次（单批上限 256 KiB，短读也会切行），剩余半行会在下一批被当成新行输出，产生伪造 IP 行 | 🟢 已修复：超长行进入「丢弃至下一个换行」状态，`Clear`/`Flush` 复位；每条超长物理行只计一次，后续半行不再成行 |
 
+### 第十轮补充（MEDIUM 7 项）
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| M-44 | `kernel-module/fw_hook.c:370-404` | IPv6 AH 扩展头按 `ipv6_optlen()`（`(hdrlen+1)*8`）前进，但 AH 的长度字段单位是 4 字节且含 2 字节固定头，正确步进是 `(hdrlen+2)*4`；AH 之后的内层头被错位解析 | 🟢 已修复：仅 `NEXTHDR_AUTH` 走 4 字节公式，其余扩展头保持 8 字节公式 |
+| M-45 | `daemon/internal/runtime/executor.go:804` | 轮转事件到达时读取器可能已自行切到新 inode；旧逻辑无条件从新文件头重读，导致同一段内容被判定两次（重复封禁/重复审计） | 🟢 已修复：先比较 `reader.Inode()` 与路径当前 inode，相同则只重挂 watch（`rebindWatch`）并返回；重挂失败先摘源并把路径记入 `pendingReadd`，不会留下无 watch 的源 |
+| M-46 | `frontend/src/hooks/useSse.ts:305` | StrictMode 的 mount→unmount→mount 中，卸载 cleanup 把 `mountedRef` 置 false 后，第二次挂载的连接 effect 未复位，之后所有事件写入都被判为「已卸载」丢弃 | 🟢 已修复：连接 effect 起始处无条件 `mountedRef.current = true` |
+| M-47 | `scripts/fetch-geoip.sh:132-133` | 临时文件建在 `$TMPDIR` 再用 `mv` 落到目标目录；跨文件系统时 `mv` 退化为复制+删除，不再原子，更新中被读取会拿到半份 MMDB | 🟢 已修复：临时文件直接建在 `$TARGET_DIR`，`mv -f` 保证同文件系统原子替换；替换前 `chmod 0644` |
+| M-48 | `frontend/src/views/Logs.tsx:231` | 溢出丢弃计数在 state updater 外按 `liveCountRef` 计算，连续 `setState` 批处理时读到旧长度；StrictMode 双调用 updater 还会重复计数 | 🟢 已修复：溢出判断移入 `setLiveLines` 的 updater，用单调 `line.id` 与 `countedDropIdRef` 去重，另一 effect 把 `droppedRef` 同步到展示 state |
+| M-49 | `daemon/internal/http/config_api.go:394-437` | `patchWebuiYAML` 把整份 YAML 解析成 `map[string]any` 再 `Marshal` 写回，PUT /config 成功后文件里所有注释丢失、键顺序被重排 | 🔴 待修复：改用 `yaml.Node` 只替换 `webui`/`ddos` 对应节点，保留注释与顺序 |
+| M-50 | `daemon/internal/http/server.go:130-150` | 连接上限统计所有连接（含长驻 SSE），且满额时 `http.Error` 回裸文本 503，不走统一信封、无 `Retry-After`；前端按业务码判定的错误处理拿不到可读提示 | 🔴 待修复：SSE 连接不应占用普通请求名额，满额响应改用 `WriteServiceUnavailable` 并带重试提示 |
+
+
 ---
 
-## LOW 级（76 项）
+## LOW 级（85 项）
 
 ### 内核模块（6 项）
 | # | 文件 | 问题 |
@@ -542,6 +625,20 @@
 | L-43 | `daemon/internal/daemonize/daemonize.go:75-110`、`cmd/firewall-daemon/main.go:91`：PID 文件不加锁、不校验属主存活；第二个实例覆盖 PID 文件，先退出的实例会删掉后者文件，陈旧 PID 也可能指向无关进程。🟢 已修复：写前用 `kill(pid, 0)` 判存活并拒绝覆盖；退出只删除属主 PID 与自身一致的文件 |
 | L-44 | `daemon/internal/kernel/consumer.go:517`：`CmdResult.ErrorCode` 是负 errno，`Value: uint64(int64(...))` 回绕成极大无符号数；`telemetry.Event.Value` 注释约定承载 errno。🟢 已修复：CmdResult 事件不再写 `Value`，错误码只经 `ErrorCode` 字段传递 |
 
+### 第十轮补充（LOW 9 项）
+| # | 问题 |
+|---|------|
+| L-45 | `kernel-module/fw_main.c:149`：容量参数只拒绝 0，超过 `INT_MAX` 时在容量比较处按 int 取值为负，检查恒成立（新增恒失败或速率表恒放行）。🟢 已修复：`fw_params_validate` 对四个容量参数统一拒绝 `> INT_MAX` |
+| L-46 | `daemon/internal/http/threat_feeds.go`：空 id 分支引用了契约未声明的 `40006`，属于不可达的错误映射。🟢 已修复：删除该分支，按契约走参数校验路径 |
+| L-47 | `daemon/internal/runtime/executor.go:1069`：配置回滚（SIGUSR1）只替换配置与 jail，不重算日志源与 owner；回滚到旧配置后日志路径/共享关系仍是回滚前的。🟢 已修复：`rollbackConfig` 末尾调用 `reconcileWatches()` |
+| L-48 | `daemon/internal/runtime/executor.go:1427`：多个 jail 共享同一日志文件时，全局行/字节计数按 jail 各加一次，页面显示的量随共享 jail 数倍增。🟢 已修复：`drainSource` 只对第一个 jail 传 `global=true`，`mirrorGlobal` 独占累加 |
+| L-49 | `frontend/src/views/Bans.tsx:317`：封禁成功提示按 `duration_seconds` 判永久，`duration_seconds=0`（契约语义为永久）会显示「0 秒」；表单也未说明留空/0 的含义。🟢 已修复：`permanent` 为真或 `duration_seconds` 为 0 均按永久展示，表单补「留空或填 0 = 永久封禁」 |
+| L-50 | `frontend/src/components/DataTable.tsx:67`：使用 `process.env.NODE_ENV` 判开发环境，Vite 构建期不注入该变量，dev 告警在生产与开发下都失效。🟢 已修复：改 `import.meta.env.DEV` |
+| L-51 | `Makefile:125,149`：版本探测用 `grep -oP`（PCRE），BSD/macOS grep 不支持，`make check-deps` 在非 GNU 环境直接失败。🟢 已修复：改用 `grep -oE` + `head`/`sed` |
+| L-52 | `contract/verify_http.py:1381-1443`：`parse_ts_interfaces` 逐行匹配，单行写多个字段（`a: string; b: number`）只取第一个；`strip_ts_comments` 还按 `//` 剥注释，会误伤 `https://` 等字符串。契约校验存在漏检/误报面。 | 🔴 待修复 |
+| L-53 | `kernel-module/fw_netlink.c:377-420,455-500`：LIST_BANS / LIST_WHITELIST / LIST_RATES 按 offset/limit 遍历活表，分页期间到期摘链或并发插入会让后续页跳过或重复条目，daemon 的全量对账因此可能漏项。 | 🔴 待修复 |
+
+
 ---
 
 ## 设计取舍（不修复）
@@ -599,9 +696,16 @@ H-23、H-24、H-25、H-26、M-31、M-32、M-33、M-34、L-36、L-39、L-40
 - 守护进程：H-30、H-31、M-40、M-41、M-42、M-43、L-42、L-43、L-44
 - 契约：L-41（提交范围 aebe60a5..44e1a118）
 
+### 批次 10（已提交）：第十轮 19 项
+- 内核：H-32、H-33、H-34、M-44、L-45
+- 守护进程：H-35、H-36、H-37、M-45、L-46、L-47、L-48
+- 情报源：H-38
+- 前端/脚本：M-46、M-47、M-48、L-49、L-50、L-51
+
 ### 待修复重点（按风险排序）
 1. **CRITICAL**：C-2（SSE 凭据在 URL，需前后端配合）
 2. **MEDIUM 数据正确性**：M-23（内核拒绝封禁后底账不回撤）、M-29（DDoS 引擎未接线、
-   `auto_ban_threshold` 无消费者）、M-F5
-3. **测试缺口**：M-T1~M-T5、M-E1
-4. **LOW 批量**：其余 54 项，按模块分批处理
+   `auto_ban_threshold` 无消费者）、M-49（PUT /config 抹掉 YAML 注释）、M-50（连接上限
+   与 SSE 共用名额、503 不走信封）、M-F5
+3. **测试缺口**：M-T1~M-T5、M-E1、L-52（verify_http 解析盲区）
+4. **LOW 批量**：其余 56 项，按模块分批处理
