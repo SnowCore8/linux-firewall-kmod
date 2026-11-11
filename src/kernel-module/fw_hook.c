@@ -98,8 +98,8 @@ struct nf_hook_ops nf_ops_ipv6 = {
  * 判定主体：一次 RCU 临界区完成白名单 / 本机地址 / 封禁表 / 速率四步判定。
  * 返回 NF_ACCEPT / NF_DROP。
  *
- * 自决封禁在临界区**外**执行：fw_ban_try_add() 会取桶锁、分配内存并推送
- * netlink 事件，旧实现同样在 RCU 外做封禁（不在 RCU 读侧做重活）。
+ * 自决封禁在临界区**外**执行：fw_ban_try_add() 会取桶锁并分配内存，
+ * 且以 notify=false 调用（softirq 里不能取可休眠的 netlink 发送读锁）。
  */
 static unsigned int fw_ban_check(u8 af, const void *src, u32 packet_len,
                                  u8 protocol, u8 tcp_flags, u16 dst_port) {
@@ -136,25 +136,35 @@ static unsigned int fw_ban_check(u8 af, const void *src, u32 packet_len,
   if (unlikely(reason != NULL)) {
     /*
      * 自决封禁与 procfs / netlink 两条路径共用同一入口：白名单前检 +
-     * 泛洪闸门 + 容量检查 + 事件推送一次到位。
+     * 泛洪闸门 + 容量检查一次到位。事件推送不在这里做（notify=false）：
+     * 本函数运行在 netfilter softirq 上下文，封禁插入不得取可休眠的
+     * fw_nl_send_lock()；DDoS 事件由下方 trylock 分支单独推送。
      * duration 语义见 fw_types.h：0 表示走 fw_ban_time（旧实现把 0 当永久）。
      * 无论封禁是否成功都丢包：触发违规的报文本身就该丢。
      */
     u32 duration = READ_ONCE(fw_info.ddos_ban_duration);
+    u8 prefix_len = fw_max_prefix_len(af);
+    int add_ret;
 
     if (!duration)
       duration = READ_ONCE(fw_ban_time);
 
     /* 自决封禁针对单个源 IP：全长前缀（精确单机），网段封禁只由 daemon 下发 */
-    fw_ban_try_add(af, src, fw_max_prefix_len(af), duration, reason, FW_HOOK_DDOS_JAIL, true);
+    add_ret =
+      fw_ban_try_add(af, src, prefix_len, duration, reason, FW_HOOK_DDOS_JAIL, false);
     /*
      * 发送保护：netfilter 钩子在 softirq 上下文中执行，使用 trylock 避免休眠。
-     * 获取失败时跳过事件推送，不影响丢包判定。
+     * 获取失败时跳过事件推送，不影响丢包判定。封禁成功时在同一个 trylock 内
+     * 补发 BanStateChange，守护进程镜像不必等对账周期才发现这条自决封禁。
      */
     if (fw_nl_send_trylock()) {
-      if (fw_nl_sock_available())
+      if (fw_nl_sock_available()) {
+        if (add_ret == 0)
+          fw_nl_send_ban_state_change(FW_BAN_ACTION_BAN, af, prefix_len, src, duration,
+                                      reason, FW_HOOK_DDOS_JAIL);
         fw_nl_send_ddos_event(
           af, src, reason, pps > 0xFFFFFFFFULL ? 0xFFFFFFFFU : (u32)pps);
+      }
       fw_nl_send_unlock();
     }
     return NF_DROP;
