@@ -36,8 +36,7 @@ type Config struct {
 
 // DefaultConfig 返回默认配置，内置推荐情报源。
 //
-// 默认启用 IPsum 和 FireHOL Level 1（质量高、误报低）。
-// 其他源（DShield、Blocklist.de、Feodo Tracker）可选启用。
+// 默认启用全部内置源：IPsum、FireHOL Level 1、DShield、Blocklist.de、Feodo Tracker。
 func DefaultConfig() Config {
 	return Config{
 		Enabled:          true,
@@ -64,21 +63,21 @@ func DefaultConfig() Config {
 			{
 				Name:       "dshield",
 				URL:        "https://www.dshield.org/block.txt",
-				Enabled:    false,
+				Enabled:    true,
 				Category:   "scanner",
 				Confidence: 0.7,
 			},
 			{
 				Name:       "blocklist_de",
 				URL:        "https://lists.blocklist.de/lists/all.txt",
-				Enabled:    false,
+				Enabled:    true,
 				Category:   "abuse",
 				Confidence: 0.75,
 			},
 			{
 				Name:       "feodo",
 				URL:        "https://feodotracker.abuse.ch/downloads/ipblocklist.csv",
-				Enabled:    false,
+				Enabled:    true,
 				Category:   "botnet",
 				Confidence: 0.9,
 			},

@@ -150,22 +150,22 @@ threat_feeds:
       enabled: true
       category: abuse
       confidence: 0.85
-    # DShield：老牌名单，稳定性好，每日更新（默认关闭）
+    # DShield：老牌名单，稳定性好，每日更新
     - name: dshield
       url: https://www.dshield.org/block.txt
-      enabled: false
+      enabled: true
       category: scanner
       confidence: 0.7
-    # Blocklist.de：按攻击类型分类，每小时更新（默认关闭）
+    # Blocklist.de：按攻击类型分类，每小时更新
     - name: blocklist_de
       url: https://lists.blocklist.de/lists/all.txt
-      enabled: false
+      enabled: true
       category: abuse
       confidence: 0.75
-    # Feodo Tracker：专注 botnet C2，每日更新（默认关闭）
+    # Feodo Tracker：专注 botnet C2，每日更新
     - name: feodo
       url: https://feodotracker.abuse.ch/downloads/ipblocklist.csv
-      enabled: false
+      enabled: true
       category: botnet
       confidence: 0.9
 

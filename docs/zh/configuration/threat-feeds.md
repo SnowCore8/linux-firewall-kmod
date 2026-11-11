@@ -52,7 +52,7 @@ threat_feeds:
 |------|------|------|------|
 | `name` | string | 是 | 源的唯一标识（如 `ipsum`, `firehol`） |
 | `url` | string | 是 | 拉取地址（必须是 HTTPS） |
-| `enabled` | bool | 否 | 该源是否启用，默认 `false` |
+| `enabled` | bool | 否 | 该源是否启用；内置源默认 `true`，自定义源未指定时为 `false` |
 | `category` | string | 否 | 默认分类（如 `abuse`, `scanner`, `botnet`） |
 | `confidence` | float64 | 否 | 默认置信度，范围 [0.0, 1.0] |
 
@@ -94,8 +94,6 @@ FireHOL 维护的保守名单，误报最低。
 - **更新频率**：每日
 - **特点**：保守名单，误报低
 
-### 可选启用
-
 #### DShield
 
 老牌扫描者 IP 名单，稳定性好。
@@ -103,7 +101,7 @@ FireHOL 维护的保守名单，误报最低。
 ```yaml
 - name: dshield
   url: https://www.dshield.org/block.txt
-  enabled: false
+  enabled: true
   category: scanner
   confidence: 0.7
 ```
@@ -120,7 +118,7 @@ FireHOL 维护的保守名单，误报最低。
 ```yaml
 - name: blocklist_de
   url: https://lists.blocklist.de/lists/all.txt
-  enabled: false
+  enabled: true
   category: abuse
   confidence: 0.75
 ```
@@ -137,7 +135,7 @@ FireHOL 维护的保守名单，误报最低。
 ```yaml
 - name: feodo
   url: https://feodotracker.abuse.ch/downloads/ipblocklist.csv
-  enabled: false
+  enabled: true
   category: botnet
   confidence: 0.9
 ```
